@@ -476,6 +476,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "unbound-canvas"
+version = "0.1.0"
+dependencies = [
+ "rustc-hash",
+ "unbound-math",
+]
+
+[[package]]
 name = "unbound-gpu"
 version = "0.1.0"
 dependencies = [
