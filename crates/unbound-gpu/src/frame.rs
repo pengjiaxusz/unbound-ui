@@ -22,11 +22,11 @@
 use ash::vk;
 
 use crate::data::{
-    DrawIndirectCommand, FramePushConstants, GpuClipNode, GpuPayload, GpuPrimitiveInstance,
+    FramePushConstants, GpuClipNode, GpuPayload, GpuPrimitiveInstance,
     GpuScatterPatch, GpuTransform, PassLayer, PushConstants,
 };
 use crate::device::{Buffer, Gpu, GpuError, MemoryKind};
-use crate::pipeline::{Pipelines, COLOR_FORMAT, DEPTH_FORMAT, MAX_ATLAS_LAYERS};
+use crate::pipeline::{Pipelines, COLOR_FORMAT, DEPTH_FORMAT};
 use crate::pool::{PersistentPool, PoolHandle};
 use crate::ring::TransientRing;
 
@@ -485,6 +485,12 @@ impl Renderer {
         colors[4] = Color::from_srgb8(63, 63, 70, 255).to_rgba16f();
         colors[5] = Color::from_srgb8(228, 228, 231, 255).to_rgba16f();
         self.write_theme(&colors)
+    }
+
+    /// Primitive capacity of the persistent pool, exposed for diagnostics.
+    #[must_use]
+    pub fn capacity_primitives(&self) -> u32 {
+        self.capacity_primitives
     }
 
     /// Current target size.
@@ -1147,7 +1153,7 @@ impl Renderer {
 
         let mut bytes: Vec<u8> = Vec::new();
         let mut spans: Vec<(u32, u32, u32)> = Vec::new(); // (dst, src_rel, len)
-        let mut stage = |dst: u32, data: &[u8], bytes: &mut Vec<u8>, spans: &mut Vec<(u32, u32, u32)>| {
+        let stage = |dst: u32, data: &[u8], bytes: &mut Vec<u8>, spans: &mut Vec<(u32, u32, u32)>| {
             if data.is_empty() {
                 return;
             }
@@ -1230,7 +1236,7 @@ impl Renderer {
     }
 
     /// Release every GPU resource. Consumes the renderer.
-    pub fn destroy(mut self) {
+    pub fn destroy(self) {
         self.gpu.wait_idle();
         // SAFETY: the device is idle and `self` is consumed.
         unsafe {

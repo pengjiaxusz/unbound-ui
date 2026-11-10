@@ -144,7 +144,7 @@ impl Pipelines {
         // ---- descriptor set layout ----------------------------------------
         // binding 0/1: bindless atlas layers (R8 and RGBA8), binding 2: sorted
         // primitive indices consumed by the vertex shader.
-        let mut bindings = [
+        let bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -300,7 +300,7 @@ impl Pipelines {
             .logic_op_enable(false)
             .attachments(&additive_blends);
 
-        let mut create_graphics = |stages: &[vk::PipelineShaderStageCreateInfo],
+        let create_graphics = |stages: &[vk::PipelineShaderStageCreateInfo],
                                    depth: &vk::PipelineDepthStencilStateCreateInfo,
                                    blend: &vk::PipelineColorBlendStateCreateInfo,
                                    rendering: &mut vk::PipelineRenderingCreateInfo|

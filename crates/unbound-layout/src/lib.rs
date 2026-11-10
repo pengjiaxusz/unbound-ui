@@ -208,18 +208,6 @@ pub fn style_for(world: &UiWorld, id: NodeId) -> Style {
     style
 }
 
-/// Measure a leaf from its pre-computed intrinsic size.
-fn measure(world: &UiWorld, id: NodeId) -> taffy::Size<f32> {
-    let size = world
-        .get(id)
-        .and_then(|n| n.measure)
-        .unwrap_or(Vec2::ZERO);
-    taffy::Size {
-        width: size.x.max(0.0),
-        height: size.y.max(0.0),
-    }
-}
-
 /// Resolve a leaf's size from taffy's known dimensions, falling back to the
 /// pre-measured intrinsic size (text, images) and finally to zero.
 fn measure_leaf(input: &LayoutInput, id: Option<NodeId>, world: &UiWorld) -> LayoutOutput {
@@ -572,7 +560,7 @@ fn solve_isolated(world: &UiWorld, root: NodeId, viewport: Vec2) -> Vec<(NodeId,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use unbound_abi::{Edges, RawNodeDesc, NodeTag};
+    use unbound_abi::{Edges, RawNodeDesc};
 
     fn loc() -> &'static core::panic::Location<'static> {
         core::panic::Location::caller()

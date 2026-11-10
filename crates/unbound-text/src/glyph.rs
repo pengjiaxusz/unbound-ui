@@ -437,7 +437,6 @@ fn pad_field(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
 
 // `SubpixelBin` documents the four-phase scheme above and is exercised through
 // `CacheKey::new`; keep the import explicit for readers.
-use cosmic_text::SubpixelBin as _SubpixelBin;
 
 #[cfg(test)]
 mod tests {

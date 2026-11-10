@@ -402,7 +402,7 @@ impl Gpu {
         // ---- feature discovery -------------------------------------------
         let mut f12 = vk::PhysicalDeviceVulkan12Features::default();
         let mut f13 = vk::PhysicalDeviceVulkan13Features::default();
-        let mut core = vk::PhysicalDeviceFeatures::default();
+        let core;
         {
             let mut query = vk::PhysicalDeviceFeatures2::default()
                 .push_next(&mut f13)
@@ -505,14 +505,14 @@ impl Gpu {
         let mut enabled_features13 = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(features.dynamic_rendering)
             .synchronization2(features.synchronization2);
-        let mut enabled_core = vk::PhysicalDeviceFeatures::default()
+        let enabled_core = vk::PhysicalDeviceFeatures::default()
             .multi_draw_indirect(features.multi_draw_indirect)
             .independent_blend(features.independent_blend)
             .sampler_anisotropy(features.sampler_anisotropy)
             .shader_int64(features.shader_int64)
             .shader_float64(features.shader_float64);
 
-        let mut device_exts = config.device_extensions.clone();
+        let device_exts = config.device_extensions.clone();
         for optional in [
             "VK_EXT_swapchain_maintenance1",
             "VK_KHR_present_wait",

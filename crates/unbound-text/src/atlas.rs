@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn sub_quarter_pixel_size_changes_share_a_slot() {
-        let mut a = Atlas::new(small(), 1);
+        let _a = Atlas::new(small(), 1);
         let k1 = GlyphKey::new(5, 16.01, 0, false, 1);
         let k2 = GlyphKey::new(5, 16.10, 0, false, 1);
         assert_eq!(k1, k2, "sizes must bucket to ¼ px");

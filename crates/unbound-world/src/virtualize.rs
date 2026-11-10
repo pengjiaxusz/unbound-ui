@@ -121,7 +121,11 @@ impl VirtualList {
     }
 
     /// Number of slots needed for a viewport plus overscan.
-    fn desired_slots(&self, viewport: f32) -> usize {
+    ///
+    /// Exposed so a host can size its primitive buffer without duplicating the
+    /// overscan policy.
+    #[must_use]
+    pub fn desired_slots(&self, viewport: f32) -> usize {
         let visible = (viewport / self.row_height).ceil().max(1.0) as usize;
         let overscan = (visible as f32 * self.overscan_screens).ceil() as usize;
         (visible + overscan * 2).max(1)
@@ -433,7 +437,7 @@ mod tests {
         let binds_before = list.binds();
         // Overscan means the first item is ahead of the viewport; scrolling far
         // enough to move the window by one row rebinds one slot.
-        let mut previous_first = list.first_item();
+        let previous_first = list.first_item();
         let mut crossing = None;
         for step in 1..=40 {
             let update = list.update(step as f32 * 20.0, 600.0, 1000);
