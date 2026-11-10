@@ -1,0 +1,16 @@
+# OS / 编辑器
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+*.log
+
+# Rust / Cargo 构建产物
+/target/
+**/*.rs.bk
+
+# 本地环境与密钥
+.env
+.env.local
+*.pem
