@@ -1,0 +1,17 @@
+[package]
+name = "unbound-input"
+description = "Double-layer hit testing, pointer capture and the deterministic cursor stack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
+unbound-vector.workspace = true
+unbound-canvas.workspace = true
+rustc-hash.workspace = true
+
+[lints]
+workspace = true

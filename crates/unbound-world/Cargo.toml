@@ -13,3 +13,6 @@ unbound-abi.workspace = true
 bytemuck.workspace = true
 slotmap.workspace = true
 rustc-hash.workspace = true
+
+[lints]
+workspace = true

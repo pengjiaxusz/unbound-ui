@@ -148,9 +148,6 @@ struct Candidate {
 #[derive(Copy, Clone, Debug)]
 struct Edge {
     coord: f32,
-    kind: SnapKind,
-    /// Index into the retained candidate list, for guide spans.
-    source: u32,
 }
 
 /// Reusable snapping solver: owns its buffers so a drag allocates nothing.
@@ -283,39 +280,18 @@ impl Snapper {
 
         self.edges_x.clear();
         self.edges_y.clear();
-        for (i, candidate) in self.candidates.iter().enumerate() {
+        for candidate in &self.candidates {
             let r = candidate.rect;
-            let source = i as u32;
-            self.edges_x.push(Edge {
-                coord: r.min().x,
-                kind: SnapKind::Left,
-                source,
-            });
+            self.edges_x.push(Edge { coord: r.min().x });
             self.edges_x.push(Edge {
                 coord: r.center().x,
-                kind: SnapKind::Centre,
-                source,
             });
-            self.edges_x.push(Edge {
-                coord: r.max().x,
-                kind: SnapKind::Right,
-                source,
-            });
-            self.edges_y.push(Edge {
-                coord: r.min().y,
-                kind: SnapKind::Top,
-                source,
-            });
+            self.edges_x.push(Edge { coord: r.max().x });
+            self.edges_y.push(Edge { coord: r.min().y });
             self.edges_y.push(Edge {
                 coord: r.center().y,
-                kind: SnapKind::Middle,
-                source,
             });
-            self.edges_y.push(Edge {
-                coord: r.max().y,
-                kind: SnapKind::Bottom,
-                source,
-            });
+            self.edges_y.push(Edge { coord: r.max().y });
         }
         self.edges_x.sort_by(|a, b| a.coord.total_cmp(&b.coord));
         self.edges_y.sort_by(|a, b| a.coord.total_cmp(&b.coord));
@@ -401,7 +377,6 @@ impl Snapper {
                         coord: edge.coord,
                         delta,
                         kind,
-                        source: edge.source,
                     });
                 }
             }
@@ -442,7 +417,6 @@ impl Snapper {
                         coord: moving.min().x + delta,
                         delta,
                         kind: SnapKind::Spacing,
-                        source: u32::MAX,
                     });
                 }
             }
@@ -483,7 +457,6 @@ impl Snapper {
                         coord: moving.min().y + delta,
                         delta,
                         kind: SnapKind::Spacing,
-                        source: u32::MAX,
                     });
                 }
             }
@@ -545,7 +518,6 @@ struct Hit {
     /// Correction applied to the moving rect.
     delta: f32,
     kind: SnapKind,
-    source: u32,
 }
 
 #[cfg(test)]

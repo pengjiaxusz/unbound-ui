@@ -512,6 +512,13 @@ impl HandleDrag {
     pub fn start_bounds(&self) -> Rect {
         self.start_bounds
     }
+
+    /// Distance of the rotation grip above the top edge, so the caller can draw
+    /// and hit test the grip with the same value.
+    #[must_use]
+    pub fn rotate_offset(&self) -> f32 {
+        self.rotate_offset
+    }
 }
 
 #[cfg(test)]

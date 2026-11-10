@@ -12,3 +12,6 @@ unbound-math.workspace = true
 bytemuck.workspace = true
 cosmic-text.workspace = true
 rustc-hash.workspace = true
+
+[lints]
+workspace = true

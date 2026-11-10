@@ -10,3 +10,6 @@ repository.workspace = true
 [dependencies]
 unbound-math.workspace = true
 bytemuck.workspace = true
+
+[lints]
+workspace = true

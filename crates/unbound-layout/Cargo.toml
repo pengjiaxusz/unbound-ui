@@ -14,3 +14,6 @@ unbound-world.workspace = true
 taffy.workspace = true
 rustc-hash.workspace = true
 rayon.workspace = true
+
+[lints]
+workspace = true

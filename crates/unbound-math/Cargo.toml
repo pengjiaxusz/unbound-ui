@@ -12,4 +12,7 @@ bytemuck.workspace = true
 half.workspace = true
 
 [lints.rust]
+# `[lints] workspace = true` cannot coexist with a table override, so this crate
+# restates the workspace's one rust lint and adds its own ban on `unsafe`.
 unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"

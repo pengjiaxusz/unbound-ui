@@ -282,7 +282,6 @@ fn sub_cubic(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t0: f32, t1: f32) -> (Vec2,
 pub fn closest_on_quad(seg: &QuadSegment, p: Vec2) -> (f32, f32) {
     let a = seg.p1 - seg.p0;
     let b = seg.p0 - seg.p1 * 2.0 + seg.p2;
-    let c = a * 2.0;
     let d = seg.p0 - p;
 
     let bb = b.dot(b);

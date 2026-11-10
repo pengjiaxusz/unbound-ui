@@ -494,6 +494,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "unbound-input"
+version = "0.1.0"
+dependencies = [
+ "rustc-hash",
+ "unbound-canvas",
+ "unbound-math",
+ "unbound-vector",
+]
+
+[[package]]
 name = "unbound-layout"
 version = "0.1.0"
 dependencies = [
