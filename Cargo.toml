@@ -16,6 +16,7 @@ members = [
     "crates/unbound-host",
     "crates/app-guest",
     "crates/unbound-kpi",
+    "apps/gallery",
 ]
 
 [workspace.package]
@@ -42,6 +43,7 @@ unbound-headless = { path = "crates/unbound-headless" }
 unbound-ui = { path = "crates/unbound-ui" }
 unbound-platform = { path = "crates/unbound-platform" }
 unbound-host = { path = "crates/unbound-host" }
+unbound-kpi = { path = "crates/unbound-kpi" }
 
 ash = { version = "0.38", default-features = false, features = ["loaded", "debug"] }
 bytemuck = { version = "1.25", features = ["derive"] }

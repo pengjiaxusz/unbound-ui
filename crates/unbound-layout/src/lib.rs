@@ -434,7 +434,6 @@ impl LayoutEngine {
         };
         let taffy_us = start.elapsed().as_micros() as u64;
 
-        self.rects.clear();
         let mut visited = 0u32;
         for chunk in nested {
             visited += chunk.len() as u32;
@@ -500,8 +499,12 @@ impl LayoutEngine {
     }
 
     /// Read layouts for `root`'s subtree into `self.rects`.
+    ///
+    /// The map is *not* cleared: an incremental solve only refreshes the nodes it
+    /// touched, and throwing away the untouched geometry would leave
+    /// [`Self::rect`] unable to answer for the rest of the tree — which is
+    /// exactly what a caller painting the frame needs.
     fn collect(&mut self, world: &UiWorld, root: NodeId) -> u32 {
-        self.rects.clear();
         let mut visited = 0u32;
         for id in preorder(world, root) {
             if let Some(t) = self.map.get(&id) {

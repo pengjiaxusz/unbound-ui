@@ -216,6 +216,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "gallery"
+version = "0.1.0"
+dependencies = [
+ "accesskit",
+ "unbound-a11y",
+ "unbound-abi",
+ "unbound-canvas",
+ "unbound-headless",
+ "unbound-input",
+ "unbound-kpi",
+ "unbound-layout",
+ "unbound-math",
+ "unbound-world",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
