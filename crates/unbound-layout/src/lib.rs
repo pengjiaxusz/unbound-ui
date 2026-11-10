@@ -275,6 +275,8 @@ pub struct LayoutEngine {
     taffy: TaffyTree<NodeId>,
     map: FxHashMap<NodeId, taffy::NodeId>,
     rects: FxHashMap<NodeId, Rect>,
+    /// Nodes touched by the last `collect`, reused across solves.
+    changed: Vec<NodeId>,
 }
 
 impl Default for LayoutEngine {
@@ -298,6 +300,7 @@ impl LayoutEngine {
             taffy: TaffyTree::new(),
             map: FxHashMap::default(),
             rects: FxHashMap::default(),
+            changed: Vec::new(),
         }
     }
 
@@ -423,13 +426,14 @@ impl LayoutEngine {
         let taffy_us = start.elapsed().as_micros() as u64;
 
         let mut visited = 0u32;
-        for chunk in nested {
+        for (chunk, boundary) in nested.into_iter().zip(boundaries.iter().copied()) {
+            let changed: Vec<NodeId> = chunk.iter().map(|(id, _)| *id).collect();
             visited += chunk.len() as u32;
             for (id, r) in chunk {
                 self.rects.insert(id, r);
             }
+            world.apply_rects_from(&self.rects, &changed, boundary);
         }
-        world.apply_rects(&self.rects);
         LayoutStats {
             nodes_visited: visited,
             boundaries_solved: boundaries.len() as u32,
@@ -477,7 +481,9 @@ impl LayoutEngine {
         let taffy_us = start.elapsed().as_micros() as u64;
 
         let visited = self.collect(world, boundary);
-        world.apply_rects(&self.rects);
+        let changed = core::mem::take(&mut self.changed);
+        world.apply_rects_from(&self.rects, &changed, boundary);
+        self.changed = changed;
         LayoutStats {
             nodes_visited: visited,
             boundaries_solved: 1,
@@ -493,11 +499,13 @@ impl LayoutEngine {
     /// [`Self::rect`] unable to answer for the rest of the tree — which is
     /// exactly what a caller painting the frame needs.
     fn collect(&mut self, world: &UiWorld, root: NodeId) -> u32 {
+        self.changed.clear();
         let mut visited = 0u32;
         for id in preorder(world, root) {
             if let Some(t) = self.map.get(&id) {
                 if let Ok(layout) = self.taffy.layout(*t) {
                     self.rects.insert(id, rect_of(layout));
+                    self.changed.push(id);
                     visited += 1;
                 }
             }

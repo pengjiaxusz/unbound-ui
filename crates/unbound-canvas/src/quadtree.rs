@@ -62,6 +62,13 @@ pub struct Element {
     pub node: u32,
 }
 
+/// One non-empty node: its index and its loose bounds.
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct Occupied {
+    index: u32,
+    bounds: Rect,
+}
+
 /// Query statistics, used by the KPI tests.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct QueryStats {
@@ -91,8 +98,14 @@ pub struct LooseQuadtree {
     world_size: f32,
     /// `level_heads[d]` has `4^d` entries: the head element of each node.
     level_heads: Vec<Vec<u32>>,
-    /// Dense list of node indices that have at least one element, per level.
-    level_occupied: Vec<Vec<u32>>,
+    /// Dense list of non-empty nodes per level, each with its loose bounds
+    /// precomputed at insertion time.
+    ///
+    /// Caching the bounds turns a query into a linear scan of contiguous
+    /// rectangles instead of replaying the Morton digits for every node: on a
+    /// 1 M entity canvas that is the difference between 4 500 random 8-step walks
+    /// and one 200 KiB sequential sweep.
+    level_occupied: Vec<Vec<Occupied>>,
     /// `level_slot[d][node]` is the position of `node` in `level_occupied[d]`,
     /// or [`NO_ELEMENT`] when the node is empty.
     level_slot: Vec<Vec<u32>>,
@@ -327,8 +340,10 @@ impl LooseQuadtree {
             e.next = head;
         }
         if head == NO_ELEMENT {
+            // Compute the bounds before taking the mutable borrow of the list.
+            let bounds = self.node_bounds(index, depth);
             let slot = self.level_occupied[depth as usize].len() as u32;
-            self.level_occupied[depth as usize].push(index);
+            self.level_occupied[depth as usize].push(Occupied { index, bounds });
             self.level_slot[depth as usize][index as usize] = slot;
         }
         self.level_heads[depth as usize][index as usize] = handle;
@@ -344,9 +359,9 @@ impl LooseQuadtree {
             let slot = self.level_slot[level][index as usize];
             debug_assert!(slot != NO_ELEMENT, "occupied list out of sync");
             let last = self.level_occupied[level].pop().expect("occupied node");
-            if last != index {
+            if last.index != index {
                 self.level_occupied[level][slot as usize] = last;
-                self.level_slot[level][last as usize] = slot;
+                self.level_slot[level][last.index as usize] = slot;
             }
             self.level_slot[level][index as usize] = NO_ELEMENT;
         }
@@ -412,13 +427,12 @@ impl LooseQuadtree {
         for depth in 0..self.level_heads.len() as u8 {
             let occupied = self.level_occupied[depth as usize].len();
             for slot in 0..occupied {
-                let index = self.level_occupied[depth as usize][slot];
-                let bounds = self.node_bounds(index, depth);
-                if !bounds.intersects(&query) {
+                let node = self.level_occupied[depth as usize][slot];
+                if !node.bounds.intersects(&query) {
                     continue;
                 }
                 self.stats.nodes_visited += 1;
-                let mut current = self.level_heads[depth as usize][index as usize];
+                let mut current = self.level_heads[depth as usize][node.index as usize];
                 while current != NO_ELEMENT {
                     self.stats.elements_tested += 1;
                     out.push(self.elements[current as usize].entity);

@@ -736,6 +736,28 @@ impl UiWorld {
         self.fold_clips(root);
     }
 
+    /// Apply rectangles for a subset of nodes and refold from `start`.
+    ///
+    /// An incremental solve touches a handful of nodes; walking the whole tree to
+    /// refresh `world_rect`/`clip` would make a 9 node re-layout cost as much as
+    /// a full one.
+    pub fn apply_rects_from(
+        &mut self,
+        rects: &FxHashMap<NodeId, Rect>,
+        changed: &[NodeId],
+        start: NodeId,
+    ) {
+        for id in changed {
+            if let Some(rect) = rects.get(id) {
+                if let Some(node) = self.nodes.get_mut(*id) {
+                    node.rect = *rect;
+                    node.state |= NodeState::LAID_OUT;
+                }
+            }
+        }
+        self.fold_clips(start);
+    }
+
     fn fold_clips(&mut self, start: NodeId) {
         let mut stack = vec![(start, None::<Rect>, [None; 2])];
         while let Some((id, inherited_clip, inherited_rounded)) = stack.pop() {
