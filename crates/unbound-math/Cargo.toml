@@ -1,0 +1,15 @@
+[package]
+name = "unbound-math"
+description = "Allocation-free scalar, vector, rectangle, affine and linear-colour math"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+half.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"

@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/unbound-math",
+    "crates/unbound-abi",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pengjiaxusz/unbound-ui"
+authors = ["Unbound UI Contributors"]
+
+[workspace.dependencies]
+unbound-math = { path = "crates/unbound-math" }
+unbound-abi = { path = "crates/unbound-abi" }
+unbound-gpu = { path = "crates/unbound-gpu" }
+unbound-vector = { path = "crates/unbound-vector" }
+unbound-text = { path = "crates/unbound-text" }
+unbound-world = { path = "crates/unbound-world" }
+unbound-layout = { path = "crates/unbound-layout" }
+unbound-anim = { path = "crates/unbound-anim" }
+unbound-canvas = { path = "crates/unbound-canvas" }
+unbound-input = { path = "crates/unbound-input" }
+unbound-a11y = { path = "crates/unbound-a11y" }
+unbound-headless = { path = "crates/unbound-headless" }
+unbound-ui = { path = "crates/unbound-ui" }
+unbound-platform = { path = "crates/unbound-platform" }
+unbound-host = { path = "crates/unbound-host" }
+
+ash = { version = "0.38", default-features = false, features = ["loaded", "debug"] }
+bytemuck = { version = "1.25", features = ["derive"] }
+half = { version = "2.7", features = ["bytemuck"] }
+taffy = { version = "0.15", default-features = false, features = ["std", "flexbox", "grid", "content_size"] }
+cosmic-text = "0.19"
+accesskit = "0.25"
+rayon = "1.12"
+slotmap = "1.1"
+rkyv = { version = "0.8", features = ["alloc", "bytecheck"] }
+serde = { version = "1.0", features = ["derive"] }
+postcard = { version = "1.1", features = ["alloc"] }
+smallvec = "1.15"
+rustc-hash = "2.1"
+mimalloc = "0.1"
+libloading = "0.9"
+log = "0.4"
+env_logger = "0.11"
+unicode-segmentation = "1.12"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+panic = "unwind"

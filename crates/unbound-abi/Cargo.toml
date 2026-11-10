@@ -1,0 +1,11 @@
+[package]
+name = "unbound-abi"
+description = "Stable C ABI between the Unbound host process and hot-reloadable guest UI logic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
