@@ -141,6 +141,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "unbound-vector"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "unbound-math",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"

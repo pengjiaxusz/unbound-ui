@@ -4,6 +4,7 @@ members = [
     "crates/unbound-math",
     "crates/unbound-abi",
     "crates/unbound-gpu",
+    "crates/unbound-vector",
 ]
 
 [workspace.package]

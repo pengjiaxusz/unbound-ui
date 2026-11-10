@@ -1,0 +1,12 @@
+[package]
+name = "unbound-vector"
+description = "Cubic-to-quadratic adaptive subdivision, tight OBBs and stable analytic Bézier distance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
+bytemuck.workspace = true
