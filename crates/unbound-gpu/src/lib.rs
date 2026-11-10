@@ -29,10 +29,12 @@ pub mod pipeline;
 pub mod pool;
 pub mod quarantine;
 pub mod ring;
+pub mod sdf;
 pub mod shader;
 pub mod sort;
 pub mod tlsf;
 
+pub use sdf::SdfPipeline;
 pub use debug::{is_device_lost, recover_with, RecoveryError, RecoveryPolicy, RenderDoc, ValidationCounter, VALIDATION};
 pub use frame::{Camera, FrameStats, Renderer, SceneUpload};
 pub use device::{Buffer, Gpu, GpuConfig, GpuError, GpuFeatures, MemoryKind, Timeline};

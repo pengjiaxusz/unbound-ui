@@ -5,6 +5,7 @@ members = [
     "crates/unbound-abi",
     "crates/unbound-gpu",
     "crates/unbound-vector",
+    "crates/unbound-text",
 ]
 
 [workspace.package]
@@ -50,6 +51,15 @@ libloading = "0.9"
 log = "0.4"
 env_logger = "0.11"
 unicode-segmentation = "1.12"
+
+[workspace.lints.cargo]
+# Workspace dependency entries are declared up-front for the whole roadmap; cargo
+# warns about the ones a given build does not touch yet. That is noise, not a bug.
+unused_workspace_dependencies = "allow"
+unused_workspace_package_fields = "allow"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
 
 [profile.dev]
 opt-level = 1

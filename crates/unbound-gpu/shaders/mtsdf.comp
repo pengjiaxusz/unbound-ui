@@ -1,0 +1,156 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ---------------------------------------------------------------------------
+// GPU MTSDF generation (docs §3.5).
+//
+// Three dispatches turn a rasterised coverage bitmap into a signed distance
+// field without touching the CPU:
+//
+//   pass 0 (h)  : 1D squared distance along x, for "to outside" and "to inside"
+//   pass 1 (v)  : the same along y, completing the separable 2D transform
+//   pass 2 (pack): sign, normalise by spread, write RGBA8
+//
+// The 1D transform is the Felzenszwalb lower-envelope algorithm. It is
+// sequential per row/column by nature, so each invocation owns one row (or one
+// column): for a 64×64 glyph that is 128 invocations of 128 steps, which is
+// nothing on a modern queue and — crucially — produces results that match the
+// CPU reference bit for bit, so the two paths can be diffed in tests.
+//
+// Channel strategy: the field is replicated into R, G and B. The fragment
+// shader's median-of-three is then a no-op but stays correct, and the layout is
+// ready for per-edge channel assignment without changing the sampling code.
+// ---------------------------------------------------------------------------
+
+#include "common.glsl"
+
+layout(local_size_x = 1) in;
+
+#define INF 1.0e20
+
+// `pc.prim_count` = width, `pc.block_count` = height, `pc.aux` = pass index,
+// `pc.digit` = spread in 1/256 texels.
+// Coverage is byte-packed; reading through a u32 view avoids requiring the
+// 8-bit storage extension, which is not part of the mandatory feature set.
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32Buf {
+    uint u[];
+};
+
+uint coverage_at(U32Buf buf, int i) {
+    return (buf.u[i >> 2] >> uint((i & 3) * 8)) & 0xFFu;
+}
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer F32Buf {
+    float f[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer PackBuf {
+    uint u[];
+};
+
+// Scratch for the 1D transform. Sized for the largest glyph tile we accept.
+shared float s_f[1024];
+shared float s_d[1024];
+shared int s_v[1024];
+shared float s_z[1025];
+
+void edt_1d(int n) {
+    // s_f holds the samples; s_d receives squared distances.
+    int k = 0;
+    s_v[0] = 0;
+    s_z[0] = -INF;
+    s_z[1] = INF;
+    for (int q = 1; q < n; ++q) {
+        float fq = s_f[q] + float(q * q);
+        while (true) {
+            int p = s_v[k];
+            float fp = s_f[p] + float(p * p);
+            float s = (fq - fp) / (2.0 * float(q) - 2.0 * float(p));
+            if (s <= s_z[k]) {
+                if (k == 0) {
+                    s_v[0] = q;
+                    s_z[0] = -INF;
+                    s_z[1] = INF;
+                    break;
+                }
+                k -= 1;
+                continue;
+            }
+            k += 1;
+            s_v[k] = q;
+            s_z[k] = s;
+            s_z[k + 1] = INF;
+            break;
+        }
+    }
+    k = 0;
+    for (int q = 0; q < n; ++q) {
+        while (s_z[k + 1] < float(q)) {
+            k += 1;
+        }
+        int p = s_v[k];
+        float dq = float(q) - float(p);
+        s_d[q] = dq * dq + s_f[p];
+    }
+}
+
+void main() {
+    int width = int(pc.prim_count);
+    int height = int(pc.block_count);
+    int pass_id = int(pc.aux);
+    uint spread_q8 = pc.digit;
+
+    U32Buf coverage = U32Buf(pc.scratch_bda);
+    // Two floats per texel: squared distance to outside, squared to inside.
+    F32Buf temp = F32Buf(pc.scratch_bda2);
+    PackBuf out_pack = PackBuf(pc.scratch_bda3);
+
+    if (pass_id == 0) {
+        // Horizontal pass: one invocation per row.
+        int y = int(gl_WorkGroupID.x);
+        if (y >= height) {
+            return;
+        }
+        for (int pair = 0; pair < 2; ++pair) {
+            bool want_inside = (pair == 1);
+            for (int x = 0; x < width; ++x) {
+                bool inside = coverage_at(coverage, y * width + x) >= 128u;
+                bool seed = want_inside ? inside : !inside;
+                s_f[x] = seed ? 0.0 : INF;
+            }
+            edt_1d(width);
+            for (int x = 0; x < width; ++x) {
+                temp.f[(y * width + x) * 2 + pair] = s_d[x];
+            }
+        }
+    } else if (pass_id == 1) {
+        // Vertical pass: one invocation per column.
+        int x = int(gl_WorkGroupID.x);
+        if (x >= width) {
+            return;
+        }
+        for (int pair = 0; pair < 2; ++pair) {
+            for (int y = 0; y < height; ++y) {
+                s_f[y] = temp.f[(y * width + x) * 2 + pair];
+            }
+            edt_1d(height);
+            for (int y = 0; y < height; ++y) {
+                temp.f[(y * width + x) * 2 + pair] = s_d[y];
+            }
+        }
+    } else {
+        // Pack pass: one invocation per texel.
+        int i = int(gl_WorkGroupID.x);
+        if (i >= width * height) {
+            return;
+        }
+        bool inside = coverage_at(coverage, i) >= 128u;
+        float d_out = sqrt(temp.f[i * 2 + 0]);
+        float d_in = sqrt(temp.f[i * 2 + 1]);
+        float signed_dist = inside ? -d_out : d_in;
+        float spread = float(spread_q8) / 256.0;
+        float value = clamp(0.5 - signed_dist / (2.0 * spread), 0.0, 1.0);
+        uint v = uint(value * 255.0 + 0.5);
+        uint alpha = coverage_at(coverage, i);
+        out_pack.u[i] = v | (v << 8) | (v << 16) | (alpha << 24);
+    }
+}
