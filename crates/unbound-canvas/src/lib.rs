@@ -12,7 +12,11 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod quadtree;
+pub mod select;
 pub mod snap;
 
 pub use quadtree::{Element, LooseQuadtree, QueryStats, MAX_DEPTH};
+pub use select::{
+    Handle, HandleDrag, Marquee, Modifiers, Selection, SelectionMode, Transform2,
+};
 pub use snap::{Axis, SnapConfig, SnapGuide, SnapKind, SnapResult, Snapper};
