@@ -693,6 +693,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "unbound-kpi"
+version = "0.1.0"
+dependencies = [
+ "unbound-abi",
+ "unbound-canvas",
+ "unbound-headless",
+ "unbound-input",
+ "unbound-layout",
+ "unbound-math",
+ "unbound-world",
+]
+
+[[package]]
 name = "unbound-layout"
 version = "0.1.0"
 dependencies = [

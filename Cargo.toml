@@ -15,6 +15,7 @@ members = [
     "crates/unbound-headless",
     "crates/unbound-host",
     "crates/app-guest",
+    "crates/unbound-kpi",
 ]
 
 [workspace.package]

@@ -1,0 +1,20 @@
+[package]
+name = "unbound-kpi"
+description = "Engineering acceptance KPIs from docs §10.2, measured on the CPU"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
+unbound-abi.workspace = true
+unbound-canvas.workspace = true
+unbound-input.workspace = true
+unbound-world.workspace = true
+unbound-layout.workspace = true
+unbound-headless.workspace = true
+
+[lints]
+workspace = true
