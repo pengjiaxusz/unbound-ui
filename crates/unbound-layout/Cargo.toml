@@ -1,0 +1,16 @@
+[package]
+name = "unbound-layout"
+description = "Incremental Taffy integration with relayout boundaries and parallel subtree solving"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
+unbound-abi.workspace = true
+unbound-world.workspace = true
+taffy.workspace = true
+rustc-hash.workspace = true
+rayon.workspace = true

@@ -79,6 +79,20 @@ macro_rules! bitflags_like {
             }
         }
 
+        impl core::ops::BitOrAssign for $name {
+            #[inline]
+            fn bitor_assign(&mut self, rhs: Self) {
+                self.0 |= rhs.0;
+            }
+        }
+
+        impl core::ops::BitAndAssign for $name {
+            #[inline]
+            fn bitand_assign(&mut self, rhs: Self) {
+                self.0 &= rhs.0;
+            }
+        }
+
         impl core::ops::BitAnd for $name {
             type Output = Self;
             #[inline]

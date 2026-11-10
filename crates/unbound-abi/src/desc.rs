@@ -458,6 +458,12 @@ impl RawNodeDesc {
         Self::default()
     }
 
+    /// A text node (content is attached separately via the host context).
+    #[must_use]
+    pub fn text() -> Self {
+        Self::default().tag(NodeTag::Text)
+    }
+
     /// Fixed size in logical pixels.
     #[must_use]
     pub fn size(mut self, w: f32, h: f32) -> Self {

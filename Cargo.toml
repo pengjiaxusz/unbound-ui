@@ -6,6 +6,8 @@ members = [
     "crates/unbound-gpu",
     "crates/unbound-vector",
     "crates/unbound-text",
+    "crates/unbound-world",
+    "crates/unbound-layout",
 ]
 
 [workspace.package]
@@ -36,7 +38,7 @@ unbound-host = { path = "crates/unbound-host" }
 ash = { version = "0.38", default-features = false, features = ["loaded", "debug"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 half = { version = "2.7", features = ["bytemuck"] }
-taffy = { version = "0.15", default-features = false, features = ["std", "flexbox", "grid", "content_size"] }
+taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
 cosmic-text = "0.19"
 accesskit = "0.25"
 rayon = "1.12"

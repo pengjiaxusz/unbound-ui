@@ -1,0 +1,15 @@
+[package]
+name = "unbound-world"
+description = "Data-oriented UI world: flat SlotMap tree, intrusive child lists, dirty triage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
+unbound-abi.workspace = true
+bytemuck.workspace = true
+slotmap.workspace = true
+rustc-hash.workspace = true
