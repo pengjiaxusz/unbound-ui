@@ -469,6 +469,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "unbound-anim"
+version = "0.1.0"
+dependencies = [
+ "unbound-math",
+]
+
+[[package]]
 name = "unbound-gpu"
 version = "0.1.0"
 dependencies = [

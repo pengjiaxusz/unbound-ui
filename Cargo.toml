@@ -8,6 +8,7 @@ members = [
     "crates/unbound-text",
     "crates/unbound-world",
     "crates/unbound-layout",
+    "crates/unbound-anim",
 ]
 
 [workspace.package]

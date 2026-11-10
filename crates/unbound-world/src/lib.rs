@@ -28,6 +28,10 @@ use slotmap::{new_key_type, Key, SlotMap};
 use unbound_abi::{bitflags_like, NodeFlags, NodeTag, RawAction, RawNodeDesc};
 use unbound_math::{Rect, Vec2};
 
+pub mod virtualize;
+
+pub use virtualize::{TreeRow, VirtualGrid, VirtualList, VirtualTree, WindowUpdate};
+
 new_key_type! {
     /// Stable, generational handle to a node.
     pub struct NodeId;

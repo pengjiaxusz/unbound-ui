@@ -1,0 +1,11 @@
+[package]
+name = "unbound-anim"
+description = "Spring physics, easing and the reactive frame scheduler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
