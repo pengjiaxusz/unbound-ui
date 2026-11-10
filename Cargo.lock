@@ -12,6 +12,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-guest"
+version = "0.1.0"
+dependencies = [
+ "postcard",
+ "serde",
+ "unbound-abi",
+ "unbound-host",
+]
+
+[[package]]
 name = "ash"
 version = "0.38.0+1.3.281"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -661,6 +671,15 @@ dependencies = [
  "postcard",
  "serde",
  "unbound-math",
+]
+
+[[package]]
+name = "unbound-host"
+version = "0.1.0"
+dependencies = [
+ "libloading 0.9.0",
+ "rustc-hash",
+ "unbound-abi",
 ]
 
 [[package]]

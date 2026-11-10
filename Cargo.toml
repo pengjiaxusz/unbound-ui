@@ -13,6 +13,8 @@ members = [
     "crates/unbound-input",
     "crates/unbound-a11y",
     "crates/unbound-headless",
+    "crates/unbound-host",
+    "crates/app-guest",
 ]
 
 [workspace.package]

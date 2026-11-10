@@ -1,0 +1,22 @@
+[package]
+name = "app-guest"
+description = "Hot-reloadable business layer: a guest cdylib driven through the C ABI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+unbound-abi.workspace = true
+serde.workspace = true
+postcard.workspace = true
+
+[dev-dependencies]
+unbound-host.workspace = true
+
+[lints]
+workspace = true
