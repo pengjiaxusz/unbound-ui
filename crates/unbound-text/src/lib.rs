@@ -18,11 +18,13 @@
 pub mod atlas;
 pub mod glyph;
 pub mod sdf;
+pub mod selection;
 pub mod shaping;
 
 pub use atlas::{Atlas, AtlasConfig, GlyphAtlas, GlyphKey, GlyphSlot, SUBPIXEL_PHASES};
 pub use glyph::{AtlasTarget, AtlasUpdate, GlyphCache, GlyphQuad, ResolvedGlyph};
 pub use sdf::{from_coverage, reconstruct_coverage, SdfBitmap};
+pub use selection::{ime_cursor_area, merge_line_rects, outline_polygon, RoundedSlot};
 pub use shaping::{
     PositionedGlyph, ShapedText, TextCacheStats, TextEngine, TextLine, TextStyle, WrappedText,
 };
