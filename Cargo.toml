@@ -12,6 +12,7 @@ members = [
     "crates/unbound-canvas",
     "crates/unbound-input",
     "crates/unbound-a11y",
+    "crates/unbound-headless",
 ]
 
 [workspace.package]

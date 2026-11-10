@@ -1,0 +1,16 @@
+[package]
+name = "unbound-headless"
+description = "GPU-free verification harness with layout sanitizers and binary time-travel snapshots"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
+serde.workspace = true
+postcard.workspace = true
+
+[lints]
+workspace = true
