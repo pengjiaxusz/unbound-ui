@@ -94,6 +94,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "unbound-gpu"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "unbound-math",
+]
+
+[[package]]
 name = "unbound-math"
 version = "0.1.0"
 dependencies = [
