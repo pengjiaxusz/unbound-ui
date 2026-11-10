@@ -1,0 +1,66 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ---------------------------------------------------------------------------
+// Stable LSD radix sort, pass 3/3: stable scatter.
+//
+// Thread 0 of each block walks the block's 256 keys **in index order** and
+// assigns each one the next slot for its digit. That serial walk is what buys
+// exact stability: `atomicAdd` ordering is not defined, and a non-stable scatter
+// would reorder equal keys on every frame.
+//
+// Blocks are independent, so the serial walk costs O(BLOCK) per block while all
+// blocks run in parallel. The key array and the index array are permuted with
+// the same positions, keeping the primitive indices attached to their keys.
+// ---------------------------------------------------------------------------
+
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#define BLOCK 256u
+
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer KeyBuf {
+    uint64_t k[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32Buf {
+    uint v[];
+};
+
+shared uint s_pos[256];    // running write cursor per digit for this block
+shared uint s_out[BLOCK];  // destination slot for each element
+
+void main() {
+    uint block = gl_WorkGroupID.x;
+    uint base = block * BLOCK;
+    if (base >= pc.prim_count) {
+        return;
+    }
+    uint lid = gl_LocalInvocationID.x;
+    uint count = min(BLOCK, pc.prim_count - base);
+
+    U32Buf scratch = U32Buf(pc.scratch_bda5);
+    uint hist_words = pc.block_count * BLOCK;
+
+    if (lid < 256u) {
+        s_pos[lid] = scratch.v[hist_words + block * BLOCK + lid];
+    }
+    barrier();
+
+    if (lid == 0u) {
+        for (uint i = 0u; i < count; ++i) {
+            uint64_t key = KeyBuf(pc.scratch_bda).k[base + i];
+            uint digit = uint((key >> pc.digit) & 0xFFu);
+            s_out[i] = s_pos[digit];
+            s_pos[digit] = s_pos[digit] + 1u;
+        }
+    }
+    barrier();
+
+    if (lid < count) {
+        uint dst = s_out[lid];
+        KeyBuf(pc.scratch_bda2).k[dst] = KeyBuf(pc.scratch_bda).k[base + lid];
+        U32Buf(pc.scratch_bda4).v[dst] = U32Buf(pc.scratch_bda3).v[base + lid];
+    }
+}

@@ -22,16 +22,25 @@
 #![warn(missing_debug_implementations)]
 
 pub mod data;
+pub mod debug;
+pub mod device;
+pub mod frame;
+pub mod pipeline;
 pub mod pool;
 pub mod quarantine;
 pub mod ring;
+pub mod shader;
 pub mod sort;
 pub mod tlsf;
 
+pub use debug::{is_device_lost, recover_with, RecoveryError, RecoveryPolicy, RenderDoc, ValidationCounter, VALIDATION};
+pub use frame::{Camera, FrameStats, Renderer, SceneUpload};
+pub use device::{Buffer, Gpu, GpuConfig, GpuError, GpuFeatures, MemoryKind, Timeline};
 pub use data::{
     BlendMode, DrawIndirectCommand, FramePushConstants, GpuClipNode, GpuPayload,
-    GpuPrimitiveInstance, GpuTransform, PassLayer, PrimType, SubElement, TransformFlags,
-    CLIP_NONE, PRIMITIVE_STRIDE, TRANSFORM_ANIMATED_BIT,
+    GpuPrimitiveInstance, GpuScatterPatch, GpuTransform, PassLayer, PrimFlags, PrimType,
+    PushConstants, SortedEntry, SubElement, TransformFlags, CLIP_NONE, PRIMITIVE_STRIDE,
+    TRANSFORM_ANIMATED_BIT,
 };
 pub use pool::{PersistentPool, PoolHandle, PoolStats, ScatterPatch};
 pub use quarantine::{EpochQuarantine, QuarantinedBlock};

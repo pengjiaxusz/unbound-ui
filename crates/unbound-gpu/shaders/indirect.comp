@@ -1,0 +1,100 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ---------------------------------------------------------------------------
+// Stage 3 — indirect command compaction (docs §6.3).
+//
+// Walks the sorted key array and emits one `VkDrawIndirectCommand` per
+// contiguous `(layer, barrier, variant)` run. Because the sort orders those
+// three fields first, every run is contiguous, so the frame issues the whole
+// thing with a single `vkCmdDrawIndirectCount`: the count buffer is written
+// here and consumed on the GPU, which means the CPU never reads it back and
+// never stalls.
+//
+// Two details make this correct rather than merely plausible:
+//   * unused key slots were pre-filled with `0xFFFF…` and sort to the end, so
+//     the walk stops at the first sentinel instead of drawing garbage;
+//   * `pc.aux` bounds the number of runs, so a pathological scene cannot
+//     overflow the command buffer.
+//
+// Output counters: `c[1]` = run count (read by drawIndirectCount),
+//                  `c[2]` = visible instance count (diagnostics).
+// ---------------------------------------------------------------------------
+
+#include "common.glsl"
+
+layout(local_size_x = 1) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer KeyBuf {
+    uint64_t k[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer CmdBuf {
+    uint v[];  // 4 words per DrawIndirectCommand
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer CursorBuf {
+    uint c[];
+};
+
+#define SENTINEL 0xFFFFFFFFFFFFFFFFul
+
+void emit(CmdBuf cmds, uint run, uint first, uint count) {
+    uint o = run * 4u;
+    cmds.v[o + 0u] = 4u;       // vertex_count
+    cmds.v[o + 1u] = count;    // instance_count
+    cmds.v[o + 2u] = 0u;       // first_vertex
+    cmds.v[o + 3u] = first;    // first_instance == sorted slot
+}
+
+void main() {
+    uint n = pc.prim_count;
+    CmdBuf cmds = CmdBuf(pc.scratch_bda2);
+    CursorBuf counters = CursorBuf(pc.scratch_bda3);
+    uint max_runs = pc.aux;
+
+    if (n == 0u) {
+        counters.c[1] = 0u;
+        counters.c[2] = 0u;
+        return;
+    }
+
+    KeyBuf keys = KeyBuf(pc.scratch_bda);
+
+    // Find the first sentinel: everything from here on is padding.
+    uint end = n;
+    for (uint i = 0u; i < n; ++i) {
+        if (keys.k[i] == SENTINEL) {
+            end = i;
+            break;
+        }
+    }
+    counters.c[2] = end;
+
+    if (end == 0u) {
+        counters.c[1] = 0u;
+        return;
+    }
+
+    uint run = 0u;
+    uint run_start = 0u;
+    // `key >> 36` leaves exactly layer|barrier|variant.
+    uint prev = uint(keys.k[0] >> 36);
+
+    for (uint i = 1u; i < end; ++i) {
+        uint cur = uint(keys.k[i] >> 36);
+        if (cur != prev) {
+            emit(cmds, run, run_start, i - run_start);
+            run += 1u;
+            run_start = i;
+            prev = cur;
+            if (run >= max_runs) {
+                // Command buffer full: stop compacting, keep the remaining
+                // primitives out rather than writing past the allocation.
+                counters.c[1] = run;
+                return;
+            }
+        }
+    }
+    emit(cmds, run, run_start, end - run_start);
+    counters.c[1] = run + 1u;
+}

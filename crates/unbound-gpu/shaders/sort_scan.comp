@@ -1,0 +1,57 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ---------------------------------------------------------------------------
+// Stable LSD radix sort, pass 2/3: global bucket scan.
+//
+// One workgroup, one thread per digit (256 threads). Each thread walks the
+// per-block histograms of *its* digit, so the whole scan is O(block_count) per
+// thread instead of O(256 × block_count) serial.
+// ---------------------------------------------------------------------------
+
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#define BLOCK 256u
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32Buf {
+    uint v[];
+};
+
+shared uint s_digit_base[256];
+
+void main() {
+    uint d = gl_LocalInvocationID.x;
+    U32Buf scratch = U32Buf(pc.scratch_bda5);
+    uint hist_words = pc.block_count * BLOCK;
+    uint blocks = pc.block_count;
+
+    // Total number of keys with this digit across all blocks.
+    uint total = 0u;
+    for (uint b = 0u; b < blocks; ++b) {
+        total += scratch.v[b * BLOCK + d];
+    }
+    s_digit_base[d] = total;
+    barrier();
+
+    // Exclusive prefix over digits, done once by thread 0 (256 iterations).
+    if (d == 0u) {
+        uint running = 0u;
+        for (uint i = 0u; i < 256u; ++i) {
+            uint t = s_digit_base[i];
+            s_digit_base[i] = running;
+            running += t;
+        }
+    }
+    barrier();
+
+    // Write every block's start offset for this digit.
+    uint running = s_digit_base[d];
+    for (uint b = 0u; b < blocks; ++b) {
+        uint c = scratch.v[b * BLOCK + d];
+        scratch.v[hist_words + b * BLOCK + d] = running;
+        running += c;
+    }
+}

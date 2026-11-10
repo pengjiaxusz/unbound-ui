@@ -1,0 +1,50 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ---------------------------------------------------------------------------
+// Stage 1 — Incremental Scatter (docs §2.2).
+//
+// The CPU never re-uploads the persistent pool. Instead it appends a sparse list
+// of `{dst_offset, src_offset, len}` patches to the frame's transient ring and
+// this shader copies them in place. A frame that only moves the camera enqueues
+// zero patches, which is what makes "0 bytes per frame" true rather than
+// aspirational.
+// ---------------------------------------------------------------------------
+
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+struct ScatterPatch {
+    uint dst_offset;
+    uint src_offset;
+    uint len;
+    uint _pad;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer PatchBuf {
+    ScatterPatch p[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) buffer WordBuf {
+    uvec4 w[];
+};
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.prim_count) {
+        return;
+    }
+    ScatterPatch sp = PatchBuf(pc.scratch_bda).p[i];
+    WordBuf dst = WordBuf(pc.scratch_bda2);
+    WordBuf src = WordBuf(pc.scratch_bda3);
+
+    // 16-byte granule copies: both ends are documented to be 16B aligned
+    // (pool offsets are 64B aligned, ring offsets are 16B aligned).
+    uint words = sp.len >> 4;
+    uint d = sp.dst_offset >> 4;
+    uint s = sp.src_offset >> 4;
+    for (uint k = 0; k < words; ++k) {
+        dst.w[d + k] = src.w[s + k];
+    }
+}

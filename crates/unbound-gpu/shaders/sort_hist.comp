@@ -1,0 +1,57 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ---------------------------------------------------------------------------
+// Stable LSD radix sort, pass 1/3: per-block histogram.
+//
+// A single 8-bit digit per pass keeps the shared-memory histogram at 1 KiB and
+// makes the scatter step exact. 8 passes cover the full 64-bit key.
+//
+// Stability is what makes LSD radix correct: equal keys must keep their input
+// order, otherwise the sub-element ordering inside a node would shuffle every
+// frame and the painter's algorithm would flicker.
+// ---------------------------------------------------------------------------
+
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#define BLOCK 256u
+
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer KeyBuf {
+    uint64_t k[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32Buf {
+    uint v[];
+};
+
+shared uint s_hist[BLOCK];
+
+void main() {
+    uint block = gl_WorkGroupID.x;
+    uint base = block * BLOCK;
+    if (base >= pc.prim_count) {
+        return;
+    }
+    uint lid = gl_LocalInvocationID.x;
+    if (lid < BLOCK) {
+        s_hist[lid] = 0u;
+    }
+    barrier();
+
+    uint count = min(BLOCK, pc.prim_count - base);
+    if (lid < count) {
+        uint64_t key = KeyBuf(pc.scratch_bda).k[base + lid];
+        uint digit = uint((key >> pc.digit) & 0xFFu);
+        atomicAdd(s_hist[digit], 1u);
+    }
+    barrier();
+
+    // Histograms live in the first `block_count * 256` words of the scratch
+    // buffer; the per-block offsets follow immediately after.
+    U32Buf hist = U32Buf(pc.scratch_bda5);
+    if (lid < BLOCK) {
+        hist.v[block * BLOCK + lid] = s_hist[lid];
+    }
+}

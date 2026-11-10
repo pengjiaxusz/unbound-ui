@@ -1,0 +1,85 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ---------------------------------------------------------------------------
+// Stage 2 — GPU viewport culling + sort-key generation (docs §5.1 / §6.3).
+//
+// The CPU already pruned whole chunks with the loose quadtree; this pass does
+// the per-primitive test that is too fine-grained for the CPU:
+//   * camera-relative AABB vs viewport,
+//   * clip-rect rejection,
+//   * sub-0.5px² cull (invisible at any zoom, pure fragment waste),
+//   * 64-bit depth key emission with the layer/barrier/variant prefix supplied
+//     per dispatch by the host pass.
+//
+// Output is a compacted (key, index) list plus an atomic write cursor.
+// ---------------------------------------------------------------------------
+
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer KeyBuf {
+    uint64_t k[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer IndexBuf {
+    uint i[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer CursorBuf {
+    uint c[];
+};
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.prim_count) {
+        return;
+    }
+    PrimBuf prims = PrimBuf(pc.primitives_bda);
+    Prim p = prims.p[i];
+
+    float shadow = unpack_shadow(p.border_and_shadow);
+    float pad = shadow > 0.0 ? shadow * 3.0 : 0.0;
+
+    vec2 chunk_base = vec2(p.chunk_id - pc.camera_chunk) * CHUNK_SIZE - pc.camera_local;
+    vec2 lo = chunk_base + p.local_pos - vec2(pad);
+    vec2 hi = chunk_base + p.local_pos + p.size + vec2(pad);
+
+    float scale = pc.camera_zoom * pc.dpi_scale;
+    vec2 s_lo = rel_to_screen(lo, scale, pc.viewport_size * 0.5);
+    vec2 s_hi = rel_to_screen(hi, scale, pc.viewport_size * 0.5);
+
+    // Viewport rejection (inclusive of the 1px AA skirt).
+    if (s_hi.x < -1.0 || s_lo.x > pc.viewport_size.x + 1.0 ||
+        s_hi.y < -1.0 || s_lo.y > pc.viewport_size.y + 1.0) {
+        return;
+    }
+
+    // Sub-pixel primitives cost more than they contribute.
+    vec2 extent = max(s_hi - s_lo, vec2(0.0));
+    if (extent.x * extent.y < 0.5) {
+        return;
+    }
+
+    // Clip-rect rejection: a primitive entirely outside its clip is invisible.
+    if (p.clip_idx != CLIP_NONE) {
+        ClipNode c = ClipBuf(pc.clips_bda).c[p.clip_idx];
+        // `aabb` is chunk-local, so compare in the same space.
+        if (p.local_pos.x >= c.aabb.z || p.local_pos.x + p.size.x <= c.aabb.x ||
+            p.local_pos.y >= c.aabb.w || p.local_pos.y + p.size.y <= c.aabb.y) {
+            return;
+        }
+    }
+
+    // 64-bit key: [layer 8 | barrier 16 | variant 4 | z 28 | sub 8].
+    // `aux` carries the layer/barrier/variant prefix for this dispatch, so the
+    // shader never needs a second lookup table.
+    uint z16 = p.z_opacity >> 16;
+    uint sub = (p.type_flags >> 16) & 0x7u;
+    uint64_t z28 = uint64_t(z16) << 12;       // 16 -> 28 bits
+    uint64_t key = pc.scratch_bda4 | (z28 << 8) | uint64_t(sub);
+
+    uint slot = atomicAdd(CursorBuf(pc.scratch_bda2).c[0], 1u);
+    KeyBuf(pc.scratch_bda).k[slot] = key;
+    IndexBuf(pc.scratch_bda3).i[slot] = i;
+}

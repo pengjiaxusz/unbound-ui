@@ -548,6 +548,122 @@ impl DrawIndirectCommand {
     }
 }
 
+/// Flags stored in the high 16 bits of `prim_type_and_flags`.
+///
+/// Bits 0..2 are the **sub-element order** that also forms the low byte of the
+/// 64-bit sort key, so a node's shadow always lands behind its background and
+/// its border always lands in front.
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Pod, Zeroable)]
+pub struct PrimFlags(pub u16);
+
+impl PrimFlags {
+    pub const EMPTY: Self = Self(0);
+    /// Sub-element order mask (`SubElement`).
+    pub const SUB_ELEMENT_MASK: Self = Self(0b111);
+    /// The glyph sits on a dark surface: apply stem darkening.
+    pub const DARK_BG: Self = Self(1 << 3);
+    /// Sample the RGBA atlas as a multi-channel distance field.
+    pub const MSDF: Self = Self(1 << 4);
+    /// The text run was truncated; the shader may soften the trailing edge.
+    pub const ELLIPSIS: Self = Self(1 << 5);
+    /// Rasterised with a horizontal subpixel phase (Atlas_R8 phase layers).
+    pub const SUBPIXEL: Self = Self(1 << 6);
+    /// The primitive is the topmost of an opaque core (used by the prepass).
+    pub const OPAQUE_CORE: Self = Self(1 << 7);
+
+    #[inline]
+    #[must_use]
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Build the flags word for a given sub-element plus extra flags.
+    #[must_use]
+    pub const fn with_sub(sub: SubElement, extra: Self) -> Self {
+        Self((sub as u16) | extra.0)
+    }
+
+    /// Sub-element encoded in the low three bits.
+    #[must_use]
+    pub const fn sub_element(self) -> u8 {
+        (self.0 & Self::SUB_ELEMENT_MASK.0) as u8
+    }
+}
+
+impl core::ops::BitOr for PrimFlags {
+    type Output = Self;
+    #[inline]
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+/// The **single** 128-byte push-constant block used by every pipeline.
+///
+/// The first 72 bytes are the documented `FramePushConstants`; the tail carries
+/// the compute stage's scratch addresses and counters. Graphics pipelines push
+/// the whole block with a zeroed tail, which lets one `VkPipelineLayout` serve
+/// the uber shader and all six compute stages (and keeps the range under the
+/// 128-byte guaranteed minimum).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
+pub struct PushConstants {
+    pub frame: FramePushConstants,
+    /// Element count for the current compute dispatch.
+    pub prim_count: u32,
+    /// Radix digit shift (0, 8, 16, … 56).
+    pub digit: u32,
+    /// Number of 256-element blocks in the current sort pass.
+    pub block_count: u32,
+    /// Generic scratch word (stage specific).
+    pub aux: u32,
+    pub scratch_bda: u64,
+    pub scratch_bda2: u64,
+    pub scratch_bda3: u64,
+    pub scratch_bda4: u64,
+    pub scratch_bda5: u64,
+}
+
+impl PushConstants {
+    /// Push-constant range size in bytes.
+    pub const SIZE: u32 = core::mem::size_of::<Self>() as u32;
+
+    /// Wrapper carrying only the frame prefix (what most callers have).
+    #[must_use]
+    pub fn from_frame(frame: FramePushConstants) -> Self {
+        Self {
+            frame,
+            ..Default::default()
+        }
+    }
+}
+
+/// One incremental-scatter patch, layout-compatible with `scatter.comp`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+pub struct GpuScatterPatch {
+    pub dst_offset: u32,
+    pub src_offset: u32,
+    pub len: u32,
+    pub _pad: u32,
+}
+
+/// A `(key, primitive index)` pair as produced by the culling pass.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+pub struct SortedEntry {
+    pub key: u64,
+    pub index: u32,
+    pub _pad: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -705,6 +821,44 @@ mod tests {
         assert_eq!(PassLayer::portal(254), PassLayer::Debug);
         assert!(PrimType::Glyph.is_text());
         assert!(!PrimType::Image.is_text());
+    }
+
+    #[test]
+    fn push_constants_are_exactly_128_bytes() {
+        assert_eq!(size_of::<PushConstants>(), 128);
+        assert_eq!(PushConstants::SIZE, 128);
+        assert_eq!(offset_of!(PushConstants, frame), 0);
+        assert_eq!(offset_of!(PushConstants, prim_count), 72);
+        assert_eq!(offset_of!(PushConstants, digit), 76);
+        assert_eq!(offset_of!(PushConstants, block_count), 80);
+        assert_eq!(offset_of!(PushConstants, aux), 84);
+        assert_eq!(offset_of!(PushConstants, scratch_bda), 88);
+        assert_eq!(offset_of!(PushConstants, scratch_bda5), 120);
+    }
+
+    #[test]
+    fn prim_flags_pack_sub_element_and_markers() {
+        let f = PrimFlags::with_sub(SubElement::Border, PrimFlags::DARK_BG);
+        assert_eq!(f.sub_element(), SubElement::Border as u8);
+        assert!(f.contains(PrimFlags::DARK_BG));
+        assert!(!f.contains(PrimFlags::MSDF));
+    }
+
+    #[test]
+    fn scatter_patch_matches_the_shader_layout() {
+        assert_eq!(size_of::<GpuScatterPatch>(), 16);
+        let p = GpuScatterPatch {
+            dst_offset: 1,
+            src_offset: 2,
+            len: 64,
+            _pad: 0,
+        };
+        assert_eq!(bytemuck::bytes_of(&p).len(), 16);
+    }
+
+    #[test]
+    fn sorted_entry_is_16_bytes() {
+        assert_eq!(size_of::<SortedEntry>(), 16);
     }
 
     #[test]
