@@ -46,6 +46,12 @@ pub enum ActionKind {
     Resize = 25,
     Focus = 26,
     Blur = 27,
+    /// OS file drag entered the window (`docs` §6.1).
+    DragEnter = 28,
+    /// OS file drag moved over a drop target.
+    DragOver = 29,
+    /// OS file drag released.
+    Drop = 30,
     /// Escape hatch for application-specific actions.
     Custom = 0xFFFF,
 }
@@ -78,6 +84,9 @@ impl ActionKind {
             22 => Self::Undo,
             23 => Self::Redo,
             24 => Self::SetTheme,
+            28 => Self::DragEnter,
+            29 => Self::DragOver,
+            30 => Self::Drop,
             25 => Self::Resize,
             26 => Self::Focus,
             27 => Self::Blur,

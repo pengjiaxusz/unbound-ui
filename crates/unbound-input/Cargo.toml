@@ -11,6 +11,7 @@ repository.workspace = true
 unbound-math.workspace = true
 unbound-vector.workspace = true
 unbound-canvas.workspace = true
+unbound-abi.workspace = true
 rustc-hash.workspace = true
 
 [lints]

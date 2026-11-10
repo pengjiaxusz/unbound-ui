@@ -32,6 +32,7 @@ pub mod ring;
 pub mod sdf;
 pub mod shader;
 pub mod sort;
+pub mod swapchain;
 pub mod tlsf;
 
 pub use sdf::SdfPipeline;
@@ -48,4 +49,5 @@ pub use pool::{PersistentPool, PoolHandle, PoolStats, ScatterPatch};
 pub use quarantine::{EpochQuarantine, QuarantinedBlock};
 pub use ring::TransientRing;
 pub use sort::SortKey;
+pub use swapchain::{is_supported, PresentConfig, PresentMode, ResizeBehaviour};
 pub use tlsf::{AllocError, Tlsf, TlsfStats, MIN_BLOCK};

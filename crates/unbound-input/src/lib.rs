@@ -13,11 +13,13 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod cursor;
+pub mod dnd;
 pub mod hit;
 pub mod pointer;
 pub mod router;
 
 pub use cursor::{CursorKind, CursorSource, CursorStack};
+pub use dnd::{DragOver, DragPayload, PayloadArena};
 pub use hit::{
     pick, pick_index, pick_stack, point_in_polygon, rounded_rect_sdf, ClipRect, HitRegion, Shape,
     PORTAL_LAYER,
