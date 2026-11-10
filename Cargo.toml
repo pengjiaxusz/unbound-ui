@@ -11,6 +11,7 @@ members = [
     "crates/unbound-anim",
     "crates/unbound-canvas",
     "crates/unbound-input",
+    "crates/unbound-a11y",
 ]
 
 [workspace.package]
@@ -43,7 +44,7 @@ bytemuck = { version = "1.25", features = ["derive"] }
 half = { version = "2.7", features = ["bytemuck"] }
 taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
 cosmic-text = "0.19"
-accesskit = "0.25"
+accesskit = "0.24"
 rayon = "1.12"
 slotmap = "1.1"
 rkyv = { version = "0.8", features = ["alloc", "bytecheck"] }

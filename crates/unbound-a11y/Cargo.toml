@@ -1,0 +1,16 @@
+[package]
+name = "unbound-a11y"
+description = "Incremental AccessKit semantics bound to node lifetimes and dirty marks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
+accesskit.workspace = true
+rustc-hash.workspace = true
+
+[lints]
+workspace = true
