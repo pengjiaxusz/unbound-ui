@@ -7,3 +7,5 @@
 pub mod button;
 /// The component gallery scene.
 pub mod gallery;
+/// Headless test harness for the button.
+pub mod testing;
