@@ -12,7 +12,7 @@
     "lefthook"
   ],
   "options": {
-    "channel": "stable",
+    "channel": "nightly",
     "chinese_programming": false,
     "commit_and_push": true,
     "commit_zh": true,
