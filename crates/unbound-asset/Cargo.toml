@@ -1,0 +1,15 @@
+[package]
+name = "unbound-asset"
+description = "Async asset streaming: background decode pool, CPU staging ring and timeline-gated transfer hand-off"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+png.workspace = true
+crossbeam-channel.workspace = true
+
+[lints]
+workspace = true

@@ -14,6 +14,7 @@ members = [
     "crates/unbound-a11y",
     "crates/unbound-theme",
     "crates/unbound-platform",
+    "crates/unbound-asset",
     "crates/unbound-headless",
     "crates/unbound-host",
     "crates/app-guest",
@@ -43,11 +44,14 @@ unbound-input = { path = "crates/unbound-input" }
 unbound-a11y = { path = "crates/unbound-a11y" }
 unbound-headless = { path = "crates/unbound-headless" }
 unbound-platform = { path = "crates/unbound-platform" }
+unbound-asset = { path = "crates/unbound-asset" }
 unbound-host = { path = "crates/unbound-host" }
 unbound-kpi = { path = "crates/unbound-kpi" }
 unbound-theme = { path = "crates/unbound-theme" }
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 
+crossbeam-channel = { version = "0.5", default-features = false, features = ["std"] }
+png = { version = "0.17", default-features = false }
 ash = { version = "0.38", default-features = false, features = ["loaded", "debug"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 half = { version = "2.7", features = ["bytemuck"] }
