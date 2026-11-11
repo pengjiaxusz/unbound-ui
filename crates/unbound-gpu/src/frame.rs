@@ -183,7 +183,15 @@ pub struct Renderer {
     /// The atlases bound to the bindless descriptor slots, when installed.
     atlases: Option<std::sync::Arc<crate::atlas::AtlasSet>>,
     /// An externally owned colour attachment to draw into, when set.
-    external_color: Option<(vk::ImageView, u32, u32)>,
+    /// The borrowed colour attachment: the image, its view and the extent.
+    ///
+    /// The image handle is needed because only the *image* can be layout
+    /// transitioned — a view carries no layout.
+    external_color: Option<(vk::Image, vk::ImageView, u32, u32)>,
+    /// The semaphore that is signalled once the borrowed image is ready.
+    ///
+    /// The render submission waits on it before it touches the image.
+    external_ready: vk::Semaphore,
     /// Signalled when the frame's rendering has finished.
     ///
     /// The presentation engine waits on this before handing the image to the
@@ -469,6 +477,7 @@ impl Renderer {
             stats: FrameStats::default(),
             atlases: None,
             external_color: None,
+            external_ready: vk::Semaphore::null(),
             present_semaphore,
         };
         renderer.write_default_lut()?;
@@ -606,14 +615,15 @@ impl Renderer {
         let frame_count = self.gpu.frames_in_flight();
         let frame_slot = (self.frame_index % u64::from(frame_count)) as usize;
         let cmd = self.gpu.frames[frame_slot].command_buffer;
+        // The previous frame that used this slot has to have retired before
+        // its command buffer may be reused.
+        self.wait_for_previous_frame()?;
         {
             let gpu = &self.gpu;
             let sync = &gpu.frames[frame_slot];
             // SAFETY: the fence, command buffer and queue belong to this
             // renderer; waiting on our own fence cannot deadlock.
             unsafe {
-                gpu.device
-                    .wait_for_fences(&[sync.in_flight], true, u64::MAX)?;
                 gpu.device.reset_fences(&[sync.in_flight])?;
                 gpu.device.reset_command_buffer(
                     cmd,
@@ -682,9 +692,22 @@ impl Renderer {
                         .semaphore(self.present_semaphore)
                         .value(0),
                 ];
+                // A borrowed image is only ours once the presentation engine
+                // has handed it over. Waiting on its semaphore here is what
+                // makes the swapchain path safe; the offscreen path has no
+                // such image and waits on nothing.
+                let wait_infos = if self.external_ready == vk::Semaphore::null() {
+                    Vec::new()
+                } else {
+                    vec![vk::SemaphoreSubmitInfo::default()
+                        .semaphore(self.external_ready)
+                        .value(0)
+                        .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)]
+                };
                 let command_infos = [vk::CommandBufferSubmitInfo::default().command_buffer(cmd)];
                 let submit = vk::SubmitInfo2::default()
                     .command_buffer_infos(&command_infos)
+                    .wait_semaphore_infos(&wait_infos)
                     .signal_semaphore_infos(&signal_infos);
                 gpu.device
                     .queue_submit2(gpu.graphics_queue, &[submit], sync.in_flight)?;
@@ -947,25 +970,69 @@ impl Renderer {
         self.atlases.as_ref()
     }
 
-    /// Render one frame into an externally owned colour view.
+    /// Wait for the previous frame that used this frame slot to retire.
+    ///
+    /// The windowed path **must** call this before acquiring the next
+    /// swapchain image. The acquire signals the image-available semaphore,
+    /// and a binary semaphore may only carry one pending signal: if the
+    /// previous frame's submission has not started executing yet, its signal
+    /// is still pending and the new signal would be dropped — the next
+    /// frame would then wait for an image that never arrives.
+    ///
+    /// The semaphore pool is as deep as the number of frames in flight, and
+    /// the slot is reused exactly one frame cycle later, so waiting for this
+    /// frame slot's fence guarantees the previous signal was consumed.
+    ///
+    /// # Errors
+    /// Propagates Vulkan failures.
+    pub fn wait_for_previous_frame(&mut self) -> Result<(), GpuError> {
+        let frame_count = self.gpu.frames_in_flight();
+        let frame_slot = (self.frame_index % u64::from(frame_count)) as usize;
+        let fence = self.gpu.frames[frame_slot].in_flight;
+        // SAFETY: the fence belongs to this renderer; waiting on our own
+        // fence cannot deadlock.
+        unsafe {
+            self.gpu
+                .device
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .map_err(GpuError::from)?;
+        }
+        Ok(())
+    }
+
+    /// Render one frame into an externally owned colour attachment.
     ///
     /// The renderer keeps its own depth buffer but borrows the colour
     /// attachment, which is what a swapchain image is: the swapchain owns the
-    /// image, the renderer only draws into it. The view must have the same
-    /// format as the renderer's own target (`COLOR_FORMAT`).
+    /// image, the renderer only draws into it. The attachment must have the
+    /// same format as the renderer's own target (`COLOR_FORMAT`).
+    ///
+    /// `color_image` must be the image behind `color_view`: the renderer
+    /// transitions it out of `UNDEFINED` into `COLOR_ATTACHMENT_OPTIMAL`,
+    /// and a view alone carries no layout.
+    ///
+    /// `image_available` is the semaphore the presentation engine signals
+    /// when the image is ready to be drawn into. The submission waits on it,
+    /// so the render can never touch an image the presentation engine still
+    /// owns. Pass a null semaphore only when the caller already guarantees
+    /// the image is ready.
     ///
     /// # Errors
     /// Propagates Vulkan failures.
     pub fn render_to_view(
         &mut self,
         scene: &SceneUpload<'_>,
+        color_image: vk::Image,
         color_view: vk::ImageView,
         width: u32,
         height: u32,
+        image_available: vk::Semaphore,
     ) -> Result<FrameStats, GpuError> {
-        self.external_color = Some((color_view, width, height));
+        self.external_color = Some((color_image, color_view, width, height));
+        self.external_ready = image_available;
         let result = self.render(scene);
         self.external_color = None;
+        self.external_ready = vk::Semaphore::null();
         result
     }
 
@@ -1121,7 +1188,7 @@ impl Renderer {
             camera_local: scene.camera.local,
             // The viewport follows the attachment we actually draw into.
             viewport_size: match self.external_color {
-                Some((_, w, h)) => [w as f32, h as f32],
+                Some((_, _, w, h)) => [w as f32, h as f32],
                 None => [self.target.width as f32, self.target.height as f32],
             },
             camera_zoom: scene.camera.zoom,
@@ -1155,11 +1222,21 @@ impl Renderer {
         let device = &self.gpu.device;
         // SAFETY: recording; the target is exclusively owned.
         unsafe {
-            // Only our own colour image needs a layout transition; an
-            // external view (a swapchain image) is transitioned by whoever
-            // owns it.
+            // The colour attachment always needs a layout transition. Our
+            // own image carries its layout; a borrowed one (a swapchain
+            // image) is handed over in `UNDEFINED` and must be transitioned
+            // before it can be a render attachment.
             let to_attachment = match self.external_color {
-                Some(_) => Vec::new(),
+                Some((image, _, _, _)) => vec![image_barrier(
+                    image,
+                    vk::ImageLayout::UNDEFINED,
+                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    vk::PipelineStageFlags2::TOP_OF_PIPE,
+                    vk::AccessFlags2::NONE,
+                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    false,
+                )],
                 None => vec![image_barrier(
                     self.target.color,
                     self.target.layout,
@@ -1210,7 +1287,7 @@ impl Renderer {
             // The colour attachment may be borrowed from a swapchain image;
             // the depth attachment is always ours.
             let color_view = match self.external_color {
-                Some((view, _, _)) => view,
+                Some((_, view, _, _)) => view,
                 None => self.target.color_view,
             };
             let color_attachment = [vk::RenderingAttachmentInfo::default()
@@ -1254,7 +1331,7 @@ impl Renderer {
         let device = &self.gpu.device;
         // The viewport follows the attachment we actually draw into.
         let (width, height) = match self.external_color {
-            Some((_, w, h)) => (w, h),
+            Some((_, _, w, h)) => (w, h),
             None => (self.target.width, self.target.height),
         };
         let extent = vk::Extent2D { width, height };
@@ -2046,6 +2123,165 @@ mod tests {
             &pixels[inner_edge_px..inner_edge_px + 4]
         );
         renderer.destroy();
+    }
+
+    /// The windowed path draws into a *borrowed* colour attachment — the
+    /// swapchain image — while the offscreen path draws into the renderer's
+    /// own target. The two must produce the same picture, or the window
+    /// shows something the test suite never saw.
+    ///
+    /// The test renders the same scene twice and compares the two readbacks
+    /// byte for byte. The borrowed attachment is created with the same usage
+    /// flags a swapchain image has, so the layout transition and the
+    /// attachment setup are exercised exactly as they are in the window.
+    #[test]
+    fn the_borrowed_attachment_path_matches_the_offscreen_path() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 256, 256).expect("renderer");
+        let mut theme = vec![[0u16; 4]; 512];
+        theme[1] = unbound_math::Color::from_srgb8(20, 20, 30, 255).to_rgba16f();
+        theme[2] = unbound_math::Color::from_srgb8(52, 100, 220, 255).to_rgba16f();
+        renderer.write_theme(&theme).unwrap();
+
+        let background = quad(0.0, 0.0, 256.0, 256.0, 1);
+        let mut rounded = quad(60.0, 60.0, 120.0, 64.0, 2);
+        rounded.corner_radii = unbound_math::f16::pack_radii([12.0; 4]);
+        rounded.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(2000, 1.0);
+        let transforms = vec![GpuTransform::IDENTITY];
+        let prims = [background, rounded];
+
+        // The reference: the renderer's own offscreen target.
+        renderer
+            .render(&scene_at(&prims, &transforms, 1, (256.0, 256.0)))
+            .expect("render");
+        let reference = renderer.read_pixels().expect("readback");
+
+        // A borrowed attachment with the usage flags of a swapchain image.
+        let (image, memory, view) = borrowed_attachment(&renderer, 256, 256);
+        renderer
+            .render_to_view(
+                &scene_at(&prims, &transforms, 2, (256.0, 256.0)),
+                image,
+                view,
+                256,
+                256,
+                // No presentation engine in the test: the image is already
+                // ours, so there is nothing to wait for.
+                vk::Semaphore::null(),
+            )
+            .expect("render");
+        let borrowed = read_back(&mut renderer, image, 256, 256).expect("readback");
+
+        assert_eq!(
+            borrowed.len(),
+            reference.len(),
+            "the borrowed path must produce a full frame"
+        );
+        assert_eq!(
+            borrowed, reference,
+            "the windowed path must draw the same picture as the offscreen path"
+        );
+
+        // Guard against "both are empty" passing the comparison above. The
+        // readback is BGRA, so the blue channel comes first: the fill is
+        // (52, 100, 220) in RGB.
+        let lit = borrowed
+            .chunks(4)
+            .filter(|pixel| pixel[0] > 180 && pixel[2] < 120)
+            .count();
+        assert!(
+            lit > 1000,
+            "the borrowed frame must actually contain the rectangle: {lit} pixels"
+        );
+
+        // SAFETY: the image, its view and its memory belong to this test.
+        unsafe {
+            renderer.gpu.device.destroy_image_view(view, None);
+            renderer.gpu.device.destroy_image(image, None);
+            renderer.gpu.device.free_memory(memory, None);
+        }
+        renderer.destroy();
+    }
+
+    /// Create a colour attachment that behaves like a swapchain image.
+    fn borrowed_attachment(
+        renderer: &Renderer,
+        width: u32,
+        height: u32,
+    ) -> (vk::Image, vk::DeviceMemory, vk::ImageView) {
+        // SAFETY: the image is returned to the caller, which destroys it.
+        unsafe {
+            RenderTarget::create_image(
+                &renderer.gpu,
+                width,
+                height,
+                COLOR_FORMAT,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
+                false,
+            )
+            .expect("borrowed attachment")
+        }
+    }
+
+    /// Copy an arbitrary colour image into the renderer's staging buffer.
+    fn read_back(
+        renderer: &mut Renderer,
+        image: vk::Image,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, GpuError> {
+        let size = u64::from(width) * u64::from(height) * 4;
+        let device = &renderer.gpu.device;
+        // SAFETY: the GPU is idle after `wait_idle`, so the copy cannot race.
+        unsafe {
+            renderer.gpu.wait_idle();
+            let barrier = [image_barrier(
+                image,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                vk::PipelineStageFlags2::COPY,
+                vk::AccessFlags2::TRANSFER_READ,
+                false,
+            )];
+            let cmd = renderer.gpu.begin_single_time()?;
+            device.cmd_pipeline_barrier2(
+                cmd,
+                &vk::DependencyInfo::default().image_memory_barriers(&barrier),
+            );
+            device.cmd_copy_image_to_buffer(
+                cmd,
+                image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                renderer.staging.raw,
+                &[vk::BufferImageCopy::default()
+                    .buffer_offset(0)
+                    .buffer_row_length(width)
+                    .buffer_image_height(height)
+                    .image_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .layer_count(1),
+                    )
+                    .image_extent(vk::Extent3D {
+                        width,
+                        height,
+                        depth: 1,
+                    })],
+            );
+            renderer.gpu.end_single_time(cmd)?;
+            let mut out = vec![0u8; size as usize];
+            core::ptr::copy_nonoverlapping(
+                renderer.staging.mapped,
+                out.as_mut_ptr(),
+                size as usize,
+            );
+            Ok(out)
+        }
     }
 
     /// A rounded rectangle must be filled edge to edge.

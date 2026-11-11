@@ -80,6 +80,12 @@ pub struct PresentConfig {
     /// Ask for a present fence so a swapchain is only destroyed once the GPU is
     /// done scanning it out.
     pub present_fence: bool,
+    /// Block until the presentation has actually reached the screen.
+    ///
+    /// This is the low-latency path of `VK_KHR_present_wait`: the CPU waits
+    /// for the real present instead of for the render, so the input queue is
+    /// sampled at the moment the user can see the frame.
+    pub wait_for_present: bool,
 }
 
 impl PresentConfig {
@@ -89,12 +95,16 @@ impl PresentConfig {
         let has_maintenance1 = extensions
             .iter()
             .any(|name| name == "VK_EXT_swapchain_maintenance1");
+        let has_present_wait = extensions
+            .iter()
+            .any(|name| name == "VK_KHR_present_wait");
         Self {
             mode: PresentMode::choose(has_maintenance1, allow_tearing),
             // Stretch during a resize: a letterboxed frame reads as a bug to
             // users, a 1-frame aspect change does not (`docs` §2.3).
             resize: ResizeBehaviour::Stretch,
             present_fence: has_maintenance1,
+            wait_for_present: has_present_wait,
         }
     }
 
@@ -139,6 +149,21 @@ mod tests {
         let config = PresentConfig::from_capabilities(&exts(&["VK_KHR_swapchain"]), false);
         assert_eq!(config.mode, PresentMode::Fifo);
         assert!(!config.present_fence);
+    }
+
+    /// The low-latency present path is only possible with
+    /// `VK_KHR_present_wait`; without it the CPU cannot know when the image
+    /// reached the screen.
+    #[test]
+    fn the_present_wait_path_needs_its_extension() {
+        let without = PresentConfig::from_capabilities(&exts(&["VK_KHR_swapchain"]), false);
+        assert!(!without.wait_for_present);
+
+        let with = PresentConfig::from_capabilities(
+            &exts(&["VK_KHR_swapchain", "VK_KHR_present_wait"]),
+            false,
+        );
+        assert!(with.wait_for_present);
     }
 
     #[test]

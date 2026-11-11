@@ -230,16 +230,69 @@ fn list_remove(arena: &mut [u8], lists: &mut FreeLists, off: u32) {
     }
 }
 
-fn list_find(lists: &FreeLists, size: u32) -> Option<u32> {
+/// The smallest size a block in `(fl, sl)` can have.
+///
+/// A bucket guarantees a *lower* bound and nothing more: the blocks in it
+/// range from the lower bound up to (but excluding) the next bucket's lower
+/// bound. So the bucket a request falls into may still hold blocks that are
+/// smaller than the request.
+fn bucket_lower_bound(fl: usize, sl: usize) -> u32 {
+    if fl < SL_SHIFT as usize {
+        return sl as u32;
+    }
+    let shift = fl as u32 - SL_SHIFT;
+    (1u32 << fl as u32) + ((sl as u32) << shift)
+}
+
+/// The first block in a free list that is at least `size` bytes big.
+///
+/// A free list is a plain intrusive doubly-linked list, so this is a walk.
+/// It is only ever called on the request's *own* bucket, whose blocks are all
+/// within a narrow size range, and it stops at the first block that fits.
+fn first_block_at_least(arena: &[u8], head: u32, size: u32) -> Option<u32> {
+    let mut off = head;
+    while off != NONE {
+        let h = read_header(arena, off);
+        if h.size >= size {
+            return Some(off);
+        }
+        off = h.next_free;
+    }
+    None
+}
+
+fn list_find(arena: &[u8], lists: &FreeLists, size: u32) -> Option<u32> {
     let (fl, sl) = mapping(size);
-    // Same first level: look for a bucket at or above `sl`.
-    let sl_map = lists.sl_bitmap[fl] & (!0u32 << sl);
+    // The request's own bucket is the only one that can hold a block that is
+    // *smaller* than the request: a bucket guarantees a lower bound, and the
+    // request's bucket's lower bound is below the request.
+    //
+    // Handing out such a block would make `split_block` compute
+    // `block.size - want` on an unsigned integer. The subtraction wraps
+    // around, and the "remainder" is written as a block header far outside
+    // the arena — a silent heap corruption.
+    //
+    // So the bucket is searched for a block that actually fits.
+    debug_assert!(
+        bucket_lower_bound(fl, sl) <= size,
+        "the request must not be below its bucket's lower bound"
+    );
+    if let Some(off) = first_block_at_least(arena, lists.heads[fl][sl], size) {
+        return Some(off);
+    }
+    // Every block in a *higher* bucket is at least that bucket's lower
+    // bound, and the buckets above the request's own start above the
+    // request. Their blocks therefore always fit.
+    //
+    // Same first level: look for a bucket at or above `sl + 1`.
+    let sl_map = lists.sl_bitmap[fl] & (!0u32 << (sl + 1));
     if sl_map != 0 {
         let bucket = sl_map.trailing_zeros() as usize;
         let off = lists.heads[fl][bucket];
         return (off != NONE).then_some(off);
     }
-    // Otherwise round up to the next non-empty first level.
+    // Otherwise round up to the next non-empty first level. Its lowest
+    // bucket starts at `1 << (fl + 1)`, which is above the request.
     if fl + 1 >= FL_COUNT {
         return None;
     }
@@ -460,7 +513,7 @@ impl Tlsf {
             let all: &mut [u8] = bytemuck::cast_slice_mut(storage);
             let arena = &mut all[..len as usize];
 
-            match list_find(lists, total) {
+            match list_find(arena, lists, total) {
                 None => Err(AllocError::OutOfMemory {
                     request: size,
                     largest_free: largest_free(arena, lists),
@@ -872,6 +925,71 @@ mod tests {
         for i in 0..64 {
             let p = t.allocate(1 + (i * 37) % 500).unwrap();
             assert_eq!(p % 64, 0, "payload {p} not 64B aligned");
+        }
+    }
+
+    /// A request that is bigger than every free hole must fail — it must
+    /// never be served from a hole that is too small.
+    ///
+    /// The bug this guards against is brutal: the allocator used to find a
+    /// free block by its *bucket*, and the bucket only guarantees a lower
+    /// bound. Handing out a block that was smaller than the request made
+    /// `split_block` subtract `want` from `block.size` on an unsigned
+    /// integer; the difference wrapped around to four billion, and the
+    /// "remainder" was written as a block header far outside the arena.
+    #[test]
+    fn a_request_bigger_than_the_free_hole_is_refused() {
+        // An arena that holds exactly three blocks: filling it leaves the
+        // hole as the *only* candidate, so the request cannot fall back to a
+        // bigger block somewhere else.
+        let block = 16384u32;
+        let total = (block as usize + 64).next_multiple_of(64) as u32;
+        let mut t = Tlsf::new(3 * total as usize);
+        let a = t.allocate(block).expect("first block");
+        let b = t.allocate(block).expect("second block");
+        let c = t.allocate(block).expect("third block");
+        // Free the middle one: a hole of exactly `total` bytes.
+        assert!(t.deallocate(b));
+
+        // One notch more than the hole can offer.
+        let result = t.allocate(block + 80);
+        assert!(
+            result.is_err(),
+            "a request that does not fit must fail, not overflow the hole: {result:?}"
+        );
+
+        // The arena is still intact: the hole is usable again, and the two
+        // live blocks were not touched.
+        assert_eq!(t.allocate(block).expect("the hole is still free"), b);
+        assert!(t.deallocate(a));
+        assert!(t.deallocate(c));
+    }
+
+    /// The bucket a request falls into may hold blocks that are too small
+    /// for it. The search has to look at the size of the block, not just at
+    /// its bucket.
+    #[test]
+    fn a_bucket_never_serves_a_request_it_cannot_hold() {
+        // Every block in a bucket is at least the bucket's lower bound — but
+        // that bound may be *below* the request, which is exactly why the
+        // search checks the size of the block it hands out.
+        for size in [MIN_BLOCK, 1024, 16384, 65536, 1 << 20] {
+            let (fl, sl) = mapping(size);
+            assert!(
+                bucket_lower_bound(fl, sl) <= size,
+                "the request {size} must not be below its bucket's lower bound"
+            );
+            // The next bucket starts strictly above the request, so every
+            // block in it fits.
+            let (next_fl, next_sl) = if sl + 1 < SL_COUNT {
+                (fl, sl + 1)
+            } else {
+                (fl + 1, 0)
+            };
+            assert!(
+                bucket_lower_bound(next_fl, next_sl) > size,
+                "the next bucket must be strictly above the request {size}"
+            );
         }
     }
 
