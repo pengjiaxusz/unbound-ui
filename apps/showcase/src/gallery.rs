@@ -4,16 +4,24 @@
 //! about, so the window shows the whole rendering vocabulary at once: rounded
 //! rectangles, borders, analytic shadows, curves, images and glyphs.
 //!
-//! The scene is rebuilt whenever the theme changes or the canvas camera
-//! moves, which is exactly the "0 byte upload" claim the engine makes for
-//! those operations — only the affected primitive data is re-staged.
+//! The scene is rebuilt when a discrete interaction state changes (hover /
+//! press / focus / click count), not when the canvas camera moves. Panning,
+//! zooming and switching themes only touch the camera uniform or the 4 KiB
+//! colour table, so the primitive buffers stay untouched — that is the
+//! "0 byte upload" claim the engine makes for those operations.
 
+use accesskit::Role;
+use unbound_a11y::{A11yNode, Semantics};
 use unbound_gpu::data::{
     BlendMode, GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform, PrimType, SubElement,
 };
 use unbound_gpu::{Camera, SceneUpload};
+use unbound_headless::{Frame, FrameBuilder, NodeKind};
+use unbound_input::HitRegion;
 use unbound_math::{Color, Rect, Vec2};
 use unbound_text::{GlyphCache, GlyphQuad, TextEngine, TextStyle};
+
+use crate::button::{self, ButtonDesc, ButtonTokens, ButtonVisualState};
 
 /// The colour tokens the gallery uses.
 ///
@@ -47,6 +55,33 @@ pub struct Palette {
     pub text_muted: u16,
     /// The shadow colour.
     pub shadow: u16,
+    /// The button fill while hovered.
+    pub primary_hover: u16,
+    /// The button fill while pressed.
+    pub primary_pressed: u16,
+    /// The button label colour.
+    pub on_primary: u16,
+    /// The focus ring colour.
+    pub focus_ring: u16,
+    /// The disabled fill.
+    pub disabled_fill: u16,
+}
+
+impl Palette {
+    /// The token set a button needs.
+    #[must_use]
+    pub fn button_tokens(&self) -> ButtonTokens {
+        ButtonTokens {
+            fill: self.primary,
+            fill_hover: self.primary_hover,
+            fill_pressed: self.primary_pressed,
+            fill_disabled: self.disabled_fill,
+            border: self.primary_pressed,
+            label: self.on_primary,
+            label_disabled: self.text_muted,
+            focus_ring: self.focus_ring,
+        }
+    }
 }
 
 /// The token layout, shared by both themes.
@@ -61,6 +96,11 @@ pub struct Palette {
 /// | 5..9 | primary, secondary, success, warning, danger |
 /// | 10 | body text |
 /// | 11 | muted text |
+/// | 12 | button primary — hover |
+/// | 13 | button primary — pressed |
+/// | 14 | button label (on primary) |
+/// | 15 | focus ring |
+/// | 16 | disabled fill |
 const TOKEN_SHADOW: u16 = 1;
 const TOKEN_BACKGROUND: u16 = 2;
 const TOKEN_SURFACE: u16 = 3;
@@ -72,6 +112,11 @@ const TOKEN_WARNING: u16 = 8;
 const TOKEN_DANGER: u16 = 9;
 const TOKEN_TEXT: u16 = 10;
 const TOKEN_TEXT_MUTED: u16 = 11;
+const TOKEN_PRIMARY_HOVER: u16 = 12;
+const TOKEN_PRIMARY_PRESSED: u16 = 13;
+const TOKEN_ON_PRIMARY: u16 = 14;
+const TOKEN_FOCUS_RING: u16 = 15;
+const TOKEN_DISABLED_FILL: u16 = 16;
 
 /// The tokens the gallery uses.
 ///
@@ -91,14 +136,20 @@ pub const fn palette() -> Palette {
         text: TOKEN_TEXT,
         text_muted: TOKEN_TEXT_MUTED,
         shadow: TOKEN_SHADOW,
+        primary_hover: TOKEN_PRIMARY_HOVER,
+        primary_pressed: TOKEN_PRIMARY_PRESSED,
+        on_primary: TOKEN_ON_PRIMARY,
+        focus_ring: TOKEN_FOCUS_RING,
+        disabled_fill: TOKEN_DISABLED_FILL,
     }
 }
 
 /// The colour table the GPU samples.
 ///
-/// The first twelve slots carry the semantic tokens; the rest stay black.
+/// The first seventeen slots carry the semantic tokens; the rest stay black.
 /// The table is uploaded as a single 4 KiB write, which is what makes a theme
-/// switch free.
+/// switch free — including while a button is hovered or focused, because the
+/// state colours live in their own slots.
 pub fn theme_table(dark: bool) -> Vec<[u16; 4]> {
     let mut colors = vec![[0u16; 4]; 512];
     let mut set = |index: u16, color: Color| {
@@ -117,6 +168,11 @@ pub fn theme_table(dark: bool) -> Vec<[u16; 4]> {
         set(TOKEN_DANGER, Color::from_srgb8(235, 90, 95, 255));
         set(TOKEN_TEXT, Color::from_srgb8(238, 239, 245, 255));
         set(TOKEN_TEXT_MUTED, Color::from_srgb8(140, 144, 160, 255));
+        set(TOKEN_PRIMARY_HOVER, Color::from_srgb8(110, 160, 255, 255));
+        set(TOKEN_PRIMARY_PRESSED, Color::from_srgb8(64, 110, 220, 255));
+        set(TOKEN_ON_PRIMARY, Color::from_srgb8(255, 255, 255, 255));
+        set(TOKEN_FOCUS_RING, Color::from_srgb8(150, 195, 255, 255));
+        set(TOKEN_DISABLED_FILL, Color::from_srgb8(70, 72, 82, 255));
     } else {
         set(TOKEN_SHADOW, Color::from_srgb8(20, 22, 30, 60));
         set(TOKEN_BACKGROUND, Color::from_srgb8(245, 246, 250, 255));
@@ -129,6 +185,11 @@ pub fn theme_table(dark: bool) -> Vec<[u16; 4]> {
         set(TOKEN_DANGER, Color::from_srgb8(220, 60, 65, 255));
         set(TOKEN_TEXT, Color::from_srgb8(28, 30, 38, 255));
         set(TOKEN_TEXT_MUTED, Color::from_srgb8(120, 124, 140, 255));
+        set(TOKEN_PRIMARY_HOVER, Color::from_srgb8(70, 120, 240, 255));
+        set(TOKEN_PRIMARY_PRESSED, Color::from_srgb8(36, 78, 190, 255));
+        set(TOKEN_ON_PRIMARY, Color::from_srgb8(255, 255, 255, 255));
+        set(TOKEN_FOCUS_RING, Color::from_srgb8(28, 90, 210, 255));
+        set(TOKEN_DISABLED_FILL, Color::from_srgb8(200, 204, 214, 255));
     }
     colors
 }
@@ -315,6 +376,8 @@ pub struct Labels {
     pub cache: GlyphCache,
     /// The shaping engine.
     pub engine: TextEngine,
+    /// The size the dynamic button label was prewarmed at, if any.
+    prewarmed: Option<f32>,
 }
 
 impl Labels {
@@ -324,7 +387,27 @@ impl Labels {
         Self {
             cache: GlyphCache::new(),
             engine: TextEngine::new(),
+            prewarmed: None,
         }
+    }
+
+    /// Rasterise every glyph a dynamic label can produce before it is shown.
+    ///
+    /// The atlas is uploaded once at startup. If clicking the button changed
+    /// `"Clicked: 0"` to `"Clicked: 1"` and `'1'` had never been shaped, the
+    /// quad would sample an empty atlas page and the glyph would render as a
+    /// blank box. Shaping the whole alphabet up front keeps the click at zero
+    /// texture uploads.
+    pub fn prewarm(&mut self, text: &str, size: f32) {
+        if self.prewarmed == Some(size) {
+            return;
+        }
+        let style = TextStyle::sized(size);
+        let shaped = self.engine.shape(text, &style);
+        let _ = self
+            .cache
+            .quads_for(&mut self.engine, &shaped, Vec2::ZERO, 400, false);
+        self.prewarmed = Some(size);
     }
 
     /// Lay out a label and return its glyph quads.
@@ -366,7 +449,24 @@ impl Default for Labels {
     }
 }
 
-/// Build the whole gallery.
+/// The button's rect in canvas coordinates.
+#[must_use]
+pub fn button_rect() -> Rect {
+    Rect::new(120.0, 468.0, 200.0, 44.0)
+}
+
+/// The placeholder identity [`build`] gives the button when the caller does
+/// not own a `UiWorld` (the offscreen `--shot` path and the visual tests).
+pub const DEFAULT_BUTTON_NODE: u64 = 2;
+
+/// The root of the semantic tree the gallery reports.
+const A11Y_ROOT: u64 = 1;
+
+/// The characters the dynamic button label can contain. Shaped up front so a
+/// click never grows the atlas.
+const BUTTON_LABEL_ALPHABET: &str = "Clicked: 0123456789";
+
+/// Build the whole gallery with the button in its idle state.
 ///
 /// Returns the scene and the glyph quads the caller still has to upload to
 /// the GPU atlas.
@@ -375,6 +475,34 @@ pub fn build(
     palette: &Palette,
     viewport: (f32, f32),
 ) -> (Gallery, Vec<GlyphQuad>) {
+    let button = ButtonDesc::new(button_rect(), "Clicked: 0");
+    let (scene, glyphs, _, _) = build_interactive(
+        labels,
+        palette,
+        viewport,
+        &button,
+        DEFAULT_BUTTON_NODE,
+        ButtonVisualState::default(),
+        0,
+    );
+    (scene, glyphs)
+}
+
+/// Build the gallery with the button in `visual` state.
+///
+/// Returns the scene, the button label's glyph quads (already placed in scene
+/// space), the hit regions the pointer router should own, and the semantic
+/// tree. The signature is the first step towards the `(Scene, HitRegions,
+/// Semantics)` triple the platform layer will consume.
+pub fn build_interactive(
+    labels: &mut Labels,
+    palette: &Palette,
+    viewport: (f32, f32),
+    button: &ButtonDesc,
+    node: u64,
+    visual: ButtonVisualState,
+    click_count: u32,
+) -> (Gallery, Vec<GlyphQuad>, Vec<HitRegion>, Semantics) {
     let mut scene = Gallery::new();
     scene.camera = Camera::ui(viewport, 1.0);
 
@@ -540,6 +668,55 @@ pub fn build(
         scene.glyph(quad, palette.text_muted, 505);
     }
 
+    // ---- the interactive card ------------------------------------------
+    scene.rect(
+        40.0,
+        410.0,
+        360.0,
+        150.0,
+        16.0,
+        palette.surface,
+        palette.border,
+        1.0,
+        18.0,
+        700,
+    );
+    let interactive_title = labels.layout(
+        "Button / 第一个可交互控件",
+        Vec2::new(60.0, 430.0),
+        16.0,
+    );
+    for quad in &interactive_title {
+        scene.glyph(quad, palette.text, 701);
+    }
+    labels.prewarm(BUTTON_LABEL_ALPHABET, button.font_size);
+    let mut glyphs = labels.layout(&button.label, Vec2::ZERO, button.font_size);
+    let artifacts = button::emit_button(
+        node,
+        button,
+        visual,
+        palette.button_tokens(),
+        &mut glyphs,
+    );
+    let base = scene.payloads.len() as u32;
+    let mut primitives = artifacts.primitives;
+    for prim in &mut primitives {
+        if matches!(prim.prim_type(), PrimType::Glyph | PrimType::GlyphColor) {
+            prim.extra_payload_idx += base;
+        }
+    }
+    scene.primitives.extend(primitives);
+    scene.payloads.extend(artifacts.payloads);
+
+    let button_hint = labels.layout(
+        "hover / press / click · Tab 聚焦 · Space 激活",
+        Vec2::new(60.0, 524.0),
+        13.0,
+    );
+    for quad in &button_hint {
+        scene.glyph(quad, palette.text_muted, 701);
+    }
+
     // ---- the theme hint -------------------------------------------------
     let hint = labels.layout(
         "T / 切换主题    Space / 主题    滚轮 / 缩放    拖拽 / 平移",
@@ -550,9 +727,57 @@ pub fn build(
         scene.glyph(quad, palette.text_muted, 600);
     }
 
+    // ---- semantics ------------------------------------------------------
+    let mut semantics = Semantics::new(A11Y_ROOT);
+    semantics.upsert(
+        A11Y_ROOT,
+        A11yNode::new(
+            Role::Window,
+            "Unbound UI — 组件展台",
+            Rect::new(0.0, 0.0, viewport.0, viewport.1),
+        ),
+    );
+    let mut button_node = artifacts.a11y;
+    button_node.value = click_count.to_string();
+    semantics.upsert(node, button_node);
+    semantics.set_children(A11Y_ROOT, &[node]);
+
     // The glyphs are already part of the scene; the atlas updates they
     // produced are drained by the caller and uploaded to the GPU.
-    (scene, Vec::new())
+    (scene, glyphs, vec![artifacts.hit], semantics)
+}
+
+/// The button's geometry as a headless frame, for the five sanitizers.
+///
+/// Kept next to the emitter so the rect the pointer hits, the rect the frame
+/// validates and the rect the primitives paint can never drift apart.
+#[must_use]
+pub fn button_frame(viewport: (f32, f32), button: &ButtonDesc, glyphs: &[GlyphQuad]) -> Frame {
+    let viewport = Rect::new(0.0, 0.0, viewport.0, viewport.1);
+    let mut frame = FrameBuilder::new(viewport);
+    frame.open(NodeKind::Container, viewport, "Root");
+    frame.open(
+        NodeKind::Container,
+        Rect::new(40.0, 410.0, 360.0, 150.0),
+        "ButtonCard",
+    );
+    frame.open(
+        NodeKind::Interactive {
+            min_size: NodeKind::DEFAULT_MIN_SIZE,
+            occluded: false,
+        },
+        button.rect,
+        "Button",
+    );
+    frame.set_clip(button.rect);
+    if let Some(ink) = button::ink_bounds(glyphs) {
+        frame.open(NodeKind::Text { ink, ellipsis: false }, ink, "Label");
+        frame.close();
+    }
+    frame.close();
+    frame.close();
+    frame.close();
+    frame.build()
 }
 
 /// The scene's bounding rect, used by the layout tests.

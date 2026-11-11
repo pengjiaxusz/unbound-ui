@@ -181,14 +181,15 @@ pub fn node_u64(node: NodeId) -> u64 {
 /// 纯函数发射器：同样的输入永远得到同样的图元、热区与语义节点。
 ///
 /// `label` 是未定位的字形（左上角在原点附近），发射器会把它在按钮矩形里
-/// 居中；这样文本换行/数字变宽都不会破坏按钮自身的布局。
+/// 就地居中；这样文本换行/数字变宽都不会破坏按钮自身的布局，调用方拿到的
+/// 也是最终场景坐标。
 #[must_use]
 pub fn emit_button(
     node: u64,
     desc: &ButtonDesc,
     state: ButtonVisualState,
     tokens: ButtonTokens,
-    label: &[GlyphQuad],
+    label: &mut [GlyphQuad],
 ) -> ButtonArtifacts {
     let rect = desc.rect;
     let radii = [desc.radius; 4];
@@ -228,6 +229,10 @@ pub fn emit_button(
             rect.center().x - (ink.min().x + ink.width() * 0.5),
             rect.center().y - (ink.min().y + ink.height() * 0.5),
         );
+        for quad in label.iter_mut() {
+            quad.rect.origin.x += offset.x;
+            quad.rect.origin.y += offset.y;
+        }
         let color = if state.disabled {
             tokens.label_disabled
         } else {
@@ -245,12 +250,7 @@ pub fn emit_button(
                 _reserved: [0; 3],
             });
             let mut glyph = instance(
-                Rect::new(
-                    quad.rect.origin.x + offset.x,
-                    quad.rect.origin.y + offset.y,
-                    quad.rect.width(),
-                    quad.rect.height(),
-                ),
+                quad.rect,
                 [0.0; 4],
                 color,
                 0,
