@@ -68,6 +68,10 @@ canvas = (screen - viewport / 2) / zoom + anchor
 `pointer_down`、`pointer_up`、`click`、`drag` 全部以窗口像素为参数。`zoom_at`
 保持锚点下的画布点不动，`pan_by` 使用窗口像素增量。
 
+相机动了、指针没动时，画布上的命中目标会变。`pan_by` / `zoom_at` 因此会在新的
+画布点上重新解析 hover 与光标；窗口侧的滚轮缩放和画布拖拽也调用同一个
+`Router::refresh_at`，不会让 hover 落后一个事件。
+
 ### 合成输入
 
 | 方法 | 行为 |
@@ -83,8 +87,10 @@ canvas = (screen - viewport / 2) / zoom + anchor
 以及 `clicked()` / `click_count()` / `is_double_click()` 三个断言快捷方式。
 `advance(seconds)` 推进逻辑时钟，用来把两次点击排除在双击窗口之外。
 
-指针捕获由路由器保证：按下后拖出热区仍然保持 pressed，在热区外松开**不会**
-合成 `Click`——这与原生按钮一致，也是旧版用 `bool` 记录状态时最容易失步的地方。
+指针捕获由路由器保证：按下后拖出热区仍然保持 pressed，**只要松开时不在按下
+的那个节点的热区里，就不会合成 `Click`**——包括位移小于拖拽阈值、状态机仍把
+它当作点击的情况。这与原生按钮一致，也避免「按在按钮边缘、松在隔壁控件上」时
+误激活。被吞掉的点击不会参与双击配对：下一次按下从计数 1 开始。
 
 ### 提交场景：`install` 与 `generation`
 
@@ -93,6 +99,16 @@ canvas = (screen - viewport / 2) / zoom + anchor
 （视觉态、点击计数）变化时重建场景并调用它，测试就能用 `generation` 判断是否
 真的发生了重建——GPU 像素测试正是靠每次重建拿到的新 `generation`，让渲染器
 重新上传 idle / hover / pressed 三种状态的图元。
+
+重建也是唯一一次校验生命周期的地方：
+
+* 如果被捕获的节点在新场景里没有热区，`install` 会取消捕获并返回
+  `Some(PointerEvent::CaptureLost)`，后续松开不会给一个已经消失的节点派发点击；
+* 如果焦点节点不在新语义树里，焦点回落到根，而不是留下一个悬空 id。
+
+替换热区本身也会重新命中测试，所以「指针没动、场景动了」之后 `router.hover()`
+立即是正确的，不需要等下一次鼠标事件。重采样用的是路由器记录的最新画布点
+（包括 `refresh_at` 传入的坐标），而不是指针状态机里可能已过时的位置。
 
 ### 焦点与语义断言
 
@@ -110,7 +126,14 @@ canvas = (screen - viewport / 2) / zoom + anchor
 把「身份 + 文案 + 计数 + 最近一次场景」拼起来，例如
 `apps/showcase/src/testing.rs` 的 `ButtonHarness`：它从路由器派生
 `ButtonVisualState`，只在 `(视觉态, 计数)` 变化时重建场景，然后把热区与语义树
-交给 `install`。
+交给 `install`。禁用态也走同一层：`set_disabled(true)` 后组件不再发射热区，
+harness 因此既点不中、也激活不了，测试可以同时断言填充 token 与语义
+`disabled` 标志。`activate()` 复现键盘激活，`generation()` 暴露红绘守卫。
+
+键盘映射单独放在 `showcase::keys`，窗口和无头测试共用同一张表：窗口把
+`KeyAction` 派发到自己的方法，测试则用同一张表驱动 harness 的
+`focus()` / `activate()` / `blur()`。完整的按键事件路由仍归应用层，`TestApp`
+不假装拥有它。
 
 ```rust
 let mut app = TestApp::new((1280.0, 720.0));

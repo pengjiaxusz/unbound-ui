@@ -50,17 +50,17 @@
 | `unbound-layout` | 854 | Taffy 增量排版、RelayoutBoundary 隔离求解 | `unbound-world`、`unbound-math` |
 | `unbound-anim` | 679 | 物理弹簧引擎、贝塞尔缓动、像素网格吸附 | `unbound-math` |
 | `unbound-canvas` | 2913 | 松散四叉树、智能磁吸、框选变换、事务化撤销 | `unbound-world`、`unbound-math` |
-| `unbound-input` | 1677 | 双层拾取、指针捕获、确定性光标栈、文件拖拽 | `unbound-world`、`unbound-math` |
+| `unbound-input` | 1798 | 双层拾取、指针捕获、确定性光标栈、文件拖拽 | `unbound-world`、`unbound-math` |
 | `unbound-a11y` | 713 | AccessKit 增量语义树 | `unbound-math`、`unbound-abi` |
 | `unbound-theme` | 978 | 语义设计令牌、颜色表、三层正交缩放、像素吸附 | `unbound-math` |
 | `unbound-graph` | 857 | 渲染图瞬态纹理生命周期校验、毛玻璃离屏池 | `unbound-math` |
 | `unbound-asset` | 1222 | 后台解码线程池、CPU 暂存环、传输队列交接 | `unbound-math` |
 | `unbound-platform` | 1562 | 窗口平台层：非阻塞缩放、低延迟呈现、延迟计量 | `unbound-math`、`unbound-gpu` |
-| `unbound-headless` | 1962 | 无头验证器：五项几何体检、`TestApp` 交互测试驱动、rkyv 时间旅行快照 | `unbound-math`、`unbound-world`、`unbound-input`、`unbound-a11y` |
+| `unbound-headless` | 2248 | 无头验证器：五项几何体检、`TestApp` 交互测试驱动、rkyv 时间旅行快照 | `unbound-math`、`unbound-world`、`unbound-input`、`unbound-a11y` |
 | `unbound-host` | 909 | Host-Guest C-ABI 热重载、分配器劫持、状态迁移 | `unbound-abi` |
 | `unbound-kpi` | 398 | 验收红线实测 | 多数 crate |
 | `app-guest` | 529 | 可热重载的业务层 cdylib | `unbound-abi` |
-| `apps/showcase` | 2012 | 组件展台：图元总览、主题切换、按钮交互、无头出图与 `ButtonHarness` | `unbound-gpu`、`unbound-text`、`unbound-platform`、`unbound-input`、`unbound-world`、`unbound-a11y`、`unbound-headless` |
+| `apps/showcase` | 2595 | 组件展台：图元总览、主题切换、按钮交互、无头出图与 `ButtonHarness` | `unbound-gpu`、`unbound-text`、`unbound-platform`、`unbound-input`、`unbound-world`、`unbound-a11y`、`unbound-headless` |
 | `apps/gallery` | 474 | 全链路演示程序（控制台测量） | `unbound-gpu` |
 
 ## 三条刻意的依赖禁令

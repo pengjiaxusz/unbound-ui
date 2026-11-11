@@ -93,7 +93,9 @@ cargo run -p showcase --release -- --shot out.png    # 显式路径也可以
 
 1. **屏幕坐标 → 画布坐标**：`Camera` 的映射是
    `screen = (world - anchor) * zoom + viewport/2`，喂给 `Router` 之前必须做
-   逆变换，否则缩放/平移后热区会与画面错位。
+   逆变换，否则缩放/平移后热区会与画面错位。滚轮缩放以光标为锚点，
+   `zoom_anchor_pan` 保持光标下的画布点不动，与 `TestApp::zoom_at` 是同一套
+   公式；缩放后立即重新命中测试，hover 不会落后一个事件。
 2. **点击优先于平移**：左键按下先问路由器是否命中 `HitRegion`；命中则捕获
    指针并聚焦按钮，未命中才进入画布拖拽。
 3. **离散状态跃迁守卫**：只有 `(视觉态, 点击计数)` 变化的那一帧才重建场景并
@@ -109,11 +111,19 @@ cargo run -p showcase --release -- --shot out.png    # 显式路径也可以
 | harness 方法 | 验证的链路 |
 | :--- | :--- |
 | `hover()` / `press()` / `release()` | hover 与 pressed 从路由器派生，按下后指针被捕获 |
-| `click()` | 一次按下/松开合成一个 `Click`，计数与文案同步前进 |
+| `click()` | 一次按下/松开合成一个 `Click`，计数与文案同步前进；松在按钮外则不激活 |
 | `focus()` / `blur()` | 焦点与指针正交，焦点环走 `PrimType::Stroke` |
+| `set_disabled(bool)` | 禁用后组件不再发射热区，点击、hover 与语义都随之关闭 |
+| `activate()` | 复现键盘 `Enter` / `Space` 的激活路径 |
 | `label()` / `value()` | 语义树里的 `Role::Button` 与激活计数 |
+| `generation()` | 红绘守卫：只有离散状态跃迁才重建场景 |
 | `assert_clean()` | 按钮帧通过五项几何体检 |
 | `rebuild_with(visual, count)` | 供 GPU 测试烘焙 idle / hover / pressed 三个状态 |
+
+键盘映射在 `showcase::keys`，窗口与测试共用：`KeyAction` 把 `Tab` / `Escape` /
+`Enter` / `Space` / `T` 解析成动作，窗口负责派发，测试则驱动同一个 harness 的
+`focus()` / `activate()` / `blur()`。映射不留在 `main.rs` 里，测试就不会变成
+副本对副本。
 
 交互测试全部纯 CPU，没有 Vulkan 设备也能跑；像素测试在 `test_device()` 返回
 `None` 时自行跳过，只比较同一场景在三种状态下的像素差异。
