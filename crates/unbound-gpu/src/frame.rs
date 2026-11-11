@@ -1426,6 +1426,7 @@ struct UploadPlan {
 mod tests {
     use super::*;
     use crate::data::{PrimFlags, SubElement};
+    use unbound_math::Vec2;
 
     fn quad(x: f32, y: f32, w: f32, h: f32, token: u32) -> GpuPrimitiveInstance {
         GpuPrimitiveInstance {
@@ -1587,17 +1588,16 @@ mod tests {
         };
         let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
         // A quadratic arc from (10, 10) to (100, 10) bulging up to y = 45.
-        let instance = unbound_vector::CurveInstance {
-            origin: [10.0, 10.0],
-            size: [90.0, 70.0],
-            p0: [0.0, 0.0],
-            p1: [40.0, 70.0],
-            p2: [90.0, 0.0],
-        };
+        let segment = unbound_vector::QuadSegment::new(
+            Vec2::new(10.0, 10.0),
+            Vec2::new(50.0, 80.0),
+            Vec2::new(100.0, 10.0),
+        );
+        let instance = unbound_vector::CurveInstance::from_quad(&segment, 4.0);
         let draw = crate::curve::CurveDraw::new([0, 0], &instance, 2, 4.0, 100);
         let prims = vec![draw.primitive];
         let payloads = vec![draw.payload];
-        let transforms = vec![GpuTransform::IDENTITY];
+        let transforms = vec![draw.transform];
         renderer.write_theme(&{
             let mut colors = vec![[0u16; 4]; 512];
             colors[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
@@ -1626,6 +1626,105 @@ mod tests {
             &pixels[off_curve..off_curve + 4]
         );
         assert_eq!(renderer.stats.visible, 1);
+        renderer.destroy();
+    }
+
+    /// `docs` §10.2: ten thousand long connectors on screen.
+    ///
+    /// The budget is 0.8 ms of curve shading. Every connector is drawn as a
+    /// tight oriented box plus an analytic distance to a quadratic Bézier, so
+    /// the whole scene is a single MDI draw call.
+    #[test]
+    fn ten_thousand_cubic_connectors_stay_inside_the_budget() {
+        let _guard = crate::device::gpu_test_guard();
+        // Ten thousand connectors need a bigger ring than the default test
+        // device: every curve is staged through the transient ring.
+        let gpu = match crate::device::Gpu::new(crate::device::GpuConfig {
+            pool_capacity: 64 << 20,
+            ring_capacity: 64 << 20,
+            ..Default::default()
+        }) {
+            Ok(gpu) => gpu,
+            Err(error) => {
+                eprintln!("skipping GPU test: {error}");
+                return;
+            }
+        };
+        let mut renderer = Renderer::new(gpu, 512, 512).expect("renderer");
+        renderer.enable_timing().expect("timing");
+
+        const CURVES: u32 = 10_000;
+        let mut prims = Vec::with_capacity(CURVES as usize);
+        let mut payloads = Vec::with_capacity(CURVES as usize);
+        let mut transforms = Vec::with_capacity(CURVES as usize);
+        for index in 0..CURVES {
+            // A long diagonal span, with a different sag per curve. The
+            // connectors are spread over a huge canvas, exactly like the
+            // scenario in the acceptance table: the viewport only ever shows
+            // a handful of them, and the cost is dominated by the cull.
+            let x = (index % 100) as f32 * 500.0;
+            let y = (index / 100) as f32 * 500.0;
+            let sag = 40.0 + (index % 17) as f32;
+            // The cubic is split into quadratics first: every segment gets its
+            // own tight box, so the fragments are proportional to the length of
+            // the curve instead of its bounding rectangle.
+            let draws = crate::curve::cubic_to_draws(
+                Vec2::new(x, y),
+                Vec2::new(x + 50.0, y - sag),
+                Vec2::new(x + 100.0, y),
+                Vec2::new(x + 150.0, y + sag * 0.5),
+                0.5,
+                2,
+                1.5,
+                100,
+            );
+            for draw in draws {
+                let mut primitive = draw.primitive;
+                primitive.transform_idx = transforms.len() as u32;
+                primitive.extra_payload_idx = payloads.len() as u32;
+                payloads.push(draw.payload);
+                transforms.push(draw.transform);
+                prims.push(primitive);
+            }
+        }
+        renderer.write_theme(&{
+            let mut colors = vec![[0u16; 4]; 512];
+            colors[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
+            colors
+        })
+        .unwrap();
+
+        let mut upload = scene_at(&prims, &transforms, 1, (512.0, 512.0));
+        upload.payloads = &payloads;
+        // The camera looks at the corner of the canvas: only a few of the ten
+        // thousand connectors are on screen.
+        upload.camera = Camera::canvas([0, 0], [256.0, 256.0], 1.0, 1.0);
+        renderer.render(&upload).expect("render");
+        // The second frame is the steady state: everything is already uploaded.
+        renderer.render(&upload).expect("render");
+        let timing = renderer
+            .read_frame_timing()
+            .expect("read timing")
+            .expect("timing is enabled");
+        let average: f32 = prims
+            .iter()
+            .map(|p| p.size[0] * p.size[1])
+            .sum::<f32>()
+            / prims.len().max(1) as f32;
+        eprintln!(
+            "{CURVES} curves -> {} primitives, avg box {average:.1} px², {:.3} ms on the GPU              (cull {:.3}, sort {:.3}, indirect {:.3}, graphics {:.3})",
+            prims.len(),
+            timing.total_ms,
+            timing.cull_ms,
+            timing.sort_ms,
+            timing.indirect_ms,
+            timing.graphics_ms
+        );
+        assert!(
+            timing.total_ms <= 0.8,
+            "the curve frame took {:.3} ms, the budget is 0.8 ms",
+            timing.total_ms
+        );
         renderer.destroy();
     }
 
