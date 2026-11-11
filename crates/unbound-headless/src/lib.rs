@@ -28,6 +28,7 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+pub mod driver;
 pub mod frame;
 pub mod rules;
 pub mod snapshot;

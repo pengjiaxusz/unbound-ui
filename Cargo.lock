@@ -1819,7 +1819,11 @@ dependencies = [
  "postcard",
  "rkyv",
  "serde",
+ "slotmap",
+ "unbound-a11y",
+ "unbound-input",
  "unbound-math",
+ "unbound-world",
 ]
 
 [[package]]

@@ -9,6 +9,10 @@ repository.workspace = true
 
 [dependencies]
 unbound-math.workspace = true
+unbound-a11y.workspace = true
+unbound-input.workspace = true
+unbound-world.workspace = true
+slotmap.workspace = true
 serde.workspace = true
 postcard.workspace = true
 rkyv.workspace = true
