@@ -27,15 +27,21 @@ pub enum Rule {
     NoSiblingOverlap,
     /// `AssertViewportContainment`
     ViewportContainment,
+    /// `AssertTextNotOverflowParent`
+    TextOverflow,
+    /// `AssertTextContrast`
+    TextContrast,
 }
 
 impl Rule {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::NoNaNOrInf,
         Self::TextNotClipped,
         Self::InteractiveTargetSize,
         Self::NoSiblingOverlap,
         Self::ViewportContainment,
+        Self::TextOverflow,
+        Self::TextContrast,
     ];
 
     /// The doc's name for the assertion.
@@ -47,6 +53,8 @@ impl Rule {
             Self::InteractiveTargetSize => "AssertInteractiveTargetSize",
             Self::NoSiblingOverlap => "AssertNoUnintendedSiblingOverlap",
             Self::ViewportContainment => "AssertViewportContainment",
+            Self::TextOverflow => "AssertTextNotOverflowParent",
+            Self::TextContrast => "AssertTextContrast",
         }
     }
 }
@@ -116,6 +124,8 @@ pub fn check(frame: &Frame) -> Vec<Diagnostic> {
     check_targets(frame, &mut diagnostics);
     check_siblings(frame, &mut diagnostics);
     check_portals(frame, &mut diagnostics);
+    check_text_overflow(frame, &mut diagnostics);
+    check_text_contrast(frame, &mut diagnostics);
     diagnostics.sort_by_key(|d| (d.rule, d.node));
     diagnostics
 }
@@ -287,6 +297,81 @@ fn check_portals(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
             );
         }
     }
+}
+
+/// 6. Text ink must stay horizontally inside its parent's content box.
+///
+/// A pill whose label is wider than the capsule, or a knob label that runs
+/// under its own control, is a real visual defect even when the text is not
+/// clipped by a scroll viewport. Vertical overflow is left to the scroll
+/// container contract (`AssertTextNotClipped`); this rule only asks whether the
+/// laid-out run is wider than the box that owns it. Ellipsised text opts out.
+fn check_text_overflow(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
+    for node in &frame.nodes {
+        let NodeKind::Text { ink, ellipsis } = &node.kind else {
+            continue;
+        };
+        if *ellipsis {
+            continue;
+        }
+        let Some(parent) = node.parent.and_then(|id| frame.get(id)) else {
+            continue;
+        };
+        let bounds = parent.rect;
+        if ink.min().x < bounds.min().x - 0.5 || ink.max().x > bounds.max().x + 0.5 {
+            push(
+                frame,
+                diagnostics,
+                Rule::TextOverflow,
+                node.id,
+                format!(
+                    "ink {ink:?} is wider than parent {} content box {bounds:?}",
+                    parent.id
+                ),
+            );
+        }
+    }
+}
+
+/// 7. Declared text colours must have readable contrast.
+///
+/// The frame only carries colours for components that opt in with
+/// `set_text_colors`, so the rule cannot guess at a primitive's fill. This is
+/// exactly what catches a dark HUD palette shipping in the light theme.
+fn check_text_contrast(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
+    for node in &frame.nodes {
+        let Some(colors) = node.text_colors else {
+            continue;
+        };
+        let foreground = relative_luminance(colors.foreground);
+        let background = relative_luminance(colors.background);
+        let ratio = (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05);
+        if ratio < 4.5 {
+            push(
+                frame,
+                diagnostics,
+                Rule::TextContrast,
+                node.id,
+                format!(
+                    "contrast {ratio:.2}:1 is below 4.5:1 ({:?} on {:?})",
+                    colors.foreground, colors.background
+                ),
+            );
+        }
+    }
+}
+
+/// WCAG 2.1 relative luminance of an opaque sRGB colour.
+fn relative_luminance(color: [u8; 3]) -> f32 {
+    let channel = |value: u8| {
+        let value = f32::from(value) / 255.0;
+        if value <= 0.040_45 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2])
 }
 
 #[cfg(test)]
@@ -526,6 +611,82 @@ mod tests {
     fn an_inside_portal_is_fine() {
         let mut b = root();
         b.open(NodeKind::Portal, rect(10.0, 10.0, 200.0, 100.0), "Menu");
+        b.close();
+        b.close();
+        assert!(check(&b.build()).is_empty());
+    }
+
+    #[test]
+    fn text_that_escapes_its_parent_is_caught() {
+        let mut b = root();
+        b.open(NodeKind::Container, rect(10.0, 10.0, 60.0, 20.0), "Pill");
+        b.open(
+            NodeKind::Text {
+                ink: rect(10.0, 10.0, 120.0, 20.0),
+                ellipsis: false,
+            },
+            rect(10.0, 10.0, 120.0, 20.0),
+            "Label",
+        );
+        b.close();
+        b.close();
+        b.close();
+        let diagnostics = check(&b.build());
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule, Rule::TextOverflow);
+        assert!(diagnostics[0].message.contains("content box"));
+    }
+
+    #[test]
+    fn ellipsised_text_may_paint_past_its_parent() {
+        let mut b = root();
+        b.open(NodeKind::Container, rect(10.0, 10.0, 60.0, 20.0), "Pill");
+        b.open(
+            NodeKind::Text {
+                ink: rect(10.0, 10.0, 120.0, 20.0),
+                ellipsis: true,
+            },
+            rect(10.0, 10.0, 120.0, 20.0),
+            "Label",
+        );
+        b.close();
+        b.close();
+        b.close();
+        assert!(check(&b.build()).is_empty());
+    }
+
+    #[test]
+    fn low_contrast_text_is_caught() {
+        let mut b = root();
+        b.open(
+            NodeKind::Text {
+                ink: rect(10.0, 10.0, 100.0, 20.0),
+                ellipsis: false,
+            },
+            rect(10.0, 10.0, 100.0, 20.0),
+            "Hud",
+        );
+        b.set_text_colors([220, 227, 242], [233, 237, 247]);
+        b.close();
+        b.close();
+        let diagnostics = check(&b.build());
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].rule, Rule::TextContrast);
+        assert!(diagnostics[0].message.contains("below 4.5:1"));
+    }
+
+    #[test]
+    fn a_dark_hud_has_readable_contrast() {
+        let mut b = root();
+        b.open(
+            NodeKind::Text {
+                ink: rect(10.0, 10.0, 100.0, 20.0),
+                ellipsis: false,
+            },
+            rect(10.0, 10.0, 100.0, 20.0),
+            "Hud",
+        );
+        b.set_text_colors([28, 30, 38], [255, 255, 255]);
         b.close();
         b.close();
         assert!(check(&b.build()).is_empty());

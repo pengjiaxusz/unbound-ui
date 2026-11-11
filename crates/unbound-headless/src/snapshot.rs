@@ -69,6 +69,8 @@ pub struct SnapNode {
     pub min_size: [f32; 2],
     pub overlays_siblings: bool,
     pub scrollable: bool,
+    /// Text foreground and background, `r,g,b,r,g,b`.
+    pub text_colors: Option<[u8; 6]>,
 }
 
 fn rect_to_array(rect: Rect) -> [f32; 4] {
@@ -116,6 +118,16 @@ impl FrameSnapshot {
                         min_size,
                         overlays_siblings: node.overlays_siblings,
                         scrollable: node.scrollable,
+                        text_colors: node.text_colors.map(|colors| {
+                            [
+                                colors.foreground[0],
+                                colors.foreground[1],
+                                colors.foreground[2],
+                                colors.background[0],
+                                colors.background[1],
+                                colors.background[2],
+                            ]
+                        }),
                     }
                 })
                 .collect(),
@@ -157,6 +169,10 @@ impl FrameSnapshot {
                         kind,
                         overlays_siblings: node.overlays_siblings,
                         scrollable: node.scrollable,
+                        text_colors: node.text_colors.map(|colors| crate::frame::TextColors {
+                            foreground: [colors[0], colors[1], colors[2]],
+                            background: [colors[3], colors[4], colors[5]],
+                        }),
                     }
                 })
                 .collect(),

@@ -88,6 +88,15 @@ impl NodeKind {
     }
 }
 
+/// The colours a text node was painted with, for the contrast sanitizer.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct TextColors {
+    /// Opaque foreground colour (`sRGB`).
+    pub foreground: [u8; 3],
+    /// Opaque background colour (`sRGB`).
+    pub background: [u8; 3],
+}
+
 /// One node in a validated frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeSnapshot {
@@ -106,6 +115,9 @@ pub struct NodeSnapshot {
     pub overlays_siblings: bool,
     /// Inside a scroll container: clipped text there is expected.
     pub scrollable: bool,
+    /// Foreground and background of a text node, when the component declares
+    /// them; the contrast sanitizer only sees what is declared here.
+    pub text_colors: Option<TextColors>,
 }
 
 impl NodeSnapshot {
@@ -314,6 +326,7 @@ impl FrameBuilder {
             kind,
             overlays_siblings: false,
             scrollable,
+            text_colors: None,
         });
         self.labels.push(path);
         self.stack.push((id, false));
@@ -362,6 +375,20 @@ impl FrameBuilder {
             };
             if let Some(node) = self.frame.get_mut(id) {
                 node.clip = Some(clip);
+            }
+        }
+    }
+
+    /// Declare the opaque foreground/background a text node is painted with.
+    pub fn set_text_colors(&mut self, foreground: [u8; 3], background: [u8; 3]) {
+        if let Some((id, _)) = self.stack.last().copied() {
+            if let Some(node) = self.frame.get_mut(id) {
+                if node.kind.is_text() {
+                    node.text_colors = Some(TextColors {
+                        foreground,
+                        background,
+                    });
+                }
             }
         }
     }

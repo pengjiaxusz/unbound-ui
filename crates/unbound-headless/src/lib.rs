@@ -37,7 +37,7 @@ use core::fmt::Write as _;
 use core::time::Duration;
 use std::time::Instant;
 
-pub use frame::{Frame, FrameBuilder, NodeKind, NodeSnapshot, SourceLoc};
+pub use frame::{Frame, FrameBuilder, NodeKind, NodeSnapshot, SourceLoc, TextColors};
 pub use rules::{check, Diagnostic, Rule};
 pub use snapshot::{capture, open, restore, FrameSnapshot, SnapNode, TimeTravel};
 
@@ -246,6 +246,29 @@ mod tests {
         b.close();
         // 5: portal outside the viewport
         b.open(NodeKind::Portal, rect(790.0, 590.0, 100.0, 100.0), "Menu");
+        b.close();
+        // 6: text wider than its parent
+        b.open(NodeKind::Container, rect(0.0, 400.0, 80.0, 40.0), "Pill");
+        b.open(
+            NodeKind::Text {
+                ink: rect(0.0, 400.0, 200.0, 20.0),
+                ellipsis: false,
+            },
+            rect(0.0, 400.0, 200.0, 20.0),
+            "Overflow",
+        );
+        b.close();
+        b.close();
+        // 7: unreadable text colours
+        b.open(
+            NodeKind::Text {
+                ink: rect(0.0, 500.0, 80.0, 20.0),
+                ellipsis: false,
+            },
+            rect(0.0, 500.0, 80.0, 20.0),
+            "LowContrast",
+        );
+        b.set_text_colors([80, 80, 80], [90, 90, 90]);
         b.close();
         b.close();
 
