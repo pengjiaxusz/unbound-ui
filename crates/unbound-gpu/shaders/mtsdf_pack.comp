@@ -1,0 +1,63 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ---------------------------------------------------------------------------
+// GPU MTSDF generation, pass 3/3: the pack pass (docs §3.5).
+//
+// This pass lives in its own shader for one reason: the 1D transform needs
+// 16 KiB of shared memory for its envelope, and *every* workgroup of a shader
+// reserves that memory — even the ones that only pack a texel. With 16 KiB per
+// workgroup an SM hosts a handful of groups, and the pack pass (one texel per
+// invocation) degenerates into thousands of serial waves.
+//
+// Split out, the pack pass has no shared memory at all and 64 texels are
+// packed per workgroup.
+// ---------------------------------------------------------------------------
+
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+// `pc.prim_count` = width, `pc.block_count` = height,
+// `pc.scratch_bda` = coverage, `pc.scratch_bda2` = the squared distances,
+// `pc.scratch_bda3` = the packed output, `pc.digit` = spread in 1/256 texels.
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32Buf {
+    uint u[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer F32Buf {
+    float f[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer PackBuf {
+    uint u[];
+};
+
+uint coverage_at(U32Buf buf, int i) {
+    return (buf.u[i >> 2] >> uint((i & 3) * 8)) & 0xFFu;
+}
+
+void main() {
+    int width = int(pc.prim_count);
+    int height = int(pc.block_count);
+    uint spread_q8 = pc.digit;
+
+    int texels = width * height;
+    int i = int(gl_GlobalInvocationID.x);
+    if (i >= texels) {
+        return;
+    }
+
+    U32Buf coverage = U32Buf(pc.scratch_bda);
+    F32Buf temp = F32Buf(pc.scratch_bda2);
+    PackBuf out_pack = PackBuf(pc.scratch_bda3);
+
+    bool inside = coverage_at(coverage, i) >= 128u;
+    float d_out = sqrt(temp.f[i * 2 + 0]);
+    float d_in = sqrt(temp.f[i * 2 + 1]);
+    float signed_dist = inside ? -d_out : d_in;
+    float spread = float(spread_q8) / 256.0;
+    float value = clamp(0.5 - signed_dist / (2.0 * spread), 0.0, 1.0);
+    uint v = uint(value * 255.0 + 0.5);
+    uint alpha = coverage_at(coverage, i);
+    out_pack.u[i] = v | (v << 8) | (v << 16) | (alpha << 24);
+}

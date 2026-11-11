@@ -40,10 +40,13 @@ pub enum ComputeStage {
     SortScan = 3,
     SortScatter = 4,
     Indirect = 5,
+    /// The MTSDF pack pass; it has its own shader because the 1D transform
+    /// needs shared memory that the pack pass must not pay for.
+    MtsdfPack = 6,
 }
 
 impl ComputeStage {
-    const COUNT: usize = 6;
+    const COUNT: usize = 7;
 
     #[must_use]
     pub const fn all() -> [Self; Self::COUNT] {
@@ -54,6 +57,7 @@ impl ComputeStage {
             Self::SortScan,
             Self::SortScatter,
             Self::Indirect,
+            Self::MtsdfPack,
         ]
     }
 
@@ -66,6 +70,7 @@ impl ComputeStage {
             Self::SortScan => shader::sort_scan(),
             Self::SortScatter => shader::sort_scatter(),
             Self::Indirect => shader::indirect(),
+            Self::MtsdfPack => shader::mtsdf_pack(),
         }
     }
 
@@ -75,6 +80,7 @@ impl ComputeStage {
         match self {
             Self::Scatter => 64,
             Self::Indirect => 1,
+            Self::MtsdfPack => 64,
             _ => 256,
         }
     }
@@ -638,7 +644,7 @@ mod tests {
     #[test]
     fn compute_stages_cover_every_shader() {
         let stages = ComputeStage::all();
-        assert_eq!(stages.len(), 6);
+        assert_eq!(stages.len(), ComputeStage::COUNT);
         for s in stages {
             assert!(s.module().magic_ok(), "{:?}", s);
             assert!(s.workgroup_size() > 0);

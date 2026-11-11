@@ -55,10 +55,11 @@ embedded!(sort_scan, "sort_scan.comp", "sort_scan.comp");
 embedded!(sort_scatter, "sort_scatter.comp", "sort_scatter.comp");
 embedded!(indirect, "indirect.comp", "indirect.comp");
 embedded!(mtsdf, "mtsdf.comp", "mtsdf.comp");
+embedded!(mtsdf_pack, "mtsdf_pack.comp", "mtsdf_pack.comp");
 
 /// Every module, for validation and diagnostics.
 #[must_use]
-pub fn all() -> [ShaderModule; 11] {
+pub fn all() -> [ShaderModule; 12] {
     [
         uber_vert(),
         uber_frag(),
@@ -71,6 +72,7 @@ pub fn all() -> [ShaderModule; 11] {
         sort_scatter(),
         indirect(),
         mtsdf(),
+        mtsdf_pack(),
     ]
 }
 

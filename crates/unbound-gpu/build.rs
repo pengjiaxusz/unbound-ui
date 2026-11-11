@@ -22,6 +22,7 @@ const SHADERS: &[&str] = &[
     "sort_scatter.comp",
     "indirect.comp",
     "mtsdf.comp",
+    "mtsdf_pack.comp",
 ];
 
 fn exe(name: &str) -> String {

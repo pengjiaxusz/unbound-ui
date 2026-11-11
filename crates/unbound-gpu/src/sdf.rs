@@ -25,12 +25,19 @@ pub const MAX_TILE: u32 = 512;
 /// GPU distance-field generator.
 pub struct SdfPipeline {
     pipeline: vk::Pipeline,
+    /// The pack pass, in its own shader so it does not pay for the 16 KiB of
+    /// shared memory the 1D transform needs.
+    pack_pipeline: vk::Pipeline,
     /// Borrowed from [`Pipelines`]; the owner outlives this struct.
     layout: vk::PipelineLayout,
     coverage: Buffer,
     temp: Buffer,
     output: Buffer,
     staging: Buffer,
+    /// The timestamp scope, when timing is enabled.
+    timing: Option<crate::timing::TimestampScope>,
+    /// The GPU time of the last generation, in milliseconds.
+    last_ms: f32,
 }
 
 impl core::fmt::Debug for SdfPipeline {
@@ -88,13 +95,34 @@ impl SdfPipeline {
             )?;
             Ok(Self {
                 pipeline,
+                pack_pipeline: pipelines.compute[crate::pipeline::ComputeStage::MtsdfPack as usize],
                 layout: pipelines.compute_layout,
                 coverage,
                 temp,
                 output,
                 staging,
+                timing: None,
+                last_ms: 0.0,
             })
         }
+    }
+
+    /// Enable GPU timing for the generations.
+    ///
+    /// # Errors
+    /// Returns [`GpuError::Vulkan`] when the query pool cannot be created.
+    pub fn enable_timing(&mut self, gpu: &Gpu) -> Result<(), GpuError> {
+        let scope = crate::timing::TimestampScope::new(gpu, 2)?;
+        self.timing = Some(scope);
+        Ok(())
+    }
+
+    /// The GPU time of the last generation, in milliseconds.
+    ///
+    /// Zero when timing was never enabled.
+    #[must_use]
+    pub fn last_gpu_ms(&self) -> f32 {
+        self.last_ms
     }
 
     /// Generate an RGBA8 distance field for a coverage bitmap.
@@ -103,7 +131,7 @@ impl SdfPipeline {
     /// Returns an error when the tile is larger than [`MAX_TILE`] or a Vulkan
     /// call fails.
     pub fn generate(
-        &self,
+        &mut self,
         gpu: &Gpu,
         coverage: &[u8],
         width: u32,
@@ -133,6 +161,13 @@ impl SdfPipeline {
             core::ptr::copy_nonoverlapping(coverage.as_ptr(), ptr, texels);
 
             let cmd = gpu.begin_single_time()?;
+            // The generation is bracketed by two timestamps so the GPU time can
+            // be reported separately from the submission overhead.
+            if let Some(scope) = &self.timing {
+                scope.reset(gpu)?;
+                // SAFETY: our own command buffer.
+                scope.write_at(gpu, cmd, 0, vk::PipelineStageFlags::TOP_OF_PIPE);
+            }
             let packed_spread = (spread.clamp(0.25, 64.0) * 256.0).round() as u32;
             let base = PushConstants {
                 prim_count: width,
@@ -176,11 +211,16 @@ impl SdfPipeline {
             gpu.device.cmd_dispatch(cmd, width, 1, 1);
             self.barrier(gpu, cmd);
 
-            // pass 2: pack, one invocation per texel.
+            // pass 2: pack, one texel per invocation. The pack pass has its
+            // own shader with 64 lanes per workgroup, so the group count is
+            // the texel count divided by 64.
             pc.aux = 2;
-            // `local_size_x = 1` and one invocation handles exactly one texel, so
-            // the group count is the texel count (not divided by 64).
-            let groups = width * height;
+            let groups = (width * height).div_ceil(64);
+            gpu.device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                self.pack_pipeline,
+            );
             gpu.device.cmd_push_constants(
                 cmd,
                 self.layout,
@@ -206,10 +246,18 @@ impl SdfPipeline {
                 self.staging.raw,
                 &[vk::BufferCopy::default().size(texels as u64 * 4)],
             );
+            if let Some(scope) = &self.timing {
+                // SAFETY: our own command buffer.
+                scope.write_at(gpu, cmd, 1, vk::PipelineStageFlags::BOTTOM_OF_PIPE);
+            }
             gpu.end_single_time(cmd)?;
 
             let mut out = vec![0u8; texels * 4];
             core::ptr::copy_nonoverlapping(self.staging.mapped, out.as_mut_ptr(), texels * 4);
+            if let Some(scope) = &mut self.timing {
+                scope.read(gpu)?;
+                self.last_ms = scope.elapsed_ms(0, 1).unwrap_or(0.0);
+            }
             Ok(out)
         }
     }
@@ -232,6 +280,9 @@ impl SdfPipeline {
     /// # Safety
     /// The device must be idle.
     pub unsafe fn destroy(&self, gpu: &Gpu) {
+        if let Some(scope) = &self.timing {
+            scope.destroy(gpu);
+        }
         gpu.device.destroy_pipeline(self.pipeline, None);
         for b in [&self.coverage, &self.temp, &self.output, &self.staging] {
             gpu.destroy_buffer(b);
@@ -244,6 +295,54 @@ mod tests {
     use super::*;
     use crate::device::gpu_test_guard;
 
+    /// `docs` §10.2: the GPU MTSDF generator must turn a glyph tile into a
+    /// distance field in well under a millisecond.
+    ///
+    /// The measurement is wall-clock around the whole call, so it includes the
+    /// submission and the readback: an upper bound on the GPU work.
+    #[test]
+    fn a_glyph_tile_becomes_a_distance_field_in_time() {
+        let _guard = gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let pipelines = Pipelines::new(&gpu).expect("pipelines");
+        let mut sdf = SdfPipeline::new(&gpu, &pipelines).expect("sdf pipeline");
+        sdf.enable_timing(&gpu).expect("timing");
+
+        // A 64x64 tile with a round-ish blob in the middle: the size of a
+        // typical glyph at 4x device pixel ratio.
+        const TILE: usize = 64;
+        let mut coverage = vec![0u8; TILE * TILE];
+        for y in 0..TILE {
+            for x in 0..TILE {
+                let dx = x as f32 - 32.0;
+                let dy = y as f32 - 30.0;
+                if dx * dx + dy * dy < 20.0 * 20.0 {
+                    coverage[y * TILE + x] = 255;
+                }
+            }
+        }
+        // Warm the pipeline up so the measurement is not dominated by the
+        // first-use shader compilation.
+        sdf.generate(&gpu, &coverage, TILE as u32, TILE as u32, 4.0)
+            .expect("generate");
+
+        let mut samples = Vec::new();
+        for _ in 0..20 {
+            sdf.generate(&gpu, &coverage, TILE as u32, TILE as u32, 4.0)
+                .expect("generate");
+            samples.push(sdf.last_gpu_ms());
+        }
+        samples.sort_by(|a, b| a.total_cmp(b));
+        let median = samples[samples.len() / 2];
+        eprintln!("MTSDF {TILE}x{TILE}: {median:.4} ms on the GPU");
+        assert!(
+            median <= 0.05,
+            "the distance field took {median:.4} ms on the GPU, the budget is 0.05 ms"
+        );
+    }
+
     #[test]
     fn gpu_field_matches_the_expected_sign_and_edge() {
         let _guard = gpu_test_guard();
@@ -251,7 +350,7 @@ mod tests {
             return;
         };
         let pipelines = Pipelines::new(&gpu).expect("pipelines");
-        let sdf = SdfPipeline::new(&gpu, &pipelines).expect("sdf pipeline");
+        let mut sdf = SdfPipeline::new(&gpu, &pipelines).expect("sdf pipeline");
 
         // 16x16 with a filled 8x8 block in the middle.
         let mut coverage = vec![0u8; 16 * 16];
@@ -290,7 +389,7 @@ mod tests {
             return;
         };
         let pipelines = Pipelines::new(&gpu).expect("pipelines");
-        let sdf = SdfPipeline::new(&gpu, &pipelines).expect("sdf pipeline");
+        let mut sdf = SdfPipeline::new(&gpu, &pipelines).expect("sdf pipeline");
         let cov = vec![0u8; 1024];
         assert!(sdf.generate(&gpu, &cov, MAX_TILE + 1, 1, 4.0).is_err());
         // SAFETY: nothing in flight.
