@@ -284,7 +284,7 @@ impl PointerState {
         // the *secondary* button while the primary one is held must not end
         // the drag: the user is still dragging with the left button.
         if self.press_button != Some(button) {
-            let mut events = vec![PointerEvent::Up {
+            let events = vec![PointerEvent::Up {
                 target: self.pressed,
                 position,
                 button,
