@@ -12,8 +12,10 @@
 //! re-layout or an instance re-upload**. Both are enforced here by construction
 //! — [`ThemeState::switch`] only ever produces a new LUT.
 
+pub mod snapping;
 pub mod zoom;
 
+pub use snapping::{edge_screen, edge_screen_snapped, jitter, snap_error, snap_screen};
 pub use zoom::ZoomLayers;
 
 use unbound_math::color::Color;
