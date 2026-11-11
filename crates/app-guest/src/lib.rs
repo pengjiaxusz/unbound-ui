@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use unbound_abi::action::{ActionKind, RawAction};
 use unbound_abi::desc::{RawNodeDesc, RawNodeId, NO_NODE};
 use unbound_abi::plugin::{
-    GuestPluginVTable, GuestState, HostAllocatorVTable, HostRenderContext, ABI_VERSION,
+    ByteBuffer, GuestPluginVTable, GuestState, HostAllocatorVTable, HostRenderContext, ABI_VERSION,
 };
 use unbound_abi::schema::StateSchema;
 
@@ -87,25 +87,80 @@ static ALLOCATOR: ForwardingAllocator = ForwardingAllocator;
 // ---------------------------------------------------------------------------
 
 /// One row in the demo list.
+///
+/// `repr(C)` is not optional here. The host hands the *old* state to the
+/// *new* guest verbatim when the schema hashes match, so both builds must
+/// agree on the byte layout. Under the default `repr(Rust)` the compiler is
+/// free to reorder fields — and it does: it moved `State::count` to offset
+/// 48 — and it may do so differently in another compiler version. A
+/// hand-written fingerprint cannot protect against that; only a fixed layout
+/// can.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[repr(C)]
 pub struct Row {
     pub label: String,
     pub done: bool,
 }
 
+// The row's own layout is part of the state's layout: `Vec<Row>` is 24 bytes
+// whatever `Row` looks like, so without this the fingerprint would not change
+// when `Row` gains a field — and the host would hand the old memory to the
+// new guest as if the layouts still matched.
+//
+// The seed changed when `Row` gained `repr(C)`: the field list is unchanged,
+// but the byte layout is not, and the fingerprint has to say so.
+unbound_abi::impl_schema_hash!(
+    Row,
+    0x524f_5745_4e43, // "ROWNB" + repr(C)
+    "label",
+    "String",
+    0,
+    "done",
+    "bool",
+    24,
+);
+
 /// The guest's whole business state.
+///
+/// See [`Row`] for why this is `repr(C)`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[repr(C)]
 pub struct State {
     pub count: i64,
     pub title: String,
     pub rows: Vec<Row>,
 }
 
+// The offsets written into the schema hashes above are the contract: if they
+// drift away from the real layout, the fingerprint stops describing the
+// layout and the host's zero-copy fast path becomes unsafe. Pin them here so
+// a wrong offset fails to compile instead of silently weakening the hash.
+const _: () = {
+    use core::mem::offset_of;
+    assert!(offset_of!(Row, label) == 0);
+    assert!(
+        offset_of!(Row, done) == 24,
+        "Row::done follows a 24-byte String"
+    );
+    assert!(offset_of!(State, count) == 0);
+    assert!(offset_of!(State, title) == 8);
+    assert!(offset_of!(State, rows) == 32);
+    assert!(core::mem::size_of::<Row>() == 32);
+    assert!(core::mem::size_of::<State>() == 56);
+};
+
 // Field order and offsets are the contract: adding `rows` changes the hash, and
 // the host falls back to `migrate_*` instead of reinterpreting the old memory.
+//
+// `Row` is listed as a nested type: a change inside it changes the state's
+// layout too, even though `Vec<Row>` itself never changes size.
+//
+// The seed changed when `State` gained `repr(C)`, for the same reason as
+// `Row`'s: the field list is unchanged, the byte layout is not.
 unbound_abi::impl_schema_hash!(
     State,
-    0x5542_4f55_4e44, // "UNBOUND"
+    0x5542_4f55_4e45, // "UNBOUND" + repr(C)
+    nested: [Row],
     "count",
     "i64",
     0,
@@ -158,16 +213,20 @@ unsafe extern "C" fn adopt_state(_state: GuestState) {
     // on every call. The schema hash proved the layout is identical.
 }
 
-unsafe extern "C" fn migrate_export(state: GuestState, out: *mut Vec<u8>) {
+unsafe extern "C" fn migrate_export(state: GuestState, out: *mut ByteBuffer) {
     if state.is_null() || out.is_null() {
         return;
     }
     // SAFETY: both pointers are host-provided and live for this call.
     let state = unsafe { &*state.cast::<State>() };
     let out = unsafe { &mut *out };
-    if let Ok(bytes) = postcard::to_allocvec(state) {
-        out.extend_from_slice(&bytes);
-    }
+    let Ok(bytes) = postcard::to_allocvec(state) else {
+        // The state could not be serialised. Report "needs nothing" so the
+        // host does not allocate a buffer for a payload that does not exist.
+        out.len = 0;
+        return;
+    };
+    write_bytes(out, &bytes);
 }
 
 unsafe extern "C" fn migrate_import(ptr: *const u8, len: usize) -> GuestState {
@@ -177,8 +236,32 @@ unsafe extern "C" fn migrate_import(ptr: *const u8, len: usize) -> GuestState {
     }
     // SAFETY: the host passes the exact buffer `migrate_export` filled.
     let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
-    let state = postcard::from_bytes::<State>(bytes).unwrap_or_else(|_| State::seed());
+    // A decode failure must be *visible*: the host falls back to a fresh state
+    // when this returns null, which is better than silently handing back an
+    // empty seed as if the migration had succeeded.
+    let Ok(state) = postcard::from_bytes::<State>(bytes) else {
+        return core::ptr::null_mut();
+    };
     Box::into_raw(Box::new(state)).cast::<c_void>()
+}
+
+/// Write `bytes` into the host's buffer.
+///
+/// The host owns the allocation; the guest only fills it. When the buffer is
+/// too small the guest writes nothing and reports the size it needs, so the
+/// host can allocate a bigger one and call again.
+fn write_bytes(out: &mut ByteBuffer, bytes: &[u8]) {
+    let needed = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+    if out.capacity < needed || out.ptr.is_null() {
+        // Not enough room: report the size the host has to provide.
+        out.len = needed;
+        return;
+    }
+    // SAFETY: the host guarantees `capacity` writable bytes at `ptr`.
+    unsafe {
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), out.ptr, bytes.len());
+    }
+    out.len = needed;
 }
 
 unsafe extern "C" fn reduce(state: GuestState, action: *const RawAction) {
@@ -251,7 +334,7 @@ unsafe extern "C" fn build_view(state: GuestState, ctx: *mut HostRenderContext) 
     ctx.done(root);
 }
 
-unsafe extern "C" fn snapshot(state: GuestState, out: *mut Vec<u8>) {
+unsafe extern "C" fn snapshot(state: GuestState, out: *mut ByteBuffer) {
     // SAFETY: same contract as `migrate_export`.
     unsafe { migrate_export(state, out) };
 }
@@ -259,6 +342,7 @@ unsafe extern "C" fn snapshot(state: GuestState, out: *mut Vec<u8>) {
 /// The vtable the host reads through [`unbound_abi::plugin::GUEST_ENTRY_SYMBOL`].
 static VTABLE: GuestPluginVTable = GuestPluginVTable {
     abi_version: ABI_VERSION,
+    struct_size: core::mem::size_of::<GuestPluginVTable>() as u32,
     state_schema_hash: <State as StateSchema>::SCHEMA_HASH,
     on_load,
     on_unload,

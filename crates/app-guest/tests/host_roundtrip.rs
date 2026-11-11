@@ -124,18 +124,27 @@ fn the_guest_allocates_through_the_host_heap() {
 
 #[test]
 fn the_dynamic_library_exports_the_entry_point() {
-    // Only runs when the cdylib has been built next to the test binary, which
-    // `cargo test --workspace` guarantees for a workspace member.
-    let Some(path) = locate_guest_dll() else {
-        eprintln!("skipping: app_guest dll not built next to the test binary");
-        return;
-    };
+    // The point of this test is the *real* DLL path: a dynamic library that is
+    // loaded by the host, exports the entry point and carries the same schema
+    // fingerprint as the in-process guest. A missing DLL used to be skipped
+    // with a message on stderr, which let the test pass without ever running
+    // — so the check is a hard failure now. `just test` builds the cdylib
+    // first for exactly this reason.
+    let path = locate_guest_dll().unwrap_or_else(|| {
+        panic!(
+            "app_guest cdylib not found next to the test binary; \
+             build it first (just test does this for you)"
+        )
+    });
     let mut host = GuestHost::new();
     host.load(&path).unwrap();
     host.reduce(&press()).unwrap();
     host.build().unwrap();
     assert_eq!(host.arena().len(), 3);
-    assert_eq!(host.schema_hash(), Some(<State as unbound_abi::schema::StateSchema>::SCHEMA_HASH));
+    assert_eq!(
+        host.schema_hash(),
+        Some(<State as unbound_abi::schema::StateSchema>::SCHEMA_HASH)
+    );
 }
 
 fn locate_guest_dll() -> Option<std::path::PathBuf> {
@@ -149,21 +158,33 @@ fn locate_guest_dll() -> Option<std::path::PathBuf> {
         roots.push(workspace.join("target").join("release"));
     }
     if let Ok(exe) = std::env::current_exe() {
-        let mut dir = exe.parent().map(std::path::Path::to_path_buf);
+        let mut dir = exe.parent().map(std::path::PathBuf::from);
         for _ in 0..8 {
             let Some(current) = dir else { break };
             roots.push(current.clone());
             roots.push(current.join("deps"));
-            dir = current.parent().map(std::path::Path::to_path_buf);
+            dir = current.parent().map(std::path::PathBuf::from);
         }
     }
+    // The *freshest* candidate wins, not the first one found. `cargo test`
+    // writes the cdylib into `target/<profile>/deps`, while `cargo build`
+    // writes it into `target/<profile>` — so the two copies drift apart, and
+    // picking by path order happily hands back a stale one whose schema
+    // fingerprint no longer matches the source it is supposed to describe.
+    let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
     for root in roots {
         for name in NAMES {
             let candidate = root.join(name);
-            if candidate.exists() {
-                return Some(candidate);
+            let Ok(meta) = candidate.metadata() else {
+                continue;
+            };
+            let Ok(modified) = meta.modified() else {
+                continue;
+            };
+            if best.as_ref().is_none_or(|(seen, _)| modified > *seen) {
+                best = Some((modified, candidate));
             }
         }
     }
-    None
+    best.map(|(_, path)| path)
 }

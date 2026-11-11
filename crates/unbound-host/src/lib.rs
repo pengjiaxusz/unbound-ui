@@ -29,8 +29,8 @@ use rustc_hash::FxHashMap;
 use unbound_abi::action::RawAction;
 use unbound_abi::desc::{RawNodeDesc, RawNodeId};
 use unbound_abi::plugin::{
-    check_abi, classify_handoff, AbiCompat, GuestEntryFn, GuestPluginVTable, GuestState,
-    HostAllocatorVTable, HostRenderContext, ABI_VERSION, GUEST_ENTRY_SYMBOL,
+    check_abi, classify_handoff, AbiCompat, ByteBuffer, GuestEntryFn, GuestPluginVTable,
+    GuestState, HostAllocatorVTable, HostRenderContext, ABI_VERSION, GUEST_ENTRY_SYMBOL,
 };
 
 pub use unbound_abi::plugin::{StateHandoff, ABI_VERSION as GUEST_ABI_VERSION};
@@ -143,7 +143,11 @@ impl NodeArena {
         // Ids start at 1: `RawNodeId::ROOT` (0) is the "virtual" root that a
         // guest may use as a parent without owning a node of its own.
         let id = RawNodeId(self.nodes.len() as u32 + 1);
-        if parent.is_none() {
+        if parent.is_none() || parent == RawNodeId::ROOT {
+            // `ROOT` is a valid parent: the node becomes a root of the tree.
+            // It used to fall through to the `else` branch, where the lookup
+            // of id 0 always failed — the node was then in neither the root
+            // list nor any child list, and silently vanished from the tree.
             self.roots.push(id);
         } else if let Some(slot) = self.index.get(&parent.0).copied() {
             self.nodes[slot].children.push(id);
@@ -187,11 +191,28 @@ pub struct GuestHost {
     /// The vtable must outlive the guest: a statically linked guest keeps the
     /// pointer in a process-wide static, so the host never hands out a pointer
     /// into its own stack frame.
+    ///
+    /// The leak is deliberate. The guest caches this pointer for as long as it
+    /// is mounted, and a statically linked guest shares one static across
+    /// every host instance in the process — so the address has to stay valid
+    /// for the whole process, not just for one mount. Storing the vtable in a
+    /// `Box` inside the host does not work: the box is freed with the host,
+    /// and the next host's allocation then goes through a dangling pointer.
     alloc: &'static HostAllocatorVTable,
     arena: NodeArena,
     generation: u64,
     loads: u32,
     shadow_counter: u32,
+    /// The shadow copies this host created, removed when the guest is unloaded.
+    ///
+    /// Without this a long dev session with hundreds of reloads leaves
+    /// hundreds of DLL copies in the temp directory.
+    shadows: Vec<PathBuf>,
+    /// The shadow copy the currently loaded library came from.
+    ///
+    /// Only this one may be deleted while the library is loaded: the file is
+    /// locked for as long as the library is mapped.
+    library_shadow: Option<PathBuf>,
 }
 
 impl core::fmt::Debug for GuestHost {
@@ -226,10 +247,15 @@ impl GuestHost {
             generation: 0,
             loads: 0,
             shadow_counter: 0,
+            shadows: Vec::new(),
+            library_shadow: None,
         }
     }
 
     /// Create a host whose guest allocations are served by `alloc`.
+    ///
+    /// The vtable is leaked on purpose — see the field's documentation: the
+    /// guest keeps the pointer in a process-wide static.
     #[must_use]
     pub fn with_allocator(alloc: HostAllocatorVTable) -> Self {
         let mut host = Self::new();
@@ -248,7 +274,9 @@ impl GuestHost {
         // library is kept alive for as long as the vtable is used.
         let library = unsafe { Library::new(&shadow)? };
         let vtable = unsafe { read_vtable(&library)? };
-        self.mount(library, vtable)
+        self.mount(library, vtable)?;
+        self.library_shadow = Some(shadow);
+        Ok(())
     }
 
     /// Mount a vtable that is already in memory (tests, statically linked apps).
@@ -296,7 +324,11 @@ impl GuestHost {
         let library = unsafe { Library::new(&shadow)? };
         let fresh = unsafe { read_vtable(&library)? };
         let handoff = self.reload_vtable(fresh)?;
+        // The old library is unloaded by `reload_vtable`, so the old shadow
+        // copy is unlocked and can go.
+        self.release_library_shadow();
         self.library = Some(library);
+        self.library_shadow = Some(shadow);
         Ok(handoff)
     }
 
@@ -318,6 +350,13 @@ impl GuestHost {
         let old = self.vtable;
         let old_state = core::mem::replace(&mut self.state, core::ptr::null_mut());
         unsafe {
+            // The new guest's allocator has to be installed *before* it
+            // allocates anything: `init_state` and `migrate_import` both
+            // allocate through the guest's global allocator, which forwards
+            // to the host's vtable. Without the forwarding table the guest
+            // would fall back to a different heap and the state would later
+            // be freed through the host's allocator — a cross-allocator free.
+            (fresh.on_load)(self.alloc);
             // SAFETY: `old` and `old_state` belong together and the old library
             // is still loaded at this point.
             match (handoff, old) {
@@ -329,19 +368,30 @@ impl GuestHost {
                     self.state = old_state;
                 }
                 (StateHandoff::Migrate, Some(old)) => {
-                    let mut buffer: Vec<u8> = Vec::new();
-                    (old.migrate_export)(old_state, &mut buffer);
+                    // A migration exports through the *migration* hook, not
+                    // through `snapshot`: the guest may reshape the state on
+                    // the way out to match the new schema.
+                    let buffer = export_state(old_state, old.migrate_export);
                     (old.drop_state)(old_state);
+                    // The old guest is done: let it release whatever it
+                    // holds before its library is unloaded.
+                    (old.on_unload)();
                     self.state = (fresh.migrate_import)(buffer.as_ptr(), buffer.len());
+                    if self.state.is_null() {
+                        // The guest could not decode the buffer. Falling back
+                        // to a fresh state is better than handing the host a
+                        // null pointer it would dereference.
+                        self.state = (fresh.init_state)();
+                    }
                 }
                 _ => {
                     if let Some(old) = old {
                         (old.drop_state)(old_state);
+                        (old.on_unload)();
                     }
                     self.state = (fresh.init_state)();
                 }
             }
-            (fresh.on_load)(self.alloc);
         }
         // The old artefact is only released once nothing can call into it.
         self.library = None;
@@ -366,6 +416,25 @@ impl GuestHost {
         }
         self.library = None;
         self.schema_hash = None;
+        self.remove_shadows();
+    }
+
+    /// Delete the shadow copies this host created.
+    ///
+    /// The library is unloaded by now, so the files are no longer locked.
+    fn remove_shadows(&mut self) {
+        for path in self.shadows.drain(..) {
+            let _ = std::fs::remove_file(path);
+        }
+        self.library_shadow = None;
+    }
+
+    /// Delete the shadow copy the unloaded library came from.
+    fn release_library_shadow(&mut self) {
+        if let Some(path) = self.library_shadow.take() {
+            let _ = std::fs::remove_file(&path);
+            self.shadows.retain(|p| p != &path);
+        }
     }
 
     /// True when a guest is mounted.
@@ -419,6 +488,7 @@ impl GuestHost {
         self.generation += 1;
         let mut context = HostRenderContext {
             abi_version: ABI_VERSION,
+            struct_size: core::mem::size_of::<HostRenderContext>() as u32,
             state_generation: self.generation,
             ctx: core::ptr::addr_of_mut!(self.arena).cast::<c_void>(),
             push_node: host_push_node,
@@ -442,16 +512,14 @@ impl GuestHost {
         let Some(vtable) = self.vtable else {
             return Err(HostError::NoGuest);
         };
-        let mut buffer: Vec<u8> = Vec::new();
-        unsafe {
-            // SAFETY: the vtable is live; the buffer lives on the host heap and
-            // the guest's allocator forwards to that same heap.
-            (vtable.snapshot)(self.state, &mut buffer);
-        }
-        Ok(buffer)
+        Ok(export_state(self.state, vtable.snapshot))
     }
 
     /// Copy `path` to a unique temp file so the original can be rebuilt.
+    ///
+    /// The copy is remembered so it can be deleted when the guest is unloaded:
+    /// without that, a long dev session with hundreds of reloads leaves
+    /// hundreds of DLL copies in the temp directory.
     fn shadow_copy(&mut self, path: &Path) -> Result<PathBuf, HostError> {
         if !path.exists() {
             // Nothing to copy (e.g. a test fixture); let the loader report it.
@@ -467,6 +535,7 @@ impl GuestHost {
             self.shadow_counter
         ));
         std::fs::copy(path, &shadow)?;
+        self.shadows.push(shadow.clone());
         Ok(shadow)
     }
 }
@@ -479,6 +548,11 @@ impl Drop for GuestHost {
 
 /// Read the guest vtable out of a freshly opened library.
 ///
+/// The ABI version and the struct size are read *first*, from the head of the
+/// struct, and the whole vtable is only copied once both have been checked.
+/// Copying it first would read past the end of a guest built against an older
+/// ABI — whose vtable is smaller — before the host got a chance to refuse it.
+///
 /// # Safety
 /// `library` must stay loaded for as long as the returned vtable is used, and it
 /// must export [`GUEST_ENTRY_SYMBOL`] with the documented signature.
@@ -490,7 +564,89 @@ unsafe fn read_vtable(library: &Library) -> Result<GuestPluginVTable, HostError>
     if pointer.is_null() {
         return Err(HostError::MissingEntry);
     }
+    // The first two words are the version and the size. Both are present in
+    // every ABI version, so reading them can never go past the guest's
+    // struct.
+    let header = unsafe { *(pointer.cast::<VTableHeader>()) };
+    let compat = check_abi(header.abi_version);
+    if compat != AbiCompat::Ok {
+        return Err(HostError::Abi(compat));
+    }
+    let expected = core::mem::size_of::<GuestPluginVTable>();
+    if (header.struct_size as usize) < expected {
+        return Err(HostError::Abi(AbiCompat::GuestTooOld {
+            host: ABI_VERSION,
+            guest: header.abi_version,
+        }));
+    }
+    // A guest whose table is *larger* than ours is accepted on purpose: the
+    // extra members sit at the end, so copying only the fields this host
+    // knows about is still correct — that is the forward-compatible case.
+    // A guest whose table is smaller is refused: the copy would read past its
+    // end. Inserting a member in the *middle* shifts every later field, and
+    // no size check can catch that — which is why `ABI_VERSION` has to be
+    // bumped for every layout change.
     Ok(unsafe { *pointer })
+}
+
+/// The leading words of [`GuestPluginVTable`], read before the whole struct.
+///
+/// Keeping them in their own `#[repr(C)]` struct makes the offset of the
+/// version and the size explicit, and guarantees that reading them cannot
+/// touch anything past the guest's vtable.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct VTableHeader {
+    abi_version: u32,
+    struct_size: u32,
+}
+
+/// Export a guest's state into a host-owned byte buffer.
+///
+/// The guest writes into the buffer; it never allocates it. The buffer grows
+/// by asking the guest how much room it needs, so the guest's allocator is
+/// never involved and the host frees the memory with its own allocator.
+///
+/// `export` selects the guest callback to run, and the two callers need
+/// different ones:
+///
+/// * [`GuestPluginVTable::snapshot`] for a plain time-travel snapshot;
+/// * [`GuestPluginVTable::migrate_export`] when the bytes are handed over to
+///   the next generation — a migration must go through the export hook so
+///   the guest can reshape its state for the new schema.
+///
+/// The callback runs twice: once to probe the required size (no buffer is
+/// given, the guest only reports the length it needs) and once to fill the
+/// buffer the host allocated for it.
+fn export_state(
+    state: GuestState,
+    export: unsafe extern "C" fn(GuestState, *mut ByteBuffer),
+) -> Vec<u8> {
+    let mut buffer: Vec<u8> = Vec::new();
+    // The guest reports the size it needs when the buffer is too small.
+    let needed: u32 = unsafe {
+        let mut view = ByteBuffer {
+            ptr: core::ptr::null_mut(),
+            capacity: 0,
+            len: 0,
+        };
+        export(state, &mut view);
+        view.len
+    };
+    if needed == 0 {
+        return buffer;
+    }
+    buffer.resize(needed as usize, 0);
+    unsafe {
+        let mut view = ByteBuffer {
+            ptr: buffer.as_mut_ptr(),
+            capacity: needed,
+            len: 0,
+        };
+        export(state, &mut view);
+        buffer.truncate(view.len as usize);
+    }
+    buffer
 }
 
 // ---- host → guest callbacks -------------------------------------------------

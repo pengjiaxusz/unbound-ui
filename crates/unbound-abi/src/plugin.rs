@@ -12,7 +12,29 @@ use crate::desc::{RawNodeDesc, RawNodeId};
 /// Bumped whenever the *layout* of any POD in this crate changes in a
 /// non-additive way. The host refuses to load a guest with a different major
 /// version instead of corrupting its heap.
-pub const ABI_VERSION: u32 = 3;
+///
+/// The version is a plain counter, not a major/minor pair: a guest is either
+/// ABI-compatible or it is not. Every layout change bumps it, and the host
+/// compares the guest's `struct_size` as well, so an additive change that grew
+/// a struct is caught by the size check rather than by the version.
+pub const ABI_VERSION: u32 = 4;
+
+/// A growable byte buffer the guest fills.
+///
+/// `Vec<u8>` cannot cross the ABI: its layout is not `#[repr(C)]` and is not
+/// covered by Rust's stability guarantees, so a guest built by a different
+/// compiler could interpret it differently. The host owns the allocation and
+/// the guest only writes into it.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct ByteBuffer {
+    /// The bytes. Null when `capacity` is zero.
+    pub ptr: *mut u8,
+    /// How many bytes the buffer can hold.
+    pub capacity: u32,
+    /// How many bytes were written.
+    pub len: u32,
+}
 
 /// Allocator vtable handed to the guest at load time.
 ///
@@ -42,6 +64,11 @@ pub struct HostAllocatorVTable {
 #[derive(Copy, Clone, Debug)]
 pub struct HostRenderContext {
     pub abi_version: u32,
+    /// Size of this struct in bytes.
+    ///
+    /// The guest checks it before reading any field: the host may be older
+    /// than the guest and the struct may have grown since.
+    pub struct_size: u32,
     /// Bumped by the host every frame; the guest uses it for memoized views.
     pub state_generation: u64,
     /// Opaque host pointer, passed back verbatim.
@@ -95,11 +122,18 @@ impl HostRenderContext {
         unsafe { (self.finish)(self.ctx, root) }
     }
 
-    /// True when the host installed real callbacks.
+    /// True when the host installed real callbacks *and* the context is one
+    /// this guest understands.
+    ///
+    /// The size check matters: the host may be older than the guest, and the
+    /// context struct may have grown since the guest was built. Reading a
+    /// field past the end of the host's struct would be undefined behaviour.
     #[inline]
     #[must_use]
     pub fn is_connected(&self) -> bool {
-        !self.ctx.is_null() && self.abi_version == ABI_VERSION
+        !self.ctx.is_null()
+            && self.abi_version == ABI_VERSION
+            && self.struct_size as usize >= core::mem::size_of::<Self>()
     }
 }
 
@@ -107,6 +141,7 @@ impl Default for HostRenderContext {
     fn default() -> Self {
         Self {
             abi_version: ABI_VERSION,
+            struct_size: core::mem::size_of::<Self>() as u32,
             state_generation: 0,
             ctx: core::ptr::null_mut(),
             push_node: no_push,
@@ -136,6 +171,12 @@ pub type GuestState = *mut c_void;
 #[derive(Copy, Clone)]
 pub struct GuestPluginVTable {
     pub abi_version: u32,
+    /// Size of this struct in bytes.
+    ///
+    /// The host reads it *before* copying the vtable, so that a guest built
+    /// against an older ABI — whose struct is smaller — is refused instead of
+    /// being read past its end.
+    pub struct_size: u32,
     /// Compiled-in fingerprint of the guest's `State` memory layout. Equal
     /// hashes enable the zero-copy hot-reload fast path (`docs` §8.1).
     pub state_schema_hash: u64,
@@ -152,15 +193,23 @@ pub struct GuestPluginVTable {
     pub adopt_state: unsafe extern "C" fn(state: GuestState),
     /// Safe path: export the state to a self-describing binary buffer so the
     /// next guest generation can migrate it field by field.
-    pub migrate_export: unsafe extern "C" fn(state: GuestState, out_buf: *mut Vec<u8>),
+    ///
+    /// The guest writes at most `out.capacity` bytes and reports how many it
+    /// wrote in `out.len`. When the buffer is too small the guest writes
+    /// nothing and sets `out.len` to the size it needs, so the host can
+    /// allocate a bigger one and call again.
+    pub migrate_export: unsafe extern "C" fn(state: GuestState, out: *mut ByteBuffer),
     /// Safe path: rebuild a state from [`Self::migrate_export`] output, applying
     /// `serde` defaults for fields the old schema did not have.
+    ///
+    /// Returns null when the buffer cannot be decoded; the host then falls
+    /// back to a fresh state instead of silently losing the data.
     pub migrate_import: unsafe extern "C" fn(buf_ptr: *const u8, buf_len: usize) -> GuestState,
 
     pub reduce: unsafe extern "C" fn(state: GuestState, action: *const RawAction),
     pub build_view: unsafe extern "C" fn(state: GuestState, ctx: *mut HostRenderContext),
     /// Serialise the whole state for time-travel snapshots.
-    pub snapshot: unsafe extern "C" fn(state: GuestState, out_buf: *mut Vec<u8>),
+    pub snapshot: unsafe extern "C" fn(state: GuestState, out: *mut ByteBuffer),
 }
 
 // SAFETY: the vtable is a plain aggregate of function pointers and integers.

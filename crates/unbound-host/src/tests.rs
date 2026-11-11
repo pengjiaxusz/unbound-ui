@@ -7,11 +7,12 @@
 
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 use unbound_abi::action::{ActionKind, RawAction};
 use unbound_abi::desc::{RawNodeDesc, RawNodeId, NO_NODE};
 use unbound_abi::plugin::{
-    GuestPluginVTable, GuestState, HostAllocatorVTable, HostRenderContext, ABI_VERSION,
+    ByteBuffer, GuestPluginVTable, GuestState, HostAllocatorVTable, HostRenderContext, ABI_VERSION,
 };
 
 use crate::{system_allocator, GuestHost, HostError, StateHandoff};
@@ -20,16 +21,28 @@ static INITIALIZED: AtomicU32 = AtomicU32::new(0);
 static ADOPTED: AtomicU32 = AtomicU32::new(0);
 static DROPPED: AtomicU32 = AtomicU32::new(0);
 static EXPORTED: AtomicU32 = AtomicU32::new(0);
+static SNAPSHOTTED: AtomicU32 = AtomicU32::new(0);
 static IMPORTED: AtomicU32 = AtomicU32::new(0);
 static ON_LOAD: AtomicU32 = AtomicU32::new(0);
+static ON_UNLOAD: AtomicU32 = AtomicU32::new(0);
 
-fn reset_counters() {
+/// The counters are process-global, and `cargo test` runs the tests of a binary
+/// in parallel threads: without this lock one test's `reset_counters` would
+/// wipe another's counters between its reset and its assertion.
+static COUNTER_LOCK: Mutex<()> = Mutex::new(());
+
+/// Take the counter lock and reset the counters.
+fn reset_counters() -> MutexGuard<'static, ()> {
+    let guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     INITIALIZED.store(0, Ordering::SeqCst);
     ADOPTED.store(0, Ordering::SeqCst);
     DROPPED.store(0, Ordering::SeqCst);
     EXPORTED.store(0, Ordering::SeqCst);
+    SNAPSHOTTED.store(0, Ordering::SeqCst);
     IMPORTED.store(0, Ordering::SeqCst);
     ON_LOAD.store(0, Ordering::SeqCst);
+    ON_UNLOAD.store(0, Ordering::SeqCst);
+    guard
 }
 
 /// Guest business state.
@@ -52,7 +65,9 @@ unsafe extern "C" fn guest_on_load(alloc: *const HostAllocatorVTable) {
     ON_LOAD.fetch_add(1, Ordering::SeqCst);
 }
 
-unsafe extern "C" fn guest_on_unload() {}
+unsafe extern "C" fn guest_on_unload() {
+    ON_UNLOAD.fetch_add(1, Ordering::SeqCst);
+}
 
 unsafe extern "C" fn guest_init() -> GuestState {
     INITIALIZED.fetch_add(1, Ordering::SeqCst);
@@ -68,21 +83,57 @@ unsafe extern "C" fn guest_adopt(_state: GuestState) {
     ADOPTED.fetch_add(1, Ordering::SeqCst);
 }
 
-unsafe extern "C" fn guest_export(state: GuestState, out: *mut Vec<u8>) {
-    EXPORTED.fetch_add(1, Ordering::SeqCst);
+unsafe extern "C" fn guest_export(state: GuestState, out: *mut ByteBuffer) {
     let state = unsafe { &*state.cast::<TestState>() };
     let out = unsafe { &mut *out };
-    out.extend_from_slice(&state.count.to_le_bytes());
-    out.extend_from_slice(state.label.as_bytes());
+    let mut bytes = Vec::with_capacity(16);
+    bytes.extend_from_slice(&state.count.to_le_bytes());
+    bytes.extend_from_slice(state.label.as_bytes());
+    // The host asks twice: once to probe the size (nothing is written back)
+    // and once to fill the buffer. Only the second pass is an export that
+    // actually produced state, so only that one is counted.
+    if write_bytes(out, &bytes) {
+        EXPORTED.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// Write `bytes` into the host's buffer, the way a real guest does.
+///
+/// Returns whether the bytes were written; `false` means the buffer was too
+/// small and only the required length was reported.
+fn write_bytes(out: &mut ByteBuffer, bytes: &[u8]) -> bool {
+    let needed = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+    if out.capacity < needed || out.ptr.is_null() {
+        out.len = needed;
+        return false;
+    }
+    // SAFETY: the host guarantees `capacity` writable bytes at `ptr`.
+    unsafe {
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), out.ptr, bytes.len());
+    }
+    out.len = needed;
+    true
 }
 
 unsafe extern "C" fn guest_import(ptr: *const u8, len: usize) -> GuestState {
     IMPORTED.fetch_add(1, Ordering::SeqCst);
     let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
-    let (count_bytes, label_bytes) = bytes.split_at(8);
-    let count = i64::from_le_bytes(count_bytes.try_into().unwrap());
-    let label = String::from_utf8(label_bytes.to_vec()).unwrap();
-    Box::into_raw(Box::new(TestState { count, label })).cast::<c_void>()
+    // A malformed buffer must not panic: unwinding out of an `extern "C"`
+    // function aborts the process.
+    let Some((count_bytes, label_bytes)) = bytes.split_at_checked(8) else {
+        return core::ptr::null_mut();
+    };
+    let Ok(count_bytes) = <[u8; 8]>::try_from(count_bytes) else {
+        return core::ptr::null_mut();
+    };
+    let Ok(label) = String::from_utf8(label_bytes.to_vec()) else {
+        return core::ptr::null_mut();
+    };
+    Box::into_raw(Box::new(TestState {
+        count: i64::from_le_bytes(count_bytes),
+        label,
+    }))
+    .cast::<c_void>()
 }
 
 unsafe extern "C" fn guest_reduce(state: GuestState, action: *const RawAction) {
@@ -107,15 +158,18 @@ unsafe extern "C" fn guest_build(state: GuestState, ctx: *mut HostRenderContext)
     ctx.done(root);
 }
 
-unsafe extern "C" fn guest_snapshot(state: GuestState, out: *mut Vec<u8>) {
+unsafe extern "C" fn guest_snapshot(state: GuestState, out: *mut ByteBuffer) {
     let state = unsafe { &*state.cast::<TestState>() };
     let out = unsafe { &mut *out };
-    out.extend_from_slice(&state.count.to_le_bytes());
+    if write_bytes(out, &state.count.to_le_bytes()) {
+        SNAPSHOTTED.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 fn vtable(schema_hash: u64) -> GuestPluginVTable {
     GuestPluginVTable {
         abi_version: ABI_VERSION,
+        struct_size: core::mem::size_of::<GuestPluginVTable>() as u32,
         state_schema_hash: schema_hash,
         on_load: guest_on_load,
         on_unload: guest_on_unload,
@@ -139,7 +193,7 @@ fn click() -> RawAction {
 
 #[test]
 fn mounting_runs_the_guest_lifecycle() {
-    reset_counters();
+    let _guard = reset_counters();
     let mut host = GuestHost::new();
     host.mount_vtable(vtable(7)).unwrap();
     assert!(host.is_mounted());
@@ -151,7 +205,7 @@ fn mounting_runs_the_guest_lifecycle() {
 
 #[test]
 fn reduce_then_build_produces_a_node_tree() {
-    reset_counters();
+    let _guard = reset_counters();
     let mut host = GuestHost::new();
     host.mount_vtable(vtable(7)).unwrap();
     host.reduce(&click()).unwrap();
@@ -168,7 +222,7 @@ fn reduce_then_build_produces_a_node_tree() {
 
 #[test]
 fn building_twice_does_not_accumulate_nodes() {
-    reset_counters();
+    let _guard = reset_counters();
     let mut host = GuestHost::new();
     host.mount_vtable(vtable(7)).unwrap();
     host.build().unwrap();
@@ -179,7 +233,7 @@ fn building_twice_does_not_accumulate_nodes() {
 
 #[test]
 fn a_reload_with_the_same_schema_adopts_the_pointer() {
-    reset_counters();
+    let _guard = reset_counters();
     let mut host = GuestHost::new();
     host.mount_vtable(vtable(0xdead_beef)).unwrap();
     host.reduce(&click()).unwrap();
@@ -198,7 +252,7 @@ fn a_reload_with_the_same_schema_adopts_the_pointer() {
 
 #[test]
 fn a_reload_with_a_new_schema_migrates_the_state() {
-    reset_counters();
+    let _guard = reset_counters();
     let mut host = GuestHost::new();
     host.mount_vtable(vtable(1)).unwrap();
     host.reduce(&click()).unwrap();
@@ -208,6 +262,11 @@ fn a_reload_with_a_new_schema_migrates_the_state() {
     let handoff = host.reload_vtable(vtable(2)).unwrap();
     assert_eq!(handoff, StateHandoff::Migrate);
     assert_eq!(EXPORTED.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        SNAPSHOTTED.load(Ordering::SeqCst),
+        0,
+        "a migration must go through migrate_export, not snapshot"
+    );
     assert_eq!(IMPORTED.load(Ordering::SeqCst), 1);
     assert_eq!(DROPPED.load(Ordering::SeqCst), 1);
     assert_eq!(INITIALIZED.load(Ordering::SeqCst), 1, "imported, not fresh");
@@ -222,7 +281,7 @@ fn a_reload_with_a_new_schema_migrates_the_state() {
 
 #[test]
 fn an_abi_mismatch_is_refused_before_any_call() {
-    reset_counters();
+    let _guard = reset_counters();
     let mut host = GuestHost::new();
     let mut broken = vtable(1);
     broken.abi_version = ABI_VERSION + 1;
@@ -234,7 +293,7 @@ fn an_abi_mismatch_is_refused_before_any_call() {
 
 #[test]
 fn unmount_drops_the_state_through_the_guest() {
-    reset_counters();
+    let _guard = reset_counters();
     let mut host = GuestHost::new();
     host.mount_vtable(vtable(1)).unwrap();
     host.unmount();
@@ -247,7 +306,7 @@ fn unmount_drops_the_state_through_the_guest() {
 
 #[test]
 fn dropping_the_host_unmounts_the_guest() {
-    reset_counters();
+    let _guard = reset_counters();
     {
         let mut host = GuestHost::new();
         host.mount_vtable(vtable(1)).unwrap();
@@ -257,7 +316,7 @@ fn dropping_the_host_unmounts_the_guest() {
 
 #[test]
 fn the_snapshot_round_trips_the_guest_state() {
-    reset_counters();
+    let _guard = reset_counters();
     let mut host = GuestHost::new();
     host.mount_vtable(vtable(1)).unwrap();
     host.reduce(&click()).unwrap();
@@ -294,7 +353,7 @@ fn a_null_allocator_realloc_behaves_like_alloc() {
 
 #[test]
 fn reduce_accepts_a_full_action_without_copying_host_state() {
-    reset_counters();
+    let _guard = reset_counters();
     let mut host = GuestHost::new();
     host.mount_vtable(vtable(1)).unwrap();
     let decrement = RawAction {
