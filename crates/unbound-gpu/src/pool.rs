@@ -91,6 +91,11 @@ pub struct PersistentPool {
     quarantine: EpochQuarantine,
     /// Scratch buffer reused by `reclaim` (never reallocated in steady state).
     reclaim_buffer: Vec<QuarantinedBlock>,
+    /// The timeline value the current frame will signal.
+    ///
+    /// A block freed during this frame may only be handed back to the
+    /// allocator once the GPU has passed this value.
+    pending_epoch: u64,
     patches: Vec<ScatterPatch>,
     stats: PoolStats,
     current_frame: u32,
@@ -121,6 +126,7 @@ impl PersistentPool {
             free_indices: Vec::new(),
             quarantine: EpochQuarantine::new(0),
             reclaim_buffer: Vec::with_capacity(64),
+            pending_epoch: 0,
             patches: Vec::with_capacity(256),
             stats: PoolStats {
                 capacity_bytes: cap,
@@ -137,13 +143,29 @@ impl PersistentPool {
     }
 
     /// Begin a frame; resets per-frame counters.
+    ///
+    /// `timeline_epoch` is the timeline value the frame's submission will
+    /// signal. A block retired during this frame may only be handed back to
+    /// the allocator once the GPU has reached that value: every frame that
+    /// could still be reading it is older, and therefore carries a smaller
+    /// value.
     pub fn begin_frame(&mut self, timeline_epoch: u64, frame_slot: u32) {
         self.current_frame = frame_slot;
         self.stats.uploads_this_frame = 0;
         self.stats.bytes_uploaded_this_frame = 0;
         self.stats.allocs_this_frame = 0;
         self.patches.clear();
-        let _ = timeline_epoch;
+        self.pending_epoch = timeline_epoch;
+    }
+
+    /// The epoch a block retired during the current frame is held back for.
+    ///
+    /// This is the timeline value the current frame will signal. Once the GPU
+    /// has reached it, every older frame — the only ones that could still
+    /// read the block — has completed.
+    #[must_use]
+    pub fn current_epoch(&self) -> u64 {
+        self.pending_epoch
     }
 
     /// Return the sparse patch list produced during the current frame.
@@ -594,5 +616,32 @@ mod tests {
         let (after, bytes) = p.ensure_capacity(prim, 100, 64, 0).unwrap();
         assert_eq!(before, p.offset_of(after).unwrap(), "the block must not move");
         assert!(u64::from(bytes) >= 100 * 64);
+    }
+
+    /// A block retired during a frame must come back once the GPU has
+    /// passed the frame's epoch.
+    ///
+    /// The quarantine is what keeps a frame in flight from reading a block
+    /// that has already been handed out again. It only works if something
+    /// actually drains it — which is what the render loop's `reclaim` call
+    /// does.
+    #[test]
+    fn a_retired_block_comes_back_after_its_epoch() {
+        let mut p = PersistentPool::new(1 << 20);
+        // The frame signals the epoch 1.
+        p.begin_frame(1, 0);
+        let epoch = p.current_epoch();
+        assert_eq!(epoch, 1);
+        let block = p.allocate(4096).unwrap();
+        // Growing retires the old block at the current epoch.
+        let grown = p.ensure_capacity(block, 100_000, 1, epoch).unwrap().0;
+        assert_ne!(grown, block, "the block must have moved");
+        assert_eq!(p.parked_blocks(), 1, "the old block must be quarantined");
+        // The epoch has not completed: the block must stay parked.
+        assert_eq!(p.reclaim(0), 0);
+        assert_eq!(p.parked_blocks(), 1);
+        // Now it has.
+        assert_eq!(p.reclaim(1), 1);
+        assert_eq!(p.parked_blocks(), 0, "the block must be back in the pool");
     }
 }

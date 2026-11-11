@@ -838,7 +838,9 @@ impl Gpu {
         };
         let preferred = match kind {
             MemoryKind::DeviceLocal => {
-                vk::MemoryPropertyFlags::DEVICE_LOCAL | vk::MemoryPropertyFlags::HOST_VISIBLE
+                vk::MemoryPropertyFlags::DEVICE_LOCAL
+                    | vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT
             }
             _ => vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         };
@@ -1022,6 +1024,11 @@ impl Gpu {
             return false;
         }
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+        // The memory may not be host-coherent — the driver is free to fall
+        // back to a non-coherent type when the preferred one is unavailable —
+        // and the GPU would then read stale bytes. Flushing is a no-op for
+        // coherent memory.
+        self.flush(buffer, offset, bytes.len() as u64);
         true
     }
 

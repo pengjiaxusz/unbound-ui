@@ -582,7 +582,12 @@ impl Renderer {
             Which::Clips => self.clip_handle,
             Which::Payloads => self.payload_handle,
         };
-        let epoch = self.frame_index + self.gpu.frames_in_flight() as u64;
+        // The epoch a retired block is held back for.
+        //
+        // The pool knows it: it is the timeline value the current frame will
+        // signal. Once the GPU has reached it, every older frame — the only
+        // ones that could still read the block — has completed.
+        let epoch = self.pool.current_epoch();
         let (new_handle, capacity) = self
             .pool
             .ensure_capacity(
@@ -648,11 +653,31 @@ impl Renderer {
             ..Default::default()
         };
 
+        // The pool's frame lifecycle: the epoch the frame will signal, and
+        // the reclamation of the blocks whose epoch the GPU has passed.
+        //
+        // Without this the quarantine never drained: every block that was
+        // ever retired stayed parked, and once the queue saturated the pool
+        // silently leaked the memory instead of reusing it.
+        let timeline_value = self.frame_index + 1;
+        self.pool.begin_frame(timeline_value, frame_slot as u32);
+        // The fence wait above retired the frame that used this slot
+        // `frames_in_flight` frames ago, so its timeline value has been
+        // signalled and the blocks it referenced may be handed back.
+        //
+        // The timeline semaphore itself only advances when somebody waits on
+        // it, and nothing does in the render loop, so the completion is
+        // derived from the fence instead.
+        let retired = self
+            .frame_index
+            .saturating_sub(u64::from(frame_count))
+            + 1;
+        self.pool.reclaim(retired);
+
         let upload = self.prepare_upload(scene)?;
         self.stats.patches = upload.patch_count;
         self.stats.bytes_uploaded = upload.bytes;
 
-        let timeline_value = self.frame_index + 1;
         // SAFETY: the command buffer is exclusively ours until the submit below
         // and the fence guarantees the previous submission has retired.
         unsafe {
@@ -664,7 +689,19 @@ impl Renderer {
         }
         // The first timestamp brackets the whole frame on the GPU.
         if let Some(scope) = &self.timing {
-            scope.reset(&self.gpu).expect("reset the timestamps");
+            if self.gpu.features.host_query_reset {
+                // SAFETY: the pool is not in use: the frame that used it has
+                // retired.
+                scope.reset(&self.gpu)?;
+            } else {
+                // Without the host feature the reset has to be recorded in the
+                // command buffer, so that it is ordered before the
+                // timestamps that follow it.
+                // SAFETY: our own command buffer, freshly begun.
+                unsafe {
+                    scope.reset_in_command_buffer(&self.gpu, cmd);
+                }
+            }
             // SAFETY: our own command buffer.
             unsafe {
                 scope.write_at(
@@ -1415,6 +1452,16 @@ impl Renderer {
         let height = self.target.height;
         let row_bytes = u64::from(width) * 4;
         let size = row_bytes * u64::from(height);
+        // The staging buffer is a fixed size. A larger target would make the
+        // copy below read past the end of the mapping — an out-of-bounds read
+        // of device memory — so the limit is checked before anything is
+        // recorded.
+        if size > self.staging.size {
+            return Err(GpuError::Allocation(format!(
+                "readback of {width}x{height} needs {size} bytes, the staging buffer holds {}",
+                self.staging.size
+            )));
+        }
         let device = &self.gpu.device;
         // SAFETY: the GPU is idle after `wait_idle`, so the copy cannot race.
         unsafe {
@@ -2279,6 +2326,14 @@ mod tests {
         height: u32,
     ) -> Result<Vec<u8>, GpuError> {
         let size = u64::from(width) * u64::from(height) * 4;
+        // The staging buffer is a fixed size; a bigger image would make the
+        // copy below read past the end of the mapping.
+        if size > renderer.staging.size {
+            return Err(GpuError::Allocation(format!(
+                "readback of {width}x{height} needs {size} bytes, the staging buffer holds {}",
+                renderer.staging.size
+            )));
+        }
         let device = &renderer.gpu.device;
         // SAFETY: the GPU is idle after `wait_idle`, so the copy cannot race.
         unsafe {
