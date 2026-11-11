@@ -35,6 +35,8 @@ pub struct ButtonHarness {
     pub node: NodeId,
     /// How many times the button was activated.
     pub count: u32,
+    /// Whether the button is disabled.
+    pub disabled: bool,
     /// The glyphs of the most recent scene.
     pub glyphs: Vec<GlyphQuad>,
     /// The most recent scene.
@@ -64,6 +66,7 @@ impl ButtonHarness {
             desc,
             node,
             count: 0,
+            disabled: false,
             glyphs: Vec::new(),
             scene: gallery::Gallery::default(),
             baked: ButtonVisualState::default(),
@@ -87,7 +90,7 @@ impl ButtonHarness {
         } else {
             None
         };
-        ButtonVisualState::resolve(self.node, &self.app.router, focused, false)
+        ButtonVisualState::resolve(self.node, &self.app.router, focused, self.disabled)
     }
 
     /// The button centre in window pixels.
@@ -130,6 +133,7 @@ impl ButtonHarness {
         self.app.install(regions, semantics);
         self.baked = visual;
         self.baked_count = count;
+        self.disabled = visual.disabled;
         &self.scene
     }
 
@@ -178,6 +182,24 @@ impl ButtonHarness {
         }
         self.sync();
         report
+    }
+
+    /// Activate the button the way `Enter` / `Space` does in the window.
+    pub fn activate(&mut self) {
+        self.count = self.count.wrapping_add(1);
+        self.sync();
+    }
+
+    /// Toggle the disabled state and re-bake the scene.
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.disabled = disabled;
+        self.sync();
+    }
+
+    /// How many scenes have been installed so far.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.app.generation()
     }
 
     /// Focus the button and re-bake the focus ring.

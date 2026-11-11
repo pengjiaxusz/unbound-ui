@@ -9,13 +9,14 @@
 use accesskit::Role;
 use showcase::button::{ButtonVisualState, PointerPhase};
 use showcase::gallery::{build, button_rect, palette, theme_table, Labels};
+use showcase::keys::{self, KeyAction};
 use showcase::testing::ButtonHarness;
 use unbound_gpu::data::PrimType;
 use unbound_input::PointerEvent;
 use unbound_math::Vec2;
 use unbound_platform::{
-    apply, ButtonState, Extent, MouseButton, PlatformEvent, PlatformState, PresentWaitPolicy,
-    WindowConfig,
+    apply, ButtonState, Extent, MouseButton, PlatformEvent, PlatformKey, PlatformState,
+    PresentWaitPolicy, WindowConfig,
 };
 
 const WIDTH: f32 = 1280.0;
@@ -121,14 +122,8 @@ fn the_focus_ring_is_a_stroke_and_focus_stays_orthogonal() {
         }),
         "a focused button must emit an outer focus ring"
     );
-    assert!(has_fill(
-        &harness.scene.primitives,
-        palette().primary_hover
-    ));
-    assert_eq!(
-        harness.app.semantics_node(harness.node).role,
-        Role::Button
-    );
+    assert!(has_fill(&harness.scene.primitives, palette().primary_hover));
+    assert_eq!(harness.app.semantics_node(harness.node).role, Role::Button);
 }
 
 #[test]
@@ -141,7 +136,10 @@ fn the_semantics_tree_exposes_a_button() {
         None,
         "no pointer has entered yet"
     );
-    assert_eq!(harness.app.pick(harness.screen_center()), Some(harness.node_key()));
+    assert_eq!(
+        harness.app.pick(harness.screen_center()),
+        Some(harness.node_key())
+    );
     assert!(!harness.glyphs.is_empty(), "the label must be laid out");
 
     let node = harness.app.semantics_node(harness.node);
@@ -155,7 +153,10 @@ fn the_semantics_tree_exposes_a_button() {
         .take_update()
         .expect("initial tree update");
     assert!(
-        update.nodes.iter().any(|(_, node)| node.role() == Role::Button),
+        update
+            .nodes
+            .iter()
+            .any(|(_, node)| node.role() == Role::Button),
         "the update AccessKit receives must carry the button role"
     );
 
@@ -236,7 +237,10 @@ fn a_platform_click_activates_the_button() {
             matches!(event, PointerEvent::Click { target, .. } if *target == harness.node_key())
         })
         .count();
-    assert_eq!(clicks, 1, "one press/release pair must synthesize one click");
+    assert_eq!(
+        clicks, 1,
+        "one press/release pair must synthesize one click"
+    );
     assert_eq!(
         harness.visual().phase,
         PointerPhase::Hovered,
@@ -257,12 +261,130 @@ fn the_button_passes_the_five_sanitizers() {
 }
 
 #[test]
+fn a_disabled_button_leaves_the_hit_set_and_never_activates() {
+    let mut harness = ButtonHarness::new();
+    let centre = harness.screen_center();
+    harness.set_disabled(true);
+
+    assert_eq!(
+        harness.app.pick(centre),
+        None,
+        "a disabled control must not be hittable"
+    );
+    assert_eq!(harness.visual().phase, PointerPhase::Idle);
+    assert!(
+        has_fill(&harness.scene.primitives, palette().disabled_fill),
+        "the disabled state must use its own fill token"
+    );
+    assert!(!harness.glyphs.is_empty(), "the label still renders");
+
+    let report = harness.click();
+    assert_eq!(report.clicked(), None);
+    assert_eq!(harness.count, 0);
+    assert_eq!(harness.label(), "Clicked: 0");
+    assert!(harness.app.semantics_node(harness.node).disabled);
+
+    harness.set_disabled(false);
+    assert_eq!(harness.app.pick(centre), Some(harness.node_key()));
+    harness.click();
+    assert_eq!(harness.count, 1);
+}
+
+#[test]
+fn the_scene_is_only_rebuilt_on_discrete_transitions() {
+    let mut harness = ButtonHarness::new();
+    let idle = harness.generation();
+
+    harness.hover();
+    let hovered = harness.generation();
+    assert!(hovered > idle, "entering the button is a rebuild");
+
+    let centre = harness.screen_center();
+    harness.hover_at(centre + Vec2::new(20.0, 0.0));
+    assert_eq!(
+        harness.generation(),
+        hovered,
+        "sliding inside the button must not upload a new scene"
+    );
+    harness.sync();
+    harness.sync();
+    assert_eq!(
+        harness.generation(),
+        hovered,
+        "a steady frame must not rebuild"
+    );
+
+    harness.press();
+    let pressed = harness.generation();
+    assert!(pressed > hovered, "pressing is a rebuild");
+
+    harness.release();
+    let clicked = harness.generation();
+    assert!(clicked > pressed, "the click count changed the label");
+    harness.sync();
+    assert_eq!(
+        harness.generation(),
+        clicked,
+        "the click is already baked into the current scene"
+    );
+}
+
+#[test]
+fn the_keyboard_mapping_matches_the_window_and_can_activate_the_button() {
+    let mut harness = ButtonHarness::new();
+    let named = |name: &str| PlatformKey::Named(name.to_owned());
+
+    assert_eq!(
+        keys::resolve(&named("tab"), false),
+        Some(KeyAction::FocusButton)
+    );
+    harness.focus();
+    assert!(harness.visual().focused);
+
+    assert_eq!(
+        keys::resolve(&named("enter"), true),
+        Some(KeyAction::Activate)
+    );
+    harness.activate();
+    assert_eq!(harness.count, 1);
+    assert_eq!(harness.label(), "Clicked: 1");
+
+    assert_eq!(
+        keys::resolve(&named("space"), true),
+        Some(KeyAction::Activate)
+    );
+    assert_eq!(
+        keys::resolve(&named("space"), false),
+        Some(KeyAction::ToggleTheme),
+        "Space without focus keeps its theme meaning"
+    );
+    assert_eq!(
+        keys::resolve(&named("escape"), true),
+        Some(KeyAction::ClearFocus)
+    );
+    harness.blur();
+    assert!(!harness.visual().focused);
+
+    assert_eq!(
+        keys::resolve(&PlatformKey::Character("t".to_owned()), false),
+        Some(KeyAction::ToggleTheme)
+    );
+    assert_eq!(
+        keys::resolve(&named("enter"), false),
+        None,
+        "Enter without focus does nothing"
+    );
+    assert_eq!(keys::resolve(&named("q"), true), None);
+}
+
+#[test]
 fn hover_and_press_change_the_rendered_pixels() {
     let Some(gpu) = unbound_gpu::device::test_device() else {
         // No Vulkan device: the test cannot run, but it must not fail.
         return;
     };
-    let mut renderer = unbound_gpu::Renderer::new(gpu, WIDTH as u32, HEIGHT as u32).expect("renderer");
+    let mut renderer =
+        unbound_gpu::Renderer::new(gpu, WIDTH as u32, HEIGHT as u32).expect("renderer");
     let atlases = std::sync::Arc::new(
         unbound_gpu::atlas::AtlasSet::new(&renderer.gpu, 4).expect("atlas set"),
     );
@@ -270,18 +392,8 @@ fn hover_and_press_change_the_rendered_pixels() {
 
     let mut harness = ButtonHarness::new();
     let idle = render_button(&mut renderer, &atlases, &mut harness, PointerPhase::Idle);
-    let hover = render_button(
-        &mut renderer,
-        &atlases,
-        &mut harness,
-        PointerPhase::Hovered,
-    );
-    let pressed = render_button(
-        &mut renderer,
-        &atlases,
-        &mut harness,
-        PointerPhase::Pressed,
-    );
+    let hover = render_button(&mut renderer, &atlases, &mut harness, PointerPhase::Hovered);
+    let pressed = render_button(&mut renderer, &atlases, &mut harness, PointerPhase::Pressed);
 
     assert!(
         differing_pixels(&idle, &hover) > 200,

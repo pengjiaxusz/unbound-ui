@@ -681,23 +681,14 @@ pub fn build_interactive(
         18.0,
         700,
     );
-    let interactive_title = labels.layout(
-        "Button / 第一个可交互控件",
-        Vec2::new(60.0, 430.0),
-        16.0,
-    );
+    let interactive_title =
+        labels.layout("Button / 第一个可交互控件", Vec2::new(60.0, 430.0), 16.0);
     for quad in &interactive_title {
         scene.glyph(quad, palette.text, 701);
     }
     labels.prewarm(BUTTON_LABEL_ALPHABET, button.font_size);
     let mut glyphs = labels.layout(&button.label, Vec2::ZERO, button.font_size);
-    let artifacts = button::emit_button(
-        node,
-        button,
-        visual,
-        palette.button_tokens(),
-        &mut glyphs,
-    );
+    let artifacts = button::emit_button(node, button, visual, palette.button_tokens(), &mut glyphs);
     let base = scene.payloads.len() as u32;
     let mut primitives = artifacts.primitives;
     for prim in &mut primitives {
@@ -744,7 +735,12 @@ pub fn build_interactive(
 
     // The glyphs are already part of the scene; the atlas updates they
     // produced are drained by the caller and uploaded to the GPU.
-    (scene, glyphs, vec![artifacts.hit], semantics)
+    (
+        scene,
+        glyphs,
+        artifacts.hit.into_iter().collect(),
+        semantics,
+    )
 }
 
 /// The button's geometry as a headless frame, for the five sanitizers.
@@ -771,7 +767,14 @@ pub fn button_frame(viewport: (f32, f32), button: &ButtonDesc, glyphs: &[GlyphQu
     );
     frame.set_clip(button.rect);
     if let Some(ink) = button::ink_bounds(glyphs) {
-        frame.open(NodeKind::Text { ink, ellipsis: false }, ink, "Label");
+        frame.open(
+            NodeKind::Text {
+                ink,
+                ellipsis: false,
+            },
+            ink,
+            "Label",
+        );
         frame.close();
     }
     frame.close();

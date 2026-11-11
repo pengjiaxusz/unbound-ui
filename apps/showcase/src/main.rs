@@ -11,6 +11,7 @@
 
 use showcase::button::{self, ButtonDesc, ButtonVisualState};
 use showcase::gallery;
+use showcase::keys::{self, KeyAction};
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -188,29 +189,15 @@ impl Showcase {
 
     /// Route keyboard input.
     ///
-    /// `T` always switches the theme. `Space` activates the focused button and
-    /// otherwise keeps its old "switch theme" meaning; `Enter` activates the
-    /// focused button; `Tab` focuses it and `Escape` clears focus.
+    /// The mapping itself lives in [`showcase::keys`] so the headless tests
+    /// exercise the same table instead of a copy.
     fn on_key(&mut self, key: PlatformKey) {
-        match key {
-            PlatformKey::Character(text) if text.eq_ignore_ascii_case("t") => self.toggle_theme(),
-            PlatformKey::Named(name) if name.eq_ignore_ascii_case("tab") => {
-                self.set_focus(Some(self.button));
-            }
-            PlatformKey::Named(name) if name.eq_ignore_ascii_case("escape") => self.set_focus(None),
-            PlatformKey::Named(name) if name.eq_ignore_ascii_case("enter") => {
-                if self.focused.is_some() {
-                    self.activate();
-                }
-            }
-            PlatformKey::Named(name) if name.eq_ignore_ascii_case("space") => {
-                if self.focused.is_some() {
-                    self.activate();
-                } else {
-                    self.toggle_theme();
-                }
-            }
-            _ => {}
+        match keys::resolve(&key, self.focused.is_some()) {
+            Some(KeyAction::ToggleTheme) => self.toggle_theme(),
+            Some(KeyAction::FocusButton) => self.set_focus(Some(self.button)),
+            Some(KeyAction::ClearFocus) => self.set_focus(None),
+            Some(KeyAction::Activate) => self.activate(),
+            None => {}
         }
     }
 
@@ -250,6 +237,10 @@ impl Showcase {
             let dx = x - self.drag_origin[0];
             let dy = y - self.drag_origin[1];
             self.pan = [self.pan_origin[0] + dx, self.pan_origin[1] + dy];
+            // The canvas moved under a stationary router, so hover and cursor
+            // must be re-picked at the new canvas point.
+            let position = self.canvas_position(x, y, window);
+            self.router.refresh_at(position);
         } else {
             // Only the inverse-transformed point may enter the router.
             let position = self.canvas_position(x, y, window);
@@ -453,10 +444,25 @@ impl PlatformApp for Showcase {
                 self.on_cursor_moved(x as f32, y as f32, window);
             }
             PlatformEvent::MouseWheel { delta_y, .. } => {
+                let size = window.inner_size();
+                let viewport = (size.width.max(1) as f32, size.height.max(1) as f32);
+                // Zoom around the cursor, exactly like `TestApp::zoom_at`:
+                // the canvas point under it must not drift.
+                let anchor = self
+                    .pointer
+                    .map_or(Vec2::new(viewport.0 * 0.5, viewport.1 * 0.5), |[x, y]| {
+                        Vec2::new(x, y)
+                    });
+                let before = canvas_at([anchor.x, anchor.y], viewport, self.zoom, self.pan);
+
                 // One notch up zooms in. The zoom is clamped so the gallery
                 // can neither disappear nor turn into a single pixel.
-                self.zoom = (self.zoom as f64 * 1.1f64.powf(delta_y)) as f32;
-                self.zoom = self.zoom.clamp(0.25, 8.0);
+                let zoom = (self.zoom as f64 * 1.1f64.powf(delta_y)) as f32;
+                self.zoom = zoom.clamp(0.25, 8.0);
+                self.pan = zoom_anchor_pan([anchor.x, anchor.y], viewport, before, self.zoom);
+                // The pointer did not move, but the canvas under it did:
+                // re-pick so hover and cursor do not lag one event behind.
+                self.router.refresh_at(before);
             }
             PlatformEvent::CloseRequested => return Flow::Exit,
             _ => {}
@@ -595,6 +601,19 @@ fn canvas_at(screen: [f32; 2], viewport: (f32, f32), zoom: f32, pan: [f32; 2]) -
     )
 }
 
+/// The pan that keeps the canvas point `before` under `screen` after a zoom.
+///
+/// The forward mapping is
+/// `screen = (canvas - viewport/2) * zoom + pan + viewport/2`;
+/// solving it for `pan` is what makes wheel zoom anchored instead of jumping
+/// towards the canvas origin.
+fn zoom_anchor_pan(screen: [f32; 2], viewport: (f32, f32), before: Vec2, zoom: f32) -> [f32; 2] {
+    [
+        screen[0] - viewport.0 * 0.5 - (before.x - viewport.0 * 0.5) * zoom,
+        screen[1] - viewport.1 * 0.5 - (before.y - viewport.1 * 0.5) * zoom,
+    ]
+}
+
 /// Render the gallery offscreen and write it to a PNG.
 ///
 /// This is the headless twin of the window: same scene, same renderer, but
@@ -636,7 +655,9 @@ fn render_to_png(path: &str, width: u32, height: u32, dark: bool) -> Result<(), 
     renderer
         .write_theme(&theme_table(dark))
         .map_err(|e| e.to_string())?;
-    renderer.render(&scene.upload(1)).map_err(|e| e.to_string())?;
+    renderer
+        .render(&scene.upload(1))
+        .map_err(|e| e.to_string())?;
     let pixels = renderer.read_pixels().map_err(|e| e.to_string())?;
     renderer.destroy();
 
@@ -662,9 +683,7 @@ fn write_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> Result<(), Str
     for pixel in rgba.chunks_exact_mut(4) {
         pixel.swap(0, 2);
     }
-    writer
-        .write_image_data(&rgba)
-        .map_err(|e| e.to_string())?;
+    writer.write_image_data(&rgba).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -743,6 +762,19 @@ mod tests {
         let panned = canvas_at([640.0, 360.0], viewport, 1.0, [120.0, -40.0]);
         assert!((panned.x - (origin.x - 120.0)).abs() < 1e-4);
         assert!((panned.y - (origin.y + 40.0)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn wheel_zoom_keeps_the_canvas_point_under_the_cursor_still() {
+        let viewport = (1280.0, 720.0);
+        let screen = [300.0, 200.0];
+        let before = canvas_at(screen, viewport, 1.0, [0.0, 0.0]);
+        let pan = zoom_anchor_pan(screen, viewport, before, 2.0);
+        let after = canvas_at(screen, viewport, 2.0, pan);
+        assert!(
+            (after - before).length() < 1e-3,
+            "the point under the cursor drifted: {before:?} -> {after:?}"
+        );
     }
 
     /// A click is only routed correctly if the screen point under the cursor

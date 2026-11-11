@@ -154,7 +154,10 @@ pub struct ButtonArtifacts {
     /// 字形 UV，索引与 `primitives[].extra_payload_idx` 对应。
     pub payloads: Vec<GpuPayload>,
     /// 圆角热区（命中测试只认它，不认图元矩形）。
-    pub hit: HitRegion,
+    ///
+    /// 禁用状态没有热区：不可交互的控件必须从命中集合里消失，而不是让
+    /// 调用方记得在点击回调里再判断一次 `disabled`。
+    pub hit: Option<HitRegion>,
     /// `Role::Button` 语义节点。
     pub a11y: A11yNode,
 }
@@ -299,9 +302,11 @@ pub fn emit_button(
         ));
     }
 
-    let hit = HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
-        .with_shape(Shape::Rounded { radii })
-        .with_cursor(CursorKind::Pointer);
+    let hit = (!state.disabled).then(|| {
+        HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
+            .with_shape(Shape::Rounded { radii })
+            .with_cursor(CursorKind::Pointer)
+    });
     let a11y = A11yNode::new(Role::Button, desc.label.clone(), rect)
         .clickable()
         .disabled(state.disabled);

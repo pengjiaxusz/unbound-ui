@@ -7,5 +7,7 @@
 pub mod button;
 /// The component gallery scene.
 pub mod gallery;
+/// Keyboard actions shared by the window and the headless tests.
+pub mod keys;
 /// Headless test harness for the button.
 pub mod testing;
