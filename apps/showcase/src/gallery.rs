@@ -170,7 +170,7 @@ pub fn theme_table(dark: bool) -> Vec<[u16; 4]> {
         set(TOKEN_TEXT_MUTED, Color::from_srgb8(140, 144, 160, 255));
         set(TOKEN_PRIMARY_HOVER, Color::from_srgb8(110, 160, 255, 255));
         set(TOKEN_PRIMARY_PRESSED, Color::from_srgb8(64, 110, 220, 255));
-        set(TOKEN_ON_PRIMARY, Color::from_srgb8(255, 255, 255, 255));
+        set(TOKEN_ON_PRIMARY, Color::from_srgb8(12, 16, 26, 255));
         set(TOKEN_FOCUS_RING, Color::from_srgb8(150, 195, 255, 255));
         set(TOKEN_DISABLED_FILL, Color::from_srgb8(70, 72, 82, 255));
     } else {
