@@ -1,118 +1,56 @@
 # Unbound UI
 
-下一代高性能 GPU 驱动 UI 与无限画布引擎的 Rust 实现，架构依据
-[`docs/`](docs/README.md) 中的 V2.0 生产级定稿（按主题域分卷，含实现状态标注
-与源码锚点）。
+下一代高性能 GPU 驱动 UI 与无限画布引擎的 Rust 实现。
 
-设计目标只有一句话：**把每一帧的成本压到与场景规模无关**。其余所有取舍
-（面向数据布局、零每帧分配、GPU 端剔除与排序、事务化撤销、无头验证）都是
-这句话的推论。
+设计核心原则：**把每一帧的成本压到与场景规模无关**。
 
-```
-crates/
-  unbound-math      基础数学：Vec2 / Rect / Affine2 / Color / 半精度打包
-  unbound-abi       稳定 ABI：扁平 POD 描述符、动作、宿主/插件 C 接口
-  unbound-gpu       Vulkan 1.3 后端：TLSF 显存池、瞬态环、GPU 剔除与排序、Uber 着色器
-  unbound-vector    三次贝塞尔自适应降阶、紧致 OBB、解析距离求解
-  unbound-text      cosmic-text 塑形、双级缓存、双图集、MTSDF 距离场
-  unbound-world     SlotMap 扁平状态树、三级脏标记、虚拟化容器
-  unbound-layout    Taffy 增量排版、RelayoutBoundary 隔离求解
-  unbound-anim      物理弹簧引擎、贝塞尔缓动、像素网格吸附
-  unbound-canvas    松散线性四叉树、智能磁吸、框选变换、事务化撤销
-  unbound-input     双层拾取、指针捕获、确定性光标栈、文件拖拽
-  unbound-a11y      AccessKit 增量语义树
-  unbound-theme     语义设计令牌、4 KiB 颜色表、三层正交缩放
-  unbound-graph     渲染图瞬态纹理生命周期校验与毛玻璃离屏池
-  unbound-asset     后台解码线程池、CPU 暂存环、传输队列交接
-  unbound-platform  窗口平台层：非阻塞缩放、低延迟呈现、延迟计量
-  unbound-headless  无头验证器：五项几何体检与 rkyv 时间旅行快照
-  unbound-host      Host-Guest C-ABI 热重载、分配器劫持、状态迁移
-  unbound-kpi       验收红线实测
-  app-guest         可热重载的业务层 cdylib
-apps/
-  showcase          组件展台：开窗看全所有图元（圆角/边框/阴影/描边/曲线/字形）
-  gallery           全链路演示程序
-```
+---
 
-## 架构文档
+## 核心特性
 
-| 目录 | 内容 |
-| :--- | :--- |
-| [`docs/00-overview`](docs/00-overview/README.md) | 设计准则、端到端数据流、crate 地图 |
-| [`docs/01-graphics`](docs/01-graphics/README.md) | Vulkan 底座、Uber-Shader、裁剪、曲线、文字 |
-| [`docs/02-ui`](docs/02-ui/README.md) | 面向数据拓扑、增量排版、虚拟化、动画、主题 |
-| [`docs/03-canvas`](docs/03-canvas/README.md) | 空间索引、分块坐标、交互编辑 |
-| [`docs/04-input`](docs/04-input/README.md) | 双层拾取、IME、Portal 排序、无障碍 |
-| [`docs/05-agent`](docs/05-agent/README.md) | 依赖分层护栏、无头闭环验证 |
-| [`docs/06-tooling`](docs/06-tooling/README.md) | 热重载、资源流送、调试工具链、组件展台 |
-| [`docs/07-roadmap`](docs/07-roadmap/README.md) | 里程碑路径、量化验收红线 |
+- **性能优先 (Performance-First)**：全链路 GPU 驱动渲染，视口粗筛、64 位基数排序与间接绘制（MDI）全交由 GPU Compute 闭环，核心路径零每帧内存分配（Zero Frame Allocation）。
+- **面向数据设计 (DOD)**：基于 `SlotMap` 扁平拓扑状态树与侵入式链表，彻底废弃深层指针树与引用计数，CPU/GPU 缓存行极致友好。
+- **无限画布与交互引擎**：松散线性四叉树空间索引、分块相对坐标解算、亚像素物理弹簧动画、视口智能磁吸与事务化局部撤销。
+- **工业级文本与曲线矢量**：`cosmic-text` 双级缓存、GPU MTSDF 距离场字形生成、三次贝塞尔自适应降阶与解析解 SDF 光栅化。
+- **Agent 双模与无头自检**：亚毫秒级纯内存无头闭环（脱离窗口/GPU 跑完排版与 5 项几何体检断言），精准定位源码，专为 AI Agent 自省与人机协作设计。
 
-每篇文档开头标注实现状态（`已落地` / `部分落地` / `蓝图`）并指向对应源码与
-测试。
+---
 
 ## 快速开始
 
+推荐使用 `just` 统一任务入口（集成跨工作树编译排队与 CPU 降级防卡顿）：
+
 ```bash
-cargo test --workspace          # 全部单元测试与 GPU 集成测试
-cargo run -p showcase           # 组件展台：开窗看全所有图元
-cargo run -p showcase -- --shot shot.png   # 无头出图（同一份场景）
-cargo run -p gallery            # 全链路演示
-cargo run -p gallery -- --kpi   # 附带验收红线报告
+# 启动组件展台（可视验收台：查看圆角、边框、解析阴影、描边、曲线与字形）
+just showcase
+
+# 运行全链路演示程序（附带验收红线计量报告）
+just gallery -- --kpi
+
+# 运行全工作区单元测试与 GPU 集成测试
+just test
 ```
 
-组件展台是引擎的**可视验收台**：窗口一开就能看到圆角矩形、边框、解析阴影、
-描边环、贝塞尔曲线与 MTSDF 字形，`T` 键切换亮暗主题，滚轮缩放，拖拽平移。
-细节见[组件展台文档](docs/06-tooling/showcase.md)。
+亦可使用原生 `cargo` 命令：
 
-GPU 集成测试需要一块 Vulkan 1.3 设备；没有设备时相关用例会自行跳过，而不是
-失败。
+```bash
+cargo run -p showcase
+cargo run -p gallery -- --kpi
+cargo test --workspace
+```
 
-## 五个里程碑
+> **注意**：GPU 集成测试与窗口运行需要 Vulkan 1.3 支持；无 Vulkan 设备时相关集成用例会自动跳过。
 
-| 阶段 | 交付内容 | 落地位置 |
-| :--- | :--- | :--- |
-| **M1** | Vulkan 1.3 底座、TLSF 池 + Epoch 隔离回收、瞬态环、Compute 增量 Scatter、GPU 64 位基数排序、双通道 Uber 着色器、RenderDoc 钩子 | `unbound-gpu` |
-| **M2** | cosmic-text 双级缓存、`Atlas_R8` + `Atlas_RGBA8`、GPU MTSDF 字形生成器、三次贝塞尔降阶与紧致 OBB、FS 解析解 SDF | `unbound-text`、`unbound-vector` |
-| **M3** | SlotMap 扁平树、Taffy + RelayoutBoundary、Rayon 并行求解、环形槽位虚拟化、弹簧动画、像素吸附、主题 LUT、渲染图与毛玻璃离屏池 | `unbound-world`、`unbound-layout`、`unbound-anim`、`unbound-theme`、`unbound-graph` |
-| **M4** | 松散线性四叉树、双层拾取与指针捕获、确定性光标栈、视口级智能磁吸、事务化撤销、CJK IME 候选框、富文本圆角选区、非阻塞窗口缩放 | `unbound-canvas`、`unbound-input`、`unbound-platform` |
-| **M5** | AccessKit 增量语义、无头验证器（5 项体检 + `#[track_caller]` + rkyv 快照）、Host-Guest C-ABI 热重载与双模状态迁移 | `unbound-a11y`、`unbound-headless`、`unbound-host` |
+---
 
-## 实测验收红线
+## 架构与技术文档
 
-在 RTX 5070 / Vulkan 1.4 上以 `--release` 复现：
+本项目遵循严格的架构先行与分层设计原则，完整设计规范与分卷文档详见：
 
-| 场景 | 预算 | 实测 |
-| :--- | :--- | :--- |
-| 10 万图元同屏渲染 | ≤ 1.5 ms | **0.67 ms**（1 次 MDI 绘制调用） |
-| 1 万条三次贝塞尔连线 | ≤ 0.8 ms | **0.52 ms**（12.4 万段，OBB 紧致包围盒） |
-| 100 万实体视口粗筛 | ≤ 0.15 ms | 见 `cargo run -p gallery -- --kpi` |
-| 单次点选命中测试 | ≤ 5 µs | 见 `cargo run -p gallery -- --kpi` |
-| 视口智能磁吸 | ≤ 0.05 ms | 见 `cargo run -p gallery -- --kpi` |
-| 单个 RelayoutBoundary 求解 | ≤ 0.2 ms | 见 `cargo run -p gallery -- --kpi` |
-| 无头单帧验证 | ≤ 1.0 ms | 见 `cargo run -p gallery -- --kpi` |
-| 主题切换 | ≤ 0.05 ms，0 次重排 | **4 KiB 单次写入，0 次重排** |
-| 输入到光子延迟 | ≤ 8.3 ms | 由 `unbound-platform` 逐帧计量 |
+- **架构主索引**：[`docs/architecture/README.md`](docs/architecture/README.md)（权威规范与模块映射）
+- **主题域专卷**：[`docs/README.md`](docs/README.md)（含总览、图形底座、UI 范式、画布、输入、Agent 友好、工具链与量化红线）
 
-GPU 时间通过 `VK_QUERY_TYPE_TIMESTAMP` 实测，差值在 64 位原始计数上求取后
-再换算，避免绝对时间戳转浮点时丢失精度。
-
-## 几个关键决策
-
-**为什么每帧都不分配内存。** 持久驻留池由 TLSF 管理，回收走 Epoch 隔离队列：
-显存只有在 GPU 时间线确认"没人再读它"之后才会被复用。帧内的临时数据走独立的
-瞬态环，每帧一个槽位，溢出会显式报错而不是悄悄写坏显存。
-
-**为什么剔除和排序都放在 GPU 上。** CPU 只做粗粒度的四叉树裁剪；逐图元的
-视口判定、64 位排序键生成和基数排序都在 Compute 通道完成，最终只发出一次
-`vkCmdDrawIndirectCount`。10 万图元塌缩成 1 次绘制调用。
-
-**为什么撤销是事务而不是快照。** 每次编辑记录的是一条补丁（几何增量、文本
-区间），撤销栈保存补丁而不是场景副本。文本输入在时间窗内自动合并成一条
-事务。
-
-**为什么要有无头验证器。** 几何错误在屏幕上表现为"看起来有点歪"，但在
-无头环境里是一次精确的断言失败。`unbound-headless` 实现五项几何体检，
-每一条都带 `#[track_caller]`，失败位置直接指向源码行。
+---
 
 ## 许可证
 

@@ -3,7 +3,9 @@
 Thumbs.db
 *.swp
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 *.log
 
 # Rust / Cargo 构建产物
@@ -17,3 +19,19 @@ Thumbs.db
 
 # 临时补丁脚本
 .tmp_patch.py
+
+# PENGJ_TEMPLATE_START
+# --- common 层 ---
+
+/node_modules
+.env
+.env.*
+!.env.example
+*.log
+
+/.omo/run-continuation
+
+# --- rust-workspace 层 ---
+
+/target/
+# PENGJ_TEMPLATE_END

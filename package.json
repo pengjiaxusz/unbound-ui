@@ -1,0 +1,20 @@
+{
+  "name": "unbound-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.6.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prepare": "node -e \"try{require('child_process').execSync('lefthook install',{stdio:'inherit'})}catch{console.log('git is not initialised yet, skipping the lefthook install; run git init and then pnpm lefthook:install')}\"",
+    "lefthook:install": "lefthook install",
+    "commitlint": "commitlint"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "latest",
+    "@commitlint/config-conventional": "latest",
+    "lefthook": "latest"
+  }
+}

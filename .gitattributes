@@ -1,0 +1,67 @@
+# PENGJ_TEMPLATE_START
+# --- common 层 ---
+
+# ==============================================================================
+# 1. Line endings & normalization (Auto Line Endings & Normalization)
+# ==============================================================================
+# Default all text files to LF in git repo, auto-adapt on checkout
+* text=auto eol=lf
+
+# Explicitly declare LF for specific text formats
+*.md text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.env* text eol=lf
+
+# Script file line ending controls
+*.sh text eol=lf
+*.bash text eol=lf
+*.zsh text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# ==============================================================================
+# 2. Common binary assets (Binary Files)
+# ==============================================================================
+# Prevent Git from attempting text merge or line ending conversion on binaries
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.svg text eol=lf
+
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.otf binary
+
+*.zip binary
+*.tar.gz binary
+*.tgz binary
+*.7z binary
+*.pdf binary
+*.wasm binary
+
+# ==============================================================================
+# 3. GitHub Linguist & diff controls
+# ==============================================================================
+# Mark package manager lockfiles as generated to keep PR diffs clean
+pnpm-lock.yaml linguist-generated=true
+package-lock.json linguist-generated=true
+yarn.lock linguist-generated=true
+Cargo.lock linguist-generated=true
+
+# Export ignores (exclude workspace configs on git archive)
+.gitattributes export-ignore
+.gitignore export-ignore
+.github/ export-ignore
+.vscode/ export-ignore
+.agents/ export-ignore
+# PENGJ_TEMPLATE_END
