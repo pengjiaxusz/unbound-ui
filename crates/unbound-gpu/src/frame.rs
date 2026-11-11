@@ -180,6 +180,15 @@ pub struct Renderer {
     last_generation: u64,
     frame_index: u64,
     pub stats: FrameStats,
+    /// Scratch buffer for the staged scene bytes, reused across frames.
+    ///
+    /// The render path allocates nothing per frame: the buffer keeps its
+    /// capacity and is only cleared.
+    staging_bytes: Vec<u8>,
+    /// The spans of the staged bytes, reused across frames.
+    staging_spans: Vec<(u32, u32, u32)>,
+    /// The scatter patches, reused across frames.
+    staging_patches: Vec<GpuScatterPatch>,
     /// The atlases bound to the bindless descriptor slots, when installed.
     atlases: Option<std::sync::Arc<crate::atlas::AtlasSet>>,
     /// An externally owned colour attachment to draw into, when set.
@@ -481,6 +490,9 @@ impl Renderer {
             last_generation: u64::MAX,
             frame_index: 0,
             stats: FrameStats::default(),
+            staging_bytes: Vec::new(),
+            staging_spans: Vec::new(),
+            staging_patches: Vec::new(),
             atlases: None,
             external_color: None,
             external_ready: vk::Semaphore::null(),
@@ -744,18 +756,24 @@ impl Renderer {
                 // has handed it over. Waiting on its semaphore here is what
                 // makes the swapchain path safe; the offscreen path has no
                 // such image and waits on nothing.
-                let wait_infos = if self.external_ready == vk::Semaphore::null() {
-                    Vec::new()
-                } else {
-                    vec![vk::SemaphoreSubmitInfo::default()
-                        .semaphore(self.external_ready)
-                        .value(0)
-                        .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)]
-                };
+                //
+                // The array is on the stack: the render path allocates
+                // nothing per frame.
+                let wait_info = vk::SemaphoreSubmitInfo::default()
+                    .semaphore(self.external_ready)
+                    .value(0)
+                    .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT);
+                let wait_infos: [vk::SemaphoreSubmitInfo; 1] =
+                    if self.external_ready == vk::Semaphore::null() {
+                        [vk::SemaphoreSubmitInfo::default()]
+                    } else {
+                        [wait_info]
+                    };
+                let wait_count = u32::from(self.external_ready != vk::Semaphore::null());
                 let command_infos = [vk::CommandBufferSubmitInfo::default().command_buffer(cmd)];
                 let submit = vk::SubmitInfo2::default()
                     .command_buffer_infos(&command_infos)
-                    .wait_semaphore_infos(&wait_infos)
+                    .wait_semaphore_infos(&wait_infos[..wait_count as usize])
                     .signal_semaphore_infos(&signal_infos);
                 gpu.device
                     .queue_submit2(gpu.graphics_queue, &[submit], sync.in_flight)?;
@@ -1274,8 +1292,11 @@ impl Renderer {
             // own image carries its layout; a borrowed one (a swapchain
             // image) is handed over in `UNDEFINED` and must be transitioned
             // before it can be a render attachment.
-            let to_attachment = match self.external_color {
-                Some((image, _, _, _)) => vec![image_barrier(
+            //
+            // The barrier is a stack array: the render path allocates
+            // nothing per frame.
+            let to_attachment = [match self.external_color {
+                Some((image, _, _, _)) => image_barrier(
                     image,
                     vk::ImageLayout::UNDEFINED,
                     vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -1284,8 +1305,8 @@ impl Renderer {
                     vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                     vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                     false,
-                )],
-                None => vec![image_barrier(
+                ),
+                None => image_barrier(
                     self.target.color,
                     self.target.layout,
                     vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -1294,8 +1315,8 @@ impl Renderer {
                     vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                     vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                     false,
-                )],
-            };
+                ),
+            }];
             let depth_ready = [image_barrier(
                 self.target.depth,
                 vk::ImageLayout::UNDEFINED,
@@ -1532,8 +1553,17 @@ impl Renderer {
         // slot that `begin_frame` selects.
         self.ring.begin_frame(self.frame_index);
 
-        let mut bytes: Vec<u8> = Vec::new();
-        let mut spans: Vec<(u32, u32, u32)> = Vec::new(); // (dst, src_rel, len)
+        // The staging buffers are reused across frames: the render path
+        // allocates nothing per frame.
+        self.staging_bytes.clear();
+        self.staging_spans.clear();
+        // The pool offsets are read before the scratch buffers are borrowed.
+        let prim_dst = self.pool_offset(self.prim_handle);
+        let transform_dst = self.pool_offset(self.transform_handle);
+        let clip_dst = self.pool_offset(self.clip_handle);
+        let payload_dst = self.pool_offset(self.payload_handle);
+        let bytes = &mut self.staging_bytes;
+        let spans = &mut self.staging_spans;
         let stage = |dst: u32, data: &[u8], bytes: &mut Vec<u8>, spans: &mut Vec<(u32, u32, u32)>| {
             if data.is_empty() {
                 return;
@@ -1544,28 +1574,28 @@ impl Renderer {
         };
 
         stage(
-            self.pool_offset(self.prim_handle),
+            prim_dst,
             bytemuck::cast_slice(scene.primitives),
-            &mut bytes,
-            &mut spans,
+            bytes,
+            spans,
         );
         stage(
-            self.pool_offset(self.transform_handle),
+            transform_dst,
             bytemuck::cast_slice(scene.transforms),
-            &mut bytes,
-            &mut spans,
+            bytes,
+            spans,
         );
         stage(
-            self.pool_offset(self.clip_handle),
+            clip_dst,
             bytemuck::cast_slice(scene.clips),
-            &mut bytes,
-            &mut spans,
+            bytes,
+            spans,
         );
         stage(
-            self.pool_offset(self.payload_handle),
+            payload_dst,
             bytemuck::cast_slice(scene.payloads),
-            &mut bytes,
-            &mut spans,
+            bytes,
+            spans,
         );
 
         if spans.is_empty() {
@@ -1582,6 +1612,17 @@ impl Renderer {
             ))
         })?;
 
+        // The patch list is reused across frames as well.
+        self.staging_patches.clear();
+        self.staging_patches.extend(spans.iter().map(|(dst, src_rel, len)| {
+            GpuScatterPatch {
+                dst_offset: *dst,
+                src_offset: ring_slot + *src_rel,
+                len: *len,
+                _pad: 0,
+            }
+        }));
+
         // SAFETY: both buffers are host visible, mapped for their whole
         // lifetime, and the ranges were just reserved.
         unsafe {
@@ -1592,15 +1633,7 @@ impl Renderer {
                     .ok_or_else(|| GpuError::Allocation("ring not mapped".into()))?,
                 bytes.len(),
             );
-            let patches: Vec<GpuScatterPatch> = spans
-                .iter()
-                .map(|(dst, src_rel, len)| GpuScatterPatch {
-                    dst_offset: *dst,
-                    src_offset: ring_slot + *src_rel,
-                    len: *len,
-                    _pad: 0,
-                })
-                .collect();
+            let patches = &self.staging_patches;
             core::ptr::copy_nonoverlapping(
                 patches.as_ptr().cast::<u8>(),
                 self.patches

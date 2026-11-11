@@ -49,7 +49,16 @@ pub enum Edit {
     /// A text buffer edit.
     Text { before: String, after: String },
     /// Creation or destruction of one entity.
-    Exist { id: u32, existed: bool },
+    ///
+    /// The entity's bounds travel with the edit: undoing a deletion has to
+    /// put the entity back *where it was*, not just re-create an empty one.
+    Exist {
+        id: u32,
+        /// True when the entity was created, false when it was destroyed.
+        existed: bool,
+        /// The entity's bounds at the time of the edit.
+        bounds: Rect,
+    },
 }
 
 impl Edit {
@@ -66,9 +75,14 @@ impl Edit {
                 before: after.clone(),
                 after: before.clone(),
             },
-            Self::Exist { id, existed } => Self::Exist {
+            Self::Exist {
+                id,
+                existed,
+                bounds,
+            } => Self::Exist {
                 id: *id,
                 existed: !existed,
+                bounds: *bounds,
             },
         }
     }
@@ -331,12 +345,20 @@ impl UndoStack {
     }
 
     /// Record that an entity appeared or disappeared.
-    pub fn record_exist(&mut self, id: u32, existed: bool, now: f64) -> bool {
+    ///
+    /// `bounds` is the entity's geometry at the time of the edit. It travels
+    /// with the edit so that undoing a deletion puts the entity back where
+    /// it was instead of re-creating an empty one.
+    pub fn record_exist(&mut self, id: u32, existed: bool, bounds: Rect, now: f64) -> bool {
         let Some(active) = &mut self.active else {
             return false;
         };
         active.last_edit = now;
-        active.edits.push(Edit::Exist { id, existed });
+        active.edits.push(Edit::Exist {
+            id,
+            existed,
+            bounds,
+        });
         true
     }
 
@@ -357,8 +379,17 @@ impl UndoStack {
     }
 
     /// Throw the open transaction away (Escape during a drag).
-    pub fn abort(&mut self) {
-        self.active = None;
+    ///
+    /// The edits recorded so far are returned, inverted, so the caller can
+    /// put the state back where it was. Dropping them on the floor would
+    /// leave the log and the state out of step: the module's contract is
+    /// that the log *is* what the reducer applies, so an aborted
+    /// transaction has to be undone, not forgotten.
+    pub fn abort(&mut self) -> Vec<Edit> {
+        let Some(active) = self.active.take() else {
+            return Vec::new();
+        };
+        active.edits.iter().rev().map(Edit::inverted).collect()
     }
 
     /// Pop the newest committed transaction and hand it to the caller, which is
@@ -645,18 +676,69 @@ mod tests {
 
     #[test]
     fn existence_edits_invert_cleanly() {
+        let bounds = rect(1.0, 2.0, 3.0, 4.0);
         let edit = Edit::Exist {
             id: 4,
             existed: true,
+            bounds,
         };
         assert_eq!(
             edit.inverted(),
             Edit::Exist {
                 id: 4,
-                existed: false
+                existed: false,
+                bounds,
             }
         );
         assert_eq!(edit.entity(), Some(4));
+    }
+
+    /// Undoing a deletion has to put the entity back *where it was*.
+    ///
+    /// The edit used to carry only the id and a boolean, so the reducer
+    /// could only re-create an empty entity: its geometry, its z-order and
+    /// its content were gone.
+    #[test]
+    fn an_undone_deletion_restores_the_bounds() {
+        let mut stack = UndoStack::new(16);
+        let bounds = rect(10.0, 20.0, 30.0, 40.0);
+        stack.begin(TransactionKind::Discrete, "delete", 0.0);
+        stack.record_exist(7, false, bounds, 0.1);
+        stack.commit();
+        let transaction = stack.undo().expect("a step to undo");
+        let edits: Vec<Edit> = transaction.inverted().collect();
+        assert_eq!(
+            edits,
+            vec![Edit::Exist {
+                id: 7,
+                existed: true,
+                bounds,
+            }],
+            "undoing a deletion must restore the entity's geometry"
+        );
+    }
+
+    /// Aborting a transaction must hand back the edits that revert it.
+    ///
+    /// The log is what the reducer applies, so throwing it away without
+    /// undoing it would leave the state and the log out of step.
+    #[test]
+    fn aborting_returns_the_edits_that_revert_it() {
+        let mut stack = UndoStack::new(16);
+        stack.begin(TransactionKind::Drag, "drag", 0.0);
+        stack.record_geometry(1, rect(0.0, 0.0, 1.0, 1.0), rect(5.0, 5.0, 1.0, 1.0), 0.1);
+        let reverted = stack.abort();
+        assert_eq!(
+            reverted,
+            vec![Edit::Geometry {
+                id: 1,
+                before: rect(5.0, 5.0, 1.0, 1.0),
+                after: rect(0.0, 0.0, 1.0, 1.0),
+            }],
+            "aborting must revert the edits, not forget them"
+        );
+        assert!(!stack.is_open());
+        assert_eq!(stack.depth(), 0);
     }
 
     #[test]

@@ -235,20 +235,35 @@ impl Atlas {
         let need_w = w + pad;
         let need_h = h + pad;
 
-        for attempt in 0..2 {
-            if attempt == 1 {
-                // No room anywhere: evict the coldest glyph and retry once. A
-                // second eviction round is not attempted because it cannot help
-                // when the request itself is too large.
-                if !self.evict_coldest(evicted) {
-                    return None;
-                }
-            }
-            if let Some(slot) = self.try_place(need_w, need_h, w, h) {
-                self.slots.insert(key, slot);
-                return Some(slot);
-            }
+        // First try without evicting anything.
+        if let Some(slot) = self.try_place(need_w, need_h, w, h) {
+            self.slots.insert(key, slot);
+            return Some(slot);
         }
+
+        // No room anywhere: evict the coldest glyph and retry once. A second
+        // eviction round is not attempted because it cannot help when the
+        // request itself is too large.
+        //
+        // The eviction is only committed if the retry succeeds. A failure
+        // would otherwise destroy a live, unrelated glyph for nothing.
+        let (evicted_key, slot) = self.evict_coldest()?;
+        if let Some(slot) = self.try_place(need_w, need_h, w, h) {
+            self.slots.insert(key, slot);
+            evicted.push(evicted_key);
+            return Some(slot);
+        }
+        // The retry failed: put the evicted glyph back where it was, so the
+        // atlas is left exactly as it was found.
+        self.slots.insert(evicted_key, slot);
+        self.free.push(FreeRect {
+            layer: slot.layer,
+            x: slot.x,
+            y: slot.y,
+            w: slot.w + pad,
+            h: slot.h + pad,
+        });
+        self.evictions = self.evictions.saturating_sub(1);
         None
     }
 
@@ -360,20 +375,17 @@ impl Atlas {
 
     /// Evict the least-recently-used slot, returning its rectangle to the pool.
     ///
-    /// The evicted key is reported through `evicted` so that the glyph cache
-    /// can drop its entry: the rectangle goes back into the free pool and is
-    /// handed to the next glyph, so a stale cache entry would point at
-    /// somebody else's texels.
-    fn evict_coldest(&mut self, evicted: &mut Vec<GlyphKey>) -> bool {
-        let Some((&key, &slot)) = self
+    /// The evicted key and slot are returned so that the caller can report the
+    /// eviction *and* put the glyph back if the allocation it was made for
+    /// still fails: the rectangle goes back into the free pool and is handed
+    /// to the next glyph, so a stale cache entry would point at somebody
+    /// else's texels.
+    fn evict_coldest(&mut self) -> Option<(GlyphKey, GlyphSlot)> {
+        let (&key, &slot) = self
             .slots
             .iter()
-            .min_by_key(|(_, s)| (s.last_used, s.layer, s.x, s.y))
-        else {
-            return false;
-        };
+            .min_by_key(|(_, s)| (s.last_used, s.layer, s.x, s.y))?;
         self.slots.remove(&key);
-        evicted.push(key);
         let pad = self.config.padding;
         self.free.push(FreeRect {
             layer: slot.layer,
@@ -383,7 +395,7 @@ impl Atlas {
             h: slot.h + pad,
         });
         self.evictions += 1;
-        true
+        Some((key, slot))
     }
 
     /// Drop a specific glyph (e.g. the face was unloaded).
@@ -697,6 +709,43 @@ mod tests {
         assert_eq!(a.evictions(), 1);
         assert_eq!(evicted.len(), 1, "the evicted key must be reported");
         assert_eq!(evicted[0], keys[0], "the coldest glyph is evicted");
+    }
+
+    /// A failed allocation must not destroy a live glyph.
+    ///
+    /// The eviction that made room was destructive: if the retry still
+    /// failed, an unrelated, perfectly good glyph was gone for nothing.
+    #[test]
+    fn a_failed_allocation_leaves_the_atlas_untouched() {
+        let mut evicted = Vec::new();
+        let mut a = Atlas::new(
+            AtlasConfig {
+                page_size: 64,
+                max_layers: 1,
+                padding: 0,
+            },
+            1,
+        );
+        a.begin_frame(1);
+        // Fill the page with 16x16 glyphs.
+        for i in 0..16u16 {
+            let key = GlyphKey::new(i, 16.0, 0, false, 1);
+            assert!(a.allocate(key, 16, 16, &mut evicted).is_some());
+        }
+        let before = a.len();
+        assert_eq!(before, 16);
+        // A glyph that does not fit even in a whole page: the eviction is
+        // attempted and the retry fails, so the atlas must be left exactly
+        // as it was found.
+        let too_big = GlyphKey::new(999, 16.0, 0, false, 1);
+        assert!(a.allocate(too_big, 40, 40, &mut evicted).is_none());
+        assert_eq!(
+            a.len(),
+            before,
+            "the failed allocation must not destroy a live glyph"
+        );
+        assert!(evicted.is_empty(), "nothing was really evicted");
+        assert_eq!(a.evictions(), 0);
     }
 
     #[test]
