@@ -752,8 +752,10 @@ mod tests {
 
     #[test]
     fn animation_bit_does_not_alias_the_index() {
-        let mut p = GpuPrimitiveInstance::default();
-        p.transform_idx = 1234;
+        let mut p = GpuPrimitiveInstance {
+            transform_idx: 1234,
+            ..Default::default()
+        };
         assert!(!p.is_animated());
         assert_eq!(p.transform_index(), 1234);
         p.transform_idx |= TRANSFORM_ANIMATED_BIT;
@@ -863,9 +865,11 @@ mod tests {
 
     #[test]
     fn bounds_include_shadow_bleed() {
-        let mut p = GpuPrimitiveInstance::default();
-        p.local_pos = [10.0, 20.0];
-        p.size = [100.0, 50.0];
+        let mut p = GpuPrimitiveInstance {
+            local_pos: [10.0, 20.0],
+            size: [100.0, 50.0],
+            ..Default::default()
+        };
         p.set_shadow_blur(4.0);
         let (min, max) = p.bounds_with_shadow();
         assert_eq!(min, [-2.0, 8.0]);

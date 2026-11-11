@@ -357,7 +357,7 @@ impl Tlsf {
             );
             let mut lists = FreeLists::new();
             list_insert(bytes, &mut lists, 0);
-            return Self {
+            Self {
                 storage,
                 len,
                 lists,
@@ -369,7 +369,7 @@ impl Tlsf {
                     free_block_count: 1,
                     ..Default::default()
                 },
-            };
+            }
         }
     }
 

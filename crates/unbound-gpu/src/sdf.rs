@@ -273,7 +273,7 @@ mod tests {
         assert!((0.25..0.5).contains(&edge), "edge = {edge}");
         // Alpha preserves the coverage.
         assert_eq!(field[(8 * 16 + 8) * 4 + 3], 255);
-        assert_eq!(field[0 * 16 * 4 + 3], 0);
+        assert_eq!(field[3], 0);
 
         // SAFETY: nothing in flight.
         unsafe {

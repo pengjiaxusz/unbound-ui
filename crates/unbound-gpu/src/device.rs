@@ -745,15 +745,25 @@ impl Gpu {
             _ => vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         };
         // First pass: exact preference.
-        for i in 0..self.memory_properties.memory_type_count as usize {
-            let t = self.memory_properties.memory_types[i];
+        for (i, t) in self
+            .memory_properties
+            .memory_types
+            .iter()
+            .enumerate()
+            .take(self.memory_properties.memory_type_count as usize)
+        {
             if t.property_flags.contains(wanted) {
                 return Some(i as u32);
             }
         }
         // Second pass: minimum requirement.
-        for i in 0..self.memory_properties.memory_type_count as usize {
-            let t = self.memory_properties.memory_types[i];
+        for (i, t) in self
+            .memory_properties
+            .memory_types
+            .iter()
+            .enumerate()
+            .take(self.memory_properties.memory_type_count as usize)
+        {
             if t.property_flags.contains(required) {
                 return Some(i as u32);
             }
@@ -1076,7 +1086,6 @@ unsafe extern "system" fn vulkan_debug_callback(
 /// Multiple `VkInstance`s creating devices simultaneously trips the vendor
 /// overlay layers installed on developer machines (RTSS / FPS Monitor), so the
 /// integration tests take this lock instead of fighting the environment.
-#[must_use]
 pub fn gpu_test_guard() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(|e| e.into_inner())

@@ -678,6 +678,7 @@ dependencies = [
  "bytemuck",
  "libloading 0.9.0",
  "unbound-math",
+ "unbound-theme",
 ]
 
 [[package]]
@@ -719,6 +720,7 @@ dependencies = [
  "unbound-input",
  "unbound-layout",
  "unbound-math",
+ "unbound-theme",
  "unbound-world",
 ]
 
@@ -749,6 +751,13 @@ dependencies = [
  "bytemuck",
  "cosmic-text",
  "rustc-hash",
+ "unbound-math",
+]
+
+[[package]]
+name = "unbound-theme"
+version = "0.1.0"
+dependencies = [
  "unbound-math",
 ]
 

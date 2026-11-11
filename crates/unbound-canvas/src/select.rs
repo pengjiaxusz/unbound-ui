@@ -95,10 +95,8 @@ impl Handle {
         for handle in Self::ALL {
             let delta = Self::position(handle, bounds, rotate_offset) - point;
             let distance = delta.length_squared();
-            if distance <= radius * radius {
-                if best.is_none_or(|(d, _)| distance < d) {
-                    best = Some((distance, handle));
-                }
+            if distance <= radius * radius && best.is_none_or(|(d, _)| distance < d) {
+                best = Some((distance, handle));
             }
         }
         best.map(|(_, handle)| handle)

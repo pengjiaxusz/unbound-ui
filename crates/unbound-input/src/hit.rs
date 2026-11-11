@@ -260,7 +260,7 @@ pub fn pick_index(regions: &[HitRegion], point: Vec2) -> Option<usize> {
 /// click target, the rest decides what the pointer *looks like* when the top
 /// entry is a pass-through or a resize handle.
 #[must_use]
-pub fn pick_stack<'a>(regions: &'a [HitRegion], point: Vec2) -> Vec<&'a HitRegion> {
+pub fn pick_stack(regions: &[HitRegion], point: Vec2) -> Vec<&HitRegion> {
     let mut hits: Vec<&HitRegion> = regions.iter().filter(|r| r.hit(point)).collect();
     hits.sort_by_key(|r| core::cmp::Reverse(r.rank()));
     hits

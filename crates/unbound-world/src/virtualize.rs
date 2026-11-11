@@ -201,11 +201,10 @@ impl VirtualList {
             }
         }
         // Slots that no longer carry an item (list shrank) must be cleared.
-        let live = self.item_of.len();
-        for slot in 0..live {
-            let item = self.item_of[slot];
+        for slot in &mut self.item_of {
+            let item = *slot;
             if item != usize::MAX && (item < first_item || item >= end) {
-                self.item_of[slot] = usize::MAX;
+                *slot = usize::MAX;
             }
         }
 

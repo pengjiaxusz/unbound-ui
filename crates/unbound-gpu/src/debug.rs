@@ -114,14 +114,23 @@ impl RenderDoc {
     }
 
     /// Begin a capture. `window` may be null for headless/offscreen frames.
-    pub fn begin_capture(&mut self, window: *mut core::ffi::c_void) {
-        // SAFETY: see above.
+    ///
+    /// # Safety
+    /// When `window` is not null it must be a live window handle that
+    /// RenderDoc accepts; the pointer is handed to the injected library
+    /// without further validation.
+    pub unsafe fn begin_capture(&mut self, window: *mut core::ffi::c_void) {
+        // SAFETY: the caller guarantees the window handle is valid.
         unsafe { (self.start_capture)(self.api, window) };
     }
 
     /// End the capture and flush it to disk.
-    pub fn end_capture(&mut self, _window: *mut core::ffi::c_void) {
-        // SAFETY: see above.
+    ///
+    /// # Safety
+    /// The matching [`Self::begin_capture`] must have run first; RenderDoc
+    /// keeps global state between the two calls.
+    pub unsafe fn end_capture(&mut self, _window: *mut core::ffi::c_void) {
+        // SAFETY: the caller guarantees a capture is in flight.
         unsafe { (self.end_capture)(self.api) };
         self.captures += 1;
     }

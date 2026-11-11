@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 unbound-math.workspace = true
+unbound-theme.workspace = true
 bytemuck.workspace = true
 ash.workspace = true
 libloading.workspace = true

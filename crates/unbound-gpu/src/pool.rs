@@ -280,11 +280,10 @@ impl PersistentPool {
         self.stats.live_slots -= 1;
         self.stats.live_bytes = self.stats.live_bytes.saturating_sub(slot.len);
         self.stats.pending_slots += 1;
-        if !self.quarantine.defer(epoch, block) {
-            // Quarantine saturated (GPU stalled): leak rather than corrupt.
-            // The slot index is intentionally *not* recycled.
-            return;
-        }
+        // When the quarantine saturates (the GPU stalled) the block is leaked
+        // on purpose: recycling the slot would hand memory to the GPU while
+        // an in-flight frame may still read it.
+        self.quarantine.defer(epoch, block);
     }
 
     /// Release everything whose epoch has completed. Returns how many slots

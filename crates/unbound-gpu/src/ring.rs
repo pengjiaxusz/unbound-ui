@@ -184,9 +184,9 @@ mod tests {
         assert_eq!(ring.slot_capacity(), 1024);
         // Every slot start is 256-aligned so that 256B-aligned allocations in
         // different frames never alias.
-        for i in 0..3 {
-            assert_eq!(ring.regions[i].start % 256, 0);
-            assert_eq!(ring.regions[i].start, i as u32 * 1024);
+        for (i, region) in ring.regions.iter().enumerate() {
+            assert_eq!(region.start % 256, 0);
+            assert_eq!(region.start, i as u32 * 1024);
         }
     }
 

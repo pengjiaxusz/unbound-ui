@@ -365,8 +365,8 @@ mod tests {
         let c = Color::from_srgb8(200, 100, 50, 255);
         let packed = c.to_rgba16f();
         let unpacked = crate::f16::unpack_radii(packed);
-        for i in 0..4 {
-            assert!((unpacked[i] - c.to_array()[i]).abs() < 1e-3);
+        for (u, expected) in unpacked.iter().zip(c.to_array()) {
+            assert!((u - expected).abs() < 1e-3);
         }
     }
 

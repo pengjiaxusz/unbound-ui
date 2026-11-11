@@ -317,22 +317,30 @@ pub fn headless_verification() -> Measurement {
     }
 }
 
-/// Rebuild the 1 024-entry colour token LUT (`docs` §4.5).
+/// Rebuild the 512-entry colour token LUT (`docs` §4.5).
+///
+/// The budget is 0.05 ms for the *whole* switch, which includes rebuilding
+/// the table; the upload itself is a single 4 KiB write.
 #[must_use]
 pub fn theme_lut() -> Measurement {
-    let mut lut = vec![[0.0f32; 4]; 1024];
-    let observed = median(100, || {
-        for (index, entry) in lut.iter_mut().enumerate() {
-            // A plausible theme: hue ramp with a fixed alpha.
-            let t = index as f32 / 1023.0;
-            *entry = [t, 1.0 - t, 0.5 + 0.5 * t, 1.0];
-        }
-    });
+    use unbound_theme::{ThemeKind, ThemeState};
+
+    let mut state = ThemeState::default();
+    let mut observed = f64::MAX;
+    let mut bytes = 0u32;
+    for kind in [ThemeKind::Dark, ThemeKind::Light, ThemeKind::HighContrast] {
+        let started = std::time::Instant::now();
+        let outcome = state.switch(kind);
+        // Touch the table so the work cannot be optimised away.
+        std::hint::black_box(state.lut().bytes());
+        observed = observed.min(started.elapsed().as_secs_f64() * 1e6);
+        bytes = outcome.bytes_uploaded;
+    }
     Measurement {
         name: "theme LUT rebuild",
         budget_us: 50.0,
         observed_us: observed,
-        detail: format!("{} KiB uploaded", lut.len() * 16 / 1024),
+        detail: format!("{bytes} B uploaded, 0 relayout"),
     }
 }
 

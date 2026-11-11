@@ -1,0 +1,14 @@
+[package]
+name = "unbound-theme"
+description = "Semantic design tokens, the flat 4 KiB colour LUT and the three orthogonal zoom layers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
+
+[lints]
+workspace = true

@@ -187,6 +187,7 @@ impl core::fmt::Debug for Renderer {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn image_barrier(
     image: vk::Image,
     old: vk::ImageLayout,
@@ -474,6 +475,18 @@ impl Renderer {
             );
         }
         Ok(())
+    }
+
+    /// Upload a semantic theme (`docs` §4.5).
+    ///
+    /// A theme switch is exactly one 4 KiB write: no instance data changes,
+    /// no layout runs, and the scene is not re-sorted. The primitives
+    /// reference colour *tokens*; the table resolves them.
+    ///
+    /// # Errors
+    /// Propagates Vulkan failures.
+    pub fn write_theme_lut(&mut self, lut: &unbound_theme::ThemeLut) -> Result<(), GpuError> {
+        self.write_theme(lut.entries())
     }
 
     fn write_default_lut(&mut self) -> Result<(), GpuError> {
@@ -1376,6 +1389,57 @@ mod tests {
 
         assert_eq!(renderer.stats.visible, 1, "the quad must survive culling");
         assert_eq!(renderer.stats.draw_calls, 1);
+        renderer.destroy();
+    }
+
+    /// `docs` §4.5: switching the theme must recolour the frame while
+    /// uploading nothing but the 4 KiB colour table.
+    ///
+    /// The instance data is *not* re-uploaded: the same generation is
+    /// rendered twice, so the only thing that can change the picture is the
+    /// lookup table.
+    #[test]
+    fn a_theme_switch_recolours_without_re_uploading_instances() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
+        // Token 5 is `PRIMARY` in the semantic palette.
+        let prims = vec![quad(16.0, 16.0, 96.0, 96.0, 5)];
+        let transforms = vec![GpuTransform::IDENTITY];
+
+        let mut theme = unbound_theme::ThemeState::default();
+        renderer.write_theme_lut(theme.lut()).unwrap();
+        renderer
+            .render(&scene(&prims, &transforms, 1))
+            .expect("render");
+        let light = renderer.read_pixels().expect("readback");
+        let centre = (64 * 128 + 64) * 4;
+
+        let outcome = theme.switch(unbound_theme::ThemeKind::Dark);
+        assert_eq!(outcome.bytes_uploaded, 4096);
+        assert!(!outcome.relayout_required, "a theme switch must not re-layout");
+        assert!(
+            !outcome.instance_reupload_required,
+            "a theme switch must not re-upload instances"
+        );
+        renderer.write_theme_lut(theme.lut()).unwrap();
+
+        // Same generation: nothing but the colour table changed.
+        renderer
+            .render(&scene(&prims, &transforms, 1))
+            .expect("render");
+        let dark = renderer.read_pixels().expect("readback");
+
+        let light_px = &light[centre..centre + 4];
+        let dark_px = &dark[centre..centre + 4];
+        assert_ne!(light_px, dark_px, "the theme switch changed nothing");
+        // The readback is BGRA, so the red channel lives at index 2.
+        assert!(
+            dark_px[2] > light_px[2] + 20,
+            "the dark primary must be lighter in red: {light_px:?} vs {dark_px:?}"
+        );
         renderer.destroy();
     }
 

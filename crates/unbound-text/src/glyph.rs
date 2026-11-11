@@ -247,8 +247,8 @@ impl GlyphCache {
             .as_ref()?;
 
         let placement = image.placement;
-        let w = u32::try_from(placement.width).ok()?;
-        let h = u32::try_from(placement.height).ok()?;
+        let w = placement.width;
+        let h = placement.height;
         if w == 0 || h == 0 {
             // Whitespace: no texture, only an advance.
             return Some(ResolvedGlyph {

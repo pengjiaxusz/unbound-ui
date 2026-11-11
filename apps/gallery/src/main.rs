@@ -209,8 +209,8 @@ fn main() {
         );
         frame.close();
     }
-    for index in 0..visible.len().min(20) {
-        let rect = tree.bounds_of(visible[index]).unwrap_or(Rect::ZERO);
+    for id in visible.iter().take(20) {
+        let rect = tree.bounds_of(*id).unwrap_or(Rect::ZERO);
         frame.open(NodeKind::Container, rect, "Row");
         frame.close();
     }

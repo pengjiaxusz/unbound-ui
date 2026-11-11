@@ -163,7 +163,7 @@ impl Pipelines {
         ];
         let _ = empty;
 
-        let mut binding_flags = [
+        let binding_flags = [
             vk::DescriptorBindingFlags::PARTIALLY_BOUND
                 | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
             vk::DescriptorBindingFlags::PARTIALLY_BOUND
@@ -171,7 +171,7 @@ impl Pipelines {
             vk::DescriptorBindingFlags::empty(),
         ];
         let mut flags_info =
-            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&mut binding_flags);
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
         let set_layout = device
             .create_descriptor_set_layout(
                 &vk::DescriptorSetLayoutCreateInfo::default()

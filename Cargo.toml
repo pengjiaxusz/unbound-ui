@@ -12,6 +12,7 @@ members = [
     "crates/unbound-canvas",
     "crates/unbound-input",
     "crates/unbound-a11y",
+    "crates/unbound-theme",
     "crates/unbound-headless",
     "crates/unbound-host",
     "crates/app-guest",
@@ -44,6 +45,7 @@ unbound-ui = { path = "crates/unbound-ui" }
 unbound-platform = { path = "crates/unbound-platform" }
 unbound-host = { path = "crates/unbound-host" }
 unbound-kpi = { path = "crates/unbound-kpi" }
+unbound-theme = { path = "crates/unbound-theme" }
 
 ash = { version = "0.38", default-features = false, features = ["loaded", "debug"] }
 bytemuck = { version = "1.25", features = ["derive"] }

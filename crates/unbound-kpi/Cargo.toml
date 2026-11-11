@@ -15,6 +15,7 @@ unbound-input.workspace = true
 unbound-world.workspace = true
 unbound-layout.workspace = true
 unbound-headless.workspace = true
+unbound-theme.workspace = true
 
 [lints]
 workspace = true

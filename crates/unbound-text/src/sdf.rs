@@ -89,13 +89,13 @@ fn edt_1d(f: &[f32], d: &mut [f32], v: &mut [usize], z: &mut [f32]) {
         }
     }
     let mut k = 0usize;
-    for q in 0..n {
+    for (q, out) in d.iter_mut().enumerate().take(n) {
         while z[k + 1] < q as f32 {
             k += 1;
         }
         let p = v[k];
         let dq = q as f32 - p as f32;
-        d[q] = dq * dq + f[p];
+        *out = dq * dq + f[p];
     }
 }
 
@@ -167,12 +167,12 @@ pub fn from_coverage(coverage: &[u8], width: u32, height: u32, spread: f32) -> S
     if !has_inside || !has_outside {
         let v = if has_inside { 0u8 } else { 255u8 };
         let mut data = vec![0u8; w * h * 4];
-        for i in 0..w * h {
+        for (i, cov) in coverage.iter().enumerate().take(w * h) {
             let o = i * 4;
             data[o] = v;
             data[o + 1] = v;
             data[o + 2] = v;
-            data[o + 3] = coverage[i];
+            data[o + 3] = *cov;
         }
         return SdfBitmap {
             width,
@@ -357,7 +357,7 @@ mod tests {
         let field = from_coverage(&cov, 8, 8, 2.0);
         assert_eq!(field.data.len(), 8 * 8 * 4);
         assert_eq!(field.data[(3 * 8 + 3) * 4 + 3], 255);
-        assert_eq!(field.data[(0 * 8 + 0) * 4 + 3], 0);
+        assert_eq!(field.data[3], 0);
     }
 
     #[test]
