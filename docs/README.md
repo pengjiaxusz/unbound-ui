@@ -17,6 +17,7 @@
 
 - **第一次了解本项目** → [总览与设计准则](00-overview/principles.md) →
   [端到端数据流](00-overview/dataflow.md) → [里程碑与验收红线](07-roadmap/milestones.md)
+- **想先看看它长什么样** → [组件展台](06-tooling/showcase.md)
 - **改渲染管线** → [图形技术栈](01-graphics/api-and-features.md) →
   [Uber-Shader](01-graphics/uber-shader.md) → [裁剪](01-graphics/clipping.md) →
   [曲线](01-graphics/curves.md)
@@ -92,6 +93,7 @@
 | [热重载与状态迁移](06-tooling/hot-reload.md) | C-ABI 隔离、分配器劫持、双模迁移 | `已落地` |
 | [异步资源流送](06-tooling/asset-streaming.md) | 后台解码、暂存环、传输队列交接 | `已落地` |
 | [调试与安全工具链](06-tooling/debugging.md) | RenderDoc 钩子、VVL 断言 | `已落地` |
+| [组件展台](06-tooling/showcase.md) | 开窗看全所有图元、主题切换、无头出图 | `已落地` |
 
 ### [07-roadmap 路线与验收](07-roadmap/README.md)
 

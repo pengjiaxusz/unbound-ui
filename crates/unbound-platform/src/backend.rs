@@ -41,6 +41,13 @@ pub trait PlatformApp {
     /// A platform event happened.
     fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow;
 
+    /// Draw one frame.
+    ///
+    /// Called from the event loop's idle point, after every pending event has
+    /// been delivered. The application acquires a swapchain image, renders
+    /// into it and presents it.
+    fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow;
+
     /// The window was hidden; the renderer must stop drawing.
     fn suspended(&mut self, state: &mut PlatformState) {
         let _ = state;
@@ -198,6 +205,18 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // The window may come back after a suspend/resume cycle.
         if self.state.is_none() {
+            event_loop.exit();
+            return;
+        }
+        // Draw one frame. The window is still needed because the application
+        // may have to recreate the swapchain when it was resized.
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        if self.app.frame(state, window) == Flow::Exit {
             event_loop.exit();
         }
     }

@@ -180,6 +180,15 @@ pub struct Renderer {
     last_generation: u64,
     frame_index: u64,
     pub stats: FrameStats,
+    /// The atlases bound to the bindless descriptor slots, when installed.
+    atlases: Option<std::sync::Arc<crate::atlas::AtlasSet>>,
+    /// An externally owned colour attachment to draw into, when set.
+    external_color: Option<(vk::ImageView, u32, u32)>,
+    /// Signalled when the frame's rendering has finished.
+    ///
+    /// The presentation engine waits on this before handing the image to the
+    /// display, so the user never sees a half-drawn frame.
+    present_semaphore: vk::Semaphore,
 }
 
 impl core::fmt::Debug for Renderer {
@@ -328,6 +337,13 @@ impl Renderer {
     pub fn new(gpu: Gpu, width: u32, height: u32) -> Result<Self, GpuError> {
         let pipelines = Pipelines::new(&gpu)?;
         let target = RenderTarget::new(&gpu, width, height)?;
+        // A binary semaphore that marks "the frame is fully drawn". The
+        // presentation engine waits on it.
+        let present_semaphore = unsafe {
+            gpu.device
+                .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                .map_err(GpuError::from)?
+        };
 
         let pool_bytes = gpu.config.pool_capacity;
         let mut pool = PersistentPool::new(pool_bytes as usize);
@@ -451,6 +467,9 @@ impl Renderer {
             last_generation: u64::MAX,
             frame_index: 0,
             stats: FrameStats::default(),
+            atlases: None,
+            external_color: None,
+            present_semaphore,
         };
         renderer.write_default_lut()?;
         Ok(renderer)
@@ -646,17 +665,29 @@ impl Renderer {
                 gpu.device.end_command_buffer(cmd)?;
                 // Offscreen: nothing signals `image_available`, so waiting on it
                 // would deadlock. Swapchain presentation supplies that wait.
-                let signal_semaphores = [gpu.timeline.semaphore];
-                let values = [timeline_value];
-                let mut timeline_info =
-                    vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&values);
-                let cmds = [cmd];
-                let submit = vk::SubmitInfo::default()
-                    .command_buffers(&cmds)
-                    .signal_semaphores(&signal_semaphores)
-                    .push_next(&mut timeline_info);
+                //
+                // The frame signals two semaphores: the timeline semaphore
+                // (with a value) and the plain binary semaphore the
+                // presentation engine waits on. A timeline semaphore cannot
+                // share `VkSubmitInfo::pSignalSemaphores` with a binary one,
+                // so `vkQueueSubmit2` is used instead: each semaphore carries
+                // its own value in a `VkSemaphoreSubmitInfo`.
+                let signal_infos = [
+                    // The timeline semaphore carries the frame's value; a
+                    // binary semaphore ignores the value field.
+                    vk::SemaphoreSubmitInfo::default()
+                        .semaphore(gpu.timeline.semaphore)
+                        .value(timeline_value),
+                    vk::SemaphoreSubmitInfo::default()
+                        .semaphore(self.present_semaphore)
+                        .value(0),
+                ];
+                let command_infos = [vk::CommandBufferSubmitInfo::default().command_buffer(cmd)];
+                let submit = vk::SubmitInfo2::default()
+                    .command_buffer_infos(&command_infos)
+                    .signal_semaphore_infos(&signal_infos);
                 gpu.device
-                    .queue_submit(gpu.graphics_queue, &[submit], sync.in_flight)?;
+                    .queue_submit2(gpu.graphics_queue, &[submit], sync.in_flight)?;
             }
         }
         self.frame_index += 1;
@@ -884,6 +915,60 @@ impl Renderer {
     ///
     /// # Errors
     /// Returns [`GpuError::Vulkan`] when the query pool cannot be created.
+    /// Install the real bindless atlases.
+    ///
+    /// Until this is called every bindless slot points at a 1x1 dummy texture,
+    /// so glyph and image primitives sample nothing and render as empty
+    /// quads. After the call, slot `n` addresses layer `n` of the atlas.
+    ///
+    /// # Errors
+    /// Propagates Vulkan allocation or descriptor failures.
+    pub fn install_atlases(
+        &mut self,
+        atlases: std::sync::Arc<crate::atlas::AtlasSet>,
+    ) -> Result<(), GpuError> {
+        self.pipelines.install_atlases(&self.gpu, atlases.clone())?;
+        self.atlases = Some(atlases);
+        Ok(())
+    }
+
+    /// The semaphore that is signalled when the frame has finished drawing.
+    ///
+    /// Pass this to the presentation engine so it waits for the GPU before
+    /// handing the image to the display.
+    #[must_use]
+    pub const fn present_semaphore(&self) -> vk::Semaphore {
+        self.present_semaphore
+    }
+
+    /// The atlases bound to the renderer, when installed.
+    #[must_use]
+    pub fn atlases(&self) -> Option<&std::sync::Arc<crate::atlas::AtlasSet>> {
+        self.atlases.as_ref()
+    }
+
+    /// Render one frame into an externally owned colour view.
+    ///
+    /// The renderer keeps its own depth buffer but borrows the colour
+    /// attachment, which is what a swapchain image is: the swapchain owns the
+    /// image, the renderer only draws into it. The view must have the same
+    /// format as the renderer's own target (`COLOR_FORMAT`).
+    ///
+    /// # Errors
+    /// Propagates Vulkan failures.
+    pub fn render_to_view(
+        &mut self,
+        scene: &SceneUpload<'_>,
+        color_view: vk::ImageView,
+        width: u32,
+        height: u32,
+    ) -> Result<FrameStats, GpuError> {
+        self.external_color = Some((color_view, width, height));
+        let result = self.render(scene);
+        self.external_color = None;
+        result
+    }
+
     pub fn enable_timing(&mut self) -> Result<(), GpuError> {
         let scope = crate::timing::TimestampScope::new(&self.gpu, STAGE_MARKS)?;
         self.timing = Some(scope);
@@ -1034,7 +1119,11 @@ impl Renderer {
             payloads_bda: self.pool_buffer.address + u64::from(self.pool_offset(self.payload_handle)),
             camera_chunk: scene.camera.chunk,
             camera_local: scene.camera.local,
-            viewport_size: [self.target.width as f32, self.target.height as f32],
+            // The viewport follows the attachment we actually draw into.
+            viewport_size: match self.external_color {
+                Some((_, w, h)) => [w as f32, h as f32],
+                None => [self.target.width as f32, self.target.height as f32],
+            },
             camera_zoom: scene.camera.zoom,
             dpi_scale: scene.camera.dpi_scale,
         }
@@ -1066,16 +1155,22 @@ impl Renderer {
         let device = &self.gpu.device;
         // SAFETY: recording; the target is exclusively owned.
         unsafe {
-            let to_attachment = [image_barrier(
-                self.target.color,
-                self.target.layout,
-                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                vk::PipelineStageFlags2::TOP_OF_PIPE,
-                vk::AccessFlags2::NONE,
-                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-                false,
-            )];
+            // Only our own colour image needs a layout transition; an
+            // external view (a swapchain image) is transitioned by whoever
+            // owns it.
+            let to_attachment = match self.external_color {
+                Some(_) => Vec::new(),
+                None => vec![image_barrier(
+                    self.target.color,
+                    self.target.layout,
+                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    vk::PipelineStageFlags2::TOP_OF_PIPE,
+                    vk::AccessFlags2::NONE,
+                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    false,
+                )],
+            };
             let depth_ready = [image_barrier(
                 self.target.depth,
                 vk::ImageLayout::UNDEFINED,
@@ -1096,7 +1191,9 @@ impl Renderer {
                 cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&depth_ready),
             );
-            self.target.layout = vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
+            if self.external_color.is_none() {
+                self.target.layout = vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
+            }
 
             let clear = [vk::ClearValue {
                 color: vk::ClearColorValue {
@@ -1110,8 +1207,14 @@ impl Renderer {
                     stencil: 0,
                 },
             };
+            // The colour attachment may be borrowed from a swapchain image;
+            // the depth attachment is always ours.
+            let color_view = match self.external_color {
+                Some((view, _, _)) => view,
+                None => self.target.color_view,
+            };
             let color_attachment = [vk::RenderingAttachmentInfo::default()
-                .image_view(self.target.color_view)
+                .image_view(color_view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .load_op(vk::AttachmentLoadOp::CLEAR)
                 .store_op(vk::AttachmentStoreOp::STORE)
@@ -1149,10 +1252,12 @@ impl Renderer {
 
     fn record_graphics(&mut self, cmd: vk::CommandBuffer, scene: &SceneUpload<'_>) {
         let device = &self.gpu.device;
-        let extent = vk::Extent2D {
-            width: self.target.width,
-            height: self.target.height,
+        // The viewport follows the attachment we actually draw into.
+        let (width, height) = match self.external_color {
+            Some((_, w, h)) => (w, h),
+            None => (self.target.width, self.target.height),
         };
+        let extent = vk::Extent2D { width, height };
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
@@ -1378,6 +1483,10 @@ impl Renderer {
 
     /// Release every GPU resource. Consumes the renderer.
     pub fn destroy(self) {
+        // SAFETY: we own the semaphore and every frame has retired.
+        unsafe {
+            self.gpu.device.destroy_semaphore(self.present_semaphore, None);
+        }
         self.gpu.wait_idle();
         if let Some(scope) = &self.timing {
             scope.destroy(&self.gpu);
@@ -1724,6 +1833,274 @@ mod tests {
             timing.total_ms <= 0.8,
             "the curve frame took {:.3} ms, the budget is 0.8 ms",
             timing.total_ms
+        );
+        renderer.destroy();
+    }
+
+    /// `docs` §3.5: a glyph is drawn from the real bindless atlas, not from
+    /// the 1x1 dummy texture the renderer falls back to.
+    ///
+    /// The test installs a one-layer atlas, uploads a white tile into it,
+    /// renders one glyph primitive that samples that layer, and checks that
+    /// the covered pixel is lit. Without the atlas the sampler would read the
+    /// dummy texture and the glyph would be invisible.
+    #[test]
+    fn a_glyph_is_drawn_from_the_real_atlas() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
+
+        // A one-layer atlas with a white tile at the origin.
+        let atlases = std::sync::Arc::new(
+            crate::atlas::AtlasSet::new(&renderer.gpu, 1).expect("atlas set"),
+        );
+        let upload = crate::atlas::AtlasUpload {
+            kind: crate::atlas::AtlasKind::R8,
+            layer: 0,
+            x: 0,
+            y: 0,
+            width: 32,
+            height: 32,
+            data: vec![255u8; 32 * 32],
+        };
+        atlases.upload(&renderer.gpu, &upload).expect("upload");
+        // Prove the pixels actually landed on the GPU.
+        let readback = atlases
+            .read_layer(&renderer.gpu, crate::atlas::AtlasKind::R8, 0, 0, 0, 4, 4)
+            .expect("readback");
+        assert!(
+            readback.iter().all(|b| *b == 255),
+            "the atlas layer must contain the uploaded texels: {readback:?}"
+        );
+        renderer.install_atlases(atlases).expect("install");
+
+        // A glyph primitive covering the middle of the target. The payload
+        // carries the atlas UV range the shader interpolates over, and the
+        // shader reads the atlas layer from `border_or_tex`.
+        // `local_pos` is camera-relative: the camera sits at the viewport
+        // centre, so a primitive whose origin is at (32, 32) and which is
+        // 64x64 large covers the screen centre.
+        let prim = crate::data::GpuPrimitiveInstance {
+            chunk_id: [0, 0],
+            local_pos: [32.0, 32.0],
+            size: [64.0, 64.0],
+            prim_type_and_flags: crate::data::GpuPrimitiveInstance::pack_type(
+                crate::data::PrimType::Glyph,
+                crate::data::BlendMode::Normal,
+                crate::data::SubElement::Content as u16,
+            ),
+            fill_token_or_uv: 2,
+            // The shader reads the atlas layer from `border_or_tex`.
+            border_token_or_tex: 0,
+            extra_payload_idx: 0,
+            // `CLIP_NONE` is `u32::MAX`, not zero: the default zero would
+            // point at a clip node that does not exist and cull the glyph.
+            clip_idx: crate::data::CLIP_NONE,
+            // Opacity must be set explicitly: the default is zero, and a
+            // zero-opacity primitive is culled before it ever reaches the
+            // fragment shader.
+            z_and_opacity: crate::data::GpuPrimitiveInstance::pack_z_opacity(1000, 1.0),
+            ..Default::default()
+        };
+        let mut payload = crate::data::GpuPayload::default();
+        // The UV range addresses the tile inside the 2048x2048 page: the tile
+        // sits at the origin and is 32x32 texels, so the range is
+        // [0, 32/2048] — not the whole page.
+        let extent = 32.0 / crate::atlas::PAGE_SIZE as f32;
+        payload.p0 = [0.0, 0.0];
+        payload.p1 = [extent, extent];
+
+        // The reference quad sits on the left half; the glyph on the right.
+        let reference = quad(16.0, 16.0, 48.0, 96.0, 2);
+        let prims = vec![reference, prim];
+        let payloads = vec![payload];
+        let transforms = vec![GpuTransform::IDENTITY];
+        let mut upload = scene(&prims, &transforms, 1);
+        upload.payloads = &payloads;
+
+        renderer.write_theme(&{
+            let mut colors = vec![[0u16; 4]; 512];
+            colors[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
+            colors
+        })
+        .unwrap();
+
+        renderer.render(&upload).expect("render");
+        let pixels = renderer.read_pixels().expect("readback");
+
+        // The reference quad (left half) must be lit.
+        let reference_px = (64 * 128 + 40) * 4;
+        // The centre of the glyph must be lit.
+        let centre = (64 * 128 + 64) * 4;
+        assert!(
+            pixels[reference_px] > 200,
+            "the reference quad must be lit: {:?}",
+            &pixels[reference_px..reference_px + 4]
+        );
+        assert!(
+            pixels[centre] > 200,
+            "the glyph must be drawn from the atlas: {:?}",
+            &pixels[centre..centre + 4]
+        );
+        // A pixel above both primitives must stay dark: the glyph tile is
+        // fully opaque, so the whole 64x64 quad is lit, but nothing above it
+        // may be.
+        let outside = (4 * 128 + 100) * 4;
+        // The clear colour is 0.07 in linear space, which is about 80 after
+        // the sRGB encode; anything lit would be far brighter than that.
+        assert!(
+            pixels[outside] < 120,
+            "nothing may be drawn above the glyph: {:?}",
+            &pixels[outside..outside + 4]
+        );
+        renderer.destroy();
+    }
+
+    /// A rounded rectangle with a border must keep its fill colour in the
+    /// interior and the border colour on the ring.
+    ///
+    /// The test renders two primitives side by side — one without a border,
+    /// one with — and checks that the interior of both is the fill colour.
+    #[test]
+    fn a_bordered_rectangle_keeps_its_fill_colour() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
+
+        // Token 2 is white, token 1 is a translucent black.
+        let mut theme = vec![[0u16; 4]; 512];
+        theme[1] = unbound_math::Color::from_srgb8(0, 0, 0, 40).to_rgba16f();
+        theme[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
+        renderer.write_theme(&theme).unwrap();
+
+        // Left: no border. Right: a 4 px border.
+        let plain = crate::data::GpuPrimitiveInstance {
+            chunk_id: [0, 0],
+            local_pos: [8.0, 8.0],
+            size: [48.0, 48.0],
+            corner_radii: [0; 4],
+            border_width: 0,
+            shadow_blur: 0,
+            transform_idx: 0,
+            clip_idx: crate::data::CLIP_NONE,
+            fill_token_or_uv: 2,
+            border_token_or_tex: 1,
+            prim_type_and_flags: GpuPrimitiveInstance::pack_type(
+                crate::data::PrimType::RoundedRect,
+                crate::data::BlendMode::Normal,
+                crate::data::SubElement::Background as u16,
+            ),
+            z_and_opacity: GpuPrimitiveInstance::pack_z_opacity(10, 1.0),
+            extra_payload_idx: 0,
+        };
+        let bordered = crate::data::GpuPrimitiveInstance {
+            local_pos: [72.0, 8.0],
+            size: [48.0, 48.0],
+            border_width: unbound_math::f16::f32_to_f16(4.0),
+            ..plain
+        };
+        let prims = vec![plain, bordered];
+        let transforms = vec![GpuTransform::IDENTITY];
+
+        renderer
+            .render(&scene(&prims, &transforms, 1))
+            .expect("render");
+        let pixels = renderer.read_pixels().expect("readback");
+
+        // The interior of the plain rectangle.
+        let plain_px = (32 * 128 + 32) * 4;
+        assert!(
+            pixels[plain_px] > 200,
+            "the plain rectangle must be white: {:?}",
+            &pixels[plain_px..plain_px + 4]
+        );
+        // The interior of the bordered rectangle: the fill still shows.
+        let bordered_px = (32 * 128 + 96) * 4;
+        assert!(
+            pixels[bordered_px] > 200,
+            "the bordered rectangle must keep its fill: {:?}",
+            &pixels[bordered_px..bordered_px + 4]
+        );
+        // The ring of the bordered rectangle: the border colour.
+        //
+        // The box starts at x = 72 and the border is 4 px wide, so the ring
+        // covers x 72..76 — pixel 76 is the first *fill* pixel, not a ring
+        // pixel. Sample the middle of the ring instead.
+        for x in 72..76usize {
+            let ring_px = (32 * 128 + x) * 4;
+            assert!(
+                pixels[ring_px] < 120,
+                "the border ring at x = {x} must use the border token: {:?}",
+                &pixels[ring_px..ring_px + 4]
+            );
+        }
+        // Immediately inside the ring the fill takes over again.
+        let inner_edge_px = (32 * 128 + 76) * 4;
+        assert!(
+            pixels[inner_edge_px] > 200,
+            "the fill must resume right after the ring: {:?}",
+            &pixels[inner_edge_px..inner_edge_px + 4]
+        );
+        renderer.destroy();
+    }
+
+    /// A rounded rectangle must be filled edge to edge.
+    ///
+    /// The test renders a background and a single rounded rectangle on top of
+    /// it and checks a grid of points inside the rectangle: every one of them
+    /// has to carry the fill colour. A rectangle whose middle is not filled
+    /// means the coverage maths or the depth pre-pass is wrong.
+    #[test]
+    fn a_rounded_rectangle_is_filled_edge_to_edge() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 256, 256).expect("renderer");
+        let mut theme = vec![[0u16; 4]; 512];
+        theme[1] = unbound_math::Color::from_srgb8(20, 20, 30, 255).to_rgba16f();
+        theme[2] = unbound_math::Color::from_srgb8(52, 100, 220, 255).to_rgba16f();
+        renderer.write_theme(&theme).unwrap();
+
+        // The background fills the whole target; the rectangle sits on top.
+        let background = quad(0.0, 0.0, 256.0, 256.0, 1);
+        let mut rounded = quad(60.0, 60.0, 120.0, 64.0, 2);
+        rounded.corner_radii = unbound_math::f16::pack_radii([12.0; 4]);
+        // Reverse-Z: a *larger* depth value is nearer and is therefore drawn
+        // last, so the rectangle has to sit above the background.
+        rounded.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(2000, 1.0);
+        let transforms = vec![GpuTransform::IDENTITY];
+
+        renderer
+            .render(&scene_at(&[background, rounded], &transforms, 1, (256.0, 256.0)))
+            .expect("render");
+        let pixels = renderer.read_pixels().expect("readback");
+
+        // Every sample inside the rectangle must be the fill colour. The
+        // rectangle covers x 60..180, y 60..124; the corners are rounded with
+        // a radius of 12, so the samples stay away from them.
+        let mut wrong = 0;
+        let mut first_wrong = None;
+        for y in 70..115u32 {
+            for x in 70..170u32 {
+                let idx = ((y * 256 + x) * 4) as usize;
+                let pixel = &pixels[idx..idx + 4];
+                // The readback is BGRA: the blue channel is first.
+                if pixel[0] < 180 || pixel[2] > 120 {
+                    wrong += 1;
+                    first_wrong.get_or_insert((x, y, pixel.to_vec()));
+                }
+            }
+        }
+        assert_eq!(
+            wrong,
+            0,
+            "{wrong} pixels inside the rectangle are not the fill colour; \
+             first offender {first_wrong:?}"
         );
         renderer.destroy();
     }

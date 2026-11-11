@@ -47,6 +47,14 @@ pub struct GpuFeatures {
     pub timeline_semaphore: bool,
     pub multi_draw_indirect: bool,
     pub draw_indirect_count: bool,
+    /// `drawIndirectFirstInstance`: the host may set a non-zero
+    /// `firstInstance` in an indirect command.
+    ///
+    /// Without it the driver is allowed to ignore `firstInstance`, which
+    /// makes every draw run after the first redraw the *first* run's
+    /// primitives. The renderer's MDI compaction emits one run per
+    /// `(layer, barrier, variant)` group, so the feature is required.
+    pub draw_indirect_first_instance: bool,
     pub shader_int64: bool,
     pub shader_float64: bool,
     pub independent_blend: bool,
@@ -78,6 +86,9 @@ impl GpuFeatures {
         }
         if !self.timeline_semaphore {
             missing.push("timelineSemaphore");
+        }
+        if !self.draw_indirect_first_instance {
+            missing.push("drawIndirectFirstInstance");
         }
         if !self.multi_draw_indirect {
             missing.push("multiDrawIndirect");
@@ -439,6 +450,7 @@ impl Gpu {
             host_query_reset: f12.host_query_reset == vk::TRUE,
             multi_draw_indirect: core.multi_draw_indirect == vk::TRUE,
             draw_indirect_count: f12.draw_indirect_count == vk::TRUE,
+            draw_indirect_first_instance: core.draw_indirect_first_instance == vk::TRUE,
             shader_int64: core.shader_int64 == vk::TRUE,
             shader_float64: core.shader_float64 == vk::TRUE,
             independent_blend: core.independent_blend == vk::TRUE,
@@ -511,6 +523,11 @@ impl Gpu {
             .synchronization2(features.synchronization2);
         let enabled_core = vk::PhysicalDeviceFeatures::default()
             .multi_draw_indirect(features.multi_draw_indirect)
+            // The MDI compaction emits one run per (layer, barrier, variant)
+            // group, and every run but the first carries a non-zero
+            // `firstInstance`. Without this feature the driver may ignore it
+            // and redraw the first run's primitives instead.
+            .draw_indirect_first_instance(features.draw_indirect_first_instance)
             .independent_blend(features.independent_blend)
             .sampler_anisotropy(features.sampler_anisotropy)
             .shader_int64(features.shader_int64)
@@ -903,16 +920,39 @@ impl Gpu {
 
     /// Flush a mapped range (no-op for coherent memory, required otherwise).
     ///
+    /// The size is rounded up to the device's `nonCoherentAtomSize`, because
+    /// Vulkan requires the flushed range to be a multiple of that value (or to
+    /// reach the end of the allocation).
+    ///
     /// # Safety
     /// `offset..offset+len` must be inside a mapped buffer.
     pub unsafe fn flush(&self, buffer: &Buffer, offset: u64, len: u64) {
         if buffer.mapped.is_null() {
             return;
         }
+        let atom = self.properties.limits.non_coherent_atom_size.max(1);
+        // Vulkan accepts a range whose size is a multiple of the atom size,
+        // *or* one that reaches exactly the end of the allocation. The
+        // allocation size is not always the buffer size (the allocator may
+        // round up), so the memory requirement is what matters here.
+        let allocation = self.device.get_buffer_memory_requirements(buffer.raw).size;
+        // The offset must be a multiple of the atom size.
+        let offset = offset & !(atom - 1);
+        if offset >= allocation {
+            return;
+        }
+        let wanted = (offset + len).min(allocation);
+        // Prefer the atom-rounded size; fall back to reaching the end of the
+        // allocation when rounding would overshoot it.
+        let rounded = wanted.div_ceil(atom) * atom;
+        let size = if rounded <= allocation { rounded } else { allocation - offset };
+        if size == 0 {
+            return;
+        }
         let range = vk::MappedMemoryRange::default()
             .memory(buffer.memory)
             .offset(offset)
-            .size(len);
+            .size(size);
         let _ = self.device.flush_mapped_memory_ranges(&[range]);
     }
 
@@ -1123,7 +1163,7 @@ mod tests {
     #[test]
     fn required_feature_list_is_stable() {
         let none = GpuFeatures::default().missing_required();
-        assert_eq!(none.len(), 7);
+        assert_eq!(none.len(), 8);
         let all = GpuFeatures {
             buffer_device_address: true,
             descriptor_indexing: true,
@@ -1131,6 +1171,7 @@ mod tests {
             synchronization2: true,
             timeline_semaphore: true,
             multi_draw_indirect: true,
+            draw_indirect_first_instance: true,
             draw_indirect_count: true,
             ..Default::default()
         };

@@ -1,0 +1,30 @@
+[package]
+name = "showcase"
+description = "Windowed component gallery: every primitive type, theme switching and canvas navigation in one live window"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "showcase"
+path = "src/lib.rs"
+
+[[bin]]
+name = "showcase"
+path = "src/main.rs"
+
+[dependencies]
+unbound-math.workspace = true
+unbound-gpu.workspace = true
+unbound-theme.workspace = true
+unbound-text.workspace = true
+unbound-vector.workspace = true
+unbound-platform.workspace = true
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
+raw-window-handle = "0.6"
+png.workspace = true
+
+[lints]
+workspace = true

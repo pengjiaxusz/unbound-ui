@@ -87,6 +87,25 @@ pub struct GpuClipNode {
 | 裁剪框在 CPU 折叠 | GPU 端只做两次轻量 SDF 求交 |
 | 圆角/阴影半径用 f16 | 保留足够精度，同时省下字节 |
 
+### 半精度打包的端序约定
+
+图元实例里的 `border_width`（偏移 32）与 `shadow_blur`（偏移 34）是两个相邻
+的 `u16`，着色器把它们当作一个 `uint` 读出。小端下 **低 16 位是边框宽度、
+高 16 位是阴影半径**。
+
+GLSL 的 `unpackHalf2x16` 遵循同样的约定：**`.x` 取最低 16 位，`.y` 取最高
+16 位**（GLSL 4.x 参考手册与 SPIR-V `GLSL.std.450` 的 `UnpackHalf2x16`
+条目）。因此 `common.glsl` 里的两个辅助函数是直通的：
+
+```glsl
+float unpack_border(uint v) { return unpackHalf2x16(v).x; }  // 低位
+float unpack_shadow(uint v) { return unpackHalf2x16(v).y; }  // 高位
+```
+
+主题颜色表用的是同一套约定：每个 RGBA16F 条目占两个 `uvec2`，四个通道依次
+落在 `e.x` 的低/高位与 `e.y` 的低/高位上，`theme_color()` 直接按
+`.x/.y` 取用。
+
 ---
 
 **相关文档**：[显存分层](memory-hierarchy.md) · [双阶裁剪](clipping.md)

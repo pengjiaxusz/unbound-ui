@@ -30,6 +30,7 @@ crates/
   unbound-kpi       验收红线实测
   app-guest         可热重载的业务层 cdylib
 apps/
+  showcase          组件展台：开窗看全所有图元（圆角/边框/阴影/描边/曲线/字形）
   gallery           全链路演示程序
 ```
 
@@ -43,7 +44,7 @@ apps/
 | [`docs/03-canvas`](docs/03-canvas/README.md) | 空间索引、分块坐标、交互编辑 |
 | [`docs/04-input`](docs/04-input/README.md) | 双层拾取、IME、Portal 排序、无障碍 |
 | [`docs/05-agent`](docs/05-agent/README.md) | 依赖分层护栏、无头闭环验证 |
-| [`docs/06-tooling`](docs/06-tooling/README.md) | 热重载、资源流送、调试工具链 |
+| [`docs/06-tooling`](docs/06-tooling/README.md) | 热重载、资源流送、调试工具链、组件展台 |
 | [`docs/07-roadmap`](docs/07-roadmap/README.md) | 里程碑路径、量化验收红线 |
 
 每篇文档开头标注实现状态（`已落地` / `部分落地` / `蓝图`）并指向对应源码与
@@ -53,9 +54,15 @@ apps/
 
 ```bash
 cargo test --workspace          # 全部单元测试与 GPU 集成测试
+cargo run -p showcase           # 组件展台：开窗看全所有图元
+cargo run -p showcase -- --shot shot.png   # 无头出图（同一份场景）
 cargo run -p gallery            # 全链路演示
 cargo run -p gallery -- --kpi   # 附带验收红线报告
 ```
+
+组件展台是引擎的**可视验收台**：窗口一开就能看到圆角矩形、边框、解析阴影、
+描边环、贝塞尔曲线与 MTSDF 字形，`T` 键切换亮暗主题，滚轮缩放，拖拽平移。
+细节见[组件展台文档](docs/06-tooling/showcase.md)。
 
 GPU 集成测试需要一块 Vulkan 1.3 设备；没有设备时相关用例会自行跳过，而不是
 失败。

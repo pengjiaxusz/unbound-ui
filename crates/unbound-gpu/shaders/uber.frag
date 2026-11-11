@@ -44,8 +44,6 @@ layout(location = 0) out vec4 out_color;
 #define FLAG_ELLIPSIS   (1u << 5)
 #define FLAG_SUBPIXEL   (1u << 6)
 
-#define SHADOW_TOKEN 1u
-
 float clip_slot_coverage(vec4 rect, uvec2 radii_packed) {
     vec2 center_rel = v_chunk_base + rect.xy;
     vec2 half_size = rect.zw;
@@ -78,8 +76,12 @@ void main() {
     float opacity = v_opacity;
 
     vec2 size = max(v_size, vec2(1e-4));
-    // Undo the shadow expansion so `p` is the true 0..size box.
-    vec2 p = v_local - vec2(v_border_pad.y);
+    // `v_local` is already the box's own coordinate system: the origin sits on
+    // the box's corner, so the box occupies [0, size] and the expanded quad
+    // reaches out to [-pad, size + pad]. The shadow SDF is therefore evaluated
+    // directly on `v_local` — subtracting the pad again would translate the
+    // whole primitive by the shadow radius.
+    vec2 p = v_local;
     vec2 center = size * 0.5;
     vec2 half_size = center;
 
@@ -140,18 +142,26 @@ void main() {
         float cov = clamp((w - d) / aa + 0.5, 0.0, 1.0);
         surface = vec4(fill.rgb, fill.a * cov);
     } else if (prim_type == PRIM_STROKE) {
+        // A stroke is a border with no fill: the colour lives in the *border*
+        // token and the fill token stays "none", exactly like a rounded
+        // rectangle with a border and no interior.
+        vec4 stroke = theme_color(v_tokens.y);
         float bw = max(v_border_pad.x, 0.5);
         float outer = self_alpha;
         float inner = coverage_from_sd(sd + bw, aa);
         float ring = clamp(outer - inner, 0.0, 1.0);
-        surface = vec4(fill.rgb, fill.a * ring);
+        surface = vec4(stroke.rgb, stroke.a * ring);
     } else if (v_border_pad.x > 0.0) {
         // Filled box with a border: the ring uses the border token, the inner
         // area the fill token, and both share the outer AA coverage.
+        //
+        // The ring is `self_alpha - inner_a`, not `1 - inner_a`: outside the
+        // primitive `inner_a` is zero, so `1 - inner_a` would paint the border
+        // colour over the whole area *around* the box.
         vec4 border = theme_color(v_tokens.y);
         float inner_a = coverage_from_sd(sd + v_border_pad.x, aa);
         float fill_a = surface.a * inner_a;
-        float border_a = border.a * (1.0 - inner_a);
+        float border_a = border.a * max(self_alpha - inner_a, 0.0);
         float a = fill_a + border_a;
         vec3 c = (surface.rgb * fill_a + border.rgb * border_a) / max(a, 1e-5);
         surface = vec4(c, a);

@@ -25,7 +25,7 @@ layout(location = 0) noperspective out vec2 v_local;
 layout(location = 1) noperspective out vec2 v_rel;
 layout(location = 2) flat out vec2 v_size;
 layout(location = 3) flat out vec4 v_radii;
-layout(location = 4) flat out vec2 v_border_pad;
+layout(location = 4) flat out vec2 v_border_pad;  // border width, shadow pad
 layout(location = 5) flat out uvec4 v_tokens;   // fill, border/tex, type|blend|flags, clip
 layout(location = 6) flat out float v_opacity;
 layout(location = 7) flat out float v_shadow;
@@ -124,8 +124,7 @@ void main() {
     v_rel = p_rel;
     v_size = p.size;
     v_radii = unpack_radii(p.radii_packed);
-    v_border_pad = vec2(unpack_border(p.border_and_shadow), pad);
-    v_tokens = uvec4(p.fill, p.border_or_tex, p.type_flags, p.clip_idx);
+    v_border_pad = vec2(unpack_border(p.border_and_shadow), pad);    v_tokens = uvec4(p.fill, p.border_or_tex, p.type_flags, p.clip_idx);
     v_opacity = unpack_opacity(p.z_opacity);
     v_shadow = shadow_blur;
     v_misc = uvec2(p.extra_payload_idx, p.z_opacity >> 16);

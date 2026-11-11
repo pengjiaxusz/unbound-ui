@@ -108,6 +108,8 @@ pub struct Pipelines {
     pub sampler: vk::Sampler,
     pub dummy_r8: DummyTexture,
     pub dummy_rgba: DummyTexture,
+    /// The real bindless atlases. `None` until the renderer installs them.
+    pub atlases: Option<std::sync::Arc<crate::atlas::AtlasSet>>,
 }
 
 impl core::fmt::Debug for Pipelines {
@@ -449,6 +451,7 @@ impl Pipelines {
             sampler,
             dummy_r8,
             dummy_rgba,
+            atlases: None,
         };
         pipelines.bind_dummy_atlases(gpu)?;
 
@@ -486,6 +489,64 @@ impl Pipelines {
         ];
         // SAFETY: descriptors belong to `self.set` and the images are alive.
         unsafe { gpu.device.update_descriptor_sets(&writes, &[]) };
+        Ok(())
+    }
+
+    /// Install the real atlases and rebind the bindless descriptor slots.
+    ///
+    /// Until this is called every slot points at a 1x1 dummy texture, so a
+    /// glyph or image primitive samples nothing. After it, slot `n` of
+    /// binding 0/1 addresses layer `n` of the `R8`/`RGBA8` atlas.
+    ///
+    /// # Errors
+    /// Propagates Vulkan failures.
+    pub fn install_atlases(
+        &mut self,
+        gpu: &Gpu,
+        atlases: std::sync::Arc<crate::atlas::AtlasSet>,
+    ) -> Result<(), GpuError> {
+        let r8: Vec<vk::DescriptorImageInfo> = (0..MAX_ATLAS_LAYERS)
+            .map(|layer| {
+                vk::DescriptorImageInfo::default()
+                    .sampler(self.sampler)
+                    .image_view(
+                        atlases
+                            .r8
+                            .layer_view(layer)
+                            .unwrap_or(self.dummy_r8.view),
+                    )
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            })
+            .collect();
+        let rgba: Vec<vk::DescriptorImageInfo> = (0..MAX_ATLAS_LAYERS)
+            .map(|layer| {
+                vk::DescriptorImageInfo::default()
+                    .sampler(self.sampler)
+                    .image_view(
+                        atlases
+                            .rgba
+                            .layer_view(layer)
+                            .unwrap_or(self.dummy_rgba.view),
+                    )
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            })
+            .collect();
+        let writes = [
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&r8),
+            vk::WriteDescriptorSet::default()
+                .dst_set(self.set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&rgba),
+        ];
+        // SAFETY: the descriptors belong to `self.set` and the images are alive
+        // for as long as the `Arc` is held.
+        unsafe { gpu.device.update_descriptor_sets(&writes, &[]) };
+        self.atlases = Some(atlases);
         Ok(())
     }
 

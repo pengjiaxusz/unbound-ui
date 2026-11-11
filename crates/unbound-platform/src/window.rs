@@ -10,6 +10,12 @@ use crate::latency::LatencyTracker;
 use crate::pacing::{FramePacer, PresentWaitPolicy};
 use crate::resize::{Extent, ResizeAction, ResizeTracker};
 
+/// How many device pixels one "line" of mouse-wheel travel is worth.
+///
+/// Windows reports wheel movement in pixels while most other platforms report
+/// it in lines; the conversion keeps the engine's unit platform-independent.
+const PIXELS_PER_LINE: f64 = 40.0;
+
 /// Configuration of the platform window.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowConfig {
@@ -93,6 +99,14 @@ pub enum PlatformEvent {
     MouseInput {
         state: ButtonState,
         button: MouseButton,
+    },
+    /// The mouse wheel turned, in logical lines.
+    ///
+    /// Windows reports pixel deltas; they are converted to lines here so the
+    /// engine never has to know about the platform's scroll granularity.
+    MouseWheel {
+        delta_x: f64,
+        delta_y: f64,
     },
     /// A key changed state.
     KeyInput {
@@ -198,6 +212,17 @@ pub fn translate_window_event(event: &winit::event::WindowEvent) -> Option<Platf
                 _ => MouseButton::Other(u16::MAX),
             },
         },
+        WindowEvent::MouseWheel { delta, .. } => {
+            // Windows reports pixel deltas, most other platforms report lines.
+            // Both are normalised to lines so the engine sees one unit.
+            let (x, y) = match delta {
+                winit::event::MouseScrollDelta::LineDelta(x, y) => (f64::from(*x), f64::from(*y)),
+                winit::event::MouseScrollDelta::PixelDelta(position) => {
+                    (position.x / PIXELS_PER_LINE, position.y / PIXELS_PER_LINE)
+                }
+            };
+            PlatformEvent::MouseWheel { delta_x: x, delta_y: y }
+        }
         WindowEvent::KeyboardInput { event, .. } => PlatformEvent::KeyInput {
             state: match event.state {
                 ElementState::Pressed => ButtonState::Pressed,
@@ -288,6 +313,7 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
         PlatformEvent::CursorMoved { .. }
         | PlatformEvent::PointerRaw { .. }
         | PlatformEvent::MouseInput { .. }
+        | PlatformEvent::MouseWheel { .. }
         | PlatformEvent::KeyInput { .. } => {
             // Anything the user did invalidates the pending frame.
             state.latency.on_input(now);

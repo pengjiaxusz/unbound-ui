@@ -328,15 +328,16 @@ impl GlyphCache {
             }
         };
 
-        // The UV rect must cover the *glyph*, not the padded allocation: the
-        // padding exists so bilinear taps never sample the neighbour.
+        // The UV rect must cover the *whole padded allocation*, because that
+        // is what the quad's size says. The quad is `w + 2·pad` wide and the
+        // padding is what keeps a bilinear tap from reaching the neighbouring
+        // glyph, so both the quad and the UV have to include it.
         let sz = self.atlas.r8.page_size() as f32;
-        let inset = pad as f32;
         resolved.slot.uv = [
-            (resolved.slot.x as f32 + inset) / sz,
-            (resolved.slot.y as f32 + inset) / sz,
-            (resolved.slot.x as f32 + inset + w as f32) / sz,
-            (resolved.slot.y as f32 + inset + h as f32) / sz,
+            resolved.slot.x as f32 / sz,
+            resolved.slot.y as f32 / sz,
+            (resolved.slot.x + resolved.slot.w) as f32 / sz,
+            (resolved.slot.y + resolved.slot.h) as f32 / sz,
         ];
 
         self.resolved.insert(key, resolved);

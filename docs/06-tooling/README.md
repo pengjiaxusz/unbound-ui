@@ -7,8 +7,10 @@
 | [热重载与状态迁移](hot-reload.md) | C-ABI 隔离、分配器劫持、双模迁移 | `已落地` |
 | [异步资源流送](asset-streaming.md) | 后台解码、暂存环、传输队列交接 | `已落地` |
 | [调试与安全工具链](debugging.md) | RenderDoc 钩子、VVL 断言 | `已落地` |
+| [组件展台](showcase.md) | 开窗看全所有图元、主题切换、无头出图 | `已落地` |
 
-相关 crate：`unbound-host`、`unbound-asset`、`unbound-gpu/src/debug.rs`。
+相关 crate：`unbound-host`、`unbound-asset`、`unbound-gpu/src/debug.rs`、
+`apps/showcase`。
 
 ---
 

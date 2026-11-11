@@ -21,6 +21,7 @@ members = [
     "crates/app-guest",
     "crates/unbound-kpi",
     "apps/gallery",
+    "apps/showcase",
 ]
 
 [workspace.package]

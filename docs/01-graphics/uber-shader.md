@@ -6,7 +6,7 @@
 > | :--- | :--- |
 > | **源码** | `crates/unbound-gpu/src/pipeline.rs`、`crates/unbound-gpu/shaders/uber.{vert,frag}`、`opaque_core.{vert,frag}` |
 > | **关键类型** | `Pipelines::uber`、`Pipelines::opaque_core`、`PrimType` |
-> | **测试** | `crates/unbound-gpu/src/frame.rs` 的单四边形像素断言 |
+> | **测试** | `crates/unbound-gpu/src/frame.rs` 的单四边形像素断言；`apps/showcase` 的整屏出图 |
 
 为彻底消除管线状态切换（PSO Switch）并同时获得硬件 Early-Z 遮挡剔除与完美的
 半透明边缘混合，渲染管线采用 **Uber-Shader 单一管线 + 不透明内核预剔除双通道
@@ -40,6 +40,16 @@
 生成纯不透明内核矩形（Opaque Core）。按**从前向后**顺序仅向 Depth Buffer
 （采用 Reverse-Z，`VK_COMPARE_OP_GREATER_OR_EQUAL`）写入深度值，不输出颜色，
 极速建立硬件遮挡掩码。
+
+内核矩形由**预通道顶点着色器**现场算出，规则有两条，缺一不可：
+
+| 规则 | 内容 | 不这么做会怎样 |
+| :--- | :--- | :--- |
+| 只有不透明容器有内核 | 圆角矩形、图元不透明度为 1、主题填充色的 alpha 为 1、未被裁剪、面积不小于 64×64 | 半透明图元也会写深度，它**背后**的不透明像素会被深度测试拒绝，画家算法直接失效 |
+| 内核 = 盒子按最大圆角半径 $R$ 向内收缩 | 圆角外沿不进入深度缓冲 | 圆角边缘的抗锯齿混合被深度测试挡掉 |
+
+不满足条件的图元在预通道里退化为一个退化四边形，**不产生任何片元**，因此
+不写深度。uber 通道随后仍然完整地绘制它们。
 
 ### Pass B — Unified Uber-Shader Pass（从后向前）
 

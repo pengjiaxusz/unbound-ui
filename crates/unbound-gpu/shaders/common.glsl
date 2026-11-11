@@ -37,12 +37,18 @@
 // Theme LUT slot 0 is always fully transparent so "no colour" is free.
 #define TOKEN_NONE 0u
 
+// Theme LUT slot 1 holds the shadow colour. The shadow is a *theme* concept
+// — every primitive shares it — so it lives in a fixed slot rather than in a
+// per-primitive field, and the slot index is part of the engine's contract
+// with whoever fills the LUT.
+#define SHADOW_TOKEN 1u
+
 struct Prim {
     ivec2 chunk_id;          //  0
     vec2  local_pos;         //  8
     vec2  size;              // 16
     uvec2 radii_packed;      // 24 (4 × f16)
-    uint  border_and_shadow; // 32 (u16 border | u16 shadow)
+    uint  border_and_shadow; // 32 (u16 border in the low half | u16 shadow in the high half)
     uint  transform_idx;     // 36
     uint  clip_idx;          // 40
     uint  fill;              // 44
@@ -135,6 +141,13 @@ vec4 unpack_radii(uvec2 packed) {
     return vec4(unpackHalf2x16(packed.x), unpackHalf2x16(packed.y));
 }
 
+// `border_and_shadow` packs the border width in the *low* half and the
+// shadow blur in the high half, matching the Rust struct layout
+// (`border_width: u16` at offset 32, then `shadow_blur: u16` at offset 34).
+//
+// `unpackHalf2x16` returns the 16 *least*-significant bits in `.x` and the
+// 16 most-significant bits in `.y` (GLSL 4.x reference / SPIR-V
+// `GLSL.std.450` §UnpackHalf2x16), so the two map straight across.
 float unpack_border(uint v) {
     return unpackHalf2x16(v).x;
 }
