@@ -15,6 +15,10 @@ use unbound_gpu::data::PrimType;
 use unbound_headless::Harness;
 use unbound_input::{HitRegion, PointerConfig, PointerEvent, Router};
 use unbound_math::Vec2;
+use unbound_platform::{
+    apply, ButtonState, Extent, MouseButton, PlatformEvent, PlatformState, PresentWaitPolicy,
+    WindowConfig,
+};
 use unbound_text::GlyphQuad;
 use unbound_world::{NodeId, UiWorld};
 
@@ -228,6 +232,91 @@ fn the_semantics_tree_exposes_a_button() {
     // The label quads are laid out inside the button; the headless frame uses
     // them for the text-clipping check.
     assert!(!glyphs.is_empty());
+}
+
+/// Drive the exact window pipeline without a window: a platform event must be
+/// forwarded, reach the router in canvas coordinates, synthesize a click, and
+/// make the next scene carry the incremented label.
+///
+/// This is the regression test for the bug where the platform layer consumed
+/// every input event after only updating its latency clock, leaving the whole
+/// showcase inert.
+#[test]
+fn a_platform_click_activates_the_button() {
+    use std::time::Instant;
+
+    let mut fixture = Fixture::new();
+    let mut state = PlatformState::new(
+        &WindowConfig::default(),
+        Extent::new(WIDTH as u32, HEIGHT as u32),
+        PresentWaitPolicy::from_extensions(&[]),
+    );
+    let now = Instant::now();
+    let centre = fixture.desc.rect.center();
+
+    // ---- hover ----------------------------------------------------------
+    let forwarded = apply(
+        &mut state,
+        &PlatformEvent::CursorMoved {
+            x: f64::from(centre.x),
+            y: f64::from(centre.y),
+        },
+        now,
+    );
+    let [PlatformEvent::CursorMoved { x, y }] = forwarded.as_slice() else {
+        panic!("the cursor must reach the application, got {forwarded:?}");
+    };
+    fixture.router.pointer_move(Vec2::new(*x as f32, *y as f32));
+    assert_eq!(fixture.visual(None).phase, PointerPhase::Hovered);
+
+    // ---- press ----------------------------------------------------------
+    let forwarded = apply(
+        &mut state,
+        &PlatformEvent::MouseInput {
+            state: ButtonState::Pressed,
+            button: MouseButton::Left,
+        },
+        now,
+    );
+    assert!(
+        matches!(forwarded.as_slice(), [PlatformEvent::MouseInput { .. }]),
+        "the press must reach the application, got {forwarded:?}"
+    );
+    fixture.router.pointer_down(centre, 0.0);
+    assert_eq!(fixture.visual(None).phase, PointerPhase::Pressed);
+
+    // ---- release --------------------------------------------------------
+    let forwarded = apply(
+        &mut state,
+        &PlatformEvent::MouseInput {
+            state: ButtonState::Released,
+            button: MouseButton::Left,
+        },
+        now,
+    );
+    assert!(
+        matches!(forwarded.as_slice(), [PlatformEvent::MouseInput { .. }]),
+        "the release must reach the application, got {forwarded:?}"
+    );
+    let clicks = fixture
+        .router
+        .pointer_up(centre, 0.1)
+        .into_iter()
+        .filter(|event| {
+            matches!(event, PointerEvent::Click { target, .. } if *target == fixture.node())
+        })
+        .count();
+    assert_eq!(clicks, 1, "one press/release pair must synthesize one click");
+    assert_eq!(
+        fixture.visual(None).phase,
+        PointerPhase::Hovered,
+        "the pointer still rests on the button after the click"
+    );
+
+    // ---- the next scene labels itself with the new count ----------------
+    let (_, glyphs, _, semantics) = fixture.scene(ButtonVisualState::default(), 1);
+    assert_eq!(semantics.get(fixture.node()).unwrap().label, "Clicked: 1");
+    assert!(!glyphs.is_empty(), "the new label must be laid out");
 }
 
 #[test]
