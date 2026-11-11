@@ -197,6 +197,14 @@ pub struct Renderer {
     /// The image handle is needed because only the *image* can be layout
     /// transitioned — a view carries no layout.
     external_color: Option<(vk::Image, vk::ImageView, u32, u32)>,
+    /// Whether the borrowed image is a swapchain image that must be handed to
+    /// the presentation engine in `PRESENT_SRC_KHR`.
+    ///
+    /// A presentable image presented straight out of
+    /// `COLOR_ATTACHMENT_OPTIMAL` is invalid
+    /// (VUID-VkPresentInfoKHR-pImageIndices-01430); the offscreen path and the
+    /// borrowed-attachment test keep the attachment layout instead.
+    external_present: bool,
     /// The semaphore that is signalled once the borrowed image is ready.
     ///
     /// The render submission waits on it before it touches the image.
@@ -495,6 +503,7 @@ impl Renderer {
             staging_patches: Vec::new(),
             atlases: None,
             external_color: None,
+            external_present: false,
             external_ready: vk::Semaphore::null(),
             present_semaphore,
         };
@@ -995,6 +1004,30 @@ impl Renderer {
         self.record_graphics(cmd, scene);
         self.end_rendering(cmd);
 
+        // A swapchain image must be handed to the presentation engine in
+        // `PRESENT_SRC_KHR`; leaving it in `COLOR_ATTACHMENT_OPTIMAL` makes
+        // every `vkQueuePresentKHR` a validation error.
+        if let (true, Some((image, _, _, _))) = (self.external_present, self.external_color) {
+            let to_present = [image_barrier(
+                image,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                vk::ImageLayout::PRESENT_SRC_KHR,
+                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
+                vk::AccessFlags2::NONE,
+                false,
+            )];
+            // SAFETY: recording into our own command buffer; the image was
+            // just drawn into and is exclusively owned until present.
+            unsafe {
+                self.gpu.device.cmd_pipeline_barrier2(
+                    cmd,
+                    &vk::DependencyInfo::default().image_memory_barriers(&to_present),
+                );
+            }
+        }
+
         self.mark(cmd, 5, vk::PipelineStageFlags::BOTTOM_OF_PIPE);
 
         Ok(())
@@ -1094,11 +1127,65 @@ impl Renderer {
         height: u32,
         image_available: vk::Semaphore,
     ) -> Result<FrameStats, GpuError> {
+        self.render_external(
+            scene,
+            color_image,
+            color_view,
+            width,
+            height,
+            image_available,
+            false,
+        )
+    }
+
+    /// Render one frame into a swapchain image and hand it back ready to
+    /// present.
+    ///
+    /// Same as [`Self::render_to_view`], except that the image is transitioned
+    /// to `VK_IMAGE_LAYOUT_PRESENT_SRC_KHR` after the draw: presenting an image
+    /// that is still in `COLOR_ATTACHMENT_OPTIMAL` is invalid and shows up as
+    /// a validation error on every frame.
+    ///
+    /// # Errors
+    /// Propagates Vulkan failures.
+    pub fn render_to_swapchain(
+        &mut self,
+        scene: &SceneUpload<'_>,
+        color_image: vk::Image,
+        color_view: vk::ImageView,
+        width: u32,
+        height: u32,
+        image_available: vk::Semaphore,
+    ) -> Result<FrameStats, GpuError> {
+        self.render_external(
+            scene,
+            color_image,
+            color_view,
+            width,
+            height,
+            image_available,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_external(
+        &mut self,
+        scene: &SceneUpload<'_>,
+        color_image: vk::Image,
+        color_view: vk::ImageView,
+        width: u32,
+        height: u32,
+        image_available: vk::Semaphore,
+        present: bool,
+    ) -> Result<FrameStats, GpuError> {
         self.external_color = Some((color_image, color_view, width, height));
         self.external_ready = image_available;
+        self.external_present = present;
         let result = self.render(scene);
         self.external_color = None;
         self.external_ready = vk::Semaphore::null();
+        self.external_present = false;
         result
     }
 
@@ -1359,6 +1446,13 @@ impl Renderer {
                 Some((_, view, _, _)) => view,
                 None => self.target.color_view,
             };
+            // The render area follows the borrowed attachment; using the
+            // renderer's own extent during a swapchain commit race would clip
+            // or overrun the presentation image.
+            let (area_width, area_height) = match self.external_color {
+                Some((_, _, w, h)) => (w, h),
+                None => (self.target.width, self.target.height),
+            };
             let color_attachment = [vk::RenderingAttachmentInfo::default()
                 .image_view(color_view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -1374,8 +1468,8 @@ impl Renderer {
             let area = vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: vk::Extent2D {
-                    width: self.target.width,
-                    height: self.target.height,
+                    width: area_width,
+                    height: area_height,
                 },
             };
             device.cmd_begin_rendering(

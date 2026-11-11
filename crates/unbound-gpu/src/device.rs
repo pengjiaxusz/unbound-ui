@@ -359,6 +359,32 @@ impl core::fmt::Debug for Gpu {
     }
 }
 
+/// Resolve the instance-extension dependencies of the requested device
+/// extensions.
+///
+/// `VK_EXT_swapchain_maintenance1` is a device extension, but it depends on
+/// the *instance* extensions `VK_EXT_surface_maintenance1`, which in turn
+/// requires `VK_KHR_get_surface_capabilities2`. Enabling a dependency without
+/// its own dependencies makes `vkCreateInstance` invalid
+/// (VUID-vkCreateInstance-ppEnabledExtensionNames-01388), and the instance has
+/// to be created before the device can be — so the chain is resolved here.
+fn resolve_surface_maintenance(instance_exts: &mut Vec<String>, device_exts: &[String]) {
+    let needs_maintenance = device_exts
+        .iter()
+        .any(|e| e == "VK_EXT_swapchain_maintenance1");
+    if !needs_maintenance {
+        return;
+    }
+    for extension in [
+        "VK_KHR_get_surface_capabilities2",
+        "VK_EXT_surface_maintenance1",
+    ] {
+        if !instance_exts.iter().any(|e| e == extension) {
+            instance_exts.push(extension.to_string());
+        }
+    }
+}
+
 fn cstrings(list: &[String]) -> Vec<std::ffi::CString> {
     list.iter()
         .filter_map(|s| std::ffi::CString::new(s.as_str()).ok())
@@ -407,22 +433,7 @@ impl Gpu {
         if enable_validation {
             instance_exts.push("VK_EXT_debug_utils".to_string());
         }
-        // `VK_EXT_swapchain_maintenance1` is a device extension, but it
-        // depends on the *instance* extension `VK_EXT_surface_maintenance1`.
-        // Enabling it without the dependency makes `vkCreateDevice` invalid
-        // (VUID-vkCreateDevice-ppEnabledExtensionNames-01387), and the
-        // instance has to be created before the device can be — so the
-        // dependency is resolved here.
-        if config
-            .device_extensions
-            .iter()
-            .any(|e| e == "VK_EXT_swapchain_maintenance1")
-            && !instance_exts
-                .iter()
-                .any(|e| e == "VK_EXT_surface_maintenance1")
-        {
-            instance_exts.push("VK_EXT_surface_maintenance1".to_string());
-        }
+        resolve_surface_maintenance(&mut instance_exts, &config.device_extensions);
         let ext_cstrings = cstrings(&instance_exts);
         let ext_ptrs = raw_ptrs(&ext_cstrings);
 
@@ -1277,6 +1288,30 @@ pub fn test_device() -> Option<Gpu> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_surface_maintenance_dependency_chain_is_complete() {
+        let mut extensions = vec!["VK_KHR_surface".to_string()];
+        resolve_surface_maintenance(
+            &mut extensions,
+            &["VK_EXT_swapchain_maintenance1".to_string()],
+        );
+        assert!(extensions.iter().any(|e| e == "VK_KHR_get_surface_capabilities2"));
+        assert!(extensions.iter().any(|e| e == "VK_EXT_surface_maintenance1"));
+
+        // A second pass must not duplicate anything.
+        let before = extensions.len();
+        resolve_surface_maintenance(
+            &mut extensions,
+            &["VK_EXT_swapchain_maintenance1".to_string()],
+        );
+        assert_eq!(extensions.len(), before);
+
+        // Without the device extension the instance list stays untouched.
+        let mut plain = vec!["VK_KHR_surface".to_string()];
+        resolve_surface_maintenance(&mut plain, &["VK_KHR_swapchain".to_string()]);
+        assert_eq!(plain, vec!["VK_KHR_surface".to_string()]);
+    }
 
     #[test]
     fn required_feature_list_is_stable() {
