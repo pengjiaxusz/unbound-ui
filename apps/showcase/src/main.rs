@@ -1,26 +1,36 @@
 //! The windowed component gallery.
 //!
 //! Run it with `cargo run -p showcase`. A window opens showing every
-//! primitive type the engine can draw; the keyboard toggles the theme and the
-//! mouse pans and zooms the canvas.
+//! primitive type the engine can draw; the keyboard toggles the theme, the
+//! mouse pans and zooms the canvas, and the button in the "Button" card is the
+//! first fully interactive widget: hover, press, click, focus and keyboard
+//! activation all go through `unbound-input`.
 //!
 //! This is the visible counterpart of `apps/gallery`: the gallery prints
 //! measurements, the showcase shows them.
 
+use showcase::button::{self, ButtonDesc, ButtonVisualState};
 use showcase::gallery;
 
 use std::sync::Arc;
 use std::time::Instant;
 
+use unbound_a11y::Semantics;
 use unbound_gpu::atlas::{AtlasKind, AtlasSet, AtlasUpload};
 use unbound_gpu::device::{Gpu, GpuConfig};
 use unbound_gpu::surface::{Surface, Swapchain};
 use unbound_gpu::swapchain::PresentConfig;
 use unbound_gpu::Renderer;
+use unbound_input::{CursorKind, PointerConfig, PointerEvent, Router};
+use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
-use unbound_platform::window::{ButtonState, MouseButton, PlatformEvent, PlatformState, WindowConfig};
+use unbound_platform::window::{
+    ButtonState, MouseButton, PlatformEvent, PlatformKey, PlatformState, WindowConfig,
+};
+use unbound_world::{NodeId, UiWorld};
+use winit::window::Window;
 
-use gallery::{build, palette, theme_table, Gallery, Labels};
+use gallery::{build, build_interactive, palette, theme_table, Gallery, Labels};
 
 /// The window title.
 const TITLE: &str = "Unbound UI — 组件展台";
@@ -42,14 +52,34 @@ struct Showcase {
     labels: Labels,
     /// The current scene.
     scene: Gallery,
+    /// The button's stable identity, allocated by `unbound-world`.
+    button: NodeId,
+    /// The pointer router: hover, capture and click synthesis.
+    router: Router,
+    /// The focused node, if any.
+    focused: Option<NodeId>,
+    /// The visual state that is currently baked into the scene.
+    visual: ButtonVisualState,
+    /// How many times the button was activated.
+    click_count: u32,
+    /// The click count baked into the current scene.
+    rendered_clicks: u32,
+    /// The semantic tree built with the current scene.
+    semantics: Option<Semantics>,
+    /// The last screen-space pointer position.
+    pointer: Option<[f32; 2]>,
+    /// Whether the left button currently pans the canvas.
+    canvas_dragging: bool,
+    /// The cursor currently applied to the window.
+    cursor: CursorKind,
+    /// The time origin for pointer timing.
+    clock: Instant,
     /// Whether the dark theme is active.
     dark: bool,
     /// The canvas zoom.
     zoom: f32,
     /// The canvas pan, in logical pixels.
     pan: [f32; 2],
-    /// Whether the left button is held.
-    dragging: bool,
     /// The pointer position at the start of a drag.
     drag_origin: [f32; 2],
     /// The pan at the start of a drag.
@@ -63,6 +93,12 @@ struct Showcase {
 impl Showcase {
     /// Create the application.
     fn new() -> Self {
+        // The world is the identity allocator; the `NodeId` it hands out is
+        // what the router, the hit region and the semantic tree share. The
+        // demo keeps no mutable widget state of its own beyond the click
+        // count — hover and press are derived from the router.
+        let mut world = UiWorld::new();
+        let button = button::insert_button(&mut world, gallery::button_rect());
         Self {
             renderer: None,
             surface: None,
@@ -70,10 +106,20 @@ impl Showcase {
             atlases: None,
             labels: Labels::new(),
             scene: Gallery::default(),
+            button,
+            router: Router::new(PointerConfig::default()),
+            focused: None,
+            visual: ButtonVisualState::default(),
+            click_count: 0,
+            rendered_clicks: 0,
+            semantics: None,
+            pointer: None,
+            canvas_dragging: false,
+            cursor: CursorKind::Default,
+            clock: Instant::now(),
             dark: false,
             zoom: 1.0,
             pan: [0.0, 0.0],
-            dragging: false,
             drag_origin: [0.0, 0.0],
             pan_origin: [0.0, 0.0],
             generation: 0,
@@ -82,11 +128,150 @@ impl Showcase {
     }
 
     /// Rebuild the scene and push the new glyphs into the atlas.
+    ///
+    /// Only called on a discrete state transition (or a resize): panning,
+    /// zooming and theme switches never get here.
     fn rebuild(&mut self, viewport: (f32, f32)) {
-        let (scene, _) = build(&mut self.labels, &gallery::palette(), viewport);
+        let desc = ButtonDesc::new(
+            gallery::button_rect(),
+            format!("Clicked: {}", self.click_count),
+        );
+        let (scene, _, regions, mut semantics) = build_interactive(
+            &mut self.labels,
+            &palette(),
+            viewport,
+            &desc,
+            button::node_u64(self.button),
+            self.visual,
+            self.click_count,
+        );
         self.scene = scene;
+        self.router.set_regions(regions);
+        if let Some(focused) = self.focused {
+            semantics.set_focus(button::node_u64(focused));
+        }
+        self.semantics = Some(semantics);
+        self.rendered_clicks = self.click_count;
         self.generation = self.generation.wrapping_add(1);
         self.upload_glyphs();
+    }
+
+    /// Move keyboard focus and mirror it into the semantic tree.
+    fn set_focus(&mut self, node: Option<NodeId>) {
+        self.focused = node;
+        if let Some(semantics) = &mut self.semantics {
+            let target = node.map_or(semantics.root(), button::node_u64);
+            semantics.set_focus(target);
+        }
+    }
+
+    /// Activate the button: the only business state the demo owns.
+    fn activate(&mut self) {
+        self.click_count = self.click_count.wrapping_add(1);
+    }
+
+    /// Map a window position (physical pixels) to canvas coordinates.
+    ///
+    /// The shader maps `screen = (world - anchor) * zoom + viewport / 2`, so
+    /// the inverse is `world = (screen - viewport / 2) / zoom + anchor`. Doing
+    /// this before feeding the router is what keeps the button's hit region
+    /// glued to its pixels after any pan or zoom.
+    fn canvas_position(&self, x: f32, y: f32, window: &Window) -> Vec2 {
+        let size = window.inner_size();
+        let (width, height) = (size.width.max(1) as f32, size.height.max(1) as f32);
+        let zoom = self.zoom.clamp(0.25, 8.0);
+        let anchor = [
+            width * 0.5 - self.pan[0] / zoom,
+            height * 0.5 - self.pan[1] / zoom,
+        ];
+        Vec2::new(
+            (x - width * 0.5) / zoom + anchor[0],
+            (y - height * 0.5) / zoom + anchor[1],
+        )
+    }
+
+    /// Route keyboard input.
+    ///
+    /// `T` always switches the theme. `Space` activates the focused button and
+    /// otherwise keeps its old "switch theme" meaning; `Enter` activates the
+    /// focused button; `Tab` focuses it and `Escape` clears focus.
+    fn on_key(&mut self, key: PlatformKey) {
+        match key {
+            PlatformKey::Character(text) if text.eq_ignore_ascii_case("t") => self.toggle_theme(),
+            PlatformKey::Named(name) if name.eq_ignore_ascii_case("tab") => {
+                self.set_focus(Some(self.button));
+            }
+            PlatformKey::Named(name) if name.eq_ignore_ascii_case("escape") => self.set_focus(None),
+            PlatformKey::Named(name) if name.eq_ignore_ascii_case("enter") => {
+                if self.focused.is_some() {
+                    self.activate();
+                }
+            }
+            PlatformKey::Named(name) if name.eq_ignore_ascii_case("space") => {
+                if self.focused.is_some() {
+                    self.activate();
+                } else {
+                    self.toggle_theme();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Pointer arbitration: a hit on the button beats panning the canvas.
+    fn on_left_button(&mut self, pressed: bool, window: &Window) {
+        let Some([x, y]) = self.pointer else {
+            return;
+        };
+        let position = self.canvas_position(x, y, window);
+        let now = self.clock.elapsed().as_secs_f64();
+        let button = button::node_u64(self.button);
+        if pressed {
+            self.router.pointer_down(position, now);
+            if self.router.pointer().pressed() == Some(button) {
+                // The router captured the pointer: this is a click, not a pan.
+                self.set_focus(Some(self.button));
+                self.canvas_dragging = false;
+            } else {
+                self.canvas_dragging = true;
+                self.drag_origin = [x, y];
+                self.pan_origin = self.pan;
+            }
+        } else {
+            for event in self.router.pointer_up(position, now) {
+                if matches!(event, PointerEvent::Click { target, .. } if target == button) {
+                    self.activate();
+                }
+            }
+            self.canvas_dragging = false;
+        }
+    }
+
+    /// Route pointer movement.
+    fn on_cursor_moved(&mut self, x: f32, y: f32, window: &Window) {
+        self.pointer = Some([x, y]);
+        if self.canvas_dragging {
+            let dx = x - self.drag_origin[0];
+            let dy = y - self.drag_origin[1];
+            self.pan = [self.pan_origin[0] + dx, self.pan_origin[1] + dy];
+        } else {
+            // Only the inverse-transformed point may enter the router.
+            let position = self.canvas_position(x, y, window);
+            self.router.pointer_move(position);
+        }
+    }
+
+    /// Push the resolved cursor to the window, but only when it changes.
+    fn apply_cursor(&mut self, window: &Window) {
+        let kind = if self.canvas_dragging {
+            CursorKind::Grabbing
+        } else {
+            self.router.cursor()
+        };
+        if kind != self.cursor {
+            self.cursor = kind;
+            window.set_cursor(cursor_icon(kind));
+        }
     }
 
     /// Upload the pending atlas updates.
@@ -134,6 +319,25 @@ impl Showcase {
             let table = theme_table(self.dark);
             let _ = renderer.write_theme(&table);
         }
+    }
+}
+
+/// Map an engine cursor to a winit one.
+fn cursor_icon(kind: CursorKind) -> winit::window::CursorIcon {
+    use winit::window::CursorIcon as Icon;
+    match kind {
+        CursorKind::Pointer => Icon::Pointer,
+        CursorKind::Text => Icon::Text,
+        CursorKind::Grab => Icon::Grab,
+        CursorKind::Grabbing => Icon::Grabbing,
+        CursorKind::Crosshair => Icon::Crosshair,
+        CursorKind::Move => Icon::Move,
+        CursorKind::ResizeNorthSouth => Icon::NsResize,
+        CursorKind::ResizeEastWest => Icon::EwResize,
+        CursorKind::ResizeNorthWestSouthEast => Icon::NwseResize,
+        CursorKind::ResizeNorthEastSouthWest => Icon::NeswResize,
+        CursorKind::NotAllowed => Icon::NotAllowed,
+        CursorKind::Default | CursorKind::Custom(_) => Icon::Default,
     }
 }
 
@@ -234,40 +438,23 @@ impl PlatformApp for Showcase {
     fn event(
         &mut self,
         _state: &mut PlatformState,
-        _window: &winit::window::Window,
+        window: &winit::window::Window,
         event: PlatformEvent,
     ) -> Flow {
         match event {
-            PlatformEvent::KeyInput { state, key, .. } => {
-                if state == ButtonState::Pressed {
-                    match key {
-                        unbound_platform::window::PlatformKey::Character(text)
-                            if text.eq_ignore_ascii_case("t") =>
-                        {
-                            self.toggle_theme();
-                        }
-                        unbound_platform::window::PlatformKey::Named(name)
-                            if name.eq_ignore_ascii_case("space") =>
-                        {
-                            self.toggle_theme();
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            PlatformEvent::MouseInput { state, button } => {
-                if button == MouseButton::Left {
-                    self.dragging = state == ButtonState::Pressed;
-                }
+            PlatformEvent::KeyInput {
+                state: ButtonState::Pressed,
+                key,
+                repeat: false,
+            } => self.on_key(key),
+            PlatformEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+            } => {
+                self.on_left_button(state == ButtonState::Pressed, window);
             }
             PlatformEvent::CursorMoved { x, y } => {
-                if self.dragging {
-                    let dx = x as f32 - self.drag_origin[0];
-                    let dy = y as f32 - self.drag_origin[1];
-                    self.pan = [self.pan_origin[0] + dx, self.pan_origin[1] + dy];
-                } else {
-                    self.drag_origin = [x as f32, y as f32];
-                }
+                self.on_cursor_moved(x as f32, y as f32, window);
             }
             PlatformEvent::MouseWheel { delta_y, .. } => {
                 // One notch up zooms in. The zoom is clamped so the gallery
@@ -278,6 +465,7 @@ impl PlatformApp for Showcase {
             PlatformEvent::CloseRequested => return Flow::Exit,
             _ => {}
         }
+        self.apply_cursor(window);
         Flow::Continue
     }
 
@@ -312,6 +500,17 @@ impl PlatformApp for Showcase {
                 // The scene is laid out for the new extent.
                 self.rebuild((width as f32, height as f32));
             }
+        }
+
+        // Hover / press / focus / click are re-derived every frame, but the
+        // scene is only rebuilt on a discrete transition. Moving the mouse
+        // inside the button, panning, zooming and switching themes all leave
+        // `generation` untouched, so they upload no primitive bytes.
+        let visual = ButtonVisualState::resolve(self.button, &self.router, self.focused, false);
+        if visual != self.visual || self.click_count != self.rendered_clicks {
+            self.visual = visual;
+            self.rebuild((window_width as f32, window_height as f32));
+            self.apply_cursor(window);
         }
 
         let Some(renderer) = &mut self.renderer else {
