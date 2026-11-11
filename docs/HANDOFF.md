@@ -43,6 +43,7 @@ just q-run cargo run -p gallery -- --kpi                 # 六项 KPI 红线
 | `4c9803c` | 选区边界、吸附排序、样式哈希、IME 锚点 |
 | `e6239e1` | 去掉多余的 `mut` 限定 |
 | 本次提交 | **ABI v4 改造**（见 §1.2） |
+| 本次提交 | **度量尺子审计**（见 §1.3） |
 
 这批提交对应的每个缺陷都**先写了会失败的回归测试**，再改实现。
 
@@ -113,6 +114,57 @@ just q-run cargo run -p gallery -- --kpi
 
 ---
 
+## 1.3 度量尺子审计（本次提交，已完成）
+
+审计了 `unbound-kpi`（六项 KPI 红线的计量代码）与 `unbound-headless`（无头验证器）
+这两个**从未被审过**的 crate——过去 7 轮缺陷审计只覆盖了 7 个 crate，另外 11 个没审。
+
+### 修掉的 3 个问题
+
+1. **畸形快照的 id 让恢复路径 panic（严重）**。
+   `Frame` 用 `index[id - 1]` 定位节点，而快照要过网络，id 是**发送方说了算**的：
+
+   - id 为 `0` → 减一在零上**溢出 panic**（`attempt to subtract with overflow`）；
+   - id 为 `u64::MAX` → 索引**按 id 本身分配**，`capacity overflow`；
+   - id 重复 → 两个节点别名到同一槽位。
+
+   `Frame::rebuild_index` 现在只对**密集 id**（构建器产出的 `1..=n`）走 `Vec` 快路径，
+   其余回退到有序 `(id, position)` 表。体检器在百万次调用里查节点，快路径不能退化。
+
+2. **KPI 报告里的数字不是测出来的**。
+   - `layout_boundary` 的 `"9 re-solved"` 是**写死的字符串**——边界变大或引擎重排整棵树，
+     报告里的数字都不变。现在读 `LayoutStats::nodes_visited`。
+   - `theme_lut` 报的是三次切换里**最快**的那次（`observed.min(...)`），等于用最好情况
+     当成绩。现在报中位数。
+   - `headless_verification` 取的是**单次**采样（`report.elapsed_us()`），
+     共享机器上单次采样测的是调度器给了什么。现在也取中位数。
+
+3. **报告数字无法复算**。`Measurement` 新增 `samples` 字段保留原始采样，
+   `observed_us` 恒为这些采样的中位数——评审者可以自己复算。
+
+另外：`pick` / `snap_against_tree` 的结果改用 `black_box` 消费，
+避免纯函数调用在 release 下被整个优化掉（那样这条 KPI 测的是"什么都没做"）。
+
+### 验证结果
+
+```
+just test        → 606 passed，0 failed（比审计前多 11 个回归测试）
+just check       → exit 0，零告警
+showcase 出图     → 与 docs/assets/showcase-light.png 字节一致
+gallery --kpi   → 六项 KPI 全部 ok；"9 re-solved" 现在是实测值
+```
+
+### 仍然成立的事实（供交叉核对）
+
+- `unbound-headless` 的 `FrameBuilder` **只被测试和 `apps/gallery` 使用**，
+  真正的渲染管线还没接进体检器——所以 `set_clip` 只在测试里被调用是**现状**，不是缺陷。
+- 六项 KPI 的**计量代码**在 `crates/unbound-kpi/src/lib.rs`，
+  它量的是 `unbound-canvas`（已审）、`unbound-layout`（未审）、
+  `unbound-world`（未审）、`unbound-theme`（未审）、`unbound-headless`（本轮已审）。
+  剩下的 `unbound-layout` / `unbound-world` / `unbound-theme` 仍待审计。
+
+---
+
 ## 2. 剩余待办（按优先级）
 
 ### 2.1 中：迁移格式仍是位置式，`postcard` 不支持"加字段不丢数据"
@@ -146,7 +198,6 @@ just q-run cargo run -p gallery -- --kpi
 成员，任何尺寸检查都拦不住——这才是版本号必须 bump 的原因（已在代码注释里写明）。
 
 ### 2.4 低：`cargo fmt --check` 在 HEAD 上就不通过（与本次改动无关）
-
 仓库里有 **43 个文件**存在 rustfmt 差异，包括本次完全没碰的文件
 （`apps/gallery/src/main.rs`、`crates/unbound-gpu/src/timing.rs` 等）。
 这是 **rustfmt 版本漂移**（工具链 1.98.1 / rustfmt 1.9.0-stable，仓库是按更早的
@@ -227,6 +278,11 @@ just q-run cargo run -p gallery -- --kpi
 | 41 | **`export_state` 在迁移路径上错调 `snapshot`** | `unbound-host/src/lib.rs` | `export_state` 接收要用的回调 |
 | 42 | **端到端测试拿过期 DLL 比对指纹 / DLL 缺失时静默跳过** | `app-guest/tests/host_roundtrip.rs` | 取最新候选；缺失时硬失败 |
 | 43 | **影子副本从不清理**：一次开发会话几百次重载 → 临时目录几百份 DLL | `unbound-host/src/lib.rs` | 宿主记录副本，卸载时删除 |
+| 44 | **畸形快照的 id 让恢复路径 panic（严重）**：id 为 0 时索引减一溢出；id 为 `u64::MAX` 时按 id 分配导致 capacity overflow；重复 id 还会别名节点 | `unbound-headless/src/frame.rs` | 密集 id 走 `Vec` 快路径，其余回退到有序 `(id, position)` 表 |
+| 45 | **KPI 报告里的数字不是测出来的**：`"9 re-solved"` 是写死的字符串 | `unbound-kpi/src/lib.rs` | 读 `LayoutStats::nodes_visited` |
+| 46 | **主题切换 KPI 报最快的一次**：用最好情况当成绩 | `unbound-kpi/src/lib.rs` | 改报中位数 |
+| 47 | **无头验证 KPI 取单次采样**：共享机器上测的是调度器给了什么 | `unbound-kpi/src/lib.rs` | 改报中位数 |
+| 48 | **报告数字无法复算** | `unbound-kpi/src/lib.rs` | `Measurement` 保留 `samples`，`observed_us` 恒为其中位数 |
 
 ---
 
@@ -284,12 +340,22 @@ just q-run cargo run -p gallery -- --kpi
 12. **`cargo fmt --check` 在 HEAD 上就不通过**（rustfmt 版本漂移，43 个文件）。
     见 §2.4。
 
+13. **KPI 里不要用 `min`（最快值）当成绩**，也不要用单次采样——共用机器上
+    测的是调度器给了什么。报中位数，并把原始样本留着让评审者能复算。
+
+14. **纯函数调用的返回值必须被消费**（`black_box`），否则 release 下整个调用
+    会被优化掉，KPI 测的是"什么都没做"。同理，**报告里的数字要来自被测对象的
+    实际返回值**，写死的常量会让这张表永远"正确"。
+
+15. **快照里的 id 不可信**。任何跨网络/跨进程的结构，id 都可能是 0、超大值或
+    重复值。用 `id - 1` 定位索引的写法会在 id 为 0 时溢出 panic。
+
 ---
 
 ## 5. 验证基线（接手者改完后应当能复现）
 
 ```
-just test        → 全部 ok，0 failed
+just test        → 全部 ok，0 failed（606 passed）
 just check       → exit 0，无 error，无 warning
 just q-run cargo run -p showcase -- --shot /tmp/o.png
                  → 与 docs/assets/showcase-light.png 字节一致
