@@ -27,6 +27,8 @@
   [交互编辑](03-canvas/interaction.md)
 - **接入 AI Agent** → [无头验证](05-agent/headless.md) →
   [依赖分层护栏](05-agent/layering.md)
+- **把项目交给外部 AI 做架构决策** → [项目简报](PROJECT-BRIEF.md) +
+  `decisions/` 下对应的一份提问文件，两个文件一起发出
 
 ## 目录
 
@@ -101,6 +103,15 @@
 | :--- | :--- | :--- |
 | [里程碑路径](07-roadmap/milestones.md) | M1–M5 交付内容与落地位置 | `已落地` |
 | [量化验收红线](07-roadmap/acceptance-kpis.md) | 性能预算与实测值 | `已落地` |
+
+### 外部决策征询材料
+
+| 文档 | 内容 |
+| :--- | :--- |
+| [项目简报 PROJECT-BRIEF](PROJECT-BRIEF.md) | 整个项目的稳定底座：定位、分层、数据流、不变量、已实现能力、红线、测试与文件索引。章节编号固定，供提问文件引用 |
+| `decisions/NNN-<topic>.md` | 每次征询一份的提问文件：决策三要素、现状增量、待决策问题、输出契约。首份见 [001 第一个 Button 落地之后](decisions/001-after-first-button.md) |
+
+生成与自检流程见 `.agents/skills/expert-decision-brief/SKILL.md`。
 
 ## 历史版本
 
