@@ -63,19 +63,25 @@ pub struct GpuPrimitiveInstance {
 
 ## GpuClipNode
 
-32 字节双槽位裁剪节点，支持任意嵌套 AABB + 两级父容器圆角交集裁剪：
+64 字节双槽位裁剪节点，支持任意嵌套 AABB + 两级父容器圆角交集裁剪：
 
 ```rust
 #[repr(C, align(16))]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuClipNode {
-    pub aabb_clip: [f32; 4],      // 16B: CPU 预求交折叠后的硬裁剪边界 (min_x, min_y, max_x, max_y)
-    pub rounded_clip_0: [f32; 4], // 16B: 第一级父圆角容器 (center_x, center_y, half_w, half_h)
-    pub radii_0: [u16; 4],        // 8B:  第一级父圆角四角的半径 (f16)
-    pub rounded_clip_1: [f32; 4], // 16B: 第二级父圆角容器 (center_x, center_y, half_w, half_h)
-    pub radii_1: [u16; 4],        // 8B:  第二级父圆角四角的半径 (f16)
+    pub aabb_clip: [f32; 4],      // 16B: CPU 预求交折叠后的硬裁剪边界 (min_x, min_y, max_x, max_y)  @ 0
+    pub rounded_clip_0: [f32; 4], // 16B: 第一级父圆角容器 (center_x, center_y, half_w, half_h)        @ 16
+    pub rounded_clip_1: [f32; 4], // 16B: 第二级父圆角容器 (center_x, center_y, half_w, half_h)        @ 32
+    pub radii_0: [u16; 4],        // 8B:  第一级父圆角四角的半径 (f16)                              @ 48
+    pub radii_1: [u16; 4],        // 8B:  第二级父圆角四角的半径 (f16)                              @ 56
 }
 ```
+
+> **字段顺序不是随便排的**：宽成员（`vec4`）必须挨在一起。GLSL 的 std430 强制
+> `vec4` 对齐到 16 字节，如果把 `radii` 这样的窄成员插在两个 `vec4` 之间，shader
+> 侧的 `ArrayStride` 会变成 80 字节，而 Rust 侧这个 `repr(C)` 结构体仍是 64 字节
+> ——索引 ≥ 1 的裁剪节点就会从错误的偏移处读出来。`common.glsl` 里的 `ClipNode`
+> 与本结构体**逐字段同序**，两者必须同时改。
 
 ## 显存协议约定
 

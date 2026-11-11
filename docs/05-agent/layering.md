@@ -47,8 +47,11 @@ const ALLOWED: [&str; 3] = ["unbound-abi", "serde", "postcard"];
 ## ABI 稳定性
 
 `unbound-abi` 定义了扁平 POD 描述符、`Action` 枚举与插件虚表。业务层的状态
-结构体布局指纹由编译期派生的 `state_schema_hash` 记录，是
-[热重载](../06-tooling/hot-reload.md)双模迁移的依据。
+结构体布局指纹由编译期宏 `impl_schema_hash!` 计算出的 `state_schema_hash` 记录，
+是[热重载](../06-tooling/hot-reload.md)双模迁移的依据。
+
+该指纹只在状态结构体布局**固定**（`#[repr(C)]`）时才有意义：默认的 `repr(Rust)`
+允许编译器重排字段，两次构建可能排得不一样，而手写的指纹检测不出这种漂移。
 
 ---
 
