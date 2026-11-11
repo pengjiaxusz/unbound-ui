@@ -4,9 +4,9 @@
 >
 > | | |
 > | :--- | :--- |
-> | **源码** | `apps/showcase/src/{main,gallery,button}.rs`、`apps/showcase/tests/gallery.rs` |
-> | **关键类型** | `Gallery`、`Palette`、`Labels`、`Showcase`、`ButtonDesc`、`ButtonVisualState`、`Router` |
-> | **测试** | `apps/showcase/tests/gallery.rs`；渲染正确性由 `crates/unbound-gpu` 的像素断言覆盖 |
+> | **源码** | `apps/showcase/src/{main,gallery,button,testing}.rs`、`apps/showcase/tests/gallery.rs` |
+> | **关键类型** | `Gallery`、`Palette`、`Labels`、`Showcase`、`ButtonDesc`、`ButtonVisualState`、`ButtonHarness`、`TestApp` |
+> | **测试** | `apps/showcase/tests/gallery.rs` 全部经由 `ButtonHarness`（`unbound_headless::driver::TestApp` 之上）；渲染正确性由 `crates/unbound-gpu` 的像素断言覆盖 |
 
 `apps/showcase` 是引擎的**可视验收台**：一个真实开窗的 Vulkan 程序，把引擎能画
 的每一种图元都摆在一屏里。启动它不需要任何资产、不需要配置文件，窗口一开就能
@@ -98,6 +98,25 @@ cargo run -p showcase --release -- --shot out.png    # 显式路径也可以
    指针并聚焦按钮，未命中才进入画布拖拽。
 3. **离散状态跃迁守卫**：只有 `(视觉态, 点击计数)` 变化的那一帧才重建场景并
    递增 `generation`。平移、缩放、切主题、鼠标在按钮内部滑行都不触发上传。
+
+### 按钮的无头测试
+
+`tests/gallery.rs` 里没有任何一处手写 `UiWorld` / `Router` / `Semantics`：它们
+统一通过 `showcase::testing::ButtonHarness` 获得一个 `TestApp` 会话。harness 只
+做控件该做的事——持有按钮身份、文案、点击计数和最近一次场景，并在
+`(视觉态, 计数)` 真正变化时重建：
+
+| harness 方法 | 验证的链路 |
+| :--- | :--- |
+| `hover()` / `press()` / `release()` | hover 与 pressed 从路由器派生，按下后指针被捕获 |
+| `click()` | 一次按下/松开合成一个 `Click`，计数与文案同步前进 |
+| `focus()` / `blur()` | 焦点与指针正交，焦点环走 `PrimType::Stroke` |
+| `label()` / `value()` | 语义树里的 `Role::Button` 与激活计数 |
+| `assert_clean()` | 按钮帧通过五项几何体检 |
+| `rebuild_with(visual, count)` | 供 GPU 测试烘焙 idle / hover / pressed 三个状态 |
+
+交互测试全部纯 CPU，没有 Vulkan 设备也能跑；像素测试在 `test_device()` 返回
+`None` 时自行跳过，只比较同一场景在三种状态下的像素差异。
 
 ### 主题切换为什么是「零上传」
 

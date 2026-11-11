@@ -56,11 +56,11 @@
 | `unbound-graph` | 857 | 渲染图瞬态纹理生命周期校验、毛玻璃离屏池 | `unbound-math` |
 | `unbound-asset` | 1222 | 后台解码线程池、CPU 暂存环、传输队列交接 | `unbound-math` |
 | `unbound-platform` | 1562 | 窗口平台层：非阻塞缩放、低延迟呈现、延迟计量 | `unbound-math`、`unbound-gpu` |
-| `unbound-headless` | 1654 | 无头验证器：五项几何体检、rkyv 时间旅行快照 | `unbound-world`、`unbound-layout` |
+| `unbound-headless` | 1962 | 无头验证器：五项几何体检、`TestApp` 交互测试驱动、rkyv 时间旅行快照 | `unbound-math`、`unbound-world`、`unbound-input`、`unbound-a11y` |
 | `unbound-host` | 909 | Host-Guest C-ABI 热重载、分配器劫持、状态迁移 | `unbound-abi` |
 | `unbound-kpi` | 398 | 验收红线实测 | 多数 crate |
 | `app-guest` | 529 | 可热重载的业务层 cdylib | `unbound-abi` |
-| `apps/showcase` | 1145 | 组件展台：图元总览、主题切换、无头出图 | `unbound-gpu`、`unbound-text`、`unbound-platform` |
+| `apps/showcase` | 2012 | 组件展台：图元总览、主题切换、按钮交互、无头出图与 `ButtonHarness` | `unbound-gpu`、`unbound-text`、`unbound-platform`、`unbound-input`、`unbound-world`、`unbound-a11y`、`unbound-headless` |
 | `apps/gallery` | 474 | 全链路演示程序（控制台测量） | `unbound-gpu` |
 
 ## 三条刻意的依赖禁令
@@ -76,10 +76,10 @@
 | 指标 | 数值 |
 | :--- | ---: |
 | crate 数 | 19 + 2 个应用 |
-| Rust 源文件 | 88 |
-| Rust 代码行 | 约 35 200 |
+| Rust 源文件 | 92 |
+| Rust 代码行 | 约 36 300 |
 | 着色器文件 | 13 |
-| 自动化测试 | 562 项（debug 与 release 双跑全绿） |
+| 自动化测试 | 568 项（debug 与 release 双跑全绿） |
 
 ---
 

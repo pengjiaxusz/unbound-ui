@@ -27,7 +27,7 @@
 | [`视口虚拟化与弹簧动画`](../02-ui/virtualization.md) | 环形槽位复用、物理弹簧引擎、像素吸附、4 KiB 颜色表与主题正交缩放 | `crates/unbound-anim/`, `crates/unbound-theme/` | 【设计实现】 |
 | [`无限画布与空间索引`](../03-canvas/spatial-index.md) | 松散线性四叉树、4096 分块锚定相对坐标、智能磁吸与事务化撤销 | `crates/unbound-canvas/` | 【权威规范】 |
 | [`输入、无障碍与 Portal 排序`](../04-input/README.md) | 双层拾取、指针捕获、CJK IME 候选框、AccessKit 增量语义树、Portal 浮层深度逃逸 | `crates/unbound-input/`, `crates/unbound-a11y/` | 【设计实现】 |
-| [`无头验证与 Agent 友好环境`](../05-agent/headless.md) | 五项几何体检、rkyv 时间旅行快照、增量编译防卡顿护栏 | `crates/unbound-headless/` | 【权威规范】 |
+| [`无头验证与 Agent 友好环境`](../05-agent/headless.md) | 五项几何体检、`TestApp` 无头交互测试驱动、rkyv 时间旅行快照、增量编译防卡顿护栏 | `crates/unbound-headless/` | 【权威规范】 |
 | [`工程工具链与热重载`](../06-tooling/README.md) | C-ABI 隔离、分配器劫持、双模状态迁移、组件展台验收台 | `crates/unbound-host/`, `apps/showcase/` | 【设计实现】 |
 
 ---
