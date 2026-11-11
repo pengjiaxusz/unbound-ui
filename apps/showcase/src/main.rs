@@ -178,15 +178,11 @@ impl Showcase {
     /// glued to its pixels after any pan or zoom.
     fn canvas_position(&self, x: f32, y: f32, window: &Window) -> Vec2 {
         let size = window.inner_size();
-        let (width, height) = (size.width.max(1) as f32, size.height.max(1) as f32);
-        let zoom = self.zoom.clamp(0.25, 8.0);
-        let anchor = [
-            width * 0.5 - self.pan[0] / zoom,
-            height * 0.5 - self.pan[1] / zoom,
-        ];
-        Vec2::new(
-            (x - width * 0.5) / zoom + anchor[0],
-            (y - height * 0.5) / zoom + anchor[1],
+        canvas_at(
+            [x, y],
+            (size.width.max(1) as f32, size.height.max(1) as f32),
+            self.zoom,
+            self.pan,
         )
     }
 
@@ -525,7 +521,6 @@ impl PlatformApp for Showcase {
         // the compositor scales the frame to the window.
         let (width, height) = swapchain.extent();
 
-
         // Nothing to draw until the next frame is due.
         if !state.pacer.should_render(Instant::now()) {
             return Flow::Continue;
@@ -538,14 +533,8 @@ impl PlatformApp for Showcase {
             return Flow::Continue;
         }
 
-
         // Acquire an image and draw into it.
-        let acquired = swapchain.acquire(ACQUIRE_TIMEOUT_NS);
-
-        if let Err(ref e) = acquired {
-            eprintln!("DIAG acquire failed: {e:?}");
-        }
-        let Ok(image) = acquired else {
+        let Ok(image) = swapchain.acquire(ACQUIRE_TIMEOUT_NS) else {
             // A lost surface or an out-of-date swapchain is recoverable: the
             // next frame rebuilds it.
             return Flow::Continue;
@@ -564,7 +553,7 @@ impl PlatformApp for Showcase {
         ];
         self.scene.camera = unbound_gpu::Camera::canvas([0, 0], anchor, zoom, 1.0);
         let scene = self.scene.upload(self.generation);
-        if let Err(error) = renderer.render_to_view(
+        if let Err(error) = renderer.render_to_swapchain(
             &scene,
             image.image,
             image.view,
@@ -575,7 +564,6 @@ impl PlatformApp for Showcase {
             eprintln!("render failed: {error}");
             return Flow::Continue;
         }
-
 
         let finished = renderer.present_semaphore();
         if let Err(error) = swapchain.present(&renderer.gpu, image.index, finished) {
@@ -588,6 +576,23 @@ impl PlatformApp for Showcase {
         state.latency.on_present(Instant::now());
         Flow::Continue
     }
+}
+
+/// Map a screen point to canvas coordinates.
+///
+/// The shader maps `screen = (world - anchor) * zoom + viewport / 2`, where the
+/// anchor is the world point under the viewport centre. Panning by `pan` screen
+/// pixels puts `viewport/2 - pan/zoom` at the centre, so the inverse is
+/// `world = (screen - viewport/2)/zoom + anchor`. Feeding screen points to the
+/// pointer router without this inverse leaves every hit region offset.
+fn canvas_at(screen: [f32; 2], viewport: (f32, f32), zoom: f32, pan: [f32; 2]) -> Vec2 {
+    let zoom = zoom.clamp(0.25, 8.0);
+    let (width, height) = viewport;
+    let anchor = [width * 0.5 - pan[0] / zoom, height * 0.5 - pan[1] / zoom];
+    Vec2::new(
+        (screen[0] - width * 0.5) / zoom + anchor[0],
+        (screen[1] - height * 0.5) / zoom + anchor[1],
+    )
 }
 
 /// Render the gallery offscreen and write it to a PNG.
@@ -627,7 +632,7 @@ fn render_to_png(path: &str, width: u32, height: u32, dark: bool) -> Result<(), 
             .map_err(|e| e.to_string())?;
     }
 
-    // Report the first glyph's UV so it can be compared with the atlas.
+    // Give the glyph atlas the colour table and draw.
     renderer
         .write_theme(&theme_table(dark))
         .map_err(|e| e.to_string())?;
@@ -638,8 +643,13 @@ fn render_to_png(path: &str, width: u32, height: u32, dark: bool) -> Result<(), 
     write_png(path, width, height, &pixels)
 }
 
-/// Write RGBA pixels to a PNG file.
+/// Write RGBA pixels to a PNG file, creating the parent directory if needed.
 fn write_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
     let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
     let writer = std::io::BufWriter::new(file);
     let mut encoder = png::Encoder::new(writer, width, height);
@@ -659,15 +669,26 @@ fn write_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> Result<(), Str
 }
 
 fn main() {
-    // The headless twin: render the gallery to a PNG and exit.
+    // The headless twin: render the gallery to a PNG and exit. Shots are
+    // build artifacts, not sources: they land under `target/` by default so
+    // they never end up in a commit.
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--shot") {
+        let dark = args.iter().any(|a| a == "--dark");
         let path = args
             .windows(2)
-            .find(|w| w[0] == "--shot")
-            .map(|w| w[1].clone())
-            .unwrap_or_else(|| "showcase.png".to_string());
-        let dark = args.iter().any(|a| a == "--dark");
+            .find(|w| w[0] == "--shot" && !w[1].starts_with("--"))
+            .map_or_else(
+                || {
+                    let name = if dark {
+                        "showcase-dark.png"
+                    } else {
+                        "showcase-light.png"
+                    };
+                    format!("target/showcase/{name}")
+                },
+                |w| w[1].clone(),
+            );
         match render_to_png(&path, 1280, 720, dark) {
             Ok(()) => println!("wrote {path}"),
             Err(error) => eprintln!("could not render: {error}"),
@@ -689,5 +710,57 @@ fn main() {
     };
     if let Err(error) = window.run(Showcase::new()) {
         eprintln!("the event loop failed: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shader's forward mapping, repeated here so the inverse can be
+    /// checked against the formula the GPU actually applies.
+    fn screen_point(world: Vec2, viewport: (f32, f32), zoom: f32, pan: [f32; 2]) -> [f32; 2] {
+        let (width, height) = viewport;
+        let anchor = [width * 0.5 - pan[0] / zoom, height * 0.5 - pan[1] / zoom];
+        [
+            (world.x - anchor[0]) * zoom + width * 0.5,
+            (world.y - anchor[1]) * zoom + height * 0.5,
+        ]
+    }
+
+    #[test]
+    fn the_inverse_camera_maps_the_viewport_centre_to_itself() {
+        let viewport = (1280.0, 720.0);
+        let world = canvas_at([640.0, 360.0], viewport, 1.0, [0.0, 0.0]);
+        assert!((world.x - 640.0).abs() < f32::EPSILON);
+        assert!((world.y - 360.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn panning_moves_canvas_coordinates_by_the_pan_amount() {
+        let viewport = (1280.0, 720.0);
+        let origin = canvas_at([640.0, 360.0], viewport, 1.0, [0.0, 0.0]);
+        let panned = canvas_at([640.0, 360.0], viewport, 1.0, [120.0, -40.0]);
+        assert!((panned.x - (origin.x - 120.0)).abs() < 1e-4);
+        assert!((panned.y - (origin.y + 40.0)).abs() < 1e-4);
+    }
+
+    /// A click is only routed correctly if the screen point under the cursor
+    /// survives the round trip through the camera at every zoom and pan.
+    #[test]
+    fn a_button_click_survives_pan_and_zoom() {
+        let rect = showcase::gallery::button_rect();
+        let viewport = (1280.0, 720.0);
+        for (zoom, pan) in [
+            (1.0, [0.0, 0.0]),
+            (2.0, [60.0, -30.0]),
+            (0.5, [-120.0, 40.0]),
+        ] {
+            let centre = rect.center();
+            let screen = screen_point(centre, viewport, zoom, pan);
+            let world = canvas_at(screen, viewport, zoom, pan);
+            assert!((world.x - centre.x).abs() < 1e-2, "zoom {zoom} pan {pan:?}");
+            assert!((world.y - centre.y).abs() < 1e-2, "zoom {zoom} pan {pan:?}");
+        }
     }
 }
