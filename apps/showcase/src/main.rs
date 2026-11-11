@@ -1,274 +1,196 @@
-//! The windowed component gallery.
+//! The windowed Unbound UI Gallery.
 //!
-//! Run it with `cargo run -p showcase`. A window opens showing every
-//! primitive type the engine can draw; the keyboard toggles the theme, the
-//! mouse pans and zooms the canvas, and the button in the "Button" card is the
-//! first fully interactive widget: hover, press, click, focus and keyboard
-//! activation all go through `unbound-input`.
+//! Run it with `cargo run -p showcase`. The window is a dogfooded application
+//! shell: a custom title bar, a collapsible NavigationView, a searchable
+//! command palette, live example cards and a performance HUD.
 //!
-//! This is the visible counterpart of `apps/gallery`: the gallery prints
-//! measurements, the showcase shows them.
-
-use showcase::button::{self, ButtonDesc, ButtonVisualState};
-use showcase::gallery;
-use showcase::keys::{self, KeyAction};
+//! This is the visible counterpart of `apps/gallery` and
+//! `unbound-headless`: the gallery prints measurements, the headless verifier
+//! checks layout, the showcase shows both.
 
 use std::sync::Arc;
 use std::time::Instant;
 
-use unbound_a11y::Semantics;
+use showcase::gallery;
+use showcase::shell::GalleryApp;
+use showcase::state::ThemeMode;
+
 use unbound_gpu::atlas::{AtlasKind, AtlasSet, AtlasUpload};
 use unbound_gpu::device::{Gpu, GpuConfig};
 use unbound_gpu::surface::{Surface, Swapchain};
 use unbound_gpu::swapchain::PresentConfig;
-use unbound_gpu::Renderer;
-use unbound_input::{CursorKind, PointerConfig, PointerEvent, Router};
+use unbound_gpu::{Camera, Renderer};
+use unbound_input::{resize_edge, CursorKind, ResizeEdge};
 use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::window::{
-    ButtonState, MouseButton, PlatformEvent, PlatformKey, PlatformState, WindowConfig,
+    ButtonState, Modifiers, MouseButton, PlatformEvent, PlatformState, WindowConfig,
 };
-use unbound_world::{NodeId, UiWorld};
 use winit::window::Window;
 
-use gallery::{build, build_interactive, palette, theme_table, Gallery, Labels};
+use showcase::shell::WindowCommand;
 
 /// The window title.
-const TITLE: &str = "Unbound UI — 组件展台";
+const TITLE: &str = "Unbound UI Gallery";
 
 /// How long to wait for a swapchain image, in nanoseconds.
 const ACQUIRE_TIMEOUT_NS: u64 = 1_000_000_000;
 
 /// The application state.
 struct Showcase {
-    /// The renderer, once the window exists.
+    app: GalleryApp,
     renderer: Option<Renderer>,
-    /// The surface bound to the window.
     surface: Option<Surface>,
-    /// The swapchain.
     swapchain: Option<Swapchain>,
-    /// The bindless atlases.
     atlases: Option<Arc<AtlasSet>>,
-    /// The label engine.
-    labels: Labels,
-    /// The current scene.
-    scene: Gallery,
-    /// The button's stable identity, allocated by `unbound-world`.
-    button: NodeId,
-    /// The pointer router: hover, capture and click synthesis.
-    router: Router,
-    /// The focused node, if any.
-    focused: Option<NodeId>,
-    /// The visual state that is currently baked into the scene.
-    visual: ButtonVisualState,
-    /// How many times the button was activated.
-    click_count: u32,
-    /// The click count baked into the current scene.
-    rendered_clicks: u32,
-    /// The semantic tree built with the current scene.
-    semantics: Option<Semantics>,
-    /// The last screen-space pointer position.
-    pointer: Option<[f32; 2]>,
-    /// Whether the left button currently pans the canvas.
-    canvas_dragging: bool,
-    /// The cursor currently applied to the window.
-    cursor: CursorKind,
-    /// The time origin for pointer timing.
-    clock: Instant,
-    /// Whether the dark theme is active.
-    dark: bool,
-    /// The canvas zoom.
-    zoom: f32,
-    /// The canvas pan, in logical pixels.
-    pan: [f32; 2],
-    /// The pointer position at the start of a drag.
-    drag_origin: [f32; 2],
-    /// The pan at the start of a drag.
-    pan_origin: [f32; 2],
     /// The upload generation; bumping it re-stages the scene.
     generation: u64,
-    /// The number of glyphs the atlas currently holds.
-    glyphs: usize,
+    /// The theme currently uploaded to the GPU.
+    uploaded_theme: Option<ThemeMode>,
+    /// Physical pointer position.
+    pointer: Vec2,
+    /// Keyboard modifiers.
+    modifiers: Modifiers,
+    cursor: CursorKind,
+    clock: Instant,
+    last_frame: Instant,
+    /// The OS scale factor (physical pixels per logical unit).
+    os_scale: f32,
+    /// The window size in logical units at 100 % app zoom.
+    base_logical: Vec2,
+    /// The zoom the current window size was requested for.
+    last_zoom: f32,
+    /// The last physical window size observed, for base-size tracking.
+    last_physical: (u32, u32),
+    /// The window edge under the pointer, if any.
+    resize_edge: Option<ResizeEdge>,
+    /// The last title-bar press, for double-click-to-maximise.
+    last_title_press: Option<(Instant, Vec2)>,
+    /// True when the current press was consumed by the window chrome.
+    press_consumed: bool,
 }
 
 impl Showcase {
-    /// Create the application.
     fn new() -> Self {
-        // The world is the identity allocator; the `NodeId` it hands out is
-        // what the router, the hit region and the semantic tree share. The
-        // demo keeps no mutable widget state of its own beyond the click
-        // count — hover and press are derived from the router.
-        let mut world = UiWorld::new();
-        let button = button::insert_button(&mut world, gallery::button_rect());
         Self {
+            app: GalleryApp::new(),
             renderer: None,
             surface: None,
             swapchain: None,
             atlases: None,
-            labels: Labels::new(),
-            scene: Gallery::default(),
-            button,
-            router: Router::new(PointerConfig::default()),
-            focused: None,
-            visual: ButtonVisualState::default(),
-            click_count: 0,
-            rendered_clicks: 0,
-            semantics: None,
-            pointer: None,
-            canvas_dragging: false,
+            generation: 0,
+            uploaded_theme: None,
+            pointer: Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
             cursor: CursorKind::Default,
             clock: Instant::now(),
-            dark: false,
-            zoom: 1.0,
-            pan: [0.0, 0.0],
-            drag_origin: [0.0, 0.0],
-            pan_origin: [0.0, 0.0],
-            generation: 0,
-            glyphs: 0,
+            last_frame: Instant::now(),
+            os_scale: 1.0,
+            base_logical: Vec2::new(1440.0, 900.0),
+            last_zoom: 1.0,
+            last_physical: (1440, 900),
+            resize_edge: None,
+            last_title_press: None,
+            press_consumed: false,
         }
     }
 
-    /// Rebuild the scene and push the new glyphs into the atlas.
-    ///
-    /// Only called on a discrete state transition (or a resize): panning,
-    /// zooming and theme switches never get here.
-    fn rebuild(&mut self, viewport: (f32, f32)) {
-        let desc = ButtonDesc::new(
-            gallery::button_rect(),
-            format!("Clicked: {}", self.click_count),
-        );
-        let (scene, _, regions, mut semantics) = build_interactive(
-            &mut self.labels,
-            &palette(),
-            viewport,
-            &desc,
-            button::node_u64(self.button),
-            self.visual,
-            self.click_count,
-        );
-        self.scene = scene;
-        self.router.set_regions(regions);
-        if let Some(focused) = self.focused {
-            semantics.set_focus(button::node_u64(focused));
-        }
-        self.semantics = Some(semantics);
-        self.rendered_clicks = self.click_count;
-        self.generation = self.generation.wrapping_add(1);
-        self.upload_glyphs();
+    /// Physical pixels per logical unit.
+    fn effective_scale(&self) -> f32 {
+        (self.os_scale * self.app.state.zoom()).clamp(0.5, 4.0)
     }
 
-    /// Move keyboard focus and mirror it into the semantic tree.
-    fn set_focus(&mut self, node: Option<NodeId>) {
-        self.focused = node;
-        if let Some(semantics) = &mut self.semantics {
-            let target = node.map_or(semantics.root(), button::node_u64);
-            semantics.set_focus(target);
-        }
+    fn logical(&self, physical: Vec2) -> Vec2 {
+        physical / self.effective_scale()
     }
 
-    /// Activate the button: the only business state the demo owns.
-    fn activate(&mut self) {
-        self.click_count = self.click_count.wrapping_add(1);
-    }
-
-    /// Map a window position (physical pixels) to canvas coordinates.
-    ///
-    /// The shader maps `screen = (world - anchor) * zoom + viewport / 2`, so
-    /// the inverse is `world = (screen - viewport / 2) / zoom + anchor`. Doing
-    /// this before feeding the router is what keeps the button's hit region
-    /// glued to its pixels after any pan or zoom.
-    fn canvas_position(&self, x: f32, y: f32, window: &Window) -> Vec2 {
+    fn logical_viewport(&self, window: &Window) -> (f32, f32) {
         let size = window.inner_size();
-        canvas_at(
-            [x, y],
-            (size.width.max(1) as f32, size.height.max(1) as f32),
-            self.zoom,
-            self.pan,
+        let scale = self.effective_scale();
+        (
+            size.width.max(1) as f32 / scale,
+            size.height.max(1) as f32 / scale,
         )
     }
 
-    /// Route keyboard input.
-    ///
-    /// The mapping itself lives in [`showcase::keys`] so the headless tests
-    /// exercise the same table instead of a copy.
-    fn on_key(&mut self, key: PlatformKey) {
-        match keys::resolve(&key, self.focused.is_some()) {
-            Some(KeyAction::ToggleTheme) => self.toggle_theme(),
-            Some(KeyAction::FocusButton) => self.set_focus(Some(self.button)),
-            Some(KeyAction::ClearFocus) => self.set_focus(None),
-            Some(KeyAction::Activate) => self.activate(),
-            None => {}
+    /// Track the OS scale, the base logical size and the zoomed window size.
+    fn sync_window_size(&mut self, window: &Window) {
+        let os_scale = window.scale_factor() as f32;
+        if os_scale.is_finite() && os_scale > 0.0 {
+            self.os_scale = os_scale;
         }
-    }
-
-    /// Pointer arbitration: a hit on the button beats panning the canvas.
-    fn on_left_button(&mut self, pressed: bool, window: &Window) {
-        let Some([x, y]) = self.pointer else {
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
             return;
-        };
-        let position = self.canvas_position(x, y, window);
-        let now = self.clock.elapsed().as_secs_f64();
-        let button = button::node_u64(self.button);
-        if pressed {
-            self.router.pointer_down(position, now);
-            if self.router.pointer().pressed() == Some(button) {
-                // The router captured the pointer: this is a click, not a pan.
-                self.set_focus(Some(self.button));
-                self.canvas_dragging = false;
+        }
+        let current = Vec2::new(size.width as f32, size.height as f32);
+        let previous = Vec2::new(
+            self.last_physical.0.max(1) as f32,
+            self.last_physical.1.max(1) as f32,
+        );
+        let zoom = self.app.state.zoom();
+        let old_scale = (self.os_scale * self.last_zoom).max(0.25);
+        if (zoom - self.last_zoom).abs() > 1e-6 {
+            // The user picked a new zoom: keep the logical size they were
+            // looking at and grow/shrink the physical window to match.
+            let reference = if (current - previous).length() > 0.5 {
+                current
             } else {
-                self.canvas_dragging = true;
-                self.drag_origin = [x, y];
-                self.pan_origin = self.pan;
+                previous
+            };
+            self.base_logical = reference / old_scale;
+            let target = zoomed_physical_size(
+                self.base_logical,
+                self.os_scale * zoom,
+                window.current_monitor().map(|monitor| {
+                    let size = monitor.size();
+                    Vec2::new(size.width as f32, size.height as f32)
+                }),
+            );
+            if !window.is_maximized() && window.is_minimized() != Some(true) {
+                let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(
+                    target.x as u32,
+                    target.y as u32,
+                ));
             }
-        } else {
-            for event in self.router.pointer_up(position, now) {
-                if matches!(event, PointerEvent::Click { target, .. } if target == button) {
-                    self.activate();
-                }
+            self.last_zoom = zoom;
+        } else if (current - previous).length() > 0.5 {
+            // A manual resize: remember it as the base size for the next zoom.
+            self.base_logical = current / (self.os_scale * zoom).max(0.25);
+        }
+        self.last_physical = (size.width, size.height);
+    }
+
+    fn resize_edge_at(&self, window: &Window) -> Option<ResizeEdge> {
+        if window.is_decorated() || window.is_maximized() {
+            return None;
+        }
+        let size = window.inner_size();
+        let scale = self.os_scale.max(0.5);
+        resize_edge(
+            self.pointer,
+            Vec2::new(size.width as f32, size.height as f32),
+            6.0 * scale,
+            16.0 * scale,
+        )
+    }
+
+    fn handle_window_command(&mut self, window: &Window, command: WindowCommand) -> Flow {
+        match command {
+            WindowCommand::Minimize => window.set_minimized(true),
+            WindowCommand::ToggleMaximize => {
+                window.set_maximized(!window.is_maximized());
             }
-            self.canvas_dragging = false;
+            WindowCommand::Close => return Flow::Exit,
         }
+        Flow::Continue
     }
 
-    /// Route pointer movement.
-    fn on_cursor_moved(&mut self, x: f32, y: f32, window: &Window) {
-        self.pointer = Some([x, y]);
-        if self.canvas_dragging {
-            let dx = x - self.drag_origin[0];
-            let dy = y - self.drag_origin[1];
-            self.pan = [self.pan_origin[0] + dx, self.pan_origin[1] + dy];
-            // The canvas moved under a stationary router, so hover and cursor
-            // must be re-picked at the new canvas point.
-            let position = self.canvas_position(x, y, window);
-            self.router.refresh_at(position);
-        } else {
-            // Only the inverse-transformed point may enter the router.
-            let position = self.canvas_position(x, y, window);
-            self.router.pointer_move(position);
-        }
-    }
-
-    /// Push the resolved cursor to the window, but only when it changes.
-    fn apply_cursor(&mut self, window: &Window) {
-        let kind = if self.canvas_dragging {
-            CursorKind::Grabbing
-        } else {
-            self.router.cursor()
-        };
-        if kind != self.cursor {
-            self.cursor = kind;
-            window.set_cursor(cursor_icon(kind));
-        }
-    }
-
-    /// Upload the pending atlas updates.
     fn upload_glyphs(&mut self) {
-        // The updates are only drained once there is somewhere to put them:
-        // taking them before that would lose the glyphs.
         if self.atlases.is_none() || self.renderer.is_none() {
             return;
         }
-        let updates = self.labels.cache.take_updates();
+        let updates = self.app.labels.cache.take_updates();
         if updates.is_empty() {
             return;
         }
@@ -296,16 +218,64 @@ impl Showcase {
                 break;
             }
         }
-        self.glyphs = self.labels.cache.resident_glyphs();
     }
 
-    /// Switch the theme and re-upload the 4 KiB colour table.
-    fn toggle_theme(&mut self) {
-        self.dark = !self.dark;
-        if let Some(renderer) = &mut self.renderer {
-            let table = theme_table(self.dark);
-            let _ = renderer.write_theme(&table);
+    fn write_theme_if_needed(&mut self) {
+        if self.uploaded_theme == Some(self.app.state.theme) {
+            return;
         }
+        if let Some(renderer) = &mut self.renderer {
+            let _ = renderer.write_theme(&gallery::theme_table(self.app.state.theme.is_dark()));
+            self.uploaded_theme = Some(self.app.state.theme);
+        }
+    }
+
+    fn rebuild(&mut self, window: &Window) {
+        self.app.set_effective_scale(self.effective_scale());
+        let viewport = self.logical_viewport(window);
+        self.app.rebuild(viewport);
+        self.generation = self.generation.wrapping_add(1);
+        self.upload_glyphs();
+        self.write_theme_if_needed();
+    }
+
+    fn apply_cursor(&mut self, window: &Window) {
+        let kind = self
+            .resize_edge
+            .map_or_else(|| self.app.cursor(), ResizeEdge::cursor);
+        if kind != self.cursor {
+            self.cursor = kind;
+            window.set_cursor(cursor_icon(kind));
+        }
+    }
+}
+
+/// The physical window size for a logical layout at `scale`, clamped to 95 %
+/// of the monitor so a 200 % zoom never opens a window larger than the screen.
+fn zoomed_physical_size(base_logical: Vec2, scale: f32, monitor: Option<Vec2>) -> Vec2 {
+    let mut target = base_logical * scale.max(0.25);
+    if let Some(monitor) = monitor {
+        let limit = monitor * 0.95;
+        if target.x > limit.x || target.y > limit.y {
+            let fit = (limit.x / target.x).min(limit.y / target.y);
+            target = target * fit;
+        }
+    }
+    Vec2::new(target.x.round().max(320.0), target.y.round().max(240.0))
+}
+
+/// Map an engine resize edge to the OS drag direction.
+fn resize_direction(edge: ResizeEdge) -> winit::window::ResizeDirection {
+    use winit::window::ResizeDirection as Direction;
+    match edge {
+        ResizeEdge::North => Direction::North,
+        ResizeEdge::South => Direction::South,
+        ResizeEdge::West => Direction::West,
+        ResizeEdge::East => Direction::East,
+        ResizeEdge::NorthWest => Direction::NorthWest,
+        ResizeEdge::NorthEast => Direction::NorthEast,
+        ResizeEdge::SouthWest => Direction::SouthWest,
+        ResizeEdge::SouthEast => Direction::SouthEast,
     }
 }
 
@@ -329,9 +299,7 @@ fn cursor_icon(kind: CursorKind) -> winit::window::CursorIcon {
 }
 
 impl PlatformApp for Showcase {
-    fn resumed(&mut self, state: &mut PlatformState, window: &winit::window::Window) {
-        // The GPU needs the surface extensions, so the instance is created
-        // with them enabled.
+    fn resumed(&mut self, state: &mut PlatformState, window: &Window) {
         let config = GpuConfig {
             instance_extensions: vec![
                 "VK_KHR_surface".to_string(),
@@ -340,8 +308,6 @@ impl PlatformApp for Showcase {
             device_extensions: vec![
                 "VK_KHR_swapchain".to_string(),
                 "VK_EXT_swapchain_maintenance1".to_string(),
-                // The low-latency present path: the CPU can wait for the
-                // image to really be on the screen instead of for the render.
                 "VK_KHR_present_wait".to_string(),
             ],
             ..Default::default()
@@ -351,7 +317,6 @@ impl PlatformApp for Showcase {
             return;
         };
 
-        // The surface needs the native window handle.
         let hwnd = {
             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
             match window.window_handle().ok().map(|h| h.as_raw()) {
@@ -369,18 +334,13 @@ impl PlatformApp for Showcase {
 
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
-        // Tearing off: a torn frame is worse than a frame that arrives one
-        // refresh cycle later.
         let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false);
         let Ok(swapchain) = Swapchain::new(&gpu, &surface, width, height, &present) else {
             eprintln!("could not create a swapchain");
             return;
         };
 
-        // The device extensions are needed after the GPU has been moved into
-        // the renderer, so they are copied out first.
         let device_extensions = gpu.enabled_device_extensions.clone();
-
         let mut renderer = match Renderer::new(gpu, width, height) {
             Ok(renderer) => renderer,
             Err(error) => {
@@ -388,9 +348,6 @@ impl PlatformApp for Showcase {
                 return;
             }
         };
-
-        // Install the real atlases so glyphs are not sampled from a dummy
-        // 1x1 texture.
         let atlases = match AtlasSet::new(&renderer.gpu, 64) {
             Ok(atlases) => Arc::new(atlases),
             Err(error) => {
@@ -407,83 +364,132 @@ impl PlatformApp for Showcase {
         self.swapchain = Some(swapchain);
         self.surface = Some(surface);
         self.renderer = Some(renderer);
-
-        // The platform layer could not know the device extensions when the
-        // window was created; now it can, and the presentation policy
-        // follows the device instead of a hard-coded fallback.
         state.set_present_extensions(&device_extensions);
 
-        // Build the first frame.
-        let logical = (width as f32, height as f32);
-        self.rebuild(logical);
-        if let Some(renderer) = &mut self.renderer {
-            let _ = renderer.write_theme(&theme_table(self.dark));
-        }
-        let _ = state;
+        self.os_scale = window.scale_factor() as f32;
+        self.last_zoom = self.app.state.zoom();
+        let size = window.inner_size();
+        self.last_physical = (size.width.max(1), size.height.max(1));
+        self.base_logical = Vec2::new(
+            size.width.max(1) as f32 / self.effective_scale(),
+            size.height.max(1) as f32 / self.effective_scale(),
+        );
+        self.rebuild(window);
+        self.last_frame = Instant::now();
     }
 
-    fn event(
-        &mut self,
-        _state: &mut PlatformState,
-        window: &winit::window::Window,
-        event: PlatformEvent,
-    ) -> Flow {
+    fn event(&mut self, _state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
+        self.sync_window_size(window);
+        self.app.set_effective_scale(self.effective_scale());
         match event {
+            PlatformEvent::ScaleFactorChanged(factor) => {
+                self.os_scale = factor as f32;
+                self.rebuild(window);
+            }
             PlatformEvent::KeyInput {
                 state: ButtonState::Pressed,
                 key,
                 repeat: false,
-            } => self.on_key(key),
+            } => {
+                self.app.key(&key, self.modifiers);
+                if let Some(command) = self.app.take_window_command() {
+                    return self.handle_window_command(window, command);
+                }
+            }
+            PlatformEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers;
+            }
             PlatformEvent::MouseInput {
                 state,
                 button: MouseButton::Left,
             } => {
-                self.on_left_button(state == ButtonState::Pressed, window);
+                let position = self.logical(self.pointer);
+                let now = self.clock.elapsed().as_secs_f64();
+                if state == ButtonState::Pressed {
+                    // The window chrome owns its edges and its title bar: the
+                    // UI underneath must not also see the press.
+                    self.resize_edge = self.resize_edge_at(window);
+                    if let Some(edge) = self.resize_edge {
+                        self.press_consumed = true;
+                        let _ = window.drag_resize_window(resize_direction(edge));
+                        return Flow::Continue;
+                    }
+                    self.app.pointer_move(position);
+                    if self.app.is_titlebar_drag(position) {
+                        self.press_consumed = true;
+                        let double = self.last_title_press.is_some_and(|(when, at)| {
+                            Instant::now().duration_since(when)
+                                < std::time::Duration::from_millis(400)
+                                && (at - position).length() < 6.0
+                        });
+                        self.last_title_press = Some((Instant::now(), position));
+                        if double {
+                            window.set_maximized(!window.is_maximized());
+                        } else {
+                            let _ = window.drag_window();
+                        }
+                        return Flow::Continue;
+                    }
+                    self.press_consumed = false;
+                    self.app.pointer_down(position, now);
+                    if let Some(command) = self.app.take_window_command() {
+                        return self.handle_window_command(window, command);
+                    }
+                } else {
+                    if self.press_consumed {
+                        self.press_consumed = false;
+                        return Flow::Continue;
+                    }
+                    self.app.pointer_up(position, now);
+                    if let Some(command) = self.app.take_window_command() {
+                        return self.handle_window_command(window, command);
+                    }
+                }
             }
             PlatformEvent::CursorMoved { x, y } => {
-                self.on_cursor_moved(x as f32, y as f32, window);
+                self.pointer = Vec2::new(x as f32, y as f32);
+                self.resize_edge = self.resize_edge_at(window);
+                if self.resize_edge.is_none() {
+                    self.app.pointer_move(self.logical(self.pointer));
+                }
             }
             PlatformEvent::MouseWheel { delta_y, .. } => {
-                let size = window.inner_size();
-                let viewport = (size.width.max(1) as f32, size.height.max(1) as f32);
-                // Zoom around the cursor, exactly like `TestApp::zoom_at`:
-                // the canvas point under it must not drift.
-                let anchor = self
-                    .pointer
-                    .map_or(Vec2::new(viewport.0 * 0.5, viewport.1 * 0.5), |[x, y]| {
-                        Vec2::new(x, y)
-                    });
-                let before = canvas_at([anchor.x, anchor.y], viewport, self.zoom, self.pan);
-
-                // One notch up zooms in. The zoom is clamped so the gallery
-                // can neither disappear nor turn into a single pixel.
-                let zoom = (self.zoom as f64 * 1.1f64.powf(delta_y)) as f32;
-                self.zoom = zoom.clamp(0.25, 8.0);
-                self.pan = zoom_anchor_pan([anchor.x, anchor.y], viewport, before, self.zoom);
-                // The pointer did not move, but the canvas under it did:
-                // re-pick so hover and cursor do not lag one event behind.
-                self.router.refresh_at(before);
+                if self.modifiers.control {
+                    let steps = showcase::state::ZOOM_STEPS.len();
+                    let current = self.app.state.zoom_step.min(steps - 1);
+                    self.app.state.zoom_step = if delta_y > 0.0 {
+                        (current + 1).min(steps - 1)
+                    } else {
+                        current.saturating_sub(1)
+                    };
+                    self.app.state.bump();
+                } else {
+                    self.app.wheel(delta_y as f32);
+                }
             }
             PlatformEvent::CloseRequested => return Flow::Exit,
             _ => {}
         }
+        // Re-read the effective scale: a zoom click in this very event changed
+        // it after the pre-handler snapshot.
+        self.app.set_effective_scale(self.effective_scale());
+        let viewport = self.logical_viewport(window);
+        self.app.sync(viewport);
+        self.upload_glyphs();
+        self.write_theme_if_needed();
         self.apply_cursor(window);
         Flow::Continue
     }
 
-    fn frame(&mut self, state: &mut PlatformState, window: &winit::window::Window) -> Flow {
+    fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+        self.sync_window_size(window);
+        self.app.set_effective_scale(self.effective_scale());
+        self.app.set_window_maximized(window.is_maximized());
         let size = window.inner_size();
         let (window_width, window_height) = (size.width.max(1), size.height.max(1));
 
-        // The swapchain follows the window only once the size has settled.
-        //
-        // Rebuilding it on every resize event is what produces black borders
-        // and stretched frames: during a drag the compositor keeps showing
-        // the last frame scaled to the new window size, and the swapchain is
-        // rebuilt once, after the dust settles.
         let settled = state.poll_resize(Instant::now());
         if settled.is_some() {
-            let (width, height) = (window_width, window_height);
             let Some(renderer) = &mut self.renderer else {
                 return Flow::Continue;
             };
@@ -492,73 +498,67 @@ impl PlatformApp for Showcase {
             };
             let present =
                 PresentConfig::from_capabilities(&renderer.gpu.enabled_device_extensions, false);
-            if let Ok(chain) = Swapchain::new(&renderer.gpu, surface, width, height, &present) {
+            if let Ok(chain) = Swapchain::new(
+                &renderer.gpu,
+                surface,
+                window_width,
+                window_height,
+                &present,
+            ) {
                 if let Some(old) = self.swapchain.replace(chain) {
                     old.destroy(&renderer.gpu);
                 }
-                if let Err(error) = renderer.resize(width, height) {
+                if let Err(error) = renderer.resize(window_width, window_height) {
                     eprintln!("could not resize the renderer: {error}");
                 }
-                // The scene is laid out for the new extent.
-                self.rebuild((width as f32, height as f32));
+                self.rebuild(window);
             }
         }
 
-        // Hover / press / focus / click are re-derived every frame, but the
-        // scene is only rebuilt on a discrete transition. Moving the mouse
-        // inside the button, panning, zooming and switching themes all leave
-        // `generation` untouched, so they upload no primitive bytes.
-        let visual = ButtonVisualState::resolve(self.button, &self.router, self.focused, false);
-        if visual != self.visual || self.click_count != self.rendered_clicks {
-            self.visual = visual;
-            self.rebuild((window_width as f32, window_height as f32));
-            self.apply_cursor(window);
+        let now = Instant::now();
+        let dt = now
+            .saturating_duration_since(self.last_frame)
+            .as_secs_f32()
+            .min(0.1);
+        self.last_frame = now;
+        if dt > 0.0 {
+            self.app.state.demo.fps = 1.0 / dt;
+            self.app.state.demo.frame_ms = dt * 1000.0;
         }
+        self.app.tick(dt);
+        let viewport = self.logical_viewport(window);
+        if self.app.sync(viewport) {
+            self.generation = self.generation.wrapping_add(1);
+            self.upload_glyphs();
+        }
+        self.write_theme_if_needed();
+        self.apply_cursor(window);
 
+        let scale = self.effective_scale();
         let Some(renderer) = &mut self.renderer else {
             return Flow::Continue;
         };
         let Some(swapchain) = &mut self.swapchain else {
             return Flow::Continue;
         };
-
-        // Draw at the *committed* extent, not at the window's current one:
-        // while a resize is pending the swapchain still has the old size and
-        // the compositor scales the frame to the window.
         let (width, height) = swapchain.extent();
-
-        // Nothing to draw until the next frame is due.
         if !state.pacer.should_render(Instant::now()) {
+            window.request_redraw();
             return Flow::Continue;
         }
-        // The previous frame has to have retired before the next image is
-        // acquired: the acquire signals the image-available semaphore, and a
-        // binary semaphore may only carry one pending signal.
         if let Err(error) = renderer.wait_for_previous_frame() {
             eprintln!("waiting for the previous frame failed: {error}");
             return Flow::Continue;
         }
-
-        // Acquire an image and draw into it.
         let Ok(image) = swapchain.acquire(ACQUIRE_TIMEOUT_NS) else {
-            // A lost surface or an out-of-date swapchain is recoverable: the
-            // next frame rebuilds it.
             return Flow::Continue;
         };
 
-        // The camera follows the pan and the zoom.
-        //
-        // `anchor` is the world point that lands in the middle of the
-        // viewport: the shader maps it to the centre and scales everything
-        // around it by the zoom, so panning by one screen pixel moves the
-        // content by exactly one screen pixel at any zoom level.
-        let zoom = self.zoom.clamp(0.25, 8.0);
-        let anchor = [
-            width as f32 * 0.5 - self.pan[0] / zoom,
-            height as f32 * 0.5 - self.pan[1] / zoom,
-        ];
-        self.scene.camera = unbound_gpu::Camera::canvas([0, 0], anchor, zoom, 1.0);
-        let scene = self.scene.upload(self.generation);
+        // The app lays out in logical units (physical / (OS scale × zoom)); the
+        // UI camera scales those units back up, so a 150 % layout maps exactly
+        // onto the physical viewport at any DPI.
+        self.app.scene.camera = Camera::ui((width as f32, height as f32), scale);
+        let scene = self.app.scene.upload(self.generation);
         if let Err(error) = renderer.render_to_swapchain(
             &scene,
             image.image,
@@ -570,13 +570,10 @@ impl PlatformApp for Showcase {
             eprintln!("render failed: {error}");
             return Flow::Continue;
         }
-
         let finished = renderer.present_semaphore();
         if let Err(error) = swapchain.present(&renderer.gpu, image.index, finished) {
             eprintln!("present failed: {error}");
         }
-        // Tell the pacer when the frame was shown, and ask the event loop for
-        // another one.
         state.pacer.on_present(Instant::now());
         window.request_redraw();
         state.latency.on_present(Instant::now());
@@ -584,53 +581,36 @@ impl PlatformApp for Showcase {
     }
 }
 
-/// Map a screen point to canvas coordinates.
-///
-/// The shader maps `screen = (world - anchor) * zoom + viewport / 2`, where the
-/// anchor is the world point under the viewport centre. Panning by `pan` screen
-/// pixels puts `viewport/2 - pan/zoom` at the centre, so the inverse is
-/// `world = (screen - viewport/2)/zoom + anchor`. Feeding screen points to the
-/// pointer router without this inverse leaves every hit region offset.
-fn canvas_at(screen: [f32; 2], viewport: (f32, f32), zoom: f32, pan: [f32; 2]) -> Vec2 {
-    let zoom = zoom.clamp(0.25, 8.0);
-    let (width, height) = viewport;
-    let anchor = [width * 0.5 - pan[0] / zoom, height * 0.5 - pan[1] / zoom];
-    Vec2::new(
-        (screen[0] - width * 0.5) / zoom + anchor[0],
-        (screen[1] - height * 0.5) / zoom + anchor[1],
-    )
-}
-
-/// The pan that keeps the canvas point `before` under `screen` after a zoom.
-///
-/// The forward mapping is
-/// `screen = (canvas - viewport/2) * zoom + pan + viewport/2`;
-/// solving it for `pan` is what makes wheel zoom anchored instead of jumping
-/// towards the canvas origin.
-fn zoom_anchor_pan(screen: [f32; 2], viewport: (f32, f32), before: Vec2, zoom: f32) -> [f32; 2] {
-    [
-        screen[0] - viewport.0 * 0.5 - (before.x - viewport.0 * 0.5) * zoom,
-        screen[1] - viewport.1 * 0.5 - (before.y - viewport.1 * 0.5) * zoom,
-    ]
-}
-
 /// Render the gallery offscreen and write it to a PNG.
-///
-/// This is the headless twin of the window: same scene, same renderer, but
-/// the picture lands in a file instead of on the screen.
-fn render_to_png(path: &str, width: u32, height: u32, dark: bool) -> Result<(), String> {
+fn render_to_png(
+    path: &str,
+    width: u32,
+    height: u32,
+    dark: bool,
+    zoom_step: usize,
+    show_hud: bool,
+) -> Result<(), String> {
     let gpu = Gpu::new(GpuConfig::default()).map_err(|e| e.to_string())?;
     let mut renderer = Renderer::new(gpu, width, height).map_err(|e| e.to_string())?;
-
     let atlases = Arc::new(AtlasSet::new(&renderer.gpu, 64).map_err(|e| e.to_string())?);
     renderer
         .install_atlases(atlases.clone())
         .map_err(|e| e.to_string())?;
 
-    let mut labels = Labels::new();
-    let (scene, _) = build(&mut labels, &palette(), (width as f32, height as f32));
+    let mut app = GalleryApp::new();
+    app.state.theme = if dark {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    };
+    app.state.zoom_step = zoom_step.min(showcase::state::ZOOM_STEPS.len() - 1);
+    app.state.show_hud = show_hud;
+    let zoom = app.state.zoom();
+    app.set_effective_scale(zoom);
+    app.rebuild((width as f32 / zoom, height as f32 / zoom));
+    app.scene.camera = Camera::ui((width as f32, height as f32), zoom);
 
-    for update in labels.cache.take_updates() {
+    for update in app.labels.cache.take_updates() {
         let kind = match update.target {
             unbound_text::AtlasTarget::Coverage => AtlasKind::R8,
             unbound_text::AtlasTarget::Color => AtlasKind::Rgba8,
@@ -650,17 +630,14 @@ fn render_to_png(path: &str, width: u32, height: u32, dark: bool) -> Result<(), 
             )
             .map_err(|e| e.to_string())?;
     }
-
-    // Give the glyph atlas the colour table and draw.
     renderer
-        .write_theme(&theme_table(dark))
+        .write_theme(&gallery::theme_table(dark))
         .map_err(|e| e.to_string())?;
     renderer
-        .render(&scene.upload(1))
+        .render(&app.scene.upload(1))
         .map_err(|e| e.to_string())?;
     let pixels = renderer.read_pixels().map_err(|e| e.to_string())?;
     renderer.destroy();
-
     write_png(path, width, height, &pixels)
 }
 
@@ -677,8 +654,6 @@ fn write_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> Result<(), Str
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-    // The readback is BGRA; the PNG wants RGBA. Swapping the first and third
-    // channels turns B,G,R,A into R,G,B,A.
     let mut rgba = rgba.to_vec();
     for pixel in rgba.chunks_exact_mut(4) {
         pixel.swap(0, 2);
@@ -688,27 +663,51 @@ fn write_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> Result<(), Str
 }
 
 fn main() {
-    // The headless twin: render the gallery to a PNG and exit. Shots are
-    // build artifacts, not sources: they land under `target/` by default so
-    // they never end up in a commit.
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--shot") {
         let dark = args.iter().any(|a| a == "--dark");
+        let zoom_step = args
+            .windows(2)
+            .find(|w| w[0] == "--zoom")
+            .and_then(|w| w[1].parse::<usize>().ok())
+            .map_or(0, |percent| match percent {
+                125 => 1,
+                150 => 2,
+                200 => 3,
+                _ => 0,
+            });
         let path = args
             .windows(2)
             .find(|w| w[0] == "--shot" && !w[1].starts_with("--"))
             .map_or_else(
                 || {
                     let name = if dark {
-                        "showcase-dark.png"
+                        "gallery-dark.png"
                     } else {
-                        "showcase-light.png"
+                        "gallery-light.png"
                     };
                     format!("target/showcase/{name}")
                 },
                 |w| w[1].clone(),
             );
-        match render_to_png(&path, 1280, 720, dark) {
+        let width = args
+            .windows(2)
+            .find(|w| w[0] == "--width")
+            .and_then(|w| w[1].parse::<u32>().ok())
+            .unwrap_or(1440);
+        let height = args
+            .windows(2)
+            .find(|w| w[0] == "--height")
+            .and_then(|w| w[1].parse::<u32>().ok())
+            .unwrap_or(900);
+        match render_to_png(
+            &path,
+            width,
+            height,
+            dark,
+            zoom_step,
+            args.iter().any(|a| a == "--hud"),
+        ) {
             Ok(()) => println!("wrote {path}"),
             Err(error) => eprintln!("could not render: {error}"),
         }
@@ -717,9 +716,12 @@ fn main() {
 
     let config = WindowConfig {
         title: TITLE.to_string(),
-        width: 1280,
-        height: 720,
+        width: 1440,
+        height: 900,
         resizable: true,
+        decorations: false,
+        min_width: 960,
+        min_height: 600,
         visible: true,
         ..Default::default()
     };
@@ -735,64 +737,45 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The shader's forward mapping, repeated here so the inverse can be
-    /// checked against the formula the GPU actually applies.
-    fn screen_point(world: Vec2, viewport: (f32, f32), zoom: f32, pan: [f32; 2]) -> [f32; 2] {
-        let (width, height) = viewport;
-        let anchor = [width * 0.5 - pan[0] / zoom, height * 0.5 - pan[1] / zoom];
-        [
-            (world.x - anchor[0]) * zoom + width * 0.5,
-            (world.y - anchor[1]) * zoom + height * 0.5,
-        ]
-    }
+    use showcase::pages::PageId;
 
     #[test]
-    fn the_inverse_camera_maps_the_viewport_centre_to_itself() {
-        let viewport = (1280.0, 720.0);
-        let world = canvas_at([640.0, 360.0], viewport, 1.0, [0.0, 0.0]);
-        assert!((world.x - 640.0).abs() < f32::EPSILON);
-        assert!((world.y - 360.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn panning_moves_canvas_coordinates_by_the_pan_amount() {
-        let viewport = (1280.0, 720.0);
-        let origin = canvas_at([640.0, 360.0], viewport, 1.0, [0.0, 0.0]);
-        let panned = canvas_at([640.0, 360.0], viewport, 1.0, [120.0, -40.0]);
-        assert!((panned.x - (origin.x - 120.0)).abs() < 1e-4);
-        assert!((panned.y - (origin.y + 40.0)).abs() < 1e-4);
-    }
-
-    #[test]
-    fn wheel_zoom_keeps_the_canvas_point_under_the_cursor_still() {
-        let viewport = (1280.0, 720.0);
-        let screen = [300.0, 200.0];
-        let before = canvas_at(screen, viewport, 1.0, [0.0, 0.0]);
-        let pan = zoom_anchor_pan(screen, viewport, before, 2.0);
-        let after = canvas_at(screen, viewport, 2.0, pan);
-        assert!(
-            (after - before).length() < 1e-3,
-            "the point under the cursor drifted: {before:?} -> {after:?}"
+    fn zooming_keeps_the_layout_and_grows_the_physical_window() {
+        let base = Vec2::new(1440.0, 900.0);
+        assert_eq!(
+            zoomed_physical_size(base, 1.0, Some(Vec2::new(3840.0, 2160.0))),
+            Vec2::new(1440.0, 900.0)
         );
+        assert_eq!(
+            zoomed_physical_size(base, 1.5, Some(Vec2::new(3840.0, 2160.0))),
+            Vec2::new(2160.0, 1350.0)
+        );
+        // A 200 % window on a 1080p panel is clamped to the screen.
+        let fitted = zoomed_physical_size(base, 2.0, Some(Vec2::new(1920.0, 1080.0)));
+        assert!(fitted.x <= 1920.0 * 0.95 + 0.5);
+        assert!(fitted.y <= 1080.0 * 0.95 + 0.5);
+        assert!(fitted.x > 900.0 && fitted.y > 500.0);
     }
 
-    /// A click is only routed correctly if the screen point under the cursor
-    /// survives the round trip through the camera at every zoom and pan.
     #[test]
-    fn a_button_click_survives_pan_and_zoom() {
-        let rect = showcase::gallery::button_rect();
-        let viewport = (1280.0, 720.0);
-        for (zoom, pan) in [
-            (1.0, [0.0, 0.0]),
-            (2.0, [60.0, -30.0]),
-            (0.5, [-120.0, 40.0]),
-        ] {
-            let centre = rect.center();
-            let screen = screen_point(centre, viewport, zoom, pan);
-            let world = canvas_at(screen, viewport, zoom, pan);
-            assert!((world.x - centre.x).abs() < 1e-2, "zoom {zoom} pan {pan:?}");
-            assert!((world.y - centre.y).abs() < 1e-2, "zoom {zoom} pan {pan:?}");
+    fn the_gallery_starts_on_home_with_a_full_catalogue() {
+        let app = GalleryApp::new();
+        assert_eq!(app.state.active_page, PageId::Home);
+        assert_eq!(PageId::ALL.len(), 21);
+        assert!(!PageId::Home.examples().is_empty());
+        assert!(PageId::Telemetry.examples().len() >= 2);
+    }
+
+    #[test]
+    fn every_page_has_examples_and_unique_metadata() {
+        for page in PageId::ALL {
+            let examples = page.examples();
+            assert!(!examples.is_empty(), "{page:?} has no examples");
+            for example in examples {
+                assert!(!example.code.is_empty());
+                assert!(!example.a11y.is_empty());
+                assert!(example.stage_height >= 200.0);
+            }
         }
     }
 }

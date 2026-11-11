@@ -24,6 +24,7 @@ unbound-vector.workspace = true
 unbound-platform.workspace = true
 unbound-abi.workspace = true
 unbound-a11y.workspace = true
+unbound-anim.workspace = true
 unbound-headless.workspace = true
 unbound-input.workspace = true
 unbound-world.workspace = true

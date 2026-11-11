@@ -1,0 +1,2679 @@
+//! The dogfooded application shell.
+//!
+//! `GalleryApp` owns navigation, environment switches, demo state and the input
+//! router. It draws the custom title bar, the collapsible NavigationView, the
+//! page viewport and the `ExampleCard` composition, so the showcase exercises
+//! the same primitives a real application would use.
+
+use accesskit::Role;
+use unbound_anim::{Spring, SpringPreset};
+use unbound_headless::{Frame, FrameBuilder, NodeKind};
+use unbound_input::{CursorKind, PointerConfig, PointerEvent, Router};
+use unbound_math::{Rect, Vec2};
+use unbound_platform::{Modifiers, PlatformKey};
+
+use crate::canvas::{AlignX, AlignY, Canvas, RangeZone};
+use crate::gallery::{self, Labels, Palette};
+use crate::pages::{self, CategoryId, DemoCtx, KnobSpec, PageId};
+use crate::state::{GalleryState, ThemeMode, ZOOM_STEPS};
+use crate::target::{self, Target, ROOT};
+use crate::widgets::{self, Icon};
+
+const TOP_BAR_HEIGHT: f32 = 56.0;
+const NAV_EXPANDED: f32 = 248.0;
+const NAV_COLLAPSED: f32 = 68.0;
+
+/// Responsive geometry for one frame.
+#[derive(Copy, Clone, Debug)]
+pub struct ShellLayout {
+    pub viewport: Rect,
+    pub top_bar: Rect,
+    pub nav: Rect,
+    pub content: Rect,
+    pub nav_width: f32,
+    pub nav_toggle: Rect,
+    pub search: Rect,
+    pub theme: Rect,
+    pub zoom: Rect,
+    pub snap: Rect,
+    pub hud: Rect,
+    pub window_minimize: Rect,
+    pub window_maximize: Rect,
+    pub window_close: Rect,
+    pub compact: bool,
+    pub wide: bool,
+}
+
+impl ShellLayout {
+    #[must_use]
+    pub fn new(viewport: Rect, nav_width: f32) -> Self {
+        let width = viewport.size.x;
+        let compact = width < 1080.0;
+        let wide = width >= 1240.0;
+        let top_bar = Rect::new(0.0, 0.0, width, TOP_BAR_HEIGHT);
+        let nav = Rect::new(
+            0.0,
+            TOP_BAR_HEIGHT,
+            nav_width,
+            (viewport.size.y - TOP_BAR_HEIGHT).max(0.0),
+        );
+        let content = Rect::new(
+            nav_width,
+            TOP_BAR_HEIGHT,
+            (width - nav_width).max(0.0),
+            (viewport.size.y - TOP_BAR_HEIGHT).max(0.0),
+        );
+
+        // Native decorations are disabled, so the right edge belongs to the
+        // client-side minimise / maximise / close buttons.
+        let close = Rect::new((width - 52.0).max(0.0), 0.0, 44.0, TOP_BAR_HEIGHT);
+        let maximize = Rect::new(close.origin.x - 44.0, 0.0, 44.0, TOP_BAR_HEIGHT);
+        let minimize = Rect::new(maximize.origin.x - 44.0, 0.0, 44.0, TOP_BAR_HEIGHT);
+        let right = minimize.origin.x - 10.0;
+        let hud = Rect::new(right - 32.0, 12.0, 32.0, 32.0);
+        let snap = Rect::new(hud.origin.x - 38.0, 12.0, 32.0, 32.0);
+        let zoom_width = if width < 1000.0 { 136.0 } else { 172.0 };
+        let zoom = Rect::new(snap.origin.x - 8.0 - zoom_width, 12.0, zoom_width, 32.0);
+        let theme_width = if compact { 34.0 } else { 118.0 };
+        let theme = Rect::new(zoom.origin.x - 8.0 - theme_width, 12.0, theme_width, 32.0);
+        let search_width = if width < 900.0 {
+            0.0
+        } else if width < 1000.0 {
+            170.0
+        } else {
+            (width * 0.24).clamp(220.0, 380.0)
+        };
+        let search_x = (width * 0.5 - search_width * 0.5)
+            .max(218.0)
+            .min((theme.origin.x - search_width - 20.0).max(218.0));
+        let search = if search_width > 0.0 {
+            Rect::new(search_x, 12.0, search_width, 32.0)
+        } else {
+            Rect::new(0.0, 12.0, 0.0, 32.0)
+        };
+        let nav_toggle = Rect::new(12.0, 12.0, 32.0, 32.0);
+        Self {
+            viewport,
+            top_bar,
+            nav,
+            content,
+            nav_width,
+            nav_toggle,
+            search,
+            theme,
+            zoom,
+            snap,
+            hud,
+            window_minimize: minimize,
+            window_maximize: maximize,
+            window_close: close,
+            compact,
+            wide,
+        }
+    }
+}
+
+/// One knob row inside an options panel.
+#[derive(Clone, Debug)]
+struct KnobRow {
+    index: usize,
+    row: Rect,
+    label: Option<Rect>,
+    control: Rect,
+}
+
+/// One example card after layout.
+#[derive(Clone, Debug)]
+struct CardLayout {
+    index: usize,
+    rect: Rect,
+    stage: Rect,
+    knobs: Rect,
+    knob_rows: Vec<KnobRow>,
+    code_bar: Rect,
+    code_panel: Option<Rect>,
+}
+
+/// A page after layout.
+#[derive(Clone, Debug)]
+struct PageLayout {
+    page: PageId,
+    header: Rect,
+    cards: Vec<CardLayout>,
+    content_height: f32,
+}
+
+/// A window action requested by the custom title bar.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum WindowCommand {
+    /// Minimise the window.
+    Minimize,
+    /// Toggle the maximised state.
+    ToggleMaximize,
+    /// Close the window.
+    Close,
+}
+
+/// The application.
+pub struct GalleryApp {
+    pub state: GalleryState,
+    pub scene: gallery::Gallery,
+    pub labels: Labels,
+    pub router: Router,
+    pub layout: ShellLayout,
+    pub focused: Option<u64>,
+    pub focus_order: Vec<u64>,
+    pub ranges: Vec<RangeZone>,
+    pub scroll_zones: Vec<(Rect, u8)>,
+    pub semantics: unbound_a11y::Semantics,
+    page_layout: Option<PageLayout>,
+    nav_spring: Spring,
+    last_revision: u64,
+    last_hover: Option<u64>,
+    last_pressed: Option<u64>,
+    last_focus: Option<u64>,
+    last_viewport: (f32, f32),
+    nav_max_scroll: f32,
+    pointer: Vec2,
+    panning: Option<Vec2>,
+    dragging_range: Option<u64>,
+    effective_scale: f32,
+    pending_window: Option<WindowCommand>,
+    /// Mirrors the native window's maximised state for the title-bar icon.
+    pub window_maximized: bool,
+}
+
+impl Default for GalleryApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GalleryApp {
+    /// Create the gallery at its Home page.
+    #[must_use]
+    pub fn new() -> Self {
+        let layout = ShellLayout::new(Rect::new(0.0, 0.0, 1280.0, 800.0), NAV_EXPANDED);
+        let mut nav_spring = Spring::new(SpringPreset::Snappy, NAV_EXPANDED);
+        nav_spring.set_target(NAV_EXPANDED);
+        Self {
+            state: GalleryState::default(),
+            scene: gallery::Gallery::new(),
+            labels: Labels::new(),
+            router: Router::new(PointerConfig::default()),
+            layout,
+            focused: None,
+            focus_order: Vec::new(),
+            ranges: Vec::new(),
+            scroll_zones: Vec::new(),
+            semantics: unbound_a11y::Semantics::new(ROOT),
+            page_layout: None,
+            nav_spring,
+            last_revision: 0,
+            last_hover: None,
+            last_pressed: None,
+            last_focus: None,
+            last_viewport: (0.0, 0.0),
+            nav_max_scroll: 0.0,
+            pointer: Vec2::ZERO,
+            panning: None,
+            dragging_range: None,
+            effective_scale: 1.0,
+            pending_window: None,
+            window_maximized: false,
+        }
+    }
+
+    /// Mirror the native window's maximised state for the title-bar icon.
+    pub fn set_window_maximized(&mut self, maximized: bool) {
+        self.window_maximized = maximized;
+    }
+
+    /// Set the physical pixels per logical unit (`OS scale × app zoom`).
+    ///
+    /// Everything painted afterwards lays out in logical units but rasterises
+    /// glyphs and snaps rectangles for this scale.
+    pub fn set_effective_scale(&mut self, scale: f32) {
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        self.effective_scale = scale.clamp(0.5, 4.0);
+    }
+
+    /// The physical pixels per logical unit currently in use.
+    #[must_use]
+    pub fn effective_scale(&self) -> f32 {
+        self.effective_scale
+    }
+
+    /// Take the window action requested by the last press, if any.
+    pub fn take_window_command(&mut self) -> Option<WindowCommand> {
+        self.pending_window.take()
+    }
+
+    /// Whether `point` is draggable title-bar background.
+    #[must_use]
+    pub fn is_titlebar_drag(&self, point: Vec2) -> bool {
+        self.layout.top_bar.contains_point(point) && self.router.hover().is_none()
+    }
+
+    /// The palette currently used by the shell.
+    #[must_use]
+    pub fn palette(&self) -> Palette {
+        gallery::palette()
+    }
+
+    /// Navigate and close transient surfaces.
+    pub fn navigate(&mut self, page: PageId) {
+        self.state.navigate(page);
+        self.state.search_focused = false;
+        self.state.search_query.clear();
+        self.state.demo.modal_open = false;
+        self.state.demo.dropdown_open = false;
+        self.focused = Some(target::id(Target::NavPage(page.index() as u8)));
+    }
+
+    /// Rebuild the scene when anything observable changed.
+    pub fn sync(&mut self, viewport: (f32, f32)) -> bool {
+        let hover = self.router.hover();
+        let pressed = self.router.pointer().pressed();
+        let changed = self.last_revision != self.state.revision
+            || self.last_hover != hover
+            || self.last_pressed != pressed
+            || self.last_focus != self.focused
+            || self.last_viewport != viewport
+            || !self.nav_spring.is_settled();
+        if changed {
+            self.rebuild(viewport);
+        }
+        changed
+    }
+
+    /// Rebuild unconditionally.
+    pub fn rebuild(&mut self, viewport: (f32, f32)) {
+        let (width, height) = viewport;
+        let viewport_rect = Rect::new(0.0, 0.0, width.max(320.0), height.max(240.0));
+        let nav_width = self.nav_spring.value.clamp(NAV_COLLAPSED, NAV_EXPANDED);
+        let layout = ShellLayout::new(viewport_rect, nav_width);
+        let palette = gallery::palette();
+        let hover = self.router.hover();
+        let pressed = self.router.pointer().pressed();
+        let page_layout = compute_page(&self.state, &layout);
+        let nav_max_scroll = nav_height(&layout) - nav_tree_rect(&layout).size.y;
+        self.state.nav_scroll = self.state.nav_scroll.clamp(0.0, nav_max_scroll.max(0.0));
+        self.state.content_scroll = self.state.content_scroll.clamp(
+            0.0,
+            (page_layout.content_height - layout.content.size.y + 48.0).max(0.0),
+        );
+        let page_layout = compute_page(&self.state, &layout);
+
+        self.scene = gallery::Gallery::new();
+        let focused = self.focused;
+        let scale = self.effective_scale;
+        let pixel_snap = self.state.pixel_snap;
+        let GalleryApp {
+            scene,
+            labels,
+            state,
+            ..
+        } = self;
+        labels.set_raster_scale(scale);
+        // The shell always runs glyph phase 0: every quad is snapped to the
+        // physical grid, so a phase-specific raster would be sampled up to half
+        // a pixel away from the position it was generated for.
+        labels.set_snap_phases(true);
+        let mut canvas = Canvas::new(
+            scene,
+            labels,
+            &palette,
+            (layout.viewport.size.x, layout.viewport.size.y),
+            focused,
+            hover,
+            pressed,
+            scale,
+            pixel_snap,
+        );
+        draw_background(&mut canvas, &layout);
+        draw_top_bar(&mut canvas, state, &layout, self.window_maximized);
+        draw_nav(&mut canvas, state, &layout);
+        draw_page(&mut canvas, state, &layout, &page_layout);
+        draw_hud(&mut canvas, state, &layout, page_layout.cards.len());
+        draw_search_overlay(&mut canvas, state, &layout);
+        let output = canvas.finish();
+        let scene_len = scene.primitives.len() as u32;
+        let draw_calls = 4 + u32::from(!scene.clips.is_empty());
+        let _ = output.glyph_count;
+
+        self.state.demo.primitive_count = scene_len;
+        self.state.demo.draw_calls = draw_calls;
+        self.state.demo.upload_bytes = 0;
+        self.router.set_regions(output.regions);
+        self.focus_order = output.focus_order;
+        self.ranges = output.ranges;
+        self.scroll_zones = output.scroll_zones;
+        self.semantics = output.semantics;
+        self.layout = layout;
+        self.page_layout = Some(page_layout);
+        self.nav_max_scroll = nav_max_scroll.max(0.0);
+        self.last_revision = self.state.revision;
+        self.last_hover = hover;
+        self.last_pressed = pressed;
+        self.last_focus = self.focused;
+        self.last_viewport = viewport;
+    }
+
+    /// Advance time-driven demos.
+    pub fn tick(&mut self, dt: f32) -> bool {
+        let target = if self.state.nav_expanded {
+            NAV_EXPANDED
+        } else {
+            NAV_COLLAPSED
+        };
+        self.nav_spring.set_target(target);
+        let nav_moving = self.nav_spring.step(dt);
+        let demo_moving = self.state.tick(dt);
+        if nav_moving || demo_moving {
+            self.state.bump();
+        }
+        nav_moving || demo_moving
+    }
+
+    /// Move the pointer (logical pixels).
+    pub fn pointer_move(&mut self, position: Vec2) {
+        self.pointer = position;
+        self.router.pointer_move(position);
+        if let Some(node) = self.router.pointer().pressed() {
+            if self.dragging_range == Some(node) {
+                self.update_range(node, position);
+            }
+            if self.panning.is_some() {
+                let zoom = self.state.demo.canvas_zoom.max(0.01);
+                let delta = position - self.panning.unwrap_or(position);
+                self.state.demo.canvas_pan -= delta / zoom;
+                self.panning = Some(position);
+                self.state.bump();
+            }
+            if let Some(Target::Demo(page, card, part)) = target::decode(node) {
+                if page as usize == PageId::Marquee.index() && part == 1 {
+                    if let Some((start, _)) = self.state.demo.marquee {
+                        self.state.demo.marquee = Some((start, position));
+                        self.state.bump();
+                    }
+                }
+                if self.state.demo.drag_active.is_some()
+                    && page as usize == PageId::DragDrop.index()
+                    && card == 0
+                    && (1..=4).contains(&part)
+                {
+                    self.state.demo.drag_position = Some(position);
+                    self.state.bump();
+                }
+            }
+        }
+    }
+
+    /// Press the pointer.
+    pub fn pointer_down(&mut self, position: Vec2, now: f64) {
+        self.pointer = position;
+        self.router.pointer_move(position);
+        self.router.pointer_down(position, now);
+        if let Some(node) = self.router.pointer().pressed() {
+            self.focused = Some(node);
+            if let Some(target) = target::decode(node) {
+                self.press_target(target, position);
+            }
+        }
+    }
+
+    /// Release the pointer.
+    pub fn pointer_up(&mut self, position: Vec2, now: f64) {
+        self.pointer = position;
+        self.router.pointer_move(position);
+        self.finish_drag(position);
+        let events = self.router.pointer_up(position, now);
+        for event in events {
+            if let PointerEvent::Click { target: node, .. } = event {
+                if let Some(target) = target::decode(node) {
+                    // Press already committed the immediate toggles; replaying
+                    // them on release would flip them back.
+                    if matches!(
+                        target,
+                        Target::NavToggle
+                            | Target::Theme(_)
+                            | Target::Zoom(_)
+                            | Target::Snap
+                            | Target::Hud
+                            | Target::Search
+                            | Target::Knob(..)
+                            | Target::KnobOption(..)
+                            | Target::Code(..)
+                            | Target::WindowMinimize
+                            | Target::WindowMaximize
+                            | Target::WindowClose
+                    ) {
+                        continue;
+                    }
+                    self.click_target(target, position);
+                }
+            }
+        }
+        self.dragging_range = None;
+        self.panning = None;
+    }
+
+    /// Wheel over the shell.
+    pub fn wheel(&mut self, delta_y: f32) {
+        let point = self.pointer;
+        if self.layout.nav.contains_point(point) {
+            self.state.nav_scroll =
+                (self.state.nav_scroll - delta_y * 44.0).clamp(0.0, self.nav_max_scroll);
+            self.state.bump();
+            return;
+        }
+        if !self.layout.content.contains_point(point) {
+            return;
+        }
+        if let Some((_, tag)) = self
+            .scroll_zones
+            .iter()
+            .find(|(rect, _)| rect.contains_point(point))
+        {
+            match tag {
+                1 => {
+                    let row = self.list_row_height();
+                    let total = self.list_total();
+                    let stage_h = self
+                        .scroll_zones
+                        .iter()
+                        .find(|(_, t)| *t == 1)
+                        .map_or(220.0, |(rect, _)| rect.size.y);
+                    self.state.demo.list_scroll = (self.state.demo.list_scroll
+                        - delta_y * row * 2.0)
+                        .clamp(0.0, (total as f32 * row - stage_h).max(0.0));
+                    self.state.bump();
+                }
+                2 => {
+                    let factor = (1.0 + delta_y * 0.08).clamp(0.85, 1.2);
+                    self.state.demo.canvas_zoom =
+                        (self.state.demo.canvas_zoom * factor).clamp(0.4, 2.5);
+                    self.state.bump();
+                }
+                3 | 4 => {}
+                _ => {}
+            }
+            return;
+        }
+        let max = self.page_layout.as_ref().map_or(0.0, |page| {
+            (page.content_height - self.layout.content.size.y + 48.0).max(0.0)
+        });
+        self.state.content_scroll = (self.state.content_scroll - delta_y * 52.0).clamp(0.0, max);
+        self.state.bump();
+    }
+
+    /// Handle a key press.
+    pub fn key(&mut self, key: &PlatformKey, modifiers: Modifiers) {
+        if self.state.search_focused {
+            match key {
+                PlatformKey::Named(name) if name == "Escape" => {
+                    self.state.search_focused = false;
+                    self.state.search_query.clear();
+                    self.state.bump();
+                }
+                PlatformKey::Named(name) if name == "Backspace" => {
+                    self.state.search_query.pop();
+                    self.state.bump();
+                }
+                PlatformKey::Named(name) if name == "Enter" => {
+                    if let Some(page) = self.state.search_results().first().copied() {
+                        self.navigate(page);
+                    }
+                }
+                PlatformKey::Character(text) if !modifiers.control => {
+                    self.state.search_query.push_str(text);
+                    self.state.bump();
+                }
+                _ => {}
+            }
+            return;
+        }
+        if self.state.demo.typing {
+            match key {
+                PlatformKey::Named(name) if name == "Escape" || name == "Enter" => {
+                    self.state.demo.typing = false;
+                    self.state.bump();
+                }
+                PlatformKey::Named(name) if name == "Backspace" => {
+                    self.state.demo.text.pop();
+                    self.state.bump();
+                }
+                PlatformKey::Character(text) if !modifiers.control => {
+                    self.state.demo.text.push_str(text);
+                    self.state.bump();
+                }
+                _ => {}
+            }
+            return;
+        }
+        if modifiers.control {
+            if let PlatformKey::Character(text) = key {
+                if text.eq_ignore_ascii_case("k") {
+                    self.state.search_focused = true;
+                    self.state.bump();
+                }
+            }
+            return;
+        }
+        match key {
+            PlatformKey::Named(name) if name == "Tab" => {
+                self.cycle_focus(modifiers.shift);
+            }
+            PlatformKey::Named(name) if name == "Enter" || name == "Space" => {
+                if let Some(node) = self.focused {
+                    if let Some(target) = target::decode(node) {
+                        self.click_target(target, self.pointer);
+                    }
+                }
+            }
+            PlatformKey::Named(name) if name == "Escape" => {
+                self.state.demo.modal_open = false;
+                self.state.demo.dropdown_open = false;
+                self.state.search_focused = false;
+                self.state.search_query.clear();
+                self.state.bump();
+            }
+            PlatformKey::Named(name) if name == "F12" => {
+                self.state.show_hud = !self.state.show_hud;
+                self.state.bump();
+            }
+            PlatformKey::Character(text) if text.eq_ignore_ascii_case("t") => {
+                self.state.theme = self.state.theme.toggled();
+                self.state.bump();
+            }
+            _ => {}
+        }
+    }
+
+    fn cycle_focus(&mut self, reverse: bool) {
+        if self.focus_order.is_empty() {
+            return;
+        }
+        let current = self.focused.and_then(|node| {
+            self.focus_order
+                .iter()
+                .position(|candidate| *candidate == node)
+        });
+        let next = match (current, reverse) {
+            (Some(index), false) => (index + 1) % self.focus_order.len(),
+            (Some(index), true) => (index + self.focus_order.len() - 1) % self.focus_order.len(),
+            (None, false) => 0,
+            (None, true) => self.focus_order.len() - 1,
+        };
+        self.focused = Some(self.focus_order[next]);
+        if let Some(Target::Demo(page, _, part)) = self.focused.and_then(target::decode) {
+            if page as usize == PageId::A11y.index() && (10..=12).contains(&part) {
+                self.state.demo.a11y_focus = (part - 10) as usize;
+            }
+        }
+        self.state.bump();
+    }
+
+    /// The OS cursor for the current hit path.
+    #[must_use]
+    pub fn cursor(&self) -> CursorKind {
+        self.router.cursor()
+    }
+
+    fn press_target(&mut self, target: Target, position: Vec2) {
+        match target {
+            Target::NavPage(page) => {
+                self.navigate(PageId::from_index(page as usize));
+            }
+            Target::NavToggle => {
+                self.state.nav_expanded = !self.state.nav_expanded;
+                self.state.bump();
+            }
+            Target::Theme(bit) => {
+                self.state.theme = if bit == 0 {
+                    ThemeMode::Light
+                } else {
+                    ThemeMode::Dark
+                };
+                self.state.bump();
+            }
+            Target::Zoom(step) => {
+                self.state.zoom_step = (step as usize).min(ZOOM_STEPS.len() - 1);
+                self.state.bump();
+            }
+            Target::Snap => {
+                self.state.pixel_snap = !self.state.pixel_snap;
+                self.state.bump();
+            }
+            Target::Hud => {
+                self.state.show_hud = !self.state.show_hud;
+                self.state.bump();
+            }
+            Target::Search => {
+                self.state.search_focused = true;
+                self.state.demo.typing = false;
+                self.state.bump();
+            }
+            Target::Footer(index) => {
+                self.navigate(if index == 0 {
+                    PageId::Telemetry
+                } else {
+                    PageId::Settings
+                });
+            }
+            Target::Knob(page, card, knob) => {
+                if let Some(spec) = knob_spec(page, card, knob) {
+                    let page_id = PageId::from_index(page as usize);
+                    if spec.range().is_some() {
+                        self.dragging_range = Some(target::id(target));
+                        self.update_range(target::id(target), position);
+                    } else {
+                        let current = self
+                            .state
+                            .knob(page_id, card as usize, knob as usize, &spec);
+                        self.state.set_knob(
+                            page_id,
+                            card as usize,
+                            knob as usize,
+                            if current > 0.5 { 0.0 } else { 1.0 },
+                        );
+                    }
+                    if page_id == PageId::Springs && card == 0 && knob <= 1 {
+                        if let Some(spec) = knob_spec(page, card, knob) {
+                            let value =
+                                self.state
+                                    .knob(page_id, card as usize, knob as usize, &spec);
+                            if knob == 0 {
+                                self.state.demo.spring.stiffness = value.max(1.0);
+                            } else {
+                                self.state.demo.spring.damping = value.max(0.1);
+                            }
+                        }
+                    }
+                }
+            }
+            Target::KnobOption(page, card, knob, option) => {
+                self.state.set_knob(
+                    PageId::from_index(page as usize),
+                    card as usize,
+                    knob as usize,
+                    option as f32,
+                );
+            }
+            Target::Code(page, card) => {
+                self.state
+                    .toggle_code(PageId::from_index(page as usize), card);
+            }
+            Target::SearchResult(page) => {
+                self.navigate(PageId::from_index(page as usize));
+            }
+            Target::Demo(page, card, part) => {
+                self.press_demo(page, card, part, position);
+            }
+            Target::WindowMinimize => {
+                self.pending_window = Some(WindowCommand::Minimize);
+            }
+            Target::WindowMaximize => {
+                self.pending_window = Some(WindowCommand::ToggleMaximize);
+            }
+            Target::WindowClose => {
+                self.pending_window = Some(WindowCommand::Close);
+            }
+        }
+    }
+
+    fn click_target(&mut self, target: Target, position: Vec2) {
+        match target {
+            Target::NavPage(page) => self.navigate(PageId::from_index(page as usize)),
+            Target::Footer(index) => self.navigate(if index == 0 {
+                PageId::Telemetry
+            } else {
+                PageId::Settings
+            }),
+            Target::SearchResult(page) => self.navigate(PageId::from_index(page as usize)),
+            Target::Demo(page, card, part) => {
+                self.click_demo(page, card, part, position);
+            }
+            Target::Knob(..) | Target::KnobOption(..) => self.press_target(target, position),
+            Target::Code(page, card) => {
+                self.state
+                    .toggle_code(PageId::from_index(page as usize), card);
+            }
+            Target::NavToggle
+            | Target::Theme(_)
+            | Target::Zoom(_)
+            | Target::Snap
+            | Target::Hud
+            | Target::Search
+            | Target::WindowMinimize
+            | Target::WindowMaximize
+            | Target::WindowClose => self.press_target(target, position),
+        }
+    }
+
+    fn press_demo(&mut self, page: u8, card: u8, part: u16, position: Vec2) {
+        let page = PageId::from_index(page as usize);
+        if page == PageId::Viewport && part == 1 {
+            self.panning = Some(position);
+        }
+        if page == PageId::Marquee && part == 1 {
+            self.state.demo.marquee = Some((position, position));
+            self.state.bump();
+        }
+        if page == PageId::DragDrop && card == 0 && (1..=4).contains(&part) {
+            self.state.demo.drag_active = Some(part as usize - 1);
+            self.state.demo.drag_position = Some(position);
+            self.state.bump();
+        }
+        if page == PageId::Sliders {
+            if let Some(zone) = self
+                .ranges
+                .iter()
+                .find(|zone| zone.node == target::id(Target::Demo(page.index() as u8, card, part)))
+            {
+                self.dragging_range = Some(zone.node);
+                self.update_range(zone.node, position);
+            }
+        }
+    }
+
+    fn click_demo(&mut self, page: u8, card: u8, part: u16, position: Vec2) {
+        let page = PageId::from_index(page as usize);
+        match page {
+            PageId::Home => match card {
+                0 => {
+                    if part == 1 {
+                        self.navigate(PageId::Buttons);
+                    } else if part == 2 {
+                        self.navigate(PageId::Viewport);
+                    }
+                }
+                1 => {
+                    if let Some((_, _, target, _)) =
+                        pages::home::CAPABILITIES.get(part as usize - 1)
+                    {
+                        self.navigate(*target);
+                    }
+                }
+                2 => {
+                    if let Some(target) = pages::home::INDEX_PAGES.get(part as usize - 1) {
+                        self.navigate(*target);
+                    }
+                }
+                _ => {}
+            },
+            PageId::Buttons => {
+                if card == 0 {
+                    self.state.demo.clicks = self.state.demo.clicks.wrapping_add(1);
+                    self.state.bump();
+                } else if (10..18).contains(&part) {
+                    self.state.demo.selected_icon = part as usize - 10;
+                    self.state.bump();
+                }
+            }
+            PageId::Toggles => match part {
+                1 => {
+                    self.state.demo.toggle_a = !self.state.demo.toggle_a;
+                    self.state.bump();
+                }
+                2 => {
+                    self.state.demo.toggle_b = !self.state.demo.toggle_b;
+                    self.state.bump();
+                }
+                10..=12 => {
+                    self.state.demo.radio_choice = (part - 10) as usize;
+                    self.state.bump();
+                }
+                20..=22 => {
+                    self.state.demo.pill_choice = (part - 20) as usize;
+                    self.state.bump();
+                }
+                30..=34 => {
+                    self.state.demo.pill_choice = (part - 30) as usize;
+                    self.state.bump();
+                }
+                _ => {}
+            },
+            PageId::TextField => {
+                if part == 1 {
+                    self.state.demo.typing = true;
+                    self.state.search_focused = false;
+                    self.state.bump();
+                }
+            }
+            PageId::Overlays => match part {
+                1 => {
+                    self.state.demo.dropdown_open = !self.state.demo.dropdown_open;
+                    self.state.demo.modal_open = false;
+                    self.state.bump();
+                }
+                2 => {
+                    self.state.demo.modal_open = !self.state.demo.modal_open;
+                    self.state.demo.dropdown_open = false;
+                    self.state.bump();
+                }
+                10..=12 => {
+                    self.state.demo.dropdown_open = false;
+                    self.state.bump();
+                }
+                20 | 21 => {
+                    self.state.demo.modal_open = false;
+                    self.state.bump();
+                }
+                _ => {}
+            },
+            PageId::ListView => {
+                if (100..112).contains(&part) {
+                    let row = self.list_row_height();
+                    let first = (self.state.demo.list_scroll / row).floor() as usize;
+                    self.state.demo.list_selected = Some(first + (part - 100) as usize);
+                    self.state.bump();
+                }
+            }
+            PageId::Marquee => {
+                if (10..22).contains(&part) {
+                    let index = (part - 10) as usize;
+                    self.state.demo.selected_nodes[index] = !self.state.demo.selected_nodes[index];
+                    self.state.bump();
+                }
+            }
+            PageId::Undo => match part {
+                1 => self.state.undo(),
+                2 => self.state.redo(),
+                3 => self.state.push_history("Move node"),
+                _ => {}
+            },
+            PageId::Springs => match part {
+                1 => {
+                    self.state.demo.spring_high = !self.state.demo.spring_high;
+                    self.state
+                        .demo
+                        .spring
+                        .set_target(if self.state.demo.spring_high {
+                            1.0
+                        } else {
+                            0.0
+                        });
+                    self.state.bump();
+                }
+                2 => {
+                    self.state.demo.spring.snap_to(0.0);
+                    self.state.demo.spring_high = true;
+                    self.state.demo.spring.set_target(1.0);
+                    self.state.bump();
+                }
+                _ => {}
+            },
+            PageId::A11y => {
+                if (10..=12).contains(&part) {
+                    self.state.demo.a11y_focus = (part - 10) as usize;
+                    self.state.bump();
+                }
+            }
+            _ => {
+                let _ = position;
+            }
+        }
+    }
+
+    fn finish_drag(&mut self, position: Vec2) {
+        if let Some(start) = self.state.demo.marquee.map(|(start, _)| start) {
+            let marquee = Rect::from_points(start, position);
+            for index in 0..12u16 {
+                if let Some(candidate) = demo_rect(self, PageId::Marquee, 0, 10 + index) {
+                    if marquee.contains_point(candidate.center()) {
+                        self.state.demo.selected_nodes[index as usize] = true;
+                    }
+                }
+            }
+            self.state.demo.marquee = None;
+            self.state.bump();
+        }
+        if let Some(index) = self.state.demo.drag_active {
+            let target_slot = (1..=4u16)
+                .filter_map(|part| {
+                    demo_rect(self, PageId::DragDrop, 0, part).map(|rect| (part, rect))
+                })
+                .min_by(|(_, a), (_, b)| {
+                    let da = (a.center() - position).length_squared();
+                    let db = (b.center() - position).length_squared();
+                    da.total_cmp(&db)
+                })
+                .map_or(index, |(part, _)| part as usize - 1);
+            let mut order = self.state.demo.drag_order.clone();
+            if let Some(from) = order.iter().position(|value| *value == index) {
+                let card = order.remove(from);
+                let slot = target_slot.min(order.len());
+                order.insert(slot, card);
+                self.state.demo.drag_order = order;
+            }
+            self.state.demo.drag_active = None;
+            self.state.demo.drag_position = None;
+            self.state.bump();
+        }
+    }
+
+    fn update_range(&mut self, node: u64, position: Vec2) {
+        let Some(zone) = self.ranges.iter().find(|zone| zone.node == node).copied() else {
+            return;
+        };
+        let t = ((position.x - zone.rect.origin.x) / zone.rect.size.x.max(1.0)).clamp(0.0, 1.0);
+        let mut value = zone.min + t * (zone.max - zone.min);
+        if zone.step > 0.0 {
+            value = (value / zone.step).round() * zone.step;
+        }
+        match target::decode(node) {
+            Some(Target::Knob(page, card, knob)) => {
+                let page_id = PageId::from_index(page as usize);
+                self.state
+                    .set_knob(page_id, card as usize, knob as usize, value);
+                if page_id == PageId::Springs && card == 0 && knob <= 1 {
+                    if knob == 0 {
+                        self.state.demo.spring.stiffness = value.max(1.0);
+                    } else {
+                        self.state.demo.spring.damping = value.max(0.1);
+                    }
+                }
+            }
+            Some(Target::Demo(page, _, part))
+                if page as usize == PageId::Sliders.index() && (1..=3).contains(&part) =>
+            {
+                self.state.demo.sliders[part as usize - 1] = value;
+                self.state.bump();
+            }
+            _ => {}
+        }
+    }
+
+    fn list_total(&self) -> usize {
+        let page = PageId::ListView;
+        let spec = PageId::ListView.examples()[0].knobs[0];
+        match self.state.knob(page, 0, 0, &spec) as usize {
+            0 => 1_000,
+            1 => 10_000,
+            _ => 100_000,
+        }
+    }
+
+    fn list_row_height(&self) -> f32 {
+        let spec = PageId::ListView.examples()[0].knobs[1];
+        self.state.knob(PageId::ListView, 0, 1, &spec)
+    }
+
+    /// A layout-only frame for the headless verifier.
+    #[must_use]
+    pub fn frame(&self) -> Frame {
+        let mut builder = FrameBuilder::new(self.layout.viewport);
+        builder.open(
+            NodeKind::Container,
+            self.layout.viewport,
+            "Unbound UI Gallery",
+        );
+        // Title bar.
+        builder.open(NodeKind::Container, self.layout.top_bar, "TitleBar");
+        builder.open(
+            interactive_rect(self.layout.nav_toggle),
+            self.layout.nav_toggle,
+            "Button \"Toggle navigation\"",
+        );
+        builder.close();
+        text_node(
+            &mut builder,
+            Rect::new(52.0, 14.0, 190.0, 28.0),
+            "Unbound UI Gallery",
+        );
+        if self.layout.search.size.x > 100.0 {
+            builder.open(
+                interactive_rect(self.layout.search),
+                self.layout.search,
+                "SearchBox \"Search controls\"",
+            );
+            builder.close();
+        }
+        bundle_controls(&mut builder, &self.layout);
+        builder.close();
+
+        // Navigation pane.
+        builder.open(NodeKind::Container, self.layout.nav, "NavigationView");
+        builder.set_clip(self.layout.nav);
+        builder.set_scrollable(true);
+        let nav_rect = self.layout.nav;
+        let nav_rows = nav_rows(&self.state, &self.layout);
+        for (rect, label) in nav_rows {
+            // A row scrolled out of the pane paints nothing; validating its
+            // clipped-to-zero target would only report the scroll position as
+            // a layout bug.
+            let visible = rect.intersect(&nav_rect);
+            if visible.size.y >= 24.0 && visible.size.x >= 24.0 {
+                builder.open(interactive_rect(rect), rect, &label);
+                builder.close();
+            }
+        }
+        builder.close();
+
+        // Page content.
+        builder.open(NodeKind::Container, self.layout.content, "Page");
+        builder.set_clip(self.layout.content);
+        builder.set_scrollable(true);
+        if let Some(page) = &self.page_layout {
+            let info = page.page.info();
+            text_node(
+                &mut builder,
+                Rect::new(
+                    page.header.origin.x,
+                    page.header.origin.y,
+                    page.header.size.x.min(600.0),
+                    34.0,
+                ),
+                info.title,
+            );
+            text_node(
+                &mut builder,
+                Rect::new(
+                    page.header.origin.x,
+                    page.header.origin.y + 38.0,
+                    page.header.size.x.min(720.0),
+                    40.0,
+                ),
+                info.description,
+            );
+            let content_rect = self.layout.content;
+            let visible = |rect: Rect| {
+                let clipped = rect.intersect(&content_rect);
+                clipped.size.x >= 24.0 && clipped.size.y >= 24.0
+            };
+            for card in &page.cards {
+                if !card.rect.intersects(&content_rect) {
+                    continue;
+                }
+                builder.open(NodeKind::Container, card.rect, "ExampleCard");
+                builder.set_clip(card.rect);
+                if visible(card.stage) {
+                    builder.open(NodeKind::Container, card.stage, "LiveStage");
+                    builder.set_clip(card.stage);
+                    builder.open(interactive_rect(card.stage), card.stage, "Live preview");
+                    builder.close();
+                    builder.close();
+                }
+                if !card.knob_rows.is_empty() {
+                    builder.open(NodeKind::Container, card.knobs, "Options");
+                    for row in &card.knob_rows {
+                        if let Some(label) = row.label {
+                            if visible(label) {
+                                text_node(&mut builder, label, "Property label");
+                            }
+                        }
+                        if visible(row.control) {
+                            builder.open(
+                                interactive_rect(row.control),
+                                row.control,
+                                "Property control",
+                            );
+                            builder.close();
+                        }
+                    }
+                    builder.close();
+                }
+                if visible(card.code_bar) {
+                    builder.open(
+                        interactive_rect(card.code_bar),
+                        card.code_bar,
+                        "Button \"Code and accessibility\"",
+                    );
+                    builder.close();
+                }
+                if let Some(panel) = card.code_panel {
+                    if visible(panel) {
+                        text_node(&mut builder, panel, "Source code");
+                    }
+                }
+                builder.close();
+            }
+        }
+        builder.close();
+
+        // Portals.
+        if self.state.search_focused {
+            let overlay = search_overlay_rect(&self.layout);
+            builder.open(NodeKind::Portal, overlay, "Command palette");
+            builder.set_overlays_siblings(true);
+            let results = self.state.search_results();
+            let count = results.len().max(1);
+            for index in 0..count {
+                let row = Rect::new(
+                    overlay.origin.x + 6.0,
+                    overlay.origin.y + 34.0 + index as f32 * 36.0,
+                    overlay.size.x - 12.0,
+                    34.0,
+                );
+                builder.open(interactive_rect(row), row, "Search result");
+                builder.close();
+            }
+            builder.close();
+        }
+        if self.state.demo.dropdown_open || self.state.demo.modal_open {
+            let overlay = self
+                .page_layout
+                .as_ref()
+                .and_then(|page| page.cards.first())
+                .map_or(self.layout.content, |card| card.stage);
+            builder.open(NodeKind::Portal, overlay, "Overlay");
+            builder.set_overlays_siblings(true);
+            builder.open(
+                interactive_rect(overlay.inflate(-24.0)),
+                overlay.inflate(-24.0),
+                "Overlay action",
+            );
+            builder.close();
+            builder.close();
+        }
+        if self.state.show_hud {
+            if let Some(rect) = hud_rect(&self.layout) {
+                builder.open(NodeKind::Portal, rect, "Stats HUD");
+                builder.set_overlays_siblings(true);
+                let (foreground, background) = hud_colors(self.state.theme.is_dark());
+                let hud_text = |builder: &mut FrameBuilder, rect: Rect, text: &str| {
+                    text_node(builder, rect, text);
+                    builder.set_text_colors(foreground, background);
+                };
+                hud_text(
+                    &mut builder,
+                    Rect::new(
+                        rect.origin.x + 12.0,
+                        rect.origin.y + 8.0,
+                        rect.size.x - 24.0,
+                        14.0,
+                    ),
+                    "LIVE FRAME",
+                );
+                for index in 0..5 {
+                    hud_text(
+                        &mut builder,
+                        Rect::new(
+                            rect.origin.x + 12.0,
+                            rect.origin.y + 26.0 + index as f32 * 15.0,
+                            rect.size.x - 24.0,
+                            14.0,
+                        ),
+                        "HUD metric",
+                    );
+                }
+                builder.close();
+            }
+        }
+        builder.close();
+        builder.build()
+    }
+}
+
+fn knob_spec(page: u8, card: u8, knob: u8) -> Option<KnobSpec> {
+    PageId::from_index(page as usize)
+        .examples()
+        .get(card as usize)
+        .and_then(|example| example.knobs.get(knob as usize))
+        .copied()
+}
+
+fn interactive_rect(_rect: Rect) -> NodeKind {
+    NodeKind::Interactive {
+        min_size: NodeKind::DEFAULT_MIN_SIZE,
+        occluded: false,
+    }
+}
+
+fn text_node(builder: &mut FrameBuilder, rect: Rect, text: &str) {
+    builder.open(
+        NodeKind::Text {
+            ink: rect,
+            ellipsis: true,
+        },
+        rect,
+        &format!("Text \"{text}\""),
+    );
+    builder.close();
+}
+
+fn bundle_controls(builder: &mut FrameBuilder, layout: &ShellLayout) {
+    for (rect, label) in [
+        (layout.theme, "Theme selector"),
+        (layout.zoom, "Zoom selector"),
+        (layout.snap, "Button \"Pixel snapping\""),
+        (layout.hud, "Button \"Performance HUD\""),
+        (layout.window_minimize, "Button \"Minimise window\""),
+        (layout.window_maximize, "Button \"Maximise window\""),
+        (layout.window_close, "Button \"Close window\""),
+    ] {
+        if rect.size.x >= 24.0 {
+            builder.open(interactive_rect(rect), rect, label);
+            builder.close();
+        }
+    }
+}
+
+fn nav_rows(state: &GalleryState, layout: &ShellLayout) -> Vec<(Rect, String)> {
+    let mut rows = Vec::new();
+    if layout.nav_width < 120.0 {
+        let mut y = layout.nav.origin.y + 10.0;
+        for page in [
+            PageId::Home,
+            PageId::Colors,
+            PageId::Buttons,
+            PageId::Flex,
+            PageId::ListView,
+            PageId::Viewport,
+            PageId::Springs,
+            PageId::Telemetry,
+            PageId::Settings,
+        ] {
+            rows.push((
+                Rect::new(layout.nav.origin.x + 12.0, y, layout.nav_width - 24.0, 36.0),
+                format!("Navigation \"{}\"", page.info().title),
+            ));
+            y += 42.0;
+        }
+        let _ = state;
+        return rows;
+    }
+    let mut y = layout.nav.origin.y + 10.0;
+    for (_page, label) in [(PageId::Home, "Home"), (PageId::Colors, "Design Guidance")] {
+        rows.push((
+            Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 36.0),
+            format!("Navigation \"{label}\""),
+        ));
+        y += 38.0 + 2.0;
+    }
+    y += 8.0;
+    for category in CategoryId::ALL {
+        y += 24.0;
+        for page in category.pages() {
+            rows.push((
+                Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 30.0),
+                format!("Navigation \"{}\"", page.info().short),
+            ));
+            y += 30.0;
+        }
+        y += 8.0;
+    }
+    let _ = state;
+    rows
+}
+
+fn demo_rect(app: &GalleryApp, page: PageId, card: u8, part: u16) -> Option<Rect> {
+    let node = target::id(Target::Demo(page.index() as u8, card, part));
+    node_rect_from_regions(app, node)
+}
+
+fn node_rect_from_regions(app: &GalleryApp, node: u64) -> Option<Rect> {
+    app.router
+        .regions()
+        .iter()
+        .find(|region| region.node == node)
+        .map(|region| region.bounds)
+}
+
+// ---------------------------------------------------------------------------
+// layout
+// ---------------------------------------------------------------------------
+
+fn nav_tree_rect(layout: &ShellLayout) -> Rect {
+    let top = layout.nav.origin.y + 10.0 + 76.0 + 8.0;
+    let bottom = layout.viewport.max().y - 10.0 - 82.0;
+    Rect::new(
+        layout.nav.origin.x,
+        top,
+        layout.nav.width(),
+        (bottom - top).max(0.0),
+    )
+}
+
+fn nav_height(layout: &ShellLayout) -> f32 {
+    if layout.nav_width < 140.0 {
+        return 9.0 * 42.0 + 10.0;
+    }
+    let mut height = 10.0 + 76.0 + 8.0;
+    for category in CategoryId::ALL {
+        height += 24.0 + category.pages().len() as f32 * 30.0 + 8.0;
+    }
+    height + 90.0
+}
+
+fn compute_page(state: &GalleryState, layout: &ShellLayout) -> PageLayout {
+    let page = state.active_page;
+    let pad = if layout.content.size.x < 760.0 {
+        24.0
+    } else {
+        36.0
+    };
+    let x = layout.content.origin.x + pad;
+    let width = (layout.content.size.x - pad * 2.0).max(280.0);
+    let scroll = state.content_scroll;
+    let header = Rect::new(x, layout.content.origin.y + 26.0 - scroll, width, 140.0);
+    let mut y = layout.content.origin.y + 172.0 - scroll;
+    let mut cards = Vec::new();
+    for (index, example) in page.examples().iter().enumerate() {
+        let open = state.code_open(page, index as u8);
+        let lines = example.code.lines().count().min(12);
+        let panel_height = if open {
+            12.0 + lines as f32 * 15.0 + 24.0
+        } else {
+            0.0
+        };
+        let card_height = 76.0
+            + example.stage_height
+            + 6.0
+            + 30.0
+            + if open { 4.0 + panel_height } else { 0.0 }
+            + 10.0;
+        let rect = Rect::new(x, y, width, card_height);
+        let inner = width - 32.0;
+        let knob_count = example.knobs.len();
+        let (stage, knobs) = if knob_count == 0 {
+            (
+                Rect::new(x + 16.0, y + 76.0, inner, example.stage_height),
+                Rect::new(x + 16.0, y + 76.0, 0.0, 0.0),
+            )
+        } else {
+            let knob_width = (inner * 0.30).clamp(188.0, 318.0);
+            let stage_width = (inner - knob_width - 18.0).max(120.0);
+            (
+                Rect::new(x + 16.0, y + 76.0, stage_width, example.stage_height),
+                Rect::new(
+                    x + 16.0 + stage_width + 18.0,
+                    y + 76.0,
+                    knob_width,
+                    example.stage_height,
+                ),
+            )
+        };
+        let mut knob_rows = Vec::new();
+        let mut row_y = knobs.origin.y + 34.0;
+        for (knob_index, spec) in example.knobs.iter().enumerate() {
+            let (height, control_height) = match spec {
+                KnobSpec::Toggle { .. } | KnobSpec::CheckBox { .. } => (44.0, 30.0),
+                KnobSpec::Slider { .. } => (58.0, 28.0),
+                KnobSpec::Segmented { .. } => (60.0, 28.0),
+            };
+            // A slider and a segmented control carry their own label above the
+            // interactive row. Toggles and checkboxes keep the label inside
+            // the row (the whole row is the control), so they start at +6.
+            let (label, control_y) = match spec {
+                KnobSpec::Slider { .. } | KnobSpec::Segmented { .. } => (
+                    Some(Rect::new(
+                        knobs.origin.x + 10.0,
+                        row_y,
+                        (knobs.size.x - 20.0).max(40.0),
+                        16.0,
+                    )),
+                    row_y + 20.0,
+                ),
+                _ => (None, row_y + 6.0),
+            };
+            let control = Rect::new(
+                knobs.origin.x + 10.0,
+                control_y,
+                (knobs.size.x - 20.0).max(40.0),
+                control_height,
+            );
+            knob_rows.push(KnobRow {
+                index: knob_index,
+                row: Rect::new(
+                    knobs.origin.x + 10.0,
+                    row_y,
+                    (knobs.size.x - 20.0).max(40.0),
+                    height,
+                ),
+                label,
+                control,
+            });
+            row_y += height;
+        }
+        let body_bottom = y + 76.0 + example.stage_height;
+        let code_bar = Rect::new(x + 16.0, body_bottom + 6.0, inner, 30.0);
+        let code_panel = if open {
+            Some(Rect::new(
+                x + 16.0,
+                code_bar.max().y + 4.0,
+                inner,
+                panel_height,
+            ))
+        } else {
+            None
+        };
+        cards.push(CardLayout {
+            index,
+            rect,
+            stage,
+            knobs,
+            knob_rows,
+            code_bar,
+            code_panel,
+        });
+        y += card_height + 18.0;
+    }
+    let content_height = (y + scroll - layout.content.origin.y + 8.0).max(layout.content.size.y);
+    PageLayout {
+        page,
+        header,
+        cards,
+        content_height,
+    }
+}
+
+fn search_overlay_rect(layout: &ShellLayout) -> Rect {
+    let width = layout.search.size.x.max(380.0);
+    let x = layout
+        .search
+        .origin
+        .x
+        .min(layout.viewport.max().x - width - 14.0)
+        .max(14.0);
+    let results = 4.0;
+    Rect::new(
+        x,
+        layout.search.max().y + 6.0,
+        width,
+        34.0 + results * 36.0 + 8.0,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// drawing
+// ---------------------------------------------------------------------------
+
+fn draw_background(canvas: &mut Canvas<'_>, layout: &ShellLayout) {
+    let palette = *canvas.palette;
+    canvas.rect(layout.viewport, 0.0, palette.background, 0, 0.0, 0.0);
+}
+
+fn draw_top_bar(
+    canvas: &mut Canvas<'_>,
+    state: &GalleryState,
+    layout: &ShellLayout,
+    window_maximized: bool,
+) {
+    let palette = *canvas.palette;
+    canvas.rect(layout.top_bar, 0.0, palette.header_bg, 0, 0.0, 0.0);
+    canvas.divider(0.0, layout.top_bar.max().y - 1.0, layout.top_bar.size.x);
+
+    widgets::icon_button(
+        canvas,
+        target::id(Target::NavToggle),
+        layout.nav_toggle,
+        Icon::Menu,
+        "Toggle navigation",
+        !state.nav_expanded,
+    );
+
+    let logo = Rect::new(52.0, 14.0, 28.0, 28.0);
+    canvas.rect(logo, 8.0, palette.primary, 0, 0.0, 4.0);
+    canvas.text(
+        "U",
+        logo,
+        15.0,
+        palette.on_primary,
+        AlignX::Center,
+        AlignY::Center,
+    );
+    canvas.text(
+        "Unbound UI Gallery",
+        Rect::new(88.0, 12.0, 190.0, 32.0),
+        13.5,
+        palette.text,
+        AlignX::Start,
+        AlignY::Center,
+    );
+
+    if layout.wide {
+        let info = state.active_page.info();
+        let category = state.active_page.category().label();
+        let crumb = if category == info.short {
+            info.short.to_string()
+        } else {
+            format!("{category}  ›  {}", info.short)
+        };
+        canvas.text(
+            &crumb,
+            Rect::new(220.0, 12.0, layout.theme.origin.x - 240.0, 32.0),
+            10.5,
+            palette.text_muted,
+            AlignX::Start,
+            AlignY::Center,
+        );
+    }
+
+    let search = layout.search;
+    if search.size.x >= 100.0 {
+        canvas.rect(
+            search,
+            8.0,
+            palette.card_bg,
+            if state.search_focused {
+                palette.primary
+            } else {
+                palette.card_border
+            },
+            if state.search_focused { 2.0 } else { 1.0 },
+            0.0,
+        );
+        widgets::icon(
+            canvas,
+            Icon::Search,
+            Rect::new(search.origin.x + 4.0, search.origin.y, 28.0, search.size.y),
+            palette.text_muted,
+            palette.card_bg,
+        );
+        let placeholder = if state.search_query.is_empty() {
+            if search.size.x < 280.0 {
+                "Search…"
+            } else {
+                "Search controls, crates, features…"
+            }
+        } else {
+            state.search_query.as_str()
+        };
+        canvas.text(
+            placeholder,
+            Rect::new(
+                search.origin.x + 32.0,
+                search.origin.y,
+                search.size.x - 84.0,
+                search.size.y,
+            ),
+            11.0,
+            if state.search_query.is_empty() {
+                palette.text_muted
+            } else {
+                palette.text
+            },
+            AlignX::Start,
+            AlignY::Center,
+        );
+        if layout.search.size.x > 280.0 {
+            widgets::badge(
+                canvas,
+                Rect::new(search.max().x - 52.0, search.origin.y + 7.0, 44.0, 18.0),
+                "Ctrl K",
+                palette.text_muted,
+                palette.stage_bg,
+            );
+        }
+        canvas.control(
+            target::id(Target::Search),
+            search,
+            Role::Search,
+            "Search controls, crates and features",
+            CursorKind::Text,
+            false,
+            state.search_focused,
+        );
+    }
+
+    // Theme.
+    if layout.compact {
+        widgets::icon_button(
+            canvas,
+            target::id(Target::Theme(if state.theme.is_dark() { 0 } else { 1 })),
+            layout.theme,
+            if state.theme.is_dark() {
+                Icon::Sun
+            } else {
+                Icon::Moon
+            },
+            "Toggle theme",
+            false,
+        );
+    } else {
+        let ids = [target::id(Target::Theme(0)), target::id(Target::Theme(1))];
+        widgets::segmented(
+            canvas,
+            &ids,
+            layout.theme,
+            &["Light", "Dark"],
+            if state.theme.is_dark() { 1 } else { 0 },
+        );
+    }
+
+    // Zoom.
+    let labels: [&str; 4] = if layout.zoom.size.x > 120.0 {
+        ["100%", "125%", "150%", "200%"]
+    } else {
+        ["1×", "1.25×", "1.5×", "2×"]
+    };
+    let zoom_ids = [
+        target::id(Target::Zoom(0)),
+        target::id(Target::Zoom(1)),
+        target::id(Target::Zoom(2)),
+        target::id(Target::Zoom(3)),
+    ];
+    widgets::segmented(canvas, &zoom_ids, layout.zoom, &labels, state.zoom_step);
+
+    widgets::icon_button(
+        canvas,
+        target::id(Target::Snap),
+        layout.snap,
+        Icon::Snap,
+        "Pixel snapping",
+        state.pixel_snap,
+    );
+    widgets::icon_button(
+        canvas,
+        target::id(Target::Hud),
+        layout.hud,
+        Icon::Chart,
+        "Performance HUD",
+        state.show_hud,
+    );
+
+    // Client-side window buttons.
+    draw_window_controls(canvas, layout, window_maximized);
+}
+
+fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_maximized: bool) {
+    let palette = *canvas.palette;
+    let buttons = [
+        (
+            Target::WindowMinimize,
+            layout.window_minimize,
+            "Minimise window",
+            false,
+        ),
+        (
+            Target::WindowMaximize,
+            layout.window_maximize,
+            "Maximise window",
+            false,
+        ),
+        (
+            Target::WindowClose,
+            layout.window_close,
+            "Close window",
+            true,
+        ),
+    ];
+    for (target, rect, label, destructive) in buttons {
+        let node = target::id(target);
+        let hovered = canvas.hovered(node);
+        let pressed = canvas.pressed(node);
+        if hovered || pressed {
+            let fill = if destructive {
+                palette.danger
+            } else {
+                palette.control_hover
+            };
+            canvas.rect(rect, 0.0, fill, 0, 0.0, 0.0);
+        }
+        let color = if destructive && hovered {
+            palette.on_hero
+        } else {
+            palette.text
+        };
+        let middle = rect.center();
+        match target {
+            Target::WindowMinimize => {
+                canvas.rect(
+                    Rect::new(middle.x - 5.0, middle.y + 4.0, 10.0, 1.5),
+                    0.0,
+                    color,
+                    0,
+                    0.0,
+                    0.0,
+                );
+            }
+            Target::WindowMaximize => {
+                let middle = rect.center();
+                if canvas_maximized {
+                    // Restore: two offset squares.
+                    canvas.rect(
+                        Rect::new(middle.x - 4.0, middle.y - 6.0, 9.0, 9.0),
+                        0.0,
+                        0,
+                        color,
+                        1.0,
+                        0.0,
+                    );
+                    canvas.rect(
+                        Rect::new(middle.x - 6.0, middle.y - 4.0, 9.0, 9.0),
+                        0.0,
+                        0,
+                        color,
+                        1.0,
+                        0.0,
+                    );
+                } else {
+                    canvas.rect(
+                        Rect::new(middle.x - 5.0, middle.y - 5.0, 10.0, 10.0),
+                        0.0,
+                        0,
+                        color,
+                        1.0,
+                        0.0,
+                    );
+                }
+            }
+            _ => {
+                canvas.text(
+                    "×",
+                    Rect::new(middle.x - 7.0, middle.y - 9.0, 14.0, 18.0),
+                    13.0,
+                    color,
+                    AlignX::Center,
+                    AlignY::Center,
+                );
+            }
+        }
+        canvas.control(
+            node,
+            rect,
+            Role::Button,
+            label,
+            CursorKind::Default,
+            false,
+            false,
+        );
+    }
+}
+
+fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
+    let palette = *canvas.palette;
+    canvas.rect(layout.nav, 0.0, palette.nav_bg, 0, 0.0, 0.0);
+    canvas.divider(layout.nav.max().x - 1.0, layout.nav.origin.y, 1.0);
+
+    // Swap content while the spring is still moving: expanded labels would be
+    // clipped by the shrinking pane, so fall back to the icon rail early.
+    if layout.nav_width < 140.0 {
+        draw_collapsed_nav(canvas, state, layout);
+        return;
+    }
+
+    let mut y = layout.nav.origin.y + 10.0;
+    nav_item(
+        canvas,
+        layout,
+        Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 36.0),
+        "Home",
+        Icon::Grid,
+        state.active_page == PageId::Home,
+        Target::NavPage(PageId::Home.index() as u8),
+    );
+    y += 38.0;
+    nav_item(
+        canvas,
+        layout,
+        Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 36.0),
+        "Design Guidance",
+        Icon::Layers,
+        state.active_page.category() == CategoryId::Design,
+        Target::NavPage(PageId::Colors.index() as u8),
+    );
+    canvas.divider(
+        layout.nav.origin.x + 14.0,
+        y + 44.0,
+        layout.nav_width - 28.0,
+    );
+
+    let tree = nav_tree_rect(layout);
+    canvas.begin_clip(tree);
+    let mut tree_y = tree.origin.y - state.nav_scroll;
+    for category in CategoryId::ALL {
+        let active = state.active_page.category() == category;
+        canvas.text(
+            &category.label().to_uppercase(),
+            Rect::new(
+                layout.nav.origin.x + 18.0,
+                tree_y,
+                layout.nav_width - 36.0,
+                22.0,
+            ),
+            8.5,
+            if active {
+                palette.primary
+            } else {
+                palette.nav_text_muted
+            },
+            AlignX::Start,
+            AlignY::Center,
+        );
+        tree_y += 24.0;
+        for page in category.pages() {
+            nav_item(
+                canvas,
+                layout,
+                Rect::new(
+                    layout.nav.origin.x + 10.0,
+                    tree_y,
+                    layout.nav_width - 20.0,
+                    30.0,
+                ),
+                page.info().short,
+                Icon::ChevronRight,
+                state.active_page == *page,
+                Target::NavPage(page.index() as u8),
+            );
+            tree_y += 30.0;
+        }
+        tree_y += 8.0;
+    }
+    canvas.end_clip();
+
+    let footer_y = layout.viewport.max().y - 90.0;
+    canvas.divider(
+        layout.nav.origin.x + 14.0,
+        footer_y,
+        layout.nav_width - 28.0,
+    );
+    nav_item(
+        canvas,
+        layout,
+        Rect::new(
+            layout.nav.origin.x + 10.0,
+            footer_y + 8.0,
+            layout.nav_width - 20.0,
+            34.0,
+        ),
+        "Engine Telemetry",
+        Icon::Chart,
+        state.active_page == PageId::Telemetry,
+        Target::NavPage(PageId::Telemetry.index() as u8),
+    );
+    nav_item(
+        canvas,
+        layout,
+        Rect::new(
+            layout.nav.origin.x + 10.0,
+            footer_y + 44.0,
+            layout.nav_width - 20.0,
+            34.0,
+        ),
+        "Settings & About",
+        Icon::Layers,
+        state.active_page == PageId::Settings,
+        Target::NavPage(PageId::Settings.index() as u8),
+    );
+}
+
+fn nav_item(
+    canvas: &mut Canvas<'_>,
+    layout: &ShellLayout,
+    rect: Rect,
+    label: &str,
+    icon: Icon,
+    selected: bool,
+    target: Target,
+) {
+    let palette = *canvas.palette;
+    let node = target::id(target);
+    let hover = canvas.visual(node, false);
+    if selected {
+        canvas.rect(rect, 8.0, palette.nav_selected, 0, 0.0, 0.0);
+        canvas.rect(
+            Rect::new(
+                rect.origin.x - 10.0,
+                rect.origin.y + 7.0,
+                3.0,
+                rect.size.y - 14.0,
+            ),
+            2.0,
+            palette.primary,
+            0,
+            0.0,
+            0.0,
+        );
+    } else if hover.is_hovered() {
+        canvas.rect(rect, 8.0, palette.nav_hover, 0, 0.0, 0.0);
+    }
+    widgets::icon(
+        canvas,
+        icon,
+        Rect::new(rect.origin.x + 6.0, rect.origin.y, 20.0, rect.size.y),
+        if selected {
+            palette.primary
+        } else {
+            palette.nav_text_muted
+        },
+        palette.nav_bg,
+    );
+    canvas.text(
+        label,
+        Rect::new(
+            rect.origin.x + 32.0,
+            rect.origin.y,
+            rect.size.x - 38.0,
+            rect.size.y,
+        ),
+        12.0,
+        if selected {
+            palette.nav_text
+        } else {
+            palette.nav_text_muted
+        },
+        AlignX::Start,
+        AlignY::Center,
+    );
+    let _ = layout;
+    canvas.control(
+        node,
+        rect,
+        Role::Link,
+        label,
+        CursorKind::Pointer,
+        false,
+        selected,
+    );
+}
+
+fn draw_collapsed_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
+    let _ = state;
+    let items = [
+        (PageId::Home, Icon::Grid),
+        (PageId::Colors, Icon::Layers),
+        (PageId::Buttons, Icon::Snap),
+        (PageId::Flex, Icon::Grid),
+        (PageId::ListView, Icon::Chart),
+        (PageId::Viewport, Icon::Snap),
+        (PageId::Springs, Icon::Layers),
+        (PageId::Telemetry, Icon::Chart),
+        (PageId::Settings, Icon::Menu),
+    ];
+    let mut y = layout.nav.origin.y + 10.0;
+    for (page, icon) in items {
+        let rect = Rect::new(layout.nav.origin.x + 14.0, y, layout.nav_width - 28.0, 36.0);
+        let selected = state.active_page == page
+            || (page == PageId::Colors && state.active_page.category() == CategoryId::Design);
+        widgets::icon_button(
+            canvas,
+            target::id(Target::NavPage(page.index() as u8)),
+            rect,
+            icon,
+            page.info().short,
+            selected,
+        );
+        y += 42.0;
+    }
+    // Keep the palette variables exercised on both branches.
+    let palette = *canvas.palette;
+    canvas.divider(
+        layout.nav.origin.x + 10.0,
+        layout.nav.max().y - 12.0,
+        layout.nav_width - 20.0,
+    );
+    canvas.text(
+        "≡",
+        Rect::new(
+            layout.nav.origin.x,
+            layout.nav.max().y - 30.0,
+            layout.nav_width,
+            16.0,
+        ),
+        10.0,
+        palette.text_muted,
+        AlignX::Center,
+        AlignY::Center,
+    );
+}
+
+fn draw_page(
+    canvas: &mut Canvas<'_>,
+    state: &GalleryState,
+    layout: &ShellLayout,
+    page: &PageLayout,
+) {
+    let palette = *canvas.palette;
+    let info = page.page.info();
+    canvas.begin_clip(layout.content);
+    canvas.semantic(
+        Role::Heading,
+        info.title,
+        Rect::new(
+            page.header.origin.x,
+            page.header.origin.y,
+            page.header.size.x,
+            34.0,
+        ),
+    );
+    canvas.text(
+        info.title,
+        Rect::new(
+            page.header.origin.x,
+            page.header.origin.y,
+            page.header.size.x,
+            38.0,
+        ),
+        30.0,
+        palette.text,
+        AlignX::Start,
+        AlignY::Top,
+    );
+    canvas.text_wrapped(
+        info.description,
+        Rect::new(
+            page.header.origin.x,
+            page.header.origin.y + 42.0,
+            (page.header.size.x * 0.74).min(820.0),
+            46.0,
+        ),
+        12.5,
+        palette.text_muted,
+    );
+    let mut badge_x = page.header.origin.x;
+    for krate in info.crates {
+        let width = canvas.labels.measure(krate, 11.0).x + 16.0;
+        widgets::badge(
+            canvas,
+            Rect::new(badge_x, page.header.origin.y + 92.0, width, 20.0),
+            krate,
+            palette.primary,
+            palette.primary_soft,
+        );
+        badge_x += width + 6.0;
+    }
+    canvas.text(
+        &format!("docs › {}", info.docs),
+        Rect::new(
+            page.header.origin.x,
+            page.header.origin.y + 124.0,
+            page.header.size.x,
+            14.0,
+        ),
+        9.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Top,
+    );
+
+    for card in &page.cards {
+        if card.rect.max().y < layout.content.origin.y
+            || card.rect.origin.y > layout.content.max().y
+        {
+            continue;
+        }
+        draw_example(canvas, state, page, card);
+    }
+
+    let max_scroll = (page.content_height - layout.content.size.y + 48.0).max(0.0);
+    if max_scroll > 1.0 {
+        let track = Rect::new(
+            layout.content.max().x - 7.0,
+            layout.content.origin.y + 8.0,
+            3.0,
+            layout.content.size.y - 16.0,
+        );
+        canvas.rect(track, 1.5, palette.control_track, 0, 0.0, 0.0);
+        let thumb_h =
+            (track.size.y * layout.content.size.y / page.content_height).clamp(28.0, track.size.y);
+        let t = (state.content_scroll / max_scroll).clamp(0.0, 1.0);
+        canvas.rect(
+            Rect::new(
+                track.origin.x,
+                track.origin.y + (track.size.y - thumb_h) * t,
+                3.0,
+                thumb_h,
+            ),
+            1.5,
+            palette.primary,
+            0,
+            0.0,
+            0.0,
+        );
+    }
+    canvas.end_clip();
+}
+
+fn draw_example(
+    canvas: &mut Canvas<'_>,
+    state: &GalleryState,
+    page: &PageLayout,
+    card: &CardLayout,
+) {
+    let palette = *canvas.palette;
+    let example = &page.page.examples()[card.index];
+    canvas.rect(
+        card.rect,
+        14.0,
+        palette.card_bg,
+        palette.card_border,
+        1.0,
+        4.0,
+    );
+    canvas.begin_clip(card.rect);
+    canvas.text(
+        example.title,
+        Rect::new(
+            card.rect.origin.x + 18.0,
+            card.rect.origin.y + 12.0,
+            card.rect.size.x - 36.0,
+            24.0,
+        ),
+        15.0,
+        palette.text,
+        AlignX::Start,
+        AlignY::Top,
+    );
+    canvas.text_wrapped(
+        example.description,
+        Rect::new(
+            card.rect.origin.x + 18.0,
+            card.rect.origin.y + 38.0,
+            card.rect.size.x - 36.0,
+            30.0,
+        ),
+        10.5,
+        palette.text_muted,
+    );
+
+    let mut badge_x = card.rect.max().x - 18.0;
+    let badge_limit = card.rect.origin.x + 170.0;
+    for krate in example.crates.iter().rev() {
+        let width = canvas.labels.measure(krate, 9.5).x + 16.0;
+        if badge_x - width < badge_limit {
+            break;
+        }
+        badge_x -= width;
+        let badge = widgets::badge_sized(
+            canvas,
+            Rect::new(badge_x, card.rect.origin.y + 14.0, width, 18.0),
+            krate,
+            palette.text_muted,
+            palette.stage_bg,
+            9.5,
+        );
+        badge_x = badge.origin.x - 6.0;
+    }
+
+    // Live stage.
+    canvas.rect(
+        card.stage,
+        10.0,
+        palette.stage_bg,
+        palette.stage_grid,
+        1.0,
+        0.0,
+    );
+    canvas.begin_clip_rounded(card.stage, 10.0);
+    let demo_rect = card.stage.inflate(-10.0);
+    let knobs = state.knob_values(page.page, card.index, example);
+    {
+        let mut ctx = DemoCtx {
+            canvas: &mut *canvas,
+            state,
+            page: page.page,
+            card: card.index,
+            rect: demo_rect,
+            knobs: &knobs,
+        };
+        pages::render_demo(&mut ctx, example.demo);
+    }
+    canvas.end_clip();
+
+    if !example.knobs.is_empty() {
+        canvas.divider(card.knobs.origin.x - 9.0, card.knobs.origin.y, 1.0);
+        canvas.text(
+            "OPTIONS",
+            Rect::new(
+                card.knobs.origin.x,
+                card.knobs.origin.y,
+                card.knobs.size.x,
+                18.0,
+            ),
+            8.5,
+            palette.text_muted,
+            AlignX::Start,
+            AlignY::Top,
+        );
+        for row in &card.knob_rows {
+            draw_knob_row(canvas, state, page.page, card.index, example, row, palette);
+        }
+    }
+
+    draw_code_bar(canvas, state, page, card, example);
+    canvas.end_clip();
+}
+
+fn draw_knob_row(
+    canvas: &mut Canvas<'_>,
+    state: &GalleryState,
+    page: PageId,
+    card: usize,
+    example: &crate::pages::ExampleDef,
+    row: &KnobRow,
+    palette: Palette,
+) {
+    let spec = example.knobs[row.index];
+    let value = state.knob(page, card, row.index, &spec);
+    let node = target::id(Target::Knob(
+        page.index() as u8,
+        card as u8,
+        row.index as u8,
+    ));
+    match spec {
+        KnobSpec::Toggle { label, .. } => {
+            widgets::toggle_switch(canvas, node, row.control, label, value > 0.5);
+        }
+        KnobSpec::CheckBox { label, .. } => {
+            widgets::checkbox(canvas, node, row.control, label, value > 0.5);
+        }
+        KnobSpec::Slider {
+            label,
+            min,
+            max,
+            step,
+            unit,
+            ..
+        } => {
+            canvas.text(
+                label,
+                row.label.unwrap_or(row.row),
+                9.5,
+                palette.text_muted,
+                AlignX::Start,
+                AlignY::Top,
+            );
+            let shown = if step < 1.0 {
+                format!("{value:.1}{unit}")
+            } else {
+                format!("{value:.0}{unit}")
+            };
+            canvas.text(
+                &shown,
+                Rect::new(row.row.origin.x, row.row.origin.y, row.row.size.x, 16.0),
+                9.5,
+                palette.primary,
+                AlignX::End,
+                AlignY::Top,
+            );
+            widgets::slider(canvas, node, row.control, value, min, max);
+            canvas.range(node, row.control, min, max, step);
+        }
+        KnobSpec::Segmented {
+            label,
+            options,
+            default_index,
+        } => {
+            canvas.text(
+                label,
+                row.label.unwrap_or(row.row),
+                9.5,
+                palette.text_muted,
+                AlignX::Start,
+                AlignY::Top,
+            );
+            let ids: Vec<u64> = (0..options.len())
+                .map(|option| {
+                    target::id(Target::KnobOption(
+                        page.index() as u8,
+                        card as u8,
+                        row.index as u8,
+                        option as u8,
+                    ))
+                })
+                .collect();
+            let selected = (value as usize).min(options.len().saturating_sub(1));
+            let _ = default_index;
+            widgets::segmented(canvas, &ids, row.control, options, selected);
+        }
+    }
+}
+
+fn draw_code_bar(
+    canvas: &mut Canvas<'_>,
+    state: &GalleryState,
+    page: &PageLayout,
+    card: &CardLayout,
+    example: &crate::pages::ExampleDef,
+) {
+    let palette = *canvas.palette;
+    let node = target::id(Target::Code(page.page.index() as u8, card.index as u8));
+    let hover = canvas.visual(node, false);
+    let open = state.code_open(page.page, card.index as u8);
+    if hover.is_hovered() {
+        canvas.rect(card.code_bar, 6.0, palette.control_hover, 0, 0.0, 0.0);
+    }
+    canvas.divider(
+        card.code_bar.origin.x,
+        card.code_bar.origin.y,
+        card.code_bar.size.x,
+    );
+    canvas.text(
+        "</>",
+        Rect::new(
+            card.code_bar.origin.x + 6.0,
+            card.code_bar.origin.y,
+            28.0,
+            card.code_bar.size.y,
+        ),
+        10.0,
+        palette.primary,
+        AlignX::Start,
+        AlignY::Center,
+    );
+    canvas.text(
+        "Rust · ABI · accessibility",
+        Rect::new(
+            card.code_bar.origin.x + 40.0,
+            card.code_bar.origin.y,
+            card.code_bar.size.x - 80.0,
+            card.code_bar.size.y,
+        ),
+        10.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
+    widgets::icon(
+        canvas,
+        if open {
+            Icon::ChevronDown
+        } else {
+            Icon::ChevronRight
+        },
+        Rect::new(
+            card.code_bar.max().x - 28.0,
+            card.code_bar.origin.y,
+            20.0,
+            card.code_bar.size.y,
+        ),
+        palette.text_muted,
+        palette.card_bg,
+    );
+    canvas.control(
+        node,
+        card.code_bar,
+        Role::Button,
+        "Code and accessibility",
+        CursorKind::Pointer,
+        false,
+        open,
+    );
+
+    if let Some(panel) = card.code_panel {
+        canvas.rect(panel, 10.0, palette.code_bg, 0, 0.0, 0.0);
+        canvas.begin_clip(panel);
+        canvas.text(
+            "SOURCE",
+            Rect::new(
+                panel.origin.x + 12.0,
+                panel.origin.y + 6.0,
+                panel.size.x - 24.0,
+                12.0,
+            ),
+            7.5,
+            palette.text_muted,
+            AlignX::Start,
+            AlignY::Top,
+        );
+        let mut y = panel.origin.y + 20.0;
+        for (line_index, line) in example.code.lines().take(12).enumerate() {
+            canvas.text(
+                &format!("{:>2}", line_index + 1),
+                Rect::new(panel.origin.x + 12.0, y, 20.0, 14.0),
+                8.5,
+                palette.text_muted,
+                AlignX::End,
+                AlignY::Top,
+            );
+            canvas.text(
+                line,
+                Rect::new(panel.origin.x + 38.0, y, panel.size.x - 50.0, 14.0),
+                9.5,
+                palette.code_text,
+                AlignX::Start,
+                AlignY::Top,
+            );
+            y += 15.0;
+        }
+        canvas.text(
+            &format!("a11y · {}", example.a11y),
+            Rect::new(
+                panel.origin.x + 12.0,
+                panel.max().y - 20.0,
+                panel.size.x - 24.0,
+                14.0,
+            ),
+            8.5,
+            palette.primary,
+            AlignX::Start,
+            AlignY::Top,
+        );
+        canvas.end_clip();
+    }
+}
+
+fn hud_rect(layout: &ShellLayout) -> Option<Rect> {
+    if layout.content.size.x < 560.0 {
+        return None;
+    }
+    Some(Rect::new(
+        layout.content.max().x - 232.0,
+        layout.content.max().y - 152.0,
+        218.0,
+        132.0,
+    ))
+}
+
+fn hud_colors(dark: bool) -> ([u8; 3], [u8; 3]) {
+    if dark {
+        ([220, 227, 242], [8, 10, 14])
+    } else {
+        ([28, 30, 38], [255, 255, 255])
+    }
+}
+
+fn draw_hud(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout, cards: usize) {
+    if !state.show_hud {
+        return;
+    }
+    let Some(rect) = hud_rect(layout) else {
+        return;
+    };
+    let palette = *canvas.palette;
+    // Float the telemetry in the bottom-right corner: the top-right area is
+    // owned by the page title and its crate pills, and a HUD there covered
+    // them at every window size.
+    canvas.rect(rect, 10.0, palette.hud_bg, palette.card_border, 1.0, 18.0);
+    canvas.text(
+        "LIVE FRAME",
+        Rect::new(
+            rect.origin.x + 12.0,
+            rect.origin.y + 8.0,
+            rect.size.x - 24.0,
+            14.0,
+        ),
+        8.0,
+        palette.hud_text,
+        AlignX::Start,
+        AlignY::Top,
+    );
+    let stats = &state.demo;
+    let prims = canvas.scene.primitives.len();
+    let glyphs = canvas.glyph_count();
+    let rows = [
+        ("FRAME", format!("{:.2} ms", stats.frame_ms)),
+        ("FPS", format!("{:.0}", stats.fps)),
+        ("PRIMS", format!("{prims}")),
+        ("GLYPHS", format!("{glyphs}")),
+        ("CARDS", format!("{cards}")),
+    ];
+    for (index, (label, value)) in rows.iter().enumerate() {
+        let y = rect.origin.y + 26.0 + index as f32 * 15.0;
+        canvas.text(
+            label,
+            Rect::new(rect.origin.x + 12.0, y, 70.0, 14.0),
+            8.0,
+            palette.hud_text,
+            AlignX::Start,
+            AlignY::Center,
+        );
+        canvas.text(
+            value,
+            Rect::new(rect.max().x - 100.0, y, 88.0, 14.0),
+            9.5,
+            palette.hud_text,
+            AlignX::End,
+            AlignY::Center,
+        );
+    }
+    // Sparkline.
+    let chart = Rect::new(
+        rect.origin.x + 12.0,
+        rect.max().y - 26.0,
+        rect.size.x - 24.0,
+        16.0,
+    );
+    for index in 0..28 {
+        let phase = index as f32 / 28.0;
+        let value = 0.35 + (phase * 15.0 + stats.elapsed * 3.0).sin() * 0.22;
+        let height = chart.size.y * value.clamp(0.08, 0.95);
+        canvas.rect(
+            Rect::new(
+                chart.origin.x + phase * chart.size.x,
+                chart.max().y - height,
+                3.0,
+                height,
+            ),
+            1.0,
+            if index > 24 {
+                palette.warning
+            } else {
+                palette.primary
+            },
+            0,
+            0.0,
+            0.0,
+        );
+    }
+}
+
+fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
+    if !state.search_focused {
+        return;
+    }
+    let palette = *canvas.palette;
+    let results = state.search_results();
+    let panel = search_overlay_rect(layout);
+    canvas.rect(
+        panel,
+        12.0,
+        palette.overlay_bg,
+        palette.card_border,
+        1.0,
+        26.0,
+    );
+    canvas.text(
+        if state.search_query.is_empty() {
+            "COMMAND PALETTE · CTRL K"
+        } else {
+            "MATCHES"
+        },
+        Rect::new(
+            panel.origin.x + 14.0,
+            panel.origin.y + 8.0,
+            panel.size.x - 28.0,
+            14.0,
+        ),
+        8.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Top,
+    );
+    if state.search_query.is_empty() {
+        canvas.text(
+            "Try “Button”, “MTSDF”, “Quadtree”, “DnD”…",
+            Rect::new(
+                panel.origin.x + 14.0,
+                panel.origin.y + 30.0,
+                panel.size.x - 28.0,
+                32.0,
+            ),
+            11.0,
+            palette.text_muted,
+            AlignX::Start,
+            AlignY::Center,
+        );
+        return;
+    }
+    if results.is_empty() {
+        canvas.text(
+            "No controls match that query.",
+            Rect::new(
+                panel.origin.x + 14.0,
+                panel.origin.y + 30.0,
+                panel.size.x - 28.0,
+                32.0,
+            ),
+            11.0,
+            palette.text_muted,
+            AlignX::Start,
+            AlignY::Center,
+        );
+        return;
+    }
+    for (index, page) in results.iter().enumerate() {
+        let row = Rect::new(
+            panel.origin.x + 6.0,
+            panel.origin.y + 30.0 + index as f32 * 36.0,
+            panel.size.x - 12.0,
+            34.0,
+        );
+        let node = target::id(Target::SearchResult(page.index() as u8));
+        let hover = canvas.visual(node, false);
+        if hover.is_hovered() || *page == state.active_page {
+            canvas.rect(
+                row,
+                7.0,
+                if *page == state.active_page {
+                    palette.primary_soft
+                } else {
+                    palette.control_hover
+                },
+                0,
+                0.0,
+                0.0,
+            );
+        }
+        let info = page.info();
+        canvas.text(
+            info.short,
+            Rect::new(
+                row.origin.x + 12.0,
+                row.origin.y,
+                row.size.x * 0.52,
+                row.size.y,
+            ),
+            11.0,
+            palette.text,
+            AlignX::Start,
+            AlignY::Center,
+        );
+        canvas.text(
+            &format!(
+                "{} · {}",
+                page.category().label(),
+                info.crates.first().copied().unwrap_or("unbound")
+            ),
+            Rect::new(
+                row.origin.x + row.size.x * 0.54,
+                row.origin.y,
+                row.size.x * 0.44 - 12.0,
+                row.size.y,
+            ),
+            9.0,
+            palette.text_muted,
+            AlignX::End,
+            AlignY::Center,
+        );
+        canvas.control_on_layer(
+            node,
+            row,
+            Role::Link,
+            info.title,
+            CursorKind::Pointer,
+            false,
+            *page == state.active_page,
+            2,
+        );
+    }
+}

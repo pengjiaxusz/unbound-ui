@@ -32,6 +32,7 @@ use crate::button::{self, ButtonDesc, ButtonTokens, ButtonVisualState};
 /// is what makes a theme switch a single 4 KiB overwrite of the table. Slot 0
 /// is reserved for "no colour" and slot 1 is the engine's shadow slot
 /// (`SHADOW_TOKEN` in `common.glsl`).
+#[derive(Copy, Clone, Debug)]
 pub struct Palette {
     /// The page background.
     pub background: u16,
@@ -65,6 +66,89 @@ pub struct Palette {
     pub focus_ring: u16,
     /// The disabled fill.
     pub disabled_fill: u16,
+    /// The title bar / global header surface.
+    pub header_bg: u16,
+    /// The navigation pane surface.
+    pub nav_bg: u16,
+    /// A hovered navigation row.
+    pub nav_hover: u16,
+    /// The selected navigation row.
+    pub nav_selected: u16,
+    /// The example card surface.
+    pub card_bg: u16,
+    /// The example card outline.
+    pub card_border: u16,
+    /// The live stage background.
+    pub stage_bg: u16,
+    /// The stage's grid dots.
+    pub stage_grid: u16,
+    /// Slider / switch tracks.
+    pub control_track: u16,
+    /// Slider thumbs and switch knobs.
+    pub control_thumb: u16,
+    /// A hovered control surface.
+    pub control_hover: u16,
+    /// The code panel background.
+    pub code_bg: u16,
+    /// The code panel foreground.
+    pub code_text: u16,
+    /// The modal scrim.
+    pub overlay_scrim: u16,
+    /// The overlay surface.
+    pub overlay_bg: u16,
+    /// A 12 % primary tint.
+    pub primary_soft: u16,
+    /// A 12 % success tint.
+    pub success_soft: u16,
+    /// A 12 % warning tint.
+    pub warning_soft: u16,
+    /// A 12 % danger tint.
+    pub danger_soft: u16,
+    /// Hero gradient start.
+    pub hero_start: u16,
+    /// Hero gradient end.
+    pub hero_end: u16,
+    /// Text and icons painted on the hero gradient.
+    pub on_hero: u16,
+    /// Text selection fill.
+    pub selection_fill: u16,
+    /// Hairline dividers.
+    pub divider: u16,
+    /// The performance HUD background.
+    pub hud_bg: u16,
+    /// The performance HUD foreground.
+    pub hud_text: u16,
+    /// A 12 % accent tint.
+    pub accent_soft: u16,
+    /// Canvas / stage grid dots.
+    pub grid_dot: u16,
+    /// A 12 % secondary tint.
+    pub secondary_soft: u16,
+    /// Navigation primary text.
+    pub nav_text: u16,
+    /// Navigation secondary text.
+    pub nav_text_muted: u16,
+}
+
+impl Palette {
+    /// The colour swatches the Design Guidance page displays.
+    #[must_use]
+    pub fn swatches(&self) -> [(&'static str, u16); 12] {
+        [
+            ("Surface", self.surface),
+            ("Raised", self.card_bg),
+            ("Primary", self.primary),
+            ("Primary soft", self.primary_soft),
+            ("Accent", self.secondary),
+            ("Success", self.success),
+            ("Warning", self.warning),
+            ("Danger", self.danger),
+            ("Text", self.text),
+            ("Muted", self.text_muted),
+            ("Outline", self.border),
+            ("Shadow", self.shadow),
+        ]
+    }
 }
 
 impl Palette {
@@ -117,6 +201,37 @@ const TOKEN_PRIMARY_PRESSED: u16 = 13;
 const TOKEN_ON_PRIMARY: u16 = 14;
 const TOKEN_FOCUS_RING: u16 = 15;
 const TOKEN_DISABLED_FILL: u16 = 16;
+const TOKEN_HEADER_BG: u16 = 17;
+const TOKEN_NAV_BG: u16 = 18;
+const TOKEN_NAV_HOVER: u16 = 19;
+const TOKEN_NAV_SELECTED: u16 = 20;
+const TOKEN_CARD_BG: u16 = 21;
+const TOKEN_CARD_BORDER: u16 = 22;
+const TOKEN_STAGE_BG: u16 = 23;
+const TOKEN_STAGE_GRID: u16 = 24;
+const TOKEN_CONTROL_TRACK: u16 = 25;
+const TOKEN_CONTROL_THUMB: u16 = 26;
+const TOKEN_CONTROL_HOVER: u16 = 27;
+const TOKEN_CODE_BG: u16 = 28;
+const TOKEN_CODE_TEXT: u16 = 29;
+const TOKEN_OVERLAY_SCRIM: u16 = 30;
+const TOKEN_OVERLAY_BG: u16 = 31;
+const TOKEN_PRIMARY_SOFT: u16 = 32;
+const TOKEN_SUCCESS_SOFT: u16 = 33;
+const TOKEN_WARNING_SOFT: u16 = 34;
+const TOKEN_DANGER_SOFT: u16 = 35;
+const TOKEN_HERO_START: u16 = 36;
+const TOKEN_HERO_END: u16 = 37;
+const TOKEN_ON_HERO: u16 = 38;
+const TOKEN_SELECTION_FILL: u16 = 39;
+const TOKEN_DIVIDER: u16 = 40;
+const TOKEN_HUD_BG: u16 = 41;
+const TOKEN_HUD_TEXT: u16 = 42;
+const TOKEN_ACCENT_SOFT: u16 = 43;
+const TOKEN_GRID_DOT: u16 = 44;
+const TOKEN_SECONDARY_SOFT: u16 = 45;
+const TOKEN_NAV_TEXT: u16 = 46;
+const TOKEN_NAV_TEXT_MUTED: u16 = 47;
 
 /// The tokens the gallery uses.
 ///
@@ -141,6 +256,37 @@ pub const fn palette() -> Palette {
         on_primary: TOKEN_ON_PRIMARY,
         focus_ring: TOKEN_FOCUS_RING,
         disabled_fill: TOKEN_DISABLED_FILL,
+        header_bg: TOKEN_HEADER_BG,
+        nav_bg: TOKEN_NAV_BG,
+        nav_hover: TOKEN_NAV_HOVER,
+        nav_selected: TOKEN_NAV_SELECTED,
+        card_bg: TOKEN_CARD_BG,
+        card_border: TOKEN_CARD_BORDER,
+        stage_bg: TOKEN_STAGE_BG,
+        stage_grid: TOKEN_STAGE_GRID,
+        control_track: TOKEN_CONTROL_TRACK,
+        control_thumb: TOKEN_CONTROL_THUMB,
+        control_hover: TOKEN_CONTROL_HOVER,
+        code_bg: TOKEN_CODE_BG,
+        code_text: TOKEN_CODE_TEXT,
+        overlay_scrim: TOKEN_OVERLAY_SCRIM,
+        overlay_bg: TOKEN_OVERLAY_BG,
+        primary_soft: TOKEN_PRIMARY_SOFT,
+        success_soft: TOKEN_SUCCESS_SOFT,
+        warning_soft: TOKEN_WARNING_SOFT,
+        danger_soft: TOKEN_DANGER_SOFT,
+        hero_start: TOKEN_HERO_START,
+        hero_end: TOKEN_HERO_END,
+        on_hero: TOKEN_ON_HERO,
+        selection_fill: TOKEN_SELECTION_FILL,
+        divider: TOKEN_DIVIDER,
+        hud_bg: TOKEN_HUD_BG,
+        hud_text: TOKEN_HUD_TEXT,
+        accent_soft: TOKEN_ACCENT_SOFT,
+        grid_dot: TOKEN_GRID_DOT,
+        secondary_soft: TOKEN_SECONDARY_SOFT,
+        nav_text: TOKEN_NAV_TEXT,
+        nav_text_muted: TOKEN_NAV_TEXT_MUTED,
     }
 }
 
@@ -173,6 +319,37 @@ pub fn theme_table(dark: bool) -> Vec<[u16; 4]> {
         set(TOKEN_ON_PRIMARY, Color::from_srgb8(12, 16, 26, 255));
         set(TOKEN_FOCUS_RING, Color::from_srgb8(150, 195, 255, 255));
         set(TOKEN_DISABLED_FILL, Color::from_srgb8(70, 72, 82, 255));
+        set(TOKEN_HEADER_BG, Color::from_srgb8(23, 26, 33, 255));
+        set(TOKEN_NAV_BG, Color::from_srgb8(20, 23, 29, 255));
+        set(TOKEN_NAV_HOVER, Color::from_srgb8(35, 40, 51, 255));
+        set(TOKEN_NAV_SELECTED, Color::from_srgb8(38, 51, 79, 255));
+        set(TOKEN_CARD_BG, Color::from_srgb8(27, 31, 39, 255));
+        set(TOKEN_CARD_BORDER, Color::from_srgb8(44, 50, 64, 255));
+        set(TOKEN_STAGE_BG, Color::from_srgb8(23, 26, 33, 255));
+        set(TOKEN_STAGE_GRID, Color::from_srgb8(38, 43, 54, 255));
+        set(TOKEN_CONTROL_TRACK, Color::from_srgb8(45, 51, 65, 255));
+        set(TOKEN_CONTROL_THUMB, Color::from_srgb8(237, 241, 250, 255));
+        set(TOKEN_CONTROL_HOVER, Color::from_srgb8(56, 64, 82, 255));
+        set(TOKEN_CODE_BG, Color::from_srgb8(14, 16, 21, 255));
+        set(TOKEN_CODE_TEXT, Color::from_srgb8(201, 210, 228, 255));
+        set(TOKEN_OVERLAY_SCRIM, Color::from_srgb8(0, 0, 0, 150));
+        set(TOKEN_OVERLAY_BG, Color::from_srgb8(32, 37, 47, 255));
+        set(TOKEN_PRIMARY_SOFT, Color::from_srgb8(34, 48, 79, 255));
+        set(TOKEN_SUCCESS_SOFT, Color::from_srgb8(28, 58, 42, 255));
+        set(TOKEN_WARNING_SOFT, Color::from_srgb8(59, 47, 27, 255));
+        set(TOKEN_DANGER_SOFT, Color::from_srgb8(61, 34, 38, 255));
+        set(TOKEN_HERO_START, Color::from_srgb8(76, 125, 255, 255));
+        set(TOKEN_HERO_END, Color::from_srgb8(160, 107, 255, 255));
+        set(TOKEN_ON_HERO, Color::from_srgb8(255, 255, 255, 255));
+        set(TOKEN_SELECTION_FILL, Color::from_srgb8(120, 165, 255, 48));
+        set(TOKEN_DIVIDER, Color::from_srgb8(38, 44, 56, 255));
+        set(TOKEN_HUD_BG, Color::from_srgb8(8, 10, 14, 224));
+        set(TOKEN_HUD_TEXT, Color::from_srgb8(220, 227, 242, 255));
+        set(TOKEN_ACCENT_SOFT, Color::from_srgb8(58, 42, 34, 255));
+        set(TOKEN_GRID_DOT, Color::from_srgb8(51, 58, 72, 255));
+        set(TOKEN_SECONDARY_SOFT, Color::from_srgb8(46, 37, 66, 255));
+        set(TOKEN_NAV_TEXT, Color::from_srgb8(228, 233, 243, 255));
+        set(TOKEN_NAV_TEXT_MUTED, Color::from_srgb8(138, 147, 166, 255));
     } else {
         set(TOKEN_SHADOW, Color::from_srgb8(20, 22, 30, 60));
         set(TOKEN_BACKGROUND, Color::from_srgb8(245, 246, 250, 255));
@@ -190,6 +367,37 @@ pub fn theme_table(dark: bool) -> Vec<[u16; 4]> {
         set(TOKEN_ON_PRIMARY, Color::from_srgb8(255, 255, 255, 255));
         set(TOKEN_FOCUS_RING, Color::from_srgb8(28, 90, 210, 255));
         set(TOKEN_DISABLED_FILL, Color::from_srgb8(200, 204, 214, 255));
+        set(TOKEN_HEADER_BG, Color::from_srgb8(255, 255, 255, 255));
+        set(TOKEN_NAV_BG, Color::from_srgb8(247, 248, 251, 255));
+        set(TOKEN_NAV_HOVER, Color::from_srgb8(236, 238, 244, 255));
+        set(TOKEN_NAV_SELECTED, Color::from_srgb8(228, 235, 253, 255));
+        set(TOKEN_CARD_BG, Color::from_srgb8(255, 255, 255, 255));
+        set(TOKEN_CARD_BORDER, Color::from_srgb8(228, 230, 238, 255));
+        set(TOKEN_STAGE_BG, Color::from_srgb8(245, 246, 250, 255));
+        set(TOKEN_STAGE_GRID, Color::from_srgb8(227, 230, 239, 255));
+        set(TOKEN_CONTROL_TRACK, Color::from_srgb8(228, 231, 239, 255));
+        set(TOKEN_CONTROL_THUMB, Color::from_srgb8(255, 255, 255, 255));
+        set(TOKEN_CONTROL_HOVER, Color::from_srgb8(236, 239, 246, 255));
+        set(TOKEN_CODE_BG, Color::from_srgb8(28, 32, 41, 255));
+        set(TOKEN_CODE_TEXT, Color::from_srgb8(215, 220, 234, 255));
+        set(TOKEN_OVERLAY_SCRIM, Color::from_srgb8(15, 18, 26, 90));
+        set(TOKEN_OVERLAY_BG, Color::from_srgb8(255, 255, 255, 255));
+        set(TOKEN_PRIMARY_SOFT, Color::from_srgb8(232, 238, 254, 255));
+        set(TOKEN_SUCCESS_SOFT, Color::from_srgb8(228, 246, 236, 255));
+        set(TOKEN_WARNING_SOFT, Color::from_srgb8(252, 242, 223, 255));
+        set(TOKEN_DANGER_SOFT, Color::from_srgb8(253, 233, 234, 255));
+        set(TOKEN_HERO_START, Color::from_srgb8(59, 110, 246, 255));
+        set(TOKEN_HERO_END, Color::from_srgb8(138, 92, 246, 255));
+        set(TOKEN_ON_HERO, Color::from_srgb8(255, 255, 255, 255));
+        set(TOKEN_SELECTION_FILL, Color::from_srgb8(59, 110, 246, 40));
+        set(TOKEN_DIVIDER, Color::from_srgb8(234, 236, 242, 255));
+        set(TOKEN_HUD_BG, Color::from_srgb8(255, 255, 255, 246));
+        set(TOKEN_HUD_TEXT, Color::from_srgb8(28, 30, 38, 255));
+        set(TOKEN_ACCENT_SOFT, Color::from_srgb8(255, 240, 232, 255));
+        set(TOKEN_GRID_DOT, Color::from_srgb8(216, 220, 232, 255));
+        set(TOKEN_SECONDARY_SOFT, Color::from_srgb8(240, 234, 254, 255));
+        set(TOKEN_NAV_TEXT, Color::from_srgb8(42, 47, 58, 255));
+        set(TOKEN_NAV_TEXT_MUTED, Color::from_srgb8(122, 128, 144, 255));
     }
     colors
 }
@@ -211,7 +419,7 @@ pub struct Gallery {
 
 impl Gallery {
     /// Start an empty scene.
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             primitives: Vec::new(),
             transforms: vec![GpuTransform::IDENTITY],
@@ -223,7 +431,7 @@ impl Gallery {
 
     /// Add a rounded rectangle.
     #[allow(clippy::too_many_arguments)]
-    fn rect(
+    pub(crate) fn rect(
         &mut self,
         x: f32,
         y: f32,
@@ -260,7 +468,16 @@ impl Gallery {
 
     /// Add a stroke (a hollow rounded rectangle).
     #[allow(clippy::too_many_arguments)]
-    fn stroke(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, color: u16, z: u16) {
+    pub(crate) fn stroke(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        color: u16,
+        z: u16,
+    ) {
         let prim = GpuPrimitiveInstance {
             chunk_id: [0, 0],
             local_pos: [x, y],
@@ -284,7 +501,7 @@ impl Gallery {
     }
 
     /// Add a glyph quad.
-    fn glyph(&mut self, quad: &GlyphQuad, color: u16, z: u16) {
+    pub(crate) fn glyph(&mut self, quad: &GlyphQuad, color: u16, z: u16) {
         let payload = GpuPayload {
             p0: [quad.uv[0], quad.uv[1]],
             p1: [quad.uv[2], quad.uv[3]],
@@ -325,7 +542,7 @@ impl Gallery {
     }
 
     /// Add a quadratic curve segment.
-    fn curve(
+    pub(crate) fn curve(
         &mut self,
         p0: [f32; 2],
         p1: [f32; 2],
@@ -376,8 +593,14 @@ pub struct Labels {
     pub cache: GlyphCache,
     /// The shaping engine.
     pub engine: TextEngine,
-    /// The size the dynamic button label was prewarmed at, if any.
-    prewarmed: Option<f32>,
+    /// How many atlas texels one logical unit covers.
+    ///
+    /// The layout stays in logical units; rasterising at
+    /// `font_size × raster_scale` and scaling the quads back keeps every glyph
+    /// sharp when the OS scale or the app zoom magnifies the whole UI.
+    raster_scale: f32,
+    /// The size and raster scale the dynamic button label was prewarmed at.
+    prewarmed: Option<(f32, f32)>,
 }
 
 impl Labels {
@@ -387,8 +610,30 @@ impl Labels {
         Self {
             cache: GlyphCache::new(),
             engine: TextEngine::new(),
+            raster_scale: 1.0,
             prewarmed: None,
         }
+    }
+
+    /// Rasterise at `logical_size × scale` and place the quads in logical units.
+    pub fn set_raster_scale(&mut self, scale: f32) {
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        self.raster_scale = scale.clamp(0.5, 4.0);
+    }
+
+    /// Whether glyphs are rasterised for the whole-pixel grid.
+    pub fn set_snap_phases(&mut self, snap: bool) {
+        self.cache.snap_phases = snap;
+    }
+
+    /// The scale glyphs are rasterised at.
+    #[must_use]
+    pub fn raster_scale(&self) -> f32 {
+        self.raster_scale
     }
 
     /// Rasterise every glyph a dynamic label can produce before it is shown.
@@ -399,15 +644,16 @@ impl Labels {
     /// blank box. Shaping the whole alphabet up front keeps the click at zero
     /// texture uploads.
     pub fn prewarm(&mut self, text: &str, size: f32) {
-        if self.prewarmed == Some(size) {
+        let scale = self.raster_scale;
+        if self.prewarmed == Some((size, scale)) {
             return;
         }
-        let style = TextStyle::sized(size);
+        let style = TextStyle::sized(size * scale);
         let shaped = self.engine.shape(text, &style);
         let _ = self
             .cache
             .quads_for(&mut self.engine, &shaped, Vec2::ZERO, 400, false);
-        self.prewarmed = Some(size);
+        self.prewarmed = Some((size, scale));
     }
 
     /// Lay out a label and return its glyph quads.
@@ -417,13 +663,22 @@ impl Labels {
     /// rectangle hangs above its baseline), so the whole run is shifted down
     /// by the line's ascent to put the first line's top at `origin`.
     pub fn layout(&mut self, text: &str, origin: Vec2, size: f32) -> Vec<GlyphQuad> {
-        let style = TextStyle::sized(size);
+        let scale = self.raster_scale;
+        let style = TextStyle::sized(size * scale);
         let shaped = self.engine.shape(text, &style);
         let mut quads = self
             .cache
             .quads_for(&mut self.engine, &shaped, Vec2::ZERO, 400, false);
         if quads.is_empty() {
             return quads;
+        }
+        if (scale - 1.0).abs() > 1e-6 {
+            for quad in &mut quads {
+                quad.rect.origin.x /= scale;
+                quad.rect.origin.y /= scale;
+                quad.rect.size.x /= scale;
+                quad.rect.size.y /= scale;
+            }
         }
         // The ascent is the distance from the baseline to the top of the
         // tallest glyph; the glyph rectangles extend that far upwards.
@@ -440,6 +695,40 @@ impl Labels {
             quad.rect.origin.y += origin.y - top;
         }
         quads
+    }
+
+    /// Measure a single-line run without emitting glyphs.
+    #[must_use]
+    pub fn measure(&mut self, text: &str, size: f32) -> Vec2 {
+        let scale = self.raster_scale;
+        self.engine.measure(text, &TextStyle::sized(size * scale)) / scale
+    }
+
+    /// Lay out a wrapped paragraph, one shaped line at a time.
+    ///
+    /// The line breaks come from the engine's wrap cache, so resizing a card
+    /// only recomputes the break positions, never the glyph shapes.
+    pub fn layout_wrapped(
+        &mut self,
+        text: &str,
+        origin: Vec2,
+        size: f32,
+        max_width: f32,
+    ) -> Vec<GlyphQuad> {
+        let scale = self.raster_scale;
+        let style = TextStyle::sized(size * scale);
+        let wrapped = self.engine.wrap(text, &style, (max_width * scale).max(1.0));
+        let mut out = Vec::new();
+        for (line, info) in wrapped.lines.iter().enumerate() {
+            let start = (info.start as usize).min(text.len());
+            let end = (info.end as usize).min(text.len());
+            if start >= end {
+                continue;
+            }
+            let y = origin.y + line as f32 * wrapped.line_height / scale;
+            out.extend(self.layout(&text[start..end], Vec2::new(origin.x, y), size));
+        }
+        out
     }
 }
 

@@ -1486,6 +1486,7 @@ dependencies = [
  "slotmap",
  "unbound-a11y",
  "unbound-abi",
+ "unbound-anim",
  "unbound-gpu",
  "unbound-headless",
  "unbound-input",

@@ -1,16 +1,17 @@
-# 组件展台：一次看全所有图元
+# 组件展台：自举式 UI Gallery
 
 > **实现状态**：`已落地`
 >
 > | | |
 > | :--- | :--- |
-> | **源码** | `apps/showcase/src/{main,gallery,button,testing}.rs`、`apps/showcase/tests/gallery.rs` |
-> | **关键类型** | `Gallery`、`Palette`、`Labels`、`Showcase`、`ButtonDesc`、`ButtonVisualState`、`ButtonHarness`、`TestApp` |
-> | **测试** | `apps/showcase/tests/gallery.rs` 全部经由 `ButtonHarness`（`unbound_headless::driver::TestApp` 之上）；渲染正确性由 `crates/unbound-gpu` 的像素断言覆盖 |
+> | **源码** | `apps/showcase/src/{main,shell,state,canvas,widgets,target,gallery,pages/*}.rs` |
+> | **关键类型** | `GalleryApp`、`ShellLayout`、`GalleryState`、`ExampleCard`（`PageLayout`/`CardLayout`）、`Canvas`、`Target`、`Palette`、`Labels` |
+> | **测试** | `apps/showcase/tests/gallery.rs`（13 个）+ `apps/showcase/tests/shell.rs`（9 个），全部无头运行；布局体检走 `unbound-headless` |
 
-`apps/showcase` 是引擎的**可视验收台**：一个真实开窗的 Vulkan 程序，把引擎能画
-的每一种图元都摆在一屏里。启动它不需要任何资产、不需要配置文件，窗口一开就能
-看到圆角矩形、边框、解析阴影、描边环、贝塞尔曲线、MTSDF 字形与双主题配色。
+`apps/showcase` 现在是一个**自举（dogfooding）的桌面应用**：它用引擎自己的布局、
+输入、语义、动画与主题原语，搭出对标 WinUI 3 Gallery 的三段式壳层与交互式组件
+沙盒。打开窗口看到的不再是一块测试画布，而是一个带自定义标题栏、可折叠导航树、
+全局搜索、主题/缩放/HUD 拨杆和标准 `ExampleCard` 的完整软件。
 
 ## 为什么需要它
 
@@ -26,130 +27,139 @@
 | Vulkan surface 与 swapchain | `crates/unbound-gpu/src/surface.rs` |
 | 真实 bindless 图集与上传通路 | `crates/unbound-gpu/src/atlas.rs` |
 | 窗口化呈现（acquire → render → present） | `apps/showcase/src/main.rs` |
-| 图元排布与主题配色 | `apps/showcase/src/gallery.rs` |
+| 应用壳层、导航与输入路由 | `apps/showcase/src/shell.rs` |
+| 页面目录、示例与 Knob 定义 | `apps/showcase/src/pages/` |
+| 图元绘制与主题配色 | `apps/showcase/src/{canvas,widgets,gallery}.rs` |
+
+## 三段式应用壳层
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ ☰  Unbound UI  › Collections › Virtualized ListView          │
+│      [搜索 Ctrl+K]              [Theme] [Zoom] [Snap] [HUD]  │
+├──────────────┬───────────────────────────────────────────────┤
+│ Home         │  Page Header（标题 / 描述 / crate 徽章）        │
+│ Design       │  ┌─────────────────────────────┬────────────┐  │
+│ Basic Input  │  │  Live Stage（约 70%）       │ Knobs 30%  │  │
+│ Layout       │  │                             │            │  │
+│ Collections  │  └─────────────────────────────┴────────────┘  │
+│ Canvas       │  │  </> Code & Schema（可展开）                │  │
+│ Motion       │  └────────────────────────────────────────────┘  │
+│──────────────│                                               │
+│ Telemetry    │                                               │
+│ Settings     │                                               │
+└──────────────┴───────────────────────────────────────────────┘
+```
+
+* **顶部全局栏**：logo、按钮式面包屑、全局搜索（`Ctrl+K` 命令面板）、
+  Light/Dark 切换、`100/125/150/200%` 缩放分段器、像素对齐开关与 HUD 开关。
+* **左侧 NavigationView**：顶部固定 Home / Design Guidance，中部 6 大分类树，
+  底部固定 Engine Telemetry / Settings。展开 248 px、折叠 68 px，宽度由
+  `unbound-anim` 的弹簧驱动；壳层在窗格窄于 140 px 时提前切换到图标栏，
+  避免标签被裁切。
+* **右侧页面视口**：统一 `PageHeader` + 垂直排列的 `ExampleCard`；内容滚动、
+  导航滚动与示例内部滚动（虚拟列表、画布缩放）分层处理。
+
+### 状态机与渲染管线
+
+`GalleryState` 是唯一事实来源：`active_page`、`nav_expanded`、`search_query`、
+`theme`、`zoom_step`、`pixel_snap`、`show_hud`、滚动位置、Knob 值、展开的代码
+面板与全部演示状态。页面是这份状态的**纯函数**。
+
+`GalleryApp` 每帧做三件事：
+
+1. `tick(dt)` 推进导航弹簧与演示动画；静态页面不重建，动画页面按约 30 Hz
+   提升 revision，空闲时窗口保持低功耗。
+2. `sync(viewport)` 比较 revision / hover / pressed / focus / viewport，只有在
+   可观察状态变化时才 `rebuild`。
+3. `rebuild` 计算 `ShellLayout` 与每张卡片的几何，由 `Canvas` 发射图元、命中
+   区域、语义节点与 RangeZone，最后交给 `Router` 与 `Semantics`。
+
+自建 Canvas 层使用绝对逻辑坐标与递增 z 序，因此缩放（逻辑坐标 = 物理 /
+（OS Scale × App Zoom））与像素对齐（`snap`）只影响几何，不影响命中与语义；
+Portal 层用于搜索面板、菜单、对话框与 Tooltip，绘制顺序即命中顺序。
 
 ## 跑起来
 
+仓库统一走 `just` 入口（内部经全局构建队列）：
+
 ```bash
-cargo run -p showcase --release
+just showcase
 ```
 
 窗口里的操作：
 
 | 输入 | 行为 |
 | :--- | :--- |
-| `T` | 在亮色与暗色主题之间切换 |
-| `Space` | 有焦点时激活按钮；无焦点时切换主题 |
-| `Enter` | 激活当前聚焦的按钮 |
-| `Tab` / `Esc` | 聚焦按钮 / 取消焦点 |
-| 滚轮 | 以视口中心为锚点缩放（0.25× – 8×） |
-| 左键拖拽 | 在空白处拖动平移画布；按在按钮上则是点击而不是平移 |
+| `Ctrl+K` | 打开全局搜索命令面板，按控件名或 `MTSDF` / `Quadtree` 等标签过滤 |
+| `/` 后输入 | 在搜索框内输入，`Enter` 跳到首个结果 |
+| `Tab` / `Shift+Tab` | 在焦点链里前后移动 |
+| `Enter` / `Space` | 激活当前聚焦的控件 |
+| `Esc` | 关闭搜索 / 菜单 / 对话框 |
+| `T` | 切换 Light / Dark |
+| `F12` | 开关 HUD |
+| `Ctrl+滚轮` | 切换全局 UI 缩放（100 / 125 / 150 / 200 %），物理窗口随缩放调整 |
+| 滚轮 | 滚页面、导航树，或缩放任一示例内部的画布 / 列表 |
+| 左键拖拽 | 拖动 Knob 滑块、拖拽排序卡片、框选画布节点或平移画布 |
+| 拖拽标题栏 / 双击标题栏 | 移动窗口 / 最大化与还原 |
+| 拖拽窗口边缘 | 从八向边缘缩放窗口（无边框 CSD） |
 
 ### 无头模式
 
-CI 与本地排查没有窗口时，`--shot` 会把**同一份场景**渲染到离屏目标并写成 PNG。
+CI 与本地排查没有窗口时，`--shot` 会把**同一份壳层**渲染到离屏目标并写成 PNG。
 截图是构建产物，默认落在 `target/showcase/`，不进版本库：
 
 ```bash
-cargo run -p showcase --release -- --shot            # target/showcase/showcase-light.png
-cargo run -p showcase --release -- --shot --dark     # target/showcase/showcase-dark.png
-cargo run -p showcase --release -- --shot out.png    # 显式路径也可以
+just showcase -- --shot                  # target/showcase/gallery-light.png
+just showcase -- --shot --dark           # target/showcase/gallery-dark.png
+just showcase -- --shot out.png
+just showcase -- --shot out.png --width 960 --height 600 --zoom 200 --hud
 ```
 
-这让「渲染结果」变成可以逐像素比对的东西，而不是只能靠人眼看；但图片本身属于
-生成物，仓库里只保留生成它的命令。
+## ExampleCard 与 Knob
 
-## 场景里摆了什么
+每张示例卡片由 `pages::ExampleDef` 静态描述：标题、说明、关联 crate、Rust 代码、
+无障碍说明、`KnobSpec` 列表与 `DemoKind`。壳层负责统一外观：
 
-`gallery.rs` 的 `build()` 用引擎自己的公开 API 拼出一屏场景，每个元素都对应
-一类图元：
+* **Live Stage**：主题背景或网格背景上的真实交互画布。
+* **Options / Knobs**：`Toggle`、`CheckBox`、`Slider`（带 RangeZone，指针可拖出
+  行外仍保持捕获）与 `Segmented`（单选胶囊），右侧一改左侧立即重排。
+* **Code & Schema**：折叠区展开后显示声明式 Rust 片段与 A11y 描述；展开高度
+  影响页面总高度，由 `content_scroll` 统一滚动。
 
-| 元素 | 覆盖的引擎能力 |
+Knob 值以 `(page, card, knob)` 编码进 `GalleryState.knobs`，默认值来自
+`KnobSpec`，因此页面定义保持只读，交互状态集中在状态机里。
+
+### 七大板块
+
+| 分类 | 页面 |
 | :--- | :--- |
-| 页面背景 | 全屏圆角矩形、z 序、反向 Z 深度 |
-| 五个色块 | 填充 + 1 px 边框 + `erf` 解析阴影 |
-| 白色卡片 | 圆角 + 边框 + 阴影，圆角半径 16 |
-| 蓝色焦点环 | `PrimType::Stroke` 的描边环 |
-| 三条彩线 | 二次贝塞尔曲线的解析 SDF |
-| 标题与各处标签 | 双图集 + MTSDF 字形采样 |
-| 底部提示行 | 深色主题下的文字极性补偿 |
-| Button 卡片 | 第一个可交互控件：hover / press / focus / click |
+| Home | Hero、能力卡、全组件索引 |
+| Design Guidance | Colors、Typography、Elevation、Vector |
+| Basic Input | Buttons、Toggles、Sliders、Text Field |
+| Layout & Portals | Flex、Overlays、Drag & Drop |
+| Collections | Virtualized List、Asset Streaming |
+| Infinite Canvas | Viewport & Quadtree、Marquee & Snapping、Undo / Redo |
+| Motion, A11y & Telemetry | Springs、Accessibility、Telemetry、Settings |
 
-### 第一个可交互控件
+## 自动化验证
 
-`button.rs` 给出组件的形态：**POD 描述符 + 派生状态 + 纯函数发射器**，而不是
-一个带方法的状态容器。
+`tests/shell.rs` 不创建窗口，直接驱动 `GalleryApp`：
 
-* `ButtonDesc` 只描述几何与文案；组件身份来自 `unbound-world` 的 `NodeId`。
-* hover / pressed **不落任何 `bool` 字段**，每帧由 `unbound-input::Router` 的
-  捕获状态派生。按下后拖出按钮仍然保持 pressed（指针被捕获），松开越界不会
-  合成点击——这套经典场景不会出现两套状态失步。
-* 焦点与指针正交：`ButtonVisualState { phase, focused, disabled }`，所以
-  "Tab 聚焦后又悬停"能同时画出 hover 底色与外部焦点环。
-* 图元按 `SubElement`（`Shadow → Background → Content → Border → FocusRing`）
-  分层，五层共享同一个 `z`，由 64 位排序键决定顺序。
-
-窗口管线里有三处必须对齐：
-
-1. **屏幕坐标 → 画布坐标**：`Camera` 的映射是
-   `screen = (world - anchor) * zoom + viewport/2`，喂给 `Router` 之前必须做
-   逆变换，否则缩放/平移后热区会与画面错位。滚轮缩放以光标为锚点，
-   `zoom_anchor_pan` 保持光标下的画布点不动，与 `TestApp::zoom_at` 是同一套
-   公式；缩放后立即重新命中测试，hover 不会落后一个事件。
-2. **点击优先于平移**：左键按下先问路由器是否命中 `HitRegion`；命中则捕获
-   指针并聚焦按钮，未命中才进入画布拖拽。
-3. **离散状态跃迁守卫**：只有 `(视觉态, 点击计数)` 变化的那一帧才重建场景并
-   递增 `generation`。平移、缩放、切主题、鼠标在按钮内部滑行都不触发上传。
-
-### 按钮的无头测试
-
-`tests/gallery.rs` 里没有任何一处手写 `UiWorld` / `Router` / `Semantics`：它们
-统一通过 `showcase::testing::ButtonHarness` 获得一个 `TestApp` 会话。harness 只
-做控件该做的事——持有按钮身份、文案、点击计数和最近一次场景，并在
-`(视觉态, 计数)` 真正变化时重建：
-
-| harness 方法 | 验证的链路 |
+| 用例 | 验证的链路 |
 | :--- | :--- |
-| `hover()` / `press()` / `release()` | hover 与 pressed 从路由器派生，按下后指针被捕获 |
-| `click()` | 一次按下/松开合成一个 `Click`，计数与文案同步前进；松在按钮外则不激活 |
-| `focus()` / `blur()` | 焦点与指针正交，焦点环走 `PrimType::Stroke` |
-| `set_disabled(bool)` | 禁用后组件不再发射热区，点击、hover 与语义都随之关闭 |
-| `activate()` | 复现键盘 `Enter` / `Space` 的激活路径 |
-| `label()` / `value()` | 语义树里的 `Role::Button` 与激活计数 |
-| `generation()` | 红绘守卫：只有离散状态跃迁才重建场景 |
-| `assert_clean()` | 按钮帧通过五项几何体检 |
-| `rebuild_with(visual, count)` | 供 GPU 测试烘焙 idle / hover / pressed 三个状态 |
+| `every_page_passes_the_headless_sanitizers` | 21 个页面全部通过 `unbound-headless` 的布局体检 |
+| `navigation_updates_the_breadcrumb_and_active_page` | 导航行点击 → 面包屑与页面切换 |
+| `the_navigation_pane_collapses_and_expands` | 折叠/展开改变导航宽度与图标栏 |
+| `ctrl_k_searches_the_catalogue_by_crate_and_tag` | 按 `MTSDF` 等标签搜索并跳转 |
+| `code_panels_change_the_page_extent` | 代码折叠区改变内容高度 |
+| `knobs_are_live_and_route_through_the_reducer` | 滑块拖拽写入 Knob 并触发重排 |
+| `theme_and_zoom_switches_are_one_click` | 主题 / 缩放分段器单击生效且不双触发 |
+| `pointer_hits_navigation_rows_without_a_window` | 指针命中与 `Router` 热区一致 |
+| `search_and_theme_keep_the_same_target_identity` | 稳定 `u64` 目标身份跨重建不变 |
 
-键盘映射在 `showcase::keys`，窗口与测试共用：`KeyAction` 把 `Tab` / `Escape` /
-`Enter` / `Space` / `T` 解析成动作，窗口负责派发，测试则驱动同一个 harness 的
-`focus()` / `activate()` / `blur()`。映射不留在 `main.rs` 里，测试就不会变成
-副本对副本。
-
-交互测试全部纯 CPU，没有 Vulkan 设备也能跑；像素测试在 `test_device()` 返回
-`None` 时自行跳过，只比较同一场景在三种状态下的像素差异。
-
-### 主题切换为什么是「零上传」
-
-亮暗两套主题**共用同一套 token 槽位**，只有颜色表里的值不同。切换主题因此只
-是一次 4 KiB 的颜色表写入——图元数据一个字节都不用动，这与
-[正交缩放与主题切换](../02-ui/theme-and-zoom.md) 描述的机制一致。
-
-按钮的状态色也必须占用**独立槽位**：如果 hover 去改槽位 5（`primary`），
-同屏所有引用 primary 的色块会一起变色。槽位 12–16 就是为此预留的。
-
-| 槽位 | 含义 |
-| ---: | :--- |
-| 0 | 无（恒透明，描边图元的填充槽用它） |
-| 1 | 阴影色（引擎的 `SHADOW_TOKEN` 固定槽） |
-| 2 | 页面背景 |
-| 3 | 面板底色 |
-| 4 | 面板边框 |
-| 5 – 9 | primary / secondary / success / warning / danger |
-| 10 / 11 | 正文 / 次要文字 |
-| 12 / 13 | primary hover / pressed（按钮状态底色） |
-| 14 | on-primary（按钮文字） |
-| 15 | focus ring（焦点环） |
-| 16 | disabled fill（禁用底色） |
+`tests/gallery.rs` 保留全部 13 个旧用例，继续覆盖按钮四态、像素差异与借用附件
+路径；壳层重构没有改动底层渲染契约。
 
 ## 展台暴露出的引擎缺陷
 
@@ -193,6 +203,28 @@ probe / Delete after audit"的探针。它的用例一直失败——**审计从
 
 探针文件已删除，缺陷由 `crates/unbound-gpu/src/tlsf.rs` 里的
 `a_request_bigger_than_the_free_hole_is_refused` 守住。
+
+### 主题切换为什么是「零上传」
+
+亮暗两套主题**共用同一套 token 槽位**，只有颜色表里的值不同。切换主题因此只
+是一次 4 KiB 的颜色表写入——图元数据一个字节都不用动，这与
+[正交缩放与主题切换](../02-ui/theme-and-zoom.md) 描述的机制一致。
+
+壳层把槽位扩展到 48 个，覆盖标题栏、导航、卡片、舞台、代码面板、弹层、Hero、
+HUD 与语义色软背景。按钮和导航的状态色必须占用**独立槽位**：如果 hover 去改
+`primary` 槽，同屏所有引用 primary 的图元会一起变色。
+
+| 槽位 | 含义 |
+| ---: | :--- |
+| 0 | 无（恒透明，描边图元的填充槽用它） |
+| 1 | 阴影色（引擎的 `SHADOW_TOKEN` 固定槽） |
+| 2 – 4 | 页面背景 / 面板底色 / 面板边框 |
+| 5 – 9 | primary / secondary / success / warning / danger |
+| 10 / 11 | 正文 / 次要文字 |
+| 12 – 16 | primary hover / pressed / on-primary / focus ring / disabled fill |
+| 17 – 24 | 标题栏、导航（hover / selected / text）、卡片、舞台与网格 |
+| 25 – 31 | 控件轨道 / 滑块拇指、代码面板、弹层遮罩与底色 |
+| 32 – 48 | 语义软背景、Hero 渐变、选区、分隔线、HUD、强调与导航文字 |
 
 ---
 
