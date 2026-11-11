@@ -1782,7 +1782,6 @@ name = "unbound-graph"
 version = "0.1.0"
 dependencies = [
  "rustc-hash",
- "unbound-math",
 ]
 
 [[package]]

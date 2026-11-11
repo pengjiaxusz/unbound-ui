@@ -14,6 +14,9 @@
 
 #include "common.glsl"
 
+// One *workgroup* per patch: the 64 threads of the group share the copy.
+// A single thread per patch would serialise a multi-megabyte upload into one
+// lane of one SM, which costs hundreds of milliseconds for a full scene.
 layout(local_size_x = 64) in;
 
 struct ScatterPatch {
@@ -31,11 +34,12 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer WordBuf {
 };
 
 void main() {
-    uint i = gl_GlobalInvocationID.x;
-    if (i >= pc.prim_count) {
+    // `patch` is a reserved word in GLSL.
+    uint patch_index = gl_WorkGroupID.x;
+    if (patch_index >= pc.prim_count) {
         return;
     }
-    ScatterPatch sp = PatchBuf(pc.scratch_bda).p[i];
+    ScatterPatch sp = PatchBuf(pc.scratch_bda).p[patch_index];
     WordBuf dst = WordBuf(pc.scratch_bda2);
     WordBuf src = WordBuf(pc.scratch_bda3);
 
@@ -44,7 +48,10 @@ void main() {
     uint words = sp.len >> 4;
     uint d = sp.dst_offset >> 4;
     uint s = sp.src_offset >> 4;
-    for (uint k = 0; k < words; ++k) {
+
+    // The whole group walks the patch together.
+    uint lid = gl_LocalInvocationID.x;
+    for (uint k = lid; k < words; k += 64u) {
         dst.w[d + k] = src.w[s + k];
     }
 }

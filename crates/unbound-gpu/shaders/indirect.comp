@@ -12,11 +12,15 @@
 // here and consumed on the GPU, which means the CPU never reads it back and
 // never stalls.
 //
-// Two details make this correct rather than merely plausible:
+// Three details make this correct rather than merely plausible:
 //   * unused key slots were pre-filled with `0xFFFF…` and sort to the end, so
 //     the walk stops at the first sentinel instead of drawing garbage;
 //   * `pc.aux` bounds the number of runs, so a pathological scene cannot
-//     overflow the command buffer.
+//     overflow the command buffer;
+//   * the two scans over the key array are **parallel**. A hundred thousand
+//     keys scanned by a single thread cost ten milliseconds — more than the
+//     rest of the frame put together — so the sentinel search and the run
+//     boundary search are both spread over the 256 lanes of the workgroup.
 //
 // Output counters: `c[1]` = run count (read by drawIndirectCount),
 //                  `c[2]` = visible instance count (diagnostics).
@@ -24,7 +28,10 @@
 
 #include "common.glsl"
 
-layout(local_size_x = 1) in;
+layout(local_size_x = 256) in;
+
+// Must match `MAX_DRAW_RUNS` in the renderer.
+#define MAX_RUNS 16
 
 layout(buffer_reference, std430, buffer_reference_align = 8) buffer KeyBuf {
     uint64_t k[];
@@ -38,6 +45,10 @@ layout(buffer_reference, std430, buffer_reference_align = 4) buffer CursorBuf {
 
 #define SENTINEL 0xFFFFFFFFFFFFFFFFul
 
+shared uint s_end;
+shared uint s_bound_count;
+shared uint s_bounds[MAX_RUNS];
+
 void emit(CmdBuf cmds, uint run, uint first, uint count) {
     uint o = run * 4u;
     cmds.v[o + 0u] = 4u;       // vertex_count
@@ -50,51 +61,92 @@ void main() {
     uint n = pc.prim_count;
     CmdBuf cmds = CmdBuf(pc.scratch_bda2);
     CursorBuf counters = CursorBuf(pc.scratch_bda3);
-    uint max_runs = pc.aux;
+    KeyBuf keys = KeyBuf(pc.scratch_bda);
+
+    uint tid = gl_LocalInvocationID.x;
+    uint threads = gl_WorkGroupSize.x;
+
+    if (tid == 0u) {
+        s_end = n;
+        s_bound_count = 0u;
+    }
+    barrier();
 
     if (n == 0u) {
-        counters.c[1] = 0u;
-        counters.c[2] = 0u;
+        if (tid == 0u) {
+            counters.c[1] = 0u;
+            counters.c[2] = 0u;
+        }
         return;
     }
 
-    KeyBuf keys = KeyBuf(pc.scratch_bda);
-
-    // Find the first sentinel: everything from here on is padding.
-    uint end = n;
-    for (uint i = 0u; i < n; ++i) {
+    // ---- phase 1: the first sentinel, in parallel --------------------------
+    uint my_end = n;
+    for (uint i = tid; i < n; i += threads) {
         if (keys.k[i] == SENTINEL) {
-            end = i;
+            my_end = i;
             break;
         }
     }
-    counters.c[2] = end;
+    atomicMin(s_end, my_end);
+    barrier();
 
+    uint end = s_end;
     if (end == 0u) {
-        counters.c[1] = 0u;
+        if (tid == 0u) {
+            counters.c[1] = 0u;
+            counters.c[2] = 0u;
+        }
         return;
     }
 
+    // ---- phase 2: the run boundaries, in parallel --------------------------
+    // A boundary is an index whose run prefix differs from its predecessor's.
+    // Every index is visited by exactly one lane, so no boundary is missed.
+    for (uint i = tid + 1u; i < end; i += threads) {
+        if (uint(keys.k[i] >> 36) != uint(keys.k[i - 1u] >> 36)) {
+            uint slot = atomicAdd(s_bound_count, 1u);
+            if (slot < uint(MAX_RUNS)) {
+                s_bounds[slot] = i;
+            }
+        }
+    }
+    barrier();
+
+    // ---- phase 3: order the boundaries and emit the commands ---------------
+    if (tid != 0u) {
+        return;
+    }
+    uint count = min(s_bound_count, uint(MAX_RUNS));
+    // Insertion sort: at most sixteen entries, and it has to be ordered
+    // because the runs must stay contiguous.
+    for (uint a = 1u; a < count; ++a) {
+        uint value = s_bounds[a];
+        uint b = a;
+        while (b > 0u && s_bounds[b - 1u] > value) {
+            s_bounds[b] = s_bounds[b - 1u];
+            b -= 1u;
+        }
+        s_bounds[b] = value;
+    }
+
+    uint max_runs = pc.aux;
     uint run = 0u;
     uint run_start = 0u;
-    // `key >> 36` leaves exactly layer|barrier|variant.
-    uint prev = uint(keys.k[0] >> 36);
-
-    for (uint i = 1u; i < end; ++i) {
-        uint cur = uint(keys.k[i] >> 36);
-        if (cur != prev) {
-            emit(cmds, run, run_start, i - run_start);
-            run += 1u;
-            run_start = i;
-            prev = cur;
-            if (run >= max_runs) {
-                // Command buffer full: stop compacting, keep the remaining
-                // primitives out rather than writing past the allocation.
-                counters.c[1] = run;
-                return;
-            }
+    for (uint a = 0u; a < count; ++a) {
+        uint boundary = s_bounds[a];
+        emit(cmds, run, run_start, boundary - run_start);
+        run += 1u;
+        run_start = boundary;
+        if (run >= max_runs) {
+            // Command buffer full: stop compacting, keep the remaining
+            // primitives out rather than writing past the allocation.
+            counters.c[1] = run;
+            counters.c[2] = end;
+            return;
         }
     }
     emit(cmds, run, run_start, end - run_start);
     counters.c[1] = run + 1u;
+    counters.c[2] = end;
 }

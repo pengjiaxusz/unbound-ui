@@ -36,6 +36,8 @@ const RADIX_PASSES: u32 = 8;
 const RADIX_BLOCK: u32 = 256;
 /// Upper bound on indirect draws per layer pass.
 pub const MAX_DRAW_RUNS: u32 = 16;
+/// The number of stage markers written into the command buffer.
+const STAGE_MARKS: u32 = 6;
 
 /// Offscreen render target (colour + depth).
 #[derive(Debug)]
@@ -152,6 +154,8 @@ pub struct Renderer {
     ring: TransientRing,
     ring_buffer: Buffer,
     lut_buffer: Buffer,
+    /// The GPU timestamp scope, when timing is enabled.
+    timing: Option<crate::timing::TimestampScope>,
 
     prim_handle: PoolHandle,
     transform_handle: PoolHandle,
@@ -425,6 +429,7 @@ impl Renderer {
             ring,
             ring_buffer,
             lut_buffer,
+            timing: None,
             prim_handle,
             transform_handle,
             clip_handle,
@@ -617,7 +622,25 @@ impl Renderer {
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )?;
         }
+        // The first timestamp brackets the whole frame on the GPU.
+        if let Some(scope) = &self.timing {
+            scope.reset(&self.gpu).expect("reset the timestamps");
+            // SAFETY: our own command buffer.
+            unsafe {
+                scope.write_at(
+                    &self.gpu,
+                    cmd,
+                    0,
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                );
+            }
+        }
         self.record_frame(cmd, scene, &upload, frame_slot)?;
+        // The second timestamp closes the bracket.
+        if let Some(scope) = &self.timing {
+            // SAFETY: our own command buffer.
+            unsafe { scope.write(&self.gpu, cmd, 1) };
+        }
 
         {
             let gpu = &self.gpu;
@@ -668,11 +691,13 @@ impl Renderer {
                 scratch_bda3: self.ring_buffer.address,
                 ..Default::default()
             };
+            // One workgroup per patch: the shader copies the patch with all
+            // 64 of its lanes.
             self.dispatch(
                 cmd,
                 crate::pipeline::ComputeStage::Scatter,
                 &mut pc,
-                upload.patch_count.div_ceil(64),
+                upload.patch_count,
             );
             self.stats.compute_dispatches += 1;
             let barrier = vk::MemoryBarrier2::default()
@@ -692,6 +717,8 @@ impl Renderer {
                 )
             };
         }
+
+        self.mark(cmd, 1, vk::PipelineStageFlags::COMPUTE_SHADER);
 
         // ---- 3. cull ---------------------------------------------------------
         let n = scene.primitives.len() as u32;
@@ -728,6 +755,8 @@ impl Renderer {
             n.div_ceil(256),
         );
         self.stats.compute_dispatches += 1;
+
+        self.mark(cmd, 2, vk::PipelineStageFlags::COMPUTE_SHADER);
 
         // ---- 4. radix sort ---------------------------------------------------
         // Sort the *whole* key array: entries beyond the visible count were
@@ -803,6 +832,8 @@ impl Renderer {
             }
         }
 
+        self.mark(cmd, 3, vk::PipelineStageFlags::COMPUTE_SHADER);
+
         // ---- 5. indirect -----------------------------------------------------
         let mut pc = PushConstants {
             prim_count: n,
@@ -841,12 +872,88 @@ impl Renderer {
             };
         }
 
+        self.mark(cmd, 4, vk::PipelineStageFlags::DRAW_INDIRECT);
+
         // ---- 6/7. graphics ---------------------------------------------------
         self.begin_rendering(cmd);
         self.record_graphics(cmd, scene);
         self.end_rendering(cmd);
 
+        self.mark(cmd, 5, vk::PipelineStageFlags::BOTTOM_OF_PIPE);
+
         Ok(())
+    }
+
+    /// Enable GPU timing for the frames rendered from now on.
+    ///
+    /// # Errors
+    /// Returns [`GpuError::Vulkan`] when the query pool cannot be created.
+    pub fn enable_timing(&mut self) -> Result<(), GpuError> {
+        let scope = crate::timing::TimestampScope::new(&self.gpu, STAGE_MARKS)?;
+        self.timing = Some(scope);
+        Ok(())
+    }
+
+    /// Write a stage marker into the command buffer.
+    fn mark(&self, cmd: vk::CommandBuffer, index: u32, stage: vk::PipelineStageFlags) {
+        if let Some(scope) = &self.timing {
+            // SAFETY: our own command buffer.
+            unsafe { scope.write_at(&self.gpu, cmd, index, stage) };
+        }
+    }
+
+    /// The GPU duration of the last frame, in milliseconds.
+    ///
+    /// Waits for the frame to retire, so it must not be called from inside the
+    /// render loop.
+    ///
+    /// # Errors
+    /// Returns [`GpuError::Vulkan`] when the timestamps cannot be read.
+    pub fn read_gpu_ms(&mut self) -> Result<Option<f32>, GpuError> {
+        if self.timing.is_none() {
+            return Ok(None);
+        }
+        {
+            let frame_count = self.gpu.frames_in_flight();
+            let frame_slot = ((self.frame_index - 1) % u64::from(frame_count)) as usize;
+            let fence = self.gpu.frames[frame_slot].in_flight;
+            // SAFETY: waiting on our own fence cannot deadlock.
+            unsafe {
+                self.gpu
+                    .device
+                    .wait_for_fences(&[fence], true, u64::MAX)?;
+            }
+        }
+        let scope = self.timing.as_mut().expect("the scope exists");
+        scope.read(&self.gpu)?;
+        Ok(scope.elapsed_ms(0, 1))
+    }
+
+    /// The GPU time of the last frame, broken down by stage.
+    ///
+    /// Waits for the frame to retire, so it must not be called from inside the
+    /// render loop.
+    ///
+    /// # Errors
+    /// Returns [`GpuError::Vulkan`] when the timestamps cannot be read.
+    pub fn read_frame_timing(&mut self) -> Result<Option<crate::timing::FrameTiming>, GpuError> {
+        if self.timing.is_none() {
+            return Ok(None);
+        }
+        {
+            let frame_count = self.gpu.frames_in_flight();
+            let frame_slot = ((self.frame_index - 1) % u64::from(frame_count)) as usize;
+            let fence = self.gpu.frames[frame_slot].in_flight;
+            // SAFETY: waiting on our own fence cannot deadlock.
+            unsafe {
+                self.gpu
+                    .device
+                    .wait_for_fences(&[fence], true, u64::MAX)?;
+            }
+        }
+        let scope = self.timing.as_mut().expect("the scope exists");
+        scope.read(&self.gpu)?;
+        Ok(Some(scope.frame_timing()))
     }
 
     fn pipeline_barrier(&self, cmd: vk::CommandBuffer) {
@@ -1480,10 +1587,30 @@ mod tests {
 
         // The camera must cover the whole grid, otherwise the cull pass
         // legitimately throws most of it away.
+        renderer.enable_timing().expect("timing");
         let stats = renderer
             .render(&scene_at(&prims, &transforms, 1, (512.0, 512.0)))
             .expect("render");
         assert_eq!(stats.submitted, COUNT);
+
+        // The second frame has nothing to upload: the scene is identical, so
+        // this is the steady state the acceptance table talks about.
+        renderer
+            .render(&scene_at(&prims, &transforms, 1, (512.0, 512.0)))
+            .expect("render");
+        let timing = renderer
+            .read_frame_timing()
+            .expect("read timing")
+            .expect("timing is enabled");
+        eprintln!(
+            "100k primitives: {:.3} ms total (cull {:.3}, sort {:.3}, indirect {:.3}, graphics {:.3})",
+            timing.total_ms,
+            timing.cull_ms,
+            timing.sort_ms,
+            timing.indirect_ms,
+            timing.graphics_ms
+        );
+
 
         let pixels = renderer.read_pixels().expect("readback");
         assert_eq!(pixels.len(), 512 * 512 * 4);
@@ -1491,6 +1618,13 @@ mod tests {
             renderer.stats.visible > COUNT - 1000,
             "culling dropped too many: {} of {COUNT}",
             renderer.stats.visible
+        );
+        // `docs` §10.2: the GPU budget for 100 000 canvas nodes is 1.5 ms and
+        // the MDI draw calls must stay at four or fewer.
+        assert!(
+            timing.total_ms <= 1.5,
+            "the frame took {:.3} ms, the budget is 1.5 ms",
+            timing.total_ms
         );
         assert!(
             renderer.stats.draw_calls <= 4,
