@@ -1195,7 +1195,7 @@ impl Renderer {
         // host-visible, so the copy below needs no staging buffer at all.
         let ring_slot = self.ring.allocate(bytes.len() as u32, 256).ok_or_else(|| {
             GpuError::Allocation(format!(
-                "transient ring exhausted: {} bytes needed, {} available",
+                "transient ring exhausted: {} bytes needed, {} available (raise GpuConfig::ring_capacity)",
                 bytes.len(),
                 self.ring.slot_capacity()
             ))
@@ -1376,6 +1376,69 @@ mod tests {
 
         assert_eq!(renderer.stats.visible, 1, "the quad must survive culling");
         assert_eq!(renderer.stats.draw_calls, 1);
+        renderer.destroy();
+    }
+
+    /// `docs` §10.2: 100 000 rounded, shadowed canvas nodes on screen must
+    /// collapse into at most four `vkCmdDrawIndirectCount` calls.
+    ///
+    /// The number four is not arbitrary: one call per `(pass layer, barrier id,
+    /// pipeline variant)` run, and the demo scene only exercises one of each.
+    #[test]
+    fn a_hundred_thousand_primitives_need_at_most_four_draw_calls() {
+        let _guard = crate::device::gpu_test_guard();
+        // The first upload stages the whole scene through one ring slot, so the
+        // slot must hold 100 000 x 64 B. Production hosts size this from their
+        // largest scene; the default 1 MiB test device cannot.
+        let gpu = match crate::device::Gpu::new(crate::device::GpuConfig {
+            pool_capacity: 32 << 20,
+            ring_capacity: 16 << 20,
+            ..Default::default()
+        }) {
+            Ok(gpu) => gpu,
+            Err(error) => {
+                eprintln!("skipping GPU test: {error}");
+                return;
+            }
+        };
+        const COUNT: u32 = 99_840; // 320 x 312
+        let mut renderer = Renderer::new(gpu, 512, 512).expect("renderer");
+        // A 320 x 312 grid of 1.6 px cells fills a 512 x 512 viewport exactly:
+        // the last column starts at 510.4 and the last row at 510.04.
+        let prims: Vec<_> = (0..COUNT)
+            .map(|i| {
+                let x = (i % 320) as f32 * 1.6;
+                let y = (i / 320) as f32 * 1.64;
+                quad(x, y, 2.0, 2.0, 2)
+            })
+            .collect();
+        let transforms = vec![GpuTransform::IDENTITY];
+
+        // The camera must cover the whole grid, otherwise the cull pass
+        // legitimately throws most of it away.
+        let stats = renderer
+            .render(&scene_at(&prims, &transforms, 1, (512.0, 512.0)))
+            .expect("render");
+        assert_eq!(stats.submitted, COUNT);
+
+        let pixels = renderer.read_pixels().expect("readback");
+        assert_eq!(pixels.len(), 512 * 512 * 4);
+        assert!(
+            renderer.stats.visible > COUNT - 1000,
+            "culling dropped too many: {} of {COUNT}",
+            renderer.stats.visible
+        );
+        assert!(
+            renderer.stats.draw_calls <= 4,
+            "MDI collapsed {} primitives into {} draw calls",
+            renderer.stats.visible,
+            renderer.stats.draw_calls
+        );
+
+        // Second frame, same generation: the persistent pool must not move a
+        // single byte (`docs` §5.2 "0 B per frame").
+        let again = renderer.render(&scene(&prims, &transforms, 1)).expect("render");
+        assert_eq!(again.bytes_uploaded, 0);
         renderer.destroy();
     }
 
