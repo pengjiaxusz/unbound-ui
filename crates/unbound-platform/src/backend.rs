@@ -218,7 +218,25 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
         };
         if self.app.frame(state, window) == Flow::Exit {
             event_loop.exit();
+            return;
         }
+
+        // The frame loop has to drive itself. `ControlFlow::Wait` — the
+        // default — parks the loop until the *next input event*, so an
+        // application that only draws on demand would show a frozen window.
+        // The pacer knows when the next frame is due; the loop sleeps until
+        // then and wakes up on its own.
+        let now = Instant::now();
+        let flow = match state.pacer.next_deadline(now) {
+            Some(deadline) => winit::event_loop::ControlFlow::WaitUntil(deadline),
+            // Nothing has been presented yet: poll so the first frame gets
+            // through.
+            None if state.visible => winit::event_loop::ControlFlow::Poll,
+            // The window is hidden: park until an event arrives instead of
+            // spinning on an empty frame loop.
+            None => winit::event_loop::ControlFlow::Wait,
+        };
+        event_loop.set_control_flow(flow);
     }
 }
 

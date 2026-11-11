@@ -227,6 +227,9 @@ mod tests {
         assert_eq!(policy.sync(), PresentSync::WaitForPresent);
         assert_eq!(config.mode, unbound_gpu::PresentMode::FifoLatestReady);
         assert!(config.present_fence);
+        // Both halves must also agree on the present-wait: the CPU waits for
+        // the presentation only if the renderer can identify it.
+        assert!(config.wait_for_present);
     }
 
     #[test]

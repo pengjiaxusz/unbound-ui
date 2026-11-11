@@ -149,6 +149,9 @@ impl PlatformApp for Showcase {
             device_extensions: vec![
                 "VK_KHR_swapchain".to_string(),
                 "VK_EXT_swapchain_maintenance1".to_string(),
+                // The low-latency present path: the CPU can wait for the
+                // image to really be on the screen instead of for the render.
+                "VK_KHR_present_wait".to_string(),
             ],
             ..Default::default()
         };
@@ -175,11 +178,17 @@ impl PlatformApp for Showcase {
 
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
-        let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, true);
+        // Tearing off: a torn frame is worse than a frame that arrives one
+        // refresh cycle later.
+        let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false);
         let Ok(swapchain) = Swapchain::new(&gpu, &surface, width, height, &present) else {
             eprintln!("could not create a swapchain");
             return;
         };
+
+        // The device extensions are needed after the GPU has been moved into
+        // the renderer, so they are copied out first.
+        let device_extensions = gpu.enabled_device_extensions.clone();
 
         let mut renderer = match Renderer::new(gpu, width, height) {
             Ok(renderer) => renderer,
@@ -207,6 +216,11 @@ impl PlatformApp for Showcase {
         self.swapchain = Some(swapchain);
         self.surface = Some(surface);
         self.renderer = Some(renderer);
+
+        // The platform layer could not know the device extensions when the
+        // window was created; now it can, and the presentation policy
+        // follows the device instead of a hard-coded fallback.
+        state.set_present_extensions(&device_extensions);
 
         // Build the first frame.
         let logical = (width as f32, height as f32);
@@ -269,22 +283,25 @@ impl PlatformApp for Showcase {
 
     fn frame(&mut self, state: &mut PlatformState, window: &winit::window::Window) -> Flow {
         let size = window.inner_size();
-        let (width, height) = (size.width.max(1), size.height.max(1));
+        let (window_width, window_height) = (size.width.max(1), size.height.max(1));
 
-        // Rebuild the swapchain when the window changed size.
-        let needs_rebuild = self
-            .swapchain
-            .as_ref()
-            .map(|chain| chain.extent() != (width, height))
-            .unwrap_or(true);
-        if needs_rebuild {
+        // The swapchain follows the window only once the size has settled.
+        //
+        // Rebuilding it on every resize event is what produces black borders
+        // and stretched frames: during a drag the compositor keeps showing
+        // the last frame scaled to the new window size, and the swapchain is
+        // rebuilt once, after the dust settles.
+        let settled = state.poll_resize(Instant::now());
+        if settled.is_some() {
+            let (width, height) = (window_width, window_height);
             let Some(renderer) = &mut self.renderer else {
                 return Flow::Continue;
             };
             let Some(surface) = &self.surface else {
                 return Flow::Continue;
             };
-            let present = PresentConfig::from_capabilities(&renderer.gpu.enabled_device_extensions, true);
+            let present =
+                PresentConfig::from_capabilities(&renderer.gpu.enabled_device_extensions, false);
             if let Ok(chain) = Swapchain::new(&renderer.gpu, surface, width, height, &present) {
                 if let Some(old) = self.swapchain.replace(chain) {
                     old.destroy(&renderer.gpu);
@@ -292,6 +309,8 @@ impl PlatformApp for Showcase {
                 if let Err(error) = renderer.resize(width, height) {
                     eprintln!("could not resize the renderer: {error}");
                 }
+                // The scene is laid out for the new extent.
+                self.rebuild((width as f32, height as f32));
             }
         }
 
@@ -302,8 +321,34 @@ impl PlatformApp for Showcase {
             return Flow::Continue;
         };
 
+        // Draw at the *committed* extent, not at the window's current one:
+        // while a resize is pending the swapchain still has the old size and
+        // the compositor scales the frame to the window.
+        let (width, height) = swapchain.extent();
+
+
+        // Nothing to draw until the next frame is due.
+        if !state.pacer.should_render(Instant::now()) {
+            return Flow::Continue;
+        }
+        // The previous frame has to have retired before the next image is
+        // acquired: the acquire signals the image-available semaphore, and a
+        // binary semaphore may only carry one pending signal.
+        if let Err(error) = renderer.wait_for_previous_frame() {
+            eprintln!("waiting for the previous frame failed: {error}");
+            return Flow::Continue;
+        }
+
+
         // Acquire an image and draw into it.
-        let Ok((index, view)) = swapchain.acquire(ACQUIRE_TIMEOUT_NS) else {
+        let acquired = swapchain.acquire(ACQUIRE_TIMEOUT_NS);
+
+        if let Err(ref e) = acquired {
+            eprintln!("DIAG acquire failed: {e:?}");
+        }
+        let Ok(image) = acquired else {
+            // A lost surface or an out-of-date swapchain is recoverable: the
+            // next frame rebuilds it.
             return Flow::Continue;
         };
 
@@ -320,15 +365,27 @@ impl PlatformApp for Showcase {
         ];
         self.scene.camera = unbound_gpu::Camera::canvas([0, 0], anchor, zoom, 1.0);
         let scene = self.scene.upload(self.generation);
-        if let Err(error) = renderer.render_to_view(&scene, view, width, height) {
+        if let Err(error) = renderer.render_to_view(
+            &scene,
+            image.image,
+            image.view,
+            width,
+            height,
+            image.available,
+        ) {
             eprintln!("render failed: {error}");
             return Flow::Continue;
         }
 
+
         let finished = renderer.present_semaphore();
-        if let Err(error) = swapchain.present(&renderer.gpu, index, finished) {
+        if let Err(error) = swapchain.present(&renderer.gpu, image.index, finished) {
             eprintln!("present failed: {error}");
         }
+        // Tell the pacer when the frame was shown, and ask the event loop for
+        // another one.
+        state.pacer.on_present(Instant::now());
+        window.request_redraw();
         state.latency.on_present(Instant::now());
         Flow::Continue
     }

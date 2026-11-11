@@ -182,6 +182,33 @@ impl PlatformState {
             visible: config.visible,
         }
     }
+
+    /// Tell the platform which device extensions the renderer actually got.
+    ///
+    /// The window exists before the Vulkan device does, so the presentation
+    /// policy cannot be derived at construction time. The application
+    /// creates the device in [`crate::backend::PlatformApp::resumed`] and
+    /// reports the extensions back here; without this the policy would stay
+    /// at its "no extensions" fallback and the low-latency present path
+    /// would never be taken.
+    pub fn set_present_extensions(&mut self, extensions: &[String]) {
+        self.present = PresentWaitPolicy::from_extensions(extensions);
+    }
+
+    /// Poll the resize tracker and commit a size that has settled.
+    ///
+    /// The settle window needs a tick that does **not** depend on another
+    /// resize event arriving. A drag burst ends with one final event, and if
+    /// nothing else ever arrives, that last size would never be committed —
+    /// the window would keep showing the stale extent forever.
+    ///
+    /// Returns the new extent when the swapchain must be rebuilt.
+    pub fn poll_resize(&mut self, now: Instant) -> Option<Extent> {
+        match self.resize.poll(now) {
+            ResizeAction::None => None,
+            ResizeAction::Recreate(extent) => Some(extent),
+        }
+    }
 }
 
 /// Translate a `winit` window event into a platform event.
@@ -336,6 +363,7 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pacing::PresentSync;
 
     #[test]
     fn a_resize_event_produces_a_swapchain_recreation_once_it_settles() {
@@ -360,9 +388,65 @@ mod tests {
         assert_eq!(out, vec![PlatformEvent::RecreateSwapchain(Extent::new(1000, 700))]);
     }
 
+    /// A drag burst ends with one final resize event. If nothing else ever
+    /// arrives, that last size must still be committed — the settle window
+    /// needs a tick that does not depend on another event.
     #[test]
-    fn input_events_start_the_latency_clock() {
+    fn a_settled_size_is_committed_even_without_a_further_event() {
         let config = WindowConfig::default();
+        let mut state = PlatformState::new(
+            &config,
+            Extent::new(1280, 800),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        let now = Instant::now();
+        let out = apply(
+            &mut state,
+            &PlatformEvent::Resized(Extent::new(1000, 700)),
+            now,
+        );
+        assert!(out.is_empty(), "the first message must not rebuild");
+
+        // No further event arrives; the frame loop polls instead.
+        assert_eq!(
+            state.poll_resize(now + std::time::Duration::from_millis(5)),
+            None,
+            "the size has not settled yet"
+        );
+        assert_eq!(
+            state.poll_resize(now + std::time::Duration::from_millis(30)),
+            Some(Extent::new(1000, 700)),
+            "the settled size must be committed by the frame loop"
+        );
+        assert_eq!(
+            state.poll_resize(now + std::time::Duration::from_millis(60)),
+            None,
+            "a committed size is not committed twice"
+        );
+    }
+
+    /// The presentation policy has to follow the device, not a hard-coded
+    /// fallback: the window is created before the Vulkan device exists.
+    #[test]
+    fn the_present_policy_follows_the_device_extensions() {
+        let config = WindowConfig::default();
+        let mut state = PlatformState::new(
+            &config,
+            Extent::new(1280, 800),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        assert_eq!(state.present.sync(), PresentSync::Immediate);
+
+        state.set_present_extensions(&[
+            "VK_KHR_swapchain".to_string(),
+            "VK_KHR_present_wait".to_string(),
+        ]);
+        assert_eq!(state.present.sync(), PresentSync::WaitForPresent);
+        assert!(state.present.can_wait_for_present());
+    }
+
+    #[test]
+    fn input_events_start_the_latency_clock() {        let config = WindowConfig::default();
         let mut state = PlatformState::new(
             &config,
             Extent::new(1280, 800),
