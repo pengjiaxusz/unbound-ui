@@ -108,6 +108,14 @@ pub struct GlyphCache {
     pub sdf_spread: f32,
     /// Extra texels around each glyph (bilinear bleed guard).
     pub padding: u32,
+    /// Raster glyphs on the whole-pixel grid instead of in four subpixel phases.
+    ///
+    /// The vertex stage snaps every static quad's AABB to a physical pixel, so
+    /// a phase-specific raster is translated away from the position it was
+    /// generated for and every edge turns into a half-pixel blend. UI text that
+    /// is pixel-snapped therefore has to use phase 0; only animated canvas text
+    /// keeps the four phases.
+    pub snap_phases: bool,
     /// Bijection between `fontdb::ID` and the compact face index stored in
     /// [`GlyphKey`]. `fontdb::ID` is an opaque slotmap key with no public
     /// integer conversion, so the atlas keys on a dense index instead.
@@ -150,6 +158,7 @@ impl GlyphCache {
             use_sdf: false,
             sdf_spread: 4.0,
             padding: 2,
+            snap_phases: false,
             faces: Vec::new(),
             face_index: FxHashMap::default(),
             evicted: Vec::new(),
@@ -219,7 +228,13 @@ impl GlyphCache {
         weight: u16,
         italic: bool,
     ) -> Option<ResolvedGlyph> {
-        let phase = Self::phase_for(pen.x);
+        let phase = if self.snap_phases {
+            // The quad is snapped to a whole physical pixel, so the raster must
+            // be the one generated for a whole-pixel pen.
+            0
+        } else {
+            Self::phase_for(pen.x)
+        };
         let sdf_mode = self.use_sdf;
         let face_index = u64::from(self.face_id(face));
         // The raster depends on the phase, the weight and the italic slant,

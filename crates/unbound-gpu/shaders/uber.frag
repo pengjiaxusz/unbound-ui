@@ -122,8 +122,12 @@ void main() {
             if ((flags & FLAG_MSDF) != 0u) {
                 // Median of the three distance channels: sharp at any scale.
                 float m = max(min(t.r, t.g), min(max(t.r, t.g), t.b));
+                // fwidth(m) is the distance-field step per screen pixel, so
+                // this ramp is exactly one pixel wide. The old ±fwidth window
+                // was two pixels wide and made every stem look soft.
                 float w = max(fwidth(m), 1e-4);
-                tex_a = smoothstep(0.5 - w, 0.5 + w, m);
+                float coverage = clamp((m - 0.5) / w + 0.5, 0.0, 1.0);
+                tex_a = glyph_alpha(coverage, (flags & FLAG_DARK_BG) != 0u);
                 texel = fill.rgb;
             } else if (prim_type == PRIM_IMAGE) {
                 texel = t.rgb * fill.rgb;
