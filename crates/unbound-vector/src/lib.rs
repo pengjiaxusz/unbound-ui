@@ -18,6 +18,10 @@
 
 use unbound_math::{Vec2, CHUNK_SIZE};
 
+pub mod curve;
+
+pub use curve::{cubic_bounds, cubic_to_instances, CurveInstance};
+
 /// Hard cap on the number of quadratics per cubic: bounds the per-frame payload
 /// for a pathological 10⁹-px line while still meeting 0.05 px on every curve a
 /// real editor produces.

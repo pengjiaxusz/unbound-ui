@@ -33,6 +33,7 @@ pub mod sdf;
 pub mod shader;
 pub mod sort;
 pub mod swapchain;
+pub mod curve;
 pub mod timing;
 pub mod tlsf;
 
@@ -51,5 +52,6 @@ pub use quarantine::{EpochQuarantine, QuarantinedBlock};
 pub use ring::TransientRing;
 pub use sort::SortKey;
 pub use swapchain::{is_supported, PresentConfig, PresentMode, ResizeBehaviour};
+pub use curve::{cubic_to_draws, CurveDraw};
 pub use timing::{FrameTiming, TimestampScope};
 pub use tlsf::{AllocError, Tlsf, TlsfStats, MIN_BLOCK};
