@@ -368,4 +368,45 @@ mod tests {
             snapshot.size()
         );
     }
+
+    /// A snapshot is meant to travel over a wire, so its ids are whatever the
+    /// sender put there. Id 0 has no slot in the dense index: the old code
+    /// subtracted one from zero and panicked instead of restoring the frame.
+    #[test]
+    fn a_snapshot_carrying_a_zero_id_is_restored_instead_of_panicking() {
+        let frame = sample();
+        let mut snapshot = FrameSnapshot::capture(&frame);
+        snapshot.nodes[0].id = 0;
+        let bytes = postcard::to_allocvec(&snapshot).unwrap();
+        let restored = restore(&bytes).expect("a malformed id must not abort");
+        assert_eq!(restored.nodes.len(), snapshot.nodes.len());
+        assert!(restored.get(0).is_some());
+    }
+
+    /// `u64::MAX` used to size the id index by the id itself, which asked the
+    /// allocator for `usize::MAX` entries.
+    #[test]
+    fn a_snapshot_carrying_an_absurd_id_is_restored_instead_of_panicking() {
+        let frame = sample();
+        let mut snapshot = FrameSnapshot::capture(&frame);
+        snapshot.nodes[0].id = u64::MAX;
+        let bytes = postcard::to_allocvec(&snapshot).unwrap();
+        let restored = restore(&bytes).expect("a malformed id must not abort");
+        assert_eq!(restored.nodes.len(), snapshot.nodes.len());
+        assert!(restored.get(u64::MAX).is_some());
+    }
+
+    /// The same goes through the rkyv path: `open` validates the *archive*,
+    /// but the ids inside it are still the sender's business.
+    #[test]
+    fn an_archive_carrying_a_zero_id_is_restored_instead_of_panicking() {
+        let frame = sample();
+        let mut snapshot = FrameSnapshot::capture(&frame);
+        snapshot.nodes[0].id = 0;
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot).unwrap();
+        let reopened = open(&bytes).expect("the archive itself is well formed");
+        let restored = reopened.restore().expect("a malformed id must not abort");
+        assert_eq!(restored.nodes.len(), snapshot.nodes.len());
+        assert!(restored.get(0).is_some());
+    }
 }

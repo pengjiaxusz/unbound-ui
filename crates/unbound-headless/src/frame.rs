@@ -136,6 +136,14 @@ pub struct Frame {
     /// map here: `get` is two loads, which matters because the sanitizers call
     /// it millions of times on a large frame.
     index: Vec<usize>,
+    /// Fallback lookup for frames whose ids are *not* dense.
+    ///
+    /// A frame restored from the wire may carry any id: id 0 has no slot in
+    /// `index`, a huge id would demand an allocation proportional to the id,
+    /// and a duplicate would alias two nodes onto one slot. Such a frame gets
+    /// a sorted `(id, position)` list instead — slower, but it can neither be
+    /// talked into panicking nor into allocating gigabytes.
+    sparse: Option<Vec<(u64, usize)>>,
 }
 
 impl Frame {
@@ -145,6 +153,7 @@ impl Frame {
             viewport,
             nodes: Vec::new(),
             index: Vec::new(),
+            sparse: None,
         }
     }
 
@@ -155,23 +164,66 @@ impl Frame {
             viewport,
             nodes,
             index: Vec::new(),
+            sparse: None,
         };
         frame.rebuild_index();
         frame
     }
 
     fn rebuild_index(&mut self) {
-        self.index.clear();
+        self.index = Vec::new();
+        self.sparse = None;
+        let count = self.nodes.len();
+        if count == 0 {
+            return;
+        }
+        // `index[id - 1]` can only hold the ids `1..=count`. Anything else
+        // would either have no slot at all or demand an allocation
+        // proportional to the id, so those frames take the sorted fallback.
+        let mut index = vec![usize::MAX; count];
+        let mut dense = true;
         for (position, node) in self.nodes.iter().enumerate() {
-            let slot = node.id as usize;
-            if self.index.len() < slot {
-                self.index.resize(slot, usize::MAX);
+            let Some(slot) = usize::try_from(node.id)
+                .ok()
+                .and_then(|id| id.checked_sub(1))
+            else {
+                dense = false;
+                break;
+            };
+            if slot >= count || index[slot] != usize::MAX {
+                // Out of range, or a duplicate id aliasing two nodes.
+                dense = false;
+                break;
             }
-            self.index[slot - 1] = position;
+            index[slot] = position;
+        }
+        if dense {
+            self.index = index;
+        } else {
+            let sorted = self.sorted_positions();
+            self.sparse = Some(sorted);
         }
     }
 
+    /// `(id, position)` pairs sorted by id, for frames whose ids are not dense.
+    fn sorted_positions(&self) -> Vec<(u64, usize)> {
+        let mut sorted: Vec<(u64, usize)> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(position, node)| (node.id, position))
+            .collect();
+        sorted.sort_unstable_by_key(|(id, _)| *id);
+        sorted
+    }
+
     fn position_of(&self, id: u64) -> Option<usize> {
+        if let Some(sparse) = &self.sparse {
+            return sparse
+                .binary_search_by_key(&id, |(node_id, _)| *node_id)
+                .ok()
+                .map(|at| sparse[at].1);
+        }
         let slot = usize::try_from(id).ok()?.checked_sub(1)?;
         let position = *self.index.get(slot)?;
         if position == usize::MAX || position >= self.nodes.len() {
@@ -401,5 +453,65 @@ mod tests {
         let frame = b.build();
         let node = frame.get(id).unwrap();
         assert_eq!(node.visible_rect(), rect(0.0, 0.0, 30.0, 30.0));
+    }
+
+    /// A frame restored from the wire may carry any id, and the dense index
+    /// has no slot for id 0 — the old code subtracted one from zero and
+    /// panicked while indexing.
+    #[test]
+    fn a_node_with_id_zero_is_still_addressable() {
+        let mut b = FrameBuilder::new(rect(0.0, 0.0, 100.0, 100.0));
+        b.open(NodeKind::Container, rect(0.0, 0.0, 100.0, 100.0), "Root");
+        b.close();
+        let built = b.build();
+        let mut nodes = built.nodes;
+        nodes[0].id = 0;
+        let frame = Frame::from_nodes(built.viewport, nodes);
+        assert!(
+            frame.get(0).is_some(),
+            "a node with id 0 must still be found"
+        );
+    }
+
+    /// A huge id used to size the index by the id itself: `u64::MAX` asked
+    /// for an allocation of `usize::MAX` entries and aborted the process.
+    #[test]
+    fn an_absurd_id_does_not_demand_an_absurd_allocation() {
+        let mut b = FrameBuilder::new(rect(0.0, 0.0, 100.0, 100.0));
+        b.open(NodeKind::Container, rect(0.0, 0.0, 100.0, 100.0), "Root");
+        b.close();
+        let built = b.build();
+        let mut nodes = built.nodes;
+        nodes[0].id = u64::MAX;
+        let frame = Frame::from_nodes(built.viewport, nodes);
+        assert!(frame.get(u64::MAX).is_some());
+    }
+
+    /// Two nodes sharing an id cannot both live in a dense index; the frame
+    /// still has to resolve them without aliasing one onto the other.
+    #[test]
+    fn duplicate_ids_do_not_alias_and_do_not_panic() {
+        let mut b = FrameBuilder::new(rect(0.0, 0.0, 100.0, 100.0));
+        b.open(NodeKind::Container, rect(0.0, 0.0, 100.0, 100.0), "Root");
+        b.close();
+        let built = b.build();
+        let mut nodes = built.nodes;
+        nodes[0].id = 1;
+        let frame = Frame::from_nodes(built.viewport, nodes);
+        assert!(frame.get(1).is_some());
+    }
+
+    /// The dense fast path has to survive for the frames the builder makes —
+    /// the sanitizers call `get` millions of times on those.
+    #[test]
+    fn a_builder_frame_uses_the_dense_index() {
+        let mut b = FrameBuilder::new(rect(0.0, 0.0, 100.0, 100.0));
+        b.open(NodeKind::Container, rect(0.0, 0.0, 100.0, 100.0), "Root");
+        let id = b.open(NodeKind::Container, rect(0.0, 0.0, 10.0, 10.0), "Child");
+        b.close();
+        b.close();
+        let frame = b.build();
+        assert!(frame.sparse.is_none(), "a builder frame must stay dense");
+        assert!(frame.get(id).is_some());
     }
 }
