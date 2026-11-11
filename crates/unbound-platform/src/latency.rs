@@ -62,7 +62,7 @@ impl LatencyTracker {
         let latency = now.saturating_duration_since(input);
         self.presented += 1;
         self.last = Some(latency);
-        if self.worst.map_or(true, |w| latency > w) {
+        if self.worst.is_none_or(|w| latency > w) {
             self.worst = Some(latency);
         }
         self.samples.push_back(latency);

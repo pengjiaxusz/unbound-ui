@@ -50,6 +50,8 @@ pub struct GpuFeatures {
     pub shader_int64: bool,
     pub shader_float64: bool,
     pub independent_blend: bool,
+    /// `hostQueryReset`: the host may reset a query pool between frames.
+    pub host_query_reset: bool,
     pub sampler_anisotropy: bool,
     pub swapchain_maintenance1: bool,
     pub present_wait: bool,
@@ -434,6 +436,7 @@ impl Gpu {
             dynamic_rendering: f13.dynamic_rendering == vk::TRUE,
             synchronization2: f13.synchronization2 == vk::TRUE,
             timeline_semaphore: f12.timeline_semaphore == vk::TRUE,
+            host_query_reset: f12.host_query_reset == vk::TRUE,
             multi_draw_indirect: core.multi_draw_indirect == vk::TRUE,
             draw_indirect_count: f12.draw_indirect_count == vk::TRUE,
             shader_int64: core.shader_int64 == vk::TRUE,
@@ -501,6 +504,7 @@ impl Gpu {
             .descriptor_binding_variable_descriptor_count(features.runtime_descriptor_array)
             .shader_sampled_image_array_non_uniform_indexing(features.runtime_descriptor_array)
             .timeline_semaphore(features.timeline_semaphore)
+            .host_query_reset(features.host_query_reset)
             .draw_indirect_count(features.draw_indirect_count);
         let mut enabled_features13 = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(features.dynamic_rendering)

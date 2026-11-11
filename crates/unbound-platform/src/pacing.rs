@@ -65,10 +65,11 @@ impl PresentWaitPolicy {
     /// screen, which is what the input sampler needs.
     #[must_use]
     pub const fn sync(&self) -> PresentSync {
+        // Only `present_wait` changes the CPU behaviour: `maintenance1` is
+        // about the *present mode* the renderer picks, not about how the CPU
+        // waits for the frame.
         if self.has_present_wait {
             PresentSync::WaitForPresent
-        } else if self.has_maintenance1 {
-            PresentSync::Immediate
         } else {
             PresentSync::Immediate
         }

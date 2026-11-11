@@ -79,15 +79,25 @@ impl TimestampScope {
 
     /// Reset every timestamp in the pool.
     ///
-    /// The reset happens on the host: a reset recorded inside the command
-    /// buffer races with the writes that follow it, and the driver is free to
-    /// reorder the two.
+    /// The reset happens on the host when `hostQueryReset` is available: a
+    /// reset recorded inside the command buffer races with the writes that
+    /// follow it, and the driver is free to reorder the two.
     ///
     /// # Errors
     /// Returns [`GpuError::Vulkan`] when the pool cannot be reset.
     pub fn reset(&self, gpu: &Gpu) -> Result<(), GpuError> {
-        // SAFETY: the pool is not in use: the frame that used it has retired.
-        unsafe { gpu.device.reset_query_pool(self.pool, 0, self.count) };
+        if gpu.features.host_query_reset {
+            // SAFETY: the pool is not in use: the frame that used it has
+            // retired.
+            unsafe { gpu.device.reset_query_pool(self.pool, 0, self.count) };
+        } else {
+            // Without the feature the reset has to be recorded. The caller
+            // passes the command buffer so the reset is ordered before the
+            // timestamps that follow it.
+            return Err(GpuError::UnsupportedFeatures(vec![
+                "hostQueryReset",
+            ]));
+        }
         Ok(())
     }
 

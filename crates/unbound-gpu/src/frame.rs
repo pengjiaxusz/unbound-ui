@@ -635,12 +635,8 @@ impl Renderer {
                 );
             }
         }
+        // The stage markers inside `record_frame` close the bracket.
         self.record_frame(cmd, scene, &upload, frame_slot)?;
-        // The second timestamp closes the bracket.
-        if let Some(scope) = &self.timing {
-            // SAFETY: our own command buffer.
-            unsafe { scope.write(&self.gpu, cmd, 1) };
-        }
 
         {
             let gpu = &self.gpu;
@@ -951,9 +947,34 @@ impl Renderer {
                     .wait_for_fences(&[fence], true, u64::MAX)?;
             }
         }
+        // The frame has retired, so the counters are final as well.
+        self.refresh_counters();
         let scope = self.timing.as_mut().expect("the scope exists");
         scope.read(&self.gpu)?;
         Ok(Some(scope.frame_timing()))
+    }
+
+    /// The statistics of the last frame.
+    ///
+    /// The counters are only final after the frame has retired; call
+    /// [`Self::read_frame_timing`] (or [`Self::read_pixels`]) first to make
+    /// them meaningful.
+    #[must_use]
+    pub fn last_stats(&self) -> FrameStats {
+        self.stats
+    }
+
+    /// Copy the frame counters into the statistics.
+    ///
+    /// Only valid once the frame has retired: the counters live in a
+    /// host-visible buffer that the GPU writes while the frame runs.
+    fn refresh_counters(&mut self) {
+        // SAFETY: the buffer is mapped for the whole lifetime of the
+        // renderer, and the frame has retired.
+        let counters =
+            unsafe { core::slice::from_raw_parts(self.counters.mapped.cast::<u32>(), 4) };
+        self.stats.visible = counters[2];
+        self.stats.draw_calls = counters[1];
     }
 
     fn pipeline_barrier(&self, cmd: vk::CommandBuffer) {
@@ -1358,6 +1379,9 @@ impl Renderer {
     /// Release every GPU resource. Consumes the renderer.
     pub fn destroy(self) {
         self.gpu.wait_idle();
+        if let Some(scope) = &self.timing {
+            scope.destroy(&self.gpu);
+        }
         // SAFETY: the device is idle and `self` is consumed.
         unsafe {
             self.target.destroy(&self.gpu);

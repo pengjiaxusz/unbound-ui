@@ -538,12 +538,17 @@ dependencies = [
  "accesskit",
  "unbound-a11y",
  "unbound-abi",
+ "unbound-asset",
  "unbound-canvas",
+ "unbound-gpu",
+ "unbound-graph",
  "unbound-headless",
  "unbound-input",
  "unbound-kpi",
  "unbound-layout",
  "unbound-math",
+ "unbound-platform",
+ "unbound-theme",
  "unbound-world",
 ]
 

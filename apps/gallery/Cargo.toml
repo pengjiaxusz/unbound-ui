@@ -21,6 +21,11 @@ unbound-input.workspace = true
 unbound-a11y.workspace = true
 unbound-headless.workspace = true
 unbound-kpi.workspace = true
+unbound-theme.workspace = true
+unbound-graph.workspace = true
+unbound-asset.workspace = true
+unbound-platform.workspace = true
+unbound-gpu.workspace = true
 accesskit.workspace = true
 
 [lints]
