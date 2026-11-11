@@ -12,8 +12,6 @@
 的每一种图元都摆在一屏里。启动它不需要任何资产、不需要配置文件，窗口一开就能
 看到圆角矩形、边框、解析阴影、描边环、贝塞尔曲线、MTSDF 字形与双主题配色。
 
-![亮色主题的组件展台](../assets/showcase-light.png)
-
 ## 为什么需要它
 
 引擎此前的示例程序 `apps/gallery` 是一个**纯控制台**程序：它只打印测量数字，
@@ -49,16 +47,17 @@ cargo run -p showcase --release
 
 ### 无头模式
 
-CI 与文档流水线没有窗口，`--shot` 会把**同一份场景**渲染到离屏目标并写成 PNG：
+CI 与本地排查没有窗口时，`--shot` 会把**同一份场景**渲染到离屏目标并写成 PNG。
+截图是构建产物，默认落在 `target/showcase/`，不进版本库：
 
 ```bash
-cargo run -p showcase --release -- --shot shot.png          # 亮色
-cargo run -p showcase --release -- --shot shot.png --dark   # 暗色
+cargo run -p showcase --release -- --shot            # target/showcase/showcase-light.png
+cargo run -p showcase --release -- --shot --dark     # target/showcase/showcase-dark.png
+cargo run -p showcase --release -- --shot out.png    # 显式路径也可以
 ```
 
-![暗色主题的组件展台](../assets/showcase-dark.png)
-
-这让「渲染结果」变成可以进版本库、可以逐像素比对的东西，而不是只能靠人眼看。
+这让「渲染结果」变成可以逐像素比对的东西，而不是只能靠人眼看；但图片本身属于
+生成物，仓库里只保留生成它的命令。
 
 ## 场景里摆了什么
 

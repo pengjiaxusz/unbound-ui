@@ -104,9 +104,9 @@ docs/01-graphics/gpu-data-layout.md  GpuClipNode 字段顺序纠正
 ```
 just test        → 全部 ok，0 failed
 just check       → exit 0，零告警
-just q-run cargo run -p showcase -- --shot out.png
-                 → 与 docs/assets/showcase-light.png 字节一致
-                   （SHA256 8E65000D3C56D38D6B04CFB6CBBF77C8E43B960811BD1206B16BC18BF3C843A4）
+just q-run cargo run -p showcase -- --shot
+                 → 写入 target/showcase/showcase-light.png
+                   （生成物，不提交；SHA256 8E65000D3C56D38D6B04CFB6CBBF77C8E43B960811BD1206B16BC18BF3C843A4）
 just q-run cargo run -p gallery -- --kpi
                  → gpu: 100k primitives in 0.667 ms, 1 draw call(s), 99840 visible
                    六项 KPI 全部 ok
@@ -150,7 +150,7 @@ just q-run cargo run -p gallery -- --kpi
 ```
 just test        → 606 passed，0 failed（比审计前多 11 个回归测试）
 just check       → exit 0，零告警
-showcase 出图     → 与 docs/assets/showcase-light.png 字节一致
+showcase 出图     → 写入 target/showcase/（生成物，不提交）
 gallery --kpi   → 六项 KPI 全部 ok；"9 re-solved" 现在是实测值
 ```
 
@@ -357,9 +357,9 @@ gallery --kpi   → 六项 KPI 全部 ok；"9 re-solved" 现在是实测值
 ```
 just test        → 全部 ok，0 failed（606 passed）
 just check       → exit 0，无 error，无 warning
-just q-run cargo run -p showcase -- --shot /tmp/o.png
-                 → 与 docs/assets/showcase-light.png 字节一致
-                   （SHA256 8E65000D3C56D38D6B04CFB6CBBF77C8E43B960811BD1206B16BC18BF3C843A4）
+just q-run cargo run -p showcase -- --shot
+                 → 写入 target/showcase/showcase-light.png
+                   （生成物，不提交；SHA256 8E65000D3C56D38D6B04CFB6CBBF77C8E43B960811BD1206B16BC18BF3C843A4）
 just q-run cargo run -p gallery -- --kpi
                  → gpu: 100k primitives in ~0.67 ms, 1 draw call(s), 99840 visible
                    六项 KPI 全部 ok
