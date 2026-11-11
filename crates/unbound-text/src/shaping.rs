@@ -209,6 +209,42 @@ impl TextCacheStats {
     }
 }
 
+/// The byte offset of every source line in `text`.
+///
+/// cosmic-text splits a string into lines at `\r`, `\n`, `\r\n` and `\n\r`,
+/// and reports a glyph's cluster as an index *within its line*. To turn a
+/// cluster index into an absolute byte offset into the source text, the
+/// offset of the line the glyph belongs to has to be known — hence this
+/// helper, which mirrors cosmic-text's own line splitting.
+fn source_line_starts(text: &str) -> Vec<usize> {
+    let mut starts = vec![0usize];
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => {
+                // `\r\n` and `\n\r` are a single terminator.
+                if bytes.get(index + 1) == Some(&b'\n') || bytes.get(index + 1) == Some(&b'\r') {
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                starts.push(index);
+            }
+            b'\n' => {
+                if bytes.get(index + 1) == Some(&b'\r') {
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                starts.push(index);
+            }
+            _ => index += 1,
+        }
+    }
+    starts
+}
+
 /// The shaping engine: owns the font system and both cache levels.
 pub struct TextEngine {
     font_system: FontSystem,
@@ -372,9 +408,18 @@ impl TextEngine {
                     glyph_id: g.glyph_id,
                     face_index: u16::try_from(face_index).unwrap_or(0),
                     x: g.x,
-                    // `y` is the pen at the baseline; convert to top-of-line so
-                    // callers can position glyph quads without knowing metrics.
-                    y: g.y - g.font_size,
+                    // The baseline of the glyph, relative to the top of the
+                    // text box.
+                    //
+                    // cosmic-text reports the baseline of a line as `line_y`
+                    // (already accumulated over the lines above it) and the
+                    // glyph's own offset within that line as `g.y`, which is
+                    // zero for horizontal text. The old code used
+                    // `g.font_size` as if it were the ascent: that put every
+                    // glyph at the wrong height *and* ignored the line's
+                    // position, so a second line was drawn on top of the
+                    // first.
+                    y: run.line_y + g.y,
                     w: g.w,
                     font_size: g.font_size,
                     cluster: u32::try_from(g.start).unwrap_or(u32::MAX),
@@ -432,22 +477,31 @@ impl TextEngine {
         let mut height: f32 = 0.0;
         let mut width: f32 = 0.0;
         let mut line_height = metrics.line_height;
+        // The byte offset of every source line in `text`.
+        //
+        // cosmic-text reports a glyph's cluster as an index *within its line*,
+        // and `LayoutRun::text` is the whole source line (not the wrapped
+        // fragment). The line offsets are therefore needed to turn a cluster
+        // index into an absolute byte offset into `text`.
+        let line_starts = source_line_starts(text);
         for run in buffer.layout_runs() {
             line_height = run.line_height;
             height = height.max(run.line_y + run.line_height);
             width = width.max(run.line_w);
-            let bytes = run.text.as_bytes();
-            // `LayoutRun` gives the *line* text; map the run back to absolute
-            // byte offsets by searching forward from the previous line.
-            let start = lines
-                .last()
-                .map(|l: &TextLine| l.end)
-                .unwrap_or(0)
-                .min(text.len() as u32);
-            let end = (start as usize + bytes.len()) as u32;
+            // The base offset of the source line this run belongs to.
+            let line_base = line_starts.get(run.line_i).copied().unwrap_or(0);
+            // The run's glyphs carry cluster indices relative to the source
+            // line, so the run's extent within it is the first glyph's start
+            // and the last glyph's end.
+            let (rel_start, rel_end) = match (run.glyphs.first(), run.glyphs.last()) {
+                (Some(first), Some(last)) => (first.start, last.end),
+                _ => (0, 0),
+            };
+            let start = line_base + rel_start;
+            let end = line_base + rel_end;
             lines.push(TextLine {
-                start,
-                end: end.min(text.len() as u32),
+                start: start as u32,
+                end: (end as u32).min(text.len() as u32),
                 width: run.line_w,
                 baseline: run.line_y,
             });
@@ -596,5 +650,76 @@ mod tests {
         assert!(rtl.glyphs.iter().all(|g| g.is_rtl()), "Hebrew must be RTL");
         let ltr = e.shape("hello", &TextStyle::sized(16.0));
         assert!(ltr.glyphs.iter().all(|g| !g.is_rtl()));
+    }
+
+    /// The glyph's `y` is the baseline of its line, relative to the top of
+    /// the text box.
+    ///
+    /// cosmic-text reports the baseline of a line as `line_y` and the glyph's
+    /// own offset within that line as `g.y` (zero for horizontal text). The
+    /// old code used `g.font_size` as if it were the ascent, which put every
+    /// glyph at the wrong height and ignored the line's position — so a
+    /// second line was drawn on top of the first.
+    #[test]
+    fn glyph_baselines_follow_their_line() {
+        let mut e = engine();
+        let shaped = e.shape("one\ntwo", &TextStyle::sized(32.0));
+        assert_eq!(shaped.line_count, 2, "the text must have two lines");
+        assert!(
+            shaped.glyphs.len() >= 6,
+            "expected six glyphs, got {}",
+            shaped.glyphs.len()
+        );
+        // The first line's glyphs sit above the second line's.
+        let first: Vec<f32> = shaped.glyphs[..3].iter().map(|g| g.y).collect();
+        let second: Vec<f32> = shaped.glyphs[3..].iter().map(|g| g.y).collect();
+        assert!(
+            first.iter().all(|y| *y < second[0]),
+            "the first line's baseline ({first:?}) must be above the second's ({second:?})"
+        );
+        // The first line's baseline is the line's own baseline.
+        assert!(
+            (first[0] - shaped.first_baseline).abs() < 0.01,
+            "the first glyph's baseline {} must be the line's baseline {}",
+            first[0],
+            shaped.first_baseline
+        );
+    }
+
+    /// A single line's glyphs must all share one baseline.
+    #[test]
+    fn one_line_has_one_baseline() {
+        let mut e = engine();
+        let shaped = e.shape("Hello", &TextStyle::sized(16.0));
+        let baselines: Vec<f32> = shaped.glyphs.iter().map(|g| g.y).collect();
+        assert!(baselines.len() >= 4);
+        let first = baselines[0];
+        assert!(
+            baselines.iter().all(|y| (*y - first).abs() < 0.01),
+            "every glyph of a line shares the baseline, got {baselines:?}"
+        );
+    }
+
+    /// The wrapped lines' byte ranges must point at the right characters.
+    ///
+    /// cosmic-text's `LayoutRun::text` is the line's content *without* the
+    /// line terminator, so accumulating the run lengths skipped every newline
+    /// and the ranges drifted by one byte per line.
+    #[test]
+    fn wrapped_lines_point_at_the_right_bytes() {
+        let mut e = engine();
+        let text = "one\ntwo\nthree";
+        let wrapped = e.wrap(text, &TextStyle::sized(16.0), 1000.0);
+        assert_eq!(wrapped.lines.len(), 3);
+        let expected = [("one", 0u32, 3u32), ("two", 4, 7), ("three", 8, 13)];
+        for (line, (content, start, end)) in wrapped.lines.iter().zip(expected) {
+            assert_eq!(line.start, start, "line start for {content:?}");
+            assert_eq!(line.end, end, "line end for {content:?}");
+            assert_eq!(
+                &text[line.start as usize..line.end as usize],
+                content,
+                "the range must select the line's text"
+            );
+        }
     }
 }

@@ -164,8 +164,12 @@ pub fn from_coverage(coverage: &[u8], width: u32, height: u32, spread: f32) -> S
     // A bitmap with no edge at all (a blank glyph padding, or a fully covered
     // box) has no meaningful signed distance: saturate instead of dividing by an
     // absent boundary, which would otherwise put every texel at exactly 0.5.
+    //
+    // The encoding is "high = inside" — the same one the GPU generator and
+    // `uber.frag` use — so a fully covered bitmap saturates to 255 (deep
+    // inside) and an empty one to 0 (far outside).
     if !has_inside || !has_outside {
-        let v = if has_inside { 0u8 } else { 255u8 };
+        let v = if has_inside { 255u8 } else { 0u8 };
         let mut data = vec![0u8; w * h * 4];
         for (i, cov) in coverage.iter().enumerate().take(w * h) {
             let o = i * 4;
@@ -312,7 +316,9 @@ mod tests {
         let field = from_coverage(&cov, 16, 16, 4.0);
         for y in 0..16 {
             for x in 0..16 {
-                assert!(field.sample(x, y) >= 0.99, "({x},{y}) = {}", field.sample(x, y));
+                // "high = inside": an empty bitmap is entirely outside, so it
+                // saturates to 0.
+                assert!(field.sample(x, y) <= 0.01, "({x},{y}) = {}", field.sample(x, y));
             }
         }
     }
@@ -323,9 +329,37 @@ mod tests {
         let field = from_coverage(&cov, 16, 16, 4.0);
         for y in 0..16 {
             for x in 0..16 {
-                assert!(field.sample(x, y) <= 0.01);
+                assert!(field.sample(x, y) >= 0.99);
             }
         }
+    }
+
+    /// The CPU field must use the same encoding as the GPU generator.
+    ///
+    /// `unbound-gpu`'s reference test asserts that the centre of a covered
+    /// block samples above 0.9 and the corner below 0.1, and `uber.frag`
+    /// turns the field into coverage with `smoothstep(0.5 - w, 0.5 + w, m)`.
+    /// A CPU field with the opposite convention would render every glyph as
+    /// a solid blob.
+    #[test]
+    fn the_encoding_is_high_inside_like_the_gpu() {
+        let cov = filled_rect(16, 16, 4, 4, 12, 12);
+        let field = from_coverage(&cov, 16, 16, 4.0);
+        // The centre is deep inside.
+        assert!(
+            field.sample(8, 8) > 0.9,
+            "the centre must read as inside, got {}",
+            field.sample(8, 8)
+        );
+        // The corner is far outside.
+        assert!(
+            field.sample(0, 0) < 0.1,
+            "the corner must read as outside, got {}",
+            field.sample(0, 0)
+        );
+        // And `signed_distance` agrees: negative inside.
+        assert!(field.signed_distance(8, 8) < 0.0);
+        assert!(field.signed_distance(0, 0) > 0.0);
     }
 
     #[test]

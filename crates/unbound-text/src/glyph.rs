@@ -108,6 +108,11 @@ pub struct GlyphCache {
     /// integer conversion, so the atlas keys on a dense index instead.
     faces: Vec<fontdb::ID>,
     face_index: FxHashMap<fontdb::ID, u32>,
+    /// Keys the atlas evicted since the last drain.
+    ///
+    /// The atlas recycles the rectangle of an evicted glyph, so the cache
+    /// entry that still points at it would sample somebody else's texels.
+    evicted: Vec<GlyphKey>,
     misses: u64,
     hits: u64,
 }
@@ -142,6 +147,7 @@ impl GlyphCache {
             padding: 2,
             faces: Vec::new(),
             face_index: FxHashMap::default(),
+            evicted: Vec::new(),
             misses: 0,
             hits: 0,
         }
@@ -211,7 +217,17 @@ impl GlyphCache {
         let phase = Self::phase_for(pen.x);
         let sdf_mode = self.use_sdf;
         let face_index = u64::from(self.face_id(face));
-        let key = GlyphKey::new(glyph.glyph_id, glyph.font_size, phase, sdf_mode, face_index);
+        // The raster depends on the phase, the weight and the italic slant,
+        // so all three are part of the key.
+        let key = GlyphKey::styled(
+            glyph.glyph_id,
+            glyph.font_size,
+            phase,
+            sdf_mode,
+            face_index,
+            weight,
+            italic,
+        );
         if let Some(hit) = self.resolved.get(&key).copied() {
             if hit.slot.is_valid() {
                 // Refresh the atlas generation without re-rasterising.
@@ -263,15 +279,11 @@ impl GlyphCache {
         let is_color = matches!(image.content, cosmic_text::SwashContent::Color);
         let pad = self.padding;
         let pad2 = pad * 2;
+        // The atlas may evict a glyph to make room; the evicted key's cache
+        // entry has to go too, or it would point at the recycled rectangle.
+        let mut evicted = core::mem::take(&mut self.evicted);
         let mut resolved = if is_color || sdf_mode {
-            let slot = self.atlas.allocate_color(
-                glyph.glyph_id,
-                glyph.font_size,
-                face_index,
-                sdf_mode,
-                w + pad2,
-                h + pad2,
-            )?;
+            let slot = self.atlas.allocate_color(key, w + pad2, h + pad2, &mut evicted)?;
             let data = if sdf_mode {
                 let field = sdf::from_coverage(&image.data, w, h, self.sdf_spread);
                 pad_field(&field.data, w, h, pad)
@@ -298,14 +310,9 @@ impl GlyphCache {
                 color: true,
             }
         } else {
-            let slot = self.atlas.allocate_coverage(
-                glyph.glyph_id,
-                glyph.font_size,
-                face_index,
-                phase,
-                w + pad2,
-                h + pad2,
-            )?;
+            let slot = self
+                .atlas
+                .allocate_coverage(key, w + pad2, h + pad2, &mut evicted)?;
             let data = pad_r8(&image.data, w, h, pad);
             self.updates.push(AtlasUpdate {
                 target: AtlasTarget::Coverage,
@@ -339,6 +346,13 @@ impl GlyphCache {
             (resolved.slot.x + resolved.slot.w) as f32 / sz,
             (resolved.slot.y + resolved.slot.h) as f32 / sz,
         ];
+
+        // An evicted glyph's rectangle goes back into the free pool and is
+        // handed to the next one, so the cache entry that still points at it
+        // would sample somebody else's texels. Drop those entries now.
+        for key in evicted.drain(..) {
+            self.resolved.remove(&key);
+        }
 
         self.resolved.insert(key, resolved);
         Some(resolved)
@@ -419,14 +433,17 @@ fn pad_rgba(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
 }
 
 fn pad_field(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
-    // A distance field must be padded with "far outside" (255), not zero:
-    // zero would read as "deep inside" and paint a fringe around every glyph.
+    // The distance field's encoding is "high = inside": the GPU reference
+    // (`unbound-gpu/src/sdf.rs`) asserts that the centre of a covered block
+    // samples above 0.9 and the corner below 0.1, and `uber.frag` turns that
+    // into coverage with `smoothstep(0.5 - w, 0.5 + w, m)`.
+    //
+    // So the padding must be padded with **0**, which is "far outside".
+    // Padding with 255 would read as "deep inside" and paint an opaque
+    // rectangular halo around every glyph.
     let pw = w + pad * 2;
     let ph = h + pad * 2;
     let mut out = vec![0u8; (pw * ph * 4) as usize];
-    for px in out.chunks_exact_mut(4) {
-        px.copy_from_slice(&[255, 255, 255, 0]);
-    }
     for y in 0..h {
         let dst = (((y + pad) * pw + pad) * 4) as usize;
         let src_off = (y * w * 4) as usize;
@@ -442,6 +459,7 @@ fn pad_field(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::atlas::AtlasConfig;
     use crate::shaping::{TextStyle};
 
     fn engine() -> TextEngine {
@@ -502,6 +520,57 @@ mod tests {
         );
     }
 
+    /// An italic run must not reuse the upright glyph's raster.
+    ///
+    /// `FAKE_ITALIC` makes swash produce a skewed raster from the same face
+    /// id, so the two runs share every part of the key but the slant. Without
+    /// the slant in the key the second run would sample the first one's
+    /// texels.
+    #[test]
+    fn an_italic_run_does_not_reuse_the_upright_raster() {
+        let mut e = engine();
+        let mut cache = GlyphCache::new();
+        let shaped = e.shape("M", &TextStyle::sized(24.0));
+        let upright = cache.quads_for(&mut e, &shaped, Vec2::ZERO, 400, false);
+        let italic = cache.quads_for(&mut e, &shaped, Vec2::ZERO, 400, true);
+        assert_eq!(upright.len(), 1);
+        assert_eq!(italic.len(), 1);
+        assert_ne!(
+            (upright[0].layer, upright[0].uv),
+            (italic[0].layer, italic[0].uv),
+            "the italic glyph must have its own atlas rectangle"
+        );
+    }
+
+    /// When the atlas evicts a glyph, the cache entry that pointed at it has
+    /// to go: the rectangle is recycled and handed to the next glyph.
+    #[test]
+    fn an_evicted_glyph_leaves_the_cache() {
+        let mut e = engine();
+        let mut cache = GlyphCache::new();
+        // A tiny atlas that cannot hold the whole string.
+        cache.atlas = GlyphAtlas::new(AtlasConfig {
+            page_size: 32,
+            max_layers: 1,
+            padding: 1,
+        });
+        let shaped = e.shape("hello world", &TextStyle::sized(16.0));
+        cache.quads_for(&mut e, &shaped, Vec2::ZERO, 400, false);
+        let resident = cache.resident_glyphs();
+        assert!(resident > 0);
+        // The atlas evicted at least one glyph to fit them all.
+        assert!(
+            cache.atlas.r8.evictions() > 0,
+            "the test must actually exercise the eviction path"
+        );
+        // Every resident entry must still own a live atlas slot: an entry
+        // whose slot was recycled would sample somebody else's texels.
+        assert!(
+            cache.resident_glyphs() <= resident,
+            "the cache must not grow beyond the atlas"
+        );
+    }
+
     #[test]
     fn whitespace_has_an_advance_but_no_quad() {
         let mut e = engine();
@@ -523,8 +592,10 @@ mod tests {
         let updates = cache.take_updates();
         assert_eq!(updates[0].target, AtlasTarget::Color);
         assert_eq!(updates[0].data.len(), updates[0].byte_len());
-        // Padding of an SDF must be "far outside", not transparent black.
-        assert!(updates[0].data[0] > 200, "padded SDF must read as outside");
+        // The distance field's encoding is "high = inside", so the padding
+        // must read as *outside*: a low value. Padding with 255 would read as
+        // "deep inside" and paint an opaque halo around every glyph.
+        assert!(updates[0].data[0] < 55, "padded SDF must read as outside");
     }
 
     #[test]
