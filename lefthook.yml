@@ -1,4 +1,11 @@
 # lefthook.yml — git hooks 配置（lefthook 层）
+pre-commit:
+  commands:
+    rustfmt:
+      glob: "*.rs"
+      run: rustfmt {staged_files}
+      stage_fixed: true
+
 commit-msg:
   commands:
     commitlint:

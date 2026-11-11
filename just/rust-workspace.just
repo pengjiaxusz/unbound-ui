@@ -35,9 +35,13 @@ bench *ARGS:
     cargo bench --workspace {{ARGS}}
 
 
-# 格式化检查（轻量，不排队）
+# 代码就地格式化（轻量，不排队）
 fmt:
+    cargo fmt
+
+# 格式化检查（CI 校验用，不修改文件）
+fmt-check:
     cargo fmt --check
 
 # 一键全检查（CI 用；各子命令各自取锁，bque 原生防重入穿透）
-ci: fmt check test
+ci: fmt-check check test
