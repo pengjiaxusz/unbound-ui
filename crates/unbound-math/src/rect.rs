@@ -103,6 +103,10 @@ impl Rect {
             && p.y <= self.origin.y + self.size.y
     }
 
+    /// True when `other` lies entirely inside `self`.
+    ///
+    /// The inclusive edge test matches [`Self::contains_point`], which counts
+    /// a point on the edge as contained.
     #[inline]
     #[must_use]
     pub fn contains_rect(&self, other: &Rect) -> bool {
@@ -121,6 +125,25 @@ impl Rect {
             && other.origin.x < a_max.x
             && self.origin.y < b_max.y
             && other.origin.y < a_max.y
+    }
+
+    /// True when the two rectangles overlap *or touch*.
+    ///
+    /// [`Self::intersects`] is strict: two boxes that share only an edge do
+    /// not intersect. That is the right convention for a conservative
+    /// broad-phase filter, but it disagrees with
+    /// [`Self::contains_point`], which counts a point on the edge as
+    /// contained. An exact selection test wants the inclusive rule: a marquee
+    /// that ends exactly on an entity's edge should select it.
+    #[inline]
+    #[must_use]
+    pub fn touches(&self, other: &Rect) -> bool {
+        let a_max = self.max();
+        let b_max = other.max();
+        self.origin.x <= b_max.x
+            && other.origin.x <= a_max.x
+            && self.origin.y <= b_max.y
+            && other.origin.y <= a_max.y
     }
 
     /// Intersection; returns an empty rect (zero or negative size) when the
@@ -259,5 +282,25 @@ mod tests {
     fn min_max_array_round_trip() {
         let r = Rect::new(1.0, 2.0, 3.0, 4.0);
         assert_eq!(Rect::from_min_max_array(r.to_min_max_array()), r);
+    }
+
+    /// `intersects` is strict, `touches` is inclusive.
+    ///
+    /// The two boxes share only their edge: `intersects` says no (the
+    /// convention for a conservative broad-phase filter), `touches` says yes
+    /// (the convention for an exact selection test, matching
+    /// `contains_point`).
+    #[test]
+    fn touching_rects_are_distinguished_from_intersecting_ones() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let touching = Rect::new(10.0, 0.0, 10.0, 10.0);
+        let overlapping = Rect::new(5.0, 0.0, 10.0, 10.0);
+        let apart = Rect::new(11.0, 0.0, 10.0, 10.0);
+
+        assert!(!a.intersects(&touching));
+        assert!(a.touches(&touching));
+        assert!(a.intersects(&overlapping));
+        assert!(a.touches(&overlapping));
+        assert!(!a.touches(&apart));
     }
 }

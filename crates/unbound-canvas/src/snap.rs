@@ -229,7 +229,7 @@ impl Snapper {
                 }
             }
         }
-        self.rank(moving);
+        self.rank(moving, zoom);
         self.ids = ids;
         self.solve(moving, zoom)
     }
@@ -242,7 +242,7 @@ impl Snapper {
                 rect: *rect,
                 score: 0.0,
             }));
-        self.rank(moving);
+        self.rank(moving, zoom);
         self.solve(moving, zoom)
     }
 
@@ -258,12 +258,20 @@ impl Snapper {
     /// reference than an 8 px icon; distance matters because off-screen-in-
     /// spirit references are noise. The quotient is the cheapest score that
     /// respects both, and it is computed once per candidate.
-    fn rank(&mut self, moving: Rect) {
+    ///
+    /// Both terms are converted to *screen* pixels first: the area is in
+    /// world units squared and the distance in world units, so mixing them
+    /// raw would make the score depend on the zoom and change which
+    /// candidates survive the cut.
+    fn rank(&mut self, moving: Rect, zoom: f32) {
         let centre = moving.center();
+        // One world unit is `zoom` screen pixels.
+        let to_screen = zoom.max(1e-6);
         for candidate in &mut self.candidates {
             let delta = candidate.rect.center() - centre;
-            let distance = delta.length();
-            candidate.score = candidate.rect.area().max(1.0) / (distance + 16.0);
+            let distance = delta.length() * to_screen;
+            let area = candidate.rect.area().max(1.0) * to_screen * to_screen;
+            candidate.score = area / (distance + 16.0);
         }
         self.candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
         if self.candidates.len() > self.config.max_candidates {
@@ -370,8 +378,10 @@ impl Snapper {
                 if delta.abs() > threshold {
                     continue;
                 }
-                // Prefer the smallest correction; ties keep the earlier (more
-                // significant) candidate, which ranking already ordered.
+                // Prefer the smallest correction. On a tie the earlier entry
+                // wins, and the table is sorted by coordinate — not by the
+                // significance ranking, which only decided which candidates
+                // survived the cut.
                 if best.as_ref().is_none_or(|b| delta.abs() < b.delta.abs()) {
                     best = Some(Hit {
                         coord: edge.coord,

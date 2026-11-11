@@ -44,16 +44,20 @@ pub fn merge_line_rects(lines: &[Rect], radius: f32) -> Vec<RoundedSlot> {
         if let Some(last) = slots.last_mut() {
             let spans_match = (last.rect.min().x - rect.min().x).abs() <= 0.5
                 && (last.rect.max().x - rect.max().x).abs() <= 0.5;
+            // The lines must follow each other downwards: the next box has to
+            // start at or below the previous one's top. Without the direction
+            // check, a box that lies *above* the previous one still looked
+            // "adjacent" (the test used the absolute difference), and the
+            // merged height `rect.max().y - top` came out negative.
+            let below = rect.min().y >= last.rect.min().y - 0.5;
             let adjacent = (last.rect.max().y - rect.min().y).abs() <= 1.0;
-            if spans_match && adjacent {
+            if spans_match && below && adjacent {
                 let top = last.rect.min().y;
-                last.rect = Rect::new(
-                    last.rect.origin.x,
-                    top,
-                    last.rect.size.x,
-                    rect.max().y - top,
-                );
-                continue;
+                let height = rect.max().y - top;
+                if height > 0.0 {
+                    last.rect = Rect::new(last.rect.origin.x, top, last.rect.size.x, height);
+                    continue;
+                }
             }
         }
         slots.push(RoundedSlot {
@@ -125,10 +129,15 @@ pub fn outline_polygon(slot: &RoundedSlot) -> Vec<Vec2> {
 pub fn ime_cursor_area(caret: Rect, camera: &Affine2, dpi: f32, window: Vec2) -> Rect {
     let transformed = camera.transform_rect_bounds(&caret);
     let scale = dpi.max(0.1);
-    let x = (transformed.origin.x * scale).floor();
-    let y = (transformed.origin.y * scale).floor();
-    let width = (transformed.size.x * scale).ceil().max(1.0);
-    let height = (transformed.size.y * scale).ceil().max(1.0);
+    // The rectangle is snapped to whole physical pixels. The origin is rounded
+    // to the nearest pixel and the size follows from the rounded corners, so
+    // the area is never larger than the caret by up to a pixel on each side.
+    let x = (transformed.origin.x * scale).round();
+    let y = (transformed.origin.y * scale).round();
+    let right = (transformed.max().x * scale).round();
+    let bottom = (transformed.max().y * scale).round();
+    let width = (right - x).max(1.0);
+    let height = (bottom - y).max(1.0);
     let max_x = (window.x - width).max(0.0);
     let max_y = (window.y - height).max(0.0);
     Rect::new(x.clamp(0.0, max_x), y.clamp(0.0, max_y), width, height)
@@ -257,5 +266,49 @@ mod tests {
         let area = ime_cursor_area(caret, &camera, 1.0, Vec2::new(800.0, 600.0));
         assert!(area.size.x >= 1.0);
         assert!(area.size.y >= 1.0);
+    }
+
+    /// The IME area must not be larger than the caret.
+    ///
+    /// The origin was floored while the size was ceiled, so the rectangle
+    /// could be up to two physical pixels bigger than the caret on each side.
+    #[test]
+    fn ime_area_is_not_larger_than_the_caret() {
+        let caret = rect(10.4, 20.6, 2.0, 20.0);
+        let camera = Affine2::IDENTITY;
+        let area = ime_cursor_area(caret, &camera, 1.0, Vec2::new(800.0, 600.0));
+        assert!(
+            area.size.x <= caret.size.x + 1.0,
+            "the width must not exceed the caret's: {} vs {}",
+            area.size.x,
+            caret.size.x
+        );
+        assert!(
+            area.size.y <= caret.size.y + 1.0,
+            "the height must not exceed the caret's: {} vs {}",
+            area.size.y,
+            caret.size.y
+        );
+    }
+
+    /// Merging line boxes must never produce a negative height.
+    ///
+    /// The adjacency test used the absolute difference, so a box lying *above*
+    /// the previous one looked adjacent too, and the merged height came out
+    /// negative.
+    #[test]
+    fn merging_lines_never_produces_a_negative_height() {
+        let above = rect(0.0, 0.0, 20.0, 5.0);
+        let below = rect(0.0, 5.0, 20.0, 5.0);
+        // The "below" box comes first, then a box above it: the two must not
+        // merge.
+        let slots = merge_line_rects(&[below, above], 4.0);
+        for slot in &slots {
+            assert!(
+                slot.rect.size.y >= 0.0,
+                "a merged slot must not have a negative height: {:?}",
+                slot.rect
+            );
+        }
     }
 }

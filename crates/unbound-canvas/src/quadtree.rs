@@ -195,10 +195,19 @@ impl LooseQuadtree {
     }
 
     /// Bytes of level storage, reported by the KPI harness.
+    ///
+    /// The three levels have different element types: the head and the slot
+    /// tables hold a `u32` each, but an occupied node is a `u32` index plus a
+    /// `Rect`. Counting them all as four bytes under-reported the memory by
+    /// five times.
     #[must_use]
     pub fn level_bytes(&self) -> usize {
         let heads: usize = self.level_heads.iter().map(|l| l.len() * 4).sum();
-        let occ: usize = self.level_occupied.iter().map(|l| l.len() * 4).sum();
+        let occ: usize = self
+            .level_occupied
+            .iter()
+            .map(|l| l.len() * core::mem::size_of::<Occupied>())
+            .sum();
         let slots: usize = self.level_slot.iter().map(|l| l.len() * 4).sum();
         heads + occ + slots
     }
@@ -309,7 +318,7 @@ impl LooseQuadtree {
         };
         let index = self.node_index(aabb.center(), depth);
         let node_bounds = self.node_bounds(index, depth);
-        if !node_bounds.intersects(&aabb) {
+        if !node_bounds.touches(&aabb) {
             // Outside the root's loose region (or higher levels' coverage):
             // unreachable by any query, so report rather than misplace.
             self.overflowed += 1;
@@ -482,7 +491,10 @@ impl LooseQuadtree {
             let Some(bounds) = self.bounds_of(entity) else {
                 continue;
             };
-            if bounds.intersects(&query) {
+            // The exact test is inclusive: a marquee whose edge lands exactly
+            // on an entity's edge still selects it, matching the way
+            // `Rect::contains_point` counts a point on the edge as inside.
+            if bounds.touches(&query) {
                 out.push(entity);
             }
         }

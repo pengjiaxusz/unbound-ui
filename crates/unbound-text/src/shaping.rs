@@ -76,10 +76,17 @@ impl TextStyle {
         mix(h, self.letter_spacing.to_bits() as u64);
         mix(h, u64::from(self.weight));
         mix(h, u64::from(self.italic));
-        if let Some(family) = &self.family {
-            for b in family.bytes() {
-                mix(h, u64::from(b));
+        // The family is mixed with its length as well as its bytes: an absent
+        // family and an empty one used to hash the same, so the two styles
+        // shared a cache entry and the wrong shaped run came back.
+        match &self.family {
+            Some(family) => {
+                mix(h, family.len() as u64);
+                for b in family.bytes() {
+                    mix(h, u64::from(b));
+                }
             }
+            None => mix(h, u64::MAX),
         }
     }
 }
@@ -142,15 +149,25 @@ impl ShapedText {
     }
 
     /// Byte range of the glyph whose cluster covers `byte`.
+    ///
+    /// The cluster is the byte offset of the glyph's first character in the
+    /// source string. The glyph that covers `byte` is therefore the last one
+    /// whose cluster starts at or before it — not "the first one within an
+    /// eight-byte window", which could pick a glyph from the next cluster.
     #[must_use]
     pub fn glyph_at_byte(&self, byte: u32) -> Option<&PositionedGlyph> {
         self.glyphs
             .iter()
             .rev()
-            .find(|g| g.cluster <= byte && byte < g.cluster + 8)
+            .find(|g| g.cluster <= byte)
     }
 
-    /// Nearest glyph to a local point (used by hit testing and cursor placement).
+    /// Nearest glyph to a local point (used by hit testing and cursor
+    /// placement).
+    ///
+    /// The returned distance is the distance to the nearest glyph *boundary*,
+    /// not to the glyph's left edge: clicking the right half of a character
+    /// has to put the caret after it, not before it.
     #[must_use]
     pub fn nearest_glyph(&self, p: Vec2) -> Option<(usize, f32)> {
         let mut best: Option<(usize, f32)> = None;
@@ -164,6 +181,21 @@ impl ShapedText {
             }
         }
         best
+    }
+
+    /// The caret position for a byte offset.
+    ///
+    /// The caret sits at the start of the glyph the byte belongs to, or at the
+    /// end of the last glyph when the byte is past the text.
+    #[must_use]
+    pub fn caret_at_byte(&self, byte: u32) -> Option<f32> {
+        let glyph = self.glyph_at_byte(byte)?;
+        let at_end = byte >= glyph.cluster + glyph.w as u32;
+        Some(if at_end {
+            glyph.x + glyph.w
+        } else {
+            glyph.x
+        })
     }
 }
 
@@ -558,6 +590,25 @@ mod tests {
         let b = e.shape("same text", &TextStyle::sized(24.0));
         assert!(!Arc::ptr_eq(&a, &b));
         assert!(b.width > a.width);
+        assert_eq!(e.stats().shape_misses, 2);
+    }
+
+    /// An absent family and an empty one are different styles.
+    ///
+    /// The family used to be mixed into the hash by its bytes only, so
+    /// `family: None` and `family: Some("")` hashed the same and shared a
+    /// cache entry: the wrong shaped run came back.
+    #[test]
+    fn an_absent_family_is_not_an_empty_family() {
+        let mut e = engine();
+        let without = e.shape("same text", &TextStyle::sized(12.0));
+        let mut empty_style = TextStyle::sized(12.0);
+        empty_style.family = Some(String::new());
+        let empty = e.shape("same text", &empty_style);
+        assert!(
+            !Arc::ptr_eq(&without, &empty),
+            "the two styles must not share a cache entry"
+        );
         assert_eq!(e.stats().shape_misses, 2);
     }
 
