@@ -1,7 +1,8 @@
 # Unbound UI
 
 下一代高性能 GPU 驱动 UI 与无限画布引擎的 Rust 实现，架构依据
-[`docs/gpu_ui_v2_0.md`](docs/gpu_ui_v2_0.md) 的 V2.0 生产级定稿。
+[`docs/`](docs/README.md) 中的 V2.0 生产级定稿（按主题域分卷，含实现状态标注
+与源码锚点）。
 
 设计目标只有一句话：**把每一帧的成本压到与场景规模无关**。其余所有取舍
 （面向数据布局、零每帧分配、GPU 端剔除与排序、事务化撤销、无头验证）都是
@@ -31,6 +32,22 @@ crates/
 apps/
   gallery           全链路演示程序
 ```
+
+## 架构文档
+
+| 目录 | 内容 |
+| :--- | :--- |
+| [`docs/00-overview`](docs/00-overview/README.md) | 设计准则、端到端数据流、crate 地图 |
+| [`docs/01-graphics`](docs/01-graphics/README.md) | Vulkan 底座、Uber-Shader、裁剪、曲线、文字 |
+| [`docs/02-ui`](docs/02-ui/README.md) | 面向数据拓扑、增量排版、虚拟化、动画、主题 |
+| [`docs/03-canvas`](docs/03-canvas/README.md) | 空间索引、分块坐标、交互编辑 |
+| [`docs/04-input`](docs/04-input/README.md) | 双层拾取、IME、Portal 排序、无障碍 |
+| [`docs/05-agent`](docs/05-agent/README.md) | 依赖分层护栏、无头闭环验证 |
+| [`docs/06-tooling`](docs/06-tooling/README.md) | 热重载、资源流送、调试工具链 |
+| [`docs/07-roadmap`](docs/07-roadmap/README.md) | 里程碑路径、量化验收红线 |
+
+每篇文档开头标注实现状态（`已落地` / `部分落地` / `蓝图`）并指向对应源码与
+测试。
 
 ## 快速开始
 
