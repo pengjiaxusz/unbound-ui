@@ -128,6 +128,11 @@ pub struct PointerState {
     position: Vec2,
     down_position: Vec2,
     pressed: Option<u64>,
+    /// The button that started the current interaction.
+    ///
+    /// Only its release may end the interaction: releasing the secondary
+    /// button while the primary one is held must not abort the drag.
+    press_button: Option<PointerButton>,
     capture: Option<u64>,
     dragging: bool,
     buttons: Buttons,
@@ -145,6 +150,7 @@ impl PointerState {
             position: Vec2::ZERO,
             down_position: Vec2::ZERO,
             pressed: None,
+            press_button: None,
             capture: None,
             dragging: false,
             buttons: Buttons::default(),
@@ -219,6 +225,7 @@ impl PointerState {
         self.last_click_target = target;
         self.down_position = position;
         self.pressed = target;
+        self.press_button = Some(button);
         self.capture = target;
         self.dragging = false;
         Some(PointerEvent::Down {
@@ -273,9 +280,24 @@ impl PointerState {
     ) -> Vec<PointerEvent> {
         self.position = position;
         self.buttons.set(button, false);
+        // Only the button that started the interaction may end it. Releasing
+        // the *secondary* button while the primary one is held must not end
+        // the drag: the user is still dragging with the left button.
+        if self.press_button != Some(button) {
+            let mut events = vec![PointerEvent::Up {
+                target: self.pressed,
+                position,
+                button,
+            }];
+            // A secondary release is not a click and must not touch the
+            // double-click clock, or a right-click followed by a left-click
+            // would register as a double-click.
+            return events;
+        }
         let target = self.pressed;
         let dragged = self.dragging;
         self.pressed = None;
+        self.press_button = None;
         self.capture = None;
         self.dragging = false;
 
@@ -305,6 +327,7 @@ impl PointerState {
     pub fn cancel(&mut self) -> Option<PointerEvent> {
         let target = self.capture.or(self.pressed)?;
         self.pressed = None;
+        self.press_button = None;
         self.capture = None;
         self.dragging = false;
         self.buttons = Buttons::default();
@@ -312,13 +335,24 @@ impl PointerState {
     }
 
     /// Take the capture without a press, e.g. when a scrollbar thumb grabs.
-    pub fn grab(&mut self, target: u64) {
-        self.capture = Some(target);
+    ///
+    /// The previous holder is evicted, and it is told so: a capture that
+    /// disappears without a `CaptureLost` leaves its owner stuck in a dragging
+    /// state.
+    pub fn grab(&mut self, target: u64) -> Option<PointerEvent> {
+        let previous = self.capture.replace(target)?;
+        if previous == target {
+            return None;
+        }
+        Some(PointerEvent::CaptureLost { target: previous })
     }
 
     /// Drop the capture but keep the button state.
-    pub fn release_capture(&mut self) {
-        self.capture = None;
+    ///
+    /// The holder is told that it lost the capture.
+    pub fn release_capture(&mut self) -> Option<PointerEvent> {
+        let previous = self.capture.take()?;
+        Some(PointerEvent::CaptureLost { target: previous })
     }
 }
 
@@ -478,5 +512,69 @@ mod tests {
         let events = p.on_up(Vec2::new(1.0, 1.0), PointerButton::Left, 0.1);
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], PointerEvent::Up { target: None, .. }));
+    }
+
+    /// Releasing the secondary button must not abort the primary drag.
+    ///
+    /// The user is still holding the left button and still dragging: the
+    /// interaction continues, and the capture is not dropped.
+    #[test]
+    fn releasing_the_secondary_button_does_not_abort_the_drag() {
+        let mut p = state();
+        p.on_down(Some(3), Vec2::new(0.0, 0.0), PointerButton::Left, 0.0);
+        p.on_move(Vec2::new(30.0, 0.0));
+        assert!(p.is_dragging());
+        // The right button goes down and up while the left one is held.
+        p.on_down(Some(3), Vec2::new(30.0, 0.0), PointerButton::Right, 0.1);
+        let events = p.on_up(Vec2::new(30.0, 0.0), PointerButton::Right, 0.2);
+        assert!(matches!(events[0], PointerEvent::Up { button: PointerButton::Right, .. }));
+        assert!(p.is_dragging(), "the drag must survive a secondary release");
+        assert_eq!(p.capture(), Some(3), "the capture must survive too");
+        // And the drag still reports drags.
+        let event = p.on_move(Vec2::new(60.0, 0.0)).unwrap();
+        assert!(matches!(event, PointerEvent::Drag { .. }));
+    }
+
+    /// A secondary release must not touch the double-click clock.
+    ///
+    /// Otherwise a right-click followed by a left-click on the same target
+    /// reads as a double-click.
+    #[test]
+    fn a_secondary_release_does_not_create_a_double_click() {
+        let mut p = state();
+        p.on_down(Some(3), Vec2::new(10.0, 10.0), PointerButton::Right, 0.0);
+        p.on_up(Vec2::new(10.0, 10.0), PointerButton::Right, 0.05);
+        // A left click right after must be a single click, not a double one.
+        p.on_down(Some(3), Vec2::new(10.0, 10.0), PointerButton::Left, 0.1);
+        let events = p.on_up(Vec2::new(10.0, 10.0), PointerButton::Left, 0.15);
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, PointerEvent::DoubleClick { .. })),
+            "a right-click must not arm the double-click: {events:?}"
+        );
+    }
+
+    /// Stealing or releasing the capture must tell the previous holder.
+    ///
+    /// A capture that disappears without a `CaptureLost` leaves its owner
+    /// stuck in a dragging state.
+    #[test]
+    fn stealing_the_capture_reports_the_loss() {
+        let mut p = state();
+        p.on_down(Some(1), Vec2::new(0.0, 0.0), PointerButton::Left, 0.0);
+        let event = p.grab(9).unwrap();
+        assert_eq!(event, PointerEvent::CaptureLost { target: 1 });
+        assert_eq!(p.capture(), Some(9));
+    }
+
+    #[test]
+    fn releasing_the_capture_reports_the_loss() {
+        let mut p = state();
+        p.on_down(Some(1), Vec2::new(0.0, 0.0), PointerButton::Left, 0.0);
+        let event = p.release_capture().unwrap();
+        assert_eq!(event, PointerEvent::CaptureLost { target: 1 });
+        assert_eq!(p.capture(), None);
+        assert!(p.release_capture().is_none(), "a second release is a no-op");
     }
 }

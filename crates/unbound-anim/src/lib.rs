@@ -122,12 +122,30 @@ impl Spring {
 
     #[must_use]
     pub fn is_settled(&self) -> bool {
+        // A non-finite state can never satisfy the comparisons below (every
+        // comparison with NaN is false), so the spring would never settle and
+        // the frame scheduler would never sleep. A broken spring counts as
+        // settled: it has nothing left to animate.
+        if !self.value.is_finite() || !self.target.is_finite() || !self.velocity.is_finite() {
+            return true;
+        }
         (self.target - self.value).abs() <= self.rest_threshold
             && self.velocity.abs() <= self.rest_velocity
     }
 
     /// Advance by `dt` seconds. Returns `true` while still moving.
     pub fn step(&mut self, dt: f32) -> bool {
+        // A non-finite target (a NaN out of layout, a division by zero in the
+        // caller) would poison the state forever: the comparisons in
+        // `is_settled` are false for NaN, so the spring would never settle,
+        // the animator would never drop it, and the frame scheduler would
+        // spin forever. The broken spring is snapped to rest instead.
+        if !self.target.is_finite() {
+            self.value = 0.0;
+            self.target = 0.0;
+            self.velocity = 0.0;
+            return false;
+        }
         if !dt.is_finite() || dt <= 0.0 {
             return !self.is_settled();
         }
@@ -141,6 +159,13 @@ impl Spring {
             self.velocity += accel * h;
             self.value += self.velocity * h;
             remaining -= h;
+        }
+        if !self.value.is_finite() || !self.velocity.is_finite() {
+            // The integration diverged (an absurd stiffness, or a value that
+            // overflowed). Rest instead of spinning on a broken state.
+            self.value = self.target;
+            self.velocity = 0.0;
+            return false;
         }
         if self.is_settled() {
             // Snap the residual so the last frame is pixel-identical to rest and
@@ -675,5 +700,61 @@ mod tests {
         a.step(1.0 / 120.0);
         let v = a.value(7, Channel::Opacity).unwrap();
         assert!(v > 0.0 && v < 1.0);
+    }
+
+    /// A NaN target must not keep the animator awake forever.
+    ///
+    /// Every comparison with NaN is false, so a spring whose target is NaN
+    /// never settles: the animator never drops it, the scheduler never
+    /// reports `Idle`, and the application spins at 100% CPU with a NaN
+    /// transform on screen.
+    #[test]
+    fn a_nan_target_settles_instead_of_spinning_forever() {
+        let mut spring = Spring::default();
+        spring.set_target(f32::NAN);
+        assert!(spring.is_settled(), "a broken spring counts as settled");
+        assert!(!spring.step(1.0 / 60.0), "it must not keep moving");
+        assert!(spring.value.is_finite());
+    }
+
+    #[test]
+    fn a_nan_target_does_not_wake_the_scheduler_forever() {
+        let mut animator = Animator::new();
+        // A NaN arrives from the layout.
+        animator.animate(1, Channel::Scale, SpringPreset::Gentle, f32::NAN);
+        for _ in 0..600 {
+            animator.step(1.0 / 60.0);
+        }
+        assert_eq!(
+            animator.active_animations(),
+            0,
+            "the broken animation must be dropped, not kept alive"
+        );
+        // The broken animation is gone, so it has no value to report.
+        assert!(
+            animator.value(1, Channel::Scale).is_none(),
+            "the dropped animation must not report a value"
+        );
+    }
+
+    /// A diverging integration must not spin either.
+    #[test]
+    fn a_diverging_spring_settles() {
+        let mut spring = Spring {
+            stiffness: 1.0e9,
+            damping: 0.0,
+            mass: 1.0,
+            value: 0.0,
+            target: 1.0,
+            velocity: 0.0,
+            ..Default::default()
+        };
+        // A step large enough to overflow the velocity.
+        let _ = spring.step(0.25);
+        assert!(
+            spring.value.is_finite() && spring.velocity.is_finite(),
+            "the spring must stay finite"
+        );
+        assert!(spring.is_settled());
     }
 }

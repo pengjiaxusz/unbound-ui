@@ -64,15 +64,24 @@ impl ClipRect {
 }
 
 /// Narrow-phase geometry of a hit region.
+///
+/// Every variant is evaluated in the **same space as the region's bounds**
+/// (the parent's coordinate space), so the vertices of a polygon, the control
+/// points of a Bézier and the point being tested are all directly
+/// comparable.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
     /// Plain rectangle.
     Rect,
     /// Rectangle with four per-corner radii (`TL, TR, BR, BL`).
     Rounded { radii: [f32; 4] },
-    /// Closed polygon in the region's own space, even-odd fill.
+    /// Closed polygon, even-odd fill.
+    ///
+    /// The vertices are in the same space as the region's `bounds`.
     Polygon(Vec<Vec2>),
     /// A quadratic Bézier stroke: hit when the distance is within the width.
+    ///
+    /// The control points are in the same space as the region's `bounds`.
     Bezier { quad: QuadSegment, half_width: f32 },
 }
 
