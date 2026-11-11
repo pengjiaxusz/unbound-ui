@@ -28,6 +28,16 @@ pub struct Router {
     cursors: CursorStack,
     hover: Option<u64>,
     tool_cursor: CursorKind,
+    /// The last canvas position the pointer was observed at.
+    ///
+    /// `PointerState::position` only moves when the state machine receives an
+    /// event; a pan, a zoom or a scroll leaves it stale. Hover and cursor must
+    /// be resolved from the freshest point, so every observation — an OS
+    /// event or a camera-driven [`Router::refresh_at`] — is recorded here.
+    ///
+    /// `None` means the pointer never entered: picking at the state machine's
+    /// origin placeholder would invent a hover target out of nothing.
+    last_position: Option<Vec2>,
 }
 
 impl Default for Router {
@@ -45,15 +55,21 @@ impl Router {
             cursors: CursorStack::new(),
             hover: None,
             tool_cursor: CursorKind::Default,
+            last_position: None,
         }
     }
 
     /// Replace the pickable set for this frame.
     ///
-    /// The vector is reused, so a steady frame does not allocate.
+    /// The vector is reused, so a steady frame does not allocate. Hover and
+    /// cursor are re-picked because the new set may no longer contain the node
+    /// that was under the pointer.
     pub fn set_regions(&mut self, regions: Vec<HitRegion>) {
         self.regions = regions;
-        self.refresh_cursor();
+        match self.last_position {
+            Some(position) => self.refresh_at(position),
+            None => self.refresh_cursor(),
+        }
     }
 
     /// Pickable regions currently registered.
@@ -94,6 +110,7 @@ impl Router {
 
     /// Button press.
     pub fn pointer_down(&mut self, position: Vec2, now: f64) -> Option<PointerEvent> {
+        self.last_position = Some(position);
         let target = pick(&self.regions, position).map(|r| r.node);
         self.hover = target;
         let event = self
@@ -106,6 +123,7 @@ impl Router {
     /// Pointer movement. The hit test is skipped while a capture is active —
     /// that is the whole point of the capture.
     pub fn pointer_move(&mut self, position: Vec2) -> Option<PointerEvent> {
+        self.last_position = Some(position);
         let event = self.pointer.on_move(position);
         if self.pointer.capture().is_none() {
             self.hover = pick(&self.regions, position).map(|r| r.node);
@@ -115,9 +133,37 @@ impl Router {
     }
 
     /// Button release.
+    ///
+    /// A release that lands outside the region it was pressed on does not
+    /// produce a click, even when the pointer never travelled far enough to
+    /// count as a drag: a button must not activate when the user lets go over
+    /// something else.
     pub fn pointer_up(&mut self, position: Vec2, now: f64) -> Vec<PointerEvent> {
-        let events = self.pointer.on_up(position, PointerButton::Left, now);
-        self.hover = pick(&self.regions, position).map(|r| r.node);
+        self.last_position = Some(position);
+        let pressed = self.pointer.pressed();
+        let mut events = self.pointer.on_up(position, PointerButton::Left, now);
+        let released_on = pick(&self.regions, position).map(|r| r.node);
+        self.hover = released_on;
+        if pressed.is_some() {
+            let clicked = events
+                .iter()
+                .any(|event| matches!(event, PointerEvent::Click { .. }));
+            if released_on != pressed {
+                events.retain(|event| {
+                    !matches!(
+                        event,
+                        PointerEvent::Click { .. } | PointerEvent::DoubleClick { .. }
+                    )
+                });
+                // The click was withheld, so the next press starts a new
+                // click sequence instead of pairing with this one.
+                self.pointer.reset_click_sequence();
+            } else if !clicked {
+                // A drag that ends on the target delivers no click either;
+                // it must not pair with the next press as a double click.
+                self.pointer.reset_click_sequence();
+            }
+        }
         self.refresh_cursor();
         events
     }
@@ -125,18 +171,41 @@ impl Router {
     /// Abort the current interaction.
     pub fn cancel(&mut self) -> Option<PointerEvent> {
         let event = self.pointer.cancel();
-        self.refresh_cursor();
+        match self.last_position {
+            // Hover was frozen while the capture was active; the pointer may
+            // now be anywhere, so it must be re-picked.
+            Some(position) => self.refresh_at(position),
+            None => self.refresh_cursor(),
+        }
         event
     }
 
+    /// Re-pick hover and cursor at `position` without moving the state machine.
+    ///
+    /// A pan, a zoom or a scene rebuild moves the geometry under a stationary
+    /// pointer. Regions live in canvas space, so the hover target and cursor
+    /// have to be resolved at the new canvas point rather than waiting for the
+    /// next OS cursor event.
+    pub fn refresh_at(&mut self, position: Vec2) {
+        self.last_position = Some(position);
+        if self.pointer.capture().is_none() {
+            self.hover = pick(&self.regions, position).map(|r| r.node);
+        }
+        self.refresh_cursor_at(position);
+    }
+
     /// Recompute the cursor stack from the current pick path.
+    fn refresh_cursor(&mut self) {
+        self.refresh_cursor_at(self.last_position.unwrap_or(Vec2::ZERO));
+    }
+
+    /// Recompute the cursor stack from the pick path at `position`.
     ///
     /// One pass per source, topmost region wins inside a source. That keeps the
     /// result independent of the region order and needs no temporary vector, so
     /// a mouse move allocates nothing.
-    fn refresh_cursor(&mut self) {
+    fn refresh_cursor_at(&mut self, position: Vec2) {
         self.cursors.clear();
-        let position = self.pointer.position();
         if self.pointer.capture().is_some() {
             let kind = if self.pointer.is_dragging() {
                 CursorKind::Grabbing
@@ -176,7 +245,8 @@ impl Router {
         // Only claim the tool slot when the tool actually wants a cursor:
         // pushing `Default` here would outrank a plain hovered widget.
         if self.tool_cursor != CursorKind::Default {
-            self.cursors.push(CursorSource::CanvasTool, self.tool_cursor);
+            self.cursors
+                .push(CursorSource::CanvasTool, self.tool_cursor);
         }
     }
 }
@@ -248,8 +318,7 @@ mod tests {
         let mut r = router();
         r.set_regions(vec![
             region(1, rect(0.0, 0.0, 100.0, 100.0)),
-            HitRegion::new(2, 1, 0, rect(200.0, 200.0, 100.0, 100.0))
-                .with_cursor(CursorKind::Text),
+            HitRegion::new(2, 1, 0, rect(200.0, 200.0, 100.0, 100.0)).with_cursor(CursorKind::Text),
         ]);
         r.pointer_down(Vec2::new(10.0, 10.0), 0.0);
         r.pointer_move(Vec2::new(30.0, 10.0));
@@ -309,5 +378,123 @@ mod tests {
         r.set_tool_cursor(CursorKind::Crosshair);
         r.pointer_move(Vec2::new(1.0, 1.0));
         assert_eq!(r.cursor(), CursorKind::Crosshair);
+    }
+
+    #[test]
+    fn replacing_the_regions_repicks_the_hover_at_the_same_pointer() {
+        let mut r = router();
+        r.set_regions(vec![region(1, rect(0.0, 0.0, 100.0, 100.0))]);
+        r.pointer_move(Vec2::new(10.0, 10.0));
+        assert_eq!(r.hover(), Some(1));
+
+        r.set_regions(vec![region(2, rect(0.0, 0.0, 100.0, 100.0))]);
+        assert_eq!(r.hover(), Some(2), "the pointer stayed, the scene changed");
+
+        r.set_regions(Vec::new());
+        assert_eq!(r.hover(), None);
+    }
+
+    #[test]
+    fn regions_alone_do_not_invent_a_hover() {
+        let mut r = router();
+        r.set_regions(vec![region(1, rect(0.0, 0.0, 100.0, 100.0))]);
+        assert_eq!(r.hover(), None, "the pointer never entered the window");
+    }
+
+    #[test]
+    fn a_release_outside_the_press_target_is_not_a_click() {
+        let mut r = router();
+        r.set_regions(vec![region(1, rect(0.0, 0.0, 100.0, 100.0))]);
+        r.pointer_down(Vec2::new(99.0, 50.0), 0.0);
+        // Two pixels outside: below the three-pixel drag slop, so the state
+        // machine still considers this a click unless the router checks where
+        // the release landed.
+        let events = r.pointer_up(Vec2::new(101.0, 50.0), 0.1);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, PointerEvent::Click { .. })),
+            "releasing outside the target must not activate it: {events:?}"
+        );
+        assert_eq!(r.hover(), None);
+
+        // The withheld click must not poison the next click sequence.
+        let down = r.pointer_down(Vec2::new(50.0, 50.0), 0.2).unwrap();
+        assert!(matches!(down, PointerEvent::Down { click_count: 1, .. }));
+        let events = r.pointer_up(Vec2::new(50.0, 50.0), 0.3);
+        assert!(matches!(
+            events.last(),
+            Some(PointerEvent::Click { count: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn a_drag_does_not_pair_with_the_next_press_as_a_double_click() {
+        let mut r = router();
+        r.set_regions(vec![region(1, rect(0.0, 0.0, 100.0, 100.0))]);
+        r.pointer_down(Vec2::new(10.0, 10.0), 0.0);
+        r.pointer_move(Vec2::new(60.0, 60.0));
+        let events = r.pointer_up(Vec2::new(60.0, 60.0), 0.1);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, PointerEvent::Click { .. })),
+            "a drag must not click even when it ends on the target"
+        );
+
+        let down = r.pointer_down(Vec2::new(10.0, 10.0), 0.2).unwrap();
+        assert!(
+            matches!(down, PointerEvent::Down { click_count: 1, .. }),
+            "the drag must reset the click sequence, got {down:?}"
+        );
+    }
+
+    #[test]
+    fn cancelling_repicks_the_hover_after_a_drag() {
+        let mut r = router();
+        r.set_regions(vec![region(1, rect(0.0, 0.0, 100.0, 100.0))]);
+        r.pointer_down(Vec2::new(10.0, 10.0), 0.0);
+        r.pointer_move(Vec2::new(300.0, 300.0));
+        assert_eq!(r.hover(), Some(1), "hover is frozen while captured");
+
+        r.cancel();
+        assert_eq!(r.hover(), None, "the pointer is no longer over the button");
+    }
+
+    #[test]
+    fn a_scene_rebuild_after_a_camera_move_does_not_resurrect_the_old_hover() {
+        let mut r = router();
+        r.set_regions(vec![region(1, rect(0.0, 0.0, 100.0, 100.0))]);
+        r.pointer_move(Vec2::new(10.0, 10.0));
+        assert_eq!(r.hover(), Some(1));
+
+        // The camera pans: the same window point now sits at canvas (500, 500).
+        r.refresh_at(Vec2::new(500.0, 500.0));
+        assert_eq!(r.hover(), None);
+
+        // A rebuild must re-pick at the refreshed point, not at the stale
+        // state-machine position where the pointer used to be.
+        r.set_regions(vec![region(1, rect(0.0, 0.0, 100.0, 100.0))]);
+        assert_eq!(r.hover(), None, "a stale hover must not come back");
+        assert_eq!(r.cursor(), CursorKind::Default);
+    }
+
+    #[test]
+    fn cancelling_after_a_camera_move_uses_the_refreshed_position() {
+        let mut r = router();
+        r.set_regions(vec![region(1, rect(0.0, 0.0, 100.0, 100.0))]);
+        r.pointer_down(Vec2::new(10.0, 10.0), 0.0);
+        assert_eq!(r.hover(), Some(1));
+
+        // The canvas moves under the captured pointer.
+        r.refresh_at(Vec2::new(500.0, 500.0));
+        assert_eq!(r.hover(), Some(1), "hover stays frozen while captured");
+
+        r.cancel();
+        assert_eq!(
+            r.hover(),
+            None,
+            "cancel must use the refreshed point, not the stale press point"
+        );
     }
 }

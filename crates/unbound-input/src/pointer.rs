@@ -272,12 +272,7 @@ impl PointerState {
     ///
     /// Returns the `Up` event followed, when the press never turned into a drag,
     /// by a `Click` (and a `DoubleClick` for the second click of a pair).
-    pub fn on_up(
-        &mut self,
-        position: Vec2,
-        button: PointerButton,
-        now: f64,
-    ) -> Vec<PointerEvent> {
+    pub fn on_up(&mut self, position: Vec2, button: PointerButton, now: f64) -> Vec<PointerEvent> {
         self.position = position;
         self.buttons.set(button, false);
         // Only the button that started the interaction may end it. Releasing
@@ -332,6 +327,17 @@ impl PointerState {
         self.dragging = false;
         self.buttons = Buttons::default();
         Some(PointerEvent::CaptureLost { target })
+    }
+
+    /// Forget the pending click pair.
+    ///
+    /// Called when a release lands outside its press target and the router
+    /// withholds the click: no click was delivered, so the next press must
+    /// start counting from one instead of reporting a phantom double click.
+    pub fn reset_click_sequence(&mut self) {
+        self.click_count = 0;
+        self.last_click_time = f64::NEG_INFINITY;
+        self.last_click_target = None;
     }
 
     /// Take the capture without a press, e.g. when a scrollbar thumb grabs.
@@ -415,7 +421,13 @@ mod tests {
         let mut p = state();
         p.on_down(Some(3), Vec2::new(0.0, 0.0), PointerButton::Left, 0.0);
         let event = p.on_move(Vec2::new(1.0, 0.0)).unwrap();
-        assert!(matches!(event, PointerEvent::Move { target: Some(3), .. }));
+        assert!(matches!(
+            event,
+            PointerEvent::Move {
+                target: Some(3),
+                ..
+            }
+        ));
         assert!(!p.is_dragging());
     }
 
@@ -426,7 +438,11 @@ mod tests {
         p.on_move(Vec2::new(50.0, 0.0));
         assert_eq!(p.capture(), Some(1));
         let event = p.on_move(Vec2::new(500.0, 500.0)).unwrap();
-        assert_eq!(event.target(), Some(1), "capture must survive leaving the node");
+        assert_eq!(
+            event.target(),
+            Some(1),
+            "capture must survive leaving the node"
+        );
     }
 
     #[test]
@@ -437,13 +453,7 @@ mod tests {
         let down = p
             .on_down(Some(4), Vec2::new(21.0, 20.0), PointerButton::Left, 0.2)
             .unwrap();
-        assert!(matches!(
-            down,
-            PointerEvent::Down {
-                click_count: 2,
-                ..
-            }
-        ));
+        assert!(matches!(down, PointerEvent::Down { click_count: 2, .. }));
         let events = p.on_up(Vec2::new(21.0, 20.0), PointerButton::Left, 0.25);
         assert!(events
             .iter()
@@ -458,13 +468,7 @@ mod tests {
         let down = p
             .on_down(Some(4), Vec2::new(20.0, 20.0), PointerButton::Left, 2.0)
             .unwrap();
-        assert!(matches!(
-            down,
-            PointerEvent::Down {
-                click_count: 1,
-                ..
-            }
-        ));
+        assert!(matches!(down, PointerEvent::Down { click_count: 1, .. }));
     }
 
     #[test]
@@ -475,13 +479,7 @@ mod tests {
         let down = p
             .on_down(Some(2), Vec2::new(20.0, 20.0), PointerButton::Left, 0.1)
             .unwrap();
-        assert!(matches!(
-            down,
-            PointerEvent::Down {
-                click_count: 1,
-                ..
-            }
-        ));
+        assert!(matches!(down, PointerEvent::Down { click_count: 1, .. }));
     }
 
     #[test]
@@ -527,7 +525,13 @@ mod tests {
         // The right button goes down and up while the left one is held.
         p.on_down(Some(3), Vec2::new(30.0, 0.0), PointerButton::Right, 0.1);
         let events = p.on_up(Vec2::new(30.0, 0.0), PointerButton::Right, 0.2);
-        assert!(matches!(events[0], PointerEvent::Up { button: PointerButton::Right, .. }));
+        assert!(matches!(
+            events[0],
+            PointerEvent::Up {
+                button: PointerButton::Right,
+                ..
+            }
+        ));
         assert!(p.is_dragging(), "the drag must survive a secondary release");
         assert_eq!(p.capture(), Some(3), "the capture must survive too");
         // And the drag still reports drags.
