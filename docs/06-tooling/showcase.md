@@ -4,8 +4,8 @@
 >
 > | | |
 > | :--- | :--- |
-> | **源码** | `apps/showcase/src/{main,gallery}.rs`、`apps/showcase/tests/gallery.rs` |
-> | **关键类型** | `Gallery`、`Palette`、`Labels`、`Showcase` |
+> | **源码** | `apps/showcase/src/{main,gallery,button}.rs`、`apps/showcase/tests/gallery.rs` |
+> | **关键类型** | `Gallery`、`Palette`、`Labels`、`Showcase`、`ButtonDesc`、`ButtonVisualState`、`Router` |
 > | **测试** | `apps/showcase/tests/gallery.rs`；渲染正确性由 `crates/unbound-gpu` 的像素断言覆盖 |
 
 `apps/showcase` 是引擎的**可视验收台**：一个真实开窗的 Vulkan 程序，把引擎能画
@@ -40,9 +40,12 @@ cargo run -p showcase --release
 
 | 输入 | 行为 |
 | :--- | :--- |
-| `T` / `Space` | 在亮色与暗色主题之间切换 |
+| `T` | 在亮色与暗色主题之间切换 |
+| `Space` | 有焦点时激活按钮；无焦点时切换主题 |
+| `Enter` | 激活当前聚焦的按钮 |
+| `Tab` / `Esc` | 聚焦按钮 / 取消焦点 |
 | 滚轮 | 以视口中心为锚点缩放（0.25× – 8×） |
-| 左键拖拽 | 平移画布 |
+| 左键拖拽 | 在空白处拖动平移画布；按在按钮上则是点击而不是平移 |
 
 ### 无头模式
 
@@ -71,12 +74,40 @@ cargo run -p showcase --release -- --shot shot.png --dark   # 暗色
 | 三条彩线 | 二次贝塞尔曲线的解析 SDF |
 | 标题与各处标签 | 双图集 + MTSDF 字形采样 |
 | 底部提示行 | 深色主题下的文字极性补偿 |
+| Button 卡片 | 第一个可交互控件：hover / press / focus / click |
+
+### 第一个可交互控件
+
+`button.rs` 给出组件的形态：**POD 描述符 + 派生状态 + 纯函数发射器**，而不是
+一个带方法的状态容器。
+
+* `ButtonDesc` 只描述几何与文案；组件身份来自 `unbound-world` 的 `NodeId`。
+* hover / pressed **不落任何 `bool` 字段**，每帧由 `unbound-input::Router` 的
+  捕获状态派生。按下后拖出按钮仍然保持 pressed（指针被捕获），松开越界不会
+  合成点击——这套经典场景不会出现两套状态失步。
+* 焦点与指针正交：`ButtonVisualState { phase, focused, disabled }`，所以
+  "Tab 聚焦后又悬停"能同时画出 hover 底色与外部焦点环。
+* 图元按 `SubElement`（`Shadow → Background → Content → Border → FocusRing`）
+  分层，五层共享同一个 `z`，由 64 位排序键决定顺序。
+
+窗口管线里有三处必须对齐：
+
+1. **屏幕坐标 → 画布坐标**：`Camera` 的映射是
+   `screen = (world - anchor) * zoom + viewport/2`，喂给 `Router` 之前必须做
+   逆变换，否则缩放/平移后热区会与画面错位。
+2. **点击优先于平移**：左键按下先问路由器是否命中 `HitRegion`；命中则捕获
+   指针并聚焦按钮，未命中才进入画布拖拽。
+3. **离散状态跃迁守卫**：只有 `(视觉态, 点击计数)` 变化的那一帧才重建场景并
+   递增 `generation`。平移、缩放、切主题、鼠标在按钮内部滑行都不触发上传。
 
 ### 主题切换为什么是「零上传」
 
 亮暗两套主题**共用同一套 token 槽位**，只有颜色表里的值不同。切换主题因此只
 是一次 4 KiB 的颜色表写入——图元数据一个字节都不用动，这与
 [正交缩放与主题切换](../02-ui/theme-and-zoom.md) 描述的机制一致。
+
+按钮的状态色也必须占用**独立槽位**：如果 hover 去改槽位 5（`primary`），
+同屏所有引用 primary 的色块会一起变色。槽位 12–16 就是为此预留的。
 
 | 槽位 | 含义 |
 | ---: | :--- |
@@ -87,6 +118,10 @@ cargo run -p showcase --release -- --shot shot.png --dark   # 暗色
 | 4 | 面板边框 |
 | 5 – 9 | primary / secondary / success / warning / danger |
 | 10 / 11 | 正文 / 次要文字 |
+| 12 / 13 | primary hover / pressed（按钮状态底色） |
+| 14 | on-primary（按钮文字） |
+| 15 | focus ring（焦点环） |
+| 16 | disabled fill（禁用底色） |
 
 ## 展台暴露出的引擎缺陷
 
