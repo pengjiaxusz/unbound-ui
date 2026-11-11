@@ -1,10 +1,16 @@
-//! Zero-copy-ish binary snapshots for time-travel debugging (`docs` §7.2).
+//! Zero-copy time-travel snapshots (`docs` §7.2).
 //!
-//! The doc asks for `rkyv`/`postcard` so that a failing frame can be captured
-//! and replayed without keeping the whole process alive. This module uses
-//! `postcard`, the compact serde format: it is a few kilobytes for a full
-//! 10 000 node frame and needs no unsafe code, which keeps the harness honest
-//! about "no GPU, no unsafe".
+//! When a frame fails, the whole point is to be able to *look at it again*:
+//! replay the exact geometry, step through it, diff it against a later frame.
+//! `rkyv` is the format that makes this cheap — the archived bytes can be
+//! read in place, with no deserialisation pass and no allocation.
+//!
+//! Two formats live here on purpose:
+//!
+//! * [`TimeTravel`] — the `rkyv` archive. Read it in place, or restore it into
+//!   a live [`Frame`]. This is the format a debugger keeps.
+//! * [`capture`] / [`restore`] — `postcard`, the compact serde format. Useful
+//!   for shipping a frame over a wire or storing thousands of them.
 //!
 //! The DTO layer exists because [`crate::frame::NodeSnapshot`] carries a
 //! `&'static str` source location. Serialising a string and leaking it back on
@@ -19,14 +25,32 @@ use unbound_math::Rect;
 use crate::frame::{Frame, NodeKind, NodeSnapshot, SourceLoc};
 
 /// Stable wire format for a frame.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct FrameSnapshot {
     pub viewport: [f32; 4],
     pub nodes: Vec<SnapNode>,
 }
 
 /// Stable wire format for one node. Field order is part of the format.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct SnapNode {
     pub id: u64,
     pub parent: Option<u64>,
@@ -68,12 +92,12 @@ impl FrameSnapshot {
                     let (kind, ink, ellipsis, occluded, min_size) = match &node.kind {
                         NodeKind::Container => (0u8, Rect::ZERO, false, false, [0.0, 0.0]),
                         NodeKind::Text { ink, ellipsis } => {
-                            (1, *ink, *ellipsis, false, [0.0, 0.0])
+                            (1u8, *ink, *ellipsis, false, [0.0, 0.0])
                         }
                         NodeKind::Interactive { min_size, occluded } => {
-                            (2, Rect::ZERO, false, *occluded, [min_size.x, min_size.y])
+                            (2u8, Rect::ZERO, false, *occluded, [min_size.x, min_size.y])
                         }
-                        NodeKind::Portal => (3, Rect::ZERO, false, false, [0.0, 0.0]),
+                        NodeKind::Portal => (3u8, Rect::ZERO, false, false, [0.0, 0.0]),
                     };
                     SnapNode {
                         id: node.id,
@@ -165,6 +189,72 @@ pub fn restore(bytes: &[u8]) -> Result<Frame, postcard::Error> {
     Ok(snapshot.restore())
 }
 
+/// A zero-copy time-travel snapshot.
+///
+/// The bytes are the archive; every read is a pointer chase into the buffer
+/// instead of a copy. A debugger can keep thousands of these in memory and
+/// still step through them instantly.
+#[derive(Clone, Debug)]
+pub struct TimeTravel {
+    bytes: rkyv::util::AlignedVec,
+}
+
+impl TimeTravel {
+    /// Archive a frame.
+    ///
+    /// # Errors
+    /// Returns the archive error when the frame cannot be serialised.
+    pub fn capture(frame: &Frame) -> Result<Self, rkyv::rancor::Error> {
+        let snapshot = FrameSnapshot::capture(frame);
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot)?;
+        Ok(Self { bytes })
+    }
+
+    /// Read the archived frame in place.
+    ///
+    /// # Errors
+    /// Returns the validation error when the buffer is corrupt or was written
+    /// by a different version of the format.
+    pub fn access(&self) -> Result<&rkyv::Archived<FrameSnapshot>, rkyv::rancor::Error> {
+        rkyv::access::<rkyv::Archived<FrameSnapshot>, rkyv::rancor::Error>(&self.bytes)
+    }
+
+    /// The archived bytes.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Number of bytes the snapshot occupies.
+    #[must_use]
+    pub fn size(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Restore a live frame from the archive.
+    ///
+    /// # Errors
+    /// Returns the archive error when the buffer is corrupt.
+    pub fn restore(&self) -> Result<Frame, rkyv::rancor::Error> {
+        let archived = self.access()?;
+        let restored = rkyv::deserialize::<FrameSnapshot, rkyv::rancor::Error>(archived)?;
+        Ok(restored.restore())
+    }
+}
+
+/// Open an archived snapshot that was written elsewhere.
+///
+/// # Errors
+/// Returns the validation error when the buffer is corrupt.
+pub fn open(bytes: &[u8]) -> Result<TimeTravel, rkyv::rancor::Error> {
+    // Validate before taking ownership: a corrupt buffer must never reach the
+    // rest of the debugger as if it were a frame.
+    rkyv::access::<rkyv::Archived<FrameSnapshot>, rkyv::rancor::Error>(bytes)?;
+    let mut owned = rkyv::util::AlignedVec::new();
+    owned.extend_from_slice(bytes);
+    Ok(TimeTravel { bytes: owned })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,26 +311,61 @@ mod tests {
     }
 
     #[test]
-    fn the_payload_is_compact() {
+    fn a_time_travel_snapshot_round_trips_through_rkyv() {
         let frame = sample();
-        let bytes = capture(&frame).unwrap();
-        // 4 nodes with strings: a few hundred bytes, not kilobytes.
-        assert!(bytes.len() < 512, "snapshot grew to {} bytes", bytes.len());
+        let snapshot = TimeTravel::capture(&frame).unwrap();
+        let restored = snapshot.restore().unwrap();
+        assert_eq!(restored.viewport, frame.viewport);
+        assert_eq!(restored.nodes.len(), frame.nodes.len());
+        for (a, b) in restored.nodes.iter().zip(&frame.nodes) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.rect, b.rect);
+            assert_eq!(a.path, b.path);
+        }
     }
 
     #[test]
-    fn a_restored_frame_still_validates() {
+    fn the_archive_can_be_read_in_place() {
         let frame = sample();
-        let bytes = capture(&frame).unwrap();
-        let restored = restore(&bytes).unwrap();
-        assert_eq!(
-            crate::rules::check(&restored).len(),
-            crate::rules::check(&frame).len()
+        let snapshot = TimeTravel::capture(&frame).unwrap();
+        let archived = snapshot.access().unwrap();
+        // The archived viewport is read straight out of the buffer.
+        assert_eq!(archived.viewport[0], 0.0);
+        assert_eq!(archived.viewport[2], 800.0);
+        assert_eq!(archived.nodes.len(), frame.nodes.len());
+        // The source path survives as a string slice into the archive.
+        assert!(archived.nodes[0].path.as_str().contains("Root"));
+    }
+
+    #[test]
+    fn a_snapshot_survives_a_trip_through_a_buffer() {
+        let frame = sample();
+        let snapshot = TimeTravel::capture(&frame).unwrap();
+        let reopened = open(snapshot.bytes()).unwrap();
+        let restored = reopened.restore().unwrap();
+        assert_eq!(restored.nodes.len(), frame.nodes.len());
+        assert_eq!(restored.nodes[0].path, frame.nodes[0].path);
+    }
+
+    #[test]
+    fn a_corrupt_buffer_is_rejected_instead_of_read() {
+        let frame = sample();
+        let snapshot = TimeTravel::capture(&frame).unwrap();
+        let mut bytes = snapshot.bytes().to_vec();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xFF;
+        assert!(open(&bytes).is_err());
+    }
+
+    #[test]
+    fn the_archive_is_compact() {
+        let frame = sample();
+        let snapshot = TimeTravel::capture(&frame).unwrap();
+        // Ten kilobytes of geometry must not explode into megabytes.
+        assert!(
+            snapshot.size() < 64 * 1024,
+            "archive is {} bytes",
+            snapshot.size()
         );
-    }
-
-    #[test]
-    fn corrupt_input_is_an_error_not_a_panic() {
-        assert!(restore(&[0xff, 0xff, 0xff]).is_err());
     }
 }

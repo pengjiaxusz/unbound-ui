@@ -38,7 +38,7 @@ use std::time::Instant;
 
 pub use frame::{Frame, FrameBuilder, NodeKind, NodeSnapshot, SourceLoc};
 pub use rules::{check, Diagnostic, Rule};
-pub use snapshot::FrameSnapshot;
+pub use snapshot::{capture, open, restore, FrameSnapshot, SnapNode, TimeTravel};
 
 /// Outcome of one verification pass.
 #[derive(Clone, Debug)]
