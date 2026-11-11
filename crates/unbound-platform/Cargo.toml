@@ -1,0 +1,17 @@
+[package]
+name = "unbound-platform"
+description = "Window platform layer: non-blocking resize, DWM tear-free presentation and input-to-photon accounting"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
+unbound-gpu.workspace = true
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
+raw-window-handle = "0.6"
+
+[lints]
+workspace = true
