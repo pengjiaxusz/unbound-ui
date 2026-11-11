@@ -57,13 +57,21 @@ impl AtlasKind {
 /// The Vulkan objects are immutable once created; only the *layout* of each
 /// layer changes, and that is tracked separately so the atlas can be shared
 /// behind an `Arc` while still being uploaded into.
-#[derive(Debug)]
 pub struct AtlasTexture {
     image: vk::Image,
     memory: vk::DeviceMemory,
     /// One view per layer; the bindless descriptor array binds them in order.
     views: Vec<vk::ImageView>,
     kind: AtlasKind,
+    /// A shared handle on the device, so the atlas can free itself even when
+    /// it outlives the [`Gpu`] that created it.
+    lifetime: crate::device::DeviceLifetime,
+    /// Set once the images have been freed.
+    ///
+    /// The atlas set is shared with the application, so the renderer frees the
+    /// images explicitly before the device goes away; the `Drop` impl then
+    /// finds them already gone. The flag makes both paths idempotent.
+    freed: std::sync::atomic::AtomicBool,
     /// The current layout of each layer.
     ///
     /// A layer that has never been written is `UNDEFINED`; after an upload it
@@ -71,6 +79,53 @@ pub struct AtlasTexture {
     /// second upload into the same layer must *not* declare `old_layout` as
     /// `UNDEFINED`: that would discard the glyphs already in the layer.
     layouts: std::sync::Mutex<Vec<vk::ImageLayout>>,
+}
+
+impl core::fmt::Debug for AtlasTexture {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AtlasTexture")
+            .field("image", &self.image)
+            .field("memory", &self.memory)
+            .field("views", &self.views.len())
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AtlasTexture {
+    /// Free the images. Idempotent: the second call does nothing.
+    ///
+    /// The atlas set is shared with the application, so the renderer frees the
+    /// images before the device is destroyed; the `Drop` impl then finds them
+    /// already gone. When the atlas outlives the device, the `Drop` impl frees
+    /// them instead — unless the device is already gone, in which case the
+    /// images went with it and the stale handle must not be touched.
+    pub fn free(&self) {
+        if self.freed.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        if !self.lifetime.is_alive() {
+            return;
+        }
+        // SAFETY: the device is alive and the images belong to it. The
+        // renderer waits for the device to be idle before calling this.
+        unsafe {
+            let device = self.lifetime.device();
+            for view in &self.views {
+                device.destroy_image_view(*view, None);
+            }
+            device.destroy_image(self.image, None);
+            device.free_memory(self.memory, None);
+        }
+    }
+}
+
+impl Drop for AtlasTexture {
+    fn drop(&mut self) {
+        // The atlas may outlive the `Gpu` that created it: the application
+        // keeps an `Arc` to the atlas set for the whole session.
+        self.free();
+    }
 }
 
 impl AtlasTexture {
@@ -139,6 +194,8 @@ impl AtlasTexture {
                 memory,
                 views,
                 kind,
+                lifetime: gpu.lifetime.clone(),
+                freed: std::sync::atomic::AtomicBool::new(false),
                 layouts,
             })
         }
@@ -182,20 +239,6 @@ impl AtlasTexture {
     pub const fn image(&self) -> vk::Image {
         self.image
     }
-
-    /// # Safety
-    /// The device must be idle.
-    pub unsafe fn destroy(&self, gpu: &Gpu) {
-        // SAFETY: the caller guarantees the device is idle, so no descriptor
-        // or command buffer still references these objects.
-        unsafe {
-            for view in &self.views {
-                gpu.device.destroy_image_view(*view, None);
-            }
-            gpu.device.destroy_image(self.image, None);
-            gpu.device.free_memory(self.memory, None);
-        }
-    }
 }
 
 /// A rectangle of texels to move from the CPU to one atlas layer.
@@ -229,13 +272,21 @@ impl AtlasUpload {
     }
 }
 
-/// The pair of atlases the renderer binds.
-#[derive(Debug)]
+/// The pair of atlases the renderer binds into its descriptor slots.
 pub struct AtlasSet {
     /// The coverage atlas.
     pub r8: AtlasTexture,
     /// The colour atlas.
     pub rgba: AtlasTexture,
+}
+
+impl core::fmt::Debug for AtlasSet {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AtlasSet")
+            .field("r8", &self.r8)
+            .field("rgba", &self.rgba)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AtlasSet {
@@ -257,6 +308,16 @@ impl AtlasSet {
             AtlasKind::R8 => &self.r8,
             AtlasKind::Rgba8 => &self.rgba,
         }
+    }
+
+    /// Free the images of both atlases. Idempotent.
+    ///
+    /// The renderer calls this before it tears the device down: Vulkan
+    /// requires every object to be destroyed before the device, and the
+    /// application may still hold an `Arc` to the atlas set.
+    pub fn free(&self) {
+        self.r8.free();
+        self.rgba.free();
     }
 
     /// Upload one rectangle of texels into the matching atlas.
@@ -503,16 +564,6 @@ impl AtlasSet {
             gpu.destroy_buffer(&staging);
         }
         Ok(out)
-    }
-
-    /// # Safety
-    /// The device must be idle.
-    pub unsafe fn destroy(&self, gpu: &Gpu) {
-        // SAFETY: the caller guarantees the device is idle.
-        unsafe {
-            self.r8.destroy(gpu);
-            self.rgba.destroy(gpu);
-        }
     }
 }
 

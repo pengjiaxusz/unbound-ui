@@ -367,6 +367,12 @@ impl Renderer {
         let payload_handle = pool
             .allocate(16 * 1024)
             .map_err(|e| GpuError::Allocation(e.to_string()))?;
+        // The capacity counters are byte counts: they must match what the
+        // allocator actually carved, not the requested size.
+        let prim_capacity = u64::from(pool.capacity_of(prim_handle).unwrap_or(0));
+        let transform_capacity = u64::from(pool.capacity_of(transform_handle).unwrap_or(0));
+        let clip_capacity = u64::from(pool.capacity_of(clip_handle).unwrap_or(0));
+        let payload_capacity = u64::from(pool.capacity_of(payload_handle).unwrap_or(0));
 
         let bda_usage = vk::BufferUsageFlags::STORAGE_BUFFER
             | vk::BufferUsageFlags::TRANSFER_DST
@@ -458,10 +464,10 @@ impl Renderer {
             transform_handle,
             clip_handle,
             payload_handle,
-            prim_capacity: 64 * 1024,
-            transform_capacity: 16 * 1024,
-            clip_capacity: 16 * 1024,
-            payload_capacity: 16 * 1024,
+            prim_capacity,
+            transform_capacity,
+            clip_capacity,
+            payload_capacity,
             keys_a,
             keys_b,
             idx_a,
@@ -563,47 +569,52 @@ impl Renderer {
         Ok(())
     }
 
+    /// Ensure the pool block backing `which` can hold `len` elements.
+    ///
+    /// The pool carves bytes, so the element count is converted with the
+    /// array's stride before the comparison. Mixing the two units is what used
+    /// to let a 2 000-element scene write 128 KB into a 64 KB block and
+    /// overwrite the transform, clip and payload arrays that follow it.
     fn ensure_pool_capacity(&mut self, len: usize, which: Which) -> Result<(), GpuError> {
-        let (handle, cap) = match which {
-            Which::Primitives => (self.prim_handle, self.prim_capacity),
-            Which::Transforms => (self.transform_handle, self.transform_capacity),
-            Which::Clips => (self.clip_handle, self.clip_capacity),
-            Which::Payloads => (self.payload_handle, self.payload_capacity),
+        let handle = match which {
+            Which::Primitives => self.prim_handle,
+            Which::Transforms => self.transform_handle,
+            Which::Clips => self.clip_handle,
+            Which::Payloads => self.payload_handle,
         };
-        let needed = (len as u64).max(1);
-        if needed <= cap {
-            return Ok(());
-        }
-        // Double until it fits so growth is amortised.
-        let mut new_cap = cap.max(4096);
-        while new_cap < needed {
-            new_cap *= 2;
-        }
         let epoch = self.frame_index + self.gpu.frames_in_flight() as u64;
-        let new_handle = self
+        let (new_handle, capacity) = self
             .pool
-            .grow(handle, new_cap as u32, epoch)
+            .ensure_capacity(
+                handle,
+                len as u64,
+                which.stride() as u64,
+                epoch,
+            )
             .map_err(|e| GpuError::Allocation(e.to_string()))?;
+        let moved = new_handle != handle;
         match which {
             Which::Primitives => {
                 self.prim_handle = new_handle;
-                self.prim_capacity = new_cap;
+                self.prim_capacity = u64::from(capacity);
             }
             Which::Transforms => {
                 self.transform_handle = new_handle;
-                self.transform_capacity = new_cap;
+                self.transform_capacity = u64::from(capacity);
             }
             Which::Clips => {
                 self.clip_handle = new_handle;
-                self.clip_capacity = new_cap;
+                self.clip_capacity = u64::from(capacity);
             }
             Which::Payloads => {
                 self.payload_handle = new_handle;
-                self.payload_capacity = new_cap;
+                self.payload_capacity = u64::from(capacity);
             }
         }
-        // The arrays moved: force a full re-upload next frame.
-        self.last_generation = u64::MAX;
+        if moved {
+            // The array moved: force a full re-upload next frame.
+            self.last_generation = u64::MAX;
+        }
         Ok(())
     }
 
@@ -1568,28 +1579,47 @@ impl Renderer {
         if let Some(scope) = &self.timing {
             scope.destroy(&self.gpu);
         }
+        // The atlases free their images when the last reference goes away, and
+        // Vulkan requires every object to be destroyed before the device. The
+        // renderer holds the only reference the application kept, so dropping
+        // it here frees the images while the device is still alive.
+        //
+        // The pipelines bind the atlas views into their descriptor sets, so
+        // they have to go first.
+        let mut this = self;
+        // SAFETY: the device is idle.
+        unsafe {
+            this.pipelines.destroy(&this.gpu);
+        }
+        // The atlases free their images here, while the device is still
+        // alive: Vulkan requires every object to be destroyed before the
+        // device. The application may still hold an `Arc` to the atlas set,
+        // so the free is idempotent and the later drop finds it already done.
+        if let Some(atlases) = &this.atlases {
+            atlases.free();
+        }
+        this.atlases = None;
         // SAFETY: the device is idle and `self` is consumed.
         unsafe {
-            self.target.destroy(&self.gpu);
-            self.pipelines.destroy(&self.gpu);
+            this.target.destroy(&this.gpu);
             for b in [
-                &self.pool_buffer,
-                &self.ring_buffer,
-                &self.lut_buffer,
-                &self.keys_a,
-                &self.keys_b,
-                &self.idx_a,
-                &self.idx_b,
-                &self.sort_scratch,
-                &self.commands,
-                &self.counters,
-                &self.patches,
-                &self.staging,
+                &this.pool_buffer,
+                &this.ring_buffer,
+                &this.lut_buffer,
+                &this.keys_a,
+                &this.keys_b,
+                &this.idx_a,
+                &this.idx_b,
+                &this.sort_scratch,
+                &this.commands,
+                &this.counters,
+                &this.patches,
+                &this.staging,
             ] {
-                self.gpu.destroy_buffer(b);
+                this.gpu.destroy_buffer(b);
             }
         }
-        self.gpu.destroy();
+        this.gpu.destroy();
     }
 }
 
@@ -1599,6 +1629,21 @@ enum Which {
     Transforms,
     Clips,
     Payloads,
+}
+
+impl Which {
+    /// Byte stride of one element of the array this block backs.
+    ///
+    /// The pool capacity counters are byte counts, so every conversion from an
+    /// element count to a byte count goes through here.
+    const fn stride(self) -> usize {
+        match self {
+            Self::Primitives => crate::data::PRIMITIVE_STRIDE,
+            Self::Transforms => core::mem::size_of::<GpuTransform>(),
+            Self::Clips => core::mem::size_of::<GpuClipNode>(),
+            Self::Payloads => core::mem::size_of::<GpuPayload>(),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default)]

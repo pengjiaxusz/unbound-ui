@@ -63,6 +63,11 @@ pub struct GpuFeatures {
     pub sampler_anisotropy: bool,
     pub swapchain_maintenance1: bool,
     pub present_wait: bool,
+    /// `presentId`: the application may tag a presentation with an id.
+    ///
+    /// Required by `VK_KHR_present_wait`, which the low-latency present path
+    /// uses to wait for a specific presentation.
+    pub present_id: bool,
     /// True when the persistent pool landed in ReBAR-visible memory.
     pub rebar: bool,
 }
@@ -182,6 +187,53 @@ impl Default for GpuConfig {
     }
 }
 
+/// A shared handle on the Vulkan device, so that objects which outlive the
+/// [`Gpu`] can still free themselves.
+///
+/// Vulkan requires every child object to be destroyed before the device. The
+/// atlases are handed to the application as an `Arc` and may well outlive the
+/// renderer that owns the `Gpu` — the showcase keeps one for the whole
+/// session. Giving them a clone of the device handle lets them free their
+/// images whenever the last reference goes away, instead of leaking them or
+/// touching a device that has already been destroyed.
+#[derive(Clone)]
+pub struct DeviceLifetime {
+    device: ash::Device,
+    /// Set to false when the owning [`Gpu`] tears the device down.
+    ///
+    /// The atlas checks this before freeing: after `Gpu::destroy` the device
+    /// handle is stale, and Vulkan forbids using it.
+    alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl DeviceLifetime {
+    /// The device handle.
+    #[must_use]
+    pub fn device(&self) -> &ash::Device {
+        &self.device
+    }
+
+    /// True while the device is still alive.
+    #[must_use]
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Mark the device as destroyed. Called by `Gpu::destroy`.
+    fn invalidate(&self) {
+        self.alive
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl core::fmt::Debug for DeviceLifetime {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DeviceLifetime")
+            .field("alive", &self.is_alive())
+            .finish_non_exhaustive()
+    }
+}
+
 /// A `VkBuffer` plus its bound memory and (optionally) a persistent mapping.
 #[derive(Debug)]
 pub struct Buffer {
@@ -291,6 +343,9 @@ pub struct Gpu {
     pub frames: Vec<FrameSync>,
     command_pool: vk::CommandPool,
     pub config: GpuConfig,
+    /// A shared handle on the device, handed to the objects that may outlive
+    /// the `Gpu` (the atlases).
+    pub lifetime: DeviceLifetime,
 }
 
 impl core::fmt::Debug for Gpu {
@@ -351,6 +406,22 @@ impl Gpu {
         let mut instance_exts = config.instance_extensions.clone();
         if enable_validation {
             instance_exts.push("VK_EXT_debug_utils".to_string());
+        }
+        // `VK_EXT_swapchain_maintenance1` is a device extension, but it
+        // depends on the *instance* extension `VK_EXT_surface_maintenance1`.
+        // Enabling it without the dependency makes `vkCreateDevice` invalid
+        // (VUID-vkCreateDevice-ppEnabledExtensionNames-01387), and the
+        // instance has to be created before the device can be — so the
+        // dependency is resolved here.
+        if config
+            .device_extensions
+            .iter()
+            .any(|e| e == "VK_EXT_swapchain_maintenance1")
+            && !instance_exts
+                .iter()
+                .any(|e| e == "VK_EXT_surface_maintenance1")
+        {
+            instance_exts.push("VK_EXT_surface_maintenance1".to_string());
         }
         let ext_cstrings = cstrings(&instance_exts);
         let ext_ptrs = raw_ptrs(&ext_cstrings);
@@ -415,11 +486,17 @@ impl Gpu {
         // ---- feature discovery -------------------------------------------
         let mut f12 = vk::PhysicalDeviceVulkan12Features::default();
         let mut f13 = vk::PhysicalDeviceVulkan13Features::default();
+        // The present features live in their own structures, so they have to
+        // be chained into the query as well.
+        let mut present_wait_query = vk::PhysicalDevicePresentWaitFeaturesKHR::default();
+        let mut present_id_query = vk::PhysicalDevicePresentIdFeaturesKHR::default();
         let core;
         {
             let mut query = vk::PhysicalDeviceFeatures2::default()
                 .push_next(&mut f13)
-                .push_next(&mut f12);
+                .push_next(&mut f12)
+                .push_next(&mut present_id_query)
+                .push_next(&mut present_wait_query);
             instance.get_physical_device_features2(physical, &mut query);
             core = query.features;
         }
@@ -456,7 +533,9 @@ impl Gpu {
             independent_blend: core.independent_blend == vk::TRUE,
             sampler_anisotropy: core.sampler_anisotropy == vk::TRUE,
             swapchain_maintenance1: has_ext("VK_EXT_swapchain_maintenance1"),
-            present_wait: has_ext("VK_KHR_present_wait"),
+            present_wait: has_ext("VK_KHR_present_wait")
+                && present_wait_query.present_wait == vk::TRUE,
+            present_id: has_ext("VK_KHR_present_id") && present_id_query.present_id == vk::TRUE,
             rebar: false,
         };
 
@@ -533,24 +612,46 @@ impl Gpu {
             .shader_int64(features.shader_int64)
             .shader_float64(features.shader_float64);
 
-        let device_exts = config.device_extensions.clone();
-        for optional in [
-            "VK_EXT_swapchain_maintenance1",
-            "VK_KHR_present_wait",
-        ] {
-            if has_ext(optional) && !device_exts.iter().any(|e| e == optional) {
-                // Only opt in when the caller is creating a swapchain; a headless
-                // device gains nothing and adds validation noise.
-                let _ = optional;
-            }
+        // ---- extension dependencies ----------------------------------------
+        //
+        // Vulkan requires the dependencies of an enabled extension to be
+        // enabled too. Two of the extensions the showcase asks for have such
+        // a dependency, and enabling them without it makes `vkCreateDevice`
+        // invalid:
+        //
+        //   VK_EXT_swapchain_maintenance1 -> VK_EXT_surface_maintenance1
+        //                                       (an *instance* extension)
+        //   VK_KHR_present_wait            -> VK_KHR_present_id
+        //                                       (a *device* extension)
+        //
+        // The instance extension has to be added before the instance is
+        // created, so this happens back in `new_inner`; the device extension
+        // is added here.
+        let mut device_exts = config.device_extensions.clone();
+        if device_exts.iter().any(|e| e == "VK_KHR_present_wait")
+            && !device_exts.iter().any(|e| e == "VK_KHR_present_id")
+        {
+            device_exts.push("VK_KHR_present_id".to_string());
         }
         let dev_ext_cstrings = cstrings(&device_exts);
         let dev_ext_ptrs = raw_ptrs(&dev_ext_cstrings);
+
+        // `VK_KHR_present_wait` and `VK_KHR_present_id` are two separate
+        // *features*. Without them `vkWaitForPresentKHR` and a non-zero
+        // `VkPresentIdKHR` are invalid usage, even though the extensions are
+        // enabled.
+        let present_wait_enabled = device_exts.iter().any(|e| e == "VK_KHR_present_wait");
+        let mut present_wait_features = vk::PhysicalDevicePresentWaitFeaturesKHR::default()
+            .present_wait(present_wait_enabled && features.present_wait);
+        let mut present_id_features = vk::PhysicalDevicePresentIdFeaturesKHR::default()
+            .present_id(present_wait_enabled && features.present_id);
 
         let device_create = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)
             .enabled_extension_names(&dev_ext_ptrs)
             .enabled_features(&enabled_core)
+            .push_next(&mut present_id_features)
+            .push_next(&mut present_wait_features)
             .push_next(&mut enabled_features13)
             .push_next(&mut enabled_features12);
 
@@ -666,6 +767,11 @@ impl Gpu {
         let khr_synchronization2 = ash::khr::synchronization2::Device::new(&instance, &device);
         let khr_draw_indirect_count = ash::khr::draw_indirect_count::Device::new(&instance, &device);
 
+        let lifetime = DeviceLifetime {
+            device: device.clone(),
+            alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        };
+
         Ok(Self {
             entry,
             instance,
@@ -686,6 +792,7 @@ impl Gpu {
             frames,
             command_pool,
             config,
+            lifetime,
         })
     }
 
@@ -1057,6 +1164,10 @@ impl Gpu {
 
     /// Tear everything down. Safe to call exactly once.
     pub fn destroy(mut self) {
+        // The objects that may outlive the `Gpu` (the atlases) must not touch
+        // the device after this point, so the shared lifetime is invalidated
+        // before the device handle goes away.
+        self.lifetime.invalidate();
         // SAFETY: we own every handle and are consuming `self`.
         unsafe {
             let _ = self.device.device_wait_idle();

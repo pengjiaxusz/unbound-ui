@@ -65,11 +65,17 @@ struct Transform {
     uint  flags;
 };
 
+// The `vec4`s come first, then the two `uvec2`s. In std430 a `vec4` must be
+// 16-byte aligned, so interleaving `vec4` and `uvec2` members would push the
+// second `vec4` to offset 48 and give the struct an 80-byte stride — while
+// the `repr(C)` Rust mirror (`GpuClipNode`) has `radii_0` as a `[u16; 4]` with
+// 2-byte alignment and stays 64 bytes. Keeping the wide members together
+// makes both layouts agree; `data.rs` pins the offsets in a unit test.
 struct ClipNode {
     vec4  aabb;      // chunk-local (min_x, min_y, max_x, max_y)
     vec4  rounded0;  // (center_x, center_y, half_w, half_h)
-    uvec2 radii0;    // 4 × f16
     vec4  rounded1;
+    uvec2 radii0;    // 4 × f16
     uvec2 radii1;
 };
 

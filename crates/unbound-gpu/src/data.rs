@@ -344,6 +344,13 @@ impl GpuPrimitiveInstance {
 /// The fields are what the shader needs (two nested rounded containers), so the
 /// layout is 64B and we document the discrepancy rather than silently dropping
 /// the second slot.
+/// A clip node: the folded hard clip plus up to two rounded parents.
+///
+/// The field order mirrors `common.glsl`'s `ClipNode` **exactly**. The wide
+/// members come first because std430 forces a `vec4` to a 16-byte boundary:
+/// interleaving `vec4` and `uvec2` members would give the shader an 80-byte
+/// stride while this `repr(C)` struct stays 64 bytes, and every clip with an
+/// index above zero would then be read from the wrong offset.
 #[repr(C, align(16))]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct GpuClipNode {
@@ -351,10 +358,10 @@ pub struct GpuClipNode {
     pub aabb_clip: [f32; 4],
     /// First rounded parent `(center_x, center_y, half_w, half_h)`.
     pub rounded_clip_0: [f32; 4],
-    /// First parent's four corner radii (f16).
-    pub radii_0: [u16; 4],
     /// Second rounded parent.
     pub rounded_clip_1: [f32; 4],
+    /// First parent's four corner radii (f16).
+    pub radii_0: [u16; 4],
     /// Second parent's four corner radii (f16).
     pub radii_1: [u16; 4],
 }
@@ -781,6 +788,78 @@ mod tests {
         let c = GpuClipNode::from_aabb([0.0, 0.0, 10.0, 10.0]);
         assert!(!c.is_empty());
         assert!(GpuClipNode::from_aabb([10.0, 0.0, 0.0, 10.0]).is_empty());
+    }
+
+    /// The `ClipNode` layout must match `common.glsl`'s `struct ClipNode`.
+    ///
+    /// The two sides are bound by physical device address, so there is no
+    /// reflection to catch a mismatch. std430 forces a `vec4` to a 16-byte
+    /// boundary, so the wide members have to come first: with
+    /// `vec4, vec4, uvec2, vec4, uvec2` the shader's stride is 80 bytes while
+    /// this `repr(C)` struct is 64, and every clip above index zero is read
+    /// from the wrong offset.
+    #[test]
+    fn clip_node_layout_matches_the_shader_struct() {
+        assert_eq!(offset_of!(GpuClipNode, aabb_clip), 0);
+        assert_eq!(offset_of!(GpuClipNode, rounded_clip_0), 16);
+        assert_eq!(offset_of!(GpuClipNode, rounded_clip_1), 32);
+        assert_eq!(offset_of!(GpuClipNode, radii_0), 48);
+        assert_eq!(offset_of!(GpuClipNode, radii_1), 56);
+        // The radii arrays are two `u32`s worth of packed f16, exactly like
+        // the `uvec2` members in the shader.
+        assert_eq!(size_of::<[u16; 4]>(), 8);
+    }
+
+    /// The shader's `ClipNode` member order must mirror the Rust struct.
+    ///
+    /// The two layouts are bound by physical device address: nothing checks
+    /// them against each other, so a reorder on one side silently corrupts
+    /// every clip above index zero. This test parses the GLSL source and
+    /// compares the member order with the Rust field order.
+    #[test]
+    fn shader_clip_node_member_order_matches_the_rust_struct() {
+        let glsl = include_str!("../shaders/common.glsl");
+        let start = glsl
+            .find("struct ClipNode {")
+            .expect("common.glsl must declare `struct ClipNode`");
+        let body = &glsl[start..];
+        let body = &body[body.find('{').expect("`struct ClipNode` must open") + 1..];
+        let end = body.find('}').expect("`struct ClipNode` must be closed");
+        let body = &body[..end];
+
+        // Collect the member types in declaration order.
+        let members: Vec<&str> = body
+            .lines()
+            .filter_map(|line| {
+                let line = line.split("//").next().unwrap_or("").trim();
+                let mut parts = line.split_whitespace();
+                let ty = parts.next()?;
+                // Skip the member name; only the type drives the layout.
+                parts.next()?;
+                Some(ty)
+            })
+            .collect();
+        assert_eq!(
+            members,
+            vec!["vec4", "vec4", "vec4", "uvec2", "uvec2"],
+            "the shader's ClipNode member order changed; mirror it in `GpuClipNode`"
+        );
+
+        // std430: a `vec4` is 16-byte aligned, a `uvec2` 8-byte aligned.
+        let mut offset = 0usize;
+        let mut offsets = Vec::new();
+        for ty in &members {
+            let (align, size) = match *ty {
+                "vec4" => (16usize, 16usize),
+                "uvec2" => (8, 8),
+                other => panic!("unhandled GLSL type `{other}` in ClipNode"),
+            };
+            offset = (offset + align - 1) & !(align - 1);
+            offsets.push(offset);
+            offset += size;
+        }
+        assert_eq!(offsets, vec![0, 16, 32, 48, 56]);
+        assert_eq!(offset, 64, "the shader's ClipNode must stay 64 bytes");
     }
 
     #[test]

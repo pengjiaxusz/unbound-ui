@@ -57,7 +57,15 @@ pub struct Element {
     pub aabb: Rect,
     /// Layer key used to order query results before the exact test.
     pub layer: u16,
+    /// Next element in the same node's list.
     pub next: u32,
+    /// Previous element in the same node's list.
+    ///
+    /// The list is doubly-linked so that removing an element from the middle is
+    /// O(1). A singly-linked list would need a walk to find the predecessor,
+    /// and the naive version (overwriting the head with the removed element's
+    /// successor) silently drops every element that followed it.
+    pub prev: u32,
     /// Node this element currently hangs off.
     pub node: u32,
 }
@@ -321,6 +329,7 @@ impl LooseQuadtree {
                     aabb,
                     layer,
                     next: NO_ELEMENT,
+                    prev: NO_ELEMENT,
                     node: 0,
                 });
                 (self.elements.len() - 1) as u32
@@ -338,6 +347,7 @@ impl LooseQuadtree {
             let e = &mut self.elements[handle as usize];
             e.node = Self::pack_node(depth, index);
             e.next = head;
+            e.prev = NO_ELEMENT;
         }
         if head == NO_ELEMENT {
             // Compute the bounds before taking the mutable borrow of the list.
@@ -345,6 +355,9 @@ impl LooseQuadtree {
             let slot = self.level_occupied[depth as usize].len() as u32;
             self.level_occupied[depth as usize].push(Occupied { index, bounds });
             self.level_slot[depth as usize][index as usize] = slot;
+        } else {
+            // The old head now has a predecessor.
+            self.elements[head as usize].prev = handle;
         }
         self.level_heads[depth as usize][index as usize] = handle;
     }
@@ -353,8 +366,22 @@ impl LooseQuadtree {
     fn detach(&mut self, handle: u32) {
         let (depth, index) = Self::unpack_node(self.elements[handle as usize].node);
         let next = self.elements[handle as usize].next;
-        self.level_heads[depth as usize][index as usize] = next;
-        if next == NO_ELEMENT {
+        let prev = self.elements[handle as usize].prev;
+
+        if prev == NO_ELEMENT {
+            // The element was the head: the list now starts at its successor.
+            self.level_heads[depth as usize][index as usize] = next;
+        } else {
+            // The element was in the middle: close the gap in the chain so the
+            // elements behind it stay reachable.
+            self.elements[prev as usize].next = next;
+        }
+        if next != NO_ELEMENT {
+            self.elements[next as usize].prev = prev;
+        }
+
+        // The node is empty when the removed element was its only member.
+        if prev == NO_ELEMENT && next == NO_ELEMENT {
             let level = depth as usize;
             let slot = self.level_slot[level][index as usize];
             debug_assert!(slot != NO_ELEMENT, "occupied list out of sync");
@@ -387,6 +414,7 @@ impl LooseQuadtree {
         {
             let e = &mut self.elements[handle as usize];
             e.next = NO_ELEMENT;
+            e.prev = NO_ELEMENT;
             e.aabb = Rect::ZERO;
         }
         self.free_elements.push(handle);
@@ -707,5 +735,64 @@ mod tests {
         let mut out = Vec::new();
         t.query_exact(rect(0.0, 0.0, 20.0, 20.0), &mut out);
         assert_eq!(out, vec![2, 3, 1]);
+    }
+
+    /// Removing an element must not take its neighbours with it.
+    ///
+    /// The node list is head-inserted, so the element being removed is usually
+    /// *not* the head. The old `detach` overwrote the head with the removed
+    /// element's successor, which silently dropped every element that had
+    /// been inserted before it.
+    #[test]
+    fn removing_one_entity_keeps_the_others() {
+        let mut t = LooseQuadtree::new(8192.0);
+        t.insert(1, rect(100.0, 100.0, 10.0, 10.0), 0);
+        t.insert(2, rect(110.0, 100.0, 10.0, 10.0), 0);
+        t.insert(3, rect(120.0, 100.0, 10.0, 10.0), 0);
+        let mut out = Vec::new();
+        t.query_exact(rect(0.0, 0.0, 8192.0, 8192.0), &mut out);
+        assert_eq!(out, vec![1, 2, 3]);
+
+        // Remove the oldest element: it sits at the tail of the list.
+        assert!(t.remove(1));
+        let mut out = Vec::new();
+        t.query_exact(rect(0.0, 0.0, 8192.0, 8192.0), &mut out);
+        assert_eq!(out, vec![2, 3], "entities 2 and 3 must survive");
+
+        // Remove the head next.
+        assert!(t.remove(3));
+        let mut out = Vec::new();
+        t.query_exact(rect(0.0, 0.0, 8192.0, 8192.0), &mut out);
+        assert_eq!(out, vec![2]);
+    }
+
+    /// Moving an entity (which removes and re-inserts it) must not disturb the
+    /// entities that share its quadtree node.
+    #[test]
+    fn moving_an_entity_keeps_its_neighbours() {
+        let mut t = LooseQuadtree::new(8192.0);
+        t.insert(1, rect(100.0, 100.0, 10.0, 10.0), 0);
+        t.insert(2, rect(110.0, 100.0, 10.0, 10.0), 0);
+        t.insert(3, rect(120.0, 100.0, 10.0, 10.0), 0);
+        // Move the oldest entity: `update` removes it and re-inserts it.
+        t.update(1, rect(130.0, 100.0, 10.0, 10.0));
+        let mut out = Vec::new();
+        t.query_exact(rect(0.0, 0.0, 8192.0, 8192.0), &mut out);
+        assert_eq!(out.len(), 3, "all three entities must survive the move");
+        assert!(out.contains(&1) && out.contains(&2) && out.contains(&3));
+    }
+
+    /// Removing the last element of a node must unregister the node.
+    #[test]
+    fn emptying_a_node_unregisters_it() {
+        let mut t = LooseQuadtree::new(8192.0);
+        t.insert(1, rect(100.0, 100.0, 10.0, 10.0), 0);
+        t.insert(2, rect(110.0, 100.0, 10.0, 10.0), 0);
+        let occupied = t.occupied_nodes();
+        assert!(occupied > 0);
+        t.remove(2);
+        t.remove(1);
+        assert_eq!(t.occupied_nodes(), 0, "the node must be gone");
+        assert!(t.is_empty());
     }
 }

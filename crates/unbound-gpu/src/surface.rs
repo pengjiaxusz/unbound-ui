@@ -373,10 +373,21 @@ impl Swapchain {
             acquire_semaphores.push(semaphore);
         }
 
+        // The low-latency present path needs three things at once: the
+        // `VK_KHR_present_wait` extension, its `VK_KHR_present_id`
+        // dependency, and the `presentWait`/`presentId` *features*. Checking
+        // only the extension string enabled the feature-less path, and
+        // `vkWaitForPresentKHR` with an unenabled feature is invalid usage.
         let has_present_wait = gpu
             .enabled_device_extensions
             .iter()
-            .any(|name| name == "VK_KHR_present_wait");
+            .any(|name| name == "VK_KHR_present_wait")
+            && gpu
+                .enabled_device_extensions
+                .iter()
+                .any(|name| name == "VK_KHR_present_id")
+            && gpu.features.present_wait
+            && gpu.features.present_id;
 
         Ok(Self {
             swapchain,

@@ -228,8 +228,9 @@ impl PersistentPool {
         true
     }
 
-    /// Resize a block. Content is copied to the new block; the old block is
-    /// quarantined until the frame that referenced it completes.
+    /// Resize a block. The old block is quarantined until the frame that
+    /// referenced it completes; the caller is responsible for re-uploading the
+    /// payload into the new block.
     ///
     /// Returns a **new** handle when the block had to move, or the same handle
     /// when the existing capacity was sufficient.
@@ -257,6 +258,41 @@ impl PersistentPool {
         // sure the old block outlives the frames that still read it.
         self.free(handle, epoch);
         Ok(new_handle)
+    }
+
+    /// Ensure the block behind `handle` can hold `count` elements of `stride`
+    /// bytes each.
+    ///
+    /// The pool carves **bytes**, so the element count is converted with the
+    /// array's stride before the capacity is compared. Mixing the two units is
+    /// how a 2 000-element scene came to write 128 KB into a 64 KB block and
+    /// overwrite the transform, clip and payload arrays that followed it.
+    ///
+    /// Returns the (possibly new) handle and the block's byte capacity.
+    ///
+    /// # Errors
+    /// Propagates [`AllocError`] when the pool cannot host the larger block.
+    pub fn ensure_capacity(
+        &mut self,
+        handle: PoolHandle,
+        count: u64,
+        stride: u64,
+        epoch: u64,
+    ) -> Result<(PoolHandle, u32), AllocError> {
+        let stride = stride.max(1);
+        let capacity = self.capacity_of(handle).unwrap_or(0);
+        let needed = count.saturating_mul(stride).max(stride);
+        if needed <= u64::from(capacity) {
+            return Ok((handle, capacity));
+        }
+        // Double until it fits so growth is amortised.
+        let mut new_cap = u64::from(capacity).max(4096);
+        while new_cap < needed {
+            new_cap = new_cap.saturating_mul(2);
+        }
+        let new_handle = self.grow(handle, new_cap as u32, epoch)?;
+        let new_capacity = self.capacity_of(new_handle).unwrap_or(new_cap as u32);
+        Ok((new_handle, new_capacity))
     }
 
     /// Mark a block for deletion at `epoch`.
@@ -506,5 +542,57 @@ mod tests {
         assert_eq!(p.stats().pending_slots, 0);
         assert_eq!(p.stats().free_slots, 1);
         assert!(p.is_live(b));
+    }
+
+    /// The regression test for the bytes-vs-elements confusion.
+    ///
+    /// The renderer asked the pool for "2 000 primitives" but the pool carves
+    /// bytes. When the two units were mixed, the 64 KB block was considered
+    /// big enough (64 KB > 2 000) and the scatter shader wrote 128 KB into it,
+    /// overwriting the transform, clip and payload arrays that followed.
+    #[test]
+    fn capacity_is_measured_in_bytes_not_elements() {
+        const STRIDE: u64 = 64;
+        let mut p = PersistentPool::new(1 << 20);
+        let prim = p.allocate(64 * 1024).unwrap();
+        let transform = p.allocate(16 * 1024).unwrap();
+        let clip = p.allocate(16 * 1024).unwrap();
+        let payload = p.allocate(16 * 1024).unwrap();
+
+        // 2 000 elements * 64 bytes = 128 000 bytes, which does NOT fit in the
+        // 64 KB primitive block.
+        let (prim, prim_bytes) = p
+            .ensure_capacity(prim, 2_000, STRIDE, 0)
+            .expect("grow the primitive block");
+        assert!(
+            u64::from(prim_bytes) >= 2_000 * STRIDE,
+            "the block must hold 2 000 elements of {STRIDE} bytes, got {prim_bytes}"
+        );
+
+        // The neighbouring arrays must be untouched by the growth.
+        let prim_offset = p.offset_of(prim).unwrap();
+        let write_end = prim_offset as u64 + 2_000 * STRIDE;
+        for (name, handle) in [
+            ("transform", transform),
+            ("clip", clip),
+            ("payload", payload),
+        ] {
+            let offset = u64::from(p.offset_of(handle).unwrap());
+            assert!(
+                offset < prim_offset as u64 || offset >= write_end,
+                "the {name} array at {offset} lies inside the primitive write range \
+                 [{prim_offset}, {write_end})"
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_capacity_is_a_no_op_when_the_block_already_fits() {
+        let mut p = PersistentPool::new(1 << 20);
+        let prim = p.allocate(64 * 1024).unwrap();
+        let before = p.offset_of(prim).unwrap();
+        let (after, bytes) = p.ensure_capacity(prim, 100, 64, 0).unwrap();
+        assert_eq!(before, p.offset_of(after).unwrap(), "the block must not move");
+        assert!(u64::from(bytes) >= 100 * 64);
     }
 }
