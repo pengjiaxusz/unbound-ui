@@ -77,7 +77,12 @@ pub fn jitter(world: f32, camera: f32, zoom: f32, half_viewport: f32) -> f32 {
     // one pixel; a sub-pixel movement must not move it at all.
     for step in 1..=16 {
         let offset = step as f32 / 16.0;
-        let moved = snap_screen(edge_screen(world, camera + offset / zoom, zoom, half_viewport));
+        let moved = snap_screen(edge_screen(
+            world,
+            camera + offset / zoom,
+            zoom,
+            half_viewport,
+        ));
         worst = worst.max((moved - base).abs());
     }
     worst

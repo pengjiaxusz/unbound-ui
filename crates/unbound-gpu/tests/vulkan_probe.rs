@@ -18,9 +18,7 @@ fn report_vulkan_capabilities() {
             .application_name(c"unbound-probe")
             .api_version(vk::make_api_version(0, 1, 3, 0));
         let create_info = vk::InstanceCreateInfo::default().application_info(&app_info);
-        let instance = entry
-            .create_instance(&create_info, None)
-            .expect("instance");
+        let instance = entry.create_instance(&create_info, None).expect("instance");
 
         let devices = instance
             .enumerate_physical_devices()
@@ -45,7 +43,11 @@ fn report_vulkan_capabilities() {
                 .unwrap_or_default();
             let names: Vec<String> = exts
                 .iter()
-                .filter_map(|e| e.extension_name_as_c_str().ok().map(|c| c.to_string_lossy().into_owned()))
+                .filter_map(|e| {
+                    e.extension_name_as_c_str()
+                        .ok()
+                        .map(|c| c.to_string_lossy().into_owned())
+                })
                 .collect();
             for wanted in [
                 "VK_KHR_buffer_device_address",

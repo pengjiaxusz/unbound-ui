@@ -17,7 +17,7 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 use std::sync::Arc;
 
 use crate::decode::{Decoder, KindDecoder};
-use crate::ring::{StagingRing, StagingRef};
+use crate::ring::{StagingRef, StagingRing};
 use crate::transfer::{AssetError, AssetId, AssetKind, DecodedAsset};
 
 /// How the pipeline is set up.

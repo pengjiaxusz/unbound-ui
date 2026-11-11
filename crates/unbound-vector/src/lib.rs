@@ -173,7 +173,10 @@ impl Obb {
     #[must_use]
     pub fn to_local(&self, world: Vec2) -> Vec2 {
         let d = world - self.center;
-        Vec2::new(d.dot(self.axis_u) + self.half_u, d.dot(self.axis_v) + self.half_v)
+        Vec2::new(
+            d.dot(self.axis_u) + self.half_u,
+            d.dot(self.axis_v) + self.half_v,
+        )
     }
 
     /// 2×2 matrix mapping OBB space to world space (for `GpuTransform`).
@@ -386,13 +389,7 @@ mod tests {
             .collect()
     }
 
-    fn worst_error(
-        p0: Vec2,
-        p1: Vec2,
-        p2: Vec2,
-        p3: Vec2,
-        quads: &[QuadSegment],
-    ) -> f32 {
+    fn worst_error(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, quads: &[QuadSegment]) -> f32 {
         let mut worst: f32 = 0.0;
         for pt in sample_cubic(p0, p1, p2, p3, 800) {
             let d = quads
@@ -415,7 +412,11 @@ mod tests {
         );
         let quads = cubic_to_quads(p0, p1, p2, p3, 0.05);
         let worst = worst_error(p0, p1, p2, p3, &quads);
-        assert!(worst <= 0.05, "worst error {worst} with {} segments", quads.len());
+        assert!(
+            worst <= 0.05,
+            "worst error {worst} with {} segments",
+            quads.len()
+        );
         // Measured reality: this curve needs ~26 segments for 0.05px. The
         // architecture doc's "2–6 segments" figure corresponds to the ~0.5px
         // tolerance that is typical once the canvas is even slightly zoomed out
@@ -541,7 +542,10 @@ mod tests {
             let p = seg.eval(i as f32 / 100.0);
             let local = obb.to_local(p);
             assert!(
-                local.x >= 0.0 && local.x <= obb.size().x && local.y >= 0.0 && local.y <= obb.size().y,
+                local.x >= 0.0
+                    && local.x <= obb.size().x
+                    && local.y >= 0.0
+                    && local.y <= obb.size().y,
                 "sample {p:?} escaped OBB (local {local:?})"
             );
         }

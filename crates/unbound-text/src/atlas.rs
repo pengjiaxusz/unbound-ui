@@ -368,7 +368,12 @@ impl Atlas {
             y,
             w,
             h,
-            uv: [x as f32 / sz, y as f32 / sz, (x + w) as f32 / sz, (y + h) as f32 / sz],
+            uv: [
+                x as f32 / sz,
+                y as f32 / sz,
+                (x + w) as f32 / sz,
+                (y + h) as f32 / sz,
+            ],
             last_used: self.clock,
         }
     }
@@ -544,7 +549,10 @@ mod tests {
         let first = a.allocate(key, 10, 10, &mut evicted).unwrap();
         a.begin_frame(50);
         let again = a.allocate(key, 10, 10, &mut evicted).unwrap();
-        assert_eq!((first.layer, first.x, first.y), (again.layer, again.x, again.y));
+        assert_eq!(
+            (first.layer, first.x, first.y),
+            (again.layer, again.x, again.y)
+        );
         assert_eq!(again.last_used, 50);
         assert_eq!(a.len(), 1);
     }
@@ -587,7 +595,10 @@ mod tests {
         let mut keys = Vec::new();
         for i in 0..16u16 {
             let key = GlyphKey::new(i, 16.0, 0, false, 1);
-            assert!(a.allocate(key, 16, 16, &mut evicted).is_some(), "glyph {i} should fit");
+            assert!(
+                a.allocate(key, 16, 16, &mut evicted).is_some(),
+                "glyph {i} should fit"
+            );
             keys.push(key);
         }
         // Touch everything except glyph 0 so it becomes the coldest.
@@ -597,9 +608,15 @@ mod tests {
         }
         a.begin_frame(3);
         let fresh = GlyphKey::new(999, 16.0, 0, false, 1);
-        assert!(a.allocate(fresh, 16, 16, &mut evicted).is_some(), "must evict to fit");
+        assert!(
+            a.allocate(fresh, 16, 16, &mut evicted).is_some(),
+            "must evict to fit"
+        );
         assert_eq!(a.evictions(), 1);
-        assert!(a.touch(&keys[0]).is_none(), "glyph 0 must have been evicted");
+        assert!(
+            a.touch(&keys[0]).is_none(),
+            "glyph 0 must have been evicted"
+        );
         assert!(a.touch(&keys[1]).is_some(), "glyph 1 was hot, keep it");
     }
 
@@ -705,7 +722,10 @@ mod tests {
         }
         a.begin_frame(3);
         let fresh = GlyphKey::new(999, 16.0, 0, false, 1);
-        assert!(a.allocate(fresh, 16, 16, &mut evicted).is_some(), "must evict");
+        assert!(
+            a.allocate(fresh, 16, 16, &mut evicted).is_some(),
+            "must evict"
+        );
         assert_eq!(a.evictions(), 1);
         assert_eq!(evicted.len(), 1, "the evicted key must be reported");
         assert_eq!(evicted[0], keys[0], "the coldest glyph is evicted");
@@ -763,10 +783,18 @@ mod tests {
         let mut evicted = Vec::new();
         let mut atlas = GlyphAtlas::new(small());
         atlas.begin_frame(1);
-        assert!(atlas.allocate_coverage(GlyphKey::new(1, 16.0, 0, false, 1), 12, 12, &mut evicted).is_some());
-        assert!(atlas.allocate_coverage(GlyphKey::new(1, 16.0, 1, false, 1), 12, 12, &mut evicted).is_some());
-        assert!(atlas.allocate_color(GlyphKey::new(2, 16.0, 0, false, 1), 16, 16, &mut evicted).is_some());
-        assert!(atlas.allocate_color(GlyphKey::new(3, 16.0, 0, true, 1), 32, 32, &mut evicted).is_some());
+        assert!(atlas
+            .allocate_coverage(GlyphKey::new(1, 16.0, 0, false, 1), 12, 12, &mut evicted)
+            .is_some());
+        assert!(atlas
+            .allocate_coverage(GlyphKey::new(1, 16.0, 1, false, 1), 12, 12, &mut evicted)
+            .is_some());
+        assert!(atlas
+            .allocate_color(GlyphKey::new(2, 16.0, 0, false, 1), 16, 16, &mut evicted)
+            .is_some());
+        assert!(atlas
+            .allocate_color(GlyphKey::new(3, 16.0, 0, true, 1), 32, 32, &mut evicted)
+            .is_some());
         assert_eq!(atlas.r8.len(), 2);
         assert_eq!(atlas.rgba.len(), 2);
         assert!(atlas.memory_bytes() > 0);
@@ -781,7 +809,9 @@ mod tests {
         let slot = a.allocate(key, 32, 32, &mut evicted).unwrap();
         assert!(a.remove(&key).is_some());
         assert_eq!(a.len(), 0);
-        let next = a.allocate(GlyphKey::new(4, 16.0, 0, false, 1), 32, 32, &mut evicted).unwrap();
+        let next = a
+            .allocate(GlyphKey::new(4, 16.0, 0, false, 1), 32, 32, &mut evicted)
+            .unwrap();
         assert_eq!((next.layer, next.x, next.y), (slot.layer, slot.x, slot.y));
     }
 

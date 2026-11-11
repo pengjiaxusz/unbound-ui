@@ -302,14 +302,8 @@ mod tests {
     #[test]
     fn a_pending_asset_never_blocks_the_frame() {
         assert_eq!(placeholder_for(AssetStatus::Ready), Placeholder::Real);
-        assert_eq!(
-            placeholder_for(AssetStatus::Pending),
-            Placeholder::Skeleton
-        );
-        assert_eq!(
-            placeholder_for(AssetStatus::Staged),
-            Placeholder::Skeleton
-        );
+        assert_eq!(placeholder_for(AssetStatus::Pending), Placeholder::Skeleton);
+        assert_eq!(placeholder_for(AssetStatus::Staged), Placeholder::Skeleton);
         assert_eq!(
             placeholder_for(AssetStatus::Failed),
             Placeholder::LowResolution

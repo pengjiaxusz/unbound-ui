@@ -189,7 +189,10 @@ mod tests {
         assert_eq!(reference.slot, 0);
         assert_eq!(reference.offset, 0);
         assert_eq!(reference.size, 5);
-        assert_eq!(ring.with(reference, |bytes| bytes.to_vec()), Some(b"hello".to_vec()));
+        assert_eq!(
+            ring.with(reference, |bytes| bytes.to_vec()),
+            Some(b"hello".to_vec())
+        );
     }
 
     #[test]

@@ -105,7 +105,11 @@ impl core::fmt::Display for GraphError {
                 texture.0
             ),
             Self::DoubleWrite { texture, pass } => {
-                write!(f, "texture {} is written twice, last by {pass:?}", texture.0)
+                write!(
+                    f,
+                    "texture {} is written twice, last by {pass:?}",
+                    texture.0
+                )
             }
             Self::Cycle => write!(f, "the passes form a cycle"),
             Self::UnknownTexture { texture, pass } => {
@@ -223,7 +227,9 @@ impl RenderGraph {
     /// The description of a texture.
     #[must_use]
     pub fn texture_desc(&self, texture: TextureId) -> Option<TextureDesc> {
-        self.textures.get(texture.0 as usize).map(|entry| entry.desc)
+        self.textures
+            .get(texture.0 as usize)
+            .map(|entry| entry.desc)
     }
 
     /// Compile the graph.
@@ -237,7 +243,10 @@ impl RenderGraph {
         // Order the passes by their data dependencies: a pass runs after every
         // pass that writes something it reads.
         let order = self.topological_order()?;
-        let mut ordered: Vec<Pass> = order.iter().map(|index| self.passes[*index].clone()).collect();
+        let mut ordered: Vec<Pass> = order
+            .iter()
+            .map(|index| self.passes[*index].clone())
+            .collect();
 
         // Validate the write/read pairs and compute the lifetimes.
         let mut written: HashMap<TextureId, String> = HashMap::new();
@@ -371,19 +380,14 @@ mod tests {
         let scratch = graph.add_texture(desc(960, 540), TextureRole::Transient);
         let blurred = graph.add_texture(desc(960, 540), TextureRole::Transient);
         let composed = graph.add_texture(desc(1920, 1080), TextureRole::External);
+        graph.add_pass("copy", PassKind::CopyBackdrop, &[swapchain], &[scratch]);
         graph.add_pass(
-            "copy",
-            PassKind::CopyBackdrop,
-            &[swapchain],
+            "blur",
+            PassKind::Blur { radius: 24 },
             &[scratch],
-        );
-        graph.add_pass("blur", PassKind::Blur { radius: 24 }, &[scratch], &[blurred]);
-        graph.add_pass(
-            "composite",
-            PassKind::Composite,
             &[blurred],
-            &[composed],
         );
+        graph.add_pass("composite", PassKind::Composite, &[blurred], &[composed]);
         graph.add_pass("present", PassKind::Present, &[composed], &[swapchain]);
         graph
     }
@@ -392,7 +396,11 @@ mod tests {
     fn a_frosted_graph_compiles_into_a_sane_order() {
         let graph = frosted_graph();
         let compiled = graph.compile().unwrap();
-        let names: Vec<&str> = compiled.passes.iter().map(|pass| pass.name.as_str()).collect();
+        let names: Vec<&str> = compiled
+            .passes
+            .iter()
+            .map(|pass| pass.name.as_str())
+            .collect();
         assert_eq!(names, vec!["copy", "blur", "composite", "present"]);
     }
 
@@ -463,7 +471,11 @@ mod tests {
         graph.add_pass("second", PassKind::Blur { radius: 4 }, &[a], &[b]);
         graph.add_pass("first", PassKind::Blur { radius: 4 }, &[], &[a]);
         let compiled = graph.compile().unwrap();
-        let names: Vec<&str> = compiled.passes.iter().map(|pass| pass.name.as_str()).collect();
+        let names: Vec<&str> = compiled
+            .passes
+            .iter()
+            .map(|pass| pass.name.as_str())
+            .collect();
         assert_eq!(names, vec!["first", "second"]);
     }
 }

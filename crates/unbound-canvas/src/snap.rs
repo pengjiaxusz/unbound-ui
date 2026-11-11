@@ -127,7 +127,8 @@ impl SnapResult {
 
     fn push_guide(&mut self, guide: SnapGuide) {
         for existing in &mut self.guides {
-            if existing.axis == guide.axis && (existing.coordinate - guide.coordinate).abs() < 0.01 {
+            if existing.axis == guide.axis && (existing.coordinate - guide.coordinate).abs() < 0.01
+            {
                 existing.start = existing.start.min(guide.start);
                 existing.end = existing.end.max(guide.end);
                 return;
@@ -237,11 +238,10 @@ impl Snapper {
     /// Solve against an explicit candidate list (headless harness and tests).
     pub fn snap(&mut self, moving: Rect, others: &[Rect], zoom: f32) -> &SnapResult {
         self.candidates.clear();
-        self.candidates
-            .extend(others.iter().map(|rect| Candidate {
-                rect: *rect,
-                score: 0.0,
-            }));
+        self.candidates.extend(others.iter().map(|rect| Candidate {
+            rect: *rect,
+            score: 0.0,
+        }));
         self.rank(moving, zoom);
         self.solve(moving, zoom)
     }
@@ -350,12 +350,7 @@ impl Snapper {
     }
 
     /// Nearest edge to any of `values`, within `threshold`.
-    fn best_axis(
-        &self,
-        values: [f32; 3],
-        kinds: [SnapKind; 3],
-        threshold: f32,
-    ) -> Option<Hit> {
+    fn best_axis(&self, values: [f32; 3], kinds: [SnapKind; 3], threshold: f32) -> Option<Hit> {
         let table: &[Edge] = if kinds[0].is_x() {
             &self.edges_x
         } else {
@@ -591,10 +586,7 @@ mod tests {
     fn equal_spacing_produces_a_third_slot() {
         let mut s = Snapper::new(SnapConfig::default());
         // Two 100 px boxes with a 40 px gap: 0..100 and 140..240.
-        let others = [
-            rect(0.0, 0.0, 100.0, 100.0),
-            rect(140.0, 0.0, 100.0, 100.0),
-        ];
+        let others = [rect(0.0, 0.0, 100.0, 100.0), rect(140.0, 0.0, 100.0, 100.0)];
         // The third box is 3 px away from the ideal slot at 280.
         let moving = rect(283.0, 0.0, 100.0, 100.0);
         let r = s.snap(moving, &others, 1.0);
@@ -608,10 +600,7 @@ mod tests {
             equal_spacing: false,
             ..SnapConfig::default()
         });
-        let others = [
-            rect(0.0, 0.0, 100.0, 100.0),
-            rect(140.0, 0.0, 100.0, 100.0),
-        ];
+        let others = [rect(0.0, 0.0, 100.0, 100.0), rect(140.0, 0.0, 100.0, 100.0)];
         // 280 is exactly the spacing slot, but the feature is off, and no edge
         // is within 5 px.
         let moving = rect(283.0, 0.0, 100.0, 100.0);
@@ -641,7 +630,11 @@ mod tests {
         let moving = rect(102.0, 300.0, 20.0, 20.0);
         let r = s.snap(moving, &others, 1.0);
         let guides: Vec<_> = r.guides.iter().filter(|g| g.axis == Axis::X).collect();
-        assert_eq!(guides.len(), 1, "same coordinate must collapse to one guide");
+        assert_eq!(
+            guides.len(),
+            1,
+            "same coordinate must collapse to one guide"
+        );
         // The surviving guide spans from the first reference to the dragged box.
         assert!(guides[0].start <= 0.0 && guides[0].end >= 320.0);
     }

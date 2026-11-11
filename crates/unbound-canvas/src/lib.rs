@@ -17,8 +17,6 @@ pub mod snap;
 pub mod undo;
 
 pub use quadtree::{Element, LooseQuadtree, QueryStats, MAX_DEPTH};
-pub use select::{
-    Handle, HandleDrag, Marquee, Modifiers, Selection, SelectionMode, Transform2,
-};
+pub use select::{Handle, HandleDrag, Marquee, Modifiers, Selection, SelectionMode, Transform2};
 pub use snap::{Axis, SnapConfig, SnapGuide, SnapKind, SnapResult, Snapper};
 pub use undo::{Edit, Transaction, TransactionKind, UndoStack};

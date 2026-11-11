@@ -377,12 +377,14 @@ impl AtlasSet {
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(atlas.image())
-                .subresource_range(vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(upload.layer)
-                    .layer_count(1))];
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(1)
+                        .base_array_layer(upload.layer)
+                        .layer_count(1),
+                )];
             gpu.device.cmd_pipeline_barrier2(
                 cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&barrier),
@@ -397,11 +399,13 @@ impl AtlasSet {
                     .buffer_offset(0)
                     .buffer_row_length(0)
                     .buffer_image_height(0)
-                    .image_subresource(vk::ImageSubresourceLayers::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .mip_level(0)
-                        .base_array_layer(upload.layer)
-                        .layer_count(1))
+                    .image_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .mip_level(0)
+                            .base_array_layer(upload.layer)
+                            .layer_count(1),
+                    )
                     .image_offset(vk::Offset3D {
                         x: upload.x as i32,
                         y: upload.y as i32,
@@ -425,12 +429,14 @@ impl AtlasSet {
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(atlas.image())
-                .subresource_range(vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(upload.layer)
-                    .layer_count(1))];
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(1)
+                        .base_array_layer(upload.layer)
+                        .layer_count(1),
+                )];
             gpu.device.cmd_pipeline_barrier2(
                 cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&to_read),
@@ -439,10 +445,8 @@ impl AtlasSet {
         gpu.end_single_time(cmd)?;
 
         // The layer is now readable by the shader.
-        self.get(upload.kind).set_layout(
-            upload.layer,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
+        self.get(upload.kind)
+            .set_layout(upload.layer, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
 
         // The staging buffer is dead once the copy has retired.
         // SAFETY: the copy already waited for the queue to go idle.
@@ -497,12 +501,14 @@ impl AtlasSet {
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(atlas.image())
-                .subresource_range(vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(layer)
-                    .layer_count(1))];
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(1)
+                        .base_array_layer(layer)
+                        .layer_count(1),
+                )];
             gpu.device.cmd_pipeline_barrier2(
                 cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&barrier),
@@ -516,11 +522,13 @@ impl AtlasSet {
                     .buffer_offset(0)
                     .buffer_row_length(0)
                     .buffer_image_height(0)
-                    .image_subresource(vk::ImageSubresourceLayers::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .mip_level(0)
-                        .base_array_layer(layer)
-                        .layer_count(1))
+                    .image_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .mip_level(0)
+                            .base_array_layer(layer)
+                            .layer_count(1),
+                    )
                     .image_offset(vk::Offset3D {
                         x: x as i32,
                         y: y as i32,
@@ -543,19 +551,22 @@ impl AtlasSet {
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(atlas.image())
-                .subresource_range(vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(layer)
-                    .layer_count(1))];
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(1)
+                        .base_array_layer(layer)
+                        .layer_count(1),
+                )];
             gpu.device.cmd_pipeline_barrier2(
                 cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&to_read),
             );
         }
         gpu.end_single_time(cmd)?;
-        self.get(kind).set_layout(layer, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        self.get(kind)
+            .set_layout(layer, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
 
         let mut out = vec![0u8; size as usize];
         // SAFETY: the copy has retired; the staging buffer is host visible.

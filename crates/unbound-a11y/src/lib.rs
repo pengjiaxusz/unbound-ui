@@ -208,7 +208,10 @@ impl A11yNode {
     pub fn to_accesskit(&self, children: &[u64]) -> Node {
         let mut node = Node::new(self.role);
         node.set_bounds(accesskit::Rect::from_origin_size(
-            accesskit::Point::new(f64::from(self.bounds.origin.x), f64::from(self.bounds.origin.y)),
+            accesskit::Point::new(
+                f64::from(self.bounds.origin.x),
+                f64::from(self.bounds.origin.y),
+            ),
             accesskit::Size::new(
                 f64::from(self.bounds.size.x.max(0.0)),
                 f64::from(self.bounds.size.y.max(0.0)),
@@ -528,18 +531,27 @@ mod tests {
 
     fn tree() -> Semantics {
         let mut s = Semantics::new(1);
-        s.upsert(1, A11yNode::new(Role::Window, "Demo", rect(0.0, 0.0, 800.0, 600.0)));
+        s.upsert(
+            1,
+            A11yNode::new(Role::Window, "Demo", rect(0.0, 0.0, 800.0, 600.0)),
+        );
         s
     }
 
     #[test]
     fn the_first_update_is_a_full_snapshot() {
         let mut s = tree();
-        s.upsert(2, A11yNode::new(Role::Button, "Save", rect(10.0, 10.0, 80.0, 30.0)).clickable());
+        s.upsert(
+            2,
+            A11yNode::new(Role::Button, "Save", rect(10.0, 10.0, 80.0, 30.0)).clickable(),
+        );
         s.set_children(1, &[2]);
         let update = s.take_update().unwrap();
         assert_eq!(update.nodes.len(), 2);
-        assert!(update.tree.is_some(), "the first update must carry the tree");
+        assert!(
+            update.tree.is_some(),
+            "the first update must carry the tree"
+        );
         assert_eq!(update.focus, NodeId(1));
         let button = update.nodes.iter().find(|(id, _)| id.0 == 2).unwrap();
         assert_eq!(button.1.role(), Role::Button);
@@ -549,11 +561,17 @@ mod tests {
     #[test]
     fn a_second_update_only_carries_the_delta() {
         let mut s = tree();
-        s.upsert(2, A11yNode::new(Role::Button, "Save", rect(0.0, 0.0, 10.0, 10.0)));
+        s.upsert(
+            2,
+            A11yNode::new(Role::Button, "Save", rect(0.0, 0.0, 10.0, 10.0)),
+        );
         s.set_children(1, &[2]);
         s.take_update();
 
-        s.upsert(3, A11yNode::new(Role::Button, "Cancel", rect(20.0, 0.0, 10.0, 10.0)));
+        s.upsert(
+            3,
+            A11yNode::new(Role::Button, "Cancel", rect(20.0, 0.0, 10.0, 10.0)),
+        );
         s.set_children(1, &[2, 3]);
         let update = s.take_update().unwrap();
         let mut ids: Vec<u64> = update.nodes.iter().map(|(id, _)| id.0).collect();
@@ -565,7 +583,10 @@ mod tests {
     #[test]
     fn focus_is_echoed_even_when_nothing_else_changed() {
         let mut s = tree();
-        s.upsert(2, A11yNode::new(Role::Button, "Save", rect(0.0, 0.0, 10.0, 10.0)));
+        s.upsert(
+            2,
+            A11yNode::new(Role::Button, "Save", rect(0.0, 0.0, 10.0, 10.0)),
+        );
         s.set_children(1, &[2]);
         s.take_update();
         s.set_focus(2);
@@ -585,7 +606,10 @@ mod tests {
     #[test]
     fn a_removed_child_updates_its_parent() {
         let mut s = tree();
-        s.upsert(2, A11yNode::new(Role::Button, "Save", rect(0.0, 0.0, 10.0, 10.0)));
+        s.upsert(
+            2,
+            A11yNode::new(Role::Button, "Save", rect(0.0, 0.0, 10.0, 10.0)),
+        );
         s.set_children(1, &[2]);
         s.take_update();
         s.remove(2);
@@ -598,8 +622,14 @@ mod tests {
     #[test]
     fn removing_a_subtree_takes_the_descendants_with_it() {
         let mut s = tree();
-        s.upsert(2, A11yNode::new(Role::Group, "Panel", rect(0.0, 0.0, 10.0, 10.0)));
-        s.upsert(3, A11yNode::new(Role::Button, "Deep", rect(0.0, 0.0, 10.0, 10.0)));
+        s.upsert(
+            2,
+            A11yNode::new(Role::Group, "Panel", rect(0.0, 0.0, 10.0, 10.0)),
+        );
+        s.upsert(
+            3,
+            A11yNode::new(Role::Button, "Deep", rect(0.0, 0.0, 10.0, 10.0)),
+        );
         s.set_children(1, &[2]);
         s.set_children(2, &[3]);
         s.take_update();
@@ -613,7 +643,10 @@ mod tests {
     #[test]
     fn focus_falls_back_to_the_root_when_the_focused_node_dies() {
         let mut s = tree();
-        s.upsert(2, A11yNode::new(Role::Button, "Save", rect(0.0, 0.0, 10.0, 10.0)));
+        s.upsert(
+            2,
+            A11yNode::new(Role::Button, "Save", rect(0.0, 0.0, 10.0, 10.0)),
+        );
         s.set_children(1, &[2]);
         s.set_focus(2);
         s.remove(2);
@@ -662,8 +695,18 @@ mod tests {
     #[test]
     fn the_semantic_path_reads_root_first() {
         let mut s = tree();
-        s.upsert(2, A11yNode::new(Role::GenericContainer, "Toolbar", rect(0.0, 0.0, 10.0, 10.0)));
-        s.upsert(3, A11yNode::new(Role::Button, "Save", rect(0.0, 0.0, 10.0, 10.0)));
+        s.upsert(
+            2,
+            A11yNode::new(
+                Role::GenericContainer,
+                "Toolbar",
+                rect(0.0, 0.0, 10.0, 10.0),
+            ),
+        );
+        s.upsert(
+            3,
+            A11yNode::new(Role::Button, "Save", rect(0.0, 0.0, 10.0, 10.0)),
+        );
         s.set_children(1, &[2]);
         s.set_children(2, &[3]);
         assert_eq!(
@@ -675,7 +718,10 @@ mod tests {
     #[test]
     fn an_orphan_node_is_attached_to_the_root() {
         let mut s = tree();
-        s.upsert(9, A11yNode::new(Role::Button, "Loose", rect(0.0, 0.0, 1.0, 1.0)));
+        s.upsert(
+            9,
+            A11yNode::new(Role::Button, "Loose", rect(0.0, 0.0, 1.0, 1.0)),
+        );
         assert_eq!(s.parent_of(9), Some(1));
         assert_eq!(s.children_of(1), &[9]);
     }
@@ -683,9 +729,18 @@ mod tests {
     #[test]
     fn reparenting_keeps_the_parent_map_consistent() {
         let mut s = tree();
-        s.upsert(2, A11yNode::new(Role::GenericContainer, "A", rect(0.0, 0.0, 1.0, 1.0)));
-        s.upsert(3, A11yNode::new(Role::GenericContainer, "B", rect(0.0, 0.0, 1.0, 1.0)));
-        s.upsert(4, A11yNode::new(Role::Button, "X", rect(0.0, 0.0, 1.0, 1.0)));
+        s.upsert(
+            2,
+            A11yNode::new(Role::GenericContainer, "A", rect(0.0, 0.0, 1.0, 1.0)),
+        );
+        s.upsert(
+            3,
+            A11yNode::new(Role::GenericContainer, "B", rect(0.0, 0.0, 1.0, 1.0)),
+        );
+        s.upsert(
+            4,
+            A11yNode::new(Role::Button, "X", rect(0.0, 0.0, 1.0, 1.0)),
+        );
         s.set_children(2, &[4]);
         assert_eq!(s.parent_of(4), Some(2));
         s.set_children(3, &[4]);
@@ -699,7 +754,10 @@ mod tests {
         let mut s = tree();
         let ids: Vec<u64> = (10..1010).collect();
         for id in &ids {
-            s.upsert(*id, A11yNode::new(Role::Button, "row", rect(0.0, 0.0, 10.0, 10.0)));
+            s.upsert(
+                *id,
+                A11yNode::new(Role::Button, "row", rect(0.0, 0.0, 10.0, 10.0)),
+            );
         }
         s.set_children(1, &ids);
         s.take_update();

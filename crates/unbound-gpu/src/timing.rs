@@ -61,8 +61,8 @@ impl TimestampScope {
         let info = vk::QueryPoolCreateInfo::default()
             .query_type(vk::QueryType::TIMESTAMP)
             .query_count(count);
-        let pool = unsafe { gpu.device.create_query_pool(&info, None) }
-            .map_err(GpuError::Vulkan)?;
+        let pool =
+            unsafe { gpu.device.create_query_pool(&info, None) }.map_err(GpuError::Vulkan)?;
         Ok(Self {
             pool,
             count,
@@ -114,7 +114,8 @@ impl TimestampScope {
         // SAFETY: the caller guarantees the command buffer is recording and
         // belongs to `gpu`.
         unsafe {
-            gpu.device.cmd_reset_query_pool(cmd, self.pool, 0, self.count);
+            gpu.device
+                .cmd_reset_query_pool(cmd, self.pool, 0, self.count);
         }
     }
 
@@ -149,7 +150,14 @@ impl TimestampScope {
     /// `gpu`.
     pub unsafe fn write(&self, gpu: &Gpu, command_buffer: vk::CommandBuffer, index: u32) {
         // SAFETY: the caller guarantees the command buffer is recording.
-        unsafe { self.write_at(gpu, command_buffer, index, vk::PipelineStageFlags::ALL_COMMANDS) };
+        unsafe {
+            self.write_at(
+                gpu,
+                command_buffer,
+                index,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+            )
+        };
     }
 
     /// Read the timestamps back.

@@ -84,7 +84,8 @@ impl SdfPipeline {
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::TRANSFER_SRC;
-            let coverage = gpu.create_buffer(texels, bda, MemoryKind::HostVisible, "sdf-coverage")?;
+            let coverage =
+                gpu.create_buffer(texels, bda, MemoryKind::HostVisible, "sdf-coverage")?;
             let temp = gpu.create_buffer(texels * 8, bda, MemoryKind::DeviceLocal, "sdf-temp")?;
             let output = gpu.create_buffer(texels * 4, bda, MemoryKind::DeviceLocal, "sdf-out")?;
             let staging = gpu.create_buffer(
@@ -179,11 +180,8 @@ impl SdfPipeline {
                 ..Default::default()
             };
 
-            gpu.device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                self.pipeline,
-            );
+            gpu.device
+                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.pipeline);
 
             // pass 0: horizontal, one invocation per row.
             let mut pc = PushConstants { aux: 0, ..base };
@@ -216,11 +214,8 @@ impl SdfPipeline {
             // the texel count divided by 64.
             pc.aux = 2;
             let groups = (width * height).div_ceil(64);
-            gpu.device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                self.pack_pipeline,
-            );
+            gpu.device
+                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.pack_pipeline);
             gpu.device.cmd_push_constants(
                 cmd,
                 self.layout,
@@ -359,7 +354,9 @@ mod tests {
                 coverage[y * 16 + x] = 255;
             }
         }
-        let field = sdf.generate(&gpu, &coverage, 16, 16, 4.0).expect("generate");
+        let field = sdf
+            .generate(&gpu, &coverage, 16, 16, 4.0)
+            .expect("generate");
         assert_eq!(field.len(), 16 * 16 * 4);
 
         // Encoding matches `uber.frag`: > 0.5 inside, < 0.5 outside, 0.5 on the

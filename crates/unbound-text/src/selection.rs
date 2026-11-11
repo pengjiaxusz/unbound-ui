@@ -168,30 +168,21 @@ mod tests {
 
     #[test]
     fn a_wrapped_selection_with_uneven_spans_keeps_two_slots() {
-        let lines = [
-            rect(0.0, 0.0, 200.0, 20.0),
-            rect(0.0, 20.0, 80.0, 20.0),
-        ];
+        let lines = [rect(0.0, 0.0, 200.0, 20.0), rect(0.0, 20.0, 80.0, 20.0)];
         let slots = merge_line_rects(&lines, 4.0);
         assert_eq!(slots.len(), 2, "an L-shape must not become one rectangle");
     }
 
     #[test]
     fn a_gap_splits_the_run() {
-        let lines = [
-            rect(0.0, 0.0, 100.0, 20.0),
-            rect(0.0, 200.0, 100.0, 20.0),
-        ];
+        let lines = [rect(0.0, 0.0, 100.0, 20.0), rect(0.0, 200.0, 100.0, 20.0)];
         let slots = merge_line_rects(&lines, 4.0);
         assert_eq!(slots.len(), 2, "far apart lines must not merge");
     }
 
     #[test]
     fn non_overlapping_columns_do_not_merge() {
-        let lines = [
-            rect(0.0, 0.0, 40.0, 20.0),
-            rect(200.0, 20.0, 40.0, 20.0),
-        ];
+        let lines = [rect(0.0, 0.0, 40.0, 20.0), rect(200.0, 20.0, 40.0, 20.0)];
         let slots = merge_line_rects(&lines, 4.0);
         assert_eq!(slots.len(), 2);
     }

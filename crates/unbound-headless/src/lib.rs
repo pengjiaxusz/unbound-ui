@@ -264,7 +264,11 @@ mod tests {
     #[should_panic(expected = "AssertNoNaNOrInf")]
     fn assert_clean_reports_the_rule_name() {
         let mut b = FrameBuilder::new(rect(0.0, 0.0, 100.0, 100.0));
-        b.open(NodeKind::Container, rect(f32::INFINITY, 0.0, 1.0, 1.0), "Bad");
+        b.open(
+            NodeKind::Container,
+            rect(f32::INFINITY, 0.0, 1.0, 1.0),
+            "Bad",
+        );
         b.close();
         Harness::assert_clean(&b.build());
     }

@@ -75,7 +75,12 @@ impl ResolvedGlyph {
     /// Quad in text-local space.
     #[must_use]
     pub fn quad(&self, pen: Vec2) -> Rect {
-        Rect::new(pen.x + self.bearing.x, pen.y + self.bearing.y, self.size.x, self.size.y)
+        Rect::new(
+            pen.x + self.bearing.x,
+            pen.y + self.bearing.y,
+            self.size.x,
+            self.size.y,
+        )
     }
 }
 
@@ -283,7 +288,9 @@ impl GlyphCache {
         // entry has to go too, or it would point at the recycled rectangle.
         let mut evicted = core::mem::take(&mut self.evicted);
         let mut resolved = if is_color || sdf_mode {
-            let slot = self.atlas.allocate_color(key, w + pad2, h + pad2, &mut evicted)?;
+            let slot = self
+                .atlas
+                .allocate_color(key, w + pad2, h + pad2, &mut evicted)?;
             let data = if sdf_mode {
                 let field = sdf::from_coverage(&image.data, w, h, self.sdf_spread);
                 pad_field(&field.data, w, h, pad)
@@ -426,8 +433,7 @@ fn pad_rgba(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
     for y in 0..h {
         let dst = (((y + pad) * pw + pad) * 4) as usize;
         let src_off = (y * w * 4) as usize;
-        out[dst..dst + (w * 4) as usize]
-            .copy_from_slice(&src[src_off..src_off + (w * 4) as usize]);
+        out[dst..dst + (w * 4) as usize].copy_from_slice(&src[src_off..src_off + (w * 4) as usize]);
     }
     out
 }
@@ -447,8 +453,7 @@ fn pad_field(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
     for y in 0..h {
         let dst = (((y + pad) * pw + pad) * 4) as usize;
         let src_off = (y * w * 4) as usize;
-        out[dst..dst + (w * 4) as usize]
-            .copy_from_slice(&src[src_off..src_off + (w * 4) as usize]);
+        out[dst..dst + (w * 4) as usize].copy_from_slice(&src[src_off..src_off + (w * 4) as usize]);
     }
     out
 }
@@ -460,7 +465,7 @@ fn pad_field(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::atlas::AtlasConfig;
-    use crate::shaping::{TextStyle};
+    use crate::shaping::TextStyle;
 
     fn engine() -> TextEngine {
         TextEngine::new()
@@ -484,7 +489,10 @@ mod tests {
         let shaped = e.shape("Ag", &style);
         let quads = cache.quads_for(&mut e, &shaped, Vec2::ZERO, 400, false);
         assert_eq!(quads.len(), 2, "both glyphs must produce a quad");
-        assert!(cache.pending_update_bytes() > 0, "rasterising must queue uploads");
+        assert!(
+            cache.pending_update_bytes() > 0,
+            "rasterising must queue uploads"
+        );
         let updates = cache.take_updates();
         assert_eq!(updates.len(), 2);
         for u in &updates {

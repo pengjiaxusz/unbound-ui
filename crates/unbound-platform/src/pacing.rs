@@ -243,7 +243,10 @@ mod tests {
     fn the_pacer_waits_for_the_refresh_interval() {
         let mut pacer = FramePacer::at_120_hz();
         let now = Instant::now();
-        assert!(pacer.should_render(now), "the first frame is due immediately");
+        assert!(
+            pacer.should_render(now),
+            "the first frame is due immediately"
+        );
         pacer.on_present(now);
         assert!(!pacer.should_render(now + Duration::from_millis(2)));
         assert!(pacer.should_render(now + Duration::from_millis(9)));

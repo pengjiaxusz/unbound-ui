@@ -19,12 +19,12 @@
 use std::time::Instant;
 
 use accesskit::Role;
+use unbound_a11y::{A11yActions, A11yNode, Semantics};
 use unbound_abi::action::{ActionKind, RawAction};
 use unbound_abi::desc::RawNodeDesc;
-use unbound_a11y::{A11yActions, A11yNode, Semantics};
-use unbound_canvas::{LooseQuadtree, Selection, SelectionMode, SnapConfig, Snapper, UndoStack};
-use unbound_canvas::{Handle, HandleDrag, Marquee, Modifiers, TransactionKind};
 use unbound_asset::{AssetId, AssetKind, AssetPipeline, PipelineConfig};
+use unbound_canvas::{Handle, HandleDrag, Marquee, Modifiers, TransactionKind};
+use unbound_canvas::{LooseQuadtree, Selection, SelectionMode, SnapConfig, Snapper, UndoStack};
 use unbound_gpu::{
     BlendMode, Camera, Gpu, GpuConfig, GpuPrimitiveInstance, GpuTransform, PrimFlags, PrimType,
     Renderer, SceneUpload, SubElement, CLIP_NONE,
@@ -40,7 +40,10 @@ use unbound_platform::{Extent, LatencyTracker, ResizeTracker};
 use unbound_theme::{ThemeKind, ThemeState};
 use unbound_world::{NodeId, UiWorld};
 
-const VIEWPORT: Vec2 = Vec2 { x: 1280.0, y: 720.0 };
+const VIEWPORT: Vec2 = Vec2 {
+    x: 1280.0,
+    y: 720.0,
+};
 const ROWS: usize = 200;
 
 fn insert(world: &mut UiWorld, parent: NodeId, desc: RawNodeDesc) -> NodeId {
@@ -126,9 +129,17 @@ fn main() {
     // ---- 1. World -----------------------------------------------------------
     let mut world = UiWorld::new();
     let root = world.root();
-    let window = insert(&mut world, root, RawNodeDesc::text().size(VIEWPORT.x, VIEWPORT.y).column());
+    let window = insert(
+        &mut world,
+        root,
+        RawNodeDesc::text().size(VIEWPORT.x, VIEWPORT.y).column(),
+    );
 
-    let toolbar = insert(&mut world, window, RawNodeDesc::text().size(VIEWPORT.x, 48.0).row());
+    let toolbar = insert(
+        &mut world,
+        window,
+        RawNodeDesc::text().size(VIEWPORT.x, 48.0).row(),
+    );
     let mut buttons = Vec::new();
     for (index, label) in ["New", "Open", "Save", "Export"].into_iter().enumerate() {
         let mut desc = RawNodeDesc::text().size(96.0, 32.0).row();
@@ -138,14 +149,15 @@ fn main() {
         // The action target is a stable index into the button table, not the
         // SlotMap key: the reducer must not depend on a key that a removal can
         // invalidate.
-        world.bind_action(
-            button,
-            RawAction::new(ActionKind::Press, index as u32),
-        );
+        world.bind_action(button, RawAction::new(ActionKind::Press, index as u32));
         buttons.push(button);
     }
 
-    let list = insert(&mut world, window, RawNodeDesc::text().size(VIEWPORT.x, 600.0).column());
+    let list = insert(
+        &mut world,
+        window,
+        RawNodeDesc::text().size(VIEWPORT.x, 600.0).column(),
+    );
     let mut rows = Vec::new();
     for index in 0..ROWS {
         let mut desc = RawNodeDesc::text().size(VIEWPORT.x, 32.0).row();
@@ -200,7 +212,9 @@ fn main() {
     let mut router = Router::default();
     router.set_regions(regions);
     let probe = Vec2::new(600.0, 200.0);
-    let hovered = router.pointer_down(probe, 0.0).and_then(|event| event.target());
+    let hovered = router
+        .pointer_down(probe, 0.0)
+        .and_then(|event| event.target());
     router.pointer_up(probe, 0.05);
 
     // ---- 5. Snapping --------------------------------------------------------
@@ -225,7 +239,10 @@ fn main() {
         selected_bounds.max(),
         24.0,
     );
-    let stretched = drag.update(selected_bounds.max() + Vec2::new(40.0, 20.0), Modifiers::NONE);
+    let stretched = drag.update(
+        selected_bounds.max() + Vec2::new(40.0, 20.0),
+        Modifiers::NONE,
+    );
 
     // ---- 7. Transactions ----------------------------------------------------
     let mut undo = UndoStack::new(64);
@@ -246,7 +263,11 @@ fn main() {
     let mut semantics = Semantics::new(1);
     semantics.upsert(
         1,
-        A11yNode::new(Role::Window, "Gallery", Rect::new(0.0, 0.0, VIEWPORT.x, VIEWPORT.y)),
+        A11yNode::new(
+            Role::Window,
+            "Gallery",
+            Rect::new(0.0, 0.0, VIEWPORT.x, VIEWPORT.y),
+        ),
     );
     let mut child_ids = Vec::new();
     for (index, button) in buttons.iter().enumerate() {
@@ -293,7 +314,10 @@ fn main() {
     let light_primary = theme.lut().color(unbound_theme::Token::PRIMARY);
     let switch = theme.switch(ThemeKind::Dark);
     let dark_primary = theme.lut().color(unbound_theme::Token::PRIMARY);
-    assert!(!switch.relayout_required, "a theme switch must not re-layout");
+    assert!(
+        !switch.relayout_required,
+        "a theme switch must not re-layout"
+    );
     assert!(
         !switch.instance_reupload_required,
         "a theme switch must not re-upload instances"
@@ -320,7 +344,12 @@ fn main() {
         TextureRole::External,
     );
     graph.add_pass("copy", PassKind::CopyBackdrop, &[swapchain], &[scratch]);
-    graph.add_pass("blur", PassKind::Blur { radius: 24 }, &[scratch], &[blurred]);
+    graph.add_pass(
+        "blur",
+        PassKind::Blur { radius: 24 },
+        &[scratch],
+        &[blurred],
+    );
     graph.add_pass("composite", PassKind::Composite, &[blurred], &[composed]);
     graph.add_pass("present", PassKind::Present, &[composed], &[swapchain]);
     let compiled = graph.compile().expect("the graph compiles");
@@ -344,11 +373,7 @@ fn main() {
     let submit_started = Instant::now();
     for index in 0..8u32 {
         assets
-            .request(
-                AssetId(index),
-                AssetKind::Raw,
-                vec![index as u8; 1024],
-            )
+            .request(AssetId(index), AssetKind::Raw, vec![index as u8; 1024])
             .expect("the request is queued");
     }
     let submit_us = submit_started.elapsed().as_secs_f64() * 1e6;
@@ -392,7 +417,11 @@ fn main() {
     // ---- Report -------------------------------------------------------------
     println!("Unbound UI — gallery");
     println!("====================");
-    println!("world      : {} nodes, {} children under the list", world.len(), rows.len());
+    println!(
+        "world      : {} nodes, {} children under the list",
+        world.len(),
+        rows.len()
+    );
     println!(
         "layout     : {} nodes in {layout_us:.1}µs ({} boundaries), single row re-solve {boundary_us:.1}µs",
         stats.nodes_visited, stats.boundaries_solved
@@ -401,7 +430,10 @@ fn main() {
         "spatial    : {} of {ROWS} rows visible, cull {cull_us:.1}µs",
         visible.len()
     );
-    println!("picking    : probe {probe:?} -> {hovered:?}, cursor {:?}", router.cursor());
+    println!(
+        "picking    : probe {probe:?} -> {hovered:?}, cursor {:?}",
+        router.cursor()
+    );
     println!(
         "snapping   : offset {snap_offset:?}, {guide_count} guides, {} candidates",
         snapper.retained_candidates()
@@ -417,7 +449,11 @@ fn main() {
     );
     println!(
         "semantics  : {initial_nodes} nodes in the first update, second update {}",
-        if second_update.is_some() { "present" } else { "suppressed" }
+        if second_update.is_some() {
+            "present"
+        } else {
+            "suppressed"
+        }
     );
     println!(
         "headless   : {} — {}",
@@ -452,7 +488,10 @@ fn main() {
     } else {
         println!("gpu        : skipped (no Vulkan device)");
     }
-    println!("total      : {:.1}µs", started.elapsed().as_secs_f64() * 1e6);
+    println!(
+        "total      : {:.1}µs",
+        started.elapsed().as_secs_f64() * 1e6
+    );
 
     if with_kpi {
         println!();
@@ -470,5 +509,8 @@ fn main() {
     );
     assert_eq!(pool_creations, 1, "a steady-state frame must not allocate");
     assert_eq!(committed, 1);
-    assert_eq!(second_update, None, "an idle frame must not emit a semantic update");
+    assert_eq!(
+        second_update, None,
+        "an idle frame must not emit a semantic update"
+    );
 }

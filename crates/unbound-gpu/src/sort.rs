@@ -237,13 +237,19 @@ mod tests {
     #[test]
     fn with_z_preserves_the_other_fields() {
         let k = SortKey::new(3, 77, 2, 10, 4).with_z(999);
-        assert_eq!((k.layer(), k.barrier(), k.variant(), k.z(), k.sub()), (3, 77, 2, 999, 4));
+        assert_eq!(
+            (k.layer(), k.barrier(), k.variant(), k.z(), k.sub()),
+            (3, 77, 2, 999, 4)
+        );
     }
 
     #[test]
     fn with_barrier_preserves_the_other_fields() {
         let k = SortKey::new(3, 1, 2, 10, 4).with_barrier(0xbeef);
-        assert_eq!((k.layer(), k.barrier(), k.variant(), k.z(), k.sub()), (3, 0xbeef, 2, 10, 4));
+        assert_eq!(
+            (k.layer(), k.barrier(), k.variant(), k.z(), k.sub()),
+            (3, 0xbeef, 2, 10, 4)
+        );
     }
 
     #[test]
@@ -330,7 +336,11 @@ mod tests {
         // Three UI panels, each with 100 primitives, plus 50 overlay items.
         for panel in 0..3u32 {
             for i in 0..100u32 {
-                keys.push(SortKey::simple(PassLayer::Ui, panel * 1000 + i, SubElement::Background));
+                keys.push(SortKey::simple(
+                    PassLayer::Ui,
+                    panel * 1000 + i,
+                    SubElement::Background,
+                ));
             }
         }
         for i in 0..50u32 {

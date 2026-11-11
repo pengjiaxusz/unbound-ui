@@ -126,7 +126,11 @@ impl PassLayer {
     #[must_use]
     pub const fn portal(depth: u8) -> Self {
         // `depth` is clamped to 254 so 255 stays reserved for diagnostics.
-        if depth > 254 { Self::Debug } else { Self::from_u8(2u8.saturating_add(depth)) }
+        if depth > 254 {
+            Self::Debug
+        } else {
+            Self::from_u8(2u8.saturating_add(depth))
+        }
     }
 
     #[must_use]
@@ -728,7 +732,10 @@ mod tests {
         assert_eq!(bytes.len(), 16 * PRIMITIVE_STRIDE);
         // Stride check: instance 3's local_pos.x sits at 3*64 + 8.
         let off = 3 * PRIMITIVE_STRIDE + 8;
-        assert_eq!(f32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()), 3.0);
+        assert_eq!(
+            f32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()),
+            3.0
+        );
     }
 
     #[test]
@@ -753,7 +760,10 @@ mod tests {
 
     #[test]
     fn opacity_clamps() {
-        assert_eq!(GpuPrimitiveInstance::pack_z_opacity(0, 4.0) & 0xffff, 0xffff);
+        assert_eq!(
+            GpuPrimitiveInstance::pack_z_opacity(0, 4.0) & 0xffff,
+            0xffff
+        );
         assert_eq!(GpuPrimitiveInstance::pack_z_opacity(0, -1.0) & 0xffff, 0);
     }
 

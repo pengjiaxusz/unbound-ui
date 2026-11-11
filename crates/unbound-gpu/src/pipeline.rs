@@ -309,9 +309,9 @@ impl Pipelines {
             .attachments(&additive_blends);
 
         let create_graphics = |stages: &[vk::PipelineShaderStageCreateInfo],
-                                   depth: &vk::PipelineDepthStencilStateCreateInfo,
-                                   blend: &vk::PipelineColorBlendStateCreateInfo,
-                                   rendering: &mut vk::PipelineRenderingCreateInfo|
+                               depth: &vk::PipelineDepthStencilStateCreateInfo,
+                               blend: &vk::PipelineColorBlendStateCreateInfo,
+                               rendering: &mut vk::PipelineRenderingCreateInfo|
          -> Result<vk::Pipeline, GpuError> {
             device
                 .create_graphics_pipelines(
@@ -509,12 +509,7 @@ impl Pipelines {
             .map(|layer| {
                 vk::DescriptorImageInfo::default()
                     .sampler(self.sampler)
-                    .image_view(
-                        atlases
-                            .r8
-                            .layer_view(layer)
-                            .unwrap_or(self.dummy_r8.view),
-                    )
+                    .image_view(atlases.r8.layer_view(layer).unwrap_or(self.dummy_r8.view))
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             })
             .collect();
@@ -613,7 +608,10 @@ unsafe fn create_dummy_texture(gpu: &Gpu, format: vk::Format) -> Result<DummyTex
     )?;
     let requirements = device.get_image_memory_requirements(image);
     let type_index = gpu
-        .memory_type_index_for_bits(requirements.memory_type_bits, crate::device::MemoryKind::DeviceLocal)
+        .memory_type_index_for_bits(
+            requirements.memory_type_bits,
+            crate::device::MemoryKind::DeviceLocal,
+        )
         .ok_or_else(|| GpuError::Allocation("no device-local memory type".into()))?;
     let memory = device.allocate_memory(
         &vk::MemoryAllocateInfo::default()

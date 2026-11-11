@@ -146,7 +146,9 @@ mod tests {
             encoder.set_depth(png::BitDepth::Eight);
             let mut writer = encoder.write_header().unwrap();
             writer
-                .write_image_data(&[255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255])
+                .write_image_data(&[
+                    255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+                ])
                 .unwrap();
         }
         bytes

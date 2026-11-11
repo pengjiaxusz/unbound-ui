@@ -215,11 +215,7 @@ fn measure_leaf(input: &LayoutInput, id: Option<NodeId>, world: &UiWorld) -> Lay
         .and_then(|id| world.get(id))
         .and_then(|n| n.measure)
         .unwrap_or(Vec2::ZERO);
-    let width = input
-        .known_dimensions
-        .width
-        .unwrap_or(intrinsic.x)
-        .max(0.0);
+    let width = input.known_dimensions.width.unwrap_or(intrinsic.x).max(0.0);
     let height = input
         .known_dimensions
         .height
@@ -530,10 +526,8 @@ fn solve_isolated(world: &UiWorld, root: NodeId, viewport: Vec2) -> Vec<(NodeId,
         return Vec::new();
     }
     let mut tree: TaffyTree<NodeId> = TaffyTree::new();
-    let mut created: FxHashMap<NodeId, taffy::NodeId> = FxHashMap::with_capacity_and_hasher(
-        order.len(),
-        Default::default(),
-    );
+    let mut created: FxHashMap<NodeId, taffy::NodeId> =
+        FxHashMap::with_capacity_and_hasher(order.len(), Default::default());
     for id in &order {
         let t = tree
             .new_leaf_with_context(style_for(world, *id), *id)
@@ -551,10 +545,9 @@ fn solve_isolated(world: &UiWorld, root: NodeId, viewport: Vec2) -> Vec<(NodeId,
     let _ = tree.compute_layout_with_measure(
         root_t,
         available(viewport),
-        |input: LayoutInput,
-         _node: taffy::NodeId,
-         ctx: Option<&mut NodeId>,
-         _style: &Style| measure_leaf(&input, ctx.map(|c| *c), world),
+        |input: LayoutInput, _node: taffy::NodeId, ctx: Option<&mut NodeId>, _style: &Style| {
+            measure_leaf(&input, ctx.map(|c| *c), world)
+        },
     );
     let mut out = Vec::with_capacity(order.len());
     for id in order {
@@ -582,10 +575,16 @@ mod tests {
         w.node_mut(root).desc.height = Dim::px(300.0);
         let card = w.insert(
             root,
-            RawNodeDesc::container().size(200.0, 100.0).flags(NodeFlags::CLIP),
+            RawNodeDesc::container()
+                .size(200.0, 100.0)
+                .flags(NodeFlags::CLIP),
             loc(),
         );
-        let label = w.insert(card, RawNodeDesc::text().flags(NodeFlags::MEASURE_TEXT), loc());
+        let label = w.insert(
+            card,
+            RawNodeDesc::text().flags(NodeFlags::MEASURE_TEXT),
+            loc(),
+        );
         w.node_mut(label).measure = Some(Vec2::new(80.0, 16.0));
         (w, root, card, label)
     }
@@ -676,7 +675,13 @@ mod tests {
         w.node_mut(root).desc.width = Dim::px(200.0);
         w.node_mut(root).desc.height = Dim::px(100.0);
         w.node_mut(root).desc.direction = unbound_abi::FlexDirection::Row as u8;
-        let half = w.insert(root, RawNodeDesc::container().width(Dim::percent(50.0)).height(Dim::px(10.0)), loc());
+        let half = w.insert(
+            root,
+            RawNodeDesc::container()
+                .width(Dim::percent(50.0))
+                .height(Dim::px(10.0)),
+            loc(),
+        );
         let mut engine = LayoutEngine::new();
         engine.solve(&mut w, root, Vec2::new(200.0, 100.0));
         assert_eq!(engine.rect(half).unwrap().size.x, 100.0);
@@ -717,7 +722,9 @@ mod tests {
         let a = w.insert(root, RawNodeDesc::container().size(10.0, 10.0), loc());
         let hidden = w.insert(
             root,
-            RawNodeDesc::container().size(10.0, 10.0).display(unbound_abi::Display::None),
+            RawNodeDesc::container()
+                .size(10.0, 10.0)
+                .display(unbound_abi::Display::None),
             loc(),
         );
         let mut engine = LayoutEngine::new();
@@ -736,7 +743,9 @@ mod tests {
             .map(|_| {
                 w.insert(
                     root,
-                    RawNodeDesc::container().size(100.0, 100.0).flags(NodeFlags::CLIP),
+                    RawNodeDesc::container()
+                        .size(100.0, 100.0)
+                        .flags(NodeFlags::CLIP),
                     loc(),
                 )
             })
@@ -779,7 +788,9 @@ mod tests {
             .map(|_| {
                 w.insert(
                     root,
-                    RawNodeDesc::container().size(120.0, 80.0).flags(NodeFlags::CLIP),
+                    RawNodeDesc::container()
+                        .size(120.0, 80.0)
+                        .flags(NodeFlags::CLIP),
                     loc(),
                 )
             })
@@ -795,11 +806,7 @@ mod tests {
 
         let mut parallel = LayoutEngine::new();
         parallel.sync(&w, root);
-        let stats = parallel.solve_boundaries(
-            &mut w,
-            &cards,
-            Vec2::new(800.0, 600.0),
-        );
+        let stats = parallel.solve_boundaries(&mut w, &cards, Vec2::new(800.0, 600.0));
         assert_eq!(stats.boundaries_solved, cards.len() as u32);
         for (card, want) in cards.iter().zip(expected) {
             let got = parallel.rect(*card).unwrap();
@@ -846,7 +853,11 @@ mod tests {
     fn tag_specific_style_is_stable() {
         let mut w = UiWorld::new();
         let root = w.root();
-        let t = w.insert(root, RawNodeDesc::text().flags(NodeFlags::MEASURE_TEXT), loc());
+        let t = w.insert(
+            root,
+            RawNodeDesc::text().flags(NodeFlags::MEASURE_TEXT),
+            loc(),
+        );
         let style = style_for(&w, t);
         assert_eq!(style.display, taffy::Display::Flex);
         assert_eq!(style.size.width, Dimension::auto());

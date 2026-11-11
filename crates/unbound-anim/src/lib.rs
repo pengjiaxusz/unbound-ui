@@ -608,7 +608,10 @@ mod tests {
         assert!(velocity_before.abs() > 1.0);
         a.animate(1, Channel::TranslateX, SpringPreset::Snappy, -100.0);
         let velocity_after = a.snapshot()[0].spring.velocity;
-        assert_eq!(velocity_before, velocity_after, "retarget must not reset velocity");
+        assert_eq!(
+            velocity_before, velocity_after,
+            "retarget must not reset velocity"
+        );
         assert_eq!(a.len(), 1, "retarget must not add a second animation");
     }
 
@@ -628,7 +631,12 @@ mod tests {
     fn many_animations_track_the_active_count() {
         let mut a = Animator::new();
         for i in 0..50u64 {
-            a.animate(i, Channel::TranslateY, SpringPreset::Gentle, 10.0 + i as f32);
+            a.animate(
+                i,
+                Channel::TranslateY,
+                SpringPreset::Gentle,
+                10.0 + i as f32,
+            );
         }
         a.step(1.0 / 120.0);
         assert_eq!(a.active_animations(), 50);
@@ -650,7 +658,11 @@ mod tests {
 
     #[test]
     fn bezier_endpoints_are_exact() {
-        for curve in [CubicBezier::EASE, CubicBezier::EASE_OUT, CubicBezier::LINEAR] {
+        for curve in [
+            CubicBezier::EASE,
+            CubicBezier::EASE_OUT,
+            CubicBezier::LINEAR,
+        ] {
             assert!((curve.sample(0.0)).abs() < 1e-4);
             assert!((curve.sample(1.0) - 1.0).abs() < 1e-4);
         }
@@ -688,7 +700,10 @@ mod tests {
     fn snapping_policy_follows_animation_state() {
         assert!(should_snap(false, true));
         assert!(!should_snap(true, true), "animating nodes must not snap");
-        assert!(!should_snap(false, false), "a static transform needs subpixel");
+        assert!(
+            !should_snap(false, false),
+            "a static transform needs subpixel"
+        );
     }
 
     #[test]

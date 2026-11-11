@@ -57,15 +57,9 @@ const FLAG_FREE: u32 = 1;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AllocError {
     /// No free block large enough after searching every bucket.
-    OutOfMemory {
-        request: u32,
-        largest_free: u32,
-    },
+    OutOfMemory { request: u32, largest_free: u32 },
     /// Request exceeds the arena capacity.
-    TooLarge {
-        request: u32,
-        capacity: u32,
-    },
+    TooLarge { request: u32, capacity: u32 },
     /// Alignment is not a power of two.
     InvalidAlignment(usize),
 }
@@ -81,7 +75,10 @@ impl core::fmt::Display for AllocError {
                 "TLSF out of memory: requested {request}B, largest free block {largest_free}B"
             ),
             Self::TooLarge { request, capacity } => {
-                write!(f, "TLSF request {request}B exceeds arena capacity {capacity}B")
+                write!(
+                    f,
+                    "TLSF request {request}B exceeds arena capacity {capacity}B"
+                )
             }
             Self::InvalidAlignment(a) => write!(f, "invalid alignment {a}"),
         }
@@ -464,7 +461,12 @@ impl Tlsf {
                 }
                 off += h.size;
             }
-            (block_count, free_block_count, free_bytes, largest_free(arena, &self.lists))
+            (
+                block_count,
+                free_block_count,
+                free_bytes,
+                largest_free(arena, &self.lists),
+            )
         };
         self.stats.block_count = block_count;
         self.stats.free_block_count = free_block_count;
@@ -505,8 +507,8 @@ impl Tlsf {
         // over-aligned payload always has room to be nudged forward.
         let align32 = align as u32;
         let slack = if align32 > HEADER_SIZE { align32 } else { 0 };
-        let total = align_up(size.saturating_add(HEADER_SIZE).saturating_add(slack), 64)
-            .max(MIN_BLOCK);
+        let total =
+            align_up(size.saturating_add(HEADER_SIZE).saturating_add(slack), 64).max(MIN_BLOCK);
 
         let result = {
             let Self { storage, lists, .. } = &mut *self;
@@ -678,7 +680,10 @@ impl Tlsf {
         let failed = self.stats.failed_allocations;
         {
             let Self {
-                storage, lists, stats, ..
+                storage,
+                lists,
+                stats,
+                ..
             } = &mut *self;
             let all: &mut [u8] = bytemuck::cast_slice_mut(storage);
             let arena = &mut all[..len as usize];
@@ -999,7 +1004,10 @@ mod tests {
         let mut size = MIN_BLOCK;
         while size < (1 << 28) {
             let m = mapping(size);
-            assert!(m >= prev, "mapping not monotonic at {size}: {m:?} < {prev:?}");
+            assert!(
+                m >= prev,
+                "mapping not monotonic at {size}: {m:?} < {prev:?}"
+            );
             prev = m;
             size *= 2;
         }

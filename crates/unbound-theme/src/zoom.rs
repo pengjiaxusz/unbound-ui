@@ -170,9 +170,7 @@ mod tests {
     fn conversions_round_trip() {
         let layers = ZoomLayers::new(1.5, 1.25, 3.0);
         assert!((layers.to_logical(layers.to_physical(37.0)) - 37.0).abs() < 1e-3);
-        assert!(
-            (layers.physical_to_world(layers.world_to_physical(12.5)) - 12.5).abs() < 1e-3
-        );
+        assert!((layers.physical_to_world(layers.world_to_physical(12.5)) - 12.5).abs() < 1e-3);
     }
 
     #[test]

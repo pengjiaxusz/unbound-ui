@@ -614,7 +614,11 @@ mod tests {
         let prim = p.allocate(64 * 1024).unwrap();
         let before = p.offset_of(prim).unwrap();
         let (after, bytes) = p.ensure_capacity(prim, 100, 64, 0).unwrap();
-        assert_eq!(before, p.offset_of(after).unwrap(), "the block must not move");
+        assert_eq!(
+            before,
+            p.offset_of(after).unwrap(),
+            "the block must not move"
+        );
         assert!(u64::from(bytes) >= 100 * 64);
     }
 

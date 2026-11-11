@@ -21,6 +21,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_debug_implementations)]
 
+pub mod atlas;
+pub mod curve;
 pub mod data;
 pub mod debug;
 pub mod device;
@@ -34,28 +36,29 @@ pub mod shader;
 pub mod sort;
 pub mod surface;
 pub mod swapchain;
-pub mod atlas;
-pub mod curve;
 pub mod timing;
 pub mod tlsf;
 
-pub use sdf::SdfPipeline;
-pub use debug::{is_device_lost, recover_with, RecoveryError, RecoveryPolicy, RenderDoc, ValidationCounter, VALIDATION};
-pub use frame::{Camera, FrameStats, Renderer, SceneUpload};
-pub use device::{Buffer, Gpu, GpuConfig, GpuError, GpuFeatures, MemoryKind, Timeline};
+pub use atlas::{AtlasKind, AtlasSet, AtlasTexture, AtlasUpload};
+pub use curve::{cubic_to_draws, CurveDraw};
 pub use data::{
     BlendMode, DrawIndirectCommand, FramePushConstants, GpuClipNode, GpuPayload,
     GpuPrimitiveInstance, GpuScatterPatch, GpuTransform, PassLayer, PrimFlags, PrimType,
     PushConstants, SortedEntry, SubElement, TransformFlags, CLIP_NONE, PRIMITIVE_STRIDE,
     TRANSFORM_ANIMATED_BIT,
 };
+pub use debug::{
+    is_device_lost, recover_with, RecoveryError, RecoveryPolicy, RenderDoc, ValidationCounter,
+    VALIDATION,
+};
+pub use device::{Buffer, Gpu, GpuConfig, GpuError, GpuFeatures, MemoryKind, Timeline};
+pub use frame::{Camera, FrameStats, Renderer, SceneUpload};
 pub use pool::{PersistentPool, PoolHandle, PoolStats, ScatterPatch};
 pub use quarantine::{EpochQuarantine, QuarantinedBlock};
 pub use ring::TransientRing;
+pub use sdf::SdfPipeline;
 pub use sort::SortKey;
-pub use swapchain::{is_supported, PresentConfig, PresentMode, ResizeBehaviour};
-pub use atlas::{AtlasKind, AtlasSet, AtlasTexture, AtlasUpload};
-pub use curve::{cubic_to_draws, CurveDraw};
 pub use surface::{Surface, Swapchain};
+pub use swapchain::{is_supported, PresentConfig, PresentMode, ResizeBehaviour};
 pub use timing::{FrameTiming, TimestampScope};
 pub use tlsf::{AllocError, Tlsf, TlsfStats, MIN_BLOCK};

@@ -156,7 +156,12 @@ impl Add for Color {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        Self::new(self.r + rhs.r, self.g + rhs.g, self.b + rhs.b, self.a + rhs.a)
+        Self::new(
+            self.r + rhs.r,
+            self.g + rhs.g,
+            self.b + rhs.b,
+            self.a + rhs.a,
+        )
     }
 }
 
@@ -172,7 +177,12 @@ impl Sub for Color {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        Self::new(self.r - rhs.r, self.g - rhs.g, self.b - rhs.b, self.a - rhs.a)
+        Self::new(
+            self.r - rhs.r,
+            self.g - rhs.g,
+            self.b - rhs.b,
+            self.a - rhs.a,
+        )
     }
 }
 
@@ -309,7 +319,10 @@ mod tests {
 
     #[test]
     fn hex_and_srgb8_agree() {
-        assert_eq!(Color::from_hex(0xFF8800), Color::from_srgb8(255, 136, 0, 255));
+        assert_eq!(
+            Color::from_hex(0xFF8800),
+            Color::from_srgb8(255, 136, 0, 255)
+        );
         assert!((Color::from_srgb8(255, 255, 255, 255) - Color::WHITE).luminance() < 1e-6);
     }
 

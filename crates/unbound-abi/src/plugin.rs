@@ -51,8 +51,12 @@ pub struct HostAllocatorVTable {
     pub dealloc: unsafe extern "C" fn(ptr: *mut u8, size: usize, align: usize),
     /// Grow/shrink in place or move. Returns null on failure (old block stays
     /// valid, as required by `GlobalAlloc`).
-    pub realloc:
-        unsafe extern "C" fn(ptr: *mut u8, old_size: usize, align: usize, new_size: usize) -> *mut u8,
+    pub realloc: unsafe extern "C" fn(
+        ptr: *mut u8,
+        old_size: usize,
+        align: usize,
+        new_size: usize,
+    ) -> *mut u8,
 }
 
 /// Sink the host exposes to the guest so the guest can emit its view tree
@@ -76,10 +80,14 @@ pub struct HostRenderContext {
 
     /// Append a child under `parent` and return its id. Roots pass
     /// `parent = RawNodeId(NO_NODE)`.
-    pub push_node:
-        unsafe extern "C" fn(ctx: *mut c_void, parent: RawNodeId, desc: *const RawNodeDesc) -> RawNodeId,
+    pub push_node: unsafe extern "C" fn(
+        ctx: *mut c_void,
+        parent: RawNodeId,
+        desc: *const RawNodeDesc,
+    ) -> RawNodeId,
     /// Attach UTF-8 text (copied by the host) to a text node.
-    pub set_text: unsafe extern "C" fn(ctx: *mut c_void, node: RawNodeId, ptr: *const u8, len: usize),
+    pub set_text:
+        unsafe extern "C" fn(ctx: *mut c_void, node: RawNodeId, ptr: *const u8, len: usize),
     /// Bind a strongly typed action to a node's activation.
     pub bind_action: unsafe extern "C" fn(ctx: *mut c_void, node: RawNodeId, action: RawAction),
     /// Declare the build finished and hand over the root.
@@ -159,7 +167,13 @@ unsafe extern "C" fn no_push(
 ) -> RawNodeId {
     RawNodeId(crate::desc::NO_NODE)
 }
-unsafe extern "C" fn no_set_text(_ctx: *mut c_void, _node: RawNodeId, _ptr: *const u8, _len: usize) {}
+unsafe extern "C" fn no_set_text(
+    _ctx: *mut c_void,
+    _node: RawNodeId,
+    _ptr: *const u8,
+    _len: usize,
+) {
+}
 unsafe extern "C" fn no_bind(_ctx: *mut c_void, _node: RawNodeId, _action: RawAction) {}
 unsafe extern "C" fn no_finish(_ctx: *mut c_void, _root: RawNodeId) {}
 
@@ -220,7 +234,10 @@ impl core::fmt::Debug for GuestPluginVTable {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("GuestPluginVTable")
             .field("abi_version", &self.abi_version)
-            .field("state_schema_hash", &format_args!("{:#018x}", self.state_schema_hash))
+            .field(
+                "state_schema_hash",
+                &format_args!("{:#018x}", self.state_schema_hash),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -321,6 +338,9 @@ mod tests {
     #[test]
     fn entry_symbol_is_nul_terminated() {
         assert_eq!(*GUEST_ENTRY_SYMBOL.last().unwrap(), 0);
-        assert_eq!(&GUEST_ENTRY_SYMBOL[..GUEST_ENTRY_SYMBOL.len() - 1], b"unbound_guest_entry");
+        assert_eq!(
+            &GUEST_ENTRY_SYMBOL[..GUEST_ENTRY_SYMBOL.len() - 1],
+            b"unbound_guest_entry"
+        );
     }
 }

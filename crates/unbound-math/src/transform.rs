@@ -222,7 +222,12 @@ mod tests {
 
     #[test]
     fn inverse_round_trips() {
-        let m = Affine2::around(Vec2::new(10.0, 5.0), Vec2::new(2.0, 0.5), 0.7, Vec2::new(3.0, -1.0));
+        let m = Affine2::around(
+            Vec2::new(10.0, 5.0),
+            Vec2::new(2.0, 0.5),
+            0.7,
+            Vec2::new(3.0, -1.0),
+        );
         let inv = m.inverse().expect("invertible");
         for p in [
             Vec2::new(0.0, 0.0),

@@ -274,10 +274,7 @@ impl Default for RecoveryPolicy {
 ///
 /// # Errors
 /// Returns [`RecoveryError`] when every attempt failed.
-pub fn recover_with<T, F>(
-    policy: RecoveryPolicy,
-    mut rebuild: F,
-) -> Result<(T, u32), RecoveryError>
+pub fn recover_with<T, F>(policy: RecoveryPolicy, mut rebuild: F) -> Result<(T, u32), RecoveryError>
 where
     F: FnMut() -> Result<T, GpuError>,
 {

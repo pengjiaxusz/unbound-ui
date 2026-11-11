@@ -268,12 +268,7 @@ impl Marquee {
     ///
     /// Candidates come from the quadtree, so a 1 M entity canvas only tests what
     /// the band actually overlaps.
-    pub fn apply(
-        &self,
-        tree: &mut LooseQuadtree,
-        mode: SelectionMode,
-        selection: &mut Selection,
-    ) {
+    pub fn apply(&self, tree: &mut LooseQuadtree, mode: SelectionMode, selection: &mut Selection) {
         let band = self.rect();
         let mut hits = Vec::new();
         tree.query_exact(band, &mut hits);
@@ -365,7 +360,12 @@ impl Transform2 {
             out_min = out_min.min(*corner);
             out_max = out_max.max(*corner);
         }
-        Rect::new(out_min.x, out_min.y, out_max.x - out_min.x, out_max.y - out_min.y)
+        Rect::new(
+            out_min.x,
+            out_min.y,
+            out_max.x - out_min.x,
+            out_max.y - out_min.y,
+        )
     }
 }
 
@@ -616,10 +616,7 @@ mod tests {
             Handle::SouthEast.position(bounds, 20.0),
             Vec2::new(100.0, 50.0)
         );
-        assert_eq!(
-            Handle::East.position(bounds, 20.0),
-            Vec2::new(100.0, 25.0)
-        );
+        assert_eq!(Handle::East.position(bounds, 20.0), Vec2::new(100.0, 25.0));
         assert_eq!(
             Handle::Rotate.position(bounds, 20.0),
             Vec2::new(50.0, -20.0)
@@ -659,12 +656,7 @@ mod tests {
     #[test]
     fn north_west_drag_pins_the_opposite_corner() {
         let bounds = rect(0.0, 0.0, 100.0, 50.0);
-        let mut drag = HandleDrag::new(
-            Handle::NorthWest,
-            bounds,
-            Vec2::new(0.0, 0.0),
-            20.0,
-        );
+        let mut drag = HandleDrag::new(Handle::NorthWest, bounds, Vec2::new(0.0, 0.0), 20.0);
         let t = drag.update(Vec2::new(-20.0, -10.0), Modifiers::NONE);
         let out = t.apply_rect(bounds);
         assert!((out.max().x - 100.0).abs() < 1e-3, "{out:?}");
@@ -676,12 +668,7 @@ mod tests {
     #[test]
     fn shift_keeps_the_aspect_ratio() {
         let bounds = rect(0.0, 0.0, 100.0, 50.0);
-        let mut drag = HandleDrag::new(
-            Handle::SouthEast,
-            bounds,
-            Vec2::new(100.0, 50.0),
-            20.0,
-        );
+        let mut drag = HandleDrag::new(Handle::SouthEast, bounds, Vec2::new(100.0, 50.0), 20.0);
         let t = drag.update(
             Vec2::new(200.0, 50.0),
             Modifiers {
@@ -773,10 +760,7 @@ mod tests {
 
     #[test]
     fn selection_mode_follows_modifiers() {
-        assert_eq!(
-            SelectionMode::from(Modifiers::NONE),
-            SelectionMode::Replace
-        );
+        assert_eq!(SelectionMode::from(Modifiers::NONE), SelectionMode::Replace);
         assert_eq!(
             SelectionMode::from(Modifiers {
                 shift: true,

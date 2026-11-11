@@ -206,10 +206,7 @@ impl RawAction {
 
     #[must_use]
     pub const fn unpack_vec2(v: u64) -> (f32, f32) {
-        (
-            f32::from_bits(v as u32),
-            f32::from_bits((v >> 32) as u32),
-        )
+        (f32::from_bits(v as u32), f32::from_bits((v >> 32) as u32))
     }
 }
 

@@ -104,10 +104,7 @@ pub enum PlatformEvent {
     ///
     /// Windows reports pixel deltas; they are converted to lines here so the
     /// engine never has to know about the platform's scroll granularity.
-    MouseWheel {
-        delta_x: f64,
-        delta_y: f64,
-    },
+    MouseWheel { delta_x: f64, delta_y: f64 },
     /// A key changed state.
     KeyInput {
         state: ButtonState,
@@ -223,9 +220,10 @@ pub fn translate_window_event(event: &winit::event::WindowEvent) -> Option<Platf
         WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
             PlatformEvent::ScaleFactorChanged(*scale_factor)
         }
-        WindowEvent::CursorMoved { position, .. } => {
-            PlatformEvent::CursorMoved { x: position.x, y: position.y }
-        }
+        WindowEvent::CursorMoved { position, .. } => PlatformEvent::CursorMoved {
+            x: position.x,
+            y: position.y,
+        },
         WindowEvent::MouseInput { state, button, .. } => PlatformEvent::MouseInput {
             state: match state {
                 ElementState::Pressed => ButtonState::Pressed,
@@ -248,7 +246,10 @@ pub fn translate_window_event(event: &winit::event::WindowEvent) -> Option<Platf
                     (position.x / PIXELS_PER_LINE, position.y / PIXELS_PER_LINE)
                 }
             };
-            PlatformEvent::MouseWheel { delta_x: x, delta_y: y }
+            PlatformEvent::MouseWheel {
+                delta_x: x,
+                delta_y: y,
+            }
         }
         WindowEvent::KeyboardInput { event, .. } => PlatformEvent::KeyInput {
             state: match event.state {
@@ -328,12 +329,10 @@ pub fn translate_key(key: &winit::keyboard::Key) -> PlatformKey {
 pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> Vec<PlatformEvent> {
     let mut out = Vec::new();
     match event {
-        PlatformEvent::Resized(extent) => {
-            match state.resize.on_resized(*extent, now) {
-                ResizeAction::None => {}
-                ResizeAction::Recreate(new) => out.push(PlatformEvent::RecreateSwapchain(new)),
-            }
-        }
+        PlatformEvent::Resized(extent) => match state.resize.on_resized(*extent, now) {
+            ResizeAction::None => {}
+            ResizeAction::Recreate(new) => out.push(PlatformEvent::RecreateSwapchain(new)),
+        },
         PlatformEvent::ScaleFactorChanged(factor) => {
             state.scale_factor = *factor;
         }
@@ -389,7 +388,10 @@ mod tests {
             &PlatformEvent::Resized(Extent::new(1000, 700)),
             now + std::time::Duration::from_millis(30),
         );
-        assert_eq!(out, vec![PlatformEvent::RecreateSwapchain(Extent::new(1000, 700))]);
+        assert_eq!(
+            out,
+            vec![PlatformEvent::RecreateSwapchain(Extent::new(1000, 700))]
+        );
     }
 
     /// A drag burst ends with one final resize event. If nothing else ever
@@ -484,7 +486,9 @@ mod tests {
                 "{event:?} must be forwarded unchanged"
             );
         }
-        state.latency.on_present(now + std::time::Duration::from_millis(4));
+        state
+            .latency
+            .on_present(now + std::time::Duration::from_millis(4));
         assert!(state.latency.last().is_some());
     }
 

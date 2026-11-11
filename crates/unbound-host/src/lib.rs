@@ -526,9 +526,10 @@ impl GuestHost {
             return Ok(path.to_path_buf());
         }
         self.shadow_counter += 1;
-        let file_name = path
-            .file_name()
-            .map_or_else(|| "guest.dll".to_owned(), |name| name.to_string_lossy().into_owned());
+        let file_name = path.file_name().map_or_else(
+            || "guest.dll".to_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
         let shadow = std::env::temp_dir().join(format!(
             "unbound-shadow-{}-{}-{file_name}",
             std::process::id(),
@@ -559,7 +560,8 @@ impl Drop for GuestHost {
 unsafe fn read_vtable(library: &Library) -> Result<GuestPluginVTable, HostError> {
     // The symbol name excludes the trailing NUL that the ABI constant carries.
     let name = &GUEST_ENTRY_SYMBOL[..GUEST_ENTRY_SYMBOL.len() - 1];
-    let entry: Symbol<'_, GuestEntryFn> = unsafe { library.get(name) }.map_err(|_| HostError::MissingEntry)?;
+    let entry: Symbol<'_, GuestEntryFn> =
+        unsafe { library.get(name) }.map_err(|_| HostError::MissingEntry)?;
     let pointer = unsafe { entry() };
     if pointer.is_null() {
         return Err(HostError::MissingEntry);

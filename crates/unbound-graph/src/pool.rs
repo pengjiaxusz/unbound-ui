@@ -125,7 +125,10 @@ impl OffscreenPool {
             .map(|(slot, existing)| (*slot, *existing))
         {
             self.reuses += 1;
-            return PooledTexture { slot, desc: existing };
+            return PooledTexture {
+                slot,
+                desc: existing,
+            };
         }
         let slot = match self.free.pop_front() {
             Some(slot) => {

@@ -295,9 +295,8 @@ mod tests {
     #[test]
     fn rounded_corners_reject_the_corner_pixel() {
         let bounds = rect(0.0, 0.0, 100.0, 100.0);
-        let region = HitRegion::new(1, 1, 0, bounds).with_shape(Shape::Rounded {
-            radii: [20.0; 4],
-        });
+        let region =
+            HitRegion::new(1, 1, 0, bounds).with_shape(Shape::Rounded { radii: [20.0; 4] });
         assert!(region.hit(Vec2::new(50.0, 50.0)));
         assert!(!region.hit(Vec2::new(1.0, 1.0)), "corner must be cut away");
         assert!(region.hit(Vec2::new(20.0, 20.0)), "inside the arc");
@@ -416,6 +415,9 @@ mod tests {
     fn a_degenerate_rect_is_never_hit() {
         let region = HitRegion::new(1, 1, 0, rect(0.0, 0.0, f32::NAN, 10.0));
         assert!(!region.hit(Vec2::new(0.0, 0.0)));
-        assert_eq!(rounded_rect_sdf(rect(0.0, 0.0, f32::NAN, 1.0), [0.0; 4], Vec2::ZERO), f32::INFINITY);
+        assert_eq!(
+            rounded_rect_sdf(rect(0.0, 0.0, f32::NAN, 1.0), [0.0; 4], Vec2::ZERO),
+            f32::INFINITY
+        );
     }
 }

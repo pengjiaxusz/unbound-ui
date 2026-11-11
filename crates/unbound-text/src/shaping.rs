@@ -156,10 +156,7 @@ impl ShapedText {
     /// eight-byte window", which could pick a glyph from the next cluster.
     #[must_use]
     pub fn glyph_at_byte(&self, byte: u32) -> Option<&PositionedGlyph> {
-        self.glyphs
-            .iter()
-            .rev()
-            .find(|g| g.cluster <= byte)
+        self.glyphs.iter().rev().find(|g| g.cluster <= byte)
     }
 
     /// Nearest glyph to a local point (used by hit testing and cursor
@@ -191,11 +188,7 @@ impl ShapedText {
     pub fn caret_at_byte(&self, byte: u32) -> Option<f32> {
         let glyph = self.glyph_at_byte(byte)?;
         let at_end = byte >= glyph.cluster + glyph.w as u32;
-        Some(if at_end {
-            glyph.x + glyph.w
-        } else {
-            glyph.x
-        })
+        Some(if at_end { glyph.x + glyph.w } else { glyph.x })
     }
 }
 

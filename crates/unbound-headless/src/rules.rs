@@ -320,10 +320,14 @@ mod tests {
             "Button",
         );
         b.close();
-        b.open(NodeKind::Text {
-            ink: rect(120.0, 10.0, 100.0, 20.0),
-            ellipsis: false,
-        }, rect(120.0, 10.0, 100.0, 20.0), "Label");
+        b.open(
+            NodeKind::Text {
+                ink: rect(120.0, 10.0, 100.0, 20.0),
+                ellipsis: false,
+            },
+            rect(120.0, 10.0, 100.0, 20.0),
+            "Label",
+        );
         b.close();
         b.close();
         let diagnostics = check(&b.build());
@@ -333,7 +337,11 @@ mod tests {
     #[test]
     fn nan_is_caught_with_its_source_line() {
         let mut b = root();
-        b.open(NodeKind::Container, rect(f32::NAN, 0.0, 10.0, 10.0), "Broken");
+        b.open(
+            NodeKind::Container,
+            rect(f32::NAN, 0.0, 10.0, 10.0),
+            "Broken",
+        );
         b.close();
         b.close();
         let diagnostics = check(&b.build());

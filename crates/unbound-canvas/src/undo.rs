@@ -41,11 +41,7 @@ pub enum TransactionKind {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Edit {
     /// Geometry of one entity.
-    Geometry {
-        id: u32,
-        before: Rect,
-        after: Rect,
-    },
+    Geometry { id: u32, before: Rect, after: Rect },
     /// A text buffer edit.
     Text { before: String, after: String },
     /// Creation or destruction of one entity.
@@ -178,9 +174,7 @@ impl Transaction {
     /// the next keystroke must open a fresh undo step.
     fn ends_on_boundary(&self) -> bool {
         match self.edits.last() {
-            Some(Edit::Text { after, .. }) => {
-                after.chars().last().is_some_and(is_word_boundary)
-            }
+            Some(Edit::Text { after, .. }) => after.chars().last().is_some_and(is_word_boundary),
             _ => false,
         }
     }
@@ -623,7 +617,12 @@ mod tests {
         let mut stack = UndoStack::new(3);
         for i in 0..10u32 {
             stack.begin(TransactionKind::Discrete, "step", f64::from(i));
-            stack.record_geometry(i, rect(0.0, 0.0, 1.0, 1.0), rect(1.0, 0.0, 1.0, 1.0), f64::from(i));
+            stack.record_geometry(
+                i,
+                rect(0.0, 0.0, 1.0, 1.0),
+                rect(1.0, 0.0, 1.0, 1.0),
+                f64::from(i),
+            );
             stack.commit();
         }
         assert_eq!(stack.depth(), 3);

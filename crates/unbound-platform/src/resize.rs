@@ -208,8 +208,14 @@ mod tests {
     fn a_quiet_window_never_recreates_the_swapchain() {
         let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
         let now = Instant::now();
-        assert_eq!(tracker.on_resized(extent(800, 600), now), ResizeAction::None);
-        assert_eq!(tracker.poll(now + Duration::from_millis(100)), ResizeAction::None);
+        assert_eq!(
+            tracker.on_resized(extent(800, 600), now),
+            ResizeAction::None
+        );
+        assert_eq!(
+            tracker.poll(now + Duration::from_millis(100)),
+            ResizeAction::None
+        );
         assert_eq!(tracker.recreations(), 0);
     }
 
@@ -267,7 +273,10 @@ mod tests {
         let now = Instant::now();
         assert_eq!(tracker.on_resized(extent(0, 0), now), ResizeAction::None);
         assert_eq!(tracker.committed(), extent(800, 600));
-        assert_eq!(tracker.poll(now + Duration::from_millis(50)), ResizeAction::None);
+        assert_eq!(
+            tracker.poll(now + Duration::from_millis(50)),
+            ResizeAction::None
+        );
     }
 
     #[test]

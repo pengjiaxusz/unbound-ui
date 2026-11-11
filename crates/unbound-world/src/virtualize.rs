@@ -12,8 +12,8 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
-use unbound_math::Vec2;
 use crate::{no_node, NodeId};
+use unbound_math::Vec2;
 
 /// What one update cost.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
@@ -386,7 +386,9 @@ impl VirtualTree {
 
     #[must_use]
     pub fn row_at(&self, slot: usize) -> Option<TreeRow> {
-        self.list.item_at(slot).and_then(|i| self.rows.get(i).copied())
+        self.list
+            .item_at(slot)
+            .and_then(|i| self.rows.get(i).copied())
     }
 
     #[must_use]

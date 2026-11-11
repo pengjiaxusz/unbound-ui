@@ -160,7 +160,10 @@ mod tests {
             0.05,
             2.0,
         );
-        assert!(instances.len() >= 2, "a cubic needs two quadratics at least");
+        assert!(
+            instances.len() >= 2,
+            "a cubic needs two quadratics at least"
+        );
     }
 
     #[test]

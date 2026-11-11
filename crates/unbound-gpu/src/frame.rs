@@ -22,8 +22,8 @@
 use ash::vk;
 
 use crate::data::{
-    FramePushConstants, GpuClipNode, GpuPayload, GpuPrimitiveInstance,
-    GpuScatterPatch, GpuTransform, PassLayer, PushConstants,
+    FramePushConstants, GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuScatterPatch,
+    GpuTransform, PassLayer, PushConstants,
 };
 use crate::device::{Buffer, Gpu, GpuError, MemoryKind};
 use crate::pipeline::{Pipelines, COLOR_FORMAT, DEPTH_FORMAT};
@@ -219,7 +219,10 @@ pub struct Renderer {
 impl core::fmt::Debug for Renderer {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Renderer")
-            .field("target", &format_args!("{}x{}", self.target.width, self.target.height))
+            .field(
+                "target",
+                &format_args!("{}x{}", self.target.width, self.target.height),
+            )
             .field("stats", &self.stats)
             .finish_non_exhaustive()
     }
@@ -260,8 +263,16 @@ impl RenderTarget {
     fn new(gpu: &Gpu, width: u32, height: u32) -> Result<Self, GpuError> {
         // SAFETY: creation only; ownership is returned to the caller.
         unsafe {
-            let (color, color_memory, color_view) =
-                Self::create_image(gpu, width, height, COLOR_FORMAT, vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST, false)?;
+            let (color, color_memory, color_view) = Self::create_image(
+                gpu,
+                width,
+                height,
+                COLOR_FORMAT,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST,
+                false,
+            )?;
             let (depth, depth_memory, depth_view) = Self::create_image(
                 gpu,
                 width,
@@ -394,7 +405,8 @@ impl Renderer {
         let bda_usage = vk::BufferUsageFlags::STORAGE_BUFFER
             | vk::BufferUsageFlags::TRANSFER_DST
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
-        let pool_buffer = gpu.create_buffer(pool_bytes, bda_usage, MemoryKind::DeviceLocal, "pool")?;
+        let pool_buffer =
+            gpu.create_buffer(pool_bytes, bda_usage, MemoryKind::DeviceLocal, "pool")?;
         let ring_bytes = gpu.config.ring_capacity;
         let ring_buffer = gpu.create_buffer(
             ring_bytes,
@@ -528,11 +540,7 @@ impl Renderer {
                 .lut_buffer
                 .host_ptr(0)
                 .ok_or_else(|| GpuError::Allocation("lut not mapped".into()))?;
-            core::ptr::copy_nonoverlapping(
-                entries.as_ptr().cast::<u8>(),
-                ptr,
-                entries.len() * 8,
-            );
+            core::ptr::copy_nonoverlapping(entries.as_ptr().cast::<u8>(), ptr, entries.len() * 8);
         }
         Ok(())
     }
@@ -611,12 +619,7 @@ impl Renderer {
         let epoch = self.pool.current_epoch();
         let (new_handle, capacity) = self
             .pool
-            .ensure_capacity(
-                handle,
-                len as u64,
-                which.stride() as u64,
-                epoch,
-            )
+            .ensure_capacity(handle, len as u64, which.stride() as u64, epoch)
             .map_err(|e| GpuError::Allocation(e.to_string()))?;
         let moved = new_handle != handle;
         match which {
@@ -662,10 +665,8 @@ impl Renderer {
             // renderer; waiting on our own fence cannot deadlock.
             unsafe {
                 gpu.device.reset_fences(&[sync.in_flight])?;
-                gpu.device.reset_command_buffer(
-                    cmd,
-                    vk::CommandBufferResetFlags::empty(),
-                )?;
+                gpu.device
+                    .reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())?;
             }
         }
 
@@ -689,10 +690,7 @@ impl Renderer {
         // The timeline semaphore itself only advances when somebody waits on
         // it, and nothing does in the render loop, so the completion is
         // derived from the fence instead.
-        let retired = self
-            .frame_index
-            .saturating_sub(u64::from(frame_count))
-            + 1;
+        let retired = self.frame_index.saturating_sub(u64::from(frame_count)) + 1;
         self.pool.reclaim(retired);
 
         let upload = self.prepare_upload(scene)?;
@@ -725,12 +723,7 @@ impl Renderer {
             }
             // SAFETY: our own command buffer.
             unsafe {
-                scope.write_at(
-                    &self.gpu,
-                    cmd,
-                    0,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                );
+                scope.write_at(&self.gpu, cmd, 0, vk::PipelineStageFlags::TOP_OF_PIPE);
             }
         }
         // The stage markers inside `record_frame` close the bracket.
@@ -892,9 +885,7 @@ impl Renderer {
                 .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
                 .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
                 .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-                .dst_access_mask(
-                    vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE,
-                );
+                .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE);
             let barriers = [barrier];
             // SAFETY: recording into our own command buffer.
             unsafe {
@@ -921,7 +912,12 @@ impl Renderer {
                     scratch_bda5: self.sort_scratch.address,
                     ..Default::default()
                 };
-                self.dispatch(cmd, crate::pipeline::ComputeStage::SortHist, &mut hist, blocks);
+                self.dispatch(
+                    cmd,
+                    crate::pipeline::ComputeStage::SortHist,
+                    &mut hist,
+                    blocks,
+                );
                 self.pipeline_barrier(cmd);
 
                 let mut scan = PushConstants {
@@ -980,12 +976,10 @@ impl Renderer {
                 .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
                 .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
                 .dst_stage_mask(
-                    vk::PipelineStageFlags2::DRAW_INDIRECT
-                        | vk::PipelineStageFlags2::VERTEX_SHADER,
+                    vk::PipelineStageFlags2::DRAW_INDIRECT | vk::PipelineStageFlags2::VERTEX_SHADER,
                 )
                 .dst_access_mask(
-                    vk::AccessFlags2::INDIRECT_COMMAND_READ
-                        | vk::AccessFlags2::SHADER_READ,
+                    vk::AccessFlags2::INDIRECT_COMMAND_READ | vk::AccessFlags2::SHADER_READ,
                 );
             let barriers = [barrier];
             // SAFETY: recording into our own command buffer.
@@ -1220,9 +1214,7 @@ impl Renderer {
             let fence = self.gpu.frames[frame_slot].in_flight;
             // SAFETY: waiting on our own fence cannot deadlock.
             unsafe {
-                self.gpu
-                    .device
-                    .wait_for_fences(&[fence], true, u64::MAX)?;
+                self.gpu.device.wait_for_fences(&[fence], true, u64::MAX)?;
             }
         }
         let scope = self.timing.as_mut().expect("the scope exists");
@@ -1247,9 +1239,7 @@ impl Renderer {
             let fence = self.gpu.frames[frame_slot].in_flight;
             // SAFETY: waiting on our own fence cannot deadlock.
             unsafe {
-                self.gpu
-                    .device
-                    .wait_for_fences(&[fence], true, u64::MAX)?;
+                self.gpu.device.wait_for_fences(&[fence], true, u64::MAX)?;
             }
         }
         // The frame has retired, so the counters are final as well.
@@ -1309,7 +1299,11 @@ impl Renderer {
         // SAFETY: recording into our own command buffer; `pc` is 128B.
         unsafe {
             let device = &self.gpu.device;
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.pipelines.compute[stage as usize]);
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                self.pipelines.compute[stage as usize],
+            );
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
@@ -1331,12 +1325,14 @@ impl Renderer {
 
     fn frame_constants(&self, scene: &SceneUpload<'_>) -> FramePushConstants {
         FramePushConstants {
-            primitives_bda: self.pool_buffer.address + u64::from(self.pool_offset(self.prim_handle)),
+            primitives_bda: self.pool_buffer.address
+                + u64::from(self.pool_offset(self.prim_handle)),
             transforms_bda: self.pool_buffer.address
                 + u64::from(self.pool_offset(self.transform_handle)),
             clips_bda: self.pool_buffer.address + u64::from(self.pool_offset(self.clip_handle)),
             theme_lut_bda: self.lut_buffer.address,
-            payloads_bda: self.pool_buffer.address + u64::from(self.pool_offset(self.payload_handle)),
+            payloads_bda: self.pool_buffer.address
+                + u64::from(self.pool_offset(self.payload_handle)),
             camera_chunk: scene.camera.chunk,
             camera_local: scene.camera.local,
             // The viewport follows the attachment we actually draw into.
@@ -1658,14 +1654,15 @@ impl Renderer {
         let payload_dst = self.pool_offset(self.payload_handle);
         let bytes = &mut self.staging_bytes;
         let spans = &mut self.staging_spans;
-        let stage = |dst: u32, data: &[u8], bytes: &mut Vec<u8>, spans: &mut Vec<(u32, u32, u32)>| {
-            if data.is_empty() {
-                return;
-            }
-            let src_rel = bytes.len() as u32;
-            bytes.extend_from_slice(data);
-            spans.push((dst, src_rel, data.len() as u32));
-        };
+        let stage =
+            |dst: u32, data: &[u8], bytes: &mut Vec<u8>, spans: &mut Vec<(u32, u32, u32)>| {
+                if data.is_empty() {
+                    return;
+                }
+                let src_rel = bytes.len() as u32;
+                bytes.extend_from_slice(data);
+                spans.push((dst, src_rel, data.len() as u32));
+            };
 
         stage(
             prim_dst,
@@ -1679,12 +1676,7 @@ impl Renderer {
             bytes,
             spans,
         );
-        stage(
-            clip_dst,
-            bytemuck::cast_slice(scene.clips),
-            bytes,
-            spans,
-        );
+        stage(clip_dst, bytemuck::cast_slice(scene.clips), bytes, spans);
         stage(
             payload_dst,
             bytemuck::cast_slice(scene.payloads),
@@ -1708,14 +1700,13 @@ impl Renderer {
 
         // The patch list is reused across frames as well.
         self.staging_patches.clear();
-        self.staging_patches.extend(spans.iter().map(|(dst, src_rel, len)| {
-            GpuScatterPatch {
+        self.staging_patches
+            .extend(spans.iter().map(|(dst, src_rel, len)| GpuScatterPatch {
                 dst_offset: *dst,
                 src_offset: ring_slot + *src_rel,
                 len: *len,
                 _pad: 0,
-            }
-        }));
+            }));
 
         // SAFETY: both buffers are host visible, mapped for their whole
         // lifetime, and the ranges were just reserved.
@@ -1747,7 +1738,9 @@ impl Renderer {
     pub fn destroy(self) {
         // SAFETY: we own the semaphore and every frame has retired.
         unsafe {
-            self.gpu.device.destroy_semaphore(self.present_semaphore, None);
+            self.gpu
+                .device
+                .destroy_semaphore(self.present_semaphore, None);
         }
         self.gpu.wait_idle();
         if let Some(scope) = &self.timing {
@@ -1892,19 +1885,20 @@ mod tests {
         let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
         let prims = vec![quad(16.0, 16.0, 96.0, 96.0, 2)];
         let transforms = vec![GpuTransform::IDENTITY];
-        renderer.write_theme(&{
-            let mut c = vec![[0u16; 4]; 512];
-            c[1] = unbound_math::Color::from_srgb8(0, 0, 0, 40).to_rgba16f();
-            c[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
-            c
-        }).unwrap();
+        renderer
+            .write_theme(&{
+                let mut c = vec![[0u16; 4]; 512];
+                c[1] = unbound_math::Color::from_srgb8(0, 0, 0, 40).to_rgba16f();
+                c[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
+                c
+            })
+            .unwrap();
 
         renderer
             .render(&scene(&prims, &transforms, 1))
             .expect("render");
         let pixels = renderer.read_pixels().expect("readback");
         assert_eq!(pixels.len(), 128 * 128 * 4);
-
 
         // Centre of the quad must be the fill token colour (white).
         let idx = (64 * 128 + 64) * 4;
@@ -1956,7 +1950,10 @@ mod tests {
 
         let outcome = theme.switch(unbound_theme::ThemeKind::Dark);
         assert_eq!(outcome.bytes_uploaded, 4096);
-        assert!(!outcome.relayout_required, "a theme switch must not re-layout");
+        assert!(
+            !outcome.relayout_required,
+            "a theme switch must not re-layout"
+        );
         assert!(
             !outcome.instance_reupload_required,
             "a theme switch must not re-upload instances"
@@ -2003,12 +2000,13 @@ mod tests {
         let prims = vec![draw.primitive];
         let payloads = vec![draw.payload];
         let transforms = vec![draw.transform];
-        renderer.write_theme(&{
-            let mut colors = vec![[0u16; 4]; 512];
-            colors[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
-            colors
-        })
-        .unwrap();
+        renderer
+            .write_theme(&{
+                let mut colors = vec![[0u16; 4]; 512];
+                colors[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
+                colors
+            })
+            .unwrap();
 
         let mut upload = scene(&prims, &transforms, 1);
         upload.payloads = &payloads;
@@ -2092,12 +2090,13 @@ mod tests {
                 prims.push(primitive);
             }
         }
-        renderer.write_theme(&{
-            let mut colors = vec![[0u16; 4]; 512];
-            colors[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
-            colors
-        })
-        .unwrap();
+        renderer
+            .write_theme(&{
+                let mut colors = vec![[0u16; 4]; 512];
+                colors[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
+                colors
+            })
+            .unwrap();
 
         let mut upload = scene_at(&prims, &transforms, 1, (512.0, 512.0));
         upload.payloads = &payloads;
@@ -2111,11 +2110,8 @@ mod tests {
             .read_frame_timing()
             .expect("read timing")
             .expect("timing is enabled");
-        let average: f32 = prims
-            .iter()
-            .map(|p| p.size[0] * p.size[1])
-            .sum::<f32>()
-            / prims.len().max(1) as f32;
+        let average: f32 =
+            prims.iter().map(|p| p.size[0] * p.size[1]).sum::<f32>() / prims.len().max(1) as f32;
         eprintln!(
             "{CURVES} curves -> {} primitives, avg box {average:.1} px², {:.3} ms on the GPU              (cull {:.3}, sort {:.3}, indirect {:.3}, graphics {:.3})",
             prims.len(),
@@ -2149,9 +2145,8 @@ mod tests {
         let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
 
         // A one-layer atlas with a white tile at the origin.
-        let atlases = std::sync::Arc::new(
-            crate::atlas::AtlasSet::new(&renderer.gpu, 1).expect("atlas set"),
-        );
+        let atlases =
+            std::sync::Arc::new(crate::atlas::AtlasSet::new(&renderer.gpu, 1).expect("atlas set"));
         let upload = crate::atlas::AtlasUpload {
             kind: crate::atlas::AtlasKind::R8,
             layer: 0,
@@ -2216,12 +2211,13 @@ mod tests {
         let mut upload = scene(&prims, &transforms, 1);
         upload.payloads = &payloads;
 
-        renderer.write_theme(&{
-            let mut colors = vec![[0u16; 4]; 512];
-            colors[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
-            colors
-        })
-        .unwrap();
+        renderer
+            .write_theme(&{
+                let mut colors = vec![[0u16; 4]; 512];
+                colors[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
+                colors
+            })
+            .unwrap();
 
         renderer.render(&upload).expect("render");
         let pixels = renderer.read_pixels().expect("readback");
@@ -2539,7 +2535,12 @@ mod tests {
         let transforms = vec![GpuTransform::IDENTITY];
 
         renderer
-            .render(&scene_at(&[background, rounded], &transforms, 1, (256.0, 256.0)))
+            .render(&scene_at(
+                &[background, rounded],
+                &transforms,
+                1,
+                (256.0, 256.0),
+            ))
             .expect("render");
         let pixels = renderer.read_pixels().expect("readback");
 
@@ -2560,8 +2561,7 @@ mod tests {
             }
         }
         assert_eq!(
-            wrong,
-            0,
+            wrong, 0,
             "{wrong} pixels inside the rectangle are not the fill colour; \
              first offender {first_wrong:?}"
         );
@@ -2629,7 +2629,6 @@ mod tests {
             timing.graphics_ms
         );
 
-
         let pixels = renderer.read_pixels().expect("readback");
         assert_eq!(pixels.len(), 512 * 512 * 4);
         assert!(
@@ -2653,7 +2652,9 @@ mod tests {
 
         // Second frame, same generation: the persistent pool must not move a
         // single byte (`docs` §5.2 "0 B per frame").
-        let again = renderer.render(&scene(&prims, &transforms, 1)).expect("render");
+        let again = renderer
+            .render(&scene(&prims, &transforms, 1))
+            .expect("render");
         assert_eq!(again.bytes_uploaded, 0);
         renderer.destroy();
     }

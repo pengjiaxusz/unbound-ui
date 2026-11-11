@@ -484,7 +484,8 @@ impl UiWorld {
 
     /// Move `id` under `new_parent` as the last child.
     pub fn reparent(&mut self, id: NodeId, new_parent: NodeId) {
-        if id == new_parent || !self.nodes.contains_key(id) || !self.nodes.contains_key(new_parent) {
+        if id == new_parent || !self.nodes.contains_key(id) || !self.nodes.contains_key(new_parent)
+        {
             return;
         }
         // Refuse cycles: walking up from the new parent must not reach `id`.
@@ -767,7 +768,10 @@ impl UiWorld {
             let world = if node.parent.is_null() {
                 node.rect
             } else {
-                let parent = self.nodes.get(node.parent).map_or(Rect::ZERO, |p| p.world_rect);
+                let parent = self
+                    .nodes
+                    .get(node.parent)
+                    .map_or(Rect::ZERO, |p| p.world_rect);
                 node.rect.translate(parent.origin)
             };
             let mut clip = inherited_clip;
@@ -944,7 +948,9 @@ mod tests {
         let (mut w, root) = world();
         let card = w.insert(
             root,
-            RawNodeDesc::container().size(320.0, 200.0).flags(NodeFlags::CLIP),
+            RawNodeDesc::container()
+                .size(320.0, 200.0)
+                .flags(NodeFlags::CLIP),
             loc(),
         );
         let inner = w.insert(card, RawNodeDesc::container(), loc());
@@ -968,7 +974,13 @@ mod tests {
     #[test]
     fn paint_dirt_never_propagates() {
         let (mut w, root) = world();
-        let card = w.insert(root, RawNodeDesc::container().size(100.0, 100.0).flags(NodeFlags::CLIP), loc());
+        let card = w.insert(
+            root,
+            RawNodeDesc::container()
+                .size(100.0, 100.0)
+                .flags(NodeFlags::CLIP),
+            loc(),
+        );
         let label = w.insert(card, RawNodeDesc::text(), loc());
         w.clear_dirty();
         w.mark_paint_dirty(label);
@@ -983,7 +995,9 @@ mod tests {
         let (mut w, root) = world();
         let outer = w.insert(
             root,
-            RawNodeDesc::container().size(400.0, 400.0).flags(NodeFlags::CLIP),
+            RawNodeDesc::container()
+                .size(400.0, 400.0)
+                .flags(NodeFlags::CLIP),
             loc(),
         );
         let inner = w.insert(
@@ -1020,7 +1034,9 @@ mod tests {
         let (mut w, root) = world();
         let panel = w.insert(
             root,
-            RawNodeDesc::container().size(100.0, 100.0).flags(NodeFlags::CLIP),
+            RawNodeDesc::container()
+                .size(100.0, 100.0)
+                .flags(NodeFlags::CLIP),
             loc(),
         );
         let portal = w.insert(panel, RawNodeDesc::container().tag(NodeTag::Portal), loc());
@@ -1029,7 +1045,10 @@ mod tests {
         rects.insert(panel, Rect::new(0.0, 0.0, 100.0, 100.0));
         rects.insert(portal, Rect::new(500.0, 500.0, 80.0, 80.0));
         w.apply_rects(&rects);
-        assert!(w.node(portal).clip.is_none(), "a portal must not be clipped");
+        assert!(
+            w.node(portal).clip.is_none(),
+            "a portal must not be clipped"
+        );
     }
 
     #[test]
@@ -1062,14 +1081,26 @@ mod tests {
     fn dirty_levels_are_ordered() {
         assert!(DirtyLevel::Topology > DirtyLevel::Layout);
         assert!(DirtyLevel::Layout > DirtyLevel::Paint);
-        assert_eq!(DirtyLevel::Clean.max(DirtyLevel::Layout), DirtyLevel::Layout);
-        assert_eq!(DirtyLevel::Topology.max(DirtyLevel::Paint), DirtyLevel::Topology);
+        assert_eq!(
+            DirtyLevel::Clean.max(DirtyLevel::Layout),
+            DirtyLevel::Layout
+        );
+        assert_eq!(
+            DirtyLevel::Topology.max(DirtyLevel::Paint),
+            DirtyLevel::Topology
+        );
     }
 
     #[test]
     fn edge_values_do_not_leak_into_the_tree() {
         let (mut w, root) = world();
-        let a = w.insert(root, RawNodeDesc::container().padding(Edges::all(4.0)).width(Dim::percent(50.0)), loc());
+        let a = w.insert(
+            root,
+            RawNodeDesc::container()
+                .padding(Edges::all(4.0))
+                .width(Dim::percent(50.0)),
+            loc(),
+        );
         assert_eq!(w.children(root).count(), 1);
         assert!(w.contains(a));
         assert_eq!(w.node(a).desc.padding.left, 4.0);

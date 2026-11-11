@@ -318,7 +318,11 @@ mod tests {
             for x in 0..16 {
                 // "high = inside": an empty bitmap is entirely outside, so it
                 // saturates to 0.
-                assert!(field.sample(x, y) <= 0.01, "({x},{y}) = {}", field.sample(x, y));
+                assert!(
+                    field.sample(x, y) <= 0.01,
+                    "({x},{y}) = {}",
+                    field.sample(x, y)
+                );
             }
         }
     }

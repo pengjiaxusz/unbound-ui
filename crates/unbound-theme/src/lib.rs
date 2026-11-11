@@ -212,7 +212,10 @@ impl ThemeSet {
                 (Token::SURFACE_RAISED, Color::from_srgb8(248, 249, 251, 255)),
                 (Token::SURFACE_SUNKEN, Color::from_srgb8(238, 240, 244, 255)),
                 (Token::ON_SURFACE, Color::from_srgb8(20, 22, 26, 255)),
-                (Token::ON_SURFACE_MUTED, Color::from_srgb8(96, 101, 110, 255)),
+                (
+                    Token::ON_SURFACE_MUTED,
+                    Color::from_srgb8(96, 101, 110, 255),
+                ),
                 (Token::PRIMARY, Color::from_srgb8(38, 110, 255, 255)),
                 (Token::ON_PRIMARY, Color::from_srgb8(255, 255, 255, 255)),
                 (Token::ACCENT, Color::from_srgb8(255, 106, 61, 255)),
@@ -231,9 +234,15 @@ impl ThemeSet {
                 (Token::DISABLED, Color::from_srgb8(20, 22, 26, 24)),
                 (Token::ON_DISABLED, Color::from_srgb8(96, 101, 110, 96)),
                 (Token::GRID, Color::from_srgb8(206, 210, 218, 128)),
-                (Token::CANVAS_BACKDROP, Color::from_srgb8(246, 247, 250, 255)),
+                (
+                    Token::CANVAS_BACKDROP,
+                    Color::from_srgb8(246, 247, 250, 255),
+                ),
                 (Token::CANVAS_NODE, Color::from_srgb8(255, 255, 255, 255)),
-                (Token::CANVAS_NODE_SELECTED, Color::from_srgb8(38, 110, 255, 255)),
+                (
+                    Token::CANVAS_NODE_SELECTED,
+                    Color::from_srgb8(38, 110, 255, 255),
+                ),
                 (Token::SNAP_GUIDE, Color::from_srgb8(255, 45, 85, 255)),
                 (Token::TEXT_PRIMARY, Color::from_srgb8(20, 22, 26, 255)),
                 (Token::TEXT_SECONDARY, Color::from_srgb8(96, 101, 110, 255)),
@@ -249,7 +258,10 @@ impl ThemeSet {
                 (Token::SURFACE_RAISED, Color::from_srgb8(32, 35, 42, 255)),
                 (Token::SURFACE_SUNKEN, Color::from_srgb8(16, 17, 21, 255)),
                 (Token::ON_SURFACE, Color::from_srgb8(233, 236, 241, 255)),
-                (Token::ON_SURFACE_MUTED, Color::from_srgb8(160, 166, 176, 255)),
+                (
+                    Token::ON_SURFACE_MUTED,
+                    Color::from_srgb8(160, 166, 176, 255),
+                ),
                 (Token::PRIMARY, Color::from_srgb8(120, 165, 255, 255)),
                 (Token::ON_PRIMARY, Color::from_srgb8(10, 18, 34, 255)),
                 (Token::ACCENT, Color::from_srgb8(255, 148, 104, 255)),
@@ -270,7 +282,10 @@ impl ThemeSet {
                 (Token::GRID, Color::from_srgb8(64, 68, 78, 140)),
                 (Token::CANVAS_BACKDROP, Color::from_srgb8(18, 20, 24, 255)),
                 (Token::CANVAS_NODE, Color::from_srgb8(44, 48, 56, 255)),
-                (Token::CANVAS_NODE_SELECTED, Color::from_srgb8(120, 165, 255, 255)),
+                (
+                    Token::CANVAS_NODE_SELECTED,
+                    Color::from_srgb8(120, 165, 255, 255),
+                ),
                 (Token::SNAP_GUIDE, Color::from_srgb8(255, 92, 122, 255)),
                 (Token::TEXT_PRIMARY, Color::from_srgb8(233, 236, 241, 255)),
                 (Token::TEXT_SECONDARY, Color::from_srgb8(160, 166, 176, 255)),
@@ -309,7 +324,10 @@ impl ThemeSet {
                 (Token::GRID, Color::WHITE),
                 (Token::CANVAS_BACKDROP, Color::BLACK),
                 (Token::CANVAS_NODE, Color::from_srgb8(16, 16, 16, 255)),
-                (Token::CANVAS_NODE_SELECTED, Color::from_srgb8(255, 230, 0, 255)),
+                (
+                    Token::CANVAS_NODE_SELECTED,
+                    Color::from_srgb8(255, 230, 0, 255),
+                ),
                 (Token::SNAP_GUIDE, Color::from_srgb8(255, 0, 128, 255)),
                 (Token::TEXT_PRIMARY, Color::WHITE),
                 (Token::TEXT_SECONDARY, Color::WHITE),
@@ -521,7 +539,11 @@ mod tests {
             let palette = set.palette(kind);
             for token in TOKENS {
                 assert!(
-                    palette.color(token).to_array().iter().all(|c| c.is_finite()),
+                    palette
+                        .color(token)
+                        .to_array()
+                        .iter()
+                        .all(|c| c.is_finite()),
                     "token {} has no finite colour in {}",
                     token.raw(),
                     kind.name()
@@ -535,7 +557,10 @@ mod tests {
         let mut state = ThemeState::default();
         let outcome = state.switch(ThemeKind::Dark);
         assert_eq!(outcome.bytes_uploaded, 4096);
-        assert!(!outcome.relayout_required, "a theme switch must not re-layout");
+        assert!(
+            !outcome.relayout_required,
+            "a theme switch must not re-layout"
+        );
         assert!(
             !outcome.instance_reupload_required,
             "a theme switch must not re-upload instances"

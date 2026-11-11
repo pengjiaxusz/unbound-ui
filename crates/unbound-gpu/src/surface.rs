@@ -47,8 +47,7 @@ impl Surface {
     #[cfg(windows)]
     pub fn new_win32(gpu: &Gpu, hwnd: isize) -> Result<Self, GpuError> {
         let khr_surface = ash::khr::surface::Instance::new(&gpu.entry, &gpu.instance);
-        let win32_surface =
-            ash::khr::win32_surface::Instance::new(&gpu.entry, &gpu.instance);
+        let win32_surface = ash::khr::win32_surface::Instance::new(&gpu.entry, &gpu.instance);
         // SAFETY: the handle comes from a live window and is only read here.
         let create_info = vk::Win32SurfaceCreateInfoKHR::default().hwnd(hwnd);
         let surface = unsafe { win32_surface.create_win32_surface(&create_info, None) }
@@ -264,10 +263,8 @@ impl Swapchain {
             .find(|f| f.format == crate::pipeline::COLOR_FORMAT)
             .copied()
             .ok_or_else(|| {
-                let available: Vec<String> = formats
-                    .iter()
-                    .map(|f| format!("{:?}", f.format))
-                    .collect();
+                let available: Vec<String> =
+                    formats.iter().map(|f| format!("{:?}", f.format)).collect();
                 GpuError::Allocation(format!(
                     "the surface does not expose the renderer's colour format {:?}; \
                      it offers {:?}",
@@ -327,16 +324,15 @@ impl Swapchain {
             .present_mode(present_mode)
             .clipped(true);
 
-        let khr_swapchain =
-            ash::khr::swapchain::Device::new(&gpu.instance, &gpu.device);
+        let khr_swapchain = ash::khr::swapchain::Device::new(&gpu.instance, &gpu.device);
         // SAFETY: the surface belongs to the same instance as the device.
         let swapchain = unsafe { khr_swapchain.create_swapchain(&create_info, None) }
             .map_err(GpuError::from)?;
 
         // The images come from the swapchain; we only create views.
         // SAFETY: the swapchain was just created.
-        let images = unsafe { khr_swapchain.get_swapchain_images(swapchain) }
-            .map_err(GpuError::from)?;
+        let images =
+            unsafe { khr_swapchain.get_swapchain_images(swapchain) }.map_err(GpuError::from)?;
 
         let mut views = Vec::with_capacity(images.len());
         for image in &images {
@@ -347,12 +343,14 @@ impl Swapchain {
                         .image(*image)
                         .view_type(vk::ImageViewType::TYPE_2D)
                         .format(chosen.format)
-                        .subresource_range(vk::ImageSubresourceRange::default()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .base_mip_level(0)
-                            .level_count(1)
-                            .base_array_layer(0)
-                            .layer_count(1)),
+                        .subresource_range(
+                            vk::ImageSubresourceRange::default()
+                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .base_mip_level(0)
+                                .level_count(1)
+                                .base_array_layer(0)
+                                .layer_count(1),
+                        ),
                     None,
                 )
             }

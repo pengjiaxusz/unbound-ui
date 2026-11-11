@@ -530,8 +530,7 @@ impl Gpu {
             descriptor_indexing: f12.descriptor_indexing == vk::TRUE,
             runtime_descriptor_array: f12.runtime_descriptor_array == vk::TRUE,
             partially_bound_descriptors: f12.descriptor_binding_partially_bound == vk::TRUE,
-            update_after_bind: f12.descriptor_binding_sampled_image_update_after_bind
-                == vk::TRUE,
+            update_after_bind: f12.descriptor_binding_sampled_image_update_after_bind == vk::TRUE,
             dynamic_rendering: f13.dynamic_rendering == vk::TRUE,
             synchronization2: f13.synchronization2 == vk::TRUE,
             timeline_semaphore: f12.timeline_semaphore == vk::TRUE,
@@ -569,9 +568,8 @@ impl Gpu {
                 transfer.get_or_insert(i as u32);
             }
         }
-        let graphics = graphics.ok_or_else(|| {
-            GpuError::NoSuitableDevice("no graphics+compute queue family".into())
-        })?;
+        let graphics = graphics
+            .ok_or_else(|| GpuError::NoSuitableDevice("no graphics+compute queue family".into()))?;
         let dedicated = transfer.is_some();
         let transfer = transfer.unwrap_or(graphics);
         let families = QueueFamilies {
@@ -776,7 +774,8 @@ impl Gpu {
 
         let khr_dynamic_rendering = ash::khr::dynamic_rendering::Device::new(&instance, &device);
         let khr_synchronization2 = ash::khr::synchronization2::Device::new(&instance, &device);
-        let khr_draw_indirect_count = ash::khr::draw_indirect_count::Device::new(&instance, &device);
+        let khr_draw_indirect_count =
+            ash::khr::draw_indirect_count::Device::new(&instance, &device);
 
         let lifetime = DeviceLifetime {
             device: device.clone(),
@@ -1070,7 +1069,11 @@ impl Gpu {
         // Prefer the atom-rounded size; fall back to reaching the end of the
         // allocation when rounding would overshoot it.
         let rounded = wanted.div_ceil(atom) * atom;
-        let size = if rounded <= allocation { rounded } else { allocation - offset };
+        let size = if rounded <= allocation {
+            rounded
+        } else {
+            allocation - offset
+        };
         if size == 0 {
             return;
         }
@@ -1114,7 +1117,8 @@ impl Gpu {
             self.device.end_command_buffer(cmd)?;
             let cmds = [cmd];
             let submit = vk::SubmitInfo::default().command_buffers(&cmds);
-            self.device.queue_submit(self.graphics_queue, &[submit], vk::Fence::null())?;
+            self.device
+                .queue_submit(self.graphics_queue, &[submit], vk::Fence::null())?;
             self.device.queue_wait_idle(self.graphics_queue)?;
             self.device.free_command_buffers(self.command_pool, &cmds);
             Ok(())
@@ -1296,8 +1300,12 @@ mod tests {
             &mut extensions,
             &["VK_EXT_swapchain_maintenance1".to_string()],
         );
-        assert!(extensions.iter().any(|e| e == "VK_KHR_get_surface_capabilities2"));
-        assert!(extensions.iter().any(|e| e == "VK_EXT_surface_maintenance1"));
+        assert!(extensions
+            .iter()
+            .any(|e| e == "VK_KHR_get_surface_capabilities2"));
+        assert!(extensions
+            .iter()
+            .any(|e| e == "VK_EXT_surface_maintenance1"));
 
         // A second pass must not duplicate anything.
         let before = extensions.len();
@@ -1361,8 +1369,7 @@ mod tests {
         let buf = gpu
             .create_buffer(
                 4096,
-                vk::BufferUsageFlags::STORAGE_BUFFER
-                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
                 MemoryKind::DeviceLocal,
                 "test-bda",
             )

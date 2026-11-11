@@ -17,7 +17,8 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 /// Extensions the windowed backend requires on top of the renderer's own set.
-pub const REQUIRED_SWAPCHAIN_EXTENSIONS: [&str; 2] = ["VK_KHR_swapchain", "VK_EXT_swapchain_maintenance1"];
+pub const REQUIRED_SWAPCHAIN_EXTENSIONS: [&str; 2] =
+    ["VK_KHR_swapchain", "VK_EXT_swapchain_maintenance1"];
 
 /// How the presentation engine must scale a swapchain whose size no longer
 /// matches the window (the resize frame, before the swapchain is recreated).
@@ -95,9 +96,7 @@ impl PresentConfig {
         let has_maintenance1 = extensions
             .iter()
             .any(|name| name == "VK_EXT_swapchain_maintenance1");
-        let has_present_wait = extensions
-            .iter()
-            .any(|name| name == "VK_KHR_present_wait");
+        let has_present_wait = extensions.iter().any(|name| name == "VK_KHR_present_wait");
         Self {
             mode: PresentMode::choose(has_maintenance1, allow_tearing),
             // Stretch during a resize: a letterboxed frame reads as a bug to
