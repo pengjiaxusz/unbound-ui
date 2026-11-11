@@ -160,8 +160,12 @@ impl TestApp {
     }
 
     /// Pan the camera by a window-space delta.
+    ///
+    /// Hover and cursor are re-picked at the new canvas point: the pointer did
+    /// not move, but the canvas under it did.
     pub fn pan_by(&mut self, delta: Vec2) {
         self.pan += delta;
+        self.refresh_pointer();
     }
 
     /// Zoom around a window-space anchor, keeping the canvas point under it.
@@ -170,6 +174,7 @@ impl TestApp {
         self.zoom = (self.zoom * factor).clamp(0.25, 8.0);
         let anchor_canvas = before - (anchor - self.viewport * 0.5) / self.zoom;
         self.pan = (self.viewport * 0.5 - anchor_canvas) * self.zoom;
+        self.refresh_pointer();
     }
 
     /// Move the pointer to a window position and update hover.
@@ -236,11 +241,39 @@ impl TestApp {
     ///
     /// This is the "frame committed" step: the generation is bumped and the
     /// focus is re-applied to the fresh tree.
-    pub fn install(&mut self, regions: Vec<HitRegion>, semantics: Semantics) {
+    ///
+    /// A rebuild can remove the node that holds the pointer capture or the
+    /// focus. Both are validated against the new scene: a capture on a node
+    /// that no longer exists is cancelled (and the `CaptureLost` event is
+    /// returned), and a focus on a vanished node falls back to the root.
+    /// Without this, a later release would deliver a click for a node that
+    /// the scene no longer contains.
+    pub fn install(
+        &mut self,
+        regions: Vec<HitRegion>,
+        semantics: Semantics,
+    ) -> Option<PointerEvent> {
         self.router.set_regions(regions);
+        let capture_lost = if self
+            .router
+            .pointer()
+            .capture()
+            .is_some_and(|node| !self.router.regions().iter().any(|r| r.node == node))
+        {
+            self.router.cancel()
+        } else {
+            None
+        };
         self.semantics = semantics;
+        if self
+            .focus
+            .is_some_and(|key| key != self.semantics.root() && self.semantics.get(key).is_none())
+        {
+            self.focus = None;
+        }
         self.apply_focus();
         self.generation = self.generation.wrapping_add(1);
+        capture_lost
     }
 
     /// Focus a node and mirror it into the semantic tree.
@@ -276,12 +309,20 @@ impl TestApp {
 
     /// Assert a node's accessible label.
     pub fn assert_label(&self, node: NodeId, expected: &str) {
-        assert_eq!(self.semantics_node(node).label, expected, "label of {node:?}");
+        assert_eq!(
+            self.semantics_node(node).label,
+            expected,
+            "label of {node:?}"
+        );
     }
 
     /// Assert a node's accessible value.
     pub fn assert_value(&self, node: NodeId, expected: &str) {
-        assert_eq!(self.semantics_node(node).value, expected, "value of {node:?}");
+        assert_eq!(
+            self.semantics_node(node).value,
+            expected,
+            "value of {node:?}"
+        );
     }
 
     /// Assert the focused semantic id.
@@ -310,7 +351,15 @@ impl TestApp {
 
     /// The current pointer position, in window pixels.
     fn pointer_position(&self) -> Vec2 {
-        self.pointer.expect("move the pointer before pressing or releasing")
+        self.pointer
+            .expect("move the pointer before pressing or releasing")
+    }
+
+    /// Re-pick hover and cursor after the camera moved under the pointer.
+    fn refresh_pointer(&mut self) {
+        if let Some(screen) = self.pointer {
+            self.router.refresh_at(self.screen_to_canvas(screen));
+        }
     }
 
     /// Mirror `focus` into the semantic tree (the root means "no focus").

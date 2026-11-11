@@ -1816,6 +1816,7 @@ dependencies = [
 name = "unbound-headless"
 version = "0.1.0"
 dependencies = [
+ "accesskit",
  "postcard",
  "rkyv",
  "serde",
