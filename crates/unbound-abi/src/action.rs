@@ -52,6 +52,16 @@ pub enum ActionKind {
     DragOver = 29,
     /// OS file drag released.
     Drop = 30,
+    /// Begin dragging a client-side decorated window.
+    WindowDrag = 31,
+    /// Minimise the window.
+    WindowMinimize = 32,
+    /// Toggle the window's maximised state.
+    WindowToggleMaximize = 33,
+    /// Close the window.
+    WindowClose = 34,
+    /// Ask the host to apply a new zoom factor; payload 0 = `f32` bits.
+    SetZoom = 35,
     /// Escape hatch for application-specific actions.
     Custom = 0xFFFF,
 }
@@ -90,6 +100,11 @@ impl ActionKind {
             25 => Self::Resize,
             26 => Self::Focus,
             27 => Self::Blur,
+            31 => Self::WindowDrag,
+            32 => Self::WindowMinimize,
+            33 => Self::WindowToggleMaximize,
+            34 => Self::WindowClose,
+            35 => Self::SetZoom,
             0xFFFF => Self::Custom,
             _ => Self::None,
         }
@@ -237,6 +252,20 @@ mod tests {
     fn action_size_is_40_bytes() {
         assert_eq!(core::mem::size_of::<RawAction>(), 40);
         assert_eq!(core::mem::align_of::<RawAction>(), 8);
+    }
+
+    #[test]
+    fn window_actions_round_trip() {
+        for kind in [
+            ActionKind::WindowDrag,
+            ActionKind::WindowMinimize,
+            ActionKind::WindowToggleMaximize,
+            ActionKind::WindowClose,
+            ActionKind::SetZoom,
+        ] {
+            assert_eq!(ActionKind::from_u32(kind as u32), kind);
+            assert!(!kind.is_transactional());
+        }
     }
 
     #[test]

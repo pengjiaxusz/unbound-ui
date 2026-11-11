@@ -27,6 +27,15 @@ pub struct WindowConfig {
     pub height: u32,
     /// Whether the user may resize the window.
     pub resizable: bool,
+    /// Whether the OS draws a native title bar and border.
+    ///
+    /// A client-side decoration application turns this off and drags the
+    /// window itself through the title-bar hit region.
+    pub decorations: bool,
+    /// Smallest logical width the user may resize the window to.
+    pub min_width: u32,
+    /// Smallest logical height the user may resize the window to.
+    pub min_height: u32,
     /// Whether the window starts visible.
     pub visible: bool,
     /// Target refresh interval.
@@ -40,6 +49,9 @@ impl Default for WindowConfig {
             width: 1280,
             height: 800,
             resizable: true,
+            decorations: true,
+            min_width: 960,
+            min_height: 600,
             visible: true,
             refresh: crate::pacing::REFRESH_120,
         }
@@ -335,6 +347,10 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
         },
         PlatformEvent::ScaleFactorChanged(factor) => {
             state.scale_factor = *factor;
+            // The application lays out in logical units, so it has to know the
+            // device scale to keep input, glyph rasterisation and the camera in
+            // one coordinate space.
+            out.push(event.clone());
         }
         PlatformEvent::CursorMoved { .. }
         | PlatformEvent::PointerRaw { .. }

@@ -26,7 +26,7 @@ use crate::cursor::CursorKind;
 pub const PORTAL_LAYER: u8 = 2;
 
 /// A rounded-rectangle clip, the CPU mirror of `GpuClipNode`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ClipRect {
     pub rect: Rect,
     /// Corner radii in `TL, TR, BR, BL` order.
@@ -275,6 +275,93 @@ pub fn pick_stack(regions: &[HitRegion], point: Vec2) -> Vec<&HitRegion> {
     hits
 }
 
+/// A window edge or corner that starts a native resize drag.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ResizeEdge {
+    /// Top edge.
+    North,
+    /// Bottom edge.
+    South,
+    /// Left edge.
+    West,
+    /// Right edge.
+    East,
+    /// Top-left corner.
+    NorthWest,
+    /// Top-right corner.
+    NorthEast,
+    /// Bottom-left corner.
+    SouthWest,
+    /// Bottom-right corner.
+    SouthEast,
+}
+
+impl ResizeEdge {
+    /// The cursor that advertises this edge.
+    #[must_use]
+    pub fn cursor(self) -> CursorKind {
+        match self {
+            Self::North | Self::South => CursorKind::ResizeNorthSouth,
+            Self::West | Self::East => CursorKind::ResizeEastWest,
+            Self::NorthWest | Self::SouthEast => CursorKind::ResizeNorthWestSouthEast,
+            Self::NorthEast | Self::SouthWest => CursorKind::ResizeNorthEastSouthWest,
+        }
+    }
+}
+
+/// The resize band under `point`, if any.
+///
+/// `border` is the thickness of the straight edges and `corner` the square
+/// reach of the four diagonal handles; the corner test runs first so a point
+/// in both bands gets the two-axis cursor.
+#[must_use]
+pub fn resize_edge(point: Vec2, size: Vec2, border: f32, corner: f32) -> Option<ResizeEdge> {
+    if size.x <= 0.0
+        || size.y <= 0.0
+        || point.x < 0.0
+        || point.y < 0.0
+        || point.x > size.x
+        || point.y > size.y
+    {
+        return None;
+    }
+    let border = border.max(0.0).min(size.x * 0.5).min(size.y * 0.5);
+    let corner = corner.max(border).min(size.x * 0.5).min(size.y * 0.5);
+    let left = point.x <= border;
+    let right = point.x >= size.x - border;
+    let top = point.y <= border;
+    let bottom = point.y >= size.y - border;
+    let corner_left = point.x <= corner;
+    let corner_right = point.x >= size.x - corner;
+    let corner_top = point.y <= corner;
+    let corner_bottom = point.y >= size.y - corner;
+    if corner_left && corner_top {
+        return Some(ResizeEdge::NorthWest);
+    }
+    if corner_right && corner_top {
+        return Some(ResizeEdge::NorthEast);
+    }
+    if corner_left && corner_bottom {
+        return Some(ResizeEdge::SouthWest);
+    }
+    if corner_right && corner_bottom {
+        return Some(ResizeEdge::SouthEast);
+    }
+    if top {
+        return Some(ResizeEdge::North);
+    }
+    if bottom {
+        return Some(ResizeEdge::South);
+    }
+    if left {
+        return Some(ResizeEdge::West);
+    }
+    if right {
+        return Some(ResizeEdge::East);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,6 +453,34 @@ mod tests {
             HitRegion::new(2, 1, 1, rect(0.0, 0.0, 100.0, 100.0)),
         ];
         assert_eq!(pick(&regions, Vec2::new(50.0, 50.0)).unwrap().node, 2);
+    }
+
+    #[test]
+    fn window_edges_start_the_matching_resize() {
+        let size = Vec2::new(1000.0, 700.0);
+        assert_eq!(
+            resize_edge(Vec2::new(2.0, 350.0), size, 6.0, 14.0),
+            Some(ResizeEdge::West)
+        );
+        assert_eq!(
+            resize_edge(Vec2::new(500.0, 698.0), size, 6.0, 14.0),
+            Some(ResizeEdge::South)
+        );
+        assert_eq!(
+            resize_edge(Vec2::new(997.0, 3.0), size, 6.0, 14.0),
+            Some(ResizeEdge::NorthEast)
+        );
+        assert_eq!(
+            resize_edge(Vec2::new(3.0, 697.0), size, 6.0, 14.0),
+            Some(ResizeEdge::SouthWest)
+        );
+    }
+
+    #[test]
+    fn the_window_middle_is_not_a_resize() {
+        let size = Vec2::new(1000.0, 700.0);
+        assert_eq!(resize_edge(Vec2::new(500.0, 350.0), size, 6.0, 14.0), None);
+        assert_eq!(resize_edge(Vec2::new(-1.0, 350.0), size, 6.0, 14.0), None);
     }
 
     #[test]

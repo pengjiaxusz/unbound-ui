@@ -131,14 +131,21 @@ impl<A: PlatformApp> Runner<A> {
 
 impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let attributes = Window::default_attributes()
+        let mut attributes = Window::default_attributes()
             .with_title(&self.config.title)
             .with_inner_size(LogicalSize::new(
                 f64::from(self.config.width),
                 f64::from(self.config.height),
             ))
             .with_resizable(self.config.resizable)
+            .with_decorations(self.config.decorations)
             .with_visible(self.config.visible);
+        if self.config.min_width > 0 && self.config.min_height > 0 {
+            attributes = attributes.with_min_inner_size(LogicalSize::new(
+                f64::from(self.config.min_width),
+                f64::from(self.config.min_height),
+            ));
+        }
         let Ok(window) = event_loop.create_window(attributes) else {
             event_loop.exit();
             return;
@@ -149,6 +156,7 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
             Extent::new(size.width, size.height),
             PresentWaitPolicy::from_extensions(&[]),
         );
+        state.scale_factor = window.scale_factor();
         state.visible = window.is_visible().unwrap_or(true);
         self.app.resumed(&mut state, &window);
         self.state = Some(state);
