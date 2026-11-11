@@ -43,7 +43,7 @@
 | :--- | ---: | :--- | :--- |
 | `unbound-math` | 1337 | 基础数学类型与半精度打包 | 无 |
 | `unbound-abi` | 1573 | 稳定 ABI：扁平 POD 描述符、Action、插件虚表 | `unbound-math` |
-| `unbound-gpu` | 10241 | Vulkan 1.3 后端：显存池、瞬态环、剔除排序、Uber 着色器 | `unbound-math`、`unbound-theme`、`unbound-vector` |
+| `unbound-gpu` | 10826 | Vulkan 1.3 后端：显存池、瞬态环、剔除排序、Uber 着色器 | `unbound-math`、`unbound-theme`、`unbound-vector` |
 | `unbound-vector` | 804 | 三次贝塞尔自适应降阶、紧致 OBB、解析距离求解 | `unbound-math` |
 | `unbound-text` | 2448 | cosmic-text 塑形、双级缓存、双图集、MTSDF 距离场 | `unbound-math` |
 | `unbound-world` | 1674 | SlotMap 扁平状态树、三级脏标记、虚拟化容器 | `unbound-math`、`unbound-abi` |
@@ -55,12 +55,12 @@
 | `unbound-theme` | 978 | 语义设计令牌、颜色表、三层正交缩放、像素吸附 | `unbound-math` |
 | `unbound-graph` | 857 | 渲染图瞬态纹理生命周期校验、毛玻璃离屏池 | `unbound-math` |
 | `unbound-asset` | 1222 | 后台解码线程池、CPU 暂存环、传输队列交接 | `unbound-math` |
-| `unbound-platform` | 1457 | 窗口平台层：非阻塞缩放、低延迟呈现、延迟计量 | `unbound-math`、`unbound-gpu` |
+| `unbound-platform` | 1562 | 窗口平台层：非阻塞缩放、低延迟呈现、延迟计量 | `unbound-math`、`unbound-gpu` |
 | `unbound-headless` | 1654 | 无头验证器：五项几何体检、rkyv 时间旅行快照 | `unbound-world`、`unbound-layout` |
 | `unbound-host` | 909 | Host-Guest C-ABI 热重载、分配器劫持、状态迁移 | `unbound-abi` |
 | `unbound-kpi` | 398 | 验收红线实测 | 多数 crate |
 | `app-guest` | 529 | 可热重载的业务层 cdylib | `unbound-abi` |
-| `apps/showcase` | 1088 | 组件展台：图元总览、主题切换、无头出图 | `unbound-gpu`、`unbound-text`、`unbound-platform` |
+| `apps/showcase` | 1145 | 组件展台：图元总览、主题切换、无头出图 | `unbound-gpu`、`unbound-text`、`unbound-platform` |
 | `apps/gallery` | 474 | 全链路演示程序（控制台测量） | `unbound-gpu` |
 
 ## 三条刻意的依赖禁令
@@ -77,9 +77,9 @@
 | :--- | ---: |
 | crate 数 | 19 + 2 个应用 |
 | Rust 源文件 | 88 |
-| Rust 代码行 | 约 34 500 |
+| Rust 代码行 | 约 35 200 |
 | 着色器文件 | 13 |
-| 自动化测试 | 555 项（debug 与 release 双跑全绿） |
+| 自动化测试 | 562 项（debug 与 release 双跑全绿） |
 
 ---
 

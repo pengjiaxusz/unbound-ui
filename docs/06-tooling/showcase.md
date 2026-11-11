@@ -100,6 +100,37 @@ cargo run -p showcase --release -- --shot shot.png --dark   # 暗色
 | 焦点环完全不可见 | 描边分支取了填充槽的颜色 | 描边取边框槽的颜色 |
 | 阴影看不见 | 阴影色被硬编码在 LUT 第 1 槽，展台却放在第 10 槽 | 统一槽位约定 |
 
+### 第二轮：窗口路径
+
+展台的**窗口**也暴露了一整类缺陷——它们在离屏渲染里完全看不见，因为离屏
+路径压根不碰交换链：
+
+| 症状 | 根因 | 修复 |
+| :--- | :--- | :--- |
+| 窗口只画出三帧就停住 | winit 默认 `ControlFlow::Wait`，事件循环睡到下一个输入事件 | 平台层按帧节奏设 `WaitUntil`，应用呈现后 `request_redraw()` |
+| 拖拽窗口边缘时黑边、拉伸 | 展台一看到尺寸变化就重建交换链，绕过了平台的延迟重建策略 | 接入 `ResizeTracker`，稳定后只重建一次 |
+| 拖拽结束后尺寸停在旧值 | 稳定窗口的 tick 只在 resize 事件到达时触发，最后一条事件之后就再也不提交了 | `PlatformState::poll_resize` 每帧驱动 |
+| 窗口可能渲染到未就绪的图像 | `vkAcquireNextImageKHR` 的信号量与栅栏**都传了空句柄**（非法用法，有的驱动会容忍） | 交换链持有信号量池，渲染提交等待 `image_available` |
+| 交换链图像从未转出 `UNDEFINED` | 渲染器认为「外部附件由持有者负责转布局」，而展台没转 | `render_to_view` 接收图像句柄并自行转换 |
+| 低延迟呈现把帧循环卡死 | `vkWaitForPresentKHR` 无限等待，而窗口没被合成时呈现永不完成 | 等待加上限 + 连续超时后自动关闭低延迟路径 |
+
+窗口路径的正确性现在有一条像素级断言守着：
+`the_borrowed_attachment_path_matches_the_offscreen_path` 用一张与交换链
+同 usage 的图像当附件渲染，与离屏路径的产物**逐字节比对**——两条路径必须画出
+同一张画面。
+
+### 第三轮：分配器
+
+展台之外，`crates/unbound-gpu/src/tlsf_probe.rs` 留下了一个自称"TEMPORARY
+probe / Delete after audit"的探针。它的用例一直失败——**审计从未完成**。
+
+顺着它查下去是一个真实的堆破坏：TLSF 按桶找空闲块，而桶只保证下界，于是
+可能把一个比请求小的块交出去；切分时 `block.size - want` 在无符号整数上回绕，
+"剩余块"的表头被写到竞技场之外。
+
+探针文件已删除，缺陷由 `crates/unbound-gpu/src/tlsf.rs` 里的
+`a_request_bigger_than_the_free_hole_is_refused` 守住。
+
 ---
 
 **相关文档**：[Uber-Shader 与双通道深度](../01-graphics/uber-shader.md) ·

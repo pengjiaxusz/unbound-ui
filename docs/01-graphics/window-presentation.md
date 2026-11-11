@@ -4,10 +4,10 @@
 >
 > | | |
 > | :--- | :--- |
-> | **已落地** | Vulkan surface 与 swapchain 创建、acquire → render → present 循环、非阻塞缩放状态机、输入到光子延迟计量、winit 事件层 |
+> | **已落地** | Vulkan surface 与 swapchain 创建、acquire → render → present 闭环、延迟重建策略、`VK_KHR_present_wait` 低延迟路径、事件循环自驱动、输入到光子延迟计量 |
 > | **缺口** | DWM 实际行为未在真机测量；零黑边仍是设计目标而非实测结论 |
 > | **源码** | `crates/unbound-platform/src/{resize,pacing,latency,backend,window}.rs`、`crates/unbound-gpu/src/surface.rs` |
-> | **验收** | `apps/showcase` 开窗运行；`--shot` 模式可无头出图 |
+> | **验收** | `apps/showcase` 开窗运行；`--shot` 模式可无头出图；`the_borrowed_attachment_path_matches_the_offscreen_path` 逐像素比对窗口路径 |
 
 ## 呈现链路
 
@@ -16,20 +16,75 @@
 ```
   PlatformApp::frame()
         │
-        ├─ swapchain.acquire()          → (image_index, image_view)
-        ├─ renderer.render_to_view()     → 在借来的交换链图像上直接绘制
-        └─ swapchain.present(finished)   → 等待 render_finished 信号量后呈现
+        ├─ renderer.wait_for_previous_frame()   → 上一帧退役，信号量槽位可复用
+        ├─ swapchain.acquire()                  → (index, image, view, available)
+        ├─ renderer.render_to_view()             → 在借来的交换链图像上直接绘制
+        ├─ swapchain.present(finished)           → 等待 render_finished 信号量后呈现
+        └─ pacer.on_present() + request_redraw() → 帧节奏由应用自己驱动
 ```
 
 - `Surface::new_win32` 用 `vkCreateWin32SurfaceKHR` 把窗口的 `HWND` 交给
   Vulkan。
 - `Swapchain` 负责创建、`acquire` 与 `present`；呈现时用
-  `vkWaitForFences` + `PresentInfoKHR.pWaitSemaphores` 等到渲染完成的那张图。
-- `Renderer::render_to_view` 借用交换链图像作为颜色附件，同时跳过自己离屏
-  目标的那道颜色屏障——所以窗口里画出来的和 `--shot` 离屏画出来的是同一条
-  路径的同一条代码。
+  `PresentInfoKHR.pWaitSemaphores` 等到渲染完成的那张图。
+- `Renderer::render_to_view` 借用交换链图像作为颜色附件，并把它从
+  `UNDEFINED` 转成 `COLOR_ATTACHMENT_OPTIMAL`——**视图不能做布局转换，
+  必须拿得到图像本身**。
 - 提交走 `vkQueueSubmit2`：时间线信号量（帧计数）与二元信号量（呈现栅栏）
   可以在同一次提交里混合使用，这正是 `vkQueueSubmit` 做不到的。
+
+### 三条同步不变量
+
+窗口路径的正确性依赖三条不变量，少一条就会出现"画面偶尔错乱"或者"整个
+程序卡死"：
+
+| 不变量 | 违反后的后果 |
+| :--- | :--- |
+| `vkAcquireNextImageKHR` 必须拿到一个有效的信号量 | 两个句柄都为空是**非法用法**。有的驱动会容忍，但同步语义就没有了 |
+| 渲染提交必须等待 `image_available` 信号量 | 渲染可能与呈现引擎抢同一张图像 |
+| 再次 `acquire` 之前，上一帧的信号量必须已被消费 | 二元信号量只允许一个挂起信号；重复 signal 会**丢信号**，下一帧永远等不到 |
+
+第三条是最隐蔽的一条：信号量池的深度等于「在途帧数」，槽位一个帧周期后才会
+复用。因此**必须在 acquire 之前**等上一帧退役（`Renderer::wait_for_previous_frame`），
+否则 GPU 还没开始执行上一帧的提交时，二次 signal 会把第一次的信号覆盖掉。
+
+### 事件循环必须自驱动
+
+`winit` 的默认 `ControlFlow::Wait` 会把事件循环**睡到下一个输入事件**才醒。
+一个只在有输入时才画画的窗口，看起来就是冻住了。平台层因此在每帧结束时按
+帧节奏设置 `ControlFlow::WaitUntil(下一次出图时刻)`，由应用在呈现后调用
+`request_redraw()`。
+
+### 低延迟呈现与它的降级
+
+`VK_KHR_present_wait` 让 CPU 能等到「图像真的上了屏」。实现要点：
+
+- 呈现时把 `VkPresentIdKHR` 挂进 `VkPresentInfoKHR` 的 `pNext`，用一个
+  单调递增的非零标识符标记本次呈现（规范要求它大于此前所有标识符）。
+- `vkWaitForPresentKHR` 的等待**必须有上限**：窗口没有被合成时（被遮挡、
+  最小化、无桌面会话），呈现永远不会完成，无限等待会把帧循环彻底卡死。
+- 连续几次超时之后，低延迟路径**自动关闭**——等一个永远不会到来的呈现，
+  只会给每一帧白白加上一个超时。
+
+## 零黑边：延迟重建交换链
+
+拖拽窗口边缘会产生一串 `WM_SIZE`。每收到一个就重建交换链，正是黑边与拉伸
+画面的来源：新的交换链还没准备好，合成器已经在按新的窗口尺寸取帧了。
+
+`unbound-platform` 的 `ResizeTracker` 把这个策略落到了实处：
+
+| 阶段 | 行为 |
+| :--- | :--- |
+| 尺寸变化 | 只**记录**新尺寸，不重建 |
+| 稳定窗口期内 | 继续用旧交换链出图，合成器把最后一帧缩放到新窗口尺寸——既没有黑边，也没有重建风暴 |
+| 尺寸稳定后 | 重建**一次**交换链，尺寸精确 |
+
+有一个容易漏掉的细节：**稳定窗口需要一个不由事件驱动的 tick**。一次拖拽的
+最后一条 `WM_SIZE` 之后如果不再有事件，那个尺寸就永远不会被提交，窗口会一直
+停在旧尺寸上。所以 `PlatformState::poll_resize` 必须每帧调用。
+
+绘制尺寸取自**已提交的**交换链尺寸（`Swapchain::extent()`），而不是窗口当前
+的尺寸——这正是"拖拽期间用旧尺寸渲染"这条策略的落点。
 
 ## 模态缩放阻塞破除
 
@@ -98,7 +153,7 @@ pub fn renderer_present_config(
 | :--- | :--- | :--- |
 | DWM 实际行为未验证 | 零黑边为设计目标而非实测 | 需在 Windows 真机测量 |
 | 缩放时的交换链重建未做压力测试 | 极端拖拽下可能出现一两帧撕裂 | 需要真机长时间拖拽验证 |
-| `VK_KHR_present_wait` 尚未接入 | 低延迟路径仍走 FIFO 等待 | 接入可等待交换链图像就绪信号量 |
+| 无头会话下窗口不会被合成 | 呈现永远不完成，低延迟等待只能超时降级 | 需要有桌面会话的机器实测呈现时序 |
 
 ---
 
