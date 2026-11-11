@@ -394,27 +394,11 @@ impl ThemeLut {
     pub fn color(&self, token: Token) -> Color {
         let e = self.entries[token.index()];
         Color::new(
-            f16_to_f32(e[0]),
-            f16_to_f32(e[1]),
-            f16_to_f32(e[2]),
-            f16_to_f32(e[3]),
+            unbound_math::f16_to_f32(e[0]),
+            unbound_math::f16_to_f32(e[1]),
+            unbound_math::f16_to_f32(e[2]),
+            unbound_math::f16_to_f32(e[3]),
         )
-    }
-}
-
-/// Decode an IEEE-754 binary16 value.
-fn f16_to_f32(bits: u16) -> f32 {
-    let sign = if bits & 0x8000 != 0 { -1.0f32 } else { 1.0f32 };
-    let exponent = ((bits >> 10) & 0x1f) as i32;
-    let mantissa = (bits & 0x03ff) as f32;
-    match exponent {
-        0 if mantissa == 0.0 => sign * 0.0,
-        0 => sign * mantissa * (1.0 / 16777216.0),
-        31 => sign * f32::INFINITY,
-        _ => {
-            let scale = 2f32.powi(exponent - 15);
-            sign * (1.0 + mantissa / 1024.0) * scale
-        }
     }
 }
 
@@ -599,6 +583,29 @@ mod tests {
         for (x, y) in a.iter().zip(b.iter()) {
             assert!((x - y).abs() < 0.005, "{x} vs {y}");
         }
+    }
+
+    /// The theme used to carry its own half-float decoder next to the
+    /// canonical one in `unbound-math`. Two decoders for the same format is
+    /// two chances to disagree — and this one did: it mapped every
+    /// exponent-31 pattern to infinity, including the NaNs, where the
+    /// canonical decoder returns NaN.
+    ///
+    /// The theme now uses the canonical decoder outright. This test keeps
+    /// the two from drifting apart again, and pins the NaN behaviour.
+    #[test]
+    fn the_theme_uses_the_canonical_half_float_decoder() {
+        // A signalling NaN and a quiet NaN.
+        for bits in [0x7c01u16, 0x7e00, 0xfc01] {
+            let decoded = unbound_math::f16_to_f32(bits);
+            assert!(
+                decoded.is_nan(),
+                "pattern {bits:#06x} must decode to NaN, got {decoded}"
+            );
+        }
+        // And the ordinary values still decode the way the LUT expects.
+        assert_eq!(unbound_math::f16_to_f32(0x3c00), 1.0);
+        assert_eq!(unbound_math::f16_to_f32(0x0000), 0.0);
     }
 
     #[test]

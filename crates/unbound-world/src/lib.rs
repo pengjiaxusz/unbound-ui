@@ -539,6 +539,9 @@ impl UiWorld {
     }
 
     /// Depth-first pre-order traversal.
+    ///
+    /// Siblings come out in insertion order (left to right), and a whole
+    /// subtree comes out before the next sibling.
     pub fn walk(&self, root: NodeId) -> impl Iterator<Item = NodeId> + '_ {
         let mut stack = vec![root];
         core::iter::from_fn(move || {
@@ -546,12 +549,17 @@ impl UiWorld {
             if !self.nodes.contains_key(id) {
                 return Some(id);
             }
+            let mut kids = Vec::new();
             let mut child = self.nodes[id].first_child;
             while !child.is_null() {
-                stack.push(child);
+                kids.push(child);
                 child = self.nodes[child].next_sibling;
             }
-            // Reverse so children come out left-to-right.
+            // A stack pops last-in-first-out, so the children have to be
+            // pushed in reverse to come out left-to-right.
+            for kid in kids.into_iter().rev() {
+                stack.push(kid);
+            }
             Some(id)
         })
     }
@@ -687,7 +695,14 @@ impl UiWorld {
             }
             boundaries.push(if found.is_null() { self.root } else { found });
         }
-        boundaries.sort_by_key(|id| self.nodes.get(*id).map_or(0, |n| n.depth));
+        // Sort by depth so ancestors are solved before their descendants, then
+        // remove the duplicates. `dedup` only drops *adjacent* equal elements,
+        // so the sort has to group equal boundaries together: sorting by
+        // depth alone leaves two boundaries of the same depth with a third
+        // one in between, and the duplicate survived — the layout engine
+        // would then solve the same boundary twice. The id breaks the tie so
+        // the order is total and the duplicates end up next to each other.
+        boundaries.sort_by_key(|id| (self.nodes.get(*id).map_or(0, |n| n.depth), *id));
         boundaries.dedup();
         boundaries
     }
@@ -760,7 +775,23 @@ impl UiWorld {
     }
 
     fn fold_clips(&mut self, start: NodeId) {
-        let mut stack = vec![(start, None::<Rect>, [None; 2])];
+        // An incremental refold starts in the *middle* of the tree, so the
+        // clip and the rounded slots that `start` inherits from its ancestors
+        // cannot be derived locally — take them from the parent, which
+        // already stores exactly what it passes down to its children.
+        //
+        // Starting from an empty clip made the subtree forget its ancestors:
+        // content that belongs inside a scroll container or a rounded panel
+        // escaped it after an incremental re-layout, because the fold only
+        // saw the boundary's own bounds.
+        let (inherited_clip, inherited_rounded) = match self.nodes.get(start) {
+            Some(node) if !node.parent.is_null() => match self.nodes.get(node.parent) {
+                Some(parent) => (parent.clip, parent.rounded_clips),
+                None => (None, [None; 2]),
+            },
+            _ => (None, [None; 2]),
+        };
+        let mut stack = vec![(start, inherited_clip, inherited_rounded)];
         while let Some((id, inherited_clip, inherited_rounded)) = stack.pop() {
             let Some(node) = self.nodes.get(id) else {
                 continue;
@@ -1075,6 +1106,189 @@ mod tests {
         assert_eq!(visited[0], root);
         assert!(visited.contains(&a1));
         assert!(visited.contains(&b));
+    }
+
+    /// Siblings have to come out in insertion order.
+    ///
+    /// The traversal pushes the children onto a stack, and a stack pops
+    /// last-in-first-out — so without reversing, every sibling group comes out
+    /// **right-to-left**. The comment in the function promised left-to-right,
+    /// and the two other tree walks in this codebase (`fold_clips` here,
+    /// `preorder` in `unbound-layout`) do reverse. A caller that walks the
+    /// tree to paint or to hit-test would see the children of every node in
+    /// the wrong order.
+    #[test]
+    fn walk_yields_siblings_in_insertion_order() {
+        let (mut w, root) = world();
+        let a = w.insert(root, RawNodeDesc::container(), loc());
+        let b = w.insert(root, RawNodeDesc::container(), loc());
+        let c = w.insert(root, RawNodeDesc::container(), loc());
+        let visited: Vec<NodeId> = w.walk(root).collect();
+        assert_eq!(
+            visited,
+            vec![root, a, b, c],
+            "siblings must be visited left-to-right"
+        );
+    }
+
+    /// The same order guarantee for a deeper tree: a whole subtree has to
+    /// come out before the next sibling.
+    #[test]
+    fn walk_yields_a_whole_subtree_before_the_next_sibling() {
+        let (mut w, root) = world();
+        let a = w.insert(root, RawNodeDesc::container(), loc());
+        let a1 = w.insert(a, RawNodeDesc::container(), loc());
+        let a2 = w.insert(a, RawNodeDesc::container(), loc());
+        let b = w.insert(root, RawNodeDesc::container(), loc());
+        let visited: Vec<NodeId> = w.walk(root).collect();
+        assert_eq!(visited, vec![root, a, a1, a2, b]);
+    }
+
+    /// An incremental solve must not drop the clip chain above the boundary.
+    ///
+    /// `apply_rects_from` refolds only the boundary's subtree, but the
+    /// subtree's *effective* clip is the intersection of every clipping
+    /// ancestor. Starting the fold with an empty inherited clip made the
+    /// subtree forget its ancestors: content that belongs inside a scroll
+    /// container or a rounded panel would escape it after an incremental
+    /// re-layout.
+    #[test]
+    fn an_incremental_refold_keeps_the_ancestor_clip_chain() {
+        let (mut w, root) = world();
+        let outer = w.insert(
+            root,
+            RawNodeDesc::container()
+                .size(100.0, 100.0)
+                .flags(NodeFlags::CLIP),
+            loc(),
+        );
+        // The inner container is *wider* than the outer one, so the
+        // difference between "clipped by the ancestor" and "clipped by
+        // itself" is visible.
+        let inner = w.insert(
+            outer,
+            RawNodeDesc::container()
+                .size(400.0, 400.0)
+                .flags(NodeFlags::CLIP),
+            loc(),
+        );
+        let leaf = w.insert(inner, RawNodeDesc::container(), loc());
+
+        let mut rects = FxHashMap::default();
+        rects.insert(root, Rect::new(0.0, 0.0, 800.0, 600.0));
+        rects.insert(outer, Rect::new(10.0, 10.0, 100.0, 100.0));
+        rects.insert(inner, Rect::new(0.0, 0.0, 400.0, 400.0));
+        rects.insert(leaf, Rect::new(0.0, 0.0, 50.0, 50.0));
+        w.apply_rects(&rects);
+
+        // The full fold clips the leaf to the outer container.
+        let full = w.node(leaf).clip.expect("clipped");
+        assert_eq!(full, Rect::new(10.0, 10.0, 100.0, 100.0));
+
+        // Now refold only the inner subtree, the way an incremental layout
+        // solve does.
+        let mut changed = FxHashMap::default();
+        changed.insert(inner, Rect::new(0.0, 0.0, 400.0, 400.0));
+        changed.insert(leaf, Rect::new(0.0, 0.0, 50.0, 50.0));
+        w.apply_rects_from(&changed, &[inner, leaf], inner);
+
+        let incremental = w.node(leaf).clip.expect("still clipped");
+        assert_eq!(
+            incremental, full,
+            "the incremental refold dropped the ancestor clip chain"
+        );
+    }
+
+    /// The same guarantee for the rounded slots: an incremental refold must
+    /// not forget the rounded ancestor above the boundary.
+    #[test]
+    fn an_incremental_refold_keeps_the_ancestor_rounded_clips() {
+        let (mut w, root) = world();
+        let outer = w.insert(
+            root,
+            RawNodeDesc::container()
+                .size(400.0, 400.0)
+                .radius(12.0)
+                .flags(NodeFlags::CLIP),
+            loc(),
+        );
+        let inner = w.insert(
+            outer,
+            RawNodeDesc::container()
+                .size(200.0, 200.0)
+                .flags(NodeFlags::CLIP),
+            loc(),
+        );
+        let leaf = w.insert(inner, RawNodeDesc::container(), loc());
+
+        let mut rects = FxHashMap::default();
+        rects.insert(root, Rect::new(0.0, 0.0, 800.0, 600.0));
+        rects.insert(outer, Rect::new(10.0, 10.0, 400.0, 400.0));
+        rects.insert(inner, Rect::new(0.0, 0.0, 200.0, 200.0));
+        rects.insert(leaf, Rect::new(0.0, 0.0, 50.0, 50.0));
+        w.apply_rects(&rects);
+        assert_eq!(
+            w.node(leaf).rounded_clips[0].expect("rounded").radii,
+            [12.0; 4]
+        );
+
+        let mut changed = FxHashMap::default();
+        changed.insert(inner, Rect::new(0.0, 0.0, 200.0, 200.0));
+        changed.insert(leaf, Rect::new(0.0, 0.0, 50.0, 50.0));
+        w.apply_rects_from(&changed, &[inner, leaf], inner);
+
+        assert_eq!(
+            w.node(leaf).rounded_clips[0].expect("rounded").radii,
+            [12.0; 4],
+            "the incremental refold dropped the ancestor rounded clip"
+        );
+    }
+
+    /// The boundary list must not name the same boundary twice.
+    ///
+    /// The boundaries were sorted by depth and then `dedup`ed — but `dedup`
+    /// only removes *adjacent* duplicates. Two boundaries at the same depth
+    /// with a third one in between left the duplicate in place, and the
+    /// layout engine then solved that boundary twice.
+    #[test]
+    fn dirty_boundaries_never_repeat_a_boundary() {
+        let (mut w, root) = world();
+        // Two boundaries at the same depth.
+        let a = w.insert(
+            root,
+            RawNodeDesc::container()
+                .size(100.0, 100.0)
+                .flags(NodeFlags::CLIP),
+            loc(),
+        );
+        let b = w.insert(
+            root,
+            RawNodeDesc::container()
+                .size(100.0, 100.0)
+                .flags(NodeFlags::CLIP),
+            loc(),
+        );
+        let a_leaf = w.insert(a, RawNodeDesc::text(), loc());
+        let a_leaf2 = w.insert(a, RawNodeDesc::text(), loc());
+        let b_leaf = w.insert(b, RawNodeDesc::text(), loc());
+
+        // Dirty nodes inside `a` and inside `b`. `a` is named twice — once
+        // per dirty node inside it.
+        w.mark_layout_dirty(a_leaf);
+        w.mark_layout_dirty(a_leaf2);
+        w.mark_layout_dirty(b_leaf);
+
+        let boundaries = w.dirty_boundaries();
+        let mut unique = boundaries.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            boundaries.len(),
+            unique.len(),
+            "the same boundary was listed twice: {boundaries:?}"
+        );
+        assert!(boundaries.contains(&a));
+        assert!(boundaries.contains(&b));
     }
 
     #[test]

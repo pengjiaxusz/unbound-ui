@@ -423,10 +423,18 @@ impl LayoutEngine {
 
         let mut visited = 0u32;
         for (chunk, boundary) in nested.into_iter().zip(boundaries.iter().copied()) {
+            let placement = world.node(boundary).rect.origin;
             let changed: Vec<NodeId> = chunk.iter().map(|(id, _)| *id).collect();
             visited += chunk.len() as u32;
             for (id, r) in chunk {
                 self.rects.insert(id, r);
+            }
+            // The subtree was solved with the boundary as its root, so the
+            // boundary's own rectangle comes back at the origin — but in the
+            // tree it sits wherever its parent put it. Keep the parent's
+            // placement and take only the size from the new solve.
+            if let Some(rect) = self.rects.get_mut(&boundary) {
+                rect.origin = placement;
             }
             world.apply_rects_from(&self.rects, &changed, boundary);
         }
@@ -478,6 +486,14 @@ impl LayoutEngine {
 
         let visited = self.collect(world, boundary);
         let changed = core::mem::take(&mut self.changed);
+        // The subtree was solved with the boundary as its root, so the
+        // boundary's own rectangle comes back at the origin — but in the
+        // tree it sits wherever its parent put it. Keep the parent's
+        // placement and take only the size from the new solve.
+        let placement = world.node(boundary).rect.origin;
+        if let Some(rect) = self.rects.get_mut(&boundary) {
+            rect.origin = placement;
+        }
         world.apply_rects_from(&self.rects, &changed, boundary);
         self.changed = changed;
         LayoutStats {
@@ -861,5 +877,117 @@ mod tests {
         let style = style_for(&w, t);
         assert_eq!(style.display, taffy::Display::Flex);
         assert_eq!(style.size.width, Dimension::auto());
+    }
+
+    /// An incremental solve must not move the boundary it solves.
+    ///
+    /// The subtree is re-solved with the boundary as the *root* of that
+    /// computation, so the boundary's own rectangle comes back at the origin
+    /// — while in the tree it sits wherever its parent put it. Writing that
+    /// rectangle back moved the card to the top-left of its parent, and the
+    /// clip folding that follows propagated the wrong position.
+    #[test]
+    fn an_incremental_solve_keeps_the_boundary_where_it_was() {
+        let mut w = UiWorld::new();
+        let root = w.root();
+        w.node_mut(root).desc.width = Dim::px(600.0);
+        w.node_mut(root).desc.height = Dim::px(400.0);
+        w.node_mut(root).desc.direction = unbound_abi::FlexDirection::Row as u8;
+        let first = w.insert(
+            root,
+            RawNodeDesc::container()
+                .size(100.0, 100.0)
+                .flags(NodeFlags::CLIP),
+            loc(),
+        );
+        let second = w.insert(
+            root,
+            RawNodeDesc::container()
+                .size(100.0, 100.0)
+                .flags(NodeFlags::CLIP),
+            loc(),
+        );
+        let label = w.insert(second, RawNodeDesc::text(), loc());
+        w.node_mut(label).measure = Some(Vec2::new(40.0, 12.0));
+
+        let mut engine = LayoutEngine::new();
+        engine.solve(&mut w, root, Vec2::new(600.0, 400.0));
+        let before = engine.rect(second).expect("second card");
+        assert_eq!(
+            before.origin,
+            Vec2::new(100.0, 0.0),
+            "the card is not at the origin"
+        );
+
+        // Change the label and re-solve only the second card's boundary.
+        w.node_mut(label).measure = Some(Vec2::new(80.0, 12.0));
+        w.mark_layout_dirty(label);
+        let boundaries = w.dirty_boundaries();
+        assert_eq!(boundaries, vec![second]);
+        engine.solve_boundaries(&mut w, &boundaries, Vec2::new(600.0, 400.0));
+
+        let after = engine.rect(second).expect("second card");
+        assert_eq!(
+            after.origin, before.origin,
+            "the incremental solve moved the boundary to the origin"
+        );
+        assert_eq!(w.node(second).rect.origin, before.origin);
+        assert_eq!(w.node(first).rect.origin, Vec2::new(0.0, 0.0));
+    }
+
+    /// The same defect, seen the way a long list sees it.
+    ///
+    /// The gallery lays out 200 rows and re-solves the one in the middle.
+    /// Before the fix that row was teleported to the top of the list — it
+    /// landed *inside the viewport*, so the spatial index reported one row
+    /// too many: a row was drawn on top of the first one, and the one that
+    /// belonged there had vanished.
+    #[test]
+    fn a_row_re_solved_inside_a_list_stays_at_its_index() {
+        const ROWS: usize = 200;
+        const ROW_HEIGHT: f32 = 32.0;
+
+        let mut w = UiWorld::new();
+        let root = w.root();
+        w.node_mut(root).desc.width = Dim::px(1280.0);
+        w.node_mut(root).desc.height = Dim::px(720.0);
+        let list = w.insert(
+            root,
+            RawNodeDesc::text().size(1280.0, 600.0).column(),
+            loc(),
+        );
+        let mut rows = Vec::with_capacity(ROWS);
+        for _ in 0..ROWS {
+            let mut desc = RawNodeDesc::text().size(1280.0, ROW_HEIGHT).row();
+            desc.flex_shrink = 0.0;
+            rows.push(w.insert(list, desc, loc()));
+        }
+
+        let mut engine = LayoutEngine::new();
+        engine.solve(&mut w, root, Vec2::new(1280.0, 720.0));
+        let middle = rows[ROWS / 2];
+        let expected = w.node(middle).rect.origin;
+        assert_eq!(
+            expected,
+            Vec2::new(0.0, (ROWS / 2) as f32 * ROW_HEIGHT),
+            "the row must start at its own index"
+        );
+
+        // Re-solve the middle row's boundary, the way an edit would. The
+        // gallery hands the row straight to the engine.
+        engine.solve_boundaries(&mut w, &[middle], Vec2::new(1280.0, 720.0));
+
+        assert_eq!(
+            w.node(middle).rect.origin,
+            expected,
+            "the re-solved row was teleported to the top of the list"
+        );
+
+        // The row that belongs at the top must still be the one there.
+        assert_eq!(
+            w.node(rows[0]).rect.origin,
+            Vec2::new(0.0, 0.0),
+            "the first row must not have been displaced"
+        );
     }
 }
