@@ -44,6 +44,7 @@ just q-run cargo run -p gallery -- --kpi                 # 六项 KPI 红线
 | `e6239e1` | 去掉多余的 `mut` 限定 |
 | 本次提交 | **ABI v4 改造**（见 §1.2） |
 | 本次提交 | **度量尺子审计**（见 §1.3） |
+| 本次提交 | **尺子所量的三个 crate 审计**（见 §1.4） |
 
 这批提交对应的每个缺陷都**先写了会失败的回归测试**，再改实现。
 
@@ -105,12 +106,14 @@ docs/01-graphics/gpu-data-layout.md  GpuClipNode 字段顺序纠正
 just test        → 全部 ok，0 failed
 just check       → exit 0，零告警
 just q-run cargo run -p showcase -- --shot
-                 → 写入 target/showcase/showcase-light.png
-                   （生成物，不提交；SHA256 8E65000D3C56D38D6B04CFB6CBBF77C8E43B960811BD1206B16BC18BF3C843A4）
+                 → 写入 target/showcase/gallery-light.png（生成物，不提交）
 just q-run cargo run -p gallery -- --kpi
                  → gpu: 100k primitives in 0.667 ms, 1 draw call(s), 99840 visible
                    六项 KPI 全部 ok
 ```
+
+> ⚠️ showcase 的出图路径含弹簧动画，**同一份代码两次出图的哈希可能不同**，
+> 不能拿它当逐字节基线。见 §1.4。
 
 ---
 
@@ -159,9 +162,56 @@ gallery --kpi   → 六项 KPI 全部 ok；"9 re-solved" 现在是实测值
 - `unbound-headless` 的 `FrameBuilder` **只被测试和 `apps/gallery` 使用**，
   真正的渲染管线还没接进体检器——所以 `set_clip` 只在测试里被调用是**现状**，不是缺陷。
 - 六项 KPI 的**计量代码**在 `crates/unbound-kpi/src/lib.rs`，
-  它量的是 `unbound-canvas`（已审）、`unbound-layout`（未审）、
-  `unbound-world`（未审）、`unbound-theme`（未审）、`unbound-headless`（本轮已审）。
-  剩下的 `unbound-layout` / `unbound-world` / `unbound-theme` 仍待审计。
+  它量的是 `unbound-canvas`（已审）、`unbound-layout`（已审）、
+  `unbound-world`（已审）、`unbound-theme`（已审）、`unbound-headless`（已审）。
+  **尺子与被量的对象，现在都审过了。**
+
+---
+
+## 1.4 尺子所量的三个 crate 审计（本次提交，已完成）
+
+审计了 `unbound-world`（SlotMap 状态树）、`unbound-layout`（Taffy 增量排版）与
+`unbound-theme`（主题 LUT）——它们正是 §1.3 那把尺子所量的对象。
+
+### 修掉的 6 个问题
+
+| # | 缺陷 | 位置 | 修法 |
+| :--- | :--- | :--- | :--- |
+| 1 | **增量重算把边界节点传送到原点（严重）**：子树以边界为根重算，边界自身的矩形回到 `(0,0)`，被写回后**卡片被挪到父节点左上角** | `unbound-layout` `solve_subtree` / `solve_boundaries` | 保留父节点给出的位置，只取新的尺寸 |
+| 2 | **增量重算丢掉祖先裁剪链（严重）**：`fold_clips` 从子树起点开始，继承裁剪是空的 → 子树**忘记**了祖先的裁剪与圆角 | `unbound-world` `fold_clips` | 从父节点已存的裁剪/圆角继承 |
+| 3 | **`dirty_boundaries` 的去重漏掉了非相邻重复**：`dedup` 只去相邻相等项，按深度排序后同深度的两个边界中间夹着第三个，重复项留了下来 → 同一个边界被解算两次 | `unbound-world` `dirty_boundaries` | 排序键加 id，让相等项相邻 |
+| 4 | **`walk()` 的兄弟节点顺序是反的**：往栈里按正序压入，栈是后进先出 → 每组兄弟**从右往左**出来（注释与 `fold_clips`/`preorder` 的做法都写着左到右） | `unbound-world` `walk` | 反转后再压栈 |
+| 5 | **theme 私藏了一份 f16 解码器**：与 `unbound-math` 的规范实现并存，两份实现会漂移——而且**已经漂移**：theme 把所有 exponent-31 模式（含 NaN）映射成 `inf` | `unbound-theme` `f16_to_f32` | 删除私有副本，改用 `unbound_math::f16_to_f32` |
+| 6 | **格式漂移已清零**：仓库切到 nightly rustfmt 并统一了全工作区格式，`cargo fmt --check` 现在**全绿** | 全仓 | 随本次改动一起 fmt |
+
+### 缺陷 1 的可见后果
+
+`apps/gallery` 的 KPI 输出里有一行 `spatial : N of 200 rows visible`。修复前是
+**23**，修复后是 **22**——因为被重解的那一行（第 100 行）原本被传送到了列表顶端，
+和第 0 行叠在一起，于是视口里多出一行、少了一行。现在那一行留在它自己的位置上。
+
+新增回归测试 `a_row_re_solved_inside_a_list_stays_at_its_index` 直接镜像这个场景。
+
+### 验证结果
+
+```
+just test        → 全部 ok，0 failed（668 passed）
+just check       → exit 0，零告警
+cargo fmt --check → 全绿，0 hunks
+just q-run cargo run -p gallery -- --kpi
+                 → 六项 KPI 全部 ok；spatial 22 of 200 rows visible（修复前是 23）
+```
+
+### ⚠️ showcase 出图**不可**用逐字节比对
+
+`apps/showcase` 的 `--shot` 路径会渲染带弹簧动画的壳层，**同一份代码连跑两次
+出来的 PNG 哈希不同**（实测 4 次跑出 3 个不同哈希）。因此：
+
+* **不要**用 showcase 的 PNG 哈希当回归基线；
+* 判断"我的改动是否影响了渲染"要看**哈希集合是否重叠**，而不是两次单点比对。
+
+（`docs/assets/showcase-*.png` 已被 `0c150e8` 移出版本库，生成物落在
+`target/showcase/`，本来也不进仓库。）
 
 ---
 
@@ -197,15 +247,16 @@ gallery --kpi   → 六项 KPI 全部 ok；"9 re-solved" 现在是实测值
 上只在"改了布局却忘了 bump 版本"时才起作用。往虚表**中间**插字段会挪动后面所有
 成员，任何尺寸检查都拦不住——这才是版本号必须 bump 的原因（已在代码注释里写明）。
 
-### 2.4 低：`cargo fmt --check` 在 HEAD 上就不通过（与本次改动无关）
-仓库里有 **43 个文件**存在 rustfmt 差异，包括本次完全没碰的文件
-（`apps/gallery/src/main.rs`、`crates/unbound-gpu/src/timing.rs` 等）。
-这是 **rustfmt 版本漂移**（工具链 1.98.1 / rustfmt 1.9.0-stable，仓库是按更早的
-版本格式化的），不是代码风格问题。
+### 2.4 ~~低：`cargo fmt --check` 在 HEAD 上就不通过~~ → **已解决**
 
-本轮的处理方式：**只保证本次改动引入的行是 fmt-clean 的**，不重排全仓
-（那会产生一个巨大的无关 diff）。所以 `just fmt` 目前仍然失败，但失败点与本次
-改动无关。
+仓库原先有 **43 个文件**存在 rustfmt 差异（rustfmt 版本漂移：仓库按更早的版本
+格式化，工具链已是 1.98.1）。
+
+**现已解决**：仓库切到 **nightly** 工具链（`rust-toolchain.toml` 的
+`channel = "nightly"`），并用 `ced8083` 统一了全工作区格式。
+`cargo fmt --check` 现在**全绿，0 hunks**。
+
+改完代码记得跑 `cargo fmt`（nightly），别再留格式漂移。
 
 ---
 
@@ -284,6 +335,16 @@ gallery --kpi   → 六项 KPI 全部 ok；"9 re-solved" 现在是实测值
 | 47 | **无头验证 KPI 取单次采样**：共享机器上测的是调度器给了什么 | `unbound-kpi/src/lib.rs` | 改报中位数 |
 | 48 | **报告数字无法复算** | `unbound-kpi/src/lib.rs` | `Measurement` 保留 `samples`，`observed_us` 恒为其中位数 |
 
+### 3.6 `unbound-world` / `unbound-layout` / `unbound-theme`（尺子所量的三个 crate）
+
+| # | 缺陷 | 位置 | 修法 |
+| :--- | :--- | :--- | :--- |
+| 49 | **增量重算把边界节点传送到原点（严重）**：子树以边界为根重算，边界自身的矩形回到 `(0,0)`，写回后卡片被挪到父节点左上角 | `unbound-layout` `solve_subtree` / `solve_boundaries` | 保留父节点给出的位置，只取新的尺寸 |
+| 50 | **增量重算丢掉祖先裁剪链（严重）**：`fold_clips` 从子树起点开始，继承裁剪为空 → 子树忘记祖先的裁剪与圆角 | `unbound-world` `fold_clips` | 从父节点已存的裁剪/圆角继承 |
+| 51 | **`dirty_boundaries` 的去重漏掉非相邻重复**：`dedup` 只去相邻相等项，同深度的两个边界中间夹着第三个时重复项留下 → 同一边界被解算两次 | `unbound-world` `dirty_boundaries` | 排序键加 id，让相等项相邻 |
+| 52 | **`walk()` 的兄弟节点顺序是反的**：正序压栈 + 后进先出 → 每组兄弟从右往左出来 | `unbound-world` `walk` | 反转后再压栈 |
+| 53 | **theme 私藏一份 f16 解码器**：与 `unbound-math` 的规范实现并存且**已漂移**——把 exponent-31（含 NaN）映射成 `inf` | `unbound-theme` `f16_to_f32` | 删除私有副本，改用 `unbound_math::f16_to_f32` |
+
 ---
 
 ## 4. 踩过的坑（省接手者的时间）
@@ -337,8 +398,8 @@ gallery --kpi   → 六项 KPI 全部 ok；"9 re-solved" 现在是实测值
     `target/<profile>/deps/`，后者是 `target/<profile>/`。找 DLL 的代码要按
     **新鲜度**挑，别按路径顺序挑。
 
-12. **`cargo fmt --check` 在 HEAD 上就不通过**（rustfmt 版本漂移，43 个文件）。
-    见 §2.4。
+12. **`cargo fmt --check` 现在全绿**（仓库已切 nightly 并统一格式，见 §2.4）。
+    改完代码跑 `cargo fmt`。
 
 13. **KPI 里不要用 `min`（最快值）当成绩**，也不要用单次采样——共用机器上
     测的是调度器给了什么。报中位数，并把原始样本留着让评审者能复算。
@@ -350,17 +411,36 @@ gallery --kpi   → 六项 KPI 全部 ok；"9 re-solved" 现在是实测值
 15. **快照里的 id 不可信**。任何跨网络/跨进程的结构，id 都可能是 0、超大值或
     重复值。用 `id - 1` 定位索引的写法会在 id 为 0 时溢出 panic。
 
+16. **子树重算时，根节点自身的坐标是新的**。以边界为根重算子树，边界自己的
+    矩形会回到 `(0,0)`——那是它在**那一次计算里**的位置，不是它在树里的位置。
+    写回前必须把父节点给它的位置恢复回去。
+
+17. **从子树起点开始折叠裁剪链时，继承值是空的**。子树的**有效**裁剪是所有
+    裁剪祖先的交集，从中间开始折就会把它忘掉。继承值要从父节点已存的裁剪取。
+
+18. **`dedup` 只去相邻相等项**。先按深度排序再 `dedup`，同深度的不同边界会把
+    重复项隔开。排序键要带上 id。
+
+19. **同一份代码的 showcase 出图哈希可能不同**（弹簧动画的时序）。判断"改动是否
+    影响了渲染"要看**哈希集合是否重叠**，别拿两次单点比对当结论。
+
+20. **别在同一个 crate 里维护同一格式的第二套实现**。theme 曾私藏一份 f16
+    解码器，与 `unbound-math` 的规范实现并存，且**已经漂移**（NaN 被映射成
+    `inf`）。要用就用规范的那份。
+
 ---
 
 ## 5. 验证基线（接手者改完后应当能复现）
 
 ```
-just test        → 全部 ok，0 failed（606 passed）
+just test        → 全部 ok，0 failed（668 passed）
 just check       → exit 0，无 error，无 warning
+cargo fmt --check → 全绿，0 hunks
 just q-run cargo run -p showcase -- --shot
-                 → 写入 target/showcase/showcase-light.png
-                   （生成物，不提交；SHA256 8E65000D3C56D38D6B04CFB6CBBF77C8E43B960811BD1206B16BC18BF3C843A4）
+                 → 写入 target/showcase/gallery-light.png（生成物，不提交）
+                   ⚠️ 该路径含动画，PNG 哈希不保证可复现，见 §1.4
 just q-run cargo run -p gallery -- --kpi
                  → gpu: 100k primitives in ~0.67 ms, 1 draw call(s), 99840 visible
+                   spatial: 22 of 200 rows visible
                    六项 KPI 全部 ok
 ```
