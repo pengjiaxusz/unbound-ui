@@ -344,6 +344,10 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
         | PlatformEvent::KeyInput { .. } => {
             // Anything the user did invalidates the pending frame.
             state.latency.on_input(now);
+            // The application draws from these events; swallowing them here
+            // is what made every widget look inert while the latency clock
+            // kept ticking.
+            out.push(event.clone());
         }
         PlatformEvent::ModifiersChanged(_) => {}
         PlatformEvent::Focused(focused) => {
@@ -445,19 +449,41 @@ mod tests {
         assert!(state.present.can_wait_for_present());
     }
 
+    /// Input events must reach the application. The latency clock alone is
+    /// not enough: a window that showed a frozen first frame while every
+    /// click, wheel and key was swallowed looks exactly like a broken widget.
     #[test]
-    fn input_events_start_the_latency_clock() {        let config = WindowConfig::default();
+    fn input_events_reach_the_application() {
+        let config = WindowConfig::default();
         let mut state = PlatformState::new(
             &config,
             Extent::new(1280, 800),
             PresentWaitPolicy::from_extensions(&[]),
         );
         let now = Instant::now();
-        apply(
-            &mut state,
-            &PlatformEvent::CursorMoved { x: 10.0, y: 20.0 },
-            now,
-        );
+        let events = [
+            PlatformEvent::CursorMoved { x: 10.0, y: 20.0 },
+            PlatformEvent::MouseInput {
+                state: ButtonState::Pressed,
+                button: MouseButton::Left,
+            },
+            PlatformEvent::MouseWheel {
+                delta_x: 0.0,
+                delta_y: -1.0,
+            },
+            PlatformEvent::KeyInput {
+                state: ButtonState::Pressed,
+                key: PlatformKey::Character("t".to_string()),
+                repeat: false,
+            },
+        ];
+        for event in &events {
+            assert_eq!(
+                apply(&mut state, event, now),
+                vec![event.clone()],
+                "{event:?} must be forwarded unchanged"
+            );
+        }
         state.latency.on_present(now + std::time::Duration::from_millis(4));
         assert!(state.latency.last().is_some());
     }
