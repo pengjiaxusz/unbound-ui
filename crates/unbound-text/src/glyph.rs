@@ -73,11 +73,20 @@ pub struct ResolvedGlyph {
 
 impl ResolvedGlyph {
     /// Quad in text-local space.
+    ///
+    /// The pen is snapped to the raster's own pixel grid: the sub-pixel part
+    /// of the pen position is already baked into the bitmap (the raster is
+    /// generated for the phase implied by `pen.x`), so adding the fractional
+    /// part a second time would shift the glyph twice.
+    ///
+    /// `pen.x` is floored and `pen.y` is rounded, which puts the quad's
+    /// corners on whole raster pixels. That is what lets the atlas texels
+    /// land one-to-one on the physical pixels the quad covers.
     #[must_use]
     pub fn quad(&self, pen: Vec2) -> Rect {
         Rect::new(
-            pen.x + self.bearing.x,
-            pen.y + self.bearing.y,
+            pen.x.floor() + self.bearing.x,
+            pen.y.round() + self.bearing.y,
             self.size.x,
             self.size.y,
         )
@@ -110,11 +119,16 @@ pub struct GlyphCache {
     pub padding: u32,
     /// Raster glyphs on the whole-pixel grid instead of in four subpixel phases.
     ///
-    /// The vertex stage snaps every static quad's AABB to a physical pixel, so
-    /// a phase-specific raster is translated away from the position it was
-    /// generated for and every edge turns into a half-pixel blend. UI text that
-    /// is pixel-snapped therefore has to use phase 0; only animated canvas text
-    /// keeps the four phases.
+    /// The phase has to match the position the quad is finally drawn at: the
+    /// raster is generated for one phase and the quad is snapped to the pixel
+    /// grid, so a phase-specific raster that does not match the pen would be
+    /// sampled away from the position it was generated for and every edge
+    /// would turn into a half-pixel blend.
+    ///
+    /// Turning this on forces every glyph to phase 0, which is only correct
+    /// when the pen itself is always a whole pixel. UI text keeps the four
+    /// phases: the phase is derived from the glyph's absolute position and
+    /// the error against the true pen is at most ⅛ px.
     pub snap_phases: bool,
     /// Bijection between `fontdb::ID` and the compact face index stored in
     /// [`GlyphKey`]. `fontdb::ID` is an opaque slotmap key with no public
@@ -218,6 +232,21 @@ impl GlyphCache {
         ((fract * 4.0).round() as u8) % SUBPIXEL_PHASES
     }
 
+    /// The subpixel phase a glyph at `pen_x` is actually rasterised at.
+    ///
+    /// The phase has to be derived from the glyph's **absolute** position:
+    /// the raster is generated for that phase, so a phase derived from a
+    /// run-relative position would shift every glyph by up to a pixel.
+    #[must_use]
+    pub fn phase_at(&self, pen_x: f32) -> u8 {
+        if self.snap_phases {
+            // The raster is the one generated for a whole-pixel pen.
+            0
+        } else {
+            Self::phase_for(pen_x)
+        }
+    }
+
     /// Resolve (and if needed rasterise) one glyph.
     pub fn resolve(
         &mut self,
@@ -228,13 +257,7 @@ impl GlyphCache {
         weight: u16,
         italic: bool,
     ) -> Option<ResolvedGlyph> {
-        let phase = if self.snap_phases {
-            // The quad is snapped to a whole physical pixel, so the raster must
-            // be the one generated for a whole-pixel pen.
-            0
-        } else {
-            Self::phase_for(pen.x)
-        };
+        let phase = self.phase_at(pen.x);
         let sdf_mode = self.use_sdf;
         let face_index = u64::from(self.face_id(face));
         // The raster depends on the phase, the weight and the italic slant,
@@ -407,7 +430,7 @@ impl GlyphCache {
                     uv: resolved.slot.uv,
                     layer: resolved.slot.layer,
                     color: resolved.color,
-                    phase: Self::phase_for(pen.x),
+                    phase: self.phase_at(pen.x),
                 });
             }
         }
@@ -563,6 +586,64 @@ mod tests {
             (italic[0].layer, italic[0].uv),
             "the italic glyph must have its own atlas rectangle"
         );
+    }
+
+    /// The quad's origin must not carry the pen's fractional part.
+    ///
+    /// The sub-pixel phase is already baked into the bitmap, so adding the
+    /// fractional part of the pen a second time shifts the glyph twice — and
+    /// leaves the quad on a fractional pixel, which makes the sampler blur it.
+    #[test]
+    fn quad_origin_floors_pen_x_to_avoid_double_subpixel_shift() {
+        let glyph = ResolvedGlyph {
+            slot: GlyphSlot::default(),
+            bearing: Vec2::new(1.0, -2.0),
+            size: Vec2::new(8.0, 10.0),
+            advance: 9.0,
+            color: false,
+        };
+        let quad = glyph.quad(Vec2::new(10.75, 20.4));
+        assert_eq!(quad.origin.x, 11.0, "the pen's fraction must be dropped");
+        assert_eq!(quad.origin.y, 18.0, "the baseline is snapped to a pixel");
+        assert_eq!(quad.size.x, 8.0);
+        assert_eq!(quad.size.y, 10.0);
+    }
+
+    /// The phase a glyph is rasterised at has to follow its **absolute**
+    /// position: the raster is generated for that phase, so deriving it from
+    /// a run-relative position would shift every glyph by up to a pixel.
+    #[test]
+    fn the_subpixel_phase_follows_the_absolute_pen_position() {
+        let mut e = engine();
+        let mut cache = GlyphCache::new();
+        let shaped = e.shape("Hello", &TextStyle::sized(16.0));
+        let at_zero = cache.quads_for(&mut e, &shaped, Vec2::ZERO, 400, false);
+        let at_half = cache.quads_for(&mut e, &shaped, Vec2::new(0.5, 0.0), 400, false);
+        assert_eq!(at_zero.len(), at_half.len());
+        for (a, b) in at_zero.iter().zip(at_half.iter()) {
+            assert_ne!(
+                a.phase, b.phase,
+                "moving the run by half a pixel must change the phase"
+            );
+        }
+    }
+
+    /// Two runs of the same text at the same absolute position must produce
+    /// the same quads — the phase is derived from the position, not from the
+    /// order the runs were laid out in.
+    #[test]
+    fn the_same_absolute_position_produces_the_same_phase() {
+        let mut e = engine();
+        let mut cache = GlyphCache::new();
+        let shaped = e.shape("Hg", &TextStyle::sized(16.0));
+        let first = cache.quads_for(&mut e, &shaped, Vec2::new(3.25, 0.0), 400, false);
+        let second = cache.quads_for(&mut e, &shaped, Vec2::new(3.25, 0.0), 400, false);
+        assert_eq!(first, second);
+        // The quad origin is floored onto the raster's pixel grid.
+        for quad in &first {
+            assert_eq!(quad.rect.origin.x, quad.rect.origin.x.floor());
+            assert_eq!(quad.rect.origin.y, quad.rect.origin.y.floor());
+        }
     }
 
     /// When the atlas evicts a glyph, the cache entry that pointed at it has

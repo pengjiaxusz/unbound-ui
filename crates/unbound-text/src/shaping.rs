@@ -400,7 +400,16 @@ impl TextEngine {
         }
         self.prepare_buffer(text, style);
         let buffer = self.buffer.as_ref().expect("prepared");
+        Self::extract(buffer, text, style)
+    }
 
+    /// Pull the positioned glyphs out of a shaped buffer.
+    ///
+    /// Shared by the single-line and the wrapped path: both produce a
+    /// `Buffer` that is already shaped, and both need the same glyph
+    /// extraction. The difference between them is only the buffer's width
+    /// limit.
+    fn extract(buffer: &Buffer, text: &str, style: &TextStyle) -> ShapedText {
         let mut faces: Vec<fontdb::ID> = Vec::new();
         let mut glyphs = Vec::with_capacity(text.len());
         let mut width: f32 = 0.0;
@@ -465,6 +474,62 @@ impl TextEngine {
             line_count,
             first_baseline,
         }
+    }
+
+    /// Shape `text` and wrap it to `max_width`, returning the positioned
+    /// glyphs of every wrapped line.
+    ///
+    /// The wrap cache only remembers the *line breaks*; the glyph positions of
+    /// a wrapped paragraph were never reachable, so a renderer could not draw
+    /// a paragraph that wraps — it could only draw one line at a time. This
+    /// is the missing piece: the same extraction as [`TextEngine::shape`],
+    /// but on a buffer that was constrained to `max_width` first.
+    ///
+    /// The width is mixed into the style hash, so a wrapped run never
+    /// collides with the same text shaped without a width limit.
+    pub fn shape_wrapped(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+        max_width: f32,
+    ) -> Arc<ShapedText> {
+        let mut style_hash = 0u64;
+        style.hash_into(&mut style_hash);
+        let width_key = (max_width.max(1.0) * 4.0).round() as u32;
+        let wrapped_hash = style_hash ^ u64::from(width_key).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        let key = (Self::hash_text(text), wrapped_hash);
+        if let Some(cached) = self.shape_cache.get(&key) {
+            self.stats.shape_hits += 1;
+            return Arc::clone(cached);
+        }
+        self.stats.shape_misses += 1;
+        let shaped = Arc::new(self.shape_wrapped_uncached(text, style, width_key as f32 * 0.25));
+        if self.shape_cache.len() >= self.max_cache_entries {
+            self.shape_cache.clear();
+        }
+        self.shape_cache.insert(key, Arc::clone(&shaped));
+        self.stats.entries = self.shape_cache.len() + self.wrap_cache.len();
+        shaped
+    }
+
+    fn shape_wrapped_uncached(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+        max_width: f32,
+    ) -> ShapedText {
+        if text.is_empty() {
+            return ShapedText::default();
+        }
+        let metrics = style.metrics();
+        // A separate buffer is used so the shape-cache buffer keeps its
+        // unlimited width: a shaped run must not depend on a wrap width.
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_size(Some(max_width.max(1.0)), None);
+        let attrs = self.attrs(style);
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        Self::extract(&buffer, text, style)
     }
 
     /// Wrap `text` to `max_width` (with caching). Widths are quantised to ¼ px so
@@ -662,6 +727,60 @@ mod tests {
         // A real change misses.
         let d = e.wrap(text, &style, 80.0);
         assert!(!Arc::ptr_eq(&a, &d));
+    }
+
+    /// A wrapped paragraph has to come back with the glyphs of every line,
+    /// each one positioned on its own baseline.
+    ///
+    /// The wrap cache only remembers the line breaks, so without this the
+    /// renderer could not draw a paragraph that wraps.
+    #[test]
+    fn shape_wrapped_produces_multiline_positioned_glyphs() {
+        let mut e = engine();
+        let style = TextStyle::sized(14.0);
+        let text = "the quick brown fox jumps over the lazy dog";
+        let full = e.measure(text, &style);
+        let shaped = e.shape_wrapped(text, &style, full.x * 0.45);
+        assert!(
+            shaped.line_count >= 2,
+            "the paragraph must wrap: lines = {}",
+            shaped.line_count
+        );
+        assert!(
+            shaped.glyphs.len() > 1,
+            "every wrapped line needs its own glyphs"
+        );
+        // The glyphs of one line share a baseline; the lines themselves do
+        // not. A single baseline for the whole paragraph would draw every line
+        // on top of the first.
+        let mut baselines: Vec<f32> = shaped.glyphs.iter().map(|g| g.y).collect();
+        baselines.sort_by(|a, b| a.total_cmp(b));
+        baselines.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+        assert_eq!(
+            baselines.len(),
+            shaped.line_count as usize,
+            "each line needs its own baseline: {baselines:?}"
+        );
+        // Every line starts at the left edge of the text box.
+        let first_x = shaped
+            .glyphs
+            .iter()
+            .map(|g| g.x)
+            .fold(f32::INFINITY, f32::min);
+        assert!(first_x < 1.0, "the first glyph must start at the left edge");
+    }
+
+    /// The wrapped run must not collide with the unwrapped one.
+    #[test]
+    fn a_wrapped_run_is_not_the_unwrapped_run() {
+        let mut e = engine();
+        let style = TextStyle::sized(14.0);
+        let text = "alpha beta gamma delta epsilon";
+        let plain = e.shape(text, &style);
+        let wrapped = e.shape_wrapped(text, &style, 60.0);
+        assert!(wrapped.line_count >= 2);
+        assert_eq!(plain.line_count, 1);
+        assert_ne!(plain.glyphs.len(), 0);
     }
 
     #[test]
