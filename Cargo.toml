@@ -15,6 +15,7 @@ members = [
     "crates/unbound-theme",
     "crates/unbound-widgets",
     "crates/unbound-platform",
+    "crates/unbound-app",
     "crates/unbound-asset",
     "crates/unbound-graph",
     "crates/unbound-headless",
@@ -47,6 +48,7 @@ unbound-input = { path = "crates/unbound-input" }
 unbound-a11y = { path = "crates/unbound-a11y" }
 unbound-headless = { path = "crates/unbound-headless" }
 unbound-platform = { path = "crates/unbound-platform" }
+unbound-app = { path = "crates/unbound-app" }
 unbound-asset = { path = "crates/unbound-asset" }
 unbound-graph = { path = "crates/unbound-graph" }
 unbound-host = { path = "crates/unbound-host" }
@@ -58,6 +60,7 @@ winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 crossbeam-channel = { version = "0.5", default-features = false, features = ["std"] }
 png = { version = "0.17", default-features = false }
 ash = { version = "0.38", default-features = false, features = ["loaded", "debug"] }
+raw-window-handle = "0.6"
 bytemuck = { version = "1.25", features = ["derive"] }
 half = { version = "2.7", features = ["bytemuck"] }
 taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }

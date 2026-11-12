@@ -1782,6 +1782,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "unbound-app"
+version = "0.1.0"
+dependencies = [
+ "unbound-a11y",
+ "unbound-gpu",
+ "unbound-headless",
+ "unbound-input",
+ "unbound-math",
+ "unbound-theme",
+ "unbound-widgets",
+]
+
+[[package]]
 name = "unbound-asset"
 version = "0.1.0"
 dependencies = [
@@ -1804,6 +1817,7 @@ dependencies = [
  "ash",
  "bytemuck",
  "libloading 0.9.0",
+ "raw-window-handle",
  "unbound-math",
  "unbound-theme",
  "unbound-vector",
@@ -1889,7 +1903,9 @@ dependencies = [
 name = "unbound-platform"
 version = "0.1.0"
 dependencies = [
+ "accesskit",
  "raw-window-handle",
+ "unbound-a11y",
  "unbound-gpu",
  "unbound-math",
  "winit",
@@ -1929,6 +1945,7 @@ dependencies = [
  "slotmap",
  "unbound-a11y",
  "unbound-abi",
+ "unbound-anim",
  "unbound-gpu",
  "unbound-headless",
  "unbound-input",
