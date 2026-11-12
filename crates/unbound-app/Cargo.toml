@@ -15,6 +15,10 @@ unbound-a11y.workspace = true
 unbound-theme.workspace = true
 unbound-gpu.workspace = true
 unbound-widgets.workspace = true
+unbound-world.workspace = true
+unbound-layout.workspace = true
+unbound-text.workspace = true
+unbound-abi.workspace = true
 
 [dev-dependencies]
 unbound-headless.workspace = true

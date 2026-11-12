@@ -19,14 +19,19 @@
 //! `runtime_headless.rs` therefore exercise exactly the same code path.
 
 use unbound_a11y::A11yAction;
+use unbound_abi::{Dim, NodeFlags, RawNodeDesc};
 use unbound_gpu::data::{GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform};
 use unbound_input::{
     CursorKind, FocusCause, FocusKey, FocusManager, PointerButton, PointerEvent, Router,
 };
+use unbound_layout::LayoutEngine;
 use unbound_math::{Rect, Vec2};
+use unbound_text::{TextEngine, TextStyle};
 use unbound_theme::ThemeKind;
+use unbound_widgets::button::{ButtonDesc, ButtonWidget};
 use unbound_widgets::diff::{diff_primitives, SceneDiff};
-use unbound_widgets::{BackdropRequest, ControlState, SceneCollector, WidgetOutput};
+use unbound_widgets::{BackdropRequest, ControlState, SceneCollector, WidgetDesc, WidgetOutput};
+use unbound_world::{NodeId, UiWorld};
 
 /// The semantic root identity.
 pub const ROOT: u64 = 1;
@@ -290,14 +295,45 @@ impl ViewContext {
     }
 }
 
+/// A widget the declarative view placed in the layout tree.
+///
+/// The widget is emitted in the second pass, once the layout engine has
+/// resolved its rectangle; the widget itself never guesses its geometry.
+#[derive(Clone, Debug)]
+pub enum WidgetSpec {
+    /// A flat button. Its descriptor rect is replaced by the laid-out rect.
+    Button(ButtonDesc),
+    /// A wrapping paragraph measured by the text engine.
+    Text {
+        /// The paragraph contents.
+        text: String,
+        /// The shaping style.
+        style: TextStyle,
+    },
+}
+
+/// One deferred widget together with the node the layout engine solved.
+#[derive(Clone, Debug)]
+pub struct PendingWidget {
+    /// The widget identity used by input and accessibility.
+    pub key: u64,
+    /// The layout node that owns the widget's geometry.
+    pub node: NodeId,
+    /// What to emit in the second pass.
+    pub spec: WidgetSpec,
+}
+
 /// The scene builder handed to [`Application::view`].
 pub struct ViewBuilder<'a> {
     collector: &'a mut SceneCollector,
     /// The immutable frame context.
     pub ctx: ViewContext,
+    world: &'a mut UiWorld,
+    parent: NodeId,
+    pending: &'a mut Vec<PendingWidget>,
 }
 
-impl ViewBuilder<'_> {
+impl<'a> ViewBuilder<'a> {
     /// Append a widget's output.
     pub fn push(&mut self, key: u64, output: WidgetOutput) {
         self.collector.push(key, output);
@@ -308,6 +344,90 @@ impl ViewBuilder<'_> {
     pub fn push_with_capacity(&mut self, key: u64, output: WidgetOutput, reserved_slots: usize) {
         self.collector
             .push_with_capacity(key, output, reserved_slots);
+    }
+
+    /// Declare a vertical stack. Children are laid out in order.
+    pub fn column(&mut self, key: u64, build: impl FnOnce(&mut Self)) -> NodeId {
+        self.container(key, RawNodeDesc::container().column().gap(8.0), build)
+    }
+
+    /// Declare a horizontal stack.
+    pub fn row(&mut self, key: u64, build: impl FnOnce(&mut Self)) -> NodeId {
+        self.container(key, RawNodeDesc::container().row().gap(8.0), build)
+    }
+
+    /// Declare a grid with up to eight explicit column tracks.
+    pub fn grid(&mut self, key: u64, columns: &[Dim], build: impl FnOnce(&mut Self)) -> NodeId {
+        let desc = RawNodeDesc::container()
+            .display(unbound_abi::Display::Grid)
+            .grid_columns(columns)
+            .gap(8.0);
+        self.container(key, desc, build)
+    }
+
+    /// Declare a layout-only container with an explicit descriptor.
+    pub fn container(
+        &mut self,
+        key: u64,
+        mut desc: RawNodeDesc,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        desc.key = key;
+        let node = self
+            .world
+            .insert(self.parent, desc, core::panic::Location::caller());
+        let parent = core::mem::replace(&mut self.parent, node);
+        build(self);
+        self.parent = parent;
+        node
+    }
+
+    /// Place a widget in the current container; emit happens after layout.
+    pub fn widget(&mut self, key: u64, mut desc: RawNodeDesc, spec: WidgetSpec) -> NodeId {
+        desc.key = key;
+        if let WidgetSpec::Button(button) = &spec {
+            // Auto-sized buttons get the descriptor's rect when it is already
+            // resolved, otherwise a conservative intrinsic from the label.
+            let intrinsic = Vec2::new(
+                (button.label.chars().count() as f32 * 8.0 + 32.0).max(button.rect.width()),
+                button.rect.height().max(32.0),
+            );
+            desc = desc.size(intrinsic.x, intrinsic.y);
+        }
+        let node = self
+            .world
+            .insert(self.parent, desc, core::panic::Location::caller());
+        if let WidgetSpec::Button(button) = &spec {
+            let size = Vec2::new(
+                (button.label.chars().count() as f32 * 8.0 + 32.0).max(button.rect.width()),
+                button.rect.height().max(32.0),
+            );
+            if let Some(data) = self.world.get_mut(node) {
+                data.measure = Some(size);
+            }
+        }
+        self.pending.push(PendingWidget { key, node, spec });
+        node
+    }
+
+    /// Place a wrapping paragraph. It spans the container width and its
+    /// measured height comes from [`TextEngine::wrap`].
+    pub fn text(&mut self, key: u64, text: impl Into<String>, style: TextStyle) -> NodeId {
+        let text = text.into();
+        let desc = RawNodeDesc::container()
+            .key(key)
+            .width(Dim::percent(100.0))
+            .flags(NodeFlags::WRAP);
+        let node = self
+            .world
+            .insert(self.parent, desc, core::panic::Location::caller());
+        self.world.set_text(node, text.clone());
+        self.pending.push(PendingWidget {
+            key,
+            node,
+            spec: WidgetSpec::Text { text, style },
+        });
+        node
     }
 
     /// Direct access for widgets that need to append transforms or clips.
@@ -391,6 +511,10 @@ pub struct AppRuntime<A: Application> {
     backdrops: Vec<BackdropRequest>,
     time: f64,
     force_rebuild: bool,
+    world: UiWorld,
+    layout: LayoutEngine,
+    text_engine: TextEngine,
+    pending: Vec<PendingWidget>,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -414,6 +538,10 @@ impl<A: Application> AppRuntime<A> {
             backdrops: Vec::new(),
             time: 0.0,
             force_rebuild: true,
+            world: UiWorld::new(),
+            layout: LayoutEngine::new(),
+            text_engine: TextEngine::new(),
+            pending: Vec::new(),
         }
     }
 
@@ -648,6 +776,14 @@ impl<A: Application> AppRuntime<A> {
         self.sync_focus_context();
 
         self.collector.reset(ROOT);
+        self.pending.clear();
+        self.world = UiWorld::new();
+        self.layout = LayoutEngine::new();
+        let root = self.world.root();
+        if let Some(data) = self.world.get_mut(root) {
+            data.desc = RawNodeDesc::container().size(self.ctx.viewport.x, self.ctx.viewport.y);
+        }
+
         let view_ctx = ViewContext {
             viewport: self.ctx.viewport,
             theme: self.ctx.theme,
@@ -659,8 +795,12 @@ impl<A: Application> AppRuntime<A> {
         let mut view = ViewBuilder {
             collector: &mut self.collector,
             ctx: view_ctx,
+            world: &mut self.world,
+            parent: root,
+            pending: &mut self.pending,
         };
         self.app.view(&self.state, &mut view);
+        self.layout_pending();
 
         // Publish the new hit regions and focus order.
         let regions = core::mem::take(&mut self.collector.regions);
@@ -708,6 +848,84 @@ impl<A: Application> AppRuntime<A> {
             aux_changed,
             backdrops: self.backdrops.clone(),
         }
+    }
+
+    /// The layout world of the most recent frame.
+    #[must_use]
+    pub fn world(&self) -> &UiWorld {
+        &self.world
+    }
+
+    /// Solve the declarative tree and emit the deferred widgets.
+    ///
+    /// Pass 1 builds the world and pre-measures nothing but buttons; pass 2
+    /// hands Taffy a measurer for wrapping paragraphs, then emits every widget
+    /// at the resolved rectangle.
+    fn layout_pending(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let viewport = self.ctx.viewport;
+        let root = self.world.root();
+        let texts: Vec<(NodeId, String, TextStyle)> = self
+            .pending
+            .iter()
+            .filter_map(|entry| match &entry.spec {
+                WidgetSpec::Text { text, style } => Some((entry.node, text.clone(), style.clone())),
+                WidgetSpec::Button(_) => None,
+            })
+            .collect();
+        {
+            let world = &mut self.world;
+            let text_engine = &mut self.text_engine;
+            self.layout
+                .solve_with_measurer(world, root, viewport, |id, known_width, available| {
+                    let Some((_, text, style)) = texts.iter().find(|(node, _, _)| *node == id)
+                    else {
+                        return Vec2::ZERO;
+                    };
+                    let space = match available.width {
+                        unbound_layout::AvailableSpace::Definite(width) => Some(width),
+                        _ => None,
+                    };
+                    let width = known_width.or(space).unwrap_or(viewport.x).max(1.0);
+                    let wrapped = text_engine.wrap(text, style, width);
+                    Vec2::new(wrapped.width, wrapped.height)
+                });
+        }
+
+        let pending = core::mem::take(&mut self.pending);
+        for entry in &pending {
+            let rect = self
+                .world
+                .get(entry.node)
+                .map(|node| node.rect)
+                .unwrap_or(Rect::ZERO);
+            let WidgetSpec::Button(desc) = &entry.spec else {
+                continue;
+            };
+            let phase = if self.ctx.pressed == Some(entry.key) {
+                unbound_widgets::PointerPhase::Pressed
+            } else if self.ctx.hovered == Some(entry.key) {
+                unbound_widgets::PointerPhase::Hovered
+            } else {
+                unbound_widgets::PointerPhase::Idle
+            };
+            let state = ControlState {
+                phase,
+                focused: self.ctx.focused == Some(entry.key) && self.ctx.focus_visible,
+                disabled: false,
+                selected: false,
+            };
+            let mut desc = desc.clone();
+            desc.rect = rect;
+            let widget = ButtonWidget {
+                node: entry.key,
+                desc,
+            };
+            self.collector.push(entry.key, widget.emit(state, &mut []));
+        }
+        self.pending = pending;
     }
 
     fn reduce_pointer(&mut self, event: PointerEvent) -> DirtyFlags {

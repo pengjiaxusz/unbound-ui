@@ -20,7 +20,8 @@
 
 use rustc_hash::FxHashMap;
 use taffy::prelude::*;
-use taffy::{AvailableSpace, Layout, LayoutInput, LayoutOutput, TaffyTree};
+pub use taffy::AvailableSpace;
+use taffy::{Layout, LayoutInput, LayoutOutput, TaffyTree};
 use unbound_abi::{Align, Dim, DimUnit, Display, FlexDirection, Justify, NodeFlags, Position};
 use unbound_math::{Rect, Vec2};
 use unbound_world::{NodeId, UiWorld};
@@ -68,6 +69,57 @@ fn inset(d: Dim) -> LengthPercentageAuto {
 
 fn fixed(v: f32) -> LengthPercentage {
     LengthPercentage::length(v)
+}
+
+/// Map a `Dim` track onto Taffy's min/max track sizing pair.
+fn grid_track<S: taffy::style::CheapCloneStr>(d: Dim) -> taffy::style::GridTemplateComponent<S> {
+    use taffy::style::{MaxTrackSizingFunction, MinTrackSizingFunction};
+    use taffy::style_helpers;
+    match d.kind() {
+        DimUnit::Px => style_helpers::minmax(
+            MinTrackSizingFunction::length(d.value.max(0.0)),
+            MaxTrackSizingFunction::length(d.value.max(0.0)),
+        ),
+        DimUnit::Percent => {
+            let percent = (d.value / 100.0).clamp(0.0, 1.0);
+            style_helpers::minmax(
+                MinTrackSizingFunction::percent(percent),
+                MaxTrackSizingFunction::percent(percent),
+            )
+        }
+        DimUnit::Fr => style_helpers::flex(d.value.max(0.0)),
+        DimUnit::Auto => style_helpers::minmax(
+            MinTrackSizingFunction::auto(),
+            MaxTrackSizingFunction::auto(),
+        ),
+    }
+}
+
+/// Translate a 1-based start line plus a span into a Taffy placement.
+fn grid_placement(start: i16, span_count: u8) -> taffy::Line<taffy::style::GridPlacement> {
+    use taffy::style::GridPlacement;
+    use taffy::style_helpers::{line, span};
+    let span_count = u16::from(span_count);
+    if span_count > 0 {
+        if start > 0 {
+            taffy::Line {
+                start: line(start),
+                end: line(start + i16::try_from(span_count).unwrap_or(i16::MAX)),
+            }
+        } else {
+            taffy::Line {
+                start: GridPlacement::Auto,
+                end: span(span_count),
+            }
+        }
+    } else if start > 0 {
+        taffy::Line {
+            start: line(start),
+            end: GridPlacement::Auto,
+        }
+    } else {
+        taffy::Line::default()
+    }
 }
 
 fn align_items(a: Align) -> taffy::AlignItems {
@@ -231,6 +283,22 @@ pub fn style_for(world: &UiWorld, id: NodeId) -> Style {
         if height_fr {
             style.size.height = Dimension::auto();
         }
+    }
+    if d.display_kind() == Display::Grid {
+        let columns = usize::from(d.grid_col_count).min(d.grid_cols.len());
+        let rows = usize::from(d.grid_row_count).min(d.grid_rows.len());
+        style.grid_template_columns = d.grid_cols[..columns]
+            .iter()
+            .copied()
+            .map(grid_track)
+            .collect();
+        style.grid_template_rows = d.grid_rows[..rows]
+            .iter()
+            .copied()
+            .map(grid_track)
+            .collect();
+        style.grid_column = grid_placement(d.grid_col_start, d.grid_col_span);
+        style.grid_row = grid_placement(d.grid_row_start, d.grid_row_span);
     }
     style
 }
@@ -439,6 +507,87 @@ impl LayoutEngine {
                     measure_leaf(&input, ctx.map(|c| *c), world_ref)
                 },
             );
+        }
+        let taffy_us = start.elapsed().as_micros() as u64;
+
+        let visited = self.collect(world, root);
+        world.apply_rects(&self.rects);
+        LayoutStats {
+            nodes_visited: visited,
+            boundaries_solved: 1,
+            taffy_us,
+            sync_us,
+        }
+    }
+
+    /// Full re-solve, letting the caller measure wrapped text against the
+    /// width Taffy actually offers.
+    ///
+    /// Nodes without text or without [`NodeFlags::WRAP`] keep using their
+    /// pre-measured intrinsic size. For wrapping nodes the callback is invoked
+    /// with the known width (if any) and Taffy's available space; the returned
+    /// size is written back to `NodeData::measure` so the debug overlay and
+    /// later frames see the resolved paragraph size.
+    pub fn solve_with_measurer<F>(
+        &mut self,
+        world: &mut UiWorld,
+        root: NodeId,
+        viewport: Vec2,
+        mut measure_fn: F,
+    ) -> LayoutStats
+    where
+        F: FnMut(NodeId, Option<f32>, taffy::Size<AvailableSpace>) -> Vec2,
+    {
+        let sync_start = std::time::Instant::now();
+        self.sync(world, root);
+        let sync_us = sync_start.elapsed().as_micros() as u64;
+
+        let Some(taffy_root) = self.map.get(&root).copied() else {
+            return LayoutStats {
+                sync_us,
+                ..Default::default()
+            };
+        };
+
+        let start = std::time::Instant::now();
+        let mut measured: Vec<(NodeId, Vec2)> = Vec::new();
+        {
+            let world_ref: &UiWorld = world;
+            let taffy = &mut self.taffy;
+            let _ = taffy.compute_layout_with_measure(
+                taffy_root,
+                available(viewport),
+                |input: LayoutInput,
+                 _node: taffy::NodeId,
+                 ctx: Option<&mut NodeId>,
+                 _style: &Style| {
+                    let Some(id) = ctx.map(|c| *c) else {
+                        return measure_leaf(&input, None, world_ref);
+                    };
+                    let wraps = world_ref
+                        .get(id)
+                        .is_some_and(|node| node.desc.has(NodeFlags::WRAP))
+                        && world_ref.text(id).is_some();
+                    if !wraps {
+                        return measure_leaf(&input, Some(id), world_ref);
+                    }
+                    let known_width = input.known_dimensions.width.or(input.parent_size.width);
+                    let intrinsic = measure_fn(id, known_width, input.available_space);
+                    measured.push((id, intrinsic));
+                    let width = input.known_dimensions.width.unwrap_or(intrinsic.x).max(0.0);
+                    let height = input
+                        .known_dimensions
+                        .height
+                        .unwrap_or(intrinsic.y)
+                        .max(0.0);
+                    LayoutOutput::from_outer_size(taffy::Size { width, height })
+                },
+            );
+        }
+        for (id, size) in measured {
+            if let Some(node) = world.get_mut(id) {
+                node.measure = Some(size);
+            }
         }
         let taffy_us = start.elapsed().as_micros() as u64;
 

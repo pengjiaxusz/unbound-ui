@@ -350,6 +350,32 @@ bitflags_like! {
     }
 }
 
+/// One explicit grid track: the same `Dim` encoding as a box dimension, so
+/// `px`, `%`, `fr` and `auto` all behave consistently between flex and grid.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
+pub struct GridTrack {
+    pub unit: u8,
+    pub _pad: [u8; 3],
+    pub value: f32,
+}
+
+impl GridTrack {
+    #[must_use]
+    pub fn from_dim(dim: Dim) -> Self {
+        Self {
+            unit: dim.unit,
+            _pad: [0; 3],
+            value: dim.value,
+        }
+    }
+
+    #[must_use]
+    pub fn unit(&self) -> DimUnit {
+        DimUnit::from_u8(self.unit)
+    }
+}
+
 /// A flat, POD node descriptor.
 ///
 /// Field order is grouped by access frequency: geometry first (touched by every
@@ -403,6 +429,20 @@ pub struct RawNodeDesc {
     pub key: u64,
     /// Opaque per-tag payload (virtual list item index, image atlas slot, …).
     pub payload: u64,
+
+    // ---- grid ----
+    /// Explicit column track sizes (only the first `grid_col_count` apply).
+    pub grid_cols: [Dim; 8],
+    /// Explicit row track sizes (only the first `grid_row_count` apply).
+    pub grid_rows: [Dim; 8],
+    pub grid_col_count: u8,
+    pub grid_row_count: u8,
+    pub grid_col_span: u8,
+    pub grid_row_span: u8,
+    /// 1-based grid line, `0` means auto placement.
+    pub grid_col_start: i16,
+    /// 1-based grid line, `0` means auto placement.
+    pub grid_row_start: i16,
 }
 
 impl Default for RawNodeDesc {
@@ -447,6 +487,14 @@ impl Default for RawNodeDesc {
             flags: 0,
             key: 0,
             payload: 0,
+            grid_cols: [Dim::AUTO; 8],
+            grid_rows: [Dim::AUTO; 8],
+            grid_col_count: 0,
+            grid_row_count: 0,
+            grid_col_start: 0,
+            grid_col_span: 0,
+            grid_row_start: 0,
+            grid_row_span: 0,
         }
     }
 }
@@ -481,6 +529,36 @@ impl RawNodeDesc {
     #[must_use]
     pub fn height(mut self, d: Dim) -> Self {
         self.height = d;
+        self
+    }
+
+    /// Declare up to eight explicit column tracks.
+    ///
+    /// Extra tracks are dropped: the descriptor is a fixed-size POD struct.
+    #[must_use]
+    pub fn grid_columns(mut self, tracks: &[Dim]) -> Self {
+        let count = tracks.len().min(self.grid_cols.len());
+        self.grid_cols[..count].copy_from_slice(&tracks[..count]);
+        self.grid_col_count = u8::try_from(count).unwrap_or(u8::MAX);
+        self
+    }
+
+    /// Declare up to eight explicit row tracks.
+    #[must_use]
+    pub fn grid_rows(mut self, tracks: &[Dim]) -> Self {
+        let count = tracks.len().min(self.grid_rows.len());
+        self.grid_rows[..count].copy_from_slice(&tracks[..count]);
+        self.grid_row_count = u8::try_from(count).unwrap_or(u8::MAX);
+        self
+    }
+
+    /// Place this item at a 1-based grid line with a span (`0`/`0` = auto).
+    #[must_use]
+    pub fn grid_area(mut self, col: i16, col_span: u8, row: i16, row_span: u8) -> Self {
+        self.grid_col_start = col;
+        self.grid_col_span = col_span;
+        self.grid_row_start = row;
+        self.grid_row_span = row_span;
         self
     }
 
@@ -677,7 +755,10 @@ mod tests {
     fn descriptor_is_pod_and_8_byte_aligned() {
         let size = core::mem::size_of::<RawNodeDesc>();
         assert_eq!(size % 8, 0, "size {size} must stay 8-byte aligned");
-        assert!(size <= 288, "descriptor grew to {size} bytes");
+        assert!(
+            size <= 512,
+            "descriptor grew to {size} bytes; grid tracks live inline"
+        );
     }
 
     #[test]
