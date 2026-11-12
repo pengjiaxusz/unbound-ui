@@ -887,3 +887,54 @@ fn the_footer_shortcuts_navigate_on_their_own_identity() {
         "the footer shortcut jumps to its page"
     );
 }
+
+/// The maximise icon draws the same number of primitives in both states.
+///
+/// The icon is one square when the window is restored and two when it is
+/// maximised. A different primitive *count* changes the scene's shape, which
+/// moves the upload generation and replaces the whole pool — and, worse,
+/// hides a dropped frame: the next frame would be "identical" and the pool
+/// would stay behind.
+///
+/// Both states therefore draw exactly two primitives; the second one is
+/// transparent when the window is restored.
+#[test]
+fn the_maximise_icon_keeps_its_primitive_count() {
+    let mut app = app();
+    app.set_window_maximized(false);
+    app.rebuild(VIEWPORT);
+    let restored = app.scene.primitives.len();
+
+    app.set_window_maximized(true);
+    app.rebuild(VIEWPORT);
+    let maximized = app.scene.primitives.len();
+
+    assert_eq!(
+        restored, maximized,
+        "the maximise icon changed the scene's shape: {restored} -> {maximized}"
+    );
+}
+
+/// The glyph atlas's eviction clock moves on every rebuild.
+///
+/// The atlas drops the least recently *used* glyph, and "used" is measured in
+/// frames. A frozen clock makes every slot look equally old, so a full atlas
+/// evicts the same glyphs forever.
+///
+/// The clock is deliberately separate from the upload generation: under the
+/// runtime's external diff the generation only moves when the scene's shape
+/// changed, and the eviction order has to advance anyway.
+#[test]
+fn the_atlas_eviction_clock_advances_on_every_rebuild() {
+    let mut app = app();
+    // The runtime owns the diff, so the shell's own generation stays put.
+    app.set_external_diff(true);
+    app.rebuild(VIEWPORT);
+    let first = app.labels.cache.atlas.frame;
+    app.rebuild(VIEWPORT);
+    let second = app.labels.cache.atlas.frame;
+    assert!(
+        second > first,
+        "the atlas eviction clock is frozen: {first} -> {second}"
+    );
+}

@@ -8,6 +8,8 @@
 pub mod button;
 /// Canvas: primitives, clipping, hit regions and semantics.
 pub mod canvas;
+/// The frame plan: the presented size and the upload plan.
+pub mod frame_plan;
 /// The low-level scene painter and the palette.
 pub mod gallery;
 /// Keyboard actions shared by the window and the headless tests.

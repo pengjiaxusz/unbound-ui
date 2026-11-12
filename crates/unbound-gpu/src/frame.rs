@@ -196,7 +196,8 @@ pub struct Renderer {
     staging: Buffer,
 
     capacity_primitives: u32,
-    last_generation: u64,
+    /// The upload generation the pool is at.
+    generation: UploadGeneration,
     frame_index: u64,
     pub stats: FrameStats,
     /// Scratch buffer for the staged scene bytes, reused across frames.
@@ -540,7 +541,7 @@ impl Renderer {
             patches,
             staging,
             capacity_primitives,
-            last_generation: u64::MAX,
+            generation: UploadGeneration::empty(),
             frame_index: 0,
             stats: FrameStats::default(),
             staging_bytes: Vec::new(),
@@ -737,7 +738,7 @@ impl Renderer {
         }
         if moved {
             // The array moved: force a full re-upload next frame.
-            self.last_generation = u64::MAX;
+            self.generation.invalidate();
         }
         Ok(())
     }
@@ -897,6 +898,10 @@ impl Renderer {
                     .queue_submit2(gpu.graphics_queue, &[submit], sync.in_flight)?;
             }
         }
+        // The frame reached the GPU: the pool now holds this scene, so the
+        // generation may be claimed. A frame that failed before this point
+        // left the pool behind, and the next frame has to upload it again.
+        self.generation.commit();
         self.frame_index += 1;
         Ok(self.stats)
     }
@@ -1798,21 +1803,25 @@ impl Renderer {
     ///   scattered. A hover or a slider drag costs a handful of bytes
     ///   instead of the whole scene.
     fn prepare_upload(&mut self, scene: &SceneUpload<'_>) -> Result<UploadPlan, GpuError> {
-        let full = self.last_generation != scene.generation;
+        let full = self.generation.needs_full(scene.generation);
         let partial = !full && !scene.dirty_ranges.is_empty();
         if !full && !partial {
             return Ok(UploadPlan::default());
         }
 
+        let mut plan = UploadPlan::default();
         if full {
             self.ensure_pool_capacity(scene.primitives.len(), Which::Primitives)?;
             self.ensure_pool_capacity(scene.transforms.len(), Which::Transforms)?;
             self.ensure_pool_capacity(scene.clips.len(), Which::Clips)?;
             self.ensure_pool_capacity(scene.payloads.len(), Which::Payloads)?;
-            self.last_generation = scene.generation;
+            // The generation is *not* committed here: the frame can still
+            // fail after this point (the command buffer, the submit), and a
+            // consumed generation would make the next frame believe the pool
+            // already holds this scene. The commit happens once the
+            // submission went through.
+            self.generation.stage(scene.generation);
         }
-
-        let mut plan = UploadPlan::default();
 
         // Rotate the ring *before* allocating: the cursor belongs to the frame
         // slot that `begin_frame` selects.
@@ -2038,11 +2047,111 @@ struct UploadPlan {
     ring_offset: u32,
 }
 
+/// The upload generation the pool is at.
+///
+/// The generation says "the pool holds this scene". It may only be claimed
+/// after the frame reached the GPU: a frame that failed on the way there
+/// left the pool behind, and a consumed generation would tell the next
+/// frame that there is nothing to upload — the scene would stay stale on
+/// screen forever.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct UploadGeneration {
+    /// The generation the pool holds.
+    committed: u64,
+    /// The generation the current frame staged, not yet committed.
+    staged: Option<u64>,
+}
+
+impl UploadGeneration {
+    /// A pool that holds nothing yet.
+    const fn empty() -> Self {
+        Self {
+            committed: u64::MAX,
+            staged: None,
+        }
+    }
+
+    /// Whether the scene has to be uploaded in full.
+    fn needs_full(&self, generation: u64) -> bool {
+        self.committed != generation
+    }
+
+    /// Stage a generation for the frame that is about to be drawn.
+    fn stage(&mut self, generation: u64) {
+        self.staged = Some(generation);
+    }
+
+    /// Claim the staged generation: the frame reached the GPU.
+    fn commit(&mut self) {
+        if let Some(generation) = self.staged.take() {
+            self.committed = generation;
+        }
+    }
+
+    /// Forget the pool's generation: the next frame has to upload in full.
+    fn invalidate(&mut self) {
+        self.committed = u64::MAX;
+        self.staged = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::{PrimFlags, SubElement};
     use unbound_math::Vec2;
+
+    /// A staged generation is not claimed until the frame reached the GPU.
+    ///
+    /// A frame that failed on the way to the GPU left the pool behind. A
+    /// generation that was consumed anyway would tell the next frame that
+    /// there is nothing to upload, and the stale scene would stay on screen
+    /// forever.
+    #[test]
+    fn a_staged_generation_is_claimed_only_after_the_frame_reached_the_gpu() {
+        let mut generation = UploadGeneration::empty();
+        assert!(generation.needs_full(1), "an empty pool has to be filled");
+
+        generation.stage(1);
+        assert!(
+            generation.needs_full(1),
+            "a staged generation is not a committed one"
+        );
+
+        generation.commit();
+        assert!(
+            !generation.needs_full(1),
+            "the committed generation is already in the pool"
+        );
+        assert!(
+            generation.needs_full(2),
+            "a new scene has to be uploaded in full"
+        );
+    }
+
+    /// A frame that never reached the GPU keeps the generation unclaimed.
+    #[test]
+    fn a_failed_frame_keeps_the_generation_unclaimed() {
+        let mut generation = UploadGeneration::empty();
+        generation.stage(7);
+        // The frame failed: no commit.
+        assert!(generation.needs_full(7));
+        // The next attempt has to upload the whole scene again.
+        generation.stage(7);
+        generation.commit();
+        assert!(!generation.needs_full(7));
+    }
+
+    /// A pool that moved has to be filled again.
+    #[test]
+    fn an_invalidated_pool_has_to_be_filled_again() {
+        let mut generation = UploadGeneration::empty();
+        generation.stage(3);
+        generation.commit();
+        assert!(!generation.needs_full(3));
+        generation.invalidate();
+        assert!(generation.needs_full(3));
+    }
 
     fn quad(x: f32, y: f32, w: f32, h: f32, token: u32) -> GpuPrimitiveInstance {
         GpuPrimitiveInstance {

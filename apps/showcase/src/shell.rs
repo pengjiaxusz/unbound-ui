@@ -111,6 +111,15 @@ pub struct GalleryApp {
     /// host that forgets to bump it shows a stale frame. Tying the counter
     /// to the rebuild itself makes that mistake impossible.
     generation: u64,
+    /// The clock the glyph atlas evicts on.
+    ///
+    /// The atlas drops the least recently *used* glyph, and "used" is measured
+    /// in frames. The clock therefore has to move on every rebuild — otherwise
+    /// every slot looks equally old and the atlas evicts the same glyphs
+    /// forever. It is deliberately separate from the upload generation: the
+    /// generation only moves when the scene's *shape* changed, and the host
+    /// owns it in the external-diff mode.
+    atlas_clock: u64,
     last_revision: u64,
     last_hover: Option<u64>,
     last_pressed: Option<u64>,
@@ -207,6 +216,7 @@ impl GalleryApp {
             page_layout: None,
             nav_spring,
             generation: 0,
+            atlas_clock: 0,
             last_revision: 0,
             last_hover: None,
             last_pressed: None,
@@ -483,7 +493,11 @@ impl GalleryApp {
         let focused = self.focused;
         let scale = self.effective_scale;
         let pixel_snap = self.state.pixel_snap;
-        let generation = self.generation.wrapping_add(1);
+        // The atlas clock moves on every rebuild, independent of the upload
+        // generation: the generation only moves when the scene's *shape*
+        // changed, while the eviction order has to advance on every frame.
+        self.atlas_clock = self.atlas_clock.wrapping_add(1);
+        let atlas_clock = self.atlas_clock;
         let GalleryApp {
             scene,
             labels,
@@ -494,7 +508,7 @@ impl GalleryApp {
         // Glyph slots are evicted by least-recently-used frame. Without this
         // the atlas clock never advanced and every slot looked equally old,
         // so a full atlas evicted the same top-left glyphs forever.
-        labels.cache.begin_frame(generation);
+        labels.cache.begin_frame(atlas_clock);
         // The shell keeps the four sub-pixel phases: a glyph's raster is
         // generated for the phase implied by its *absolute* position, and the
         // quad is placed on the pixel grid around it. Forcing phase 0 would
@@ -2108,6 +2122,12 @@ fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_ma
             }
             Target::WindowMaximize => {
                 let middle = rect.center();
+                // Both states draw exactly **two** primitives, so the toggle
+                // is a patch of two slices instead of a change of the
+                // scene's shape. A shape change would move the upload
+                // generation and re-upload the whole scene — and, worse, it
+                // would let a dropped frame slip through with the pool
+                // behind the diff base.
                 if canvas_maximized {
                     // Restore: two offset squares. The front square is filled
                     // with whatever is behind the icon, otherwise the back
@@ -2135,14 +2155,13 @@ fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_ma
                         0.0,
                     );
                 } else {
-                    canvas.rect(
-                        Rect::new(middle.x - 5.0, middle.y - 5.0, 10.0, 10.0),
-                        0.0,
-                        0,
-                        color,
-                        1.0,
-                        0.0,
-                    );
+                    // Maximise: one stroked square, plus a transparent fill
+                    // that stands in for the restore icon's second square.
+                    // The fill carries no colour and no opacity, so it draws
+                    // nothing, but it keeps the primitive count at two.
+                    let square = Rect::new(middle.x - 5.0, middle.y - 5.0, 10.0, 10.0);
+                    canvas.rect_faded(square, 0.0, 0, 0.0);
+                    canvas.rect(square, 0.0, 0, color, 1.0, 0.0);
                 }
             }
             Target::WindowClose => {

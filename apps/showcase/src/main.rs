@@ -11,6 +11,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use showcase::frame_plan::{frame_size, needs_rebuild, upload_plan};
 use showcase::runtime_app::GalleryRuntime;
 use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
@@ -31,7 +32,6 @@ use unbound_platform::window::{
 };
 use unbound_platform::Extent;
 use unbound_theme::{ThemeKind, ThemeState};
-use unbound_widgets::diff::SceneDiff;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::Window;
@@ -53,6 +53,11 @@ struct ExtraWindow {
     surface: Surface,
     swapchain: Swapchain,
     swapchain_dirty: bool,
+    /// The size the swapchain was last requested at.
+    ///
+    /// The chain's actual extent is the driver's answer and may differ from
+    /// the request; the two are never compared with each other.
+    committed_request: (u32, u32),
 }
 
 /// The application state.
@@ -72,6 +77,18 @@ struct Showcase {
     /// host advances it exactly when the runtime reported a whole-scene
     /// change.
     scene_generation: u64,
+    /// True when the previous frame was rebuilt but never uploaded.
+    ///
+    /// The runtime moves its diff base on every rebuild, whether the frame
+    /// reaches the GPU or not. A dropped frame therefore leaves the pool
+    /// behind the base, and the next upload has to be a full one.
+    frame_dropped: bool,
+    /// The size the swapchain was last requested at.
+    ///
+    /// The chain's *actual* extent is the driver's answer and may differ from
+    /// the request; this remembers the request so the two are never compared
+    /// with each other.
+    committed_request: (u32, u32),
     /// The live theme: the engine owns the colour table, the app only asks
     /// for a different palette.
     theme: ThemeState,
@@ -112,6 +129,8 @@ impl Showcase {
             atlases: None,
             uploaded_theme: None,
             scene_generation: 0,
+            frame_dropped: false,
+            committed_request: (0, 0),
             theme: ThemeState::new(theme::theme_set(), ThemeKind::Light),
             pointer: Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
@@ -148,21 +167,12 @@ impl Showcase {
         physical / self.effective_scale()
     }
 
-    fn logical_viewport(&self, window: &Window) -> (f32, f32) {
-        let size = window.inner_size();
-        let scale = self.effective_scale();
-        (
-            size.width.max(1) as f32 / scale,
-            size.height.max(1) as f32 / scale,
-        )
-    }
-
     /// Track the OS scale factor only.
     ///
     /// Changing the app zoom must never resize the physical window: the UI
-    /// scales in place because `logical_viewport` recomputes
-    /// `physical_size / (os_scale × app_zoom)`, and the page reflows for the
-    /// smaller logical viewport.
+    /// scales in place because the logical viewport is recomputed from the
+    /// committed extent (`physical_size / (os_scale × app_zoom)`), and the page
+    /// reflows for the smaller logical viewport.
     fn sync_window_size(&mut self, window: &Window) {
         let os_scale = window.scale_factor() as f32;
         if os_scale.is_finite() && os_scale > 0.0 {
@@ -217,7 +227,7 @@ impl Showcase {
             return;
         };
         let uploads: Vec<AtlasUpload> = updates
-            .into_iter()
+            .iter()
             .map(|update| {
                 let kind = match update.target {
                     unbound_text::AtlasTarget::Coverage => AtlasKind::R8,
@@ -230,14 +240,22 @@ impl Showcase {
                     y: update.y,
                     width: update.width,
                     height: update.height,
-                    data: update.data,
+                    data: update.data.clone(),
                 }
             })
             .collect();
         // One batch: a single staging buffer, a single command buffer and a
         // single queue wait for the whole page of text. Uploading glyph by
         // glyph stalled the pipeline once per character.
-        let _ = atlases.upload_batch(&renderer.gpu, &uploads);
+        //
+        // A failed batch must not lose the glyphs: the cache believes they
+        // are in the atlas, so the text would sample texels that were never
+        // written — blank or garbled glyphs, forever. The updates therefore
+        // go back into the queue and the next frame tries again.
+        if let Err(error) = atlases.upload_batch(&renderer.gpu, &uploads) {
+            eprintln!("could not upload the glyphs: {error}");
+            self.shell_mut().labels.cache.restore_updates(updates);
+        }
     }
 
     fn write_theme_if_needed(&mut self) {
@@ -255,13 +273,6 @@ impl Showcase {
         }
     }
 
-    fn rebuild(&mut self, window: &Window) {
-        let scale = self.effective_scale();
-        self.shell_mut().set_effective_scale(scale);
-        let viewport = self.logical_viewport(window);
-        self.app.resize(Vec2::new(viewport.0, viewport.1));
-    }
-
     /// Rebuild the scene through the runtime, diff it and upload the glyphs
     /// the rebuild produced.
     ///
@@ -272,12 +283,11 @@ impl Showcase {
         let scale = self.effective_scale();
         self.shell_mut().set_effective_scale(scale);
         let report = self.app.frame(dt);
-        if !matches!(report.diff, SceneDiff::Identical) {
-            if report.diff.bumps_generation() {
-                self.scene_generation = self.scene_generation.wrapping_add(1);
-            }
-            self.upload_glyphs();
-        }
+        // The glyphs are uploaded whenever there are any. A frame whose scene
+        // did not change can still carry fresh glyphs — a re-rasterised glyph
+        // lands in a different atlas slot, so the primitive changed too, but
+        // the upload must not depend on that coincidence.
+        self.upload_glyphs();
         let shell = self.shell_mut();
         shell.state.demo.upload_bytes = report.bytes;
         shell.state.demo.primitive_count = report.primitives as u32;
@@ -331,6 +341,10 @@ impl Showcase {
             eprintln!(" could not rebuild the swapchain: {error}");
             return false;
         }
+        // The chain now answers for this request. Its *actual* extent may
+        // still differ from it — the driver clamps it to its own limits — and
+        // that difference must never be mistaken for a new request.
+        self.committed_request = (width, height);
         // The windowed path borrows the swapchain image as its colour
         // attachment, so only the depth buffer has to follow the new size.
         // `ensure_depth_size` grows in 256 px steps and never shrinks, which
@@ -341,6 +355,25 @@ impl Showcase {
             return false;
         }
         true
+    }
+
+    /// Bring the layout viewport in line with the committed chain extent.
+    ///
+    /// The layout follows the *presented* size, not the window: the driver
+    /// decides how large the images are, and the image is what the compositor
+    /// shows. The logical viewport is `physical / effective scale`, so a zoom
+    /// changes it exactly like a physical resize does.
+    fn sync_viewport(&mut self) {
+        let Some(chain) = &self.swapchain else {
+            return;
+        };
+        let (width, height) = chain.extent();
+        let scale = self.effective_scale();
+        let presented = frame_size((width, height), scale);
+        let wanted = Vec2::new(presented.logical.0, presented.logical.1);
+        if (self.app.context().viewport - wanted).length() > 0.01 {
+            self.app.resize(wanted);
+        }
     }
 
     /// Keep the OS input method in sync with the focused control.
@@ -566,7 +599,11 @@ impl PlatformApp for Showcase {
 
         self.os_scale = window.scale_factor() as f32;
         self.primary = Some(window.id());
-        self.rebuild(window);
+        // The chain was just created for the window's size: that request is
+        // committed, so the frame does not rebuild it again.
+        let size = window.inner_size();
+        self.committed_request = (size.width.max(1), size.height.max(1));
+        self.sync_viewport();
         self.last_frame = Instant::now();
     }
 
@@ -603,6 +640,7 @@ impl PlatformApp for Showcase {
             surface,
             swapchain,
             swapchain_dirty: false,
+            committed_request: (width, height),
         });
     }
 
@@ -646,7 +684,10 @@ impl PlatformApp for Showcase {
         match event {
             PlatformEvent::ScaleFactorChanged(factor) => {
                 self.os_scale = factor as f32;
-                self.rebuild(window);
+                // The scale changes the logical viewport, which the frame
+                // derives from the committed extent. Invalidating makes the
+                // next frame rebuild the scene for the new size.
+                self.app.invalidate();
             }
             PlatformEvent::RecreateSwapchain(extent) => {
                 // The platform layer settled a resize: the swapchain has to
@@ -831,6 +872,10 @@ impl Showcase {
             eprintln!("could not rebuild the secondary swapchain: {error}");
             return false;
         }
+        // The chain now answers for this request. Its *actual* extent may
+        // still differ from it — the driver clamps it to its own limits — and
+        // that difference must never be mistaken for a new request.
+        extra.committed_request = (width, height);
         let (actual_w, actual_h) = extra.swapchain.extent();
         if let Err(error) = renderer.ensure_depth_size(actual_w, actual_h) {
             eprintln!("could not resize the shared depth buffer: {error}");
@@ -850,11 +895,17 @@ impl Showcase {
             return Flow::Continue;
         };
         let size = window.inner_size();
-        let (width, height) = (size.width.max(1), size.height.max(1));
-        let mismatch = self.extras[index].swapchain.extent() != (width, height);
-        if mismatch || self.extras[index].swapchain_dirty {
+        let requested = (size.width.max(1), size.height.max(1));
+        // The rebuild criterion compares two *requested* sizes: the window's
+        // current request against the one the chain was last built for. The
+        // chain's actual extent is the driver's answer and may differ by a
+        // pixel — comparing the two would rebuild on every frame and never
+        // converge.
+        let dirty = self.extras[index].swapchain_dirty;
+        if needs_rebuild(requested, self.extras[index].committed_request, dirty) {
             self.extras[index].swapchain_dirty = false;
-            if !self.recreate_extra_swapchain(index, width, height) {
+            if !self.recreate_extra_swapchain(index, requested.0, requested.1) {
+                self.extras[index].swapchain_dirty = true;
                 return Flow::Continue;
             }
         }
@@ -862,11 +913,16 @@ impl Showcase {
             return Flow::Continue;
         }
 
-        // Lay the shared application out for this window and rebuild.
+        // Lay the shared application out for this window and rebuild. The
+        // viewport follows the committed extent — the same size the frame is
+        // actually drawn at — so the layout and the camera can never describe
+        // two different pictures.
         let scale = (window.scale_factor() as f32 * self.shell().state.zoom()).clamp(0.5, 4.0);
         self.shell_mut().set_effective_scale(scale);
+        let (chain_w, chain_h) = self.extras[index].swapchain.extent();
+        let presented = frame_size((chain_w, chain_h), scale);
         self.app
-            .resize(Vec2::new(width as f32 / scale, height as f32 / scale));
+            .resize(Vec2::new(presented.logical.0, presented.logical.1));
         let _ = self.app.frame(0.0);
         self.upload_glyphs();
         self.write_theme_if_needed();
@@ -937,56 +993,60 @@ impl Showcase {
         self.sync_window_size(window);
         let scale = self.effective_scale();
         self.shell_mut().set_effective_scale(scale);
-        // The logical viewport is `physical / effective scale`, so zooming
-        // changes it exactly like a physical resize does. The runtime must see
-        // the new size, or the page keeps laying out for the old one and
-        // everything past the new right/bottom edge overflows the window.
-        let viewport = self.logical_viewport(window);
-        let wanted = Vec2::new(viewport.0, viewport.1);
-        if (self.app.context().viewport - wanted).length() > 0.01 {
-            self.app.resize(wanted);
-        }
-        self.sync_ime(state, window);
-        let maximized = window.is_maximized();
-        if self.shell().window_maximized != maximized {
-            self.shell_mut().set_window_maximized(maximized);
-            self.app.invalidate();
-        }
+
+        // The window size is only a *request*. The driver decides how large
+        // the swapchain images are, and the image is what the compositor
+        // shows, so everything below derives from the committed extent: the
+        // layout and the camera then always describe the same picture.
         let size = window.inner_size();
-        let (window_width, window_height) = (size.width.max(1), size.height.max(1));
+        let requested = (size.width, size.height);
+        // A minimised window reports a zero extent: there is nothing to
+        // rebuild for, and a one-pixel chain would be nonsense.
+        let live = size.width > 0 && size.height > 0;
 
         // A resize that settled, or a swapchain the driver already rejected,
         // both mean the same thing: rebuild the chain for the new size.
-        //
-        // The third condition is the important one: as long as the chain and
-        // the window disagree, the frame would be drawn at one resolution and
-        // stretched to the other. Comparing the two directly makes the
-        // invariant "chain size == window size" hold on *every* frame, no
-        // matter which path noticed the resize.
         let settled = state.poll_resize(Instant::now());
         // The frame-rate limit lives in the app state; the pacer is the only
         // place that enforces it. A change also changes the present mode
         // (capped runs stay tear-free, an uncapped run must not be pinned to
         // the display's refresh rate), so the chain is rebuilt next.
         let limit = self.shell().state.effective_fps_limit();
+        let mut dirty = self.swapchain_dirty || settled.is_some();
         if state.pacer.fps_limit() != limit {
             state.pacer.set_fps_limit(limit);
-            self.swapchain_dirty = true;
+            dirty = true;
         }
-        // A minimised window reports a zero extent: there is nothing to
-        // rebuild for, and a one-pixel chain would be nonsense.
-        let size_mismatch = size.width > 0
-            && size.height > 0
-            && self
-                .swapchain
-                .as_ref()
-                .is_some_and(|chain| chain.extent() != (window_width, window_height));
-        let forced = settled.is_some() || self.swapchain_dirty || size_mismatch;
-        if forced {
+        // The comparison is between two *requested* sizes. The chain's actual
+        // extent is the driver's answer and may legitimately differ from the
+        // request by a pixel; comparing the two would rebuild the chain on
+        // every frame, never converge, and present a layout that belongs to
+        // one size in an image of another.
+        let rebuild = live && needs_rebuild(requested, self.committed_request, dirty);
+        if rebuild {
             self.swapchain_dirty = false;
-            if self.recreate_swapchain(window, window_width, window_height) {
-                self.rebuild(window);
+            if !self.recreate_swapchain(window, requested.0, requested.1) {
+                // The old chain belongs to the old size: presenting the new
+                // layout in it would put the UI in the wrong place. Skip the
+                // frame and try again on the next one.
+                self.swapchain_dirty = true;
+                state.pacer.request_immediate(Instant::now());
+                return Flow::Continue;
             }
+        }
+
+        // The layout follows the *presented* size: the committed extent of
+        // the swapchain. The page can therefore never be laid out for a size
+        // the frame is not drawn at.
+        if self.swapchain.is_none() {
+            return Flow::Continue;
+        }
+        self.sync_viewport();
+        self.sync_ime(state, window);
+        let maximized = window.is_maximized();
+        if self.shell().window_maximized != maximized {
+            self.shell_mut().set_window_maximized(maximized);
+            self.app.invalidate();
         }
 
         let mut now = Instant::now();
@@ -997,7 +1057,7 @@ impl Showcase {
         // The event loop wakes `SPIN_LEAD` before the deadline, so the last
         // sub-millisecond gap is closed here instead of being left to the
         // millisecond-granular OS timer.
-        if !forced && !state.pacer.should_render(now) {
+        if !rebuild && !state.pacer.should_render(now) {
             if state.pacer.within_spin_lead(now) {
                 now = state.pacer.spin_to_deadline();
             } else {
@@ -1026,10 +1086,6 @@ impl Showcase {
         // for its own viewport and uploads the whole scene: the shared
         // instance pool can only hold one patch base at a time.
         let multi = !self.extras.is_empty();
-        if multi {
-            let viewport = self.logical_viewport(window);
-            self.app.resize(Vec2::new(viewport.0, viewport.1));
-        }
         // The runtime reduces the tick, rebuilds the scene and returns the
         // upload plan for this frame.
         let dirty = self.app.tick(dt);
@@ -1037,6 +1093,12 @@ impl Showcase {
         let report = self.advance_scene(0.0);
         self.write_theme_if_needed();
         self.apply_cursor(window);
+
+        // The upload plan. The generation moves when the scene's shape
+        // changed, and it also moves when the previous frame was dropped:
+        // the runtime's diff base runs ahead of the pool after a dropped
+        // frame, and only a full upload can bring the two back together.
+        let plan = upload_plan(self.scene_generation, &report.diff, self.frame_dropped);
 
         let scale = self.effective_scale();
         let Some(renderer) = &mut self.renderer else {
@@ -1048,6 +1110,7 @@ impl Showcase {
         let (width, height) = swapchain.extent();
         if let Err(error) = renderer.wait_for_previous_frame() {
             eprintln!("waiting for the previous frame failed: {error}");
+            self.frame_dropped = true;
             return Flow::Continue;
         }
         // The driver rejects the image when the surface changed under us.
@@ -1062,13 +1125,13 @@ impl Showcase {
             }
             Ok(AcquireOutcome::OutOfDate) => {
                 self.swapchain_dirty = true;
-                state
-                    .resize
-                    .mark_out_of_date(Extent::new(window_width, window_height));
+                state.resize.mark_out_of_date(Extent::new(width, height));
+                self.frame_dropped = true;
                 return Flow::Continue;
             }
             Err(error) => {
                 eprintln!("could not acquire a swapchain image: {error}");
+                self.frame_dropped = true;
                 return Flow::Continue;
             }
         };
@@ -1076,15 +1139,22 @@ impl Showcase {
         // The app lays out in logical units (physical / (OS scale × zoom)); the
         // UI camera scales those units back up, so a 150 % layout maps exactly
         // onto the physical viewport at any DPI.
+        //
+        // The camera is built from the same extent the layout was solved
+        // for, so the two can never describe different pictures.
         self.app.application_mut().shell_mut().scene.camera =
             Camera::ui((width as f32, height as f32), scale);
         let shell = self.app.application().shell();
         let (generation, dirty_ranges): (u64, &[(u32, u32)]) = if multi {
-            self.scene_generation = self.scene_generation.wrapping_add(1);
-            (self.scene_generation, &[])
+            // Two windows share the instance pool, so each draw uploads the
+            // whole scene under a *fresh* generation instead of patching a
+            // base that belongs to the other window. The generation moves on
+            // every draw, so the two windows can never claim the same one.
+            (self.scene_generation.wrapping_add(1), &[])
         } else {
-            (self.scene_generation, report.diff.ranges())
+            (plan.generation, plan.ranges)
         };
+        self.scene_generation = generation;
         let scene = SceneUpload {
             primitives: &shell.scene.primitives,
             transforms: &shell.scene.transforms,
@@ -1097,8 +1167,12 @@ impl Showcase {
         };
         if let Err(error) = renderer.render_into_swapchain(&scene, &image, width, height) {
             eprintln!("render failed: {error}");
+            self.frame_dropped = true;
             return Flow::Continue;
         }
+        // The scene reached the pool: the diff base and the GPU are in sync
+        // again, so a later drop starts from a clean slate.
+        self.frame_dropped = false;
         // The render-finished semaphore belongs to *this* swapchain image, so
         // the presentation engine never waits on a semaphore another image
         // still owns.
@@ -1109,9 +1183,7 @@ impl Showcase {
             Ok(PresentOutcome::Optimal) => {}
             Ok(PresentOutcome::Recreate) => {
                 self.swapchain_dirty = true;
-                state
-                    .resize
-                    .mark_out_of_date(Extent::new(window_width, window_height));
+                state.resize.mark_out_of_date(Extent::new(width, height));
             }
             Err(error) => {
                 eprintln!("present failed: {error}");

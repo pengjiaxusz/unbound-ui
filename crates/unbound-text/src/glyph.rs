@@ -214,6 +214,30 @@ impl GlyphCache {
         core::mem::take(&mut self.updates)
     }
 
+    /// Put a drained batch back into the queue.
+    ///
+    /// The upload can fail — the device is gone, the staging buffer is
+    /// exhausted, the queue is full. The cache believes those glyphs are in
+    /// the atlas, so a lost batch means the text samples texels that were
+    /// never written: blank or garbled glyphs, forever. The batch therefore
+    /// goes back into the queue and the next frame tries again.
+    ///
+    /// The restored updates keep their place at the front of the queue: they
+    /// are older than whatever was produced in the meantime.
+    pub fn restore_updates(&mut self, mut updates: Vec<AtlasUpdate>) {
+        if updates.is_empty() {
+            return;
+        }
+        updates.append(&mut self.updates);
+        self.updates = updates;
+    }
+
+    /// The uploads that are still queued, for diagnostics and tests.
+    #[must_use]
+    pub fn pending_updates(&self) -> &[AtlasUpdate] {
+        &self.updates
+    }
+
     #[must_use]
     pub fn pending_update_bytes(&self) -> usize {
         self.updates.iter().map(AtlasUpdate::byte_len).sum()
@@ -618,6 +642,69 @@ mod tests {
             assert!(q.uv[2] > q.uv[0] && q.uv[3] > q.uv[1]);
             assert!(!q.color);
         }
+    }
+
+    /// A failed upload must not lose the glyphs.
+    ///
+    /// The cache believes the glyphs are in the atlas, so a lost batch means
+    /// the text samples texels that were never written: blank or garbled
+    /// glyphs, forever. The batch therefore goes back into the queue.
+    #[test]
+    fn a_failed_upload_puts_the_glyphs_back_into_the_queue() {
+        let mut e = engine();
+        let mut cache = GlyphCache::new();
+        let shaped = e.shape("Ag", &TextStyle::sized(16.0));
+        let _ = cache.quads_for(&mut e, &shaped, Vec2::ZERO, 400, false);
+
+        let updates = cache.take_updates();
+        assert_eq!(updates.len(), 2);
+        assert!(cache.pending_updates().is_empty(), "the batch was drained");
+
+        // The upload failed: the batch goes back.
+        cache.restore_updates(updates);
+        assert_eq!(
+            cache.pending_updates().len(),
+            2,
+            "the glyphs would be lost for good"
+        );
+        assert!(cache.pending_update_bytes() > 0);
+
+        // And the next attempt takes them out again.
+        let again = cache.take_updates();
+        assert_eq!(again.len(), 2);
+        assert!(cache.pending_updates().is_empty());
+    }
+
+    /// A restored batch goes in front of whatever was queued meanwhile.
+    #[test]
+    fn a_restored_batch_keeps_its_place_at_the_front() {
+        let mut cache = GlyphCache::new();
+        let older = AtlasUpdate {
+            target: AtlasTarget::Coverage,
+            layer: 0,
+            x: 1,
+            y: 2,
+            width: 3,
+            height: 4,
+            data: vec![0u8; 12],
+        };
+        let newer = AtlasUpdate {
+            target: AtlasTarget::Color,
+            layer: 1,
+            x: 5,
+            y: 6,
+            width: 7,
+            height: 8,
+            data: vec![0u8; 7 * 8 * 4],
+        };
+        cache.restore_updates(vec![older.clone()]);
+        cache.updates.push(newer.clone());
+        cache.restore_updates(vec![older.clone()]);
+
+        let queued = cache.pending_updates();
+        assert_eq!(queued.len(), 3);
+        assert_eq!(queued[0], older, "the oldest batch comes first");
+        assert_eq!(queued[2], newer);
     }
 
     #[test]
