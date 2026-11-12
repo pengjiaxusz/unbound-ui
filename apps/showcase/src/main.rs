@@ -122,7 +122,13 @@ struct Showcase {
 impl Showcase {
     fn new() -> Self {
         Self {
-            app: AppRuntime::new(GalleryRuntime::new(), Vec2::new(1440.0, 900.0)),
+            app: {
+                let mut app = GalleryRuntime::new();
+                // The runtime diffs the frame, so the shell must not scan the
+                // primitive list a second time for the same answer.
+                app.set_external_diff(true);
+                AppRuntime::new(app, Vec2::new(1440.0, 900.0))
+            },
             renderer: None,
             surface: None,
             swapchain: None,
@@ -297,7 +303,7 @@ impl Showcase {
     fn apply_cursor(&mut self, window: &Window) {
         let kind = self
             .resize_edge
-            .map_or_else(|| self.shell().cursor(), ResizeEdge::cursor);
+            .map_or_else(|| self.app.context().cursor, ResizeEdge::cursor);
         if kind != self.cursor {
             self.cursor = kind;
             window.set_cursor(cursor_icon(kind));
@@ -742,7 +748,10 @@ impl PlatformApp for Showcase {
                         let _ = window.drag_resize_window(resize_direction(edge));
                     } else {
                         self.app.pointer_move(position);
-                        if self.shell().is_titlebar_drag(position) {
+                        if self
+                            .shell()
+                            .is_titlebar_drag(position, self.app.context().hovered)
+                        {
                             self.press_consumed = true;
                             let double = self.last_title_press.is_some_and(|(when, at)| {
                                 Instant::now().duration_since(when)
@@ -801,6 +810,7 @@ impl PlatformApp for Showcase {
                 // drags have to go, or the shell keeps a ghost drag alive
                 // until the user happens to click somewhere else.
                 self.shell_mut().cancel_interactions();
+                self.app.cancel_pointer();
                 self.app.pointer_up(self.logical(self.pointer));
             }
             PlatformEvent::RedrawRequested => {
@@ -1255,7 +1265,10 @@ fn render_to_png(
     app.state.show_hud = show_hud;
     let zoom = app.state.zoom();
     app.set_effective_scale(zoom);
-    app.rebuild((width as f32 / zoom, height as f32 / zoom));
+    app.rebuild(
+        (width as f32 / zoom, height as f32 / zoom),
+        showcase::shell::Interaction::default(),
+    );
     app.scene.camera = Camera::ui((width as f32, height as f32), zoom);
 
     for update in app.labels.cache.take_updates() {

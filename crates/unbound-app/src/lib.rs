@@ -271,6 +271,11 @@ pub struct ViewContext {
     pub focused: Option<u64>,
     /// Whether the focus ring should be painted.
     pub focus_visible: bool,
+    /// Whether the host asked for a full rebuild.
+    ///
+    /// Set by [`AppRuntime::invalidate`]: an application that normally skips a
+    /// rebuild when nothing changed must honour this and rebuild anyway.
+    pub force: bool,
 }
 
 impl ViewContext {
@@ -619,6 +624,21 @@ impl<A: Application> AppRuntime<A> {
         &self.focus
     }
 
+    /// Focus a node (or drop focus) without going through an event.
+    ///
+    /// A host uses this for window-activation changes; a test uses it to
+    /// reproduce the focus the runtime's own pointer policy would resolve.
+    pub fn focus_node(&mut self, node: Option<u64>) {
+        let changed = match node {
+            Some(node) => self.focus.focus(node, FocusCause::Programmatic),
+            None => self.focus.blur(),
+        };
+        if changed {
+            self.sync_focus_context();
+            self.mark(DirtyFlags::LAYOUT);
+        }
+    }
+
     /// Mark the next frame as a full rebuild.
     pub fn invalidate(&mut self) {
         self.dirty = self.dirty.merge(DirtyFlags::ALL);
@@ -658,6 +678,18 @@ impl<A: Application> AppRuntime<A> {
         self.sync_router_context();
         self.mark(flags);
         flags
+    }
+
+    /// Cancel the pointer capture without synthesising a click.
+    ///
+    /// A host that loses focus mid-press has to drop the capture: the release
+    /// will never arrive, and the next `pointer_up` must not turn the
+    /// abandoned press into an activation.
+    pub fn cancel_pointer(&mut self) -> DirtyFlags {
+        let _ = self.router.cancel();
+        self.sync_router_context();
+        self.mark(DirtyFlags::LAYOUT);
+        DirtyFlags::LAYOUT
     }
 
     /// A wheel notch at `pos`.
@@ -791,6 +823,7 @@ impl<A: Application> AppRuntime<A> {
             pressed: self.router.pointer().pressed(),
             focused: self.ctx.focused,
             focus_visible: self.ctx.focus_visible,
+            force: self.force_rebuild,
         };
         let mut view = ViewBuilder {
             collector: &mut self.collector,

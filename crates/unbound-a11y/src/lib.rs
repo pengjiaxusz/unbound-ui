@@ -255,7 +255,11 @@ impl A11yNode {
 }
 
 /// The incremental semantic tree.
-#[derive(Debug)]
+///
+/// Cloning is a full snapshot: an application that rebuilds its semantic tree
+/// from scratch every frame hands a copy to the scene collector while keeping
+/// the original inspectable.
+#[derive(Clone, Debug)]
 pub struct Semantics {
     nodes: FxHashMap<u64, A11yNode>,
     children: FxHashMap<u64, Vec<u64>>,

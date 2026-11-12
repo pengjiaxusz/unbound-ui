@@ -1,32 +1,177 @@
 //! Behavioural checks for the dogfooded gallery shell.
 
+use std::ops::{Deref, DerefMut};
+
 use showcase::pages::PageId;
 use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::target::{self, Target};
+use unbound_app::{AppKey, AppRuntime, Modifiers as AppModifiers};
 use unbound_headless::Harness;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::{Modifiers, PlatformKey};
+use unbound_widgets::diff::SceneDiff;
 
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
 
-fn app() -> GalleryApp {
-    let mut app = GalleryApp::new();
+/// The shell driven through the runtime, the way the window host drives it.
+///
+/// The pointer router, the focus manager and the scene collector belong to
+/// the runtime now, so a test can no longer poke a private router: it feeds
+/// the same events the platform would and reads the resolved state back.
+struct App {
+    runtime: AppRuntime<GalleryApp>,
+    viewport: (f32, f32),
+}
+
+impl Deref for App {
+    type Target = GalleryApp;
+
+    fn deref(&self) -> &GalleryApp {
+        self.runtime.application()
+    }
+}
+
+impl DerefMut for App {
+    fn deref_mut(&mut self) -> &mut GalleryApp {
+        self.runtime.application_mut()
+    }
+}
+
+impl App {
+    fn new() -> Self {
+        Self {
+            runtime: AppRuntime::new(GalleryApp::new(), Vec2::new(VIEWPORT.0, VIEWPORT.1)),
+            viewport: VIEWPORT,
+        }
+    }
+
+    /// Hand any focus the shell asked for to the runtime, then paint a frame.
+    fn paint(&mut self, dt: f32) {
+        if let Some(node) = self.runtime.application_mut().take_focus_request() {
+            self.runtime.focus_node(Some(node));
+        }
+        if self.runtime.application_mut().take_blur_request() {
+            self.runtime.focus_node(None);
+        }
+        self.runtime.frame(dt);
+    }
+
+    fn resize(&mut self, viewport: (f32, f32)) {
+        if self.viewport != viewport {
+            self.viewport = viewport;
+            self.runtime.resize(Vec2::new(viewport.0, viewport.1));
+        }
+    }
+
+    fn rebuild(&mut self, viewport: (f32, f32)) {
+        self.resize(viewport);
+        // An explicit rebuild is a rebuild, even when nothing observable
+        // changed: the atlas clock and the layout statistics move with it.
+        self.runtime.invalidate();
+        self.paint(1.0 / 60.0);
+    }
+
+    /// Rebuild only when something observable changed; returns whether it did.
+    fn sync(&mut self, viewport: (f32, f32)) -> bool {
+        self.resize(viewport);
+        self.paint(1.0 / 60.0);
+        !matches!(self.runtime.last_diff(), SceneDiff::Identical)
+    }
+
+    fn pointer_move(&mut self, pos: Vec2) {
+        self.runtime.pointer_move(pos);
+    }
+
+    fn pointer_down(&mut self, pos: Vec2, _now: f64) {
+        self.runtime.pointer_move(pos);
+        // The old helper threaded an explicit timestamp; the runtime owns the
+        // clock, so nudge it forward to keep two clicks from pairing.
+        self.runtime.advance(0.5);
+        self.runtime.pointer_down(pos);
+    }
+
+    fn pointer_up(&mut self, pos: Vec2, _now: f64) {
+        self.runtime.pointer_up(pos);
+    }
+
+    fn key(&mut self, key: &PlatformKey, modifiers: Modifiers) {
+        if let Some(key) = app_key(key) {
+            self.runtime.key(key, true, app_modifiers(modifiers));
+        }
+    }
+
+    fn pressed(&self) -> Option<u64> {
+        self.runtime.context().pressed
+    }
+
+    fn hovered(&self) -> Option<u64> {
+        self.runtime.context().hovered
+    }
+
+    /// Losing the focus aborts the interaction, the way the window host does:
+    /// the shell drops its own drag state and the runtime releases the
+    /// pointer capture it owns.
+    fn cancel_interactions(&mut self) {
+        self.runtime.application_mut().cancel_interactions();
+        self.runtime.cancel_pointer();
+    }
+}
+
+fn app_key(key: &PlatformKey) -> Option<AppKey> {
+    Some(match key {
+        PlatformKey::Named(name) => match name.as_str() {
+            "Tab" => AppKey::Tab,
+            "Escape" => AppKey::Escape,
+            "Enter" => AppKey::Enter,
+            "Space" => AppKey::Space,
+            "Backspace" => AppKey::Backspace,
+            "Delete" => AppKey::Delete,
+            "ArrowLeft" => AppKey::Left,
+            "ArrowRight" => AppKey::Right,
+            "ArrowUp" => AppKey::Up,
+            "ArrowDown" => AppKey::Down,
+            "Home" => AppKey::Home,
+            "End" => AppKey::End,
+            _ => return None,
+        },
+        PlatformKey::Character(text) => {
+            let mut chars = text.chars();
+            let first = chars.next()?;
+            if chars.next().is_some() {
+                return None;
+            }
+            AppKey::Character(first)
+        }
+        PlatformKey::Other(_) => return None,
+    })
+}
+
+fn app_modifiers(modifiers: Modifiers) -> AppModifiers {
+    AppModifiers {
+        shift: modifiers.shift,
+        ctrl: modifiers.control,
+        alt: modifiers.alt,
+        meta: modifiers.meta,
+    }
+}
+
+fn app() -> App {
+    let mut app = App::new();
     app.state.theme = ThemeMode::Dark;
     app.rebuild(VIEWPORT);
     app
 }
 
-fn rect_of(app: &GalleryApp, node: u64) -> unbound_math::Rect {
-    app.router
-        .regions()
+fn rect_of(app: &App, node: u64) -> unbound_math::Rect {
+    app.regions
         .iter()
         .find(|region| region.node == node)
         .map(|region| region.bounds)
         .unwrap_or_else(|| panic!("no hit region for node {node:#x}"))
 }
 
-fn click_node(app: &mut GalleryApp, node: u64) {
+fn click_node(app: &mut App, node: u64) {
     let rect = rect_of(app, node);
     let point = rect.center();
     app.pointer_move(point);
@@ -54,7 +199,7 @@ fn every_page_passes_the_headless_sanitizers() {
 #[test]
 fn the_hud_passes_contrast_in_both_themes() {
     for theme in [ThemeMode::Light, ThemeMode::Dark] {
-        let mut app = GalleryApp::new();
+        let mut app = App::new();
         app.state.theme = theme;
         app.state.show_hud = true;
         app.rebuild((1440.0, 900.0));
@@ -78,7 +223,7 @@ fn layouts_stay_clean_across_themes_zooms_and_sizes() {
                 (1280.0, 800.0),
                 (1920.0, 1080.0),
             ] {
-                let mut app = GalleryApp::new();
+                let mut app = App::new();
                 app.state.theme = theme;
                 app.state.zoom_step = zoom_step as usize;
                 app.rebuild((width, height));
@@ -433,13 +578,10 @@ fn losing_the_focus_cancels_the_pointer_capture() {
 
     app.pointer_move(point);
     app.pointer_down(point, 0.0);
-    assert!(app.router.pointer().pressed().is_some());
+    assert!(app.pressed().is_some());
 
     app.cancel_interactions();
-    assert!(
-        app.router.pointer().pressed().is_none(),
-        "the capture must be released"
-    );
+    assert!(app.pressed().is_none(), "the capture must be released");
     // The pending activation is gone: the release no longer commits.
     app.pointer_up(point, 0.1);
     assert_eq!(
@@ -623,12 +765,7 @@ fn hovering_a_control_never_relays_out_the_page() {
         app.navigate(page);
         app.pointer_move(Vec2::new(2.0, 898.0));
         app.rebuild(VIEWPORT);
-        let targets: Vec<u64> = app
-            .router
-            .regions()
-            .iter()
-            .map(|region| region.node)
-            .collect();
+        let targets: Vec<u64> = app.regions.iter().map(|region| region.node).collect();
         for node in targets {
             let point = rect_of(&app, node).center();
             app.pointer_move(point);
@@ -649,7 +786,7 @@ fn hovering_a_control_never_relays_out_the_page() {
 /// glyphs sat off-centre.
 #[test]
 fn the_window_buttons_are_flush_and_equal() {
-    let mut app = GalleryApp::new();
+    let mut app = App::new();
     app.rebuild((1440.0, 900.0));
     let close = app.layout.window_close;
     let maximize = app.layout.window_maximize;
@@ -686,8 +823,7 @@ fn an_identical_rebuild_keeps_the_pending_patch() {
     app.mark_uploaded();
 
     let node = app
-        .router
-        .regions()
+        .regions
         .iter()
         .map(|region| region.node)
         .find(|node| !target::is_demo(*node))
@@ -725,8 +861,7 @@ fn a_hover_patches_the_pool_instead_of_reuploading_it() {
     app.pointer_move(Vec2::new(2.0, 898.0));
     app.rebuild(VIEWPORT);
     let targets: Vec<u64> = app
-        .router
-        .regions()
+        .regions
         .iter()
         .map(|region| region.node)
         .filter(|node| !target::is_demo(*node))
@@ -773,8 +908,7 @@ fn a_hover_patch_stays_inside_the_hovered_control() {
     app.pointer_move(Vec2::new(2.0, 898.0));
     app.rebuild(VIEWPORT);
     let targets: Vec<u64> = app
-        .router
-        .regions()
+        .regions
         .iter()
         .map(|region| region.node)
         .filter(|node| !target::is_demo(*node))
@@ -789,8 +923,7 @@ fn a_hover_patch_stays_inside_the_hovered_control() {
         // centre of the visible part — hovering a clipped-away row would hit
         // whatever is painted underneath it.
         let Some(region) = app
-            .router
-            .regions()
+            .regions
             .iter()
             .find(|region| region.node == node)
             .cloned()
@@ -852,7 +985,7 @@ fn every_hit_region_has_its_own_identity() {
             app.rebuild(VIEWPORT);
             let mut seen: std::collections::HashMap<u64, unbound_math::Rect> =
                 std::collections::HashMap::new();
-            for region in app.router.regions() {
+            for region in app.regions.iter() {
                 if let Some(first) = seen.insert(region.node, region.bounds) {
                     panic!(
                         "{page:?} (expanded: {expanded}): node {:#x} has two hit regions, {first:?} and {:?}",
@@ -874,7 +1007,7 @@ fn the_footer_shortcuts_navigate_on_their_own_identity() {
     app.pointer_move(point);
     app.rebuild(VIEWPORT);
     assert_eq!(
-        app.router.hover(),
+        app.hovered(),
         Some(footer),
         "the footer row must own the hover, not the tree row for the same page"
     );

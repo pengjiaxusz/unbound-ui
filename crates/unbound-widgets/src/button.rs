@@ -219,6 +219,16 @@ pub struct ButtonDesc {
     pub icon_trailing: bool,
     /// Show the loading indicator and refuse interaction.
     pub loading: bool,
+    /// The analytic drop-shadow blur. `0.0` paints no shadow at all.
+    pub shadow: f32,
+    /// Centre the label on its ink bounds.
+    ///
+    /// A caller that already positioned the glyph run (a page that shaped it
+    /// inside the button rectangle) clears this, so the emitter paints the
+    /// run exactly where it was measured instead of re-centring it.
+    pub centre_label: bool,
+    /// How far the focus ring grows outside the button.
+    pub focus_ring_gap: f32,
 }
 
 impl ButtonDesc {
@@ -236,6 +246,9 @@ impl ButtonDesc {
             icon: None,
             icon_trailing: false,
             loading: false,
+            shadow: BUTTON_SHADOW,
+            centre_label: true,
+            focus_ring_gap: FOCUS_RING_GAP,
         }
     }
 
@@ -280,6 +293,27 @@ impl ButtonDesc {
     #[must_use]
     pub fn with_loading(mut self, loading: bool) -> Self {
         self.loading = loading;
+        self
+    }
+
+    /// The same button with another shadow blur (`0.0` paints none).
+    #[must_use]
+    pub fn with_shadow(mut self, shadow: f32) -> Self {
+        self.shadow = shadow;
+        self
+    }
+
+    /// Paint the label where the caller laid it out instead of re-centring it.
+    #[must_use]
+    pub fn with_centre_label(mut self, centre: bool) -> Self {
+        self.centre_label = centre;
+        self
+    }
+
+    /// The same button with another focus-ring gap.
+    #[must_use]
+    pub fn with_focus_ring_gap(mut self, gap: f32) -> Self {
+        self.focus_ring_gap = gap;
         self
     }
 
@@ -410,7 +444,7 @@ pub fn emit_button_with_tokens(
         Token::NONE,
         Token::NONE,
         0.0,
-        BUTTON_SHADOW,
+        desc.shadow,
         PrimType::Shadow,
         SubElement::Shadow,
         z,
@@ -482,13 +516,15 @@ pub fn emit_button_with_tokens(
     // The label: same `z` as the button, drawn later through
     // `SubElement::Content`.
     if let Some(ink) = ink {
-        let offset = Vec2::new(
-            cursor - ink.min().x,
-            rect.center().y - (ink.min().y + ink.height() * 0.5),
-        );
-        for quad in label.iter_mut() {
-            quad.rect.origin.x += offset.x;
-            quad.rect.origin.y += offset.y;
+        if desc.centre_label {
+            let offset = Vec2::new(
+                cursor - ink.min().x,
+                rect.center().y - (ink.min().y + ink.height() * 0.5),
+            );
+            for quad in label.iter_mut() {
+                quad.rect.origin.x += offset.x;
+                quad.rect.origin.y += offset.y;
+            }
         }
         let color = if state.disabled {
             tokens.label_disabled
@@ -564,8 +600,8 @@ pub fn emit_button_with_tokens(
     //    always emitted — focus only changes its opacity — so that focusing
     //    a button repaints one primitive instead of reshuffling the pool.
     primitives.push(focus_ring(
-        rect.inflate(FOCUS_RING_GAP),
-        desc.radius + FOCUS_RING_GAP,
+        rect.inflate(desc.focus_ring_gap),
+        desc.radius + desc.focus_ring_gap,
         tokens.focus_ring,
         2.0,
         z,

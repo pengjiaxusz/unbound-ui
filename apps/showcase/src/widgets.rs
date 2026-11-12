@@ -7,6 +7,10 @@
 use accesskit::Role;
 use unbound_input::CursorKind;
 use unbound_math::Rect;
+use unbound_theme::Token;
+use unbound_widgets::button::{
+    emit_button_with_tokens, ButtonDesc, ButtonTokens, ButtonVariant as EngineButtonVariant,
+};
 use unbound_widgets::checkbox::{emit_checkbox, CheckboxDesc, CheckboxTokens};
 use unbound_widgets::radio::{emit_radio, RadioDesc, RadioTokens};
 use unbound_widgets::segmented::{
@@ -38,6 +42,11 @@ pub enum ButtonVariant {
 }
 
 /// A gallery button. Returns the visual state it painted.
+///
+/// The control itself lives in the engine layer: the shell only supplies the
+/// geometry, the shaped label and the per-variant colour slots, so the five
+/// states and the focus ring come from [`emit_button_with_tokens`] instead of
+/// a second hand-drawn implementation.
 pub fn button(
     canvas: &mut Canvas<'_>,
     node: u64,
@@ -46,95 +55,112 @@ pub fn button(
     variant: ButtonVariant,
     enabled: bool,
 ) -> Visual {
-    let start = canvas.span_start();
-    let visual = canvas.visual(node, !enabled);
-    let palette = *canvas.palette;
-    let (fill, border, text) = match variant {
-        ButtonVariant::Primary => (
-            match visual {
-                Visual::Hover => palette.primary_hover,
-                Visual::Pressed => palette.primary_pressed,
-                Visual::Disabled => palette.disabled_fill,
-                Visual::Idle => palette.primary,
-            },
-            0,
-            if enabled {
-                palette.on_primary
-            } else {
-                palette.text_muted
-            },
-        ),
-        ButtonVariant::Secondary => (
-            match visual {
-                Visual::Hover | Visual::Pressed => palette.control_hover,
-                _ => palette.card_bg,
-            },
-            palette.card_border,
-            if enabled {
-                palette.text
-            } else {
-                palette.text_muted
-            },
-        ),
-        ButtonVariant::Subtle | ButtonVariant::Icon => (
-            match visual {
-                Visual::Hover => palette.control_hover,
-                Visual::Pressed => palette.nav_selected,
-                _ => 0,
-            },
-            0,
-            if enabled {
-                palette.primary
-            } else {
-                palette.text_muted
-            },
-        ),
-        ButtonVariant::OnHero => (
-            match visual {
-                Visual::Hover => palette.on_hero,
-                Visual::Pressed => palette.primary_soft,
-                _ => palette.on_hero,
-            },
-            0,
-            palette.primary,
-        ),
-        ButtonVariant::OnHeroSecondary => (palette.hero_scrim, palette.on_hero, palette.on_hero),
+    let state = canvas.control_state(node, !enabled, false);
+    let font_size = if variant == ButtonVariant::Icon {
+        15.0
+    } else {
+        13.0
     };
-    canvas.rect(rect, 8.0, fill, border, 1.0, 0.0);
-    // The ring is always emitted and only fades in on focus, so focusing a
-    // button repaints one primitive instead of inserting one.
-    canvas.stroke_faded(
-        rect.inflate(2.0),
-        10.0,
-        palette.focus_ring,
-        2.0,
-        if canvas.focused(node) { 1.0 } else { 0.0 },
-    );
-    if !label.is_empty() {
-        canvas.text(
-            label,
+    let (mut quads, _) = canvas.layout_text(label, rect, font_size, AlignX::Center, AlignY::Center);
+    let mut desc = ButtonDesc::new(rect, label)
+        .with_variant(carrier_variant(variant))
+        .with_shadow(0.0)
+        .with_centre_label(false)
+        .with_focus_ring_gap(2.0);
+    desc.font_size = font_size;
+    let output = emit_button_with_tokens(node, &desc, state, button_tokens(variant), &mut quads);
+    canvas.control_output(node, &output);
+    if !enabled {
+        // The engine drops the hit region of a disabled button; the gallery
+        // keeps its disabled buttons absorbing clicks like the hand-drawn
+        // version did.
+        canvas.control(
+            node,
             rect,
-            if variant == ButtonVariant::Icon {
-                15.0
-            } else {
-                13.0
-            },
-            text,
-            AlignX::Center,
-            AlignY::Center,
+            Role::Button,
+            label,
+            CursorKind::Pointer,
+            true,
+            false,
         );
     }
-    canvas.control(
-        node,
-        rect,
-        Role::Button,
-        label,
-        CursorKind::Pointer,
-        !enabled,
-        matches!(visual, Visual::Pressed),
-    );
-    canvas.record_span(node, start);
-    visual
+    visual_of(state)
+}
+
+/// The engine variant used as a carrier.
+///
+/// The colour slots are passed explicitly, so the carrier never decides the
+/// palette; it only keeps the descriptor readable.
+fn carrier_variant(variant: ButtonVariant) -> EngineButtonVariant {
+    match variant {
+        ButtonVariant::Primary => EngineButtonVariant::Primary,
+        ButtonVariant::Secondary | ButtonVariant::OnHeroSecondary => EngineButtonVariant::Secondary,
+        ButtonVariant::Subtle => EngineButtonVariant::Subtle,
+        ButtonVariant::Icon => EngineButtonVariant::Icon,
+        ButtonVariant::OnHero => EngineButtonVariant::OnHero,
+    }
+}
+
+/// The colour slots each gallery variant paints with.
+///
+/// These are the exact slots the hand-drawn button used, so the migration
+/// keeps the page pixel-identical: the engine's own defaults differ in three
+/// places (Primary's border, every `label_disabled`, and Secondary's disabled
+/// fill) and those are overridden here.
+fn button_tokens(variant: ButtonVariant) -> ButtonTokens {
+    let focus_ring = Token::FOCUS_RING;
+    match variant {
+        ButtonVariant::Primary => ButtonTokens {
+            fill: Token::PRIMARY,
+            fill_hover: Token::PRIMARY_HOVER,
+            fill_pressed: Token::PRIMARY_PRESSED,
+            fill_disabled: Token::DISABLED,
+            border: Token::NONE,
+            label: Token::ON_PRIMARY,
+            label_disabled: Token::TEXT_SECONDARY,
+            focus_ring,
+        },
+        ButtonVariant::Secondary => ButtonTokens {
+            fill: Token::CARD_BG,
+            fill_hover: Token::CONTROL_HOVER,
+            fill_pressed: Token::CONTROL_HOVER,
+            fill_disabled: Token::CARD_BG,
+            border: Token::CARD_BORDER,
+            label: Token::TEXT_PRIMARY,
+            label_disabled: Token::TEXT_SECONDARY,
+            focus_ring,
+        },
+        ButtonVariant::Subtle | ButtonVariant::Icon => ButtonTokens {
+            fill: Token::NONE,
+            fill_hover: Token::CONTROL_HOVER,
+            fill_pressed: Token::NAV_SELECTED,
+            fill_disabled: Token::NONE,
+            border: Token::NONE,
+            label: Token::PRIMARY,
+            label_disabled: Token::TEXT_SECONDARY,
+            focus_ring,
+        },
+        ButtonVariant::OnHero => ButtonTokens {
+            fill: Token::ON_HERO,
+            fill_hover: Token::ON_HERO,
+            fill_pressed: Token::PRIMARY_SOFT,
+            fill_disabled: Token::ON_HERO,
+            border: Token::NONE,
+            label: Token::PRIMARY,
+            label_disabled: Token::PRIMARY,
+            focus_ring,
+        },
+        ButtonVariant::OnHeroSecondary => ButtonTokens {
+            fill: Token::HERO_SCRIM,
+            fill_hover: Token::HERO_SCRIM,
+            fill_pressed: Token::HERO_SCRIM,
+            fill_disabled: Token::HERO_SCRIM,
+            border: Token::ON_HERO,
+            label: Token::ON_HERO,
+            label_disabled: Token::ON_HERO,
+            focus_ring,
+        },
+    }
 }
 
 /// A row with a label and a switch.

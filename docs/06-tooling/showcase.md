@@ -6,7 +6,7 @@
 > | :--- | :--- |
 > | **源码** | `apps/showcase/src/{main,shell,runtime_app,state,canvas,widgets,target,gallery,pages/*}.rs` |
 > | **关键类型** | `GalleryRuntime`、`AppRuntime<GalleryRuntime>`、`GalleryApp`、`ShellTree`、`ShellLayout`、`GalleryState`、`ExampleCard`（`PageLayout`/`CardLayout`）、`Canvas`、`Target`、`Palette`、`Labels` |
-> | **测试** | `apps/showcase/tests/gallery.rs`（13 个）+ `apps/showcase/tests/shell.rs`（9 个）+ `runtime_migration.rs`（4 个），全部无头运行；布局体检走 `unbound-headless` |
+> | **测试** | `apps/showcase/tests/gallery.rs`（15 个）+ `apps/showcase/tests/shell.rs`（36 个）+ `runtime_migration.rs`（5 个），全部无头运行；布局体检走 `unbound-headless` |
 
 `apps/showcase` 现在是一个**自举（dogfooding）的桌面应用**：它用引擎自己的布局、
 输入、语义、动画与主题原语，搭出对标 WinUI 3 Gallery 的三段式壳层与交互式组件
@@ -27,7 +27,7 @@
 | Vulkan surface 与 swapchain | `crates/unbound-gpu/src/surface.rs` |
 | 真实 bindless 图集与上传通路 | `crates/unbound-gpu/src/atlas.rs` |
 | 窗口化呈现（acquire → render → present） | `apps/showcase/src/main.rs` |
-| 应用壳层、导航与输入路由 | `apps/showcase/src/shell.rs` |
+| 应用壳层与导航（指针路由与焦点策略归 `unbound-app`） | `apps/showcase/src/{shell,runtime_app}.rs` |
 | 页面目录、示例与 Knob 定义 | `apps/showcase/src/pages/` |
 | 图元绘制与主题配色 | `apps/showcase/src/{canvas,widgets,gallery}.rs` |
 

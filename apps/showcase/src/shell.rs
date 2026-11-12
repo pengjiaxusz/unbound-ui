@@ -1,14 +1,14 @@
 //! The dogfooded application shell.
 //!
-//! `GalleryApp` owns navigation, environment switches, demo state and the input
-//! router. It draws the custom title bar, the collapsible NavigationView, the
-//! page viewport and the `ExampleCard` composition, so the showcase exercises
-//! the same primitives a real application would use.
+//! `GalleryApp` owns navigation, environment switches and demo state. It draws
+//! the custom title bar, the collapsible NavigationView, the page viewport and
+//! the `ExampleCard` composition, so the showcase exercises the same
+//! primitives a real application would use.
 
 use accesskit::Role;
 use unbound_anim::{Spring, SpringPreset};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
-use unbound_input::{CursorKind, PointerConfig, PointerEvent, Router};
+use unbound_input::CursorKind;
 use unbound_layout::LayoutStats;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::{Modifiers, PlatformKey};
@@ -89,10 +89,17 @@ pub struct GalleryApp {
     pub state: GalleryState,
     pub scene: gallery::Gallery,
     pub labels: Labels,
-    pub router: Router,
     pub layout: ShellLayout,
-    pub focused: Option<u64>,
+    /// The focus order the last rebuild produced.
+    ///
+    /// The runtime adopts it into its `FocusManager` right after `view`, so
+    /// this is an output, never a second source of truth.
     pub focus_order: Vec<u64>,
+    /// The hit regions the last rebuild produced.
+    ///
+    /// The runtime adopts them into its `Router` right after `view`; the
+    /// shell no longer keeps a router of its own.
+    pub regions: Vec<unbound_input::HitRegion>,
     pub ranges: Vec<RangeZone>,
     pub scroll_zones: Vec<(Rect, u8)>,
     pub semantics: unbound_a11y::Semantics,
@@ -167,6 +174,29 @@ pub struct GalleryApp {
     /// accurate enough and avoids threading a caret rectangle through every
     /// page.
     ime_caret: Vec2,
+    /// A focus request raised by a click, a navigation or an a11y action.
+    ///
+    /// The runtime owns the focus manager, so the shell only records the
+    /// request and hands it over after the reduction.
+    pending_focus: Option<u64>,
+    /// A blur request raised by an accessibility action.
+    pending_blur: bool,
+}
+
+/// The interaction state the runtime resolved for this frame.
+///
+/// The shell no longer routes the pointer itself: the runtime's `Router`
+/// picks the hovered / pressed node, and its `FocusManager` owns the focused
+/// one. Painting a frame therefore takes a read-only snapshot instead of a
+/// second router.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Interaction {
+    /// The node under the pointer.
+    pub hovered: Option<u64>,
+    /// The node the pointer is pressing.
+    pub pressed: Option<u64>,
+    /// The focused node.
+    pub focused: Option<u64>,
 }
 
 /// The inputs the shell's layout depends on.
@@ -205,10 +235,9 @@ impl GalleryApp {
             state: GalleryState::default(),
             scene: gallery::Gallery::new(),
             labels: Labels::new(),
-            router: Router::new(PointerConfig::default()),
             layout,
-            focused: None,
             focus_order: Vec::new(),
+            regions: Vec::new(),
             ranges: Vec::new(),
             scroll_zones: Vec::new(),
             semantics: unbound_a11y::Semantics::new(ROOT),
@@ -243,6 +272,8 @@ impl GalleryApp {
             frame_layout_stats: LayoutStats::default(),
             node_spans: rustc_hash::FxHashMap::default(),
             ime_caret: Vec2::new(24.0, 60.0),
+            pending_focus: None,
+            pending_blur: false,
         }
     }
 
@@ -285,9 +316,12 @@ impl GalleryApp {
     }
 
     /// Whether `point` is draggable title-bar background.
+    ///
+    /// The runtime resolves the hover, so the caller passes it in: a point
+    /// over a window button is a click, not a drag.
     #[must_use]
-    pub fn is_titlebar_drag(&self, point: Vec2) -> bool {
-        self.layout.top_bar.contains_point(point) && self.router.hover().is_none()
+    pub fn is_titlebar_drag(&self, point: Vec2, hovered: Option<u64>) -> bool {
+        self.layout.top_bar.contains_point(point) && hovered.is_none()
     }
 
     /// The palette currently used by the shell.
@@ -303,7 +337,7 @@ impl GalleryApp {
         self.state.search_query.clear();
         self.state.demo.modal_open = false;
         self.state.demo.dropdown_open = false;
-        self.focused = Some(target::id(Target::NavPage(page.index() as u8)));
+        self.pending_focus = Some(target::id(Target::NavPage(page.index() as u8)));
     }
 
     /// Apply an accessibility action exactly like the equivalent pointer or
@@ -328,12 +362,12 @@ impl GalleryApp {
             }
             A11yAction::Focus => {
                 if target::decode(node).is_some() {
-                    self.focused = Some(node);
+                    self.pending_focus = Some(node);
                     self.state.bump();
                 }
             }
             A11yAction::Blur => {
-                self.focused = None;
+                self.pending_blur = true;
                 self.state.bump();
             }
             A11yAction::SetValue => {
@@ -353,20 +387,21 @@ impl GalleryApp {
         }
     }
 
-    /// Rebuild the scene when anything observable changed.
-    pub fn sync(&mut self, viewport: (f32, f32)) -> bool {
-        let hover = self.router.hover();
-        let pressed = self.router.pointer().pressed();
-        let changed = self.last_revision != self.state.revision
-            || self.last_hover != hover
-            || self.last_pressed != pressed
-            || self.last_focus != self.focused
+    /// Whether the scene has to be rebuilt for this interaction snapshot.
+    ///
+    /// A hover, a press or a focus change repaints a control but moves
+    /// nothing, so a frame whose snapshot is unchanged reuses the previous
+    /// scene instead of rebuilding it. `force` comes from the runtime: an
+    /// explicit `AppRuntime::invalidate` rebuilds even when nothing moved.
+    #[must_use]
+    pub fn needs_rebuild(&self, viewport: (f32, f32), inter: &Interaction, force: bool) -> bool {
+        force
+            || self.last_revision != self.state.revision
+            || self.last_hover != inter.hovered
+            || self.last_pressed != inter.pressed
+            || self.last_focus != inter.focused
             || self.last_viewport != viewport
-            || !self.nav_spring.is_settled();
-        if changed {
-            self.rebuild(viewport);
-        }
-        changed
+            || !self.nav_spring.is_settled()
     }
 
     /// The primitive ranges that changed in the last rebuild.
@@ -454,13 +489,13 @@ impl GalleryApp {
     }
 
     /// Rebuild unconditionally.
-    pub fn rebuild(&mut self, viewport: (f32, f32)) {
+    pub fn rebuild(&mut self, viewport: (f32, f32), inter: Interaction) {
         let (width, height) = viewport;
         let viewport_rect = Rect::new(0.0, 0.0, width.max(320.0), height.max(240.0));
         let nav_width = self.nav_spring.value.clamp(NAV_COLLAPSED, NAV_EXPANDED);
         let palette = gallery::palette();
-        let hover = self.router.hover();
-        let pressed = self.router.pointer().pressed();
+        let hover = inter.hovered;
+        let pressed = inter.pressed;
         // The tree owns the geometry: the title bar, the navigation pane and
         // the page are solved, not measured by hand.
         //
@@ -490,7 +525,7 @@ impl GalleryApp {
         // The previous scene is kept for one frame: the diff against the
         // new one tells the renderer which primitives actually changed.
         let previous = std::mem::replace(&mut self.scene, gallery::Gallery::new());
-        let focused = self.focused;
+        let focused = inter.focused;
         let scale = self.effective_scale;
         let pixel_snap = self.state.pixel_snap;
         // The atlas clock moves on every rebuild, independent of the upload
@@ -578,7 +613,7 @@ impl GalleryApp {
         }
         self.state.demo.primitive_count = scene_len;
         self.state.demo.draw_calls = draw_calls;
-        self.router.set_regions(output.regions);
+        self.regions = output.regions;
         self.focus_order = output.focus_order;
         self.ranges = output.ranges;
         self.scroll_zones = output.scroll_zones;
@@ -591,7 +626,7 @@ impl GalleryApp {
         self.last_revision = self.state.revision;
         self.last_hover = hover;
         self.last_pressed = pressed;
-        self.last_focus = self.focused;
+        self.last_focus = focused;
         self.last_viewport = viewport;
     }
 
@@ -612,9 +647,11 @@ impl GalleryApp {
     }
 
     /// Move the pointer (logical pixels).
+    ///
+    /// Only the drags the shell is already running follow the pointer; the
+    /// hover itself is the runtime's, so nothing here has to route.
     pub fn pointer_move(&mut self, position: Vec2) {
         self.pointer = position;
-        self.router.pointer_move(position);
         if let Some(grab) = self.scroll_drag {
             if let Some(bar) = self.scrollbar {
                 let scroll = bar.scroll_for(position.y - grab);
@@ -624,33 +661,26 @@ impl GalleryApp {
                 }
             }
         }
-        if let Some(node) = self.router.pointer().pressed() {
-            if self.dragging_range == Some(node) {
-                self.update_range(node, position);
-            }
-            if self.panning.is_some() {
-                let zoom = self.state.demo.canvas_zoom.max(0.01);
-                let delta = position - self.panning.unwrap_or(position);
-                self.state.demo.canvas_pan -= delta / zoom;
-                self.panning = Some(position);
-                self.state.bump();
-            }
-            if let Some(Target::Demo(page, card, part)) = target::decode(node) {
-                if page as usize == PageId::Marquee.index() && part == 1 {
-                    if let Some((start, _)) = self.state.demo.marquee {
-                        self.state.demo.marquee = Some((start, position));
-                        self.state.bump();
-                    }
-                }
-                if self.state.demo.drag_active.is_some()
-                    && page as usize == PageId::DragDrop.index()
-                    && card == 0
-                    && (1..=4).contains(&part)
-                {
-                    self.state.demo.drag_position = Some(position);
-                    self.state.bump();
-                }
-            }
+        // A drag only exists while the shell started one on the press, so the
+        // snapshot does not have to be consulted: the `Option` *is* the
+        // capture.
+        if let Some(node) = self.dragging_range {
+            self.update_range(node, position);
+        }
+        if self.panning.is_some() {
+            let zoom = self.state.demo.canvas_zoom.max(0.01);
+            let delta = position - self.panning.unwrap_or(position);
+            self.state.demo.canvas_pan -= delta / zoom;
+            self.panning = Some(position);
+            self.state.bump();
+        }
+        if let Some((start, _)) = self.state.demo.marquee {
+            self.state.demo.marquee = Some((start, position));
+            self.state.bump();
+        }
+        if self.state.demo.drag_active.is_some() {
+            self.state.demo.drag_position = Some(position);
+            self.state.bump();
         }
     }
 
@@ -660,17 +690,15 @@ impl GalleryApp {
     /// scrollbar, the sliders and the draggable demo stages. Every
     /// discrete control waits for the release, so a press that is dragged
     /// off the control never activates it.
-    pub fn pointer_down(&mut self, position: Vec2, now: f64) {
+    pub fn pointer_down(&mut self, position: Vec2, target: Option<u64>) {
         self.pointer = position;
-        self.router.pointer_move(position);
         // Clicking anywhere but the FPS input commits the pending value, the
         // same way a native spin box does on blur.
-        if self.state.fps_focused && self.router.hover() != Some(target::id(Target::FpsInput)) {
+        if self.state.fps_focused && target != Some(target::id(Target::FpsInput)) {
             self.state.commit_fps_input();
         }
-        self.router.pointer_down(position, now);
-        if let Some(node) = self.router.pointer().pressed() {
-            self.focused = Some(node);
+        if let Some(node) = target {
+            self.pending_focus = Some(node);
             if let Some(target) = target::decode(node) {
                 self.begin_press_target(target, position);
             }
@@ -678,21 +706,13 @@ impl GalleryApp {
     }
 
     /// Release the pointer.
-    pub fn pointer_up(&mut self, position: Vec2, now: f64) {
+    ///
+    /// The release itself never activates a control: the runtime reports a
+    /// separate [`AppEvent::Click`](unbound_app::AppEvent::Click) only when
+    /// the press landed on the same control and never became a drag.
+    pub fn pointer_up(&mut self, position: Vec2) {
         self.pointer = position;
-        self.router.pointer_move(position);
         self.finish_drag(position);
-        let events = self.router.pointer_up(position, now);
-        for event in events {
-            if let PointerEvent::Click { target: node, .. } = event {
-                if let Some(target) = target::decode(node) {
-                    // The router only reports a click when the release
-                    // landed on the pressed control and the press never
-                    // turned into a drag.
-                    self.click_target(target, position);
-                }
-            }
-        }
         self.dragging_range = None;
         self.panning = None;
     }
@@ -703,7 +723,6 @@ impl GalleryApp {
     /// and the demo drags have to go, or the shell keeps a ghost drag
     /// alive until the user happens to click somewhere else.
     pub fn cancel_interactions(&mut self) {
-        let _ = self.router.cancel();
         self.scroll_drag = None;
         self.dragging_range = None;
         self.panning = None;
@@ -822,7 +841,11 @@ impl GalleryApp {
     }
 
     /// Handle a key press.
-    pub fn key(&mut self, key: &PlatformKey, modifiers: Modifiers) {
+    ///
+    /// `focused` is the runtime's focused node: the shell does not keep one.
+    /// `Tab` never reaches this method — the runtime's `FocusManager` steps
+    /// the order before dispatching.
+    pub fn key(&mut self, key: &PlatformKey, modifiers: Modifiers, focused: Option<u64>) {
         if self.state.fps_focused {
             match key {
                 PlatformKey::Named(name) if name == "Escape" => {
@@ -900,11 +923,15 @@ impl GalleryApp {
             return;
         }
         match key {
-            PlatformKey::Named(name) if name == "Tab" => {
-                self.cycle_focus(modifiers.shift);
+            PlatformKey::Named(name) if name == "Enter" => {
+                if let Some(node) = focused {
+                    if let Some(target) = target::decode(node) {
+                        self.activate_target(target, self.pointer);
+                    }
+                }
             }
-            PlatformKey::Named(name) if name == "Enter" || name == "Space" => {
-                if let Some(node) = self.focused {
+            PlatformKey::Character(text) if text == " " => {
+                if let Some(node) = focused {
                     if let Some(target) = target::decode(node) {
                         self.activate_target(target, self.pointer);
                     }
@@ -971,36 +998,26 @@ impl GalleryApp {
         }
     }
 
-    fn cycle_focus(&mut self, reverse: bool) {
-        if self.focus_order.is_empty() {
-            return;
+    /// Activate the control a click landed on.
+    ///
+    /// The runtime only reports a click when the release landed on the
+    /// pressed control and the press never became a drag, so this is the one
+    /// activation entry point.
+    pub fn click(&mut self, node: u64, position: Vec2) {
+        if let Some(target) = target::decode(node) {
+            self.click_target(target, position);
         }
-        let current = self.focused.and_then(|node| {
-            self.focus_order
-                .iter()
-                .position(|candidate| *candidate == node)
-        });
-        let next = match (current, reverse) {
-            (Some(index), false) => (index + 1) % self.focus_order.len(),
-            (Some(index), true) => (index + self.focus_order.len() - 1) % self.focus_order.len(),
-            (None, false) => 0,
-            (None, true) => self.focus_order.len() - 1,
-        };
-        self.focused = Some(self.focus_order[next]);
-        if let Some(Target::Demo(page, _, part)) = self.focused.and_then(target::decode) {
-            if page as usize == PageId::A11y.index() && (10..=12).contains(&part) {
-                self.state.demo.a11y_focus = (part - 10) as usize;
-            }
-        }
-        self.state.bump();
     }
 
-    /// The OS cursor for the current hit path.
-    #[must_use]
-    pub fn cursor(&self) -> CursorKind {
-        self.router.cursor()
+    /// The focus request the last reduction raised, if any.
+    pub fn take_focus_request(&mut self) -> Option<u64> {
+        self.pending_focus.take()
     }
 
+    /// Whether the last reduction asked to blur.
+    pub fn take_blur_request(&mut self) -> bool {
+        core::mem::take(&mut self.pending_blur)
+    }
     /// Start dragging the page's scrollbar thumb.
     ///
     /// A press on the thumb grabs it where it was; a press on the track
@@ -1767,8 +1784,7 @@ fn demo_rect(app: &GalleryApp, page: PageId, card: u8, part: u16) -> Option<Rect
 }
 
 fn node_rect_from_regions(app: &GalleryApp, node: u64) -> Option<Rect> {
-    app.router
-        .regions()
+    app.regions
         .iter()
         .find(|region| region.node == node)
         .map(|region| region.bounds)

@@ -1,84 +1,48 @@
 //! The dogfooded shell as a generic [`Application`].
 //!
-//! `GalleryApp` already owns the whole state machine of the showcase; this
-//! adapter only translates the runtime's resolved events into its method
-//! calls and copies the finished scene into the runtime's collector. The
-//! window host then uploads `AppRuntime::frame`'s report instead of doing its
-//! own diff, so the showcase runs through exactly the same frame pipeline a
-//! third-party application would.
+//! The showcase is not a special case any more: `GalleryApp` *is* the
+//! application, and the runtime owns the pointer router, the focus manager
+//! and the scene collector. The adapter that used to sit in between — and the
+//! second router that came with it — is gone. This module only translates the
+//! runtime's resolved events into the shell's methods and publishes the
+//! finished scene into the runtime's collector, so the showcase runs through
+//! exactly the same frame pipeline a third-party application would.
 
 use unbound_app::{
     AppContext, AppEvent, AppKey, Application, DirtyFlags, ImeUpdate, Modifiers as AppModifiers,
     ViewBuilder,
 };
+use unbound_input::FocusCause;
 use unbound_platform::{Modifiers, PlatformKey};
 use unbound_theme::ThemeKind;
 
-use crate::shell::GalleryApp;
+use crate::shell::{GalleryApp, Interaction};
 use crate::state::ThemeMode;
-use crate::target::ROOT;
 
-/// The observable state a rebuild depends on.
+/// The showcase shell, driven by [`unbound_app::AppRuntime`].
 ///
-/// A pointer move that crosses empty space changes none of these, so the
-/// adapter reports no dirty flags and the runtime skips the rebuild.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct Token {
-    revision: u64,
-    hover: Option<u64>,
-    pressed: Option<u64>,
-    focus: Option<u64>,
-}
+/// The alias keeps the window host and the tests reading the same name while
+/// the type itself is the shell.
+pub type GalleryRuntime = GalleryApp;
 
-impl Token {
-    fn of(app: &GalleryApp) -> Self {
-        Self {
-            revision: app.state.revision,
-            hover: app.router.hover(),
-            pressed: app.router.pointer().pressed(),
-            focus: app.focused,
-        }
-    }
-}
-
-/// The showcase shell, reduced through [`unbound_app::AppRuntime`].
-pub struct GalleryRuntime {
-    app: GalleryApp,
-}
-
-impl Default for GalleryRuntime {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl GalleryRuntime {
-    /// Wrap a fresh shell.
-    #[must_use]
-    pub fn new() -> Self {
-        let mut app = GalleryApp::new();
-        // The runtime owns the frame diff now.
-        app.set_external_diff(true);
-        Self { app }
-    }
-
+impl GalleryApp {
     /// The shell, for the window host.
     #[must_use]
-    pub fn shell(&self) -> &GalleryApp {
-        &self.app
+    pub fn shell(&self) -> &Self {
+        self
     }
 
     /// The shell, mutably, for the parts the runtime does not own.
-    pub fn shell_mut(&mut self) -> &mut GalleryApp {
-        &mut self.app
+    pub fn shell_mut(&mut self) -> &mut Self {
+        self
     }
 }
 
-impl Application for GalleryRuntime {
+impl Application for GalleryApp {
     type State = ();
 
     fn init(&mut self, ctx: &mut AppContext) -> Self::State {
-        ctx.theme = crate::theme::kind(self.app.state.theme == ThemeMode::Dark);
+        ctx.theme = crate::theme::kind(self.state.theme == ThemeMode::Dark);
     }
 
     fn reduce(
@@ -87,14 +51,17 @@ impl Application for GalleryRuntime {
         event: AppEvent,
         ctx: &mut AppContext,
     ) -> DirtyFlags {
-        let before = Token::of(&self.app);
         match event {
-            AppEvent::PointerMove { pos, .. } => self.app.pointer_move(pos),
-            AppEvent::PointerDown { pos, .. } => self.app.pointer_down(pos, ctx.time),
-            AppEvent::PointerUp { pos, .. } => self.app.pointer_up(pos, ctx.time),
+            AppEvent::PointerMove { pos, .. } => self.pointer_move(pos),
+            AppEvent::PointerDown { pos, target, .. } => self.pointer_down(pos, target),
+            AppEvent::PointerUp { pos, .. } => self.pointer_up(pos),
+            // The release only ends a drag; the runtime reports the click
+            // separately, and only when the press never became one.
+            AppEvent::Click { node, pos, .. } => self.click(node, pos),
+            AppEvent::DoubleClick { .. } | AppEvent::DragStart { .. } | AppEvent::Drag { .. } => {}
             AppEvent::Wheel { pos, delta, .. } => {
-                self.app.pointer_move(pos);
-                self.app.wheel(delta.y);
+                self.pointer_move(pos);
+                self.wheel(delta.y);
             }
             AppEvent::Key {
                 key,
@@ -104,82 +71,84 @@ impl Application for GalleryRuntime {
                 if pressed {
                     let key = platform_key(key);
                     let modifiers = platform_modifiers(modifiers);
-                    self.app.key(&key, modifiers);
+                    self.key(&key, modifiers, ctx.focused);
                 }
             }
-            AppEvent::Text { text } => self.app.type_text(&text),
+            AppEvent::Text { text } => self.type_text(&text),
             AppEvent::Ime { update } => self.apply_ime(&update),
             AppEvent::Resize { size } => {
                 ctx.viewport = size;
-                return DirtyFlags::LAYOUT;
             }
             AppEvent::Theme { kind } => {
-                self.app.state.theme = if kind == ThemeKind::Dark {
+                self.state.theme = if kind == ThemeKind::Dark {
                     ThemeMode::Dark
                 } else {
                     ThemeMode::Light
                 };
-                self.app.state.bump();
+                self.state.bump();
             }
             AppEvent::A11y {
                 target,
                 action,
                 value,
-            } => self.app.apply_a11y(target, action, value),
+            } => self.apply_a11y(target, action, value),
             AppEvent::Tick { dt } => {
-                self.app.tick(dt);
+                self.tick(dt);
             }
-            // The shell's own router already resolves clicks and drags; the
-            // adapter forwards the position-level events above, so the
-            // runtime's derived events are informational only.
-            AppEvent::Click { .. }
-            | AppEvent::DoubleClick { .. }
-            | AppEvent::DragStart { .. }
-            | AppEvent::Drag { .. } => {}
         }
-        let after = Token::of(&self.app);
-        if after != before {
-            DirtyFlags::PAINT
-        } else {
-            DirtyFlags::NONE
+
+        if let Some(node) = self.take_focus_request() {
+            ctx.request_focus = Some((node, FocusCause::Programmatic));
         }
+        if self.take_blur_request() {
+            ctx.request_blur = true;
+        }
+        // The shell paints every frame it is asked for; `view` decides from
+        // the interaction snapshot whether the scene has to be rebuilt.
+        DirtyFlags::LAYOUT
     }
 
     fn view(&mut self, _state: &Self::State, view: &mut ViewBuilder<'_>) {
         let viewport = (view.ctx.viewport.x, view.ctx.viewport.y);
-        self.app.rebuild(viewport);
+        let inter = Interaction {
+            hovered: view.ctx.hovered,
+            pressed: view.ctx.pressed,
+            focused: view.ctx.focused,
+        };
+        if self.needs_rebuild(viewport, &inter, view.ctx.force) {
+            self.rebuild(viewport, inter);
+        }
         let collector = view.collector();
         collector
             .primitives
-            .extend_from_slice(&self.app.scene.primitives);
+            .extend_from_slice(&self.scene.primitives);
         collector
             .transforms
-            .extend_from_slice(&self.app.scene.transforms);
-        collector.clips.extend_from_slice(&self.app.scene.clips);
-        collector
-            .payloads
-            .extend_from_slice(&self.app.scene.payloads);
-        collector
-            .focus_order
-            .extend_from_slice(&self.app.focus_order);
+            .extend_from_slice(&self.scene.transforms);
+        collector.clips.extend_from_slice(&self.scene.clips);
+        collector.payloads.extend_from_slice(&self.scene.payloads);
+        // The regions are what the runtime's router picks from next frame;
+        // the shell never routes on its own. They are copied rather than
+        // moved: a caller that inspects the last frame still sees them.
+        collector.regions.extend_from_slice(&self.regions);
+        collector.focus_order.extend_from_slice(&self.focus_order);
         collector
             .node_spans
-            .extend(self.app.node_spans().iter().map(|(k, v)| (*k, *v)));
+            .extend(self.node_spans().iter().map(|(k, v)| (*k, *v)));
         // The shell rebuilds the semantic tree from scratch every frame, so
-        // handing it over costs nothing: the next rebuild replaces it.
-        collector.semantics =
-            core::mem::replace(&mut self.app.semantics, unbound_a11y::Semantics::new(ROOT));
+        // handing a copy over leaves the last frame inspectable.
+        collector.semantics = self.semantics.clone();
     }
 }
 
-impl GalleryRuntime {
+impl GalleryApp {
     fn apply_ime(&mut self, update: &ImeUpdate) {
         if let Some(commit) = &update.commit {
-            self.app.type_text(commit);
+            self.type_text(commit);
         }
-        if self.app.state.ime_preedit != update.preedit {
-            self.app.state.ime_preedit = update.preedit.clone();
-            self.app.state.bump();
+        if self.state.ime_preedit != update.preedit {
+            self.state.ime_preedit = update.preedit.clone();
+            self.state.bump();
         }
     }
 }
