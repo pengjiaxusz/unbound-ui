@@ -303,6 +303,13 @@ impl ViewBuilder<'_> {
         self.collector.push(key, output);
     }
 
+    /// Append a widget's output with a fixed primitive reservation, so a
+    /// dynamic glyph run does not shift every following widget's span.
+    pub fn push_with_capacity(&mut self, key: u64, output: WidgetOutput, reserved_slots: usize) {
+        self.collector
+            .push_with_capacity(key, output, reserved_slots);
+    }
+
     /// Direct access for widgets that need to append transforms or clips.
     pub fn collector(&mut self) -> &mut SceneCollector {
         self.collector
@@ -359,6 +366,10 @@ pub struct FrameReport {
     pub primitives: usize,
     /// The bytes the diff would upload.
     pub bytes: u32,
+    /// Whether one of the lightweight auxiliary tables (payloads, transforms,
+    /// clips) changed and must be re-uploaded without re-sending the
+    /// primitive pool.
+    pub aux_changed: bool,
     /// Backdrop-blur requests for this frame.
     pub backdrops: Vec<BackdropRequest>,
 }
@@ -625,6 +636,7 @@ impl<A: Application> AppRuntime<A> {
                 dirty,
                 primitives: self.collector.primitives.len(),
                 bytes: 0,
+                aux_changed: false,
                 backdrops: self.backdrops.clone(),
             };
         }
@@ -657,9 +669,13 @@ impl<A: Application> AppRuntime<A> {
             .set_order(self.collector.focus_order.iter().copied());
         self.sync_focus_context();
 
-        let structure_changed = self.collector.payloads != self.previous_payloads
-            || self.collector.transforms != self.previous_transforms
+        // Only the tables a primitive *indexes into* decide whether a slice
+        // patch can repair the pool. Payload changes (glyphs, gradients) are
+        // uploaded separately through `aux_changed`, so typing in a text
+        // field keeps patching the primitive pool instead of re-sending it.
+        let structure_changed = self.collector.transforms != self.previous_transforms
             || self.collector.clips != self.previous_clips;
+        let aux_changed = self.collector.payloads != self.previous_payloads;
         let diff = diff_primitives(
             &self.previous_primitives,
             &self.collector.primitives,
@@ -689,6 +705,7 @@ impl<A: Application> AppRuntime<A> {
             dirty,
             primitives: self.collector.primitives.len(),
             bytes,
+            aux_changed,
             backdrops: self.backdrops.clone(),
         }
     }

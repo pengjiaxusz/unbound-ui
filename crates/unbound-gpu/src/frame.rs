@@ -125,6 +125,10 @@ pub struct SceneUpload<'a> {
     /// leaves them untouched, and the caller has to fall back to a full
     /// upload when it does not.
     pub dirty_ranges: &'a [(u32, u32)],
+    /// The lightweight auxiliary tables changed even though the primitive
+    /// pool did not. They are staged in the partial path without forcing a
+    /// whole-scene upload.
+    pub aux_changed: bool,
 }
 
 impl Default for SceneUpload<'_> {
@@ -138,6 +142,7 @@ impl Default for SceneUpload<'_> {
             camera: Camera::ui((128.0, 128.0), 1.0),
             key_prefix: (PassLayer::Ui as u64) << 56,
             dirty_ranges: &[],
+            aux_changed: false,
         }
     }
 }
@@ -1804,7 +1809,7 @@ impl Renderer {
     ///   instead of the whole scene.
     fn prepare_upload(&mut self, scene: &SceneUpload<'_>) -> Result<UploadPlan, GpuError> {
         let full = self.generation.needs_full(scene.generation);
-        let partial = !full && !scene.dirty_ranges.is_empty();
+        let partial = !full && (!scene.dirty_ranges.is_empty() || scene.aux_changed);
         if !full && !partial {
             return Ok(UploadPlan::default());
         }
@@ -1821,6 +1826,12 @@ impl Renderer {
             // already holds this scene. The commit happens once the
             // submission went through.
             self.generation.stage(scene.generation);
+        } else if scene.aux_changed {
+            // Auxiliary tables are small; refreshing them must not force the
+            // primitive pool to travel again.
+            self.ensure_pool_capacity(scene.transforms.len(), Which::Transforms)?;
+            self.ensure_pool_capacity(scene.clips.len(), Which::Clips)?;
+            self.ensure_pool_capacity(scene.payloads.len(), Which::Payloads)?;
         }
 
         // Rotate the ring *before* allocating: the cursor belongs to the frame
@@ -1890,6 +1901,21 @@ impl Renderer {
                 let data = bytemuck::cast_slice(&scene.primitives[start..end]);
                 let dst = prim_dst + u32::try_from(start).unwrap_or(u32::MAX) * stride;
                 stage(dst, data, bytes, spans);
+            }
+            if scene.aux_changed {
+                stage(
+                    transform_dst,
+                    bytemuck::cast_slice(scene.transforms),
+                    bytes,
+                    spans,
+                );
+                stage(clip_dst, bytemuck::cast_slice(scene.clips), bytes, spans);
+                stage(
+                    payload_dst,
+                    bytemuck::cast_slice(scene.payloads),
+                    bytes,
+                    spans,
+                );
             }
         }
 
@@ -2189,6 +2215,7 @@ mod tests {
             camera: Camera::ui((128.0, 128.0), 1.0),
             key_prefix: (PassLayer::Ui as u64) << 56,
             dirty_ranges: &[],
+            aux_changed: false,
         }
     }
 

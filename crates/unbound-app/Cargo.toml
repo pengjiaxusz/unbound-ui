@@ -18,6 +18,7 @@ unbound-widgets.workspace = true
 
 [dev-dependencies]
 unbound-headless.workspace = true
+unbound-text.workspace = true
 
 [lints]
 workspace = true

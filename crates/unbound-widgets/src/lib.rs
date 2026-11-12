@@ -283,6 +283,31 @@ impl SceneCollector {
         self.transform_stack.pop();
     }
 
+    /// Append one widget's output, reserving a fixed number of primitive
+    /// slots so a dynamic glyph run keeps every following widget's span
+    /// stable.
+    ///
+    /// Unused slots are padded with a fully transparent instance, so adding
+    /// a character changes only the slots it actually paints instead of
+    /// shifting the whole scene. When the output outgrows the reservation the
+    /// span is rounded up to the next power of two.
+    pub fn push_with_capacity(
+        &mut self,
+        key: u64,
+        mut output: WidgetOutput,
+        reserved_slots: usize,
+    ) {
+        let target = if output.primitives.len() > reserved_slots {
+            output.primitives.len().next_power_of_two()
+        } else {
+            reserved_slots
+        };
+        output
+            .primitives
+            .resize_with(target, GpuPrimitiveInstance::default);
+        self.push(key, output);
+    }
+
     /// Append one widget's output and record the primitives it owns.
     pub fn push(&mut self, key: u64, mut output: WidgetOutput) {
         let active_transform = self.transform_stack.last().copied();

@@ -5,12 +5,18 @@
 //! the windowed shell uses, and the reports are asserted at the scene level.
 
 use unbound_app::{AppEvent, AppKey, AppRuntime, Application, DirtyFlags, Modifiers};
+use unbound_gpu::data::GpuPrimitiveInstance;
 use unbound_math::{Rect, Vec2};
+use unbound_text::GlyphQuad;
 use unbound_widgets::button::emit_button;
 use unbound_widgets::diff::SceneDiff;
-use unbound_widgets::{ButtonDesc, ButtonVariant, WidgetOutput};
+use unbound_widgets::text_input::{TextEditState, TextInputDesc, TextInputVisual, TextInputWidget};
+use unbound_widgets::{ButtonDesc, ButtonVariant, ControlState, WidgetDesc, WidgetOutput};
 
 const BUTTON: u64 = 10;
+const FIELD: u64 = 42;
+const BACKGROUND: u64 = 9;
+const TEXT_INPUT_SLOTS: usize = 64;
 
 #[derive(Default)]
 struct Counter;
@@ -65,6 +71,74 @@ impl Application for Counter {
 
 fn runtime() -> AppRuntime<Counter> {
     AppRuntime::new(Counter, Vec2::new(800.0, 600.0))
+}
+
+/// A scene with 5,000 inert background primitives and a single text field
+/// whose span is reserved, so typing cannot shift the background.
+#[derive(Default)]
+struct TypingScene;
+
+struct TypingState {
+    text: String,
+}
+
+impl Application for TypingScene {
+    type State = TypingState;
+
+    fn init(&mut self, _ctx: &mut unbound_app::AppContext) -> Self::State {
+        TypingState {
+            text: String::new(),
+        }
+    }
+
+    fn reduce(
+        &mut self,
+        state: &mut Self::State,
+        event: AppEvent,
+        _ctx: &mut unbound_app::AppContext,
+    ) -> DirtyFlags {
+        match event {
+            AppEvent::Text { text } => {
+                state.text.push_str(&text);
+                DirtyFlags::PAINT | DirtyFlags::A11Y
+            }
+            _ => DirtyFlags::NONE,
+        }
+    }
+
+    fn view(&mut self, state: &Self::State, view: &mut unbound_app::ViewBuilder) {
+        let mut background = WidgetOutput::default();
+        background.primitives = (0..5_000)
+            .map(|index| GpuPrimitiveInstance {
+                local_pos: [(index % 800) as f32, (index / 800) as f32],
+                size: [1.0, 1.0],
+                ..GpuPrimitiveInstance::default()
+            })
+            .collect();
+        view.push(BACKGROUND, background);
+
+        let mut glyphs: Vec<GlyphQuad> = state
+            .text
+            .chars()
+            .enumerate()
+            .map(|(index, _)| GlyphQuad {
+                rect: Rect::new(20.0 + index as f32 * 8.0, 20.0, 7.0, 16.0),
+                uv: [0.0; 4],
+                layer: 0,
+                color: false,
+                msdf: false,
+                phase: 0,
+            })
+            .collect();
+        let widget = TextInputWidget {
+            node: FIELD,
+            desc: TextInputDesc::new(Rect::new(10.0, 10.0, 400.0, 32.0)),
+            edit: TextEditState::with_text(state.text.clone()),
+            visual: TextInputVisual::default(),
+        };
+        let output = widget.emit(ControlState::default(), &mut glyphs);
+        view.push_with_capacity(FIELD, output, TEXT_INPUT_SLOTS);
+    }
 }
 
 #[test]
@@ -175,4 +249,30 @@ fn resizing_forces_a_whole_scene() {
     assert_eq!(runtime.context().viewport, Vec2::new(1024.0, 768.0));
     let report = runtime.frame(1.0 / 60.0);
     assert_eq!(report.diff, SceneDiff::Whole);
+}
+
+#[test]
+fn typing_in_text_input_uploads_only_local_range() {
+    let mut runtime = AppRuntime::new(TypingScene, Vec2::new(800.0, 600.0));
+    let first = runtime.frame(0.0);
+    assert_eq!(first.diff, SceneDiff::Whole);
+
+    for index in 0..10 {
+        runtime.text(if index % 2 == 0 { "a" } else { "b" });
+        let report = runtime.frame(1.0 / 60.0);
+        assert!(
+            matches!(report.diff, SceneDiff::Ranges(_)),
+            "frame {index} re-uploaded the whole scene: {:?}",
+            report.diff
+        );
+        assert!(
+            report.bytes <= 512,
+            "frame {index} uploaded {} B, expected <= 512 B",
+            report.bytes
+        );
+        assert!(
+            report.aux_changed,
+            "the glyph payload table must ride the auxiliary upload"
+        );
+    }
 }
