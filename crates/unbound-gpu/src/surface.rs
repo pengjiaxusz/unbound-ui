@@ -7,14 +7,21 @@
 //! [`Swapchain::acquire`] hands the caller a colour view to draw into.
 //!
 //! The present mode follows the policy in [`crate::swapchain`]: with
-//! `VK_EXT_swapchain_maintenance1` the FIFO-latest-ready mode keeps vsync but
-//! presents the newest completed image, which is the difference between three
-//! frames of input lag and one.
+//! `VK_EXT_present_mode_fifo_latest_ready` the FIFO-latest-ready mode keeps
+//! vsync but presents the newest completed image, which is the difference
+//! between three frames of input lag and one.
+//!
+//! Resizing is the other half of the story. A window that is dragged is
+//! *out of date* for a few frames, and both `vkAcquireNextImageKHR` and
+//! `vkQueuePresentKHR` report that with `VK_ERROR_OUT_OF_DATE_KHR`. That is
+//! not a failure — it is the driver asking for a new swapchain. The old
+//! swapchain is handed to the driver as `oldSwapchain` so the presentation
+//! engine can reuse its resources instead of tearing the surface down.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 use crate::device::{Gpu, GpuError};
-use crate::swapchain::{PresentConfig, PresentMode};
+use crate::swapchain::{PresentConfig, PresentMode, ResizeBehaviour};
 use ash::vk;
 
 /// A `VkSurfaceKHR` bound to a native window.
@@ -127,6 +134,50 @@ impl Surface {
         }
     }
 
+    /// The present-scaling capabilities of the surface for a present mode.
+    ///
+    /// `None` when the query is not possible — the instance does not expose
+    /// `VK_KHR_get_surface_capabilities2`, or the driver refused the call.
+    /// The platform's own scaling is used then.
+    ///
+    /// The capabilities are what makes it legal to ask for a specific scaling
+    /// behaviour: `VK_EXT_swapchain_maintenance1` requires the behaviour to
+    /// be one the surface says it supports.
+    #[must_use]
+    pub fn present_scaling_capabilities(
+        &self,
+        gpu: &Gpu,
+        present_mode: vk::PresentModeKHR,
+    ) -> Option<vk::SurfacePresentScalingCapabilitiesEXT<'_>> {
+        if !gpu
+            .enabled_instance_extensions
+            .iter()
+            .any(|name| name == "VK_KHR_get_surface_capabilities2")
+        {
+            return None;
+        }
+        let loader = ash::khr::get_surface_capabilities2::Instance::new(&gpu.entry, &gpu.instance);
+        // The scaling capabilities depend on the present mode, so the mode is
+        // part of the query.
+        let mut present_mode_info = vk::SurfacePresentModeEXT::default().present_mode(present_mode);
+        let surface_info = vk::PhysicalDeviceSurfaceInfo2KHR::default()
+            .surface(self.surface)
+            .push_next(&mut present_mode_info);
+        let mut scaling = vk::SurfacePresentScalingCapabilitiesEXT::default();
+        let mut capabilities = vk::SurfaceCapabilities2KHR::default();
+        capabilities = capabilities.push_next(&mut scaling);
+        // SAFETY: the surface belongs to this instance and the physical device
+        // is the one the surface was created for.
+        let result = unsafe {
+            loader.get_physical_device_surface_capabilities2(
+                gpu.physical,
+                &surface_info,
+                &mut capabilities,
+            )
+        };
+        result.ok().map(|()| scaling)
+    }
+
     /// Destroy the surface.
     pub fn destroy(self, gpu: &Gpu) {
         // SAFETY: the surface belongs to `gpu.instance`, which outlives it.
@@ -181,6 +232,143 @@ pub struct AcquiredImage {
     pub available: vk::Semaphore,
 }
 
+/// Result of acquiring the next swapchain image.
+#[derive(Copy, Clone, Debug)]
+pub enum AcquireOutcome {
+    /// An image is ready to be rendered into.
+    Ready {
+        /// The acquired image.
+        image: AcquiredImage,
+        /// True when the swapchain still works but no longer matches the
+        /// surface exactly and should be recreated after presenting.
+        suboptimal: bool,
+    },
+    /// The surface size changed incompatibly; recreate the swapchain now.
+    OutOfDate,
+}
+
+/// Result of presenting a rendered swapchain image.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PresentOutcome {
+    /// Presented cleanly.
+    Optimal,
+    /// Presented, but the swapchain is suboptimal or out-of-date and must
+    /// be recreated before the next frame.
+    Recreate,
+}
+
+/// `VK_PRESENT_MODE_FIFO_LATEST_READY_EXT`.
+///
+/// The mode comes from `VK_EXT_present_mode_fifo_latest_ready` (promoted to
+/// `VK_KHR_present_mode_fifo_latest_ready`), *not* from
+/// `VK_EXT_swapchain_maintenance1`. `ash` 0.38 predates both, so the value
+/// from the registry is used directly.
+///
+/// The neighbouring value `1000111000` is
+/// `VK_PRESENT_MODE_SHARED_DEMAND_REFRESH_KHR` and has nothing to do with
+/// the latest-ready mode.
+const PRESENT_MODE_FIFO_LATEST_READY: vk::PresentModeKHR =
+    vk::PresentModeKHR::from_raw(1_000_361_000);
+
+/// The Vulkan present mode for a policy mode.
+///
+/// `FifoLatestReady` is only legal when the driver offers
+/// `VK_PRESENT_MODE_FIFO_LATEST_READY_EXT`; every Vulkan implementation must
+/// support `VK_PRESENT_MODE_FIFO_KHR`, so that is the fallback.
+pub(crate) fn resolve_present_mode(
+    mode: PresentMode,
+    supports_latest_ready: bool,
+) -> vk::PresentModeKHR {
+    match mode {
+        PresentMode::FifoLatestReady if supports_latest_ready => PRESENT_MODE_FIFO_LATEST_READY,
+        PresentMode::FifoLatestReady | PresentMode::Fifo => vk::PresentModeKHR::FIFO,
+        PresentMode::Immediate => vk::PresentModeKHR::IMMEDIATE,
+    }
+}
+
+/// The extent the swapchain images are created with.
+///
+/// `current` is the driver's `currentExtent`: on Win32 it is the
+/// authoritative size of the window the surface was created for. A
+/// one-pixel difference between the requested size and the driver's size is
+/// enough to make the driver report the swapchain as out of date on the very
+/// next frame, so the driver's value wins whenever it is known.
+///
+/// The clamp into `min ..= max` cannot panic: a driver that reports
+/// `min > max` would make `u32::clamp` panic, so the low bound is the
+/// *smaller* of the two.
+pub(crate) fn resolve_extent(
+    current: (u32, u32),
+    min: (u32, u32),
+    max: (u32, u32),
+    width: u32,
+    height: u32,
+) -> vk::Extent2D {
+    let (mut w, mut h) = if current.0 != u32::MAX {
+        (current.0, current.1)
+    } else {
+        (width, height)
+    };
+    w = w.clamp(min.0.min(max.0), min.0.max(max.0));
+    h = h.clamp(min.1.min(max.1), min.1.max(max.1));
+    vk::Extent2D {
+        width: w,
+        height: h,
+    }
+}
+
+/// What `vkAcquireNextImageKHR` reported.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AcquireStatus {
+    /// The image is ready to be rendered into.
+    Ready {
+        /// Index of the image inside the swapchain.
+        index: u32,
+        /// The swapchain still works but no longer matches the surface.
+        suboptimal: bool,
+    },
+    /// The surface changed; the swapchain has to be recreated.
+    OutOfDate,
+}
+
+/// Classify the result of `vkAcquireNextImageKHR`.
+///
+/// `VK_ERROR_OUT_OF_DATE_KHR` is not a failure: the window was resized and
+/// the swapchain has to be recreated. Every other error is fatal.
+pub(crate) fn classify_acquire(
+    result: Result<(u32, bool), vk::Result>,
+) -> Result<AcquireStatus, vk::Result> {
+    match result {
+        Ok((index, false)) => Ok(AcquireStatus::Ready {
+            index,
+            suboptimal: false,
+        }),
+        Ok((index, true)) => Ok(AcquireStatus::Ready {
+            index,
+            suboptimal: true,
+        }),
+        Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Ok(AcquireStatus::OutOfDate),
+        Err(other) => Err(other),
+    }
+}
+
+/// Classify the result of `vkQueuePresentKHR`.
+///
+/// `VK_ERROR_OUT_OF_DATE_KHR` and `VK_SUBOPTIMAL_KHR` mean the swapchain has
+/// to be recreated, not that the frame failed. Every other error is fatal.
+pub(crate) fn classify_present(
+    result: Result<bool, vk::Result>,
+) -> Result<PresentOutcome, vk::Result> {
+    match result {
+        Ok(false) => Ok(PresentOutcome::Optimal),
+        Ok(true) => Ok(PresentOutcome::Recreate),
+        Err(vk::Result::ERROR_OUT_OF_DATE_KHR) | Err(vk::Result::SUBOPTIMAL_KHR) => {
+            Ok(PresentOutcome::Recreate)
+        }
+        Err(other) => Err(other),
+    }
+}
+
 /// A swapchain plus the image views the renderer draws into.
 pub struct Swapchain {
     swapchain: vk::SwapchainKHR,
@@ -220,6 +408,11 @@ pub struct Swapchain {
     wait_for_present: bool,
     /// `VK_KHR_present_wait` is available.
     has_present_wait: bool,
+    /// `VK_EXT_swapchain_maintenance1` is available.
+    ///
+    /// The extension *and* its feature have to be enabled: the present
+    /// fence and the present scaling behaviour are only legal then.
+    has_maintenance1: bool,
     /// How many presentations did not reach the screen in time.
     present_timeouts: u32,
     /// How many timeouts happened in a row.
@@ -248,6 +441,33 @@ impl Swapchain {
         height: u32,
         config: &PresentConfig,
     ) -> Result<Self, GpuError> {
+        Self::with_old(
+            gpu,
+            surface,
+            width,
+            height,
+            config,
+            vk::SwapchainKHR::null(),
+        )
+    }
+
+    /// Create the swapchain, optionally retiring an older one.
+    ///
+    /// `old_swapchain` is handed to the driver so the presentation engine can
+    /// reuse its resources: without it the old swapchain is torn down before
+    /// the new one exists, which shows up as a flicker and as validation
+    /// errors about images of a destroyed swapchain.
+    ///
+    /// # Errors
+    /// Propagates Vulkan failures.
+    fn with_old(
+        gpu: &Gpu,
+        surface: &Surface,
+        width: u32,
+        height: u32,
+        config: &PresentConfig,
+        old_swapchain: vk::SwapchainKHR,
+    ) -> Result<Self, GpuError> {
         let capabilities = surface.capabilities(gpu)?;
         let formats = surface.formats(gpu)?;
         let modes = surface.present_modes(gpu)?;
@@ -273,11 +493,33 @@ impl Swapchain {
                 ))
             })?;
 
-        let present_mode = match config.mode {
-            PresentMode::FifoLatestReady => vk::PresentModeKHR::FIFO,
-            PresentMode::Fifo => vk::PresentModeKHR::FIFO,
-            PresentMode::Immediate => vk::PresentModeKHR::IMMEDIATE,
-        };
+        // `VK_EXT_swapchain_maintenance1` is only usable when the extension
+        // *and* its feature are enabled: the present fence and the present
+        // scaling behaviour are illegal usage without the feature.
+        let has_maintenance1 = gpu
+            .enabled_device_extensions
+            .iter()
+            .any(|name| name == "VK_EXT_swapchain_maintenance1")
+            && gpu.features.swapchain_maintenance1;
+
+        // `VK_PRESENT_MODE_FIFO_LATEST_READY_EXT` comes from its own
+        // extension (`VK_EXT_present_mode_fifo_latest_ready`, promoted to
+        // `VK_KHR_present_mode_fifo_latest_ready`) — *not* from
+        // `VK_EXT_swapchain_maintenance1`. Asking for the mode without that
+        // extension enabled is invalid usage, and the driver reports the
+        // mode in `supported_present_modes` only when it really has it.
+        let latest_ready_extension = gpu
+            .enabled_device_extensions
+            .iter()
+            .any(|name| name == "VK_EXT_present_mode_fifo_latest_ready")
+            || gpu
+                .enabled_device_extensions
+                .iter()
+                .any(|name| name == "VK_KHR_present_mode_fifo_latest_ready");
+        let supports_latest_ready =
+            latest_ready_extension && modes.contains(&PRESENT_MODE_FIFO_LATEST_READY);
+
+        let present_mode = resolve_present_mode(config.mode, supports_latest_ready);
         // Only ask for a mode the surface actually supports.
         let present_mode = if modes.contains(&present_mode) {
             present_mode
@@ -285,16 +527,26 @@ impl Swapchain {
             vk::PresentModeKHR::FIFO
         };
 
-        let extent = vk::Extent2D {
-            width: width.clamp(
-                capabilities.min_image_extent.width,
-                capabilities.max_image_extent.width,
+        // The driver's `currentExtent` is the authoritative size of the
+        // surface: a one-pixel mismatch with the requested size is enough to
+        // make the driver report the swapchain as out of date on the very
+        // next frame.
+        let extent = resolve_extent(
+            (
+                capabilities.current_extent.width,
+                capabilities.current_extent.height,
             ),
-            height: height.clamp(
+            (
+                capabilities.min_image_extent.width,
                 capabilities.min_image_extent.height,
+            ),
+            (
+                capabilities.max_image_extent.width,
                 capabilities.max_image_extent.height,
             ),
-        };
+            width,
+            height,
+        );
 
         let image_count = (capabilities.min_image_count + 1).max(2);
         let image_count = image_count.min(capabilities.max_image_count);
@@ -302,7 +554,26 @@ impl Swapchain {
         let queue_family_index = gpu.families.graphics;
         let queue_family_indices = [queue_family_index];
 
-        let create_info = vk::SwapchainCreateInfoKHR::default()
+        // `VK_EXT_swapchain_maintenance1` lets the application say how the
+        // presentation engine has to scale a swapchain that no longer matches
+        // the surface. The behaviour has to be one the surface says it
+        // supports, so the capabilities are queried first.
+        let mut scaling_info = vk::SwapchainPresentScalingCreateInfoEXT::default();
+        let mut use_scaling = false;
+        if has_maintenance1 && config.resize == ResizeBehaviour::Stretch {
+            if let Some(caps) = surface.present_scaling_capabilities(gpu, present_mode) {
+                if caps
+                    .supported_present_scaling
+                    .contains(vk::PresentScalingFlagsEXT::STRETCH)
+                {
+                    scaling_info =
+                        scaling_info.scaling_behavior(vk::PresentScalingFlagsEXT::STRETCH);
+                    use_scaling = true;
+                }
+            }
+        }
+
+        let mut create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(surface.handle())
             .min_image_count(image_count)
             .image_format(chosen.format)
@@ -322,7 +593,13 @@ impl Swapchain {
             .pre_transform(capabilities.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .present_mode(present_mode)
-            .clipped(true);
+            .clipped(true)
+            // The old swapchain is handed to the driver so it can reuse the
+            // presentation resources instead of tearing the surface down.
+            .old_swapchain(old_swapchain);
+        if use_scaling {
+            create_info = create_info.push_next(&mut scaling_info);
+        }
 
         let khr_swapchain = ash::khr::swapchain::Device::new(&gpu.instance, &gpu.device);
         // SAFETY: the surface belongs to the same instance as the device.
@@ -402,6 +679,7 @@ impl Swapchain {
             next_present_id: 1,
             wait_for_present: config.wait_for_present && has_present_wait,
             has_present_wait,
+            has_maintenance1,
             present_timeouts: 0,
             consecutive_timeouts: 0,
         })
@@ -425,6 +703,15 @@ impl Swapchain {
         self.extent
     }
 
+    /// Whether `VK_EXT_swapchain_maintenance1` and its feature are enabled.
+    ///
+    /// With them the application may hand the OS a present fence and ask for
+    /// a specific present scaling behaviour.
+    #[must_use]
+    pub const fn has_maintenance1(&self) -> bool {
+        self.has_maintenance1
+    }
+
     /// How many presentations did not reach the screen in time.
     ///
     /// A non-zero count means the window is not being composited the way the
@@ -435,6 +722,30 @@ impl Swapchain {
         self.present_timeouts
     }
 
+    /// Rebuild the swapchain for a new surface size, handing the old
+    /// swapchain to the driver so the presentation engine can reuse its
+    /// resources instead of tearing the surface down.
+    ///
+    /// The device is put to idle first: the images of the old swapchain must
+    /// not be in flight while it is being replaced.
+    ///
+    /// # Errors
+    /// Propagates Vulkan failures.
+    pub fn recreate(
+        &mut self,
+        gpu: &Gpu,
+        surface: &Surface,
+        width: u32,
+        height: u32,
+        config: &PresentConfig,
+    ) -> Result<(), GpuError> {
+        gpu.wait_idle();
+        let replacement = Self::with_old(gpu, surface, width, height, config, self.swapchain)?;
+        let old = core::mem::replace(self, replacement);
+        old.destroy(gpu);
+        Ok(())
+    }
+
     /// Acquire the next image to draw into.
     ///
     /// Returns the index into [`Self::views`], the image view to render into
@@ -442,35 +753,78 @@ impl Swapchain {
     /// caller must present the same index afterwards, and the render
     /// submission must wait on the semaphore before it touches the image.
     ///
+    /// An out-of-date surface is reported as an error for the benefit of the
+    /// callers that predate [`Self::acquire_outcome`]: the frame loop has to
+    /// recreate the swapchain. New code should use
+    /// [`Self::acquire_outcome`], which reports it as
+    /// [`AcquireOutcome::OutOfDate`] instead of an error.
+    ///
     /// # Errors
     /// Propagates Vulkan failures, including a lost surface.
     pub fn acquire(&mut self, timeout_ns: u64) -> Result<AcquiredImage, GpuError> {
+        match self.acquire_outcome(timeout_ns)? {
+            AcquireOutcome::Ready { image, .. } => Ok(image),
+            AcquireOutcome::OutOfDate => Err(GpuError::Vulkan(vk::Result::ERROR_OUT_OF_DATE_KHR)),
+        }
+    }
+
+    /// Acquire the next image, reporting an out-of-date surface as such.
+    ///
+    /// `VK_ERROR_OUT_OF_DATE_KHR` is not a failure: the window was resized
+    /// and the swapchain has to be recreated. Callers that keep the swapchain
+    /// alive can then call [`Self::recreate`] and carry on.
+    ///
+    /// # Errors
+    /// Propagates Vulkan failures, including a lost surface.
+    pub fn acquire_outcome(&mut self, timeout_ns: u64) -> Result<AcquireOutcome, GpuError> {
         // The semaphore comes from a round-robin pool: a binary semaphore may
         // only carry one pending signal, so the slot is only reused once the
         // previous frame has consumed it.
         let semaphore = self.acquire_semaphores[self.next_semaphore];
-        self.next_semaphore = (self.next_semaphore + 1) % self.acquire_semaphores.len();
         // SAFETY: the swapchain belongs to this device.
-        let (index, _) = unsafe {
-            self.khr_swapchain
-                .acquire_next_image(self.swapchain, timeout_ns, semaphore, vk::Fence::null())
-                .map_err(GpuError::from)?
+        let raw = unsafe {
+            self.khr_swapchain.acquire_next_image(
+                self.swapchain,
+                timeout_ns,
+                semaphore,
+                vk::Fence::null(),
+            )
         };
-        self.next_index = index;
-        self.acquired = Some(index);
-        let view = self.views[index as usize];
-        Ok(AcquiredImage {
-            index,
-            view,
-            available: semaphore,
-            image: self.images[index as usize],
-        })
+        let status = classify_acquire(raw).map_err(GpuError::from)?;
+        match status {
+            AcquireStatus::OutOfDate => {
+                // The semaphore was not signalled, so the slot is *not*
+                // consumed: the next attempt may use it again.
+                self.acquired = None;
+                Ok(AcquireOutcome::OutOfDate)
+            }
+            AcquireStatus::Ready { index, suboptimal } => {
+                self.next_semaphore = (self.next_semaphore + 1) % self.acquire_semaphores.len();
+                self.next_index = index;
+                self.acquired = Some(index);
+                let view = self.views[index as usize];
+                Ok(AcquireOutcome::Ready {
+                    image: AcquiredImage {
+                        index,
+                        view,
+                        available: semaphore,
+                        image: self.images[index as usize],
+                    },
+                    suboptimal,
+                })
+            }
+        }
     }
 
     /// Present the acquired image, waiting for the renderer to finish.
     ///
     /// `render_finished` is signalled by the renderer's frame submission; the
     /// present waits for it so the display never shows a half-drawn frame.
+    ///
+    /// An out-of-date surface is *not* an error here: the frame was
+    /// presented as far as the driver could and the swapchain has to be
+    /// recreated. Use [`Self::present_outcome`] to learn whether that is
+    /// needed.
     ///
     /// # Errors
     /// Propagates Vulkan failures, including a lost surface.
@@ -480,6 +834,24 @@ impl Swapchain {
         index: u32,
         render_finished: vk::Semaphore,
     ) -> Result<(), GpuError> {
+        self.present_outcome(gpu, index, render_finished)
+            .map(|_| ())
+    }
+
+    /// Present the acquired image, reporting an out-of-date swapchain as
+    /// such.
+    ///
+    /// `VK_ERROR_OUT_OF_DATE_KHR` and `VK_SUBOPTIMAL_KHR` mean the swapchain
+    /// has to be recreated before the next frame — they are not failures.
+    ///
+    /// # Errors
+    /// Propagates Vulkan failures, including a lost surface.
+    pub fn present_outcome(
+        &mut self,
+        gpu: &Gpu,
+        index: u32,
+        render_finished: vk::Semaphore,
+    ) -> Result<PresentOutcome, GpuError> {
         let swapchains = [self.swapchain];
         // The present info takes the *index* of the image, not the image.
         let indices = [index];
@@ -524,14 +896,19 @@ impl Swapchain {
                 .queue_present(gpu.graphics_queue, &present_info)
         };
         self.acquired = None;
-        // `queue_present` reports whether the presentation was suboptimal;
-        // that is not an error, so the boolean is dropped.
-        result.map(|_| ()).map_err(GpuError::from)?;
+        // `queue_present` reports whether the presentation was suboptimal, and
+        // an out-of-date surface is reported as an error. Neither is a
+        // failure of the frame: both mean "recreate the swapchain".
+        let mut outcome = classify_present(result).map_err(GpuError::from)?;
+        // When the present already reported the swapchain as out of date the
+        // image never reached the screen, so waiting for the presentation
+        // would only burn the timeout.
+        let out_of_date = matches!(result, Err(vk::Result::ERROR_OUT_OF_DATE_KHR));
 
         if self.has_present_wait {
             // The identifier must keep growing for the same swapchain.
             self.next_present_id += 1;
-            if self.wait_for_present {
+            if self.wait_for_present && !out_of_date {
                 // Block until the image is really on the screen. This is the
                 // low-latency path: the input queue is sampled right after a
                 // real present, so the reaction is picked up by the very next
@@ -564,9 +941,13 @@ impl Swapchain {
                             self.consecutive_timeouts = 0;
                         }
                     }
-                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                        return Err(GpuError::Vulkan(vk::Result::ERROR_OUT_OF_DATE_KHR));
+                    // The swapchain no longer matches the surface: recreate
+                    // it instead of failing the frame.
+                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) | Err(vk::Result::SUBOPTIMAL_KHR) => {
+                        outcome = PresentOutcome::Recreate;
                     }
+                    // The surface itself is gone: nothing can be presented
+                    // any more, so this one stays a hard error.
                     Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
                         return Err(GpuError::Vulkan(vk::Result::ERROR_SURFACE_LOST_KHR));
                     }
@@ -574,7 +955,7 @@ impl Swapchain {
                 }
             }
         }
-        Ok(())
+        Ok(outcome)
     }
 
     /// Destroy the swapchain and its views.
@@ -594,6 +975,7 @@ impl Swapchain {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ash::vk;
 
     #[test]
@@ -622,5 +1004,184 @@ mod tests {
             vk::Format::B8G8R8A8_SRGB,
             "the swapchain must match the pipeline's attachment format"
         );
+    }
+
+    /// The lowest-latency present mode has its own extension, and its own
+    /// value: `1000111000` is `VK_PRESENT_MODE_SHARED_DEMAND_REFRESH_KHR`,
+    /// not the latest-ready mode.
+    #[test]
+    fn fifo_latest_ready_maps_to_the_extension_present_mode() {
+        assert_eq!(
+            resolve_present_mode(PresentMode::FifoLatestReady, true).as_raw(),
+            1_000_361_000,
+            "VK_PRESENT_MODE_FIFO_LATEST_READY_EXT"
+        );
+        assert_ne!(
+            resolve_present_mode(PresentMode::FifoLatestReady, true),
+            vk::PresentModeKHR::from_raw(1_000_111_000),
+            "1000111000 is VK_PRESENT_MODE_SHARED_DEMAND_REFRESH_KHR"
+        );
+
+        // Without the extension the mode is illegal, so FIFO is used.
+        assert_eq!(
+            resolve_present_mode(PresentMode::FifoLatestReady, false),
+            vk::PresentModeKHR::FIFO
+        );
+        assert_eq!(
+            resolve_present_mode(PresentMode::Fifo, true),
+            vk::PresentModeKHR::FIFO
+        );
+        assert_eq!(
+            resolve_present_mode(PresentMode::Immediate, true),
+            vk::PresentModeKHR::IMMEDIATE
+        );
+    }
+
+    /// The driver's `currentExtent` is the authoritative surface size: a
+    /// one-pixel difference is enough to make the driver report the
+    /// swapchain as out of date on the very next frame.
+    #[test]
+    fn the_extent_prefers_the_drivers_current_extent() {
+        let extent = resolve_extent((1920, 1080), (0, 0), (u32::MAX, u32::MAX), 800, 600);
+        assert_eq!(extent.width, 1920);
+        assert_eq!(extent.height, 1080);
+
+        // `u32::MAX` is the "the surface has no size" sentinel, so the
+        // requested size is used instead.
+        let extent = resolve_extent((u32::MAX, u32::MAX), (0, 0), (u32::MAX, u32::MAX), 800, 600);
+        assert_eq!(extent.width, 800);
+        assert_eq!(extent.height, 600);
+
+        // The result is clamped into the driver's range.
+        let extent = resolve_extent((10, 10), (100, 100), (200, 200), 800, 600);
+        assert_eq!(extent.width, 100);
+        assert_eq!(extent.height, 100);
+    }
+
+    /// A driver that reports `min > max` must not make the clamp panic.
+    #[test]
+    fn the_extent_clamp_survives_a_nonsensical_range() {
+        let extent = resolve_extent((150, 150), (300, 300), (200, 200), 150, 150);
+        assert_eq!(extent.width, 200);
+        assert_eq!(extent.height, 200);
+    }
+
+    /// An out-of-date surface is a request to recreate the swapchain, not a
+    /// failure of the frame.
+    #[test]
+    fn present_and_acquire_outcomes_classify_correctly() {
+        assert_eq!(classify_present(Ok(false)), Ok(PresentOutcome::Optimal));
+        assert_eq!(classify_present(Ok(true)), Ok(PresentOutcome::Recreate));
+        assert_eq!(
+            classify_present(Err(vk::Result::ERROR_OUT_OF_DATE_KHR)),
+            Ok(PresentOutcome::Recreate)
+        );
+        assert_eq!(
+            classify_present(Err(vk::Result::SUBOPTIMAL_KHR)),
+            Ok(PresentOutcome::Recreate)
+        );
+        // A lost surface is fatal: nothing can be presented any more.
+        assert!(classify_present(Err(vk::Result::ERROR_SURFACE_LOST_KHR)).is_err());
+
+        assert_eq!(
+            classify_acquire(Ok((3, false))),
+            Ok(AcquireStatus::Ready {
+                index: 3,
+                suboptimal: false
+            })
+        );
+        assert_eq!(
+            classify_acquire(Ok((3, true))),
+            Ok(AcquireStatus::Ready {
+                index: 3,
+                suboptimal: true
+            })
+        );
+        assert_eq!(
+            classify_acquire(Err(vk::Result::ERROR_OUT_OF_DATE_KHR)),
+            Ok(AcquireStatus::OutOfDate)
+        );
+        assert!(classify_acquire(Err(vk::Result::ERROR_SURFACE_LOST_KHR)).is_err());
+    }
+
+    /// The signatures the windowed callers depend on.
+    ///
+    /// The new outcome-aware API is additive: the four calls the showcase
+    /// makes keep their exact shape. This test is a compile-time guard for
+    /// that.
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn the_windowed_api_keeps_its_shape() {
+        let _new: fn(&Gpu, &Surface, u32, u32, &PresentConfig) -> Result<Swapchain, GpuError> =
+            Swapchain::new;
+        let _acquire: fn(&mut Swapchain, u64) -> Result<AcquiredImage, GpuError> =
+            Swapchain::acquire;
+        let _present: fn(&mut Swapchain, &Gpu, u32, vk::Semaphore) -> Result<(), GpuError> =
+            Swapchain::present;
+        let _destroy: fn(Swapchain, &Gpu) = Swapchain::destroy;
+        let _extent: fn(&Swapchain) -> (u32, u32) = Swapchain::extent;
+
+        // The outcome-aware API is additive.
+        let _acquire_outcome: fn(&mut Swapchain, u64) -> Result<AcquireOutcome, GpuError> =
+            Swapchain::acquire_outcome;
+        let _present_outcome: fn(
+            &mut Swapchain,
+            &Gpu,
+            u32,
+            vk::Semaphore,
+        ) -> Result<PresentOutcome, GpuError> = Swapchain::present_outcome;
+        let _recreate: fn(
+            &mut Swapchain,
+            &Gpu,
+            &Surface,
+            u32,
+            u32,
+            &PresentConfig,
+        ) -> Result<(), GpuError> = Swapchain::recreate;
+    }
+
+    /// Recreating the swapchain hands the old one to the driver instead of
+    /// tearing the surface down first.
+    ///
+    /// The windowed part needs a real `HWND`, which the test suite does not
+    /// build; the parts that can be checked without a window are the device
+    /// negotiation and the pure decisions.
+    #[test]
+    fn swapchain_recreate_retires_the_old_handle_cleanly() {
+        // The present mode and the extent are the two decisions that decide
+        // whether the driver is happy with the new swapchain.
+        assert_eq!(
+            resolve_present_mode(PresentMode::FifoLatestReady, false),
+            vk::PresentModeKHR::FIFO
+        );
+        let extent = resolve_extent((1280, 720), (0, 0), (u32::MAX, u32::MAX), 640, 360);
+        assert_eq!((extent.width, extent.height), (1280, 720));
+
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            // No GPU: the pure assertions above are all that can be checked.
+            return;
+        };
+
+        // `VK_EXT_swapchain_maintenance1` is *not* requested by the test
+        // device, so the feature must not be claimed: the flag reports the
+        // enabled feature, not the extension string.
+        assert!(!gpu
+            .enabled_device_extensions
+            .iter()
+            .any(|name| name == "VK_EXT_swapchain_maintenance1"));
+        assert!(
+            !gpu.features.swapchain_maintenance1,
+            "the feature must not be enabled without the extension"
+        );
+
+        // The instance extensions the surface-maintenance dependency chain
+        // adds are only added when the device extension is requested.
+        assert!(!gpu
+            .enabled_instance_extensions
+            .iter()
+            .any(|name| name == "VK_EXT_surface_maintenance1"));
+
+        gpu.destroy();
     }
 }

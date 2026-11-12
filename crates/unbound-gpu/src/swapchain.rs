@@ -7,12 +7,18 @@
 //! default, and how a resize must behave so the user never sees a black border
 //! or a stretched frame.
 //!
-//! `VK_EXT_swapchain_maintenance1` is the important one. It allows
-//! `VK_PRESENT_MODE_FIFO_LATEST_READY_EXT`, the mode that keeps vsync but
-//! presents the newest completed image instead of queueing stale ones — the
-//! difference between 3 frames of input lag and 1. It also lets the application
-//! hand the OS a fence so destroyed swapchains are not reused while still
-//! scanned out.
+//! `VK_EXT_swapchain_maintenance1` is the important one. It lets the
+//! application hand the OS a fence so destroyed swapchains are not reused
+//! while still scanned out, and it lets the application say how the
+//! presentation engine has to scale a swapchain whose size no longer matches
+//! the window.
+//!
+//! The mode that keeps vsync but presents the newest completed image —
+//! `VK_PRESENT_MODE_FIFO_LATEST_READY_EXT` — comes from a different
+//! extension, `VK_EXT_present_mode_fifo_latest_ready` (promoted to
+//! `VK_KHR_present_mode_fifo_latest_ready`). The policy here only states the
+//! *preference*: the Vulkan mode is resolved in
+//! [`crate::surface`], where the driver's real capabilities are known.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -44,9 +50,11 @@ pub enum PresentMode {
 impl PresentMode {
     /// The mode to request given what the surface reports.
     ///
-    /// `FifoLatestReady` is preferred whenever `VK_EXT_swapchain_maintenance1` is
-    /// present; `Fifo` is the only mode every Vulkan implementation must support,
-    /// so it is the safe fallback.
+    /// `FifoLatestReady` is preferred whenever the maintenance stack is
+    /// present; `Fifo` is the only mode every Vulkan implementation must
+    /// support, so it is the safe fallback. The preference is resolved into
+    /// a real `VkPresentModeKHR` in [`crate::surface`], where the driver's
+    /// supported present modes are known.
     #[must_use]
     pub fn choose(has_maintenance1: bool, allow_tearing: bool) -> Self {
         if have_extension(&["VK_EXT_swapchain_maintenance1"], has_maintenance1) {

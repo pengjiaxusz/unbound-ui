@@ -61,6 +61,12 @@ pub struct GpuFeatures {
     /// `hostQueryReset`: the host may reset a query pool between frames.
     pub host_query_reset: bool,
     pub sampler_anisotropy: bool,
+    /// `swapchainMaintenance1`: the application may hand the OS a fence so a
+    /// destroyed swapchain is not reused while it is still scanned out, and
+    /// may ask for a specific present scaling behaviour.
+    ///
+    /// True only when the extension *and* the feature are enabled — the
+    /// extension string alone says nothing about the feature.
     pub swapchain_maintenance1: bool,
     pub present_wait: bool,
     /// `presentId`: the application may tag a presentation with an id.
@@ -333,6 +339,11 @@ pub struct Gpu {
     pub transfer_queue: vk::Queue,
     pub features: GpuFeatures,
     pub enabled_device_extensions: Vec<String>,
+    /// The instance extensions that were actually enabled.
+    ///
+    /// The list is resolved, not the requested one: the surface-maintenance
+    /// dependency chain adds extensions the application never asked for.
+    pub enabled_instance_extensions: Vec<String>,
     /// Dynamic-rendering function table (`vkCmdBeginRendering`).
     pub khr_dynamic_rendering: ash::khr::dynamic_rendering::Device,
     /// Synchronization2 function table (`vkCmdPipelineBarrier2`).
@@ -494,22 +505,26 @@ impl Gpu {
         }
         let (physical, _, properties) = best.expect("at least one device");
 
-        // ---- feature discovery -------------------------------------------
-        let mut f12 = vk::PhysicalDeviceVulkan12Features::default();
-        let mut f13 = vk::PhysicalDeviceVulkan13Features::default();
-        // The present features live in their own structures, so they have to
-        // be chained into the query as well.
-        let mut present_wait_query = vk::PhysicalDevicePresentWaitFeaturesKHR::default();
-        let mut present_id_query = vk::PhysicalDevicePresentIdFeaturesKHR::default();
-        let core;
+        // ---- extension dependencies ----------------------------------------
+        //
+        // Vulkan requires the dependencies of an enabled extension to be
+        // enabled too. Two of the extensions the showcase asks for have such
+        // a dependency, and enabling them without it makes `vkCreateDevice`
+        // invalid:
+        //
+        //   VK_EXT_swapchain_maintenance1 -> VK_EXT_surface_maintenance1
+        //                                       (an *instance* extension)
+        //   VK_KHR_present_wait            -> VK_KHR_present_id
+        //                                       (a *device* extension)
+        //
+        // The instance extension has to be added before the instance is
+        // created, so this happens back in `new_inner`; the device extension
+        // is added here.
+        let mut device_exts = config.device_extensions.clone();
+        if device_exts.iter().any(|e| e == "VK_KHR_present_wait")
+            && !device_exts.iter().any(|e| e == "VK_KHR_present_id")
         {
-            let mut query = vk::PhysicalDeviceFeatures2::default()
-                .push_next(&mut f13)
-                .push_next(&mut f12)
-                .push_next(&mut present_id_query)
-                .push_next(&mut present_wait_query);
-            instance.get_physical_device_features2(physical, &mut query);
-            core = query.features;
+            device_exts.push("VK_KHR_present_id".to_string());
         }
 
         let dev_ext_props = instance
@@ -524,6 +539,37 @@ impl Gpu {
             })
             .collect();
         let has_ext = |name: &str| dev_ext_names.iter().any(|n| n == name);
+        // The extension has to be *requested* to be enabled: a driver that
+        // merely exposes it does not enable the feature.
+        let maintenance1_requested = device_exts
+            .iter()
+            .any(|e| e == "VK_EXT_swapchain_maintenance1");
+
+        // ---- feature discovery -------------------------------------------
+        let mut f12 = vk::PhysicalDeviceVulkan12Features::default();
+        let mut f13 = vk::PhysicalDeviceVulkan13Features::default();
+        // The present features live in their own structures, so they have to
+        // be chained into the query as well.
+        let mut present_wait_query = vk::PhysicalDevicePresentWaitFeaturesKHR::default();
+        let mut present_id_query = vk::PhysicalDevicePresentIdFeaturesKHR::default();
+        // `VK_EXT_swapchain_maintenance1` gates the present fence and the
+        // present scaling behaviour. The structure is only chained when the
+        // driver knows the extension: an unknown structure type in the chain
+        // makes the query fail.
+        let mut maintenance1_query = vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
+        let core;
+        {
+            let mut query = vk::PhysicalDeviceFeatures2::default()
+                .push_next(&mut f13)
+                .push_next(&mut f12)
+                .push_next(&mut present_id_query)
+                .push_next(&mut present_wait_query);
+            if has_ext("VK_EXT_swapchain_maintenance1") {
+                query = query.push_next(&mut maintenance1_query);
+            }
+            instance.get_physical_device_features2(physical, &mut query);
+            core = query.features;
+        }
 
         let features = GpuFeatures {
             buffer_device_address: f12.buffer_device_address == vk::TRUE,
@@ -542,7 +588,10 @@ impl Gpu {
             shader_float64: core.shader_float64 == vk::TRUE,
             independent_blend: core.independent_blend == vk::TRUE,
             sampler_anisotropy: core.sampler_anisotropy == vk::TRUE,
-            swapchain_maintenance1: has_ext("VK_EXT_swapchain_maintenance1"),
+            // The feature has to be *queried* and then enabled: the extension
+            // string alone says nothing about the feature.
+            swapchain_maintenance1: maintenance1_requested
+                && maintenance1_query.swapchain_maintenance1 == vk::TRUE,
             present_wait: has_ext("VK_KHR_present_wait")
                 && present_wait_query.present_wait == vk::TRUE,
             present_id: has_ext("VK_KHR_present_id") && present_id_query.present_id == vk::TRUE,
@@ -621,27 +670,6 @@ impl Gpu {
             .shader_int64(features.shader_int64)
             .shader_float64(features.shader_float64);
 
-        // ---- extension dependencies ----------------------------------------
-        //
-        // Vulkan requires the dependencies of an enabled extension to be
-        // enabled too. Two of the extensions the showcase asks for have such
-        // a dependency, and enabling them without it makes `vkCreateDevice`
-        // invalid:
-        //
-        //   VK_EXT_swapchain_maintenance1 -> VK_EXT_surface_maintenance1
-        //                                       (an *instance* extension)
-        //   VK_KHR_present_wait            -> VK_KHR_present_id
-        //                                       (a *device* extension)
-        //
-        // The instance extension has to be added before the instance is
-        // created, so this happens back in `new_inner`; the device extension
-        // is added here.
-        let mut device_exts = config.device_extensions.clone();
-        if device_exts.iter().any(|e| e == "VK_KHR_present_wait")
-            && !device_exts.iter().any(|e| e == "VK_KHR_present_id")
-        {
-            device_exts.push("VK_KHR_present_id".to_string());
-        }
         let dev_ext_cstrings = cstrings(&device_exts);
         let dev_ext_ptrs = raw_ptrs(&dev_ext_cstrings);
 
@@ -655,7 +683,15 @@ impl Gpu {
         let mut present_id_features = vk::PhysicalDevicePresentIdFeaturesKHR::default()
             .present_id(present_wait_enabled && features.present_id);
 
-        let device_create = vk::DeviceCreateInfo::default()
+        // `VK_EXT_swapchain_maintenance1` has a feature of its own: the
+        // present fence and the present scaling behaviour are only legal
+        // when `swapchainMaintenance1` is enabled. The structure may only be
+        // chained when the extension itself is enabled.
+        let mut maintenance1_features =
+            vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default()
+                .swapchain_maintenance1(features.swapchain_maintenance1);
+
+        let mut device_create = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)
             .enabled_extension_names(&dev_ext_ptrs)
             .enabled_features(&enabled_core)
@@ -663,6 +699,9 @@ impl Gpu {
             .push_next(&mut present_wait_features)
             .push_next(&mut enabled_features13)
             .push_next(&mut enabled_features12);
+        if features.swapchain_maintenance1 {
+            device_create = device_create.push_next(&mut maintenance1_features);
+        }
 
         let device = instance
             .create_device(physical, &device_create, None)
@@ -678,6 +717,7 @@ impl Gpu {
             families,
             features,
             device_exts,
+            instance_exts,
             config,
         )
     }
@@ -693,6 +733,7 @@ impl Gpu {
         families: QueueFamilies,
         mut features: GpuFeatures,
         enabled_device_extensions: Vec<String>,
+        enabled_instance_extensions: Vec<String>,
         config: GpuConfig,
     ) -> Result<Self, GpuError> {
         let graphics_queue = device.get_device_queue(families.graphics, 0);
@@ -795,6 +836,7 @@ impl Gpu {
             transfer_queue,
             features,
             enabled_device_extensions,
+            enabled_instance_extensions,
             khr_dynamic_rendering,
             khr_synchronization2,
             khr_draw_indirect_count,
