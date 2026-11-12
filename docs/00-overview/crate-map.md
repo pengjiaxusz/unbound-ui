@@ -3,7 +3,7 @@
 > **实现状态**：`已落地` —— 本表与仓库实际结构一一对应，由
 > `crates/*/src/lib.rs` 的公开接口核对而来。
 
-20 个 crate 按依赖方向分层。**上层可以依赖下层，反向依赖被物理禁止**——
+21 个 crate 按依赖方向分层。**上层可以依赖下层，反向依赖被物理禁止**——
 这不是约定，而是由 [`app-guest` 的分层护栏测试](../05-agent/layering.md)
 在 CI 中强制检查的。
 
@@ -13,6 +13,8 @@
 ┌─────────────────────────────────────────────────────────────┐
 │  apps/showcase           自举式 UI Gallery：壳层 + 组件沙盒         │
 │  apps/gallery            全链路演示程序                       │
+├─────────────────────────────────────────────────────────────┤
+│  unbound-app             应用运行时：Application、事件归约、帧差分 │
 ├─────────────────────────────────────────────────────────────┤
 │  app-guest               可热重载的业务层 cdylib（纯数据）      │
 ├─────────────────────────────────────────────────────────────┤
@@ -58,7 +60,8 @@
 | `unbound-graph` | 857 | 渲染图瞬态纹理生命周期校验、毛玻璃离屏池 | `unbound-math` |
 | `unbound-asset` | 1222 | 后台解码线程池、CPU 暂存环、传输队列交接 | `unbound-math` |
 | `unbound-platform` | 1562 | 窗口平台层：非阻塞缩放、低延迟呈现、延迟计量 | `unbound-math`、`unbound-gpu` |
-| `unbound-widgets` | 3446 | 标准控件层：ControlState、WidgetOutput、SceneCollector、WidgetHarness、帧差分（`diff`：局部补丁上传），以及 Button / Switch / Checkbox / Radio / Segmented / Slider | `unbound-gpu`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-text`、`unbound-world`、`unbound-headless` |
+| `unbound-widgets` | 3446 | 标准控件层：ControlState、WidgetOutput、SceneCollector、WidgetHarness、帧差分（`diff`：局部补丁上传），以及 Button / Switch / Checkbox / Radio / Segmented / Slider / TextInput / ScrollView / Overlay / Popover / Menu / Select / Modal / Tooltip / Image | `unbound-gpu`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-text`、`unbound-world`、`unbound-anim`、`unbound-headless` |
+| `unbound-app` | 738 | 应用运行时：`Application::{init,reduce,view}`、事件解析、指针路由、焦点策略、双缓冲场景差分与零工作帧 | `unbound-math`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-gpu`、`unbound-widgets` |
 | `unbound-headless` | 2248 | 无头验证器：五项几何体检、`TestApp` 交互测试驱动、rkyv 时间旅行快照 | `unbound-math`、`unbound-world`、`unbound-input`、`unbound-a11y` |
 | `unbound-host` | 909 | Host-Guest C-ABI 热重载、分配器劫持、状态迁移 | `unbound-abi` |
 | `unbound-kpi` | 398 | 验收红线实测 | 多数 crate |
