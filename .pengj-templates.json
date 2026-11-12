@@ -34,9 +34,9 @@
   },
   "generated_at": "2026-11-11T09:33:50Z",
   "files": {
-    ".agents\\skills\\arch-align\\SKILL.md": "f12c8564162330dd7dcd028d7dd69fc971e1638edab0f89ad2f13bcb871c8ede",
-    ".agents\\skills\\arch-align\\references\\GENERATE-DOC.md": "adcbc307fa5683721c8bec6b3606dbb9b3baec5666e4d2efe73a4dafe2c12970",
-    ".agents\\skills\\arch-align\\references\\GENERATE-INDEX.md": "86e1946d2ebe4c621dfb7ef4f0506a2835dfb72008d92aba8735ce95b5f182ca",
+    ".agents\\skills\\arch-align\\SKILL.md": "6efa6b1b88114b06eca815e2b6b12f2372852aea95a1ad6d83e20a66e4867051",
+    ".agents\\skills\\arch-align\\references\\GENERATE-DOC.md": "5375edc2e05d5a892411fcfb8f6f68e1524ee6794d25909e40fc0b5bb64c5bc2",
+    ".agents\\skills\\arch-align\\references\\GENERATE-INDEX.md": "382d2e4899ff3cab28d95d371f6a8175717f35d8e63eb460bf722258afcaffb0",
     ".agents\\skills\\bque\\SKILL.md": "7c28d97fe60922e0d0500b191b22635c2897319ba608c2612de3c4bc4619309e",
     ".agents\\skills\\bque\\references\\install.md": "1b87fa1ccf520a90a57b62555b3672b12b7f423eacf6b04d8aede13c1c6e83ff",
     ".agents\\skills\\bque\\references\\usage-matrix.md": "2c11dcb32f89a20284d7a6bff587d818e7e80ca925336ce4b8f1aac9eb8b97c9",
