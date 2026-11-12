@@ -23,6 +23,7 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod a11y_bridge;
+pub mod a11y_winit;
 pub mod backend;
 pub mod clipboard;
 pub mod latency;
@@ -32,6 +33,7 @@ pub mod window;
 pub mod windows;
 
 pub use a11y_bridge::{action_request, A11yBridge, A11yRequest, A11yTransport};
+pub use a11y_winit::WinitA11y;
 pub use backend::{Flow, PlatformWindow};
 pub use clipboard::{
     ClipboardError, ClipboardProvider, MemoryClipboard, SystemClipboard, MAX_CLIPBOARD_BYTES,

@@ -4,9 +4,9 @@
 >
 > | | |
 > | :--- | :--- |
-> | **源码** | `crates/unbound-a11y/src/lib.rs`、`crates/unbound-platform/src/a11y_bridge.rs` |
-> | **关键类型** | `Semantics`、`A11yNode`、`A11yAction`、`A11yActions`、`A11yBridge`、`A11yRequest` |
-> | **依赖** | `accesskit` crate |
+> | **源码** | `crates/unbound-a11y/src/lib.rs`、`crates/unbound-platform/src/a11y_bridge.rs`、`crates/unbound-platform/src/a11y_winit.rs` |
+> | **关键类型** | `Semantics`、`A11yNode`、`A11yAction`、`A11yActions`、`A11yBridge`、`A11yRequest`、`WinitA11y` |
+> | **依赖** | `accesskit`、`accesskit_winit` crate |
 
 ## 语义树作为一级输出端
 
@@ -63,8 +63,17 @@
   走同一条处理路径。
 
 `unbound-platform` 只定义传输契约，不绑定具体窗口库，因此桥接可以在无头环境中
-用记录型 transport 完整测试。窗口壳层仍需实现一个 `A11yTransport` 适配器
-（Windows 上通常是 `accesskit_winit::Adapter`），这是当前尚未接入的一环。
+用记录型 transport 完整测试。窗口壳层由 `WinitA11y`（`accesskit_winit::Adapter`）
+完成实机接入，每个窗口一份：
+
+- 适配器在窗口 **显示之前** 创建（AccessKit 的硬性要求），由
+  `PlatformApp::window_created` 之后统一托管。
+- 每帧由平台调用 `PlatformApp::accessibility_update` 拉取增量，
+  `WinitA11y::publish_with` 只在有辅助技术监听时消费该增量；静态帧不产生
+  任何系统调用。
+- OS 回传的 `ActionRequest` 进入通道，事件循环在帧边界取出并交给
+  `PlatformApp::accessibility_action`，再进入 `AppRuntime::a11y`，与指针、键盘
+  事件共用同一条归约路径。
 
 ## 边界同步
 

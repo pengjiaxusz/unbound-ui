@@ -4,10 +4,10 @@
 >
 > | | |
 > | :--- | :--- |
-> | **已落地** | Vulkan surface 与 swapchain 创建、acquire → render → present 闭环、延迟重建策略、`VK_KHR_present_wait` 低延迟路径、事件循环自驱动、输入到光子延迟计量 |
+> | **已落地** | Vulkan surface 与 swapchain 创建、acquire → render → present 闭环、延迟重建策略、`VK_KHR_present_wait` 低延迟路径、事件循环自驱动、输入到光子延迟计量、多窗口 Surface/Swapchain 宿主、AccessKit 实机适配 |
 > | **缺口** | DWM 实际行为未在真机测量；零黑边仍是设计目标而非实测结论 |
-> | **源码** | `crates/unbound-platform/src/{resize,pacing,latency,backend,window}.rs`、`crates/unbound-gpu/src/surface.rs` |
-> | **验收** | `apps/showcase` 开窗运行；`--shot` 模式可无头出图；`the_borrowed_attachment_path_matches_the_offscreen_path` 逐像素比对窗口路径 |
+> | **源码** | `crates/unbound-platform/src/{resize,pacing,latency,backend,window,a11y_winit}.rs`、`crates/unbound-gpu/src/surface.rs` |
+> | **验收** | `apps/showcase` 开窗运行（`Ctrl+N` 开第二窗口）；`--shot` 模式可无头出图；`the_borrowed_attachment_path_matches_the_offscreen_path` 逐像素比对窗口路径 |
 
 ## 呈现链路
 
@@ -47,6 +47,20 @@
 第三条是最隐蔽的一条：信号量池的深度等于「在途帧数」，槽位一个帧周期后才会
 复用。因此**必须在 acquire 之前**等上一帧退役（`Renderer::wait_for_previous_frame`），
 否则 GPU 还没开始执行上一帧的提交时，二次 signal 会把第一次的信号覆盖掉。
+
+### 多窗口
+
+平台层现在按 `WindowId` 维护一组成员：每个窗口有自己的 `PlatformState`
+（resize tracker、pacer、IME）、自己的 `WinitA11y` 适配器，以及应用侧自己的
+`Surface` + `Swapchain`。设备、渲染器、管线与字形图集仍然共享：
+
+- `PlatformApp::take_window_request` 申请窗口，平台在下一帧创建后调用
+  `window_created`；关闭非主窗口只移除该成员并调用 `window_closing`，主窗口
+  关闭才退出事件循环。
+- 所有窗口共用一个 `Renderer` 时，实例池只有一份基线，因此每个窗口都要用
+  新的 `generation` 全量上传；只有单窗口时才走局部补丁路径。
+- `Renderer::ensure_depth_size` 只增不减，两个窗口按各自尺寸绘制前调用即可
+  共享同一张深度附件。
 
 ### 事件循环必须自驱动
 
