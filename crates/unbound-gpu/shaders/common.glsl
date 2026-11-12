@@ -34,6 +34,15 @@
 #define PRIM_SHADOW       6u
 #define PRIM_LINE         7u
 
+// Primitive flags, mirroring `PrimFlags` on the Rust side. They travel in the
+// high 16 bits of `type_flags`, so both the vertex and the fragment stage can
+// read them without a second unpacking convention.
+#define SUB_ELEMENT_MASK 0x7u
+#define FLAG_DARK_BG    (1u << 3)
+#define FLAG_MSDF       (1u << 4)
+#define FLAG_ELLIPSIS   (1u << 5)
+#define FLAG_SUBPIXEL   (1u << 6)
+
 // Theme LUT slot 0 is always fully transparent so "no colour" is free.
 #define TOKEN_NONE 0u
 
@@ -250,11 +259,29 @@ float dot2(vec2 v) {
     return dot(v, v);
 }
 
+/// Distance from `p` to the line segment `a..b`.
+float sd_segment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-12), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
 float sd_quadratic_bezier(vec2 pos, vec2 p0, vec2 p1, vec2 p2) {
     vec2 a = p1 - p0;
     vec2 b = p0 - 2.0 * p1 + p2;
     vec2 c = a * 2.0;
     vec2 d = p0 - pos;
+
+    // A collinear control polygon — a "curve" that is really a straight line —
+    // makes `b` vanish, and the Cardano solve below divides by `|b|²` clamped
+    // at 1e-12. The roots then explode to ±1e12, clamp to `t = 1`, and the
+    // distance collapses to the *end point*: the stroke disappears and only a
+    // dot is left. Straight strokes (the window close glyph, a flat ribbon)
+    // take this path, so fall back to the exact segment distance.
+    if (dot(b, b) < 1e-8) {
+        return sd_segment(pos, p0, p2);
+    }
 
     float kk = 1.0 / max(dot(b, b), 1e-12);
     float kx = kk * dot(a, b);

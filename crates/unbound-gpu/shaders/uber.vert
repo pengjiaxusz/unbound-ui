@@ -70,23 +70,42 @@ void main() {
     // transparent smear across two.
     //
     // The size stays exact for glyphs: a glyph quad is exactly as wide as its
-    // atlas allocation in texels, and an integer texel count survives the
-    // snap (`floor(a + n) - floor(a) == n` for integer `n`). That keeps the
-    // texture mapping at one texel per physical pixel — no stretch, no blur,
-    // and every letter of a word weighted the same.
+    // atlas allocation in texels. Snapping *both* corners is what breaks that:
+    // the CPU stores the quad in logical units (`texels / scale`) and the two
+    // round-trips through the scale can push one corner to `.5`, so `min` and
+    // `max` independently snap to a span of `W ± 1` px. Stretching a `W`-texel
+    // glyph over `W + 1` pixels makes the `VK_FILTER_LINEAR` tap smear a 1 px
+    // stem into 2–3 px of ghosting.
+    //
+    // Billboards (glyphs and non-MSDF colour glyphs) therefore snap only their
+    // top-left corner and keep their size in whole texels; true geometry keeps
+    // snapping both edges so a 1 px border lands on a pixel boundary.
     //
     // A rotated quad is left alone: its screen-space box is only a
     // conservative hull, so snapping it would clip the shape.
     bool axis_aligned = abs(m[0][1]) < 1e-5 && abs(m[1][0]) < 1e-5
                       && abs(m[0][0] - 1.0) < 1e-5 && abs(m[1][1] - 1.0) < 1e-5;
 
+    uint prim_type = p.type_flags & 0xFFu;
+    uint prim_flags = (p.type_flags >> 16) & 0xFFFFu;
+    bool bitmap_glyph = prim_type == PRIM_GLYPH
+        || (prim_type == PRIM_GLYPH_COLOR && (prim_flags & FLAG_MSDF) == 0u);
+
     vec2 eff_origin = origin_rel + trans;
     vec2 eff_size = p.size;
     if (!animated && axis_aligned) {
         vec2 box_min_s = floor(rel_to_screen(eff_origin, scale, half_vp) + 0.5);
-        vec2 box_max_s = floor(rel_to_screen(eff_origin + p.size, scale, half_vp) + 0.5);
+        vec2 size_s;
+        if (bitmap_glyph) {
+            // One texel per pixel: the quad's logical size times the scale is
+            // exactly the integer texel count the atlas allocated.
+            size_s = max(floor(p.size * scale + 0.5), vec2(1.0));
+        } else {
+            vec2 box_max_s = floor(rel_to_screen(eff_origin + p.size, scale, half_vp) + 0.5);
+            size_s = max(box_max_s - box_min_s, vec2(1.0));
+        }
         eff_origin = screen_to_rel(box_min_s, scale, half_vp);
-        eff_size = max((box_max_s - box_min_s) / scale, vec2(1.0 / scale));
+        eff_size = size_s / scale;
     }
 
     vec2 lo = vec2(-pad);

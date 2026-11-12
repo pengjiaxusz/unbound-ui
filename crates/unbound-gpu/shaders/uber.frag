@@ -37,12 +37,8 @@ layout(location = 0) out vec4 out_color;
 
 // Type flags, mirroring `PrimFlags` on the Rust side (bits 16..31 of the word
 // become bits 0..15 here). Bits 0..2 are the sub-element order that also feeds
-// the low byte of the 64-bit sort key.
-#define SUB_ELEMENT_MASK 0x7u
-#define FLAG_DARK_BG    (1u << 3)
-#define FLAG_MSDF       (1u << 4)
-#define FLAG_ELLIPSIS   (1u << 5)
-#define FLAG_SUBPIXEL   (1u << 6)
+// the low byte of the 64-bit sort key. The `FLAG_*` bits themselves live in
+// `common.glsl`, because the vertex shader needs `FLAG_MSDF` too.
 
 float clip_slot_coverage(vec4 rect, uvec2 radii_packed) {
     vec2 center_rel = v_chunk_base + rect.xy;
@@ -131,8 +127,13 @@ void main() {
     float aa = max(fwidth(p.x), fwidth(p.y));
     aa = max(aa, 1e-5);
 
+    // A glyph's quad is an atlas rectangle, not a rounded box: the coverage
+    // already lives in the glyph bitmap, so the rounded-box SDF must never
+    // clip or fade it. Skipping it also removes a `fwidth`/SDF evaluation from
+    // every glyph fragment.
+    bool is_glyph = prim_type == PRIM_GLYPH || prim_type == PRIM_GLYPH_COLOR;
     float sd = sd_rounded_box(p - center, half_size, v_radii);
-    float self_alpha = coverage_from_sd(sd, aa);
+    float self_alpha = is_glyph ? 1.0 : coverage_from_sd(sd, aa);
 
     // ---- shadow ----------------------------------------------------------
     float shadow_alpha = 0.0;
@@ -219,9 +220,24 @@ void main() {
     }
 
     // ---- composite: shadow, then surface ---------------------------------
+    //
+    // The blend state is `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`, i.e. it multiplies
+    // the output colour by the output alpha once more. The shader therefore
+    // has to hand over *straight* (un-premultiplied) RGB: mixing the surface
+    // with the shadow colour here and leaving `surface.rgb * sa` in place made
+    // the hardware multiply by `sa` a second time, which produced `sa^2`
+    // falloff and let the dark shadow colour bleed into every antialiased
+    // edge (white text with a black halo, grey arcs on same-colour rounded
+    // rectangles).
+    //
+    // Over-compositing in straight alpha needs the *combined* alpha in the
+    // denominator: `out = (src·a_src + dst·a_dst·(1-a_src)) / a_out`.
     float sa = surface.a;
-    rgb = surface.rgb * sa + rgb * (1.0 - sa);
-    alpha = sa + alpha * (1.0 - sa);
+    float shadow_term = alpha * (1.0 - sa);
+    float out_a = sa + shadow_term;
+    vec3 premul = surface.rgb * sa + rgb * shadow_term;
+    rgb = out_a > 1e-5 ? premul / out_a : vec3(0.0);
+    alpha = out_a;
 
     // ---- dual-slot rounded clipping --------------------------------------
     if (clip_idx != CLIP_NONE) {
