@@ -8,10 +8,12 @@
 use unbound_headless::driver::TestApp;
 use unbound_input::Router;
 use unbound_math::{Rect, Vec2};
+use unbound_widgets::button::ButtonDesc;
 use unbound_widgets::scroll::{
     emit_scroll_view, update_virtual_list, ScrollState, ScrollViewDesc, ScrollbarAxis,
 };
-use unbound_widgets::ControlState;
+use unbound_widgets::text_input::TextInputDesc;
+use unbound_widgets::{ButtonWidget, ControlState, SceneCollector, TextInputWidget, WidgetDesc};
 
 fn desc() -> ScrollViewDesc {
     ScrollViewDesc::new(Rect::new(0.0, 0.0, 400.0, 300.0), Vec2::new(400.0, 3000.0))
@@ -103,4 +105,64 @@ fn a_disabled_scroll_view_still_emits_but_is_not_pickable() {
     let output = emit_scroll_view(90, &desc, &state, disabled);
     assert!(output.output.hit.is_some(), "the viewport still clips");
     assert!(output.thumb.is_some());
+}
+
+#[test]
+fn controls_inside_scroll_view_inherit_clip_and_transform() {
+    let desc = desc();
+    let mut state = ScrollState::new();
+    state.jump_to(&desc, Vec2::new(0.0, 420.0));
+    let scroll = emit_scroll_view(90, &desc, &state, tab());
+
+    // The visible button sits at content-space y = 460, the field at y = 100.
+    let button = ButtonWidget {
+        node: 700,
+        desc: ButtonDesc::new(Rect::new(20.0, 460.0, 120.0, 36.0), "Save"),
+    };
+    let field = TextInputWidget {
+        node: 701,
+        desc: TextInputDesc::new(Rect::new(20.0, 100.0, 200.0, 32.0)),
+        edit: unbound_widgets::TextEditState::default(),
+        visual: unbound_widgets::TextInputVisual::default(),
+    };
+
+    let mut collector = SceneCollector::new(1);
+    collector.push_clip(scroll.clip, desc.rect);
+    collector.push_transform(scroll.transform);
+    collector.push(button.key(), button.emit(tab(), &mut []));
+    collector.push(field.key(), field.emit(tab(), &mut []));
+    collector.pop_transform();
+    collector.pop_clip();
+
+    assert_eq!(collector.clips.len(), 1);
+    assert_eq!(collector.clips[0].aabb_clip, [0.0, 0.0, 400.0, 300.0]);
+    assert_eq!(collector.transforms.len(), 2, "identity + scroll");
+
+    for key in [button.key(), field.key()] {
+        let primitives = collector.span(key).expect("widget emitted");
+        assert!(!primitives.is_empty());
+        assert!(
+            primitives.iter().all(|prim| prim.clip_idx != u32::MAX),
+            "every primitive must inherit the viewport clip"
+        );
+        assert!(
+            primitives.iter().all(|prim| prim.transform_idx == 1),
+            "every primitive must follow the scroll transform"
+        );
+    }
+
+    // The visible button is still pickable at its on-screen position.
+    let visible = Vec2::new(80.0, 460.0 - 420.0 + 18.0);
+    assert_eq!(
+        unbound_input::pick(&collector.regions, visible).map(|region| region.node),
+        Some(button.key())
+    );
+
+    // The field scrolled above the viewport collapses to an empty region and
+    // can no longer be picked.
+    let outside = Vec2::new(80.0, 100.0 - 420.0);
+    assert_eq!(
+        unbound_input::pick(&collector.regions, outside).map(|region| region.node),
+        None
+    );
 }

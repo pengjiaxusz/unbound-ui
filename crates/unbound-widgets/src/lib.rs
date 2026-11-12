@@ -41,9 +41,9 @@ pub mod tooltip;
 
 use rustc_hash::FxHashMap;
 use unbound_a11y::{A11yNode, Semantics};
-use unbound_gpu::data::{GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform};
+use unbound_gpu::data::{GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform, CLIP_NONE};
 use unbound_headless::driver::{ClickReport, TestApp};
-use unbound_input::{HitRegion, PointerEvent, Router};
+use unbound_input::{ClipRect, HitRegion, PointerEvent, Router};
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 
@@ -186,6 +186,10 @@ pub struct SceneCollector {
     pub node_spans: FxHashMap<u64, (u32, u32)>,
     /// Backdrop-blur requests produced by overlays this frame.
     pub backdrops: Vec<crate::overlay::BackdropRequest>,
+    /// Active clip scopes: `(clip index, screen-space bounds)`.
+    clip_stack: Vec<(u32, Rect)>,
+    /// Active transform scopes: `(transform index, cumulative translation)`.
+    transform_stack: Vec<(u32, Vec2)>,
 }
 
 impl SceneCollector {
@@ -208,11 +212,118 @@ impl SceneCollector {
         self.focus_order.clear();
         self.node_spans.clear();
         self.backdrops.clear();
+        self.clip_stack.clear();
+        self.transform_stack.clear();
         self.semantics.reset(root);
     }
 
+    /// Open a clip scope for every widget pushed until [`Self::pop_clip`].
+    ///
+    /// `node` describes the new clip; when a parent scope is active its
+    /// rounded slot is folded into `rounded_clip_1` and the effective bounds
+    /// become the intersection of both scopes. The returned index is what the
+    /// children's primitives reference.
+    pub fn push_clip(&mut self, mut node: GpuClipNode, world_bounds: Rect) -> u32 {
+        let mut bounds = world_bounds;
+        if let Some(&(parent_idx, parent_bounds)) = self.clip_stack.last() {
+            bounds = bounds.intersect(&parent_bounds);
+            let [min_x, min_y, max_x, max_y] = node.aabb_clip;
+            let own = Rect::new(
+                min_x,
+                min_y,
+                (max_x - min_x).max(0.0),
+                (max_y - min_y).max(0.0),
+            );
+            let folded = own.intersect(&bounds);
+            node.aabb_clip = [
+                folded.min().x,
+                folded.min().y,
+                folded.max().x,
+                folded.max().y,
+            ];
+            if let Some(parent) = self.clips.get(parent_idx as usize) {
+                node.rounded_clip_1 = parent.rounded_clip_0;
+                node.radii_1 = parent.radii_0;
+            }
+        }
+        let index = u32::try_from(self.clips.len()).unwrap_or(CLIP_NONE - 1);
+        self.clips.push(node);
+        self.clip_stack.push((index, bounds));
+        index
+    }
+
+    /// Close the innermost clip scope.
+    pub fn pop_clip(&mut self) {
+        self.clip_stack.pop();
+    }
+
+    /// Open a transform scope for every widget pushed until
+    /// [`Self::pop_transform`].
+    ///
+    /// The scope translation is the sum of every active scope, so children
+    /// only ever reference the innermost transform index. Slot `0` of the
+    /// table is always the identity.
+    pub fn push_transform(&mut self, mut transform: GpuTransform) -> u32 {
+        if self.transforms.is_empty() {
+            self.transforms.push(GpuTransform::IDENTITY);
+        }
+        if let Some(&(_, parent_offset)) = self.transform_stack.last() {
+            transform.translation[0] += parent_offset.x;
+            transform.translation[1] += parent_offset.y;
+        }
+        let offset = Vec2::new(transform.translation[0], transform.translation[1]);
+        let index = u32::try_from(self.transforms.len()).unwrap_or(CLIP_NONE - 1);
+        self.transforms.push(transform);
+        self.transform_stack.push((index, offset));
+        index
+    }
+
+    /// Close the innermost transform scope.
+    pub fn pop_transform(&mut self) {
+        self.transform_stack.pop();
+    }
+
     /// Append one widget's output and record the primitives it owns.
-    pub fn push(&mut self, key: u64, output: WidgetOutput) {
+    pub fn push(&mut self, key: u64, mut output: WidgetOutput) {
+        let active_transform = self.transform_stack.last().copied();
+        if let Some((transform_idx, offset)) = active_transform {
+            for primitive in &mut output.primitives {
+                if primitive.transform_idx == 0 {
+                    primitive.transform_idx = transform_idx;
+                }
+            }
+            if let Some(hit) = output.hit.as_mut() {
+                hit.bounds = hit.bounds.translate(offset);
+                if let Some(clip) = hit.clip.as_mut() {
+                    clip.rect = clip.rect.translate(offset);
+                }
+            }
+            if let Some(node) = output.a11y.as_mut() {
+                node.bounds = node.bounds.translate(offset);
+            }
+        }
+
+        if let Some((clip_idx, clip_rect)) = self.clip_stack.last().copied() {
+            for primitive in &mut output.primitives {
+                if primitive.clip_idx == CLIP_NONE {
+                    primitive.clip_idx = clip_idx;
+                }
+            }
+            if let Some(hit) = output.hit.as_mut() {
+                hit.bounds = hit.bounds.intersect(&clip_rect);
+                hit.clip = Some(match hit.clip.take() {
+                    Some(existing) => ClipRect {
+                        rect: existing.rect.intersect(&clip_rect),
+                        radii: existing.radii,
+                    },
+                    None => ClipRect::new(clip_rect),
+                });
+            }
+            if let Some(node) = output.a11y.as_mut() {
+                node.bounds = node.bounds.intersect(&clip_rect);
+            }
+        }
+
         let start = u32::try_from(self.primitives.len()).unwrap_or(u32::MAX);
         self.primitives.extend(output.primitives);
         let end = u32::try_from(self.primitives.len()).unwrap_or(u32::MAX);
