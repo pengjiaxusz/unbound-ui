@@ -82,8 +82,11 @@ const CODE_BAR: f32 = 30.0;
 const CODE_GAP: f32 = 6.0;
 /// The gap between the code bar and the code panel.
 const CODE_PANEL_GAP: f32 = 4.0;
-/// The gap between the window's edge and the right-most control.
-const WINDOW_BUTTON_GAP: f32 = 52.0;
+/// The width of one window control button.
+///
+/// The three buttons are flush with the right edge: a gap there would be a
+/// dead strip where a click neither closes the window nor starts a drag.
+const WINDOW_BUTTON_WIDTH: f32 = 46.0;
 
 /// Responsive geometry for one frame.
 #[derive(Copy, Clone, Debug)]
@@ -253,15 +256,26 @@ fn code_panel_height(example: &ExampleDef) -> f32 {
 /// search field that sits in the middle of the bar.
 fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
     // The window buttons are anchored to the right edge and always win: a
-    // narrow window must never push "close" off-screen.
+    // narrow window must never push "close" off-screen, and the close button
+    // must reach the edge so the corner is a valid target.
     let close = Rect::new(
-        (width - WINDOW_BUTTON_GAP).max(0.0),
+        (width - WINDOW_BUTTON_WIDTH).max(0.0),
         0.0,
-        44.0,
+        WINDOW_BUTTON_WIDTH,
         TOP_BAR_HEIGHT,
     );
-    let maximize = Rect::new(close.origin.x - 44.0, 0.0, 44.0, TOP_BAR_HEIGHT);
-    let minimize = Rect::new(maximize.origin.x - 44.0, 0.0, 44.0, TOP_BAR_HEIGHT);
+    let maximize = Rect::new(
+        close.origin.x - WINDOW_BUTTON_WIDTH,
+        0.0,
+        WINDOW_BUTTON_WIDTH,
+        TOP_BAR_HEIGHT,
+    );
+    let minimize = Rect::new(
+        maximize.origin.x - WINDOW_BUTTON_WIDTH,
+        0.0,
+        WINDOW_BUTTON_WIDTH,
+        TOP_BAR_HEIGHT,
+    );
     let nav_toggle = Rect::new(12.0, 12.0, 32.0, 32.0);
 
     // Everything else is laid out right-to-left inside the gap between the
@@ -285,13 +299,16 @@ fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
 
     let hud = take(32.0);
     let snap = take(32.0);
-    // Four zoom steps need a 43 px slot each for `"100%"` plus its
-    // padding; below that the compact labels are used instead.
-    let zoom = take(if width < 1000.0 { 150.0 } else { 190.0 });
+    // Four zoom steps need a 42 px slot each for `"1.25×"` plus its padding;
+    // below that the compact labels are used instead.
+    let zoom = take(if width < 1000.0 { 168.0 } else { 190.0 });
     let theme = take(if compact { 34.0 } else { 118.0 });
 
+    // A narrow window keeps a search *icon* instead of dropping search
+    // entirely: the overlay is the only entry point at 150–200 % zoom, where
+    // the logical viewport is too small for the field.
     let search_width = if width < 900.0 {
-        0.0
+        32.0
     } else if width < 1000.0 {
         170.0
     } else {

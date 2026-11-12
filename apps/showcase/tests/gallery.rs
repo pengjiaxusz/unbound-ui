@@ -406,6 +406,39 @@ fn hover_and_press_change_the_rendered_pixels() {
     renderer.destroy();
 }
 
+/// Overdrawing a surface with the same colour must not change one pixel.
+///
+/// The composite used to multiply the fill by its own coverage a second time
+/// and mix the shadow colour into the partially covered pixels, so a rounded
+/// rectangle drawn on a surface of its own colour left a dark rim along its
+/// antialiased edge.
+#[test]
+fn overdrawing_the_same_colour_leaves_no_seam() {
+    let Some(gpu) = unbound_gpu::device::test_device() else {
+        // No Vulkan device: the test cannot run, but it must not fail.
+        return;
+    };
+    let mut renderer = unbound_gpu::Renderer::new(gpu, 256, 256).expect("renderer");
+    let atlases = std::sync::Arc::new(
+        unbound_gpu::atlas::AtlasSet::new(&renderer.gpu, 4).expect("atlas set"),
+    );
+    renderer.install_atlases(atlases).expect("install");
+    renderer
+        .write_theme_lut(&showcase::theme::lut(false))
+        .expect("theme");
+    let scene = showcase::testing::same_colour_overlay_scene((256.0, 256.0));
+    renderer.render(&scene.upload(1, &[])).expect("render");
+    let pixels = renderer.read_pixels().expect("readback");
+    let first = &pixels[0..4];
+    for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+        assert_eq!(
+            pixel, first,
+            "pixel {index} is not the flat surface colour: the same-colour overlay left a seam"
+        );
+    }
+    renderer.destroy();
+}
+
 fn render_button(
     renderer: &mut unbound_gpu::Renderer,
     atlases: &std::sync::Arc<unbound_gpu::atlas::AtlasSet>,

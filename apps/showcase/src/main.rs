@@ -134,11 +134,11 @@ impl Showcase {
         }
         let size = window.inner_size();
         let scale = self.os_scale.max(0.5);
-        // The window buttons live in the top-right 48 px. Testing the resize
-        // border first made that corner start a window drag instead of a
-        // click, so the exclusion has to happen before the edge test.
+        // The window buttons live in the top-right 3 × 46 px. Testing the
+        // resize border first made that corner start a window drag instead of
+        // a click, so the exclusion has to happen before the edge test.
         let logical_w = size.width as f32 / self.effective_scale();
-        if self.pointer.y < 48.0 && self.pointer.x > logical_w - 3.0 * 44.0 - 8.0 {
+        if self.pointer.y < 48.0 && self.pointer.x > logical_w - 3.0 * 46.0 {
             return None;
         }
         resize_edge(
@@ -725,6 +725,9 @@ impl PlatformApp for Showcase {
             eprintln!("render failed: {error}");
             return Flow::Continue;
         }
+        // The pending slices are in the pool now. Keeping them would re-stage
+        // the same primitives on every later frame under the same generation.
+        self.app.mark_uploaded();
         // The render-finished semaphore belongs to *this* swapchain image, so
         // the presentation engine never waits on a semaphore another image
         // still owns.

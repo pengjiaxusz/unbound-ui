@@ -639,6 +639,75 @@ fn hovering_a_control_never_relays_out_the_page() {
     }
 }
 
+/// The three window buttons are flush, equal and reach the right edge.
+///
+/// The old layout left a 52 px gap before "close" and the icons did not share
+/// a centre, so the top-right corner was a dead strip and two of the three
+/// glyphs sat off-centre.
+#[test]
+fn the_window_buttons_are_flush_and_equal() {
+    let mut app = GalleryApp::new();
+    app.rebuild((1440.0, 900.0));
+    let close = app.layout.window_close;
+    let maximize = app.layout.window_maximize;
+    let minimize = app.layout.window_minimize;
+
+    assert_eq!(close.max().x, 1440.0, "close must reach the right edge");
+    for (name, rect) in [
+        ("close", close),
+        ("maximize", maximize),
+        ("minimize", minimize),
+    ] {
+        assert_eq!(rect.size.x, 46.0, "{name} must keep its 46 px width");
+        assert_eq!(rect.origin.y, 0.0, "{name} must start at the top");
+    }
+    assert_eq!(maximize.max().x, close.origin.x);
+    assert_eq!(minimize.max().x, maximize.origin.x);
+    let centre = |rect: unbound_math::Rect| rect.center().y;
+    assert!((centre(close) - centre(maximize)).abs() < 0.01);
+    assert!((centre(close) - centre(minimize)).abs() < 0.01);
+}
+
+/// A rebuild that changes nothing must not drop a pending patch.
+///
+/// The window can rebuild twice per frame (event handling, then the animation
+/// tick). The second diff only covers what changed since the first rebuild, so
+/// clearing the pending list there silently dropped the event's paint changes
+/// and the frame kept the old colours until the next full upload.
+#[test]
+fn an_identical_rebuild_keeps_the_pending_patch() {
+    let mut app = app();
+    app.navigate(PageId::Home);
+    app.pointer_move(Vec2::new(2.0, 898.0));
+    app.rebuild(VIEWPORT);
+    app.mark_uploaded();
+
+    let node = app
+        .router
+        .regions()
+        .iter()
+        .map(|region| region.node)
+        .find(|node| !target::is_demo(*node))
+        .expect("the page should have chrome to hover");
+    app.pointer_move(rect_of(&app, node).center());
+    app.rebuild(VIEWPORT);
+    let pending = app.dirty_ranges().to_vec();
+    assert!(!pending.is_empty(), "the hover must produce a patch");
+
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.dirty_ranges(),
+        pending.as_slice(),
+        "a rebuild with no changes must keep the pending patch for the host"
+    );
+
+    app.mark_uploaded();
+    assert!(
+        app.dirty_ranges().is_empty(),
+        "an upload must clear the pending patch"
+    );
+}
+
 /// A hover patches the pool; it does not re-upload the scene.
 ///
 /// The shell's chrome and the standard controls keep a stable primitive count
@@ -664,6 +733,9 @@ fn a_hover_patches_the_pool_instead_of_reuploading_it() {
     for node in targets {
         app.pointer_move(Vec2::new(2.0, 898.0));
         app.rebuild(VIEWPORT);
+        // The reset hover's slices have been "uploaded"; only the next
+        // transition may contribute to the patch being measured.
+        app.mark_uploaded();
         let generation = app.generation();
         let point = rect_of(&app, node).center();
         app.pointer_move(point);
@@ -708,6 +780,7 @@ fn a_hover_patch_stays_inside_the_hovered_control() {
     for node in targets {
         app.pointer_move(Vec2::new(2.0, 898.0));
         app.rebuild(VIEWPORT);
+        app.mark_uploaded();
         let hovered = rect_of(&app, node).center();
         app.pointer_move(hovered);
         app.rebuild(VIEWPORT);

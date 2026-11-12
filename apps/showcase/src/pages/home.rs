@@ -156,12 +156,17 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
     // They live in the lower right corner: the copy occupies the left 58 %
     // of the hero, and a ribbon that crosses the paragraph turns the text
     // into a background pattern instead of a sentence.
+    //
+    // The ribbons start *below* the hero and are clipped by the rounded
+    // surface on the way in. Starting them at the inner edge of the violet
+    // blob made them stop dead in mid-air, which read as a broken clip
+    // rectangle rather than a deliberate design.
     for index in 0..4 {
         let f = index as f32;
         ctx.canvas.curve(
             [
-                rect.origin.x + rect.size.x * 0.70,
-                rect.max().y - 12.0 - f * 7.0,
+                rect.origin.x + rect.size.x * (0.58 + f * 0.03),
+                rect.max().y + 8.0,
             ],
             [
                 rect.origin.x + rect.size.x * 0.86,

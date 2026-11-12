@@ -226,6 +226,15 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Physical pixels per logical unit.
+    ///
+    /// Geometry that must stay exactly one physical pixel thick (the window
+    /// control strokes) needs this to convert its line width.
+    #[must_use]
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+
     /// The current clip rectangle, if any.
     #[must_use]
     pub fn clip_rect(&self) -> Option<Rect> {

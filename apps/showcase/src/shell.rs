@@ -305,6 +305,14 @@ impl GalleryApp {
         &self.dirty_ranges
     }
 
+    /// The host uploaded the pending slices: drop them.
+    ///
+    /// `dirty_ranges` accumulates across every rebuild between two uploads, so
+    /// only the host knows when the data actually reached the GPU.
+    pub fn mark_uploaded(&mut self) {
+        self.dirty_ranges.clear();
+    }
+
     /// The layout statistics of the current frame.
     ///
     /// `nodes_visited` is zero when the frame did not have to be laid out.
@@ -450,15 +458,19 @@ impl GalleryApp {
         // How much of the scene has to travel decides how the frame is
         // uploaded: a paint-only change patches its slices under the *same*
         // generation, and the renderer leaves the rest of the pool alone.
+        //
+        // A frame can rebuild twice (the event handler, then `tick`), and the
+        // second diff only knows what changed since the *first* rebuild. The
+        // pending slices therefore accumulate until the host has actually
+        // uploaded them (`mark_uploaded`); overwriting them here lost every
+        // paint change made before the frame's animation tick.
         let diff = diff_scenes(&previous, scene);
-        self.state.demo.upload_bytes = diff.bytes(scene.primitives.len());
+        let bumps_generation = diff.bumps_generation();
         match diff {
-            // Nothing moved and nothing was repainted: the GPU already holds
-            // this exact scene.
-            SceneDiff::Identical => self.dirty_ranges.clear(),
-            // The scene keeps its generation, so the renderer knows to patch
-            // these slices into the pool instead of re-uploading all of it.
-            SceneDiff::Ranges(ranges) => self.dirty_ranges = ranges,
+            // Nothing changed: the slices still pending from an earlier
+            // rebuild in this frame must survive.
+            SceneDiff::Identical => {}
+            SceneDiff::Ranges(ranges) => merge_ranges(&mut self.dirty_ranges, ranges),
             // The shape changed, so the generation has to move and the whole
             // scene goes up again.
             SceneDiff::Whole => {
@@ -466,6 +478,15 @@ impl GalleryApp {
                 self.generation = self.generation.wrapping_add(1);
             }
         }
+        let stride = core::mem::size_of::<unbound_gpu::data::GpuPrimitiveInstance>() as u32;
+        self.state.demo.upload_bytes = if bumps_generation {
+            (scene.primitives.len() as u32).saturating_mul(stride)
+        } else {
+            self.dirty_ranges
+                .iter()
+                .map(|(start, end)| (end - start) * stride)
+                .sum()
+        };
         self.state.demo.primitive_count = scene_len;
         self.state.demo.draw_calls = draw_calls;
         self.router.set_regions(output.regions);
@@ -1854,6 +1875,18 @@ fn draw_top_bar(
             false,
             state.search_focused,
         );
+    } else if search.size.x > 0.0 {
+        // Narrow windows keep the magnifier as a button that opens the same
+        // command palette. Dropping search entirely left 150–200 % zoom with
+        // no pointer path to it at all.
+        widgets::icon_button(
+            canvas,
+            target::id(Target::Search),
+            search,
+            Icon::Search,
+            "Search controls, crates and features",
+            state.search_focused,
+        );
     }
 
     // Theme.
@@ -1970,8 +2003,16 @@ fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_ma
         let middle = rect.center();
         match target {
             Target::WindowMinimize => {
+                // A 10 × 1 logical pixel bar, vertically centred. The stroke
+                // is rounded to whole physical pixels and aligned to the pixel
+                // grid, so it stays one pixel thick at 100 %, 125 %, 150 % and
+                // 200 % alike (the old `middle.y + 4.0` sat on the icon box's
+                // bottom edge and doubled in weight at fractional scales).
+                let scale = canvas.scale().max(0.5);
+                let stroke = scale.round().max(1.0) / scale;
+                let top = (middle.y * scale - stroke * scale * 0.5).round() / scale;
                 canvas.rect(
-                    Rect::new(middle.x - 5.0, middle.y + 4.0, 10.0, 1.5),
+                    Rect::new(middle.x - 5.0, top, 10.0, stroke),
                     0.0,
                     color,
                     0,
@@ -1982,9 +2023,17 @@ fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_ma
             Target::WindowMaximize => {
                 let middle = rect.center();
                 if canvas_maximized {
-                    // Restore: two offset squares.
+                    // Restore: two offset squares. The front square is filled
+                    // with whatever is behind the icon, otherwise the back
+                    // square's edges run through its interior and the pair
+                    // reads as a tic-tac-toe grid.
+                    let occluder = if hovered || pressed {
+                        palette.control_hover
+                    } else {
+                        palette.header_bg
+                    };
                     canvas.rect(
-                        Rect::new(middle.x - 4.0, middle.y - 6.0, 9.0, 9.0),
+                        Rect::new(middle.x - 3.0, middle.y - 5.0, 8.0, 8.0),
                         0.0,
                         0,
                         color,
@@ -1992,9 +2041,9 @@ fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_ma
                         0.0,
                     );
                     canvas.rect(
-                        Rect::new(middle.x - 6.0, middle.y - 4.0, 9.0, 9.0),
+                        Rect::new(middle.x - 5.0, middle.y - 3.0, 8.0, 8.0),
                         0.0,
-                        0,
+                        occluder,
                         color,
                         1.0,
                         0.0,
@@ -2010,16 +2059,30 @@ fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_ma
                     );
                 }
             }
-            _ => {
-                canvas.text(
-                    "×",
-                    Rect::new(middle.x - 7.0, middle.y - 9.0, 14.0, 18.0),
-                    13.0,
+            Target::WindowClose => {
+                // Two analytic strokes rather than the "×" glyph (U+00D7).
+                // The glyph sits on the font's maths axis and its ink is a
+                // fraction of the em box, so it was 40 % too small and 4 px
+                // low at 200 %. The strokes intersect exactly at the button
+                // centre and are antialiased by the SDF.
+                let half = 4.5;
+                let mid = [middle.x, middle.y];
+                canvas.curve(
+                    [middle.x - half, middle.y - half],
+                    mid,
+                    [middle.x + half, middle.y + half],
+                    1.25,
                     color,
-                    AlignX::Center,
-                    AlignY::Center,
+                );
+                canvas.curve(
+                    [middle.x + half, middle.y - half],
+                    mid,
+                    [middle.x - half, middle.y + half],
+                    1.25,
+                    color,
                 );
             }
+            _ => {}
         }
         canvas.control(
             node,
@@ -2153,6 +2216,40 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
         state.active_page == PageId::Settings,
         Target::Footer(1),
     );
+
+    // The tree scrolls when the window is short or the app zoom is high, and
+    // it used to do so silently: only the content pane carried an indicator,
+    // so a clipped "Layout & portals" section looked like a missing page.
+    draw_nav_scrollbar(canvas, state, layout);
+}
+
+/// Paint the navigation tree's scroll indicator.
+fn draw_nav_scrollbar(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
+    let tree = nav_tree_rect(layout);
+    // Same range the rebuild clamps `state.nav_scroll` to.
+    let max_scroll = (nav_height(layout) - tree.size.y).max(0.0);
+    if max_scroll <= 1.0 || tree.size.y <= 1.0 {
+        return;
+    }
+    let palette = *canvas.palette;
+    let track = Rect::new(layout.nav.max().x - 7.0, tree.origin.y, 3.0, tree.size.y);
+    canvas.rect(track, 1.5, palette.control_track, 0, 0.0, 0.0);
+    let thumb_h =
+        (track.size.y * tree.size.y / (tree.size.y + max_scroll)).clamp(28.0, track.size.y);
+    let t = (state.nav_scroll / max_scroll).clamp(0.0, 1.0);
+    canvas.rect(
+        Rect::new(
+            track.origin.x,
+            track.origin.y + (track.size.y - thumb_h) * t,
+            3.0,
+            thumb_h,
+        ),
+        1.5,
+        palette.primary,
+        0,
+        0.0,
+        0.0,
+    );
 }
 
 fn nav_item(
@@ -2263,25 +2360,12 @@ fn draw_collapsed_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &Sh
         );
         y += 42.0;
     }
-    // Keep the palette variables exercised on both branches.
-    let palette = *canvas.palette;
+    // A hairline above the collapse toggle keeps the icon rail visually
+    // separated from the page content.
     canvas.divider(
         layout.nav.origin.x + 10.0,
         layout.nav.max().y - 12.0,
         layout.nav_width - 20.0,
-    );
-    canvas.text(
-        "≡",
-        Rect::new(
-            layout.nav.origin.x,
-            layout.nav.max().y - 30.0,
-            layout.nav_width,
-            16.0,
-        ),
-        10.0,
-        palette.text_muted,
-        AlignX::Center,
-        AlignY::Center,
     );
 }
 
@@ -2979,4 +3063,24 @@ fn diff_scenes(previous: &gallery::Gallery, current: &gallery::Gallery) -> Scene
         || previous.clips != current.clips
         || previous.payloads != current.payloads;
     diff_primitives(&previous.primitives, &current.primitives, structure_changed)
+}
+
+/// Merge `incoming` into `pending`, coalescing overlapping or adjacent runs.
+///
+/// The upload path stages one contiguous slice per range, so a union of
+/// per-rebuild diffs would otherwise stage the same primitive twice.
+fn merge_ranges(pending: &mut Vec<(u32, u32)>, incoming: Vec<(u32, u32)>) {
+    pending.extend(incoming);
+    pending.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(pending.len());
+    for (start, end) in pending.drain(..) {
+        if start >= end {
+            continue;
+        }
+        match merged.last_mut() {
+            Some((_, last_end)) if start <= *last_end => *last_end = (*last_end).max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    *pending = merged;
 }

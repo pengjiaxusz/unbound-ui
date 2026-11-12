@@ -47,6 +47,46 @@ pub struct ButtonHarness {
     baked_count: u32,
 }
 
+/// A scene that paints a rounded rectangle over a full-surface rectangle of
+/// the **same colour**.
+///
+/// A correct straight-alpha composite is invisible, no matter how the edge
+/// pixels are antialiased. The old double-alpha blend folded the shadow
+/// colour into every partially covered pixel, so the edge of the rounded
+/// rectangle showed up as a dark rim on an otherwise flat surface — the
+/// "same colour, visible seam" bug.
+#[must_use]
+pub fn same_colour_overlay_scene(viewport: (f32, f32)) -> gallery::Gallery {
+    let palette = gallery::palette();
+    let mut scene = gallery::Gallery::new();
+    scene.camera = unbound_gpu::Camera::ui(viewport, 1.0);
+    scene.rect(
+        0.0,
+        0.0,
+        viewport.0,
+        viewport.1,
+        0.0,
+        palette.surface,
+        0,
+        0.0,
+        0.0,
+        0,
+    );
+    scene.rect(
+        40.0,
+        40.0,
+        viewport.0 - 80.0,
+        viewport.1 - 80.0,
+        28.0,
+        palette.surface,
+        0,
+        0.0,
+        0.0,
+        1,
+    );
+    scene
+}
+
 impl Default for ButtonHarness {
     fn default() -> Self {
         Self::new()
