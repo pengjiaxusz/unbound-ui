@@ -937,6 +937,15 @@ impl Showcase {
         self.sync_window_size(window);
         let scale = self.effective_scale();
         self.shell_mut().set_effective_scale(scale);
+        // The logical viewport is `physical / effective scale`, so zooming
+        // changes it exactly like a physical resize does. The runtime must see
+        // the new size, or the page keeps laying out for the old one and
+        // everything past the new right/bottom edge overflows the window.
+        let viewport = self.logical_viewport(window);
+        let wanted = Vec2::new(viewport.0, viewport.1);
+        if (self.app.context().viewport - wanted).length() > 0.01 {
+            self.app.resize(wanted);
+        }
         self.sync_ime(state, window);
         let maximized = window.is_maximized();
         if self.shell().window_maximized != maximized {

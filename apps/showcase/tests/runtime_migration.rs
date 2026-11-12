@@ -61,6 +61,26 @@ fn navigating_rebuilds_and_reports_a_new_scene() {
 }
 
 #[test]
+fn zooming_reflows_for_the_smaller_logical_viewport() {
+    let mut runtime = runtime();
+    let _ = runtime.frame(0.0);
+    let wide = runtime.application().shell().layout.content.size.x;
+
+    // Zooming in divides the physical size by the effective scale, so the
+    // host hands the runtime a smaller logical viewport. The page has to be
+    // laid out for it instead of keeping the old geometry and overflowing.
+    runtime.resize(Vec2::new(640.0, 400.0));
+    let _ = runtime.frame(0.0);
+    let narrow = runtime.application().shell().layout.content.size.x;
+
+    assert!(narrow < wide, "the page did not reflow: {narrow} >= {wide}");
+    assert!(
+        (runtime.application().shell().layout.viewport.size.x - 640.0).abs() < 1.0,
+        "the shell laid out for a stale viewport"
+    );
+}
+
+#[test]
 fn an_accessibility_click_reaches_the_shell() {
     let mut runtime = runtime();
     let _ = runtime.frame(0.0);
