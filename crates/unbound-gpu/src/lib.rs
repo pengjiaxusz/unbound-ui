@@ -35,6 +35,7 @@ pub mod sdf;
 pub mod shader;
 pub mod sort;
 pub mod surface;
+pub mod surface_extensions;
 pub mod swapchain;
 pub mod timing;
 pub mod tlsf;

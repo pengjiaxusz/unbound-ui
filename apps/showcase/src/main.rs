@@ -29,6 +29,7 @@ use unbound_platform::window::{
 use unbound_platform::Extent;
 use unbound_theme::{ThemeKind, ThemeState};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::Window;
 
 use showcase::shell::WindowCommand;
@@ -379,11 +380,15 @@ fn cursor_icon(kind: CursorKind) -> winit::window::CursorIcon {
 
 impl PlatformApp for Showcase {
     fn resumed(&mut self, state: &mut PlatformState, window: &Window) {
+        let instance_extensions = window
+            .display_handle()
+            .map(|handle| {
+                unbound_gpu::surface_extensions::required_instance_extensions(handle.as_raw())
+            })
+            .map(|extensions| extensions.into_iter().map(str::to_owned).collect())
+            .unwrap_or_else(|_| vec!["VK_KHR_surface".to_owned()]);
         let config = GpuConfig {
-            instance_extensions: vec![
-                "VK_KHR_surface".to_string(),
-                "VK_KHR_win32_surface".to_string(),
-            ],
+            instance_extensions,
             device_extensions: vec![
                 "VK_KHR_swapchain".to_string(),
                 "VK_EXT_swapchain_maintenance1".to_string(),
