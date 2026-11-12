@@ -744,16 +744,29 @@ impl Renderer {
                 // share `VkSubmitInfo::pSignalSemaphores` with a binary one,
                 // so `vkQueueSubmit2` is used instead: each semaphore carries
                 // its own value in a `VkSemaphoreSubmitInfo`.
-                let signal_infos = [
+                //
+                // The present semaphore is only signalled when the frame is
+                // actually going to be presented. A binary semaphore that is
+                // signalled but never waited on cannot be signalled again, and
+                // the offscreen path never presents — signalling it there
+                // made every offscreen frame after the first an invalid
+                // submission.
+                let mut signal_infos = [
                     // The timeline semaphore carries the frame's value; a
                     // binary semaphore ignores the value field.
                     vk::SemaphoreSubmitInfo::default()
                         .semaphore(gpu.timeline.semaphore)
                         .value(timeline_value),
-                    vk::SemaphoreSubmitInfo::default()
-                        .semaphore(self.present_semaphore)
-                        .value(0),
+                    vk::SemaphoreSubmitInfo::default(),
                 ];
+                let signal_count = if self.external_present {
+                    signal_infos[1] = vk::SemaphoreSubmitInfo::default()
+                        .semaphore(self.present_semaphore)
+                        .value(0);
+                    2
+                } else {
+                    1
+                };
                 // A borrowed image is only ours once the presentation engine
                 // has handed it over. Waiting on its semaphore here is what
                 // makes the swapchain path safe; the offscreen path has no
@@ -776,7 +789,7 @@ impl Renderer {
                 let submit = vk::SubmitInfo2::default()
                     .command_buffer_infos(&command_infos)
                     .wait_semaphore_infos(&wait_infos[..wait_count as usize])
-                    .signal_semaphore_infos(&signal_infos);
+                    .signal_semaphore_infos(&signal_infos[..signal_count]);
                 gpu.device
                     .queue_submit2(gpu.graphics_queue, &[submit], sync.in_flight)?;
             }
