@@ -4,9 +4,9 @@
 >
 > | | |
 > | :--- | :--- |
-> | **已落地** | IME 候选框锚定计算、多行选区几何合并与圆角轮廓、光标栈 |
-> | **缺口** | 平台层 IME 预编辑（Preedit）事件流未接入；连字内部光标切分为设计项 |
-> | **源码** | `crates/unbound-text/src/selection.rs`、`crates/unbound-text/src/shaping.rs`、`crates/unbound-input/src/cursor.rs` |
+> | **已落地** | IME 候选框锚定计算、多行选区几何合并与圆角轮廓、光标栈、`TextInput` 的预编辑/提交状态机（`ImePreedit`/`ImeCommit`，提交替换预编辑区间） |
+> | **缺口** | 展示台尚未把 `WindowEvent::Ime` 路由到 `TextInput` 组件；连字内部光标切分为设计项 |
+> | **源码** | `crates/unbound-text/src/selection.rs`、`crates/unbound-text/src/shaping.rs`、`crates/unbound-input/src/cursor.rs`、`crates/unbound-widgets/src/text_input.rs` |
 
 ## CJK 完整输入法管线
 

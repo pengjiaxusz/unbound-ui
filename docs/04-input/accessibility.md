@@ -4,8 +4,8 @@
 >
 > | | |
 > | :--- | :--- |
-> | **源码** | `crates/unbound-a11y/src/lib.rs` |
-> | **关键类型** | `Semantics`、`A11yNode`、`A11yAction`、`A11yActions` |
+> | **源码** | `crates/unbound-a11y/src/lib.rs`、`crates/unbound-platform/src/a11y_bridge.rs` |
+> | **关键类型** | `Semantics`、`A11yNode`、`A11yAction`、`A11yActions`、`A11yBridge`、`A11yRequest` |
 > | **依赖** | `accesskit` crate |
 
 ## 语义树作为一级输出端
@@ -51,6 +51,20 @@
 
 `A11yNode::to_accesskit` 把内部表示转换为 `accesskit::Node`，其中边界使用
 `accesskit::Rect::from_origin_size` 转换——语义树直接使用物理屏幕坐标。
+
+## 平台桥接
+
+`A11yBridge` 负责语义树与平台适配器之间的双向边界：
+
+- **出站**：`Semantics::take_update` 产出的 `TreeUpdate` 交给实现了
+  `A11yTransport` 的适配器；无障碍关闭时 `publish` 直接返回，不产生任何开销。
+- **入站**：平台回传的 `ActionRequest` 由 `translate` 映射为 `A11yRequest`
+  （节点 id + `A11yAction` + 可选新值），再进入应用 `reduce`，与指针、键盘事件
+  走同一条处理路径。
+
+`unbound-platform` 只定义传输契约，不绑定具体窗口库，因此桥接可以在无头环境中
+用记录型 transport 完整测试。窗口壳层仍需实现一个 `A11yTransport` 适配器
+（Windows 上通常是 `accesskit_winit::Adapter`），这是当前尚未接入的一环。
 
 ## 边界同步
 

@@ -134,19 +134,29 @@ const _: () = {
 ### 安全容错通道（`old_hash != new_hash`）
 
 当开发者增删或修改了 `State` 结构体字段时，自动触发旧 DLL 的 `migrate_export`
-导出为紧凑二进制流，再由新 DLL 的 `migrate_import` 解回。
+导出为**字段化信封**，再由新 DLL 的 `migrate_import` 解回。
 
-> ⚠️ **格式是 `postcard`，位置式，不是自描述格式。** `postcard` 按字段顺序编码，
-> `#[serde(default)]` 对新增字段**无效**——老数据缺字段时解码会直接失败。所以
-> "改字段不丢数据"目前**并不成立**：真正支持它需要换成自描述格式（如
-> `rmp-serde` / `flexbuffers`）。
+信封格式（小端，`crates/unbound-abi/src/migration.rs`）：
 
-`migrate_import` 解码失败时返回 **null**，而不是悄悄塞一个空 seed。宿主看到 null
-就回落到 `init_state()`，失败是可见的，而不是"用户数据全丢、宿主还以为迁移成功
-了"。
+```text
+"UBMF" | u16 版本 | u16 字段数 | 字段数 × { u16 字段 id, u32 长度, 长度字节 }
+```
+
+每个字段的负载仍由 guest 自己用 `postcard` 编码，但**字段之间是独立的**：
+
+- 新版本新增字段：旧负载里没有该 id，`migrate` 取 `FieldSpec::optional` 的默认值；
+- 新版本删除字段：旧负载里的未知 id 被丢弃，其余字段按其 id 重新排布；
+- 缺失 `FieldSpec::required` 字段：返回 `MissingField`，`migrate_import` 返回
+  **null**，而不是悄悄塞一个空 seed。宿主看到 null 就回落到 `init_state()`，
+  失败是可见的，而不是"用户数据全丢、宿主还以为迁移成功了"。
+
+信封头部带版本号，未来格式升级时可以显式拒绝或转换旧版本；
+`app-guest/tests/schema_evolution.rs` 用 V1/V2 两个结构体验证了"加字段取默认、
+删字段丢弃、缺必填字段报错"三条路径。
 
 另外，迁移通道走的是 `migrate_export` 而不是 `snapshot`：前者是"导出给下一代"的
-语义，guest 可以在导出时按新 schema 重塑自己的状态。
+语义，guest 可以在导出时按新 schema 重塑自己的状态；`snapshot` 仍保持单块
+`postcard`，供调试工具读取当前状态。
 
 ### 交接结果的显式建模
 
