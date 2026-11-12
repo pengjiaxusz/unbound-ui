@@ -338,6 +338,23 @@ impl Semantics {
         is_new
     }
 
+    /// Reset the tree for a new frame, keeping every allocation.
+    ///
+    /// The root stays the same; the next update is a full snapshot again.
+    /// Reusing the maps is what keeps a steady-state frame from allocating a
+    /// new semantic tree per frame.
+    pub fn reset(&mut self, root: u64) {
+        self.nodes.clear();
+        self.children.clear();
+        self.parents.clear();
+        self.dirty.clear();
+        self.removed.clear();
+        self.structural.clear();
+        self.root = root;
+        self.focus = root;
+        self.initialized = false;
+    }
+
     /// Replace the child list of `parent`, reparenting the children as needed.
     pub fn set_children(&mut self, parent: u64, children: &[u64]) {
         let previous = self.children.get(&parent).cloned().unwrap_or_default();

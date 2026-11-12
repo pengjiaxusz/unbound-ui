@@ -24,11 +24,20 @@
 pub mod button;
 pub mod checkbox;
 pub mod diff;
+pub mod image;
+pub mod menu;
+pub mod modal;
+pub mod overlay;
+pub mod popover;
 pub mod primitive;
 pub mod radio;
+pub mod scroll;
 pub mod segmented;
+pub mod select;
 pub mod slider;
 pub mod switch;
+pub mod text_input;
+pub mod tooltip;
 
 use rustc_hash::FxHashMap;
 use unbound_a11y::{A11yNode, Semantics};
@@ -40,10 +49,29 @@ use unbound_text::GlyphQuad;
 
 pub use button::{ButtonDesc, ButtonTokens, ButtonVariant, ButtonWidget};
 pub use checkbox::{CheckboxDesc, CheckboxTokens};
+pub use image::{
+    emit_icon, emit_image, fit_image, IconDesc, ImageDesc, ImageFit, ImageWidget, ObjectFit,
+};
+pub use menu::{emit_menu, MenuDesc, MenuItem, MenuState, MenuWidget};
+pub use modal::{emit_modal, ModalDesc, ModalOutput, ModalWidget};
+pub use overlay::{
+    place_anchored_popup, BackdropRequest, OverlayEntry, OverlayKind, OverlayStack, Placement,
+};
+pub use popover::{emit_popover, PopoverDesc, PopoverOutput, PopoverWidget};
 pub use radio::{RadioDesc, RadioTokens};
+pub use scroll::{
+    emit_scroll_view, update_virtual_list, ScrollAxis, ScrollState, ScrollViewDesc,
+    ScrollViewOutput, ScrollViewWidget, ScrollbarAxis, VirtualWindow,
+};
 pub use segmented::{SegmentedDesc, SegmentedTokens};
+pub use select::{emit_select, SelectDesc, SelectState, SelectWidget};
 pub use slider::{SliderDesc, SliderTokens};
 pub use switch::{SwitchDesc, SwitchTokens};
+pub use text_input::{
+    emit_text_input, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
+    TextInputOutcome, TextInputVisual, TextInputWidget,
+};
+pub use tooltip::{emit_tooltip, TooltipDesc, TooltipState, TooltipWidget};
 
 /// The default viewport a headless widget session renders into.
 pub const DEFAULT_VIEWPORT: (f32, f32) = (1280.0, 720.0);
@@ -166,6 +194,18 @@ impl SceneCollector {
             semantics: Semantics::new(root),
             ..Self::default()
         }
+    }
+
+    /// Reset for a new frame, reusing every allocation.
+    pub fn reset(&mut self, root: u64) {
+        self.primitives.clear();
+        self.transforms.clear();
+        self.clips.clear();
+        self.payloads.clear();
+        self.regions.clear();
+        self.focus_order.clear();
+        self.node_spans.clear();
+        self.semantics.reset(root);
     }
 
     /// Append one widget's output and record the primitives it owns.
