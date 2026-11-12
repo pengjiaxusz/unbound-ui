@@ -347,6 +347,28 @@ pub struct AtlasSet {
     pub r8: AtlasTexture,
     /// The colour atlas.
     pub rgba: AtlasTexture,
+    /// A staging buffer reused by every upload batch.
+    ///
+    /// The glyph cache uploads a handful of small glyphs on many frames;
+    /// allocating and freeing a `VkBuffer` + `VkDeviceMemory` per batch cost
+    /// two driver round-trips for a few kilobytes of data. The buffer is grown
+    /// when needed and kept for the life of the atlas set.
+    staging: std::sync::Mutex<Option<StagingSlot>>,
+}
+
+/// The owned handles of the persistent staging buffer.
+///
+/// Only plain integers are stored so the type stays `Send + Sync` without an
+/// `unsafe impl`: the mapped address is kept as a `usize` and turned back into
+/// a pointer at the point of use.
+struct StagingSlot {
+    raw: vk::Buffer,
+    memory: vk::DeviceMemory,
+    size: u64,
+    allocation_size: u64,
+    mapped: usize,
+    host_coherent: bool,
+    lifetime: crate::device::DeviceLifetime,
 }
 
 impl core::fmt::Debug for AtlasSet {
@@ -367,6 +389,7 @@ impl AtlasSet {
         Ok(Self {
             r8: AtlasTexture::new(gpu, AtlasKind::R8, layers)?,
             rgba: AtlasTexture::new(gpu, AtlasKind::Rgba8, layers)?,
+            staging: std::sync::Mutex::new(None),
         })
     }
 
@@ -387,6 +410,21 @@ impl AtlasSet {
     pub fn free(&self) {
         self.r8.free();
         self.rgba.free();
+        // The staging buffer is owned by the set, not by an individual atlas,
+        // so it has to be released here too.
+        if let Ok(mut slot) = self.staging.lock() {
+            if let Some(staging) = slot.take() {
+                if staging.lifetime.is_alive() {
+                    // SAFETY: the device is alive and the buffer belongs to
+                    // it. The caller waits for the device to be idle.
+                    unsafe {
+                        let device = staging.lifetime.device();
+                        device.destroy_buffer(staging.raw, None);
+                        device.free_memory(staging.memory, None);
+                    }
+                }
+            }
+        }
     }
 
     /// Upload one rectangle of texels into the matching atlas.
@@ -435,15 +473,60 @@ impl AtlasSet {
             return Ok(());
         }
 
-        let staging = gpu.create_buffer(
-            total,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            MemoryKind::HostVisible,
-            "atlas-staging",
-        )?;
+        // Grow the persistent staging buffer instead of allocating one per
+        // batch. The mutex guard is held for the whole upload: the staging
+        // contents only need to survive until `end_single_time`.
+        let mut slot = self
+            .staging
+            .lock()
+            .map_err(|_| GpuError::Allocation("atlas staging poisoned".into()))?;
+        let needs_grow = slot.as_ref().is_none_or(|buffer| buffer.size < total);
+        if needs_grow {
+            if let Some(old) = slot.take() {
+                if old.lifetime.is_alive() {
+                    // SAFETY: every batch ends with `end_single_time`, which
+                    // idles the queue, so no copy references the old buffer.
+                    unsafe {
+                        let device = old.lifetime.device();
+                        device.destroy_buffer(old.raw, None);
+                        device.free_memory(old.memory, None);
+                    }
+                }
+            }
+            let buffer = gpu.create_buffer(
+                total,
+                vk::BufferUsageFlags::TRANSFER_SRC,
+                MemoryKind::HostVisible,
+                "atlas-staging",
+            )?;
+            *slot = Some(StagingSlot {
+                raw: buffer.raw,
+                memory: buffer.memory,
+                size: buffer.size,
+                allocation_size: buffer.allocation_size,
+                mapped: buffer.mapped as usize,
+                host_coherent: buffer.host_coherent,
+                lifetime: gpu.lifetime.clone(),
+            });
+        }
+        let staging = slot
+            .as_ref()
+            .ok_or_else(|| GpuError::Allocation("atlas staging missing".into()))?;
+        // A temporary `Buffer` view so the regular flush path (alignment and
+        // coherence rules) can be reused without duplicating it.
+        let staging_view = Buffer {
+            raw: staging.raw,
+            memory: staging.memory,
+            size: staging.size,
+            allocation_size: staging.allocation_size,
+            address: 0,
+            mapped: staging.mapped as *mut u8,
+            host_visible: true,
+            host_coherent: staging.host_coherent,
+        };
         // SAFETY: the staging buffer is exclusively ours until the copy runs.
         unsafe {
-            let base = staging
+            let base = staging_view
                 .host_ptr(0)
                 .ok_or_else(|| GpuError::Allocation("atlas staging not mapped".into()))?;
             for (index, upload) in updates.iter().enumerate() {
@@ -460,7 +543,7 @@ impl AtlasSet {
                 );
             }
             // One flush for the whole range: the memory may not be coherent.
-            gpu.flush(&staging, 0, total);
+            gpu.flush(&staging_view, 0, total);
         }
 
         let cmd = gpu.begin_single_time()?;
@@ -573,11 +656,7 @@ impl AtlasSet {
                 .set_layout(layer, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
         }
 
-        // The staging buffer is dead once the copy has retired.
-        // SAFETY: the copy already waited for the queue to go idle.
-        unsafe {
-            gpu.destroy_buffer(&staging);
-        }
+        // The staging buffer stays alive for the next batch.
         Ok(())
     }
 

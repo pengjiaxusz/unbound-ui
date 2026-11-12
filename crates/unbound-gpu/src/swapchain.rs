@@ -34,6 +34,13 @@ pub enum ResizeBehaviour {
     Stretch,
     /// Keep the aspect ratio: letterboxing, no distortion.
     PreserveAspect,
+    /// Never scale: anchor the old image at the top-left and let the new
+    /// window area show the clear colour until the swapchain is rebuilt.
+    ///
+    /// A stretched frame during a drag is the "jelly" the user sees; a
+    /// one-frame anchored image is invisible because the next frame is
+    /// already rendered at the new size.
+    OneToOne,
 }
 
 /// Which present mode to ask for.
@@ -55,12 +62,16 @@ impl PresentMode {
     /// support, so it is the safe fallback. The preference is resolved into
     /// a real `VkPresentModeKHR` in [`crate::surface`], where the driver's
     /// supported present modes are known.
+    ///
+    /// `allow_tearing` wins over vsync: an uncapped run (`0` FPS limit) is
+    /// asking to be limited by the GPU, not by the display's refresh rate, and
+    /// FIFO would silently pin it to 60 Hz.
     #[must_use]
     pub fn choose(has_maintenance1: bool, allow_tearing: bool) -> Self {
-        if have_extension(&["VK_EXT_swapchain_maintenance1"], has_maintenance1) {
-            Self::FifoLatestReady
-        } else if allow_tearing {
+        if allow_tearing {
             Self::Immediate
+        } else if have_extension(&["VK_EXT_swapchain_maintenance1"], has_maintenance1) {
+            Self::FifoLatestReady
         } else {
             Self::Fifo
         }
@@ -107,11 +118,15 @@ impl PresentConfig {
         let has_present_wait = extensions.iter().any(|name| name == "VK_KHR_present_wait");
         Self {
             mode: PresentMode::choose(has_maintenance1, allow_tearing),
-            // Stretch during a resize: a letterboxed frame reads as a bug to
-            // users, a 1-frame aspect change does not (`docs` §2.3).
-            resize: ResizeBehaviour::Stretch,
+            // Anchor the stale image at the top-left instead of stretching it
+            // across the new window during the one frame between a resize and
+            // the swapchain rebuild (`docs` §2.3).
+            resize: ResizeBehaviour::OneToOne,
             present_fence: has_maintenance1,
-            wait_for_present: has_present_wait,
+            // Blocking on the present would cap an uncapped run at the
+            // display's refresh rate, which is exactly what `0` asks not to
+            // happen.
+            wait_for_present: has_present_wait && !allow_tearing,
         }
     }
 
@@ -148,7 +163,7 @@ mod tests {
         );
         assert_eq!(config.mode, PresentMode::FifoLatestReady);
         assert!(config.present_fence);
-        assert_eq!(config.resize, ResizeBehaviour::Stretch);
+        assert_eq!(config.resize, ResizeBehaviour::OneToOne);
     }
 
     #[test]

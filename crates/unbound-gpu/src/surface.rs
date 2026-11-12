@@ -462,6 +462,13 @@ pub struct Swapchain {
     present_timeouts: u32,
     /// How many timeouts happened in a row.
     consecutive_timeouts: u32,
+    /// Skip the present wait once, right after a recreation.
+    ///
+    /// While the user drags a window edge the compositor frequently drops the
+    /// present requests of the old chain; blocking for 50 ms each time stalls
+    /// the message loop. The first frame after a rebuild therefore presents
+    /// without waiting.
+    skip_present_wait_once: bool,
 }
 
 impl core::fmt::Debug for Swapchain {
@@ -605,15 +612,32 @@ impl Swapchain {
         // supports, so the capabilities are queried first.
         let mut scaling_info = vk::SwapchainPresentScalingCreateInfoEXT::default();
         let mut use_scaling = false;
-        if has_maintenance1 && config.resize == ResizeBehaviour::Stretch {
+        if has_maintenance1 {
             if let Some(caps) = surface.present_scaling_capabilities(gpu, present_mode) {
-                if caps
-                    .supported_present_scaling
-                    .contains(vk::PresentScalingFlagsEXT::STRETCH)
-                {
-                    scaling_info =
-                        scaling_info.scaling_behavior(vk::PresentScalingFlagsEXT::STRETCH);
-                    use_scaling = true;
+                match config.resize {
+                    ResizeBehaviour::Stretch
+                        if caps
+                            .supported_present_scaling
+                            .contains(vk::PresentScalingFlagsEXT::STRETCH) =>
+                    {
+                        scaling_info =
+                            scaling_info.scaling_behavior(vk::PresentScalingFlagsEXT::STRETCH);
+                        use_scaling = true;
+                    }
+                    ResizeBehaviour::OneToOne
+                        if caps
+                            .supported_present_scaling
+                            .contains(vk::PresentScalingFlagsEXT::ONE_TO_ONE) =>
+                    {
+                        // Never scale the stale image: anchor it top-left and
+                        // let the fresh frame fill the rest of the window.
+                        scaling_info = scaling_info
+                            .scaling_behavior(vk::PresentScalingFlagsEXT::ONE_TO_ONE)
+                            .present_gravity_x(vk::PresentGravityFlagsEXT::MIN)
+                            .present_gravity_y(vk::PresentGravityFlagsEXT::MIN);
+                        use_scaling = true;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -743,6 +767,7 @@ impl Swapchain {
             has_maintenance1,
             present_timeouts: 0,
             consecutive_timeouts: 0,
+            skip_present_wait_once: false,
         })
     }
 
@@ -801,7 +826,10 @@ impl Swapchain {
         config: &PresentConfig,
     ) -> Result<(), GpuError> {
         gpu.wait_idle();
-        let replacement = Self::with_old(gpu, surface, width, height, config, self.swapchain)?;
+        let mut replacement = Self::with_old(gpu, surface, width, height, config, self.swapchain)?;
+        // The next frame must not block on a presentation the compositor may
+        // drop while the window is still being dragged.
+        replacement.skip_present_wait_once = true;
         let old = core::mem::replace(self, replacement);
         old.destroy(gpu);
         Ok(())
@@ -973,7 +1001,10 @@ impl Swapchain {
         if self.has_present_wait {
             // The identifier must keep growing for the same swapchain.
             self.next_present_id += 1;
-            if self.wait_for_present && !out_of_date {
+            // The frame right after a recreation never waits: the compositor
+            // may still be holding the old chain.
+            let skip_wait = core::mem::take(&mut self.skip_present_wait_once);
+            if self.wait_for_present && !out_of_date && !skip_wait {
                 // Block until the image is really on the screen. This is the
                 // low-latency path: the input queue is sampled right after a
                 // real present, so the reaction is picked up by the very next

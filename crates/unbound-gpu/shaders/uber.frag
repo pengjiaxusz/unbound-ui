@@ -95,18 +95,18 @@ bool glyph_on_dark_surface(vec3 text_rgb, uint flags) {
 
 float glyph_alpha(float a, bool light_text) {
     float c = clamp(a, 0.0, 1.0);
-    if (light_text) {
-        // Light text: the linear blend makes the stem look bolder than it
-        // is. The correction assumes the darkest possible background, so it
-        // is deliberately mild — a light label on a saturated surface (a
-        // badge on the hero gradient) must not disappear.
-        return pow(c, 1.05);
-    }
-    // Dark text: the linear blend washes the stem out. Half a covered pixel
-    // ends up at 0.735 in sRGB instead of 0.5, which is why black text on a
-    // white card looked grey and thin. This is the alpha that reproduces the
-    // gamma-space result against a light surface.
-    return 1.0 - srgb_to_linear(1.0 - c);
+    // Two corrections, averaged:
+    //   * `pow(c, 1.05)` keeps a light stem from blooming on a dark surface,
+    //   * `1 - srgb_to_linear(1 - c)` is the alpha whose linear blend lands on
+    //     the gamma-space half-coverage, which is what a native text renderer
+    //     produces.
+    //
+    // Using only the second one thickened light text noticeably; using only
+    // the first left dark text washed out. The 70/30 mix matches both themes
+    // at 1 px stems without the old polarity-dependent discontinuity.
+    float gamma_corrected = 1.0 - srgb_to_linear(1.0 - c);
+    float stem = pow(c, 1.05);
+    return light_text ? stem : mix(gamma_corrected, stem, 0.3);
 }
 
 void main() {

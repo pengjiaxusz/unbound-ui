@@ -296,11 +296,20 @@ pub struct Buffer {
     pub raw: vk::Buffer,
     pub memory: vk::DeviceMemory,
     pub size: u64,
+    /// The byte size of the bound `VkDeviceMemory` allocation.
+    ///
+    /// The allocator rounds the request up, so this is not always `size`; the
+    /// mapped-range bounds check has to use the allocation, not the buffer.
+    pub allocation_size: u64,
     /// Device address (0 when `bufferDeviceAddress` was not requested).
     pub address: u64,
     /// Non-null when the memory is host visible and permanently mapped.
     pub mapped: *mut u8,
     pub host_visible: bool,
+    /// True when the bound memory type carries `HOST_COHERENT`.
+    ///
+    /// A flush is a no-op there, so the hot path skips the driver call.
+    pub host_coherent: bool,
 }
 
 // SAFETY: the pointers inside are opaque Vulkan handles; Vulkan objects are
@@ -444,6 +453,33 @@ fn resolve_surface_maintenance(instance_exts: &mut Vec<String>, device_exts: &[S
     }
 }
 
+/// Device extensions the renderer can run without.
+///
+/// They only improve presentation (frame pacing, tearing control, present
+/// fences), so a missing one is a warning, not a failure.
+#[must_use]
+pub fn is_optional_device_extension(name: &str) -> bool {
+    matches!(
+        name,
+        "VK_EXT_swapchain_maintenance1" | "VK_KHR_present_wait" | "VK_KHR_present_id"
+    )
+}
+
+/// The device extensions a physical device exposes.
+fn device_extension_names(instance: &ash::Instance, device: vk::PhysicalDevice) -> Vec<String> {
+    // SAFETY: `instance` is alive and `device` was enumerated from it.
+    let properties =
+        unsafe { instance.enumerate_device_extension_properties(device) }.unwrap_or_default();
+    properties
+        .iter()
+        .filter_map(|e| {
+            e.extension_name_as_c_str()
+                .ok()
+                .map(|c| c.to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
 fn cstrings(list: &[String]) -> Vec<std::ffi::CString> {
     list.iter()
         .filter_map(|s| std::ffi::CString::new(s.as_str()).ok())
@@ -452,6 +488,36 @@ fn cstrings(list: &[String]) -> Vec<std::ffi::CString> {
 
 fn raw_ptrs(strings: &[std::ffi::CString]) -> Vec<*const c_char> {
     strings.iter().map(|c| c.as_ptr()).collect()
+}
+
+/// Turn a requested `offset..offset+len` into a range that satisfies
+/// `VUID-VkMappedMemoryRange-size-00685`.
+///
+/// Returns `(offset, size)` where `offset` is atom aligned, `size` is either
+/// atom aligned or ends exactly at `allocation`, and `offset + size` never
+/// exceeds the allocation. `None` means there is nothing to flush.
+#[must_use]
+pub fn align_mapped_range(offset: u64, len: u64, atom: u64, allocation: u64) -> Option<(u64, u64)> {
+    if len == 0 || allocation == 0 {
+        return None;
+    }
+    let atom = atom.max(1);
+    let aligned_offset = offset & !(atom - 1);
+    if aligned_offset >= allocation {
+        return None;
+    }
+    // The *unrounded* end, so a misaligned start does not lose its tail.
+    let end = offset.saturating_add(len).min(allocation);
+    if end <= aligned_offset {
+        return None;
+    }
+    let aligned_end = end.div_ceil(atom) * atom;
+    let size = if aligned_end <= allocation {
+        aligned_end - aligned_offset
+    } else {
+        allocation - aligned_offset
+    };
+    (size > 0).then_some((aligned_offset, size))
 }
 
 const VALIDATION_LAYER: &CStr = c"VK_LAYER_KHRONOS_validation";
@@ -496,12 +562,22 @@ impl Gpu {
         let ext_cstrings = cstrings(&instance_exts);
         let ext_ptrs = raw_ptrs(&ext_cstrings);
 
+        // The loader may support less than 1.3 (Windows 10 ships an older
+        // loader). Asking for 1.3 unconditionally makes `vkCreateInstance`
+        // fail; asking for what the loader knows keeps the app running and the
+        // device selection below takes care of the 1.2 path.
+        let max_api = entry
+            .try_enumerate_instance_version()
+            .ok()
+            .flatten()
+            .unwrap_or(vk::make_api_version(0, 1, 0, 0));
+        let api_version = max_api.min(vk::make_api_version(0, 1, 3, 0));
         let app_info = vk::ApplicationInfo::default()
             .application_name(c"unbound-ui")
             .application_version(vk::make_api_version(0, 0, 1, 0))
             .engine_name(c"unbound")
             .engine_version(vk::make_api_version(0, 1, 0, 0))
-            .api_version(vk::make_api_version(0, 1, 3, 0));
+            .api_version(api_version);
 
         let instance = entry
             .create_instance(
@@ -525,68 +601,124 @@ impl Gpu {
         };
 
         // ---- physical device ---------------------------------------------
+        //
+        // A candidate has to be probed *before* it is chosen. Windows 10
+        // drivers commonly expose Vulkan 1.2 only: the 1.3 core features the
+        // renderer uses are also available as `VK_KHR_dynamic_rendering` and
+        // `VK_KHR_synchronization2`, so a 1.2 device is still usable — but
+        // only if those two extensions are present. Selecting by device type
+        // alone used to pick a 1.2 GPU and fail at `vkCreateDevice`.
         let devices = instance
             .enumerate_physical_devices()
             .map_err(GpuError::Vulkan)?;
-        if devices.is_empty() {
-            return Err(GpuError::NoSuitableDevice("no physical device".into()));
-        }
-
-        let mut best: Option<(vk::PhysicalDevice, i32, vk::PhysicalDeviceProperties)> = None;
+        let mut best: Option<(
+            vk::PhysicalDevice,
+            i32,
+            vk::PhysicalDeviceProperties,
+            Vec<String>,
+        )> = None;
+        let mut rejected: Vec<String> = Vec::new();
         for pd in devices {
             let props = instance.get_physical_device_properties(pd);
+            let name = props
+                .device_name_as_c_str()
+                .map(|c| c.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "unnamed".into());
+            let ext_names = device_extension_names(&instance, pd);
+            let missing: Vec<&str> = config
+                .device_extensions
+                .iter()
+                .filter(|extension| !is_optional_device_extension(extension))
+                .map(String::as_str)
+                .filter(|extension| !ext_names.iter().any(|n| n == extension))
+                .collect();
+            if !missing.is_empty() {
+                rejected.push(format!("{name}: no {}", missing.join(", ")));
+                continue;
+            }
+            let has_12_extensions = ext_names.iter().any(|n| n == "VK_KHR_dynamic_rendering")
+                && ext_names.iter().any(|n| n == "VK_KHR_synchronization2");
+            if props.api_version < vk::make_api_version(0, 1, 3, 0) && !has_12_extensions {
+                rejected.push(format!("{name}: Vulkan 1.2 without the 1.3 back-ports"));
+                continue;
+            }
             let mut score = match props.device_type {
                 vk::PhysicalDeviceType::DISCRETE_GPU => 1000,
                 vk::PhysicalDeviceType::INTEGRATED_GPU => 500,
                 vk::PhysicalDeviceType::VIRTUAL_GPU => 250,
                 _ => 100,
             };
-            if props.api_version < vk::make_api_version(0, 1, 3, 0) {
-                score -= 900;
+            // Prefer a driver that speaks 1.3 natively, then one that also
+            // exposes the optional present extensions.
+            if props.api_version >= vk::make_api_version(0, 1, 3, 0) {
+                score += 400;
             }
+            score += config
+                .device_extensions
+                .iter()
+                .filter(|extension| is_optional_device_extension(extension))
+                .filter(|extension| ext_names.iter().any(|n| *n == **extension))
+                .count() as i32
+                * 10;
             if config.prefer_discrete && props.device_type != vk::PhysicalDeviceType::DISCRETE_GPU {
                 score -= 100;
             }
-            if best.as_ref().map(|(_, s, _)| score > *s).unwrap_or(true) {
-                best = Some((pd, score, props));
+            if best.as_ref().map(|(_, s, _, _)| score > *s).unwrap_or(true) {
+                best = Some((pd, score, props, ext_names));
             }
         }
-        let (physical, _, properties) = best.expect("at least one device");
+        let Some((physical, _, properties, dev_ext_names)) = best else {
+            return Err(GpuError::NoSuitableDevice(if rejected.is_empty() {
+                "no physical device".into()
+            } else {
+                rejected.join("; ")
+            }));
+        };
 
         // ---- extension dependencies ----------------------------------------
         //
         // Vulkan requires the dependencies of an enabled extension to be
-        // enabled too. Two of the extensions the showcase asks for have such
-        // a dependency, and enabling them without it makes `vkCreateDevice`
-        // invalid:
+        // enabled too, and a device may simply not offer an optional one. The
+        // old code enabled every requested string unconditionally, so a
+        // driver without `VK_KHR_present_wait` made `vkCreateDevice` fail with
+        // `VK_ERROR_EXTENSION_NOT_PRESENT` — an error the application could
+        // not diagnose.
         //
         //   VK_EXT_swapchain_maintenance1 -> VK_EXT_surface_maintenance1
         //                                       (an *instance* extension)
         //   VK_KHR_present_wait            -> VK_KHR_present_id
         //                                       (a *device* extension)
-        //
-        // The instance extension has to be added before the instance is
-        // created, so this happens back in `new_inner`; the device extension
-        // is added here.
-        let mut device_exts = config.device_extensions.clone();
+        let has_ext = |name: &str| dev_ext_names.iter().any(|n| n == name);
+        let mut device_exts: Vec<String> = Vec::new();
+        let mut skipped: Vec<&str> = Vec::new();
+        for extension in &config.device_extensions {
+            if has_ext(extension) {
+                device_exts.push(extension.clone());
+            } else if is_optional_device_extension(extension) {
+                skipped.push(extension.as_str());
+            } else {
+                // The selection loop already rejected devices without the
+                // required extensions, so this is only a safety net.
+                return Err(GpuError::UnsupportedFeatures(vec!["device extension"]));
+            }
+        }
+        for extension in skipped {
+            eprintln!("GPU: {extension} is not supported by this driver; continuing without it");
+        }
+        // A 1.2 driver exposes the Vulkan 1.3 features as back-port extensions.
+        let needs_13_backports = properties.api_version < vk::make_api_version(0, 1, 3, 0);
+        if needs_13_backports {
+            for extension in ["VK_KHR_dynamic_rendering", "VK_KHR_synchronization2"] {
+                if !device_exts.iter().any(|e| e == extension) {
+                    device_exts.push(extension.to_string());
+                }
+            }
+        }
         if device_exts.iter().any(|e| e == "VK_KHR_present_wait")
             && !device_exts.iter().any(|e| e == "VK_KHR_present_id")
         {
             device_exts.push("VK_KHR_present_id".to_string());
         }
-
-        let dev_ext_props = instance
-            .enumerate_device_extension_properties(physical)
-            .unwrap_or_default();
-        let dev_ext_names: Vec<String> = dev_ext_props
-            .iter()
-            .filter_map(|e| {
-                e.extension_name_as_c_str()
-                    .ok()
-                    .map(|c| c.to_string_lossy().into_owned())
-            })
-            .collect();
-        let has_ext = |name: &str| dev_ext_names.iter().any(|n| n == name);
         // The extension has to be *requested* to be enabled: a driver that
         // merely exposes it does not enable the feature.
         let maintenance1_requested = device_exts
@@ -595,29 +727,49 @@ impl Gpu {
 
         // ---- feature discovery -------------------------------------------
         let mut f12 = vk::PhysicalDeviceVulkan12Features::default();
+        // Only one of these is chained: `VkPhysicalDeviceVulkan13Features`
+        // is invalid below API 1.3, and querying it there is undefined.
         let mut f13 = vk::PhysicalDeviceVulkan13Features::default();
+        let mut f_dynamic_rendering = vk::PhysicalDeviceDynamicRenderingFeatures::default();
+        let mut f_synchronization2 = vk::PhysicalDeviceSynchronization2Features::default();
         // The present features live in their own structures, so they have to
-        // be chained into the query as well.
+        // be chained into the query as well. An unknown structure type in the
+        // chain makes the query fail, hence the extension checks.
         let mut present_wait_query = vk::PhysicalDevicePresentWaitFeaturesKHR::default();
         let mut present_id_query = vk::PhysicalDevicePresentIdFeaturesKHR::default();
-        // `VK_EXT_swapchain_maintenance1` gates the present fence and the
-        // present scaling behaviour. The structure is only chained when the
-        // driver knows the extension: an unknown structure type in the chain
-        // makes the query fail.
         let mut maintenance1_query = vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
         let core;
         {
-            let mut query = vk::PhysicalDeviceFeatures2::default()
-                .push_next(&mut f13)
-                .push_next(&mut f12)
-                .push_next(&mut present_id_query)
-                .push_next(&mut present_wait_query);
+            let mut query = vk::PhysicalDeviceFeatures2::default().push_next(&mut f12);
+            if needs_13_backports {
+                query = query
+                    .push_next(&mut f_dynamic_rendering)
+                    .push_next(&mut f_synchronization2);
+            } else {
+                query = query.push_next(&mut f13);
+            }
+            if has_ext("VK_KHR_present_id") {
+                query = query.push_next(&mut present_id_query);
+            }
+            if has_ext("VK_KHR_present_wait") {
+                query = query.push_next(&mut present_wait_query);
+            }
             if has_ext("VK_EXT_swapchain_maintenance1") {
                 query = query.push_next(&mut maintenance1_query);
             }
             instance.get_physical_device_features2(physical, &mut query);
             core = query.features;
         }
+        let dynamic_rendering = if needs_13_backports {
+            f_dynamic_rendering.dynamic_rendering == vk::TRUE
+        } else {
+            f13.dynamic_rendering == vk::TRUE
+        };
+        let synchronization2 = if needs_13_backports {
+            f_synchronization2.synchronization2 == vk::TRUE
+        } else {
+            f13.synchronization2 == vk::TRUE
+        };
 
         let features = GpuFeatures {
             buffer_device_address: f12.buffer_device_address == vk::TRUE,
@@ -625,8 +777,8 @@ impl Gpu {
             runtime_descriptor_array: f12.runtime_descriptor_array == vk::TRUE,
             partially_bound_descriptors: f12.descriptor_binding_partially_bound == vk::TRUE,
             update_after_bind: f12.descriptor_binding_sampled_image_update_after_bind == vk::TRUE,
-            dynamic_rendering: f13.dynamic_rendering == vk::TRUE,
-            synchronization2: f13.synchronization2 == vk::TRUE,
+            dynamic_rendering,
+            synchronization2,
             timeline_semaphore: f12.timeline_semaphore == vk::TRUE,
             host_query_reset: f12.host_query_reset == vk::TRUE,
             multi_draw_indirect: core.multi_draw_indirect == vk::TRUE,
@@ -706,6 +858,10 @@ impl Gpu {
         let mut enabled_features13 = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(features.dynamic_rendering)
             .synchronization2(features.synchronization2);
+        let mut enabled_dynamic_rendering = vk::PhysicalDeviceDynamicRenderingFeatures::default()
+            .dynamic_rendering(features.dynamic_rendering);
+        let mut enabled_synchronization2 = vk::PhysicalDeviceSynchronization2Features::default()
+            .synchronization2(features.synchronization2);
         let enabled_core = vk::PhysicalDeviceFeatures::default()
             .multi_draw_indirect(features.multi_draw_indirect)
             // The MDI compaction emits one run per (layer, barrier, variant)
@@ -745,8 +901,16 @@ impl Gpu {
             .enabled_features(&enabled_core)
             .push_next(&mut present_id_features)
             .push_next(&mut present_wait_features)
-            .push_next(&mut enabled_features13)
             .push_next(&mut enabled_features12);
+        if needs_13_backports {
+            // Vulkan 1.2: the features come from the KHR extensions, and the
+            // core 1.3 structure must not be chained.
+            device_create = device_create
+                .push_next(&mut enabled_dynamic_rendering)
+                .push_next(&mut enabled_synchronization2);
+        } else {
+            device_create = device_create.push_next(&mut enabled_features13);
+        }
         if features.swapchain_maintenance1 {
             device_create = device_create.push_next(&mut maintenance1_features);
         }
@@ -990,9 +1154,9 @@ impl Gpu {
                 return Err(GpuError::from(e));
             }
 
-            let host_visible = self.memory_properties.memory_types[type_index as usize]
-                .property_flags
-                .contains(vk::MemoryPropertyFlags::HOST_VISIBLE);
+            let mem_flags = self.memory_properties.memory_types[type_index as usize].property_flags;
+            let host_visible = mem_flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE);
+            let host_coherent = mem_flags.contains(vk::MemoryPropertyFlags::HOST_COHERENT);
             let mapped = if host_visible {
                 self.device
                     .map_memory(memory, 0, requirements.size, vk::MemoryMapFlags::empty())
@@ -1017,9 +1181,11 @@ impl Gpu {
                 raw: buffer,
                 memory,
                 size,
+                allocation_size: requirements.size,
                 address,
                 mapped,
                 host_visible,
+                host_coherent,
             })
         }
     }
@@ -1065,42 +1231,26 @@ impl Gpu {
 
     /// Flush a mapped range (no-op for coherent memory, required otherwise).
     ///
-    /// The size is rounded up to the device's `nonCoherentAtomSize`, because
-    /// Vulkan requires the flushed range to be a multiple of that value (or to
-    /// reach the end of the allocation).
+    /// Vulkan's `VUID-VkMappedMemoryRange-size-00685` requires the range to
+    /// stay inside the allocation, `offset` to be a multiple of
+    /// `nonCoherentAtomSize`, and `size` to be either a multiple of that value
+    /// or to reach exactly the end of the allocation.
     ///
     /// # Safety
     /// `offset..offset+len` must be inside a mapped buffer.
     pub unsafe fn flush(&self, buffer: &Buffer, offset: u64, len: u64) {
-        if buffer.mapped.is_null() {
+        if buffer.mapped.is_null() || buffer.host_coherent || len == 0 {
             return;
         }
         let atom = self.properties.limits.non_coherent_atom_size.max(1);
-        // Vulkan accepts a range whose size is a multiple of the atom size,
-        // *or* one that reaches exactly the end of the allocation. The
-        // allocation size is not always the buffer size (the allocator may
-        // round up), so the memory requirement is what matters here.
-        let allocation = self.device.get_buffer_memory_requirements(buffer.raw).size;
-        // The offset must be a multiple of the atom size.
-        let offset = offset & !(atom - 1);
-        if offset >= allocation {
+        let Some((aligned_offset, size)) =
+            align_mapped_range(offset, len, atom, buffer.allocation_size)
+        else {
             return;
-        }
-        let wanted = (offset + len).min(allocation);
-        // Prefer the atom-rounded size; fall back to reaching the end of the
-        // allocation when rounding would overshoot it.
-        let rounded = wanted.div_ceil(atom) * atom;
-        let size = if rounded <= allocation {
-            rounded
-        } else {
-            allocation - offset
         };
-        if size == 0 {
-            return;
-        }
         let range = vk::MappedMemoryRange::default()
             .memory(buffer.memory)
-            .offset(offset)
+            .offset(aligned_offset)
             .size(size);
         let _ = self.device.flush_mapped_memory_ranges(&[range]);
     }
@@ -1529,6 +1679,37 @@ mod tests {
             choose_memory_type(&types, u32::MAX, MemoryKind::HostVisible),
             Some(3)
         );
+    }
+
+    /// The reported range used to put the *end* offset into `size`, so the
+    /// second frame of a 4 MiB ring flushed `2 MiB + 64 B` starting at `2 MiB`
+    /// and the validation layer rejected it (`VUID-...-00685`).
+    #[test]
+    fn mapped_memory_flush_range_never_exceeds_allocation_bounds() {
+        let allocation = 4_194_304;
+        let atom = 64;
+        for len in [64, 128, 4096] {
+            let (offset, size) =
+                align_mapped_range(2_097_152, len, atom, allocation).expect("a flushable range");
+            assert_eq!(offset % atom, 0, "offset must be atom aligned");
+            assert_eq!(size % atom, 0, "a rounded size must be atom aligned");
+            assert!(
+                offset + size <= allocation,
+                "flush {offset}+{size} must stay inside {allocation}"
+            );
+            assert!(offset + size >= 2_097_152 + len, "the tail must be flushed");
+        }
+        // A misaligned start rounds down without losing the requested tail.
+        let (offset, size) = align_mapped_range(100, 10, 64, 1024).expect("a flushable range");
+        assert_eq!(offset, 64);
+        assert!(offset + size >= 110);
+        // A range that ends exactly at the allocation may stop unaligned.
+        let (offset, size) = align_mapped_range(1000, 24, 64, 1024).expect("a flushable range");
+        assert_eq!(offset, 960);
+        assert_eq!(offset + size, 1024);
+        // Degenerate ranges are ignored instead of producing an invalid one.
+        assert_eq!(align_mapped_range(0, 0, atom, allocation), None);
+        assert_eq!(align_mapped_range(allocation, 16, atom, allocation), None);
     }
 
     #[test]
