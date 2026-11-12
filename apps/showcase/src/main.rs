@@ -201,24 +201,28 @@ impl Showcase {
         let Some(renderer) = &self.renderer else {
             return;
         };
-        for update in updates {
-            let kind = match update.target {
-                unbound_text::AtlasTarget::Coverage => AtlasKind::R8,
-                unbound_text::AtlasTarget::Color => AtlasKind::Rgba8,
-            };
-            let upload = AtlasUpload {
-                kind,
-                layer: update.layer,
-                x: update.x,
-                y: update.y,
-                width: update.width,
-                height: update.height,
-                data: update.data,
-            };
-            if atlases.upload(&renderer.gpu, &upload).is_err() {
-                break;
-            }
-        }
+        let uploads: Vec<AtlasUpload> = updates
+            .into_iter()
+            .map(|update| {
+                let kind = match update.target {
+                    unbound_text::AtlasTarget::Coverage => AtlasKind::R8,
+                    unbound_text::AtlasTarget::Color => AtlasKind::Rgba8,
+                };
+                AtlasUpload {
+                    kind,
+                    layer: update.layer,
+                    x: update.x,
+                    y: update.y,
+                    width: update.width,
+                    height: update.height,
+                    data: update.data,
+                }
+            })
+            .collect();
+        // One batch: a single staging buffer, a single command buffer and a
+        // single queue wait for the whole page of text. Uploading glyph by
+        // glyph stalled the pipeline once per character.
+        let _ = atlases.upload_batch(&renderer.gpu, &uploads);
     }
 
     fn write_theme_if_needed(&mut self) {

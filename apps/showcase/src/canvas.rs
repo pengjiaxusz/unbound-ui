@@ -75,6 +75,16 @@ pub struct RangeZone {
     pub step: f32,
 }
 
+/// A rounded clip shape: the rectangle and its corner radii.
+///
+/// This is the CPU-side twin of the two rounded slots a `GpuClipNode`
+/// carries.
+#[derive(Copy, Clone, Debug)]
+struct RoundedSlot {
+    rect: Rect,
+    radii: [f32; 4],
+}
+
 /// The scene painter.
 pub struct Canvas<'a> {
     pub scene: &'a mut Gallery,
@@ -94,6 +104,14 @@ pub struct Canvas<'a> {
     z: u16,
     clips: Vec<u32>,
     clip_rects: Vec<ClipRect>,
+    /// The rounded clip slots inherited by the current level.
+    ///
+    /// Slot 0 is the innermost rounded ancestor, slot 1 the one above it —
+    /// the same two-slot model the shader evaluates. Keeping them in a stack
+    /// (instead of squeezing them into the single `ClipRect` of the CPU
+    /// mirror) means a plain axis-aligned clip in the middle no longer wipes
+    /// the rounded ancestor out.
+    rounded_stack: Vec<[Option<RoundedSlot>; 2]>,
     scale: f32,
     snap: bool,
     static_ids: u64,
@@ -137,6 +155,7 @@ impl<'a> Canvas<'a> {
             z: 1,
             clips: Vec::new(),
             clip_rects: Vec::new(),
+            rounded_stack: Vec::new(),
             scale: scale.max(0.25),
             snap,
             static_ids: 0,
@@ -217,25 +236,53 @@ impl<'a> Canvas<'a> {
             combined.max().x,
             combined.max().y,
         ]);
-        if let Some(existing) = inherited {
-            if existing.radii.iter().any(|r| *r > 0.0) {
-                Self::write_rounded_slot(
-                    &mut node.rounded_clip_0,
-                    &mut node.radii_0,
-                    existing.rect,
-                    existing.radii,
-                );
+
+        // The rounded ancestors are kept in their own stack, not squeezed
+        // into the single CPU mirror rectangle.
+        //
+        // The old code inherited the parent's radii through `ClipRect`, and a
+        // plain axis-aligned clip in the middle reset them to zero — so a
+        // third level lost the rounded shape of the first one entirely. The
+        // GPU then fell back to a scissor rectangle and the rounded card grew
+        // square corners.
+        //
+        // Slot 0 is the innermost rounded ancestor, slot 1 the one above it:
+        // exactly what the shader's two-slot mask evaluates, and the same
+        // order `unbound-world` uses.
+        let mut slots = self.rounded_stack.last().copied().unwrap_or([None, None]);
+        if let Some(value) = radius {
+            if value > 0.0 {
+                slots = [
+                    Some(RoundedSlot {
+                        rect,
+                        radii: [value.max(0.0); 4],
+                    }),
+                    slots[0],
+                ];
             }
         }
+        if let Some(slot) = slots[0] {
+            Self::write_rounded_slot(
+                &mut node.rounded_clip_0,
+                &mut node.radii_0,
+                slot.rect,
+                slot.radii,
+            );
+        }
+        if let Some(slot) = slots[1] {
+            Self::write_rounded_slot(
+                &mut node.rounded_clip_1,
+                &mut node.radii_1,
+                slot.rect,
+                slot.radii,
+            );
+        }
+
         let radii = match radius {
-            Some(value) => {
-                let radii = [value.max(0.0); 4];
-                Self::write_rounded_slot(&mut node.rounded_clip_1, &mut node.radii_1, rect, radii);
-                radii
-            }
-            None => inherited
-                .filter(|existing| existing.rect == combined)
-                .map_or([0.0; 4], |existing| existing.radii),
+            Some(value) => [value.max(0.0); 4],
+            None => slots[0]
+                .filter(|slot| slot.rect == combined)
+                .map_or([0.0; 4], |slot| slot.radii),
         };
         let index = self.scene.clips.len() as u32;
         self.scene.clips.push(node);
@@ -244,6 +291,7 @@ impl<'a> Canvas<'a> {
             rect: combined,
             radii,
         });
+        self.rounded_stack.push(slots);
     }
 
     fn write_rounded_slot(
@@ -261,6 +309,7 @@ impl<'a> Canvas<'a> {
     pub fn end_clip(&mut self) {
         self.clips.pop();
         self.clip_rects.pop();
+        self.rounded_stack.pop();
     }
 
     fn clip_index(&self) -> u32 {
@@ -605,4 +654,96 @@ pub fn quads_bounds(quads: &[GlyphQuad]) -> Option<Rect> {
         bounds = bounds.union(&quad.rect);
     }
     Some(bounds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gallery::{palette, Gallery, Labels};
+
+    /// A canvas over an empty scene.
+    fn canvas<'a>(
+        scene: &'a mut Gallery,
+        labels: &'a mut Labels,
+        palette: &'a Palette,
+    ) -> Canvas<'a> {
+        Canvas::new(
+            scene,
+            labels,
+            palette,
+            (400.0, 400.0),
+            None,
+            None,
+            None,
+            1.0,
+            false,
+        )
+    }
+
+    /// The corner radii of the clip node at `index`.
+    fn radii_of(node: &GpuClipNode, slot: usize) -> [f32; 4] {
+        let packed = if slot == 0 {
+            node.radii_0
+        } else {
+            node.radii_1
+        };
+        unbound_math::f16::unpack_radii(packed)
+    }
+
+    /// The rounded rectangle of the clip node at `index`.
+    fn rounded_of(node: &GpuClipNode, slot: usize) -> [f32; 4] {
+        if slot == 0 {
+            node.rounded_clip_0
+        } else {
+            node.rounded_clip_1
+        }
+    }
+
+    #[test]
+    fn a_third_level_plain_clip_keeps_the_rounded_ancestor() {
+        let mut scene = Gallery::new();
+        let mut labels = Labels::new();
+        let palette = palette();
+        let mut canvas = canvas(&mut scene, &mut labels, &palette);
+
+        let outer = Rect::new(10.0, 10.0, 120.0, 120.0);
+        canvas.begin_clip_rounded(outer, 12.0);
+        canvas.begin_clip(Rect::new(20.0, 20.0, 80.0, 80.0));
+        canvas.begin_clip(Rect::new(30.0, 30.0, 40.0, 40.0));
+
+        let node = canvas.scene.clips.last().expect("three clip nodes");
+        assert_eq!(
+            radii_of(node, 0),
+            [12.0; 4],
+            "the innermost clip lost the rounded ancestor"
+        );
+        assert_eq!(
+            rounded_of(node, 0),
+            [70.0, 70.0, 60.0, 60.0],
+            "the rounded slot must describe the outer rounded rectangle"
+        );
+    }
+
+    #[test]
+    fn a_nested_rounded_clip_keeps_both_shapes() {
+        let mut scene = Gallery::new();
+        let mut labels = Labels::new();
+        let palette = palette();
+        let mut canvas = canvas(&mut scene, &mut labels, &palette);
+
+        canvas.begin_clip_rounded(Rect::new(0.0, 0.0, 100.0, 100.0), 12.0);
+        canvas.begin_clip_rounded(Rect::new(10.0, 10.0, 40.0, 40.0), 4.0);
+
+        let node = canvas.scene.clips.last().expect("two clip nodes");
+        assert_eq!(
+            radii_of(node, 0),
+            [4.0; 4],
+            "the inner shape is the first slot"
+        );
+        assert_eq!(
+            radii_of(node, 1),
+            [12.0; 4],
+            "the outer shape is the second slot"
+        );
+    }
 }

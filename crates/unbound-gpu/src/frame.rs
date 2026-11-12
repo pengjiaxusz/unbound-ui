@@ -538,7 +538,9 @@ impl Renderer {
     /// # Errors
     /// Propagates write failures.
     pub fn write_theme(&mut self, colors: &[[u16; 4]]) -> Result<(), GpuError> {
-        let mut entries = vec![[0u16; 4]; 512];
+        // A stack array: the table is a fixed 4 KiB, so there is no reason to
+        // heap-allocate it on every theme switch.
+        let mut entries = [[0u16; 4]; 512];
         for (i, c) in colors.iter().take(512).enumerate() {
             entries[i] = *c;
         }
@@ -550,6 +552,11 @@ impl Renderer {
                 .host_ptr(0)
                 .ok_or_else(|| GpuError::Allocation("lut not mapped".into()))?;
             core::ptr::copy_nonoverlapping(entries.as_ptr().cast::<u8>(), ptr, entries.len() * 8);
+            // The memory may not be host-coherent, so the copy has to be
+            // flushed before the GPU reads the table. Without this the
+            // shader could sample the previous theme.
+            self.gpu
+                .flush(&self.lut_buffer, 0, (entries.len() * 8) as u64);
         }
         Ok(())
     }
@@ -1802,6 +1809,12 @@ impl Renderer {
                 patches.len() * 16,
             );
             plan.patch_count = patches.len() as u32;
+            // Both buffers may live in non-coherent memory: the GPU would
+            // otherwise read the previous frame's bytes.
+            self.gpu
+                .flush(&self.ring_buffer, u64::from(ring_slot), bytes.len() as u64);
+            self.gpu
+                .flush(&self.patches, 0, (patches.len() * 16) as u64);
         }
 
         plan.bytes = bytes.len() as u32;

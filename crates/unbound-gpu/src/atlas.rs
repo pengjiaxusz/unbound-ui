@@ -272,6 +272,75 @@ impl AtlasUpload {
     }
 }
 
+/// The layout of one batch of atlas uploads.
+///
+/// Every rectangle is placed in a single staging buffer, and every involved
+/// layer is listed once so its layout is transitioned only once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BatchPlan {
+    /// The byte offset of each upload inside the staging buffer; `None` for
+    /// an empty rectangle.
+    offsets: Vec<Option<u64>>,
+    /// The total size of the staging buffer.
+    total: u64,
+    /// The `(kind, layer)` pairs the batch touches.
+    layers: Vec<(AtlasKind, u32)>,
+}
+
+/// Lay a batch of uploads out in one staging buffer.
+///
+/// This is a pure function on purpose: the layout is the part that can go
+/// wrong (an offset that is not a multiple of the texel block size, a layer
+/// that is transitioned twice), and it is worth testing on the CPU.
+///
+/// # Errors
+/// Returns [`GpuError::Allocation`] for a malformed upload.
+fn plan_batch(
+    layer_count: impl Fn(AtlasKind) -> u32,
+    updates: &[AtlasUpload],
+) -> Result<BatchPlan, GpuError> {
+    let mut offsets: Vec<Option<u64>> = Vec::with_capacity(updates.len());
+    let mut layers: Vec<(AtlasKind, u32)> = Vec::new();
+    let mut total = 0u64;
+    for upload in updates {
+        let expected = upload.expected_len();
+        if upload.data.len() < expected {
+            return Err(GpuError::Allocation(format!(
+                "atlas upload is {} bytes, expected {expected}",
+                upload.data.len()
+            )));
+        }
+        if upload.width == 0 || upload.height == 0 {
+            offsets.push(None);
+            continue;
+        }
+        let available = layer_count(upload.kind);
+        if upload.layer >= available {
+            return Err(GpuError::Allocation(format!(
+                "atlas layer {} is out of range ({} layers)",
+                upload.layer, available
+            )));
+        }
+        // The copy offset must be a multiple of the texel block size; 4
+        // bytes covers both the 1-byte and the 4-byte atlas.
+        total = (total + 3) & !3;
+        offsets.push(Some(total));
+        total += expected as u64;
+        // A layer that receives several rectangles is transitioned once.
+        if !layers
+            .iter()
+            .any(|(kind, layer)| *kind == upload.kind && *layer == upload.layer)
+        {
+            layers.push((upload.kind, upload.layer));
+        }
+    }
+    Ok(BatchPlan {
+        offsets,
+        total,
+        layers,
+    })
+}
+
 /// The pair of atlases the renderer binds into its descriptor slots.
 pub struct AtlasSet {
     /// The coverage atlas.
@@ -330,113 +399,167 @@ impl AtlasSet {
     /// # Errors
     /// Returns [`GpuError::Vulkan`] when the copy cannot be recorded.
     pub fn upload(&self, gpu: &Gpu, upload: &AtlasUpload) -> Result<(), GpuError> {
-        let expected = upload.expected_len();
-        if upload.data.len() < expected {
-            return Err(GpuError::Allocation(format!(
-                "atlas upload is {} bytes, expected {expected}",
-                upload.data.len()
-            )));
-        }
-        if upload.width == 0 || upload.height == 0 {
+        self.upload_batch(gpu, std::slice::from_ref(upload))
+    }
+
+    /// Upload many rectangles into the atlases with **one** queue round trip.
+    ///
+    /// Uploading glyph by glyph was the single worst stutter in the whole
+    /// renderer: every glyph allocated a staging buffer, opened a one-shot
+    /// command buffer and waited for the queue to go idle
+    /// (`vkQueueWaitIdle`), so a page of text stopped the pipeline dozens of
+    /// times in a row.
+    ///
+    /// The batch instead
+    ///
+    /// * allocates **one** staging buffer for all the pixels,
+    /// * records **one** command buffer,
+    /// * transitions every involved `(kind, layer)` pair to
+    ///   `TRANSFER_DST_OPTIMAL` **once**, and
+    /// * transitions them back to `SHADER_READ_ONLY_OPTIMAL` **once**.
+    ///
+    /// The queue is still waited on exactly once, at the end.
+    ///
+    /// # Errors
+    /// Returns [`GpuError::Allocation`] for a malformed upload and
+    /// [`GpuError::Vulkan`] when the copies cannot be recorded.
+    pub fn upload_batch(&self, gpu: &Gpu, updates: &[AtlasUpload]) -> Result<(), GpuError> {
+        // 1. Validate and lay the pixels out in one staging buffer.
+        let plan = plan_batch(|kind| self.get(kind).layers(), updates)?;
+        let BatchPlan {
+            offsets,
+            total,
+            layers,
+        } = plan;
+        if total == 0 {
             return Ok(());
-        }
-        let atlas = self.get(upload.kind);
-        if upload.layer >= atlas.layers() {
-            return Err(GpuError::Allocation(format!(
-                "atlas layer {} is out of range ({} layers)",
-                upload.layer,
-                atlas.layers()
-            )));
         }
 
         let staging = gpu.create_buffer(
-            expected as u64,
+            total,
             vk::BufferUsageFlags::TRANSFER_SRC,
             MemoryKind::HostVisible,
             "atlas-staging",
         )?;
         // SAFETY: the staging buffer is exclusively ours until the copy runs.
         unsafe {
-            gpu.write_host(&staging, 0, &upload.data[..expected]);
-            gpu.flush(&staging, 0, expected as u64);
+            let base = staging
+                .host_ptr(0)
+                .ok_or_else(|| GpuError::Allocation("atlas staging not mapped".into()))?;
+            for (index, upload) in updates.iter().enumerate() {
+                let Some(offset) = offsets[index] else {
+                    continue;
+                };
+                let expected = upload.expected_len();
+                // SAFETY: `offset + expected` is inside the staging buffer,
+                // which is exclusively ours.
+                core::ptr::copy_nonoverlapping(
+                    upload.data.as_ptr(),
+                    base.add(offset as usize),
+                    expected,
+                );
+            }
+            // One flush for the whole range: the memory may not be coherent.
+            gpu.flush(&staging, 0, total);
         }
 
         let cmd = gpu.begin_single_time()?;
         // SAFETY: `cmd` is a fresh command buffer we own.
         unsafe {
-            // The layer's current layout is tracked, so a second upload into
-            // the same layer keeps the glyphs that are already there.
-            let old_layout = atlas.current_layout(upload.layer);
-            let barrier = [vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(vk::PipelineStageFlags2::NONE)
-                .src_access_mask(vk::AccessFlags2::NONE)
-                .dst_stage_mask(vk::PipelineStageFlags2::COPY)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .old_layout(old_layout)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(atlas.image())
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .base_mip_level(0)
-                        .level_count(1)
-                        .base_array_layer(upload.layer)
-                        .layer_count(1),
-                )];
+            let to_copy: Vec<vk::ImageMemoryBarrier2> = layers
+                .iter()
+                .map(|(kind, layer)| {
+                    let atlas = self.get(*kind);
+                    vk::ImageMemoryBarrier2::default()
+                        .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                        .src_access_mask(vk::AccessFlags2::NONE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+                        .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                        // The layer's current layout is tracked, so a second
+                        // upload into the same layer keeps the glyphs that are
+                        // already there.
+                        .old_layout(atlas.current_layout(*layer))
+                        .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(atlas.image())
+                        .subresource_range(
+                            vk::ImageSubresourceRange::default()
+                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .base_mip_level(0)
+                                .level_count(1)
+                                .base_array_layer(*layer)
+                                .layer_count(1),
+                        )
+                })
+                .collect();
             gpu.device.cmd_pipeline_barrier2(
                 cmd,
-                &vk::DependencyInfo::default().image_memory_barriers(&barrier),
+                &vk::DependencyInfo::default().image_memory_barriers(&to_copy),
             );
 
-            gpu.device.cmd_copy_buffer_to_image(
-                cmd,
-                staging.raw,
-                atlas.image(),
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[vk::BufferImageCopy::default()
-                    .buffer_offset(0)
-                    .buffer_row_length(0)
-                    .buffer_image_height(0)
-                    .image_subresource(
-                        vk::ImageSubresourceLayers::default()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .mip_level(0)
-                            .base_array_layer(upload.layer)
-                            .layer_count(1),
-                    )
-                    .image_offset(vk::Offset3D {
-                        x: upload.x as i32,
-                        y: upload.y as i32,
-                        z: 0,
-                    })
-                    .image_extent(vk::Extent3D {
-                        width: upload.width,
-                        height: upload.height,
-                        depth: 1,
-                    })],
-            );
+            for (index, upload) in updates.iter().enumerate() {
+                if upload.width == 0 || upload.height == 0 {
+                    continue;
+                }
+                let Some(offset) = offsets[index] else {
+                    continue;
+                };
+                let atlas = self.get(upload.kind);
+                gpu.device.cmd_copy_buffer_to_image(
+                    cmd,
+                    staging.raw,
+                    atlas.image(),
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[vk::BufferImageCopy::default()
+                        .buffer_offset(offset)
+                        .buffer_row_length(0)
+                        .buffer_image_height(0)
+                        .image_subresource(
+                            vk::ImageSubresourceLayers::default()
+                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .mip_level(0)
+                                .base_array_layer(upload.layer)
+                                .layer_count(1),
+                        )
+                        .image_offset(vk::Offset3D {
+                            x: upload.x as i32,
+                            y: upload.y as i32,
+                            z: 0,
+                        })
+                        .image_extent(vk::Extent3D {
+                            width: upload.width,
+                            height: upload.height,
+                            depth: 1,
+                        })],
+                );
+            }
 
             // Back to shader-read so the graphics queue can sample it.
-            let to_read = [vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(vk::PipelineStageFlags2::COPY)
-                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-                .dst_access_mask(vk::AccessFlags2::SHADER_READ)
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(atlas.image())
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .base_mip_level(0)
-                        .level_count(1)
-                        .base_array_layer(upload.layer)
-                        .layer_count(1),
-                )];
+            let to_read: Vec<vk::ImageMemoryBarrier2> = layers
+                .iter()
+                .map(|(kind, layer)| {
+                    let atlas = self.get(*kind);
+                    vk::ImageMemoryBarrier2::default()
+                        .src_stage_mask(vk::PipelineStageFlags2::COPY)
+                        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+                        .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(atlas.image())
+                        .subresource_range(
+                            vk::ImageSubresourceRange::default()
+                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .base_mip_level(0)
+                                .level_count(1)
+                                .base_array_layer(*layer)
+                                .layer_count(1),
+                        )
+                })
+                .collect();
             gpu.device.cmd_pipeline_barrier2(
                 cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&to_read),
@@ -444,9 +567,11 @@ impl AtlasSet {
         }
         gpu.end_single_time(cmd)?;
 
-        // The layer is now readable by the shader.
-        self.get(upload.kind)
-            .set_layout(upload.layer, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        // The layers are now readable by the shader.
+        for (kind, layer) in layers {
+            self.get(kind)
+                .set_layout(layer, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        }
 
         // The staging buffer is dead once the copy has retired.
         // SAFETY: the copy already waited for the queue to go idle.
@@ -658,5 +783,73 @@ mod tests {
         // The pipeline binds `MAX_ATLAS_LAYERS` slots; the atlas must not
         // provide fewer or the descriptor write would go out of range.
         assert_eq!(ATLAS_LAYERS, crate::pipeline::MAX_ATLAS_LAYERS);
+    }
+
+    /// A glyph-sized upload.
+    fn glyph(layer: u32) -> AtlasUpload {
+        AtlasUpload {
+            kind: AtlasKind::R8,
+            layer,
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 8,
+            data: vec![0; 64],
+        }
+    }
+
+    #[test]
+    fn a_batch_packs_every_glyph_into_one_staging_buffer() {
+        let updates = [glyph(0), glyph(0), glyph(1)];
+        let plan = plan_batch(|_| 4, &updates).expect("a valid batch");
+        // Two glyphs land back to back; the third starts a new layer but
+        // shares the same staging buffer.
+        assert_eq!(plan.offsets[0], Some(0));
+        assert_eq!(plan.offsets[1], Some(64));
+        assert_eq!(plan.offsets[2], Some(128));
+        assert_eq!(plan.total, 192);
+        // Two distinct layers, each listed once.
+        assert_eq!(plan.layers, vec![(AtlasKind::R8, 0), (AtlasKind::R8, 1)]);
+    }
+
+    #[test]
+    fn a_batch_offset_is_always_a_multiple_of_the_texel_block() {
+        // A colour glyph is four bytes per texel, so a one-byte coverage
+        // upload in front of it would misalign the copy.
+        let mut colour = glyph(0);
+        colour.kind = AtlasKind::Rgba8;
+        colour.width = 1;
+        colour.height = 1;
+        colour.data = vec![0; 4];
+        let updates = [glyph(0), colour];
+        let plan = plan_batch(|_| 4, &updates).expect("a valid batch");
+        for offset in plan.offsets.iter().flatten() {
+            assert_eq!(offset % 4, 0, "the copy offset must be texel aligned");
+        }
+        // The colour glyph starts after the 64-byte coverage glyph, aligned.
+        assert_eq!(plan.offsets[1], Some(64));
+        assert_eq!(plan.total, 68);
+    }
+
+    #[test]
+    fn an_empty_rectangle_takes_no_space_and_touches_no_layer() {
+        let mut empty = glyph(0);
+        empty.width = 0;
+        empty.height = 0;
+        empty.data = Vec::new();
+        let updates = [empty, glyph(0)];
+        let plan = plan_batch(|_| 4, &updates).expect("a valid batch");
+        assert_eq!(plan.offsets[0], None);
+        assert_eq!(plan.offsets[1], Some(0));
+        assert_eq!(plan.total, 64);
+        assert_eq!(plan.layers, vec![(AtlasKind::R8, 0)]);
+    }
+
+    #[test]
+    fn a_malformed_batch_is_rejected() {
+        let mut short = glyph(0);
+        short.data = vec![0; 8];
+        assert!(plan_batch(|_| 4, &[short]).is_err());
+        assert!(plan_batch(|_| 4, &[glyph(9)]).is_err());
     }
 }
