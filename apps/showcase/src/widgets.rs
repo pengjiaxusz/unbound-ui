@@ -7,6 +7,14 @@
 use accesskit::Role;
 use unbound_input::CursorKind;
 use unbound_math::Rect;
+use unbound_widgets::checkbox::{emit_checkbox, CheckboxDesc, CheckboxTokens};
+use unbound_widgets::radio::{emit_radio, RadioDesc, RadioTokens};
+use unbound_widgets::segmented::{
+    emit_segmented_frame, emit_segmented_segment, SegmentedDesc, SegmentedTokens,
+};
+use unbound_widgets::slider::{emit_slider, SliderDesc, SliderTokens};
+use unbound_widgets::switch::{emit_switch, SwitchDesc, SwitchTokens};
+use unbound_widgets::ControlState;
 
 use crate::canvas::{quads_bounds, AlignX, AlignY, Canvas, Visual};
 use crate::target::Target;
@@ -122,6 +130,10 @@ pub fn button(
 }
 
 /// A row with a label and a switch.
+///
+/// The control itself lives in the engine layer
+/// ([`unbound_widgets::switch`]): the shell only supplies the row geometry
+/// and the shaped label.
 pub fn toggle_switch(
     canvas: &mut Canvas<'_>,
     node: u64,
@@ -129,66 +141,35 @@ pub fn toggle_switch(
     label: &str,
     on: bool,
 ) -> Visual {
-    let visual = canvas.visual(node, false);
-    let palette = *canvas.palette;
-    let track = Rect::new(
-        rect.max().x - 44.0,
-        rect.origin.y + (rect.size.y - 24.0) * 0.5,
-        44.0,
-        24.0,
-    );
-    canvas.rect(
-        track,
-        12.0,
-        if on {
-            palette.primary
-        } else {
-            palette.control_track
-        },
-        0,
-        0.0,
-        0.0,
-    );
-    let knob_x = if on {
-        track.max().x - 20.0
-    } else {
-        track.origin.x + 4.0
-    };
-    canvas.rect(
-        Rect::new(knob_x, track.origin.y + 4.0, 16.0, 16.0),
-        8.0,
-        palette.control_thumb,
-        0,
-        0.0,
-        2.0,
-    );
-    canvas.text(
+    let state = canvas.control_state(node, false, on);
+    let desc = SwitchDesc::new(rect, label).with_on(on);
+    let (quads, _) = canvas.layout_text(
         label,
         Rect::new(
             rect.origin.x,
             rect.origin.y,
-            rect.size.x - 56.0,
+            (rect.size.x - 56.0).max(0.0),
             rect.size.y,
         ),
         13.0,
-        if visual.is_hovered() {
-            palette.text
-        } else {
-            palette.text_muted
-        },
         AlignX::Start,
         AlignY::Center,
     );
-    canvas.control(
-        node,
-        rect,
-        Role::Switch,
-        label,
-        CursorKind::Pointer,
-        false,
-        on,
-    );
-    visual
+    let output = emit_switch(node, &desc, state, &quads, SwitchTokens::standard());
+    canvas.control_output(node, &output);
+    visual_of(state)
+}
+
+/// Translate a control state into the shell's own visual vocabulary.
+fn visual_of(state: ControlState) -> Visual {
+    if state.disabled {
+        return Visual::Disabled;
+    }
+    match state.phase {
+        unbound_widgets::PointerPhase::Idle => Visual::Idle,
+        unbound_widgets::PointerPhase::Hovered => Visual::Hover,
+        unbound_widgets::PointerPhase::Pressed => Visual::Pressed,
+    }
 }
 
 /// A checkbox row.
@@ -199,61 +180,26 @@ pub fn checkbox(
     label: &str,
     checked: bool,
 ) -> Visual {
-    let visual = canvas.visual(node, false);
-    let palette = *canvas.palette;
-    let box_rect = Rect::new(
-        rect.origin.x,
-        rect.origin.y + (rect.size.y - 18.0) * 0.5,
-        18.0,
-        18.0,
-    );
-    canvas.rect(
-        box_rect,
-        4.0,
-        if checked {
-            palette.primary
-        } else if visual.is_hovered() {
-            palette.control_hover
-        } else {
-            palette.card_bg
-        },
-        if checked { 0 } else { palette.border },
-        1.0,
-        0.0,
-    );
-    if checked {
-        canvas.text(
-            "✓",
-            box_rect,
-            12.0,
-            palette.on_primary,
-            AlignX::Center,
-            AlignY::Center,
-        );
-    }
-    canvas.text(
+    let state = canvas.control_state(node, false, checked);
+    let desc = CheckboxDesc::new(rect, label).with_checked(checked);
+    let (mark, _) = canvas.layout_text("✓", desc.box_rect(), 12.0, AlignX::Center, AlignY::Center);
+    let (quads, _) = canvas.layout_text(
         label,
-        Rect::new(
-            rect.origin.x + 28.0,
-            rect.origin.y,
-            rect.size.x - 28.0,
-            rect.size.y,
-        ),
+        desc.label_rect(),
         13.0,
-        palette.text,
         AlignX::Start,
         AlignY::Center,
     );
-    canvas.control(
+    let output = emit_checkbox(
         node,
-        rect,
-        Role::CheckBox,
-        label,
-        CursorKind::Pointer,
-        false,
-        checked,
+        &desc,
+        state,
+        &mark,
+        &quads,
+        CheckboxTokens::standard(),
     );
-    visual
+    canvas.control_output(node, &output);
+    visual_of(state)
 }
 
 /// A radio-button row.
@@ -264,56 +210,18 @@ pub fn radio(
     label: &str,
     selected: bool,
 ) -> Visual {
-    let visual = canvas.visual(node, false);
-    let palette = *canvas.palette;
-    let circle = Rect::new(
-        rect.origin.x,
-        rect.origin.y + (rect.size.y - 18.0) * 0.5,
-        18.0,
-        18.0,
-    );
-    canvas.rect(
-        circle,
-        9.0,
-        palette.card_bg,
-        if selected {
-            palette.primary
-        } else {
-            palette.border
-        },
-        2.0,
-        0.0,
-    );
-    if selected {
-        canvas.rect(circle.inflate(-5.0), 4.0, palette.primary, 0, 0.0, 0.0);
-    }
-    canvas.text(
+    let state = canvas.control_state(node, false, selected);
+    let desc = RadioDesc::new(rect, label).with_selected(selected);
+    let (quads, _) = canvas.layout_text(
         label,
-        Rect::new(
-            rect.origin.x + 28.0,
-            rect.origin.y,
-            rect.size.x - 28.0,
-            rect.size.y,
-        ),
+        desc.label_rect(),
         13.0,
-        if visual.is_hovered() {
-            palette.text
-        } else {
-            palette.text_muted
-        },
         AlignX::Start,
         AlignY::Center,
     );
-    canvas.control(
-        node,
-        rect,
-        Role::RadioButton,
-        label,
-        CursorKind::Pointer,
-        false,
-        selected,
-    );
-    visual
+    let output = emit_radio(node, &desc, state, &quads, RadioTokens::standard());
+    canvas.control_output(node, &output);
+    visual_of(state)
 }
 
 /// A horizontal slider. `value` is in `[min, max]`.
@@ -325,56 +233,11 @@ pub fn slider(
     min: f32,
     max: f32,
 ) -> Visual {
-    let visual = canvas.visual(node, false);
-    let palette = *canvas.palette;
-    let t = ((value - min) / (max - min).max(1e-6)).clamp(0.0, 1.0);
-    let track = Rect::new(
-        rect.origin.x,
-        rect.origin.y + rect.size.y * 0.5 - 2.0,
-        rect.size.x,
-        4.0,
-    );
-    canvas.rect(track, 2.0, palette.control_track, 0, 0.0, 0.0);
-    canvas.rect(
-        Rect::new(
-            track.origin.x,
-            track.origin.y,
-            track.size.x * t,
-            track.size.y,
-        ),
-        2.0,
-        palette.primary,
-        0,
-        0.0,
-        0.0,
-    );
-    let thumb = Rect::new(
-        track.origin.x + track.size.x * t - 8.0,
-        track.origin.y + track.size.y * 0.5 - 8.0,
-        16.0,
-        16.0,
-    );
-    canvas.rect(
-        thumb,
-        8.0,
-        palette.control_thumb,
-        palette.border,
-        1.0,
-        if visual.is_pressed() { 8.0 } else { 4.0 },
-    );
-    if canvas.focused(node) {
-        canvas.stroke(thumb.inflate(3.0), 11.0, palette.focus_ring, 2.0);
-    }
-    canvas.control(
-        node,
-        rect,
-        Role::Slider,
-        "Slider",
-        CursorKind::Pointer,
-        false,
-        false,
-    );
-    visual
+    let state = canvas.control_state(node, false, false);
+    let desc = SliderDesc::new(rect, "Slider", value, min, max);
+    let output = emit_slider(node, &desc, state, &[], SliderTokens::standard());
+    canvas.control_output(node, &output);
+    visual_of(state)
 }
 
 /// A segmented pill control.
@@ -389,53 +252,21 @@ pub fn segmented(
     labels: &[&str],
     selected: usize,
 ) {
-    let palette = *canvas.palette;
-    canvas.rect(rect, 7.0, palette.control_track, 0, 0.0, 0.0);
-    let count = labels.len().max(1);
-    let width = rect.size.x / count as f32;
-    for (index, label) in labels.iter().enumerate() {
-        let slot_x = rect.origin.x + index as f32 * width;
-        let segment = Rect::new(
-            slot_x + 2.0,
-            rect.origin.y + 2.0,
-            (width - 4.0).max(8.0),
-            (rect.size.y - 4.0).max(8.0),
-        );
-        let active = index == selected;
-        let visual = canvas.visual(ids[index], false);
-        if active {
-            canvas.rect(
-                segment,
-                5.0,
-                palette.primary_soft,
-                palette.primary,
-                1.0,
-                0.0,
-            );
-        } else if visual.is_hovered() {
-            canvas.rect(segment, 5.0, palette.control_hover, 0, 0.0, 0.0);
-        }
-        canvas.text(
-            label,
-            segment,
+    let desc = SegmentedDesc::new(rect, labels).with_selected(selected);
+    let tokens = SegmentedTokens::standard();
+    let frame = emit_segmented_frame(&desc, tokens);
+    canvas.control_output(0, &frame);
+    for index in 0..labels.len() {
+        let state = canvas.control_state(ids[index], false, index == selected);
+        let (quads, _) = canvas.layout_text(
+            labels[index],
+            desc.segment_rect(index),
             12.0,
-            if active {
-                palette.primary
-            } else {
-                palette.text_muted
-            },
             AlignX::Center,
             AlignY::Center,
         );
-        canvas.control(
-            ids[index],
-            segment,
-            Role::Tab,
-            (*label).to_string(),
-            CursorKind::Pointer,
-            false,
-            active,
-        );
+        let output = emit_segmented_segment(ids[index], &desc, index, state, &quads, tokens);
+        canvas.control_output(ids[index], &output);
     }
 }
 

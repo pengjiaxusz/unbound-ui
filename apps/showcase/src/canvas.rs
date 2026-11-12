@@ -11,6 +11,7 @@ use unbound_gpu::data::{GpuClipNode, GpuPrimitiveInstance, CLIP_NONE};
 use unbound_input::{ClipRect, CursorKind, HitRegion};
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
+use unbound_widgets::{ControlState, PointerPhase, WidgetOutput};
 
 use crate::gallery::{Gallery, Labels, Palette};
 use crate::target::{self, Target, ROOT};
@@ -436,6 +437,31 @@ impl<'a> Canvas<'a> {
         align_x: AlignX,
         align_y: AlignY,
     ) -> Rect {
+        let (quads, ink) = self.layout_text(text, rect, size, align_x, align_y);
+        let z = self.next_z();
+        let start = self.scene.primitives.len();
+        for quad in &quads {
+            self.scene.glyph(quad, color, z);
+        }
+        self.glyphs_emitted += quads.len();
+        self.apply_clip(start);
+        ink
+    }
+
+    /// Shape a run of text at its aligned position **without** painting it.
+    ///
+    /// The standard controls paint their own labels, so the shell needs the
+    /// shaped glyphs at the exact position the painter would have used — the
+    /// baseline, not the ink box, decides where a line sits.
+    #[allow(clippy::too_many_arguments)]
+    pub fn layout_text(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        size: f32,
+        align_x: AlignX,
+        align_y: AlignY,
+    ) -> (Vec<GlyphQuad>, Rect) {
         let metrics = self.labels.metrics(text, size);
         let x = match align_x {
             AlignX::Start => rect.origin.x,
@@ -456,14 +482,72 @@ impl<'a> Canvas<'a> {
         let y = self.snap_value(y);
         let quads = self.labels.layout(text, Vec2::new(x, y), size);
         let ink = quads_bounds(&quads).unwrap_or(Rect::new(x, y, metrics.width, size));
-        let z = self.next_z();
-        let start = self.scene.primitives.len();
-        for quad in &quads {
-            self.scene.glyph(quad, color, z);
+        (quads, ink)
+    }
+
+    /// The visual state of a standard control.
+    ///
+    /// The shell already resolved hover, press and focus from the router;
+    /// the control layer only needs them in the shape it understands.
+    #[must_use]
+    pub fn control_state(&self, node: u64, disabled: bool, selected: bool) -> ControlState {
+        let phase = if disabled {
+            PointerPhase::Idle
+        } else if self.pressed == Some(node) {
+            PointerPhase::Pressed
+        } else if self.hover == Some(node) {
+            PointerPhase::Hovered
+        } else {
+            PointerPhase::Idle
+        };
+        ControlState {
+            phase,
+            focused: self.focused == Some(node),
+            disabled,
+            selected,
         }
-        self.glyphs_emitted += quads.len();
+    }
+
+    /// Paint the output of a standard control.
+    ///
+    /// The control's primitives are rebased onto the canvas paint depth —
+    /// keeping their relative order — and clipped like every other
+    /// primitive. Its hit region and semantic node are registered with the
+    /// canvas bookkeeping, so the shell keeps a single source of truth for
+    /// the focus order.
+    pub fn control_output(&mut self, node: u64, output: &WidgetOutput) {
+        let start = self.scene.primitives.len();
+        let payload_base = self.scene.payloads.len() as u32;
+        for mut primitive in output.primitives.iter().copied() {
+            primitive.z_and_opacity =
+                GpuPrimitiveInstance::pack_z_opacity(self.next_z(), primitive.opacity());
+            if matches!(
+                primitive.prim_type(),
+                unbound_gpu::data::PrimType::Glyph | unbound_gpu::data::PrimType::GlyphColor
+            ) {
+                primitive.extra_payload_idx += payload_base;
+            }
+            self.scene.primitives.push(primitive);
+        }
+        self.scene.payloads.extend(output.payloads.iter().copied());
+        self.glyphs_emitted += output.payloads.len();
         self.apply_clip(start);
-        ink
+
+        if let Some(mut region) = output.hit.clone() {
+            region.z = u32::from(self.z);
+            if let Some(clip) = self.clip_shape() {
+                region = region.with_clip(clip);
+            }
+            self.regions.push(region);
+        }
+
+        if let Some(a11y) = output.a11y.clone() {
+            if output.focusable {
+                self.focus_order.push(node);
+            }
+            self.semantics.upsert(node, a11y);
+            self.a11y_nodes.push(node);
+        }
     }
 
     /// Paint a wrapped paragraph inside `rect`.

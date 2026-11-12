@@ -22,6 +22,12 @@
 //! guest application may host these controls without pulling in the engine.
 
 pub mod button;
+pub mod checkbox;
+pub mod primitive;
+pub mod radio;
+pub mod segmented;
+pub mod slider;
+pub mod switch;
 
 use rustc_hash::FxHashMap;
 use unbound_a11y::{A11yNode, Semantics};
@@ -32,6 +38,11 @@ use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 
 pub use button::{ButtonDesc, ButtonTokens, ButtonVariant, ButtonWidget};
+pub use checkbox::{CheckboxDesc, CheckboxTokens};
+pub use radio::{RadioDesc, RadioTokens};
+pub use segmented::{SegmentedDesc, SegmentedTokens};
+pub use slider::{SliderDesc, SliderTokens};
+pub use switch::{SwitchDesc, SwitchTokens};
 
 /// The default viewport a headless widget session renders into.
 pub const DEFAULT_VIEWPORT: (f32, f32) = (1280.0, 720.0);

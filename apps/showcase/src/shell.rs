@@ -1141,11 +1141,14 @@ impl GalleryApp {
         let Some(zone) = self.ranges.iter().find(|zone| zone.node == node).copied() else {
             return;
         };
-        let t = ((position.x - zone.rect.origin.x) / zone.rect.size.x.max(1.0)).clamp(0.0, 1.0);
-        let mut value = zone.min + t * (zone.max - zone.min);
-        if zone.step > 0.0 {
-            value = (value / zone.step).round() * zone.step;
-        }
+        // The mapping from a pointer position to a value belongs to the
+        // control, not to the shell: the same rule paints the slider and
+        // moves it.
+        let desc = unbound_widgets::slider::SliderDesc::new(
+            zone.rect, "Slider", zone.min, zone.min, zone.max,
+        )
+        .with_step(zone.step);
+        let value = unbound_widgets::slider::value_from_pointer(position, &desc);
         match target::decode(node) {
             Some(Target::Knob(page, card, knob)) => {
                 let page_id = PageId::from_index(page as usize);

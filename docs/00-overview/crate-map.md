@@ -58,7 +58,7 @@
 | `unbound-graph` | 857 | 渲染图瞬态纹理生命周期校验、毛玻璃离屏池 | `unbound-math` |
 | `unbound-asset` | 1222 | 后台解码线程池、CPU 暂存环、传输队列交接 | `unbound-math` |
 | `unbound-platform` | 1562 | 窗口平台层：非阻塞缩放、低延迟呈现、延迟计量 | `unbound-math`、`unbound-gpu` |
-| `unbound-widgets` | 1075 | 标准控件层：ControlState、WidgetOutput、SceneCollector、WidgetHarness | `unbound-gpu`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-text`、`unbound-world`、`unbound-headless` |
+| `unbound-widgets` | 2807 | 标准控件层：ControlState、WidgetOutput、SceneCollector、WidgetHarness，以及 Switch / Checkbox / Radio / Segmented / Slider | `unbound-gpu`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-text`、`unbound-world`、`unbound-headless` |
 | `unbound-headless` | 2248 | 无头验证器：五项几何体检、`TestApp` 交互测试驱动、rkyv 时间旅行快照 | `unbound-math`、`unbound-world`、`unbound-input`、`unbound-a11y` |
 | `unbound-host` | 909 | Host-Guest C-ABI 热重载、分配器劫持、状态迁移 | `unbound-abi` |
 | `unbound-kpi` | 398 | 验收红线实测 | 多数 crate |
