@@ -414,3 +414,89 @@ fn losing_the_focus_cancels_the_pointer_capture() {
         "a cancelled press must not activate the control"
     );
 }
+
+/// The options panel belongs beside the stage while the card is wide enough.
+///
+/// The decision is the layout engine's: the flex line runs out of room and
+/// the panel wraps below the stage. Nothing in the shell asks for it.
+#[test]
+fn a_wide_card_keeps_its_options_panel_beside_the_stage() {
+    let mut app = app();
+    app.navigate(PageId::Home);
+    app.rebuild(VIEWPORT);
+    let card = &app.page_layout().expect("page layout").cards[0];
+    assert!(
+        card.knobs.origin.y <= card.stage.max().y,
+        "the options panel should start beside the stage: {:?}",
+        card.knobs
+    );
+    assert!(
+        card.knobs.origin.x >= card.stage.max().x - 1.0,
+        "the options panel should not overlap the stage"
+    );
+}
+
+/// A narrow card folds its options panel below the stage.
+#[test]
+fn a_narrow_card_folds_its_options_panel_below_the_stage() {
+    let mut app = app();
+    app.navigate(PageId::Home);
+    app.rebuild((760.0, 900.0));
+    let card = &app.page_layout().expect("page layout").cards[0];
+    assert!(
+        card.knobs.origin.y > card.stage.max().y,
+        "the options panel should fold below the stage: {:?}",
+        card.knobs
+    );
+    assert!(
+        card.knobs.size.x <= card.stage.size.x + 1.0,
+        "the folded panel should not be wider than the stage"
+    );
+}
+
+/// The fold follows the window, frame by frame.
+///
+/// A drag that only lays out its final size is a drag that shows a frozen
+/// picture for its whole duration, so every intermediate size has to be
+/// solved and has to stay clean.
+#[test]
+fn the_options_panel_folds_while_the_window_is_resized() {
+    let mut app = app();
+    app.navigate(PageId::Home);
+    let mut folded = Vec::new();
+    for width in [1440.0, 1200.0, 1000.0, 900.0, 800.0, 700.0, 1440.0] {
+        app.rebuild((width, 900.0));
+        let card = &app.page_layout().expect("page layout").cards[0];
+        folded.push(card.knobs.origin.y > card.stage.max().y);
+        let report = Harness::run(&app.frame());
+        assert!(
+            report.is_clean(),
+            "the layout at {width} produced {} diagnostic(s): {}",
+            report.diagnostics.len(),
+            report.summary()
+        );
+    }
+    assert_eq!(
+        folded,
+        vec![false, false, false, false, true, true, false],
+        "the panel must fold once the card is too narrow and unfold again"
+    );
+}
+
+/// A card's size is fixed, so the card is a relayout boundary.
+///
+/// Nothing inside a card can change its size, which means a change inside a
+/// card never re-solves the page.
+#[test]
+fn every_card_is_a_relayout_boundary() {
+    let mut app = app();
+    app.navigate(PageId::Home);
+    app.rebuild(VIEWPORT);
+    let cards = app.page_layout().expect("page layout").cards.len();
+    assert!(cards > 0, "the page should have cards");
+    assert_eq!(
+        app.relayout_boundary_count(),
+        cards,
+        "every card must be a relayout boundary"
+    );
+}

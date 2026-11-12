@@ -588,10 +588,24 @@ impl LayoutEngine {
         visited
     }
 
-    /// Last computed rectangle for a node.
+    /// Last computed rectangle for a node, in its parent's coordinate space.
+    ///
+    /// Taffy reports a node's position inside its parent, so the rectangle
+    /// is relative — the same space [`unbound_world::UiWorld::apply_rects`]
+    /// writes back into the world. Use [`Self::world_rect`] when absolute
+    /// coordinates are what the caller needs.
     #[must_use]
     pub fn rect(&self, id: NodeId) -> Option<Rect> {
         self.rects.get(&id).copied()
+    }
+
+    /// Last computed rectangle for a node in absolute window coordinates.
+    ///
+    /// The world folds every ancestor's offset into `world_rect` when it
+    /// applies a solve, so this is the rectangle a painter wants.
+    #[must_use]
+    pub fn world_rect(&self, world: &UiWorld, id: NodeId) -> Option<Rect> {
+        world.get(id).map(|node| node.world_rect)
     }
 }
 

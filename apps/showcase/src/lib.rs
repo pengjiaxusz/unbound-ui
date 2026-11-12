@@ -12,6 +12,8 @@ pub mod canvas;
 pub mod gallery;
 /// Keyboard actions shared by the window and the headless tests.
 pub mod keys;
+/// The shell's layout tree: the node tree `LayoutEngine` solves.
+pub mod layout_tree;
 /// The page catalogue and the live example renderers.
 pub mod pages;
 /// The dogfooded application shell and its state machine.

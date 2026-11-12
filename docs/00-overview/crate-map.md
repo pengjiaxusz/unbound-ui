@@ -63,7 +63,7 @@
 | `unbound-host` | 909 | Host-Guest C-ABI 热重载、分配器劫持、状态迁移 | `unbound-abi` |
 | `unbound-kpi` | 398 | 验收红线实测 | 多数 crate |
 | `app-guest` | 529 | 可热重载的业务层 cdylib | `unbound-abi` |
-| `apps/showcase` | 10527 | 自举式 UI Gallery：三段式壳层、21 页示例卡、Knob 调参、代码/A11y 面板、搜索与 HUD | `unbound-gpu`、`unbound-text`、`unbound-platform`、`unbound-input`、`unbound-world`、`unbound-a11y`、`unbound-anim`、`unbound-headless` |
+| `apps/showcase` | 14281 | 自举式 UI Gallery：三段式壳层、21 页示例卡、Knob 调参、代码/A11y 面板、搜索与 HUD；壳层几何由 `UiWorld` 节点树 + `LayoutEngine` 求解 | `unbound-gpu`、`unbound-text`、`unbound-platform`、`unbound-input`、`unbound-world`、`unbound-layout`、`unbound-widgets`、`unbound-theme`、`unbound-a11y`、`unbound-anim`、`unbound-headless` |
 | `apps/gallery` | 474 | 全链路演示程序（控制台测量） | `unbound-gpu` |
 
 ## 三条刻意的依赖禁令

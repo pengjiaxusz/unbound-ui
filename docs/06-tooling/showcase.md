@@ -5,7 +5,7 @@
 > | | |
 > | :--- | :--- |
 > | **源码** | `apps/showcase/src/{main,shell,state,canvas,widgets,target,gallery,pages/*}.rs` |
-> | **关键类型** | `GalleryApp`、`ShellLayout`、`GalleryState`、`ExampleCard`（`PageLayout`/`CardLayout`）、`Canvas`、`Target`、`Palette`、`Labels` |
+> | **关键类型** | `GalleryApp`、`ShellTree`、`ShellLayout`、`GalleryState`、`ExampleCard`（`PageLayout`/`CardLayout`）、`Canvas`、`Target`、`Palette`、`Labels` |
 > | **测试** | `apps/showcase/tests/gallery.rs`（13 个）+ `apps/showcase/tests/shell.rs`（9 个），全部无头运行；布局体检走 `unbound-headless` |
 
 `apps/showcase` 现在是一个**自举（dogfooding）的桌面应用**：它用引擎自己的布局、
@@ -72,8 +72,38 @@
    提升 revision，空闲时窗口保持低功耗。
 2. `sync(viewport)` 比较 revision / hover / pressed / focus / viewport，只有在
    可观察状态变化时才 `rebuild`。
-3. `rebuild` 计算 `ShellLayout` 与每张卡片的几何，由 `Canvas` 发射图元、命中
-   区域、语义节点与 RangeZone，最后交给 `Router` 与 `Semantics`。
+3. `rebuild` 求解**布局树**（`ShellTree`：`UiWorld` 节点树 + `LayoutEngine`），
+   读出 `ShellLayout` 与每张卡片的几何，再由 `Canvas` 发射图元、命中区域、
+   语义节点与 RangeZone，最后交给 `Router` 与 `Semantics`。
+
+### 布局树
+
+壳层的几何不再由手算的矩形堆出来，而是一棵交给 `LayoutEngine` 求解的节点树：
+
+```
+Root (Column)
+├── TopBar (Row, 高 56)          ← 顶栏控件为绝对定位子节点
+└── Body (Row)
+    ├── Nav (Column, 宽 = nav_width)
+    └── Content (Column, CLIP|SCROLL_Y)
+        └── Page (Column)         ← 页边距、卡片间距
+            ├── Header (高 140)
+            └── Cards (Column, gap 18)
+                └── Card (Column, 定宽定高 + CLIP ⇒ RelayoutBoundary)
+                    ├── Head (标题与描述占位)
+                    ├── Body (Row, WRAP)   ← 舞台 + OPTIONS 面板
+                    │   ├── Stage (flex_grow 1, basis 314)
+                    │   └── Knobs (宽 30%, min 188, max 318)
+                    ├── CodeBar (高 30)
+                    └── CodePanel (展开时存在)
+```
+
+- **折行由引擎决定**：`Stage` 与 `Knobs` 同处一条 flex 线，线宽不够时
+  `Knobs` 自动换行落到舞台下方——没有硬编码的断点，窗口连续缩放时逐帧
+  重新求解即可自适应。
+- **卡片是重排边界**：卡片尺寸固定且裁剪子节点，世界因此把它标记为
+  `RelayoutBoundary`，卡内变化不会牵连页面重排。
+- **滚动不触发重排**：滚动只平移页面内的读数，布局本身不受影响。
 
 自建 Canvas 层使用绝对逻辑坐标与递增 z 序，因此缩放（逻辑坐标 = 物理 /
 （OS Scale × App Zoom））与像素对齐（`snap`）只影响几何，不影响命中与语义；

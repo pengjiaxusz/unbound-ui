@@ -14,136 +14,14 @@ use unbound_platform::{Modifiers, PlatformKey};
 
 use crate::canvas::{AlignX, AlignY, Canvas, RangeZone};
 use crate::gallery::{self, Labels, Palette};
+use crate::layout_tree::{CardLayout, KnobRow, PageLayout, ShellLayout, ShellTree};
 use crate::pages::{self, CategoryId, DemoCtx, KnobSpec, PageId};
 use crate::state::{GalleryState, ThemeMode, ZOOM_STEPS};
 use crate::target::{self, Target, ROOT};
 use crate::widgets::{self, Icon};
 
-const TOP_BAR_HEIGHT: f32 = 56.0;
 const NAV_EXPANDED: f32 = 248.0;
 const NAV_COLLAPSED: f32 = 68.0;
-
-/// Responsive geometry for one frame.
-#[derive(Copy, Clone, Debug)]
-pub struct ShellLayout {
-    pub viewport: Rect,
-    pub top_bar: Rect,
-    pub nav: Rect,
-    pub content: Rect,
-    pub nav_width: f32,
-    pub nav_toggle: Rect,
-    pub search: Rect,
-    pub theme: Rect,
-    pub zoom: Rect,
-    pub snap: Rect,
-    pub hud: Rect,
-    pub window_minimize: Rect,
-    pub window_maximize: Rect,
-    pub window_close: Rect,
-    pub compact: bool,
-    pub wide: bool,
-}
-
-impl ShellLayout {
-    #[must_use]
-    pub fn new(viewport: Rect, nav_width: f32) -> Self {
-        let width = viewport.size.x;
-        let compact = width < 1080.0;
-        let wide = width >= 1240.0;
-        let top_bar = Rect::new(0.0, 0.0, width, TOP_BAR_HEIGHT);
-        let nav = Rect::new(
-            0.0,
-            TOP_BAR_HEIGHT,
-            nav_width,
-            (viewport.size.y - TOP_BAR_HEIGHT).max(0.0),
-        );
-        let content = Rect::new(
-            nav_width,
-            TOP_BAR_HEIGHT,
-            (width - nav_width).max(0.0),
-            (viewport.size.y - TOP_BAR_HEIGHT).max(0.0),
-        );
-
-        // Native decorations are disabled, so the right edge belongs to the
-        // client-side minimise / maximise / close buttons.
-        let close = Rect::new((width - 52.0).max(0.0), 0.0, 44.0, TOP_BAR_HEIGHT);
-        let maximize = Rect::new(close.origin.x - 44.0, 0.0, 44.0, TOP_BAR_HEIGHT);
-        let minimize = Rect::new(maximize.origin.x - 44.0, 0.0, 44.0, TOP_BAR_HEIGHT);
-        let right = minimize.origin.x - 10.0;
-        let hud = Rect::new(right - 32.0, 12.0, 32.0, 32.0);
-        let snap = Rect::new(hud.origin.x - 38.0, 12.0, 32.0, 32.0);
-        // Four zoom steps need a 43 px slot each for `"100%"` plus its
-        // padding; below that the compact labels are used instead.
-        let zoom_width = if width < 1000.0 { 150.0 } else { 190.0 };
-        let zoom = Rect::new(snap.origin.x - 8.0 - zoom_width, 12.0, zoom_width, 32.0);
-        let theme_width = if compact { 34.0 } else { 118.0 };
-        let theme = Rect::new(zoom.origin.x - 8.0 - theme_width, 12.0, theme_width, 32.0);
-        let search_width = if width < 900.0 {
-            0.0
-        } else if width < 1000.0 {
-            170.0
-        } else {
-            (width * 0.24).clamp(220.0, 380.0)
-        };
-        let search_x = (width * 0.5 - search_width * 0.5)
-            .max(218.0)
-            .min((theme.origin.x - search_width - 20.0).max(218.0));
-        let search = if search_width > 0.0 {
-            Rect::new(search_x, 12.0, search_width, 32.0)
-        } else {
-            Rect::new(0.0, 12.0, 0.0, 32.0)
-        };
-        let nav_toggle = Rect::new(12.0, 12.0, 32.0, 32.0);
-        Self {
-            viewport,
-            top_bar,
-            nav,
-            content,
-            nav_width,
-            nav_toggle,
-            search,
-            theme,
-            zoom,
-            snap,
-            hud,
-            window_minimize: minimize,
-            window_maximize: maximize,
-            window_close: close,
-            compact,
-            wide,
-        }
-    }
-}
-
-/// One knob row inside an options panel.
-#[derive(Clone, Debug)]
-struct KnobRow {
-    index: usize,
-    row: Rect,
-    label: Option<Rect>,
-    control: Rect,
-}
-
-/// One example card after layout.
-#[derive(Clone, Debug)]
-struct CardLayout {
-    index: usize,
-    rect: Rect,
-    stage: Rect,
-    knobs: Rect,
-    knob_rows: Vec<KnobRow>,
-    code_bar: Rect,
-    code_panel: Option<Rect>,
-}
-
-/// A page after layout.
-#[derive(Clone, Debug)]
-struct PageLayout {
-    page: PageId,
-    header: Rect,
-    cards: Vec<CardLayout>,
-    content_height: f32,
-}
 
 /// A window action requested by the custom title bar.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -216,6 +94,12 @@ pub struct GalleryApp {
     pub ranges: Vec<RangeZone>,
     pub scroll_zones: Vec<(Rect, u8)>,
     pub semantics: unbound_a11y::Semantics,
+    /// The layout tree the shell's geometry comes from.
+    ///
+    /// The tree is the single source of truth for the shell's rectangles:
+    /// the title bar, the navigation pane and the page are nodes that
+    /// `LayoutEngine` solves, not arithmetic in this file.
+    tree: ShellTree,
     page_layout: Option<PageLayout>,
     nav_spring: Spring,
     /// The upload generation of the current scene.
@@ -254,7 +138,12 @@ impl GalleryApp {
     /// Create the gallery at its Home page.
     #[must_use]
     pub fn new() -> Self {
-        let layout = ShellLayout::new(Rect::new(0.0, 0.0, 1280.0, 800.0), NAV_EXPANDED);
+        let mut tree = ShellTree::new();
+        let layout = tree.solve(
+            &GalleryState::default(),
+            Rect::new(0.0, 0.0, 1280.0, 800.0),
+            NAV_EXPANDED,
+        );
         let mut nav_spring = Spring::new(SpringPreset::Snappy, NAV_EXPANDED);
         nav_spring.set_target(NAV_EXPANDED);
         Self {
@@ -268,6 +157,7 @@ impl GalleryApp {
             ranges: Vec::new(),
             scroll_zones: Vec::new(),
             semantics: unbound_a11y::Semantics::new(ROOT),
+            tree,
             page_layout: None,
             nav_spring,
             generation: 0,
@@ -355,6 +245,21 @@ impl GalleryApp {
         changed
     }
 
+    /// The geometry of the page as the layout tree solved it.
+    #[must_use]
+    pub fn page_layout(&self) -> Option<&PageLayout> {
+        self.page_layout.as_ref()
+    }
+
+    /// The number of cards that are relayout boundaries.
+    ///
+    /// A card's size is fixed, so nothing inside it can change it: the page
+    /// can be re-solved without touching the card.
+    #[must_use]
+    pub fn relayout_boundary_count(&self) -> usize {
+        self.tree.card_boundary_count()
+    }
+
     /// The upload generation of the current scene.
     ///
     /// The GPU skips the upload when the generation did not move, so the
@@ -371,18 +276,22 @@ impl GalleryApp {
         let (width, height) = viewport;
         let viewport_rect = Rect::new(0.0, 0.0, width.max(320.0), height.max(240.0));
         let nav_width = self.nav_spring.value.clamp(NAV_COLLAPSED, NAV_EXPANDED);
-        let layout = ShellLayout::new(viewport_rect, nav_width);
         let palette = gallery::palette();
         let hover = self.router.hover();
         let pressed = self.router.pointer().pressed();
-        let page_layout = compute_page(&self.state, &layout);
+        // The tree owns the geometry: the title bar, the navigation pane and
+        // the page are solved, not measured by hand.
+        let layout = self.tree.solve(&self.state, viewport_rect, nav_width);
         let nav_max_scroll = nav_height(&layout) - nav_tree_rect(&layout).size.y;
         self.state.nav_scroll = self.state.nav_scroll.clamp(0.0, nav_max_scroll.max(0.0));
+        let content_height = self.tree.content_height();
         self.state.content_scroll = self.state.content_scroll.clamp(
             0.0,
-            (page_layout.content_height - layout.content.size.y + 48.0).max(0.0),
+            (content_height - layout.content.size.y + 48.0).max(0.0),
         );
-        let page_layout = compute_page(&self.state, &layout);
+        let page_layout = self
+            .tree
+            .page_layout(&self.state, self.state.content_scroll);
 
         self.scene = gallery::Gallery::new();
         let focused = self.focused;
@@ -1522,170 +1431,6 @@ fn nav_height(layout: &ShellLayout) -> f32 {
         height += 24.0 + category.pages().len() as f32 * 30.0 + 8.0;
     }
     height + 90.0
-}
-
-fn compute_page(state: &GalleryState, layout: &ShellLayout) -> PageLayout {
-    let page = state.active_page;
-    let pad = if layout.content.size.x < 760.0 {
-        24.0
-    } else {
-        36.0
-    };
-    let x = layout.content.origin.x + pad;
-    let width = (layout.content.size.x - pad * 2.0).max(280.0);
-    let scroll = state.content_scroll;
-    let header = Rect::new(x, layout.content.origin.y + 26.0 - scroll, width, 140.0);
-    let mut y = layout.content.origin.y + 172.0 - scroll;
-    let mut cards = Vec::new();
-    for (index, example) in page.examples().iter().enumerate() {
-        let open = state.code_open(page, index as u8);
-        let lines = example.code.lines().count().min(12);
-        let panel_height = if open {
-            12.0 + lines as f32 * 15.0 + 24.0
-        } else {
-            0.0
-        };
-        let inner = width - 32.0;
-        let knob_count = example.knobs.len();
-        // A narrow card stacks the options *below* the stage. Side by side,
-        // the options panel would take its fixed 188 px and squeeze the stage
-        // until the demo overflowed it — which is what happened at 200 % zoom.
-        let stacked = knob_count > 0 && inner < 520.0;
-        let stacked_knob_height = 96.0;
-        let card_height = 76.0
-            + example.stage_height
-            + if stacked {
-                6.0 + stacked_knob_height
-            } else {
-                0.0
-            }
-            + 6.0
-            + 30.0
-            + if open { 4.0 + panel_height } else { 0.0 }
-            + 10.0;
-        let rect = Rect::new(x, y, width, card_height);
-        let (stage, knobs) = if knob_count == 0 {
-            (
-                Rect::new(x + 16.0, y + 76.0, inner, example.stage_height),
-                Rect::new(x + 16.0, y + 76.0, 0.0, 0.0),
-            )
-        } else if stacked {
-            (
-                Rect::new(x + 16.0, y + 76.0, inner, example.stage_height),
-                Rect::new(
-                    x + 16.0,
-                    y + 76.0 + example.stage_height + 6.0,
-                    inner,
-                    stacked_knob_height,
-                ),
-            )
-        } else {
-            let knob_width = (inner * 0.30).clamp(188.0, 318.0);
-            let stage_width = (inner - knob_width - 18.0).max(120.0);
-            (
-                Rect::new(x + 16.0, y + 76.0, stage_width, example.stage_height),
-                Rect::new(
-                    x + 16.0 + stage_width + 18.0,
-                    y + 76.0,
-                    knob_width,
-                    example.stage_height,
-                ),
-            )
-        };
-        let mut knob_rows = Vec::new();
-        // A stacked options panel is wide and short: its knobs sit side by
-        // side instead of in a column.
-        let stacked_columns = stacked && example.knobs.len() > 1;
-        let column_width = if stacked_columns {
-            (knobs.size.x / example.knobs.len() as f32).max(80.0)
-        } else {
-            knobs.size.x
-        };
-        let mut row_y = knobs.origin.y + 34.0;
-        for (knob_index, spec) in example.knobs.iter().enumerate() {
-            let (height, control_height) = match spec {
-                KnobSpec::Toggle { .. } | KnobSpec::CheckBox { .. } => (44.0, 30.0),
-                KnobSpec::Slider { .. } => (58.0, 28.0),
-                KnobSpec::Segmented { .. } => (60.0, 28.0),
-            };
-            let column_x = if stacked_columns {
-                knobs.origin.x + knob_index as f32 * column_width
-            } else {
-                knobs.origin.x
-            };
-            // A slider and a segmented control carry their own label above the
-            // interactive row. Toggles and checkboxes keep the label inside
-            // the row (the whole row is the control), so they start at +6.
-            let (label, control_y) = match spec {
-                KnobSpec::Slider { .. } | KnobSpec::Segmented { .. } => (
-                    Some(Rect::new(
-                        column_x + 10.0,
-                        row_y,
-                        (column_width - 20.0).max(40.0),
-                        16.0,
-                    )),
-                    row_y + 20.0,
-                ),
-                _ => (None, row_y + 6.0),
-            };
-            let control = Rect::new(
-                column_x + 10.0,
-                control_y,
-                (column_width - 20.0).max(40.0),
-                control_height,
-            );
-            knob_rows.push(KnobRow {
-                index: knob_index,
-                row: Rect::new(
-                    column_x + 10.0,
-                    row_y,
-                    (column_width - 20.0).max(40.0),
-                    height,
-                ),
-                label,
-                control,
-            });
-            if !stacked_columns {
-                row_y += height;
-            }
-        }
-        let body_bottom = y
-            + 76.0
-            + example.stage_height
-            + if stacked {
-                6.0 + stacked_knob_height
-            } else {
-                0.0
-            };
-        let code_bar = Rect::new(x + 16.0, body_bottom + 6.0, inner, 30.0);
-        let code_panel = if open {
-            Some(Rect::new(
-                x + 16.0,
-                code_bar.max().y + 4.0,
-                inner,
-                panel_height,
-            ))
-        } else {
-            None
-        };
-        cards.push(CardLayout {
-            index,
-            rect,
-            stage,
-            knobs,
-            knob_rows,
-            code_bar,
-            code_panel,
-        });
-        y += card_height + 18.0;
-    }
-    let content_height = (y + scroll - layout.content.origin.y + 8.0).max(layout.content.size.y);
-    PageLayout {
-        page,
-        header,
-        cards,
-        content_height,
-    }
 }
 
 fn search_overlay_rect(layout: &ShellLayout) -> Rect {
