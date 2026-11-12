@@ -230,6 +230,43 @@ pub struct AcquiredImage {
     /// The render submission must wait on this semaphore before it touches
     /// the image.
     pub available: vk::Semaphore,
+    /// The semaphore this image's render submission has to signal.
+    ///
+    /// Every swapchain image owns its own render-finished semaphore. A
+    /// single global semaphore cannot be reused: the presentation engine
+    /// only releases an image when it is acquired again, and the wait of the
+    /// previous presentation may still be pending at that point. Signalling
+    /// a semaphore that is still in use by `vkQueuePresentKHR` is a
+    /// validation error (`VUID-vkQueueSubmit2-semaphore-03868`).
+    ///
+    /// With one semaphore per image, the semaphore is only signalled again
+    /// once the very same image index has been acquired again — and the
+    /// image is only handed out again after its previous presentation has
+    /// completed, which is exactly when the previous wait was consumed.
+    pub render_finished: vk::Semaphore,
+}
+
+/// How many render-finished semaphores a swapchain with `image_count`
+/// images needs.
+///
+/// One per swapchain image: the semaphore is bound to the image it
+/// describes, not to the frame slot, because the presentation engine — not
+/// the renderer — decides how long an image stays busy.
+pub(crate) const fn render_finished_slot_count(image_count: usize) -> usize {
+    image_count
+}
+
+/// The slot of the render-finished semaphore that belongs to `image_index`.
+///
+/// The mapping has to be injective for the images of one swapchain: two
+/// images may never share a semaphore, or the second presentation would
+/// signal a semaphore the first presentation still waits on.
+pub(crate) const fn render_finished_slot(image_index: u32, image_count: usize) -> usize {
+    if image_count == 0 {
+        0
+    } else {
+        (image_index as usize) % image_count
+    }
 }
 
 /// Result of acquiring the next swapchain image.
@@ -390,6 +427,14 @@ pub struct Swapchain {
     /// renderer's own in-flight fence guarantees that the previous wait has
     /// already been consumed before a slot is reused.
     acquire_semaphores: Vec<vk::Semaphore>,
+    /// One render-finished semaphore per swapchain image.
+    ///
+    /// The semaphore is bound to the image, not to the frame slot: the
+    /// presentation engine may still be waiting on it long after the render
+    /// submission that signalled it has retired. Sharing one semaphore
+    /// across the images is what produced
+    /// `VUID-vkQueueSubmit2-semaphore-03868`.
+    render_finished_semaphores: Vec<vk::Semaphore>,
     /// The next semaphore of the round-robin.
     next_semaphore: usize,
     format: vk::Format,
@@ -648,6 +693,21 @@ impl Swapchain {
             acquire_semaphores.push(semaphore);
         }
 
+        // One "render finished" semaphore per swapchain image. The number has
+        // to match the image count, not the number of frames in flight: the
+        // semaphore describes how long *this image* stays busy for the
+        // presentation engine.
+        let mut render_finished_semaphores = Vec::with_capacity(images.len());
+        for _ in 0..render_finished_slot_count(images.len()) {
+            // SAFETY: the device outlives the swapchain.
+            let semaphore = unsafe {
+                gpu.device
+                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                    .map_err(GpuError::from)?
+            };
+            render_finished_semaphores.push(semaphore);
+        }
+
         // The low-latency present path needs three things at once: the
         // `VK_KHR_present_wait` extension, its `VK_KHR_present_id`
         // dependency, and the `presentWait`/`presentId` *features*. Checking
@@ -670,6 +730,7 @@ impl Swapchain {
             images,
             views,
             acquire_semaphores,
+            render_finished_semaphores,
             next_semaphore: 0,
             format: chosen.format,
             color_space: chosen.color_space,
@@ -803,12 +864,16 @@ impl Swapchain {
                 self.next_index = index;
                 self.acquired = Some(index);
                 let view = self.views[index as usize];
+                // The semaphore belongs to this image: it is only signalled
+                // again after this very image has been acquired again.
+                let slot = render_finished_slot(index, self.render_finished_semaphores.len());
                 Ok(AcquireOutcome::Ready {
                     image: AcquiredImage {
                         index,
                         view,
                         available: semaphore,
                         image: self.images[index as usize],
+                        render_finished: self.render_finished_semaphores[slot],
                     },
                     suboptimal,
                 })
@@ -965,6 +1030,9 @@ impl Swapchain {
             for semaphore in &self.acquire_semaphores {
                 gpu.device.destroy_semaphore(*semaphore, None);
             }
+            for semaphore in &self.render_finished_semaphores {
+                gpu.device.destroy_semaphore(*semaphore, None);
+            }
             for view in &self.views {
                 gpu.device.destroy_image_view(*view, None);
             }
@@ -1102,6 +1170,35 @@ mod tests {
             Ok(AcquireStatus::OutOfDate)
         );
         assert!(classify_acquire(Err(vk::Result::ERROR_SURFACE_LOST_KHR)).is_err());
+    }
+
+    /// The render-finished semaphores are bound to the swapchain *image*,
+    /// not to the frame slot.
+    ///
+    /// One global semaphore for every image is the bug that produced
+    /// `VUID-vkQueueSubmit2-semaphore-03868`: the presentation engine of
+    /// image 0 was still waiting on a semaphore that the frame for image 1
+    /// signalled again.
+    #[test]
+    fn the_render_finished_semaphores_are_allocated_per_image() {
+        // One semaphore per image — not per frame in flight.
+        assert_eq!(render_finished_slot_count(1), 1);
+        assert_eq!(render_finished_slot_count(3), 3);
+        assert_eq!(render_finished_slot_count(0), 0);
+
+        // The mapping is injective: two images never share a semaphore.
+        let count = 4;
+        let slots: Vec<usize> = (0..count as u32)
+            .map(|index| render_finished_slot(index, count))
+            .collect();
+        let mut unique = slots.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), count, "every image needs its own semaphore");
+
+        // An empty swapchain cannot panic.
+        assert_eq!(render_finished_slot(0, 0), 0);
+        assert_eq!(render_finished_slot(7, 0), 0);
     }
 
     /// The signatures the windowed callers depend on.

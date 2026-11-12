@@ -209,6 +209,14 @@ pub struct Renderer {
     ///
     /// The render submission waits on it before it touches the image.
     external_ready: vk::Semaphore,
+    /// The semaphore the frame submission signals when the frame is going
+    /// to be presented.
+    ///
+    /// This is the render-finished semaphore of the *acquired swapchain
+    /// image*: one per image, so the presentation engine never waits on a
+    /// semaphore that another image's presentation is still using. A null
+    /// semaphore falls back to [`Self::present_semaphore`].
+    external_signal: vk::Semaphore,
     /// Signalled when the frame's rendering has finished.
     ///
     /// The presentation engine waits on this before handing the image to the
@@ -517,6 +525,7 @@ impl Renderer {
             external_color: None,
             external_present: false,
             external_ready: vk::Semaphore::null(),
+            external_signal: vk::Semaphore::null(),
             present_semaphore,
         };
         renderer.write_default_lut()?;
@@ -760,8 +769,16 @@ impl Renderer {
                     vk::SemaphoreSubmitInfo::default(),
                 ];
                 let signal_count = if self.external_present {
+                    // The signal semaphore belongs to the acquired swapchain
+                    // image: signalling it a second time while the previous
+                    // presentation still waits on it is invalid usage.
+                    let signal_sem = if self.external_signal != vk::Semaphore::null() {
+                        self.external_signal
+                    } else {
+                        self.present_semaphore
+                    };
                     signal_infos[1] = vk::SemaphoreSubmitInfo::default()
-                        .semaphore(self.present_semaphore)
+                        .semaphore(signal_sem)
                         .value(0);
                     2
                 } else {
@@ -1141,6 +1158,7 @@ impl Renderer {
             width,
             height,
             image_available,
+            vk::Semaphore::null(),
             false,
         )
     }
@@ -1152,6 +1170,14 @@ impl Renderer {
     /// to `VK_IMAGE_LAYOUT_PRESENT_SRC_KHR` after the draw: presenting an image
     /// that is still in `COLOR_ATTACHMENT_OPTIMAL` is invalid and shows up as
     /// a validation error on every frame.
+    ///
+    /// **Prefer [`Self::render_into_swapchain`].** This entry point has no
+    /// swapchain image to bind the render-finished semaphore to, so it falls
+    /// back to the renderer's single global semaphore. Signalling that
+    /// semaphore again while the presentation engine still waits on it is
+    /// invalid usage (`VUID-vkQueueSubmit2-semaphore-03868`); the
+    /// image-bound semaphore of [`Self::render_into_swapchain`] is the one
+    /// that avoids it.
     ///
     /// # Errors
     /// Propagates Vulkan failures.
@@ -1171,6 +1197,39 @@ impl Renderer {
             width,
             height,
             image_available,
+            vk::Semaphore::null(),
+            true,
+        )
+    }
+
+    /// Render one frame into an acquired swapchain image.
+    ///
+    /// This is the safe windowed entry point: the acquired image carries
+    /// both semaphores the submission needs — the one the presentation
+    /// engine signals when the image becomes available (waited on) and the
+    /// one that belongs to *this* image (signalled).
+    ///
+    /// Signalling the image's own semaphore is what keeps the presentation
+    /// engine from waiting on a semaphore another image still owns
+    /// (`VUID-vkQueueSubmit2-semaphore-03868`).
+    ///
+    /// # Errors
+    /// Propagates Vulkan failures.
+    pub fn render_into_swapchain(
+        &mut self,
+        scene: &SceneUpload<'_>,
+        acquired: &crate::surface::AcquiredImage,
+        width: u32,
+        height: u32,
+    ) -> Result<FrameStats, GpuError> {
+        self.render_external(
+            scene,
+            acquired.image,
+            acquired.view,
+            width,
+            height,
+            acquired.available,
+            acquired.render_finished,
             true,
         )
     }
@@ -1184,14 +1243,17 @@ impl Renderer {
         width: u32,
         height: u32,
         image_available: vk::Semaphore,
+        render_finished: vk::Semaphore,
         present: bool,
     ) -> Result<FrameStats, GpuError> {
         self.external_color = Some((color_image, color_view, width, height));
         self.external_ready = image_available;
+        self.external_signal = render_finished;
         self.external_present = present;
         let result = self.render(scene);
         self.external_color = None;
         self.external_ready = vk::Semaphore::null();
+        self.external_signal = vk::Semaphore::null();
         self.external_present = false;
         result
     }

@@ -307,8 +307,6 @@ impl Timeline {
 /// Per-frame synchronisation primitives.
 #[derive(Debug)]
 pub struct FrameSync {
-    pub image_available: vk::Semaphore,
-    pub render_finished: vk::Semaphore,
     pub in_flight: vk::Fence,
     pub command_buffer: vk::CommandBuffer,
     /// Timeline value that marks this frame complete.
@@ -792,12 +790,6 @@ impl Gpu {
 
         let mut frames = Vec::with_capacity(frame_count as usize);
         for (i, cmd) in cmd_buffers.into_iter().enumerate() {
-            let image_available = device
-                .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-                .map_err(GpuError::Vulkan)?;
-            let render_finished = device
-                .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-                .map_err(GpuError::Vulkan)?;
             let in_flight = device
                 .create_fence(
                     &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED),
@@ -805,8 +797,6 @@ impl Gpu {
                 )
                 .map_err(GpuError::Vulkan)?;
             frames.push(FrameSync {
-                image_available,
-                render_finished,
                 in_flight,
                 command_buffer: cmd,
                 timeline_value: i as u64,
@@ -1236,8 +1226,6 @@ impl Gpu {
         unsafe {
             let _ = self.device.device_wait_idle();
             for f in &self.frames {
-                self.device.destroy_semaphore(f.image_available, None);
-                self.device.destroy_semaphore(f.render_finished, None);
                 self.device.destroy_fence(f.in_flight, None);
             }
             self.device.destroy_semaphore(self.timeline.semaphore, None);

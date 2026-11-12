@@ -599,18 +599,14 @@ impl PlatformApp for Showcase {
         // onto the physical viewport at any DPI.
         self.app.scene.camera = Camera::ui((width as f32, height as f32), scale);
         let scene = self.app.scene.upload(self.generation);
-        if let Err(error) = renderer.render_to_swapchain(
-            &scene,
-            image.image,
-            image.view,
-            width,
-            height,
-            image.available,
-        ) {
+        if let Err(error) = renderer.render_into_swapchain(&scene, &image, width, height) {
             eprintln!("render failed: {error}");
             return Flow::Continue;
         }
-        let finished = renderer.present_semaphore();
+        // The render-finished semaphore belongs to *this* swapchain image, so
+        // the presentation engine never waits on a semaphore another image
+        // still owns.
+        let finished = image.render_finished;
         // A present that came back "recreate" means the surface moved under
         // the swapchain: the frame was shown, but the chain is stale now.
         match swapchain.present_outcome(&renderer.gpu, image.index, finished) {
