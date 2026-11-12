@@ -62,6 +62,12 @@ pub struct SegmentedDesc {
     pub labels: Vec<String>,
     /// The index of the selected slot.
     pub selected: usize,
+    /// The animated position of the pill, in slot units.
+    ///
+    /// `None` paints the pill inside [`Self::selected`] (the frame-to-frame
+    /// result). `Some(t)` draws a single floating pill at `t` between slots,
+    /// which is what makes a selection change slide instead of jump.
+    pub thumb: Option<f32>,
     /// The draw order key.
     pub z: u16,
 }
@@ -74,6 +80,7 @@ impl SegmentedDesc {
             rect,
             labels: labels.iter().map(|label| (*label).to_string()).collect(),
             selected: 0,
+            thumb: None,
             z: 700,
         }
     }
@@ -83,6 +90,31 @@ impl SegmentedDesc {
     pub fn with_selected(mut self, selected: usize) -> Self {
         self.selected = selected;
         self
+    }
+
+    /// Draw the pill at an interpolated slot position instead of snapping it
+    /// into the selected slot.
+    #[must_use]
+    pub fn with_thumb(mut self, thumb: f32) -> Self {
+        self.thumb = Some(thumb);
+        self
+    }
+
+    /// The pill rectangle, interpolated when [`Self::thumb`] is set.
+    #[must_use]
+    pub fn thumb_rect(&self) -> Rect {
+        let position = self
+            .thumb
+            .unwrap_or(self.selected as f32)
+            .clamp(0.0, (self.count() - 1) as f32);
+        let count = self.count();
+        let width = self.rect.size.x / count as f32;
+        Rect::new(
+            self.rect.origin.x + position * width + SEGMENT_INSET,
+            self.rect.origin.y + SEGMENT_INSET,
+            (width - SEGMENT_INSET * 2.0).max(8.0),
+            (self.rect.size.y - SEGMENT_INSET * 2.0).max(8.0),
+        )
     }
 
     /// How many slots the control has.
@@ -122,7 +154,22 @@ impl SegmentedDesc {
 /// The frame carries no hit region: only the slots themselves are pickable.
 #[must_use]
 pub fn emit_segmented_frame(desc: &SegmentedDesc, tokens: SegmentedTokens) -> WidgetOutput {
-    let primitives = vec![surface(desc.rect, 7.0, tokens.frame, desc.z)];
+    let mut primitives = Vec::with_capacity(2);
+    primitives.push(surface(desc.rect, 7.0, tokens.frame, desc.z));
+    // An animated pill lives in the frame, not in a slot: it has to be one
+    // primitive that moves, otherwise the fill would teleport from one slot
+    // to the next and the "animation" would be a flicker.
+    if desc.thumb.is_some() {
+        primitives.push(outlined(
+            desc.thumb_rect(),
+            5.0,
+            tokens.selected,
+            tokens.selected_border,
+            1.0,
+            0.0,
+            desc.z,
+        ));
+    }
     WidgetOutput {
         primitives,
         payloads: Vec::new(),
@@ -156,7 +203,14 @@ pub fn emit_segmented_segment(
     // slot paints nothing at all. Because the primitive exists in every
     // state, hovering a slot patches one instance instead of renumbering the
     // pool.
-    let (fill, border, border_width) = if active {
+    let (fill, border, border_width) = if desc.thumb.is_some() {
+        // The frame owns the pill; a slot only paints its hover fill.
+        if state.phase == PointerPhase::Hovered && !active {
+            (tokens.hover, Token::NONE, 0.0)
+        } else {
+            (Token::NONE, Token::NONE, 0.0)
+        }
+    } else if active {
         (tokens.selected, tokens.selected_border, 1.0)
     } else if state.phase == PointerPhase::Hovered {
         (tokens.hover, Token::NONE, 0.0)
@@ -323,5 +377,42 @@ mod tests {
             let a11y = output.a11y.expect("每个槽位都有语义节点");
             assert_eq!(a11y.role, Role::Tab);
         }
+    }
+
+    #[test]
+    fn the_frame_paints_the_thumb_at_its_interpolated_position() {
+        let tokens = SegmentedTokens::standard();
+        let desc = desc().with_selected(2).with_thumb(1.5);
+        // 300 px / 3 slots = 100 px per slot; halfway between slot 1 and 2.
+        assert!((desc.thumb_rect().origin.x - 152.0).abs() < 0.01);
+        let output = emit_segmented_frame(&desc, tokens);
+        assert_eq!(output.primitives.len(), 2);
+        assert_eq!(
+            output.primitives[1].fill_token_or_uv,
+            tokens.selected.raw() as u32
+        );
+        assert_eq!(
+            output.primitives[1].border_token_or_tex,
+            tokens.selected_border.raw() as u32
+        );
+    }
+
+    #[test]
+    fn a_thumb_frame_leaves_the_slot_fills_empty() {
+        let tokens = SegmentedTokens::standard();
+        let desc = desc().with_selected(1).with_thumb(1.0);
+        let output = emit_segmented_segment(1, &desc, 1, ControlState::default(), &[], tokens);
+        // The frame owns the pill; the active slot must not paint a second one.
+        assert_eq!(
+            output.primitives[0].fill_token_or_uv,
+            Token::NONE.raw() as u32
+        );
+    }
+
+    #[test]
+    fn the_thumb_is_clamped_to_the_row() {
+        let desc = desc();
+        assert!((desc.clone().with_thumb(-1.0).thumb_rect().origin.x - 2.0).abs() < 0.01);
+        assert!((desc.clone().with_thumb(9.0).thumb_rect().origin.x - 202.0).abs() < 0.01);
     }
 }
