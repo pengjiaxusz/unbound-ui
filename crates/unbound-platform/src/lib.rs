@@ -22,13 +22,20 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+pub mod a11y_bridge;
 pub mod backend;
+pub mod clipboard;
 pub mod latency;
 pub mod pacing;
 pub mod resize;
 pub mod window;
+pub mod windows;
 
+pub use a11y_bridge::{action_request, A11yBridge, A11yRequest, A11yTransport};
 pub use backend::{Flow, PlatformWindow};
+pub use clipboard::{
+    ClipboardError, ClipboardProvider, MemoryClipboard, SystemClipboard, MAX_CLIPBOARD_BYTES,
+};
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
 pub use pacing::{
     renderer_present_config, FramePacer, PresentSync, PresentWaitPolicy, MIN_FPS_LIMIT,
@@ -39,3 +46,4 @@ pub use window::{
     ImeState, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey, PlatformState,
     WindowConfig,
 };
+pub use windows::{WindowId, WindowRegistry, WindowSlot};
