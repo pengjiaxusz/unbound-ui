@@ -1,0 +1,23 @@
+[package]
+name = "unbound-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Application runtime: event reduction, scene rebuild and frame diffing"
+
+[dependencies]
+unbound-math.workspace = true
+unbound-input.workspace = true
+unbound-a11y.workspace = true
+unbound-theme.workspace = true
+unbound-gpu.workspace = true
+unbound-widgets.workspace = true
+
+[dev-dependencies]
+unbound-headless.workspace = true
+
+[lints]
+workspace = true
