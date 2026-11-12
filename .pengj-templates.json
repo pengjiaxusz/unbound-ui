@@ -65,7 +65,7 @@
     ".gitattributes": "b5099197608cab315182fadad3cdf0e06ad5ab9b21f3decf8ace9e328cb9a121",
     ".gitignore": "7dfaa8c81536367e53f3dc009c222f4d691a80b129f1ec6862b5b57f89ef20e8",
     ".vscode\\settings.json": "5ccf099e6f346fa5e3d18a280f96571f21aaeda1c323dca064bc66e03ea00c0f",
-    "AGENTS.md": "2b952e4f761822f226f7c6169c8656baac6a5fc577b8bf9d1d743577fbb403e6",
+    "AGENTS.md": "4058cac4f9949654a87fa68572577fb2438c5971240c04a162f27bd907b09e54",
     "commitlint.base.js": "0d81be3222e681a569c4b9c0a39a2cc93c68190252bdbd652d15e187a2f0de42",
     "just\\bque.just": "cf01148f49e980d5df19c46e7c616cc3812cd3a52b613779da1f4aa918b3f487",
     "just\\rust-workspace.just": "5aae64c139f55f40f3cc65705d436ee549fb650d84038ef885f7d4d07f5fb87c",
