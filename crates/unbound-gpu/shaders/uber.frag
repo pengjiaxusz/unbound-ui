@@ -58,12 +58,55 @@ float clip_slot_coverage(vec4 rect, uvec2 radii_packed) {
     return coverage_from_sd(sd, aa);
 }
 
-float glyph_alpha(float a, bool dark_bg) {
-    // Perceived-gamma compensation: dark text on a light surface needs a
-    // slightly thinner stem, light text on a dark surface a slightly thicker
-    // one. Without this the same font looks bold in one theme and anemic in the
-    // other.
-    return dark_bg ? pow(clamp(a, 0.0, 1.0), 0.85) : pow(clamp(a, 0.0, 1.0), 1.15);
+// The sRGB electro-optical transfer function, inverted.
+//
+// The colour attachment is `B8G8R8A8_SRGB`, so the hardware blends in
+// *linear* light. Text, on the other hand, has to look the way a
+// gamma-space compositor draws it: a stem edge that covers half a pixel must
+// read as half the text colour, not as a much lighter grey.
+//
+// The compensation turns the coverage into the alpha that reproduces the
+// gamma-space result once the hardware has blended in linear light:
+//
+//   * light text on a dark surface: `srgb_to_linear(a)`
+//   * dark text on a light surface: `1 - srgb_to_linear(1 - a)`
+//
+// Without it a 50 % covered stem lands at 0.735 in sRGB and reads as a thin,
+// washed-out grey line — which is exactly how black text on a white card
+// used to look.
+float srgb_to_linear(float c) {
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+
+// Whether the glyph's own colour is bright, i.e. whether it sits on a dark
+// surface.
+//
+// `FLAG_DARK_BG` overrides the guess for the rare case where the text colour
+// does not tell the story (a coloured label on a coloured surface).
+bool glyph_on_dark_surface(vec3 text_rgb, uint flags) {
+    if ((flags & FLAG_DARK_BG) != 0u) {
+        return true;
+    }
+    // The theme LUT holds linear colours; 0.214 is the linear value of the
+    // sRGB mid grey, so the test is "is the text brighter than mid grey".
+    float luma = dot(text_rgb, vec3(0.2126, 0.7152, 0.0722));
+    return luma > 0.214;
+}
+
+float glyph_alpha(float a, bool light_text) {
+    float c = clamp(a, 0.0, 1.0);
+    if (light_text) {
+        // Light text: the linear blend makes the stem look bolder than it
+        // is. The correction assumes the darkest possible background, so it
+        // is deliberately mild — a light label on a saturated surface (a
+        // badge on the hero gradient) must not disappear.
+        return pow(c, 1.05);
+    }
+    // Dark text: the linear blend washes the stem out. Half a covered pixel
+    // ends up at 0.735 in sRGB instead of 0.5, which is why black text on a
+    // white card looked grey and thin. This is the alpha that reproduces the
+    // gamma-space result against a light surface.
+    return 1.0 - srgb_to_linear(1.0 - c);
 }
 
 void main() {
@@ -113,21 +156,25 @@ void main() {
         uint layer = v_tokens.y;
         vec2 tile = v_local / size;
         vec2 uv = mix(pl.p0, pl.p1, tile);
+        bool on_dark = glyph_on_dark_surface(fill.rgb, flags);
         if (prim_type == PRIM_GLYPH) {
             tex_a = texture(u_atlas_r8[nonuniformEXT(layer)], uv).r;
-            tex_a = glyph_alpha(tex_a, (flags & FLAG_DARK_BG) != 0u);
+            tex_a = glyph_alpha(tex_a, on_dark);
             texel = fill.rgb;
         } else {
             vec4 t = texture(u_atlas_rgba[nonuniformEXT(layer)], uv);
             if ((flags & FLAG_MSDF) != 0u) {
                 // Median of the three distance channels: sharp at any scale.
                 float m = max(min(t.r, t.g), min(max(t.r, t.g), t.b));
-                // fwidth(m) is the distance-field step per screen pixel, so
-                // this ramp is exactly one pixel wide. The old ±fwidth window
-                // was two pixels wide and made every stem look soft.
-                float w = max(fwidth(m), 1e-4);
-                float coverage = clamp((m - 0.5) / w + 0.5, 0.0, 1.0);
-                tex_a = glyph_alpha(coverage, (flags & FLAG_DARK_BG) != 0u);
+                // The true distance field gradient is the *length* of the
+                // screen-space derivative, not its largest component. On a
+                // diagonal edge `fwidth` underestimates it by up to √2, which
+                // widens the transition band to ~2.8 px and turns every stem
+                // into a soft blob.
+                float grad = length(vec2(dFdx(m), dFdy(m)));
+                float w = max(grad * 0.5, 1e-4);
+                float coverage = clamp((m - 0.5) / (2.0 * w) + 0.5, 0.0, 1.0);
+                tex_a = glyph_alpha(coverage, on_dark);
                 texel = fill.rgb;
             } else if (prim_type == PRIM_IMAGE) {
                 texel = t.rgb * fill.rgb;

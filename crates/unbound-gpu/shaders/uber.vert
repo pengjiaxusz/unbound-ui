@@ -9,10 +9,10 @@
 // Order of operations matters and is load-bearing:
 //   1. chunk-anchored camera-relative coordinates  (zero per-frame uploads)
 //   2. independent animation transform             (never enters Taffy)
-//   3. quad expansion by 3σ for analytic shadows
-//   4. clip the screen AABB against the folded clip rect
-//   5. reconstruct local coordinates through M⁻¹  (no shear on rotated quads)
-//   6. pixel snapping for static geometry, bypassed while animating
+//   3. pixel-grid alignment of the primitive's own box
+//   4. quad expansion by 3σ for analytic shadows
+//   5. clip the screen AABB against the folded clip rect
+//   6. reconstruct local coordinates through M⁻¹  (no shear on rotated quads)
 // ---------------------------------------------------------------------------
 
 #include "common.glsl"
@@ -54,18 +54,49 @@ void main() {
     float shadow_blur = unpack_shadow(p.border_and_shadow);
     float pad = shadow_blur > 0.0 ? shadow_blur * 3.0 : 0.0;
 
-    vec2 lo = vec2(-pad);
-    vec2 hi = p.size + vec2(pad);
     vec2 uv = vec2(float(gl_VertexIndex & 1u), float((gl_VertexIndex >> 1u) & 1u));
 
     float scale = pc.camera_zoom * pc.dpi_scale;
     vec2 half_vp = pc.viewport_size * 0.5;
 
+    // ---- 4. pixel-grid alignment -----------------------------------------
+    // The primitive's *own* box is snapped to the physical pixel grid: its
+    // top-left corner moves onto a pixel and its size is taken from the
+    // snapped corners.
+    //
+    // Snapping the box (rather than the shadow-padded hull) is what makes a
+    // 1 px border land exactly on a pixel boundary, so the analytic
+    // antialiasing resolves it to one fully covered pixel instead of a half
+    // transparent smear across two.
+    //
+    // The size stays exact for glyphs: a glyph quad is exactly as wide as its
+    // atlas allocation in texels, and an integer texel count survives the
+    // snap (`floor(a + n) - floor(a) == n` for integer `n`). That keeps the
+    // texture mapping at one texel per physical pixel — no stretch, no blur,
+    // and every letter of a word weighted the same.
+    //
+    // A rotated quad is left alone: its screen-space box is only a
+    // conservative hull, so snapping it would clip the shape.
+    bool axis_aligned = abs(m[0][1]) < 1e-5 && abs(m[1][0]) < 1e-5
+                      && abs(m[0][0] - 1.0) < 1e-5 && abs(m[1][1] - 1.0) < 1e-5;
+
+    vec2 eff_origin = origin_rel + trans;
+    vec2 eff_size = p.size;
+    if (!animated && axis_aligned) {
+        vec2 box_min_s = floor(rel_to_screen(eff_origin, scale, half_vp) + 0.5);
+        vec2 box_max_s = floor(rel_to_screen(eff_origin + p.size, scale, half_vp) + 0.5);
+        eff_origin = screen_to_rel(box_min_s, scale, half_vp);
+        eff_size = max((box_max_s - box_min_s) / scale, vec2(1.0 / scale));
+    }
+
+    vec2 lo = vec2(-pad);
+    vec2 hi = eff_size + vec2(pad);
+
     // Local -> camera-relative (animation matrix, then primitive origin).
-    vec2 c0 = origin_rel + (m * vec2(lo.x, lo.y) + trans);
-    vec2 c1 = origin_rel + (m * vec2(hi.x, lo.y) + trans);
-    vec2 c2 = origin_rel + (m * vec2(lo.x, hi.y) + trans);
-    vec2 c3 = origin_rel + (m * vec2(hi.x, hi.y) + trans);
+    vec2 c0 = eff_origin + m * vec2(lo.x, lo.y);
+    vec2 c1 = eff_origin + m * vec2(hi.x, lo.y);
+    vec2 c2 = eff_origin + m * vec2(lo.x, hi.y);
+    vec2 c3 = eff_origin + m * vec2(hi.x, hi.y);
 
     vec2 s0 = rel_to_screen(c0, scale, half_vp);
     vec2 s1 = rel_to_screen(c1, scale, half_vp);
@@ -75,16 +106,7 @@ void main() {
     vec2 bb_min = min(min(s0, s1), min(s2, s3));
     vec2 bb_max = max(max(s0, s1), max(s2, s3));
 
-    // ---- 6. pixel snapping ----------------------------------------------
-    // Snap the AABB, never the individual vertices: snapping vertices would
-    // change the aspect ratio of a rotated quad. Animated quads keep full
-    // sub-pixel precision so spring tails never crawl.
-    if (!animated) {
-        bb_min = floor(bb_min + 0.5);
-        bb_max = floor(bb_max + 0.5);
-    }
-
-    // ---- 4. clip ---------------------------------------------------------
+    // ---- 5. clip ---------------------------------------------------------
     if (p.clip_idx != CLIP_NONE) {
         ClipNode c = clips.c[p.clip_idx];
         vec2 clip_min = rel_to_screen(chunk_base + c.aabb.xy, scale, half_vp);
@@ -112,17 +134,20 @@ void main() {
 
     vec2 p_screen = mix(bb_min, bb_max, uv);
 
-    // ---- 5. inverse local reconstruction --------------------------------
+    // ---- 6. inverse local reconstruction --------------------------------
     // screen -> camera-relative -> local. Both steps are affine, so the
     // `noperspective` varyings below stay exact for rotated primitives, and the
     // SDF in the fragment shader is evaluated in true local space.
+    //
+    // The origin used here is the *snapped* one, so the local coordinate of a
+    // fragment is measured from the box's real (pixel-aligned) corner.
     vec2 p_rel = screen_to_rel(p_screen, scale, half_vp);
     mat2 inv_m = inverse2x2(m);
-    vec2 p_local = inv_m * (p_rel - origin_rel - trans);
+    vec2 p_local = inv_m * (p_rel - eff_origin);
 
     v_local = p_local;
     v_rel = p_rel;
-    v_size = p.size;
+    v_size = eff_size;
     v_radii = unpack_radii(p.radii_packed);
     v_border_pad = vec2(unpack_border(p.border_and_shadow), pad);    v_tokens = uvec4(p.fill, p.border_or_tex, p.type_flags, p.clip_idx);
     v_opacity = unpack_opacity(p.z_opacity);

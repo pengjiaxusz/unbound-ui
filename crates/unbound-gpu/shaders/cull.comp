@@ -41,13 +41,32 @@ void main() {
     float shadow = unpack_shadow(p.border_and_shadow);
     float pad = shadow > 0.0 ? shadow * 3.0 : 0.0;
 
+    // The primitive's transform has to be applied here as well: the vertex
+    // shader places the quad through it, so a box that is culled against the
+    // *untransformed* position would drop primitives that are plainly on
+    // screen — a rotated curve, or anything the animation moved.
+    Transform t = TransformBuf(pc.transforms_bda).t[p.transform_idx & TRANSFORM_INDEX_MASK];
+    mat2 m = mat2(t.linear.x, t.linear.y, t.linear.z, t.linear.w);
+    vec2 trans = t.translation;
+
     vec2 chunk_base = vec2(p.chunk_id - pc.camera_chunk) * CHUNK_SIZE - pc.camera_local;
-    vec2 lo = chunk_base + p.local_pos - vec2(pad);
-    vec2 hi = chunk_base + p.local_pos + p.size + vec2(pad);
+    vec2 origin_rel = chunk_base + p.local_pos;
+
+    vec2 lo = vec2(-pad);
+    vec2 hi = p.size + vec2(pad);
+    vec2 c0 = origin_rel + (m * vec2(lo.x, lo.y) + trans);
+    vec2 c1 = origin_rel + (m * vec2(hi.x, lo.y) + trans);
+    vec2 c2 = origin_rel + (m * vec2(lo.x, hi.y) + trans);
+    vec2 c3 = origin_rel + (m * vec2(hi.x, hi.y) + trans);
 
     float scale = pc.camera_zoom * pc.dpi_scale;
-    vec2 s_lo = rel_to_screen(lo, scale, pc.viewport_size * 0.5);
-    vec2 s_hi = rel_to_screen(hi, scale, pc.viewport_size * 0.5);
+    vec2 half_vp = pc.viewport_size * 0.5;
+    vec2 s0 = rel_to_screen(c0, scale, half_vp);
+    vec2 s1 = rel_to_screen(c1, scale, half_vp);
+    vec2 s2 = rel_to_screen(c2, scale, half_vp);
+    vec2 s3 = rel_to_screen(c3, scale, half_vp);
+    vec2 s_lo = min(min(s0, s1), min(s2, s3));
+    vec2 s_hi = max(max(s0, s1), max(s2, s3));
 
     // Viewport rejection (inclusive of the 1px AA skirt).
     if (s_hi.x < -1.0 || s_lo.x > pc.viewport_size.x + 1.0 ||
@@ -64,9 +83,14 @@ void main() {
     // Clip-rect rejection: a primitive entirely outside its clip is invisible.
     if (p.clip_idx != CLIP_NONE) {
         ClipNode c = ClipBuf(pc.clips_bda).c[p.clip_idx];
-        // `aabb` is chunk-local, so compare in the same space.
-        if (p.local_pos.x >= c.aabb.z || p.local_pos.x + p.size.x <= c.aabb.x ||
-            p.local_pos.y >= c.aabb.w || p.local_pos.y + p.size.y <= c.aabb.y) {
+        // `aabb` is chunk-local, so compare in the same space. The primitive's
+        // own *transformed* box is used: a rotated primitive reaches outside
+        // the box the vertex shader was given, and testing the box alone
+        // would cull it too early.
+        vec2 aabb_lo = min(min(c0, c1), min(c2, c3)) - chunk_base;
+        vec2 aabb_hi = max(max(c0, c1), max(c2, c3)) - chunk_base;
+        if (aabb_lo.x >= c.aabb.z || aabb_hi.x <= c.aabb.x ||
+            aabb_lo.y >= c.aabb.w || aabb_hi.y <= c.aabb.y) {
             return;
         }
     }
