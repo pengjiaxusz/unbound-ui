@@ -59,43 +59,58 @@ impl Token {
         self.0 as usize
     }
 
-    pub const SURFACE: Self = Self(0);
-    pub const SURFACE_RAISED: Self = Self(1);
-    pub const SURFACE_SUNKEN: Self = Self(2);
-    pub const ON_SURFACE: Self = Self(3);
-    pub const ON_SURFACE_MUTED: Self = Self(4);
+    /// The reserved "no colour" slot.
+    ///
+    /// The GPU's `common.glsl` hard-codes slot 0 as fully transparent, so
+    /// "no fill" and "no border" cost nothing: a primitive can name slot 0
+    /// and the shader sees a colour with zero alpha.
+    pub const NONE: Self = Self(0);
+    /// The global shadow colour.
+    ///
+    /// The shadow is a *theme* concept — every primitive shares it — so it
+    /// lives in a fixed slot rather than in a per-primitive field. The slot
+    /// index is part of the engine's contract with whoever fills the LUT
+    /// (`SHADOW_TOKEN` in `unbound-gpu/shaders/common.glsl`).
+    pub const SHADOW: Self = Self(1);
+    pub const SURFACE: Self = Self(2);
+    pub const SURFACE_RAISED: Self = Self(3);
+    pub const SURFACE_SUNKEN: Self = Self(4);
     pub const PRIMARY: Self = Self(5);
     pub const ON_PRIMARY: Self = Self(6);
     pub const ACCENT: Self = Self(7);
     pub const ON_ACCENT: Self = Self(8);
     pub const OUTLINE: Self = Self(9);
     pub const OUTLINE_STRONG: Self = Self(10);
-    pub const SHADOW: Self = Self(11);
-    pub const ERROR: Self = Self(12);
-    pub const ON_ERROR: Self = Self(13);
-    pub const WARNING: Self = Self(14);
-    pub const SUCCESS: Self = Self(15);
-    pub const SELECTION: Self = Self(16);
-    pub const ON_SELECTION: Self = Self(17);
-    pub const HOVER: Self = Self(18);
-    pub const PRESSED: Self = Self(19);
-    pub const DISABLED: Self = Self(20);
-    pub const ON_DISABLED: Self = Self(21);
-    pub const GRID: Self = Self(22);
-    pub const CANVAS_BACKDROP: Self = Self(23);
-    pub const CANVAS_NODE: Self = Self(24);
-    pub const CANVAS_NODE_SELECTED: Self = Self(25);
-    pub const SNAP_GUIDE: Self = Self(26);
-    pub const TEXT_PRIMARY: Self = Self(27);
-    pub const TEXT_SECONDARY: Self = Self(28);
-    pub const TEXT_DISABLED: Self = Self(29);
-    pub const SCRIM: Self = Self(30);
+    pub const ON_SURFACE: Self = Self(11);
+    pub const ON_SURFACE_MUTED: Self = Self(12);
+    pub const ERROR: Self = Self(13);
+    pub const ON_ERROR: Self = Self(14);
+    pub const WARNING: Self = Self(15);
+    pub const SUCCESS: Self = Self(16);
+    pub const SELECTION: Self = Self(17);
+    pub const ON_SELECTION: Self = Self(18);
+    pub const HOVER: Self = Self(19);
+    pub const PRESSED: Self = Self(20);
+    pub const DISABLED: Self = Self(21);
+    pub const ON_DISABLED: Self = Self(22);
+    pub const GRID: Self = Self(23);
+    pub const CANVAS_BACKDROP: Self = Self(24);
+    pub const CANVAS_NODE: Self = Self(25);
+    pub const CANVAS_NODE_SELECTED: Self = Self(26);
+    pub const SNAP_GUIDE: Self = Self(27);
+    pub const TEXT_PRIMARY: Self = Self(28);
+    pub const TEXT_SECONDARY: Self = Self(29);
+    pub const TEXT_DISABLED: Self = Self(30);
+    pub const SCRIM: Self = Self(31);
 }
 
 /// The set of semantic tokens the design system defines.
 ///
 /// Keeping the list in one place means a token cannot be renamed in one
 /// palette and forgotten in another.
+///
+/// [`Token::NONE`] is not in the list: it is a reserved engine slot, not a
+/// semantic colour.
 pub const TOKENS: [Token; 31] = [
     Token::SURFACE,
     Token::SURFACE_RAISED,
@@ -536,6 +551,52 @@ mod tests {
         }
     }
 
+    /// The GPU reserves two slots: 0 is "no colour" and 1 is the shadow.
+    ///
+    /// A palette that puts a real colour in slot 0 makes every "no fill"
+    /// primitive paint that colour, and a palette that puts something else
+    /// in slot 1 turns every analytic shadow into a solid block.
+    #[test]
+    fn slot_zero_is_transparent_and_slot_one_is_shadow() {
+        let set = ThemeSet::default_set();
+        for kind in ThemeKind::ALL {
+            let palette = set.palette(kind);
+            let none = palette.color(Token::NONE);
+            assert_eq!(
+                none.to_array()[3],
+                0.0,
+                "slot 0 must be fully transparent in {}",
+                kind.name()
+            );
+            assert_eq!(
+                palette.color(Token::SHADOW).to_array(),
+                palette.entries()[Token::SHADOW.index()].to_array(),
+                "slot 1 must be the shadow colour in {}",
+                kind.name()
+            );
+            // The shadow is not transparent: an invisible shadow would be a
+            // shadow that never renders.
+            assert!(palette.color(Token::SHADOW).to_array()[3] > 0.0);
+            assert_eq!(Token::NONE.raw(), 0);
+            assert_eq!(Token::SHADOW.raw(), 1);
+        }
+    }
+
+    /// Every semantic token owns a slot of its own.
+    #[test]
+    fn the_semantic_tokens_never_share_a_slot() {
+        let mut seen = std::collections::HashSet::new();
+        for token in TOKENS {
+            assert!(
+                seen.insert(token.raw()),
+                "token {} shares a slot with another token",
+                token.raw()
+            );
+        }
+        // The reserved engine slots stay reserved.
+        assert!(!seen.contains(&Token::NONE.raw()));
+    }
+
     #[test]
     fn a_switch_uploads_four_kibibytes_and_nothing_else() {
         let mut state = ThemeState::default();
@@ -639,8 +700,9 @@ mod tests {
             assert!(seen.insert(token.raw()), "duplicate token {}", token.raw());
         }
         // The two lowest ids are frozen because they are referenced from
-        // built-in shaders and the gallery demo.
-        assert_eq!(Token::SURFACE.raw(), 0);
+        // built-in shaders: slot 0 is "no colour", slot 1 is the shadow.
+        assert_eq!(Token::NONE.raw(), 0);
+        assert_eq!(Token::SHADOW.raw(), 1);
         assert_eq!(Token::PRIMARY.raw(), 5);
     }
 

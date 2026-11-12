@@ -17,7 +17,7 @@
 use unbound_math::Vec2;
 
 use crate::cursor::{CursorKind, CursorSource, CursorStack};
-use crate::hit::{pick, HitRegion, PORTAL_LAYER};
+use crate::hit::{pick, pick_stack, HitRegion, PORTAL_LAYER};
 use crate::pointer::{PointerButton, PointerConfig, PointerEvent, PointerState};
 
 /// Routes pointer input to hit regions.
@@ -38,6 +38,12 @@ pub struct Router {
     /// `None` means the pointer never entered: picking at the state machine's
     /// origin placeholder would invent a hover target out of nothing.
     last_position: Option<Vec2>,
+    /// The last wheel delta the router saw.
+    ///
+    /// The wheel does not move the pointer, so the delta has to be recorded
+    /// separately: a host that scrolls on the wheel needs to know how far
+    /// the wheel turned even though the pointer stayed where it was.
+    last_wheel: Vec2,
 }
 
 impl Default for Router {
@@ -56,6 +62,7 @@ impl Router {
             hover: None,
             tool_cursor: CursorKind::Default,
             last_position: None,
+            last_wheel: Vec2::ZERO,
         }
     }
 
@@ -106,6 +113,33 @@ impl Router {
     #[must_use]
     pub fn pick(&self, point: Vec2) -> Option<&HitRegion> {
         pick(&self.regions, point)
+    }
+
+    /// Every region under `point`, topmost first.
+    ///
+    /// This is the "pick path": the top entry is what a click would hit, and
+    /// the rest are its ancestors. A wheel event walks it to find the
+    /// nearest scrollable container.
+    #[must_use]
+    pub fn pick_all(&self, point: Vec2) -> Vec<&HitRegion> {
+        pick_stack(&self.regions, point)
+    }
+
+    /// Route a wheel event to the regions under the pointer.
+    ///
+    /// The returned path is topmost first, so the host can walk up it to the
+    /// nearest scrollable ancestor and scroll that one.
+    pub fn wheel(&mut self, delta: Vec2, point: Vec2) -> Vec<&HitRegion> {
+        self.last_wheel = delta;
+        self.last_position = Some(point);
+        self.pointer.on_move(point);
+        self.pick_all(point)
+    }
+
+    /// The last wheel delta the router saw.
+    #[must_use]
+    pub fn last_wheel(&self) -> Vec2 {
+        self.last_wheel
     }
 
     /// Button press.
@@ -263,6 +297,37 @@ mod tests {
 
     fn region(node: u64, bounds: Rect) -> HitRegion {
         HitRegion::new(node, 1, 0, bounds).with_cursor(CursorKind::Pointer)
+    }
+
+    /// A wheel event has to reach the regions under the pointer.
+    ///
+    /// Without a wheel route the input layer had no way to tell a host
+    /// *where* the wheel turned, so every scrollable area had to guess.
+    #[test]
+    fn wheel_events_are_routed_to_the_regions_under_the_pointer() {
+        let mut router = Router::new(PointerConfig::default());
+        router.set_regions(vec![
+            region(1, rect(0.0, 0.0, 100.0, 100.0)),
+            region(2, rect(0.0, 0.0, 50.0, 50.0)),
+        ]);
+        let path = router.wheel(Vec2::new(0.0, 40.0), Vec2::new(10.0, 10.0));
+        assert_eq!(path.len(), 2, "both regions are under the pointer");
+        // The topmost region comes first: that is the one a click would hit.
+        assert_eq!(path[0].node, 2);
+        assert_eq!(path[1].node, 1);
+        assert_eq!(router.last_wheel(), Vec2::new(0.0, 40.0));
+        // The wheel does not move the pointer, but the router remembers
+        // where the wheel happened.
+        assert_eq!(router.pointer().position(), Vec2::new(10.0, 10.0));
+    }
+
+    /// A wheel over nothing returns an empty path.
+    #[test]
+    fn a_wheel_over_nothing_routes_nowhere() {
+        let mut router = Router::new(PointerConfig::default());
+        router.set_regions(vec![region(1, rect(0.0, 0.0, 10.0, 10.0))]);
+        let path = router.wheel(Vec2::new(0.0, 1.0), Vec2::new(100.0, 100.0));
+        assert!(path.is_empty());
     }
 
     fn router() -> Router {

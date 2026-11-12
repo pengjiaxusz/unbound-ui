@@ -231,6 +231,24 @@ fn available(viewport: Vec2) -> taffy::Size<AvailableSpace> {
     }
 }
 
+/// The size a node's own style fixes, per axis.
+///
+/// A definite size is the node's own business; an automatic one is decided
+/// by its content.
+fn definite_size(world: &UiWorld, id: NodeId) -> (Option<f32>, Option<f32>) {
+    let Some(node) = world.get(id) else {
+        return (None, None);
+    };
+    let px = |d: Dim| {
+        if d.unit == DimUnit::Px as u8 {
+            Some(d.value)
+        } else {
+            None
+        }
+    };
+    (px(node.desc.width), px(node.desc.height))
+}
+
 fn rect_of(layout: &Layout) -> Rect {
     Rect::new(
         layout.location.x,
@@ -346,6 +364,20 @@ impl LayoutEngine {
                 .collect();
             let _ = self.taffy.set_children(t, &kids);
         }
+        // Pass 3: drop the nodes that left the world.
+        //
+        // `UiWorld::remove` frees the slot, but the engine kept the node's
+        // Taffy node, its map entry and its cached rectangle forever: a long
+        // session that creates and drops widgets leaked one of each per
+        // removal.
+        self.map.retain(|id, taffy_id| {
+            let alive = world.contains(*id);
+            if !alive {
+                let _ = self.taffy.remove(*taffy_id);
+                self.rects.remove(id);
+            }
+            alive
+        });
     }
 
     /// Full re-solve under `viewport` (topology changes, resize).
@@ -416,14 +448,21 @@ impl LayoutEngine {
             use rayon::prelude::*;
             boundaries
                 .par_iter()
-                .map(|b| solve_isolated(world, *b, viewport))
+                .map(|b| {
+                    // The boundary is solved as a root, so it is given the
+                    // space it had: a child with `width: 100 %` resolves
+                    // against the containing block.
+                    let size = world.node(*b).rect.size;
+                    let space = Vec2::new(size.x.max(viewport.x), size.y.max(viewport.y));
+                    solve_isolated(world, *b, space)
+                })
                 .collect()
         };
         let taffy_us = start.elapsed().as_micros() as u64;
 
         let mut visited = 0u32;
         for (chunk, boundary) in nested.into_iter().zip(boundaries.iter().copied()) {
-            let placement = world.node(boundary).rect.origin;
+            let placement = world.node(boundary).rect;
             let changed: Vec<NodeId> = chunk.iter().map(|(id, _)| *id).collect();
             visited += chunk.len() as u32;
             for (id, r) in chunk {
@@ -433,8 +472,18 @@ impl LayoutEngine {
             // boundary's own rectangle comes back at the origin — but in the
             // tree it sits wherever its parent put it. Keep the parent's
             // placement and take only the size from the new solve.
+            let (fixed_width, fixed_height) = definite_size(world, boundary);
             if let Some(rect) = self.rects.get_mut(&boundary) {
-                rect.origin = placement;
+                rect.origin = placement.origin;
+                // A size the style fixes belongs to the node itself: Taffy
+                // sizes a root from its content, so the fixed size has to be
+                // restored.
+                if let Some(width) = fixed_width {
+                    rect.size.x = width;
+                }
+                if let Some(height) = fixed_height {
+                    rect.size.y = height;
+                }
             }
             world.apply_rects_from(&self.rects, &changed, boundary);
         }
@@ -463,13 +512,18 @@ impl LayoutEngine {
         let sync_us = sync_start.elapsed().as_micros() as u64;
 
         let taffy_root = self.map[&boundary];
+        // Taffy sizes a *root* node from its children, so the subtree has to
+        // be solved against the space the boundary had: a child with
+        // `width: 100 %` resolves against the containing block, and without
+        // the old size it would resolve against nothing and collapse.
+        let space = self.rects.get(&boundary).map_or(viewport, |r| r.size);
         let start = std::time::Instant::now();
         {
             let world_ref: &UiWorld = world;
             let taffy = &mut self.taffy;
             let _ = taffy.compute_layout_with_measure(
                 taffy_root,
-                available(viewport),
+                available(space),
                 |input: LayoutInput,
                  _node: taffy::NodeId,
                  ctx: Option<&mut NodeId>,
@@ -490,9 +544,18 @@ impl LayoutEngine {
         // boundary's own rectangle comes back at the origin — but in the
         // tree it sits wherever its parent put it. Keep the parent's
         // placement and take only the size from the new solve.
-        let placement = world.node(boundary).rect.origin;
+        let placement = world.node(boundary).rect;
+        let (fixed_width, fixed_height) = definite_size(world, boundary);
         if let Some(rect) = self.rects.get_mut(&boundary) {
-            rect.origin = placement;
+            rect.origin = placement.origin;
+            // A size the style fixes belongs to the node itself: Taffy sizes
+            // a root from its content, so the fixed size has to be restored.
+            if let Some(width) = fixed_width {
+                rect.size.x = width;
+            }
+            if let Some(height) = fixed_height {
+                rect.size.y = height;
+            }
         }
         world.apply_rects_from(&self.rects, &changed, boundary);
         self.changed = changed;
@@ -603,6 +666,60 @@ mod tests {
         );
         w.node_mut(label).measure = Some(Vec2::new(80.0, 16.0));
         (w, root, card, label)
+    }
+
+    /// A subtree that is re-solved with the boundary as its root comes back
+    /// with the boundary's own rectangle at the origin — but in the tree the
+    /// boundary sits wherever its parent put it.
+    ///
+    /// Losing that placement is what made a re-solved card jump to the top
+    /// left corner and land on top of its siblings.
+    #[test]
+    fn incremental_boundary_solve_preserves_the_boundary_origin() {
+        let mut w = UiWorld::new();
+        let root = w.root();
+        w.node_mut(root).desc.width = Dim::px(400.0);
+        w.node_mut(root).desc.height = Dim::px(300.0);
+        w.node_mut(root).desc.gap_row = 8.0;
+        let first = w.insert(root, RawNodeDesc::container().size(200.0, 50.0), loc());
+        let second = w.insert(root, RawNodeDesc::container().size(200.0, 50.0), loc());
+        let mut engine = LayoutEngine::new();
+        engine.solve(&mut w, root, Vec2::new(400.0, 300.0));
+        let placement = engine.rect(second).expect("rect").origin;
+        assert!(placement.y > 0.0, "the second row is not at the top");
+
+        // Re-solve the second row on its own.
+        engine.solve_subtree(&mut w, second, Vec2::new(400.0, 300.0));
+        let after = engine.rect(second).expect("rect");
+        assert_eq!(
+            after.origin, placement,
+            "the boundary must keep the position its parent gave it"
+        );
+        assert_eq!(
+            after.size,
+            Vec2::new(200.0, 50.0),
+            "the size is still taken"
+        );
+        assert_ne!(first, second);
+    }
+
+    /// A node that left the world must not stay in the engine's tables.
+    #[test]
+    fn sync_removes_deleted_world_nodes_from_taffy() {
+        let (mut w, root, card, _label) = fixture();
+        let mut engine = LayoutEngine::new();
+        engine.solve(&mut w, root, Vec2::new(400.0, 300.0));
+        let before = engine.node_count();
+        assert!(before >= 3);
+
+        w.remove(card);
+        engine.sync(&w, root);
+        assert!(
+            engine.node_count() < before,
+            "the removed node must not stay in the engine: {} vs {before}",
+            engine.node_count()
+        );
+        assert!(engine.rect(card).is_none());
     }
 
     #[test]

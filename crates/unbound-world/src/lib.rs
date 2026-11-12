@@ -129,6 +129,16 @@ pub struct NodeData {
     /// Pre-measured intrinsic size (text, images). Layout never calls into the
     /// text engine, which keeps shaping off the layout critical path.
     pub measure: Option<Vec2>,
+    /// Current scroll offset of a `SCROLLABLE` container, in logical pixels.
+    ///
+    /// The offset is subtracted from the children's world position, so the
+    /// content moves while the container itself stays where it is.
+    pub scroll_offset: Vec2,
+    /// The union of the children's extents inside this container.
+    ///
+    /// It is what bounds the scroll: a container can never scroll past its
+    /// own content.
+    pub content_size: Vec2,
     /// Monotonic generation of the state that produced this node's view. A child
     /// whose generation did not change is skipped by the view builder.
     pub state_generation: u64,
@@ -160,6 +170,8 @@ impl NodeData {
             clip: None,
             rounded_clips: [None, None],
             measure: None,
+            scroll_offset: Vec2::ZERO,
+            content_size: Vec2::ZERO,
             state_generation: 0,
             source,
             action: None,
@@ -799,11 +811,15 @@ impl UiWorld {
             let world = if node.parent.is_null() {
                 node.rect
             } else {
-                let parent = self
+                let (parent_origin, parent_scroll) = self
                     .nodes
                     .get(node.parent)
-                    .map_or(Rect::ZERO, |p| p.world_rect);
-                node.rect.translate(parent.origin)
+                    .map_or((Rect::ZERO, Vec2::ZERO), |p| {
+                        (p.world_rect, p.scroll_offset)
+                    });
+                // The parent's scroll offset moves the content, not the
+                // container: the children follow the scroll.
+                node.rect.translate(parent_origin.origin - parent_scroll)
             };
             let mut clip = inherited_clip;
             let mut rounded = inherited_rounded;
@@ -837,22 +853,66 @@ impl UiWorld {
                 }
             }
 
+            // The content size is the union of the children's extents: it is
+            // what bounds the scroll, so it has to be measured before the
+            // scroll can be clamped.
+            let mut child = node.first_child;
+            let mut kids = Vec::new();
+            let mut content = Vec2::ZERO;
+            while !child.is_null() {
+                kids.push(child);
+                if let Some(kid) = self.nodes.get(child) {
+                    content = content.max(kid.rect.max());
+                }
+                child = self.nodes[child].next_sibling;
+            }
+
             let node = self.nodes.get_mut(id).expect("checked above");
             node.world_rect = world;
             node.clip = clip;
             node.rounded_clips = rounded;
+            node.content_size = content;
 
-            let mut child = node.first_child;
-            let mut kids = Vec::new();
-            while !child.is_null() {
-                kids.push(child);
-                child = self.nodes[child].next_sibling;
-            }
             // Reverse push so the pop order is left-to-right.
             for k in kids.into_iter().rev() {
                 stack.push((k, clip, rounded));
             }
         }
+    }
+
+    /// Set the scroll offset of a scrollable container.
+    ///
+    /// The offset is clamped to the container's content, so a scroll can
+    /// never leave a gap at the end. Returns `true` when the offset moved.
+    pub fn set_scroll(&mut self, id: NodeId, offset: Vec2) -> bool {
+        let Some(node) = self.nodes.get(id) else {
+            return false;
+        };
+        if !node.state.contains(NodeState::SCROLLABLE) {
+            return false;
+        }
+        let max_x = (node.content_size.x - node.rect.size.x).max(0.0);
+        let max_y = (node.content_size.y - node.rect.size.y).max(0.0);
+        let clamped = Vec2::new(offset.x.clamp(0.0, max_x), offset.y.clamp(0.0, max_y));
+        if (node.scroll_offset - clamped).length_squared() < 1e-4 {
+            return false;
+        }
+        let Some(node) = self.nodes.get_mut(id) else {
+            return false;
+        };
+        node.scroll_offset = clamped;
+        self.fold_clips(id);
+        self.mark_paint_dirty(id);
+        true
+    }
+
+    /// Scroll a container by `delta` logical pixels (`delta.y > 0` scrolls down).
+    pub fn scroll_by(&mut self, id: NodeId, delta: Vec2) -> bool {
+        let Some(node) = self.nodes.get(id) else {
+            return false;
+        };
+        let target = node.scroll_offset + delta;
+        self.set_scroll(id, target)
     }
 
     /// Total nodes that would be visited by a naive full re-layout — the
@@ -922,6 +982,64 @@ mod tests {
         for id in [a, a1, a2, a21] {
             assert!(!w.contains(id));
         }
+    }
+
+    /// A scrollable container moves its content, and the scroll is bounded
+    /// by the content.
+    ///
+    /// Without the offset the children stayed where they were: the container
+    /// declared itself scrollable, but nothing ever moved.
+    #[test]
+    fn scrolling_a_container_translates_its_children_and_clamps() {
+        let (mut w, root) = world();
+        let container = w.insert(root, RawNodeDesc::container(), loc());
+        let child = w.insert(container, RawNodeDesc::container(), loc());
+        if let Some(node) = w.get_mut(container) {
+            node.state |= NodeState::SCROLLABLE;
+            node.rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        }
+        if let Some(node) = w.get_mut(child) {
+            node.rect = Rect::new(0.0, 0.0, 80.0, 400.0);
+        }
+        w.apply_rects_from(&FxHashMap::default(), &[container, child], root);
+
+        let before = w.get(child).expect("child").world_rect;
+        assert_eq!(before.origin.y, 0.0);
+
+        // The content is 400 tall inside a 100 tall container: 300 px of
+        // scroll are available.
+        assert_eq!(w.get(container).expect("container").content_size.y, 400.0);
+        assert!(w.set_scroll(container, Vec2::new(0.0, 120.0)));
+        let after = w.get(child).expect("child").world_rect;
+        assert_eq!(after.origin.y, -120.0, "the content follows the scroll");
+
+        // The scroll is clamped to the content.
+        assert!(w.set_scroll(container, Vec2::new(0.0, 9999.0)));
+        assert_eq!(w.get(container).expect("container").scroll_offset.y, 300.0);
+        let clamped = w.get(child).expect("child").world_rect;
+        assert_eq!(clamped.origin.y, -300.0);
+
+        // A container that is not scrollable does not scroll.
+        assert!(!w.set_scroll(child, Vec2::new(0.0, 10.0)));
+    }
+
+    /// `scroll_by` is the relative form of `set_scroll`.
+    #[test]
+    fn scrolling_by_a_delta_moves_the_content() {
+        let (mut w, root) = world();
+        let container = w.insert(root, RawNodeDesc::container(), loc());
+        let child = w.insert(container, RawNodeDesc::container(), loc());
+        if let Some(node) = w.get_mut(container) {
+            node.state |= NodeState::SCROLLABLE;
+            node.rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        }
+        if let Some(node) = w.get_mut(child) {
+            node.rect = Rect::new(0.0, 0.0, 80.0, 400.0);
+        }
+        w.apply_rects_from(&FxHashMap::default(), &[container, child], root);
+        assert!(w.scroll_by(container, Vec2::new(0.0, 50.0)));
+        assert_eq!(w.get(container).expect("container").scroll_offset.y, 50.0);
+        assert_eq!(w.get(child).expect("child").world_rect.origin.y, -50.0);
     }
 
     #[test]
