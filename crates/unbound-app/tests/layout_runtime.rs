@@ -2,7 +2,7 @@
 //! must be positioned by `AppRuntime`, not by hand-tuned rectangles.
 
 use unbound_abi::{Dim, RawNodeDesc};
-use unbound_app::{AppEvent, AppRuntime, Application, DirtyFlags, WidgetSpec};
+use unbound_app::{AppEvent, AppRuntime, Application, EventOutcome, WidgetSpec};
 use unbound_math::{Rect, Vec2};
 use unbound_text::TextStyle;
 use unbound_widgets::button::ButtonDesc;
@@ -23,8 +23,8 @@ impl Application for LayoutApp {
         _state: &mut Self::State,
         _event: AppEvent,
         _ctx: &mut unbound_app::AppContext,
-    ) -> DirtyFlags {
-        DirtyFlags::NONE
+    ) -> EventOutcome {
+        EventOutcome::default()
     }
 
     fn view(&mut self, _state: &Self::State, view: &mut unbound_app::ViewBuilder) {

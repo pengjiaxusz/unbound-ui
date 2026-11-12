@@ -19,6 +19,9 @@ use crate::{ControlState, WidgetDesc, WidgetOutput};
 /// The hit-test layer of an image that accepts clicks.
 pub const IMAGE_LAYER: u8 = 1;
 
+/// One nine-slice span: the start offset and the length along an axis.
+type Span = (f32, f32);
+
 /// How an image fills its box.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ObjectFit {
@@ -394,7 +397,7 @@ impl NinePatchDesc {
     }
 
     /// `(position, length)` for the three columns and three rows.
-    fn spans(&self) -> ([(f32, f32); 3], [(f32, f32); 3]) {
+    fn spans(&self) -> ([Span; 3], [Span; 3]) {
         let width = self.rect.width();
         let height = self.rect.height();
         let left = self.patch[0].clamp(0.0, width);

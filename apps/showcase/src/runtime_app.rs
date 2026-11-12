@@ -9,8 +9,8 @@
 //! exactly the same frame pipeline a third-party application would.
 
 use unbound_app::{
-    AppContext, AppEvent, AppKey, Application, DirtyFlags, ImeUpdate, Modifiers as AppModifiers,
-    ViewBuilder,
+    AppContext, AppEvent, AppKey, Application, DirtyFlags, EventOutcome, ImeUpdate,
+    Modifiers as AppModifiers, ViewBuilder,
 };
 use unbound_input::FocusCause;
 use unbound_platform::{Modifiers, PlatformKey};
@@ -50,7 +50,7 @@ impl Application for GalleryApp {
         _state: &mut Self::State,
         event: AppEvent,
         ctx: &mut AppContext,
-    ) -> DirtyFlags {
+    ) -> EventOutcome {
         match event {
             AppEvent::PointerMove { pos, .. } => self.pointer_move(pos),
             AppEvent::PointerDown { pos, target, .. } => self.pointer_down(pos, target),
@@ -59,9 +59,20 @@ impl Application for GalleryApp {
             // separately, and only when the press never became one.
             AppEvent::Click { node, pos, .. } => self.click(node, pos),
             AppEvent::DoubleClick { .. } | AppEvent::DragStart { .. } | AppEvent::Drag { .. } => {}
+            AppEvent::ContextMenu { .. } => {
+                // The context-menu widget lands with the P2 container batch;
+                // until then the shell has nothing to open.
+            }
+            AppEvent::Shortcut { .. } => {
+                // The shell registers no keymap bindings yet; the runtime
+                // resolves shortcuts for applications that do.
+            }
             AppEvent::Wheel { pos, delta, .. } => {
                 self.pointer_move(pos);
                 self.wheel(delta.y);
+                // The page scrolls as far as it can; a nested scroll area
+                // would consume first and let the remainder bubble.
+                ctx.consume_scroll(delta);
             }
             AppEvent::Key {
                 key,
@@ -95,6 +106,7 @@ impl Application for GalleryApp {
             AppEvent::Tick { dt } => {
                 self.tick(dt);
             }
+            AppEvent::Timer { .. } => {}
         }
 
         if let Some(node) = self.take_focus_request() {
@@ -105,7 +117,7 @@ impl Application for GalleryApp {
         }
         // The shell paints every frame it is asked for; `view` decides from
         // the interaction snapshot whether the scene has to be rebuilt.
-        DirtyFlags::LAYOUT
+        EventOutcome::new(DirtyFlags::LAYOUT)
     }
 
     fn view(&mut self, _state: &Self::State, view: &mut ViewBuilder<'_>) {
@@ -163,12 +175,23 @@ fn platform_key(key: AppKey) -> PlatformKey {
         AppKey::Space => PlatformKey::Character(" ".into()),
         AppKey::Backspace => PlatformKey::Named("Backspace".into()),
         AppKey::Delete => PlatformKey::Named("Delete".into()),
+        AppKey::Insert => PlatformKey::Named("Insert".into()),
         AppKey::Left => PlatformKey::Named("ArrowLeft".into()),
         AppKey::Right => PlatformKey::Named("ArrowRight".into()),
         AppKey::Up => PlatformKey::Named("ArrowUp".into()),
         AppKey::Down => PlatformKey::Named("ArrowDown".into()),
         AppKey::Home => PlatformKey::Named("Home".into()),
         AppKey::End => PlatformKey::Named("End".into()),
+        AppKey::PageUp => PlatformKey::Named("PageUp".into()),
+        AppKey::PageDown => PlatformKey::Named("PageDown".into()),
+        AppKey::ContextMenu => PlatformKey::Named("ContextMenu".into()),
+        AppKey::CapsLock => PlatformKey::Named("CapsLock".into()),
+        AppKey::F(number) => PlatformKey::Named(format!("F{number}")),
+        AppKey::Copy => PlatformKey::Named("Copy".into()),
+        AppKey::Cut => PlatformKey::Named("Cut".into()),
+        AppKey::Paste => PlatformKey::Named("Paste".into()),
+        AppKey::Undo => PlatformKey::Named("Undo".into()),
+        AppKey::Redo => PlatformKey::Named("Redo".into()),
         AppKey::Character(c) => PlatformKey::Character(c.to_string()),
     }
 }

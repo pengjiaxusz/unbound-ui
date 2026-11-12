@@ -202,8 +202,23 @@ impl PointerState {
     ) -> Option<PointerEvent> {
         self.position = position;
         self.buttons.set(button, true);
-        if button != PointerButton::Left {
-            // Right/middle presses are reported but never start a drag.
+        if button == PointerButton::Right {
+            // A secondary press opens a context menu on release. It is
+            // captured like any other press, but it must not touch the
+            // double-click clock: a right click followed by a left click is
+            // two different gestures. A primary drag already in flight keeps
+            // the capture; the secondary press only reports itself.
+            let primary_active = matches!(
+                self.press_button,
+                Some(PointerButton::Left | PointerButton::Middle)
+            );
+            if !primary_active {
+                self.down_position = position;
+                self.pressed = target;
+                self.press_button = Some(button);
+                self.capture = target;
+                self.dragging = false;
+            }
             return Some(PointerEvent::Down {
                 target,
                 position,
@@ -243,7 +258,13 @@ impl PointerState {
         self.position = position;
         if let Some(target) = self.pressed {
             if !self.dragging {
-                if (position - self.down_position).length() >= self.config.drag_slop {
+                // Only the buttons that own a drag gesture may cross the
+                // slop: a secondary press stays a press until it is released.
+                let draggable = matches!(
+                    self.press_button,
+                    Some(PointerButton::Left | PointerButton::Middle)
+                );
+                if draggable && (position - self.down_position).length() >= self.config.drag_slop {
                     self.dragging = true;
                     return Some(PointerEvent::DragStart { target, position });
                 }
@@ -253,7 +274,7 @@ impl PointerState {
                     target: Some(target),
                 });
             }
-            if self.buttons.left {
+            if self.buttons.left || self.buttons.middle {
                 return Some(PointerEvent::Drag {
                     target,
                     position,
@@ -489,6 +510,57 @@ mod tests {
         let event = p.on_move(Vec2::new(100.0, 0.0)).unwrap();
         assert!(matches!(event, PointerEvent::Move { .. }));
         assert!(!p.is_dragging());
+    }
+
+    /// A secondary press is captured so its release has a target, but it is
+    /// not a click: the runtime turns it into a context-menu request.
+    #[test]
+    fn a_secondary_press_is_captured_but_is_not_a_click() {
+        let mut p = state();
+        let down = p
+            .on_down(Some(4), Vec2::new(10.0, 10.0), PointerButton::Right, 0.0)
+            .unwrap();
+        assert!(matches!(
+            down,
+            PointerEvent::Down {
+                button: PointerButton::Right,
+                ..
+            }
+        ));
+        assert_eq!(p.capture(), Some(4), "the release needs a target");
+        assert!(!p.is_dragging());
+        let events = p.on_up(Vec2::new(10.0, 10.0), PointerButton::Right, 0.05);
+        assert!(matches!(
+            events[0],
+            PointerEvent::Up {
+                target: Some(4),
+                button: PointerButton::Right,
+                ..
+            }
+        ));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, PointerEvent::Click { .. })),
+            "a right click is a menu request, not an activation"
+        );
+    }
+
+    /// The middle button owns a drag (canvas panning) just like the primary
+    /// one, but it never synthesises a click.
+    #[test]
+    fn the_middle_button_drags_without_clicking() {
+        let mut p = state();
+        p.on_down(Some(2), Vec2::new(0.0, 0.0), PointerButton::Middle, 0.0);
+        let start = p.on_move(Vec2::new(10.0, 0.0)).unwrap();
+        assert!(matches!(start, PointerEvent::DragStart { target: 2, .. }));
+        let drag = p.on_move(Vec2::new(20.0, 0.0)).unwrap();
+        assert!(matches!(drag, PointerEvent::Drag { target: 2, .. }));
+        let events = p.on_up(Vec2::new(20.0, 0.0), PointerButton::Middle, 0.1);
+        assert_eq!(events.len(), 1);
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, PointerEvent::Click { .. })));
     }
 
     #[test]

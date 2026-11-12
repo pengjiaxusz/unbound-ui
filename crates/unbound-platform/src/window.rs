@@ -129,6 +129,8 @@ pub enum PlatformEvent {
     Focused(bool),
     /// The window became visible or hidden.
     VisibilityChanged(bool),
+    /// The OS light / dark preference changed.
+    ThemeChanged { dark: bool },
     /// The OS asks for a new frame.
     RedrawRequested,
     /// The user asked to close the window.
@@ -320,6 +322,9 @@ pub fn translate_window_event(event: &winit::event::WindowEvent) -> Option<Platf
 
     Some(match event {
         WindowEvent::Resized(size) => PlatformEvent::Resized(Extent::new(size.width, size.height)),
+        WindowEvent::ThemeChanged(theme) => PlatformEvent::ThemeChanged {
+            dark: matches!(theme, winit::window::Theme::Dark),
+        },
         WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
             PlatformEvent::ScaleFactorChanged(*scale_factor)
         }
@@ -435,7 +440,17 @@ pub fn translate_key(key: &winit::keyboard::Key) -> PlatformKey {
             NamedKey::End => PlatformKey::Named("End".into()),
             NamedKey::PageUp => PlatformKey::Named("PageUp".into()),
             NamedKey::PageDown => PlatformKey::Named("PageDown".into()),
+            NamedKey::Insert => PlatformKey::Named("Insert".into()),
+            NamedKey::ContextMenu => PlatformKey::Named("ContextMenu".into()),
+            NamedKey::CapsLock => PlatformKey::Named("CapsLock".into()),
             NamedKey::Space => PlatformKey::Named("Space".into()),
+            // Editing commands and the function keys (`F1`..`F24`) fold
+            // through the debug name, which is already the stable spelling.
+            NamedKey::Copy => PlatformKey::Named("Copy".into()),
+            NamedKey::Cut => PlatformKey::Named("Cut".into()),
+            NamedKey::Paste => PlatformKey::Named("Paste".into()),
+            NamedKey::Undo => PlatformKey::Named("Undo".into()),
+            NamedKey::Redo => PlatformKey::Named("Redo".into()),
             other => PlatformKey::Named(format!("{other:?}")),
         },
         WinitKey::Unidentified(code) => PlatformKey::Other(native_key_code(code)),
@@ -502,6 +517,9 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
             state.visible = *visible;
             state.pacer.set_visible(*visible);
             out.push(PlatformEvent::VisibilityChanged(*visible));
+        }
+        PlatformEvent::ThemeChanged { dark } => {
+            out.push(PlatformEvent::ThemeChanged { dark: *dark });
         }
         PlatformEvent::RedrawRequested => out.push(PlatformEvent::RedrawRequested),
         PlatformEvent::CloseRequested => out.push(PlatformEvent::CloseRequested),

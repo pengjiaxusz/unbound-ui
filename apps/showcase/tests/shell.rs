@@ -8,6 +8,7 @@ use showcase::state::ThemeMode;
 use showcase::target::{self, Target};
 use unbound_app::{AppKey, AppRuntime, Modifiers as AppModifiers};
 use unbound_headless::Harness;
+use unbound_input::PointerButton;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::{Modifiers, PlatformKey};
 use unbound_widgets::diff::SceneDiff;
@@ -88,11 +89,11 @@ impl App {
         // The old helper threaded an explicit timestamp; the runtime owns the
         // clock, so nudge it forward to keep two clicks from pairing.
         self.runtime.advance(0.5);
-        self.runtime.pointer_down(pos);
+        self.runtime.pointer_down(pos, PointerButton::Left);
     }
 
     fn pointer_up(&mut self, pos: Vec2, _now: f64) {
-        self.runtime.pointer_up(pos);
+        self.runtime.pointer_up(pos, PointerButton::Left);
     }
 
     fn key(&mut self, key: &PlatformKey, modifiers: Modifiers) {

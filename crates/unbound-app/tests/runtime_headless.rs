@@ -4,8 +4,9 @@
 //! application is built, clicked and focused through the same [`AppRuntime`]
 //! the windowed shell uses, and the reports are asserted at the scene level.
 
-use unbound_app::{AppEvent, AppKey, AppRuntime, Application, DirtyFlags, Modifiers};
+use unbound_app::{AppEvent, AppKey, AppRuntime, Application, DirtyFlags, EventOutcome, Modifiers};
 use unbound_gpu::data::GpuPrimitiveInstance;
+use unbound_input::PointerButton;
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_widgets::button::emit_button;
@@ -37,14 +38,15 @@ impl Application for Counter {
         state: &mut Self::State,
         event: AppEvent,
         _ctx: &mut unbound_app::AppContext,
-    ) -> DirtyFlags {
-        match event {
+    ) -> EventOutcome {
+        let dirty = match event {
             AppEvent::Click { node, .. } if node == BUTTON => {
                 state.clicks += 1;
                 DirtyFlags::PAINT | DirtyFlags::A11Y
             }
             _ => DirtyFlags::NONE,
-        }
+        };
+        EventOutcome::new(dirty)
     }
 
     fn view(&mut self, state: &Self::State, view: &mut unbound_app::ViewBuilder) {
@@ -96,25 +98,28 @@ impl Application for TypingScene {
         state: &mut Self::State,
         event: AppEvent,
         _ctx: &mut unbound_app::AppContext,
-    ) -> DirtyFlags {
-        match event {
+    ) -> EventOutcome {
+        let dirty = match event {
             AppEvent::Text { text } => {
                 state.text.push_str(&text);
                 DirtyFlags::PAINT | DirtyFlags::A11Y
             }
             _ => DirtyFlags::NONE,
-        }
+        };
+        EventOutcome::new(dirty)
     }
 
     fn view(&mut self, state: &Self::State, view: &mut unbound_app::ViewBuilder) {
-        let mut background = WidgetOutput::default();
-        background.primitives = (0..5_000)
-            .map(|index| GpuPrimitiveInstance {
-                local_pos: [(index % 800) as f32, (index / 800) as f32],
-                size: [1.0, 1.0],
-                ..GpuPrimitiveInstance::default()
-            })
-            .collect();
+        let background = WidgetOutput {
+            primitives: (0..5_000)
+                .map(|index| GpuPrimitiveInstance {
+                    local_pos: [(index % 800) as f32, (index / 800) as f32],
+                    size: [1.0, 1.0],
+                    ..GpuPrimitiveInstance::default()
+                })
+                .collect(),
+            ..WidgetOutput::default()
+        };
         view.push(BACKGROUND, background);
 
         let mut glyphs: Vec<GlyphQuad> = state
@@ -177,8 +182,8 @@ fn a_click_reaches_reduce_and_rebuilds_the_button() {
     let mut runtime = runtime();
     runtime.frame(0.0);
     runtime.pointer_move(Vec2::new(100.0, 60.0));
-    runtime.pointer_down(Vec2::new(100.0, 60.0));
-    runtime.pointer_up(Vec2::new(100.0, 60.0));
+    runtime.pointer_down(Vec2::new(100.0, 60.0), PointerButton::Left);
+    runtime.pointer_up(Vec2::new(100.0, 60.0), PointerButton::Left);
     assert_eq!(runtime.state().clicks, 1);
 
     let report = runtime.frame(1.0 / 60.0);
@@ -193,8 +198,8 @@ fn clicking_outside_does_nothing() {
     let mut runtime = runtime();
     runtime.frame(0.0);
     runtime.pointer_move(Vec2::new(700.0, 500.0));
-    runtime.pointer_down(Vec2::new(700.0, 500.0));
-    runtime.pointer_up(Vec2::new(700.0, 500.0));
+    runtime.pointer_down(Vec2::new(700.0, 500.0), PointerButton::Left);
+    runtime.pointer_up(Vec2::new(700.0, 500.0), PointerButton::Left);
     assert_eq!(runtime.state().clicks, 0);
 }
 
@@ -232,8 +237,8 @@ fn backdrop_requests_reach_the_frame_report() {
     assert_eq!(report.backdrops[0].blur, 12.0);
 
     runtime.pointer_move(Vec2::new(100.0, 60.0));
-    runtime.pointer_down(Vec2::new(100.0, 60.0));
-    runtime.pointer_up(Vec2::new(100.0, 60.0));
+    runtime.pointer_down(Vec2::new(100.0, 60.0), PointerButton::Left);
+    runtime.pointer_up(Vec2::new(100.0, 60.0), PointerButton::Left);
     let report = runtime.frame(1.0 / 60.0);
     assert!(
         report.backdrops.is_empty(),

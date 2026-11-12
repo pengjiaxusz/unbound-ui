@@ -7,6 +7,7 @@
 //! The engine never sees a `winit` type: everything is translated into
 //! [`PlatformEvent`] and applied to a [`PlatformState`].
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
@@ -98,12 +99,29 @@ pub trait PlatformApp {
     fn take_window_request(&mut self) -> Option<WindowConfig> {
         None
     }
+
+    /// When the application needs the loop to wake up even with no input.
+    ///
+    /// A pending timer (a blinking caret, a tooltip delay) answers here so the
+    /// loop can park in `WaitUntil` instead of polling every frame.
+    fn next_wake(&self) -> Option<Instant> {
+        None
+    }
+
+    /// Hand the application a callback that wakes the parked event loop.
+    ///
+    /// Called once the event loop exists; a background task calls it when its
+    /// result is ready, so `about_to_wait` runs and the result is reduced.
+    fn attach_waker(&mut self, waker: Arc<dyn Fn() + Send + Sync>) {
+        let _ = waker;
+    }
 }
 
 /// The platform window: an event loop that will own a window.
 pub struct PlatformWindow {
     event_loop: EventLoop<()>,
     config: WindowConfig,
+    waker: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl PlatformWindow {
@@ -117,9 +135,14 @@ impl PlatformWindow {
     pub fn new(config: &WindowConfig) -> Result<Self, PlatformError> {
         let event_loop =
             EventLoop::new().map_err(|error| PlatformError::EventLoop(error.to_string()))?;
+        let proxy = event_loop.create_proxy();
+        let waker = Arc::new(move || {
+            let _ = proxy.send_event(());
+        });
         Ok(Self {
             event_loop,
             config: config.clone(),
+            waker,
         })
     }
 
@@ -128,10 +151,15 @@ impl PlatformWindow {
     /// # Errors
     /// Returns [`PlatformError`] when the event loop itself fails.
     pub fn run<A: PlatformApp>(self, app: A) -> Result<(), PlatformError> {
-        let Self { event_loop, config } = self;
+        let Self {
+            event_loop,
+            config,
+            waker,
+        } = self;
         let mut runner = Runner {
             app,
             config,
+            waker,
             windows: Vec::new(),
             primary: None,
         };
@@ -158,6 +186,7 @@ struct WindowEntry {
 struct Runner<A> {
     app: A,
     config: WindowConfig,
+    waker: Arc<dyn Fn() + Send + Sync>,
     windows: Vec<WindowEntry>,
     primary: Option<WindowId>,
 }
@@ -308,9 +337,14 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
             return;
         };
         self.primary = Some(entry.window.id());
+        self.app.attach_waker(Arc::clone(&self.waker));
         self.app.resumed(&mut entry.state, &entry.window);
         self.windows.push(entry);
     }
+
+    /// A background task asked for a frame; `about_to_wait` runs next and
+    /// reduces its result.
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, (): ()) {}
 
     fn window_event(
         &mut self,
@@ -414,7 +448,14 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
         };
         let state = &self.windows[index].state;
         let now = Instant::now();
-        let flow = match state.pacer.next_wake(now) {
+        // The pacer knows when the next *frame* is due; the application knows
+        // when its next *timer* is due. The loop has to wake for whichever
+        // comes first.
+        let deadline = match (state.pacer.next_wake(now), self.app.next_wake()) {
+            (Some(frame), Some(timer)) => Some(frame.min(timer)),
+            (frame, timer) => frame.or(timer),
+        };
+        let flow = match deadline {
             Some(deadline) => winit::event_loop::ControlFlow::WaitUntil(deadline),
             // Nothing has been presented yet *and* the application still
             // wants frames: poll so the first frame gets through.

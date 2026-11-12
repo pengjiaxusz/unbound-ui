@@ -183,7 +183,7 @@ OS 输入 / 文件拖拽 / Agent 驱动
 | :--- | :--- |
 | `unbound-gpu` | `PrimType` 8 种（`RoundedRect / Image / Glyph / GlyphColor / Curve / Stroke / Shadow / Line`）、`SubElement`、`BlendMode` 4 种、`PassLayer` 5 级、`GpuClipNode`（AABB + 两级圆角父裁剪）、`GpuTransform`、`GpuPayload`、`GpuPrimitiveInstance`、`SceneUpload`、`CLIP_NONE`、`SHADOW_TOKEN` |
 | `unbound-abi` | `RawNodeDesc`（扁平 POD：fill / border_color / text_color / shadow_color / radius / border_width / shadow_blur / opacity / transform / z_index / key / payload）、`NodeTag` 7 种（`Container / Text / Image / Canvas / Scroll / Portal / Separator`）、`NodeFlags`（`INTERACTIVE / FOCUSABLE / HIDDEN / CLIP / WRAP / ANIMATED`…）、`Display` 4 种、`ActionKind` 31 种（`Press / PointerDown / PointerUp / Focus / Blur / Undo / Redo / SetTheme`…） |
-| `unbound-input` | `HitRegion::{new, with_shape, with_cursor, with_clip}`、`Shape::{Rect, Rounded, Polygon, Bezier}`、`pick / pick_index / pick_stack`、`Router::{new, set_regions, hover, cursor, pointer_down, pointer_move, pointer_up, cancel}`、`PointerState`、`PointerEvent::{Down, Move, DragStart, Drag, Up, Click, DoubleClick, CaptureLost}`、`CursorStack`、`DragPayload` |
+| `unbound-input` | `HitRegion::{new, with_shape, with_cursor, with_clip}`、`Shape::{Rect, Rounded, Polygon, Bezier}`、`pick / pick_index / pick_stack`、`Router::{new, set_regions, hover, cursor, pointer_down, pointer_down_button, pointer_move, pointer_up, pointer_up_button, cancel}`、`Keymap::{bind, bind_sequence, feed}`、`KeyChord`、`PointerState`、`PointerEvent::{Down, Move, DragStart, Drag, Up, Click, DoubleClick, CaptureLost}`、`CursorStack`、`DragPayload` |
 | `unbound-world` | `UiWorld`（SlotMap 状态树）、`NodeId`、`DirtyLevel::{Clean, Paint, Layout, Topology}`、`VirtualList / VirtualGrid / VirtualTree` |
 | `unbound-layout` | `LayoutEngine::{new, sync, solve, solve_boundaries, solve_subtree, rect}`（Taffy flex/grid，`RelayoutBoundary` 增量求解） |
 | `unbound-anim` | `Spring`、`Spring2`、`SpringPreset::{Snappy, Gentle, Heavy, Precise}`、`CubicBezier`、`Animation`、`Animator`、`FrameScheduler`、`should_snap` |
@@ -195,7 +195,7 @@ OS 输入 / 文件拖拽 / Agent 驱动
 | `unbound-headless` | `Rule::ALL`、`Harness::{run, assert_clean}`、`Diagnostic::to_json`（含源码行号与约束链）、`TimeTravel` 快照 |
 | `unbound-host` / `app-guest` | `GuestHost::{load, reload, reduce, build, snapshot}`、`state_schema_hash` 状态迁移 |
 | `unbound-graph` / `unbound-asset` / `unbound-kpi` | `RenderGraph`、`OffscreenPool`；`AssetPipeline`、`StagingRing`；`measure_all().to_text()` |
-| `unbound-platform` | `PlatformApp`、`PlatformEvent`（`KeyInput / MouseInput / CursorMoved / MouseWheel / Focused / ModifiersChanged / Resized / ScaleFactorChanged / RedrawRequested / RecreateSwapchain / CloseRequested`…）、`ResizeTracker`、`PlatformState::poll_resize`、`LatencyTracker` |
+| `unbound-platform` | `PlatformApp`（含 `next_wake` / `attach_waker`）、`PlatformEvent`（`KeyInput / MouseInput / CursorMoved / MouseWheel / Focused / ModifiersChanged / Resized / ScaleFactorChanged / ThemeChanged / RedrawRequested / RecreateSwapchain / CloseRequested`…）、`ResizeTracker`、`PlatformState::poll_resize`、`LatencyTracker` |
 
 ---
 

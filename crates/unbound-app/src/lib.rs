@@ -18,11 +18,18 @@
 //! events and asserts on the same reports. The showcase shell and
 //! `runtime_headless.rs` therefore exercise exactly the same code path.
 
+use std::cell::{Cell, RefCell, RefMut};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
+
+use crossbeam_channel::{Receiver, Sender};
 use unbound_a11y::A11yAction;
 use unbound_abi::{Dim, NodeFlags, RawNodeDesc};
 use unbound_gpu::data::{GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform};
 use unbound_input::{
-    CursorKind, FocusCause, FocusKey, FocusManager, PointerButton, PointerEvent, Router,
+    CursorKind, FocusCause, FocusKey, FocusManager, KeyChord, KeyName, Keymap, PointerButton,
+    PointerEvent, Router,
 };
 use unbound_layout::LayoutEngine;
 use unbound_math::{Rect, Vec2};
@@ -32,6 +39,12 @@ use unbound_widgets::button::{ButtonDesc, ButtonWidget};
 use unbound_widgets::diff::{diff_primitives, SceneDiff};
 use unbound_widgets::{BackdropRequest, ControlState, SceneCollector, WidgetDesc, WidgetOutput};
 use unbound_world::{NodeId, UiWorld};
+
+pub mod scheduler;
+pub mod state_store;
+
+pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
+pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 
 /// The semantic root identity.
 pub const ROOT: u64 = 1;
@@ -116,7 +129,7 @@ impl core::ops::BitOrAssign for DirtyFlags {
 }
 
 /// A keyboard key in the application's vocabulary.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AppKey {
     Tab,
     Escape,
@@ -124,14 +137,78 @@ pub enum AppKey {
     Space,
     Backspace,
     Delete,
+    Insert,
     Left,
     Right,
     Up,
     Down,
     Home,
     End,
+    PageUp,
+    PageDown,
+    ContextMenu,
+    CapsLock,
+    /// An `F1`..`F24` function key.
+    F(u8),
+    Copy,
+    Cut,
+    Paste,
+    Undo,
+    Redo,
     /// Any other key, identified by its character.
     Character(char),
+}
+
+impl AppKey {
+    /// The stable name a [`KeyChord`] binding uses.
+    #[must_use]
+    pub const fn chord_name(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Tab => "Tab",
+            Self::Escape => "Escape",
+            Self::Enter => "Enter",
+            Self::Space => "Space",
+            Self::Backspace => "Backspace",
+            Self::Delete => "Delete",
+            Self::Insert => "Insert",
+            Self::Left => "ArrowLeft",
+            Self::Right => "ArrowRight",
+            Self::Up => "ArrowUp",
+            Self::Down => "ArrowDown",
+            Self::Home => "Home",
+            Self::End => "End",
+            Self::PageUp => "PageUp",
+            Self::PageDown => "PageDown",
+            Self::ContextMenu => "ContextMenu",
+            Self::CapsLock => "CapsLock",
+            Self::Copy => "Copy",
+            Self::Cut => "Cut",
+            Self::Paste => "Paste",
+            Self::Undo => "Undo",
+            Self::Redo => "Redo",
+            Self::F(_) | Self::Character(_) => return None,
+        })
+    }
+
+    /// The chord this key forms with `modifiers`.
+    ///
+    /// Characters are folded to lower case: a keyboard reports `P` when Shift
+    /// is held, but a binding written as `Ctrl+Shift+P` must match it.
+    #[must_use]
+    pub fn chord(self, modifiers: Modifiers) -> KeyChord {
+        let key = match self {
+            Self::Character(character) => KeyName::Char(character.to_ascii_lowercase()),
+            Self::F(number) => KeyName::Function(number),
+            other => KeyName::Named(other.chord_name().unwrap_or("Unidentified")),
+        };
+        KeyChord {
+            key,
+            ctrl: modifiers.ctrl,
+            shift: modifiers.shift,
+            alt: modifiers.alt,
+            meta: modifiers.meta,
+        }
+    }
 }
 
 /// Held modifier keys.
@@ -187,6 +264,10 @@ pub enum AppEvent {
         delta: Vec2,
         target: Option<u64>,
     },
+    /// A secondary click completed over `node`.
+    ContextMenu { node: u64, pos: Vec2 },
+    /// A keyboard shortcut matched a [`Keymap`] binding.
+    Shortcut { action: u64 },
     /// A key was pressed or released.
     Key {
         key: AppKey,
@@ -209,10 +290,12 @@ pub enum AppEvent {
     },
     /// A frame clock tick.
     Tick { dt: f32 },
+    /// A timer scheduled through [`AppContext::set_timeout`] fired.
+    Timer { token: TimerToken },
 }
 
 /// The runtime's read/write view of the world during `reduce`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AppContext {
     /// The current viewport size.
     pub viewport: Vec2,
@@ -236,6 +319,38 @@ pub struct AppContext {
     pub request_focus: Option<(u64, FocusCause)>,
     /// Ask the runtime to blur after this reduction.
     pub request_blur: bool,
+    /// The local state pool, shared with the view that renders it.
+    widget_state: Rc<RefCell<WidgetStateStore>>,
+    /// Timers requested during this reduction, drained by the runtime.
+    timer_requests: Vec<TimerRequest>,
+    /// Timers cancelled during this reduction, drained by the runtime.
+    timer_cancels: Vec<TimerToken>,
+    /// Shared with the runtime queue so tokens are unique across both.
+    timer_tokens: Rc<Cell<u64>>,
+    /// Where a background task posts its result.
+    async_sender: Option<Sender<AppEvent>>,
+    /// Wakes the parked event loop when a task posts a result.
+    waker: Option<Arc<dyn AppWaker>>,
+    /// How much of the current wheel delta the last handler consumed.
+    scroll_consumed: Vec2,
+}
+
+impl core::fmt::Debug for AppContext {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AppContext")
+            .field("viewport", &self.viewport)
+            .field("theme", &self.theme)
+            .field("focused", &self.focused)
+            .field("focus_visible", &self.focus_visible)
+            .field("hovered", &self.hovered)
+            .field("pressed", &self.pressed)
+            .field("cursor", &self.cursor)
+            .field("pointer", &self.pointer)
+            .field("time", &self.time)
+            .field("widget_state", &self.widget_state)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AppContext {
@@ -252,8 +367,128 @@ impl AppContext {
             time: 0.0,
             request_focus: None,
             request_blur: false,
+            widget_state: Rc::new(RefCell::new(WidgetStateStore::new())),
+            timer_requests: Vec::new(),
+            timer_cancels: Vec::new(),
+            timer_tokens: Rc::new(Cell::new(0)),
+            async_sender: None,
+            waker: None,
+            scroll_consumed: Vec2::ZERO,
         }
     }
+
+    /// The local state for a node key.
+    ///
+    /// Unlike the view's [`ViewBuilder::use_state`], this does not mark the key
+    /// as rendered: an event handler may poke at a widget's state without
+    /// keeping a removed widget alive.
+    pub fn use_state<T: Default + Send + Sync + 'static>(&self, key: u64) -> RefMut<'_, T> {
+        RefMut::map(self.widget_state.borrow_mut(), |store| store.entry(key))
+    }
+
+    /// Schedule a one-shot event `after` this reduction.
+    ///
+    /// The token is allocated first and handed to `make`, so the event can
+    /// carry the token it will be dispatched as; the runtime enqueues it once
+    /// the event has been reduced.
+    pub fn set_timeout(
+        &mut self,
+        after: Duration,
+        make: impl FnOnce(TimerToken) -> AppEvent,
+    ) -> TimerToken {
+        let token = self.allocate_timer();
+        self.timer_requests.push(TimerRequest {
+            token,
+            delay_ms: millis(after),
+            period_ms: None,
+            event: make(token),
+        });
+        token
+    }
+
+    /// Schedule a repeating event every `period`.
+    pub fn set_interval(
+        &mut self,
+        period: Duration,
+        make: impl FnOnce(TimerToken) -> AppEvent,
+    ) -> TimerToken {
+        let token = self.allocate_timer();
+        self.timer_requests.push(TimerRequest {
+            token,
+            delay_ms: millis(period),
+            period_ms: Some(millis(period)),
+            event: make(token),
+        });
+        token
+    }
+
+    /// Cancel a timer scheduled earlier.
+    pub fn cancel_timer(&mut self, token: TimerToken) {
+        self.timer_cancels.push(token);
+    }
+
+    /// Report how much of a wheel delta this handler used.
+    ///
+    /// The runtime subtracts it from the delta and offers the remainder to the
+    /// next region under the pointer, which is how a nested scroll area hands
+    /// the leftover wheel to its outer scroller.
+    pub fn consume_scroll(&mut self, delta: Vec2) {
+        self.scroll_consumed += delta;
+    }
+
+    /// Run `task` on a worker thread and reduce the event it returns.
+    ///
+    /// The result is delivered on the next [`AppRuntime::poll_async`] (called
+    /// automatically at the top of every frame); [`AppWaker`] wakes a parked
+    /// event loop in the meantime.
+    pub fn spawn(&self, task: impl FnOnce() -> AppEvent + Send + 'static) {
+        let Some(sender) = self.async_sender.clone() else {
+            return;
+        };
+        let waker = self.waker.clone();
+        std::thread::spawn(move || {
+            let event = task();
+            if sender.send(event).is_ok() {
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            }
+        });
+    }
+
+    fn allocate_timer(&self) -> TimerToken {
+        let id = self.timer_tokens.get().saturating_add(1);
+        self.timer_tokens.set(id);
+        TimerToken::new(id)
+    }
+
+    /// Drain the timer requests for the runtime.
+    fn take_timer_requests(&mut self) -> (Vec<TimerRequest>, Vec<TimerToken>) {
+        (
+            core::mem::take(&mut self.timer_requests),
+            core::mem::take(&mut self.timer_cancels),
+        )
+    }
+
+    /// Share the runtime's timer token counter.
+    fn share_timer_tokens(&mut self, tokens: Rc<Cell<u64>>) {
+        self.timer_tokens = tokens;
+    }
+
+    /// Share the runtime's local state pool with the view.
+    fn share_state(&mut self, state: Rc<RefCell<WidgetStateStore>>) {
+        self.widget_state = state;
+    }
+
+    /// Install the channel and waker used by [`Self::spawn`].
+    fn install_async(&mut self, sender: Sender<AppEvent>, waker: Option<Arc<dyn AppWaker>>) {
+        self.async_sender = Some(sender);
+        self.waker = waker;
+    }
+}
+
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// The immutable context available while `view` builds the scene.
@@ -336,9 +571,18 @@ pub struct ViewBuilder<'a> {
     world: &'a mut UiWorld,
     parent: NodeId,
     pending: &'a mut Vec<PendingWidget>,
+    widget_state: Rc<RefCell<WidgetStateStore>>,
 }
 
 impl<'a> ViewBuilder<'a> {
+    /// The local state for a widget key.
+    ///
+    /// The key is recorded as rendered, so a key that stops calling this is
+    /// unmounted at the end of the frame and its value reclaimed.
+    pub fn use_state<T: Default + Send + Sync + 'static>(&mut self, key: u64) -> RefMut<'_, T> {
+        RefMut::map(self.widget_state.borrow_mut(), |store| store.use_state(key))
+    }
+
     /// Append a widget's output.
     pub fn push(&mut self, key: u64, output: WidgetOutput) {
         self.collector.push(key, output);
@@ -474,10 +718,67 @@ pub trait Application {
         state: &mut Self::State,
         event: AppEvent,
         ctx: &mut AppContext,
-    ) -> DirtyFlags;
+    ) -> EventOutcome;
+
+    /// React to a lifecycle transition for a local state key.
+    ///
+    /// Runs after the view, once the runtime knows which keys appeared or
+    /// disappeared, and when the keyboard focus moves. Returning flags that
+    /// need a rebuild schedules one for the next frame.
+    fn lifecycle(&mut self, _state: &mut Self::State, _event: LifecycleEvent) -> DirtyFlags {
+        DirtyFlags::NONE
+    }
 
     /// Emit the scene for the current state.
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder<'_>);
+}
+
+/// Whether an event keeps bubbling up the hit path.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum Propagation {
+    /// The event may be offered to the next ancestor.
+    #[default]
+    Bubble,
+    /// The handler consumed the event; the runtime stops walking the path.
+    Stop,
+}
+
+/// What reducing one event produced.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct EventOutcome {
+    /// The invalidation the reduction caused.
+    pub dirty: DirtyFlags,
+    /// Whether the event should still be offered to an ancestor.
+    pub propagation: Propagation,
+}
+
+impl EventOutcome {
+    /// An outcome that changed `dirty` and keeps bubbling.
+    #[must_use]
+    pub const fn new(dirty: DirtyFlags) -> Self {
+        Self {
+            dirty,
+            propagation: Propagation::Bubble,
+        }
+    }
+
+    /// An outcome that stops the event.
+    #[must_use]
+    pub const fn stopping(dirty: DirtyFlags) -> Self {
+        Self {
+            dirty,
+            propagation: Propagation::Stop,
+        }
+    }
+
+    /// The same outcome, marked as consumed.
+    #[must_use]
+    pub const fn stop(self) -> Self {
+        Self {
+            dirty: self.dirty,
+            propagation: Propagation::Stop,
+        }
+    }
 }
 
 /// The result of rebuilding one frame.
@@ -520,14 +821,26 @@ pub struct AppRuntime<A: Application> {
     layout: LayoutEngine,
     text_engine: TextEngine,
     pending: Vec<PendingWidget>,
+    widget_state: Rc<RefCell<WidgetStateStore>>,
+    timers: TimerQueue,
+    async_rx: Receiver<AppEvent>,
+    keymap: Keymap,
+    key_context: Option<String>,
+    last_focused: Option<u64>,
 }
 
 impl<A: Application> AppRuntime<A> {
     /// Build a runtime, initialising the application state.
     pub fn new(mut app: A, viewport: Vec2) -> Self {
         let mut ctx = AppContext::new(viewport);
+        let widget_state = Rc::new(RefCell::new(WidgetStateStore::new()));
+        let timers = TimerQueue::new();
+        let (async_tx, async_rx) = crossbeam_channel::unbounded();
+        ctx.share_state(Rc::clone(&widget_state));
+        ctx.share_timer_tokens(timers.tokens());
+        ctx.install_async(async_tx.clone(), None);
         let state = app.init(&mut ctx);
-        Self {
+        let mut runtime = Self {
             app,
             state,
             ctx,
@@ -547,6 +860,98 @@ impl<A: Application> AppRuntime<A> {
             layout: LayoutEngine::new(),
             text_engine: TextEngine::new(),
             pending: Vec::new(),
+            widget_state,
+            timers,
+            async_rx,
+            keymap: Keymap::new(),
+            key_context: None,
+            last_focused: None,
+        };
+        // A timer scheduled from `init` is already due relative to the zero
+        // clock; enqueue it before the first frame can advance past it.
+        runtime.collect_timer_requests();
+        runtime
+    }
+
+    /// Install the waker a background task uses to wake a parked event loop.
+    pub fn set_waker(&mut self, waker: Arc<dyn AppWaker>) {
+        self.ctx.waker = Some(waker);
+    }
+
+    /// The mutable shortcut table.
+    pub fn keymap_mut(&mut self) -> &mut Keymap {
+        &mut self.keymap
+    }
+
+    /// Set the active shortcut scope (`"TextInput"`, `"Modal"`, ...).
+    pub fn set_key_context(&mut self, context: Option<&str>) {
+        self.key_context = context.map(str::to_owned);
+        self.keymap.clear_pending();
+    }
+
+    /// How long until the next timer, for the host's `ControlFlow`.
+    #[must_use]
+    pub fn next_wake_in(&self) -> Option<Duration> {
+        let deadline = self.timers.next_deadline_ms()?;
+        Some(Duration::from_millis(
+            deadline.saturating_sub(self.now_ms()),
+        ))
+    }
+
+    /// Reduce every result a background task posted.
+    pub fn poll_async(&mut self) -> DirtyFlags {
+        let mut flags = DirtyFlags::NONE;
+        while let Ok(event) = self.async_rx.try_recv() {
+            flags = flags.merge(self.dispatch(event));
+        }
+        flags
+    }
+
+    /// Reduce every timer due at the current clock.
+    pub fn poll_timers(&mut self) -> DirtyFlags {
+        self.collect_timer_requests();
+        let due = self.timers.due(self.now_ms());
+        let mut flags = DirtyFlags::NONE;
+        for event in due {
+            flags = flags.merge(self.dispatch(event));
+        }
+        flags
+    }
+
+    /// Access one local state value by key.
+    pub fn with_state<T: Default + Send + Sync + 'static, R>(
+        &mut self,
+        key: u64,
+        f: impl FnOnce(&mut T) -> R,
+    ) -> R {
+        let mut store = self.widget_state.borrow_mut();
+        f(store.entry(key))
+    }
+
+    /// The local state pool, for a test or a host that needs to inspect it.
+    #[must_use]
+    pub fn state_store(&self) -> core::cell::Ref<'_, WidgetStateStore> {
+        self.widget_state.borrow()
+    }
+
+    fn now_ms(&self) -> u64 {
+        millis(Duration::from_secs_f64(self.time.max(0.0)))
+    }
+
+    fn collect_timer_requests(&mut self) {
+        let (requests, cancels) = self.ctx.take_timer_requests();
+        let now = self.now_ms();
+        for request in requests {
+            self.timers.schedule(
+                request.token,
+                now,
+                request.delay_ms,
+                request.period_ms,
+                request.event,
+            );
+        }
+        for token in cancels {
+            self.timers.cancel(token);
         }
     }
 
@@ -657,9 +1062,9 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
-    /// Press the primary button.
-    pub fn pointer_down(&mut self, pos: Vec2) -> DirtyFlags {
-        let event = self.router.pointer_down(pos, self.time);
+    /// Press `button`.
+    pub fn pointer_down(&mut self, pos: Vec2, button: PointerButton) -> DirtyFlags {
+        let event = self.router.pointer_down_button(pos, button, self.time);
         self.ctx.pointer = pos;
         let flags = event.map_or(DirtyFlags::NONE, |event| self.reduce_pointer(event));
         self.sync_router_context();
@@ -667,9 +1072,9 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
-    /// Release the primary button.
-    pub fn pointer_up(&mut self, pos: Vec2) -> DirtyFlags {
-        let events = self.router.pointer_up(pos, self.time);
+    /// Release `button`.
+    pub fn pointer_up(&mut self, pos: Vec2, button: PointerButton) -> DirtyFlags {
+        let events = self.router.pointer_up_button(pos, button, self.time);
         self.ctx.pointer = pos;
         let mut flags = DirtyFlags::PAINT;
         for event in events {
@@ -693,14 +1098,46 @@ impl<A: Application> AppRuntime<A> {
     }
 
     /// A wheel notch at `pos`.
+    ///
+    /// The delta walks the hit stack topmost-first. Each handler reports what
+    /// it consumed through [`AppContext::consume_scroll`]; the remainder is
+    /// offered to the ancestor under it, so a scroll area at its end hands the
+    /// wheel to the page behind it. A handler that returns
+    /// [`Propagation::Stop`] ends the chain immediately.
     pub fn wheel(&mut self, pos: Vec2, delta: Vec2) -> DirtyFlags {
-        let target = self
+        let path: Vec<u64> = self
             .router
             .wheel(delta, pos)
-            .first()
-            .map(|region| region.node);
-        let event = AppEvent::Wheel { pos, delta, target };
-        self.dispatch(event)
+            .iter()
+            .map(|region| region.node)
+            .collect();
+        if path.is_empty() {
+            return self.dispatch(AppEvent::Wheel {
+                pos,
+                delta,
+                target: None,
+            });
+        }
+
+        let mut remaining = delta;
+        let mut flags = DirtyFlags::NONE;
+        for node in path {
+            if remaining.length() <= 0.01 {
+                break;
+            }
+            self.ctx.scroll_consumed = Vec2::ZERO;
+            let outcome = self.dispatch_outcome(AppEvent::Wheel {
+                pos,
+                delta: remaining,
+                target: Some(node),
+            });
+            remaining -= self.ctx.scroll_consumed;
+            flags = flags.merge(outcome.dirty);
+            if outcome.propagation == Propagation::Stop {
+                break;
+            }
+        }
+        flags
     }
 
     /// A raw pointer event, for a shell that owns a different router.
@@ -723,6 +1160,17 @@ impl<A: Application> AppRuntime<A> {
                     flags = flags.merge(DirtyFlags::PAINT);
                 }
                 self.sync_focus_context();
+            }
+
+            // A bound chord is a command, not text: reducing it instead of
+            // the raw key stops a focused text field from also inserting it.
+            let action =
+                self.keymap
+                    .feed(key.chord(modifiers), self.key_context.as_deref(), self.time);
+            if let Some(action) = action {
+                let flags = self.dispatch(AppEvent::Shortcut { action }).merge(flags);
+                self.mark(flags);
+                return flags;
             }
         }
         let flags = self
@@ -788,8 +1236,12 @@ impl<A: Application> AppRuntime<A> {
     /// A frame with no dirty flags and no forced rebuild is a no-op that
     /// reports [`SceneDiff::Identical`] — the zero-work path.
     pub fn frame(&mut self, dt: f32) -> FrameReport {
-        let dirty = core::mem::replace(&mut self.dirty, DirtyFlags::NONE);
         self.advance(dt);
+        // Results and timers that arrived since the previous frame are
+        // reduced first, so a frame that only woke up for them still rebuilds.
+        self.poll_async();
+        self.poll_timers();
+        let dirty = core::mem::replace(&mut self.dirty, DirtyFlags::NONE);
         if dirty == DirtyFlags::NONE && !self.force_rebuild {
             return FrameReport {
                 diff: SceneDiff::Identical,
@@ -809,6 +1261,7 @@ impl<A: Application> AppRuntime<A> {
 
         self.collector.reset(ROOT);
         self.pending.clear();
+        self.widget_state.borrow_mut().begin_frame();
         self.world = UiWorld::new();
         self.layout = LayoutEngine::new();
         let root = self.world.root();
@@ -831,9 +1284,11 @@ impl<A: Application> AppRuntime<A> {
             world: &mut self.world,
             parent: root,
             pending: &mut self.pending,
+            widget_state: Rc::clone(&self.widget_state),
         };
         self.app.view(&self.state, &mut view);
         self.layout_pending();
+        self.dispatch_lifecycle();
 
         // Publish the new hit regions and focus order.
         let regions = core::mem::take(&mut self.collector.regions);
@@ -999,11 +1454,26 @@ impl<A: Application> AppRuntime<A> {
                 target,
                 position,
                 button,
-            } => self.dispatch(AppEvent::PointerUp {
-                pos: position,
-                target,
-                button,
-            }),
+            } => {
+                let mut flags = self.dispatch(AppEvent::PointerUp {
+                    pos: position,
+                    target,
+                    button,
+                });
+                // A secondary click opens the menu only when the release is
+                // still over the node that was pressed.
+                if button == PointerButton::Right {
+                    if let Some(node) = target {
+                        if self.router.hover() == Some(node) {
+                            flags = flags.merge(self.dispatch(AppEvent::ContextMenu {
+                                node,
+                                pos: position,
+                            }));
+                        }
+                    }
+                }
+                flags
+            }
             PointerEvent::Click {
                 target,
                 position,
@@ -1023,8 +1493,52 @@ impl<A: Application> AppRuntime<A> {
         }
     }
 
+    /// Report the mount / unmount delta and the focus change to the app.
+    fn dispatch_lifecycle(&mut self) {
+        let changes = {
+            // Do not hold the borrow while the hooks run: a hook may ask for
+            // the same key's state again.
+            self.widget_state.borrow_mut().end_frame()
+        };
+        let mut flags = DirtyFlags::NONE;
+        for key in &changes.unmounted {
+            flags = flags.merge(
+                self.app
+                    .lifecycle(&mut self.state, LifecycleEvent::Unmounted(*key)),
+            );
+        }
+        for key in &changes.mounted {
+            flags = flags.merge(
+                self.app
+                    .lifecycle(&mut self.state, LifecycleEvent::Mounted(*key)),
+            );
+        }
+
+        let focused = self.ctx.focused;
+        if focused != self.last_focused {
+            if let Some(previous) = self.last_focused {
+                flags = flags.merge(
+                    self.app
+                        .lifecycle(&mut self.state, LifecycleEvent::Blurred(previous)),
+                );
+            }
+            if let Some(current) = focused {
+                flags = flags.merge(
+                    self.app
+                        .lifecycle(&mut self.state, LifecycleEvent::Focused(current)),
+                );
+            }
+            self.last_focused = focused;
+        }
+        self.mark(flags);
+    }
+
     fn dispatch(&mut self, event: AppEvent) -> DirtyFlags {
-        let flags = self.app.reduce(&mut self.state, event, &mut self.ctx);
+        self.dispatch_outcome(event).dirty
+    }
+
+    fn dispatch_outcome(&mut self, event: AppEvent) -> EventOutcome {
+        let outcome = self.app.reduce(&mut self.state, event, &mut self.ctx);
         if let Some((key, cause)) = self.ctx.request_focus.take() {
             self.focus.focus(key, cause);
         }
@@ -1032,8 +1546,9 @@ impl<A: Application> AppRuntime<A> {
             self.focus.blur();
         }
         self.sync_focus_context();
-        self.mark(flags);
-        flags
+        self.collect_timer_requests();
+        self.mark(outcome.dirty);
+        outcome
     }
 
     fn mark(&mut self, flags: DirtyFlags) {

@@ -16,6 +16,7 @@ pub mod cursor;
 pub mod dnd;
 pub mod focus;
 pub mod hit;
+pub mod keymap;
 pub mod pointer;
 pub mod router;
 
@@ -26,5 +27,6 @@ pub use hit::{
     pick, pick_index, pick_stack, point_in_polygon, resize_edge, rounded_rect_sdf, ClipRect,
     HitRegion, ResizeEdge, Shape, PORTAL_LAYER,
 };
+pub use keymap::{KeyBinding, KeyChord, KeyName, Keymap};
 pub use pointer::{Buttons, PointerButton, PointerConfig, PointerEvent, PointerState};
 pub use router::Router;

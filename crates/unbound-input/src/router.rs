@@ -142,14 +142,26 @@ impl Router {
         self.last_wheel
     }
 
-    /// Button press.
+    /// A primary-button press.
+    ///
+    /// A convenience for hosts that never distinguish the buttons; anything
+    /// that supports a context menu or a middle-drag calls
+    /// [`Self::pointer_down_button`].
     pub fn pointer_down(&mut self, position: Vec2, now: f64) -> Option<PointerEvent> {
+        self.pointer_down_button(position, PointerButton::Left, now)
+    }
+
+    /// Any button press.
+    pub fn pointer_down_button(
+        &mut self,
+        position: Vec2,
+        button: PointerButton,
+        now: f64,
+    ) -> Option<PointerEvent> {
         self.last_position = Some(position);
         let target = pick(&self.regions, position).map(|r| r.node);
         self.hover = target;
-        let event = self
-            .pointer
-            .on_down(target, position, PointerButton::Left, now);
+        let event = self.pointer.on_down(target, position, button, now);
         self.refresh_cursor();
         event
     }
@@ -173,9 +185,19 @@ impl Router {
     /// count as a drag: a button must not activate when the user lets go over
     /// something else.
     pub fn pointer_up(&mut self, position: Vec2, now: f64) -> Vec<PointerEvent> {
+        self.pointer_up_button(position, PointerButton::Left, now)
+    }
+
+    /// Any button release.
+    pub fn pointer_up_button(
+        &mut self,
+        position: Vec2,
+        button: PointerButton,
+        now: f64,
+    ) -> Vec<PointerEvent> {
         self.last_position = Some(position);
         let pressed = self.pointer.pressed();
-        let mut events = self.pointer.on_up(position, PointerButton::Left, now);
+        let mut events = self.pointer.on_up(position, button, now);
         let released_on = pick(&self.regions, position).map(|r| r.node);
         self.hover = released_on;
         if pressed.is_some() {

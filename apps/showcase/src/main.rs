@@ -24,7 +24,7 @@ use unbound_gpu::device::{Gpu, GpuConfig};
 use unbound_gpu::surface::{AcquireOutcome, PresentOutcome, Surface, Swapchain};
 use unbound_gpu::swapchain::PresentConfig;
 use unbound_gpu::{Camera, Renderer, SceneUpload};
-use unbound_input::{resize_edge, CursorKind, ResizeEdge};
+use unbound_input::{resize_edge, CursorKind, PointerButton, ResizeEdge};
 use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::window::{
@@ -462,17 +462,56 @@ fn app_key(key: &PlatformKey) -> AppKey {
             "ArrowDown" => AppKey::Down,
             "Home" => AppKey::Home,
             "End" => AppKey::End,
+            "PageUp" => AppKey::PageUp,
+            "PageDown" => AppKey::PageDown,
+            "Insert" => AppKey::Insert,
+            "ContextMenu" => AppKey::ContextMenu,
+            "CapsLock" => AppKey::CapsLock,
+            "Copy" => AppKey::Copy,
+            "Cut" => AppKey::Cut,
+            "Paste" => AppKey::Paste,
+            "Undo" => AppKey::Undo,
+            "Redo" => AppKey::Redo,
             " " | "Space" => AppKey::Space,
-            other => other
-                .chars()
-                .next()
-                .map_or(AppKey::Character('\0'), AppKey::Character),
+            other => match other.strip_prefix('F').and_then(|n| n.parse::<u8>().ok()) {
+                Some(number) if other.len() > 1 && (1..=24).contains(&number) => AppKey::F(number),
+                _ => other
+                    .chars()
+                    .next()
+                    .map_or(AppKey::Character('\0'), AppKey::Character),
+            },
         },
         PlatformKey::Character(text) => text
             .chars()
             .next()
             .map_or(AppKey::Character('\0'), AppKey::Character),
         PlatformKey::Other(_) => AppKey::Character('\0'),
+    }
+}
+
+/// Map a platform mouse button into the runtime's.
+fn pointer_button(button: MouseButton) -> Option<PointerButton> {
+    match button {
+        MouseButton::Left => Some(PointerButton::Left),
+        MouseButton::Right => Some(PointerButton::Right),
+        MouseButton::Middle => Some(PointerButton::Middle),
+        // Back / forward are navigation, not pointer state the router owns.
+        MouseButton::Other(_) => None,
+    }
+}
+
+/// Adapts the backend's wake callback to the runtime's [`AppWaker`] trait.
+struct SignalWaker(std::sync::Arc<dyn Fn() + Send + Sync>);
+
+impl std::fmt::Debug for SignalWaker {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SignalWaker")
+    }
+}
+
+impl unbound_app::AppWaker for SignalWaker {
+    fn wake(&self) {
+        (self.0)();
     }
 }
 
@@ -672,6 +711,16 @@ impl PlatformApp for Showcase {
         })
     }
 
+    fn next_wake(&self) -> Option<Instant> {
+        // A pending timer or a parked background task has to wake the loop;
+        // the pacer's frame deadline is considered separately by the backend.
+        self.app.next_wake_in().map(|delay| Instant::now() + delay)
+    }
+
+    fn attach_waker(&mut self, waker: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        self.app.set_waker(std::sync::Arc::new(SignalWaker(waker)));
+    }
+
     fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
         // Secondary windows present the same application; their input is not
         // routed yet, so only the presentation chain reacts.
@@ -734,50 +783,58 @@ impl PlatformApp for Showcase {
             PlatformEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers;
             }
-            PlatformEvent::MouseInput {
-                state,
-                button: MouseButton::Left,
-            } => {
-                let position = self.logical(self.pointer);
-                if state == ButtonState::Pressed {
-                    // The window chrome owns its edges and its title bar: the
-                    // UI underneath must not also see the press.
-                    self.resize_edge = self.resize_edge_at(window);
-                    if let Some(edge) = self.resize_edge {
-                        self.press_consumed = true;
-                        let _ = window.drag_resize_window(resize_direction(edge));
-                    } else {
-                        self.app.pointer_move(position);
-                        if self
-                            .shell()
-                            .is_titlebar_drag(position, self.app.context().hovered)
-                        {
-                            self.press_consumed = true;
-                            let double = self.last_title_press.is_some_and(|(when, at)| {
-                                Instant::now().duration_since(when)
-                                    < std::time::Duration::from_millis(400)
-                                    && (at - position).length() < 6.0
-                            });
-                            self.last_title_press = Some((Instant::now(), position));
-                            if double {
-                                window.set_maximized(!window.is_maximized());
-                            } else {
-                                let _ = window.drag_window();
-                            }
+            PlatformEvent::MouseInput { state, button } => {
+                if let Some(button) = pointer_button(button) {
+                    let position = self.logical(self.pointer);
+                    if button != PointerButton::Left {
+                        // A secondary press never moves the window chrome; it
+                        // is the UI's context-menu gesture. The middle button
+                        // is a canvas pan, also owned by the runtime.
+                        if state == ButtonState::Pressed {
+                            self.app.pointer_down(position, button);
                         } else {
-                            self.press_consumed = false;
-                            self.app.pointer_down(position);
-                            if let Some(command) = self.shell_mut().take_window_command() {
-                                flow = self.handle_window_command(window, command);
+                            self.app.pointer_up(position, button);
+                        }
+                    } else if state == ButtonState::Pressed {
+                        // The window chrome owns its edges and its title bar:
+                        // the UI underneath must not also see the press.
+                        self.resize_edge = self.resize_edge_at(window);
+                        if let Some(edge) = self.resize_edge {
+                            self.press_consumed = true;
+                            let _ = window.drag_resize_window(resize_direction(edge));
+                        } else {
+                            self.app.pointer_move(position);
+                            if self
+                                .shell()
+                                .is_titlebar_drag(position, self.app.context().hovered)
+                            {
+                                self.press_consumed = true;
+                                let double = self.last_title_press.is_some_and(|(when, at)| {
+                                    Instant::now().duration_since(when)
+                                        < std::time::Duration::from_millis(400)
+                                        && (at - position).length() < 6.0
+                                });
+                                self.last_title_press = Some((Instant::now(), position));
+                                if double {
+                                    window.set_maximized(!window.is_maximized());
+                                } else {
+                                    let _ = window.drag_window();
+                                }
+                            } else {
+                                self.press_consumed = false;
+                                self.app.pointer_down(position, PointerButton::Left);
+                                if let Some(command) = self.shell_mut().take_window_command() {
+                                    flow = self.handle_window_command(window, command);
+                                }
                             }
                         }
-                    }
-                } else if self.press_consumed {
-                    self.press_consumed = false;
-                } else {
-                    self.app.pointer_up(position);
-                    if let Some(command) = self.shell_mut().take_window_command() {
-                        flow = self.handle_window_command(window, command);
+                    } else if self.press_consumed {
+                        self.press_consumed = false;
+                    } else {
+                        self.app.pointer_up(position, PointerButton::Left);
+                        if let Some(command) = self.shell_mut().take_window_command() {
+                            flow = self.handle_window_command(window, command);
+                        }
                     }
                 }
             }
@@ -811,7 +868,8 @@ impl PlatformApp for Showcase {
                 // until the user happens to click somewhere else.
                 self.shell_mut().cancel_interactions();
                 self.app.cancel_pointer();
-                self.app.pointer_up(self.logical(self.pointer));
+                self.app
+                    .pointer_up(self.logical(self.pointer), PointerButton::Left);
             }
             PlatformEvent::RedrawRequested => {
                 // The OS asked to repaint (the window was uncovered, or the
@@ -822,6 +880,17 @@ impl PlatformApp for Showcase {
                 if !state.pacer.animating() {
                     state.pacer.request_immediate(Instant::now());
                 }
+            }
+            PlatformEvent::ThemeChanged { dark } => {
+                // Follow the OS preference; the in-app toggle still wins
+                // until the next OS change.
+                self.shell_mut().state.theme = if dark {
+                    ThemeMode::Dark
+                } else {
+                    ThemeMode::Light
+                };
+                self.shell_mut().state.bump();
+                self.app.invalidate();
             }
             PlatformEvent::CloseRequested => return Flow::Exit,
             _ => {}
