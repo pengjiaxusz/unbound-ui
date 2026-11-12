@@ -141,6 +141,11 @@ pub struct GalleryApp {
     layout_key: LayoutKey,
     /// The layout statistics of the current frame.
     frame_layout_stats: LayoutStats,
+    /// The primitive range each control owns.
+    ///
+    /// The ranges are what tie a dirty slice back to the control that owns
+    /// it: a hover patch has to stay inside one control's span.
+    node_spans: rustc_hash::FxHashMap<u64, (u32, u32)>,
 }
 
 /// The inputs the shell's layout depends on.
@@ -213,6 +218,7 @@ impl GalleryApp {
                 code_mask: 0,
             },
             frame_layout_stats: LayoutStats::default(),
+            node_spans: rustc_hash::FxHashMap::default(),
         }
     }
 
@@ -298,6 +304,15 @@ impl GalleryApp {
     #[must_use]
     pub fn layout_stats(&self) -> LayoutStats {
         self.frame_layout_stats
+    }
+
+    /// The primitive range a control owns, `[start, end)`.
+    ///
+    /// Hand-drawn shell controls and emitted widgets both register one, so a
+    /// dirty slice can always be attributed to the control it belongs to.
+    #[must_use]
+    pub fn span_of(&self, node: u64) -> Option<(u32, u32)> {
+        self.node_spans.get(&node).copied()
     }
 
     /// The geometry of the page as the layout tree solved it.
@@ -446,6 +461,7 @@ impl GalleryApp {
         self.ranges = output.ranges;
         self.scroll_zones = output.scroll_zones;
         self.semantics = output.semantics;
+        self.node_spans = output.node_spans;
         self.layout = layout;
         self.page_layout = Some(page_layout);
         self.scrollbar = scrollbar;
@@ -1771,6 +1787,7 @@ fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_ma
     ];
     for (target, rect, label, destructive) in buttons {
         let node = target::id(target);
+        let start = canvas.span_start();
         let hovered = canvas.hovered(node);
         let pressed = canvas.pressed(node);
         // The background always exists and only fades in on hover, so
@@ -1850,6 +1867,7 @@ fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_ma
             false,
             false,
         );
+        canvas.record_span(node, start);
     }
 }
 
@@ -1953,7 +1971,10 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
         "Engine Telemetry",
         Icon::Chart,
         state.active_page == PageId::Telemetry,
-        Target::NavPage(PageId::Telemetry.index() as u8),
+        // The footer shortcut needs its own identity: the tree row for the
+        // same page already owns `NavPage(Telemetry)`, and sharing it made
+        // hovering either row light up both.
+        Target::Footer(0),
     );
     nav_item(
         canvas,
@@ -1967,7 +1988,7 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
         "Settings & About",
         Icon::Layers,
         state.active_page == PageId::Settings,
-        Target::NavPage(PageId::Settings.index() as u8),
+        Target::Footer(1),
     );
 }
 
@@ -1982,6 +2003,7 @@ fn nav_item(
 ) {
     let palette = *canvas.palette;
     let node = target::id(target);
+    let start = canvas.span_start();
     let hover = canvas.visual(node, false);
     // The row always paints two primitives — a pill and the selection
     // indicator — whatever its state. The pill takes the pane's own colour
@@ -2047,6 +2069,7 @@ fn nav_item(
         false,
         selected,
     );
+    canvas.record_span(node, start);
 }
 
 fn draw_collapsed_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
@@ -2412,6 +2435,7 @@ fn draw_code_bar(
 ) {
     let palette = *canvas.palette;
     let node = target::id(Target::Code(page.page.index() as u8, card.index as u8));
+    let start = canvas.span_start();
     let hover = canvas.visual(node, false);
     let open = state.code_open(page.page, card.index as u8);
     // The hover wash always exists and only fades in, so pointing at the
@@ -2478,6 +2502,9 @@ fn draw_code_bar(
         false,
         open,
     );
+    // The span ends at the bar: the panel below it belongs to the card, and
+    // it only appears when the card's shape changes anyway.
+    canvas.record_span(node, start);
 
     if let Some(panel) = card.code_panel {
         canvas.rect(panel, 10.0, palette.code_bg, 0, 0.0, 0.0);

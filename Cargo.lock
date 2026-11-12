@@ -1483,6 +1483,7 @@ dependencies = [
  "accesskit",
  "png",
  "raw-window-handle",
+ "rustc-hash",
  "slotmap",
  "unbound-a11y",
  "unbound-abi",

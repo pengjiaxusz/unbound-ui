@@ -46,6 +46,7 @@ pub fn button(
     variant: ButtonVariant,
     enabled: bool,
 ) -> Visual {
+    let start = canvas.span_start();
     let visual = canvas.visual(node, !enabled);
     let palette = *canvas.palette;
     let (fill, border, text) = match variant {
@@ -100,9 +101,15 @@ pub fn button(
         ButtonVariant::OnHeroSecondary => (palette.hero_scrim, palette.on_hero, palette.on_hero),
     };
     canvas.rect(rect, 8.0, fill, border, 1.0, 0.0);
-    if canvas.focused(node) {
-        canvas.stroke(rect.inflate(2.0), 10.0, palette.focus_ring, 2.0);
-    }
+    // The ring is always emitted and only fades in on focus, so focusing a
+    // button repaints one primitive instead of inserting one.
+    canvas.stroke_faded(
+        rect.inflate(2.0),
+        10.0,
+        palette.focus_ring,
+        2.0,
+        if canvas.focused(node) { 1.0 } else { 0.0 },
+    );
     if !label.is_empty() {
         canvas.text(
             label,
@@ -126,6 +133,7 @@ pub fn button(
         !enabled,
         matches!(visual, Visual::Pressed),
     );
+    canvas.record_span(node, start);
     visual
 }
 
@@ -279,6 +287,7 @@ pub fn nav_row(
     selected: bool,
     indent: f32,
 ) {
+    let start = canvas.span_start();
     let palette = *canvas.palette;
     let visual = canvas.visual(node, false);
     // The row always paints two primitives — a background and the accent
@@ -330,6 +339,7 @@ pub fn nav_row(
         false,
         selected,
     );
+    canvas.record_span(node, start);
 }
 
 /// A small pill badge.

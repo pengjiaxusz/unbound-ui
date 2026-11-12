@@ -684,3 +684,106 @@ fn a_hover_patches_the_pool_instead_of_reuploading_it() {
         );
     }
 }
+
+/// A hover patch stays inside the control that was hovered.
+///
+/// This is the other half of the byte budget: uploading little is only
+/// correct if the little that goes up is the right little. Every control
+/// owns a span of the primitive pool, and every dirty slice has to fall
+/// inside the span of the control whose state changed.
+#[test]
+fn a_hover_patch_stays_inside_the_hovered_control() {
+    let mut app = app();
+    app.navigate(PageId::Home);
+    app.pointer_move(Vec2::new(2.0, 898.0));
+    app.rebuild(VIEWPORT);
+    let targets: Vec<u64> = app
+        .router
+        .regions()
+        .iter()
+        .map(|region| region.node)
+        .filter(|node| !target::is_demo(*node))
+        .collect();
+    let mut spans = 0usize;
+    for node in targets {
+        app.pointer_move(Vec2::new(2.0, 898.0));
+        app.rebuild(VIEWPORT);
+        let hovered = rect_of(&app, node).center();
+        app.pointer_move(hovered);
+        app.rebuild(VIEWPORT);
+        let Some((start, end)) = app.span_of(node) else {
+            continue;
+        };
+        spans += 1;
+        for (dirty_start, dirty_end) in app.dirty_ranges() {
+            assert!(
+                *dirty_start >= start && *dirty_end <= end,
+                "{node:#x} owns [{start}, {end}) but the patch is [{dirty_start}, {dirty_end})"
+            );
+        }
+    }
+    assert!(
+        spans > 20,
+        "the span map should cover the page's chrome, covered {spans}"
+    );
+}
+
+/// One control, one identity.
+///
+/// The identity is shared by the hit region, the semantic node and the
+/// primitive span, so a second control reusing it is not a cosmetic problem:
+/// the two light up together, the semantic tree loses one of them and the
+/// span map keeps only the last registration. The footer shortcut and the
+/// tree row for the same page used to collide exactly this way.
+#[test]
+fn every_hit_region_has_its_own_identity() {
+    for expanded in [true, false] {
+        for page in PageId::ALL {
+            let mut app = app();
+            app.navigate(page);
+            if !expanded {
+                click_node(&mut app, target::id(Target::NavToggle));
+                // Settle the spring: the collapsed rail is a different
+                // renderer and has to be audited on its own.
+                for _ in 0..120 {
+                    app.tick(1.0 / 60.0);
+                }
+            }
+            app.rebuild(VIEWPORT);
+            let mut seen: std::collections::HashMap<u64, unbound_math::Rect> =
+                std::collections::HashMap::new();
+            for region in app.router.regions() {
+                if let Some(first) = seen.insert(region.node, region.bounds) {
+                    panic!(
+                        "{page:?} (expanded: {expanded}): node {:#x} has two hit regions, {first:?} and {:?}",
+                        region.node, region.bounds
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The footer shortcuts navigate, and only their own row lights up.
+#[test]
+fn the_footer_shortcuts_navigate_on_their_own_identity() {
+    let mut app = app();
+    let footer = target::id(Target::Footer(0));
+    let row = rect_of(&app, footer);
+    let point = row.center();
+    app.pointer_move(point);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.router.hover(),
+        Some(footer),
+        "the footer row must own the hover, not the tree row for the same page"
+    );
+    app.pointer_down(point, 0.0);
+    app.pointer_up(point, 0.1);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.state.active_page,
+        PageId::Telemetry,
+        "the footer shortcut jumps to its page"
+    );
+}

@@ -30,6 +30,7 @@ unbound-headless.workspace = true
 unbound-input.workspace = true
 unbound-world.workspace = true
 unbound-layout.workspace = true
+rustc-hash.workspace = true
 accesskit.workspace = true
 slotmap.workspace = true
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }

@@ -6,6 +6,7 @@
 //! event/geometry wiring in one place.
 
 use accesskit::Role;
+use rustc_hash::FxHashMap;
 use unbound_a11y::{A11yNode, Semantics};
 use unbound_gpu::data::{GpuClipNode, GpuPrimitiveInstance, CLIP_NONE};
 use unbound_input::{ClipRect, CursorKind, HitRegion};
@@ -64,6 +65,12 @@ pub struct CanvasOutput {
     pub scroll_zones: Vec<(Rect, u8)>,
     pub ranges: Vec<RangeZone>,
     pub glyph_count: usize,
+    /// The primitive range each control owns, `[start, end)`.
+    ///
+    /// A control's primitives are emitted consecutively, so the span is what
+    /// lets the upload path say *which control* a dirty slice belongs to —
+    /// and what makes a hover patch provably local.
+    pub node_spans: FxHashMap<u64, (u32, u32)>,
 }
 
 /// A slider-like region whose value is derived from the pointer's x position.
@@ -116,6 +123,8 @@ pub struct Canvas<'a> {
     scale: f32,
     snap: bool,
     static_ids: u64,
+    /// The primitive range each control owns.
+    node_spans: FxHashMap<u64, (u32, u32)>,
 }
 
 impl<'a> Canvas<'a> {
@@ -160,6 +169,25 @@ impl<'a> Canvas<'a> {
             scale: scale.max(0.25),
             snap,
             static_ids: 0,
+            node_spans: FxHashMap::default(),
+        }
+    }
+
+    /// The index the next primitive will occupy.
+    ///
+    /// A hand-drawn control reads this before its first primitive and hands
+    /// it to [`record_span`](Self::record_span) after its last, which is how
+    /// it joins the span map the same way an emitted control does.
+    #[must_use]
+    pub fn span_start(&self) -> usize {
+        self.scene.primitives.len()
+    }
+
+    /// Record the primitives emitted since `start` as belonging to `node`.
+    pub fn record_span(&mut self, node: u64, start: usize) {
+        let end = self.scene.primitives.len();
+        if end > start {
+            self.node_spans.insert(node, (start as u32, end as u32));
         }
     }
 
@@ -392,13 +420,37 @@ impl<'a> Canvas<'a> {
     pub fn rect_faded(&mut self, rect: Rect, radius: f32, fill: u16, opacity: f32) -> u16 {
         let start = self.scene.primitives.len();
         let z = self.rect(rect, radius, fill, 0, 0.0, 0.0);
+        self.fade(start, opacity);
+        z
+    }
+
+    /// Paint a stroke at a given opacity.
+    ///
+    /// The companion of [`rect_faded`](Self::rect_faded) for the keyboard
+    /// focus ring: the ring is always emitted, and losing focus fades it out
+    /// instead of removing a primitive.
+    pub fn stroke_faded(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        color: u16,
+        width: f32,
+        opacity: f32,
+    ) -> u16 {
+        let start = self.scene.primitives.len();
+        let z = self.stroke(rect, radius, color, width);
+        self.fade(start, opacity);
+        z
+    }
+
+    /// Set the opacity of the primitive at `start`.
+    fn fade(&mut self, start: usize, opacity: f32) {
         if let Some(primitive) = self.scene.primitives.get_mut(start) {
             primitive.z_and_opacity = unbound_gpu::data::GpuPrimitiveInstance::pack_z_opacity(
                 primitive.depth_u16(),
                 opacity,
             );
         }
-        z
     }
 
     /// Paint a shadow-only rounded rectangle.
@@ -535,6 +587,9 @@ impl<'a> Canvas<'a> {
     /// the focus order.
     pub fn control_output(&mut self, node: u64, output: &WidgetOutput) {
         let start = self.scene.primitives.len();
+        if node != 0 {
+            self.record_span(node, start);
+        }
         let payload_base = self.scene.payloads.len() as u32;
         for mut primitive in output.primitives.iter().copied() {
             primitive.z_and_opacity =
@@ -743,6 +798,7 @@ impl<'a> Canvas<'a> {
             scroll_zones: self.scroll_zones,
             ranges: self.ranges,
             glyph_count: self.glyphs_emitted,
+            node_spans: self.node_spans,
         }
     }
 }
