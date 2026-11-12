@@ -218,6 +218,13 @@ pub struct GalleryApp {
     pub semantics: unbound_a11y::Semantics,
     page_layout: Option<PageLayout>,
     nav_spring: Spring,
+    /// The upload generation of the current scene.
+    ///
+    /// The generation is bumped by every rebuild, and *only* by a rebuild:
+    /// the GPU skips the upload when the generation did not move, so a
+    /// host that forgets to bump it shows a stale frame. Tying the counter
+    /// to the rebuild itself makes that mistake impossible.
+    generation: u64,
     last_revision: u64,
     last_hover: Option<u64>,
     last_pressed: Option<u64>,
@@ -263,6 +270,7 @@ impl GalleryApp {
             semantics: unbound_a11y::Semantics::new(ROOT),
             page_layout: None,
             nav_spring,
+            generation: 0,
             last_revision: 0,
             last_hover: None,
             last_pressed: None,
@@ -347,6 +355,17 @@ impl GalleryApp {
         changed
     }
 
+    /// The upload generation of the current scene.
+    ///
+    /// The GPU skips the upload when the generation did not move, so the
+    /// host has to advance it exactly when the scene was rebuilt. Tying it
+    /// to the rebuild is what makes a click show up on screen: the host
+    /// cannot "forget" to bump it.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Rebuild unconditionally.
     pub fn rebuild(&mut self, viewport: (f32, f32)) {
         let (width, height) = viewport;
@@ -417,6 +436,11 @@ impl GalleryApp {
         self.page_layout = Some(page_layout);
         self.scrollbar = scrollbar;
         self.nav_max_scroll = nav_max_scroll.max(0.0);
+        // The scene was rebuilt: the primitives on the GPU are stale, so the
+        // upload generation has to move. Bumping it here — rather than in
+        // the host — is what guarantees that a click is drawn on the very
+        // next frame.
+        self.generation = self.generation.wrapping_add(1);
         self.last_revision = self.state.revision;
         self.last_hover = hover;
         self.last_pressed = pressed;
@@ -484,6 +508,11 @@ impl GalleryApp {
     }
 
     /// Press the pointer.
+    ///
+    /// Only the controls that *capture* the pointer act here: the
+    /// scrollbar, the sliders and the draggable demo stages. Every
+    /// discrete control waits for the release, so a press that is dragged
+    /// off the control never activates it.
     pub fn pointer_down(&mut self, position: Vec2, now: f64) {
         self.pointer = position;
         self.router.pointer_move(position);
@@ -491,7 +520,7 @@ impl GalleryApp {
         if let Some(node) = self.router.pointer().pressed() {
             self.focused = Some(node);
             if let Some(target) = target::decode(node) {
-                self.press_target(target, position);
+                self.begin_press_target(target, position);
             }
         }
     }
@@ -505,32 +534,35 @@ impl GalleryApp {
         for event in events {
             if let PointerEvent::Click { target: node, .. } = event {
                 if let Some(target) = target::decode(node) {
-                    // Press already committed the immediate toggles; replaying
-                    // them on release would flip them back.
-                    if matches!(
-                        target,
-                        Target::NavToggle
-                            | Target::Theme(_)
-                            | Target::Zoom(_)
-                            | Target::Snap
-                            | Target::Hud
-                            | Target::Search
-                            | Target::Knob(..)
-                            | Target::KnobOption(..)
-                            | Target::Code(..)
-                            | Target::WindowMinimize
-                            | Target::WindowMaximize
-                            | Target::WindowClose
-                            | Target::ContentScrollbar
-                    ) {
-                        continue;
-                    }
+                    // The router only reports a click when the release
+                    // landed on the pressed control and the press never
+                    // turned into a drag.
                     self.click_target(target, position);
                 }
             }
         }
         self.dragging_range = None;
         self.panning = None;
+    }
+
+    /// Abort every in-flight interaction.
+    ///
+    /// The window lost the focus: the pointer capture, the scrollbar grab
+    /// and the demo drags have to go, or the shell keeps a ghost drag
+    /// alive until the user happens to click somewhere else.
+    pub fn cancel_interactions(&mut self) {
+        let _ = self.router.cancel();
+        self.scroll_drag = None;
+        self.dragging_range = None;
+        self.panning = None;
+        // Both drags have to be taken, not just the first one: `||` would
+        // short-circuit and leave the second drag alive.
+        let marquee = self.state.demo.marquee.take();
+        let drag = self.state.demo.drag_active.take();
+        if marquee.is_some() || drag.is_some() {
+            self.state.demo.drag_position = None;
+            self.state.bump();
+        }
     }
 
     /// Wheel over the shell.
@@ -642,7 +674,7 @@ impl GalleryApp {
             PlatformKey::Named(name) if name == "Enter" || name == "Space" => {
                 if let Some(node) = self.focused {
                     if let Some(target) = target::decode(node) {
-                        self.click_target(target, self.pointer);
+                        self.activate_target(target, self.pointer);
                     }
                 }
             }
@@ -760,14 +792,45 @@ impl GalleryApp {
         }
     }
 
-    fn press_target(&mut self, target: Target, position: Vec2) {
+    /// Begin a press-captured interaction.
+    ///
+    /// Only the controls that need the pointer *captured* act on the
+    /// press: the content scrollbar, the sliders and the draggable demo
+    /// stages. Every discrete control waits for the release, so pressing a
+    /// button and dragging off it never activates it.
+    fn begin_press_target(&mut self, target: Target, position: Vec2) {
         match target {
             Target::ContentScrollbar => {
                 self.begin_scrollbar_drag(position);
             }
-            Target::NavPage(page) => {
-                self.navigate(PageId::from_index(page as usize));
+            Target::Knob(page, card, knob) => {
+                // Only a slider captures the pointer. A toggle or a checkbox
+                // is a discrete control and waits for the release.
+                if knob_spec(page, card, knob)
+                    .and_then(|spec| spec.range())
+                    .is_some()
+                {
+                    self.dragging_range = Some(target::id(target));
+                    self.update_range(target::id(target), position);
+                }
             }
+            Target::Demo(page, card, part) => {
+                self.press_demo(page, card, part, position);
+            }
+            _ => {}
+        }
+    }
+
+    /// Activate a control.
+    ///
+    /// Every discrete action of the shell happens here: the navigation, the
+    /// theme and zoom switches, the toggles, the segmented options, the
+    /// code panels and the window buttons. The router only reports a click
+    /// when the release landed on the pressed control and the press never
+    /// became a drag, so a press that was dragged away does nothing.
+    fn click_target(&mut self, target: Target, position: Vec2) {
+        match target {
+            Target::NavPage(page) => self.navigate(PageId::from_index(page as usize)),
             Target::NavToggle => {
                 self.state.nav_expanded = !self.state.nav_expanded;
                 self.state.bump();
@@ -797,20 +860,21 @@ impl GalleryApp {
                 self.state.demo.typing = false;
                 self.state.bump();
             }
-            Target::Footer(index) => {
-                self.navigate(if index == 0 {
-                    PageId::Telemetry
-                } else {
-                    PageId::Settings
-                });
-            }
+            Target::Footer(index) => self.navigate(if index == 0 {
+                PageId::Telemetry
+            } else {
+                PageId::Settings
+            }),
+            Target::SearchResult(page) => self.navigate(PageId::from_index(page as usize)),
             Target::Knob(page, card, knob) => {
-                if let Some(spec) = knob_spec(page, card, knob) {
+                // A slider was already moved by the press and the drag; a
+                // toggle or a checkbox flips here.
+                if knob_spec(page, card, knob)
+                    .and_then(|spec| spec.range())
+                    .is_none()
+                {
                     let page_id = PageId::from_index(page as usize);
-                    if spec.range().is_some() {
-                        self.dragging_range = Some(target::id(target));
-                        self.update_range(target::id(target), position);
-                    } else {
+                    if let Some(spec) = knob_spec(page, card, knob) {
                         let current = self
                             .state
                             .knob(page_id, card as usize, knob as usize, &spec);
@@ -820,18 +884,6 @@ impl GalleryApp {
                             knob as usize,
                             if current > 0.5 { 0.0 } else { 1.0 },
                         );
-                    }
-                    if page_id == PageId::Springs && card == 0 && knob <= 1 {
-                        if let Some(spec) = knob_spec(page, card, knob) {
-                            let value =
-                                self.state
-                                    .knob(page_id, card as usize, knob as usize, &spec);
-                            if knob == 0 {
-                                self.state.demo.spring.stiffness = value.max(1.0);
-                            } else {
-                                self.state.demo.spring.damping = value.max(0.1);
-                            }
-                        }
                     }
                 }
             }
@@ -847,11 +899,8 @@ impl GalleryApp {
                 self.state
                     .toggle_code(PageId::from_index(page as usize), card);
             }
-            Target::SearchResult(page) => {
-                self.navigate(PageId::from_index(page as usize));
-            }
             Target::Demo(page, card, part) => {
-                self.press_demo(page, card, part, position);
+                self.click_demo(page, card, part, position);
             }
             Target::WindowMinimize => {
                 self.pending_window = Some(WindowCommand::Minimize);
@@ -862,38 +911,26 @@ impl GalleryApp {
             Target::WindowClose => {
                 self.pending_window = Some(WindowCommand::Close);
             }
-        }
-    }
-
-    fn click_target(&mut self, target: Target, position: Vec2) {
-        match target {
-            Target::NavPage(page) => self.navigate(PageId::from_index(page as usize)),
-            Target::Footer(index) => self.navigate(if index == 0 {
-                PageId::Telemetry
-            } else {
-                PageId::Settings
-            }),
-            Target::SearchResult(page) => self.navigate(PageId::from_index(page as usize)),
-            Target::Demo(page, card, part) => {
-                self.click_demo(page, card, part, position);
-            }
-            Target::Knob(..) | Target::KnobOption(..) => self.press_target(target, position),
             Target::ContentScrollbar => {
                 // The scrollbar acts on the press, not on the release.
             }
-            Target::Code(page, card) => {
-                self.state
-                    .toggle_code(PageId::from_index(page as usize), card);
+        }
+    }
+
+    /// Activate a control from the keyboard.
+    ///
+    /// The keyboard cannot drag, so a slider jumps to the pointer instead
+    /// of following a drag.
+    fn activate_target(&mut self, target: Target, position: Vec2) {
+        match target {
+            Target::Knob(page, card, knob)
+                if knob_spec(page, card, knob)
+                    .and_then(|spec| spec.range())
+                    .is_some() =>
+            {
+                self.update_range(target::id(target), position);
             }
-            Target::NavToggle
-            | Target::Theme(_)
-            | Target::Zoom(_)
-            | Target::Snap
-            | Target::Hud
-            | Target::Search
-            | Target::WindowMinimize
-            | Target::WindowMaximize
-            | Target::WindowClose => self.press_target(target, position),
+            _ => self.click_target(target, position),
         }
     }
 

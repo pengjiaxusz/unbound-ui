@@ -229,3 +229,131 @@ fn search_and_theme_keep_the_same_target_identity() {
     );
     assert!(app.state.demo.clicks > clicked);
 }
+
+/// A click has to reach the screen in the same frame.
+///
+/// The GPU skips the upload when the scene's generation did not move, so a
+/// click that changes the state but leaves the generation alone is a click
+/// the user never sees. The generation is bumped by the rebuild itself, so
+/// the two can never drift apart.
+#[test]
+fn clicking_a_button_bumps_scene_generation_immediately() {
+    let mut app = app();
+    let before = app.generation();
+    let node = target::id(Target::Theme(0));
+    let rect = rect_of(&app, node);
+    let point = rect.center();
+
+    app.pointer_move(point);
+    app.pointer_down(point, 0.0);
+    app.pointer_up(point, 0.1);
+
+    // The state changed on the release.
+    assert_eq!(app.state.theme, ThemeMode::Light);
+    // The next sync rebuilds the scene, and the rebuild moves the
+    // generation: that is what makes the GPU re-upload the primitives.
+    assert!(
+        app.sync(VIEWPORT),
+        "the click must be visible to the renderer"
+    );
+    assert!(
+        app.generation() > before,
+        "the scene generation must advance so the frame is re-uploaded"
+    );
+}
+
+/// A press that is dragged off the control must not activate it.
+///
+/// The discrete controls act on the release, and the router withholds the
+/// click when the release did not land on the pressed control. Together
+/// they make "press, drag away, release" a no-op.
+#[test]
+fn dragging_off_a_shell_control_cancels_activation() {
+    let mut app = app();
+    let node = target::id(Target::Theme(0));
+    let rect = rect_of(&app, node);
+    let point = rect.center();
+
+    app.pointer_move(point);
+    app.pointer_down(point, 0.0);
+    // Drag far away from the control and release there.
+    let away = Vec2::new(point.x + 400.0, point.y + 300.0);
+    app.pointer_move(away);
+    app.pointer_up(away, 0.1);
+
+    assert_eq!(
+        app.state.theme,
+        ThemeMode::Dark,
+        "a drag off the control must not activate it"
+    );
+}
+
+/// The discrete controls act on the release, not on the press.
+///
+/// This is what removes the double activation: the press used to commit
+/// the toggle *and* the release replayed it, flipping the control back.
+#[test]
+fn a_press_alone_does_not_activate_a_discrete_control() {
+    let mut app = app();
+    let node = target::id(Target::Theme(0));
+    let rect = rect_of(&app, node);
+    let point = rect.center();
+
+    app.pointer_move(point);
+    app.pointer_down(point, 0.0);
+    assert_eq!(
+        app.state.theme,
+        ThemeMode::Dark,
+        "the press must not commit the toggle"
+    );
+    app.pointer_up(point, 0.1);
+    assert_eq!(app.state.theme, ThemeMode::Light);
+}
+
+/// The navigation must not fire twice for a single click.
+///
+/// It used to: the press navigated and the release navigated again, which
+/// reset the content scroll twice.
+#[test]
+fn a_navigation_click_fires_exactly_once() {
+    let mut app = app();
+    let node = target::id(Target::NavPage(PageId::Colors.index() as u8));
+    let rect = rect_of(&app, node);
+    let point = rect.center();
+
+    app.pointer_move(point);
+    app.pointer_down(point, 0.0);
+    assert_eq!(app.state.active_page, PageId::Home);
+    app.pointer_up(point, 0.1);
+    assert_eq!(app.state.active_page, PageId::Colors);
+}
+
+/// Losing the focus has to abort the in-flight interaction.
+///
+/// Otherwise the shell keeps a ghost drag alive: the scrollbar stays
+/// grabbed and the demo keeps a marquee running until the user happens to
+/// click somewhere else.
+#[test]
+fn losing_the_focus_cancels_the_pointer_capture() {
+    let mut app = app();
+    let node = target::id(Target::Theme(0));
+    let rect = rect_of(&app, node);
+    let point = rect.center();
+
+    app.pointer_move(point);
+    app.pointer_down(point, 0.0);
+    assert!(app.router.pointer().pressed().is_some());
+
+    app.cancel_interactions();
+    assert!(
+        app.router.pointer().pressed().is_none(),
+        "the capture must be released"
+    );
+    // The pending activation is gone: the release no longer commits.
+    app.pointer_up(point, 0.1);
+    assert_eq!(
+        app.state.theme,
+        ThemeMode::Dark,
+        "a cancelled press must not activate the control"
+    );
+}

@@ -44,8 +44,6 @@ struct Showcase {
     surface: Option<Surface>,
     swapchain: Option<Swapchain>,
     atlases: Option<Arc<AtlasSet>>,
-    /// The upload generation; bumping it re-stages the scene.
-    generation: u64,
     /// The theme currently uploaded to the GPU.
     uploaded_theme: Option<ThemeMode>,
     /// Physical pointer position.
@@ -81,7 +79,6 @@ impl Showcase {
             surface: None,
             swapchain: None,
             atlases: None,
-            generation: 0,
             uploaded_theme: None,
             pointer: Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
@@ -238,9 +235,25 @@ impl Showcase {
         self.app.set_effective_scale(self.effective_scale());
         let viewport = self.logical_viewport(window);
         self.app.rebuild(viewport);
-        self.generation = self.generation.wrapping_add(1);
         self.upload_glyphs();
         self.write_theme_if_needed();
+    }
+
+    /// Rebuild the scene when anything observable changed.
+    ///
+    /// The scene's upload generation is bumped by the rebuild itself, so
+    /// the renderer always sees a fresh generation as soon as the state
+    /// moved. The redraw request is what makes the change visible in the
+    /// same frame: without it the window would keep showing the previous
+    /// picture until something else happened to trigger a frame.
+    fn sync_scene(&mut self, window: &Window) -> bool {
+        let viewport = self.logical_viewport(window);
+        let changed = self.app.sync(viewport);
+        if changed {
+            self.upload_glyphs();
+            window.request_redraw();
+        }
+        changed
     }
 
     fn apply_cursor(&mut self, window: &Window) {
@@ -410,9 +423,10 @@ impl PlatformApp for Showcase {
         self.last_frame = Instant::now();
     }
 
-    fn event(&mut self, _state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
+    fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
         self.sync_window_size(window);
         self.app.set_effective_scale(self.effective_scale());
+        let mut flow = Flow::Continue;
         match event {
             PlatformEvent::ScaleFactorChanged(factor) => {
                 self.os_scale = factor as f32;
@@ -431,7 +445,7 @@ impl PlatformApp for Showcase {
             } => {
                 self.app.key(&key, self.modifiers);
                 if let Some(command) = self.app.take_window_command() {
-                    return self.handle_window_command(window, command);
+                    flow = self.handle_window_command(window, command);
                 }
             }
             PlatformEvent::ModifiersChanged(modifiers) => {
@@ -450,37 +464,35 @@ impl PlatformApp for Showcase {
                     if let Some(edge) = self.resize_edge {
                         self.press_consumed = true;
                         let _ = window.drag_resize_window(resize_direction(edge));
-                        return Flow::Continue;
-                    }
-                    self.app.pointer_move(position);
-                    if self.app.is_titlebar_drag(position) {
-                        self.press_consumed = true;
-                        let double = self.last_title_press.is_some_and(|(when, at)| {
-                            Instant::now().duration_since(when)
-                                < std::time::Duration::from_millis(400)
-                                && (at - position).length() < 6.0
-                        });
-                        self.last_title_press = Some((Instant::now(), position));
-                        if double {
-                            window.set_maximized(!window.is_maximized());
+                    } else {
+                        self.app.pointer_move(position);
+                        if self.app.is_titlebar_drag(position) {
+                            self.press_consumed = true;
+                            let double = self.last_title_press.is_some_and(|(when, at)| {
+                                Instant::now().duration_since(when)
+                                    < std::time::Duration::from_millis(400)
+                                    && (at - position).length() < 6.0
+                            });
+                            self.last_title_press = Some((Instant::now(), position));
+                            if double {
+                                window.set_maximized(!window.is_maximized());
+                            } else {
+                                let _ = window.drag_window();
+                            }
                         } else {
-                            let _ = window.drag_window();
+                            self.press_consumed = false;
+                            self.app.pointer_down(position, now);
+                            if let Some(command) = self.app.take_window_command() {
+                                flow = self.handle_window_command(window, command);
+                            }
                         }
-                        return Flow::Continue;
                     }
+                } else if self.press_consumed {
                     self.press_consumed = false;
-                    self.app.pointer_down(position, now);
-                    if let Some(command) = self.app.take_window_command() {
-                        return self.handle_window_command(window, command);
-                    }
                 } else {
-                    if self.press_consumed {
-                        self.press_consumed = false;
-                        return Flow::Continue;
-                    }
                     self.app.pointer_up(position, now);
                     if let Some(command) = self.app.take_window_command() {
-                        return self.handle_window_command(window, command);
+                        flow = self.handle_window_command(window, command);
                     }
                 }
             }
@@ -505,15 +517,30 @@ impl PlatformApp for Showcase {
                     self.app.wheel(delta_y as f32);
                 }
             }
+            PlatformEvent::Focused(false) => {
+                // The window lost the focus: whatever the pointer was doing
+                // is over. The capture, the scrollbar grab and the demo
+                // drags have to go, or the shell keeps a ghost drag alive
+                // until the user happens to click somewhere else.
+                self.app.cancel_interactions();
+            }
+            PlatformEvent::RedrawRequested => {
+                // The OS asks for a frame: draw it right away instead of
+                // waiting for the pacer's next deadline.
+                state.pacer.request_immediate(Instant::now());
+            }
             PlatformEvent::CloseRequested => return Flow::Exit,
             _ => {}
+        }
+        if flow == Flow::Exit {
+            return Flow::Exit;
         }
         // Re-read the effective scale: a zoom click in this very event changed
         // it after the pre-handler snapshot.
         self.app.set_effective_scale(self.effective_scale());
-        let viewport = self.logical_viewport(window);
-        self.app.sync(viewport);
-        self.upload_glyphs();
+        // The scene is rebuilt here, not in the frame loop: the state the
+        // event changed has to reach the screen in the very same frame.
+        self.sync_scene(window);
         self.write_theme_if_needed();
         self.apply_cursor(window);
         Flow::Continue
@@ -547,11 +574,7 @@ impl PlatformApp for Showcase {
             self.app.state.demo.frame_ms = dt * 1000.0;
         }
         self.app.tick(dt);
-        let viewport = self.logical_viewport(window);
-        if self.app.sync(viewport) {
-            self.generation = self.generation.wrapping_add(1);
-            self.upload_glyphs();
-        }
+        self.sync_scene(window);
         self.write_theme_if_needed();
         self.apply_cursor(window);
 
@@ -598,7 +621,7 @@ impl PlatformApp for Showcase {
         // UI camera scales those units back up, so a 150 % layout maps exactly
         // onto the physical viewport at any DPI.
         self.app.scene.camera = Camera::ui((width as f32, height as f32), scale);
-        let scene = self.app.scene.upload(self.generation);
+        let scene = self.app.scene.upload(self.app.generation());
         if let Err(error) = renderer.render_into_swapchain(&scene, &image, width, height) {
             eprintln!("render failed: {error}");
             return Flow::Continue;
