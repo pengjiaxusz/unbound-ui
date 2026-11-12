@@ -40,7 +40,7 @@ description: >-
 
 ### 1.2 提交前完整性检查 —— 项目自定义
 本步骤归**项目**所有，模板不硬编码具体检查：按下方托管块外「项目专属提交流程与红线」的定义执行。项目专属区未定义时执行兜底自检（扫 diff 校验构建/更新文档/跑格式化）。
-触及架构（新增/调整模块边界、数据流、生命周期、系统拓扑、核心不变式等）时，检查 `docs/architecture/README.md` 与对应领域文档是否已同步，详情参见 `.agents/skills/arch-align`。
+改动涉及模块边界、公共 API、数据流、生命周期或新增模块/子系统时，同步更新对应的架构/设计文档再提交。
 - **Rust 静态检查**：运行 `just check`（或 `cargo clippy --all-targets --all-features -- -D warnings`，工作区加 `--workspace`），warnings 清零后再提交。
 
 ### 1.3 提交格式与立即推送
