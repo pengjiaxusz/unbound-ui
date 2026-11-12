@@ -4,9 +4,9 @@
 >
 > | | |
 > | :--- | :--- |
-> | **源码** | `apps/showcase/src/{main,shell,state,canvas,widgets,target,gallery,pages/*}.rs` |
-> | **关键类型** | `GalleryApp`、`ShellTree`、`ShellLayout`、`GalleryState`、`ExampleCard`（`PageLayout`/`CardLayout`）、`Canvas`、`Target`、`Palette`、`Labels` |
-> | **测试** | `apps/showcase/tests/gallery.rs`（13 个）+ `apps/showcase/tests/shell.rs`（9 个），全部无头运行；布局体检走 `unbound-headless` |
+> | **源码** | `apps/showcase/src/{main,shell,runtime_app,state,canvas,widgets,target,gallery,pages/*}.rs` |
+> | **关键类型** | `GalleryRuntime`、`AppRuntime<GalleryRuntime>`、`GalleryApp`、`ShellTree`、`ShellLayout`、`GalleryState`、`ExampleCard`（`PageLayout`/`CardLayout`）、`Canvas`、`Target`、`Palette`、`Labels` |
+> | **测试** | `apps/showcase/tests/gallery.rs`（13 个）+ `apps/showcase/tests/shell.rs`（9 个）+ `runtime_migration.rs`（4 个），全部无头运行；布局体检走 `unbound-headless` |
 
 `apps/showcase` 现在是一个**自举（dogfooding）的桌面应用**：它用引擎自己的布局、
 输入、语义、动画与主题原语，搭出对标 WinUI 3 Gallery 的三段式壳层与交互式组件
@@ -66,15 +66,17 @@
 `theme`、`zoom_step`、`pixel_snap`、`show_hud`、滚动位置、Knob 值、展开的代码
 面板与全部演示状态。页面是这份状态的**纯函数**。
 
-`GalleryApp` 每帧做三件事：
+`GalleryRuntime` 把 `GalleryApp` 适配成 `unbound_app::Application`，窗口壳层只
+通过 `AppRuntime<GalleryRuntime>` 驱动，不再自己维护事件解析与帧差分：
 
-1. `tick(dt)` 推进导航弹簧与演示动画；静态页面不重建，动画页面按约 30 Hz
-   提升 revision，空闲时窗口保持低功耗。
-2. `sync(viewport)` 比较 revision / hover / pressed / focus / viewport，只有在
-   可观察状态变化时才 `rebuild`。
-3. `rebuild` 求解**布局树**（`ShellTree`：`UiWorld` 节点树 + `LayoutEngine`），
-   读出 `ShellLayout` 与每张卡片的几何，再由 `Canvas` 发射图元、命中区域、
-   语义节点与 RangeZone，最后交给 `Router` 与 `Semantics`。
+1. `AppRuntime::tick(dt)` 归约 Tick 并推进导航弹簧与演示动画；静态页面不重建，
+   动画页面按约 30 Hz 提升 revision，空闲时窗口保持低功耗。
+2. `AppRuntime::frame()` 在脏标记非空时调用 `view`，把 `GalleryApp` 重建出的
+   图元、语义树与焦点链搬进 `SceneCollector`，再与上一帧做双缓冲差分。
+3. `GalleryApp::rebuild` 求解**布局树**（`ShellTree`：`UiWorld` 节点树 +
+   `LayoutEngine`），读出 `ShellLayout` 与每张卡片的几何，再由 `Canvas` 发射
+   图元、命中区域、语义节点与 RangeZone；`ExternalDiff` 让壳层跳过自己的差分，
+   保证每帧只扫描一次场景。
 
 ### 布局树
 
@@ -111,8 +113,8 @@ Portal 层用于搜索面板、菜单、对话框与 Tooltip，绘制顺序即�
 
 ### 上传路径
 
-场景每帧由状态重建，但**不是每帧全量上传**。`rebuild` 末尾把新场景与上一帧
-相减，按三种结果决定怎么送：
+场景每帧由状态重建，但**不是每帧全量上传**。`AppRuntime::frame` 返回的
+`FrameReport.diff` 已经给出三种结果：
 
 | 差分 | 含义 | 上传 |
 | :--- | :--- | :--- |
@@ -163,6 +165,7 @@ just showcase
 | 输入 | 行为 |
 | :--- | :--- |
 | `Ctrl+K` | 打开全局搜索命令面板，按控件名或 `MTSDF` / `Quadtree` 等标签过滤 |
+| `Ctrl+N` | 打开第二个窗口：独立 Surface / Swapchain，共享同一设备与渲染器 |
 | `/` 后输入 | 在搜索框内输入，`Enter` 跳到首个结果 |
 | `Tab` / `Shift+Tab` | 在焦点链里前后移动 |
 | `Enter` / `Space` | 激活当前聚焦的控件 |

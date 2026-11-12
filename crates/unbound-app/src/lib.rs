@@ -417,6 +417,31 @@ impl<A: Application> AppRuntime<A> {
         &mut self.state
     }
 
+    /// The application itself.
+    ///
+    /// A windowed shell needs it for the parts the runtime deliberately does
+    /// not own: the glyph cache, the camera, and the accessibility tree the
+    /// platform adapter publishes.
+    #[must_use]
+    pub fn application(&self) -> &A {
+        &self.app
+    }
+
+    /// The application itself, mutably.
+    pub fn application_mut(&mut self) -> &mut A {
+        &mut self.app
+    }
+
+    /// Advance the clock and reduce one tick.
+    ///
+    /// A shell with a frame clock calls this instead of
+    /// [`Self::frame`]'s `dt`, so a time-driven application reports the frame
+    /// it actually needs instead of being rebuilt on every vsync.
+    pub fn tick(&mut self, dt: f32) -> DirtyFlags {
+        self.advance(dt);
+        self.dispatch(AppEvent::Tick { dt })
+    }
+
     /// The current application context.
     #[must_use]
     pub fn context(&self) -> &AppContext {
@@ -427,6 +452,14 @@ impl<A: Application> AppRuntime<A> {
     #[must_use]
     pub fn scene(&self) -> &SceneCollector {
         &self.collector
+    }
+
+    /// The scene of the most recent frame, mutably.
+    ///
+    /// A window host uses this to drain the semantic delta into the platform
+    /// accessibility adapter.
+    pub fn scene_mut(&mut self) -> &mut SceneCollector {
+        &mut self.collector
     }
 
     /// The diff of the most recent frame.

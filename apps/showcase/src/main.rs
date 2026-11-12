@@ -11,15 +11,18 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use showcase::runtime_app::GalleryRuntime;
 use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::theme;
 
+use unbound_app::{AppKey, AppRuntime, DirtyFlags, Modifiers as AppModifiers};
 use unbound_gpu::atlas::{AtlasKind, AtlasSet, AtlasUpload};
+use unbound_gpu::data::PassLayer;
 use unbound_gpu::device::{Gpu, GpuConfig};
 use unbound_gpu::surface::{AcquireOutcome, PresentOutcome, Surface, Swapchain};
 use unbound_gpu::swapchain::PresentConfig;
-use unbound_gpu::{Camera, Renderer};
+use unbound_gpu::{Camera, Renderer, SceneUpload};
 use unbound_input::{resize_edge, CursorKind, ResizeEdge};
 use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
@@ -28,6 +31,7 @@ use unbound_platform::window::{
 };
 use unbound_platform::Extent;
 use unbound_theme::{ThemeKind, ThemeState};
+use unbound_widgets::diff::SceneDiff;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::Window;
@@ -40,15 +44,34 @@ const TITLE: &str = "Unbound UI Gallery";
 /// How long to wait for a swapchain image, in nanoseconds.
 const ACQUIRE_TIMEOUT_NS: u64 = 1_000_000_000;
 
+/// One secondary window: its own surface, swapchain and upload generation.
+///
+/// The device, renderer, pipelines and glyph atlases are shared with the
+/// primary window; only the presentation chain is per-window.
+struct ExtraWindow {
+    id: winit::window::WindowId,
+    surface: Surface,
+    swapchain: Swapchain,
+    swapchain_dirty: bool,
+}
+
 /// The application state.
 struct Showcase {
-    app: GalleryApp,
+    /// The generic runtime: it reduces every event, owns the router / focus
+    /// policy and diffs each frame against the previous one.
+    app: AppRuntime<GalleryRuntime>,
     renderer: Option<Renderer>,
     surface: Option<Surface>,
     swapchain: Option<Swapchain>,
     atlases: Option<Arc<AtlasSet>>,
     /// The theme currently uploaded to the GPU.
     uploaded_theme: Option<ThemeMode>,
+    /// The upload generation of the last `SceneUpload`.
+    ///
+    /// The renderer skips the upload when the generation does not move; the
+    /// host advances it exactly when the runtime reported a whole-scene
+    /// change.
+    scene_generation: u64,
     /// The live theme: the engine owns the colour table, the app only asks
     /// for a different palette.
     theme: ThemeState,
@@ -57,7 +80,6 @@ struct Showcase {
     /// Keyboard modifiers.
     modifiers: Modifiers,
     cursor: CursorKind,
-    clock: Instant,
     last_frame: Instant,
     /// The OS scale factor (physical pixels per logical unit).
     os_scale: f32,
@@ -72,22 +94,28 @@ struct Showcase {
     press_consumed: bool,
     /// True when the driver reported that the swapchain is stale.
     swapchain_dirty: bool,
+    /// The primary window's identity, so secondary windows can be told apart.
+    primary: Option<winit::window::WindowId>,
+    /// Secondary windows and their presentation chains.
+    extras: Vec<ExtraWindow>,
+    /// Set by `Ctrl+N`; the platform opens the window at the next frame.
+    new_window_requested: bool,
 }
 
 impl Showcase {
     fn new() -> Self {
         Self {
-            app: GalleryApp::new(),
+            app: AppRuntime::new(GalleryRuntime::new(), Vec2::new(1440.0, 900.0)),
             renderer: None,
             surface: None,
             swapchain: None,
             atlases: None,
             uploaded_theme: None,
+            scene_generation: 0,
             theme: ThemeState::new(theme::theme_set(), ThemeKind::Light),
             pointer: Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
             cursor: CursorKind::Default,
-            clock: Instant::now(),
             last_frame: Instant::now(),
             os_scale: 1.0,
             resize_edge: None,
@@ -95,12 +123,25 @@ impl Showcase {
             last_title_press: None,
             press_consumed: false,
             swapchain_dirty: false,
+            primary: None,
+            extras: Vec::new(),
+            new_window_requested: false,
         }
     }
 
     /// Physical pixels per logical unit.
     fn effective_scale(&self) -> f32 {
-        (self.os_scale * self.app.state.zoom()).clamp(0.5, 4.0)
+        (self.os_scale * self.shell().state.zoom()).clamp(0.5, 4.0)
+    }
+
+    /// The dogfooded shell the runtime drives.
+    fn shell(&self) -> &GalleryApp {
+        self.app.application().shell()
+    }
+
+    /// The shell, mutably.
+    fn shell_mut(&mut self) -> &mut GalleryApp {
+        self.app.application_mut().shell_mut()
     }
 
     fn logical(&self, physical: Vec2) -> Vec2 {
@@ -165,7 +206,7 @@ impl Showcase {
         if self.atlases.is_none() || self.renderer.is_none() {
             return;
         }
-        let updates = self.app.labels.cache.take_updates();
+        let updates = self.shell_mut().labels.cache.take_updates();
         if updates.is_empty() {
             return;
         }
@@ -200,49 +241,53 @@ impl Showcase {
     }
 
     fn write_theme_if_needed(&mut self) {
-        if self.uploaded_theme == Some(self.app.state.theme) {
+        let mode = self.shell().state.theme;
+        if self.uploaded_theme == Some(mode) {
             return;
         }
+        let dark = mode.is_dark();
         if let Some(renderer) = &mut self.renderer {
             // Switching the theme only rewrites the 4 KiB colour table: no
             // layout, no instance re-upload.
-            let _ = self
-                .theme
-                .switch(theme::kind(self.app.state.theme.is_dark()));
+            let _ = self.theme.switch(theme::kind(dark));
             let _ = renderer.write_theme_lut(self.theme.lut());
-            self.uploaded_theme = Some(self.app.state.theme);
+            self.uploaded_theme = Some(mode);
         }
     }
 
     fn rebuild(&mut self, window: &Window) {
-        self.app.set_effective_scale(self.effective_scale());
+        let scale = self.effective_scale();
+        self.shell_mut().set_effective_scale(scale);
         let viewport = self.logical_viewport(window);
-        self.app.rebuild(viewport);
-        self.upload_glyphs();
-        self.write_theme_if_needed();
+        self.app.resize(Vec2::new(viewport.0, viewport.1));
     }
 
-    /// Rebuild the scene when anything observable changed.
+    /// Rebuild the scene through the runtime, diff it and upload the glyphs
+    /// the rebuild produced.
     ///
-    /// The scene's upload generation is bumped by the rebuild itself, so
-    /// the renderer always sees a fresh generation as soon as the state
-    /// moved. No redraw is requested here: every caller either runs inside
-    /// `frame` (which renders right away) or is followed by
-    /// `pacer.request_immediate`, and a `request_redraw` in this spot used
-    /// to short-circuit the pacer on every frame.
-    fn sync_scene(&mut self, window: &Window) -> bool {
-        let viewport = self.logical_viewport(window);
-        let changed = self.app.sync(viewport);
-        if changed {
+    /// This replaces the hand-written `sync` / `dirty_ranges` / `generation`
+    /// bookkeeping: the runtime owns the frame pipeline now, and the host only
+    /// turns the returned report into an upload plan.
+    fn advance_scene(&mut self, dt: f32) -> unbound_app::FrameReport {
+        let scale = self.effective_scale();
+        self.shell_mut().set_effective_scale(scale);
+        let report = self.app.frame(dt);
+        if !matches!(report.diff, SceneDiff::Identical) {
+            if report.diff.bumps_generation() {
+                self.scene_generation = self.scene_generation.wrapping_add(1);
+            }
             self.upload_glyphs();
         }
-        changed
+        let shell = self.shell_mut();
+        shell.state.demo.upload_bytes = report.bytes;
+        shell.state.demo.primitive_count = report.primitives as u32;
+        report
     }
 
     fn apply_cursor(&mut self, window: &Window) {
         let kind = self
             .resize_edge
-            .map_or_else(|| self.app.cursor(), ResizeEdge::cursor);
+            .map_or_else(|| self.shell().cursor(), ResizeEdge::cursor);
         if kind != self.cursor {
             self.cursor = kind;
             window.set_cursor(cursor_icon(kind));
@@ -255,6 +300,9 @@ impl Showcase {
     /// presentation engine can hand its resources over instead of tearing
     /// the surface down — that is what removes the flicker on a resize.
     fn recreate_swapchain(&mut self, window: &Window, width: u32, height: u32) -> bool {
+        // Read the limit before borrowing the renderer: both go through
+        // `self`, and the shell read would conflict with the mutable borrow.
+        let limit = self.shell().state.effective_fps_limit();
         let Some(renderer) = &mut self.renderer else {
             return false;
         };
@@ -267,7 +315,6 @@ impl Showcase {
         // Any such limit hands the cadence to the software pacer and presents
         // without vsync; a limit at or below the refresh rate keeps the
         // tear-free path.
-        let limit = self.app.state.effective_fps_limit();
         let refresh_hz = window
             .current_monitor()
             .and_then(|monitor| monitor.refresh_rate_millihertz())
@@ -302,14 +349,14 @@ impl Showcase {
     /// Chinese/Japanese/Korean keyboard could only ever type ASCII. The
     /// candidate window is anchored at the click position.
     fn sync_ime(&mut self, state: &mut PlatformState, window: &Window) {
-        let active = self.app.ime_active();
+        let active = self.shell().ime_active();
         if active != self.ime_allowed {
             window.set_ime_allowed(active);
             self.ime_allowed = active;
         }
         if active {
             let scale = self.effective_scale();
-            let caret = self.app.ime_caret() * scale;
+            let caret = self.shell().ime_caret() * scale;
             window.set_ime_cursor_area(
                 PhysicalPosition::new(caret.x.round() as i32, caret.y.round() as i32),
                 PhysicalSize::new(
@@ -323,7 +370,8 @@ impl Showcase {
         let commit = state.ime.take_commit();
         let mut changed = false;
         if !commit.is_empty() {
-            self.app.type_text(&commit);
+            // Through the runtime, so the commit also marks the frame dirty.
+            self.app.text(&commit);
             changed = true;
         }
         let preedit = if active {
@@ -331,9 +379,10 @@ impl Showcase {
         } else {
             String::new()
         };
-        if preedit != self.app.state.ime_preedit {
-            self.app.state.ime_preedit = preedit;
-            self.app.state.bump();
+        if preedit != self.shell().state.ime_preedit {
+            self.shell_mut().state.ime_preedit = preedit;
+            self.shell_mut().state.bump();
+            self.app.invalidate();
             changed = true;
         }
         // IME events are not `PlatformEvent`s, so a parked loop would never
@@ -356,6 +405,45 @@ fn resize_direction(edge: ResizeEdge) -> winit::window::ResizeDirection {
         ResizeEdge::NorthEast => Direction::NorthEast,
         ResizeEdge::SouthWest => Direction::SouthWest,
         ResizeEdge::SouthEast => Direction::SouthEast,
+    }
+}
+
+/// Translate a platform key into the runtime's key vocabulary.
+fn app_key(key: &PlatformKey) -> AppKey {
+    match key {
+        PlatformKey::Named(name) => match name.as_str() {
+            "Tab" => AppKey::Tab,
+            "Escape" => AppKey::Escape,
+            "Enter" => AppKey::Enter,
+            "Backspace" => AppKey::Backspace,
+            "Delete" => AppKey::Delete,
+            "ArrowLeft" => AppKey::Left,
+            "ArrowRight" => AppKey::Right,
+            "ArrowUp" => AppKey::Up,
+            "ArrowDown" => AppKey::Down,
+            "Home" => AppKey::Home,
+            "End" => AppKey::End,
+            " " | "Space" => AppKey::Space,
+            other => other
+                .chars()
+                .next()
+                .map_or(AppKey::Character('\0'), AppKey::Character),
+        },
+        PlatformKey::Character(text) => text
+            .chars()
+            .next()
+            .map_or(AppKey::Character('\0'), AppKey::Character),
+        PlatformKey::Other(_) => AppKey::Character('\0'),
+    }
+}
+
+/// Translate the platform's modifier set into the runtime's.
+fn app_modifiers(modifiers: Modifiers) -> AppModifiers {
+    AppModifiers {
+        shift: modifiers.shift,
+        ctrl: modifiers.control,
+        alt: modifiers.alt,
+        meta: modifiers.meta,
     }
 }
 
@@ -477,13 +565,83 @@ impl PlatformApp for Showcase {
         state.set_present_extensions(&device_extensions);
 
         self.os_scale = window.scale_factor() as f32;
+        self.primary = Some(window.id());
         self.rebuild(window);
         self.last_frame = Instant::now();
     }
 
+    fn window_created(&mut self, _state: &mut PlatformState, window: &Window) {
+        let Some(renderer) = &self.renderer else {
+            return;
+        };
+        let Some(raw) = ({
+            // The GPU crate has its own handle enum so it does not have to
+            // depend on winit; extract the native handle once here.
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            match window.window_handle().ok().map(|handle| handle.as_raw()) {
+                Some(RawWindowHandle::Win32(handle)) => Some(handle.hwnd.get()),
+                _ => None,
+            }
+        }) else {
+            eprintln!("the secondary window has no native handle");
+            return;
+        };
+        let Ok(surface) = Surface::new_win32(&renderer.gpu, raw) else {
+            eprintln!("could not create a surface for the secondary window");
+            return;
+        };
+        let size = window.inner_size();
+        let (width, height) = (size.width.max(1), size.height.max(1));
+        let present =
+            PresentConfig::from_capabilities(&renderer.gpu.enabled_device_extensions, false);
+        let Ok(swapchain) = Swapchain::new(&renderer.gpu, &surface, width, height, &present) else {
+            eprintln!("could not create a swapchain for the secondary window");
+            return;
+        };
+        self.extras.push(ExtraWindow {
+            id: window.id(),
+            surface,
+            swapchain,
+            swapchain_dirty: false,
+        });
+    }
+
+    fn window_closing(&mut self, window: &Window) {
+        self.extras.retain(|extra| extra.id != window.id());
+    }
+
+    fn take_window_request(&mut self) -> Option<WindowConfig> {
+        if !self.new_window_requested {
+            return None;
+        }
+        self.new_window_requested = false;
+        Some(WindowConfig {
+            title: "Unbound UI Gallery — Second Window".to_string(),
+            width: 960,
+            height: 640,
+            resizable: true,
+            decorations: false,
+            min_width: 640,
+            min_height: 480,
+            visible: true,
+            ..Default::default()
+        })
+    }
+
     fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
+        // Secondary windows present the same application; their input is not
+        // routed yet, so only the presentation chain reacts.
+        if Some(window.id()) != self.primary {
+            if matches!(event, PlatformEvent::RecreateSwapchain(_)) {
+                if let Some(extra) = self.extras.iter_mut().find(|extra| extra.id == window.id()) {
+                    extra.swapchain_dirty = true;
+                }
+            }
+            return Flow::Continue;
+        }
         self.sync_window_size(window);
-        self.app.set_effective_scale(self.effective_scale());
+        let scale = self.effective_scale();
+        self.shell_mut().set_effective_scale(scale);
         let mut flow = Flow::Continue;
         match event {
             PlatformEvent::ScaleFactorChanged(factor) => {
@@ -501,18 +659,28 @@ impl PlatformApp for Showcase {
                 key,
                 repeat,
             } => {
+                // Ctrl+N opens a second window: a real second surface and
+                // swapchain on the same device.
+                if !repeat
+                    && self.modifiers.control
+                    && matches!(&key, PlatformKey::Character(text) if text.eq_ignore_ascii_case("n"))
+                {
+                    self.new_window_requested = true;
+                    state.pacer.request_immediate(Instant::now());
+                }
                 // While the IME owns the text, the platform also reports the
                 // composition's characters as key presses. Forwarding both
                 // would insert every letter twice ("nihao" → "nniihhaaoo").
                 let ime_owns_text = state.ime.enabled && matches!(key, PlatformKey::Character(_));
                 if !ime_owns_text {
                     if repeat {
-                        self.app.key_repeat(&key);
+                        self.shell_mut().key_repeat(&key);
                     } else {
-                        self.app.key(&key, self.modifiers);
+                        let modifiers = app_modifiers(self.modifiers);
+                        self.app.key(app_key(&key), true, modifiers);
                     }
                 }
-                if let Some(command) = self.app.take_window_command() {
+                if let Some(command) = self.shell_mut().take_window_command() {
                     flow = self.handle_window_command(window, command);
                 }
             }
@@ -524,7 +692,6 @@ impl PlatformApp for Showcase {
                 button: MouseButton::Left,
             } => {
                 let position = self.logical(self.pointer);
-                let now = self.clock.elapsed().as_secs_f64();
                 if state == ButtonState::Pressed {
                     // The window chrome owns its edges and its title bar: the
                     // UI underneath must not also see the press.
@@ -534,7 +701,7 @@ impl PlatformApp for Showcase {
                         let _ = window.drag_resize_window(resize_direction(edge));
                     } else {
                         self.app.pointer_move(position);
-                        if self.app.is_titlebar_drag(position) {
+                        if self.shell().is_titlebar_drag(position) {
                             self.press_consumed = true;
                             let double = self.last_title_press.is_some_and(|(when, at)| {
                                 Instant::now().duration_since(when)
@@ -549,8 +716,8 @@ impl PlatformApp for Showcase {
                             }
                         } else {
                             self.press_consumed = false;
-                            self.app.pointer_down(position, now);
-                            if let Some(command) = self.app.take_window_command() {
+                            self.app.pointer_down(position);
+                            if let Some(command) = self.shell_mut().take_window_command() {
                                 flow = self.handle_window_command(window, command);
                             }
                         }
@@ -558,8 +725,8 @@ impl PlatformApp for Showcase {
                 } else if self.press_consumed {
                     self.press_consumed = false;
                 } else {
-                    self.app.pointer_up(position, now);
-                    if let Some(command) = self.app.take_window_command() {
+                    self.app.pointer_up(position);
+                    if let Some(command) = self.shell_mut().take_window_command() {
                         flow = self.handle_window_command(window, command);
                     }
                 }
@@ -574,15 +741,17 @@ impl PlatformApp for Showcase {
             PlatformEvent::MouseWheel { delta_y, .. } => {
                 if self.modifiers.control {
                     let steps = showcase::state::ZOOM_STEPS.len();
-                    let current = self.app.state.zoom_step.min(steps - 1);
-                    self.app.state.zoom_step = if delta_y > 0.0 {
+                    let current = self.shell().state.zoom_step.min(steps - 1);
+                    self.shell_mut().state.zoom_step = if delta_y > 0.0 {
                         (current + 1).min(steps - 1)
                     } else {
                         current.saturating_sub(1)
                     };
-                    self.app.state.bump();
+                    self.shell_mut().state.bump();
+                    self.app.invalidate();
                 } else {
-                    self.app.wheel(delta_y as f32);
+                    self.app
+                        .wheel(self.logical(self.pointer), Vec2::new(0.0, delta_y as f32));
                 }
             }
             PlatformEvent::Focused(false) => {
@@ -590,7 +759,8 @@ impl PlatformApp for Showcase {
                 // is over. The capture, the scrollbar grab and the demo
                 // drags have to go, or the shell keeps a ghost drag alive
                 // until the user happens to click somewhere else.
-                self.app.cancel_interactions();
+                self.shell_mut().cancel_interactions();
+                self.app.pointer_up(self.logical(self.pointer));
             }
             PlatformEvent::RedrawRequested => {
                 // The OS asked to repaint (the window was uncovered, or the
@@ -610,13 +780,13 @@ impl PlatformApp for Showcase {
         }
         // Re-read the effective scale: a zoom click in this very event changed
         // it after the pre-handler snapshot.
-        self.app.set_effective_scale(self.effective_scale());
+        let scale = self.effective_scale();
+        self.shell_mut().set_effective_scale(scale);
         self.sync_ime(state, window);
-        // The scene is rebuilt here, not in the frame loop: the state the
-        // event changed has to reach the screen in the very same frame.
-        if self.sync_scene(window) {
-            // Bypass the cadence: a click must react now, even if the last
-            // frame was a millisecond ago.
+        // The rebuild itself happens in the frame loop, through the runtime.
+        // Kick the pacer when anything in the scene moved, so a click is
+        // visible now instead of at the next vsync.
+        if self.app.dirty() != DirtyFlags::NONE {
             state.pacer.request_immediate(Instant::now());
         }
         self.write_theme_if_needed();
@@ -625,10 +795,154 @@ impl PlatformApp for Showcase {
     }
 
     fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+        Showcase::frame_impl(self, state, window)
+    }
+
+    fn accessibility_update(&mut self) -> Option<accesskit::TreeUpdate> {
+        Showcase::accessibility_update_impl(self)
+    }
+
+    fn accessibility_action(
+        &mut self,
+        state: &mut PlatformState,
+        window: &Window,
+        request: unbound_platform::A11yRequest,
+    ) -> Flow {
+        Showcase::accessibility_action_impl(self, state, window, request)
+    }
+}
+
+impl Showcase {
+    /// Rebuild a secondary window's presentation chain.
+    fn recreate_extra_swapchain(&mut self, index: usize, width: u32, height: u32) -> bool {
+        let Some(renderer) = &mut self.renderer else {
+            return false;
+        };
+        let Some(extra) = self.extras.get_mut(index) else {
+            return false;
+        };
+        let present =
+            PresentConfig::from_capabilities(&renderer.gpu.enabled_device_extensions, false);
+        if let Err(error) =
+            extra
+                .swapchain
+                .recreate(&renderer.gpu, &extra.surface, width, height, &present)
+        {
+            eprintln!("could not rebuild the secondary swapchain: {error}");
+            return false;
+        }
+        let (actual_w, actual_h) = extra.swapchain.extent();
+        if let Err(error) = renderer.ensure_depth_size(actual_w, actual_h) {
+            eprintln!("could not resize the shared depth buffer: {error}");
+            return false;
+        }
+        true
+    }
+
+    /// Render one secondary window.
+    ///
+    /// The window shares the device and the renderer with the primary one,
+    /// but owns its surface, its swapchain and its cadence. The application is
+    /// laid out for this window's logical viewport right before the draw, so
+    /// the same UI fills either window at its own size.
+    fn frame_secondary(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+        let Some(index) = self.extras.iter().position(|extra| extra.id == window.id()) else {
+            return Flow::Continue;
+        };
+        let size = window.inner_size();
+        let (width, height) = (size.width.max(1), size.height.max(1));
+        let mismatch = self.extras[index].swapchain.extent() != (width, height);
+        if mismatch || self.extras[index].swapchain_dirty {
+            self.extras[index].swapchain_dirty = false;
+            if !self.recreate_extra_swapchain(index, width, height) {
+                return Flow::Continue;
+            }
+        }
+        if !state.pacer.should_render(Instant::now()) {
+            return Flow::Continue;
+        }
+
+        // Lay the shared application out for this window and rebuild.
+        let scale = (window.scale_factor() as f32 * self.shell().state.zoom()).clamp(0.5, 4.0);
+        self.shell_mut().set_effective_scale(scale);
+        self.app
+            .resize(Vec2::new(width as f32 / scale, height as f32 / scale));
+        let _ = self.app.frame(0.0);
+        self.upload_glyphs();
+        self.write_theme_if_needed();
+
+        let Some(renderer) = &mut self.renderer else {
+            return Flow::Continue;
+        };
+        let extra = &mut self.extras[index];
+        if let Err(error) = renderer.wait_for_previous_frame() {
+            eprintln!("waiting for the previous frame failed: {error}");
+            return Flow::Continue;
+        }
+        let image = match extra.swapchain.acquire_outcome(ACQUIRE_TIMEOUT_NS) {
+            Ok(AcquireOutcome::Ready { image, suboptimal }) => {
+                if suboptimal {
+                    extra.swapchain_dirty = true;
+                }
+                image
+            }
+            Ok(AcquireOutcome::OutOfDate) => {
+                extra.swapchain_dirty = true;
+                return Flow::Continue;
+            }
+            Err(error) => {
+                eprintln!("could not acquire a secondary swapchain image: {error}");
+                return Flow::Continue;
+            }
+        };
+        let (actual_w, actual_h) = extra.swapchain.extent();
+        self.scene_generation = self.scene_generation.wrapping_add(1);
+        self.app.application_mut().shell_mut().scene.camera =
+            Camera::ui((actual_w as f32, actual_h as f32), scale);
+        // Two windows share the pool, so each draw uploads the whole scene
+        // with a fresh generation instead of patching a base that belongs to
+        // the other window.
+        let shell = self.app.application().shell();
+        let scene = SceneUpload {
+            primitives: &shell.scene.primitives,
+            transforms: &shell.scene.transforms,
+            clips: &shell.scene.clips,
+            payloads: &shell.scene.payloads,
+            generation: self.scene_generation,
+            camera: shell.scene.camera,
+            key_prefix: (PassLayer::Ui as u64) << 56,
+            dirty_ranges: &[],
+        };
+        if let Err(error) = renderer.render_into_swapchain(&scene, &image, actual_w, actual_h) {
+            eprintln!("secondary render failed: {error}");
+            return Flow::Continue;
+        }
+        let finished = image.render_finished;
+        match extra
+            .swapchain
+            .present_outcome(&renderer.gpu, image.index, finished)
+        {
+            Ok(PresentOutcome::Optimal) => {}
+            Ok(PresentOutcome::Recreate) => extra.swapchain_dirty = true,
+            Err(error) => eprintln!("secondary present failed: {error}"),
+        }
+        state.pacer.on_present(Instant::now());
+        Flow::Continue
+    }
+
+    fn frame_impl(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+        if Some(window.id()) != self.primary {
+            return self.frame_secondary(state, window);
+        }
         self.sync_window_size(window);
-        self.app.set_effective_scale(self.effective_scale());
+        let scale = self.effective_scale();
+        self.shell_mut().set_effective_scale(scale);
         self.sync_ime(state, window);
-        self.app.set_window_maximized(window.is_maximized());
+        let maximized = window.is_maximized();
+        if self.shell().window_maximized != maximized {
+            self.shell_mut().set_window_maximized(maximized);
+            self.app.invalidate();
+        }
         let size = window.inner_size();
         let (window_width, window_height) = (size.width.max(1), size.height.max(1));
 
@@ -645,7 +959,7 @@ impl PlatformApp for Showcase {
         // place that enforces it. A change also changes the present mode
         // (capped runs stay tear-free, an uncapped run must not be pinned to
         // the display's refresh rate), so the chain is rebuilt next.
-        let limit = self.app.state.effective_fps_limit();
+        let limit = self.shell().state.effective_fps_limit();
         if state.pacer.fps_limit() != limit {
             state.pacer.set_fps_limit(limit);
             self.swapchain_dirty = true;
@@ -695,12 +1009,23 @@ impl PlatformApp for Showcase {
             // HUD jump between 40 and 120.
             let instant_fps = 1.0 / dt;
             let alpha = 0.15;
-            let demo = &mut self.app.state.demo;
+            let demo = &mut self.shell_mut().state.demo;
             demo.fps += (instant_fps - demo.fps) * alpha;
             demo.frame_ms += (dt * 1000.0 - demo.frame_ms) * alpha;
         }
-        let moving = self.app.tick(dt);
-        self.sync_scene(window);
+        // With a second window on the same renderer, every window rebuilds
+        // for its own viewport and uploads the whole scene: the shared
+        // instance pool can only hold one patch base at a time.
+        let multi = !self.extras.is_empty();
+        if multi {
+            let viewport = self.logical_viewport(window);
+            self.app.resize(Vec2::new(viewport.0, viewport.1));
+        }
+        // The runtime reduces the tick, rebuilds the scene and returns the
+        // upload plan for this frame.
+        let dirty = self.app.tick(dt);
+        let moving = dirty != DirtyFlags::NONE;
+        let report = self.advance_scene(0.0);
         self.write_theme_if_needed();
         self.apply_cursor(window);
 
@@ -742,18 +1067,29 @@ impl PlatformApp for Showcase {
         // The app lays out in logical units (physical / (OS scale × zoom)); the
         // UI camera scales those units back up, so a 150 % layout maps exactly
         // onto the physical viewport at any DPI.
-        self.app.scene.camera = Camera::ui((width as f32, height as f32), scale);
-        let scene = self
-            .app
-            .scene
-            .upload(self.app.generation(), self.app.dirty_ranges());
+        self.app.application_mut().shell_mut().scene.camera =
+            Camera::ui((width as f32, height as f32), scale);
+        let shell = self.app.application().shell();
+        let (generation, dirty_ranges): (u64, &[(u32, u32)]) = if multi {
+            self.scene_generation = self.scene_generation.wrapping_add(1);
+            (self.scene_generation, &[])
+        } else {
+            (self.scene_generation, report.diff.ranges())
+        };
+        let scene = SceneUpload {
+            primitives: &shell.scene.primitives,
+            transforms: &shell.scene.transforms,
+            clips: &shell.scene.clips,
+            payloads: &shell.scene.payloads,
+            generation,
+            camera: shell.scene.camera,
+            key_prefix: (PassLayer::Ui as u64) << 56,
+            dirty_ranges,
+        };
         if let Err(error) = renderer.render_into_swapchain(&scene, &image, width, height) {
             eprintln!("render failed: {error}");
             return Flow::Continue;
         }
-        // The pending slices are in the pool now. Keeping them would re-stage
-        // the same primitives on every later frame under the same generation.
-        self.app.mark_uploaded();
         // The render-finished semaphore belongs to *this* swapchain image, so
         // the presentation engine never waits on a semaphore another image
         // still owns.
@@ -776,9 +1112,9 @@ impl PlatformApp for Showcase {
         // A static page with no HUD, no animation and a capped frame rate has
         // nothing to show: let the event loop park instead of submitting a
         // full cull + radix sort every refresh.
-        let keep_animating = self.app.state.fps_limit == 0
-            || self.app.state.show_hud
-            || self.app.state.active_page == showcase::pages::PageId::Telemetry
+        let keep_animating = self.shell().state.fps_limit == 0
+            || self.shell().state.show_hud
+            || self.shell().state.active_page == showcase::pages::PageId::Telemetry
             || moving;
         state.pacer.set_animating(keep_animating);
         // No `request_redraw` here: `about_to_wait` arms
@@ -788,6 +1124,24 @@ impl PlatformApp for Showcase {
         // handler cancelled the deadline that had just been set — the software
         // limiter never got to enforce anything.
         state.latency.on_present(Instant::now());
+        Flow::Continue
+    }
+
+    fn accessibility_update_impl(&mut self) -> Option<accesskit::TreeUpdate> {
+        // The runtime's collector holds the shell's tree; taking the delta
+        // here is what makes a static frame cost no system call.
+        self.app.scene_mut().semantics.take_update()
+    }
+
+    fn accessibility_action_impl(
+        &mut self,
+        _state: &mut PlatformState,
+        _window: &Window,
+        request: unbound_platform::A11yRequest,
+    ) -> Flow {
+        // Through the reducer, so an assistive-technology click is the same
+        // code path as a mouse click.
+        self.app.a11y(request.node, request.action, request.value);
         Flow::Continue
     }
 }

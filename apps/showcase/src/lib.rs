@@ -16,6 +16,8 @@ pub mod keys;
 pub mod layout_tree;
 /// The page catalogue and the live example renderers.
 pub mod pages;
+/// The shell adapted to the generic application runtime.
+pub mod runtime_app;
 /// The dogfooded application shell and its state machine.
 pub mod shell;
 /// Navigation, knob and demo state.

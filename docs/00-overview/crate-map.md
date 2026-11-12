@@ -35,7 +35,7 @@
 │  unbound-vector          贝塞尔降阶、紧致 OBB、解析距离         │
 │  unbound-graph           渲染图、瞬态纹理生命周期、离屏池       │
 │  unbound-asset           后台解码池、暂存环、传输队列交接        │
-│  unbound-platform        窗口平台层：缩放、呈现策略、延迟计量    │
+│  unbound-platform        窗口平台层：多窗口、AccessKit 实机适配、呈现策略    │
 ├─────────────────────────────────────────────────────────────┤
 │  unbound-math            基础数学：Vec2/Rect/Affine2/Color/f16  │
 └─────────────────────────────────────────────────────────────┘
@@ -59,14 +59,14 @@
 | `unbound-theme` | 978 | 语义设计令牌、颜色表、三层正交缩放、像素吸附 | `unbound-math` |
 | `unbound-graph` | 857 | 渲染图瞬态纹理生命周期校验、毛玻璃离屏池 | `unbound-math` |
 | `unbound-asset` | 1222 | 后台解码线程池、CPU 暂存环、传输队列交接 | `unbound-math` |
-| `unbound-platform` | 1562 | 窗口平台层：非阻塞缩放、低延迟呈现、延迟计量 | `unbound-math`、`unbound-gpu` |
+| `unbound-platform` | 1562 | 窗口平台层：多窗口事件路由与 Surface/Swapchain 宿主、AccessKit 实机适配、非阻塞缩放、低延迟呈现、延迟计量 | `unbound-math`、`unbound-gpu` |
 | `unbound-widgets` | 3446 | 标准控件层：ControlState、WidgetOutput、SceneCollector、WidgetHarness、帧差分（`diff`：局部补丁上传），以及 Button / Switch / Checkbox / Radio / Segmented / Slider / TextInput / ScrollView / Overlay / Popover / Menu / Select / Modal / Tooltip / Image | `unbound-gpu`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-text`、`unbound-world`、`unbound-anim`、`unbound-headless` |
 | `unbound-app` | 689 | 应用运行时：`Application::{init,reduce,view}`、事件解析、指针路由、焦点策略、双缓冲场景差分、零工作帧与毛玻璃请求上报 | `unbound-math`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-gpu`、`unbound-widgets` |
 | `unbound-headless` | 2248 | 无头验证器：五项几何体检、`TestApp` 交互测试驱动、rkyv 时间旅行快照 | `unbound-math`、`unbound-world`、`unbound-input`、`unbound-a11y` |
 | `unbound-host` | 909 | Host-Guest C-ABI 热重载、分配器劫持、状态迁移 | `unbound-abi` |
 | `unbound-kpi` | 398 | 验收红线实测 | 多数 crate |
 | `app-guest` | 529 | 可热重载的业务层 cdylib | `unbound-abi` |
-| `apps/showcase` | 14773 | 自举式 UI Gallery：三段式壳层、21 页示例卡、Knob 调参、代码/A11y 面板、搜索与 HUD；壳层几何由 `UiWorld` 节点树 + `LayoutEngine` 求解，悬停/聚焦走局部补丁上传 | `unbound-gpu`、`unbound-text`、`unbound-platform`、`unbound-input`、`unbound-world`、`unbound-layout`、`unbound-widgets`、`unbound-theme`、`unbound-a11y`、`unbound-anim`、`unbound-headless` |
+| `apps/showcase` | 14773 | 自举式 UI Gallery：三段式壳层、21 页示例卡、Knob 调参、代码/A11y 面板、搜索与 HUD；壳层几何由 `UiWorld` 节点树 + `LayoutEngine` 求解，事件与帧差分经 `AppRuntime<GalleryRuntime>` 归约，悬停/聚焦走局部补丁上传，`Ctrl+N` 开第二窗口 | `unbound-app`、`unbound-gpu`、`unbound-text`、`unbound-platform`、`unbound-input`、`unbound-world`、`unbound-layout`、`unbound-widgets`、`unbound-theme`、`unbound-a11y`、`unbound-anim`、`unbound-headless` |
 | `apps/gallery` | 474 | 全链路演示程序（控制台测量） | `unbound-gpu` |
 
 ## 三条刻意的依赖禁令

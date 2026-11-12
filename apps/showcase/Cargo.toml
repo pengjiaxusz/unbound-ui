@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 unbound-math.workspace = true
 unbound-gpu.workspace = true
+unbound-app.workspace = true
 unbound-theme.workspace = true
 unbound-widgets.workspace = true
 unbound-text.workspace = true

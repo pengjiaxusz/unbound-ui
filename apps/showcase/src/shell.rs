@@ -139,6 +139,12 @@ pub struct GalleryApp {
     /// A hover, a press or a focus change moves nothing, so the layout is
     /// not re-solved for them: the frame's layout cost stays at zero.
     layout_key: LayoutKey,
+    /// Whether a host runtime owns the frame diff.
+    ///
+    /// The showcase is driven by `unbound_app::AppRuntime`, which diffs the
+    /// primitive list once per frame. Re-diffing here as well would scan the
+    /// whole scene twice for the same answer.
+    external_diff: bool,
     /// The layout statistics of the current frame.
     frame_layout_stats: LayoutStats,
     /// The primitive range each control owns.
@@ -223,6 +229,7 @@ impl GalleryApp {
                 page: 0,
                 code_mask: 0,
             },
+            external_diff: false,
             frame_layout_stats: LayoutStats::default(),
             node_spans: rustc_hash::FxHashMap::default(),
             ime_caret: Vec2::new(24.0, 60.0),
@@ -258,6 +265,15 @@ impl GalleryApp {
         self.pending_window.take()
     }
 
+    /// Let a host runtime own the frame diff.
+    ///
+    /// [`crate::runtime_app::GalleryRuntime`] installs this so the scene is
+    /// diffed exactly once, by the runtime, instead of once here and once
+    /// there.
+    pub fn set_external_diff(&mut self, external: bool) {
+        self.external_diff = external;
+    }
+
     /// Whether `point` is draggable title-bar background.
     #[must_use]
     pub fn is_titlebar_drag(&self, point: Vec2) -> bool {
@@ -278,6 +294,53 @@ impl GalleryApp {
         self.state.demo.modal_open = false;
         self.state.demo.dropdown_open = false;
         self.focused = Some(target::id(Target::NavPage(page.index() as u8)));
+    }
+
+    /// Apply an accessibility action exactly like the equivalent pointer or
+    /// keyboard gesture.
+    ///
+    /// The OS adapter hands actions back in the engine's vocabulary, so the
+    /// reducer path is the same one a click takes — an assistive-technology
+    /// user cannot reach a code path a mouse user cannot.
+    pub fn apply_a11y(
+        &mut self,
+        node: u64,
+        action: unbound_a11y::A11yAction,
+        value: Option<String>,
+    ) {
+        use unbound_a11y::A11yAction;
+        match action {
+            A11yAction::Click => {
+                if let Some(target) = target::decode(node) {
+                    let position = self.pointer;
+                    self.click_target(target, position);
+                }
+            }
+            A11yAction::Focus => {
+                if target::decode(node).is_some() {
+                    self.focused = Some(node);
+                    self.state.bump();
+                }
+            }
+            A11yAction::Blur => {
+                self.focused = None;
+                self.state.bump();
+            }
+            A11yAction::SetValue => {
+                if let Some(value) = value {
+                    if self.state.search_focused {
+                        self.state.search_query = value;
+                        self.state.bump();
+                    } else if self.state.demo.typing {
+                        self.state.demo.text = value;
+                        self.state.bump();
+                    }
+                }
+            }
+            // Increment / decrement need the control's range, which lives in
+            // the page description; the demo has no such descriptor yet.
+            _ => {}
+        }
     }
 
     /// Rebuild the scene when anything observable changed.
@@ -328,6 +391,12 @@ impl GalleryApp {
     #[must_use]
     pub fn span_of(&self, node: u64) -> Option<(u32, u32)> {
         self.node_spans.get(&node).copied()
+    }
+
+    /// Every control's primitive range, keyed by node identity.
+    #[must_use]
+    pub fn node_spans(&self) -> &rustc_hash::FxHashMap<u64, (u32, u32)> {
+        &self.node_spans
     }
 
     /// The geometry of the page as the layout tree solved it.
@@ -465,28 +534,34 @@ impl GalleryApp {
         // uploaded them (`mark_uploaded`); overwriting them here lost every
         // paint change made before the frame's animation tick.
         let diff = diff_scenes(&previous, scene);
-        let bumps_generation = diff.bumps_generation();
-        match diff {
-            // Nothing changed: the slices still pending from an earlier
-            // rebuild in this frame must survive.
-            SceneDiff::Identical => {}
-            SceneDiff::Ranges(ranges) => merge_ranges(&mut self.dirty_ranges, ranges),
-            // The shape changed, so the generation has to move and the whole
-            // scene goes up again.
-            SceneDiff::Whole => {
-                self.dirty_ranges.clear();
-                self.generation = self.generation.wrapping_add(1);
-            }
-        }
-        let stride = core::mem::size_of::<unbound_gpu::data::GpuPrimitiveInstance>() as u32;
-        self.state.demo.upload_bytes = if bumps_generation {
-            (scene.primitives.len() as u32).saturating_mul(stride)
+        if self.external_diff {
+            // The host runtime diffs the frame itself; drop the slices the
+            // shell would otherwise have accumulated for its own uploader.
+            self.dirty_ranges.clear();
         } else {
-            self.dirty_ranges
-                .iter()
-                .map(|(start, end)| (end - start) * stride)
-                .sum()
-        };
+            let bumps_generation = diff.bumps_generation();
+            match diff {
+                // Nothing changed: the slices still pending from an earlier
+                // rebuild in this frame must survive.
+                SceneDiff::Identical => {}
+                SceneDiff::Ranges(ranges) => merge_ranges(&mut self.dirty_ranges, ranges),
+                // The shape changed, so the generation has to move and the whole
+                // scene goes up again.
+                SceneDiff::Whole => {
+                    self.dirty_ranges.clear();
+                    self.generation = self.generation.wrapping_add(1);
+                }
+            }
+            let stride = core::mem::size_of::<unbound_gpu::data::GpuPrimitiveInstance>() as u32;
+            self.state.demo.upload_bytes = if bumps_generation {
+                (scene.primitives.len() as u32).saturating_mul(stride)
+            } else {
+                self.dirty_ranges
+                    .iter()
+                    .map(|(start, end)| (end - start) * stride)
+                    .sum()
+            };
+        }
         self.state.demo.primitive_count = scene_len;
         self.state.demo.draw_calls = draw_calls;
         self.router.set_regions(output.regions);
