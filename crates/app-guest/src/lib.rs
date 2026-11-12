@@ -25,6 +25,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use serde::{Deserialize, Serialize};
 use unbound_abi::action::{ActionKind, RawAction};
 use unbound_abi::desc::{RawNodeDesc, RawNodeId, NO_NODE};
+use unbound_abi::migration::{migrate, Field, FieldSpec};
 use unbound_abi::plugin::{
     ByteBuffer, GuestPluginVTable, GuestState, HostAllocatorVTable, HostRenderContext, ABI_VERSION,
 };
@@ -183,6 +184,25 @@ impl State {
 }
 
 // ---------------------------------------------------------------------------
+// Migratable state
+// ---------------------------------------------------------------------------
+
+/// Stable field ids for the versioned envelope. They must never be reused.
+const FIELD_COUNT: u16 = 1;
+const FIELD_TITLE: u16 = 2;
+const FIELD_ROWS: u16 = 3;
+/// `postcard` encoding of an empty `String` / `Vec`.
+const EMPTY_COLLECTION: &[u8] = &[0];
+
+/// The new shape of the state. Fields absent from an older payload take a
+/// default; a missing `count` is an error the host can see.
+const STATE_FIELDS: &[FieldSpec] = &[
+    FieldSpec::required(FIELD_COUNT),
+    FieldSpec::optional(FIELD_TITLE, EMPTY_COLLECTION),
+    FieldSpec::optional(FIELD_ROWS, EMPTY_COLLECTION),
+];
+
+// ---------------------------------------------------------------------------
 // Guest lifecycle
 // ---------------------------------------------------------------------------
 
@@ -220,7 +240,22 @@ unsafe extern "C" fn migrate_export(state: GuestState, out: *mut ByteBuffer) {
     // SAFETY: both pointers are host-provided and live for this call.
     let state = unsafe { &*state.cast::<State>() };
     let out = unsafe { &mut *out };
-    let Ok(bytes) = postcard::to_allocvec(state) else {
+    // Each field is encoded on its own so a new field can be added without
+    // reshuffling the bytes of the old ones.
+    let (Ok(count), Ok(title), Ok(rows)) = (
+        postcard::to_allocvec(&state.count),
+        postcard::to_allocvec(&state.title),
+        postcard::to_allocvec(&state.rows),
+    ) else {
+        out.len = 0;
+        return;
+    };
+    let envelope = unbound_abi::migration::encode(&[
+        Field::new(FIELD_COUNT, &count),
+        Field::new(FIELD_TITLE, &title),
+        Field::new(FIELD_ROWS, &rows),
+    ]);
+    let Ok(bytes) = envelope else {
         // The state could not be serialised. Report "needs nothing" so the
         // host does not allocate a buffer for a payload that does not exist.
         out.len = 0;
@@ -239,9 +274,26 @@ unsafe extern "C" fn migrate_import(ptr: *const u8, len: usize) -> GuestState {
     // A decode failure must be *visible*: the host falls back to a fresh state
     // when this returns null, which is better than silently handing back an
     // empty seed as if the migration had succeeded.
-    let Ok(state) = postcard::from_bytes::<State>(bytes) else {
+    let Ok(fields) = migrate(bytes, STATE_FIELDS) else {
         return core::ptr::null_mut();
     };
+    let decode = |id: u16| fields.iter().find(|field| field.id == id);
+    let Some(count) =
+        decode(FIELD_COUNT).and_then(|field| postcard::from_bytes::<i64>(&field.bytes).ok())
+    else {
+        return core::ptr::null_mut();
+    };
+    let Some(title) =
+        decode(FIELD_TITLE).and_then(|field| postcard::from_bytes::<String>(&field.bytes).ok())
+    else {
+        return core::ptr::null_mut();
+    };
+    let Some(rows) =
+        decode(FIELD_ROWS).and_then(|field| postcard::from_bytes::<Vec<Row>>(&field.bytes).ok())
+    else {
+        return core::ptr::null_mut();
+    };
+    let state = State { count, title, rows };
     Box::into_raw(Box::new(state)).cast::<c_void>()
 }
 

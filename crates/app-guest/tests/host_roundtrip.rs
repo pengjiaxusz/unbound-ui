@@ -94,15 +94,24 @@ fn a_migration_round_trip_preserves_every_row() {
 }
 
 #[test]
-fn the_state_snapshot_is_postcard_and_round_trips() {
+fn the_state_snapshot_is_a_versioned_postcard_envelope() {
     let mut host = GuestHost::new();
     host.mount_vtable(vtable()).unwrap();
     host.reduce(&press()).unwrap();
     let bytes = host.snapshot().unwrap();
-    let state: State = postcard::from_bytes(&bytes).unwrap();
-    assert_eq!(state.count, 1);
-    assert_eq!(state.rows.len(), 1);
-    assert_eq!(state.rows[0].label, "item 1");
+    let fields = unbound_abi::migration::decode(&bytes).expect("a versioned envelope");
+    let field = |id: u16| {
+        fields
+            .iter()
+            .find(|field| field.id == id)
+            .map(|field| field.bytes)
+            .expect("field is present")
+    };
+    let count: i64 = postcard::from_bytes(field(1)).unwrap();
+    let rows: Vec<app_guest::Row> = postcard::from_bytes(field(3)).unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].label, "item 1");
 }
 
 #[test]

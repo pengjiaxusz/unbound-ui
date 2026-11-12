@@ -19,6 +19,7 @@ mod macros;
 
 pub mod action;
 pub mod desc;
+pub mod migration;
 pub mod plugin;
 pub mod schema;
 
@@ -26,6 +27,10 @@ pub use action::{ActionKind, RawAction};
 pub use desc::{
     Align, Dim, DimUnit, Display, Edges, FlexDirection, Justify, NodeFlags, NodeTag, Position,
     RawNodeDesc, RawNodeId, NO_NODE,
+};
+pub use migration::{
+    decode, encode, migrate, Field, FieldSpec, MigratedField, MigrationError, ENVELOPE_VERSION,
+    MAGIC,
 };
 pub use plugin::{
     check_abi, classify_handoff, AbiCompat, GuestEntryFn, GuestPluginVTable, GuestState,
