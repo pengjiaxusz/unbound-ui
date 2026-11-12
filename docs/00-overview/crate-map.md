@@ -3,7 +3,7 @@
 > **实现状态**：`已落地` —— 本表与仓库实际结构一一对应，由
 > `crates/*/src/lib.rs` 的公开接口核对而来。
 
-19 个 crate 按依赖方向分层。**上层可以依赖下层，反向依赖被物理禁止**——
+20 个 crate 按依赖方向分层。**上层可以依赖下层，反向依赖被物理禁止**——
 这不是约定，而是由 [`app-guest` 的分层护栏测试](../05-agent/layering.md)
 在 CI 中强制检查的。
 
@@ -17,6 +17,8 @@
 │  app-guest               可热重载的业务层 cdylib（纯数据）      │
 ├─────────────────────────────────────────────────────────────┤
 │  unbound-host            Host-Guest C-ABI 热重载与状态迁移      │
+├─────────────────────────────────────────────────────────────┤
+│  unbound-widgets         标准控件：描述符、视觉状态、场景发射    │
 ├─────────────────────────────────────────────────────────────┤
 │  unbound-abi             稳定 ABI：POD 描述符、Action、插件接口 │
 ├─────────────────────────────────────────────────────────────┤
@@ -56,6 +58,7 @@
 | `unbound-graph` | 857 | 渲染图瞬态纹理生命周期校验、毛玻璃离屏池 | `unbound-math` |
 | `unbound-asset` | 1222 | 后台解码线程池、CPU 暂存环、传输队列交接 | `unbound-math` |
 | `unbound-platform` | 1562 | 窗口平台层：非阻塞缩放、低延迟呈现、延迟计量 | `unbound-math`、`unbound-gpu` |
+| `unbound-widgets` | 1075 | 标准控件层：ControlState、WidgetOutput、SceneCollector、WidgetHarness | `unbound-gpu`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-text`、`unbound-world`、`unbound-headless` |
 | `unbound-headless` | 2248 | 无头验证器：五项几何体检、`TestApp` 交互测试驱动、rkyv 时间旅行快照 | `unbound-math`、`unbound-world`、`unbound-input`、`unbound-a11y` |
 | `unbound-host` | 909 | Host-Guest C-ABI 热重载、分配器劫持、状态迁移 | `unbound-abi` |
 | `unbound-kpi` | 398 | 验收红线实测 | 多数 crate |

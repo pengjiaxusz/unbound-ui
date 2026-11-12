@@ -1495,6 +1495,7 @@ dependencies = [
  "unbound-text",
  "unbound-theme",
  "unbound-vector",
+ "unbound-widgets",
  "unbound-world",
  "winit",
 ]
@@ -1915,6 +1916,24 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "unbound-math",
+]
+
+[[package]]
+name = "unbound-widgets"
+version = "0.1.0"
+dependencies = [
+ "accesskit",
+ "rustc-hash",
+ "slotmap",
+ "unbound-a11y",
+ "unbound-abi",
+ "unbound-gpu",
+ "unbound-headless",
+ "unbound-input",
+ "unbound-math",
+ "unbound-text",
+ "unbound-theme",
+ "unbound-world",
 ]
 
 [[package]]

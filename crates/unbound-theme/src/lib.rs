@@ -102,6 +102,87 @@ impl Token {
     pub const TEXT_SECONDARY: Self = Self(29);
     pub const TEXT_DISABLED: Self = Self(30);
     pub const SCRIM: Self = Self(31);
+
+    // ---- control states and containers (32..=60) -------------------------
+    //
+    // The first thirty-two slots are the *primitive* vocabulary: surfaces,
+    // accents and text. The slots below are the *control* vocabulary: the
+    // state colours of a standard widget and the containers a shell paints.
+    //
+    // Every control state lives in its own slot, so a hover never rewrites
+    // the instance data — it only changes which colour the token resolves
+    // to. That is what makes a theme switch (and a hover) free of instance
+    // re-uploads.
+
+    /// The primary fill while hovered.
+    pub const PRIMARY_HOVER: Self = Self(32);
+    /// The primary fill while pressed.
+    pub const PRIMARY_PRESSED: Self = Self(33);
+    /// A low-saturation primary tint.
+    pub const PRIMARY_SOFT: Self = Self(34);
+    /// A low-saturation secondary tint.
+    pub const SECONDARY_SOFT: Self = Self(35);
+    /// A low-saturation success tint.
+    pub const SUCCESS_SOFT: Self = Self(36);
+    /// A low-saturation warning tint.
+    pub const WARNING_SOFT: Self = Self(37);
+    /// A low-saturation error tint.
+    pub const ERROR_SOFT: Self = Self(38);
+    /// The keyboard focus ring.
+    pub const FOCUS_RING: Self = Self(39);
+    /// The track of a slider or a switch.
+    pub const CONTROL_TRACK: Self = Self(40);
+    /// The thumb of a slider or the knob of a switch.
+    pub const CONTROL_THUMB: Self = Self(41);
+    /// A hovered control surface.
+    pub const CONTROL_HOVER: Self = Self(42);
+    /// The title bar surface.
+    pub const HEADER_BG: Self = Self(43);
+    /// The navigation pane surface.
+    pub const NAV_BG: Self = Self(44);
+    /// A hovered navigation row.
+    pub const NAV_HOVER: Self = Self(45);
+    /// The selected navigation row.
+    pub const NAV_SELECTED: Self = Self(46);
+    /// A hairline divider.
+    pub const DIVIDER: Self = Self(47);
+    /// The code panel background.
+    pub const CODE_BG: Self = Self(48);
+    /// The code panel foreground.
+    pub const CODE_TEXT: Self = Self(49);
+    /// The overlay surface.
+    pub const OVERLAY_BG: Self = Self(50);
+    /// The first stop of a hero gradient.
+    pub const HERO_START: Self = Self(51);
+    /// The last stop of a hero gradient.
+    pub const HERO_END: Self = Self(52);
+    /// Text and icons painted on a hero gradient.
+    pub const ON_HERO: Self = Self(53);
+    /// The scrim behind a call to action on a hero surface.
+    pub const HERO_SCRIM: Self = Self(54);
+    /// The performance HUD background.
+    pub const HUD_BG: Self = Self(55);
+    /// The performance HUD foreground.
+    pub const HUD_TEXT: Self = Self(56);
+    /// A low-saturation accent tint.
+    pub const ACCENT_SOFT: Self = Self(57);
+    /// The dots of a canvas or stage grid.
+    pub const GRID_DOT: Self = Self(58);
+    /// The primary text of a navigation row.
+    pub const NAV_TEXT: Self = Self(59);
+    /// The secondary text of a navigation row.
+    pub const NAV_TEXT_MUTED: Self = Self(60);
+    /// A secondary accent, next to [`Token::PRIMARY`].
+    ///
+    /// The primary accent carries the call to action; the secondary one is
+    /// for the supporting highlights of a surface. Both are *solid* colours —
+    /// the tinted variants are [`Token::PRIMARY_SOFT`] and
+    /// [`Token::SECONDARY_SOFT`].
+    pub const SECONDARY: Self = Self(61);
+    /// The surface of a card that sits on [`Token::SURFACE`].
+    pub const CARD_BG: Self = Self(62);
+    /// The outline of a card that sits on [`Token::SURFACE`].
+    pub const CARD_BORDER: Self = Self(63);
 }
 
 /// The set of semantic tokens the design system defines.
@@ -111,7 +192,7 @@ impl Token {
 ///
 /// [`Token::NONE`] is not in the list: it is a reserved engine slot, not a
 /// semantic colour.
-pub const TOKENS: [Token; 31] = [
+pub const TOKENS: [Token; 63] = [
     Token::SURFACE,
     Token::SURFACE_RAISED,
     Token::SURFACE_SUNKEN,
@@ -143,6 +224,38 @@ pub const TOKENS: [Token; 31] = [
     Token::TEXT_SECONDARY,
     Token::TEXT_DISABLED,
     Token::SCRIM,
+    Token::PRIMARY_HOVER,
+    Token::PRIMARY_PRESSED,
+    Token::PRIMARY_SOFT,
+    Token::SECONDARY_SOFT,
+    Token::SUCCESS_SOFT,
+    Token::WARNING_SOFT,
+    Token::ERROR_SOFT,
+    Token::FOCUS_RING,
+    Token::CONTROL_TRACK,
+    Token::CONTROL_THUMB,
+    Token::CONTROL_HOVER,
+    Token::HEADER_BG,
+    Token::NAV_BG,
+    Token::NAV_HOVER,
+    Token::NAV_SELECTED,
+    Token::DIVIDER,
+    Token::CODE_BG,
+    Token::CODE_TEXT,
+    Token::OVERLAY_BG,
+    Token::HERO_START,
+    Token::HERO_END,
+    Token::ON_HERO,
+    Token::HERO_SCRIM,
+    Token::HUD_BG,
+    Token::HUD_TEXT,
+    Token::ACCENT_SOFT,
+    Token::GRID_DOT,
+    Token::NAV_TEXT,
+    Token::NAV_TEXT_MUTED,
+    Token::SECONDARY,
+    Token::CARD_BG,
+    Token::CARD_BORDER,
 ];
 
 /// Which theme is currently active.
@@ -206,6 +319,25 @@ impl Palette {
     pub fn entries(&self) -> &[Color] {
         &self.entries
     }
+
+    /// Build a palette from 8-bit sRGB components.
+    ///
+    /// The authoring form used by applications: a flat list of
+    /// `(token, rgba)` pairs, one per theme. Unmentioned tokens stay
+    /// transparent.
+    #[must_use]
+    pub fn from_srgb8(kind: ThemeKind, colors: &[(Token, [u8; 4])]) -> Self {
+        let mapped: Vec<(Token, Color)> = colors
+            .iter()
+            .map(|(token, rgba)| {
+                (
+                    *token,
+                    Color::from_srgb8(rgba[0], rgba[1], rgba[2], rgba[3]),
+                )
+            })
+            .collect();
+        Self::new(kind, &mapped)
+    }
 }
 
 /// The three shipped themes.
@@ -217,6 +349,21 @@ pub struct ThemeSet {
 }
 
 impl ThemeSet {
+    /// Build a theme set from three explicit palettes.
+    ///
+    /// The shipped [`ThemeSet::default_set`] is one particular set; an
+    /// application that carries its own brand colours builds its own set and
+    /// hands it to [`ThemeState::new`]. The engine does not care where the
+    /// colours come from — only that every token resolves to one.
+    #[must_use]
+    pub fn from_palettes(light: Palette, dark: Palette, high_contrast: Palette) -> Self {
+        Self {
+            light,
+            dark,
+            high_contrast,
+        }
+    }
+
     /// The default Material-ish light/dark pair plus a high-contrast variant.
     #[must_use]
     pub fn default_set() -> Self {
@@ -263,6 +410,38 @@ impl ThemeSet {
                 (Token::TEXT_SECONDARY, Color::from_srgb8(96, 101, 110, 255)),
                 (Token::TEXT_DISABLED, Color::from_srgb8(120, 125, 133, 128)),
                 (Token::SCRIM, Color::from_srgb8(0, 0, 0, 96)),
+                (Token::PRIMARY_HOVER, Color::from_srgb8(58, 126, 255, 255)),
+                (Token::PRIMARY_PRESSED, Color::from_srgb8(22, 88, 224, 255)),
+                (Token::PRIMARY_SOFT, Color::from_srgb8(232, 238, 254, 255)),
+                (Token::SECONDARY_SOFT, Color::from_srgb8(240, 234, 254, 255)),
+                (Token::SUCCESS_SOFT, Color::from_srgb8(228, 246, 236, 255)),
+                (Token::WARNING_SOFT, Color::from_srgb8(252, 242, 223, 255)),
+                (Token::ERROR_SOFT, Color::from_srgb8(253, 233, 234, 255)),
+                (Token::FOCUS_RING, Color::from_srgb8(38, 110, 255, 255)),
+                (Token::CONTROL_TRACK, Color::from_srgb8(228, 231, 239, 255)),
+                (Token::CONTROL_THUMB, Color::from_srgb8(255, 255, 255, 255)),
+                (Token::CONTROL_HOVER, Color::from_srgb8(236, 239, 246, 255)),
+                (Token::HEADER_BG, Color::from_srgb8(255, 255, 255, 255)),
+                (Token::NAV_BG, Color::from_srgb8(247, 248, 251, 255)),
+                (Token::NAV_HOVER, Color::from_srgb8(236, 238, 244, 255)),
+                (Token::NAV_SELECTED, Color::from_srgb8(228, 235, 253, 255)),
+                (Token::DIVIDER, Color::from_srgb8(234, 236, 242, 255)),
+                (Token::CODE_BG, Color::from_srgb8(28, 32, 41, 255)),
+                (Token::CODE_TEXT, Color::from_srgb8(215, 220, 234, 255)),
+                (Token::OVERLAY_BG, Color::from_srgb8(255, 255, 255, 255)),
+                (Token::HERO_START, Color::from_srgb8(59, 110, 246, 255)),
+                (Token::HERO_END, Color::from_srgb8(138, 92, 246, 255)),
+                (Token::ON_HERO, Color::from_srgb8(255, 255, 255, 255)),
+                (Token::HERO_SCRIM, Color::from_srgb8(15, 18, 28, 200)),
+                (Token::HUD_BG, Color::from_srgb8(255, 255, 255, 246)),
+                (Token::HUD_TEXT, Color::from_srgb8(28, 30, 38, 255)),
+                (Token::ACCENT_SOFT, Color::from_srgb8(255, 240, 232, 255)),
+                (Token::GRID_DOT, Color::from_srgb8(216, 220, 232, 255)),
+                (Token::NAV_TEXT, Color::from_srgb8(42, 47, 58, 255)),
+                (Token::NAV_TEXT_MUTED, Color::from_srgb8(122, 128, 144, 255)),
+                (Token::SECONDARY, Color::from_srgb8(124, 106, 240, 255)),
+                (Token::CARD_BG, Color::from_srgb8(255, 255, 255, 255)),
+                (Token::CARD_BORDER, Color::from_srgb8(228, 230, 238, 255)),
             ],
         );
 
@@ -306,6 +485,38 @@ impl ThemeSet {
                 (Token::TEXT_SECONDARY, Color::from_srgb8(160, 166, 176, 255)),
                 (Token::TEXT_DISABLED, Color::from_srgb8(120, 126, 134, 128)),
                 (Token::SCRIM, Color::from_srgb8(0, 0, 0, 160)),
+                (Token::PRIMARY_HOVER, Color::from_srgb8(140, 180, 255, 255)),
+                (Token::PRIMARY_PRESSED, Color::from_srgb8(88, 132, 235, 255)),
+                (Token::PRIMARY_SOFT, Color::from_srgb8(34, 48, 79, 255)),
+                (Token::SECONDARY_SOFT, Color::from_srgb8(46, 37, 66, 255)),
+                (Token::SUCCESS_SOFT, Color::from_srgb8(28, 58, 42, 255)),
+                (Token::WARNING_SOFT, Color::from_srgb8(59, 47, 27, 255)),
+                (Token::ERROR_SOFT, Color::from_srgb8(61, 34, 38, 255)),
+                (Token::FOCUS_RING, Color::from_srgb8(150, 195, 255, 255)),
+                (Token::CONTROL_TRACK, Color::from_srgb8(45, 51, 65, 255)),
+                (Token::CONTROL_THUMB, Color::from_srgb8(237, 241, 250, 255)),
+                (Token::CONTROL_HOVER, Color::from_srgb8(56, 64, 82, 255)),
+                (Token::HEADER_BG, Color::from_srgb8(23, 26, 33, 255)),
+                (Token::NAV_BG, Color::from_srgb8(20, 23, 29, 255)),
+                (Token::NAV_HOVER, Color::from_srgb8(35, 40, 51, 255)),
+                (Token::NAV_SELECTED, Color::from_srgb8(38, 51, 79, 255)),
+                (Token::DIVIDER, Color::from_srgb8(38, 44, 56, 255)),
+                (Token::CODE_BG, Color::from_srgb8(14, 16, 21, 255)),
+                (Token::CODE_TEXT, Color::from_srgb8(201, 210, 228, 255)),
+                (Token::OVERLAY_BG, Color::from_srgb8(32, 37, 47, 255)),
+                (Token::HERO_START, Color::from_srgb8(76, 125, 255, 255)),
+                (Token::HERO_END, Color::from_srgb8(160, 107, 255, 255)),
+                (Token::ON_HERO, Color::from_srgb8(255, 255, 255, 255)),
+                (Token::HERO_SCRIM, Color::from_srgb8(8, 10, 16, 200)),
+                (Token::HUD_BG, Color::from_srgb8(8, 10, 14, 224)),
+                (Token::HUD_TEXT, Color::from_srgb8(220, 227, 242, 255)),
+                (Token::ACCENT_SOFT, Color::from_srgb8(58, 42, 34, 255)),
+                (Token::GRID_DOT, Color::from_srgb8(51, 58, 72, 255)),
+                (Token::NAV_TEXT, Color::from_srgb8(228, 233, 243, 255)),
+                (Token::NAV_TEXT_MUTED, Color::from_srgb8(138, 147, 166, 255)),
+                (Token::SECONDARY, Color::from_srgb8(160, 130, 255, 255)),
+                (Token::CARD_BG, Color::from_srgb8(32, 35, 42, 255)),
+                (Token::CARD_BORDER, Color::from_srgb8(52, 56, 66, 255)),
             ],
         );
 
@@ -348,6 +559,38 @@ impl ThemeSet {
                 (Token::TEXT_SECONDARY, Color::WHITE),
                 (Token::TEXT_DISABLED, Color::from_srgb8(255, 255, 255, 160)),
                 (Token::SCRIM, Color::BLACK),
+                (Token::PRIMARY_HOVER, Color::from_srgb8(255, 245, 120, 255)),
+                (Token::PRIMARY_PRESSED, Color::from_srgb8(200, 190, 0, 255)),
+                (Token::PRIMARY_SOFT, Color::from_srgb8(60, 58, 0, 255)),
+                (Token::SECONDARY_SOFT, Color::from_srgb8(0, 58, 66, 255)),
+                (Token::SUCCESS_SOFT, Color::from_srgb8(0, 60, 32, 255)),
+                (Token::WARNING_SOFT, Color::from_srgb8(60, 48, 0, 255)),
+                (Token::ERROR_SOFT, Color::from_srgb8(66, 16, 16, 255)),
+                (Token::FOCUS_RING, Color::from_srgb8(255, 230, 0, 255)),
+                (Token::CONTROL_TRACK, Color::from_srgb8(48, 48, 48, 255)),
+                (Token::CONTROL_THUMB, Color::WHITE),
+                (Token::CONTROL_HOVER, Color::from_srgb8(64, 64, 64, 255)),
+                (Token::HEADER_BG, Color::BLACK),
+                (Token::NAV_BG, Color::BLACK),
+                (Token::NAV_HOVER, Color::from_srgb8(40, 40, 40, 255)),
+                (Token::NAV_SELECTED, Color::from_srgb8(255, 230, 0, 255)),
+                (Token::DIVIDER, Color::WHITE),
+                (Token::CODE_BG, Color::BLACK),
+                (Token::CODE_TEXT, Color::WHITE),
+                (Token::OVERLAY_BG, Color::BLACK),
+                (Token::HERO_START, Color::from_srgb8(0, 120, 255, 255)),
+                (Token::HERO_END, Color::from_srgb8(120, 0, 255, 255)),
+                (Token::ON_HERO, Color::BLACK),
+                (Token::HERO_SCRIM, Color::BLACK),
+                (Token::HUD_BG, Color::BLACK),
+                (Token::HUD_TEXT, Color::WHITE),
+                (Token::ACCENT_SOFT, Color::from_srgb8(60, 32, 16, 255)),
+                (Token::GRID_DOT, Color::from_srgb8(64, 64, 64, 255)),
+                (Token::NAV_TEXT, Color::WHITE),
+                (Token::NAV_TEXT_MUTED, Color::from_srgb8(200, 200, 200, 255)),
+                (Token::SECONDARY, Color::from_srgb8(200, 180, 255, 255)),
+                (Token::CARD_BG, Color::BLACK),
+                (Token::CARD_BORDER, Color::WHITE),
             ],
         );
 

@@ -1,0 +1,25 @@
+[package]
+name = "unbound-widgets"
+description = "Standard controls: the shared descriptor, visual state and emission vocabulary every widget speaks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
+unbound-abi.workspace = true
+unbound-gpu.workspace = true
+unbound-text.workspace = true
+unbound-theme.workspace = true
+unbound-world.workspace = true
+unbound-input.workspace = true
+unbound-a11y.workspace = true
+unbound-headless.workspace = true
+accesskit.workspace = true
+rustc-hash.workspace = true
+slotmap.workspace = true
+
+[lints]
+workspace = true

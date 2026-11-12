@@ -5,7 +5,7 @@ use unbound_math::Rect;
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageInfo};
 use crate::canvas::{AlignX, AlignY};
-use crate::gallery::theme_table;
+use crate::theme;
 use crate::widgets;
 
 pub const COLORS_INFO: PageInfo = PageInfo {
@@ -49,9 +49,9 @@ pub const COLOR_EXAMPLES: &[ExampleDef] = &[
         "Semantic swatches",
         "The twelve tokens the shell consumes. Labels show both the semantic role and the numeric slot stored in every primitive.",
         &["unbound-theme"],
-        r#"let tokens = theme_table(ThemeMode::Dark);
+        r#"let lut = theme::lut(ThemeMode::Dark);
 let chip = Rect::new(x, y, 148.0, 72.0);
-scene.rect(chip, 10.0, Token::CARD_BG, Token::BORDER, 1.0, 0.0);"#,
+scene.rect(chip, 10.0, Token::CARD_BG, Token::CARD_BORDER, 1.0, 0.0);"#,
         "A definition list of twelve colour tokens; the swatch exposes the token name as its description.",
         &[
             KnobSpec::segmented("Columns", &["2", "3", "4"], 2),
@@ -219,7 +219,7 @@ fn palette_grid(ctx: &mut DemoCtx<'_, '_>) {
     let rows = swatches.len().div_ceil(columns);
     let cell_w = (rect.size.x - gap * (columns - 1) as f32) / columns as f32;
     let cell_h = ((rect.size.y - gap * (rows - 1) as f32) / rows as f32).clamp(56.0, 82.0);
-    let table = theme_table(ctx.state.theme.is_dark());
+    let table = theme::lut(ctx.state.theme.is_dark());
     for (index, (name, token)) in swatches.iter().enumerate() {
         let col = index % columns;
         let row = index / columns;
@@ -255,9 +255,9 @@ fn palette_grid(ctx: &mut DemoCtx<'_, '_>) {
             AlignY::Top,
         );
         let detail = if show_slots {
-            format!("token {token} · {}", hex(table[*token as usize]))
+            format!("token {token} · {}", hex(table.entries()[*token as usize]))
         } else {
-            hex(table[*token as usize])
+            hex(table.entries()[*token as usize])
         };
         ctx.canvas.text(
             &detail,
@@ -278,8 +278,8 @@ fn palette_grid(ctx: &mut DemoCtx<'_, '_>) {
 fn palette_compare(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
-    let light = theme_table(false);
-    let dark = theme_table(true);
+    let light = theme::lut(false);
+    let dark = theme::lut(true);
     let roles: &[(&str, u16)] = match ctx.knob(0) as usize {
         1 => &[
             ("Text", palette.text),
@@ -346,7 +346,7 @@ fn palette_compare(ctx: &mut DemoCtx<'_, '_>) {
                 28.0,
             );
             ctx.canvas.rect(row, 7.0, *token, 0, 0.0, 0.0);
-            let color = table[*token as usize];
+            let color = table.entries()[*token as usize];
             ctx.canvas.text(
                 role,
                 Rect::new(row.origin.x + 10.0, row.origin.y, 70.0, row.size.y),

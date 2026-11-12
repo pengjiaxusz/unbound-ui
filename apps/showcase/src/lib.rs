@@ -22,5 +22,7 @@ pub mod state;
 pub mod target;
 /// Headless test harness for the button.
 pub mod testing;
+/// The brand palettes of the showcase, packed into the engine's colour LUT.
+pub mod theme;
 /// Reusable gallery controls (buttons, switches, sliders, pills).
 pub mod widgets;

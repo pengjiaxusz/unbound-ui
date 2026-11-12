@@ -8,7 +8,7 @@
 
 use accesskit::Role;
 use showcase::button::{ButtonVisualState, PointerPhase};
-use showcase::gallery::{build, button_rect, palette, theme_table, Labels};
+use showcase::gallery::{build, button_rect, palette, Labels};
 use showcase::keys::{self, KeyAction};
 use showcase::testing::ButtonHarness;
 use unbound_gpu::data::PrimType;
@@ -416,6 +416,7 @@ fn render_button(
         phase,
         focused: false,
         disabled: false,
+        selected: false,
     };
     harness.rebuild_with(visual, 0);
     for update in harness.labels.cache.take_updates() {
@@ -438,7 +439,9 @@ fn render_button(
             )
             .expect("upload");
     }
-    renderer.write_theme(&theme_table(false)).expect("theme");
+    renderer
+        .write_theme_lut(&showcase::theme::lut(false))
+        .expect("theme");
     // Every state gets its own generation from the driver, otherwise the
     // primitive buffer is considered unchanged and the previous state is drawn
     // again.
@@ -511,7 +514,9 @@ fn the_gallery_draws_something() {
             .expect("upload");
     }
 
-    renderer.write_theme(&theme_table(false)).expect("theme");
+    renderer
+        .write_theme_lut(&showcase::theme::lut(false))
+        .expect("theme");
     renderer.render(&scene.upload(1)).expect("render");
     let pixels = renderer.read_pixels().expect("readback");
 

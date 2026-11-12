@@ -90,7 +90,7 @@ impl ButtonHarness {
         } else {
             None
         };
-        ButtonVisualState::resolve(self.node, &self.app.router, focused, self.disabled)
+        button::resolve_state(self.node, &self.app.router, focused, self.disabled)
     }
 
     /// The button centre in window pixels.
@@ -118,6 +118,7 @@ impl ButtonHarness {
             radius: self.desc.radius,
             font_size: self.desc.font_size,
             z: self.desc.z,
+            variant: self.desc.variant,
         };
         let (scene, glyphs, regions, semantics) = gallery::build_interactive(
             &mut self.labels,
@@ -235,6 +236,7 @@ impl ButtonHarness {
             radius: self.desc.radius,
             font_size: self.desc.font_size,
             z: self.desc.z,
+            variant: self.desc.variant,
         };
         gallery::button_frame(VIEWPORT, &desc, &self.glyphs)
     }

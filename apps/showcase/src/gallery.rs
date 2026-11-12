@@ -18,10 +18,11 @@ use unbound_gpu::data::{
 use unbound_gpu::{Camera, SceneUpload};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
 use unbound_input::HitRegion;
-use unbound_math::{Color, Rect, Vec2};
+use unbound_math::{Rect, Vec2};
 use unbound_text::{GlyphCache, GlyphQuad, ShapedText, TextEngine, TextStyle};
+use unbound_theme::Token;
 
-use crate::button::{self, ButtonDesc, ButtonTokens, ButtonVisualState};
+use crate::button::{self, ButtonDesc, ButtonVisualState};
 
 /// The colour tokens the gallery uses.
 ///
@@ -153,23 +154,6 @@ impl Palette {
     }
 }
 
-impl Palette {
-    /// The token set a button needs.
-    #[must_use]
-    pub fn button_tokens(&self) -> ButtonTokens {
-        ButtonTokens {
-            fill: self.primary,
-            fill_hover: self.primary_hover,
-            fill_pressed: self.primary_pressed,
-            fill_disabled: self.disabled_fill,
-            border: self.primary_pressed,
-            label: self.on_primary,
-            label_disabled: self.text_muted,
-            focus_ring: self.focus_ring,
-        }
-    }
-}
-
 /// The token layout, shared by both themes.
 ///
 /// | slot | meaning |
@@ -187,225 +171,64 @@ impl Palette {
 /// | 14 | button label (on primary) |
 /// | 15 | focus ring |
 /// | 16 | disabled fill |
-const TOKEN_SHADOW: u16 = 1;
-const TOKEN_BACKGROUND: u16 = 2;
-const TOKEN_SURFACE: u16 = 3;
-const TOKEN_BORDER: u16 = 4;
-const TOKEN_PRIMARY: u16 = 5;
-const TOKEN_SECONDARY: u16 = 6;
-const TOKEN_SUCCESS: u16 = 7;
-const TOKEN_WARNING: u16 = 8;
-const TOKEN_DANGER: u16 = 9;
-const TOKEN_TEXT: u16 = 10;
-const TOKEN_TEXT_MUTED: u16 = 11;
-const TOKEN_PRIMARY_HOVER: u16 = 12;
-const TOKEN_PRIMARY_PRESSED: u16 = 13;
-const TOKEN_ON_PRIMARY: u16 = 14;
-const TOKEN_FOCUS_RING: u16 = 15;
-const TOKEN_DISABLED_FILL: u16 = 16;
-const TOKEN_HEADER_BG: u16 = 17;
-const TOKEN_NAV_BG: u16 = 18;
-const TOKEN_NAV_HOVER: u16 = 19;
-const TOKEN_NAV_SELECTED: u16 = 20;
-const TOKEN_CARD_BG: u16 = 21;
-const TOKEN_CARD_BORDER: u16 = 22;
-const TOKEN_STAGE_BG: u16 = 23;
-const TOKEN_STAGE_GRID: u16 = 24;
-const TOKEN_CONTROL_TRACK: u16 = 25;
-const TOKEN_CONTROL_THUMB: u16 = 26;
-const TOKEN_CONTROL_HOVER: u16 = 27;
-const TOKEN_CODE_BG: u16 = 28;
-const TOKEN_CODE_TEXT: u16 = 29;
-const TOKEN_OVERLAY_SCRIM: u16 = 30;
-const TOKEN_OVERLAY_BG: u16 = 31;
-const TOKEN_PRIMARY_SOFT: u16 = 32;
-const TOKEN_SUCCESS_SOFT: u16 = 33;
-const TOKEN_WARNING_SOFT: u16 = 34;
-const TOKEN_DANGER_SOFT: u16 = 35;
-const TOKEN_HERO_START: u16 = 36;
-const TOKEN_HERO_END: u16 = 37;
-const TOKEN_ON_HERO: u16 = 38;
-const TOKEN_SELECTION_FILL: u16 = 39;
-const TOKEN_DIVIDER: u16 = 40;
-const TOKEN_HUD_BG: u16 = 41;
-const TOKEN_HUD_TEXT: u16 = 42;
-const TOKEN_ACCENT_SOFT: u16 = 43;
-const TOKEN_GRID_DOT: u16 = 44;
-const TOKEN_SECONDARY_SOFT: u16 = 45;
-const TOKEN_NAV_TEXT: u16 = 46;
-const TOKEN_NAV_TEXT_MUTED: u16 = 47;
-const TOKEN_HERO_SCRIM: u16 = 48;
-
 /// The tokens the gallery uses.
 ///
 /// Both themes share the same slots — only the colours in the table differ —
-/// so switching themes never touches the scene data.
+/// so switching themes never touches the scene data. The slot numbers come
+/// from the engine's semantic vocabulary ([`unbound_theme::Token`]); the
+/// colours themselves live in [`crate::theme`].
 #[must_use]
 pub const fn palette() -> Palette {
     Palette {
-        background: TOKEN_BACKGROUND,
-        surface: TOKEN_SURFACE,
-        border: TOKEN_BORDER,
-        primary: TOKEN_PRIMARY,
-        secondary: TOKEN_SECONDARY,
-        success: TOKEN_SUCCESS,
-        warning: TOKEN_WARNING,
-        danger: TOKEN_DANGER,
-        text: TOKEN_TEXT,
-        text_muted: TOKEN_TEXT_MUTED,
-        shadow: TOKEN_SHADOW,
-        primary_hover: TOKEN_PRIMARY_HOVER,
-        primary_pressed: TOKEN_PRIMARY_PRESSED,
-        on_primary: TOKEN_ON_PRIMARY,
-        focus_ring: TOKEN_FOCUS_RING,
-        disabled_fill: TOKEN_DISABLED_FILL,
-        header_bg: TOKEN_HEADER_BG,
-        nav_bg: TOKEN_NAV_BG,
-        nav_hover: TOKEN_NAV_HOVER,
-        nav_selected: TOKEN_NAV_SELECTED,
-        card_bg: TOKEN_CARD_BG,
-        card_border: TOKEN_CARD_BORDER,
-        stage_bg: TOKEN_STAGE_BG,
-        stage_grid: TOKEN_STAGE_GRID,
-        control_track: TOKEN_CONTROL_TRACK,
-        control_thumb: TOKEN_CONTROL_THUMB,
-        control_hover: TOKEN_CONTROL_HOVER,
-        code_bg: TOKEN_CODE_BG,
-        code_text: TOKEN_CODE_TEXT,
-        overlay_scrim: TOKEN_OVERLAY_SCRIM,
-        overlay_bg: TOKEN_OVERLAY_BG,
-        primary_soft: TOKEN_PRIMARY_SOFT,
-        success_soft: TOKEN_SUCCESS_SOFT,
-        warning_soft: TOKEN_WARNING_SOFT,
-        danger_soft: TOKEN_DANGER_SOFT,
-        hero_start: TOKEN_HERO_START,
-        hero_end: TOKEN_HERO_END,
-        on_hero: TOKEN_ON_HERO,
-        selection_fill: TOKEN_SELECTION_FILL,
-        divider: TOKEN_DIVIDER,
-        hud_bg: TOKEN_HUD_BG,
-        hud_text: TOKEN_HUD_TEXT,
-        accent_soft: TOKEN_ACCENT_SOFT,
-        grid_dot: TOKEN_GRID_DOT,
-        secondary_soft: TOKEN_SECONDARY_SOFT,
-        nav_text: TOKEN_NAV_TEXT,
-        nav_text_muted: TOKEN_NAV_TEXT_MUTED,
-        hero_scrim: TOKEN_HERO_SCRIM,
+        background: Token::SURFACE.raw(),
+        surface: Token::SURFACE_RAISED.raw(),
+        border: Token::OUTLINE.raw(),
+        primary: Token::PRIMARY.raw(),
+        secondary: Token::SECONDARY.raw(),
+        success: Token::SUCCESS.raw(),
+        warning: Token::WARNING.raw(),
+        danger: Token::ERROR.raw(),
+        text: Token::TEXT_PRIMARY.raw(),
+        text_muted: Token::TEXT_SECONDARY.raw(),
+        shadow: Token::SHADOW.raw(),
+        primary_hover: Token::PRIMARY_HOVER.raw(),
+        primary_pressed: Token::PRIMARY_PRESSED.raw(),
+        on_primary: Token::ON_PRIMARY.raw(),
+        focus_ring: Token::FOCUS_RING.raw(),
+        disabled_fill: Token::DISABLED.raw(),
+        header_bg: Token::HEADER_BG.raw(),
+        nav_bg: Token::NAV_BG.raw(),
+        nav_hover: Token::NAV_HOVER.raw(),
+        nav_selected: Token::NAV_SELECTED.raw(),
+        card_bg: Token::CARD_BG.raw(),
+        card_border: Token::CARD_BORDER.raw(),
+        stage_bg: Token::CANVAS_BACKDROP.raw(),
+        stage_grid: Token::GRID.raw(),
+        control_track: Token::CONTROL_TRACK.raw(),
+        control_thumb: Token::CONTROL_THUMB.raw(),
+        control_hover: Token::CONTROL_HOVER.raw(),
+        code_bg: Token::CODE_BG.raw(),
+        code_text: Token::CODE_TEXT.raw(),
+        overlay_scrim: Token::SCRIM.raw(),
+        overlay_bg: Token::OVERLAY_BG.raw(),
+        primary_soft: Token::PRIMARY_SOFT.raw(),
+        success_soft: Token::SUCCESS_SOFT.raw(),
+        warning_soft: Token::WARNING_SOFT.raw(),
+        danger_soft: Token::ERROR_SOFT.raw(),
+        hero_start: Token::HERO_START.raw(),
+        hero_end: Token::HERO_END.raw(),
+        on_hero: Token::ON_HERO.raw(),
+        selection_fill: Token::SELECTION.raw(),
+        divider: Token::DIVIDER.raw(),
+        hud_bg: Token::HUD_BG.raw(),
+        hud_text: Token::HUD_TEXT.raw(),
+        accent_soft: Token::ACCENT_SOFT.raw(),
+        grid_dot: Token::GRID_DOT.raw(),
+        secondary_soft: Token::SECONDARY_SOFT.raw(),
+        nav_text: Token::NAV_TEXT.raw(),
+        nav_text_muted: Token::NAV_TEXT_MUTED.raw(),
+        hero_scrim: Token::HERO_SCRIM.raw(),
     }
-}
-
-/// The colour table the GPU samples.
-///
-/// The first seventeen slots carry the semantic tokens; the rest stay black.
-/// The table is uploaded as a single 4 KiB write, which is what makes a theme
-/// switch free — including while a button is hovered or focused, because the
-/// state colours live in their own slots.
-pub fn theme_table(dark: bool) -> Vec<[u16; 4]> {
-    let mut colors = vec![[0u16; 4]; 512];
-    let mut set = |index: u16, color: Color| {
-        colors[index as usize] = color.to_rgba16f();
-    };
-
-    if dark {
-        set(TOKEN_SHADOW, Color::from_srgb8(0, 0, 0, 160));
-        set(TOKEN_BACKGROUND, Color::from_srgb8(18, 18, 22, 255));
-        set(TOKEN_SURFACE, Color::from_srgb8(32, 33, 40, 255));
-        set(TOKEN_BORDER, Color::from_srgb8(58, 60, 72, 255));
-        set(TOKEN_PRIMARY, Color::from_srgb8(88, 140, 255, 255));
-        set(TOKEN_SECONDARY, Color::from_srgb8(150, 110, 240, 255));
-        set(TOKEN_SUCCESS, Color::from_srgb8(70, 190, 130, 255));
-        set(TOKEN_WARNING, Color::from_srgb8(235, 175, 70, 255));
-        set(TOKEN_DANGER, Color::from_srgb8(235, 90, 95, 255));
-        set(TOKEN_TEXT, Color::from_srgb8(238, 239, 245, 255));
-        set(TOKEN_TEXT_MUTED, Color::from_srgb8(140, 144, 160, 255));
-        set(TOKEN_PRIMARY_HOVER, Color::from_srgb8(110, 160, 255, 255));
-        set(TOKEN_PRIMARY_PRESSED, Color::from_srgb8(64, 110, 220, 255));
-        set(TOKEN_ON_PRIMARY, Color::from_srgb8(12, 16, 26, 255));
-        set(TOKEN_FOCUS_RING, Color::from_srgb8(150, 195, 255, 255));
-        set(TOKEN_DISABLED_FILL, Color::from_srgb8(70, 72, 82, 255));
-        set(TOKEN_HEADER_BG, Color::from_srgb8(23, 26, 33, 255));
-        set(TOKEN_NAV_BG, Color::from_srgb8(20, 23, 29, 255));
-        set(TOKEN_NAV_HOVER, Color::from_srgb8(35, 40, 51, 255));
-        set(TOKEN_NAV_SELECTED, Color::from_srgb8(38, 51, 79, 255));
-        set(TOKEN_CARD_BG, Color::from_srgb8(27, 31, 39, 255));
-        set(TOKEN_CARD_BORDER, Color::from_srgb8(44, 50, 64, 255));
-        set(TOKEN_STAGE_BG, Color::from_srgb8(23, 26, 33, 255));
-        set(TOKEN_STAGE_GRID, Color::from_srgb8(38, 43, 54, 255));
-        set(TOKEN_CONTROL_TRACK, Color::from_srgb8(45, 51, 65, 255));
-        set(TOKEN_CONTROL_THUMB, Color::from_srgb8(237, 241, 250, 255));
-        set(TOKEN_CONTROL_HOVER, Color::from_srgb8(56, 64, 82, 255));
-        set(TOKEN_CODE_BG, Color::from_srgb8(14, 16, 21, 255));
-        set(TOKEN_CODE_TEXT, Color::from_srgb8(201, 210, 228, 255));
-        set(TOKEN_OVERLAY_SCRIM, Color::from_srgb8(0, 0, 0, 150));
-        set(TOKEN_OVERLAY_BG, Color::from_srgb8(32, 37, 47, 255));
-        set(TOKEN_PRIMARY_SOFT, Color::from_srgb8(34, 48, 79, 255));
-        set(TOKEN_SUCCESS_SOFT, Color::from_srgb8(28, 58, 42, 255));
-        set(TOKEN_WARNING_SOFT, Color::from_srgb8(59, 47, 27, 255));
-        set(TOKEN_DANGER_SOFT, Color::from_srgb8(61, 34, 38, 255));
-        set(TOKEN_HERO_START, Color::from_srgb8(76, 125, 255, 255));
-        set(TOKEN_HERO_END, Color::from_srgb8(160, 107, 255, 255));
-        set(TOKEN_ON_HERO, Color::from_srgb8(255, 255, 255, 255));
-        set(TOKEN_SELECTION_FILL, Color::from_srgb8(120, 165, 255, 48));
-        set(TOKEN_DIVIDER, Color::from_srgb8(38, 44, 56, 255));
-        set(TOKEN_HUD_BG, Color::from_srgb8(8, 10, 14, 224));
-        set(TOKEN_HUD_TEXT, Color::from_srgb8(220, 227, 242, 255));
-        set(TOKEN_ACCENT_SOFT, Color::from_srgb8(58, 42, 34, 255));
-        set(TOKEN_GRID_DOT, Color::from_srgb8(51, 58, 72, 255));
-        set(TOKEN_SECONDARY_SOFT, Color::from_srgb8(46, 37, 66, 255));
-        set(TOKEN_NAV_TEXT, Color::from_srgb8(228, 233, 243, 255));
-        set(TOKEN_NAV_TEXT_MUTED, Color::from_srgb8(138, 147, 166, 255));
-        set(TOKEN_HERO_SCRIM, Color::from_srgb8(8, 10, 16, 200));
-    } else {
-        set(TOKEN_SHADOW, Color::from_srgb8(20, 22, 30, 60));
-        set(TOKEN_BACKGROUND, Color::from_srgb8(245, 246, 250, 255));
-        set(TOKEN_SURFACE, Color::from_srgb8(255, 255, 255, 255));
-        set(TOKEN_BORDER, Color::from_srgb8(222, 224, 232, 255));
-        set(TOKEN_PRIMARY, Color::from_srgb8(52, 100, 220, 255));
-        set(TOKEN_SECONDARY, Color::from_srgb8(120, 80, 210, 255));
-        set(TOKEN_SUCCESS, Color::from_srgb8(30, 160, 100, 255));
-        set(TOKEN_WARNING, Color::from_srgb8(220, 155, 40, 255));
-        set(TOKEN_DANGER, Color::from_srgb8(220, 60, 65, 255));
-        set(TOKEN_TEXT, Color::from_srgb8(28, 30, 38, 255));
-        set(TOKEN_TEXT_MUTED, Color::from_srgb8(120, 124, 140, 255));
-        set(TOKEN_PRIMARY_HOVER, Color::from_srgb8(70, 120, 240, 255));
-        set(TOKEN_PRIMARY_PRESSED, Color::from_srgb8(36, 78, 190, 255));
-        set(TOKEN_ON_PRIMARY, Color::from_srgb8(255, 255, 255, 255));
-        set(TOKEN_FOCUS_RING, Color::from_srgb8(28, 90, 210, 255));
-        set(TOKEN_DISABLED_FILL, Color::from_srgb8(200, 204, 214, 255));
-        set(TOKEN_HEADER_BG, Color::from_srgb8(255, 255, 255, 255));
-        set(TOKEN_NAV_BG, Color::from_srgb8(247, 248, 251, 255));
-        set(TOKEN_NAV_HOVER, Color::from_srgb8(236, 238, 244, 255));
-        set(TOKEN_NAV_SELECTED, Color::from_srgb8(228, 235, 253, 255));
-        set(TOKEN_CARD_BG, Color::from_srgb8(255, 255, 255, 255));
-        set(TOKEN_CARD_BORDER, Color::from_srgb8(228, 230, 238, 255));
-        set(TOKEN_STAGE_BG, Color::from_srgb8(245, 246, 250, 255));
-        set(TOKEN_STAGE_GRID, Color::from_srgb8(227, 230, 239, 255));
-        set(TOKEN_CONTROL_TRACK, Color::from_srgb8(228, 231, 239, 255));
-        set(TOKEN_CONTROL_THUMB, Color::from_srgb8(255, 255, 255, 255));
-        set(TOKEN_CONTROL_HOVER, Color::from_srgb8(236, 239, 246, 255));
-        set(TOKEN_CODE_BG, Color::from_srgb8(28, 32, 41, 255));
-        set(TOKEN_CODE_TEXT, Color::from_srgb8(215, 220, 234, 255));
-        set(TOKEN_OVERLAY_SCRIM, Color::from_srgb8(15, 18, 26, 90));
-        set(TOKEN_OVERLAY_BG, Color::from_srgb8(255, 255, 255, 255));
-        set(TOKEN_PRIMARY_SOFT, Color::from_srgb8(232, 238, 254, 255));
-        set(TOKEN_SUCCESS_SOFT, Color::from_srgb8(228, 246, 236, 255));
-        set(TOKEN_WARNING_SOFT, Color::from_srgb8(252, 242, 223, 255));
-        set(TOKEN_DANGER_SOFT, Color::from_srgb8(253, 233, 234, 255));
-        set(TOKEN_HERO_START, Color::from_srgb8(59, 110, 246, 255));
-        set(TOKEN_HERO_END, Color::from_srgb8(138, 92, 246, 255));
-        set(TOKEN_ON_HERO, Color::from_srgb8(255, 255, 255, 255));
-        set(TOKEN_SELECTION_FILL, Color::from_srgb8(59, 110, 246, 40));
-        set(TOKEN_DIVIDER, Color::from_srgb8(234, 236, 242, 255));
-        set(TOKEN_HUD_BG, Color::from_srgb8(255, 255, 255, 246));
-        set(TOKEN_HUD_TEXT, Color::from_srgb8(28, 30, 38, 255));
-        set(TOKEN_ACCENT_SOFT, Color::from_srgb8(255, 240, 232, 255));
-        set(TOKEN_GRID_DOT, Color::from_srgb8(216, 220, 232, 255));
-        set(TOKEN_SECONDARY_SOFT, Color::from_srgb8(240, 234, 254, 255));
-        set(TOKEN_NAV_TEXT, Color::from_srgb8(42, 47, 58, 255));
-        set(TOKEN_NAV_TEXT_MUTED, Color::from_srgb8(122, 128, 144, 255));
-        set(TOKEN_HERO_SCRIM, Color::from_srgb8(15, 18, 28, 200));
-    }
-    colors
 }
 
 /// The gallery scene, ready to be uploaded.
@@ -1067,7 +890,7 @@ pub fn build_interactive(
     }
     labels.prewarm(BUTTON_LABEL_ALPHABET, button.font_size);
     let mut glyphs = labels.layout(&button.label, Vec2::ZERO, button.font_size);
-    let artifacts = button::emit_button(node, button, visual, palette.button_tokens(), &mut glyphs);
+    let artifacts = button::emit_button(node, button, visual, &mut glyphs);
     let base = scene.payloads.len() as u32;
     let mut primitives = artifacts.primitives;
     for prim in &mut primitives {
@@ -1107,7 +930,7 @@ pub fn build_interactive(
             Rect::new(0.0, 0.0, viewport.0, viewport.1),
         ),
     );
-    let mut button_node = artifacts.a11y;
+    let mut button_node = artifacts.a11y.unwrap_or_default();
     button_node.value = click_count.to_string();
     semantics.upsert(node, button_node);
     semantics.set_children(A11Y_ROOT, &[node]);

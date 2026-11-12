@@ -13,6 +13,7 @@ members = [
     "crates/unbound-input",
     "crates/unbound-a11y",
     "crates/unbound-theme",
+    "crates/unbound-widgets",
     "crates/unbound-platform",
     "crates/unbound-asset",
     "crates/unbound-graph",
@@ -51,6 +52,7 @@ unbound-graph = { path = "crates/unbound-graph" }
 unbound-host = { path = "crates/unbound-host" }
 unbound-kpi = { path = "crates/unbound-kpi" }
 unbound-theme = { path = "crates/unbound-theme" }
+unbound-widgets = { path = "crates/unbound-widgets" }
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 
 crossbeam-channel = { version = "0.5", default-features = false, features = ["std"] }

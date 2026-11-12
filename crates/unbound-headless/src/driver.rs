@@ -288,6 +288,15 @@ impl TestApp {
         self.apply_focus();
     }
 
+    /// Remove the keyboard focus.
+    ///
+    /// The semantic tree falls back to its root, exactly like a window that
+    /// loses focus to another widget.
+    pub fn clear_focus(&mut self) {
+        self.focus = None;
+        self.apply_focus();
+    }
+
     /// The focused semantic id, if any.
     #[must_use]
     pub fn focused_key(&self) -> Option<u64> {

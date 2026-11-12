@@ -11,9 +11,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use showcase::gallery;
 use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
+use showcase::theme;
 
 use unbound_gpu::atlas::{AtlasKind, AtlasSet, AtlasUpload};
 use unbound_gpu::device::{Gpu, GpuConfig};
@@ -27,6 +27,7 @@ use unbound_platform::window::{
     ButtonState, Modifiers, MouseButton, PlatformEvent, PlatformState, WindowConfig,
 };
 use unbound_platform::Extent;
+use unbound_theme::{ThemeKind, ThemeState};
 use winit::window::Window;
 
 use showcase::shell::WindowCommand;
@@ -46,6 +47,9 @@ struct Showcase {
     atlases: Option<Arc<AtlasSet>>,
     /// The theme currently uploaded to the GPU.
     uploaded_theme: Option<ThemeMode>,
+    /// The live theme: the engine owns the colour table, the app only asks
+    /// for a different palette.
+    theme: ThemeState,
     /// Physical pointer position.
     pointer: Vec2,
     /// Keyboard modifiers.
@@ -80,6 +84,7 @@ impl Showcase {
             swapchain: None,
             atlases: None,
             uploaded_theme: None,
+            theme: ThemeState::new(theme::theme_set(), ThemeKind::Light),
             pointer: Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
             cursor: CursorKind::Default,
@@ -230,7 +235,12 @@ impl Showcase {
             return;
         }
         if let Some(renderer) = &mut self.renderer {
-            let _ = renderer.write_theme(&gallery::theme_table(self.app.state.theme.is_dark()));
+            // Switching the theme only rewrites the 4 KiB colour table: no
+            // layout, no instance re-upload.
+            let _ = self
+                .theme
+                .switch(theme::kind(self.app.state.theme.is_dark()));
+            let _ = renderer.write_theme_lut(self.theme.lut());
             self.uploaded_theme = Some(self.app.state.theme);
         }
     }
@@ -719,7 +729,7 @@ fn render_to_png(
             .map_err(|e| e.to_string())?;
     }
     renderer
-        .write_theme(&gallery::theme_table(dark))
+        .write_theme_lut(&theme::lut(dark))
         .map_err(|e| e.to_string())?;
     renderer
         .render(&app.scene.upload(1))
