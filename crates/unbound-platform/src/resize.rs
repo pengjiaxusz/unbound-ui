@@ -73,6 +73,13 @@ pub struct ResizeTracker {
     settle: Duration,
     /// Set while the user is dragging a window edge.
     dragging: bool,
+    /// Set when the driver rejected the swapchain.
+    ///
+    /// The settle window exists to avoid rebuilding the chain while the user
+    /// is still dragging. But once the driver has said `OUT_OF_DATE`, the
+    /// chain is already unusable — waiting for the window to settle would
+    /// leave the window showing the old resolution for another frame.
+    forced: bool,
     /// Number of committed recreations, for diagnostics.
     recreations: u32,
     /// Number of resize messages that were absorbed instead of acted on.
@@ -89,6 +96,7 @@ impl ResizeTracker {
             pending_since: None,
             settle,
             dragging: false,
+            forced: false,
             recreations: 0,
             absorbed: 0,
         }
@@ -167,13 +175,40 @@ impl ResizeTracker {
         self.poll(now)
     }
 
+    /// Mark the swapchain as out of date.
+    ///
+    /// The driver already rejected the old swapchain, so the settle window
+    /// is bypassed: the next [`ResizeTracker::poll`] commits immediately.
+    ///
+    /// Without this the window keeps the old resolution until the user stops
+    /// dragging for the settle window — and every frame in between reports
+    /// `ERROR_OUT_OF_DATE_KHR` again.
+    pub fn mark_out_of_date(&mut self, extent: Extent) {
+        if extent.is_empty() {
+            return;
+        }
+        if extent != self.pending {
+            if extent != self.committed {
+                self.absorbed += 1;
+            }
+            self.pending = extent;
+        }
+        self.forced = true;
+        self.pending_since = Some(Instant::now());
+    }
+
     /// Check whether the pending size has settled and must be committed.
     pub fn poll(&mut self, now: Instant) -> ResizeAction {
         if !self.is_dirty() {
+            self.forced = false;
             return ResizeAction::None;
         }
         if self.dragging {
             return ResizeAction::None;
+        }
+        if self.forced {
+            // The driver rejected the chain: rebuild now.
+            return self.commit();
         }
         let Some(since) = self.pending_since else {
             return ResizeAction::None;
@@ -187,10 +222,12 @@ impl ResizeTracker {
     /// Commit the pending extent.
     fn commit(&mut self) -> ResizeAction {
         if self.pending == self.committed {
+            self.forced = false;
             return ResizeAction::None;
         }
         self.committed = self.pending;
         self.pending_since = None;
+        self.forced = false;
         self.recreations += 1;
         ResizeAction::Recreate(self.committed)
     }
@@ -265,6 +302,38 @@ mod tests {
             "the final size is applied the moment the drag ends"
         );
         assert_eq!(tracker.recreations(), 1);
+    }
+
+    /// The driver has already rejected the swapchain: the settle window is
+    /// pointless, the chain has to be rebuilt on the next poll.
+    #[test]
+    fn out_of_date_marks_the_resize_tracker_dirty_immediately() {
+        let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
+        let now = Instant::now();
+        assert_eq!(
+            tracker.on_resized(extent(900, 600), now),
+            ResizeAction::None,
+            "the first message must not trigger a rebuild"
+        );
+        // The driver rejects the chain before the size has settled.
+        tracker.mark_out_of_date(extent(900, 600));
+        assert_eq!(
+            tracker.poll(now + Duration::from_millis(1)),
+            ResizeAction::Recreate(extent(900, 600)),
+            "an out-of-date swapchain is rebuilt without waiting for the settle window"
+        );
+        assert!(!tracker.is_dirty());
+        assert_eq!(tracker.recreations(), 1);
+    }
+
+    /// A chain the driver rejected at a size the OS has not reported yet is
+    /// still rebuilt — otherwise the window keeps the stale resolution.
+    #[test]
+    fn an_out_of_date_chain_is_rebuilt_even_without_a_resize_message() {
+        let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
+        let now = Instant::now();
+        tracker.mark_out_of_date(extent(1024, 768));
+        assert_eq!(tracker.poll(now), ResizeAction::Recreate(extent(1024, 768)));
     }
 
     #[test]

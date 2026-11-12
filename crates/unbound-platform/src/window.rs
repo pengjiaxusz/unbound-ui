@@ -171,6 +171,12 @@ pub struct PlatformState {
     pub present: PresentWaitPolicy,
     /// The current OS scale factor.
     pub scale_factor: f64,
+    /// The modifier keys that are currently held.
+    ///
+    /// A shortcut is only meaningful together with the modifiers, so the
+    /// state keeps them: an application that reads the modifier state from
+    /// the event stream alone has to track it itself.
+    pub modifiers: Modifiers,
     /// Whether the window is focused.
     pub focused: bool,
     /// Whether the window is visible.
@@ -187,6 +193,7 @@ impl PlatformState {
             pacer: FramePacer::new(config.refresh),
             present,
             scale_factor: 1.0,
+            modifiers: Modifiers::default(),
             focused: true,
             visible: config.visible,
         }
@@ -350,6 +357,7 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
             // The application lays out in logical units, so it has to know the
             // device scale to keep input, glyph rasterisation and the camera in
             // one coordinate space.
+            state.pacer.request_immediate(now);
             out.push(event.clone());
         }
         PlatformEvent::CursorMoved { .. }
@@ -362,19 +370,32 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
             // The application draws from these events; swallowing them here
             // is what made every widget look inert while the latency clock
             // kept ticking.
+            //
+            // The frame that reacts to the input must not wait for the next
+            // vsync: the pacer would otherwise hold the response back for a
+            // whole refresh interval.
+            state.pacer.request_immediate(now);
             out.push(event.clone());
         }
-        PlatformEvent::ModifiersChanged(_) => {}
+        PlatformEvent::ModifiersChanged(mods) => {
+            // The application needs the modifiers to interpret a shortcut.
+            state.modifiers = *mods;
+            out.push(PlatformEvent::ModifiersChanged(*mods));
+        }
         PlatformEvent::Focused(focused) => {
             state.focused = *focused;
+            out.push(PlatformEvent::Focused(*focused));
         }
         PlatformEvent::VisibilityChanged(visible) => {
             state.visible = *visible;
             state.pacer.set_visible(*visible);
+            out.push(PlatformEvent::VisibilityChanged(*visible));
         }
         PlatformEvent::RedrawRequested => out.push(PlatformEvent::RedrawRequested),
         PlatformEvent::CloseRequested => out.push(PlatformEvent::CloseRequested),
-        PlatformEvent::RecreateSwapchain(_) => {}
+        PlatformEvent::RecreateSwapchain(extent) => {
+            out.push(PlatformEvent::RecreateSwapchain(*extent));
+        }
     }
     out
 }
@@ -506,6 +527,55 @@ mod tests {
             .latency
             .on_present(now + std::time::Duration::from_millis(4));
         assert!(state.latency.last().is_some());
+    }
+
+    /// Every input event has to reach the application.
+    ///
+    /// The engine draws from these events; swallowing them here is what made
+    /// every widget look inert while the latency clock kept ticking. The
+    /// modifiers, the focus state and the visibility were dropped as well.
+    #[test]
+    fn input_and_wheel_events_are_forwarded_to_the_application() {
+        let config = WindowConfig::default();
+        let mut state = PlatformState::new(
+            &config,
+            Extent::new(1280, 800),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        let now = Instant::now();
+
+        let events = [
+            PlatformEvent::CursorMoved { x: 10.0, y: 20.0 },
+            PlatformEvent::MouseWheel {
+                delta_x: 0.0,
+                delta_y: 40.0,
+            },
+            PlatformEvent::MouseInput {
+                state: ButtonState::Pressed,
+                button: MouseButton::Left,
+            },
+            PlatformEvent::KeyInput {
+                state: ButtonState::Pressed,
+                key: PlatformKey::Character("t".to_string()),
+                repeat: false,
+            },
+            PlatformEvent::ModifiersChanged(Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            }),
+            PlatformEvent::Focused(false),
+            PlatformEvent::VisibilityChanged(false),
+        ];
+        for event in &events {
+            let out = apply(&mut state, event, now);
+            assert!(
+                out.iter().any(|forwarded| forwarded == event),
+                "{event:?} must be forwarded: {out:?}"
+            );
+        }
+        // The modifiers are also remembered on the state, so a shortcut can be
+        // resolved without tracking the event stream.
+        assert!(state.modifiers.shift);
     }
 
     #[test]
