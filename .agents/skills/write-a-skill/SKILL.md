@@ -142,3 +142,4 @@ description: 能力的简要描述。当 [具体触发条件] 时使用。
 - 四条语言轴互相独立：`chinese_programming`（**目标项目**代码里的标识符）、`skill_lang`（文档语言）、`commit_zh`（提交信息语言）、技能脚本语言（恒为英文、无选项）。
 - 新增技能照抄 `commit` 技能的双语模板结构；新增语言时同步扩展 `skill_lang` 校验（CLI / GUI / core）。
 - `SKILL.md` = 托管框架块（`PENGJ_TEMPLATE_START/END`，`update` 时原位替换）+ 块外项目专属区（归用户、永不覆盖）。文档型定制与提交前检查的定义都写在块外；可执行门禁的形式与位置由项目自定，框架不预设。
+- 托管块与 `.agents/skills/*/scripts/` 脚本归 `pengj-templates` 所有，严禁直接篡改；项目专属配置写在块外，随时用 `cargo run -p pengj-templates-cli -- audit --dir . --diff` 巡检对齐。
