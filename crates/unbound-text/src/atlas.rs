@@ -241,30 +241,155 @@ impl Atlas {
             return Some(slot);
         }
 
-        // No room anywhere: evict the coldest glyph and retry once. A second
-        // eviction round is not attempted because it cannot help when the
-        // request itself is too large.
+        // No room anywhere: free enough of the coldest slots to fit the
+        // request. One eviction is not enough when the new glyph is wider than
+        // the coldest resident one — a 48 px glyph cannot move into the 8 px
+        // rectangle of a full stop — and giving up at that point silently
+        // dropped the glyph from the frame.
         //
-        // The eviction is only committed if the retry succeeds. A failure
-        // would otherwise destroy a live, unrelated glyph for nothing.
-        let (evicted_key, slot) = self.evict_coldest()?;
-        if let Some(slot) = self.try_place(need_w, need_h, w, h) {
+        // The batch is transactional: the caller only learns about the
+        // evictions once the placement succeeded, and a failed allocation puts
+        // every slot (and every free rectangle) back.
+        const MAX_EVICTIONS_PER_ALLOCATION: usize = 16;
+        let free_before = self.free.clone();
+        let mut batch: Vec<(GlyphKey, GlyphSlot)> = Vec::new();
+        let placement = loop {
+            if let Some(slot) = self.try_place(need_w, need_h, w, h) {
+                break Some(slot);
+            }
+            if batch.len() >= MAX_EVICTIONS_PER_ALLOCATION {
+                break None;
+            }
+            match self.evict_coldest() {
+                Some(entry) => {
+                    batch.push(entry);
+                    // Adjacent holes are only useful once merged: sixteen
+                    // separate 8 px rectangles still cannot hold a 48 px glyph.
+                    self.coalesce_free_rects();
+                }
+                None => break None,
+            }
+        };
+        if let Some(slot) = placement {
             self.slots.insert(key, slot);
-            evicted.push(evicted_key);
+            evicted.extend(batch.into_iter().map(|(key, _)| key));
             return Some(slot);
         }
-        // The retry failed: put the evicted glyph back where it was, so the
-        // atlas is left exactly as it was found.
-        self.slots.insert(evicted_key, slot);
-        self.free.push(FreeRect {
-            layer: slot.layer,
-            x: slot.x,
-            y: slot.y,
-            w: slot.w + pad,
-            h: slot.h + pad,
-        });
-        self.evictions = self.evictions.saturating_sub(1);
+        // Last resort: empty the coldest page. The request already fits in a
+        // page, so a blank page is guaranteed to accept it.
+        if need_w <= self.config.page_size
+            && need_h <= self.config.page_size
+            && self.reset_coldest_page(&mut batch)
+        {
+            if let Some(slot) = self.try_place(need_w, need_h, w, h) {
+                self.slots.insert(key, slot);
+                evicted.extend(batch.into_iter().map(|(key, _)| key));
+                return Some(slot);
+            }
+            debug_assert!(
+                false,
+                "an empty page must fit a request that fits in a page"
+            );
+            return None;
+        }
+        let evicted_count = batch.len() as u64;
+        self.free = free_before;
+        for (key, slot) in batch {
+            self.slots.insert(key, slot);
+        }
+        self.evictions = self.evictions.saturating_sub(evicted_count);
         None
+    }
+
+    /// Merge free rectangles that share an edge.
+    ///
+    /// Eviction hands back one rectangle per glyph, so freeing a run of
+    /// neighbours used to leave a row of small holes that no large glyph could
+    /// ever use. Merging them (same row and height horizontally, same column
+    /// and width vertically) turns the run back into usable space.
+    fn coalesce_free_rects(&mut self) {
+        let mut merged = true;
+        while merged {
+            merged = false;
+            'restart: for i in 0..self.free.len() {
+                for j in (i + 1)..self.free.len() {
+                    let a = self.free[i];
+                    let b = self.free[j];
+                    if a.layer != b.layer {
+                        continue;
+                    }
+                    if a.y == b.y && a.h == b.h && (a.x + a.w == b.x || b.x + b.w == a.x) {
+                        self.free[i] = FreeRect {
+                            layer: a.layer,
+                            x: a.x.min(b.x),
+                            y: a.y,
+                            w: a.w + b.w,
+                            h: a.h,
+                        };
+                        self.free.swap_remove(j);
+                        merged = true;
+                        break 'restart;
+                    }
+                    if a.x == b.x && a.w == b.w && (a.y + a.h == b.y || b.y + b.h == a.y) {
+                        self.free[i] = FreeRect {
+                            layer: a.layer,
+                            x: a.x,
+                            y: a.y.min(b.y),
+                            w: a.w,
+                            h: a.h + b.h,
+                        };
+                        self.free.swap_remove(j);
+                        merged = true;
+                        break 'restart;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Evict every glyph on the least recently used page and blank it.
+    ///
+    /// Only reached when no bounded number of single evictions can satisfy the
+    /// request, i.e. when the atlas is genuinely full. Returns `false` when
+    /// there is no page to reset.
+    fn reset_coldest_page(&mut self, batch: &mut Vec<(GlyphKey, GlyphSlot)>) -> bool {
+        let mut best: Option<(u64, usize)> = None;
+        for (index, page) in self.pages.iter().enumerate() {
+            if page.shelves.is_empty() {
+                continue;
+            }
+            let Some(oldest) = self
+                .slots
+                .values()
+                .filter(|slot| slot.layer as usize == index)
+                .map(|slot| slot.last_used)
+                .min()
+            else {
+                continue;
+            };
+            if best.is_none_or(|(stamp, _)| oldest < stamp) {
+                best = Some((oldest, index));
+            }
+        }
+        let Some((_, layer)) = best else {
+            return false;
+        };
+        let keys: Vec<GlyphKey> = self
+            .slots
+            .iter()
+            .filter(|(_, slot)| slot.layer as usize == layer)
+            .map(|(key, _)| *key)
+            .collect();
+        for key in keys {
+            if let Some(slot) = self.slots.remove(&key) {
+                batch.push((key, slot));
+                self.evictions += 1;
+            }
+        }
+        self.pages[layer].shelves.clear();
+        self.pages[layer].next_y = 0;
+        self.free.retain(|rect| rect.layer as usize != layer);
+        true
     }
 
     fn try_place(&mut self, need_w: u32, need_h: u32, w: u32, h: u32) -> Option<GlyphSlot> {
@@ -742,23 +867,24 @@ mod tests {
             AtlasConfig {
                 page_size: 64,
                 max_layers: 1,
-                padding: 0,
+                padding: 1,
             },
             1,
         );
         a.begin_frame(1);
-        // Fill the page with 16x16 glyphs.
-        for i in 0..16u16 {
+        // 16 px glyphs plus the 1 px gutter: three fit per 64 px shelf and
+        // three shelves fit in the page, so nine glyphs fill it exactly.
+        for i in 0..9u16 {
             let key = GlyphKey::new(i, 16.0, 0, false, 1);
             assert!(a.allocate(key, 16, 16, &mut evicted).is_some());
         }
         let before = a.len();
-        assert_eq!(before, 16);
-        // A glyph that does not fit even in a whole page: the eviction is
-        // attempted and the retry fails, so the atlas must be left exactly
-        // as it was found.
-        let too_big = GlyphKey::new(999, 16.0, 0, false, 1);
-        assert!(a.allocate(too_big, 40, 40, &mut evicted).is_none());
+        assert_eq!(before, 9);
+        // 64 px plus the 1 px gutter is wider than a whole page, so the
+        // request can never be satisfied: the evictions attempted on the way
+        // must all be rolled back.
+        let impossible = GlyphKey::new(999, 16.0, 0, false, 1);
+        assert!(a.allocate(impossible, 64, 16, &mut evicted).is_none());
         assert_eq!(
             a.len(),
             before,
@@ -766,6 +892,40 @@ mod tests {
         );
         assert!(evicted.is_empty(), "nothing was really evicted");
         assert_eq!(a.evictions(), 0);
+    }
+
+    /// Batching evictions is what lets a glyph larger than every cold slot fit.
+    ///
+    /// A single eviction frees the rectangle of the coldest glyph — often a
+    /// small punctuation mark — and the retry still fails, which used to drop
+    /// the new glyph from the frame entirely.
+    #[test]
+    fn a_glyph_larger_than_every_cold_slot_still_fits() {
+        let mut evicted = Vec::new();
+        let mut a = Atlas::new(
+            AtlasConfig {
+                page_size: 64,
+                max_layers: 1,
+                padding: 0,
+            },
+            1,
+        );
+        a.begin_frame(1);
+        for i in 0..64u16 {
+            assert!(
+                a.allocate(GlyphKey::new(i, 8.0, 0, false, 1), 8, 8, &mut evicted)
+                    .is_some(),
+                "glyph {i}"
+            );
+        }
+        a.begin_frame(2);
+        let large = GlyphKey::new(999, 48.0, 0, false, 1);
+        let slot = a
+            .allocate(large, 48, 48, &mut evicted)
+            .expect("the atlas must free enough room for a large glyph");
+        assert!(slot.x + 48 <= 64 && slot.y + 48 <= 64);
+        assert!(evicted.len() > 1, "one 8 px slot cannot hold a 48 px glyph");
+        assert!(a.touch(&large).is_some());
     }
 
     #[test]

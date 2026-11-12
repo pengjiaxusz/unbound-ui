@@ -13,7 +13,8 @@
 use accesskit::Role;
 use unbound_a11y::{A11yNode, Semantics};
 use unbound_gpu::data::{
-    BlendMode, GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform, PrimType, SubElement,
+    BlendMode, GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform, PrimFlags, PrimType,
+    SubElement,
 };
 use unbound_gpu::{Camera, SceneUpload};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
@@ -362,7 +363,10 @@ impl Gallery {
                     PrimType::Glyph
                 },
                 BlendMode::Normal,
-                SubElement::Content as u16,
+                // The shader has to know that the RGBA texel is a distance
+                // field; without the flag it treats it as a plain colour
+                // bitmap and paints an opaque blob.
+                SubElement::Content as u16 | if quad.msdf { PrimFlags::MSDF.bits() } else { 0 },
             ),
             z_and_opacity: GpuPrimitiveInstance::pack_z_opacity(z, 1.0),
             extra_payload_idx: payload_idx,

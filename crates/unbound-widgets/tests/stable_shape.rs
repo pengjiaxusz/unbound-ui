@@ -42,6 +42,7 @@ fn label() -> Vec<GlyphQuad> {
             uv: [0.0, 0.0, 1.0, 1.0],
             layer: 0,
             color: false,
+            msdf: false,
             phase: 0,
         })
         .collect()

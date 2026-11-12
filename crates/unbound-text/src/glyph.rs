@@ -16,7 +16,7 @@ use cosmic_text::{fontdb, CacheKey, CacheKeyFlags, SwashCache};
 use rustc_hash::FxHashMap;
 use unbound_math::{Rect, Vec2};
 
-use crate::atlas::{GlyphAtlas, GlyphKey, GlyphSlot, SUBPIXEL_PHASES};
+use crate::atlas::{GlyphAtlas, GlyphKey, GlyphSlot};
 use crate::sdf;
 use crate::shaping::{PositionedGlyph, ShapedText, TextEngine};
 
@@ -69,6 +69,12 @@ pub struct ResolvedGlyph {
     pub advance: f32,
     /// True when the glyph came from the RGBA atlas.
     pub color: bool,
+    /// True when the RGBA atlas entry is a multi-channel distance field.
+    ///
+    /// The flag has to reach the fragment shader: without it the distance
+    /// field is sampled as an ordinary RGBA bitmap and the glyph turns into a
+    /// white blob.
+    pub msdf: bool,
 }
 
 impl ResolvedGlyph {
@@ -79,13 +85,17 @@ impl ResolvedGlyph {
     /// generated for the phase implied by `pen.x`), so adding the fractional
     /// part a second time would shift the glyph twice.
     ///
-    /// `pen.x` is floored and `pen.y` is rounded, which puts the quad's
-    /// corners on whole raster pixels. That is what lets the atlas texels
-    /// land one-to-one on the physical pixels the quad covers.
+    /// The horizontal origin comes from [`GlyphCache::quantize_x`], which
+    /// carries the integer pixel along with the phase: a pen fraction in
+    /// `[0.875, 1.0)` rounds to phase 0 of the *next* pixel, and the quad has
+    /// to move with it. Dropping that carry (the old `% 4` on its own) put
+    /// 12.5 % of all glyphs one pixel to the left, where their edge overlapped
+    /// the previous letter.
     #[must_use]
-    pub fn quad(&self, pen: Vec2) -> Rect {
+    pub fn quad(&self, pen: Vec2, snap_phases: bool) -> Rect {
+        let (base_x, _) = GlyphCache::quantize_x(pen.x, snap_phases);
         Rect::new(
-            pen.x.floor() + self.bearing.x,
+            base_x + self.bearing.x,
             pen.y.round() + self.bearing.y,
             self.size.x,
             self.size.y,
@@ -100,6 +110,8 @@ pub struct GlyphQuad {
     pub uv: [f32; 4],
     pub layer: u32,
     pub color: bool,
+    /// The glyph lives in the RGBA atlas as a distance field.
+    pub msdf: bool,
     /// Horizontal subpixel phase (0..3) used for this glyph.
     pub phase: u8,
 }
@@ -222,14 +234,32 @@ impl GlyphCache {
         }
     }
 
+    /// Split a pen position into a whole-pixel origin and a subpixel phase.
+    ///
+    /// Four phases cover `[0, 1)` as `0, ¼, ½, ¾`. Rounding decides the phase,
+    /// so the top of the last bucket (`fract ≥ 0.875`) rounds to `4` — that is
+    /// phase 0 of the *next* pixel. The whole-pixel origin has to advance with
+    /// it, which is exactly what `div_euclid`/`rem_euclid` give: one helper
+    /// produces both numbers, so they can never disagree.
+    ///
+    /// `snap_phases` forces the whole-pixel raster instead (phase 0 at
+    /// `round(x)`), for callers whose pen is always on the grid.
+    #[must_use]
+    pub fn quantize_x(x: f32, snap_phases: bool) -> (f32, u8) {
+        if snap_phases {
+            return (x.round(), 0);
+        }
+        let quarters = (x * 4.0).round();
+        (quarters.div_euclid(4.0), quarters.rem_euclid(4.0) as u8)
+    }
+
     /// Subpixel phase implied by a pen position.
     #[must_use]
     pub fn phase_for(x: f32) -> u8 {
-        let fract = x - x.floor();
         // Four phases: 0, ¼, ½, ¾. Rounding to the nearest phase keeps the
         // error at most ⅛ px, which is invisible; snapping to whole pixels
         // instead would visibly change letter spacing.
-        ((fract * 4.0).round() as u8) % SUBPIXEL_PHASES
+        Self::quantize_x(x, false).1
     }
 
     /// The subpixel phase a glyph at `pen_x` is actually rasterised at.
@@ -239,12 +269,7 @@ impl GlyphCache {
     /// run-relative position would shift every glyph by up to a pixel.
     #[must_use]
     pub fn phase_at(&self, pen_x: f32) -> u8 {
-        if self.snap_phases {
-            // The raster is the one generated for a whole-pixel pen.
-            0
-        } else {
-            Self::phase_for(pen_x)
-        }
+        Self::quantize_x(pen_x, self.snap_phases).1
     }
 
     /// Resolve (and if needed rasterise) one glyph.
@@ -327,6 +352,7 @@ impl GlyphCache {
                 size: Vec2::ZERO,
                 advance: glyph.w,
                 color: matches!(image.content, cosmic_text::SwashContent::Color),
+                msdf: false,
             });
         }
 
@@ -364,6 +390,7 @@ impl GlyphCache {
                 size: Vec2::new(w as f32 + pad2 as f32, h as f32 + pad2 as f32),
                 advance: glyph.w,
                 color: true,
+                msdf: sdf_mode,
             }
         } else {
             let slot = self
@@ -388,6 +415,7 @@ impl GlyphCache {
                 size: Vec2::new(w as f32 + pad2 as f32, h as f32 + pad2 as f32),
                 advance: glyph.w,
                 color: false,
+                msdf: false,
             }
         };
 
@@ -436,12 +464,14 @@ impl GlyphCache {
                 if resolved.size.x <= 0.0 || resolved.size.y <= 0.0 {
                     continue;
                 }
+                let snap = self.snap_phases;
                 out.push(GlyphQuad {
-                    rect: resolved.quad(pen),
+                    rect: resolved.quad(pen, snap),
                     uv: resolved.slot.uv,
                     layer: resolved.slot.layer,
                     color: resolved.color,
-                    phase: self.phase_at(pen.x),
+                    msdf: resolved.msdf,
+                    phase: Self::quantize_x(pen.x, snap).1,
                 });
             }
         }
@@ -654,12 +684,65 @@ mod tests {
             size: Vec2::new(8.0, 10.0),
             advance: 9.0,
             color: false,
+            msdf: false,
         };
-        let quad = glyph.quad(Vec2::new(10.75, 20.4));
+        let quad = glyph.quad(Vec2::new(10.75, 20.4), false);
         assert_eq!(quad.origin.x, 11.0, "the pen's fraction must be dropped");
         assert_eq!(quad.origin.y, 18.0, "the baseline is snapped to a pixel");
         assert_eq!(quad.size.x, 8.0);
         assert_eq!(quad.size.y, 10.0);
+    }
+
+    /// The last phase bucket must carry into the next whole pixel.
+    ///
+    /// `round(fract * 4)` returns 4 for `fract ∈ [0.875, 1)`, which is phase 0
+    /// of the *next* pixel. The old `% 4` folded it back to phase 0 without
+    /// moving the quad, dragging 12.5 % of all glyphs one pixel to the left.
+    #[test]
+    fn the_last_phase_bucket_carries_into_the_next_pixel() {
+        for thousandths in 875..1000 {
+            let x = 10.0 + thousandths as f32 / 1000.0;
+            let (base, phase) = GlyphCache::quantize_x(x, false);
+            assert_eq!(phase, 0, "x = {x} must round to phase 0");
+            assert_eq!(base, 11.0, "x = {x} must move to the next pixel");
+        }
+    }
+
+    /// Quantisation is monotonic: no pen position may ever render to the left
+    /// of a smaller one, and the quantised position stays within ⅛ px.
+    #[test]
+    fn quantize_x_is_monotonic_and_never_jumps_backwards() {
+        let mut previous = f32::NEG_INFINITY;
+        for step in 0..=1280 {
+            let x = step as f32 / 64.0;
+            let (base, phase) = GlyphCache::quantize_x(x, false);
+            let quantised = base + phase as f32 * 0.25;
+            assert!(
+                quantised >= previous,
+                "x = {x} quantised to {quantised}, behind {previous}"
+            );
+            assert!(
+                (quantised - x).abs() <= 0.126,
+                "x = {x} quantised to {quantised}, more than ⅛ px away"
+            );
+            previous = quantised;
+        }
+    }
+
+    /// Whole-pixel snapping puts the quad on the rounded pen, not the floor.
+    #[test]
+    fn snapped_phases_use_the_rounded_pen() {
+        let glyph = ResolvedGlyph {
+            slot: GlyphSlot::default(),
+            bearing: Vec2::ZERO,
+            size: Vec2::new(4.0, 4.0),
+            advance: 4.0,
+            color: false,
+            msdf: false,
+        };
+        let quad = glyph.quad(Vec2::new(10.6, 0.0), true);
+        assert_eq!(quad.origin.x, 11.0);
+        assert_eq!(GlyphCache::quantize_x(10.6, true), (11.0, 0));
     }
 
     /// The phase a glyph is rasterised at has to follow its **absolute**
@@ -746,6 +829,10 @@ mod tests {
         let quads = cache.quads_for(&mut e, &shaped, Vec2::ZERO, 400, false);
         assert_eq!(quads.len(), 1);
         assert!(quads[0].color, "distance fields live in the RGBA atlas");
+        assert!(
+            quads[0].msdf,
+            "the quad must carry the MSDF flag to the primitive builder"
+        );
         let updates = cache.take_updates();
         assert_eq!(updates[0].target, AtlasTarget::Color);
         assert_eq!(updates[0].data.len(), updates[0].byte_len());

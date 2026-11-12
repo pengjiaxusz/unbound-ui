@@ -21,7 +21,7 @@ use slotmap::Key as _;
 use unbound_a11y::A11yNode;
 use unbound_abi::{NodeFlags, RawNodeDesc};
 use unbound_gpu::data::{
-    BlendMode, GpuPayload, GpuPrimitiveInstance, PrimType, SubElement, CLIP_NONE,
+    BlendMode, GpuPayload, GpuPrimitiveInstance, PrimFlags, PrimType, SubElement, CLIP_NONE,
 };
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::{f16, Rect, Vec2};
@@ -366,6 +366,9 @@ pub fn emit_button_with_tokens(
             // background does not use.
             glyph.border_token_or_tex = quad.layer;
             glyph.extra_payload_idx = payload_idx;
+            if quad.msdf {
+                glyph.prim_type_and_flags |= u32::from(PrimFlags::MSDF.bits()) << 16;
+            }
             primitives.push(glyph);
         }
     }

@@ -6,7 +6,7 @@
 //! *how* a primitive instance is packed.
 
 use unbound_gpu::data::{
-    BlendMode, GpuPayload, GpuPrimitiveInstance, PrimType, SubElement, CLIP_NONE,
+    BlendMode, GpuPayload, GpuPrimitiveInstance, PrimFlags, PrimType, SubElement, CLIP_NONE,
 };
 use unbound_math::{f16, Rect};
 use unbound_text::GlyphQuad;
@@ -152,6 +152,11 @@ pub(crate) fn glyphs(
         // does not use.
         glyph.border_token_or_tex = quad.layer;
         glyph.extra_payload_idx = payload_idx;
+        // A distance-field glyph must be decoded as one; the flag rides in the
+        // high half of the type word.
+        if quad.msdf {
+            glyph.prim_type_and_flags |= u32::from(PrimFlags::MSDF.bits()) << 16;
+        }
         primitives.push(glyph);
     }
 }
