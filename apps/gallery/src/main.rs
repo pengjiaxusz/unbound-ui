@@ -109,6 +109,7 @@ fn measure_gpu() -> Option<(f32, u32, u32)> {
         generation: 1,
         camera: Camera::ui((512.0, 512.0), 1.0),
         key_prefix: 0,
+        dirty_ranges: &[],
     };
     renderer.enable_timing().ok()?;
     // The first frame uploads the scene; the second is the steady state.

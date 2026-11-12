@@ -174,16 +174,16 @@ pub fn emit_switch(
     };
     glyphs(label, label_color, z, &mut primitives, &mut payloads);
 
-    // The focus ring.
-    if state.focused {
-        primitives.push(focus_ring(
-            knob.inflate(3.0),
-            desc.knob_size * 0.5 + 3.0,
-            tokens.focus_ring,
-            2.0,
-            z,
-        ));
-    }
+    // The focus ring. It is always emitted: focus changes its opacity, not the
+    // pool's shape, so focus is a paint change and never a re-upload.
+    primitives.push(focus_ring(
+        knob.inflate(3.0),
+        desc.knob_size * 0.5 + 3.0,
+        tokens.focus_ring,
+        2.0,
+        z,
+        state.focused,
+    ));
 
     let hit = (!state.disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(z), desc.rect)

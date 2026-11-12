@@ -649,7 +649,10 @@ impl PlatformApp for Showcase {
         // UI camera scales those units back up, so a 150 % layout maps exactly
         // onto the physical viewport at any DPI.
         self.app.scene.camera = Camera::ui((width as f32, height as f32), scale);
-        let scene = self.app.scene.upload(self.app.generation());
+        let scene = self
+            .app
+            .scene
+            .upload(self.app.generation(), self.app.dirty_ranges());
         if let Err(error) = renderer.render_into_swapchain(&scene, &image, width, height) {
             eprintln!("render failed: {error}");
             return Flow::Continue;
@@ -732,7 +735,7 @@ fn render_to_png(
         .write_theme_lut(&theme::lut(dark))
         .map_err(|e| e.to_string())?;
     renderer
-        .render(&app.scene.upload(1))
+        .render(&app.scene.upload(1, &[]))
         .map_err(|e| e.to_string())?;
     let pixels = renderer.read_pixels().map_err(|e| e.to_string())?;
     renderer.destroy();

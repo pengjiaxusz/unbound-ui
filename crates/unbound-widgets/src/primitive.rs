@@ -81,14 +81,20 @@ pub(crate) fn outlined(
 }
 
 /// An outward stroke, used for the keyboard focus ring.
+///
+/// The ring is emitted whether or not the control has focus, and `focused`
+/// only decides its opacity. Gaining or losing focus is then a *paint*
+/// change — one primitive in the pool — instead of a *shape* change, which
+/// would invalidate every index after it and force a full re-upload.
 pub(crate) fn focus_ring(
     rect: Rect,
     radius: f32,
     color: Token,
     width: f32,
     z: u16,
+    focused: bool,
 ) -> GpuPrimitiveInstance {
-    instance(
+    let mut ring = instance(
         rect,
         [radius; 4],
         Token::NONE,
@@ -98,7 +104,10 @@ pub(crate) fn focus_ring(
         PrimType::Stroke,
         SubElement::FocusRing,
         z,
-    )
+    );
+    ring.z_and_opacity =
+        GpuPrimitiveInstance::pack_z_opacity(ring.depth_u16(), if focused { 1.0 } else { 0.0 });
+    ring
 }
 
 /// A run of glyphs, already positioned by the caller.

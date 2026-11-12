@@ -58,12 +58,12 @@
 | `unbound-graph` | 857 | 渲染图瞬态纹理生命周期校验、毛玻璃离屏池 | `unbound-math` |
 | `unbound-asset` | 1222 | 后台解码线程池、CPU 暂存环、传输队列交接 | `unbound-math` |
 | `unbound-platform` | 1562 | 窗口平台层：非阻塞缩放、低延迟呈现、延迟计量 | `unbound-math`、`unbound-gpu` |
-| `unbound-widgets` | 2807 | 标准控件层：ControlState、WidgetOutput、SceneCollector、WidgetHarness，以及 Switch / Checkbox / Radio / Segmented / Slider | `unbound-gpu`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-text`、`unbound-world`、`unbound-headless` |
+| `unbound-widgets` | 3446 | 标准控件层：ControlState、WidgetOutput、SceneCollector、WidgetHarness、帧差分（`diff`：局部补丁上传），以及 Button / Switch / Checkbox / Radio / Segmented / Slider | `unbound-gpu`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-text`、`unbound-world`、`unbound-headless` |
 | `unbound-headless` | 2248 | 无头验证器：五项几何体检、`TestApp` 交互测试驱动、rkyv 时间旅行快照 | `unbound-math`、`unbound-world`、`unbound-input`、`unbound-a11y` |
 | `unbound-host` | 909 | Host-Guest C-ABI 热重载、分配器劫持、状态迁移 | `unbound-abi` |
 | `unbound-kpi` | 398 | 验收红线实测 | 多数 crate |
 | `app-guest` | 529 | 可热重载的业务层 cdylib | `unbound-abi` |
-| `apps/showcase` | 14281 | 自举式 UI Gallery：三段式壳层、21 页示例卡、Knob 调参、代码/A11y 面板、搜索与 HUD；壳层几何由 `UiWorld` 节点树 + `LayoutEngine` 求解 | `unbound-gpu`、`unbound-text`、`unbound-platform`、`unbound-input`、`unbound-world`、`unbound-layout`、`unbound-widgets`、`unbound-theme`、`unbound-a11y`、`unbound-anim`、`unbound-headless` |
+| `apps/showcase` | 14773 | 自举式 UI Gallery：三段式壳层、21 页示例卡、Knob 调参、代码/A11y 面板、搜索与 HUD；壳层几何由 `UiWorld` 节点树 + `LayoutEngine` 求解，悬停/聚焦走局部补丁上传 | `unbound-gpu`、`unbound-text`、`unbound-platform`、`unbound-input`、`unbound-world`、`unbound-layout`、`unbound-widgets`、`unbound-theme`、`unbound-a11y`、`unbound-anim`、`unbound-headless` |
 | `apps/gallery` | 474 | 全链路演示程序（控制台测量） | `unbound-gpu` |
 
 ## 三条刻意的依赖禁令

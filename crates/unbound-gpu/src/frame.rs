@@ -107,6 +107,19 @@ pub struct SceneUpload<'a> {
     /// `(layer << 56) | (barrier << 40) | (variant << 36)` prefix for the
     /// 64-bit sort key.
     pub key_prefix: u64,
+    /// The primitive ranges that changed since the last upload.
+    ///
+    /// An empty slice means "upload everything" — the generation moved and
+    /// the whole scene is staged. A non-empty slice means "only these
+    /// primitives changed": the renderer skips the rest of the scene and
+    /// patches just those slices into the pool, so a hover or a slider drag
+    /// costs a handful of bytes instead of the whole scene.
+    ///
+    /// The ranges are half-open primitive indices. The transforms, the
+    /// clips and the payloads are *not* re-uploaded: a paint-only change
+    /// leaves them untouched, and the caller has to fall back to a full
+    /// upload when it does not.
+    pub dirty_ranges: &'a [(u32, u32)],
 }
 
 impl Default for SceneUpload<'_> {
@@ -119,6 +132,7 @@ impl Default for SceneUpload<'_> {
             generation: 0,
             camera: Camera::ui((128.0, 128.0), 1.0),
             key_prefix: (PassLayer::Ui as u64) << 56,
+            dirty_ranges: &[],
         }
     }
 }
@@ -1709,17 +1723,31 @@ impl Renderer {
     }
 
     /// Upload the scene into the persistent pool if (and only if) it changed.
+    ///
+    /// Two paths:
+    ///
+    /// * **Full.** The generation moved: the whole scene is staged into the
+    ///   transient ring and scattered into the pool.
+    /// * **Partial.** The generation stayed but the caller marked the
+    ///   primitives that changed: only those slices are staged and
+    ///   scattered. A hover or a slider drag costs a handful of bytes
+    ///   instead of the whole scene.
     fn prepare_upload(&mut self, scene: &SceneUpload<'_>) -> Result<UploadPlan, GpuError> {
-        self.ensure_pool_capacity(scene.primitives.len(), Which::Primitives)?;
-        self.ensure_pool_capacity(scene.transforms.len(), Which::Transforms)?;
-        self.ensure_pool_capacity(scene.clips.len(), Which::Clips)?;
-        self.ensure_pool_capacity(scene.payloads.len(), Which::Payloads)?;
+        let full = self.last_generation != scene.generation;
+        let partial = !full && !scene.dirty_ranges.is_empty();
+        if !full && !partial {
+            return Ok(UploadPlan::default());
+        }
+
+        if full {
+            self.ensure_pool_capacity(scene.primitives.len(), Which::Primitives)?;
+            self.ensure_pool_capacity(scene.transforms.len(), Which::Transforms)?;
+            self.ensure_pool_capacity(scene.clips.len(), Which::Clips)?;
+            self.ensure_pool_capacity(scene.payloads.len(), Which::Payloads)?;
+            self.last_generation = scene.generation;
+        }
 
         let mut plan = UploadPlan::default();
-        if self.last_generation == scene.generation {
-            return Ok(plan);
-        }
-        self.last_generation = scene.generation;
 
         // Rotate the ring *before* allocating: the cursor belongs to the frame
         // slot that `begin_frame` selects.
@@ -1746,25 +1774,42 @@ impl Renderer {
                 spans.push((dst, src_rel, data.len() as u32));
             };
 
-        stage(
-            prim_dst,
-            bytemuck::cast_slice(scene.primitives),
-            bytes,
-            spans,
-        );
-        stage(
-            transform_dst,
-            bytemuck::cast_slice(scene.transforms),
-            bytes,
-            spans,
-        );
-        stage(clip_dst, bytemuck::cast_slice(scene.clips), bytes, spans);
-        stage(
-            payload_dst,
-            bytemuck::cast_slice(scene.payloads),
-            bytes,
-            spans,
-        );
+        if full {
+            stage(
+                prim_dst,
+                bytemuck::cast_slice(scene.primitives),
+                bytes,
+                spans,
+            );
+            stage(
+                transform_dst,
+                bytemuck::cast_slice(scene.transforms),
+                bytes,
+                spans,
+            );
+            stage(clip_dst, bytemuck::cast_slice(scene.clips), bytes, spans);
+            stage(
+                payload_dst,
+                bytemuck::cast_slice(scene.payloads),
+                bytes,
+                spans,
+            );
+        } else {
+            // Only the dirty slices are staged. The rest of the scene is
+            // already in the pool and did not change, so it is left alone.
+            let stride =
+                u32::try_from(core::mem::size_of::<GpuPrimitiveInstance>()).unwrap_or(u32::MAX);
+            for (start, end) in scene.dirty_ranges {
+                let start = *start as usize;
+                let end = (*end as usize).min(scene.primitives.len());
+                if start >= end {
+                    continue;
+                }
+                let data = bytemuck::cast_slice(&scene.primitives[start..end]);
+                let dst = prim_dst + u32::try_from(start).unwrap_or(u32::MAX) * stride;
+                stage(dst, data, bytes, spans);
+            }
+        }
 
         if spans.is_empty() {
             return Ok(plan);
@@ -1949,6 +1994,7 @@ mod tests {
             generation: gen,
             camera: Camera::ui((128.0, 128.0), 1.0),
             key_prefix: (PassLayer::Ui as u64) << 56,
+            dirty_ranges: &[],
         }
     }
 

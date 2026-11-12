@@ -240,7 +240,8 @@ fn search_and_theme_keep_the_same_target_identity() {
 fn clicking_a_button_bumps_scene_generation_immediately() {
     let mut app = app();
     let before = app.generation();
-    let node = target::id(Target::Theme(0));
+    // The HUD toggle changes the scene's *shape*: the overlay appears.
+    let node = target::id(Target::Hud);
     let rect = rect_of(&app, node);
     let point = rect.center();
 
@@ -249,7 +250,7 @@ fn clicking_a_button_bumps_scene_generation_immediately() {
     app.pointer_up(point, 0.1);
 
     // The state changed on the release.
-    assert_eq!(app.state.theme, ThemeMode::Light);
+    assert!(app.state.show_hud, "the click must toggle the HUD");
     // The next sync rebuilds the scene, and the rebuild moves the
     // generation: that is what makes the GPU re-upload the primitives.
     assert!(
@@ -259,6 +260,36 @@ fn clicking_a_button_bumps_scene_generation_immediately() {
     assert!(
         app.generation() > before,
         "the scene generation must advance so the frame is re-uploaded"
+    );
+}
+
+/// Switching the theme repaints through the colour table, not the pool.
+///
+/// Every colour a frame paints is a slot in a 4 KiB lookup table, so a theme
+/// switch rewrites that table and moves no primitive at all. This is the
+/// cheapest possible full-screen repaint: zero bytes of scene upload.
+#[test]
+fn switching_the_theme_uploads_no_primitives() {
+    let mut app = app();
+    assert_eq!(app.state.theme, ThemeMode::Dark);
+    let node = target::id(Target::Theme(0));
+    let point = rect_of(&app, node).center();
+
+    app.pointer_move(point);
+    app.pointer_down(point, 0.0);
+    app.pointer_up(point, 0.1);
+    let before = app.generation();
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.theme, ThemeMode::Light);
+    assert_eq!(
+        app.generation(),
+        before,
+        "a theme switch must not re-upload a single primitive"
+    );
+    assert!(
+        app.dirty_ranges().is_empty() || app.state.demo.upload_bytes < 1024,
+        "a theme switch may only repaint the slots that changed"
     );
 }
 
@@ -499,4 +530,157 @@ fn every_card_is_a_relayout_boundary() {
         cards,
         "every card must be a relayout boundary"
     );
+}
+
+/// A hover repaints a control; it does not move anything.
+///
+/// The frame's layout cost must be exactly zero, otherwise every pointer
+/// move would pay for a full tree solve.
+#[test]
+fn a_hover_repaints_without_relaying_out() {
+    let mut app = app();
+    let node = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let point = rect_of(&app, node).center();
+    app.pointer_move(point);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.layout_stats().nodes_visited,
+        0,
+        "a hover must not visit a single layout node"
+    );
+    assert!(
+        !app.dirty_ranges().is_empty(),
+        "a hover must still repaint, so it must name the slices it changed"
+    );
+}
+
+/// The hover's patch is a handful of bytes, not the whole scene.
+#[test]
+fn a_hover_uploads_a_handful_of_bytes() {
+    let mut app = app();
+    let node = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let point = rect_of(&app, node).center();
+    app.pointer_move(point);
+    app.rebuild(VIEWPORT);
+    let stride = core::mem::size_of::<unbound_gpu::data::GpuPrimitiveInstance>() as u32;
+    let bytes: u32 = app
+        .dirty_ranges()
+        .iter()
+        .map(|(start, end)| (end - start) * stride)
+        .sum();
+    assert!(
+        bytes < 1024,
+        "a hover over one control must stay under 1 KiB, got {bytes} B in {:?}",
+        app.dirty_ranges()
+    );
+}
+
+/// A patch keeps the generation, so the renderer knows not to re-upload all.
+#[test]
+fn a_paint_only_change_keeps_the_upload_generation() {
+    let mut app = app();
+    let generation = app.generation();
+    let node = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let point = rect_of(&app, node).center();
+    app.pointer_move(point);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.generation(),
+        generation,
+        "a paint-only frame patches the pool; it does not replace it"
+    );
+}
+
+/// Navigating changes the page's shape, so the whole scene goes up again.
+#[test]
+fn a_navigation_bumps_the_upload_generation() {
+    let mut app = app();
+    let generation = app.generation();
+    app.navigate(PageId::Sliders);
+    app.rebuild(VIEWPORT);
+    assert_ne!(
+        app.generation(),
+        generation,
+        "a new page is a new scene and must be uploaded in full"
+    );
+    assert!(
+        app.dirty_ranges().is_empty(),
+        "a full upload must not carry stale patch ranges"
+    );
+}
+
+/// Hovering a control repaints it; it never lays the page out again.
+///
+/// Every control on every page is exercised: a pointer move that reached the
+/// layout engine would make the whole page pay for a hover.
+#[test]
+fn hovering_a_control_never_relays_out_the_page() {
+    for page in PageId::ALL {
+        let mut app = app();
+        app.navigate(page);
+        app.pointer_move(Vec2::new(2.0, 898.0));
+        app.rebuild(VIEWPORT);
+        let targets: Vec<u64> = app
+            .router
+            .regions()
+            .iter()
+            .map(|region| region.node)
+            .collect();
+        for node in targets {
+            let point = rect_of(&app, node).center();
+            app.pointer_move(point);
+            app.rebuild(VIEWPORT);
+            assert_eq!(
+                app.layout_stats().nodes_visited,
+                0,
+                "{page:?} re-laid the page out for a hover on {node:#x}"
+            );
+        }
+    }
+}
+
+/// A hover patches the pool; it does not re-upload the scene.
+///
+/// The shell's chrome and the standard controls keep a stable primitive count
+/// across states, which is what makes this possible. Demo stages are excluded:
+/// a demo is a bespoke drawing and may legitimately reveal widgets on hover
+/// (a table row highlight, a dialog shadow), so it falls back to a full
+/// upload — correct, just not cheap.
+#[test]
+fn a_hover_patches_the_pool_instead_of_reuploading_it() {
+    let mut app = app();
+    app.navigate(PageId::Home);
+    app.pointer_move(Vec2::new(2.0, 898.0));
+    app.rebuild(VIEWPORT);
+    let targets: Vec<u64> = app
+        .router
+        .regions()
+        .iter()
+        .map(|region| region.node)
+        .filter(|node| !target::is_demo(*node))
+        .collect();
+    assert!(!targets.is_empty(), "the page should have chrome to hover");
+    let stride = core::mem::size_of::<unbound_gpu::data::GpuPrimitiveInstance>() as u32;
+    for node in targets {
+        app.pointer_move(Vec2::new(2.0, 898.0));
+        app.rebuild(VIEWPORT);
+        let generation = app.generation();
+        let point = rect_of(&app, node).center();
+        app.pointer_move(point);
+        app.rebuild(VIEWPORT);
+        assert_eq!(
+            app.generation(),
+            generation,
+            "hovering {node:#x} swapped the whole scene instead of patching it"
+        );
+        let bytes: u32 = app
+            .dirty_ranges()
+            .iter()
+            .map(|(start, end)| (end - start) * stride)
+            .sum();
+        assert!(
+            bytes < 1024,
+            "hovering {node:#x} uploaded {bytes} B, over the 1 KiB patch budget"
+        );
+    }
 }

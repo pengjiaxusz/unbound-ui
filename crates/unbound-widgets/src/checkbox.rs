@@ -149,15 +149,16 @@ pub fn emit_checkbox(
     glyphs(mark, tokens.mark, z, &mut primitives, &mut payloads);
     glyphs(label, tokens.label, z, &mut primitives, &mut payloads);
 
-    if state.focused {
-        primitives.push(focus_ring(
-            box_rect.inflate(3.0),
-            7.0,
-            tokens.focus_ring,
-            2.0,
-            z,
-        ));
-    }
+    // The ring is always emitted: focus changes its opacity, not the
+    // pool's shape, so focus is a paint change and never a re-upload.
+    primitives.push(focus_ring(
+        box_rect.inflate(3.0),
+        7.0,
+        tokens.focus_ring,
+        2.0,
+        z,
+        state.focused,
+    ));
 
     let hit = (!state.disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(z), desc.rect)

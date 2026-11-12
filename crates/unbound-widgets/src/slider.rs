@@ -29,6 +29,15 @@ pub struct SliderTokens {
     pub track: Token,
     /// The filled part of the track.
     pub fill: Token,
+    /// The filled part while the pointer is over the slider.
+    ///
+    /// A slider has to answer the pointer before it is grabbed, otherwise the
+    /// track looks inert until the drag starts. The state only changes which
+    /// colour slot the fill resolves to, so the hover is one patched
+    /// primitive, not a new one.
+    pub fill_hover: Token,
+    /// The filled part while the slider is being dragged.
+    pub fill_pressed: Token,
     /// The thumb.
     pub thumb: Token,
     /// The border of the thumb.
@@ -46,6 +55,8 @@ impl SliderTokens {
         Self {
             track: Token::CONTROL_TRACK,
             fill: Token::PRIMARY,
+            fill_hover: Token::PRIMARY_HOVER,
+            fill_pressed: Token::PRIMARY_PRESSED,
             thumb: Token::CONTROL_THUMB,
             thumb_border: Token::OUTLINE,
             label: Token::TEXT_SECONDARY,
@@ -203,7 +214,7 @@ pub fn emit_slider(
     primitives.push(surface(
         desc.fill_rect(),
         desc.track_height * 0.5,
-        tokens.fill,
+        fill_slot(state, tokens),
         z,
     ));
 
@@ -224,15 +235,16 @@ pub fn emit_slider(
 
     glyphs(label, tokens.label, z, &mut primitives, &mut payloads);
 
-    if state.focused {
-        primitives.push(focus_ring(
-            thumb.inflate(3.0),
-            desc.thumb_size * 0.5 + 3.0,
-            tokens.focus_ring,
-            2.0,
-            z,
-        ));
-    }
+    // The ring is always emitted: focus changes its opacity, not the
+    // pool's shape, so focus is a paint change and never a re-upload.
+    primitives.push(focus_ring(
+        thumb.inflate(3.0),
+        desc.thumb_size * 0.5 + 3.0,
+        tokens.focus_ring,
+        2.0,
+        z,
+        state.focused,
+    ));
 
     let hit = (!state.disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(z), desc.rect)
@@ -252,6 +264,18 @@ pub fn emit_slider(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+    }
+}
+
+/// The colour slot the filled track paints with.
+fn fill_slot(state: ControlState, tokens: SliderTokens) -> Token {
+    if state.disabled {
+        return tokens.fill;
+    }
+    match state.phase {
+        PointerPhase::Idle => tokens.fill,
+        PointerPhase::Hovered => tokens.fill_hover,
+        PointerPhase::Pressed => tokens.fill_pressed,
     }
 }
 

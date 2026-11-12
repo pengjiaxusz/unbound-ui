@@ -281,24 +281,29 @@ pub fn nav_row(
 ) {
     let palette = *canvas.palette;
     let visual = canvas.visual(node, false);
-    if selected {
-        canvas.rect(rect, 8.0, palette.nav_selected, 0, 0.0, 0.0);
-        canvas.rect(
-            Rect::new(
-                rect.origin.x - 10.0,
-                rect.origin.y + 8.0,
-                3.0,
-                rect.size.y - 16.0,
-            ),
-            2.0,
-            palette.primary,
-            0,
-            0.0,
-            0.0,
-        );
+    // The row always paints two primitives — a background and the accent
+    // bar — whatever its state. The background's slot is the pane's own
+    // colour while idle, and the accent bar fades out, so neither state
+    // changes the number of primitives the row owns.
+    let background = if selected {
+        palette.nav_selected
     } else if visual.is_hovered() {
-        canvas.rect(rect, 8.0, palette.nav_hover, 0, 0.0, 0.0);
-    }
+        palette.nav_hover
+    } else {
+        palette.nav_bg
+    };
+    canvas.rect(rect, 8.0, background, 0, 0.0, 0.0);
+    canvas.rect_faded(
+        Rect::new(
+            rect.origin.x - 10.0,
+            rect.origin.y + 8.0,
+            3.0,
+            rect.size.y - 16.0,
+        ),
+        2.0,
+        palette.primary,
+        if selected { 1.0 } else { 0.0 },
+    );
     canvas.text(
         label,
         Rect::new(

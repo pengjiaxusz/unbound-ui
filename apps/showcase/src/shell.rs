@@ -9,8 +9,10 @@ use accesskit::Role;
 use unbound_anim::{Spring, SpringPreset};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
 use unbound_input::{CursorKind, PointerConfig, PointerEvent, Router};
+use unbound_layout::LayoutStats;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::{Modifiers, PlatformKey};
+use unbound_widgets::diff::{diff_primitives, SceneDiff};
 
 use crate::canvas::{AlignX, AlignY, Canvas, RangeZone};
 use crate::gallery::{self, Labels, Palette};
@@ -126,6 +128,33 @@ pub struct GalleryApp {
     scrollbar: Option<Scrollbar>,
     /// The grab offset inside the scrollbar thumb, while it is dragged.
     scroll_drag: Option<f32>,
+    /// The primitive ranges that changed in the last rebuild.
+    ///
+    /// An empty list means "the whole scene changed" and the renderer has to
+    /// upload it. A non-empty list means "only these slices changed", which
+    /// is what turns a hover into a handful of uploaded bytes.
+    dirty_ranges: Vec<(u32, u32)>,
+    /// The inputs the layout depends on.
+    ///
+    /// A hover, a press or a focus change moves nothing, so the layout is
+    /// not re-solved for them: the frame's layout cost stays at zero.
+    layout_key: LayoutKey,
+    /// The layout statistics of the current frame.
+    frame_layout_stats: LayoutStats,
+}
+
+/// The inputs the shell's layout depends on.
+///
+/// Two frames with the same key have the same geometry, so the second one
+/// does not have to be solved again.
+#[derive(Copy, Clone, PartialEq, Eq)]
+struct LayoutKey {
+    width: u32,
+    height: u32,
+    nav_width: u32,
+    page: u8,
+    /// Which code panels are open.
+    code_mask: u64,
 }
 
 impl Default for GalleryApp {
@@ -175,6 +204,15 @@ impl GalleryApp {
             window_maximized: false,
             scrollbar: None,
             scroll_drag: None,
+            dirty_ranges: Vec::new(),
+            layout_key: LayoutKey {
+                width: 0,
+                height: 0,
+                nav_width: 0,
+                page: 0,
+                code_mask: 0,
+            },
+            frame_layout_stats: LayoutStats::default(),
         }
     }
 
@@ -245,6 +283,23 @@ impl GalleryApp {
         changed
     }
 
+    /// The primitive ranges that changed in the last rebuild.
+    ///
+    /// An empty list means "the whole scene changed". A non-empty list names
+    /// the slices the renderer has to patch into the pool.
+    #[must_use]
+    pub fn dirty_ranges(&self) -> &[(u32, u32)] {
+        &self.dirty_ranges
+    }
+
+    /// The layout statistics of the current frame.
+    ///
+    /// `nodes_visited` is zero when the frame did not have to be laid out.
+    #[must_use]
+    pub fn layout_stats(&self) -> LayoutStats {
+        self.frame_layout_stats
+    }
+
     /// The geometry of the page as the layout tree solved it.
     #[must_use]
     pub fn page_layout(&self) -> Option<&PageLayout> {
@@ -271,6 +326,24 @@ impl GalleryApp {
         self.generation
     }
 
+    /// The inputs the layout depends on.
+    fn layout_key(&self, viewport: (f32, f32), nav_width: f32) -> LayoutKey {
+        let page = self.state.active_page;
+        let mut code_mask = 0u64;
+        for (index, _) in page.examples().iter().enumerate() {
+            if self.state.code_open(page, index as u8) {
+                code_mask |= 1u64 << index;
+            }
+        }
+        LayoutKey {
+            width: viewport.0.to_bits(),
+            height: viewport.1.to_bits(),
+            nav_width: nav_width.to_bits(),
+            page: page.index() as u8,
+            code_mask,
+        }
+    }
+
     /// Rebuild unconditionally.
     pub fn rebuild(&mut self, viewport: (f32, f32)) {
         let (width, height) = viewport;
@@ -281,7 +354,19 @@ impl GalleryApp {
         let pressed = self.router.pointer().pressed();
         // The tree owns the geometry: the title bar, the navigation pane and
         // the page are solved, not measured by hand.
-        let layout = self.tree.solve(&self.state, viewport_rect, nav_width);
+        //
+        // The layout is only solved when something that *moves* changed. A
+        // hover, a press or a focus change repaints a control but moves
+        // nothing, so it must not pay for a layout pass.
+        let key = self.layout_key(viewport, nav_width);
+        if key != self.layout_key {
+            self.layout_key = key;
+            self.layout = self.tree.solve(&self.state, viewport_rect, nav_width);
+            self.frame_layout_stats = self.tree.stats();
+        } else {
+            self.frame_layout_stats = LayoutStats::default();
+        }
+        let layout = self.layout;
         let nav_max_scroll = nav_height(&layout) - nav_tree_rect(&layout).size.y;
         self.state.nav_scroll = self.state.nav_scroll.clamp(0.0, nav_max_scroll.max(0.0));
         let content_height = self.tree.content_height();
@@ -293,7 +378,9 @@ impl GalleryApp {
             .tree
             .page_layout(&self.state, self.state.content_scroll);
 
-        self.scene = gallery::Gallery::new();
+        // The previous scene is kept for one frame: the diff against the
+        // new one tells the renderer which primitives actually changed.
+        let previous = std::mem::replace(&mut self.scene, gallery::Gallery::new());
         let focused = self.focused;
         let scale = self.effective_scale;
         let pixel_snap = self.state.pixel_snap;
@@ -333,9 +420,27 @@ impl GalleryApp {
         let draw_calls = 4 + u32::from(!scene.clips.is_empty());
         let _ = output.glyph_count;
 
+        // How much of the scene has to travel decides how the frame is
+        // uploaded: a paint-only change patches its slices under the *same*
+        // generation, and the renderer leaves the rest of the pool alone.
+        let diff = diff_scenes(&previous, scene);
+        self.state.demo.upload_bytes = diff.bytes(scene.primitives.len());
+        match diff {
+            // Nothing moved and nothing was repainted: the GPU already holds
+            // this exact scene.
+            SceneDiff::Identical => self.dirty_ranges.clear(),
+            // The scene keeps its generation, so the renderer knows to patch
+            // these slices into the pool instead of re-uploading all of it.
+            SceneDiff::Ranges(ranges) => self.dirty_ranges = ranges,
+            // The shape changed, so the generation has to move and the whole
+            // scene goes up again.
+            SceneDiff::Whole => {
+                self.dirty_ranges.clear();
+                self.generation = self.generation.wrapping_add(1);
+            }
+        }
         self.state.demo.primitive_count = scene_len;
         self.state.demo.draw_calls = draw_calls;
-        self.state.demo.upload_bytes = 0;
         self.router.set_regions(output.regions);
         self.focus_order = output.focus_order;
         self.ranges = output.ranges;
@@ -345,11 +450,6 @@ impl GalleryApp {
         self.page_layout = Some(page_layout);
         self.scrollbar = scrollbar;
         self.nav_max_scroll = nav_max_scroll.max(0.0);
-        // The scene was rebuilt: the primitives on the GPU are stale, so the
-        // upload generation has to move. Bumping it here — rather than in
-        // the host — is what guarantees that a click is drawn on the very
-        // next frame.
-        self.generation = self.generation.wrapping_add(1);
         self.last_revision = self.state.revision;
         self.last_hover = hover;
         self.last_pressed = pressed;
@@ -1673,14 +1773,15 @@ fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_ma
         let node = target::id(target);
         let hovered = canvas.hovered(node);
         let pressed = canvas.pressed(node);
-        if hovered || pressed {
-            let fill = if destructive {
-                palette.danger
-            } else {
-                palette.control_hover
-            };
-            canvas.rect(rect, 0.0, fill, 0, 0.0, 0.0);
-        }
+        // The background always exists and only fades in on hover, so
+        // pointing at a window button repaints one primitive instead of
+        // inserting one.
+        let fill = if destructive {
+            palette.danger
+        } else {
+            palette.control_hover
+        };
+        canvas.rect_faded(rect, 0.0, fill, if hovered || pressed { 1.0 } else { 0.0 });
         let color = if destructive && hovered {
             palette.on_hero
         } else {
@@ -1882,27 +1983,32 @@ fn nav_item(
     let palette = *canvas.palette;
     let node = target::id(target);
     let hover = canvas.visual(node, false);
-    if selected {
-        canvas.rect(rect, 8.0, palette.nav_selected, 0, 0.0, 0.0);
-        // The selection indicator lives *inside* the pill. Flush against the
-        // window edge it looked like a rendering artefact rather than part of
-        // the row.
-        canvas.rect(
-            Rect::new(
-                rect.origin.x + 4.0,
-                rect.origin.y + (rect.size.y - 16.0) * 0.5,
-                3.0,
-                16.0,
-            ),
-            1.5,
-            palette.primary,
-            0,
-            0.0,
-            0.0,
-        );
+    // The row always paints two primitives — a pill and the selection
+    // indicator — whatever its state. The pill takes the pane's own colour
+    // when idle and the indicator fades out when unselected, so hovering a
+    // row repaints two instances instead of renumbering the pool.
+    let background = if selected {
+        palette.nav_selected
     } else if hover.is_hovered() {
-        canvas.rect(rect, 8.0, palette.nav_hover, 0, 0.0, 0.0);
-    }
+        palette.nav_hover
+    } else {
+        palette.nav_bg
+    };
+    canvas.rect(rect, 8.0, background, 0, 0.0, 0.0);
+    // The selection indicator lives *inside* the pill. Flush against the
+    // window edge it looked like a rendering artefact rather than part of
+    // the row.
+    canvas.rect_faded(
+        Rect::new(
+            rect.origin.x + 4.0,
+            rect.origin.y + (rect.size.y - 16.0) * 0.5,
+            3.0,
+            16.0,
+        ),
+        1.5,
+        palette.primary,
+        if selected { 1.0 } else { 0.0 },
+    );
     widgets::icon(
         canvas,
         icon,
@@ -2308,9 +2414,14 @@ fn draw_code_bar(
     let node = target::id(Target::Code(page.page.index() as u8, card.index as u8));
     let hover = canvas.visual(node, false);
     let open = state.code_open(page.page, card.index as u8);
-    if hover.is_hovered() {
-        canvas.rect(card.code_bar, 6.0, palette.control_hover, 0, 0.0, 0.0);
-    }
+    // The hover wash always exists and only fades in, so pointing at the
+    // code bar repaints one primitive instead of inserting one.
+    canvas.rect_faded(
+        card.code_bar,
+        6.0,
+        palette.control_hover,
+        if hover.is_hovered() { 1.0 } else { 0.0 },
+    );
     canvas.divider(
         card.code_bar.origin.x,
         card.code_bar.origin.y,
@@ -2655,4 +2766,19 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
             2,
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// upload
+// ---------------------------------------------------------------------------
+
+/// The diff between two scenes.
+///
+/// The widget layer owns the algorithm; the shell only knows what the
+/// *shape* of its scene is, which is the tables a primitive indexes into.
+fn diff_scenes(previous: &gallery::Gallery, current: &gallery::Gallery) -> SceneDiff {
+    let structure_changed = previous.transforms != current.transforms
+        || previous.clips != current.clips
+        || previous.payloads != current.payloads;
+    diff_primitives(&previous.primitives, &current.primitives, structure_changed)
 }

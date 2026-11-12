@@ -66,6 +66,16 @@ const TAG_CONTENT_SCROLLBAR: u64 = 17;
 /// The semantic root of the gallery.
 pub const ROOT: u64 = 1;
 
+/// Whether an identity belongs to an example's live stage.
+///
+/// A demo is a bespoke drawing: unlike a standard control it may reveal
+/// widgets when hovered (a table row highlight, a dialog shadow), so it is
+/// allowed to change the scene's shape.
+#[must_use]
+pub const fn is_demo(node: u64) -> bool {
+    node >> 56 == TAG_DEMO
+}
+
 const fn tag(value: u64) -> u64 {
     value << 56
 }

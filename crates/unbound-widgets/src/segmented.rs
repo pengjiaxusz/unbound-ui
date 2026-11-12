@@ -151,19 +151,19 @@ pub fn emit_segmented_segment(
     let segment = desc.segment_rect(index);
     let active = index == desc.selected;
 
-    if active {
-        primitives.push(outlined(
-            segment,
-            5.0,
-            tokens.selected,
-            tokens.selected_border,
-            1.0,
-            0.0,
-            z,
-        ));
+    // One pill, always. The active slot paints it as a raised, bordered
+    // surface; a hovered slot paints the hover fill and no border; an idle
+    // slot paints nothing at all. Because the primitive exists in every
+    // state, hovering a slot patches one instance instead of renumbering the
+    // pool.
+    let (fill, border, border_width) = if active {
+        (tokens.selected, tokens.selected_border, 1.0)
     } else if state.phase == PointerPhase::Hovered {
-        primitives.push(surface(segment, 5.0, tokens.hover, z));
-    }
+        (tokens.hover, Token::NONE, 0.0)
+    } else {
+        (Token::NONE, Token::NONE, 0.0)
+    };
+    primitives.push(outlined(segment, 5.0, fill, border, border_width, 0.0, z));
 
     let label_color = if active {
         tokens.label_selected
@@ -172,15 +172,16 @@ pub fn emit_segmented_segment(
     };
     glyphs(label, label_color, z, &mut primitives, &mut payloads);
 
-    if state.focused {
-        primitives.push(focus_ring(
-            segment.inflate(2.0),
-            7.0,
-            tokens.focus_ring,
-            2.0,
-            z,
-        ));
-    }
+    // The ring is always emitted: focus changes its opacity, not the
+    // pool's shape, so focus is a paint change and never a re-upload.
+    primitives.push(focus_ring(
+        segment.inflate(2.0),
+        7.0,
+        tokens.focus_ring,
+        2.0,
+        z,
+        state.focused,
+    ));
 
     let hit = (!state.disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(z), segment)
@@ -262,7 +263,17 @@ mod tests {
             &[],
             tokens,
         );
-        assert!(output.primitives.is_empty());
+        // An idle slot paints nothing, but it still emits its two
+        // primitives — the invisible pill and the invisible ring — so that
+        // hovering it patches fields instead of inserting primitives.
+        assert_eq!(output.primitives.len(), 2);
+        assert!(
+            output
+                .primitives
+                .iter()
+                .all(|primitive| primitive.fill_token_or_uv == Token::NONE.raw() as u32),
+            "an idle slot must not paint a fill"
+        );
     }
 
     #[test]

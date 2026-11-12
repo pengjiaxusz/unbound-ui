@@ -153,15 +153,16 @@ pub fn emit_radio(
     };
     glyphs(label, label_color, z, &mut primitives, &mut payloads);
 
-    if state.focused {
-        primitives.push(focus_ring(
-            circle.inflate(3.0),
-            desc.size * 0.5 + 3.0,
-            tokens.focus_ring,
-            2.0,
-            z,
-        ));
-    }
+    // The ring is always emitted: focus changes its opacity, not the
+    // pool's shape, so focus is a paint change and never a re-upload.
+    primitives.push(focus_ring(
+        circle.inflate(3.0),
+        desc.size * 0.5 + 3.0,
+        tokens.focus_ring,
+        2.0,
+        z,
+        state.focused,
+    ));
 
     let hit = (!state.disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(z), desc.rect)
@@ -200,7 +201,16 @@ mod tests {
             output.primitives[0].border_token_or_tex,
             tokens.border.raw() as u32
         );
-        assert_eq!(output.primitives.len(), 1, "没有选中就没有圆点");
+        // The circle and its focus ring — the ring is always emitted, and
+        // opaque only when the control has focus.
+        assert_eq!(output.primitives.len(), 2);
+        assert!(
+            output
+                .primitives
+                .iter()
+                .all(|primitive| primitive.fill_token_or_uv != tokens.dot.raw() as u32),
+            "没有选中就没有圆点"
+        );
     }
 
     #[test]
@@ -217,7 +227,8 @@ mod tests {
             output.primitives[0].border_token_or_tex,
             tokens.border_selected.raw() as u32
         );
-        assert_eq!(output.primitives.len(), 2);
+        // The circle, the dot and the focus ring.
+        assert_eq!(output.primitives.len(), 3);
         assert_eq!(
             output.primitives[1].fill_token_or_uv,
             tokens.dot.raw() as u32

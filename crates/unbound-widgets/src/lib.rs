@@ -23,6 +23,7 @@
 
 pub mod button;
 pub mod checkbox;
+pub mod diff;
 pub mod primitive;
 pub mod radio;
 pub mod segmented;

@@ -412,6 +412,21 @@ fn render_button(
     harness: &mut ButtonHarness,
     phase: PointerPhase,
 ) -> Vec<u8> {
+    paint_button(renderer, atlases, harness, phase, None)
+}
+
+/// Render one button state, uploading the whole scene.
+///
+/// `patch` chooses the upload path: `None` uploads everything under a fresh
+/// generation, `Some((generation, ranges))` keeps the generation and patches
+/// the given slices — the path a hover takes.
+fn paint_button(
+    renderer: &mut unbound_gpu::Renderer,
+    atlases: &std::sync::Arc<unbound_gpu::atlas::AtlasSet>,
+    harness: &mut ButtonHarness,
+    phase: PointerPhase,
+    patch: Option<(u64, Vec<(u32, u32)>)>,
+) -> Vec<u8> {
     let visual = ButtonVisualState {
         phase,
         focused: false,
@@ -419,6 +434,36 @@ fn render_button(
         selected: false,
     };
     harness.rebuild_with(visual, 0);
+    upload_atlases(renderer, atlases, harness);
+    renderer
+        .write_theme_lut(&showcase::theme::lut(false))
+        .expect("theme");
+    match &patch {
+        // A patch keeps the generation the pool is already at and names the
+        // slices that changed; the renderer rewrites only those.
+        Some((generation, ranges)) => {
+            renderer
+                .render(&harness.scene.upload(*generation, ranges))
+                .expect("render");
+        }
+        // Every state gets its own generation from the driver, otherwise the
+        // primitive buffer is considered unchanged and the previous state is
+        // drawn again.
+        None => {
+            renderer
+                .render(&harness.scene.upload(harness.app.generation(), &[]))
+                .expect("render");
+        }
+    }
+    renderer.read_pixels().expect("readback")
+}
+
+/// Send every glyph the last rebuild rasterised to the GPU atlases.
+fn upload_atlases(
+    renderer: &mut unbound_gpu::Renderer,
+    atlases: &std::sync::Arc<unbound_gpu::atlas::AtlasSet>,
+    harness: &mut ButtonHarness,
+) {
     for update in harness.labels.cache.take_updates() {
         let kind = match update.target {
             unbound_text::AtlasTarget::Coverage => unbound_gpu::atlas::AtlasKind::R8,
@@ -439,16 +484,90 @@ fn render_button(
             )
             .expect("upload");
     }
+}
+
+/// A patched upload paints exactly the pixels a full one does.
+///
+/// The patch path writes slices of the primitive pool and leaves the rest
+/// alone, so a wrong offset, a wrong length or a missed flush would show up
+/// here as a stale pixel. The scene is the same either way, so the two
+/// readbacks must agree byte for byte.
+#[test]
+fn a_patched_upload_paints_the_same_pixels_as_a_full_one() {
+    let Some(gpu) = unbound_gpu::device::test_device() else {
+        // No Vulkan device: the test cannot run, but it must not fail.
+        return;
+    };
+    let mut renderer =
+        unbound_gpu::Renderer::new(gpu, WIDTH as u32, HEIGHT as u32).expect("renderer");
+    let atlases = std::sync::Arc::new(
+        unbound_gpu::atlas::AtlasSet::new(&renderer.gpu, 4).expect("atlas set"),
+    );
+    renderer.install_atlases(atlases.clone()).expect("install");
     renderer
         .write_theme_lut(&showcase::theme::lut(false))
         .expect("theme");
-    // Every state gets its own generation from the driver, otherwise the
-    // primitive buffer is considered unchanged and the previous state is drawn
-    // again.
+
+    let mut harness = ButtonHarness::new();
+    let visual = |phase| ButtonVisualState {
+        phase,
+        focused: false,
+        disabled: false,
+        selected: false,
+    };
+
+    // 1. The idle button goes up in full, under generation 7.
+    let idle = paint_button(
+        &mut renderer,
+        &atlases,
+        &mut harness,
+        PointerPhase::Idle,
+        None,
+    );
+    let generation = 7;
+    let idle_primitives = harness.scene.primitives.clone();
+    let idle_transforms = harness.scene.transforms.clone();
+    let idle_clips = harness.scene.clips.clone();
+    let idle_payloads = harness.scene.payloads.clone();
+
+    // 2. The hovered button is the same scene with a handful of colours
+    //    changed, so it is a patch.
+    harness.rebuild_with(visual(PointerPhase::Hovered), 0);
+    upload_atlases(&mut renderer, &atlases, &mut harness);
+    let hovered = &harness.scene;
+    let diff = unbound_widgets::diff::diff_primitives(
+        &idle_primitives,
+        &hovered.primitives,
+        idle_transforms != hovered.transforms
+            || idle_clips != hovered.clips
+            || idle_payloads != hovered.payloads,
+    );
+    let unbound_widgets::diff::SceneDiff::Ranges(ranges) = diff else {
+        panic!("a hover must be a patch, got {diff:?}");
+    };
+
+    // 3. Patch the pool, then upload the same scene in full. Both have to
+    //    paint the hovered button.
     renderer
-        .render(&harness.scene.upload(harness.app.generation()))
-        .expect("render");
-    renderer.read_pixels().expect("readback")
+        .render(&hovered.upload(generation, &ranges))
+        .expect("patched render");
+    let patched = renderer.read_pixels().expect("readback");
+    renderer
+        .render(&hovered.upload(generation + 1, &[]))
+        .expect("full render");
+    let full = renderer.read_pixels().expect("readback");
+
+    assert_eq!(
+        patched,
+        full,
+        "the patch left stale pixels behind: {} differ",
+        differing_pixels(&patched, &full)
+    );
+    assert!(
+        differing_pixels(&patched, &idle) > 200,
+        "the hover must actually have changed the picture"
+    );
+    renderer.destroy();
 }
 
 fn differing_pixels(left: &[u8], right: &[u8]) -> usize {
@@ -517,7 +636,7 @@ fn the_gallery_draws_something() {
     renderer
         .write_theme_lut(&showcase::theme::lut(false))
         .expect("theme");
-    renderer.render(&scene.upload(1)).expect("render");
+    renderer.render(&scene.upload(1, &[])).expect("render");
     let pixels = renderer.read_pixels().expect("readback");
 
     // The picture must not be uniformly the background: the swatches, the

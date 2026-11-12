@@ -383,6 +383,24 @@ impl<'a> Canvas<'a> {
         z
     }
 
+    /// Paint a rounded rectangle at a given opacity.
+    ///
+    /// The primitive exists in every state; only its opacity changes. That
+    /// keeps a control's primitive count constant, which is what lets a
+    /// state change be repaired by patching one slice of the pool instead of
+    /// re-uploading the whole scene.
+    pub fn rect_faded(&mut self, rect: Rect, radius: f32, fill: u16, opacity: f32) -> u16 {
+        let start = self.scene.primitives.len();
+        let z = self.rect(rect, radius, fill, 0, 0.0, 0.0);
+        if let Some(primitive) = self.scene.primitives.get_mut(start) {
+            primitive.z_and_opacity = unbound_gpu::data::GpuPrimitiveInstance::pack_z_opacity(
+                primitive.depth_u16(),
+                opacity,
+            );
+        }
+        z
+    }
+
     /// Paint a shadow-only rounded rectangle.
     pub fn shadow(&mut self, rect: Rect, radius: f32, blur: f32) -> u16 {
         let z = self.next_z();

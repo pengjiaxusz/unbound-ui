@@ -29,6 +29,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 use unbound_world::{NodeId, UiWorld};
 
+use crate::primitive::focus_ring;
 use crate::{ControlState, PointerPhase, WidgetDesc, WidgetOutput};
 
 /// The button label font size. The glyph warm-up must use the same size,
@@ -382,20 +383,17 @@ pub fn emit_button_with_tokens(
         z,
     ));
 
-    // 5. The focus ring: an outward stroke, on top of everything.
-    if state.focused {
-        primitives.push(instance(
-            rect.inflate(FOCUS_RING_GAP),
-            [desc.radius + FOCUS_RING_GAP; 4],
-            Token::NONE,
-            tokens.focus_ring,
-            2.0,
-            0.0,
-            PrimType::Stroke,
-            SubElement::FocusRing,
-            z,
-        ));
-    }
+    // 5. The focus ring: an outward stroke, on top of everything. It is
+    //    always emitted — focus only changes its opacity — so that focusing
+    //    a button repaints one primitive instead of reshuffling the pool.
+    primitives.push(focus_ring(
+        rect.inflate(FOCUS_RING_GAP),
+        desc.radius + FOCUS_RING_GAP,
+        tokens.focus_ring,
+        2.0,
+        z,
+        state.focused,
+    ));
 
     let hit = (!state.disabled).then(|| {
         HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)

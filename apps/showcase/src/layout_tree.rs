@@ -12,7 +12,7 @@
 //! relayout boundary — the page can be re-solved without touching it.
 
 use unbound_abi::{Align, Dim, Edges, NodeFlags, Position, RawNodeDesc};
-use unbound_layout::LayoutEngine;
+use unbound_layout::{LayoutEngine, LayoutStats};
 use unbound_math::Rect;
 use unbound_world::{NodeId, UiWorld};
 
@@ -190,6 +190,8 @@ pub struct ShellTree {
     chrome: ChromeNodes,
     cards: Vec<CardNodes>,
     page_id: Option<PageId>,
+    /// The statistics of the last solve.
+    last_stats: LayoutStats,
 }
 
 impl Default for ShellTree {
@@ -365,6 +367,7 @@ impl ShellTree {
             chrome,
             cards: Vec::new(),
             page_id: None,
+            last_stats: LayoutStats::default(),
         }
     }
 
@@ -456,10 +459,10 @@ impl ShellTree {
         // Whether it actually does is the engine's answer, not ours: the
         // second pass folds the panel if the flex line ran out of room.
         self.update_page(state, page_width, false);
-        self.engine.solve(&mut self.world, self.root, viewport.size);
+        self.last_stats = self.engine.solve(&mut self.world, self.root, viewport.size);
         if self.options_folded() {
             self.update_page(state, page_width, true);
-            self.engine.solve(&mut self.world, self.root, viewport.size);
+            self.last_stats = self.engine.solve(&mut self.world, self.root, viewport.size);
         }
 
         let rect = |id: NodeId| self.rect_of(id);
@@ -481,6 +484,15 @@ impl ShellTree {
             compact,
             wide,
         }
+    }
+
+    /// The statistics of the last solve.
+    ///
+    /// `nodes_visited` is zero when the tree was not solved at all — a
+    /// paint-only frame does not touch the layout.
+    #[must_use]
+    pub fn stats(&self) -> LayoutStats {
+        self.last_stats
     }
 
     /// The height of the page's content, in the page's own coordinate space.

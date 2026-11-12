@@ -411,8 +411,17 @@ impl Gallery {
     }
 
     /// The scene as an upload plan.
+    ///
+    /// `dirty_ranges` are the primitive ranges that changed since the last
+    /// upload. An empty slice means "upload everything"; a non-empty one
+    /// makes the renderer patch just those slices, which is what turns a
+    /// hover into a handful of uploaded bytes.
     #[must_use]
-    pub fn upload(&self, generation: u64) -> SceneUpload<'_> {
+    pub fn upload<'a>(
+        &'a self,
+        generation: u64,
+        dirty_ranges: &'a [(u32, u32)],
+    ) -> SceneUpload<'a> {
         SceneUpload {
             primitives: &self.primitives,
             transforms: &self.transforms,
@@ -421,6 +430,7 @@ impl Gallery {
             generation,
             camera: self.camera,
             key_prefix: (unbound_gpu::data::PassLayer::Ui as u64) << 56,
+            dirty_ranges,
         }
     }
 }
