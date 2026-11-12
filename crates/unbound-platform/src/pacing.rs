@@ -25,6 +25,21 @@ pub const REFRESH_60: Duration = Duration::from_nanos(16_666_667);
 /// The smallest non-zero frame rate limit the engine accepts.
 pub const MIN_FPS_LIMIT: u32 = 60;
 
+/// How early the event loop's OS sleep is cut short before the exact frame
+/// deadline.
+///
+/// `ControlFlow::WaitUntil` lands in `MsgWaitForMultipleObjectsEx` on Windows,
+/// whose timeout is a whole number of milliseconds and is additionally delayed
+/// by the system timer granularity (1–2 ms). Sleeping to the exact instant
+/// therefore always oversleeps; waking this much earlier and spinning the
+/// remaining gap out gets the cadence to the requested frame rate instead of
+/// a few percent below it.
+pub const SPIN_LEAD: Duration = Duration::from_micros(1200);
+
+/// No spin is attempted for intervals at or below this: a sub-millisecond
+/// busy-wait would cost more CPU than the jitter it removes.
+const MIN_SPIN_INTERVAL: Duration = Duration::from_millis(2);
+
 /// How the CPU synchronises with the display.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PresentSync {
@@ -200,8 +215,28 @@ impl FramePacer {
     }
 
     /// Record that a frame was presented.
+    ///
+    /// The next deadline is advanced by exactly one interval from the
+    /// *previous deadline*, not from the wake-up instant. Resetting to `now`
+    /// makes every oversleep permanent: at 6.944 ms (144 FPS) a 0.8 ms late
+    /// wake-up and a 0.8 ms timer rounding add up frame after frame until the
+    /// measured rate sits at 115 FPS instead of 144.
+    ///
+    /// A hitch longer than a whole interval restarts the phase instead of
+    /// racing to catch up, so a drag or a stalled GPU does not produce a burst
+    /// of back-to-back frames.
     pub fn on_present(&mut self, now: Instant) {
-        self.last_present = Some(now);
+        self.last_present = Some(match self.last_present {
+            Some(previous) if !self.interval.is_zero() => {
+                let next = previous + self.interval;
+                if now > next + self.interval {
+                    now
+                } else {
+                    next
+                }
+            }
+            _ => now,
+        });
     }
 
     /// The instant the next frame becomes due, if the pacer is running.
@@ -214,6 +249,51 @@ impl FramePacer {
         // An unlimited pacer is always due; a deadline in the past would also
         // work, but returning `now` keeps `ControlFlow::Poll` explicit.
         Some((last + self.interval).max(now))
+    }
+
+    /// The instant the event loop should wake up.
+    ///
+    /// This is [`Self::next_deadline`] moved [`SPIN_LEAD`] earlier so that
+    /// [`Self::spin_to_deadline`] can close the remaining sub-millisecond gap
+    /// instead of the OS timer deciding where the frame lands.
+    #[must_use]
+    pub fn next_wake(&self, now: Instant) -> Option<Instant> {
+        let deadline = self.next_deadline(now)?;
+        if self.interval <= MIN_SPIN_INTERVAL {
+            return Some(deadline);
+        }
+        Some(deadline.checked_sub(SPIN_LEAD).unwrap_or(now))
+    }
+
+    /// Whether the exact deadline is close enough to be spun on.
+    #[must_use]
+    pub fn within_spin_lead(&self, now: Instant) -> bool {
+        let Some(last) = self.last_present else {
+            return false;
+        };
+        if self.interval <= MIN_SPIN_INTERVAL {
+            return false;
+        }
+        let deadline = last + self.interval;
+        now < deadline && deadline.saturating_duration_since(now) <= SPIN_LEAD
+    }
+
+    /// Busy-wait until the exact deadline and return the instant it was hit.
+    ///
+    /// Bounded by [`SPIN_LEAD`] because the caller only spins when
+    /// [`Self::within_spin_lead`] is true.
+    #[must_use]
+    pub fn spin_to_deadline(&self) -> Instant {
+        let Some(last) = self.last_present else {
+            return Instant::now();
+        };
+        let deadline = last + self.interval;
+        let mut now = Instant::now();
+        while now < deadline {
+            std::hint::spin_loop();
+            now = Instant::now();
+        }
+        now
     }
 
     /// True when a frame is due.
@@ -348,5 +428,41 @@ mod tests {
                 && delta < REFRESH_60 + Duration::from_micros(1),
             "deadline drifted by {delta:?}"
         );
+    }
+
+    #[test]
+    fn a_late_wake_up_does_not_accumulate_into_a_frame_rate_deficit() {
+        let mut pacer = FramePacer::new(REFRESH_120);
+        let start = Instant::now();
+        pacer.on_present(start);
+        // Frame 2 woke up 0.5 ms late. The phase must stay on the grid, so the
+        // next deadline is still exactly two intervals after the start.
+        pacer.on_present(start + REFRESH_120 + Duration::from_micros(500));
+        assert_eq!(
+            pacer.next_deadline(start).expect("deadline"),
+            start + REFRESH_120 * 2
+        );
+    }
+
+    #[test]
+    fn a_hitch_restarts_the_phase_instead_of_catching_up() {
+        let mut pacer = FramePacer::new(REFRESH_120);
+        let start = Instant::now();
+        pacer.on_present(start);
+        let late = start + REFRESH_120 * 3;
+        pacer.on_present(late);
+        assert_eq!(pacer.next_deadline(late), Some(late + REFRESH_120));
+    }
+
+    #[test]
+    fn the_event_loop_wakes_early_enough_to_spin() {
+        let mut pacer = FramePacer::new(REFRESH_60);
+        let now = Instant::now();
+        pacer.on_present(now);
+        let deadline = pacer.next_deadline(now).expect("deadline");
+        let wake = pacer.next_wake(now).expect("wake");
+        assert_eq!(wake + SPIN_LEAD, deadline);
+        assert!(!pacer.within_spin_lead(now));
+        assert!(pacer.within_spin_lead(wake));
     }
 }

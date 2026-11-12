@@ -1200,6 +1200,18 @@ impl GalleryApp {
                     self.state.bump();
                 }
             }
+            PageId::Fonts => {
+                // The BiDi sandbox's custom preset is a real text input: the
+                // IME has to compose into `demo.text` exactly like the text
+                // field page, otherwise a CJK/Arabic input method would only
+                // ever deliver ASCII.
+                if card == 2 && part == 1 {
+                    self.state.demo.typing = true;
+                    self.state.search_focused = false;
+                    self.ime_caret = self.pointer;
+                    self.state.bump();
+                }
+            }
             PageId::Overlays => match part {
                 1 => {
                     self.state.demo.dropdown_open = !self.state.demo.dropdown_open;
@@ -1638,14 +1650,13 @@ fn nav_rows(state: &GalleryState, layout: &ShellLayout) -> Vec<(Rect, String)> {
         return rows;
     }
     let mut y = layout.nav.origin.y + 10.0;
-    for (_page, label) in [(PageId::Home, "Home"), (PageId::Colors, "Design Guidance")] {
-        rows.push((
-            Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 36.0),
-            format!("Navigation \"{label}\""),
-        ));
-        y += 38.0 + 2.0;
-    }
-    y += 8.0;
+    rows.push((
+        Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 36.0),
+        "Navigation \"Home\"".to_string(),
+    ));
+    // The tree starts below the Home row and its divider — the same offset
+    // `nav_tree_rect` uses.
+    y = layout.nav.origin.y + 56.0;
     for category in CategoryId::ALL {
         y += 24.0;
         for page in category.pages() {
@@ -1679,7 +1690,7 @@ fn node_rect_from_regions(app: &GalleryApp, node: u64) -> Option<Rect> {
 // ---------------------------------------------------------------------------
 
 fn nav_tree_rect(layout: &ShellLayout) -> Rect {
-    let top = layout.nav.origin.y + 10.0 + 76.0 + 8.0;
+    let top = layout.nav.origin.y + 56.0;
     let bottom = layout.viewport.max().y - 10.0 - 82.0;
     Rect::new(
         layout.nav.origin.x,
@@ -1693,7 +1704,7 @@ fn nav_height(layout: &ShellLayout) -> f32 {
     if layout.nav_width < 140.0 {
         return 9.0 * 42.0 + 10.0;
     }
-    let mut height = 10.0 + 76.0 + 8.0;
+    let mut height = 10.0 + 38.0 + 8.0;
     for category in CategoryId::ALL {
         height += 24.0 + category.pages().len() as f32 * 30.0 + 8.0;
     }
@@ -2120,20 +2131,7 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
         Target::NavPage(PageId::Home.index() as u8),
     );
     y += 38.0;
-    nav_item(
-        canvas,
-        layout,
-        Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 36.0),
-        "Design Guidance",
-        Icon::Layers,
-        state.active_page.category() == CategoryId::Design,
-        Target::NavPage(PageId::Colors.index() as u8),
-    );
-    canvas.divider(
-        layout.nav.origin.x + 14.0,
-        y + 44.0,
-        layout.nav_width - 28.0,
-    );
+    canvas.divider(layout.nav.origin.x + 14.0, y + 6.0, layout.nav_width - 28.0);
 
     let tree = nav_tree_rect(layout);
     canvas.begin_clip(tree);

@@ -7,6 +7,7 @@
 pub mod canvas;
 pub mod collections;
 pub mod design;
+pub mod fonts;
 pub mod home;
 pub mod input;
 pub mod layout;
@@ -32,7 +33,12 @@ pub enum CategoryId {
 
 impl CategoryId {
     /// The categories rendered in the navigation tree.
-    pub const ALL: [CategoryId; 5] = [
+    ///
+    /// `Design` is part of the tree: leaving it out meant the whole design
+    /// section (colour, type, elevation, vectors, fonts) was reachable only
+    /// through the single "Design Guidance" row that always opened Colors.
+    pub const ALL: [CategoryId; 6] = [
+        CategoryId::Design,
         CategoryId::Basic,
         CategoryId::Layout,
         CategoryId::Collections,
@@ -61,6 +67,7 @@ impl CategoryId {
             Self::Design => &[
                 PageId::Colors,
                 PageId::Typography,
+                PageId::Fonts,
                 PageId::Elevation,
                 PageId::Vector,
             ],
@@ -85,6 +92,8 @@ pub enum PageId {
     Home,
     Colors,
     Typography,
+    /// Multilingual script matrix, curve inspector and BiDi sandbox.
+    Fonts,
     Elevation,
     Vector,
     Buttons,
@@ -106,10 +115,11 @@ pub enum PageId {
 }
 
 impl PageId {
-    pub const ALL: [PageId; 21] = [
+    pub const ALL: [PageId; 22] = [
         PageId::Home,
         PageId::Colors,
         PageId::Typography,
+        PageId::Fonts,
         PageId::Elevation,
         PageId::Vector,
         PageId::Buttons,
@@ -136,24 +146,25 @@ impl PageId {
             Self::Home => 0,
             Self::Colors => 1,
             Self::Typography => 2,
-            Self::Elevation => 3,
-            Self::Vector => 4,
-            Self::Buttons => 5,
-            Self::Toggles => 6,
-            Self::Sliders => 7,
-            Self::TextField => 8,
-            Self::Flex => 9,
-            Self::Overlays => 10,
-            Self::DragDrop => 11,
-            Self::ListView => 12,
-            Self::Assets => 13,
-            Self::Viewport => 14,
-            Self::Marquee => 15,
-            Self::Undo => 16,
-            Self::Springs => 17,
-            Self::A11y => 18,
-            Self::Telemetry => 19,
-            Self::Settings => 20,
+            Self::Fonts => 3,
+            Self::Elevation => 4,
+            Self::Vector => 5,
+            Self::Buttons => 6,
+            Self::Toggles => 7,
+            Self::Sliders => 8,
+            Self::TextField => 9,
+            Self::Flex => 10,
+            Self::Overlays => 11,
+            Self::DragDrop => 12,
+            Self::ListView => 13,
+            Self::Assets => 14,
+            Self::Viewport => 15,
+            Self::Marquee => 16,
+            Self::Undo => 17,
+            Self::Springs => 18,
+            Self::A11y => 19,
+            Self::Telemetry => 20,
+            Self::Settings => 21,
         }
     }
 
@@ -166,7 +177,9 @@ impl PageId {
     pub const fn category(self) -> CategoryId {
         match self {
             Self::Home => CategoryId::Home,
-            Self::Colors | Self::Typography | Self::Elevation | Self::Vector => CategoryId::Design,
+            Self::Colors | Self::Typography | Self::Fonts | Self::Elevation | Self::Vector => {
+                CategoryId::Design
+            }
             Self::Buttons | Self::Toggles | Self::Sliders | Self::TextField => CategoryId::Basic,
             Self::Flex | Self::Overlays | Self::DragDrop => CategoryId::Layout,
             Self::ListView | Self::Assets => CategoryId::Collections,
@@ -182,6 +195,7 @@ impl PageId {
             Self::Home => home::INFO,
             Self::Colors => design::COLORS_INFO,
             Self::Typography => design::TYPOGRAPHY_INFO,
+            Self::Fonts => fonts::FONTS_INFO,
             Self::Elevation => design::ELEVATION_INFO,
             Self::Vector => design::VECTOR_INFO,
             Self::Buttons => input::BUTTONS_INFO,
@@ -209,6 +223,7 @@ impl PageId {
             Self::Home => home::EXAMPLES,
             Self::Colors => design::COLOR_EXAMPLES,
             Self::Typography => design::TYPOGRAPHY_EXAMPLES,
+            Self::Fonts => fonts::FONTS_EXAMPLES,
             Self::Elevation => design::ELEVATION_EXAMPLES,
             Self::Vector => design::VECTOR_EXAMPLES,
             Self::Buttons => input::BUTTON_EXAMPLES,
@@ -381,6 +396,9 @@ pub enum DemoKind {
     ControlIndex,
     Palette { compare: bool },
     Typography { scaling: bool },
+    ScriptMatrix,
+    CurveInspector,
+    BidiSandbox,
     Elevation { clipping: bool },
     Vector { shapes: bool },
     Buttons { icons: bool },
@@ -503,6 +521,9 @@ pub fn render_demo(ctx: &mut DemoCtx<'_, '_>, demo: DemoKind) {
         DemoKind::ControlIndex => home::control_index(ctx),
         DemoKind::Palette { compare } => design::palette(ctx, compare),
         DemoKind::Typography { scaling } => design::typography(ctx, scaling),
+        DemoKind::ScriptMatrix => fonts::script_matrix(ctx),
+        DemoKind::CurveInspector => fonts::curve_inspector(ctx),
+        DemoKind::BidiSandbox => fonts::bidi_sandbox(ctx),
         DemoKind::Elevation { clipping } => design::elevation(ctx, clipping),
         DemoKind::Vector { shapes } => design::vector(ctx, shapes),
         DemoKind::Buttons { icons } => input::buttons(ctx, icons),

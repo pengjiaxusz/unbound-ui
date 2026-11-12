@@ -5,7 +5,7 @@ use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::target::{self, Target};
 use unbound_headless::Harness;
-use unbound_math::Vec2;
+use unbound_math::{Rect, Vec2};
 use unbound_platform::{Modifiers, PlatformKey};
 
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
@@ -210,9 +210,12 @@ fn knobs_are_live_and_route_through_the_reducer() {
 #[test]
 fn pointer_hits_navigation_rows_without_a_window() {
     let mut app = app();
-    // The second navigation row is Design Guidance.
-    app.pointer_down(Vec2::new(120.0, 122.0), 0.0);
-    app.pointer_up(Vec2::new(120.0, 122.0), 0.1);
+    // The design section is now a real tree category, so Colors has its own
+    // row; the target identity is what the pointer has to resolve.
+    let node = target::id(Target::NavPage(PageId::Colors.index() as u8));
+    let point = rect_of(&app, node).center();
+    app.pointer_down(point, 0.0);
+    app.pointer_up(point, 0.1);
     assert_eq!(app.state.active_page, PageId::Colors);
 }
 
@@ -781,7 +784,31 @@ fn a_hover_patch_stays_inside_the_hovered_control() {
         app.pointer_move(Vec2::new(2.0, 898.0));
         app.rebuild(VIEWPORT);
         app.mark_uploaded();
-        let hovered = rect_of(&app, node).center();
+        // A row that is partly scrolled out of the navigation tree only
+        // receives events inside the clip, so the hover point has to be the
+        // centre of the visible part — hovering a clipped-away row would hit
+        // whatever is painted underneath it.
+        let Some(region) = app
+            .router
+            .regions()
+            .iter()
+            .find(|region| region.node == node)
+            .cloned()
+        else {
+            continue;
+        };
+        let mut visible = region.bounds;
+        if let Some(clip) = &region.clip {
+            let x0 = visible.origin.x.max(clip.rect.origin.x);
+            let y0 = visible.origin.y.max(clip.rect.origin.y);
+            let x1 = visible.max().x.min(clip.rect.max().x);
+            let y1 = visible.max().y.min(clip.rect.max().y);
+            visible = Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0));
+        }
+        if visible.size.x < 4.0 || visible.size.y < 6.0 {
+            continue;
+        }
+        let hovered = visible.center();
         app.pointer_move(hovered);
         app.rebuild(VIEWPORT);
         let Some((start, end)) = app.span_of(node) else {

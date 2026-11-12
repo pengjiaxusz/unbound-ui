@@ -11,7 +11,7 @@ use unbound_a11y::{A11yNode, Semantics};
 use unbound_gpu::data::{GpuClipNode, GpuPrimitiveInstance, CLIP_NONE};
 use unbound_input::{ClipRect, CursorKind, HitRegion};
 use unbound_math::{Rect, Vec2};
-use unbound_text::GlyphQuad;
+use unbound_text::{GlyphQuad, TextStyle};
 use unbound_widgets::{ControlState, PointerPhase, WidgetOutput};
 
 use crate::gallery::{Gallery, Labels, Palette};
@@ -562,6 +562,54 @@ impl<'a> Canvas<'a> {
         let quads = self.labels.layout(text, Vec2::new(x, y), size);
         let ink = quads_bounds(&quads).unwrap_or(Rect::new(x, y, metrics.width, size));
         (quads, ink)
+    }
+
+    /// Shape a styled run at its aligned position without painting it.
+    ///
+    /// Same alignment rules as [`Self::layout_text`], but with an explicit
+    /// weight, slant and family: the font inspector's whole point is to show
+    /// the difference between them.
+    #[allow(clippy::too_many_arguments)]
+    pub fn layout_text_styled(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        style: &TextStyle,
+        align_x: AlignX,
+        align_y: AlignY,
+    ) -> (Vec<GlyphQuad>, Rect) {
+        let metrics = self.labels.metrics_styled(text, style);
+        let x = match align_x {
+            AlignX::Start => rect.origin.x,
+            AlignX::Center => rect.origin.x + (rect.size.x - metrics.width) * 0.5,
+            AlignX::End => rect.max().x - metrics.width,
+        };
+        let y = match align_y {
+            AlignY::Top => rect.origin.y,
+            AlignY::Center => rect.origin.y + (rect.size.y - metrics.line_height()) * 0.5,
+            AlignY::Bottom => rect.max().y - metrics.line_height(),
+        };
+        let x = self.snap_value(x);
+        let y = self.snap_value(y);
+        let quads = self.labels.layout_styled(text, Vec2::new(x, y), style);
+        let ink = quads_bounds(&quads).unwrap_or(Rect::new(x, y, metrics.width, style.font_size));
+        (quads, ink)
+    }
+
+    /// Paint a styled single-line label inside `rect`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_styled(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        style: &TextStyle,
+        color: u16,
+        align_x: AlignX,
+        align_y: AlignY,
+    ) -> Rect {
+        let (quads, ink) = self.layout_text_styled(text, rect, style, align_x, align_y);
+        self.glyphs(&quads, color);
+        ink
     }
 
     /// The visual state of a standard control.

@@ -285,17 +285,10 @@ impl GlyphCache {
         let phase = self.phase_at(pen.x);
         let sdf_mode = self.use_sdf;
         let face_index = u64::from(self.face_id(face));
-        // Optical sizing: at 9–17 px a regular weight loses about one third of
-        // its stem in the rasteriser, which is why small labels used to read
-        // as light grey. Asking for a slightly heavier cut at raster time is
-        // what browsers call "optical sizing"; the advance comes from the
-        // shaped run, so the layout does not shift.
-        let weight = if glyph.font_size < 18.0 {
-            let bump = ((18.0 - glyph.font_size) * 10.0).clamp(80.0, 120.0) as u16;
-            weight.saturating_add(bump)
-        } else {
-            weight
-        };
+        // The raster weight must be the weight the run was shaped at. Adding
+        // an "optical" bump here made small labels heavier than the advances
+        // they were laid out with, and the step at 18 px made a size change
+        // jump in weight.
         // The raster depends on the phase, the weight and the italic slant,
         // so all three are part of the key.
         let key = GlyphKey::styled(
@@ -494,55 +487,28 @@ impl GlyphCache {
 }
 
 fn pad_r8(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
-    // The padding is a *ramp*, not a transparent gutter.
+    // A pure transparent gutter around the glyph's tight bounding box.
     //
-    // The glyph quad is inflated by `padding` on every side, so the outer
-    // texels are actually sampled. Leaving them at zero sampled as a hard
-    // transparent edge (thin, washed-out stems); copying the edge value
-    // verbatim widened every stem by two full pixels. A linear falloff keeps
-    // the antialiased edge and adds just enough weight to match an LCD
-    // renderer on a 1 px stem.
+    // The quad is inflated by `padding`, so the outer texels *are* sampled —
+    // but they must sample as fully transparent. A previous version ramped
+    // the edge coverage outwards instead (edge-clamp + a 50 % falloff), which
+    // extruded a grey step next to every texel row that touched the bounding
+    // box: on an `O` those are exactly the four tangent points, so the
+    // letter grew a square smudge at the top, bottom, left and right while
+    // the diagonal corners stayed clean.
+    //
+    // The gutter exists to stop a bilinear tap from reaching the neighbouring
+    // glyph; it is not a place to add ink.
     let pw = w + pad * 2;
     let ph = h + pad * 2;
     let mut out = vec![0u8; (pw * ph) as usize];
     if w == 0 || h == 0 {
         return out;
     }
-    let max_x = (w - 1) as i32;
-    let max_y = (h - 1) as i32;
-    // Stem darkening: coverage is gamma-lifted once, at atlas build time, so
-    // the raster carries the weight even where the shader's gamma correction
-    // is disabled. 0 stays 0, so the padding gutter remains transparent.
-    let mut curve = [0u8; 256];
-    for (value, slot) in curve.iter_mut().enumerate() {
-        *slot = if value == 0 {
-            0
-        } else {
-            ((value as f32 / 255.0).powf(0.82) * 1.05 * 255.0).min(255.0) as u8
-        };
-    }
-    for y in 0..ph {
-        for x in 0..pw {
-            let sx = x as i32 - pad as i32;
-            let sy = y as i32 - pad as i32;
-            let cx = sx.clamp(0, max_x);
-            let cy = sy.clamp(0, max_y);
-            let src_off = (cy as u32 * w + cx as u32) as usize;
-            let value = curve[src[src_off] as usize];
-            let out_of_bounds = (sx < 0 || sy < 0 || sx > max_x || sy > max_y) as u32;
-            // Distance outside the glyph, in pixels.
-            let dist = out_of_bounds
-                * (sx.clamp(0, max_x) - sx)
-                    .unsigned_abs()
-                    .max((sy.clamp(0, max_y) - sy).unsigned_abs());
-            let faded = if pad == 0 {
-                value
-            } else {
-                let keep = pad.saturating_sub(dist);
-                (u32::from(value) * keep / pad) as u8
-            };
-            out[(y * pw + x) as usize] = faded;
-        }
+    for y in 0..h {
+        let dst = ((y + pad) * pw + pad) as usize;
+        let src_off = (y * w) as usize;
+        out[dst..dst + w as usize].copy_from_slice(&src[src_off..src_off + w as usize]);
     }
     out
 }
@@ -590,6 +556,32 @@ mod tests {
 
     fn engine() -> TextEngine {
         TextEngine::new()
+    }
+
+    #[test]
+    fn the_glyph_gutter_stays_transparent() {
+        // 2 px wide, 3 px tall source with a bright left edge — the shape of a
+        // glyph edge that touches the tight bounding box (the tangent point of
+        // an `O`).
+        let src = [255u8, 128, 64, 200, 40, 10];
+        let out = pad_r8(&src, 2, 3, 2);
+        let pw = 2 + 4;
+        assert_eq!(out.len(), pw * (3 + 4));
+        // Every texel of the gutter is zero: no edge-clamp extrusion, so the
+        // rounded corner cannot grow a square smudge.
+        for x in 0..pw {
+            assert_eq!(out[x], 0, "top gutter at x={x}");
+            assert_eq!(out[(3 + 3) * pw + x], 0, "bottom gutter at x={x}");
+        }
+        for y in 0..7 {
+            assert_eq!(out[y * pw], 0, "left gutter at y={y}");
+            assert_eq!(out[y * pw + pw - 1], 0, "right gutter at y={y}");
+        }
+        // The glyph itself is copied verbatim, with no gamma ramp.
+        assert_eq!(out[2 * pw + 2], 255);
+        assert_eq!(out[2 * pw + 3], 128);
+        assert_eq!(out[3 * pw + 2], 64);
+        assert_eq!(out[3 * pw + 3], 200);
     }
 
     #[test]

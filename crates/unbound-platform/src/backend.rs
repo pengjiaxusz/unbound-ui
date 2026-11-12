@@ -263,7 +263,7 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
         // The pacer knows when the next frame is due; the loop sleeps until
         // then and wakes up on its own.
         let now = Instant::now();
-        let flow = match state.pacer.next_deadline(now) {
+        let flow = match state.pacer.next_wake(now) {
             Some(deadline) => winit::event_loop::ControlFlow::WaitUntil(deadline),
             // Nothing has been presented yet *and* the application still
             // wants frames: poll so the first frame gets through.

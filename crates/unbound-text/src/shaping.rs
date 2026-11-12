@@ -394,6 +394,33 @@ impl TextEngine {
         shaped
     }
 
+    /// The system font families that shaped `text`, in run order.
+    ///
+    /// A fallback chain is invisible from the outside: asking for the UI font
+    /// says nothing about whether the CJK part landed on `Microsoft YaHei UI`
+    /// or the Arabic part on `Segoe UI`. The font inspector page needs the
+    /// answer, so it comes from the same shaped run the renderer draws.
+    #[must_use]
+    pub fn resolved_families(&mut self, text: &str, style: &TextStyle) -> Vec<String> {
+        let shaped = self.shape(text, style);
+        let ids = shaped.faces.clone();
+        let db = self.font_system_mut().db_mut();
+        let mut out: Vec<String> = Vec::new();
+        for id in ids {
+            let Some(face) = db.face(id) else {
+                continue;
+            };
+            let name = face.families.first().map_or_else(
+                || face.post_script_name.clone(),
+                |(family, _)| family.clone(),
+            );
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+        out
+    }
+
     fn shape_uncached(&mut self, text: &str, style: &TextStyle) -> ShapedText {
         if text.is_empty() {
             return ShapedText::default();
@@ -441,7 +468,17 @@ impl TextEngine {
                 glyphs.push(PositionedGlyph {
                     glyph_id: g.glyph_id,
                     face_index: u16::try_from(face_index).unwrap_or(0),
-                    x: g.x,
+                    // HarfBuzz (through rustybuzz) positions marks out of the
+                    // run's pen stream: an Arabic haraka, a Thai tone mark or
+                    // a Vietnamese double accent carries its real placement in
+                    // `x_offset`/`y_offset` (in em units). Dropping them
+                    // collapses every mark onto the baseline, on top of the
+                    // base letter.
+                    //
+                    // This mirrors `cosmic_text::LayoutGlyph::physical`:
+                    // `x = g.x + font_size * x_offset`,
+                    // `y = g.y - font_size * y_offset`.
+                    x: g.x + g.font_size * g.x_offset,
                     // The baseline of the glyph, relative to the top of the
                     // text box.
                     //
@@ -453,7 +490,7 @@ impl TextEngine {
                     // glyph at the wrong height *and* ignored the line's
                     // position, so a second line was drawn on top of the
                     // first.
-                    y: run.line_y + g.y,
+                    y: run.line_y + g.y - g.font_size * g.y_offset,
                     w: g.w,
                     font_size: g.font_size,
                     cluster: u32::try_from(g.start).unwrap_or(u32::MAX),

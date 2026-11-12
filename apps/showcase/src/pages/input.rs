@@ -743,21 +743,15 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
     } else {
         palette.text
     };
-    let ink = ctx
+    // Lay the run out once. The glyphs are painted after the selection band
+    // (which has to sit *under* the text), and the ink box is only used for
+    // the caret and the preedit underline — never as a line box. The old code
+    // fed the ink box back into `text()` with `AlignY::Top`, which shifted a
+    // second copy of the run a few pixels down and left, and that is the
+    // "double image" the screenshot shows.
+    let (quads, ink) = ctx
         .canvas
-        .text(text, text_rect, 15.0, color, AlignX::Start, AlignY::Center);
-    if !preedit.is_empty() {
-        let committed = ctx.canvas.labels.measure(&ctx.state.demo.text, 15.0).x;
-        let width = ctx.canvas.labels.measure(preedit, 15.0).x;
-        ctx.canvas.rect(
-            Rect::new(ink.origin.x + committed, ink.max().y - 2.0, width, 1.5),
-            0.5,
-            palette.primary,
-            0,
-            0.0,
-            0.0,
-        );
-    }
+        .layout_text(text, text_rect, 15.0, AlignX::Start, AlignY::Center);
     let select_mode = if selection { ctx.knob(0) as usize } else { 2 };
     if select_mode < 2 && !ctx.state.demo.text.is_empty() {
         let selected = if select_mode == 0 {
@@ -768,24 +762,34 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
         let width = ctx.canvas.labels.measure(selected, 15.0).x;
         ctx.canvas.rect(
             Rect::new(
-                ink.origin.x - 2.0,
-                ink.origin.y - 2.0,
+                text_rect.origin.x,
+                field.origin.y + 8.0,
                 width + 4.0,
-                ink.size.y + 4.0,
+                field.size.y - 16.0,
             ),
-            3.0,
+            4.0,
             palette.selection_fill,
             0,
             0.0,
             0.0,
         );
-        ctx.canvas.text(
-            selected,
-            Rect::new(ink.origin.x, ink.origin.y, width, ink.size.y),
-            15.0,
-            palette.text,
-            AlignX::Start,
-            AlignY::Top,
+    }
+    ctx.canvas.glyphs(&quads, color);
+    if !preedit.is_empty() {
+        let committed = ctx.canvas.labels.measure(&ctx.state.demo.text, 15.0).x;
+        let width = ctx.canvas.labels.measure(preedit, 15.0).x;
+        ctx.canvas.rect(
+            Rect::new(
+                text_rect.origin.x + committed,
+                ink.max().y - 2.0,
+                width,
+                1.5,
+            ),
+            0.5,
+            palette.primary,
+            0,
+            0.0,
+            0.0,
         );
     }
     if focused && (ctx.state.demo.elapsed * 2.0).rem_euclid(2.0) < 1.2 {

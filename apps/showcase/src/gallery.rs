@@ -645,6 +645,72 @@ impl Labels {
         }
         quads
     }
+
+    /// Lay out a label with an explicit weight, slant and family.
+    ///
+    /// [`Self::layout`] is a fixed regular upright run. The font inspector
+    /// moves the whole axis, and the raster weight has to be the shaped weight
+    /// — a heavier raster with regular advances is what made small labels look
+    /// cramped.
+    pub fn layout_styled(&mut self, text: &str, origin: Vec2, style: &TextStyle) -> Vec<GlyphQuad> {
+        self.layout_styled_measured(text, origin, style).0
+    }
+
+    /// Lay out a styled run and report its logical metrics.
+    pub fn layout_styled_measured(
+        &mut self,
+        text: &str,
+        origin: Vec2,
+        style: &TextStyle,
+    ) -> (Vec<GlyphQuad>, TextMetrics) {
+        let scale = self.raster_scale;
+        let mut style = style.clone();
+        style.font_size *= scale;
+        let shaped = self.engine.shape(text, &style);
+        let metrics = metrics_of(&shaped, scale);
+        let mut quads = self.cache.quads_for(
+            &mut self.engine,
+            &shaped,
+            origin * scale,
+            style.weight,
+            style.italic,
+        );
+        if (scale - 1.0).abs() > 1e-6 {
+            for quad in &mut quads {
+                quad.rect.origin.x /= scale;
+                quad.rect.origin.y /= scale;
+                quad.rect.size.x /= scale;
+                quad.rect.size.y /= scale;
+            }
+        }
+        (quads, metrics)
+    }
+
+    /// Measure a styled run without emitting glyphs.
+    #[must_use]
+    pub fn measure_styled(&mut self, text: &str, style: &TextStyle) -> Vec2 {
+        let scale = self.raster_scale;
+        let mut style = style.clone();
+        style.font_size *= scale;
+        self.engine.measure(text, &style) / scale
+    }
+
+    /// The logical metrics of a styled run.
+    pub fn metrics_styled(&mut self, text: &str, style: &TextStyle) -> TextMetrics {
+        let scale = self.raster_scale;
+        let mut style = style.clone();
+        style.font_size *= scale;
+        let shaped = self.engine.shape(text, &style);
+        metrics_of(&shaped, scale)
+    }
+
+    /// The system families that actually shaped `text`.
+    pub fn resolved_families(&mut self, text: &str, style: &TextStyle) -> Vec<String> {
+        let scale = self.raster_scale;
+        let mut style = style.clone();
+        style.font_size *= scale;
+        self.engine.resolved_families(text, &style)
+    }
 }
 
 /// The logical metrics of a shaped run.

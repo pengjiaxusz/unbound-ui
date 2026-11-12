@@ -225,15 +225,15 @@ impl Showcase {
     ///
     /// The scene's upload generation is bumped by the rebuild itself, so
     /// the renderer always sees a fresh generation as soon as the state
-    /// moved. The redraw request is what makes the change visible in the
-    /// same frame: without it the window would keep showing the previous
-    /// picture until something else happened to trigger a frame.
+    /// moved. No redraw is requested here: every caller either runs inside
+    /// `frame` (which renders right away) or is followed by
+    /// `pacer.request_immediate`, and a `request_redraw` in this spot used
+    /// to short-circuit the pacer on every frame.
     fn sync_scene(&mut self, window: &Window) -> bool {
         let viewport = self.logical_viewport(window);
         let changed = self.app.sync(viewport);
         if changed {
             self.upload_glyphs();
-            window.request_redraw();
         }
         changed
     }
@@ -253,17 +253,25 @@ impl Showcase {
     /// The old chain is handed to the driver through `oldSwapchain`, so the
     /// presentation engine can hand its resources over instead of tearing
     /// the surface down — that is what removes the flicker on a resize.
-    fn recreate_swapchain(&mut self, width: u32, height: u32) -> bool {
+    fn recreate_swapchain(&mut self, window: &Window, width: u32, height: u32) -> bool {
         let Some(renderer) = &mut self.renderer else {
             return false;
         };
         let Some(surface) = &self.surface else {
             return false;
         };
-        // An uncapped or above-vsync limit would be pinned to the display's
-        // refresh rate by FIFO, so tearing is allowed in that mode only.
+        // A limit above the display's physical refresh rate cannot be reached
+        // through FIFO — the compositor would quantise every frame down to the
+        // VBlank (that is why "120" used to run at 60 FPS on a 60 Hz panel).
+        // Any such limit hands the cadence to the software pacer and presents
+        // without vsync; a limit at or below the refresh rate keeps the
+        // tear-free path.
         let limit = self.app.state.effective_fps_limit();
-        let allow_tearing = limit == 0 || limit > 120;
+        let refresh_hz = window
+            .current_monitor()
+            .and_then(|monitor| monitor.refresh_rate_millihertz())
+            .map_or(60.0, |millihertz| millihertz as f32 / 1000.0);
+        let allow_tearing = limit == 0 || (limit as f32) > refresh_hz + 0.5;
         let present = PresentConfig::from_capabilities(
             &renderer.gpu.enabled_device_extensions,
             allow_tearing,
@@ -580,9 +588,14 @@ impl PlatformApp for Showcase {
                 self.app.cancel_interactions();
             }
             PlatformEvent::RedrawRequested => {
-                // The OS asks for a frame: draw it right away instead of
-                // waiting for the pacer's next deadline.
-                state.pacer.request_immediate(Instant::now());
+                // The OS asked to repaint (the window was uncovered, or the
+                // compositor lost the surface). Only a *parked* loop has to be
+                // kicked: while the pacer is animating it already owns the
+                // cadence, and forcing a frame here would cancel the deadline
+                // that was set one moment ago on every single frame.
+                if !state.pacer.animating() {
+                    state.pacer.request_immediate(Instant::now());
+                }
             }
             PlatformEvent::CloseRequested => return Flow::Exit,
             _ => {}
@@ -643,17 +656,25 @@ impl PlatformApp for Showcase {
         let forced = settled.is_some() || self.swapchain_dirty || size_mismatch;
         if forced {
             self.swapchain_dirty = false;
-            if self.recreate_swapchain(window_width, window_height) {
+            if self.recreate_swapchain(window, window_width, window_height) {
                 self.rebuild(window);
             }
         }
 
-        let now = Instant::now();
+        let mut now = Instant::now();
         // Check the cadence *before* touching the frame clock: an early
         // return used to leave `last_frame` and the FPS counter updated for a
         // frame that was never drawn.
+        //
+        // The event loop wakes `SPIN_LEAD` before the deadline, so the last
+        // sub-millisecond gap is closed here instead of being left to the
+        // millisecond-granular OS timer.
         if !forced && !state.pacer.should_render(now) {
-            return Flow::Continue;
+            if state.pacer.within_spin_lead(now) {
+                now = state.pacer.spin_to_deadline();
+            } else {
+                return Flow::Continue;
+            }
         }
 
         // Advance time and rebuild the scene before borrowing the renderer:
@@ -755,9 +776,12 @@ impl PlatformApp for Showcase {
             || self.app.state.active_page == showcase::pages::PageId::Telemetry
             || moving;
         state.pacer.set_animating(keep_animating);
-        if keep_animating {
-            window.request_redraw();
-        }
+        // No `request_redraw` here: `about_to_wait` arms
+        // `ControlFlow::WaitUntil(pacer.next_wake())` on every iteration, so
+        // the loop wakes itself exactly when the next frame is due. Requesting
+        // a redraw as well delivered `RedrawRequested` immediately, whose
+        // handler cancelled the deadline that had just been set — the software
+        // limiter never got to enforce anything.
         state.latency.on_present(Instant::now());
         Flow::Continue
     }
@@ -939,7 +963,7 @@ mod tests {
     fn the_gallery_starts_on_home_with_a_full_catalogue() {
         let app = GalleryApp::new();
         assert_eq!(app.state.active_page, PageId::Home);
-        assert_eq!(PageId::ALL.len(), 21);
+        assert_eq!(PageId::ALL.len(), 22);
         assert!(!PageId::Home.examples().is_empty());
         assert!(PageId::Telemetry.examples().len() >= 2);
     }
