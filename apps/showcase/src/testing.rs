@@ -152,14 +152,11 @@ impl ButtonHarness {
     /// This is what the GPU test uses to render idle / hover / pressed without
     /// driving the router; interaction tests should prefer [`sync`](Self::sync).
     pub fn rebuild_with(&mut self, visual: ButtonVisualState, count: u32) -> &gallery::Gallery {
-        let desc = ButtonDesc {
-            rect: self.desc.rect,
-            label: format!("Clicked: {count}"),
-            radius: self.desc.radius,
-            font_size: self.desc.font_size,
-            z: self.desc.z,
-            variant: self.desc.variant,
-        };
+        let mut desc = ButtonDesc::new(self.desc.rect, format!("Clicked: {count}"));
+        desc.radius = self.desc.radius;
+        desc.font_size = self.desc.font_size;
+        desc.z = self.desc.z;
+        desc.variant = self.desc.variant;
         let (scene, glyphs, regions, semantics) = gallery::build_interactive(
             &mut self.labels,
             &gallery::palette(),
@@ -270,14 +267,11 @@ impl ButtonHarness {
     /// The frame the geometry sanitizers inspect.
     #[must_use]
     pub fn frame(&self) -> unbound_headless::Frame {
-        let desc = ButtonDesc {
-            rect: self.desc.rect,
-            label: format!("Clicked: {}", self.baked_count),
-            radius: self.desc.radius,
-            font_size: self.desc.font_size,
-            z: self.desc.z,
-            variant: self.desc.variant,
-        };
+        let mut desc = ButtonDesc::new(self.desc.rect, format!("Clicked: {}", self.baked_count));
+        desc.radius = self.desc.radius;
+        desc.font_size = self.desc.font_size;
+        desc.z = self.desc.z;
+        desc.variant = self.desc.variant;
         gallery::button_frame(VIEWPORT, &desc, &self.glyphs)
     }
 

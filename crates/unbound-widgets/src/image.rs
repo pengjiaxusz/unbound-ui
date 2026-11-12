@@ -118,8 +118,12 @@ pub struct ImageDesc {
     pub texture_layer: u32,
     /// The object fit.
     pub fit: ObjectFit,
-    /// The corner radius.
-    pub radius: f32,
+    /// The per-corner radii: top-left, top-right, bottom-right, bottom-left.
+    pub radius: [f32; 4],
+    /// The border width; `0.0` paints no border.
+    pub border_width: f32,
+    /// The border colour slot.
+    pub border_color: Token,
     /// The tint; [`Token::NONE`] leaves the texture untouched.
     pub tint: Token,
     /// The accessible description.
@@ -138,7 +142,9 @@ impl ImageDesc {
             natural_size,
             texture_layer,
             fit: ObjectFit::Cover,
-            radius: 0.0,
+            radius: [0.0; 4],
+            border_width: 0.0,
+            border_color: Token::NONE,
             tint: Token::NONE,
             alt: String::new(),
             z: 690,
@@ -160,10 +166,25 @@ impl ImageDesc {
         self
     }
 
-    /// The same image with rounded corners.
+    /// The same image with a uniform corner radius.
     #[must_use]
     pub fn with_radius(mut self, radius: f32) -> Self {
-        self.radius = radius;
+        self.radius = [radius; 4];
+        self
+    }
+
+    /// The same image with per-corner radii.
+    #[must_use]
+    pub fn with_radii(mut self, radii: [f32; 4]) -> Self {
+        self.radius = radii;
+        self
+    }
+
+    /// The same image with a border.
+    #[must_use]
+    pub fn with_border(mut self, width: f32, color: Token) -> Self {
+        self.border_width = width;
+        self.border_color = color;
         self
     }
 }
@@ -225,7 +246,7 @@ pub fn emit_image(node: u64, desc: &ImageDesc, state: ControlState) -> WidgetOut
     let fit = fit_image(desc.rect, desc.natural_size, desc.fit);
     let mut primitive = instance(
         fit.rect,
-        [desc.radius; 4],
+        desc.radius,
         desc.tint,
         Token::NONE,
         0.0,
@@ -244,11 +265,26 @@ pub fn emit_image(node: u64, desc: &ImageDesc, state: ControlState) -> WidgetOut
         flags: 0,
         _reserved: [0; 3],
     };
+    let mut primitives = vec![primitive];
+    // A textured primitive spends its border slot on the texture layer, so a
+    // border is a separate stroke drawn on top with the image's radii.
+    if desc.border_width > 0.0 && desc.border_color != Token::NONE {
+        primitives.push(instance(
+            fit.rect,
+            desc.radius,
+            Token::NONE,
+            desc.border_color,
+            desc.border_width,
+            0.0,
+            PrimType::RoundedRect,
+            SubElement::Border,
+            desc.z,
+        ));
+    }
 
     let hit = (desc.interactive && !state.disabled).then(|| {
-        HitRegion::new(node, IMAGE_LAYER, u32::from(desc.z), desc.rect).with_shape(Shape::Rounded {
-            radii: [desc.radius; 4],
-        })
+        HitRegion::new(node, IMAGE_LAYER, u32::from(desc.z), desc.rect)
+            .with_shape(Shape::Rounded { radii: desc.radius })
     });
     let mut a11y = A11yNode::new(
         Role::Image,
@@ -265,9 +301,160 @@ pub fn emit_image(node: u64, desc: &ImageDesc, state: ControlState) -> WidgetOut
     }
 
     WidgetOutput {
-        primitives: vec![primitive],
+        primitives,
         payloads: vec![payload],
         hit,
+        a11y: Some(a11y),
+        focusable: false,
+    }
+}
+
+/// A nine-patch image: a texture stretched with fixed edge insets.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NinePatchDesc {
+    /// The destination box.
+    pub rect: Rect,
+    /// The texture's natural size, in pixels.
+    pub natural_size: Vec2,
+    /// The texture layer in the atlas.
+    pub texture_layer: u32,
+    /// The insets in texture pixels: left, top, right, bottom.
+    pub patch: [f32; 4],
+    /// The tint; [`Token::NONE`] leaves the texture untouched.
+    pub tint: Token,
+    /// The accessible description.
+    pub alt: String,
+    /// The draw order key.
+    pub z: u16,
+}
+
+impl NinePatchDesc {
+    #[must_use]
+    pub fn new(rect: Rect, natural_size: Vec2, texture_layer: u32, patch: [f32; 4]) -> Self {
+        Self {
+            rect,
+            natural_size,
+            texture_layer,
+            patch,
+            tint: Token::NONE,
+            alt: String::new(),
+            z: 690,
+        }
+    }
+
+    /// The nine destination cells, row-major from the top-left.
+    #[must_use]
+    pub fn cells(&self) -> [Rect; 9] {
+        let (columns, rows) = self.spans();
+        let mut cells = [Rect::ZERO; 9];
+        for row in 0..3 {
+            for column in 0..3 {
+                cells[row * 3 + column] = Rect::new(
+                    columns[column].0,
+                    rows[row].0,
+                    columns[column].1,
+                    rows[row].1,
+                );
+            }
+        }
+        cells
+    }
+
+    /// The nine UV cells, row-major from the top-left.
+    #[must_use]
+    pub fn uvs(&self) -> [Rect; 9] {
+        let nw = self.natural_size.x.max(1.0);
+        let nh = self.natural_size.y.max(1.0);
+        let left = self.patch[0].clamp(0.0, nw);
+        let top = self.patch[1].clamp(0.0, nh);
+        let right = self.patch[2].clamp(0.0, nw - left);
+        let bottom = self.patch[3].clamp(0.0, nh - top);
+        let columns = [
+            (0.0, left / nw),
+            (left / nw, (1.0 - (left + right) / nw).max(0.0)),
+            (1.0 - right / nw, right / nw),
+        ];
+        let rows = [
+            (0.0, top / nh),
+            (top / nh, (1.0 - (top + bottom) / nh).max(0.0)),
+            (1.0 - bottom / nh, bottom / nh),
+        ];
+        let mut cells = [Rect::ZERO; 9];
+        for row in 0..3 {
+            for column in 0..3 {
+                cells[row * 3 + column] = Rect::new(
+                    columns[column].0,
+                    rows[row].0,
+                    columns[column].1,
+                    rows[row].1,
+                );
+            }
+        }
+        cells
+    }
+
+    /// `(position, length)` for the three columns and three rows.
+    fn spans(&self) -> ([(f32, f32); 3], [(f32, f32); 3]) {
+        let width = self.rect.width();
+        let height = self.rect.height();
+        let left = self.patch[0].clamp(0.0, width);
+        let top = self.patch[1].clamp(0.0, height);
+        let right = self.patch[2].clamp(0.0, width - left);
+        let bottom = self.patch[3].clamp(0.0, height - top);
+        let middle = (width - left - right).max(0.0);
+        let middle_h = (height - top - bottom).max(0.0);
+        let x0 = self.rect.origin.x;
+        let y0 = self.rect.origin.y;
+        (
+            [(x0, left), (x0 + left, middle), (x0 + left + middle, right)],
+            [
+                (y0, top),
+                (y0 + top, middle_h),
+                (y0 + top + middle_h, bottom),
+            ],
+        )
+    }
+}
+
+/// Emit nine UV-split textured primitives for a nine-patch image.
+#[must_use]
+pub fn emit_nine_patch(_node: u64, desc: &NinePatchDesc, state: ControlState) -> WidgetOutput {
+    let cells = desc.cells();
+    let uvs = desc.uvs();
+    let mut primitives = Vec::with_capacity(9);
+    let mut payloads = Vec::with_capacity(9);
+    for (cell, uv) in cells.iter().zip(uvs.iter()) {
+        let mut primitive = instance(
+            *cell,
+            [0.0; 4],
+            desc.tint,
+            Token::NONE,
+            0.0,
+            0.0,
+            PrimType::Image,
+            SubElement::Content,
+            desc.z,
+        );
+        primitive.border_token_or_tex = desc.texture_layer;
+        primitive.extra_payload_idx = payloads.len() as u32;
+        primitives.push(primitive);
+        payloads.push(GpuPayload {
+            p0: [uv.origin.x, uv.origin.y],
+            p1: [uv.max().x, uv.max().y],
+            p2: [0.0, 0.0],
+            line_width: 0.0,
+            extra: 0,
+            flags: 0,
+            _reserved: [0; 3],
+        });
+    }
+
+    let a11y = A11yNode::new(Role::Image, desc.alt.clone(), desc.rect).disabled(state.disabled);
+
+    WidgetOutput {
+        primitives,
+        payloads,
+        hit: None,
         a11y: Some(a11y),
         focusable: false,
     }
@@ -281,7 +468,9 @@ pub fn emit_icon(node: u64, desc: &IconDesc, state: ControlState) -> WidgetOutpu
         natural_size: desc.rect.size,
         texture_layer: desc.texture_layer,
         fit: ObjectFit::Contain,
-        radius: 0.0,
+        radius: [0.0; 4],
+        border_width: 0.0,
+        border_color: Token::NONE,
         tint: desc.tint,
         alt: desc.label.clone(),
         z: desc.z,

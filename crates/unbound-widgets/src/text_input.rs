@@ -60,6 +60,14 @@ pub enum TextInputEvent {
     MoveLeft { extend: bool },
     /// Move one code point right.
     MoveRight { extend: bool },
+    /// Move one word left (`Ctrl+Left`).
+    MoveWordLeft { extend: bool },
+    /// Move one word right (`Ctrl+Right`).
+    MoveWordRight { extend: bool },
+    /// Delete the word before the caret (`Ctrl+Backspace`).
+    DeleteWordBack,
+    /// Delete the word after the caret (`Ctrl+Delete`).
+    DeleteWordForward,
     /// Move to the start of the text.
     Home { extend: bool },
     /// Move to the end of the text.
@@ -84,6 +92,8 @@ pub enum TextInputEvent {
     PointerUp,
     /// A double click selected a word around a byte offset.
     DoubleClick { offset: usize },
+    /// A triple click selected the whole line (the whole buffer here).
+    TripleClick,
     /// IME pre-edit text occupies `start..end` so it can be replaced on commit.
     ImePreedit { start: usize, end: usize },
     /// The composition ended; `text` replaces the pre-edit range.
@@ -112,6 +122,18 @@ impl TextInputOutcome {
     }
 }
 
+/// How the field's contents validate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ValidationState {
+    /// No validation message.
+    #[default]
+    None,
+    /// The contents are invalid.
+    Error,
+    /// The contents deserve a warning but are accepted.
+    Warning,
+}
+
 /// A single-line text field's pure descriptor.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextInputDesc {
@@ -125,6 +147,12 @@ pub struct TextInputDesc {
     pub disabled: bool,
     /// The text can be selected and copied but not edited.
     pub read_only: bool,
+    /// The characters are masked and Copy/Cut are refused.
+    pub password: bool,
+    /// The validation state; it drives the border colour.
+    pub validation: ValidationState,
+    /// The field shows a clear affordance when it is not empty.
+    pub clearable: bool,
     /// The maximum buffer length in bytes.
     pub max_bytes: usize,
     /// The draw order key.
@@ -145,6 +173,9 @@ impl TextInputDesc {
             placeholder: String::new(),
             disabled: false,
             read_only: false,
+            password: false,
+            validation: ValidationState::None,
+            clearable: false,
             max_bytes: 1 << 20,
             z: 720,
             radius: TEXT_INPUT_RADIUS,
@@ -180,11 +211,57 @@ impl TextInputDesc {
         self
     }
 
+    /// The same field, masking its contents.
+    #[must_use]
+    pub fn password(mut self, password: bool) -> Self {
+        self.password = password;
+        self
+    }
+
+    /// The same field in `validation`.
+    #[must_use]
+    pub fn with_validation(mut self, validation: ValidationState) -> Self {
+        self.validation = validation;
+        self
+    }
+
+    /// The same field with a clear affordance.
+    #[must_use]
+    pub fn clearable(mut self, clearable: bool) -> Self {
+        self.clearable = clearable;
+        self
+    }
+
     /// The same field with a byte budget.
     #[must_use]
     pub fn max_bytes(mut self, max_bytes: usize) -> Self {
         self.max_bytes = max_bytes;
         self
+    }
+
+    /// The text to shape and paint.
+    ///
+    /// A password field replaces every scalar value with `•`; the caller shapes
+    /// the result instead of [`TextEditState::text`].
+    #[must_use]
+    pub fn display_text(&self, text: &str) -> String {
+        if self.password {
+            "\u{2022}".repeat(text.chars().count())
+        } else {
+            text.to_owned()
+        }
+    }
+
+    /// The clear affordance, centred inside the trailing padding.
+    #[must_use]
+    pub fn clear_rect(&self) -> Rect {
+        const SIZE: f32 = 16.0;
+        Rect::new(
+            self.rect.max().x - TEXT_INPUT_PADDING - SIZE,
+            self.rect.origin.y + (self.rect.size.y - SIZE) * 0.5,
+            SIZE,
+            SIZE,
+        )
     }
 
     fn editable(&self) -> bool {
@@ -311,6 +388,20 @@ impl TextEditState {
         self.scroll_x = scroll_x.max(0.0);
     }
 
+    /// Scroll just enough that the caret lies inside the visible window.
+    ///
+    /// `caret_x` is the caret's position in the text's own (unscrolled)
+    /// coordinate space; the caret is kept inside
+    /// `[scroll_x, scroll_x + viewport_width]`.
+    pub fn ensure_caret_visible(&mut self, caret_x: f32, viewport_width: f32) {
+        let viewport_width = viewport_width.max(0.0);
+        if caret_x < self.scroll_x {
+            self.scroll_x = caret_x.max(0.0);
+        } else if caret_x > self.scroll_x + viewport_width {
+            self.scroll_x = (caret_x - viewport_width).max(0.0);
+        }
+    }
+
     /// Move the caret to a byte offset, clamped to a character boundary.
     ///
     /// `extend` keeps the anchor, which grows or shrinks the selection.
@@ -390,6 +481,36 @@ impl TextEditState {
             let end = next_boundary(&self.text, self.cursor);
             (self.cursor, end)
         });
+        if start == end {
+            return;
+        }
+        self.push_undo(false);
+        self.text.replace_range(start..end, "");
+        self.cursor = start;
+        self.anchor = start;
+        self.normalize();
+    }
+
+    /// Delete the selection, or the word before the caret.
+    pub fn delete_word_backward(&mut self) {
+        let (start, end) = self
+            .selection()
+            .unwrap_or_else(|| (prev_word_boundary(&self.text, self.cursor), self.cursor));
+        if start == end {
+            return;
+        }
+        self.push_undo(false);
+        self.text.replace_range(start..end, "");
+        self.cursor = start;
+        self.anchor = start;
+        self.normalize();
+    }
+
+    /// Delete the selection, or the word after the caret.
+    pub fn delete_word_forward(&mut self) {
+        let (start, end) = self
+            .selection()
+            .unwrap_or_else(|| (self.cursor, next_word_boundary(&self.text, self.cursor)));
         if start == end {
             return;
         }
@@ -507,6 +628,20 @@ pub fn reduce_text_input(
             edit.delete_forward();
             TextInputOutcome::changed()
         }
+        TextInputEvent::DeleteWordBack => {
+            if !desc.editable() {
+                return TextInputOutcome::default();
+            }
+            edit.delete_word_backward();
+            TextInputOutcome::changed()
+        }
+        TextInputEvent::DeleteWordForward => {
+            if !desc.editable() {
+                return TextInputOutcome::default();
+            }
+            edit.delete_word_forward();
+            TextInputOutcome::changed()
+        }
         TextInputEvent::MoveLeft { extend } => {
             let cursor = prev_boundary(edit.text(), edit.cursor());
             edit.set_cursor(cursor, *extend);
@@ -514,6 +649,16 @@ pub fn reduce_text_input(
         }
         TextInputEvent::MoveRight { extend } => {
             let cursor = next_boundary(edit.text(), edit.cursor());
+            edit.set_cursor(cursor, *extend);
+            TextInputOutcome::changed()
+        }
+        TextInputEvent::MoveWordLeft { extend } => {
+            let cursor = prev_word_boundary(edit.text(), edit.cursor());
+            edit.set_cursor(cursor, *extend);
+            TextInputOutcome::changed()
+        }
+        TextInputEvent::MoveWordRight { extend } => {
+            let cursor = next_word_boundary(edit.text(), edit.cursor());
             edit.set_cursor(cursor, *extend);
             TextInputOutcome::changed()
         }
@@ -530,12 +675,17 @@ pub fn reduce_text_input(
             edit.select_all();
             TextInputOutcome::changed()
         }
-        TextInputEvent::Copy => TextInputOutcome {
-            copied: edit.selected_text().map(str::to_owned),
-            ..TextInputOutcome::default()
-        },
+        TextInputEvent::Copy => {
+            if desc.password {
+                return TextInputOutcome::default();
+            }
+            TextInputOutcome {
+                copied: edit.selected_text().map(str::to_owned),
+                ..TextInputOutcome::default()
+            }
+        }
         TextInputEvent::Cut => {
-            if !desc.editable() {
+            if !desc.editable() || desc.password {
                 return TextInputOutcome::default();
             }
             let Some(text) = edit.selected_text().map(str::to_owned) else {
@@ -587,6 +737,10 @@ pub fn reduce_text_input(
             }
             TextInputOutcome::changed()
         }
+        TextInputEvent::TripleClick => {
+            edit.select_all();
+            TextInputOutcome::changed()
+        }
         TextInputEvent::ImePreedit { start, end } => {
             if !desc.editable() {
                 return TextInputOutcome::default();
@@ -613,12 +767,27 @@ pub fn reduce_text_input(
 /// The caller shapes the text (it owns the font, atlas and zoom) and hands
 /// back the caret and selection rectangles in the same coordinate space as
 /// [`TextInputDesc::rect`].
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextInputVisual {
     /// The caret rectangle.
     pub caret: Rect,
     /// The selection rectangle, if any text is selected.
     pub selection: Option<Rect>,
+    /// The measured IME pre-edit rectangle, if a composition is active.
+    pub preedit: Option<Rect>,
+    /// Whether the caret is in its visible blink phase.
+    pub caret_visible: bool,
+}
+
+impl Default for TextInputVisual {
+    fn default() -> Self {
+        Self {
+            caret: Rect::ZERO,
+            selection: None,
+            preedit: None,
+            caret_visible: true,
+        }
+    }
 }
 
 /// A text input bound to an identity, its edit state and its measured layout.
@@ -688,10 +857,16 @@ pub fn emit_text_input(
     };
     primitives.push(surface(rect, desc.radius, fill, z));
 
-    let border = if state.focused {
-        Token::OUTLINE_STRONG
-    } else {
-        Token::OUTLINE
+    let border = match desc.validation {
+        ValidationState::Error => Token::INPUT_BORDER_ERROR,
+        ValidationState::Warning => Token::INPUT_BORDER_WARNING,
+        ValidationState::None => {
+            if state.focused {
+                Token::OUTLINE_STRONG
+            } else {
+                Token::OUTLINE
+            }
+        }
     };
     primitives.push(outlined(
         rect,
@@ -738,13 +913,36 @@ pub fn emit_text_input(
     );
     set_opacity(
         &mut caret,
-        if state.focused && !state.disabled {
+        if state.focused && !state.disabled && visual.caret_visible {
             1.0
         } else {
             0.0
         },
     );
     primitives.push(caret);
+
+    // The IME pre-edit underline. Like the caret it is always in the pool;
+    // the opacity says whether a composition is active.
+    let mut preedit = surface(
+        visual.preedit.unwrap_or(Rect::ZERO),
+        0.0,
+        Token::PREEDIT_UNDERLINE,
+        z,
+    );
+    preedit.prim_type_and_flags = GpuPrimitiveInstance::pack_type(
+        PrimType::RoundedRect,
+        Default::default(),
+        SubElement::Content as u16,
+    );
+    set_opacity(
+        &mut preedit,
+        if edit.preedit().is_some() && visual.preedit.is_some() && !state.disabled {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    primitives.push(preedit);
 
     // The glyphs, positioned by the caller.
     let ink = if state.disabled {
@@ -811,7 +1009,7 @@ pub fn emit_text_input(
     let mut a11y = A11yNode::new(Role::TextInput, desc.accessible_label(), rect)
         .clickable()
         .disabled(state.disabled);
-    a11y.value = edit.text().to_owned();
+    a11y.value = desc.display_text(edit.text());
     a11y.actions.insert(A11yAction::SetValue);
     a11y.actions.insert(A11yAction::Focus);
 
@@ -864,6 +1062,65 @@ pub fn next_boundary(text: &str, offset: usize) -> usize {
         index += 1;
     }
     index.min(text.len())
+}
+
+/// The previous word boundary.
+///
+/// `unicode_segmentation` is not a dependency of this crate, so a word is a
+/// run of `char::is_alphanumeric` (or `_`) scalars and everything else —
+/// spaces and punctuation — is skipped. This is the same definition
+/// [`word_range`] uses for double-click selection.
+#[must_use]
+pub fn prev_word_boundary(text: &str, offset: usize) -> usize {
+    let mut index = floor_boundary(text, offset);
+    while index > 0 {
+        let previous = prev_boundary(text, index);
+        let Some(character) = text[previous..index].chars().next() else {
+            break;
+        };
+        if is_word_char(character) {
+            break;
+        }
+        index = previous;
+    }
+    while index > 0 {
+        let previous = prev_boundary(text, index);
+        let Some(character) = text[previous..index].chars().next() else {
+            break;
+        };
+        if !is_word_char(character) {
+            break;
+        }
+        index = previous;
+    }
+    index
+}
+
+/// The next word boundary, skipping separators first.
+#[must_use]
+pub fn next_word_boundary(text: &str, offset: usize) -> usize {
+    let mut index = floor_boundary(text, offset);
+    while index < text.len() {
+        let next = next_boundary(text, index);
+        let Some(character) = text[index..next].chars().next() else {
+            break;
+        };
+        if is_word_char(character) {
+            break;
+        }
+        index = next;
+    }
+    while index < text.len() {
+        let next = next_boundary(text, index);
+        let Some(character) = text[index..next].chars().next() else {
+            break;
+        };
+        if !is_word_char(character) {
+            break;
+        }
+        index = next;
+    }
+    index
 }
 
 /// The word range around a byte offset.
@@ -1094,6 +1351,7 @@ mod tests {
         let visual = TextInputVisual {
             caret: Rect::new(30.0, 24.0, 1.0, 20.0),
             selection: Some(Rect::new(24.0, 24.0, 20.0, 20.0)),
+            ..TextInputVisual::default()
         };
         let glyphs: Vec<GlyphQuad> = Vec::new();
         let mut counts = Vec::new();

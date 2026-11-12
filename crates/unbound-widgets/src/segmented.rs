@@ -68,6 +68,12 @@ pub struct SegmentedDesc {
     /// result). `Some(t)` draws a single floating pill at `t` between slots,
     /// which is what makes a selection change slide instead of jump.
     pub thumb: Option<f32>,
+    /// Per-slot widths, when the row is not split into equal columns.
+    ///
+    /// A shorter list falls back to the equal split for the missing slots.
+    pub item_widths: Option<Vec<f32>>,
+    /// One bit per slot: a set bit means the slot refuses interaction.
+    pub disabled_mask: u64,
     /// The draw order key.
     pub z: u16,
 }
@@ -81,6 +87,8 @@ impl SegmentedDesc {
             labels: labels.iter().map(|label| (*label).to_string()).collect(),
             selected: 0,
             thumb: None,
+            item_widths: None,
+            disabled_mask: 0,
             z: 700,
         }
     }
@@ -100,19 +108,69 @@ impl SegmentedDesc {
         self
     }
 
+    /// Give the slots explicit widths instead of an equal split.
+    #[must_use]
+    pub fn with_item_widths(mut self, widths: Vec<f32>) -> Self {
+        self.item_widths = Some(widths);
+        self
+    }
+
+    /// Disable the slots whose bit is set in `mask`.
+    #[must_use]
+    pub fn with_disabled_mask(mut self, mask: u64) -> Self {
+        self.disabled_mask = mask;
+        self
+    }
+
+    /// Disable one slot, preserving the rest of the mask.
+    #[must_use]
+    pub fn with_disabled(mut self, index: usize, disabled: bool) -> Self {
+        if index < u64::BITS as usize {
+            let bit = 1u64 << index;
+            if disabled {
+                self.disabled_mask |= bit;
+            } else {
+                self.disabled_mask &= !bit;
+            }
+        }
+        self
+    }
+
+    /// Whether one slot refuses interaction.
+    #[must_use]
+    pub fn is_disabled(&self, index: usize) -> bool {
+        index < u64::BITS as usize && (self.disabled_mask >> index) & 1 == 1
+    }
+
+    /// The x offset and width of one slot, honouring explicit widths.
+    fn slot_geometry(&self, index: usize) -> (f32, f32) {
+        if let Some(widths) = &self.item_widths {
+            if let Some(width) = widths.get(index) {
+                let offset: f32 = widths[..index].iter().sum();
+                return (self.rect.origin.x + offset, *width);
+            }
+        }
+        let count = self.count();
+        let width = self.rect.size.x / count as f32;
+        (self.rect.origin.x + index as f32 * width, width)
+    }
+
     /// The pill rectangle, interpolated when [`Self::thumb`] is set.
     #[must_use]
     pub fn thumb_rect(&self) -> Rect {
+        let count = self.count();
         let position = self
             .thumb
             .unwrap_or(self.selected as f32)
-            .clamp(0.0, (self.count() - 1) as f32);
-        let count = self.count();
-        let width = self.rect.size.x / count as f32;
+            .clamp(0.0, (count - 1) as f32);
+        let lower = position.floor() as usize;
+        let frac = position - lower as f32;
+        let (x0, w0) = self.slot_geometry(lower);
+        let (x1, w1) = self.slot_geometry((lower + 1).min(count - 1));
         Rect::new(
-            self.rect.origin.x + position * width + SEGMENT_INSET,
+            x0 + (x1 - x0) * frac + SEGMENT_INSET,
             self.rect.origin.y + SEGMENT_INSET,
-            (width - SEGMENT_INSET * 2.0).max(8.0),
+            (w0 + (w1 - w0) * frac - SEGMENT_INSET * 2.0).max(8.0),
             (self.rect.size.y - SEGMENT_INSET * 2.0).max(8.0),
         )
     }
@@ -123,17 +181,11 @@ impl SegmentedDesc {
         self.labels.len().max(1)
     }
 
-    /// The cell of one slot: the frame is split into equal columns.
+    /// The cell of one slot: equal columns unless [`Self::item_widths`] is set.
     #[must_use]
     pub fn cell_rect(&self, index: usize) -> Rect {
-        let count = self.count();
-        let width = self.rect.size.x / count as f32;
-        Rect::new(
-            self.rect.origin.x + index as f32 * width,
-            self.rect.origin.y,
-            width,
-            self.rect.size.y,
-        )
+        let (x, width) = self.slot_geometry(index);
+        Rect::new(x, self.rect.origin.y, width, self.rect.size.y)
     }
 
     /// The painted rectangle of one slot, inset from its cell.
@@ -147,6 +199,38 @@ impl SegmentedDesc {
             (cell.size.y - SEGMENT_INSET * 2.0).max(8.0),
         )
     }
+}
+
+/// The keys that move a segmented selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SegmentedKey {
+    /// Move to the previous enabled slot.
+    ArrowLeft,
+    /// Move to the next enabled slot.
+    ArrowRight,
+}
+
+/// Move the selection by one enabled slot.
+///
+/// The row is one radio group, so the arrow keys wrap: pressing Left on the
+/// first enabled slot lands on the last enabled one. Disabled slots are
+/// skipped in both directions; when every slot is disabled nothing moves and
+/// `current` comes back unchanged.
+#[must_use]
+pub fn reduce_segmented_key(desc: &SegmentedDesc, current: usize, key: SegmentedKey) -> usize {
+    let count = desc.count();
+    let step: isize = match key {
+        SegmentedKey::ArrowLeft => -1,
+        SegmentedKey::ArrowRight => 1,
+    };
+    let mut index = current.min(count - 1) as isize;
+    for _ in 0..count {
+        index = (index + step).rem_euclid(count as isize);
+        if !desc.is_disabled(index as usize) {
+            return index as usize;
+        }
+    }
+    current
 }
 
 /// Emit the frame that holds the slots.
@@ -197,6 +281,7 @@ pub fn emit_segmented_segment(
     let z = desc.z;
     let segment = desc.segment_rect(index);
     let active = index == desc.selected;
+    let disabled = state.disabled || desc.is_disabled(index);
 
     // One pill, always. The active slot paints it as a raised, bordered
     // surface; a hovered slot paints the hover fill and no border; an idle
@@ -205,21 +290,23 @@ pub fn emit_segmented_segment(
     // pool.
     let (fill, border, border_width) = if desc.thumb.is_some() {
         // The frame owns the pill; a slot only paints its hover fill.
-        if state.phase == PointerPhase::Hovered && !active {
+        if state.phase == PointerPhase::Hovered && !active && !disabled {
             (tokens.hover, Token::NONE, 0.0)
         } else {
             (Token::NONE, Token::NONE, 0.0)
         }
     } else if active {
         (tokens.selected, tokens.selected_border, 1.0)
-    } else if state.phase == PointerPhase::Hovered {
+    } else if state.phase == PointerPhase::Hovered && !disabled {
         (tokens.hover, Token::NONE, 0.0)
     } else {
         (Token::NONE, Token::NONE, 0.0)
     };
     primitives.push(outlined(segment, 5.0, fill, border, border_width, 0.0, z));
 
-    let label_color = if active {
+    let label_color = if disabled {
+        Token::TEXT_DISABLED
+    } else if active {
         tokens.label_selected
     } else {
         tokens.label
@@ -237,7 +324,7 @@ pub fn emit_segmented_segment(
         state.focused,
     ));
 
-    let hit = (!state.disabled).then(|| {
+    let hit = (!disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(z), segment)
             .with_shape(Shape::Rounded { radii: [5.0; 4] })
             .with_cursor(CursorKind::Pointer)
@@ -245,7 +332,7 @@ pub fn emit_segmented_segment(
     let label_text = desc.labels.get(index).cloned().unwrap_or_default();
     let mut a11y = A11yNode::new(Role::Tab, label_text, segment)
         .clickable()
-        .disabled(state.disabled);
+        .disabled(disabled);
     a11y.selected = active;
 
     WidgetOutput {
@@ -253,7 +340,7 @@ pub fn emit_segmented_segment(
         payloads,
         hit,
         a11y: Some(a11y),
-        focusable: !state.disabled,
+        focusable: !disabled,
     }
 }
 

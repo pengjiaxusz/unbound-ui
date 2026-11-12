@@ -18,7 +18,7 @@ use unbound_theme::Token;
 use unbound_world::virtualize::VirtualList;
 
 use crate::primitive::surface;
-use crate::{ControlState, WidgetDesc, WidgetOutput};
+use crate::{ControlState, SceneCollector, WidgetDesc, WidgetOutput};
 
 /// The UI layer a scroll view lives in.
 pub const SCROLL_LAYER: u8 = 1;
@@ -30,6 +30,8 @@ pub const MIN_THUMB: f32 = 24.0;
 pub const SCROLLBAR_HOLD: f32 = 1.0;
 /// How long the fade-out takes once the hold expires.
 pub const SCROLLBAR_FADE: f32 = 0.25;
+/// How far a fling projects its release velocity into the spring target.
+pub const FLING_PROJECTION: f32 = 0.25;
 
 /// Which axes a scroll view accepts.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -392,6 +394,112 @@ impl ScrollState {
                 self.scroll_to(desc, Vec2::new(self.target().x, max_scroll * progress));
             }
         }
+    }
+
+    /// Page the content by one viewport when the scrollbar **track** is
+    /// clicked outside the thumb.
+    ///
+    /// Clicking above/left of the thumb pages backwards, below/right pages
+    /// forwards. Returns whether a page was triggered.
+    pub fn page_at_track_click(&mut self, desc: &ScrollViewDesc, click_pos: Vec2) -> bool {
+        let horizontal = desc.axis.horizontal() && desc.track_rect(true).contains_point(click_pos);
+        let vertical = desc.axis.vertical() && desc.track_rect(false).contains_point(click_pos);
+        let (horizontal, thumb) = if horizontal {
+            (true, desc.thumb_rect(self.offset(), true))
+        } else if vertical {
+            (false, desc.thumb_rect(self.offset(), false))
+        } else {
+            return false;
+        };
+        if thumb.contains_point(click_pos) {
+            return false;
+        }
+        let viewport = if horizontal {
+            desc.rect.width()
+        } else {
+            desc.rect.height()
+        };
+        let direction = if horizontal {
+            if click_pos.x < thumb.origin.x {
+                -1.0
+            } else {
+                1.0
+            }
+        } else if click_pos.y < thumb.origin.y {
+            -1.0
+        } else {
+            1.0
+        };
+        let mut target = self.target();
+        if horizontal {
+            target.x += direction * viewport;
+        } else {
+            target.y += direction * viewport;
+        }
+        self.scroll_to(desc, target);
+        true
+    }
+
+    /// Scroll just enough to make `child_rect` visible.
+    ///
+    /// `child_rect` is in content coordinates: the origin is the top-left of
+    /// the content, so an offset of `o` shows the window `[o, o + viewport]`.
+    /// The spring target is adjusted (not the visual offset) so a focused
+    /// child that is out of view animates into place. Returns whether the
+    /// target moved.
+    pub fn scroll_into_view(&mut self, desc: &ScrollViewDesc, child_rect: Rect) -> bool {
+        let before = self.target();
+        let mut target = before;
+        if desc.axis.vertical() {
+            let height = desc.rect.height();
+            if child_rect.origin.y < target.y {
+                target.y = child_rect.origin.y;
+            } else if child_rect.max().y > target.y + height {
+                target.y = child_rect.max().y - height;
+            }
+        }
+        if desc.axis.horizontal() {
+            let width = desc.rect.width();
+            if child_rect.origin.x < target.x {
+                target.x = child_rect.origin.x;
+            } else if child_rect.max().x > target.x + width {
+                target.x = child_rect.max().x - width;
+            }
+        }
+        if target == before {
+            return false;
+        }
+        self.scroll_to(desc, target);
+        true
+    }
+
+    /// Project release inertia into the spring target.
+    ///
+    /// `velocity` is in logical pixels per second; it is extrapolated over
+    /// [`FLING_PROJECTION`] seconds and clamped to the content bounds, so a
+    /// hard flick keeps gliding and then stops exactly at the end of the
+    /// content instead of running off it.
+    pub fn fling(&mut self, desc: &ScrollViewDesc, velocity: Vec2) {
+        self.scroll_to(desc, self.offset() + velocity * FLING_PROJECTION);
+    }
+}
+
+impl ScrollViewOutput {
+    /// Collect children inside the viewport clip and the scroll translation.
+    ///
+    /// This is the bridge between [`emit_scroll_view`] and
+    /// [`SceneCollector::push_clip`] / [`SceneCollector::push_transform`]: every
+    /// primitive the closure pushes inherits both, and the scopes are popped
+    /// even when the closure emits nothing.
+    pub fn collect_children<F>(&self, collector: &mut SceneCollector, viewport: Rect, children: F)
+    where
+        F: FnOnce(&mut SceneCollector),
+    {
+        collector.push_clip(self.clip, viewport);
+        collector.push_transform(self.transform);
+        children(collector);
+        collector.pop_transform();
+        collector.pop_clip();
     }
 }
 

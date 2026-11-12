@@ -29,6 +29,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 use unbound_world::{NodeId, UiWorld};
 
+use crate::image::IconDesc;
 use crate::primitive::focus_ring;
 use crate::{ControlState, PointerPhase, WidgetDesc, WidgetOutput};
 
@@ -38,6 +39,40 @@ pub const BUTTON_FONT_SIZE: f32 = 14.0;
 
 /// The button corner radius.
 pub const BUTTON_RADIUS: f32 = 10.0;
+
+/// The gap between the label and a leading / trailing icon.
+pub const BUTTON_CONTENT_GAP: f32 = 8.0;
+
+/// The diameter of the loading indicator.
+pub const BUTTON_LOADING_SIZE: f32 = 12.0;
+
+/// The height of a button, in logical pixels.
+///
+/// The size is metadata: a caller that has already solved the layout keeps
+/// its rectangle, but a toolbar can ask for the standard height instead of
+/// hard-coding a number.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ButtonSize {
+    /// A compact action, 28 px tall.
+    Sm,
+    /// The standard action, 36 px tall.
+    #[default]
+    Md,
+    /// A prominent action, 44 px tall.
+    Lg,
+}
+
+impl ButtonSize {
+    /// The control height for this size.
+    #[must_use]
+    pub const fn height(self) -> f32 {
+        match self {
+            Self::Sm => 28.0,
+            Self::Md => 36.0,
+            Self::Lg => 44.0,
+        }
+    }
+}
 
 /// The UI layer a button's hit region lives in (`0` canvas, `1` UI, `2..`
 /// portals).
@@ -176,6 +211,14 @@ pub struct ButtonDesc {
     pub z: u16,
     /// The visual role.
     pub variant: ButtonVariant,
+    /// The standard size (28 / 36 / 44 px).
+    pub size: ButtonSize,
+    /// An icon painted next to the label.
+    pub icon: Option<IconDesc>,
+    /// Paint the icon after the label instead of before it.
+    pub icon_trailing: bool,
+    /// Show the loading indicator and refuse interaction.
+    pub loading: bool,
 }
 
 impl ButtonDesc {
@@ -189,6 +232,10 @@ impl ButtonDesc {
             font_size: BUTTON_FONT_SIZE,
             z: 703,
             variant: ButtonVariant::default(),
+            size: ButtonSize::default(),
+            icon: None,
+            icon_trailing: false,
+            loading: false,
         }
     }
 
@@ -207,10 +254,68 @@ impl ButtonDesc {
         self
     }
 
+    /// The same button at another standard size.
+    #[must_use]
+    pub fn with_size(mut self, size: ButtonSize) -> Self {
+        self.size = size;
+        self
+    }
+
+    /// The same button with an icon next to its label.
+    #[must_use]
+    pub fn with_icon(mut self, icon: IconDesc) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// Paint the icon after the label instead of before it.
+    #[must_use]
+    pub fn with_icon_trailing(mut self, trailing: bool) -> Self {
+        self.icon_trailing = trailing;
+        self
+    }
+
+    /// The same button in its loading state: no clicks, an indicator on the
+    /// left.
+    #[must_use]
+    pub fn with_loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+
     /// The colour slots this button paints with.
     #[must_use]
     pub fn tokens(&self) -> ButtonTokens {
         self.variant.tokens()
+    }
+
+    /// The indicator rectangle: left-aligned and vertically centred.
+    #[must_use]
+    pub fn loading_rect(&self) -> Rect {
+        Rect::new(
+            self.rect.origin.x + BUTTON_CONTENT_GAP,
+            self.rect.origin.y + (self.rect.size.y - BUTTON_LOADING_SIZE) * 0.5,
+            BUTTON_LOADING_SIZE,
+            BUTTON_LOADING_SIZE,
+        )
+    }
+}
+
+/// Fold a keyboard activation into the visual state.
+///
+/// The pointer router never sees Space or Enter. A focused button activated
+/// with either key must paint exactly like a pointer press, so the caller
+/// routes the key through here before it emits the button; the emitter then
+/// only has to honour [`PointerPhase::Pressed`].
+#[must_use]
+pub fn keyboard_activation(state: ControlState, space_or_enter_down: bool) -> ControlState {
+    if space_or_enter_down && state.focused && !state.disabled {
+        ControlState {
+            phase: PointerPhase::Pressed,
+            ..state
+        }
+    } else {
+        state
     }
 }
 
@@ -290,8 +395,12 @@ pub fn emit_button_with_tokens(
     let rect = desc.rect;
     let radii = [desc.radius; 4];
     let z = desc.z;
-    let mut primitives = Vec::with_capacity(5 + label.len());
-    let mut payloads = Vec::with_capacity(label.len());
+    let mut primitives = Vec::with_capacity(8 + label.len());
+    let mut payloads = Vec::with_capacity(label.len() + 1);
+
+    // A loading button is not a target and never shows the focus ring: the
+    // spinner says "wait", so accepting a second activation would be wrong.
+    let blocked = state.disabled || desc.loading;
 
     // 1. The shadow: a dedicated Shadow primitive, fill and border are
     //    transparent, so only the resolved shadow is painted.
@@ -320,11 +429,61 @@ pub fn emit_button_with_tokens(
         z,
     ));
 
-    // 3. The label: same `z` as the button, drawn later through
-    //    `SubElement::Content`.
-    if let Some(ink) = ink_bounds(label) {
+    // 3. The icon, the loading indicator and the label share one centred
+    //    content row. The indicator always leads, so a loading button never
+    //    jumps horizontally when the spinner appears.
+    let ink = ink_bounds(label);
+    let leading_icon = desc.icon.is_some() && !desc.icon_trailing;
+    let mut content_width = ink.map_or(0.0, |bounds| bounds.width());
+    if desc.loading {
+        content_width += BUTTON_LOADING_SIZE + BUTTON_CONTENT_GAP;
+    } else if leading_icon {
+        content_width += desc.font_size + BUTTON_CONTENT_GAP;
+    }
+    if desc.icon.is_some() && desc.icon_trailing {
+        content_width += desc.font_size + BUTTON_CONTENT_GAP;
+    }
+    let mut cursor = rect.center().x - content_width * 0.5;
+
+    if desc.loading {
+        let indicator = desc.loading_rect();
+        let color = if state.disabled {
+            tokens.label_disabled
+        } else {
+            tokens.label
+        };
+        primitives.push(instance(
+            indicator,
+            [BUTTON_LOADING_SIZE * 0.5; 4],
+            Token::NONE,
+            color,
+            2.0,
+            0.0,
+            PrimType::Stroke,
+            SubElement::Content,
+            z,
+        ));
+        cursor += BUTTON_LOADING_SIZE + BUTTON_CONTENT_GAP;
+    } else if leading_icon {
+        if let Some(icon) = &desc.icon {
+            icon_at(
+                icon,
+                cursor,
+                rect.center().y,
+                desc.font_size,
+                z,
+                &mut primitives,
+                &mut payloads,
+            );
+            cursor += desc.font_size + BUTTON_CONTENT_GAP;
+        }
+    }
+
+    // The label: same `z` as the button, drawn later through
+    // `SubElement::Content`.
+    if let Some(ink) = ink {
         let offset = Vec2::new(
-            rect.center().x - (ink.min().x + ink.width() * 0.5),
+            cursor - ink.min().x,
             rect.center().y - (ink.min().y + ink.height() * 0.5),
         );
         for quad in label.iter_mut() {
@@ -371,6 +530,21 @@ pub fn emit_button_with_tokens(
             }
             primitives.push(glyph);
         }
+        cursor += ink.width();
+    }
+
+    if desc.icon.is_some() && desc.icon_trailing {
+        if let Some(icon) = &desc.icon {
+            icon_at(
+                icon,
+                cursor + BUTTON_CONTENT_GAP,
+                rect.center().y,
+                desc.font_size,
+                z,
+                &mut primitives,
+                &mut payloads,
+            );
+        }
     }
 
     // 4. The border: a hollow rounded rectangle, its own sub element.
@@ -395,25 +569,63 @@ pub fn emit_button_with_tokens(
         tokens.focus_ring,
         2.0,
         z,
-        state.focused,
+        state.focused && !desc.loading,
     ));
 
-    let hit = (!state.disabled).then(|| {
+    let hit = (!blocked).then(|| {
         HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
             .with_shape(Shape::Rounded { radii })
             .with_cursor(CursorKind::Pointer)
     });
     let a11y = A11yNode::new(Role::Button, desc.label.clone(), rect)
         .clickable()
-        .disabled(state.disabled);
+        .disabled(blocked);
 
     WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
-        focusable: !state.disabled,
+        focusable: !blocked,
     }
+}
+
+/// Emit one icon primitive, anchored at `left` and vertically centred.
+#[allow(clippy::too_many_arguments)]
+fn icon_at(
+    icon: &IconDesc,
+    left: f32,
+    center_y: f32,
+    side: f32,
+    z: u16,
+    primitives: &mut Vec<GpuPrimitiveInstance>,
+    payloads: &mut Vec<GpuPayload>,
+) {
+    let icon_rect = Rect::new(left, center_y - side * 0.5, side, side);
+    let payload_idx = payloads.len() as u32;
+    payloads.push(GpuPayload {
+        p0: [0.0, 0.0],
+        p1: [1.0, 1.0],
+        p2: [0.0, 0.0],
+        line_width: 0.0,
+        extra: 0,
+        flags: 0,
+        _reserved: [0; 3],
+    });
+    let mut primitive = instance(
+        icon_rect,
+        [0.0; 4],
+        icon.tint,
+        Token::NONE,
+        0.0,
+        0.0,
+        PrimType::Image,
+        SubElement::Content,
+        z,
+    );
+    primitive.border_token_or_tex = icon.texture_layer;
+    primitive.extra_payload_idx = payload_idx;
+    primitives.push(primitive);
 }
 
 /// The fill slot a state paints with.

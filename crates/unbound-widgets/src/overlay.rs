@@ -18,6 +18,9 @@ use unbound_math::{Rect, Vec2};
 pub const POPUP_GAP: f32 = 4.0;
 
 /// Where a popup would like to appear relative to its anchor.
+///
+/// The twelve variants cover the four sides, each in its start, centred and
+/// end alignment.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum Placement {
     /// Below the anchor, aligned to its start edge.
@@ -25,14 +28,26 @@ pub enum Placement {
     BottomStart,
     /// Below the anchor, aligned to its end edge.
     BottomEnd,
+    /// Below the anchor, horizontally centred on it.
+    Bottom,
     /// Above the anchor, aligned to its start edge.
     TopStart,
     /// Above the anchor, aligned to its end edge.
     TopEnd,
+    /// Above the anchor, horizontally centred on it.
+    Top,
     /// To the right of the anchor, aligned to its top edge.
     RightStart,
+    /// To the right of the anchor, aligned to its bottom edge.
+    RightEnd,
+    /// To the right of the anchor, vertically centred on it.
+    Right,
     /// To the left of the anchor, aligned to its top edge.
     LeftStart,
+    /// To the left of the anchor, aligned to its bottom edge.
+    LeftEnd,
+    /// To the left of the anchor, vertically centred on it.
+    Left,
 }
 
 impl Placement {
@@ -42,31 +57,64 @@ impl Placement {
         match self {
             Self::BottomStart => Self::TopStart,
             Self::BottomEnd => Self::TopEnd,
+            Self::Bottom => Self::Top,
             Self::TopStart => Self::BottomStart,
             Self::TopEnd => Self::BottomEnd,
+            Self::Top => Self::Bottom,
             Self::RightStart => Self::LeftStart,
+            Self::RightEnd => Self::LeftEnd,
+            Self::Right => Self::Left,
             Self::LeftStart => Self::RightStart,
+            Self::LeftEnd => Self::RightEnd,
+            Self::Left => Self::Right,
         }
     }
 
     const fn vertical(self) -> bool {
         matches!(
             self,
-            Self::BottomStart | Self::BottomEnd | Self::TopStart | Self::TopEnd
+            Self::BottomStart
+                | Self::BottomEnd
+                | Self::Bottom
+                | Self::TopStart
+                | Self::TopEnd
+                | Self::Top
         )
     }
 
     const fn below(self) -> bool {
-        matches!(self, Self::BottomStart | Self::BottomEnd)
+        matches!(self, Self::BottomStart | Self::BottomEnd | Self::Bottom)
     }
 
     const fn right(self) -> bool {
-        matches!(self, Self::RightStart)
+        matches!(self, Self::RightStart | Self::RightEnd | Self::Right)
     }
 
+    /// Horizontal placement aligned to the anchor's trailing edge.
     const fn aligned_to_end(self) -> bool {
         matches!(self, Self::BottomEnd | Self::TopEnd)
     }
+
+    /// Side placement aligned to the anchor's bottom edge.
+    const fn aligned_y_to_end(self) -> bool {
+        matches!(self, Self::RightEnd | Self::LeftEnd)
+    }
+
+    const fn centered(self) -> bool {
+        matches!(self, Self::Bottom | Self::Top | Self::Right | Self::Left)
+    }
+}
+
+/// The geometry of a placed popup.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PlacedPopup {
+    /// The final popup rectangle, always inside the viewport.
+    pub rect: Rect,
+    /// The side the popup actually ended up on (the requested side, or the
+    /// flip when the requested one overflowed).
+    pub chosen_placement: Placement,
+    /// The point on the popup edge nearest the anchor. The tip of the arrow.
+    pub arrow_tip: Vec2,
 }
 
 /// Place a popup next to an anchor, always inside the viewport.
@@ -75,18 +123,47 @@ impl Placement {
 /// not fit is shrunk first, then positioned. Flipping and shifting make the
 /// result satisfy `Rule::ViewportContainment` for every anchor on or near an
 /// edge.
+///
+/// New callers bind the result as [`PlacedPopup`] to receive the chosen side
+/// and the arrow tip. Existing call sites that still want only the rectangle
+/// keep working because `Rect: From<PlacedPopup>`:
+///
+/// ```
+/// # use unbound_math::{Rect, Vec2};
+/// # use unbound_widgets::overlay::{place_anchored_popup, Placement, PlacedPopup};
+/// let anchor = Rect::new(10.0, 10.0, 40.0, 20.0);
+/// let placed: PlacedPopup =
+///     place_anchored_popup(anchor, Vec2::new(80.0, 60.0), anchor, Placement::Bottom);
+/// assert_eq!(placed.chosen_placement, Placement::Bottom);
+/// ```
 #[must_use]
-pub fn place_anchored_popup(
+pub fn place_anchored_popup<T: From<PlacedPopup>>(
     anchor: Rect,
     popup_size: Vec2,
     viewport: Rect,
     placement: Placement,
-) -> Rect {
+) -> T {
+    T::from(place_anchored_popup_detailed(
+        anchor, popup_size, viewport, placement,
+    ))
+}
+
+/// The detailed form of [`place_anchored_popup`].
+#[must_use]
+pub fn place_anchored_popup_detailed(
+    anchor: Rect,
+    popup_size: Vec2,
+    viewport: Rect,
+    placement: Placement,
+) -> PlacedPopup {
     let width = popup_size.x.max(0.0).min(viewport.width().max(0.0));
     let height = popup_size.y.max(0.0).min(viewport.height().max(0.0));
 
+    let mut chosen = placement;
     let mut origin = if placement.vertical() {
-        let x = if placement.aligned_to_end() {
+        let x = if placement.centered() {
+            anchor.center().x - width * 0.5
+        } else if placement.aligned_to_end() {
             anchor.max().x - width
         } else {
             anchor.origin.x
@@ -98,12 +175,19 @@ pub fn place_anchored_popup(
         };
         Vec2::new(x, y)
     } else {
+        let y = if placement.centered() {
+            anchor.center().y - height * 0.5
+        } else if placement.aligned_y_to_end() {
+            anchor.max().y - height
+        } else {
+            anchor.origin.y
+        };
         let x = if placement.right() {
             anchor.max().x + POPUP_GAP
         } else {
             anchor.origin.x - POPUP_GAP - width
         };
-        Vec2::new(x, anchor.origin.y)
+        Vec2::new(x, y)
     };
 
     // Flip when the preferred side overflows and the opposite side fits.
@@ -121,6 +205,7 @@ pub fn place_anchored_popup(
             };
             if flipped_y >= viewport.origin.y && flipped_y + height <= viewport.max().y {
                 origin.y = flipped_y;
+                chosen = placement.flip();
             }
         }
     } else {
@@ -137,6 +222,7 @@ pub fn place_anchored_popup(
             };
             if flipped_x >= viewport.origin.x && flipped_x + width <= viewport.max().x {
                 origin.x = flipped_x;
+                chosen = placement.flip();
             }
         }
     }
@@ -147,7 +233,39 @@ pub fn place_anchored_popup(
     origin.x = origin.x.clamp(viewport.origin.x, max_x);
     origin.y = origin.y.clamp(viewport.origin.y, max_y);
 
-    Rect::new(origin.x, origin.y, width, height)
+    let rect = Rect::new(origin.x, origin.y, width, height);
+    let center = anchor.center();
+    let arrow_tip = if chosen.vertical() {
+        Vec2::new(
+            center.x.clamp(rect.origin.x, rect.max().x),
+            if chosen.below() {
+                rect.origin.y
+            } else {
+                rect.max().y
+            },
+        )
+    } else {
+        Vec2::new(
+            if chosen.right() {
+                rect.origin.x
+            } else {
+                rect.max().x
+            },
+            center.y.clamp(rect.origin.y, rect.max().y),
+        )
+    };
+
+    PlacedPopup {
+        rect,
+        chosen_placement: chosen,
+        arrow_tip,
+    }
+}
+
+impl From<PlacedPopup> for Rect {
+    fn from(placed: PlacedPopup) -> Self {
+        placed.rect
+    }
 }
 
 /// A request for the render graph's backdrop-blur pass.
@@ -222,6 +340,10 @@ pub struct OverlayEntry {
     pub bounds: Rect,
     /// The focusable nodes a modal traps `Tab` inside.
     pub focus_scope: Vec<u64>,
+    /// Whether the anchor has scrolled out of its clip region. A clipped
+    /// anchor hides the overlay without closing it, so it reappears when the
+    /// anchor scrolls back into view.
+    pub anchor_clipped: bool,
 }
 
 impl OverlayEntry {
@@ -234,6 +356,7 @@ impl OverlayEntry {
             kind: OverlayKind::Popover,
             bounds,
             focus_scope: Vec::new(),
+            anchor_clipped: false,
         }
     }
 
@@ -246,6 +369,7 @@ impl OverlayEntry {
             kind: OverlayKind::Menu,
             bounds,
             focus_scope: Vec::new(),
+            anchor_clipped: false,
         }
     }
 
@@ -258,6 +382,7 @@ impl OverlayEntry {
             kind: OverlayKind::Tooltip,
             bounds,
             focus_scope: Vec::new(),
+            anchor_clipped: false,
         }
     }
 
@@ -270,7 +395,15 @@ impl OverlayEntry {
             kind: OverlayKind::Modal,
             bounds,
             focus_scope,
+            anchor_clipped: false,
         }
+    }
+
+    /// Mark whether the anchor has scrolled out of its clip region.
+    #[must_use]
+    pub fn with_anchor_clipped(mut self, clipped: bool) -> Self {
+        self.anchor_clipped = clipped;
+        self
     }
 }
 
@@ -300,10 +433,35 @@ impl OverlayStack {
         self.sort_key(self.entries.len() - 1, order)
     }
 
-    /// The topmost entry.
+    /// The topmost entry that is actually visible.
     #[must_use]
     pub fn top(&self) -> Option<&OverlayEntry> {
-        self.entries.iter().max_by_key(|entry| self.key_of(entry))
+        self.entries
+            .iter()
+            .filter(|entry| !entry.anchor_clipped)
+            .max_by_key(|entry| self.key_of(entry))
+    }
+
+    /// Every entry whose anchor is still inside its clip region.
+    ///
+    /// Painting iterates this instead of [`Self::entries`] so a clipped anchor
+    /// hides its popup while keeping it in the stack.
+    pub fn visible_entries(&self) -> impl Iterator<Item = &OverlayEntry> {
+        self.entries.iter().filter(|entry| !entry.anchor_clipped)
+    }
+
+    /// Hide or reveal an overlay without closing it.
+    ///
+    /// A clipped anchor hides its popup; the entry stays in the stack so it
+    /// reappears when the anchor scrolls back into view.
+    pub fn set_anchor_clipped(&mut self, node: u64, clipped: bool) -> bool {
+        for entry in &mut self.entries {
+            if entry.node == node {
+                entry.anchor_clipped = clipped;
+                return true;
+            }
+        }
+        false
     }
 
     /// How many overlays are open.
@@ -348,6 +506,7 @@ impl OverlayStack {
         let node = self
             .entries
             .iter()
+            .filter(|entry| !entry.anchor_clipped)
             .max_by_key(|entry| self.key_of(entry))
             .filter(|entry| entry.kind.escape_closes())?
             .node;
@@ -358,7 +517,11 @@ impl OverlayStack {
     /// Handle an outside click: close the topmost light-dismissable overlay
     /// when the point is outside its bounds.
     pub fn close_outside(&mut self, point: Vec2) -> Option<u64> {
-        let entry = self.entries.iter().max_by_key(|entry| self.key_of(entry))?;
+        let entry = self
+            .entries
+            .iter()
+            .filter(|entry| !entry.anchor_clipped)
+            .max_by_key(|entry| self.key_of(entry))?;
         if !entry.kind.light_dismiss() || entry.bounds.contains_point(point) {
             return None;
         }
@@ -433,7 +596,7 @@ mod tests {
     #[test]
     fn a_popup_prefers_the_requested_side() {
         let anchor = Rect::new(100.0, 100.0, 120.0, 36.0);
-        let popup = place_anchored_popup(
+        let popup: Rect = place_anchored_popup(
             anchor,
             Vec2::new(200.0, 160.0),
             viewport(),
@@ -446,7 +609,7 @@ mod tests {
     #[test]
     fn a_popup_flips_up_when_the_bottom_edge_has_no_room() {
         let anchor = Rect::new(100.0, 650.0, 120.0, 36.0);
-        let popup = place_anchored_popup(
+        let popup: Rect = place_anchored_popup(
             anchor,
             Vec2::new(200.0, 160.0),
             viewport(),
@@ -459,7 +622,7 @@ mod tests {
     #[test]
     fn a_popup_flips_left_when_the_right_edge_has_no_room() {
         let anchor = Rect::new(1200.0, 100.0, 60.0, 30.0);
-        let popup = place_anchored_popup(
+        let popup: Rect = place_anchored_popup(
             anchor,
             Vec2::new(200.0, 100.0),
             viewport(),
@@ -487,23 +650,66 @@ mod tests {
         let placements = [
             Placement::BottomStart,
             Placement::BottomEnd,
+            Placement::Bottom,
             Placement::TopStart,
             Placement::TopEnd,
+            Placement::Top,
             Placement::RightStart,
+            Placement::RightEnd,
+            Placement::Right,
             Placement::LeftStart,
+            Placement::LeftEnd,
+            Placement::Left,
         ];
         for anchor in anchors {
             for placement in placements {
-                let popup = place_anchored_popup(anchor, size, viewport(), placement);
+                let popup: Rect = place_anchored_popup(anchor, size, viewport(), placement);
                 assert_contained(popup, viewport());
             }
         }
     }
 
     #[test]
+    fn the_centred_placements_centre_on_the_anchor() {
+        let anchor = Rect::new(400.0, 300.0, 100.0, 40.0);
+        let below: PlacedPopup = place_anchored_popup(
+            anchor,
+            Vec2::new(200.0, 100.0),
+            viewport(),
+            Placement::Bottom,
+        );
+        assert_eq!(below.rect.center().x, anchor.center().x);
+        assert_eq!(below.rect.origin.y, anchor.max().y + POPUP_GAP);
+
+        let right: PlacedPopup = place_anchored_popup(
+            anchor,
+            Vec2::new(200.0, 100.0),
+            viewport(),
+            Placement::Right,
+        );
+        assert_eq!(right.rect.center().y, anchor.center().y);
+        assert_eq!(right.rect.origin.x, anchor.max().x + POPUP_GAP);
+    }
+
+    #[test]
+    fn a_flipped_popup_reports_the_chosen_side_and_an_arrow_tip_on_its_edge() {
+        let anchor = Rect::new(100.0, 650.0, 120.0, 36.0);
+        let placed: PlacedPopup = place_anchored_popup(
+            anchor,
+            Vec2::new(200.0, 160.0),
+            viewport(),
+            Placement::Bottom,
+        );
+        assert_eq!(placed.chosen_placement, Placement::Top);
+        // The arrow points down at the anchor from the popup's bottom edge.
+        assert_eq!(placed.arrow_tip.y, placed.rect.max().y);
+        assert_eq!(placed.arrow_tip.x, anchor.center().x);
+    }
+
+    #[test]
     fn an_oversized_popup_is_shrunk_to_the_viewport() {
         let anchor = Rect::new(0.0, 0.0, 10.0, 10.0);
-        let popup = place_anchored_popup(
+        let popup: Rect = place_anchored_popup(
             anchor,
             Vec2::new(4000.0, 4000.0),
             viewport(),

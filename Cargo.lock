@@ -1869,12 +1869,16 @@ name = "unbound-app"
 version = "0.1.0"
 dependencies = [
  "unbound-a11y",
+ "unbound-abi",
  "unbound-gpu",
  "unbound-headless",
  "unbound-input",
+ "unbound-layout",
  "unbound-math",
+ "unbound-text",
  "unbound-theme",
  "unbound-widgets",
+ "unbound-world",
 ]
 
 [[package]]

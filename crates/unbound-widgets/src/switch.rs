@@ -26,6 +26,9 @@ pub const SWITCH_KNOB: f32 = 16.0;
 /// The distance the knob keeps from the track's edge.
 const KNOB_INSET: f32 = 4.0;
 
+/// How much the knob stretches along the track while pressed.
+const KNOB_SQUISH: f32 = 4.0;
+
 /// The colour slots a switch paints with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SwitchTokens {
@@ -33,12 +36,18 @@ pub struct SwitchTokens {
     pub track: Token,
     /// The track while the switch is on.
     pub track_on: Token,
+    /// The track while disabled.
+    pub track_disabled: Token,
     /// The knob.
     pub thumb: Token,
+    /// The knob while disabled.
+    pub thumb_disabled: Token,
     /// The label while idle.
     pub label: Token,
     /// The label while hovered.
     pub label_hover: Token,
+    /// The label while disabled.
+    pub label_disabled: Token,
     /// The keyboard focus ring.
     pub focus_ring: Token,
 }
@@ -50,9 +59,12 @@ impl SwitchTokens {
         Self {
             track: Token::CONTROL_TRACK,
             track_on: Token::PRIMARY,
+            track_disabled: Token::CONTROL_DISABLED_BG,
             thumb: Token::CONTROL_THUMB,
+            thumb_disabled: Token::CONTROL_DISABLED_THUMB,
             label: Token::TEXT_SECONDARY,
             label_hover: Token::TEXT_PRIMARY,
+            label_disabled: Token::TEXT_DISABLED,
             focus_ring: Token::FOCUS_RING,
         }
     }
@@ -67,6 +79,12 @@ pub struct SwitchDesc {
     pub label: String,
     /// Whether the switch is on.
     pub on: bool,
+    /// The animated knob position, in `0..=1`.
+    ///
+    /// `None` snaps the knob to the business state; `Some(t)` is what a
+    /// spring animation writes every frame, so the knob can slide instead of
+    /// jumping when the value flips.
+    pub thumb_t: Option<f32>,
     /// The track size.
     pub track_size: (f32, f32),
     /// The knob size.
@@ -83,6 +101,7 @@ impl SwitchDesc {
             rect,
             label: label.into(),
             on: false,
+            thumb_t: None,
             track_size: SWITCH_TRACK,
             knob_size: SWITCH_KNOB,
             z: 700,
@@ -93,6 +112,13 @@ impl SwitchDesc {
     #[must_use]
     pub fn with_on(mut self, on: bool) -> Self {
         self.on = on;
+        self
+    }
+
+    /// Draw the knob at an interpolated position instead of snapping it.
+    #[must_use]
+    pub fn with_thumb_t(mut self, thumb_t: f32) -> Self {
+        self.thumb_t = Some(thumb_t);
         self
     }
 
@@ -108,19 +134,42 @@ impl SwitchDesc {
         )
     }
 
+    /// The knob position in `0..=1`, from the animation or the business state.
+    #[must_use]
+    pub fn thumb_position(&self) -> f32 {
+        self.thumb_t
+            .unwrap_or(if self.on { 1.0 } else { 0.0 })
+            .clamp(0.0, 1.0)
+    }
+
     /// The knob rectangle.
     #[must_use]
     pub fn knob_rect(&self) -> Rect {
+        self.knob_rect_pressed(false)
+    }
+
+    /// The knob rectangle while pressed.
+    ///
+    /// Pressing a switch stretches the knob into a capsule: it grows towards
+    /// the centre of the track, away from the end it is anchored to, which is
+    /// the "squish" a physical toggle shows under a thumb.
+    #[must_use]
+    pub fn knob_rect_pressed(&self, pressed: bool) -> Rect {
         let track = self.track_rect();
-        let x = if self.on {
-            track.max().x - self.knob_size - KNOB_INSET
-        } else {
-            track.origin.x + KNOB_INSET
-        };
+        let travel = (track.size.x - self.knob_size - KNOB_INSET * 2.0).max(0.0);
+        let t = self.thumb_position();
+        let mut width = self.knob_size;
+        let mut x = track.origin.x + KNOB_INSET + t * travel;
+        if pressed && travel > 0.0 {
+            width += KNOB_SQUISH;
+            if t >= 0.5 {
+                x -= KNOB_SQUISH;
+            }
+        }
         Rect::new(
             x,
             track.origin.y + (track.size.y - self.knob_size) * 0.5,
-            self.knob_size,
+            width,
             self.knob_size,
         )
     }
@@ -143,23 +192,33 @@ pub fn emit_switch(
     let z = desc.z;
 
     // The track.
+    let track_fill = if state.disabled {
+        tokens.track_disabled
+    } else if desc.on {
+        tokens.track_on
+    } else {
+        tokens.track
+    };
     primitives.push(surface(
         desc.track_rect(),
         desc.track_size.1 * 0.5,
-        if desc.on {
-            tokens.track_on
-        } else {
-            tokens.track
-        },
+        track_fill,
         z,
     ));
 
-    // The knob.
-    let knob = desc.knob_rect();
+    // The knob: it stretches into a capsule while pressed, which is the
+    // tactile feedback of a real toggle.
+    let pressed = state.phase == crate::PointerPhase::Pressed && !state.disabled;
+    let knob = desc.knob_rect_pressed(pressed);
+    let thumb_fill = if state.disabled {
+        tokens.thumb_disabled
+    } else {
+        tokens.thumb
+    };
     primitives.push(outlined(
         knob,
         desc.knob_size * 0.5,
-        tokens.thumb,
+        thumb_fill,
         Token::NONE,
         0.0,
         2.0,
@@ -167,7 +226,9 @@ pub fn emit_switch(
     ));
 
     // The label.
-    let label_color = if state.phase == crate::PointerPhase::Hovered {
+    let label_color = if state.disabled {
+        tokens.label_disabled
+    } else if state.phase == crate::PointerPhase::Hovered {
         tokens.label_hover
     } else {
         tokens.label

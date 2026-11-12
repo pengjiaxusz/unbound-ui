@@ -166,3 +166,96 @@ fn controls_inside_scroll_view_inherit_clip_and_transform() {
         None
     );
 }
+
+#[test]
+fn clicking_the_track_outside_the_thumb_pages_by_one_viewport() {
+    let desc = desc();
+    let mut state = ScrollState::new();
+    let track = desc.track_rect(false);
+
+    let below = Vec2::new(track.center().x, track.max().y - 4.0);
+    assert!(state.page_at_track_click(&desc, below), "forward page");
+    assert_eq!(state.target().y, desc.rect.height());
+
+    state.jump_to(&desc, Vec2::new(0.0, desc.rect.height()));
+    let above = Vec2::new(track.center().x, track.origin.y + 2.0);
+    assert!(state.page_at_track_click(&desc, above), "backward page");
+    assert_eq!(state.target().y, 0.0);
+}
+
+#[test]
+fn clicking_the_thumb_or_outside_the_track_does_not_page() {
+    let desc = desc();
+    let mut state = ScrollState::new();
+    state.jump_to(&desc, Vec2::new(0.0, 1500.0));
+    let thumb = desc.thumb_rect(state.offset(), false);
+    assert!(!state.page_at_track_click(&desc, thumb.center()));
+    assert_eq!(state.target().y, 1500.0);
+
+    assert!(!state.page_at_track_click(&desc, Vec2::new(-10.0, -10.0)));
+    assert_eq!(state.target().y, 1500.0);
+}
+
+#[test]
+fn scroll_into_view_targets_the_nearest_edge() {
+    let desc = desc();
+    let mut state = ScrollState::new();
+
+    // A child fully below the viewport: align its bottom with the viewport.
+    assert!(state.scroll_into_view(&desc, Rect::new(20.0, 460.0, 120.0, 36.0)));
+    assert_eq!(state.target().y, 460.0 + 36.0 - desc.rect.height());
+
+    // A child fully above: align its top with the viewport.
+    assert!(state.scroll_into_view(&desc, Rect::new(20.0, 50.0, 120.0, 36.0)));
+    assert_eq!(state.target().y, 50.0);
+
+    // A child already visible: the target does not move.
+    assert!(!state.scroll_into_view(&desc, Rect::new(20.0, 100.0, 120.0, 20.0)));
+    assert_eq!(state.target().y, 50.0);
+}
+
+#[test]
+fn a_fling_projects_the_release_velocity_into_the_target() {
+    let desc = desc();
+    let mut state = ScrollState::new();
+    state.fling(&desc, Vec2::new(0.0, 1200.0));
+    assert_eq!(state.target().y, 1200.0 * 0.25);
+    assert_eq!(state.offset().y, 0.0, "only the target moves");
+    assert!(state.is_animating());
+
+    // A hard fling stops exactly at the end of the content.
+    state.fling(&desc, Vec2::new(0.0, 1_000_000.0));
+    assert_eq!(state.target().y, desc.max_offset().y);
+
+    state.jump_to(&desc, Vec2::ZERO);
+    state.fling(&desc, Vec2::new(0.0, -500.0));
+    assert_eq!(state.target().y, 0.0);
+}
+
+#[test]
+fn collect_children_inherits_the_scroll_clip_and_transform() {
+    let desc = desc();
+    let mut state = ScrollState::new();
+    state.jump_to(&desc, Vec2::new(0.0, 420.0));
+    let scroll = emit_scroll_view(90, &desc, &state, tab());
+
+    let button = ButtonWidget {
+        node: 700,
+        desc: ButtonDesc::new(Rect::new(20.0, 460.0, 120.0, 36.0), "Save"),
+    };
+
+    let mut collector = SceneCollector::new(1);
+    scroll.collect_children(&mut collector, desc.rect, |collector| {
+        collector.push(button.key(), button.emit(tab(), &mut []));
+    });
+
+    assert_eq!(collector.clips.len(), 1);
+    assert_eq!(collector.transforms.len(), 2, "identity + scroll");
+    let primitives = collector.span(button.key()).expect("button emitted");
+    assert!(primitives
+        .iter()
+        .all(|primitive| primitive.clip_idx != u32::MAX));
+    assert!(primitives
+        .iter()
+        .all(|primitive| primitive.transform_idx == 1));
+}

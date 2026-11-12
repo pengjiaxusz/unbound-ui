@@ -17,7 +17,104 @@ use crate::{ControlState, WidgetDesc, WidgetOutput};
 
 /// How long the pointer must rest before the tooltip appears.
 pub const TOOLTIP_DELAY_MS: f32 = 400.0;
+/// The maximum width of a wrapped tooltip.
+pub const TOOLTIP_MAX_WIDTH: f32 = 280.0;
 const TOOLTIP_SHADOW: f32 = 14.0;
+
+/// An absolute hover deadline, in milliseconds.
+///
+/// No timer queue lives in this crate yet, so the delay is expressed as a
+/// deadline the caller registers (`TooltipState::schedule`) and polls with the
+/// frame clock (`TooltipState::poll`). When a `TimerQueue` lands, this struct
+/// is the value it can store: it carries everything the scheduler needs and
+/// nothing that depends on the widget tree.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct TooltipDelay {
+    /// The clock value at which the hover started.
+    pub started_ms: f32,
+    /// How long the pointer has to rest.
+    pub delay_ms: f32,
+}
+
+impl TooltipDelay {
+    /// Register a deadline of `delay_ms` starting at `now_ms`.
+    #[must_use]
+    pub fn start(now_ms: f32, delay_ms: f32) -> Self {
+        Self {
+            started_ms: now_ms,
+            delay_ms: delay_ms.max(0.0),
+        }
+    }
+
+    /// The clock value at which the tooltip becomes due.
+    #[must_use]
+    pub fn deadline_ms(&self) -> f32 {
+        self.started_ms + self.delay_ms
+    }
+
+    /// Whether the deadline has passed at `now_ms`.
+    #[must_use]
+    pub fn is_due(&self, now_ms: f32) -> bool {
+        now_ms >= self.deadline_ms()
+    }
+
+    /// How long is left before the deadline (never negative).
+    #[must_use]
+    pub fn remaining(&self, now_ms: f32) -> f32 {
+        (self.deadline_ms() - now_ms).max(0.0)
+    }
+}
+
+/// Greedy word wrap with `max_width` and a per-character advance estimate.
+///
+/// A word wider than one line is hard-split, so no returned line exceeds
+/// `max_chars = floor(max_width / char_width)`. This is a measurement helper:
+/// the caller passes the average advance from its text engine, which keeps the
+/// widget crate independent of any font stack.
+#[must_use]
+pub fn wrap_text(text: &str, max_width: f32, char_width: f32) -> Vec<String> {
+    let max_width = if max_width > 0.0 {
+        max_width
+    } else {
+        TOOLTIP_MAX_WIDTH
+    };
+    let char_width = if char_width > 0.0 { char_width } else { 1.0 };
+    let max_chars = (max_width / char_width).floor().max(1.0) as usize;
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let mut remaining = word;
+        while remaining.chars().count() > max_chars {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            let chunk: String = remaining.chars().take(max_chars).collect();
+            remaining = &remaining[chunk.len()..];
+            lines.push(chunk);
+        }
+        if remaining.is_empty() {
+            continue;
+        }
+        let used = current.chars().count();
+        let candidate = if used == 0 {
+            remaining.chars().count()
+        } else {
+            used + 1 + remaining.chars().count()
+        };
+        if candidate > max_chars && used > 0 {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(remaining);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
 
 /// A tooltip descriptor.
 #[derive(Clone, Debug, PartialEq)]
@@ -32,6 +129,8 @@ pub struct TooltipDesc {
     pub placement: Placement,
     /// The delay before it appears.
     pub delay_ms: f32,
+    /// The maximum line width used by [`Self::with_wrapped_text`].
+    pub max_width: f32,
     /// The corner radius.
     pub radius: f32,
     /// The draw order key.
@@ -47,9 +146,32 @@ impl TooltipDesc {
             size,
             placement: Placement::TopStart,
             delay_ms: TOOLTIP_DELAY_MS,
+            max_width: TOOLTIP_MAX_WIDTH,
             radius: 6.0,
             z: 940,
         }
+    }
+
+    /// Measure a wrapped multi-line tooltip.
+    ///
+    /// `char_width` is the average advance reported by the caller's text
+    /// engine and `line_height` the line box. The resulting bubble is never
+    /// wider than [`Self::max_width`].
+    #[must_use]
+    pub fn with_wrapped_text(mut self, text: &str, char_width: f32, line_height: f32) -> Self {
+        let lines = wrap_text(text, self.max_width, char_width);
+        let widest = lines
+            .iter()
+            .map(|line| line.chars().count() as f32 * char_width)
+            .fold(0.0, f32::max);
+        self.size = Vec2::new(widest.min(self.max_width), lines.len() as f32 * line_height);
+        self
+    }
+
+    /// The wrapped lines of `text` at this bubble's maximum width.
+    #[must_use]
+    pub fn wrapped_lines(&self, text: &str, char_width: f32) -> Vec<String> {
+        wrap_text(text, self.max_width, char_width)
     }
 
     /// The placed bubble rectangle.
@@ -65,6 +187,8 @@ pub struct TooltipState {
     hovered_ms: f32,
     visible: bool,
     hovered_anchor: Option<u64>,
+    now_ms: f32,
+    deadline: Option<TooltipDelay>,
 }
 
 impl TooltipState {
@@ -85,37 +209,95 @@ impl TooltipState {
         self.hovered_ms
     }
 
-    /// Advance the delay.
+    /// The registered deadline, if the pointer is resting on a trigger.
+    #[must_use]
+    pub const fn delay(&self) -> Option<TooltipDelay> {
+        self.deadline
+    }
+
+    /// Register the hover delay for `hovered` at the caller's clock.
+    ///
+    /// This is the timer-queue-style entry point: it only creates a new
+    /// deadline when the hovered node changes, so calling it every frame does
+    /// not restart the timer. The caller then calls [`Self::poll`] with the
+    /// frame clock.
+    pub fn schedule(&mut self, desc: &TooltipDesc, hovered: Option<u64>, now_ms: f32) {
+        self.now_ms = now_ms;
+        match hovered {
+            Some(node) => {
+                if self.hovered_anchor != Some(node) {
+                    self.hovered_anchor = Some(node);
+                    self.hovered_ms = 0.0;
+                    self.visible = false;
+                    self.deadline = Some(TooltipDelay::start(now_ms, desc.delay_ms));
+                }
+            }
+            None => {
+                self.hovered_anchor = None;
+                self.hovered_ms = 0.0;
+                self.deadline = None;
+                self.visible = false;
+            }
+        }
+    }
+
+    /// Advance the clock and return whether the visibility changed.
+    ///
+    /// This is the poll half of [`Self::schedule`]: registering the deadline is
+    /// a `TimerQueue`-style operation, while reading the clock once per frame
+    /// is a cheap comparison against it.
+    pub fn poll(&mut self, now_ms: f32) -> bool {
+        self.now_ms = now_ms;
+        let was = self.visible;
+        if let Some(deadline) = self.deadline {
+            self.hovered_ms = (now_ms - deadline.started_ms).max(0.0);
+            self.visible = deadline.is_due(now_ms);
+        } else {
+            self.hovered_ms = 0.0;
+            self.visible = false;
+        }
+        self.visible != was
+    }
+
+    /// Advance the delay by a frame delta.
+    ///
+    /// Kept for callers that only have a delta rather than a frame clock; it
+    /// feeds the same deadline the timer-queue-style API uses.
     ///
     /// `hovered` is the node under the pointer (`None` when it is over
     /// nothing). Moving to a different node restarts the timer, which is what
     /// keeps a sweep across a row of buttons from showing a bubble for each
     /// one. Returns whether the visibility changed.
     pub fn update(&mut self, desc: &TooltipDesc, hovered: Option<u64>, dt_ms: f32) -> bool {
+        let dt = dt_ms.max(0.0);
+        let now = self.now_ms + dt;
         let was = self.visible;
         match hovered {
-            Some(node) if self.hovered_anchor == Some(node) => {
-                self.hovered_ms += dt_ms.max(0.0);
-                self.visible = self.hovered_ms >= desc.delay_ms;
-            }
+            Some(node) if self.hovered_anchor == Some(node) => {}
             Some(node) => {
                 self.hovered_anchor = Some(node);
-                self.hovered_ms = dt_ms.max(0.0);
-                self.visible = self.hovered_ms >= desc.delay_ms;
+                self.hovered_ms = 0.0;
+                // The pointer rested for `dt` before this tick, so the
+                // deadline starts one delta in the past.
+                self.deadline = Some(TooltipDelay::start(now - dt, desc.delay_ms));
             }
             None => {
                 self.hovered_anchor = None;
                 self.hovered_ms = 0.0;
+                self.deadline = None;
                 self.visible = false;
+                self.now_ms = now;
+                return self.visible != was;
             }
         }
-        self.visible != was
+        self.poll(now)
     }
 
     /// Hide the bubble immediately (e.g. a press).
     pub fn hide(&mut self) {
         self.visible = false;
         self.hovered_ms = 0.0;
+        self.deadline = None;
     }
 }
 

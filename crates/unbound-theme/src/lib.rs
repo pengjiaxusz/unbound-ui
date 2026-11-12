@@ -183,6 +183,29 @@ impl Token {
     pub const CARD_BG: Self = Self(62);
     /// The outline of a card that sits on [`Token::SURFACE`].
     pub const CARD_BORDER: Self = Self(63);
+
+    // ---- disabled / input / editing states (64..=73) ----------------------
+
+    /// The fill of a disabled button, input or select.
+    pub const CONTROL_DISABLED_BG: Self = Self(64);
+    /// The outline of a disabled control.
+    pub const CONTROL_DISABLED_BORDER: Self = Self(65);
+    /// The thumb or knob of a disabled slider / switch.
+    pub const CONTROL_DISABLED_THUMB: Self = Self(66);
+    /// The fill of an indeterminate checkbox or a mixed progress bar.
+    pub const INDETERMINATE_FILL: Self = Self(67);
+    /// The background of a text input.
+    pub const INPUT_BG: Self = Self(68);
+    /// The input border while hovered.
+    pub const INPUT_BORDER_HOVER: Self = Self(69);
+    /// The input border in an error validation state.
+    pub const INPUT_BORDER_ERROR: Self = Self(70);
+    /// The input border in a warning validation state.
+    pub const INPUT_BORDER_WARNING: Self = Self(71);
+    /// The IME pre-edit underline.
+    pub const PREEDIT_UNDERLINE: Self = Self(72);
+    /// The disclosure arrow of a submenu row.
+    pub const SUBMENU_ARROW: Self = Self(73);
 }
 
 /// The set of semantic tokens the design system defines.
@@ -192,7 +215,7 @@ impl Token {
 ///
 /// [`Token::NONE`] is not in the list: it is a reserved engine slot, not a
 /// semantic colour.
-pub const TOKENS: [Token; 63] = [
+pub const TOKENS: [Token; 73] = [
     Token::SURFACE,
     Token::SURFACE_RAISED,
     Token::SURFACE_SUNKEN,
@@ -256,6 +279,16 @@ pub const TOKENS: [Token; 63] = [
     Token::SECONDARY,
     Token::CARD_BG,
     Token::CARD_BORDER,
+    Token::CONTROL_DISABLED_BG,
+    Token::CONTROL_DISABLED_BORDER,
+    Token::CONTROL_DISABLED_THUMB,
+    Token::INDETERMINATE_FILL,
+    Token::INPUT_BG,
+    Token::INPUT_BORDER_HOVER,
+    Token::INPUT_BORDER_ERROR,
+    Token::INPUT_BORDER_WARNING,
+    Token::PREEDIT_UNDERLINE,
+    Token::SUBMENU_ARROW,
 ];
 
 /// Which theme is currently active.
@@ -442,6 +475,40 @@ impl ThemeSet {
                 (Token::SECONDARY, Color::from_srgb8(124, 106, 240, 255)),
                 (Token::CARD_BG, Color::from_srgb8(255, 255, 255, 255)),
                 (Token::CARD_BORDER, Color::from_srgb8(228, 230, 238, 255)),
+                (
+                    Token::CONTROL_DISABLED_BG,
+                    Color::from_srgb8(241, 242, 246, 255),
+                ),
+                (
+                    Token::CONTROL_DISABLED_BORDER,
+                    Color::from_srgb8(213, 216, 224, 255),
+                ),
+                (
+                    Token::CONTROL_DISABLED_THUMB,
+                    Color::from_srgb8(196, 200, 210, 255),
+                ),
+                (
+                    Token::INDETERMINATE_FILL,
+                    Color::from_srgb8(38, 110, 255, 255),
+                ),
+                (Token::INPUT_BG, Color::WHITE),
+                (
+                    Token::INPUT_BORDER_HOVER,
+                    Color::from_srgb8(154, 163, 181, 255),
+                ),
+                (
+                    Token::INPUT_BORDER_ERROR,
+                    Color::from_srgb8(229, 72, 77, 255),
+                ),
+                (
+                    Token::INPUT_BORDER_WARNING,
+                    Color::from_srgb8(217, 119, 6, 255),
+                ),
+                (
+                    Token::PREEDIT_UNDERLINE,
+                    Color::from_srgb8(38, 110, 255, 255),
+                ),
+                (Token::SUBMENU_ARROW, Color::from_srgb8(107, 114, 128, 255)),
             ],
         );
 
@@ -517,6 +584,40 @@ impl ThemeSet {
                 (Token::SECONDARY, Color::from_srgb8(160, 130, 255, 255)),
                 (Token::CARD_BG, Color::from_srgb8(32, 35, 42, 255)),
                 (Token::CARD_BORDER, Color::from_srgb8(52, 56, 66, 255)),
+                (
+                    Token::CONTROL_DISABLED_BG,
+                    Color::from_srgb8(42, 44, 51, 255),
+                ),
+                (
+                    Token::CONTROL_DISABLED_BORDER,
+                    Color::from_srgb8(74, 77, 87, 255),
+                ),
+                (
+                    Token::CONTROL_DISABLED_THUMB,
+                    Color::from_srgb8(90, 94, 105, 255),
+                ),
+                (
+                    Token::INDETERMINATE_FILL,
+                    Color::from_srgb8(122, 162, 255, 255),
+                ),
+                (Token::INPUT_BG, Color::from_srgb8(32, 34, 41, 255)),
+                (
+                    Token::INPUT_BORDER_HOVER,
+                    Color::from_srgb8(108, 114, 128, 255),
+                ),
+                (
+                    Token::INPUT_BORDER_ERROR,
+                    Color::from_srgb8(255, 107, 107, 255),
+                ),
+                (
+                    Token::INPUT_BORDER_WARNING,
+                    Color::from_srgb8(255, 178, 36, 255),
+                ),
+                (
+                    Token::PREEDIT_UNDERLINE,
+                    Color::from_srgb8(122, 162, 255, 255),
+                ),
+                (Token::SUBMENU_ARROW, Color::from_srgb8(160, 166, 180, 255)),
             ],
         );
 
@@ -591,6 +692,34 @@ impl ThemeSet {
                 (Token::SECONDARY, Color::from_srgb8(200, 180, 255, 255)),
                 (Token::CARD_BG, Color::BLACK),
                 (Token::CARD_BORDER, Color::WHITE),
+                (
+                    Token::CONTROL_DISABLED_BG,
+                    Color::from_srgb8(32, 32, 32, 255),
+                ),
+                (Token::CONTROL_DISABLED_BORDER, Color::WHITE),
+                (Token::CONTROL_DISABLED_THUMB, Color::WHITE),
+                (
+                    Token::INDETERMINATE_FILL,
+                    Color::from_srgb8(255, 230, 0, 255),
+                ),
+                (Token::INPUT_BG, Color::BLACK),
+                (
+                    Token::INPUT_BORDER_HOVER,
+                    Color::from_srgb8(255, 230, 0, 255),
+                ),
+                (
+                    Token::INPUT_BORDER_ERROR,
+                    Color::from_srgb8(255, 80, 80, 255),
+                ),
+                (
+                    Token::INPUT_BORDER_WARNING,
+                    Color::from_srgb8(255, 230, 0, 255),
+                ),
+                (
+                    Token::PREEDIT_UNDERLINE,
+                    Color::from_srgb8(255, 230, 0, 255),
+                ),
+                (Token::SUBMENU_ARROW, Color::WHITE),
             ],
         );
 
