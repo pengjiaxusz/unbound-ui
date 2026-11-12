@@ -14,12 +14,14 @@
 
 pub mod cursor;
 pub mod dnd;
+pub mod focus;
 pub mod hit;
 pub mod pointer;
 pub mod router;
 
 pub use cursor::{CursorKind, CursorSource, CursorStack};
 pub use dnd::{DragOver, DragPayload, PayloadArena};
+pub use focus::{FocusCause, FocusConfig, FocusKey, FocusManager};
 pub use hit::{
     pick, pick_index, pick_stack, point_in_polygon, resize_edge, rounded_rect_sdf, ClipRect,
     HitRegion, ResizeEdge, Shape, PORTAL_LAYER,
