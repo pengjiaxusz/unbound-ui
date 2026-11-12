@@ -26,6 +26,10 @@ pub const SCROLL_LAYER: u8 = 1;
 pub const SCROLLBAR_WIDTH: f32 = 8.0;
 /// The smallest scrollbar thumb, in logical pixels.
 pub const MIN_THUMB: f32 = 24.0;
+/// How long the scrollbar stays visible after the last scroll, in seconds.
+pub const SCROLLBAR_HOLD: f32 = 1.0;
+/// How long the fade-out takes once the hold expires.
+pub const SCROLLBAR_FADE: f32 = 0.25;
 
 /// Which axes a scroll view accepts.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -194,6 +198,8 @@ pub struct ScrollState {
     spring: Spring2,
     offset: Vec2,
     drag: Option<Drag>,
+    bar_opacity: f32,
+    idle: f32,
 }
 
 impl Default for ScrollState {
@@ -209,6 +215,8 @@ impl ScrollState {
             spring: Spring2::new(SpringPreset::Precise, Vec2::ZERO),
             offset: Vec2::ZERO,
             drag: None,
+            bar_opacity: 0.0,
+            idle: 0.0,
         }
     }
 
@@ -235,18 +243,54 @@ impl ScrollState {
         let offset = desc.clamp_offset(offset);
         self.spring.snap_to(offset);
         self.offset = offset;
+        self.reveal_scrollbar();
     }
 
     /// Add a delta (a wheel notch, a drag) and clamp it.
     pub fn scroll_by(&mut self, desc: &ScrollViewDesc, delta: Vec2) {
         let target = desc.clamp_offset(self.target() + delta);
         self.spring.set_target(target);
+        self.reveal_scrollbar();
     }
 
     /// Scroll to an absolute offset, clamped.
     pub fn scroll_to(&mut self, desc: &ScrollViewDesc, offset: Vec2) {
         let target = desc.clamp_offset(offset);
         self.spring.set_target(target);
+        self.reveal_scrollbar();
+    }
+
+    /// The scrollbar opacity in `0..=1`.
+    #[must_use]
+    pub fn scrollbar_opacity(&self) -> f32 {
+        self.bar_opacity
+    }
+
+    /// Show the scrollbar immediately (a wheel event, a hover, a drag).
+    pub fn reveal_scrollbar(&mut self) {
+        self.bar_opacity = 1.0;
+        self.idle = 0.0;
+    }
+
+    /// Advance the scrollbar fade.
+    ///
+    /// The bar stays fully opaque while the pointer is over the view, while a
+    /// drag is active and while the spring is still moving. Afterwards it
+    /// holds for [`SCROLLBAR_HOLD`] and fades over [`SCROLLBAR_FADE`].
+    ///
+    /// Returns whether the opacity changed.
+    pub fn tick_scrollbar(&mut self, dt: f32, hovering: bool) -> bool {
+        let before = self.bar_opacity;
+        let active = hovering || self.drag.is_some() || self.is_animating();
+        if active {
+            self.reveal_scrollbar();
+        } else {
+            self.idle += dt.max(0.0);
+            if self.idle > SCROLLBAR_HOLD {
+                self.bar_opacity = (self.bar_opacity - dt.max(0.0) / SCROLLBAR_FADE).max(0.0);
+            }
+        }
+        (self.bar_opacity - before).abs() > f32::EPSILON
     }
 
     /// Advance the spring. Returns `true` while it is moving.
@@ -267,6 +311,7 @@ impl ScrollState {
             start_pointer: pointer,
             start_offset: self.offset,
         });
+        self.reveal_scrollbar();
     }
 
     /// Update a scrollbar drag.
@@ -417,21 +462,16 @@ pub fn emit_scroll_view(
     };
 
     let mut thumb_region = None;
+    let opacity = scroll.scrollbar_opacity();
     if desc.axis.vertical() && desc.content_size.y > rect.height() {
         let track = desc.track_rect(false);
-        primitives.push(surface(
-            track,
-            desc.scrollbar_width * 0.5,
-            track_token,
-            desc.z,
-        ));
+        let mut track_primitive = surface(track, desc.scrollbar_width * 0.5, track_token, desc.z);
+        set_opacity(&mut track_primitive, opacity);
+        primitives.push(track_primitive);
         let thumb = desc.thumb_rect(offset, false);
-        primitives.push(surface(
-            thumb,
-            desc.scrollbar_width * 0.5,
-            thumb_token,
-            desc.z,
-        ));
+        let mut thumb_primitive = surface(thumb, desc.scrollbar_width * 0.5, thumb_token, desc.z);
+        set_opacity(&mut thumb_primitive, opacity);
+        primitives.push(thumb_primitive);
         thumb_region = Some(
             HitRegion::new(node ^ (1 << 63), SCROLL_LAYER, u32::from(desc.z) + 1, thumb)
                 .with_cursor(CursorKind::Pointer),
@@ -439,19 +479,13 @@ pub fn emit_scroll_view(
     }
     if desc.axis.horizontal() && desc.content_size.x > rect.width() {
         let track = desc.track_rect(true);
-        primitives.push(surface(
-            track,
-            desc.scrollbar_width * 0.5,
-            track_token,
-            desc.z,
-        ));
+        let mut track_primitive = surface(track, desc.scrollbar_width * 0.5, track_token, desc.z);
+        set_opacity(&mut track_primitive, opacity);
+        primitives.push(track_primitive);
         let thumb = desc.thumb_rect(offset, true);
-        primitives.push(surface(
-            thumb,
-            desc.scrollbar_width * 0.5,
-            thumb_token,
-            desc.z,
-        ));
+        let mut thumb_primitive = surface(thumb, desc.scrollbar_width * 0.5, thumb_token, desc.z);
+        set_opacity(&mut thumb_primitive, opacity);
+        primitives.push(thumb_primitive);
     }
 
     let hit = Some(HitRegion::new(node, SCROLL_LAYER, u32::from(desc.z), rect));
@@ -531,6 +565,10 @@ fn list_total(list: &VirtualList, desc: &ScrollViewDesc) -> usize {
     } else {
         0
     }
+}
+
+fn set_opacity(primitive: &mut GpuPrimitiveInstance, opacity: f32) {
+    primitive.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(primitive.depth_u16(), opacity);
 }
 
 /// One row's position for a virtual list, in viewport space.
@@ -677,6 +715,50 @@ mod tests {
             Vec2::new(track.center().x, track.origin.y + track.height() * 0.5),
         );
         assert!(state.target().y > 1000.0);
+    }
+
+    #[test]
+    fn the_scrollbar_fades_after_the_hold_expires() {
+        let desc = desc();
+        let mut state = ScrollState::new();
+        assert_eq!(state.scrollbar_opacity(), 0.0);
+
+        state.scroll_by(&desc, Vec2::new(0.0, 60.0));
+        assert_eq!(state.scrollbar_opacity(), 1.0);
+
+        // The spring is still moving, so the bar stays visible.
+        state.tick_scrollbar(0.016, false);
+        assert_eq!(state.scrollbar_opacity(), 1.0);
+
+        // Jump to settle instantly, then hold for one second.
+        state.jump_to(&desc, Vec2::new(0.0, 120.0));
+        assert_eq!(state.scrollbar_opacity(), 1.0);
+        state.tick_scrollbar(SCROLLBAR_HOLD + 0.01, false);
+        assert!(state.scrollbar_opacity() < 1.0);
+        state.tick_scrollbar(SCROLLBAR_FADE, false);
+        assert_eq!(state.scrollbar_opacity(), 0.0);
+    }
+
+    #[test]
+    fn hovering_reveals_the_scrollbar_without_scrolling() {
+        let mut state = ScrollState::new();
+        assert_eq!(state.scrollbar_opacity(), 0.0);
+        assert!(state.tick_scrollbar(0.016, true));
+        assert_eq!(state.scrollbar_opacity(), 1.0);
+    }
+
+    #[test]
+    fn scrolling_reveals_the_bar_and_the_emitter_writes_its_opacity() {
+        let desc = desc();
+        let mut state = ScrollState::new();
+        state.jump_to(&desc, Vec2::new(0.0, 60.0));
+        let output = emit_scroll_view(9, &desc, &state, ControlState::default());
+        assert_eq!(output.output.primitives.len(), 2, "track and thumb");
+        assert!(output
+            .output
+            .primitives
+            .iter()
+            .all(|primitive| primitive.opacity() > 0.99));
     }
 
     #[test]

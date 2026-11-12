@@ -184,6 +184,8 @@ pub struct SceneCollector {
     pub focus_order: Vec<u64>,
     /// The primitive range each widget owns, keyed by widget identity.
     pub node_spans: FxHashMap<u64, (u32, u32)>,
+    /// Backdrop-blur requests produced by overlays this frame.
+    pub backdrops: Vec<crate::overlay::BackdropRequest>,
 }
 
 impl SceneCollector {
@@ -205,6 +207,7 @@ impl SceneCollector {
         self.regions.clear();
         self.focus_order.clear();
         self.node_spans.clear();
+        self.backdrops.clear();
         self.semantics.reset(root);
     }
 
