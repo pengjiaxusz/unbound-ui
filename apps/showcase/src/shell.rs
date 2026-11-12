@@ -146,6 +146,12 @@ pub struct GalleryApp {
     /// The ranges are what tie a dirty slice back to the control that owns
     /// it: a hover patch has to stay inside one control's span.
     node_spans: rustc_hash::FxHashMap<u64, (u32, u32)>,
+    /// Where the input method should put its candidate window.
+    ///
+    /// The platform only needs an approximate caret; the click position is
+    /// accurate enough and avoids threading a caret rectangle through every
+    /// page.
+    ime_caret: Vec2,
 }
 
 /// The inputs the shell's layout depends on.
@@ -219,6 +225,7 @@ impl GalleryApp {
             },
             frame_layout_stats: LayoutStats::default(),
             node_spans: rustc_hash::FxHashMap::default(),
+            ime_caret: Vec2::new(24.0, 60.0),
         }
     }
 
@@ -399,6 +406,7 @@ impl GalleryApp {
         let focused = self.focused;
         let scale = self.effective_scale;
         let pixel_snap = self.state.pixel_snap;
+        let generation = self.generation.wrapping_add(1);
         let GalleryApp {
             scene,
             labels,
@@ -406,6 +414,10 @@ impl GalleryApp {
             ..
         } = self;
         labels.set_raster_scale(scale);
+        // Glyph slots are evicted by least-recently-used frame. Without this
+        // the atlas clock never advanced and every slot looked equally old,
+        // so a full atlas evicted the same top-left glyphs forever.
+        labels.cache.begin_frame(generation);
         // The shell keeps the four sub-pixel phases: a glyph's raster is
         // generated for the phase implied by its *absolute* position, and the
         // quad is placed on the pixel grid around it. Forcing phase 0 would
@@ -541,6 +553,11 @@ impl GalleryApp {
     pub fn pointer_down(&mut self, position: Vec2, now: f64) {
         self.pointer = position;
         self.router.pointer_move(position);
+        // Clicking anywhere but the FPS input commits the pending value, the
+        // same way a native spin box does on blur.
+        if self.state.fps_focused && self.router.hover() != Some(target::id(Target::FpsInput)) {
+            self.state.commit_fps_input();
+        }
         self.router.pointer_down(position, now);
         if let Some(node) = self.router.pointer().pressed() {
             self.focused = Some(node);
@@ -639,8 +656,88 @@ impl GalleryApp {
         self.state.bump();
     }
 
+    /// Whether a text control owns the keyboard.
+    ///
+    /// The window enables the IME only while this is true; leaving it on for
+    /// the whole application would pop the candidate strip over every page.
+    #[must_use]
+    pub fn ime_active(&self) -> bool {
+        self.state.search_focused || self.state.demo.typing
+    }
+
+    /// Where the candidate window should be anchored, in logical pixels.
+    #[must_use]
+    pub fn ime_caret(&self) -> Vec2 {
+        self.ime_caret
+    }
+
+    /// Insert committed IME text into the focused control.
+    ///
+    /// Control characters are dropped: a text field is single-line, and a
+    /// stray line feed from a commit would corrupt the buffer.
+    pub fn type_text(&mut self, text: &str) {
+        let filtered: String = text.chars().filter(|c| !c.is_control()).collect();
+        if filtered.is_empty() {
+            return;
+        }
+        if self.state.search_focused {
+            self.state.search_query.push_str(&filtered);
+        } else if self.state.demo.typing {
+            self.state.demo.text.push_str(&filtered);
+        } else {
+            return;
+        }
+        self.state.bump();
+    }
+
+    /// Handle a key that the OS is repeating while it is held down.
+    ///
+    /// Text is excluded: a held `a` is not a stream of `a`s, and `winit` also
+    /// reports the composed characters again. Only the editing keys repeat.
+    pub fn key_repeat(&mut self, key: &PlatformKey) {
+        let PlatformKey::Named(name) = key else {
+            return;
+        };
+        if name != "Backspace" {
+            return;
+        }
+        if self.state.search_focused {
+            self.state.search_query.pop();
+        } else if self.state.demo.typing {
+            self.state.demo.text.pop();
+        } else {
+            return;
+        }
+        self.state.bump();
+    }
+
     /// Handle a key press.
     pub fn key(&mut self, key: &PlatformKey, modifiers: Modifiers) {
+        if self.state.fps_focused {
+            match key {
+                PlatformKey::Named(name) if name == "Escape" => {
+                    self.state.fps_focused = false;
+                    self.state.fps_input = self.state.fps_limit.to_string();
+                    self.state.bump();
+                }
+                PlatformKey::Named(name) if name == "Enter" => {
+                    self.state.commit_fps_input();
+                }
+                PlatformKey::Named(name) if name == "Backspace" => {
+                    self.state.fps_input.pop();
+                    self.state.bump();
+                }
+                PlatformKey::Character(text) if !modifiers.control => {
+                    // Only digits: the limit is an FPS count.
+                    for c in text.chars().filter(char::is_ascii_digit) {
+                        self.state.fps_input.push(c);
+                    }
+                    self.state.bump();
+                }
+                _ => {}
+            }
+            return;
+        }
         if self.state.search_focused {
             match key {
                 PlatformKey::Named(name) if name == "Escape" => {
@@ -883,6 +980,18 @@ impl GalleryApp {
             Target::Search => {
                 self.state.search_focused = true;
                 self.state.demo.typing = false;
+                self.ime_caret = self.pointer;
+                self.state.bump();
+            }
+            Target::FpsPreset(index) => {
+                let fps = [60, 120, 144, 240, 0][usize::from(index).min(4)];
+                self.state.set_fps_limit(fps);
+                self.state.fps_focused = false;
+            }
+            Target::FpsInput => {
+                self.state.fps_focused = true;
+                self.state.fps_input = self.state.fps_limit.to_string();
+                self.ime_caret = self.pointer;
                 self.state.bump();
             }
             Target::Footer(index) => self.navigate(if index == 0 {
@@ -987,6 +1096,26 @@ impl GalleryApp {
 
     fn click_demo(&mut self, page: u8, card: u8, part: u16, position: Vec2) {
         let page = PageId::from_index(page as usize);
+        // The frame-rate bar is shared by Telemetry and Settings and uses the
+        // same part ids on both pages.
+        if matches!(page, PageId::Telemetry | PageId::Settings) {
+            match part {
+                20..=24 => {
+                    let fps = [60, 120, 144, 240, 0][(part - 20) as usize];
+                    self.state.set_fps_limit(fps);
+                    self.state.fps_focused = false;
+                    return;
+                }
+                30 => {
+                    self.state.fps_focused = true;
+                    self.state.fps_input = self.state.fps_limit.to_string();
+                    self.ime_caret = position;
+                    self.state.bump();
+                    return;
+                }
+                _ => {}
+            }
+        }
         match page {
             PageId::Home => match card {
                 0 => {
@@ -1033,11 +1162,11 @@ impl GalleryApp {
                     self.state.bump();
                 }
                 20..=22 => {
-                    self.state.demo.pill_choice = (part - 20) as usize;
+                    self.state.demo.set_pill((part - 20) as usize);
                     self.state.bump();
                 }
                 30..=34 => {
-                    self.state.demo.pill_choice = (part - 30) as usize;
+                    self.state.demo.set_pill((part - 30) as usize);
                     self.state.bump();
                 }
                 _ => {}
@@ -1046,6 +1175,7 @@ impl GalleryApp {
                 if part == 1 {
                     self.state.demo.typing = true;
                     self.state.search_focused = false;
+                    self.ime_caret = self.pointer;
                     self.state.bump();
                 }
             }
@@ -1657,16 +1787,25 @@ fn draw_top_bar(
             palette.text_muted,
             palette.card_bg,
         );
+        let preedit = if state.search_focused {
+            state.ime_preedit.as_str()
+        } else {
+            ""
+        };
+        let composed;
         let placeholder = if state.search_query.is_empty() {
             if search.size.x < 280.0 {
                 "Search…"
             } else {
                 "Search controls, crates, features…"
             }
-        } else {
+        } else if preedit.is_empty() {
             state.search_query.as_str()
+        } else {
+            composed = format!("{}{}", state.search_query, preedit);
+            composed.as_str()
         };
-        canvas.text(
+        let ink = canvas.text(
             placeholder,
             Rect::new(
                 search.origin.x + 32.0,
@@ -1683,6 +1822,20 @@ fn draw_top_bar(
             AlignX::Start,
             AlignY::Center,
         );
+        // An IME composition is underlined, the way every native text field
+        // shows one.
+        if !preedit.is_empty() {
+            let committed = canvas.labels.measure(&state.search_query, 11.0).x;
+            let width = canvas.labels.measure(preedit, 11.0).x;
+            canvas.rect(
+                Rect::new(ink.origin.x + committed, ink.max().y - 1.5, width, 1.0),
+                0.5,
+                palette.primary,
+                0,
+                0.0,
+                0.0,
+            );
+        }
         if layout.search.size.x > 280.0 {
             widgets::badge(
                 canvas,
@@ -1725,6 +1878,8 @@ fn draw_top_bar(
             layout.theme,
             &["Light", "Dark"],
             if state.theme.is_dark() { 1 } else { 0 },
+            false,
+            None,
         );
     }
 
@@ -1740,7 +1895,15 @@ fn draw_top_bar(
         target::id(Target::Zoom(2)),
         target::id(Target::Zoom(3)),
     ];
-    widgets::segmented(canvas, &zoom_ids, layout.zoom, &labels, state.zoom_step);
+    widgets::segmented(
+        canvas,
+        &zoom_ids,
+        layout.zoom,
+        &labels,
+        state.zoom_step,
+        false,
+        None,
+    );
 
     widgets::icon_button(
         canvas,
@@ -1922,7 +2085,7 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
                 layout.nav_width - 36.0,
                 22.0,
             ),
-            8.5,
+            9.5,
             if active {
                 palette.primary
             } else {
@@ -2185,7 +2348,7 @@ fn draw_page(
             page.header.size.x,
             14.0,
         ),
-        9.0,
+        9.5,
         palette.text_muted,
         AlignX::Start,
         AlignY::Top,
@@ -2327,7 +2490,7 @@ fn draw_example(
                 card.knobs.size.x,
                 18.0,
             ),
-            8.5,
+            9.5,
             palette.text_muted,
             AlignX::Start,
             AlignY::Top,
@@ -2359,10 +2522,10 @@ fn draw_knob_row(
     ));
     match spec {
         KnobSpec::Toggle { label, .. } => {
-            widgets::toggle_switch(canvas, node, row.control, label, value > 0.5);
+            widgets::toggle_switch(canvas, node, row.control, label, value > 0.5, false);
         }
         KnobSpec::CheckBox { label, .. } => {
-            widgets::checkbox(canvas, node, row.control, label, value > 0.5);
+            widgets::checkbox(canvas, node, row.control, label, value > 0.5, false);
         }
         KnobSpec::Slider {
             label,
@@ -2421,7 +2584,7 @@ fn draw_knob_row(
                 .collect();
             let selected = (value as usize).min(options.len().saturating_sub(1));
             let _ = default_index;
-            widgets::segmented(canvas, &ids, row.control, options, selected);
+            widgets::segmented(canvas, &ids, row.control, options, selected, false, None);
         }
     }
 }
@@ -2513,11 +2676,11 @@ fn draw_code_bar(
             "SOURCE",
             Rect::new(
                 panel.origin.x + 12.0,
-                panel.origin.y + 6.0,
+                panel.origin.y + 5.0,
                 panel.size.x - 24.0,
-                12.0,
+                14.0,
             ),
-            7.5,
+            9.5,
             palette.text_muted,
             AlignX::Start,
             AlignY::Top,
@@ -2527,7 +2690,7 @@ fn draw_code_bar(
             canvas.text(
                 &format!("{:>2}", line_index + 1),
                 Rect::new(panel.origin.x + 12.0, y, 20.0, 14.0),
-                8.5,
+                9.0,
                 palette.text_muted,
                 AlignX::End,
                 AlignY::Top,
@@ -2550,7 +2713,7 @@ fn draw_code_bar(
                 panel.size.x - 24.0,
                 14.0,
             ),
-            8.5,
+            9.0,
             palette.primary,
             AlignX::Start,
             AlignY::Top,
@@ -2565,9 +2728,9 @@ fn hud_rect(layout: &ShellLayout) -> Option<Rect> {
     }
     Some(Rect::new(
         layout.content.max().x - 232.0,
-        layout.content.max().y - 152.0,
+        layout.content.max().y - 168.0,
         218.0,
-        132.0,
+        148.0,
     ))
 }
 
@@ -2599,7 +2762,7 @@ fn draw_hud(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout,
             rect.size.x - 24.0,
             14.0,
         ),
-        8.0,
+        9.5,
         palette.hud_text,
         AlignX::Start,
         AlignY::Top,
@@ -2613,13 +2776,21 @@ fn draw_hud(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout,
         ("PRIMS", format!("{prims}")),
         ("GLYPHS", format!("{glyphs}")),
         ("CARDS", format!("{cards}")),
+        (
+            "LIMIT",
+            if state.fps_limit == 0 {
+                "uncapped".to_string()
+            } else {
+                format!("{} fps", state.fps_limit)
+            },
+        ),
     ];
     for (index, (label, value)) in rows.iter().enumerate() {
         let y = rect.origin.y + 26.0 + index as f32 * 15.0;
         canvas.text(
             label,
             Rect::new(rect.origin.x + 12.0, y, 70.0, 14.0),
-            8.0,
+            9.5,
             palette.hud_text,
             AlignX::Start,
             AlignY::Center,
@@ -2691,7 +2862,7 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
             panel.size.x - 28.0,
             14.0,
         ),
-        8.0,
+        9.5,
         palette.text_muted,
         AlignX::Start,
         AlignY::Top,
@@ -2777,7 +2948,7 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
                 row.size.x * 0.44 - 12.0,
                 row.size.y,
             ),
-            9.0,
+            9.5,
             palette.text_muted,
             AlignX::End,
             AlignY::Center,

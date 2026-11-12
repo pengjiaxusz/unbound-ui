@@ -112,7 +112,10 @@ for (i, curve) in ribbons.iter().enumerate() {
 pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
-    let compact = rect.size.x < 720.0;
+    // The density knob (`0` = comfortable, `1` = compact) and a narrow stage
+    // both tighten the banner. Reading the knob is what makes the segment on
+    // the right actually do something.
+    let compact = rect.size.x < 720.0 || ctx.knob_on(0);
 
     ctx.canvas
         .rect(rect, 20.0, palette.hero_start, 0, 0.0, 24.0);
@@ -174,11 +177,13 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
     }
     ctx.canvas.end_clip();
 
+    let pad_x = if compact { 20.0 } else { 28.0 };
+    let pad_y = if compact { 16.0 } else { 24.0 };
     let left = Rect::new(
-        rect.origin.x + 28.0,
-        rect.origin.y + 24.0,
+        rect.origin.x + pad_x,
+        rect.origin.y + pad_y,
         rect.size.x * if compact { 0.72 } else { 0.58 },
-        rect.size.y - 48.0,
+        rect.size.y - pad_y * 2.0,
     );
     let badge_width = if compact { 92.0 } else { 116.0 };
     widgets::badge(
@@ -188,10 +193,17 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
         palette.on_hero,
         palette.hero_end,
     );
+    let title_size = if compact { 34.0 } else { 44.0 };
+    let title_y = left.origin.y + if compact { 28.0 } else { 32.0 };
     ctx.canvas.text(
         "Unbound UI",
-        Rect::new(left.origin.x, left.origin.y + 32.0, left.size.x, 54.0),
-        if compact { 34.0 } else { 44.0 },
+        Rect::new(
+            left.origin.x,
+            title_y,
+            left.size.x,
+            if compact { 42.0 } else { 54.0 },
+        ),
+        title_size,
         palette.on_hero,
         AlignX::Start,
         AlignY::Top,
@@ -200,16 +212,21 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
         "An engine-level UI framework: GPU primitives, MTSDF text, Taffy layout, an infinite canvas and a headless verifier — dogfooded by the application you are looking at.",
         Rect::new(
             left.origin.x,
-            left.origin.y + 86.0,
+            title_y + if compact { 44.0 } else { 54.0 },
             left.size.x,
-            left.size.y - 132.0,
+            left.size.y - if compact { 108.0 } else { 132.0 },
         ),
-        13.0,
+        if compact { 12.0 } else { 13.0 },
         palette.on_hero,
     );
 
-    let cta_y = left.max().y - 34.0;
-    let primary = Rect::new(left.origin.x, cta_y, 168.0, 34.0);
+    let cta_y = left.max().y - if compact { 30.0 } else { 34.0 };
+    let primary = Rect::new(
+        left.origin.x,
+        cta_y,
+        if compact { 148.0 } else { 168.0 },
+        if compact { 30.0 } else { 34.0 },
+    );
     widgets::button(
         ctx.canvas,
         ctx.part(1),

@@ -219,7 +219,7 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         ctx.canvas.text(
             "recycled",
             Rect::new(row.max().x - 84.0, row.origin.y, 72.0, row.size.y),
-            8.5,
+            9.5,
             palette.text_muted,
             AlignX::End,
             AlignY::Center,
@@ -471,7 +471,7 @@ pub fn asset_grid(ctx: &mut DemoCtx<'_, '_>) {
                 cell.size.x - 20.0,
                 12.0,
             ),
-            8.5,
+            9.5,
             palette.text_muted,
             AlignX::Start,
             AlignY::Top,

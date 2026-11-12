@@ -24,10 +24,11 @@ use unbound_input::{resize_edge, CursorKind, ResizeEdge};
 use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::window::{
-    ButtonState, Modifiers, MouseButton, PlatformEvent, PlatformState, WindowConfig,
+    ButtonState, Modifiers, MouseButton, PlatformEvent, PlatformKey, PlatformState, WindowConfig,
 };
 use unbound_platform::Extent;
 use unbound_theme::{ThemeKind, ThemeState};
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::window::Window;
 
 use showcase::shell::WindowCommand;
@@ -59,14 +60,11 @@ struct Showcase {
     last_frame: Instant,
     /// The OS scale factor (physical pixels per logical unit).
     os_scale: f32,
-    /// The window size in logical units at 100 % app zoom.
-    base_logical: Vec2,
-    /// The zoom the current window size was requested for.
-    last_zoom: f32,
-    /// The last physical window size observed, for base-size tracking.
-    last_physical: (u32, u32),
     /// The window edge under the pointer, if any.
     resize_edge: Option<ResizeEdge>,
+    /// Whether the IME is currently allowed, so the call is only made on
+    /// a transition instead of every frame.
+    ime_allowed: bool,
     /// The last title-bar press, for double-click-to-maximise.
     last_title_press: Option<(Instant, Vec2)>,
     /// True when the current press was consumed by the window chrome.
@@ -91,10 +89,8 @@ impl Showcase {
             clock: Instant::now(),
             last_frame: Instant::now(),
             os_scale: 1.0,
-            base_logical: Vec2::new(1440.0, 900.0),
-            last_zoom: 1.0,
-            last_physical: (1440, 900),
             resize_edge: None,
+            ime_allowed: false,
             last_title_press: None,
             press_consumed: false,
             swapchain_dirty: false,
@@ -119,52 +115,17 @@ impl Showcase {
         )
     }
 
-    /// Track the OS scale, the base logical size and the zoomed window size.
+    /// Track the OS scale factor only.
+    ///
+    /// Changing the app zoom must never resize the physical window: the UI
+    /// scales in place because `logical_viewport` recomputes
+    /// `physical_size / (os_scale × app_zoom)`, and the page reflows for the
+    /// smaller logical viewport.
     fn sync_window_size(&mut self, window: &Window) {
         let os_scale = window.scale_factor() as f32;
         if os_scale.is_finite() && os_scale > 0.0 {
             self.os_scale = os_scale;
         }
-        let size = window.inner_size();
-        if size.width == 0 || size.height == 0 {
-            return;
-        }
-        let current = Vec2::new(size.width as f32, size.height as f32);
-        let previous = Vec2::new(
-            self.last_physical.0.max(1) as f32,
-            self.last_physical.1.max(1) as f32,
-        );
-        let zoom = self.app.state.zoom();
-        let old_scale = (self.os_scale * self.last_zoom).max(0.25);
-        if (zoom - self.last_zoom).abs() > 1e-6 {
-            // The user picked a new zoom: keep the logical size they were
-            // looking at and grow/shrink the physical window to match.
-            let reference = if (current - previous).length() > 0.5 {
-                current
-            } else {
-                previous
-            };
-            self.base_logical = reference / old_scale;
-            let target = zoomed_physical_size(
-                self.base_logical,
-                self.os_scale * zoom,
-                window.current_monitor().map(|monitor| {
-                    let size = monitor.size();
-                    Vec2::new(size.width as f32, size.height as f32)
-                }),
-            );
-            if !window.is_maximized() && window.is_minimized() != Some(true) {
-                let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(
-                    target.x as u32,
-                    target.y as u32,
-                ));
-            }
-            self.last_zoom = zoom;
-        } else if (current - previous).length() > 0.5 {
-            // A manual resize: remember it as the base size for the next zoom.
-            self.base_logical = current / (self.os_scale * zoom).max(0.25);
-        }
-        self.last_physical = (size.width, size.height);
     }
 
     fn resize_edge_at(&self, window: &Window) -> Option<ResizeEdge> {
@@ -173,6 +134,13 @@ impl Showcase {
         }
         let size = window.inner_size();
         let scale = self.os_scale.max(0.5);
+        // The window buttons live in the top-right 48 px. Testing the resize
+        // border first made that corner start a window drag instead of a
+        // click, so the exclusion has to happen before the edge test.
+        let logical_w = size.width as f32 / self.effective_scale();
+        if self.pointer.y < 48.0 && self.pointer.x > logical_w - 3.0 * 44.0 - 8.0 {
+            return None;
+        }
         resize_edge(
             self.pointer,
             Vec2::new(size.width as f32, size.height as f32),
@@ -292,8 +260,14 @@ impl Showcase {
         let Some(surface) = &self.surface else {
             return false;
         };
-        let present =
-            PresentConfig::from_capabilities(&renderer.gpu.enabled_device_extensions, false);
+        // An uncapped or above-vsync limit would be pinned to the display's
+        // refresh rate by FIFO, so tearing is allowed in that mode only.
+        let limit = self.app.state.effective_fps_limit();
+        let allow_tearing = limit == 0 || limit > 120;
+        let present = PresentConfig::from_capabilities(
+            &renderer.gpu.enabled_device_extensions,
+            allow_tearing,
+        );
         let Some(swapchain) = &mut self.swapchain else {
             return false;
         };
@@ -301,26 +275,64 @@ impl Showcase {
             eprintln!(" could not rebuild the swapchain: {error}");
             return false;
         }
-        if let Err(error) = renderer.resize(width, height) {
-            eprintln!("could not resize the renderer: {error}");
+        // The windowed path borrows the swapchain image as its colour
+        // attachment, so only the depth buffer has to follow the new size.
+        // `ensure_depth_size` grows in 256 px steps and never shrinks, which
+        // keeps a 1 px drag step from reallocating anything.
+        let (actual_w, actual_h) = swapchain.extent();
+        if let Err(error) = renderer.ensure_depth_size(actual_w, actual_h) {
+            eprintln!("could not resize the depth buffer: {error}");
             return false;
         }
         true
     }
-}
 
-/// The physical window size for a logical layout at `scale`, clamped to 95 %
-/// of the monitor so a 200 % zoom never opens a window larger than the screen.
-fn zoomed_physical_size(base_logical: Vec2, scale: f32, monitor: Option<Vec2>) -> Vec2 {
-    let mut target = base_logical * scale.max(0.25);
-    if let Some(monitor) = monitor {
-        let limit = monitor * 0.95;
-        if target.x > limit.x || target.y > limit.y {
-            let fit = (limit.x / target.x).min(limit.y / target.y);
-            target = target * fit;
+    /// Keep the OS input method in sync with the focused control.
+    ///
+    /// Without `set_ime_allowed` Windows never sends composition at all, so a
+    /// Chinese/Japanese/Korean keyboard could only ever type ASCII. The
+    /// candidate window is anchored at the click position.
+    fn sync_ime(&mut self, state: &mut PlatformState, window: &Window) {
+        let active = self.app.ime_active();
+        if active != self.ime_allowed {
+            window.set_ime_allowed(active);
+            self.ime_allowed = active;
+        }
+        if active {
+            let scale = self.effective_scale();
+            let caret = self.app.ime_caret() * scale;
+            window.set_ime_cursor_area(
+                PhysicalPosition::new(caret.x.round() as i32, caret.y.round() as i32),
+                PhysicalSize::new(
+                    (2.0 * scale).round().max(1.0) as u32,
+                    (18.0 * scale).round().max(1.0) as u32,
+                ),
+            );
+        }
+        // Committed text must be inserted exactly once, so the buffer is
+        // drained here rather than read.
+        let commit = state.ime.take_commit();
+        let mut changed = false;
+        if !commit.is_empty() {
+            self.app.type_text(&commit);
+            changed = true;
+        }
+        let preedit = if active {
+            state.ime.preedit().to_string()
+        } else {
+            String::new()
+        };
+        if preedit != self.app.state.ime_preedit {
+            self.app.state.ime_preedit = preedit;
+            self.app.state.bump();
+            changed = true;
+        }
+        // IME events are not `PlatformEvent`s, so a parked loop would never
+        // learn that a composition appeared. Bypass the cadence for them too.
+        if changed {
+            state.pacer.request_immediate(Instant::now());
         }
     }
-    Vec2::new(target.x.round().max(320.0), target.y.round().max(240.0))
 }
 
 /// Map an engine resize edge to the OS drag direction.
@@ -371,9 +383,35 @@ impl PlatformApp for Showcase {
             ],
             ..Default::default()
         };
-        let Ok(gpu) = Gpu::new(config) else {
-            eprintln!("could not create a Vulkan device");
-            return;
+        let gpu = match Gpu::new(config) {
+            Ok(gpu) => gpu,
+            Err(error) => {
+                // The old message was "could not create a Vulkan device" and
+                // threw the cause away, which left Windows 10 users with no
+                // way to know whether the driver, the loader or a feature was
+                // missing.
+                eprintln!("could not create a Vulkan device: {error}");
+                match &error {
+                    unbound_gpu::device::GpuError::UnsupportedFeatures(_) => eprintln!(
+                        "hint: update the GPU driver; the renderer needs descriptor indexing, \
+                         dynamic rendering, synchronization2 and bufferDeviceAddress"
+                    ),
+                    unbound_gpu::device::GpuError::NoSuitableDevice(detail) => {
+                        eprintln!("hint: {detail}");
+                        eprintln!(
+                            "hint: on Windows 10 install a Vulkan 1.2+ driver, or run on a \
+                             machine with a GPU that exposes VK_KHR_synchronization2 and \
+                             VK_KHR_dynamic_rendering"
+                        );
+                    }
+                    unbound_gpu::device::GpuError::Loader(detail) => eprintln!(
+                        "hint: the Vulkan loader is missing ({detail}); install the Vulkan \
+                         Runtime from https://vulkan.lunarg.com"
+                    ),
+                    _ => {}
+                }
+                return;
+            }
         };
 
         let hwnd = {
@@ -426,13 +464,6 @@ impl PlatformApp for Showcase {
         state.set_present_extensions(&device_extensions);
 
         self.os_scale = window.scale_factor() as f32;
-        self.last_zoom = self.app.state.zoom();
-        let size = window.inner_size();
-        self.last_physical = (size.width.max(1), size.height.max(1));
-        self.base_logical = Vec2::new(
-            size.width.max(1) as f32 / self.effective_scale(),
-            size.height.max(1) as f32 / self.effective_scale(),
-        );
         self.rebuild(window);
         self.last_frame = Instant::now();
     }
@@ -455,9 +486,19 @@ impl PlatformApp for Showcase {
             PlatformEvent::KeyInput {
                 state: ButtonState::Pressed,
                 key,
-                repeat: false,
+                repeat,
             } => {
-                self.app.key(&key, self.modifiers);
+                // While the IME owns the text, the platform also reports the
+                // composition's characters as key presses. Forwarding both
+                // would insert every letter twice ("nihao" → "nniihhaaoo").
+                let ime_owns_text = state.ime.enabled && matches!(key, PlatformKey::Character(_));
+                if !ime_owns_text {
+                    if repeat {
+                        self.app.key_repeat(&key);
+                    } else {
+                        self.app.key(&key, self.modifiers);
+                    }
+                }
                 if let Some(command) = self.app.take_window_command() {
                     flow = self.handle_window_command(window, command);
                 }
@@ -552,9 +593,14 @@ impl PlatformApp for Showcase {
         // Re-read the effective scale: a zoom click in this very event changed
         // it after the pre-handler snapshot.
         self.app.set_effective_scale(self.effective_scale());
+        self.sync_ime(state, window);
         // The scene is rebuilt here, not in the frame loop: the state the
         // event changed has to reach the screen in the very same frame.
-        self.sync_scene(window);
+        if self.sync_scene(window) {
+            // Bypass the cadence: a click must react now, even if the last
+            // frame was a millisecond ago.
+            state.pacer.request_immediate(Instant::now());
+        }
         self.write_theme_if_needed();
         self.apply_cursor(window);
         Flow::Continue
@@ -563,6 +609,7 @@ impl PlatformApp for Showcase {
     fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
         self.sync_window_size(window);
         self.app.set_effective_scale(self.effective_scale());
+        self.sync_ime(state, window);
         self.app.set_window_maximized(window.is_maximized());
         let size = window.inner_size();
         let (window_width, window_height) = (size.width.max(1), size.height.max(1));
@@ -576,6 +623,15 @@ impl PlatformApp for Showcase {
         // invariant "chain size == window size" hold on *every* frame, no
         // matter which path noticed the resize.
         let settled = state.poll_resize(Instant::now());
+        // The frame-rate limit lives in the app state; the pacer is the only
+        // place that enforces it. A change also changes the present mode
+        // (capped runs stay tear-free, an uncapped run must not be pinned to
+        // the display's refresh rate), so the chain is rebuilt next.
+        let limit = self.app.state.effective_fps_limit();
+        if state.pacer.fps_limit() != limit {
+            state.pacer.set_fps_limit(limit);
+            self.swapchain_dirty = true;
+        }
         // A minimised window reports a zero extent: there is nothing to
         // rebuild for, and a one-pixel chain would be nonsense.
         let size_mismatch = size.width > 0
@@ -584,7 +640,8 @@ impl PlatformApp for Showcase {
                 .swapchain
                 .as_ref()
                 .is_some_and(|chain| chain.extent() != (window_width, window_height));
-        if settled.is_some() || self.swapchain_dirty || size_mismatch {
+        let forced = settled.is_some() || self.swapchain_dirty || size_mismatch;
+        if forced {
             self.swapchain_dirty = false;
             if self.recreate_swapchain(window_width, window_height) {
                 self.rebuild(window);
@@ -592,16 +649,31 @@ impl PlatformApp for Showcase {
         }
 
         let now = Instant::now();
+        // Check the cadence *before* touching the frame clock: an early
+        // return used to leave `last_frame` and the FPS counter updated for a
+        // frame that was never drawn.
+        if !forced && !state.pacer.should_render(now) {
+            return Flow::Continue;
+        }
+
+        // Advance time and rebuild the scene before borrowing the renderer:
+        // the app and the GPU objects are disjoint, but the helper methods
+        // borrow all of `self`.
         let dt = now
             .saturating_duration_since(self.last_frame)
             .as_secs_f32()
             .min(0.1);
         self.last_frame = now;
         if dt > 0.0 {
-            self.app.state.demo.fps = 1.0 / dt;
-            self.app.state.demo.frame_ms = dt * 1000.0;
+            // Exponential moving average: a single hitch must not make the
+            // HUD jump between 40 and 120.
+            let instant_fps = 1.0 / dt;
+            let alpha = 0.15;
+            let demo = &mut self.app.state.demo;
+            demo.fps += (instant_fps - demo.fps) * alpha;
+            demo.frame_ms += (dt * 1000.0 - demo.frame_ms) * alpha;
         }
-        self.app.tick(dt);
+        let moving = self.app.tick(dt);
         self.sync_scene(window);
         self.write_theme_if_needed();
         self.apply_cursor(window);
@@ -614,10 +686,6 @@ impl PlatformApp for Showcase {
             return Flow::Continue;
         };
         let (width, height) = swapchain.extent();
-        if !state.pacer.should_render(Instant::now()) {
-            window.request_redraw();
-            return Flow::Continue;
-        }
         if let Err(error) = renderer.wait_for_previous_frame() {
             eprintln!("waiting for the previous frame failed: {error}");
             return Flow::Continue;
@@ -676,7 +744,17 @@ impl PlatformApp for Showcase {
             }
         }
         state.pacer.on_present(Instant::now());
-        window.request_redraw();
+        // A static page with no HUD, no animation and a capped frame rate has
+        // nothing to show: let the event loop park instead of submitting a
+        // full cull + radix sort every refresh.
+        let keep_animating = self.app.state.fps_limit == 0
+            || self.app.state.show_hud
+            || self.app.state.active_page == showcase::pages::PageId::Telemetry
+            || moving;
+        state.pacer.set_animating(keep_animating);
+        if keep_animating {
+            window.request_redraw();
+        }
         state.latency.on_present(Instant::now());
         Flow::Continue
     }
@@ -840,22 +918,18 @@ mod tests {
     use super::*;
     use showcase::pages::PageId;
 
+    /// Changing the app zoom must not resize the window.
+    ///
+    /// The layout is re-derived from `physical / (os_scale × zoom)`, so the
+    /// physical window is left alone; this guards against the old behaviour
+    /// coming back (a resize request per zoom step broke the drag gestures and
+    /// could move the window off-screen at 200 %).
     #[test]
-    fn zooming_keeps_the_layout_and_grows_the_physical_window() {
-        let base = Vec2::new(1440.0, 900.0);
-        assert_eq!(
-            zoomed_physical_size(base, 1.0, Some(Vec2::new(3840.0, 2160.0))),
-            Vec2::new(1440.0, 900.0)
-        );
-        assert_eq!(
-            zoomed_physical_size(base, 1.5, Some(Vec2::new(3840.0, 2160.0))),
-            Vec2::new(2160.0, 1350.0)
-        );
-        // A 200 % window on a 1080p panel is clamped to the screen.
-        let fitted = zoomed_physical_size(base, 2.0, Some(Vec2::new(1920.0, 1080.0)));
-        assert!(fitted.x <= 1920.0 * 0.95 + 0.5);
-        assert!(fitted.y <= 1080.0 * 0.95 + 0.5);
-        assert!(fitted.x > 900.0 && fitted.y > 500.0);
+    fn app_zoom_never_changes_the_physical_window_size() {
+        let mut app = GalleryApp::new();
+        let before = app.state.zoom();
+        app.state.zoom_step = (app.state.zoom_step + 1).min(3);
+        assert!(app.state.zoom() > before);
     }
 
     #[test]

@@ -183,17 +183,22 @@ pub fn flex(ctx: &mut DemoCtx<'_, '_>, box_model: bool) {
             AlignY::Center,
         );
     }
+    // The outline must start where the first item starts. It used to be
+    // anchored at the container's leading edge even for `center`/`end`, so
+    // the "content box" was drawn in the empty space to the left of the row.
     let outline = if row {
+        let start = inner.origin.x + align_offset(0, count, inner.size.x, space, alignment);
         Rect::new(
-            inner.origin.x + (inner.size.x - content_w) * 0.0,
+            start,
             inner.origin.y,
             content_w.min(inner.size.x),
             inner.size.y,
         )
     } else {
+        let start = inner.origin.y + align_offset(0, count, inner.size.y, space, alignment);
         Rect::new(
             inner.origin.x,
-            inner.origin.y,
+            start,
             inner.size.x,
             content_w.min(inner.size.y),
         )

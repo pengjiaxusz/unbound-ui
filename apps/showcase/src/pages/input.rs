@@ -386,6 +386,7 @@ pub fn selection(ctx: &mut DemoCtx<'_, '_>, segmented: bool) {
         switch,
         "Wi-Fi",
         ctx.state.demo.toggle_a,
+        disabled,
     );
     let check = Rect::new(left.origin.x, left.origin.y + row_h, left.size.x, row_h);
     widgets::checkbox(
@@ -394,6 +395,7 @@ pub fn selection(ctx: &mut DemoCtx<'_, '_>, segmented: bool) {
         check,
         "Notify on completion",
         ctx.state.demo.toggle_b,
+        disabled,
     );
     for (index, label) in ["Automatic", "Ask me", "Never"].iter().enumerate() {
         let row = Rect::new(
@@ -408,6 +410,7 @@ pub fn selection(ctx: &mut DemoCtx<'_, '_>, segmented: bool) {
             row,
             label,
             ctx.state.demo.radio_choice == index,
+            disabled,
         );
     }
     if disabled {
@@ -455,7 +458,10 @@ pub fn selection(ctx: &mut DemoCtx<'_, '_>, segmented: bool) {
         &ids,
         pill_rect,
         &pills,
-        ctx.state.demo.pill_choice,
+        ctx.state.demo.pill_choice.min(2),
+        disabled,
+        // The pill slides to its new slot instead of teleporting (`A-04`).
+        Some(ctx.state.demo.pill_spring.value),
     );
     ctx.canvas.text(
         &format!("selected: {}", pills[ctx.state.demo.pill_choice.min(2)]),
@@ -498,6 +504,8 @@ fn segmented_page(ctx: &mut DemoCtx<'_, '_>) {
         pill,
         labels,
         ctx.state.demo.pill_choice.min(count - 1),
+        false,
+        Some(ctx.state.demo.pill_spring.value),
     );
     ctx.canvas.text(
         &format!("SegmentedControl · {} options", count),
@@ -712,12 +720,25 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
         field.size.x - 28.0,
         field.size.y,
     );
-    let text = if ctx.state.demo.text.is_empty() {
+    let preedit = if focused {
+        ctx.state.ime_preedit.as_str()
+    } else {
+        ""
+    };
+    // The composition is drawn as one run after the committed text, exactly
+    // where the caret is: the IME has shaped it already, so re-shaping it
+    // separately would hide the ligatures it just resolved.
+    let display = if preedit.is_empty() {
+        ctx.state.demo.text.clone()
+    } else {
+        format!("{}{}", ctx.state.demo.text, preedit)
+    };
+    let text = if display.is_empty() {
         "Project name"
     } else {
-        ctx.state.demo.text.as_str()
+        display.as_str()
     };
-    let color = if ctx.state.demo.text.is_empty() {
+    let color = if display.is_empty() {
         palette.text_muted
     } else {
         palette.text
@@ -725,6 +746,18 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
     let ink = ctx
         .canvas
         .text(text, text_rect, 15.0, color, AlignX::Start, AlignY::Center);
+    if !preedit.is_empty() {
+        let committed = ctx.canvas.labels.measure(&ctx.state.demo.text, 15.0).x;
+        let width = ctx.canvas.labels.measure(preedit, 15.0).x;
+        ctx.canvas.rect(
+            Rect::new(ink.origin.x + committed, ink.max().y - 2.0, width, 1.5),
+            0.5,
+            palette.primary,
+            0,
+            0.0,
+            0.0,
+        );
+    }
     let select_mode = if selection { ctx.knob(0) as usize } else { 2 };
     if select_mode < 2 && !ctx.state.demo.text.is_empty() {
         let selected = if select_mode == 0 {

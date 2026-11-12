@@ -555,7 +555,7 @@ pub fn undo(ctx: &mut DemoCtx<'_, '_>) {
         ctx.canvas.text(
             &format!("{:02}", index + 1),
             Rect::new(panel.max().x - 34.0, y, 22.0, 24.0),
-            8.5,
+            9.5,
             palette.text_muted,
             AlignX::End,
             AlignY::Center,

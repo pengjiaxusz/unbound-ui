@@ -72,6 +72,8 @@ pub struct DemoState {
     pub history: Vec<&'static str>,
     pub history_index: usize,
     pub spring: Spring,
+    /// The segmented pill's animated slot position.
+    pub pill_spring: Spring,
     pub spring_high: bool,
     pub a11y_focus: usize,
     pub frame_ms: f32,
@@ -90,6 +92,10 @@ impl Default for DemoState {
     fn default() -> Self {
         let mut spring = Spring::new(SpringPreset::Snappy, 0.0);
         spring.set_target(0.0);
+        // The default pill sits in slot 1 ("All"), so the spring starts there
+        // instead of sliding in from the left on the first frame.
+        let mut pill_spring = Spring::new(SpringPreset::Snappy, 1.0);
+        pill_spring.snap_to(1.0);
         Self {
             text: "Unbound UI".to_string(),
             typing: false,
@@ -113,6 +119,7 @@ impl Default for DemoState {
             history: vec!["Open canvas", "Add node", "Move node"],
             history_index: 3,
             spring,
+            pill_spring,
             spring_high: false,
             a11y_focus: 0,
             frame_ms: 4.2,
@@ -127,6 +134,14 @@ impl Default for DemoState {
     }
 }
 
+impl DemoState {
+    /// Select a segmented slot with the sliding pill.
+    pub fn set_pill(&mut self, index: usize) {
+        self.pill_choice = index;
+        self.pill_spring.set_target(index as f32);
+    }
+}
+
 /// The whole gallery state.
 #[derive(Debug)]
 pub struct GalleryState {
@@ -134,9 +149,21 @@ pub struct GalleryState {
     pub nav_expanded: bool,
     pub search_query: String,
     pub search_focused: bool,
+    /// The input method's composition string while a text control is focused.
+    ///
+    /// Kept in the state (instead of in the renderer) so the page and the
+    /// search field draw exactly what the IME is composing.
+    pub ime_preedit: String,
     pub theme: ThemeMode,
     pub zoom_step: usize,
+    /// Whether the pixel grid is snapped.
     pub pixel_snap: bool,
+    /// The frame-rate limit in FPS; `0` means unlimited.
+    pub fps_limit: u32,
+    /// The custom FPS-limit input buffer.
+    pub fps_input: String,
+    /// Whether the custom FPS input owns the keyboard.
+    pub fps_focused: bool,
     pub show_hud: bool,
     pub content_scroll: f32,
     pub nav_scroll: f32,
@@ -156,9 +183,13 @@ impl Default for GalleryState {
             nav_expanded: true,
             search_query: String::new(),
             search_focused: false,
+            ime_preedit: String::new(),
             theme: ThemeMode::Dark,
             zoom_step: 0,
             pixel_snap: true,
+            fps_limit: 120,
+            fps_input: "120".to_string(),
+            fps_focused: false,
             // The HUD is a floating popover opened from the top bar; showing
             // it by default covered the hero card at 960×600.
             show_hud: false,
@@ -193,6 +224,62 @@ impl GalleryState {
             self.demo.modal_open = false;
             self.demo.dropdown_open = false;
             self.bump();
+        }
+    }
+
+    /// Set the frame-rate limit.
+    ///
+    /// `0` is unlimited; any other value is clamped to the engine's 60 FPS
+    /// floor. The text buffer is normalised so the UI always shows the value
+    /// that is actually in effect.
+    pub fn set_fps_limit(&mut self, fps: u32) {
+        self.fps_limit = if fps == 0 {
+            0
+        } else {
+            fps.max(unbound_platform::MIN_FPS_LIMIT)
+        };
+        self.fps_input = self.fps_limit.to_string();
+        self.bump();
+    }
+
+    /// The limit the pacer should currently use.
+    ///
+    /// While the user is typing `"1"` on the way to `"144"`, the non-zero
+    /// partial value is raised to the 60 FPS floor instead of stalling the
+    /// renderer at 1 FPS.
+    #[must_use]
+    pub fn effective_fps_limit(&self) -> u32 {
+        if !self.fps_focused {
+            return self.fps_limit;
+        }
+        match self.fps_input.trim().parse::<u32>() {
+            Ok(0) => 0,
+            Ok(fps) => fps.max(unbound_platform::MIN_FPS_LIMIT),
+            Err(_) => self.fps_limit,
+        }
+    }
+
+    /// Apply the custom input: normalise the text and commit the limit.
+    pub fn commit_fps_input(&mut self) {
+        let parsed = self
+            .fps_input
+            .trim()
+            .parse::<u32>()
+            .unwrap_or(self.fps_limit);
+        self.set_fps_limit(parsed);
+        self.fps_focused = false;
+    }
+
+    /// The FPS preset index that matches the current limit, if any.
+    #[must_use]
+    pub fn fps_preset(&self) -> Option<u8> {
+        match self.fps_limit {
+            60 => Some(0),
+            120 => Some(1),
+            144 => Some(2),
+            240 => Some(3),
+            0 => Some(4),
+            _ => None,
         }
     }
 
@@ -249,6 +336,10 @@ impl GalleryState {
         let mut moving = false;
         self.demo.spring.step(dt);
         if !self.demo.spring.is_settled() {
+            moving = true;
+        }
+        self.demo.pill_spring.step(dt);
+        if !self.demo.pill_spring.is_settled() {
             moving = true;
         }
         // Re-shape and repaint animated pages at ~30 Hz. Static pages never

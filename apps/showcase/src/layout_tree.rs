@@ -252,6 +252,8 @@ fn code_panel_height(example: &ExampleDef) -> f32 {
 /// The bar is a chain of controls that hangs off the right edge, plus a
 /// search field that sits in the middle of the bar.
 fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
+    // The window buttons are anchored to the right edge and always win: a
+    // narrow window must never push "close" off-screen.
     let close = Rect::new(
         (width - WINDOW_BUTTON_GAP).max(0.0),
         0.0,
@@ -260,15 +262,34 @@ fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
     );
     let maximize = Rect::new(close.origin.x - 44.0, 0.0, 44.0, TOP_BAR_HEIGHT);
     let minimize = Rect::new(maximize.origin.x - 44.0, 0.0, 44.0, TOP_BAR_HEIGHT);
-    let right = minimize.origin.x - 10.0;
-    let hud = Rect::new(right - 32.0, 12.0, 32.0, 32.0);
-    let snap = Rect::new(hud.origin.x - 38.0, 12.0, 32.0, 32.0);
+    let nav_toggle = Rect::new(12.0, 12.0, 32.0, 32.0);
+
+    // Everything else is laid out right-to-left inside the gap between the
+    // navigation toggle and the window buttons. A control that no longer fits
+    // is hidden (zero width) instead of overlapping its neighbour, which used
+    // to make the layout negative at 320 px.
+    let left_limit = nav_toggle.origin.x + nav_toggle.size.x + 8.0;
+    let right_limit = (minimize.origin.x - 10.0).max(left_limit);
+    let mut cursor = right_limit;
+    let mut take = |w: f32| -> Rect {
+        if cursor - w >= left_limit {
+            let placed = Rect::new(cursor - w, 12.0, w, 32.0);
+            cursor = placed.origin.x - 8.0;
+            placed
+        } else {
+            let hidden = Rect::new(cursor.max(left_limit), 12.0, 0.0, 32.0);
+            cursor = left_limit;
+            hidden
+        }
+    };
+
+    let hud = take(32.0);
+    let snap = take(32.0);
     // Four zoom steps need a 43 px slot each for `"100%"` plus its
     // padding; below that the compact labels are used instead.
-    let zoom_width = if width < 1000.0 { 150.0 } else { 190.0 };
-    let zoom = Rect::new(snap.origin.x - 8.0 - zoom_width, 12.0, zoom_width, 32.0);
-    let theme_width = if compact { 34.0 } else { 118.0 };
-    let theme = Rect::new(zoom.origin.x - 8.0 - theme_width, 12.0, theme_width, 32.0);
+    let zoom = take(if width < 1000.0 { 150.0 } else { 190.0 });
+    let theme = take(if compact { 34.0 } else { 118.0 });
+
     let search_width = if width < 900.0 {
         0.0
     } else if width < 1000.0 {
@@ -276,15 +297,19 @@ fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
     } else {
         (width * 0.24).clamp(220.0, 380.0)
     };
+    let search_right = if theme.size.x > 0.0 {
+        theme.origin.x - 20.0
+    } else {
+        cursor - 12.0
+    };
     let search_x = (width * 0.5 - search_width * 0.5)
-        .max(218.0)
-        .min((theme.origin.x - search_width - 20.0).max(218.0));
-    let search = if search_width > 0.0 {
+        .max(left_limit)
+        .min((search_right - search_width).max(left_limit));
+    let search = if search_width > 0.0 && search_right - search_width >= left_limit {
         Rect::new(search_x, 12.0, search_width, 32.0)
     } else {
         Rect::new(0.0, 12.0, 0.0, 32.0)
     };
-    let nav_toggle = Rect::new(12.0, 12.0, 32.0, 32.0);
     [
         nav_toggle, search, theme, zoom, snap, hud, minimize, maximize, close,
     ]
@@ -407,7 +432,11 @@ impl ShellTree {
         } else {
             PAGE_PAD_WIDE
         };
-        let page_width = (content_width - pad * 2.0).max(280.0);
+        // 160 px is the narrowest width at which a card's knob row still
+        // separates its label from its control. A larger floor used to make
+        // the page wider than the pane, which clipped the right edge instead
+        // of reflowing it.
+        let page_width = (content_width - pad * 2.0).max(160.0);
 
         {
             let root = &mut self.world.node_mut(self.root).desc;

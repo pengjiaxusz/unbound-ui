@@ -43,6 +43,11 @@ pub enum Target {
     WindowClose,
     /// Drag the page's vertical scrollbar.
     ContentScrollbar,
+    /// Pick an FPS limit preset (`0` = 60, `1` = 120, `2` = 144, `3` = 240,
+    /// `4` = unlimited).
+    FpsPreset(u8),
+    /// Focus the custom FPS-limit input.
+    FpsInput,
 }
 
 const TAG_NAV_TOGGLE: u64 = 1;
@@ -62,6 +67,8 @@ const TAG_WINDOW_MINIMIZE: u64 = 14;
 const TAG_WINDOW_MAXIMIZE: u64 = 15;
 const TAG_WINDOW_CLOSE: u64 = 16;
 const TAG_CONTENT_SCROLLBAR: u64 = 17;
+const TAG_FPS_PRESET: u64 = 18;
+const TAG_FPS_INPUT: u64 = 19;
 
 /// The semantic root of the gallery.
 pub const ROOT: u64 = 1;
@@ -111,6 +118,8 @@ pub const fn id(target: Target) -> u64 {
         Target::WindowMaximize => tag(TAG_WINDOW_MAXIMIZE),
         Target::WindowClose => tag(TAG_WINDOW_CLOSE),
         Target::ContentScrollbar => tag(TAG_CONTENT_SCROLLBAR),
+        Target::FpsPreset(index) => tag(TAG_FPS_PRESET) | index as u64,
+        Target::FpsInput => tag(TAG_FPS_INPUT),
     }
 }
 
@@ -150,6 +159,8 @@ pub const fn decode(value: u64) -> Option<Target> {
         TAG_WINDOW_MAXIMIZE => Target::WindowMaximize,
         TAG_WINDOW_CLOSE => Target::WindowClose,
         TAG_CONTENT_SCROLLBAR => Target::ContentScrollbar,
+        TAG_FPS_PRESET => Target::FpsPreset((low & 0xff) as u8),
+        TAG_FPS_INPUT => Target::FpsInput,
         _ => return None,
     })
 }
@@ -178,6 +189,8 @@ mod tests {
             Target::WindowMaximize,
             Target::WindowClose,
             Target::ContentScrollbar,
+            Target::FpsPreset(4),
+            Target::FpsInput,
         ];
         for target in targets {
             assert_eq!(decode(id(target)), Some(target), "{target:?}");

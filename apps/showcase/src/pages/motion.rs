@@ -155,7 +155,7 @@ pub const SETTINGS_EXAMPLES: &[ExampleDef] = &[ExampleDef::new(
     ],
     DemoKind::About,
 )
-.with_height(280.0)];
+.with_height(348.0)];
 
 /// Spring lab or easing plot.
 pub fn springs(ctx: &mut DemoCtx<'_, '_>, easing: bool) {
@@ -531,7 +531,9 @@ pub fn telemetry(ctx: &mut DemoCtx<'_, '_>, graph: bool) {
     let columns = if rect.size.x > 520.0 { 3 } else { 2 };
     let gap = 10.0;
     let cell_w = (rect.size.x - gap * (columns - 1) as f32) / columns as f32;
-    let cell_h = (rect.size.y - gap) * 0.5;
+    // The limit bar owns the bottom 34 px of the stage.
+    let grid_height = (rect.size.y - 34.0).max(0.0);
+    let cell_h = (grid_height - gap) * 0.5;
     for (index, (label, value, detail)) in cards.iter().enumerate() {
         let col = index % columns;
         let row = index / columns;
@@ -581,13 +583,135 @@ pub fn telemetry(ctx: &mut DemoCtx<'_, '_>, graph: bool) {
                 cell.size.x - 24.0,
                 14.0,
             ),
-            8.5,
+            9.5,
             palette.text_muted,
             AlignX::Start,
             AlignY::Center,
         );
     }
     ctx.canvas.scroll_zone(rect, 4);
+    fps_limit_bar(ctx);
+}
+
+/// The frame-rate limit controls: five presets plus a custom input.
+///
+/// `0` is unlimited; any other value is floored at 60 FPS by the engine.
+pub fn fps_limit_bar(ctx: &mut DemoCtx<'_, '_>) {
+    let rect = ctx.rect;
+    let palette = *ctx.canvas.palette;
+    let state = ctx.state;
+    let bar = Rect::new(rect.origin.x, rect.max().y - 30.0, rect.size.x, 26.0);
+    let presets = [
+        ("60", 60u32),
+        ("120", 120),
+        ("144", 144),
+        ("240", 240),
+        ("0", 0),
+    ];
+    let active_preset = state.fps_preset();
+    let mut x = bar.origin.x;
+    for (index, (label, _)) in presets.iter().enumerate() {
+        let chip = Rect::new(x, bar.origin.y, 46.0, bar.size.y);
+        let active = active_preset == Some(index as u8);
+        let hover = matches!(
+            ctx.canvas.visual(ctx.part(20 + index as u16), active),
+            crate::canvas::Visual::Hover
+        );
+        ctx.canvas.rect(
+            chip,
+            7.0,
+            if active {
+                palette.primary
+            } else if hover {
+                palette.control_hover
+            } else {
+                palette.stage_bg
+            },
+            if active { 0 } else { palette.card_border },
+            1.0,
+            0.0,
+        );
+        ctx.canvas.text(
+            if *label == "0" { "0 ∞" } else { label },
+            chip,
+            10.5,
+            if active {
+                palette.on_primary
+            } else {
+                palette.text
+            },
+            AlignX::Center,
+            AlignY::Center,
+        );
+        ctx.control(
+            20 + index as u16,
+            chip,
+            accesskit::Role::Button,
+            if *label == "0" {
+                "Unlimited frame rate"
+            } else {
+                label
+            },
+            active,
+        );
+        x += 52.0;
+    }
+    let field = Rect::new(
+        x + 4.0,
+        bar.origin.y,
+        (bar.max().x - x - 4.0).max(70.0),
+        bar.size.y,
+    );
+    if field.size.x >= 70.0 {
+        ctx.canvas.rect(
+            field,
+            7.0,
+            palette.card_bg,
+            if state.fps_focused {
+                palette.primary
+            } else {
+                palette.card_border
+            },
+            if state.fps_focused { 2.0 } else { 1.0 },
+            0.0,
+        );
+        let text = if state.fps_focused {
+            state.fps_input.as_str()
+        } else if state.fps_limit == 0 {
+            "uncapped"
+        } else {
+            ""
+        };
+        let display = if text.is_empty() {
+            "Custom FPS (min 60, 0 = ∞)"
+        } else {
+            text
+        };
+        ctx.canvas.text(
+            display,
+            Rect::new(
+                field.origin.x + 8.0,
+                field.origin.y,
+                field.size.x - 16.0,
+                field.size.y,
+            ),
+            10.0,
+            if text.is_empty() {
+                palette.text_muted
+            } else {
+                palette.text
+            },
+            AlignX::Start,
+            AlignY::Center,
+        );
+        ctx.control(
+            30,
+            field,
+            accesskit::Role::TextInput,
+            "Custom FPS limit, minimum 60, 0 is unlimited",
+            state.fps_focused,
+        );
+    }
 }
 
 fn frame_graph(ctx: &mut DemoCtx<'_, '_>) {
@@ -611,7 +735,7 @@ fn frame_graph(ctx: &mut DemoCtx<'_, '_>) {
         ctx.canvas.text(
             "16.7 ms",
             Rect::new(plot.max().x - 64.0, y - 14.0, 56.0, 12.0),
-            8.5,
+            9.5,
             palette.warning,
             AlignX::End,
             AlignY::Top,
@@ -734,9 +858,10 @@ pub fn about(ctx: &mut DemoCtx<'_, '_>) {
     }
     widgets::badge(
         ctx.canvas,
-        Rect::new(rect.origin.x, rect.max().y - 26.0, 96.0, 20.0),
+        Rect::new(rect.origin.x, rect.max().y - 62.0, 96.0, 20.0),
         "MIT OR Apache-2.0",
         palette.text_muted,
         palette.stage_bg,
     );
+    fps_limit_bar(ctx);
 }

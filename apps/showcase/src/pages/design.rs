@@ -409,7 +409,10 @@ pub fn typography(ctx: &mut DemoCtx<'_, '_>, scaling: bool) {
     let sample = if ligatures {
         "office · affine · fi fl"
     } else {
-        "office · affine"
+        // ZERO WIDTH NON-JOINER between the glyphs that would form a
+        // ligature. Shaping treats it as a break, so "office" renders as
+        // three separate f/i codes — visibly wider — instead of the ligature.
+        "of\u{200c}fice · af\u{200c}fine · f\u{200c}i f\u{200c}l"
     };
     ctx.canvas.divider(rect.origin.x, y + 2.0, rect.size.x);
     ctx.canvas.text(

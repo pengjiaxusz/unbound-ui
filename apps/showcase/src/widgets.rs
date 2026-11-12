@@ -148,8 +148,9 @@ pub fn toggle_switch(
     rect: Rect,
     label: &str,
     on: bool,
+    disabled: bool,
 ) -> Visual {
-    let state = canvas.control_state(node, false, on);
+    let state = canvas.control_state(node, disabled, on);
     let desc = SwitchDesc::new(rect, label).with_on(on);
     let (quads, _) = canvas.layout_text(
         label,
@@ -187,8 +188,9 @@ pub fn checkbox(
     rect: Rect,
     label: &str,
     checked: bool,
+    disabled: bool,
 ) -> Visual {
-    let state = canvas.control_state(node, false, checked);
+    let state = canvas.control_state(node, disabled, checked);
     let desc = CheckboxDesc::new(rect, label).with_checked(checked);
     let (mark, _) = canvas.layout_text("✓", desc.box_rect(), 12.0, AlignX::Center, AlignY::Center);
     let (quads, _) = canvas.layout_text(
@@ -217,8 +219,9 @@ pub fn radio(
     rect: Rect,
     label: &str,
     selected: bool,
+    disabled: bool,
 ) -> Visual {
-    let state = canvas.control_state(node, false, selected);
+    let state = canvas.control_state(node, disabled, selected);
     let desc = RadioDesc::new(rect, label).with_selected(selected);
     let (quads, _) = canvas.layout_text(
         label,
@@ -259,13 +262,18 @@ pub fn segmented(
     rect: Rect,
     labels: &[&str],
     selected: usize,
+    disabled: bool,
+    thumb: Option<f32>,
 ) {
-    let desc = SegmentedDesc::new(rect, labels).with_selected(selected);
+    let mut desc = SegmentedDesc::new(rect, labels).with_selected(selected);
+    if let Some(thumb) = thumb {
+        desc = desc.with_thumb(thumb);
+    }
     let tokens = SegmentedTokens::standard();
     let frame = emit_segmented_frame(&desc, tokens);
     canvas.control_output(0, &frame);
     for index in 0..labels.len() {
-        let state = canvas.control_state(ids[index], false, index == selected);
+        let state = canvas.control_state(ids[index], disabled, index == selected);
         let (quads, _) = canvas.layout_text(
             labels[index],
             desc.segment_rect(index),
