@@ -51,6 +51,15 @@ impl Application for Counter {
         let control = view.ctx.control_state(BUTTON, false, false);
         let output: WidgetOutput = emit_button(BUTTON, &desc, control, &mut []);
         view.push(BUTTON, output);
+        if state.clicks == 0 {
+            if let Some(request) = unbound_widgets::BackdropRequest::new(
+                BUTTON,
+                Rect::new(20.0, 20.0, 240.0, 80.0),
+                12.0,
+            ) {
+                view.request_backdrop(request);
+            }
+        }
     }
 }
 
@@ -139,6 +148,23 @@ fn tab_focuses_the_button_and_the_next_frame_repaints_the_ring() {
         report.diff,
         SceneDiff::Ranges(_) | SceneDiff::Whole
     ));
+}
+
+#[test]
+fn backdrop_requests_reach_the_frame_report() {
+    let mut runtime = runtime();
+    let report = runtime.frame(0.0);
+    assert_eq!(report.backdrops.len(), 1);
+    assert_eq!(report.backdrops[0].blur, 12.0);
+
+    runtime.pointer_move(Vec2::new(100.0, 60.0));
+    runtime.pointer_down(Vec2::new(100.0, 60.0));
+    runtime.pointer_up(Vec2::new(100.0, 60.0));
+    let report = runtime.frame(1.0 / 60.0);
+    assert!(
+        report.backdrops.is_empty(),
+        "the dialog closed, so the blur pass must not run"
+    );
 }
 
 #[test]

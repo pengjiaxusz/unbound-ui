@@ -26,7 +26,7 @@ use unbound_input::{
 use unbound_math::{Rect, Vec2};
 use unbound_theme::ThemeKind;
 use unbound_widgets::diff::{diff_primitives, SceneDiff};
-use unbound_widgets::{ControlState, SceneCollector, WidgetOutput};
+use unbound_widgets::{BackdropRequest, ControlState, SceneCollector, WidgetOutput};
 
 /// The semantic root identity.
 pub const ROOT: u64 = 1;
@@ -308,6 +308,15 @@ impl ViewBuilder<'_> {
         self.collector
     }
 
+    /// Ask the renderer for a backdrop-blur pass behind `rect`.
+    ///
+    /// Overlay emitters return a `BackdropRequest`; forwarding it here puts it
+    /// on the frame report, where a renderer can activate the frosted-glass
+    /// chain. An empty list means the graph skips the blur passes entirely.
+    pub fn request_backdrop(&mut self, request: BackdropRequest) {
+        self.collector.backdrops.push(request);
+    }
+
     /// The viewport as a rectangle at the origin.
     #[must_use]
     pub fn viewport_rect(&self) -> Rect {
@@ -350,6 +359,8 @@ pub struct FrameReport {
     pub primitives: usize,
     /// The bytes the diff would upload.
     pub bytes: u32,
+    /// Backdrop-blur requests for this frame.
+    pub backdrops: Vec<BackdropRequest>,
 }
 
 /// The event-reducing, scene-diffing application runtime.
@@ -366,6 +377,7 @@ pub struct AppRuntime<A: Application> {
     previous_clips: Vec<GpuClipNode>,
     diff: SceneDiff,
     dirty: DirtyFlags,
+    backdrops: Vec<BackdropRequest>,
     time: f64,
     force_rebuild: bool,
 }
@@ -388,6 +400,7 @@ impl<A: Application> AppRuntime<A> {
             previous_clips: Vec::new(),
             diff: SceneDiff::Whole,
             dirty: DirtyFlags::ALL,
+            backdrops: Vec::new(),
             time: 0.0,
             force_rebuild: true,
         }
@@ -579,6 +592,7 @@ impl<A: Application> AppRuntime<A> {
                 dirty,
                 primitives: self.collector.primitives.len(),
                 bytes: 0,
+                backdrops: self.backdrops.clone(),
             };
         }
 
@@ -633,6 +647,8 @@ impl<A: Application> AppRuntime<A> {
         self.previous_clips.extend_from_slice(&self.collector.clips);
 
         self.diff = diff.clone();
+        self.backdrops.clear();
+        self.backdrops.extend_from_slice(&self.collector.backdrops);
         self.force_rebuild = false;
 
         FrameReport {
@@ -640,6 +656,7 @@ impl<A: Application> AppRuntime<A> {
             dirty,
             primitives: self.collector.primitives.len(),
             bytes,
+            backdrops: self.backdrops.clone(),
         }
     }
 
