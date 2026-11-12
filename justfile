@@ -28,12 +28,12 @@ default:
 # 运行组件展台（可视验收台：开窗查看所有图元）
 # 示例：just showcase 或 just showcase -- --shot shot.png
 showcase *ARGS:
-    cargo run -p showcase -- {{ARGS}}
+    cargo run -p showcase {{ARGS}}
 
 # 运行全链路演示程序
 # 示例：just gallery 或 just gallery -- --kpi
 gallery *ARGS:
-    cargo run -p gallery -- {{ARGS}}
+    cargo run -p gallery {{ARGS}}
 
 # 编译 Vulkan 着色器
 compile-shaders:
