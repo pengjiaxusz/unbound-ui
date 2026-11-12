@@ -72,7 +72,10 @@ fn fixed(v: f32) -> LengthPercentage {
 
 fn align_items(a: Align) -> taffy::AlignItems {
     match a {
-        Align::FlexStart | Align::Baseline => taffy::AlignItems::FLEX_START,
+        Align::FlexStart => taffy::AlignItems::FLEX_START,
+        // Taffy implements baseline alignment; folding it into `FLEX_START`
+        // made every "title next to a caption" row top-aligned instead.
+        Align::Baseline => taffy::AlignItems::BASELINE,
         Align::FlexEnd => taffy::AlignItems::FLEX_END,
         Align::Center => taffy::AlignItems::CENTER,
         Align::Stretch => taffy::AlignItems::STRETCH,
@@ -85,7 +88,8 @@ fn align_items(a: Align) -> taffy::AlignItems {
 /// ignore its parent's alignment, which is the single most common flex surprise.
 fn align_self(a: Align) -> Option<taffy::AlignSelf> {
     match a {
-        Align::FlexStart | Align::Baseline => Some(taffy::AlignSelf::FLEX_START),
+        Align::FlexStart => Some(taffy::AlignSelf::FLEX_START),
+        Align::Baseline => Some(taffy::AlignSelf::BASELINE),
         Align::FlexEnd => Some(taffy::AlignSelf::FLEX_END),
         Align::Center => Some(taffy::AlignSelf::CENTER),
         Align::Stretch => None,
@@ -204,6 +208,29 @@ pub fn style_for(world: &UiWorld, id: NodeId) -> Style {
     };
     if d.aspect_ratio > 0.0 {
         style.aspect_ratio = Some(d.aspect_ratio);
+    }
+    // `fr` means "share of the free space", not a pixel count. Mapping it to a
+    // literal `1.0` px made a `Dim::fr(1.0)` node one pixel wide; a share is a
+    // `flex-grow` with a zero basis.
+    let width_fr = d.width.kind() == DimUnit::Fr;
+    let height_fr = d.height.kind() == DimUnit::Fr;
+    if width_fr || height_fr {
+        // Only the fractional axis contributes the share; the other axis is
+        // still a length (a `40 px` height must not turn into a grow factor).
+        style.flex_grow = match (width_fr, height_fr) {
+            (true, true) => d.width.value.max(d.height.value),
+            (true, false) => d.width.value,
+            (false, true) => d.height.value,
+            (false, false) => unreachable!(),
+        }
+        .max(0.0);
+        style.flex_basis = Dimension::length(0.0);
+        if width_fr {
+            style.size.width = Dimension::auto();
+        }
+        if height_fr {
+            style.size.height = Dimension::auto();
+        }
     }
     style
 }
@@ -1119,6 +1146,64 @@ mod tests {
             w.node(rows[0]).rect.origin,
             Vec2::new(0.0, 0.0),
             "the first row must not have been displaced"
+        );
+    }
+
+    /// `fr` is a share of the free space, not a pixel value.
+    #[test]
+    fn a_fractional_size_grows_instead_of_collapsing_to_one_pixel() {
+        let mut w = UiWorld::new();
+        let root = w.root();
+        w.node_mut(root).desc.width = Dim::px(400.0);
+        w.node_mut(root).desc.height = Dim::px(80.0);
+        w.node_mut(root).desc.direction = FlexDirection::Row as u8;
+        let mut first_desc = RawNodeDesc::container();
+        first_desc.width = Dim::fr(1.0);
+        first_desc.height = Dim::px(40.0);
+        let mut second_desc = RawNodeDesc::container();
+        second_desc.width = Dim::fr(2.0);
+        second_desc.height = Dim::px(40.0);
+        let first = w.insert(root, first_desc, loc());
+        let second = w.insert(root, second_desc, loc());
+
+        let mut engine = LayoutEngine::new();
+        engine.solve(&mut w, root, Vec2::new(400.0, 80.0));
+        let a = engine.rect(first).expect("rect").size.x;
+        let b = engine.rect(second).expect("rect").size.x;
+        assert!(a > 100.0, "1fr must not collapse to a pixel, got {a}");
+        assert!(
+            (b - 2.0 * a).abs() <= 1.0,
+            "2fr must take twice 1fr: {a} / {b}"
+        );
+        assert!((a + b - 400.0).abs() <= 1.0, "{a} + {b} must fill the row");
+    }
+
+    /// `Align::Baseline` must reach Taffy as baseline alignment.
+    #[test]
+    fn baseline_alignment_is_not_folded_into_flex_start() {
+        let mut w = UiWorld::new();
+        let root = w.root();
+        w.node_mut(root).desc.width = Dim::px(400.0);
+        w.node_mut(root).desc.height = Dim::px(100.0);
+        w.node_mut(root).desc.direction = FlexDirection::Row as u8;
+        w.node_mut(root).desc.align_items = Align::Baseline as u8;
+
+        let mut tall_desc = RawNodeDesc::text();
+        tall_desc.width = Dim::px(100.0);
+        tall_desc.height = Dim::px(60.0);
+        let tall = w.insert(root, tall_desc, loc());
+        let mut short_desc = RawNodeDesc::text();
+        short_desc.width = Dim::px(100.0);
+        short_desc.height = Dim::px(20.0);
+        let short = w.insert(root, short_desc, loc());
+
+        let mut engine = LayoutEngine::new();
+        engine.solve(&mut w, root, Vec2::new(400.0, 100.0));
+        let a = engine.rect(tall).expect("rect");
+        let b = engine.rect(short).expect("rect");
+        assert!(
+            b.origin.y > a.origin.y,
+            "the shorter box must be pushed down onto the shared baseline"
         );
     }
 }
