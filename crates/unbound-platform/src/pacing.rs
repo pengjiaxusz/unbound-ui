@@ -22,6 +22,9 @@ pub const REFRESH_120: Duration = Duration::from_nanos(8_333_333);
 /// 60 Hz.
 pub const REFRESH_60: Duration = Duration::from_nanos(16_666_667);
 
+/// The smallest non-zero frame rate limit the engine accepts.
+pub const MIN_FPS_LIMIT: u32 = 60;
+
 /// How the CPU synchronises with the display.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PresentSync {
@@ -104,6 +107,11 @@ pub struct FramePacer {
     last_present: Option<Instant>,
     /// Whether the window is visible.
     visible: bool,
+    /// Whether the application still needs frames.
+    ///
+    /// A static page sets this to `false`; the event loop then parks in
+    /// `ControlFlow::Wait` instead of waking at the refresh rate.
+    animating: bool,
 }
 
 impl FramePacer {
@@ -114,6 +122,7 @@ impl FramePacer {
             interval,
             last_present: None,
             visible: true,
+            animating: true,
         }
     }
 
@@ -133,6 +142,46 @@ impl FramePacer {
     #[must_use]
     pub const fn interval(&self) -> Duration {
         self.interval
+    }
+
+    /// Set the frame rate limit in FPS.
+    ///
+    /// * `0` means **unlimited**: the interval is zero, so every frame is due
+    ///   and the event loop polls instead of sleeping.
+    /// * Any other value is clamped to at least [`MIN_FPS_LIMIT`].
+    pub fn set_fps_limit(&mut self, fps: u32) {
+        self.interval = if fps == 0 {
+            Duration::ZERO
+        } else {
+            let clamped = fps.max(MIN_FPS_LIMIT);
+            Duration::from_nanos((1_000_000_000u64 / u64::from(clamped)).max(1))
+        };
+    }
+
+    /// The current limit in FPS (`0` when unlimited).
+    #[must_use]
+    pub fn fps_limit(&self) -> u32 {
+        if self.interval.is_zero() {
+            return 0;
+        }
+        let nanos = self.interval.as_nanos().max(1) as u64;
+        // Round to the nearest integer so setting 144 and reading it back does
+        // not report 143.
+        ((1_000_000_000u64 + nanos / 2) / nanos).max(u64::from(MIN_FPS_LIMIT)) as u32
+    }
+
+    /// Tell the pacer whether the application still needs frames.
+    ///
+    /// When this is `false` and the window is visible, [`Self::next_deadline`]
+    /// returns `None` and the backend parks the loop until an event arrives.
+    pub fn set_animating(&mut self, animating: bool) {
+        self.animating = animating;
+    }
+
+    /// Whether the application still needs frames.
+    #[must_use]
+    pub const fn animating(&self) -> bool {
+        self.animating
     }
 
     /// The window became visible or hidden.
@@ -157,12 +206,14 @@ impl FramePacer {
 
     /// The instant the next frame becomes due, if the pacer is running.
     #[must_use]
-    pub fn next_deadline(&self, _now: Instant) -> Option<Instant> {
-        if !self.visible {
+    pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        if !self.visible || !self.animating {
             return None;
         }
         let last = self.last_present?;
-        Some(last + self.interval)
+        // An unlimited pacer is always due; a deadline in the past would also
+        // work, but returning `now` keeps `ControlFlow::Poll` explicit.
+        Some((last + self.interval).max(now))
     }
 
     /// True when a frame is due.
@@ -237,6 +288,21 @@ mod tests {
         let policy = PresentWaitPolicy::from_extensions(&[]);
         assert_eq!(policy.sync(), PresentSync::Immediate);
         assert!(!policy.can_wait_for_present());
+    }
+
+    #[test]
+    fn fps_limits_are_clamped_and_zero_means_unlimited() {
+        let mut pacer = FramePacer::at_120_hz();
+        pacer.set_fps_limit(30);
+        assert_eq!(pacer.fps_limit(), MIN_FPS_LIMIT, "30 must clamp to 60");
+        pacer.set_fps_limit(144);
+        assert_eq!(pacer.fps_limit(), 144);
+        pacer.set_fps_limit(0);
+        assert_eq!(pacer.fps_limit(), 0);
+        let now = Instant::now();
+        pacer.on_present(now);
+        assert!(pacer.should_render(now), "unlimited renders immediately");
+        assert_eq!(pacer.next_deadline(now), Some(now));
     }
 
     #[test]

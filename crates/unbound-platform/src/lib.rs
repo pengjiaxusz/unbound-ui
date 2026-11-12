@@ -30,9 +30,12 @@ pub mod window;
 
 pub use backend::{Flow, PlatformWindow};
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
-pub use pacing::{renderer_present_config, FramePacer, PresentSync, PresentWaitPolicy};
+pub use pacing::{
+    renderer_present_config, FramePacer, PresentSync, PresentWaitPolicy, MIN_FPS_LIMIT,
+};
 pub use resize::{Extent, ResizeAction, ResizeTracker};
 pub use window::{
-    apply, translate_key, translate_window_event, ButtonState, Modifiers, MouseButton,
-    PlatformError, PlatformEvent, PlatformKey, PlatformState, WindowConfig,
+    apply, translate_ime_event, translate_key, translate_window_event, ButtonState, ImeEvent,
+    ImeState, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey, PlatformState,
+    WindowConfig,
 };

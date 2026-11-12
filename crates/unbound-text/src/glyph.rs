@@ -260,6 +260,17 @@ impl GlyphCache {
         let phase = self.phase_at(pen.x);
         let sdf_mode = self.use_sdf;
         let face_index = u64::from(self.face_id(face));
+        // Optical sizing: at 9–17 px a regular weight loses about one third of
+        // its stem in the rasteriser, which is why small labels used to read
+        // as light grey. Asking for a slightly heavier cut at raster time is
+        // what browsers call "optical sizing"; the advance comes from the
+        // shaped run, so the layout does not shift.
+        let weight = if glyph.font_size < 18.0 {
+            let bump = ((18.0 - glyph.font_size) * 10.0).clamp(80.0, 120.0) as u16;
+            weight.saturating_add(bump)
+        } else {
+            weight
+        };
         // The raster depends on the phase, the weight and the italic slant,
         // so all three are part of the key.
         let key = GlyphKey::styled(
@@ -453,13 +464,55 @@ impl GlyphCache {
 }
 
 fn pad_r8(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
+    // The padding is a *ramp*, not a transparent gutter.
+    //
+    // The glyph quad is inflated by `padding` on every side, so the outer
+    // texels are actually sampled. Leaving them at zero sampled as a hard
+    // transparent edge (thin, washed-out stems); copying the edge value
+    // verbatim widened every stem by two full pixels. A linear falloff keeps
+    // the antialiased edge and adds just enough weight to match an LCD
+    // renderer on a 1 px stem.
     let pw = w + pad * 2;
     let ph = h + pad * 2;
     let mut out = vec![0u8; (pw * ph) as usize];
-    for y in 0..h {
-        let dst = ((y + pad) * pw + pad) as usize;
-        let src_off = (y * w) as usize;
-        out[dst..dst + w as usize].copy_from_slice(&src[src_off..src_off + w as usize]);
+    if w == 0 || h == 0 {
+        return out;
+    }
+    let max_x = (w - 1) as i32;
+    let max_y = (h - 1) as i32;
+    // Stem darkening: coverage is gamma-lifted once, at atlas build time, so
+    // the raster carries the weight even where the shader's gamma correction
+    // is disabled. 0 stays 0, so the padding gutter remains transparent.
+    let mut curve = [0u8; 256];
+    for (value, slot) in curve.iter_mut().enumerate() {
+        *slot = if value == 0 {
+            0
+        } else {
+            ((value as f32 / 255.0).powf(0.82) * 1.05 * 255.0).min(255.0) as u8
+        };
+    }
+    for y in 0..ph {
+        for x in 0..pw {
+            let sx = x as i32 - pad as i32;
+            let sy = y as i32 - pad as i32;
+            let cx = sx.clamp(0, max_x);
+            let cy = sy.clamp(0, max_y);
+            let src_off = (cy as u32 * w + cx as u32) as usize;
+            let value = curve[src[src_off] as usize];
+            let out_of_bounds = (sx < 0 || sy < 0 || sx > max_x || sy > max_y) as u32;
+            // Distance outside the glyph, in pixels.
+            let dist = out_of_bounds
+                * (sx.clamp(0, max_x) - sx)
+                    .unsigned_abs()
+                    .max((sy.clamp(0, max_y) - sy).unsigned_abs());
+            let faded = if pad == 0 {
+                value
+            } else {
+                let keep = pad.saturating_sub(dist);
+                (u32::from(value) * keep / pad) as u8
+            };
+            out[(y * pw + x) as usize] = faded;
+        }
     }
     out
 }

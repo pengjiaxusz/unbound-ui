@@ -135,6 +135,87 @@ pub enum PlatformEvent {
     CloseRequested,
 }
 
+/// An input-method event.
+///
+/// The engine never sees a `winit` type; the backend translates the platform
+/// IME into this small enum, and [`PlatformState::ime`] keeps the composition
+/// so the application can render it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImeEvent {
+    /// The IME is ready to receive composition.
+    Enabled,
+    /// The composition string changed.
+    ///
+    /// The tuple is the string plus the byte range of the selection.
+    Preedit(String, Option<(usize, usize)>),
+    /// A composition was accepted; insert this text.
+    Commit(String),
+    /// The IME was turned off.
+    Disabled,
+}
+
+/// The live state of the input method.
+///
+/// A text field needs two things from the platform: the composition string it
+/// is currently showing (with the selection range, which it draws as a
+/// highlighted run) and the committed text, which has to be inserted exactly
+/// once. Commits are buffered here because an input event may arrive between
+/// two frames; [`Self::take_commit`] drains them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImeState {
+    /// Whether the IME is enabled for the focused control.
+    pub enabled: bool,
+    /// The composition string, empty when there is none.
+    pub preedit: String,
+    /// The byte range of the composition selection.
+    pub selection: Option<(usize, usize)>,
+    /// Committed text waiting to be inserted.
+    pub commit: String,
+}
+
+impl ImeState {
+    /// Apply one platform event.
+    pub fn apply(&mut self, event: &ImeEvent) {
+        match event {
+            ImeEvent::Enabled => self.enabled = true,
+            ImeEvent::Preedit(text, selection) => {
+                self.preedit.clone_from(text);
+                self.selection = *selection;
+            }
+            ImeEvent::Commit(text) => {
+                // A commit always follows a cleared preedit; clear defensively
+                // for platforms that do not send the empty preedit.
+                self.preedit.clear();
+                self.selection = None;
+                self.commit.push_str(text);
+            }
+            ImeEvent::Disabled => {
+                self.enabled = false;
+                self.preedit.clear();
+                self.selection = None;
+            }
+        }
+    }
+
+    /// Take the committed text, leaving the buffer empty.
+    pub fn take_commit(&mut self) -> String {
+        core::mem::take(&mut self.commit)
+    }
+
+    /// The composition string that should be drawn at the caret.
+    #[must_use]
+    pub fn preedit(&self) -> &str {
+        &self.preedit
+    }
+
+    /// Discard a composition (for example when focus moves).
+    pub fn clear(&mut self) {
+        self.preedit.clear();
+        self.selection = None;
+        self.commit.clear();
+    }
+}
+
 /// Errors raised while creating or running the window.
 #[derive(Debug)]
 pub enum PlatformError {
@@ -181,6 +262,8 @@ pub struct PlatformState {
     pub focused: bool,
     /// Whether the window is visible.
     pub visible: bool,
+    /// Input-method composition and committed text.
+    pub ime: ImeState,
 }
 
 impl PlatformState {
@@ -196,6 +279,7 @@ impl PlatformState {
             modifiers: Modifiers::default(),
             focused: true,
             visible: config.visible,
+            ime: ImeState::default(),
         }
     }
 
@@ -291,6 +375,24 @@ pub fn translate_window_event(event: &winit::event::WindowEvent) -> Option<Platf
         WindowEvent::CloseRequested => PlatformEvent::CloseRequested,
         WindowEvent::RedrawRequested => PlatformEvent::RedrawRequested,
         _ => return None,
+    })
+}
+
+/// Translate a `winit` IME event into a platform event.
+///
+/// IME events are kept out of [`PlatformEvent`]: they carry text, which the
+/// engine consumes from [`PlatformState::ime`] rather than through the input
+/// delta stream.
+#[must_use]
+pub fn translate_ime_event(event: &winit::event::WindowEvent) -> Option<ImeEvent> {
+    let winit::event::WindowEvent::Ime(ime) = event else {
+        return None;
+    };
+    Some(match ime {
+        winit::event::Ime::Enabled => ImeEvent::Enabled,
+        winit::event::Ime::Preedit(text, selection) => ImeEvent::Preedit(text.clone(), *selection),
+        winit::event::Ime::Commit(text) => ImeEvent::Commit(text.clone()),
+        winit::event::Ime::Disabled => ImeEvent::Disabled,
     })
 }
 

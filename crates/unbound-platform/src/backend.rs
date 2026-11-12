@@ -18,7 +18,8 @@ use winit::window::{Window, WindowId};
 use crate::pacing::PresentWaitPolicy;
 use crate::resize::Extent;
 use crate::window::{
-    apply, translate_window_event, PlatformError, PlatformEvent, PlatformState, WindowConfig,
+    apply, translate_ime_event, translate_window_event, PlatformError, PlatformEvent,
+    PlatformState, WindowConfig,
 };
 
 /// What the engine wants the platform to do next.
@@ -106,6 +107,14 @@ struct Runner<A> {
 impl<A: PlatformApp> Runner<A> {
     /// Translate and dispatch one window event.
     fn on_window_event(&mut self, event: &winit::event::WindowEvent) -> Flow {
+        // IME composition is state, not a delta: fold it into the platform
+        // state before anything else looks at the event. Without this an East
+        // Asian keyboard could only ever type ASCII.
+        if let Some(ime) = translate_ime_event(event) {
+            if let Some(state) = self.state.as_mut() {
+                state.ime.apply(&ime);
+            }
+        }
         let Some(platform_event) = translate_window_event(event) else {
             return Flow::Continue;
         };
@@ -256,11 +265,13 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
         let now = Instant::now();
         let flow = match state.pacer.next_deadline(now) {
             Some(deadline) => winit::event_loop::ControlFlow::WaitUntil(deadline),
-            // Nothing has been presented yet: poll so the first frame gets
-            // through.
-            None if state.visible => winit::event_loop::ControlFlow::Poll,
-            // The window is hidden: park until an event arrives instead of
-            // spinning on an empty frame loop.
+            // Nothing has been presented yet *and* the application still
+            // wants frames: poll so the first frame gets through.
+            None if state.visible && state.pacer.animating() => {
+                winit::event_loop::ControlFlow::Poll
+            }
+            // The window is hidden, or the page is static and idle: park
+            // until an event arrives instead of spinning on an empty loop.
             None => winit::event_loop::ControlFlow::Wait,
         };
         event_loop.set_control_flow(flow);
