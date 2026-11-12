@@ -34,7 +34,57 @@ pub enum MemoryKind {
     HostVisibleDeviceLocal,
 }
 
+/// Pick a memory type for `kind` out of the device's `memory_types`.
+///
+/// `bits` is the resource's `memoryTypeBits`: a type outside that mask cannot
+/// back the allocation at all, whatever its properties say.
+///
+/// The ladders matter more than they look. A discrete GPU reports three kinds
+/// of heap: real VRAM (`DEVICE_LOCAL`), system memory (`HOST_VISIBLE`), and a
+/// small window of VRAM the CPU can also map — on NVIDIA the "BAR" window is a
+/// couple of hundred megabytes, and it is the only type that is both device
+/// local and host visible. Preferring it for [`MemoryKind::DeviceLocal`] does
+/// not make anything faster: it caps every pool, sort key buffer and atlas
+/// image at the size of that window, and the failure mode is a
+/// `vkAllocateMemory` that returns `ERROR_OUT_OF_DEVICE_MEMORY` with most of
+/// the card still free. `DeviceLocal` means fast VRAM the CPU never touches, so
+/// a plain device-local type always wins; the window is the fallback for parts
+/// that expose nothing else.
+fn choose_memory_type(types: &[vk::MemoryType], bits: u32, kind: MemoryKind) -> Option<u32> {
+    use vk::MemoryPropertyFlags as Flags;
+
+    let coherent = Flags::HOST_VISIBLE | Flags::HOST_COHERENT;
+    let local = Flags::DEVICE_LOCAL;
+
+    let find = |test: &dyn Fn(Flags) -> bool| {
+        types.iter().enumerate().find_map(|(index, ty)| {
+            let allowed = bits & (1 << index) != 0;
+            (allowed && test(ty.property_flags)).then_some(index as u32)
+        })
+    };
+
+    match kind {
+        // Fast VRAM, never mapped on the host.
+        MemoryKind::DeviceLocal => {
+            find(&|flags| flags.contains(local) && !flags.contains(coherent))
+                .or_else(|| find(&|flags| flags.contains(local)))
+        }
+        // ReBAR / Smart Access Memory: VRAM the CPU may write directly.
+        MemoryKind::HostVisibleDeviceLocal => {
+            find(&|flags| flags.contains(local) && flags.contains(coherent))
+                .or_else(|| find(&|flags| flags.contains(coherent)))
+        }
+        // Staging: system memory, because a mapped write there does not steal
+        // from the VRAM window.
+        MemoryKind::HostVisible => {
+            find(&|flags| flags.contains(coherent) && !flags.contains(local))
+                .or_else(|| find(&|flags| flags.contains(coherent)))
+        }
+    }
+}
+
 /// Everything the renderer negotiated with the driver.
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct GpuFeatures {
     pub buffer_device_address: bool,
@@ -863,7 +913,12 @@ impl Gpu {
     /// Public wrapper over the memory-type search (used by the texture pool).
     #[must_use]
     pub fn memory_type_index_public(&self, kind: MemoryKind) -> Option<u32> {
-        self.memory_type_index(kind)
+        choose_memory_type(self.memory_types(), u32::MAX, kind)
+    }
+
+    /// The memory types the device actually reports.
+    fn memory_types(&self) -> &[vk::MemoryType] {
+        &self.memory_properties.memory_types[..self.memory_properties.memory_type_count as usize]
     }
 
     /// Find a memory type that both matches `kind` **and** is allowed by the
@@ -874,73 +929,7 @@ impl Gpu {
     /// it (tiling constraints differ per format).
     #[must_use]
     pub fn memory_type_index_for_bits(&self, bits: u32, kind: MemoryKind) -> Option<u32> {
-        let required = match kind {
-            MemoryKind::DeviceLocal => vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            _ => vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        };
-        let preferred = match kind {
-            MemoryKind::DeviceLocal => {
-                vk::MemoryPropertyFlags::DEVICE_LOCAL
-                    | vk::MemoryPropertyFlags::HOST_VISIBLE
-                    | vk::MemoryPropertyFlags::HOST_COHERENT
-            }
-            _ => vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        };
-        let candidates = |mask: vk::MemoryPropertyFlags| {
-            (0..self.memory_properties.memory_type_count as usize).find(|i| {
-                bits & (1 << i) != 0
-                    && self.memory_properties.memory_types[*i]
-                        .property_flags
-                        .contains(mask)
-            })
-        };
-        candidates(preferred)
-            .or_else(|| candidates(required))
-            .map(|i| i as u32)
-    }
-
-    /// Find a memory type satisfying `flags`, preferring `kind`.
-    fn memory_type_index(&self, kind: MemoryKind) -> Option<u32> {
-        let wanted = match kind {
-            MemoryKind::DeviceLocal => {
-                vk::MemoryPropertyFlags::DEVICE_LOCAL | vk::MemoryPropertyFlags::HOST_VISIBLE
-            }
-            MemoryKind::HostVisible => {
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT
-            }
-            MemoryKind::HostVisibleDeviceLocal => {
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT
-            }
-        };
-        let required = match kind {
-            MemoryKind::DeviceLocal => vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            _ => vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        };
-        // First pass: exact preference.
-        for (i, t) in self
-            .memory_properties
-            .memory_types
-            .iter()
-            .enumerate()
-            .take(self.memory_properties.memory_type_count as usize)
-        {
-            if t.property_flags.contains(wanted) {
-                return Some(i as u32);
-            }
-        }
-        // Second pass: minimum requirement.
-        for (i, t) in self
-            .memory_properties
-            .memory_types
-            .iter()
-            .enumerate()
-            .take(self.memory_properties.memory_type_count as usize)
-        {
-            if t.property_flags.contains(required) {
-                return Some(i as u32);
-            }
-        }
-        None
+        choose_memory_type(self.memory_types(), bits, kind)
     }
 
     /// Create a buffer and bind its memory.
@@ -1479,6 +1468,108 @@ mod tests {
             gpu.wait_timeline(value).unwrap();
             assert!(gpu.timeline.value() >= value);
         }
+        gpu.destroy();
+    }
+
+    /// The memory layout a discrete NVIDIA card reports: two plain VRAM types,
+    /// a block of system memory, and — as type 5, at the end — the small window
+    /// of VRAM that is also host visible (the Resizable BAR window).
+    fn discrete_memory_types() -> Vec<vk::MemoryType> {
+        use vk::MemoryPropertyFlags as Flags;
+        let ty = |heap_index, property_flags| vk::MemoryType {
+            heap_index,
+            property_flags,
+        };
+        vec![
+            ty(1, Flags::empty()),
+            ty(0, Flags::DEVICE_LOCAL),
+            ty(0, Flags::DEVICE_LOCAL),
+            ty(1, Flags::HOST_VISIBLE | Flags::HOST_COHERENT),
+            ty(
+                1,
+                Flags::HOST_VISIBLE | Flags::HOST_COHERENT | Flags::HOST_CACHED,
+            ),
+            ty(
+                2,
+                Flags::DEVICE_LOCAL | Flags::HOST_VISIBLE | Flags::HOST_COHERENT,
+            ),
+        ]
+    }
+
+    #[test]
+    fn device_local_memory_stays_out_of_the_cpu_visible_window() {
+        let types = discrete_memory_types();
+        // Plain VRAM is type 1. Type 5 is VRAM too, but it is the cramped
+        // window the CPU can map: putting the primitive pool, the sort keys or
+        // an atlas image there caps them at the size of that window.
+        assert_eq!(
+            choose_memory_type(&types, u32::MAX, MemoryKind::DeviceLocal),
+            Some(1)
+        );
+        // When the resource may only live in the window, take it anyway.
+        assert_eq!(
+            choose_memory_type(&types, 1 << 5, MemoryKind::DeviceLocal),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn host_visible_device_local_memory_prefers_the_window() {
+        let types = discrete_memory_types();
+        assert_eq!(
+            choose_memory_type(&types, u32::MAX, MemoryKind::HostVisibleDeviceLocal),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn host_visible_memory_stays_in_system_ram() {
+        let types = discrete_memory_types();
+        assert_eq!(
+            choose_memory_type(&types, u32::MAX, MemoryKind::HostVisible),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn a_device_without_vram_still_gets_device_local_memory() {
+        // Integrated parts report a single type that is both device local and
+        // host visible; refusing it would leave nothing to allocate from.
+        let types = vec![vk::MemoryType {
+            heap_index: 0,
+            property_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL
+                | vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+        }];
+        assert_eq!(
+            choose_memory_type(&types, u32::MAX, MemoryKind::DeviceLocal),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn the_real_device_keeps_device_local_out_of_the_cpu_visible_window() {
+        let _guard = gpu_test_guard();
+        let Some(gpu) = test_device() else {
+            return;
+        };
+        let types = gpu.memory_types();
+        let index = gpu
+            .memory_type_index_for_bits(u32::MAX, MemoryKind::DeviceLocal)
+            .expect("a device always offers device-local memory");
+        let chosen = types[index as usize].property_flags;
+        let plain_exists = types.iter().any(|ty| {
+            ty.property_flags
+                .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+                && !ty
+                    .property_flags
+                    .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+        });
+        assert!(
+            !plain_exists || !chosen.contains(vk::MemoryPropertyFlags::HOST_VISIBLE),
+            "device-local memory landed in the CPU-visible VRAM window (type {index}) \
+             while a plain VRAM type exists"
+        );
         gpu.destroy();
     }
 }
