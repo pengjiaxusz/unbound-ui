@@ -1,28 +1,35 @@
 //! Deferred swapchain recreation (`docs` §2.3).
 //!
 //! On Windows, dragging a window edge produces a burst of `WM_SIZE`
-//! messages. Rebuilding the swapchain for every one of them is what produces
-//! black borders and stretched frames: the new swapchain is not ready when the
-//! compositor asks for it, and the old one has a different aspect ratio.
+//! messages. The policy implemented here decides *when* the swapchain
+//! follows the window:
 //!
-//! The policy implemented here is the one the design asks for:
+//! * **Real-time mode (the default).** The swapchain is rebuilt for every
+//!   size the OS reports, so the frame is rendered at the new resolution
+//!   and the compositor never has to stretch the previous one.
+//! * **Deferred mode.** The swapchain keeps the committed size while the
+//!   size is still moving and is rebuilt once it settles. This trades a
+//!   stretched frame for a cheaper rebuild, which is what a host that
+//!   cannot afford a rebuild per message wants.
 //!
-//! * **Never block the message loop.** A resize only *records* the new size.
-//! * **Render at the committed size** while the drag is in flight; the
-//!   compositor scales the last frame to the new window size, so there is
-//!   neither a black border nor a rebuild storm.
-//! * **Recreate once the size settles.** The swapchain is rebuilt after the
-//!   size has been stable for a short window, or immediately when the drag
-//!   ends, so the final size is exact.
+//! Both modes never block the message loop: a resize only *records* the new
+//! size, and the rebuild happens in the frame.
 
 use std::time::{Duration, Instant};
 
-/// How long the window size must stay unchanged before the swapchain is
-/// rebuilt.
+/// The settle window used by default: the swapchain follows the window
+/// size immediately.
+///
+/// Zero means "no settle window at all": every size the OS reports is
+/// committed on the spot. That is what makes a live resize sharp instead
+/// of a stretched copy of the last frame.
+pub const DEFAULT_SETTLE: Duration = Duration::ZERO;
+
+/// The settle window of the deferred mode.
 ///
 /// Two frames at 120 Hz is ~16 ms: long enough to swallow the event burst of
 /// a drag, short enough that the user never notices a lag.
-pub const DEFAULT_SETTLE: Duration = Duration::from_millis(16);
+pub const DEFERRED_SETTLE: Duration = Duration::from_millis(16);
 
 /// A physical pixel extent.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -88,6 +95,10 @@ pub struct ResizeTracker {
 
 impl ResizeTracker {
     /// Create a tracker for an initial extent.
+    ///
+    /// A `settle` of [`Duration::ZERO`] selects the real-time mode: every
+    /// size the OS reports is committed at once. A longer window selects the
+    /// deferred mode, which waits for the size to settle before it rebuilds.
     #[must_use]
     pub fn new(initial: Extent, settle: Duration) -> Self {
         Self {
@@ -159,12 +170,20 @@ impl ResizeTracker {
             // for it is illegal, so the size is ignored until it comes back.
             return ResizeAction::None;
         }
-        if extent != self.pending {
-            if extent != self.committed {
-                self.absorbed += 1;
-            }
+        let fresh = extent != self.pending;
+        if fresh {
             self.pending = extent;
             self.pending_since = Some(now);
+        }
+        if self.settle.is_zero() {
+            // Real-time mode: the swapchain follows the window size at once.
+            // A drag therefore never shows a stretched copy of the previous
+            // frame, and the size is committed even while the edge is being
+            // dragged.
+            return self.commit();
+        }
+        if fresh && extent != self.committed {
+            self.absorbed += 1;
         }
         if self.dragging {
             // During a drag the swapchain stays where it is.
@@ -202,6 +221,11 @@ impl ResizeTracker {
         if !self.is_dirty() {
             self.forced = false;
             return ResizeAction::None;
+        }
+        if self.settle.is_zero() {
+            // Real-time mode: there is nothing to wait for, and the drag
+            // never freezes the committed size.
+            return self.commit();
         }
         if self.dragging {
             return ResizeAction::None;
@@ -256,9 +280,51 @@ mod tests {
         assert_eq!(tracker.recreations(), 0);
     }
 
+    /// The real-time mode is the default: a size the OS reports is
+    /// committed at once, so the frame is drawn at the new resolution
+    /// instead of a stretched copy of the previous one.
+    #[test]
+    fn a_resize_is_committed_immediately_in_real_time_mode() {
+        let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
+        let now = Instant::now();
+        assert_eq!(
+            tracker.on_resized(extent(900, 600), now),
+            ResizeAction::Recreate(extent(900, 600)),
+            "the swapchain must follow the window size right away"
+        );
+        assert!(!tracker.is_dirty());
+        assert_eq!(tracker.recreations(), 1);
+        assert_eq!(
+            tracker.absorbed(),
+            0,
+            "the real-time mode never absorbs a resize message"
+        );
+    }
+
+    /// A drag produces a burst of sizes. In the real-time mode every one of
+    /// them is committed: freezing the size would show a stretched frame for
+    /// the whole drag.
+    #[test]
+    fn every_size_of_a_drag_burst_is_committed_in_real_time_mode() {
+        let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
+        let now = Instant::now();
+        tracker.on_drag_started();
+        for width in 801..=820 {
+            assert_eq!(
+                tracker.on_resized(extent(width, 600), now),
+                ResizeAction::Recreate(extent(width, 600)),
+                "the swapchain must not freeze while the edge is dragged"
+            );
+        }
+        assert_eq!(tracker.recreations(), 20);
+        assert_eq!(tracker.committed(), extent(820, 600));
+    }
+
+    /// The deferred mode keeps the old behaviour: the size is absorbed while
+    /// it is still moving.
     #[test]
     fn a_resize_is_committed_after_the_size_settles() {
-        let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
+        let mut tracker = ResizeTracker::new(extent(800, 600), DEFERRED_SETTLE);
         let now = Instant::now();
         assert_eq!(
             tracker.on_resized(extent(900, 600), now),
@@ -281,7 +347,7 @@ mod tests {
 
     #[test]
     fn a_drag_burst_is_absorbed_into_a_single_recreation() {
-        let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
+        let mut tracker = ResizeTracker::new(extent(800, 600), DEFERRED_SETTLE);
         let now = Instant::now();
         tracker.on_drag_started();
         for width in 801..=820 {
@@ -308,7 +374,7 @@ mod tests {
     /// pointless, the chain has to be rebuilt on the next poll.
     #[test]
     fn out_of_date_marks_the_resize_tracker_dirty_immediately() {
-        let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
+        let mut tracker = ResizeTracker::new(extent(800, 600), DEFERRED_SETTLE);
         let now = Instant::now();
         assert_eq!(
             tracker.on_resized(extent(900, 600), now),
@@ -348,9 +414,10 @@ mod tests {
         );
     }
 
+    /// The deferred mode keeps the render extent stable until the commit.
     #[test]
     fn the_render_extent_never_changes_before_the_commit() {
-        let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
+        let mut tracker = ResizeTracker::new(extent(800, 600), DEFERRED_SETTLE);
         let now = Instant::now();
         tracker.on_resized(extent(1024, 768), now);
         // While the size is settling the renderer keeps using the old extent.
@@ -360,9 +427,20 @@ mod tests {
         assert_eq!(tracker.committed(), extent(1024, 768));
     }
 
+    /// The real-time mode changes the render extent as soon as the OS
+    /// reports a new size — that is what removes the stretched frame.
+    #[test]
+    fn the_render_extent_follows_the_window_in_real_time_mode() {
+        let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
+        let now = Instant::now();
+        tracker.on_resized(extent(1024, 768), now);
+        assert_eq!(tracker.committed(), extent(1024, 768));
+        assert_eq!(tracker.pending(), extent(1024, 768));
+    }
+
     #[test]
     fn repeated_identical_messages_do_not_restart_the_settle_timer() {
-        let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
+        let mut tracker = ResizeTracker::new(extent(800, 600), DEFERRED_SETTLE);
         let now = Instant::now();
         tracker.on_resized(extent(900, 600), now);
         // The same size again: the timer must not be restarted.

@@ -36,7 +36,7 @@ use unbound_headless::{FrameBuilder, Harness, NodeKind};
 use unbound_input::{CursorKind, HitRegion, Router};
 use unbound_layout::LayoutEngine;
 use unbound_math::{Rect, Vec2};
-use unbound_platform::{Extent, LatencyTracker, ResizeTracker};
+use unbound_platform::{resize::DEFERRED_SETTLE, Extent, LatencyTracker, ResizeTracker};
 use unbound_theme::{ThemeKind, ThemeState};
 use unbound_world::{NodeId, UiWorld};
 
@@ -384,8 +384,10 @@ fn main() {
         .sum();
 
     // ---- 13. Platform layer -------------------------------------------------
-    // A window-edge drag must not rebuild the swapchain for every message.
-    let mut resize = ResizeTracker::with_default_settle(Extent::new(1280, 720));
+    // The deferred mode absorbs a window-edge drag: the swapchain is not
+    // rebuilt for every message of the burst. The *default* mode is the
+    // real-time one, which follows the window size at once.
+    let mut resize = ResizeTracker::new(Extent::new(1280, 720), DEFERRED_SETTLE);
     let now = Instant::now();
     resize.on_drag_started();
     for width in 1281..=1300 {

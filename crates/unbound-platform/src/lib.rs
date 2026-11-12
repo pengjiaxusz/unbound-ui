@@ -2,11 +2,12 @@
 //!
 //! Everything Windows-specific about presenting a frame lives here:
 //!
-//! * **No blocking resize.** A window-edge drag produces a burst of size
-//!   messages. The swapchain is *not* rebuilt for each of them: the renderer
-//!   keeps using the committed extent and the compositor scales the last
-//!   frame, so there is no black border and no rebuild storm. See
-//!   [`resize::ResizeTracker`].
+//! * **Real-time resize.** A window-edge drag produces a burst of size
+//!   messages. The swapchain follows the window size *immediately*: every
+//!   reported size is committed, so the frame is drawn at the new
+//!   resolution and the compositor never has to stretch the previous one.
+//!   The deferred mode is still available for a host that prefers fewer
+//!   rebuilds. See [`resize::ResizeTracker`].
 //! * **Tear-free, lowest-latency presentation.** `VK_EXT_swapchain_maintenance1`
 //!   provides `FIFO_LATEST_READY`, and `VK_KHR_present_wait` lets the CPU
 //!   block until the image is actually scanned out, which is what keeps the

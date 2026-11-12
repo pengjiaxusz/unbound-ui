@@ -555,8 +555,22 @@ impl PlatformApp for Showcase {
 
         // A resize that settled, or a swapchain the driver already rejected,
         // both mean the same thing: rebuild the chain for the new size.
+        //
+        // The third condition is the important one: as long as the chain and
+        // the window disagree, the frame would be drawn at one resolution and
+        // stretched to the other. Comparing the two directly makes the
+        // invariant "chain size == window size" hold on *every* frame, no
+        // matter which path noticed the resize.
         let settled = state.poll_resize(Instant::now());
-        if settled.is_some() || self.swapchain_dirty {
+        // A minimised window reports a zero extent: there is nothing to
+        // rebuild for, and a one-pixel chain would be nonsense.
+        let size_mismatch = size.width > 0
+            && size.height > 0
+            && self
+                .swapchain
+                .as_ref()
+                .is_some_and(|chain| chain.extent() != (window_width, window_height));
+        if settled.is_some() || self.swapchain_dirty || size_mismatch {
             self.swapchain_dirty = false;
             if self.recreate_swapchain(window_width, window_height) {
                 self.rebuild(window);

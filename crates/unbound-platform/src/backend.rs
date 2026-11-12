@@ -125,6 +125,25 @@ impl<A: PlatformApp> Runner<A> {
                 return Flow::Exit;
             }
         }
+        // Windows runs a *modal* loop while the user drags a window edge
+        // (`WM_ENTERSIZEMOVE`): the event loop is suspended and
+        // `about_to_wait` is not called until the drag ends. A frame that is
+        // only driven from `about_to_wait` therefore freezes for the whole
+        // drag, and the compositor stretches the last frame to the new size.
+        //
+        // Driving the frame right here makes every `WM_SIZE` produce a
+        // freshly rendered image at the new resolution.
+        //
+        // Only a resize is driven this way: `RedrawRequested` carries no
+        // size information and is served by `about_to_wait` outside the
+        // modal loop — rendering it here as well would draw every frame
+        // twice.
+        if matches!(platform_event, PlatformEvent::Resized(_)) {
+            state.pacer.request_immediate(now);
+            if self.app.frame(state, window) == Flow::Exit {
+                return Flow::Exit;
+            }
+        }
         Flow::Continue
     }
 }

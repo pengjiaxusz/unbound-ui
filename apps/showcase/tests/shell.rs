@@ -328,6 +328,63 @@ fn a_navigation_click_fires_exactly_once() {
     assert_eq!(app.state.active_page, PageId::Colors);
 }
 
+/// A window resize has to recompute the layout.
+///
+/// This is what makes a live resize work: the frame is drawn at the new
+/// size, and the navigation, the card grid and the text wrapping follow the
+/// new edge instead of staying at the old one.
+#[test]
+fn a_resize_recomputes_the_layout() {
+    let mut app = app();
+    let before = app.generation();
+
+    // The window got narrower: the viewport changed.
+    assert!(
+        app.sync((960.0, 600.0)),
+        "a viewport change must be visible to the renderer"
+    );
+    assert!(
+        app.generation() > before,
+        "the rebuilt scene must advance the upload generation"
+    );
+
+    // The hit regions were rebuilt for the new size: the theme toggle now
+    // sits where the new layout puts it, not where the old one did.
+    let node = target::id(Target::Theme(0));
+    let resized = rect_of(&app, node);
+    assert!(
+        resized.size.x > 0.0 && resized.size.y > 0.0,
+        "the rebuilt layout must have a hit region"
+    );
+}
+
+/// Every intermediate size of a drag has to be laid out, not just the last
+/// one. A drag that only lays out its final size is a drag that shows a
+/// frozen picture for its whole duration.
+#[test]
+fn every_size_of_a_drag_is_laid_out() {
+    let mut app = app();
+    let mut previous = app.generation();
+    for width in [1400.0, 1300.0, 1200.0, 1100.0, 1000.0] {
+        assert!(
+            app.sync((width, 900.0)),
+            "the resize to {width} must be visible to the renderer"
+        );
+        assert!(
+            app.generation() > previous,
+            "every size of the drag must rebuild the scene"
+        );
+        previous = app.generation();
+        let report = Harness::run(&app.frame());
+        assert!(
+            report.is_clean(),
+            "the layout at {width} produced {} diagnostic(s): {}",
+            report.diagnostics.len(),
+            report.summary()
+        );
+    }
+}
+
 /// Losing the focus has to abort the in-flight interaction.
 ///
 /// Otherwise the shell keeps a ghost drag alive: the scrollbar stays

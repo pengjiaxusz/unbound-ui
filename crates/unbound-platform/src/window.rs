@@ -348,10 +348,20 @@ pub fn translate_key(key: &winit::keyboard::Key) -> PlatformKey {
 pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> Vec<PlatformEvent> {
     let mut out = Vec::new();
     match event {
-        PlatformEvent::Resized(extent) => match state.resize.on_resized(*extent, now) {
-            ResizeAction::None => {}
-            ResizeAction::Recreate(new) => out.push(PlatformEvent::RecreateSwapchain(new)),
-        },
+        PlatformEvent::Resized(extent) => {
+            // The window changed size. The application has to know: the
+            // layout is recomputed for the new size, and the swapchain has
+            // to be rebuilt for it.
+            //
+            // The event used to be swallowed here, which meant the renderer
+            // kept drawing at the old size while the window had already
+            // moved on — the stretched frame the user saw.
+            state.pacer.request_immediate(now);
+            out.push(PlatformEvent::Resized(*extent));
+            if let ResizeAction::Recreate(new) = state.resize.on_resized(*extent, now) {
+                out.push(PlatformEvent::RecreateSwapchain(new));
+            }
+        }
         PlatformEvent::ScaleFactorChanged(factor) => {
             state.scale_factor = *factor;
             // The application lays out in logical units, so it has to know the
@@ -405,8 +415,11 @@ mod tests {
     use super::*;
     use crate::pacing::PresentSync;
 
+    /// The resize event reaches the application and rebuilds the swapchain
+    /// at once: the frame has to be drawn at the new resolution, not a
+    /// stretched copy of the previous one.
     #[test]
-    fn a_resize_event_produces_a_swapchain_recreation_once_it_settles() {
+    fn a_resize_event_produces_a_swapchain_recreation_immediately() {
         let config = WindowConfig::default();
         let mut state = PlatformState::new(
             &config,
@@ -418,24 +431,49 @@ mod tests {
             &mut state,
             &PlatformEvent::Resized(Extent::new(1000, 700)),
             now,
-        );
-        assert!(out.is_empty(), "the first message must not rebuild");
-        let out = apply(
-            &mut state,
-            &PlatformEvent::Resized(Extent::new(1000, 700)),
-            now + std::time::Duration::from_millis(30),
         );
         assert_eq!(
             out,
-            vec![PlatformEvent::RecreateSwapchain(Extent::new(1000, 700))]
+            vec![
+                PlatformEvent::Resized(Extent::new(1000, 700)),
+                PlatformEvent::RecreateSwapchain(Extent::new(1000, 700)),
+            ],
+            "the resize must not be swallowed and the chain must follow at once"
         );
     }
 
-    /// A drag burst ends with one final resize event. If nothing else ever
-    /// arrives, that last size must still be committed — the settle window
-    /// needs a tick that does not depend on another event.
+    /// The resize event wakes the frame scheduler: the new size must not
+    /// wait for the next regular deadline.
     #[test]
-    fn a_settled_size_is_committed_even_without_a_further_event() {
+    fn a_resize_wakes_the_frame_scheduler() {
+        let config = WindowConfig::default();
+        let mut state = PlatformState::new(
+            &config,
+            Extent::new(1280, 800),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        let now = Instant::now();
+        // Pretend a frame was presented a moment ago.
+        state.pacer.on_present(now);
+        assert!(
+            !state.pacer.should_render(now),
+            "the pacer must not be due yet"
+        );
+        apply(
+            &mut state,
+            &PlatformEvent::Resized(Extent::new(1000, 700)),
+            now,
+        );
+        assert!(
+            state.pacer.should_render(now),
+            "a resize must make the next frame due right away"
+        );
+    }
+
+    /// A drag burst ends with one final resize event. The size is committed
+    /// on every message, so the poll only ever reports "nothing to do".
+    #[test]
+    fn a_committed_size_is_not_committed_twice() {
         let config = WindowConfig::default();
         let mut state = PlatformState::new(
             &config,
@@ -448,18 +486,16 @@ mod tests {
             &PlatformEvent::Resized(Extent::new(1000, 700)),
             now,
         );
-        assert!(out.is_empty(), "the first message must not rebuild");
+        assert!(
+            out.contains(&PlatformEvent::RecreateSwapchain(Extent::new(1000, 700))),
+            "the first message must rebuild the chain"
+        );
 
         // No further event arrives; the frame loop polls instead.
         assert_eq!(
             state.poll_resize(now + std::time::Duration::from_millis(5)),
             None,
-            "the size has not settled yet"
-        );
-        assert_eq!(
-            state.poll_resize(now + std::time::Duration::from_millis(30)),
-            Some(Extent::new(1000, 700)),
-            "the settled size must be committed by the frame loop"
+            "the size was already committed"
         );
         assert_eq!(
             state.poll_resize(now + std::time::Duration::from_millis(60)),
