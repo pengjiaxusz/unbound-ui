@@ -17,7 +17,7 @@ use showcase::state::ThemeMode;
 
 use unbound_gpu::atlas::{AtlasKind, AtlasSet, AtlasUpload};
 use unbound_gpu::device::{Gpu, GpuConfig};
-use unbound_gpu::surface::{Surface, Swapchain};
+use unbound_gpu::surface::{AcquireOutcome, PresentOutcome, Surface, Swapchain};
 use unbound_gpu::swapchain::PresentConfig;
 use unbound_gpu::{Camera, Renderer};
 use unbound_input::{resize_edge, CursorKind, ResizeEdge};
@@ -26,6 +26,7 @@ use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::window::{
     ButtonState, Modifiers, MouseButton, PlatformEvent, PlatformState, WindowConfig,
 };
+use unbound_platform::Extent;
 use winit::window::Window;
 
 use showcase::shell::WindowCommand;
@@ -68,6 +69,8 @@ struct Showcase {
     last_title_press: Option<(Instant, Vec2)>,
     /// True when the current press was consumed by the window chrome.
     press_consumed: bool,
+    /// True when the driver reported that the swapchain is stale.
+    swapchain_dirty: bool,
 }
 
 impl Showcase {
@@ -92,6 +95,7 @@ impl Showcase {
             resize_edge: None,
             last_title_press: None,
             press_consumed: false,
+            swapchain_dirty: false,
         }
     }
 
@@ -248,6 +252,34 @@ impl Showcase {
             window.set_cursor(cursor_icon(kind));
         }
     }
+
+    /// Rebuild the swapchain for a new surface size.
+    ///
+    /// The old chain is handed to the driver through `oldSwapchain`, so the
+    /// presentation engine can hand its resources over instead of tearing
+    /// the surface down — that is what removes the flicker on a resize.
+    fn recreate_swapchain(&mut self, width: u32, height: u32) -> bool {
+        let Some(renderer) = &mut self.renderer else {
+            return false;
+        };
+        let Some(surface) = &self.surface else {
+            return false;
+        };
+        let present =
+            PresentConfig::from_capabilities(&renderer.gpu.enabled_device_extensions, false);
+        let Some(swapchain) = &mut self.swapchain else {
+            return false;
+        };
+        if let Err(error) = swapchain.recreate(&renderer.gpu, surface, width, height, &present) {
+            eprintln!(" could not rebuild the swapchain: {error}");
+            return false;
+        }
+        if let Err(error) = renderer.resize(width, height) {
+            eprintln!("could not resize the renderer: {error}");
+            return false;
+        }
+        true
+    }
 }
 
 /// The physical window size for a logical layout at `scale`, clamped to 95 %
@@ -386,6 +418,12 @@ impl PlatformApp for Showcase {
                 self.os_scale = factor as f32;
                 self.rebuild(window);
             }
+            PlatformEvent::RecreateSwapchain(extent) => {
+                // The platform layer settled a resize: the swapchain has to
+                // be rebuilt for the new size.
+                self.swapchain_dirty = true;
+                let _ = extent;
+            }
             PlatformEvent::KeyInput {
                 state: ButtonState::Pressed,
                 key,
@@ -488,29 +526,12 @@ impl PlatformApp for Showcase {
         let size = window.inner_size();
         let (window_width, window_height) = (size.width.max(1), size.height.max(1));
 
+        // A resize that settled, or a swapchain the driver already rejected,
+        // both mean the same thing: rebuild the chain for the new size.
         let settled = state.poll_resize(Instant::now());
-        if settled.is_some() {
-            let Some(renderer) = &mut self.renderer else {
-                return Flow::Continue;
-            };
-            let Some(surface) = &self.surface else {
-                return Flow::Continue;
-            };
-            let present =
-                PresentConfig::from_capabilities(&renderer.gpu.enabled_device_extensions, false);
-            if let Ok(chain) = Swapchain::new(
-                &renderer.gpu,
-                surface,
-                window_width,
-                window_height,
-                &present,
-            ) {
-                if let Some(old) = self.swapchain.replace(chain) {
-                    old.destroy(&renderer.gpu);
-                }
-                if let Err(error) = renderer.resize(window_width, window_height) {
-                    eprintln!("could not resize the renderer: {error}");
-                }
+        if settled.is_some() || self.swapchain_dirty {
+            self.swapchain_dirty = false;
+            if self.recreate_swapchain(window_width, window_height) {
                 self.rebuild(window);
             }
         }
@@ -550,8 +571,27 @@ impl PlatformApp for Showcase {
             eprintln!("waiting for the previous frame failed: {error}");
             return Flow::Continue;
         }
-        let Ok(image) = swapchain.acquire(ACQUIRE_TIMEOUT_NS) else {
-            return Flow::Continue;
+        // The driver rejects the image when the surface changed under us.
+        // That is not a failure: the swapchain is rebuilt for the new size
+        // on the next frame.
+        let image = match swapchain.acquire_outcome(ACQUIRE_TIMEOUT_NS) {
+            Ok(AcquireOutcome::Ready { image, suboptimal }) => {
+                if suboptimal {
+                    self.swapchain_dirty = true;
+                }
+                image
+            }
+            Ok(AcquireOutcome::OutOfDate) => {
+                self.swapchain_dirty = true;
+                state
+                    .resize
+                    .mark_out_of_date(Extent::new(window_width, window_height));
+                return Flow::Continue;
+            }
+            Err(error) => {
+                eprintln!("could not acquire a swapchain image: {error}");
+                return Flow::Continue;
+            }
         };
 
         // The app lays out in logical units (physical / (OS scale × zoom)); the
@@ -571,8 +611,19 @@ impl PlatformApp for Showcase {
             return Flow::Continue;
         }
         let finished = renderer.present_semaphore();
-        if let Err(error) = swapchain.present(&renderer.gpu, image.index, finished) {
-            eprintln!("present failed: {error}");
+        // A present that came back "recreate" means the surface moved under
+        // the swapchain: the frame was shown, but the chain is stale now.
+        match swapchain.present_outcome(&renderer.gpu, image.index, finished) {
+            Ok(PresentOutcome::Optimal) => {}
+            Ok(PresentOutcome::Recreate) => {
+                self.swapchain_dirty = true;
+                state
+                    .resize
+                    .mark_out_of_date(Extent::new(window_width, window_height));
+            }
+            Err(error) => {
+                eprintln!("present failed: {error}");
+            }
         }
         state.pacer.on_present(Instant::now());
         window.request_redraw();

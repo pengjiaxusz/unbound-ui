@@ -210,6 +210,8 @@ pub fn buttons(ctx: &mut DemoCtx<'_, '_>, icons: bool) {
             ButtonVariant::Secondary => "Secondary",
             ButtonVariant::Subtle => "Subtle action",
             ButtonVariant::Icon => "+",
+            ButtonVariant::OnHero => "On hero",
+            ButtonVariant::OnHeroSecondary => "On hero, secondary",
         },
         variant,
         !disabled,

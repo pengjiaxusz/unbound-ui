@@ -18,6 +18,15 @@ pub enum ButtonVariant {
     Secondary,
     Subtle,
     Icon,
+    /// A call to action on the saturated hero surface.
+    ///
+    /// A filled blue button on a blue gradient has almost no contrast, so
+    /// the primary action is a solid white pill with the brand colour as its
+    /// label, and the secondary action is a dark translucent pill with a
+    /// hairline border.
+    OnHero,
+    /// The secondary call to action on the hero surface.
+    OnHeroSecondary,
 }
 
 /// A gallery button. Returns the visual state it painted.
@@ -71,6 +80,16 @@ pub fn button(
                 palette.text_muted
             },
         ),
+        ButtonVariant::OnHero => (
+            match visual {
+                Visual::Hover => palette.on_hero,
+                Visual::Pressed => palette.primary_soft,
+                _ => palette.on_hero,
+            },
+            0,
+            palette.primary,
+        ),
+        ButtonVariant::OnHeroSecondary => (palette.hero_scrim, palette.on_hero, palette.on_hero),
     };
     canvas.rect(rect, 8.0, fill, border, 1.0, 0.0);
     if canvas.focused(node) {
@@ -359,6 +378,10 @@ pub fn slider(
 }
 
 /// A segmented pill control.
+///
+/// The slots are an even grid and the highlight is inset by two pixels on
+/// every side, so the label never touches the frame: a 43 px slot holds
+/// `"100%"` with seven pixels of breathing room on each side.
 pub fn segmented(
     canvas: &mut Canvas<'_>,
     ids: &[u64],
@@ -367,29 +390,30 @@ pub fn segmented(
     selected: usize,
 ) {
     let palette = *canvas.palette;
-    canvas.rect(rect, 9.0, palette.control_track, 0, 0.0, 0.0);
+    canvas.rect(rect, 7.0, palette.control_track, 0, 0.0, 0.0);
     let count = labels.len().max(1);
     let width = rect.size.x / count as f32;
     for (index, label) in labels.iter().enumerate() {
+        let slot_x = rect.origin.x + index as f32 * width;
         let segment = Rect::new(
-            rect.origin.x + index as f32 * width + 3.0,
+            slot_x + 2.0,
             rect.origin.y + 2.0,
-            width - 6.0,
-            rect.size.y - 4.0,
+            (width - 4.0).max(8.0),
+            (rect.size.y - 4.0).max(8.0),
         );
         let active = index == selected;
         let visual = canvas.visual(ids[index], false);
         if active {
             canvas.rect(
                 segment,
-                7.0,
+                5.0,
                 palette.primary_soft,
                 palette.primary,
                 1.0,
                 0.0,
             );
         } else if visual.is_hovered() {
-            canvas.rect(segment, 7.0, palette.control_hover, 0, 0.0, 0.0);
+            canvas.rect(segment, 5.0, palette.control_hover, 0, 0.0, 0.0);
         }
         canvas.text(
             label,

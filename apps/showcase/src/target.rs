@@ -41,6 +41,8 @@ pub enum Target {
     WindowMaximize,
     /// Close the native window.
     WindowClose,
+    /// Drag the page's vertical scrollbar.
+    ContentScrollbar,
 }
 
 const TAG_NAV_TOGGLE: u64 = 1;
@@ -59,6 +61,7 @@ const TAG_FOOTER: u64 = 13;
 const TAG_WINDOW_MINIMIZE: u64 = 14;
 const TAG_WINDOW_MAXIMIZE: u64 = 15;
 const TAG_WINDOW_CLOSE: u64 = 16;
+const TAG_CONTENT_SCROLLBAR: u64 = 17;
 
 /// The semantic root of the gallery.
 pub const ROOT: u64 = 1;
@@ -97,6 +100,7 @@ pub const fn id(target: Target) -> u64 {
         Target::WindowMinimize => tag(TAG_WINDOW_MINIMIZE),
         Target::WindowMaximize => tag(TAG_WINDOW_MAXIMIZE),
         Target::WindowClose => tag(TAG_WINDOW_CLOSE),
+        Target::ContentScrollbar => tag(TAG_CONTENT_SCROLLBAR),
     }
 }
 
@@ -135,6 +139,7 @@ pub const fn decode(value: u64) -> Option<Target> {
         TAG_WINDOW_MINIMIZE => Target::WindowMinimize,
         TAG_WINDOW_MAXIMIZE => Target::WindowMaximize,
         TAG_WINDOW_CLOSE => Target::WindowClose,
+        TAG_CONTENT_SCROLLBAR => Target::ContentScrollbar,
         _ => return None,
     })
 }
@@ -162,6 +167,7 @@ mod tests {
             Target::WindowMinimize,
             Target::WindowMaximize,
             Target::WindowClose,
+            Target::ContentScrollbar,
         ];
         for target in targets {
             assert_eq!(decode(id(target)), Some(target), "{target:?}");

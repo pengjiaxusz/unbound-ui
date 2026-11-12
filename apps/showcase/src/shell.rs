@@ -72,7 +72,9 @@ impl ShellLayout {
         let right = minimize.origin.x - 10.0;
         let hud = Rect::new(right - 32.0, 12.0, 32.0, 32.0);
         let snap = Rect::new(hud.origin.x - 38.0, 12.0, 32.0, 32.0);
-        let zoom_width = if width < 1000.0 { 136.0 } else { 172.0 };
+        // Four zoom steps need a 43 px slot each for `"100%"` plus its
+        // padding; below that the compact labels are used instead.
+        let zoom_width = if width < 1000.0 { 150.0 } else { 190.0 };
         let zoom = Rect::new(snap.origin.x - 8.0 - zoom_width, 12.0, zoom_width, 32.0);
         let theme_width = if compact { 34.0 } else { 118.0 };
         let theme = Rect::new(zoom.origin.x - 8.0 - theme_width, 12.0, theme_width, 32.0);
@@ -154,6 +156,54 @@ pub enum WindowCommand {
     Close,
 }
 
+/// The geometry of the page's vertical scrollbar.
+///
+/// The thumb is a real control: it can be dragged, and the track can be
+/// clicked to jump. A scrollbar that only exists as a painted rectangle is
+/// decoration, not a control.
+#[derive(Copy, Clone, Debug)]
+struct Scrollbar {
+    track: Rect,
+    thumb_h: f32,
+    max_scroll: f32,
+}
+
+impl Scrollbar {
+    /// The thumb's top edge for a scroll position.
+    fn thumb_top(&self, scroll: f32) -> f32 {
+        let t = (scroll / self.max_scroll).clamp(0.0, 1.0);
+        self.track.origin.y + (self.track.size.y - self.thumb_h) * t
+    }
+
+    /// The scroll position for a thumb top edge.
+    fn scroll_for(&self, thumb_top: f32) -> f32 {
+        let span = (self.track.size.y - self.thumb_h).max(1.0);
+        let t = ((thumb_top - self.track.origin.y) / span).clamp(0.0, 1.0);
+        t * self.max_scroll
+    }
+}
+
+/// The page's scrollbar, or `None` when the page fits.
+fn content_scrollbar(layout: &ShellLayout, page: &PageLayout) -> Option<Scrollbar> {
+    let max_scroll = (page.content_height - layout.content.size.y + 48.0).max(0.0);
+    if max_scroll <= 1.0 {
+        return None;
+    }
+    let track = Rect::new(
+        layout.content.max().x - 7.0,
+        layout.content.origin.y + 8.0,
+        3.0,
+        (layout.content.size.y - 16.0).max(1.0),
+    );
+    let thumb_h = (track.size.y * layout.content.size.y / page.content_height.max(1.0))
+        .clamp(28.0, track.size.y);
+    Some(Scrollbar {
+        track,
+        thumb_h,
+        max_scroll,
+    })
+}
+
 /// The application.
 pub struct GalleryApp {
     pub state: GalleryState,
@@ -181,6 +231,10 @@ pub struct GalleryApp {
     pending_window: Option<WindowCommand>,
     /// Mirrors the native window's maximised state for the title-bar icon.
     pub window_maximized: bool,
+    /// The page's scrollbar, when the page is taller than the viewport.
+    scrollbar: Option<Scrollbar>,
+    /// The grab offset inside the scrollbar thumb, while it is dragged.
+    scroll_drag: Option<f32>,
 }
 
 impl Default for GalleryApp {
@@ -221,6 +275,8 @@ impl GalleryApp {
             effective_scale: 1.0,
             pending_window: None,
             window_maximized: false,
+            scrollbar: None,
+            scroll_drag: None,
         }
     }
 
@@ -320,10 +376,12 @@ impl GalleryApp {
             ..
         } = self;
         labels.set_raster_scale(scale);
-        // The shell always runs glyph phase 0: every quad is snapped to the
-        // physical grid, so a phase-specific raster would be sampled up to half
-        // a pixel away from the position it was generated for.
-        labels.set_snap_phases(true);
+        // The shell keeps the four sub-pixel phases: a glyph's raster is
+        // generated for the phase implied by its *absolute* position, and the
+        // quad is placed on the pixel grid around it. Forcing phase 0 would
+        // put every glyph up to a pixel away from where it belongs, which is
+        // what made the letter spacing jitter.
+        labels.set_snap_phases(false);
         let mut canvas = Canvas::new(
             scene,
             labels,
@@ -342,6 +400,7 @@ impl GalleryApp {
         draw_hud(&mut canvas, state, &layout, page_layout.cards.len());
         draw_search_overlay(&mut canvas, state, &layout);
         let output = canvas.finish();
+        let scrollbar = content_scrollbar(&layout, &page_layout);
         let scene_len = scene.primitives.len() as u32;
         let draw_calls = 4 + u32::from(!scene.clips.is_empty());
         let _ = output.glyph_count;
@@ -356,6 +415,7 @@ impl GalleryApp {
         self.semantics = output.semantics;
         self.layout = layout;
         self.page_layout = Some(page_layout);
+        self.scrollbar = scrollbar;
         self.nav_max_scroll = nav_max_scroll.max(0.0);
         self.last_revision = self.state.revision;
         self.last_hover = hover;
@@ -384,6 +444,15 @@ impl GalleryApp {
     pub fn pointer_move(&mut self, position: Vec2) {
         self.pointer = position;
         self.router.pointer_move(position);
+        if let Some(grab) = self.scroll_drag {
+            if let Some(bar) = self.scrollbar {
+                let scroll = bar.scroll_for(position.y - grab);
+                if (scroll - self.state.content_scroll).abs() > 0.01 {
+                    self.state.content_scroll = scroll;
+                    self.state.bump();
+                }
+            }
+        }
         if let Some(node) = self.router.pointer().pressed() {
             if self.dragging_range == Some(node) {
                 self.update_range(node, position);
@@ -452,6 +521,7 @@ impl GalleryApp {
                             | Target::WindowMinimize
                             | Target::WindowMaximize
                             | Target::WindowClose
+                            | Target::ContentScrollbar
                     ) {
                         continue;
                     }
@@ -587,11 +657,53 @@ impl GalleryApp {
                 self.state.show_hud = !self.state.show_hud;
                 self.state.bump();
             }
+            PlatformKey::Named(name)
+                if matches!(
+                    name.as_str(),
+                    "ArrowDown" | "ArrowUp" | "PageDown" | "PageUp" | "Home" | "End"
+                ) =>
+            {
+                self.scroll_page(name);
+            }
             PlatformKey::Character(text) if text.eq_ignore_ascii_case("t") => {
                 self.state.theme = self.state.theme.toggled();
                 self.state.bump();
             }
             _ => {}
+        }
+    }
+
+    /// Scroll the page with the keyboard.
+    ///
+    /// A wheel alone is not enough: the page has to be reachable without a
+    /// pointer, and `Home` / `End` are the conventional way to jump to the
+    /// top and the bottom.
+    fn scroll_page(&mut self, key: &str) {
+        let viewport = self.layout.content.size.y;
+        let step = match key {
+            "ArrowDown" => 40.0,
+            "ArrowUp" => -40.0,
+            "PageDown" => viewport * 0.8,
+            "PageUp" => -viewport * 0.8,
+            "Home" => f32::NEG_INFINITY,
+            "End" => f32::INFINITY,
+            _ => return,
+        };
+        let max = self.page_layout.as_ref().map_or(0.0, |page| {
+            (page.content_height - self.layout.content.size.y + 48.0).max(0.0)
+        });
+        let next = if step.is_infinite() {
+            if step > 0.0 {
+                max
+            } else {
+                0.0
+            }
+        } else {
+            (self.state.content_scroll + step).clamp(0.0, max)
+        };
+        if (next - self.state.content_scroll).abs() > 0.01 {
+            self.state.content_scroll = next;
+            self.state.bump();
         }
     }
 
@@ -625,8 +737,34 @@ impl GalleryApp {
         self.router.cursor()
     }
 
+    /// Start dragging the page's scrollbar thumb.
+    ///
+    /// A press on the thumb grabs it where it was; a press on the track
+    /// jumps the thumb to the pointer.
+    fn begin_scrollbar_drag(&mut self, position: Vec2) {
+        let Some(bar) = self.scrollbar else {
+            return;
+        };
+        let thumb_top = bar.thumb_top(self.state.content_scroll);
+        let grab = position.y - thumb_top;
+        self.scroll_drag = Some(grab);
+        if grab > bar.thumb_h {
+            // A press below the thumb centres it on the pointer instead.
+            let centred = position.y - bar.thumb_h * 0.5;
+            let scroll = bar.scroll_for(centred);
+            if (scroll - self.state.content_scroll).abs() > 0.01 {
+                self.state.content_scroll = scroll;
+                self.state.bump();
+            }
+            self.scroll_drag = Some(bar.thumb_h * 0.5);
+        }
+    }
+
     fn press_target(&mut self, target: Target, position: Vec2) {
         match target {
+            Target::ContentScrollbar => {
+                self.begin_scrollbar_drag(position);
+            }
             Target::NavPage(page) => {
                 self.navigate(PageId::from_index(page as usize));
             }
@@ -740,6 +878,9 @@ impl GalleryApp {
                 self.click_demo(page, card, part, position);
             }
             Target::Knob(..) | Target::KnobOption(..) => self.press_target(target, position),
+            Target::ContentScrollbar => {
+                // The scrollbar acts on the press, not on the release.
+            }
             Target::Code(page, card) => {
                 self.state
                     .toggle_code(PageId::from_index(page as usize), card);
@@ -922,6 +1063,7 @@ impl GalleryApp {
     }
 
     fn finish_drag(&mut self, position: Vec2) {
+        self.scroll_drag = None;
         if let Some(start) = self.state.demo.marquee.map(|(start, _)| start) {
             let marquee = Rect::from_points(start, position);
             for index in 0..12u16 {
@@ -1363,19 +1505,39 @@ fn compute_page(state: &GalleryState, layout: &ShellLayout) -> PageLayout {
         } else {
             0.0
         };
+        let inner = width - 32.0;
+        let knob_count = example.knobs.len();
+        // A narrow card stacks the options *below* the stage. Side by side,
+        // the options panel would take its fixed 188 px and squeeze the stage
+        // until the demo overflowed it — which is what happened at 200 % zoom.
+        let stacked = knob_count > 0 && inner < 520.0;
+        let stacked_knob_height = 96.0;
         let card_height = 76.0
             + example.stage_height
+            + if stacked {
+                6.0 + stacked_knob_height
+            } else {
+                0.0
+            }
             + 6.0
             + 30.0
             + if open { 4.0 + panel_height } else { 0.0 }
             + 10.0;
         let rect = Rect::new(x, y, width, card_height);
-        let inner = width - 32.0;
-        let knob_count = example.knobs.len();
         let (stage, knobs) = if knob_count == 0 {
             (
                 Rect::new(x + 16.0, y + 76.0, inner, example.stage_height),
                 Rect::new(x + 16.0, y + 76.0, 0.0, 0.0),
+            )
+        } else if stacked {
+            (
+                Rect::new(x + 16.0, y + 76.0, inner, example.stage_height),
+                Rect::new(
+                    x + 16.0,
+                    y + 76.0 + example.stage_height + 6.0,
+                    inner,
+                    stacked_knob_height,
+                ),
             )
         } else {
             let knob_width = (inner * 0.30).clamp(188.0, 318.0);
@@ -1391,6 +1553,14 @@ fn compute_page(state: &GalleryState, layout: &ShellLayout) -> PageLayout {
             )
         };
         let mut knob_rows = Vec::new();
+        // A stacked options panel is wide and short: its knobs sit side by
+        // side instead of in a column.
+        let stacked_columns = stacked && example.knobs.len() > 1;
+        let column_width = if stacked_columns {
+            (knobs.size.x / example.knobs.len() as f32).max(80.0)
+        } else {
+            knobs.size.x
+        };
         let mut row_y = knobs.origin.y + 34.0;
         for (knob_index, spec) in example.knobs.iter().enumerate() {
             let (height, control_height) = match spec {
@@ -1398,15 +1568,20 @@ fn compute_page(state: &GalleryState, layout: &ShellLayout) -> PageLayout {
                 KnobSpec::Slider { .. } => (58.0, 28.0),
                 KnobSpec::Segmented { .. } => (60.0, 28.0),
             };
+            let column_x = if stacked_columns {
+                knobs.origin.x + knob_index as f32 * column_width
+            } else {
+                knobs.origin.x
+            };
             // A slider and a segmented control carry their own label above the
             // interactive row. Toggles and checkboxes keep the label inside
             // the row (the whole row is the control), so they start at +6.
             let (label, control_y) = match spec {
                 KnobSpec::Slider { .. } | KnobSpec::Segmented { .. } => (
                     Some(Rect::new(
-                        knobs.origin.x + 10.0,
+                        column_x + 10.0,
                         row_y,
-                        (knobs.size.x - 20.0).max(40.0),
+                        (column_width - 20.0).max(40.0),
                         16.0,
                     )),
                     row_y + 20.0,
@@ -1414,25 +1589,34 @@ fn compute_page(state: &GalleryState, layout: &ShellLayout) -> PageLayout {
                 _ => (None, row_y + 6.0),
             };
             let control = Rect::new(
-                knobs.origin.x + 10.0,
+                column_x + 10.0,
                 control_y,
-                (knobs.size.x - 20.0).max(40.0),
+                (column_width - 20.0).max(40.0),
                 control_height,
             );
             knob_rows.push(KnobRow {
                 index: knob_index,
                 row: Rect::new(
-                    knobs.origin.x + 10.0,
+                    column_x + 10.0,
                     row_y,
-                    (knobs.size.x - 20.0).max(40.0),
+                    (column_width - 20.0).max(40.0),
                     height,
                 ),
                 label,
                 control,
             });
-            row_y += height;
+            if !stacked_columns {
+                row_y += height;
+            }
         }
-        let body_bottom = y + 76.0 + example.stage_height;
+        let body_bottom = y
+            + 76.0
+            + example.stage_height
+            + if stacked {
+                6.0 + stacked_knob_height
+            } else {
+                0.0
+            };
         let code_bar = Rect::new(x + 16.0, body_bottom + 6.0, inner, 30.0);
         let code_panel = if open {
             Some(Rect::new(
@@ -1519,14 +1703,19 @@ fn draw_top_bar(
         AlignX::Center,
         AlignY::Center,
     );
-    canvas.text(
-        "Unbound UI Gallery",
-        Rect::new(88.0, 12.0, 190.0, 32.0),
-        13.5,
-        palette.text,
-        AlignX::Start,
-        AlignY::Center,
-    );
+    // The title gives way before it can collide with the theme control: at
+    // 200 % zoom the logical viewport is barely 512 px wide, and a title
+    // that runs into the segmented control is worse than no title.
+    if layout.theme.origin.x > 292.0 {
+        canvas.text(
+            "Unbound UI Gallery",
+            Rect::new(88.0, 12.0, 190.0, 32.0),
+            13.5,
+            palette.text,
+            AlignX::Start,
+            AlignY::Center,
+        );
+    }
 
     if layout.wide {
         let info = state.active_page.info();
@@ -1639,7 +1828,7 @@ fn draw_top_bar(
     }
 
     // Zoom.
-    let labels: [&str; 4] = if layout.zoom.size.x > 120.0 {
+    let labels: [&str; 4] = if layout.zoom.size.x >= 170.0 {
         ["100%", "125%", "150%", "200%"]
     } else {
         ["1×", "1.25×", "1.5×", "2×"]
@@ -1910,14 +2099,17 @@ fn nav_item(
     let hover = canvas.visual(node, false);
     if selected {
         canvas.rect(rect, 8.0, palette.nav_selected, 0, 0.0, 0.0);
+        // The selection indicator lives *inside* the pill. Flush against the
+        // window edge it looked like a rendering artefact rather than part of
+        // the row.
         canvas.rect(
             Rect::new(
-                rect.origin.x - 10.0,
-                rect.origin.y + 7.0,
+                rect.origin.x + 4.0,
+                rect.origin.y + (rect.size.y - 16.0) * 0.5,
                 3.0,
-                rect.size.y - 14.0,
+                16.0,
             ),
-            2.0,
+            1.5,
             palette.primary,
             0,
             0.0,
@@ -1929,7 +2121,7 @@ fn nav_item(
     widgets::icon(
         canvas,
         icon,
-        Rect::new(rect.origin.x + 6.0, rect.origin.y, 20.0, rect.size.y),
+        Rect::new(rect.origin.x + 14.0, rect.origin.y, 20.0, rect.size.y),
         if selected {
             palette.primary
         } else {
@@ -1940,9 +2132,9 @@ fn nav_item(
     canvas.text(
         label,
         Rect::new(
-            rect.origin.x + 32.0,
+            rect.origin.x + 40.0,
             rect.origin.y,
-            rect.size.x - 38.0,
+            rect.size.x - 46.0,
             rect.size.y,
         ),
         12.0,
@@ -2094,30 +2286,32 @@ fn draw_page(
         draw_example(canvas, state, page, card);
     }
 
-    let max_scroll = (page.content_height - layout.content.size.y + 48.0).max(0.0);
-    if max_scroll > 1.0 {
-        let track = Rect::new(
-            layout.content.max().x - 7.0,
-            layout.content.origin.y + 8.0,
+    if let Some(bar) = content_scrollbar(layout, page) {
+        canvas.rect(bar.track, 1.5, palette.control_track, 0, 0.0, 0.0);
+        let thumb_h = bar.thumb_h;
+        let t = (state.content_scroll / bar.max_scroll).clamp(0.0, 1.0);
+        let thumb = Rect::new(
+            bar.track.origin.x,
+            bar.track.origin.y + (bar.track.size.y - thumb_h) * t,
             3.0,
-            layout.content.size.y - 16.0,
+            thumb_h,
         );
-        canvas.rect(track, 1.5, palette.control_track, 0, 0.0, 0.0);
-        let thumb_h =
-            (track.size.y * layout.content.size.y / page.content_height).clamp(28.0, track.size.y);
-        let t = (state.content_scroll / max_scroll).clamp(0.0, 1.0);
-        canvas.rect(
+        canvas.rect(thumb, 1.5, palette.primary, 0, 0.0, 0.0);
+        // The whole track is the control: the thumb can be dragged, and a
+        // click on the track jumps the thumb there.
+        canvas.control(
+            target::id(Target::ContentScrollbar),
             Rect::new(
-                track.origin.x,
-                track.origin.y + (track.size.y - thumb_h) * t,
-                3.0,
-                thumb_h,
+                bar.track.origin.x - 5.0,
+                bar.track.origin.y,
+                bar.track.size.x + 10.0,
+                bar.track.size.y,
             ),
-            1.5,
-            palette.primary,
-            0,
-            0.0,
-            0.0,
+            Role::ScrollBar,
+            "Scroll page",
+            CursorKind::Pointer,
+            false,
+            false,
         );
     }
     canvas.end_clip();

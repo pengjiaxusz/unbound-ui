@@ -149,18 +149,25 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
     );
 
     // Decorative ribbon curves.
+    //
+    // They live in the lower right corner: the copy occupies the left 58 %
+    // of the hero, and a ribbon that crosses the paragraph turns the text
+    // into a background pattern instead of a sentence.
     for index in 0..4 {
         let f = index as f32;
         ctx.canvas.curve(
             [
-                rect.origin.x + rect.size.x * 0.42,
-                rect.max().y - 26.0 - f * 9.0,
+                rect.origin.x + rect.size.x * 0.70,
+                rect.max().y - 12.0 - f * 7.0,
             ],
             [
-                rect.origin.x + rect.size.x * 0.72,
-                rect.origin.y + 18.0 + f * 22.0,
+                rect.origin.x + rect.size.x * 0.86,
+                rect.origin.y + rect.size.y * 0.55 + f * 14.0,
             ],
-            [rect.max().x - 12.0, rect.origin.y + 70.0 + f * 24.0],
+            [
+                rect.max().x + 14.0,
+                rect.origin.y + rect.size.y * 0.88 - f * 12.0,
+            ],
             2.0,
             palette.on_hero,
         );
@@ -208,7 +215,7 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
         ctx.part(1),
         primary,
         "Explore components",
-        ButtonVariant::Primary,
+        ButtonVariant::OnHero,
         true,
     );
     let secondary = Rect::new(primary.max().x + 10.0, cta_y, 154.0, 34.0);
@@ -217,7 +224,7 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
         ctx.part(2),
         secondary,
         "Open canvas studio",
-        ButtonVariant::Secondary,
+        ButtonVariant::OnHeroSecondary,
         true,
     );
     ctx.canvas.semantic(

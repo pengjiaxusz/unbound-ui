@@ -19,7 +19,7 @@ use unbound_gpu::{Camera, SceneUpload};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
 use unbound_input::HitRegion;
 use unbound_math::{Color, Rect, Vec2};
-use unbound_text::{GlyphCache, GlyphQuad, TextEngine, TextStyle};
+use unbound_text::{GlyphCache, GlyphQuad, ShapedText, TextEngine, TextStyle};
 
 use crate::button::{self, ButtonDesc, ButtonTokens, ButtonVisualState};
 
@@ -128,6 +128,8 @@ pub struct Palette {
     pub nav_text: u16,
     /// Navigation secondary text.
     pub nav_text_muted: u16,
+    /// The scrim behind a call-to-action on the hero surface.
+    pub hero_scrim: u16,
 }
 
 impl Palette {
@@ -232,6 +234,7 @@ const TOKEN_GRID_DOT: u16 = 44;
 const TOKEN_SECONDARY_SOFT: u16 = 45;
 const TOKEN_NAV_TEXT: u16 = 46;
 const TOKEN_NAV_TEXT_MUTED: u16 = 47;
+const TOKEN_HERO_SCRIM: u16 = 48;
 
 /// The tokens the gallery uses.
 ///
@@ -287,6 +290,7 @@ pub const fn palette() -> Palette {
         secondary_soft: TOKEN_SECONDARY_SOFT,
         nav_text: TOKEN_NAV_TEXT,
         nav_text_muted: TOKEN_NAV_TEXT_MUTED,
+        hero_scrim: TOKEN_HERO_SCRIM,
     }
 }
 
@@ -350,6 +354,7 @@ pub fn theme_table(dark: bool) -> Vec<[u16; 4]> {
         set(TOKEN_SECONDARY_SOFT, Color::from_srgb8(46, 37, 66, 255));
         set(TOKEN_NAV_TEXT, Color::from_srgb8(228, 233, 243, 255));
         set(TOKEN_NAV_TEXT_MUTED, Color::from_srgb8(138, 147, 166, 255));
+        set(TOKEN_HERO_SCRIM, Color::from_srgb8(8, 10, 16, 200));
     } else {
         set(TOKEN_SHADOW, Color::from_srgb8(20, 22, 30, 60));
         set(TOKEN_BACKGROUND, Color::from_srgb8(245, 246, 250, 255));
@@ -398,6 +403,7 @@ pub fn theme_table(dark: bool) -> Vec<[u16; 4]> {
         set(TOKEN_SECONDARY_SOFT, Color::from_srgb8(240, 234, 254, 255));
         set(TOKEN_NAV_TEXT, Color::from_srgb8(42, 47, 58, 255));
         set(TOKEN_NAV_TEXT_MUTED, Color::from_srgb8(122, 128, 144, 255));
+        set(TOKEN_HERO_SCRIM, Color::from_srgb8(15, 18, 28, 200));
     }
     colors
 }
@@ -565,6 +571,18 @@ impl Gallery {
             BlendMode::Normal,
             SubElement::Content as u16,
         );
+        // The control points live in the oriented box's *own* frame, so the
+        // box's rotation has to reach the vertex shader. Without it the curve
+        // is drawn unrotated, in the wrong place, and cut off at the edge of
+        // an axis-aligned box that was never rotated.
+        let transform_idx = if draw.transform == GpuTransform::IDENTITY {
+            0
+        } else {
+            let idx = self.transforms.len() as u32;
+            self.transforms.push(draw.transform);
+            idx
+        };
+        prim.transform_idx = transform_idx;
         self.payloads.push(draw.payload);
         self.primitives.push(prim);
     }
@@ -581,6 +599,37 @@ impl Gallery {
             camera: self.camera,
             key_prefix: (unbound_gpu::data::PassLayer::Ui as u64) << 56,
         }
+    }
+}
+
+/// The metrics of a laid-out run, in logical units.
+///
+/// The vertical metrics come from the **font**, not from the run's ink. Two
+/// runs of the same size have to share a baseline — otherwise a row of
+/// buttons shows `"Comfortable"` a couple of pixels lower than `"Compact"`,
+/// because the second string has no descender and the first one has an
+/// ascender.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct TextMetrics {
+    /// The advance width of the widest line.
+    pub width: f32,
+    /// The height of the whole text block.
+    pub height: f32,
+    /// The distance from the top of the line box to the baseline.
+    pub ascent: f32,
+    /// The distance from the baseline to the bottom of the line box.
+    pub descent: f32,
+    /// The baseline of the first line, relative to the top of the line box.
+    pub first_baseline: f32,
+    /// How many lines the run occupies.
+    pub line_count: u32,
+}
+
+impl TextMetrics {
+    /// The height of one line box.
+    #[must_use]
+    pub fn line_height(&self) -> f32 {
+        self.ascent + self.descent
     }
 }
 
@@ -636,6 +685,29 @@ impl Labels {
         self.raster_scale
     }
 
+    /// The origin that centres a run inside `rect`.
+    ///
+    /// The vertical centring uses the font's ascent and descent rather than
+    /// the run's ink box, so every label of the same size lands on the same
+    /// baseline. The horizontal centring uses the advance width, which is
+    /// what the font itself considers the run's width.
+    #[must_use]
+    pub fn center_in_rect(metrics: &TextMetrics, rect: Rect) -> Vec2 {
+        let x = rect.origin.x + (rect.size.x - metrics.width) * 0.5;
+        // The optical middle of the line box: the baseline sits half a line
+        // box above the centre of the box.
+        let middle = (metrics.ascent - metrics.descent) * 0.5;
+        let target_baseline = rect.origin.y + rect.size.y * 0.5 + middle;
+        Vec2::new(x, target_baseline - metrics.first_baseline)
+    }
+
+    /// The metrics of a run at `size`, in logical units.
+    pub fn metrics(&mut self, text: &str, size: f32) -> TextMetrics {
+        let scale = self.raster_scale;
+        let shaped = self.engine.shape(text, &TextStyle::sized(size * scale));
+        metrics_of(&shaped, scale)
+    }
+
     /// Rasterise every glyph a dynamic label can produce before it is shown.
     ///
     /// The atlas is uploaded once at startup. If clicking the button changed
@@ -658,20 +730,37 @@ impl Labels {
 
     /// Lay out a label and return its glyph quads.
     ///
-    /// `origin` is the *top-left* of the text block in screen space. The
-    /// glyph quads come back in baseline-relative coordinates (a glyph's
-    /// rectangle hangs above its baseline), so the whole run is shifted down
-    /// by the line's ascent to put the first line's top at `origin`.
+    /// `origin` is the top-left of the text's **line box** in logical units:
+    /// the baseline of the first line sits at `origin.y + ascent` and the
+    /// glyphs hang above it.
+    ///
+    /// The run is deliberately *not* aligned by its ink. Aligning by the ink
+    /// box moves every string to a different baseline, because the ink top
+    /// depends on the string's own tallest glyph — and that is what made the
+    /// labels of a row of buttons sit at slightly different heights.
+    ///
+    /// The origin is passed to the glyph cache *before* the quads are
+    /// produced, so the sub-pixel phase of every glyph is derived from its
+    /// real position on screen. A phase derived from a run-relative position
+    /// would shift each glyph by up to a pixel.
     pub fn layout(&mut self, text: &str, origin: Vec2, size: f32) -> Vec<GlyphQuad> {
+        self.layout_measured(text, origin, size).0
+    }
+
+    /// Lay out a label and report its metrics.
+    pub fn layout_measured(
+        &mut self,
+        text: &str,
+        origin: Vec2,
+        size: f32,
+    ) -> (Vec<GlyphQuad>, TextMetrics) {
         let scale = self.raster_scale;
         let style = TextStyle::sized(size * scale);
         let shaped = self.engine.shape(text, &style);
+        let metrics = metrics_of(&shaped, scale);
         let mut quads = self
             .cache
-            .quads_for(&mut self.engine, &shaped, Vec2::ZERO, 400, false);
-        if quads.is_empty() {
-            return quads;
-        }
+            .quads_for(&mut self.engine, &shaped, origin * scale, 400, false);
         if (scale - 1.0).abs() > 1e-6 {
             for quad in &mut quads {
                 quad.rect.origin.x /= scale;
@@ -680,21 +769,7 @@ impl Labels {
                 quad.rect.size.y /= scale;
             }
         }
-        // The ascent is the distance from the baseline to the top of the
-        // tallest glyph; the glyph rectangles extend that far upwards.
-        let top = quads
-            .iter()
-            .map(|q| q.rect.origin.y)
-            .fold(f32::INFINITY, f32::min);
-        let left = quads
-            .iter()
-            .map(|q| q.rect.origin.x)
-            .fold(f32::INFINITY, f32::min);
-        for quad in &mut quads {
-            quad.rect.origin.x += origin.x - left;
-            quad.rect.origin.y += origin.y - top;
-        }
-        quads
+        (quads, metrics)
     }
 
     /// Measure a single-line run without emitting glyphs.
@@ -717,18 +792,33 @@ impl Labels {
     ) -> Vec<GlyphQuad> {
         let scale = self.raster_scale;
         let style = TextStyle::sized(size * scale);
-        let wrapped = self.engine.wrap(text, &style, (max_width * scale).max(1.0));
-        let mut out = Vec::new();
-        for (line, info) in wrapped.lines.iter().enumerate() {
-            let start = (info.start as usize).min(text.len());
-            let end = (info.end as usize).min(text.len());
-            if start >= end {
-                continue;
+        let shaped = self
+            .engine
+            .shape_wrapped(text, &style, (max_width * scale).max(1.0));
+        let mut quads = self
+            .cache
+            .quads_for(&mut self.engine, &shaped, origin * scale, 400, false);
+        if (scale - 1.0).abs() > 1e-6 {
+            for quad in &mut quads {
+                quad.rect.origin.x /= scale;
+                quad.rect.origin.y /= scale;
+                quad.rect.size.x /= scale;
+                quad.rect.size.y /= scale;
             }
-            let y = origin.y + line as f32 * wrapped.line_height / scale;
-            out.extend(self.layout(&text[start..end], Vec2::new(origin.x, y), size));
         }
-        out
+        quads
+    }
+}
+
+/// The logical metrics of a shaped run.
+fn metrics_of(shaped: &ShapedText, scale: f32) -> TextMetrics {
+    TextMetrics {
+        width: shaped.width / scale,
+        height: shaped.height / scale,
+        ascent: shaped.ascent / scale,
+        descent: shaped.descent / scale,
+        first_baseline: shaped.first_baseline / scale,
+        line_count: shaped.line_count,
     }
 }
 

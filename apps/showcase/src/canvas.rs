@@ -372,6 +372,11 @@ impl<'a> Canvas<'a> {
     }
 
     /// Paint a single-line label inside `rect`.
+    ///
+    /// The vertical placement follows the **baseline**, not the run's ink
+    /// box: two labels of the same size have to share a baseline, otherwise a
+    /// row of buttons shows `"Light"` a couple of pixels higher than
+    /// `"Dark"` — the ink box depends on the string's own tallest glyph.
     #[allow(clippy::too_many_arguments)]
     pub fn text(
         &mut self,
@@ -382,57 +387,52 @@ impl<'a> Canvas<'a> {
         align_x: AlignX,
         align_y: AlignY,
     ) -> Rect {
-        let mut quads = self.labels.layout(text, Vec2::ZERO, size);
-        let ink = quads_bounds(&quads).unwrap_or(Rect::new(0.0, 0.0, 0.0, size));
+        let metrics = self.labels.metrics(text, size);
         let x = match align_x {
             AlignX::Start => rect.origin.x,
-            AlignX::Center => rect.origin.x + (rect.size.x - ink.size.x) * 0.5,
-            AlignX::End => rect.max().x - ink.size.x,
+            AlignX::Center => rect.origin.x + (rect.size.x - metrics.width) * 0.5,
+            AlignX::End => rect.max().x - metrics.width,
         };
+        // The line box is what gets aligned: its top is the top of the box,
+        // its bottom the bottom of the box, and its middle the middle.
         let y = match align_y {
             AlignY::Top => rect.origin.y,
-            AlignY::Center => rect.origin.y + (rect.size.y - ink.size.y) * 0.5,
-            AlignY::Bottom => rect.max().y - ink.size.y,
+            AlignY::Center => rect.origin.y + (rect.size.y - metrics.line_height()) * 0.5,
+            AlignY::Bottom => rect.max().y - metrics.line_height(),
         };
         // Snap the run origin, not every glyph: the pen advances are integral
         // at phase 0, so one snapped origin keeps the whole line on the grid
         // without changing letter spacing.
         let x = self.snap_value(x);
         let y = self.snap_value(y);
-        let dx = x - ink.origin.x;
-        let dy = y - ink.origin.y;
+        let quads = self.labels.layout(text, Vec2::new(x, y), size);
+        let ink = quads_bounds(&quads).unwrap_or(Rect::new(x, y, metrics.width, size));
         let z = self.next_z();
         let start = self.scene.primitives.len();
-        for quad in &mut quads {
-            quad.rect.origin.x += dx;
-            quad.rect.origin.y += dy;
+        for quad in &quads {
             self.scene.glyph(quad, color, z);
         }
         self.glyphs_emitted += quads.len();
         self.apply_clip(start);
-        Rect::new(x, y, ink.size.x, ink.size.y)
+        ink
     }
 
     /// Paint a wrapped paragraph inside `rect`.
     pub fn text_wrapped(&mut self, text: &str, rect: Rect, size: f32, color: u16) -> Rect {
-        let mut quads = self
-            .labels
-            .layout_wrapped(text, Vec2::ZERO, size, rect.size.x.max(1.0));
-        let ink = quads_bounds(&quads).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
         let x = self.snap_value(rect.origin.x);
         let y = self.snap_value(rect.origin.y);
-        let dx = x - ink.origin.x;
-        let dy = y - ink.origin.y;
+        let quads = self
+            .labels
+            .layout_wrapped(text, Vec2::new(x, y), size, rect.size.x.max(1.0));
+        let ink = quads_bounds(&quads).unwrap_or(Rect::new(x, y, 0.0, 0.0));
         let z = self.next_z();
         let start = self.scene.primitives.len();
-        for quad in &mut quads {
-            quad.rect.origin.x += dx;
-            quad.rect.origin.y += dy;
+        for quad in &quads {
             self.scene.glyph(quad, color, z);
         }
         self.glyphs_emitted += quads.len();
         self.apply_clip(start);
-        Rect::new(x, y, ink.size.x, ink.size.y)
+        ink
     }
 
     /// Paint glyphs that were laid out elsewhere in scene space.
