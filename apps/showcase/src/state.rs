@@ -4,7 +4,7 @@
 //! live here. Pages are pure functions of this state, which is what makes the
 //! whole shell testable without a window.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use unbound_anim::{Spring, SpringPreset};
 use unbound_math::Vec2;
@@ -44,6 +44,20 @@ impl ThemeMode {
 
 /// One selectable UI scale step.
 pub const ZOOM_STEPS: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
+
+/// How many recent frames the telemetry chart keeps.
+pub const FRAME_HISTORY_CAP: usize = 96;
+
+/// One recorded frame, fed to the telemetry chart's rolling window.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameSample {
+    /// The frame time in milliseconds.
+    pub ms: f32,
+    /// The bytes uploaded this frame.
+    pub upload: f32,
+    /// The draw calls issued this frame.
+    pub draws: f32,
+}
 
 /// Runtime state that is not derived from an example definition.
 #[derive(Debug)]
@@ -91,6 +105,8 @@ pub struct DemoState {
     pub progress_bar: ProgressState,
     /// The progress demo's eased ring display.
     pub progress_ring: ProgressState,
+    /// The rolling window of recent frames feeding the telemetry chart.
+    pub frame_history: VecDeque<FrameSample>,
 }
 
 impl Default for DemoState {
@@ -137,6 +153,7 @@ impl Default for DemoState {
             selected_icon: 0,
             progress_bar: ProgressState::new(),
             progress_ring: ProgressState::new(),
+            frame_history: VecDeque::new(),
         }
     }
 }
@@ -340,6 +357,16 @@ impl GalleryState {
     /// Advance time-driven demos. Returns `true` while something moved.
     pub fn tick(&mut self, dt: f32) -> bool {
         self.demo.elapsed = (self.demo.elapsed + dt).rem_euclid(3600.0);
+        // Record the live frame stats so the telemetry chart plots real
+        // measurements instead of a synthesised curve.
+        self.demo.frame_history.push_back(FrameSample {
+            ms: self.demo.frame_ms,
+            upload: self.demo.upload_bytes as f32,
+            draws: self.demo.draw_calls as f32,
+        });
+        if self.demo.frame_history.len() > FRAME_HISTORY_CAP {
+            self.demo.frame_history.pop_front();
+        }
         // The progress demo eases its bar and ring toward the clock-driven
         // target through the real `ProgressState`, so a value jump reads as
         // movement. Pausing freezes both the target and the indeterminate sweep.

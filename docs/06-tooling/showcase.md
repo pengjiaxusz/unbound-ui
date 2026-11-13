@@ -66,6 +66,11 @@
 `theme`、`zoom_step`、`pixel_snap`、`show_hud`、滚动位置、Knob 值、展开的代码
 面板与全部演示状态。页面是这份状态的**纯函数**。
 
+演示状态里的 `frame_history` 是一个滚动窗口（`FRAME_HISTORY_CAP` 帧），由
+`tick` 每帧压入真实的 `frame_ms` / `upload_bytes` / `draw_calls`。Telemetry 的
+帧率图因此不再是手绘正弦曲线，而是把这份实测缓冲交给
+`unbound-widgets::chart::emit_chart` 绘制——与组件画廊用的是同一个图表发射器。
+
 `GalleryRuntime` 把 `GalleryApp` 适配成 `unbound_app::Application`，窗口壳层只
 通过 `AppRuntime<GalleryRuntime>` 驱动，不再自己维护事件解析与帧差分：
 

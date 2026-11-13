@@ -2,10 +2,14 @@
 
 use accesskit::Role;
 use unbound_anim::CubicBezier;
-use unbound_math::Rect;
+use unbound_math::{Rect, Vec2};
+use unbound_theme::Token;
+use unbound_widgets::chart::{emit_chart, ChartDesc, ChartSeries, ChartState};
+use unbound_widgets::WidgetCatalogId;
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageInfo};
 use crate::canvas::{AlignX, AlignY};
+use crate::state::{FrameSample, FRAME_HISTORY_CAP};
 use crate::widgets::{self, ButtonVariant, Icon};
 
 pub const SPRINGS_INFO: PageInfo = PageInfo {
@@ -125,10 +129,11 @@ kpi.record(FrameSample::new(stats, frame_ms));"#,
     .with_height(270.0),
     ExampleDef::new(
         "Frame graph",
-        "A rolling frame-time chart with a 16.7 ms budget line. Spikes are rendered with the same curve primitive as the hero banner.",
-        &["unbound-kpi", "unbound-platform/src/pacing.rs"],
-        r#"history.push(frame_ms);
-graph.line(history.window(seconds), Token::PRIMARY, 2.0);"#,
+        "A rolling frame-time chart with a 16.7 ms budget line. The series is the real frame buffer, plotted by the same chart emitter as the component gallery.",
+        &["unbound-widgets", "unbound-kpi"],
+        r#"let series = ChartSeries::line(history.points(), Token::PRIMARY);
+let desc = ChartDesc::new(rect).with_series(vec![series]);
+emit_chart(node, &desc, &ChartState::new(), &[], control);"#,
         "A chart described as an image with its current, minimum and p95 frame time.",
         &[
             KnobSpec::segmented("Metric", &["Frame", "Uploads", "Draw calls"], 0),
@@ -720,12 +725,46 @@ fn frame_graph(ctx: &mut DemoCtx<'_, '_>) {
     let metric = ctx.knob(0) as usize;
     let budget = ctx.knob_on(1);
     let plot = rect.inflate(-8.0);
+
+    // The series is the real rolling frame buffer, not a synthesised curve.
+    let value = |sample: &FrameSample| match metric {
+        1 => sample.upload,
+        2 => sample.draws,
+        _ => sample.ms,
+    };
+    let points: Vec<Vec2> = ctx
+        .state
+        .demo
+        .frame_history
+        .iter()
+        .enumerate()
+        .map(|(index, sample)| Vec2::new(index as f32, value(sample)))
+        .collect();
+    // Frame time keeps a fixed two-budget ceiling so the 16.7 ms reference
+    // sits mid-plot; the other metrics scale to their own observed peak.
+    let y_max = match metric {
+        0 => 33.4,
+        _ => points.iter().map(|point| point.y).fold(1.0, f32::max) * 1.25,
+    };
+    let mut desc =
+        ChartDesc::new(plot).with_series(vec![ChartSeries::line(points, Token::PRIMARY)]);
+    desc.x_range = (0.0, (FRAME_HISTORY_CAP - 1) as f32);
+    desc.y_range = (0.0, y_max);
+
+    let node = ctx.part(1);
+    let control = ctx.canvas.control_state(node, false, false);
+    let output = emit_chart(node, &desc, &ChartState::new(), &[], control);
     ctx.canvas
-        .rect(plot, 8.0, palette.stage_bg, palette.card_border, 1.0, 0.0);
-    if budget {
-        let y = plot.origin.y + plot.size.y * 0.38;
+        .widget_output(WidgetCatalogId::Chart, node, &output.output);
+
+    // The budget reference and metric caption are annotations the chart
+    // emitter does not model; the reference uses the chart's own mapping so
+    // it can never disagree with the plotted data.
+    let inner = desc.plot_rect();
+    if budget && metric == 0 {
+        let y = desc.map_point(Vec2::new(0.0, 16.7)).y;
         ctx.canvas.rect(
-            Rect::new(plot.origin.x + 8.0, y, plot.size.x - 16.0, 1.0),
+            Rect::new(inner.origin.x, y, inner.size.x, 1.0),
             0.0,
             palette.warning,
             0,
@@ -734,32 +773,12 @@ fn frame_graph(ctx: &mut DemoCtx<'_, '_>) {
         );
         ctx.canvas.text(
             "16.7 ms",
-            Rect::new(plot.max().x - 64.0, y - 14.0, 56.0, 12.0),
+            Rect::new(inner.max().x - 56.0, y - 14.0, 56.0, 12.0),
             9.5,
             palette.warning,
             AlignX::End,
             AlignY::Top,
         );
-    }
-    let mut previous = [plot.origin.x + 8.0, plot.origin.y + plot.size.y * 0.6];
-    let count = 48;
-    for index in 1..=count {
-        let phase = index as f32 / count as f32;
-        let noise = match metric {
-            1 => ((phase * 13.0 + ctx.state.demo.elapsed).sin() * 0.5 + 0.5) * 0.24,
-            2 => ((phase * 21.0 + ctx.state.demo.elapsed * 0.7).cos() * 0.5 + 0.5) * 0.18,
-            _ => {
-                let base = 0.22 + phase * 0.12;
-                let wobble = (phase * 17.0 + ctx.state.demo.elapsed * 2.0).sin() * 0.05;
-                (base + wobble).clamp(0.05, 0.9)
-            }
-        };
-        let x = plot.origin.x + 8.0 + (plot.size.x - 16.0) * phase;
-        let y = plot.origin.y + 12.0 + (plot.size.y - 40.0) * (1.0 - noise);
-        let point = [x, y];
-        ctx.canvas
-            .curve(previous, previous, point, 1.6, palette.primary);
-        previous = point;
     }
     ctx.canvas.text(
         match metric {
