@@ -311,6 +311,18 @@ pub struct AlertDialogOutput {
     pub layout: AlertDialogLayout,
 }
 
+/// Deterministic sub-node id for the alert dialog Cancel button.
+#[must_use]
+pub const fn alert_cancel_node(node: u64) -> u64 {
+    node ^ (1 << 62)
+}
+
+/// Deterministic sub-node id for the alert dialog Confirm button.
+#[must_use]
+pub const fn alert_confirm_node(node: u64) -> u64 {
+    node ^ (1 << 61)
+}
+
 /// Emit a confirmation dialog.
 #[must_use]
 pub fn emit_alert_dialog(
@@ -411,32 +423,50 @@ pub fn emit_alert_dialog(
 
     let card_hit = HitRegion::new(node, MODAL_LAYER, u32::from(desc.z), desc.rect);
     let scrim = HitRegion::new(node ^ (1 << 63), PORTAL_LAYER, 0, viewport);
+    let cancel_key = alert_cancel_node(node);
+    let confirm_key = alert_confirm_node(node);
     let actions = [
         HitRegion::new(
-            node ^ (1 << 62),
+            cancel_key,
             MODAL_LAYER,
-            u32::from(desc.z),
+            u32::from(desc.z) + 1,
             layout.cancel,
         )
         .with_cursor(CursorKind::Pointer),
         HitRegion::new(
-            node ^ (1 << 61),
+            confirm_key,
             MODAL_LAYER,
-            u32::from(desc.z),
+            u32::from(desc.z) + 1,
             layout.confirm,
         )
         .with_cursor(CursorKind::Pointer),
     ];
 
+    let mut output = WidgetOutput {
+        primitives,
+        payloads,
+        hit: Some(card_hit),
+        a11y: Some(a11y),
+        focusable: false,
+        ..Default::default()
+    };
+    if !control.disabled {
+        output.with_sub_control(
+            cancel_key,
+            actions[0].clone(),
+            A11yNode::new(Role::Button, desc.cancel_label.clone(), layout.cancel).clickable(),
+            true,
+        );
+        output.with_sub_control(
+            confirm_key,
+            actions[1].clone(),
+            A11yNode::new(Role::Button, desc.confirm_label.clone(), layout.confirm).clickable(),
+            true,
+        );
+    }
+
     AlertDialogOutput {
-        output: WidgetOutput {
-            primitives,
-            payloads,
-            hit: Some(card_hit),
-            a11y: Some(a11y),
-            focusable: false,
-            ..Default::default()
-        },
+        output,
         scrim,
         actions,
         entry: OverlayEntry::modal(node, desc.rect, Vec::new()),

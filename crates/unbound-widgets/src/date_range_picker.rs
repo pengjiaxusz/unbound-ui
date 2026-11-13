@@ -79,6 +79,18 @@ impl DateRangePickerDesc {
     }
 }
 
+/// Deterministic sub-node id for a date range preset pill (`0..3`).
+#[must_use]
+pub const fn date_range_preset_node(node: u64, index: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x600 + index as u64)
+}
+
+/// Deterministic sub-node id for a date range month panel (`0..2`).
+#[must_use]
+pub const fn date_range_panel_node(node: u64, panel: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x610 + panel as u64)
+}
+
 /// Emit a stable-shape dual-panel date range picker (1 bg + 2 month panels + 3 preset pills + 1 range highlight + 1 focus ring = 8 primitives).
 #[must_use]
 pub fn emit_date_range_picker(
@@ -193,12 +205,49 @@ pub fn emit_date_range_picker(
     });
     let a11y = A11yNode::new(Role::Group, desc.label.clone(), desc.rect).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        for i in 0..3 {
+            let r = Rect::new(
+                desc.rect.origin.x + pad + i as f32 * (preset_w + pad),
+                desc.rect.origin.y + pad,
+                preset_w,
+                preset_h,
+            );
+            let key = date_range_preset_node(node, i);
+            out.with_sub_control(
+                key,
+                HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::Button, format!("Preset {}", i + 1), r).clickable(),
+                true,
+            );
+        }
+        for m in 0..2 {
+            let r = Rect::new(
+                desc.rect.origin.x + pad + m as f32 * (panel_w + pad),
+                panel_y,
+                panel_w,
+                panel_h,
+            );
+            let key = date_range_panel_node(node, m);
+            out.with_sub_control(
+                key,
+                HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::Group, format!("Month Panel {}", m + 1), r).clickable(),
+                false,
+            );
+        }
     }
+
+    out
 }

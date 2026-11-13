@@ -94,6 +94,12 @@ impl StepperDesc {
     }
 }
 
+/// Deterministic sub-node id for a stepper step node (`0..5`).
+#[must_use]
+pub const fn stepper_step_node(node: u64, index: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xD00 + index as u64)
+}
+
 /// Emit a stable-shape stepper (1 bg + 4 connectors + 5 step nodes + 1 focus ring = 11 primitives).
 #[must_use]
 pub fn emit_stepper(
@@ -235,12 +241,29 @@ pub fn emit_stepper(
     });
     let a11y = A11yNode::new(Role::List, desc.label.clone(), desc.rect).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        for (i, step) in desc.steps.iter().take(MAX_STEP_SLOTS).enumerate() {
+            let (cx, cy) = step_center(i.min(count - 1));
+            let r = Rect::new(cx - badge_sz * 0.5, cy - badge_sz * 0.5, badge_sz, badge_sz);
+            let key = stepper_step_node(node, i);
+            out.with_sub_control(
+                key,
+                HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 2, r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::Button, step.title.clone(), r).clickable(),
+                true,
+            );
+        }
     }
+
+    out
 }

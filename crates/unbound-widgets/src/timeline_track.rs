@@ -74,6 +74,18 @@ impl TimelineTrackDesc {
     }
 }
 
+/// Deterministic sub-node id for a timeline keyframe marker (`0..6`).
+#[must_use]
+pub const fn timeline_keyframe_node(node: u64, index: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xF00 + index as u64)
+}
+
+/// Deterministic sub-node id for the timeline playhead scrubber handle.
+#[must_use]
+pub const fn timeline_playhead_node(node: u64) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xF10
+}
+
 /// Emit a stable-shape dope sheet (1 bg + 3 track lanes + 6 keyframe diamonds + 1 playhead + 1 focus ring = 12 primitives).
 #[must_use]
 pub fn emit_timeline_track(
@@ -183,12 +195,46 @@ pub fn emit_timeline_track(
     });
     let a11y = A11yNode::new(Role::Slider, desc.label.clone(), desc.rect).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        for (k, f) in desc.keyframes.iter().take(MAX_KEYFRAMES).enumerate() {
+            let track = f.track.min(MAX_TRACKS - 1);
+            let norm_t = (f.time / desc.duration).clamp(0.0, 1.0);
+            let kx = desc.rect.origin.x + pad + norm_t * (lane_w - 8.0);
+            let ky = desc.rect.origin.y + pad + track as f32 * (lane_h + pad) + (lane_h - 8.0) * 0.5;
+            let kf_r = Rect::new(kx - 2.0, ky - 2.0, 12.0, 12.0);
+            let key = timeline_keyframe_node(node, k);
+            out.with_sub_control(
+                key,
+                HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 2, kf_r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::Button, format!("Keyframe {}", k + 1), kf_r).clickable(),
+                true,
+            );
+        }
+        let ph_r = Rect::new(
+            ph_x - 4.0,
+            desc.rect.origin.y + 2.0,
+            10.0,
+            (desc.rect.height() - 4.0).max(8.0),
+        );
+        let ph_key = timeline_playhead_node(node);
+        out.with_sub_control(
+            ph_key,
+            HitRegion::new(ph_key, CONTROL_LAYER, u32::from(desc.z) + 3, ph_r)
+                .with_cursor(CursorKind::ResizeEastWest),
+            A11yNode::new(Role::Slider, "Playhead", ph_r).clickable(),
+            true,
+        );
     }
+
+    out
 }

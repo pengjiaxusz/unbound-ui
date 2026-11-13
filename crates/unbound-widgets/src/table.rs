@@ -590,7 +590,7 @@ pub fn emit_table(
     a11y.description = format!("{} 行 × {} 列", rows.len(), desc.columns.len());
     a11y.disabled = control.disabled;
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit: Some(
@@ -601,7 +601,73 @@ pub fn emit_table(
         a11y: Some(a11y),
         focusable: !control.disabled,
         ..Default::default()
+    };
+
+    if !control.disabled {
+        let mut col_x = desc.rect.origin.x;
+        let header_y = desc.rect.origin.y;
+        let header_h = desc.header_height;
+        for (col_idx, col) in desc.columns.iter().enumerate() {
+            let w = col.width;
+            let header_r = Rect::new(col_x, header_y, (w - 4.0).max(4.0), header_h);
+            let h_key = column_header_node(node, col_idx);
+            out.with_sub_control(
+                h_key,
+                HitRegion::new(h_key, CONTROL_LAYER, u32::from(desc.z) + 2, header_r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::ColumnHeader, col.title.clone(), header_r).clickable(),
+                false,
+            );
+            let resize_r = Rect::new(col_x + w - 4.0, header_y, 8.0, header_h);
+            let r_key = column_resize_node(node, col_idx);
+            out.with_sub_control(
+                r_key,
+                HitRegion::new(r_key, CONTROL_LAYER, u32::from(desc.z) + 3, resize_r)
+                    .with_cursor(CursorKind::ResizeEastWest),
+                A11yNode::new(Role::Splitter, format!("Resize {}", col.title), resize_r),
+                false,
+            );
+            col_x += w;
+        }
+        for row in rows {
+            let rect = desc.row_rect(row.index, state.offset());
+            if rect.origin.y + rect.size.y <= desc.body_rect().origin.y
+                || rect.origin.y >= desc.body_rect().max().y
+            {
+                continue;
+            }
+            let row_key = table_row_node(node, row.index);
+            let mut row_a11y = A11yNode::new(Role::Row, format!("Row {}", row.index + 1), rect).clickable();
+            row_a11y.selected = state.is_selected(row.index);
+            out.with_sub_control(
+                row_key,
+                HitRegion::new(row_key, CONTROL_LAYER, u32::from(desc.z) + 1, rect)
+                    .with_cursor(CursorKind::Pointer),
+                row_a11y,
+                false,
+            );
+        }
     }
+
+    out
+}
+
+/// Deterministic child node key for column header `col`.
+#[must_use]
+pub const fn column_header_node(base: u64, col: usize) -> u64 {
+    base ^ (0x5442_4800_u64 | (col as u64 + 1))
+}
+
+/// Deterministic child node key for column resize handle `col`.
+#[must_use]
+pub const fn column_resize_node(base: u64, col: usize) -> u64 {
+    base ^ (0x5442_5200_u64 | (col as u64 + 1))
+}
+
+/// Deterministic child node key for row `index`.
+#[must_use]
+pub const fn table_row_node(base: u64, index: usize) -> u64 {
+    base ^ (0x5442_5700_u64 | (index as u64 + 1))
 }
 
 /// A solid line primitive.

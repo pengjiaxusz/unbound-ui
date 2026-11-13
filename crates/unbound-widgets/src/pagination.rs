@@ -90,6 +90,24 @@ impl PaginationDesc {
     }
 }
 
+/// Deterministic sub-node id for the Previous Page button.
+#[must_use]
+pub const fn pagination_prev_node(node: u64) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x200
+}
+
+/// Deterministic sub-node id for the Next Page button.
+#[must_use]
+pub const fn pagination_next_node(node: u64) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x201
+}
+
+/// Deterministic sub-node id for a specific 1-based page button.
+#[must_use]
+pub const fn pagination_page_node(node: u64, page: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x300 + page as u64)
+}
+
 /// Interactive state for pagination navigation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PaginationState {
@@ -226,14 +244,54 @@ pub fn emit_pagination(
     });
     let a11y = A11yNode::new(Role::Group, desc.label.clone(), desc.rect).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        for idx in 0..total_slots {
+            let x = desc.rect.origin.x + pad + idx as f32 * (slot_w + gap);
+            let r = Rect::new(x, desc.rect.origin.y + pad, slot_w, slot_h);
+            if idx == 0 {
+                let key = pagination_prev_node(node);
+                out.with_sub_control(
+                    key,
+                    HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, r)
+                        .with_cursor(CursorKind::Pointer),
+                    A11yNode::new(Role::Button, "Previous Page", r).clickable(),
+                    true,
+                );
+            } else if idx == total_slots - 1 {
+                let key = pagination_next_node(node);
+                out.with_sub_control(
+                    key,
+                    HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, r)
+                        .with_cursor(CursorKind::Pointer),
+                    A11yNode::new(Role::Button, "Next Page", r).clickable(),
+                    true,
+                );
+            } else if let Some(page) = slots[idx - 1] {
+                let is_vis = idx - 1 < desc.total_pages || desc.total_pages > MAX_PAGE_SLOTS;
+                if is_vis {
+                    let key = pagination_page_node(node, page);
+                    out.with_sub_control(
+                        key,
+                        HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, r)
+                            .with_cursor(CursorKind::Pointer),
+                        A11yNode::new(Role::Button, format!("Page {page}"), r).clickable(),
+                        true,
+                    );
+                }
+            }
+        }
     }
+
+    out
 }
 
 #[cfg(test)]

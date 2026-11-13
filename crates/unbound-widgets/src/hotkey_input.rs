@@ -22,6 +22,39 @@ pub struct HotkeyInputState {
     pub conflict: bool,
 }
 
+/// Deterministic sub-node id for the hotkey clear/record indicator button.
+#[must_use]
+pub const fn hotkey_clear_node(node: u64) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x900
+}
+
+impl HotkeyInputState {
+    /// Start listening for a key chord.
+    pub fn start_recording(&mut self) {
+        self.recording = true;
+        self.conflict = false;
+    }
+
+    /// Clear the bound shortcut and stop recording.
+    pub fn clear(&mut self) {
+        self.chord = None;
+        self.recording = false;
+        self.conflict = false;
+    }
+
+    /// Capture `chord` if `recording` is true, checking `existing_bindings` for conflicts.
+    /// Returns `true` if the chord was accepted without conflict.
+    pub fn handle_key(&mut self, chord: KeyChord, existing_bindings: &[KeyChord]) -> bool {
+        if !self.recording {
+            return false;
+        }
+        self.conflict = existing_bindings.contains(&chord);
+        self.chord = Some(chord);
+        self.recording = false;
+        !self.conflict
+    }
+}
+
 /// Descriptor for a [`HotkeyInput`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct HotkeyInputDesc {
@@ -91,6 +124,26 @@ pub fn emit_hotkey_input(
         desc.z,
     ));
 
+    let capsule_r = Rect::new(
+        desc.rect.origin.x + 6.0,
+        desc.rect.origin.y + 4.0,
+        (desc.rect.width() - 32.0).max(16.0),
+        (desc.rect.height() - 8.0).max(12.0),
+    );
+    primitives.push(outlined(
+        capsule_r,
+        4.0,
+        if desc.shortcut_text.is_empty() {
+            Token::SURFACE
+        } else {
+            Token::SURFACE_RAISED
+        },
+        Token::CARD_BORDER,
+        1.0,
+        0.0,
+        desc.z + 1,
+    ));
+
     let dot_r = Rect::new(
         desc.rect.max().x - 16.0,
         desc.rect.origin.y + (desc.rect.height() - 8.0) * 0.5,
@@ -137,12 +190,26 @@ pub fn emit_hotkey_input(
         A11yNode::new(Role::TextInput, desc.label.clone(), desc.rect).disabled(state.disabled);
     a11y.value = desc.shortcut_text.clone();
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        let clear_key = hotkey_clear_node(node);
+        let clear_r = Rect::new(dot_r.origin.x - 4.0, dot_r.origin.y - 4.0, 16.0, 16.0);
+        out.with_sub_control(
+            clear_key,
+            HitRegion::new(clear_key, CONTROL_LAYER, u32::from(desc.z) + 1, clear_r)
+                .with_cursor(CursorKind::Pointer),
+            A11yNode::new(Role::Button, "Clear shortcut", clear_r).clickable(),
+            true,
+        );
     }
+
+    out
 }

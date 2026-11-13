@@ -85,6 +85,12 @@ impl NavigationRailDesc {
     }
 }
 
+/// Deterministic sub-node id for a navigation rail item.
+#[must_use]
+pub const fn rail_item_node(node: u64, index: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x500 + index as u64)
+}
+
 /// Emit a stable-shape navigation rail (1 bg + 6 item rows + 6 badge pills + 1 focus ring = 14 primitives).
 #[must_use]
 pub fn emit_navigation_rail(
@@ -195,12 +201,34 @@ pub fn emit_navigation_rail(
     let a11y =
         A11yNode::new(Role::Navigation, desc.label.clone(), desc.rect).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        for (idx, item) in desc.items.iter().take(MAX_RAIL_ITEMS).enumerate() {
+            let y = desc.rect.origin.y + 8.0 + idx as f32 * row_h;
+            let row_r = Rect::new(
+                desc.rect.origin.x + pad_x,
+                y,
+                (rail_w - pad_x * 2.0).max(12.0),
+                (row_h - 4.0).max(12.0),
+            );
+            let key = rail_item_node(node, idx);
+            out.with_sub_control(
+                key,
+                HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, row_r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::Button, item.label.clone(), row_r).clickable(),
+                true,
+            );
+        }
     }
+
+    out
 }

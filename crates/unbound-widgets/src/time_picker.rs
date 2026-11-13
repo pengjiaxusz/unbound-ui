@@ -49,7 +49,27 @@ pub struct TimePickerState {
     pub active_column: usize,
 }
 
+/// Deterministic sub-node id for a time picker H/M/S column (`0..3`).
+#[must_use]
+pub const fn time_picker_col_node(node: u64, col: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x700 + col as u64)
+}
+
 impl TimePickerState {
+    /// Select active column (`0 = hour`, `1 = minute`, `2 = second`).
+    pub fn select_column(&mut self, col: usize) {
+        self.active_column = col.min(2);
+    }
+
+    /// Handle mouse wheel delta by stepping the active column.
+    pub fn handle_wheel(&mut self, delta_y: f32) {
+        if delta_y > 0.0 {
+            self.step_active(1);
+        } else if delta_y < 0.0 {
+            self.step_active(-1);
+        }
+    }
+
     /// Step the active column by `delta` (`+1` or `-1`, wrapping).
     pub fn step_active(&mut self, delta: i32) {
         match self.active_column {
@@ -179,14 +199,36 @@ pub fn emit_time_picker(
         A11yNode::new(Role::SpinButton, desc.label.clone(), desc.rect).disabled(state.disabled);
     a11y.value = desc.value.format_hms();
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        const COL_NAMES: [&str; 3] = ["Hour", "Minute", "Second"];
+        for (col, name) in COL_NAMES.iter().enumerate() {
+            let r = Rect::new(
+                desc.rect.origin.x + pad + col as f32 * (col_w + gap),
+                desc.rect.origin.y + pad,
+                col_w,
+                col_h,
+            );
+            let key = time_picker_col_node(node, col);
+            out.with_sub_control(
+                key,
+                HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::SpinButton, (*name).to_owned(), r).clickable(),
+                true,
+            );
+        }
     }
+
+    out
 }
 
 #[cfg(test)]

@@ -83,6 +83,12 @@ impl NotificationCenterDesc {
     }
 }
 
+/// Deterministic sub-node id for a notification card item (`0..4`).
+#[must_use]
+pub const fn notification_item_node(node: u64, index: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xC00 + index as u64)
+}
+
 /// Emit a stable-shape notification center (1 bg + 4 item cards + 4 unread dots + 1 focus ring = 10 primitives).
 #[must_use]
 pub fn emit_notification_center(
@@ -177,12 +183,33 @@ pub fn emit_notification_center(
     });
     let a11y = A11yNode::new(Role::Region, desc.label.clone(), desc.rect).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        for (i, item) in desc.items.iter().take(MAX_ITEMS).enumerate() {
+            let r = Rect::new(
+                desc.rect.origin.x + pad,
+                desc.rect.origin.y + pad + i as f32 * (row_h + pad),
+                (desc.rect.width() - pad * 2.0).max(16.0),
+                row_h,
+            );
+            let key = notification_item_node(node, i);
+            out.with_sub_control(
+                key,
+                HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::ListItem, item.title.clone(), r).clickable(),
+                true,
+            );
+        }
     }
+
+    out
 }

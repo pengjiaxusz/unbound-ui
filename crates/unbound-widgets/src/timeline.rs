@@ -52,6 +52,12 @@ impl TimelineDesc {
     }
 }
 
+/// Deterministic sub-node id for a timeline event item (`0..4`).
+#[must_use]
+pub const fn timeline_item_node(node: u64, index: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xE00 + index as u64)
+}
+
 /// Emit a stable-shape vertical timeline (1 bg + 1 rail + 4 dots + 4 row cards + 1 focus ring = 11 primitives).
 #[must_use]
 pub fn emit_timeline(
@@ -157,12 +163,34 @@ pub fn emit_timeline(
     });
     let a11y = A11yNode::new(Role::List, desc.label.clone(), desc.rect).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        for (i, item) in desc.items.iter().take(MAX_TIMELINE_NODES).enumerate() {
+            let y = desc.rect.origin.y + 8.0 + i as f32 * row_h;
+            let card_r = Rect::new(
+                desc.rect.origin.x + 28.0,
+                y,
+                (desc.rect.width() - 36.0).max(16.0),
+                (row_h - 4.0).max(10.0),
+            );
+            let key = timeline_item_node(node, i);
+            out.with_sub_control(
+                key,
+                HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, card_r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::ListItem, item.title.clone(), card_r).clickable(),
+                true,
+            );
+        }
     }
+
+    out
 }

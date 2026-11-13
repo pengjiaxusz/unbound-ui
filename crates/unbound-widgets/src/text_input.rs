@@ -24,7 +24,7 @@ use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yNode};
 use unbound_gpu::data::{GpuPayload, GpuPrimitiveInstance, PrimType, SubElement, CLIP_NONE};
 use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::{f16, Rect};
+use unbound_math::{f16, Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
@@ -418,6 +418,38 @@ impl TextEditState {
         self.anchor = 0;
         self.cursor = self.text.len();
         self.coalescing = false;
+    }
+
+    /// Position the caret by clicking at `local_x` (relative to text origin) using `shaped`.
+    pub fn pointer_down_at(
+        &mut self,
+        shaped: &unbound_text::ShapedText,
+        local_x: f32,
+        extend: bool,
+    ) {
+        let offset = shaped.hit_byte_index(&self.text, Vec2::new(local_x + self.scroll_x, 0.0));
+        self.set_cursor(offset, extend);
+    }
+
+    /// Extend the selection while dragging to `local_x` (relative to text origin).
+    pub fn drag_to(&mut self, shaped: &unbound_text::ShapedText, local_x: f32) {
+        let offset = shaped.hit_byte_index(&self.text, Vec2::new(local_x + self.scroll_x, 0.0));
+        self.set_cursor(offset, true);
+    }
+
+    /// Select the word under `local_x` (double-click).
+    pub fn double_click_at(&mut self, shaped: &unbound_text::ShapedText, local_x: f32) {
+        let offset = shaped.hit_byte_index(&self.text, Vec2::new(local_x + self.scroll_x, 0.0));
+        if let Some((start, end)) = word_range(&self.text, offset) {
+            self.anchor = start;
+            self.cursor = end;
+            self.coalescing = false;
+        }
+    }
+
+    /// Select all text (triple-click).
+    pub fn triple_click(&mut self) {
+        self.select_all();
     }
 
     /// Insert text at the cursor, replacing the selection.
@@ -1013,14 +1045,32 @@ pub fn emit_text_input(
     a11y.actions.insert(A11yAction::SetValue);
     a11y.actions.insert(A11yAction::Focus);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+    if desc.clearable && !edit.text().is_empty() && !state.disabled && !desc.read_only {
+        let clear_key = clear_button_node(node);
+        let clear_rect = desc.clear_rect();
+        out.with_sub_control(
+            clear_key,
+            HitRegion::new(clear_key, TEXT_INPUT_LAYER, u32::from(z) + 1, clear_rect)
+                .with_cursor(CursorKind::Pointer),
+            A11yNode::new(Role::Button, "Clear", clear_rect).clickable(),
+            true,
+        );
     }
+    out
+}
+
+/// Deterministic child node key for the clear button of a [`TextInputDesc`].
+#[must_use]
+pub const fn clear_button_node(node: u64) -> u64 {
+    node ^ 0x434C_4541_5200
 }
 
 fn set_opacity(primitive: &mut GpuPrimitiveInstance, opacity: f32) {

@@ -519,7 +519,7 @@ pub fn emit_property_grid(
     a11y.description = format!("{} 个属性", desc.row_count());
     a11y.disabled = control.disabled;
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit: Some(
@@ -530,7 +530,70 @@ pub fn emit_property_grid(
         a11y: Some(a11y),
         focusable: !control.disabled,
         ..Default::default()
+    };
+
+    if !control.disabled {
+        for row in &layout {
+            if row.row == usize::MAX {
+                let sec_key = property_section_node(node, row.section);
+                out.with_sub_control(
+                    sec_key,
+                    HitRegion::new(sec_key, CONTROL_LAYER, u32::from(desc.z) + 1, row.rect)
+                        .with_cursor(CursorKind::Pointer),
+                    A11yNode::new(Role::Button, format!("Section {}", row.section + 1), row.rect)
+                        .clickable(),
+                    false,
+                );
+            } else {
+                let row_key = property_row_node(node, row.section, row.row);
+                out.with_sub_control(
+                    row_key,
+                    HitRegion::new(row_key, CONTROL_LAYER, u32::from(desc.z) + 1, row.rect)
+                        .with_cursor(CursorKind::Pointer),
+                    A11yNode::new(
+                        Role::ListItem,
+                        format!("Property {}:{}", row.section, row.row),
+                        row.rect,
+                    )
+                    .clickable(),
+                    false,
+                );
+                let reset_key = property_reset_node(node, row.section, row.row);
+                out.with_sub_control(
+                    reset_key,
+                    HitRegion::new(
+                        reset_key,
+                        CONTROL_LAYER,
+                        u32::from(desc.z) + 3,
+                        row.reset_rect.inflate(3.0),
+                    )
+                    .with_cursor(CursorKind::Pointer),
+                    A11yNode::new(Role::Button, "Reset", row.reset_rect.inflate(3.0)).clickable(),
+                    false,
+                );
+            }
+        }
     }
+
+    out
+}
+
+/// Deterministic child node key for a property grid section header.
+#[must_use]
+pub const fn property_section_node(base: u64, section: usize) -> u64 {
+    base ^ (0x5047_5300_u64 | (section as u64 + 1))
+}
+
+/// Deterministic child node key for a property grid row.
+#[must_use]
+pub const fn property_row_node(base: u64, section: usize, row: usize) -> u64 {
+    base ^ (((section as u64 + 1) << 20) | (row as u64 + 1))
+}
+
+/// Deterministic child node key for a property row's reset-to-default button.
+#[must_use]
+pub const fn property_reset_node(base: u64, section: usize, row: usize) -> u64 {
+    base ^ 0x5047_5200_0000_u64 ^ (((section as u64 + 1) << 20) | (row as u64 + 1))
 }
 
 /// A solid line primitive.

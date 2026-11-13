@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use cosmic_text::{fontdb, Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight};
 use rustc_hash::FxHashMap;
-use unbound_math::Vec2;
+use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
 
 /// Everything that affects shaping, in one comparable value.
@@ -267,6 +267,86 @@ impl ShapedText {
         let glyph = self.glyph_at_byte(byte)?;
         let at_end = byte >= glyph.cluster + glyph.w as u32;
         Some(if at_end { glyph.x + glyph.w } else { glyph.x })
+    }
+
+    /// Map a local pixel coordinate `(x, y)` relative to the text origin to the nearest
+    /// UTF-8 byte offset on a valid character boundary.
+    #[must_use]
+    pub fn hit_byte_index(&self, text: &str, local_pos: Vec2) -> usize {
+        let idx = self.hit_test_point(local_pos, text).min(text.len());
+        if text.is_char_boundary(idx) {
+            idx
+        } else {
+            let mut b = idx;
+            while b > 0 && !text.is_char_boundary(b) {
+                b -= 1;
+            }
+            b
+        }
+    }
+
+    /// Compute the local caret rectangle at `byte_index`.
+    #[must_use]
+    pub fn caret_rect_at(&self, byte_index: usize) -> Rect {
+        let line_h = self.line_height.max(14.0);
+        if self.glyphs.is_empty() {
+            return Rect::new(0.0, 0.0, 1.5, line_h);
+        }
+        let byte = u32::try_from(byte_index).unwrap_or(u32::MAX);
+        if let Some((pos, glyph)) = self
+            .glyphs
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, g)| g.cluster <= byte)
+        {
+            let next_cluster = self
+                .glyphs
+                .get(pos + 1)
+                .map(|g| g.cluster)
+                .unwrap_or(u32::MAX);
+            let at_end = byte > glyph.cluster && next_cluster == u32::MAX;
+            let x = if at_end { glyph.x + glyph.w } else { glyph.x };
+            Rect::new(x, glyph.y, 1.5, line_h)
+        } else {
+            let first = &self.glyphs[0];
+            Rect::new(first.x, first.y, 1.5, line_h)
+        }
+    }
+
+    /// Generate per-line selection rectangles for the given UTF-8 byte `range`.
+    ///
+    /// Pass the result to [`crate::selection::merge_line_rects`] for seamless rounded highlights.
+    #[must_use]
+    pub fn selection_rects(&self, range: core::ops::Range<usize>) -> Vec<Rect> {
+        if range.is_empty() || self.glyphs.is_empty() {
+            return Vec::new();
+        }
+        let line_h = self.line_height.max(14.0);
+        let start = u32::try_from(range.start).unwrap_or(u32::MAX);
+        let end = u32::try_from(range.end).unwrap_or(u32::MAX);
+        let mut lines: Vec<(f32, f32, f32)> = Vec::new();
+        for g in &self.glyphs {
+            if g.cluster >= start && g.cluster < end {
+                let gx0 = g.x;
+                let gx1 = g.x + g.w;
+                if let Some(last) = lines.last_mut() {
+                    if (last.0 - g.y).abs() < line_h * 0.45 {
+                        last.1 = last.1.min(gx0);
+                        last.2 = last.2.max(gx1);
+                        continue;
+                    }
+                }
+                lines.push((g.y, gx0, gx1));
+            }
+        }
+        lines
+            .into_iter()
+            .filter_map(|(y, x0, x1)| {
+                let w = (x1 - x0).max(0.0);
+                (w > 0.0).then(|| Rect::new(x0, y, w, line_h))
+            })
+            .collect()
     }
 }
 

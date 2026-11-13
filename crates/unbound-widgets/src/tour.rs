@@ -75,7 +75,26 @@ impl TourDesc {
     }
 }
 
-/// Emit a stable-shape tour spotlight (1 scrim + 1 spotlight ring + 1 popover card + 1 next pill + 1 focus ring = 5 primitives).
+/// Deterministic child node key for the Prev button.
+#[must_use]
+pub const fn tour_prev_node(base: u64) -> u64 {
+    base ^ 0x544F_5552_0001
+}
+
+/// Deterministic child node key for the Next button.
+#[must_use]
+pub const fn tour_next_node(base: u64) -> u64 {
+    base ^ 0x544F_5552_0002
+}
+
+/// Deterministic child node key for the Skip button.
+#[must_use]
+pub const fn tour_skip_node(base: u64) -> u64 {
+    base ^ 0x544F_5552_0003
+}
+
+/// Emit a stable-shape tour spotlight with 4 surrounding scrims (top, bottom, left, right)
+/// leaving `desc.target` transparent and unblocked, plus independent Prev/Next/Skip sub-hits.
 #[must_use]
 pub fn emit_tour(
     node: u64,
@@ -83,18 +102,32 @@ pub fn emit_tour(
     state: ControlState,
     label_glyphs: &[GlyphQuad],
 ) -> WidgetOutput {
-    let mut primitives = Vec::with_capacity(5 + label_glyphs.len());
+    let mut primitives = Vec::with_capacity(10 + label_glyphs.len());
     let mut payloads = Vec::with_capacity(label_glyphs.len());
 
-    let mut scrim = surface(desc.rect, 6.0, Token::SURFACE_SUNKEN, desc.z);
-    scrim.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(scrim.depth_u16(), 0.45);
-    primitives.push(scrim);
+    let r = desc.rect;
+    let t = desc.target;
+    let scrim_rects = [
+        // Top
+        Rect::new(r.origin.x, r.origin.y, r.width(), (t.origin.y - r.origin.y).max(0.0)),
+        // Bottom
+        Rect::new(r.origin.x, t.max().y, r.width(), (r.max().y - t.max().y).max(0.0)),
+        // Left
+        Rect::new(r.origin.x, t.origin.y, (t.origin.x - r.origin.x).max(0.0), t.height()),
+        // Right
+        Rect::new(t.max().x, t.origin.y, (r.max().x - t.max().x).max(0.0), t.height()),
+    ];
+    for sr in scrim_rects {
+        let mut scrim = surface(sr, 0.0, Token::SURFACE_SUNKEN, desc.z);
+        scrim.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(scrim.depth_u16(), 0.45);
+        primitives.push(scrim);
+    }
 
     let hovered = state.phase == PointerPhase::Hovered;
     primitives.push(outlined(
         desc.target,
         6.0,
-        Token::SURFACE,
+        Token::NONE,
         if hovered {
             Token::PRIMARY
         } else {
@@ -105,8 +138,8 @@ pub fn emit_tour(
         desc.z + 1,
     ));
 
-    let bubble_w = 140.0_f32.min(desc.rect.width() - 16.0).max(40.0);
-    let bubble_h = 44.0_f32.min(desc.rect.height() * 0.45).max(24.0);
+    let bubble_w = 180.0_f32.min(desc.rect.width() - 16.0).max(80.0);
+    let bubble_h = 48.0_f32.min(desc.rect.height() * 0.45).max(28.0);
     let bubble_r = Rect::new(
         (desc.target.origin.x)
             .min(desc.rect.max().x - bubble_w - 8.0)
@@ -125,7 +158,11 @@ pub fn emit_tour(
         desc.z + 2,
     ));
 
+    let skip_r = Rect::new(bubble_r.origin.x + 8.0, bubble_r.max().y - 20.0, 32.0, 14.0);
+    let prev_r = Rect::new(bubble_r.max().x - 80.0, bubble_r.max().y - 20.0, 34.0, 14.0);
     let next_r = Rect::new(bubble_r.max().x - 42.0, bubble_r.max().y - 20.0, 34.0, 14.0);
+    primitives.push(surface(skip_r, 4.0, Token::SURFACE_SUNKEN, desc.z + 3));
+    primitives.push(surface(prev_r, 4.0, Token::SURFACE_SUNKEN, desc.z + 3));
     primitives.push(surface(next_r, 4.0, Token::PRIMARY, desc.z + 3));
 
     primitives.push(focus_ring(
@@ -153,12 +190,30 @@ pub fn emit_tour(
     });
     let a11y = A11yNode::new(Role::Dialog, desc.title.clone(), bubble_r).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        for (sub_key, r_btn, label_str) in [
+            (tour_skip_node(node), skip_r, "Skip"),
+            (tour_prev_node(node), prev_r, "Prev"),
+            (tour_next_node(node), next_r, "Next"),
+        ] {
+            out.with_sub_control(
+                sub_key,
+                HitRegion::new(sub_key, CONTROL_LAYER, u32::from(desc.z) + 3, r_btn)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::Button, label_str, r_btn).clickable(),
+                true,
+            );
+        }
     }
+
+    out
 }

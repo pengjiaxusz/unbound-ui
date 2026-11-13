@@ -40,6 +40,18 @@ impl PopconfirmDesc {
     }
 }
 
+/// Deterministic sub-node id for the popconfirm Cancel button.
+#[must_use]
+pub const fn popconfirm_cancel_node(node: u64) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x101
+}
+
+/// Deterministic sub-node id for the popconfirm Confirm button.
+#[must_use]
+pub const fn popconfirm_confirm_node(node: u64) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x102
+}
+
 /// Emit a stable-shape popconfirm bubble (1 card + cancel button + confirm button + 1 focus ring = 4 primitives).
 #[must_use]
 pub fn emit_popconfirm(
@@ -116,12 +128,33 @@ pub fn emit_popconfirm(
     });
     let a11y = A11yNode::new(Role::Dialog, desc.title.clone(), desc.rect).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        let cancel_key = popconfirm_cancel_node(node);
+        out.with_sub_control(
+            cancel_key,
+            HitRegion::new(cancel_key, CONTROL_LAYER, u32::from(desc.z) + 1, cancel_r)
+                .with_cursor(CursorKind::Pointer),
+            A11yNode::new(Role::Button, desc.cancel_label.clone(), cancel_r).clickable(),
+            true,
+        );
+        let confirm_key = popconfirm_confirm_node(node);
+        out.with_sub_control(
+            confirm_key,
+            HitRegion::new(confirm_key, CONTROL_LAYER, u32::from(desc.z) + 1, confirm_r)
+                .with_cursor(CursorKind::Pointer),
+            A11yNode::new(Role::Button, desc.confirm_label.clone(), confirm_r).clickable(),
+            true,
+        );
     }
+
+    out
 }

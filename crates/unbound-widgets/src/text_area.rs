@@ -181,6 +181,25 @@ impl TextAreaState {
         self.preferred_column = None;
     }
 
+    /// Position the caret by clicking at `local_pos` (relative to text_rect origin).
+    pub fn pointer_down_at(
+        &mut self,
+        shaped: &unbound_text::ShapedText,
+        local_pos: Vec2,
+        extend: bool,
+    ) {
+        self.preferred_column = None;
+        let offset = shaped.hit_byte_index(self.edit.text(), local_pos + self.scroll.offset());
+        self.edit.set_cursor(offset, extend);
+    }
+
+    /// Extend the selection while dragging to `local_pos` (relative to text_rect origin).
+    pub fn drag_to(&mut self, shaped: &unbound_text::ShapedText, local_pos: Vec2) {
+        self.preferred_column = None;
+        let offset = shaped.hit_byte_index(self.edit.text(), local_pos + self.scroll.offset());
+        self.edit.set_cursor(offset, true);
+    }
+
     /// Insert a newline at the caret.
     pub fn insert_newline(&mut self, desc: &TextAreaDesc) -> bool {
         if !desc.editable() {

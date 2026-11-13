@@ -549,14 +549,32 @@ pub fn emit_tree_row(
         a11y.expanded = Some(row.row.expanded);
     }
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !disabled,
         ..Default::default()
+    };
+    if row.row.has_children && !disabled {
+        let toggle_key = tree_toggle_node(row.row.id);
+        let toggle_r = Rect::new(arrow_x - 2.0, rect.origin.y, 16.0, rect.size.y);
+        out.with_sub_control(
+            toggle_key,
+            HitRegion::new(toggle_key, CONTROL_LAYER, u32::from(desc.z) + 1, toggle_r)
+                .with_cursor(CursorKind::Pointer),
+            A11yNode::new(Role::Button, "Toggle branch", toggle_r).clickable(),
+            false,
+        );
     }
+    out
+}
+
+/// Deterministic child node key for the expand/collapse chevron of a tree row.
+#[must_use]
+pub const fn tree_toggle_node(row_id: u64) -> u64 {
+    row_id ^ 0x5452_4545_0001
 }
 
 /// Emit the viewport background.

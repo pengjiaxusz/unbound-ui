@@ -23,7 +23,24 @@ pub struct PinInputState {
     pub cursor: usize,
 }
 
+/// Deterministic sub-node id for a PIN input cell (`0..6`).
+#[must_use]
+pub const fn pin_cell_node(node: u64, index: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x800 + index as u64)
+}
+
 impl PinInputState {
+    /// Delete the last character or current slot and move cursor back.
+    pub fn backspace(&mut self) {
+        if self.cursor > 0 {
+            let idx = (self.cursor - 1).min(self.digits.len().saturating_sub(1));
+            if idx < self.digits.len() {
+                self.digits.remove(idx);
+            }
+            self.cursor -= 1;
+        }
+    }
+
     /// Insert a character and advance cursor.
     pub fn push_char(&mut self, ch: char, length: usize) {
         let cap = length.clamp(1, MAX_PIN_SLOTS);
@@ -166,12 +183,33 @@ pub fn emit_pin_input(
     let a11y =
         A11yNode::new(Role::TextInput, desc.label.clone(), desc.rect).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        for idx in 0..len {
+            let r = Rect::new(
+                desc.rect.origin.x + idx as f32 * (cell_w + gap),
+                desc.rect.origin.y,
+                cell_w,
+                cell_h,
+            );
+            let key = pin_cell_node(node, idx);
+            out.with_sub_control(
+                key,
+                HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, r)
+                    .with_cursor(CursorKind::Text),
+                A11yNode::new(Role::TextInput, format!("Digit {}", idx + 1), r).clickable(),
+                true,
+            );
+        }
     }
+
+    out
 }

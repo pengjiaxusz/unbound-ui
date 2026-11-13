@@ -89,6 +89,12 @@ impl CascaderDesc {
     }
 }
 
+/// Deterministic sub-node id for a cascader breadcrumb level pill (`0..3`).
+#[must_use]
+pub const fn cascader_level_node(node: u64, level: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xA00 + level as u64)
+}
+
 /// Emit a stable-shape cascader (1 trigger + 3 level pills + 1 chevron + 1 focus ring = 6 primitives).
 #[must_use]
 pub fn emit_cascader(
@@ -181,12 +187,33 @@ pub fn emit_cascader(
     let a11y =
         A11yNode::new(Role::ComboBox, desc.label.clone(), desc.rect).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        for (level, seg) in desc.path.iter().take(MAX_LEVELS).enumerate() {
+            let r = Rect::new(
+                desc.rect.origin.x + 6.0 + level as f32 * (pill_w + 4.0),
+                desc.rect.origin.y + 5.0,
+                pill_w,
+                pill_h,
+            );
+            let key = cascader_level_node(node, level);
+            out.with_sub_control(
+                key,
+                HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::Button, seg.clone(), r).clickable(),
+                true,
+            );
+        }
     }
+
+    out
 }

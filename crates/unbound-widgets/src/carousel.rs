@@ -14,6 +14,12 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_DOTS: usize = 5;
 
+/// Deterministic sub-node id for a carousel indicator dot.
+#[must_use]
+pub const fn carousel_dot_node(node: u64, index: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x400 + index as u64)
+}
+
 /// Interactive state for [`CarouselDesc`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CarouselState {
@@ -144,12 +150,28 @@ pub fn emit_carousel(
     });
     let a11y = A11yNode::new(Role::Group, desc.label.clone(), desc.rect).disabled(state.disabled);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if !state.disabled {
+        for i in 0..dots {
+            let dot_r = Rect::new(start_x + i as f32 * (dot_sz + gap), dot_y, dot_sz, dot_sz);
+            let key = carousel_dot_node(node, i);
+            out.with_sub_control(
+                key,
+                HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 1, dot_r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::Button, format!("Slide {}", i + 1), dot_r).clickable(),
+                true,
+            );
+        }
     }
+
+    out
 }

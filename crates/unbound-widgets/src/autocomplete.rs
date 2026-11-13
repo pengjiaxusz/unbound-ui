@@ -36,6 +36,12 @@ impl AutoCompleteState {
     }
 }
 
+/// Deterministic sub-node id for an autocomplete suggestion item.
+#[must_use]
+pub const fn autocomplete_option_node(node: u64, index: usize) -> u64 {
+    node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xB00 + index as u64)
+}
+
 /// Descriptor for an [`AutoComplete`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct AutoCompleteDesc {
@@ -45,6 +51,10 @@ pub struct AutoCompleteDesc {
     pub value: String,
     /// Number of matching suggestions.
     pub suggestion_count: usize,
+    /// Optional suggestion labels rendered when `open` is true.
+    pub suggestions: Vec<String>,
+    /// Whether the suggestion popup is open.
+    pub open: bool,
     /// Accessible label.
     pub label: String,
     /// Base z-index.
@@ -59,9 +69,20 @@ impl AutoCompleteDesc {
             rect,
             value: value.into(),
             suggestion_count,
+            suggestions: Vec::new(),
+            open: false,
             label: "AutoComplete".to_owned(),
             z: 600,
         }
+    }
+
+    /// Attach suggestion labels and open state.
+    #[must_use]
+    pub fn with_suggestions(mut self, suggestions: Vec<String>, open: bool) -> Self {
+        self.suggestion_count = suggestions.len();
+        self.suggestions = suggestions;
+        self.open = open;
+        self
     }
 }
 
@@ -136,12 +157,58 @@ pub fn emit_autocomplete(
         A11yNode::new(Role::TextInput, desc.label.clone(), desc.rect).disabled(state.disabled);
     a11y.value = desc.value.clone();
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    };
+
+    if desc.open && !state.disabled {
+        let count = desc.suggestions.len().min(6);
+        let row_h = 26.0;
+        if count > 0 {
+            let popup_r = Rect::new(
+                desc.rect.origin.x,
+                desc.rect.max().y + 4.0,
+                desc.rect.width(),
+                count as f32 * row_h + 8.0,
+            );
+            out.primitives.push(outlined(
+                popup_r,
+                6.0,
+                Token::SURFACE_RAISED,
+                Token::CARD_BORDER,
+                1.0,
+                6.0,
+                desc.z + 4,
+            ));
+            for (idx, label) in desc.suggestions.iter().take(count).enumerate() {
+                let row_r = Rect::new(
+                    popup_r.origin.x + 4.0,
+                    popup_r.origin.y + 4.0 + idx as f32 * row_h,
+                    (popup_r.width() - 8.0).max(16.0),
+                    row_h - 2.0,
+                );
+                out.primitives.push(surface(
+                    row_r,
+                    4.0,
+                    Token::SURFACE,
+                    desc.z + 5,
+                ));
+                let key = autocomplete_option_node(node, idx);
+                out.with_sub_control(
+                    key,
+                    HitRegion::new(key, CONTROL_LAYER, u32::from(desc.z) + 5, row_r)
+                        .with_cursor(CursorKind::Pointer),
+                    A11yNode::new(Role::ListItem, label.clone(), row_r).clickable(),
+                    true,
+                );
+            }
+        }
     }
+
+    out
 }
