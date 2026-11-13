@@ -1565,6 +1565,7 @@ dependencies = [
  "unbound-abi",
  "unbound-anim",
  "unbound-app",
+ "unbound-asset",
  "unbound-gpu",
  "unbound-headless",
  "unbound-input",

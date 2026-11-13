@@ -31,6 +31,7 @@ unbound-headless.workspace = true
 unbound-input.workspace = true
 unbound-world.workspace = true
 unbound-layout.workspace = true
+unbound-asset.workspace = true
 rustc-hash.workspace = true
 accesskit.workspace = true
 slotmap.workspace = true

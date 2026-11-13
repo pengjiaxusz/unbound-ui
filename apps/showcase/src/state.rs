@@ -7,9 +7,12 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use unbound_anim::{Spring, SpringPreset};
+use unbound_app::AssetHub;
+use unbound_asset::{AssetId, StagingRing};
 use unbound_math::Vec2;
 use unbound_widgets::curve_editor::CurveEditorState;
 use unbound_widgets::progress::ProgressState;
+use unbound_world::virtualize::{VirtualList, WindowUpdate};
 
 use crate::pages::{ExampleDef, KnobSpec, PageId};
 
@@ -81,6 +84,16 @@ pub struct DemoState {
     pub drag_position: Option<Vec2>,
     pub list_scroll: [f32; 2],
     pub list_selected: [Option<usize>; 2],
+    /// Real slot-recycling virtualizer per list card.
+    pub virtual_lists: [VirtualList; 2],
+    /// Most recent update telemetry from `virtual_lists`.
+    pub virtual_updates: [WindowUpdate; 2],
+    /// Async PNG decode hub for the asset streaming grid (lazily started).
+    pub asset_hub: Option<AssetHub>,
+    /// Asset IDs requested from `asset_hub` for the streaming tiles.
+    pub asset_ids: Vec<AssetId>,
+    /// Staging ring used by the asset streaming demo.
+    pub asset_ring: StagingRing,
     pub canvas_pan: Vec2,
     pub canvas_zoom: f32,
     pub marquee: Option<(Vec2, Vec2)>,
@@ -136,6 +149,11 @@ impl Default for DemoState {
             drag_position: None,
             list_scroll: [0.0, 0.0],
             list_selected: [Some(2), Some(2)],
+            virtual_lists: [VirtualList::new(32.0, 0.25), VirtualList::new(32.0, 0.25)],
+            virtual_updates: [WindowUpdate::default(), WindowUpdate::default()],
+            asset_hub: None,
+            asset_ids: Vec::new(),
+            asset_ring: StagingRing::new(4096, 3),
             canvas_pan: Vec2::new(18.0, 12.0),
             canvas_zoom: 1.0,
             marquee: None,
@@ -168,6 +186,55 @@ impl DemoState {
         self.pill_choice = index;
         self.pill_spring.set_target(index as f32);
     }
+
+    /// Lazily start the async asset pipeline for the streaming grid and poll
+    /// completed decodes.
+    pub fn poll_assets(&mut self, text: &mut unbound_text::TextEngine) {
+        let hub = self.asset_hub.get_or_insert_with(AssetHub::new);
+        if self.asset_ids.is_empty() {
+            let palette_rgba: [[u8; 4]; 5] = [
+                [88, 130, 245, 255],
+                [64, 196, 140, 255],
+                [242, 169, 64, 255],
+                [164, 118, 242, 255],
+                [72, 184, 212, 255],
+            ];
+            for idx in 0..10 {
+                let color = palette_rgba[idx % palette_rgba.len()];
+                let png_bytes = procedural_tile_png(16, 16, color);
+                if let Ok(staging_ref) = self.asset_ring.write(&png_bytes) {
+                    let _ = staging_ref;
+                }
+                self.asset_ids.push(hub.request_png(png_bytes));
+            }
+            self.asset_ring.begin_frame();
+        }
+        let _ = hub.poll(text);
+    }
+}
+
+fn procedural_tile_png(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        if let Ok(mut writer) = encoder.write_header() {
+            let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+            for y in 0..height {
+                for x in 0..width {
+                    let checker = ((x / 4 + y / 4) % 2) == 0;
+                    let shade = if checker { 1.0 } else { 0.78 };
+                    pixels.push((f32::from(rgba[0]) * shade) as u8);
+                    pixels.push((f32::from(rgba[1]) * shade) as u8);
+                    pixels.push((f32::from(rgba[2]) * shade) as u8);
+                    pixels.push(rgba[3]);
+                }
+            }
+            let _ = writer.write_image_data(&pixels);
+        }
+    }
+    bytes
 }
 
 /// The whole gallery state.

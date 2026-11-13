@@ -1,7 +1,12 @@
 //! Collections: virtualized rows and streaming asset grids.
 
 use accesskit::Role;
-use unbound_math::Rect;
+use unbound_app::AssetResidency;
+use unbound_math::{Rect, Vec2};
+use unbound_widgets::image::{emit_image_with_assets, ImageDesc, ObjectFit};
+use unbound_widgets::progress::{emit_progress, ProgressDesc, ProgressState};
+use unbound_widgets::skeleton::{emit_skeleton, SkeletonDesc, SkeletonState, SKELETON_PERIOD};
+use unbound_widgets::{ControlState, WidgetCatalogId};
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageInfo};
 use crate::canvas::{AlignX, AlignY};
@@ -140,18 +145,22 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         list.max().y - header.max().y,
     );
     let scroll = ctx.state.demo.list_scroll[ctx.card].max(0.0);
+    let vlist = &ctx.state.demo.virtual_lists[ctx.card];
+    let update = &ctx.state.demo.virtual_updates[ctx.card];
     let first = (scroll / row_h).floor() as usize;
-    let offset = scroll - first as f32 * row_h;
     let visible = (viewport.size.y / row_h).ceil() as usize + 1;
     ctx.canvas.begin_clip(viewport);
-    for slot in 0..visible {
-        let index = first + slot;
-        if index >= total {
-            break;
+    for slot in 0..vlist.slot_count() {
+        let Some(index) = vlist.item_at(slot) else {
+            continue;
+        };
+        if index == usize::MAX || index >= total {
+            continue;
         }
+        let screen_y = viewport.origin.y + (vlist.item_y(index) - scroll);
         let row = Rect::new(
             viewport.origin.x,
-            viewport.origin.y + slot as f32 * row_h - offset + 1.0,
+            screen_y + 1.0,
             viewport.size.x,
             row_h - 2.0,
         );
@@ -226,7 +235,8 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         );
     }
     ctx.canvas.end_clip();
-    let active = visible + if overscan { 6 } else { 0 };
+    let active = vlist.slot_count();
+    let recycled_str = format!("{} / frame", update.recycled);
     ctx.canvas.text(
         &format!("active nodes {active} · scroll {:.0} px", scroll),
         Rect::new(
@@ -294,7 +304,7 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
             ("visible", format!("{visible}")),
             ("overscan", if overscan { "3".into() } else { "0".into() }),
             ("active", format!("{active}")),
-            ("recycled", "4 / frame".into()),
+            ("recycled", recycled_str),
             ("total", format_count(total)),
         ]
         .iter()
@@ -326,27 +336,36 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
             palette.primary_soft,
         );
     }
-    for slot in 0..visible.min(10) {
-        let index = first + slot;
-        if index >= total {
+    let mut registered = 0usize;
+    for slot in 0..vlist.slot_count() {
+        if registered >= 10 {
             break;
         }
+        let Some(index) = vlist.item_at(slot) else {
+            continue;
+        };
+        if index == usize::MAX || index >= total {
+            continue;
+        }
+        let screen_y = viewport.origin.y + (vlist.item_y(index) - scroll);
         let row = Rect::new(
             viewport.origin.x,
-            viewport.origin.y + slot as f32 * row_h - offset + 1.0,
+            screen_y + 1.0,
             viewport.size.x,
             row_h - 2.0,
         );
         if row.max().y < viewport.origin.y || row.origin.y > viewport.max().y {
             continue;
         }
+        let visible_slot = index.saturating_sub(first);
         ctx.control(
-            100 + slot as u16,
+            100 + visible_slot as u16,
             row,
             Role::ListItem,
             &format!("Row {}", index + 1),
             ctx.state.demo.list_selected[ctx.card] == Some(index),
         );
+        registered += 1;
     }
 }
 
@@ -399,41 +418,50 @@ pub fn asset_grid(ctx: &mut DemoCtx<'_, '_>) {
         } else {
             1.0
         };
+        let asset_residency = ctx
+            .state
+            .demo
+            .asset_hub
+            .as_ref()
+            .zip(ctx.state.demo.asset_ids.get(index).copied())
+            .and_then(|(hub, id)| hub.residency(id).map(|res| (hub, id, res)));
         ctx.canvas
             .rect(cell, 9.0, palette.card_bg, palette.card_border, 1.0, 0.0);
         ctx.canvas.begin_clip(cell);
+        let thumb_rect = Rect::new(
+            cell.origin.x,
+            cell.origin.y,
+            cell.size.x,
+            cell.size.y * 0.62,
+        );
         ctx.canvas.rect(
-            Rect::new(
-                cell.origin.x,
-                cell.origin.y,
-                cell.size.x,
-                cell.size.y * 0.62,
-            ),
+            thumb_rect,
             0.0,
             palette_tints[index % palette_tints.len()],
             0,
             0.0,
             0.0,
         );
-        let blob = Rect::new(
-            cell.origin.x + cell.size.x * 0.2,
-            cell.origin.y + 10.0,
-            cell.size.x * 0.6,
-            cell.size.y * 0.36,
-        );
-        ctx.canvas
-            .rect(blob, blob.size.y * 0.5, palette.grid_dot, 0, 0.0, 0.0);
-        if progress < 1.0 {
-            let shimmer = (ctx.state.demo.elapsed * 0.6 + index as f32 * 0.21).rem_euclid(1.0);
-            let x = cell.origin.x - 40.0 + (cell.size.x + 80.0) * shimmer;
-            ctx.canvas.rect(
-                Rect::new(x, cell.origin.y, 34.0, cell.size.y * 0.62),
-                4.0,
-                palette.overlay_bg,
-                0,
-                0.0,
-                0.0,
+        if let Some((hub, id, res)) = asset_residency {
+            if matches!(res, AssetResidency::Ready { .. }) && progress >= 1.0 {
+                let mut desc = ImageDesc::new(thumb_rect, Vec2::new(16.0, 16.0), 0).with_asset(id);
+                desc.fit = ObjectFit::Cover;
+                let part = 100 + index as u16;
+                let output =
+                    emit_image_with_assets(ctx.part(part), &desc, ControlState::default(), hub);
+                ctx.canvas
+                    .widget_output(WidgetCatalogId::Image, ctx.part(part), &output);
+            }
+        }
+        if progress < 1.0 || asset_residency.is_some_and(|(_, _, r)| r == AssetResidency::Loading) {
+            let mut skel_state = SkeletonState::new();
+            skel_state.set_phase(
+                (ctx.state.demo.elapsed / SKELETON_PERIOD + index as f32 * 0.21).rem_euclid(1.0),
             );
+            let skel_desc = SkeletonDesc::new(thumb_rect).with_radius(0.0).animated();
+            let output = emit_skeleton(&skel_desc, &skel_state);
+            ctx.canvas
+                .widget_output(WidgetCatalogId::Skeleton, ctx.part(index as u16), &output);
         }
         ctx.canvas.end_clip();
         ctx.canvas.text(
@@ -453,26 +481,16 @@ pub fn asset_grid(ctx: &mut DemoCtx<'_, '_>) {
             cell.origin.x + 10.0,
             cell.max().y - 16.0,
             cell.size.x - 20.0,
-            4.0,
+            6.0,
         );
-        ctx.canvas
-            .rect(bar, 2.0, palette.control_track, 0, 0.0, 0.0);
-        ctx.canvas.rect(
-            Rect::new(
-                bar.origin.x,
-                bar.origin.y,
-                bar.size.x * progress,
-                bar.size.y,
-            ),
-            2.0,
-            if progress >= 1.0 {
-                palette.success
-            } else {
-                palette.primary
-            },
-            0,
-            0.0,
-            0.0,
+        let bar_desc = ProgressDesc::new(bar).value(progress);
+        let mut bar_state = ProgressState::new();
+        bar_state.tick(1.0, Some(progress), false);
+        let bar_output = emit_progress(&bar_desc, &bar_state);
+        ctx.canvas.widget_output(
+            WidgetCatalogId::Progress,
+            ctx.part(200 + index as u16),
+            &bar_output,
         );
         ctx.canvas.text(
             &format!("{quality}× · {:.0} %", progress * 100.0),

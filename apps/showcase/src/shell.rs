@@ -560,6 +560,32 @@ impl GalleryApp {
         let page_layout = self
             .tree
             .page_layout(&self.state, self.state.content_scroll);
+        if self.state.active_page == PageId::ListView {
+            for card in 0..2 {
+                let row_h = self.list_row_height(card);
+                let total = self.list_total(card);
+                let overscan_knob = if card == 0 { 2 } else { 1 };
+                let overscan_spec = PageId::ListView.examples()[card].knobs[overscan_knob];
+                let overscan =
+                    self.state
+                        .knob(PageId::ListView, card, overscan_knob, &overscan_spec)
+                        >= 0.5;
+                let overscan_screens = if overscan { 0.25 } else { 0.0 };
+                let vlist = &mut self.state.demo.virtual_lists[card];
+                if (vlist.row_height() - row_h).abs() > 0.01 {
+                    *vlist = unbound_world::virtualize::VirtualList::new(row_h, overscan_screens);
+                }
+                let viewport_h = page_layout
+                    .cards
+                    .get(card)
+                    .map(|c| (c.stage.size.y - 38.0).max(1.0))
+                    .unwrap_or(262.0);
+                let scroll = self.state.demo.list_scroll[card].max(0.0);
+                self.state.demo.virtual_updates[card] = vlist.update(scroll, viewport_h, total);
+            }
+        } else if self.state.active_page == PageId::Assets {
+            self.state.demo.poll_assets(&mut self.labels.engine);
+        }
 
         // The previous scene is kept for one frame: the diff against the
         // new one tells the renderer which primitives actually changed.

@@ -119,6 +119,15 @@ pub struct AssetHub {
     next_id: u32,
 }
 
+impl std::fmt::Debug for AssetHub {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AssetHub")
+            .field("residency_len", &self.residency.len())
+            .field("next_id", &self.next_id)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for AssetHub {
     fn default() -> Self {
         Self::new()
