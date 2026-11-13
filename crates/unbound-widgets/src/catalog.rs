@@ -642,5 +642,78 @@ pub fn emit_widget(
             );
             crate::stepper::emit_stepper(node, &desc, state, label)
         }
+        WidgetCatalogId::AutoComplete => {
+            let desc = crate::autocomplete::AutoCompleteDesc::new(rect, "unb", 3);
+            crate::autocomplete::emit_autocomplete(node, &desc, state, label)
+        }
+        WidgetCatalogId::Banner => {
+            let desc = crate::banner::BannerDesc::new(rect, "Hot reload ready", Severity::Info);
+            crate::banner::emit_banner(node, &desc, state, label)
+        }
+        WidgetCatalogId::Cascader => {
+            let desc = crate::cascader::CascaderDesc::new(
+                rect,
+                vec![crate::cascader::CascaderOption::leaf("ui", "UI")],
+                vec!["ui".to_owned()],
+            );
+            crate::cascader::emit_cascader(node, &desc, state, label)
+        }
+        WidgetCatalogId::DateRangePicker => {
+            let desc = crate::date_range_picker::DateRangePickerDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, 96.0),
+                Some(crate::date_range_picker::DateRange::ordered(
+                    NaiveDate::new(2026, 11, 1).expect("valid date"),
+                    NaiveDate::new(2026, 11, 13).expect("valid date"),
+                )),
+            );
+            crate::date_range_picker::emit_date_range_picker(node, &desc, state, label)
+        }
+        WidgetCatalogId::HotkeyInput => {
+            let desc = crate::hotkey_input::HotkeyInputDesc::new(rect, "Ctrl+K");
+            crate::hotkey_input::emit_hotkey_input(node, &desc, state, label)
+        }
+        WidgetCatalogId::NotificationCenter => {
+            let desc = crate::notification_center::NotificationCenterDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, 96.0),
+                vec![crate::notification_center::NotificationItem {
+                    id: 1,
+                    title: "Build finished".to_owned(),
+                    severity: Severity::Success,
+                    read: false,
+                }],
+            );
+            crate::notification_center::emit_notification_center(node, &desc, state, label)
+        }
+        WidgetCatalogId::PinInput => {
+            let desc = crate::pin_input::PinInputDesc::new(rect, 4, 2);
+            crate::pin_input::emit_pin_input(node, &desc, state, label)
+        }
+        WidgetCatalogId::Popconfirm => {
+            let desc = crate::popconfirm::PopconfirmDesc::new(
+                Rect::new(o.x, o.y, 180.0, 68.0),
+                "Delete item?",
+            );
+            crate::popconfirm::emit_popconfirm(node, &desc, state, label)
+        }
+        WidgetCatalogId::Rating => {
+            let desc = crate::rating::RatingDesc::new(rect, 4.5);
+            crate::rating::emit_rating(node, &desc, state)
+        }
+        WidgetCatalogId::Spinner => {
+            let desc = crate::spinner::SpinnerDesc::new(Rect::new(o.x, o.y, 36.0, 36.0), 0.25);
+            crate::spinner::emit_spinner(&desc, state)
+        }
+        WidgetCatalogId::TimePicker => {
+            let desc = crate::time_picker::TimePickerDesc::new(
+                rect,
+                crate::time_picker::TimeValue::new(14, 30, 0),
+            );
+            crate::time_picker::emit_time_picker(node, &desc, state, label)
+        }
+        WidgetCatalogId::Transfer => {
+            let desc =
+                crate::transfer::TransferDesc::new(Rect::new(o.x, o.y, rect.size.x, 96.0), 5, 2);
+            crate::transfer::emit_transfer(node, &desc, state, label)
+        }
     }
 }

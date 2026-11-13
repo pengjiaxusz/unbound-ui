@@ -139,6 +139,18 @@ define_showcase_components! {
     NavigationRail => "Navigation rail", "Collapsible sidebar navigation rail with badges.", 280.0,
     Pagination => "Pagination", "Page buttons with ellipsis folding and page-size metadata.", 220.0,
     Stepper => "Stepper", "Horizontal or vertical multi-step progress indicator.", 240.0,
+    AutoComplete => "AutoComplete", "Prefix-filtered input with live suggestion badge.", 220.0,
+    Banner => "Banner", "Full-width top global status and recovery banner.", 220.0,
+    Cascader => "Cascader", "Multi-level hierarchical option selector.", 220.0,
+    DateRangePicker => "Date range picker", "Dual-month calendar range selector with presets.", 260.0,
+    HotkeyInput => "Hotkey input", "Live KeyChord shortcut recorder with conflict status.", 220.0,
+    NotificationCenter => "Notification center", "Drawer aggregating toast history and unread status.", 260.0,
+    PinInput => "PIN input", "Segmented verification code input with paste splitting.", 220.0,
+    Popconfirm => "Popconfirm", "Anchored confirmation bubble for destructive actions.", 240.0,
+    Rating => "Rating", "Five-star rating control with half-star precision.", 220.0,
+    Spinner => "Spinner", "Continuous loading spinner and overlay lock scrim.", 220.0,
+    TimePicker => "Time picker", "Hour, minute, and second stepping time selector.", 220.0,
+    Transfer => "Transfer", "Dual-column item transfer list with batch move.", 260.0,
 }
 
 /// Whether `examples` mounts a card for `id` (const-comparable).

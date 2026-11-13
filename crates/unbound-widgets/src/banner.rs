@@ -1,0 +1,121 @@
+//! Full-width top global status Banner (e.g. hot-reload / device-lost notice).
+
+use accesskit::Role;
+use unbound_a11y::A11yNode;
+use unbound_input::{CursorKind, HitRegion};
+use unbound_math::Rect;
+use unbound_text::GlyphQuad;
+use unbound_theme::Token;
+
+use crate::alert::Severity;
+use crate::primitive::{focus_ring, glyphs, outlined, surface};
+use crate::switch::CONTROL_LAYER;
+use crate::{ControlState, PointerPhase, WidgetOutput};
+
+/// Descriptor for a full-width top [`Banner`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct BannerDesc {
+    /// Bounding rectangle.
+    pub rect: Rect,
+    /// Banner message.
+    pub message: String,
+    /// Severity tone.
+    pub severity: Severity,
+    /// Base z-index.
+    pub z: u16,
+}
+
+impl BannerDesc {
+    /// Create a banner descriptor.
+    #[must_use]
+    pub fn new(rect: Rect, message: impl Into<String>, severity: Severity) -> Self {
+        Self {
+            rect,
+            message: message.into(),
+            severity,
+            z: 700,
+        }
+    }
+}
+
+/// Emit a stable-shape banner (1 bg + 1 accent bar + 1 dismiss pill + 1 focus ring = 4 primitives).
+#[must_use]
+pub fn emit_banner(
+    node: u64,
+    desc: &BannerDesc,
+    state: ControlState,
+    label_glyphs: &[GlyphQuad],
+) -> WidgetOutput {
+    let mut primitives = Vec::with_capacity(4 + label_glyphs.len());
+    let mut payloads = Vec::with_capacity(label_glyphs.len());
+
+    let (fill, accent) = match desc.severity {
+        Severity::Info => (Token::PRIMARY_SOFT, Token::PRIMARY),
+        Severity::Success => (Token::SUCCESS_SOFT, Token::SUCCESS),
+        Severity::Warning => (Token::WARNING_SOFT, Token::WARNING),
+        Severity::Error => (Token::ERROR_SOFT, Token::ERROR),
+    };
+    let hovered = state.phase == PointerPhase::Hovered;
+    primitives.push(outlined(
+        desc.rect,
+        4.0,
+        fill,
+        if hovered || state.focused {
+            Token::FOCUS_RING
+        } else {
+            accent
+        },
+        1.0,
+        0.0,
+        desc.z,
+    ));
+
+    let bar_r = Rect::new(
+        desc.rect.origin.x,
+        desc.rect.origin.y,
+        4.0,
+        desc.rect.height(),
+    );
+    primitives.push(surface(bar_r, 2.0, accent, desc.z + 1));
+
+    let close_r = Rect::new(
+        desc.rect.max().x - 22.0,
+        desc.rect.origin.y + (desc.rect.height() - 14.0) * 0.5,
+        14.0,
+        14.0,
+    );
+    primitives.push(surface(close_r, 7.0, accent, desc.z + 1));
+
+    primitives.push(focus_ring(
+        desc.rect,
+        4.0,
+        Token::FOCUS_RING,
+        2.0,
+        desc.z + 2,
+        state.focused,
+    ));
+
+    if !label_glyphs.is_empty() {
+        glyphs(
+            label_glyphs,
+            Token::TEXT_PRIMARY,
+            desc.z + 3,
+            &mut primitives,
+            &mut payloads,
+        );
+    }
+
+    let hit = (!state.disabled).then(|| {
+        HitRegion::new(node, CONTROL_LAYER, u32::from(desc.z), desc.rect)
+            .with_cursor(CursorKind::Pointer)
+    });
+    let a11y = A11yNode::new(Role::Alert, desc.message.clone(), desc.rect).disabled(state.disabled);
+
+    WidgetOutput {
+        primitives,
+        payloads,
+        hit,
+        a11y: Some(a11y),
+        focusable: !state.disabled,
+    }
+}

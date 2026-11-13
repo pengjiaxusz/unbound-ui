@@ -89,6 +89,7 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::RichText,
     WidgetCatalogId::Ruler,
     WidgetCatalogId::Skeleton,
+    WidgetCatalogId::Spinner,
     WidgetCatalogId::Table,
     WidgetCatalogId::Toast,
     WidgetCatalogId::Tooltip,
@@ -160,6 +161,18 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::NavigationRail => "navigation_rail",
         WidgetCatalogId::Pagination => "pagination",
         WidgetCatalogId::Stepper => "stepper",
+        WidgetCatalogId::AutoComplete => "autocomplete",
+        WidgetCatalogId::Banner => "banner",
+        WidgetCatalogId::Cascader => "cascader",
+        WidgetCatalogId::DateRangePicker => "date_range_picker",
+        WidgetCatalogId::HotkeyInput => "hotkey_input",
+        WidgetCatalogId::NotificationCenter => "notification_center",
+        WidgetCatalogId::PinInput => "pin_input",
+        WidgetCatalogId::Popconfirm => "popconfirm",
+        WidgetCatalogId::Rating => "rating",
+        WidgetCatalogId::Spinner => "spinner",
+        WidgetCatalogId::TimePicker => "time_picker",
+        WidgetCatalogId::Transfer => "transfer",
     }
 }
 
@@ -236,5 +249,5 @@ fn the_probe_covers_every_component() {
         WidgetCatalogId::COUNT,
         "the probe must cover every component exactly once"
     );
-    assert_eq!(WidgetCatalogId::COUNT, 61);
+    assert_eq!(WidgetCatalogId::COUNT, 73);
 }
