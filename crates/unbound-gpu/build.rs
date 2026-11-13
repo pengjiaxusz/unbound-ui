@@ -23,6 +23,10 @@ const SHADERS: &[&str] = &[
     "indirect.comp",
     "mtsdf.comp",
     "mtsdf_pack.comp",
+    "blur_down.comp",
+    "blur_up.comp",
+    "backdrop.vert",
+    "backdrop.frag",
 ];
 
 fn exe(name: &str) -> String {

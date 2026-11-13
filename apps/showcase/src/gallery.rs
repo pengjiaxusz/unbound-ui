@@ -436,6 +436,7 @@ impl Gallery {
             key_prefix: (unbound_gpu::data::PassLayer::Ui as u64) << 56,
             dirty_ranges,
             aux_changed: false,
+            backdrops: &[],
         }
     }
 }

@@ -1048,6 +1048,7 @@ impl Showcase {
             key_prefix: (PassLayer::Ui as u64) << 56,
             dirty_ranges: &[],
             aux_changed: false,
+            backdrops: &[],
         };
         if let Err(error) = renderer.render_into_swapchain(&scene, &image, actual_w, actual_h) {
             eprintln!("secondary render failed: {error}");
@@ -1245,6 +1246,7 @@ impl Showcase {
             key_prefix: (PassLayer::Ui as u64) << 56,
             dirty_ranges,
             aux_changed: report.aux_changed,
+            backdrops: &[],
         };
         if let Err(error) = renderer.render_into_swapchain(&scene, &image, width, height) {
             eprintln!("render failed: {error}");

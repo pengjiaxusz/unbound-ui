@@ -105,6 +105,18 @@ pub struct Pipelines {
     pub uber_additive: vk::Pipeline,
     pub opaque_core: vk::Pipeline,
     pub compute: [vk::Pipeline; ComputeStage::COUNT],
+    /// The backdrop-blur descriptor set layout: source sampler + storage image.
+    pub blur_set_layout: vk::DescriptorSetLayout,
+    /// The layout shared by the two blur compute pipelines and the composite.
+    pub blur_layout: vk::PipelineLayout,
+    /// The pool the blur descriptor sets come from.
+    pub blur_pool: vk::DescriptorPool,
+    /// Pre-allocated descriptor sets, one per blur pass.
+    pub blur_sets: Vec<vk::DescriptorSet>,
+    pub blur_down: vk::Pipeline,
+    pub blur_up: vk::Pipeline,
+    /// The full-screen backdrop composite pipeline.
+    pub backdrop: vk::Pipeline,
     pub sampler: vk::Sampler,
     pub dummy_r8: DummyTexture,
     pub dummy_rgba: DummyTexture,
@@ -393,6 +405,140 @@ impl Pipelines {
             compute[stage as usize] = pipeline;
         }
 
+        // ---- backdrop blur ---------------------------------------------------
+        // One sampler for the source, one storage image for the destination.
+        // The same layout is reused by the composite pass, which only needs
+        // the sampler.
+        let blur_bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        ];
+        let blur_set_layout = device
+            .create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&blur_bindings),
+                None,
+            )
+            .map_err(GpuError::from)?;
+
+        let blur_set_layouts = [blur_set_layout];
+        let blur_pc_range = vk::PushConstantRange::default()
+            .stage_flags(
+                vk::ShaderStageFlags::COMPUTE
+                    | vk::ShaderStageFlags::VERTEX
+                    | vk::ShaderStageFlags::FRAGMENT,
+            )
+            .offset(0)
+            .size(crate::data::BlurPush::SIZE.max(crate::data::BackdropCompositePush::SIZE));
+        let blur_layout = device
+            .create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::default()
+                    .set_layouts(&blur_set_layouts)
+                    .push_constant_ranges(&[blur_pc_range]),
+                None,
+            )
+            .map_err(GpuError::from)?;
+
+        let make_compute = |module: shader::ShaderModule| -> Result<vk::Pipeline, GpuError> {
+            let module = shader_module(gpu, module)?;
+            let stage_info = vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::COMPUTE)
+                .module(module)
+                .name(c"main");
+            let pipeline = device
+                .create_compute_pipelines(
+                    vk::PipelineCache::null(),
+                    &[vk::ComputePipelineCreateInfo::default()
+                        .stage(stage_info)
+                        .layout(blur_layout)],
+                    None,
+                )
+                .map_err(|(_, e)| GpuError::from(e))?[0];
+            device.destroy_shader_module(module, None);
+            Ok(pipeline)
+        };
+        let blur_down = make_compute(shader::blur_down())?;
+        let blur_up = make_compute(shader::blur_up())?;
+
+        // The composite is a plain alpha-blended full-screen triangle with no
+        // depth attachment: it runs after the main pass and only paints the
+        // blurred backdrop inside the requesting rectangle.
+        let backdrop = {
+            let vert = shader_module(gpu, shader::backdrop_vert())?;
+            let frag = shader_module(gpu, shader::backdrop_frag())?;
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(vert)
+                    .name(c"main"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(frag)
+                    .name(c"main"),
+            ];
+            let tri = vk::PipelineInputAssemblyStateCreateInfo::default()
+                .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+            let no_depth = vk::PipelineDepthStencilStateCreateInfo::default();
+            let mut rendering =
+                vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&color_formats);
+            let pipeline = device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    &[vk::GraphicsPipelineCreateInfo::default()
+                        .stages(&stages)
+                        .vertex_input_state(&vertex_input)
+                        .input_assembly_state(&tri)
+                        .viewport_state(&viewport_state)
+                        .rasterization_state(&raster)
+                        .multisample_state(&multisample)
+                        .depth_stencil_state(&no_depth)
+                        .color_blend_state(&color_blend)
+                        .dynamic_state(&dynamic)
+                        .layout(blur_layout)
+                        .push_next(&mut rendering)],
+                    None,
+                )
+                .map_err(|(_, e)| GpuError::from(e))?[0];
+            device.destroy_shader_module(vert, None);
+            device.destroy_shader_module(frag, None);
+            pipeline
+        };
+
+        let blur_pool_sizes = [
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(16),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(16),
+        ];
+        let blur_pool = device
+            .create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(16)
+                    .pool_sizes(&blur_pool_sizes),
+                None,
+            )
+            .map_err(GpuError::from)?;
+        // Four sets per blur round plus one for the composite. A descriptor
+        // set cannot be rebound while a recorded dispatch that uses it is
+        // pending, so each round gets its own.
+        let blur_layouts = [blur_set_layout; 13];
+        let blur_sets = device
+            .allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(blur_pool)
+                    .set_layouts(&blur_layouts),
+            )
+            .map_err(GpuError::from)?;
+
         // ---- descriptor pool + set ------------------------------------------
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -448,6 +594,13 @@ impl Pipelines {
             uber_additive,
             opaque_core,
             compute,
+            blur_set_layout,
+            blur_layout,
+            blur_pool,
+            blur_sets,
+            blur_down,
+            blur_up,
+            backdrop,
             sampler,
             dummy_r8,
             dummy_rgba,
@@ -562,6 +715,44 @@ impl Pipelines {
         gpu.device.update_descriptor_sets(&[write], &[]);
     }
 
+    /// Point one of the pre-allocated blur sets at a source/destination pair.
+    ///
+    /// The renderer only calls this when either image view changed, so the
+    /// steady-state frame does no descriptor writes at all.
+    ///
+    /// # Safety
+    /// The set must not be in use by an in-flight frame.
+    pub unsafe fn update_blur_set(
+        &self,
+        gpu: &Gpu,
+        index: usize,
+        source_view: vk::ImageView,
+        source_layout: vk::ImageLayout,
+        dest_view: vk::ImageView,
+    ) {
+        let source = vk::DescriptorImageInfo::default()
+            .sampler(self.sampler)
+            .image_view(source_view)
+            .image_layout(source_layout);
+        let dest = vk::DescriptorImageInfo::default()
+            .image_view(dest_view)
+            .image_layout(vk::ImageLayout::GENERAL);
+        let set = self.blur_sets[index];
+        let writes = [
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(core::slice::from_ref(&source)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(core::slice::from_ref(&dest)),
+        ];
+        gpu.device.update_descriptor_sets(&writes, &[]);
+    }
+
     /// # Safety
     /// The device must be idle.
     pub unsafe fn destroy(&self, gpu: &Gpu) {
@@ -574,6 +765,12 @@ impl Pipelines {
                 device.destroy_pipeline(p, None);
             }
         }
+        device.destroy_pipeline(self.blur_down, None);
+        device.destroy_pipeline(self.blur_up, None);
+        device.destroy_pipeline(self.backdrop, None);
+        device.destroy_descriptor_pool(self.blur_pool, None);
+        device.destroy_pipeline_layout(self.blur_layout, None);
+        device.destroy_descriptor_set_layout(self.blur_set_layout, None);
         device.destroy_sampler(self.sampler, None);
         for tex in [&self.dummy_r8, &self.dummy_rgba] {
             device.destroy_image_view(tex.view, None);

@@ -1907,6 +1907,7 @@ dependencies = [
  "bytemuck",
  "libloading 0.9.0",
  "raw-window-handle",
+ "unbound-graph",
  "unbound-math",
  "unbound-theme",
  "unbound-vector",

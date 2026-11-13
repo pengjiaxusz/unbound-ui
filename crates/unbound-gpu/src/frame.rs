@@ -22,8 +22,8 @@
 use ash::vk;
 
 use crate::data::{
-    FramePushConstants, GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuScatterPatch,
-    GpuTransform, PassLayer, PushConstants,
+    BackdropCompositePush, BlurPush, FramePushConstants, GpuClipNode, GpuPayload,
+    GpuPrimitiveInstance, GpuScatterPatch, GpuTransform, PassLayer, PushConstants,
 };
 use crate::device::{Buffer, Gpu, GpuError, MemoryKind};
 use crate::pipeline::{Pipelines, COLOR_FORMAT, DEPTH_FORMAT};
@@ -98,6 +98,36 @@ impl Camera {
     }
 }
 
+/// A frosted-glass backdrop requested by the UI.
+///
+/// The rectangle is in **physical pixels** of the target. The GPU renders the
+/// frame, blurs the region behind the rectangle with a dual-Kawase filter and
+/// composites the result back with the rounded-corner mask — the modal's own
+/// surface is then drawn translucent on top by the normal primitive pass.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct BackdropRequest {
+    /// `(x, y, width, height)` in physical pixels.
+    pub rect: [f32; 4],
+    /// The uniform corner radius, in physical pixels.
+    pub radius: f32,
+    /// Per-corner radii `(top-left, top-right, bottom-right, bottom-left)`.
+    pub corner_radii: [f32; 4],
+    /// The layer the owning primitive lives on. Kept so a future layered
+    /// renderer can composite the blur under exactly that layer.
+    pub layer_key_prefix: u64,
+}
+
+impl Default for BackdropRequest {
+    fn default() -> Self {
+        Self {
+            rect: [0.0; 4],
+            radius: 0.0,
+            corner_radii: [0.0; 4],
+            layer_key_prefix: (PassLayer::Overlay as u64) << 56,
+        }
+    }
+}
+
 /// Everything the renderer needs for one layer pass.
 #[derive(Debug)]
 pub struct SceneUpload<'a> {
@@ -129,6 +159,8 @@ pub struct SceneUpload<'a> {
     /// pool did not. They are staged in the partial path without forcing a
     /// whole-scene upload.
     pub aux_changed: bool,
+    /// Frosted-glass regions composited after the main pass, before present.
+    pub backdrops: &'a [BackdropRequest],
 }
 
 impl Default for SceneUpload<'_> {
@@ -143,6 +175,7 @@ impl Default for SceneUpload<'_> {
             key_prefix: (PassLayer::Ui as u64) << 56,
             dirty_ranges: &[],
             aux_changed: false,
+            backdrops: &[],
         }
     }
 }
@@ -165,6 +198,133 @@ impl FrameStats {
     #[must_use]
     pub fn mdi_draw_calls(&self) -> u32 {
         self.draw_calls
+    }
+}
+
+/// A driver image owned by one offscreen-pool slot.
+struct BlurTexture {
+    desc: unbound_graph::TextureDesc,
+    image: vk::Image,
+    memory: vk::DeviceMemory,
+    view: vk::ImageView,
+}
+
+/// The backdrop-blur scratch targets and the graph that validates them.
+///
+/// The [pool](unbound_graph::OffscreenPool) owns the slot bookkeeping; this
+/// struct owns the Vulkan images. A slot keeps its image across frames, so the
+/// steady state creates nothing and writes no descriptors.
+struct BlurTargets {
+    pool: unbound_graph::OffscreenPool,
+    textures: Vec<Option<BlurTexture>>,
+    /// The `(source view, source layout, destination view)` currently written
+    /// into each pre-allocated descriptor set.
+    bindings: Vec<Option<(vk::ImageView, vk::ImageLayout, vk::ImageView)>>,
+    /// The compiled graph describing copy → blur → composite.
+    graph: unbound_graph::CompiledGraph,
+}
+
+impl BlurTargets {
+    fn new() -> Self {
+        Self {
+            pool: unbound_graph::OffscreenPool::new(),
+            textures: Vec::new(),
+            bindings: Vec::new(),
+            graph: Self::compile_graph(),
+        }
+    }
+
+    /// Declare the backdrop chain and let the graph reject a broken one.
+    ///
+    /// The graph is compiled once: it is a declaration of the passes, not a
+    /// per-frame structure.
+    fn compile_graph() -> unbound_graph::CompiledGraph {
+        use unbound_graph::{PassKind, RenderGraph, TextureRole};
+        use unbound_graph::{TextureDesc, TextureFormat};
+
+        let mut graph = RenderGraph::new();
+        let desc = TextureDesc::new(1, 1, TextureFormat::Rgba8);
+        let scene = graph.add_texture(
+            desc,
+            TextureRole::External, // the scene colour attachment
+        );
+        let half = graph.add_texture(desc, TextureRole::Transient);
+        let full = graph.add_texture(desc, TextureRole::Transient);
+        graph.add_pass(
+            "blur-down",
+            PassKind::Blur { radius: 20 },
+            &[scene],
+            &[half],
+        );
+        graph.add_pass("blur-up", PassKind::Blur { radius: 20 }, &[half], &[full]);
+        graph.add_pass(
+            "backdrop-composite",
+            PassKind::Composite,
+            &[full, scene],
+            &[scene],
+        );
+        graph.compile().unwrap_or(unbound_graph::CompiledGraph {
+            passes: Vec::new(),
+            lifetimes: Vec::new(),
+        })
+    }
+
+    /// Make sure `slot` holds an image of `desc` and return its view.
+    ///
+    /// Returns `true` in the second position when the image was (re)created
+    /// and therefore still needs its `UNDEFINED → GENERAL` transition.
+    fn ensure(
+        &mut self,
+        gpu: &Gpu,
+        slot: u32,
+        desc: unbound_graph::TextureDesc,
+    ) -> Result<(vk::ImageView, vk::Image, bool), GpuError> {
+        let index = slot as usize;
+        if self.textures.len() <= index {
+            self.textures.resize_with(index + 1, || None);
+        }
+        if let Some(texture) = &self.textures[index] {
+            if texture.desc == desc {
+                return Ok((texture.view, texture.image, false));
+            }
+        }
+        if let Some(old) = self.textures[index].take() {
+            // SAFETY: the slot is being rebound and the device is idle between
+            // frames; the old image is ours.
+            unsafe {
+                gpu.device.destroy_image_view(old.view, None);
+                gpu.device.destroy_image(old.image, None);
+                gpu.device.free_memory(old.memory, None);
+            }
+        }
+        // SAFETY: creation only; ownership is stored in the slot.
+        let (image, memory, view) = unsafe {
+            RenderTarget::create_image(
+                gpu,
+                desc.width,
+                desc.height,
+                vk::Format::R8G8B8A8_UNORM,
+                vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+                false,
+            )?
+        };
+        self.textures[index] = Some(BlurTexture {
+            desc,
+            image,
+            memory,
+            view,
+        });
+        Ok((view, image, true))
+    }
+
+    /// # Safety
+    /// The device must be idle.
+    unsafe fn destroy(&mut self, gpu: &Gpu) {
+        for texture in self.textures.drain(..).flatten() {
+            gpu.device.destroy_image_view(texture.view, None);
+            gpu.device.destroy_image(texture.image, None);
+            gpu.device.free_memory(texture.memory, None);
+        }
     }
 }
 
@@ -205,6 +365,8 @@ pub struct Renderer {
     generation: UploadGeneration,
     frame_index: u64,
     pub stats: FrameStats,
+    /// Backdrop-blur scratch targets.
+    blur: BlurTargets,
     /// Scratch buffer for the staged scene bytes, reused across frames.
     ///
     /// The render path allocates nothing per frame: the buffer keeps its
@@ -307,6 +469,7 @@ impl RenderTarget {
                 height,
                 COLOR_FORMAT,
                 vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::SAMPLED
                     | vk::ImageUsageFlags::TRANSFER_SRC
                     | vk::ImageUsageFlags::TRANSFER_DST,
                 false,
@@ -549,6 +712,7 @@ impl Renderer {
             generation: UploadGeneration::empty(),
             frame_index: 0,
             stats: FrameStats::default(),
+            blur: BlurTargets::new(),
             staging_bytes: Vec::new(),
             staging_spans: Vec::new(),
             staging_patches: Vec::new(),
@@ -1124,6 +1288,11 @@ impl Renderer {
         self.record_graphics(cmd, scene);
         self.end_rendering(cmd);
 
+        // ---- 8. frosted-glass backdrops -------------------------------------
+        // The blur samples the colour attachment, so it runs after the main
+        // pass has finished writing and before the image is handed to present.
+        self.record_backdrop(cmd, scene)?;
+
         // A swapchain image must be handed to the presentation engine in
         // `PRESENT_SRC_KHR`; leaving it in `COLOR_ATTACHMENT_OPTIMAL` makes
         // every `vkQueuePresentKHR` a validation error.
@@ -1151,6 +1320,431 @@ impl Renderer {
         self.mark(cmd, 5, vk::PipelineStageFlags::BOTTOM_OF_PIPE);
 
         Ok(())
+    }
+
+    /// Number of images the backdrop pool had to create.
+    ///
+    /// A steady-state frame reuses every slot: the counter does not move after
+    /// the first backdrop and is what the frosted-glass test asserts.
+    #[must_use]
+    pub fn blur_pool_creation_count(&self) -> u64 {
+        self.blur.pool.creation_count()
+    }
+
+    /// Run the backdrop chain: sample, blur, composite — for every request.
+    fn record_backdrop(
+        &mut self,
+        cmd: vk::CommandBuffer,
+        scene: &SceneUpload<'_>,
+    ) -> Result<(), GpuError> {
+        if scene.backdrops.is_empty() {
+            return Ok(());
+        }
+        debug_assert!(
+            !self.blur.graph.passes.is_empty(),
+            "the backdrop render graph must compile"
+        );
+        let (width, height, color_image, color_view) = match self.external_color {
+            Some((image, view, w, h)) => (w, h, image, view),
+            None => (
+                self.target.width,
+                self.target.height,
+                self.target.color,
+                self.target.color_view,
+            ),
+        };
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        for request in scene.backdrops {
+            self.record_one_backdrop(cmd, request, width, height, color_image, color_view)?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_one_backdrop(
+        &mut self,
+        cmd: vk::CommandBuffer,
+        request: &BackdropRequest,
+        width: u32,
+        height: u32,
+        color_image: vk::Image,
+        color_view: vk::ImageView,
+    ) -> Result<(), GpuError> {
+        use unbound_graph::TextureFormat;
+
+        let radius = request.radius.max(1.0);
+        let two_levels = radius > 8.0;
+
+        // The scene colour attachment becomes a sampled source.
+        let to_sample = [image_barrier(
+            color_image,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+            vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            vk::AccessFlags2::SHADER_READ,
+            false,
+        )];
+        // SAFETY: recording into our own command buffer.
+        unsafe {
+            self.gpu.device.cmd_pipeline_barrier2(
+                cmd,
+                &vk::DependencyInfo::default().image_memory_barriers(&to_sample),
+            );
+        }
+        if self.external_color.is_none() {
+            self.target.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        }
+
+        let half_desc = unbound_graph::TextureDesc::new(
+            (width / 2).max(1),
+            (height / 2).max(1),
+            TextureFormat::Rgba8,
+        );
+        let full_desc =
+            unbound_graph::TextureDesc::new(width.max(1), height.max(1), TextureFormat::Rgba8);
+        let half = self.blur.pool.acquire(half_desc);
+        let (half_view, half_image, half_new) =
+            self.blur.ensure(&self.gpu, half.slot, half_desc)?;
+
+        let mut quarter_handle = None;
+        let (quarter_view, quarter_image, quarter_new) = if two_levels {
+            let quarter_desc = unbound_graph::TextureDesc::new(
+                (width / 4).max(1),
+                (height / 4).max(1),
+                TextureFormat::Rgba8,
+            );
+            let quarter = self.blur.pool.acquire(quarter_desc);
+            quarter_handle = Some(quarter);
+            let (view, image, new) = self.blur.ensure(&self.gpu, quarter.slot, quarter_desc)?;
+            (view, image, new)
+        } else {
+            (vk::ImageView::null(), vk::Image::null(), false)
+        };
+
+        let full = self.blur.pool.acquire(full_desc);
+        let (full_view, full_image, full_new) =
+            self.blur.ensure(&self.gpu, full.slot, full_desc)?;
+
+        if half_new {
+            self.transition_blur_image(cmd, half_image);
+        }
+        if quarter_new {
+            self.transition_blur_image(cmd, quarter_image);
+        }
+        if full_new {
+            self.transition_blur_image(cmd, full_image);
+        }
+
+        let scene_size = (width, height);
+        let half_size = (half_desc.width, half_desc.height);
+        let quarter_size = ((width / 4).max(1), (height / 4).max(1));
+
+        // Three rounds of the dual-Kawase chain. Each round applies the same
+        // tent twice (down and up), and stacking them drives the response at
+        // the checkerboard frequency close to zero instead of leaving a
+        // low-amplitude copy of the pattern.
+        let mut source_view = color_view;
+        let mut source_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        for round in 0..3usize {
+            // Each round owns four descriptor sets: a set updated for round 2
+            // must not change the descriptors round 1 already recorded.
+            let base = round * 4;
+            self.blur_pass(
+                cmd,
+                base,
+                self.pipelines.blur_down,
+                source_view,
+                source_layout,
+                half_view,
+                half_size,
+                scene_size,
+                radius,
+                0,
+            );
+            if two_levels {
+                self.blur_pass(
+                    cmd,
+                    base + 1,
+                    self.pipelines.blur_down,
+                    half_view,
+                    vk::ImageLayout::GENERAL,
+                    quarter_view,
+                    quarter_size,
+                    half_size,
+                    radius,
+                    1,
+                );
+                self.blur_pass(
+                    cmd,
+                    base + 2,
+                    self.pipelines.blur_up,
+                    quarter_view,
+                    vk::ImageLayout::GENERAL,
+                    half_view,
+                    half_size,
+                    quarter_size,
+                    radius,
+                    1,
+                );
+                self.blur_pass(
+                    cmd,
+                    base + 3,
+                    self.pipelines.blur_up,
+                    half_view,
+                    vk::ImageLayout::GENERAL,
+                    full_view,
+                    scene_size,
+                    half_size,
+                    radius,
+                    0,
+                );
+            } else {
+                self.blur_pass(
+                    cmd,
+                    base + 1,
+                    self.pipelines.blur_up,
+                    half_view,
+                    vk::ImageLayout::GENERAL,
+                    full_view,
+                    scene_size,
+                    half_size,
+                    radius,
+                    0,
+                );
+            }
+            source_view = full_view;
+            source_layout = vk::ImageLayout::GENERAL;
+        }
+
+        // The composite samples the *destination* of the last blur pass, so
+        // its own descriptor set points the sampler at the full-resolution
+        // result (set 8 is reserved for that).
+        self.bind_blur_binding(8, full_view, vk::ImageLayout::GENERAL, full_view);
+        self.composite_backdrop(cmd, request, width, height, color_image, color_view, 8);
+
+        self.blur.pool.release(half);
+        if let Some(quarter) = quarter_handle {
+            self.blur.pool.release(quarter);
+        }
+        self.blur.pool.release(full);
+        Ok(())
+    }
+
+    /// Transition a freshly created blur image into the layout the compute
+    /// shaders read and write.
+    fn transition_blur_image(&self, cmd: vk::CommandBuffer, image: vk::Image) {
+        let ready = [image_barrier(
+            image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::GENERAL,
+            vk::PipelineStageFlags2::TOP_OF_PIPE,
+            vk::AccessFlags2::NONE,
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_WRITE,
+            false,
+        )];
+        // SAFETY: recording into our own command buffer.
+        unsafe {
+            self.gpu.device.cmd_pipeline_barrier2(
+                cmd,
+                &vk::DependencyInfo::default().image_memory_barriers(&ready),
+            );
+        }
+    }
+
+    /// Point a pre-allocated descriptor set at a source/destination pair,
+    /// writing the descriptors only when the pair actually changed.
+    fn bind_blur_binding(
+        &mut self,
+        set_index: usize,
+        source_view: vk::ImageView,
+        source_layout: vk::ImageLayout,
+        dest_view: vk::ImageView,
+    ) {
+        if self.blur.bindings.len() <= set_index {
+            self.blur.bindings.resize(set_index + 1, None);
+        }
+        let binding = (source_view, source_layout, dest_view);
+        if self.blur.bindings[set_index] == Some(binding) {
+            return;
+        }
+        // SAFETY: the set is not in use by an in-flight frame: the renderer
+        // waited for this frame slot before recording.
+        unsafe {
+            self.pipelines.update_blur_set(
+                &self.gpu,
+                set_index,
+                source_view,
+                source_layout,
+                dest_view,
+            );
+        }
+        self.blur.bindings[set_index] = Some(binding);
+    }
+
+    /// Dispatch one dual-Kawase step and make its writes visible to the next
+    /// reader.
+    #[allow(clippy::too_many_arguments)]
+    fn blur_pass(
+        &mut self,
+        cmd: vk::CommandBuffer,
+        set_index: usize,
+        pipeline: vk::Pipeline,
+        source_view: vk::ImageView,
+        source_layout: vk::ImageLayout,
+        dest_view: vk::ImageView,
+        dest_size: (u32, u32),
+        _source_size: (u32, u32),
+        radius: f32,
+        iteration: u32,
+    ) {
+        self.bind_blur_binding(set_index, source_view, source_layout, dest_view);
+
+        let push = BlurPush {
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
+            dst_size: [dest_size.0 as f32, dest_size.1 as f32],
+            radius,
+            iteration,
+        };
+        // SAFETY: recording; the pipeline, layout and set are ours.
+        unsafe {
+            let device = &self.gpu.device;
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                self.pipelines.blur_layout,
+                0,
+                &[self.pipelines.blur_sets[set_index]],
+                &[],
+            );
+            device.cmd_push_constants(
+                cmd,
+                self.pipelines.blur_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                bytemuck::bytes_of(&push),
+            );
+            device.cmd_dispatch(
+                cmd,
+                dest_size.0.div_ceil(8).max(1),
+                dest_size.1.div_ceil(8).max(1),
+                1,
+            );
+        }
+        self.stats.compute_dispatches += 1;
+
+        let visible = [vk::MemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+            .dst_stage_mask(
+                vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            )
+            .dst_access_mask(vk::AccessFlags2::SHADER_READ)];
+        // SAFETY: recording into our own command buffer.
+        unsafe {
+            self.gpu.device.cmd_pipeline_barrier2(
+                cmd,
+                &vk::DependencyInfo::default().memory_barriers(&visible),
+            );
+        }
+    }
+
+    /// Paint the blurred full-resolution texture back into the rectangle.
+    #[allow(clippy::too_many_arguments)]
+    fn composite_backdrop(
+        &mut self,
+        cmd: vk::CommandBuffer,
+        request: &BackdropRequest,
+        width: u32,
+        height: u32,
+        color_image: vk::Image,
+        color_view: vk::ImageView,
+        descriptor_set: usize,
+    ) {
+        let radii = if request.corner_radii == [0.0; 4] {
+            [request.radius; 4]
+        } else {
+            request.corner_radii
+        };
+        let push = BackdropCompositePush {
+            rect: request.rect,
+            radii,
+        };
+        let to_attachment = [image_barrier(
+            color_image,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            vk::AccessFlags2::SHADER_READ,
+            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+            vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            false,
+        )];
+        // SAFETY: recording; the target is exclusively owned.
+        unsafe {
+            let device = &self.gpu.device;
+            device.cmd_pipeline_barrier2(
+                cmd,
+                &vk::DependencyInfo::default().image_memory_barriers(&to_attachment),
+            );
+            let color_attachment = [vk::RenderingAttachmentInfo::default()
+                .image_view(color_view)
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::LOAD)
+                .store_op(vk::AttachmentStoreOp::STORE)];
+            let area = vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D { width, height },
+            };
+            device.cmd_begin_rendering(
+                cmd,
+                &vk::RenderingInfo::default()
+                    .render_area(area)
+                    .layer_count(1)
+                    .color_attachments(&color_attachment),
+            );
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipelines.backdrop,
+            );
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipelines.blur_layout,
+                0,
+                &[self.pipelines.blur_sets[descriptor_set]],
+                &[],
+            );
+            device.cmd_push_constants(
+                cmd,
+                self.pipelines.blur_layout,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                bytemuck::bytes_of(&push),
+            );
+            let viewport = vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: width as f32,
+                height: height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            };
+            device.cmd_set_viewport(cmd, 0, &[viewport]);
+            device.cmd_set_scissor(cmd, 0, &[area]);
+            device.cmd_draw(cmd, 3, 1, 0, 0);
+            device.cmd_end_rendering(cmd);
+        }
+        self.stats.draw_calls += 1;
+        if self.external_color.is_none() {
+            self.target.layout = vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
+        }
     }
 
     /// Enable GPU timing for the frames rendered from now on.
@@ -2022,6 +2616,7 @@ impl Renderer {
         // SAFETY: the device is idle and `self` is consumed.
         unsafe {
             this.target.destroy(&this.gpu);
+            this.blur.destroy(&this.gpu);
             for b in [
                 &this.pool_buffer,
                 &this.ring_buffer,
@@ -2216,6 +2811,7 @@ mod tests {
             key_prefix: (PassLayer::Ui as u64) << 56,
             dirty_ranges: &[],
             aux_changed: false,
+            backdrops: &[],
         }
     }
 
@@ -2277,6 +2873,98 @@ mod tests {
 
         assert_eq!(renderer.stats.visible, 1, "the quad must survive culling");
         assert_eq!(renderer.stats.draw_calls, 1);
+        renderer.destroy();
+    }
+
+    /// Standard deviation of the red channel over a rectangle.
+    ///
+    /// The checkerboard alternates black and white, so its deviation is ~127;
+    /// a real blur collapses it. Adjacent-pixel differences would miss the
+    /// point because the blurred image keeps the same low-amplitude wave.
+    fn region_stddev(pixels: &[u8], width: u32, rect: (u32, u32, u32, u32)) -> f32 {
+        let (x0, y0, x1, y1) = rect;
+        let mut sum = 0.0;
+        let mut sum_sq = 0.0;
+        let mut count = 0.0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let value = f32::from(pixels[((y * width + x) * 4) as usize]);
+                sum += value;
+                sum_sq += value * value;
+                count += 1.0;
+            }
+        }
+        if count == 0.0 {
+            return 0.0;
+        }
+        let mean = sum / count;
+        (sum_sq / count - mean * mean).max(0.0).sqrt()
+    }
+
+    /// P1.4: a modal backdrop must really blur the checkerboard beneath it.
+    ///
+    /// The frame is rendered twice: once unfiltered (the baseline) and once
+    /// with a `radius = 20` backdrop covering the whole target. The blurred
+    /// readback must lose at least 80% of its high-frequency energy, and a
+    /// second blurred frame must not allocate another scratch image.
+    #[test]
+    fn modal_backdrop_blur_smooths_underlying_checkerboard() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
+        let mut theme = vec![[0u16; 4]; 512];
+        theme[2] = unbound_math::Color::from_srgb8(18, 18, 20, 255).to_rgba16f();
+        theme[5] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
+        theme[6] = unbound_math::Color::from_srgb8(0, 0, 0, 255).to_rgba16f();
+        renderer.write_theme(&theme).unwrap();
+
+        let mut prims = Vec::new();
+        for y in 0..16 {
+            for x in 0..16 {
+                let token = if (x + y) % 2 == 0 { 5 } else { 6 };
+                let mut tile = quad(x as f32 * 8.0, y as f32 * 8.0, 8.0, 8.0, token);
+                tile.corner_radii = unbound_math::f16::pack_radii([0.0; 4]);
+                prims.push(tile);
+            }
+        }
+        let transforms = vec![GpuTransform::IDENTITY];
+        let base = scene(&prims, &transforms, 1);
+
+        renderer.render(&base).expect("baseline render");
+        let baseline = renderer.read_pixels().expect("baseline readback");
+        let before = region_stddev(&baseline, 128, (16, 16, 112, 112));
+        assert!(before > 100.0, "the checkerboard must be sharp: {before}");
+
+        let backdrops = [BackdropRequest {
+            rect: [0.0, 0.0, 128.0, 128.0],
+            radius: 0.0,
+            corner_radii: [0.0; 4],
+            layer_key_prefix: (PassLayer::Overlay as u64) << 56,
+        }];
+        let blurred_scene = SceneUpload {
+            backdrops: &backdrops,
+            ..scene(&prims, &transforms, 1)
+        };
+        renderer.render(&blurred_scene).expect("blurred render");
+        let blurred = renderer.read_pixels().expect("blurred readback");
+        let after = region_stddev(&blurred, 128, (16, 16, 112, 112));
+        assert!(
+            after <= before * 0.2,
+            "the backdrop must smooth the checkerboard: before={before}, after={after}"
+        );
+
+        let created = renderer.blur_pool_creation_count();
+        renderer
+            .render(&blurred_scene)
+            .expect("steady-state render");
+        let _ = renderer.read_pixels().expect("steady-state readback");
+        assert_eq!(
+            renderer.blur_pool_creation_count(),
+            created,
+            "a steady-state frame must recycle the offscreen pool"
+        );
         renderer.destroy();
     }
 

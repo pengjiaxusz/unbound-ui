@@ -11,6 +11,7 @@ repository.workspace = true
 unbound-math.workspace = true
 unbound-theme.workspace = true
 unbound-vector.workspace = true
+unbound-graph.workspace = true
 bytemuck.workspace = true
 ash.workspace = true
 raw-window-handle.workspace = true

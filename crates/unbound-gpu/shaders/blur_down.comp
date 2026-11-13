@@ -1,0 +1,52 @@
+#version 460
+
+// ---------------------------------------------------------------------------
+// Dual-Kawase blur — downsample (P1.4).
+//
+// The backdrop is sampled with the classic 5-tap Kawase kernel and written to
+// a half-resolution storage image. The kernel only needs the source region
+// (`uv_rect`) and the destination size, so the same pass blurs a full window,
+// a modal rect, or a popover.
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_source;
+layout(set = 0, binding = 1, rgba8) uniform image2D u_dest;
+
+layout(push_constant) uniform BlurPush {
+    // Source region in uv space: (x, y, width, height).
+    vec4 uv_rect;
+    // Destination size in pixels.
+    vec2 dst_size;
+    // Blur radius in logical pixels.
+    float radius;
+    // Which iteration this is (0-based); scales the kernel offset.
+    uint iteration;
+} pc;
+
+// One 13-tap tent at offset `o`. The centre only carries 1/13 of the weight,
+// so a single high-contrast tile cannot dominate the result.
+vec4 tent(vec2 uv, vec2 o) {
+    vec4 c = texture(u_source, uv);
+    c += (texture(u_source, uv + vec2(o.x, 0.0))
+        + texture(u_source, uv - vec2(o.x, 0.0))
+        + texture(u_source, uv + vec2(0.0, o.y))
+        + texture(u_source, uv - vec2(0.0, o.y))) * 2.0;
+    c += texture(u_source, uv + vec2(o.x, o.y));
+    c += texture(u_source, uv + vec2(-o.x, o.y));
+    c += texture(u_source, uv + vec2(o.x, -o.y));
+    c += texture(u_source, uv + vec2(-o.x, -o.y));
+    return c / 13.0;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.dst_size.x) || p.y >= int(pc.dst_size.y)) {
+        return;
+    }
+    vec2 uv = (vec2(p) + 0.5) / pc.dst_size;
+    vec2 suv = pc.uv_rect.xy + uv * pc.uv_rect.zw;
+    vec2 o = pc.uv_rect.zw / pc.dst_size * max(pc.radius, 1.0) * 0.75;
+    imageStore(u_dest, p, tent(suv, o));
+}

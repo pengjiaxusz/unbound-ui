@@ -1,0 +1,43 @@
+#version 460
+
+// ---------------------------------------------------------------------------
+// Dual-Kawase blur — upsample (P1.4).
+//
+// Eight tent taps reconstruct a smooth result from the half-resolution image.
+// The last pass writes a full-resolution texture that the backdrop composite
+// samples directly.
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_source;
+layout(set = 0, binding = 1, rgba8) uniform image2D u_dest;
+
+layout(push_constant) uniform BlurPush {
+    vec4 uv_rect;
+    vec2 dst_size;
+    float radius;
+    uint iteration;
+} pc;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.dst_size.x) || p.y >= int(pc.dst_size.y)) {
+        return;
+    }
+    vec2 uv = (vec2(p) + 0.5) / pc.dst_size;
+    vec2 suv = pc.uv_rect.xy + uv * pc.uv_rect.zw;
+    vec2 o = pc.uv_rect.zw / pc.dst_size * max(pc.radius, 1.0) * 0.5;
+
+    vec4 c = vec4(0.0);
+    c += texture(u_source, suv + vec2(-o.x * 2.0, 0.0));
+    c += texture(u_source, suv + vec2(-o.x, o.y));
+    c += texture(u_source, suv + vec2(0.0, o.y * 2.0));
+    c += texture(u_source, suv + vec2(o.x, o.y));
+    c += texture(u_source, suv + vec2(o.x * 2.0, 0.0));
+    c += texture(u_source, suv + vec2(o.x, -o.y));
+    c += texture(u_source, suv + vec2(0.0, -o.y * 2.0));
+    c += texture(u_source, suv + vec2(-o.x, -o.y));
+
+    imageStore(u_dest, p, c / 8.0);
+}

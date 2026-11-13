@@ -656,6 +656,40 @@ impl PushConstants {
     }
 }
 
+/// Push constants for the dual-Kawase blur passes.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
+pub struct BlurPush {
+    /// Source region in uv space: `(x, y, width, height)`.
+    pub uv_rect: [f32; 4],
+    /// Destination size in pixels.
+    pub dst_size: [f32; 2],
+    /// Blur radius in logical pixels.
+    pub radius: f32,
+    /// Which downsample/upsample iteration this is.
+    pub iteration: u32,
+}
+
+impl BlurPush {
+    /// Size contract for the blur pipeline layout.
+    pub const SIZE: u32 = core::mem::size_of::<Self>() as u32;
+}
+
+/// Push constants for the backdrop composite pass.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
+pub struct BackdropCompositePush {
+    /// Rectangle in physical pixels: `(x, y, width, height)`.
+    pub rect: [f32; 4],
+    /// Corner radii: top-left, top-right, bottom-right, bottom-left.
+    pub radii: [f32; 4],
+}
+
+impl BackdropCompositePush {
+    /// Size contract for the composite pipeline layout.
+    pub const SIZE: u32 = core::mem::size_of::<Self>() as u32;
+}
+
 /// One incremental-scatter patch, layout-compatible with `scatter.comp`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
@@ -933,6 +967,19 @@ mod tests {
         assert_eq!(f.sub_element(), SubElement::Border as u8);
         assert!(f.contains(PrimFlags::DARK_BG));
         assert!(!f.contains(PrimFlags::MSDF));
+    }
+
+    #[test]
+    fn blur_push_constants_are_32_bytes() {
+        assert_eq!(size_of::<BlurPush>(), 32);
+        assert_eq!(align_of::<BlurPush>(), 4);
+        assert_eq!(BlurPush::SIZE, 32);
+    }
+
+    #[test]
+    fn backdrop_composite_push_constants_are_32_bytes() {
+        assert_eq!(size_of::<BackdropCompositePush>(), 32);
+        assert_eq!(BackdropCompositePush::SIZE, 32);
     }
 
     #[test]

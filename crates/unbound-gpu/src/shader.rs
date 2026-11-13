@@ -56,10 +56,14 @@ embedded!(sort_scatter, "sort_scatter.comp", "sort_scatter.comp");
 embedded!(indirect, "indirect.comp", "indirect.comp");
 embedded!(mtsdf, "mtsdf.comp", "mtsdf.comp");
 embedded!(mtsdf_pack, "mtsdf_pack.comp", "mtsdf_pack.comp");
+embedded!(blur_down, "blur_down.comp", "blur_down.comp");
+embedded!(blur_up, "blur_up.comp", "blur_up.comp");
+embedded!(backdrop_vert, "backdrop.vert", "backdrop.vert");
+embedded!(backdrop_frag, "backdrop.frag", "backdrop.frag");
 
 /// Every module, for validation and diagnostics.
 #[must_use]
-pub fn all() -> [ShaderModule; 12] {
+pub fn all() -> [ShaderModule; 16] {
     [
         uber_vert(),
         uber_frag(),
@@ -73,6 +77,10 @@ pub fn all() -> [ShaderModule; 12] {
         indirect(),
         mtsdf(),
         mtsdf_pack(),
+        blur_down(),
+        blur_up(),
+        backdrop_vert(),
+        backdrop_frag(),
     ]
 }
 
