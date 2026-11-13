@@ -2044,12 +2044,14 @@ dependencies = [
  "unbound-abi",
  "unbound-anim",
  "unbound-asset",
+ "unbound-canvas",
  "unbound-gpu",
  "unbound-headless",
  "unbound-input",
  "unbound-math",
  "unbound-text",
  "unbound-theme",
+ "unbound-vector",
  "unbound-world",
 ]
 

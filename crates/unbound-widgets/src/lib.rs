@@ -28,6 +28,8 @@ pub mod avatar;
 pub mod badge;
 pub mod breadcrumb;
 pub mod button;
+pub mod canvas_toolbar;
+pub mod chart;
 pub mod checkbox;
 pub mod code_block;
 pub mod color_picker;
@@ -43,11 +45,14 @@ pub mod dock;
 pub mod drawer;
 pub mod file_drop;
 pub mod form;
+pub mod gizmo;
 pub mod hover_card;
 pub mod image;
 pub mod menu;
 pub mod menubar;
+pub mod minimap;
 pub mod modal;
+pub mod node_graph;
 pub mod number_input;
 pub mod overlay;
 pub mod popover;
@@ -56,6 +61,7 @@ pub mod progress;
 pub mod property_grid;
 pub mod radio;
 pub mod rich_text;
+pub mod ruler;
 pub mod scroll;
 pub mod segmented;
 pub mod select;
@@ -102,6 +108,14 @@ pub use breadcrumb::{
     BreadcrumbTokens, Crumb, CrumbSlot,
 };
 pub use button::{ButtonDesc, ButtonTokens, ButtonVariant, ButtonWidget};
+pub use canvas_toolbar::{
+    emit_canvas_toolbar, CanvasTool, CanvasToolbarDesc, CanvasToolbarOutput, CanvasToolbarState,
+    TOOLBAR_BLUR, TOOLBAR_HEIGHT, TOOL_BUTTON, TOOL_GAP, ZOOM_RANGE, ZOOM_WIDTH,
+};
+pub use chart::{
+    emit_chart, ChartDesc, ChartOutput, ChartSeries, ChartState, SeriesKind, CHART_INSET,
+    CHART_STROKE, HOVER_RADIUS, TOOLTIP_SIZE,
+};
 pub use checkbox::{CheckboxDesc, CheckboxTokens};
 pub use code_block::{
     emit_code_block, highlight_line, CodeBlockDesc, CodeBlockState, CodeSpan, SyntaxToken,
@@ -146,6 +160,10 @@ pub use form::{
     FormDesc, FormField, FormFieldDesc, FormFieldLayout, FormLayout, FormState, FORM_FIELD_GAP,
     FORM_INPUT_HEIGHT, FORM_LABEL_GAP, FORM_LINE, FORM_MESSAGE_GAP,
 };
+pub use gizmo::{
+    emit_gizmo, grip_rect_for, GizmoDesc, GizmoOutput, GRIP_SIZE, ROTATE_GRIP, ROTATE_OFFSET,
+    SIZE_BUBBLE,
+};
 pub use hover_card::{
     emit_empty_state, emit_hover_card, EmptyStateDesc, EmptyStateOutput, HoverCardDesc,
     HoverCardState, EMPTY_ACTION_SIZE, EMPTY_ICON, HOVER_CARD_DELAY_MS, HOVER_CARD_GRACE_MS,
@@ -160,7 +178,13 @@ pub use menubar::{
     emit_menubar, emit_menubar_item, reduce_menubar_key, MenuBarDesc, MenuBarItem, MenuBarKey,
     MenuBarState, MenuBarTokens,
 };
+pub use minimap::{emit_minimap, MinimapDesc, MinimapItem, MinimapState, MINIMAP_INSET};
 pub use modal::{emit_modal, ModalDesc, ModalOutput, ModalWidget};
+pub use node_graph::{
+    emit_node_graph, nearest_input, ActiveWire, GraphNodeDesc, GraphWire, NodeGraphOutput,
+    NodeGraphState, PinHit, PinKind, PinSpec, NODE_HEADER, PIN_RADIUS, PIN_SNAP, PIN_SPACING,
+    WIRE_WIDTH,
+};
 pub use number_input::{
     emit_number_input, evaluate_expression, format_number, number_text_rect, round_to,
     spin_down_rect, spin_up_rect, NumberInputDesc, NumberInputState, NumberMode, NUMBER_PADDING,
@@ -182,6 +206,10 @@ pub use radio::{RadioDesc, RadioTokens};
 pub use rich_text::{
     emit_rich_text, parse_markdown, BlockKind, RichBlock, RichDocument, RichTextDesc,
     HEADING_SCALE, RICH_TEXT_SIZE,
+};
+pub use ruler::{
+    emit_rulers, nice_step, GuideAxis, GuideLine, RulerDesc, RulerOutput, RulerState, RULER_BAND,
+    RULER_MINOR_PER_MAJOR, RULER_MIN_STEP,
 };
 pub use scroll::{
     emit_scroll_view, update_virtual_list, ScrollAxis, ScrollState, ScrollViewDesc,
