@@ -582,6 +582,19 @@ impl UiWorld {
         self.children(id).count()
     }
 
+    /// Find a node by its stable semantic key.
+    ///
+    /// Keys are the diff/memoization handle, so the mapping is one-to-one in
+    /// practice; the first match wins if a builder reuses one by mistake.
+    #[must_use]
+    pub fn find_key(&self, key: u64) -> Option<NodeId> {
+        if key == 0 {
+            return None;
+        }
+        self.walk(self.root())
+            .find(|id| self.node(*id).desc.key == key)
+    }
+
     /// Attach text to a node (replacing any previous text).
     pub fn set_text(&mut self, id: NodeId, text: impl Into<String>) {
         let text = text.into();

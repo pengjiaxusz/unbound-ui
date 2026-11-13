@@ -4,8 +4,8 @@
 >
 > | | |
 > | :--- | :--- |
-> | **源码** | `crates/unbound-gpu/src/debug.rs` |
-> | **关键类型** | `RenderDoc`、`ValidationCounter`、`RecoveryPolicy`、`VALIDATION` |
+> | **源码** | `crates/unbound-gpu/src/debug.rs`、`crates/unbound-app/src/inspector.rs` |
+> | **关键类型** | `RenderDoc`、`ValidationCounter`、`RecoveryPolicy`、`VALIDATION`、`Inspector`、`InspectorScene` |
 
 ## 应用内 RenderDoc 编程钩子
 
@@ -47,6 +47,36 @@ VVL 守卫不是摆设——开发期间它抓出了：
    差值直接抹成 0。改为先在 u64 上求差再换算。
 3. **scatter 着色器的单线程串行拷贝**：不是验证层发现的，是分段时间戳定位
    出来的。
+
+## 运行时 DevTools Inspector 与诊断闭环
+
+> **源码**：`crates/unbound-app/src/inspector.rs`
+
+按 `F12` 切换 Inspector 覆盖层。它不进入布局树，而是直接向场景收集器追加
+图元，并画在调试通道（最高 `z`，最后绘制），因此开关不会触发一次重新排版。
+
+- 指针悬停通过 `pick_stack` 命中当前帧的 hit region；落在非交互空隙时回退到
+  最深的包含节点，因此普通容器同样能看盒模型。
+- 盒模型用四条描边带显示 margin / border / padding / content，颜色分别取
+  `WARNING`、`ACCENT`、`SUCCESS`、`PRIMARY`。
+- 右侧面板给出 `SourceLoc`、语义 key、矩形与违规列表；文本行由宿主用自己
+  的字体绘制（`InspectorScene::lines`），面板本身只画背景与行标记。
+
+### 调试体检闭环
+
+`AppRuntime::enable_debug_sanitizers(true)` 打开后，每帧把 `UiWorld` 镜像成
+`unbound_headless::Frame`（节点 id 直接使用语义 key），交给
+`Harness::run` 跑五条 sanitizer。违规项以闪烁的 `ERROR` 色框叠加，并写入面板
+文本，形成“改代码 → 渲染 → 发现违规”的闭环。
+
+```rust
+runtime.enable_debug_sanitizers(true);
+runtime.key(AppKey::F(12), true, Modifiers::default());
+let report = runtime.frame(1.0 / 60.0);
+assert!(!runtime.inspector().violations().is_empty());
+```
+
+> 该开关是调试功能：每帧多一次整树遍历与五条规则扫描，正式发布时应关闭。
 
 ## 设备丢失恢复
 

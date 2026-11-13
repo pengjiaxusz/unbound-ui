@@ -43,11 +43,13 @@ use unbound_world::{NodeId, UiWorld};
 
 pub mod assets;
 pub mod guest_bridge;
+pub mod inspector;
 pub mod scheduler;
 pub mod state_store;
 
 pub use assets::{AssetHub, AssetResidency};
 pub use guest_bridge::GuestAppAdapter;
+pub use inspector::{Inspector, InspectorNode, InspectorScene};
 pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 
@@ -838,6 +840,8 @@ pub struct AppRuntime<A: Application> {
     keymap: Keymap,
     key_context: Option<String>,
     last_focused: Option<u64>,
+    inspector: Inspector,
+    debug_sanitizers: bool,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -878,6 +882,8 @@ impl<A: Application> AppRuntime<A> {
             keymap: Keymap::new(),
             key_context: None,
             last_focused: None,
+            inspector: Inspector::new(),
+            debug_sanitizers: false,
         };
         // A timer scheduled from `init` is already due relative to the zero
         // clock; enqueue it before the first frame can advance past it.
@@ -899,6 +905,44 @@ impl<A: Application> AppRuntime<A> {
     pub fn set_key_context(&mut self, context: Option<&str>) {
         self.key_context = context.map(str::to_owned);
         self.keymap.clear_pending();
+    }
+
+    /// The DevTools inspector state.
+    #[must_use]
+    pub const fn inspector(&self) -> &Inspector {
+        &self.inspector
+    }
+
+    /// Mutable access for shell-side wiring (e.g. a menu item).
+    pub fn inspector_mut(&mut self) -> &mut Inspector {
+        &mut self.inspector
+    }
+
+    /// Toggle the inspector overlay; returns the new state.
+    pub fn toggle_inspector(&mut self) -> bool {
+        let enabled = self.inspector.toggle();
+        // The overlay is part of the scene, so the next frame has to rebuild
+        // even when no widget dirtied itself.
+        self.force_rebuild = true;
+        self.dirty |= DirtyFlags::PAINT;
+        enabled
+    }
+
+    /// Turn the per-frame headless sanitizer pass on or off.
+    ///
+    /// While on, every frame mirrors the world into an `unbound_headless::Frame` and
+    /// runs the five sanitizers; violations show up as blinking boxes in the
+    /// inspector. This is a debug switch and costs a full tree walk per frame.
+    pub fn enable_debug_sanitizers(&mut self, enabled: bool) {
+        self.debug_sanitizers = enabled;
+        self.force_rebuild = true;
+        self.dirty |= DirtyFlags::PAINT;
+    }
+
+    /// Whether the sanitizer pass is currently enabled.
+    #[must_use]
+    pub const fn debug_sanitizers_enabled(&self) -> bool {
+        self.debug_sanitizers
     }
 
     /// How long until the next timer, for the host's `ControlFlow`.
@@ -1160,6 +1204,11 @@ impl<A: Application> AppRuntime<A> {
     /// A key press or release.
     pub fn key(&mut self, key: AppKey, pressed: bool, modifiers: Modifiers) -> DirtyFlags {
         let mut flags = DirtyFlags::NONE;
+        if pressed && matches!(key, AppKey::F(12)) {
+            // F12 is the DevTools toggle; it never reaches the application.
+            self.toggle_inspector();
+            return DirtyFlags::PAINT;
+        }
         if pressed {
             let focus_key = match key {
                 AppKey::Tab if modifiers.shift => Some(FocusKey::ShiftTab),
@@ -1313,6 +1362,28 @@ impl<A: Application> AppRuntime<A> {
             .set_order(self.collector.focus_order.iter().copied());
         self.sync_focus_context();
 
+        // DevTools overlay + the debug sanitizer loop. Both read the world and
+        // the hit regions the frame just produced, and both append to the end
+        // of the primitive list so the debug pass paints last.
+        let inspector_active = self.inspector.enabled() || self.debug_sanitizers;
+        if inspector_active {
+            self.inspector.tick(dt);
+            self.inspector
+                .update(&self.world, self.router.regions(), self.ctx.pointer);
+            if self.debug_sanitizers {
+                let frame = inspector::capture_frame(&self.world, self.ctx.viewport);
+                let report = unbound_headless::Harness::run(&frame);
+                self.inspector.set_diagnostics(&report.diagnostics);
+            } else {
+                self.inspector.clear_diagnostics();
+            }
+            if self.inspector.enabled() {
+                let scene = self.inspector.emit(self.ctx.viewport);
+                self.collector.primitives.extend(scene.primitives);
+                self.collector.payloads.extend(scene.payloads);
+            }
+        }
+
         // Only the tables a primitive *indexes into* decide whether a slice
         // patch can repair the pool. Payload changes (glyphs, gradients) are
         // uploaded separately through `aux_changed`, so typing in a text
@@ -1342,7 +1413,9 @@ impl<A: Application> AppRuntime<A> {
         self.diff = diff.clone();
         self.backdrops.clear();
         self.backdrops.extend_from_slice(&self.collector.backdrops);
-        self.force_rebuild = false;
+        // The inspector blinks and follows the pointer, so its presence forces
+        // the next frame to rebuild even when nothing else is dirty.
+        self.force_rebuild = inspector_active;
 
         FrameReport {
             diff,

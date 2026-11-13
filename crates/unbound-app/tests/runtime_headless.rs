@@ -146,6 +146,63 @@ impl Application for TypingScene {
     }
 }
 
+/// A view whose only interactive node is deliberately below the 24px minimum.
+#[derive(Default)]
+struct TinyTarget;
+
+impl Application for TinyTarget {
+    type State = ();
+
+    fn init(&mut self, _ctx: &mut unbound_app::AppContext) -> Self::State {}
+
+    fn reduce(
+        &mut self,
+        _state: &mut Self::State,
+        _event: AppEvent,
+        _ctx: &mut unbound_app::AppContext,
+    ) -> EventOutcome {
+        EventOutcome::new(DirtyFlags::NONE)
+    }
+
+    fn view(&mut self, _state: &Self::State, view: &mut unbound_app::ViewBuilder) {
+        view.container(
+            7,
+            unbound_abi::RawNodeDesc::container()
+                .size(6.0, 6.0)
+                .flags(unbound_abi::NodeFlags::INTERACTIVE),
+            |_| {},
+        );
+    }
+}
+
+#[test]
+fn f12_toggles_the_inspector_and_sanitizers_feed_it_every_frame() {
+    let mut runtime = AppRuntime::new(TinyTarget, Vec2::new(800.0, 600.0));
+    let plain = runtime.frame(0.0).primitives;
+
+    assert!(runtime.key(AppKey::F(12), true, Modifiers::default()) != DirtyFlags::NONE);
+    assert!(runtime.inspector().enabled());
+    runtime.enable_debug_sanitizers(true);
+
+    let report = runtime.frame(1.0 / 60.0);
+    assert!(
+        report.primitives > plain,
+        "the inspector must append overlay primitives"
+    );
+    let violations = runtime.inspector().violations().len();
+    assert!(
+        violations > 0,
+        "a 6×6 interactive target must fail the touch-target rule"
+    );
+
+    // The pass is per-frame: the same violation comes back on the next frame.
+    runtime.frame(1.0 / 60.0);
+    assert_eq!(runtime.inspector().violations().len(), violations);
+
+    assert!(runtime.key(AppKey::F(12), true, Modifiers::default()) != DirtyFlags::NONE);
+    assert!(!runtime.inspector().enabled());
+}
+
 #[test]
 fn the_first_frame_is_a_whole_scene() {
     let mut runtime = runtime();
