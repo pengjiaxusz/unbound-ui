@@ -171,14 +171,16 @@ pub fn emit_gizmo(
             Token::OUTLINE_STRONG
         };
         primitives.push(surface(grip.inflate(width), radius + width, ink, desc.z));
-        if control.focused && handle == Handle::SouthEast {
+        // The South-East grip always reserves a focus-ring slot; focus only
+        // changes its opacity, keeping the primitive count state-invariant.
+        if handle == Handle::SouthEast {
             primitives.push(focus_ring(
                 grip.inflate(3.0),
                 6.0,
                 Token::FOCUS_RING,
                 2.0,
                 desc.z + 2,
-                true,
+                control.focused,
             ));
         }
         hits.push((
@@ -303,5 +305,35 @@ mod tests {
         let a11y = output.output.a11y.expect("gizmo");
         assert_eq!(a11y.role, Role::Group);
         assert_eq!(a11y.value, "200 × 100");
+    }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let desc = desc();
+        let mut counts = Vec::new();
+        for phase in [
+            crate::PointerPhase::Idle,
+            crate::PointerPhase::Hovered,
+            crate::PointerPhase::Pressed,
+        ] {
+            for focused in [false, true] {
+                for disabled in [false, true] {
+                    for selected in [false, true] {
+                        let control = ControlState {
+                            phase,
+                            focused,
+                            disabled,
+                            selected,
+                        };
+                        let output = emit_gizmo(4, &desc, None, &[], &[], control);
+                        counts.push(output.output.primitives.len());
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }

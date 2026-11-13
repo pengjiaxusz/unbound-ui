@@ -248,16 +248,14 @@ pub fn emit_alert(
         );
     }
 
-    if control.focused {
-        primitives.push(crate::primitive::focus_ring(
-            desc.rect,
-            desc.radius,
-            Token::FOCUS_RING,
-            2.0,
-            desc.z + 4,
-            true,
-        ));
-    }
+    primitives.push(crate::primitive::focus_ring(
+        desc.rect,
+        desc.radius,
+        Token::FOCUS_RING,
+        2.0,
+        desc.z + 4,
+        control.focused,
+    ));
 
     let mut a11y = A11yNode::new(
         Role::Alert,
@@ -484,8 +482,10 @@ mod tests {
             let alert = AlertDesc::new(Rect::new(0.0, 0.0, 400.0, 64.0), severity, "x");
             let output = emit_alert(1, &alert, &[], ControlState::default());
             let icon = alert.icon_rect();
-            // Background, accent bar and icon circle are indices 0..=2.
-            for primitive in &output.primitives[3..] {
+            // Background, accent bar and icon circle are indices 0..=2; the
+            // always-present focus ring is the last slot and is not a mark.
+            let marks = &output.primitives[3..output.primitives.len() - 1];
+            for primitive in marks {
                 let bounds = Rect::new(
                     primitive.local_pos[0],
                     primitive.local_pos[1],
@@ -498,5 +498,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let desc = desc().dismissible();
+        let mut counts = Vec::new();
+        for phase in [
+            crate::PointerPhase::Idle,
+            crate::PointerPhase::Hovered,
+            crate::PointerPhase::Pressed,
+        ] {
+            for focused in [false, true] {
+                for disabled in [false, true] {
+                    for selected in [false, true] {
+                        let control = ControlState {
+                            phase,
+                            focused,
+                            disabled,
+                            selected,
+                        };
+                        let output = emit_alert(9, &desc, &[], control);
+                        counts.push(output.primitives.len());
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }

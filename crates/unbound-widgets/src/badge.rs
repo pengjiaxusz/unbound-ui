@@ -295,16 +295,14 @@ pub fn emit_chip(
         &mut primitives,
         &mut payloads,
     );
-    if control.focused {
-        primitives.push(focus_ring(
-            desc.rect,
-            radius,
-            Token::FOCUS_RING,
-            2.0,
-            desc.z + 3,
-            true,
-        ));
-    }
+    primitives.push(focus_ring(
+        desc.rect,
+        radius,
+        Token::FOCUS_RING,
+        2.0,
+        desc.z + 3,
+        control.focused,
+    ));
 
     let mut a11y = A11yNode::new(Role::Button, desc.text.clone(), desc.rect).clickable();
     a11y.selected = desc.selected;
@@ -423,5 +421,35 @@ mod tests {
             Some(Some(CursorKind::NotAllowed))
         );
         assert!(!output.focusable);
+    }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let chip = ChipDesc::new(Rect::new(0.0, 0.0, 80.0, 24.0), "PNG").closable();
+        let mut counts = Vec::new();
+        for phase in [
+            crate::PointerPhase::Idle,
+            crate::PointerPhase::Hovered,
+            crate::PointerPhase::Pressed,
+        ] {
+            for focused in [false, true] {
+                for disabled in [false, true] {
+                    for selected in [false, true] {
+                        let control = ControlState {
+                            phase,
+                            focused,
+                            disabled,
+                            selected,
+                        };
+                        let output = emit_chip(3, &chip, control, &[]);
+                        counts.push(output.primitives.len());
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }

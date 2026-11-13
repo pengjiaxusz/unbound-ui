@@ -329,23 +329,12 @@ pub fn emit_chart(
     }
 
     let hovered = state.pointer.and_then(|pointer| desc.nearest(pointer));
-    let mut tooltip = None;
-    if let Some((series_index, point_index)) = hovered {
+    // The crosshair, highlight dot and tooltip keep fixed slots even when
+    // nothing is hovered: opacity alone carries their visibility, so moving
+    // the pointer never reshapes the primitive pool.
+    let hover_paint = hovered.map(|(series_index, point_index)| {
         let series = &desc.series[series_index];
-        let point = series.points[point_index];
-        let mapped = desc.map_point(point);
-        primitives.push(surface(
-            Rect::new(mapped.x - 0.5, plot.origin.y, 1.0, plot.size.y),
-            0.0,
-            Token::TEXT_SECONDARY,
-            z + 3,
-        ));
-        primitives.push(surface(
-            Rect::new(mapped.x - 4.0, mapped.y - 4.0, 8.0, 8.0),
-            4.0,
-            series.token,
-            z + 3,
-        ));
+        let mapped = desc.map_point(series.points[point_index]);
         let bubble = Rect::new(
             (mapped.x + 10.0)
                 .min(plot.max().x - TOOLTIP_SIZE.0)
@@ -354,16 +343,50 @@ pub fn emit_chart(
             TOOLTIP_SIZE.0,
             TOOLTIP_SIZE.1,
         );
-        primitives.push(surface(bubble, 8.0, Token::HUD_BG, z + 4));
-        glyphs(
-            tooltip_glyphs,
-            Token::HUD_TEXT,
-            z + 5,
-            &mut primitives,
-            &mut payloads,
-        );
-        tooltip = Some(bubble);
+        (mapped, series.token, bubble)
+    });
+    let (mapped, dot_token, bubble) = hover_paint.unwrap_or((Vec2::ZERO, Token::NONE, Rect::ZERO));
+    let hover_opacity = if hover_paint.is_some() { 1.0 } else { 0.0 };
+
+    let mut crosshair = surface(
+        Rect::new(mapped.x - 0.5, plot.origin.y, 1.0, plot.size.y),
+        0.0,
+        Token::TEXT_SECONDARY,
+        z + 3,
+    );
+    crosshair.z_and_opacity =
+        GpuPrimitiveInstance::pack_z_opacity(crosshair.depth_u16(), hover_opacity);
+    primitives.push(crosshair);
+
+    let mut dot = surface(
+        Rect::new(mapped.x - 4.0, mapped.y - 4.0, 8.0, 8.0),
+        4.0,
+        dot_token,
+        z + 3,
+    );
+    dot.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(dot.depth_u16(), hover_opacity);
+    primitives.push(dot);
+
+    let mut tooltip_bg = surface(bubble, 8.0, Token::HUD_BG, z + 4);
+    tooltip_bg.z_and_opacity =
+        GpuPrimitiveInstance::pack_z_opacity(tooltip_bg.depth_u16(), hover_opacity);
+    primitives.push(tooltip_bg);
+
+    let glyph_start = primitives.len();
+    glyphs(
+        tooltip_glyphs,
+        Token::HUD_TEXT,
+        z + 5,
+        &mut primitives,
+        &mut payloads,
+    );
+    if hover_paint.is_none() {
+        for primitive in &mut primitives[glyph_start..] {
+            primitive.z_and_opacity =
+                GpuPrimitiveInstance::pack_z_opacity(primitive.depth_u16(), 0.0);
+        }
     }
+    let tooltip = hover_paint.map(|(_, _, bubble)| bubble);
 
     let mut a11y = A11yNode::new(Role::Group, "图表", desc.rect).disabled(control.disabled);
     a11y.value = hovered
@@ -544,7 +567,53 @@ mod tests {
     fn an_empty_chart_still_paints_its_grid() {
         let desc = ChartDesc::new(Rect::new(0.0, 0.0, 400.0, 240.0));
         let output = emit_chart(3, &desc, &ChartState::new(), &[], ControlState::default());
-        assert_eq!(output.output.primitives.len(), 10);
+        // Ten grid lines plus the three always-present hover slots
+        // (crosshair, highlight dot, tooltip background), hidden at opacity 0.
+        assert_eq!(output.output.primitives.len(), 13);
         assert!(output.tooltip.is_none());
+    }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let desc = desc();
+        let glyphs = [GlyphQuad {
+            rect: Rect::new(0.0, 0.0, 8.0, 12.0),
+            uv: [0.0, 0.0, 1.0, 1.0],
+            layer: 0,
+            color: false,
+            msdf: false,
+            phase: 0,
+        }];
+        let mut counts = Vec::new();
+        for pointer in [None, Some(desc.map_point(Vec2::new(1.0, 5.0)))] {
+            let mut state = ChartState::new();
+            if let Some(point) = pointer {
+                state.hover(point);
+            }
+            for phase in [
+                crate::PointerPhase::Idle,
+                crate::PointerPhase::Hovered,
+                crate::PointerPhase::Pressed,
+            ] {
+                for focused in [false, true] {
+                    for disabled in [false, true] {
+                        for selected in [false, true] {
+                            let control = ControlState {
+                                phase,
+                                focused,
+                                disabled,
+                                selected,
+                            };
+                            let output = emit_chart(3, &desc, &state, &glyphs, control);
+                            counts.push(output.output.primitives.len());
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }

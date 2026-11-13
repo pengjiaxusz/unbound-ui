@@ -397,16 +397,14 @@ pub fn emit_empty_state(
     let action = desc.action_rect();
     if let Some(action) = action {
         primitives.push(surface(action, 8.0, Token::PRIMARY_SOFT, desc.z + 1));
-        if control.focused {
-            primitives.push(crate::primitive::focus_ring(
-                action,
-                8.0,
-                Token::FOCUS_RING,
-                2.0,
-                desc.z + 2,
-                true,
-            ));
-        }
+        primitives.push(crate::primitive::focus_ring(
+            action,
+            8.0,
+            Token::FOCUS_RING,
+            2.0,
+            desc.z + 2,
+            control.focused,
+        ));
     }
 
     let mut a11y = A11yNode::new(Role::Group, desc.title.clone(), desc.rect);
@@ -541,5 +539,35 @@ mod tests {
         let action = output.action.expect("action");
         assert_eq!(action.bounds, desc.action_rect().unwrap());
         assert_eq!(action.cursor, Some(CursorKind::Pointer));
+    }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let desc = empty();
+        let mut counts = Vec::new();
+        for phase in [
+            crate::PointerPhase::Idle,
+            crate::PointerPhase::Hovered,
+            crate::PointerPhase::Pressed,
+        ] {
+            for focused in [false, true] {
+                for disabled in [false, true] {
+                    for selected in [false, true] {
+                        let control = ControlState {
+                            phase,
+                            focused,
+                            disabled,
+                            selected,
+                        };
+                        let output = emit_empty_state(3, &desc, &[], control);
+                        counts.push(output.output.primitives.len());
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }

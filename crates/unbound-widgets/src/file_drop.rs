@@ -413,4 +413,38 @@ mod tests {
         );
         assert!(output.primitives.len() > 20, "dashed outline is emitted");
     }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let desc = desc();
+        let mut counts = Vec::new();
+        for drag_hovered in [false, true] {
+            let mut state = FileDropState::new();
+            state.hovered = drag_hovered;
+            for phase in [
+                crate::PointerPhase::Idle,
+                crate::PointerPhase::Hovered,
+                crate::PointerPhase::Pressed,
+            ] {
+                for focused in [false, true] {
+                    for disabled in [false, true] {
+                        for selected in [false, true] {
+                            let control = ControlState {
+                                phase,
+                                focused,
+                                disabled,
+                                selected,
+                            };
+                            let output = emit_file_drop(4, &desc, &state, control, &mut []);
+                            counts.push(output.primitives.len());
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
+    }
 }

@@ -197,17 +197,26 @@ pub fn emit_minimap(
         0.0,
         desc.z + 2,
     ));
-    if state.dragging || control.focused {
-        primitives.push(outlined(
-            desc.rect,
-            10.0,
-            Token::NONE,
-            Token::FOCUS_RING,
-            1.5,
-            0.0,
-            desc.z + 3,
-        ));
-    }
+    // The drag/focus outline always occupies a slot; its opacity alone says
+    // whether it is visible, so the primitive count never changes.
+    let mut ring = outlined(
+        desc.rect,
+        10.0,
+        Token::NONE,
+        Token::FOCUS_RING,
+        1.5,
+        0.0,
+        desc.z + 3,
+    );
+    ring.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+        ring.depth_u16(),
+        if state.dragging || control.focused {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    primitives.push(ring);
 
     let mut a11y = A11yNode::new(Role::Group, "小地图", desc.rect).clickable();
     a11y.description = "点击或拖拽以平移画布".to_owned();
@@ -304,8 +313,9 @@ mod tests {
             output.hit.as_ref().unwrap().cursor,
             Some(CursorKind::Pointer)
         );
-        // Shadow, background, border, one block, one viewport outline.
-        assert_eq!(output.primitives.len(), 5);
+        // Shadow, background, border, one block, one viewport outline and the
+        // always-present (invisible) drag/focus ring slot.
+        assert_eq!(output.primitives.len(), 6);
         assert_eq!(
             output.a11y.as_ref().map(|node| node.role),
             Some(Role::Group)
@@ -323,5 +333,41 @@ mod tests {
         );
         state.end();
         assert!(!state.dragging);
+    }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let desc = desc();
+        let mut counts = Vec::new();
+        for dragging in [false, true] {
+            let mut state = MinimapState::new();
+            if dragging {
+                state.begin();
+            }
+            for phase in [
+                crate::PointerPhase::Idle,
+                crate::PointerPhase::Hovered,
+                crate::PointerPhase::Pressed,
+            ] {
+                for focused in [false, true] {
+                    for disabled in [false, true] {
+                        for selected in [false, true] {
+                            let control = ControlState {
+                                phase,
+                                focused,
+                                disabled,
+                                selected,
+                            };
+                            let (output, _) = emit_minimap(2, &desc, &[], &state, control);
+                            counts.push(output.primitives.len());
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }

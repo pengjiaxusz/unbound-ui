@@ -484,14 +484,18 @@ pub fn emit_property_grid(
                 );
                 primitives.push(surface(dot, 2.5, tokens.modified, desc.z + 3));
             }
-            if state.hovered() == Some((row.section, row.row)) {
-                primitives.push(surface(
-                    row.reset_rect.inflate(3.0),
-                    4.0,
-                    tokens.header,
-                    desc.z + 3,
-                ));
-            }
+            // The reset-button wash keeps a fixed slot: hovering only changes
+            // its opacity, never the primitive count.
+            let mut reset = surface(row.reset_rect.inflate(3.0), 4.0, tokens.header, desc.z + 3);
+            reset.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+                reset.depth_u16(),
+                if state.hovered() == Some((row.section, row.row)) {
+                    1.0
+                } else {
+                    0.0
+                },
+            );
+            primitives.push(reset);
         }
     }
 
@@ -502,16 +506,14 @@ pub fn emit_property_grid(
         &mut primitives,
         &mut payloads,
     );
-    if control.focused {
-        primitives.push(focus_ring(
-            desc.rect,
-            0.0,
-            Token::FOCUS_RING,
-            2.0,
-            desc.z + 5,
-            true,
-        ));
-    }
+    primitives.push(focus_ring(
+        desc.rect,
+        0.0,
+        Token::FOCUS_RING,
+        2.0,
+        desc.z + 5,
+        control.focused,
+    ));
 
     let mut a11y = A11yNode::new(Role::Group, desc.label.clone(), desc.rect).clickable();
     a11y.description = format!("{} 个属性", desc.row_count());
@@ -643,5 +645,39 @@ mod tests {
         assert_eq!(a11y.role, Role::Group);
         assert_eq!(a11y.description, "3 个属性");
         assert!(output.hit.is_some());
+    }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let desc = desc();
+        let mut counts = Vec::new();
+        for hover in [None, Some((0, 1))] {
+            let mut state = PropertyGridState::new();
+            state.hover(hover);
+            for phase in [
+                crate::PointerPhase::Idle,
+                crate::PointerPhase::Hovered,
+                crate::PointerPhase::Pressed,
+            ] {
+                for focused in [false, true] {
+                    for disabled in [false, true] {
+                        for selected in [false, true] {
+                            let control = ControlState {
+                                phase,
+                                focused,
+                                disabled,
+                                selected,
+                            };
+                            let output = emit_property_grid(9, &desc, &state, &[], control);
+                            counts.push(output.primitives.len());
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }

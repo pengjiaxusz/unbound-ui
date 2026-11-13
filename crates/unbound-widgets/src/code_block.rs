@@ -333,20 +333,27 @@ pub fn emit_code_block(
             Token::SURFACE_RAISED
         };
         primitives.push(surface(button, 5.0, fill, desc.z + 4));
-        if control.phase == crate::PointerPhase::Hovered {
-            primitives.push(surface(button, 5.0, Token::CONTROL_HOVER, desc.z + 5));
-        }
+        // The hover wash is always in the pool; only its opacity changes, so
+        // hovering never reshapes the primitive run.
+        let mut hover = surface(button, 5.0, Token::CONTROL_HOVER, desc.z + 5);
+        hover.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+            hover.depth_u16(),
+            if control.phase == crate::PointerPhase::Hovered {
+                1.0
+            } else {
+                0.0
+            },
+        );
+        primitives.push(hover);
     }
-    if control.focused {
-        primitives.push(focus_ring(
-            desc.rect,
-            8.0,
-            Token::FOCUS_RING,
-            2.0,
-            desc.z + 6,
-            true,
-        ));
-    }
+    primitives.push(focus_ring(
+        desc.rect,
+        8.0,
+        Token::FOCUS_RING,
+        2.0,
+        desc.z + 6,
+        control.focused,
+    ));
 
     let mut a11y =
         A11yNode::new(Role::Code, format!("{} 代码块", desc.language), desc.rect).clickable();
@@ -472,6 +479,37 @@ mod tests {
         assert_eq!(
             output.hit.as_ref().map(|hit| hit.cursor),
             Some(Some(CursorKind::Text))
+        );
+    }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let desc = desc();
+        let state = CodeBlockState::new();
+        let mut counts = Vec::new();
+        for phase in [
+            crate::PointerPhase::Idle,
+            crate::PointerPhase::Hovered,
+            crate::PointerPhase::Pressed,
+        ] {
+            for focused in [false, true] {
+                for disabled in [false, true] {
+                    for selected in [false, true] {
+                        let control = ControlState {
+                            phase,
+                            focused,
+                            disabled,
+                            selected,
+                        };
+                        let output = emit_code_block(2, &desc, &state, &[], control);
+                        counts.push(output.primitives.len());
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
         );
     }
 }

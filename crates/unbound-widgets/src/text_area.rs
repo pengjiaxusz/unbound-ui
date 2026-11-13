@@ -16,7 +16,7 @@
 
 use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yNode};
-use unbound_gpu::data::{PrimType, SubElement};
+use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::{Rect, Vec2};
 use unbound_text::selection::RoundedSlot;
@@ -359,9 +359,18 @@ pub fn emit_text_area(
         ));
     }
 
-    if control.focused && !control.disabled && visual.caret_visible {
-        primitives.push(surface(visual.caret, 0.0, Token::PRIMARY, desc.z));
-    }
+    // The caret slot is always present; opacity alone carries its visibility,
+    // mirroring `emit_text_input`, so focus/blink never reshapes the pool.
+    let mut caret = surface(visual.caret, 0.0, Token::PRIMARY, desc.z);
+    caret.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+        caret.depth_u16(),
+        if control.focused && !control.disabled && visual.caret_visible {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    primitives.push(caret);
 
     let ink = if control.disabled {
         Token::TEXT_DISABLED
@@ -514,10 +523,53 @@ mod tests {
         let a11y = output.a11y.expect("reachable");
         assert_eq!(a11y.role, Role::MultilineTextInput);
         assert_eq!(a11y.value, "one\ntwo");
-        assert_eq!(output.primitives.len(), 3 + visual.selection.len());
+        // Surface, border, focus ring and the always-present caret slot.
+        assert_eq!(output.primitives.len(), 4 + visual.selection.len());
         assert_eq!(
             output.hit.as_ref().map(|hit| hit.cursor),
             Some(Some(CursorKind::Text))
+        );
+    }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let desc = desc();
+        let state = TextAreaState::with_text("one\ntwo");
+        let mut counts = Vec::new();
+        for caret_visible in [false, true] {
+            let visual = TextAreaVisual {
+                caret: Rect::new(20.0, 20.0, 1.0, 18.0),
+                selection: vec![RoundedSlot {
+                    rect: Rect::new(20.0, 20.0, 40.0, 18.0),
+                    radii: [3.0; 4],
+                }],
+                caret_visible,
+            };
+            for phase in [
+                crate::PointerPhase::Idle,
+                crate::PointerPhase::Hovered,
+                crate::PointerPhase::Pressed,
+            ] {
+                for focused in [false, true] {
+                    for disabled in [false, true] {
+                        for selected in [false, true] {
+                            let control = ControlState {
+                                phase,
+                                focused,
+                                disabled,
+                                selected,
+                            };
+                            let output =
+                                emit_text_area(5, &desc, &state, control, &visual, &mut []);
+                            counts.push(output.primitives.len());
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
         );
     }
 }

@@ -1348,30 +1348,39 @@ mod tests {
     #[test]
     fn the_primitive_count_is_constant_across_states() {
         let edit = TextEditState::with_text("abc");
-        let visual = TextInputVisual {
-            caret: Rect::new(30.0, 24.0, 1.0, 20.0),
-            selection: Some(Rect::new(24.0, 24.0, 20.0, 20.0)),
-            ..TextInputVisual::default()
-        };
         let glyphs: Vec<GlyphQuad> = Vec::new();
         let mut counts = Vec::new();
-        for phase in [
-            crate::PointerPhase::Idle,
-            crate::PointerPhase::Hovered,
-            crate::PointerPhase::Pressed,
-        ] {
-            for focused in [false, true] {
-                for disabled in [false, true] {
-                    for selected in [false, true] {
-                        let state = ControlState {
-                            phase,
-                            focused,
-                            disabled,
-                            selected,
-                        };
-                        let output =
-                            emit_text_input(9, &desc(), state, &edit, &visual, &mut glyphs.clone());
-                        counts.push(output.primitives.len());
+        for caret_visible in [false, true] {
+            let visual = TextInputVisual {
+                caret: Rect::new(30.0, 24.0, 1.0, 20.0),
+                selection: Some(Rect::new(24.0, 24.0, 20.0, 20.0)),
+                caret_visible,
+                ..TextInputVisual::default()
+            };
+            for phase in [
+                crate::PointerPhase::Idle,
+                crate::PointerPhase::Hovered,
+                crate::PointerPhase::Pressed,
+            ] {
+                for focused in [false, true] {
+                    for disabled in [false, true] {
+                        for selected in [false, true] {
+                            let state = ControlState {
+                                phase,
+                                focused,
+                                disabled,
+                                selected,
+                            };
+                            let output = emit_text_input(
+                                9,
+                                &desc(),
+                                state,
+                                &edit,
+                                &visual,
+                                &mut glyphs.clone(),
+                            );
+                            counts.push(output.primitives.len());
+                        }
                     }
                 }
             }

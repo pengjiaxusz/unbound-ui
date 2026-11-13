@@ -577,16 +577,14 @@ pub fn emit_table(
         ));
     }
 
-    if control.focused {
-        primitives.push(focus_ring(
-            desc.rect,
-            0.0,
-            Token::FOCUS_RING,
-            2.0,
-            desc.z + 5,
-            true,
-        ));
-    }
+    primitives.push(focus_ring(
+        desc.rect,
+        0.0,
+        Token::FOCUS_RING,
+        2.0,
+        desc.z + 5,
+        control.focused,
+    ));
 
     let mut a11y = A11yNode::new(Role::Grid, desc.label.clone(), desc.rect).clickable();
     a11y.description = format!("{} 行 × {} 列", rows.len(), desc.columns.len());
@@ -737,5 +735,40 @@ mod tests {
         );
         let harness = WidgetHarness::new(desc.clone(), Vec::new());
         assert!(!harness.output.primitives.is_empty());
+    }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let desc = desc();
+        let state = TableState::new();
+        let row = [TableRow {
+            index: 0,
+            glyphs: &[],
+        }];
+        let mut counts = Vec::new();
+        for phase in [
+            crate::PointerPhase::Idle,
+            crate::PointerPhase::Hovered,
+            crate::PointerPhase::Pressed,
+        ] {
+            for focused in [false, true] {
+                for disabled in [false, true] {
+                    for selected in [false, true] {
+                        let control = ControlState {
+                            phase,
+                            focused,
+                            disabled,
+                            selected,
+                        };
+                        let output = emit_table(7, &desc, &state, &row, &[], control);
+                        counts.push(output.primitives.len());
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }

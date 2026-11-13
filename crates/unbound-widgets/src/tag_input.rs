@@ -12,7 +12,7 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
-use unbound_gpu::data::{PrimType, SubElement};
+use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
@@ -407,19 +407,28 @@ pub fn emit_tag_input(
         }
     }
 
-    if state.input.text().is_empty() && control.focused && !control.disabled {
-        primitives.push(surface(
-            Rect::new(
-                layout.input.origin.x,
-                layout.input.origin.y + 4.0,
-                1.5,
-                TAG_HEIGHT - 8.0,
-            ),
-            0.0,
-            Token::PRIMARY,
-            desc.z,
-        ));
-    }
+    // The empty-editor caret keeps a fixed slot: focus only changes its
+    // opacity, so the primitive count is invariant across states.
+    let mut caret = surface(
+        Rect::new(
+            layout.input.origin.x,
+            layout.input.origin.y + 4.0,
+            1.5,
+            TAG_HEIGHT - 8.0,
+        ),
+        0.0,
+        Token::PRIMARY,
+        desc.z,
+    );
+    caret.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+        caret.depth_u16(),
+        if state.input.text().is_empty() && control.focused && !control.disabled {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    primitives.push(caret);
 
     let ink = if control.disabled {
         Token::TEXT_DISABLED
@@ -561,6 +570,38 @@ mod tests {
         assert_eq!(
             output.hit.as_ref().map(|hit| hit.cursor),
             Some(Some(CursorKind::Text))
+        );
+    }
+
+    #[test]
+    fn stable_shape_across_states() {
+        let desc = desc();
+        let state = TagInputState::new();
+        let layout = layout_tags(&desc, &state, |tag| tag.len() as f32 * 8.0);
+        let mut counts = Vec::new();
+        for phase in [
+            crate::PointerPhase::Idle,
+            crate::PointerPhase::Hovered,
+            crate::PointerPhase::Pressed,
+        ] {
+            for focused in [false, true] {
+                for disabled in [false, true] {
+                    for selected in [false, true] {
+                        let control = ControlState {
+                            phase,
+                            focused,
+                            disabled,
+                            selected,
+                        };
+                        let output = emit_tag_input(11, &desc, &state, control, &layout, &mut []);
+                        counts.push(output.primitives.len());
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
         );
     }
 }
