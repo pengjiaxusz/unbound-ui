@@ -1271,3 +1271,42 @@ fn the_component_gallery_emits_every_catalog_widget() {
         "the gallery never emitted these catalog components: {missing:?}"
     );
 }
+
+/// The easing demo's curve editor drags its control points (S3.6).
+///
+/// The bezier is a real `emit_curve_editor`, not a static plot: pressing a
+/// handle captures it, dragging reshapes the curve, and releasing ends the
+/// gesture. The plotted control point must follow the pointer exactly.
+#[test]
+fn dragging_the_easing_curve_moves_its_control_point() {
+    use unbound_widgets::curve_editor::{CurveEditorDesc, CurveHandle};
+
+    let mut app = app();
+    app.navigate(PageId::Springs);
+    // A tall window keeps the whole easing card (and its lower control point)
+    // inside the clipped content viewport, so the press is not culled.
+    let viewport = (1440.0, 1100.0);
+    app.rebuild(viewport);
+
+    let node = target::id(Target::Demo(PageId::Springs.index() as u8, 1, 1));
+    let desc = CurveEditorDesc::new(rect_of(&app, node));
+
+    let before = app.state.demo.curve_editor.p1();
+    let grab = desc.to_screen(before);
+    app.pointer_move(grab);
+    app.pointer_down(grab, 0.0);
+    assert_eq!(app.state.demo.curve_editor.active(), Some(CurveHandle::P1));
+
+    let destination = desc.frame().center();
+    app.pointer_move(destination);
+    let expected = desc.from_screen(destination);
+    let after = app.state.demo.curve_editor.p1();
+    assert!(
+        (after.x - expected.x).abs() < 1e-4 && (after.y - expected.y).abs() < 1e-4,
+        "the handle must track the pointer: {after:?} vs {expected:?}"
+    );
+    assert_ne!(after, before, "the control point must move");
+
+    app.pointer_up(destination, 0.1);
+    assert_eq!(app.state.demo.curve_editor.active(), None);
+}

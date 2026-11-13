@@ -1,10 +1,10 @@
 //! Motion, accessibility, telemetry and settings.
 
 use accesskit::Role;
-use unbound_anim::CubicBezier;
 use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
 use unbound_widgets::chart::{emit_chart, ChartDesc, ChartSeries, ChartState};
+use unbound_widgets::curve_editor::{emit_curve_editor, CurveEditorDesc};
 use unbound_widgets::WidgetCatalogId;
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageInfo};
@@ -68,11 +68,13 @@ spring.set_target(1.0);"#,
     .with_height(280.0),
     ExampleDef::new(
         "Cubic easing",
-        "Four one-shot curves sampled by Newton iteration. Easing is used for theme fades and page transitions; springs are for direct manipulation.",
-        &["unbound-anim"],
-        r#"let ease = CubicBezier::EASE_OUT;
-let t = ease.sample(elapsed / duration);"#,
-        "A curve plot; each curve name is exposed as a list item.",
+        "An interactive cubic-bezier editor: drag the two control points to reshape the curve. Presets load the engine's ease, ease-out and linear curves; springs are for direct manipulation.",
+        &["unbound-widgets", "unbound-anim"],
+        r#"let mut curve = CurveEditorState::new();
+curve.begin(CurveHandle::P1);
+curve.drag_to(desc.from_screen(pointer));
+emit_curve_editor(node, &desc, &curve, control);"#,
+        "A curve editor whose control points are draggable; its cubic-bezier value is announced.",
         &[
             KnobSpec::segmented("Curve", &["Ease", "Ease out", "Linear"], 1),
             KnobSpec::slider("Duration", 100.0, 1000.0, 25.0, 320.0, "ms"),
@@ -263,35 +265,26 @@ pub fn springs(ctx: &mut DemoCtx<'_, '_>, easing: bool) {
 fn easing_page(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
-    let curve = match ctx.knob(0) as usize {
-        0 => ("Ease", CubicBezier::EASE),
-        2 => ("Linear", CubicBezier::LINEAR),
-        _ => ("Ease out", CubicBezier::EASE_OUT),
-    };
     let plot = Rect::new(
         rect.origin.x + 24.0,
         rect.origin.y + 18.0,
         (rect.size.x - 48.0).min(rect.size.y * 1.6),
         rect.size.y - 52.0,
     );
+    // The curve is a real interactive editor: its two control points live in
+    // the demo state and the shell drags them, so the plotted bezier and the
+    // reported cubic-bezier(...) can never disagree.
+    let node = ctx.part(1);
+    let control = ctx.canvas.control_state(node, false, false);
+    let mut desc = CurveEditorDesc::new(plot);
+    desc.label = "Easing curve".to_owned();
+    let output = emit_curve_editor(node, &desc, &ctx.state.demo.curve_editor, control);
     ctx.canvas
-        .rect(plot, 10.0, palette.stage_bg, palette.stage_grid, 1.0, 0.0);
-    let mut previous = [plot.origin.x, plot.max().y];
-    for step in 1..=32 {
-        let t = step as f32 / 32.0;
-        let sample = curve.1.sample(t);
-        let point = [
-            plot.origin.x + plot.size.x * t,
-            plot.max().y - plot.size.y * sample,
-        ];
-        ctx.canvas
-            .curve(previous, previous, point, 2.0, palette.primary);
-        previous = point;
-    }
+        .widget_output(WidgetCatalogId::CurveEditor, node, &output);
     ctx.canvas.text(
-        curve.0,
+        &ctx.state.demo.curve_editor.css(),
         Rect::new(plot.origin.x, plot.origin.y + 8.0, plot.size.x, 18.0),
-        12.0,
+        11.0,
         palette.text,
         AlignX::Center,
         AlignY::Top,

@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use unbound_anim::{Spring, SpringPreset};
 use unbound_math::Vec2;
+use unbound_widgets::curve_editor::CurveEditorState;
 use unbound_widgets::progress::ProgressState;
 
 use crate::pages::{ExampleDef, KnobSpec, PageId};
@@ -107,6 +108,8 @@ pub struct DemoState {
     pub progress_ring: ProgressState,
     /// The rolling window of recent frames feeding the telemetry chart.
     pub frame_history: VecDeque<FrameSample>,
+    /// The easing demo's interactive cubic-bezier control points.
+    pub curve_editor: CurveEditorState,
 }
 
 impl Default for DemoState {
@@ -154,6 +157,7 @@ impl Default for DemoState {
             progress_bar: ProgressState::new(),
             progress_ring: ProgressState::new(),
             frame_history: VecDeque::new(),
+            curve_editor: CurveEditorState::new(),
         }
     }
 }

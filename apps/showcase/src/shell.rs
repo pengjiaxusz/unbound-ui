@@ -6,12 +6,13 @@
 //! primitives a real application would use.
 
 use accesskit::Role;
-use unbound_anim::{Spring, SpringPreset};
+use unbound_anim::{CubicBezier, Spring, SpringPreset};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
 use unbound_input::CursorKind;
 use unbound_layout::LayoutStats;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::{Modifiers, PlatformKey};
+use unbound_widgets::curve_editor::{CurveEditorDesc, CurveEditorState, CurveHandle};
 use unbound_widgets::diff::{diff_primitives, SceneDiff};
 
 use crate::canvas::{AlignX, AlignY, Canvas, RangeZone};
@@ -740,6 +741,14 @@ impl GalleryApp {
             self.state.demo.drag_position = Some(position);
             self.state.bump();
         }
+        if self.state.demo.curve_editor.active().is_some() {
+            if let Some(rect) = demo_rect(self, PageId::Springs, 1, 1) {
+                let point = CurveEditorDesc::new(rect).from_screen(position);
+                if self.state.demo.curve_editor.drag_to(point) {
+                    self.state.bump();
+                }
+            }
+        }
     }
 
     /// Press the pointer.
@@ -773,6 +782,10 @@ impl GalleryApp {
         self.finish_drag(position);
         self.dragging_range = None;
         self.panning = None;
+        if self.state.demo.curve_editor.active().is_some() {
+            self.state.demo.curve_editor.end();
+            self.state.bump();
+        }
     }
 
     /// Abort every in-flight interaction.
@@ -792,6 +805,10 @@ impl GalleryApp {
         let drag = self.state.demo.drag_active.take();
         if marquee.is_some() || drag.is_some() {
             self.state.demo.drag_position = None;
+            self.state.bump();
+        }
+        if self.state.demo.curve_editor.active().is_some() {
+            self.state.demo.curve_editor.end();
             self.state.bump();
         }
     }
@@ -1279,6 +1296,19 @@ impl GalleryApp {
                     knob as usize,
                     option as f32,
                 );
+                // The easing demo's preset segmented loads the engine's
+                // canonical curves into the interactive editor.
+                if PageId::from_index(page as usize) == PageId::Springs && card == 1 && knob == 0 {
+                    let bezier = match option {
+                        0 => CubicBezier::EASE,
+                        2 => CubicBezier::LINEAR,
+                        _ => CubicBezier::EASE_OUT,
+                    };
+                    self.state.demo.curve_editor = CurveEditorState::with_points(
+                        Vec2::new(bezier.x1, bezier.y1),
+                        Vec2::new(bezier.x2, bezier.y2),
+                    );
+                }
             }
             Target::Code(page, card) => {
                 self.state
@@ -1347,6 +1377,22 @@ impl GalleryApp {
             {
                 self.dragging_range = Some(zone.node);
                 self.update_range(zone.node, position);
+            }
+        }
+        if page == PageId::Springs && card == 1 && part == 1 {
+            if let Some(rect) = demo_rect(self, page, card, part) {
+                let desc = CurveEditorDesc::new(rect);
+                let curve = &mut self.state.demo.curve_editor;
+                let handle = if (position - desc.to_screen(curve.p1())).length_squared()
+                    <= (position - desc.to_screen(curve.p2())).length_squared()
+                {
+                    CurveHandle::P1
+                } else {
+                    CurveHandle::P2
+                };
+                curve.begin(handle);
+                curve.drag_to(desc.from_screen(position));
+                self.state.bump();
             }
         }
     }
@@ -1491,7 +1537,7 @@ impl GalleryApp {
                 3 => self.state.push_history("Move node"),
                 _ => {}
             },
-            PageId::Springs => match part {
+            PageId::Springs if card == 0 => match part {
                 1 => {
                     self.state.demo.spring_high = !self.state.demo.spring_high;
                     self.state

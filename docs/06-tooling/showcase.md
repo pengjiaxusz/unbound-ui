@@ -71,6 +71,12 @@
 帧率图因此不再是手绘正弦曲线，而是把这份实测缓冲交给
 `unbound-widgets::chart::emit_chart` 绘制——与组件画廊用的是同一个图表发射器。
 
+同理，Springs 的缓动曲线不再是静态手绘贝塞尔：`DemoState.curve_editor`
+（`CurveEditorState`）保存两个控制点，壳层在 `press_demo` / `pointer_move` /
+`pointer_up` 里把指针归约成 `begin` / `drag_to` / `end`，由
+`unbound-widgets::curve_editor::emit_curve_editor` 实时绘制；预设分段器载入引擎
+的 `CubicBezier::EASE` / `EASE_OUT` / `LINEAR`。
+
 `GalleryRuntime` 把 `GalleryApp` 适配成 `unbound_app::Application`，窗口壳层只
 通过 `AppRuntime<GalleryRuntime>` 驱动，不再自己维护事件解析与帧差分：
 
