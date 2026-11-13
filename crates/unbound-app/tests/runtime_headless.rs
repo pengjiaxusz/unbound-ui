@@ -338,3 +338,89 @@ fn typing_in_text_input_uploads_only_local_range() {
         );
     }
 }
+
+#[test]
+fn inspector_emits_debug_glyph_primitives_when_enabled() {
+    let mut runtime = runtime();
+    runtime.frame(0.0);
+    let base_prims = runtime.scene().primitives.len();
+    let base_payloads = runtime.scene().payloads.len();
+
+    runtime.toggle_inspector();
+    runtime.frame(1.0 / 60.0);
+    assert!(
+        runtime.scene().primitives.len() > base_prims,
+        "enabled inspector must emit panel and glyph primitives into scene"
+    );
+    assert!(
+        runtime.scene().payloads.len() > base_payloads,
+        "enabled inspector must shape debug text lines into glyph payloads"
+    );
+}
+
+#[derive(Default)]
+struct PlatformBridgeApp;
+
+struct PlatformBridgeState {
+    dropped: Vec<std::path::PathBuf>,
+    hovered: Vec<std::path::PathBuf>,
+    hover_cancelled: bool,
+    pasted: Option<String>,
+}
+
+impl Application for PlatformBridgeApp {
+    type State = PlatformBridgeState;
+
+    fn init(&mut self, ctx: &mut unbound_app::AppContext) -> Self::State {
+        ctx.clipboard_set("hello clipboard");
+        PlatformBridgeState {
+            dropped: Vec::new(),
+            hovered: Vec::new(),
+            hover_cancelled: false,
+            pasted: ctx.clipboard_get(),
+        }
+    }
+
+    fn reduce(
+        &mut self,
+        state: &mut Self::State,
+        event: AppEvent,
+        _ctx: &mut unbound_app::AppContext,
+    ) -> EventOutcome {
+        match event {
+            AppEvent::FileHover(paths) => {
+                state.hovered = paths;
+            }
+            AppEvent::FileDrop(paths) => {
+                state.dropped = paths;
+            }
+            AppEvent::FileHoverCancelled => {
+                state.hover_cancelled = true;
+            }
+            _ => {}
+        }
+        EventOutcome::new(DirtyFlags::NONE)
+    }
+
+    fn view(&mut self, _state: &Self::State, _view: &mut unbound_app::ViewBuilder) {}
+}
+
+#[test]
+fn clipboard_and_file_drop_events_flow_through_runtime() {
+    let mut runtime = AppRuntime::new(PlatformBridgeApp, Vec2::new(800.0, 600.0));
+    runtime.set_clipboard(Box::new(unbound_app::MemoryClipboard::default()));
+    runtime.context().clipboard_set("from runtime");
+    assert_eq!(
+        runtime.context().clipboard_get().as_deref(),
+        Some("from runtime")
+    );
+    assert_eq!(runtime.state().pasted.as_deref(), Some("hello clipboard"));
+
+    let p = std::path::PathBuf::from("sample.txt");
+    runtime.file_hover(vec![p.clone()]);
+    assert_eq!(runtime.state().hovered, vec![p.clone()]);
+    runtime.file_drop(vec![p.clone()]);
+    assert_eq!(runtime.state().dropped, vec![p]);
+    runtime.file_hover_cancelled();
+    assert!(runtime.state().hover_cancelled);
+}

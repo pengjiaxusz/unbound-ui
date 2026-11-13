@@ -131,6 +131,12 @@ pub enum PlatformEvent {
     VisibilityChanged(bool),
     /// The OS light / dark preference changed.
     ThemeChanged { dark: bool },
+    /// A file is being dragged over the window.
+    FileHover(std::path::PathBuf),
+    /// A file was dropped onto the window.
+    FileDrop(std::path::PathBuf),
+    /// A file drag left the window without dropping.
+    FileHoverCancelled,
     /// The OS asks for a new frame.
     RedrawRequested,
     /// The user asked to close the window.
@@ -377,6 +383,9 @@ pub fn translate_window_event(event: &winit::event::WindowEvent) -> Option<Platf
             })
         }
         WindowEvent::Focused(focused) => PlatformEvent::Focused(*focused),
+        WindowEvent::HoveredFile(path) => PlatformEvent::FileHover(path.clone()),
+        WindowEvent::DroppedFile(path) => PlatformEvent::FileDrop(path.clone()),
+        WindowEvent::HoveredFileCancelled => PlatformEvent::FileHoverCancelled,
         WindowEvent::CloseRequested => PlatformEvent::CloseRequested,
         WindowEvent::RedrawRequested => PlatformEvent::RedrawRequested,
         _ => return None,
@@ -521,6 +530,9 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
         PlatformEvent::ThemeChanged { dark } => {
             out.push(PlatformEvent::ThemeChanged { dark: *dark });
         }
+        PlatformEvent::FileHover(path) => out.push(PlatformEvent::FileHover(path.clone())),
+        PlatformEvent::FileDrop(path) => out.push(PlatformEvent::FileDrop(path.clone())),
+        PlatformEvent::FileHoverCancelled => out.push(PlatformEvent::FileHoverCancelled),
         PlatformEvent::RedrawRequested => out.push(PlatformEvent::RedrawRequested),
         PlatformEvent::CloseRequested => out.push(PlatformEvent::CloseRequested),
         PlatformEvent::RecreateSwapchain(extent) => {

@@ -595,6 +595,24 @@ impl UiWorld {
             .find(|id| self.node(*id).desc.key == key)
     }
 
+    /// Replace a node's layout descriptor when it changed, marking layout dirty.
+    pub fn set_desc(&mut self, id: NodeId, desc: RawNodeDesc) {
+        let Some(node) = self.nodes.get_mut(id) else {
+            return;
+        };
+        if node.desc == desc {
+            return;
+        }
+        let was_boundary = node.is_relayout_boundary();
+        node.desc = desc;
+        let is_boundary = node.is_relayout_boundary();
+        if was_boundary != is_boundary {
+            self.mark_topology_dirty();
+        } else {
+            self.mark_layout_dirty(id);
+        }
+    }
+
     /// Attach text to a node (replacing any previous text).
     pub fn set_text(&mut self, id: NodeId, text: impl Into<String>) {
         let text = text.into();

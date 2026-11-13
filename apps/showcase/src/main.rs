@@ -127,7 +127,22 @@ impl Showcase {
                 // The runtime diffs the frame, so the shell must not scan the
                 // primitive list a second time for the same answer.
                 app.set_external_diff(true);
-                AppRuntime::new(app, Vec2::new(1440.0, 900.0))
+                let mut rt = AppRuntime::new(app, Vec2::new(1440.0, 900.0));
+                struct WinClipboard(std::cell::RefCell<unbound_platform::SystemClipboard>);
+                impl unbound_app::ClipboardProvider for WinClipboard {
+                    fn get_text(&self) -> Option<String> {
+                        use unbound_platform::ClipboardProvider as _;
+                        self.0.borrow_mut().read_text().ok().flatten()
+                    }
+                    fn set_text(&mut self, text: &str) {
+                        use unbound_platform::ClipboardProvider as _;
+                        let _ = self.0.borrow_mut().write_text(text);
+                    }
+                }
+                rt.set_clipboard(Box::new(WinClipboard(std::cell::RefCell::new(
+                    unbound_platform::SystemClipboard::new(),
+                ))));
+                rt
             },
             renderer: None,
             surface: None,
@@ -916,6 +931,15 @@ impl PlatformApp for Showcase {
                 self.shell_mut().state.bump();
                 self.app.invalidate();
             }
+            PlatformEvent::FileHover(path) => {
+                self.app.file_hover(vec![path]);
+            }
+            PlatformEvent::FileDrop(path) => {
+                self.app.file_drop(vec![path]);
+            }
+            PlatformEvent::FileHoverCancelled => {
+                self.app.file_hover_cancelled();
+            }
             PlatformEvent::CloseRequested => return Flow::Exit,
             _ => {}
         }
@@ -1057,19 +1081,19 @@ impl Showcase {
         };
         let (actual_w, actual_h) = extra.swapchain.extent();
         self.scene_generation = self.scene_generation.wrapping_add(1);
-        self.app.application_mut().shell_mut().scene.camera =
-            Camera::ui((actual_w as f32, actual_h as f32), scale);
+        let camera = Camera::ui((actual_w as f32, actual_h as f32), scale);
+        self.app.application_mut().shell_mut().scene.camera = camera;
         // Two windows share the pool, so each draw uploads the whole scene
         // with a fresh generation instead of patching a base that belongs to
         // the other window.
-        let shell = self.app.application().shell();
+        let runtime_scene = self.app.scene();
         let scene = SceneUpload {
-            primitives: &shell.scene.primitives,
-            transforms: &shell.scene.transforms,
-            clips: &shell.scene.clips,
-            payloads: &shell.scene.payloads,
+            primitives: &runtime_scene.primitives,
+            transforms: &runtime_scene.transforms,
+            clips: &runtime_scene.clips,
+            payloads: &runtime_scene.payloads,
             generation: self.scene_generation,
-            camera: shell.scene.camera,
+            camera,
             key_prefix: (PassLayer::Ui as u64) << 56,
             dirty_ranges: &[],
             aux_changed: false,
@@ -1248,9 +1272,8 @@ impl Showcase {
         //
         // The camera is built from the same extent the layout was solved
         // for, so the two can never describe different pictures.
-        self.app.application_mut().shell_mut().scene.camera =
-            Camera::ui((width as f32, height as f32), scale);
-        let shell = self.app.application().shell();
+        let camera = Camera::ui((width as f32, height as f32), scale);
+        self.app.application_mut().shell_mut().scene.camera = camera;
         let (generation, dirty_ranges): (u64, &[(u32, u32)]) = if multi {
             // Two windows share the instance pool, so each draw uploads the
             // whole scene under a *fresh* generation instead of patching a
@@ -1261,17 +1284,33 @@ impl Showcase {
             (plan.generation, plan.ranges)
         };
         self.scene_generation = generation;
+        let gpu_backdrops: Vec<unbound_gpu::frame::BackdropRequest> = report
+            .backdrops
+            .iter()
+            .map(|b| unbound_gpu::frame::BackdropRequest {
+                rect: [
+                    b.rect.origin.x * scale,
+                    b.rect.origin.y * scale,
+                    b.rect.size.x * scale,
+                    b.rect.size.y * scale,
+                ],
+                radius: b.blur * scale,
+                corner_radii: [0.0; 4],
+                layer_key_prefix: (PassLayer::Overlay as u64) << 56,
+            })
+            .collect();
+        let runtime_scene = self.app.scene();
         let scene = SceneUpload {
-            primitives: &shell.scene.primitives,
-            transforms: &shell.scene.transforms,
-            clips: &shell.scene.clips,
-            payloads: &shell.scene.payloads,
+            primitives: &runtime_scene.primitives,
+            transforms: &runtime_scene.transforms,
+            clips: &runtime_scene.clips,
+            payloads: &runtime_scene.payloads,
             generation,
-            camera: shell.scene.camera,
+            camera,
             key_prefix: (PassLayer::Ui as u64) << 56,
             dirty_ranges,
             aux_changed: report.aux_changed,
-            backdrops: &[],
+            backdrops: &gpu_backdrops,
         };
         if let Err(error) = renderer.render_into_swapchain(&scene, &image, width, height) {
             eprintln!("render failed: {error}");

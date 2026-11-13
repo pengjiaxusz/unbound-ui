@@ -202,6 +202,62 @@ impl ShapedText {
         best
     }
 
+    /// Map a local point `(x, y)` to a UTF-8 byte offset in `text`.
+    ///
+    /// Selects the line closest to `point.y`, then compares `point.x` against
+    /// each glyph's horizontal midpoint on that line so clicking the right half
+    /// of a glyph advances the caret to the following character boundary.
+    #[must_use]
+    pub fn hit_test_point(&self, point: Vec2, text: &str) -> usize {
+        if self.glyphs.is_empty() || text.is_empty() {
+            return 0;
+        }
+        let line_h = self.line_height.max(1.0);
+        // Group glyphs by line via y coordinate; pick the line closest to point.y.
+        let mut best_line_y = self.glyphs[0].y;
+        let mut best_dy = (point.y - (best_line_y + line_h * 0.5)).abs();
+        for g in &self.glyphs {
+            let dy = (point.y - (g.y + line_h * 0.5)).abs();
+            if dy < best_dy {
+                best_dy = dy;
+                best_line_y = g.y;
+            }
+        }
+        let next_boundary = |byte: usize| -> usize {
+            let b = byte.min(text.len());
+            let mut idx = b + 1;
+            while idx < text.len() && !text.is_char_boundary(idx) {
+                idx += 1;
+            }
+            idx.min(text.len())
+        };
+        let mut line_glyphs: Vec<&PositionedGlyph> = self
+            .glyphs
+            .iter()
+            .filter(|g| (g.y - best_line_y).abs() < line_h * 0.45)
+            .collect();
+        if line_glyphs.is_empty() {
+            return 0;
+        }
+        line_glyphs.sort_by(|a, b| a.x.total_cmp(&b.x));
+        for g in &line_glyphs {
+            let mid = g.x + g.w * 0.5;
+            if point.x < mid {
+                return if g.is_rtl() {
+                    next_boundary(g.cluster as usize)
+                } else {
+                    (g.cluster as usize).min(text.len())
+                };
+            }
+        }
+        let last = line_glyphs[line_glyphs.len() - 1];
+        if last.is_rtl() {
+            (last.cluster as usize).min(text.len())
+        } else {
+            next_boundary(last.cluster as usize)
+        }
+    }
+
     /// The caret position for a byte offset.
     ///
     /// The caret sits at the start of the glyph the byte belongs to, or at the
@@ -1193,5 +1249,44 @@ mod tests {
                 "the range must select the line's text"
             );
         }
+    }
+
+    #[test]
+    fn hit_test_point_maps_x_and_y_to_byte_offsets() {
+        let mut engine = TextEngine::new();
+        let text = "Hello world wrapped line";
+        let shaped = engine.shape_wrapped(
+            text,
+            &TextStyle {
+                font_size: 16.0,
+                line_height: 22.0,
+                ..TextStyle::default()
+            },
+            100.0,
+        );
+        let first_y = shaped.glyphs.first().map(|g| g.y).unwrap_or(0.0);
+        let second_y = shaped
+            .glyphs
+            .iter()
+            .map(|g| g.y)
+            .find(|&y| (y - first_y).abs() > 1.0)
+            .expect("wrapped text must have at least two lines");
+        // Click at origin -> start of first line
+        assert_eq!(
+            shaped.hit_test_point(Vec2::new(0.0, first_y + 4.0), text),
+            0
+        );
+        // Click far right on first line -> byte offset before second line
+        let first_end = shaped.hit_test_point(Vec2::new(500.0, first_y + 4.0), text);
+        // Click on second line near start -> byte offset at or past first_end
+        let second_start = shaped.hit_test_point(Vec2::new(0.0, second_y + 4.0), text);
+        assert!(
+            second_start >= first_end && first_end > 0,
+            "first_end={first_end}, second_start={second_start}"
+        );
+        // Click far right on second line -> end of string (or last line)
+        let last_y = shaped.glyphs.iter().map(|g| g.y).fold(first_y, f32::max);
+        let last_end = shaped.hit_test_point(Vec2::new(500.0, last_y + 4.0), text);
+        assert_eq!(last_end, text.len());
     }
 }

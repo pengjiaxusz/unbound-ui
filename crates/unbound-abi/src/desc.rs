@@ -381,7 +381,7 @@ impl GridTrack {
 /// Field order is grouped by access frequency: geometry first (touched by every
 /// layout pass), then paint (only touched by dirty-paint passes), then identity.
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct RawNodeDesc {
     // ---- geometry / layout (hot) ----
     pub width: Dim,

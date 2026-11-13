@@ -130,3 +130,72 @@ fn layout_only_state_is_not_published_as_a_whole_scene() {
     let report = runtime.frame(1.0 / 60.0);
     assert_eq!(report.diff, unbound_widgets::diff::SceneDiff::Identical);
 }
+
+struct BoundaryApp;
+
+impl Application for BoundaryApp {
+    type State = bool;
+
+    fn init(&mut self, _ctx: &mut unbound_app::AppContext) -> Self::State {
+        false
+    }
+
+    fn reduce(
+        &mut self,
+        state: &mut Self::State,
+        event: AppEvent,
+        _ctx: &mut unbound_app::AppContext,
+    ) -> EventOutcome {
+        if matches!(event, AppEvent::Click { .. }) {
+            *state = !*state;
+            return EventOutcome::new(unbound_app::DirtyFlags::LAYOUT);
+        }
+        EventOutcome::default()
+    }
+
+    fn view(&mut self, state: &Self::State, view: &mut unbound_app::ViewBuilder) {
+        let boundary_desc = RawNodeDesc::container()
+            .size(280.0, 180.0)
+            .flags(unbound_abi::NodeFlags::CLIP);
+        view.row(10, |row| {
+            row.container(100, boundary_desc, |card| {
+                let label = if *state { "Expanded" } else { "Ok" };
+                card.widget(
+                    101,
+                    RawNodeDesc::container(),
+                    WidgetSpec::Button(ButtonDesc::new(Rect::ZERO, label)),
+                );
+            });
+            row.container(200, boundary_desc, |card| {
+                card.widget(
+                    201,
+                    RawNodeDesc::container(),
+                    WidgetSpec::Button(ButtonDesc::new(Rect::ZERO, "Static")),
+                );
+            });
+        });
+    }
+}
+
+#[test]
+fn incremental_frame_reuses_world_and_solves_only_dirty_boundary() {
+    let mut runtime = AppRuntime::new(BoundaryApp, Vec2::new(640.0, 320.0));
+    runtime.frame(0.0);
+    let card_a_before = runtime.world().find_key(100).expect("card 100");
+    let card_b_before = runtime.world().find_key(200).expect("card 200");
+
+    // Click inside card 100's button to mutate only card 100.
+    let btn_rect = find(runtime.world(), 101);
+    runtime.pointer_move(btn_rect.center());
+    runtime.pointer_down(btn_rect.center(), unbound_input::PointerButton::Left);
+    runtime.pointer_up(btn_rect.center(), unbound_input::PointerButton::Left);
+    runtime.frame(1.0 / 60.0);
+
+    assert_eq!(runtime.world().find_key(100), Some(card_a_before));
+    assert_eq!(runtime.world().find_key(200), Some(card_b_before));
+    assert_eq!(
+        runtime.last_layout_stats().boundaries_solved,
+        1,
+        "only the dirty relayout boundary should be re-solved"
+    );
+}

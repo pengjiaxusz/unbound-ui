@@ -24,20 +24,31 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
+use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_a11y::A11yAction;
 use unbound_abi::{Dim, NodeFlags, RawNodeDesc};
 use unbound_gpu::atlas::AtlasUpload;
-use unbound_gpu::data::{GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform};
+use unbound_gpu::data::{
+    BlendMode, GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform, PrimFlags, PrimType,
+    SubElement, CLIP_NONE,
+};
 use unbound_input::{
     CursorKind, FocusCause, FocusKey, FocusManager, KeyChord, KeyName, Keymap, PointerButton,
     PointerEvent, Router,
 };
-use unbound_layout::LayoutEngine;
+use unbound_layout::{LayoutEngine, LayoutStats};
 use unbound_math::{Rect, Vec2};
-use unbound_text::{TextEngine, TextStyle};
+use unbound_text::{GlyphCache, TextEngine, TextStyle};
 use unbound_theme::ThemeKind;
+use unbound_widgets::alert::{emit_alert, AlertDesc};
+use unbound_widgets::badge::{emit_badge, BadgeDesc};
 use unbound_widgets::button::{ButtonDesc, ButtonWidget};
+use unbound_widgets::checkbox::{emit_checkbox, CheckboxDesc, CheckboxTokens};
 use unbound_widgets::diff::{diff_primitives, SceneDiff};
+use unbound_widgets::divider::{emit_divider, DividerDesc, DividerTokens};
+use unbound_widgets::progress::{emit_progress, ProgressDesc, ProgressState};
+use unbound_widgets::slider::{emit_slider, SliderDesc, SliderTokens};
+use unbound_widgets::switch::{emit_switch, SwitchDesc, SwitchTokens};
 use unbound_widgets::{BackdropRequest, ControlState, SceneCollector, WidgetDesc, WidgetOutput};
 use unbound_world::{NodeId, UiWorld};
 
@@ -299,6 +310,43 @@ pub enum AppEvent {
     Tick { dt: f32 },
     /// A timer scheduled through [`AppContext::set_timeout`] fired.
     Timer { token: TimerToken },
+    /// OS files are hovering over the window.
+    FileHover(Vec<std::path::PathBuf>),
+    /// OS files were dropped onto the window.
+    FileDrop(Vec<std::path::PathBuf>),
+    /// An OS file drag left the window without dropping.
+    FileHoverCancelled,
+}
+
+/// Platform-agnostic clipboard interface for `AppContext`.
+pub trait ClipboardProvider {
+    /// Read the current clipboard text, if any.
+    fn get_text(&self) -> Option<String>;
+    /// Replace the clipboard contents with `text`.
+    fn set_text(&mut self, text: &str);
+}
+
+/// In-memory clipboard used in headless tests and as a fallback.
+#[derive(Clone, Debug, Default)]
+pub struct MemoryClipboard {
+    text: Option<String>,
+}
+
+impl MemoryClipboard {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl ClipboardProvider for MemoryClipboard {
+    fn get_text(&self) -> Option<String> {
+        self.text.clone()
+    }
+
+    fn set_text(&mut self, text: &str) {
+        self.text = Some(text.to_owned());
+    }
 }
 
 /// The runtime's read/write view of the world during `reduce`.
@@ -340,6 +388,8 @@ pub struct AppContext {
     waker: Option<Arc<dyn AppWaker>>,
     /// How much of the current wheel delta the last handler consumed.
     scroll_consumed: Vec2,
+    /// Shared clipboard provider (SystemClipboard in windowed mode, MemoryClipboard headless).
+    clipboard: Rc<RefCell<Box<dyn ClipboardProvider>>>,
 }
 
 impl core::fmt::Debug for AppContext {
@@ -381,7 +431,24 @@ impl AppContext {
             async_sender: None,
             waker: None,
             scroll_consumed: Vec2::ZERO,
+            clipboard: Rc::new(RefCell::new(Box::new(MemoryClipboard::new()))),
         }
+    }
+
+    /// Replace the clipboard provider (for example with `SystemClipboard`).
+    pub fn set_clipboard(&mut self, provider: Box<dyn ClipboardProvider>) {
+        *self.clipboard.borrow_mut() = provider;
+    }
+
+    /// Read text from the active clipboard provider.
+    #[must_use]
+    pub fn clipboard_get(&self) -> Option<String> {
+        self.clipboard.borrow().get_text()
+    }
+
+    /// Write text to the active clipboard provider.
+    pub fn clipboard_set(&self, text: &str) {
+        self.clipboard.borrow_mut().set_text(text);
     }
 
     /// The local state for a node key.
@@ -557,6 +624,25 @@ pub enum WidgetSpec {
         /// The shaping style.
         style: TextStyle,
     },
+    /// A checkbox control.
+    Checkbox(CheckboxDesc),
+    /// A toggle switch.
+    Switch(SwitchDesc),
+    /// A continuous slider.
+    Slider(SliderDesc),
+    /// A progress bar or ring.
+    Progress {
+        /// Descriptor (rect is replaced by layout).
+        desc: ProgressDesc,
+        /// Animation state.
+        state: ProgressState,
+    },
+    /// A pill badge.
+    Badge(BadgeDesc),
+    /// A hairline divider.
+    Divider(DividerDesc),
+    /// A status alert banner.
+    Alert(AlertDesc),
 }
 
 /// One deferred widget together with the node the layout engine solved.
@@ -579,6 +665,9 @@ pub struct ViewBuilder<'a> {
     parent: NodeId,
     pending: &'a mut Vec<PendingWidget>,
     widget_state: Rc<RefCell<WidgetStateStore>>,
+    node_keys: &'a mut FxHashMap<u64, NodeId>,
+    seen_keys: &'a mut FxHashSet<u64>,
+    ephemeral_nodes: &'a mut Vec<NodeId>,
 }
 
 impl<'a> ViewBuilder<'a> {
@@ -621,17 +710,41 @@ impl<'a> ViewBuilder<'a> {
         self.container(key, desc, build)
     }
 
+    fn reconcile_node(
+        &mut self,
+        key: u64,
+        mut desc: RawNodeDesc,
+        loc: &'static core::panic::Location<'static>,
+    ) -> NodeId {
+        desc.key = key;
+        if key != 0 {
+            self.seen_keys.insert(key);
+            if let Some(&existing) = self.node_keys.get(&key) {
+                if let Some(node_data) = self.world.get(existing) {
+                    if node_data.parent == self.parent {
+                        self.world.set_desc(existing, desc);
+                        return existing;
+                    }
+                }
+            }
+        }
+        let node = self.world.insert(self.parent, desc, loc);
+        if key != 0 {
+            self.node_keys.insert(key, node);
+        } else {
+            self.ephemeral_nodes.push(node);
+        }
+        node
+    }
+
     /// Declare a layout-only container with an explicit descriptor.
     pub fn container(
         &mut self,
         key: u64,
-        mut desc: RawNodeDesc,
+        desc: RawNodeDesc,
         build: impl FnOnce(&mut Self),
     ) -> NodeId {
-        desc.key = key;
-        let node = self
-            .world
-            .insert(self.parent, desc, core::panic::Location::caller());
+        let node = self.reconcile_node(key, desc, core::panic::Location::caller());
         let parent = core::mem::replace(&mut self.parent, node);
         build(self);
         self.parent = parent;
@@ -641,23 +754,46 @@ impl<'a> ViewBuilder<'a> {
     /// Place a widget in the current container; emit happens after layout.
     pub fn widget(&mut self, key: u64, mut desc: RawNodeDesc, spec: WidgetSpec) -> NodeId {
         desc.key = key;
-        if let WidgetSpec::Button(button) = &spec {
-            // Auto-sized buttons get the descriptor's rect when it is already
-            // resolved, otherwise a conservative intrinsic from the label.
-            let intrinsic = Vec2::new(
+        let intrinsic = match &spec {
+            WidgetSpec::Button(button) => Some(Vec2::new(
                 (button.label.chars().count() as f32 * 8.0 + 32.0).max(button.rect.width()),
                 button.rect.height().max(32.0),
-            );
-            desc = desc.size(intrinsic.x, intrinsic.y);
+            )),
+            WidgetSpec::Checkbox(cb) => Some(Vec2::new(
+                cb.rect.width().max(120.0),
+                cb.rect.height().max(24.0),
+            )),
+            WidgetSpec::Switch(sw) => Some(Vec2::new(
+                sw.rect.width().max(48.0),
+                sw.rect.height().max(26.0),
+            )),
+            WidgetSpec::Slider(sl) => Some(Vec2::new(
+                sl.rect.width().max(160.0),
+                sl.rect.height().max(28.0),
+            )),
+            WidgetSpec::Progress { desc: pr, .. } => Some(Vec2::new(
+                pr.rect.width().max(160.0),
+                pr.rect.height().max(12.0),
+            )),
+            WidgetSpec::Badge(badge) => Some(Vec2::new(
+                badge.rect.width().max(64.0),
+                badge.rect.height().max(22.0),
+            )),
+            WidgetSpec::Divider(div) => Some(Vec2::new(
+                div.rect.width().max(1.0),
+                div.rect.height().max(1.0),
+            )),
+            WidgetSpec::Alert(alert) => Some(Vec2::new(
+                alert.rect.width().max(240.0),
+                alert.rect.height().max(48.0),
+            )),
+            WidgetSpec::Text { .. } => None,
+        };
+        if let Some(size) = intrinsic {
+            desc = desc.size(size.x, size.y);
         }
-        let node = self
-            .world
-            .insert(self.parent, desc, core::panic::Location::caller());
-        if let WidgetSpec::Button(button) = &spec {
-            let size = Vec2::new(
-                (button.label.chars().count() as f32 * 8.0 + 32.0).max(button.rect.width()),
-                button.rect.height().max(32.0),
-            );
+        let node = self.reconcile_node(key, desc, core::panic::Location::caller());
+        if let Some(size) = intrinsic {
             if let Some(data) = self.world.get_mut(node) {
                 data.measure = Some(size);
             }
@@ -674,9 +810,7 @@ impl<'a> ViewBuilder<'a> {
             .key(key)
             .width(Dim::percent(100.0))
             .flags(NodeFlags::WRAP);
-        let node = self
-            .world
-            .insert(self.parent, desc, core::panic::Location::caller());
+        let node = self.reconcile_node(key, desc, core::panic::Location::caller());
         self.world.set_text(node, text.clone());
         self.pending.push(PendingWidget {
             key,
@@ -832,6 +966,7 @@ pub struct AppRuntime<A: Application> {
     world: UiWorld,
     layout: LayoutEngine,
     text_engine: TextEngine,
+    glyph_cache: GlyphCache,
     asset_hub: AssetHub,
     pending: Vec<PendingWidget>,
     widget_state: Rc<RefCell<WidgetStateStore>>,
@@ -842,6 +977,11 @@ pub struct AppRuntime<A: Application> {
     last_focused: Option<u64>,
     inspector: Inspector,
     debug_sanitizers: bool,
+    node_keys: FxHashMap<u64, NodeId>,
+    seen_keys: FxHashSet<u64>,
+    ephemeral_nodes: Vec<NodeId>,
+    last_layout_stats: LayoutStats,
+    layout_initialized: bool,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -874,6 +1014,7 @@ impl<A: Application> AppRuntime<A> {
             world: UiWorld::new(),
             layout: LayoutEngine::new(),
             text_engine: TextEngine::new(),
+            glyph_cache: GlyphCache::new(),
             asset_hub: AssetHub::new(),
             pending: Vec::new(),
             widget_state,
@@ -884,6 +1025,11 @@ impl<A: Application> AppRuntime<A> {
             last_focused: None,
             inspector: Inspector::new(),
             debug_sanitizers: false,
+            node_keys: FxHashMap::default(),
+            seen_keys: FxHashSet::default(),
+            ephemeral_nodes: Vec::new(),
+            last_layout_stats: LayoutStats::default(),
+            layout_initialized: false,
         };
         // A timer scheduled from `init` is already due relative to the zero
         // clock; enqueue it before the first frame can advance past it.
@@ -1255,6 +1401,26 @@ impl<A: Application> AppRuntime<A> {
         self.dispatch(AppEvent::Ime { update })
     }
 
+    /// OS files hovered over the window.
+    pub fn file_hover(&mut self, paths: Vec<std::path::PathBuf>) -> DirtyFlags {
+        self.dispatch(AppEvent::FileHover(paths))
+    }
+
+    /// OS files dropped onto the window.
+    pub fn file_drop(&mut self, paths: Vec<std::path::PathBuf>) -> DirtyFlags {
+        self.dispatch(AppEvent::FileDrop(paths))
+    }
+
+    /// OS file hover cancelled.
+    pub fn file_hover_cancelled(&mut self) -> DirtyFlags {
+        self.dispatch(AppEvent::FileHoverCancelled)
+    }
+
+    /// Install a platform clipboard provider on the runtime's context.
+    pub fn set_clipboard(&mut self, provider: Box<dyn ClipboardProvider>) {
+        self.ctx.set_clipboard(provider);
+    }
+
     /// A resize.
     pub fn resize(&mut self, size: Vec2) -> DirtyFlags {
         self.ctx.viewport = size;
@@ -1327,12 +1493,17 @@ impl<A: Application> AppRuntime<A> {
         self.collector.reset(ROOT);
         self.pending.clear();
         self.widget_state.borrow_mut().begin_frame();
-        self.world = UiWorld::new();
-        self.layout = LayoutEngine::new();
-        let root = self.world.root();
-        if let Some(data) = self.world.get_mut(root) {
-            data.desc = RawNodeDesc::container().size(self.ctx.viewport.x, self.ctx.viewport.y);
+        for old_ephemeral in self.ephemeral_nodes.drain(..) {
+            if self.world.get(old_ephemeral).is_some() {
+                self.world.remove(old_ephemeral);
+            }
         }
+        self.seen_keys.clear();
+        let root = self.world.root();
+        self.world.set_desc(
+            root,
+            RawNodeDesc::container().size(self.ctx.viewport.x, self.ctx.viewport.y),
+        );
 
         let view_ctx = ViewContext {
             viewport: self.ctx.viewport,
@@ -1350,8 +1521,23 @@ impl<A: Application> AppRuntime<A> {
             parent: root,
             pending: &mut self.pending,
             widget_state: Rc::clone(&self.widget_state),
+            node_keys: &mut self.node_keys,
+            seen_keys: &mut self.seen_keys,
+            ephemeral_nodes: &mut self.ephemeral_nodes,
         };
         self.app.view(&self.state, &mut view);
+        let vanished: Vec<(u64, NodeId)> = self
+            .node_keys
+            .iter()
+            .filter(|(k, _)| !self.seen_keys.contains(k))
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        for (k, node) in vanished {
+            self.node_keys.remove(&k);
+            if self.world.get(node).is_some() {
+                self.world.remove(node);
+            }
+        }
         self.layout_pending();
         self.dispatch_lifecycle();
 
@@ -1381,6 +1567,57 @@ impl<A: Application> AppRuntime<A> {
                 let scene = self.inspector.emit(self.ctx.viewport);
                 self.collector.primitives.extend(scene.primitives);
                 self.collector.payloads.extend(scene.payloads);
+                let panel_w = inspector::PANEL_WIDTH.min(self.ctx.viewport.x * 0.45);
+                let panel_x = self.ctx.viewport.x - panel_w + 12.0;
+                let style = TextStyle::sized(11.0);
+                for (index, line) in scene.lines.iter().enumerate().take(16) {
+                    let shaped = self.text_engine.shape(line, &style);
+                    let origin = Vec2::new(panel_x, 16.0 + index as f32 * 18.0);
+                    let quads = self.glyph_cache.quads_for(
+                        &mut self.text_engine,
+                        &shaped,
+                        origin,
+                        400,
+                        false,
+                    );
+                    for quad in quads {
+                        let payload_idx = self.collector.payloads.len() as u32;
+                        self.collector.payloads.push(GpuPayload {
+                            p0: [quad.uv[0], quad.uv[1]],
+                            p1: [quad.uv[2], quad.uv[3]],
+                            p2: [0.0, 0.0],
+                            line_width: 0.0,
+                            extra: 0,
+                            flags: 0,
+                            _reserved: [0; 3],
+                        });
+                        let prim_type = if quad.color {
+                            PrimType::GlyphColor
+                        } else {
+                            PrimType::Glyph
+                        };
+                        let glyph = GpuPrimitiveInstance {
+                            local_pos: [quad.rect.origin.x, quad.rect.origin.y],
+                            size: [quad.rect.size.x, quad.rect.size.y],
+                            clip_idx: CLIP_NONE,
+                            border_token_or_tex: quad.layer,
+                            extra_payload_idx: payload_idx,
+                            z_and_opacity: GpuPrimitiveInstance::pack_z_opacity(u16::MAX, 1.0),
+                            fill_token_or_uv: u32::from(unbound_theme::Token::TEXT_PRIMARY.raw()),
+                            prim_type_and_flags: GpuPrimitiveInstance::pack_type(
+                                prim_type,
+                                BlendMode::Normal,
+                                SubElement::Content as u16,
+                            ) | if quad.msdf {
+                                u32::from(PrimFlags::MSDF.bits()) << 16
+                            } else {
+                                0
+                            },
+                            ..Default::default()
+                        };
+                        self.collector.primitives.push(glyph);
+                    }
+                }
             }
         }
 
@@ -1451,13 +1688,29 @@ impl<A: Application> AppRuntime<A> {
         &self.app
     }
 
+    /// The layout statistics from the most recent solve pass.
+    #[must_use]
+    pub fn last_layout_stats(&self) -> LayoutStats {
+        self.last_layout_stats
+    }
+
     /// Solve the declarative tree and emit the deferred widgets.
     ///
-    /// Pass 1 builds the world and pre-measures nothing but buttons; pass 2
-    /// hands Taffy a measurer for wrapping paragraphs, then emits every widget
-    /// at the resolved rectangle.
+    /// Pass 1 reconciles the world and pre-measures widgets; pass 2 solves
+    /// either the full tree (on topology/viewport change) or only dirty
+    /// relayout boundaries via [`LayoutEngine::solve_boundaries`], then emits
+    /// every widget at its resolved rectangle.
     fn layout_pending(&mut self) {
-        if self.pending.is_empty() {
+        if self.pending.is_empty() && !self.world.topology_dirty() {
+            let boundaries = self.world.dirty_boundaries();
+            if boundaries.is_empty() {
+                self.last_layout_stats = LayoutStats::default();
+                return;
+            }
+            self.last_layout_stats =
+                self.layout
+                    .solve_boundaries(&mut self.world, &boundaries, self.ctx.viewport);
+            self.world.clear_dirty();
             return;
         }
         let viewport = self.ctx.viewport;
@@ -1467,14 +1720,17 @@ impl<A: Application> AppRuntime<A> {
             .iter()
             .filter_map(|entry| match &entry.spec {
                 WidgetSpec::Text { text, style } => Some((entry.node, text.clone(), style.clone())),
-                WidgetSpec::Button(_) => None,
+                _ => None,
             })
             .collect();
-        {
+        if !self.layout_initialized || self.world.topology_dirty() || self.force_rebuild {
             let world = &mut self.world;
             let text_engine = &mut self.text_engine;
-            self.layout
-                .solve_with_measurer(world, root, viewport, |id, known_width, available| {
+            self.last_layout_stats = self.layout.solve_with_measurer(
+                world,
+                root,
+                viewport,
+                |id, known_width, available| {
                     let Some((_, text, style)) = texts.iter().find(|(node, _, _)| *node == id)
                     else {
                         return Vec2::ZERO;
@@ -1486,7 +1742,20 @@ impl<A: Application> AppRuntime<A> {
                     let width = known_width.or(space).unwrap_or(viewport.x).max(1.0);
                     let wrapped = text_engine.wrap(text, style, width);
                     Vec2::new(wrapped.width, wrapped.height)
-                });
+                },
+            );
+            self.layout_initialized = true;
+            self.world.clear_dirty();
+        } else {
+            let boundaries = self.world.dirty_boundaries();
+            if !boundaries.is_empty() {
+                self.last_layout_stats =
+                    self.layout
+                        .solve_boundaries(&mut self.world, &boundaries, viewport);
+                self.world.clear_dirty();
+            } else {
+                self.last_layout_stats = LayoutStats::default();
+            }
         }
 
         let pending = core::mem::take(&mut self.pending);
@@ -1496,9 +1765,6 @@ impl<A: Application> AppRuntime<A> {
                 .get(entry.node)
                 .map(|node| node.rect)
                 .unwrap_or(Rect::ZERO);
-            let WidgetSpec::Button(desc) = &entry.spec else {
-                continue;
-            };
             let phase = if self.ctx.pressed == Some(entry.key) {
                 unbound_widgets::PointerPhase::Pressed
             } else if self.ctx.hovered == Some(entry.key) {
@@ -1512,13 +1778,76 @@ impl<A: Application> AppRuntime<A> {
                 disabled: false,
                 selected: false,
             };
-            let mut desc = desc.clone();
-            desc.rect = rect;
-            let widget = ButtonWidget {
-                node: entry.key,
-                desc,
-            };
-            self.collector.push(entry.key, widget.emit(state, &mut []));
+            match &entry.spec {
+                WidgetSpec::Button(desc) => {
+                    let mut desc = desc.clone();
+                    desc.rect = rect;
+                    let widget = ButtonWidget {
+                        node: entry.key,
+                        desc,
+                    };
+                    self.collector.push(entry.key, widget.emit(state, &mut []));
+                }
+                WidgetSpec::Checkbox(desc) => {
+                    let mut desc = desc.clone();
+                    desc.rect = rect;
+                    self.collector.push(
+                        entry.key,
+                        emit_checkbox(
+                            entry.key,
+                            &desc,
+                            state,
+                            &[],
+                            &[],
+                            CheckboxTokens::standard(),
+                        ),
+                    );
+                }
+                WidgetSpec::Switch(desc) => {
+                    let mut desc = desc.clone();
+                    desc.rect = rect;
+                    self.collector.push(
+                        entry.key,
+                        emit_switch(entry.key, &desc, state, &[], SwitchTokens::standard()),
+                    );
+                }
+                WidgetSpec::Slider(desc) => {
+                    let mut desc = desc.clone();
+                    desc.rect = rect;
+                    self.collector.push(
+                        entry.key,
+                        emit_slider(entry.key, &desc, state, &[], SliderTokens::standard()),
+                    );
+                }
+                WidgetSpec::Progress {
+                    desc,
+                    state: pstate,
+                } => {
+                    let mut desc = desc.clone();
+                    desc.rect = rect;
+                    self.collector.push(entry.key, emit_progress(&desc, pstate));
+                }
+                WidgetSpec::Badge(desc) => {
+                    let mut desc = desc.clone();
+                    desc.rect = rect;
+                    self.collector.push(entry.key, emit_badge(&desc, &[]));
+                }
+                WidgetSpec::Divider(desc) => {
+                    let mut desc = desc.clone();
+                    desc.rect = rect;
+                    self.collector.push(
+                        entry.key,
+                        emit_divider(&desc, &[], 0.0, DividerTokens::standard()),
+                    );
+                }
+                WidgetSpec::Alert(desc) => {
+                    let mut desc = desc.clone();
+                    desc.rect = rect;
+                    self.collector
+                        .push(entry.key, emit_alert(entry.key, &desc, &[], state));
+                }
+                WidgetSpec::Text { .. } => {}
+            }
         }
         self.pending = pending;
     }

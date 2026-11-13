@@ -86,6 +86,42 @@ impl Application for GalleryApp {
                 modifiers,
             } => {
                 if pressed {
+                    if modifiers.ctrl && !modifiers.alt && !modifiers.meta {
+                        if let AppKey::Character(ch) = key {
+                            let ch = ch.to_ascii_lowercase();
+                            if ch == 'c' {
+                                if self.state.search_focused && !self.state.search_query.is_empty()
+                                {
+                                    ctx.clipboard_set(&self.state.search_query);
+                                } else if self.state.demo.typing && !self.state.demo.text.is_empty()
+                                {
+                                    ctx.clipboard_set(&self.state.demo.text);
+                                }
+                            } else if ch == 'x' {
+                                if self.state.search_focused && !self.state.search_query.is_empty()
+                                {
+                                    ctx.clipboard_set(&self.state.search_query);
+                                    self.state.search_query.clear();
+                                    self.state.bump();
+                                } else if self.state.demo.typing && !self.state.demo.text.is_empty()
+                                {
+                                    ctx.clipboard_set(&self.state.demo.text);
+                                    self.state.demo.text.clear();
+                                    self.state.bump();
+                                }
+                            } else if ch == 'v' {
+                                if let Some(pasted) = ctx.clipboard_get() {
+                                    if self.state.search_focused {
+                                        self.state.search_query.push_str(&pasted);
+                                        self.state.bump();
+                                    } else if self.state.demo.typing {
+                                        self.state.demo.text.push_str(&pasted);
+                                        self.state.bump();
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let key = platform_key(key);
                     let modifiers = platform_modifiers(modifiers);
                     self.key(&key, modifiers, ctx.focused);
@@ -112,7 +148,10 @@ impl Application for GalleryApp {
             AppEvent::Tick { dt } => {
                 self.tick(dt);
             }
-            AppEvent::Timer { .. } => {}
+            AppEvent::Timer { .. }
+            | AppEvent::FileHover(_)
+            | AppEvent::FileDrop(_)
+            | AppEvent::FileHoverCancelled => {}
         }
 
         if let Some(node) = self.take_focus_request() {
