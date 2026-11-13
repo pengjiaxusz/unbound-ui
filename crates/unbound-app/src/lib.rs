@@ -40,16 +40,16 @@ use unbound_layout::{LayoutEngine, LayoutStats};
 use unbound_math::{Rect, Vec2};
 use unbound_text::{GlyphCache, TextEngine, TextStyle};
 use unbound_theme::ThemeKind;
-use unbound_widgets::alert::{emit_alert, AlertDesc};
-use unbound_widgets::badge::{emit_badge, BadgeDesc};
-use unbound_widgets::button::{ButtonDesc, ButtonWidget};
-use unbound_widgets::checkbox::{emit_checkbox, CheckboxDesc, CheckboxTokens};
+use unbound_widgets::alert::AlertDesc;
+use unbound_widgets::badge::BadgeDesc;
+use unbound_widgets::button::ButtonDesc;
+use unbound_widgets::checkbox::CheckboxDesc;
 use unbound_widgets::diff::{diff_primitives, SceneDiff};
-use unbound_widgets::divider::{emit_divider, DividerDesc, DividerTokens};
-use unbound_widgets::progress::{emit_progress, ProgressDesc, ProgressState};
-use unbound_widgets::slider::{emit_slider, SliderDesc, SliderTokens};
-use unbound_widgets::switch::{emit_switch, SwitchDesc, SwitchTokens};
-use unbound_widgets::{BackdropRequest, ControlState, SceneCollector, WidgetDesc, WidgetOutput};
+use unbound_widgets::divider::DividerDesc;
+use unbound_widgets::progress::{ProgressDesc, ProgressState};
+use unbound_widgets::slider::SliderDesc;
+use unbound_widgets::switch::SwitchDesc;
+use unbound_widgets::{BackdropRequest, ControlState, SceneCollector, WidgetOutput};
 use unbound_world::{NodeId, UiWorld};
 
 pub mod assets;
@@ -57,9 +57,11 @@ pub mod guest_bridge;
 pub mod i18n;
 pub mod inspector;
 pub mod overlay_manager;
+pub mod prelude;
 pub mod router;
 pub mod scheduler;
 pub mod state_store;
+pub mod window_runner;
 
 pub use assets::{AssetHub, AssetResidency};
 pub use guest_bridge::GuestAppAdapter;
@@ -70,6 +72,162 @@ pub use router::{RouteEntry, RouterStack, TransitionDirection};
 pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
+pub use unbound_widgets::ergonomics::UiWidget;
+pub use window_runner::{run_windowed, WindowedRunner};
+
+/// Compile-time 64-bit FNV-1a hash used by [`ui_key!`].
+pub const fn const_fnv1a_hash(file: &str, line: u32, column: u32) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    let bytes = file.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        hash ^= bytes[i] as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+        i += 1;
+    }
+    hash ^= line as u64;
+    hash = hash.wrapping_mul(FNV_PRIME);
+    hash ^= column as u64;
+    hash = hash.wrapping_mul(FNV_PRIME);
+    hash
+}
+
+/// Mix a base key with a runtime discriminator or loop index.
+pub const fn mix_key(base: u64, discriminator: u64) -> u64 {
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = base ^ discriminator;
+    hash = hash.wrapping_mul(FNV_PRIME);
+    hash
+}
+
+/// Trait converting various discriminator types into a u64 for [`ui_key!`].
+pub trait KeyDiscriminator {
+    /// Convert self to u64 hash/value.
+    fn into_u64(self) -> u64;
+}
+
+impl KeyDiscriminator for u64 {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        self
+    }
+}
+
+impl KeyDiscriminator for usize {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+impl KeyDiscriminator for u32 {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+impl KeyDiscriminator for i32 {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+impl KeyDiscriminator for &str {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        const_fnv1a_hash(self, 0, 0)
+    }
+}
+
+impl KeyDiscriminator for &String {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        const_fnv1a_hash(self.as_str(), 0, 0)
+    }
+}
+
+/// Macro producing a stable compile-time widget identifier based on source location.
+#[macro_export]
+macro_rules! ui_key {
+    () => {{
+        const KEY: u64 = $crate::const_fnv1a_hash(file!(), line!(), column!());
+        KEY
+    }};
+    ($discriminator:expr) => {{
+        const BASE: u64 = $crate::const_fnv1a_hash(file!(), line!(), column!());
+        $crate::mix_key(BASE, $crate::KeyDiscriminator::into_u64($discriminator))
+    }};
+}
+
+/// Type-erased trait object adapter for [`unbound_widgets::UiWidget`].
+pub trait ErasedUiWidget: Send + Sync + core::fmt::Debug {
+    /// Compute the widget's intrinsic size using real text shaping.
+    fn intrinsic_size_erased(&self, text_ctx: &mut unbound_widgets::TextCtx<'_>) -> Vec2;
+    /// Reduce input event directly onto local widget state.
+    fn reduce_erased(
+        &self,
+        key: u64,
+        rect: Rect,
+        event: &unbound_widgets::WidgetInputEvent,
+        store: &mut WidgetStateStore,
+    ) -> bool;
+    /// Ensure the widget's state is mounted/initialized in the state store.
+    fn ensure_state_erased(&self, key: u64, store: &mut WidgetStateStore);
+    /// Emit primitives with resolved layout rectangle and typed state.
+    fn emit_laid_out_erased(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        store: &WidgetStateStore,
+        text_ctx: &mut unbound_widgets::TextCtx<'_>,
+    ) -> WidgetOutput;
+}
+
+impl<W: unbound_widgets::UiWidget> ErasedUiWidget for W {
+    fn intrinsic_size_erased(&self, text_ctx: &mut unbound_widgets::TextCtx<'_>) -> Vec2 {
+        self.intrinsic_size(text_ctx)
+    }
+
+    fn ensure_state_erased(&self, key: u64, store: &mut WidgetStateStore) {
+        if store.get::<W::State>(key).is_none() {
+            let initial = self.initial_state();
+            store.insert_state::<W::State>(key, initial);
+        }
+    }
+
+    fn reduce_erased(
+        &self,
+        key: u64,
+        rect: Rect,
+        event: &unbound_widgets::WidgetInputEvent,
+        store: &mut WidgetStateStore,
+    ) -> bool {
+        let state = store.use_state_or_init::<W::State>(key, || self.initial_state());
+        self.reduce(state, rect, event)
+    }
+
+    fn emit_laid_out_erased(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        store: &WidgetStateStore,
+        text_ctx: &mut unbound_widgets::TextCtx<'_>,
+    ) -> WidgetOutput {
+        if let Some(state) = store.get::<W::State>(node) {
+            self.emit_laid_out(node, rect, control, state, text_ctx)
+        } else {
+            let default_state = self.initial_state();
+            self.emit_laid_out(node, rect, control, &default_state, text_ctx)
+        }
+    }
+}
 
 /// The semantic root identity.
 pub const ROOT: u64 = 1;
@@ -622,6 +780,8 @@ impl ViewContext {
 /// resolved its rectangle; the widget itself never guesses its geometry.
 #[derive(Clone, Debug)]
 pub enum WidgetSpec {
+    /// A declarative [`UiWidget`] implementing automatic intrinsic sizing and emission.
+    UiWidget(Arc<dyn ErasedUiWidget>),
     /// A flat button. Its descriptor rect is replaced by the laid-out rect.
     Button(ButtonDesc),
     /// A wrapping paragraph measured by the text engine.
@@ -768,6 +928,7 @@ impl<'a> ViewBuilder<'a> {
     pub fn widget(&mut self, key: u64, mut desc: RawNodeDesc, spec: WidgetSpec) -> NodeId {
         desc.key = key;
         let intrinsic = match &spec {
+            WidgetSpec::UiWidget(_) => None,
             WidgetSpec::Button(button) => Some(Vec2::new(
                 (button.label.chars().count() as f32 * 8.0 + 32.0).max(button.rect.width()),
                 button.rect.height().max(32.0),
@@ -813,6 +974,130 @@ impl<'a> ViewBuilder<'a> {
         }
         self.pending.push(PendingWidget { key, node, spec });
         node
+    }
+
+    /// Add any declarative [`UiWidget`] with automatic intrinsic sizing and layout.
+    pub fn add<W: unbound_widgets::UiWidget + 'static>(&mut self, key: u64, widget: W) -> NodeId {
+        self.add_with_layout(key, RawNodeDesc::container(), widget)
+    }
+
+    /// Add any declarative [`UiWidget`] with custom layout constraints.
+    pub fn add_with_layout<W: unbound_widgets::UiWidget + 'static>(
+        &mut self,
+        key: u64,
+        mut desc: RawNodeDesc,
+        widget: W,
+    ) -> NodeId {
+        desc.key = key;
+        let node = self.reconcile_node(key, desc, core::panic::Location::caller());
+        self.pending.push(PendingWidget {
+            key,
+            node,
+            spec: WidgetSpec::UiWidget(Arc::new(widget)),
+        });
+        node
+    }
+
+    /// Declarative button shortcut.
+    pub fn button(&mut self, key: u64, desc: ButtonDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// Declarative checkbox shortcut.
+    pub fn checkbox(&mut self, key: u64, desc: CheckboxDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// Declarative switch shortcut.
+    pub fn switch(&mut self, key: u64, desc: SwitchDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// Declarative slider shortcut.
+    pub fn slider(&mut self, key: u64, desc: SliderDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// Declarative text input shortcut.
+    pub fn text_input(&mut self, key: u64, desc: unbound_widgets::TextInputDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// Declarative select dropdown shortcut.
+    pub fn select(&mut self, key: u64, desc: unbound_widgets::SelectDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// Declarative badge shortcut.
+    pub fn badge(&mut self, key: u64, desc: BadgeDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// Declarative divider shortcut.
+    pub fn divider(&mut self, key: u64, desc: DividerDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// Declarative alert banner shortcut.
+    pub fn alert(&mut self, key: u64, desc: AlertDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// Declarative progress indicator shortcut.
+    pub fn progress(&mut self, key: u64, desc: ProgressDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// Declarative card container shortcut.
+    pub fn card(
+        &mut self,
+        key: u64,
+        _desc: unbound_widgets::CardDesc,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        self.container(
+            key,
+            RawNodeDesc::container()
+                .column()
+                .padding(unbound_abi::Edges::all(16.0))
+                .gap(8.0),
+            build,
+        )
+    }
+
+    /// Declarative scroll view container shortcut.
+    pub fn scroll_view(
+        &mut self,
+        key: u64,
+        vertical: bool,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let mut desc = RawNodeDesc::container();
+        if vertical {
+            desc = desc.column().flags(NodeFlags::CLIP | NodeFlags::SCROLL_Y);
+        } else {
+            desc = desc.row().flags(NodeFlags::CLIP | NodeFlags::SCROLL_X);
+        }
+        self.container(key, desc, build)
+    }
+
+    /// Declarative split pane container shortcut.
+    pub fn split_pane(
+        &mut self,
+        key: u64,
+        vertical: bool,
+        first: impl FnOnce(&mut Self),
+        second: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let desc = if vertical {
+            RawNodeDesc::container().column()
+        } else {
+            RawNodeDesc::container().row()
+        };
+        self.container(key, desc, |ui| {
+            first(ui);
+            second(ui);
+        })
     }
 
     /// Place a wrapping paragraph. It spans the container width and its
@@ -975,6 +1260,7 @@ pub struct AppRuntime<A: Application> {
     dirty: DirtyFlags,
     backdrops: Vec<BackdropRequest>,
     time: f64,
+    frame_count: u64,
     force_rebuild: bool,
     world: UiWorld,
     layout: LayoutEngine,
@@ -982,6 +1268,7 @@ pub struct AppRuntime<A: Application> {
     glyph_cache: GlyphCache,
     asset_hub: AssetHub,
     pending: Vec<PendingWidget>,
+    mounted_widgets: FxHashMap<u64, (Rect, Arc<dyn ErasedUiWidget>)>,
     widget_state: Rc<RefCell<WidgetStateStore>>,
     timers: TimerQueue,
     async_rx: Receiver<AppEvent>,
@@ -1024,6 +1311,7 @@ impl<A: Application> AppRuntime<A> {
             dirty: DirtyFlags::ALL,
             backdrops: Vec::new(),
             time: 0.0,
+            frame_count: 0,
             force_rebuild: true,
             world: UiWorld::new(),
             layout: LayoutEngine::new(),
@@ -1031,6 +1319,7 @@ impl<A: Application> AppRuntime<A> {
             glyph_cache: GlyphCache::new(),
             asset_hub: AssetHub::new(),
             pending: Vec::new(),
+            mounted_widgets: FxHashMap::default(),
             widget_state,
             timers,
             async_rx,
@@ -1149,6 +1438,12 @@ impl<A: Application> AppRuntime<A> {
     #[must_use]
     pub fn state_store(&self) -> core::cell::Ref<'_, WidgetStateStore> {
         self.widget_state.borrow()
+    }
+
+    /// Returns the world rect of a mounted widget by its key.
+    #[must_use]
+    pub fn widget_rect(&self, key: u64) -> Option<Rect> {
+        self.mounted_widgets.get(&key).map(|(rect, _)| *rect)
     }
 
     fn now_ms(&self) -> u64 {
@@ -1532,12 +1827,34 @@ impl<A: Application> AppRuntime<A> {
         self.ctx.time = self.time;
     }
 
+    /// Drain pending uploads from both the asset hub and the glyph cache.
+    fn collect_atlas_uploads(&mut self) -> Vec<AtlasUpload> {
+        let mut uploads = self.asset_hub.take_uploads();
+        for update in self.glyph_cache.take_updates() {
+            let kind = match update.target {
+                unbound_text::AtlasTarget::Coverage => unbound_gpu::atlas::AtlasKind::R8,
+                unbound_text::AtlasTarget::Color => unbound_gpu::atlas::AtlasKind::Rgba8,
+            };
+            uploads.push(AtlasUpload {
+                kind,
+                layer: update.layer,
+                x: update.x,
+                y: update.y,
+                width: update.width,
+                height: update.height,
+                data: update.data,
+            });
+        }
+        uploads
+    }
+
     /// Rebuild the scene, diff it against the previous frame, and update the
     /// router, the focus order and the accessibility snapshot.
     ///
     /// A frame with no dirty flags and no forced rebuild is a no-op that
     /// reports [`SceneDiff::Identical`] — the zero-work path.
     pub fn frame(&mut self, dt: f32) -> FrameReport {
+        self.frame_count = self.frame_count.wrapping_add(1);
         self.advance(dt);
         // Results and timers that arrived since the previous frame are
         // reduced first, so a frame that only woke up for them still rebuilds.
@@ -1555,7 +1872,7 @@ impl<A: Application> AppRuntime<A> {
                 bytes: 0,
                 aux_changed: false,
                 backdrops: self.backdrops.clone(),
-                atlas_uploads: self.asset_hub.take_uploads(),
+                atlas_uploads: self.collect_atlas_uploads(),
             };
         }
 
@@ -1742,7 +2059,7 @@ impl<A: Application> AppRuntime<A> {
             bytes,
             aux_changed,
             backdrops: self.backdrops.clone(),
-            atlas_uploads: self.asset_hub.take_uploads(),
+            atlas_uploads: self.collect_atlas_uploads(),
         }
     }
 
@@ -1794,6 +2111,54 @@ impl<A: Application> AppRuntime<A> {
             self.world.clear_dirty();
             return;
         }
+
+        // Pass 1: Pre-measure widgets using TextCtx
+        {
+            let mut text_ctx = unbound_widgets::TextCtx {
+                engine: &mut self.text_engine,
+                cache: &mut self.glyph_cache,
+                atlas_clock: self.frame_count,
+            };
+            for entry in &self.pending {
+                let intrinsic = match &entry.spec {
+                    WidgetSpec::UiWidget(w) => Some(w.intrinsic_size_erased(&mut text_ctx)),
+                    WidgetSpec::Button(b) => {
+                        Some(unbound_widgets::UiWidget::intrinsic_size(b, &mut text_ctx))
+                    }
+                    WidgetSpec::Checkbox(cb) => {
+                        Some(unbound_widgets::UiWidget::intrinsic_size(cb, &mut text_ctx))
+                    }
+                    WidgetSpec::Switch(sw) => {
+                        Some(unbound_widgets::UiWidget::intrinsic_size(sw, &mut text_ctx))
+                    }
+                    WidgetSpec::Slider(sl) => {
+                        Some(unbound_widgets::UiWidget::intrinsic_size(sl, &mut text_ctx))
+                    }
+                    WidgetSpec::Progress { desc, .. } => Some(
+                        unbound_widgets::UiWidget::intrinsic_size(desc, &mut text_ctx),
+                    ),
+                    WidgetSpec::Badge(bg) => {
+                        Some(unbound_widgets::UiWidget::intrinsic_size(bg, &mut text_ctx))
+                    }
+                    WidgetSpec::Divider(div) => Some(unbound_widgets::UiWidget::intrinsic_size(
+                        div,
+                        &mut text_ctx,
+                    )),
+                    WidgetSpec::Alert(al) => {
+                        Some(unbound_widgets::UiWidget::intrinsic_size(al, &mut text_ctx))
+                    }
+                    WidgetSpec::Text { .. } => None,
+                };
+                if let Some(size) = intrinsic {
+                    if let Some(data) = self.world.get_mut(entry.node) {
+                        if data.measure.is_none() {
+                            data.measure = Some(size);
+                        }
+                    }
+                }
+            }
+        }
+
         let viewport = self.ctx.viewport;
         let root = self.world.root();
         let texts: Vec<(NodeId, String, TextStyle)> = self
@@ -1839,12 +2204,13 @@ impl<A: Application> AppRuntime<A> {
             }
         }
 
+        self.mounted_widgets.clear();
         let pending = core::mem::take(&mut self.pending);
         for entry in &pending {
             let rect = self
                 .world
                 .get(entry.node)
-                .map(|node| node.rect)
+                .map(|node| node.world_rect)
                 .unwrap_or(Rect::ZERO);
             let phase = if self.ctx.pressed == Some(entry.key) {
                 unbound_widgets::PointerPhase::Pressed
@@ -1859,46 +2225,47 @@ impl<A: Application> AppRuntime<A> {
                 disabled: false,
                 selected: false,
             };
+            let mut text_ctx = unbound_widgets::TextCtx {
+                engine: &mut self.text_engine,
+                cache: &mut self.glyph_cache,
+                atlas_clock: self.frame_count,
+            };
             match &entry.spec {
+                WidgetSpec::UiWidget(widget) => {
+                    self.mounted_widgets
+                        .insert(entry.key, (rect, Arc::clone(widget)));
+                    widget.ensure_state_erased(entry.key, &mut self.widget_state.borrow_mut());
+                    let store = self.widget_state.borrow();
+                    let output =
+                        widget.emit_laid_out_erased(entry.key, rect, state, &store, &mut text_ctx);
+                    self.collector.push(entry.key, output);
+                }
                 WidgetSpec::Button(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    let widget = ButtonWidget {
-                        node: entry.key,
-                        desc,
-                    };
-                    self.collector.push(entry.key, widget.emit(state, &mut []));
+                    let output = desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx);
+                    self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Checkbox(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    self.collector.push(
-                        entry.key,
-                        emit_checkbox(
-                            entry.key,
-                            &desc,
-                            state,
-                            &[],
-                            &[],
-                            CheckboxTokens::standard(),
-                        ),
-                    );
+                    let output =
+                        desc.emit_laid_out(entry.key, rect, state, &desc.state, &mut text_ctx);
+                    self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Switch(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    self.collector.push(
-                        entry.key,
-                        emit_switch(entry.key, &desc, state, &[], SwitchTokens::standard()),
-                    );
+                    let output =
+                        desc.emit_laid_out(entry.key, rect, state, &desc.on, &mut text_ctx);
+                    self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Slider(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    self.collector.push(
-                        entry.key,
-                        emit_slider(entry.key, &desc, state, &[], SliderTokens::standard()),
-                    );
+                    let output =
+                        desc.emit_laid_out(entry.key, rect, state, &desc.value, &mut text_ctx);
+                    self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Progress {
                     desc,
@@ -1906,26 +2273,26 @@ impl<A: Application> AppRuntime<A> {
                 } => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    self.collector.push(entry.key, emit_progress(&desc, pstate));
+                    let output = desc.emit_laid_out(entry.key, rect, state, pstate, &mut text_ctx);
+                    self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Badge(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    self.collector.push(entry.key, emit_badge(&desc, &[]));
+                    let output = desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx);
+                    self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Divider(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    self.collector.push(
-                        entry.key,
-                        emit_divider(&desc, &[], 0.0, DividerTokens::standard()),
-                    );
+                    let output = desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx);
+                    self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Alert(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    self.collector
-                        .push(entry.key, emit_alert(entry.key, &desc, &[], state));
+                    let output = desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx);
+                    self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Text { .. } => {}
             }
@@ -2060,7 +2427,98 @@ impl<A: Application> AppRuntime<A> {
     }
 
     fn dispatch_outcome(&mut self, event: AppEvent) -> EventOutcome {
-        let outcome = self.app.reduce(&mut self.state, event, &mut self.ctx);
+        let mut widget_dirty = DirtyFlags::NONE;
+        match &event {
+            AppEvent::PointerDown {
+                pos,
+                target: Some(target_key),
+                click_count,
+                ..
+            } => {
+                if self.focus.order().contains(target_key)
+                    && self.focus.focus(*target_key, FocusCause::Pointer)
+                {
+                    self.sync_focus_context();
+                    widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                }
+                if let Some((rect, widget)) = self.mounted_widgets.get(target_key).cloned() {
+                    let w_evt = unbound_widgets::WidgetInputEvent::PointerDown {
+                        pos: *pos,
+                        click_count: *click_count,
+                    };
+                    let mut store = self.widget_state.borrow_mut();
+                    if widget.reduce_erased(*target_key, rect, &w_evt, &mut store) {
+                        widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                    }
+                }
+            }
+            AppEvent::Drag { node, pos, .. } => {
+                if let Some((rect, widget)) = self.mounted_widgets.get(node).cloned() {
+                    let w_evt = unbound_widgets::WidgetInputEvent::PointerDrag { pos: *pos };
+                    let mut store = self.widget_state.borrow_mut();
+                    if widget.reduce_erased(*node, rect, &w_evt, &mut store) {
+                        widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                    }
+                }
+            }
+            AppEvent::PointerUp {
+                pos,
+                target: Some(target_key),
+                ..
+            } => {
+                if let Some((rect, widget)) = self.mounted_widgets.get(target_key).cloned() {
+                    let w_evt = unbound_widgets::WidgetInputEvent::PointerUp { pos: *pos };
+                    let mut store = self.widget_state.borrow_mut();
+                    if widget.reduce_erased(*target_key, rect, &w_evt, &mut store) {
+                        widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                    }
+                }
+            }
+            AppEvent::Wheel {
+                delta,
+                target: Some(target_key),
+                ..
+            } => {
+                if let Some((rect, widget)) = self.mounted_widgets.get(target_key).cloned() {
+                    let w_evt = unbound_widgets::WidgetInputEvent::Wheel { delta: *delta };
+                    let mut store = self.widget_state.borrow_mut();
+                    if widget.reduce_erased(*target_key, rect, &w_evt, &mut store) {
+                        widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                    }
+                }
+            }
+            AppEvent::Text { text } => {
+                if let Some(focused_key) = self.ctx.focused {
+                    if let Some((rect, widget)) = self.mounted_widgets.get(&focused_key).cloned() {
+                        let w_evt = unbound_widgets::WidgetInputEvent::TextInput(text.clone());
+                        let mut store = self.widget_state.borrow_mut();
+                        if widget.reduce_erased(focused_key, rect, &w_evt, &mut store) {
+                            widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        }
+                    }
+                }
+            }
+            AppEvent::Key {
+                key,
+                pressed: true,
+                modifiers,
+            } => {
+                if let Some(focused_key) = self.ctx.focused {
+                    if let Some((rect, widget)) = self.mounted_widgets.get(&focused_key).cloned() {
+                        let chord = key.chord(*modifiers);
+                        let w_evt = unbound_widgets::WidgetInputEvent::KeyDown(chord);
+                        let mut store = self.widget_state.borrow_mut();
+                        if widget.reduce_erased(focused_key, rect, &w_evt, &mut store) {
+                            widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let mut outcome = self.app.reduce(&mut self.state, event, &mut self.ctx);
+        outcome.dirty = outcome.dirty.merge(widget_dirty);
         if let Some((key, cause)) = self.ctx.request_focus.take() {
             self.focus.focus(key, cause);
         }

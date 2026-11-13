@@ -20,7 +20,7 @@ fn main() {
         fs::read_to_string(src_dir.join("catalog.rs")).expect("failed to read src/catalog.rs");
 
     // Rule 1: No bare `pub mod` in `lib.rs` other than infrastructure modules
-    const ALLOWED_BARE_MODS: &[&str] = &["catalog", "diff", "primitive"];
+    const ALLOWED_BARE_MODS: &[&str] = &["catalog", "diff", "primitive", "ergonomics"];
     for line in lib_rs.lines() {
         let trimmed = line.trim();
         if let Some(stripped) = trimmed.strip_prefix("pub mod ") {
@@ -55,6 +55,7 @@ fn main() {
             || file_name == "catalog.rs"
             || file_name == "diff.rs"
             || file_name == "primitive.rs"
+            || file_name == "ergonomics.rs"
         {
             continue;
         }

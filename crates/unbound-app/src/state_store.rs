@@ -97,6 +97,43 @@ impl WidgetStateStore {
         self.entry(key)
     }
 
+    /// The state for `key`, created with `init()` on first use and marked as
+    /// visited so the frame keeps it mounted.
+    pub fn use_state_or_init<T: Send + Sync + 'static>(
+        &mut self,
+        key: u64,
+        init: impl FnOnce() -> T,
+    ) -> &mut T {
+        self.visited.insert(key);
+        self.entries
+            .entry((key, TypeId::of::<T>()))
+            .or_insert_with(|| Box::new(init()))
+            .downcast_mut::<T>()
+            .expect("a state entry is always stored under its own TypeId")
+    }
+
+    /// Read state for `(key, T)` if present.
+    #[must_use]
+    pub fn get<T: 'static>(&self, key: u64) -> Option<&T> {
+        self.entries
+            .get(&(key, TypeId::of::<T>()))
+            .and_then(|boxed| boxed.downcast_ref::<T>())
+    }
+
+    /// Mutably access state for `(key, T)` if present.
+    pub fn get_mut<T: 'static>(&mut self, key: u64) -> Option<&mut T> {
+        self.entries
+            .get_mut(&(key, TypeId::of::<T>()))
+            .and_then(|boxed| boxed.downcast_mut::<T>())
+    }
+
+    /// Insert or replace state for `(key, T)`.
+    pub fn insert_state<T: Send + Sync + 'static>(&mut self, key: u64, value: T) {
+        self.visited.insert(key);
+        self.entries
+            .insert((key, TypeId::of::<T>()), Box::new(value));
+    }
+
     /// The state for `key` without marking it as visited.
     ///
     /// Event reduction runs between frames; a key touched there must not

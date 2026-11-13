@@ -40,6 +40,12 @@ pub struct CardDesc {
     pub z: u16,
 }
 
+impl Default for CardDesc {
+    fn default() -> Self {
+        Self::new(Rect::ZERO)
+    }
+}
+
 impl CardDesc {
     /// A flat card.
     #[must_use]

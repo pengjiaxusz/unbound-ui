@@ -22,6 +22,7 @@ UI 框架层：状态拓扑、增量排版、虚拟化、动画与主题。
 | `RouterStack` | `crates/unbound-app/src/router.rs` | 命名路由历史栈（`push`/`replace`/`pop`/`forward`）、过渡动画与面包屑同步 |
 | `I18nBundle` | `crates/unbound-app/src/i18n.rs` | 多语言词条插值、Locale 数字/日期格式化与 RTL 方向切换 |
 | `SvgPath` / `IconPack` | `crates/unbound-vector/src/svg_path.rs` + `unbound-widgets/src/image.rs` | SVG Path (`M/L/H/V/C/S/Q/T/A/Z`) 二次贝塞尔降阶缓存与 66 个内置矢量图标 |
+| `UiWidget` / 声明式人体工学 | `crates/unbound-widgets/src/ergonomics.rs` + `unbound-app` | 声明式组件契约、Rect-free 构建器、自动固有尺寸测量、局部状态派生、事件自动派发与一键运行器 (`run_windowed`) |
 
 ---
 

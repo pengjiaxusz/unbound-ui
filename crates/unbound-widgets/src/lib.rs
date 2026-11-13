@@ -25,6 +25,7 @@
 // are not business components, so they stay out of the showcase catalog.
 pub mod catalog;
 pub mod diff;
+pub mod ergonomics;
 pub mod primitive;
 
 /// Declare every business component module and derive the exhaustive catalog.
@@ -299,7 +300,7 @@ pub use breadcrumb::{
     emit_crumb, emit_crumb_ellipsis, emit_crumb_separator, BreadcrumbDesc, BreadcrumbState,
     BreadcrumbTokens, Crumb, CrumbSlot,
 };
-pub use button::{ButtonDesc, ButtonTokens, ButtonVariant, ButtonWidget};
+pub use button::{ButtonDesc, ButtonSize, ButtonTokens, ButtonVariant, ButtonWidget};
 pub use canvas_toolbar::{
     emit_canvas_toolbar, CanvasTool, CanvasToolbarDesc, CanvasToolbarOutput, CanvasToolbarState,
     TOOLBAR_BLUR, TOOLBAR_HEIGHT, TOOL_BUTTON, TOOL_GAP, ZOOM_RANGE, ZOOM_WIDTH,
@@ -310,7 +311,7 @@ pub use chart::{
     emit_chart, ChartDesc, ChartOutput, ChartSeries, ChartState, SeriesKind, CHART_INSET,
     CHART_STROKE, HOVER_RADIUS, TOOLTIP_SIZE,
 };
-pub use checkbox::{CheckboxDesc, CheckboxTokens};
+pub use checkbox::{CheckState, CheckboxDesc, CheckboxTokens};
 pub use code_block::{
     emit_code_block, highlight_line, CodeBlockDesc, CodeBlockState, CodeSpan, SyntaxToken,
     CODE_GUTTER, CODE_LINE_HEIGHT, COPY_CONFIRM_SECONDS,
@@ -354,6 +355,7 @@ pub use drawer::{
     drawer_rect, emit_drawer, DrawerDesc, DrawerOutput, DrawerSide, DrawerState, DRAWER_BLUR,
     DRAWER_RADIUS,
 };
+pub use ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 pub use file_drop::{drop_point, emit_file_drop, FileDropDesc, FileDropState};
 pub use form::{
     emit_form_label, emit_form_message, emit_form_root, layout_form, required_marker, reveal_field,
@@ -442,8 +444,8 @@ pub use split_pane::{
 pub use stepper::{emit_stepper, StepItem, StepStatus, StepperDesc, StepperOrientation};
 pub use switch::{SwitchDesc, SwitchTokens};
 pub use table::{
-    emit_table, AlignX, ColumnSpec, RowWindow, SortDir, TableDesc, TableRow, TableState,
-    TableTokens,
+    emit_table, AlignX as TableAlignX, ColumnSpec, RowWindow, SortDir, TableDesc, TableRow,
+    TableState, TableTokens,
 };
 pub use tabs::{
     emit_tab, emit_tab_close, emit_tabs_add, emit_tabs_strip, reduce_tabs_key, TabItem, TabsDesc,
