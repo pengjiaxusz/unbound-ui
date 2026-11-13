@@ -2,6 +2,8 @@
 
 use accesskit::Role;
 use unbound_math::Rect;
+use unbound_widgets::progress::{emit_progress, ProgressDesc};
+use unbound_widgets::WidgetCatalogId;
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageInfo};
 use crate::canvas::{AlignX, AlignY};
@@ -127,11 +129,11 @@ pub const SLIDER_EXAMPLES: &[ExampleDef] = &[
     .with_height(240.0),
     ExampleDef::new(
         "Progress",
-        "Determinate progress reflects a bound value; indeterminate progress is paced by the animation clock and composited without a new draw call.",
-        &["unbound-anim", "unbound-gpu"],
-        r#"ProgressBar::new(0.64)
-    .determinate(true)
-    .animate(true)"#,
+        "Determinate progress reflects a bound value; indeterminate progress is paced by the animation clock. Both the bar and the ring come from the real progress emitter.",
+        &["unbound-widgets", "unbound-anim"],
+        r#"let desc = ProgressDesc::new(track).value(0.64);
+let output = emit_progress(&desc, &state.progress_bar);
+canvas.widget_output(WidgetCatalogId::Progress, node, &output);"#,
         "A progress indicator exposes `value` and `max`; the paused state is announced.",
         &[
             KnobSpec::segmented("Mode", &["Determinate", "Indeterminate"], 0),
@@ -615,8 +617,8 @@ fn progress_bar(ctx: &mut DemoCtx<'_, '_>) {
     };
     let track = Rect::new(
         rect.origin.x + 24.0,
-        rect.origin.y + 36.0,
-        rect.size.x - 48.0,
+        rect.origin.y + 48.0,
+        (rect.size.x - 160.0).max(120.0),
         12.0,
     );
     widgets::badge(
@@ -638,47 +640,45 @@ fn progress_bar(ctx: &mut DemoCtx<'_, '_>) {
         AlignX::End,
         AlignY::Center,
     );
-    ctx.canvas
-        .rect(track, 6.0, palette.control_track, 0, 0.0, 0.0);
-    if indeterminate {
-        let span = track.size.x * 0.32;
-        let travel = (track.size.x + span) * 0.5;
-        let phase = (ctx.state.demo.elapsed * 0.8).rem_euclid(1.0);
-        let x = track.origin.x - span + travel * phase;
-        let bar = Rect::new(x, track.origin.y, span, track.size.y);
-        ctx.canvas.begin_clip(track);
-        ctx.canvas.rect(bar, 6.0, palette.primary, 0, 0.0, 0.0);
-        ctx.canvas.end_clip();
+
+    // The bar and the ring are both painted by the genuine `emit_progress`,
+    // eased by the persistent `ProgressState` the shell ticks each frame.
+    let mut bar = ProgressDesc::new(track).with_label("Upload");
+    bar = if indeterminate {
+        bar.indeterminate()
     } else {
-        ctx.canvas.rect(
-            Rect::new(
-                track.origin.x,
-                track.origin.y,
-                track.size.x * value,
-                track.size.y,
-            ),
-            6.0,
-            palette.primary,
-            0,
-            0.0,
-            0.0,
-        );
-    }
+        bar.value(value)
+    };
+    let bar_output = emit_progress(&bar, &ctx.state.demo.progress_bar);
+    ctx.canvas
+        .widget_output(WidgetCatalogId::Progress, ctx.part(1), &bar_output);
+
+    let ring_rect = Rect::new(rect.max().x - 104.0, rect.origin.y + 24.0, 80.0, 80.0);
+    let mut ring = ProgressDesc::circular(ring_rect).with_label("Sync");
+    ring = if indeterminate {
+        ring.indeterminate()
+    } else {
+        ring.value(value)
+    };
+    let ring_output = emit_progress(&ring, &ctx.state.demo.progress_ring);
+    ctx.canvas
+        .widget_output(WidgetCatalogId::Progress, ctx.part(2), &ring_output);
+
     ctx.canvas.text(
         if paused {
             "paused · progress frozen"
         } else {
             "paced by the animation clock"
         },
-        Rect::new(track.origin.x, track.max().y + 12.0, track.size.x, 16.0),
+        Rect::new(track.origin.x, track.max().y + 16.0, track.size.x, 16.0),
         10.0,
         palette.text_muted,
         AlignX::Start,
         AlignY::Top,
     );
     ctx.canvas.text(
-        "4 ms frame budget · no layout invalidation",
-        Rect::new(track.origin.x, track.max().y + 34.0, track.size.x, 16.0),
+        "bar + ring · one rounded-rect shader",
+        Rect::new(track.origin.x, track.max().y + 38.0, track.size.x, 16.0),
         9.5,
         palette.text_muted,
         AlignX::Start,

@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use unbound_anim::{Spring, SpringPreset};
 use unbound_math::Vec2;
+use unbound_widgets::progress::ProgressState;
 
 use crate::pages::{ExampleDef, KnobSpec, PageId};
 
@@ -86,6 +87,10 @@ pub struct DemoState {
     pub clicks: u32,
     /// The last icon-button selected in the icon variant.
     pub selected_icon: usize,
+    /// The progress demo's eased bar display.
+    pub progress_bar: ProgressState,
+    /// The progress demo's eased ring display.
+    pub progress_ring: ProgressState,
 }
 
 impl Default for DemoState {
@@ -130,6 +135,8 @@ impl Default for DemoState {
             elapsed: 0.0,
             clicks: 0,
             selected_icon: 0,
+            progress_bar: ProgressState::new(),
+            progress_ring: ProgressState::new(),
         }
     }
 }
@@ -333,6 +340,19 @@ impl GalleryState {
     /// Advance time-driven demos. Returns `true` while something moved.
     pub fn tick(&mut self, dt: f32) -> bool {
         self.demo.elapsed = (self.demo.elapsed + dt).rem_euclid(3600.0);
+        // The progress demo eases its bar and ring toward the clock-driven
+        // target through the real `ProgressState`, so a value jump reads as
+        // movement. Pausing freezes both the target and the indeterminate sweep.
+        let progress_example = &PageId::Sliders.examples()[1];
+        let progress_knobs = self.knob_values(PageId::Sliders, 1, progress_example);
+        let paused = progress_knobs.get(1).copied().unwrap_or(0.0) > 0.5;
+        let target = if paused {
+            0.64
+        } else {
+            (self.demo.elapsed * 0.18).rem_euclid(1.0)
+        };
+        self.demo.progress_bar.tick(dt, Some(target), !paused);
+        self.demo.progress_ring.tick(dt, Some(target), !paused);
         let mut moving = false;
         self.demo.spring.step(dt);
         if !self.demo.spring.is_settled() {
