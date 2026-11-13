@@ -70,13 +70,30 @@ fn content_scrollbar(layout: &ShellLayout, page: &PageLayout) -> Option<Scrollba
         return None;
     }
     let track = Rect::new(
-        layout.content.max().x - 7.0,
+        layout.content.max().x - 10.0,
         layout.content.origin.y + 8.0,
-        3.0,
+        6.0,
         (layout.content.size.y - 16.0).max(1.0),
     );
     let thumb_h = (track.size.y * layout.content.size.y / page.content_height.max(1.0))
         .clamp(28.0, track.size.y);
+    Some(Scrollbar {
+        track,
+        thumb_h,
+        max_scroll,
+    })
+}
+
+/// The navigation pane's scrollbar, or `None` when the tree fits.
+fn nav_scrollbar(layout: &ShellLayout) -> Option<Scrollbar> {
+    let tree = nav_tree_rect(layout);
+    let max_scroll = (nav_height(layout) - tree.size.y).max(0.0);
+    if max_scroll <= 1.0 || tree.size.y <= 1.0 {
+        return None;
+    }
+    let track = Rect::new(layout.nav.max().x - 10.0, tree.origin.y, 6.0, tree.size.y);
+    let thumb_h =
+        (track.size.y * tree.size.y / (tree.size.y + max_scroll)).clamp(28.0, track.size.y);
     Some(Scrollbar {
         track,
         thumb_h,
@@ -144,6 +161,12 @@ pub struct GalleryApp {
     scrollbar: Option<Scrollbar>,
     /// The grab offset inside the scrollbar thumb, while it is dragged.
     scroll_drag: Option<f32>,
+    /// The navigation pane's scrollbar, when the tree is taller than the pane.
+    nav_scrollbar: Option<Scrollbar>,
+    /// The grab offset inside the navigation scrollbar thumb, while dragged.
+    nav_scroll_drag: Option<f32>,
+    /// The virtual-list scrollbar drag: `(card, grab offset)`.
+    list_scroll_drag: Option<(usize, f32)>,
     /// The primitive ranges that changed in the last rebuild.
     ///
     /// An empty list means "the whole scene changed" and the renderer has to
@@ -260,6 +283,9 @@ impl GalleryApp {
             window_maximized: false,
             scrollbar: None,
             scroll_drag: None,
+            nav_scrollbar: None,
+            nav_scroll_drag: None,
+            list_scroll_drag: None,
             dirty_ranges: Vec::new(),
             layout_key: LayoutKey {
                 width: 0,
@@ -622,6 +648,7 @@ impl GalleryApp {
         self.layout = layout;
         self.page_layout = Some(page_layout);
         self.scrollbar = scrollbar;
+        self.nav_scrollbar = nav_scrollbar(&layout);
         self.nav_max_scroll = nav_max_scroll.max(0.0);
         self.last_revision = self.state.revision;
         self.last_hover = hover;
@@ -657,6 +684,24 @@ impl GalleryApp {
                 let scroll = bar.scroll_for(position.y - grab);
                 if (scroll - self.state.content_scroll).abs() > 0.01 {
                     self.state.content_scroll = scroll;
+                    self.state.bump();
+                }
+            }
+        }
+        if let Some(grab) = self.nav_scroll_drag {
+            if let Some(bar) = self.nav_scrollbar {
+                let scroll = bar.scroll_for(position.y - grab);
+                if (scroll - self.state.nav_scroll).abs() > 0.01 {
+                    self.state.nav_scroll = scroll;
+                    self.state.bump();
+                }
+            }
+        }
+        if let Some((card, grab)) = self.list_scroll_drag {
+            if let Some(bar) = self.list_scrollbar(card) {
+                let scroll = bar.scroll_for(position.y - grab);
+                if (scroll - self.state.demo.list_scroll[card]).abs() > 0.01 {
+                    self.state.demo.list_scroll[card] = scroll;
                     self.state.bump();
                 }
             }
@@ -724,6 +769,8 @@ impl GalleryApp {
     /// alive until the user happens to click somewhere else.
     pub fn cancel_interactions(&mut self) {
         self.scroll_drag = None;
+        self.nav_scroll_drag = None;
+        self.list_scroll_drag = None;
         self.dragging_range = None;
         self.panning = None;
         // Both drags have to be taken, not just the first one: `||` would
@@ -748,22 +795,24 @@ impl GalleryApp {
         if !self.layout.content.contains_point(point) {
             return;
         }
-        if let Some((_, tag)) = self
+        if let Some((zone_rect, tag)) = self
             .scroll_zones
             .iter()
             .find(|(rect, _)| rect.contains_point(point))
         {
+            let zone_rect = *zone_rect;
+            let tag = *tag;
             match tag {
-                1 => {
-                    let row = self.list_row_height();
-                    let total = self.list_total();
-                    let stage_h = self
-                        .scroll_zones
-                        .iter()
-                        .find(|(_, t)| *t == 1)
-                        .map_or(220.0, |(rect, _)| rect.size.y);
-                    self.state.demo.list_scroll = (self.state.demo.list_scroll
-                        - delta_y * row * 2.0)
+                // Tag 1 is the first list card, tag 5 the second; each owns its
+                // own offset and row metrics. The zone is the viewport, so its
+                // height is the exact clamp bound (the header is excluded).
+                1 | 5 => {
+                    let card = if tag == 1 { 0 } else { 1 };
+                    let row = self.list_row_height(card);
+                    let total = self.list_total(card);
+                    let stage_h = zone_rect.size.y;
+                    let scroll = self.state.demo.list_scroll[card];
+                    self.state.demo.list_scroll[card] = (scroll - delta_y * row * 2.0)
                         .clamp(0.0, (total as f32 * row - stage_h).max(0.0));
                     self.state.bump();
                 }
@@ -1018,6 +1067,24 @@ impl GalleryApp {
     pub fn take_blur_request(&mut self) -> bool {
         core::mem::take(&mut self.pending_blur)
     }
+
+    /// Whether a hovered control captures the pointer, so the window's resize
+    /// border must yield to it instead of stealing the press or the hover.
+    #[must_use]
+    pub fn hover_captures_pointer(&self, node: Option<u64>) -> bool {
+        let Some(node) = node else {
+            return false;
+        };
+        matches!(
+            target::decode(node),
+            Some(
+                Target::ContentScrollbar
+                    | Target::NavScrollbar
+                    | Target::Knob(..)
+                    | Target::Demo(..)
+            )
+        )
+    }
     /// Start dragging the page's scrollbar thumb.
     ///
     /// A press on the thumb grabs it where it was; a press on the track
@@ -1029,8 +1096,11 @@ impl GalleryApp {
         let thumb_top = bar.thumb_top(self.state.content_scroll);
         let grab = position.y - thumb_top;
         self.scroll_drag = Some(grab);
-        if grab > bar.thumb_h {
-            // A press below the thumb centres it on the pointer instead.
+        if !(0.0..=bar.thumb_h).contains(&grab) {
+            // A press on the track — above *or* below the thumb — centres the
+            // thumb on the pointer and keeps dragging from there. Testing only
+            // `grab > thumb_h` left above-thumb clicks storing a negative grab,
+            // which jumped the page on the next move.
             let centred = position.y - bar.thumb_h * 0.5;
             let scroll = bar.scroll_for(centred);
             if (scroll - self.state.content_scroll).abs() > 0.01 {
@@ -1038,6 +1108,44 @@ impl GalleryApp {
                 self.state.bump();
             }
             self.scroll_drag = Some(bar.thumb_h * 0.5);
+        }
+    }
+
+    /// Start dragging the navigation pane's scrollbar thumb.
+    fn begin_nav_scrollbar_drag(&mut self, position: Vec2) {
+        let Some(bar) = self.nav_scrollbar else {
+            return;
+        };
+        let thumb_top = bar.thumb_top(self.state.nav_scroll);
+        let grab = position.y - thumb_top;
+        self.nav_scroll_drag = Some(grab);
+        if !(0.0..=bar.thumb_h).contains(&grab) {
+            let centred = position.y - bar.thumb_h * 0.5;
+            let scroll = bar.scroll_for(centred);
+            if (scroll - self.state.nav_scroll).abs() > 0.01 {
+                self.state.nav_scroll = scroll;
+                self.state.bump();
+            }
+            self.nav_scroll_drag = Some(bar.thumb_h * 0.5);
+        }
+    }
+
+    /// Start dragging a virtual-list card's scrollbar thumb.
+    fn begin_list_scrollbar_drag(&mut self, card: usize, position: Vec2) {
+        let Some(bar) = self.list_scrollbar(card) else {
+            return;
+        };
+        let thumb_top = bar.thumb_top(self.state.demo.list_scroll[card]);
+        let grab = position.y - thumb_top;
+        self.list_scroll_drag = Some((card, grab));
+        if !(0.0..=bar.thumb_h).contains(&grab) {
+            let centred = position.y - bar.thumb_h * 0.5;
+            let scroll = bar.scroll_for(centred);
+            if (scroll - self.state.demo.list_scroll[card]).abs() > 0.01 {
+                self.state.demo.list_scroll[card] = scroll;
+                self.state.bump();
+            }
+            self.list_scroll_drag = Some((card, bar.thumb_h * 0.5));
         }
     }
 
@@ -1051,6 +1159,9 @@ impl GalleryApp {
         match target {
             Target::ContentScrollbar => {
                 self.begin_scrollbar_drag(position);
+            }
+            Target::NavScrollbar => {
+                self.begin_nav_scrollbar_drag(position);
             }
             Target::Knob(page, card, knob) => {
                 // Only a slider captures the pointer. A toggle or a checkbox
@@ -1175,6 +1286,9 @@ impl GalleryApp {
             Target::ContentScrollbar => {
                 // The scrollbar acts on the press, not on the release.
             }
+            Target::NavScrollbar => {
+                // The nav scrollbar acts on the press, not on the release.
+            }
         }
     }
 
@@ -1208,6 +1322,9 @@ impl GalleryApp {
             self.state.demo.drag_active = Some(part as usize - 1);
             self.state.demo.drag_position = Some(position);
             self.state.bump();
+        }
+        if page == PageId::ListView && part == 200 {
+            self.begin_list_scrollbar_drag(card as usize, position);
         }
         if page == PageId::Sliders {
             if let Some(zone) = self
@@ -1341,9 +1458,10 @@ impl GalleryApp {
             },
             PageId::ListView => {
                 if (100..112).contains(&part) {
-                    let row = self.list_row_height();
-                    let first = (self.state.demo.list_scroll / row).floor() as usize;
-                    self.state.demo.list_selected = Some(first + (part - 100) as usize);
+                    let card = card as usize;
+                    let row = self.list_row_height(card);
+                    let first = (self.state.demo.list_scroll[card] / row).floor() as usize;
+                    self.state.demo.list_selected[card] = Some(first + (part - 100) as usize);
                     self.state.bump();
                 }
             }
@@ -1395,6 +1513,8 @@ impl GalleryApp {
 
     fn finish_drag(&mut self, position: Vec2) {
         self.scroll_drag = None;
+        self.nav_scroll_drag = None;
+        self.list_scroll_drag = None;
         if let Some(start) = self.state.demo.marquee.map(|(start, _)| start) {
             let marquee = Rect::from_points(start, position);
             for index in 0..12u16 {
@@ -1466,19 +1586,41 @@ impl GalleryApp {
         }
     }
 
-    fn list_total(&self) -> usize {
-        let page = PageId::ListView;
-        let spec = PageId::ListView.examples()[0].knobs[0];
-        match self.state.knob(page, 0, 0, &spec) as usize {
+    fn list_total(&self, card: usize) -> usize {
+        let spec = PageId::ListView.examples()[card].knobs[0];
+        match self.state.knob(PageId::ListView, card, 0, &spec) as usize {
             0 => 1_000,
             1 => 10_000,
             _ => 100_000,
         }
     }
 
-    fn list_row_height(&self) -> f32 {
-        let spec = PageId::ListView.examples()[0].knobs[1];
-        self.state.knob(PageId::ListView, 0, 1, &spec)
+    fn list_row_height(&self, card: usize) -> f32 {
+        let spec = PageId::ListView.examples()[card].knobs[1];
+        self.state
+            .knob(PageId::ListView, card, 1, &spec)
+            .clamp(24.0, 48.0)
+    }
+
+    /// The virtual-list scrollbar geometry for a card, rebuilt from the
+    /// registered track hot zone so a drag stays in sync with what is painted.
+    fn list_scrollbar(&self, card: usize) -> Option<Scrollbar> {
+        let track = demo_rect(self, PageId::ListView, card as u8, 200)?;
+        let viewport_h = track.size.y + 8.0;
+        let row = self.list_row_height(card);
+        let content_h = self.list_total(card) as f32 * row;
+        let max_scroll = (content_h - viewport_h).max(0.0);
+        if max_scroll <= 1.0 {
+            return None;
+        }
+        let thumb_h = (viewport_h * viewport_h / content_h)
+            .max(18.0)
+            .min(track.size.y);
+        Some(Scrollbar {
+            track,
+            thumb_h,
+            max_scroll,
+        })
     }
 
     /// A layout-only frame for the headless verifier.
@@ -2333,30 +2475,34 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
 
 /// Paint the navigation tree's scroll indicator.
 fn draw_nav_scrollbar(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
-    let tree = nav_tree_rect(layout);
-    // Same range the rebuild clamps `state.nav_scroll` to.
-    let max_scroll = (nav_height(layout) - tree.size.y).max(0.0);
-    if max_scroll <= 1.0 || tree.size.y <= 1.0 {
+    let Some(bar) = nav_scrollbar(layout) else {
         return;
-    }
+    };
     let palette = *canvas.palette;
-    let track = Rect::new(layout.nav.max().x - 7.0, tree.origin.y, 3.0, tree.size.y);
-    canvas.rect(track, 1.5, palette.control_track, 0, 0.0, 0.0);
-    let thumb_h =
-        (track.size.y * tree.size.y / (tree.size.y + max_scroll)).clamp(28.0, track.size.y);
-    let t = (state.nav_scroll / max_scroll).clamp(0.0, 1.0);
-    canvas.rect(
+    canvas.rect(bar.track, 3.0, palette.control_track, 0, 0.0, 0.0);
+    let thumb = Rect::new(
+        bar.track.origin.x,
+        bar.thumb_top(state.nav_scroll),
+        6.0,
+        bar.thumb_h,
+    );
+    canvas.rect(thumb, 3.0, palette.primary, 0, 0.0, 0.0);
+    // The nav scrollbar is a real control, not decoration: a 14px hot zone
+    // lets the thumb be dragged and the track be clicked, exactly like the
+    // page scrollbar.
+    canvas.control(
+        target::id(Target::NavScrollbar),
         Rect::new(
-            track.origin.x,
-            track.origin.y + (track.size.y - thumb_h) * t,
-            3.0,
-            thumb_h,
+            bar.track.origin.x - 4.0,
+            bar.track.origin.y,
+            14.0,
+            bar.track.size.y,
         ),
-        1.5,
-        palette.primary,
-        0,
-        0.0,
-        0.0,
+        Role::ScrollBar,
+        "Scroll navigation",
+        CursorKind::Pointer,
+        false,
+        false,
     );
 }
 
@@ -2556,24 +2702,26 @@ fn draw_page(
     }
 
     if let Some(bar) = content_scrollbar(layout, page) {
-        canvas.rect(bar.track, 1.5, palette.control_track, 0, 0.0, 0.0);
+        canvas.rect(bar.track, 3.0, palette.control_track, 0, 0.0, 0.0);
         let thumb_h = bar.thumb_h;
         let t = (state.content_scroll / bar.max_scroll).clamp(0.0, 1.0);
         let thumb = Rect::new(
             bar.track.origin.x,
             bar.track.origin.y + (bar.track.size.y - thumb_h) * t,
-            3.0,
+            6.0,
             thumb_h,
         );
-        canvas.rect(thumb, 1.5, palette.primary, 0, 0.0, 0.0);
+        canvas.rect(thumb, 3.0, palette.primary, 0, 0.0, 0.0);
         // The whole track is the control: the thumb can be dragged, and a
-        // click on the track jumps the thumb there.
+        // click on the track jumps the thumb there. The 14px hot zone is wider
+        // than the 6px bar so it is easy to grab, and stays inside the window
+        // so the host's resize border never steals the press.
         canvas.control(
             target::id(Target::ContentScrollbar),
             Rect::new(
-                bar.track.origin.x - 5.0,
+                bar.track.origin.x - 4.0,
                 bar.track.origin.y,
-                bar.track.size.x + 10.0,
+                14.0,
                 bar.track.size.y,
             ),
             Role::ScrollBar,

@@ -62,6 +62,24 @@
 `PointerState` 维护 `capture()` 与 `pressed()` 两套状态：`pressed` 是按下瞬间
 命中的目标，`capture` 是独占路由的目标。
 
+## 拖拽阈值与事件切换 (Drag Slop)
+
+按下后指针移动超过 `drag_slop`（3 px）时，路由器**停止发射 `PointerMove`，改发
+`DragStart` / `Drag`**。这是「点击」与「拖拽」的分界：阈值内的抖动仍算点击，
+越过阈值后离散控件不再在释放时激活。
+
+架构红线：**所有已捕获的拖拽（滚动条滑块、Knob 滑块、画布平移、框选、卡片排序）
+必须同时跟随 `PointerMove` 与 `DragStart` / `Drag`**。两类事件携带相同坐标，
+应用层把它们归约到同一个 `pointer_move` 入口；只接 `PointerMove` 会让拖拽在越过
+阈值的那一刻「断链」——这正是滚动条滑块拖不动的根因。
+
+## 多热区注册 (SceneCollector::push_hit)
+
+一个组件可以注册多个热区（例如滚动视图的垂直与水平滑块）。`SceneCollector`
+除 `push`（图元 + 单热区）外提供 `push_hit`，把额外的 `HitRegion` 套用当前
+变换 / 裁剪栈后并入拾取集。滚动视图用 `node ^ (1 << 63)` / `node ^ (1 << 62)`
+为两个滑块派生独立身份，使二者都能被 `pick` 命中且互不覆盖。
+
 ## 确定性光标栈
 
 光标形态按以下优先级覆盖：

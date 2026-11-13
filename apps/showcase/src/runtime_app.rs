@@ -58,7 +58,13 @@ impl Application for GalleryApp {
             // The release only ends a drag; the runtime reports the click
             // separately, and only when the press never became one.
             AppEvent::Click { node, pos, .. } => self.click(node, pos),
-            AppEvent::DoubleClick { .. } | AppEvent::DragStart { .. } | AppEvent::Drag { .. } => {}
+            // Once the pointer crosses the drag slop the router stops emitting
+            // `PointerMove` and emits `DragStart`/`Drag` instead. They carry the
+            // same position, so the shell's captured drags (scrollbar grabs,
+            // sliders, canvas pan, marquee, card reorder) keep following the
+            // pointer exactly as they did before the slop was crossed.
+            AppEvent::DragStart { pos, .. } | AppEvent::Drag { pos, .. } => self.pointer_move(pos),
+            AppEvent::DoubleClick { .. } => {}
             AppEvent::ContextMenu { .. } => {
                 // The context-menu widget lands with the P2 container batch;
                 // until then the shell has nothing to open.

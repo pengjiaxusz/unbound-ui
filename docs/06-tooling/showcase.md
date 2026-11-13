@@ -218,6 +218,7 @@ just showcase
 | `Ctrl+滚轮` | 切换全局 UI 缩放（100 / 125 / 150 / 200 %），物理窗口随缩放调整 |
 | 滚轮 | 滚页面、导航树，或缩放任一示例内部的画布 / 列表 |
 | 左键拖拽 | 拖动 Knob 滑块、拖拽排序卡片、框选画布节点或平移画布 |
+| 拖拽滚动条滑块 | 拖动内容 / 导航 / 虚拟列表滚动条；点击轨道上下方跳转（越过 3 px `drag_slop` 后仍连续跟随） |
 | 拖拽标题栏 / 双击标题栏 | 移动窗口 / 最大化与还原 |
 | 拖拽窗口边缘 | 从八向边缘缩放窗口（无边框 CSD） |
 
@@ -339,6 +340,32 @@ probe / Delete after audit"的探针。它的用例一直失败——**审计从
 
 探针文件已删除，缺陷由 `crates/unbound-gpu/src/tlsf.rs` 里的
 `a_request_bigger_than_the_free_hole_is_refused` 守住。
+
+### 第四轮：拖拽与滚动条全链路（P0）
+
+交互审计暴露出一整类「拖拽断链」缺陷——离屏体检全绿，但真实指针一拖就失效：
+
+| 症状 | 根因 | 修复 |
+| :--- | :--- | :--- |
+| 滚动条滑块 / Knob / 画布平移一拖就停 | 越过 3 px `drag_slop` 后路由器改发 `DragStart` / `Drag`，壳层却把这些事件丢弃 | `runtime_app` 把 `DragStart` / `Drag` 与 `PointerMove` 归约到同一 `pointer_move` |
+| 点击滑块**上方**轨道后页面乱跳 | `begin_scrollbar_drag` 只判 `grab > thumb_h`，上方点击存下负 grab，下一次移动突然跳页 | 改用 `!(0.0..=thumb_h).contains(&grab)`，上方/下方轨道点击都把滑块中心对准指针 |
+| 导航树溢出却滚不动 | 导航 pane 没有滚动条热区与拖拽状态 | 新增 `Target::NavScrollbar`（tag 20）+ `nav_scrollbar` 几何 + `begin_nav_scrollbar_drag` |
+| 两个虚拟列表卡片共用一份滚动状态 | `list_scroll` / `list_selected` 是单值，卡片互相覆盖 | 改为 `[f32; 2]` / `[Option<usize>; 2]`，按 `ctx.card` 索引；滚轮按卡片分 tag（1 / 5） |
+| 拖拽窗口边缘误触发缩放 | 标题栏按钮排除区混用物理 / 逻辑像素，且未排除正在捕获指针的控件 | `resize_edge_at` 统一物理像素，并在 `pressed` 或 `hover_captures_pointer` 时返回 `None` |
+| 引擎滚动视图滑块拖不到底 | `drag_to` 用 `max_scroll / track_length` 作比例，忽略了滑块自身长度 | 比例改为 `max_scroll / (track_length - thumb_length)`，与 `thumb_rect` 同源 |
+
+引擎侧 `unbound-widgets::scroll` 同步收敛为可复用契约：`ScrollViewOutput` 以
+`hits: Vec<HitRegion>` 取代单个 `thumb`，新增 `ScrollPointerEvent`
+（`Press` / `Drag` / `Release`）与 `ScrollState::reduce_pointer`，把「按下滑块 /
+点击轨道 / 拖拽 / 释放」整套状态机收进组件层，宿主只需转发指针事件。
+
+这条链路由三条无头回归测试守着（`tests/shell.rs`）：
+
+| 用例 | 验证的链路 |
+| :--- | :--- |
+| `dragging_the_content_scrollbar_moves_the_page_across_drag_slop` | 按下内容滚动条滑块、分步拖拽越过 `drag_slop`，断言 `content_scroll` 逐帧精确递增；点击滑块上方轨道断言向上跳转 |
+| `dragging_the_virtual_list_scrollbar_scrolls_to_100k_end` | 把 10 万行虚拟列表的滑块拖到轨道底端，断言滚动落在距理论最大值一行以内（末行可达） |
+| `dragging_the_navigation_scrollbar_scrolls_the_tree` | 短窗口下导航树溢出，拖拽导航滚动条断言 `nav_scroll` 递增 |
 
 ### 主题切换为什么是「零上传」
 

@@ -190,13 +190,23 @@ impl Showcase {
         if window.is_decorated() || window.is_maximized() {
             return None;
         }
+        // An in-flight capture (a scrollbar grab, a slider drag, a canvas pan)
+        // owns the pointer: the resize border must never interrupt it, and a
+        // hover over a drag-capable control must not turn into a resize cursor.
+        let ctx = self.app.context();
+        if ctx.pressed.is_some() || self.shell().hover_captures_pointer(ctx.hovered) {
+            return None;
+        }
         let size = window.inner_size();
         let scale = self.os_scale.max(0.5);
-        // The window buttons live in the top-right 3 × 46 px. Testing the
-        // resize border first made that corner start a window drag instead of
-        // a click, so the exclusion has to happen before the edge test.
-        let logical_w = size.width as f32 / self.effective_scale();
-        if self.pointer.y < 48.0 && self.pointer.x > logical_w - 3.0 * 46.0 {
+        // The window buttons live in the top-right 3 × 46 logical px. The
+        // pointer is in physical pixels, so the exclusion has to be converted
+        // to physical too — mixing the two mis-placed the corner on high-DPI
+        // displays and zoomed UIs.
+        let ui_scale = self.effective_scale();
+        let button_h = 48.0 * ui_scale;
+        let button_w = 3.0 * 46.0 * ui_scale;
+        if self.pointer.y < button_h && self.pointer.x > size.width as f32 - button_w {
             return None;
         }
         resize_edge(

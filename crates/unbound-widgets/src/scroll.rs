@@ -52,6 +52,13 @@ impl ScrollAxis {
     }
 }
 
+/// The scrollbar thumb length for a track, shared by painting and dragging so
+/// the thumb's travel is computed identically in both paths.
+fn thumb_length(track_length: f32, viewport: f32, content: f32) -> f32 {
+    let ratio = (viewport / content).clamp(0.0, 1.0);
+    (track_length * ratio).max(MIN_THUMB).min(track_length)
+}
+
 /// The pure descriptor of a scroll viewport.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollViewDesc {
@@ -146,8 +153,7 @@ impl ScrollViewDesc {
         if content <= viewport || track_length <= 0.0 {
             return track;
         }
-        let ratio = (viewport / content).clamp(0.0, 1.0);
-        let thumb = (track_length * ratio).max(MIN_THUMB).min(track_length);
+        let thumb = thumb_length(track_length, viewport, content);
         let max_scroll = (content - viewport).max(0.0);
         let progress = if max_scroll > 0.0 {
             (position / max_scroll).clamp(0.0, 1.0)
@@ -184,6 +190,17 @@ impl ScrollbarAxis {
     fn horizontal(self) -> bool {
         matches!(self, Self::Horizontal)
     }
+}
+
+/// A pointer gesture routed to a scroll view's scrollbars.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum ScrollPointerEvent {
+    /// A press landed at a screen-space point.
+    Press(Vec2),
+    /// The pointer moved while a thumb is captured.
+    Drag(Vec2),
+    /// The pointer released.
+    Release,
 }
 
 /// One scrollbar drag.
@@ -345,7 +362,13 @@ impl ScrollState {
         if track_length <= 0.0 || max_scroll <= 0.0 {
             return;
         }
-        let ratio = max_scroll / track_length;
+        // The thumb only travels `track_length - thumb_length`, not the whole
+        // track: dividing by the full track made the thumb lag the pointer and
+        // stop short of the bottom. Mirror `thumb_rect`'s sizing so the thumb
+        // stays glued to the pointer and reaches `max_scroll` exactly.
+        let thumb_length = thumb_length(track_length, viewport, content);
+        let travel = (track_length - thumb_length).max(1.0);
+        let ratio = max_scroll / travel;
         let delta = (pointer - drag.start_pointer) * ratio;
         let mut offset = drag.start_offset;
         if horizontal {
@@ -482,6 +505,48 @@ impl ScrollState {
     pub fn fling(&mut self, desc: &ScrollViewDesc, velocity: Vec2) {
         self.scroll_to(desc, self.offset() + velocity * FLING_PROJECTION);
     }
+
+    /// Reduce a pointer gesture against the scrollbars.
+    ///
+    /// A press on a thumb captures it where it was; a press on the track pages
+    /// by one viewport; a drag moves the captured thumb; a release ends the
+    /// drag. Returns whether the offset or the capture changed. This is the
+    /// single entry point a host wires its pointer events into, so thumb
+    /// grabs, track clicks and release cleanup cannot drift apart.
+    pub fn reduce_pointer(&mut self, desc: &ScrollViewDesc, event: ScrollPointerEvent) -> bool {
+        match event {
+            ScrollPointerEvent::Press(pos) => {
+                if desc.axis.vertical() && desc.content_size.y > desc.rect.height() {
+                    let thumb = desc.thumb_rect(self.offset(), false);
+                    if thumb.contains_point(pos) {
+                        self.begin_drag(ScrollbarAxis::Vertical, pos.y);
+                        return true;
+                    }
+                }
+                if desc.axis.horizontal() && desc.content_size.x > desc.rect.width() {
+                    let thumb = desc.thumb_rect(self.offset(), true);
+                    if thumb.contains_point(pos) {
+                        self.begin_drag(ScrollbarAxis::Horizontal, pos.x);
+                        return true;
+                    }
+                }
+                self.page_at_track_click(desc, pos)
+            }
+            ScrollPointerEvent::Drag(pos) => {
+                let Some(axis) = self.dragging() else {
+                    return false;
+                };
+                let pointer = if axis.horizontal() { pos.x } else { pos.y };
+                self.drag_to(desc, pointer);
+                true
+            }
+            ScrollPointerEvent::Release => {
+                let was_dragging = self.drag.is_some();
+                self.end_drag();
+                was_dragging
+            }
+        }
+    }
 }
 
 impl ScrollViewOutput {
@@ -501,6 +566,24 @@ impl ScrollViewOutput {
         collector.pop_transform();
         collector.pop_clip();
     }
+
+    /// Register every scrollbar thumb hit region with the collector.
+    ///
+    /// [`SceneCollector::push`] only collects a widget's single `hit`, so the
+    /// thumbs — which live outside [`WidgetOutput`] — would otherwise be
+    /// silently dropped every frame and never become draggable.
+    pub fn register_hits(&self, collector: &mut SceneCollector) {
+        for hit in &self.hits {
+            collector.push_hit(hit.clone());
+        }
+    }
+
+    /// Push the scroll view's own output **and** its thumb hit regions in one
+    /// call, so a caller cannot forget the thumbs.
+    pub fn push_into(self, collector: &mut SceneCollector, key: u64) {
+        self.register_hits(collector);
+        collector.push(key, self.output);
+    }
 }
 
 /// What one scroll view emits.
@@ -516,8 +599,10 @@ pub struct ScrollViewOutput {
     pub clip: GpuClipNode,
     /// The translation every child primitive must reference.
     pub transform: GpuTransform,
-    /// The scrollbar thumb hit region, if a scrollbar is visible.
-    pub thumb: Option<HitRegion>,
+    /// The scrollbar thumb hit regions (vertical first, then horizontal), one
+    /// per visible scrollbar. Register them with [`Self::register_hits`] so the
+    /// router can pick and drag the thumbs.
+    pub hits: Vec<HitRegion>,
 }
 
 /// A scroll view descriptor bound to an identity.
@@ -569,7 +654,7 @@ pub fn emit_scroll_view(
         Token::OUTLINE_STRONG
     };
 
-    let mut thumb_region = None;
+    let mut hits: Vec<HitRegion> = Vec::with_capacity(2);
     let opacity = scroll.scrollbar_opacity();
     if desc.axis.vertical() && desc.content_size.y > rect.height() {
         let track = desc.track_rect(false);
@@ -580,7 +665,7 @@ pub fn emit_scroll_view(
         let mut thumb_primitive = surface(thumb, desc.scrollbar_width * 0.5, thumb_token, desc.z);
         set_opacity(&mut thumb_primitive, opacity);
         primitives.push(thumb_primitive);
-        thumb_region = Some(
+        hits.push(
             HitRegion::new(node ^ (1 << 63), SCROLL_LAYER, u32::from(desc.z) + 1, thumb)
                 .with_cursor(CursorKind::Pointer),
         );
@@ -594,6 +679,10 @@ pub fn emit_scroll_view(
         let mut thumb_primitive = surface(thumb, desc.scrollbar_width * 0.5, thumb_token, desc.z);
         set_opacity(&mut thumb_primitive, opacity);
         primitives.push(thumb_primitive);
+        hits.push(
+            HitRegion::new(node ^ (1 << 62), SCROLL_LAYER, u32::from(desc.z) + 1, thumb)
+                .with_cursor(CursorKind::Pointer),
+        );
     }
 
     let hit = Some(HitRegion::new(node, SCROLL_LAYER, u32::from(desc.z), rect));
@@ -620,7 +709,7 @@ pub fn emit_scroll_view(
         },
         clip,
         transform,
-        thumb: thumb_region,
+        hits,
     }
 }
 
@@ -916,5 +1005,70 @@ mod tests {
             assert_eq!(list.slot_count(), budget);
         }
         assert!((28..=120).contains(&budget), "{budget}");
+    }
+
+    #[test]
+    fn dragging_thumb_across_travel_reaches_exact_max_scroll() {
+        let desc = desc();
+        let track = desc.track_rect(false);
+        let thumb = desc.thumb_rect(Vec2::ZERO, false);
+        let travel = track.height() - thumb.height();
+        let mut state = ScrollState::new();
+        let start = track.origin.y + thumb.height() * 0.5;
+        state.begin_drag(ScrollbarAxis::Vertical, start);
+        state.drag_to(&desc, start + travel);
+        assert!(
+            (state.offset().y - desc.max_offset().y).abs() < 1e-3,
+            "{} should equal {}",
+            state.offset().y,
+            desc.max_offset().y
+        );
+    }
+
+    #[test]
+    fn both_scrollbar_thumbs_are_pickable_and_registered() {
+        let mut desc =
+            ScrollViewDesc::new(Rect::new(0.0, 0.0, 400.0, 300.0), Vec2::new(800.0, 3000.0));
+        desc.axis = ScrollAxis::Both;
+        let state = ScrollState::new();
+        let output = emit_scroll_view(90, &desc, &state, ControlState::default());
+        assert_eq!(output.hits.len(), 2, "vertical and horizontal thumbs");
+
+        let mut collector = SceneCollector::new(1);
+        output.push_into(&mut collector, 90);
+        assert_eq!(collector.regions.len(), 3, "viewport hit plus two thumbs");
+        assert!(collector.regions.iter().any(|r| r.node == 90 ^ (1 << 63)));
+        assert!(collector.regions.iter().any(|r| r.node == 90 ^ (1 << 62)));
+    }
+
+    #[test]
+    fn reduce_pointer_grabs_the_thumb_and_drags_to_the_end() {
+        let desc = desc();
+        let mut state = ScrollState::new();
+        let thumb = desc.thumb_rect(Vec2::ZERO, false);
+        let press = thumb.center();
+        assert!(state.reduce_pointer(&desc, ScrollPointerEvent::Press(press)));
+        assert_eq!(state.dragging(), Some(ScrollbarAxis::Vertical));
+
+        let track = desc.track_rect(false);
+        let travel = track.height() - thumb.height();
+        assert!(state.reduce_pointer(
+            &desc,
+            ScrollPointerEvent::Drag(Vec2::new(press.x, press.y + travel))
+        ));
+        assert!((state.offset().y - desc.max_offset().y).abs() < 1e-3);
+        assert!(state.reduce_pointer(&desc, ScrollPointerEvent::Release));
+        assert!(state.dragging().is_none());
+    }
+
+    #[test]
+    fn reduce_pointer_pages_on_a_track_click() {
+        let desc = desc();
+        let mut state = ScrollState::new();
+        let track = desc.track_rect(false);
+        let below = Vec2::new(track.center().x, track.max().y - 2.0);
+        assert!(state.reduce_pointer(&desc, ScrollPointerEvent::Press(below)));
+        assert_eq!(state.target().y, desc.rect.height());
+        assert!(state.dragging().is_none(), "a track click does not capture");
     }
 }

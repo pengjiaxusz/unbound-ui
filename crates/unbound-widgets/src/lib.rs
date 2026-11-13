@@ -212,8 +212,8 @@ pub use ruler::{
     RULER_MINOR_PER_MAJOR, RULER_MIN_STEP,
 };
 pub use scroll::{
-    emit_scroll_view, update_virtual_list, ScrollAxis, ScrollState, ScrollViewDesc,
-    ScrollViewOutput, ScrollViewWidget, ScrollbarAxis, VirtualWindow,
+    emit_scroll_view, update_virtual_list, ScrollAxis, ScrollPointerEvent, ScrollState,
+    ScrollViewDesc, ScrollViewOutput, ScrollViewWidget, ScrollbarAxis, VirtualWindow,
 };
 pub use segmented::{SegmentedDesc, SegmentedTokens};
 pub use select::{emit_select, SelectDesc, SelectState, SelectWidget};
@@ -525,12 +525,6 @@ impl SceneCollector {
                     primitive.transform_idx = transform_idx;
                 }
             }
-            if let Some(hit) = output.hit.as_mut() {
-                hit.bounds = hit.bounds.translate(offset);
-                if let Some(clip) = hit.clip.as_mut() {
-                    clip.rect = clip.rect.translate(offset);
-                }
-            }
             if let Some(node) = output.a11y.as_mut() {
                 node.bounds = node.bounds.translate(offset);
             }
@@ -542,19 +536,13 @@ impl SceneCollector {
                     primitive.clip_idx = clip_idx;
                 }
             }
-            if let Some(hit) = output.hit.as_mut() {
-                hit.bounds = hit.bounds.intersect(&clip_rect);
-                hit.clip = Some(match hit.clip.take() {
-                    Some(existing) => ClipRect {
-                        rect: existing.rect.intersect(&clip_rect),
-                        radii: existing.radii,
-                    },
-                    None => ClipRect::new(clip_rect),
-                });
-            }
             if let Some(node) = output.a11y.as_mut() {
                 node.bounds = node.bounds.intersect(&clip_rect);
             }
+        }
+
+        if let Some(hit) = output.hit.as_mut() {
+            self.scope_hit(hit);
         }
 
         let start = u32::try_from(self.primitives.len()).unwrap_or(u32::MAX);
@@ -570,6 +558,33 @@ impl SceneCollector {
         }
         if output.focusable {
             self.focus_order.push(key);
+        }
+    }
+
+    /// Register a standalone hit region (a scrollbar thumb, say) under the
+    /// active clip and transform scopes, without owning any primitives.
+    pub fn push_hit(&mut self, mut hit: HitRegion) {
+        self.scope_hit(&mut hit);
+        self.regions.push(hit);
+    }
+
+    /// Fold the active transform and clip scopes into a hit region's bounds.
+    fn scope_hit(&self, hit: &mut HitRegion) {
+        if let Some(&(_, offset)) = self.transform_stack.last() {
+            hit.bounds = hit.bounds.translate(offset);
+            if let Some(clip) = hit.clip.as_mut() {
+                clip.rect = clip.rect.translate(offset);
+            }
+        }
+        if let Some(&(_, clip_rect)) = self.clip_stack.last() {
+            hit.bounds = hit.bounds.intersect(&clip_rect);
+            hit.clip = Some(match hit.clip.take() {
+                Some(existing) => ClipRect {
+                    rect: existing.rect.intersect(&clip_rect),
+                    radii: existing.radii,
+                },
+                None => ClipRect::new(clip_rect),
+            });
         }
     }
 

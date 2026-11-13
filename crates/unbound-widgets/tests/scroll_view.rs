@@ -32,7 +32,7 @@ fn the_wheel_over_the_viewport_targets_the_scroll_view() {
     let mut router = Router::default();
     router.set_regions(vec![
         output.output.hit.clone().expect("viewport hit"),
-        output.thumb.clone().expect("thumb hit"),
+        output.hits.first().cloned().expect("thumb hit"),
     ]);
 
     let hits = router.wheel(Vec2::new(-120.0, 0.0), Vec2::new(200.0, 150.0));
@@ -45,7 +45,9 @@ fn the_scrollbar_thumb_is_pickable_and_draggable() {
     let desc = desc();
     let mut state = ScrollState::new();
     let thumb = emit_scroll_view(90, &desc, &state, tab())
-        .thumb
+        .hits
+        .first()
+        .cloned()
         .expect("content overflows, so the thumb exists");
 
     let mut app = TestApp::new((800.0, 600.0));
@@ -104,7 +106,7 @@ fn a_disabled_scroll_view_still_emits_but_is_not_pickable() {
     };
     let output = emit_scroll_view(90, &desc, &state, disabled);
     assert!(output.output.hit.is_some(), "the viewport still clips");
-    assert!(output.thumb.is_some());
+    assert!(!output.hits.is_empty());
 }
 
 #[test]

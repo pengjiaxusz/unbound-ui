@@ -1072,3 +1072,157 @@ fn the_atlas_eviction_clock_advances_on_every_rebuild() {
         "the atlas eviction clock is frozen: {first} -> {second}"
     );
 }
+
+/// Dragging the content scrollbar has to scroll the page, frame by frame.
+///
+/// The router stops emitting `PointerMove` once the pointer crosses the 3 px
+/// `drag_slop` and emits `DragStart`/`Drag` instead. The shell used to drop
+/// those events, so a scrollbar grab died the moment it became a real drag.
+/// This drives a 200 px drag in 20 px steps and asserts the scroll advances on
+/// every step, then clicks the track above the thumb and asserts the page jumps
+/// back up.
+#[test]
+fn dragging_the_content_scrollbar_moves_the_page_across_drag_slop() {
+    let mut app = app();
+    app.navigate(PageId::Buttons);
+    app.rebuild(VIEWPORT);
+    let node = target::id(Target::ContentScrollbar);
+    let bar = rect_of(&app, node);
+    assert_eq!(app.state.content_scroll, 0.0);
+
+    // Derive the thumb travel from the public layout so the drag stays below
+    // the clamp: a 200 px drag on a page that only overflows a little would
+    // saturate and stop advancing, which is correct behaviour, not a bug.
+    let page = app.page_layout().expect("page layout");
+    let content = app.layout.content;
+    let max_scroll = (page.content_height - content.size.y + 48.0).max(0.0);
+    let track_h = (content.size.y - 16.0).max(1.0);
+    let thumb_h = (track_h * content.size.y / page.content_height.max(1.0)).clamp(28.0, track_h);
+    let travel = (track_h - thumb_h).max(1.0);
+    let ratio = max_scroll / travel;
+    let target_scroll = max_scroll * 0.6;
+    let drag_px = target_scroll / ratio;
+
+    // Grab the thumb near its top edge (the thumb starts at the track top).
+    let grab = Vec2::new(bar.center().x, bar.origin.y + 10.0);
+    app.pointer_move(grab);
+    app.pointer_down(grab, 0.0);
+
+    let mut previous = 0.0;
+    let steps = 10;
+    for step in 1..=steps {
+        let point = Vec2::new(grab.x, grab.y + drag_px * step as f32 / steps as f32);
+        app.pointer_move(point);
+        let scroll = app.state.content_scroll;
+        assert!(
+            scroll > previous,
+            "step {step}: scroll {scroll} must advance past {previous}"
+        );
+        previous = scroll;
+    }
+    assert!(
+        (previous - target_scroll).abs() < 1.0,
+        "the drag must track the pointer precisely: {previous} vs {target_scroll}"
+    );
+    app.pointer_up(Vec2::new(grab.x, grab.y + drag_px), 0.1);
+    app.rebuild(VIEWPORT);
+    let scrolled = app.state.content_scroll;
+    assert!(scrolled > 0.0);
+
+    // Click the track above the thumb: the thumb centres on the pointer and
+    // the page jumps back up.
+    let bar = rect_of(&app, node);
+    let above = Vec2::new(bar.center().x, bar.origin.y + 2.0);
+    app.pointer_move(above);
+    app.pointer_down(above, 0.0);
+    app.pointer_up(above, 0.1);
+    assert!(
+        app.state.content_scroll < scrolled,
+        "clicking above the thumb must scroll up: {} -> {}",
+        scrolled,
+        app.state.content_scroll
+    );
+}
+
+/// Dragging a virtual-list scrollbar reaches the end of a 100 000-row list.
+///
+/// The list is virtualised, so the scrollbar is the only way to reach the last
+/// row; a drag that cannot reach the bottom makes the tail of the list
+/// unreachable. This grabs the thumb and drags it to the track's bottom edge,
+/// then asserts the scroll lands within one row of the theoretical maximum.
+#[test]
+fn dragging_the_virtual_list_scrollbar_scrolls_to_100k_end() {
+    let mut app = app();
+    app.navigate(PageId::ListView);
+    // Card 0, knob 0 = 2 selects the 100 000-row dataset.
+    app.state.set_knob(PageId::ListView, 0, 0, 2.0);
+    app.rebuild(VIEWPORT);
+
+    let node = target::id(Target::Demo(PageId::ListView.index() as u8, 0, 200));
+    let bar = rect_of(&app, node);
+    let row_spec = PageId::ListView.examples()[0].knobs[1];
+    let row = app
+        .state
+        .knob(PageId::ListView, 0, 1, &row_spec)
+        .clamp(24.0, 48.0);
+    let viewport_h = bar.size.y + 8.0;
+    let max_scroll = (100_000.0 * row - viewport_h).max(0.0);
+    assert!(
+        max_scroll > 1_000_000.0,
+        "the list should be huge: {max_scroll}"
+    );
+    assert_eq!(app.state.demo.list_scroll[0], 0.0);
+
+    let grab = Vec2::new(bar.center().x, bar.origin.y + 4.0);
+    app.pointer_move(grab);
+    app.pointer_down(grab, 0.0);
+    // Drag to the bottom of the track in steps that each cross the slop.
+    let bottom = bar.max().y - 1.0;
+    let steps = 12;
+    for step in 1..=steps {
+        let y = grab.y + (bottom - grab.y) * step as f32 / steps as f32;
+        app.pointer_move(Vec2::new(grab.x, y));
+    }
+    app.pointer_up(Vec2::new(grab.x, bottom), 0.1);
+
+    let scroll = app.state.demo.list_scroll[0];
+    assert!(
+        scroll >= max_scroll - row,
+        "the last row must be reachable: scroll {scroll}, max {max_scroll}, row {row}"
+    );
+    assert!(
+        scroll <= max_scroll + 0.5,
+        "the scroll must clamp at the end: {scroll} > {max_scroll}"
+    );
+}
+
+/// The navigation pane's scrollbar drags the tree, across the drag slop.
+#[test]
+fn dragging_the_navigation_scrollbar_scrolls_the_tree() {
+    let mut app = app();
+    // A short window guarantees the tree overflows the pane.
+    app.rebuild((1440.0, 520.0));
+    let node = target::id(Target::NavScrollbar);
+    let bar = rect_of(&app, node);
+    assert_eq!(app.state.nav_scroll, 0.0);
+
+    let grab = Vec2::new(bar.center().x, bar.origin.y + 6.0);
+    app.pointer_move(grab);
+    app.pointer_down(grab, 0.0);
+    let mut previous = 0.0;
+    for step in 1..=8 {
+        let point = Vec2::new(grab.x, grab.y + 15.0 * step as f32);
+        app.pointer_move(point);
+        let scroll = app.state.nav_scroll;
+        assert!(
+            scroll >= previous,
+            "step {step}: nav scroll {scroll} must not regress from {previous}"
+        );
+        previous = scroll;
+    }
+    app.pointer_up(Vec2::new(grab.x, grab.y + 120.0), 0.1);
+    assert!(
+        app.state.nav_scroll > 0.0,
+        "dragging the nav scrollbar must scroll the tree"
+    );
+}

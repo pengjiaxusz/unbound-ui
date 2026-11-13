@@ -139,7 +139,7 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         list.size.x,
         list.max().y - header.max().y,
     );
-    let scroll = ctx.state.demo.list_scroll.max(0.0);
+    let scroll = ctx.state.demo.list_scroll[ctx.card].max(0.0);
     let first = (scroll / row_h).floor() as usize;
     let offset = scroll - first as f32 * row_h;
     let visible = (viewport.size.y / row_h).ceil() as usize + 1;
@@ -158,7 +158,7 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         if row.max().y < viewport.origin.y || row.origin.y > viewport.max().y {
             continue;
         }
-        let selected = ctx.state.demo.list_selected == Some(index);
+        let selected = ctx.state.demo.list_selected[ctx.card] == Some(index);
         ctx.canvas.rect(
             row,
             5.0,
@@ -240,27 +240,38 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         AlignX::Start,
         AlignY::Center,
     );
-    // Scroll affordance.
+    // Scroll affordance — a real control, not decoration. The thumb can be
+    // dragged and the track clicked; the wheel zone is the *viewport* (header
+    // excluded) so the clamp reaches the last row instead of stopping 38px
+    // short. Each card owns its own zone tag and scroll offset.
     let track = Rect::new(
-        list.max().x - 6.0,
+        list.max().x - 10.0,
         viewport.origin.y + 4.0,
-        3.0,
+        6.0,
         viewport.size.y - 8.0,
     );
     ctx.canvas
-        .rect(track, 1.5, palette.control_track, 0, 0.0, 0.0);
+        .rect(track, 3.0, palette.control_track, 0, 0.0, 0.0);
     let max_scroll = (total as f32 * row_h - viewport.size.y).max(1.0);
     let thumb_h = (viewport.size.y * viewport.size.y / (total as f32 * row_h)).max(18.0);
     let thumb_y = track.origin.y + (track.size.y - thumb_h) * (scroll / max_scroll).clamp(0.0, 1.0);
     ctx.canvas.rect(
-        Rect::new(track.origin.x, thumb_y, 3.0, thumb_h),
-        1.5,
+        Rect::new(track.origin.x, thumb_y, 6.0, thumb_h),
+        3.0,
         palette.primary,
         0,
         0.0,
         0.0,
     );
-    ctx.canvas.scroll_zone(rect, 1);
+    ctx.control(
+        200,
+        Rect::new(track.origin.x - 4.0, track.origin.y, 14.0, track.size.y),
+        Role::ScrollBar,
+        "Scroll list",
+        false,
+    );
+    let zone_tag = if ctx.card == 0 { 1 } else { 5 };
+    ctx.canvas.scroll_zone(viewport, zone_tag);
 
     if metrics {
         let panel = Rect::new(rect.max().x - panel_w, rect.origin.y, panel_w, rect.size.y);
@@ -334,7 +345,7 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
             row,
             Role::ListItem,
             &format!("Row {}", index + 1),
-            ctx.state.demo.list_selected == Some(index),
+            ctx.state.demo.list_selected[ctx.card] == Some(index),
         );
     }
 }
