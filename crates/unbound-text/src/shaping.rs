@@ -17,6 +17,7 @@ use std::sync::Arc;
 use cosmic_text::{fontdb, Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight};
 use rustc_hash::FxHashMap;
 use unbound_math::Vec2;
+use unbound_theme::Token;
 
 /// Everything that affects shaping, in one comparable value.
 #[derive(Clone, Debug, PartialEq)]
@@ -89,6 +90,27 @@ impl TextStyle {
             None => mix(h, u64::MAX),
         }
     }
+}
+
+/// One inline run of rich text.
+///
+/// A span never carries a font or a shaped run: it carries the *policy* for a
+/// byte range, and [`TextEngine::shape_rich`] lays every span out in one
+/// buffer so the baselines of different sizes and weights stay aligned.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextSpan {
+    /// The byte range this span covers.
+    pub range: std::ops::Range<usize>,
+    /// The style of the glyphs in the range.
+    pub style: TextStyle,
+    /// The semantic colour token the caller paints the glyphs with.
+    pub color: Token,
+    /// Whether the range is underlined (links, emphasis).
+    pub underline: bool,
+    /// An optional inline background token (inline code, highlight).
+    pub background: Option<Token>,
+    /// A link identity, when the range is interactive.
+    pub link_id: Option<u32>,
 }
 
 /// One positioned glyph, in logical pixels relative to the text origin.
@@ -656,6 +678,173 @@ impl TextEngine {
         }
     }
 
+    /// Shape `text` and elide it with `…` when it is wider than `max_width`.
+    ///
+    /// The ellipsis is shaped first, so the visible prefix is chosen against
+    /// the *combined* width and a wide glyph never pushes the dots outside the
+    /// box. The prefix search is a binary search over character boundaries;
+    /// every trial prefix goes through the shape cache.
+    pub fn shape_elided(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+        max_width: f32,
+    ) -> Arc<ShapedText> {
+        let shaped = self.shape(text, style);
+        if shaped.width <= max_width || shaped.glyphs.is_empty() {
+            return shaped;
+        }
+        let cut = self.elision_cut(text, style, max_width);
+        if cut == 0 {
+            return self.shape("\u{2026}", style);
+        }
+        if cut >= text.len() {
+            return shaped;
+        }
+        let elided = format!("{}\u{2026}", &text[..cut]);
+        self.shape(&elided, style)
+    }
+
+    /// Wrap `text` and clamp the result to `max_lines`, eliding the last line.
+    pub fn wrap_clamped(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+        max_width: f32,
+        max_lines: usize,
+    ) -> Arc<WrappedText> {
+        let wrapped = self.wrap(text, style, max_width);
+        if max_lines == 0 || wrapped.lines.len() <= max_lines {
+            return wrapped;
+        }
+        let mut out = (*wrapped).clone();
+        out.lines.truncate(max_lines);
+        let Some(last) = out.lines.last_mut() else {
+            return Arc::new(out);
+        };
+        let start = usize::try_from(last.start).unwrap_or(0);
+        let tail = text.get(start..).unwrap_or("");
+        let cut = self.elision_cut(tail, style, max_width);
+        let dots = self.measure("\u{2026}", style).x;
+        let visible = &tail[..cut];
+        last.end = u32::try_from(start + cut).unwrap_or(u32::MAX);
+        last.width = self.measure(visible, style).x + dots;
+        out.width = out.lines.iter().map(|line| line.width).fold(0.0, f32::max);
+        out.height = out.lines.len() as f32 * out.line_height;
+        Arc::new(out)
+    }
+
+    /// Lay out `text` with per-range styles in one buffer.
+    ///
+    /// Every span becomes an `Attrs` run, so a bold word in a 14 px paragraph
+    /// shares the paragraph's baseline instead of being shaped separately and
+    /// pasted on top. Gaps between spans fall back to `base`.
+    pub fn shape_rich(
+        &mut self,
+        text: &str,
+        base: &TextStyle,
+        spans: &[TextSpan],
+        max_width: Option<f32>,
+    ) -> Arc<ShapedText> {
+        let mut span_hash = 0u64;
+        for span in spans {
+            span_hash ^= (span.range.start as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                ^ (span.range.end as u64)
+                ^ u64::from(span.color.raw()).rotate_left(48);
+            let mut style_hash = 0u64;
+            span.style.hash_into(&mut style_hash);
+            span_hash = span_hash.wrapping_mul(0x100_0000_01b3) ^ style_hash;
+            if let Some(background) = span.background {
+                span_hash ^= u64::from(background.raw()).rotate_left(16);
+            }
+            span_hash ^= u64::from(span.underline) << 3;
+            span_hash ^= u64::from(span.link_id.unwrap_or(0)) << 8;
+        }
+        let mut style_hash = 0u64;
+        base.hash_into(&mut style_hash);
+        let width_key = max_width.map_or(0, |width| (width.max(1.0) * 4.0).round() as u32);
+        let key = (
+            Self::hash_text(text),
+            style_hash ^ span_hash ^ u64::from(width_key).rotate_left(32),
+        );
+        if let Some(cached) = self.shape_cache.get(&key) {
+            self.stats.shape_hits += 1;
+            return Arc::clone(cached);
+        }
+        self.stats.shape_misses += 1;
+
+        // Build the `Attrs` runs first, then borrow the font system: the runs
+        // borrow the spans, never `self`.
+        let mut runs: Vec<(&str, Attrs<'_>)> = Vec::new();
+        let mut cursor = 0usize;
+        for span in spans {
+            let start = span.range.start.min(text.len());
+            let end = span.range.end.min(text.len());
+            if start > cursor {
+                if let Some(gap) = text.get(cursor..start) {
+                    runs.push((gap, self.attrs(base)));
+                }
+            }
+            if end > start {
+                if let Some(slice) = text.get(start..end) {
+                    runs.push((slice, self.attrs(&span.style)));
+                }
+            }
+            cursor = end.max(cursor);
+        }
+        if cursor < text.len() {
+            if let Some(gap) = text.get(cursor..) {
+                runs.push((gap, self.attrs(base)));
+            }
+        }
+        if runs.is_empty() {
+            runs.push((text, self.attrs(base)));
+        }
+        let default = self.attrs(base);
+        let metrics = base.metrics();
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_size(max_width.map(|width| width.max(1.0)), None);
+        buffer.set_rich_text(runs, &default, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        let shaped = Arc::new(Self::extract(&buffer, text, base));
+        if self.shape_cache.len() >= self.max_cache_entries {
+            self.shape_cache.clear();
+        }
+        self.shape_cache.insert(key, Arc::clone(&shaped));
+        self.stats.entries = self.shape_cache.len() + self.wrap_cache.len();
+        shaped
+    }
+
+    /// The byte cut a prefix of `text` needs so `prefix + …` fits `max_width`.
+    fn elision_cut(&mut self, text: &str, style: &TextStyle, max_width: f32) -> usize {
+        let dots = self.measure("\u{2026}", style).x;
+        if max_width <= 0.0 {
+            return 0;
+        }
+        if dots > max_width {
+            return 0;
+        }
+        let mut boundaries: Vec<usize> = text.char_indices().map(|(index, _)| index).collect();
+        boundaries.push(text.len());
+        let chars = boundaries.len() - 1;
+        let (mut low, mut high) = (0usize, chars + 1);
+        while low < high {
+            let mid = (low + high) / 2;
+            let width = if mid == 0 {
+                0.0
+            } else {
+                self.measure(&text[..boundaries[mid]], style).x
+            };
+            if width + dots <= max_width {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        let best = low.saturating_sub(1).min(chars);
+        boundaries.get(best).copied().unwrap_or(0)
+    }
+
     /// Measure without keeping the shaped glyphs (still cached).
     pub fn measure(&mut self, text: &str, style: &TextStyle) -> Vec2 {
         let shaped = self.shape(text, style);
@@ -701,6 +890,65 @@ mod tests {
         assert!(!Arc::ptr_eq(&a, &b));
         assert!(b.width > a.width);
         assert_eq!(e.stats().shape_misses, 2);
+    }
+
+    #[test]
+    fn eliding_stays_within_the_width_and_ends_with_a_dot() {
+        let mut e = engine();
+        let style = TextStyle::sized(16.0);
+        let full = e.shape("M M M M M M M M M", &style);
+        let limit = full.width * 0.5;
+        let elided = e.shape_elided("M M M M M M M M M", &style, limit);
+        assert!(elided.width <= limit + 0.5, "width = {}", elided.width);
+        assert!(elided.glyphs.len() < full.glyphs.len());
+        let last = elided.glyphs.last().expect("glyphs");
+        assert_eq!(last.cluster, (elided.glyphs.len() - 1) as u32);
+    }
+
+    #[test]
+    fn text_that_fits_is_not_elided() {
+        let mut e = engine();
+        let style = TextStyle::sized(16.0);
+        let shaped = e.shape_elided("ok", &style, 500.0);
+        assert_eq!(shaped.glyphs.len(), 2);
+    }
+
+    #[test]
+    fn clamping_limits_lines_and_keeps_the_paragraph_width() {
+        let mut e = engine();
+        let style = TextStyle::sized(16.0);
+        let text = "one two three four five six seven eight nine ten";
+        let wrapped = e.wrap(text, &style, 60.0);
+        assert!(wrapped.lines.len() > 2);
+        let clamped = e.wrap_clamped(text, &style, 60.0, 2);
+        assert_eq!(clamped.lines.len(), 2);
+        assert!(clamped.lines[1].width <= 60.5);
+        assert_eq!(
+            e.wrap_clamped(text, &style, 60.0, 0).lines.len(),
+            wrapped.lines.len()
+        );
+    }
+
+    #[test]
+    fn rich_spans_lay_out_in_one_run() {
+        let mut e = engine();
+        let base = TextStyle::sized(14.0);
+        let bold = TextStyle {
+            weight: 700,
+            ..base.clone()
+        };
+        let spans = [TextSpan {
+            range: 0..1,
+            style: bold,
+            color: Token::PRIMARY,
+            underline: false,
+            background: None,
+            link_id: None,
+        }];
+        let shaped = e.shape_rich("a b", &base, &spans, None);
+        assert_eq!(shaped.glyphs.len(), 3);
+        assert_eq!(shaped.line_count, 1);
+        assert!(shaped.width > 0.0);
     }
 
     /// An absent family and an empty one are different styles.

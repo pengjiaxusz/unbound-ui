@@ -22,9 +22,12 @@
 //! guest application may host these controls without pulling in the engine.
 
 pub mod accordion;
+pub mod avatar;
+pub mod badge;
 pub mod breadcrumb;
 pub mod button;
 pub mod checkbox;
+pub mod code_block;
 pub mod color_picker;
 pub mod combobox;
 pub mod command_palette;
@@ -45,13 +48,16 @@ pub mod number_input;
 pub mod overlay;
 pub mod popover;
 pub mod primitive;
+pub mod property_grid;
 pub mod radio;
+pub mod rich_text;
 pub mod scroll;
 pub mod segmented;
 pub mod select;
 pub mod slider;
 pub mod split_pane;
 pub mod switch;
+pub mod table;
 pub mod tabs;
 pub mod tag_input;
 pub mod text_area;
@@ -59,6 +65,7 @@ pub mod text_input;
 pub mod toolbar;
 pub mod tooltip;
 pub mod tree_view;
+pub mod virtual_views;
 
 use rustc_hash::FxHashMap;
 use unbound_a11y::{A11yNode, Semantics};
@@ -72,12 +79,18 @@ pub use accordion::{
     emit_accordion_body, emit_accordion_header, AccordionDesc, AccordionSection, AccordionState,
     AccordionTokens,
 };
+pub use avatar::{emit_avatar, emit_avatar_group, initials, AvatarDesc, AvatarGroupDesc, Presence};
+pub use badge::{emit_badge, emit_chip, BadgeDesc, BadgeVariant, ChipDesc};
 pub use breadcrumb::{
     emit_crumb, emit_crumb_ellipsis, emit_crumb_separator, BreadcrumbDesc, BreadcrumbState,
     BreadcrumbTokens, Crumb, CrumbSlot,
 };
 pub use button::{ButtonDesc, ButtonTokens, ButtonVariant, ButtonWidget};
 pub use checkbox::{CheckboxDesc, CheckboxTokens};
+pub use code_block::{
+    emit_code_block, highlight_line, CodeBlockDesc, CodeBlockState, CodeSpan, SyntaxToken,
+    CODE_GUTTER, CODE_LINE_HEIGHT, COPY_CONFIRM_SECONDS,
+};
 pub use color_picker::{
     emit_color_picker, parse_hex, parse_oklch, parse_rgba, ColorFormat, ColorPart, ColorPickerDesc,
     ColorPickerLayout, ColorPickerState, Hsva,
@@ -132,7 +145,15 @@ pub use overlay::{
     place_anchored_popup, BackdropRequest, OverlayEntry, OverlayKind, OverlayStack, Placement,
 };
 pub use popover::{emit_popover, PopoverDesc, PopoverOutput, PopoverWidget};
+pub use property_grid::{
+    emit_property_grid, PropertyDesc, PropertyGridDesc, PropertyGridState, PropertyGridTokens,
+    PropertyKind, PropertyRowLayout, PropertySection, PropertyValue,
+};
 pub use radio::{RadioDesc, RadioTokens};
+pub use rich_text::{
+    emit_rich_text, parse_markdown, BlockKind, RichBlock, RichDocument, RichTextDesc,
+    HEADING_SCALE, RICH_TEXT_SIZE,
+};
 pub use scroll::{
     emit_scroll_view, update_virtual_list, ScrollAxis, ScrollState, ScrollViewDesc,
     ScrollViewOutput, ScrollViewWidget, ScrollbarAxis, VirtualWindow,
@@ -145,6 +166,10 @@ pub use split_pane::{
     SplitPaneState, SplitPaneTokens, SplitSide,
 };
 pub use switch::{SwitchDesc, SwitchTokens};
+pub use table::{
+    emit_table, AlignX, ColumnSpec, RowWindow, SortDir, TableDesc, TableRow, TableState,
+    TableTokens,
+};
 pub use tabs::{
     emit_tab, emit_tab_close, emit_tabs_add, emit_tabs_strip, reduce_tabs_key, TabItem, TabsDesc,
     TabsKey, TabsState, TabsTokens,
@@ -170,6 +195,7 @@ pub use tooltip::{emit_tooltip, TooltipDesc, TooltipState, TooltipWidget};
 pub use tree_view::{
     emit_tree_background, emit_tree_row, TreeViewDesc, TreeViewRow, TreeViewState, TreeViewTokens,
 };
+pub use virtual_views::{emit_virtual_row, VariableVirtualList, VariableWindow, VirtualRowTokens};
 
 /// The default viewport a headless widget session renders into.
 pub const DEFAULT_VIEWPORT: (f32, f32) = (1280.0, 720.0);
