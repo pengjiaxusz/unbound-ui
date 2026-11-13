@@ -26,6 +26,7 @@ use std::time::Duration;
 use crossbeam_channel::{Receiver, Sender};
 use unbound_a11y::A11yAction;
 use unbound_abi::{Dim, NodeFlags, RawNodeDesc};
+use unbound_gpu::atlas::AtlasUpload;
 use unbound_gpu::data::{GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform};
 use unbound_input::{
     CursorKind, FocusCause, FocusKey, FocusManager, KeyChord, KeyName, Keymap, PointerButton,
@@ -40,9 +41,11 @@ use unbound_widgets::diff::{diff_primitives, SceneDiff};
 use unbound_widgets::{BackdropRequest, ControlState, SceneCollector, WidgetDesc, WidgetOutput};
 use unbound_world::{NodeId, UiWorld};
 
+pub mod assets;
 pub mod scheduler;
 pub mod state_store;
 
+pub use assets::{AssetHub, AssetResidency};
 pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 
@@ -798,6 +801,11 @@ pub struct FrameReport {
     pub aux_changed: bool,
     /// Backdrop-blur requests for this frame.
     pub backdrops: Vec<BackdropRequest>,
+    /// Atlas rectangles the asset hub decoded this frame.
+    ///
+    /// The shell uploads them with [`unbound_gpu::atlas::AtlasSet::upload_batch`]
+    /// before it draws; the runtime itself never touches the GPU.
+    pub atlas_uploads: Vec<AtlasUpload>,
 }
 
 /// The event-reducing, scene-diffing application runtime.
@@ -820,6 +828,7 @@ pub struct AppRuntime<A: Application> {
     world: UiWorld,
     layout: LayoutEngine,
     text_engine: TextEngine,
+    asset_hub: AssetHub,
     pending: Vec<PendingWidget>,
     widget_state: Rc<RefCell<WidgetStateStore>>,
     timers: TimerQueue,
@@ -859,6 +868,7 @@ impl<A: Application> AppRuntime<A> {
             world: UiWorld::new(),
             layout: LayoutEngine::new(),
             text_engine: TextEngine::new(),
+            asset_hub: AssetHub::new(),
             pending: Vec::new(),
             widget_state,
             timers,
@@ -1241,6 +1251,9 @@ impl<A: Application> AppRuntime<A> {
         // reduced first, so a frame that only woke up for them still rebuilds.
         self.poll_async();
         self.poll_timers();
+        // Decoded assets invalidate the same way a reduction does.
+        let asset_dirty = self.asset_hub.poll(&mut self.text_engine);
+        self.dirty = self.dirty.merge(asset_dirty);
         let dirty = core::mem::replace(&mut self.dirty, DirtyFlags::NONE);
         if dirty == DirtyFlags::NONE && !self.force_rebuild {
             return FrameReport {
@@ -1250,6 +1263,7 @@ impl<A: Application> AppRuntime<A> {
                 bytes: 0,
                 aux_changed: false,
                 backdrops: self.backdrops.clone(),
+                atlas_uploads: self.asset_hub.take_uploads(),
             };
         }
 
@@ -1335,7 +1349,19 @@ impl<A: Application> AppRuntime<A> {
             bytes,
             aux_changed,
             backdrops: self.backdrops.clone(),
+            atlas_uploads: self.asset_hub.take_uploads(),
         }
+    }
+
+    /// The asset hub, for submitting images and fonts.
+    #[must_use]
+    pub fn asset_hub(&self) -> &AssetHub {
+        &self.asset_hub
+    }
+
+    /// Mutable access to the asset hub.
+    pub fn asset_hub_mut(&mut self) -> &mut AssetHub {
+        &mut self.asset_hub
     }
 
     /// The layout world of the most recent frame.

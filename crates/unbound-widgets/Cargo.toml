@@ -17,6 +17,7 @@ unbound-world.workspace = true
 unbound-input.workspace = true
 unbound-a11y.workspace = true
 unbound-anim.workspace = true
+unbound-asset.workspace = true
 unbound-headless.workspace = true
 accesskit.workspace = true
 rustc-hash.workspace = true

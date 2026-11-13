@@ -50,7 +50,8 @@ use unbound_text::GlyphQuad;
 pub use button::{ButtonDesc, ButtonTokens, ButtonVariant, ButtonWidget};
 pub use checkbox::{CheckboxDesc, CheckboxTokens};
 pub use image::{
-    emit_icon, emit_image, fit_image, IconDesc, ImageDesc, ImageFit, ImageWidget, ObjectFit,
+    emit_icon, emit_image, emit_image_with_assets, fit_image, IconDesc, ImageAssetResolver,
+    ImageDesc, ImageFit, ImageSource, ImageWidget, ObjectFit, ResolvedImage,
 };
 pub use menu::{emit_menu, MenuDesc, MenuItem, MenuState, MenuWidget};
 pub use modal::{emit_modal, ModalDesc, ModalOutput, ModalWidget};

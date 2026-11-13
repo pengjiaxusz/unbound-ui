@@ -322,6 +322,21 @@ impl TextEngine {
         &mut self.font_system
     }
 
+    /// Inject a font from an in-memory byte stream.
+    ///
+    /// The faces become immediately available to the shaper, and both caches
+    /// are dropped so no label keeps a shape that was resolved against the
+    /// old font list. Returns the number of faces the stream provided; a
+    /// malformed blob loads no faces and returns `0` instead of panicking.
+    pub fn load_font_bytes(&mut self, data: Vec<u8>) -> usize {
+        let faces = self
+            .font_system
+            .db_mut()
+            .load_font_source(fontdb::Source::Binary(Arc::new(data)));
+        self.clear_caches();
+        faces.len()
+    }
+
     #[must_use]
     pub fn stats(&self) -> TextCacheStats {
         self.stats
@@ -840,6 +855,15 @@ mod tests {
         let again = e.shape("x", &style);
         assert_eq!(again.glyphs.len(), 1);
         assert_eq!(e.stats().shape_misses, 2);
+    }
+
+    #[test]
+    fn loading_a_malformed_font_blob_reports_no_faces_and_keeps_shaping() {
+        let mut e = engine();
+        assert_eq!(e.load_font_bytes(b"this is not a font".to_vec()), 0);
+        // The caches were dropped, but the system faces are still usable.
+        let shaped = e.shape("ok", &TextStyle::sized(16.0));
+        assert_eq!(shaped.glyphs.len(), 2);
     }
 
     #[test]

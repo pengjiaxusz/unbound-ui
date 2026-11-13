@@ -1869,9 +1869,11 @@ name = "unbound-app"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "png",
  "rustc-hash",
  "unbound-a11y",
  "unbound-abi",
+ "unbound-asset",
  "unbound-gpu",
  "unbound-headless",
  "unbound-input",
@@ -2037,6 +2039,7 @@ dependencies = [
  "unbound-a11y",
  "unbound-abi",
  "unbound-anim",
+ "unbound-asset",
  "unbound-gpu",
  "unbound-headless",
  "unbound-input",

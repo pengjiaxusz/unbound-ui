@@ -19,12 +19,14 @@ unbound-world.workspace = true
 unbound-layout.workspace = true
 unbound-text.workspace = true
 unbound-abi.workspace = true
+unbound-asset.workspace = true
 crossbeam-channel.workspace = true
 rustc-hash.workspace = true
 
 [dev-dependencies]
 unbound-headless.workspace = true
 unbound-text.workspace = true
+png.workspace = true
 
 [lints]
 workspace = true

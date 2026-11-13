@@ -264,6 +264,19 @@ impl Showcase {
         }
     }
 
+    /// Upload the RGBA8 rectangles the asset hub decoded this frame.
+    fn upload_asset_textures(&mut self, uploads: &[AtlasUpload]) {
+        if uploads.is_empty() {
+            return;
+        }
+        let (Some(atlases), Some(renderer)) = (&self.atlases, &self.renderer) else {
+            return;
+        };
+        if let Err(error) = atlases.upload_batch(&renderer.gpu, uploads) {
+            eprintln!("could not upload the image assets: {error}");
+        }
+    }
+
     fn write_theme_if_needed(&mut self) {
         let mode = self.shell().state.theme;
         if self.uploaded_theme == Some(mode) {
@@ -289,6 +302,7 @@ impl Showcase {
         let scale = self.effective_scale();
         self.shell_mut().set_effective_scale(scale);
         let report = self.app.frame(dt);
+        self.upload_asset_textures(&report.atlas_uploads);
         // The glyphs are uploaded whenever there are any. A frame whose scene
         // did not change can still carry fresh glyphs — a re-rasterised glyph
         // lands in a different atlas slot, so the primitive changed too, but
@@ -1002,7 +1016,8 @@ impl Showcase {
         let presented = frame_size((chain_w, chain_h), scale);
         self.app
             .resize(Vec2::new(presented.logical.0, presented.logical.1));
-        let _ = self.app.frame(0.0);
+        let report = self.app.frame(0.0);
+        self.upload_asset_textures(&report.atlas_uploads);
         self.upload_glyphs();
         self.write_theme_if_needed();
 

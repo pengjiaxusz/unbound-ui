@@ -8,6 +8,7 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
+use unbound_asset::AssetId;
 use unbound_gpu::data::{GpuPayload, PrimType, SubElement};
 use unbound_input::{HitRegion, Shape};
 use unbound_math::{Rect, Vec2};
@@ -21,6 +22,45 @@ pub const IMAGE_LAYER: u8 = 1;
 
 /// One nine-slice span: the start offset and the length along an axis.
 type Span = (f32, f32);
+
+/// Where an image's texels come from.
+///
+/// The atlas variant is the immediate path: the caller already knows the
+/// bindless layer and the texture's natural size. The asset variant defers to
+/// an [`ImageAssetResolver`], which is how an asynchronously decoded image
+/// becomes a textured quad once its upload lands.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum ImageSource {
+    /// A texture already resident in a bindless atlas layer.
+    AtlasLayer {
+        /// The array layer.
+        layer: u32,
+        /// The texture's natural size, in pixels.
+        natural_size: Vec2,
+    },
+    /// An asset that may still be decoding.
+    Asset(AssetId),
+}
+
+/// A resolved image: the layer, the UV rectangle and the natural size.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ResolvedImage {
+    /// The bindless atlas layer.
+    pub layer: u32,
+    /// The region of the layer the image occupies, normalised to `0..1`.
+    pub uv: Rect,
+    /// The image's natural size, in pixels.
+    pub size: Vec2,
+}
+
+/// The seam between the widget layer and the asset hub.
+///
+/// The widgets crate must not depend on the application runtime, so it asks
+/// this trait instead: `None` means "not ready yet" and paints the placeholder.
+pub trait ImageAssetResolver {
+    /// Look up an asset that has finished decoding.
+    fn resolve(&self, id: AssetId) -> Option<ResolvedImage>;
+}
 
 /// How an image fills its box.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -119,6 +159,8 @@ pub struct ImageDesc {
     pub natural_size: Vec2,
     /// The texture layer in the atlas.
     pub texture_layer: u32,
+    /// Where the texels come from. Defaults to the atlas layer above.
+    pub source: ImageSource,
     /// The object fit.
     pub fit: ObjectFit,
     /// The per-corner radii: top-left, top-right, bottom-right, bottom-left.
@@ -144,6 +186,10 @@ impl ImageDesc {
             rect,
             natural_size,
             texture_layer,
+            source: ImageSource::AtlasLayer {
+                layer: texture_layer,
+                natural_size,
+            },
             fit: ObjectFit::Cover,
             radius: [0.0; 4],
             border_width: 0.0,
@@ -188,6 +234,13 @@ impl ImageDesc {
     pub fn with_border(mut self, width: f32, color: Token) -> Self {
         self.border_width = width;
         self.border_color = color;
+        self
+    }
+
+    /// The same image sourced from an asynchronous asset.
+    #[must_use]
+    pub fn with_asset(mut self, id: AssetId) -> Self {
+        self.source = ImageSource::Asset(id);
         self
     }
 }
@@ -246,34 +299,110 @@ impl WidgetDesc for ImageWidget {
 /// Emit one textured primitive.
 #[must_use]
 pub fn emit_image(node: u64, desc: &ImageDesc, state: ControlState) -> WidgetOutput {
-    let fit = fit_image(desc.rect, desc.natural_size, desc.fit);
-    let mut primitive = instance(
-        fit.rect,
-        desc.radius,
-        desc.tint,
-        Token::NONE,
-        0.0,
-        0.0,
-        PrimType::Image,
-        SubElement::Content,
-        desc.z,
-    );
-    primitive.border_token_or_tex = desc.texture_layer;
-    let payload = GpuPayload {
-        p0: [fit.uv.origin.x, fit.uv.origin.y],
-        p1: [fit.uv.max().x, fit.uv.max().y],
-        p2: [0.0, 0.0],
-        line_width: 0.0,
-        extra: 0,
-        flags: 0,
-        _reserved: [0; 3],
+    emit_image_inner(node, desc, state, None)
+}
+
+/// Emit an image whose texels may still be decoding.
+///
+/// An asset that the resolver does not know yet (or one that failed) becomes a
+/// sunken rounded placeholder of the same box, so the layout never jumps when
+/// the texture arrives — only the paint changes.
+#[must_use]
+pub fn emit_image_with_assets(
+    node: u64,
+    desc: &ImageDesc,
+    state: ControlState,
+    resolver: &dyn ImageAssetResolver,
+) -> WidgetOutput {
+    emit_image_inner(node, desc, state, Some(resolver))
+}
+
+fn emit_image_inner(
+    node: u64,
+    desc: &ImageDesc,
+    state: ControlState,
+    resolver: Option<&dyn ImageAssetResolver>,
+) -> WidgetOutput {
+    let resolved = match desc.source {
+        ImageSource::AtlasLayer {
+            layer,
+            natural_size,
+        } => Some(ResolvedImage {
+            layer,
+            uv: Rect::new(0.0, 0.0, 1.0, 1.0),
+            size: natural_size,
+        }),
+        ImageSource::Asset(id) => resolver.and_then(|resolver| resolver.resolve(id)),
     };
-    let mut primitives = vec![primitive];
+
+    let mut primitives = Vec::with_capacity(2);
+    let mut payloads = Vec::with_capacity(1);
+    let bounds = match resolved {
+        Some(image) => {
+            let fit = fit_image(desc.rect, image.size, desc.fit);
+            // Crop the atlas sub-rectangle, not the whole layer: the image is
+            // one shelf of a shared page.
+            let uv = Rect::new(
+                image.uv.origin.x + fit.uv.origin.x * image.uv.width(),
+                image.uv.origin.y + fit.uv.origin.y * image.uv.height(),
+                fit.uv.width() * image.uv.width(),
+                fit.uv.height() * image.uv.height(),
+            );
+            let mut primitive = instance(
+                fit.rect,
+                desc.radius,
+                desc.tint,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Image,
+                SubElement::Content,
+                desc.z,
+            );
+            primitive.border_token_or_tex = image.layer;
+            primitives.push(primitive);
+            payloads.push(GpuPayload {
+                p0: [uv.origin.x, uv.origin.y],
+                p1: [uv.max().x, uv.max().y],
+                p2: [0.0, 0.0],
+                line_width: 0.0,
+                extra: 0,
+                flags: 0,
+                _reserved: [0; 3],
+            });
+            fit.rect
+        }
+        None => {
+            // Loading or failed: a sunken surface keeps the box and the radii.
+            primitives.push(instance(
+                desc.rect,
+                desc.radius,
+                Token::SURFACE_SUNKEN,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::RoundedRect,
+                SubElement::Background,
+                desc.z,
+            ));
+            payloads.push(GpuPayload {
+                p0: [0.0; 2],
+                p1: [0.0; 2],
+                p2: [0.0, 0.0],
+                line_width: 0.0,
+                extra: 0,
+                flags: 0,
+                _reserved: [0; 3],
+            });
+            desc.rect
+        }
+    };
+
     // A textured primitive spends its border slot on the texture layer, so a
     // border is a separate stroke drawn on top with the image's radii.
     if desc.border_width > 0.0 && desc.border_color != Token::NONE {
         primitives.push(instance(
-            fit.rect,
+            bounds,
             desc.radius,
             Token::NONE,
             desc.border_color,
@@ -305,7 +434,7 @@ pub fn emit_image(node: u64, desc: &ImageDesc, state: ControlState) -> WidgetOut
 
     WidgetOutput {
         primitives,
-        payloads: vec![payload],
+        payloads,
         hit,
         a11y: Some(a11y),
         focusable: false,
@@ -470,6 +599,10 @@ pub fn emit_icon(node: u64, desc: &IconDesc, state: ControlState) -> WidgetOutpu
         rect: desc.rect,
         natural_size: desc.rect.size,
         texture_layer: desc.texture_layer,
+        source: ImageSource::AtlasLayer {
+            layer: desc.texture_layer,
+            natural_size: desc.rect.size,
+        },
         fit: ObjectFit::Contain,
         radius: [0.0; 4],
         border_width: 0.0,
@@ -556,5 +689,54 @@ mod tests {
             ..ControlState::default()
         };
         assert!(emit_image(3, &desc, disabled).hit.is_none());
+    }
+
+    struct NoImages;
+
+    impl ImageAssetResolver for NoImages {
+        fn resolve(&self, _id: AssetId) -> Option<ResolvedImage> {
+            None
+        }
+    }
+
+    struct OneImage(ResolvedImage);
+
+    impl ImageAssetResolver for OneImage {
+        fn resolve(&self, _id: AssetId) -> Option<ResolvedImage> {
+            Some(self.0)
+        }
+    }
+
+    #[test]
+    fn an_unresolved_asset_paints_a_sunken_placeholder_of_the_same_box() {
+        let desc = ImageDesc::new(box_rect(), Vec2::new(64.0, 64.0), 0)
+            .with_radius(12.0)
+            .with_asset(AssetId(4));
+        let output = emit_image_with_assets(3, &desc, ControlState::default(), &NoImages);
+        assert_eq!(output.primitives.len(), 1);
+        assert_eq!(output.primitives[0].prim_type(), PrimType::RoundedRect);
+        assert_eq!(
+            output.primitives[0].fill_token_or_uv,
+            u32::from(Token::SURFACE_SUNKEN.raw())
+        );
+        assert_eq!(output.primitives[0].size, [200.0, 100.0]);
+        assert_eq!(output.payloads.len(), 1);
+    }
+
+    #[test]
+    fn a_ready_asset_becomes_a_textured_quad_with_the_atlas_sub_rect() {
+        let desc = ImageDesc::new(box_rect(), Vec2::new(64.0, 64.0), 0).with_asset(AssetId(9));
+        let resolved = OneImage(ResolvedImage {
+            layer: 5,
+            uv: Rect::new(0.25, 0.5, 0.5, 0.25),
+            size: Vec2::new(64.0, 32.0),
+        });
+        let output = emit_image_with_assets(3, &desc, ControlState::default(), &resolved);
+        assert_eq!(output.primitives.len(), 1);
+        assert_eq!(output.primitives[0].prim_type(), PrimType::Image);
+        assert_eq!(output.primitives[0].border_token_or_tex, 5);
+        // `Fill` samples the whole image, so the payload is the atlas rect.
+        assert_eq!(output.payloads[0].p0, [0.25, 0.5]);
+        assert_eq!(output.payloads[0].p1, [0.75, 0.75]);
     }
 }
