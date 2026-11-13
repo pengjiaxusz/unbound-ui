@@ -17,7 +17,7 @@ pub mod vec2;
 
 pub use color::{Color, Oklab, Srgba};
 pub use f16::{f16_to_f32, f32_to_f16};
-pub use rect::Rect;
+pub use rect::{project_rounded_radii, Rect};
 pub use transform::Affine2;
 pub use vec2::Vec2;
 

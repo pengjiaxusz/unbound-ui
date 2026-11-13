@@ -26,7 +26,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use slotmap::{new_key_type, Key, SlotMap};
 use unbound_abi::{bitflags_like, NodeFlags, NodeTag, RawAction, RawNodeDesc};
-use unbound_math::{Rect, Vec2};
+use unbound_math::{project_rounded_radii, Rect, Vec2};
 
 pub mod virtualize;
 
@@ -839,17 +839,29 @@ impl UiWorld {
                     Some(c) => c.intersect(&own),
                     None => own,
                 });
-                // Two rounded slots is what the shader can test; the innermost
-                // two are the ones the user actually sees. Use `world`, not
-                // `node.world_rect`, which is only written below.
+                // Two rounded slots is what the shader can test. Pushing a
+                // third nested container would silently drop the outermost
+                // arc, so fold the dropped radius into the slot that stays:
+                // the intersection turns the outer arc into a smaller
+                // effective radius at the kept container's corners.
                 if node.desc.radius.iter().any(|r| *r > 0.0) {
-                    rounded = [
-                        Some(RoundedClip {
-                            rect: world,
-                            radii: node.desc.radius,
-                        }),
-                        rounded[0],
-                    ];
+                    let own = RoundedClip {
+                        rect: world,
+                        radii: node.desc.radius,
+                    };
+                    rounded = match (rounded[0], rounded[1]) {
+                        (Some(mut kept), Some(dropped)) => {
+                            kept.radii = project_rounded_radii(
+                                kept.rect,
+                                kept.radii,
+                                dropped.rect,
+                                dropped.radii,
+                            );
+                            [Some(own), Some(kept)]
+                        }
+                        (Some(kept), None) => [Some(own), Some(kept)],
+                        (None, _) => [Some(own), None],
+                    };
                 }
             }
 
@@ -1176,6 +1188,41 @@ mod tests {
         let rounded = leaf_node.rounded_clips[0].expect("rounded clip");
         assert_eq!(rounded.radii, [12.0; 4]);
         assert_eq!(rounded.rect, Rect::new(30.0, 30.0, 200.0, 200.0));
+    }
+
+    #[test]
+    fn a_third_nested_rounded_clip_is_folded_into_the_second_slot() {
+        let (mut w, root) = world();
+        let build = |w: &mut UiWorld, parent, size: f32, radius: f32| {
+            w.insert(
+                parent,
+                RawNodeDesc::container()
+                    .size(size, size)
+                    .radius(radius)
+                    .flags(NodeFlags::CLIP),
+                loc(),
+            )
+        };
+        let outer = build(&mut w, root, 400.0, 40.0);
+        let middle = build(&mut w, outer, 380.0, 16.0);
+        let inner = build(&mut w, middle, 360.0, 8.0);
+        let leaf = w.insert(inner, RawNodeDesc::container(), loc());
+
+        let mut rects = FxHashMap::default();
+        rects.insert(root, Rect::new(0.0, 0.0, 800.0, 600.0));
+        rects.insert(outer, Rect::new(0.0, 0.0, 400.0, 400.0));
+        rects.insert(middle, Rect::new(10.0, 10.0, 380.0, 380.0));
+        rects.insert(inner, Rect::new(20.0, 20.0, 360.0, 360.0));
+        rects.insert(leaf, Rect::new(0.0, 0.0, 10.0, 10.0));
+        w.apply_rects(&rects);
+
+        let slots = w.node(leaf).rounded_clips;
+        assert_eq!(slots[0].expect("inner").radii, [8.0; 4]);
+        let folded = slots[1].expect("middle slot kept");
+        assert_eq!(folded.rect, Rect::new(10.0, 10.0, 380.0, 380.0));
+        // The dropped 40px outer arc projects to 40 - 10 = 30px on the kept
+        // middle container, so the outer rounding still shows.
+        assert_eq!(folded.radii, [30.0; 4]);
     }
 
     #[test]

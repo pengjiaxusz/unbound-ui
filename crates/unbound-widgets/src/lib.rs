@@ -85,7 +85,7 @@ use unbound_a11y::{A11yNode, Semantics};
 use unbound_gpu::data::{GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform, CLIP_NONE};
 use unbound_headless::driver::{ClickReport, TestApp};
 use unbound_input::{ClipRect, HitRegion, PointerEvent, Router};
-use unbound_math::{Rect, Vec2};
+use unbound_math::{f16_to_f32, f32_to_f16, project_rounded_radii, Rect, Vec2};
 use unbound_text::GlyphQuad;
 
 pub use accordion::{
@@ -378,6 +378,16 @@ pub struct SceneCollector {
     transform_stack: Vec<(u32, Vec2)>,
 }
 
+/// Rebuild a clip slot's `(centre, half-extent)` form into a rectangle.
+fn center_half_rect(slot: [f32; 4]) -> Rect {
+    Rect::new(
+        slot[0] - slot[2],
+        slot[1] - slot[3],
+        slot[2] * 2.0,
+        slot[3] * 2.0,
+    )
+}
+
 impl SceneCollector {
     /// An empty collector whose semantic tree is rooted at `root`.
     #[must_use]
@@ -430,6 +440,18 @@ impl SceneCollector {
             if let Some(parent) = self.clips.get(parent_idx as usize) {
                 node.rounded_clip_1 = parent.rounded_clip_0;
                 node.radii_1 = parent.radii_0;
+                // A fourth rounded ancestor would be dropped: fold its arc into
+                // the slot that survives so a 3+ level nest keeps its outer
+                // rounding instead of snapping to a square corner. A no-op
+                // slot has zero radii, so the projection leaves the kept slot
+                // untouched.
+                let kept_rect = center_half_rect(node.rounded_clip_1);
+                let dropped_rect = center_half_rect(parent.rounded_clip_1);
+                let kept_radii = node.radii_1.map(f16_to_f32);
+                let dropped_radii = parent.radii_1.map(f16_to_f32);
+                node.radii_1 =
+                    project_rounded_radii(kept_rect, kept_radii, dropped_rect, dropped_radii)
+                        .map(f32_to_f16);
             }
         }
         let index = u32::try_from(self.clips.len()).unwrap_or(CLIP_NONE - 1);
@@ -824,5 +846,43 @@ mod tests {
         };
         collector.push(10, output);
         assert_eq!(collector.focus_order, vec![10]);
+    }
+
+    /// Build a clip node with a radius, in the `(centre, half-extent)` form
+    /// the shader's rounded slots use.
+    fn rounded_clip(rect: Rect, radius: f32) -> GpuClipNode {
+        let mut node = GpuClipNode::from_aabb(rect.to_min_max_array());
+        node.rounded_clip_0 = rect.to_center_half();
+        node.radii_0 = [f32_to_f16(radius); 4];
+        node
+    }
+
+    #[test]
+    fn a_third_nested_rounded_clip_is_folded_not_dropped() {
+        let mut collector = SceneCollector::new(1);
+        let outer = Rect::new(0.0, 0.0, 200.0, 200.0);
+        let middle = Rect::new(10.0, 10.0, 180.0, 180.0);
+        let inner = Rect::new(20.0, 20.0, 160.0, 160.0);
+
+        collector.push_clip(rounded_clip(outer, 40.0), outer);
+        collector.push_clip(rounded_clip(middle, 16.0), middle);
+        let index = collector.push_clip(rounded_clip(inner, 8.0), inner);
+
+        let node = collector.clips[index as usize];
+        // The innermost container keeps its own radius in slot 0.
+        assert_eq!(node.rounded_clip_0, inner.to_center_half());
+        // The middle container keeps its slot, but its corners now also
+        // respect the outer arc: the middle sits 10px inside a 40px arc, so
+        // its effective radius rises from 16px to 30px.
+        assert_eq!(node.rounded_clip_1, middle.to_center_half());
+        let folded = f16_to_f32(node.radii_1[0]);
+        assert!(
+            (folded - 30.0).abs() < 0.05,
+            "outer arc must raise the kept radius: {folded}"
+        );
+        assert!(
+            folded < 40.0,
+            "the folded radius never exceeds the outer one"
+        );
     }
 }

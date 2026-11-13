@@ -31,6 +31,64 @@ pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 /// makes unused slots free.
 pub const MAX_ATLAS_LAYERS: u32 = 64;
 
+/// First bindless RGBA slot available to caller-owned textures.
+///
+/// Slots `0..EXTERNAL_TEXTURE_BASE` are the internal atlas pages; the remaining
+/// sixteen are registered at runtime through
+/// [`crate::frame::Renderer::register_external_texture`].
+pub const EXTERNAL_TEXTURE_BASE: u32 = 48;
+/// Number of bindless slots reserved for external textures.
+pub const EXTERNAL_TEXTURE_SLOTS: u32 = MAX_ATLAS_LAYERS - EXTERNAL_TEXTURE_BASE;
+
+/// Allocator for the external bindless slots.
+///
+/// Kept separate from the device so the bookkeeping — the part that can be
+/// wrong in ways only a real frame would reveal — is unit-testable without a
+/// GPU.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExternalTextureSlots {
+    used: u32,
+}
+
+impl ExternalTextureSlots {
+    /// Reserve the lowest free slot, or `None` when all sixteen are taken.
+    pub fn allocate(&mut self) -> Option<u32> {
+        for bit in 0..EXTERNAL_TEXTURE_SLOTS {
+            if self.used & (1 << bit) == 0 {
+                self.used |= 1 << bit;
+                return Some(EXTERNAL_TEXTURE_BASE + bit);
+            }
+        }
+        None
+    }
+
+    /// Release a slot returned by [`Self::allocate`]. Returns `false` when the
+    /// slot is outside the external range or already free.
+    pub fn release(&mut self, slot: u32) -> bool {
+        if !Self::owns(slot) {
+            return false;
+        }
+        let bit = 1 << (slot - EXTERNAL_TEXTURE_BASE);
+        if self.used & bit == 0 {
+            return false;
+        }
+        self.used &= !bit;
+        true
+    }
+
+    /// Whether `slot` belongs to the external range.
+    #[must_use]
+    pub const fn owns(slot: u32) -> bool {
+        slot >= EXTERNAL_TEXTURE_BASE && slot < MAX_ATLAS_LAYERS
+    }
+
+    /// Number of slots currently reserved.
+    #[must_use]
+    pub const fn used(self) -> u32 {
+        self.used.count_ones()
+    }
+}
+
 /// Compute stages of the GPU-driven pipeline.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ComputeStage {
@@ -666,7 +724,15 @@ impl Pipelines {
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             })
             .collect();
-        let rgba: Vec<vk::DescriptorImageInfo> = (0..MAX_ATLAS_LAYERS)
+        // Only the internal pages are rewritten: slots at and above
+        // `EXTERNAL_TEXTURE_BASE` are caller-owned and may already point at a
+        // registered texture.
+        debug_assert!(
+            atlases.rgba.layers() <= EXTERNAL_TEXTURE_BASE,
+            "the RGBA atlas grew past its {} bindless pages",
+            EXTERNAL_TEXTURE_BASE
+        );
+        let rgba: Vec<vk::DescriptorImageInfo> = (0..EXTERNAL_TEXTURE_BASE)
             .map(|layer| {
                 vk::DescriptorImageInfo::default()
                     .sampler(self.sampler)
@@ -696,6 +762,58 @@ impl Pipelines {
         unsafe { gpu.device.update_descriptor_sets(&writes, &[]) };
         self.atlases = Some(atlases);
         Ok(())
+    }
+
+    /// Point one external bindless slot at a caller-owned texture.
+    ///
+    /// `slot` must come from [`ExternalTextureSlots::allocate`]. The caller
+    /// keeps ownership of both handles and must keep them alive until the slot
+    /// is released.
+    ///
+    /// # Errors
+    /// Returns [`GpuError::InvalidArgument`] when `slot` is not an external
+    /// slot.
+    pub fn bind_external_texture(
+        &self,
+        gpu: &Gpu,
+        slot: u32,
+        view: vk::ImageView,
+        sampler: vk::Sampler,
+    ) -> Result<(), GpuError> {
+        if !ExternalTextureSlots::owns(slot) {
+            return Err(GpuError::InvalidArgument(format!(
+                "bindless slot {slot} is not an external texture slot \
+                 ({EXTERNAL_TEXTURE_BASE}..{MAX_ATLAS_LAYERS})"
+            )));
+        }
+        let info = [vk::DescriptorImageInfo::default()
+            .sampler(sampler)
+            .image_view(view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(self.set)
+            .dst_binding(1)
+            .dst_array_element(slot)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&info);
+        // SAFETY: the descriptor belongs to `self.set`; the caller guarantees
+        // the view and sampler outlive the slot.
+        unsafe { gpu.device.update_descriptor_sets(&[write], &[]) };
+        Ok(())
+    }
+
+    /// Restore a released external slot to the 1×1 dummy texture.
+    ///
+    /// # Errors
+    /// Returns [`GpuError::InvalidArgument`] when `slot` is not an external
+    /// slot.
+    pub fn unbind_external_texture(&self, gpu: &Gpu, slot: u32) -> Result<(), GpuError> {
+        if !ExternalTextureSlots::owns(slot) {
+            return Err(GpuError::InvalidArgument(format!(
+                "bindless slot {slot} is not an external texture slot"
+            )));
+        }
+        self.bind_external_texture(gpu, slot, self.dummy_rgba.view, self.sampler)
     }
 
     /// Point the vertex shader's index binding at the frame's sorted list.
@@ -905,6 +1023,30 @@ mod tests {
             assert!(s.module().magic_ok(), "{:?}", s);
             assert!(s.workgroup_size() > 0);
         }
+    }
+
+    #[test]
+    fn external_slots_never_touch_the_atlas_pages() {
+        assert_eq!(
+            EXTERNAL_TEXTURE_BASE + EXTERNAL_TEXTURE_SLOTS,
+            MAX_ATLAS_LAYERS
+        );
+        let mut slots = ExternalTextureSlots::default();
+        let mut allocated = Vec::new();
+        while let Some(slot) = slots.allocate() {
+            assert!(slot >= EXTERNAL_TEXTURE_BASE);
+            assert!(slot < MAX_ATLAS_LAYERS);
+            allocated.push(slot);
+        }
+        assert_eq!(allocated.len(), EXTERNAL_TEXTURE_SLOTS as usize);
+        assert_eq!(slots.allocate(), None);
+        assert_eq!(slots.used(), EXTERNAL_TEXTURE_SLOTS);
+
+        assert!(slots.release(allocated[3]));
+        assert_eq!(slots.used(), EXTERNAL_TEXTURE_SLOTS - 1);
+        assert_eq!(slots.allocate(), Some(allocated[3]));
+        assert!(!slots.release(EXTERNAL_TEXTURE_BASE - 1));
+        assert!(!slots.release(MAX_ATLAS_LAYERS));
     }
 
     #[test]

@@ -240,6 +240,49 @@ impl Rect {
     }
 }
 
+/// Project an **outer** rounded clip's corner arcs onto an **inner** rectangle.
+///
+/// The shader only carries two rounded clip slots, so a third nested container
+/// has to be folded on the CPU. Intersecting the outer rounded rect with the
+/// inner one turns each outer corner arc into a smaller effective radius at the
+/// corresponding inner corner — the same "inner radius = outer radius − inset"
+/// rule CSS uses for nested rounded containers. The result is only valid when
+/// the two rects are axis-aligned, which is the case the fold path handles.
+///
+/// `radii` are ordered `[top-left, top-right, bottom-right, bottom-left]`,
+/// matching the primitive corner-radius order and `sd_rounded_box`.
+#[must_use]
+pub fn project_rounded_radii(
+    inner: Rect,
+    inner_radii: [f32; 4],
+    outer: Rect,
+    outer_radii: [f32; 4],
+) -> [f32; 4] {
+    let mut out = inner_radii;
+    let inner_min = inner.min();
+    let outer_min = outer.min();
+    let outer_max = outer.max();
+    for (corner, radius) in outer_radii.iter().enumerate() {
+        let r = *radius;
+        if r <= 0.0 {
+            continue;
+        }
+        // Distance from the inner corner to the outer corner, per axis.
+        let (dx, dy) = match corner {
+            0 => (inner_min.x - outer_min.x, inner_min.y - outer_min.y),
+            1 => (outer_max.x - inner.max().x, inner_min.y - outer_min.y),
+            2 => (outer_max.x - inner.max().x, outer_max.y - inner.max().y),
+            _ => (inner_min.x - outer_min.x, outer_max.y - inner.max().y),
+        };
+        // The inner corner needs at least the outer radius minus the inset it
+        // sits at; the larger of the two axes is the conservative choice for
+        // non-uniform insets.
+        let projected = (r - dx.max(dy)).max(0.0);
+        out[corner] = out[corner].max(projected);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +345,25 @@ mod tests {
         assert!(a.intersects(&overlapping));
         assert!(a.touches(&overlapping));
         assert!(!a.touches(&apart));
+    }
+
+    #[test]
+    fn a_nested_corner_radius_is_projected_onto_the_inner_rect() {
+        let outer = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let inner = Rect::new(10.0, 10.0, 80.0, 80.0);
+        let projected = project_rounded_radii(inner, [0.0; 4], outer, [20.0; 4]);
+        // Each inner corner sits 10px inside the outer one, so the outer 20px
+        // arc projects to 20 - 10 = 10px at the inner corner.
+        for r in projected {
+            assert!((r - 10.0).abs() < 1e-3, "{projected:?}");
+        }
+
+        // Containers that share a corner keep the full radius.
+        let same = project_rounded_radii(outer, [0.0; 4], outer, [20.0; 4]);
+        assert!(same.iter().all(|r| (r - 20.0).abs() < 1e-4));
+
+        // An inner rect far from an arc needs no radius at all.
+        let far = project_rounded_radii(inner, [4.0; 4], outer, [8.0; 4]);
+        assert_eq!(far, [4.0; 4]);
     }
 }

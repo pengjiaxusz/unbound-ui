@@ -26,7 +26,7 @@ use crate::data::{
     GpuPrimitiveInstance, GpuScatterPatch, GpuTransform, PassLayer, PushConstants,
 };
 use crate::device::{Buffer, Gpu, GpuError, MemoryKind};
-use crate::pipeline::{Pipelines, COLOR_FORMAT, DEPTH_FORMAT};
+use crate::pipeline::{ExternalTextureSlots, Pipelines, COLOR_FORMAT, DEPTH_FORMAT};
 use crate::pool::{PersistentPool, PoolHandle};
 use crate::ring::TransientRing;
 
@@ -378,6 +378,8 @@ pub struct Renderer {
     staging_patches: Vec<GpuScatterPatch>,
     /// The atlases bound to the bindless descriptor slots, when installed.
     atlases: Option<std::sync::Arc<crate::atlas::AtlasSet>>,
+    /// Bookkeeping for the caller-owned bindless slots (`48..64`).
+    external_slots: ExternalTextureSlots,
     /// An externally owned colour attachment to draw into, when set.
     /// The borrowed colour attachment: the image, its view and the extent.
     ///
@@ -717,6 +719,7 @@ impl Renderer {
             staging_spans: Vec::new(),
             staging_patches: Vec::new(),
             atlases: None,
+            external_slots: ExternalTextureSlots::default(),
             external_color: None,
             external_present: false,
             external_ready: vk::Semaphore::null(),
@@ -1781,6 +1784,61 @@ impl Renderer {
     #[must_use]
     pub fn atlases(&self) -> Option<&std::sync::Arc<crate::atlas::AtlasSet>> {
         self.atlases.as_ref()
+    }
+
+    /// Install a caller-owned texture into a bindless slot.
+    ///
+    /// Returns the layer id to store in [`GpuPrimitiveInstance::border_token_or_tex`]
+    /// (`PrimType::Image` reads it from there). External ids start at
+    /// `EXTERNAL_TEXTURE_BASE`, so they never collide with atlas pages.
+    ///
+    /// The renderer only writes the descriptor; it keeps **no** ownership. The
+    /// caller must keep `view` and `sampler` alive until
+    /// [`Self::release_external_texture`], and must keep the texture in
+    /// `SHADER_READ_ONLY_OPTIMAL` while it is bound.
+    ///
+    /// # Errors
+    /// Returns [`GpuError::InvalidArgument`] when the sixteen external slots
+    /// are all taken, or propagates a descriptor update failure.
+    pub fn register_external_texture(
+        &mut self,
+        view: vk::ImageView,
+        sampler: vk::Sampler,
+    ) -> Result<u32, GpuError> {
+        let slot = self.external_slots.allocate().ok_or_else(|| {
+            GpuError::InvalidArgument(format!(
+                "all {} external bindless slots are in use",
+                crate::pipeline::EXTERNAL_TEXTURE_SLOTS
+            ))
+        })?;
+        if let Err(error) = self
+            .pipelines
+            .bind_external_texture(&self.gpu, slot, view, sampler)
+        {
+            self.external_slots.release(slot);
+            return Err(error);
+        }
+        Ok(slot)
+    }
+
+    /// Release an external slot and rebind it to the 1×1 dummy texture.
+    ///
+    /// # Errors
+    /// Returns [`GpuError::InvalidArgument`] when `slot` is not a live external
+    /// slot.
+    pub fn release_external_texture(&mut self, slot: u32) -> Result<(), GpuError> {
+        if !self.external_slots.release(slot) {
+            return Err(GpuError::InvalidArgument(format!(
+                "bindless slot {slot} is not a live external texture slot"
+            )));
+        }
+        self.pipelines.unbind_external_texture(&self.gpu, slot)
+    }
+
+    /// Number of external slots currently registered.
+    #[must_use]
+    pub const fn external_texture_count(&self) -> u32 {
+        self.external_slots.used()
     }
 
     /// Wait for the previous frame that used this frame slot to retire.

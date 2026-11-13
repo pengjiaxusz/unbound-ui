@@ -535,6 +535,65 @@ impl GpuPayload {
             _reserved: [0; 3],
         }
     }
+
+    /// Linear gradient from `from` to `to`, both in normalised local
+    /// coordinates (`0..1` of the primitive's box).
+    ///
+    /// Stops are theme tokens: `token0` at `from`, `token1` at `to`. `exponent`
+    /// biases the interpolation (`1.0` is linear) — useful for perceptually
+    /// even ramps in a linear-sRGB swapchain.
+    #[must_use]
+    pub fn gradient_linear(
+        from: [f32; 2],
+        to: [f32; 2],
+        token0: u32,
+        token1: u32,
+        exponent: f32,
+    ) -> Self {
+        Self::gradient(from, to, token0, token1, exponent)
+    }
+
+    /// Radial gradient centred at `center` with the per-axis radius `radius`.
+    #[must_use]
+    pub fn gradient_radial(
+        center: [f32; 2],
+        radius: [f32; 2],
+        token0: u32,
+        token1: u32,
+        exponent: f32,
+    ) -> Self {
+        Self::gradient(center, radius, token0, token1, exponent)
+    }
+
+    fn gradient(p0: [f32; 2], p1: [f32; 2], token0: u32, token1: u32, exponent: f32) -> Self {
+        // `p2.x` carries both stop tokens: low 16 bits = start, high = end.
+        // `p2.y` is the interpolation exponent. The shader unpacks the same
+        // way with `floatBitsToUint`.
+        let packed = (token0 & 0xFFFF) | ((token1 & 0xFFFF) << 16);
+        Self {
+            p0,
+            p1,
+            p2: [f32::from_bits(packed), exponent],
+            line_width: 0.0,
+            extra: 0,
+            flags: 0,
+            _reserved: [0; 3],
+        }
+    }
+
+    /// The two stop tokens of a gradient payload, as written by
+    /// [`Self::gradient_linear`] / [`Self::gradient_radial`].
+    #[must_use]
+    pub fn gradient_tokens(&self) -> (u32, u32) {
+        let packed = self.p2[0].to_bits();
+        (packed & 0xFFFF, packed >> 16)
+    }
+
+    /// The gradient interpolation exponent.
+    #[must_use]
+    pub fn gradient_exponent(&self) -> f32 {
+        self.p2[1]
+    }
 }
 
 /// Indirect draw command; layout-compatible with `VkDrawIndirectCommand`.
@@ -582,6 +641,19 @@ impl PrimFlags {
     pub const SUBPIXEL: Self = Self(1 << 6);
     /// The primitive is the topmost of an opaque core (used by the prepass).
     pub const OPAQUE_CORE: Self = Self(1 << 7);
+    /// Fill from the linear gradient stored in `extra_payload_idx`.
+    ///
+    /// Bits 5 and 6 are already taken by `ELLIPSIS`/`SUBPIXEL`, so the gradient
+    /// markers start at bit 8. `common.glsl` mirrors the value exactly.
+    pub const GRADIENT_LINEAR: Self = Self(1 << 8);
+    /// Fill from a radial gradient (centre `p0`, radius vector `p1`).
+    pub const GRADIENT_RADIAL: Self = Self(1 << 9);
+    /// The primitive is an `InnerShadow` sub-element: `shadow_blur` is the
+    /// inset blur radius and the fill token is the shadow colour.
+    pub const INNER_SHADOW: Self = Self(1 << 10);
+
+    /// Either gradient marker.
+    pub const GRADIENT_ANY: Self = Self(Self::GRADIENT_LINEAR.0 | Self::GRADIENT_RADIAL.0);
 
     #[inline]
     #[must_use]
@@ -967,6 +1039,39 @@ mod tests {
         assert_eq!(f.sub_element(), SubElement::Border as u8);
         assert!(f.contains(PrimFlags::DARK_BG));
         assert!(!f.contains(PrimFlags::MSDF));
+    }
+
+    #[test]
+    fn gradient_flags_do_not_collide_with_text_markers() {
+        for flag in [
+            PrimFlags::GRADIENT_LINEAR,
+            PrimFlags::GRADIENT_RADIAL,
+            PrimFlags::INNER_SHADOW,
+        ] {
+            assert_eq!(flag.bits().count_ones(), 1);
+            assert_eq!(flag.bits() & PrimFlags::SUB_ELEMENT_MASK.bits(), 0);
+            assert_eq!(flag.bits() & PrimFlags::ELLIPSIS.bits(), 0);
+            assert_eq!(flag.bits() & PrimFlags::SUBPIXEL.bits(), 0);
+        }
+        assert_eq!(
+            PrimFlags::GRADIENT_ANY.bits(),
+            PrimFlags::GRADIENT_LINEAR.bits() | PrimFlags::GRADIENT_RADIAL.bits()
+        );
+        assert!(PrimFlags::GRADIENT_ANY.contains(PrimFlags::GRADIENT_RADIAL));
+    }
+
+    #[test]
+    fn gradient_payload_round_trips_its_stop_tokens() {
+        let p = GpuPayload::gradient_linear([0.0, 0.0], [1.0, 1.0], 7, 42, 1.6);
+        assert_eq!(p.gradient_tokens(), (7, 42));
+        assert!((p.gradient_exponent() - 1.6).abs() < 1e-6);
+        assert_eq!(p.p0, [0.0, 0.0]);
+        assert_eq!(p.p1, [1.0, 1.0]);
+        assert_eq!(size_of::<GpuPayload>(), 48);
+
+        let r = GpuPayload::gradient_radial([0.5, 0.5], [0.5, 0.25], 3, 4, 1.0);
+        assert_eq!(r.gradient_tokens(), (3, 4));
+        assert_eq!(r.p1, [0.5, 0.25]);
     }
 
     #[test]

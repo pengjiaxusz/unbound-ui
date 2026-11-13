@@ -115,9 +115,15 @@ void main() {
     float sd = sd_rounded_box(p - center, half_size, v_radii);
     float self_alpha = is_glyph ? 1.0 : coverage_from_sd(sd, aa);
 
+    // An `InnerShadow` sub-element paints *inside* the box, so it must never
+    // also cast an outer drop shadow.
+    uint sub_element = flags & SUB_ELEMENT_MASK;
+    bool is_inner_shadow =
+        (flags & FLAG_INNER_SHADOW) != 0u || sub_element == SUB_INNER_SHADOW;
+
     // ---- shadow ----------------------------------------------------------
     float shadow_alpha = 0.0;
-    if (v_shadow > 0.0) {
+    if (v_shadow > 0.0 && !is_inner_shadow) {
         float sigma = max(v_shadow * 0.5, 0.5);
         shadow_alpha = box_shadow_alpha(sd, sigma) * theme_color(SHADOW_TOKEN).a;
         // Never darken the interior: the fill composites on top, but a shadow
@@ -131,6 +137,33 @@ void main() {
     vec4 surface = vec4(fill.rgb, fill.a * self_alpha);
     vec3 texel = vec3(1.0);
     float tex_a = 1.0;
+
+    // ---- gradient fill ---------------------------------------------------
+    //
+    // Runs before the border branch so a gradient keeps its ring: the border
+    // branch only composites `surface`, it does not re-derive the interior.
+    if (prim_type == PRIM_ROUNDED_RECT && (flags & FLAG_GRADIENT_ANY) != 0u) {
+        Payload pl = PayloadBuf(pc.payloads_bda).p[v_misc.x];
+        vec2 n = v_local / size;
+        float t;
+        if ((flags & FLAG_GRADIENT_RADIAL) != 0u) {
+            // `p1` is the per-axis radius vector, so an ellipse is free.
+            vec2 r = max(abs(pl.p1), vec2(1e-5));
+            t = length((n - pl.p0) / r);
+        } else {
+            vec2 d = pl.p1 - pl.p0;
+            t = dot(n - pl.p0, d) / max(dot(d, d), 1e-8);
+        }
+        t = clamp(t, 0.0, 1.0);
+        float e = pl.p2.y;
+        if (e > 0.0 && abs(e - 1.0) > 1e-4) {
+            t = pow(t, e);
+        }
+        vec4 g = gradient_color(pl, t);
+        // One LSB of blue noise: a long ramp on a linear swapchain otherwise
+        // shows Mach bands where 8-bit output quantises.
+        surface = vec4(g.rgb + gradient_dither(gl_FragCoord.xy), g.a * self_alpha);
+    }
 
     if (prim_type == PRIM_GLYPH || prim_type == PRIM_GLYPH_COLOR || prim_type == PRIM_IMAGE) {
         Payload pl = PayloadBuf(pc.payloads_bda).p[v_misc.x];
@@ -197,6 +230,18 @@ void main() {
         float a = fill_a + border_a;
         vec3 c = (surface.rgb * fill_a + border.rgb * border_a) / max(a, 1e-5);
         surface = vec4(c, a);
+    }
+
+    // ---- analytic inner shadow -------------------------------------------
+    //
+    // `1 - blurred coverage` is the classic inset shadow: 0.5 right on the
+    // edge, falling to 0 roughly 3σ inside, and clipped by `self_alpha` so it
+    // never leaks outside the rounded box. The fill token is the shadow
+    // colour; the sub-element ordering draws it above the content.
+    if (is_inner_shadow && !is_glyph) {
+        float sigma = max(v_shadow * 0.5, 0.5);
+        float inner_a = (1.0 - box_shadow_alpha(sd, sigma)) * self_alpha;
+        surface = vec4(fill.rgb, fill.a * inner_a);
     }
 
     // ---- composite: shadow, then surface ---------------------------------

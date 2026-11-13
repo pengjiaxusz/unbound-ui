@@ -38,10 +38,19 @@
 // high 16 bits of `type_flags`, so both the vertex and the fragment stage can
 // read them without a second unpacking convention.
 #define SUB_ELEMENT_MASK 0x7u
-#define FLAG_DARK_BG    (1u << 3)
-#define FLAG_MSDF       (1u << 4)
-#define FLAG_ELLIPSIS   (1u << 5)
-#define FLAG_SUBPIXEL   (1u << 6)
+#define FLAG_DARK_BG      (1u << 3)
+#define FLAG_MSDF         (1u << 4)
+#define FLAG_ELLIPSIS     (1u << 5)
+#define FLAG_SUBPIXEL     (1u << 6)
+// Bits 8..10 are the P3.2 graphics markers. They skip 5 and 6 because those
+// already carry the text-run markers above.
+#define FLAG_GRADIENT_LINEAR (1u << 8)
+#define FLAG_GRADIENT_RADIAL (1u << 9)
+#define FLAG_INNER_SHADOW    (1u << 10)
+#define FLAG_GRADIENT_ANY    (FLAG_GRADIENT_LINEAR | FLAG_GRADIENT_RADIAL)
+
+// `SubElement::InnerShadow`, low three bits of the flags word.
+#define SUB_INNER_SHADOW 3u
 
 // Theme LUT slot 0 is always fully transparent so "no colour" is free.
 #define TOKEN_NONE 0u
@@ -179,6 +188,22 @@ vec4 theme_color(uint token) {
     LutBuf lut = LutBuf(pc.theme_lut_bda);
     uvec2 e = lut.e[token];
     return vec4(unpackHalf2x16(e.x), unpackHalf2x16(e.y));
+}
+
+// Gradient stops travel as two 16-bit theme tokens packed into the bits of
+// `Payload::p2.x` (see `GpuPayload::gradient_linear`).
+vec4 gradient_color(Payload pl, float t) {
+    uint packed = floatBitsToUint(pl.p2.x);
+    vec4 c0 = theme_color(packed & 0xFFFFu);
+    vec4 c1 = theme_color(packed >> 16);
+    return mix(c0, c1, clamp(t, 0.0, 1.0));
+}
+
+// One LSB of ordered noise, centred on zero. Long gradients on a linear
+// swapchain show Mach bands without it.
+float gradient_dither(vec2 frag_coord) {
+    float n = fract(sin(dot(frag_coord, vec2(12.9898, 78.233))) * 43758.5453);
+    return (n - 0.5) * (1.0 / 255.0);
 }
 
 // ---------------------------------------------------------------------------

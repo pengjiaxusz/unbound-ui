@@ -174,6 +174,8 @@ pub enum GpuError {
     UnsupportedFeatures(Vec<&'static str>),
     /// Allocation of a `VkBuffer` or `VkDeviceMemory` failed.
     Allocation(String),
+    /// A caller supplied an argument the renderer cannot accept.
+    InvalidArgument(String),
     /// The device disappeared (`VK_ERROR_DEVICE_LOST`).
     DeviceLost,
 }
@@ -188,6 +190,7 @@ impl core::fmt::Display for GpuError {
                 write!(f, "GPU lacks required features: {}", list.join(", "))
             }
             Self::Allocation(e) => write!(f, "GPU allocation failed: {e}"),
+            Self::InvalidArgument(e) => write!(f, "invalid argument: {e}"),
             Self::DeviceLost => write!(f, "VK_ERROR_DEVICE_LOST"),
         }
     }
