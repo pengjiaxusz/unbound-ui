@@ -1,7 +1,10 @@
 //! Layout & Portals: flex sandbox, overlays and drag-and-drop.
 
 use accesskit::Role;
+use unbound_abi::{Align, Justify, RawNodeDesc};
+use unbound_layout::LayoutEngine;
 use unbound_math::Rect;
+use unbound_world::UiWorld;
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageInfo};
 use crate::canvas::{AlignX, AlignY};
@@ -121,15 +124,6 @@ pub const DRAG_EXAMPLES: &[ExampleDef] = &[ExampleDef::new(
 )
 .with_height(260.0)];
 
-fn align_offset(index: usize, count: usize, extent: f32, width: f32, alignment: usize) -> f32 {
-    let start = match alignment {
-        2 => extent - count as f32 * width,
-        1 => (extent - count as f32 * width) * 0.5,
-        _ => 0.0,
-    };
-    start + index as f32 * width
-}
-
 /// Flex layout or the box model.
 pub fn flex(ctx: &mut DemoCtx<'_, '_>, box_model: bool) {
     if box_model {
@@ -145,34 +139,63 @@ pub fn flex(ctx: &mut DemoCtx<'_, '_>, box_model: bool) {
     ctx.canvas
         .rect(inner, 10.0, palette.stage_bg, palette.stage_grid, 1.0, 0.0);
     let item = 62.0;
-    let space = item + gap;
     let count = 4;
-    let content_w = count as f32 * space - gap;
-    for index in 0..count {
-        let (x, y) = if row {
-            (
-                inner.origin.x + align_offset(index, count, inner.size.x, space, alignment),
-                inner.origin.y + (inner.size.y - item) * 0.5,
-            )
-        } else {
-            (
-                inner.origin.x + (inner.size.x - item) * 0.5,
-                inner.origin.y + align_offset(index, count, inner.size.y, space, alignment),
-            )
-        };
-        let cell = Rect::new(x, y, item, item);
-        let colors = [
-            palette.primary_soft,
-            palette.success_soft,
-            palette.warning_soft,
-            palette.secondary_soft,
-        ];
-        let inks = [
-            palette.primary,
-            palette.success,
-            palette.warning,
-            palette.secondary,
-        ];
+
+    let mut world = UiWorld::new();
+    let root = world.root();
+    let loc = std::panic::Location::caller();
+    let justify = match alignment {
+        1 => Justify::Center,
+        2 => Justify::FlexEnd,
+        _ => Justify::FlexStart,
+    };
+    let container_desc = if row {
+        RawNodeDesc::container().row()
+    } else {
+        RawNodeDesc::container().column()
+    }
+    .size(inner.size.x, inner.size.y)
+    .gap(gap)
+    .align(Align::Center)
+    .justify(justify);
+    let container = world.insert(root, container_desc, loc);
+    let mut children = Vec::with_capacity(count);
+    for _ in 0..count {
+        children.push(world.insert(container, RawNodeDesc::container().size(item, item), loc));
+    }
+    let mut engine = LayoutEngine::new();
+    engine.solve(&mut world, container, inner.size);
+
+    let colors = [
+        palette.primary_soft,
+        palette.success_soft,
+        palette.warning_soft,
+        palette.secondary_soft,
+    ];
+    let inks = [
+        palette.primary,
+        palette.success,
+        palette.warning,
+        palette.secondary,
+    ];
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (index, &child) in children.iter().enumerate() {
+        let solved = engine
+            .rect(child)
+            .unwrap_or(Rect::new(0.0, 0.0, item, item));
+        let cell = Rect::new(
+            inner.origin.x + solved.origin.x,
+            inner.origin.y + solved.origin.y,
+            solved.size.x,
+            solved.size.y,
+        );
+        min_x = min_x.min(cell.origin.x);
+        min_y = min_y.min(cell.origin.y);
+        max_x = max_x.max(cell.max().x);
+        max_y = max_y.max(cell.max().y);
         ctx.canvas.rect(cell, 10.0, colors[index], 0, 0.0, 0.0);
         ctx.canvas.text(
             &format!("{}", index + 1),
@@ -183,24 +206,19 @@ pub fn flex(ctx: &mut DemoCtx<'_, '_>, box_model: bool) {
             AlignY::Center,
         );
     }
-    // The outline must start where the first item starts. It used to be
-    // anchored at the container's leading edge even for `center`/`end`, so
-    // the "content box" was drawn in the empty space to the left of the row.
     let outline = if row {
-        let start = inner.origin.x + align_offset(0, count, inner.size.x, space, alignment);
         Rect::new(
-            start,
+            min_x,
             inner.origin.y,
-            content_w.min(inner.size.x),
+            (max_x - min_x).clamp(0.0, inner.size.x),
             inner.size.y,
         )
     } else {
-        let start = inner.origin.y + align_offset(0, count, inner.size.y, space, alignment);
         Rect::new(
             inner.origin.x,
-            start,
+            min_y,
             inner.size.x,
-            content_w.min(inner.size.y),
+            (max_y - min_y).clamp(0.0, inner.size.y),
         )
     };
     ctx.canvas.stroke(outline, 6.0, palette.grid_dot, 1.0);
@@ -209,7 +227,7 @@ pub fn flex(ctx: &mut DemoCtx<'_, '_>, box_model: bool) {
         Rect::new(
             outline.origin.x + 4.0,
             inner.max().y - 22.0,
-            inner.size.x - 8.0,
+            (inner.size.x - 8.0).min(260.0),
             16.0,
         ),
         9.5,

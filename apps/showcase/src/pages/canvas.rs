@@ -1,6 +1,7 @@
 //! Infinite Canvas: viewport, quadtree, marquee selection and history.
 
 use accesskit::Role;
+use unbound_canvas::{Axis, LooseQuadtree, SnapConfig, Snapper};
 use unbound_math::{Rect, Vec2};
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageInfo};
@@ -219,11 +220,37 @@ pub fn viewport(ctx: &mut DemoCtx<'_, '_>, quadtree: bool) {
         }
     }
 
+    // Populate the real LooseQuadtree in positive world coordinates (offset by +2048).
+    const WORLD_HALF: f32 = 2048.0;
+    let mut tree = LooseQuadtree::new(WORLD_HALF * 2.0);
+    for (index, (_, wx, wy, ww, wh)) in WORLD_NODES.iter().enumerate() {
+        tree.insert(
+            index as u32,
+            Rect::new(wx + WORLD_HALF, wy + WORLD_HALF, *ww, *wh),
+            0,
+        );
+    }
+    let world_min = Vec2::new(
+        (rect.origin.x - center.x) / zoom + pan.x + WORLD_HALF,
+        (rect.origin.y - center.y) / zoom + pan.y + WORLD_HALF,
+    );
+    let world_query = Rect::new(
+        world_min.x,
+        world_min.y,
+        rect.size.x / zoom,
+        rect.size.y / zoom,
+    );
+    let mut visible_ids = Vec::with_capacity(WORLD_NODES.len());
+    tree.query(world_query, &mut visible_ids);
+    let qt_stats = tree.stats();
+
     let mut visible = 0;
     for (index, (label, wx, wy, ww, wh)) in WORLD_NODES.iter().enumerate() {
         let origin = world_to_screen(Vec2::new(*wx, *wy));
         let node = Rect::new(origin.x, origin.y, ww * zoom, wh * zoom);
-        let inside = node.max().x > rect.origin.x
+        let in_tree = visible_ids.contains(&(index as u32));
+        let inside = in_tree
+            && node.max().x > rect.origin.x
             && node.origin.x < rect.max().x
             && node.max().y > rect.origin.y
             && node.origin.y < rect.max().y;
@@ -259,11 +286,13 @@ pub fn viewport(ctx: &mut DemoCtx<'_, '_>, quadtree: bool) {
     }
     ctx.canvas.text(
         &format!(
-            "{:.0} % · pan {:.0},{:.0} · visible {visible}/{}",
+            "{:.0}% · pan {:.0},{:.0} · vis {visible}/{} · qtree nodes {} visited {}",
             zoom * 100.0,
             pan.x,
             pan.y,
-            WORLD_NODES.len()
+            WORLD_NODES.len(),
+            tree.occupied_nodes(),
+            qt_stats.nodes_visited
         ),
         Rect::new(
             rect.origin.x + 12.0,
@@ -370,42 +399,39 @@ pub fn marquee(ctx: &mut DemoCtx<'_, '_>, snapping: bool) {
             0.0,
         );
         if show_guides {
+            let mut others = Vec::with_capacity(12);
             for node_index in 0..12 {
                 let col = node_index % cols;
                 let row = node_index / cols;
-                let node = Rect::new(
+                others.push(Rect::new(
                     inner.origin.x + col as f32 * (cell_w + gap),
                     inner.origin.y + row as f32 * (cell_h + gap),
                     cell_w.min(96.0),
                     cell_h.min(58.0),
-                );
-                let dx = (node.origin.x - current.x).abs();
-                let dy = (node.center().y - current.y).abs();
-                if dx < threshold.max(2.0) {
-                    ctx.canvas.rect(
-                        Rect::new(node.origin.x, rect.origin.y + 8.0, 1.0, rect.size.y - 16.0),
-                        0.0,
-                        palette.warning,
-                        0,
-                        0.0,
-                        0.0,
-                    );
-                }
-                if dy < threshold.max(2.0) {
-                    ctx.canvas.rect(
-                        Rect::new(
-                            rect.origin.x + 8.0,
-                            node.center().y,
-                            rect.size.x - 16.0,
-                            1.0,
-                        ),
-                        0.0,
-                        palette.warning,
-                        0,
-                        0.0,
-                        0.0,
-                    );
-                }
+                ));
+            }
+            let mut snapper = Snapper::new(SnapConfig {
+                threshold_px: threshold.max(2.0),
+                ..SnapConfig::default()
+            });
+            let moving = Rect::new(current.x, current.y, 1.0, 1.0);
+            let result = snapper.snap(moving, &others, 1.0);
+            for guide in &result.guides {
+                let line = match guide.axis {
+                    Axis::X => Rect::new(
+                        guide.coordinate,
+                        guide.start.max(rect.origin.y + 8.0),
+                        1.0,
+                        (guide.end - guide.start).max(rect.size.y - 16.0),
+                    ),
+                    Axis::Y => Rect::new(
+                        guide.start.max(rect.origin.x + 8.0),
+                        guide.coordinate,
+                        (guide.end - guide.start).max(rect.size.x - 16.0),
+                        1.0,
+                    ),
+                };
+                ctx.canvas.rect(line, 0.0, palette.warning, 0, 0.0, 0.0);
             }
         }
         ctx.canvas.text(
@@ -470,8 +496,14 @@ pub fn undo(ctx: &mut DemoCtx<'_, '_>) {
         AlignX::Center,
         AlignY::Center,
     );
+    let stack = &ctx.state.demo.undo_stack;
     ctx.canvas.text(
-        &format!("applied {applied} / {total}"),
+        &format!(
+            "applied {applied} / {total} · stack {}/{} ({} B)",
+            stack.depth(),
+            stack.depth() + stack.redo_depth(),
+            stack.bytes()
+        ),
         Rect::new(
             stage.origin.x + 14.0,
             stage.origin.y + 10.0,

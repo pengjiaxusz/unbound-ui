@@ -1566,6 +1566,7 @@ dependencies = [
  "unbound-anim",
  "unbound-app",
  "unbound-asset",
+ "unbound-canvas",
  "unbound-gpu",
  "unbound-headless",
  "unbound-input",

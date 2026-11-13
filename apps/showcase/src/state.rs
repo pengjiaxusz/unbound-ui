@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use unbound_anim::{Spring, SpringPreset};
 use unbound_app::AssetHub;
 use unbound_asset::{AssetId, StagingRing};
+use unbound_canvas::{TransactionKind, UndoStack};
 use unbound_math::Vec2;
 use unbound_widgets::curve_editor::CurveEditorState;
 use unbound_widgets::progress::ProgressState;
@@ -100,6 +101,8 @@ pub struct DemoState {
     pub selected_nodes: [bool; 12],
     pub history: Vec<&'static str>,
     pub history_index: usize,
+    /// Real copy-on-write transaction stack from `unbound-canvas`.
+    pub undo_stack: UndoStack,
     pub spring: Spring,
     /// The segmented pill's animated slot position.
     pub pill_spring: Spring,
@@ -160,6 +163,20 @@ impl Default for DemoState {
             selected_nodes: [false; 12],
             history: vec!["Open canvas", "Add node", "Move node"],
             history_index: 3,
+            undo_stack: {
+                let mut stack = UndoStack::new(64);
+                for (i, label) in ["Open canvas", "Add node", "Move node"].iter().enumerate() {
+                    stack.begin(TransactionKind::Discrete, label, i as f64);
+                    stack.record_exist(
+                        i as u32,
+                        false,
+                        unbound_math::Rect::new(i as f32 * 40.0, 0.0, 124.0, 60.0),
+                        i as f64,
+                    );
+                    stack.commit();
+                }
+                stack
+            },
             spring,
             pill_spring,
             spring_high: false,
@@ -482,6 +499,18 @@ impl GalleryState {
         self.demo.history.truncate(self.demo.history_index);
         self.demo.history.push(label);
         self.demo.history_index = self.demo.history.len();
+        let now = f64::from(self.demo.elapsed);
+        let idx = self.demo.history_index as u32;
+        self.demo
+            .undo_stack
+            .begin(TransactionKind::Discrete, label, now);
+        self.demo.undo_stack.record_geometry(
+            0,
+            unbound_math::Rect::new((idx.saturating_sub(1) as f32) * 30.0, 0.0, 124.0, 60.0),
+            unbound_math::Rect::new((idx as f32) * 30.0, 0.0, 124.0, 60.0),
+            now,
+        );
+        self.demo.undo_stack.commit();
         self.bump();
     }
 
@@ -489,6 +518,7 @@ impl GalleryState {
     pub fn undo(&mut self) {
         if self.demo.history_index > 0 {
             self.demo.history_index -= 1;
+            let _ = self.demo.undo_stack.undo();
             self.bump();
         }
     }
@@ -497,6 +527,7 @@ impl GalleryState {
     pub fn redo(&mut self) {
         if self.demo.history_index < self.demo.history.len() {
             self.demo.history_index += 1;
+            let _ = self.demo.undo_stack.redo();
             self.bump();
         }
     }

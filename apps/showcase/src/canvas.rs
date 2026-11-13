@@ -707,6 +707,12 @@ impl<'a> Canvas<'a> {
         &self.emitted_widgets
     }
 
+    /// Read-only access to the live semantic tree built so far this frame.
+    #[must_use]
+    pub fn semantics(&self) -> &Semantics {
+        &self.semantics
+    }
+
     /// Shape a single-line label into glyph quads for a component emitter.
     pub fn shape(&mut self, text: &str, origin: Vec2, size: f32) -> Vec<GlyphQuad> {
         self.labels.layout(text, origin, size)

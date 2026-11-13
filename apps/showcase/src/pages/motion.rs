@@ -386,17 +386,41 @@ pub fn a11y(ctx: &mut DemoCtx<'_, '_>, focus_rings: bool) {
         AlignX::Start,
         AlignY::Top,
     );
-    let rows = [
-        ("Window", "Unbound UI Gallery", 0),
-        ("Group", "Demo card", 1),
-        ("Button", "Save", 2),
-        ("Button", "Cancel", 2),
-        ("Button", "Delete", 2),
-    ];
-    for (index, (role, name, indent)) in rows.iter().enumerate() {
+    let sem = ctx.canvas.semantics();
+    let focus_id = sem.focus();
+    let mut rows: Vec<(String, String, usize, bool)> = Vec::new();
+    let root_id = sem.root();
+    if let Some(root_node) = sem.get(root_id) {
+        rows.push((
+            format!("{:?}", root_node.role),
+            root_node.label.clone(),
+            0,
+            focus_id == root_id,
+        ));
+    } else {
+        rows.push((
+            "Window".to_string(),
+            format!("Unbound UI Gallery ({} nodes)", sem.len()),
+            0,
+            false,
+        ));
+    }
+    rows.push((
+        "Group".to_string(),
+        format!("Demo card ({} live)", sem.len()),
+        1,
+        false,
+    ));
+    for index in 0..labels.len() {
+        let id = ctx.part(10 + index as u16);
+        if let Some(node) = sem.get(id) {
+            let focused = focus_id == id || ctx.state.demo.a11y_focus == index;
+            rows.push((format!("{:?}", node.role), node.label.clone(), 2, focused));
+        }
+    }
+    for (index, (role, name, indent, focused)) in rows.iter().enumerate() {
         let y = tree.origin.y + 32.0 + index as f32 * 24.0;
-        let focused = *indent == 2 && ctx.state.demo.a11y_focus == index - 2;
-        if focused {
+        if *focused {
             ctx.canvas.rect(
                 Rect::new(tree.origin.x + 6.0, y - 2.0, tree.size.x - 12.0, 22.0),
                 5.0,
@@ -410,7 +434,7 @@ pub fn a11y(ctx: &mut DemoCtx<'_, '_>, focus_rings: bool) {
             &format!("{}{}", "· ".repeat(*indent), role),
             Rect::new(tree.origin.x + 12.0, y, tree.size.x * 0.4, 18.0),
             9.5,
-            if focused {
+            if *focused {
                 palette.primary
             } else {
                 palette.text_muted
@@ -427,7 +451,7 @@ pub fn a11y(ctx: &mut DemoCtx<'_, '_>, focus_rings: bool) {
                 18.0,
             ),
             10.0,
-            if focused {
+            if *focused {
                 palette.text
             } else {
                 palette.text_muted
