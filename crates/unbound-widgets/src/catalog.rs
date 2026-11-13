@@ -715,5 +715,77 @@ pub fn emit_widget(
                 crate::transfer::TransferDesc::new(Rect::new(o.x, o.y, rect.size.x, 96.0), 5, 2);
             crate::transfer::emit_transfer(node, &desc, state, label)
         }
+        WidgetCatalogId::Carousel => {
+            let desc =
+                crate::carousel::CarouselDesc::new(Rect::new(o.x, o.y, rect.size.x, 84.0), 4, 1);
+            crate::carousel::emit_carousel(node, &desc, state, label)
+        }
+        WidgetCatalogId::CodeEditor => {
+            let desc = crate::code_editor::CodeEditorDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, 96.0),
+                12,
+                1,
+            );
+            crate::code_editor::emit_code_editor(node, &desc, state, label)
+        }
+        WidgetCatalogId::DataGrid => {
+            let desc = crate::data_grid::DataGridDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, 96.0),
+                (1, 1),
+                false,
+            );
+            crate::data_grid::emit_data_grid(node, &desc, state, label)
+        }
+        WidgetCatalogId::Timeline => {
+            let desc = crate::timeline::TimelineDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, 96.0),
+                vec![
+                    crate::timeline::TimelineItem {
+                        title: "Init".to_owned(),
+                        timestamp: "10:00".to_owned(),
+                        severity: Severity::Success,
+                    },
+                    crate::timeline::TimelineItem {
+                        title: "Verify".to_owned(),
+                        timestamp: "10:05".to_owned(),
+                        severity: Severity::Info,
+                    },
+                ],
+            );
+            crate::timeline::emit_timeline(node, &desc, state, label)
+        }
+        WidgetCatalogId::TimelineTrack => {
+            let desc = crate::timeline_track::TimelineTrackDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, 96.0),
+                1.5,
+                4.0,
+                vec![
+                    crate::timeline_track::Keyframe {
+                        track: 0,
+                        time: 0.5,
+                    },
+                    crate::timeline_track::Keyframe {
+                        track: 1,
+                        time: 2.0,
+                    },
+                ],
+            );
+            crate::timeline_track::emit_timeline_track(node, &desc, state, label)
+        }
+        WidgetCatalogId::Tour => {
+            let desc = crate::tour::TourDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, 96.0),
+                Rect::new(o.x + 12.0, o.y + 8.0, 64.0, 28.0),
+                "Step 1",
+            );
+            crate::tour::emit_tour(node, &desc, state, label)
+        }
+        WidgetCatalogId::Watermark => {
+            let desc = crate::watermark::WatermarkDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, 84.0),
+                "CONFIDENTIAL",
+            );
+            crate::watermark::emit_watermark(&desc, state, label)
+        }
     }
 }

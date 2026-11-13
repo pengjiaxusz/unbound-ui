@@ -93,6 +93,7 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::Table,
     WidgetCatalogId::Toast,
     WidgetCatalogId::Tooltip,
+    WidgetCatalogId::Watermark,
 ];
 
 /// The compile-time gate, mirrored in the test crate: an exhaustive `match`
@@ -173,6 +174,13 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Spinner => "spinner",
         WidgetCatalogId::TimePicker => "time_picker",
         WidgetCatalogId::Transfer => "transfer",
+        WidgetCatalogId::Carousel => "carousel",
+        WidgetCatalogId::CodeEditor => "code_editor",
+        WidgetCatalogId::DataGrid => "data_grid",
+        WidgetCatalogId::Timeline => "timeline",
+        WidgetCatalogId::TimelineTrack => "timeline_track",
+        WidgetCatalogId::Tour => "tour",
+        WidgetCatalogId::Watermark => "watermark",
     }
 }
 
@@ -249,5 +257,5 @@ fn the_probe_covers_every_component() {
         WidgetCatalogId::COUNT,
         "the probe must cover every component exactly once"
     );
-    assert_eq!(WidgetCatalogId::COUNT, 73);
+    assert_eq!(WidgetCatalogId::COUNT, 80);
 }

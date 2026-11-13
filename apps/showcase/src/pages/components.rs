@@ -23,7 +23,7 @@ use crate::canvas::{AlignX, AlignY};
 pub const COMPONENTS_INFO: PageInfo = PageInfo {
     title: "Component gallery",
     short: "Components",
-    description: "All 56 standard components, each painted by its genuine unbound-widgets emitter with a real hit region and semantic node.",
+    description: "All 80 standard components, each painted by its genuine unbound-widgets emitter with a real hit region and semantic node.",
     crates: &["unbound-widgets"],
     docs: "docs/05-agent/layering.md",
     keywords: "component gallery catalog emitter coverage widget showcase every control",
@@ -151,6 +151,13 @@ define_showcase_components! {
     Spinner => "Spinner", "Continuous loading spinner and overlay lock scrim.", 220.0,
     TimePicker => "Time picker", "Hour, minute, and second stepping time selector.", 220.0,
     Transfer => "Transfer", "Dual-column item transfer list with batch move.", 260.0,
+    Carousel => "Carousel", "Spring-snapping slide deck with indicator dots.", 240.0,
+    CodeEditor => "Code editor", "Editable code surface with line gutter and active line highlight.", 260.0,
+    DataGrid => "Data grid", "Editable virtualized spreadsheet grid with cell selection.", 260.0,
+    Timeline => "Timeline", "Chronological event stream with status nodes and timestamps.", 260.0,
+    TimelineTrack => "Timeline track", "Multi-track keyframe dope sheet with playhead scrubber.", 260.0,
+    Tour => "Tour", "Spotlight walkthrough overlay with target cutout and bubble.", 260.0,
+    Watermark => "Watermark", "Non-interactive tiled security watermark overlay.", 240.0,
 }
 
 /// Whether `examples` mounts a card for `id` (const-comparable).
