@@ -308,6 +308,325 @@ pub fn reveal_field(
     (scroll.target().y - before).abs() > f32::EPSILON
 }
 
+/// Type alias for a thread-safe custom field validator closure.
+pub type CustomValidatorFn = std::sync::Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// Declarative validation rule for [`FormValidator`].
+#[derive(Clone)]
+pub enum ValidationRule {
+    /// Value (trimmed) must be non-empty.
+    Required { message: String },
+    /// Character count bounds.
+    Length {
+        min: Option<usize>,
+        max: Option<usize>,
+        message: String,
+    },
+    /// Numeric `f64` value bounds.
+    Range {
+        min: Option<f64>,
+        max: Option<f64>,
+        message: String,
+    },
+    /// Required substring/pattern match.
+    Pattern { needle: String, message: String },
+    /// Custom validation closure returning `Some(error)` on failure.
+    Custom(CustomValidatorFn),
+}
+
+impl std::fmt::Debug for ValidationRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Required { message } => f
+                .debug_struct("Required")
+                .field("message", message)
+                .finish(),
+            Self::Length { min, max, message } => f
+                .debug_struct("Length")
+                .field("min", min)
+                .field("max", max)
+                .field("message", message)
+                .finish(),
+            Self::Range { min, max, message } => f
+                .debug_struct("Range")
+                .field("min", min)
+                .field("max", max)
+                .field("message", message)
+                .finish(),
+            Self::Pattern { needle, message } => f
+                .debug_struct("Pattern")
+                .field("needle", needle)
+                .field("message", message)
+                .finish(),
+            Self::Custom(_) => f.debug_tuple("Custom").field(&"<fn>").finish(),
+        }
+    }
+}
+
+/// Composable validator chain for a form field.
+#[derive(Clone, Debug, Default)]
+pub struct FormValidator {
+    rules: Vec<ValidationRule>,
+}
+
+impl FormValidator {
+    /// Create an empty validator (passes everything).
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Require non-empty input after trimming whitespace.
+    #[must_use]
+    pub fn required(mut self, message: impl Into<String>) -> Self {
+        self.rules.push(ValidationRule::Required {
+            message: message.into(),
+        });
+        self
+    }
+
+    /// Require minimum character length.
+    #[must_use]
+    pub fn min_len(mut self, min: usize, message: impl Into<String>) -> Self {
+        self.rules.push(ValidationRule::Length {
+            min: Some(min),
+            max: None,
+            message: message.into(),
+        });
+        self
+    }
+
+    /// Require maximum character length.
+    #[must_use]
+    pub fn max_len(mut self, max: usize, message: impl Into<String>) -> Self {
+        self.rules.push(ValidationRule::Length {
+            min: None,
+            max: Some(max),
+            message: message.into(),
+        });
+        self
+    }
+
+    /// Require a numeric value within `[min, max]`.
+    #[must_use]
+    pub fn range(mut self, min: Option<f64>, max: Option<f64>, message: impl Into<String>) -> Self {
+        self.rules.push(ValidationRule::Range {
+            min,
+            max,
+            message: message.into(),
+        });
+        self
+    }
+
+    /// Require that the input contains `needle`.
+    #[must_use]
+    pub fn pattern(mut self, needle: impl Into<String>, message: impl Into<String>) -> Self {
+        self.rules.push(ValidationRule::Pattern {
+            needle: needle.into(),
+            message: message.into(),
+        });
+        self
+    }
+
+    /// Add a custom validator function.
+    #[must_use]
+    pub fn custom(mut self, f: impl Fn(&str) -> Option<String> + Send + Sync + 'static) -> Self {
+        self.rules
+            .push(ValidationRule::Custom(std::sync::Arc::new(f)));
+        self
+    }
+
+    /// Evaluate all rules in order, returning the first failure message.
+    #[must_use]
+    pub fn validate_value(&self, value: &str) -> Option<String> {
+        for rule in &self.rules {
+            match rule {
+                ValidationRule::Required { message } => {
+                    if value.trim().is_empty() {
+                        return Some(message.clone());
+                    }
+                }
+                ValidationRule::Length { min, max, message } => {
+                    let len = value.chars().count();
+                    if min.is_some_and(|m| len < m) || max.is_some_and(|m| len > m) {
+                        return Some(message.clone());
+                    }
+                }
+                ValidationRule::Range { min, max, message } => {
+                    let Ok(parsed) = value.trim().parse::<f64>() else {
+                        return Some(message.clone());
+                    };
+                    if min.is_some_and(|m| parsed < m) || max.is_some_and(|m| parsed > m) {
+                        return Some(message.clone());
+                    }
+                }
+                ValidationRule::Pattern { needle, message } => {
+                    if !value.contains(needle.as_str()) {
+                        return Some(message.clone());
+                    }
+                }
+                ValidationRule::Custom(f) => {
+                    if let Some(err) = f(value) {
+                        return Some(err);
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ManagedField {
+    key: u64,
+    initial: String,
+    value: String,
+    touched: bool,
+    dirty: bool,
+    validator: FormValidator,
+}
+
+/// Stateful form controller tracking values, `touched`/`dirty` flags, validation,
+/// and first-error focus + scroll-into-view on submit.
+#[derive(Clone, Debug, Default)]
+pub struct FormController {
+    fields: Vec<ManagedField>,
+    state: FormState,
+    submitted: bool,
+}
+
+impl FormController {
+    /// Create a new empty [`FormController`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register (or update) a field with its initial value and validator.
+    pub fn register_field(
+        &mut self,
+        key: u64,
+        initial: impl Into<String>,
+        validator: FormValidator,
+    ) {
+        let initial = initial.into();
+        if let Some(existing) = self.fields.iter_mut().find(|f| f.key == key) {
+            existing.validator = validator;
+            return;
+        }
+        self.fields.push(ManagedField {
+            key,
+            initial: initial.clone(),
+            value: initial,
+            touched: false,
+            dirty: false,
+            validator,
+        });
+    }
+
+    /// Update a field's value, updating `dirty` and re-validating if touched or submitted.
+    pub fn set_value(&mut self, key: u64, value: impl Into<String>) {
+        let value = value.into();
+        if let Some(field) = self.fields.iter_mut().find(|f| f.key == key) {
+            field.dirty = value != field.initial;
+            field.value = value;
+            if field.touched || self.submitted {
+                let err = field.validator.validate_value(&field.value);
+                self.state.set_error(key, err);
+            }
+        }
+    }
+
+    /// Mark a field as touched (e.g. on blur) and run its validator.
+    pub fn mark_touched(&mut self, key: u64) {
+        if let Some(field) = self.fields.iter_mut().find(|f| f.key == key) {
+            field.touched = true;
+            let err = field.validator.validate_value(&field.value);
+            self.state.set_error(key, err);
+        }
+    }
+
+    /// Current value of `key`.
+    #[must_use]
+    pub fn value(&self, key: u64) -> Option<&str> {
+        self.fields
+            .iter()
+            .find(|f| f.key == key)
+            .map(|f| f.value.as_str())
+    }
+
+    /// Whether `key` has been touched.
+    #[must_use]
+    pub fn is_touched(&self, key: u64) -> bool {
+        self.fields
+            .iter()
+            .find(|f| f.key == key)
+            .is_some_and(|f| f.touched)
+    }
+
+    /// Whether `key` differs from its initial value.
+    #[must_use]
+    pub fn is_dirty(&self, key: u64) -> bool {
+        self.fields
+            .iter()
+            .find(|f| f.key == key)
+            .is_some_and(|f| f.dirty)
+    }
+
+    /// Whether any field in the form is dirty.
+    #[must_use]
+    pub fn any_dirty(&self) -> bool {
+        self.fields.iter().any(|f| f.dirty)
+    }
+
+    /// Reset all fields to their initial values, clearing errors and dirty/touched flags.
+    pub fn reset(&mut self) {
+        self.submitted = false;
+        for field in &mut self.fields {
+            field.value = field.initial.clone();
+            field.touched = false;
+            field.dirty = false;
+        }
+        let empty: [(u64, Option<String>); 0] = [];
+        self.state.validate(empty);
+    }
+
+    /// Borrow the underlying [`FormState`] for rendering and error lookup.
+    #[must_use]
+    pub fn state(&self) -> &FormState {
+        &self.state
+    }
+
+    /// Mutably borrow the underlying [`FormState`].
+    pub fn state_mut(&mut self) -> &mut FormState {
+        &mut self.state
+    }
+
+    /// Validate all fields in order, focus the first error, and optionally scroll it into view.
+    pub fn submit(
+        &mut self,
+        layouts: &[FormFieldLayout],
+        scroll: Option<(&mut ScrollState, Rect, f32)>,
+    ) -> Result<(), u64> {
+        self.submitted = true;
+        let mut results = Vec::with_capacity(self.fields.len());
+        for field in &mut self.fields {
+            field.touched = true;
+            results.push((field.key, field.validator.validate_value(&field.value)));
+        }
+        if let Some(first_err) = self.state.validate(results) {
+            if let Some((scroll_state, viewport, content_height)) = scroll {
+                if let Some(layout) = layouts.iter().find(|l| l.key == first_err) {
+                    reveal_field(scroll_state, viewport, layout.input, content_height);
+                }
+            }
+            Err(first_err)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// The required marker as a two-primitive dot: no glyphs needed.
 #[must_use]
 pub fn required_marker(rect: Rect, z: u16) -> Vec<GpuPrimitiveInstance> {

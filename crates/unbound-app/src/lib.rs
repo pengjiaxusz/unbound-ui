@@ -54,15 +54,22 @@ use unbound_world::{NodeId, UiWorld};
 
 pub mod assets;
 pub mod guest_bridge;
+pub mod i18n;
 pub mod inspector;
+pub mod overlay_manager;
+pub mod router;
 pub mod scheduler;
 pub mod state_store;
 
 pub use assets::{AssetHub, AssetResidency};
 pub use guest_bridge::GuestAppAdapter;
+pub use i18n::{I18nBundle, LayoutDirection};
 pub use inspector::{Inspector, InspectorNode, InspectorScene};
+pub use overlay_manager::OverlayManager;
+pub use router::{RouteEntry, RouterStack, TransitionDirection};
 pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
+pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
 
 /// The semantic root identity.
 pub const ROOT: u64 = 1;
@@ -668,9 +675,15 @@ pub struct ViewBuilder<'a> {
     node_keys: &'a mut FxHashMap<u64, NodeId>,
     seen_keys: &'a mut FxHashSet<u64>,
     ephemeral_nodes: &'a mut Vec<NodeId>,
+    focus_groups: &'a mut Vec<FocusGroup>,
 }
 
 impl<'a> ViewBuilder<'a> {
+    /// Register a roving-tabindex focus group for the current frame.
+    pub fn register_focus_group(&mut self, group: FocusGroup) {
+        self.focus_groups.push(group);
+    }
+
     /// The local state for a widget key.
     ///
     /// The key is recorded as rendered, so a key that stops calling this is
@@ -982,6 +995,7 @@ pub struct AppRuntime<A: Application> {
     ephemeral_nodes: Vec<NodeId>,
     last_layout_stats: LayoutStats,
     layout_initialized: bool,
+    overlays: OverlayManager,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -1030,6 +1044,7 @@ impl<A: Application> AppRuntime<A> {
             ephemeral_nodes: Vec::new(),
             last_layout_stats: LayoutStats::default(),
             layout_initialized: false,
+            overlays: OverlayManager::new(),
         };
         // A timer scheduled from `init` is already due relative to the zero
         // clock; enqueue it before the first frame can advance past it.
@@ -1264,11 +1279,50 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
+    /// Borrow the runtime overlay & focus-trap manager.
+    #[must_use]
+    pub fn overlays(&self) -> &OverlayManager {
+        &self.overlays
+    }
+
+    /// Mutably borrow the runtime overlay & focus-trap manager.
+    pub fn overlays_mut(&mut self) -> &mut OverlayManager {
+        &mut self.overlays
+    }
+
+    /// Open an overlay with automatic focus-trap and focus-return management.
+    pub fn open_overlay(&mut self, entry: unbound_widgets::overlay::OverlayEntry) -> u64 {
+        let key = self.overlays.open(entry, &mut self.focus);
+        self.sync_focus_context();
+        self.mark(DirtyFlags::PAINT);
+        key
+    }
+
+    /// Close an overlay by node ID and restore trigger focus.
+    pub fn close_overlay(&mut self, node: u64) -> bool {
+        let closed = self.overlays.close(node, &mut self.focus);
+        if closed {
+            self.sync_focus_context();
+            self.mark(DirtyFlags::PAINT);
+        }
+        closed
+    }
+
     /// Press `button`.
     pub fn pointer_down(&mut self, pos: Vec2, button: PointerButton) -> DirtyFlags {
+        let mut flags = DirtyFlags::NONE;
+        if button == PointerButton::Left
+            && self
+                .overlays
+                .handle_pointer_down(pos, &mut self.focus)
+                .is_some()
+        {
+            self.sync_focus_context();
+            flags = flags.merge(DirtyFlags::PAINT | DirtyFlags::LAYOUT);
+        }
         let event = self.router.pointer_down_button(pos, button, self.time);
         self.ctx.pointer = pos;
-        let flags = event.map_or(DirtyFlags::NONE, |event| self.reduce_pointer(event));
+        flags = flags.merge(event.map_or(DirtyFlags::NONE, |event| self.reduce_pointer(event)));
         self.sync_router_context();
         self.mark(flags.merge(DirtyFlags::PAINT));
         flags
@@ -1356,17 +1410,38 @@ impl<A: Application> AppRuntime<A> {
             return DirtyFlags::PAINT;
         }
         if pressed {
-            let focus_key = match key {
-                AppKey::Tab if modifiers.shift => Some(FocusKey::ShiftTab),
-                AppKey::Tab => Some(FocusKey::Tab),
-                AppKey::Escape => Some(FocusKey::Escape),
-                _ => None,
-            };
-            if let Some(focus_key) = focus_key {
-                if self.focus.handle_key(focus_key).is_some() || focus_key == FocusKey::Escape {
-                    flags = flags.merge(DirtyFlags::PAINT);
-                }
+            if key == AppKey::Escape && self.overlays.handle_escape(&mut self.focus).is_some() {
+                flags = flags.merge(DirtyFlags::PAINT | DirtyFlags::LAYOUT);
                 self.sync_focus_context();
+            } else {
+                let focus_key = match key {
+                    AppKey::Tab if modifiers.shift => Some(FocusKey::ShiftTab),
+                    AppKey::Tab => Some(FocusKey::Tab),
+                    AppKey::Escape => Some(FocusKey::Escape),
+                    _ => None,
+                };
+                if let Some(focus_key) = focus_key {
+                    if self.focus.handle_key(focus_key).is_some() || focus_key == FocusKey::Escape {
+                        flags = flags.merge(DirtyFlags::PAINT);
+                    }
+                    self.sync_focus_context();
+                } else {
+                    let roving_key = match key {
+                        AppKey::Left => Some(RovingKey::Left),
+                        AppKey::Right => Some(RovingKey::Right),
+                        AppKey::Up => Some(RovingKey::Up),
+                        AppKey::Down => Some(RovingKey::Down),
+                        AppKey::Home => Some(RovingKey::Home),
+                        AppKey::End => Some(RovingKey::End),
+                        _ => None,
+                    };
+                    if let Some(rk) = roving_key {
+                        if self.focus.handle_roving_key(rk).is_some() {
+                            flags = flags.merge(DirtyFlags::PAINT);
+                            self.sync_focus_context();
+                        }
+                    }
+                }
             }
 
             // A bound chord is a command, not text: reducing it instead of
@@ -1514,6 +1589,7 @@ impl<A: Application> AppRuntime<A> {
             focus_visible: self.ctx.focus_visible,
             force: self.force_rebuild,
         };
+        let mut focus_groups = Vec::new();
         let mut view = ViewBuilder {
             collector: &mut self.collector,
             ctx: view_ctx,
@@ -1524,6 +1600,7 @@ impl<A: Application> AppRuntime<A> {
             node_keys: &mut self.node_keys,
             seen_keys: &mut self.seen_keys,
             ephemeral_nodes: &mut self.ephemeral_nodes,
+            focus_groups: &mut focus_groups,
         };
         self.app.view(&self.state, &mut view);
         let vanished: Vec<(u64, NodeId)> = self
@@ -1546,6 +1623,10 @@ impl<A: Application> AppRuntime<A> {
         self.router.set_regions(regions);
         self.focus
             .set_order(self.collector.focus_order.iter().copied());
+        self.focus.clear_groups();
+        for group in focus_groups {
+            self.focus.register_group(group);
+        }
         self.sync_focus_context();
 
         // DevTools overlay + the debug sanitizer loop. Both read the world and

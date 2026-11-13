@@ -29,6 +29,233 @@ pub enum FocusKey {
     Escape,
 }
 
+/// Orientation for linear roving tabindex groups.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RovingOrientation {
+    /// Left/Right arrows move across items.
+    Horizontal,
+    /// Up/Down arrows move across items.
+    Vertical,
+    /// Both Left/Right and Up/Down move linearly.
+    Both,
+}
+
+/// Navigation topology for a [`FocusGroup`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum FocusGroupMode {
+    /// 1D strip (tabs, radio group, segmented control, toolbar, menu).
+    Linear(RovingOrientation),
+    /// 2D grid (calendar, color swatches, icon picker) with `columns` per row.
+    Grid { columns: usize },
+    /// Hierarchical tree (tree view, outline) where Up/Down/Home/End step items.
+    Tree,
+}
+
+/// Directional key for roving tabindex navigation.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RovingKey {
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+}
+
+/// A roving-tabindex focus group.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FocusGroup {
+    /// Stable group identity.
+    pub id: u64,
+    /// Navigation mode (`Linear`, `Grid`, `Tree`).
+    pub mode: FocusGroupMode,
+    /// Ordered member node IDs.
+    pub items: Vec<u64>,
+    /// Currently active index inside `items`.
+    pub active_index: usize,
+    /// Whether stepping past ends wraps around.
+    pub wrap: bool,
+}
+
+impl FocusGroup {
+    /// Create a new roving focus group.
+    #[must_use]
+    pub fn new(id: u64, mode: FocusGroupMode, items: Vec<u64>) -> Self {
+        Self {
+            id,
+            mode,
+            items,
+            active_index: 0,
+            wrap: true,
+        }
+    }
+
+    /// Builder: set wrap-around behavior.
+    #[must_use]
+    pub fn with_wrap(mut self, wrap: bool) -> Self {
+        self.wrap = wrap;
+        self
+    }
+
+    /// Currently active node in this group.
+    #[must_use]
+    pub fn active_node(&self) -> Option<u64> {
+        self.items.get(self.active_index).copied()
+    }
+
+    /// Sync active index to `node` if present.
+    pub fn set_active_node(&mut self, node: u64) -> bool {
+        if let Some(pos) = self.items.iter().position(|&id| id == node) {
+            self.active_index = pos;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Navigate according to `key` and return the newly focused node ID, if moved.
+    pub fn navigate(&mut self, key: RovingKey) -> Option<u64> {
+        let len = self.items.len();
+        if len == 0 {
+            return None;
+        }
+        let cur = self.active_index.min(len - 1);
+        let next = match self.mode {
+            FocusGroupMode::Linear(orient) => match (orient, key) {
+                (_, RovingKey::Home) => Some(0),
+                (_, RovingKey::End) => Some(len - 1),
+                (RovingOrientation::Horizontal | RovingOrientation::Both, RovingKey::Left)
+                | (RovingOrientation::Vertical | RovingOrientation::Both, RovingKey::Up) => {
+                    if cur > 0 {
+                        Some(cur - 1)
+                    } else if self.wrap {
+                        Some(len - 1)
+                    } else {
+                        None
+                    }
+                }
+                (RovingOrientation::Horizontal | RovingOrientation::Both, RovingKey::Right)
+                | (RovingOrientation::Vertical | RovingOrientation::Both, RovingKey::Down) => {
+                    if cur + 1 < len {
+                        Some(cur + 1)
+                    } else if self.wrap {
+                        Some(0)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+            FocusGroupMode::Grid { columns } => {
+                let cols = columns.max(1);
+                match key {
+                    RovingKey::Home => Some(0),
+                    RovingKey::End => Some(len - 1),
+                    RovingKey::Left => {
+                        if cur > 0 {
+                            Some(cur - 1)
+                        } else if self.wrap {
+                            Some(len - 1)
+                        } else {
+                            None
+                        }
+                    }
+                    RovingKey::Right => {
+                        if cur + 1 < len {
+                            Some(cur + 1)
+                        } else if self.wrap {
+                            Some(0)
+                        } else {
+                            None
+                        }
+                    }
+                    RovingKey::Up => {
+                        if cur >= cols {
+                            Some(cur - cols)
+                        } else {
+                            None
+                        }
+                    }
+                    RovingKey::Down => {
+                        if cur + cols < len {
+                            Some(cur + cols)
+                        } else {
+                            None
+                        }
+                    }
+                }
+            }
+            FocusGroupMode::Tree => match key {
+                RovingKey::Home => Some(0),
+                RovingKey::End => Some(len - 1),
+                RovingKey::Up => {
+                    if cur > 0 {
+                        Some(cur - 1)
+                    } else if self.wrap {
+                        Some(len - 1)
+                    } else {
+                        None
+                    }
+                }
+                RovingKey::Down => {
+                    if cur + 1 < len {
+                        Some(cur + 1)
+                    } else if self.wrap {
+                        Some(0)
+                    } else {
+                        None
+                    }
+                }
+                RovingKey::Left | RovingKey::Right => None,
+            },
+        }?;
+        self.active_index = next;
+        self.items.get(next).copied()
+    }
+}
+
+/// Registry of roving-tabindex [`FocusGroup`]s active for the current frame.
+#[derive(Debug, Default)]
+pub struct RovingRegistry {
+    groups: Vec<FocusGroup>,
+}
+
+impl RovingRegistry {
+    /// Register or replace a focus group.
+    pub fn register(&mut self, group: FocusGroup) {
+        if let Some(existing) = self.groups.iter_mut().find(|g| g.id == group.id) {
+            *existing = group;
+        } else {
+            self.groups.push(group);
+        }
+    }
+
+    /// Remove all registered groups.
+    pub fn clear(&mut self) {
+        self.groups.clear();
+    }
+
+    /// All registered groups.
+    #[must_use]
+    pub fn groups(&self) -> &[FocusGroup] {
+        &self.groups
+    }
+
+    /// Find the group containing `node`.
+    #[must_use]
+    pub fn group_for_node(&self, node: u64) -> Option<&FocusGroup> {
+        self.groups.iter().find(|g| g.items.contains(&node))
+    }
+
+    /// Handle a directional key for `focused`, returning the next node ID if handled.
+    pub fn handle_key(&mut self, focused: Option<u64>, key: RovingKey) -> Option<u64> {
+        let node = focused?;
+        let group = self.groups.iter_mut().find(|g| g.items.contains(&node))?;
+        group.set_active_node(node);
+        group.navigate(key)
+    }
+}
+
 /// Why a node received focus.
 ///
 /// The cause decides whether the focus ring is painted: a pointer click must
@@ -69,6 +296,7 @@ pub struct FocusManager {
     visible: bool,
     trap: Option<Vec<u64>>,
     config: FocusConfig,
+    roving: RovingRegistry,
 }
 
 impl Default for FocusManager {
@@ -86,6 +314,31 @@ impl FocusManager {
             visible: false,
             trap: None,
             config,
+            roving: RovingRegistry::default(),
+        }
+    }
+
+    /// Register a roving-tabindex focus group for the current frame.
+    pub fn register_group(&mut self, group: FocusGroup) {
+        self.roving.register(group);
+    }
+
+    /// Clear all registered roving focus groups.
+    pub fn clear_groups(&mut self) {
+        self.roving.clear();
+    }
+
+    /// Handle a roving-tabindex directional key (`Arrow*` / `Home` / `End`).
+    ///
+    /// Returns the newly focused node ID if the currently focused node belongs
+    /// to a registered [`FocusGroup`] and moved.
+    pub fn handle_roving_key(&mut self, key: RovingKey) -> Option<u64> {
+        let next = self.roving.handle_key(self.focused, key)?;
+        if self.is_trapped(next) {
+            self.focus_internal(Some(next), true);
+            Some(next)
+        } else {
+            None
         }
     }
 
@@ -366,5 +619,38 @@ mod tests {
         let mut manager = FocusManager::default();
         manager.set_order([1, 2, 1, 3, 2]);
         assert_eq!(manager.order(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn roving_focus_group_supports_linear_grid_and_tree() {
+        let mut manager = FocusManager::default();
+        manager.set_order([1, 2, 3, 10, 11, 12, 13]);
+        manager.register_group(FocusGroup::new(
+            900,
+            FocusGroupMode::Linear(RovingOrientation::Horizontal),
+            vec![1, 2, 3],
+        ));
+        manager.register_group(
+            FocusGroup::new(
+                901,
+                FocusGroupMode::Grid { columns: 2 },
+                vec![10, 11, 12, 13],
+            )
+            .with_wrap(false),
+        );
+
+        manager.focus(1, FocusCause::Keyboard);
+        assert_eq!(manager.handle_roving_key(RovingKey::Right), Some(2));
+        assert_eq!(manager.handle_roving_key(RovingKey::End), Some(3));
+        assert_eq!(manager.handle_roving_key(RovingKey::Right), Some(1));
+        assert_eq!(manager.handle_roving_key(RovingKey::Left), Some(3));
+
+        manager.focus(10, FocusCause::Keyboard);
+        assert_eq!(manager.handle_roving_key(RovingKey::Down), Some(12));
+        assert_eq!(manager.handle_roving_key(RovingKey::Right), Some(13));
+        assert_eq!(manager.handle_roving_key(RovingKey::Up), Some(11));
+        assert_eq!(manager.handle_roving_key(RovingKey::Right), Some(12));
+        assert_eq!(manager.handle_roving_key(RovingKey::Home), Some(10));
+        assert!(manager.focus_visible());
     }
 }
