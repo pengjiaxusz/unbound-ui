@@ -22,14 +22,18 @@
 //! guest application may host these controls without pulling in the engine.
 
 pub mod accordion;
+pub mod breadcrumb;
 pub mod button;
 pub mod checkbox;
+pub mod command_palette;
 pub mod containers;
+pub mod context_menu;
 pub mod diff;
 pub mod divider;
 pub mod dock;
 pub mod image;
 pub mod menu;
+pub mod menubar;
 pub mod modal;
 pub mod overlay;
 pub mod popover;
@@ -43,7 +47,9 @@ pub mod split_pane;
 pub mod switch;
 pub mod tabs;
 pub mod text_input;
+pub mod toolbar;
 pub mod tooltip;
+pub mod tree_view;
 
 use rustc_hash::FxHashMap;
 use unbound_a11y::{A11yNode, Semantics};
@@ -57,11 +63,20 @@ pub use accordion::{
     emit_accordion_body, emit_accordion_header, AccordionDesc, AccordionSection, AccordionState,
     AccordionTokens,
 };
+pub use breadcrumb::{
+    emit_crumb, emit_crumb_ellipsis, emit_crumb_separator, BreadcrumbDesc, BreadcrumbState,
+    BreadcrumbTokens, Crumb, CrumbSlot,
+};
 pub use button::{ButtonDesc, ButtonTokens, ButtonVariant, ButtonWidget};
 pub use checkbox::{CheckboxDesc, CheckboxTokens};
+pub use command_palette::{
+    emit_command_palette, emit_command_row, score_command, Command, CommandPaletteDesc,
+    CommandPaletteState, CommandPaletteTokens, MatchKind,
+};
 pub use containers::{
     emit_card, emit_stack, CardDesc, CardTokens, StackDesc, WrapDesc, CARD_ELEVATIONS, WRAP_FLAG,
 };
+pub use context_menu::{ContextClose, ContextKey, ContextMenuState};
 pub use divider::{emit_divider, DividerDesc, DividerOrientation, DividerTokens};
 pub use dock::{
     emit_dock_pane, emit_dock_preview, emit_dock_tab, DockDrag, DockHover, DockNode, DockPane,
@@ -72,6 +87,10 @@ pub use image::{
     ImageDesc, ImageFit, ImageSource, ImageWidget, ObjectFit, ResolvedImage,
 };
 pub use menu::{emit_menu, MenuDesc, MenuItem, MenuState, MenuWidget};
+pub use menubar::{
+    emit_menubar, emit_menubar_item, reduce_menubar_key, MenuBarDesc, MenuBarItem, MenuBarKey,
+    MenuBarState, MenuBarTokens,
+};
 pub use modal::{emit_modal, ModalDesc, ModalOutput, ModalWidget};
 pub use overlay::{
     place_anchored_popup, BackdropRequest, OverlayEntry, OverlayKind, OverlayStack, Placement,
@@ -98,7 +117,15 @@ pub use text_input::{
     emit_text_input, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
     TextInputOutcome, TextInputVisual, TextInputWidget,
 };
+pub use toolbar::{
+    emit_status_bar, emit_status_segment, emit_toolbar, emit_toolbar_item, emit_toolbar_overflow,
+    StatusAlign, StatusBarDesc, StatusSegment, ToolbarDesc, ToolbarItem, ToolbarItemKind,
+    ToolbarLayout, ToolbarState, ToolbarTokens,
+};
 pub use tooltip::{emit_tooltip, TooltipDesc, TooltipState, TooltipWidget};
+pub use tree_view::{
+    emit_tree_background, emit_tree_row, TreeViewDesc, TreeViewRow, TreeViewState, TreeViewTokens,
+};
 
 /// The default viewport a headless widget session renders into.
 pub const DEFAULT_VIEWPORT: (f32, f32) = (1280.0, 720.0);

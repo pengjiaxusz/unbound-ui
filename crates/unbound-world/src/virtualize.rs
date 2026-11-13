@@ -395,6 +395,39 @@ impl VirtualTree {
     pub fn slot_count(&self) -> usize {
         self.list.slot_count()
     }
+
+    /// The row height the virtualiser was built with.
+    #[must_use]
+    pub fn row_height(&self) -> f32 {
+        self.list.row_height()
+    }
+
+    /// The flattened row index a slot currently represents.
+    ///
+    /// Slots are a ring, so a consumer that needs a row's content-space `y`
+    /// must ask for the item index rather than assume `slot == item`.
+    #[must_use]
+    pub fn slot_item(&self, slot: usize) -> Option<usize> {
+        self.list.item_at(slot)
+    }
+
+    /// Content-space `y` of a flattened row.
+    #[must_use]
+    pub fn item_y(&self, item: usize) -> f32 {
+        self.list.item_y(item)
+    }
+
+    /// First flattened row instantiated in the window.
+    #[must_use]
+    pub fn first_item(&self) -> usize {
+        self.list.first_item()
+    }
+
+    /// Total content height of the flattened rows.
+    #[must_use]
+    pub fn content_height(&self) -> f32 {
+        self.list.content_height(self.rows.len())
+    }
 }
 
 #[cfg(test)]
