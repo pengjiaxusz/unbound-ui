@@ -386,6 +386,26 @@ impl Semantics {
         self.structural.insert(parent);
     }
 
+    /// Move a single child to a new parent.
+    pub fn reparent(&mut self, child: u64, parent: u64) {
+        if let Some(old) = self.parents.get(&child).copied() {
+            if old != parent {
+                if let Some(list) = self.children.get_mut(&old) {
+                    list.retain(|c| *c != child);
+                }
+                self.dirty.insert(old);
+                self.structural.insert(old);
+            }
+        }
+        self.parents.insert(child, parent);
+        let list = self.children.entry(parent).or_default();
+        if !list.contains(&child) {
+            list.push(child);
+        }
+        self.dirty.insert(parent);
+        self.structural.insert(parent);
+    }
+
     /// Move focus. Always echoed in the next update.
     pub fn set_focus(&mut self, id: u64) {
         if self.focus == id {

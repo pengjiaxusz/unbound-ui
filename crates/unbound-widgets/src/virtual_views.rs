@@ -305,6 +305,7 @@ pub fn emit_virtual_row(
         hit: None,
         a11y: None,
         focusable: false,
+        ..Default::default()
     }
 }
 

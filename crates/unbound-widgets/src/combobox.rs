@@ -440,6 +440,7 @@ pub fn emit_combobox_trigger(
         hit,
         a11y: Some(a11y),
         focusable: !control.disabled,
+        ..Default::default()
     }
 }
 
@@ -511,6 +512,7 @@ pub fn emit_combobox_popup(
         hit: None,
         a11y: Some(a11y),
         focusable: false,
+        ..Default::default()
     }
 }
 

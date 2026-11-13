@@ -163,6 +163,7 @@ pub fn emit_badge(desc: &BadgeDesc, badge_glyphs: &[GlyphQuad]) -> WidgetOutput 
         hit: None,
         a11y: Some(A11yNode::new(Role::Label, desc.text.clone(), desc.rect)),
         focusable: false,
+        ..Default::default()
     }
 }
 
@@ -327,6 +328,7 @@ pub fn emit_chip(
         ),
         a11y: Some(a11y),
         focusable: !disabled,
+        ..Default::default()
     }
 }
 

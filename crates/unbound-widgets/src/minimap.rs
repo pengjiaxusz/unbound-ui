@@ -236,6 +236,7 @@ pub fn emit_minimap(
             ),
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         HitRegion::new(node, CONTROL_LAYER, u32::from(desc.z), desc.rect),
     )

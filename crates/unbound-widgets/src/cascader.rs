@@ -187,5 +187,6 @@ pub fn emit_cascader(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }

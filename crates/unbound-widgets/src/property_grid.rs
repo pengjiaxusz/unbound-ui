@@ -529,6 +529,7 @@ pub fn emit_property_grid(
         ),
         a11y: Some(a11y),
         focusable: !control.disabled,
+        ..Default::default()
     }
 }
 

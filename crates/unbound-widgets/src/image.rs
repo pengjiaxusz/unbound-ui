@@ -438,6 +438,7 @@ fn emit_image_inner(
         hit,
         a11y: Some(a11y),
         focusable: false,
+        ..Default::default()
     }
 }
 
@@ -589,6 +590,7 @@ pub fn emit_nine_patch(_node: u64, desc: &NinePatchDesc, state: ControlState) ->
         hit: None,
         a11y: Some(a11y),
         focusable: false,
+        ..Default::default()
     }
 }
 

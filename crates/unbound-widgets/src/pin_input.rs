@@ -172,5 +172,6 @@ pub fn emit_pin_input(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }

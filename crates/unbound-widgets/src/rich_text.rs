@@ -402,6 +402,7 @@ pub fn emit_rich_text(
         ),
         a11y: Some(a11y),
         focusable: !control.disabled,
+        ..Default::default()
     }
 }
 

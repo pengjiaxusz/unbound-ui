@@ -170,6 +170,7 @@ pub fn emit_masonry(node: u64, desc: &MasonryDesc, state: ControlState) -> Widge
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }
 

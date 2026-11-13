@@ -408,6 +408,7 @@ pub fn emit_toolbar_item(
                 hit: None,
                 a11y: Some(A11yNode::new(Role::Label, item.label.clone(), rect)),
                 focusable: false,
+                ..Default::default()
             }
         }
         ToolbarItemKind::Button | ToolbarItemKind::Toggle => {
@@ -455,6 +456,7 @@ pub fn emit_toolbar_item(
                 hit,
                 a11y: Some(a11y),
                 focusable: !disabled,
+                ..Default::default()
             }
         }
     }
@@ -517,6 +519,7 @@ pub fn emit_toolbar_overflow(
                 .disabled(disabled),
         ),
         focusable: !disabled,
+        ..Default::default()
     }
 }
 
@@ -679,6 +682,7 @@ pub fn emit_status_segment(
         hit: None,
         a11y: Some(A11yNode::new(Role::Label, segment.label.clone(), rect)),
         focusable: false,
+        ..Default::default()
     }
 }
 

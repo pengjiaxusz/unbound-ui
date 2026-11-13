@@ -202,6 +202,7 @@ pub fn emit_card(desc: &CardDesc, tokens: CardTokens) -> WidgetOutput {
         hit: None,
         a11y: None,
         focusable: false,
+        ..Default::default()
     }
 }
 
@@ -349,6 +350,7 @@ pub fn emit_stack(desc: &StackDesc, fill: Token) -> WidgetOutput {
         hit: None,
         a11y: None,
         focusable: false,
+        ..Default::default()
     }
 }
 

@@ -707,6 +707,7 @@ pub fn emit_form_label(
         hit: None,
         a11y: Some(a11y),
         focusable: false,
+        ..Default::default()
     }
 }
 
@@ -779,6 +780,7 @@ pub fn emit_form_message(
         hit: None,
         a11y: Some(a11y),
         focusable: false,
+        ..Default::default()
     }
 }
 

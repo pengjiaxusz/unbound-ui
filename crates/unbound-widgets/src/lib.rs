@@ -36,10 +36,13 @@ pub mod primitive;
 /// — adding a module here without wiring it into those matches is a compile
 /// error (`E0004`), not a silently uncovered component.
 macro_rules! define_widget_catalog {
-    ($( $variant:ident => $module:ident ),+ $(,)?) => {
+    (
+        modules: [ $( $module:ident ),+ $(,)? ],
+        catalog: [ $( $variant:ident => $cat_module:ident ),+ $(,)? ] $(,)?
+    ) => {
         $( pub mod $module; )+
 
-        /// One variant per business component module.
+        /// One variant per business component or sub-component surface.
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
         pub enum WidgetCatalogId {
             $( $variant, )+
@@ -54,7 +57,7 @@ macro_rules! define_widget_catalog {
             /// The source module that implements this component.
             #[must_use]
             pub const fn module_name(self) -> &'static str {
-                match self { $( Self::$variant => stringify!($module), )+ }
+                match self { $( Self::$variant => stringify!($cat_module), )+ }
             }
 
             /// The component at `index` in [`Self::ALL`].
@@ -67,86 +70,181 @@ macro_rules! define_widget_catalog {
 }
 
 define_widget_catalog! {
-    Accordion => accordion,
-    Alert => alert,
-    AlertDialog => alert_dialog,
-    AutoComplete => autocomplete,
-    Avatar => avatar,
-    Badge => badge,
-    Banner => banner,
-    Breadcrumb => breadcrumb,
-    Button => button,
-    CanvasToolbar => canvas_toolbar,
-    Carousel => carousel,
-    Cascader => cascader,
-    Chart => chart,
-    Checkbox => checkbox,
-    CodeBlock => code_block,
-    CodeEditor => code_editor,
-    Collapsible => collapsible,
-    ColorPicker => color_picker,
-    Combobox => combobox,
-    CommandPalette => command_palette,
-    Containers => containers,
-    ContextMenu => context_menu,
-    CurveEditor => curve_editor,
-    DataGrid => data_grid,
-    DatePicker => date_picker,
-    DateRangePicker => date_range_picker,
-    Divider => divider,
-    Dock => dock,
-    Drawer => drawer,
-    FileDrop => file_drop,
-    Form => form,
-    Gizmo => gizmo,
-    HotkeyInput => hotkey_input,
-    HoverCard => hover_card,
-    Image => image,
-    Masonry => masonry,
-    Menu => menu,
-    Menubar => menubar,
-    Minimap => minimap,
-    Modal => modal,
-    NavigationRail => navigation_rail,
-    NodeGraph => node_graph,
-    NotificationCenter => notification_center,
-    NumberInput => number_input,
-    Overlay => overlay,
-    Pagination => pagination,
-    PinInput => pin_input,
-    Popconfirm => popconfirm,
-    Popover => popover,
-    Progress => progress,
-    PropertyGrid => property_grid,
-    Radio => radio,
-    Rating => rating,
-    RichText => rich_text,
-    Ruler => ruler,
-    Scroll => scroll,
-    Segmented => segmented,
-    Select => select,
-    Skeleton => skeleton,
-    Slider => slider,
-    Spinner => spinner,
-    SplitPane => split_pane,
-    Stepper => stepper,
-    Switch => switch,
-    Table => table,
-    Tabs => tabs,
-    TagInput => tag_input,
-    TextArea => text_area,
-    TextInput => text_input,
-    TimePicker => time_picker,
-    Timeline => timeline,
-    TimelineTrack => timeline_track,
-    Toast => toast,
-    Toolbar => toolbar,
-    Tooltip => tooltip,
-    Tour => tour,
-    Transfer => transfer,
-    TreeView => tree_view,
-    VirtualViews => virtual_views,
-    Watermark => watermark,
+    modules: [
+        accordion,
+        alert,
+        alert_dialog,
+        autocomplete,
+        avatar,
+        badge,
+        banner,
+        breadcrumb,
+        button,
+        canvas_toolbar,
+        carousel,
+        cascader,
+        chart,
+        checkbox,
+        code_block,
+        code_editor,
+        collapsible,
+        color_picker,
+        combobox,
+        command_palette,
+        containers,
+        context_menu,
+        curve_editor,
+        data_grid,
+        date_picker,
+        date_range_picker,
+        divider,
+        dock,
+        drawer,
+        file_drop,
+        form,
+        gizmo,
+        hotkey_input,
+        hover_card,
+        image,
+        masonry,
+        menu,
+        menubar,
+        minimap,
+        modal,
+        navigation_rail,
+        node_graph,
+        notification_center,
+        number_input,
+        overlay,
+        pagination,
+        pin_input,
+        popconfirm,
+        popover,
+        progress,
+        property_grid,
+        radio,
+        rating,
+        rich_text,
+        ruler,
+        scroll,
+        segmented,
+        select,
+        skeleton,
+        slider,
+        spinner,
+        split_pane,
+        stepper,
+        switch,
+        table,
+        tabs,
+        tag_input,
+        text_area,
+        text_input,
+        time_picker,
+        timeline,
+        timeline_track,
+        toast,
+        toolbar,
+        tooltip,
+        tour,
+        transfer,
+        tree_view,
+        virtual_views,
+        watermark,
+    ],
+    catalog: [
+        Accordion => accordion,
+        Alert => alert,
+        AlertDialog => alert_dialog,
+        AspectRatioBox => masonry,
+        AutoComplete => autocomplete,
+        Avatar => avatar,
+        AvatarGroup => avatar,
+        Badge => badge,
+        Banner => banner,
+        Breadcrumb => breadcrumb,
+        Button => button,
+        CanvasToolbar => canvas_toolbar,
+        Carousel => carousel,
+        Cascader => cascader,
+        Chart => chart,
+        Checkbox => checkbox,
+        Chip => badge,
+        CodeBlock => code_block,
+        CodeEditor => code_editor,
+        Collapsible => collapsible,
+        ColorPicker => color_picker,
+        Combobox => combobox,
+        CommandPalette => command_palette,
+        Containers => containers,
+        ContextMenu => context_menu,
+        CurveEditor => curve_editor,
+        DataGrid => data_grid,
+        DatePicker => date_picker,
+        DateRangePicker => date_range_picker,
+        Divider => divider,
+        Dock => dock,
+        Drawer => drawer,
+        EmptyState => hover_card,
+        FileDrop => file_drop,
+        Form => form,
+        Gizmo => gizmo,
+        GradientEditor => curve_editor,
+        HotkeyInput => hotkey_input,
+        HoverCard => hover_card,
+        Icon => image,
+        Image => image,
+        LoadingOverlay => spinner,
+        Masonry => masonry,
+        Menu => menu,
+        Menubar => menubar,
+        Minimap => minimap,
+        Modal => modal,
+        NavigationRail => navigation_rail,
+        NinePatch => image,
+        NodeGraph => node_graph,
+        NotificationCenter => notification_center,
+        NumberInput => number_input,
+        Overlay => overlay,
+        Pagination => pagination,
+        PinInput => pin_input,
+        Popconfirm => popconfirm,
+        Popover => popover,
+        Progress => progress,
+        PropertyGrid => property_grid,
+        Radio => radio,
+        Rating => rating,
+        RichText => rich_text,
+        Ruler => ruler,
+        Scroll => scroll,
+        Segmented => segmented,
+        Select => select,
+        Skeleton => skeleton,
+        Slider => slider,
+        Spinner => spinner,
+        SplitPane => split_pane,
+        Stack => containers,
+        StatusBar => toolbar,
+        Stepper => stepper,
+        Switch => switch,
+        Table => table,
+        Tabs => tabs,
+        TagInput => tag_input,
+        TextArea => text_area,
+        TextInput => text_input,
+        TimePicker => time_picker,
+        Timeline => timeline,
+        TimelineTrack => timeline_track,
+        Toast => toast,
+        Toolbar => toolbar,
+        Tooltip => tooltip,
+        Tour => tour,
+        Transfer => transfer,
+        TreeView => tree_view,
+        VirtualViews => virtual_views,
+        Watermark => watermark,
+        Wrap => containers,
+    ],
 }
 
 /// Proof that a component was really emitted, not faked with a hand-drawn rect.
@@ -193,8 +291,10 @@ pub use alert_dialog::{
     AlertDialogOutput, AlertDialogState, AlertFocus, ConfirmTone, DIALOG_BUTTON_HEIGHT,
     DIALOG_FOOTER, DIALOG_ICON, DIALOG_PADDING, DIALOG_RADIUS,
 };
+pub use autocomplete::{emit_autocomplete, AutoCompleteDesc, AutoCompleteState};
 pub use avatar::{emit_avatar, emit_avatar_group, initials, AvatarDesc, AvatarGroupDesc, Presence};
 pub use badge::{emit_badge, emit_chip, BadgeDesc, BadgeVariant, ChipDesc};
+pub use banner::{emit_banner, BannerDesc};
 pub use breadcrumb::{
     emit_crumb, emit_crumb_ellipsis, emit_crumb_separator, BreadcrumbDesc, BreadcrumbState,
     BreadcrumbTokens, Crumb, CrumbSlot,
@@ -204,6 +304,8 @@ pub use canvas_toolbar::{
     emit_canvas_toolbar, CanvasTool, CanvasToolbarDesc, CanvasToolbarOutput, CanvasToolbarState,
     TOOLBAR_BLUR, TOOLBAR_HEIGHT, TOOL_BUTTON, TOOL_GAP, ZOOM_RANGE, ZOOM_WIDTH,
 };
+pub use carousel::{emit_carousel, CarouselDesc};
+pub use cascader::{emit_cascader, CascaderDesc, CascaderOption};
 pub use chart::{
     emit_chart, ChartDesc, ChartOutput, ChartSeries, ChartState, SeriesKind, CHART_INSET,
     CHART_STROKE, HOVER_RADIUS, TOOLTIP_SIZE,
@@ -213,6 +315,8 @@ pub use code_block::{
     emit_code_block, highlight_line, CodeBlockDesc, CodeBlockState, CodeSpan, SyntaxToken,
     CODE_GUTTER, CODE_LINE_HEIGHT, COPY_CONFIRM_SECONDS,
 };
+pub use code_editor::{emit_code_editor, CodeEditorDesc, CodeEditorState};
+pub use collapsible::{emit_collapsible, CollapsibleDesc, CollapsibleState};
 pub use color_picker::{
     emit_color_picker, parse_hex, parse_oklch, parse_rgba, ColorFormat, ColorPart, ColorPickerDesc,
     ColorPickerLayout, ColorPickerState, Hsva,
@@ -233,9 +337,13 @@ pub use curve_editor::{
     emit_curve_editor, emit_gradient_editor, CurveEditorDesc, CurveEditorState, CurveHandle,
     GradientEditorState, GradientStop,
 };
+pub use data_grid::{emit_data_grid, DataGridDesc, DataGridState};
 pub use date_picker::{
     days_in_month, emit_calendar, is_leap_year, CalendarCell, CalendarState, DatePickerDesc,
     NaiveDate, SelectionMode, YearMonth,
+};
+pub use date_range_picker::{
+    emit_date_range_picker, DateRange, DateRangePickerDesc, DateRangePickerState,
 };
 pub use divider::{emit_divider, DividerDesc, DividerOrientation, DividerTokens};
 pub use dock::{
@@ -256,15 +364,18 @@ pub use gizmo::{
     emit_gizmo, grip_rect_for, GizmoDesc, GizmoOutput, GRIP_SIZE, ROTATE_GRIP, ROTATE_OFFSET,
     SIZE_BUBBLE,
 };
+pub use hotkey_input::{emit_hotkey_input, HotkeyInputDesc, HotkeyInputState};
 pub use hover_card::{
     emit_empty_state, emit_hover_card, EmptyStateDesc, EmptyStateOutput, HoverCardDesc,
     HoverCardState, EMPTY_ACTION_SIZE, EMPTY_ICON, HOVER_CARD_DELAY_MS, HOVER_CARD_GRACE_MS,
     HOVER_CARD_RADIUS,
 };
 pub use image::{
-    emit_icon, emit_image, emit_image_with_assets, fit_image, IconDesc, ImageAssetResolver,
-    ImageDesc, ImageFit, ImageSource, ImageWidget, ObjectFit, ResolvedImage,
+    emit_icon, emit_image, emit_image_with_assets, emit_nine_patch, fit_image, IconDesc,
+    ImageAssetResolver, ImageDesc, ImageFit, ImageSource, ImageWidget, NinePatchDesc, ObjectFit,
+    ResolvedImage,
 };
+pub use masonry::{emit_masonry, AspectRatioBoxDesc, MasonryDesc, MasonryItem};
 pub use menu::{emit_menu, MenuDesc, MenuItem, MenuState, MenuWidget};
 pub use menubar::{
     emit_menubar, emit_menubar_item, reduce_menubar_key, MenuBarDesc, MenuBarItem, MenuBarKey,
@@ -272,10 +383,16 @@ pub use menubar::{
 };
 pub use minimap::{emit_minimap, MinimapDesc, MinimapItem, MinimapState, MINIMAP_INSET};
 pub use modal::{emit_modal, ModalDesc, ModalOutput, ModalWidget};
+pub use navigation_rail::{
+    emit_navigation_rail, NavRailItem, NavigationRailDesc, NavigationRailState,
+};
 pub use node_graph::{
     emit_node_graph, nearest_input, ActiveWire, GraphNodeDesc, GraphWire, NodeGraphOutput,
     NodeGraphState, PinHit, PinKind, PinSpec, NODE_HEADER, PIN_RADIUS, PIN_SNAP, PIN_SPACING,
     WIRE_WIDTH,
+};
+pub use notification_center::{
+    emit_notification_center, NotificationCenterDesc, NotificationCenterState, NotificationItem,
 };
 pub use number_input::{
     emit_number_input, evaluate_expression, format_number, number_text_rect, round_to,
@@ -285,6 +402,9 @@ pub use number_input::{
 pub use overlay::{
     place_anchored_popup, BackdropRequest, OverlayEntry, OverlayKind, OverlayStack, Placement,
 };
+pub use pagination::{emit_pagination, PaginationDesc, PaginationState};
+pub use pin_input::{emit_pin_input, PinInputDesc, PinInputState};
+pub use popconfirm::{emit_popconfirm, PopconfirmDesc};
 pub use popover::{emit_popover, PopoverDesc, PopoverOutput, PopoverWidget};
 pub use progress::{
     emit_progress, ProgressDesc, ProgressKind, ProgressState, ProgressTokens, PROGRESS_RATE,
@@ -294,7 +414,10 @@ pub use property_grid::{
     emit_property_grid, PropertyDesc, PropertyGridDesc, PropertyGridState, PropertyGridTokens,
     PropertyKind, PropertyRowLayout, PropertySection, PropertyValue,
 };
-pub use radio::{RadioDesc, RadioTokens};
+pub use radio::{
+    reduce_radio_group, RadioDesc, RadioGroupDesc, RadioGroupKey, RadioGroupOutcome, RadioTokens,
+};
+pub use rating::{emit_rating, RatingDesc, RatingState};
 pub use rich_text::{
     emit_rich_text, parse_markdown, BlockKind, RichBlock, RichDocument, RichTextDesc,
     HEADING_SCALE, RICH_TEXT_SIZE,
@@ -311,10 +434,12 @@ pub use segmented::{SegmentedDesc, SegmentedTokens};
 pub use select::{emit_select, SelectDesc, SelectState, SelectWidget};
 pub use skeleton::{emit_skeleton, SkeletonDesc, SkeletonState, SKELETON_PERIOD, SKELETON_SHIMMER};
 pub use slider::{SliderDesc, SliderTokens};
+pub use spinner::{emit_loading_overlay, emit_spinner, LoadingOverlayDesc, SpinnerDesc};
 pub use split_pane::{
     emit_split_pane, emit_split_pane_panes, reduce_split_key, SplitKey, SplitLayout, SplitPaneDesc,
     SplitPaneState, SplitPaneTokens, SplitSide,
 };
+pub use stepper::{emit_stepper, StepItem, StepStatus, StepperDesc, StepperOrientation};
 pub use switch::{SwitchDesc, SwitchTokens};
 pub use table::{
     emit_table, AlignX, ColumnSpec, RowWindow, SortDir, TableDesc, TableRow, TableState,
@@ -336,6 +461,9 @@ pub use text_input::{
     emit_text_input, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
     TextInputOutcome, TextInputVisual, TextInputWidget,
 };
+pub use time_picker::{emit_time_picker, TimePickerDesc, TimePickerState, TimeValue};
+pub use timeline::{emit_timeline, TimelineDesc, TimelineItem};
+pub use timeline_track::{emit_timeline_track, Keyframe, TimelineTrackDesc, TimelineTrackState};
 pub use toast::{
     emit_toast, ToastEntry, ToastLayout, ToastOutput, ToastSpring, ToastStack, ToastTick,
     TOAST_ACTION_SIZE, TOAST_CLOSE_SIZE, TOAST_DURATION_MS, TOAST_RADIUS, TOAST_SLIDE_IN,
@@ -346,10 +474,13 @@ pub use toolbar::{
     ToolbarLayout, ToolbarState, ToolbarTokens,
 };
 pub use tooltip::{emit_tooltip, TooltipDesc, TooltipState, TooltipWidget};
+pub use tour::{emit_tour, TourDesc, TourState, TourStep};
+pub use transfer::{emit_transfer, TransferDesc, TransferItem, TransferState};
 pub use tree_view::{
     emit_tree_background, emit_tree_row, TreeViewDesc, TreeViewRow, TreeViewState, TreeViewTokens,
 };
 pub use virtual_views::{emit_virtual_row, VariableVirtualList, VariableWindow, VirtualRowTokens};
+pub use watermark::{emit_watermark, WatermarkDesc};
 
 /// The default viewport a headless widget session renders into.
 pub const DEFAULT_VIEWPORT: (f32, f32) = (1280.0, 720.0);
@@ -431,10 +562,35 @@ pub struct WidgetOutput {
     pub payloads: Vec<GpuPayload>,
     /// The pickable surface, if the widget accepts input.
     pub hit: Option<HitRegion>,
+    /// Multi-part sub-hit regions (e.g. confirm/cancel buttons, close button, page items).
+    pub sub_hits: smallvec::SmallVec<[HitRegion; 4]>,
     /// The semantic node, if the widget is reachable.
     pub a11y: Option<A11yNode>,
+    /// Multi-part sub-semantic nodes `(child_key, A11yNode)`.
+    pub sub_a11y: smallvec::SmallVec<[(u64, A11yNode); 4]>,
     /// Whether the widget takes part in the keyboard tab order.
     pub focusable: bool,
+    /// Inner focus order for multi-part widgets.
+    pub sub_focus_order: smallvec::SmallVec<[u64; 4]>,
+}
+
+impl WidgetOutput {
+    /// Register a sub-control (e.g. an inline confirm button or close button) with its own key,
+    /// hit region, accessibility node, and keyboard focusability.
+    pub fn with_sub_control(
+        &mut self,
+        sub_key: u64,
+        hit: HitRegion,
+        a11y: A11yNode,
+        focusable: bool,
+    ) -> &mut Self {
+        self.sub_hits.push(hit);
+        self.sub_a11y.push((sub_key, a11y));
+        if focusable {
+            self.sub_focus_order.push(sub_key);
+        }
+        self
+    }
 }
 
 /// Collects the output of many widgets into one frame.
@@ -636,6 +792,9 @@ impl SceneCollector {
         if let Some(hit) = output.hit.as_mut() {
             self.scope_hit(hit);
         }
+        for sub_hit in &mut output.sub_hits {
+            self.scope_hit(sub_hit);
+        }
 
         let start = u32::try_from(self.primitives.len()).unwrap_or(u32::MAX);
         self.primitives.extend(output.primitives);
@@ -645,11 +804,25 @@ impl SceneCollector {
         if let Some(hit) = output.hit {
             self.regions.push(hit);
         }
+        self.regions.extend(output.sub_hits);
         if let Some(node) = output.a11y {
             self.semantics.upsert(key, node);
         }
+        for (sub_key, mut sub_node) in output.sub_a11y {
+            if let Some((_, offset)) = active_transform {
+                sub_node.bounds = sub_node.bounds.translate(offset);
+            }
+            if let Some((_, clip_rect)) = self.clip_stack.last().copied() {
+                sub_node.bounds = sub_node.bounds.intersect(&clip_rect);
+            }
+            self.semantics.upsert(sub_key, sub_node);
+            self.semantics.reparent(sub_key, key);
+        }
         if output.focusable {
             self.focus_order.push(key);
+        }
+        for sub_focus in output.sub_focus_order {
+            self.focus_order.push(sub_focus);
         }
     }
 

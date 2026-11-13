@@ -312,6 +312,7 @@ pub fn emit_canvas_toolbar(
             hit: None,
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         tools,
         zoom: HitRegion::new(node ^ 1, CONTROL_LAYER, u32::from(desc.z), desc.zoom_rect())

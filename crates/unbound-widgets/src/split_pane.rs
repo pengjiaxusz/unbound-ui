@@ -486,6 +486,7 @@ pub fn emit_split_pane(
         hit,
         a11y: Some(a11y),
         focusable: !disabled,
+        ..Default::default()
     }
 }
 
@@ -553,6 +554,7 @@ pub fn emit_split_pane_panes(
         hit: None,
         a11y: None,
         focusable: false,
+        ..Default::default()
     }
 }
 

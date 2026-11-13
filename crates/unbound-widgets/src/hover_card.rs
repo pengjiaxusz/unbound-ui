@@ -228,6 +228,7 @@ pub fn emit_hover_card(
             ),
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         OverlayEntry::popover(node, anchor_node, rect),
     )
@@ -417,6 +418,7 @@ pub fn emit_empty_state(
             hit: None,
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         action: action.map(|action| {
             HitRegion::new(node, PORTAL_LAYER, u32::from(desc.z), action)

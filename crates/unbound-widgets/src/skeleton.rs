@@ -132,6 +132,7 @@ pub fn emit_skeleton(desc: &SkeletonDesc, state: &SkeletonState) -> WidgetOutput
         // Decorative: the surrounding live region owns the announcement.
         a11y: None,
         focusable: false,
+        ..Default::default()
     }
 }
 

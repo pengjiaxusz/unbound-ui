@@ -373,6 +373,7 @@ pub fn emit_tooltip(
             hit: None,
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         OverlayEntry::tooltip(node, anchor_node, rect),
     )

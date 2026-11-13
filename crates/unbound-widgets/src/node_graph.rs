@@ -452,6 +452,7 @@ pub fn emit_node_graph(
             hit: None,
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         pins,
         nodes: hits,

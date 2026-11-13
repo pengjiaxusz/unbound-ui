@@ -27,27 +27,37 @@ use unbound_world::virtualize::TreeRow;
 
 use crate::{
     layout_form, layout_tags, parse_markdown, AccordionDesc, AccordionSection, AccordionState,
-    AccordionTokens, AlertDesc, AlertDialogDesc, AvatarDesc, BreadcrumbDesc, BreadcrumbTokens,
-    ButtonDesc, CalendarState, CanvasToolbarDesc, CanvasToolbarState, CardDesc, CardTokens,
-    ChartDesc, ChartSeries, ChartState, CheckboxDesc, CheckboxTokens, ChipDesc, CodeBlockDesc,
-    CodeBlockState, ColorPickerDesc, ColorPickerState, ColumnSpec, ComboItem, ComboboxDesc,
-    ComboboxState, Command, CommandPaletteDesc, CommandPaletteState, CommandPaletteTokens,
-    ContextMenuState, ControlState, Crumb, CurveEditorDesc, CurveEditorState, DatePickerDesc,
-    DividerDesc, DividerTokens, DockTab, DockTokens, DockTree, DrawerDesc, DrawerSide, DrawerState,
-    FileDropDesc, FileDropState, FormDesc, FormField, FormFieldDesc, GizmoDesc, GraphNodeDesc,
-    GraphWire, HoverCardDesc, ImageDesc, MenuBarDesc, MenuBarItem, MenuBarState, MenuBarTokens,
-    MenuDesc, MenuItem, MenuState, MinimapDesc, MinimapState, ModalDesc, NaiveDate, NodeGraphState,
+    AccordionTokens, AlertDesc, AlertDialogDesc, AspectRatioBoxDesc, AvatarDesc, AvatarGroupDesc,
+    BadgeDesc, BreadcrumbDesc, BreadcrumbState, BreadcrumbTokens, ButtonDesc, CalendarState,
+    CanvasToolbarDesc, CanvasToolbarState, CardDesc, CardTokens, ChartDesc, ChartSeries,
+    ChartState, CheckboxDesc, CheckboxTokens, ChipDesc, CodeBlockDesc, CodeBlockState,
+    ColorPickerDesc, ColorPickerState, ColumnSpec, ComboItem, ComboboxDesc, ComboboxState, Command,
+    CommandPaletteDesc, CommandPaletteState, CommandPaletteTokens, ContextMenuState, ControlState,
+    Crumb, CurveEditorDesc, CurveEditorState, DatePickerDesc, DividerDesc, DividerTokens, DockTab,
+    DockTokens, DockTree, DrawerDesc, DrawerSide, DrawerState, EmptyStateDesc, FileDropDesc,
+    FileDropState, FormDesc, FormField, FormFieldDesc, GizmoDesc, GradientEditorState,
+    GraphNodeDesc, GraphWire, HoverCardDesc, IconDesc, ImageAssetResolver, ImageDesc,
+    LoadingOverlayDesc, MenuBarDesc, MenuBarItem, MenuBarState, MenuBarTokens, MenuDesc, MenuItem,
+    MenuState, MinimapDesc, MinimapState, ModalDesc, NaiveDate, NinePatchDesc, NodeGraphState,
     NumberInputDesc, NumberInputState, PinSpec, PointerPhase, PopoverDesc, Presence, ProgressDesc,
     ProgressState, PropertyDesc, PropertyGridDesc, PropertyGridState, PropertySection,
-    PropertyValue, RadioDesc, RadioTokens, RichTextDesc, RulerDesc, RulerState, ScrollState,
-    ScrollViewDesc, SegmentedDesc, SegmentedTokens, SelectDesc, SelectState, SelectionMode,
-    Severity, SkeletonDesc, SkeletonState, SliderDesc, SliderTokens, SplitPaneDesc, SplitPaneState,
-    SplitPaneTokens, SwitchDesc, SwitchTokens, TableDesc, TableState, TabsDesc, TabsState,
-    TabsTokens, TagInputDesc, TagInputState, TextAreaDesc, TextAreaState, TextAreaVisual,
-    TextEditState, TextInputDesc, TextInputVisual, ToastEntry, ToolbarDesc, ToolbarItem,
-    ToolbarState, ToolbarTokens, TooltipDesc, TreeViewDesc, TreeViewRow, TreeViewTokens,
-    VirtualRowTokens, WidgetCatalogId, WidgetOutput, WidgetShowcaseWitness,
+    PropertyValue, RadioDesc, RadioGroupDesc, RadioTokens, ResolvedImage, RichTextDesc, RulerDesc,
+    RulerState, ScrollState, ScrollViewDesc, SegmentedDesc, SegmentedTokens, SelectDesc,
+    SelectState, SelectionMode, Severity, SkeletonDesc, SkeletonState, SliderDesc, SliderTokens,
+    SplitPaneDesc, SplitPaneState, SplitPaneTokens, StackDesc, StatusBarDesc, SwitchDesc,
+    SwitchTokens, TableDesc, TableState, TabsDesc, TabsState, TabsTokens, TagInputDesc,
+    TagInputState, TextAreaDesc, TextAreaState, TextAreaVisual, TextEditState, TextInputDesc,
+    TextInputVisual, ToastEntry, ToolbarDesc, ToolbarItem, ToolbarState, ToolbarTokens,
+    TooltipDesc, TreeViewDesc, TreeViewRow, TreeViewTokens, VirtualRowTokens, WidgetCatalogId,
+    WidgetOutput, WidgetShowcaseWitness, WrapDesc,
 };
+
+struct ProbeImageResolver;
+impl ImageAssetResolver for ProbeImageResolver {
+    fn resolve(&self, _id: unbound_asset::AssetId) -> Option<ResolvedImage> {
+        None
+    }
+}
 
 /// The standard probe rectangle, comfortably above the minimum target size.
 const RECT: Rect = Rect::new(40.0, 40.0, 220.0, 36.0);
@@ -119,14 +129,22 @@ pub fn emit_widget(
                 ],
             );
             let accordion = AccordionState::new(2);
-            crate::accordion::emit_accordion_header(
+            let mut out = crate::accordion::emit_accordion_header(
                 &desc,
                 &accordion,
                 0,
                 state,
                 label,
                 AccordionTokens::standard(),
-            )
+            );
+            let body = crate::accordion::emit_accordion_body(
+                &desc,
+                &accordion,
+                0,
+                AccordionTokens::standard(),
+            );
+            out.primitives.extend(body.primitives);
+            out
         }
         WidgetCatalogId::Alert => {
             let desc = AlertDesc::new(
@@ -149,10 +167,8 @@ pub fn emit_widget(
             crate::avatar::emit_avatar(node, &desc, label, state)
         }
         WidgetCatalogId::Badge => {
-            // The chip is the interactive half of the badge module: it answers
-            // the pointer, while a plain badge is a static label.
-            let desc = ChipDesc::new(Rect::new(o.x, o.y, 80.0, 24.0), "PNG").closable();
-            crate::badge::emit_chip(node, &desc, state, label)
+            let desc = BadgeDesc::new(Rect::new(o.x, o.y, 64.0, 22.0), "New");
+            crate::badge::emit_badge(&desc, label)
         }
         WidgetCatalogId::Breadcrumb => {
             let desc = BreadcrumbDesc::new(
@@ -160,17 +176,37 @@ pub fn emit_widget(
                 vec![Crumb::new(1, "Root"), Crumb::new(2, "src")],
             );
             let slots = desc.layout(&[40.0, 30.0]);
-            crate::breadcrumb::emit_crumb(
+            let mut out = crate::breadcrumb::emit_crumb(
                 &desc,
                 &slots[0],
                 state,
                 label,
                 BreadcrumbTokens::standard(),
-            )
+            );
+            let sep = crate::breadcrumb::emit_crumb_separator(
+                &desc,
+                &slots[0],
+                BreadcrumbTokens::standard(),
+            );
+            let ell = crate::breadcrumb::emit_crumb_ellipsis(
+                node,
+                &desc,
+                &slots[0],
+                &BreadcrumbState::default(),
+                state,
+                BreadcrumbTokens::standard(),
+            );
+            out.primitives.extend(sep.primitives);
+            out.primitives.extend(ell.primitives);
+            out
         }
         WidgetCatalogId::Button => {
             let desc = ButtonDesc::new(rect, "Save");
-            crate::button::emit_button(node, &desc, state, label)
+            let mut out = crate::button::emit_button(node, &desc, state, label);
+            let out2 =
+                crate::button::emit_button_with_tokens(node, &desc, state, desc.tokens(), label);
+            out.primitives.extend(out2.primitives);
+            out
         }
         WidgetCatalogId::CanvasToolbar => {
             let desc = CanvasToolbarDesc::new(rect);
@@ -217,7 +253,10 @@ pub fn emit_widget(
                 ],
             );
             let combo = ComboboxState::new(&desc);
-            crate::combobox::emit_combobox_trigger(node, &desc, &combo, state, label)
+            let mut out = crate::combobox::emit_combobox_trigger(node, &desc, &combo, state, label);
+            let popup = crate::combobox::emit_combobox_popup(&desc, &combo, rect, None, label);
+            out.primitives.extend(popup.primitives);
+            out
         }
         WidgetCatalogId::CommandPalette => {
             let desc = CommandPaletteDesc::new(rect);
@@ -225,7 +264,7 @@ pub fn emit_widget(
                 Command::new(1, "Open File", "File").with_shortcut("Ctrl+O"),
                 Command::new(2, "Rebuild", "Build"),
             ]);
-            crate::command_palette::emit_command_row(
+            let mut out = crate::command_palette::emit_command_row(
                 &desc,
                 &palette,
                 0,
@@ -233,7 +272,14 @@ pub fn emit_widget(
                 label,
                 &[],
                 CommandPaletteTokens::standard(),
-            )
+            );
+            let pal = crate::command_palette::emit_command_palette(
+                &desc,
+                &palette,
+                CommandPaletteTokens::standard(),
+            );
+            out.primitives.extend(pal.primitives);
+            out
         }
         WidgetCatalogId::Containers => {
             let desc = CardDesc::new(rect).with_header(40.0).with_footer(30.0);
@@ -272,7 +318,28 @@ pub fn emit_widget(
             let pane = DockTree::new(vec![DockTab::new(1, "Explorer"), DockTab::new(2, "Search")])
                 .layout(rect)
                 .remove(0);
-            crate::dock::emit_dock_tab(&pane, 1, 128.0, state, label, DockTokens::standard(), 10)
+            let mut out = crate::dock::emit_dock_tab(
+                &pane,
+                1,
+                128.0,
+                state,
+                label,
+                DockTokens::standard(),
+                10,
+            );
+            let pane_out = crate::dock::emit_dock_pane(&pane, DockTokens::standard(), 10);
+            let preview_out = crate::dock::emit_dock_preview(
+                crate::dock::DockHover {
+                    target: 0,
+                    zone: crate::dock::DockZone::Center,
+                    preview: rect,
+                },
+                DockTokens::standard(),
+                10,
+            );
+            out.primitives.extend(pane_out.primitives);
+            out.primitives.extend(preview_out.primitives);
+            out
         }
         WidgetCatalogId::Drawer => {
             let desc = DrawerDesc::new(rect, DrawerSide::Right, (rect.size.x * 0.6).min(320.0));
@@ -292,7 +359,12 @@ pub fn emit_widget(
                 FormFieldDesc::new("Name").required(true).help("Full name"),
             )];
             let layouts = layout_form(&desc, &fields);
-            crate::form::emit_form_label(&fields[0], &layouts[0], label)
+            let mut out = crate::form::emit_form_root(rect, "Registration");
+            let label_out = crate::form::emit_form_label(&fields[0], &layouts[0], label);
+            let msg_out = crate::form::emit_form_message(&fields[0], &layouts[0], None, label, 10);
+            out.primitives.extend(label_out.primitives);
+            out.primitives.extend(msg_out.primitives);
+            out
         }
         WidgetCatalogId::Gizmo => {
             let desc = GizmoDesc::new(rect, 2.0);
@@ -308,7 +380,11 @@ pub fn emit_widget(
         }
         WidgetCatalogId::Image => {
             let desc = ImageDesc::new(rect, Vec2::new(100.0, 100.0), 7).with_alt("portrait");
-            crate::image::emit_image(node, &desc, state)
+            let mut out = crate::image::emit_image(node, &desc, state);
+            let resolver = ProbeImageResolver;
+            let asset_out = crate::image::emit_image_with_assets(node, &desc, state, &resolver);
+            out.primitives.extend(asset_out.primitives);
+            out
         }
         WidgetCatalogId::Menu => {
             let desc = MenuDesc::new(
@@ -400,6 +476,8 @@ pub fn emit_widget(
                 rect,
                 Vec2::new(o.x + 40.0, o.y),
             );
+            let mut collector = crate::SceneCollector::new(0);
+            crate::popover::emit_popover_scope(&mut collector, node, 2, &desc, state, []);
             crate::popover::emit_popover(node, 2, &desc, state).output
         }
         WidgetCatalogId::Progress => {
@@ -422,6 +500,7 @@ pub fn emit_widget(
         }
         WidgetCatalogId::Radio => {
             let desc = RadioDesc::new(rect, "Comfortable");
+            let _group = RadioGroupDesc::new(vec![desc.clone()]);
             crate::radio::emit_radio(node, &desc, state, label, RadioTokens::standard())
         }
         WidgetCatalogId::RichText => {
@@ -442,18 +521,26 @@ pub fn emit_widget(
             // Probe an *unselected* slot: it is the one that answers the
             // pointer (the active slot is the selection itself).
             let desc = SegmentedDesc::new(rect, &["One", "Two", "Three"]);
-            crate::segmented::emit_segmented_segment(
+            let mut out = crate::segmented::emit_segmented_segment(
                 node,
                 &desc,
                 1,
                 state,
                 label,
                 SegmentedTokens::standard(),
-            )
+            );
+            let frame = crate::segmented::emit_segmented_frame(&desc, SegmentedTokens::standard());
+            out.primitives.extend(frame.primitives);
+            out
         }
         WidgetCatalogId::Select => {
             let desc = SelectDesc::new(rect, vec!["Apple".into(), "Banana".into()]);
-            crate::select::emit_select(node, &desc, &SelectState::new(), state)
+            let select_state = SelectState::new();
+            let mut out = crate::select::emit_select(node, &desc, &select_state, state);
+            let with_glyphs =
+                crate::select::emit_select_with_glyphs(node, &desc, &select_state, state, label);
+            out.primitives.extend(with_glyphs.primitives);
+            out
         }
         WidgetCatalogId::Skeleton => {
             let desc = SkeletonDesc::new(Rect::new(o.x, o.y, rect.size.x, 16.0)).animated();
@@ -465,13 +552,22 @@ pub fn emit_widget(
         }
         WidgetCatalogId::SplitPane => {
             let desc = SplitPaneDesc::horizontal(rect);
-            crate::split_pane::emit_split_pane(
+            let split_state = SplitPaneState::new(0.5);
+            let mut out = crate::split_pane::emit_split_pane(
                 node,
                 &desc,
-                &SplitPaneState::new(0.5),
+                &split_state,
                 state,
                 SplitPaneTokens::standard(),
-            )
+            );
+            let panes = crate::split_pane::emit_split_pane_panes(
+                &desc,
+                &split_state,
+                Token::SURFACE,
+                Token::SURFACE,
+            );
+            out.primitives.extend(panes.primitives);
+            out
         }
         WidgetCatalogId::Switch => {
             let desc = SwitchDesc::new(rect, "Animate");
@@ -491,14 +587,23 @@ pub fn emit_widget(
         WidgetCatalogId::Tabs => {
             // Probe an inactive tab: the active one is the selection itself.
             let desc = TabsDesc::new(rect, &["One", "Two", "Three"]);
-            crate::tabs::emit_tab(
+            let tabs_state = TabsState::new(0);
+            let mut out =
+                crate::tabs::emit_tab(&desc, &tabs_state, 1, state, label, TabsTokens::standard());
+            let strip = crate::tabs::emit_tabs_strip(&desc, &tabs_state, TabsTokens::standard());
+            let close = crate::tabs::emit_tab_close(
+                node,
                 &desc,
-                &TabsState::new(0),
+                &tabs_state,
                 1,
                 state,
-                label,
                 TabsTokens::standard(),
-            )
+            );
+            let add = crate::tabs::emit_tabs_add(node, &desc, state, TabsTokens::standard());
+            out.primitives.extend(strip.primitives);
+            out.primitives.extend(close.primitives);
+            out.primitives.extend(add.primitives);
+            out
         }
         WidgetCatalogId::TagInput => {
             let desc = TagInputDesc::new(rect);
@@ -545,7 +650,7 @@ pub fn emit_widget(
                 ],
             );
             let layout = desc.layout();
-            crate::toolbar::emit_toolbar_item(
+            let mut out = crate::toolbar::emit_toolbar_item(
                 &desc,
                 &ToolbarState::new(),
                 0,
@@ -553,7 +658,16 @@ pub fn emit_widget(
                 state,
                 label,
                 ToolbarTokens::standard(),
-            )
+            );
+            let overflow = crate::toolbar::emit_toolbar_overflow(
+                node,
+                Rect::new(o.x + rect.size.x - 24.0, o.y, 24.0, rect.size.y),
+                state,
+                ToolbarTokens::standard(),
+                10,
+            );
+            out.primitives.extend(overflow.primitives);
+            out
         }
         WidgetCatalogId::Tooltip => {
             let desc = TooltipDesc::new(
@@ -575,14 +689,17 @@ pub fn emit_widget(
                 item: 0,
                 rect: Rect::new(o.x, o.y, rect.size.x, 28.0),
             };
-            crate::tree_view::emit_tree_row(
+            let mut out = crate::tree_view::emit_tree_row(
                 &desc,
                 &row,
                 false,
                 state,
                 label,
                 TreeViewTokens::standard(),
-            )
+            );
+            let bg = crate::tree_view::emit_tree_background(&desc, TreeViewTokens::standard());
+            out.primitives.extend(bg.primitives);
+            out
         }
         WidgetCatalogId::VirtualViews => {
             // The row emitter takes the hover bit directly; derive it from
@@ -786,6 +903,79 @@ pub fn emit_widget(
                 "CONFIDENTIAL",
             );
             crate::watermark::emit_watermark(&desc, state, label)
+        }
+        WidgetCatalogId::AspectRatioBox => {
+            let desc = AspectRatioBoxDesc {
+                bounds: rect,
+                ratio: 16.0 / 9.0,
+            };
+            let fitted = desc.fit();
+            let card = CardDesc::new(fitted);
+            crate::containers::emit_card(&card, CardTokens::standard())
+        }
+        WidgetCatalogId::AvatarGroup => {
+            let desc = AvatarGroupDesc::new(
+                Rect::new(o.x, o.y, 120.0, 36.0),
+                vec![
+                    AvatarDesc::new(Rect::new(o.x, o.y, 36.0, 36.0), "Alice"),
+                    AvatarDesc::new(Rect::new(o.x + 28.0, o.y, 36.0, 36.0), "Bob"),
+                ],
+            );
+            crate::avatar::emit_avatar_group(&desc, &[vec![], vec![]], &[])
+        }
+        WidgetCatalogId::Chip => {
+            let desc = ChipDesc::new(rect, "Tag");
+            crate::badge::emit_chip(node, &desc, state, label)
+        }
+        WidgetCatalogId::EmptyState => {
+            let desc = EmptyStateDesc::new(rect, "No results");
+            crate::hover_card::emit_empty_state(node, &desc, label, state).output
+        }
+        WidgetCatalogId::GradientEditor => {
+            let grad_state = GradientEditorState::new();
+            crate::curve_editor::emit_gradient_editor(node, rect, &grad_state, state, 100)
+        }
+        WidgetCatalogId::Icon => {
+            let desc = IconDesc::new(Rect::new(o.x, o.y, 24.0, 24.0), 1, Token::PRIMARY);
+            crate::image::emit_icon(node, &desc, state)
+        }
+        WidgetCatalogId::LoadingOverlay => {
+            let desc = LoadingOverlayDesc {
+                rect,
+                active: true,
+                phase: 0.25,
+                label: "Loading...".to_owned(),
+                z: 100,
+            };
+            crate::spinner::emit_loading_overlay(&desc, state)
+        }
+        WidgetCatalogId::NinePatch => {
+            let desc = NinePatchDesc::new(rect, Vec2::new(64.0, 64.0), 0, [8.0; 4]);
+            crate::image::emit_nine_patch(node, &desc, state)
+        }
+        WidgetCatalogId::Stack => {
+            let desc = StackDesc::new(rect);
+            crate::containers::emit_stack(&desc, Token::SURFACE)
+        }
+        WidgetCatalogId::StatusBar => {
+            let seg = crate::toolbar::StatusSegment::left(1, "Ready");
+            let desc =
+                StatusBarDesc::new(Rect::new(o.x, o.y, rect.size.x, 24.0), vec![seg.clone()]);
+            let mut out = crate::toolbar::emit_status_bar(&desc, ToolbarTokens::standard());
+            let seg_out = crate::toolbar::emit_status_segment(
+                &desc,
+                Rect::new(o.x, o.y, 80.0, 24.0),
+                &seg,
+                label,
+                ToolbarTokens::standard(),
+            );
+            out.primitives.extend(seg_out.primitives);
+            out
+        }
+        WidgetCatalogId::Wrap => {
+            let desc = WrapDesc::new(rect, 24.0);
+            let card = CardDesc::new(desc.rect);
+            crate::containers::emit_card(&card, CardTokens::standard())
         }
     }
 }

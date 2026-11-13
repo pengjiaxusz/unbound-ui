@@ -270,6 +270,7 @@ pub fn emit_alert(
         hit,
         a11y: Some(a11y),
         focusable: desc.dismissible && !control.disabled,
+        ..Default::default()
     }
 }
 

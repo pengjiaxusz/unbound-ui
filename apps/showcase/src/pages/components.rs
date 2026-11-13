@@ -23,7 +23,7 @@ use crate::canvas::{AlignX, AlignY};
 pub const COMPONENTS_INFO: PageInfo = PageInfo {
     title: "Component gallery",
     short: "Components",
-    description: "All 80 standard components, each painted by its genuine unbound-widgets emitter with a real hit region and semantic node.",
+    description: "All 91 standard components, each painted by its genuine unbound-widgets emitter with a real hit region and semantic node.",
     crates: &["unbound-widgets"],
     docs: "docs/05-agent/layering.md",
     keywords: "component gallery catalog emitter coverage widget showcase every control",
@@ -158,6 +158,17 @@ define_showcase_components! {
     TimelineTrack => "Timeline track", "Multi-track keyframe dope sheet with playhead scrubber.", 260.0,
     Tour => "Tour", "Spotlight walkthrough overlay with target cutout and bubble.", 260.0,
     Watermark => "Watermark", "Non-interactive tiled security watermark overlay.", 240.0,
+    AspectRatioBox => "Aspect ratio box", "Maintains fixed width/height proportions.", 260.0,
+    AvatarGroup => "Avatar group", "Overlapping avatars with overflow counter.", 240.0,
+    Chip => "Chip", "Interactive filter chip with close affordance.", 240.0,
+    EmptyState => "Empty state", "Centred empty placeholder with action button.", 280.0,
+    GradientEditor => "Gradient editor", "Colour ramp editor with draggable colour stops.", 300.0,
+    Icon => "Icon", "Sized vector icon with rounded corners.", 220.0,
+    LoadingOverlay => "Loading overlay", "Full-card scrim with centred spinning loader.", 260.0,
+    NinePatch => "Nine-patch", "Nine-slice scaling image with fixed border corners.", 260.0,
+    Stack => "Stack", "Layered container stacking children in z-order.", 260.0,
+    StatusBar => "Status bar", "Desktop status strip with aligned segments.", 220.0,
+    Wrap => "Wrap layout", "Flow layout wrapping items into lines.", 260.0,
 }
 
 /// Whether `examples` mounts a card for `id` (const-comparable).

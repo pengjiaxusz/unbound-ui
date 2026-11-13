@@ -279,6 +279,7 @@ pub fn emit_checkbox(
         hit,
         a11y: Some(a11y),
         focusable: !disabled,
+        ..Default::default()
     }
 }
 

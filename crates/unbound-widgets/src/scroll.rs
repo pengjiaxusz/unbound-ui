@@ -706,6 +706,7 @@ pub fn emit_scroll_view(
             hit,
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         clip,
         transform,

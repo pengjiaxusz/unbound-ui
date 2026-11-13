@@ -470,6 +470,7 @@ pub fn emit_curve_editor(
         hit,
         a11y: Some(a11y),
         focusable: !control.disabled,
+        ..Default::default()
     }
 }
 
@@ -555,6 +556,7 @@ pub fn emit_gradient_editor(
         hit,
         a11y: Some(a11y),
         focusable: !control.disabled,
+        ..Default::default()
     }
 }
 

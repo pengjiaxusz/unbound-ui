@@ -24,6 +24,7 @@ unbound-vector.workspace = true
 accesskit.workspace = true
 rustc-hash.workspace = true
 slotmap.workspace = true
+smallvec.workspace = true
 
 [lints]
 workspace = true

@@ -552,6 +552,7 @@ pub fn emit_menu(
             hit,
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         OverlayEntry::menu(node, anchor_node, rect),
     )

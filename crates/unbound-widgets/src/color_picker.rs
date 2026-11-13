@@ -631,6 +631,7 @@ pub fn emit_color_picker(
         hit,
         a11y: Some(a11y),
         focusable: !control.disabled,
+        ..Default::default()
     }
 }
 

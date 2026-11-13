@@ -89,5 +89,6 @@ pub fn emit_watermark(
         hit: None,
         a11y: Some(a11y),
         focusable: false,
+        ..Default::default()
     }
 }

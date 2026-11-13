@@ -199,5 +199,6 @@ pub fn emit_date_range_picker(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }

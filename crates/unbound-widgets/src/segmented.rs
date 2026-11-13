@@ -260,6 +260,7 @@ pub fn emit_segmented_frame(desc: &SegmentedDesc, tokens: SegmentedTokens) -> Wi
         hit: None,
         a11y: None,
         focusable: false,
+        ..Default::default()
     }
 }
 
@@ -341,6 +342,7 @@ pub fn emit_segmented_segment(
         hit,
         a11y: Some(a11y),
         focusable: !disabled,
+        ..Default::default()
     }
 }
 

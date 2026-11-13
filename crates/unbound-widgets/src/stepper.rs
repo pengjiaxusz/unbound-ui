@@ -241,5 +241,6 @@ pub fn emit_stepper(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }

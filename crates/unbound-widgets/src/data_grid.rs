@@ -168,5 +168,6 @@ pub fn emit_data_grid(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }

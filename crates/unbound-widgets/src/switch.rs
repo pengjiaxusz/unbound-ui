@@ -264,6 +264,7 @@ pub fn emit_switch(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }
 

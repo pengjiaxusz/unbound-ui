@@ -275,6 +275,7 @@ pub fn emit_menubar(desc: &MenuBarDesc, tokens: MenuBarTokens) -> WidgetOutput {
         hit: None,
         a11y: None,
         focusable: false,
+        ..Default::default()
     }
 }
 
@@ -338,6 +339,7 @@ pub fn emit_menubar_item(
         hit,
         a11y: Some(a11y),
         focusable: !disabled,
+        ..Default::default()
     }
 }
 

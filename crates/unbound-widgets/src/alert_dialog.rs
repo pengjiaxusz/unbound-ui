@@ -435,6 +435,7 @@ pub fn emit_alert_dialog(
             hit: Some(card_hit),
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         scrim,
         actions,

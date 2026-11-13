@@ -159,5 +159,6 @@ pub fn emit_tour(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }

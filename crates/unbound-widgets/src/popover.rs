@@ -176,6 +176,7 @@ pub fn emit_popover(
             hit,
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         entry: OverlayEntry::popover(node, anchor_node, rect),
         backdrop: crate::overlay::BackdropRequest::new(node, rect, desc.backdrop_blur),

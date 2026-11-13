@@ -589,6 +589,7 @@ pub fn emit_number_input(
         hit,
         a11y: Some(a11y),
         focusable: !control.disabled,
+        ..Default::default()
     }
 }
 

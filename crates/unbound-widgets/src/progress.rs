@@ -306,6 +306,7 @@ pub fn emit_progress(desc: &ProgressDesc, state: &ProgressState) -> WidgetOutput
         hit: None,
         a11y: Some(a11y),
         focusable: false,
+        ..Default::default()
     }
 }
 

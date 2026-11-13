@@ -143,5 +143,6 @@ pub fn emit_hotkey_input(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }

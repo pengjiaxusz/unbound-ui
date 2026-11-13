@@ -265,6 +265,7 @@ pub fn emit_drawer(
             hit: Some(HitRegion::new(node, MODAL_LAYER, u32::from(desc.z), rect)),
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         scrim: HitRegion::new(node ^ (1 << 63), PORTAL_LAYER, 0, desc.viewport),
         entry: OverlayEntry::modal(node, rect, focus_scope.to_vec()),

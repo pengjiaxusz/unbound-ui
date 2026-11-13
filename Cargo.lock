@@ -2042,6 +2042,7 @@ dependencies = [
  "accesskit",
  "rustc-hash",
  "slotmap",
+ "smallvec",
  "unbound-a11y",
  "unbound-abi",
  "unbound-anim",

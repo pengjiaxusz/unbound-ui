@@ -394,6 +394,7 @@ pub fn emit_select_with_glyphs(
         hit,
         a11y: Some(a11y),
         focusable: !control.disabled,
+        ..Default::default()
     }
 }
 

@@ -122,5 +122,6 @@ pub fn emit_rating(node: u64, desc: &RatingDesc, state: ControlState) -> WidgetO
         hit,
         a11y: Some(a11y),
         focusable: interactive,
+        ..Default::default()
     }
 }

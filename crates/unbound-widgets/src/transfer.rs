@@ -180,5 +180,6 @@ pub fn emit_transfer(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }

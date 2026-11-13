@@ -367,6 +367,7 @@ pub fn emit_rulers(
             hit: None,
             a11y: None,
             focusable: false,
+            ..Default::default()
         },
         bands,
     }

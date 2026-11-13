@@ -310,6 +310,7 @@ pub fn emit_radio(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }
 

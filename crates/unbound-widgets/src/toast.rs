@@ -511,6 +511,7 @@ pub fn emit_toast(
             ),
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         close: HitRegion::new(node ^ (1 << 62), PORTAL_LAYER, 562, close)
             .with_cursor(CursorKind::Pointer),

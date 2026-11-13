@@ -467,6 +467,7 @@ pub fn emit_tag_input(
         hit,
         a11y: Some(a11y),
         focusable: !control.disabled,
+        ..Default::default()
     }
 }
 

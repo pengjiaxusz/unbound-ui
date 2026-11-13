@@ -559,6 +559,7 @@ pub fn emit_slider(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }
 

@@ -214,6 +214,7 @@ pub fn emit_gizmo(
             hit: None,
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         hits,
         bubble,

@@ -335,6 +335,7 @@ pub fn emit_crumb(
         hit,
         a11y: Some(a11y),
         focusable: !disabled && !current,
+        ..Default::default()
     }
 }
 
@@ -387,6 +388,7 @@ pub fn emit_crumb_ellipsis(
         hit,
         a11y: Some(a11y),
         focusable: !control.disabled,
+        ..Default::default()
     }
 }
 

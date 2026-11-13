@@ -623,6 +623,7 @@ pub fn emit_button_with_tokens(
         hit,
         a11y: Some(a11y),
         focusable: !blocked,
+        ..Default::default()
     }
 }
 

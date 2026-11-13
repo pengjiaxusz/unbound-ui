@@ -189,5 +189,6 @@ pub fn emit_timeline_track(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }

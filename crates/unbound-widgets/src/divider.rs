@@ -218,6 +218,7 @@ pub fn emit_divider(
         hit: None,
         a11y,
         focusable: false,
+        ..Default::default()
     }
 }
 

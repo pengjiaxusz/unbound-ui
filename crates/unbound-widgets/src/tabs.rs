@@ -426,6 +426,7 @@ pub fn emit_tabs_strip(desc: &TabsDesc, state: &TabsState, tokens: TabsTokens) -
         hit: None,
         a11y: None,
         focusable: false,
+        ..Default::default()
     }
 }
 
@@ -495,6 +496,7 @@ pub fn emit_tab(
         hit,
         a11y: Some(a11y),
         focusable: !disabled,
+        ..Default::default()
     }
 }
 
@@ -565,6 +567,7 @@ pub fn emit_tab_close(
                 .disabled(disabled),
         ),
         focusable: !disabled,
+        ..Default::default()
     }
 }
 
@@ -634,6 +637,7 @@ pub fn emit_tabs_add(
                 .disabled(disabled),
         ),
         focusable: !disabled,
+        ..Default::default()
     }
 }
 

@@ -405,6 +405,7 @@ pub fn emit_chart(
             hit: Some(HitRegion::new(node, CONTROL_LAYER, u32::from(z), desc.rect)),
             a11y: Some(a11y),
             focusable: false,
+            ..Default::default()
         },
         tooltip,
         hovered: hovered.and_then(|(series, point)| {

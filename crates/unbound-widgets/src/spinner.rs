@@ -98,6 +98,7 @@ pub fn emit_spinner(desc: &SpinnerDesc, state: ControlState) -> WidgetOutput {
         hit: None,
         a11y: Some(a11y),
         focusable: false,
+        ..Default::default()
     }
 }
 
@@ -129,5 +130,6 @@ pub fn emit_loading_overlay(desc: &LoadingOverlayDesc, state: ControlState) -> W
         hit: None,
         a11y: Some(a11y),
         focusable: false,
+        ..Default::default()
     }
 }

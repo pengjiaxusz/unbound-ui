@@ -662,6 +662,7 @@ pub fn emit_dock_pane(pane: &DockPane, tokens: DockTokens, z: u16) -> WidgetOutp
         hit: None,
         a11y: None,
         focusable: false,
+        ..Default::default()
     }
 }
 
@@ -733,6 +734,7 @@ pub fn emit_dock_tab(
         hit,
         a11y: Some(a11y),
         focusable: !disabled,
+        ..Default::default()
     }
 }
 

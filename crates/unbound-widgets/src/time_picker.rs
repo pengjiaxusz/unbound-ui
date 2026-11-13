@@ -185,6 +185,7 @@ pub fn emit_time_picker(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }
 

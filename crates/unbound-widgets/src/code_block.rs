@@ -371,6 +371,7 @@ pub fn emit_code_block(
         ),
         a11y: Some(a11y),
         focusable: !control.disabled,
+        ..Default::default()
     }
 }
 

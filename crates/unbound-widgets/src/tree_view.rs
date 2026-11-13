@@ -555,6 +555,7 @@ pub fn emit_tree_row(
         hit,
         a11y: Some(a11y),
         focusable: !disabled,
+        ..Default::default()
     }
 }
 
@@ -575,6 +576,7 @@ pub fn emit_tree_background(desc: &TreeViewDesc, tokens: TreeViewTokens) -> Widg
         hit: None,
         a11y: None,
         focusable: false,
+        ..Default::default()
     }
 }
 

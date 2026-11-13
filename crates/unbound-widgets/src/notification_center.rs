@@ -183,5 +183,6 @@ pub fn emit_notification_center(
         hit,
         a11y: Some(a11y),
         focusable: !state.disabled,
+        ..Default::default()
     }
 }

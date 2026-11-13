@@ -63,7 +63,10 @@ fn states() -> Vec<ControlState> {
 const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::Alert,
     WidgetCatalogId::AlertDialog,
+    WidgetCatalogId::AspectRatioBox,
     WidgetCatalogId::Avatar,
+    WidgetCatalogId::AvatarGroup,
+    WidgetCatalogId::Badge,
     WidgetCatalogId::Breadcrumb,
     WidgetCatalogId::Chart,
     WidgetCatalogId::ColorPicker,
@@ -74,13 +77,18 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::DatePicker,
     WidgetCatalogId::Divider,
     WidgetCatalogId::Drawer,
+    WidgetCatalogId::EmptyState,
     WidgetCatalogId::Form,
     WidgetCatalogId::Gizmo,
+    WidgetCatalogId::GradientEditor,
     WidgetCatalogId::HoverCard,
+    WidgetCatalogId::Icon,
     WidgetCatalogId::Image,
+    WidgetCatalogId::LoadingOverlay,
     WidgetCatalogId::Menu,
     WidgetCatalogId::Minimap,
     WidgetCatalogId::Modal,
+    WidgetCatalogId::NinePatch,
     WidgetCatalogId::NodeGraph,
     WidgetCatalogId::Overlay,
     WidgetCatalogId::Popover,
@@ -90,10 +98,13 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::Ruler,
     WidgetCatalogId::Skeleton,
     WidgetCatalogId::Spinner,
+    WidgetCatalogId::Stack,
+    WidgetCatalogId::StatusBar,
     WidgetCatalogId::Table,
     WidgetCatalogId::Toast,
     WidgetCatalogId::Tooltip,
     WidgetCatalogId::Watermark,
+    WidgetCatalogId::Wrap,
 ];
 
 /// The compile-time gate, mirrored in the test crate: an exhaustive `match`
@@ -181,6 +192,17 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::TimelineTrack => "timeline_track",
         WidgetCatalogId::Tour => "tour",
         WidgetCatalogId::Watermark => "watermark",
+        WidgetCatalogId::AspectRatioBox => "masonry",
+        WidgetCatalogId::AvatarGroup => "avatar",
+        WidgetCatalogId::Chip => "badge",
+        WidgetCatalogId::EmptyState => "hover_card",
+        WidgetCatalogId::GradientEditor => "curve_editor",
+        WidgetCatalogId::Icon => "image",
+        WidgetCatalogId::LoadingOverlay => "spinner",
+        WidgetCatalogId::NinePatch => "image",
+        WidgetCatalogId::Stack => "containers",
+        WidgetCatalogId::StatusBar => "toolbar",
+        WidgetCatalogId::Wrap => "containers",
     }
 }
 
@@ -250,12 +272,12 @@ fn the_probe_covers_every_component() {
         assert_eq!(probe.witness.id(), id);
         probed.push(id);
     }
-    probed.sort_unstable_by_key(|id| id.module_name());
+    probed.sort_unstable_by_key(|id| *id as usize);
     probed.dedup();
     assert_eq!(
         probed.len(),
         WidgetCatalogId::COUNT,
         "the probe must cover every component exactly once"
     );
-    assert_eq!(WidgetCatalogId::COUNT, 80);
+    assert_eq!(WidgetCatalogId::COUNT, 91);
 }
