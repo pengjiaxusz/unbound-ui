@@ -13,7 +13,7 @@
 > **标注口径**：【事实】= 已从源码、配置或文档逐条核对；【推断】= 附依据的推理；
 > 【未知】= 未查到、需要另行核实。文档自称的数据不等于已复核事实，会单独标明来源。
 >
-> **快照日期**：2026-11-11，基于当前工作树（含未提交改动）。文末第 14 节说明答复纪律。
+> **快照日期**：2026-11-13，基于当前工作树。文末第 14 节说明答复纪律。
 
 ---
 
@@ -22,13 +22,12 @@
 - 【事实】这是一个用 Rust 写的 **GPU 驱动 UI 引擎 + 无限画布**，目标是把每一帧的成本压到与场景规模无关。
   它不是应用框架，也不是组件库，是一套渲染、布局、输入、语义与验证的底座。
 - 【事实】渲染底座、增量排版、命中测试、动画、无障碍语义、无头验证等**引擎能力层已全部落地**（M1–M5）。
-- 【事实】组件层刚起步：**第一个可交互 Button 已落地并接入展台主循环**（hover / press / click /
-  focus / 键盘激活 / 无障碍语义 / 点击计数），由三个提交完成，见第 7 节。
-  但仍然**没有通用组件框架**，也没有第二个控件。
-- 【事实】两个应用：`apps/showcase` 是开窗的**渲染验收台**（手工拼图元 + 一个已接线的按钮），
-  `apps/gallery` 是**纯控制台**的全链路演示，只打印数字、不出画面。
-- 【推断】当前矛盾已经从「一个控件都没有」变成「有了一个能点的控件，但它住在应用里、
-  没有可复用的组件骨架」。依据：第 6 节已实现能力清单与第 7 节组件层现状对照。
+- 【事实】组件层已经成型：`unbound-widgets` 提供扁平描述符 + 纯发射函数的
+  **59 个模块、40+ 标准组件**（工作区容器、导航命令、高阶表单、富文本与数据集合、
+  反馈浮层、无限画布套件），由 `AppRuntime` 统一接线，见第 6、7 节。
+- 【事实】运行时 DevTools Inspector（`F12`）与每帧 5 项无头体检闭环已落地，见第 7.3 节。
+- 【事实】两个应用：`apps/showcase` 是开窗的**渲染验收台**，`apps/gallery` 是**纯控制台**
+  的全链路演示，只打印数字、不出画面。
 
 ---
 
@@ -39,7 +38,7 @@
 | 定位 | 下一代高性能 GPU 驱动 UI 与无限画布引擎的 Rust 实现 | `README.md` |
 | 第一原则 | 把每一帧的成本压到与场景规模无关 | `docs/00-overview/principles.md` |
 | 四条准则 | 性能绝对优先 / 面向数据设计（DOD）/ 无锁响应式调度与超低延迟呈现 / Agent 与人类双模友好 | `docs/00-overview/principles.md` |
-| Workspace | 19 个 `crates/*` + 2 个 `apps/*`，共 21 个成员 | `Cargo.toml` `[workspace].members` |
+| Workspace | 21 个 `crates/*` + 2 个 `apps/*`，共 23 个成员 | `Cargo.toml` `[workspace].members` |
 | 语言与工具链 | edition 2021，`rust-version = "1.85"`，MIT OR Apache-2.0 | `Cargo.toml` `[workspace.package]` |
 | 代码规模 | 约 88 个 Rust 源文件、约 35 200 行、13 个着色器、562 项自动化测试 | `docs/00-overview/crate-map.md` 自述，**未逐项复核** |
 
@@ -103,6 +102,8 @@ unbound-math         基础数学：Vec2 / Rect / Affine2 / Color / f16 打包
 | `unbound-input` | 双层拾取、指针捕获、确定性光标栈、文件拖拽 | `world`、`math` |
 | `unbound-a11y` | AccessKit 增量语义树 | `math`、`abi` |
 | `unbound-theme` | 语义设计令牌、4 KiB 颜色表、三层正交缩放 | `math` |
+| `unbound-widgets` | 扁平描述符 + 纯发射函数的组件库与 `SceneCollector` | `math`、`abi`、`theme`、`input`、`a11y`、`canvas`、`vector`、`text` |
+| `unbound-app` | `AppRuntime`：世界/布局/文本/输入/状态池/Inspector 的统一接线 | `world`、`layout`、`theme`、`input`、`widgets`、`headless` |
 | `unbound-graph` | 渲染图瞬态纹理生命周期、毛玻璃离屏池 | `math` |
 | `unbound-asset` | 后台解码线程池、CPU 暂存环、传输队列交接 | `math` |
 | `unbound-platform` | 窗口平台层：非阻塞缩放、低延迟呈现、延迟计量 | `math`、`gpu` |
@@ -199,60 +200,37 @@ OS 输入 / 文件拖拽 / Agent 驱动
 
 ---
 
-## 7. 组件层现状（刚刚起步）
+## 7. 组件层现状
 
-【事实】全仓库**仍没有通用控件框架**：不存在 `Slider` / `Checkbox` / `Input` / `Tooltip` / `Menu` /
-`Dialog` / `Scrollbar` / `Progress` 之类的控件类型定义，也没有组件注册、状态派生、发射器产物的共享抽象。
-唯一成型的控件是 `apps/showcase/src/button.rs` 里的 Button。
+【事实】通用组件层已经成立，位于 `crates/unbound-widgets`：59 个源码模块、40+ 标准组件，
+统一遵循「扁平描述符 + 纯发射函数」的契约，所有颜色取 `unbound_theme::Token`。
 
-### 7.1 第一个 Button 已落地（三个提交）
+### 7.1 组件契约
 
-| 提交 | 内容 |
-| :--- | :--- |
-| `87248d2` | 新增 `button.rs`：扁平描述符 + 纯函数图元发射器（354 行）；加入依赖 `unbound-abi / a11y / headless / input / world / accesskit / slotmap` |
-| `064b64a` | `gallery.rs` 接入按钮状态色、字形预热与交互式构建（+239 行） |
-| `6dd33ea` | `main.rs` 用指针路由器驱动交互与按需重绘（+236 行） |
-| `4852108` | `tests/gallery.rs` 扩到 407 行：8 条测试覆盖按钮状态机、语义树、5 项几何体检与离屏像素差异 |
+- 每个组件一个模块，导出 `XxxDesc`（纯数据）与 `emit_xxx(...) -> WidgetOutput`。
+- `WidgetOutput { primitives, payloads, hit, a11y, focusable }`：图元、曲线/渐变 payload、
+  命中区域、无障碍节点、是否进入 Tab 序。
+- 组件不持有状态；交互瞬态由调用方传入的 `ControlState` / 组件自己的 `XxxState` 表达。
+- `SceneCollector::push` 汇总图元与语义树，`push_clip` 负责圆角裁剪槽的折叠继承。
 
-【事实】Button 的形态：`ButtonDesc`（纯数据：rect / label / radius / font_size / z）、
-`ButtonVisualState { phase: PointerPhase::{Idle, Hovered, Pressed}, focused, disabled }`；
-`ButtonVisualState::resolve(node, router, focused, disabled)` 从 `Router` 的捕获状态派生 hover / pressed，
-交互瞬态不落 bool 字段；`ButtonTokens` 把状态色与 `Palette` 解耦；`ButtonArtifacts` 是发射产物
-（图元 + `HitRegion` + `A11yNode`）；公开入口 `emit_button` / `insert_button` / `node_u64` / `ink_bounds`。
-组件身份取 `NodeId`，图元分层用 `SubElement` 而非手工偏移 z。
+### 7.2 已交付范围
 
-【事实】展台侧入口：`gallery.rs` 的 `button_rect()`、`build_interactive()`、`button_frame()`、
-`DEFAULT_BUTTON_NODE`；`Palette` 新增 `primary_hover` / `primary_pressed` / `focus_ring` 等 token。
-状态色占用颜色表 12–15 槽，因此切主题时按钮图元一个字节都不重传（见第 5 节）。
+工作区容器（#1–#6）、导航命令（#7–#12）、高阶表单与录入（#13–#21）、
+富文本/数据集合/反馈浮层（#22–#35）、无限画布套件（#36–#41），
+以及 `unbound-gpu` 的渐变、内阴影、多层圆角裁剪与外部纹理绑定。
 
-【事实】交互接法：`Showcase` 持有 `Router` / `focused` / `visual` / `click_count` / `canvas_dragging` /
-`generation`；`T` 切主题、`Tab` 聚焦、`Escape` 清焦、`Space` / `Enter` 激活；左键按下先喂 `Router`，
-若 `pointer().pressed()` 命中按钮则视为点击并禁用平移，否则进入画布拖拽；
-`Semantics::set_focus` 同步无障碍焦点；光标跟随 `Router`'s `cursor()`。
+### 7.3 运行时接线与 DevTools
 
-【事实】按需重绘策略（`main.rs:505`）：每帧重新派生 `visual`，仅当
-`visual != self.visual || click_count != rendered_clicks` 时 `rebuild()` 并 bump `generation`。
-鼠标在按钮内移动、平移、缩放、切主题不动 `generation`，不上传图元字节；
-**离散状态跃迁（hover 进出 / 按下 / 点击计数变化）仍会触发整场 rebuild + 全量上传**。
+`AppRuntime` 把 `UiWorld`、`LayoutEngine`、文本、`Router`、状态池、TimerQueue 与
+`SceneCollector` 串成一个每帧闭环，并提供：
 
-### 7.2 仍未闭环
+- `F12` 切换的 DevTools Inspector：盒模型四色描边、`SourceLoc` 与违规面板，
+  以最高 `z` 追加到场景末尾（调试通道）。
+- `enable_debug_sanitizers(true)`：每帧把世界镜像成 `unbound_headless::Frame`
+  （节点 id 即语义 key），跑 5 项 sanitizer，违规项以闪烁错误框回显。
 
-- 【事实】Button 是 `apps/showcase` 内部模块，不是独立 crate，也不在 `unbound-abi` 里；
-  `ButtonDesc` 注释写「第二个控件只需要再写一个同样的描述符」，但没有共享骨架或注册机制。
-- 【事实】`Gallery::build()` 仍是硬编码绝对坐标，没有接 `LayoutEngine` / `RawNodeDesc`。
-- 【事实】`apps/showcase/tests/gallery.rs` 已由提交 `4852108` 扩到 407 行、8 条测试：
-  `hover_and_press_switch_the_fill_token`、`a_drag_off_the_button_cancels_the_click`、
-  `a_release_inside_emits_a_click`、`a_click_changes_the_rendered_label`、
-  `the_focus_ring_is_a_stroke_and_focus_stays_orthogonal`、`the_semantics_tree_exposes_a_button`、
-  `the_button_passes_the_five_sanitizers`、`hover_and_press_change_the_rendered_pixels`。
-  `Harness::assert_clean` 只在测试里调用，应用主循环尚未接入。
-- 【事实】截至快照时 `docs/06-tooling/showcase.md` 与两张主题截图有**未提交**的文档更新，
-  内容是把按钮与新的键位说明补进展台文档。
-- 【未知】组件层是否要抽成独立 crate、第二个控件何时做、按需重绘在控件数量增加后的开销，
-  均没有实测或定论。
-
-【推断】「零上传」这条叙事现在只在「相机 / 主题 / 同状态内移动」成立，状态跃迁已改成按需全量重建。
-依据：`main.rs:505–513` 的条件判断与 `rebuild()` 里的 `generation` 自增。
+【未知】组件数量继续增长后的按需重绘开销、以及 Inspector 面板文本的宿主字体接线，
+尚无实测数据；后者目前通过 `InspectorScene::lines` 交给宿主绘制。
 
 ---
 

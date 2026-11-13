@@ -64,6 +64,18 @@
 
 **落地位置**：`unbound-a11y`、`unbound-headless`、`unbound-host`
 
+## 组件层补强（框架审计后续，M6）
+
+- 在 `unbound-widgets` 落地「扁平描述符 + 纯发射函数」组件契约，覆盖工作区容器、
+  导航命令、高阶表单、富文本/数据集合、反馈浮层与无限画布套件（#1–#41）。
+- `unbound-gpu` 补齐线性/径向渐变填充、解析内阴影、多级圆角裁剪折叠与外部纹理
+  绑定槽。
+- `unbound-app` 提供 `AppRuntime` 每帧闭环、`F12` DevTools Inspector 与
+  `enable_debug_sanitizers` 的 per-frame 无头体检。
+
+**落地位置**：`unbound-widgets`、`unbound-gpu`、`unbound-app`、`unbound-world`、
+`unbound-math`
+
 ## 尚未闭环的部分
 
 | 阶段 | 缺口 |

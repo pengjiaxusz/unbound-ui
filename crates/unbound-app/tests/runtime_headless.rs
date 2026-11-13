@@ -176,7 +176,7 @@ impl Application for TinyTarget {
 }
 
 #[test]
-fn f12_toggles_the_inspector_and_sanitizers_feed_it_every_frame() {
+fn inspector_overlay_renders_on_debug_layer_and_reports_hovered_node_box_model() {
     let mut runtime = AppRuntime::new(TinyTarget, Vec2::new(800.0, 600.0));
     let plain = runtime.frame(0.0).primitives;
 
