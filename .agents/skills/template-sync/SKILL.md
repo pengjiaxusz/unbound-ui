@@ -23,8 +23,8 @@ description: >-
 # 快速预检：1 秒内快速诊断单项目或多项目的漂移状态（Dry Run）
 pwsh .agents/skills/template-sync/scripts/sync-template.ps1 -Projects @("<项目目录1>", "<项目目录2>")
 
-# 一键流水线：批量更新、精准暂存、生成约定式提交并推送到远端（一次调用全自动闭环）
-pwsh .agents/skills/template-sync/scripts/sync-template.ps1 -Projects @("<项目目录1>", "<项目目录2>") -Apply -Commit -Push
+# 一键流水线：批量更新、精准暂存、生成约定式提交并推送到远端（默认行为，一次调用全自动闭环）
+pwsh .agents/skills/template-sync/scripts/sync-template.ps1 -Projects @("<项目目录1>", "<项目目录2>") -Apply
 ```
 
 ### 原生 CLI 命令
@@ -56,10 +56,10 @@ cargo run -p pengj-templates-cli -- adopt --dir <目标项目目录> --layers <�
 
 1. 执行极速脚本或更新命令：
    ```powershell
-   # 推荐：极速流水线脚本
+   # 推荐：极速流水线脚本（默认自动提交并推送被应用的项目）
    pwsh .agents/skills/template-sync/scripts/sync-template.ps1 -Projects @("<目标项目目录>") -Apply
 
-   # 或通过 CLI 直接调用
+   # 或通过 CLI 直接调用（随后按步骤 4 提交被应用的项目）
    cargo run -p pengj-templates-cli -- update --dir <目标项目目录> --sync-skills
    ```
 2. 引擎自动从 manifest 读取固化的选项（`edition`、`skills`、`skill_lang` 等）并重渲染比对：
@@ -141,7 +141,7 @@ cargo run -p pengj-templates-cli -- audit --dir <目标项目目录> --diff
 - **配置与工具链接线核验**：
   - 检查 `commitlint.base.js` 自动接线、`.vscode/settings.json`、`.cargo/config.toml` 合并是否符合预期。
 
-### 4. 验证与按需精准提交
+### 4. 验证并自动提交被应用的项目
 
 1. 进入目标项目目录，执行对应技术栈的验证检查：
    ```powershell
@@ -150,10 +150,12 @@ cargo run -p pengj-templates-cli -- audit --dir <目标项目目录> --diff
    # 如前端项目
    pnpm build
    ```
-2. **提交策略与精准提交流程**：
-   - **默认不提交**：执行 `update` 或 `adopt` 后，默认仅在工作区完成更新与核验，**不要自动提交**，等待用户确认或显式指令。
-   - **用户要求提交时的精准提交（红线）**：当用户明确要求提交时，**只能单独 `git add <file>` 本次模板同步/纳管所修改或新增的文件**（严格对照 update 报告清单），**严禁 `git add .` 或 `git commit -a`**，防止误将工作区既有的无关改动或脏文件一并带入提交。
-   - 提交信息采用约定式提交（如 `chore(templates): 同步上游模板更新` 或 `chore(templates): 纳管项目分层模板`），并在提交后推送。
+2. **自动提交策略与精准暂存红线**：
+   - **默认必须提交**：`update` / `adopt` 成功后，Agent 必须在**被应用的项目**中提交本次模板同步并 `git push`，不得把已应用的模板更新留在工作区等待用户确认——「每次改了都不提交」正是要消除的旧行为。
+   - **提交正确的仓库**：上述提交属于下游被应用的项目；上游 `pengj-templates` 仓库自身的改动（模板源、引擎、文档）在该仓库单独提交，两者绝不混在一起。
+   - **精准暂存（红线）**：**只能单独 `git add <file>` 本次同步报告里的 `[更新]` / `[新增]` 路径与 `.pengj-templates.json`**，**严禁 `git add .` 或 `git commit -a`**，防止误将工作区既有的无关改动或脏文件一并带入提交。
+   - **提交信息语言跟随目标项目**：读取目标项目 `.pengj-templates.json` 的 `options.commit_zh`；为 `true` 时标题必须中文（如 `chore: 同步分层模板更新`），为 `false` 时必须英文（如 `chore: sync layered template updates`），commit-msg 钩子会强制校验。
+   - **仅在用户明确要求不提交时豁免**：极速脚本传 `-NoCommit` / `-NoPush`，或手动跳过本步骤。
 
 <!-- PENGJ_TEMPLATE_END -->
 

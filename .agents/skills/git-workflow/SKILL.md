@@ -47,7 +47,8 @@ description: >-
 执行 `git commit -m "<type>(<scope>): <标题>"` 后立即 `git push`。
 
 - 标题用中文短句（至少包含 2 个汉字，严禁写纯英文标题）；
-- type/scope 用英文（`feat` `fix` `docs` `style` `refactor` `perf` `test` `build` `ci` `chore` `revert`）。
+- type/scope 用英文（`feat` `fix` `docs` `style` `refactor` `perf` `test` `build` `ci` `chore` `revert`）；
+- 适用于所有提交入口（含宿主提供的 `/commit` 命令与手写 `git commit`）：此类命令生成的英文标题必须先改写为中文再提交。
 
 
 提交规范、语义拆分与 Amend 约束详见：[references/commit.md](references/commit.md)。

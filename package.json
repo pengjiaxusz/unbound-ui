@@ -8,8 +8,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "prepare": "node -e \"try{require('child_process').execSync('lefthook install',{stdio:'inherit'})}catch{console.log('git is not initialised yet, skipping the lefthook install; run git init and then pnpm lefthook:install')}\"",
-    "lefthook:install": "lefthook install",
+    "prepare": "node scripts/install-hooks.mjs",
+    "lefthook:install": "node scripts/install-hooks.mjs",
     "commitlint": "commitlint"
   },
   "devDependencies": {

@@ -54,6 +54,7 @@ git --no-pager diff --cached --stat
 - **type/scope 用英文**：
   - 常用 type：`feat` `fix` `docs` `style` `refactor` `perf` `test` `build` `ci` `chore` `revert`
   - scope 参考项目 `commitlint.config.js` 的 scope-enum 白名单，无合适则省略。
+- **提交入口**：宿主提供的 `/commit` 命令与手写 `git commit` 同样适用；此类命令生成的英文标题必须先改写为中文再提交。
 
 
 ---

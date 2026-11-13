@@ -9,7 +9,7 @@
     3. Default dry run mode: rapid diagnosis of alignment and drift states via audit;
     4. Single-shot update on -Apply with -SyncSkills enabled by default;
     5. Selective staging red-line enforcement: strictly stages only template-affected files and manifest, never git add .;
-    6. Optional -Commit and -Push to complete multi-project synchronization in a single tool call.
+    6. Automatic selective commit and push on -Apply by default (-NoCommit / -NoPush to opt out), so applied projects never leave template updates uncommitted.
 
 .PARAMETER Projects
     List of target project paths. Supports multiple paths e.g. @("D:\repo1", "D:\repo2"). Defaults to @("."). 
@@ -21,13 +21,19 @@
     Align and overwrite managed skill assets and scripts directly (default $true).
 
 .PARAMETER Commit
-    Automatically selectively stage and commit after successful update on -Apply.
+    Kept for compatibility: the selective commit is the DEFAULT on -Apply. Use -NoCommit to disable it.
 
 .PARAMETER Push
-    Automatically push to remote after successful commit on -Commit.
+    Kept for compatibility: the push is the DEFAULT on -Apply. Use -NoPush to disable it.
+
+.PARAMETER NoCommit
+    Skip the automatic selective commit after -Apply (also skips push).
+
+.PARAMETER NoPush
+    Skip the automatic push but still create the selective commit.
 
 .PARAMETER CommitMessage
-    Custom commit message. If omitted, inferred from Conventional Commits (default: chore(template): sync layered template updates).
+    Custom commit message. If omitted, the language follows the target project's commit_zh option (Chinese or English Conventional Commit subject).
 
 .PARAMETER Diff
     Display detailed drift diffs in pre-flight mode.
@@ -36,8 +42,11 @@
     # 1. Rapid read-only pre-flight audit of template drifts
     pwsh .agents/skills/template-sync/scripts/sync-template.ps1 -Projects @("D:\pengj\proj-a", "D:\pengj\proj-b")
 
-    # 2. Batch update, selective commit, and push in a single tool call
-    pwsh .agents/skills/template-sync/scripts/sync-template.ps1 -Projects @("D:\pengj\proj-a", "D:\pengj\proj-b") -Apply -Commit -Push
+    # 2. Batch update, selective commit, and push in a single tool call (default behavior)
+    pwsh .agents/skills/template-sync/scripts/sync-template.ps1 -Projects @("D:\pengj\proj-a", "D:\pengj\proj-b") -Apply
+
+    # 3. Update without committing (explicit opt-out)
+    pwsh .agents/skills/template-sync/scripts/sync-template.ps1 -Projects @("D:\pengj\proj-a") -Apply -NoCommit
 #>
 
 [CmdletBinding()]
@@ -49,12 +58,19 @@ param(
     [bool]$SyncSkills = $true,
     [switch]$Commit,
     [switch]$Push,
+    [switch]$NoCommit,
+    [switch]$NoPush,
     [string]$CommitMessage = "",
     [switch]$Diff
 )
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+# -Apply commits and pushes the applied project by default; -NoCommit / -NoPush opt out.
+# -Commit / -Push remain accepted for compatibility with existing command lines.
+$doCommit = -not $NoCommit.IsPresent
+$doPush = $doCommit -and (-not $NoPush.IsPresent)
 
 # 1. Discover or resolve optimal pengj-templates-cli execution path
 function Find-CliCommand {
@@ -162,11 +178,26 @@ function Get-DefaultCommitMessage {
             }
         }
     }
-    if ($scope) {
-    return "chore($scope): sync layered template updates"
-    } else {
-    return "chore: sync layered template updates"
+    # Commit language axis: follow the applied project's commit_zh, otherwise the
+    # commit-msg hook rejects the generated commit subject.
+    $commitZh = $true
+    $manifestPath = Join-Path $ProjectDir ".pengj-templates.json"
+    if (Test-Path $manifestPath) {
+        try {
+            $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+            if ($null -ne $manifest.options.commit_zh) {
+                $commitZh = [bool]$manifest.options.commit_zh
+            }
+        } catch {
+            Write-Warning "Cannot read commit_zh from manifest, assuming Chinese: $($_.Exception.Message)"
+        }
     }
+
+    # Rendered from the commit_zh axis: an EN-commit project never contains CJK text.
+    $localizedSubject = '同步分层模板更新'
+    if (-not $commitZh) { $localizedSubject = "sync layered template updates" }
+    if ($scope) { return "chore($scope): $localizedSubject" }
+    return "chore: $localizedSubject"
 }
 
 $summaryRows = @()
@@ -298,7 +329,7 @@ foreach ($rawProj in $targetProjects) {
     $commitStatus = "Skipped Commit"
     $pushStatus = "Skipped Push"
 
-    if ($Commit) {
+    if ($doCommit) {
         $cachedDiff = Invoke-Git -WorkingDir $projDir -CommandArgs @("diff", "--cached", "--name-only")
         if ($cachedDiff.Output) {
             $msg = if ($CommitMessage) { $CommitMessage } else { Get-DefaultCommitMessage -ProjectDir $projDir }
@@ -309,7 +340,7 @@ foreach ($rawProj in $targetProjects) {
                 $commitStatus = "Commit Failed"
             } else {
                 $commitStatus = "Committed"
-                if ($Push) {
+                if ($doPush) {
                     Write-Host "  -> Pushing to remote repository..." -ForegroundColor Yellow
                     $pRes = Invoke-Git -WorkingDir $projDir -CommandArgs @("push")
                     if ($pRes.ExitCode -ne 0) {
