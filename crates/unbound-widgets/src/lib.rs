@@ -21,9 +21,13 @@
 //! [`app-guest`](../../app_guest) still depends on [`unbound_abi`] alone, so a
 //! guest application may host these controls without pulling in the engine.
 
+pub mod accordion;
 pub mod button;
 pub mod checkbox;
+pub mod containers;
 pub mod diff;
+pub mod divider;
+pub mod dock;
 pub mod image;
 pub mod menu;
 pub mod modal;
@@ -35,7 +39,9 @@ pub mod scroll;
 pub mod segmented;
 pub mod select;
 pub mod slider;
+pub mod split_pane;
 pub mod switch;
+pub mod tabs;
 pub mod text_input;
 pub mod tooltip;
 
@@ -47,8 +53,20 @@ use unbound_input::{ClipRect, HitRegion, PointerEvent, Router};
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 
+pub use accordion::{
+    emit_accordion_body, emit_accordion_header, AccordionDesc, AccordionSection, AccordionState,
+    AccordionTokens,
+};
 pub use button::{ButtonDesc, ButtonTokens, ButtonVariant, ButtonWidget};
 pub use checkbox::{CheckboxDesc, CheckboxTokens};
+pub use containers::{
+    emit_card, emit_stack, CardDesc, CardTokens, StackDesc, WrapDesc, CARD_ELEVATIONS, WRAP_FLAG,
+};
+pub use divider::{emit_divider, DividerDesc, DividerOrientation, DividerTokens};
+pub use dock::{
+    emit_dock_pane, emit_dock_preview, emit_dock_tab, DockDrag, DockHover, DockNode, DockPane,
+    DockState, DockTab, DockTokens, DockTree, DockZone,
+};
 pub use image::{
     emit_icon, emit_image, emit_image_with_assets, fit_image, IconDesc, ImageAssetResolver,
     ImageDesc, ImageFit, ImageSource, ImageWidget, ObjectFit, ResolvedImage,
@@ -67,7 +85,15 @@ pub use scroll::{
 pub use segmented::{SegmentedDesc, SegmentedTokens};
 pub use select::{emit_select, SelectDesc, SelectState, SelectWidget};
 pub use slider::{SliderDesc, SliderTokens};
+pub use split_pane::{
+    emit_split_pane, emit_split_pane_panes, reduce_split_key, SplitKey, SplitLayout, SplitPaneDesc,
+    SplitPaneState, SplitPaneTokens, SplitSide,
+};
 pub use switch::{SwitchDesc, SwitchTokens};
+pub use tabs::{
+    emit_tab, emit_tab_close, emit_tabs_add, emit_tabs_strip, reduce_tabs_key, TabItem, TabsDesc,
+    TabsKey, TabsState, TabsTokens,
+};
 pub use text_input::{
     emit_text_input, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
     TextInputOutcome, TextInputVisual, TextInputWidget,
