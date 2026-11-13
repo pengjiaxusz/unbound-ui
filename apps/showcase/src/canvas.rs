@@ -6,13 +6,13 @@
 //! event/geometry wiring in one place.
 
 use accesskit::Role;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_a11y::{A11yNode, Semantics};
 use unbound_gpu::data::{GpuClipNode, GpuPrimitiveInstance, CLIP_NONE};
 use unbound_input::{ClipRect, CursorKind, HitRegion};
 use unbound_math::{Rect, Vec2};
 use unbound_text::{GlyphQuad, TextStyle};
-use unbound_widgets::{ControlState, PointerPhase, WidgetOutput};
+use unbound_widgets::{ControlState, PointerPhase, WidgetCatalogId, WidgetOutput};
 
 use crate::gallery::{Gallery, Labels, Palette};
 use crate::target::{self, Target, ROOT};
@@ -71,6 +71,8 @@ pub struct CanvasOutput {
     /// lets the upload path say *which control* a dirty slice belongs to —
     /// and what makes a hover patch provably local.
     pub node_spans: FxHashMap<u64, (u32, u32)>,
+    /// The real widget emitters that ran this frame (coverage gate).
+    pub emitted_widgets: FxHashSet<WidgetCatalogId>,
 }
 
 /// A slider-like region whose value is derived from the pointer's x position.
@@ -125,6 +127,13 @@ pub struct Canvas<'a> {
     static_ids: u64,
     /// The primitive range each control owns.
     node_spans: FxHashMap<u64, (u32, u32)>,
+    /// The real `unbound-widgets` emitters this frame actually ran.
+    ///
+    /// The compile-time coverage gate maps every [`WidgetCatalogId`] to a
+    /// demo; this set is the runtime half of the proof — a demo that merely
+    /// hand-draws a rectangle never inserts its id, so the coverage test can
+    /// tell a genuine emission from a fake.
+    emitted_widgets: FxHashSet<WidgetCatalogId>,
 }
 
 impl<'a> Canvas<'a> {
@@ -170,6 +179,7 @@ impl<'a> Canvas<'a> {
             snap,
             static_ids: 0,
             node_spans: FxHashMap::default(),
+            emitted_widgets: FxHashSet::default(),
         }
     }
 
@@ -680,6 +690,28 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Paint a real component's output and record that its emitter ran.
+    ///
+    /// This is the verified counterpart of [`control_output`](Self::control_output):
+    /// the demo names the [`WidgetCatalogId`] it is emitting, so the frame's
+    /// `emitted_widgets` set proves the genuine `unbound-widgets` emitter ran
+    /// rather than a hand-drawn stand-in.
+    pub fn widget_output(&mut self, id: WidgetCatalogId, node: u64, output: &WidgetOutput) {
+        self.emitted_widgets.insert(id);
+        self.control_output(node, output);
+    }
+
+    /// The real component emitters that ran this frame.
+    #[must_use]
+    pub fn emitted_widgets(&self) -> &FxHashSet<WidgetCatalogId> {
+        &self.emitted_widgets
+    }
+
+    /// Shape a single-line label into glyph quads for a component emitter.
+    pub fn shape(&mut self, text: &str, origin: Vec2, size: f32) -> Vec<GlyphQuad> {
+        self.labels.layout(text, origin, size)
+    }
+
     /// Paint a wrapped paragraph inside `rect`.
     pub fn text_wrapped(&mut self, text: &str, rect: Rect, size: f32, color: u16) -> Rect {
         let x = self.snap_value(rect.origin.x);
@@ -856,6 +888,7 @@ impl<'a> Canvas<'a> {
             ranges: self.ranges,
             glyph_count: self.glyphs_emitted,
             node_spans: self.node_spans,
+            emitted_widgets: self.emitted_widgets,
         }
     }
 }

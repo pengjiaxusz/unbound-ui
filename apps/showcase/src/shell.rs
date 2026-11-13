@@ -191,6 +191,8 @@ pub struct GalleryApp {
     /// The ranges are what tie a dirty slice back to the control that owns
     /// it: a hover patch has to stay inside one control's span.
     node_spans: rustc_hash::FxHashMap<u64, (u32, u32)>,
+    /// The real widget emitters that ran this frame, for the coverage gate.
+    emitted_widgets: rustc_hash::FxHashSet<unbound_widgets::WidgetCatalogId>,
     /// Where the input method should put its candidate window.
     ///
     /// The platform only needs an approximate caret; the click position is
@@ -297,6 +299,7 @@ impl GalleryApp {
             external_diff: false,
             frame_layout_stats: LayoutStats::default(),
             node_spans: rustc_hash::FxHashMap::default(),
+            emitted_widgets: rustc_hash::FxHashSet::default(),
             ime_caret: Vec2::new(24.0, 60.0),
             pending_focus: None,
             pending_blur: false,
@@ -468,6 +471,15 @@ impl GalleryApp {
     #[must_use]
     pub fn node_spans(&self) -> &rustc_hash::FxHashMap<u64, (u32, u32)> {
         &self.node_spans
+    }
+
+    /// The real widget emitters that ran this frame.
+    ///
+    /// The Showcase coverage gate reads this to prove every catalog component
+    /// is hosted by a genuine demo, not a hand-drawn imitation.
+    #[must_use]
+    pub fn emitted_widgets(&self) -> &rustc_hash::FxHashSet<unbound_widgets::WidgetCatalogId> {
+        &self.emitted_widgets
     }
 
     /// The geometry of the page as the layout tree solved it.
@@ -645,6 +657,7 @@ impl GalleryApp {
         self.scroll_zones = output.scroll_zones;
         self.semantics = output.semantics;
         self.node_spans = output.node_spans;
+        self.emitted_widgets = output.emitted_widgets;
         self.layout = layout;
         self.page_layout = Some(page_layout);
         self.scrollbar = scrollbar;

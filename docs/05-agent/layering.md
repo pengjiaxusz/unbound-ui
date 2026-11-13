@@ -79,6 +79,26 @@ const ALLOWED: [&str; 3] = ["unbound-abi", "serde", "postcard"];
 的防伪锚点：任何「组件已定义却未在展台展示」或「手绘矩形冒充组件」都会在编译期或
 无头测试中被拒绝。
 
+### 全输出发射器与组件画廊
+
+`catalog::emit_widget(id, node, state, rect, glyphs)` 是同一穷举匹配的**全输出形态**：
+它把组件摆放在调用方给定的 `rect`（_overlay 组件同时以其为放置视口_）、绑定真实
+`node` 身份、用调用方整形的字形渲染主标签，返回完整 `WidgetOutput`（图元 + payload +
+热区 + 语义节点）。`probe_widget` 委托给它，因此**编译期穷举门禁只有一处源头**。
+
+`apps/showcase` 的「Components」分类据此挂载**组件画廊**：`pages/components.rs` 用
+`define_showcase_components!` 宏从单一 id 列表同时生成 56 张示例卡与穷举函数
+`showcase_entry_for_widget`，每张卡调用 `emit_widget` 并经 `Canvas::widget_output`
+登记到当帧 `emitted_widgets: FxHashSet<WidgetCatalogId>`。由此 S2.4 门禁分两半落地：
+
+| 半 | 位置 | 约束 |
+| :--- | :--- | :--- |
+| 编译期 | `pages/components.rs` 的 `const _: () = { … }` | 遍历 `WidgetCatalogId::ALL`，断言每个变体都被其映射页面实际挂载；新增变体未入画廊即编译失败 |
+| 运行时 | `apps/showcase/tests/shell.rs` | 滚动画廊全页（卡片离屏即被裁剪），并集每帧 `emitted_widgets`，断言 100% 覆盖 `WidgetCatalogId::ALL` |
+
+手绘冒充者不会向 `emitted_widgets` 插入 id，因此无法通过运行时半区；新增组件未接真实
+发射器则在 `emit_widget` 处 `E0004`。两半合起来保证「目录里的每个组件都被真实发射器画过」。
+
 ---
 
 **相关文档**：[无头闭环验证](headless.md) · [热重载](../06-tooling/hot-reload.md)

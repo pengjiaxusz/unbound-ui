@@ -6,6 +6,7 @@
 
 pub mod canvas;
 pub mod collections;
+pub mod components;
 pub mod design;
 pub mod fonts;
 pub mod home;
@@ -14,9 +15,12 @@ pub mod layout;
 pub mod motion;
 
 use unbound_math::Rect;
+use unbound_widgets::WidgetCatalogId;
 
 use crate::canvas::Canvas;
 use crate::state::GalleryState;
+
+pub use components::showcase_entry_for_widget;
 
 /// The seven navigation categories.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -28,6 +32,7 @@ pub enum CategoryId {
     Collections,
     Canvas,
     Motion,
+    Components,
     System,
 }
 
@@ -37,13 +42,14 @@ impl CategoryId {
     /// `Design` is part of the tree: leaving it out meant the whole design
     /// section (colour, type, elevation, vectors, fonts) was reachable only
     /// through the single "Design Guidance" row that always opened Colors.
-    pub const ALL: [CategoryId; 6] = [
+    pub const ALL: [CategoryId; 7] = [
         CategoryId::Design,
         CategoryId::Basic,
         CategoryId::Layout,
         CategoryId::Collections,
         CategoryId::Canvas,
         CategoryId::Motion,
+        CategoryId::Components,
     ];
 
     #[must_use]
@@ -56,6 +62,7 @@ impl CategoryId {
             Self::Collections => "Collections",
             Self::Canvas => "Infinite Canvas",
             Self::Motion => "Motion, A11y & Telemetry",
+            Self::Components => "Components",
             Self::System => "System",
         }
     }
@@ -81,6 +88,7 @@ impl CategoryId {
             Self::Collections => &[PageId::ListView, PageId::Assets],
             Self::Canvas => &[PageId::Viewport, PageId::Marquee, PageId::Undo],
             Self::Motion => &[PageId::Springs, PageId::A11y, PageId::Telemetry],
+            Self::Components => &[PageId::Components],
             Self::System => &[PageId::Settings],
         }
     }
@@ -112,10 +120,12 @@ pub enum PageId {
     A11y,
     Telemetry,
     Settings,
+    /// The full component gallery: one card per catalog component.
+    Components,
 }
 
 impl PageId {
-    pub const ALL: [PageId; 22] = [
+    pub const ALL: [PageId; 23] = [
         PageId::Home,
         PageId::Colors,
         PageId::Typography,
@@ -138,6 +148,7 @@ impl PageId {
         PageId::A11y,
         PageId::Telemetry,
         PageId::Settings,
+        PageId::Components,
     ];
 
     #[must_use]
@@ -165,6 +176,7 @@ impl PageId {
             Self::A11y => 19,
             Self::Telemetry => 20,
             Self::Settings => 21,
+            Self::Components => 22,
         }
     }
 
@@ -185,6 +197,7 @@ impl PageId {
             Self::ListView | Self::Assets => CategoryId::Collections,
             Self::Viewport | Self::Marquee | Self::Undo => CategoryId::Canvas,
             Self::Springs | Self::A11y | Self::Telemetry => CategoryId::Motion,
+            Self::Components => CategoryId::Components,
             Self::Settings => CategoryId::System,
         }
     }
@@ -214,6 +227,7 @@ impl PageId {
             Self::A11y => motion::A11Y_INFO,
             Self::Telemetry => motion::TELEMETRY_INFO,
             Self::Settings => motion::SETTINGS_INFO,
+            Self::Components => components::COMPONENTS_INFO,
         }
     }
 
@@ -242,6 +256,7 @@ impl PageId {
             Self::A11y => motion::A11Y_EXAMPLES,
             Self::Telemetry => motion::TELEMETRY_EXAMPLES,
             Self::Settings => motion::SETTINGS_EXAMPLES,
+            Self::Components => components::COMPONENT_EXAMPLES,
         }
     }
 
@@ -394,29 +409,65 @@ pub enum DemoKind {
     Hero,
     CapabilityGrid,
     ControlIndex,
-    Palette { compare: bool },
-    Typography { scaling: bool },
+    Palette {
+        compare: bool,
+    },
+    Typography {
+        scaling: bool,
+    },
     ScriptMatrix,
     CurveInspector,
     BidiSandbox,
-    Elevation { clipping: bool },
-    Vector { shapes: bool },
-    Buttons { icons: bool },
-    Selection { segmented: bool },
-    Sliders { progress: bool },
-    TextField { selection: bool },
-    Flex { box_model: bool },
-    Overlays { tooltips: bool },
+    Elevation {
+        clipping: bool,
+    },
+    Vector {
+        shapes: bool,
+    },
+    Buttons {
+        icons: bool,
+    },
+    Selection {
+        segmented: bool,
+    },
+    Sliders {
+        progress: bool,
+    },
+    TextField {
+        selection: bool,
+    },
+    Flex {
+        box_model: bool,
+    },
+    Overlays {
+        tooltips: bool,
+    },
     DragDrop,
-    VirtualList { metrics: bool },
+    VirtualList {
+        metrics: bool,
+    },
     AssetGrid,
-    Viewport { quadtree: bool },
-    Marquee { snapping: bool },
+    Viewport {
+        quadtree: bool,
+    },
+    Marquee {
+        snapping: bool,
+    },
     Undo,
-    Springs { easing: bool },
-    A11y { focus_rings: bool },
-    Telemetry { graph: bool },
+    Springs {
+        easing: bool,
+    },
+    A11y {
+        focus_rings: bool,
+    },
+    Telemetry {
+        graph: bool,
+    },
     About,
+    /// One catalog component painted by its genuine emitter.
+    Component {
+        id: WidgetCatalogId,
+    },
 }
 
 /// One example card definition.
@@ -542,5 +593,6 @@ pub fn render_demo(ctx: &mut DemoCtx<'_, '_>, demo: DemoKind) {
         DemoKind::A11y { focus_rings } => motion::a11y(ctx, focus_rings),
         DemoKind::Telemetry { graph } => motion::telemetry(ctx, graph),
         DemoKind::About => motion::about(ctx),
+        DemoKind::Component { id } => components::component(ctx, id),
     }
 }

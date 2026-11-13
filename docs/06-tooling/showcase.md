@@ -248,7 +248,7 @@ just showcase -- --shot out.png --width 960 --height 600 --zoom 200 --hud
 Knob 值以 `(page, card, knob)` 编码进 `GalleryState.knobs`，默认值来自
 `KnobSpec`，因此页面定义保持只读，交互状态集中在状态机里。
 
-### 七大板块
+### 八大板块
 
 | 分类 | 页面 |
 | :--- | :--- |
@@ -259,6 +259,7 @@ Knob 值以 `(page, card, knob)` 编码进 `GalleryState.knobs`，默认值来�
 | Collections | Virtualized List、Asset Streaming |
 | Infinite Canvas | Viewport & Quadtree、Marquee & Snapping、Undo / Redo |
 | Motion, A11y & Telemetry | Springs、Accessibility、Telemetry、Settings |
+| Components | 组件画廊：56 个标准组件各一张卡，全部由真实 `catalog::emit_widget` 发射 |
 
 ## 自动化验证
 
@@ -266,7 +267,8 @@ Knob 值以 `(page, card, knob)` 编码进 `GalleryState.knobs`，默认值来�
 
 | 用例 | 验证的链路 |
 | :--- | :--- |
-| `every_page_passes_the_headless_sanitizers` | 21 个页面全部通过 `unbound-headless` 的布局体检 |
+| `every_page_passes_the_headless_sanitizers` | 23 个页面全部通过 `unbound-headless` 的布局体检 |
+| `the_component_gallery_emits_every_catalog_widget` | 滚动画廊全页并集 `emitted_widgets`，断言 100% 覆盖 `WidgetCatalogId::ALL`（S2.4 运行时半区） |
 | `navigation_updates_the_breadcrumb_and_active_page` | 导航行点击 → 面包屑与页面切换 |
 | `the_navigation_pane_collapses_and_expands` | 折叠/展开改变导航宽度与图标栏 |
 | `ctrl_k_searches_the_catalogue_by_crate_and_tag` | 按 `MTSDF` 等标签搜索并跳转 |

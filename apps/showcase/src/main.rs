@@ -1514,7 +1514,7 @@ mod tests {
     fn the_gallery_starts_on_home_with_a_full_catalogue() {
         let app = GalleryApp::new();
         assert_eq!(app.state.active_page, PageId::Home);
-        assert_eq!(PageId::ALL.len(), 22);
+        assert_eq!(PageId::ALL.len(), 23);
         assert!(!PageId::Home.examples().is_empty());
         assert!(PageId::Telemetry.examples().len() >= 2);
     }

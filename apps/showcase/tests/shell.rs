@@ -1226,3 +1226,48 @@ fn dragging_the_navigation_scrollbar_scrolls_the_tree() {
         "dragging the nav scrollbar must scroll the tree"
     );
 }
+
+/// The runtime half of the Showcase coverage gate (S2.4).
+///
+/// The compile-time gate (`showcase_entry_for_widget` + the `const` assertion
+/// in `pages/components.rs`) proves every catalog component is *mounted* by a
+/// gallery card. This proves every one is actually *painted by its genuine
+/// emitter*: cards are culled when offscreen, so the test scrolls the whole
+/// component gallery and unions the per-frame `emitted_widgets` set, then
+/// asserts it covers `WidgetCatalogId::ALL`. A hand-drawn stand-in would never
+/// insert its id, so it cannot satisfy this gate.
+#[test]
+fn the_component_gallery_emits_every_catalog_widget() {
+    use unbound_widgets::WidgetCatalogId;
+
+    let mut app = app();
+    app.navigate(PageId::Components);
+    app.rebuild(VIEWPORT);
+
+    let content = app.layout.content;
+    let page_height = app.page_layout().expect("page layout").content_height;
+    let max_scroll = (page_height - content.size.y + 48.0).max(0.0);
+    let step = (content.size.y * 0.35).max(120.0);
+
+    let mut seen = rustc_hash::FxHashSet::default();
+    let mut scroll = 0.0;
+    loop {
+        app.state.content_scroll = scroll;
+        app.rebuild(VIEWPORT);
+        seen.extend(app.emitted_widgets().iter().copied());
+        if scroll >= max_scroll {
+            break;
+        }
+        scroll = (scroll + step).min(max_scroll);
+    }
+
+    let missing: Vec<&str> = WidgetCatalogId::ALL
+        .iter()
+        .filter(|id| !seen.contains(id))
+        .map(|id| id.module_name())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the gallery never emitted these catalog components: {missing:?}"
+    );
+}

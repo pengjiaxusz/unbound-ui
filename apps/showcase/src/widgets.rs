@@ -18,7 +18,7 @@ use unbound_widgets::segmented::{
 };
 use unbound_widgets::slider::{emit_slider, SliderDesc, SliderTokens};
 use unbound_widgets::switch::{emit_switch, SwitchDesc, SwitchTokens};
-use unbound_widgets::ControlState;
+use unbound_widgets::{ControlState, WidgetCatalogId};
 
 use crate::canvas::{quads_bounds, AlignX, AlignY, Canvas, Visual};
 use crate::target::Target;
@@ -69,7 +69,7 @@ pub fn button(
         .with_focus_ring_gap(2.0);
     desc.font_size = font_size;
     let output = emit_button_with_tokens(node, &desc, state, button_tokens(variant), &mut quads);
-    canvas.control_output(node, &output);
+    canvas.widget_output(WidgetCatalogId::Button, node, &output);
     if !enabled {
         // The engine drops the hit region of a disabled button; the gallery
         // keeps its disabled buttons absorbing clicks like the hand-drawn
@@ -191,7 +191,7 @@ pub fn toggle_switch(
         AlignY::Center,
     );
     let output = emit_switch(node, &desc, state, &quads, SwitchTokens::standard());
-    canvas.control_output(node, &output);
+    canvas.widget_output(WidgetCatalogId::Switch, node, &output);
     visual_of(state)
 }
 
@@ -234,7 +234,7 @@ pub fn checkbox(
         &quads,
         CheckboxTokens::standard(),
     );
-    canvas.control_output(node, &output);
+    canvas.widget_output(WidgetCatalogId::Checkbox, node, &output);
     visual_of(state)
 }
 
@@ -257,7 +257,7 @@ pub fn radio(
         AlignY::Center,
     );
     let output = emit_radio(node, &desc, state, &quads, RadioTokens::standard());
-    canvas.control_output(node, &output);
+    canvas.widget_output(WidgetCatalogId::Radio, node, &output);
     visual_of(state)
 }
 
@@ -273,7 +273,7 @@ pub fn slider(
     let state = canvas.control_state(node, false, false);
     let desc = SliderDesc::new(rect, "Slider", value, min, max);
     let output = emit_slider(node, &desc, state, &[], SliderTokens::standard());
-    canvas.control_output(node, &output);
+    canvas.widget_output(WidgetCatalogId::Slider, node, &output);
     visual_of(state)
 }
 
@@ -297,7 +297,7 @@ pub fn segmented(
     }
     let tokens = SegmentedTokens::standard();
     let frame = emit_segmented_frame(&desc, tokens);
-    canvas.control_output(0, &frame);
+    canvas.widget_output(WidgetCatalogId::Segmented, 0, &frame);
     for index in 0..labels.len() {
         let state = canvas.control_state(ids[index], disabled, index == selected);
         let (quads, _) = canvas.layout_text(
