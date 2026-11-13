@@ -38,3 +38,12 @@ gallery *ARGS:
 # 编译 Vulkan 着色器
 compile-shaders:
     bash scripts/compile-shaders.sh
+
+# 运行指定示例程序
+# 示例：just example 01_hello_counter
+example NAME *ARGS:
+    cargo run -p unbound-app --example {{NAME}} {{ARGS}}
+
+# 运行所有示例程序的无头自检套件
+test-examples:
+    just q-run cargo test -p unbound-app --examples

@@ -31,6 +31,9 @@ rustc-hash.workspace = true
 
 [dev-dependencies]
 unbound-text.workspace = true
+unbound-canvas.workspace = true
+unbound-anim.workspace = true
+unbound-vector.workspace = true
 app-guest = { path = "../app-guest" }
 png.workspace = true
 

@@ -13,6 +13,7 @@ use unbound_canvas::{TransactionKind, UndoStack};
 use unbound_math::Vec2;
 use unbound_widgets::curve_editor::CurveEditorState;
 use unbound_widgets::progress::ProgressState;
+use unbound_widgets::WidgetCatalogId;
 use unbound_world::virtualize::{VirtualList, WindowUpdate};
 
 use crate::pages::{ExampleDef, KnobSpec, PageId};
@@ -282,6 +283,7 @@ pub struct GalleryState {
     pub knobs: HashMap<u32, f32>,
     pub expanded_code: HashSet<(u8, u8)>,
     pub demo: DemoState,
+    pub sandbox: ComponentSandboxState,
     /// Bumped on every state change, so the window can skip identical frames.
     pub revision: u64,
     /// Accumulator that throttles demo animation rebuilds to ~30 Hz.
@@ -310,6 +312,7 @@ impl Default for GalleryState {
             knobs: HashMap::new(),
             expanded_code: HashSet::new(),
             demo: DemoState::default(),
+            sandbox: ComponentSandboxState::default(),
             revision: 1,
             animation_clock: 0.0,
         }
@@ -545,5 +548,175 @@ impl GalleryState {
             .filter(|page| page.matches(&query))
             .take(4)
             .collect()
+    }
+}
+
+/// Live interactive state for the 91 component showcase sandboxes.
+#[derive(Clone, Debug, Default)]
+pub struct ComponentSandboxState {
+    pub click_counts: HashMap<u8, u32>,
+    pub toggles: HashMap<u8, bool>,
+    pub selected_indices: HashMap<u8, usize>,
+    pub text_buffers: HashMap<u8, String>,
+    pub slider_values: HashMap<u8, f32>,
+}
+
+impl ComponentSandboxState {
+    #[must_use]
+    pub fn get_clicks(&self, id: WidgetCatalogId) -> u32 {
+        self.click_counts.get(&(id as u8)).copied().unwrap_or(0)
+    }
+
+    #[must_use]
+    pub fn get_toggle(&self, id: WidgetCatalogId) -> bool {
+        self.toggles.get(&(id as u8)).copied().unwrap_or(false)
+    }
+
+    #[must_use]
+    pub fn get_selected(&self, id: WidgetCatalogId) -> usize {
+        self.selected_indices.get(&(id as u8)).copied().unwrap_or(0)
+    }
+
+    #[must_use]
+    pub fn get_text<'a>(&'a self, id: WidgetCatalogId, default: &'a str) -> &'a str {
+        self.text_buffers
+            .get(&(id as u8))
+            .map(String::as_str)
+            .unwrap_or(default)
+    }
+
+    #[must_use]
+    pub fn get_slider(&self, id: WidgetCatalogId, default: f32) -> f32 {
+        self.slider_values
+            .get(&(id as u8))
+            .copied()
+            .unwrap_or(default)
+    }
+}
+
+/// Exhaustive reduction of user interaction on any component card in the gallery.
+#[deny(unreachable_patterns)]
+pub fn reduce_showcase_component(
+    id: WidgetCatalogId,
+    sandbox: &mut ComponentSandboxState,
+    _click_pos: Option<Vec2>,
+) -> bool {
+    let key = id as u8;
+    match id {
+        WidgetCatalogId::Button
+        | WidgetCatalogId::Alert
+        | WidgetCatalogId::AlertDialog
+        | WidgetCatalogId::Badge
+        | WidgetCatalogId::Chip
+        | WidgetCatalogId::CommandPalette
+        | WidgetCatalogId::Icon
+        | WidgetCatalogId::Popconfirm
+        | WidgetCatalogId::Toast
+        | WidgetCatalogId::Tour
+        | WidgetCatalogId::Avatar
+        | WidgetCatalogId::AvatarGroup
+        | WidgetCatalogId::Dock
+        | WidgetCatalogId::Containers
+        | WidgetCatalogId::EmptyState
+        | WidgetCatalogId::Watermark
+        | WidgetCatalogId::NinePatch
+        | WidgetCatalogId::Stack
+        | WidgetCatalogId::Wrap
+        | WidgetCatalogId::Divider
+        | WidgetCatalogId::Form
+        | WidgetCatalogId::StatusBar
+        | WidgetCatalogId::PropertyGrid
+        | WidgetCatalogId::NotificationCenter
+        | WidgetCatalogId::Banner
+        | WidgetCatalogId::FileDrop
+        | WidgetCatalogId::RichText
+        | WidgetCatalogId::Overlay
+        | WidgetCatalogId::Image => {
+            let count = sandbox.click_counts.entry(key).or_insert(0);
+            *count = count.wrapping_add(1);
+            true
+        }
+        WidgetCatalogId::Checkbox
+        | WidgetCatalogId::Switch
+        | WidgetCatalogId::Collapsible
+        | WidgetCatalogId::Modal
+        | WidgetCatalogId::Drawer
+        | WidgetCatalogId::Popover
+        | WidgetCatalogId::Tooltip
+        | WidgetCatalogId::HoverCard
+        | WidgetCatalogId::LoadingOverlay => {
+            let on = sandbox.toggles.entry(key).or_insert(false);
+            *on = !*on;
+            true
+        }
+        WidgetCatalogId::Accordion
+        | WidgetCatalogId::Tabs
+        | WidgetCatalogId::Radio
+        | WidgetCatalogId::Segmented
+        | WidgetCatalogId::Stepper
+        | WidgetCatalogId::Rating
+        | WidgetCatalogId::Pagination
+        | WidgetCatalogId::Carousel
+        | WidgetCatalogId::NavigationRail
+        | WidgetCatalogId::Menu
+        | WidgetCatalogId::Menubar
+        | WidgetCatalogId::ContextMenu
+        | WidgetCatalogId::Breadcrumb
+        | WidgetCatalogId::Toolbar
+        | WidgetCatalogId::CanvasToolbar
+        | WidgetCatalogId::Select
+        | WidgetCatalogId::Cascader
+        | WidgetCatalogId::Table
+        | WidgetCatalogId::DataGrid
+        | WidgetCatalogId::VirtualViews
+        | WidgetCatalogId::Masonry
+        | WidgetCatalogId::Chart
+        | WidgetCatalogId::Timeline
+        | WidgetCatalogId::TimelineTrack
+        | WidgetCatalogId::Transfer
+        | WidgetCatalogId::TreeView
+        | WidgetCatalogId::DatePicker
+        | WidgetCatalogId::DateRangePicker
+        | WidgetCatalogId::TimePicker => {
+            let sel = sandbox.selected_indices.entry(key).or_insert(0);
+            *sel = (*sel + 1) % 5;
+            true
+        }
+        WidgetCatalogId::Slider
+        | WidgetCatalogId::Progress
+        | WidgetCatalogId::NumberInput
+        | WidgetCatalogId::Spinner
+        | WidgetCatalogId::AspectRatioBox
+        | WidgetCatalogId::SplitPane
+        | WidgetCatalogId::Ruler
+        | WidgetCatalogId::Minimap
+        | WidgetCatalogId::Scroll
+        | WidgetCatalogId::ColorPicker
+        | WidgetCatalogId::GradientEditor
+        | WidgetCatalogId::CurveEditor
+        | WidgetCatalogId::NodeGraph
+        | WidgetCatalogId::Gizmo => {
+            let val = sandbox.slider_values.entry(key).or_insert(50.0);
+            *val = (*val + 10.0) % 100.0;
+            true
+        }
+        WidgetCatalogId::TextInput
+        | WidgetCatalogId::TextArea
+        | WidgetCatalogId::AutoComplete
+        | WidgetCatalogId::Combobox
+        | WidgetCatalogId::PinInput
+        | WidgetCatalogId::TagInput
+        | WidgetCatalogId::HotkeyInput
+        | WidgetCatalogId::CodeBlock
+        | WidgetCatalogId::CodeEditor
+        | WidgetCatalogId::Skeleton => {
+            let text = sandbox.text_buffers.entry(key).or_default();
+            if text.len() >= 12 {
+                text.clear();
+            } else {
+                text.push_str("Unbound ");
+            }
+            true
+        }
     }
 }

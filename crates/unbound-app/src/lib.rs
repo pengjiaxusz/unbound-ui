@@ -625,6 +625,17 @@ impl AppContext {
         RefMut::map(self.widget_state.borrow_mut(), |store| store.entry(key))
     }
 
+    /// Borrow the widget state store immutably.
+    #[must_use]
+    pub fn state_store(&self) -> core::cell::Ref<'_, WidgetStateStore> {
+        self.widget_state.borrow()
+    }
+
+    /// Borrow the widget state store mutably.
+    pub fn state_store_mut(&self) -> RefMut<'_, WidgetStateStore> {
+        self.widget_state.borrow_mut()
+    }
+
     /// Schedule a one-shot event `after` this reduction.
     ///
     /// The token is allocated first and handed to `make`, so the event can

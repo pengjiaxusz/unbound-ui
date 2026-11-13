@@ -293,14 +293,27 @@ impl TextInputDesc {
 impl SelectDesc {
     /// Create a Rect-free select dropdown with `options`.
     #[must_use]
-    pub fn options(options: Vec<String>) -> Self {
-        Self::new(Rect::ZERO, options)
+    pub fn options(options: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        Self::new(
+            Rect::ZERO,
+            options
+                .into_iter()
+                .map(|s| s.as_ref().to_string())
+                .collect(),
+        )
     }
 
     /// Set placeholder text.
     #[must_use]
     pub fn placeholder(self, placeholder: impl Into<String>) -> Self {
         self.with_placeholder(placeholder)
+    }
+
+    /// Pre-select an option index.
+    #[must_use]
+    pub fn selected(mut self, index: usize) -> Self {
+        self.initial_selection = Some(index);
+        self
     }
 }
 
@@ -689,6 +702,14 @@ impl UiWidget for TextInputDesc {
 
 impl UiWidget for SelectDesc {
     type State = SelectState;
+
+    fn initial_state(&self) -> Self::State {
+        SelectState {
+            open: false,
+            selected: self.initial_selection,
+            highlighted: None,
+        }
+    }
 
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
         let longest = self

@@ -42,6 +42,8 @@ pub struct SelectDesc {
     pub placeholder: String,
     /// Indices of the options that cannot be chosen.
     pub disabled_options: Vec<usize>,
+    /// Optional initial selection index for declarative builders.
+    pub initial_selection: Option<usize>,
     /// The corner radius.
     pub radius: f32,
     /// The draw order key.
@@ -57,6 +59,7 @@ impl SelectDesc {
             label: String::new(),
             placeholder: String::new(),
             disabled_options: Vec::new(),
+            initial_selection: None,
             radius: 8.0,
             z: 730,
         }

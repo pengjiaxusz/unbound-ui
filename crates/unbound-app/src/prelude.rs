@@ -19,11 +19,12 @@ pub use unbound_text::TextStyle;
 pub use unbound_theme::{ThemeKind, ThemeState, Token};
 pub use unbound_widgets::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 pub use unbound_widgets::{
-    AlertDesc, BadgeDesc, ButtonDesc, ButtonSize, ButtonVariant, CardDesc, CheckState,
-    CheckboxDesc, CodeEditorDesc, CodeEditorState, ControlState, DataGridDesc, DataGridState,
-    DividerDesc, PaginationDesc, PaginationState, PopconfirmDesc, ProgressDesc, ProgressState,
-    SelectDesc, SelectState, SliderDesc, SwitchDesc, TableDesc, TableRow, TableState,
-    TextEditState, TextInputDesc, TimelineTrackDesc, TimelineTrackState, TourDesc, TransferDesc,
-    TransferState, WidgetCatalogId, WidgetOutput,
+    AlertDesc, BadgeDesc, BannerDesc, ButtonDesc, ButtonSize, ButtonVariant, CardDesc, CheckState,
+    CheckboxDesc, CodeEditorDesc, CodeEditorState, ColumnSpec, ControlState, CurveEditorDesc,
+    DataGridDesc, DataGridState, DividerDesc, FileDropDesc, PaginationDesc, PaginationState,
+    PopconfirmDesc, ProgressDesc, ProgressState, SelectDesc, SelectState, Severity, SliderDesc,
+    SwitchDesc, TableDesc, TableRow, TableState, TextEditState, TextInputDesc, TimelineTrackDesc,
+    TimelineTrackState, TourDesc, TransferDesc, TransferState, WatermarkDesc, WidgetCatalogId,
+    WidgetOutput,
 };
 pub use unbound_world::NodeId;

@@ -1590,6 +1590,19 @@ impl GalleryApp {
                     self.state.bump();
                 }
             }
+            PageId::Components => {
+                if let Some(example) = PageId::Components.examples().get(card as usize) {
+                    if let pages::DemoKind::Component { id } = example.demo {
+                        if crate::state::reduce_showcase_component(
+                            id,
+                            &mut self.state.sandbox,
+                            Some(position),
+                        ) {
+                            self.state.bump();
+                        }
+                    }
+                }
+            }
             _ => {
                 let _ = position;
             }
