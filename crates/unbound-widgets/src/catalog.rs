@@ -596,5 +596,51 @@ pub fn emit_widget(
                 100,
             )
         }
+        WidgetCatalogId::Collapsible => {
+            let desc = crate::collapsible::CollapsibleDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, 76.0),
+                "Details",
+                true,
+            );
+            crate::collapsible::emit_collapsible(node, &desc, state, label)
+        }
+        WidgetCatalogId::Masonry => {
+            let desc = crate::masonry::MasonryDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, 96.0),
+                2,
+                vec![
+                    crate::masonry::MasonryItem { height: 32.0 },
+                    crate::masonry::MasonryItem { height: 24.0 },
+                    crate::masonry::MasonryItem { height: 28.0 },
+                ],
+            );
+            crate::masonry::emit_masonry(node, &desc, state)
+        }
+        WidgetCatalogId::NavigationRail => {
+            let desc = crate::navigation_rail::NavigationRailDesc::new(
+                Rect::new(o.x, o.y, 140.0, 110.0),
+                vec![
+                    crate::navigation_rail::NavRailItem::new(1, "Home").with_badge(2),
+                    crate::navigation_rail::NavRailItem::new(2, "Assets"),
+                ],
+                1,
+            );
+            crate::navigation_rail::emit_navigation_rail(node, &desc, state, label)
+        }
+        WidgetCatalogId::Pagination => {
+            let desc = crate::pagination::PaginationDesc::new(rect, 12, 5);
+            crate::pagination::emit_pagination(node, &desc, state, label)
+        }
+        WidgetCatalogId::Stepper => {
+            let desc = crate::stepper::StepperDesc::new(
+                rect,
+                vec![
+                    crate::stepper::StepItem::new("Plan", crate::stepper::StepStatus::Completed),
+                    crate::stepper::StepItem::new("Build", crate::stepper::StepStatus::Active),
+                    crate::stepper::StepItem::new("Ship", crate::stepper::StepStatus::Pending),
+                ],
+            );
+            crate::stepper::emit_stepper(node, &desc, state, label)
+        }
     }
 }

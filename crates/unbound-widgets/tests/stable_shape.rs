@@ -155,6 +155,11 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Tooltip => "tooltip",
         WidgetCatalogId::TreeView => "tree_view",
         WidgetCatalogId::VirtualViews => "virtual_views",
+        WidgetCatalogId::Collapsible => "collapsible",
+        WidgetCatalogId::Masonry => "masonry",
+        WidgetCatalogId::NavigationRail => "navigation_rail",
+        WidgetCatalogId::Pagination => "pagination",
+        WidgetCatalogId::Stepper => "stepper",
     }
 }
 
@@ -231,5 +236,5 @@ fn the_probe_covers_every_component() {
         WidgetCatalogId::COUNT,
         "the probe must cover every component exactly once"
     );
-    assert_eq!(WidgetCatalogId::COUNT, 56);
+    assert_eq!(WidgetCatalogId::COUNT, 61);
 }

@@ -134,6 +134,11 @@ define_showcase_components! {
     Tooltip => "Tooltip", "A delayed, smart-flipping hint.", 260.0,
     TreeView => "Tree view", "An expandable row with keyboard navigation.", 320.0,
     VirtualViews => "Virtual row", "A Fenwick-backed variable-height virtual row.", 240.0,
+    Collapsible => "Collapsible", "Single-section disclosure panel with smooth spring progress.", 240.0,
+    Masonry => "Masonry grid", "Shortest-column adaptive waterfall grid and aspect-ratio box.", 280.0,
+    NavigationRail => "Navigation rail", "Collapsible sidebar navigation rail with badges.", 280.0,
+    Pagination => "Pagination", "Page buttons with ellipsis folding and page-size metadata.", 220.0,
+    Stepper => "Stepper", "Horizontal or vertical multi-step progress indicator.", 240.0,
 }
 
 /// Whether `examples` mounts a card for `id` (const-comparable).
