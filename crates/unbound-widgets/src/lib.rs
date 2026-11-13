@@ -21,64 +21,132 @@
 //! [`app-guest`](../../app_guest) still depends on [`unbound_abi`] alone, so a
 //! guest application may host these controls without pulling in the engine.
 
-pub mod accordion;
-pub mod alert;
-pub mod alert_dialog;
-pub mod avatar;
-pub mod badge;
-pub mod breadcrumb;
-pub mod button;
-pub mod canvas_toolbar;
-pub mod chart;
-pub mod checkbox;
-pub mod code_block;
-pub mod color_picker;
-pub mod combobox;
-pub mod command_palette;
-pub mod containers;
-pub mod context_menu;
-pub mod curve_editor;
-pub mod date_picker;
+// Infrastructure modules: scene diffing and primitive packing helpers. They
+// are not business components, so they stay out of the showcase catalog.
+pub mod catalog;
 pub mod diff;
-pub mod divider;
-pub mod dock;
-pub mod drawer;
-pub mod file_drop;
-pub mod form;
-pub mod gizmo;
-pub mod hover_card;
-pub mod image;
-pub mod menu;
-pub mod menubar;
-pub mod minimap;
-pub mod modal;
-pub mod node_graph;
-pub mod number_input;
-pub mod overlay;
-pub mod popover;
 pub mod primitive;
-pub mod progress;
-pub mod property_grid;
-pub mod radio;
-pub mod rich_text;
-pub mod ruler;
-pub mod scroll;
-pub mod segmented;
-pub mod select;
-pub mod skeleton;
-pub mod slider;
-pub mod split_pane;
-pub mod switch;
-pub mod table;
-pub mod tabs;
-pub mod tag_input;
-pub mod text_area;
-pub mod text_input;
-pub mod toast;
-pub mod toolbar;
-pub mod tooltip;
-pub mod tree_view;
-pub mod virtual_views;
+
+/// Declare every business component module and derive the exhaustive catalog.
+///
+/// The macro is the single source of truth for the component vocabulary: it
+/// emits the `pub mod` declarations *and* the [`WidgetCatalogId`] enum. Because
+/// the enum has no `#[non_exhaustive]` marker, every downstream `match` over it
+/// (the stable-shape probe, the showcase coverage gate) must name every variant
+/// — adding a module here without wiring it into those matches is a compile
+/// error (`E0004`), not a silently uncovered component.
+macro_rules! define_widget_catalog {
+    ($( $variant:ident => $module:ident ),+ $(,)?) => {
+        $( pub mod $module; )+
+
+        /// One variant per business component module.
+        #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+        pub enum WidgetCatalogId {
+            $( $variant, )+
+        }
+
+        impl WidgetCatalogId {
+            /// Every component, in declaration order.
+            pub const ALL: &'static [Self] = &[ $( Self::$variant ),+ ];
+            /// The number of business components.
+            pub const COUNT: usize = Self::ALL.len();
+
+            /// The source module that implements this component.
+            #[must_use]
+            pub const fn module_name(self) -> &'static str {
+                match self { $( Self::$variant => stringify!($module), )+ }
+            }
+
+            /// The component at `index` in [`Self::ALL`].
+            #[must_use]
+            pub const fn from_index(index: usize) -> Self {
+                Self::ALL[index]
+            }
+        }
+    };
+}
+
+define_widget_catalog! {
+    Accordion => accordion,
+    Alert => alert,
+    AlertDialog => alert_dialog,
+    Avatar => avatar,
+    Badge => badge,
+    Breadcrumb => breadcrumb,
+    Button => button,
+    CanvasToolbar => canvas_toolbar,
+    Chart => chart,
+    Checkbox => checkbox,
+    CodeBlock => code_block,
+    ColorPicker => color_picker,
+    Combobox => combobox,
+    CommandPalette => command_palette,
+    Containers => containers,
+    ContextMenu => context_menu,
+    CurveEditor => curve_editor,
+    DatePicker => date_picker,
+    Divider => divider,
+    Dock => dock,
+    Drawer => drawer,
+    FileDrop => file_drop,
+    Form => form,
+    Gizmo => gizmo,
+    HoverCard => hover_card,
+    Image => image,
+    Menu => menu,
+    Menubar => menubar,
+    Minimap => minimap,
+    Modal => modal,
+    NodeGraph => node_graph,
+    NumberInput => number_input,
+    Overlay => overlay,
+    Popover => popover,
+    Progress => progress,
+    PropertyGrid => property_grid,
+    Radio => radio,
+    RichText => rich_text,
+    Ruler => ruler,
+    Scroll => scroll,
+    Segmented => segmented,
+    Select => select,
+    Skeleton => skeleton,
+    Slider => slider,
+    SplitPane => split_pane,
+    Switch => switch,
+    Table => table,
+    Tabs => tabs,
+    TagInput => tag_input,
+    TextArea => text_area,
+    TextInput => text_input,
+    Toast => toast,
+    Toolbar => toolbar,
+    Tooltip => tooltip,
+    TreeView => tree_view,
+    VirtualViews => virtual_views,
+}
+
+/// Proof that a component was really emitted, not faked with a hand-drawn rect.
+///
+/// The constructor is `pub(crate)`: only `unbound-widgets` itself can mint a
+/// witness, by running the component's genuine emitter through the catalog
+/// probe. An application cannot forge one, so a showcase branch that returns a
+/// witness has demonstrably called the real component.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct WidgetShowcaseWitness {
+    id: WidgetCatalogId,
+}
+
+impl WidgetShowcaseWitness {
+    pub(crate) const fn new(id: WidgetCatalogId) -> Self {
+        Self { id }
+    }
+
+    /// The component this witness proves was emitted.
+    #[must_use]
+    pub const fn id(self) -> WidgetCatalogId {
+        self.id
+    }
+}
 
 use rustc_hash::FxHashMap;
 use unbound_a11y::{A11yNode, Semantics};

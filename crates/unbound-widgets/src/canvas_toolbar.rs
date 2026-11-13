@@ -255,14 +255,24 @@ pub fn emit_canvas_toolbar(
     ];
 
     let mut tools = Vec::with_capacity(CanvasTool::ALL.len());
+    let hovered = control.phase == crate::PointerPhase::Hovered;
     for tool in CanvasTool::ALL {
         let button = desc.tool_rect(tool);
         let active = tool == state.active;
-        if active {
-            primitives.push(surface(button, 7.0, Token::PRIMARY, desc.z + 1));
-        } else if control.phase == crate::PointerPhase::Hovered {
-            primitives.push(surface(button, 7.0, Token::CONTROL_HOVER, desc.z + 1));
-        }
+        // One slot per tool, always in the pool: the active tool paints its
+        // primary fill, every other tool keeps a hover wash whose opacity is
+        // the only thing hovering changes, so the run never reshapes.
+        let slot = if active {
+            surface(button, 7.0, Token::PRIMARY, desc.z + 1)
+        } else {
+            let mut wash = surface(button, 7.0, Token::CONTROL_HOVER, desc.z + 1);
+            wash.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+                wash.depth_u16(),
+                if hovered { 1.0 } else { 0.0 },
+            );
+            wash
+        };
+        primitives.push(slot);
         tools.push((
             tool,
             HitRegion::new(node, CONTROL_LAYER, u32::from(desc.z), button)

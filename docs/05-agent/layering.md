@@ -54,6 +54,31 @@ const ALLOWED: [&str; 3] = ["unbound-abi", "serde", "postcard"];
 该指纹只在状态结构体布局**固定**（`#[repr(C)]`）时才有意义：默认的 `repr(Rust)`
 允许编译器重排字段，两次构建可能排得不一样，而手写的指纹检测不出这种漂移。
 
+## 组件目录与编译期 Showcase 门禁
+
+`unbound-widgets` 的业务组件不再手写零散 `pub mod`，而是由 `define_widget_catalog!`
+宏统一声明（`crates/unbound-widgets/src/lib.rs`）。宏一次性产出：
+
+1. 全部 56 个业务组件的 `pub mod` 导出（`diff` / `primitive` / `catalog` 是基础设施，不入目录）；
+2. **无 `#[non_exhaustive]`** 的穷举枚举 `WidgetCatalogId` 及 `ALL` / `COUNT` /
+   `module_name()` / `from_index()`；
+3. 见证令牌 `WidgetShowcaseWitness`：构造函数 `pub(crate)`，**应用层无法伪造**，
+   只有 crate 内部跑通真实发射器才能产出。
+
+由此形成三级编译期强约束：
+
+| 级 | 位置 | 约束 |
+| :--- | :--- | :--- |
+| 目录 | `define_widget_catalog!` | 新增组件模块即新增枚举变体 |
+| 探针 | `catalog::probe_widget`（`#[deny(unreachable_patterns)]`，无 `_ =>`） | 每个变体必须调用**真实** `emit_*` 发射器并产出见证；漏写直接 `E0004` |
+| 体检 | `tests/stable_shape.rs` | 对 `WidgetCatalogId::ALL` × 24 种 `ControlState` 断言图元数恒定（Stable Shape / R4），并断言交互组件悬停必有差异 |
+
+`catalog::probe_widget(id, state)` 为每个组件构造最小合法描述符、调用其真实发射器，
+返回 `CatalogProbe { witness, primitives }`。它既是 Stable Shape 全量体检的底座，
+也是 Showcase 覆盖率门禁（`apps/showcase` 侧 `showcase_entry_for_widget` 穷举映射）
+的防伪锚点：任何「组件已定义却未在展台展示」或「手绘矩形冒充组件」都会在编译期或
+无头测试中被拒绝。
+
 ---
 
 **相关文档**：[无头闭环验证](headless.md) · [热重载](../06-tooling/hot-reload.md)
