@@ -108,10 +108,12 @@ fn the_state_snapshot_is_a_versioned_postcard_envelope() {
             .expect("field is present")
     };
     let count: i64 = postcard::from_bytes(field(1)).unwrap();
-    let rows: Vec<app_guest::Row> = postcard::from_bytes(field(3)).unwrap();
+    let rows = app_guest::decode_rows(field(3)).expect("nested row envelopes");
     assert_eq!(count, 1);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].label, "item 1");
+    assert_eq!(rows[0].priority, 0);
+    assert!(rows[0].tags.is_empty());
 }
 
 #[test]

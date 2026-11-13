@@ -233,6 +233,85 @@ pub fn migrate<'a>(
     Ok(out)
 }
 
+/// Length of the list header, a `u32` item count.
+const LIST_HEADER_LEN: usize = 4;
+/// Length of one item's `u32` envelope length.
+const ITEM_LENGTH_LEN: usize = 4;
+
+/// Encode a collection as `u32 count | count × (u32 length | UBMF envelope)`.
+///
+/// The nesting is what keeps `Row` changes cheap: each item is its own
+/// field-tagged envelope, so adding a field to one row does not shift the
+/// bytes of any other row, and the decoder can migrate every item
+/// independently.
+///
+/// # Errors
+/// Propagates the encoder's and [`encode`]'s errors.
+pub fn encode_list<T, F>(items: &[T], mut encode_item: F) -> Result<Vec<u8>, MigrationError>
+where
+    F: FnMut(&T) -> Result<Vec<u8>, MigrationError>,
+{
+    let count = u32::try_from(items.len()).map_err(|_| MigrationError::TooManyFields)?;
+    let mut out = Vec::with_capacity(LIST_HEADER_LEN + items.len() * 8);
+    out.extend_from_slice(&count.to_le_bytes());
+    for item in items {
+        let envelope = encode_item(item)?;
+        let len = u32::try_from(envelope.len()).map_err(|_| MigrationError::FieldTooLarge)?;
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&envelope);
+    }
+    Ok(out)
+}
+
+/// Decode and migrate a list encoded by [`encode_list`].
+///
+/// Every item is migrated against `item_schema` on its own, so a field added
+/// to the item takes its default and a field removed from it is dropped
+/// without touching the neighbouring items.
+///
+/// # Errors
+/// Returns a structural [`MigrationError`] when the list is truncated, has
+/// trailing bytes, or when any item fails to migrate.
+pub fn migrate_list<T, F>(
+    bytes: &[u8],
+    item_schema: &[FieldSpec],
+    mut decode_item: F,
+) -> Result<Vec<T>, MigrationError>
+where
+    F: FnMut(&[MigratedField<'_>]) -> Result<T, MigrationError>,
+{
+    if bytes.len() < LIST_HEADER_LEN {
+        return Err(MigrationError::Truncated);
+    }
+    let count = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+    let mut offset = LIST_HEADER_LEN;
+    // A corrupt count must not reserve gigabytes up front.
+    let mut items = Vec::with_capacity(count.min(4096));
+    for _ in 0..count {
+        if bytes.len() - offset < ITEM_LENGTH_LEN {
+            return Err(MigrationError::Truncated);
+        }
+        let len = u32::from_le_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ]) as usize;
+        offset += ITEM_LENGTH_LEN;
+        let end = offset.checked_add(len).ok_or(MigrationError::Truncated)?;
+        if end > bytes.len() {
+            return Err(MigrationError::Truncated);
+        }
+        let fields = migrate(&bytes[offset..end], item_schema)?;
+        items.push(decode_item(&fields)?);
+        offset = end;
+    }
+    if offset != bytes.len() {
+        return Err(MigrationError::TrailingBytes);
+    }
+    Ok(items)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +406,109 @@ mod tests {
         bytes.extend_from_slice(&1u16.to_le_bytes());
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(decode(&bytes), Err(MigrationError::Truncated));
+    }
+
+    // ---- nested lists ---------------------------------------------------
+
+    #[derive(Debug, PartialEq)]
+    struct Item {
+        name: String,
+        done: bool,
+        priority: u8,
+    }
+
+    const ITEM_NAME: u16 = 1;
+    const ITEM_DONE: u16 = 2;
+    const ITEM_PRIORITY: u16 = 3;
+
+    const ITEM_V1: &[FieldSpec] = &[
+        FieldSpec::required(ITEM_NAME),
+        FieldSpec::required(ITEM_DONE),
+    ];
+    const ITEM_V2: &[FieldSpec] = &[
+        FieldSpec::required(ITEM_NAME),
+        FieldSpec::required(ITEM_DONE),
+        FieldSpec::optional(ITEM_PRIORITY, &[0]),
+    ];
+
+    fn encode_item(item: &Item, schema: &[FieldSpec]) -> Result<Vec<u8>, MigrationError> {
+        let name = postcard::to_allocvec(&item.name).unwrap();
+        let done = postcard::to_allocvec(&item.done).unwrap();
+        let priority = postcard::to_allocvec(&item.priority).unwrap();
+        let mut fields = vec![Field::new(ITEM_NAME, &name), Field::new(ITEM_DONE, &done)];
+        if schema.iter().any(|spec| spec.id == ITEM_PRIORITY) {
+            fields.push(Field::new(ITEM_PRIORITY, &priority));
+        }
+        encode(&fields)
+    }
+
+    fn decode_item(fields: &[MigratedField<'_>]) -> Result<Item, MigrationError> {
+        let read = |id: u16| fields.iter().find(|field| field.id == id).unwrap();
+        Ok(Item {
+            name: postcard::from_bytes(&read(ITEM_NAME).bytes).unwrap(),
+            done: postcard::from_bytes(&read(ITEM_DONE).bytes).unwrap(),
+            priority: postcard::from_bytes(&read(ITEM_PRIORITY).bytes).unwrap(),
+        })
+    }
+
+    fn sample_items(count: usize, priority: u8) -> Vec<Item> {
+        (0..count)
+            .map(|index| Item {
+                name: format!("row {index}"),
+                done: index % 3 == 0,
+                priority,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_list_round_trips_each_item_as_its_own_envelope() {
+        let items = sample_items(100, 0);
+        let bytes = encode_list(&items, |item| encode_item(item, ITEM_V2)).unwrap();
+        let decoded = migrate_list(&bytes, ITEM_V2, decode_item).unwrap();
+        assert_eq!(decoded, items);
+    }
+
+    #[test]
+    fn every_item_of_a_v1_list_gains_the_v2_default_independently() {
+        let items = sample_items(100, 0);
+        let bytes = encode_list(&items, |item| encode_item(item, ITEM_V1)).unwrap();
+        let decoded = migrate_list(&bytes, ITEM_V2, decode_item).unwrap();
+        assert_eq!(decoded.len(), 100);
+        for (old, new) in items.iter().zip(&decoded) {
+            assert_eq!(new.name, old.name);
+            assert_eq!(new.done, old.done);
+            assert_eq!(new.priority, 0, "the new field takes its default");
+        }
+    }
+
+    #[test]
+    fn a_truncated_list_is_rejected_without_allocating_the_claimed_count() {
+        let items = sample_items(3, 1);
+        let mut bytes = encode_list(&items, |item| encode_item(item, ITEM_V2)).unwrap();
+        bytes.truncate(bytes.len() - 1);
+        assert_eq!(
+            migrate_list::<Item, _>(&bytes, ITEM_V2, decode_item),
+            Err(MigrationError::Truncated)
+        );
+
+        // A huge declared count must not be trusted before the bytes are read.
+        let mut lie = vec![0xFF, 0xFF, 0xFF, 0xFF];
+        lie.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(
+            migrate_list::<Item, _>(&lie, ITEM_V2, decode_item),
+            Err(MigrationError::Truncated)
+        );
+    }
+
+    #[test]
+    fn trailing_bytes_after_a_list_are_rejected() {
+        let items = sample_items(1, 0);
+        let mut bytes = encode_list(&items, |item| encode_item(item, ITEM_V2)).unwrap();
+        bytes.push(0);
+        assert_eq!(
+            migrate_list::<Item, _>(&bytes, ITEM_V2, decode_item),
+            Err(MigrationError::TrailingBytes)
+        );
     }
 }

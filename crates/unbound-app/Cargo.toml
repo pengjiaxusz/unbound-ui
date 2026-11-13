@@ -20,12 +20,14 @@ unbound-layout.workspace = true
 unbound-text.workspace = true
 unbound-abi.workspace = true
 unbound-asset.workspace = true
+unbound-host.workspace = true
 crossbeam-channel.workspace = true
 rustc-hash.workspace = true
 
 [dev-dependencies]
 unbound-headless.workspace = true
 unbound-text.workspace = true
+app-guest = { path = "../app-guest" }
 png.workspace = true
 
 [lints]

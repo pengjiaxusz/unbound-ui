@@ -1855,6 +1855,7 @@ name = "unbound-abi"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "postcard",
 ]
 
 [[package]]
@@ -1868,6 +1869,7 @@ dependencies = [
 name = "unbound-app"
 version = "0.1.0"
 dependencies = [
+ "app-guest",
  "crossbeam-channel",
  "png",
  "rustc-hash",
@@ -1876,6 +1878,7 @@ dependencies = [
  "unbound-asset",
  "unbound-gpu",
  "unbound-headless",
+ "unbound-host",
  "unbound-input",
  "unbound-layout",
  "unbound-math",

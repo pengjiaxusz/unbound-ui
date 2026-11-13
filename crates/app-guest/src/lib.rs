@@ -25,7 +25,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use serde::{Deserialize, Serialize};
 use unbound_abi::action::{ActionKind, RawAction};
 use unbound_abi::desc::{RawNodeDesc, RawNodeId, NO_NODE};
-use unbound_abi::migration::{migrate, Field, FieldSpec};
+use unbound_abi::migration::{
+    encode, encode_list, migrate, migrate_list, Field, FieldSpec, MigratedField, MigrationError,
+};
 use unbound_abi::plugin::{
     ByteBuffer, GuestPluginVTable, GuestState, HostAllocatorVTable, HostRenderContext, ABI_VERSION,
 };
@@ -96,11 +98,17 @@ static ALLOCATOR: ForwardingAllocator = ForwardingAllocator;
 /// 48 — and it may do so differently in another compiler version. A
 /// hand-written fingerprint cannot protect against that; only a fixed layout
 /// can.
+///
+/// `priority` and `tags` were added after V1 shipped. Rows travel as one UBMF
+/// envelope each (see [`encode_rows`]), so a V1 payload simply has no field 3
+/// or 4 and the new guest fills the defaults instead of losing the rows.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Row {
     pub label: String,
     pub done: bool,
+    pub priority: u8,
+    pub tags: Vec<String>,
 }
 
 // The row's own layout is part of the state's layout: `Vec<Row>` is 24 bytes
@@ -119,6 +127,12 @@ unbound_abi::impl_schema_hash!(
     "done",
     "bool",
     24,
+    "priority",
+    "u8",
+    25,
+    "tags",
+    "Vec<String>",
+    32,
 );
 
 /// The guest's whole business state.
@@ -146,7 +160,9 @@ const _: () = {
     assert!(offset_of!(State, count) == 0);
     assert!(offset_of!(State, title) == 8);
     assert!(offset_of!(State, rows) == 32);
-    assert!(core::mem::size_of::<Row>() == 32);
+    assert!(offset_of!(Row, priority) == 25);
+    assert!(offset_of!(Row, tags) == 32);
+    assert!(core::mem::size_of::<Row>() == 56);
     assert!(core::mem::size_of::<State>() == 56);
 };
 
@@ -191,16 +207,80 @@ impl State {
 const FIELD_COUNT: u16 = 1;
 const FIELD_TITLE: u16 = 2;
 const FIELD_ROWS: u16 = 3;
-/// `postcard` encoding of an empty `String` / `Vec`.
+/// `postcard` encoding of an empty `String` / `Vec` / zero `u8`.
 const EMPTY_COLLECTION: &[u8] = &[0];
+/// An empty row list: the `encode_list` header is a `u32` zero.
+const EMPTY_ROWS: &[u8] = &[0, 0, 0, 0];
 
 /// The new shape of the state. Fields absent from an older payload take a
 /// default; a missing `count` is an error the host can see.
 const STATE_FIELDS: &[FieldSpec] = &[
     FieldSpec::required(FIELD_COUNT),
     FieldSpec::optional(FIELD_TITLE, EMPTY_COLLECTION),
-    FieldSpec::optional(FIELD_ROWS, EMPTY_COLLECTION),
+    FieldSpec::optional(FIELD_ROWS, EMPTY_ROWS),
 ];
+
+// Row field ids. A V1 row only carries 1 and 2; 3 and 4 are the fields this
+// version added, and their defaults are what a V1 payload gets.
+const ROW_LABEL: u16 = 1;
+const ROW_DONE: u16 = 2;
+const ROW_PRIORITY: u16 = 3;
+const ROW_TAGS: u16 = 4;
+
+const ROW_FIELDS: &[FieldSpec] = &[
+    FieldSpec::required(ROW_LABEL),
+    FieldSpec::required(ROW_DONE),
+    FieldSpec::optional(ROW_PRIORITY, EMPTY_COLLECTION),
+    FieldSpec::optional(ROW_TAGS, EMPTY_COLLECTION),
+];
+
+/// Encode rows as a list of self-describing envelopes.
+///
+/// # Errors
+/// Propagates a field that cannot be serialised.
+pub fn encode_rows(rows: &[Row]) -> Result<Vec<u8>, MigrationError> {
+    encode_list(rows, |row| {
+        let label = postcard::to_allocvec(&row.label).map_err(|_| MigrationError::FieldTooLarge)?;
+        let done = postcard::to_allocvec(&row.done).map_err(|_| MigrationError::FieldTooLarge)?;
+        let priority =
+            postcard::to_allocvec(&row.priority).map_err(|_| MigrationError::FieldTooLarge)?;
+        let tags = postcard::to_allocvec(&row.tags).map_err(|_| MigrationError::FieldTooLarge)?;
+        encode(&[
+            Field::new(ROW_LABEL, &label),
+            Field::new(ROW_DONE, &done),
+            Field::new(ROW_PRIORITY, &priority),
+            Field::new(ROW_TAGS, &tags),
+        ])
+    })
+}
+
+/// Decode rows, filling the fields an older row did not have.
+///
+/// # Errors
+/// Returns a structural [`MigrationError`] when the list or one row is
+/// corrupt, and [`MigrationError::MissingField`] when a required field is
+/// absent.
+pub fn decode_rows(bytes: &[u8]) -> Result<Vec<Row>, MigrationError> {
+    migrate_list(bytes, ROW_FIELDS, |fields| {
+        Ok(Row {
+            label: row_field(fields, ROW_LABEL)?,
+            done: row_field(fields, ROW_DONE)?,
+            priority: row_field(fields, ROW_PRIORITY)?,
+            tags: row_field(fields, ROW_TAGS)?,
+        })
+    })
+}
+
+fn row_field<T: serde::de::DeserializeOwned>(
+    fields: &[MigratedField<'_>],
+    id: u16,
+) -> Result<T, MigrationError> {
+    let field = fields
+        .iter()
+        .find(|field| field.id == id)
+        .ok_or(MigrationError::MissingField(id))?;
+    postcard::from_bytes(&field.bytes).map_err(|_| MigrationError::Truncated)
+}
 
 // ---------------------------------------------------------------------------
 // Guest lifecycle
@@ -245,7 +325,7 @@ unsafe extern "C" fn migrate_export(state: GuestState, out: *mut ByteBuffer) {
     let (Ok(count), Ok(title), Ok(rows)) = (
         postcard::to_allocvec(&state.count),
         postcard::to_allocvec(&state.title),
-        postcard::to_allocvec(&state.rows),
+        encode_rows(&state.rows),
     ) else {
         out.len = 0;
         return;
@@ -288,9 +368,7 @@ unsafe extern "C" fn migrate_import(ptr: *const u8, len: usize) -> GuestState {
     else {
         return core::ptr::null_mut();
     };
-    let Some(rows) =
-        decode(FIELD_ROWS).and_then(|field| postcard::from_bytes::<Vec<Row>>(&field.bytes).ok())
-    else {
+    let Some(rows) = decode(FIELD_ROWS).and_then(|field| decode_rows(&field.bytes).ok()) else {
         return core::ptr::null_mut();
     };
     let state = State { count, title, rows };
@@ -329,6 +407,8 @@ unsafe extern "C" fn reduce(state: GuestState, action: *const RawAction) {
             state.rows.push(Row {
                 label: format!("item {}", state.count),
                 done: false,
+                priority: 0,
+                tags: Vec::new(),
             });
         }
         ActionKind::Undo => {

@@ -42,10 +42,12 @@ use unbound_widgets::{BackdropRequest, ControlState, SceneCollector, WidgetDesc,
 use unbound_world::{NodeId, UiWorld};
 
 pub mod assets;
+pub mod guest_bridge;
 pub mod scheduler;
 pub mod state_store;
 
 pub use assets::{AssetHub, AssetResidency};
+pub use guest_bridge::GuestAppAdapter;
 pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 
@@ -1370,6 +1372,12 @@ impl<A: Application> AppRuntime<A> {
         &self.world
     }
 
+    /// The application itself, for inspection from tests and debug overlays.
+    #[must_use]
+    pub fn app(&self) -> &A {
+        &self.app
+    }
+
     /// Solve the declarative tree and emit the deferred widgets.
     ///
     /// Pass 1 builds the world and pre-measures nothing but buttons; pass 2
@@ -1559,7 +1567,12 @@ impl<A: Application> AppRuntime<A> {
         self.mark(flags);
     }
 
-    fn dispatch(&mut self, event: AppEvent) -> DirtyFlags {
+    /// Dispatch one resolved event outside the pointer/keyboard path.
+    ///
+    /// Embedders that synthesise events (tests, remote control, a scripting
+    /// bridge) use this instead of reaching into the router. The returned flags
+    /// are already marked on the runtime, so the next [`Self::frame`] rebuilds.
+    pub fn dispatch(&mut self, event: AppEvent) -> DirtyFlags {
         self.dispatch_outcome(event).dirty
     }
 
