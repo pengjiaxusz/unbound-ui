@@ -25,16 +25,23 @@ pub mod accordion;
 pub mod breadcrumb;
 pub mod button;
 pub mod checkbox;
+pub mod color_picker;
+pub mod combobox;
 pub mod command_palette;
 pub mod containers;
 pub mod context_menu;
+pub mod curve_editor;
+pub mod date_picker;
 pub mod diff;
 pub mod divider;
 pub mod dock;
+pub mod file_drop;
+pub mod form;
 pub mod image;
 pub mod menu;
 pub mod menubar;
 pub mod modal;
+pub mod number_input;
 pub mod overlay;
 pub mod popover;
 pub mod primitive;
@@ -46,6 +53,8 @@ pub mod slider;
 pub mod split_pane;
 pub mod switch;
 pub mod tabs;
+pub mod tag_input;
+pub mod text_area;
 pub mod text_input;
 pub mod toolbar;
 pub mod tooltip;
@@ -69,6 +78,14 @@ pub use breadcrumb::{
 };
 pub use button::{ButtonDesc, ButtonTokens, ButtonVariant, ButtonWidget};
 pub use checkbox::{CheckboxDesc, CheckboxTokens};
+pub use color_picker::{
+    emit_color_picker, parse_hex, parse_oklch, parse_rgba, ColorFormat, ColorPart, ColorPickerDesc,
+    ColorPickerLayout, ColorPickerState, Hsva,
+};
+pub use combobox::{
+    emit_combobox_popup, emit_combobox_trigger, ComboItem, ComboboxDesc, ComboboxKey,
+    ComboboxOutcome, ComboboxState,
+};
 pub use command_palette::{
     emit_command_palette, emit_command_row, score_command, Command, CommandPaletteDesc,
     CommandPaletteState, CommandPaletteTokens, MatchKind,
@@ -77,10 +94,24 @@ pub use containers::{
     emit_card, emit_stack, CardDesc, CardTokens, StackDesc, WrapDesc, CARD_ELEVATIONS, WRAP_FLAG,
 };
 pub use context_menu::{ContextClose, ContextKey, ContextMenuState};
+pub use curve_editor::{
+    emit_curve_editor, emit_gradient_editor, CurveEditorDesc, CurveEditorState, CurveHandle,
+    GradientEditorState, GradientStop,
+};
+pub use date_picker::{
+    days_in_month, emit_calendar, is_leap_year, CalendarCell, CalendarState, DatePickerDesc,
+    NaiveDate, SelectionMode, YearMonth,
+};
 pub use divider::{emit_divider, DividerDesc, DividerOrientation, DividerTokens};
 pub use dock::{
     emit_dock_pane, emit_dock_preview, emit_dock_tab, DockDrag, DockHover, DockNode, DockPane,
     DockState, DockTab, DockTokens, DockTree, DockZone,
+};
+pub use file_drop::{drop_point, emit_file_drop, FileDropDesc, FileDropState};
+pub use form::{
+    emit_form_label, emit_form_message, emit_form_root, layout_form, required_marker, reveal_field,
+    FormDesc, FormField, FormFieldDesc, FormFieldLayout, FormLayout, FormState, FORM_FIELD_GAP,
+    FORM_INPUT_HEIGHT, FORM_LABEL_GAP, FORM_LINE, FORM_MESSAGE_GAP,
 };
 pub use image::{
     emit_icon, emit_image, emit_image_with_assets, fit_image, IconDesc, ImageAssetResolver,
@@ -92,6 +123,11 @@ pub use menubar::{
     MenuBarState, MenuBarTokens,
 };
 pub use modal::{emit_modal, ModalDesc, ModalOutput, ModalWidget};
+pub use number_input::{
+    emit_number_input, evaluate_expression, format_number, number_text_rect, round_to,
+    spin_down_rect, spin_up_rect, NumberInputDesc, NumberInputState, NumberMode, NUMBER_PADDING,
+    NUMBER_RADIUS, SPIN_WIDTH,
+};
 pub use overlay::{
     place_anchored_popup, BackdropRequest, OverlayEntry, OverlayKind, OverlayStack, Placement,
 };
@@ -112,6 +148,14 @@ pub use switch::{SwitchDesc, SwitchTokens};
 pub use tabs::{
     emit_tab, emit_tab_close, emit_tabs_add, emit_tabs_strip, reduce_tabs_key, TabItem, TabsDesc,
     TabsKey, TabsState, TabsTokens,
+};
+pub use tag_input::{
+    emit_tag_input, layout_tags, TagInputDesc, TagInputOutcome, TagInputState, TagKey, TagLayout,
+    TAG_CLOSE, TAG_GAP, TAG_HEIGHT, TAG_INSET, TAG_PADDING, TAG_RADIUS,
+};
+pub use text_area::{
+    emit_text_area, logical_lines, AreaLine, TextAreaDesc, TextAreaState, TextAreaVisual,
+    AREA_PADDING, AREA_RADIUS,
 };
 pub use text_input::{
     emit_text_input, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
