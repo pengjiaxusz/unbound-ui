@@ -22,6 +22,8 @@
 //! guest application may host these controls without pulling in the engine.
 
 pub mod accordion;
+pub mod alert;
+pub mod alert_dialog;
 pub mod avatar;
 pub mod badge;
 pub mod breadcrumb;
@@ -38,8 +40,10 @@ pub mod date_picker;
 pub mod diff;
 pub mod divider;
 pub mod dock;
+pub mod drawer;
 pub mod file_drop;
 pub mod form;
+pub mod hover_card;
 pub mod image;
 pub mod menu;
 pub mod menubar;
@@ -48,12 +52,14 @@ pub mod number_input;
 pub mod overlay;
 pub mod popover;
 pub mod primitive;
+pub mod progress;
 pub mod property_grid;
 pub mod radio;
 pub mod rich_text;
 pub mod scroll;
 pub mod segmented;
 pub mod select;
+pub mod skeleton;
 pub mod slider;
 pub mod split_pane;
 pub mod switch;
@@ -62,6 +68,7 @@ pub mod tabs;
 pub mod tag_input;
 pub mod text_area;
 pub mod text_input;
+pub mod toast;
 pub mod toolbar;
 pub mod tooltip;
 pub mod tree_view;
@@ -78,6 +85,15 @@ use unbound_text::GlyphQuad;
 pub use accordion::{
     emit_accordion_body, emit_accordion_header, AccordionDesc, AccordionSection, AccordionState,
     AccordionTokens,
+};
+pub use alert::{
+    emit_alert, AlertDesc, Severity, ALERT_ACCENT_WIDTH, ALERT_CLOSE_SIZE, ALERT_ICON_SIZE,
+    ALERT_PADDING, ALERT_RADIUS,
+};
+pub use alert_dialog::{
+    emit_alert_dialog, AlertDialogDesc, AlertDialogKey, AlertDialogLayout, AlertDialogOutcome,
+    AlertDialogOutput, AlertDialogState, AlertFocus, ConfirmTone, DIALOG_BUTTON_HEIGHT,
+    DIALOG_FOOTER, DIALOG_ICON, DIALOG_PADDING, DIALOG_RADIUS,
 };
 pub use avatar::{emit_avatar, emit_avatar_group, initials, AvatarDesc, AvatarGroupDesc, Presence};
 pub use badge::{emit_badge, emit_chip, BadgeDesc, BadgeVariant, ChipDesc};
@@ -120,11 +136,20 @@ pub use dock::{
     emit_dock_pane, emit_dock_preview, emit_dock_tab, DockDrag, DockHover, DockNode, DockPane,
     DockState, DockTab, DockTokens, DockTree, DockZone,
 };
+pub use drawer::{
+    drawer_rect, emit_drawer, DrawerDesc, DrawerOutput, DrawerSide, DrawerState, DRAWER_BLUR,
+    DRAWER_RADIUS,
+};
 pub use file_drop::{drop_point, emit_file_drop, FileDropDesc, FileDropState};
 pub use form::{
     emit_form_label, emit_form_message, emit_form_root, layout_form, required_marker, reveal_field,
     FormDesc, FormField, FormFieldDesc, FormFieldLayout, FormLayout, FormState, FORM_FIELD_GAP,
     FORM_INPUT_HEIGHT, FORM_LABEL_GAP, FORM_LINE, FORM_MESSAGE_GAP,
+};
+pub use hover_card::{
+    emit_empty_state, emit_hover_card, EmptyStateDesc, EmptyStateOutput, HoverCardDesc,
+    HoverCardState, EMPTY_ACTION_SIZE, EMPTY_ICON, HOVER_CARD_DELAY_MS, HOVER_CARD_GRACE_MS,
+    HOVER_CARD_RADIUS,
 };
 pub use image::{
     emit_icon, emit_image, emit_image_with_assets, fit_image, IconDesc, ImageAssetResolver,
@@ -145,6 +170,10 @@ pub use overlay::{
     place_anchored_popup, BackdropRequest, OverlayEntry, OverlayKind, OverlayStack, Placement,
 };
 pub use popover::{emit_popover, PopoverDesc, PopoverOutput, PopoverWidget};
+pub use progress::{
+    emit_progress, ProgressDesc, ProgressKind, ProgressState, ProgressTokens, PROGRESS_RATE,
+    RING_SEGMENTS,
+};
 pub use property_grid::{
     emit_property_grid, PropertyDesc, PropertyGridDesc, PropertyGridState, PropertyGridTokens,
     PropertyKind, PropertyRowLayout, PropertySection, PropertyValue,
@@ -160,6 +189,7 @@ pub use scroll::{
 };
 pub use segmented::{SegmentedDesc, SegmentedTokens};
 pub use select::{emit_select, SelectDesc, SelectState, SelectWidget};
+pub use skeleton::{emit_skeleton, SkeletonDesc, SkeletonState, SKELETON_PERIOD, SKELETON_SHIMMER};
 pub use slider::{SliderDesc, SliderTokens};
 pub use split_pane::{
     emit_split_pane, emit_split_pane_panes, reduce_split_key, SplitKey, SplitLayout, SplitPaneDesc,
@@ -185,6 +215,10 @@ pub use text_area::{
 pub use text_input::{
     emit_text_input, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
     TextInputOutcome, TextInputVisual, TextInputWidget,
+};
+pub use toast::{
+    emit_toast, ToastEntry, ToastLayout, ToastOutput, ToastSpring, ToastStack, ToastTick,
+    TOAST_ACTION_SIZE, TOAST_CLOSE_SIZE, TOAST_DURATION_MS, TOAST_RADIUS, TOAST_SLIDE_IN,
 };
 pub use toolbar::{
     emit_status_bar, emit_status_segment, emit_toolbar, emit_toolbar_item, emit_toolbar_overflow,
