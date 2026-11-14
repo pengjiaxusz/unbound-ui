@@ -1,12 +1,11 @@
 # IME、富文本选区与光标栈
 
-> **实现状态**：`部分落地`
+> **实现状态**：`全部落地`
 >
 > | | |
 > | :--- | :--- |
-> | **已落地** | IME 候选框锚定计算、多行选区几何合并与圆角轮廓、光标栈、`TextInput` 的预编辑/提交状态机（`ImePreedit`/`ImeCommit`，提交替换预编辑区间） |
-> | **缺口** | 展示台尚未把 `WindowEvent::Ime` 路由到 `TextInput` 组件；连字内部光标切分为设计项 |
-> | **源码** | `crates/unbound-text/src/selection.rs`、`crates/unbound-text/src/shaping.rs`、`crates/unbound-input/src/cursor.rs`、`crates/unbound-widgets/src/text_input.rs` |
+> | **已落地** | IME 候选框锚定计算、多行选区几何合并与圆角轮廓、光标栈、`TextInput` 的预编辑/提交状态机（`ImePreedit`/`ImeCommit`）、`ImeUpdate` 带字节光标区间（`cursor_range`）、Windows 10/11 原生无边框 Snap Layouts 子类化、系统字体回退链（Segoe UI Variable / Microsoft YaHei UI / Cascadia Mono）、富剪贴板（图片与文件列表）及显卡设备丢失（TDR）热恢复 |
+> | **源码** | `crates/unbound-platform/src/{win32_frame, dialogs, tray, clipboard, window, backend}.rs`、`crates/unbound-text/src/{selection, shaping}.rs`、`crates/unbound-app/src/{window_runner, lib}.rs` |
 
 ## CJK 完整输入法管线
 

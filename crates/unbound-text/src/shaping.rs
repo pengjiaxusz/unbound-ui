@@ -463,7 +463,13 @@ impl TextEngine {
 
     /// Build on an existing `FontSystem` (tests use a minimal one).
     #[must_use]
-    pub fn with_font_system(font_system: FontSystem) -> Self {
+    pub fn with_font_system(mut font_system: FontSystem) -> Self {
+        #[cfg(windows)]
+        {
+            let db = font_system.db_mut();
+            db.set_sans_serif_family("Segoe UI");
+            db.set_monospace_family("Cascadia Mono");
+        }
         Self {
             font_system,
             buffer: None,

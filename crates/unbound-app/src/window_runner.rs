@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use unbound_gpu::atlas::AtlasSet;
 use unbound_gpu::data::PassLayer;
+use unbound_gpu::debug::{is_device_lost, recover_with, RecoveryPolicy};
 use unbound_gpu::device::{Gpu, GpuConfig};
 use unbound_gpu::surface::{AcquireOutcome, Surface, Swapchain};
 use unbound_gpu::swapchain::PresentConfig;
@@ -12,13 +13,14 @@ use unbound_gpu::{Camera, Renderer, SceneUpload};
 use unbound_input::PointerButton;
 use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
+use unbound_platform::win32_frame::{install_custom_frame, set_window_dark_mode, FrameHitMetrics};
 use unbound_platform::window::{
-    ButtonState, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey, PlatformState,
-    WindowConfig,
+    ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
+    PlatformState, WindowConfig,
 };
 use winit::window::Window;
 
-use crate::{AppKey, AppRuntime, Application, Modifiers as AppModifiers};
+use crate::{AppKey, AppRuntime, Application, ImeUpdate, Modifiers as AppModifiers, ThemeKind};
 
 /// Clipboard adapter wrapping platform clipboard.
 struct WinClipboard(std::cell::RefCell<unbound_platform::SystemClipboard>);
@@ -109,6 +111,8 @@ pub struct WindowedRunner<A: Application> {
     swapchain_dirty: bool,
     committed_request: (u32, u32),
     scene_generation: u64,
+    frame_metrics: Option<Arc<FrameHitMetrics>>,
+    hwnd: Option<isize>,
 }
 
 impl<A: Application> WindowedRunner<A> {
@@ -133,6 +137,8 @@ impl<A: Application> WindowedRunner<A> {
             swapchain_dirty: false,
             committed_request: (w, h),
             scene_generation: 0,
+            frame_metrics: None,
+            hwnd: None,
         }
     }
 
@@ -145,6 +151,58 @@ impl<A: Application> WindowedRunner<A> {
     /// Mutably access the underlying application runtime.
     pub fn runtime_mut(&mut self) -> &mut AppRuntime<A> {
         &mut self.runtime
+    }
+
+    fn recover_gpu(&mut self, window: &Window) {
+        self.swapchain = None;
+        self.surface = None;
+        self.atlases = None;
+        self.renderer = None;
+
+        let hwnd = match self.hwnd {
+            Some(h) => h,
+            None => return,
+        };
+
+        let size = window.inner_size();
+        let (width, height) = (size.width.max(1), size.height.max(1));
+        let policy = RecoveryPolicy::default();
+
+        let recovered = recover_with(policy, || {
+            let config = GpuConfig {
+                app_name: "Unbound App (Recovered)".to_string(),
+                device_extensions: vec![
+                    "VK_KHR_swapchain".to_string(),
+                    "VK_KHR_dynamic_rendering".to_string(),
+                    "VK_KHR_synchronization2".to_string(),
+                ],
+                ..Default::default()
+            };
+            let gpu = Gpu::new(config)?;
+            let surface = Surface::new_win32(&gpu, hwnd)?;
+            let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false);
+            let swapchain = Swapchain::new(&gpu, &surface, width, height, &present)?;
+            let mut renderer = Renderer::new(gpu, width, height)?;
+            let atlases = Arc::new(AtlasSet::new(&renderer.gpu, 64)?);
+            renderer.install_atlases(atlases.clone())?;
+            Ok((renderer, swapchain, surface, atlases))
+        });
+
+        match recovered {
+            Ok(((renderer, swapchain, surface, atlases), attempts)) => {
+                eprintln!("[unbound-app] GPU recovered successfully after {attempts} attempt(s).");
+                self.renderer = Some(renderer);
+                self.swapchain = Some(swapchain);
+                self.surface = Some(surface);
+                self.atlases = Some(atlases);
+                self.swapchain_dirty = true;
+                self.runtime.request_full_rebuild();
+                window.request_redraw();
+            }
+            Err(e) => {
+                eprintln!("[unbound-app] GPU recovery failed: {e:?}");
+            }
+        }
     }
 }
 
@@ -221,6 +279,13 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.swapchain = Some(swapchain);
         self.surface = Some(surface);
         self.renderer = Some(renderer);
+        self.hwnd = Some(hwnd);
+
+        let metrics = Arc::new(FrameHitMetrics::new());
+        metrics.set_scale_factor(window.scale_factor() as f32);
+        install_custom_frame(hwnd, metrics.clone());
+        self.frame_metrics = Some(metrics);
+
         state.set_present_extensions(&device_extensions);
         self.last_frame = Instant::now();
     }
@@ -262,6 +327,54 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             }
             PlatformEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers;
+            }
+            PlatformEvent::Ime(ime) => match ime {
+                ImeEvent::Preedit(text, selection) => {
+                    self.runtime.ime(ImeUpdate {
+                        preedit: text,
+                        cursor_range: selection,
+                        commit: None,
+                    });
+                }
+                ImeEvent::Commit(text) => {
+                    self.runtime.ime(ImeUpdate {
+                        preedit: String::new(),
+                        cursor_range: None,
+                        commit: Some(text),
+                    });
+                }
+                ImeEvent::Disabled => {
+                    self.runtime.ime(ImeUpdate {
+                        preedit: String::new(),
+                        cursor_range: None,
+                        commit: None,
+                    });
+                }
+                ImeEvent::Enabled => {}
+            },
+            PlatformEvent::ScaleFactorChanged(scale) => {
+                if let Some(metrics) = &self.frame_metrics {
+                    metrics.set_scale_factor(scale as f32);
+                }
+            }
+            PlatformEvent::ThemeChanged { dark } => {
+                self.runtime.set_theme(if dark {
+                    ThemeKind::Dark
+                } else {
+                    ThemeKind::Light
+                });
+                if let Some(hwnd) = self.hwnd {
+                    set_window_dark_mode(hwnd, dark);
+                }
+            }
+            PlatformEvent::FileHover(path) => {
+                self.runtime.file_hover(vec![path]);
+            }
+            PlatformEvent::FileDrop(path) => {
+                self.runtime.file_drop(vec![path]);
+            }
+            PlatformEvent::FileHoverCancelled => {
+                self.runtime.file_hover_cancelled();
             }
             PlatformEvent::CloseRequested => {
                 return Flow::Exit;
@@ -306,34 +419,57 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                     self.swapchain_dirty = false;
                 }
 
-                if let Ok(AcquireOutcome::Ready { image, suboptimal }) =
-                    swapchain.acquire_outcome(1_000_000_000)
-                {
-                    if suboptimal {
-                        self.swapchain_dirty = true;
-                    }
-                    self.scene_generation = self.scene_generation.wrapping_add(1);
-                    let camera = Camera::ui((width as f32, height as f32), 1.0);
-                    let scene_data = self.runtime.scene();
-                    let scene = SceneUpload {
-                        primitives: &scene_data.primitives,
-                        transforms: &scene_data.transforms,
-                        clips: &scene_data.clips,
-                        payloads: &scene_data.payloads,
-                        generation: self.scene_generation,
-                        camera,
-                        key_prefix: (PassLayer::Ui as u64) << 56,
-                        dirty_ranges: &[],
-                        aux_changed: report.aux_changed,
-                        backdrops: &[],
-                    };
+                match swapchain.acquire_outcome(1_000_000_000) {
+                    Ok(AcquireOutcome::Ready { image, suboptimal }) => {
+                        if suboptimal {
+                            self.swapchain_dirty = true;
+                        }
+                        self.scene_generation = self.scene_generation.wrapping_add(1);
+                        let camera = Camera::ui((width as f32, height as f32), 1.0);
+                        let scene_data = self.runtime.scene();
+                        let scene = SceneUpload {
+                            primitives: &scene_data.primitives,
+                            transforms: &scene_data.transforms,
+                            clips: &scene_data.clips,
+                            payloads: &scene_data.payloads,
+                            generation: self.scene_generation,
+                            camera,
+                            key_prefix: (PassLayer::Ui as u64) << 56,
+                            dirty_ranges: &[],
+                            aux_changed: report.aux_changed,
+                            backdrops: &[],
+                        };
 
-                    let _ = renderer.render_into_swapchain(&scene, &image, width, height);
-                    let _ = swapchain.present_outcome(
-                        &renderer.gpu,
-                        image.index,
-                        image.render_finished,
-                    );
+                        if let Err(ref err) =
+                            renderer.render_into_swapchain(&scene, &image, width, height)
+                        {
+                            if is_device_lost(err) {
+                                eprintln!("[unbound-app] GPU device lost during render. Triggering recovery...");
+                                self.recover_gpu(window);
+                                return Flow::Continue;
+                            }
+                        }
+
+                        if let Err(ref err) = swapchain.present_outcome(
+                            &renderer.gpu,
+                            image.index,
+                            image.render_finished,
+                        ) {
+                            if is_device_lost(err) {
+                                eprintln!("[unbound-app] GPU device lost during present. Triggering recovery...");
+                                self.recover_gpu(window);
+                                return Flow::Continue;
+                            }
+                        }
+                    }
+                    Err(ref err) if is_device_lost(err) => {
+                        eprintln!(
+                            "[unbound-app] GPU device lost during acquire. Triggering recovery..."
+                        );
+                        self.recover_gpu(window);
+                        return Flow::Continue;
+                    }
+                    _ => {}
                 }
             }
         }

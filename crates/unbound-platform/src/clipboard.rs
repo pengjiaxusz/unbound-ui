@@ -64,6 +64,8 @@ pub trait ClipboardProvider {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryClipboard {
     text: Option<String>,
+    image: Option<(u32, u32, Vec<u8>)>,
+    files: Vec<std::path::PathBuf>,
     max_bytes: usize,
 }
 
@@ -78,8 +80,32 @@ impl MemoryClipboard {
     pub fn new() -> Self {
         Self {
             text: None,
+            image: None,
+            files: Vec::new(),
             max_bytes: MAX_CLIPBOARD_BYTES,
         }
+    }
+
+    /// Read copied file paths.
+    #[must_use]
+    pub fn read_file_paths(&self) -> Vec<std::path::PathBuf> {
+        self.files.clone()
+    }
+
+    /// Set file paths in clipboard.
+    pub fn write_file_paths(&mut self, paths: Vec<std::path::PathBuf>) {
+        self.files = paths;
+    }
+
+    /// Read copied RGBA image.
+    #[must_use]
+    pub fn read_image_rgba(&self) -> Option<(u32, u32, Vec<u8>)> {
+        self.image.clone()
+    }
+
+    /// Set RGBA image in clipboard.
+    pub fn write_image_rgba(&mut self, width: u32, height: u32, rgba: Vec<u8>) {
+        self.image = Some((width, height, rgba));
     }
 
     /// The same clipboard with a smaller byte budget (useful in tests).
@@ -87,6 +113,8 @@ impl MemoryClipboard {
     pub fn with_limit(max_bytes: usize) -> Self {
         Self {
             text: None,
+            image: None,
+            files: Vec::new(),
             max_bytes,
         }
     }
@@ -133,9 +161,57 @@ impl SystemClipboard {
             max_bytes: MAX_CLIPBOARD_BYTES,
         }
     }
+
+    /// Read file paths from clipboard (e.g. from File Explorer copy).
+    pub fn read_file_paths(&self) -> Result<Vec<std::path::PathBuf>, ClipboardError> {
+        #[cfg(windows)]
+        {
+            win32::read_files()
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Read RGBA image from clipboard.
+    pub fn read_image_rgba(&self) -> Result<Option<(u32, u32, Vec<u8>)>, ClipboardError> {
+        #[cfg(windows)]
+        {
+            win32::read_image()
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(None)
+        }
+    }
+
+    /// Write RGBA image to clipboard.
+    pub fn write_image_rgba(
+        &self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> Result<(), ClipboardError> {
+        #[cfg(windows)]
+        {
+            win32::write_image(width, height, rgba)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (width, height, rgba);
+            Err(ClipboardError::Unavailable)
+        }
+    }
 }
 
 #[cfg(windows)]
+#[allow(
+    non_snake_case,
+    non_camel_case_types,
+    clippy::upper_case_acronyms,
+    dead_code
+)]
 mod win32 {
     //! Minimal Win32 clipboard bindings.
     //!
@@ -149,7 +225,24 @@ mod win32 {
     type Handle = *mut c_void;
 
     const CF_UNICODETEXT: u32 = 13;
+    const CF_DIB: u32 = 8;
+    const CF_HDROP: u32 = 15;
     const GMEM_MOVEABLE: u32 = 0x0002;
+
+    #[repr(C)]
+    struct BITMAPINFOHEADER {
+        biSize: u32,
+        biWidth: i32,
+        biHeight: i32,
+        biPlanes: u16,
+        biBitCount: u16,
+        biCompression: u32,
+        biSizeImage: u32,
+        biXPelsPerMeter: i32,
+        biYPelsPerMeter: i32,
+        biClrUsed: u32,
+        biClrImportant: u32,
+    }
 
     #[link(name = "user32")]
     extern "system" {
@@ -159,6 +252,11 @@ mod win32 {
         fn GetClipboardData(format: u32) -> Handle;
         fn SetClipboardData(format: u32, memory: Handle) -> Handle;
         fn IsClipboardFormatAvailable(format: u32) -> Bool;
+    }
+
+    #[link(name = "shell32")]
+    extern "system" {
+        fn DragQueryFileW(hDrop: Handle, iFile: u32, lpszFile: *mut u16, cch: u32) -> u32;
     }
 
     #[link(name = "kernel32")]
@@ -262,6 +360,185 @@ mod win32 {
         }
         Ok(())
     }
+
+    pub(super) fn read_files() -> Result<Vec<std::path::PathBuf>, super::ClipboardError> {
+        unsafe {
+            if OpenClipboard(core::ptr::null_mut()) == 0 {
+                return Err(super::ClipboardError::Unavailable);
+            }
+            if IsClipboardFormatAvailable(CF_HDROP) == 0 {
+                let _ = CloseClipboard();
+                return Ok(Vec::new());
+            }
+            let handle = GetClipboardData(CF_HDROP);
+            if handle.is_null() {
+                let _ = CloseClipboard();
+                return Ok(Vec::new());
+            }
+            let count = DragQueryFileW(handle, 0xFFFFFFFF, core::ptr::null_mut(), 0);
+            let mut out = Vec::new();
+            let mut buffer = vec![0u16; 1024];
+            for i in 0..count {
+                let len = DragQueryFileW(handle, i, core::ptr::null_mut(), 0) as usize;
+                if len >= buffer.len() {
+                    buffer.resize(len + 1, 0);
+                }
+                DragQueryFileW(handle, i, buffer.as_mut_ptr(), buffer.len() as u32);
+                let path_str = String::from_utf16_lossy(&buffer[..len]);
+                out.push(std::path::PathBuf::from(path_str));
+            }
+            let _ = CloseClipboard();
+            Ok(out)
+        }
+    }
+
+    pub(super) fn read_image() -> Result<Option<(u32, u32, Vec<u8>)>, super::ClipboardError> {
+        unsafe {
+            if OpenClipboard(core::ptr::null_mut()) == 0 {
+                return Err(super::ClipboardError::Unavailable);
+            }
+            if IsClipboardFormatAvailable(CF_DIB) == 0 {
+                let _ = CloseClipboard();
+                return Ok(None);
+            }
+            let handle = GetClipboardData(CF_DIB);
+            if handle.is_null() {
+                let _ = CloseClipboard();
+                return Ok(None);
+            }
+            let pointer = GlobalLock(handle).cast::<u8>();
+            if pointer.is_null() {
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+            let header = &*(pointer as *const BITMAPINFOHEADER);
+            let width = header.biWidth.unsigned_abs();
+            let height = header.biHeight.unsigned_abs();
+            let bpp = header.biBitCount;
+
+            if (bpp != 24 && bpp != 32)
+                || width == 0
+                || height == 0
+                || width > 8192
+                || height > 8192
+            {
+                let _ = GlobalUnlock(handle);
+                let _ = CloseClipboard();
+                return Ok(None);
+            }
+
+            let pixel_offset = header.biSize as usize;
+            let pixel_bytes = pointer.add(pixel_offset);
+            let row_stride = (((width * bpp as u32 + 31) & !31) / 8) as usize;
+            let mut rgba = vec![0u8; (width * height * 4) as usize];
+
+            let is_top_down = header.biHeight < 0;
+
+            for y in 0..height {
+                let src_y = if is_top_down { y } else { height - 1 - y };
+                let src_row = pixel_bytes.add(src_y as usize * row_stride);
+                let dst_row = &mut rgba[(y * width * 4) as usize..((y + 1) * width * 4) as usize];
+
+                if bpp == 32 {
+                    for x in 0..width as usize {
+                        let b = *src_row.add(x * 4);
+                        let g = *src_row.add(x * 4 + 1);
+                        let r = *src_row.add(x * 4 + 2);
+                        let a = *src_row.add(x * 4 + 3);
+                        dst_row[x * 4] = r;
+                        dst_row[x * 4 + 1] = g;
+                        dst_row[x * 4 + 2] = b;
+                        dst_row[x * 4 + 3] = if a == 0 { 255 } else { a };
+                    }
+                } else if bpp == 24 {
+                    for x in 0..width as usize {
+                        let b = *src_row.add(x * 3);
+                        let g = *src_row.add(x * 3 + 1);
+                        let r = *src_row.add(x * 3 + 2);
+                        dst_row[x * 4] = r;
+                        dst_row[x * 4 + 1] = g;
+                        dst_row[x * 4 + 2] = b;
+                        dst_row[x * 4 + 3] = 255;
+                    }
+                }
+            }
+
+            let _ = GlobalUnlock(handle);
+            let _ = CloseClipboard();
+            Ok(Some((width, height, rgba)))
+        }
+    }
+
+    pub(super) fn write_image(
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> Result<(), super::ClipboardError> {
+        if rgba.len() != (width * height * 4) as usize {
+            return Err(super::ClipboardError::Os);
+        }
+        let header_size = core::mem::size_of::<BITMAPINFOHEADER>();
+        let image_size = (width * height * 4) as usize;
+        let total_size = header_size + image_size;
+
+        unsafe {
+            if OpenClipboard(core::ptr::null_mut()) == 0 {
+                return Err(super::ClipboardError::Unavailable);
+            }
+            if EmptyClipboard() == 0 {
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+            let memory = GlobalAlloc(GMEM_MOVEABLE, total_size);
+            if memory.is_null() {
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+            let dest = GlobalLock(memory).cast::<u8>();
+            if dest.is_null() {
+                let _ = GlobalFree(memory);
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+
+            let header = BITMAPINFOHEADER {
+                biSize: header_size as u32,
+                biWidth: width as i32,
+                biHeight: -(height as i32), // top-down
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: 0, // BI_RGB
+                biSizeImage: image_size as u32,
+                biXPelsPerMeter: 3780, // ~96 DPI
+                biYPelsPerMeter: 3780,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            };
+
+            core::ptr::copy_nonoverlapping(&header as *const _ as *const u8, dest, header_size);
+
+            let dest_pixels = dest.add(header_size);
+            for i in 0..(width * height) as usize {
+                let r = rgba[i * 4];
+                let g = rgba[i * 4 + 1];
+                let b = rgba[i * 4 + 2];
+                let a = rgba[i * 4 + 3];
+                *dest_pixels.add(i * 4) = b;
+                *dest_pixels.add(i * 4 + 1) = g;
+                *dest_pixels.add(i * 4 + 2) = r;
+                *dest_pixels.add(i * 4 + 3) = a;
+            }
+
+            let _ = GlobalUnlock(memory);
+            if SetClipboardData(CF_DIB, memory).is_null() {
+                let _ = GlobalFree(memory);
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+            let _ = CloseClipboard();
+            Ok(())
+        }
+    }
 }
 
 impl ClipboardProvider for SystemClipboard {
@@ -335,5 +612,26 @@ mod tests {
             Ok(None) | Err(ClipboardError::Unavailable) | Err(ClipboardError::Os) => {}
             Err(ClipboardError::TooLarge { limit, .. }) => assert_eq!(limit, MAX_CLIPBOARD_BYTES),
         }
+    }
+
+    #[test]
+    fn memory_clipboard_supports_files_and_images() {
+        let mut clipboard = MemoryClipboard::new();
+        assert_eq!(
+            clipboard.read_file_paths(),
+            Vec::<std::path::PathBuf>::new()
+        );
+        assert_eq!(clipboard.read_image_rgba(), None);
+
+        let files = vec![
+            std::path::PathBuf::from(r"C:\test\sample.png"),
+            std::path::PathBuf::from(r"C:\test\document.pdf"),
+        ];
+        clipboard.write_file_paths(files.clone());
+        assert_eq!(clipboard.read_file_paths(), files);
+
+        let rgba = vec![255, 0, 0, 255, 0, 255, 0, 255];
+        clipboard.write_image_rgba(2, 1, rgba.clone());
+        assert_eq!(clipboard.read_image_rgba(), Some((2, 1, rgba)));
     }
 }

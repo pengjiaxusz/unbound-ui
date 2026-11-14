@@ -137,6 +137,8 @@ pub enum PlatformEvent {
     FileDrop(std::path::PathBuf),
     /// A file drag left the window without dropping.
     FileHoverCancelled,
+    /// An input-method composition or commit event.
+    Ime(ImeEvent),
     /// The OS asks for a new frame.
     RedrawRequested,
     /// The user asked to close the window.
@@ -386,6 +388,14 @@ pub fn translate_window_event(event: &winit::event::WindowEvent) -> Option<Platf
         WindowEvent::HoveredFile(path) => PlatformEvent::FileHover(path.clone()),
         WindowEvent::DroppedFile(path) => PlatformEvent::FileDrop(path.clone()),
         WindowEvent::HoveredFileCancelled => PlatformEvent::FileHoverCancelled,
+        WindowEvent::Ime(ime) => match ime {
+            winit::event::Ime::Enabled => PlatformEvent::Ime(ImeEvent::Enabled),
+            winit::event::Ime::Preedit(text, selection) => {
+                PlatformEvent::Ime(ImeEvent::Preedit(text.clone(), *selection))
+            }
+            winit::event::Ime::Commit(text) => PlatformEvent::Ime(ImeEvent::Commit(text.clone())),
+            winit::event::Ime::Disabled => PlatformEvent::Ime(ImeEvent::Disabled),
+        },
         WindowEvent::CloseRequested => PlatformEvent::CloseRequested,
         WindowEvent::RedrawRequested => PlatformEvent::RedrawRequested,
         _ => return None,
@@ -533,6 +543,12 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
         PlatformEvent::FileHover(path) => out.push(PlatformEvent::FileHover(path.clone())),
         PlatformEvent::FileDrop(path) => out.push(PlatformEvent::FileDrop(path.clone())),
         PlatformEvent::FileHoverCancelled => out.push(PlatformEvent::FileHoverCancelled),
+        PlatformEvent::Ime(ime) => {
+            state.ime.apply(ime);
+            state.latency.on_input(now);
+            state.pacer.request_immediate(now);
+            out.push(PlatformEvent::Ime(ime.clone()));
+        }
         PlatformEvent::RedrawRequested => out.push(PlatformEvent::RedrawRequested),
         PlatformEvent::CloseRequested => out.push(PlatformEvent::CloseRequested),
         PlatformEvent::RecreateSwapchain(extent) => {

@@ -408,6 +408,8 @@ pub struct Modifiers {
 pub struct ImeUpdate {
     /// The composing text, empty when composition ended.
     pub preedit: String,
+    /// Active cursor / selection byte range inside preedit text.
+    pub cursor_range: Option<(usize, usize)>,
     /// A committed string, when the composition finished this frame.
     pub commit: Option<String>,
 }
@@ -1404,6 +1406,13 @@ impl<A: Application> AppRuntime<A> {
     #[must_use]
     pub const fn debug_sanitizers_enabled(&self) -> bool {
         self.debug_sanitizers
+    }
+
+    /// Force a full rebuild of the scene and re-upload of all cached resources.
+    pub fn request_full_rebuild(&mut self) {
+        self.force_rebuild = true;
+        self.dirty |= DirtyFlags::ALL;
+        self.glyph_cache.clear();
     }
 
     /// How long until the next timer, for the host's `ControlFlow`.

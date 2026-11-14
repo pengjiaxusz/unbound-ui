@@ -26,9 +26,12 @@ pub mod a11y_bridge;
 pub mod a11y_winit;
 pub mod backend;
 pub mod clipboard;
+pub mod dialogs;
 pub mod latency;
 pub mod pacing;
 pub mod resize;
+pub mod tray;
+pub mod win32_frame;
 pub mod window;
 pub mod windows;
 
@@ -38,11 +41,19 @@ pub use backend::{Flow, PlatformWindow};
 pub use clipboard::{
     ClipboardError, ClipboardProvider, MemoryClipboard, SystemClipboard, MAX_CLIPBOARD_BYTES,
 };
+pub use dialogs::{
+    open_file, open_file_async, open_files, save_file, save_file_async, FileDialogConfig,
+};
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
 pub use pacing::{
     renderer_present_config, FramePacer, PresentSync, PresentWaitPolicy, MIN_FPS_LIMIT,
 };
 pub use resize::{Extent, ResizeAction, ResizeTracker};
+pub use tray::{
+    set_taskbar_progress, set_tray_icon, show_tray_balloon, TaskbarProgressState,
+    TrayNotificationSeverity,
+};
+pub use win32_frame::{install_custom_frame, set_window_dark_mode, FrameHitMetrics};
 pub use window::{
     apply, translate_ime_event, translate_key, translate_window_event, ButtonState, ImeEvent,
     ImeState, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey, PlatformState,
