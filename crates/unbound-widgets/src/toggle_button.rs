@@ -7,7 +7,7 @@ use unbound_math::Rect;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{outlined, surface};
+use crate::primitive::{focus_ring, outlined, surface};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 /// 切换按钮描述符。
@@ -112,20 +112,30 @@ pub fn emit_toggle_button(
         z + 1,
     ));
 
-    out.hit = Some(
+    // 3. 焦点环
+    let disabled = control.disabled || desc.disabled;
+    out.primitives.push(focus_ring(
+        rect,
+        desc.radius,
+        Token::FOCUS_RING,
+        2.0,
+        z + 2,
+        control.focused && !disabled,
+    ));
+
+    out.hit = (!disabled).then(|| {
         HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
             .with_shape(Shape::Rounded {
                 radii: [desc.radius; 4],
             })
-            .with_cursor(if desc.disabled {
-                CursorKind::NotAllowed
-            } else {
-                CursorKind::Pointer
-            }),
-    );
+            .with_cursor(CursorKind::Pointer)
+    });
 
-    let mut a11y = A11yNode::new(Role::CheckBox, desc.label.clone(), rect).clickable();
+    let mut a11y = A11yNode::new(Role::CheckBox, desc.label.clone(), rect)
+        .clickable()
+        .disabled(disabled);
     a11y.selected = is_checked;
     out.a11y = Some(a11y);
+    out.focusable = !disabled;
     out
 }

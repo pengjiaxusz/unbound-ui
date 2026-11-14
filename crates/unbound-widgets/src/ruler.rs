@@ -275,7 +275,7 @@ pub fn emit_rulers(
     node: u64,
     desc: &RulerDesc,
     state: &RulerState,
-    _control: ControlState,
+    control: ControlState,
 ) -> RulerOutput {
     let mut primitives: Vec<GpuPrimitiveInstance> = vec![
         surface(desc.top_rect(), 0.0, Token::SURFACE_SUNKEN, desc.z),
@@ -355,10 +355,14 @@ pub fn emit_rulers(
                 .with_cursor(CursorKind::ResizeEastWest),
         ),
     ];
-    bands.retain(|(axis, _)| match axis {
-        GuideAxis::X => desc.top_rect().size.x > 0.0,
-        GuideAxis::Y => desc.left_rect().size.y > 0.0,
-    });
+    if control.disabled {
+        bands.clear();
+    } else {
+        bands.retain(|(axis, _)| match axis {
+            GuideAxis::X => desc.top_rect().size.x > 0.0,
+            GuideAxis::Y => desc.left_rect().size.y > 0.0,
+        });
+    }
 
     RulerOutput {
         output: WidgetOutput {

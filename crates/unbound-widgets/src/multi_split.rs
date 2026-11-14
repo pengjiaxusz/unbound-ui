@@ -7,7 +7,7 @@ use unbound_math::Rect;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{outlined, surface};
+use crate::primitive::{focus_ring, outlined, surface};
 use crate::scroll::ScrollAxis;
 use crate::{ControlState, WidgetOutput};
 
@@ -86,14 +86,27 @@ pub fn emit_multi_split(
     out.primitives
         .push(surface(rect, desc.radius, Token::SURFACE, z));
 
-    // 2. 固定 3 条分隔槽以维持固定形状
-    let total_w = rect.width();
-    let col_w = total_w / 3.0;
+    // 2. 固定 2 条分隔槽以维持固定形状（按轴向与 state.ratios 定位）
+    let mut accum = 0.0_f32;
+    let total_ratio: f32 = state.ratios.iter().sum::<f32>().max(1e-5);
     for g_idx in 0..2 {
-        let gx = rect.origin.x + (g_idx + 1) as f32 * col_w - MULTI_SPLIT_GUTTER_SIZE * 0.5;
-        let gutter_rect = Rect::new(gx, rect.origin.y, MULTI_SPLIT_GUTTER_SIZE, rect.height());
-        let is_dragging = state.dragging_gutter == Some(g_idx);
-        let gutter_bg = if is_dragging {
+        let r = state.ratios.get(g_idx).copied().unwrap_or(1.0 / 3.0) / total_ratio;
+        accum += r;
+        let gutter_rect = match desc.axis {
+            // 分隔槽与 ratios 均为一维，双轴滚动时沿用水平分栏布局。
+            ScrollAxis::Horizontal | ScrollAxis::Both => {
+                let gx = rect.origin.x + accum * rect.width() - MULTI_SPLIT_GUTTER_SIZE * 0.5;
+                Rect::new(gx, rect.origin.y, MULTI_SPLIT_GUTTER_SIZE, rect.height())
+            }
+            ScrollAxis::Vertical => {
+                let gy = rect.origin.y + accum * rect.height() - MULTI_SPLIT_GUTTER_SIZE * 0.5;
+                Rect::new(rect.origin.x, gy, rect.width(), MULTI_SPLIT_GUTTER_SIZE)
+            }
+        };
+        let is_dragging = !control.disabled && state.dragging_gutter == Some(g_idx);
+        let gutter_bg = if control.disabled {
+            Token::DISABLED
+        } else if is_dragging {
             Token::PRIMARY
         } else {
             Token::OUTLINE
@@ -118,14 +131,29 @@ pub fn emit_multi_split(
         z + 3,
     ));
 
-    out.hit = Some(
+    // 4. 焦点环
+    out.primitives.push(focus_ring(
+        rect,
+        desc.radius,
+        Token::FOCUS_RING,
+        2.0,
+        z + 4,
+        control.focused && !control.disabled,
+    ));
+
+    let cursor = match desc.axis {
+        ScrollAxis::Horizontal | ScrollAxis::Both => CursorKind::ResizeEastWest,
+        ScrollAxis::Vertical => CursorKind::ResizeNorthSouth,
+    };
+    out.hit = (!control.disabled).then(|| {
         HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
             .with_shape(Shape::Rounded {
                 radii: [desc.radius; 4],
             })
-            .with_cursor(CursorKind::ResizeEastWest),
-    );
+            .with_cursor(cursor)
+    });
 
-    out.a11y = Some(A11yNode::new(Role::Group, "MultiSplit", rect));
+    out.a11y = Some(A11yNode::new(Role::Group, "MultiSplit", rect).disabled(control.disabled));
+    out.focusable = !control.disabled;
     out
 }

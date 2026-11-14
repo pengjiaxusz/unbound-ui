@@ -299,14 +299,24 @@ pub fn emit_canvas_toolbar(
         &mut payloads,
     );
 
-    let mut a11y = A11yNode::new(Role::Toolbar, "画布工具", rect);
+    let mut a11y = A11yNode::new(Role::Toolbar, "画布工具", rect).disabled(control.disabled);
     a11y.value = format!("{} · {}", state.active.label(), state.zoom_label());
+
+    let sub_hits = if control.disabled {
+        Vec::new()
+    } else {
+        tools.iter().map(|(_, hit)| hit.clone()).collect()
+    };
 
     CanvasToolbarOutput {
         output: WidgetOutput {
             primitives,
             payloads,
-            hit: None,
+            hit: (!control.disabled).then(|| {
+                HitRegion::new(node, CONTROL_LAYER, u32::from(desc.z), rect)
+                    .with_cursor(CursorKind::Pointer)
+            }),
+            sub_hits: sub_hits.into(),
             a11y: Some(a11y),
             focusable: false,
             ..Default::default()

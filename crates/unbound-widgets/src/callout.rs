@@ -8,7 +8,7 @@ use unbound_theme::Token;
 
 use crate::alert::Severity;
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{outlined, surface};
+use crate::primitive::{focus_ring, outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
 /// 提示框栏描述符。
@@ -76,17 +76,21 @@ pub fn emit_callout(
     node: u64,
     desc: &CalloutDesc,
     state: &CalloutState,
-    _control: ControlState,
+    control: ControlState,
 ) -> WidgetOutput {
     let mut out = WidgetOutput::default();
     let rect = if state.closed { Rect::ZERO } else { desc.rect };
     let z = 700u16;
 
-    let (bg_token, border_token, stripe_token) = match desc.severity {
-        Severity::Info => (Token::PRIMARY_SOFT, Token::PRIMARY, Token::PRIMARY),
-        Severity::Success => (Token::SUCCESS_SOFT, Token::SUCCESS, Token::SUCCESS),
-        Severity::Warning => (Token::WARNING_SOFT, Token::WARNING, Token::WARNING),
-        Severity::Error => (Token::ERROR_SOFT, Token::ERROR, Token::ERROR),
+    let (bg_token, border_token, stripe_token) = if control.disabled {
+        (Token::CONTROL_DISABLED_BG, Token::DISABLED, Token::DISABLED)
+    } else {
+        match desc.severity {
+            Severity::Info => (Token::PRIMARY_SOFT, Token::PRIMARY, Token::PRIMARY),
+            Severity::Success => (Token::SUCCESS_SOFT, Token::SUCCESS, Token::SUCCESS),
+            Severity::Warning => (Token::WARNING_SOFT, Token::WARNING, Token::WARNING),
+            Severity::Error => (Token::ERROR_SOFT, Token::ERROR, Token::ERROR),
+        }
     };
 
     // 1. 背景表面
@@ -108,7 +112,18 @@ pub fn emit_callout(
         z + 2,
     ));
 
-    // 4. 关闭按钮命中区域
+    // 4. 焦点环
+    let interactive = !control.disabled && !state.closed;
+    out.primitives.push(focus_ring(
+        rect,
+        desc.radius,
+        Token::FOCUS_RING,
+        2.0,
+        z + 3,
+        control.focused && interactive,
+    ));
+
+    // 5. 关闭按钮命中区域
     let close_node = node ^ 0xC105E;
     let close_rect = Rect::new(
         rect.origin.x + (rect.width() - 32.0).max(0.0),
@@ -117,7 +132,7 @@ pub fn emit_callout(
         24.0,
     );
 
-    if desc.closable && !state.closed {
+    if desc.closable && interactive {
         out.sub_hits.push(
             HitRegion::new(close_node, BUTTON_LAYER, u32::from(z + 3), close_rect)
                 .with_shape(Shape::Rounded { radii: [4.0; 4] })
@@ -129,14 +144,16 @@ pub fn emit_callout(
         ));
     }
 
-    out.hit = Some(
+    out.hit = interactive.then(|| {
         HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
             .with_shape(Shape::Rounded {
                 radii: [desc.radius; 4],
             })
-            .with_cursor(CursorKind::Pointer),
-    );
+            .with_cursor(CursorKind::Pointer)
+    });
 
-    out.a11y = Some(A11yNode::new(Role::Alert, desc.title.clone(), rect));
+    out.a11y =
+        Some(A11yNode::new(Role::Alert, desc.title.clone(), rect).disabled(control.disabled));
+    out.focusable = interactive;
     out
 }

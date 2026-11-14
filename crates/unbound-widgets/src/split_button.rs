@@ -7,7 +7,7 @@ use unbound_math::Rect;
 use unbound_theme::Token;
 
 use crate::button::{ButtonVariant, BUTTON_LAYER};
-use crate::primitive::{outlined, surface};
+use crate::primitive::{focus_ring, outlined, surface};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 pub const DROPDOWN_WIDTH: f32 = 32.0;
@@ -95,7 +95,8 @@ pub fn emit_split_button(
         (rect.height() - 8.0).max(0.0),
     );
 
-    let bg_token = if control.disabled || desc.disabled {
+    let disabled = control.disabled || desc.disabled;
+    let bg_token = if disabled {
         Token::DISABLED
     } else if control.phase == PointerPhase::Pressed || state.main_pressed {
         Token::PRIMARY_PRESSED
@@ -110,7 +111,9 @@ pub fn emit_split_button(
         .push(surface(main_rect, desc.radius, bg_token, z));
 
     // 2. 下拉触发器背景表面
-    let arrow_bg = if state.menu_open || state.arrow_pressed {
+    let arrow_bg = if disabled {
+        Token::DISABLED
+    } else if state.menu_open || state.arrow_pressed {
         Token::PRIMARY_PRESSED
     } else {
         bg_token
@@ -127,54 +130,72 @@ pub fn emit_split_button(
         rect,
         desc.radius,
         Token::NONE,
-        Token::OUTLINE_STRONG,
+        if disabled {
+            Token::DISABLED
+        } else {
+            Token::OUTLINE_STRONG
+        },
         1.0,
         0.0,
         z + 3,
+    ));
+
+    // 5. 焦点环
+    out.primitives.push(focus_ring(
+        rect,
+        desc.radius,
+        Token::FOCUS_RING,
+        2.0,
+        z + 4,
+        control.focused && !disabled,
     ));
 
     // 多命中区域：主操作区与下拉箭头区
     let action_node = node;
     let arrow_node = node ^ 0xFF;
 
-    let cursor = if desc.disabled {
-        CursorKind::NotAllowed
-    } else {
-        CursorKind::Pointer
-    };
+    if !disabled {
+        out.sub_hits.push(
+            HitRegion::new(action_node, BUTTON_LAYER, u32::from(z + 4), main_rect)
+                .with_shape(Shape::Rounded {
+                    radii: [desc.radius; 4],
+                })
+                .with_cursor(CursorKind::Pointer),
+        );
+        out.sub_hits.push(
+            HitRegion::new(arrow_node, BUTTON_LAYER, u32::from(z + 4), arrow_rect)
+                .with_shape(Shape::Rounded {
+                    radii: [desc.radius; 4],
+                })
+                .with_cursor(CursorKind::Pointer),
+        );
+        out.hit = Some(
+            HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
+                .with_shape(Shape::Rounded {
+                    radii: [desc.radius; 4],
+                })
+                .with_cursor(CursorKind::Pointer),
+        );
+    }
 
-    out.sub_hits.push(
-        HitRegion::new(action_node, BUTTON_LAYER, u32::from(z + 4), main_rect)
-            .with_shape(Shape::Rounded {
-                radii: [desc.radius; 4],
-            })
-            .with_cursor(cursor),
+    out.a11y = Some(
+        A11yNode::new(Role::Button, desc.label.clone(), rect)
+            .clickable()
+            .disabled(disabled),
     );
-    out.sub_hits.push(
-        HitRegion::new(arrow_node, BUTTON_LAYER, u32::from(z + 4), arrow_rect)
-            .with_shape(Shape::Rounded {
-                radii: [desc.radius; 4],
-            })
-            .with_cursor(cursor),
-    );
-
-    out.hit = Some(
-        HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
-            .with_shape(Shape::Rounded {
-                radii: [desc.radius; 4],
-            })
-            .with_cursor(CursorKind::Pointer),
-    );
-
-    out.a11y = Some(A11yNode::new(Role::Button, desc.label.clone(), rect).clickable());
     out.sub_a11y.push((
         action_node,
-        A11yNode::new(Role::Button, desc.label.clone(), main_rect).clickable(),
+        A11yNode::new(Role::Button, desc.label.clone(), main_rect)
+            .clickable()
+            .disabled(disabled),
     ));
     out.sub_a11y.push((
         arrow_node,
-        A11yNode::new(Role::Button, "Options", arrow_rect).clickable(),
+        A11yNode::new(Role::Button, "Options", arrow_rect)
+            .clickable()
+            .disabled(disabled),
     ));
+    out.focusable = !disabled;
 
     out
 }

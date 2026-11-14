@@ -86,7 +86,7 @@ pub fn emit_descriptions(
     node: u64,
     desc: &DescriptionsDesc,
     _state: &DescriptionsState,
-    _control: ControlState,
+    control: ControlState,
 ) -> WidgetOutput {
     let mut out = WidgetOutput::default();
     let rect = desc.rect;
@@ -96,9 +96,10 @@ pub fn emit_descriptions(
     out.primitives
         .push(surface(rect, desc.radius, Token::SURFACE, z));
 
-    // 2. 固定 3 行分隔线以维持固定形状
+    // 2. 固定 3 行分隔线以维持固定形状（限制在容器高度内）
+    let row_h = DESCRIPTION_ROW_HEIGHT.min((rect.height() / 4.0).max(1.0));
     for r_idx in 0..3 {
-        let y = rect.origin.y + (r_idx + 1) as f32 * DESCRIPTION_ROW_HEIGHT;
+        let y = (rect.origin.y + (r_idx + 1) as f32 * row_h).min(rect.max().y - 1.0);
         let line_rect = Rect::new(rect.origin.x, y, rect.width(), 1.0);
         out.primitives.push(surface(
             line_rect,
@@ -113,24 +114,26 @@ pub fn emit_descriptions(
         rect,
         desc.radius,
         Token::NONE,
-        Token::OUTLINE,
+        if control.focused {
+            Token::FOCUS_RING
+        } else {
+            Token::OUTLINE
+        },
         1.0,
         0.0,
         z + 4,
     ));
 
-    out.hit = Some(
+    out.hit = (!control.disabled).then(|| {
         HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
             .with_shape(Shape::Rounded {
                 radii: [desc.radius; 4],
             })
-            .with_cursor(CursorKind::Pointer),
-    );
+            .with_cursor(CursorKind::Pointer)
+    });
 
-    out.a11y = Some(A11yNode::new(
-        Role::DescriptionList,
-        desc.title.clone(),
-        rect,
-    ));
+    out.a11y = Some(
+        A11yNode::new(Role::DescriptionList, desc.title.clone(), rect).disabled(control.disabled),
+    );
     out
 }

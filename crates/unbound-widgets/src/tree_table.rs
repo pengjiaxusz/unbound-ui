@@ -7,7 +7,7 @@ use unbound_math::Rect;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{outlined, surface};
+use crate::primitive::{focus_ring, outlined, surface};
 use crate::table::ColumnSpec;
 use crate::{ControlState, WidgetOutput};
 
@@ -122,10 +122,12 @@ pub fn emit_tree_table(
     out.primitives
         .push(surface(header_line, 0.0, Token::OUTLINE, z + 2));
 
-    // 4. 数据行（最多 4 个可见行以保持结构稳定）
+    // 4. 数据行（最多 4 个可见行以保持结构稳定，高度自适应容器剩余空间）
+    let body_h = (rect.height() - header_rect.height()).max(0.0);
+    let row_h = TREE_TABLE_ROW_HEIGHT.min(body_h / 4.0);
     for row_idx in 0..4 {
-        let y = rect.origin.y + header_rect.height() + row_idx as f32 * TREE_TABLE_ROW_HEIGHT;
-        let row_rect = Rect::new(rect.origin.x, y, rect.width(), TREE_TABLE_ROW_HEIGHT);
+        let y = rect.origin.y + header_rect.height() + row_idx as f32 * row_h;
+        let row_rect = Rect::new(rect.origin.x, y, rect.width(), row_h.max(0.0));
         let is_selected = state.selected == Some(row_idx as u64);
         let row_bg = if is_selected {
             Token::PRIMARY_SOFT
@@ -153,14 +155,25 @@ pub fn emit_tree_table(
         z + 4,
     ));
 
-    out.hit = Some(
+    // 6. 焦点环
+    out.primitives.push(focus_ring(
+        rect,
+        desc.radius,
+        Token::FOCUS_RING,
+        2.0,
+        z + 5,
+        control.focused && !control.disabled,
+    ));
+
+    out.hit = (!control.disabled).then(|| {
         HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
             .with_shape(Shape::Rounded {
                 radii: [desc.radius; 4],
             })
-            .with_cursor(CursorKind::Pointer),
-    );
+            .with_cursor(CursorKind::Pointer)
+    });
 
-    out.a11y = Some(A11yNode::new(Role::TreeGrid, "TreeTable", rect));
+    out.a11y = Some(A11yNode::new(Role::TreeGrid, "TreeTable", rect).disabled(control.disabled));
+    out.focusable = !control.disabled;
     out
 }

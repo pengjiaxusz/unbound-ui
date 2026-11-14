@@ -117,7 +117,7 @@ pub fn emit_navigation_rail(
         desc.z,
     ));
 
-    let row_h = ((desc.rect.height() - 16.0) / MAX_RAIL_ITEMS as f32).clamp(18.0, 36.0);
+    let row_h = ((desc.rect.height() - 16.0) / MAX_RAIL_ITEMS as f32).clamp(4.0, 36.0);
     let pad_x = 6.0;
     let rail_w = if desc.collapsed {
         desc.rect.width().min(44.0)

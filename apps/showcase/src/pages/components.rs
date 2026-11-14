@@ -608,8 +608,8 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
     let node = ctx.part(1);
     let checked = ctx.state.sandbox.get_toggle(id);
     let selected_idx = ctx.state.sandbox.get_selected(id);
-    let selected = selected_idx > 0;
-    let mut state = ctx.canvas.control_state(node, checked, selected);
+    let selected = checked || selected_idx > 0;
+    let mut state = ctx.canvas.control_state(node, false, selected);
     let knobs = knobs_for_id(id);
     if matches!(
         knobs.first(),
@@ -625,14 +625,23 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
     ) && ctx.knob_on(0)
     {
         state.disabled = true;
+        state.phase = unbound_widgets::PointerPhase::Idle;
     }
-    let value_norm = if let Some(KnobSpec::Slider { min, max, .. }) = knobs.get(1) {
+    let value_norm = if let Some(&sandbox_val) = ctx.state.sandbox.slider_values.get(&(id as u8)) {
+        (sandbox_val / 100.0).clamp(0.0, 1.0)
+    } else if let Some(KnobSpec::Slider { min, max, .. }) = knobs.get(1) {
         let span = (max - min).max(1e-5);
         ((ctx.knob(1) - min) / span).clamp(0.0, 1.0)
     } else {
         (ctx.state.sandbox.get_slider(id, 50.0) / 100.0).clamp(0.0, 1.0)
     };
-    let variant_idx = selected_idx.max(ctx.knob(1).round().max(0.0) as usize);
+    let knob_variant = match knobs.get(1) {
+        Some(KnobSpec::Segmented { .. } | KnobSpec::Toggle { .. } | KnobSpec::CheckBox { .. }) => {
+            ctx.knob(1).round().max(0.0) as usize
+        }
+        _ => 0,
+    };
+    let variant_idx = selected_idx.wrapping_add(knob_variant);
 
     let label_str = semantic_label_for_id(id, &ctx.state.sandbox);
     let mut glyphs = ctx.canvas.shape(

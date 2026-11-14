@@ -7,7 +7,7 @@ use unbound_math::Rect;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{outlined, surface};
+use crate::primitive::{focus_ring, outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
 /// 虚拟瀑布流网格中的单个条目。
@@ -86,16 +86,25 @@ pub fn emit_virtual_masonry(
     out.primitives
         .push(surface(rect, desc.radius, Token::SURFACE, z));
 
-    // 2. 固定 6 个卡片槽位，以在帧间保持结构稳定
+    // 2. 固定 6 个交错卡片槽位，以在帧间保持结构稳定并限制在容器边界内
     let col_count = desc.columns.clamp(1, 4);
-    let col_w = (rect.width() - desc.gap * (col_count as f32 - 1.0)) / col_count as f32;
+    let pad = 8.0;
+    let inner_w = (rect.width() - pad * 2.0).max(20.0);
+    let col_w = ((inner_w - desc.gap * (col_count as f32 - 1.0)) / col_count as f32).max(12.0);
+    let rows = 6_usize.div_ceil(col_count);
+    let max_cell_h = ((rect.height() - pad * 2.0 - desc.gap * (rows.saturating_sub(1)) as f32)
+        / rows.max(1) as f32)
+        .max(8.0);
+    let heights = [0.78_f32, 1.0, 0.85, 0.96, 0.72, 0.90];
+    let mut col_y = [rect.origin.y + pad; 4];
 
-    for i in 0..6 {
+    for (i, &height_scale) in heights.iter().enumerate() {
         let col = i % col_count;
-        let row = i / col_count;
-        let x = rect.origin.x + col as f32 * (col_w + desc.gap);
-        let y = rect.origin.y + 12.0 + row as f32 * 80.0;
-        let item_rect = Rect::new(x, y, col_w.max(20.0), 70.0);
+        let x = rect.origin.x + pad + col as f32 * (col_w + desc.gap);
+        let y = col_y[col].min(rect.max().y - pad - 4.0);
+        let h = (max_cell_h * height_scale).min((rect.max().y - pad - y).max(4.0));
+        let item_rect = Rect::new(x, y, col_w, h);
+        col_y[col] = y + h + desc.gap;
 
         out.primitives.push(surface(
             item_rect,
@@ -124,14 +133,25 @@ pub fn emit_virtual_masonry(
         z + 8,
     ));
 
-    out.hit = Some(
+    // 4. 焦点环
+    out.primitives.push(focus_ring(
+        rect,
+        desc.radius,
+        Token::FOCUS_RING,
+        2.0,
+        z + 9,
+        control.focused && !control.disabled,
+    ));
+
+    out.hit = (!control.disabled).then(|| {
         HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
             .with_shape(Shape::Rounded {
                 radii: [desc.radius; 4],
             })
-            .with_cursor(CursorKind::Pointer),
-    );
+            .with_cursor(CursorKind::Pointer)
+    });
 
-    out.a11y = Some(A11yNode::new(Role::Grid, "VirtualMasonry", rect));
+    out.a11y = Some(A11yNode::new(Role::Grid, "VirtualMasonry", rect).disabled(control.disabled));
+    out.focusable = !control.disabled;
     out
 }

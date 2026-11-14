@@ -661,11 +661,9 @@ impl<'a> Canvas<'a> {
         for mut primitive in output.primitives.iter().copied() {
             primitive.z_and_opacity =
                 GpuPrimitiveInstance::pack_z_opacity(self.next_z(), primitive.opacity());
-            if matches!(
-                primitive.prim_type(),
-                unbound_gpu::data::PrimType::Glyph | unbound_gpu::data::PrimType::GlyphColor
-            ) {
-                primitive.extra_payload_idx += payload_base;
+            if payload_base != 0 {
+                primitive.extra_payload_idx =
+                    primitive.extra_payload_idx.saturating_add(payload_base);
             }
             self.scene.primitives.push(primitive);
         }
@@ -673,12 +671,37 @@ impl<'a> Canvas<'a> {
         self.glyphs_emitted += output.payloads.len();
         self.apply_clip(start);
 
+        let clip_shape = self.clip_shape();
         if let Some(mut region) = output.hit.clone() {
             region.z = u32::from(self.z);
-            if let Some(clip) = self.clip_shape() {
+            if let Some(clip) = clip_shape {
                 region = region.with_clip(clip);
             }
             self.regions.push(region);
+        }
+        let demo_parent = match crate::target::decode(node) {
+            Some(crate::target::Target::Demo(page, card, _)) => Some((page, card)),
+            _ => None,
+        };
+        for (idx, mut sub_region) in output.sub_hits.iter().cloned().enumerate() {
+            if let Some((page, card)) = demo_parent {
+                let same_demo = matches!(
+                    crate::target::decode(sub_region.node),
+                    Some(crate::target::Target::Demo(p, c, _)) if p == page && c == card
+                );
+                if !same_demo {
+                    sub_region.node = crate::target::id(crate::target::Target::Demo(
+                        page,
+                        card,
+                        1000_u16.saturating_add(idx as u16),
+                    ));
+                }
+            }
+            sub_region.z = u32::from(self.z);
+            if let Some(clip) = clip_shape {
+                sub_region = sub_region.with_clip(clip);
+            }
+            self.regions.push(sub_region);
         }
 
         if let Some(a11y) = output.a11y.clone() {
@@ -688,6 +711,14 @@ impl<'a> Canvas<'a> {
             self.semantics.upsert(node, a11y);
             self.a11y_nodes.push(node);
         }
+        for (sub_key, sub_a11y) in output.sub_a11y.iter().cloned() {
+            self.semantics.upsert(sub_key, sub_a11y);
+            if node != 0 {
+                self.semantics.reparent(sub_key, node);
+            }
+            self.a11y_nodes.push(sub_key);
+        }
+        self.focus_order.extend_from_slice(&output.sub_focus_order);
     }
 
     /// 绘制真实组件的输出并记录其发射器已运行。

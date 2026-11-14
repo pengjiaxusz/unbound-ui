@@ -112,6 +112,30 @@ pub fn emit_widget(
     emit_widget_with_params(id, node, state, rect, label, 0.5, 0)
 }
 
+/// 合并子组件输出，重定位载荷索引并保留子命中区域与无障碍节点。
+fn merge_output(dst: &mut WidgetOutput, mut src: WidgetOutput) {
+    let payload_base = u32::try_from(dst.payloads.len()).unwrap_or(u32::MAX);
+    if payload_base != 0 {
+        for primitive in &mut src.primitives {
+            primitive.extra_payload_idx = primitive.extra_payload_idx.saturating_add(payload_base);
+        }
+    }
+    dst.primitives.extend(src.primitives);
+    dst.payloads.extend(src.payloads);
+    if dst.hit.is_none() {
+        dst.hit = src.hit;
+    } else if let Some(hit) = src.hit {
+        dst.sub_hits.push(hit);
+    }
+    dst.sub_hits.extend(src.sub_hits);
+    if dst.a11y.is_none() {
+        dst.a11y = src.a11y;
+    }
+    dst.sub_a11y.extend(src.sub_a11y);
+    dst.focusable |= src.focusable;
+    dst.sub_focus_order.extend(src.sub_focus_order);
+}
+
 /// 带交互参数（归一化数值 `value_norm` 与选项索引 `variant_idx`）的穷举组件发射器。
 #[deny(unreachable_patterns)]
 pub fn emit_widget_with_params(
@@ -125,6 +149,7 @@ pub fn emit_widget_with_params(
 ) -> WidgetOutput {
     let value_norm = value_norm.clamp(0.0, 1.0);
     let o = rect.origin;
+    let ctrl_rect = Rect::new(o.x, o.y, rect.size.x.min(320.0), rect.size.y.min(36.0));
     let mut out = match id {
         WidgetCatalogId::Accordion => {
             let desc = AccordionDesc::new(
@@ -134,7 +159,13 @@ pub fn emit_widget_with_params(
                     AccordionSection::new(2, "Advanced", 80.0),
                 ],
             );
-            let accordion = AccordionState::new(2);
+            let mut accordion = AccordionState::new(2);
+            if variant_idx % 2 == 0 {
+                accordion.toggle(&desc, 0);
+            } else {
+                accordion.toggle(&desc, 1);
+            }
+            accordion.snap(&desc);
             let mut out = crate::accordion::emit_accordion_header(
                 &desc,
                 &accordion,
@@ -143,26 +174,54 @@ pub fn emit_widget_with_params(
                 label,
                 AccordionTokens::standard(),
             );
-            let body = crate::accordion::emit_accordion_body(
+            let body0 = crate::accordion::emit_accordion_body(
                 &desc,
                 &accordion,
                 0,
                 AccordionTokens::standard(),
             );
-            out.primitives.extend(body.primitives);
+            merge_output(&mut out, body0);
+            // 两个表头都绑定实时状态：展开项使用展开色，折叠项仍需响应悬停。
+            let hdr1 = crate::accordion::emit_accordion_header(
+                &desc,
+                &accordion,
+                1,
+                state,
+                &[],
+                AccordionTokens::standard(),
+            );
+            merge_output(&mut out, hdr1);
             out
         }
         WidgetCatalogId::Alert => {
+            let severity = match variant_idx % 4 {
+                0 => Severity::Info,
+                1 => Severity::Success,
+                2 => Severity::Warning,
+                _ => Severity::Error,
+            };
             let desc = AlertDesc::new(
                 Rect::new(o.x, o.y, rect.size.x, 64.0),
-                Severity::Warning,
+                severity,
                 "Low disk space",
             )
             .dismissible();
             crate::alert::emit_alert(node, &desc, label, state)
         }
         WidgetCatalogId::AlertDialog => {
-            let desc = AlertDialogDesc::new(rect, "Delete workspace?")
+            let card_rect = if rect.size.x > 260.0 && rect.size.y > 140.0 {
+                let w = rect.size.x.min(360.0);
+                let h = rect.size.y.min(160.0);
+                Rect::new(
+                    o.x + (rect.size.x - w) * 0.5,
+                    o.y + (rect.size.y - h) * 0.5,
+                    w,
+                    h,
+                )
+            } else {
+                rect
+            };
+            let desc = AlertDialogDesc::new(card_rect, "Delete workspace?")
                 .with_message("This cannot be undone.");
             crate::alert_dialog::emit_alert_dialog(node, rect, &desc, label, state).output
         }
@@ -173,50 +232,94 @@ pub fn emit_widget_with_params(
             crate::avatar::emit_avatar(node, &desc, label, state)
         }
         WidgetCatalogId::Badge => {
-            let desc = BadgeDesc::new(Rect::new(o.x, o.y, 64.0, 22.0), "New");
+            let variant = match variant_idx % 5 {
+                0 => crate::badge::BadgeVariant::Neutral,
+                1 => crate::badge::BadgeVariant::Primary,
+                2 => crate::badge::BadgeVariant::Success,
+                3 => crate::badge::BadgeVariant::Warning,
+                _ => crate::badge::BadgeVariant::Error,
+            };
+            let desc = BadgeDesc::new(Rect::new(o.x, o.y, 64.0, 22.0), "New")
+                .variant(variant)
+                .with_dot();
             crate::badge::emit_badge(&desc, label)
         }
         WidgetCatalogId::Breadcrumb => {
-            let desc = BreadcrumbDesc::new(
-                Rect::new(o.x, o.y, rect.size.x, 24.0),
-                vec![Crumb::new(1, "Root"), Crumb::new(2, "src")],
-            );
-            let slots = desc.layout(&[40.0, 30.0]);
-            let mut out = crate::breadcrumb::emit_crumb(
-                &desc,
-                &slots[0],
-                state,
-                label,
-                BreadcrumbTokens::standard(),
-            );
-            let sep = crate::breadcrumb::emit_crumb_separator(
-                &desc,
-                &slots[0],
-                BreadcrumbTokens::standard(),
-            );
-            let ell = crate::breadcrumb::emit_crumb_ellipsis(
-                node,
-                &desc,
-                &slots[0],
-                &BreadcrumbState::default(),
-                state,
-                BreadcrumbTokens::standard(),
-            );
-            out.primitives.extend(sep.primitives);
-            out.primitives.extend(ell.primitives);
+            let crumbs = vec![
+                Crumb::new(1, "Root"),
+                Crumb::new(2, "src"),
+                Crumb::new(3, "main.rs"),
+            ];
+            // 偶数变体展示完整路径，奇数变体压缩视口以触发折叠态省略号。
+            let available = if variant_idx % 2 == 0 {
+                rect.size.x
+            } else {
+                72.0
+            };
+            let desc = BreadcrumbDesc::new(Rect::new(o.x, o.y, available, 24.0), crumbs);
+            let slots = desc.layout(&[40.0, 30.0, 60.0]);
+            let mut out = WidgetOutput::default();
+            for (index, slot) in slots.iter().enumerate() {
+                let control = if index == 0 {
+                    state
+                } else {
+                    ControlState::default()
+                };
+                let glyphs: &[GlyphQuad] = if index == 0 { &*label } else { &[] };
+                let crumb = crate::breadcrumb::emit_crumb(
+                    &desc,
+                    slot,
+                    control,
+                    glyphs,
+                    BreadcrumbTokens::standard(),
+                );
+                merge_output(&mut out, crumb);
+                // 省略号槽位（`crumb: None`）由专用发射器处理，其余槽位返回空输出。
+                let ellipsis = crate::breadcrumb::emit_crumb_ellipsis(
+                    node,
+                    &desc,
+                    slot,
+                    &BreadcrumbState::default(),
+                    control,
+                    BreadcrumbTokens::standard(),
+                );
+                merge_output(&mut out, ellipsis);
+                let sep = crate::breadcrumb::emit_crumb_separator(
+                    &desc,
+                    slot,
+                    BreadcrumbTokens::standard(),
+                );
+                merge_output(&mut out, sep);
+            }
             out
         }
         WidgetCatalogId::Button => {
-            let desc = ButtonDesc::new(rect, "Save");
+            let variant = match variant_idx % 3 {
+                0 => crate::button::ButtonVariant::Primary,
+                1 => crate::button::ButtonVariant::Secondary,
+                _ => crate::button::ButtonVariant::Subtle,
+            };
+            let desc = ButtonDesc::new(
+                Rect::new(o.x, o.y, rect.size.x.min(180.0), rect.size.y.min(36.0)),
+                "Save",
+            )
+            .with_variant(variant);
             let mut out = crate::button::emit_button(node, &desc, state, label);
-            let out2 =
-                crate::button::emit_button_with_tokens(node, &desc, state, desc.tokens(), label);
-            out.primitives.extend(out2.primitives);
+            let themed = crate::button::emit_button_with_tokens(
+                node,
+                &desc,
+                ControlState::default(),
+                desc.tokens(),
+                label,
+            );
+            merge_output(&mut out, themed);
             out
         }
         WidgetCatalogId::CanvasToolbar => {
             let desc = CanvasToolbarDesc::new(rect);
-            let toolbar = CanvasToolbarState::new(1.0);
+            let mut toolbar = CanvasToolbarState::new(0.5 + value_norm);
+            let tools = crate::canvas_toolbar::CanvasTool::ALL;
+            toolbar.set_tool(tools[variant_idx % tools.len()]);
             crate::canvas_toolbar::emit_canvas_toolbar(node, &desc, &toolbar, label, state).output
         }
         WidgetCatalogId::Chart => {
@@ -231,7 +334,15 @@ pub fn emit_widget_with_params(
             crate::chart::emit_chart(node, &desc, &ChartState::new(), label, state).output
         }
         WidgetCatalogId::Checkbox => {
-            let desc = CheckboxDesc::new(rect, "Snap to grid");
+            for g in label.iter_mut() {
+                if g.rect.origin.x < o.x + 24.0 {
+                    g.rect.origin.x += 24.0;
+                }
+            }
+            // 勾选态属于展示变体，不能跟随 ControlState，否则图元数会随状态漂移；
+            // 默认变体保持未勾选，确保悬停配色仍可见。
+            let desc =
+                CheckboxDesc::new(ctrl_rect, "Snap to grid").with_checked(variant_idx % 2 == 1);
             crate::checkbox::emit_checkbox(
                 node,
                 &desc,
@@ -270,7 +381,12 @@ pub fn emit_widget_with_params(
                 Command::new(1, "Open File", "File").with_shortcut("Ctrl+O"),
                 Command::new(2, "Rebuild", "Build"),
             ]);
-            let mut out = crate::command_palette::emit_command_row(
+            let mut out = crate::command_palette::emit_command_palette(
+                &desc,
+                &palette,
+                CommandPaletteTokens::standard(),
+            );
+            let row0 = crate::command_palette::emit_command_row(
                 &desc,
                 &palette,
                 0,
@@ -279,12 +395,17 @@ pub fn emit_widget_with_params(
                 &[],
                 CommandPaletteTokens::standard(),
             );
-            let pal = crate::command_palette::emit_command_palette(
+            merge_output(&mut out, row0);
+            let row1 = crate::command_palette::emit_command_row(
                 &desc,
                 &palette,
+                1,
+                ControlState::default(),
+                &[],
+                &[],
                 CommandPaletteTokens::standard(),
             );
-            out.primitives.extend(pal.primitives);
+            merge_output(&mut out, row1);
             out
         }
         WidgetCatalogId::Containers => {
@@ -302,6 +423,7 @@ pub fn emit_widget_with_params(
                     MenuItem::action("Copy").with_shortcut("Ctrl+C"),
                 ],
             );
+            context.menu.highlighted = Some(variant_idx % 2);
             let placed = context.desc_at(menu, rect);
             crate::menu::emit_menu(node, 2, &placed, &context.menu, state).0
         }
@@ -323,17 +445,28 @@ pub fn emit_widget_with_params(
             let pane = DockTree::new(vec![DockTab::new(1, "Explorer"), DockTab::new(2, "Search")])
                 .layout(rect)
                 .remove(0);
-            let mut out = crate::dock::emit_dock_tab(
+            let mut out = crate::dock::emit_dock_pane(&pane, DockTokens::standard(), 10);
+            let tab1 = crate::dock::emit_dock_tab(
                 &pane,
                 1,
                 128.0,
                 state,
                 label,
                 DockTokens::standard(),
-                10,
+                11,
             );
-            let pane_out = crate::dock::emit_dock_pane(&pane, DockTokens::standard(), 10);
-            let preview_out = crate::dock::emit_dock_preview(
+            merge_output(&mut out, tab1);
+            let tab2 = crate::dock::emit_dock_tab(
+                &pane,
+                2,
+                128.0,
+                ControlState::default(),
+                &[],
+                DockTokens::standard(),
+                11,
+            );
+            merge_output(&mut out, tab2);
+            let preview = crate::dock::emit_dock_preview(
                 crate::dock::DockHover {
                     target: 0,
                     zone: crate::dock::DockZone::Center,
@@ -342,8 +475,7 @@ pub fn emit_widget_with_params(
                 DockTokens::standard(),
                 10,
             );
-            out.primitives.extend(pane_out.primitives);
-            out.primitives.extend(preview_out.primitives);
+            merge_output(&mut out, preview);
             out
         }
         WidgetCatalogId::Drawer => {
@@ -366,8 +498,8 @@ pub fn emit_widget_with_params(
             let mut out = crate::form::emit_form_root(rect, "Registration");
             let label_out = crate::form::emit_form_label(&fields[0], &layouts[0], label);
             let msg_out = crate::form::emit_form_message(&fields[0], &layouts[0], None, label, 10);
-            out.primitives.extend(label_out.primitives);
-            out.primitives.extend(msg_out.primitives);
+            merge_output(&mut out, label_out);
+            merge_output(&mut out, msg_out);
             out
         }
         WidgetCatalogId::Gizmo => {
@@ -387,7 +519,7 @@ pub fn emit_widget_with_params(
             let mut out = crate::image::emit_image(node, &desc, state);
             let resolver = ProbeImageResolver;
             let asset_out = crate::image::emit_image_with_assets(node, &desc, state, &resolver);
-            out.primitives.extend(asset_out.primitives);
+            merge_output(&mut out, asset_out);
             out
         }
         WidgetCatalogId::Menu => {
@@ -399,7 +531,9 @@ pub fn emit_widget_with_params(
                     MenuItem::action("Quit"),
                 ],
             );
-            crate::menu::emit_menu(node, 2, &desc, &MenuState::new(), state).0
+            let mut menu_state = MenuState::new();
+            menu_state.highlighted = Some(variant_idx % 3);
+            crate::menu::emit_menu(node, 2, &desc, &menu_state, state).0
         }
         WidgetCatalogId::Menubar => {
             let desc = MenuBarDesc::new(
@@ -426,7 +560,19 @@ pub fn emit_widget_with_params(
             crate::minimap::emit_minimap(node, &desc, &[], &MinimapState::new(), state).0
         }
         WidgetCatalogId::Modal => {
-            let desc = ModalDesc::new(rect).with_label("Settings");
+            let card_rect = if rect.size.x > 260.0 && rect.size.y > 140.0 {
+                let w = rect.size.x.min(380.0);
+                let h = rect.size.y.min(200.0);
+                Rect::new(
+                    o.x + (rect.size.x - w) * 0.5,
+                    o.y + (rect.size.y - h) * 0.5,
+                    w,
+                    h,
+                )
+            } else {
+                rect
+            };
+            let desc = ModalDesc::new(card_rect).with_label("Settings");
             crate::modal::emit_modal(node, rect, &desc, &[10, 11], state).output
         }
         WidgetCatalogId::NodeGraph => {
@@ -462,8 +608,8 @@ pub fn emit_widget_with_params(
             .output
         }
         WidgetCatalogId::NumberInput => {
-            let desc = NumberInputDesc::new(rect, 0.0, 100.0);
-            let number = NumberInputState::new(10.0);
+            let desc = NumberInputDesc::new(ctrl_rect, 0.0, 100.0);
+            let number = NumberInputState::new(f64::from((value_norm * 100.0).round()));
             crate::number_input::emit_number_input(node, &desc, &number, state, label)
         }
         WidgetCatalogId::Overlay => {
@@ -484,7 +630,9 @@ pub fn emit_widget_with_params(
         }
         WidgetCatalogId::Progress => {
             let desc = ProgressDesc::new(Rect::new(o.x, o.y, rect.size.x, 8.0)).value(value_norm);
-            crate::progress::emit_progress(&desc, &ProgressState::new())
+            let mut progress_state = ProgressState::new();
+            progress_state.jump_to(value_norm);
+            crate::progress::emit_progress(&desc, &progress_state)
         }
         WidgetCatalogId::PropertyGrid => {
             let desc = PropertyGridDesc::new(
@@ -501,7 +649,12 @@ pub fn emit_widget_with_params(
             )
         }
         WidgetCatalogId::Radio => {
-            let desc = RadioDesc::new(rect, "Comfortable");
+            for g in label.iter_mut() {
+                if g.rect.origin.x < o.x + 24.0 {
+                    g.rect.origin.x += 24.0;
+                }
+            }
+            let desc = RadioDesc::new(ctrl_rect, "Comfortable");
             let _group = RadioGroupDesc::new(vec![desc.clone()]);
             crate::radio::emit_radio(node, &desc, state, label, RadioTokens::standard())
         }
@@ -520,23 +673,36 @@ pub fn emit_widget_with_params(
             crate::scroll::emit_scroll_view(node, &desc, &ScrollState::new(), state).output
         }
         WidgetCatalogId::Segmented => {
-            // 探测*未选中*的槽位：它是响应指针的槽位（当前激活槽位即选中项本身）。
-            let desc = SegmentedDesc::new(rect, &["One", "Two", "Three"]);
-            let mut out = crate::segmented::emit_segmented_segment(
-                node,
-                &desc,
-                1,
-                state,
-                label,
-                SegmentedTokens::standard(),
-            );
-            let frame = crate::segmented::emit_segmented_frame(&desc, SegmentedTokens::standard());
-            out.primitives.extend(frame.primitives);
+            // 先绘制外框底板，再依次绘制 3 个分段槽位；将交互态传入未选中槽位以满足探针检测。
+            let mut desc = SegmentedDesc::new(ctrl_rect, &["One", "Two", "Three"]);
+            desc.selected = variant_idx % 3;
+            let interactive_idx = if desc.selected == 1 { 0 } else { 1 };
+            let mut out =
+                crate::segmented::emit_segmented_frame(&desc, SegmentedTokens::standard());
+            for idx in 0..3 {
+                let seg_state = if idx == interactive_idx {
+                    state
+                } else {
+                    ControlState::default()
+                };
+                let seg_label: &[GlyphQuad] = if idx == 0 { label } else { &[] };
+                let seg = crate::segmented::emit_segmented_segment(
+                    node + idx as u64,
+                    &desc,
+                    idx,
+                    seg_state,
+                    seg_label,
+                    SegmentedTokens::standard(),
+                );
+                merge_output(&mut out, seg);
+            }
             out
         }
         WidgetCatalogId::Select => {
-            let desc =
-                SelectDesc::new(rect, vec!["Apple".into(), "Banana".into(), "Cherry".into()]);
+            let desc = SelectDesc::new(
+                ctrl_rect,
+                vec!["Apple".into(), "Banana".into(), "Cherry".into()],
+            );
             let mut select_state = SelectState::new();
             select_state.selected = Some(variant_idx % 3);
             crate::select::emit_select_with_glyphs(node, &desc, &select_state, state, label)
@@ -546,30 +712,31 @@ pub fn emit_widget_with_params(
             crate::skeleton::emit_skeleton(&desc, &SkeletonState::new())
         }
         WidgetCatalogId::Slider => {
-            let desc = SliderDesc::new(rect, "Gap", value_norm * 36.0, 0.0, 36.0).with_step(1.0);
+            let desc =
+                SliderDesc::new(ctrl_rect, "Gap", value_norm * 36.0, 0.0, 36.0).with_step(1.0);
             crate::slider::emit_slider(node, &desc, state, label, SliderTokens::standard())
         }
         WidgetCatalogId::SplitPane => {
             let desc = SplitPaneDesc::horizontal(rect);
-            let split_state = SplitPaneState::new(0.5);
-            let mut out = crate::split_pane::emit_split_pane(
+            let split_state = SplitPaneState::new(value_norm.clamp(0.15, 0.85));
+            let mut out = crate::split_pane::emit_split_pane_panes(
+                &desc,
+                &split_state,
+                Token::SURFACE,
+                Token::SURFACE_SUNKEN,
+            );
+            let splitter = crate::split_pane::emit_split_pane(
                 node,
                 &desc,
                 &split_state,
                 state,
                 SplitPaneTokens::standard(),
             );
-            let panes = crate::split_pane::emit_split_pane_panes(
-                &desc,
-                &split_state,
-                Token::SURFACE,
-                Token::SURFACE,
-            );
-            out.primitives.extend(panes.primitives);
+            merge_output(&mut out, splitter);
             out
         }
         WidgetCatalogId::Switch => {
-            let desc = SwitchDesc::new(rect, "Animate");
+            let desc = SwitchDesc::new(ctrl_rect, "Animate");
             crate::switch::emit_switch(node, &desc, state, label, SwitchTokens::standard())
         }
         WidgetCatalogId::Table => {
@@ -581,27 +748,62 @@ pub fn emit_widget_with_params(
                 ],
             )
             .with_label("Files");
-            crate::table::emit_table(node, &desc, &TableState::new(), &[], label, state)
+            let mut table_state = TableState::new();
+            table_state.select_row(variant_idx % 3);
+            let rows = [
+                crate::table::TableRow {
+                    index: 0,
+                    glyphs: &[],
+                },
+                crate::table::TableRow {
+                    index: 1,
+                    glyphs: &[],
+                },
+                crate::table::TableRow {
+                    index: 2,
+                    glyphs: &[],
+                },
+            ];
+            crate::table::emit_table(node, &desc, &table_state, &rows, label, state)
         }
         WidgetCatalogId::Tabs => {
-            // 探测未激活的标签页：当前激活的标签页即选中项本身。
-            let desc = TabsDesc::new(rect, &["One", "Two", "Three"]);
-            let tabs_state = TabsState::new(variant_idx % 3);
-            let mut out =
-                crate::tabs::emit_tab(&desc, &tabs_state, 1, state, label, TabsTokens::standard());
-            let strip = crate::tabs::emit_tabs_strip(&desc, &tabs_state, TabsTokens::standard());
+            // 先绘制标签栏底条，再依次绘制各标签页与操作按钮。
+            let desc = TabsDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, rect.size.y.min(36.0)),
+                &["One", "Two", "Three"],
+            );
+            let active = variant_idx % 3;
+            let tabs_state = TabsState::new(active);
+            let interactive_idx = if active == 1 { 0 } else { 1 };
+            let mut out = crate::tabs::emit_tabs_strip(&desc, &tabs_state, TabsTokens::standard());
+            for idx in 0..3 {
+                let tab_state = if idx == interactive_idx {
+                    state
+                } else {
+                    ControlState::default()
+                };
+                let tab_label: &[GlyphQuad] = if idx == 0 { label } else { &[] };
+                let tab = crate::tabs::emit_tab(
+                    &desc,
+                    &tabs_state,
+                    idx,
+                    tab_state,
+                    tab_label,
+                    TabsTokens::standard(),
+                );
+                merge_output(&mut out, tab);
+            }
             let close = crate::tabs::emit_tab_close(
                 node,
                 &desc,
                 &tabs_state,
-                1,
+                interactive_idx,
                 state,
                 TabsTokens::standard(),
             );
+            merge_output(&mut out, close);
             let add = crate::tabs::emit_tabs_add(node, &desc, state, TabsTokens::standard());
-            out.primitives.extend(strip.primitives);
-            out.primitives.extend(close.primitives);
-            out.primitives.extend(add.primitives);
+            merge_output(&mut out, add);
             out
         }
         WidgetCatalogId::TagInput => {
@@ -623,7 +825,7 @@ pub fn emit_widget_with_params(
             )
         }
         WidgetCatalogId::TextInput => {
-            let desc = TextInputDesc::new(rect).with_placeholder("type here");
+            let desc = TextInputDesc::new(ctrl_rect).with_placeholder("type here");
             crate::text_input::emit_text_input(
                 node,
                 &desc,
@@ -649,7 +851,8 @@ pub fn emit_widget_with_params(
                 ],
             );
             let layout = desc.layout();
-            let mut out = crate::toolbar::emit_toolbar_item(
+            let mut out = crate::toolbar::emit_toolbar(&desc, ToolbarTokens::standard());
+            let item0 = crate::toolbar::emit_toolbar_item(
                 &desc,
                 &ToolbarState::new(),
                 0,
@@ -658,6 +861,19 @@ pub fn emit_widget_with_params(
                 label,
                 ToolbarTokens::standard(),
             );
+            merge_output(&mut out, item0);
+            if let Some(r1) = layout.rects.get(1).and_then(|r| *r) {
+                let item1 = crate::toolbar::emit_toolbar_item(
+                    &desc,
+                    &ToolbarState::new(),
+                    1,
+                    r1,
+                    ControlState::default(),
+                    &[],
+                    ToolbarTokens::standard(),
+                );
+                merge_output(&mut out, item1);
+            }
             let overflow = crate::toolbar::emit_toolbar_overflow(
                 node,
                 Rect::new(o.x + rect.size.x - 24.0, o.y, 24.0, rect.size.y),
@@ -665,7 +881,7 @@ pub fn emit_widget_with_params(
                 ToolbarTokens::standard(),
                 10,
             );
-            out.primitives.extend(overflow.primitives);
+            merge_output(&mut out, overflow);
             out
         }
         WidgetCatalogId::Tooltip => {
@@ -688,16 +904,16 @@ pub fn emit_widget_with_params(
                 item: 0,
                 rect: Rect::new(o.x, o.y, rect.size.x, 28.0),
             };
-            let mut out = crate::tree_view::emit_tree_row(
+            let mut out = crate::tree_view::emit_tree_background(&desc, TreeViewTokens::standard());
+            let row_out = crate::tree_view::emit_tree_row(
                 &desc,
                 &row,
-                false,
+                variant_idx % 2 == 1,
                 state,
                 label,
                 TreeViewTokens::standard(),
             );
-            let bg = crate::tree_view::emit_tree_background(&desc, TreeViewTokens::standard());
-            out.primitives.extend(bg.primitives);
+            merge_output(&mut out, row_out);
             out
         }
         WidgetCatalogId::VirtualViews => {
@@ -715,7 +931,7 @@ pub fn emit_widget_with_params(
             let desc = crate::collapsible::CollapsibleDesc::new(
                 Rect::new(o.x, o.y, rect.size.x, 76.0),
                 "Details",
-                true,
+                state.selected,
             );
             crate::collapsible::emit_collapsible(node, &desc, state, label)
         }
@@ -743,7 +959,11 @@ pub fn emit_widget_with_params(
             crate::navigation_rail::emit_navigation_rail(node, &desc, state, label)
         }
         WidgetCatalogId::Pagination => {
-            let desc = crate::pagination::PaginationDesc::new(rect, 12, 5);
+            let desc = crate::pagination::PaginationDesc::new(
+                Rect::new(o.x, o.y, rect.size.x.min(380.0), rect.size.y.min(36.0)),
+                12,
+                (variant_idx % 12) + 1,
+            );
             crate::pagination::emit_pagination(node, &desc, state, label)
         }
         WidgetCatalogId::Stepper => {
@@ -758,7 +978,7 @@ pub fn emit_widget_with_params(
             crate::stepper::emit_stepper(node, &desc, state, label)
         }
         WidgetCatalogId::AutoComplete => {
-            let desc = crate::autocomplete::AutoCompleteDesc::new(rect, "unb", 3);
+            let desc = crate::autocomplete::AutoCompleteDesc::new(ctrl_rect, "unb", 3);
             crate::autocomplete::emit_autocomplete(node, &desc, state, label)
         }
         WidgetCatalogId::Banner => {
@@ -784,7 +1004,7 @@ pub fn emit_widget_with_params(
             crate::date_range_picker::emit_date_range_picker(node, &desc, state, label)
         }
         WidgetCatalogId::HotkeyInput => {
-            let desc = crate::hotkey_input::HotkeyInputDesc::new(rect, "Ctrl+K");
+            let desc = crate::hotkey_input::HotkeyInputDesc::new(ctrl_rect, "Ctrl+K");
             crate::hotkey_input::emit_hotkey_input(node, &desc, state, label)
         }
         WidgetCatalogId::NotificationCenter => {
@@ -800,7 +1020,11 @@ pub fn emit_widget_with_params(
             crate::notification_center::emit_notification_center(node, &desc, state, label)
         }
         WidgetCatalogId::PinInput => {
-            let desc = crate::pin_input::PinInputDesc::new(rect, 4, 2);
+            let desc = crate::pin_input::PinInputDesc::new(
+                Rect::new(o.x, o.y, rect.size.x.min(220.0), rect.size.y.min(40.0)),
+                4,
+                (variant_idx % 4) + 1,
+            );
             crate::pin_input::emit_pin_input(node, &desc, state, label)
         }
         WidgetCatalogId::Popconfirm => {
@@ -811,18 +1035,28 @@ pub fn emit_widget_with_params(
             crate::popconfirm::emit_popconfirm(node, &desc, state, label)
         }
         WidgetCatalogId::Rating => {
-            let desc = crate::rating::RatingDesc::new(rect, 4.5);
+            let stars = if variant_idx > 0 {
+                ((variant_idx % 5) + 1) as f32
+            } else {
+                4.5
+            };
+            let desc = crate::rating::RatingDesc::new(
+                Rect::new(o.x, o.y, rect.size.x.min(200.0), rect.size.y.min(36.0)),
+                stars,
+            );
             crate::rating::emit_rating(node, &desc, state)
         }
         WidgetCatalogId::Spinner => {
-            let desc = crate::spinner::SpinnerDesc::new(Rect::new(o.x, o.y, 36.0, 36.0), 0.25);
+            let desc =
+                crate::spinner::SpinnerDesc::new(Rect::new(o.x, o.y, 36.0, 36.0), value_norm);
             crate::spinner::emit_spinner(&desc, state)
         }
         WidgetCatalogId::TimePicker => {
-            let desc = crate::time_picker::TimePickerDesc::new(
-                rect,
+            let mut desc = crate::time_picker::TimePickerDesc::new(
+                ctrl_rect,
                 crate::time_picker::TimeValue::new(14, 30, 0),
             );
+            desc.active_column = variant_idx % 3;
             crate::time_picker::emit_time_picker(node, &desc, state, label)
         }
         WidgetCatalogId::Transfer => {
@@ -831,8 +1065,11 @@ pub fn emit_widget_with_params(
             crate::transfer::emit_transfer(node, &desc, state, label)
         }
         WidgetCatalogId::Carousel => {
-            let desc =
-                crate::carousel::CarouselDesc::new(Rect::new(o.x, o.y, rect.size.x, 84.0), 4, 1);
+            let desc = crate::carousel::CarouselDesc::new(
+                Rect::new(o.x, o.y, rect.size.x, 84.0),
+                4,
+                variant_idx % 4,
+            );
             crate::carousel::emit_carousel(node, &desc, state, label)
         }
         WidgetCatalogId::CodeEditor => {
@@ -846,7 +1083,7 @@ pub fn emit_widget_with_params(
         WidgetCatalogId::DataGrid => {
             let desc = crate::data_grid::DataGridDesc::new(
                 Rect::new(o.x, o.y, rect.size.x, 96.0),
-                (1, 1),
+                (variant_idx % 3, (variant_idx / 3) % 3),
                 false,
             );
             crate::data_grid::emit_data_grid(node, &desc, state, label)
@@ -922,7 +1159,10 @@ pub fn emit_widget_with_params(
             crate::avatar::emit_avatar_group(&desc, &[vec![], vec![]], &[])
         }
         WidgetCatalogId::Chip => {
-            let desc = ChipDesc::new(rect, "Tag");
+            let desc = ChipDesc::new(
+                Rect::new(o.x, o.y, rect.size.x.min(120.0), rect.size.y.min(32.0)),
+                "Tag",
+            );
             crate::badge::emit_chip(node, &desc, state, label)
         }
         WidgetCatalogId::EmptyState => {
@@ -967,7 +1207,7 @@ pub fn emit_widget_with_params(
                 label,
                 ToolbarTokens::standard(),
             );
-            out.primitives.extend(seg_out.primitives);
+            merge_output(&mut out, seg_out);
             out
         }
         WidgetCatalogId::Wrap => {
@@ -976,12 +1216,19 @@ pub fn emit_widget_with_params(
             crate::containers::emit_card(&card, CardTokens::standard())
         }
         WidgetCatalogId::SplitButton => {
-            let desc = crate::split_button::SplitButtonDesc::new(rect, "Action");
+            let desc = crate::split_button::SplitButtonDesc::new(
+                Rect::new(o.x, o.y, rect.size.x.min(180.0), rect.size.y.min(36.0)),
+                "Action",
+            );
             let s = crate::split_button::SplitButtonState::new();
             crate::split_button::emit_split_button(node, &desc, &s, state)
         }
         WidgetCatalogId::ToggleButton => {
-            let desc = crate::toggle_button::ToggleButtonDesc::new(rect, "Toggle", state.selected);
+            let desc = crate::toggle_button::ToggleButtonDesc::new(
+                Rect::new(o.x, o.y, rect.size.x.min(160.0), rect.size.y.min(36.0)),
+                "Toggle",
+                state.selected,
+            );
             let s = crate::toggle_button::ToggleButtonState::new(state.selected);
             crate::toggle_button::emit_toggle_button(node, &desc, &s, state)
         }
@@ -993,7 +1240,8 @@ pub fn emit_widget_with_params(
                     crate::table::ColumnSpec::new("Size", 100.0),
                 ],
             );
-            let s = crate::tree_table::TreeTableState::new();
+            let mut s = crate::tree_table::TreeTableState::new();
+            s.selected = Some((variant_idx % 4) as u64);
             crate::tree_table::emit_tree_table(node, &desc, &s, state)
         }
         WidgetCatalogId::MultiSplit => {

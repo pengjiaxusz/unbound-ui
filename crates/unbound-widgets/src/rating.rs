@@ -85,17 +85,20 @@ pub fn emit_rating(node: u64, desc: &RatingDesc, state: ControlState) -> WidgetO
     let y = desc.rect.origin.y + (desc.rect.height() - sz) * 0.5;
     for i in 0..MAX_STARS {
         let r = Rect::new(desc.rect.origin.x + gap + i as f32 * (sz + gap), y, sz, sz);
-        let filled = desc.value >= i as f32 + 0.5;
-        primitives.push(surface(
-            r,
-            sz * 0.25,
-            if filled {
-                Token::WARNING
+        let star_tok = if state.disabled {
+            if desc.value >= i as f32 + 0.5 {
+                Token::DISABLED
             } else {
-                Token::CARD_BORDER
-            },
-            desc.z + 1,
-        ));
+                Token::CONTROL_DISABLED_BG
+            }
+        } else if desc.value >= i as f32 + 1.0 {
+            Token::WARNING
+        } else if desc.allow_half && desc.value >= i as f32 + 0.5 {
+            Token::WARNING_SOFT
+        } else {
+            Token::CARD_BORDER
+        };
+        primitives.push(surface(r, sz * 0.25, star_tok, desc.z + 1));
     }
 
     primitives.push(focus_ring(

@@ -116,7 +116,7 @@ pub fn emit_notification_center(
     ));
 
     let pad = 6.0;
-    let row_h = ((desc.rect.height() - pad * 5.0) / MAX_ITEMS as f32).max(12.0);
+    let row_h = ((desc.rect.height() - pad * 5.0) / MAX_ITEMS as f32).max(4.0);
     for i in 0..MAX_ITEMS {
         let item = desc.items.get(i);
         let r = Rect::new(

@@ -7,7 +7,7 @@ use unbound_math::Rect;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{outlined, surface};
+use crate::primitive::{focus_ring, outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
 pub const TERMINAL_LINE_HEIGHT: f32 = 18.0;
@@ -71,7 +71,7 @@ impl TerminalViewState {
 pub fn emit_terminal_view(
     node: u64,
     desc: &TerminalViewDesc,
-    _state: &TerminalViewState,
+    state: &TerminalViewState,
     control: ControlState,
 ) -> WidgetOutput {
     let mut out = WidgetOutput::default();
@@ -83,18 +83,21 @@ pub fn emit_terminal_view(
         .push(surface(rect, desc.radius, Token::CANVAS_BACKDROP, z));
 
     // 2. 左侧行号边栏
-    let gutter_w = 40.0;
+    let gutter_w = 40.0_f32.min(rect.width() * 0.25);
     let gutter_rect = Rect::new(rect.origin.x, rect.origin.y, gutter_w, rect.height());
     out.primitives
         .push(surface(gutter_rect, 0.0, Token::SURFACE, z + 1));
 
-    // 3. 当前光标行高亮
-    let cursor_y = rect.origin.y + 8.0;
+    // 3. 当前光标行高亮（跟随 cursor_line 与 scroll_y，限制在视口内）
+    let line_h = TERMINAL_LINE_HEIGHT.min((rect.height() - 8.0).max(4.0));
+    let raw_y = rect.origin.y + 8.0 + state.cursor_line as f32 * line_h - state.scroll_y;
+    let max_y = (rect.max().y - line_h - 4.0).max(rect.origin.y + 4.0);
+    let cursor_y = raw_y.clamp(rect.origin.y + 4.0, max_y);
     let cursor_rect = Rect::new(
         rect.origin.x + gutter_w,
         cursor_y,
         (rect.width() - gutter_w).max(0.0),
-        TERMINAL_LINE_HEIGHT,
+        line_h,
     );
     out.primitives
         .push(surface(cursor_rect, 2.0, Token::PRIMARY_SOFT, z + 2));
@@ -114,14 +117,25 @@ pub fn emit_terminal_view(
         z + 3,
     ));
 
-    out.hit = Some(
+    // 5. 焦点环
+    out.primitives.push(focus_ring(
+        rect,
+        desc.radius,
+        Token::FOCUS_RING,
+        2.0,
+        z + 4,
+        control.focused && !control.disabled,
+    ));
+
+    out.hit = (!control.disabled).then(|| {
         HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
             .with_shape(Shape::Rounded {
                 radii: [desc.radius; 4],
             })
-            .with_cursor(CursorKind::Text),
-    );
+            .with_cursor(CursorKind::Text)
+    });
 
-    out.a11y = Some(A11yNode::new(Role::Terminal, "TerminalView", rect));
+    out.a11y = Some(A11yNode::new(Role::Terminal, "TerminalView", rect).disabled(control.disabled));
+    out.focusable = !control.disabled;
     out
 }
