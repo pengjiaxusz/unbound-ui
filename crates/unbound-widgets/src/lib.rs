@@ -17,9 +17,11 @@
 // 基础设施模块：场景差分、图元打包辅助工具与默认标题栏描述符。它们没有独立的
 // `emit_*` 发射器，不属于业务组件，因此不纳入展示目录。
 pub mod catalog;
+pub mod cha_kit;
 pub mod diff;
 pub mod ergonomics;
 pub mod primitive;
+pub mod schema_kit;
 pub mod title_bar;
 
 pub use title_bar::{
@@ -289,6 +291,20 @@ use unbound_headless::driver::{ClickReport, TestApp};
 use unbound_input::{ClipRect, HitRegion, PointerEvent, Router};
 use unbound_math::{f16_to_f32, f32_to_f16, project_rounded_radii, Rect, Vec2};
 use unbound_text::GlyphQuad;
+
+pub use cha_kit::{
+    emit_address_bar, emit_pipeline_view, emit_query_builder, emit_range_slider,
+    emit_readonly_copy_input, emit_shortcut_bar, emit_snap_slider, emit_task_hud, AddressBarDesc,
+    AddressBarState, DraggableModalState, FilterPopupState, KeybindingManagerState,
+    PipelineStageItem, PipelineViewDesc, QueryBuilderDesc, QueryCombinator, QueryRule,
+    RangeSliderDesc, ReadOnlyCopyInputDesc, ReorderableListState, ShortcutBarDesc, ShortcutEntry,
+    SmoothWheelHandler, SnapSliderDesc, TaskActivityItem, TaskHudDesc, ThemeSettingsState,
+};
+pub use schema_kit::{
+    emit_generic_data_table, emit_schema_form, DataColumnSpec, GenericDataTableDesc,
+    GenericDataTableState, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc, SchemaFormState,
+    SchemaValue, SortDirection,
+};
 
 pub use accordion::{
     emit_accordion_body, emit_accordion_header, AccordionDesc, AccordionSection, AccordionState,

@@ -499,9 +499,15 @@ pub fn emit_menu(
             continue;
         }
         let highlighted = state.highlighted == Some(index) && item.selectable();
+        let pill = Rect::new(
+            row.origin.x + 4.0,
+            row.origin.y + 2.0,
+            (row.size.x - 8.0).max(0.0),
+            (row.size.y - 4.0).max(0.0),
+        );
         let mut slot = surface(
-            row,
-            4.0,
+            pill,
+            5.0,
             if highlighted {
                 Token::CONTROL_HOVER
             } else {

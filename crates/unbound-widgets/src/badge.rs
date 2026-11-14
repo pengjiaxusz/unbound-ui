@@ -284,7 +284,29 @@ pub fn emit_chip(
     let mut payloads = Vec::with_capacity(chip_glyphs.len());
     primitives.push(outlined(desc.rect, radius, fill, border, 1.0, 0.0, desc.z));
     if let Some(close) = desc.close_rect() {
-        primitives.push(surface(close, 1.0, text, desc.z + 1));
+        let inset = 3.2;
+        let x0 = close.origin.x + inset;
+        let y0 = close.origin.y + inset;
+        let x1 = (close.max().x - inset).max(x0 + 1.0);
+        let y1 = (close.max().y - inset).max(y0 + 1.0);
+        crate::primitive::curve_stroke(
+            [x0, y0],
+            [x1, y1],
+            1.4,
+            text,
+            desc.z + 1,
+            &mut primitives,
+            &mut payloads,
+        );
+        crate::primitive::curve_stroke(
+            [x1, y0],
+            [x0, y1],
+            1.4,
+            text,
+            desc.z + 1,
+            &mut primitives,
+            &mut payloads,
+        );
     }
     glyphs(
         chip_glyphs,

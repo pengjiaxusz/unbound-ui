@@ -12,9 +12,13 @@
 //! 两者均通过结构约束在此强制保证——[`ThemeState::switch`] 只会生成新的 LUT。
 //!
 
+pub mod presets;
 pub mod snapping;
 pub mod zoom;
 
+pub use presets::{
+    snap_ui_scale, step_ui_scale, AccentBrand, ProductPreset, CANONICAL_SCALE_STEPS,
+};
 pub use snapping::{edge_screen, edge_screen_snapped, jitter, snap_error, snap_screen};
 pub use zoom::ZoomLayers;
 
@@ -524,7 +528,7 @@ impl ThemeSet {
                     Color::from_srgb8(160, 166, 176, 255),
                 ),
                 (Token::PRIMARY, Color::from_srgb8(120, 165, 255, 255)),
-                (Token::ON_PRIMARY, Color::from_srgb8(10, 18, 34, 255)),
+                (Token::ON_PRIMARY, Color::from_srgb8(255, 255, 255, 255)),
                 (Token::ACCENT, Color::from_srgb8(255, 148, 104, 255)),
                 (Token::ON_ACCENT, Color::from_srgb8(34, 14, 4, 255)),
                 (Token::OUTLINE, Color::from_srgb8(64, 68, 78, 255)),

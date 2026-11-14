@@ -255,22 +255,27 @@ fn curve_stroke(
     primitives: &mut Vec<GpuPrimitiveInstance>,
     payloads: &mut Vec<GpuPayload>,
 ) {
+    let pad = (width * 0.5 + 1.5).ceil();
     let min_x = points
         .iter()
         .map(|point| point.x)
-        .fold(f32::INFINITY, f32::min);
+        .fold(f32::INFINITY, f32::min)
+        - pad;
     let min_y = points
         .iter()
         .map(|point| point.y)
-        .fold(f32::INFINITY, f32::min);
+        .fold(f32::INFINITY, f32::min)
+        - pad;
     let max_x = points
         .iter()
         .map(|point| point.x)
-        .fold(f32::NEG_INFINITY, f32::max);
+        .fold(f32::NEG_INFINITY, f32::max)
+        + pad;
     let max_y = points
         .iter()
         .map(|point| point.y)
-        .fold(f32::NEG_INFINITY, f32::max);
+        .fold(f32::NEG_INFINITY, f32::max)
+        + pad;
     let local = points.map(|point| [point.x - min_x, point.y - min_y]);
     let payload_idx = payloads.len() as u32;
     payloads.push(GpuPayload::curve(local[0], local[1], local[2], width));

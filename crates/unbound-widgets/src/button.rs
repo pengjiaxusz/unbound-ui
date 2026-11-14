@@ -674,7 +674,11 @@ fn instance(
         local_pos: [rect.origin.x, rect.origin.y],
         size: [rect.size.x, rect.size.y],
         corner_radii: f16::pack_radii(radii),
-        border_width: f16::f32_to_f16(border_width),
+        border_width: f16::f32_to_f16(if border == Token::NONE {
+            0.0
+        } else {
+            border_width
+        }),
         shadow_blur: f16::f32_to_f16(shadow),
         transform_idx: 0,
         clip_idx: CLIP_NONE,

@@ -524,29 +524,56 @@ pub fn emit_color_picker(
         z,
     ));
 
-    // 面板与滑轨。在渐变填充就绪前色谱由调用方自行叠加，因此此处刻意使用纯色表面。
-    primitives.push(surface(layout.sv, 4.0, Token::SURFACE_SUNKEN, z));
-    primitives.push(surface(
+    // 面板与滑轨：使用硬件线性渐变呈现饱和度-明度（SV）色板、色相条与透明度棋盘格。
+    crate::primitive::gradient_surface(
+        layout.sv,
+        6.0,
+        [0.0, 0.0],
+        [1.0, 1.0],
+        Token::PRIMARY,
+        Token::SURFACE_SUNKEN,
+        Token::CARD_BORDER,
+        1.0,
+        z,
+        &mut primitives,
+        &mut payloads,
+    );
+    crate::primitive::gradient_surface(
         layout.hue,
         PICKER_TRACK * 0.5,
-        Token::CONTROL_TRACK,
+        [0.0, 0.5],
+        [1.0, 0.5],
+        Token::PRIMARY,
+        Token::ACCENT,
+        Token::CARD_BORDER,
+        1.0,
         z,
-    ));
-    primitives.push(surface(
+        &mut primitives,
+        &mut payloads,
+    );
+    primitives.push(outlined(
         layout.alpha,
         PICKER_TRACK * 0.5,
         Token::SURFACE_SUNKEN,
+        Token::CARD_BORDER,
+        1.0,
+        0.0,
         z,
     ));
-    // 透明度棋盘格：四个交替方格即使无纹理也能清晰传达透明语义。
+    // 透明度棋盘格：四个交替方格配合对比令牌清晰传达透明语义。
     for index in 0..4u16 {
         let cell = layout.alpha.size.x / 4.0;
         let x = layout.alpha.origin.x + f32::from(index) * cell;
         if index % 2 == 0 {
             primitives.push(surface(
-                Rect::new(x, layout.alpha.origin.y, cell, layout.alpha.size.y),
-                0.0,
-                Token::SURFACE,
+                Rect::new(
+                    x,
+                    layout.alpha.origin.y + 1.0,
+                    cell,
+                    (layout.alpha.size.y - 2.0).max(1.0),
+                ),
+                2.0,
+                Token::CONTROL_TRACK,
                 z,
             ));
         }

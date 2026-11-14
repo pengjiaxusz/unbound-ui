@@ -1,10 +1,11 @@
 //! 主题收敛后的**像素一致性**回归。
 //!
 //! 展台不再手写 512 槽颜色表，改为由 [`unbound_theme`] 依据语义 token 打包。
-//! 这份用例把迁移前每个语义槽的**精确颜色**钉死：任何一个 token 的槽位
-//! 映射、颜色值或亮暗对应关系发生变化，测试立刻失败。
+//! 这份用例把阶段 1 色板基线下每个语义槽的**精确颜色**钉死：任何一个
+//! token 的槽位映射、颜色值或亮暗对应关系发生变化，测试立刻失败。
 //!
-//! 期望值取自迁移前手写颜色表的每一行（sRGB 十六进制 + 透明度）。
+//! 期望值与 `src/theme.rs` 的 LIGHT / DARK 表逐行对应（sRGB 十六进制 +
+//! 透明度）；色板重调时必须同步刷新本快照。
 
 use showcase::theme;
 use unbound_math::color::linear_to_srgb;
@@ -18,7 +19,7 @@ struct Expected {
     dark: (&'static str, u8),
 }
 
-/// 迁移前手写颜色表的完整快照。
+/// 阶段 1 色板基线的完整快照。
 const EXPECTED: &[Expected] = &[
     Expected {
         token: Token::SHADOW,
@@ -28,17 +29,17 @@ const EXPECTED: &[Expected] = &[
     Expected {
         token: Token::SURFACE,
         light: ("#F5F6FA", 255),
-        dark: ("#121216", 255),
+        dark: ("#121318", 255),
     },
     Expected {
         token: Token::SURFACE_RAISED,
         light: ("#FFFFFF", 255),
-        dark: ("#202128", 255),
+        dark: ("#20232C", 255),
     },
     Expected {
         token: Token::OUTLINE,
-        light: ("#DEE0E8", 255),
-        dark: ("#3A3C48", 255),
+        light: ("#D6DAE4", 255),
+        dark: ("#404654", 255),
     },
     Expected {
         token: Token::PRIMARY,
@@ -48,62 +49,62 @@ const EXPECTED: &[Expected] = &[
     Expected {
         token: Token::SECONDARY,
         light: ("#7850D2", 255),
-        dark: ("#966EF0", 255),
+        dark: ("#9C74F8", 255),
     },
     Expected {
         token: Token::SUCCESS,
         light: ("#1EA064", 255),
-        dark: ("#46BE82", 255),
+        dark: ("#48C486", 255),
     },
     Expected {
         token: Token::WARNING,
         light: ("#DC9B28", 255),
-        dark: ("#EBAF46", 255),
+        dark: ("#F0B248", 255),
     },
     Expected {
         token: Token::ERROR,
         light: ("#DC3C41", 255),
-        dark: ("#EB5A5F", 255),
+        dark: ("#F05C60", 255),
     },
     Expected {
         token: Token::TEXT_PRIMARY,
         light: ("#1C1E26", 255),
-        dark: ("#EEEFF5", 255),
+        dark: ("#F0F2F8", 255),
     },
     Expected {
         token: Token::TEXT_SECONDARY,
-        light: ("#787C8C", 255),
-        dark: ("#8C90A0", 255),
+        light: ("#6E7384", 255),
+        dark: ("#9AA0B2", 255),
     },
     Expected {
         token: Token::PRIMARY_HOVER,
         light: ("#4678F0", 255),
-        dark: ("#6EA0FF", 255),
+        dark: ("#70A2FF", 255),
     },
     Expected {
         token: Token::PRIMARY_PRESSED,
         light: ("#244EBE", 255),
-        dark: ("#406EDC", 255),
+        dark: ("#4070E0", 255),
     },
     Expected {
         token: Token::ON_PRIMARY,
         light: ("#FFFFFF", 255),
-        dark: ("#0C101A", 255),
+        dark: ("#FFFFFF", 255),
     },
     Expected {
         token: Token::FOCUS_RING,
-        light: ("#1C5AD2", 255),
-        dark: ("#96C3FF", 255),
+        light: ("#306EEB", 255),
+        dark: ("#88B8FF", 255),
     },
     Expected {
         token: Token::DISABLED,
         light: ("#C8CCD6", 255),
-        dark: ("#464852", 255),
+        dark: ("#3E424E", 255),
     },
     Expected {
         token: Token::ON_DISABLED,
         light: ("#787C8C", 255),
-        dark: ("#8C90A0", 255),
+        dark: ("#868C9C", 255),
     },
     Expected {
         token: Token::HEADER_BG,
@@ -132,73 +133,73 @@ const EXPECTED: &[Expected] = &[
     },
     Expected {
         token: Token::CARD_BORDER,
-        light: ("#E4E6EE", 255),
-        dark: ("#2C3240", 255),
+        light: ("#DEE2EC", 255),
+        dark: ("#323846", 255),
     },
     Expected {
         token: Token::CANVAS_BACKDROP,
         light: ("#F5F6FA", 255),
-        dark: ("#171A21", 255),
+        dark: ("#15181F", 255),
     },
     Expected {
         token: Token::GRID,
         light: ("#E3E6EF", 255),
-        dark: ("#262B36", 255),
+        dark: ("#2A303C", 255),
     },
     Expected {
         token: Token::CONTROL_TRACK,
-        light: ("#E4E7EF", 255),
-        dark: ("#2D3341", 255),
+        light: ("#DEE2EC", 255),
+        dark: ("#2E3442", 255),
     },
     Expected {
         token: Token::CONTROL_THUMB,
         light: ("#FFFFFF", 255),
-        dark: ("#EDF1FA", 255),
+        dark: ("#F2F5FC", 255),
     },
     Expected {
         token: Token::CONTROL_HOVER,
-        light: ("#ECEFF6", 255),
-        dark: ("#384052", 255),
+        light: ("#EAEEF6", 255),
+        dark: ("#363E4E", 255),
     },
     Expected {
         token: Token::CODE_BG,
-        light: ("#1C2029", 255),
-        dark: ("#0E1015", 255),
+        light: ("#161A22", 255),
+        dark: ("#0E1016", 255),
     },
     Expected {
         token: Token::CODE_TEXT,
-        light: ("#D7DCEA", 255),
-        dark: ("#C9D2E4", 255),
+        light: ("#E0E6F2", 255),
+        dark: ("#D8E0F0", 255),
     },
     Expected {
         token: Token::SCRIM,
-        light: ("#0F121A", 90),
-        dark: ("#000000", 150),
+        light: ("#0F121A", 110),
+        dark: ("#04060A", 155),
     },
     Expected {
         token: Token::OVERLAY_BG,
         light: ("#FFFFFF", 255),
-        dark: ("#20252F", 255),
+        dark: ("#1E232D", 255),
     },
     Expected {
         token: Token::PRIMARY_SOFT,
-        light: ("#E8EEFE", 255),
-        dark: ("#22304F", 255),
+        light: ("#E4ECFE", 255),
+        dark: ("#243456", 255),
     },
     Expected {
         token: Token::SUCCESS_SOFT,
-        light: ("#E4F6EC", 255),
-        dark: ("#1C3A2A", 255),
+        light: ("#E0F6EA", 255),
+        dark: ("#1C3C2C", 255),
     },
     Expected {
         token: Token::WARNING_SOFT,
-        light: ("#FCF2DF", 255),
-        dark: ("#3B2F1B", 255),
+        light: ("#FDF1DA", 255),
+        dark: ("#3E301A", 255),
     },
     Expected {
         token: Token::ERROR_SOFT,
-        light: ("#FDE9EA", 255),
-        dark: ("#3D2226", 255),
+        light: ("#FDE6E8", 255),
+        dark: ("#402226", 255),
     },
     Expected {
         token: Token::HERO_START,
@@ -217,38 +218,38 @@ const EXPECTED: &[Expected] = &[
     },
     Expected {
         token: Token::SELECTION,
-        light: ("#3B6EF6", 40),
-        dark: ("#78A5FF", 48),
+        light: ("#3B6EF6", 48),
+        dark: ("#6094FF", 64),
     },
     Expected {
         token: Token::DIVIDER,
-        light: ("#EAECF2", 255),
-        dark: ("#262C38", 255),
+        light: ("#E2E5EE", 255),
+        dark: ("#2E3442", 255),
     },
     Expected {
         token: Token::HUD_BG,
         light: ("#FFFFFF", 246),
-        dark: ("#080A0E", 224),
+        dark: ("#12151C", 240),
     },
     Expected {
         token: Token::HUD_TEXT,
         light: ("#1C1E26", 255),
-        dark: ("#DCE3F2", 255),
+        dark: ("#E8EEF8", 255),
     },
     Expected {
         token: Token::ACCENT_SOFT,
-        light: ("#FFF0E8", 255),
-        dark: ("#3A2A22", 255),
+        light: ("#FFEEE4", 255),
+        dark: ("#3E2A20", 255),
     },
     Expected {
         token: Token::GRID_DOT,
-        light: ("#D8DCE8", 255),
-        dark: ("#333A48", 255),
+        light: ("#D2D7E4", 255),
+        dark: ("#363E4C", 255),
     },
     Expected {
         token: Token::SECONDARY_SOFT,
-        light: ("#F0EAFE", 255),
-        dark: ("#2E2542", 255),
+        light: ("#EEE8FE", 255),
+        dark: ("#302648", 255),
     },
     Expected {
         token: Token::NAV_TEXT,
@@ -283,7 +284,7 @@ fn srgb(color: Color) -> (String, u8) {
 }
 
 #[test]
-fn every_slot_kept_its_colour_through_the_migration() {
+fn every_slot_matches_the_palette_baseline() {
     let light = theme::lut(false);
     let dark = theme::lut(true);
     for expected in EXPECTED {

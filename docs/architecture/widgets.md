@@ -29,3 +29,12 @@
 - [必须] 追加 `WidgetOutput` 时重定位全部 `extra_payload_idx` -> [原因] 着色器按全局索引访问 payload 数组，不做偏移换算 -> [守卫] `crates/unbound-widgets/src/lib.rs::payload_indices_are_rebased_for_every_widget`
 - [新增] `title_bar` 模块提供与 Showcase 1:1 一致的 `WindowCaptionButton`（46px 贴边几何图元：像素对齐最小化横线、双图元最大化/还原框、解析交叉关闭线及 `Token::ERROR` 悬停警示），并由 `unbound-app` 的 `ViewBuilder::title_bar_custom` + `TitleBarSlots`（`left` / `center` / `actions`）与 `AppContext::window_maximized` 为所有窗口应用提供统一且可自定义扩展的默认标题栏 -> [位置] `crates/unbound-widgets/src/title_bar.rs`、`crates/unbound-app/src/lib.rs`
 - [新增] `ergonomics` 中全部 16 个声明式适配器与 `WidgetCatalogId` 统一通过 `ViewCtx::shape` 完成全量文本字形排版，并完整闭环指针/键盘状态归约；`catalog::emit_widget_with_shaper` 统一透传 `CatalogParams`（含 `toggled` 与 `click_count`），补齐全部 99 个组件在亮/暗主题与 24 态下的几何与字形渲染 -> [位置] `crates/unbound-widgets/src/{catalog.rs, ergonomics.rs, pin_input.rs}`
+
+
+## 阶段 1 扩展能力（WP4 & WP5：高阶业务复合组件、`SchemaForm` 与 `GenericDataTable`）
+
+* **高阶业务复合组件库（`unbound_widgets::cha_kit`）**：新增 `AddressBar`（面包屑/全路径双模切换）、`FilterPopupState`、`QueryBuilder`（`AND`/`OR` 可视化规则树）、`ShortcutBar` & `KeybindingManagerState`（冲突检测）、`PipelineView`（Pass 耗时条）、`TaskHud`（后台任务栈）、`SnapSlider`（磁吸刻度）、`RangeSlider`（双滑块区间）、`ReadOnlyCopyInput`（一键复制只读框）、`ReorderableListState`、`ThemeSettingsState`、`DraggableModalState` 与 `SmoothWheelHandler`，全部严格遵守 24 态 `Stable Shape` 恒定图元契约。
+* **声明式 `SchemaForm` 与 `GenericDataTable`（`unbound_widgets::schema_kit`）**：
+  * `SchemaForm` 支持布尔开关、带单位数值、必填校验文本、文件扩展名路径、枚举下拉、颜色、三维向量与只读字段，内置跨字段条件启用（`enabled_when_field`）、脏字段追踪与一键重置默认值；
+  * `GenericDataTable` 支持多列升序/降序切换、列宽拖拽钳制、Pinyin/子串实时过滤、键盘行焦点导航与底部汇总行（Summary Footer）。
+* **模块边界与构建门禁**：`cha_kit` / `schema_kit` 是复合组件工具包，只提供状态机、描述符与 `emit_*` 构建块，由应用与展厅按需组合，不对应 `WidgetCatalogId` 的独立展示变体；因此与 `title_bar` 一样按基础设施模块列入 `build.rs` 白名单，豁免「展示目录宏声明」与 `catalog.rs` 的 `Desc` / `emit_*` 覆盖门禁，但仍强制 `lib.rs` 顶层 `pub use` 重导出 -> [原因] 纳入穷举目录会迫使为每个工具包组件伪造展示分支 -> [守卫] `crates/unbound-widgets/build.rs`

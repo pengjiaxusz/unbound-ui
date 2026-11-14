@@ -46,9 +46,11 @@ fn an_arrow_adds_two_bezier_edges_that_start_at_the_arrow_tip() {
     let placed = desc.placed();
     let tip = placed.arrow_tip;
     assert_eq!(tip.y, placed.rect.origin.y, "points up at the anchor");
+    // 曲线包围盒按半线宽 + 1.5px 外扩以避免描边端点被裁剪，因此箭头尖落在
+    // 四边形上边缘内侧，而不是恰好等于 local_pos.y。
     assert!(edges
         .iter()
-        .any(|primitive| { primitive.local_pos[1] == tip.y && primitive.local_pos[0] <= tip.x }));
+        .any(|primitive| { primitive.local_pos[1] < tip.y && primitive.local_pos[0] <= tip.x }));
 }
 
 #[test]

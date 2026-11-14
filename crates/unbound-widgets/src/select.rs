@@ -318,7 +318,8 @@ pub fn emit_select_with_glyphs(
     let apex = Vec2::new(center.x, center.y + apex_y);
     let right = Vec2::new(center.x + CHEVRON_HALF_WIDTH, center.y - apex_y);
     for (a, b) in [(left, apex), (apex, right)] {
-        let (primitive, payload) = chevron_segment(a, b, Token::TEXT_SECONDARY, desc.z);
+        let (mut primitive, payload) = chevron_segment(a, b, Token::TEXT_SECONDARY, desc.z);
+        primitive.extra_payload_idx = payloads.len() as u32;
         primitives.push(primitive);
         payloads.push(payload);
     }
@@ -400,8 +401,9 @@ pub fn emit_select_with_glyphs(
 
 /// 展开箭头的单条二次曲线描边。
 fn chevron_segment(a: Vec2, b: Vec2, color: Token, z: u16) -> (GpuPrimitiveInstance, GpuPayload) {
-    let origin = Vec2::new(a.x.min(b.x), a.y.min(b.y));
-    let size = Vec2::new((a.x - b.x).abs().max(1.0), (a.y - b.y).abs().max(1.0));
+    let pad = (CHEVRON_STROKE * 0.5 + 1.5).ceil();
+    let origin = Vec2::new(a.x.min(b.x) - pad, a.y.min(b.y) - pad);
+    let size = Vec2::new((a.x - b.x).abs() + pad * 2.0, (a.y - b.y).abs() + pad * 2.0);
     let primitive = instance(
         Rect::new(origin.x, origin.y, size.x, size.y),
         [0.0; 4],

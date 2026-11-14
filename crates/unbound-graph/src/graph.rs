@@ -42,6 +42,20 @@ pub enum PassKind {
     Composite,
     /// 将最终图像绘制到交换链。
     Present,
+    /// 嵌入 UI 区域的自定义 3D 视口渲染 Pass（服务于 `dunting` 网格/材质预览）。
+    CustomViewport {
+        /// 视口唯一标识。
+        viewport_id: u64,
+        /// 是否清空深度附件。
+        clear_depth: bool,
+    },
+    /// 2D 纹理单通道/Mip/曝光检视 Pass（服务于 `chahu-render-debugger` RT 检视）。
+    TextureInspect {
+        /// 通道掩码枚举值。
+        channel_mask: u8,
+        /// 目标 Mip 层级。
+        mip_level: u32,
+    },
 }
 
 /// 单个渲染 Pass。
@@ -477,5 +491,39 @@ mod tests {
             .map(|pass| pass.name.as_str())
             .collect();
         assert_eq!(names, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn custom_viewport_and_texture_inspect_passes_compile_cleanly() {
+        let mut graph = RenderGraph::new();
+        let mesh_rt = graph.add_texture(desc(512, 512), TextureRole::Transient);
+        let inspected = graph.add_texture(desc(512, 512), TextureRole::Transient);
+        let swapchain = graph.add_texture(desc(1920, 1080), TextureRole::External);
+        graph.add_pass(
+            "mesh_preview",
+            PassKind::CustomViewport {
+                viewport_id: 42,
+                clear_depth: true,
+            },
+            &[],
+            &[mesh_rt],
+        );
+        graph.add_pass(
+            "inspect_mip0",
+            PassKind::TextureInspect {
+                channel_mask: 2,
+                mip_level: 0,
+            },
+            &[mesh_rt],
+            &[inspected],
+        );
+        graph.add_pass("present", PassKind::Present, &[inspected], &[swapchain]);
+        let compiled = graph.compile().unwrap();
+        assert_eq!(compiled.passes.len(), 3);
+        // 瞬态纹理在最后一次被读取的 Pass 之后才回收，而非写入它的 Pass 之后：
+        // mesh_rt 在 pass 1 被检视读取，inspected 在 pass 2 被呈现读取。
+        assert!(compiled.expiring_after(0).is_empty());
+        assert_eq!(compiled.expiring_after(1), vec![mesh_rt]);
+        assert_eq!(compiled.expiring_after(2), vec![inspected]);
     }
 }

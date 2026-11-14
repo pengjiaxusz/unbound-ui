@@ -19,9 +19,11 @@
 use unbound_math::{Vec2, CHUNK_SIZE};
 
 pub mod curve;
+pub mod icons;
 pub mod svg_path;
 
 pub use curve::{cubic_bounds, cubic_to_instances, CurveInstance};
+pub use icons::{FileTypeIcon, MaterialIcon};
 pub use svg_path::{parse_svg_path, SvgPath, SvgPathCache, SvgPathError, SvgSubpath};
 
 /// 每条三次曲线对应的二次段数量硬上限：既能在极端 10⁹ px 线段下

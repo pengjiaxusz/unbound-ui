@@ -28,3 +28,10 @@
 - [必须] 无 Vulkan 1.3 设备的 CI 环境下 `vulkan_probe` 自动跳过而非失败 -> [守卫] `crates/unbound-gpu/tests/vulkan_probe.rs`
 - [必须] 空 `transforms` 表补 `GpuTransform::IDENTITY` 后再上传 -> [原因] 剔除/顶点着色器无条件读 `transforms[0]`，未初始化显存会把全部图元移出视口 -> [守卫] `crates/unbound-gpu/src/frame.rs::a_scene_without_transforms_still_draws`
 - [必须] `Surface::new_win32` 先校验实例扩展再调 ash -> [原因] ash 加载器 panic 位于不可展开的 `extern "system"`，会 abort 而非返回错误 -> [守卫] `crates/unbound-gpu/src/surface.rs::new_win32_reports_missing_instance_extensions`
+
+
+## 阶段 1 扩展能力（WP1：外部显存导入、256 槽纹理与通道检视）
+
+* **外部显存句柄导入（`unbound_gpu::inspector`）**：通过 `ExternalMemoryHandleKind`（支持 `OpaqueWin32`、`D3D11Texture`、`D3D12Resource`）与 `ExternalImageDesc` 校验并封装跨进程/跨 API 零拷贝共享纹理导入协议。
+* **256 槽扩展 Bindless 分配器（`ExtendedExternalSlots`）**：采用 4×64 位无堆分配位图，在 `O(1)` 时间内分配与回收多达 256 个外部纹理槽位，满足 `dunting` 大规模资产缩略图与 `chahu-render-debugger` 多 RenderTarget 同屏检视需求。
+* **2D 纹理通道检视器与 3D 视口轨道相机**：`TextureInspectorParams` 提供 `ChannelMask`（`Rgba`/`Rgb`/`Red`/`Green`/`Blue`/`Alpha`/`Luminance`）、曝光（EV）、Gamma、Mip 层级与值域归一化计算；`ViewportCamera3D` 与 `RenderGraph` 的 `PassKind::CustomViewport` / `PassKind::TextureInspect` 支撑内嵌 3D 网格预览与 RT 单通道分析。

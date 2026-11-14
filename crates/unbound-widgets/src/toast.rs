@@ -532,11 +532,12 @@ fn stroke(
     primitives: &mut Vec<GpuPrimitiveInstance>,
     payloads: &mut Vec<GpuPayload>,
 ) {
+    let pad = (width * 0.5 + 1.5).ceil();
     let origin = Rect::new(
-        from.0.min(to.0),
-        from.1.min(to.1),
-        (from.0 - to.0).abs().max(1.0),
-        (from.1 - to.1).abs().max(1.0),
+        from.0.min(to.0) - pad,
+        from.1.min(to.1) - pad,
+        (from.0 - to.0).abs() + pad * 2.0,
+        (from.1 - to.1).abs() + pad * 2.0,
     );
     let payload_idx = payloads.len() as u32;
     payloads.push(GpuPayload::curve(

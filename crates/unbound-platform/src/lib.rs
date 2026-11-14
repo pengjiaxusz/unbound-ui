@@ -24,6 +24,7 @@ pub mod backend;
 pub mod clipboard;
 pub mod dialogs;
 pub mod latency;
+pub mod overlay_host;
 pub mod pacing;
 pub mod resize;
 pub mod tray;
@@ -60,3 +61,9 @@ pub use window::{
     WindowPosition,
 };
 pub use windows::{WindowId, WindowRegistry, WindowSlot};
+
+pub use overlay_host::{
+    is_rect_fully_covered, FileDragDropBridge, FileDragEffect, HitTestPassThroughPolicy,
+    MultiWindowHostPool, OcclusionMonitor, OverlayHitDisposition, OverlayWindowSpec,
+    RenderThrottleState, ScreenSleepInhibitor, TargetWindowFollower,
+};

@@ -293,11 +293,15 @@ fn check_mark(
     let w = box_rect.size.x;
     let h = box_rect.size.y;
     let width = (w * 0.16).max(1.5);
-    let start = [x + w * 0.20, y + h * 0.52];
+    let start = [x + w * 0.22, y + h * 0.52];
     let elbow = [x + w * 0.42, y + h * 0.72];
-    let tip = [x + w * 0.79, y + h * 0.28];
+    let tip = [x + w * 0.78, y + h * 0.28];
     curve_stroke(
-        [start, [x + w * 0.27, y + h * 0.63], elbow],
+        [
+            start,
+            [(start[0] + elbow[0]) * 0.5, (start[1] + elbow[1]) * 0.5],
+            elbow,
+        ],
         width,
         color,
         z,
@@ -305,7 +309,11 @@ fn check_mark(
         payloads,
     );
     curve_stroke(
-        [elbow, [x + w * 0.60, y + h * 0.78], tip],
+        [
+            elbow,
+            [(elbow[0] + tip[0]) * 0.5, (elbow[1] + tip[1]) * 0.5],
+            tip,
+        ],
         width,
         color,
         z,
@@ -314,7 +322,7 @@ fn check_mark(
     );
 }
 
-/// 单段二次曲线描边，打包进紧凑的局部包围盒。
+/// 单段二次曲线描边，打包进带描边半宽边距的局部包围盒。
 fn curve_stroke(
     points: [[f32; 2]; 3],
     width: f32,
@@ -323,16 +331,19 @@ fn curve_stroke(
     primitives: &mut Vec<GpuPrimitiveInstance>,
     payloads: &mut Vec<GpuPayload>,
 ) {
-    let min_x = points.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
-    let min_y = points.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+    let pad = (width * 0.5 + 1.5).ceil();
+    let min_x = points.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min) - pad;
+    let min_y = points.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min) - pad;
     let max_x = points
         .iter()
         .map(|p| p[0])
-        .fold(f32::NEG_INFINITY, f32::max);
+        .fold(f32::NEG_INFINITY, f32::max)
+        + pad;
     let max_y = points
         .iter()
         .map(|p| p[1])
-        .fold(f32::NEG_INFINITY, f32::max);
+        .fold(f32::NEG_INFINITY, f32::max)
+        + pad;
     let local = points.map(|point| [point[0] - min_x, point[1] - min_y]);
     let payload_idx = payloads.len() as u32;
     payloads.push(GpuPayload::curve(local[0], local[1], local[2], width));
@@ -340,8 +351,8 @@ fn curve_stroke(
         Rect::new(
             min_x,
             min_y,
-            (max_x - min_x).max(0.5),
-            (max_y - min_y).max(0.5),
+            (max_x - min_x).max(1.0),
+            (max_y - min_y).max(1.0),
         ),
         [0.0; 4],
         color,

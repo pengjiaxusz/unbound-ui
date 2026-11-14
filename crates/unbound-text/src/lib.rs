@@ -17,6 +17,7 @@
 
 pub mod atlas;
 pub mod glyph;
+pub mod pinyin;
 pub mod sdf;
 pub mod selection;
 pub mod shaping;
@@ -29,3 +30,5 @@ pub use shaping::{
     PositionedGlyph, ShapedText, TextCacheStats, TextEngine, TextLine, TextSpan, TextStyle,
     WrappedText,
 };
+
+pub use pinyin::{PinyinMatch, PinyinMatcher};

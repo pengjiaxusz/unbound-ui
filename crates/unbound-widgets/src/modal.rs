@@ -297,7 +297,8 @@ pub fn emit_modal(
         let c = (button.max().x - inset, button.origin.y + inset);
         let d = (button.origin.x + inset, button.max().y - inset);
         for (from, to) in [(a, b), (c, d)] {
-            let (primitive, payload) = close_stroke(from, to, Token::TEXT_SECONDARY, desc.z);
+            let (mut primitive, payload) = close_stroke(from, to, Token::TEXT_SECONDARY, desc.z);
+            primitive.extra_payload_idx = payloads.len() as u32;
             primitives.push(primitive);
             payloads.push(payload);
         }
@@ -332,11 +333,12 @@ fn close_stroke(
     color: Token,
     z: u16,
 ) -> (GpuPrimitiveInstance, GpuPayload) {
+    let pad = 2.5_f32;
     let origin = Rect::new(
-        from.0.min(to.0),
-        from.1.min(to.1),
-        (from.0 - to.0).abs().max(1.0),
-        (from.1 - to.1).abs().max(1.0),
+        from.0.min(to.0) - pad,
+        from.1.min(to.1) - pad,
+        (from.0 - to.0).abs() + pad * 2.0,
+        (from.1 - to.1).abs() + pad * 2.0,
     );
     let primitive = instance(
         origin,

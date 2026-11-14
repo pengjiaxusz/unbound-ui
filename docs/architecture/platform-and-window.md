@@ -38,3 +38,11 @@
 - [必须] 写入 `FrameHitMetrics` 的标题栏/按钮包围盒与子类命中测试统一到逻辑坐标系 -> [原因] 子类把物理客户区坐标除以 DPI 缩放后再比对，直接写物理矩形会在高 DPI 下整体错位；运行时的控件命中则用物理坐标，不得二次换算 -> [守卫] `crates/unbound-app/src/window_runner.rs`
 - [必须] `WindowedRunner::destroy_vulkan`、`recover_gpu`、`Showcase::destroy_vulkan` 与 `Renderer::destroy` 在销毁 `Swapchain`（含 `acquire_semaphores`、`render_finished_semaphores`）及 `present_semaphore` 前必须先调用 `gpu.wait_idle()` -> [原因] 防止在途帧仍在 `VkQueue` 执行时销毁信号量与交换链触发 `VUID-vkDestroySemaphore-semaphore-05149` / `VUID-vkDestroySwapchainKHR-swapchain-01282` -> [位置] `crates/unbound-app/src/window_runner.rs`、`apps/showcase/src/main.rs`、`crates/unbound-gpu/src/frame.rs`
 - [必须] Win32 后端处理 `WM_NCMOUSEMOVE`（配合 `TME_LEAVE | TME_NONCLIENT`）与 `WM_NCMOUSELEAVE` 并换算客户区坐标转发 `PlatformEvent::CursorMoved` -> [原因] `WM_NCHITTEST` 返回 `HTMINBUTTON`/`HTMAXBUTTON`/`HTCLOSE` 时 Windows 会吞掉客户区 `WM_MOUSEMOVE`，转发非客户区移动可在保留 Win11 Snap Layouts 的同时保证右上角按钮 Hover 100% 稳定 -> [位置] `crates/unbound-platform/src/backend.rs`
+
+
+## 阶段 1 扩展能力（WP2：透明穿透覆盖层、多窗口编排、遮挡节流与文件拖拽）
+
+* **透明覆盖层与工具浮窗规格（`OverlayWindowSpec`）**：封装 `WS_EX_LAYERED`、`WS_EX_TRANSPARENT`、`WS_EX_TOPMOST`、`WS_EX_TOOLWINDOW` 与 `WS_EX_NOACTIVATE` 组合策略，并由 `HitTestPassThroughPolicy` 根据每帧交互式 UI 矩形列表动态切换客户端捕获（`CaptureClient`）与底层窗口穿透（`PassThrough`）。
+* **目标进程窗口跟随（`TargetWindowFollower`）**：实时同步被调试目标进程 `HWND` 的屏幕物理矩形、最小化隐藏状态与前台激活状态。
+* **多窗口共享设备编排与遮挡零开销暂停（`MultiWindowHostPool` & `OcclusionMonitor`）**：基于递归矩形并集覆盖算法 `is_rect_fully_covered` 精确判断窗口是否被上方不透明窗口 100% 遮挡，并在完全遮挡或最小化时进入 `RenderThrottleState::PausedZeroCost`（0% GPU 开销）。
+* **系统文件拖入/拖出桥接与屏幕防休眠守卫**：`FileDragDropBridge` 提供 `IDropTarget` / `CF_HDROP` 拖入及 `DoDragDrop` 向外部 DCC 拖出文件的策略层与无头测试替身；`ScreenSleepInhibitor` 以引用计数管理长耗时任务期间的屏幕常亮租约。

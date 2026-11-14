@@ -19,3 +19,9 @@
 ## 不变量与红线
 - [禁止] 在 6400% 等高倍画布缩放时每帧重新调用 CPU 字形光栅化 -> [原因] 破坏 MTSDF 缩放无关性能预算（<= 0.05ms） -> [守卫] `crates/unbound-text/src/glyph.rs::GlyphCache`
 - [必须] 曲线拟合几何误差 <= 0.05px -> [守卫] `crates/unbound-vector/tests/svg_path.rs`
+
+
+## 阶段 1 扩展能力（WP3：中英文拼音检索引擎与矢量图标库）
+
+* **零分配友好的拼音与首字母检索引擎（`unbound_text::PinyinMatcher`）**：支持直接子串、全拼、首字母缩写及常见多音字（如 `重`/`调`/`行`/`长`/`藏`）匹配，并返回综合得分与合并后的字符高亮区间 `Vec<(usize, usize)>`。
+* **内置 Material 矢量图标与 22 类文件图标（`unbound_vector::icons`）**：`MaterialIcon`（32 款核心 UI/调试器图标）与 `FileTypeIcon`（覆盖 `KTX2`、`DDS`、`OBJ`、`FBX`、`GLTF`、`HLSL`、`GLSL`、`SPIRV`、`RDC` 等 22 类专业资产扩展名）均以 `24×24` 规范 SVG 路径定义，直接由 `parse_svg_path` 编译为 GPU 解析曲线。

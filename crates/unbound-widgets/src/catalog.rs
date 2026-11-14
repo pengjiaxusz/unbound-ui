@@ -206,6 +206,24 @@ where
     quads
 }
 
+/// 辅助函数：以指定水平起点排版文本，并在目标矩形内垂直居中。
+///
+/// 与 `shape_centered` 不同，这里不做水平居中：菜单项、徽章、对话框标题等需要
+/// 左对齐到给定的内边距，同时与同行图标、快捷键保持同一条垂直中心线。
+fn shape_centered_y<F>(
+    shape: &mut F,
+    text: &str,
+    rect: Rect,
+    x: f32,
+    font_size: f32,
+) -> Vec<GlyphQuad>
+where
+    F: FnMut(&str, Vec2, f32) -> Vec<GlyphQuad>,
+{
+    let origin = Vec2::new(x, rect.origin.y + (rect.size.y - font_size) * 0.5);
+    shape(text, origin, font_size)
+}
+
 /// 辅助函数：将字形切片追加到输出中。
 fn push_glyphs(out: &mut WidgetOutput, quads: &[GlyphQuad], color: Token, z: u16) {
     crate::primitive::glyphs(quads, color, z, &mut out.primitives, &mut out.payloads);
@@ -384,8 +402,8 @@ where
         }
         WidgetCatalogId::AlertDialog => {
             let card_rect = if rect.size.x > 260.0 && rect.size.y > 140.0 {
-                let w = rect.size.x.min(380.0);
-                let h = rect.size.y.min(168.0);
+                let w = rect.size.x.min(420.0);
+                let h = rect.size.y.min(176.0);
                 Rect::new(
                     o.x + (rect.size.x - w) * 0.5,
                     o.y + (rect.size.y - h) * 0.5,
@@ -402,16 +420,31 @@ where
                 desc = desc.destructive();
             }
             let layout = desc.layout();
-            let mut dlg_glyphs = shape(
+            let mut dlg_glyphs = shape_centered_y(
+                &mut shape,
                 &desc.title,
-                Vec2::new(layout.title.origin.x, layout.title.origin.y + 3.0),
+                layout.title,
+                layout.title.origin.x,
                 14.0,
             );
-            dlg_glyphs.extend(shape(
-                &desc.message,
-                Vec2::new(layout.message.origin.x, layout.message.origin.y),
-                12.0,
-            ));
+            if layout.message.size.x < 360.0 {
+                dlg_glyphs.extend(shape(
+                    "This action permanently removes local caches",
+                    Vec2::new(layout.message.origin.x, layout.message.origin.y),
+                    12.0,
+                ));
+                dlg_glyphs.extend(shape(
+                    "and cannot be undone.",
+                    Vec2::new(layout.message.origin.x, layout.message.origin.y + 18.0),
+                    12.0,
+                ));
+            } else {
+                dlg_glyphs.extend(shape(
+                    &desc.message,
+                    Vec2::new(layout.message.origin.x, layout.message.origin.y + 2.0),
+                    12.0,
+                ));
+            }
             dlg_glyphs.extend(shape_centered(
                 &mut shape,
                 &desc.cancel_label,
@@ -454,8 +487,22 @@ where
             };
             let badge_r = Rect::new(o.x, o.y, 124.0, 26.0);
             let desc = BadgeDesc::new(badge_r, text).variant(variant).with_dot();
-            let glyphs = shape(text, Vec2::new(o.x + 20.0, o.y + 6.0), 12.5);
-            crate::badge::emit_badge(&desc, &glyphs)
+            let glyphs = shape_centered_y(&mut shape, text, badge_r, o.x + 22.0, 12.5);
+            let mut out = crate::badge::emit_badge(&desc, &glyphs);
+            let chip_r = Rect::new(badge_r.max().x + 12.0, o.y, 108.0, 26.0);
+            let chip_desc = crate::badge::ChipDesc::new(chip_r, "Filter: Rust")
+                .closable()
+                .selected();
+            let chip_glyphs = shape_centered_y(
+                &mut shape,
+                "Filter: Rust",
+                chip_r,
+                chip_r.origin.x + 10.0,
+                12.0,
+            );
+            let chip_out = crate::badge::emit_chip(node, &chip_desc, state, &chip_glyphs);
+            merge_output(&mut out, chip_out);
+            out
         }
         WidgetCatalogId::Breadcrumb => {
             let crumbs = vec![
@@ -477,23 +524,14 @@ where
                 } else {
                     ControlState::default()
                 };
-                let label_text = match slot.crumb {
-                    Some(1) => "Root",
-                    Some(2) => "src",
-                    Some(3) => "main.rs",
-                    _ => "",
-                };
+                let label_text = slot
+                    .crumb
+                    .and_then(|idx| desc.crumbs.get(idx))
+                    .map_or("", |c| c.label.as_str());
                 let glyphs = if label_text.is_empty() {
                     Vec::new()
                 } else {
-                    shape(
-                        label_text,
-                        Vec2::new(
-                            slot.rect.origin.x + 4.0,
-                            slot.rect.origin.y + (slot.rect.size.y - 13.0) * 0.5,
-                        ),
-                        13.0,
-                    )
+                    shape_centered(&mut shape, label_text, slot.rect, 13.0)
                 };
                 let crumb = crate::breadcrumb::emit_crumb(
                     &desc,
@@ -550,7 +588,13 @@ where
             out
         }
         WidgetCatalogId::CanvasToolbar => {
-            let desc = CanvasToolbarDesc::new(rect);
+            let tb_vp = Rect::new(
+                o.x,
+                o.y,
+                rect.size.x.min(380.0),
+                (rect.size.y * 0.65).clamp(64.0, 96.0),
+            );
+            let desc = CanvasToolbarDesc::new(tb_vp);
             let mut toolbar = CanvasToolbarState::new(0.5 + value_norm);
             let tools = crate::canvas_toolbar::CanvasTool::ALL;
             toolbar.set_tool(tools[variant_idx % tools.len()]);
@@ -581,11 +625,7 @@ where
             crate::chart::emit_chart(node, &desc, &ChartState::new(), &glyphs, state).output
         }
         WidgetCatalogId::Checkbox => {
-            let glyphs = shape(
-                "Snap to grid",
-                Vec2::new(o.x + 26.0, o.y + (ctrl_rect.size.y - 13.0) * 0.5),
-                13.0,
-            );
+            let glyphs = shape_centered_y(&mut shape, "Snap to grid", ctrl_rect, o.x + 26.0, 13.0);
             // 勾选态由展示变体与沙盒点击状态共同决定，不绑定 state.selected 以保证 24 态图元数恒定。
             let desc =
                 CheckboxDesc::new(ctrl_rect, "Snap to grid").with_checked(variant_idx % 2 == 1);
@@ -601,18 +641,41 @@ where
         WidgetCatalogId::CodeBlock => {
             let code = "fn main() {\n    let x = 42;\n    println!(\"{x}\");\n}";
             let desc = CodeBlockDesc::new(rect, code, "rust");
-            let mut glyphs = Vec::new();
+            let mut out =
+                crate::code_block::emit_code_block(node, &desc, &CodeBlockState::new(), &[], state);
             for (i, line) in code.lines().enumerate() {
-                glyphs.extend(shape(
-                    line,
-                    Vec2::new(o.x + 14.0, o.y + 34.0 + i as f32 * 18.0),
-                    12.5,
-                ));
+                let text_pos = desc.text_origin(i);
+                let num_str = format!("{}", i + 1);
+                let num_g = shape(
+                    &num_str,
+                    Vec2::new(desc.gutter_rect().origin.x + 16.0, text_pos.y),
+                    12.0,
+                );
+                push_glyphs(&mut out, &num_g, Token::TEXT_SECONDARY, desc.z + 2);
+                let mut x_cursor = text_pos.x;
+                for span in crate::code_block::highlight_line(line) {
+                    let seg = &line[span.range.clone()];
+                    if !seg.is_empty() {
+                        let seg_g = shape(seg, Vec2::new(x_cursor, text_pos.y), 12.5);
+                        let adv = seg_g
+                            .last()
+                            .map_or(seg.len() as f32 * 7.5, |q| q.rect.max().x - x_cursor);
+                        let leading_ws = seg.len() - seg.trim_start().len();
+                        let trailing_ws = seg.len() - seg.trim_end().len();
+                        x_cursor += adv + (leading_ws + trailing_ws) as f32 * 7.2;
+                        push_glyphs(&mut out, &seg_g, span.token.token(), desc.z + 2);
+                    }
+                }
             }
-            crate::code_block::emit_code_block(node, &desc, &CodeBlockState::new(), &glyphs, state)
+            if let Some(copy_r) = desc.copy_rect() {
+                let copy_g = shape_centered(&mut shape, "Copy", copy_r, 11.0);
+                push_glyphs(&mut out, &copy_g, Token::TEXT_SECONDARY, desc.z + 6);
+            }
+            out
         }
         WidgetCatalogId::ColorPicker => {
-            let desc = ColorPickerDesc::new(rect);
+            let cp_rect = Rect::new(o.x, o.y, rect.size.x.min(360.0), rect.size.y);
+            let desc = ColorPickerDesc::new(cp_rect);
             let hue_shift = (value_norm * 180.0).round() as u8;
             let picker = ColorPickerState::new(Color::from_srgb8(
                 24u8.wrapping_add(hue_shift),
@@ -621,7 +684,12 @@ where
                 255,
             ));
             let hex = format!("#{:02X}80C8", 24u8.wrapping_add(hue_shift));
-            let mut glyphs = shape(&hex, Vec2::new(o.x + 12.0, o.y + rect.size.y - 26.0), 12.0);
+            let layout = desc.layout();
+            let hex_pos = match (layout.swatches.first(), layout.swatches.last()) {
+                (Some(first), Some(last)) => Vec2::new(last.max().x + 14.0, first.origin.y + 3.0),
+                _ => Vec2::new(o.x + 12.0, o.y + cp_rect.size.y - 24.0),
+            };
+            let mut glyphs = shape(&hex, hex_pos, 12.0);
             crate::color_picker::emit_color_picker(node, &desc, &picker, state, &mut glyphs)
         }
         WidgetCatalogId::Combobox => {
@@ -636,7 +704,8 @@ where
             // `highlighted` 是私有字段，通过公开的键盘归约接口设置高亮项。
             combo.move_highlight(&desc, (variant_idx % 2) as isize);
             let active_label = ["Apple", "Banana"][variant_idx % 2];
-            let mut trig_glyphs = shape(active_label, Vec2::new(o.x + 10.0, o.y + 10.0), 13.0);
+            let mut trig_glyphs =
+                shape_centered_y(&mut shape, active_label, ctrl_rect, o.x + 10.0, 13.0);
             let mut out = crate::combobox::emit_combobox_trigger(
                 node,
                 &desc,
@@ -644,20 +713,41 @@ where
                 state,
                 &mut trig_glyphs,
             );
-            let mut popup_glyphs = shape(
-                "Apple",
-                Vec2::new(o.x + 12.0, ctrl_rect.max().y + 12.0),
-                13.0,
+            let popup_rect = Rect::new(
+                ctrl_rect.origin.x,
+                ctrl_rect.max().y + 4.0,
+                ctrl_rect.size.x,
+                64.0,
             );
-            popup_glyphs.extend(shape(
+            let row0 = Rect::new(
+                popup_rect.origin.x,
+                popup_rect.origin.y,
+                popup_rect.size.x,
+                32.0,
+            );
+            let row1 = Rect::new(
+                popup_rect.origin.x,
+                popup_rect.origin.y + 32.0,
+                popup_rect.size.x,
+                32.0,
+            );
+            let mut popup_glyphs =
+                shape_centered_y(&mut shape, "Apple", row0, popup_rect.origin.x + 12.0, 13.0);
+            popup_glyphs.extend(shape_centered_y(
+                &mut shape,
                 "Banana",
-                Vec2::new(o.x + 12.0, ctrl_rect.max().y + 42.0),
+                row1,
+                popup_rect.origin.x + 12.0,
                 13.0,
             ));
-            let popup =
-                crate::combobox::emit_combobox_popup(&desc, &combo, rect, None, &mut popup_glyphs);
-            out.primitives.extend(popup.primitives);
-            out.payloads.extend(popup.payloads);
+            let popup = crate::combobox::emit_combobox_popup(
+                &desc,
+                &combo,
+                popup_rect,
+                None,
+                &mut popup_glyphs,
+            );
+            merge_output(&mut out, popup);
             out
         }
         WidgetCatalogId::CommandPalette => {
@@ -758,26 +848,12 @@ where
             context.menu.highlighted = Some(variant_idx % 2);
             let placed = context.desc_at(menu, rect);
             let mut out = crate::menu::emit_menu(node, 2, &placed, &context.menu, state).0;
-            let g0 = shape(
-                "Cut",
-                Vec2::new(placed.rect.origin.x + 14.0, placed.rect.origin.y + 10.0),
-                13.0,
-            );
-            let g0s = shape(
-                "Ctrl+X",
-                Vec2::new(placed.rect.max().x - 56.0, placed.rect.origin.y + 11.0),
-                11.5,
-            );
-            let g1 = shape(
-                "Copy",
-                Vec2::new(placed.rect.origin.x + 14.0, placed.rect.origin.y + 40.0),
-                13.0,
-            );
-            let g1s = shape(
-                "Ctrl+C",
-                Vec2::new(placed.rect.max().x - 56.0, placed.rect.origin.y + 41.0),
-                11.5,
-            );
+            let r0 = placed.item_rect(0);
+            let r1 = placed.item_rect(1);
+            let g0 = shape_centered_y(&mut shape, "Cut", r0, placed.rect.origin.x + 14.0, 13.0);
+            let g0s = shape_centered_y(&mut shape, "Ctrl+X", r0, placed.rect.max().x - 56.0, 11.5);
+            let g1 = shape_centered_y(&mut shape, "Copy", r1, placed.rect.origin.x + 14.0, 13.0);
+            let g1s = shape_centered_y(&mut shape, "Ctrl+C", r1, placed.rect.max().x - 56.0, 11.5);
             push_glyphs(&mut out, &g0, Token::TEXT_PRIMARY, placed.z + 2);
             push_glyphs(&mut out, &g0s, Token::TEXT_SECONDARY, placed.z + 2);
             push_glyphs(&mut out, &g1, Token::TEXT_PRIMARY, placed.z + 2);
@@ -1069,21 +1145,11 @@ where
             let mut menu_state = MenuState::new();
             menu_state.highlighted = Some(variant_idx % 3);
             let mut out = crate::menu::emit_menu(node, 2, &desc, &menu_state, state).0;
-            let g0 = shape(
-                "Open",
-                Vec2::new(menu_r.origin.x + 14.0, menu_r.origin.y + 10.0),
-                13.0,
-            );
-            let g0s = shape(
-                "Ctrl+O",
-                Vec2::new(menu_r.max().x - 56.0, menu_r.origin.y + 11.0),
-                11.5,
-            );
-            let g2 = shape(
-                "Quit",
-                Vec2::new(menu_r.origin.x + 14.0, menu_r.origin.y + 46.0),
-                13.0,
-            );
+            let r0 = desc.item_rect(0);
+            let r2 = desc.item_rect(2);
+            let g0 = shape_centered_y(&mut shape, "Open", r0, menu_r.origin.x + 14.0, 13.0);
+            let g0s = shape_centered_y(&mut shape, "Ctrl+O", r0, menu_r.max().x - 56.0, 11.5);
+            let g2 = shape_centered_y(&mut shape, "Quit", r2, menu_r.origin.x + 14.0, 13.0);
             push_glyphs(&mut out, &g0, Token::TEXT_PRIMARY, desc.z + 2);
             push_glyphs(&mut out, &g0s, Token::TEXT_SECONDARY, desc.z + 2);
             push_glyphs(&mut out, &g2, Token::TEXT_PRIMARY, desc.z + 2);

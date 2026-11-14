@@ -14,7 +14,7 @@ use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::Rect;
+use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
@@ -221,6 +221,27 @@ impl CodeBlockDesc {
             self.rect.origin.y + index as f32 * CODE_LINE_HEIGHT,
             self.rect.size.x,
             CODE_LINE_HEIGHT,
+        )
+    }
+
+    /// 行号槽的矩形区域（与 `emit_code_block` 绘制的槽面板严格对齐）。
+    #[must_use]
+    pub fn gutter_rect(&self) -> Rect {
+        Rect::new(
+            self.rect.origin.x,
+            self.rect.origin.y,
+            self.gutter_width(),
+            self.rect.size.y,
+        )
+    }
+
+    /// 第 `index` 行源码文本的排版起点（跳过行号槽并留 12px 内边距，行内垂直居中）。
+    #[must_use]
+    pub fn text_origin(&self, index: usize) -> Vec2 {
+        let line = self.line_rect(index);
+        Vec2::new(
+            self.code_rect().origin.x + 12.0,
+            line.origin.y + (CODE_LINE_HEIGHT - 12.5) * 0.5,
         )
     }
 

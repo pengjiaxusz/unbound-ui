@@ -24,11 +24,17 @@ pub use unbound_text::TextStyle;
 pub use unbound_theme::{ThemeKind, ThemeState, Token};
 pub use unbound_widgets::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 pub use unbound_widgets::{
-    AlertDesc, BadgeDesc, BannerDesc, ButtonDesc, ButtonSize, ButtonVariant, CardDesc, CheckState,
-    CheckboxDesc, CodeEditorDesc, CodeEditorState, ColumnSpec, ControlState, CurveEditorDesc,
-    DataGridDesc, DataGridState, DividerDesc, FileDropDesc, PaginationDesc, PaginationState,
-    Placement, PopconfirmDesc, ProgressDesc, ProgressState, SelectDesc, SelectState, Severity,
-    SliderDesc, SwitchDesc, TableDesc, TableRow, TableState, TextEditState, TextInputDesc,
+    AddressBarDesc, AddressBarState, AlertDesc, BadgeDesc, BannerDesc, ButtonDesc, ButtonSize,
+    ButtonVariant, CardDesc, CheckState, CheckboxDesc, CodeEditorDesc, CodeEditorState, ColumnSpec,
+    ControlState, CurveEditorDesc, DataColumnSpec, DataGridDesc, DataGridState, DividerDesc,
+    DraggableModalState, FileDropDesc, FilterPopupState, GenericDataTableDesc,
+    GenericDataTableState, KeybindingManagerState, PaginationDesc, PaginationState,
+    PipelineStageItem, PipelineViewDesc, Placement, PopconfirmDesc, ProgressDesc, ProgressState,
+    QueryBuilderDesc, QueryCombinator, QueryRule, RangeSliderDesc, ReadOnlyCopyInputDesc,
+    ReorderableListState, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc, SchemaFormState,
+    SchemaValue, SelectDesc, SelectState, Severity, ShortcutBarDesc, ShortcutEntry, SliderDesc,
+    SmoothWheelHandler, SnapSliderDesc, SortDirection, SwitchDesc, TableDesc, TableRow, TableState,
+    TaskActivityItem, TaskHudDesc, TextEditState, TextInputDesc, ThemeSettingsState,
     TimelineTrackDesc, TimelineTrackState, TitleBarDesc, TooltipDesc, TooltipState, TourDesc,
     TransferDesc, TransferState, WatermarkDesc, WidgetCatalogId, WidgetOutput, WindowCaptionButton,
     WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID,

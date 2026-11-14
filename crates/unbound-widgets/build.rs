@@ -23,7 +23,22 @@ fn main() {
     // `title_bar` 仅提供默认标题栏描述符与保留节点 ID，场景由 `unbound-app` 的
     // `ViewBuilder` 组合既有容器/徽章/按钮生成，没有独立的 `emit_*`，因此按基础设施
     // 模块处理，不纳入 `define_widget_catalog!` 展示目录。
-    const ALLOWED_BARE_MODS: &[&str] = &["catalog", "diff", "primitive", "ergonomics", "title_bar"];
+    // `cha_kit` / `schema_kit` 是复合组件工具包：只提供状态机与高阶构建块，由应用
+    // 与展厅按需组合，不对应 `WidgetCatalogId` 的独立展示变体，因此同样按基础设施
+    // 模块处理，不纳入 `define_widget_catalog!` 展示目录。
+    const ALLOWED_BARE_MODS: &[&str] = &[
+        "catalog",
+        "cha_kit",
+        "diff",
+        "ergonomics",
+        "primitive",
+        "schema_kit",
+        "title_bar",
+    ];
+
+    // 工具包模块豁免「展示目录宏声明」与 `Desc` / `emit_*` 覆盖门禁，但仍受规则 4
+    // （顶层 `pub use` 重导出）约束。
+    const TOOLKIT_MODS: &[&str] = &["cha_kit", "schema_kit"];
     for line in lib_rs.lines() {
         let trimmed = line.trim();
         if let Some(stripped) = trimmed.strip_prefix("pub mod ") {
@@ -65,9 +80,10 @@ fn main() {
         }
 
         let mod_name = path.file_stem().unwrap().to_str().unwrap();
+        let is_toolkit = TOOLKIT_MODS.contains(&mod_name);
 
-        // 检查模块是否在 `define_widget_catalog!` 中声明
-        if !catalog_macro_body.contains(mod_name) {
+        // 检查模块是否在 `define_widget_catalog!` 中声明（工具包模块豁免）
+        if !is_toolkit && !catalog_macro_body.contains(mod_name) {
             panic!(
                 "Compile error: module `{mod_name}` in `src/{file_name}` is not declared in `define_widget_catalog!` in src/lib.rs"
             );
@@ -79,6 +95,11 @@ fn main() {
             panic!(
                 "Compile error: module `{mod_name}` in `src/{file_name}` is missing top-level re-export in src/lib.rs (expected `{expected_pub_use}`)"
             );
+        }
+
+        // 工具包模块不参与展示目录，跳过规则 2 / 3 的符号覆盖校验。
+        if is_toolkit {
+            continue;
         }
 
         let content = fs::read_to_string(&path)

@@ -26,6 +26,7 @@ pub mod data;
 pub mod debug;
 pub mod device;
 pub mod frame;
+pub mod inspector;
 pub mod pipeline;
 pub mod pool;
 pub mod quarantine;
@@ -67,3 +68,8 @@ pub use surface::{Surface, Swapchain};
 pub use swapchain::{is_supported, PresentConfig, PresentMode, ResizeBehaviour};
 pub use timing::{FrameTiming, TimestampScope};
 pub use tlsf::{AllocError, Tlsf, TlsfStats, MIN_BLOCK};
+
+pub use inspector::{
+    ChannelMask, ExtendedExternalSlots, ExternalImageDesc, ExternalMemoryHandleKind,
+    TextureInspectorParams, ViewportCamera3D, ViewportRenderPassDesc, EXTENDED_EXTERNAL_SLOTS,
+};

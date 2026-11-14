@@ -125,8 +125,8 @@ fn a_tall_menu_clamps_to_the_viewport_and_embeds_a_scroll_state() {
     assert_eq!(state.scroll_offset().y, 100.0);
 
     let output = emit_menu(1, 2, &desc, &state, ControlState::default()).0;
-    // 行图元随滚动偏移一起移动。
-    assert_eq!(output.primitives[2].local_pos[1], -100.0);
+    // 行图元随滚动偏移一起移动；高亮胶囊相对行上下各内缩 2px。
+    assert_eq!(output.primitives[2].local_pos[1], -98.0);
     // 2 个外框图元 + 20 行 * 2 + 边框。
     assert_eq!(output.primitives.len(), 43);
 }

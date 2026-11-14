@@ -299,6 +299,96 @@ impl Oklab {
     }
 }
 
+/// 极坐标形式的感知均匀色彩空间（OKLCH：亮度 `l`、色度 `c`、色相角 `h_deg` 度、透明度 `alpha`）。
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Oklch {
+    pub l: f32,
+    pub c: f32,
+    pub h_deg: f32,
+    pub alpha: f32,
+}
+
+impl Oklch {
+    #[inline]
+    #[must_use]
+    pub const fn new(l: f32, c: f32, h_deg: f32, alpha: f32) -> Self {
+        Self { l, c, h_deg, alpha }
+    }
+
+    /// 从 [`Oklab`] 转换至 [`Oklch`]。
+    #[must_use]
+    pub fn from_oklab(lab: Oklab) -> Self {
+        let c = (lab.a * lab.a + lab.b * lab.b).sqrt();
+        let h_rad = lab.b.atan2(lab.a);
+        let mut h_deg = h_rad.to_degrees();
+        if h_deg < 0.0 {
+            h_deg += 360.0;
+        }
+        Self {
+            l: lab.l,
+            c,
+            h_deg,
+            alpha: lab.alpha,
+        }
+    }
+
+    /// 转换回 [`Oklab`]。
+    #[must_use]
+    pub fn to_oklab(self) -> Oklab {
+        let h_rad = self.h_deg.to_radians();
+        Oklab {
+            l: self.l,
+            a: self.c * h_rad.cos(),
+            b: self.c * h_rad.sin(),
+            alpha: self.alpha,
+        }
+    }
+
+    /// 从线性 sRGB [`Color`] 构建。
+    #[must_use]
+    pub fn from_linear(c: Color) -> Self {
+        Self::from_oklab(c.to_oklab())
+    }
+
+    /// 转换回线性 sRGB [`Color`]（将分量钳制在 `[0, 1]` SDR 安全色域内）。
+    #[must_use]
+    pub fn to_linear(self) -> Color {
+        let raw = self.to_oklab().to_linear();
+        Color::new(
+            raw.r.clamp(0.0, 1.0),
+            raw.g.clamp(0.0, 1.0),
+            raw.b.clamp(0.0, 1.0),
+            raw.alpha_clamped(),
+        )
+    }
+}
+
+impl Color {
+    #[inline]
+    #[must_use]
+    pub const fn alpha_clamped(self) -> f32 {
+        if self.a < 0.0 {
+            0.0
+        } else if self.a > 1.0 {
+            1.0
+        } else {
+            self.a
+        }
+    }
+
+    /// 从 [`Oklch`] 构建线性 [`Color`]。
+    #[must_use]
+    pub fn from_oklch(l: f32, c: f32, h_deg: f32, a: f32) -> Self {
+        Oklch::new(l, c, h_deg, a).to_linear()
+    }
+
+    /// 转换至 [`Oklch`]。
+    #[must_use]
+    pub fn to_oklch(self) -> Oklch {
+        Oklch::from_linear(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

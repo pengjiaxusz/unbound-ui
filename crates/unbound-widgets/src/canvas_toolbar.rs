@@ -166,7 +166,7 @@ impl CanvasToolbarDesc {
     pub fn separator_rect(&self) -> Rect {
         let last = self.tool_rect(CanvasTool::ALL[CanvasTool::ALL.len() - 1]);
         Rect::new(
-            last.max().x + TOOL_GAP + 4.0,
+            last.max().x + TOOL_GAP,
             self.rect().origin.y + 10.0,
             1.0,
             TOOLBAR_HEIGHT - 20.0,

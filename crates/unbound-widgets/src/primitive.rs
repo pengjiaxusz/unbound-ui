@@ -25,12 +25,20 @@ pub(crate) fn instance(
     sub: SubElement,
     z: u16,
 ) -> GpuPrimitiveInstance {
+    // 当边框令牌为 `Token::NONE` 时，必须将 `border_width` 归零：
+    // 片元着色器在 `v_border_pad.x > 0.0` 时会将外环区域的填充 alpha 乘以 `inner_a`，
+    // 若此时 `border == Token::NONE`（alpha = 0），外边缘会被镂空出透明暗圈。
+    let effective_border_width = if kind == PrimType::RoundedRect && border == Token::NONE {
+        0.0
+    } else {
+        border_width
+    };
     GpuPrimitiveInstance {
         chunk_id: [0, 0],
         local_pos: [rect.origin.x, rect.origin.y],
         size: [rect.size.x, rect.size.y],
         corner_radii: f16::pack_radii(radii),
-        border_width: f16::f32_to_f16(border_width),
+        border_width: f16::f32_to_f16(effective_border_width),
         shadow_blur: f16::f32_to_f16(shadow),
         transform_idx: 0,
         clip_idx: CLIP_NONE,
@@ -160,6 +168,9 @@ pub(crate) fn glyphs(
 }
 
 /// 以退化二次贝塞尔曲线编码的直线描边（用于斜线、箭头与关闭叉号，避免 `PrimType::Line` 被绘制为实心矩形）。
+///
+/// 包围盒向外扩充 `half_thickness + 1.5px`，确保水平/垂直直线与斜线端点的半宽及抗锯齿过渡带
+/// 绝不会被光栅化四边形边界截断。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn curve_stroke(
     start: [f32; 2],
@@ -170,10 +181,11 @@ pub(crate) fn curve_stroke(
     primitives: &mut Vec<GpuPrimitiveInstance>,
     payloads: &mut Vec<GpuPayload>,
 ) {
-    let origin_x = start[0].min(end[0]);
-    let origin_y = start[1].min(end[1]);
-    let w = (start[0] - end[0]).abs().max(1.0);
-    let h = (start[1] - end[1]).abs().max(1.0);
+    let pad = (thickness * 0.5 + 1.5).ceil();
+    let origin_x = start[0].min(end[0]) - pad;
+    let origin_y = start[1].min(end[1]) - pad;
+    let w = (start[0] - end[0]).abs() + pad * 2.0;
+    let h = (start[1] - end[1]).abs() + pad * 2.0;
     let payload_idx = payloads.len() as u32;
     payloads.push(GpuPayload::curve(
         [start[0] - origin_x, start[1] - origin_y],
@@ -195,6 +207,35 @@ pub(crate) fn curve_stroke(
         SubElement::Content,
         z,
     );
+    prim.extra_payload_idx = payload_idx;
+    primitives.push(prim);
+}
+
+/// 发射带硬件线性渐变的圆角矩形表面。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn gradient_surface(
+    rect: Rect,
+    radius: f32,
+    from_uv: [f32; 2],
+    to_uv: [f32; 2],
+    token_start: Token,
+    token_end: Token,
+    border: Token,
+    border_width: f32,
+    z: u16,
+    primitives: &mut Vec<GpuPrimitiveInstance>,
+    payloads: &mut Vec<GpuPayload>,
+) {
+    let payload_idx = payloads.len() as u32;
+    payloads.push(GpuPayload::gradient_linear(
+        from_uv,
+        to_uv,
+        u32::from(token_start.raw()),
+        u32::from(token_end.raw()),
+        1.0,
+    ));
+    let mut prim = outlined(rect, radius, token_start, border, border_width, 0.0, z);
+    prim.prim_type_and_flags |= u32::from(PrimFlags::GRADIENT_LINEAR.bits()) << 16;
     prim.extra_payload_idx = payload_idx;
     primitives.push(prim);
 }
