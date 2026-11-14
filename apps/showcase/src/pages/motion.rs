@@ -146,23 +146,45 @@ emit_chart(node, &desc, &ChartState::new(), &[], control);"#,
     .with_height(280.0),
 ];
 
-pub const SETTINGS_EXAMPLES: &[ExampleDef] = &[ExampleDef::new(
-    "About this build",
-    "Unbound UI is a Rust workspace: GPU renderer, text stack, layout, input, world, canvas and a headless verifier. This gallery is its flagship application.",
-    &["unbound-platform", "unbound-headless"],
-    r#"Showcase::new()
+pub const SETTINGS_EXAMPLES: &[ExampleDef] = &[
+    ExampleDef::new(
+        "About this build",
+        "Unbound UI is a Rust workspace: GPU renderer, text stack, layout, input, world, canvas and a headless verifier. This gallery is its flagship application.",
+        &["unbound-platform", "unbound-headless"],
+        r#"Showcase::new()
     .theme(ThemeMode::Dark)
     .zoom(1.0)
     .pixel_snap(true)
     .run()"#,
-    "A definition list of build facts plus the version heading.",
-    &[
-        KnobSpec::toggle("Telemetry opt-in", true),
-        KnobSpec::segmented("Motion", &["Full", "Reduced"], 0),
-    ],
-    DemoKind::About,
-)
-.with_height(348.0)];
+        "A definition list of build facts plus the version heading.",
+        &[
+            KnobSpec::toggle("Telemetry opt-in", true),
+            KnobSpec::segmented("Motion", &["Full", "Reduced"], 0),
+        ],
+        DemoKind::About,
+    )
+    .with_height(348.0),
+    ExampleDef::new(
+        "Pinyin & Shuangpin runtime config",
+        "Full 20,992 CJK ideographs + polyphones with Full Pinyin, 6 Shuangpin schemes (Xiaohe enabled by default), and Full/Shuangpin initials. Switch schemes at runtime below.",
+        &["unbound-text/src/pinyin.rs"],
+        r#"set_global_shuangpin_scheme(ShuangpinScheme::Xiaohe);
+let matcher = PinyinMatcher::new();
+let hit = matcher.match_text("着色器管线", "voseqi");"#,
+        "Interactive Shuangpin scheme selector and live CJK query matcher with character highlight ranges.",
+        &[
+            KnobSpec::segmented(
+                "Scheme",
+                &["Xiaohe", "Natural", "Microsoft", "Sogou", "Ziguang", "SmartABC"],
+                0,
+            ),
+            KnobSpec::toggle("Shuangpin", true),
+            KnobSpec::toggle("Initials", true),
+        ],
+        DemoKind::PinyinEngine,
+    )
+    .with_height(280.0),
+];
 
 /// 弹簧实验室或缓动曲线图。
 pub fn springs(ctx: &mut DemoCtx<'_, '_>, easing: bool) {
@@ -900,4 +922,119 @@ pub fn about(ctx: &mut DemoCtx<'_, '_>) {
         palette.stage_bg,
     );
     fps_limit_bar(ctx);
+}
+
+/// 拼音与多方案双拼（默认小鹤双拼）运行时配置与实时编码检视台。
+pub fn pinyin_engine(ctx: &mut DemoCtx<'_, '_>) {
+    use unbound_text::{set_global_pinyin_config, PinyinConfig, PinyinMatcher, ShuangpinScheme};
+
+    let rect = ctx.rect;
+    let palette = *ctx.canvas.palette;
+    let scheme_idx = (ctx.knob(0).round().max(0.0) as usize).min(ShuangpinScheme::ALL.len() - 1);
+    let enable_sp = ctx.knob_on(1);
+    let enable_init = ctx.knob_on(2);
+    let scheme = ShuangpinScheme::from_index(scheme_idx);
+
+    // 同步至全局原子拼音配置，使全局搜索框与数据表格实时响应切换
+    let cfg = PinyinConfig::new()
+        .with_scheme(scheme)
+        .with_shuangpin(enable_sp)
+        .with_full_initials(enable_init)
+        .with_shuangpin_initials(enable_init);
+    set_global_pinyin_config(cfg);
+    let matcher = PinyinMatcher::with_config(cfg);
+
+    ctx.canvas.text(
+        &format!(
+            "Active Runtime Scheme: {}  ·  20,992 CJK + 6,592 Ext-A + Polyphones",
+            scheme.label()
+        ),
+        Rect::new(
+            rect.origin.x + 16.0,
+            rect.origin.y + 10.0,
+            rect.size.x - 32.0,
+            20.0,
+        ),
+        12.5,
+        palette.text,
+        AlignX::Start,
+        AlignY::Center,
+    );
+
+    let rule_summary = match scheme {
+        ShuangpinScheme::Xiaohe => {
+            "zh=v  ch=i  sh=u  |  零声母: 首字母+韵母键 (ang=ah, eng=eg)  |  默认方案"
+        }
+        ShuangpinScheme::Natural => {
+            "zh=v  ch=i  sh=u  |  零声母: 首字母+韵母键 (ang=ah, eng=eg)  |  自然码"
+        }
+        ShuangpinScheme::Microsoft => {
+            "zh=v  ch=i  sh=u  |  零声母: o+韵母键 (a=oa, an=oj)  |  üe=v"
+        }
+        ShuangpinScheme::Sogou => "zh=v  ch=i  sh=u  |  零声母: o+韵母键 (a=oa, an=oj)  |  üe=v",
+        ShuangpinScheme::Ziguang => {
+            "zh=u  ch=a  sh=i  |  零声母: o+韵母键 (a=oa, an=or)  |  紫光华宇"
+        }
+        ShuangpinScheme::SmartAbc => {
+            "zh=a  ch=e  sh=v  |  零声母: o+韵母键 (a=oa, ei=oq)  |  智能ABC"
+        }
+    };
+    ctx.canvas.text(
+        rule_summary,
+        Rect::new(
+            rect.origin.x + 16.0,
+            rect.origin.y + 32.0,
+            rect.size.x - 32.0,
+            18.0,
+        ),
+        10.5,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
+
+    let samples = [
+        ("着色器管线_Uber", "zhuoseqi"),
+        ("材质球_PBR", "caizhiqiu"),
+        ("重命名文件", "chongmingming"),
+        ("魑魅魍魉_Rare", "chimeiwangliang"),
+    ];
+
+    for (i, (term, full_py)) in samples.iter().enumerate() {
+        let y = rect.origin.y + 62.0 + i as f32 * 44.0;
+        let row_r = Rect::new(rect.origin.x + 16.0, y, rect.size.x - 32.0, 38.0);
+        ctx.canvas
+            .rect(row_r, 6.0, palette.stage_bg, palette.border, 1.0, 0.0);
+
+        let sp_code = scheme.encode_text(term);
+        let init_char = scheme
+            .initial_key(full_py)
+            .unwrap_or_else(|| full_py.chars().next().unwrap_or('z'));
+        let hit = matcher.match_text(term, &sp_code[..sp_code.len().min(6)]);
+        let score = hit.as_ref().map_or(0, |m| m.score);
+
+        ctx.canvas.text(
+            term,
+            Rect::new(row_r.origin.x + 12.0, y + 4.0, 160.0, 30.0),
+            12.5,
+            palette.text,
+            AlignX::Start,
+            AlignY::Center,
+        );
+        ctx.canvas.text(
+            &format!("全拼: {full_py}   双拼: {sp_code}   双拼首码: '{init_char}'"),
+            Rect::new(row_r.origin.x + 176.0, y + 4.0, row_r.size.x - 276.0, 30.0),
+            11.0,
+            palette.text_muted,
+            AlignX::Start,
+            AlignY::Center,
+        );
+        widgets::badge(
+            ctx.canvas,
+            Rect::new(row_r.max().x - 92.0, y + 9.0, 80.0, 20.0),
+            &format!("score {score}"),
+            palette.primary,
+            palette.primary_soft,
+        );
+    }
 }

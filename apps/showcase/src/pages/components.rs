@@ -19,7 +19,7 @@ use crate::canvas::{AlignX, AlignY};
 pub const COMPONENTS_INFO: PageInfo = PageInfo {
     title: "Component gallery",
     short: "All Components",
-    description: "All 99 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
+    description: "All 106 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
     crates: &["unbound-widgets"],
     docs: "docs/architecture/widgets.md",
     keywords: "component gallery catalog emitter coverage widget showcase every control tooltip",
@@ -87,7 +87,8 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::Slider
         | WidgetCatalogId::NumberInput
         | WidgetCatalogId::Spinner
-        | WidgetCatalogId::AspectRatioBox => KNOBS_NUMERIC,
+        | WidgetCatalogId::AspectRatioBox
+        | WidgetCatalogId::TaskHud => KNOBS_NUMERIC,
 
         WidgetCatalogId::Table
         | WidgetCatalogId::TreeTable
@@ -102,7 +103,9 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::VirtualViews
         | WidgetCatalogId::Masonry
         | WidgetCatalogId::VirtualMasonry
-        | WidgetCatalogId::AvatarGroup => KNOBS_DATA,
+        | WidgetCatalogId::AvatarGroup
+        | WidgetCatalogId::GenericDataTable
+        | WidgetCatalogId::PipelineView => KNOBS_DATA,
 
         WidgetCatalogId::Alert
         | WidgetCatalogId::AlertDialog
@@ -129,7 +132,9 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::CommandPalette
         | WidgetCatalogId::Toolbar
         | WidgetCatalogId::CanvasToolbar
-        | WidgetCatalogId::StatusBar => KNOBS_NAV,
+        | WidgetCatalogId::StatusBar
+        | WidgetCatalogId::AddressBar
+        | WidgetCatalogId::ShortcutBar => KNOBS_NAV,
 
         WidgetCatalogId::Containers
         | WidgetCatalogId::SplitPane
@@ -161,7 +166,9 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::Form
         | WidgetCatalogId::Transfer
         | WidgetCatalogId::FileDrop
-        | WidgetCatalogId::Select => KNOBS_INPUT,
+        | WidgetCatalogId::Select
+        | WidgetCatalogId::QueryBuilder
+        | WidgetCatalogId::SchemaForm => KNOBS_INPUT,
 
         WidgetCatalogId::NodeGraph
         | WidgetCatalogId::Minimap
@@ -281,6 +288,13 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::VirtualMasonry => "view.virtual_masonry(ui_key!(\"vm\"), VirtualMasonryDesc::new(rect, 4, 1000));",
         WidgetCatalogId::Watermark => "view.add(ui_key!(\"wm\"), WatermarkDesc::new(rect, \"CONFIDENTIAL\"));",
         WidgetCatalogId::Wrap => "view.add(ui_key!(\"wrp\"), WrapDesc::new(rect));",
+        WidgetCatalogId::AddressBar => "view.add(ui_key!(\"addr\"), AddressBarDesc::new(rect, segments));",
+        WidgetCatalogId::GenericDataTable => "view.add(ui_key!(\"gdt\"), GenericDataTableDesc::new(rect, cols, 6));",
+        WidgetCatalogId::PipelineView => "view.add(ui_key!(\"pipe\"), PipelineViewDesc::new(rect, stages));",
+        WidgetCatalogId::QueryBuilder => "view.add(ui_key!(\"qb\"), QueryBuilderDesc::new(rect, QueryCombinator::And, rules));",
+        WidgetCatalogId::SchemaForm => "view.add(ui_key!(\"sf\"), SchemaFormDesc::new(rect, fields));",
+        WidgetCatalogId::ShortcutBar => "view.add(ui_key!(\"scb\"), ShortcutBarDesc::new(rect, entries));",
+        WidgetCatalogId::TaskHud => "view.add(ui_key!(\"hud\"), TaskHudDesc::new(rect, tasks));",
     }
 }
 
@@ -442,6 +456,129 @@ define_showcase_components! {
     Callout => "Callout", "High-visibility information or warning callout box.", 220.0,
     VirtualMasonry => "Virtual masonry", "Virtualized staggered column layout for heterogeneous items.", 280.0,
     TerminalView => "Terminal view", "ANSI-styled virtualized terminal console log viewer.", 280.0,
+    AddressBar => "Address bar", "Dual-mode path breadcrumb and full-path text editor.", 240.0,
+    GenericDataTable => "Generic data table", "Virtualized table with multi-column sort, Pinyin/Shuangpin filter, and summary footer.", 300.0,
+    PipelineView => "Pipeline view", "Render pass and build pipeline stage duration inspector.", 240.0,
+    QueryBuilder => "Query builder", "Visual AND/OR filter rule builder with field, operator, and value rows.", 280.0,
+    SchemaForm => "Schema form", "Declarative schema-driven inspector form with dirty tracking and conditional fields.", 280.0,
+    ShortcutBar => "Shortcut bar", "Contextual keycap shortcut hint bar with conflict detection.", 220.0,
+    TaskHud => "Task HUD", "Background task progress stack with cancellation affordances.", 260.0,
+}
+
+/// 每个目录组件的中英文搜索关键词（支持全拼、小鹤/多方案双拼与首字母检索）。
+#[must_use]
+#[deny(unreachable_patterns)]
+pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
+    match id {
+        WidgetCatalogId::Accordion => "折叠面板 手风琴 accordion",
+        WidgetCatalogId::AddressBar => "地址栏 路径导航 面包屑 address bar",
+        WidgetCatalogId::Alert => "警告提示 横幅 alert",
+        WidgetCatalogId::AlertDialog => "确认对话框 弹窗 alert dialog",
+        WidgetCatalogId::AspectRatioBox => "宽高比容器 比例盒 aspect ratio",
+        WidgetCatalogId::AutoComplete => "自动补全 输入建议 autocomplete",
+        WidgetCatalogId::Avatar => "头像 用户状态 avatar",
+        WidgetCatalogId::AvatarGroup => "头像组 叠放头像 avatar group",
+        WidgetCatalogId::Badge => "徽章 标记 badge",
+        WidgetCatalogId::Banner => "全局横幅 顶部通知 banner",
+        WidgetCatalogId::Breadcrumb => "面包屑 路径导航 breadcrumb",
+        WidgetCatalogId::Button => "按钮 点击 触发器 button",
+        WidgetCatalogId::Callout => "高亮提示框 说明框 callout",
+        WidgetCatalogId::CanvasToolbar => "画布工具栏 缩放工具 canvas toolbar",
+        WidgetCatalogId::Carousel => "轮播图 走马灯 carousel",
+        WidgetCatalogId::Cascader => "级联选择器 多级下拉 cascader",
+        WidgetCatalogId::Chart => "图表 折线图 渲染耗时曲线 chart",
+        WidgetCatalogId::Checkbox => "复选框 勾选框 checkbox",
+        WidgetCatalogId::Chip => "标签胶囊 过滤标签 chip",
+        WidgetCatalogId::CodeBlock => "代码块 语法高亮 code block",
+        WidgetCatalogId::CodeEditor => "代码编辑器 着色器编辑 code editor",
+        WidgetCatalogId::Collapsible => "可折叠区域 展开收起 collapsible",
+        WidgetCatalogId::ColorPicker => "颜色选择器 调色盘 材质球色彩 color picker",
+        WidgetCatalogId::Combobox => "组合框 可编辑下拉 combobox",
+        WidgetCatalogId::CommandPalette => "命令面板 快捷指令搜索 command palette",
+        WidgetCatalogId::Containers => "卡片容器 面板 containers card",
+        WidgetCatalogId::ContextMenu => "右键菜单 上下文菜单 context menu",
+        WidgetCatalogId::CurveEditor => "曲线编辑器 贝塞尔动画曲线 curve editor",
+        WidgetCatalogId::DataGrid => "数据网格 电子表格 data grid",
+        WidgetCatalogId::DatePicker => "日期选择器 日历 date picker",
+        WidgetCatalogId::DateRangePicker => "日期区间选择器 date range picker",
+        WidgetCatalogId::Descriptions => "描述列表 属性键值对 descriptions",
+        WidgetCatalogId::Divider => "分割线 分隔符 divider",
+        WidgetCatalogId::Dock => "停靠面板 工作区多窗格 dock",
+        WidgetCatalogId::Drawer => "抽屉面板 侧边滑出浮层 drawer",
+        WidgetCatalogId::EmptyState => "空状态 占位提示 empty state",
+        WidgetCatalogId::FileDrop => "文件拖拽上传 资产导入 file drop",
+        WidgetCatalogId::Form => "表单 校验字段 form",
+        WidgetCatalogId::GenericDataTable => {
+            "泛型数据表格 拼音双拼过滤 排序汇总 generic data table"
+        }
+        WidgetCatalogId::Gizmo => "变换操控器 旋转缩放手柄 gizmo",
+        WidgetCatalogId::GradientEditor => "渐变编辑器 色阶条 gradient editor",
+        WidgetCatalogId::HotkeyInput => "快捷键录制 键位绑定 hotkey input",
+        WidgetCatalogId::HoverCard => "悬停预览卡 浮窗卡片 hover card",
+        WidgetCatalogId::Icon => "矢量图标 icon",
+        WidgetCatalogId::Image => "图像 纹理贴图预览 image",
+        WidgetCatalogId::LoadingOverlay => "加载遮罩 等待浮层 loading overlay",
+        WidgetCatalogId::Masonry => "瀑布流布局 资产墙 masonry",
+        WidgetCatalogId::Menu => "菜单 下拉列表 menu",
+        WidgetCatalogId::Menubar => "顶部菜单栏 menubar",
+        WidgetCatalogId::Minimap => "小地图 缩略导航 minimap",
+        WidgetCatalogId::Modal => "模态框 对话框 可拖拽弹窗 modal",
+        WidgetCatalogId::MultiSplit => "多列分割面板 可调分栏 multi split",
+        WidgetCatalogId::NavigationRail => "侧边导航栏 折叠导航轨 navigation rail",
+        WidgetCatalogId::NinePatch => "九宫格拉伸图 nine patch",
+        WidgetCatalogId::NodeGraph => "节点图 着色器管线蓝图 node graph",
+        WidgetCatalogId::NotificationCenter => "通知中心 消息盒子 notification center",
+        WidgetCatalogId::NumberInput => "数值输入框 步进器 number input",
+        WidgetCatalogId::Overlay => "浮层栈 弹出定位层 overlay",
+        WidgetCatalogId::Pagination => "分页器 页码切换 pagination",
+        WidgetCatalogId::PinInput => "验证码输入框 PIN码 pin input",
+        WidgetCatalogId::PipelineView => "渲染管线视图 阶段耗时分析 着色器管线 pipeline view",
+        WidgetCatalogId::Popconfirm => "气泡确认框 删除确认 popconfirm",
+        WidgetCatalogId::Popover => "气泡浮层 锚定弹窗 popover",
+        WidgetCatalogId::Progress => "进度条 环形进度 progress",
+        WidgetCatalogId::PropertyGrid => "属性网格 检视器面板 property grid",
+        WidgetCatalogId::QueryBuilder => "查询构建器 过滤规则树 query builder",
+        WidgetCatalogId::Radio => "单选框 单选组 radio",
+        WidgetCatalogId::Rating => "星级评分 资产评级 rating",
+        WidgetCatalogId::RichText => "富文本 Markdown渲染 rich text",
+        WidgetCatalogId::Ruler => "标尺 辅助参考线 ruler",
+        WidgetCatalogId::SchemaForm => "声明式配置表单 属性检查器 schema form",
+        WidgetCatalogId::Scroll => "滚动视图 平滑滚轮 scroll view",
+        WidgetCatalogId::Segmented => "分段控制器 胶囊切换 segmented",
+        WidgetCatalogId::Select => "下拉选择器 枚举选择 select",
+        WidgetCatalogId::ShortcutBar => "快捷键提示栏 键位冲突检测 shortcut bar",
+        WidgetCatalogId::Skeleton => "骨架屏 加载占位 skeleton",
+        WidgetCatalogId::Slider => "滑块 区间滑块 磁吸刻度 slider range snap",
+        WidgetCatalogId::Spinner => "加载转圈 旋转指示器 spinner",
+        WidgetCatalogId::SplitButton => "分割按钮 下拉操作按钮 split button",
+        WidgetCatalogId::SplitPane => "双栏分割窗格 split pane",
+        WidgetCatalogId::Stack => "层叠容器 堆叠布局 stack",
+        WidgetCatalogId::StatusBar => "底部状态栏 status bar",
+        WidgetCatalogId::Stepper => "步骤条 向导进度 stepper",
+        WidgetCatalogId::Switch => "开关 切换器 switch toggle",
+        WidgetCatalogId::Table => "基础数据表 虚拟行 table",
+        WidgetCatalogId::Tabs => "标签页 选项卡 tabs",
+        WidgetCatalogId::TagInput => "标签输入框 多标签编辑 tag input",
+        WidgetCatalogId::TaskHud => "后台任务浮窗 烘焙进度栈 task hud",
+        WidgetCatalogId::TerminalView => "终端控制台 日志视图 terminal view",
+        WidgetCatalogId::TextArea => "多行文本域 文本编辑 text area",
+        WidgetCatalogId::TextInput => "单行输入框 只读复制框 重命名文本 text input",
+        WidgetCatalogId::TimePicker => "时间选择器 时分秒 time picker",
+        WidgetCatalogId::Timeline => "时间轴 事件流 timeline",
+        WidgetCatalogId::TimelineTrack => "关键帧轨道 动画时间线 timeline track",
+        WidgetCatalogId::Toast => "轻量吐司通知 浮动提示 toast",
+        WidgetCatalogId::ToggleButton => "双态切换按钮 按下锁定 toggle button",
+        WidgetCatalogId::Toolbar => "工具栏 按钮条 toolbar",
+        WidgetCatalogId::Tooltip => "文字提示气泡 窗口防溢出 tooltip",
+        WidgetCatalogId::Tour => "漫游引导 新手聚光灯 tour",
+        WidgetCatalogId::Transfer => "穿梭框 双栏列表转移 transfer",
+        WidgetCatalogId::TreeTable => "树形表格 层级数据表 tree table",
+        WidgetCatalogId::TreeView => "树形视图 目录树 重命名文件 tree view",
+        WidgetCatalogId::VirtualMasonry => "虚拟化瀑布流 大规模缩略图 virtual masonry",
+        WidgetCatalogId::VirtualViews => "变高虚拟列表 可重排列表 virtual views",
+        WidgetCatalogId::Watermark => "安全水印 平铺背景 watermark",
+        WidgetCatalogId::Wrap => "自动换行流式布局 wrap",
+    }
 }
 
 /// 返回组件在 `COMPONENT_EXAMPLES` 中的卡片索引。

@@ -323,6 +323,35 @@ fn line(rect: Rect, color: Token, z: u16) -> GpuPrimitiveInstance {
     )
 }
 
+/// 拖拽重排序列表状态机。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReorderableListState<T> {
+    pub items: Vec<T>,
+    pub dragging_idx: Option<usize>,
+    pub drop_target_idx: Option<usize>,
+}
+
+impl<T> ReorderableListState<T> {
+    #[must_use]
+    pub fn new(items: Vec<T>) -> Self {
+        Self {
+            items,
+            dragging_idx: None,
+            drop_target_idx: None,
+        }
+    }
+
+    /// 将索引 `from` 处的元素移动到索引 `to` 处。
+    pub fn move_item(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.items.len() || to >= self.items.len() || from == to {
+            return false;
+        }
+        let item = self.items.remove(from);
+        self.items.insert(to, item);
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -787,6 +787,46 @@ pub fn scrollbar_thumb_primitive(
     primitive
 }
 
+/// 临界阻尼平滑滚轮插值器。
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct SmoothWheelHandler {
+    pub current: f32,
+    pub target: f32,
+    pub velocity: f32,
+}
+
+impl SmoothWheelHandler {
+    #[must_use]
+    pub const fn new(initial: f32) -> Self {
+        Self {
+            current: initial,
+            target: initial,
+            velocity: 0.0,
+        }
+    }
+
+    /// 注入滚轮脉冲并钳制在 `[min, max]` 范围内。
+    pub fn push_wheel_delta(&mut self, delta: f32, min: f32, max: f32) {
+        self.target = (self.target + delta).clamp(min, max);
+    }
+
+    /// 推进单帧阻尼弹簧步进（返回是否仍在运动）。
+    pub fn tick(&mut self, dt: f32) -> bool {
+        let diff = self.target - self.current;
+        if diff.abs() < 0.05 && self.velocity.abs() < 0.05 {
+            self.current = self.target;
+            self.velocity = 0.0;
+            return false;
+        }
+        let omega = 22.0_f32;
+        let step = dt.clamp(0.001, 0.05);
+        let accel = omega * omega * diff - 2.0 * omega * self.velocity;
+        self.velocity += accel * step;
+        self.current += self.velocity * step;
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

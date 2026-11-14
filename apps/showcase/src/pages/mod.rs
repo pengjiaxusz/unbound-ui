@@ -68,7 +68,7 @@ impl CategoryId {
             Self::Collections => "Collections",
             Self::Canvas => "Infinite Canvas",
             Self::Motion => "Motion, A11y & Telemetry",
-            Self::Components => "Components (99)",
+            Self::Components => "Components (106)",
             Self::System => "Engine Systems",
         }
     }
@@ -277,21 +277,50 @@ impl PageId {
         }
     }
 
-    /// 不区分大小写的目录搜索。
+    /// 支持中英文子串、全拼、双拼（默认小鹤双拼）及首字母缩写的页面搜索。
     #[must_use]
     pub fn matches(self, query: &str) -> bool {
         let info = self.info();
+        let zh_keywords = match self {
+            Self::Home => "首页 概览 欢迎 主页",
+            Self::Colors => "色彩 主题 调色盘 品牌色",
+            Self::Typography => "排版 字阶 行高 字体",
+            Self::Fonts => "多语言 字体塑形 双向文本 曲线",
+            Self::Elevation => "阴影 层级 裁剪 圆角",
+            Self::Vector => "矢量图形 路径 描边 图标",
+            Self::Buttons => "按钮 交互状态 焦点环",
+            Self::Toggles => "开关 复选框 单选 分段器",
+            Self::Sliders => "滑块 进度条 磁吸 区间",
+            Self::TextField => "文本输入框 选区 输入法 拼音双拼检索",
+            Self::Flex => "弹性布局 盒模型 网格",
+            Self::Overlays => "浮层 模态框 抽屉 提示框",
+            Self::DragDrop => "拖拽 拖放 列表排序",
+            Self::ListView => "虚拟列表 大数据滚动",
+            Self::Assets => "资产网格 缩略图 材质球 着色器",
+            Self::Viewport => "无限画布 视口 四叉树",
+            Self::Marquee => "框选 对齐吸附",
+            Self::Undo => "撤销 重做 历史栈",
+            Self::Springs => "弹簧动画 缓动物理",
+            Self::A11y => "无障碍 语义树 焦点顺序",
+            Self::Telemetry => "性能遥测 帧耗时 显存监控",
+            Self::Settings => "设置 关于 双拼方案 小鹤双拼 帧率上限",
+            Self::Components => "组件展厅 全部标准组件 目录",
+            Self::Systems => "引擎子系统 架构全景 渲染管线",
+        };
         let haystack = format!(
-            "{} {} {} {} {} {}",
+            "{} {} {} {} {} {} {}",
             info.title,
             info.nav_label(),
             info.description,
             info.keywords,
             info.crates.join(" "),
-            self.category().label()
-        )
-        .to_lowercase();
-        query.split_whitespace().all(|term| haystack.contains(term))
+            self.category().label(),
+            zh_keywords
+        );
+        let matcher = unbound_text::PinyinMatcher::new();
+        query
+            .split_whitespace()
+            .all(|term| matcher.match_text(&haystack, term).is_some())
     }
 }
 
@@ -489,6 +518,8 @@ pub enum DemoKind {
     TextField {
         selection: bool,
     },
+    /// 全量汉字全拼 + 6 套双拼 + 首字母实时检索与高亮区间沙盒。
+    PinyinSandbox,
     Flex {
         box_model: bool,
     },
@@ -517,6 +548,8 @@ pub enum DemoKind {
         graph: bool,
     },
     About,
+    /// 拼音与多方案双拼（默认小鹤双拼）运行时切换与实时检索沙盒。
+    PinyinEngine,
     /// 引擎核心子系统架构全景与流水线舞台。
     Systems {
         mode: u8,
@@ -638,6 +671,7 @@ pub fn render_demo(ctx: &mut DemoCtx<'_, '_>, demo: DemoKind) {
         DemoKind::Selection { segmented } => input::selection(ctx, segmented),
         DemoKind::Sliders { progress } => input::sliders(ctx, progress),
         DemoKind::TextField { selection } => input::text_field(ctx, selection),
+        DemoKind::PinyinSandbox => input::pinyin_sandbox(ctx),
         DemoKind::Flex { box_model } => layout::flex(ctx, box_model),
         DemoKind::Overlays { tooltips } => layout::overlays(ctx, tooltips),
         DemoKind::DragDrop => layout::drag_drop(ctx),
@@ -650,6 +684,7 @@ pub fn render_demo(ctx: &mut DemoCtx<'_, '_>, demo: DemoKind) {
         DemoKind::A11y { focus_rings } => motion::a11y(ctx, focus_rings),
         DemoKind::Telemetry { graph } => motion::telemetry(ctx, graph),
         DemoKind::About => motion::about(ctx),
+        DemoKind::PinyinEngine => motion::pinyin_engine(ctx),
         DemoKind::Systems { mode } => systems::systems(ctx, mode),
         DemoKind::Component { id } => components::component(ctx, id),
     }

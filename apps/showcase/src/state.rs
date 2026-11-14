@@ -567,17 +567,18 @@ impl GalleryState {
             .collect()
     }
 
-    /// 同时检索页面目录与 91 个标准组件目录。
+    /// 同时检索页面目录与全部 106 个标准组件目录（支持中英文子串、全拼、多方案双拼与首字母缩写）。
     #[must_use]
     pub fn search_hits(&self) -> Vec<SearchHit> {
-        let query = self.search_query.trim().to_lowercase();
+        let query = self.search_query.trim();
         if query.is_empty() {
             return Vec::new();
         }
         let terms: Vec<&str> = query.split_whitespace().collect();
+        let matcher = unbound_text::PinyinMatcher::new();
         let mut hits = Vec::new();
         for page in PageId::ALL {
-            if page.matches(&query) {
+            if page.matches(query) {
                 hits.push(SearchHit::Page(page));
                 if hits.len() >= 6 {
                     return hits;
@@ -585,10 +586,14 @@ impl GalleryState {
             }
         }
         for &id in WidgetCatalogId::ALL {
-            let label = crate::pages::components::component_nav_label(id).to_lowercase();
-            let mod_name = id.module_name().to_lowercase();
-            let hay = format!("{label} {mod_name} component widget");
-            if terms.iter().all(|term| hay.contains(term)) {
+            let label = crate::pages::components::component_nav_label(id);
+            let mod_name = id.module_name();
+            let keywords = crate::pages::components::component_search_keywords(id);
+            let hay = format!("{label} {mod_name} {keywords} component widget");
+            if terms
+                .iter()
+                .all(|term| matcher.match_text(&hay, term).is_some())
+            {
                 hits.push(SearchHit::Component(id));
                 if hits.len() >= 6 {
                     break;
@@ -688,7 +693,8 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::FileDrop
         | WidgetCatalogId::RichText
         | WidgetCatalogId::Overlay
-        | WidgetCatalogId::Image => {
+        | WidgetCatalogId::Image
+        | WidgetCatalogId::ShortcutBar => {
             let count = sandbox.click_counts.entry(key).or_insert(0);
             *count = count.wrapping_add(1);
             true
@@ -703,7 +709,10 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::Popover
         | WidgetCatalogId::Tooltip
         | WidgetCatalogId::HoverCard
-        | WidgetCatalogId::LoadingOverlay => {
+        | WidgetCatalogId::LoadingOverlay
+        | WidgetCatalogId::AddressBar
+        | WidgetCatalogId::QueryBuilder
+        | WidgetCatalogId::SchemaForm => {
             let on = sandbox.toggles.entry(key).or_insert(false);
             *on = !*on;
             true
@@ -738,7 +747,9 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::TreeView
         | WidgetCatalogId::DatePicker
         | WidgetCatalogId::DateRangePicker
-        | WidgetCatalogId::TimePicker => {
+        | WidgetCatalogId::TimePicker
+        | WidgetCatalogId::GenericDataTable
+        | WidgetCatalogId::PipelineView => {
             let sel = sandbox.selected_indices.entry(key).or_insert(0);
             *sel = (*sel + 1) % 5;
             true
@@ -757,7 +768,8 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::GradientEditor
         | WidgetCatalogId::CurveEditor
         | WidgetCatalogId::NodeGraph
-        | WidgetCatalogId::Gizmo => {
+        | WidgetCatalogId::Gizmo
+        | WidgetCatalogId::TaskHud => {
             let val = sandbox.slider_values.entry(key).or_insert(50.0);
             *val = (*val + 10.0) % 100.0;
             true
@@ -799,6 +811,21 @@ mod search_tests {
             hits.iter()
                 .any(|h| matches!(h, SearchHit::Component(WidgetCatalogId::Accordion))),
             "搜索 Accordion 应命中对应组件卡片: {hits:?}"
+        );
+
+        // 支持中文、全拼、小鹤双拼（如 "dzl" / "ulki"）检索组件
+        state.search_query = "地址栏".to_string();
+        assert!(
+            state
+                .search_hits()
+                .iter()
+                .any(|h| matches!(h, SearchHit::Component(WidgetCatalogId::AddressBar))),
+            "中文搜索 '地址栏' 应命中 AddressBar"
+        );
+        state.search_query = "voseqi".to_string(); // 小鹤双拼 "着色器"
+        assert!(
+            !state.search_hits().is_empty(),
+            "小鹤双拼 'voseqi'（着色器）应命中相关页面或组件"
         );
 
         state.search_query = "Button".to_string();

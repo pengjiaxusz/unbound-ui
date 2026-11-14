@@ -5,7 +5,7 @@
 守卫：`cargo test -p unbound-widgets --test stable_shape --test health --test overlay_placement`
 
 ## 范围
-- [负责] 标准与高阶组件库（`define_widget_catalog!` 统一注册 99 个目录组件）、`ControlState`（24 种状态解析）、`TooltipDesc` 窗口边界防溢出自动定位、`WidgetOutput` 场景发射与帧差分补丁
+- [负责] 标准与高阶组件库（`define_widget_catalog!` 统一注册 106 个目录组件）、`ControlState`（24 种状态解析）、`TooltipDesc` 窗口边界防溢出自动定位、`WidgetOutput` 场景发射与帧差分补丁
 - [不负责] 业务状态持有与异步网络 -> 委托给 `crates/unbound-app/`；底层 Vulkan 渲染 -> 委托给 `crates/unbound-gpu/`
 
 ## 拓扑与流程
@@ -28,13 +28,12 @@
 - [必须] 默认标题栏以 `Dim::px(viewport.x)` 显式铺满视口，且 `TITLE_BAR_DRAG_ID` 挂在覆盖整条栏的绝对定位背景控件上 -> [原因] 应用根容器为 `AUTO`，百分比宽度会退化成内容宽度，使标题与窗口按钮挤在左上角；纯布局容器不在挂载控件表中，窗口运行器读不到其包围盒便无法设定拖拽高度 -> [守卫] `crates/unbound-app/tests/declarative_ergonomics.rs`
 - [必须] 追加 `WidgetOutput` 时重定位全部 `extra_payload_idx` -> [原因] 着色器按全局索引访问 payload 数组，不做偏移换算 -> [守卫] `crates/unbound-widgets/src/lib.rs::payload_indices_are_rebased_for_every_widget`
 - [新增] `title_bar` 模块提供与 Showcase 1:1 一致的 `WindowCaptionButton`（46px 贴边几何图元：像素对齐最小化横线、双图元最大化/还原框、解析交叉关闭线及 `Token::ERROR` 悬停警示），并由 `unbound-app` 的 `ViewBuilder::title_bar_custom` + `TitleBarSlots`（`left` / `center` / `actions`）与 `AppContext::window_maximized` 为所有窗口应用提供统一且可自定义扩展的默认标题栏 -> [位置] `crates/unbound-widgets/src/title_bar.rs`、`crates/unbound-app/src/lib.rs`
-- [新增] `ergonomics` 中全部 16 个声明式适配器与 `WidgetCatalogId` 统一通过 `ViewCtx::shape` 完成全量文本字形排版，并完整闭环指针/键盘状态归约；`catalog::emit_widget_with_shaper` 统一透传 `CatalogParams`（含 `toggled` 与 `click_count`），补齐全部 99 个组件在亮/暗主题与 24 态下的几何与字形渲染 -> [位置] `crates/unbound-widgets/src/{catalog.rs, ergonomics.rs, pin_input.rs}`
+- [新增] `ergonomics` 中全部 16 个声明式适配器与 `WidgetCatalogId` 统一通过 `ViewCtx::shape` 完成全量文本字形排版，并完整闭环指针/键盘状态归约；`catalog::emit_widget_with_shaper` 统一透传 `CatalogParams`（含 `toggled` 与 `click_count`），补齐全部 106 个组件在亮/暗主题与 24 态下的几何与字形渲染 -> [位置] `crates/unbound-widgets/src/{catalog.rs, ergonomics.rs, pin_input.rs}`
 
 
-## 阶段 1 扩展能力（WP4 & WP5：高阶业务复合组件、`SchemaForm` 与 `GenericDataTable`）
+## 组件系统大一统与 106 组件全覆盖门禁
 
-* **高阶业务复合组件库（`unbound_widgets::cha_kit`）**：新增 `AddressBar`（面包屑/全路径双模切换）、`FilterPopupState`、`QueryBuilder`（`AND`/`OR` 可视化规则树）、`ShortcutBar` & `KeybindingManagerState`（冲突检测）、`PipelineView`（Pass 耗时条）、`TaskHud`（后台任务栈）、`SnapSlider`（磁吸刻度）、`RangeSlider`（双滑块区间）、`ReadOnlyCopyInput`（一键复制只读框）、`ReorderableListState`、`ThemeSettingsState`、`DraggableModalState` 与 `SmoothWheelHandler`，全部严格遵守 24 态 `Stable Shape` 恒定图元契约。
-* **声明式 `SchemaForm` 与 `GenericDataTable`（`unbound_widgets::schema_kit`）**：
-  * `SchemaForm` 支持布尔开关、带单位数值、必填校验文本、文件扩展名路径、枚举下拉、颜色、三维向量与只读字段，内置跨字段条件启用（`enabled_when_field`）、脏字段追踪与一键重置默认值；
-  * `GenericDataTable` 支持多列升序/降序切换、列宽拖拽钳制、Pinyin/子串实时过滤、键盘行焦点导航与底部汇总行（Summary Footer）。
-* **模块边界与构建门禁**：`cha_kit` / `schema_kit` 是复合组件工具包，只提供状态机、描述符与 `emit_*` 构建块，由应用与展厅按需组合，不对应 `WidgetCatalogId` 的独立展示变体；因此与 `title_bar` 一样按基础设施模块列入 `build.rs` 白名单，豁免「展示目录宏声明」与 `catalog.rs` 的 `Desc` / `emit_*` 覆盖门禁，但仍强制 `lib.rs` 顶层 `pub use` 重导出 -> [原因] 纳入穷举目录会迫使为每个工具包组件伪造展示分支 -> [守卫] `crates/unbound-widgets/build.rs`
+* **消除多维度组件包，统一单一组件目录（`WidgetCatalogId::COUNT = 106`）**：
+  * 彻底移除原 `cha_kit` 与 `schema_kit` 独立工具包模块及 `build.rs` 中的 `TOOLKIT_MODS` 白名单豁免；
+  * **重复能力归并入标准组件**：原磁吸滑块（`SnapSlider`）与双滑块区间（`RangeSlider`）统一收敛进 `slider::SliderDesc`（`with_snap_points` / `with_range_start`）；原只读复制框（`ReadOnlyCopyInput`）统一收敛进 `text_input::TextInputDesc`（`read_only(true).copyable(true)`）；`DraggableModalState` 并入 `modal`、`SmoothWheelHandler` 并入 `scroll`、`ReorderableListState` 并入 `virtual_views`、`ThemeSettingsState` 并入 `color_picker`；
+  * **7 款高阶复合组件转正为一等公民**：`address_bar`（`AddressBar`）、`generic_data_table`（`GenericDataTable`）、`pipeline_view`（`PipelineView`）、`query_builder`（`QueryBuilder`）、`schema_form`（`SchemaForm`）、`shortcut_bar`（`ShortcutBar`）、`task_hud`（`TaskHud`）全部纳入 `define_widget_catalog!`、`catalog::emit_widget`、`UiWidget` 声明式挂载、`tests/stable_shape.rs` 24 态探针与 `apps/showcase` 组件展厅。

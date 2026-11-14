@@ -5,7 +5,7 @@
 守卫：`cargo test -p showcase` / `just showcase -- --shot /tmp/out.png`
 
 ## 范围
-- [负责] 自举式 UI 组件与引擎架构展台（8 大导航分类、24 页示例卡、侧边栏全部 99 个 `WidgetCatalogId` 组件直达导航、`PageId::Systems` 全部 21 个核心引擎子系统架构全景页、Knob 实时调参、代码/A11y/文档面板、搜索与 HUD、`Ctrl+N` 多窗口）、无头出图及 `gallery` KPI 压测入口
+- [负责] 自举式 UI 组件与引擎架构展台（8 大导航分类、24 页示例卡、侧边栏全部 106 个 `WidgetCatalogId` 组件直达导航、`PageId::Systems` 全部 21 个核心引擎子系统架构全景页、Knob 实时调参、代码/A11y/文档面板、搜索与 HUD、`Ctrl+N` 多窗口）、无头出图及 `gallery` KPI 压测入口
 - [不负责] 通用框架运行时能力 -> 委托给 `crates/unbound-app/` 与 `crates/unbound-widgets/`
 
 ## 拓扑与流程
@@ -13,7 +13,7 @@
 - 侧边栏平滑折叠/展开：侧边栏宽度由临界阻尼弹簧 `Spring::critically_damped(420.0, NAV_EXPANDED).with_rest_thresholds(0.25, 2.0)` 驱动并在布局求解前对齐至物理像素网格；`draw_nav`、`nav_rows` 与 `nav_height` 统一使用 `NAV_COLLAPSE_THRESHOLD = 140.0`，折叠态图标按钮采用固定宽度（`NAV_COLLAPSED - 28.0 = 40.0`）与固定水平中心点（`x = 34.0`），并开启 `layout.nav` 裁剪作用域，彻底消除折叠与展开过程中的弹簧过冲反弹和图标水平位移抖动
 - 页面、组件与子系统三级编译期完备性门禁：
   1. **页面全覆盖门禁**：`pages/mod.rs` 与 `shell.rs` 的编译期 `const` 断言强制校验 `PageId::ALL`（24 页）中的每一个页面均在侧边栏分类树（`PageId::Home` + `CategoryId::ALL`）中精确出现一次
-  2. **99 组件全覆盖与侧边栏直达门禁**：`pages/components.rs` 通过 `define_showcase_components!` 从单一组件列表同时生成 `COMPONENT_EXAMPLES`、`SIDEBAR_COMPONENT_IDS`、`component_nav_label`、`component_card_index`、`component_scroll_offset` 与 `showcase_entry_for_widget` 穷举映射；侧边栏在 `CategoryId::Components` 下为全部 99 个组件生成 `Target::NavComponent(u8)` 导航项，点击即可跳转并自动滚动至对应组件卡片
+  2. **106 组件全覆盖与侧边栏直达门禁**：`pages/components.rs` 通过 `define_showcase_components!` 从单一组件列表同时生成 `COMPONENT_EXAMPLES`、`SIDEBAR_COMPONENT_IDS`、`component_nav_label`、`component_card_index`、`component_scroll_offset` 与 `showcase_entry_for_widget` 穷举映射；侧边栏在 `CategoryId::Components` 下为全部 106 个组件生成 `Target::NavComponent(u8)` 导航项，点击即可跳转并自动滚动至对应组件卡片
   3. **21 引擎子系统全景页门禁**：`pages/systems.rs` 定义 `SubsystemId`（覆盖工作区全部 21 个核心 crate 子系统），通过 `#[deny(unreachable_patterns)]` 与编译期 `const` 断言确保无任何子系统遗漏，并提供交互式子系统矩阵卡片、端到端帧管线时序舞台与编译期契约验证舞台
 - 文档联动：`PageInfo::docs` 与 `SubsystemMeta::doc_path` 指向 `docs/architecture/<module>.md`，供展台侧边栏跳转查阅
 

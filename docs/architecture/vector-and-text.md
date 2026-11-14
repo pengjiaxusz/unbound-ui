@@ -23,5 +23,9 @@
 
 ## 阶段 1 扩展能力（WP3：中英文拼音检索引擎与矢量图标库）
 
-* **零分配友好的拼音与首字母检索引擎（`unbound_text::PinyinMatcher`）**：支持直接子串、全拼、首字母缩写及常见多音字（如 `重`/`调`/`行`/`长`/`藏`）匹配，并返回综合得分与合并后的字符高亮区间 `Vec<(usize, usize)>`。
+* **全字库全拼 + 6 套双拼 + 全拼/双拼首字母运行时可调检索引擎（`unbound_text::PinyinMatcher`）**：
+  * **全量字库覆盖**：通过编译期生成的 `u16` 静态音节索引表（`pinyin_data.rs`）以 `O(1)` 零堆分配覆盖全部 20,992 个 Unicode CJK 基本汉字（`U+4E00..=U+9FFF`）、6,592 个扩展 A 区汉字（`U+3400..=U+4DBF`）、`〇`（`U+3007`）及 200+ 常见多音字全读音表（`CJK_POLYPHONES`）；
+  * **四维检索与多双拼方案**：同时支持全拼、双拼、全拼首字母与双拼首字母缩写匹配；内置 6 套主流双拼方案（`ShuangpinScheme::{Xiaohe, Natural, Microsoft, Sogou, Ziguang, SmartAbc}`），**默认开启小鹤双拼（`ShuangpinScheme::Xiaohe`）**；
+  * **运行时动态调整**：支持通过 `set_global_shuangpin_scheme` / `set_global_pinyin_config` 全局原子无锁切换，或通过 `PinyinMatcher::with_config` / `set_scheme` 实例级调整，并返回综合得分与合并后的字符高亮区间 `Vec<(usize, usize)>`；
+  * **英文误命中抑制**：大小写不敏感的直接子串匹配优先级最高；离散子序列首字母缩写仅在至少一次命中来自汉字读音首字母时才成立，且英文直接命中只取词首字母，因此 `Accordion` 之类的纯英文单词不会被逐字母拆成「缩写」而误命中任意长英文文本，中英文混合查询仍可跨分隔符命中。
 * **内置 Material 矢量图标与 22 类文件图标（`unbound_vector::icons`）**：`MaterialIcon`（32 款核心 UI/调试器图标）与 `FileTypeIcon`（覆盖 `KTX2`、`DDS`、`OBJ`、`FBX`、`GLTF`、`HLSL`、`GLSL`、`SPIRV`、`RDC` 等 22 类专业资产扩展名）均以 `24×24` 规范 SVG 路径定义，直接由 `parse_svg_path` 编译为 GPU 解析曲线。

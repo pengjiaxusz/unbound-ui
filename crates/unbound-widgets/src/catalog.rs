@@ -21,30 +21,36 @@ use unbound_theme::Token;
 use unbound_world::virtualize::TreeRow;
 
 use crate::{
-    layout_form, layout_tags, parse_markdown, AccordionDesc, AccordionSection, AccordionState,
-    AccordionTokens, AlertDesc, AlertDialogDesc, AspectRatioBoxDesc, AvatarDesc, AvatarGroupDesc,
+    emit_address_bar, emit_generic_data_table, emit_pipeline_view, emit_query_builder,
+    emit_schema_form, emit_shortcut_bar, emit_task_hud, layout_form, layout_tags, parse_markdown,
+    AccordionDesc, AccordionSection, AccordionState, AccordionTokens, AddressBarDesc,
+    AddressBarState, AlertDesc, AlertDialogDesc, AspectRatioBoxDesc, AvatarDesc, AvatarGroupDesc,
     BadgeDesc, BreadcrumbDesc, BreadcrumbState, BreadcrumbTokens, ButtonDesc, CalendarState,
     CanvasToolbarDesc, CanvasToolbarState, CardDesc, CardTokens, ChartDesc, ChartSeries,
     ChartState, CheckboxDesc, CheckboxTokens, ChipDesc, CodeBlockDesc, CodeBlockState,
     ColorPickerDesc, ColorPickerState, ColumnSpec, ComboItem, ComboboxDesc, ComboboxState, Command,
     CommandPaletteDesc, CommandPaletteState, CommandPaletteTokens, ContextMenuState, ControlState,
-    Crumb, CurveEditorDesc, CurveEditorState, DatePickerDesc, DividerDesc, DividerTokens, DockTab,
-    DockTokens, DockTree, DrawerDesc, DrawerSide, DrawerState, EmptyStateDesc, FileDropDesc,
-    FileDropState, FormDesc, FormField, FormFieldDesc, GizmoDesc, GradientEditorState,
-    GraphNodeDesc, GraphWire, HoverCardDesc, IconDesc, ImageAssetResolver, ImageDesc,
-    LoadingOverlayDesc, MenuBarDesc, MenuBarItem, MenuBarState, MenuBarTokens, MenuDesc, MenuItem,
-    MenuState, MinimapDesc, MinimapItem, MinimapState, ModalDesc, NaiveDate, NinePatchDesc,
-    NodeGraphState, NumberInputDesc, NumberInputState, PinSpec, PointerPhase, PopoverDesc,
-    Presence, ProgressDesc, ProgressState, PropertyDesc, PropertyGridDesc, PropertyGridState,
-    PropertySection, PropertyValue, RadioDesc, RadioGroupDesc, RadioTokens, ResolvedImage,
-    RichTextDesc, RulerDesc, RulerState, ScrollState, ScrollViewDesc, SegmentedDesc,
-    SegmentedTokens, SelectDesc, SelectState, SelectionMode, Severity, SkeletonDesc, SkeletonState,
+    Crumb, CurveEditorDesc, CurveEditorState, DataColumnSpec, DatePickerDesc, DividerDesc,
+    DividerTokens, DockTab, DockTokens, DockTree, DrawerDesc, DrawerSide, DrawerState,
+    EmptyStateDesc, FileDropDesc, FileDropState, FormDesc, FormField, FormFieldDesc,
+    GenericDataTableDesc, GenericDataTableState, GizmoDesc, GradientEditorState, GraphNodeDesc,
+    GraphWire, HoverCardDesc, IconDesc, ImageAssetResolver, ImageDesc, LoadingOverlayDesc,
+    MenuBarDesc, MenuBarItem, MenuBarState, MenuBarTokens, MenuDesc, MenuItem, MenuState,
+    MinimapDesc, MinimapItem, MinimapState, ModalDesc, NaiveDate, NinePatchDesc, NodeGraphState,
+    NumberInputDesc, NumberInputState, PinSpec, PipelineStageItem, PipelineViewDesc, PointerPhase,
+    PopoverDesc, Presence, ProgressDesc, ProgressState, PropertyDesc, PropertyGridDesc,
+    PropertyGridState, PropertySection, PropertyValue, QueryBuilderDesc, QueryCombinator,
+    QueryRule, RadioDesc, RadioGroupDesc, RadioTokens, ResolvedImage, RichTextDesc, RulerDesc,
+    RulerState, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc, SchemaFormState, SchemaValue,
+    ScrollState, ScrollViewDesc, SegmentedDesc, SegmentedTokens, SelectDesc, SelectState,
+    SelectionMode, Severity, ShortcutBarDesc, ShortcutEntry, SkeletonDesc, SkeletonState,
     SliderDesc, SliderTokens, SplitPaneDesc, SplitPaneState, SplitPaneTokens, StackDesc,
     StatusBarDesc, SwitchDesc, SwitchTokens, TableDesc, TableState, TabsDesc, TabsState,
-    TabsTokens, TagInputDesc, TagInputState, TextAreaDesc, TextAreaState, TextAreaVisual,
-    TextEditState, TextInputDesc, TextInputVisual, ToastEntry, ToolbarDesc, ToolbarItem,
-    ToolbarState, ToolbarTokens, TooltipDesc, TreeViewDesc, TreeViewRow, TreeViewTokens,
-    VirtualRowTokens, WidgetCatalogId, WidgetOutput, WidgetShowcaseWitness, WrapDesc,
+    TabsTokens, TagInputDesc, TagInputState, TaskActivityItem, TaskHudDesc, TextAreaDesc,
+    TextAreaState, TextAreaVisual, TextEditState, TextInputDesc, TextInputVisual, ToastEntry,
+    ToolbarDesc, ToolbarItem, ToolbarState, ToolbarTokens, TooltipDesc, TreeViewDesc, TreeViewRow,
+    TreeViewTokens, VirtualRowTokens, WidgetCatalogId, WidgetOutput, WidgetShowcaseWitness,
+    WrapDesc,
 };
 
 struct ProbeImageResolver;
@@ -365,7 +371,7 @@ where
                 1 => (
                     Severity::Success,
                     "Build succeeded",
-                    "All 99 components compiled with zero warnings.",
+                    "All 106 components compiled with zero warnings.",
                 ),
                 2 => (
                     Severity::Warning,
@@ -2781,6 +2787,267 @@ where
                 12.5,
             ));
             crate::terminal_view::emit_terminal_view_with_glyphs(node, &desc, &s, state, &glyphs)
+        }
+        WidgetCatalogId::AddressBar => {
+            let ab_r = Rect::new(o.x, o.y, rect.size.x.min(360.0), 34.0);
+            let segments = vec![
+                "Workspace".to_owned(),
+                "Assets".to_owned(),
+                "Shaders".to_owned(),
+            ];
+            let desc = AddressBarDesc::new(ab_r, segments);
+            let mut ab_state = AddressBarState::new();
+            ab_state.editing = params.toggled;
+            let mut glyphs = Vec::new();
+            let mut sx = ab_r.origin.x + 118.0;
+            for seg in &desc.segments {
+                let w = (seg.chars().count() as f32 * 7.5 + 16.0).clamp(36.0, 140.0);
+                let seg_r = Rect::new(sx, ab_r.origin.y + 4.0, w, (ab_r.size.y - 8.0).max(16.0));
+                glyphs.extend(shape_centered(&mut shape, seg, seg_r, 12.0));
+                sx += w + 6.0;
+            }
+            emit_address_bar(node, &desc, &ab_state, state, &glyphs)
+        }
+        WidgetCatalogId::GenericDataTable => {
+            let dt_r = Rect::new(o.x, o.y, rect.size.x, 156.0);
+            let cols = vec![
+                DataColumnSpec::new("asset", "Asset Name", (dt_r.size.x * 0.45).max(96.0)),
+                DataColumnSpec::new("format", "Format", (dt_r.size.x * 0.25).max(60.0)),
+                DataColumnSpec::new("size", "VRAM", (dt_r.size.x * 0.28).max(64.0)),
+            ];
+            let desc = GenericDataTableDesc::new(dt_r, cols, 3);
+            let mut dt_state = GenericDataTableState::new();
+            dt_state.selected_rows = vec![variant_idx % 3];
+            let mut glyphs = Vec::new();
+            let mut hx = dt_r.origin.x + 10.0;
+            for col in &desc.columns {
+                let hr = Rect::new(hx, dt_r.origin.y + 2.0, col.width - 12.0, 28.0);
+                glyphs.extend(shape_centered_y(&mut shape, &col.title, hr, hx, 12.0));
+                hx += col.width;
+            }
+            let sample_rows = [
+                ["着色器_Uber.spv", "SPIR-V", "128 KB"],
+                ["材质球_PBR.mat", "Material", "64 KB"],
+                ["环境光照贴图.ktx2", "BC6H", "4.2 MB"],
+            ];
+            for (r_idx, row) in sample_rows.iter().enumerate() {
+                let ry = dt_r.origin.y + 33.0 + r_idx as f32 * desc.row_height;
+                let mut cx = dt_r.origin.x + 10.0;
+                for (c_idx, cell_txt) in row.iter().enumerate() {
+                    let cw = desc.columns[c_idx].width;
+                    let cr = Rect::new(cx, ry, cw - 12.0, desc.row_height);
+                    glyphs.extend(shape_centered_y(&mut shape, cell_txt, cr, cx, 11.5));
+                    cx += cw;
+                }
+            }
+            let footer_r = Rect::new(
+                dt_r.origin.x + 10.0,
+                dt_r.max().y - 26.0,
+                dt_r.size.x - 20.0,
+                24.0,
+            );
+            glyphs.extend(shape_centered_y(
+                &mut shape,
+                "3 items · Pinyin & Xiaohe Shuangpin Ready",
+                footer_r,
+                footer_r.origin.x,
+                11.0,
+            ));
+            emit_generic_data_table(node, &desc, &dt_state, state, &glyphs)
+        }
+        WidgetCatalogId::PipelineView => {
+            let pv_r = Rect::new(o.x, o.y, rect.size.x, 76.0);
+            let active_idx = variant_idx % 3;
+            let stages = vec![
+                PipelineStageItem::new("Cull", 0.14, active_idx == 0),
+                PipelineStageItem::new("Uber Pass", 0.48 + value_norm * 0.4, active_idx == 1),
+                PipelineStageItem::new("Present", 0.12, active_idx == 2),
+            ];
+            let desc = PipelineViewDesc::new(pv_r, stages);
+            let count = desc.stages.len() as f32;
+            let gap = 8.0;
+            let stage_w = ((pv_r.size.x - 24.0 - (count - 1.0) * gap) / count).max(32.0);
+            let mut glyphs = Vec::new();
+            for (idx, stg) in desc.stages.iter().enumerate() {
+                let sx = pv_r.origin.x + 12.0 + idx as f32 * (stage_w + gap);
+                let label_r = Rect::new(sx + 8.0, pv_r.origin.y + 16.0, stage_w - 16.0, 20.0);
+                let txt = format!("{} ({:.2}ms)", stg.name, stg.duration_ms);
+                glyphs.extend(shape_centered_y(&mut shape, &txt, label_r, sx + 8.0, 11.5));
+            }
+            emit_pipeline_view(node, &desc, state, &glyphs)
+        }
+        WidgetCatalogId::QueryBuilder => {
+            let qb_r = Rect::new(o.x, o.y, rect.size.x, 120.0);
+            let comb = if params.toggled || variant_idx % 2 == 1 {
+                QueryCombinator::Or
+            } else {
+                QueryCombinator::And
+            };
+            let rules = vec![
+                QueryRule::new("tag", "contains", "材质球"),
+                QueryRule::new("vram_mb", "<=", "16.0"),
+            ];
+            let desc = QueryBuilderDesc::new(qb_r, comb, rules);
+            let comb_r = Rect::new(qb_r.origin.x + 12.0, qb_r.origin.y + 10.0, 56.0, 24.0);
+            let comb_txt = match comb {
+                QueryCombinator::And => "AND",
+                QueryCombinator::Or => "OR",
+            };
+            let mut glyphs = shape_centered(&mut shape, comb_txt, comb_r, 11.5);
+            for (idx, rule) in desc.rules.iter().enumerate() {
+                let y = qb_r.origin.y + 42.0 + idx as f32 * 34.0;
+                let row_r = Rect::new(qb_r.origin.x + 18.0, y, qb_r.size.x - 36.0, 28.0);
+                glyphs.extend(shape_centered_y(
+                    &mut shape,
+                    &rule.field,
+                    row_r,
+                    row_r.origin.x,
+                    12.0,
+                ));
+                let op_r = Rect::new(qb_r.origin.x + 108.0, y + 4.0, 48.0, 20.0);
+                glyphs.extend(shape_centered(&mut shape, &rule.operator, op_r, 11.0));
+                glyphs.extend(shape_centered_y(
+                    &mut shape,
+                    &rule.value,
+                    row_r,
+                    qb_r.origin.x + 168.0,
+                    12.0,
+                ));
+            }
+            emit_query_builder(node, &desc, state, &glyphs)
+        }
+        WidgetCatalogId::SchemaForm => {
+            let sf_r = Rect::new(o.x, o.y, rect.size.x, 120.0);
+            let fields = vec![
+                SchemaFieldSpec::new(
+                    "shuangpin",
+                    "双拼方案 (Scheme)",
+                    "Input",
+                    SchemaFieldKind::Select {
+                        options: vec!["小鹤双拼".into(), "自然码".into(), "微软双拼".into()],
+                    },
+                    SchemaValue::EnumIndex(0),
+                ),
+                SchemaFieldSpec::new(
+                    "auto_capture",
+                    "自动帧捕获",
+                    "Capture",
+                    SchemaFieldKind::Switch,
+                    SchemaValue::Bool(true),
+                ),
+                SchemaFieldSpec::new(
+                    "frame_budget",
+                    "帧预算上限",
+                    "Capture",
+                    SchemaFieldKind::Number {
+                        min: 1.0,
+                        max: 33.3,
+                        step: 0.1,
+                        unit: "ms",
+                    },
+                    SchemaValue::Number(8.0 + f64::from(value_norm) * 8.6),
+                )
+                .enabled_when("auto_capture"),
+            ];
+            let desc = SchemaFormDesc::new(sf_r, fields.clone());
+            let mut sf_state = SchemaFormState::from_schema(&fields);
+            if params.toggled {
+                sf_state.set("shuangpin", SchemaValue::EnumIndex(1));
+            }
+            let label_col_w = (sf_r.size.x * 0.36).clamp(90.0, 180.0);
+            let mut glyphs = Vec::new();
+            let values_preview = ["小鹤双拼 (Xiaohe)", "Enabled", "16.6 ms"];
+            for (idx, field) in desc.fields.iter().enumerate() {
+                let y = sf_r.origin.y + 10.0 + idx as f32 * desc.row_height;
+                let row_r = Rect::new(
+                    sf_r.origin.x + 18.0,
+                    y,
+                    label_col_w - 14.0,
+                    desc.row_height - 4.0,
+                );
+                glyphs.extend(shape_centered_y(
+                    &mut shape,
+                    &field.label,
+                    row_r,
+                    row_r.origin.x,
+                    12.0,
+                ));
+                let val_x = sf_r.origin.x + 16.0 + label_col_w;
+                let val_r = Rect::new(
+                    val_x,
+                    y,
+                    sf_r.size.x - label_col_w - 28.0,
+                    desc.row_height - 4.0,
+                );
+                glyphs.extend(shape_centered_y(
+                    &mut shape,
+                    values_preview[idx],
+                    val_r,
+                    val_x,
+                    12.0,
+                ));
+            }
+            emit_schema_form(node, &desc, &sf_state, state, &glyphs)
+        }
+        WidgetCatalogId::ShortcutBar => {
+            let sb_r = Rect::new(o.x, o.y, rect.size.x, 34.0);
+            let entries = vec![
+                ShortcutEntry::new("search", "Search", "Ctrl+K"),
+                ShortcutEntry::new("capture", "Capture", "F11"),
+                ShortcutEntry::new("inspect", "Inspector", "F12"),
+            ];
+            let desc = ShortcutBarDesc::new(sb_r, entries);
+            let mut glyphs = Vec::new();
+            let mut x = sb_r.origin.x + 10.0;
+            for entry in &desc.entries {
+                let keycap_w = (entry.chord.len() as f32 * 7.0 + 12.0).max(24.0);
+                let keycap_r = Rect::new(
+                    x,
+                    sb_r.origin.y + 4.0,
+                    keycap_w,
+                    (sb_r.size.y - 8.0).max(16.0),
+                );
+                glyphs.extend(shape_centered(&mut shape, &entry.chord, keycap_r, 11.0));
+                let lbl_x = x + keycap_w + 6.0;
+                let lbl_r = Rect::new(
+                    lbl_x,
+                    sb_r.origin.y + 4.0,
+                    80.0,
+                    (sb_r.size.y - 8.0).max(16.0),
+                );
+                glyphs.extend(shape_centered_y(
+                    &mut shape,
+                    &entry.label,
+                    lbl_r,
+                    lbl_x,
+                    11.5,
+                ));
+                x += keycap_w + (entry.label.len() as f32 * 7.0) + 20.0;
+            }
+            emit_shortcut_bar(node, &desc, state, &glyphs)
+        }
+        WidgetCatalogId::TaskHud => {
+            let hud_r = Rect::new(o.x, o.y, rect.size.x.min(340.0), 92.0);
+            let p0 = (0.35 + value_norm * 0.55).clamp(0.1, 1.0);
+            let tasks = vec![
+                TaskActivityItem::new(1, "Baking KTX2 mipmaps", p0),
+                TaskActivityItem::new(2, "Indexing 20,992 CJK Pinyin", 1.0),
+            ];
+            let desc = TaskHudDesc::new(hud_r, tasks);
+            let mut glyphs = Vec::new();
+            for (idx, task) in desc.tasks.iter().enumerate() {
+                let y = hud_r.origin.y + 10.0 + idx as f32 * 38.0;
+                let row_r = Rect::new(hud_r.origin.x + 12.0, y, hud_r.size.x - 44.0, 18.0);
+                let txt = format!("{} ({:.0}%)", task.title, task.progress * 100.0);
+                glyphs.extend(shape_centered_y(
+                    &mut shape,
+                    &txt,
+                    row_r,
+                    row_r.origin.x,
+                    11.5,
+                ));
+            }
+            emit_task_hud(node, &desc, state, &glyphs)
         }
     };
     if out.hit.is_none() {

@@ -17,11 +17,9 @@
 // 基础设施模块：场景差分、图元打包辅助工具与默认标题栏描述符。它们没有独立的
 // `emit_*` 发射器，不属于业务组件，因此不纳入展示目录。
 pub mod catalog;
-pub mod cha_kit;
 pub mod diff;
 pub mod ergonomics;
 pub mod primitive;
-pub mod schema_kit;
 pub mod title_bar;
 
 pub use title_bar::{
@@ -72,6 +70,7 @@ macro_rules! define_widget_catalog {
 define_widget_catalog! {
     modules: [
         accordion,
+        address_bar,
         alert,
         alert_dialog,
         autocomplete,
@@ -104,6 +103,7 @@ define_widget_catalog! {
         drawer,
         file_drop,
         form,
+        generic_data_table,
         gizmo,
         hotkey_input,
         hover_card,
@@ -121,17 +121,21 @@ define_widget_catalog! {
         overlay,
         pagination,
         pin_input,
+        pipeline_view,
         popconfirm,
         popover,
         progress,
         property_grid,
+        query_builder,
         radio,
         rating,
         rich_text,
         ruler,
+        schema_form,
         scroll,
         segmented,
         select,
+        shortcut_bar,
         skeleton,
         slider,
         spinner,
@@ -142,6 +146,7 @@ define_widget_catalog! {
         table,
         tabs,
         tag_input,
+        task_hud,
         terminal_view,
         text_area,
         text_input,
@@ -162,6 +167,7 @@ define_widget_catalog! {
     ],
     catalog: [
         Accordion => accordion,
+        AddressBar => address_bar,
         Alert => alert,
         AlertDialog => alert_dialog,
         AspectRatioBox => masonry,
@@ -198,6 +204,7 @@ define_widget_catalog! {
         EmptyState => hover_card,
         FileDrop => file_drop,
         Form => form,
+        GenericDataTable => generic_data_table,
         Gizmo => gizmo,
         GradientEditor => curve_editor,
         HotkeyInput => hotkey_input,
@@ -219,17 +226,21 @@ define_widget_catalog! {
         Overlay => overlay,
         Pagination => pagination,
         PinInput => pin_input,
+        PipelineView => pipeline_view,
         Popconfirm => popconfirm,
         Popover => popover,
         Progress => progress,
         PropertyGrid => property_grid,
+        QueryBuilder => query_builder,
         Radio => radio,
         Rating => rating,
         RichText => rich_text,
         Ruler => ruler,
+        SchemaForm => schema_form,
         Scroll => scroll,
         Segmented => segmented,
         Select => select,
+        ShortcutBar => shortcut_bar,
         Skeleton => skeleton,
         Slider => slider,
         Spinner => spinner,
@@ -242,6 +253,7 @@ define_widget_catalog! {
         Table => table,
         Tabs => tabs,
         TagInput => tag_input,
+        TaskHud => task_hud,
         TerminalView => terminal_view,
         TextArea => text_area,
         TextInput => text_input,
@@ -292,19 +304,21 @@ use unbound_input::{ClipRect, HitRegion, PointerEvent, Router};
 use unbound_math::{f16_to_f32, f32_to_f16, project_rounded_radii, Rect, Vec2};
 use unbound_text::GlyphQuad;
 
-pub use cha_kit::{
-    emit_address_bar, emit_pipeline_view, emit_query_builder, emit_range_slider,
-    emit_readonly_copy_input, emit_shortcut_bar, emit_snap_slider, emit_task_hud, AddressBarDesc,
-    AddressBarState, DraggableModalState, FilterPopupState, KeybindingManagerState,
-    PipelineStageItem, PipelineViewDesc, QueryBuilderDesc, QueryCombinator, QueryRule,
-    RangeSliderDesc, ReadOnlyCopyInputDesc, ReorderableListState, ShortcutBarDesc, ShortcutEntry,
-    SmoothWheelHandler, SnapSliderDesc, TaskActivityItem, TaskHudDesc, ThemeSettingsState,
+pub use address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
+pub use generic_data_table::{
+    emit_generic_data_table, DataColumnSpec, GenericDataTableDesc, GenericDataTableState,
+    SortDirection,
 };
-pub use schema_kit::{
-    emit_generic_data_table, emit_schema_form, DataColumnSpec, GenericDataTableDesc,
-    GenericDataTableState, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc, SchemaFormState,
-    SchemaValue, SortDirection,
+pub use pipeline_view::{emit_pipeline_view, PipelineStageItem, PipelineViewDesc};
+pub use query_builder::{
+    emit_query_builder, FilterPopupState, QueryBuilderDesc, QueryCombinator, QueryRule,
 };
+pub use schema_form::{
+    emit_schema_form, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc, SchemaFormState,
+    SchemaValue,
+};
+pub use shortcut_bar::{emit_shortcut_bar, KeybindingManagerState, ShortcutBarDesc, ShortcutEntry};
+pub use task_hud::{emit_task_hud, TaskActivityItem, TaskHudDesc};
 
 pub use accordion::{
     emit_accordion_body, emit_accordion_header, AccordionDesc, AccordionSection, AccordionState,
@@ -348,7 +362,7 @@ pub use code_editor::{emit_code_editor, CodeEditorDesc, CodeEditorState};
 pub use collapsible::{emit_collapsible, CollapsibleDesc, CollapsibleState};
 pub use color_picker::{
     emit_color_picker, parse_hex, parse_oklch, parse_rgba, ColorFormat, ColorPart, ColorPickerDesc,
-    ColorPickerLayout, ColorPickerState, Hsva,
+    ColorPickerLayout, ColorPickerState, Hsva, ThemeSettingsState,
 };
 pub use combobox::{
     emit_combobox_popup, emit_combobox_trigger, ComboItem, ComboboxDesc, ComboboxKey,
@@ -416,7 +430,7 @@ pub use menubar::{
     MenuBarState, MenuBarTokens,
 };
 pub use minimap::{emit_minimap, MinimapDesc, MinimapItem, MinimapState, MINIMAP_INSET};
-pub use modal::{emit_modal, ModalDesc, ModalOutput, ModalWidget};
+pub use modal::{emit_modal, DraggableModalState, ModalDesc, ModalOutput, ModalWidget};
 pub use multi_split::{emit_multi_split, MultiSplitDesc, MultiSplitState, MULTI_SPLIT_GUTTER_SIZE};
 pub use navigation_rail::{
     emit_navigation_rail, NavRailItem, NavigationRailDesc, NavigationRailState,
@@ -464,7 +478,8 @@ pub use ruler::{
 };
 pub use scroll::{
     emit_scroll_view, update_virtual_list, ScrollAxis, ScrollPointerEvent, ScrollState,
-    ScrollViewDesc, ScrollViewOutput, ScrollViewWidget, ScrollbarAxis, VirtualWindow,
+    ScrollViewDesc, ScrollViewOutput, ScrollViewWidget, ScrollbarAxis, SmoothWheelHandler,
+    VirtualWindow,
 };
 pub use segmented::{SegmentedDesc, SegmentedTokens};
 pub use select::{emit_select, SelectDesc, SelectState, SelectWidget};
@@ -534,7 +549,9 @@ pub use tree_view::{
     emit_tree_background, emit_tree_row, TreeViewDesc, TreeViewRow, TreeViewState, TreeViewTokens,
 };
 pub use virtual_masonry::{emit_virtual_masonry, VirtualMasonryDesc, VirtualMasonryState};
-pub use virtual_views::{emit_virtual_row, VariableVirtualList, VariableWindow, VirtualRowTokens};
+pub use virtual_views::{
+    emit_virtual_row, ReorderableListState, VariableVirtualList, VariableWindow, VirtualRowTokens,
+};
 pub use watermark::{emit_watermark, WatermarkDesc};
 
 /// 无头控件会话渲染使用的默认视口。

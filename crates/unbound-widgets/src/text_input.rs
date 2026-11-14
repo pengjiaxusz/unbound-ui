@@ -151,6 +151,10 @@ pub struct TextInputDesc {
     pub validation: ValidationState,
     /// 非空时显示清除按钮。
     pub clearable: bool,
+    /// 显示尾部一键复制按钮（常用于只读地址/哈希/路径框）。
+    pub copyable: bool,
+    /// 一键复制按钮是否处于“已复制”确认态。
+    pub copied: bool,
     /// 缓冲区最大字节长度。
     pub max_bytes: usize,
     /// 绘制顺序键。
@@ -174,6 +178,8 @@ impl TextInputDesc {
             password: false,
             validation: ValidationState::None,
             clearable: false,
+            copyable: false,
+            copied: false,
             max_bytes: 1 << 20,
             z: 720,
             radius: TEXT_INPUT_RADIUS,
@@ -228,6 +234,27 @@ impl TextInputDesc {
     pub fn clearable(mut self, clearable: bool) -> Self {
         self.clearable = clearable;
         self
+    }
+
+    /// 启用尾部一键复制按钮（常用于只读地址、哈希或路径框）。
+    #[must_use]
+    pub fn copyable(mut self, copyable: bool) -> Self {
+        self.copyable = copyable;
+        self
+    }
+
+    /// 设置“已复制”确认高亮状态。
+    #[must_use]
+    pub fn with_copied(mut self, copied: bool) -> Self {
+        self.copied = copied;
+        self
+    }
+
+    /// 位于尾部的一键复制按钮矩形。
+    #[must_use]
+    pub fn copy_rect(&self) -> Rect {
+        let h = (self.rect.size.y - 8.0).max(16.0);
+        Rect::new(self.rect.max().x - 28.0, self.rect.origin.y + 4.0, 24.0, h)
     }
 
     /// 设置最大字节预算。
@@ -1015,6 +1042,26 @@ pub fn emit_text_input(
             glyph.prim_type_and_flags |= u32::from(unbound_gpu::data::PrimFlags::MSDF.bits()) << 16;
         }
         primitives.push(glyph);
+    }
+
+    if desc.copyable {
+        let btn_r = desc.copy_rect();
+        let btn_fill = if desc.copied {
+            Token::SUCCESS_SOFT
+        } else if !state.disabled && state.phase == crate::PointerPhase::Hovered {
+            Token::CONTROL_HOVER
+        } else {
+            Token::SURFACE_RAISED
+        };
+        primitives.push(outlined(
+            btn_r,
+            4.0,
+            btn_fill,
+            Token::OUTLINE,
+            1.0,
+            0.0,
+            z + 1,
+        ));
     }
 
     primitives.push(focus_ring(

@@ -128,6 +128,10 @@ pub struct SliderDesc {
     pub show_ticks: bool,
     /// 数值提示气泡是否跟随拇指。
     pub show_value_tooltip: bool,
+    /// 磁吸刻度点列表（非空时拖拽或设值在 `snap_tolerance` 范围内自动吸附）。
+    pub snap_points: Vec<f32>,
+    /// 磁吸吸附容差。
+    pub snap_tolerance: f32,
     /// 绘制顺序键。
     pub z: u16,
 }
@@ -149,6 +153,8 @@ impl SliderDesc {
             range_start: None,
             show_ticks: false,
             show_value_tooltip: false,
+            snap_points: Vec::new(),
+            snap_tolerance: (max - min).abs() * 0.03,
             z: 700,
         }
     }
@@ -186,6 +192,35 @@ impl SliderDesc {
     pub fn with_value_tooltip(mut self, show_value_tooltip: bool) -> Self {
         self.show_value_tooltip = show_value_tooltip;
         self
+    }
+
+    /// 配置磁吸刻度点并自动开启刻度显示。
+    #[must_use]
+    pub fn with_snap_points(mut self, snap_points: Vec<f32>) -> Self {
+        self.show_ticks = !snap_points.is_empty() || self.show_ticks;
+        self.snap_points = snap_points;
+        self
+    }
+
+    /// 设置磁吸吸附容差。
+    #[must_use]
+    pub fn with_snap_tolerance(mut self, tolerance: f32) -> Self {
+        self.snap_tolerance = tolerance.max(0.0);
+        self
+    }
+
+    /// 对输入值应用磁吸刻度吸附计算。
+    #[must_use]
+    pub fn snap_value(&self, raw: f32) -> f32 {
+        let lo = self.min.min(self.max);
+        let hi = self.max.max(self.min);
+        let clamped = raw.clamp(lo, hi);
+        for &pt in &self.snap_points {
+            if (clamped - pt).abs() <= self.snap_tolerance {
+                return pt.clamp(lo, hi);
+            }
+        }
+        clamped
     }
 
     /// 将数值归一化到 `[0, 1]`。
@@ -300,6 +335,13 @@ impl SliderDesc {
         if span < f32::EPSILON {
             return Vec::new();
         }
+        if !self.snap_points.is_empty() {
+            return self
+                .snap_points
+                .iter()
+                .map(|&pt| self.ratio_of(pt))
+                .collect();
+        }
         if self.step > 0.0 {
             let count = (span / self.step).round() as usize;
             if (1..=64).contains(&count) {
@@ -381,7 +423,7 @@ pub fn value_from_pointer(pointer: Vec2, desc: &SliderDesc) -> f32 {
     } else {
         raw
     };
-    stepped.clamp(desc.min.min(desc.max), desc.max.max(desc.min))
+    desc.snap_value(stepped)
 }
 
 /// 单次键盘事件将滑块移动到的目标值。

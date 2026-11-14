@@ -21,6 +21,16 @@ use unbound_platform::{
 const WIDTH: f32 = 1280.0;
 const HEIGHT: f32 = 720.0;
 
+/// 并发创建多个 Vulkan 设备会与第三方隐式层（RTSS、截屏兼容层等）冲突，
+/// 触发 `STATUS_ACCESS_VIOLATION`；像素用例通过同一把锁串行执行。
+static GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    GPU_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn has_fill(primitives: &[unbound_gpu::data::GpuPrimitiveInstance], token: u16) -> bool {
     primitives.iter().any(|primitive| {
         primitive.prim_type() == PrimType::RoundedRect
@@ -378,6 +388,7 @@ fn the_keyboard_mapping_matches_the_window_and_can_activate_the_button() {
 
 #[test]
 fn hover_and_press_change_the_rendered_pixels() {
+    let _gpu_guard = gpu_test_guard();
     let Some(gpu) = unbound_gpu::device::test_device() else {
         // 无 Vulkan 设备：测试无法运行，但不得失败。
         return;
@@ -413,6 +424,7 @@ fn hover_and_press_change_the_rendered_pixels() {
 ///
 #[test]
 fn overdrawing_the_same_colour_leaves_no_seam() {
+    let _gpu_guard = gpu_test_guard();
     let Some(gpu) = unbound_gpu::device::test_device() else {
         // 无 Vulkan 设备：测试无法运行，但不得失败。
         return;
@@ -526,6 +538,7 @@ fn upload_atlases(
 ///
 #[test]
 fn a_patched_upload_paints_the_same_pixels_as_a_full_one() {
+    let _gpu_guard = gpu_test_guard();
     let Some(gpu) = unbound_gpu::device::test_device() else {
         // 无 Vulkan 设备：测试无法运行，但不得失败。
         return;
@@ -634,6 +647,7 @@ fn differing_pixels(left: &[u8], right: &[u8]) -> usize {
 
 #[test]
 fn the_gallery_draws_something() {
+    let _gpu_guard = gpu_test_guard();
     let Some(gpu) = unbound_gpu::device::test_device() else {
         // 无 Vulkan 设备：测试无法运行，但不得失败。
         return;

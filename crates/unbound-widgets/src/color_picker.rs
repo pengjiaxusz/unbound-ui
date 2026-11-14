@@ -656,6 +656,41 @@ pub fn emit_color_picker(
     }
 }
 
+/// 主题与品牌强调色设置面板状态（联动 `unbound-theme` 双产品预设与 10 套 OKLCH 强调色）。
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ThemeSettingsState {
+    pub preset: unbound_theme::ProductPreset,
+    pub kind: unbound_theme::ThemeKind,
+    pub accent: unbound_theme::AccentBrand,
+    pub ui_scale: f32,
+}
+
+impl Default for ThemeSettingsState {
+    fn default() -> Self {
+        Self::new(
+            Default::default(),
+            unbound_theme::ThemeKind::Light,
+            Default::default(),
+        )
+    }
+}
+
+impl ThemeSettingsState {
+    #[must_use]
+    pub const fn new(
+        preset: unbound_theme::ProductPreset,
+        kind: unbound_theme::ThemeKind,
+        accent: unbound_theme::AccentBrand,
+    ) -> Self {
+        Self {
+            preset,
+            kind,
+            accent,
+            ui_scale: 1.0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

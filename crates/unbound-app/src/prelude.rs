@@ -20,7 +20,11 @@ pub use unbound_platform::{
     set_tray_icon, show_tray_balloon, FileDialogConfig, FrameHitMetrics, PlatformError,
     TaskbarProgressState, TrayNotificationSeverity, WindowConfig, WindowPlacement, WindowPosition,
 };
-pub use unbound_text::TextStyle;
+pub use unbound_text::{
+    global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,
+    set_global_shuangpin_scheme, PinyinConfig, PinyinMatch, PinyinMatcher, ShuangpinScheme,
+    TextStyle,
+};
 pub use unbound_theme::{ThemeKind, ThemeState, Token};
 pub use unbound_widgets::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 pub use unbound_widgets::{
@@ -30,14 +34,14 @@ pub use unbound_widgets::{
     DraggableModalState, FileDropDesc, FilterPopupState, GenericDataTableDesc,
     GenericDataTableState, KeybindingManagerState, PaginationDesc, PaginationState,
     PipelineStageItem, PipelineViewDesc, Placement, PopconfirmDesc, ProgressDesc, ProgressState,
-    QueryBuilderDesc, QueryCombinator, QueryRule, RangeSliderDesc, ReadOnlyCopyInputDesc,
-    ReorderableListState, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc, SchemaFormState,
-    SchemaValue, SelectDesc, SelectState, Severity, ShortcutBarDesc, ShortcutEntry, SliderDesc,
-    SmoothWheelHandler, SnapSliderDesc, SortDirection, SwitchDesc, TableDesc, TableRow, TableState,
-    TaskActivityItem, TaskHudDesc, TextEditState, TextInputDesc, ThemeSettingsState,
-    TimelineTrackDesc, TimelineTrackState, TitleBarDesc, TooltipDesc, TooltipState, TourDesc,
-    TransferDesc, TransferState, WatermarkDesc, WidgetCatalogId, WidgetOutput, WindowCaptionButton,
-    WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID,
-    TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID,
+    QueryBuilderDesc, QueryCombinator, QueryRule, ReorderableListState, SchemaFieldKind,
+    SchemaFieldSpec, SchemaFormDesc, SchemaFormState, SchemaValue, SelectDesc, SelectState,
+    Severity, ShortcutBarDesc, ShortcutEntry, SliderDesc, SmoothWheelHandler, SortDirection,
+    SwitchDesc, TableDesc, TableRow, TableState, TaskActivityItem, TaskHudDesc, TextEditState,
+    TextInputDesc, ThemeSettingsState, TimelineTrackDesc, TimelineTrackState, TitleBarDesc,
+    TooltipDesc, TooltipState, TourDesc, TransferDesc, TransferState, WatermarkDesc,
+    WidgetCatalogId, WidgetOutput, WindowCaptionButton, WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH,
+    TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID,
+    TITLE_BAR_MINIMIZE_ID,
 };
 pub use unbound_world::NodeId;

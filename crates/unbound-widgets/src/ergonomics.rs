@@ -10,6 +10,7 @@ use unbound_input::KeyName;
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 
+use crate::address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
 use crate::alert::{emit_alert, AlertDesc, Severity};
 use crate::badge::{emit_badge, BadgeDesc};
 use crate::button::{emit_button, ButtonDesc, ButtonSize, ButtonVariant};
@@ -23,17 +24,25 @@ use crate::descriptions::{
     emit_descriptions_with_glyphs, DescriptionsDesc, DescriptionsState, DESCRIPTION_ROW_HEIGHT,
 };
 use crate::divider::{emit_divider, DividerDesc, DividerOrientation, DividerTokens};
+use crate::generic_data_table::{
+    emit_generic_data_table, GenericDataTableDesc, GenericDataTableState,
+};
 use crate::multi_split::{emit_multi_split, MultiSplitDesc, MultiSplitState};
 use crate::pagination::{emit_pagination, PaginationDesc, PaginationState};
+use crate::pipeline_view::{emit_pipeline_view, PipelineViewDesc};
 use crate::popconfirm::{emit_popconfirm, PopconfirmDesc};
 use crate::progress::{emit_progress, ProgressDesc, ProgressState};
+use crate::query_builder::{emit_query_builder, QueryBuilderDesc};
+use crate::schema_form::{emit_schema_form, SchemaFormDesc, SchemaFormState};
 use crate::select::{emit_select_with_glyphs, SelectDesc, SelectState};
+use crate::shortcut_bar::{emit_shortcut_bar, ShortcutBarDesc};
 use crate::slider::{emit_slider, value_from_pointer, Orientation, SliderDesc, SliderTokens};
 use crate::split_button::{
     emit_split_button_with_glyphs, SplitButtonDesc, SplitButtonState, DROPDOWN_WIDTH,
 };
 use crate::switch::{emit_switch, SwitchDesc, SwitchTokens};
 use crate::table::{emit_table, ColumnSpec, TableDesc, TableRow, TableState};
+use crate::task_hud::{emit_task_hud, TaskHudDesc};
 use crate::terminal_view::{
     emit_terminal_view_with_glyphs, TerminalViewDesc, TerminalViewState, TERMINAL_LINE_HEIGHT,
 };
@@ -1965,6 +1974,307 @@ impl UiWidget for TooltipDesc {
             AlignY::Middle,
         );
         desc.render_with_glyphs(node, 0, control, &glyphs).0
+    }
+}
+
+impl UiWidget for AddressBarDesc {
+    type State = AddressBarState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(260.0), self.rect.height().max(34.0))
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let mut glyphs = Vec::new();
+        let mut sx = rect.origin.x + 114.0;
+        for seg in &desc.segments {
+            let w = (seg.chars().count() as f32 * 7.5 + 16.0).clamp(36.0, 140.0);
+            let seg_r = Rect::new(sx, rect.origin.y + 4.0, w, (rect.size.y - 8.0).max(16.0));
+            glyphs.extend(text_ctx.shape_line(
+                seg,
+                seg_r,
+                12.0,
+                400,
+                AlignX::Center,
+                AlignY::Middle,
+            ));
+            sx += w + 6.0;
+        }
+        emit_address_bar(node, &desc, state, control, &glyphs)
+    }
+}
+
+impl UiWidget for QueryBuilderDesc {
+    type State = ();
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let h = 48.0 + self.rules.len().max(1) as f32 * 34.0;
+        Vec2::new(self.rect.width().max(280.0), self.rect.height().max(h))
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        _state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let comb_r = Rect::new(rect.origin.x + 12.0, rect.origin.y + 10.0, 56.0, 24.0);
+        let comb_txt = match desc.combinator {
+            crate::query_builder::QueryCombinator::And => "AND",
+            crate::query_builder::QueryCombinator::Or => "OR",
+        };
+        let mut glyphs =
+            text_ctx.shape_line(comb_txt, comb_r, 11.5, 500, AlignX::Center, AlignY::Middle);
+        for (idx, rule) in desc.rules.iter().enumerate() {
+            let y = rect.origin.y + 42.0 + idx as f32 * 34.0;
+            let row_r = Rect::new(
+                rect.origin.x + 18.0,
+                y,
+                (rect.size.x - 36.0).max(40.0),
+                28.0,
+            );
+            let txt = format!("{}  {}  {}", rule.field, rule.operator, rule.value);
+            glyphs.extend(text_ctx.shape_line(
+                &txt,
+                row_r,
+                12.0,
+                400,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+        }
+        emit_query_builder(node, &desc, control, &glyphs)
+    }
+}
+
+impl UiWidget for ShortcutBarDesc {
+    type State = ();
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(260.0), self.rect.height().max(32.0))
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        _state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let mut glyphs = Vec::new();
+        let mut x = rect.origin.x + 10.0;
+        for entry in &desc.entries {
+            let keycap_w = (entry.chord.len() as f32 * 7.0 + 12.0).max(24.0);
+            let keycap_r = Rect::new(
+                x,
+                rect.origin.y + 4.0,
+                keycap_w,
+                (rect.size.y - 8.0).max(16.0),
+            );
+            glyphs.extend(text_ctx.shape_line(
+                &entry.chord,
+                keycap_r,
+                11.0,
+                500,
+                AlignX::Center,
+                AlignY::Middle,
+            ));
+            let lbl_r = Rect::new(
+                x + keycap_w + 6.0,
+                rect.origin.y + 4.0,
+                96.0,
+                (rect.size.y - 8.0).max(16.0),
+            );
+            glyphs.extend(text_ctx.shape_line(
+                &entry.label,
+                lbl_r,
+                11.5,
+                400,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+            x += keycap_w + (entry.label.len() as f32 * 7.0) + 20.0;
+        }
+        emit_shortcut_bar(node, &desc, control, &glyphs)
+    }
+}
+
+impl UiWidget for PipelineViewDesc {
+    type State = ();
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(280.0), self.rect.height().max(72.0))
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        _state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let count = desc.stages.len().max(1) as f32;
+        let gap = 8.0;
+        let stage_w = ((rect.size.x - 24.0 - (count - 1.0) * gap) / count).max(32.0);
+        let mut glyphs = Vec::new();
+        for (idx, stg) in desc.stages.iter().enumerate() {
+            let sx = rect.origin.x + 12.0 + idx as f32 * (stage_w + gap);
+            let label_r = Rect::new(
+                sx + 6.0,
+                rect.origin.y + 14.0,
+                (stage_w - 12.0).max(16.0),
+                20.0,
+            );
+            let txt = format!("{} {:.2}ms", stg.name, stg.duration_ms);
+            glyphs.extend(text_ctx.shape_line(
+                &txt,
+                label_r,
+                11.5,
+                400,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+        }
+        emit_pipeline_view(node, &desc, control, &glyphs)
+    }
+}
+
+impl UiWidget for TaskHudDesc {
+    type State = ();
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let h = 20.0 + self.tasks.len().max(1) as f32 * 38.0;
+        Vec2::new(self.rect.width().max(260.0), self.rect.height().max(h))
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        _state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let mut glyphs = Vec::new();
+        for (idx, task) in desc.tasks.iter().enumerate() {
+            let y = rect.origin.y + 10.0 + idx as f32 * 38.0;
+            let row_r = Rect::new(
+                rect.origin.x + 12.0,
+                y,
+                (rect.size.x - 40.0).max(40.0),
+                18.0,
+            );
+            let txt = format!("{} ({:.0}%)", task.title, task.progress * 100.0);
+            glyphs.extend(text_ctx.shape_line(
+                &txt,
+                row_r,
+                11.5,
+                400,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+        }
+        emit_task_hud(node, &desc, control, &glyphs)
+    }
+}
+
+impl UiWidget for SchemaFormDesc {
+    type State = SchemaFormState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let h = 20.0 + self.fields.len().max(1) as f32 * self.row_height;
+        Vec2::new(self.rect.width().max(280.0), self.rect.height().max(h))
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let label_col_w = (rect.size.x * 0.36).clamp(90.0, 180.0);
+        let mut glyphs = Vec::new();
+        for (idx, field) in desc.fields.iter().enumerate() {
+            let y = rect.origin.y + 10.0 + idx as f32 * desc.row_height;
+            let row_r = Rect::new(
+                rect.origin.x + 16.0,
+                y,
+                label_col_w - 12.0,
+                desc.row_height - 4.0,
+            );
+            glyphs.extend(text_ctx.shape_line(
+                &field.label,
+                row_r,
+                12.0,
+                400,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+        }
+        emit_schema_form(node, &desc, state, control, &glyphs)
+    }
+}
+
+impl UiWidget for GenericDataTableDesc {
+    type State = GenericDataTableState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let h = 36.0
+            + self.visible_row_slots as f32 * self.row_height
+            + if self.show_summary_footer { 28.0 } else { 0.0 };
+        Vec2::new(self.rect.width().max(300.0), self.rect.height().max(h))
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let mut glyphs = Vec::new();
+        let mut hx = rect.origin.x + 10.0;
+        for col in &desc.columns {
+            let hr = Rect::new(hx, rect.origin.y + 2.0, (col.width - 12.0).max(24.0), 28.0);
+            glyphs.extend(text_ctx.shape_line(
+                &col.title,
+                hr,
+                12.0,
+                500,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+            hx += col.width;
+        }
+        emit_generic_data_table(node, &desc, state, control, &glyphs)
     }
 }
 

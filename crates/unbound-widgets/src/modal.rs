@@ -363,6 +363,53 @@ fn close_stroke(
     (primitive, payload)
 }
 
+/// 可拖拽模态框位置状态机。
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct DraggableModalState {
+    pub offset: unbound_math::Vec2,
+    drag_anchor: Option<unbound_math::Vec2>,
+}
+
+impl DraggableModalState {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            offset: unbound_math::Vec2::ZERO,
+            drag_anchor: None,
+        }
+    }
+
+    pub fn begin_drag(&mut self, pointer: unbound_math::Vec2) {
+        self.drag_anchor = Some(pointer - self.offset);
+    }
+
+    pub fn drag_to(
+        &mut self,
+        pointer: unbound_math::Vec2,
+        viewport: Rect,
+        modal_size: unbound_math::Vec2,
+    ) -> Rect {
+        if let Some(anchor) = self.drag_anchor {
+            self.offset = pointer - anchor;
+        }
+        let base_x = viewport.center().x - modal_size.x * 0.5 + self.offset.x;
+        let base_y = viewport.center().y - modal_size.y * 0.5 + self.offset.y;
+        let clamped_x = base_x.clamp(
+            viewport.origin.x,
+            (viewport.max().x - modal_size.x).max(viewport.origin.x),
+        );
+        let clamped_y = base_y.clamp(
+            viewport.origin.y,
+            (viewport.max().y - modal_size.y).max(viewport.origin.y),
+        );
+        Rect::new(clamped_x, clamped_y, modal_size.x, modal_size.y)
+    }
+
+    pub fn end_drag(&mut self) {
+        self.drag_anchor = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -175,6 +175,30 @@ scene.rect(selection.bounds(), 0.0, Token::SELECTION_FILL, 0, 0.0, 0.0);"#,
         DemoKind::TextField { selection: true },
     )
     .with_height(240.0),
+    ExampleDef::new(
+        "Pinyin & Shuangpin live filter sandbox",
+        "Full 20,992 CJK ideographs + polyphones with Full Pinyin, 6 Shuangpin schemes (Xiaohe default), and Full/Shuangpin initials. Switch schemes or preset queries live.",
+        &["unbound-text/src/pinyin.rs"],
+        r#"let matcher = PinyinMatcher::with_scheme(ShuangpinScheme::Xiaohe);
+if let Some(hit) = matcher.match_text(item, query) {
+    highlight_ranges(item, &hit.char_ranges);
+}"#,
+        "A live filter sandbox highlighting matched character ranges across Chinese terms.",
+        &[
+            KnobSpec::segmented(
+                "Scheme",
+                &["Xiaohe", "Natural", "Microsoft", "Sogou", "Ziguang", "SmartABC"],
+                0,
+            ),
+            KnobSpec::segmented(
+                "Query",
+                &["voseqi", "cdviqq", "vsqgx", "chongming", "cmwl"],
+                0,
+            ),
+        ],
+        DemoKind::PinyinSandbox,
+    )
+    .with_height(268.0),
 ];
 
 fn button_variant(index: usize) -> ButtonVariant {
@@ -861,5 +885,105 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
     }
     if !read_only {
         ctx.control(1, field, Role::TextInput, "Project name", false);
+    }
+}
+
+/// 全拼 + 6 套双拼（默认小鹤双拼）+ 全拼/双拼首字母实时检索与高亮区间沙盒。
+pub fn pinyin_sandbox(ctx: &mut DemoCtx<'_, '_>) {
+    use unbound_text::{set_global_shuangpin_scheme, PinyinMatcher, ShuangpinScheme};
+
+    let rect = ctx.rect;
+    let palette = *ctx.canvas.palette;
+    let scheme_idx = (ctx.knob(0).round().max(0.0) as usize).min(ShuangpinScheme::ALL.len() - 1);
+    let preset_idx = (ctx.knob(1).round().max(0.0) as usize).min(4);
+    let scheme = ShuangpinScheme::from_index(scheme_idx);
+    set_global_shuangpin_scheme(scheme);
+
+    let preset_queries = ["voseqi", "cdviqq", "vsqgx", "chongming", "cmwl"];
+    let query = preset_queries[preset_idx];
+    let matcher = PinyinMatcher::with_scheme(scheme);
+
+    let bar = Rect::new(
+        rect.origin.x + 20.0,
+        rect.origin.y + 12.0,
+        rect.size.x - 40.0,
+        36.0,
+    );
+    ctx.canvas
+        .rect(bar, 8.0, palette.card_bg, palette.primary, 1.5, 4.0);
+    ctx.canvas.text(
+        &format!("Query: \"{query}\"   ·   Scheme: {}", scheme.label()),
+        Rect::new(
+            bar.origin.x + 12.0,
+            bar.origin.y,
+            bar.size.x - 24.0,
+            bar.size.y,
+        ),
+        12.5,
+        palette.text,
+        AlignX::Start,
+        AlignY::Center,
+    );
+
+    let items = [
+        "着色器管线_Uber.spv",
+        "材质球_PBR.mat",
+        "重命名文件_Asset",
+        "魑魅魍魉_RareMesh",
+    ];
+    for (idx, item) in items.iter().enumerate() {
+        let y = bar.max().y + 10.0 + idx as f32 * 40.0;
+        let row = Rect::new(bar.origin.x, y, bar.size.x, 34.0);
+        let hit = matcher.match_text(item, query);
+        let is_hit = hit.is_some();
+        ctx.canvas.rect(
+            row,
+            6.0,
+            if is_hit {
+                palette.primary_soft
+            } else {
+                palette.stage_bg
+            },
+            if is_hit {
+                palette.primary
+            } else {
+                palette.border
+            },
+            1.0,
+            0.0,
+        );
+        ctx.canvas.text(
+            item,
+            Rect::new(row.origin.x + 12.0, y, 200.0, row.size.y),
+            12.5,
+            if is_hit {
+                palette.text
+            } else {
+                palette.text_muted
+            },
+            AlignX::Start,
+            AlignY::Center,
+        );
+        let sp = scheme.encode_text(item);
+        let detail = if let Some(m) = hit {
+            format!(
+                "HIT · ranges={:?} · score={} · sp={sp}",
+                m.char_ranges, m.score
+            )
+        } else {
+            format!("— · sp={sp}")
+        };
+        ctx.canvas.text(
+            &detail,
+            Rect::new(row.origin.x + 216.0, y, row.size.x - 228.0, row.size.y),
+            10.5,
+            if is_hit {
+                palette.primary
+            } else {
+                palette.text_muted
+            },
+            AlignX::Start,
+            AlignY::Center,
+        );
     }
 }
