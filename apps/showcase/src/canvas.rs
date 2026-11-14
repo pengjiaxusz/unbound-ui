@@ -673,11 +673,22 @@ impl<'a> Canvas<'a> {
 
         let clip_shape = self.clip_shape();
         if let Some(mut region) = output.hit.clone() {
+            // 将组件的主命中区域归一化为外壳分配的 `node`，确保多子项组件（如 Accordion/Tabs/Menubar）
+            // 主区域点击也能被 `target::decode(node)` 正确路由，同时避免裸小整数 ID 发生热区冲突。
+            if node != 0 {
+                region.node = node;
+            }
             region.z = u32::from(self.z);
             if let Some(clip) = clip_shape {
                 region = region.with_clip(clip);
             }
-            self.regions.push(region);
+            if !self
+                .regions
+                .iter()
+                .any(|existing| existing.node == region.node)
+            {
+                self.regions.push(region);
+            }
         }
         let demo_parent = match crate::target::decode(node) {
             Some(crate::target::Target::Demo(page, card, _)) => Some((page, card)),
@@ -689,7 +700,7 @@ impl<'a> Canvas<'a> {
                     crate::target::decode(sub_region.node),
                     Some(crate::target::Target::Demo(p, c, _)) if p == page && c == card
                 );
-                if !same_demo {
+                if !same_demo || sub_region.node == node {
                     sub_region.node = crate::target::id(crate::target::Target::Demo(
                         page,
                         card,
@@ -701,7 +712,13 @@ impl<'a> Canvas<'a> {
             if let Some(clip) = clip_shape {
                 sub_region = sub_region.with_clip(clip);
             }
-            self.regions.push(sub_region);
+            if !self
+                .regions
+                .iter()
+                .any(|existing| existing.node == sub_region.node)
+            {
+                self.regions.push(sub_region);
+            }
         }
 
         if let Some(a11y) = output.a11y.clone() {

@@ -95,6 +95,28 @@ impl PinInputDesc {
             z: 600,
         }
     }
+
+    /// 设置是否以掩码圆点隐藏明文数字。
+    #[must_use]
+    pub fn with_masked(mut self, masked: bool) -> Self {
+        self.masked = masked;
+        self
+    }
+
+    /// 计算第 `index` 个 PIN 单元格矩形。
+    #[must_use]
+    pub fn cell_rect(&self, index: usize) -> Rect {
+        let len = self.length.clamp(1, MAX_PIN_SLOTS);
+        let gap = 6.0;
+        let cell_w = ((self.rect.width() - gap * (len - 1) as f32) / len as f32).max(14.0);
+        let cell_h = self.rect.height().max(20.0);
+        Rect::new(
+            self.rect.origin.x + index.min(len - 1) as f32 * (cell_w + gap),
+            self.rect.origin.y,
+            cell_w,
+            cell_h,
+        )
+    }
 }
 
 /// 输出结构稳定的 PIN 输入框（6 个单元格框 + 6 个填充圆点 + 1 个焦点环 = 13 个图元）。
@@ -151,7 +173,8 @@ pub fn emit_pin_input(
             8.0,
         );
         let mut dot = surface(dot_r, 4.0, Token::PRIMARY, desc.z + 1);
-        if !visible || idx >= desc.filled {
+        // 当提供了明文字形且未启用掩码模式时，隐藏中心实心圆点以避免遮挡数字字符，但保持图元总数恒定。
+        if !visible || idx >= desc.filled || (!desc.masked && !label_glyphs.is_empty()) {
             dot.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(dot.depth_u16(), 0.0);
         }
         primitives.push(dot);

@@ -606,7 +606,7 @@ pub enum SearchHit {
     Component(WidgetCatalogId),
 }
 
-/// 91 个组件展示沙盒的实时交互状态。
+/// 99 个组件展示沙盒的实时交互状态。
 #[derive(Clone, Debug, Default)]
 pub struct ComponentSandboxState {
     pub click_counts: HashMap<u8, u32>,

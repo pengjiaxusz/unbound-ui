@@ -199,10 +199,10 @@ mod win32 {
                                 params.rgrc[0] = mi.rcWork;
                             }
                         }
-                        // 返回 0 表示客户区完全填满整个窗口矩形
-                        return LRESULT(0);
                     }
-                    DefSubclassProc(hwnd, msg, wparam, lparam)
+                    // 无论 wparam 为 0 还是非 0，均直接返回 0，使客户区完全填满整个窗口矩形，
+                    // 避免 WS_THICKFRAME 在首次移动或样式刷新时被默认过程扣减非客户区边框。
+                    LRESULT(0)
                 }
                 WM_NCHITTEST => {
                     // 低 16 位 = X，高 16 位 = Y（屏幕坐标）

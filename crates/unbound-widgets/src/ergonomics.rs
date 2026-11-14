@@ -13,34 +13,43 @@ use unbound_text::GlyphQuad;
 use crate::alert::{emit_alert, AlertDesc, Severity};
 use crate::badge::{emit_badge, BadgeDesc};
 use crate::button::{emit_button, ButtonDesc, ButtonSize, ButtonVariant};
-use crate::callout::{emit_callout, CalloutDesc, CalloutState};
-use crate::catalog::emit_widget;
+use crate::callout::{emit_callout_with_glyphs, CalloutDesc, CalloutState};
+use crate::catalog::{emit_widget_with_shaper, CatalogParams};
 use crate::checkbox::{emit_checkbox, CheckState, CheckboxDesc, CheckboxTokens};
 use crate::code_editor::{emit_code_editor, CodeEditorDesc, CodeEditorState};
 use crate::containers::{emit_card, CardDesc, CardTokens};
 use crate::data_grid::{emit_data_grid, DataGridDesc, DataGridState};
-use crate::descriptions::{emit_descriptions, DescriptionsDesc, DescriptionsState};
+use crate::descriptions::{
+    emit_descriptions_with_glyphs, DescriptionsDesc, DescriptionsState, DESCRIPTION_ROW_HEIGHT,
+};
 use crate::divider::{emit_divider, DividerDesc, DividerOrientation, DividerTokens};
 use crate::multi_split::{emit_multi_split, MultiSplitDesc, MultiSplitState};
 use crate::pagination::{emit_pagination, PaginationDesc, PaginationState};
 use crate::popconfirm::{emit_popconfirm, PopconfirmDesc};
 use crate::progress::{emit_progress, ProgressDesc, ProgressState};
-use crate::select::{emit_select, SelectDesc, SelectState};
+use crate::select::{emit_select_with_glyphs, SelectDesc, SelectState};
 use crate::slider::{emit_slider, value_from_pointer, Orientation, SliderDesc, SliderTokens};
-use crate::split_button::{emit_split_button, SplitButtonDesc, SplitButtonState, DROPDOWN_WIDTH};
+use crate::split_button::{
+    emit_split_button_with_glyphs, SplitButtonDesc, SplitButtonState, DROPDOWN_WIDTH,
+};
 use crate::switch::{emit_switch, SwitchDesc, SwitchTokens};
 use crate::table::{emit_table, ColumnSpec, TableDesc, TableRow, TableState};
-use crate::terminal_view::{emit_terminal_view, TerminalViewDesc, TerminalViewState};
+use crate::terminal_view::{
+    emit_terminal_view_with_glyphs, TerminalViewDesc, TerminalViewState, TERMINAL_LINE_HEIGHT,
+};
 use crate::text_input::{
     emit_text_input, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
     TextInputVisual,
 };
 use crate::timeline_track::{emit_timeline_track, TimelineTrackDesc, TimelineTrackState};
-use crate::toggle_button::{emit_toggle_button, ToggleButtonDesc, ToggleButtonState};
+use crate::toggle_button::{emit_toggle_button_with_glyphs, ToggleButtonDesc, ToggleButtonState};
 use crate::tooltip::{TooltipDesc, TooltipState};
 use crate::tour::{emit_tour, TourDesc};
 use crate::transfer::{emit_transfer, TransferDesc, TransferState};
-use crate::tree_table::{emit_tree_table, TreeTableDesc, TreeTableState};
+use crate::tree_table::{
+    emit_tree_table_with_glyphs, TreeTableDesc, TreeTableState, TREE_TABLE_HEADER_HEIGHT,
+    TREE_TABLE_ROW_HEIGHT,
+};
 use crate::virtual_masonry::{emit_virtual_masonry, VirtualMasonryDesc, VirtualMasonryState};
 use crate::{ControlState, WidgetCatalogId, WidgetOutput};
 
@@ -509,9 +518,9 @@ impl UiWidget for SwitchDesc {
         desc.on = *state;
         control.selected = desc.on;
         let label_r = Rect::new(
-            rect.origin.x,
+            rect.origin.x + desc.track_size.0 + 10.0,
             rect.origin.y,
-            (rect.width() - desc.track_size.0 - 8.0).max(0.0),
+            (rect.width() - desc.track_size.0 - 10.0).max(0.0),
             rect.height(),
         );
         let glyphs = text_ctx.shape_line(
@@ -713,7 +722,7 @@ impl UiWidget for SelectDesc {
         SelectState {
             open: false,
             selected: self.initial_selection,
-            highlighted: None,
+            highlighted: self.initial_selection,
         }
     }
 
@@ -733,14 +742,40 @@ impl UiWidget for SelectDesc {
     }
 
     fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
-        if matches!(event, WidgetInputEvent::PointerDown { .. }) {
-            state.open = !state.open;
-            if state.selected.is_none() && !self.options.is_empty() {
-                state.selected = Some(0);
+        match event {
+            WidgetInputEvent::PointerDown { .. } => {
+                if !self.options.is_empty() {
+                    let next = match state.selected {
+                        Some(idx) => (idx + 1) % self.options.len(),
+                        None => 0,
+                    };
+                    state.selected = Some(next);
+                    state.highlighted = Some(next);
+                }
+                state.open = !state.open;
+                true
             }
-            return true;
+            WidgetInputEvent::KeyDown(chord) => match chord.key {
+                KeyName::Named("ArrowDown") | KeyName::Named("ArrowRight") => {
+                    self.clone().step_selection(state, true);
+                    true
+                }
+                KeyName::Named("ArrowUp") | KeyName::Named("ArrowLeft") => {
+                    self.clone().step_selection(state, false);
+                    true
+                }
+                KeyName::Named("Enter") | KeyName::Named("Space") => {
+                    state.open = !state.open;
+                    true
+                }
+                KeyName::Named("Escape") => {
+                    state.close();
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
         }
-        false
     }
 
     fn emit_laid_out(
@@ -760,8 +795,19 @@ impl UiWidget for SelectDesc {
             (rect.width() - 32.0).max(0.0),
             rect.height(),
         );
-        let _glyphs = text_ctx.shape_line(display, text_r, 14.0, 400, AlignX::Left, AlignY::Middle);
-        emit_select(node, &desc, state, control)
+        let glyphs = text_ctx.shape_line(display, text_r, 14.0, 400, AlignX::Left, AlignY::Middle);
+        emit_select_with_glyphs(node, &desc, state, control, &glyphs)
+    }
+}
+
+impl SelectDesc {
+    fn step_selection(&self, state: &mut SelectState, forward: bool) {
+        if self.options.is_empty() {
+            return;
+        }
+        state.highlighted = state.selected;
+        state.step(self, forward);
+        state.selected = state.highlighted;
     }
 }
 
@@ -815,20 +861,54 @@ impl UiWidget for TableDesc {
         let mut row_glyph_vecs: Vec<Vec<GlyphQuad>> = Vec::with_capacity(vis_count);
         for r in 0..vis_count {
             let row_r = desc.row_rect(r, state.offset());
-            let padded = Rect::new(
-                row_r.origin.x + 8.0,
-                row_r.origin.y,
-                (row_r.width() - 16.0).max(0.0),
-                row_r.height(),
-            );
-            row_glyph_vecs.push(text_ctx.shape_line(
-                &format!("Row {}", r + 1),
-                padded,
-                13.0,
-                400,
-                AlignX::Left,
-                AlignY::Middle,
-            ));
+            let mut row_glyphs = Vec::new();
+            if desc.columns.is_empty() {
+                let padded = Rect::new(
+                    row_r.origin.x + 8.0,
+                    row_r.origin.y,
+                    (row_r.width() - 16.0).max(0.0),
+                    row_r.height(),
+                );
+                row_glyphs.extend(text_ctx.shape_line(
+                    &format!("Row {}", r + 1),
+                    padded,
+                    13.0,
+                    400,
+                    AlignX::Left,
+                    AlignY::Middle,
+                ));
+            } else {
+                let mut col_x = row_r.origin.x;
+                for (c_idx, col) in desc.columns.iter().enumerate() {
+                    let cell_r = Rect::new(
+                        col_x + 8.0,
+                        row_r.origin.y,
+                        (col.width - 16.0).max(0.0),
+                        row_r.height(),
+                    );
+                    let cell_text = match c_idx {
+                        0 => format!("Item #{:02}", r + 1),
+                        1 => format!("{} KB", (r + 1) * 12),
+                        _ => format!("Col {}", c_idx + 1),
+                    };
+                    // `ColumnSpec.align` 是 table 模块的枚举，需映射到本模块文本排版用的 AlignX。
+                    let align_x = match col.align {
+                        crate::table::AlignX::End => AlignX::Right,
+                        crate::table::AlignX::Center => AlignX::Center,
+                        crate::table::AlignX::Start => AlignX::Left,
+                    };
+                    row_glyphs.extend(text_ctx.shape_line(
+                        &cell_text,
+                        cell_r,
+                        13.0,
+                        400,
+                        align_x,
+                        AlignY::Middle,
+                    ));
+                    col_x += col.width;
+                }
+            }
+            row_glyph_vecs.push(row_glyphs);
         }
         let rows: Vec<TableRow<'_>> = row_glyph_vecs
             .iter()
@@ -911,7 +991,9 @@ impl UiWidget for AlertDesc {
         let m = text_ctx.measure_line(&self.message, 13.0, 400);
         Vec2::new(
             (t.x.max(m.x) + 64.0).max(self.rect.width()).max(220.0),
-            self.rect.height().max(52.0),
+            self.rect
+                .height()
+                .max(if self.message.is_empty() { 44.0 } else { 64.0 }),
         )
     }
 
@@ -925,13 +1007,36 @@ impl UiWidget for AlertDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let text_r = Rect::new(
-            rect.origin.x + 40.0,
-            rect.origin.y + 8.0,
-            (rect.width() - 64.0).max(0.0),
-            (rect.height() - 16.0).max(0.0),
+        let content_r = desc.content_rect();
+        let mut glyphs = text_ctx.shape_line(
+            &desc.title,
+            Rect::new(
+                content_r.origin.x,
+                content_r.origin.y,
+                content_r.width(),
+                18.0,
+            ),
+            13.5,
+            600,
+            AlignX::Left,
+            AlignY::Middle,
         );
-        let glyphs = text_ctx.shape_line(&desc.title, text_r, 14.0, 600, AlignX::Left, AlignY::Top);
+        if !desc.message.is_empty() {
+            let msg_r = Rect::new(
+                content_r.origin.x,
+                content_r.origin.y + 20.0,
+                content_r.width(),
+                (content_r.height() - 20.0).max(14.0),
+            );
+            glyphs.extend(text_ctx.shape_line(
+                &desc.message,
+                msg_r,
+                12.0,
+                400,
+                AlignX::Left,
+                AlignY::Top,
+            ));
+        }
         emit_alert(node, &desc, &glyphs, control)
     }
 }
@@ -989,8 +1094,58 @@ impl UiWidget for CardDesc {
 impl UiWidget for DataGridDesc {
     type State = DataGridState;
 
+    fn initial_state(&self) -> Self::State {
+        DataGridState {
+            active_cell: self.active_cell,
+            editing: self.editing,
+            edit_buffer: String::new(),
+        }
+    }
+
     fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
         Vec2::new(self.rect.width().max(280.0), self.rect.height().max(160.0))
+    }
+
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        match event {
+            WidgetInputEvent::PointerDown { pos, .. } => {
+                let mut desc = self.clone();
+                desc.rect = rect;
+                for r in 0..desc.visible_rows() {
+                    for c in 0..desc.visible_cols() {
+                        if desc.cell_rect(r, c).contains_point(*pos) {
+                            state.select_cell(r + desc.row_offset, c);
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            WidgetInputEvent::KeyDown(chord) => {
+                let rows = self.visible_rows().max(1);
+                let cols = self.visible_cols().max(1);
+                match chord.key {
+                    KeyName::Named("ArrowUp") => {
+                        state.move_cell(-1, 0, rows, cols);
+                        true
+                    }
+                    KeyName::Named("ArrowDown") => {
+                        state.move_cell(1, 0, rows, cols);
+                        true
+                    }
+                    KeyName::Named("ArrowLeft") => {
+                        state.move_cell(0, -1, rows, cols);
+                        true
+                    }
+                    KeyName::Named("ArrowRight") => {
+                        state.move_cell(0, 1, rows, cols);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
     }
 
     fn emit_laid_out(
@@ -1005,7 +1160,38 @@ impl UiWidget for DataGridDesc {
         desc.rect = rect;
         desc.active_cell = state.active_cell;
         desc.editing = state.editing;
-        let glyphs = text_ctx.shape_line(&desc.label, rect, 13.0, 500, AlignX::Left, AlignY::Top);
+        let rows = desc.visible_rows();
+        let cols = desc.visible_cols();
+        let mut glyphs = Vec::new();
+        for r in 0..rows {
+            for c in 0..cols {
+                let cell_r = desc.cell_rect(r, c);
+                let text = desc
+                    .cells
+                    .get(r)
+                    .and_then(|row| row.get(c))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        if r == 0 {
+                            desc.columns
+                                .get(c)
+                                .map(|col| col.title.clone())
+                                .unwrap_or_else(|| format!("Col {}", (b'A' + c as u8) as char))
+                        } else {
+                            format!("R{}C{}", r + desc.row_offset, c + 1)
+                        }
+                    });
+                let weight = if r == 0 { 600 } else { 400 };
+                glyphs.extend(text_ctx.shape_line(
+                    &text,
+                    cell_r,
+                    12.5,
+                    weight,
+                    AlignX::Center,
+                    AlignY::Middle,
+                ));
+            }
+        }
         emit_data_grid(node, &desc, control, &glyphs)
     }
 }
@@ -1022,12 +1208,52 @@ impl UiWidget for CodeEditorDesc {
         node: u64,
         rect: Rect,
         control: ControlState,
-        _state: &Self::State,
+        state: &Self::State,
         text_ctx: &mut TextCtx<'_>,
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let glyphs = text_ctx.shape_line(&desc.label, rect, 13.0, 400, AlignX::Left, AlignY::Top);
+        let gutter_w = 36.0_f32.min(rect.width() * 0.2);
+        let line_h = 20.0_f32;
+        let max_lines = ((rect.height() - 12.0) / line_h).floor().max(1.0) as usize;
+        let mut glyphs = Vec::new();
+        let source_lines: Vec<&str> = if !desc.lines.is_empty() {
+            desc.lines.iter().map(String::as_str).collect()
+        } else if !state.source.is_empty() {
+            state.source.lines().collect()
+        } else {
+            vec![
+                "fn render_frame(ctx: &mut FrameCtx) {",
+                "    ctx.submit_indirect_draws();",
+                "}",
+            ]
+        };
+        for (i, line) in source_lines.into_iter().take(max_lines).enumerate() {
+            let y = rect.origin.y + 6.0 + i as f32 * line_h;
+            let num_r = Rect::new(rect.origin.x + 4.0, y, (gutter_w - 8.0).max(8.0), line_h);
+            let code_r = Rect::new(
+                rect.origin.x + gutter_w + 8.0,
+                y,
+                (rect.width() - gutter_w - 16.0).max(16.0),
+                line_h,
+            );
+            glyphs.extend(text_ctx.shape_line(
+                &format!("{}", i + 1),
+                num_r,
+                12.0,
+                400,
+                AlignX::Right,
+                AlignY::Middle,
+            ));
+            glyphs.extend(text_ctx.shape_line(
+                line,
+                code_r,
+                12.5,
+                400,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+        }
         emit_code_editor(node, &desc, control, &glyphs)
     }
 }
@@ -1043,6 +1269,45 @@ impl UiWidget for PaginationDesc {
         Vec2::new(self.rect.width().max(260.0), self.rect.height().max(36.0))
     }
 
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        if let WidgetInputEvent::PointerDown { pos, .. } = event {
+            let total_slots = 9usize;
+            let gap = 4.0;
+            let pad = 4.0;
+            let slot_w = ((rect.width() - pad * 2.0 - gap * (total_slots - 1) as f32)
+                / total_slots as f32)
+                .max(18.0);
+            let slot_h = (rect.height() - pad * 2.0).max(18.0);
+            let mut desc = self.clone();
+            desc.rect = rect;
+            if state.page >= 1 {
+                desc.current_page = state.page;
+            }
+            let slots = desc.visible_slots();
+            for idx in 0..total_slots {
+                let r = Rect::new(
+                    rect.origin.x + pad + idx as f32 * (slot_w + gap),
+                    rect.origin.y + pad,
+                    slot_w,
+                    slot_h,
+                );
+                if r.contains_point(*pos) {
+                    if idx == 0 {
+                        state.page = desc.current_page.saturating_sub(1).max(1);
+                        return true;
+                    } else if idx == total_slots - 1 {
+                        state.page = (desc.current_page + 1).min(desc.total_pages.max(1));
+                        return true;
+                    } else if let Some(p) = slots[idx - 1] {
+                        state.page = p;
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     fn emit_laid_out(
         &self,
         node: u64,
@@ -1056,8 +1321,33 @@ impl UiWidget for PaginationDesc {
         if state.page >= 1 {
             desc.current_page = state.page;
         }
-        let glyphs =
-            text_ctx.shape_line(&desc.label, rect, 12.0, 500, AlignX::Center, AlignY::Middle);
+        let slots = desc.visible_slots();
+        let total_slots = 9usize;
+        let gap = 4.0;
+        let pad = 4.0;
+        let slot_w = ((rect.width() - pad * 2.0 - gap * (total_slots - 1) as f32)
+            / total_slots as f32)
+            .max(18.0);
+        let slot_h = (rect.height() - pad * 2.0).max(18.0);
+        let mut glyphs = Vec::new();
+        for idx in 0..total_slots {
+            let r = Rect::new(
+                rect.origin.x + pad + idx as f32 * (slot_w + gap),
+                rect.origin.y + pad,
+                slot_w,
+                slot_h,
+            );
+            let txt = if idx == 0 {
+                "<".to_string()
+            } else if idx == total_slots - 1 {
+                ">".to_string()
+            } else if let Some(p) = slots[idx - 1] {
+                p.to_string()
+            } else {
+                "...".to_string()
+            };
+            glyphs.extend(text_ctx.shape_line(&txt, r, 12.0, 500, AlignX::Center, AlignY::Middle));
+        }
         emit_pagination(node, &desc, control, &glyphs)
     }
 }
@@ -1079,7 +1369,48 @@ impl UiWidget for TransferDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let glyphs = text_ctx.shape_line(&desc.label, rect, 13.0, 400, AlignX::Left, AlignY::Top);
+        let (right_btn, left_btn) = desc.action_button_rects();
+        let mut glyphs =
+            text_ctx.shape_line(">", right_btn, 12.0, 600, AlignX::Center, AlignY::Middle);
+        glyphs.extend(text_ctx.shape_line(
+            "<",
+            left_btn,
+            12.0,
+            600,
+            AlignX::Center,
+            AlignY::Middle,
+        ));
+        let pad = 6.0;
+        let mid_w = 28.0;
+        let pane_w = ((rect.width() - pad * 4.0 - mid_w) * 0.5).max(24.0);
+        let left_hdr = Rect::new(
+            rect.origin.x + pad + 8.0,
+            rect.origin.y + pad + 4.0,
+            (pane_w - 16.0).max(16.0),
+            20.0,
+        );
+        let right_hdr = Rect::new(
+            rect.origin.x + pad * 3.0 + pane_w + mid_w + 8.0,
+            rect.origin.y + pad + 4.0,
+            (pane_w - 16.0).max(16.0),
+            20.0,
+        );
+        glyphs.extend(text_ctx.shape_line(
+            &format!("Source ({})", desc.source_count),
+            left_hdr,
+            12.5,
+            500,
+            AlignX::Left,
+            AlignY::Middle,
+        ));
+        glyphs.extend(text_ctx.shape_line(
+            &format!("Target ({})", desc.target_count),
+            right_hdr,
+            12.5,
+            500,
+            AlignX::Left,
+            AlignY::Middle,
+        ));
         emit_transfer(node, &desc, control, &glyphs)
     }
 }
@@ -1105,7 +1436,41 @@ impl UiWidget for PopconfirmDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let glyphs = text_ctx.shape_line(&desc.title, rect, 13.0, 500, AlignX::Left, AlignY::Top);
+        let title_r = Rect::new(
+            rect.origin.x + 12.0,
+            rect.origin.y + 10.0,
+            (rect.width() - 24.0).max(0.0),
+            22.0,
+        );
+        let mut glyphs = text_ctx.shape_line(
+            &desc.title,
+            title_r,
+            13.0,
+            500,
+            AlignX::Left,
+            AlignY::Middle,
+        );
+        let btn_w = 56.0_f32.min((rect.width() - 24.0) * 0.45);
+        let btn_h = 22.0_f32.min(rect.height() * 0.4);
+        let btn_y = rect.max().y - btn_h - 8.0;
+        let confirm_r = Rect::new(rect.max().x - btn_w - 8.0, btn_y, btn_w, btn_h);
+        let cancel_r = Rect::new(confirm_r.origin.x - btn_w - 6.0, btn_y, btn_w, btn_h);
+        glyphs.extend(text_ctx.shape_line(
+            &desc.cancel_label,
+            cancel_r,
+            11.5,
+            500,
+            AlignX::Center,
+            AlignY::Middle,
+        ));
+        glyphs.extend(text_ctx.shape_line(
+            &desc.confirm_label,
+            confirm_r,
+            11.5,
+            500,
+            AlignX::Center,
+            AlignY::Middle,
+        ));
         emit_popconfirm(node, &desc, control, &glyphs)
     }
 }
@@ -1127,7 +1492,19 @@ impl UiWidget for TourDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let glyphs = text_ctx.shape_line(&desc.title, rect, 13.0, 500, AlignX::Left, AlignY::Top);
+        if desc.target.is_empty() {
+            desc.target = Rect::new(rect.origin.x + 16.0, rect.origin.y + 12.0, 96.0, 28.0);
+        }
+        let bubble_y = (desc.target.max().y + 6.0).min(rect.max().y - 54.0);
+        let title_r = Rect::new(desc.target.origin.x + 10.0, bubble_y + 6.0, 160.0, 20.0);
+        let glyphs = text_ctx.shape_line(
+            &desc.title,
+            title_r,
+            12.5,
+            600,
+            AlignX::Left,
+            AlignY::Middle,
+        );
         emit_tour(node, &desc, control, &glyphs)
     }
 }
@@ -1149,7 +1526,25 @@ impl UiWidget for TimelineTrackDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let glyphs = text_ctx.shape_line(&desc.label, rect, 12.0, 400, AlignX::Left, AlignY::Top);
+        let pad = 6.0;
+        let lane_h = ((rect.height() - pad * 4.0) / 3.0).max(14.0);
+        let mut glyphs = Vec::new();
+        for (i, label) in ["Transform", "Opacity", "Camera"].iter().enumerate() {
+            let lane_r = Rect::new(
+                rect.origin.x + pad + 8.0,
+                rect.origin.y + pad + i as f32 * (lane_h + pad),
+                120.0,
+                lane_h,
+            );
+            glyphs.extend(text_ctx.shape_line(
+                label,
+                lane_r,
+                11.5,
+                500,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+        }
         emit_timeline_track(node, &desc, control, &glyphs)
     }
 }
@@ -1182,7 +1577,7 @@ impl UiWidget for SplitButtonDesc {
         desc.rect = rect;
         let action_w = (rect.width() - DROPDOWN_WIDTH).max(0.0);
         let action_r = Rect::new(rect.origin.x, rect.origin.y, action_w, rect.height());
-        let _glyphs = text_ctx.shape_line(
+        let glyphs = text_ctx.shape_line(
             &desc.label,
             action_r,
             14.0,
@@ -1190,12 +1585,16 @@ impl UiWidget for SplitButtonDesc {
             AlignX::Center,
             AlignY::Middle,
         );
-        emit_split_button(node, &desc, state, control)
+        emit_split_button_with_glyphs(node, &desc, state, control, &glyphs)
     }
 }
 
 impl UiWidget for ToggleButtonDesc {
     type State = ToggleButtonState;
+
+    fn initial_state(&self) -> Self::State {
+        ToggleButtonState::new(self.checked)
+    }
 
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
         let m = text_ctx.measure_line(&self.label, 14.0, 500);
@@ -1220,9 +1619,9 @@ impl UiWidget for ToggleButtonDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let _glyphs =
+        let glyphs =
             text_ctx.shape_line(&desc.label, rect, 14.0, 500, AlignX::Center, AlignY::Middle);
-        emit_toggle_button(node, &desc, state, control)
+        emit_toggle_button_with_glyphs(node, &desc, state, control, &glyphs)
     }
 }
 
@@ -1239,11 +1638,55 @@ impl UiWidget for TreeTableDesc {
         rect: Rect,
         control: ControlState,
         state: &Self::State,
-        _text_ctx: &mut TextCtx<'_>,
+        text_ctx: &mut TextCtx<'_>,
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        emit_tree_table(node, &desc, state, control)
+        let mut glyphs = Vec::new();
+        let header_h = TREE_TABLE_HEADER_HEIGHT.min(rect.height());
+        let mut col_x = rect.origin.x;
+        for col in &desc.columns {
+            let hdr_r = Rect::new(
+                col_x + 12.0,
+                rect.origin.y,
+                (col.width - 16.0).max(0.0),
+                header_h,
+            );
+            glyphs.extend(text_ctx.shape_line(
+                &col.title,
+                hdr_r,
+                12.5,
+                600,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+            col_x += col.width;
+        }
+        let body_h = (rect.height() - header_h).max(0.0);
+        let row_h = TREE_TABLE_ROW_HEIGHT.min(body_h / 4.0);
+        for (r_idx, row) in desc.rows.iter().take(4).enumerate() {
+            let row_y = rect.origin.y + header_h + r_idx as f32 * row_h;
+            let mut cx = rect.origin.x;
+            for (c_idx, cell) in row.cells.iter().enumerate() {
+                let col_w = desc.columns.get(c_idx).map_or(140.0, |c| c.width);
+                let indent = if c_idx == 0 {
+                    22.0 + row.depth as f32 * 14.0
+                } else {
+                    12.0
+                };
+                let cell_r = Rect::new(cx + indent, row_y, (col_w - indent - 8.0).max(0.0), row_h);
+                glyphs.extend(text_ctx.shape_line(
+                    cell,
+                    cell_r,
+                    12.5,
+                    400,
+                    AlignX::Left,
+                    AlignY::Middle,
+                ));
+                cx += col_w;
+            }
+        }
+        emit_tree_table_with_glyphs(node, &desc, state, control, &glyphs)
     }
 }
 
@@ -1289,21 +1732,48 @@ impl UiWidget for DescriptionsDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
+        let row_h = DESCRIPTION_ROW_HEIGHT.min((rect.height() / 4.0).max(1.0));
         let title_r = Rect::new(
             rect.origin.x + 12.0,
-            rect.origin.y + 4.0,
+            rect.origin.y,
             (rect.width() - 24.0).max(0.0),
-            24.0,
+            row_h,
         );
-        let _glyphs = text_ctx.shape_line(
+        let mut glyphs = text_ctx.shape_line(
             &desc.title,
             title_r,
-            15.0,
+            13.5,
             600,
             AlignX::Left,
             AlignY::Middle,
         );
-        emit_descriptions(node, &desc, state, control)
+        for (idx, item) in desc.items.iter().take(3).enumerate() {
+            let y = rect.origin.y + (idx + 1) as f32 * row_h;
+            let key_r = Rect::new(rect.origin.x + 12.0, y, rect.width() * 0.4, row_h);
+            let val_r = Rect::new(
+                rect.origin.x + rect.width() * 0.42,
+                y,
+                (rect.width() * 0.58 - 12.0).max(0.0),
+                row_h,
+            );
+            glyphs.extend(text_ctx.shape_line(
+                &item.label,
+                key_r,
+                12.5,
+                500,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+            glyphs.extend(text_ctx.shape_line(
+                &item.value,
+                val_r,
+                12.5,
+                400,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+        }
+        emit_descriptions_with_glyphs(node, &desc, state, control, &glyphs)
     }
 }
 
@@ -1318,7 +1788,7 @@ impl UiWidget for CalloutDesc {
 
     fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
         if matches!(event, WidgetInputEvent::PointerDown { .. }) {
-            state.dismiss();
+            state.closed = !state.closed;
             return true;
         }
         false
@@ -1334,15 +1804,37 @@ impl UiWidget for CalloutDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let text_r = Rect::new(
+        let title_r = Rect::new(
             rect.origin.x + 16.0,
             rect.origin.y + 8.0,
-            (rect.width() - 50.0).max(0.0),
+            (rect.width() - 48.0).max(0.0),
             20.0,
         );
-        let _glyphs =
-            text_ctx.shape_line(&desc.title, text_r, 14.0, 600, AlignX::Left, AlignY::Middle);
-        emit_callout(node, &desc, state, control)
+        let mut glyphs = text_ctx.shape_line(
+            &desc.title,
+            title_r,
+            13.5,
+            600,
+            AlignX::Left,
+            AlignY::Middle,
+        );
+        if !desc.message.is_empty() {
+            let msg_r = Rect::new(
+                rect.origin.x + 16.0,
+                rect.origin.y + 30.0,
+                (rect.width() - 48.0).max(0.0),
+                (rect.height() - 36.0).max(16.0),
+            );
+            glyphs.extend(text_ctx.shape_line(
+                &desc.message,
+                msg_r,
+                12.0,
+                400,
+                AlignX::Left,
+                AlignY::Top,
+            ));
+        }
+        emit_callout_with_glyphs(node, &desc, state, control, &glyphs)
     }
 }
 
@@ -1380,11 +1872,49 @@ impl UiWidget for TerminalViewDesc {
         rect: Rect,
         control: ControlState,
         state: &Self::State,
-        _text_ctx: &mut TextCtx<'_>,
+        text_ctx: &mut TextCtx<'_>,
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        emit_terminal_view(node, &desc, state, control)
+        let gutter_w = 40.0_f32.min(rect.width() * 0.25);
+        let line_h = TERMINAL_LINE_HEIGHT.min((rect.height() - 8.0).max(4.0));
+        let max_lines = ((rect.height() - 12.0) / line_h).floor().max(1.0) as usize;
+        let lines: Vec<&str> = if desc.lines.is_empty() {
+            vec![
+                "$ cargo test --workspace",
+                "test result: ok. 142 passed; 0 failed",
+            ]
+        } else {
+            desc.lines.iter().map(String::as_str).collect()
+        };
+        let mut glyphs = Vec::new();
+        for (idx, line) in lines.into_iter().take(max_lines).enumerate() {
+            let y = rect.origin.y + 8.0 + idx as f32 * line_h;
+            let num_r = Rect::new(rect.origin.x + 4.0, y, (gutter_w - 8.0).max(8.0), line_h);
+            let txt_r = Rect::new(
+                rect.origin.x + gutter_w + 8.0,
+                y,
+                (rect.width() - gutter_w - 16.0).max(16.0),
+                line_h,
+            );
+            glyphs.extend(text_ctx.shape_line(
+                &format!("{}", idx + 1),
+                num_r,
+                12.0,
+                400,
+                AlignX::Right,
+                AlignY::Middle,
+            ));
+            glyphs.extend(text_ctx.shape_line(
+                line,
+                txt_r,
+                12.5,
+                400,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+        }
+        emit_terminal_view_with_glyphs(node, &desc, state, control, &glyphs)
     }
 }
 
@@ -1443,7 +1973,7 @@ impl UiWidget for WidgetCatalogId {
 
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
         let m = text_ctx.measure_line(self.module_name(), 13.0, 500);
-        Vec2::new((m.x + 48.0).max(180.0), 44.0)
+        Vec2::new((m.x + 48.0).max(220.0), 64.0)
     }
 
     fn emit_laid_out(
@@ -1454,14 +1984,16 @@ impl UiWidget for WidgetCatalogId {
         _state: &Self::State,
         text_ctx: &mut TextCtx<'_>,
     ) -> WidgetOutput {
-        let mut glyphs = text_ctx.shape_line(
-            self.module_name(),
+        emit_widget_with_shaper(
+            *self,
+            node,
+            control,
             rect,
-            13.0,
-            500,
-            AlignX::Left,
-            AlignY::Middle,
-        );
-        emit_widget(*self, node, control, rect, &mut glyphs)
+            CatalogParams::default(),
+            |text, origin, size| {
+                let line_r = Rect::new(origin.x, origin.y, 400.0, (size * 1.4).max(16.0));
+                text_ctx.shape_line(text, line_r, size, 400, AlignX::Left, AlignY::Top)
+            },
+        )
     }
 }

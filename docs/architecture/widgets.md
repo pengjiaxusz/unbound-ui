@@ -5,7 +5,7 @@
 守卫：`cargo test -p unbound-widgets --test stable_shape --test health --test overlay_placement`
 
 ## 范围
-- [负责] 标准与高阶组件库（`define_widget_catalog!` 统一注册 91 个目录组件）、`ControlState`（24 种状态解析）、`TooltipDesc` 窗口边界防溢出自动定位、`WidgetOutput` 场景发射与帧差分补丁
+- [负责] 标准与高阶组件库（`define_widget_catalog!` 统一注册 99 个目录组件）、`ControlState`（24 种状态解析）、`TooltipDesc` 窗口边界防溢出自动定位、`WidgetOutput` 场景发射与帧差分补丁
 - [不负责] 业务状态持有与异步网络 -> 委托给 `crates/unbound-app/`；底层 Vulkan 渲染 -> 委托给 `crates/unbound-gpu/`
 
 ## 拓扑与流程
@@ -28,3 +28,4 @@
 - [必须] 默认标题栏以 `Dim::px(viewport.x)` 显式铺满视口，且 `TITLE_BAR_DRAG_ID` 挂在覆盖整条栏的绝对定位背景控件上 -> [原因] 应用根容器为 `AUTO`，百分比宽度会退化成内容宽度，使标题与窗口按钮挤在左上角；纯布局容器不在挂载控件表中，窗口运行器读不到其包围盒便无法设定拖拽高度 -> [守卫] `crates/unbound-app/tests/declarative_ergonomics.rs`
 - [必须] 追加 `WidgetOutput` 时重定位全部 `extra_payload_idx` -> [原因] 着色器按全局索引访问 payload 数组，不做偏移换算 -> [守卫] `crates/unbound-widgets/src/lib.rs::payload_indices_are_rebased_for_every_widget`
 - [新增] `title_bar` 模块提供与 Showcase 1:1 一致的 `WindowCaptionButton`（46px 贴边几何图元：像素对齐最小化横线、双图元最大化/还原框、解析交叉关闭线及 `Token::ERROR` 悬停警示），并由 `unbound-app` 的 `ViewBuilder::title_bar_custom` + `TitleBarSlots`（`left` / `center` / `actions`）与 `AppContext::window_maximized` 为所有窗口应用提供统一且可自定义扩展的默认标题栏 -> [位置] `crates/unbound-widgets/src/title_bar.rs`、`crates/unbound-app/src/lib.rs`
+- [新增] `ergonomics` 中全部 16 个声明式适配器与 `WidgetCatalogId` 统一通过 `ViewCtx::shape` 完成全量文本字形排版，并完整闭环指针/键盘状态归约；`catalog::emit_widget_with_shaper` 统一透传 `CatalogParams`（含 `toggled` 与 `click_count`），补齐全部 99 个组件在亮/暗主题与 24 态下的几何与字形渲染 -> [位置] `crates/unbound-widgets/src/{catalog.rs, ergonomics.rs, pin_input.rs}`

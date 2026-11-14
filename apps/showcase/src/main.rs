@@ -174,6 +174,27 @@ impl Showcase {
         }
     }
 
+    fn destroy_vulkan(&mut self) {
+        let extras = core::mem::take(&mut self.extras);
+        let swapchain = self.swapchain.take();
+        let surface = self.surface.take();
+        self.atlases = None;
+        if let Some(renderer) = self.renderer.take() {
+            renderer.gpu.wait_idle();
+            for extra in extras {
+                extra.swapchain.destroy(&renderer.gpu);
+                extra.surface.destroy(&renderer.gpu);
+            }
+            if let Some(swapchain) = swapchain {
+                swapchain.destroy(&renderer.gpu);
+            }
+            if let Some(surface) = surface {
+                surface.destroy(&renderer.gpu);
+            }
+            renderer.destroy();
+        }
+    }
+
     /// 每逻辑单位对应的物理像素数。
     fn effective_scale(&self) -> f32 {
         (self.os_scale * self.shell().state.zoom()).clamp(0.5, 4.0)
@@ -605,30 +626,11 @@ impl PlatformApp for Showcase {
         let gpu = match Gpu::new(config) {
             Ok(gpu) => gpu,
             Err(error) => {
-                // 旧报错仅提示“could not create a Vulkan device”并丢弃了原因，
-                // 导致 Windows 10 用户无从得知缺失的是驱动、加载器还是某个特性。
-                //
-                //
-                eprintln!("could not create a Vulkan device: {error}");
-                match &error {
-                    unbound_gpu::device::GpuError::UnsupportedFeatures(_) => eprintln!(
-                        "hint: update the GPU driver; the renderer needs descriptor indexing, \
-                         dynamic rendering, synchronization2 and bufferDeviceAddress"
-                    ),
-                    unbound_gpu::device::GpuError::NoSuitableDevice(detail) => {
-                        eprintln!("hint: {detail}");
-                        eprintln!(
-                            "hint: on Windows 10 install a Vulkan 1.2+ driver, or run on a \
-                             machine with a GPU that exposes VK_KHR_synchronization2 and \
-                             VK_KHR_dynamic_rendering"
-                        );
-                    }
-                    unbound_gpu::device::GpuError::Loader(detail) => eprintln!(
-                        "hint: the Vulkan loader is missing ({detail}); install the Vulkan \
-                         Runtime from https://vulkan.lunarg.com"
-                    ),
-                    _ => {}
-                }
+                eprintln!(
+                    "could not create a Vulkan device: {error}\n{}",
+                    error.diagnostic_report()
+                );
+                window.request_close();
                 return;
             }
         };
@@ -639,40 +641,75 @@ impl PlatformApp for Showcase {
                 Some(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
                 _ => {
                     eprintln!("the window has no native handle");
+                    gpu.destroy();
+                    window.request_close();
                     return;
                 }
             }
         };
-        let Ok(surface) = Surface::new_win32(&gpu, hwnd) else {
-            eprintln!("could not create a Vulkan surface");
-            return;
+        let surface = match Surface::new_win32(&gpu, hwnd) {
+            Ok(surface) => surface,
+            Err(error) => {
+                eprintln!(
+                    "could not create a Vulkan surface (hwnd=0x{hwnd:X}):\n{}",
+                    error.diagnostic_report()
+                );
+                gpu.destroy();
+                window.request_close();
+                return;
+            }
         };
 
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
         let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false);
-        let Ok(swapchain) = Swapchain::new(&gpu, &surface, width, height, &present) else {
-            eprintln!("could not create a swapchain");
-            return;
+        let swapchain = match Swapchain::new(&gpu, &surface, width, height, &present) {
+            Ok(swapchain) => swapchain,
+            Err(error) => {
+                eprintln!(
+                    "could not create a swapchain ({width}x{height}):\n{}",
+                    error.diagnostic_report()
+                );
+                surface.destroy(&gpu);
+                gpu.destroy();
+                window.request_close();
+                return;
+            }
         };
 
         let device_extensions = gpu.enabled_device_extensions.clone();
         let mut renderer = match Renderer::new(gpu, width, height) {
             Ok(renderer) => renderer,
             Err(error) => {
-                eprintln!("could not create the renderer: {error}");
+                eprintln!(
+                    "could not create the renderer ({width}x{height}):\n{}",
+                    error.diagnostic_report()
+                );
+                window.request_close();
                 return;
             }
         };
         let atlases = match AtlasSet::new(&renderer.gpu, 64) {
             Ok(atlases) => Arc::new(atlases),
             Err(error) => {
-                eprintln!("could not create the atlases: {error}");
+                eprintln!(
+                    "could not create the atlases:\n{}",
+                    error.diagnostic_report()
+                );
+                swapchain.destroy(&renderer.gpu);
+                surface.destroy(&renderer.gpu);
+                renderer.destroy();
+                window.request_close();
                 return;
             }
         };
         if let Err(error) = renderer.install_atlases(atlases.clone()) {
-            eprintln!("could not bind the atlases: {error}");
+            eprintln!("could not bind the atlases:\n{}", error.diagnostic_report());
+            drop(atlases);
+            swapchain.destroy(&renderer.gpu);
+            surface.destroy(&renderer.gpu);
+            renderer.destroy();
+            window.request_close();
             return;
         }
 
@@ -714,17 +751,30 @@ impl PlatformApp for Showcase {
             eprintln!("the secondary window has no native handle");
             return;
         };
-        let Ok(surface) = Surface::new_win32(&renderer.gpu, raw) else {
-            eprintln!("could not create a surface for the secondary window");
-            return;
+        let surface = match Surface::new_win32(&renderer.gpu, raw) {
+            Ok(surface) => surface,
+            Err(error) => {
+                eprintln!(
+                    "could not create a surface for the secondary window:\n{}",
+                    error.diagnostic_report()
+                );
+                return;
+            }
         };
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
         let present =
             PresentConfig::from_capabilities(&renderer.gpu.enabled_device_extensions, false);
-        let Ok(swapchain) = Swapchain::new(&renderer.gpu, &surface, width, height, &present) else {
-            eprintln!("could not create a swapchain for the secondary window");
-            return;
+        let swapchain = match Swapchain::new(&renderer.gpu, &surface, width, height, &present) {
+            Ok(swapchain) => swapchain,
+            Err(error) => {
+                eprintln!(
+                    "could not create a swapchain for the secondary window:\n{}",
+                    error.diagnostic_report()
+                );
+                surface.destroy(&renderer.gpu);
+                return;
+            }
         };
         self.extras.push(ExtraWindow {
             id: window.id(),
@@ -736,7 +786,18 @@ impl PlatformApp for Showcase {
     }
 
     fn window_closing(&mut self, window: &Window) {
-        self.extras.retain(|extra| extra.id != window.id());
+        if Some(window.id()) == self.primary {
+            self.destroy_vulkan();
+            return;
+        }
+        if let Some(pos) = self.extras.iter().position(|extra| extra.id == window.id()) {
+            let extra = self.extras.remove(pos);
+            if let Some(renderer) = &self.renderer {
+                renderer.gpu.wait_idle();
+                extra.swapchain.destroy(&renderer.gpu);
+                extra.surface.destroy(&renderer.gpu);
+            }
+        }
     }
 
     fn take_window_request(&mut self) -> Option<WindowConfig> {
@@ -969,10 +1030,14 @@ impl PlatformApp for Showcase {
                 };
                 self.app.ime(update);
             }
-            PlatformEvent::CloseRequested => return Flow::Exit,
+            PlatformEvent::CloseRequested => {
+                self.destroy_vulkan();
+                return Flow::Exit;
+            }
             _ => {}
         }
         if flow == Flow::Exit {
+            self.destroy_vulkan();
             return Flow::Exit;
         }
         // 重新读取有效缩放：本次事件中的缩放点击可能在处理前快照之后修改了它。
@@ -1006,6 +1071,12 @@ impl PlatformApp for Showcase {
         request: unbound_platform::A11yRequest,
     ) -> Flow {
         Showcase::accessibility_action_impl(self, state, window, request)
+    }
+}
+
+impl Drop for Showcase {
+    fn drop(&mut self) {
+        self.destroy_vulkan();
     }
 }
 
@@ -1440,12 +1511,12 @@ fn render_to_png(
     zoom_step: usize,
     show_hud: bool,
 ) -> Result<(), String> {
-    let gpu = Gpu::new(GpuConfig::default()).map_err(|e| e.to_string())?;
-    let mut renderer = Renderer::new(gpu, width, height).map_err(|e| e.to_string())?;
-    let atlases = Arc::new(AtlasSet::new(&renderer.gpu, 64).map_err(|e| e.to_string())?);
+    let gpu = Gpu::new(GpuConfig::default()).map_err(|e| e.diagnostic_report())?;
+    let mut renderer = Renderer::new(gpu, width, height).map_err(|e| e.diagnostic_report())?;
+    let atlases = Arc::new(AtlasSet::new(&renderer.gpu, 64).map_err(|e| e.diagnostic_report())?);
     renderer
         .install_atlases(atlases.clone())
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.diagnostic_report())?;
 
     let mut app = GalleryApp::new();
     app.state.theme = if dark {
@@ -1562,7 +1633,7 @@ fn main() {
             args.iter().any(|a| a == "--hud"),
         ) {
             Ok(()) => println!("wrote {path}"),
-            Err(error) => eprintln!("could not render: {error}"),
+            Err(error) => eprintln!("could not render:\n{error}"),
         }
         return;
     }

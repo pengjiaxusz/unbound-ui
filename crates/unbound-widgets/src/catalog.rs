@@ -33,18 +33,18 @@ use crate::{
     FileDropState, FormDesc, FormField, FormFieldDesc, GizmoDesc, GradientEditorState,
     GraphNodeDesc, GraphWire, HoverCardDesc, IconDesc, ImageAssetResolver, ImageDesc,
     LoadingOverlayDesc, MenuBarDesc, MenuBarItem, MenuBarState, MenuBarTokens, MenuDesc, MenuItem,
-    MenuState, MinimapDesc, MinimapState, ModalDesc, NaiveDate, NinePatchDesc, NodeGraphState,
-    NumberInputDesc, NumberInputState, PinSpec, PointerPhase, PopoverDesc, Presence, ProgressDesc,
-    ProgressState, PropertyDesc, PropertyGridDesc, PropertyGridState, PropertySection,
-    PropertyValue, RadioDesc, RadioGroupDesc, RadioTokens, ResolvedImage, RichTextDesc, RulerDesc,
-    RulerState, ScrollState, ScrollViewDesc, SegmentedDesc, SegmentedTokens, SelectDesc,
-    SelectState, SelectionMode, Severity, SkeletonDesc, SkeletonState, SliderDesc, SliderTokens,
-    SplitPaneDesc, SplitPaneState, SplitPaneTokens, StackDesc, StatusBarDesc, SwitchDesc,
-    SwitchTokens, TableDesc, TableState, TabsDesc, TabsState, TabsTokens, TagInputDesc,
-    TagInputState, TextAreaDesc, TextAreaState, TextAreaVisual, TextEditState, TextInputDesc,
-    TextInputVisual, ToastEntry, ToolbarDesc, ToolbarItem, ToolbarState, ToolbarTokens,
-    TooltipDesc, TreeViewDesc, TreeViewRow, TreeViewTokens, VirtualRowTokens, WidgetCatalogId,
-    WidgetOutput, WidgetShowcaseWitness, WrapDesc,
+    MenuState, MinimapDesc, MinimapItem, MinimapState, ModalDesc, NaiveDate, NinePatchDesc,
+    NodeGraphState, NumberInputDesc, NumberInputState, PinSpec, PointerPhase, PopoverDesc,
+    Presence, ProgressDesc, ProgressState, PropertyDesc, PropertyGridDesc, PropertyGridState,
+    PropertySection, PropertyValue, RadioDesc, RadioGroupDesc, RadioTokens, ResolvedImage,
+    RichTextDesc, RulerDesc, RulerState, ScrollState, ScrollViewDesc, SegmentedDesc,
+    SegmentedTokens, SelectDesc, SelectState, SelectionMode, Severity, SkeletonDesc, SkeletonState,
+    SliderDesc, SliderTokens, SplitPaneDesc, SplitPaneState, SplitPaneTokens, StackDesc,
+    StatusBarDesc, SwitchDesc, SwitchTokens, TableDesc, TableState, TabsDesc, TabsState,
+    TabsTokens, TagInputDesc, TagInputState, TextAreaDesc, TextAreaState, TextAreaVisual,
+    TextEditState, TextInputDesc, TextInputVisual, ToastEntry, ToolbarDesc, ToolbarItem,
+    ToolbarState, ToolbarTokens, TooltipDesc, TreeViewDesc, TreeViewRow, TreeViewTokens,
+    VirtualRowTokens, WidgetCatalogId, WidgetOutput, WidgetShowcaseWitness, WrapDesc,
 };
 
 struct ProbeImageResolver;
@@ -112,7 +112,7 @@ pub fn emit_widget(
     emit_widget_with_params(id, node, state, rect, label, 0.5, 0)
 }
 
-/// 合并子组件输出，重定位载荷索引并保留子命中区域与无障碍节点。
+/// 合并子组件输出，重定位载荷索引并保留子命中区域与无障碍节点（同时去重相同节点 ID 的命中区）。
 fn merge_output(dst: &mut WidgetOutput, mut src: WidgetOutput) {
     let payload_base = u32::try_from(dst.payloads.len()).unwrap_or(u32::MAX);
     if payload_base != 0 {
@@ -125,9 +125,19 @@ fn merge_output(dst: &mut WidgetOutput, mut src: WidgetOutput) {
     if dst.hit.is_none() {
         dst.hit = src.hit;
     } else if let Some(hit) = src.hit {
-        dst.sub_hits.push(hit);
+        let dup_primary = dst.hit.as_ref().is_some_and(|h| h.node == hit.node);
+        let dup_sub = dst.sub_hits.iter().any(|h| h.node == hit.node);
+        if !dup_primary && !dup_sub {
+            dst.sub_hits.push(hit);
+        }
     }
-    dst.sub_hits.extend(src.sub_hits);
+    for sub in src.sub_hits {
+        let dup_primary = dst.hit.as_ref().is_some_and(|h| h.node == sub.node);
+        let dup_sub = dst.sub_hits.iter().any(|h| h.node == sub.node);
+        if !dup_primary && !dup_sub {
+            dst.sub_hits.push(sub);
+        }
+    }
     if dst.a11y.is_none() {
         dst.a11y = src.a11y;
     }
@@ -136,7 +146,7 @@ fn merge_output(dst: &mut WidgetOutput, mut src: WidgetOutput) {
     dst.sub_focus_order.extend(src.sub_focus_order);
 }
 
-/// 展厅组件发射器的交互旋钮参数。
+/// 展厅组件发射器的交互旋钮与沙盒状态参数。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CatalogParams {
     /// 归一化数值（`0.0..=1.0`）。
@@ -153,6 +163,10 @@ pub struct CatalogParams {
     pub compact: bool,
     /// 是否只读模式。
     pub read_only: bool,
+    /// 沙盒切换开关状态（点击卡片触发切换）。
+    pub toggled: bool,
+    /// 沙盒累计点击次数。
+    pub click_count: u32,
 }
 
 impl Default for CatalogParams {
@@ -165,6 +179,8 @@ impl Default for CatalogParams {
             active: true,
             compact: false,
             read_only: false,
+            toggled: false,
+            click_count: 0,
         }
     }
 }
@@ -230,7 +246,10 @@ where
     F: FnMut(&str, Vec2, f32) -> Vec<GlyphQuad>,
 {
     let value_norm = params.value_norm.clamp(0.0, 1.0);
-    let variant_idx = params.variant_idx;
+    let variant_idx = params
+        .variant_idx
+        .wrapping_add(params.click_count as usize)
+        .wrapping_add(usize::from(params.toggled));
     let o = rect.origin;
     let ctrl_rect = Rect::new(o.x, o.y, rect.size.x.min(320.0), rect.size.y.min(36.0));
     let mut out = match id {
@@ -508,17 +527,23 @@ where
                 1 => crate::button::ButtonVariant::Secondary,
                 _ => crate::button::ButtonVariant::Subtle,
             };
-            let btn_r = Rect::new(o.x, o.y, rect.size.x.min(160.0), rect.size.y.min(36.0));
+            let btn_w = (rect.size.x * 0.52).clamp(96.0, 148.0);
+            let btn_h = rect.size.y.min(36.0);
+            let btn_r = Rect::new(o.x, o.y, btn_w, btn_h);
             let desc = ButtonDesc::new(btn_r, "Save Changes").with_variant(variant);
             let mut glyphs = shape_centered(&mut shape, "Save Changes", btn_r, 13.0);
             let mut out = crate::button::emit_button(node, &desc, state, &mut glyphs);
-            // 覆盖显式配色发射器：使用独立的字形副本，避免二次排版偏移。
-            let mut themed_glyphs = glyphs.clone();
+            // 在右侧并排放置次要按钮以覆盖 `emit_button_with_tokens`，避免与主按钮重叠遮挡悬停态。
+            let btn2_w = (rect.size.x - btn_w - 12.0).clamp(72.0, 112.0);
+            let btn2_r = Rect::new(btn_r.max().x + 12.0, o.y, btn2_w, btn_h);
+            let desc2 = ButtonDesc::new(btn2_r, "Cancel")
+                .with_variant(crate::button::ButtonVariant::Secondary);
+            let mut themed_glyphs = shape_centered(&mut shape, "Cancel", btn2_r, 13.0);
             let themed = crate::button::emit_button_with_tokens(
-                node,
-                &desc,
+                node ^ 0xB002,
+                &desc2,
                 ControlState::default(),
-                desc.tokens(),
+                desc2.tokens(),
                 &mut themed_glyphs,
             );
             merge_output(&mut out, themed);
@@ -530,7 +555,12 @@ where
             let tools = crate::canvas_toolbar::CanvasTool::ALL;
             toolbar.set_tool(tools[variant_idx % tools.len()]);
             let zoom_pct = format!("{:.0}%", toolbar.zoom * 100.0);
-            let glyphs = shape(&zoom_pct, Vec2::new(o.x + 12.0, o.y + 10.0), 12.0);
+            let mut glyphs = shape_centered(&mut shape, &zoom_pct, desc.zoom_rect(), 11.5);
+            let tool_icons = ["V", "H", "F", "P", "C", "T"];
+            for (idx, &tool) in tools.iter().enumerate() {
+                let tr = desc.tool_rect(tool);
+                glyphs.extend(shape_centered(&mut shape, tool_icons[idx], tr, 12.0));
+            }
             crate::canvas_toolbar::emit_canvas_toolbar(node, &desc, &toolbar, &glyphs, state).output
         }
         WidgetCatalogId::Chart => {
@@ -556,8 +586,7 @@ where
                 Vec2::new(o.x + 26.0, o.y + (ctrl_rect.size.y - 13.0) * 0.5),
                 13.0,
             );
-            // 勾选态属于展示变体：绑定 state.selected 会让图元数随控件状态漂移，
-            // 且勾选态会覆盖悬停配色；默认变体保持未勾选。
+            // 勾选态由展示变体与沙盒点击状态共同决定，不绑定 state.selected 以保证 24 态图元数恒定。
             let desc =
                 CheckboxDesc::new(ctrl_rect, "Snap to grid").with_checked(variant_idx % 2 == 1);
             crate::checkbox::emit_checkbox(
@@ -584,12 +613,15 @@ where
         }
         WidgetCatalogId::ColorPicker => {
             let desc = ColorPickerDesc::new(rect);
-            let picker = ColorPickerState::new(Color::from_srgb8(24, 128, 200, 255));
-            let mut glyphs = shape(
-                "#1880C8",
-                Vec2::new(o.x + 12.0, o.y + rect.size.y - 26.0),
-                12.0,
-            );
+            let hue_shift = (value_norm * 180.0).round() as u8;
+            let picker = ColorPickerState::new(Color::from_srgb8(
+                24u8.wrapping_add(hue_shift),
+                128,
+                200,
+                255,
+            ));
+            let hex = format!("#{:02X}80C8", 24u8.wrapping_add(hue_shift));
+            let mut glyphs = shape(&hex, Vec2::new(o.x + 12.0, o.y + rect.size.y - 26.0), 12.0);
             crate::color_picker::emit_color_picker(node, &desc, &picker, state, &mut glyphs)
         }
         WidgetCatalogId::Combobox => {
@@ -600,8 +632,11 @@ where
                     ComboItem::new("banana", "Banana"),
                 ],
             );
-            let combo = ComboboxState::new(&desc);
-            let mut trig_glyphs = shape("Apple", Vec2::new(o.x + 10.0, o.y + 10.0), 13.0);
+            let mut combo = ComboboxState::new(&desc);
+            // `highlighted` 是私有字段，通过公开的键盘归约接口设置高亮项。
+            combo.move_highlight(&desc, (variant_idx % 2) as isize);
+            let active_label = ["Apple", "Banana"][variant_idx % 2];
+            let mut trig_glyphs = shape(active_label, Vec2::new(o.x + 10.0, o.y + 10.0), 13.0);
             let mut out = crate::combobox::emit_combobox_trigger(
                 node,
                 &desc,
@@ -611,9 +646,14 @@ where
             );
             let mut popup_glyphs = shape(
                 "Apple",
-                Vec2::new(o.x + 10.0, ctrl_rect.max().y + 12.0),
+                Vec2::new(o.x + 12.0, ctrl_rect.max().y + 12.0),
                 13.0,
             );
+            popup_glyphs.extend(shape(
+                "Banana",
+                Vec2::new(o.x + 12.0, ctrl_rect.max().y + 42.0),
+                13.0,
+            ));
             let popup =
                 crate::combobox::emit_combobox_popup(&desc, &combo, rect, None, &mut popup_glyphs);
             out.primitives.extend(popup.primitives);
@@ -723,24 +763,81 @@ where
                 Vec2::new(placed.rect.origin.x + 14.0, placed.rect.origin.y + 10.0),
                 13.0,
             );
+            let g0s = shape(
+                "Ctrl+X",
+                Vec2::new(placed.rect.max().x - 56.0, placed.rect.origin.y + 11.0),
+                11.5,
+            );
             let g1 = shape(
                 "Copy",
                 Vec2::new(placed.rect.origin.x + 14.0, placed.rect.origin.y + 40.0),
                 13.0,
             );
+            let g1s = shape(
+                "Ctrl+C",
+                Vec2::new(placed.rect.max().x - 56.0, placed.rect.origin.y + 41.0),
+                11.5,
+            );
             push_glyphs(&mut out, &g0, Token::TEXT_PRIMARY, placed.z + 2);
+            push_glyphs(&mut out, &g0s, Token::TEXT_SECONDARY, placed.z + 2);
             push_glyphs(&mut out, &g1, Token::TEXT_PRIMARY, placed.z + 2);
+            push_glyphs(&mut out, &g1s, Token::TEXT_SECONDARY, placed.z + 2);
             out
         }
         WidgetCatalogId::CurveEditor => {
             let desc = CurveEditorDesc::new(rect);
-            crate::curve_editor::emit_curve_editor(node, &desc, &CurveEditorState::new(), state)
+            let mut out = crate::curve_editor::emit_curve_editor(
+                node,
+                &desc,
+                &CurveEditorState::new(),
+                state,
+            );
+            let g = shape(
+                "Cubic Bezier (0.25, 0.10, 0.25, 1.00)",
+                Vec2::new(o.x + 12.0, o.y + 10.0),
+                11.5,
+            );
+            push_glyphs(&mut out, &g, Token::TEXT_SECONDARY, desc.z + 3);
+            out
         }
         WidgetCatalogId::DatePicker => {
-            let desc = DatePickerDesc::new(rect);
+            let cal_r = Rect::new(o.x, o.y, rect.size.x.min(300.0), rect.size.y.max(36.0));
+            let desc = DatePickerDesc::new(cal_r);
             let today = NaiveDate::new(2024, 1, 15).expect("valid probe date");
-            let calendar = CalendarState::new(today, SelectionMode::Single);
-            let mut glyphs = shape("January 2024", Vec2::new(o.x + 16.0, o.y + 12.0), 13.5);
+            let mut calendar = CalendarState::new(today, SelectionMode::Single);
+            let picked_day = 10 + (variant_idx % 18) as u8;
+            if let Some(sel_date) = NaiveDate::new(2024, 1, picked_day) {
+                calendar.select(sel_date);
+            }
+            let hdr_r = Rect::new(
+                cal_r.origin.x + 36.0,
+                cal_r.origin.y + 4.0,
+                (cal_r.size.x - 72.0).max(40.0),
+                26.0,
+            );
+            let mut glyphs = shape_centered(&mut shape, "January 2024", hdr_r, 13.0);
+            glyphs.extend(shape_centered(&mut shape, "<", desc.prev_rect(), 12.0));
+            glyphs.extend(shape_centered(&mut shape, ">", desc.next_rect(), 12.0));
+            let col_w = cal_r.size.x / 7.0;
+            for (wd_idx, wd) in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+                .iter()
+                .enumerate()
+            {
+                let wd_r = Rect::new(
+                    cal_r.origin.x + wd_idx as f32 * col_w,
+                    cal_r.origin.y + crate::date_picker::CALENDAR_HEADER,
+                    col_w,
+                    crate::date_picker::CALENDAR_WEEKDAYS,
+                );
+                glyphs.extend(shape_centered(&mut shape, wd, wd_r, 11.0));
+            }
+            for (idx, cell) in calendar.cells().iter().enumerate() {
+                if let Some(d) = cell.date {
+                    let cr = desc.cell_rect(idx);
+                    let day_str = format!("{}", d.day);
+                    glyphs.extend(shape_centered(&mut shape, &day_str, cr, 11.5));
+                }
+            }
             crate::date_picker::emit_calendar(node, &desc, &calendar, state, &mut glyphs)
         }
         WidgetCatalogId::Divider => {
@@ -784,14 +881,26 @@ where
                 11,
             );
             merge_output(&mut out, tab2);
+            let body_g = shape(
+                "Workspace: src/lib.rs, src/main.rs",
+                Vec2::new(pane.rect.origin.x + 16.0, pane.rect.origin.y + 46.0),
+                12.5,
+            );
+            push_glyphs(&mut out, &body_g, Token::TEXT_SECONDARY, 12);
+            let preview_zone = Rect::new(
+                rect.origin.x + rect.size.x * 0.58,
+                rect.origin.y + 34.0,
+                (rect.size.x * 0.42 - 6.0).max(24.0),
+                (rect.size.y - 40.0).max(16.0),
+            );
             let preview = crate::dock::emit_dock_preview(
                 crate::dock::DockHover {
                     target: 0,
-                    zone: crate::dock::DockZone::Center,
-                    preview: rect,
+                    zone: crate::dock::DockZone::Right,
+                    preview: preview_zone,
                 },
                 DockTokens::standard(),
-                10,
+                12,
             );
             merge_output(&mut out, preview);
             out
@@ -819,7 +928,9 @@ where
             let desc = FormDesc::new(rect);
             let fields = vec![FormField::new(
                 1,
-                FormFieldDesc::new("Name").required(true).help("Full name"),
+                FormFieldDesc::new("Name")
+                    .required(true)
+                    .help("Enter your full display name"),
             )];
             let layouts = layout_form(&desc, &fields);
             let mut out = crate::form::emit_form_root(rect, "Registration");
@@ -828,8 +939,31 @@ where
                 Vec2::new(layouts[0].label.origin.x, layouts[0].label.origin.y + 4.0),
                 13.0,
             );
+            let input_r = Rect::new(
+                layouts[0].input.origin.x,
+                layouts[0].input.origin.y,
+                layouts[0].input.size.x.min(280.0),
+                layouts[0].input.size.y,
+            );
+            let input_desc = TextInputDesc::new(input_r).with_placeholder("Ada Lovelace");
+            let mut input_g = shape(
+                "Ada Lovelace",
+                Vec2::new(
+                    input_r.origin.x + 10.0,
+                    input_r.origin.y + (input_r.size.y - 13.0) * 0.5,
+                ),
+                13.0,
+            );
+            let input_out = crate::text_input::emit_text_input(
+                node,
+                &input_desc,
+                state,
+                &TextEditState::with_text("Ada Lovelace"),
+                &TextInputVisual::default(),
+                &mut input_g,
+            );
             let mut msg_g = shape(
-                "Full name",
+                "Enter your full display name",
                 Vec2::new(
                     layouts[0].message.origin.x,
                     layouts[0].message.origin.y + 2.0,
@@ -840,24 +974,56 @@ where
             let msg_out =
                 crate::form::emit_form_message(&fields[0], &layouts[0], None, &mut msg_g, 10);
             merge_output(&mut out, label_out);
+            merge_output(&mut out, input_out);
             merge_output(&mut out, msg_out);
             out
         }
         WidgetCatalogId::Gizmo => {
-            let desc = GizmoDesc::new(rect, 2.0);
-            let glyphs = shape("120 x 80", Vec2::new(o.x + 12.0, o.y + 10.0), 12.0);
+            let gizmo_bounds = if rect.size.x > 120.0 && rect.size.y > 90.0 {
+                Rect::new(
+                    o.x + 36.0,
+                    o.y + 30.0,
+                    (rect.size.x - 72.0).min(240.0),
+                    (rect.size.y - 68.0).max(32.0),
+                )
+            } else {
+                rect
+            };
+            let desc = GizmoDesc::new(gizmo_bounds, 1.0 + value_norm);
+            let bubble_r = desc.size_bubble_rect(80.0);
+            let glyphs = shape_centered(&mut shape, "120 x 80", bubble_r, 11.5);
             crate::gizmo::emit_gizmo(node, &desc, None, &[], &glyphs, state).output
         }
         WidgetCatalogId::HoverCard => {
-            let trig_r = Rect::new(o.x, o.y, 130.0, 32.0);
-            let desc = HoverCardDesc::new(trig_r, rect, Vec2::new(o.x + 40.0, o.y - 40.0));
-            let mut glyphs = shape_centered(&mut shape, "Hover trigger", trig_r, 12.5);
+            let trig_r = Rect::new(o.x, o.y, 136.0, 32.0);
+            let card_size = Vec2::new(240.0_f32.min(rect.size.x), 76.0);
+            let desc = HoverCardDesc::new(trig_r, rect, card_size);
+            let card_r = desc.rect();
+            let mut glyphs = shape_centered(&mut shape, "@ada_lovelace", trig_r, 12.5);
             glyphs.extend(shape(
-                "Preview card details",
-                Vec2::new(o.x + 16.0, o.y + 52.0),
+                "Ada Lovelace · Principal Engineer",
+                Vec2::new(card_r.origin.x + 14.0, card_r.origin.y + 14.0),
                 12.5,
             ));
-            crate::hover_card::emit_hover_card(node, 2, &desc, &glyphs, state).0
+            glyphs.extend(shape(
+                "Maintainer of Unbound UI GPU kernel.",
+                Vec2::new(card_r.origin.x + 14.0, card_r.origin.y + 38.0),
+                11.5,
+            ));
+            let mut out = crate::hover_card::emit_hover_card(node, 2, &desc, &glyphs, state).0;
+            out.primitives.insert(
+                0,
+                crate::primitive::outlined(
+                    trig_r,
+                    6.0,
+                    Token::SURFACE_RAISED,
+                    Token::OUTLINE,
+                    1.0,
+                    0.0,
+                    desc.z.saturating_sub(1),
+                ),
+            );
+            out
         }
         WidgetCatalogId::Image => {
             let img_r = Rect::new(o.x, o.y, rect.size.x.min(220.0), rect.size.y.min(140.0));
@@ -955,12 +1121,32 @@ where
             out
         }
         WidgetCatalogId::Minimap => {
+            let cam_x = 120.0 + value_norm * 360.0;
+            let cam_y = 80.0 + value_norm * 240.0;
             let desc = MinimapDesc::new(
                 rect,
                 Rect::new(0.0, 0.0, 1000.0, 1000.0),
-                Rect::new(200.0, 100.0, 400.0, 300.0),
+                Rect::new(cam_x, cam_y, 380.0, 280.0),
             );
-            crate::minimap::emit_minimap(node, &desc, &[], &MinimapState::new(), state).0
+            let items = [
+                MinimapItem {
+                    bounds: Rect::new(80.0, 100.0, 220.0, 140.0),
+                    token: Token::PRIMARY,
+                },
+                MinimapItem {
+                    bounds: Rect::new(380.0, 160.0, 260.0, 160.0),
+                    token: Token::SUCCESS,
+                },
+                MinimapItem {
+                    bounds: Rect::new(220.0, 440.0, 280.0, 180.0),
+                    token: Token::WARNING,
+                },
+                MinimapItem {
+                    bounds: Rect::new(620.0, 520.0, 240.0, 160.0),
+                    token: Token::SECONDARY,
+                },
+            ];
+            crate::minimap::emit_minimap(node, &desc, &items, &MinimapState::new(), state).0
         }
         WidgetCatalogId::Modal => {
             let card_rect = if rect.size.x > 260.0 && rect.size.y > 140.0 {
@@ -1040,14 +1226,68 @@ where
             );
             crate::number_input::emit_number_input(node, &desc, &number, state, &mut glyphs)
         }
-        WidgetCatalogId::Overlay => WidgetOutput::default(),
+        WidgetCatalogId::Overlay => {
+            // 通过真实 `place_anchored_popup` 计算浮层堆叠并在舞台中可视化锚点与弹出层关系。
+            let anchor_r = Rect::new(o.x + 12.0, o.y + 8.0, 132.0, 30.0);
+            let placed = crate::overlay::place_anchored_popup(
+                anchor_r,
+                Vec2::new(220.0_f32.min(rect.size.x), 56.0),
+                rect,
+                crate::overlay::Placement::BottomStart,
+            );
+            let mut out = WidgetOutput::default();
+            out.primitives.push(crate::primitive::outlined(
+                anchor_r,
+                6.0,
+                Token::SURFACE_RAISED,
+                Token::OUTLINE,
+                1.0,
+                0.0,
+                890,
+            ));
+            out.primitives.push(crate::primitive::outlined(
+                placed,
+                8.0,
+                Token::OVERLAY_BG,
+                Token::PRIMARY,
+                1.0,
+                8.0,
+                895,
+            ));
+            let g_anchor = shape_centered(&mut shape, "Anchor Layer", anchor_r, 12.0);
+            let g_popup = shape_centered(&mut shape, "OverlayStack Popup (z=895)", placed, 12.0);
+            push_glyphs(&mut out, &g_anchor, Token::TEXT_PRIMARY, 891);
+            push_glyphs(&mut out, &g_popup, Token::TEXT_PRIMARY, 896);
+            out
+        }
         WidgetCatalogId::Popover => {
-            let trig_r = Rect::new(o.x, o.y, 120.0, 36.0);
-            let desc = PopoverDesc::new(trig_r, rect, Vec2::new(o.x + 40.0, o.y));
+            let trig_r = Rect::new(o.x, o.y, 128.0, 34.0);
+            let pop_size = Vec2::new(220.0_f32.min(rect.size.x), 72.0);
+            let mut desc = PopoverDesc::new(trig_r, rect, pop_size);
+            desc.show_arrow = true;
+            let pop_r = desc.rect();
             let mut collector = crate::SceneCollector::new(0);
             crate::popover::emit_popover_scope(&mut collector, node, 2, &desc, state, []);
             let mut out = crate::popover::emit_popover(node, 2, &desc, state).output;
-            let g = shape("Popover content", Vec2::new(o.x + 14.0, o.y + 56.0), 12.5);
+            out.primitives.insert(
+                0,
+                crate::primitive::outlined(
+                    trig_r,
+                    6.0,
+                    Token::SURFACE_RAISED,
+                    Token::OUTLINE,
+                    1.0,
+                    0.0,
+                    desc.z.saturating_sub(1),
+                ),
+            );
+            let trig_g = shape_centered(&mut shape, "Open Popover", trig_r, 12.5);
+            let g = shape(
+                "Anchored popover with arrow",
+                Vec2::new(pop_r.origin.x + 14.0, pop_r.origin.y + 18.0),
+                12.5,
+            );
+            push_glyphs(&mut out, &trig_g, Token::TEXT_PRIMARY, desc.z);
             push_glyphs(&mut out, &g, Token::TEXT_PRIMARY, desc.z + 2);
             out
         }
@@ -1066,7 +1306,9 @@ where
             let desc = PropertyGridDesc::new(
                 rect,
                 vec![PropertySection::new("Transform")
-                    .with_row(PropertyDesc::new("Position X", PropertyValue::Number(10.0)))],
+                    .with_row(PropertyDesc::new("Position X", PropertyValue::Number(10.0)))
+                    .with_row(PropertyDesc::new("Scale Y", PropertyValue::Number(1.25)))
+                    .with_row(PropertyDesc::new("Visible", PropertyValue::Bool(true)))],
             );
             let glyphs = shape("Transform", Vec2::new(o.x + 12.0, o.y + 8.0), 13.0);
             let mut out = crate::property_grid::emit_property_grid(
@@ -1076,25 +1318,74 @@ where
                 &glyphs,
                 state,
             );
-            let row_k = shape("Position X", Vec2::new(o.x + 16.0, o.y + 42.0), 12.5);
-            let row_v = shape(
-                "10.0",
-                Vec2::new(o.x + rect.size.x * 0.55, o.y + 42.0),
-                12.5,
-            );
-            push_glyphs(&mut out, &row_k, Token::TEXT_SECONDARY, desc.z + 2);
-            push_glyphs(&mut out, &row_v, Token::TEXT_PRIMARY, desc.z + 2);
+            for (idx, (k, v)) in [
+                ("Position X", "10.0 px"),
+                ("Scale Y", "1.25 x"),
+                ("Visible", "true"),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let ry = o.y + 38.0 + idx as f32 * 28.0;
+                let row_k = shape(k, Vec2::new(o.x + 16.0, ry), 12.0);
+                let row_v = shape(v, Vec2::new(o.x + rect.size.x * 0.55, ry), 12.0);
+                push_glyphs(&mut out, &row_k, Token::TEXT_SECONDARY, desc.z + 2);
+                push_glyphs(&mut out, &row_v, Token::TEXT_PRIMARY, desc.z + 2);
+            }
             out
         }
         WidgetCatalogId::Radio => {
-            let desc = RadioDesc::new(ctrl_rect, "Comfortable");
-            let _group = RadioGroupDesc::new(vec![desc.clone()]);
-            let glyphs = shape(
-                "Comfortable",
-                Vec2::new(o.x + 26.0, o.y + (ctrl_rect.size.y - 13.0) * 0.5),
-                13.0,
-            );
-            crate::radio::emit_radio(node, &desc, state, &glyphs, RadioTokens::standard())
+            let labels = ["Comfortable", "Compact", "Dense"];
+            let sel = variant_idx % 3;
+            let item_w = (rect.size.x / 3.0).clamp(96.0, 140.0);
+            let mut out = WidgetOutput::default();
+            let mut items = Vec::with_capacity(3);
+            for (idx, &lbl) in labels.iter().enumerate() {
+                let item_r = Rect::new(
+                    o.x + idx as f32 * item_w,
+                    o.y,
+                    item_w - 8.0,
+                    ctrl_rect.size.y,
+                );
+                let mut r_desc = RadioDesc::new(item_r, lbl);
+                if idx == sel {
+                    r_desc.selected = true;
+                }
+                let r_state = if idx == 0 {
+                    ControlState {
+                        selected: idx == sel,
+                        ..state
+                    }
+                } else {
+                    ControlState {
+                        selected: idx == sel,
+                        ..ControlState::default()
+                    }
+                };
+                let glyphs = shape(
+                    lbl,
+                    Vec2::new(
+                        item_r.origin.x + 24.0,
+                        item_r.origin.y + (item_r.size.y - 12.5) * 0.5,
+                    ),
+                    12.5,
+                );
+                let r_out = crate::radio::emit_radio(
+                    if idx == 0 {
+                        node
+                    } else {
+                        node ^ (0x5200 + idx as u64)
+                    },
+                    &r_desc,
+                    r_state,
+                    &glyphs,
+                    RadioTokens::standard(),
+                );
+                merge_output(&mut out, r_out);
+                items.push(r_desc);
+            }
+            let _group = RadioGroupDesc::new(items);
+            out
         }
         WidgetCatalogId::RichText => {
             let desc = RichTextDesc::new(rect);
@@ -1109,13 +1400,43 @@ where
             crate::rich_text::emit_rich_text(node, &desc, &document, &layout, &glyphs, state)
         }
         WidgetCatalogId::Ruler => {
-            let desc = RulerDesc::new(rect, 1.0, Vec2::ZERO);
-            crate::ruler::emit_rulers(node, &desc, &RulerState::new(), state).output
+            let band = crate::ruler::RULER_BAND;
+            let inner_vp = if rect.size.x > band * 2.0 && rect.size.y > band * 2.0 {
+                Rect::new(
+                    o.x + band,
+                    o.y + band,
+                    rect.size.x - band,
+                    rect.size.y - band,
+                )
+            } else {
+                rect
+            };
+            let desc = RulerDesc::new(inner_vp, 1.0, Vec2::ZERO);
+            let mut ruler_state = RulerState::new();
+            ruler_state.begin(
+                crate::ruler::GuideAxis::X,
+                60.0 + value_norm * (inner_vp.size.x - 80.0).max(20.0),
+            );
+            ruler_state.end();
+            let mut out = crate::ruler::emit_rulers(node, &desc, &ruler_state, state).output;
+            for (idx, lbl) in ["0", "100", "200"].iter().enumerate() {
+                let g = shape(
+                    lbl,
+                    Vec2::new(
+                        inner_vp.origin.x + idx as f32 * 100.0 + 4.0,
+                        inner_vp.origin.y - band + 3.0,
+                    ),
+                    10.0,
+                );
+                push_glyphs(&mut out, &g, Token::TEXT_SECONDARY, desc.z + 2);
+            }
+            out
         }
         WidgetCatalogId::Scroll => {
             let desc = ScrollViewDesc::new(rect, Vec2::new(rect.size.x, 3000.0));
-            let mut out =
-                crate::scroll::emit_scroll_view(node, &desc, &ScrollState::new(), state).output;
+            let mut scroll_state = ScrollState::new();
+            scroll_state.jump_to(&desc, Vec2::new(0.0, value_norm * 1200.0));
+            let mut out = crate::scroll::emit_scroll_view(node, &desc, &scroll_state, state).output;
             let g = shape(
                 "Scrollable viewport content (3000px virtual height)",
                 Vec2::new(o.x + 14.0, o.y + 14.0),
@@ -1171,8 +1492,35 @@ where
             crate::select::emit_select_with_glyphs(node, &desc, &select_state, state, &glyphs)
         }
         WidgetCatalogId::Skeleton => {
-            let desc = SkeletonDesc::new(Rect::new(o.x, o.y, rect.size.x, 18.0)).animated();
-            crate::skeleton::emit_skeleton(&desc, &SkeletonState::new())
+            let mut sk_state = SkeletonState::new();
+            sk_state.set_phase(value_norm);
+            let avatar_s = SkeletonDesc::new(Rect::new(o.x, o.y, 36.0, 36.0))
+                .with_radius(18.0)
+                .animated();
+            let line1_s = SkeletonDesc::new(Rect::new(
+                o.x + 48.0,
+                o.y + 2.0,
+                (rect.size.x - 48.0).max(40.0) * 0.55,
+                14.0,
+            ))
+            .animated();
+            let line2_s = SkeletonDesc::new(Rect::new(
+                o.x + 48.0,
+                o.y + 22.0,
+                (rect.size.x - 48.0).max(40.0) * 0.85,
+                12.0,
+            ))
+            .animated();
+            let mut out = crate::skeleton::emit_skeleton(&avatar_s, &sk_state);
+            merge_output(
+                &mut out,
+                crate::skeleton::emit_skeleton(&line1_s, &sk_state),
+            );
+            merge_output(
+                &mut out,
+                crate::skeleton::emit_skeleton(&line2_s, &sk_state),
+            );
+            out
         }
         WidgetCatalogId::Slider => {
             let val = (value_norm * 36.0).round();
@@ -1213,7 +1561,8 @@ where
             out
         }
         WidgetCatalogId::Switch => {
-            let desc = SwitchDesc::new(ctrl_rect, "Animate");
+            let is_on = variant_idx % 2 == 1;
+            let desc = SwitchDesc::new(ctrl_rect, "Animate").with_on(is_on);
             let glyphs = shape(
                 "Animate",
                 Vec2::new(o.x + 48.0, o.y + (ctrl_rect.size.y - 13.0) * 0.5),
@@ -1232,9 +1581,12 @@ where
             .with_label("Files");
             let mut table_state = TableState::new();
             table_state.select_row(variant_idx % 3);
-            let row0_g = shape("main.rs", Vec2::new(o.x + 12.0, o.y + 38.0), 12.5);
-            let row1_g = shape("lib.rs", Vec2::new(o.x + 12.0, o.y + 68.0), 12.5);
-            let row2_g = shape("Cargo.toml", Vec2::new(o.x + 12.0, o.y + 98.0), 12.5);
+            let mut row0_g = shape("main.rs", Vec2::new(o.x + 12.0, o.y + 38.0), 12.5);
+            row0_g.extend(shape("14.2 KB", Vec2::new(o.x + 210.0, o.y + 38.0), 12.0));
+            let mut row1_g = shape("lib.rs", Vec2::new(o.x + 12.0, o.y + 68.0), 12.5);
+            row1_g.extend(shape("8.6 KB", Vec2::new(o.x + 216.0, o.y + 68.0), 12.0));
+            let mut row2_g = shape("Cargo.toml", Vec2::new(o.x + 12.0, o.y + 98.0), 12.5);
+            row2_g.extend(shape("1.4 KB", Vec2::new(o.x + 216.0, o.y + 98.0), 12.0));
             let rows = [
                 crate::table::TableRow {
                     index: 0,
@@ -1304,14 +1656,20 @@ where
         }
         WidgetCatalogId::TagInput => {
             let desc = TagInputDesc::new(ctrl_rect);
-            let tags = TagInputState::with_tags(["rust".to_owned()]);
+            let tags = TagInputState::with_tags(["rust".to_owned(), "vulkan".to_owned()]);
             let layout = layout_tags(&desc, &tags, |tag| tag.len() as f32 * 8.0);
-            let chip_r = layout.chips.first().copied().unwrap_or(ctrl_rect);
+            let chip0 = layout.chips.first().copied().unwrap_or(ctrl_rect);
+            let chip1 = layout.chips.get(1).copied().unwrap_or(ctrl_rect);
             let mut glyphs = shape(
                 "rust",
-                Vec2::new(chip_r.origin.x + 10.0, chip_r.origin.y + 4.0),
-                12.5,
+                Vec2::new(chip0.origin.x + 10.0, chip0.origin.y + 4.0),
+                12.0,
             );
+            glyphs.extend(shape(
+                "vulkan",
+                Vec2::new(chip1.origin.x + 10.0, chip1.origin.y + 4.0),
+                12.0,
+            ));
             crate::tag_input::emit_tag_input(node, &desc, &tags, state, &layout, &mut glyphs)
         }
         WidgetCatalogId::TextArea => {
@@ -1329,9 +1687,11 @@ where
             )
         }
         WidgetCatalogId::TextInput => {
+            let samples = ["type here", "Unbound UI", "Vulkan 1.3"];
+            let sample = samples[variant_idx % samples.len()];
             let desc = TextInputDesc::new(ctrl_rect).with_placeholder("type here");
             let mut glyphs = shape(
-                "type here",
+                sample,
                 Vec2::new(
                     ctrl_rect.origin.x + 10.0,
                     ctrl_rect.origin.y + (ctrl_rect.size.y - 13.0) * 0.5,
@@ -1418,17 +1778,26 @@ where
             out
         }
         WidgetCatalogId::Tooltip => {
-            let desc = TooltipDesc::new(
-                Rect::new(o.x, o.y, 120.0, 32.0),
-                rect,
-                Vec2::new(o.x + 20.0, o.y + 40.0),
-            );
+            let trig_r = Rect::new(o.x, o.y, 128.0, 32.0);
+            let tip_size = Vec2::new(168.0, 30.0);
+            let desc = TooltipDesc::new(trig_r, rect, tip_size);
+            let tip_r = desc.rect();
             let mut out = crate::tooltip::emit_tooltip(node, 2, &desc, state).0;
-            let g = shape(
-                "Auto-flipping hint",
-                Vec2::new(o.x + 28.0, o.y + 46.0),
-                12.0,
+            out.primitives.insert(
+                0,
+                crate::primitive::outlined(
+                    trig_r,
+                    6.0,
+                    Token::SURFACE_RAISED,
+                    Token::OUTLINE,
+                    1.0,
+                    0.0,
+                    desc.z.saturating_sub(1),
+                ),
             );
+            let trig_g = shape_centered(&mut shape, "Hover target", trig_r, 12.0);
+            let g = shape_centered(&mut shape, "Auto-flipping hint", tip_r, 12.0);
+            push_glyphs(&mut out, &trig_g, Token::TEXT_PRIMARY, desc.z);
             push_glyphs(&mut out, &g, Token::TEXT_PRIMARY, desc.z + 2);
             out
         }
@@ -1485,18 +1854,18 @@ where
                 open,
             );
             let mut glyphs = shape("Details", Vec2::new(o.x + 12.0, o.y + 9.0), 13.0);
-            if open {
-                glyphs.extend(shape(
-                    "Expanded disclosure panel content.",
-                    Vec2::new(o.x + 12.0, o.y + 44.0),
-                    12.5,
-                ));
-            }
+            let body_text = if open {
+                "Expanded disclosure panel content."
+            } else {
+                "Click header to expand details..."
+            };
+            glyphs.extend(shape(body_text, Vec2::new(o.x + 12.0, o.y + 44.0), 12.5));
             crate::collapsible::emit_collapsible(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::Masonry => {
+            let msn_r = Rect::new(o.x, o.y, rect.size.x, 96.0);
             let desc = crate::masonry::MasonryDesc::new(
-                Rect::new(o.x, o.y, rect.size.x, 96.0),
+                msn_r,
                 2,
                 vec![
                     crate::masonry::MasonryItem { height: 32.0 },
@@ -1504,17 +1873,27 @@ where
                     crate::masonry::MasonryItem { height: 28.0 },
                 ],
             );
-            crate::masonry::emit_masonry(node, &desc, state)
+            let mut out = crate::masonry::emit_masonry(node, &desc, state);
+            for (idx, tile_r) in crate::masonry::layout_masonry(&desc)
+                .into_iter()
+                .enumerate()
+            {
+                let lbl = ["Card #1", "Card #2", "Card #3"][idx.min(2)];
+                let g = shape_centered(&mut shape, lbl, tile_r, 11.5);
+                push_glyphs(&mut out, &g, Token::TEXT_PRIMARY, desc.z + 2);
+            }
+            out
         }
         WidgetCatalogId::NavigationRail => {
             let rail_r = Rect::new(o.x, o.y, 160.0, 110.0);
+            let active_id = ((variant_idx % 2) + 1) as u64;
             let desc = crate::navigation_rail::NavigationRailDesc::new(
                 rail_r,
                 vec![
                     crate::navigation_rail::NavRailItem::new(1, "Home").with_badge(2),
                     crate::navigation_rail::NavRailItem::new(2, "Assets"),
                 ],
-                1,
+                active_id,
             );
             let mut glyphs = shape("Home", Vec2::new(o.x + 16.0, o.y + 18.0), 13.0);
             glyphs.extend(shape("Assets", Vec2::new(o.x + 16.0, o.y + 62.0), 13.0));
@@ -1554,24 +1933,44 @@ where
         }
         WidgetCatalogId::Stepper => {
             let stp_r = Rect::new(o.x, o.y, rect.size.x, 64.0);
+            let active_step = variant_idx % 3;
+            let status_for = |idx: usize| {
+                if idx < active_step {
+                    crate::stepper::StepStatus::Completed
+                } else if idx == active_step {
+                    crate::stepper::StepStatus::Active
+                } else {
+                    crate::stepper::StepStatus::Pending
+                }
+            };
             let desc = crate::stepper::StepperDesc::new(
                 stp_r,
                 vec![
-                    crate::stepper::StepItem::new("Plan", crate::stepper::StepStatus::Completed),
-                    crate::stepper::StepItem::new("Build", crate::stepper::StepStatus::Active),
-                    crate::stepper::StepItem::new("Ship", crate::stepper::StepStatus::Pending),
+                    crate::stepper::StepItem::new("Plan", status_for(0)),
+                    crate::stepper::StepItem::new("Build", status_for(1)),
+                    crate::stepper::StepItem::new("Ship", status_for(2)),
                 ],
             );
             let mut glyphs = shape("1  Plan", Vec2::new(o.x + 12.0, o.y + 46.0), 11.5);
-            glyphs.extend(shape_centered(&mut shape, "2  Build", stp_r, 11.5));
+            glyphs.extend(shape_centered(
+                &mut shape,
+                "2  Build",
+                Rect::new(o.x, o.y + 38.0, stp_r.size.x, 22.0),
+                11.5,
+            ));
+            glyphs.extend(shape(
+                "3  Ship",
+                Vec2::new((stp_r.max().x - 64.0).max(o.x + 120.0), o.y + 46.0),
+                11.5,
+            ));
             crate::stepper::emit_stepper(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::AutoComplete => {
             let desc = crate::autocomplete::AutoCompleteDesc::new(ctrl_rect, "unb", 3);
             let glyphs = shape(
-                "unb",
+                "unb  →  unbound-widgets (3 matches)",
                 Vec2::new(ctrl_rect.origin.x + 10.0, ctrl_rect.origin.y + 10.0),
-                13.0,
+                12.5,
             );
             crate::autocomplete::emit_autocomplete(node, &desc, state, &glyphs)
         }
@@ -1592,13 +1991,19 @@ where
             crate::banner::emit_banner(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::Cascader => {
+            let paths = [
+                "UI / Layout / Flex",
+                "UI / Widgets / Table",
+                "GPU / Vulkan / Pass",
+            ];
+            let path = paths[variant_idx % paths.len()];
             let desc = crate::cascader::CascaderDesc::new(
                 ctrl_rect,
-                vec![crate::cascader::CascaderOption::leaf("ui", "UI")],
-                vec!["UI".to_owned()],
+                vec![crate::cascader::CascaderOption::leaf("ui", path)],
+                vec![path.to_owned()],
             );
             let glyphs = shape(
-                "UI",
+                path,
                 Vec2::new(ctrl_rect.origin.x + 14.0, ctrl_rect.origin.y + 10.0),
                 12.5,
             );
@@ -1613,17 +2018,39 @@ where
                     NaiveDate::new(2026, 11, 13).expect("valid date"),
                 )),
             );
-            let glyphs = shape(
-                "Nov 1 - Nov 13, 2026",
-                Vec2::new(drp_r.origin.x + 16.0, drp_r.origin.y + 42.0),
-                12.0,
-            );
+            let pad = 6.0;
+            let preset_h = 20.0_f32.min(drp_r.height() * 0.25);
+            let preset_w = ((drp_r.width() - pad * 4.0) / 3.0).max(20.0);
+            let mut glyphs = Vec::new();
+            for (idx, lbl) in ["Last 7d", "Last 30d", "Q4 2026"].iter().enumerate() {
+                let pr = Rect::new(
+                    drp_r.origin.x + pad + idx as f32 * (preset_w + pad),
+                    drp_r.origin.y + pad,
+                    preset_w,
+                    preset_h,
+                );
+                glyphs.extend(shape_centered(&mut shape, lbl, pr, 11.0));
+            }
+            let panel_y = drp_r.origin.y + preset_h + pad * 2.0;
+            let panel_w = ((drp_r.width() - pad * 3.0) * 0.5).max(24.0);
+            glyphs.extend(shape(
+                "Nov 2026  (Nov 1 – Nov 13)",
+                Vec2::new(drp_r.origin.x + pad + 10.0, panel_y + 8.0),
+                11.5,
+            ));
+            glyphs.extend(shape(
+                "Dec 2026",
+                Vec2::new(drp_r.origin.x + pad * 2.0 + panel_w + 10.0, panel_y + 8.0),
+                11.5,
+            ));
             crate::date_range_picker::emit_date_range_picker(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::HotkeyInput => {
-            let desc = crate::hotkey_input::HotkeyInputDesc::new(ctrl_rect, "Ctrl+K");
+            let chords = ["Ctrl+K", "Ctrl+Shift+P", "Alt+Enter"];
+            let chord = chords[variant_idx % chords.len()];
+            let desc = crate::hotkey_input::HotkeyInputDesc::new(ctrl_rect, chord);
             let glyphs = shape(
-                "Ctrl+K",
+                chord,
                 Vec2::new(ctrl_rect.origin.x + 14.0, ctrl_rect.origin.y + 10.0),
                 13.0,
             );
@@ -1661,12 +2088,14 @@ where
             crate::notification_center::emit_notification_center(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::PinInput => {
-            let desc = crate::pin_input::PinInputDesc::new(
-                Rect::new(o.x, o.y, rect.size.x.min(220.0), rect.size.y.min(40.0)),
-                4,
-                (variant_idx % 4) + 1,
-            );
-            crate::pin_input::emit_pin_input(node, &desc, state, &[])
+            let pin_r = Rect::new(o.x, o.y, rect.size.x.min(220.0), rect.size.y.min(40.0));
+            let desc = crate::pin_input::PinInputDesc::new(pin_r, 4, (variant_idx % 4) + 1);
+            let mut glyphs = Vec::new();
+            for (idx, digit) in ["4", "8", "2", "9"].iter().enumerate() {
+                let cr = desc.cell_rect(idx);
+                glyphs.extend(shape_centered(&mut shape, digit, cr, 14.0));
+            }
+            crate::pin_input::emit_pin_input(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::Popconfirm => {
             let pc_r = Rect::new(o.x, o.y, 200.0, 72.0);
@@ -1762,7 +2191,7 @@ where
         }
         WidgetCatalogId::CodeEditor => {
             let ce_r = Rect::new(o.x, o.y, rect.size.x, 96.0);
-            let desc = crate::code_editor::CodeEditorDesc::new(ce_r, 12, 1);
+            let desc = crate::code_editor::CodeEditorDesc::new(ce_r, 12, variant_idx % 3);
             let mut glyphs = shape(
                 "1",
                 Vec2::new(ce_r.origin.x + 12.0, ce_r.origin.y + 8.0),
@@ -1836,22 +2265,35 @@ where
             crate::timeline::emit_timeline(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::TimelineTrack => {
+            let tt_r = Rect::new(o.x, o.y, rect.size.x, 96.0);
+            let playhead = 0.4 + value_norm * 3.2;
             let desc = crate::timeline_track::TimelineTrackDesc::new(
-                Rect::new(o.x, o.y, rect.size.x, 96.0),
-                1.5,
+                tt_r,
+                playhead,
                 4.0,
                 vec![
                     crate::timeline_track::Keyframe {
                         track: 0,
-                        time: 0.5,
+                        time: 0.8,
                     },
                     crate::timeline_track::Keyframe {
                         track: 1,
                         time: 2.0,
                     },
+                    crate::timeline_track::Keyframe {
+                        track: 2,
+                        time: 3.1,
+                    },
                 ],
             );
-            crate::timeline_track::emit_timeline_track(node, &desc, state, &[])
+            let pad = 6.0;
+            let lane_h = ((tt_r.height() - pad * 4.0) / 3.0).max(14.0);
+            let mut glyphs = Vec::new();
+            for (i, name) in ["Transform", "Opacity", "Camera"].iter().enumerate() {
+                let ly = tt_r.origin.y + pad + i as f32 * (lane_h + pad) + 4.0;
+                glyphs.extend(shape(name, Vec2::new(tt_r.origin.x + 12.0, ly), 11.0));
+            }
+            crate::timeline_track::emit_timeline_track(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::Tour => {
             let tr_r = Rect::new(o.x, o.y, rect.size.x, 110.0);
@@ -1916,13 +2358,36 @@ where
             crate::badge::emit_chip(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::EmptyState => {
-            let desc = EmptyStateDesc::new(rect, "No results found");
-            let glyphs = shape_centered(&mut shape, "No results found", rect, 13.5);
-            crate::hover_card::emit_empty_state(node, &desc, &glyphs, state).output
+            let desc = EmptyStateDesc::new(rect, "No results found")
+                .with_message("Try adjusting your search or filter criteria.")
+                .with_action("Reset Filters");
+            let title_r = desc.title_rect();
+            let desc_r = desc.message_rect();
+            let mut glyphs = shape_centered(&mut shape, "No results found", title_r, 13.5);
+            glyphs.extend(shape_centered(
+                &mut shape,
+                "Try adjusting your search or filter criteria.",
+                desc_r,
+                12.0,
+            ));
+            let mut out = crate::hover_card::emit_empty_state(node, &desc, &glyphs, state).output;
+            if let Some(act_r) = desc.action_rect() {
+                let act_g = shape_centered(&mut shape, "Reset Filters", act_r, 12.0);
+                push_glyphs(&mut out, &act_g, Token::ON_PRIMARY, desc.z + 2);
+            }
+            out
         }
         WidgetCatalogId::GradientEditor => {
             let grad_state = GradientEditorState::new();
-            crate::curve_editor::emit_gradient_editor(node, rect, &grad_state, state, 100)
+            let mut out =
+                crate::curve_editor::emit_gradient_editor(node, rect, &grad_state, state, 100);
+            let g = shape(
+                "OKLCH Gradient · 2 stops",
+                Vec2::new(o.x + 8.0, rect.max().y - 18.0),
+                11.5,
+            );
+            push_glyphs(&mut out, &g, Token::TEXT_SECONDARY, 104);
+            out
         }
         WidgetCatalogId::Icon => {
             let icon_r = Rect::new(o.x, o.y, 32.0, 32.0);
@@ -2123,9 +2588,9 @@ where
         }
         WidgetCatalogId::ToggleButton => {
             let tb_r = Rect::new(o.x, o.y, rect.size.x.min(160.0), rect.size.y.min(36.0));
-            let desc =
-                crate::toggle_button::ToggleButtonDesc::new(tb_r, "Pin Panel", state.selected);
-            let s = crate::toggle_button::ToggleButtonState::new(state.selected);
+            let checked = state.selected || (variant_idx % 2 == 1);
+            let desc = crate::toggle_button::ToggleButtonDesc::new(tb_r, "Pin Panel", checked);
+            let s = crate::toggle_button::ToggleButtonState::new(checked);
             let g = shape_centered(&mut shape, "Pin Panel", tb_r, 13.0);
             crate::toggle_button::emit_toggle_button_with_glyphs(node, &desc, &s, state, &g)
         }
@@ -2220,11 +2685,23 @@ where
         WidgetCatalogId::VirtualMasonry => {
             let desc = crate::virtual_masonry::VirtualMasonryDesc::new(rect, 3);
             let s = crate::virtual_masonry::VirtualMasonryState::new();
-            crate::virtual_masonry::emit_virtual_masonry(node, &desc, &s, state)
+            let mut out = crate::virtual_masonry::emit_virtual_masonry(node, &desc, &s, state);
+            let cols = 3usize;
+            let gap = 8.0;
+            let col_w = ((rect.width() - gap * (cols + 1) as f32) / cols as f32).max(20.0);
+            for c in 0..cols {
+                let cx = rect.origin.x + gap + c as f32 * (col_w + gap);
+                let cell_r = Rect::new(cx, rect.origin.y + gap, col_w, 28.0);
+                let lbl = ["Tile A1", "Tile B1", "Tile C1"][c];
+                let g = shape_centered(&mut shape, lbl, cell_r, 11.5);
+                push_glyphs(&mut out, &g, Token::TEXT_PRIMARY, 704);
+            }
+            out
         }
         WidgetCatalogId::TerminalView => {
             let desc = crate::terminal_view::TerminalViewDesc::new(rect);
-            let s = crate::terminal_view::TerminalViewState::new();
+            let mut s = crate::terminal_view::TerminalViewState::new();
+            s.cursor_line = variant_idx % 2;
             let mut glyphs = shape("1", Vec2::new(o.x + 14.0, o.y + 8.0), 12.0);
             glyphs.extend(shape("2", Vec2::new(o.x + 14.0, o.y + 26.0), 12.0));
             glyphs.extend(shape(

@@ -10,6 +10,39 @@ use crate::latency::LatencyTracker;
 use crate::pacing::{FramePacer, PresentWaitPolicy};
 use crate::resize::{Extent, ResizeAction, ResizeTracker};
 
+/// 窗口启动时的初始位置策略。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum WindowPosition {
+    /// 默认居中于主显示器工作区（扣除任务栏后的可用区域）。
+    #[default]
+    CenterPrimary,
+    /// 居中于当前鼠标指针所在显示器的工作区。
+    CenterActiveMonitor,
+    /// 交由操作系统默认策略决定（在无边框弹窗下自动应用工作区安全边距）。
+    SystemDefault,
+    /// 指定逻辑像素坐标（相对于目标显示器工作区左上角，按目标显示器 DPI 自动换算为物理像素）。
+    Logical { x: i32, y: i32 },
+    /// 指定屏幕物理像素坐标。
+    Physical { x: i32, y: i32 },
+}
+
+/// 解析后的窗口初始物理摆放参数（屏幕物理坐标与客户区物理尺寸）。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct WindowPlacement {
+    /// 窗口左上角屏幕物理 X 坐标。
+    pub x: i32,
+    /// 窗口左上角屏幕物理 Y 坐标。
+    pub y: i32,
+    /// 窗口客户区物理像素宽度。
+    pub width: i32,
+    /// 窗口客户区物理像素高度。
+    pub height: i32,
+    /// 生效的最小跟踪物理像素宽度（用于 `WM_GETMINMAXINFO`）。
+    pub min_track_width: i32,
+    /// 生效的最小跟踪物理像素高度（用于 `WM_GETMINMAXINFO`）。
+    pub min_track_height: i32,
+}
+
 /// 平台窗口的配置参数。
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowConfig {
@@ -34,6 +67,8 @@ pub struct WindowConfig {
     pub visible: bool,
     /// 目标刷新间隔。
     pub refresh: std::time::Duration,
+    /// 窗口启动时的初始位置策略（默认为主屏幕工作区居中 [`WindowPosition::CenterPrimary`]）。
+    pub position: WindowPosition,
 }
 
 impl Default for WindowConfig {
@@ -44,11 +79,158 @@ impl Default for WindowConfig {
             height: 800,
             resizable: true,
             decorations: true,
-            min_width: 960,
-            min_height: 600,
+            min_width: 320,
+            min_height: 240,
             visible: true,
             refresh: crate::pacing::REFRESH_120,
+            position: WindowPosition::CenterPrimary,
         }
+    }
+}
+
+impl WindowConfig {
+    /// 设置窗口标题。
+    #[must_use]
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    /// 设置窗口初始逻辑宽高。
+    #[must_use]
+    pub const fn with_size(mut self, width: u32, height: u32) -> Self {
+        self.width = width;
+        self.height = height;
+        self
+    }
+
+    /// 设置窗口最小逻辑宽高。
+    #[must_use]
+    pub const fn with_min_size(mut self, min_width: u32, min_height: u32) -> Self {
+        self.min_width = min_width;
+        self.min_height = min_height;
+        self
+    }
+
+    /// 设置窗口初始位置策略。
+    #[must_use]
+    pub const fn with_position(mut self, position: WindowPosition) -> Self {
+        self.position = position;
+        self
+    }
+
+    /// 将窗口初始位置设为主显示器工作区居中。
+    #[must_use]
+    pub const fn centered(mut self) -> Self {
+        self.position = WindowPosition::CenterPrimary;
+        self
+    }
+
+    /// 将窗口初始位置设为当前鼠标所在显示器工作区居中。
+    #[must_use]
+    pub const fn centered_on_active_monitor(mut self) -> Self {
+        self.position = WindowPosition::CenterActiveMonitor;
+        self
+    }
+
+    /// 将窗口初始位置设为指定逻辑坐标（相对于目标显示器工作区左上角）。
+    #[must_use]
+    pub const fn at_logical(mut self, x: i32, y: i32) -> Self {
+        self.position = WindowPosition::Logical { x, y };
+        self
+    }
+
+    /// 将窗口初始位置设为指定屏幕物理坐标。
+    #[must_use]
+    pub const fn at_physical(mut self, x: i32, y: i32) -> Self {
+        self.position = WindowPosition::Physical { x, y };
+        self
+    }
+
+    /// 计算生效的最小逻辑尺寸。
+    ///
+    /// 若调用方仅设置了较小的 `width` / `height`（例如 800×600）而显式或隐式携带了更大的
+    /// `min_width` / `min_height`，必须将最小尺寸钳制到不超过初始窗口尺寸，否则首次移动窗口
+    /// 触发 `WM_GETMINMAXINFO` 时操作系统会强制把窗口拉大到 `min_width × min_height`。
+    #[must_use]
+    pub const fn effective_min_size(&self) -> (u32, u32) {
+        let w = if self.width > 0 { self.width } else { 1 };
+        let h = if self.height > 0 { self.height } else { 1 };
+        let min_w = if self.min_width > w {
+            w
+        } else {
+            self.min_width
+        };
+        let min_h = if self.min_height > h {
+            h
+        } else {
+            self.min_height
+        };
+        (min_w, min_h)
+    }
+}
+
+/// 根据 [`WindowConfig`]、目标显示器工作区物理矩形 `(left, top, right, bottom)` 与 DPI 缩放因子，
+/// 计算窗口初始物理位置与客户区物理尺寸。
+#[must_use]
+pub fn resolve_window_placement(
+    config: &WindowConfig,
+    work_area: (i32, i32, i32, i32),
+    scale_factor: f64,
+) -> WindowPlacement {
+    let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    let (eff_min_w, eff_min_h) = config.effective_min_size();
+    let logical_w = config.width.max(eff_min_w).max(1);
+    let logical_h = config.height.max(eff_min_h).max(1);
+
+    let width = (f64::from(logical_w) * scale).round().max(1.0) as i32;
+    let height = (f64::from(logical_h) * scale).round().max(1.0) as i32;
+    let min_track_width = if eff_min_w > 0 {
+        (f64::from(eff_min_w) * scale).round().max(1.0) as i32
+    } else {
+        0
+    };
+    let min_track_height = if eff_min_h > 0 {
+        (f64::from(eff_min_h) * scale).round().max(1.0) as i32
+    } else {
+        0
+    };
+
+    let (work_left, work_top, work_right, work_bottom) = work_area;
+    let work_w = (work_right - work_left).max(1);
+    let work_h = (work_bottom - work_top).max(1);
+
+    let (x, y) = match config.position {
+        WindowPosition::CenterPrimary | WindowPosition::CenterActiveMonitor => {
+            let cx = work_left + ((work_w - width) / 2).max(0);
+            let cy = work_top + ((work_h - height) / 2).max(0);
+            (cx, cy)
+        }
+        WindowPosition::Logical { x, y } => (
+            work_left + (f64::from(x) * scale).round() as i32,
+            work_top + (f64::from(y) * scale).round() as i32,
+        ),
+        WindowPosition::Physical { x, y } => (x, y),
+        WindowPosition::SystemDefault => {
+            let offset = (48.0 * scale).round() as i32;
+            (
+                work_left + offset.min((work_w - width).max(0)),
+                work_top + offset.min((work_h - height).max(0)),
+            )
+        }
+    };
+
+    WindowPlacement {
+        x,
+        y,
+        width,
+        height,
+        min_track_width,
+        min_track_height,
     }
 }
 
@@ -399,6 +581,70 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
 mod tests {
     use super::*;
     use crate::pacing::PresentSync;
+
+    /// 默认窗口配置应居中于主屏幕工作区，且将 `min_width` / `min_height` 钳制在 `width` / `height` 之内，
+    /// 避免示例程序（如 800×600）在移动窗口触发 `WM_GETMINMAXINFO` 时突然跳变到 960 宽度。
+    #[test]
+    fn default_window_config_centers_on_primary_and_never_jumps_size_on_move() {
+        let example_cfg = WindowConfig {
+            title: "01 — Hello Counter".to_string(),
+            width: 800,
+            height: 600,
+            ..Default::default()
+        };
+        assert_eq!(example_cfg.position, WindowPosition::CenterPrimary);
+        let (min_w, min_h) = example_cfg.effective_min_size();
+        assert!(min_w <= example_cfg.width);
+        assert!(min_h <= example_cfg.height);
+
+        let placement = resolve_window_placement(&example_cfg, (0, 0, 1920, 1040), 1.0);
+        assert_eq!(placement.width, 800);
+        assert_eq!(placement.height, 600);
+        assert_eq!(placement.x, (1920 - 800) / 2);
+        assert_eq!(placement.y, (1040 - 600) / 2);
+        assert!(placement.min_track_width <= placement.width);
+        assert!(placement.min_track_height <= placement.height);
+    }
+
+    /// 即使调用方显式指定了大于初始宽高的 `min_width` / `min_height`，`effective_min_size`
+    /// 也会将其钳制到不超过初始宽高，杜绝移动窗口时的尺寸跳变。
+    #[test]
+    fn effective_min_size_clamps_oversized_minimums_to_initial_dimensions() {
+        let cfg = WindowConfig {
+            width: 800,
+            height: 600,
+            min_width: 960,
+            min_height: 720,
+            ..Default::default()
+        };
+        assert_eq!(cfg.effective_min_size(), (800, 600));
+        let placement = resolve_window_placement(&cfg, (0, 0, 2560, 1400), 1.5);
+        assert_eq!(placement.width, 1200);
+        assert_eq!(placement.height, 900);
+        assert_eq!(placement.min_track_width, 1200);
+        assert_eq!(placement.min_track_height, 900);
+    }
+
+    /// 窗口位置策略支持逻辑坐标、物理坐标与主屏/活动显示器居中配置。
+    #[test]
+    fn custom_window_positions_resolve_accurately_across_dpi_scales() {
+        let work_area = (100, 40, 2020, 1120);
+        let logical_cfg = WindowConfig::default()
+            .with_size(800, 600)
+            .at_logical(50, 60);
+        let p_logical = resolve_window_placement(&logical_cfg, work_area, 1.5);
+        assert_eq!(p_logical.x, 100 + 75);
+        assert_eq!(p_logical.y, 40 + 90);
+        assert_eq!(p_logical.width, 1200);
+        assert_eq!(p_logical.height, 900);
+
+        let physical_cfg = WindowConfig::default()
+            .with_size(800, 600)
+            .at_physical(320, 180);
+        let p_phys = resolve_window_placement(&physical_cfg, work_area, 1.5);
+        assert_eq!(p_phys.x, 320);
+        assert_eq!(p_phys.y, 180);
+    }
 
     /// 缩放事件直达应用并立即重建交换链：必须按新分辨率绘制帧，
     /// 而非显示上一帧的拉伸副本。

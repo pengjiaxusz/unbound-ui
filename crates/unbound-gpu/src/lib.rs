@@ -10,7 +10,7 @@
 //! | [`ring`] | M1 | 逐帧瞬态环形缓冲区 |
 //! | [`pool`] | M1 | 持久化池 + 稀疏散布更新补丁 |
 //! | [`sort`] | M1 | 64 位排序键编码与 CPU 参考排序 |
-//! | [`device`] | M1 | Vulkan 实例/设备/队列/特性初始化 |
+//! | [`device`] | M1 | Vulkan 实例/设备/特性初始化与诊断 |
 //! | [`shader`] | M1 | 已编译的 SPIR-V 模块 |
 //! | [`pipeline`] | M1 | Uber 着色器与计算管线 |
 //! | [`frame`] | M1 | Pass 调度与间接绘制提交 |
@@ -51,7 +51,12 @@ pub use debug::{
     is_device_lost, recover_with, RecoveryError, RecoveryPolicy, RenderDoc, ValidationCounter,
     VALIDATION,
 };
-pub use device::{Buffer, Gpu, GpuConfig, GpuError, GpuFeatures, MemoryKind, Timeline};
+pub use device::{
+    explain_vk_result, filter_instance_extensions, is_13_backport_device_extension,
+    is_optional_device_extension, is_optional_instance_extension, last_init_diagnostics,
+    resolve_device_extensions, Buffer, DeviceExtensionResolution, Gpu, GpuConfig, GpuError,
+    GpuFeatures, GpuInitDiagnostics, InstanceExtensionResolution, MemoryKind, Timeline,
+};
 pub use frame::{Camera, FrameStats, Renderer, SceneUpload};
 pub use pool::{PersistentPool, PoolHandle, PoolStats, ScatterPatch};
 pub use quarantine::{EpochQuarantine, QuarantinedBlock};

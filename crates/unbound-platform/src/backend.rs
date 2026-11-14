@@ -230,22 +230,23 @@ mod win32 {
         TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CW_USEDEFAULT,
         GWLP_USERDATA, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTCLOSE, HTLEFT,
         HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, MINMAXINFO,
-        MSG, MWMO_INPUTAVAILABLE, NCCALCSIZE_PARAMS, PM_REMOVE, QS_ALLINPUT, SWP_NOACTIVATE,
-        SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, WINDOW_STYLE, WM_CHAR,
-        WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_DROPFILES, WM_GETMINMAXINFO, WM_IME_COMPOSITION,
-        WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-        WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
-        WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
-        WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN,
-        WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW,
+        MSG, MWMO_INPUTAVAILABLE, NCCALCSIZE_PARAMS, PM_REMOVE, QS_ALLINPUT, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, WINDOW_STYLE,
+        WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_DROPFILES, WM_GETMINMAXINFO,
+        WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
+        WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
+        WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
+        WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+        WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
+        WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW,
     };
 
     use crate::pacing::PresentWaitPolicy;
     use crate::resize::Extent;
     use crate::win32_window::{CursorIcon, WM_APP_WAKE};
     use crate::window::{
-        apply, ButtonState, ImeEvent, Modifiers, MouseButton, PlatformEvent, PlatformKey,
+        apply, resolve_window_placement, ButtonState, ImeEvent, Modifiers, MouseButton,
+        PlatformEvent, PlatformKey, WindowPosition,
     };
 
     const INFINITE_TIMEOUT: u32 = u32::MAX;
@@ -356,6 +357,9 @@ mod win32 {
         resizable: bool,
         min_width: u32,
         min_height: u32,
+        /// 原生装饰窗口的非客户区边框增量（用于 `WM_GETMINMAXINFO` 保证客户区最小尺寸准确）。
+        frame_extra_w: std::cell::Cell<i32>,
+        frame_extra_h: std::cell::Cell<i32>,
         cursor: Arc<AtomicU8>,
         tracking_leave: std::cell::Cell<bool>,
         last_modifiers: std::cell::Cell<Modifiers>,
@@ -508,11 +512,27 @@ mod win32 {
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
             WM_GETMINMAXINFO => {
-                if data.min_width > 0 && data.min_height > 0 {
+                if data.min_width > 0 || data.min_height > 0 {
                     let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
                     let scale = crate::win32_window::win32::scale_factor(hwnd.0 as isize);
-                    info.ptMinTrackSize.x = (f64::from(data.min_width) * scale).round() as i32;
-                    info.ptMinTrackSize.y = (f64::from(data.min_height) * scale).round() as i32;
+                    let extra_w = if data.decorations {
+                        data.frame_extra_w.get().max(0)
+                    } else {
+                        0
+                    };
+                    let extra_h = if data.decorations {
+                        data.frame_extra_h.get().max(0)
+                    } else {
+                        0
+                    };
+                    if data.min_width > 0 {
+                        info.ptMinTrackSize.x =
+                            (f64::from(data.min_width) * scale).round() as i32 + extra_w;
+                    }
+                    if data.min_height > 0 {
+                        info.ptMinTrackSize.y =
+                            (f64::from(data.min_height) * scale).round() as i32 + extra_h;
+                    }
                     return LRESULT(0);
                 }
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -844,15 +864,47 @@ mod win32 {
         config: &WindowConfig,
     ) -> Result<WindowEntry, PlatformError> {
         let style = WINDOW_STYLE(compute_window_style(config));
+        let (eff_min_w, eff_min_h) = config.effective_min_size();
 
         let sys_dpi = unsafe { GetDpiForSystem() };
-        let scale = if sys_dpi == 0 {
+        let init_scale = if sys_dpi == 0 {
             1.0
         } else {
             f64::from(sys_dpi) / 96.0
         };
-        let phys_w = (f64::from(config.width.max(1)) * scale).round() as i32;
-        let phys_h = (f64::from(config.height.max(1)) * scale).round() as i32;
+        let init_logical_w = config.width.max(eff_min_w).max(1);
+        let init_logical_h = config.height.max(eff_min_h).max(1);
+        let init_phys_w = (f64::from(init_logical_w) * init_scale).round().max(1.0) as i32;
+        let init_phys_h = (f64::from(init_logical_h) * init_scale).round().max(1.0) as i32;
+
+        // 依据位置策略确定初始探测坐标点，使隐藏态窗口落在目标显示器上：
+        // - 主屏幕左上角恒为 (0, 0)；
+        // - CenterActiveMonitor 先采样当前鼠标指针屏幕坐标；
+        // - 自定义坐标先落到对应坐标点所在显示器。
+        let (seed_x, seed_y) = match config.position {
+            WindowPosition::CenterPrimary => (0, 0),
+            WindowPosition::CenterActiveMonitor => {
+                let mut cursor_pt = POINT::default();
+                if unsafe { GetCursorPos(&mut cursor_pt) }.is_ok() {
+                    (cursor_pt.x, cursor_pt.y)
+                } else {
+                    (0, 0)
+                }
+            }
+            WindowPosition::Physical { x, y } => (x, y),
+            WindowPosition::Logical { x, y } => (
+                (f64::from(x) * init_scale).round() as i32,
+                (f64::from(y) * init_scale).round() as i32,
+            ),
+            WindowPosition::SystemDefault => {
+                if config.decorations {
+                    (CW_USEDEFAULT, CW_USEDEFAULT)
+                } else {
+                    (0, 0)
+                }
+            }
+        };
+
         let title_wide: Vec<u16> = config
             .title
             .encode_utf16()
@@ -865,8 +917,10 @@ mod win32 {
         let user_data = Rc::new(WindowUserData {
             decorations: config.decorations,
             resizable: config.resizable,
-            min_width: config.min_width,
-            min_height: config.min_height,
+            min_width: eff_min_w,
+            min_height: eff_min_h,
+            frame_extra_w: std::cell::Cell::new(0),
+            frame_extra_h: std::cell::Cell::new(0),
             cursor: Arc::clone(&cursor),
             tracking_leave: std::cell::Cell::new(false),
             last_modifiers: std::cell::Cell::new(Modifiers::default()),
@@ -881,10 +935,10 @@ mod win32 {
                 class_name,
                 PCWSTR(title_wide.as_ptr()),
                 style,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                phys_w,
-                phys_h,
+                seed_x,
+                seed_y,
+                init_phys_w,
+                init_phys_h,
                 None,
                 None,
                 Some(hinstance),
@@ -902,6 +956,93 @@ mod win32 {
             // 无边框窗口经 WM_NCCALCSIZE 去除非客户区后，通过扩展 1px 顶边帧恢复 DWM 阴影与圆角。
             crate::win32_frame::apply_borderless_dwm(hwnd.0 as isize);
         }
+
+        // 在窗口显示前，查询目标显示器的真实工作区（扣除任务栏）与真实 DPI 缩放因子，
+        // 计算精确的居中或自定义坐标以及物理宽高并一次性应用。
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        let mut mi = MONITORINFO {
+            cbSize: core::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let monitor_scale = crate::win32_window::win32::scale_factor(hwnd.0 as isize);
+        let work_area = if unsafe { GetMonitorInfoW(monitor, &mut mi) }.as_bool() {
+            (
+                mi.rcWork.left,
+                mi.rcWork.top,
+                mi.rcWork.right,
+                mi.rcWork.bottom,
+            )
+        } else {
+            (
+                0,
+                0,
+                (1920.0 * monitor_scale).round() as i32,
+                (1080.0 * monitor_scale).round() as i32,
+            )
+        };
+
+        // 对带原生装饰的窗口，测算外框相对于客户区的非客户区边框差值，保证客户区物理尺寸严格等于请求值。
+        let (extra_w, extra_h) = if config.decorations {
+            let mut client_rc = RECT::default();
+            if unsafe { GetClientRect(hwnd, &mut client_rc) }.is_ok() {
+                let cw = (client_rc.right - client_rc.left).max(1);
+                let ch = (client_rc.bottom - client_rc.top).max(1);
+                ((init_phys_w - cw).max(0), (init_phys_h - ch).max(0))
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+        user_data.frame_extra_w.set(extra_w);
+        user_data.frame_extra_h.set(extra_h);
+
+        let placement = resolve_window_placement(config, work_area, monitor_scale);
+        let outer_w = placement.width + extra_w;
+        let outer_h = placement.height + extra_h;
+        let (final_x, final_y) = match config.position {
+            WindowPosition::CenterPrimary | WindowPosition::CenterActiveMonitor => {
+                let work_w = (work_area.2 - work_area.0).max(1);
+                let work_h = (work_area.3 - work_area.1).max(1);
+                (
+                    work_area.0 + ((work_w - outer_w) / 2).max(0),
+                    work_area.1 + ((work_h - outer_h) / 2).max(0),
+                )
+            }
+            _ => (placement.x, placement.y),
+        };
+
+        if !(config.decorations && matches!(config.position, WindowPosition::SystemDefault)) {
+            unsafe {
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    final_x,
+                    final_y,
+                    outer_w,
+                    outer_h,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                );
+            }
+        } else if outer_w != init_phys_w || outer_h != init_phys_h {
+            unsafe {
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    0,
+                    0,
+                    outer_w,
+                    outer_h,
+                    ::windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE
+                        | SWP_NOZORDER
+                        | SWP_NOACTIVATE
+                        | SWP_FRAMECHANGED,
+                );
+            }
+        }
+
+        // 清空隐藏定位阶段产生的中间尺寸消息，使应用在 resumed 时直接读取最终稳定尺寸。
+        user_data.events.borrow_mut().clear();
 
         let window = Window::new(
             hwnd.0 as isize,

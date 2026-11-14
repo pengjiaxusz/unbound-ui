@@ -272,6 +272,8 @@ impl<A: Application> WindowedRunner<A> {
             instance_extensions,
             device_extensions: vec![
                 "VK_KHR_swapchain".to_string(),
+                "VK_EXT_swapchain_maintenance1".to_string(),
+                "VK_KHR_present_wait".to_string(),
                 "VK_KHR_dynamic_rendering".to_string(),
                 "VK_KHR_synchronization2".to_string(),
             ],
@@ -280,12 +282,44 @@ impl<A: Application> WindowedRunner<A> {
 
         let recovered = recover_with(policy, || {
             let gpu = Gpu::new(device_config.clone())?;
-            let surface = Surface::new_win32(&gpu, hwnd)?;
+            let surface = match Surface::new_win32(&gpu, hwnd) {
+                Ok(s) => s,
+                Err(err) => {
+                    gpu.destroy();
+                    return Err(err);
+                }
+            };
             let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false);
-            let swapchain = Swapchain::new(&gpu, &surface, width, height, &present)?;
-            let mut renderer = Renderer::new(gpu, width, height)?;
-            let atlases = Arc::new(AtlasSet::new(&renderer.gpu, 64)?);
-            renderer.install_atlases(atlases.clone())?;
+            let swapchain = match Swapchain::new(&gpu, &surface, width, height, &present) {
+                Ok(sc) => sc,
+                Err(err) => {
+                    surface.destroy(&gpu);
+                    gpu.destroy();
+                    return Err(err);
+                }
+            };
+            let mut renderer = match Renderer::new(gpu, width, height) {
+                Ok(r) => r,
+                Err(err) => {
+                    return Err(err);
+                }
+            };
+            let atlases = match AtlasSet::new(&renderer.gpu, 64) {
+                Ok(a) => Arc::new(a),
+                Err(err) => {
+                    swapchain.destroy(&renderer.gpu);
+                    surface.destroy(&renderer.gpu);
+                    renderer.destroy();
+                    return Err(err);
+                }
+            };
+            if let Err(err) = renderer.install_atlases(atlases.clone()) {
+                drop(atlases);
+                swapchain.destroy(&renderer.gpu);
+                surface.destroy(&renderer.gpu);
+                renderer.destroy();
+                return Err(err);
+            }
             Ok((renderer, swapchain, surface, atlases))
         });
 
@@ -320,7 +354,8 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         let instance_extensions = match window_instance_extensions(window) {
             Ok(extensions) => extensions,
             Err(error) => {
-                eprintln!("[unbound-app] {error}");
+                eprintln!("[unbound-app] Window display handle initialization failed: {error}");
+                window.request_close();
                 return;
             }
         };
@@ -329,6 +364,8 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             instance_extensions,
             device_extensions: vec![
                 "VK_KHR_swapchain".to_string(),
+                "VK_EXT_swapchain_maintenance1".to_string(),
+                "VK_KHR_present_wait".to_string(),
                 "VK_KHR_dynamic_rendering".to_string(),
                 "VK_KHR_synchronization2".to_string(),
             ],
@@ -338,7 +375,11 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         let gpu = match Gpu::new(config) {
             Ok(gpu) => gpu,
             Err(error) => {
-                eprintln!("[unbound-app] Vulkan device initialization failed: {error:?}");
+                eprintln!(
+                    "[unbound-app] Vulkan device initialization failed:\n{}",
+                    error.diagnostic_report()
+                );
+                window.request_close();
                 return;
             }
         };
@@ -349,27 +390,50 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 Some(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
                 _ => {
                     eprintln!("[unbound-app] Window has no native Win32 handle");
+                    gpu.destroy();
+                    window.request_close();
                     return;
                 }
             }
         };
 
-        let Ok(surface) = Surface::new_win32(&gpu, hwnd) else {
-            eprintln!("[unbound-app] Could not create Vulkan surface");
-            return;
+        let surface = match Surface::new_win32(&gpu, hwnd) {
+            Ok(surface) => surface,
+            Err(error) => {
+                eprintln!(
+                    "[unbound-app] Could not create Vulkan surface (hwnd=0x{hwnd:X}):\n{}",
+                    error.diagnostic_report()
+                );
+                gpu.destroy();
+                window.request_close();
+                return;
+            }
         };
 
         let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false);
-        let Ok(swapchain) = Swapchain::new(&gpu, &surface, width, height, &present) else {
-            eprintln!("[unbound-app] Could not create swapchain");
-            return;
+        let swapchain = match Swapchain::new(&gpu, &surface, width, height, &present) {
+            Ok(swapchain) => swapchain,
+            Err(error) => {
+                eprintln!(
+                    "[unbound-app] Could not create swapchain ({width}x{height}):\n{}",
+                    error.diagnostic_report()
+                );
+                surface.destroy(&gpu);
+                gpu.destroy();
+                window.request_close();
+                return;
+            }
         };
 
         let device_extensions = gpu.enabled_device_extensions.clone();
         let mut renderer = match Renderer::new(gpu, width, height) {
             Ok(renderer) => renderer,
             Err(error) => {
-                eprintln!("[unbound-app] Could not create renderer: {error:?}");
+                eprintln!(
+                    "[unbound-app] Could not create renderer ({width}x{height}):\n{}",
+                    error.diagnostic_report()
+                );
+                window.request_close();
                 return;
             }
         };
@@ -377,13 +441,28 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         let atlases = match AtlasSet::new(&renderer.gpu, 64) {
             Ok(atlases) => Arc::new(atlases),
             Err(error) => {
-                eprintln!("[unbound-app] Could not create atlas set: {error:?}");
+                eprintln!(
+                    "[unbound-app] Could not create atlas set:\n{}",
+                    error.diagnostic_report()
+                );
+                swapchain.destroy(&renderer.gpu);
+                surface.destroy(&renderer.gpu);
+                renderer.destroy();
+                window.request_close();
                 return;
             }
         };
 
         if let Err(error) = renderer.install_atlases(atlases.clone()) {
-            eprintln!("[unbound-app] Could not install atlases: {error:?}");
+            eprintln!(
+                "[unbound-app] Could not install atlases:\n{}",
+                error.diagnostic_report()
+            );
+            drop(atlases);
+            swapchain.destroy(&renderer.gpu);
+            surface.destroy(&renderer.gpu);
+            renderer.destroy();
+            window.request_close();
             return;
         }
 

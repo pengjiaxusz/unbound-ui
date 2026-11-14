@@ -74,7 +74,6 @@ fn choose_memory_type(types: &[vk::MemoryType], bits: u32, kind: MemoryKind) -> 
 }
 
 /// 渲染器与驱动协商启用的全部能力快照。
-
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct GpuFeatures {
     pub buffer_device_address: bool,
@@ -156,6 +155,100 @@ impl GpuFeatures {
     }
 }
 
+/// Vulkan 初始化与资源创建阶段的详细诊断快照。
+///
+/// 当 Windows 10 旧驱动、缺失 Vulkan Runtime 或特性不满足导致初始化失败时，
+/// 该结构记录精确的失败阶段、加载器版本、实例/设备扩展协商结果与候选物理设备详情，
+/// 供 [`GpuError::diagnostic_report`] 输出完整的定位信息。
+#[derive(Clone, Debug, Default)]
+pub struct GpuInitDiagnostics {
+    /// 当前执行或失败所处的阶段名称（如 `"vkCreateInstance"`、`"vkCreateDevice"`）。
+    pub stage: &'static str,
+    /// Vulkan 加载器报告的最高实例 API 版本 `(major, minor, patch)`。
+    pub loader_api_version: Option<(u32, u32, u32)>,
+    /// 实际请求创建的实例 API 版本 `(major, minor, patch)`。
+    pub requested_api_version: Option<(u32, u32, u32)>,
+    /// 调用方与依赖链推导出的目标实例扩展。
+    pub requested_instance_extensions: Vec<String>,
+    /// 经 `vkEnumerateInstanceExtensionProperties` 过滤后实际启用的实例扩展。
+    pub enabled_instance_extensions: Vec<String>,
+    /// 因加载器或驱动不支持而被安全跳过的可选实例扩展。
+    pub skipped_instance_extensions: Vec<String>,
+    /// 缺失的必需实例扩展。
+    pub missing_required_instance_extensions: Vec<String>,
+    /// 选中的物理设备名称。
+    pub selected_device_name: Option<String>,
+    /// 选中的物理设备类型（如 `DISCRETE_GPU`、`INTEGRATED_GPU`）。
+    pub selected_device_type: Option<String>,
+    /// 选中的物理设备 API 版本 `(major, minor, patch)`。
+    pub selected_device_api_version: Option<(u32, u32, u32)>,
+    /// 选中的物理设备驱动原始版本号。
+    pub selected_device_driver_version: Option<u32>,
+    /// 选中的物理设备厂商 ID 与设备 ID `(vendor_id, device_id)`。
+    pub selected_device_ids: Option<(u32, u32)>,
+    /// 调用方请求的设备扩展。
+    pub requested_device_extensions: Vec<String>,
+    /// 最终协商启用的设备扩展。
+    pub enabled_device_extensions: Vec<String>,
+    /// 因驱动或实例不支持而被安全跳过的可选设备扩展（含原因说明）。
+    pub skipped_device_extensions: Vec<String>,
+    /// 被淘汰的候选设备及其详细原因。
+    pub rejected_devices: Vec<String>,
+    /// 缺失的必需硬件特性。
+    pub missing_required_features: Vec<&'static str>,
+}
+
+static LAST_INIT_DIAGNOSTICS: std::sync::Mutex<Option<GpuInitDiagnostics>> =
+    std::sync::Mutex::new(None);
+
+fn store_init_diagnostics(diag: &GpuInitDiagnostics) {
+    if let Ok(mut guard) = LAST_INIT_DIAGNOSTICS.lock() {
+        *guard = Some(diag.clone());
+    }
+}
+
+/// 获取最近一次 Vulkan 设备初始化记录的诊断快照。
+#[must_use]
+pub fn last_init_diagnostics() -> Option<GpuInitDiagnostics> {
+    LAST_INIT_DIAGNOSTICS
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+}
+
+/// 将 `vk::Result` 转换为通俗易懂的故障原因说明。
+#[must_use]
+pub fn explain_vk_result(result: vk::Result) -> &'static str {
+    match result {
+        vk::Result::ERROR_EXTENSION_NOT_PRESENT => {
+            "请求的 Vulkan 扩展在当前系统加载器（vulkan-1.dll）或显卡驱动中不存在（常见于 Windows 10 旧版显卡驱动）"
+        }
+        vk::Result::ERROR_FEATURE_NOT_PRESENT => {
+            "显卡驱动不支持所请求的某项 Vulkan 硬件特性"
+        }
+        vk::Result::ERROR_INCOMPATIBLE_DRIVER => {
+            "显卡驱动与请求的 Vulkan API 版本不兼容（需支持 Vulkan 1.2+ 的显卡驱动）"
+        }
+        vk::Result::ERROR_INITIALIZATION_FAILED => {
+            "Vulkan 底层初始化失败（可能是驱动安装损坏、虚拟显卡环境受限或安全软件拦截）"
+        }
+        vk::Result::ERROR_LAYER_NOT_PRESENT => {
+            "请求的 Vulkan 校验层（如 VK_LAYER_KHRONOS_validation）未安装"
+        }
+        vk::Result::ERROR_OUT_OF_HOST_MEMORY => "系统内存（RAM）不足，无法完成 Vulkan 分配",
+        vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => "显卡显存（VRAM）不足，无法完成 Vulkan 分配",
+        vk::Result::ERROR_DEVICE_LOST => {
+            "GPU 设备已丢失（驱动重置/TDR 超时/显卡硬件断开）"
+        }
+        vk::Result::ERROR_SURFACE_LOST_KHR => "窗口渲染表面（VkSurfaceKHR）已失效",
+        vk::Result::ERROR_NATIVE_WINDOW_IN_USE_KHR => {
+            "原生窗口句柄（HWND）已被另一个未销毁的 VkSurfaceKHR 占用"
+        }
+        vk::Result::ERROR_OUT_OF_DATE_KHR => "交换链尺寸与窗口当前尺寸不一致，需重建交换链",
+        _ => "底层 Vulkan API 调用返回非预期错误码",
+    }
+}
+
 /// 设备创建与操作错误类型。
 #[derive(Debug)]
 pub enum GpuError {
@@ -173,6 +266,190 @@ pub enum GpuError {
     InvalidArgument(String),
     /// 设备已丢失（`VK_ERROR_DEVICE_LOST`）。
     DeviceLost,
+}
+
+impl GpuError {
+    /// 生成包含失败阶段、驱动/扩展协商详情与排障建议的结构化诊断报告。
+    #[must_use]
+    pub fn diagnostic_report(&self) -> String {
+        use core::fmt::Write as _;
+
+        let mut out = String::new();
+        let _ = writeln!(out, "=== Unbound UI Vulkan 诊断报告 ===");
+        let _ = writeln!(out, "错误摘要: {self}");
+
+        if let Self::Vulkan(res) = self {
+            let _ = writeln!(
+                out,
+                "错误码解析: {res:?} (code = {}) — {}",
+                res.as_raw(),
+                explain_vk_result(*res)
+            );
+        }
+
+        if let Some(diag) = last_init_diagnostics() {
+            if !diag.stage.is_empty() {
+                let _ = writeln!(out, "失败阶段: {}", diag.stage);
+            }
+            if let Some((maj, min, pat)) = diag.loader_api_version {
+                let req = diag
+                    .requested_api_version
+                    .map(|(rmaj, rmin, rpat)| format!("{rmaj}.{rmin}.{rpat}"))
+                    .unwrap_or_else(|| "unknown".into());
+                let _ = writeln!(
+                    out,
+                    "Vulkan Loader 版本: {maj}.{min}.{pat} (请求实例版本: {req})"
+                );
+            }
+            if !diag.requested_instance_extensions.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "请求的实例扩展: [{}]",
+                    diag.requested_instance_extensions.join(", ")
+                );
+                let _ = writeln!(
+                    out,
+                    "启用的实例扩展: [{}]",
+                    diag.enabled_instance_extensions.join(", ")
+                );
+            }
+            if !diag.skipped_instance_extensions.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "已跳过的可选实例扩展: [{}]",
+                    diag.skipped_instance_extensions.join(", ")
+                );
+            }
+            if !diag.missing_required_instance_extensions.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "缺失的必需实例扩展: [{}]",
+                    diag.missing_required_instance_extensions.join(", ")
+                );
+            }
+            if let Some(name) = &diag.selected_device_name {
+                let dev_type = diag.selected_device_type.as_deref().unwrap_or("UNKNOWN");
+                let api = diag
+                    .selected_device_api_version
+                    .map(|(a, b, c)| format!("{a}.{b}.{c}"))
+                    .unwrap_or_else(|| "unknown".into());
+                let drv = diag
+                    .selected_device_driver_version
+                    .map(|d| format!("0x{d:08X}"))
+                    .unwrap_or_else(|| "unknown".into());
+                let ids = diag
+                    .selected_device_ids
+                    .map(|(v, d)| format!("vendor=0x{v:04X}, device=0x{d:04X}"))
+                    .unwrap_or_default();
+                let _ = writeln!(
+                    out,
+                    "目标物理设备: {name} (type={dev_type}, api={api}, driver={drv}, {ids})"
+                );
+            }
+            if !diag.requested_device_extensions.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "请求的设备扩展: [{}]",
+                    diag.requested_device_extensions.join(", ")
+                );
+                let _ = writeln!(
+                    out,
+                    "启用的设备扩展: [{}]",
+                    diag.enabled_device_extensions.join(", ")
+                );
+            }
+            if !diag.skipped_device_extensions.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "已跳过的可选设备扩展: [{}]",
+                    diag.skipped_device_extensions.join("; ")
+                );
+            }
+            if !diag.missing_required_features.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "缺失的必需硬件特性: [{}]",
+                    diag.missing_required_features.join(", ")
+                );
+            }
+            if !diag.rejected_devices.is_empty() {
+                let _ = writeln!(out, "被拒绝的候选设备:");
+                for item in &diag.rejected_devices {
+                    let _ = writeln!(out, "  - {item}");
+                }
+            }
+        }
+
+        let _ = writeln!(out, "排障建议:");
+        match self {
+            Self::Loader(_) => {
+                let _ = writeln!(
+                    out,
+                    "  1. 请确认系统已安装显卡驱动以及 Vulkan Runtime (vulkan-1.dll)。"
+                );
+                let _ = writeln!(
+                    out,
+                    "  2. 可前往显卡厂商官网（NVIDIA / AMD / Intel）或 https://vulkan.lunarg.com 安装最新运行时。"
+                );
+            }
+            Self::NoSuitableDevice(_) => {
+                let _ = writeln!(
+                    out,
+                    "  1. 渲染器需要支持 Vulkan 1.3，或支持 Vulkan 1.2 且具备 VK_KHR_dynamic_rendering 与 VK_KHR_synchronization2 扩展的显卡驱动。"
+                );
+                let _ = writeln!(
+                    out,
+                    "  2. 在 Windows 10 机器上，请将独立显卡/核显驱动升级至支持 Vulkan 1.2+ 的较新版本。"
+                );
+            }
+            Self::UnsupportedFeatures(missing) => {
+                let _ = writeln!(
+                    out,
+                    "  1. 当前显卡驱动缺少关键渲染特性: {}。",
+                    missing.join(", ")
+                );
+                let _ = writeln!(
+                    out,
+                    "  2. 请更新显卡驱动；若机器存在双显卡（核显+独显），请在 Windows 图形设置中将程序指定为“高性能”独立显卡运行。"
+                );
+            }
+            Self::Vulkan(vk::Result::ERROR_EXTENSION_NOT_PRESENT) => {
+                let _ = writeln!(
+                    out,
+                    "  1. 驱动或 Vulkan Loader 拒绝了某项扩展请求。请检查上方“缺失的必需实例扩展”或“启用的设备扩展”列表。"
+                );
+                let _ = writeln!(
+                    out,
+                    "  2. 在 Windows 10 旧驱动环境下，建议更新显卡驱动并检查是否存在过期的第三方 Vulkan 覆盖层（如旧版 RTSS / OBS Vulkan Hook）。"
+                );
+            }
+            Self::Vulkan(_) => {
+                let _ = writeln!(
+                    out,
+                    "  1. 请参考上方失败阶段与错误码解析排查驱动状态，必要时可设置环境变量 UNBOUND_VALIDATION=1 获取校验层详细输出。"
+                );
+            }
+            Self::Allocation(_) => {
+                let _ = writeln!(
+                    out,
+                    "  1. 显存或主机内存分配失败，请检查是否有其他大型 3D 程序占满 VRAM，或调低 GpuConfig::{{pool_capacity, ring_capacity}}。"
+                );
+            }
+            Self::InvalidArgument(_) => {
+                let _ = writeln!(
+                    out,
+                    "  1. 请检查调用渲染器 API 时传入的槽位索引或缓冲区参数。"
+                );
+            }
+            Self::DeviceLost => {
+                let _ = writeln!(
+                    out,
+                    "  1. GPU 设备发生重置（VK_ERROR_DEVICE_LOST），框架将尝试触发自动设备恢复流程。"
+                );
+            }
+        }
+        out
+    }
 }
 
 impl core::fmt::Display for GpuError {
@@ -388,7 +665,7 @@ pub struct Gpu {
     pub enabled_device_extensions: Vec<String>,
     /// 实际启用的实例扩展列表。
     ///
-    /// 这是解析依赖链后的最终列表，可能包含由表面维护扩展自动引入的依赖项。
+    /// 这是解析依赖链并按系统实际支持情况过滤后的最终列表。
     pub enabled_instance_extensions: Vec<String>,
     /// 动态渲染函数表（`vkCmdBeginRendering`）。
     pub khr_dynamic_rendering: ash::khr::dynamic_rendering::Device,
@@ -467,6 +744,74 @@ fn resolve_instance_extension_dependencies(
     }
 }
 
+/// 渲染器在缺失时仍可运行的可选实例扩展。
+///
+/// 在 Windows 10 旧版加载器或旧显卡驱动上，`VK_EXT_surface_maintenance1`、
+/// `VK_KHR_get_surface_capabilities2` 或 `VK_EXT_debug_utils` 可能不存在；
+/// 必须在调用 `vkCreateInstance` 前依据 `vkEnumerateInstanceExtensionProperties`
+/// 过滤掉不支持的可选实例扩展，否则 `vkCreateInstance` 会直接因
+/// `VK_ERROR_EXTENSION_NOT_PRESENT` 失败。
+#[must_use]
+pub fn is_optional_instance_extension(name: &str) -> bool {
+    matches!(
+        name,
+        "VK_EXT_surface_maintenance1" | "VK_KHR_get_surface_capabilities2" | "VK_EXT_debug_utils"
+    )
+}
+
+/// 实例扩展协商结果。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InstanceExtensionResolution {
+    /// 最终传给 `vkCreateInstance` 的实例扩展列表。
+    pub enabled: Vec<String>,
+    /// 因当前机器不支持而被安全跳过的可选实例扩展。
+    pub skipped: Vec<String>,
+    /// 当前机器缺失的必需实例扩展（非空时无法创建窗口表面）。
+    pub missing_required: Vec<String>,
+}
+
+/// 根据加载器实际支持的实例扩展列表 `available` 过滤目标实例扩展 `desired`。
+///
+/// 保持依赖链合法性：若 `VK_KHR_get_surface_capabilities2` 不可用，则依赖它的
+/// `VK_EXT_surface_maintenance1` 也会一并降级跳过。
+#[must_use]
+pub fn filter_instance_extensions(
+    desired: &[String],
+    available: &[String],
+) -> InstanceExtensionResolution {
+    let is_avail = |name: &str| available.iter().any(|a| a == name);
+    let mut enabled = Vec::new();
+    let mut skipped = Vec::new();
+    let mut missing_required = Vec::new();
+
+    for ext in desired {
+        if is_avail(ext) {
+            push_unique(&mut enabled, ext);
+        } else if is_optional_instance_extension(ext) {
+            push_unique(&mut skipped, ext);
+        } else {
+            push_unique(&mut missing_required, ext);
+        }
+    }
+
+    // `VK_EXT_surface_maintenance1` 强依赖 `VK_KHR_get_surface_capabilities2`；
+    // 若后者未启用，必须同步移除前者以避免触发 VUID-vkCreateInstance-ppEnabledExtensionNames-01388。
+    if enabled.iter().any(|e| e == "VK_EXT_surface_maintenance1")
+        && !enabled
+            .iter()
+            .any(|e| e == "VK_KHR_get_surface_capabilities2")
+    {
+        enabled.retain(|e| e != "VK_EXT_surface_maintenance1");
+        push_unique(&mut skipped, "VK_EXT_surface_maintenance1");
+    }
+
+    InstanceExtensionResolution {
+        enabled,
+        skipped,
+        missing_required,
+    }
+}
+
 /// 渲染器在缺失时仍可运行的可选设备扩展。
 ///
 /// 它们仅用于改善呈现体验（帧步调、撕裂控制、呈现围栏），缺失时不视为失败。
@@ -476,6 +821,149 @@ pub fn is_optional_device_extension(name: &str) -> bool {
         name,
         "VK_EXT_swapchain_maintenance1" | "VK_KHR_present_wait" | "VK_KHR_present_id"
     )
+}
+
+/// Vulkan 1.2 向后移植的 1.3 核心特性扩展。
+///
+/// 在 Vulkan 1.3+ 驱动上这些特性已晋升为核心 `VkPhysicalDeviceVulkan13Features`；
+/// 在 Vulkan 1.2 驱动上则作为必需扩展由 `needs_13_backports` 分支统一启用。
+#[must_use]
+pub fn is_13_backport_device_extension(name: &str) -> bool {
+    matches!(
+        name,
+        "VK_KHR_dynamic_rendering"
+            | "VK_KHR_synchronization2"
+            | "VK_EXT_shader_demote_to_helper_invocation"
+    )
+}
+
+/// 设备扩展协商结果。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeviceExtensionResolution {
+    /// 最终启用并传给 `vkCreateDevice` 的设备扩展列表。
+    pub enabled: Vec<String>,
+    /// 被安全跳过的可选设备扩展及原因。
+    pub skipped: Vec<String>,
+    /// 缺失的必需设备扩展。
+    pub missing_required: Vec<String>,
+}
+
+/// 结合设备自身暴露的扩展 `available_device_exts`、实例已启用的扩展 `enabled_instance_exts`
+/// 与物理设备 API 版本，解析最终要启用的设备扩展集合。
+///
+/// 严格执行跨层依赖守卫：
+/// 1. `VK_EXT_swapchain_maintenance1` 仅在设备支持该扩展**且**实例已启用
+///    `VK_EXT_surface_maintenance1` + `VK_KHR_get_surface_capabilities2` 时启用；
+/// 2. `VK_KHR_present_wait` 仅在设备同时支持 `VK_KHR_present_wait` 与 `VK_KHR_present_id` 时启用；
+/// 3. Vulkan 1.3+ 设备通过 `VkPhysicalDeviceVulkan13Features` 开启核心特性，不重复挂载 1.2 KHR 向后移植扩展。
+#[must_use]
+pub fn resolve_device_extensions(
+    requested_device_exts: &[String],
+    available_device_exts: &[String],
+    enabled_instance_exts: &[String],
+    device_api_version: u32,
+) -> DeviceExtensionResolution {
+    let has_dev_ext = |name: &str| available_device_exts.iter().any(|n| n == name);
+    let has_inst_ext = |name: &str| enabled_instance_exts.iter().any(|n| n == name);
+    let needs_13_backports = device_api_version < vk::make_api_version(0, 1, 3, 0);
+
+    let mut enabled = Vec::new();
+    let mut skipped = Vec::new();
+    let mut missing_required = Vec::new();
+
+    for extension in requested_device_exts {
+        let name = extension.as_str();
+        if is_13_backport_device_extension(name) {
+            if needs_13_backports {
+                if has_dev_ext(name) {
+                    push_unique(&mut enabled, name);
+                } else {
+                    push_unique(&mut missing_required, name);
+                }
+            }
+            continue;
+        }
+
+        if name == "VK_EXT_swapchain_maintenance1" {
+            let inst_ready = has_inst_ext("VK_EXT_surface_maintenance1")
+                && has_inst_ext("VK_KHR_get_surface_capabilities2");
+            if !has_dev_ext(name) {
+                skipped.push(format!("{name} (driver does not expose extension)"));
+            } else if !inst_ready {
+                skipped.push(format!(
+                    "{name} (instance lacks VK_EXT_surface_maintenance1)"
+                ));
+            } else {
+                push_unique(&mut enabled, name);
+            }
+            continue;
+        }
+
+        if name == "VK_KHR_present_wait" {
+            if !has_dev_ext("VK_KHR_present_wait") {
+                skipped.push("VK_KHR_present_wait (driver does not expose extension)".to_string());
+            } else if !has_dev_ext("VK_KHR_present_id") {
+                skipped.push(
+                    "VK_KHR_present_wait (driver lacks dependency VK_KHR_present_id)".to_string(),
+                );
+            } else {
+                push_unique(&mut enabled, "VK_KHR_present_wait");
+                push_unique(&mut enabled, "VK_KHR_present_id");
+            }
+            continue;
+        }
+
+        if name == "VK_KHR_present_id" {
+            if has_dev_ext("VK_KHR_present_id") {
+                push_unique(&mut enabled, "VK_KHR_present_id");
+            } else {
+                skipped.push("VK_KHR_present_id (driver does not expose extension)".to_string());
+            }
+            continue;
+        }
+
+        if has_dev_ext(name) {
+            push_unique(&mut enabled, name);
+        } else if is_optional_device_extension(name) {
+            skipped.push(format!("{name} (not supported by driver)"));
+        } else {
+            push_unique(&mut missing_required, name);
+        }
+    }
+
+    if needs_13_backports {
+        for req_backport in ["VK_KHR_dynamic_rendering", "VK_KHR_synchronization2"] {
+            if has_dev_ext(req_backport) {
+                push_unique(&mut enabled, req_backport);
+            } else {
+                push_unique(&mut missing_required, req_backport);
+            }
+        }
+        if has_dev_ext("VK_EXT_shader_demote_to_helper_invocation") {
+            push_unique(&mut enabled, "VK_EXT_shader_demote_to_helper_invocation");
+        }
+    }
+
+    DeviceExtensionResolution {
+        enabled,
+        skipped,
+        missing_required,
+    }
+}
+
+/// 查询 Vulkan 加载器暴露的所有实例扩展名称。
+fn instance_extension_names(entry: &ash::Entry) -> Vec<String> {
+    // SAFETY: `entry` 为有效加载的 Vulkan 函数入口。
+    let properties =
+        unsafe { entry.enumerate_instance_extension_properties(None) }.unwrap_or_default();
+    properties
+        .iter()
+        .filter_map(|e| {
+            e.extension_name_as_c_str()
+                .ok()
+                .map(|c| c.to_string_lossy().into_owned())
+        })
+        .collect()
 }
 
 /// 查询物理设备暴露的所有设备扩展名称。
@@ -544,9 +1032,37 @@ impl Gpu {
     }
 
     unsafe fn new_inner(config: GpuConfig) -> Result<Self, GpuError> {
-        let entry = ash::Entry::load().map_err(|e| GpuError::Loader(e.to_string()))?;
+        let mut diag = GpuInitDiagnostics {
+            stage: "Entry::load",
+            requested_device_extensions: config.device_extensions.clone(),
+            ..Default::default()
+        };
+        store_init_diagnostics(&diag);
 
-        // ---- 校验层 ---------------------------------------------------------
+        let entry = ash::Entry::load().map_err(|e| {
+            let msg = format!("{e} (failed to load vulkan-1.dll / libvulkan)");
+            store_init_diagnostics(&diag);
+            GpuError::Loader(msg)
+        })?;
+
+        // ---- 加载器版本与实例扩展探测 ---------------------------------------
+        let max_api = entry
+            .try_enumerate_instance_version()
+            .ok()
+            .flatten()
+            .unwrap_or(vk::make_api_version(0, 1, 0, 0));
+        let api_version = max_api.min(vk::make_api_version(0, 1, 3, 0));
+        diag.loader_api_version = Some((
+            vk::api_version_major(max_api),
+            vk::api_version_minor(max_api),
+            vk::api_version_patch(max_api),
+        ));
+        diag.requested_api_version = Some((
+            vk::api_version_major(api_version),
+            vk::api_version_minor(api_version),
+            vk::api_version_patch(api_version),
+        ));
+
         let available_layers = entry
             .enumerate_instance_layer_properties()
             .unwrap_or_default();
@@ -555,29 +1071,53 @@ impl Gpu {
                 .map(|n| n == VALIDATION_LAYER)
                 .unwrap_or(false)
         });
-        let enable_validation = config.validation && validation_available;
+        let want_validation = config.validation && validation_available;
+
+        let mut desired_instance_exts = config.instance_extensions.clone();
+        if want_validation {
+            push_unique(&mut desired_instance_exts, "VK_EXT_debug_utils");
+        }
+        resolve_instance_extension_dependencies(
+            &mut desired_instance_exts,
+            &config.device_extensions,
+        );
+        diag.requested_instance_extensions = desired_instance_exts.clone();
+
+        let available_instance_exts = instance_extension_names(&entry);
+        let inst_resolution =
+            filter_instance_extensions(&desired_instance_exts, &available_instance_exts);
+        diag.enabled_instance_extensions = inst_resolution.enabled.clone();
+        diag.skipped_instance_extensions = inst_resolution.skipped.clone();
+        diag.missing_required_instance_extensions = inst_resolution.missing_required.clone();
+        diag.stage = "vkCreateInstance";
+        store_init_diagnostics(&diag);
+
+        for skipped_ext in &inst_resolution.skipped {
+            eprintln!(
+                "[unbound-gpu] Instance extension {skipped_ext} is not supported by this system; continuing without it"
+            );
+        }
+
+        if !inst_resolution.missing_required.is_empty() {
+            return Err(GpuError::NoSuitableDevice(format!(
+                "Vulkan instance lacks required surface extension(s): {} (available: [{}])",
+                inst_resolution.missing_required.join(", "),
+                available_instance_exts.join(", ")
+            )));
+        }
+
+        let instance_exts = inst_resolution.enabled;
+        let enable_validation =
+            want_validation && instance_exts.iter().any(|e| e == "VK_EXT_debug_utils");
         let layer_names = if enable_validation {
             vec![VALIDATION_LAYER.as_ptr()]
         } else {
             Vec::new()
         };
 
-        let mut instance_exts = config.instance_extensions.clone();
-        if enable_validation {
-            instance_exts.push("VK_EXT_debug_utils".to_string());
-        }
-        resolve_instance_extension_dependencies(&mut instance_exts, &config.device_extensions);
         let ext_cstrings = cstrings(&instance_exts);
         let ext_ptrs = raw_ptrs(&ext_cstrings);
 
-        // 加载器版本可能低于 1.3（Windows 10 自带较旧加载器）。无条件请求 1.3 会导致
-        // `vkCreateInstance` 失败；按加载器实际支持版本请求并在下方设备选择中处理 1.2 回退路径。
-        let max_api = entry
-            .try_enumerate_instance_version()
-            .ok()
-            .flatten()
-            .unwrap_or(vk::make_api_version(0, 1, 0, 0));
-        let api_version = max_api.min(vk::make_api_version(0, 1, 3, 0));
         let app_info = vk::ApplicationInfo::default()
             .application_name(c"unbound-ui")
             .application_version(vk::make_api_version(0, 0, 1, 0))
@@ -593,15 +1133,23 @@ impl Gpu {
                     .enabled_extension_names(&ext_ptrs),
                 None,
             )
-            .map_err(GpuError::Vulkan)?;
+            .map_err(|err| {
+                store_init_diagnostics(&diag);
+                GpuError::Vulkan(err)
+            })?;
 
         // ---- 调试信使 -------------------------------------------------------
         let debug = if enable_validation {
             let utils = ash::ext::debug_utils::Instance::new(&entry, &instance);
-            let messenger = utils
-                .create_debug_utils_messenger(&debug_messenger_info(), None)
-                .map_err(GpuError::Vulkan)?;
-            Some((utils, messenger))
+            match utils.create_debug_utils_messenger(&debug_messenger_info(), None) {
+                Ok(messenger) => Some((utils, messenger)),
+                Err(err) => {
+                    eprintln!(
+                        "[unbound-gpu] Could not create debug messenger ({err:?}); continuing without it"
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
@@ -611,9 +1159,21 @@ impl Gpu {
         // 候选设备必须在选中前完整探测：Windows 10 驱动常仅暴露 Vulkan 1.2，
         // 若具备 `VK_KHR_dynamic_rendering` 与 `VK_KHR_synchronization2` 扩展，
         // 1.2 设备依然可用；仅按设备类型选择会导致选中不可用的 1.2 GPU。
-        let devices = instance
-            .enumerate_physical_devices()
-            .map_err(GpuError::Vulkan)?;
+        diag.stage = "vkEnumeratePhysicalDevices";
+        store_init_diagnostics(&diag);
+        let devices = match instance.enumerate_physical_devices() {
+            Ok(list) => list,
+            Err(err) => {
+                if let Some((utils, messenger)) = debug {
+                    utils.destroy_debug_utils_messenger(messenger, None);
+                }
+                instance.destroy_instance(None);
+                store_init_diagnostics(&diag);
+                return Err(GpuError::Vulkan(err));
+            }
+        };
+
+        diag.stage = "PhysicalDeviceSelection";
         let mut best: Option<(
             vk::PhysicalDevice,
             i32,
@@ -627,22 +1187,45 @@ impl Gpu {
                 .device_name_as_c_str()
                 .map(|c| c.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| "unnamed".into());
+            let dev_api = format!(
+                "{}.{}.{}",
+                vk::api_version_major(props.api_version),
+                vk::api_version_minor(props.api_version),
+                vk::api_version_patch(props.api_version)
+            );
             let ext_names = device_extension_names(&instance, pd);
             let missing: Vec<&str> = config
                 .device_extensions
                 .iter()
-                .filter(|extension| !is_optional_device_extension(extension))
+                .filter(|extension| {
+                    !is_optional_device_extension(extension)
+                        && !is_13_backport_device_extension(extension)
+                })
                 .map(String::as_str)
                 .filter(|extension| !ext_names.iter().any(|n| n == extension))
                 .collect();
             if !missing.is_empty() {
-                rejected.push(format!("{name}: no {}", missing.join(", ")));
+                rejected.push(format!(
+                    "{name} (api={dev_api}, type={:?}): missing required device extension(s) [{}]",
+                    props.device_type,
+                    missing.join(", ")
+                ));
+                continue;
+            }
+            if props.api_version < vk::make_api_version(0, 1, 2, 0) {
+                rejected.push(format!(
+                    "{name} (api={dev_api}, type={:?}): Vulkan API < 1.2 is not supported",
+                    props.device_type
+                ));
                 continue;
             }
             let has_12_extensions = ext_names.iter().any(|n| n == "VK_KHR_dynamic_rendering")
                 && ext_names.iter().any(|n| n == "VK_KHR_synchronization2");
             if props.api_version < vk::make_api_version(0, 1, 3, 0) && !has_12_extensions {
-                rejected.push(format!("{name}: Vulkan 1.2 without the 1.3 back-ports"));
+                rejected.push(format!(
+                    "{name} (api={dev_api}, type={:?}): Vulkan 1.2 driver without VK_KHR_dynamic_rendering / VK_KHR_synchronization2",
+                    props.device_type
+                ));
                 continue;
             }
             let mut score = match props.device_type {
@@ -669,71 +1252,68 @@ impl Gpu {
                 best = Some((pd, score, props, ext_names));
             }
         }
+        diag.rejected_devices = rejected.clone();
         let Some((physical, _, properties, dev_ext_names)) = best else {
+            if let Some((utils, messenger)) = debug {
+                utils.destroy_debug_utils_messenger(messenger, None);
+            }
+            instance.destroy_instance(None);
+            store_init_diagnostics(&diag);
             return Err(GpuError::NoSuitableDevice(if rejected.is_empty() {
-                "no physical device".into()
+                "no Vulkan physical device found on this system".into()
             } else {
                 rejected.join("; ")
             }));
         };
 
+        let selected_name = properties
+            .device_name_as_c_str()
+            .map(|c| c.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "<unnamed>".into());
+        diag.selected_device_name = Some(selected_name);
+        diag.selected_device_type = Some(format!("{:?}", properties.device_type));
+        diag.selected_device_api_version = Some((
+            vk::api_version_major(properties.api_version),
+            vk::api_version_minor(properties.api_version),
+            vk::api_version_patch(properties.api_version),
+        ));
+        diag.selected_device_driver_version = Some(properties.driver_version);
+        diag.selected_device_ids = Some((properties.vendor_id, properties.device_id));
+
         // ---- 扩展依赖解析 ---------------------------------------------------
-        //
-        // Vulkan 要求启用扩展的同时必须启用其依赖项，且设备可能未提供某些可选扩展。
-        // 此处先校验设备实际暴露的扩展再按依赖链启用，避免因可选扩展缺失导致 `vkCreateDevice` 失败。
-        //
-        //   VK_EXT_swapchain_maintenance1 -> VK_EXT_surface_maintenance1
-        //                                       （实例扩展）
-        //   VK_KHR_present_wait            -> VK_KHR_present_id
-        //                                       （设备扩展）
-        let has_ext = |name: &str| dev_ext_names.iter().any(|n| n == name);
-        let mut device_exts: Vec<String> = Vec::new();
-        let mut skipped: Vec<&str> = Vec::new();
-        for extension in &config.device_extensions {
-            if has_ext(extension) {
-                device_exts.push(extension.clone());
-            } else if is_optional_device_extension(extension) {
-                skipped.push(extension.as_str());
-            } else {
-                // 物理设备选择循环已过滤掉缺少必需扩展的设备，此处仅作兜底校验。
-                return Err(GpuError::UnsupportedFeatures(vec!["device extension"]));
+        let dev_resolution = resolve_device_extensions(
+            &config.device_extensions,
+            &dev_ext_names,
+            &instance_exts,
+            properties.api_version,
+        );
+        let mut device_exts = dev_resolution.enabled;
+        diag.enabled_device_extensions = device_exts.clone();
+        diag.skipped_device_extensions = dev_resolution.skipped.clone();
+        store_init_diagnostics(&diag);
+
+        for skipped_reason in &dev_resolution.skipped {
+            eprintln!("[unbound-gpu] Optional device extension skipped: {skipped_reason}");
+        }
+        if !dev_resolution.missing_required.is_empty() {
+            if let Some((utils, messenger)) = debug {
+                utils.destroy_debug_utils_messenger(messenger, None);
             }
+            instance.destroy_instance(None);
+            return Err(GpuError::UnsupportedFeatures(vec!["device extension"]));
         }
-        for extension in skipped {
-            eprintln!("GPU: {extension} is not supported by this driver; continuing without it");
-        }
-        // Vulkan 1.2 驱动通过向后移植的 KHR 扩展提供 1.3 核心特性。
+
         let needs_13_backports = properties.api_version < vk::make_api_version(0, 1, 3, 0);
-        if needs_13_backports {
-            for extension in ["VK_KHR_dynamic_rendering", "VK_KHR_synchronization2"] {
-                push_unique(&mut device_exts, extension);
-            }
-            // `discard` 会编译为 `OpDemoteToHelperInvocation`；在 1.2 驱动上
-            // 该特性来自此扩展而非 1.3 核心。缺少它时着色器模块属非法用法。
-            if has_ext("VK_EXT_shader_demote_to_helper_invocation") {
-                push_unique(
-                    &mut device_exts,
-                    "VK_EXT_shader_demote_to_helper_invocation",
-                );
-            }
-        }
-        if device_exts.iter().any(|e| e == "VK_KHR_present_wait")
-            && !device_exts.iter().any(|e| e == "VK_KHR_present_id")
-        {
-            device_exts.push("VK_KHR_present_id".to_string());
-        }
-        // 扩展必须显式请求启用：驱动仅仅暴露扩展名并不会自动开启对应特性。
-        let maintenance1_requested = device_exts
-            .iter()
-            .any(|e| e == "VK_EXT_swapchain_maintenance1");
+        let has_enabled_dev_ext = |name: &str| device_exts.iter().any(|e| e == name);
 
         // ---- 特性探测 -------------------------------------------------------
+        diag.stage = "FeatureVerification";
         let mut f12 = vk::PhysicalDeviceVulkan12Features::default();
         // 两者仅挂载其一：API 1.3 以下挂载 `VkPhysicalDeviceVulkan13Features` 属于未定义行为。
         let mut f13 = vk::PhysicalDeviceVulkan13Features::default();
         let mut f_dynamic_rendering = vk::PhysicalDeviceDynamicRenderingFeatures::default();
         let mut f_synchronization2 = vk::PhysicalDeviceSynchronization2Features::default();
-        // 呈现相关特性位于独立结构体中，同样需链入查询；链中出现未知结构体会导致查询失败，故先检查扩展。
+        // 呈现相关特性位于独立结构体中，仅在对应扩展已通过跨层校验后再链入查询。
         let mut present_wait_query = vk::PhysicalDevicePresentWaitFeaturesKHR::default();
         let mut present_id_query = vk::PhysicalDevicePresentIdFeaturesKHR::default();
         let mut maintenance1_query = vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
@@ -746,19 +1326,19 @@ impl Gpu {
                 query = query
                     .push_next(&mut f_dynamic_rendering)
                     .push_next(&mut f_synchronization2);
-                if has_ext("VK_EXT_shader_demote_to_helper_invocation") {
+                if has_enabled_dev_ext("VK_EXT_shader_demote_to_helper_invocation") {
                     query = query.push_next(&mut demote_query);
                 }
             } else {
                 query = query.push_next(&mut f13);
             }
-            if has_ext("VK_KHR_present_id") {
+            if has_enabled_dev_ext("VK_KHR_present_id") {
                 query = query.push_next(&mut present_id_query);
             }
-            if has_ext("VK_KHR_present_wait") {
+            if has_enabled_dev_ext("VK_KHR_present_wait") {
                 query = query.push_next(&mut present_wait_query);
             }
-            if has_ext("VK_EXT_swapchain_maintenance1") {
+            if has_enabled_dev_ext("VK_EXT_swapchain_maintenance1") {
                 query = query.push_next(&mut maintenance1_query);
             }
             instance.get_physical_device_features2(physical, &mut query);
@@ -774,6 +1354,25 @@ impl Gpu {
         } else {
             f13.synchronization2 == vk::TRUE
         };
+
+        // 仅当 `VK_KHR_present_wait` 与 `VK_KHR_present_id` 的扩展与特性位同时为 TRUE 时才启用，
+        // 否则从启用扩展列表中剔除，防止向 `vkCreateDevice` 传入未启用特性的扩展。
+        let present_wait_supported = has_enabled_dev_ext("VK_KHR_present_wait")
+            && has_enabled_dev_ext("VK_KHR_present_id")
+            && present_wait_query.present_wait == vk::TRUE
+            && present_id_query.present_id == vk::TRUE;
+        // 先完成所有基于 `device_exts` 的只读判定，再执行 `retain` 剔除：
+        // 闭包 `has_enabled_dev_ext` 持有不可变借用，需在其最后一次调用结束后才能可变借用。
+        let swapchain_maintenance1_supported = has_enabled_dev_ext("VK_EXT_swapchain_maintenance1")
+            && maintenance1_query.swapchain_maintenance1 == vk::TRUE;
+        if !present_wait_supported {
+            device_exts.retain(|e| e != "VK_KHR_present_wait" && e != "VK_KHR_present_id");
+        }
+
+        if !swapchain_maintenance1_supported {
+            device_exts.retain(|e| e != "VK_EXT_swapchain_maintenance1");
+        }
+        diag.enabled_device_extensions = device_exts.clone();
 
         let features = GpuFeatures {
             buffer_device_address: f12.buffer_device_address == vk::TRUE,
@@ -797,21 +1396,26 @@ impl Gpu {
             } else {
                 f13.shader_demote_to_helper_invocation == vk::TRUE
             },
-            // 特性必须先查询再启用：仅有扩展名不能说明特性实际可用。
-            swapchain_maintenance1: maintenance1_requested
-                && maintenance1_query.swapchain_maintenance1 == vk::TRUE,
-            present_wait: has_ext("VK_KHR_present_wait")
-                && present_wait_query.present_wait == vk::TRUE,
-            present_id: has_ext("VK_KHR_present_id") && present_id_query.present_id == vk::TRUE,
+            swapchain_maintenance1: swapchain_maintenance1_supported,
+            present_wait: present_wait_supported,
+            present_id: present_wait_supported,
             rebar: false,
         };
 
         let missing = features.missing_required();
         if !missing.is_empty() {
+            diag.missing_required_features = missing.clone();
+            store_init_diagnostics(&diag);
+            if let Some((utils, messenger)) = debug {
+                utils.destroy_debug_utils_messenger(messenger, None);
+            }
+            instance.destroy_instance(None);
             return Err(GpuError::UnsupportedFeatures(missing));
         }
 
         // ---- 队列族选择 -----------------------------------------------------
+        diag.stage = "QueueFamilySelection";
+        store_init_diagnostics(&diag);
         let families_props = instance.get_physical_device_queue_family_properties(physical);
         let mut graphics = None;
         let mut transfer = None;
@@ -825,8 +1429,15 @@ impl Gpu {
                 transfer.get_or_insert(i as u32);
             }
         }
-        let graphics = graphics
-            .ok_or_else(|| GpuError::NoSuitableDevice("no graphics+compute queue family".into()))?;
+        let Some(graphics) = graphics else {
+            if let Some((utils, messenger)) = debug {
+                utils.destroy_debug_utils_messenger(messenger, None);
+            }
+            instance.destroy_instance(None);
+            return Err(GpuError::NoSuitableDevice(
+                "no graphics+compute queue family".into(),
+            ));
+        };
         let dedicated = transfer.is_some();
         let transfer = transfer.unwrap_or(graphics);
         let families = QueueFamilies {
@@ -836,6 +1447,8 @@ impl Gpu {
         };
 
         // ---- 逻辑设备创建 ---------------------------------------------------
+        diag.stage = "vkCreateDevice";
+        store_init_diagnostics(&diag);
         let mut used_families = vec![graphics];
         if transfer != graphics {
             used_families.push(transfer);
@@ -884,21 +1497,16 @@ impl Gpu {
         let dev_ext_cstrings = cstrings(&device_exts);
         let dev_ext_ptrs = raw_ptrs(&dev_ext_cstrings);
 
-        // `VK_KHR_present_wait` 与 `VK_KHR_present_id` 各自拥有独立特性开关；
-        // 若未启用特性，即使启用了扩展，调用 `vkWaitForPresentKHR` 仍属于非法用法。
-        let present_wait_enabled = device_exts.iter().any(|e| e == "VK_KHR_present_wait");
-        let mut present_wait_features = vk::PhysicalDevicePresentWaitFeaturesKHR::default()
-            .present_wait(present_wait_enabled && features.present_wait);
-        let mut present_id_features = vk::PhysicalDevicePresentIdFeaturesKHR::default()
-            .present_id(present_wait_enabled && features.present_id);
-
-        // `VK_EXT_swapchain_maintenance1` 同样有独立特性开关：仅当 `swapchainMaintenance1`
-        // 特性启用时，呈现围栏与呈现缩放才合法，且该结构体仅在扩展启用时才可链入。
+        // 严禁在未启用对应设备扩展时将 `present_id_features`、`present_wait_features` 或
+        // `maintenance1_features` 链入 `VkDeviceCreateInfo::pNext`：Windows 10 旧驱动遇到
+        // 未启用扩展的 pNext 结构体将直接报错 `VK_ERROR_EXTENSION_NOT_PRESENT` 或触发未定义行为。
+        let mut present_wait_features =
+            vk::PhysicalDevicePresentWaitFeaturesKHR::default().present_wait(features.present_wait);
+        let mut present_id_features =
+            vk::PhysicalDevicePresentIdFeaturesKHR::default().present_id(features.present_id);
         let mut maintenance1_features =
             vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default()
                 .swapchain_maintenance1(features.swapchain_maintenance1);
-        // Vulkan 1.2 把 demote 特性放在独立的扩展结构体中；
-        // 在 1.3 设备上链入它会与 1.3 核心特性重复。
         let mut demote_features =
             vk::PhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT::default()
                 .shader_demote_to_helper_invocation(features.shader_demote_to_helper_invocation);
@@ -907,8 +1515,6 @@ impl Gpu {
             .queue_create_infos(&queue_infos)
             .enabled_extension_names(&dev_ext_ptrs)
             .enabled_features(&enabled_core)
-            .push_next(&mut present_id_features)
-            .push_next(&mut present_wait_features)
             .push_next(&mut enabled_features12);
         if needs_13_backports {
             // Vulkan 1.2 路径：特性来自 KHR 扩展结构体，严禁链入 1.3 核心结构体。
@@ -921,13 +1527,27 @@ impl Gpu {
         } else {
             device_create = device_create.push_next(&mut enabled_features13);
         }
+        if features.present_id {
+            device_create = device_create.push_next(&mut present_id_features);
+        }
+        if features.present_wait {
+            device_create = device_create.push_next(&mut present_wait_features);
+        }
         if features.swapchain_maintenance1 {
             device_create = device_create.push_next(&mut maintenance1_features);
         }
 
-        let device = instance
-            .create_device(physical, &device_create, None)
-            .map_err(GpuError::Vulkan)?;
+        let device = match instance.create_device(physical, &device_create, None) {
+            Ok(dev) => dev,
+            Err(err) => {
+                if let Some((utils, messenger)) = debug {
+                    utils.destroy_debug_utils_messenger(messenger, None);
+                }
+                instance.destroy_instance(None);
+                store_init_diagnostics(&diag);
+                return Err(GpuError::Vulkan(err));
+            }
+        };
 
         Self::finish(
             entry,
@@ -1521,6 +2141,81 @@ mod tests {
         assert!(extensions
             .iter()
             .any(|e| e == "VK_KHR_get_surface_capabilities2"));
+    }
+
+    /// 回归测试：Windows 10 旧版加载器/驱动不支持 `VK_EXT_surface_maintenance1` 时，
+    /// 实例与设备扩展过滤器必须安全降级跳过可选扩展，绝不让 `vkCreateInstance` 或
+    /// `vkCreateDevice` 触发 `ERROR_EXTENSION_NOT_PRESENT`。
+    #[test]
+    fn win10_older_driver_gracefully_skips_missing_optional_extensions() {
+        let mut desired_inst = vec![
+            "VK_KHR_surface".to_string(),
+            "VK_KHR_win32_surface".to_string(),
+        ];
+        let requested_dev = vec![
+            "VK_KHR_swapchain".to_string(),
+            "VK_EXT_swapchain_maintenance1".to_string(),
+            "VK_KHR_present_wait".to_string(),
+        ];
+        resolve_instance_extension_dependencies(&mut desired_inst, &requested_dev);
+
+        // 模拟 Win10 旧加载器：仅提供基础 surface 扩展，不提供 VK_EXT_surface_maintenance1。
+        let available_inst = vec![
+            "VK_KHR_surface".to_string(),
+            "VK_KHR_win32_surface".to_string(),
+            "VK_KHR_get_surface_capabilities2".to_string(),
+        ];
+        let inst_res = filter_instance_extensions(&desired_inst, &available_inst);
+        assert!(inst_res.missing_required.is_empty());
+        assert!(!inst_res
+            .enabled
+            .iter()
+            .any(|e| e == "VK_EXT_surface_maintenance1"));
+        assert!(inst_res
+            .skipped
+            .iter()
+            .any(|e| e == "VK_EXT_surface_maintenance1"));
+
+        // 即使物理设备列表包含 VK_EXT_swapchain_maintenance1，由于实例未启用
+        // VK_EXT_surface_maintenance1，设备层也必须自动跳过它；同时若缺少 VK_KHR_present_id，
+        // VK_KHR_present_wait 也必须自动跳过。
+        let available_dev = vec![
+            "VK_KHR_swapchain".to_string(),
+            "VK_EXT_swapchain_maintenance1".to_string(),
+            "VK_KHR_present_wait".to_string(),
+            "VK_KHR_dynamic_rendering".to_string(),
+            "VK_KHR_synchronization2".to_string(),
+        ];
+        let dev_res = resolve_device_extensions(
+            &requested_dev,
+            &available_dev,
+            &inst_res.enabled,
+            vk::make_api_version(0, 1, 2, 0),
+        );
+        assert!(dev_res.missing_required.is_empty());
+        assert!(dev_res.enabled.iter().any(|e| e == "VK_KHR_swapchain"));
+        assert!(dev_res
+            .enabled
+            .iter()
+            .any(|e| e == "VK_KHR_dynamic_rendering"));
+        assert!(dev_res
+            .enabled
+            .iter()
+            .any(|e| e == "VK_KHR_synchronization2"));
+        assert!(!dev_res
+            .enabled
+            .iter()
+            .any(|e| e == "VK_EXT_swapchain_maintenance1"));
+        assert!(!dev_res.enabled.iter().any(|e| e == "VK_KHR_present_wait"));
+        assert!(!dev_res.enabled.iter().any(|e| e == "VK_KHR_present_id"));
+    }
+
+    #[test]
+    fn diagnostic_report_includes_context_and_troubleshooting_hints() {
+        let err = GpuError::Vulkan(vk::Result::ERROR_EXTENSION_NOT_PRESENT);
+        let report = err.diagnostic_report();
+        assert!(report.contains("ERROR_EXTENSION_NOT_PRESENT"));
+        assert!(report.contains("排障建议"));
     }
 
     #[test]

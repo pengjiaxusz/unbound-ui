@@ -641,7 +641,15 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
     } else {
         knob_value_norm
     };
-    let variant_idx = selected_idx.wrapping_add(knob_variant);
+    let text_step = ctx
+        .state
+        .sandbox
+        .text_buffers
+        .get(&(id as u8))
+        .map_or(0, |buf| buf.len() / 8);
+    let variant_idx = selected_idx
+        .wrapping_add(knob_variant)
+        .wrapping_add(text_step);
 
     let params = CatalogParams {
         value_norm,
@@ -651,6 +659,8 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
         active,
         compact,
         read_only,
+        toggled: checked,
+        click_count: clicks,
     };
     let output = emit_widget_with_shaper(id, node, state, stage, params, |text, origin, size| {
         ctx.canvas.shape(text, origin, size)
