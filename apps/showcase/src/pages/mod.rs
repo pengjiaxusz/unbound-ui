@@ -13,6 +13,7 @@ pub mod home;
 pub mod input;
 pub mod layout;
 pub mod motion;
+pub mod systems;
 
 use unbound_math::Rect;
 use unbound_widgets::WidgetCatalogId;
@@ -20,9 +21,13 @@ use unbound_widgets::WidgetCatalogId;
 use crate::canvas::Canvas;
 use crate::state::GalleryState;
 
-pub use components::showcase_entry_for_widget;
+pub use components::{
+    component_card_index, component_nav_label, component_scroll_offset, showcase_entry_for_widget,
+    SIDEBAR_COMPONENT_IDS,
+};
+pub use systems::SubsystemId;
 
-/// 七个导航分类。
+/// 导航分类。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CategoryId {
     Home,
@@ -37,22 +42,23 @@ pub enum CategoryId {
 }
 
 impl CategoryId {
-    /// 导航树中渲染的分类。
+    /// 导航树中渲染的全部非 Home 分类。
     ///
-    /// `Design` 也是树的一部分：此前将其漏掉导致整个设计分区
-    /// （色彩、排版、层级阴影、矢量图形、字体）只能通过总是打开 Colors 的
-    /// 单个“Design Guidance”行访问。
-    pub const ALL: [CategoryId; 7] = [
+    /// 包含 `Design`、`Basic`、`Layout`、`Collections`、`Canvas`、`Motion`、`System` 与 `Components`，
+    /// 由下方编译期 `const` 断言强制保证 `PageId::ALL` 中的每一个页面都出现在侧边栏分类树中。
+    pub const ALL: [CategoryId; 8] = [
         CategoryId::Design,
         CategoryId::Basic,
         CategoryId::Layout,
         CategoryId::Collections,
         CategoryId::Canvas,
         CategoryId::Motion,
+        CategoryId::System,
         CategoryId::Components,
     ];
 
     #[must_use]
+    #[deny(unreachable_patterns)]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Home => "Home",
@@ -62,12 +68,13 @@ impl CategoryId {
             Self::Collections => "Collections",
             Self::Canvas => "Infinite Canvas",
             Self::Motion => "Motion, A11y & Telemetry",
-            Self::Components => "Components",
-            Self::System => "System",
+            Self::Components => "Components (91)",
+            Self::System => "Engine Systems",
         }
     }
 
     #[must_use]
+    #[deny(unreachable_patterns)]
     pub const fn pages(self) -> &'static [PageId] {
         match self {
             Self::Home => &[PageId::Home],
@@ -89,7 +96,7 @@ impl CategoryId {
             Self::Canvas => &[PageId::Viewport, PageId::Marquee, PageId::Undo],
             Self::Motion => &[PageId::Springs, PageId::A11y, PageId::Telemetry],
             Self::Components => &[PageId::Components],
-            Self::System => &[PageId::Settings],
+            Self::System => &[PageId::Systems, PageId::Settings],
         }
     }
 }
@@ -122,10 +129,12 @@ pub enum PageId {
     Settings,
     /// 完整组件展厅：每个目录组件对应一张卡片。
     Components,
+    /// 引擎核心子系统架构全景页：覆盖全部 21 个核心 crate 子系统。
+    Systems,
 }
 
 impl PageId {
-    pub const ALL: [PageId; 23] = [
+    pub const ALL: [PageId; 24] = [
         PageId::Home,
         PageId::Colors,
         PageId::Typography,
@@ -149,9 +158,11 @@ impl PageId {
         PageId::Telemetry,
         PageId::Settings,
         PageId::Components,
+        PageId::Systems,
     ];
 
     #[must_use]
+    #[deny(unreachable_patterns)]
     pub const fn index(self) -> usize {
         match self {
             Self::Home => 0,
@@ -177,6 +188,7 @@ impl PageId {
             Self::Telemetry => 20,
             Self::Settings => 21,
             Self::Components => 22,
+            Self::Systems => 23,
         }
     }
 
@@ -186,6 +198,7 @@ impl PageId {
     }
 
     #[must_use]
+    #[deny(unreachable_patterns)]
     pub const fn category(self) -> CategoryId {
         match self {
             Self::Home => CategoryId::Home,
@@ -198,11 +211,12 @@ impl PageId {
             Self::Viewport | Self::Marquee | Self::Undo => CategoryId::Canvas,
             Self::Springs | Self::A11y | Self::Telemetry => CategoryId::Motion,
             Self::Components => CategoryId::Components,
-            Self::Settings => CategoryId::System,
+            Self::Systems | Self::Settings => CategoryId::System,
         }
     }
 
     #[must_use]
+    #[deny(unreachable_patterns)]
     pub const fn info(self) -> PageInfo {
         match self {
             Self::Home => home::INFO,
@@ -228,10 +242,12 @@ impl PageId {
             Self::Telemetry => motion::TELEMETRY_INFO,
             Self::Settings => motion::SETTINGS_INFO,
             Self::Components => components::COMPONENTS_INFO,
+            Self::Systems => systems::SYSTEMS_INFO,
         }
     }
 
     #[must_use]
+    #[deny(unreachable_patterns)]
     pub const fn examples(self) -> &'static [ExampleDef] {
         match self {
             Self::Home => home::EXAMPLES,
@@ -257,6 +273,7 @@ impl PageId {
             Self::Telemetry => motion::TELEMETRY_EXAMPLES,
             Self::Settings => motion::SETTINGS_EXAMPLES,
             Self::Components => components::COMPONENT_EXAMPLES,
+            Self::Systems => systems::SYSTEMS_EXAMPLES,
         }
     }
 
@@ -277,6 +294,42 @@ impl PageId {
         query.split_whitespace().all(|term| haystack.contains(term))
     }
 }
+
+/// 编译期完备性门禁：验证 `PageId::ALL` 中的每个页面都精确出现在 `CategoryId::Home`
+/// 或 `CategoryId::ALL` 的侧边栏树中，任何页面或分类遗漏都会直接触发编译错误。
+const _: () = {
+    let mut i = 0;
+    while i < PageId::ALL.len() {
+        let page = PageId::ALL[i];
+        assert!(
+            page.index() == i,
+            "PageId::ALL order must match PageId::index()",
+        );
+        let in_sidebar = if matches!(page, PageId::Home) {
+            true
+        } else {
+            let mut c = 0;
+            let mut found = false;
+            while c < CategoryId::ALL.len() {
+                let pages = CategoryId::ALL[c].pages();
+                let mut p = 0;
+                while p < pages.len() {
+                    if pages[p] as usize == page as usize {
+                        found = true;
+                    }
+                    p += 1;
+                }
+                c += 1;
+            }
+            found
+        };
+        assert!(
+            in_sidebar,
+            "every PageId in PageId::ALL must be present in the sidebar CategoryId::ALL",
+        );
+        i += 1;
+    }
+};
 
 /// 静态页面元数据。
 #[derive(Copy, Clone, Debug)]
@@ -464,6 +517,10 @@ pub enum DemoKind {
         graph: bool,
     },
     About,
+    /// 引擎核心子系统架构全景与流水线舞台。
+    Systems {
+        mode: u8,
+    },
     /// 由其真实发射器绘制的单个目录组件。
     Component {
         id: WidgetCatalogId,
@@ -593,6 +650,7 @@ pub fn render_demo(ctx: &mut DemoCtx<'_, '_>, demo: DemoKind) {
         DemoKind::A11y { focus_rings } => motion::a11y(ctx, focus_rings),
         DemoKind::Telemetry { graph } => motion::telemetry(ctx, graph),
         DemoKind::About => motion::about(ctx),
+        DemoKind::Systems { mode } => systems::systems(ctx, mode),
         DemoKind::Component { id } => components::component(ctx, id),
     }
 }

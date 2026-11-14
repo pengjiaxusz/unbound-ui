@@ -1,7 +1,7 @@
 //! 原生 Windows 10/11 文件对话框。
 //!
-//! 基于 Win32 `comdlg32` 提供同步与非阻塞后台文件选择对话框，
-//! 无需引入沉重的外部依赖。
+//! 基于官方 `windows = "0.62.2"` crate 的 `Win32::UI::Controls::Dialogs` 提供同步与非阻塞
+//! 后台文件选择对话框，无需手写 FFI 绑定。
 
 use std::path::PathBuf;
 
@@ -58,62 +58,13 @@ impl FileDialogConfig {
 }
 
 #[cfg(windows)]
-#[allow(
-    non_snake_case,
-    non_camel_case_types,
-    clippy::upper_case_acronyms,
-    dead_code
-)]
 mod win32 {
     use super::*;
-    use core::ffi::c_void;
-
-    type HWND = *mut c_void;
-    type HINSTANCE = *mut c_void;
-    type DWORD = u32;
-    type BOOL = i32;
-    type LPCWSTR = *const u16;
-    type LPWSTR = *mut u16;
-
-    const OFN_EXPLORER: DWORD = 0x00080000;
-    const OFN_FILEMUSTEXIST: DWORD = 0x00001000;
-    const OFN_PATHMUSTEXIST: DWORD = 0x00000800;
-    const OFN_ALLOWMULTISELECT: DWORD = 0x00000200;
-    const OFN_OVERWRITEPROMPT: DWORD = 0x00000002;
-    const OFN_NOCHANGEDIR: DWORD = 0x00000008;
-
-    #[repr(C)]
-    struct OPENFILENAMEW {
-        lStructSize: DWORD,
-        hwndOwner: HWND,
-        hInstance: HINSTANCE,
-        lpstrFilter: LPCWSTR,
-        lpstrCustomFilter: LPWSTR,
-        nMaxCustFilter: DWORD,
-        nFilterIndex: DWORD,
-        lpstrFile: LPWSTR,
-        nMaxFile: DWORD,
-        lpstrFileTitle: LPWSTR,
-        nMaxFileTitle: DWORD,
-        lpstrInitialDir: LPCWSTR,
-        lpstrTitle: LPCWSTR,
-        Flags: DWORD,
-        nFileOffset: u16,
-        nFileExtension: u16,
-        lpstrDefExt: LPCWSTR,
-        lCustData: usize,
-        lpfnHook: *mut c_void,
-        lpTemplateName: LPCWSTR,
-        pvReserved: *mut c_void,
-        dwReserved: DWORD,
-        FlagsEx: DWORD,
-    }
-
-    #[link(name = "comdlg32")]
-    extern "system" {
-        fn GetOpenFileNameW(lpofn: *mut OPENFILENAMEW) -> BOOL;
-        fn GetSaveFileNameW(lpofn: *mut OPENFILENAMEW) -> BOOL;
-    }
+    use ::windows::core::{PCWSTR, PWSTR};
+    use ::windows::Win32::UI::Controls::Dialogs::{
+        GetOpenFileNameW, GetSaveFileNameW, OFN_ALLOWMULTISELECT, OFN_EXPLORER, OFN_FILEMUSTEXIST,
+        OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    };
 
     fn build_filter_string(filters: &[(String, String)]) -> Vec<u16> {
         let mut out = Vec::new();
@@ -147,35 +98,23 @@ mod win32 {
         }
 
         let mut ofn = OPENFILENAMEW {
-            lStructSize: core::mem::size_of::<OPENFILENAMEW>() as DWORD,
-            hwndOwner: core::ptr::null_mut(),
-            hInstance: core::ptr::null_mut(),
-            lpstrFilter: filter_str.as_ptr(),
-            lpstrCustomFilter: core::ptr::null_mut(),
-            nMaxCustFilter: 0,
+            lStructSize: core::mem::size_of::<OPENFILENAMEW>() as u32,
+            lpstrFilter: PCWSTR(filter_str.as_ptr()),
             nFilterIndex: 1,
-            lpstrFile: buffer.as_mut_ptr(),
-            nMaxFile: buffer.len() as DWORD,
-            lpstrFileTitle: core::ptr::null_mut(),
-            nMaxFileTitle: 0,
+            lpstrFile: PWSTR(buffer.as_mut_ptr()),
+            nMaxFile: buffer.len() as u32,
             lpstrInitialDir: init_dir_w
                 .as_ref()
-                .map_or(core::ptr::null(), |v| v.as_ptr()),
-            lpstrTitle: title_w.as_ref().map_or(core::ptr::null(), |v| v.as_ptr()),
+                .map_or(PCWSTR::null(), |v| PCWSTR(v.as_ptr())),
+            lpstrTitle: title_w
+                .as_ref()
+                .map_or(PCWSTR::null(), |v| PCWSTR(v.as_ptr())),
             Flags: flags,
-            nFileOffset: 0,
-            nFileExtension: 0,
-            lpstrDefExt: core::ptr::null(),
-            lCustData: 0,
-            lpfnHook: core::ptr::null_mut(),
-            lpTemplateName: core::ptr::null(),
-            pvReserved: core::ptr::null_mut(),
-            dwReserved: 0,
-            FlagsEx: 0,
+            ..Default::default()
         };
 
-        let ok = unsafe { GetOpenFileNameW(&mut ofn) };
-        if ok == 0 {
+        let ok = unsafe { GetOpenFileNameW(&mut ofn) }.as_bool();
+        if !ok {
             return Vec::new();
         }
 
@@ -228,35 +167,23 @@ mod win32 {
         let flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
 
         let mut ofn = OPENFILENAMEW {
-            lStructSize: core::mem::size_of::<OPENFILENAMEW>() as DWORD,
-            hwndOwner: core::ptr::null_mut(),
-            hInstance: core::ptr::null_mut(),
-            lpstrFilter: filter_str.as_ptr(),
-            lpstrCustomFilter: core::ptr::null_mut(),
-            nMaxCustFilter: 0,
+            lStructSize: core::mem::size_of::<OPENFILENAMEW>() as u32,
+            lpstrFilter: PCWSTR(filter_str.as_ptr()),
             nFilterIndex: 1,
-            lpstrFile: buffer.as_mut_ptr(),
-            nMaxFile: buffer.len() as DWORD,
-            lpstrFileTitle: core::ptr::null_mut(),
-            nMaxFileTitle: 0,
+            lpstrFile: PWSTR(buffer.as_mut_ptr()),
+            nMaxFile: buffer.len() as u32,
             lpstrInitialDir: init_dir_w
                 .as_ref()
-                .map_or(core::ptr::null(), |v| v.as_ptr()),
-            lpstrTitle: title_w.as_ref().map_or(core::ptr::null(), |v| v.as_ptr()),
+                .map_or(PCWSTR::null(), |v| PCWSTR(v.as_ptr())),
+            lpstrTitle: title_w
+                .as_ref()
+                .map_or(PCWSTR::null(), |v| PCWSTR(v.as_ptr())),
             Flags: flags,
-            nFileOffset: 0,
-            nFileExtension: 0,
-            lpstrDefExt: core::ptr::null(),
-            lCustData: 0,
-            lpfnHook: core::ptr::null_mut(),
-            lpTemplateName: core::ptr::null(),
-            pvReserved: core::ptr::null_mut(),
-            dwReserved: 0,
-            FlagsEx: 0,
+            ..Default::default()
         };
 
-        let ok = unsafe { GetSaveFileNameW(&mut ofn) };
-        if ok == 0 {
+        let ok = unsafe { GetSaveFileNameW(&mut ofn) }.as_bool();
+        if !ok {
             return None;
         }
 

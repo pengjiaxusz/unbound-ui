@@ -181,10 +181,24 @@ ui.split_pane(
 );
 ```
 
-### 挂载任意组件 (`add`)
-`unbound-widgets` 中所有的 91 个标准组件变体（包括 `WidgetCatalogId` 中的所有组件）均实现了 `UiWidget` trait，均可一键挂载：
+### 窗口内自适应工具提示 (`tooltip`)
+`TooltipDesc` 与 `place_tooltip_in_window` 支持全部 12 种 `Placement` 偏好方向，当触发锚点靠近窗口顶部、底部、左侧、右侧或四角时，会自动沿主轴翻转、尝试交叉轴方向并以安全内缩边距（`TOOLTIP_VIEWPORT_MARGIN = 6.0px`）钳制，确保提示框始终完整显示在窗口内部：
 ```rust
-ui.add(ui_key!("progress_bar"), ProgressBarDesc::percent(0.75));
+let tip = TooltipDesc::labeled(
+    anchor_rect,
+    Vec2::new(196.0, 44.0),
+    ui.viewport_rect(),
+    "Ctrl+B · 切换侧边栏（靠近窗口边缘时自动向内翻转）",
+)
+.with_placement(Placement::Top)
+.with_viewport_margin(6.0);
+ui.tooltip(ui_key!("sidebar_tip"), tip);
+```
+
+### 挂载任意组件 (`add`)
+`unbound-widgets` 中所有的 91 个标准组件变体（包括 `WidgetCatalogId` 中的所有组件）均实现了 `UiWidget` trait，均可一键挂载，且在 Showcase 侧边栏 `Components (91)` 与 `Engine Systems`（21 个引擎核心子系统）中均受编译期完备性门禁保护：
+```rust
+ui.add(ui_key!("progress_bar"), ProgressDesc::linear(0.75));
 ui.add(ui_key!("data_table"), TableDesc::columns(my_columns));
 ```
 
@@ -289,7 +303,7 @@ fn test_my_app_logic() {
 
 ## 8. Windows 10/11 原生深度特性
 
-- **Windows 11 Snap Layouts**：自定义无边框标题栏拦截 `WM_NCHITTEST`，悬停最大化按钮时无缝弹出 Windows 11 系统级贴靠分屏布局菜单。
+- **基于 `windows = "0.62.2"` 的原生无边框边缘调整大小与 Snap Layouts**：统一采用官方 `windows = "0.62.2"` crate 绑定，无边框可调整大小窗口通过 `WS_THICKFRAME` + `WM_NCCALCSIZE`（零非客户区 + 最大化工作区 `rcWork` 钳制）+ `WM_NCHITTEST` 八方向命中测试与 `WM_SYSCOMMAND(SC_SIZE + WMSZ_*)` 双路径协同，支持平滑拖拽窗口四边与四角调整尺寸，并在悬停最大化按钮时弹出 Windows 11 系统级贴靠分屏菜单。
 - **CJK 输入法（IME）精确跟随**：预编辑文本（Preedit）和光标选区自动同步，候选词窗口严密贴合当前聚焦输入控件的光标位置。
 - **Per-Monitor DPI v2**：窗口在不同缩放比（100%、125%、150%、200%）显示器之间拖拽时，字形图集与几何尺寸平滑无缝重构，彻底杜绝模糊。
 - **文件拖放 (`FileDrop`)**：无缝接收从 Windows 资源管理器（File Explorer）拖入的文件路径列表。

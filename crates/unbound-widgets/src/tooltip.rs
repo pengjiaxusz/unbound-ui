@@ -1,17 +1,22 @@
-//! 带延迟与鼠标穿透的悬停工具提示。
+//! 带延迟、鼠标穿透与窗口边界防溢出自动定位的悬停工具提示（Tooltip）。
 //!
 //! 工具提示是唯一**绝不能**接收输入的浮层：它出现在指针下方，
 //! 若设置命中区域反而会窃取维持其显示的悬停事件。因此 [`emit_tooltip`] 返回的
 //! `WidgetOutput` 中 `hit: None`，而 [`TooltipState`] 持有延迟计时，
 //! 使指针扫过工具栏时不会为每个按钮都闪烁气泡。
 //!
+//! 位置求解统一经由 [`place_tooltip_in_window`]：
+//! - 优先采用 `placement` 指定方向；
+//! - 当靠近窗口边缘导致主轴空间不足时，自动翻转至对向（`Top <-> Bottom`、`Left <-> Right`）或正交轴；
+//! - 最终严格钳制在窗口视口（扣除 `viewport_margin` 安全边距）之内，确保工具提示在任意角落触发时均不出窗口。
 
 use accesskit::Role;
 use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_math::{Rect, Vec2};
+use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::overlay::{place_anchored_popup, OverlayEntry, Placement};
+use crate::overlay::{place_tooltip_in_window, OverlayEntry, PlacedPopup, Placement, POPUP_GAP};
 use crate::primitive::{instance, surface};
 use crate::{ControlState, WidgetDesc, WidgetOutput};
 
@@ -117,13 +122,13 @@ pub fn wrap_text(text: &str, max_width: f32, char_width: f32) -> Vec<String> {
 pub struct TooltipDesc {
     /// 触发器矩形。
     pub anchor: Rect,
-    /// 气泡必须保持在内的视口矩形。
+    /// 气泡必须保持在内的窗口视口矩形。
     pub viewport: Rect,
-    /// 已测量的气泡尺寸。
+    /// 已测量的气泡外框尺寸。
     pub size: Vec2,
     /// 气泡的首选放置位置。
     pub placement: Placement,
-    /// 显示前的延迟时长。
+    /// 显示前的延迟时长（毫秒）。
     pub delay_ms: f32,
     /// [`Self::with_wrapped_text`] 使用的最大行宽。
     pub max_width: f32,
@@ -131,6 +136,14 @@ pub struct TooltipDesc {
     pub radius: f32,
     /// 绘制顺序键。
     pub z: u16,
+    /// 工具提示文本内容（同步用于无障碍语义标签与声明式排版）。
+    pub label: String,
+    /// 气泡与触发器之间的间距（逻辑像素）。
+    pub gap: f32,
+    /// 气泡与窗口边缘保持的最小安全内边距（逻辑像素）。
+    pub viewport_margin: f32,
+    /// 气泡内部水平与垂直内边距（逻辑像素）。
+    pub padding: Vec2,
 }
 
 impl TooltipDesc {
@@ -145,7 +158,91 @@ impl TooltipDesc {
             max_width: TOOLTIP_MAX_WIDTH,
             radius: 6.0,
             z: 940,
+            label: String::new(),
+            gap: POPUP_GAP,
+            viewport_margin: 0.0,
+            padding: Vec2::new(10.0, 6.0),
         }
+    }
+
+    /// 创建带文本标签的工具提示描述符，并自动估算气泡尺寸与启用窗口边缘安全间距。
+    #[must_use]
+    pub fn labeled(anchor: Rect, viewport: Rect, label: impl Into<String>) -> Self {
+        let label = label.into();
+        let padding = Vec2::new(10.0, 6.0);
+        let lines = wrap_text(&label, TOOLTIP_MAX_WIDTH - padding.x * 2.0, 7.2);
+        let line_count = lines.len().max(1) as f32;
+        let widest = lines
+            .iter()
+            .map(|l| l.chars().count() as f32 * 7.2)
+            .fold(40.0_f32, f32::max);
+        let size = Vec2::new(
+            (widest + padding.x * 2.0).min(TOOLTIP_MAX_WIDTH),
+            line_count * 18.0 + padding.y * 2.0,
+        );
+        Self {
+            anchor,
+            viewport,
+            size,
+            placement: Placement::Top,
+            delay_ms: TOOLTIP_DELAY_MS,
+            max_width: TOOLTIP_MAX_WIDTH,
+            radius: 6.0,
+            z: 940,
+            label,
+            gap: 6.0,
+            viewport_margin: crate::overlay::TOOLTIP_VIEWPORT_MARGIN,
+            padding,
+        }
+    }
+
+    /// 设置工具提示文本标签。
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
+        self
+    }
+
+    /// 设置首选放置方向。
+    #[must_use]
+    pub fn with_placement(mut self, placement: Placement) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    /// 设置悬停延迟时长（毫秒）。
+    #[must_use]
+    pub fn with_delay_ms(mut self, delay_ms: f32) -> Self {
+        self.delay_ms = delay_ms.max(0.0);
+        self
+    }
+
+    /// 设置最大换行宽度。
+    #[must_use]
+    pub fn with_max_width(mut self, max_width: f32) -> Self {
+        self.max_width = max_width.max(40.0);
+        self
+    }
+
+    /// 设置气泡与触发器之间的间距。
+    #[must_use]
+    pub fn with_gap(mut self, gap: f32) -> Self {
+        self.gap = gap.max(0.0);
+        self
+    }
+
+    /// 设置距离窗口视口四边的安全内边距。
+    #[must_use]
+    pub fn with_viewport_margin(mut self, margin: f32) -> Self {
+        self.viewport_margin = margin.max(0.0);
+        self
+    }
+
+    /// 设置气泡内边距。
+    #[must_use]
+    pub fn with_padding(mut self, padding: Vec2) -> Self {
+        self.padding = Vec2::new(padding.x.max(0.0), padding.y.max(0.0));
+        self
     }
 
     /// 测量自动换行的多行工具提示。
@@ -154,6 +251,7 @@ impl TooltipDesc {
     /// 生成的气泡宽度绝不会超过 [`Self::max_width`]。
     #[must_use]
     pub fn with_wrapped_text(mut self, text: &str, char_width: f32, line_height: f32) -> Self {
+        self.label = text.to_string();
         let lines = wrap_text(text, self.max_width, char_width);
         let widest = lines
             .iter()
@@ -169,10 +267,67 @@ impl TooltipDesc {
         wrap_text(text, self.max_width, char_width)
     }
 
-    /// 已放置的气泡矩形。
+    /// 计算在窗口内的完整定位结果（包含最终矩形、实际采用的放置方向与箭头尖端坐标）。
+    #[must_use]
+    pub fn placed(&self) -> PlacedPopup {
+        place_tooltip_in_window(
+            self.anchor,
+            self.size,
+            self.viewport,
+            self.placement,
+            self.gap,
+            self.viewport_margin,
+        )
+    }
+
+    /// 已放置的气泡矩形（始终位于 `viewport` 内部）。
     #[must_use]
     pub fn rect(&self) -> Rect {
-        place_anchored_popup(self.anchor, self.size, self.viewport, self.placement)
+        self.placed().rect
+    }
+
+    /// 实际选定的放置方向（发生防溢出翻转后可能与 `self.placement` 不同）。
+    #[must_use]
+    pub fn chosen_placement(&self) -> Placement {
+        self.placed().chosen_placement
+    }
+
+    /// 气泡朝向锚点的箭头尖端坐标。
+    #[must_use]
+    pub fn arrow_tip(&self) -> Vec2 {
+        self.placed().arrow_tip
+    }
+
+    /// 气泡内部扣除 `padding` 后的文本排版矩形。
+    #[must_use]
+    pub fn content_rect(&self) -> Rect {
+        let r = self.rect();
+        Rect::new(
+            r.origin.x + self.padding.x,
+            r.origin.y + self.padding.y,
+            (r.width() - self.padding.x * 2.0).max(0.0),
+            (r.height() - self.padding.y * 2.0).max(0.0),
+        )
+    }
+
+    /// 发射包含已整形文本字形的工具提示气泡。
+    #[must_use]
+    pub fn render_with_glyphs(
+        &self,
+        node: u64,
+        anchor_node: u64,
+        state: ControlState,
+        glyphs: &[GlyphQuad],
+    ) -> (WidgetOutput, OverlayEntry) {
+        let (mut output, entry) = emit_tooltip(node, anchor_node, self, state);
+        crate::primitive::glyphs(
+            glyphs,
+            Token::TEXT_PRIMARY,
+            self.z.saturating_add(1),
+            &mut output.primitives,
+            &mut output.payloads,
+        );
+        (output, entry)
     }
 }
 
@@ -267,7 +422,6 @@ impl TooltipState {
                 self.hovered_anchor = Some(node);
                 self.hovered_ms = 0.0;
                 // 指针在本次 tick 前已停留了 `dt`，因此截止时间从过去一个增量处开始。
-                //
                 self.deadline = Some(TooltipDelay::start(now - dt, desc.delay_ms));
             }
             None => {
@@ -310,8 +464,10 @@ impl WidgetDesc for TooltipWidget {
         self.node
     }
 
-    fn emit(&self, state: ControlState, _glyphs: &mut [unbound_text::GlyphQuad]) -> WidgetOutput {
-        emit_tooltip(self.node, self.anchor_node, &self.desc, state).0
+    fn emit(&self, state: ControlState, glyphs: &mut [unbound_text::GlyphQuad]) -> WidgetOutput {
+        self.desc
+            .render_with_glyphs(self.node, self.anchor_node, state, glyphs)
+            .0
     }
 }
 
@@ -351,14 +507,14 @@ pub fn emit_tooltip(
         ),
     ];
 
-    let a11y = unbound_a11y::A11yNode::new(Role::Tooltip, "", rect).disabled(state.disabled);
+    let a11y = unbound_a11y::A11yNode::new(Role::Tooltip, desc.label.clone(), rect)
+        .disabled(state.disabled);
 
     (
         WidgetOutput {
             primitives,
             payloads: Vec::new(),
             // 鼠标穿透：工具提示绝不能窃取维持其打开状态的悬停事件。
-            //
             hit: None,
             a11y: Some(a11y),
             focusable: false,
@@ -429,5 +585,33 @@ mod tests {
         let rect = desc.rect();
         assert!(rect.origin.y >= desc.viewport.origin.y);
         assert!(desc.viewport.contains_rect(&rect));
+        assert_eq!(desc.chosen_placement(), Placement::BottomStart);
+    }
+
+    #[test]
+    fn labeled_tooltip_never_overflows_any_window_corner() {
+        let viewport = Rect::new(0.0, 0.0, 640.0, 480.0);
+        let corners = [
+            Rect::new(2.0, 2.0, 72.0, 28.0),
+            Rect::new(566.0, 2.0, 72.0, 28.0),
+            Rect::new(2.0, 450.0, 72.0, 28.0),
+            Rect::new(566.0, 450.0, 72.0, 28.0),
+        ];
+        for anchor in corners {
+            for placement in [
+                Placement::Top,
+                Placement::Bottom,
+                Placement::Left,
+                Placement::Right,
+            ] {
+                let t = TooltipDesc::labeled(anchor, viewport, "Auto-adjusted in-window tooltip")
+                    .with_placement(placement);
+                let r = t.rect();
+                assert!(
+                    viewport.contains_rect(&r),
+                    "tooltip {r:?} overflowed viewport {viewport:?} at anchor {anchor:?}"
+                );
+            }
+        }
     }
 }

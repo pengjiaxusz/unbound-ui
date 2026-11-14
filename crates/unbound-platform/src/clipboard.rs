@@ -2,17 +2,14 @@
 //!
 //! 剪贴板属于平台服务，因此将策略层与系统实现层分离：
 //!
-//!
 //! * [`ClipboardProvider`] 是编辑器交互的 trait。
 //! * [`MemoryClipboard`] 是测试与无头运行使用的确定性实现。
-//! * [`SystemClipboard`] 是 Windows 实现；在其他平台上返回
+//! * [`SystemClipboard`] 是基于 `windows` crate（0.62.2）的 Windows 实现；在其他平台上返回
 //!   [`ClipboardError::Unavailable`] 而非静默无操作。
-//!
 //!
 //! 每次读取均受限于 [`MAX_CLIPBOARD_BYTES`]。粘贴操作绝不能在应用有机会
 //! 拒绝之前将恶意的 2 GB 剪贴板载荷变成 4 GB 的 `String`——上限检查在
 //! 任何大内存分配前执行，错误中会报告被拒绝的字节大小。
-//!
 
 /// 引擎可接受的最大剪贴板载荷（以 UTF-8 字节计）。
 pub const MAX_CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
@@ -21,7 +18,6 @@ pub const MAX_CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipboardError {
     /// 剪贴板服务不可用（不支持的平台，或剪贴板被其他进程锁定）。
-    ///
     Unavailable,
     /// 载荷大小超出 [`MAX_CLIPBOARD_BYTES`]。
     TooLarge {
@@ -206,101 +202,58 @@ impl SystemClipboard {
 }
 
 #[cfg(windows)]
-#[allow(
-    non_snake_case,
-    non_camel_case_types,
-    clippy::upper_case_acronyms,
-    dead_code
-)]
 mod win32 {
-    //! 最小化 Win32 剪贴板绑定。
+    //! 基于官方 `windows = "0.62.2"` crate 的 Win32 剪贴板实现。
     //!
-    //! 本 crate 禁止在 `unsafe fn` 内部执行 unsafe 操作；此处每处 FFI 调用均
-    //! 包裹在显式 `unsafe` 块中，且句柄生命周期严格受限于下方的打开/关闭作用域。
-    //!
+    //! 句柄生命周期严格受限于每次打开/关闭剪贴板的作用域。
 
-    use core::ffi::c_void;
+    use ::windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
+    use ::windows::Win32::Graphics::Gdi::{BITMAPINFOHEADER, BI_RGB};
+    use ::windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
+        OpenClipboard, SetClipboardData,
+    };
+    use ::windows::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+    };
+    use ::windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
-    type Bool = i32;
-    type Handle = *mut c_void;
-
-    const CF_UNICODETEXT: u32 = 13;
     const CF_DIB: u32 = 8;
+    const CF_UNICODETEXT: u32 = 13;
     const CF_HDROP: u32 = 15;
-    const GMEM_MOVEABLE: u32 = 0x0002;
-
-    #[repr(C)]
-    struct BITMAPINFOHEADER {
-        biSize: u32,
-        biWidth: i32,
-        biHeight: i32,
-        biPlanes: u16,
-        biBitCount: u16,
-        biCompression: u32,
-        biSizeImage: u32,
-        biXPelsPerMeter: i32,
-        biYPelsPerMeter: i32,
-        biClrUsed: u32,
-        biClrImportant: u32,
-    }
-
-    #[link(name = "user32")]
-    extern "system" {
-        fn OpenClipboard(owner: Handle) -> Bool;
-        fn CloseClipboard() -> Bool;
-        fn EmptyClipboard() -> Bool;
-        fn GetClipboardData(format: u32) -> Handle;
-        fn SetClipboardData(format: u32, memory: Handle) -> Handle;
-        fn IsClipboardFormatAvailable(format: u32) -> Bool;
-    }
-
-    #[link(name = "shell32")]
-    extern "system" {
-        fn DragQueryFileW(hDrop: Handle, iFile: u32, lpszFile: *mut u16, cch: u32) -> u32;
-    }
-
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GlobalAlloc(flags: u32, bytes: usize) -> Handle;
-        fn GlobalFree(memory: Handle) -> Handle;
-        fn GlobalLock(memory: Handle) -> *mut c_void;
-        fn GlobalUnlock(memory: Handle) -> Bool;
-        fn lstrlenW(text: *const u16) -> i32;
-    }
 
     pub(super) fn read(max_bytes: usize) -> Result<Option<String>, super::ClipboardError> {
-        // SAFETY: 剪贴板在此作用域内打开、读取并关闭，指针仅在剪贴板持有
-        // 所有权期间使用。
         unsafe {
-            if OpenClipboard(core::ptr::null_mut()) == 0 {
+            if OpenClipboard(None).is_err() {
                 return Err(super::ClipboardError::Unavailable);
             }
-            if IsClipboardFormatAvailable(CF_UNICODETEXT) == 0 {
+            if IsClipboardFormatAvailable(CF_UNICODETEXT).is_err() {
                 let _ = CloseClipboard();
                 return Ok(None);
             }
-            let handle = GetClipboardData(CF_UNICODETEXT);
-            if handle.is_null() {
+            let Ok(handle) = GetClipboardData(CF_UNICODETEXT) else {
+                let _ = CloseClipboard();
+                return Ok(None);
+            };
+            if handle.is_invalid() {
                 let _ = CloseClipboard();
                 return Ok(None);
             }
-            let pointer = GlobalLock(handle).cast::<u16>();
+            let hglobal = HGLOBAL(handle.0);
+            let max_units = GlobalSize(hglobal) / core::mem::size_of::<u16>();
+            let pointer = GlobalLock(hglobal).cast::<u16>();
             if pointer.is_null() {
                 let _ = CloseClipboard();
                 return Err(super::ClipboardError::Os);
             }
-            let units = lstrlenW(pointer);
-            if units < 0 {
-                let _ = GlobalUnlock(handle);
-                let _ = CloseClipboard();
-                return Err(super::ClipboardError::Os);
+            let mut units = 0usize;
+            while units < max_units && *pointer.add(units) != 0 {
+                units += 1;
             }
-            let units = units as usize;
             // 每个 UTF-16 码元最多需要 4 个 UTF-8 字节；在解码前按最坏情况检查，
             // 从而在不分配内存的情况下拒绝超大粘贴。
-            //
             if units.saturating_mul(4) > max_bytes {
-                let _ = GlobalUnlock(handle);
+                let _ = GlobalUnlock(hglobal);
                 let _ = CloseClipboard();
                 return Err(super::ClipboardError::TooLarge {
                     bytes: units.saturating_mul(4),
@@ -309,7 +262,7 @@ mod win32 {
             }
             let slice = core::slice::from_raw_parts(pointer, units);
             let text = String::from_utf16_lossy(slice);
-            let _ = GlobalUnlock(handle);
+            let _ = GlobalUnlock(hglobal);
             let _ = CloseClipboard();
             if text.is_empty() {
                 Ok(None)
@@ -328,31 +281,28 @@ mod win32 {
         }
         let wide: Vec<u16> = text.encode_utf16().chain(core::iter::once(0)).collect();
         let bytes = core::mem::size_of_val(wide.as_slice());
-        // SAFETY: 在所有权移交剪贴板之前完成缓冲区分配与拷贝；失败时释放内存。
-        //
         unsafe {
-            if OpenClipboard(core::ptr::null_mut()) == 0 {
+            if OpenClipboard(None).is_err() {
                 return Err(super::ClipboardError::Unavailable);
             }
-            if EmptyClipboard() == 0 {
+            if EmptyClipboard().is_err() {
                 let _ = CloseClipboard();
                 return Err(super::ClipboardError::Os);
             }
-            let memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
-            if memory.is_null() {
+            let Ok(memory) = GlobalAlloc(GMEM_MOVEABLE, bytes) else {
                 let _ = CloseClipboard();
                 return Err(super::ClipboardError::Os);
-            }
+            };
             let destination = GlobalLock(memory).cast::<u16>();
             if destination.is_null() {
-                let _ = GlobalFree(memory);
+                let _ = GlobalFree(Some(memory));
                 let _ = CloseClipboard();
                 return Err(super::ClipboardError::Os);
             }
             core::ptr::copy_nonoverlapping(wide.as_ptr(), destination, wide.len());
             let _ = GlobalUnlock(memory);
-            if SetClipboardData(CF_UNICODETEXT, memory).is_null() {
-                let _ = GlobalFree(memory);
+            if SetClipboardData(CF_UNICODETEXT, Some(HANDLE(memory.0))).is_err() {
+                let _ = GlobalFree(Some(memory));
                 let _ = CloseClipboard();
                 return Err(super::ClipboardError::Os);
             }
@@ -363,29 +313,35 @@ mod win32 {
 
     pub(super) fn read_files() -> Result<Vec<std::path::PathBuf>, super::ClipboardError> {
         unsafe {
-            if OpenClipboard(core::ptr::null_mut()) == 0 {
+            if OpenClipboard(None).is_err() {
                 return Err(super::ClipboardError::Unavailable);
             }
-            if IsClipboardFormatAvailable(CF_HDROP) == 0 {
+            if IsClipboardFormatAvailable(CF_HDROP).is_err() {
                 let _ = CloseClipboard();
                 return Ok(Vec::new());
             }
-            let handle = GetClipboardData(CF_HDROP);
-            if handle.is_null() {
+            let Ok(handle) = GetClipboardData(CF_HDROP) else {
+                let _ = CloseClipboard();
+                return Ok(Vec::new());
+            };
+            if handle.is_invalid() {
                 let _ = CloseClipboard();
                 return Ok(Vec::new());
             }
-            let count = DragQueryFileW(handle, 0xFFFFFFFF, core::ptr::null_mut(), 0);
+            let hdrop = HDROP(handle.0);
+            let count = DragQueryFileW(hdrop, u32::MAX, None);
             let mut out = Vec::new();
             let mut buffer = vec![0u16; 1024];
             for i in 0..count {
-                let len = DragQueryFileW(handle, i, core::ptr::null_mut(), 0) as usize;
+                let len = DragQueryFileW(hdrop, i, None) as usize;
                 if len >= buffer.len() {
                     buffer.resize(len + 1, 0);
                 }
-                DragQueryFileW(handle, i, buffer.as_mut_ptr(), buffer.len() as u32);
-                let path_str = String::from_utf16_lossy(&buffer[..len]);
-                out.push(std::path::PathBuf::from(path_str));
+                let copied = DragQueryFileW(hdrop, i, Some(&mut buffer)) as usize;
+                if copied > 0 {
+                    let path_str = String::from_utf16_lossy(&buffer[..copied]);
+                    out.push(std::path::PathBuf::from(path_str));
+                }
             }
             let _ = CloseClipboard();
             Ok(out)
@@ -394,19 +350,23 @@ mod win32 {
 
     pub(super) fn read_image() -> Result<Option<(u32, u32, Vec<u8>)>, super::ClipboardError> {
         unsafe {
-            if OpenClipboard(core::ptr::null_mut()) == 0 {
+            if OpenClipboard(None).is_err() {
                 return Err(super::ClipboardError::Unavailable);
             }
-            if IsClipboardFormatAvailable(CF_DIB) == 0 {
+            if IsClipboardFormatAvailable(CF_DIB).is_err() {
                 let _ = CloseClipboard();
                 return Ok(None);
             }
-            let handle = GetClipboardData(CF_DIB);
-            if handle.is_null() {
+            let Ok(handle) = GetClipboardData(CF_DIB) else {
+                let _ = CloseClipboard();
+                return Ok(None);
+            };
+            if handle.is_invalid() {
                 let _ = CloseClipboard();
                 return Ok(None);
             }
-            let pointer = GlobalLock(handle).cast::<u8>();
+            let hglobal = HGLOBAL(handle.0);
+            let pointer = GlobalLock(hglobal).cast::<u8>();
             if pointer.is_null() {
                 let _ = CloseClipboard();
                 return Err(super::ClipboardError::Os);
@@ -422,14 +382,14 @@ mod win32 {
                 || width > 8192
                 || height > 8192
             {
-                let _ = GlobalUnlock(handle);
+                let _ = GlobalUnlock(hglobal);
                 let _ = CloseClipboard();
                 return Ok(None);
             }
 
             let pixel_offset = header.biSize as usize;
             let pixel_bytes = pointer.add(pixel_offset);
-            let row_stride = (((width * bpp as u32 + 31) & !31) / 8) as usize;
+            let row_stride = (((width * u32::from(bpp) + 31) & !31) / 8) as usize;
             let mut rgba = vec![0u8; (width * height * 4) as usize];
 
             let is_top_down = header.biHeight < 0;
@@ -463,7 +423,7 @@ mod win32 {
                 }
             }
 
-            let _ = GlobalUnlock(handle);
+            let _ = GlobalUnlock(hglobal);
             let _ = CloseClipboard();
             Ok(Some((width, height, rgba)))
         }
@@ -482,21 +442,20 @@ mod win32 {
         let total_size = header_size + image_size;
 
         unsafe {
-            if OpenClipboard(core::ptr::null_mut()) == 0 {
+            if OpenClipboard(None).is_err() {
                 return Err(super::ClipboardError::Unavailable);
             }
-            if EmptyClipboard() == 0 {
+            if EmptyClipboard().is_err() {
                 let _ = CloseClipboard();
                 return Err(super::ClipboardError::Os);
             }
-            let memory = GlobalAlloc(GMEM_MOVEABLE, total_size);
-            if memory.is_null() {
+            let Ok(memory) = GlobalAlloc(GMEM_MOVEABLE, total_size) else {
                 let _ = CloseClipboard();
                 return Err(super::ClipboardError::Os);
-            }
+            };
             let dest = GlobalLock(memory).cast::<u8>();
             if dest.is_null() {
-                let _ = GlobalFree(memory);
+                let _ = GlobalFree(Some(memory));
                 let _ = CloseClipboard();
                 return Err(super::ClipboardError::Os);
             }
@@ -507,7 +466,7 @@ mod win32 {
                 biHeight: -(height as i32), // top-down
                 biPlanes: 1,
                 biBitCount: 32,
-                biCompression: 0, // BI_RGB
+                biCompression: BI_RGB.0,
                 biSizeImage: image_size as u32,
                 biXPelsPerMeter: 3780, // ~96 DPI
                 biYPelsPerMeter: 3780,
@@ -515,7 +474,7 @@ mod win32 {
                 biClrImportant: 0,
             };
 
-            core::ptr::copy_nonoverlapping(&header as *const _ as *const u8, dest, header_size);
+            core::ptr::copy_nonoverlapping((&raw const header).cast::<u8>(), dest, header_size);
 
             let dest_pixels = dest.add(header_size);
             for i in 0..(width * height) as usize {
@@ -530,8 +489,8 @@ mod win32 {
             }
 
             let _ = GlobalUnlock(memory);
-            if SetClipboardData(CF_DIB, memory).is_null() {
-                let _ = GlobalFree(memory);
+            if SetClipboardData(CF_DIB, Some(HANDLE(memory.0))).is_err() {
+                let _ = GlobalFree(Some(memory));
                 let _ = CloseClipboard();
                 return Err(super::ClipboardError::Os);
             }
@@ -606,7 +565,6 @@ mod tests {
     fn a_system_clipboard_is_constructed_with_the_default_limit() {
         let mut clipboard = SystemClipboard::new();
         // 在无头或锁屏桌面上允许读取失败；绝对不能发生的是 panic 或无界内存分配。
-        //
         match clipboard.read_text() {
             Ok(Some(text)) => assert!(text.len() <= MAX_CLIPBOARD_BYTES),
             Ok(None) | Err(ClipboardError::Unavailable) | Err(ClipboardError::Os) => {}

@@ -3,7 +3,9 @@
 use accesskit::Role;
 use unbound_abi::{Align, Justify, RawNodeDesc};
 use unbound_layout::LayoutEngine;
-use unbound_math::Rect;
+use unbound_math::{Rect, Vec2};
+use unbound_widgets::overlay::Placement;
+use unbound_widgets::tooltip::TooltipDesc;
 use unbound_world::UiWorld;
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageInfo};
@@ -22,10 +24,10 @@ pub const FLEX_INFO: PageInfo = PageInfo {
 pub const OVERLAYS_INFO: PageInfo = PageInfo {
     title: "Portals & overlays",
     short: "Portals",
-    description: "Menus, dialogs and tooltips paint above the page on portal layers. Hit testing follows paint order, so the topmost surface wins.",
-    crates: &["unbound-input/src/hit.rs", "unbound-graph"],
-    docs: "docs/architecture/input-and-a11y.md",
-    keywords: "portal overlay modal dialog dropdown menu tooltip popup z order",
+    description: "Menus, dialogs and tooltips paint above the page on portal layers. Tooltips automatically flip and clamp within the window bounds.",
+    crates: &["unbound-widgets/src/tooltip.rs", "unbound-widgets/src/overlay.rs"],
+    docs: "docs/architecture/widgets.md",
+    keywords: "portal overlay modal dialog dropdown menu tooltip popup z order auto flip clamp",
 };
 
 pub const DRAG_INFO: PageInfo = PageInfo {
@@ -92,20 +94,21 @@ pub const OVERLAY_EXAMPLES: &[ExampleDef] = &[
     )
     .with_height(300.0),
     ExampleDef::new(
-        "Tooltips",
-        "Hover any button. Tooltips are portals too, positioned above or below the anchor and never clipped by the stage.",
-        &["unbound-input/src/hit.rs"],
-        r#"Tooltip::new("Open command palette")
-    .placement(Placement::Bottom)
-    .delay(Duration::from_millis(400));"#,
-        "Three buttons each exposing a tooltip via `aria-describedby`.",
+        "Tooltips (In-Window Auto-Positioning)",
+        "Hover any button — including buttons pinned to the top, bottom, left, and right edges. TooltipDesc automatically flips across axes and clamps within the window bounds.",
+        &["unbound-widgets/src/tooltip.rs", "unbound-widgets/src/overlay.rs"],
+        r#"let tip = TooltipDesc::labeled(anchor, viewport, "Open command palette")
+    .with_placement(Placement::Top)
+    .with_viewport_margin(8.0);
+let placed = tip.placed();"#,
+        "Five trigger buttons (including edge/corner triggers) exposing auto-flipping in-window tooltips.",
         &[
-            KnobSpec::segmented("Placement", &["Top", "Bottom"], 1),
-            KnobSpec::toggle("Show role hints", true),
+            KnobSpec::segmented("Preferred", &["Top", "Bottom", "Left", "Right"], 0),
+            KnobSpec::toggle("Show shortcut hints", true),
         ],
         DemoKind::Overlays { tooltips: true },
     )
-    .with_height(240.0),
+    .with_height(260.0),
 ];
 
 pub const DRAG_EXAMPLES: &[ExampleDef] = &[ExampleDef::new(
@@ -505,64 +508,129 @@ pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
 fn tooltip_page(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
-    let placement_bottom = ctx.knob(0) > 0.5;
+    let preferred = match ctx.knob(0) as usize {
+        1 => Placement::Bottom,
+        2 => Placement::Left,
+        3 => Placement::Right,
+        _ => Placement::Top,
+    };
     let show_hints = ctx.knob_on(1);
-    let buttons = [
-        ("Command palette", Icon::Search, "Ctrl+K"),
-        ("Toggle theme", Icon::Moon, "T"),
-        ("Toggle HUD", Icon::Chart, "F12"),
+
+    let btn_w = 104.0_f32.min((rect.size.x - 24.0) * 0.3);
+    let btn_h = 34.0;
+    let triggers = [
+        (
+            Rect::new(rect.origin.x + 6.0, rect.origin.y + 6.0, btn_w, btn_h),
+            "Top-Left Corner · Auto-Flips Inside",
+            Icon::Search,
+            "Ctrl+K",
+        ),
+        (
+            Rect::new(
+                rect.max().x - btn_w - 6.0,
+                rect.origin.y + 6.0,
+                btn_w,
+                btn_h,
+            ),
+            "Top-Right Edge · Clamped In-Window",
+            Icon::Moon,
+            "T",
+        ),
+        (
+            Rect::new(
+                rect.center().x - btn_w * 0.5,
+                rect.center().y - btn_h * 0.5,
+                btn_w,
+                btn_h,
+            ),
+            "Center Anchor · Follows Preferred Side",
+            Icon::Layers,
+            "Space",
+        ),
+        (
+            Rect::new(
+                rect.origin.x + 6.0,
+                rect.max().y - btn_h - 26.0,
+                btn_w,
+                btn_h,
+            ),
+            "Bottom-Left Edge · Flips Upward",
+            Icon::Chart,
+            "F12",
+        ),
+        (
+            Rect::new(
+                rect.max().x - btn_w - 6.0,
+                rect.max().y - btn_h - 26.0,
+                btn_w,
+                btn_h,
+            ),
+            "Bottom-Right Corner · Never Overflows",
+            Icon::Snap,
+            "Ctrl+N",
+        ),
     ];
-    for (index, (label, icon, shortcut)) in buttons.iter().enumerate() {
-        let button = Rect::new(
-            rect.origin.x + 36.0 + index as f32 * 132.0,
-            rect.origin.y + rect.size.y * 0.5 - 20.0,
-            116.0,
-            40.0,
-        );
+
+    let mut active_tooltip: Option<(Rect, &'static str, Placement)> = None;
+
+    for (index, (button, label, icon, shortcut)) in triggers.iter().enumerate() {
         let node = ctx.part(30 + index as u16);
-        let visual = widgets::button(ctx.canvas, node, button, "", ButtonVariant::Secondary, true);
-        widgets::icon(ctx.canvas, *icon, button, palette.text, palette.card_bg);
+        let visual = widgets::button(
+            ctx.canvas,
+            node,
+            *button,
+            "",
+            ButtonVariant::Secondary,
+            true,
+        );
+        widgets::icon(ctx.canvas, *icon, *button, palette.text, palette.card_bg);
         if show_hints {
             ctx.canvas.text(
                 shortcut,
-                Rect::new(button.origin.x, button.max().y + 6.0, button.size.x, 14.0),
-                9.0,
+                Rect::new(
+                    button.origin.x + 6.0,
+                    button.origin.y + 2.0,
+                    button.size.x - 12.0,
+                    12.0,
+                ),
+                8.5,
                 palette.text_muted,
-                AlignX::Center,
+                AlignX::End,
                 AlignY::Top,
             );
         }
         if visual.is_hovered() {
-            let tip = Rect::new(
-                button.center().x - 82.0,
-                if placement_bottom {
-                    button.max().y + 22.0
-                } else {
-                    button.origin.y - 46.0
-                },
-                164.0,
-                34.0,
-            );
-            ctx.canvas
-                .rect(tip, 7.0, palette.overlay_bg, palette.card_border, 1.0, 12.0);
-            ctx.canvas.text(
-                label,
-                Rect::new(
-                    tip.origin.x + 10.0,
-                    tip.origin.y,
-                    tip.size.x - 20.0,
-                    tip.size.y,
-                ),
-                10.5,
-                palette.text,
-                AlignX::Center,
-                AlignY::Center,
-            );
+            let desc = TooltipDesc::new(*button, rect, Vec2::new(224.0, 32.0))
+                .with_label(*label)
+                .with_placement(preferred)
+                .with_gap(6.0)
+                .with_viewport_margin(6.0);
+            let placed = desc.placed();
+            active_tooltip = Some((placed.rect, *label, placed.chosen_placement));
         }
     }
+
+    if let Some((tip, label, chosen)) = active_tooltip {
+        ctx.canvas
+            .rect(tip, 7.0, palette.overlay_bg, palette.primary, 1.0, 12.0);
+        ctx.canvas.text(
+            &format!("{label} ({chosen:?})"),
+            Rect::new(
+                tip.origin.x + 8.0,
+                tip.origin.y,
+                (tip.size.x - 16.0).max(0.0),
+                tip.size.y,
+            ),
+            9.5,
+            palette.text,
+            AlignX::Center,
+            AlignY::Center,
+        );
+    }
+
     ctx.canvas.text(
-        "Hover a button · tooltip placement is a portal anchor",
-        Rect::new(rect.origin.x, rect.max().y - 22.0, rect.size.x, 16.0),
+        "Hover any edge/corner button · TooltipDesc auto-flips and clamps within window bounds",
+        Rect::new(rect.origin.x, rect.max().y - 20.0, rect.size.x, 16.0),
         9.5,
         palette.text_muted,
         AlignX::Center,

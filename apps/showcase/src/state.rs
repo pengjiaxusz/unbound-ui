@@ -16,7 +16,7 @@ use unbound_widgets::progress::ProgressState;
 use unbound_widgets::WidgetCatalogId;
 use unbound_world::virtualize::{VirtualList, WindowUpdate};
 
-use crate::pages::{ExampleDef, KnobSpec, PageId};
+use crate::pages::{component_scroll_offset, ExampleDef, KnobSpec, PageId};
 
 /// 随附的两个应用主题。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -119,6 +119,8 @@ pub struct DemoState {
     pub clicks: u32,
     /// 图标变体中上次选中的图标按钮。
     pub selected_icon: usize,
+    /// 系统专页中当前选中的子系统索引（`0..SubsystemId::COUNT`）。
+    pub selected_subsystem: usize,
     /// 进度条演示的缓动条显示值。
     pub progress_bar: ProgressState,
     /// 进度条演示的缓动圆环显示值。
@@ -190,6 +192,7 @@ impl Default for DemoState {
             elapsed: 0.0,
             clicks: 0,
             selected_icon: 0,
+            selected_subsystem: 0,
             progress_bar: ProgressState::new(),
             progress_ring: ProgressState::new(),
             frame_history: VecDeque::new(),
@@ -259,6 +262,8 @@ fn procedural_tile_png(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
 #[derive(Debug)]
 pub struct GalleryState {
     pub active_page: PageId,
+    /// 当通过侧边栏直接选中某个具体组件时记录该组件 ID。
+    pub active_component: Option<WidgetCatalogId>,
     pub nav_expanded: bool,
     pub search_query: String,
     pub search_focused: bool,
@@ -294,6 +299,7 @@ impl Default for GalleryState {
     fn default() -> Self {
         Self {
             active_page: PageId::Home,
+            active_component: None,
             nav_expanded: true,
             search_query: String::new(),
             search_focused: false,
@@ -333,13 +339,24 @@ impl GalleryState {
 
     /// 导航到指定页面；重置内容滚动位置以使页头可见。
     pub fn navigate(&mut self, page: PageId) {
-        if self.active_page != page {
+        if self.active_page != page || self.active_component.is_some() {
             self.active_page = page;
+            self.active_component = None;
             self.content_scroll = 0.0;
             self.demo.modal_open = false;
             self.demo.dropdown_open = false;
             self.bump();
         }
+    }
+
+    /// 导航到组件展厅并自动将页面滚动到指定组件的卡片位置。
+    pub fn navigate_to_component(&mut self, id: WidgetCatalogId) {
+        self.active_page = PageId::Components;
+        self.active_component = Some(id);
+        self.content_scroll = component_scroll_offset(id);
+        self.demo.modal_open = false;
+        self.demo.dropdown_open = false;
+        self.bump();
     }
 
     /// 设置帧率上限。

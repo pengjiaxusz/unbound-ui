@@ -26,10 +26,10 @@ pub use unbound_widgets::{
     AlertDesc, BadgeDesc, BannerDesc, ButtonDesc, ButtonSize, ButtonVariant, CardDesc, CheckState,
     CheckboxDesc, CodeEditorDesc, CodeEditorState, ColumnSpec, ControlState, CurveEditorDesc,
     DataGridDesc, DataGridState, DividerDesc, FileDropDesc, PaginationDesc, PaginationState,
-    PopconfirmDesc, ProgressDesc, ProgressState, SelectDesc, SelectState, Severity, SliderDesc,
-    SwitchDesc, TableDesc, TableRow, TableState, TextEditState, TextInputDesc, TimelineTrackDesc,
-    TimelineTrackState, TitleBarDesc, TourDesc, TransferDesc, TransferState, WatermarkDesc,
-    WidgetCatalogId, WidgetOutput, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT,
-    TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID,
+    Placement, PopconfirmDesc, ProgressDesc, ProgressState, SelectDesc, SelectState, Severity,
+    SliderDesc, SwitchDesc, TableDesc, TableRow, TableState, TextEditState, TextInputDesc,
+    TimelineTrackDesc, TimelineTrackState, TitleBarDesc, TooltipDesc, TooltipState, TourDesc,
+    TransferDesc, TransferState, WatermarkDesc, WidgetCatalogId, WidgetOutput, TITLE_BAR_CLOSE_ID,
+    TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID,
 };
 pub use unbound_world::NodeId;

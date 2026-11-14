@@ -28,6 +28,7 @@ use unbound_gpu::{Camera, Renderer, SceneUpload};
 use unbound_input::{resize_edge, CursorKind, PointerButton, ResizeEdge};
 use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
+use unbound_platform::win32_frame::{install_custom_frame, FrameHitMetrics};
 use unbound_platform::window::{
     ButtonState, Modifiers, MouseButton, PlatformEvent, PlatformKey, PlatformState, WindowConfig,
 };
@@ -114,6 +115,8 @@ struct Showcase {
     swapchain_dirty: bool,
     /// 主窗口标识，用于区分辅助窗口。
     primary: Option<NativeWindowId>,
+    /// 主窗口自定义边框命中指标（驱动 Win32 `WM_NCHITTEST` 四边/四角缩放与 Win11 贴靠布局）。
+    frame_metrics: Option<Arc<FrameHitMetrics>>,
     /// 辅助窗口及其呈现链。
     extras: Vec<ExtraWindow>,
     /// 由 `Ctrl+N` 置位；平台层在下一帧打开新窗口。
@@ -165,6 +168,7 @@ impl Showcase {
             press_consumed: false,
             swapchain_dirty: false,
             primary: None,
+            frame_metrics: None,
             extras: Vec::new(),
             new_window_requested: false,
         }
@@ -206,11 +210,10 @@ impl Showcase {
         if window.is_decorated() || window.is_maximized() {
             return None;
         }
-        // 进行中的捕获操作（滚动条抓取、滑块拖拽、画布平移）独占指针：
-        // 调整大小边框绝不能打断它，且悬停在可拖拽控件上时也不应变成调整大小光标。
-        //
+        // 进行中的按压捕获操作（滚动条抓取、滑块拖拽、画布平移）独占指针：
+        // 仅在按下拖拽期间屏蔽边缘缩放，未按下时始终允许窗口外圈 6px 热区响应缩放。
         let ctx = self.app.context();
-        if ctx.pressed.is_some() || self.shell().hover_captures_pointer(ctx.hovered) {
+        if ctx.pressed.is_some() {
             return None;
         }
         let size = window.inner_size();
@@ -681,6 +684,12 @@ impl PlatformApp for Showcase {
 
         self.os_scale = window.scale_factor() as f32;
         self.primary = Some(window.id());
+
+        let metrics = Arc::new(FrameHitMetrics::new());
+        metrics.set_scale_factor(self.effective_scale());
+        install_custom_frame(hwnd, Arc::clone(&metrics));
+        self.frame_metrics = Some(metrics);
+
         // 呈现链刚刚按窗口尺寸创建：该请求已提交，因此首帧不会再次重建。
         //
         let size = window.inner_size();
@@ -1222,6 +1231,34 @@ impl Showcase {
         self.write_theme_if_needed();
         self.apply_cursor(window);
 
+        if let Some(metrics) = &self.frame_metrics {
+            let ui_scale = self.effective_scale();
+            metrics.set_scale_factor(ui_scale);
+            // 同步右上角窗口控制按钮矩形，以激活 Win11 贴靠布局（HTMAXBUTTON）与原生边缘缩放。
+            // title_bar_height 保持为 0，使标题栏内的搜索框、主题切换与缩放按钮仍由客户端事件驱动。
+            let logical_w = self.app.context().viewport.x;
+            let btn_w = 46.0;
+            let btn_h = 48.0;
+            metrics.set_minimize_button_rect(unbound_math::Rect::new(
+                logical_w - 3.0 * btn_w,
+                0.0,
+                btn_w,
+                btn_h,
+            ));
+            metrics.set_maximize_button_rect(unbound_math::Rect::new(
+                logical_w - 2.0 * btn_w,
+                0.0,
+                btn_w,
+                btn_h,
+            ));
+            metrics.set_close_button_rect(unbound_math::Rect::new(
+                logical_w - btn_w,
+                0.0,
+                btn_w,
+                btn_h,
+            ));
+        }
+
         // 上传计划。当场景形状变化时推进代次；当上一帧被丢弃时也会推进代次：
         // 丢帧后运行时的 diff 基准已跑在缓冲池前面，唯有全量上传能使两者重新对齐。
         //
@@ -1551,9 +1588,10 @@ mod tests {
     fn the_gallery_starts_on_home_with_a_full_catalogue() {
         let app = GalleryApp::new();
         assert_eq!(app.state.active_page, PageId::Home);
-        assert_eq!(PageId::ALL.len(), 23);
+        assert_eq!(PageId::ALL.len(), 24);
         assert!(!PageId::Home.examples().is_empty());
         assert!(PageId::Telemetry.examples().len() >= 2);
+        assert!(!PageId::Systems.examples().is_empty());
     }
 
     #[test]

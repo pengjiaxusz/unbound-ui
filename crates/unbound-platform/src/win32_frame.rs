@@ -1,15 +1,15 @@
 //! 适用于 Windows 10 与 11 的 Win32 无边框窗口、贴靠布局（Snap Layouts）与 DWM 集成。
 //!
-//! 提供以下能力：
+//! 基于官方 `windows = "0.62.2"` crate 提供以下能力：
 //! - 无缝无边框窗口，通过 `WM_NCCALCSIZE` 钳制到显示器工作区（最大化零溢出）。
 //! - 原生 `WM_NCHITTEST` 子类化：
 //!   - 在自定义最大化按钮上映射 `HTMAXBUTTON`，激活 Windows 11 贴靠布局悬停菜单。
 //!   - 在标题栏区域映射 `HTCAPTION`，支持系统级窗口拖拽与 Aero 贴靠（`Win + 方向键`）。
-//!   - 映射 `HTLEFT..HTBOTTOMRIGHT` 实现边缘缩放。
+//!   - 按 DPI 缩放比例映射 `HTLEFT..HTBOTTOMRIGHT` 实现窗口四边与四角拖拽调整大小。
 //! - DWM 窗口属性：
 //!   - Windows 11 圆角窗口（`DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND`）。
 //!   - 沉浸式深色模式同步（`DWMWA_USE_IMMERSIVE_DARK_MODE`）。
-//!   - Windows 10 窗口阴影恢复（`DwmExtendFrameIntoClientArea`）。
+//!   - Windows 10 / 11 窗口阴影恢复（`DwmExtendFrameIntoClientArea`）。
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -19,7 +19,7 @@ pub use unbound_math::Rect;
 /// 用于自定义标题栏与窗口按钮命中测试的原子指标。
 #[derive(Debug, Default)]
 pub struct FrameHitMetrics {
-    /// 标题栏高度（单位：逻辑像素）。
+    /// 标题栏高度（单位：逻辑像素）。为 `0` 时标题栏拖拽交由客户端逻辑判断。
     pub title_bar_height: AtomicI32,
     /// 最大化按钮包围盒（单位：逻辑像素）。
     pub max_btn_left: AtomicI32,
@@ -137,140 +137,37 @@ impl FrameHitMetrics {
 }
 
 #[cfg(windows)]
-#[allow(
-    non_snake_case,
-    non_camel_case_types,
-    clippy::upper_case_acronyms,
-    dead_code
-)]
 mod win32 {
     use super::*;
     use core::ffi::c_void;
 
-    type HWND = *mut c_void;
-    type HMONITOR = *mut c_void;
-    type LRESULT = isize;
-    type UINT = u32;
-    type WPARAM = usize;
-    type LPARAM = isize;
-    type BOOL = i32;
-    type DWORD = u32;
-
-    const WM_NCCALCSIZE: UINT = 0x0083;
-    const WM_NCHITTEST: UINT = 0x0084;
-    const WM_NCDESTROY: UINT = 0x0082;
-
-    const HTCLIENT: LRESULT = 1;
-    const HTCAPTION: LRESULT = 2;
-    const HTMINBUTTON: LRESULT = 8;
-    const HTMAXBUTTON: LRESULT = 9;
-    const HTLEFT: LRESULT = 10;
-    const HTRIGHT: LRESULT = 11;
-    const HTTOP: LRESULT = 12;
-    const HTTOPLEFT: LRESULT = 13;
-    const HTTOPRIGHT: LRESULT = 14;
-    const HTBOTTOM: LRESULT = 15;
-    const HTBOTTOMLEFT: LRESULT = 16;
-    const HTBOTTOMRIGHT: LRESULT = 17;
-    const HTCLOSE: LRESULT = 20;
-
-    const MONITOR_DEFAULTTONEAREST: DWORD = 2;
-
-    const DWMWA_USE_IMMERSIVE_DARK_MODE: DWORD = 20;
-    const DWMWA_WINDOW_CORNER_PREFERENCE: DWORD = 33;
-    const DWMWCP_ROUND: DWORD = 2;
-
-    #[repr(C)]
-    struct POINT {
-        x: i32,
-        y: i32,
-    }
-
-    #[repr(C)]
-    struct RECT {
-        left: i32,
-        top: i32,
-        right: i32,
-        bottom: i32,
-    }
-
-    #[repr(C)]
-    struct MARGINS {
-        cxLeftWidth: i32,
-        cxRightWidth: i32,
-        cyTopHeight: i32,
-        cyBottomHeight: i32,
-    }
-
-    #[repr(C)]
-    struct MONITORINFO {
-        cbSize: DWORD,
-        rcMonitor: RECT,
-        rcWork: RECT,
-        dwFlags: DWORD,
-    }
-
-    #[repr(C)]
-    struct NCCALCSIZE_PARAMS {
-        rgrc: [RECT; 3],
-        lppos: *mut c_void,
-    }
-
-    type SUBCLASSPROC = unsafe extern "system" fn(
-        hWnd: HWND,
-        uMsg: UINT,
-        wParam: WPARAM,
-        lParam: LPARAM,
-        uIdSubclass: usize,
-        dwRefData: usize,
-    ) -> LRESULT;
-
-    #[link(name = "user32")]
-    extern "system" {
-        fn ScreenToClient(hWnd: HWND, lpPoint: *mut POINT) -> BOOL;
-        fn GetClientRect(hWnd: HWND, lpRect: *mut RECT) -> BOOL;
-        fn IsZoomed(hWnd: HWND) -> BOOL;
-        fn MonitorFromWindow(hWnd: HWND, dwFlags: DWORD) -> HMONITOR;
-        fn GetMonitorInfoW(hMonitor: HMONITOR, lpmi: *mut MONITORINFO) -> BOOL;
-        fn SetWindowPos(
-            hWnd: HWND,
-            hWndInsertAfter: HWND,
-            X: i32,
-            Y: i32,
-            cx: i32,
-            cy: i32,
-            uFlags: UINT,
-        ) -> BOOL;
-    }
-
-    #[link(name = "comctl32")]
-    extern "system" {
-        fn SetWindowSubclass(
-            hWnd: HWND,
-            pfnSubclass: SUBCLASSPROC,
-            uIdSubclass: usize,
-            dwRefData: usize,
-        ) -> BOOL;
-        fn DefSubclassProc(hWnd: HWND, uMsg: UINT, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
-        fn RemoveWindowSubclass(hWnd: HWND, pfnSubclass: SUBCLASSPROC, uIdSubclass: usize) -> BOOL;
-    }
-
-    #[link(name = "dwmapi")]
-    extern "system" {
-        fn DwmSetWindowAttribute(
-            hwnd: HWND,
-            dwAttribute: DWORD,
-            pvAttribute: *const c_void,
-            cbAttribute: DWORD,
-        ) -> i32;
-        fn DwmExtendFrameIntoClientArea(hwnd: HWND, pMarInset: *const MARGINS) -> i32;
-    }
+    use ::windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+    use ::windows::Win32::Graphics::Dwm::{
+        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+    use ::windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, ScreenToClient, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use ::windows::Win32::UI::Controls::MARGINS;
+    use ::windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+    use ::windows::Win32::UI::WindowsAndMessaging::{
+        GetClientRect, IsZoomed, SetWindowPos, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
+        HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
+        NCCALCSIZE_PARAMS, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WM_NCCALCSIZE,
+        WM_NCDESTROY, WM_NCHITTEST,
+    };
 
     const SUBCLASS_ID: usize = 0x554E42; // "UNB" in hex
 
+    #[inline]
+    fn hwnd_from_isize(raw: isize) -> HWND {
+        HWND(raw as *mut c_void)
+    }
+
     unsafe extern "system" fn custom_frame_subclass_proc(
         hwnd: HWND,
-        msg: UINT,
+        msg: u32,
         wparam: WPARAM,
         lparam: LPARAM,
         _uid: usize,
@@ -289,61 +186,53 @@ mod win32 {
 
             match msg {
                 WM_NCCALCSIZE => {
-                    if wparam != 0 {
-                        let params = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
-                        if IsZoomed(hwnd) != 0 {
+                    if wparam.0 != 0 {
+                        let params = &mut *(lparam.0 as *mut NCCALCSIZE_PARAMS);
+                        if IsZoomed(hwnd).as_bool() {
                             // 最大化模式：钳制到显示器工作区以消除 8px 溢出
                             let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
                             let mut mi = MONITORINFO {
-                                cbSize: core::mem::size_of::<MONITORINFO>() as DWORD,
-                                rcMonitor: RECT {
-                                    left: 0,
-                                    top: 0,
-                                    right: 0,
-                                    bottom: 0,
-                                },
-                                rcWork: RECT {
-                                    left: 0,
-                                    top: 0,
-                                    right: 0,
-                                    bottom: 0,
-                                },
-                                dwFlags: 0,
+                                cbSize: core::mem::size_of::<MONITORINFO>() as u32,
+                                ..Default::default()
                             };
-                            if GetMonitorInfoW(monitor, &mut mi) != 0 {
+                            if GetMonitorInfoW(monitor, &mut mi).as_bool() {
                                 params.rgrc[0] = mi.rcWork;
                             }
                         }
                         // 返回 0 表示客户区完全填满整个窗口矩形
-                        return 0;
+                        return LRESULT(0);
                     }
                     DefSubclassProc(hwnd, msg, wparam, lparam)
                 }
                 WM_NCHITTEST => {
                     // 低 16 位 = X，高 16 位 = Y（屏幕坐标）
-                    let screen_x = (lparam & 0xFFFF) as i16 as i32;
-                    let screen_y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+                    let screen_x = (lparam.0 & 0xFFFF) as i16 as i32;
+                    let screen_y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                     let mut pt = POINT {
                         x: screen_x,
                         y: screen_y,
                     };
-                    if ScreenToClient(hwnd, &mut pt) == 0 {
+                    if !ScreenToClient(hwnd, &mut pt).as_bool() {
                         return DefSubclassProc(hwnd, msg, wparam, lparam);
                     }
 
-                    let mut client_rect = RECT {
-                        left: 0,
-                        top: 0,
-                        right: 0,
-                        bottom: 0,
-                    };
-                    GetClientRect(hwnd, &mut client_rect);
+                    let mut client_rect = RECT::default();
+                    let _ = GetClientRect(hwnd, &mut client_rect);
 
-                    let is_max = IsZoomed(hwnd) != 0;
-                    let border_thickness = if is_max { 0 } else { 8 };
+                    let is_max = IsZoomed(hwnd).as_bool();
+                    let scale = metrics.scale_factor().max(0.5);
+                    let border_thickness = if is_max {
+                        0
+                    } else {
+                        (6.0 * scale).round().max(4.0) as i32
+                    };
+                    let corner_extent = if is_max {
+                        0
+                    } else {
+                        (16.0 * scale).round().max(8.0) as i32
+                    };
 
                     // 将客户区物理坐标转换为逻辑坐标，用于窗口按钮命中测试。
-                    let scale = metrics.scale_factor();
                     let logical_x = (pt.x as f32 / scale).round() as i32;
                     let logical_y = (pt.y as f32 / scale).round() as i32;
 
@@ -358,7 +247,7 @@ mod win32 {
                         &metrics.max_btn_right,
                         &metrics.max_btn_bottom,
                     ) {
-                        return HTMAXBUTTON;
+                        return LRESULT(HTMAXBUTTON as isize);
                     }
 
                     // 2. 最小化按钮。
@@ -370,7 +259,7 @@ mod win32 {
                         &metrics.min_btn_right,
                         &metrics.min_btn_bottom,
                     ) {
-                        return HTMINBUTTON;
+                        return LRESULT(HTMINBUTTON as isize);
                     }
 
                     // 3. 关闭按钮。
@@ -382,53 +271,59 @@ mod win32 {
                         &metrics.close_btn_right,
                         &metrics.close_btn_bottom,
                     ) {
-                        return HTCLOSE;
+                        return LRESULT(HTCLOSE as isize);
                     }
 
-                    // 4. 检查用于调整大小的窗口边框。
+                    // 4. 检查用于调整大小的窗口边框（四角采用 corner_extent 扩大热区）。
                     if !is_max {
                         let on_left = pt.x < border_thickness;
                         let on_right = pt.x >= client_rect.right - border_thickness;
                         let on_top = pt.y < border_thickness;
                         let on_bottom = pt.y >= client_rect.bottom - border_thickness;
 
-                        if on_top && on_left {
-                            return HTTOPLEFT;
+                        let in_left_corner = pt.x < corner_extent;
+                        let in_right_corner = pt.x >= client_rect.right - corner_extent;
+                        let in_top_corner = pt.y < corner_extent;
+                        let in_bottom_corner = pt.y >= client_rect.bottom - corner_extent;
+
+                        if (on_top && in_left_corner) || (on_left && in_top_corner) {
+                            return LRESULT(HTTOPLEFT as isize);
                         }
-                        if on_top && on_right {
-                            return HTTOPRIGHT;
+                        if (on_top && in_right_corner) || (on_right && in_top_corner) {
+                            return LRESULT(HTTOPRIGHT as isize);
                         }
-                        if on_bottom && on_left {
-                            return HTBOTTOMLEFT;
+                        if (on_bottom && in_left_corner) || (on_left && in_bottom_corner) {
+                            return LRESULT(HTBOTTOMLEFT as isize);
                         }
-                        if on_bottom && on_right {
-                            return HTBOTTOMRIGHT;
+                        if (on_bottom && in_right_corner) || (on_right && in_bottom_corner) {
+                            return LRESULT(HTBOTTOMRIGHT as isize);
                         }
                         if on_top {
-                            return HTTOP;
+                            return LRESULT(HTTOP as isize);
                         }
                         if on_bottom {
-                            return HTBOTTOM;
+                            return LRESULT(HTBOTTOM as isize);
                         }
                         if on_left {
-                            return HTLEFT;
+                            return LRESULT(HTLEFT as isize);
                         }
                         if on_right {
-                            return HTRIGHT;
+                            return LRESULT(HTRIGHT as isize);
                         }
                     }
 
                     // 5. 标题栏空白区域 -> HTCAPTION（Aero 拖拽与贴靠）。
                     let title_height = metrics.title_bar_height.load(Ordering::Acquire);
                     if title_height > 0 && logical_y < title_height {
-                        return HTCAPTION;
+                        return LRESULT(HTCAPTION as isize);
                     }
 
                     // 6. 其余情况交由常规客户区交互处理。
-                    HTCLIENT
+                    LRESULT(HTCLIENT as isize)
                 }
                 WM_NCDESTROY => {
-                    RemoveWindowSubclass(hwnd, custom_frame_subclass_proc, SUBCLASS_ID);
+                    let _ =
+                        RemoveWindowSubclass(hwnd, Some(custom_frame_subclass_proc), SUBCLASS_ID);
                     let _ = Arc::from_raw(metrics_ptr);
                     DefSubclassProc(hwnd, msg, wparam, lparam)
                 }
@@ -439,19 +334,19 @@ mod win32 {
 
     /// 为无边框窗口应用 DWM 圆角与阴影（不涉及消息子类化）。
     ///
-    /// `WS_POPUP` 窗口没有非客户区，DWM 默认既不绘制阴影也不绘制圆角；
-    /// 把顶边 1px 扩展进客户区并请求圆角，可在不引入系统标题栏的前提下恢复两者。
+    /// `WS_POPUP | WS_THICKFRAME` 无边框窗口通过 `WM_NCCALCSIZE` 将非客户区裁切为 0，
+    /// 把顶边 1px 扩展进客户区并请求圆角，可在不引入系统标题栏的前提下恢复阴影与圆角。
     /// 该函数是幂等的，窗口创建时与自定义边框子类安装时各调用一次均无副作用。
     pub fn apply_borderless_dwm(hwnd: isize) {
-        let hwnd_ptr = hwnd as HWND;
+        let hwnd_ptr = hwnd_from_isize(hwnd);
         unsafe {
             // 启用 Win11 圆角。
             let corner_pref = DWMWCP_ROUND;
             let _ = DwmSetWindowAttribute(
                 hwnd_ptr,
                 DWMWA_WINDOW_CORNER_PREFERENCE,
-                &corner_pref as *const _ as *const c_void,
-                core::mem::size_of::<DWORD>() as DWORD,
+                (&raw const corner_pref).cast::<c_void>(),
+                core::mem::size_of_val(&corner_pref) as u32,
             );
 
             // 启用 Win10 / Win11 窗口阴影。
@@ -464,13 +359,9 @@ mod win32 {
             let _ = DwmExtendFrameIntoClientArea(hwnd_ptr, &margins);
 
             // 触发非客户区重新计算。
-            const SWP_NOSIZE: UINT = 0x0001;
-            const SWP_NOMOVE: UINT = 0x0002;
-            const SWP_NOZORDER: UINT = 0x0004;
-            const SWP_FRAMECHANGED: UINT = 0x0020;
-            SetWindowPos(
+            let _ = SetWindowPos(
                 hwnd_ptr,
-                core::ptr::null_mut(),
+                None,
                 0,
                 0,
                 0,
@@ -482,17 +373,18 @@ mod win32 {
 
     /// 安装 Win32 自定义边框子类化并启用 DWM 属性。
     pub fn install_frame_subclass(hwnd: isize, metrics: Arc<FrameHitMetrics>) -> bool {
-        let hwnd_ptr = hwnd as HWND;
+        let hwnd_ptr = hwnd_from_isize(hwnd);
         let metrics_raw = Arc::into_raw(metrics);
 
         let ok = unsafe {
             SetWindowSubclass(
                 hwnd_ptr,
-                custom_frame_subclass_proc,
+                Some(custom_frame_subclass_proc),
                 SUBCLASS_ID,
                 metrics_raw as usize,
             )
-        } != 0;
+        }
+        .as_bool();
 
         if !ok {
             let _ = unsafe { Arc::from_raw(metrics_raw) };
@@ -505,14 +397,15 @@ mod win32 {
 
     /// 更新窗口标题栏/边框的沉浸式深色模式。
     pub fn set_dark_mode(hwnd: isize, dark: bool) {
-        let hwnd_ptr = hwnd as HWND;
-        let use_dark: BOOL = if dark { 1 } else { 0 };
+        let hwnd_ptr = hwnd_from_isize(hwnd);
+        // windows 0.62.2 未公开 BOOL 类型；DWM 深色模式属性需要的是 32 位布尔值，直接用 i32。
+        let use_dark = i32::from(dark);
         unsafe {
             let _ = DwmSetWindowAttribute(
                 hwnd_ptr,
                 DWMWA_USE_IMMERSIVE_DARK_MODE,
-                &use_dark as *const _ as *const c_void,
-                core::mem::size_of::<BOOL>() as DWORD,
+                (&raw const use_dark).cast::<c_void>(),
+                core::mem::size_of_val(&use_dark) as u32,
             );
         }
     }
@@ -535,7 +428,7 @@ pub fn install_custom_frame(hwnd: isize, metrics: Arc<FrameHitMetrics>) -> bool 
 /// 为无边框窗口应用 DWM 圆角与阴影。
 ///
 /// 由窗口创建路径在 `decorations = false` 时调用，使未安装自定义边框子类
-/// （例如自行派发拖拽与窗口按钮的 showcase）的窗口同样保留系统阴影与圆角。
+/// 的窗口同样保留系统阴影与圆角。
 pub fn apply_borderless_dwm(hwnd: isize) {
     #[cfg(windows)]
     {

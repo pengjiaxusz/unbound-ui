@@ -1131,6 +1131,11 @@ impl<'a> ViewBuilder<'a> {
         self.add(key, desc)
     }
 
+    /// 声明式工具提示（Tooltip）快捷方式（支持窗口内自动翻转与安全边距钳制）。
+    pub fn tooltip(&mut self, key: u64, desc: unbound_widgets::TooltipDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
     /// 声明式卡片容器快捷方式。
     pub fn card(
         &mut self,

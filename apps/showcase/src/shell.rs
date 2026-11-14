@@ -6,7 +6,7 @@
 //!
 
 use accesskit::Role;
-use unbound_anim::{CubicBezier, Spring, SpringPreset};
+use unbound_anim::{CubicBezier, Spring};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
 use unbound_input::CursorKind;
 use unbound_layout::LayoutStats;
@@ -25,6 +25,67 @@ use crate::widgets::{self, Icon};
 
 const NAV_EXPANDED: f32 = 248.0;
 const NAV_COLLAPSED: f32 = 68.0;
+/// 侧边栏在展开树与折叠图标栏之间切换的宽度阈值（绘制、无头帧校验与高度计算统一复用）。
+const NAV_COLLAPSE_THRESHOLD: f32 = 140.0;
+
+/// 编译期完备性门禁：验证侧边栏 100% 覆盖全部 `PageId::ALL`（24 页）、全部 `WidgetCatalogId::ALL`（91 组件）以及 `PageId::Systems` 覆盖全部 21 个引擎子系统。
+const _: () = {
+    let mut page_idx = 0;
+    while page_idx < PageId::ALL.len() {
+        let candidate = PageId::ALL[page_idx];
+        let mut count = if matches!(candidate, PageId::Home) {
+            1
+        } else {
+            0
+        };
+        let mut cat_idx = 0;
+        while cat_idx < CategoryId::ALL.len() {
+            let pages = CategoryId::ALL[cat_idx].pages();
+            let mut p = 0;
+            while p < pages.len() {
+                if pages[p] as u8 == candidate as u8 {
+                    count += 1;
+                }
+                p += 1;
+            }
+            cat_idx += 1;
+        }
+        assert!(
+            count == 1,
+            "PageId missing or duplicated in showcase sidebar"
+        );
+        page_idx += 1;
+    }
+    assert!(
+        pages::SIDEBAR_COMPONENT_IDS.len() == unbound_widgets::WidgetCatalogId::COUNT,
+        "SIDEBAR_COMPONENT_IDS count must equal WidgetCatalogId::COUNT"
+    );
+    assert!(
+        pages::SubsystemId::ALL.len() == pages::SubsystemId::COUNT,
+        "SubsystemId::ALL count mismatch"
+    );
+};
+
+/// 返回展开状态下侧边栏挂载的全部导航目标（含首页、全部分类页、全部 91 个目录组件项与页脚快捷项）。
+#[must_use]
+pub fn sidebar_all_targets() -> Vec<Target> {
+    let mut targets =
+        Vec::with_capacity(1 + PageId::ALL.len() + pages::SIDEBAR_COMPONENT_IDS.len() + 2);
+    targets.push(Target::NavPage(PageId::Home.index() as u8));
+    for category in CategoryId::ALL {
+        for page in category.pages() {
+            targets.push(Target::NavPage(page.index() as u8));
+            if *page == PageId::Components {
+                for comp_id in pages::SIDEBAR_COMPONENT_IDS {
+                    targets.push(Target::NavComponent(comp_id as u8));
+                }
+            }
+        }
+    }
+    targets.push(Target::Footer(0));
+    targets.push(Target::Footer(1));
+    targets
+}
 
 /// 自定义标题栏请求的窗口动作。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -71,7 +132,7 @@ fn content_scrollbar(layout: &ShellLayout, page: &PageLayout) -> Option<Scrollba
         return None;
     }
     let track = Rect::new(
-        layout.content.max().x - 10.0,
+        layout.content.max().x - 12.0,
         layout.content.origin.y + 8.0,
         6.0,
         (layout.content.size.y - 16.0).max(1.0),
@@ -255,7 +316,10 @@ impl GalleryApp {
             Rect::new(0.0, 0.0, 1280.0, 800.0),
             NAV_EXPANDED,
         );
-        let mut nav_spring = Spring::new(SpringPreset::Snappy, NAV_EXPANDED);
+        // 使用临界阻尼弹簧（ξ = 1.0）与收敛阈值，消除欠阻尼过冲在 `.clamp(NAV_COLLAPSED, NAV_EXPANDED)` 处反弹造成的侧边栏折叠/展开抖动。
+        let mut nav_spring = Spring::critically_damped(420.0, NAV_EXPANDED);
+        nav_spring.rest_threshold = 0.25;
+        nav_spring.rest_velocity = 2.0;
         nav_spring.set_target(NAV_EXPANDED);
         Self {
             state: GalleryState::default(),
@@ -368,6 +432,16 @@ impl GalleryApp {
         self.state.demo.modal_open = false;
         self.state.demo.dropdown_open = false;
         self.pending_focus = Some(target::id(Target::NavPage(page.index() as u8)));
+    }
+
+    /// 导航至组件展厅中的指定目录组件卡片，并将其滚动到视口顶部。
+    pub fn navigate_to_component(&mut self, id: unbound_widgets::WidgetCatalogId) {
+        self.state.navigate_to_component(id);
+        self.state.search_focused = false;
+        self.state.search_query.clear();
+        self.state.demo.modal_open = false;
+        self.state.demo.dropdown_open = false;
+        self.pending_focus = Some(target::id(Target::NavComponent(id as u8)));
     }
 
     /// 像等价的指针或键盘手势一样应用无障碍动作。
@@ -530,7 +604,14 @@ impl GalleryApp {
     pub fn rebuild(&mut self, viewport: (f32, f32), inter: Interaction) {
         let (width, height) = viewport;
         let viewport_rect = Rect::new(0.0, 0.0, width.max(320.0), height.max(240.0));
-        let nav_width = self.nav_spring.value.clamp(NAV_COLLAPSED, NAV_EXPANDED);
+        let raw_nav_width = self.nav_spring.value.clamp(NAV_COLLAPSED, NAV_EXPANDED);
+        let scale = self.effective_scale.max(0.5);
+        // 在布局求解前将侧边栏宽度对齐到物理像素网格，使 `layout.nav` 与 `layout.content` 的分界线在动画过程中不会出现亚像素往返跳变。
+        let nav_width = if self.state.pixel_snap {
+            (raw_nav_width * scale).round() / scale
+        } else {
+            raw_nav_width
+        };
         let palette = gallery::palette();
         let hover = inter.hovered;
         let pressed = inter.pressed;
@@ -1244,6 +1325,11 @@ impl GalleryApp {
     fn click_target(&mut self, target: Target, position: Vec2) {
         match target {
             Target::NavPage(page) => self.navigate(PageId::from_index(page as usize)),
+            Target::NavComponent(index) => {
+                if let Some(&id) = unbound_widgets::WidgetCatalogId::ALL.get(index as usize) {
+                    self.navigate_to_component(id);
+                }
+            }
             Target::NavToggle => {
                 self.state.nav_expanded = !self.state.nav_expanded;
                 self.state.bump();
@@ -1598,6 +1684,12 @@ impl GalleryApp {
                             self.state.bump();
                         }
                     }
+                }
+            }
+            PageId::Systems => {
+                if card == 0 && (100..100 + pages::SubsystemId::COUNT as u16).contains(&part) {
+                    self.state.demo.selected_subsystem = (part - 100) as usize;
+                    self.state.bump();
                 }
             }
             _ => {
@@ -1970,7 +2062,7 @@ fn bundle_controls(builder: &mut FrameBuilder, layout: &ShellLayout) {
 
 fn nav_rows(state: &GalleryState, layout: &ShellLayout) -> Vec<(Rect, String)> {
     let mut rows = Vec::new();
-    if layout.nav_width < 120.0 {
+    if layout.nav_width < NAV_COLLAPSE_THRESHOLD {
         let mut y = layout.nav.origin.y + 10.0;
         for page in [
             PageId::Home,
@@ -1980,11 +2072,11 @@ fn nav_rows(state: &GalleryState, layout: &ShellLayout) -> Vec<(Rect, String)> {
             PageId::ListView,
             PageId::Viewport,
             PageId::Springs,
-            PageId::Telemetry,
+            PageId::Systems,
             PageId::Settings,
         ] {
             rows.push((
-                Rect::new(layout.nav.origin.x + 12.0, y, layout.nav_width - 24.0, 36.0),
+                Rect::new(layout.nav.origin.x + 14.0, y, NAV_COLLAPSED - 28.0, 36.0),
                 format!("Navigation \"{}\"", page.info().title),
             ));
             y += 42.0;
@@ -1997,21 +2089,35 @@ fn nav_rows(state: &GalleryState, layout: &ShellLayout) -> Vec<(Rect, String)> {
         Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 36.0),
         "Navigation \"Home\"".to_string(),
     ));
-    // 树从 Home 行及其分隔符下方开始——与 `nav_tree_rect` 使用相同的偏移。
-    //
-    y = layout.nav.origin.y + 56.0;
+    // 树从 Home 行及其分隔符下方开始——与 `nav_tree_rect` 使用相同的偏移，并按树裁剪区过滤可见项。
+    let tree = nav_tree_rect(layout);
+    y = tree.origin.y - state.nav_scroll;
     for category in CategoryId::ALL {
         y += 24.0;
         for page in category.pages() {
-            rows.push((
-                Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 30.0),
-                format!("Navigation \"{}\"", page.info().short),
-            ));
+            let row_rect = Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 30.0);
+            let clipped = row_rect.intersect(&tree);
+            if clipped.size.y >= 24.0 && clipped.size.x >= 24.0 {
+                rows.push((clipped, format!("Navigation \"{}\"", page.info().short)));
+            }
             y += 30.0;
+            if *page == PageId::Components {
+                for comp_id in pages::SIDEBAR_COMPONENT_IDS {
+                    let comp_rect =
+                        Rect::new(layout.nav.origin.x + 22.0, y, layout.nav_width - 32.0, 28.0);
+                    let comp_clipped = comp_rect.intersect(&tree);
+                    if comp_clipped.size.y >= 24.0 && comp_clipped.size.x >= 24.0 {
+                        rows.push((
+                            comp_clipped,
+                            format!("Component \"{}\"", pages::component_nav_label(comp_id)),
+                        ));
+                    }
+                    y += 28.0;
+                }
+            }
         }
         y += 8.0;
     }
-    let _ = state;
     rows
 }
 
@@ -2043,12 +2149,15 @@ fn nav_tree_rect(layout: &ShellLayout) -> Rect {
 }
 
 fn nav_height(layout: &ShellLayout) -> f32 {
-    if layout.nav_width < 140.0 {
+    if layout.nav_width < NAV_COLLAPSE_THRESHOLD {
         return 9.0 * 42.0 + 10.0;
     }
     let mut height = 10.0 + 38.0 + 8.0;
     for category in CategoryId::ALL {
         height += 24.0 + category.pages().len() as f32 * 30.0 + 8.0;
+        if category == CategoryId::Components {
+            height += pages::SIDEBAR_COMPONENT_IDS.len() as f32 * 28.0;
+        }
     }
     height + 90.0
 }
@@ -2457,13 +2566,15 @@ fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_ma
 
 fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
     let palette = *canvas.palette;
+    canvas.begin_clip(layout.nav);
     canvas.rect(layout.nav, 0.0, palette.nav_bg, 0, 0.0, 0.0);
     canvas.divider(layout.nav.max().x - 1.0, layout.nav.origin.y, 1.0);
 
     // 弹簧仍在运动时即切换内容：展开的标签会被收缩中的窗格裁剪，
-    // 因此提前回退到图标栏。
-    if layout.nav_width < 140.0 {
+    // 因此提前回退到固定水平锚点的图标栏。
+    if layout.nav_width < NAV_COLLAPSE_THRESHOLD {
         draw_collapsed_nav(canvas, state, layout);
+        canvas.end_clip();
         return;
     }
 
@@ -2485,40 +2596,72 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
     let mut tree_y = tree.origin.y - state.nav_scroll;
     for category in CategoryId::ALL {
         let active = state.active_page.category() == category;
-        canvas.text(
-            &category.label().to_uppercase(),
-            Rect::new(
-                layout.nav.origin.x + 18.0,
-                tree_y,
-                layout.nav_width - 36.0,
-                22.0,
-            ),
-            9.5,
-            if active {
-                palette.primary
-            } else {
-                palette.nav_text_muted
-            },
-            AlignX::Start,
-            AlignY::Center,
+        let header_rect = Rect::new(
+            layout.nav.origin.x + 18.0,
+            tree_y,
+            layout.nav_width - 36.0,
+            22.0,
         );
+        if header_rect.max().y > tree.origin.y && header_rect.origin.y < tree.max().y {
+            canvas.text(
+                &category.label().to_uppercase(),
+                header_rect,
+                9.5,
+                if active {
+                    palette.primary
+                } else {
+                    palette.nav_text_muted
+                },
+                AlignX::Start,
+                AlignY::Center,
+            );
+        }
         tree_y += 24.0;
         for page in category.pages() {
-            nav_item(
-                canvas,
-                layout,
-                Rect::new(
-                    layout.nav.origin.x + 10.0,
-                    tree_y,
-                    layout.nav_width - 20.0,
-                    30.0,
-                ),
-                page.info().short,
-                Icon::ChevronRight,
-                state.active_page == *page,
-                Target::NavPage(page.index() as u8),
+            let row_rect = Rect::new(
+                layout.nav.origin.x + 10.0,
+                tree_y,
+                layout.nav_width - 20.0,
+                30.0,
             );
+            let selected = state.active_page == *page
+                && (*page != PageId::Components || state.active_component.is_none());
+            if row_rect.max().y > tree.origin.y && row_rect.origin.y < tree.max().y {
+                nav_item(
+                    canvas,
+                    layout,
+                    row_rect,
+                    page.info().short,
+                    Icon::ChevronRight,
+                    selected,
+                    Target::NavPage(page.index() as u8),
+                );
+            }
             tree_y += 30.0;
+            if *page == PageId::Components {
+                for comp_id in pages::SIDEBAR_COMPONENT_IDS {
+                    let comp_rect = Rect::new(
+                        layout.nav.origin.x + 22.0,
+                        tree_y,
+                        layout.nav_width - 32.0,
+                        28.0,
+                    );
+                    let comp_selected = state.active_page == PageId::Components
+                        && state.active_component == Some(comp_id);
+                    if comp_rect.max().y > tree.origin.y && comp_rect.origin.y < tree.max().y {
+                        nav_item(
+                            canvas,
+                            layout,
+                            comp_rect,
+                            pages::component_nav_label(comp_id),
+                            Icon::ChevronRight,
+                            comp_selected,
+                            Target::NavComponent(comp_id as u8),
+                        );
+                    }
+                    tree_y += 28.0;
+                }
+            }
         }
         tree_y += 8.0;
     }
@@ -2542,9 +2685,6 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
         "Engine Telemetry",
         Icon::Chart,
         state.active_page == PageId::Telemetry,
-        // 页脚快捷方式需要独立标识：同一页面的树行已拥有 `NavPage(Telemetry)`，
-        // 若共享该标识会导致悬停任一行时两行同时高亮。
-        //
         Target::Footer(0),
     );
     nav_item(
@@ -2562,10 +2702,8 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
         Target::Footer(1),
     );
 
-    // 当窗口较矮或应用缩放较高时导航树会滚动，过去它是静默滚动的：
-    // 仅内容窗格带有指示条，导致被裁剪的 “Layout & portals” 分区看起来像页面丢失。
-    //
     draw_nav_scrollbar(canvas, state, layout);
+    canvas.end_clip();
 }
 
 /// 绘制导航树的滚动指示条。
@@ -2682,7 +2820,6 @@ fn nav_item(
 }
 
 fn draw_collapsed_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
-    let _ = state;
     let items = [
         (PageId::Home, Icon::Grid),
         (PageId::Colors, Icon::Layers),
@@ -2691,12 +2828,15 @@ fn draw_collapsed_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &Sh
         (PageId::ListView, Icon::Chart),
         (PageId::Viewport, Icon::Snap),
         (PageId::Springs, Icon::Layers),
-        (PageId::Telemetry, Icon::Chart),
+        (PageId::Systems, Icon::Chart),
         (PageId::Settings, Icon::Menu),
     ];
     let mut y = layout.nav.origin.y + 10.0;
+    // 使用固定宽度 `NAV_COLLAPSED - 28.0`（40px）与固定左锚点 `+14.0`（中心固定在 34.0），
+    // 确保侧边栏宽度在 140px 与 68px 之间过渡时图标中心点绝对静止，彻底消除水平位移抖动。
+    let button_width = NAV_COLLAPSED - 28.0;
     for (page, icon) in items {
-        let rect = Rect::new(layout.nav.origin.x + 14.0, y, layout.nav_width - 28.0, 36.0);
+        let rect = Rect::new(layout.nav.origin.x + 14.0, y, button_width, 36.0);
         let selected = state.active_page == page
             || (page == PageId::Colors && state.active_page.category() == CategoryId::Design);
         widgets::icon_button(
@@ -2709,12 +2849,10 @@ fn draw_collapsed_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &Sh
         );
         y += 42.0;
     }
-    // 折叠切换按钮上方的细线使图标栏与页面内容在视觉上保持分隔。
-    //
     canvas.divider(
         layout.nav.origin.x + 10.0,
         layout.nav.max().y - 12.0,
-        layout.nav_width - 20.0,
+        NAV_COLLAPSED - 20.0,
     );
 }
 
@@ -2816,7 +2954,7 @@ fn draw_page(
             Rect::new(
                 bar.track.origin.x - 4.0,
                 bar.track.origin.y,
-                14.0,
+                12.0,
                 bar.track.size.y,
             ),
             Role::ScrollBar,

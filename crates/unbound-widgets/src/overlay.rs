@@ -2,20 +2,20 @@
 //!
 //! 弹窗面临两个控件层其余部分没有的问题：
 //!
-//! 1. **绝不能超出窗口。** [`place_anchored_popup`] 是纯几何方案：
-//!    优先选择请求方向，空间不足时翻转，最后将弹窗移回视口内。
+//! 1. **绝不能超出窗口。** [`place_anchored_popup`] 与 [`place_tooltip_in_window`] 是纯几何方案：
+//!    优先选择请求方向，空间不足时自动翻转（含主轴翻转与正交轴回退），最后将浮层钳制回视口安全边距内。
 //! 2. **必须按正确顺序堆叠、关闭与清理。** [`OverlayStack`] 分配单调递增的排序键，
 //!    在按下 `Escape` 或点击外部时关闭顶层，并在同一帧内清除锚点已消失的条目——
 //!    弹窗绝不能比其触发器存活更久而留下幽灵命中区。
-//!
-//!
-//!
 
 use unbound_gpu::data::PassLayer;
 use unbound_math::{Rect, Vec2};
 
-/// 锚点与弹窗之间的间距（逻辑像素）。
+/// 锚点与弹窗之间的默认间距（逻辑像素）。
 pub const POPUP_GAP: f32 = 4.0;
+
+/// 工具提示距离窗口视口四边的默认安全内边距（逻辑像素）。
+pub const TOOLTIP_VIEWPORT_MARGIN: f32 = 8.0;
 
 /// 弹窗相对于锚点的期望出现位置。
 ///
@@ -155,35 +155,7 @@ pub fn place_anchored_popup_detailed(
     let height = popup_size.y.max(0.0).min(viewport.height().max(0.0));
 
     let mut chosen = placement;
-    let mut origin = if placement.vertical() {
-        let x = if placement.centered() {
-            anchor.center().x - width * 0.5
-        } else if placement.aligned_to_end() {
-            anchor.max().x - width
-        } else {
-            anchor.origin.x
-        };
-        let y = if placement.below() {
-            anchor.max().y + POPUP_GAP
-        } else {
-            anchor.origin.y - POPUP_GAP - height
-        };
-        Vec2::new(x, y)
-    } else {
-        let y = if placement.centered() {
-            anchor.center().y - height * 0.5
-        } else if placement.aligned_y_to_end() {
-            anchor.max().y - height
-        } else {
-            anchor.origin.y
-        };
-        let x = if placement.right() {
-            anchor.max().x + POPUP_GAP
-        } else {
-            anchor.origin.x - POPUP_GAP - width
-        };
-        Vec2::new(x, y)
-    };
+    let mut origin = candidate_origin(anchor, Vec2::new(width, height), placement, POPUP_GAP);
 
     // 当首选方向溢出且对向方向放得下时翻转。
     if placement.vertical() {
@@ -229,8 +201,81 @@ pub fn place_anchored_popup_detailed(
     origin.y = origin.y.clamp(viewport.origin.y, max_y);
 
     let rect = Rect::new(origin.x, origin.y, width, height);
+    let arrow_tip = compute_arrow_tip(anchor, rect, chosen);
+
+    PlacedPopup {
+        rect,
+        chosen_placement: chosen,
+        arrow_tip,
+    }
+}
+
+/// 计算指定 [`Placement`] 与 `gap` 下未钳制的浮层左上角坐标。
+#[must_use]
+fn candidate_origin(anchor: Rect, size: Vec2, placement: Placement, gap: f32) -> Vec2 {
+    let width = size.x;
+    let height = size.y;
+    if placement.vertical() {
+        let x = if placement.centered() {
+            anchor.center().x - width * 0.5
+        } else if placement.aligned_to_end() {
+            anchor.max().x - width
+        } else {
+            anchor.origin.x
+        };
+        let y = if placement.below() {
+            anchor.max().y + gap
+        } else {
+            anchor.origin.y - gap - height
+        };
+        Vec2::new(x, y)
+    } else {
+        let y = if placement.centered() {
+            anchor.center().y - height * 0.5
+        } else if placement.aligned_y_to_end() {
+            anchor.max().y - height
+        } else {
+            anchor.origin.y
+        };
+        let x = if placement.right() {
+            anchor.max().x + gap
+        } else {
+            anchor.origin.x - gap - width
+        };
+        Vec2::new(x, y)
+    }
+}
+
+/// 判断候选位置在其主轴方向上是否完全落入 `bounds` 内。
+#[must_use]
+fn fits_primary_axis(origin: Vec2, size: Vec2, bounds: Rect, placement: Placement) -> bool {
+    if placement.vertical() {
+        origin.y >= bounds.origin.y && origin.y + size.y <= bounds.max().y
+    } else {
+        origin.x >= bounds.origin.x && origin.x + size.x <= bounds.max().x
+    }
+}
+
+/// 计算 `placement` 所在侧相对于 `anchor` 在 `bounds` 内的可用主轴空间。
+#[must_use]
+fn available_primary_space(anchor: Rect, bounds: Rect, placement: Placement) -> f32 {
+    if placement.vertical() {
+        if placement.below() {
+            bounds.max().y - anchor.max().y
+        } else {
+            anchor.origin.y - bounds.origin.y
+        }
+    } else if placement.right() {
+        bounds.max().x - anchor.max().x
+    } else {
+        anchor.origin.x - bounds.origin.x
+    }
+}
+
+#[must_use]
+fn compute_arrow_tip(anchor: Rect, rect: Rect, chosen: Placement) -> Vec2 {
     let center = anchor.center();
-    let arrow_tip = if chosen.vertical() {
+    if chosen.vertical() {
         Vec2::new(
             center.x.clamp(rect.origin.x, rect.max().x),
             if chosen.below() {
@@ -248,7 +293,93 @@ pub fn place_anchored_popup_detailed(
             },
             center.y.clamp(rect.origin.y, rect.max().y),
         )
+    }
+}
+
+/// 智能工具提示窗口内自动定位算法。
+///
+/// 确保工具提示气泡**始终完整显示在窗口视口内、绝不溢出窗口边界**：
+/// 1. **视口安全边距（`viewport_margin`）**：自动在视口四周收缩 `viewport_margin`（当视口足够大时），
+///    防止气泡紧贴窗口裁切边缘。
+/// 2. **四向自适应翻转**：
+///    - 优先尝试调用方请求的 `preferred` 方向；
+///    - 若主轴空间不足，尝试对向翻转 `preferred.flip()`（如 `Top -> Bottom`、`Right -> Left`）；
+///    - 若正反方向均放不下（例如触发器高度很大或贴近角落），自动尝试正交轴的两个方向（如 `Right`/`Left` 或 `Top`/`Bottom`），
+///      优先选择剩余空间更大的一侧；
+///    - 若四个方向均需钳制，则选择可用空间最大的一侧以最小化对触发器的遮挡。
+/// 3. **双向边界钳制**：在次轴与主轴上将气泡矩形严格钳制在安全视口内，保证 `viewport.contains_rect(&placed.rect)` 恒成立。
+#[must_use]
+pub fn place_tooltip_in_window(
+    anchor: Rect,
+    tooltip_size: Vec2,
+    viewport: Rect,
+    preferred: Placement,
+    gap: f32,
+    viewport_margin: f32,
+) -> PlacedPopup {
+    let gap = gap.max(0.0);
+    let margin = viewport_margin.max(0.0);
+    let safe_viewport = if viewport.width() > margin * 2.0 && viewport.height() > margin * 2.0 {
+        viewport.inflate(-margin)
+    } else {
+        viewport
     };
+
+    let width = tooltip_size.x.max(0.0).min(safe_viewport.width().max(0.0));
+    let height = tooltip_size.y.max(0.0).min(safe_viewport.height().max(0.0));
+    let clamped_size = Vec2::new(width, height);
+
+    let (cross_first, cross_second) = if preferred.vertical() {
+        let space_right = available_primary_space(anchor, safe_viewport, Placement::Right);
+        let space_left = available_primary_space(anchor, safe_viewport, Placement::Left);
+        if space_right >= space_left {
+            (Placement::Right, Placement::Left)
+        } else {
+            (Placement::Left, Placement::Right)
+        }
+    } else {
+        let space_top = available_primary_space(anchor, safe_viewport, Placement::Top);
+        let space_bottom = available_primary_space(anchor, safe_viewport, Placement::Bottom);
+        if space_top >= space_bottom {
+            (Placement::Top, Placement::Bottom)
+        } else {
+            (Placement::Bottom, Placement::Top)
+        }
+    };
+
+    let candidates = [preferred, preferred.flip(), cross_first, cross_second];
+
+    let mut chosen = preferred;
+    let mut found_clean_fit = false;
+    for candidate in candidates {
+        let orig = candidate_origin(anchor, clamped_size, candidate, gap);
+        if fits_primary_axis(orig, clamped_size, safe_viewport, candidate) {
+            chosen = candidate;
+            found_clean_fit = true;
+            break;
+        }
+    }
+
+    if !found_clean_fit {
+        // 四个候选方向均超出安全视口主轴时，选择主轴可用空间最大的方向
+        let mut best_space = f32::NEG_INFINITY;
+        for candidate in candidates {
+            let space = available_primary_space(anchor, safe_viewport, candidate);
+            if space > best_space {
+                best_space = space;
+                chosen = candidate;
+            }
+        }
+    }
+
+    let mut origin = candidate_origin(anchor, clamped_size, chosen, gap);
+    let max_x = (safe_viewport.max().x - width).max(safe_viewport.origin.x);
+    let max_y = (safe_viewport.max().y - height).max(safe_viewport.origin.y);
+    origin.x = origin.x.clamp(safe_viewport.origin.x, max_x);
+    origin.y = origin.y.clamp(safe_viewport.origin.y, max_y);
+
+    let rect = Rect::new(origin.x, origin.y, width, height);
+    let arrow_tip = compute_arrow_tip(anchor, rect, chosen);
 
     PlacedPopup {
         rect,
@@ -653,8 +784,21 @@ mod tests {
             for placement in placements {
                 let popup: Rect = place_anchored_popup(anchor, size, viewport(), placement);
                 assert_contained(popup, viewport());
+                let tip = place_tooltip_in_window(anchor, size, viewport(), placement, 6.0, 8.0);
+                assert_contained(tip.rect, viewport());
             }
         }
+    }
+
+    #[test]
+    fn tooltip_in_window_falls_back_to_cross_axis_when_both_vertical_sides_lack_room() {
+        let vp = Rect::new(0.0, 0.0, 800.0, 200.0);
+        // 触发器高度占满上下空间，导致 Top 与 Bottom 均放不下 80px 高的气泡，应自动回退到右侧
+        let anchor = Rect::new(40.0, 20.0, 80.0, 160.0);
+        let placed =
+            place_tooltip_in_window(anchor, Vec2::new(160.0, 80.0), vp, Placement::Top, 6.0, 8.0);
+        assert_eq!(placed.chosen_placement, Placement::Right);
+        assert_contained(placed.rect, vp.inflate(-8.0));
     }
 
     #[test]

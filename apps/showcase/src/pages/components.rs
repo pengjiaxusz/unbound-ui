@@ -1,17 +1,13 @@
-//! 组件展厅：目录中的每个组件均由其真实发射器（emitter）绘制。
-//!
+//! 组件展厅：目录中的每个组件均由其真实发射器（emitter）绘制，并在侧边栏中一一列出。
 //!
 //! 每张卡片驱动 [`unbound_widgets::catalog::emit_widget`]——与支撑 Stable Shape 探针的
 //! 穷举式、无通配符匹配相同——因此表面、命中区域与语义节点全部来自真实的
 //! `unbound-widgets` 发射器，绝非手绘替身。帧会将组件记录在 `Canvas::emitted_widgets` 中，
 //! Showcase 覆盖率门禁读取该记录以证明目录已 100% 承载。
 //!
-//!
-//!
-//! [`showcase_entry_for_widget`] 与 [`COMPONENT_EXAMPLES`] 由同一份 ID 列表生成，
-//! 因此无法在不命名穷举入口函数的前提下向展厅新增目录变体（反之亦然）。
-//! 下方的 `const` 断言将两者绑定到 `WidgetCatalogId::ALL`。
-//!
+//! [`showcase_entry_for_widget`]、[`SIDEBAR_COMPONENT_IDS`]、[`component_nav_label`] 与
+//! [`COMPONENT_EXAMPLES`] 由同一份 ID 列表生成，因此无法在不加入侧边栏与展厅入口函数的前提下
+//! 向 `WidgetCatalogId` 新增变体。下方的 `const` 断言在编译期将三者严格绑定到 `WidgetCatalogId::ALL`。
 
 use unbound_math::{Rect, Vec2};
 use unbound_widgets::catalog::emit_widget;
@@ -22,11 +18,11 @@ use crate::canvas::{AlignX, AlignY};
 
 pub const COMPONENTS_INFO: PageInfo = PageInfo {
     title: "Component gallery",
-    short: "Components",
-    description: "All 91 standard components, each painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
+    short: "All Components",
+    description: "All 91 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
     crates: &["unbound-widgets"],
-    docs: "docs/architecture/principles.md",
-    keywords: "component gallery catalog emitter coverage widget showcase every control",
+    docs: "docs/architecture/widgets.md",
+    keywords: "component gallery catalog emitter coverage widget showcase every control tooltip",
 };
 
 const KNOBS_ACTION: &[KnobSpec] = &[
@@ -276,7 +272,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Toast => "view.add(ui_key!(\"tst\"), ToastDesc::new(rect, \"Notification\"));",
         WidgetCatalogId::ToggleButton => "view.toggle_button(ui_key!(\"tbtn\"), ToggleButtonDesc::new(rect, \"Pin\", true));",
         WidgetCatalogId::Toolbar => "view.add(ui_key!(\"tbr\"), ToolbarDesc::new(rect, tools));",
-        WidgetCatalogId::Tooltip => "view.add(ui_key!(\"ttp\"), TooltipDesc::new(rect, \"Help text\"));",
+        WidgetCatalogId::Tooltip => "view.tooltip(ui_key!(\"ttp\"), TooltipDesc::labeled(anchor, viewport, \"Auto-flipping hint\"));",
         WidgetCatalogId::Tour => "view.add(ui_key!(\"tur\"), TourDesc::new(rect, step));",
         WidgetCatalogId::Transfer => "view.add(ui_key!(\"tr\"), TransferDesc::new(rect, items));",
         WidgetCatalogId::TreeTable => "view.tree_table(ui_key!(\"ttbl\"), TreeTableDesc::new(rect, rows));",
@@ -288,11 +284,16 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
     }
 }
 
-/// 由同一份 ID 列表生成展厅示例与穷举覆盖率门禁。
+/// 由同一份 ID 列表生成展厅示例、侧边栏组件列表与穷举覆盖率门禁。
 /// 新增目录变体时必须在此补充条目（否则下方 `const` 断言会失败），
 /// 并在 `emit_widget` 中新增分支（`E0004`）。
 macro_rules! define_showcase_components {
     ($( $id:ident => $title:literal, $desc:literal, $height:literal ),+ $(,)?) => {
+        /// 侧边栏组件导航项顺序（与 `COMPONENT_EXAMPLES` 卡片一一对应）。
+        pub const SIDEBAR_COMPONENT_IDS: [WidgetCatalogId; WidgetCatalogId::COUNT] = [
+            $( WidgetCatalogId::$id, )+
+        ];
+
         /// 按目录顺序为每个目录组件生成一张卡片。
         pub const COMPONENT_EXAMPLES: &[ExampleDef] = &[
             $(
@@ -316,7 +317,6 @@ macro_rules! define_showcase_components {
         ///
         /// 穷举匹配：禁止 `_ =>` 通配符分支。新增的 `WidgetCatalogId` 变体
         /// 在命名之前将无法通过此处编译，与 `unbound-widgets` 中的探针门禁一致。
-        ///
         #[deny(unreachable_patterns)]
         pub const fn showcase_entry_for_widget(id: WidgetCatalogId) -> (super::PageId, DemoKind) {
             match id {
@@ -325,6 +325,17 @@ macro_rules! define_showcase_components {
                         super::PageId::Components,
                         DemoKind::Component { id: WidgetCatalogId::$id },
                     ),
+                )+
+            }
+        }
+
+        /// 获取每个目录组件在侧边栏中显示的导航名称（穷举匹配，禁止遗漏）。
+        #[must_use]
+        #[deny(unreachable_patterns)]
+        pub const fn component_nav_label(id: WidgetCatalogId) -> &'static str {
+            match id {
+                $(
+                    WidgetCatalogId::$id => $title,
                 )+
             }
         }
@@ -385,7 +396,7 @@ define_showcase_components! {
     TextInput => "Text input", "A single-line field with caret and selection.", 240.0,
     Toast => "Toast", "A spring-in notification with a countdown.", 280.0,
     Toolbar => "Toolbar", "Button and toggle items in a row.", 240.0,
-    Tooltip => "Tooltip", "A delayed, smart-flipping hint.", 260.0,
+    Tooltip => "Tooltip", "A delayed, smart-flipping in-window hint.", 260.0,
     TreeView => "Tree view", "An expandable row with keyboard navigation.", 320.0,
     VirtualViews => "Virtual row", "A Fenwick-backed variable-height virtual row.", 240.0,
     Collapsible => "Collapsible", "Single-section disclosure panel with smooth spring progress.", 240.0,
@@ -433,6 +444,36 @@ define_showcase_components! {
     TerminalView => "Terminal view", "ANSI-styled virtualized terminal console log viewer.", 280.0,
 }
 
+/// 返回组件在 `COMPONENT_EXAMPLES` 中的卡片索引。
+#[must_use]
+pub const fn component_card_index(id: WidgetCatalogId) -> usize {
+    let mut j = 0;
+    while j < SIDEBAR_COMPONENT_IDS.len() {
+        if SIDEBAR_COMPONENT_IDS[j] as usize == id as usize {
+            return j;
+        }
+        j += 1;
+    }
+    0
+}
+
+/// 计算滚动到 `PageId::Components` 上指定组件卡片顶部的精确垂直滚动偏移（逻辑像素）。
+#[must_use]
+pub fn component_scroll_offset(id: WidgetCatalogId) -> f32 {
+    let target_idx = component_card_index(id);
+    if target_idx == 0 {
+        return 0.0;
+    }
+    // 页头区高度：PAGE_PAD_TOP (26) + header (140) + PAGE_HEAD_GAP (6) = 172.0
+    let mut offset = 172.0_f32;
+    for example in COMPONENT_EXAMPLES.iter().take(target_idx) {
+        // 单张卡片高度：CARD_PAD_TOP(12) + CARD_HEAD(64) + stage_height + CODE_GAP(6) + CODE_BAR(30) + CARD_PAD_BOTTOM(10) = 122 + stage_height
+        // 加卡片间距 CARD_GAP(18) = 140 + stage_height
+        offset += 140.0 + example.stage_height;
+    }
+    offset
+}
+
 /// `examples` 是否为 `id` 挂载了卡片（可 const 比较）。
 const fn hosts(examples: &[ExampleDef], id: WidgetCatalogId) -> bool {
     let mut j = 0;
@@ -447,9 +488,13 @@ const fn hosts(examples: &[ExampleDef], id: WidgetCatalogId) -> bool {
     false
 }
 
-/// 编译期覆盖率门禁：每个目录组件都必须映射到目标页面实际挂载的演示，
-/// 且拥有非空的交互旋钮。
+/// 编译期覆盖率门禁：每个目录组件都必须映射到目标页面实际挂载的演示、
+/// 出现在侧边栏列表 `SIDEBAR_COMPONENT_IDS` 中，且拥有非空的交互旋钮与导航标签。
 const _: () = {
+    assert!(
+        SIDEBAR_COMPONENT_IDS.len() == WidgetCatalogId::COUNT,
+        "SIDEBAR_COMPONENT_IDS must contain every WidgetCatalogId",
+    );
     let mut i = 0;
     while i < WidgetCatalogId::COUNT {
         let id = WidgetCatalogId::ALL[i];
@@ -457,6 +502,15 @@ const _: () = {
         assert!(
             hosts(page.examples(), id),
             "catalog component is not mounted by its showcase page",
+        );
+        let idx = component_card_index(id);
+        assert!(
+            SIDEBAR_COMPONENT_IDS[idx] as usize == id as usize,
+            "every catalog component must be present in SIDEBAR_COMPONENT_IDS",
+        );
+        assert!(
+            !component_nav_label(id).is_empty(),
+            "every catalog component must have a non-empty sidebar label",
         );
         let knobs = knobs_for_id(id);
         assert!(
@@ -515,6 +569,7 @@ fn semantic_label_for_id(
         WidgetCatalogId::Callout => "Callout: Tip".to_string(),
         WidgetCatalogId::VirtualMasonry => "VirtualMasonry: 1000 items".to_string(),
         WidgetCatalogId::TerminalView => "Terminal: Ready".to_string(),
+        WidgetCatalogId::Tooltip => "Tooltip: In-window auto-flipped".to_string(),
         _ => id.module_name().to_string(),
     }
 }

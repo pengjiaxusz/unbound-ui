@@ -1310,3 +1310,105 @@ fn dragging_the_easing_curve_moves_its_control_point() {
     app.pointer_up(destination, 0.1);
     assert_eq!(app.state.demo.curve_editor.active(), None);
 }
+
+/// 侧边栏折叠与展开过程严格单调收敛，无欠阻尼过冲或水平位移抖动。
+#[test]
+fn sidebar_collapse_and_expand_is_monotonic_without_jitter() {
+    let mut app = app();
+    let initial = app.layout.nav_width;
+    assert!((initial - 248.0).abs() < 0.01);
+
+    // 触发折叠：宽度必须单调递减至 68.0，不得反弹或过冲。
+    click_node(&mut app, target::id(Target::NavToggle));
+    assert!(!app.state.nav_expanded);
+    let mut prev = app.layout.nav_width;
+    for step in 0..90 {
+        app.tick(1.0 / 60.0);
+        app.rebuild(VIEWPORT);
+        let cur = app.layout.nav_width;
+        assert!(
+            cur <= prev + 1e-4,
+            "collapse step {step} jittered upward: {prev} -> {cur}"
+        );
+        if cur < 140.0 {
+            let home_rect = rect_of(
+                &app,
+                target::id(Target::NavPage(PageId::Home.index() as u8)),
+            );
+            assert!(
+                (home_rect.center().x - (app.layout.nav.origin.x + 34.0)).abs() < 0.01,
+                "collapsed icon center shifted horizontally during collapse: {:?}",
+                home_rect
+            );
+        }
+        prev = cur;
+    }
+    assert!((app.layout.nav_width - 68.0).abs() < 0.5);
+
+    // 触发展开：宽度必须单调递增至 248.0，不得过冲或回弹。
+    click_node(&mut app, target::id(Target::NavToggle));
+    assert!(app.state.nav_expanded);
+    let mut prev = app.layout.nav_width;
+    for step in 0..90 {
+        app.tick(1.0 / 60.0);
+        app.rebuild(VIEWPORT);
+        let cur = app.layout.nav_width;
+        assert!(
+            cur >= prev - 1e-4,
+            "expand step {step} jittered downward: {prev} -> {cur}"
+        );
+        prev = cur;
+    }
+    assert!((app.layout.nav_width - 248.0).abs() < 0.5);
+}
+
+/// 侧边栏导航目标 100% 覆盖全部 24 个页面与全部 91 个目录组件，且点击组件导航项可精确定位。
+#[test]
+fn sidebar_covers_every_page_and_every_catalog_component() {
+    use showcase::pages::{component_scroll_offset, SIDEBAR_COMPONENT_IDS};
+    use showcase::shell::sidebar_all_targets;
+    use unbound_widgets::WidgetCatalogId;
+
+    let targets = sidebar_all_targets();
+    for page in PageId::ALL {
+        assert!(
+            targets.contains(&Target::NavPage(page.index() as u8)),
+            "sidebar missing PageId::{page:?}"
+        );
+    }
+    assert_eq!(SIDEBAR_COMPONENT_IDS.len(), WidgetCatalogId::COUNT);
+    for &id in WidgetCatalogId::ALL {
+        assert!(
+            targets.contains(&Target::NavComponent(id as u8)),
+            "sidebar missing WidgetCatalogId::{id:?}"
+        );
+    }
+
+    // 点击侧边栏中的 Tooltip 组件项应导航至 Components 页并自动滚动到对应卡片位置。
+    let mut app = app();
+    app.click(
+        target::id(Target::NavComponent(WidgetCatalogId::Tooltip as u8)),
+        Vec2::ZERO,
+    );
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.active_page, PageId::Components);
+    assert_eq!(app.state.active_component, Some(WidgetCatalogId::Tooltip));
+    assert!(
+        (app.state.content_scroll - component_scroll_offset(WidgetCatalogId::Tooltip)).abs() < 1.0
+    );
+}
+
+/// `PageId::Systems` 引擎子系统全景页覆盖全部 21 个核心子系统，且支持点击切换当前检视的子系统。
+#[test]
+fn systems_page_covers_all_21_engine_subsystems() {
+    use showcase::pages::SubsystemId;
+
+    assert_eq!(SubsystemId::ALL.len(), 21);
+    let mut app = app();
+    app.navigate(PageId::Systems);
+    app.rebuild(VIEWPORT);
+
+    let node = target::id(Target::Demo(PageId::Systems.index() as u8, 0, 105));
+    click_node(&mut app, node);
+    assert_eq!(app.state.demo.selected_subsystem, 5);
+}

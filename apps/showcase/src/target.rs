@@ -25,6 +25,8 @@ pub enum Target {
     SearchResult(u8),
     /// 导航到指定页面。
     NavPage(u8),
+    /// 从侧边栏直接导航并滚动定位到指定的标准组件卡片（`0..WidgetCatalogId::COUNT`）。
+    NavComponent(u8),
     /// 展开 / 折叠示例卡片的代码面板。
     Code(u8, u8),
     /// 激活旋钮（开关 / 复选框行）。
@@ -72,6 +74,7 @@ const TAG_CONTENT_SCROLLBAR: u64 = 17;
 const TAG_FPS_PRESET: u64 = 18;
 const TAG_FPS_INPUT: u64 = 19;
 const TAG_NAV_SCROLLBAR: u64 = 20;
+const TAG_NAV_COMPONENT: u64 = 21;
 
 /// 展厅的语义根节点。
 pub const ROOT: u64 = 1;
@@ -102,6 +105,7 @@ pub const fn id(target: Target) -> u64 {
         Target::Search => tag(TAG_SEARCH),
         Target::SearchResult(page) => tag(TAG_SEARCH_RESULT) | page as u64,
         Target::NavPage(page) => tag(TAG_NAV_PAGE) | page as u64,
+        Target::NavComponent(comp) => tag(TAG_NAV_COMPONENT) | comp as u64,
         Target::Code(page, card) => tag(TAG_CODE) | ((page as u64) << 8) | card as u64,
         Target::Knob(page, card, knob) => {
             tag(TAG_KNOB) | ((page as u64) << 16) | ((card as u64) << 8) | knob as u64
@@ -141,6 +145,7 @@ pub const fn decode(value: u64) -> Option<Target> {
         TAG_SEARCH => Target::Search,
         TAG_SEARCH_RESULT => Target::SearchResult((low & 0xff) as u8),
         TAG_NAV_PAGE => Target::NavPage((low & 0xff) as u8),
+        TAG_NAV_COMPONENT => Target::NavComponent((low & 0xff) as u8),
         TAG_CODE => Target::Code(((low >> 8) & 0xff) as u8, (low & 0xff) as u8),
         TAG_KNOB => Target::Knob(
             ((low >> 16) & 0xff) as u8,
@@ -185,6 +190,7 @@ mod tests {
             Target::Search,
             Target::SearchResult(7),
             Target::NavPage(12),
+            Target::NavComponent(42),
             Target::Code(3, 2),
             Target::Knob(4, 1, 2),
             Target::KnobOption(4, 1, 2, 3),
@@ -208,6 +214,7 @@ mod tests {
     fn ids_are_unique_across_fields() {
         assert_ne!(id(Target::Code(1, 2)), id(Target::Code(2, 1)));
         assert_ne!(id(Target::NavPage(2)), id(Target::NavPage(3)));
+        assert_ne!(id(Target::NavPage(2)), id(Target::NavComponent(2)));
         assert_ne!(
             id(Target::Knob(1, 2, 3)),
             id(Target::KnobOption(1, 2, 3, 0))

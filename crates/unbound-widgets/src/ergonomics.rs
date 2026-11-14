@@ -37,6 +37,7 @@ use crate::text_input::{
 };
 use crate::timeline_track::{emit_timeline_track, TimelineTrackDesc, TimelineTrackState};
 use crate::toggle_button::{emit_toggle_button, ToggleButtonDesc, ToggleButtonState};
+use crate::tooltip::{TooltipDesc, TooltipState};
 use crate::tour::{emit_tour, TourDesc};
 use crate::transfer::{emit_transfer, TransferDesc, TransferState};
 use crate::tree_table::{emit_tree_table, TreeTableDesc, TreeTableState};
@@ -1384,6 +1385,56 @@ impl UiWidget for TerminalViewDesc {
         let mut desc = self.clone();
         desc.rect = rect;
         emit_terminal_view(node, &desc, state, control)
+    }
+}
+
+impl UiWidget for TooltipDesc {
+    type State = TooltipState;
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        if self.label.is_empty() {
+            return Vec2::new(self.size.x.max(64.0), self.size.y.max(28.0));
+        }
+        let m = text_ctx.measure_line(&self.label, 12.0, 400);
+        Vec2::new(
+            (m.x + self.padding.x * 2.0)
+                .max(self.size.x)
+                .min(self.max_width.max(64.0)),
+            (m.y + self.padding.y * 2.0).max(self.size.y).max(28.0),
+        )
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        _state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        if desc.anchor.is_empty() {
+            desc.anchor = rect;
+        }
+        if !desc.label.is_empty() {
+            let m = text_ctx.measure_line(&desc.label, 12.0, 400);
+            desc.size = Vec2::new(
+                (m.x + desc.padding.x * 2.0)
+                    .max(desc.size.x)
+                    .min(desc.max_width.max(64.0)),
+                (m.y + desc.padding.y * 2.0).max(desc.size.y).max(28.0),
+            );
+        }
+        let text_r = desc.content_rect();
+        let glyphs = text_ctx.shape_line(
+            &desc.label,
+            text_r,
+            12.0,
+            400,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        desc.render_with_glyphs(node, 0, control, &glyphs).0
     }
 }
 

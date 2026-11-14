@@ -415,7 +415,8 @@ pub use number_input::{
     NUMBER_RADIUS, SPIN_WIDTH,
 };
 pub use overlay::{
-    place_anchored_popup, BackdropRequest, OverlayEntry, OverlayKind, OverlayStack, Placement,
+    place_anchored_popup, place_tooltip_in_window, BackdropRequest, OverlayEntry, OverlayKind,
+    OverlayStack, PlacedPopup, Placement, TOOLTIP_VIEWPORT_MARGIN,
 };
 pub use pagination::{emit_pagination, PaginationDesc, PaginationState};
 pub use pin_input::{emit_pin_input, PinInputDesc, PinInputState};
@@ -493,7 +494,10 @@ pub use toolbar::{
     StatusAlign, StatusBarDesc, StatusSegment, ToolbarDesc, ToolbarItem, ToolbarItemKind,
     ToolbarLayout, ToolbarState, ToolbarTokens,
 };
-pub use tooltip::{emit_tooltip, TooltipDesc, TooltipState, TooltipWidget};
+pub use tooltip::{
+    emit_tooltip, wrap_text, TooltipDelay, TooltipDesc, TooltipState, TooltipWidget,
+    TOOLTIP_DELAY_MS, TOOLTIP_MAX_WIDTH,
+};
 pub use tour::{emit_tour, TourDesc, TourState, TourStep};
 pub use transfer::{emit_transfer, TransferDesc, TransferItem, TransferState};
 pub use tree_table::{
