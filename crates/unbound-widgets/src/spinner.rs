@@ -113,7 +113,14 @@ pub fn emit_loading_overlay(desc: &LoadingOverlayDesc, state: ControlState) -> W
     );
     primitives.push(scrim);
 
-    let spin = emit_spinner(&SpinnerDesc::new(desc.rect, desc.phase), state);
+    let spin_sz = desc.rect.width().min(desc.rect.height()).clamp(16.0, 44.0);
+    let spin_rect = Rect::new(
+        desc.rect.origin.x + (desc.rect.width() - spin_sz) * 0.5,
+        desc.rect.origin.y + (desc.rect.height() - spin_sz) * 0.5,
+        spin_sz,
+        spin_sz,
+    );
+    let spin = emit_spinner(&SpinnerDesc::new(spin_rect, desc.phase), state);
     for mut p in spin.primitives {
         if !desc.active {
             p.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(p.depth_u16(), 0.0);

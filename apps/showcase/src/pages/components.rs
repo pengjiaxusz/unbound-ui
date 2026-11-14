@@ -9,8 +9,8 @@
 //! [`COMPONENT_EXAMPLES`] 由同一份 ID 列表生成，因此无法在不加入侧边栏与展厅入口函数的前提下
 //! 向 `WidgetCatalogId` 新增变体。下方的 `const` 断言在编译期将三者严格绑定到 `WidgetCatalogId::ALL`。
 
-use unbound_math::{Rect, Vec2};
-use unbound_widgets::catalog::emit_widget_with_params;
+use unbound_math::Rect;
+use unbound_widgets::catalog::{emit_widget_with_shaper, CatalogParams};
 use unbound_widgets::WidgetCatalogId;
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageInfo};
@@ -19,7 +19,7 @@ use crate::canvas::{AlignX, AlignY};
 pub const COMPONENTS_INFO: PageInfo = PageInfo {
     title: "Component gallery",
     short: "All Components",
-    description: "All 91 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
+    description: "All 99 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
     crates: &["unbound-widgets"],
     docs: "docs/architecture/widgets.md",
     keywords: "component gallery catalog emitter coverage widget showcase every control tooltip",
@@ -521,59 +521,6 @@ const _: () = {
     }
 };
 
-fn semantic_label_for_id(
-    id: WidgetCatalogId,
-    sandbox: &crate::state::ComponentSandboxState,
-) -> String {
-    match id {
-        WidgetCatalogId::Button => format!("Button ({})", sandbox.get_clicks(id)),
-        WidgetCatalogId::Badge => "Badge: Active".to_string(),
-        WidgetCatalogId::Chip => "Chip: Selected".to_string(),
-        WidgetCatalogId::Checkbox => {
-            if sandbox.get_toggle(id) {
-                "Checked".to_string()
-            } else {
-                "Unchecked".to_string()
-            }
-        }
-        WidgetCatalogId::Switch => {
-            if sandbox.get_toggle(id) {
-                "Enabled".to_string()
-            } else {
-                "Disabled".to_string()
-            }
-        }
-        WidgetCatalogId::TextInput => sandbox.get_text(id, "Search query...").to_string(),
-        WidgetCatalogId::TextArea => sandbox
-            .get_text(id, "Multi-line text editor\nLine 2")
-            .to_string(),
-        WidgetCatalogId::Slider => format!("Slider: {:.0}%", sandbox.get_slider(id, 50.0)),
-        WidgetCatalogId::Progress => format!("Progress: {:.0}%", sandbox.get_slider(id, 65.0)),
-        WidgetCatalogId::Table => "Table: 5 columns, 100 rows".to_string(),
-        WidgetCatalogId::DataGrid => "DataGrid: Virtualized grid".to_string(),
-        WidgetCatalogId::Chart => "Series: 120 FPS".to_string(),
-        WidgetCatalogId::Select => format!("Option {}", sandbox.get_selected(id) + 1),
-        WidgetCatalogId::Tabs => format!("Tab {}", sandbox.get_selected(id) + 1),
-        WidgetCatalogId::Accordion => format!("Section {}", sandbox.get_selected(id) + 1),
-        WidgetCatalogId::SplitButton => format!("SplitButton ({})", sandbox.get_clicks(id)),
-        WidgetCatalogId::ToggleButton => {
-            if sandbox.get_toggle(id) {
-                "Active (ON)".to_string()
-            } else {
-                "Inactive (OFF)".to_string()
-            }
-        }
-        WidgetCatalogId::TreeTable => "TreeTable: 12 nodes".to_string(),
-        WidgetCatalogId::MultiSplit => "MultiSplit: 3 panes".to_string(),
-        WidgetCatalogId::Descriptions => "Descriptions: 6 items".to_string(),
-        WidgetCatalogId::Callout => "Callout: Tip".to_string(),
-        WidgetCatalogId::VirtualMasonry => "VirtualMasonry: 1000 items".to_string(),
-        WidgetCatalogId::TerminalView => "Terminal: Ready".to_string(),
-        WidgetCatalogId::Tooltip => "Tooltip: In-window auto-flipped".to_string(),
-        _ => id.module_name().to_string(),
-    }
-}
-
 /// 使用真实发射器渲染单个组件卡片。
 pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
     let rect = ctx.rect;
@@ -599,10 +546,72 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
         AlignX::Start,
         AlignY::Top,
     );
+
+    let knobs = knobs_for_id(id);
+    let mut pad_x = 24.0_f32;
+    let mut bordered = true;
+    let mut active = true;
+    let mut compact = false;
+    let mut show_icon = true;
+    let mut read_only = false;
+    let mut knob_variant = 0usize;
+    let mut knob_value_norm = 0.5_f32;
+
+    if let Some(k0) = knobs.first() {
+        match k0 {
+            KnobSpec::Segmented { .. } => {
+                knob_variant = ctx.knob(0).round().max(0.0) as usize;
+            }
+            KnobSpec::Toggle {
+                label: "Active", ..
+            } => {
+                active = ctx.knob_on(0);
+            }
+            KnobSpec::Toggle {
+                label: "Bordered", ..
+            } => {
+                bordered = ctx.knob_on(0);
+            }
+            KnobSpec::Toggle {
+                label: "Compact", ..
+            } => {
+                compact = ctx.knob_on(0);
+            }
+            _ => {}
+        }
+    }
+    if let Some(k1) = knobs.get(1) {
+        match k1 {
+            KnobSpec::Slider {
+                label, min, max, ..
+            } => {
+                let span = (max - min).max(1e-5);
+                knob_value_norm = ((ctx.knob(1) - min) / span).clamp(0.0, 1.0);
+                if *label == "Padding" {
+                    pad_x = ctx.knob(1).clamp(8.0, 32.0);
+                }
+            }
+            KnobSpec::Segmented { .. } => {
+                knob_variant = ctx.knob(1).round().max(0.0) as usize;
+            }
+            KnobSpec::Toggle {
+                label: "Show Icon", ..
+            } => {
+                show_icon = ctx.knob_on(1);
+            }
+            KnobSpec::Toggle {
+                label: "ReadOnly", ..
+            } => {
+                read_only = ctx.knob_on(1);
+            }
+            _ => {}
+        }
+    }
+
     let stage = Rect::new(
-        rect.origin.x + 24.0,
+        rect.origin.x + pad_x,
         rect.origin.y + 42.0,
-        (rect.size.x - 48.0).max(40.0),
+        (rect.size.x - pad_x * 2.0).max(40.0),
         (rect.size.y - 66.0).max(40.0),
     );
     let node = ctx.part(1);
@@ -610,7 +619,6 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
     let selected_idx = ctx.state.sandbox.get_selected(id);
     let selected = checked || selected_idx > 0;
     let mut state = ctx.canvas.control_state(node, false, selected);
-    let knobs = knobs_for_id(id);
     if matches!(
         knobs.first(),
         Some(
@@ -627,29 +635,25 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
         state.disabled = true;
         state.phase = unbound_widgets::PointerPhase::Idle;
     }
+
     let value_norm = if let Some(&sandbox_val) = ctx.state.sandbox.slider_values.get(&(id as u8)) {
         (sandbox_val / 100.0).clamp(0.0, 1.0)
-    } else if let Some(KnobSpec::Slider { min, max, .. }) = knobs.get(1) {
-        let span = (max - min).max(1e-5);
-        ((ctx.knob(1) - min) / span).clamp(0.0, 1.0)
     } else {
-        (ctx.state.sandbox.get_slider(id, 50.0) / 100.0).clamp(0.0, 1.0)
-    };
-    let knob_variant = match knobs.get(1) {
-        Some(KnobSpec::Segmented { .. } | KnobSpec::Toggle { .. } | KnobSpec::CheckBox { .. }) => {
-            ctx.knob(1).round().max(0.0) as usize
-        }
-        _ => 0,
+        knob_value_norm
     };
     let variant_idx = selected_idx.wrapping_add(knob_variant);
 
-    let label_str = semantic_label_for_id(id, &ctx.state.sandbox);
-    let mut glyphs = ctx.canvas.shape(
-        &label_str,
-        Vec2::new(stage.origin.x + 8.0, stage.origin.y + 8.0),
-        13.0,
-    );
-    let output =
-        emit_widget_with_params(id, node, state, stage, &mut glyphs, value_norm, variant_idx);
+    let params = CatalogParams {
+        value_norm,
+        variant_idx,
+        show_icon,
+        bordered,
+        active,
+        compact,
+        read_only,
+    };
+    let output = emit_widget_with_shaper(id, node, state, stage, params, |text, origin, size| {
+        ctx.canvas.shape(text, origin, size)
+    });
     ctx.canvas.widget_output(id, node, &output);
 }

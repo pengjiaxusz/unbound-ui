@@ -8,7 +8,7 @@ use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs, outlined, surface};
+use crate::primitive::{curve_stroke, focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -153,13 +153,26 @@ pub fn emit_cascader(
         primitives.push(inst);
     }
 
-    let chev_r = Rect::new(
-        desc.rect.max().x - 16.0,
-        desc.rect.origin.y + (desc.rect.height() - 8.0) * 0.5,
-        8.0,
-        8.0,
+    let chev_cx = desc.rect.max().x - 14.0;
+    let chev_cy = desc.rect.origin.y + desc.rect.height() * 0.5;
+    curve_stroke(
+        [chev_cx - 3.5, chev_cy - 1.5],
+        [chev_cx, chev_cy + 2.0],
+        1.5,
+        Token::TEXT_SECONDARY,
+        desc.z + 2,
+        &mut primitives,
+        &mut payloads,
     );
-    primitives.push(surface(chev_r, 2.0, Token::TEXT_SECONDARY, desc.z + 2));
+    curve_stroke(
+        [chev_cx, chev_cy + 2.0],
+        [chev_cx + 3.5, chev_cy - 1.5],
+        1.5,
+        Token::TEXT_SECONDARY,
+        desc.z + 2,
+        &mut primitives,
+        &mut payloads,
+    );
 
     primitives.push(focus_ring(
         desc.rect,

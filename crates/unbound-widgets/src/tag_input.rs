@@ -12,13 +12,13 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
-use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
+use unbound_gpu::data::GpuPrimitiveInstance;
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined, surface};
+use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::text_input::{reduce_text_input, TextEditState, TextInputDesc, TextInputEvent};
 use crate::{ControlState, WidgetOutput};
@@ -391,17 +391,27 @@ pub fn emit_tag_input(
             ));
         }
         if let Some(close) = layout.close.get(index) {
-            primitives.push(instance(
-                Rect::new(close.center().x - 3.0, close.center().y - 0.75, 6.0, 1.5),
-                [0.0; 4],
+            let cx = close.center().x;
+            let cy = close.center().y;
+            let arm = 3.0;
+            curve_stroke(
+                [cx - arm, cy - arm],
+                [cx + arm, cy + arm],
+                1.5,
                 Token::TEXT_SECONDARY,
-                Token::NONE,
-                0.0,
-                0.0,
-                PrimType::Line,
-                SubElement::Content,
                 desc.z,
-            ));
+                &mut primitives,
+                &mut payloads,
+            );
+            curve_stroke(
+                [cx + arm, cy - arm],
+                [cx - arm, cy + arm],
+                1.5,
+                Token::TEXT_SECONDARY,
+                desc.z,
+                &mut primitives,
+                &mut payloads,
+            );
         }
     }
 

@@ -312,7 +312,7 @@ pub use breadcrumb::{
     BreadcrumbTokens, Crumb, CrumbSlot,
 };
 pub use button::{ButtonDesc, ButtonSize, ButtonTokens, ButtonVariant, ButtonWidget};
-pub use callout::{emit_callout, CalloutDesc, CalloutState};
+pub use callout::{emit_callout, emit_callout_with_glyphs, CalloutDesc, CalloutState};
 pub use canvas_toolbar::{
     emit_canvas_toolbar, CanvasTool, CanvasToolbarDesc, CanvasToolbarOutput, CanvasToolbarState,
     TOOLBAR_BLUR, TOOLBAR_HEIGHT, TOOL_BUTTON, TOOL_GAP, ZOOM_RANGE, ZOOM_WIDTH,
@@ -358,7 +358,10 @@ pub use date_picker::{
 pub use date_range_picker::{
     emit_date_range_picker, DateRange, DateRangePickerDesc, DateRangePickerState,
 };
-pub use descriptions::{emit_descriptions, DescriptionItem, DescriptionsDesc, DescriptionsState};
+pub use descriptions::{
+    emit_descriptions, emit_descriptions_with_glyphs, DescriptionItem, DescriptionsDesc,
+    DescriptionsState,
+};
 pub use divider::{emit_divider, DividerDesc, DividerOrientation, DividerTokens};
 pub use dock::{
     emit_dock_pane, emit_dock_preview, emit_dock_tab, DockDrag, DockHover, DockNode, DockPane,
@@ -452,7 +455,10 @@ pub use select::{emit_select, SelectDesc, SelectState, SelectWidget};
 pub use skeleton::{emit_skeleton, SkeletonDesc, SkeletonState, SKELETON_PERIOD, SKELETON_SHIMMER};
 pub use slider::{SliderDesc, SliderTokens};
 pub use spinner::{emit_loading_overlay, emit_spinner, LoadingOverlayDesc, SpinnerDesc};
-pub use split_button::{emit_split_button, SplitButtonDesc, SplitButtonState, DROPDOWN_WIDTH};
+pub use split_button::{
+    emit_split_button, emit_split_button_with_glyphs, SplitButtonDesc, SplitButtonState,
+    DROPDOWN_WIDTH,
+};
 pub use split_pane::{
     emit_split_pane, emit_split_pane_panes, reduce_split_key, SplitKey, SplitLayout, SplitPaneDesc,
     SplitPaneState, SplitPaneTokens, SplitSide,
@@ -472,7 +478,8 @@ pub use tag_input::{
     TAG_CLOSE, TAG_GAP, TAG_HEIGHT, TAG_INSET, TAG_PADDING, TAG_RADIUS,
 };
 pub use terminal_view::{
-    emit_terminal_view, TerminalViewDesc, TerminalViewState, TERMINAL_LINE_HEIGHT,
+    emit_terminal_view, emit_terminal_view_with_glyphs, TerminalViewDesc, TerminalViewState,
+    TERMINAL_LINE_HEIGHT,
 };
 pub use text_area::{
     emit_text_area, logical_lines, AreaLine, TextAreaDesc, TextAreaState, TextAreaVisual,
@@ -489,7 +496,9 @@ pub use toast::{
     emit_toast, ToastEntry, ToastLayout, ToastOutput, ToastSpring, ToastStack, ToastTick,
     TOAST_ACTION_SIZE, TOAST_CLOSE_SIZE, TOAST_DURATION_MS, TOAST_RADIUS, TOAST_SLIDE_IN,
 };
-pub use toggle_button::{emit_toggle_button, ToggleButtonDesc, ToggleButtonState};
+pub use toggle_button::{
+    emit_toggle_button, emit_toggle_button_with_glyphs, ToggleButtonDesc, ToggleButtonState,
+};
 pub use toolbar::{
     emit_status_bar, emit_status_segment, emit_toolbar, emit_toolbar_item, emit_toolbar_overflow,
     StatusAlign, StatusBarDesc, StatusSegment, ToolbarDesc, ToolbarItem, ToolbarItemKind,
@@ -502,8 +511,8 @@ pub use tooltip::{
 pub use tour::{emit_tour, TourDesc, TourState, TourStep};
 pub use transfer::{emit_transfer, TransferDesc, TransferItem, TransferState};
 pub use tree_table::{
-    emit_tree_table, TreeTableDesc, TreeTableRow, TreeTableState, TREE_TABLE_HEADER_HEIGHT,
-    TREE_TABLE_ROW_HEIGHT,
+    emit_tree_table, emit_tree_table_with_glyphs, TreeTableDesc, TreeTableRow, TreeTableState,
+    TREE_TABLE_HEADER_HEIGHT, TREE_TABLE_ROW_HEIGHT,
 };
 pub use tree_view::{
     emit_tree_background, emit_tree_row, TreeViewDesc, TreeViewRow, TreeViewState, TreeViewTokens,

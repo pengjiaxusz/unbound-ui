@@ -5,13 +5,12 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
-use unbound_gpu::data::{PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs, instance};
+use crate::primitive::{curve_stroke, focus_ring, glyphs};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
@@ -250,29 +249,24 @@ pub fn emit_crumb_separator(
     let y = slot.rect.origin.y + slot.rect.size.y * 0.5;
     let arm = desc.separator_width * 0.25;
     let mut primitives = Vec::with_capacity(2);
+    let mut payloads = Vec::with_capacity(2);
     for (start, end) in [
-        ([x, y - arm], [x + arm * 2.0, y]),
-        ([x + arm * 2.0, y], [x, y + arm]),
+        ([x, y - arm], [x + arm * 1.6, y]),
+        ([x + arm * 1.6, y], [x, y + arm]),
     ] {
-        primitives.push(instance(
-            Rect::new(
-                start[0].min(end[0]),
-                start[1].min(end[1]),
-                (start[0] - end[0]).abs().max(1.0),
-                (start[1] - end[1]).abs().max(1.0),
-            ),
-            [0.0; 4],
+        curve_stroke(
+            start,
+            end,
+            1.5,
             tokens.separator,
-            Token::NONE,
-            0.0,
-            0.0,
-            PrimType::Line,
-            SubElement::Content,
             desc.z,
-        ));
+            &mut primitives,
+            &mut payloads,
+        );
     }
     WidgetOutput {
         primitives,
+        payloads,
         ..WidgetOutput::default()
     }
 }

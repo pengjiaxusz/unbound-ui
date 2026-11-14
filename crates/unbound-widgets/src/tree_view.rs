@@ -17,7 +17,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 use unbound_world::virtualize::{TreeRow, VirtualTree, WindowUpdate};
 
-use crate::primitive::{focus_ring, glyphs, instance, outlined};
+use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined};
 use crate::scroll::{ScrollState, ScrollViewDesc};
 use crate::switch::CONTROL_LAYER;
 use crate::text_input::TextEditState;
@@ -485,32 +485,38 @@ pub fn emit_tree_row(
     let centre = [arrow_x + 4.0, rect.origin.y + rect.size.y * 0.5];
     if row.row.has_children {
         // 朝右的箭头；展开状态时向下旋转。
-        let arm = 4.0;
-        let (sx, sy, ex, ey) = if row.row.expanded {
+        let arm = 3.5;
+        let (a, b, c) = if row.row.expanded {
             (
-                centre[0] - arm,
-                centre[1] - arm * 0.5,
-                centre[0] + arm,
-                centre[1] - arm * 0.5,
+                [centre[0] - arm, centre[1] - arm * 0.5],
+                [centre[0], centre[1] + arm * 0.5],
+                [centre[0] + arm, centre[1] - arm * 0.5],
             )
         } else {
             (
-                centre[0] - arm * 0.5,
-                centre[1] - arm,
-                centre[0] - arm * 0.5,
-                centre[1] + arm,
+                [centre[0] - arm * 0.5, centre[1] - arm],
+                [centre[0] + arm * 0.5, centre[1]],
+                [centre[0] - arm * 0.5, centre[1] + arm],
             )
         };
-        primitives.push(line([sx, sy], [ex, ey], 1.5, tokens.arrow, desc.z));
-        if row.row.expanded {
-            primitives.push(line(
-                [centre[0] - arm, centre[1] + arm * 0.5],
-                [centre[0] + arm, centre[1] + arm * 0.5],
-                1.5,
-                tokens.arrow,
-                desc.z,
-            ));
-        }
+        curve_stroke(
+            a,
+            b,
+            1.5,
+            tokens.arrow,
+            desc.z,
+            &mut primitives,
+            &mut payloads,
+        );
+        curve_stroke(
+            b,
+            c,
+            1.5,
+            tokens.arrow,
+            desc.z,
+            &mut primitives,
+            &mut payloads,
+        );
     }
 
     glyphs(
@@ -594,32 +600,6 @@ pub fn emit_tree_background(desc: &TreeViewDesc, tokens: TreeViewTokens) -> Widg
         focusable: false,
         ..Default::default()
     }
-}
-
-/// 两点之间的细描边。
-fn line(
-    start: [f32; 2],
-    end: [f32; 2],
-    thickness: f32,
-    color: Token,
-    z: u16,
-) -> unbound_gpu::data::GpuPrimitiveInstance {
-    instance(
-        Rect::new(
-            start[0].min(end[0]),
-            start[1].min(end[1]),
-            (start[0] - end[0]).abs().max(thickness),
-            (start[1] - end[1]).abs().max(thickness),
-        ),
-        [0.0; 4],
-        color,
-        Token::NONE,
-        0.0,
-        0.0,
-        PrimType::Line,
-        SubElement::Content,
-        z,
-    )
 }
 
 #[cfg(test)]

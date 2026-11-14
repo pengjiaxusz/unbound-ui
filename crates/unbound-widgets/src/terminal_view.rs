@@ -4,10 +4,11 @@ use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
+use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{focus_ring, outlined, surface};
+use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
 pub const TERMINAL_LINE_HEIGHT: f32 = 18.0;
@@ -74,6 +75,18 @@ pub fn emit_terminal_view(
     state: &TerminalViewState,
     control: ControlState,
 ) -> WidgetOutput {
+    emit_terminal_view_with_glyphs(node, desc, state, control, &[])
+}
+
+/// 输出带文本字形的终端视图图元与命中区域。
+#[must_use]
+pub fn emit_terminal_view_with_glyphs(
+    node: u64,
+    desc: &TerminalViewDesc,
+    state: &TerminalViewState,
+    control: ControlState,
+    label_glyphs: &[GlyphQuad],
+) -> WidgetOutput {
     let mut out = WidgetOutput::default();
     let rect = desc.rect;
     let z = 700u16;
@@ -101,6 +114,16 @@ pub fn emit_terminal_view(
     );
     out.primitives
         .push(surface(cursor_rect, 2.0, Token::PRIMARY_SOFT, z + 2));
+
+    if !label_glyphs.is_empty() {
+        emit_glyphs(
+            label_glyphs,
+            Token::TEXT_PRIMARY,
+            z + 3,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     // 4. 外边框
     out.primitives.push(outlined(

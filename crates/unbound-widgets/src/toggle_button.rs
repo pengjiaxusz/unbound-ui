@@ -4,10 +4,11 @@ use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
+use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{focus_ring, outlined, surface};
+use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 /// 切换按钮描述符。
@@ -75,6 +76,18 @@ pub fn emit_toggle_button(
     state: &ToggleButtonState,
     control: ControlState,
 ) -> WidgetOutput {
+    emit_toggle_button_with_glyphs(node, desc, state, control, &[])
+}
+
+/// 输出带文本字形的切换按钮图元与命中区域。
+#[must_use]
+pub fn emit_toggle_button_with_glyphs(
+    node: u64,
+    desc: &ToggleButtonDesc,
+    state: &ToggleButtonState,
+    control: ControlState,
+    label_glyphs: &[GlyphQuad],
+) -> WidgetOutput {
     let mut out = WidgetOutput::default();
     let rect = desc.rect;
     let is_checked = state.checked || desc.checked;
@@ -111,6 +124,23 @@ pub fn emit_toggle_button(
         0.0,
         z + 1,
     ));
+
+    if !label_glyphs.is_empty() {
+        let ink = if control.disabled || desc.disabled {
+            Token::TEXT_SECONDARY
+        } else if is_checked {
+            Token::ON_PRIMARY
+        } else {
+            Token::TEXT_PRIMARY
+        };
+        emit_glyphs(
+            label_glyphs,
+            ink,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     // 3. 焦点环
     let disabled = control.disabled || desc.disabled;

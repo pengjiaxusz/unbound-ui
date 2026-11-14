@@ -18,7 +18,9 @@ use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined, surface};
+use crate::primitive::{
+    curve_stroke, focus_ring, glyphs as emit_glyphs, instance, outlined, surface,
+};
 use crate::switch::CONTROL_LAYER;
 use crate::text_input::{reduce_text_input, TextEditState, TextInputDesc, TextInputEvent};
 use crate::{ControlState, WidgetOutput};
@@ -515,38 +517,46 @@ pub fn emit_number_input(
     } else {
         Token::TEXT_SECONDARY
     };
-    primitives.push(instance(
-        Rect::new(
-            up.center().x - 3.0,
-            up.origin.y + up.size.y * 0.5 - 0.75,
-            6.0,
-            1.5,
-        ),
-        [0.0; 4],
+    let ucx = up.center().x;
+    let ucy = up.center().y;
+    curve_stroke(
+        [ucx - 3.0, ucy + 1.5],
+        [ucx, ucy - 1.5],
+        1.5,
         mark,
-        Token::NONE,
-        0.0,
-        0.0,
-        PrimType::Line,
-        SubElement::Content,
         desc.z,
-    ));
-    primitives.push(instance(
-        Rect::new(
-            down.center().x - 3.0,
-            down.origin.y + down.size.y * 0.5 - 0.75,
-            6.0,
-            1.5,
-        ),
-        [0.0; 4],
+        &mut primitives,
+        &mut payloads,
+    );
+    curve_stroke(
+        [ucx, ucy - 1.5],
+        [ucx + 3.0, ucy + 1.5],
+        1.5,
         mark,
-        Token::NONE,
-        0.0,
-        0.0,
-        PrimType::Line,
-        SubElement::Content,
         desc.z,
-    ));
+        &mut primitives,
+        &mut payloads,
+    );
+    let dcx = down.center().x;
+    let dcy = down.center().y;
+    curve_stroke(
+        [dcx - 3.0, dcy - 1.5],
+        [dcx, dcy + 1.5],
+        1.5,
+        mark,
+        desc.z,
+        &mut primitives,
+        &mut payloads,
+    );
+    curve_stroke(
+        [dcx, dcy + 1.5],
+        [dcx + 3.0, dcy - 1.5],
+        1.5,
+        mark,
+        desc.z,
+        &mut primitives,
+        &mut payloads,
+    );
 
     primitives.push(focus_ring(
         rect.inflate(3.0),

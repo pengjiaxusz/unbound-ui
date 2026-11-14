@@ -6,13 +6,13 @@
 use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_anim::{Spring, SpringPreset};
-use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
+use unbound_gpu::data::{PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs, instance, outlined, surface};
+use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -352,7 +352,15 @@ pub fn emit_accordion_header(
         let tdx = tip[0] - cx;
         let tdy = tip[1] - cy;
         let rotated_tip = [cx + tdx * tcos - tdy * tsin, cy + tdx * tsin + tdy * tcos];
-        primitives.push(stroke(rotated, rotated_tip, 1.5, tokens.chevron, desc.z));
+        curve_stroke(
+            rotated,
+            rotated_tip,
+            1.5,
+            tokens.chevron,
+            desc.z,
+            &mut primitives,
+            &mut payloads,
+        );
     }
 
     let divider = Rect::new(rect.origin.x, rect.max().y - 1.0, rect.size.x, 1.0);
@@ -427,32 +435,6 @@ pub fn emit_accordion_body(
         focusable: false,
         ..Default::default()
     }
-}
-
-/// 两点之间的细描边。
-fn stroke(
-    start: [f32; 2],
-    end: [f32; 2],
-    thickness: f32,
-    color: Token,
-    z: u16,
-) -> GpuPrimitiveInstance {
-    instance(
-        Rect::new(
-            start[0].min(end[0]),
-            start[1].min(end[1]),
-            (start[0] - end[0]).abs().max(thickness),
-            (start[1] - end[1]).abs().max(thickness),
-        ),
-        [0.0; 4],
-        color,
-        Token::NONE,
-        0.0,
-        0.0,
-        PrimType::Line,
-        SubElement::Content,
-        z,
-    )
 }
 
 #[cfg(test)]

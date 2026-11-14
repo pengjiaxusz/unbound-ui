@@ -2637,12 +2637,17 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
             let selected = state.active_page == *page
                 && (*page != PageId::Components || state.active_component.is_none());
             if row_rect.max().y > tree.origin.y && row_rect.origin.y < tree.max().y {
+                let page_icon = if *page == PageId::Components {
+                    Icon::ChevronDown
+                } else {
+                    Icon::ChevronRight
+                };
                 nav_item(
                     canvas,
                     layout,
                     row_rect,
                     page.info().short,
-                    Icon::ChevronRight,
+                    page_icon,
                     selected,
                     Target::NavPage(page.index() as u8),
                 );
@@ -2664,7 +2669,7 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
                             layout,
                             comp_rect,
                             pages::component_nav_label(comp_id),
-                            Icon::ChevronRight,
+                            Icon::Dot,
                             comp_selected,
                             Target::NavComponent(comp_id as u8),
                         );

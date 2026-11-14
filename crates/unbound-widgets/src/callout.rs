@@ -4,11 +4,12 @@ use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
+use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::alert::Severity;
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{focus_ring, outlined, surface};
+use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
 /// 提示框栏描述符。
@@ -78,6 +79,18 @@ pub fn emit_callout(
     state: &CalloutState,
     control: ControlState,
 ) -> WidgetOutput {
+    emit_callout_with_glyphs(node, desc, state, control, &[])
+}
+
+/// 发射带文本字形的提示框横幅图元与命中区域。
+#[must_use]
+pub fn emit_callout_with_glyphs(
+    node: u64,
+    desc: &CalloutDesc,
+    state: &CalloutState,
+    control: ControlState,
+    label_glyphs: &[GlyphQuad],
+) -> WidgetOutput {
     let mut out = WidgetOutput::default();
     let rect = if state.closed { Rect::ZERO } else { desc.rect };
     let z = 700u16;
@@ -131,6 +144,38 @@ pub fn emit_callout(
         24.0,
         24.0,
     );
+
+    if desc.closable && !state.closed {
+        let cx = close_rect.center().x;
+        let cy = close_rect.center().y;
+        curve_stroke(
+            [cx - 3.5, cy - 3.5],
+            [cx + 3.5, cy + 3.5],
+            1.5,
+            Token::TEXT_SECONDARY,
+            z + 3,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+        curve_stroke(
+            [cx + 3.5, cy - 3.5],
+            [cx - 3.5, cy + 3.5],
+            1.5,
+            Token::TEXT_SECONDARY,
+            z + 3,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
+    if !label_glyphs.is_empty() && !state.closed {
+        emit_glyphs(
+            label_glyphs,
+            Token::TEXT_PRIMARY,
+            z + 3,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     if desc.closable && interactive {
         out.sub_hits.push(

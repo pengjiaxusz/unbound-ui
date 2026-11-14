@@ -8,7 +8,7 @@ use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs, outlined, surface};
+use crate::primitive::{curve_stroke, focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -124,22 +124,52 @@ pub fn emit_collapsible(
         desc.z + 1,
     ));
 
-    let chev_r = Rect::new(
-        header_r.max().x - 20.0,
-        header_r.origin.y + (header_h - 8.0) * 0.5,
-        8.0,
-        8.0,
-    );
-    primitives.push(surface(
-        chev_r,
-        2.0,
-        if desc.open {
-            Token::PRIMARY
-        } else {
-            Token::TEXT_SECONDARY
-        },
-        desc.z + 2,
-    ));
+    let chev_cx = header_r.max().x - 16.0;
+    let chev_cy = header_r.origin.y + header_h * 0.5;
+    let chev_col = if desc.open {
+        Token::PRIMARY
+    } else {
+        Token::TEXT_SECONDARY
+    };
+    if desc.open {
+        curve_stroke(
+            [chev_cx - 4.0, chev_cy - 2.0],
+            [chev_cx, chev_cy + 2.0],
+            1.5,
+            chev_col,
+            desc.z + 2,
+            &mut primitives,
+            &mut payloads,
+        );
+        curve_stroke(
+            [chev_cx, chev_cy + 2.0],
+            [chev_cx + 4.0, chev_cy - 2.0],
+            1.5,
+            chev_col,
+            desc.z + 2,
+            &mut primitives,
+            &mut payloads,
+        );
+    } else {
+        curve_stroke(
+            [chev_cx - 2.0, chev_cy - 4.0],
+            [chev_cx + 2.0, chev_cy],
+            1.5,
+            chev_col,
+            desc.z + 2,
+            &mut primitives,
+            &mut payloads,
+        );
+        curve_stroke(
+            [chev_cx + 2.0, chev_cy],
+            [chev_cx - 2.0, chev_cy + 4.0],
+            1.5,
+            chev_col,
+            desc.z + 2,
+            &mut primitives,
+            &mut payloads,
+        );
+    }
 
     let body_h = ((desc.rect.height() - header_h) * desc.progress.clamp(0.0, 1.0)).max(0.0);
     let body_r = Rect::new(

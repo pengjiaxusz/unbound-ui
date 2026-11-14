@@ -14,7 +14,7 @@ use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs, instance, outlined};
+use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -475,32 +475,31 @@ pub fn emit_toolbar_overflow(
     } else {
         tokens.item
     };
-    let mut primitives = Vec::with_capacity(4);
+    let mut primitives = Vec::with_capacity(5);
+    let mut payloads = Vec::with_capacity(4);
     primitives.push(outlined(rect, 6.0, fill, Token::NONE, 0.0, 0.0, z));
     let cx = rect.origin.x + rect.size.x * 0.5;
     let cy = rect.origin.y + rect.size.y * 0.5;
-    let arm = rect.size.y * 0.16;
-    for (start, end) in [
-        ([cx - arm, cy - arm], [cx + arm * 0.4, cy - arm]),
-        ([cx - arm, cy + arm], [cx + arm * 0.4, cy + arm]),
-        ([cx - arm, cy - arm], [cx - arm, cy + arm]),
-    ] {
-        primitives.push(instance(
-            Rect::new(
-                start[0].min(end[0]),
-                start[1].min(end[1]),
-                (start[0] - end[0]).abs().max(1.5),
-                (start[1] - end[1]).abs().max(1.5),
-            ),
-            [0.0; 4],
+    let arm = (rect.size.y * 0.14).clamp(2.5, 4.5);
+    for dx in [-arm * 0.7, arm * 0.5] {
+        curve_stroke(
+            [cx + dx - arm * 0.6, cy - arm],
+            [cx + dx + arm * 0.4, cy],
+            1.5,
             tokens.icon,
-            Token::NONE,
-            0.0,
-            0.0,
-            PrimType::Line,
-            SubElement::Content,
             z,
-        ));
+            &mut primitives,
+            &mut payloads,
+        );
+        curve_stroke(
+            [cx + dx + arm * 0.4, cy],
+            [cx + dx - arm * 0.6, cy + arm],
+            1.5,
+            tokens.icon,
+            z,
+            &mut primitives,
+            &mut payloads,
+        );
     }
     let hit = (!disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(z), rect)
@@ -509,7 +508,7 @@ pub fn emit_toolbar_overflow(
     });
     WidgetOutput {
         primitives,
-        payloads: Vec::new(),
+        payloads,
         hit,
         a11y: Some(
             A11yNode::new(Role::Button, "More tools", rect)

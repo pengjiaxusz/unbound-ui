@@ -434,12 +434,23 @@ pub enum Icon {
     Play,
     Undo,
     Redo,
+    Dot,
 }
 
 /// 将图标居中绘制在 `rect` 中。
 pub fn icon(canvas: &mut Canvas<'_>, kind: Icon, rect: Rect, color: u16, background: u16) {
     let c = rect.center();
     match kind {
+        Icon::Dot => {
+            canvas.rect(
+                Rect::new(c.x - 2.0, c.y - 2.0, 4.0, 4.0),
+                2.0,
+                color,
+                0,
+                0.0,
+                0.0,
+            );
+        }
         Icon::Menu => {
             for i in 0..3 {
                 canvas.rect(

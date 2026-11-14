@@ -158,3 +158,43 @@ pub(crate) fn glyphs(
         primitives.push(glyph);
     }
 }
+
+/// 以退化二次贝塞尔曲线编码的直线描边（用于斜线、箭头与关闭叉号，避免 `PrimType::Line` 被绘制为实心矩形）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn curve_stroke(
+    start: [f32; 2],
+    end: [f32; 2],
+    thickness: f32,
+    color: Token,
+    z: u16,
+    primitives: &mut Vec<GpuPrimitiveInstance>,
+    payloads: &mut Vec<GpuPayload>,
+) {
+    let origin_x = start[0].min(end[0]);
+    let origin_y = start[1].min(end[1]);
+    let w = (start[0] - end[0]).abs().max(1.0);
+    let h = (start[1] - end[1]).abs().max(1.0);
+    let payload_idx = payloads.len() as u32;
+    payloads.push(GpuPayload::curve(
+        [start[0] - origin_x, start[1] - origin_y],
+        [
+            (start[0] + end[0]) * 0.5 - origin_x,
+            (start[1] + end[1]) * 0.5 - origin_y,
+        ],
+        [end[0] - origin_x, end[1] - origin_y],
+        thickness,
+    ));
+    let mut prim = instance(
+        Rect::new(origin_x, origin_y, w, h),
+        [0.0; 4],
+        color,
+        Token::NONE,
+        0.0,
+        0.0,
+        PrimType::Curve,
+        SubElement::Content,
+        z,
+    );
+    prim.extra_payload_idx = payload_idx;
+    primitives.push(prim);
+}

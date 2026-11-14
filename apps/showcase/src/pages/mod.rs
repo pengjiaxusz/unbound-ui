@@ -68,7 +68,7 @@ impl CategoryId {
             Self::Collections => "Collections",
             Self::Canvas => "Infinite Canvas",
             Self::Motion => "Motion, A11y & Telemetry",
-            Self::Components => "Components (91)",
+            Self::Components => "Components (99)",
             Self::System => "Engine Systems",
         }
     }

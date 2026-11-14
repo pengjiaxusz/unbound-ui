@@ -14,7 +14,7 @@ use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs, instance, outlined, surface};
+use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -523,6 +523,7 @@ pub fn emit_tab_close(
         tokens.close
     };
     let mut primitives = Vec::with_capacity(3);
+    let mut payloads = Vec::with_capacity(2);
     let inset = rect.size.x * 0.3;
     let thickness = 1.5;
     for (start, end) in [
@@ -535,7 +536,15 @@ pub fn emit_tab_close(
             [rect.origin.x + inset, rect.max().y - inset],
         ),
     ] {
-        primitives.push(stroke_between(start, end, thickness, color, desc.z));
+        curve_stroke(
+            start,
+            end,
+            thickness,
+            color,
+            desc.z,
+            &mut primitives,
+            &mut payloads,
+        );
     }
     primitives.push(focus_ring(
         rect.inflate(1.0),

@@ -8,7 +8,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::alert::Severity;
-use crate::primitive::{focus_ring, glyphs, outlined, surface};
+use crate::primitive::{curve_stroke, focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -79,12 +79,32 @@ pub fn emit_banner(
     primitives.push(surface(bar_r, 2.0, accent, desc.z + 1));
 
     let close_r = Rect::new(
-        desc.rect.max().x - 22.0,
-        desc.rect.origin.y + (desc.rect.height() - 14.0) * 0.5,
-        14.0,
-        14.0,
+        desc.rect.max().x - 26.0,
+        desc.rect.origin.y + (desc.rect.height() - 18.0) * 0.5,
+        18.0,
+        18.0,
     );
-    primitives.push(surface(close_r, 7.0, accent, desc.z + 1));
+    primitives.push(surface(close_r, 9.0, accent, desc.z + 1));
+    let cx = close_r.center().x;
+    let cy = close_r.center().y;
+    curve_stroke(
+        [cx - 3.0, cy - 3.0],
+        [cx + 3.0, cy + 3.0],
+        1.5,
+        Token::ON_PRIMARY,
+        desc.z + 2,
+        &mut primitives,
+        &mut payloads,
+    );
+    curve_stroke(
+        [cx + 3.0, cy - 3.0],
+        [cx - 3.0, cy + 3.0],
+        1.5,
+        Token::ON_PRIMARY,
+        desc.z + 2,
+        &mut primitives,
+        &mut payloads,
+    );
 
     primitives.push(focus_ring(
         desc.rect,

@@ -4,10 +4,11 @@ use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
+use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{focus_ring, outlined, surface};
+use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::table::ColumnSpec;
 use crate::{ControlState, WidgetOutput};
 
@@ -90,6 +91,18 @@ pub fn emit_tree_table(
     state: &TreeTableState,
     control: ControlState,
 ) -> WidgetOutput {
+    emit_tree_table_with_glyphs(node, desc, state, control, &[])
+}
+
+/// 输出带文本字形的树形表格图元与命中区域。
+#[must_use]
+pub fn emit_tree_table_with_glyphs(
+    node: u64,
+    desc: &TreeTableDesc,
+    state: &TreeTableState,
+    control: ControlState,
+    label_glyphs: &[GlyphQuad],
+) -> WidgetOutput {
     let mut out = WidgetOutput::default();
     let rect = desc.rect;
     let z = 700u16;
@@ -138,6 +151,62 @@ pub fn emit_tree_table(
         };
 
         out.primitives.push(surface(row_rect, 0.0, row_bg, z + 3));
+    }
+
+    if !label_glyphs.is_empty() {
+        emit_glyphs(
+            label_glyphs,
+            Token::TEXT_PRIMARY,
+            z + 4,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
+    for (row_idx, row) in desc.rows.iter().take(4).enumerate() {
+        if row.has_children {
+            let y = rect.origin.y + header_rect.height() + row_idx as f32 * row_h + row_h * 0.5;
+            let cx = rect.origin.x + 12.0 + row.depth as f32 * 14.0;
+            let expanded = state.is_expanded(row.id);
+            if expanded {
+                curve_stroke(
+                    [cx - 3.5, y - 1.5],
+                    [cx, y + 2.0],
+                    1.5,
+                    Token::TEXT_SECONDARY,
+                    z + 4,
+                    &mut out.primitives,
+                    &mut out.payloads,
+                );
+                curve_stroke(
+                    [cx, y + 2.0],
+                    [cx + 3.5, y - 1.5],
+                    1.5,
+                    Token::TEXT_SECONDARY,
+                    z + 4,
+                    &mut out.primitives,
+                    &mut out.payloads,
+                );
+            } else {
+                curve_stroke(
+                    [cx - 1.5, y - 3.5],
+                    [cx + 2.0, y],
+                    1.5,
+                    Token::TEXT_SECONDARY,
+                    z + 4,
+                    &mut out.primitives,
+                    &mut out.payloads,
+                );
+                curve_stroke(
+                    [cx + 2.0, y],
+                    [cx - 1.5, y + 3.5],
+                    1.5,
+                    Token::TEXT_SECONDARY,
+                    z + 4,
+                    &mut out.primitives,
+                    &mut out.payloads,
+                );
+            }
+        }
     }
 
     // 5. 外边框

@@ -4,10 +4,11 @@ use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
+use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{outlined, surface};
+use crate::primitive::{glyphs as emit_glyphs, outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
 pub const DESCRIPTION_ROW_HEIGHT: f32 = 32.0;
@@ -85,8 +86,20 @@ impl DescriptionsState {
 pub fn emit_descriptions(
     node: u64,
     desc: &DescriptionsDesc,
+    state: &DescriptionsState,
+    control: ControlState,
+) -> WidgetOutput {
+    emit_descriptions_with_glyphs(node, desc, state, control, &[])
+}
+
+/// 发射带文本字形的描述列表块图元与命中区域。
+#[must_use]
+pub fn emit_descriptions_with_glyphs(
+    node: u64,
+    desc: &DescriptionsDesc,
     _state: &DescriptionsState,
     control: ControlState,
+    label_glyphs: &[GlyphQuad],
 ) -> WidgetOutput {
     let mut out = WidgetOutput::default();
     let rect = desc.rect;
@@ -107,6 +120,16 @@ pub fn emit_descriptions(
             Token::OUTLINE,
             z + 1 + r_idx as u16,
         ));
+    }
+
+    if !label_glyphs.is_empty() {
+        emit_glyphs(
+            label_glyphs,
+            Token::TEXT_PRIMARY,
+            z + 4,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
     }
 
     // 3. 外层边框

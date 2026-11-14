@@ -4,10 +4,13 @@ use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
+use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::{ButtonVariant, BUTTON_LAYER};
-use crate::primitive::{focus_ring, outlined, surface};
+use crate::primitive::{
+    curve_stroke, focus_ring, glyphs as emit_glyphs, instance, outlined, surface,
+};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 pub const DROPDOWN_WIDTH: f32 = 32.0;
@@ -75,6 +78,18 @@ pub fn emit_split_button(
     state: &SplitButtonState,
     control: ControlState,
 ) -> WidgetOutput {
+    emit_split_button_with_glyphs(node, desc, state, control, &[])
+}
+
+/// 输出带文本字形的分裂按钮图元与命中区域。
+#[must_use]
+pub fn emit_split_button_with_glyphs(
+    node: u64,
+    desc: &SplitButtonDesc,
+    state: &SplitButtonState,
+    control: ControlState,
+    label_glyphs: &[GlyphQuad],
+) -> WidgetOutput {
     let mut out = WidgetOutput::default();
     let rect = desc.rect;
     let arrow_w = DROPDOWN_WIDTH.min(rect.width() * 0.4);
@@ -106,11 +121,20 @@ pub fn emit_split_button(
         Token::PRIMARY
     };
 
-    // 1. 主操作按钮背景表面
-    out.primitives
-        .push(surface(main_rect, desc.radius, bg_token, z));
+    // 1. 主操作按钮背景表面（仅左侧圆角）
+    out.primitives.push(instance(
+        main_rect,
+        [desc.radius, 0.0, 0.0, desc.radius],
+        bg_token,
+        Token::NONE,
+        0.0,
+        0.0,
+        unbound_gpu::data::PrimType::RoundedRect,
+        unbound_gpu::data::SubElement::Background,
+        z,
+    ));
 
-    // 2. 下拉触发器背景表面
+    // 2. 下拉触发器背景表面（仅右侧圆角）
     let arrow_bg = if disabled {
         Token::DISABLED
     } else if state.menu_open || state.arrow_pressed {
@@ -118,8 +142,17 @@ pub fn emit_split_button(
     } else {
         bg_token
     };
-    out.primitives
-        .push(surface(arrow_rect, desc.radius, arrow_bg, z + 1));
+    out.primitives.push(instance(
+        arrow_rect,
+        [0.0, desc.radius, desc.radius, 0.0],
+        arrow_bg,
+        Token::NONE,
+        0.0,
+        0.0,
+        unbound_gpu::data::PrimType::RoundedRect,
+        unbound_gpu::data::SubElement::Background,
+        z + 1,
+    ));
 
     // 3. 分隔线
     out.primitives
@@ -140,18 +173,54 @@ pub fn emit_split_button(
         z + 3,
     ));
 
-    // 5. 焦点环
+    // 5. 下拉箭头与标签字形
+    let ink = if disabled {
+        Token::TEXT_SECONDARY
+    } else {
+        Token::ON_PRIMARY
+    };
+    let acx = arrow_rect.center().x;
+    let acy = arrow_rect.center().y;
+    curve_stroke(
+        [acx - 3.5, acy - 1.5],
+        [acx, acy + 2.0],
+        1.5,
+        ink,
+        z + 4,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+    curve_stroke(
+        [acx, acy + 2.0],
+        [acx + 3.5, acy - 1.5],
+        1.5,
+        ink,
+        z + 4,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+    if !label_glyphs.is_empty() {
+        emit_glyphs(
+            label_glyphs,
+            ink,
+            z + 4,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
+
+    // 6. 焦点环
     out.primitives.push(focus_ring(
         rect,
         desc.radius,
         Token::FOCUS_RING,
         2.0,
-        z + 4,
+        z + 5,
         control.focused && !disabled,
     ));
 
     // 多命中区域：主操作区与下拉箭头区
-    let action_node = node;
+    let action_node = node ^ 0xFE;
     let arrow_node = node ^ 0xFF;
 
     if !disabled {
