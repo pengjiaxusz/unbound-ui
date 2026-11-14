@@ -523,6 +523,8 @@ pub struct AppContext {
     pub viewport: Vec2,
     /// 当前激活主题。
     pub theme: ThemeKind,
+    /// 当前原生窗口是否处于最大化状态（由窗口运行器自动同步）。
+    pub window_maximized: bool,
     /// 当前聚焦节点，与焦点管理器保持同步。
     pub focused: Option<u64>,
     /// 是否应绘制焦点环。
@@ -582,6 +584,7 @@ impl AppContext {
         Self {
             viewport,
             theme: ThemeKind::Dark,
+            window_maximized: false,
             focused: None,
             focus_visible: false,
             hovered: None,
@@ -763,6 +766,8 @@ pub struct ViewContext {
     /// 由 [`AppRuntime::invalidate`] 设置：通常在无变更时跳过重建的应用
     /// 必须遵守此标志并执行重建。
     pub force: bool,
+    /// 窗口当前是否处于最大化状态（决定标题栏最大化/还原按钮图标）。
+    pub window_maximized: bool,
 }
 
 impl ViewContext {
@@ -836,7 +841,40 @@ pub struct PendingWidget {
     pub spec: WidgetSpec,
 }
 
-/// 传递给 [`Application::view`] 的场景构建器。
+/// 标题栏插槽的构建闭包：接收插槽容器并在其中声明自定义控件。
+pub type TitleBarSlot<'a> = Box<dyn for<'b> FnOnce(&mut ViewBuilder<'b>) + 'a>;
+
+/// 标题栏三段式自定义插槽（`left` / `center` / `actions`）。
+#[derive(Default)]
+pub struct TitleBarSlots<'a> {
+    /// 标题栏左侧自定义控件区（如导航折叠按钮、应用图标、面包屑）。
+    pub left: Option<TitleBarSlot<'a>>,
+    /// 标题栏中间自定义控件区（如全局搜索框 / 命令面板入口）。
+    pub center: Option<TitleBarSlot<'a>>,
+    /// 标题栏右侧自定义操作区（位于窗口控制按钮左侧，如主题切换、缩放比、HUD 开关）。
+    pub actions: Option<TitleBarSlot<'a>>,
+}
+
+impl<'a> TitleBarSlots<'a> {
+    #[must_use]
+    pub fn left(mut self, f: impl FnOnce(&mut ViewBuilder<'_>) + 'a) -> Self {
+        self.left = Some(Box::new(f));
+        self
+    }
+
+    #[must_use]
+    pub fn center(mut self, f: impl FnOnce(&mut ViewBuilder<'_>) + 'a) -> Self {
+        self.center = Some(Box::new(f));
+        self
+    }
+
+    #[must_use]
+    pub fn actions(mut self, f: impl FnOnce(&mut ViewBuilder<'_>) + 'a) -> Self {
+        self.actions = Some(Box::new(f));
+        self
+    }
+}
+
 pub struct ViewBuilder<'a> {
     collector: &'a mut SceneCollector,
     /// 不可变帧上下文。
@@ -893,13 +931,22 @@ impl<'a> ViewBuilder<'a> {
     }
 
     /// 使用自定义配置声明无边框窗口标题栏。
-    ///
-    /// 与 showcase 的顶栏一致：按视口宽度显式铺满、标题靠左、窗口按钮链贴右边缘，
-    /// 并绘制 `HEADER_BG` 背景与底部分隔线。显式像素宽度是必需的——应用的根容器
-    /// 为 `AUTO`（由内容撑开），百分比宽度在父子循环依赖下会退化成内容宽度，
-    /// 使标题与按钮全挤在窗口左上角。
     pub fn title_bar_with(&mut self, desc: unbound_widgets::TitleBarDesc) -> NodeId {
+        self.title_bar_custom(desc, TitleBarSlots::default())
+    }
+
+    /// 声明支持三段式自定义插槽（`left` / `center` / `actions`）的无边框窗口标题栏。
+    ///
+    /// 右上角固定渲染与 Showcase 一致的贴边几何窗口控制按钮（最小化 / 最大化 / 关闭），
+    /// 并自动同步 `AppContext::window_maximized` 状态；其余控件通过插槽注入，空白区域自动
+    /// 回落为系统原生拖拽与双击最大化。
+    pub fn title_bar_custom(
+        &mut self,
+        desc: unbound_widgets::TitleBarDesc,
+        slots: TitleBarSlots<'_>,
+    ) -> NodeId {
         let width = self.ctx.viewport.x;
+        let maximized = desc.is_maximized || self.ctx.window_maximized;
         let bar_desc = RawNodeDesc::container()
             .row()
             .width(Dim::px(width))
@@ -908,8 +955,6 @@ impl<'a> ViewBuilder<'a> {
             .align(unbound_abi::Align::Center)
             .justify(unbound_abi::Justify::SpaceBetween)
             .gap(8.0);
-        // 纯布局容器不在挂载控件表中，因此把拖拽区域键让给覆盖整条标题栏的
-        // 背景装饰控件：窗口运行器用它的包围盒设定 Aero 拖拽高度。
         let root_key = unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(9);
         self.container(root_key, bar_desc, |bar| {
             let chrome_desc = RawNodeDesc::container()
@@ -921,37 +966,86 @@ impl<'a> ViewBuilder<'a> {
                 chrome_desc,
                 unbound_widgets::TitleBarChrome,
             );
-            bar.badge(
-                unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(10),
-                BadgeDesc::label(desc.title),
-            );
             bar.row(
-                unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(11),
-                |btns| {
-                    if desc.show_minimize {
-                        btns.button(
-                            desc.minimize_id,
-                            ButtonDesc::label(" — ")
-                                .size(unbound_widgets::ButtonSize::Sm)
-                                .variant(unbound_widgets::ButtonVariant::Subtle),
+                unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(12),
+                |left| {
+                    if desc.show_title {
+                        left.badge(
+                            unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(10),
+                            BadgeDesc::label(desc.title),
                         );
                     }
-                    if desc.show_maximize {
-                        btns.button(
-                            desc.maximize_id,
-                            ButtonDesc::label(if desc.is_maximized { " ❐ " } else { " □ " })
-                                .size(unbound_widgets::ButtonSize::Sm)
-                                .variant(unbound_widgets::ButtonVariant::Subtle),
+                    if let Some(build_left) = slots.left {
+                        build_left(left);
+                    }
+                },
+            );
+            if let Some(build_center) = slots.center {
+                bar.row(
+                    unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(13),
+                    build_center,
+                );
+            }
+            let right_desc = RawNodeDesc::container()
+                .row()
+                .align(unbound_abi::Align::Center)
+                .gap(8.0);
+            bar.container(
+                unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(14),
+                right_desc,
+                |right| {
+                    if let Some(build_actions) = slots.actions {
+                        right.row(
+                            unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(15),
+                            build_actions,
                         );
                     }
-                    if desc.show_close {
-                        btns.button(
-                            desc.close_id,
-                            ButtonDesc::label(" ✕ ")
-                                .size(unbound_widgets::ButtonSize::Sm)
-                                .variant(unbound_widgets::ButtonVariant::Subtle),
-                        );
-                    }
+                    let caption_row_desc = RawNodeDesc::container()
+                        .row()
+                        .align(unbound_abi::Align::Center)
+                        .gap(0.0);
+                    right.container(
+                        unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(11),
+                        caption_row_desc,
+                        |btns| {
+                            if desc.show_minimize {
+                                btns.add_with_layout(
+                                    desc.minimize_id,
+                                    RawNodeDesc::container()
+                                        .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
+                                        .height(Dim::px(desc.height)),
+                                    unbound_widgets::WindowCaptionButton::new(
+                                        unbound_widgets::WindowCaptionKind::Minimize,
+                                        desc.height,
+                                    ),
+                                );
+                            }
+                            if desc.show_maximize {
+                                btns.add_with_layout(
+                                    desc.maximize_id,
+                                    RawNodeDesc::container()
+                                        .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
+                                        .height(Dim::px(desc.height)),
+                                    unbound_widgets::WindowCaptionButton::new(
+                                        unbound_widgets::WindowCaptionKind::Maximize { maximized },
+                                        desc.height,
+                                    ),
+                                );
+                            }
+                            if desc.show_close {
+                                btns.add_with_layout(
+                                    desc.close_id,
+                                    RawNodeDesc::container()
+                                        .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
+                                        .height(Dim::px(desc.height)),
+                                    unbound_widgets::WindowCaptionButton::new(
+                                        unbound_widgets::WindowCaptionKind::Close,
+                                        desc.height,
+                                    ),
+                                );
+                            }
+                        },
+                    );
                 },
             );
         })
@@ -1604,6 +1698,13 @@ impl<A: Application> AppRuntime<A> {
         &self.ctx
     }
 
+    /// 可变访问应用上下文。
+    ///
+    /// 窗口 host 借此在每帧构建视图前同步窗口最大化状态等外部输入。
+    pub fn context_mut(&mut self) -> &mut AppContext {
+        &mut self.ctx
+    }
+
     /// 获取最近一帧的场景。
     #[must_use]
     pub fn scene(&self) -> &SceneCollector {
@@ -2000,6 +2101,7 @@ impl<A: Application> AppRuntime<A> {
             focused: self.ctx.focused,
             focus_visible: self.ctx.focus_visible,
             force: self.force_rebuild,
+            window_maximized: self.ctx.window_maximized,
         };
         let mut focus_groups = Vec::new();
         let mut view = ViewBuilder {

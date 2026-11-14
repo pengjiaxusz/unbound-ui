@@ -22,3 +22,4 @@
 - [禁止] 在 `view()` 视图构建阶段直接修改业务状态或触发 I/O -> [原因] 保证视图发射纯函数化与无头可复现 -> [守卫] `crates/unbound-app/tests/runtime_headless.rs`
 - [必须] 每帧提交前通过 `SceneCollector::push_clip`/`pop_clip` 配对校验 -> [原因] 防止裁剪栈失衡污染后续图元 -> [守卫] `crates/unbound-widgets/src/lib.rs::SceneCollector`
 - [必须] 场景发射侧索引在跨 widget 合并后仍为全局索引 -> [原因] 着色器无偏移换算，局部索引会串读相邻数据 -> [守卫] `crates/unbound-gpu/src/frame.rs`
+- [必须] 窗口 host 同步的外部窗口状态（如 `window_maximized`）必须在 `AppRuntime::frame` 之前经 `AppRuntime::context_mut` 写入 `AppContext`，再由 `ViewContext` 快照传给 `ViewBuilder` -> [原因] 视图在 `frame` 内构建，帧末写入会让默认标题栏的最大化/还原图标滞后一帧；视图阶段只读上下文、不得回写业务状态 -> [位置] `crates/unbound-app/src/window_runner.rs`、`crates/unbound-app/src/lib.rs`

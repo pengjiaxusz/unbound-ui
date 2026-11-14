@@ -2431,13 +2431,14 @@ impl Renderer {
 
     /// 释放全部 GPU 资源并消费渲染器实例。
     pub fn destroy(self) {
-        // SAFETY: 本渲染器拥有该信号量且所有帧均已退役。
+        // 先等待设备空闲，避免 present_semaphore 仍在队列使用中被销毁。
+        self.gpu.wait_idle();
+        // SAFETY: 设备已空闲且本渲染器拥有该信号量。
         unsafe {
             self.gpu
                 .device
                 .destroy_semaphore(self.present_semaphore, None);
         }
-        self.gpu.wait_idle();
         if let Some(scope) = &self.timing {
             scope.destroy(&self.gpu);
         }

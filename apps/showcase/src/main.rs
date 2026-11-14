@@ -223,7 +223,7 @@ impl Showcase {
         // 会导致角落判定错位。
         //
         let ui_scale = self.effective_scale();
-        let button_h = 48.0 * ui_scale;
+        let button_h = showcase::layout_tree::TOP_BAR_HEIGHT * ui_scale;
         let button_w = 3.0 * 46.0 * ui_scale;
         if self.pointer.y < button_h && self.pointer.x > size.width as f32 - button_w {
             return None;
@@ -889,6 +889,8 @@ impl PlatformApp for Showcase {
                 self.resize_edge = self.resize_edge_at(window);
                 if self.resize_edge.is_none() {
                     self.app.pointer_move(self.logical(self.pointer));
+                } else {
+                    self.app.pointer_move(Vec2::new(-1.0, -1.0));
                 }
             }
             PlatformEvent::MouseWheel { delta_y, .. } => {
@@ -946,6 +948,26 @@ impl PlatformApp for Showcase {
             }
             PlatformEvent::FileHoverCancelled => {
                 self.app.file_hover_cancelled();
+            }
+            PlatformEvent::Ime(ime) => {
+                let update = match ime {
+                    unbound_platform::ImeEvent::Preedit(text, selection) => {
+                        unbound_app::ImeUpdate {
+                            preedit: text,
+                            cursor_range: selection,
+                            commit: None,
+                        }
+                    }
+                    unbound_platform::ImeEvent::Commit(text) => unbound_app::ImeUpdate {
+                        preedit: String::new(),
+                        cursor_range: None,
+                        commit: Some(text),
+                    },
+                    unbound_platform::ImeEvent::Enabled | unbound_platform::ImeEvent::Disabled => {
+                        unbound_app::ImeUpdate::default()
+                    }
+                };
+                self.app.ime(update);
             }
             PlatformEvent::CloseRequested => return Flow::Exit,
             _ => {}
@@ -1238,7 +1260,7 @@ impl Showcase {
             // title_bar_height 保持为 0，使标题栏内的搜索框、主题切换与缩放按钮仍由客户端事件驱动。
             let logical_w = self.app.context().viewport.x;
             let btn_w = 46.0;
-            let btn_h = 48.0;
+            let btn_h = showcase::layout_tree::TOP_BAR_HEIGHT;
             metrics.set_minimize_button_rect(unbound_math::Rect::new(
                 logical_w - 3.0 * btn_w,
                 0.0,

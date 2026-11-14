@@ -3,15 +3,21 @@
 //! 所有基于 `unbound-app` 无边框窗口运行的应用与示例均可使用 [`TitleBarDesc`]
 //! 提供一致的窗口标题展示、拖拽区域以及最小化 / 最大化 / 关闭按钮。
 
-use unbound_gpu::data::{PrimType, SubElement};
+use accesskit::Role;
+use unbound_a11y::A11yNode;
+use unbound_gpu::data::{GpuPayload, GpuPrimitiveInstance, PrimType, SubElement};
+use unbound_input::HitRegion;
 use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
 
 use crate::primitive::instance;
-use crate::{ControlState, TextCtx, UiWidget, WidgetOutput};
+use crate::{ControlState, PointerPhase, TextCtx, UiWidget, WidgetOutput};
 
 /// 默认标题栏高度（逻辑像素）。
 pub const TITLE_BAR_HEIGHT: f32 = 38.0;
+
+/// 窗口控制按钮（最小化 / 最大化 / 关闭）的默认宽度（逻辑像素，与 Showcase 一致）。
+pub const TITLE_BAR_CAPTION_WIDTH: f32 = 46.0;
 
 /// 标题栏拖拽区域（背景装饰控件）的保留节点键。
 ///
@@ -73,6 +79,205 @@ impl UiWidget for TitleBarChrome {
     }
 }
 
+/// 窗口控制按钮类型。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowCaptionKind {
+    /// 最小化窗口。
+    Minimize,
+    /// 最大化或还原窗口。
+    Maximize { maximized: bool },
+    /// 关闭窗口（悬停/按压时呈红色警示背景）。
+    Close,
+}
+
+/// 与 Showcase 完全一致的无边框窗口控制按钮控件（46px 宽、零圆角贴边、几何图元图标）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowCaptionButton {
+    pub kind: WindowCaptionKind,
+    pub height: f32,
+}
+
+impl WindowCaptionButton {
+    #[must_use]
+    pub fn new(kind: WindowCaptionKind, height: f32) -> Self {
+        Self {
+            kind,
+            height: height.max(24.0),
+        }
+    }
+}
+
+impl UiWidget for WindowCaptionButton {
+    type State = ();
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(TITLE_BAR_CAPTION_WIDTH, self.height)
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        _state: &Self::State,
+        _text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut output = WidgetOutput::default();
+        let active = matches!(control.phase, PointerPhase::Hovered | PointerPhase::Pressed);
+        let destructive = matches!(self.kind, WindowCaptionKind::Close);
+        let bg_token = if destructive {
+            Token::ERROR
+        } else {
+            Token::CONTROL_HOVER
+        };
+        let mut bg = instance(
+            rect,
+            [0.0; 4],
+            bg_token,
+            Token::NONE,
+            0.0,
+            0.0,
+            PrimType::RoundedRect,
+            SubElement::Background,
+            0,
+        );
+        bg.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(0, if active { 1.0 } else { 0.0 });
+        output.primitives.push(bg);
+
+        let fg = if destructive && active {
+            Token::ON_ERROR
+        } else {
+            Token::TEXT_PRIMARY
+        };
+        let middle = rect.center();
+        match self.kind {
+            WindowCaptionKind::Minimize => {
+                output.primitives.push(instance(
+                    Rect::new(middle.x - 5.0, (middle.y - 0.5).round(), 10.0, 1.0),
+                    [0.0; 4],
+                    fg,
+                    Token::NONE,
+                    0.0,
+                    0.0,
+                    PrimType::RoundedRect,
+                    SubElement::Content,
+                    1,
+                ));
+            }
+            WindowCaptionKind::Maximize { maximized } => {
+                if maximized {
+                    output.primitives.push(instance(
+                        Rect::new(middle.x - 3.0, middle.y - 5.0, 8.0, 8.0),
+                        [0.0; 4],
+                        Token::NONE,
+                        fg,
+                        1.0,
+                        0.0,
+                        PrimType::RoundedRect,
+                        SubElement::Content,
+                        1,
+                    ));
+                    let occluder = if active {
+                        Token::CONTROL_HOVER
+                    } else {
+                        Token::HEADER_BG
+                    };
+                    output.primitives.push(instance(
+                        Rect::new(middle.x - 5.0, middle.y - 3.0, 8.0, 8.0),
+                        [0.0; 4],
+                        occluder,
+                        fg,
+                        1.0,
+                        0.0,
+                        PrimType::RoundedRect,
+                        SubElement::Content,
+                        2,
+                    ));
+                } else {
+                    let square = Rect::new(middle.x - 5.0, middle.y - 5.0, 10.0, 10.0);
+                    let mut pad = instance(
+                        square,
+                        [0.0; 4],
+                        Token::NONE,
+                        Token::NONE,
+                        0.0,
+                        0.0,
+                        PrimType::RoundedRect,
+                        SubElement::Content,
+                        1,
+                    );
+                    pad.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(1, 0.0);
+                    output.primitives.push(pad);
+                    output.primitives.push(instance(
+                        square,
+                        [0.0; 4],
+                        Token::NONE,
+                        fg,
+                        1.0,
+                        0.0,
+                        PrimType::RoundedRect,
+                        SubElement::Content,
+                        2,
+                    ));
+                }
+            }
+            WindowCaptionKind::Close => {
+                let half = 4.5;
+                let strokes = [
+                    (
+                        (middle.x - half, middle.y - half),
+                        (middle.x + half, middle.y + half),
+                    ),
+                    (
+                        (middle.x + half, middle.y - half),
+                        (middle.x - half, middle.y + half),
+                    ),
+                ];
+                for (from, to) in strokes {
+                    let origin = Rect::new(
+                        from.0.min(to.0),
+                        from.1.min(to.1),
+                        (from.0 - to.0).abs().max(1.0),
+                        (from.1 - to.1).abs().max(1.0),
+                    );
+                    let mut prim = instance(
+                        origin,
+                        [0.0; 4],
+                        fg,
+                        Token::NONE,
+                        0.0,
+                        0.0,
+                        PrimType::Curve,
+                        SubElement::Content,
+                        1,
+                    );
+                    let payload = GpuPayload::curve(
+                        [from.0 - origin.origin.x, from.1 - origin.origin.y],
+                        [
+                            (from.0 + to.0) * 0.5 - origin.origin.x,
+                            (from.1 + to.1) * 0.5 - origin.origin.y,
+                        ],
+                        [to.0 - origin.origin.x, to.1 - origin.origin.y],
+                        1.25,
+                    );
+                    prim.extra_payload_idx = output.payloads.len() as u32;
+                    output.payloads.push(payload);
+                    output.primitives.push(prim);
+                }
+            }
+        }
+        let label = match self.kind {
+            WindowCaptionKind::Minimize => "Minimize window",
+            WindowCaptionKind::Maximize { maximized: true } => "Restore window",
+            WindowCaptionKind::Maximize { maximized: false } => "Maximize window",
+            WindowCaptionKind::Close => "Close window",
+        };
+        output.hit = Some(HitRegion::new(node, 0, 0, rect));
+        output.a11y = Some(A11yNode::new(Role::Button, label.to_owned(), rect));
+        output
+    }
+}
+
 /// 默认标题栏“最小化”按钮的保留节点键。
 pub const TITLE_BAR_MINIMIZE_ID: u64 = 0xFFFF_FF01;
 
@@ -103,6 +308,8 @@ pub struct TitleBarDesc {
     pub maximize_id: u64,
     /// 关闭按钮节点键。
     pub close_id: u64,
+    /// 是否显示默认标题徽章（使用自定义 `left` 插槽时可关闭）。
+    pub show_title: bool,
 }
 
 impl Default for TitleBarDesc {
@@ -125,6 +332,7 @@ impl TitleBarDesc {
             minimize_id: TITLE_BAR_MINIMIZE_ID,
             maximize_id: TITLE_BAR_MAXIMIZE_ID,
             close_id: TITLE_BAR_CLOSE_ID,
+            show_title: true,
         }
     }
 
@@ -183,6 +391,13 @@ impl TitleBarDesc {
         self.close_id = id;
         self
     }
+
+    /// 设置是否显示默认标题。
+    #[must_use]
+    pub fn show_title(mut self, show: bool) -> Self {
+        self.show_title = show;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -202,5 +417,40 @@ mod tests {
         assert!(desc.show_maximize);
         assert!(desc.show_close);
         assert_eq!(desc.close_id, TITLE_BAR_CLOSE_ID);
+        assert!(desc.show_title);
+    }
+
+    #[test]
+    fn window_caption_button_emits_showcase_geometry() {
+        // 几何图元按钮不排版文字，但仍需提供合法的文本上下文给 `UiWidget` 调用。
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut font = crate::TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 0,
+        };
+        let rect = Rect::new(0.0, 0.0, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_HEIGHT);
+        let min_out = WindowCaptionButton::new(WindowCaptionKind::Minimize, TITLE_BAR_HEIGHT)
+            .emit_laid_out(1, rect, ControlState::default(), &(), &mut font);
+        assert_eq!(min_out.primitives.len(), 2);
+        assert!(min_out.hit.is_some());
+
+        let max_out = WindowCaptionButton::new(
+            WindowCaptionKind::Maximize { maximized: false },
+            TITLE_BAR_HEIGHT,
+        )
+        .emit_laid_out(2, rect, ControlState::default(), &(), &mut font);
+        let restore_out = WindowCaptionButton::new(
+            WindowCaptionKind::Maximize { maximized: true },
+            TITLE_BAR_HEIGHT,
+        )
+        .emit_laid_out(2, rect, ControlState::default(), &(), &mut font);
+        assert_eq!(max_out.primitives.len(), restore_out.primitives.len());
+
+        let close_out = WindowCaptionButton::new(WindowCaptionKind::Close, TITLE_BAR_HEIGHT)
+            .emit_laid_out(3, rect, ControlState::default(), &(), &mut font);
+        assert_eq!(close_out.primitives.len(), 3);
+        assert_eq!(close_out.payloads.len(), 2);
     }
 }

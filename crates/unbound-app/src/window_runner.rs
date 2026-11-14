@@ -218,9 +218,15 @@ impl<A: Application> WindowedRunner<A> {
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
         self.atlases = None;
-        if let (Some(renderer), Some(swapchain), Some(surface)) = (renderer, swapchain, surface) {
-            swapchain.destroy(&renderer.gpu);
-            surface.destroy(&renderer.gpu);
+        if let Some(renderer) = renderer {
+            // 必须先等待队列空闲，确保在途帧信号量与交换链图像全部退役后再销毁。
+            renderer.gpu.wait_idle();
+            if let Some(swapchain) = swapchain {
+                swapchain.destroy(&renderer.gpu);
+            }
+            if let Some(surface) = surface {
+                surface.destroy(&renderer.gpu);
+            }
             renderer.destroy();
         }
     }
@@ -234,9 +240,14 @@ impl<A: Application> WindowedRunner<A> {
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
         self.atlases = None;
-        if let (Some(renderer), Some(swapchain), Some(surface)) = (renderer, swapchain, surface) {
-            swapchain.destroy(&renderer.gpu);
-            surface.destroy(&renderer.gpu);
+        if let Some(renderer) = renderer {
+            renderer.gpu.wait_idle();
+            if let Some(swapchain) = swapchain {
+                swapchain.destroy(&renderer.gpu);
+            }
+            if let Some(surface) = surface {
+                surface.destroy(&renderer.gpu);
+            }
             renderer.destroy();
         }
 
@@ -522,6 +533,8 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
 
+        // 标题栏在构建视图时读取该状态，必须在 `runtime.frame` 之前同步，避免滞后一帧。
+        self.runtime.context_mut().window_maximized = window.is_maximized();
         let report = self.runtime.frame(dt);
 
         // `reduce` 可能改动 `ctx.theme`（示例 01 的主题按钮正是如此），

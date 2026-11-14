@@ -61,7 +61,17 @@ impl Application for CounterApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("root"), |col| {
-            col.title_bar("01 — Hello Counter");
+            col.title_bar_custom(
+                TitleBarDesc::new("01 — Hello Counter"),
+                TitleBarSlots::default().actions(|act| {
+                    act.button(
+                        BTN_THEME,
+                        ButtonDesc::label(format!("Theme: {:?}", state.theme))
+                            .size(unbound_widgets::ButtonSize::Sm)
+                            .variant(unbound_widgets::ButtonVariant::Subtle),
+                    );
+                }),
+            );
             col.card(ui_key!("counter_card"), CardDesc::default(), |card| {
                 card.row(ui_key!("header_row"), |hdr| {
                     hdr.badge(

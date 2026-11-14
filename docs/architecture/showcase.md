@@ -27,3 +27,5 @@
 - [必须] 运行时滚动全页后 `emitted_widgets` 并集 100% 覆盖 `WidgetCatalogId::ALL`，且 `sidebar_all_targets()` 100% 覆盖全部 `PageId::ALL` 与 `WidgetCatalogId::ALL` -> [守卫] `apps/showcase/tests/shell.rs`
 - [必须] 侧边栏折叠与展开过程中 `layout.nav_width` 每帧严格单调变化，零反向抖动 -> [守卫] `apps/showcase/tests/shell.rs::sidebar_collapse_and_expand_is_monotonic_without_jitter`
 - [必须] 10 个 `unbound-app` 示例逐个开窗抓屏验收 -> [原因] 示例走通用 `WindowedRunner`，与展台自管呈现链不同；「进程不崩」无法证明像素正确 -> [守卫] `just test-examples` + 开窗抓屏
+- [必须] `Showcase::event` 必须转发 `PlatformEvent::Ime` 至 `AppRuntime::ime`，且全局搜索 `GalleryState::search_hits()` 同时覆盖 `PageId::ALL` 与 `WidgetCatalogId::ALL`（`SearchHit::Page` / `SearchHit::Component`） -> [原因] 防止 IME 开启后输入字符被 `ime_owns_text` 屏蔽而无处提交，并支持直接搜索跳转任意标准组件 -> [位置] `apps/showcase/src/{main.rs, state.rs, shell.rs, target.rs}`
+- [必须] 组件展厅 `pages/components.rs` 通过 `emit_widget_with_params` 透传 `checked`、`selected`、归一化滑块值及分段旋钮索引，并按旋钮真实标签判定 `disabled` -> [原因] 避免硬编码 `false` 与错位禁用导致大部分组件卡片无法响应交互 -> [位置] `apps/showcase/src/pages/components.rs`

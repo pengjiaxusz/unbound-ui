@@ -1066,8 +1066,13 @@ impl GalleryApp {
                     self.state.bump();
                 }
                 PlatformKey::Named(name) if name == "Enter" => {
-                    if let Some(page) = self.state.search_results().first().copied() {
-                        self.navigate(page);
+                    if let Some(hit) = self.state.search_hits().first().copied() {
+                        match hit {
+                            crate::state::SearchHit::Page(page) => self.navigate(page),
+                            crate::state::SearchHit::Component(id) => {
+                                self.navigate_to_component(id);
+                            }
+                        }
                     }
                 }
                 PlatformKey::Character(text) if !modifiers.control => {
@@ -1377,6 +1382,11 @@ impl GalleryApp {
                 PageId::Settings
             }),
             Target::SearchResult(page) => self.navigate(PageId::from_index(page as usize)),
+            Target::SearchComponent(index) => {
+                if let Some(&id) = unbound_widgets::WidgetCatalogId::ALL.get(index as usize) {
+                    self.navigate_to_component(id);
+                }
+            }
             Target::Knob(page, card, knob) => {
                 // 滑块已由按压和拖拽移动过；开关或复选框在此处翻转。
                 //
@@ -1944,7 +1954,7 @@ impl GalleryApp {
 
         // 传送门（Portals）。
         if self.state.search_focused {
-            let overlay = search_overlay_rect(&self.layout);
+            let overlay = search_overlay_rect(&self.layout, self.state.search_hits().len());
             builder.open(NodeKind::Portal, overlay, "Command palette");
             builder.set_overlays_siblings(true);
             let results = self.state.search_results();
@@ -2162,7 +2172,7 @@ fn nav_height(layout: &ShellLayout) -> f32 {
     height + 90.0
 }
 
-fn search_overlay_rect(layout: &ShellLayout) -> Rect {
+fn search_overlay_rect(layout: &ShellLayout, count: usize) -> Rect {
     let width = layout.search.size.x.max(380.0);
     let x = layout
         .search
@@ -2170,7 +2180,7 @@ fn search_overlay_rect(layout: &ShellLayout) -> Rect {
         .x
         .min(layout.viewport.max().x - width - 14.0)
         .max(14.0);
-    let results = 4.0;
+    let results = (count.max(1) as f32).min(6.0);
     Rect::new(
         x,
         layout.search.max().y + 6.0,
@@ -3413,8 +3423,8 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
         return;
     }
     let palette = *canvas.palette;
-    let results = state.search_results();
-    let panel = search_overlay_rect(layout);
+    let hits = state.search_hits();
+    let panel = search_overlay_rect(layout, hits.len());
     canvas.rect(
         panel,
         12.0,
@@ -3456,7 +3466,7 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
         );
         return;
     }
-    if results.is_empty() {
+    if hits.is_empty() {
         canvas.text(
             "No controls match that query.",
             Rect::new(
@@ -3472,20 +3482,42 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
         );
         return;
     }
-    for (index, page) in results.iter().enumerate() {
+    for (index, hit) in hits.iter().enumerate() {
         let row = Rect::new(
             panel.origin.x + 6.0,
             panel.origin.y + 30.0 + index as f32 * 36.0,
             panel.size.x - 12.0,
             34.0,
         );
-        let node = target::id(Target::SearchResult(page.index() as u8));
+        let (node, active, title, meta, a11y_label) = match *hit {
+            crate::state::SearchHit::Page(page) => {
+                let info = page.info();
+                (
+                    target::id(Target::SearchResult(page.index() as u8)),
+                    page == state.active_page,
+                    info.short.to_string(),
+                    format!(
+                        "{} · {}",
+                        page.category().label(),
+                        info.crates.first().copied().unwrap_or("unbound")
+                    ),
+                    info.title.to_string(),
+                )
+            }
+            crate::state::SearchHit::Component(id) => (
+                target::id(Target::SearchComponent(id as u8)),
+                state.active_page == PageId::Components,
+                crate::pages::components::component_nav_label(id).to_string(),
+                format!("Component · {}", id.module_name()),
+                format!("Component {}", id.module_name()),
+            ),
+        };
         let hover = canvas.visual(node, false);
-        if hover.is_hovered() || *page == state.active_page {
+        if hover.is_hovered() || active {
             canvas.rect(
                 row,
                 7.0,
-                if *page == state.active_page {
+                if active {
                     palette.primary_soft
                 } else {
                     palette.control_hover
@@ -3495,9 +3527,8 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
                 0.0,
             );
         }
-        let info = page.info();
         canvas.text(
-            info.short,
+            &title,
             Rect::new(
                 row.origin.x + 12.0,
                 row.origin.y,
@@ -3510,11 +3541,7 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
             AlignY::Center,
         );
         canvas.text(
-            &format!(
-                "{} · {}",
-                page.category().label(),
-                info.crates.first().copied().unwrap_or("unbound")
-            ),
+            &meta,
             Rect::new(
                 row.origin.x + row.size.x * 0.54,
                 row.origin.y,
@@ -3530,10 +3557,10 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
             node,
             row,
             Role::Link,
-            info.title,
+            &a11y_label,
             CursorKind::Pointer,
             false,
-            *page == state.active_page,
+            active,
             2,
         );
     }

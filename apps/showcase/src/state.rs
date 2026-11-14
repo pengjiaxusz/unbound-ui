@@ -566,6 +566,44 @@ impl GalleryState {
             .take(4)
             .collect()
     }
+
+    /// 同时检索页面目录与 91 个标准组件目录。
+    #[must_use]
+    pub fn search_hits(&self) -> Vec<SearchHit> {
+        let query = self.search_query.trim().to_lowercase();
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let terms: Vec<&str> = query.split_whitespace().collect();
+        let mut hits = Vec::new();
+        for page in PageId::ALL {
+            if page.matches(&query) {
+                hits.push(SearchHit::Page(page));
+                if hits.len() >= 6 {
+                    return hits;
+                }
+            }
+        }
+        for &id in WidgetCatalogId::ALL {
+            let label = crate::pages::components::component_nav_label(id).to_lowercase();
+            let mod_name = id.module_name().to_lowercase();
+            let hay = format!("{label} {mod_name} component widget");
+            if terms.iter().all(|term| hay.contains(term)) {
+                hits.push(SearchHit::Component(id));
+                if hits.len() >= 6 {
+                    break;
+                }
+            }
+        }
+        hits
+    }
+}
+
+/// 搜索命中条目：页面或标准组件。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum SearchHit {
+    Page(PageId),
+    Component(WidgetCatalogId),
 }
 
 /// 91 个组件展示沙盒的实时交互状态。
@@ -743,5 +781,32 @@ pub fn reduce_showcase_component(
             }
             true
         }
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    #[test]
+    fn search_hits_matches_both_pages_and_catalog_components() {
+        let mut state = GalleryState {
+            search_query: "Accordion".to_string(),
+            ..Default::default()
+        };
+        let hits = state.search_hits();
+        assert!(
+            hits.iter()
+                .any(|h| matches!(h, SearchHit::Component(WidgetCatalogId::Accordion))),
+            "搜索 Accordion 应命中对应组件卡片: {hits:?}"
+        );
+
+        state.search_query = "Button".to_string();
+        let hits = state.search_hits();
+        assert!(
+            hits.iter()
+                .any(|h| matches!(h, SearchHit::Page(PageId::Buttons))),
+            "搜索 Button 应命中页面: {hits:?}"
+        );
     }
 }

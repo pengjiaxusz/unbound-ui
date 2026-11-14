@@ -14,6 +14,13 @@ const CHK_KEY: u64 = 1002;
 const SWI_KEY: u64 = 1003;
 const TXT_KEY: u64 = 1004;
 
+// `ui_key!` 按源码行列生成键，`view()` 与断言各写一次会得到两个不同的键；
+// 标题栏插槽需要在两处引用同一控件，故固定为显式常量。
+const TB_SLOT_BASE: u64 = const_fnv1a_hash(file!(), 0, 0);
+const TB_LEFT_BADGE: u64 = mix_key(TB_SLOT_BASE, 1);
+const TB_CENTER_SEARCH: u64 = mix_key(TB_SLOT_BASE, 2);
+const TB_ACTION_THEME: u64 = mix_key(TB_SLOT_BASE, 3);
+
 #[derive(Default)]
 struct DeclarativeApp;
 
@@ -283,4 +290,61 @@ fn default_title_bar_spans_viewport_and_anchors_window_buttons_right() {
         title.max().x < minimize.origin.x,
         "标题不得与窗口按钮重叠，实际 {title:?} / {minimize:?}"
     );
+}
+
+struct CustomTitleBarApp;
+
+impl Application for CustomTitleBarApp {
+    type State = ();
+
+    fn init(&mut self, _ctx: &mut AppContext) -> Self::State {}
+
+    fn reduce(
+        &mut self,
+        _state: &mut Self::State,
+        _event: AppEvent,
+        _ctx: &mut AppContext,
+    ) -> EventOutcome {
+        EventOutcome::new(DirtyFlags::NONE)
+    }
+
+    fn view(&mut self, _state: &Self::State, view: &mut ViewBuilder) {
+        view.column(ui_key!("custom_tb_root"), |col| {
+            col.title_bar_custom(
+                TitleBarDesc::new("Custom Shell").height(48.0),
+                TitleBarSlots::default()
+                    .left(|l| {
+                        l.badge(TB_LEFT_BADGE, BadgeDesc::label("Beta"));
+                    })
+                    .center(|c| {
+                        c.badge(TB_CENTER_SEARCH, BadgeDesc::label("Search..."));
+                    })
+                    .actions(|a| {
+                        a.button(TB_ACTION_THEME, ButtonDesc::label("Theme"));
+                    }),
+            );
+        });
+    }
+}
+
+#[test]
+fn custom_title_bar_supports_slots_and_showcase_caption_width() {
+    let mut runtime = AppRuntime::new(CustomTitleBarApp, Vec2::new(1000.0, 640.0));
+    runtime.context_mut().window_maximized = true;
+    let _ = runtime.frame(0.0);
+
+    let close = runtime.widget_rect(TITLE_BAR_CLOSE_ID).expect("close");
+    let max = runtime.widget_rect(TITLE_BAR_MAXIMIZE_ID).expect("max");
+    let min = runtime.widget_rect(TITLE_BAR_MINIMIZE_ID).expect("min");
+    assert!((close.size.x - TITLE_BAR_CAPTION_WIDTH).abs() < 0.01);
+    assert!((max.size.x - TITLE_BAR_CAPTION_WIDTH).abs() < 0.01);
+    assert!((min.size.x - TITLE_BAR_CAPTION_WIDTH).abs() < 0.01);
+
+    let action = runtime.widget_rect(TB_ACTION_THEME).expect("custom action");
+    assert!(
+        action.max().x <= min.origin.x + 0.01,
+        "自定义操作按钮应位于最小化按钮左侧: {action:?} / {min:?}"
+    );
+    assert!(runtime.widget_rect(TB_LEFT_BADGE).is_some());
+    assert!(runtime.widget_rect(TB_CENTER_SEARCH).is_some());
 }

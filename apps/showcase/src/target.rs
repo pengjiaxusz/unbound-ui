@@ -21,8 +21,10 @@ pub enum Target {
     Hud,
     /// 聚焦全局搜索框。
     Search,
-    /// 跳转到搜索结果。
+    /// 跳转到搜索结果页面。
     SearchResult(u8),
+    /// 跳转到搜索结果组件卡片。
+    SearchComponent(u8),
     /// 导航到指定页面。
     NavPage(u8),
     /// 从侧边栏直接导航并滚动定位到指定的标准组件卡片（`0..WidgetCatalogId::COUNT`）。
@@ -75,6 +77,7 @@ const TAG_FPS_PRESET: u64 = 18;
 const TAG_FPS_INPUT: u64 = 19;
 const TAG_NAV_SCROLLBAR: u64 = 20;
 const TAG_NAV_COMPONENT: u64 = 21;
+const TAG_SEARCH_COMPONENT: u64 = 22;
 
 /// 展厅的语义根节点。
 pub const ROOT: u64 = 1;
@@ -104,6 +107,7 @@ pub const fn id(target: Target) -> u64 {
         Target::Hud => tag(TAG_HUD),
         Target::Search => tag(TAG_SEARCH),
         Target::SearchResult(page) => tag(TAG_SEARCH_RESULT) | page as u64,
+        Target::SearchComponent(comp) => tag(TAG_SEARCH_COMPONENT) | comp as u64,
         Target::NavPage(page) => tag(TAG_NAV_PAGE) | page as u64,
         Target::NavComponent(comp) => tag(TAG_NAV_COMPONENT) | comp as u64,
         Target::Code(page, card) => tag(TAG_CODE) | ((page as u64) << 8) | card as u64,
@@ -144,6 +148,7 @@ pub const fn decode(value: u64) -> Option<Target> {
         TAG_HUD => Target::Hud,
         TAG_SEARCH => Target::Search,
         TAG_SEARCH_RESULT => Target::SearchResult((low & 0xff) as u8),
+        TAG_SEARCH_COMPONENT => Target::SearchComponent((low & 0xff) as u8),
         TAG_NAV_PAGE => Target::NavPage((low & 0xff) as u8),
         TAG_NAV_COMPONENT => Target::NavComponent((low & 0xff) as u8),
         TAG_CODE => Target::Code(((low >> 8) & 0xff) as u8, (low & 0xff) as u8),
@@ -189,6 +194,7 @@ mod tests {
             Target::Hud,
             Target::Search,
             Target::SearchResult(7),
+            Target::SearchComponent(15),
             Target::NavPage(12),
             Target::NavComponent(42),
             Target::Code(3, 2),

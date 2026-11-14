@@ -34,3 +34,5 @@
 - [必须] 开窗验收以抓屏像素为准 -> [原因] 「无 panic + 无 VUID」不证明呈现链正确；LUT 未上传、图元被剔除、payload 错位均不报校验错 -> [守卫] `just test-examples` + 10 示例开窗抓屏
 - [禁止] 在指针仅悬停（未按下捕获）时拦截窗口边缘 `resize_edge_at` 判定 -> [原因] 会导致鼠标移到窗口边缘无法切换缩放光标和拖拽调整窗口大小 -> [守卫] `apps/showcase/src/main.rs::resize_edge_at`
 - [必须] 写入 `FrameHitMetrics` 的标题栏/按钮包围盒与子类命中测试统一到逻辑坐标系 -> [原因] 子类把物理客户区坐标除以 DPI 缩放后再比对，直接写物理矩形会在高 DPI 下整体错位；运行时的控件命中则用物理坐标，不得二次换算 -> [守卫] `crates/unbound-app/src/window_runner.rs`
+- [必须] `WindowedRunner::destroy_vulkan`、`recover_gpu` 与 `Renderer::destroy` 在销毁 `Swapchain`（含 `acquire_semaphores`、`render_finished_semaphores`）及 `present_semaphore` 前必须先调用 `gpu.wait_idle()` -> [原因] 防止在途帧仍在 `VkQueue` 执行时销毁信号量与交换链触发 `VUID-vkDestroySemaphore-semaphore-05149` / `VUID-vkDestroySwapchainKHR-swapchain-01282` -> [位置] `crates/unbound-app/src/window_runner.rs`、`crates/unbound-gpu/src/frame.rs`
+- [必须] Win32 后端处理 `WM_NCMOUSEMOVE`（配合 `TME_LEAVE | TME_NONCLIENT`）与 `WM_NCMOUSELEAVE` 并换算客户区坐标转发 `PlatformEvent::CursorMoved` -> [原因] `WM_NCHITTEST` 返回 `HTMINBUTTON`/`HTMAXBUTTON`/`HTCLOSE` 时 Windows 会吞掉客户区 `WM_MOUSEMOVE`，转发非客户区移动可在保留 Win11 Snap Layouts 的同时保证右上角按钮 Hover 100% 稳定 -> [位置] `crates/unbound-platform/src/backend.rs`

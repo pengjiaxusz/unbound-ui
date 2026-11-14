@@ -109,8 +109,23 @@ pub fn emit_widget(
     rect: Rect,
     label: &mut [GlyphQuad],
 ) -> WidgetOutput {
+    emit_widget_with_params(id, node, state, rect, label, 0.5, 0)
+}
+
+/// 带交互参数（归一化数值 `value_norm` 与选项索引 `variant_idx`）的穷举组件发射器。
+#[deny(unreachable_patterns)]
+pub fn emit_widget_with_params(
+    id: WidgetCatalogId,
+    node: u64,
+    state: ControlState,
+    rect: Rect,
+    label: &mut [GlyphQuad],
+    value_norm: f32,
+    variant_idx: usize,
+) -> WidgetOutput {
+    let value_norm = value_norm.clamp(0.0, 1.0);
     let o = rect.origin;
-    match id {
+    let mut out = match id {
         WidgetCatalogId::Accordion => {
             let desc = AccordionDesc::new(
                 Rect::new(o.x, o.y, rect.size.x, rect.size.y.max(200.0)),
@@ -468,7 +483,7 @@ pub fn emit_widget(
             crate::popover::emit_popover(node, 2, &desc, state).output
         }
         WidgetCatalogId::Progress => {
-            let desc = ProgressDesc::new(Rect::new(o.x, o.y, rect.size.x, 8.0)).value(0.4);
+            let desc = ProgressDesc::new(Rect::new(o.x, o.y, rect.size.x, 8.0)).value(value_norm);
             crate::progress::emit_progress(&desc, &ProgressState::new())
         }
         WidgetCatalogId::PropertyGrid => {
@@ -520,20 +535,18 @@ pub fn emit_widget(
             out
         }
         WidgetCatalogId::Select => {
-            let desc = SelectDesc::new(rect, vec!["Apple".into(), "Banana".into()]);
-            let select_state = SelectState::new();
-            let mut out = crate::select::emit_select(node, &desc, &select_state, state);
-            let with_glyphs =
-                crate::select::emit_select_with_glyphs(node, &desc, &select_state, state, label);
-            out.primitives.extend(with_glyphs.primitives);
-            out
+            let desc =
+                SelectDesc::new(rect, vec!["Apple".into(), "Banana".into(), "Cherry".into()]);
+            let mut select_state = SelectState::new();
+            select_state.selected = Some(variant_idx % 3);
+            crate::select::emit_select_with_glyphs(node, &desc, &select_state, state, label)
         }
         WidgetCatalogId::Skeleton => {
             let desc = SkeletonDesc::new(Rect::new(o.x, o.y, rect.size.x, 16.0)).animated();
             crate::skeleton::emit_skeleton(&desc, &SkeletonState::new())
         }
         WidgetCatalogId::Slider => {
-            let desc = SliderDesc::new(rect, "Gap", 18.0, 0.0, 36.0).with_step(1.0);
+            let desc = SliderDesc::new(rect, "Gap", value_norm * 36.0, 0.0, 36.0).with_step(1.0);
             crate::slider::emit_slider(node, &desc, state, label, SliderTokens::standard())
         }
         WidgetCatalogId::SplitPane => {
@@ -573,7 +586,7 @@ pub fn emit_widget(
         WidgetCatalogId::Tabs => {
             // 探测未激活的标签页：当前激活的标签页即选中项本身。
             let desc = TabsDesc::new(rect, &["One", "Two", "Three"]);
-            let tabs_state = TabsState::new(0);
+            let tabs_state = TabsState::new(variant_idx % 3);
             let mut out =
                 crate::tabs::emit_tab(&desc, &tabs_state, 1, state, label, TabsTokens::standard());
             let strip = crate::tabs::emit_tabs_strip(&desc, &tabs_state, TabsTokens::standard());
@@ -968,8 +981,8 @@ pub fn emit_widget(
             crate::split_button::emit_split_button(node, &desc, &s, state)
         }
         WidgetCatalogId::ToggleButton => {
-            let desc = crate::toggle_button::ToggleButtonDesc::new(rect, "Toggle", false);
-            let s = crate::toggle_button::ToggleButtonState::new(false);
+            let desc = crate::toggle_button::ToggleButtonDesc::new(rect, "Toggle", state.selected);
+            let s = crate::toggle_button::ToggleButtonState::new(state.selected);
             crate::toggle_button::emit_toggle_button(node, &desc, &s, state)
         }
         WidgetCatalogId::TreeTable => {
@@ -1007,6 +1020,53 @@ pub fn emit_widget(
             let desc = crate::terminal_view::TerminalViewDesc::new(rect);
             let s = crate::terminal_view::TerminalViewState::new();
             crate::terminal_view::emit_terminal_view(node, &desc, &s, state)
+        }
+    };
+    if out.hit.is_none() {
+        out.hit = Some(unbound_input::HitRegion::new(node, 0, 0, rect));
+    }
+    out
+}
+
+#[cfg(test)]
+mod interactive_tests {
+    use super::*;
+
+    #[test]
+    fn emit_widget_with_params_propagates_state_and_fallback_hit() {
+        let rect = Rect::new(0.0, 0.0, 240.0, 40.0);
+        let mut glyphs = label();
+
+        let toggle_on = emit_widget_with_params(
+            WidgetCatalogId::ToggleButton,
+            10,
+            ControlState {
+                selected: true,
+                ..ControlState::default()
+            },
+            rect,
+            &mut glyphs,
+            0.5,
+            0,
+        );
+        let toggle_off = emit_widget_with_params(
+            WidgetCatalogId::ToggleButton,
+            10,
+            ControlState::default(),
+            rect,
+            &mut glyphs,
+            0.5,
+            0,
+        );
+        assert_ne!(
+            toggle_on.primitives[0].fill_token_or_uv,
+            toggle_off.primitives[0].fill_token_or_uv
+        );
+
+        for &id in &[WidgetCatalogId::Progress, WidgetCatalogId::Skeleton] {
+            let out =
+                emit_widget_with_params(id, 11, ControlState::default(), rect, &mut glyphs, 0.8, 0);
+            assert!(out.hit.is_some(), "{id:?} 应具备兜底命中区域以支持展厅交互");
         }
     }
 }

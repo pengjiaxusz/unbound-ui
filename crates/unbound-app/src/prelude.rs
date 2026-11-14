@@ -7,7 +7,8 @@ pub use crate::window_runner::{run_windowed, WindowedRunner};
 pub use crate::{
     const_fnv1a_hash, mix_key, ui_key, AppContext, AppEvent, AppKey, AppRuntime, Application,
     ClipboardProvider, DirtyFlags, ErasedUiWidget, EventOutcome, FrameReport, KeyDiscriminator,
-    Modifiers, PendingWidget, Propagation, ViewBuilder, ViewContext, WidgetSpec, ROOT,
+    Modifiers, PendingWidget, Propagation, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec,
+    ROOT,
 };
 
 pub use unbound_a11y::A11yAction;
@@ -29,7 +30,8 @@ pub use unbound_widgets::{
     Placement, PopconfirmDesc, ProgressDesc, ProgressState, SelectDesc, SelectState, Severity,
     SliderDesc, SwitchDesc, TableDesc, TableRow, TableState, TextEditState, TextInputDesc,
     TimelineTrackDesc, TimelineTrackState, TitleBarDesc, TooltipDesc, TooltipState, TourDesc,
-    TransferDesc, TransferState, WatermarkDesc, WidgetCatalogId, WidgetOutput, TITLE_BAR_CLOSE_ID,
-    TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID,
+    TransferDesc, TransferState, WatermarkDesc, WidgetCatalogId, WidgetOutput, WindowCaptionButton,
+    WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID,
+    TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID,
 };
 pub use unbound_world::NodeId;

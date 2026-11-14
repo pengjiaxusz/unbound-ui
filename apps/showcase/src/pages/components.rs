@@ -10,7 +10,7 @@
 //! 向 `WidgetCatalogId` 新增变体。下方的 `const` 断言在编译期将三者严格绑定到 `WidgetCatalogId::ALL`。
 
 use unbound_math::{Rect, Vec2};
-use unbound_widgets::catalog::emit_widget;
+use unbound_widgets::catalog::emit_widget_with_params;
 use unbound_widgets::WidgetCatalogId;
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageInfo};
@@ -606,10 +606,33 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
         (rect.size.y - 66.0).max(40.0),
     );
     let node = ctx.part(1);
-    let mut state = ctx.canvas.control_state(node, false, false);
-    if ctx.knob_on(0) {
+    let checked = ctx.state.sandbox.get_toggle(id);
+    let selected_idx = ctx.state.sandbox.get_selected(id);
+    let selected = selected_idx > 0;
+    let mut state = ctx.canvas.control_state(node, checked, selected);
+    let knobs = knobs_for_id(id);
+    if matches!(
+        knobs.first(),
+        Some(
+            KnobSpec::Toggle {
+                label: "Disabled",
+                ..
+            } | KnobSpec::CheckBox {
+                label: "Disabled",
+                ..
+            }
+        )
+    ) && ctx.knob_on(0)
+    {
         state.disabled = true;
     }
+    let value_norm = if let Some(KnobSpec::Slider { min, max, .. }) = knobs.get(1) {
+        let span = (max - min).max(1e-5);
+        ((ctx.knob(1) - min) / span).clamp(0.0, 1.0)
+    } else {
+        (ctx.state.sandbox.get_slider(id, 50.0) / 100.0).clamp(0.0, 1.0)
+    };
+    let variant_idx = selected_idx.max(ctx.knob(1).round().max(0.0) as usize);
 
     let label_str = semantic_label_for_id(id, &ctx.state.sandbox);
     let mut glyphs = ctx.canvas.shape(
@@ -617,6 +640,7 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
         Vec2::new(stage.origin.x + 8.0, stage.origin.y + 8.0),
         13.0,
     );
-    let output = emit_widget(id, node, state, stage, &mut glyphs);
+    let output =
+        emit_widget_with_params(id, node, state, stage, &mut glyphs, value_norm, variant_idx);
     ctx.canvas.widget_output(id, node, &output);
 }

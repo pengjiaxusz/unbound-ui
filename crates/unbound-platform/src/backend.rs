@@ -217,15 +217,16 @@ mod win32 {
     };
     use ::windows::Win32::UI::Input::KeyboardAndMouse::{
         GetKeyState, GetKeyboardState, ReleaseCapture, SetCapture, ToUnicode, TrackMouseEvent,
-        TME_LEAVE, TRACKMOUSEEVENT, VK_APPS, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_DELETE, VK_DOWN,
-        VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT,
-        VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+        TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, VK_APPS, VK_BACK, VK_CAPITAL, VK_CONTROL,
+        VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN,
+        VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB,
+        VK_UP,
     };
     use ::windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
     use ::windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-        GetWindowLongPtrW, IsZoomed, LoadCursorW, MsgWaitForMultipleObjectsEx, PeekMessageW,
-        PostMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+        GetCursorPos, GetWindowLongPtrW, IsZoomed, LoadCursorW, MsgWaitForMultipleObjectsEx,
+        PeekMessageW, PostMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
         TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CW_USEDEFAULT,
         GWLP_USERDATA, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTCLOSE, HTLEFT,
         HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, MINMAXINFO,
@@ -235,9 +236,9 @@ mod win32 {
         WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
         WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
         WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
-        WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
-        WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN,
-        WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW,
+        WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+        WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN,
+        WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW,
     };
 
     use crate::pacing::PresentWaitPolicy;
@@ -599,7 +600,51 @@ mod win32 {
             }
             WM_MOUSELEAVE => {
                 data.tracking_leave.set(false);
+                let mut pt = POINT::default();
+                let mut rect = RECT::default();
+                let inside_client = unsafe {
+                    GetCursorPos(&mut pt).is_ok()
+                        && ScreenToClient(hwnd, &mut pt).as_bool()
+                        && GetClientRect(hwnd, &mut rect).is_ok()
+                        && pt.x >= rect.left
+                        && pt.x < rect.right
+                        && pt.y >= rect.top
+                        && pt.y < rect.bottom
+                };
+                if !inside_client {
+                    data.events
+                        .borrow_mut()
+                        .push(PlatformEvent::CursorMoved { x: -1.0, y: -1.0 });
+                }
                 LRESULT(0)
+            }
+            WM_NCMOUSEMOVE => {
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE | TME_NONCLIENT,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                let _ = unsafe { TrackMouseEvent(&mut tme) };
+                let screen_x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let screen_y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let mut pt = POINT {
+                    x: screen_x,
+                    y: screen_y,
+                };
+                if unsafe { ScreenToClient(hwnd, &mut pt).as_bool() } {
+                    data.events.borrow_mut().push(PlatformEvent::CursorMoved {
+                        x: pt.x as f64,
+                        y: pt.y as f64,
+                    });
+                }
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+            WM_NCMOUSELEAVE => {
+                data.events
+                    .borrow_mut()
+                    .push(PlatformEvent::CursorMoved { x: -1.0, y: -1.0 });
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
             WM_LBUTTONDOWN => {
                 let _ = unsafe { SetCapture(hwnd) };
