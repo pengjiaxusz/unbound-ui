@@ -1,15 +1,12 @@
-//! Syntax-highlighted code block.
+//! 语法高亮代码块（CodeBlock）。
 //!
-//! The block is a viewer, not an editor: it owns geometry, a coarse token
-//! classifier, the highlighted-line bands and the copy affordance. The
-//! classifier is intentionally small — keywords, numbers, strings, comments
-//! and call sites. A full grammar belongs in a language service, not in a
-//! widget; what matters here is that a line can be painted with the right
-//! semantic tokens and that the gutter stays aligned.
+//! 该组件是只读查看器而非编辑器：仅持有几何布局、粗粒度词法分类器、
+//! 高亮行背景条与复制控件。分类器刻意保持精简——仅识别关键字、数字、字符串、
+//! 注释与调用点。完整语法分析属于语言服务而非 UI 组件；此处关注的是用正确的
+//! 语义令牌绘制代码行并保持行号槽对齐。
 //!
-//! Copy is a *request*: [`CodeBlockState::mark_copied`] remembers when the
-//! affordance last confirmed, and the application performs the clipboard
-//! write.
+//! 复制操作是一个*请求*：[`CodeBlockState::mark_copied`] 记录上次确认复制的时间，
+//! 实际写入剪贴板由应用程序执行。
 
 use std::ops::Range;
 
@@ -25,35 +22,35 @@ use crate::primitive::{focus_ring, glyphs, instance, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The line rhythm of a code block.
+/// 代码块的行高节奏。
 pub const CODE_LINE_HEIGHT: f32 = 20.0;
-/// The width of the line-number gutter.
+/// 行号槽宽度。
 pub const CODE_GUTTER: f32 = 44.0;
-/// How long the copy affordance confirms for.
+/// 复制确认提示的持续时长。
 pub const COPY_CONFIRM_SECONDS: f32 = 1.4;
 
-/// One coarse syntax class.
+/// 粗粒度语法分类。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SyntaxToken {
-    /// Identifiers, punctuation and whitespace.
+    /// 标识符、标点符号与空白字符。
     #[default]
     Plain,
-    /// A language keyword.
+    /// 语言关键字。
     Keyword,
-    /// A type name (capitalised identifier or built-in).
+    /// 类型名称（首字母大写的标识符或内置类型）。
     Type,
-    /// A quoted string.
+    /// 引号包裹的字符串。
     String,
-    /// A line comment.
+    /// 单行注释。
     Comment,
-    /// A numeric literal.
+    /// 数字字面量。
     Number,
-    /// An identifier followed by `(`.
+    /// 后跟 `(` 的标识符（调用点）。
     Function,
 }
 
 impl SyntaxToken {
-    /// The colour token the class paints with.
+    /// 该语法类别绘制使用的颜色令牌。
     #[must_use]
     pub fn token(self) -> Token {
         match self {
@@ -68,16 +65,16 @@ impl SyntaxToken {
     }
 }
 
-/// A byte range of one line and its class.
+/// 单行内的字节范围及其语法类别。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodeSpan {
-    /// Byte range inside the line.
+    /// 行内字节范围。
     pub range: Range<usize>,
-    /// The syntax class.
+    /// 语法类别。
     pub token: SyntaxToken,
 }
 
-/// Classify one line.
+/// 对单行代码进行词法分类。
 #[must_use]
 pub fn highlight_line(line: &str) -> Vec<CodeSpan> {
     const KEYWORDS: [&str; 24] = [
@@ -152,29 +149,29 @@ pub fn highlight_line(line: &str) -> Vec<CodeSpan> {
     spans
 }
 
-/// The pure descriptor of a code block.
+/// 代码块的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CodeBlockDesc {
-    /// The whole block rectangle.
+    /// 整体代码块矩形。
     pub rect: Rect,
-    /// The source text.
+    /// 源码文本。
     pub text: String,
-    /// The language tag shown in the header.
+    /// 头部显示的语言标签。
     pub language: String,
-    /// The first visible line number.
+    /// 起始可见行号。
     pub start_line: usize,
-    /// One-based line indices to band.
+    /// 需要高亮条带标注的 1-based 行号列表。
     pub highlight_lines: Vec<usize>,
-    /// Whether the gutter shows line numbers.
+    /// 行号槽是否显示行号。
     pub show_numbers: bool,
-    /// Whether the copy affordance is visible.
+    /// 是否显示复制控件。
     pub copyable: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl CodeBlockDesc {
-    /// A code block with a language tag.
+    /// 创建带语言标签的代码块。
     #[must_use]
     pub fn new(rect: Rect, text: impl Into<String>, language: impl Into<String>) -> Self {
         Self {
@@ -189,13 +186,13 @@ impl CodeBlockDesc {
         }
     }
 
-    /// The number of lines.
+    /// 代码总行数。
     #[must_use]
     pub fn line_count(&self) -> usize {
         self.text.lines().count()
     }
 
-    /// The line-number gutter width (`0` when numbers are hidden).
+    /// 行号槽宽度（隐藏行号时为 `0`）。
     #[must_use]
     pub fn gutter_width(&self) -> f32 {
         if self.show_numbers {
@@ -205,7 +202,7 @@ impl CodeBlockDesc {
         }
     }
 
-    /// The source area, excluding the gutter.
+    /// 排除行号槽后的源码区域。
     #[must_use]
     pub fn code_rect(&self) -> Rect {
         Rect::new(
@@ -216,7 +213,7 @@ impl CodeBlockDesc {
         )
     }
 
-    /// The rectangle of one visible line.
+    /// 单个可见行的矩形区域。
     #[must_use]
     pub fn line_rect(&self, index: usize) -> Rect {
         Rect::new(
@@ -227,7 +224,7 @@ impl CodeBlockDesc {
         )
     }
 
-    /// The copy button in the top-trailing corner.
+    /// 位于右上角的复制按钮。
     #[must_use]
     pub fn copy_rect(&self) -> Option<Rect> {
         self.copyable.then_some(Rect::new(
@@ -238,32 +235,32 @@ impl CodeBlockDesc {
         ))
     }
 
-    /// Whether a one-based line number is banded.
+    /// 判断指定 1-based 行号是否处于高亮条带中。
     #[must_use]
     pub fn is_highlighted(&self, line: usize) -> bool {
         self.highlight_lines.contains(&line)
     }
 }
 
-/// The mutable state of a code block.
+/// 代码块的可变状态。
 #[derive(Clone, Debug, Default)]
 pub struct CodeBlockState {
     copied_at: Option<f32>,
 }
 
 impl CodeBlockState {
-    /// No copy confirmation.
+    /// 未处于复制确认状态。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Remember that the copy button was pressed at `now` seconds.
+    /// 记录复制按钮在 `now` 秒时被按下。
     pub fn mark_copied(&mut self, now: f32) {
         self.copied_at = Some(now);
     }
 
-    /// Whether the copy confirmation is still visible.
+    /// 判断复制确认提示是否仍可见。
     #[must_use]
     pub fn copied(&self, now: f32) -> bool {
         self.copied_at
@@ -271,7 +268,7 @@ impl CodeBlockState {
     }
 }
 
-/// Emit the gutter, highlight bands, glyphs and the copy button.
+/// 发射行号槽、高亮行条带、字形与复制按钮。
 #[must_use]
 pub fn emit_code_block(
     node: u64,
@@ -333,8 +330,7 @@ pub fn emit_code_block(
             Token::SURFACE_RAISED
         };
         primitives.push(surface(button, 5.0, fill, desc.z + 4));
-        // The hover wash is always in the pool; only its opacity changes, so
-        // hovering never reshapes the primitive run.
+        // 悬停底色始终保留在图元池中；仅改变其不透明度，因此悬停绝不会重排图元序列。
         let mut hover = surface(button, 5.0, Token::CONTROL_HOVER, desc.z + 5);
         hover.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
             hover.depth_u16(),
@@ -375,7 +371,7 @@ pub fn emit_code_block(
     }
 }
 
-/// A solid line primitive.
+/// 实心线段图元。
 fn line(rect: Rect, color: Token, z: u16) -> GpuPrimitiveInstance {
     instance(
         rect,

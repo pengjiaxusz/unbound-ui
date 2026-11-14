@@ -1,5 +1,5 @@
-//! The runtime owns the layout world: rows, grids and wrapping paragraphs
-//! must be positioned by `AppRuntime`, not by hand-tuned rectangles.
+//! 运行时持有布局世界：行、网格与自动换行段落必须由 `AppRuntime` 定位，
+//! 而非手工硬编码矩形。
 
 use unbound_abi::{Dim, RawNodeDesc};
 use unbound_app::{AppEvent, AppRuntime, Application, EventOutcome, WidgetSpec};
@@ -184,7 +184,7 @@ fn incremental_frame_reuses_world_and_solves_only_dirty_boundary() {
     let card_a_before = runtime.world().find_key(100).expect("card 100");
     let card_b_before = runtime.world().find_key(200).expect("card 200");
 
-    // Click inside card 100's button to mutate only card 100.
+    // 点击卡片 100 的按钮内部，仅修改卡片 100。
     let btn_rect = find(runtime.world(), 101);
     runtime.pointer_move(btn_rect.center());
     runtime.pointer_down(btn_rect.center(), unbound_input::PointerButton::Left);

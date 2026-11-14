@@ -1,4 +1,4 @@
-//! Common primitives, application contracts, descriptors, and runtime types.
+//! 常用图元、应用契约、描述符与运行时类型重导出。
 
 pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
 pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};

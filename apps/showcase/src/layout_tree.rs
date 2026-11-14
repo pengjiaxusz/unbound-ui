@@ -1,15 +1,15 @@
-//! The shell's layout tree.
+//! 外壳的布局树。
 //!
-//! The shell used to place every rectangle by hand. [`ShellLayout`] carried
-//! fourteen hand-computed rectangles and the page was stacked by adding up
-//! card heights, so a narrow card had to be recognised by a hard-coded
-//! `inner < 520.0` breakpoint before it could fold its options panel below
-//! the stage.
+//! 外壳过去是手动摆放每个矩形。[`ShellLayout`] 携带了十四个手算矩形，
+//! 页面通过累加卡片高度进行堆叠，因此窄卡片必须依靠硬编码的 `inner < 520.0` 断点
+//! 才能把选项面板折叠到舞台下方。
 //!
-//! Both are now a node tree that [`LayoutEngine`] solves. The tree *is* the
-//! layout: a card folds because the flex line runs out of room, not because a
-//! breakpoint said so, and the card's own size is fixed, which makes it a
-//! relayout boundary — the page can be re-solved without touching it.
+//!
+//!
+//! 如今两者都统一为由 [`LayoutEngine`] 求解的节点树。树*即*布局：
+//! 卡片折叠是因为弹性行空间不足，而非某个断点规定如此；且卡片自身尺寸固定，
+//! 使其成为重布局边界（relayout boundary）——页面可在不触及它的情况下重新求解。
+//!
 
 use unbound_abi::{Align, Dim, Edges, NodeFlags, Position, RawNodeDesc};
 use unbound_layout::{LayoutEngine, LayoutStats};
@@ -19,76 +19,76 @@ use unbound_world::{NodeId, UiWorld};
 use crate::pages::{ExampleDef, KnobSpec, PageId};
 use crate::state::GalleryState;
 
-/// The height of the custom title bar.
+/// 自定义标题栏的高度。
 pub const TOP_BAR_HEIGHT: f32 = 56.0;
 
-/// The page's horizontal padding on a wide content column.
+/// 宽内容列上的页面水平内边距。
 const PAGE_PAD_WIDE: f32 = 36.0;
-/// The page's horizontal padding on a narrow content column.
+/// 窄内容列上的页面水平内边距。
 const PAGE_PAD_COMPACT: f32 = 24.0;
-/// The content width below which the page uses the compact padding.
+/// 页面采用紧凑内边距的内容宽度阈值。
 const PAGE_PAD_BREAKPOINT: f32 = 760.0;
-/// The page's top padding, above the page heading.
+/// 页面顶部内边距（位于页面标题上方）。
 const PAGE_PAD_TOP: f32 = 26.0;
-/// The page's bottom padding, below the last card.
+/// 页面底部内边距（位于最后一张卡片下方）。
 const PAGE_PAD_BOTTOM: f32 = 26.0;
-/// The gap between the page heading and the first card.
+/// 页面标题与第一张卡片之间的间距。
 const PAGE_HEAD_GAP: f32 = 6.0;
-/// The gap between two cards.
+/// 两张卡片之间的间距。
 const CARD_GAP: f32 = 18.0;
-/// The card's horizontal padding.
+/// 卡片的水平内边距。
 const CARD_PAD_X: f32 = 16.0;
-/// The card's top padding.
+/// 卡片的顶部内边距。
 const CARD_PAD_TOP: f32 = 12.0;
-/// The card's bottom padding.
+/// 卡片的底部内边距。
 const CARD_PAD_BOTTOM: f32 = 10.0;
-/// The height reserved for the card's title and description.
+/// 为卡片标题与描述预留的高度。
 const CARD_HEAD: f32 = 64.0;
-/// The gap between the stage and the options panel.
+/// 舞台与选项面板之间的间距。
 const STAGE_GAP: f32 = 6.0;
-/// The gap between the stage and the options panel when they stand side by
-/// side.
+/// 舞台与选项面板并排放置时的间距。
+///
 const BODY_GAP: f32 = 18.0;
-/// The stage's flex basis.
+/// 舞台的弹性基准尺寸（flex basis）。
 ///
-/// Together with the options panel's minimum width and the gap between them
-/// this is the width at which the options panel folds below the stage.
+/// 连同选项面板的最小宽度及两者间距，共同决定了选项面板折叠到舞台下方的宽度阈值。
+///
 const STAGE_BASIS: f32 = 314.0;
-/// The stage's minimum width.
+/// 舞台的最小宽度。
 const STAGE_MIN: f32 = 120.0;
-/// The options panel's share of the card's width.
+/// 选项面板占卡片宽度的比例。
 const KNOB_SHARE: f32 = 30.0;
-/// The options panel's minimum width.
+/// 选项面板的最小宽度。
 const KNOB_MIN: f32 = 188.0;
-/// The options panel's maximum width.
+/// 选项面板的最大宽度。
 const KNOB_MAX: f32 = 318.0;
-/// A knob row's flex basis while the options panel stands beside the stage.
+/// 选项面板位于舞台旁时，单个旋钮行的弹性基准尺寸。
 const KNOB_BASIS: f32 = 180.0;
-/// The gap between two knob rows.
+/// 两个旋钮行之间的间距。
 const KNOB_GAP: f32 = 12.0;
-/// The height of a folded options panel.
+/// 折叠后选项面板的高度。
 const KNOB_FOLDED: f32 = 96.0;
-/// The height of the "OPTIONS" caption.
+/// "OPTIONS" 小标题的高度。
 const KNOB_CAPTION: f32 = 18.0;
-/// The vertical gap between the caption and the first knob row.
+/// 小标题与第一个旋钮行之间的垂直间距。
 const KNOB_CAPTION_GAP: f32 = 16.0;
-/// The options panel's horizontal padding.
+/// 选项面板的水平内边距。
 const KNOB_PAD: f32 = 10.0;
-/// The distance from the panel's top to the first knob row.
+/// 面板顶部到第一个旋钮行的距离。
 const KNOB_ROW_TOP: f32 = 34.0;
-/// The code bar's height.
+/// 代码栏的高度。
 const CODE_BAR: f32 = 30.0;
-/// The gap between the card body and the code bar.
+/// 卡片主体与代码栏之间的间距。
 const CODE_GAP: f32 = 6.0;
-/// The gap between the code bar and the code panel.
+/// 代码栏与代码面板之间的间距。
 const CODE_PANEL_GAP: f32 = 4.0;
-/// The width of one window control button.
+/// 单个窗口控制按钮的宽度。
 ///
-/// The three buttons are flush with the right edge: a gap there would be a
-/// dead strip where a click neither closes the window nor starts a drag.
+/// 三个按钮紧贴右边缘：此处若留有缝隙，就会形成既无法关闭窗口也无法触发拖拽的死区。
+///
 const WINDOW_BUTTON_WIDTH: f32 = 46.0;
 
-/// Responsive geometry for one frame.
+/// 单帧的响应式几何信息。
 #[derive(Copy, Clone, Debug)]
 pub struct ShellLayout {
     pub viewport: Rect,
@@ -109,7 +109,7 @@ pub struct ShellLayout {
     pub wide: bool,
 }
 
-/// One knob row inside an options panel.
+/// 选项面板中的一个旋钮行。
 #[derive(Clone, Debug)]
 pub struct KnobRow {
     pub index: usize,
@@ -118,7 +118,7 @@ pub struct KnobRow {
     pub control: Rect,
 }
 
-/// One example card after layout.
+/// 布局后的单个示例卡片。
 #[derive(Clone, Debug)]
 pub struct CardLayout {
     pub index: usize,
@@ -130,7 +130,7 @@ pub struct CardLayout {
     pub code_panel: Option<Rect>,
 }
 
-/// A page after layout.
+/// 布局后的页面。
 #[derive(Clone, Debug)]
 pub struct PageLayout {
     pub page: PageId,
@@ -139,7 +139,7 @@ pub struct PageLayout {
     pub content_height: f32,
 }
 
-/// The title bar's controls.
+/// 标题栏控件组。
 #[derive(Clone, Copy, Debug)]
 struct ChromeNodes {
     nav_toggle: NodeId,
@@ -153,7 +153,7 @@ struct ChromeNodes {
     close: NodeId,
 }
 
-/// The nodes that make up one knob row.
+/// 构成单个旋钮行的节点。
 #[derive(Clone, Copy, Debug)]
 struct KnobNodes {
     row: NodeId,
@@ -161,7 +161,7 @@ struct KnobNodes {
     control: NodeId,
 }
 
-/// The nodes that make up one card.
+/// 构成单个卡片的节点。
 #[derive(Clone, Debug)]
 struct CardNodes {
     card: NodeId,
@@ -174,11 +174,11 @@ struct CardNodes {
     code_panel: Option<NodeId>,
 }
 
-/// The shell's layout tree.
+/// 外壳的布局树。
 ///
-/// The tree lives for as long as the application: the chrome is built once
-/// and only its geometry is refreshed, while the page subtree is rebuilt
-/// whenever the user navigates.
+/// 该树的生命周期与整个应用相同：外框（chrome）只构建一次，后续仅刷新几何信息，
+/// 而页面子树则在每次用户导航时重建。
+///
 pub struct ShellTree {
     world: UiWorld,
     engine: LayoutEngine,
@@ -193,7 +193,7 @@ pub struct ShellTree {
     chrome: ChromeNodes,
     cards: Vec<CardNodes>,
     page_id: Option<PageId>,
-    /// The statistics of the last solve.
+    /// 上次求解的统计信息。
     last_stats: LayoutStats,
 }
 
@@ -203,23 +203,23 @@ impl Default for ShellTree {
     }
 }
 
-/// Insert a node, attributing it to the caller's source location.
+/// 插入一个节点，并将其归因于调用方的源码位置。
 #[track_caller]
 fn insert(world: &mut UiWorld, parent: NodeId, desc: RawNodeDesc) -> NodeId {
     world.insert(parent, desc, core::panic::Location::caller())
 }
 
-/// A container that stacks its children along the vertical axis.
+/// 沿垂直轴堆叠子节点的容器。
 fn column() -> RawNodeDesc {
     RawNodeDesc::container().column()
 }
 
-/// A container that lays its children out along the horizontal axis.
+/// 沿水平轴排列子节点的容器。
 fn row() -> RawNodeDesc {
     RawNodeDesc::container().row()
 }
 
-/// A node that is placed at an absolute offset inside its parent.
+/// 在父节点内以绝对偏移放置的节点。
 fn absolute(x: f32, y: f32, width: f32, height: f32) -> RawNodeDesc {
     let mut desc = RawNodeDesc::container();
     desc.position = Position::Absolute as u8;
@@ -234,8 +234,8 @@ fn absolute(x: f32, y: f32, width: f32, height: f32) -> RawNodeDesc {
     desc
 }
 
-/// The metrics of one knob row: its height, its control's height and whether
-/// the row carries a caption of its own.
+/// 单个旋钮行的度量信息：行高、控件高度，以及该行是否自带标题。
+///
 fn knob_row_metrics(spec: &KnobSpec) -> (f32, f32, bool) {
     match spec {
         KnobSpec::Toggle { .. } | KnobSpec::CheckBox { .. } => (44.0, 30.0, false),
@@ -244,20 +244,20 @@ fn knob_row_metrics(spec: &KnobSpec) -> (f32, f32, bool) {
     }
 }
 
-/// The height of a card's code panel.
+/// 卡片代码面板的高度。
 fn code_panel_height(example: &ExampleDef) -> f32 {
     let lines = example.code.lines().count().min(12);
     12.0 + lines as f32 * 15.0 + 24.0
 }
 
-/// The title bar's control geometry.
+/// 标题栏的控件几何布局。
 ///
-/// The bar is a chain of controls that hangs off the right edge, plus a
-/// search field that sits in the middle of the bar.
+/// 标题栏是一条挂在右边缘的控件链，外加位于栏中央的搜索框。
+///
 fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
-    // The window buttons are anchored to the right edge and always win: a
-    // narrow window must never push "close" off-screen, and the close button
-    // must reach the edge so the corner is a valid target.
+    // 窗口按钮锚定在右边缘且始终优先：窄窗口绝不能把“关闭”挤出屏幕，
+    // 且关闭按钮必须紧贴边缘，使屏幕角落成为有效点击目标。
+    //
     let close = Rect::new(
         (width - WINDOW_BUTTON_WIDTH).max(0.0),
         0.0,
@@ -278,10 +278,10 @@ fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
     );
     let nav_toggle = Rect::new(12.0, 12.0, 32.0, 32.0);
 
-    // Everything else is laid out right-to-left inside the gap between the
-    // navigation toggle and the window buttons. A control that no longer fits
-    // is hidden (zero width) instead of overlapping its neighbour, which used
-    // to make the layout negative at 320 px.
+    // 其余控件在导航切换按钮与窗口按钮之间的空隙内从右向左排列。
+    // 放不下的控件会被隐藏（宽度设为零）而不是与邻居重叠——
+    // 过去在 320 px 下会导致布局出现负值。
+    //
     let left_limit = nav_toggle.origin.x + nav_toggle.size.x + 8.0;
     let right_limit = (minimize.origin.x - 10.0).max(left_limit);
     let mut cursor = right_limit;
@@ -299,14 +299,14 @@ fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
 
     let hud = take(32.0);
     let snap = take(32.0);
-    // Four zoom steps need a 42 px slot each for `"1.25×"` plus its padding;
-    // below that the compact labels are used instead.
+    // 四个缩放档位需要每个 42 px 的槽位来容纳 `"1.25×"` 及其内边距；
+    // 低于该宽度时改用紧凑标签。
     let zoom = take(if width < 1000.0 { 168.0 } else { 190.0 });
     let theme = take(if compact { 34.0 } else { 118.0 });
 
-    // A narrow window keeps a search *icon* instead of dropping search
-    // entirely: the overlay is the only entry point at 150–200 % zoom, where
-    // the logical viewport is too small for the field.
+    //
+    // 窄窗口保留搜索*图标*而非完全丢弃搜索：在 150–200 % 缩放下
+    // 逻辑视口太小，无法容纳输入框，此时浮层是唯一的入口。
     let search_width = if width < 900.0 {
         32.0
     } else if width < 1000.0 {
@@ -333,7 +333,7 @@ fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
 }
 
 impl ShellTree {
-    /// Create the tree with an empty page.
+    /// 创建仅含空页面的布局树。
     #[must_use]
     pub fn new() -> Self {
         let mut world = UiWorld::new();
@@ -356,8 +356,8 @@ impl ShellTree {
         content_desc = content_desc.flags(NodeFlags::CLIP | NodeFlags::SCROLL_Y);
         let content = insert(&mut world, body, content_desc);
 
-        // The page column is rebuilt whenever the user navigates; the node
-        // exists from the start so the tree always has the same shape.
+        // 页面列会在每次用户导航时重建；该节点从一开始就存在，使树始终保持相同形状。
+        //
         let mut page_desc = column();
         page_desc.padding = Edges {
             left: 0.0,
@@ -413,22 +413,22 @@ impl ShellTree {
         }
     }
 
-    /// The number of nodes in the tree (diagnostics).
+    /// 树中的节点总数（诊断用）。
     #[must_use]
     pub fn node_count(&self) -> usize {
         self.world.len()
     }
 
-    /// The number of relayout boundaries in the tree.
+    /// 树中的重布局边界数量。
     ///
-    /// A fixed-size card is a boundary: nothing inside it can change its
-    /// size, so a change inside a card never re-solves the page.
+    /// 固定尺寸的卡片是一个边界：其内部任何变化都无法改变自身尺寸，
+    /// 因此卡片内部的变更绝不会重新求解整个页面。
     #[must_use]
     pub fn boundary_count(&self) -> usize {
         self.world.relayout_boundary_count()
     }
 
-    /// The number of cards that are relayout boundaries.
+    /// 作为重排边界的卡片数量。
     #[must_use]
     pub fn card_boundary_count(&self) -> usize {
         self.cards
@@ -437,7 +437,7 @@ impl ShellTree {
             .count()
     }
 
-    /// Solve the tree for the current viewport and navigation width.
+    /// 按当前视口和导航宽度求解布局树。
     pub fn solve(&mut self, state: &GalleryState, viewport: Rect, nav_width: f32) -> ShellLayout {
         let width = viewport.size.x;
         let compact = width < 1080.0;
@@ -449,10 +449,10 @@ impl ShellTree {
         } else {
             PAGE_PAD_WIDE
         };
-        // 160 px is the narrowest width at which a card's knob row still
-        // separates its label from its control. A larger floor used to make
-        // the page wider than the pane, which clipped the right edge instead
-        // of reflowing it.
+        // 160 px 是卡片旋钮行仍能将标签与控件分开的最小宽度。
+        // 更大的下限过去曾使页面比窗格更宽，导致右边缘被裁剪而不是重排。
+        //
+        //
         let page_width = (content_width - pad * 2.0).max(160.0);
 
         {
@@ -461,8 +461,8 @@ impl ShellTree {
             root.height = Dim::px(viewport.size.y);
         }
         {
-            // The body takes whatever the title bar left over. Fixing its
-            // height keeps the navigation pane from growing with the page.
+            // 主体区域占据标题栏剩余的所有空间。固定其高度可防止导航窗格随页面一起拉长。
+            //
             let body = &mut self.world.node_mut(self.body).desc;
             body.height = Dim::px((viewport.size.y - TOP_BAR_HEIGHT).max(0.0));
         }
@@ -501,9 +501,9 @@ impl ShellTree {
         }
 
         self.ensure_page(state.active_page);
-        // The first pass assumes the options panel stands beside the stage.
-        // Whether it actually does is the engine's answer, not ours: the
-        // second pass folds the panel if the flex line ran out of room.
+        // 第一遍假设选项面板位于舞台旁。它实际是否并排由引擎决定，而非我们：
+        // 若弹性行空间不足，第二遍会将面板折叠到下方。
+        //
         self.update_page(state, page_width, false);
         self.last_stats = self.engine.solve(&mut self.world, self.root, viewport.size);
         if self.options_folded() {
@@ -532,25 +532,25 @@ impl ShellTree {
         }
     }
 
-    /// The statistics of the last solve.
+    /// 上次求解的统计信息。
     ///
-    /// `nodes_visited` is zero when the tree was not solved at all — a
-    /// paint-only frame does not touch the layout.
+    /// 当树完全未求解时 `nodes_visited` 为零——仅重绘的帧不触及布局。
+    ///
     #[must_use]
     pub fn stats(&self) -> LayoutStats {
         self.last_stats
     }
 
-    /// The height of the page's content, in the page's own coordinate space.
+    /// 页面内容在页面自身坐标系中的高度。
     #[must_use]
     pub fn content_height(&self) -> f32 {
         self.rect_of(self.page).size.y
     }
 
-    /// Read the page's geometry.
+    /// 读取页面几何信息。
     ///
-    /// `scroll` shifts the page inside the content viewport; the layout
-    /// itself is untouched by it, so a scroll never re-solves the tree.
+    /// `scroll` 会在内容视口内平移页面；布局本身不受其影响，因此滚动绝不会重新求解布局树。
+    ///
     #[must_use]
     pub fn page_layout(&self, state: &GalleryState, scroll: f32) -> PageLayout {
         let shift = |rect: Rect| {
@@ -591,17 +591,17 @@ impl ShellTree {
         }
     }
 
-    /// The node's rectangle in absolute window coordinates.
+    /// 节点在绝对窗口坐标中的矩形。
     ///
-    /// Taffy reports a node's position relative to its parent, so the tree
-    /// reads the world's absolute rectangle instead.
+    /// Taffy 上报的节点位置是相对父节点的，因此树改为读取世界中的绝对矩形。
+    ///
     fn rect_of(&self, id: NodeId) -> Rect {
         self.engine
             .world_rect(&self.world, id)
             .unwrap_or(Rect::ZERO)
     }
 
-    /// Whether the engine folded an options panel below its stage.
+    /// 引擎是否将选项面板折叠到了舞台下方。
     fn options_folded(&self) -> bool {
         self.cards.iter().any(|nodes| {
             let Some(knobs) = nodes.knobs else {
@@ -613,7 +613,7 @@ impl ShellTree {
         })
     }
 
-    /// Rebuild the page subtree when the user navigated.
+    /// 在用户导航后重建页面子树。
     fn ensure_page(&mut self, page: PageId) {
         if self.page_id == Some(page) {
             return;
@@ -622,7 +622,7 @@ impl ShellTree {
         self.rebuild_page(page);
     }
 
-    /// Drop the page's cards and build them again for `page`.
+    /// 丢弃页面现有卡片并为 `page` 重新构建。
     fn rebuild_page(&mut self, page: PageId) {
         for nodes in &self.cards {
             self.world.remove(nodes.card);
@@ -642,8 +642,8 @@ impl ShellTree {
             card_desc = card_desc.flags(NodeFlags::CLIP);
             let card = insert(&mut self.world, self.cards_list, card_desc);
 
-            // The title and the description are painted by the canvas; the
-            // node only reserves their height.
+            // 标题与描述由画布绘制；节点仅预留它们的高度。
+            //
             let mut head_desc = column();
             head_desc.width = Dim::percent(100.0);
             head_desc.height = Dim::px(CARD_HEAD);
@@ -725,8 +725,8 @@ impl ShellTree {
                     control_desc.width = Dim::percent(100.0);
                     control_desc.height = Dim::px(control_height);
                     if !captioned {
-                        // A toggle and a checkbox carry their own label
-                        // inside the control, so they start a little lower.
+                        // 开关和复选框在控件内部自带标签，因此起点略微下移。
+                        //
                         control_desc.margin = Edges {
                             left: 0.0,
                             top: 6.0,
@@ -767,7 +767,7 @@ impl ShellTree {
         }
     }
 
-    /// Refresh the page's geometry for the current state.
+    /// 按当前状态刷新页面几何信息。
     fn update_page(&mut self, state: &GalleryState, page_width: f32, folded: bool) {
         let page = state.active_page;
         let inner = (page_width - CARD_PAD_X * 2.0).max(0.0);
@@ -820,15 +820,15 @@ impl ShellTree {
                 } else {
                     Dim::percent(KNOB_SHARE)
                 };
-                // A folded panel spans the whole card: the width limits that
-                // keep the panel next to the stage would clip it instead.
+                // 折叠后的面板横跨整张卡片：用于将其保持在舞台旁的宽度限制反而会裁剪它。
+                //
                 desc.min_width = if folded { Dim::AUTO } else { Dim::px(KNOB_MIN) };
                 desc.max_width = if folded { Dim::AUTO } else { Dim::px(KNOB_MAX) };
                 desc.height = Dim::px(knob_height);
 
-                // A folded panel is wide and short: its rows sit side by side
-                // instead of in a column. The basis is the share each row
-                // gets of the panel's content width.
+                // 折叠后的面板宽而矮：其行并排排列而非按列堆叠。
+                // 基准尺寸即每行分得的面板内容宽度份额。
+                //
                 let count = nodes.rows.len().max(1) as f32;
                 let basis = if folded {
                     ((inner - KNOB_PAD * 2.0 - KNOB_GAP * (count - 1.0)) / count).max(80.0)

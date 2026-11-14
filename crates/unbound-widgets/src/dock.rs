@@ -1,10 +1,8 @@
-//! The dock area: a tree of split and tabbed panels that can be rearranged.
+//! 停靠区（DockArea）：支持可重排的分割面板与标签页树。
 //!
-//! The tree is a flat arena — [`DockNode::Split`] holds two child indices and
-//! [`DockNode::Tabs`] holds a tab list — so a drag never has to move a
-//! recursive structure through the event loop. Splitting a panel clones its
-//! node into a fresh arena slot and overwrites the old slot with the new
-//! split, which keeps every existing child index valid.
+//! 树采用扁平竞技场（arena）结构——[`DockNode::Split`] 持有两个子节点索引，
+//! [`DockNode::Tabs`] 持有标签页列表——因此拖拽操作无需在事件循环中搬移递归结构。
+//! 分割面板时将其节点克隆到新的竞技场槽位，并用新分割节点覆写旧槽位，从而保持既有子节点索引有效。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -19,25 +17,25 @@ use crate::scroll::ScrollAxis;
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// The height of a tab strip, in logical pixels.
+/// 标签栏高度（逻辑像素）。
 pub const DOCK_TAB_BAR: f32 = 32.0;
 
-/// The minimum share of a split either side may take while dragging.
+/// 拖拽分割条时任意一侧可占用的最小比例。
 const SPLIT_LIMIT: f32 = 0.1;
 
-/// One dockable tab.
+/// 单个可停靠标签页。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DockTab {
-    /// Stable identity, also used as the tab's semantic and hit node.
+    /// 稳定标识，同时用作标签页的语义与命中节点。
     pub id: u64,
-    /// The visible title.
+    /// 可见标题。
     pub title: String,
-    /// Whether the tab can be closed.
+    /// 标签页是否可关闭。
     pub closable: bool,
 }
 
 impl DockTab {
-    /// A closable tab.
+    /// 创建可关闭的标签页。
     #[must_use]
     pub fn new(id: u64, title: impl Into<String>) -> Self {
         Self {
@@ -47,7 +45,7 @@ impl DockTab {
         }
     }
 
-    /// The same tab without a close affordance.
+    /// 创建不可关闭的同款标签页。
     #[must_use]
     pub fn pinned(mut self) -> Self {
         self.closable = false;
@@ -55,31 +53,31 @@ impl DockTab {
     }
 }
 
-/// One node of the dock arena.
+/// 停靠竞技场中的单个节点。
 #[derive(Clone, Debug, PartialEq)]
 pub enum DockNode {
-    /// Two children separated by a draggable gutter.
+    /// 由可拖拽分割条隔开的两个子节点。
     Split {
-        /// `Horizontal` puts the children side by side.
+        /// `Horizontal` 表示左右并排放置两个子节点。
         axis: ScrollAxis,
-        /// The share owned by `first`.
+        /// `first` 子节点所占比例。
         ratio: f32,
-        /// The left/top child.
+        /// 左/上侧子节点。
         first: usize,
-        /// The right/bottom child.
+        /// 右/下侧子节点。
         second: usize,
     },
-    /// A group of tabs sharing one panel.
+    /// 共享同一面板的一组标签页。
     Tabs {
-        /// The tabs, left to right.
+        /// 从左到右排列的标签页列表。
         tabs: Vec<DockTab>,
-        /// The visible tab.
+        /// 当前可见的标签页索引。
         active: usize,
     },
 }
 
 impl DockNode {
-    /// The tab list when this is a `Tabs` node.
+    /// 当节点为 `Tabs` 时返回其标签页列表。
     #[must_use]
     pub fn tabs(&self) -> Option<&[DockTab]> {
         match self {
@@ -88,7 +86,7 @@ impl DockNode {
         }
     }
 
-    /// The active tab index when this is a `Tabs` node.
+    /// 当节点为 `Tabs` 时返回其当前激活的标签页索引。
     #[must_use]
     pub fn active(&self) -> Option<usize> {
         match self {
@@ -98,19 +96,19 @@ impl DockNode {
     }
 }
 
-/// A flat tree of dock panels.
+/// 停靠面板的扁平树。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DockTree {
-    /// Every node; child indices point into this vector.
+    /// 所有节点；子节点索引指向此向量。
     pub nodes: Vec<DockNode>,
-    /// The root node index.
+    /// 根节点索引。
     pub root: usize,
-    /// The gutter thickness of every split.
+    /// 所有分割条的槽宽。
     pub handle: f32,
 }
 
 impl DockTree {
-    /// A tree with a single tab group.
+    /// 创建包含单个标签组的停靠树。
     #[must_use]
     pub fn new(tabs: Vec<DockTab>) -> Self {
         Self {
@@ -120,18 +118,18 @@ impl DockTree {
         }
     }
 
-    /// The node at `index`, if it exists.
+    /// 获取 `index` 处的节点（若存在）。
     #[must_use]
     pub fn node(&self, index: usize) -> Option<&DockNode> {
         self.nodes.get(index)
     }
 
-    /// The node at `index`, mutably.
+    /// 可变获取 `index` 处的节点。
     pub fn node_mut(&mut self, index: usize) -> Option<&mut DockNode> {
         self.nodes.get_mut(index)
     }
 
-    /// Every tab group, in arena order.
+    /// 按竞技场顺序返回所有标签组。
     #[must_use]
     pub fn tab_groups(&self) -> Vec<usize> {
         self.nodes
@@ -141,7 +139,7 @@ impl DockTree {
             .collect()
     }
 
-    /// Locate a tab by identity.
+    /// 按标识定位标签页。
     #[must_use]
     pub fn find_tab(&self, id: u64) -> Option<(usize, usize)> {
         for (index, node) in self.nodes.iter().enumerate() {
@@ -154,7 +152,7 @@ impl DockTree {
         None
     }
 
-    /// The panel rectangle of every tab group.
+    /// 计算所有标签组的面板矩形。
     #[must_use]
     pub fn layout(&self, rect: Rect) -> Vec<DockPane> {
         let mut out = Vec::new();
@@ -209,10 +207,9 @@ impl DockTree {
         }
     }
 
-    /// Split the target panel and put `tabs` into the new half.
+    /// 分割目标面板并将 `tabs` 放入新分出的半区。
     ///
-    /// `Center` merges the tabs into the target group instead. Returns the
-    /// index of the new tab group, or `None` when the target is not a panel.
+    /// `Center` 则改为将标签页合并进目标组。返回新标签组的索引，若目标不是面板则返回 `None`。
     pub fn insert(&mut self, target: usize, zone: DockZone, tabs: Vec<DockTab>) -> Option<usize> {
         let node = self.nodes.get(target)?.clone();
         if !matches!(node, DockNode::Tabs { .. }) {
@@ -249,12 +246,10 @@ impl DockTree {
         Some(fresh)
     }
 
-    /// Move a tab to a target panel and zone.
+    /// 将标签页移动至目标面板与停靠区域。
     ///
-    /// A tab dropped on its own group in `Center` stays put; a tab moved to a
-    /// new group is removed from its old one. Empty groups are left in place:
-    /// a panel that vanishes under the cursor is worse than an empty one that
-    /// can receive another tab.
+    /// 拖放到自身所在组的 `Center` 区域保持原地不动；移入新组时会从旧组移除。
+    /// 空组保留在原地：光标下突然消失的面板比等待接收新标签页的空面板更糟糕。
     pub fn move_tab(&mut self, id: u64, target: usize, zone: DockZone) -> bool {
         let Some((source, position)) = self.find_tab(id) else {
             return false;
@@ -275,7 +270,7 @@ impl DockTree {
         self.insert(target, zone, vec![tab]).is_some()
     }
 
-    /// Remove a tab. Returns whether the tab existed.
+    /// 移除标签页。返回该标签页是否存在。
     pub fn close_tab(&mut self, id: u64) -> bool {
         let Some((group, position)) = self.find_tab(id) else {
             return false;
@@ -290,7 +285,7 @@ impl DockTree {
         true
     }
 
-    /// Apply a drag ratio to a split node.
+    /// 将拖拽比例应用到分割节点。
     pub fn set_split_ratio(&mut self, index: usize, ratio: f32) -> bool {
         let Some(DockNode::Split { ratio: slot, .. }) = self.nodes.get_mut(index) else {
             return false;
@@ -300,21 +295,21 @@ impl DockTree {
     }
 }
 
-/// One laid-out panel.
+/// 单个已布局的面板。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DockPane {
-    /// The arena index of the tab group.
+    /// 该标签组的竞技场索引。
     pub node: usize,
-    /// The panel rectangle.
+    /// 面板矩形。
     pub rect: Rect,
-    /// The tabs in the group.
+    /// 组内的标签页切片。
     pub tabs: Vec<DockTab>,
-    /// The visible tab.
+    /// 当前可见标签页索引。
     pub active: usize,
 }
 
 impl DockPane {
-    /// The tab strip inside the panel.
+    /// 面板内部的标签栏矩形。
     #[must_use]
     pub fn tab_bar(&self) -> Rect {
         Rect::new(
@@ -325,7 +320,7 @@ impl DockPane {
         )
     }
 
-    /// The content area under the tab strip.
+    /// 标签栏下方的内容区域矩形。
     #[must_use]
     pub fn content(&self) -> Rect {
         let bar = self.tab_bar();
@@ -337,7 +332,7 @@ impl DockPane {
         )
     }
 
-    /// The rectangle of one tab, clipped to the strip.
+    /// 单个标签页的矩形，已裁剪到标签栏范围内。
     #[must_use]
     pub fn tab_rect(&self, index: usize, width: f32) -> Rect {
         let bar = self.tab_bar();
@@ -349,7 +344,7 @@ impl DockPane {
         )
     }
 
-    /// The close affordance of one tab.
+    /// 单个标签页的关闭控件矩形。
     #[must_use]
     pub fn close_rect(&self, index: usize, width: f32) -> Rect {
         let tab = self.tab_rect(index, width);
@@ -362,30 +357,30 @@ impl DockPane {
         )
     }
 
-    /// The visible tab, if the group has one.
+    /// 当前可见的标签页（若组内存在）。
     #[must_use]
     pub fn active_tab(&self) -> Option<&DockTab> {
         self.tabs.get(self.active)
     }
 }
 
-/// Where a dragged tab would land inside a panel.
+/// 拖拽中的标签页在面板内的落点区域。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DockZone {
-    /// Split the panel and place the tab above.
+    /// 分割面板并将标签页置于上方。
     Top,
-    /// Split the panel and place the tab below.
+    /// 分割面板并将标签页置于下方。
     Bottom,
-    /// Split the panel and place the tab on the left.
+    /// 分割面板并将标签页置于左侧。
     Left,
-    /// Split the panel and place the tab on the right.
+    /// 分割面板并将标签页置于右侧。
     Right,
-    /// Merge into the panel's tab group.
+    /// 合并到当前面板的标签组中。
     Center,
 }
 
 impl DockZone {
-    /// The split axis this zone produces.
+    /// 该落点区域产生的分割轴方向。
     #[must_use]
     pub fn axis(self) -> ScrollAxis {
         match self {
@@ -395,11 +390,10 @@ impl DockZone {
         }
     }
 
-    /// Classify a pointer position inside a panel.
+    /// 对面板内的指针位置进行区域分类。
     ///
-    /// The outer quarter of each side is a split zone; the middle is the
-    /// merge zone. The closest edge wins, so a pointer near a corner still
-    /// picks the more deliberate of the two directions.
+    /// 每条边的外侧四分之一为分割区，中间为合并区。
+    /// 距离最近的一条边胜出，因此靠近角落的指针仍能选中更明确的方向。
     #[must_use]
     pub fn from_pointer(rect: Rect, pointer: Vec2) -> Self {
         if rect.size.x <= 0.0 || rect.size.y <= 0.0 || !rect.contains_point(pointer) {
@@ -431,7 +425,7 @@ impl DockZone {
         best
     }
 
-    /// The translucent preview this zone paints.
+    /// 该落点区域绘制的半透明预览矩形。
     #[must_use]
     pub fn preview(self, rect: Rect) -> Rect {
         match self {
@@ -454,33 +448,32 @@ impl DockZone {
     }
 }
 
-/// The in-flight tab drag.
+/// 进行中的标签页拖拽状态。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DockDrag {
-    /// The dragged tab.
+    /// 被拖拽的标签页。
     pub tab: u64,
-    /// The group the drag started from.
+    /// 拖拽起始所在的标签组。
     pub from: usize,
-    /// The current pointer position.
+    /// 当前指针位置。
     pub pointer: Vec2,
-    /// Whether the pointer has left every dock panel, which a caller may turn
-    /// into a floating window.
+    /// 指针是否已离开所有停靠面板（调用方据此可将其转为浮动窗口）。
     pub detached: bool,
 }
 
-/// The preview produced while a drag hovers a panel.
+/// 拖拽悬停在面板上时产生的预览。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DockHover {
-    /// The target group.
+    /// 目标标签组。
     pub target: usize,
-    /// The zone inside it.
+    /// 组内的落点区域。
     pub zone: DockZone,
-    /// The rectangle the preview paints.
+    /// 预览绘制的矩形。
     pub preview: Rect,
 }
 
 impl DockHover {
-    /// Classify a pointer over the tree.
+    /// 对停靠树上的指针位置进行分类。
     #[must_use]
     pub fn resolve(tree: &DockTree, root: Rect, pointer: Vec2) -> Option<Self> {
         let pane = tree
@@ -496,19 +489,19 @@ impl DockHover {
     }
 }
 
-/// The live state of a dock area.
+/// 停靠区的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DockState {
-    /// The panel tree.
+    /// 面板树。
     pub tree: DockTree,
-    /// The active drag, if any.
+    /// 当前进行的拖拽（若有）。
     pub drag: Option<DockDrag>,
-    /// The preview under the pointer, if any.
+    /// 指针下方的落点预览（若有）。
     pub hover: Option<DockHover>,
 }
 
 impl DockState {
-    /// A state around the given tree.
+    /// 基于给定面板树创建停靠区状态。
     #[must_use]
     pub fn new(tree: DockTree) -> Self {
         Self {
@@ -518,7 +511,7 @@ impl DockState {
         }
     }
 
-    /// Start dragging a tab.
+    /// 开始拖拽标签页。
     pub fn begin_drag(&mut self, tab: u64, from: usize, pointer: Vec2) {
         self.drag = Some(DockDrag {
             tab,
@@ -529,7 +522,7 @@ impl DockState {
         self.hover = None;
     }
 
-    /// Move the drag and recompute its preview.
+    /// 移动拖拽并重新计算落点预览。
     pub fn drag_to(&mut self, root: Rect, pointer: Vec2) {
         let Some(drag) = self.drag.as_mut() else {
             return;
@@ -539,9 +532,9 @@ impl DockState {
         drag.detached = self.hover.is_none();
     }
 
-    /// Finish the drag: move the tab to the previewed zone.
+    /// 完成拖拽：将标签页移至预览区域。
     ///
-    /// Returns whether the tree changed.
+    /// 返回面板树是否发生变化。
     pub fn drop_drag(&mut self) -> bool {
         let Some(drag) = self.drag.take() else {
             return false;
@@ -552,19 +545,19 @@ impl DockState {
         self.tree.move_tab(drag.tab, hover.target, hover.zone)
     }
 
-    /// Abandon the drag without moving anything.
+    /// 放弃拖拽，不做任何移动。
     pub fn cancel_drag(&mut self) {
         self.drag = None;
         self.hover = None;
     }
 
-    /// Whether a tab is being dragged.
+    /// 判断当前是否正在拖拽标签页。
     #[must_use]
     pub fn is_dragging(&self) -> bool {
         self.drag.is_some()
     }
 
-    /// Activate a tab inside a group.
+    /// 激活指定组内的某个标签页。
     pub fn activate(&mut self, group: usize, index: usize) -> bool {
         let Some(DockNode::Tabs { tabs, active }) = self.tree.node_mut(group) else {
             return false;
@@ -577,35 +570,35 @@ impl DockState {
     }
 }
 
-/// The colour slots a dock area paints with.
+/// 停靠区绘制使用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DockTokens {
-    /// The panel background.
+    /// 面板背景色。
     pub panel: Token,
-    /// The panel border.
+    /// 面板边框色。
     pub border: Token,
-    /// The tab strip background.
+    /// 标签栏背景色。
     pub tab_bar: Token,
-    /// An idle tab.
+    /// 闲置标签页背景色。
     pub tab: Token,
-    /// A hovered tab.
+    /// 悬停标签页背景色。
     pub tab_hover: Token,
-    /// The active tab.
+    /// 激活标签页背景色。
     pub tab_active: Token,
-    /// The text of an active tab.
+    /// 激活标签页文字颜色。
     pub tab_text_active: Token,
-    /// The text of an idle tab.
+    /// 闲置标签页文字颜色。
     pub tab_text: Token,
-    /// The drop preview fill.
+    /// 拖放预览填充色。
     pub preview: Token,
-    /// The drop preview border.
+    /// 拖放预览边框色。
     pub preview_border: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环颜色。
     pub focus_ring: Token,
 }
 
 impl DockTokens {
-    /// The standard set.
+    /// 标准配色方案。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -624,7 +617,7 @@ impl DockTokens {
     }
 }
 
-/// Emit a panel frame: its surface, border and tab strip.
+/// 发射面板框架：表面、边框与标签栏。
 #[must_use]
 pub fn emit_dock_pane(pane: &DockPane, tokens: DockTokens, z: u16) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(3);
@@ -639,8 +632,7 @@ pub fn emit_dock_pane(pane: &DockPane, tokens: DockTokens, z: u16) -> WidgetOutp
     ));
     primitives.push(surface(pane.tab_bar(), 0.0, tokens.tab_bar, z));
     if pane.active_tab().is_some() {
-        // The active tab is underlined in the accent colour, which is the
-        // dock's only permanent state cue.
+        // 激活标签页下方以强调色描线，这是停靠区唯一的常驻状态提示。
         let width = DOCK_TAB_BAR * 4.0;
         let rect = pane.tab_rect(pane.active, width);
         let line = Rect::new(rect.origin.x, rect.max().y - 2.0, rect.size.x, 2.0);
@@ -666,11 +658,10 @@ pub fn emit_dock_pane(pane: &DockPane, tokens: DockTokens, z: u16) -> WidgetOutp
     }
 }
 
-/// Emit one dock tab.
+/// 发射单个停靠标签页。
 ///
-/// The tab's identity is its own node: the tab strip is a list of controls,
-/// not one control with sub-regions, so assistive technology can enumerate
-/// and activate each tab independently.
+/// 每个标签页拥有独立节点标识：标签栏是一组控件列表，而非带子区域的单个控件，
+/// 因此辅助技术可以独立枚举并激活每个标签页。
 #[must_use]
 pub fn emit_dock_tab(
     desc: &DockPane,
@@ -738,7 +729,7 @@ pub fn emit_dock_tab(
     }
 }
 
-/// Emit the translucent drop preview.
+/// 发射半透明拖放预览。
 #[must_use]
 pub fn emit_dock_preview(hover: DockHover, tokens: DockTokens, z: u16) -> WidgetOutput {
     let rect = hover.preview;
@@ -817,8 +808,7 @@ mod tests {
         let preview = tree
             .insert(0, DockZone::Bottom, vec![DockTab::new(9, "Preview")])
             .expect("split");
-        // The split clones the original group into a fresh slot, so the source
-        // group is no longer at index 0.
+        // 分割操作会将原标签组克隆到新槽位，因此源组不再位于索引 0。
         let source = tree
             .tab_groups()
             .into_iter()

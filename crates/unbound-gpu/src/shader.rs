@@ -1,12 +1,11 @@
-//! Compiled SPIR-V modules, embedded at build time.
+//! 编译后的 SPIR-V 模块，在构建期嵌入二进制。
 //!
-//! `build.rs` runs `glslc` (and `spirv-val`, when present) so a malformed
-//! shader fails the build rather than the driver. The bytes are embedded rather
-//! than loaded from disk so the guest/host deployment is a single executable.
+//! `build.rs` 会调用 `glslc`（以及可用的 `spirv-val`），确保异常着色器在构建期
+//! 即报错而非拖到驱动阶段。字节流直接嵌入而非从磁盘加载，使部署保持单文件形态。
 
 use std::io::Cursor;
 
-/// One embedded shader.
+/// 单个内嵌着色器模块。
 #[derive(Copy, Clone, Debug)]
 pub struct ShaderModule {
     pub name: &'static str,
@@ -14,10 +13,10 @@ pub struct ShaderModule {
 }
 
 impl ShaderModule {
-    /// Decode the SPIR-V words for `vkCreateShaderModule`.
+    /// 解码供 `vkCreateShaderModule` 使用的 SPIR-V 字数组。
     ///
     /// # Errors
-    /// Returns an error when the embedded blob is not a multiple of 4 bytes.
+    /// 当内嵌字节长度不是 4 的倍数时返回错误。
     pub fn words(&self) -> Result<Vec<u32>, &'static str> {
         let mut cursor = Cursor::new(self.spirv);
         ash::util::read_spv(&mut cursor).map_err(|_| "malformed SPIR-V blob")
@@ -25,7 +24,7 @@ impl ShaderModule {
 
     #[must_use]
     pub fn magic_ok(&self) -> bool {
-        // SPIR-V magic: 0x07230203, little-endian on disk.
+        // SPIR-V 魔数：0x07230203（磁盘上为小端序）。
         self.spirv.len() >= 4
             && self.spirv.len() % 4 == 0
             && u32::from_le_bytes([self.spirv[0], self.spirv[1], self.spirv[2], self.spirv[3]])
@@ -61,7 +60,7 @@ embedded!(blur_up, "blur_up.comp", "blur_up.comp");
 embedded!(backdrop_vert, "backdrop.vert", "backdrop.vert");
 embedded!(backdrop_frag, "backdrop.frag", "backdrop.frag");
 
-/// Every module, for validation and diagnostics.
+/// 所有着色器模块列表，用于校验与诊断。
 #[must_use]
 pub fn all() -> [ShaderModule; 16] {
     [
@@ -112,8 +111,7 @@ mod tests {
 
     #[test]
     fn vertex_and_fragment_entry_points_exist() {
-        // Entry point is the 5th word of an OpEntryPoint-free module only by
-        // convention, so just assert the modules differ from each other.
+        // 入口点名称在无 OpEntryPoint 的模块中并无固定第 5 字约定，此处仅断言各模块互不相同。
         assert_ne!(uber_vert().spirv, uber_frag().spirv);
         assert_ne!(cull().spirv, scatter().spirv);
         assert_ne!(sort_hist().spirv, sort_scatter().spirv);

@@ -1,4 +1,4 @@
-//! MultiSplit: Continuous N-way horizontal or vertical split container.
+//! 多重分割容器（MultiSplit）：连续 N 路水平或垂直分割容器。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -13,7 +13,7 @@ use crate::{ControlState, WidgetOutput};
 
 pub const MULTI_SPLIT_GUTTER_SIZE: f32 = 6.0;
 
-/// Descriptor for a multi-split container.
+/// 多重分割容器描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct MultiSplitDesc {
     pub rect: Rect,
@@ -45,7 +45,7 @@ impl MultiSplitDesc {
     }
 }
 
-/// State for a multi-split container storing pane fraction ratios.
+/// 存储各窗格比例的多重分割容器状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct MultiSplitState {
     pub ratios: Vec<f32>,
@@ -70,7 +70,7 @@ impl MultiSplitState {
     }
 }
 
-/// Emit primitives and hit regions for a multi-split pane.
+/// 发射多重分割窗格的图元与命中区域。
 #[must_use]
 pub fn emit_multi_split(
     node: u64,
@@ -82,11 +82,11 @@ pub fn emit_multi_split(
     let rect = desc.rect;
     let z = 700u16;
 
-    // 1. Container background
+    // 1. 容器背景
     out.primitives
         .push(surface(rect, desc.radius, Token::SURFACE, z));
 
-    // 2. Fixed 3 gutters for Stable Shape
+    // 2. 固定 3 条分隔槽以维持固定形状
     let total_w = rect.width();
     let col_w = total_w / 3.0;
     for g_idx in 0..2 {
@@ -103,7 +103,7 @@ pub fn emit_multi_split(
             .push(surface(gutter_rect, 2.0, gutter_bg, z + 1 + g_idx as u16));
     }
 
-    // 3. Container outline
+    // 3. 容器轮廓线
     out.primitives.push(outlined(
         rect,
         desc.radius,

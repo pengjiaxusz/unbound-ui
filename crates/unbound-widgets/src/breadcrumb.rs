@@ -1,8 +1,7 @@
-//! The breadcrumb: the path to the current node, collapsed from the left.
+//! 面包屑导航（Breadcrumb）：指向当前节点的路径，从左侧折叠。
 //!
-//! When the path does not fit, the *middle* is what disappears, not the end:
-//! the first crumb and the last few stay visible, and the hidden head folds
-//! into an ellipsis that opens the same dropdown as the first crumb.
+//! 当空间不足时，隐藏的是*中间*部分而非末尾：首项与最后几项保持可见，
+//! 隐藏的头部折叠为省略号，点击可打开与首项相同的下拉菜单。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -16,23 +15,23 @@ use crate::primitive::{focus_ring, glyphs, instance};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The gap around one separator.
+/// 单个分隔符两侧的间距。
 pub const CRUMB_GAP: f32 = 6.0;
 
-/// The width reserved for the ellipsis crumb.
+/// 为省略号面包屑预留的宽度。
 pub const CRUMB_ELLIPSIS: f32 = 24.0;
 
-/// One crumb.
+/// 单个面包屑项。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Crumb {
-    /// Stable identity, also used as the node.
+    /// 稳定标识，同时用作节点。
     pub id: u64,
-    /// The visible label.
+    /// 可见标签文本。
     pub label: String,
 }
 
 impl Crumb {
-    /// A crumb with a label.
+    /// 创建带标签的面包屑项。
     #[must_use]
     pub fn new(id: u64, label: impl Into<String>) -> Self {
         Self {
@@ -42,23 +41,23 @@ impl Crumb {
     }
 }
 
-/// The pure descriptor of a breadcrumb.
+/// 面包屑导航的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct BreadcrumbDesc {
-    /// The breadcrumb rectangle.
+    /// 面包屑矩形区域。
     pub rect: Rect,
-    /// The crumbs, root first.
+    /// 面包屑列表，根节点在前。
     pub crumbs: Vec<Crumb>,
-    /// The gap around each separator.
+    /// 每个分隔符两侧的间距。
     pub gap: f32,
-    /// The width of the separator glyph.
+    /// 分隔符字形的宽度。
     pub separator_width: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl BreadcrumbDesc {
-    /// A breadcrumb with the default separators.
+    /// 使用默认分隔符创建面包屑导航。
     #[must_use]
     pub fn new(rect: Rect, crumbs: Vec<Crumb>) -> Self {
         Self {
@@ -70,9 +69,9 @@ impl BreadcrumbDesc {
         }
     }
 
-    /// One laid-out slot.
+    /// 单个已布局的槽位。
     ///
-    /// `crumb` is `None` for the ellipsis slot.
+    /// 省略号槽位时 `crumb` 为 `None`。
     #[must_use]
     pub fn layout(&self, widths: &[f32]) -> Vec<CrumbSlot> {
         let count = self.crumbs.len();
@@ -105,10 +104,8 @@ impl BreadcrumbDesc {
             return out;
         }
 
-        // Collapse from the left: the last crumbs that fit win, the first
-        // crumb is dropped into the ellipsis together with every other
-        // hidden one. A path with no room for even the tail shows one
-        // ellipsis and the last crumb.
+        // 从左侧折叠：优先保留最后能放下的面包屑，首项及其余隐藏项
+        // 一并折叠进省略号。若连尾部也放不下，则仅显示一个省略号和最后一项。
         let mut visible = Vec::new();
         let mut used = step(CRUMB_ELLIPSIS);
         for index in (0..count).rev() {
@@ -159,7 +156,7 @@ impl BreadcrumbDesc {
         out
     }
 
-    /// Every crumb index folded into the ellipsis.
+    /// 所有被折叠进省略号的面包屑索引。
     #[must_use]
     pub fn hidden_indices(&self, widths: &[f32]) -> Vec<usize> {
         let visible: Vec<usize> = self
@@ -173,60 +170,60 @@ impl BreadcrumbDesc {
     }
 }
 
-/// One breadcrumb slot.
+/// 单个面包屑槽位。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CrumbSlot {
-    /// The crumb index, or `None` for the ellipsis.
+    /// 面包屑索引，省略号槽位时为 `None`。
     pub crumb: Option<usize>,
-    /// The slot rectangle.
+    /// 槽位矩形。
     pub rect: Rect,
-    /// Whether a separator follows the slot.
+    /// 该槽位后是否跟随分隔符。
     pub separator: bool,
 }
 
-/// The live state of a breadcrumb.
+/// 面包屑导航的实时状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BreadcrumbState {
-    /// Whether the overflow dropdown is open.
+    /// 溢出下拉菜单是否展开。
     pub overflow_open: bool,
 }
 
 impl BreadcrumbState {
-    /// A closed breadcrumb.
+    /// 创建关闭状态的面包屑。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Toggle the overflow dropdown.
+    /// 切换溢出下拉菜单的展开状态。
     pub fn toggle_overflow(&mut self) -> bool {
         self.overflow_open = !self.overflow_open;
         self.overflow_open
     }
 
-    /// Close the overflow dropdown.
+    /// 关闭溢出下拉菜单。
     pub fn close(&mut self) {
         self.overflow_open = false;
     }
 }
 
-/// The colour slots a breadcrumb paints with.
+/// 面包屑绘制使用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BreadcrumbTokens {
-    /// The crumb text.
+    /// 面包屑文本颜色。
     pub text: Token,
-    /// The text of the last (current) crumb.
+    /// 最后一项（当前节点）文本颜色。
     pub text_current: Token,
-    /// The separator.
+    /// 分隔符颜色。
     pub separator: Token,
-    /// The ellipsis text.
+    /// 省略号文本颜色。
     pub ellipsis: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环颜色。
     pub focus_ring: Token,
 }
 
 impl BreadcrumbTokens {
-    /// The standard set.
+    /// 标准配色方案。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -239,7 +236,7 @@ impl BreadcrumbTokens {
     }
 }
 
-/// Emit a separator between two slots.
+/// 发射两个槽位之间的分隔符。
 #[must_use]
 pub fn emit_crumb_separator(
     desc: &BreadcrumbDesc,
@@ -280,7 +277,7 @@ pub fn emit_crumb_separator(
     }
 }
 
-/// Emit one crumb.
+/// 发射单个面包屑项。
 #[must_use]
 pub fn emit_crumb(
     desc: &BreadcrumbDesc,
@@ -339,7 +336,7 @@ pub fn emit_crumb(
     }
 }
 
-/// Emit the ellipsis that opens the hidden head.
+/// 发射用于展开隐藏头部的省略号。
 #[must_use]
 pub fn emit_crumb_ellipsis(
     node: u64,
@@ -530,8 +527,7 @@ mod tests {
             &[],
             tokens,
         );
-        // The glyph list is empty here; the focus ring is the only primitive
-        // and it stays hidden while unfocused.
+        // 此处字形列表为空；焦点环是唯一图元，未聚焦时保持隐藏。
         assert_eq!(output.primitives.len(), 1);
     }
 }

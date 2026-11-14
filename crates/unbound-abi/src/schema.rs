@@ -1,22 +1,22 @@
-//! Compile-time state schema fingerprinting.
+//! 编译期状态 schema 指纹生成。
 //!
-//! The hot-reload fast path (`docs` §8.1) compares a 64-bit hash of the guest's
-//! `State` memory layout. When it matches, the old `State` is handed to the new
-//! `guest_gen_N.dll` verbatim — no serialisation at all. When it differs, the
-//! host pays for a `migrate_export`/`migrate_import` round trip instead of
-//! crashing.
+//! 热重载快路径（`docs` §8.1）会比对 guest `State` 内存布局的 64 位哈希。
+//! 哈希匹配时，旧 `State` 会原样移交给新的 `guest_gen_N.dll`——完全无需序列化。
+//! 若不一致，host 则走 `migrate_export`/`migrate_import` 往返迁移，避免崩溃。
 //!
-//! The hash is FNV-1a over `(field_name, type_name, offset)` triples, mixed in
-//! declaration order. It is computed entirely in `const` context by the
-//! [`impl_schema_hash!`](crate::impl_schema_hash) macro, so it costs nothing
-//! at runtime.
+//!
+//!
+//! 该哈希基于 `(field_name, type_name, offset)` 三元组按声明顺序计算 FNV-1a。
+//! 整个计算由 [`impl_schema_hash!`](crate::impl_schema_hash) 宏在 `const` 上下文中完成，
+//! 运行时零开销。
+//!
 
-/// FNV-1a 64-bit offset basis.
+/// FNV-1a 64 位偏移基数。
 pub const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-/// FNV-1a 64-bit prime.
+/// FNV-1a 64 位质数。
 pub const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-/// Mix a byte slice into an in-progress FNV-1a hash.
+/// 将字节切片混入当前 FNV-1a 哈希状态。
 #[inline]
 #[must_use]
 pub const fn hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
@@ -29,21 +29,21 @@ pub const fn hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
     hash
 }
 
-/// Mix a `&str` into an in-progress hash.
+/// 将 `&str` 混入当前哈希状态。
 #[inline]
 #[must_use]
 pub const fn hash_str(hash: u64, s: &str) -> u64 {
     hash_bytes(hash, s.as_bytes())
 }
 
-/// Mix a `u64` into an in-progress hash (little-endian, order-sensitive).
+/// 将 `u64` 混入当前哈希状态（小端序，顺序敏感）。
 #[inline]
 #[must_use]
 pub const fn hash_u64(hash: u64, v: u64) -> u64 {
     hash_bytes(hash, &v.to_le_bytes())
 }
 
-/// Mix a field descriptor — name, type and byte offset — into the hash.
+/// 将字段描述符（名称、类型与字节偏移）混入哈希。
 #[inline]
 #[must_use]
 pub const fn hash_field(hash: u64, name: &str, type_name: &str, offset: usize) -> u64 {
@@ -54,24 +54,24 @@ pub const fn hash_field(hash: u64, name: &str, type_name: &str, offset: usize) -
     hash_u64(h, offset as u64)
 }
 
-/// Mix a nested type's own schema hash into the parent's.
+/// 将嵌套类型自身的 schema 哈希混入父类型哈希。
 ///
-/// Without this a change *inside* a nested type — adding a field to the
-/// element type of a `Vec`, say — would leave the parent's fingerprint
-/// untouched, and the host would hand the old memory to the new guest as if
-/// the layouts still matched.
+/// 否则嵌套类型*内部*的变更（例如向 `Vec` 元素类型添加字段）将不会改变
+/// 父类型指纹，导致 host 把旧内存当成布局仍匹配直接交给新 guest。
+///
+///
 #[inline]
 #[must_use]
 pub const fn hash_nested(hash: u64, nested: u64) -> u64 {
     hash_u64(hash, nested)
 }
 
-/// Finished hash value from an in-progress state.
+/// 从进行中的状态生成最终哈希值。
 #[inline]
 #[must_use]
 pub const fn finish_hash(hash: u64) -> u64 {
-    // One last avalanche step so that small field reorderings that only differ
-    // in one byte still spread across the whole 64-bit space.
+    // 最后一次雪崩（avalanche）步骤，确保仅单字节差异的小范围字段重排
+    // 也能均匀扩散到整个 64 位空间。
     let mut h = hash;
     h ^= h >> 33;
     h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
@@ -79,36 +79,36 @@ pub const fn finish_hash(hash: u64) -> u64 {
     h
 }
 
-/// Implemented by every guest `State` that participates in hot reload.
+/// 由每个参与热重载的 guest `State` 实现。
 ///
-/// # The layout has to be fixed
+/// # 布局必须固定
 ///
-/// Equal fingerprints mean "the host may hand the old state to the new guest
-/// verbatim". That is only safe if both builds agree on the *byte* layout, so
-/// the state type must have a fixed one: `#[repr(C)]`, or
-/// `#[repr(transparent)]` around a single field.
+/// 指纹相等意味着“host 可将旧状态原样交给新 guest”。
+/// 仅当两次构建就*字节*布局达成一致时才安全，因此状态类型必须具备
+/// 固定布局：`#[repr(C)]`，或围绕单个字段的 `#[repr(transparent)]`。
 ///
-/// Under the default `repr(Rust)` the compiler may reorder fields — it does
-/// — and it may do so differently in another compiler version. The
-/// fingerprint is hand-written from a field list, so it cannot detect that
-/// kind of drift: it would report "compatible" for two states that are laid
-/// out differently.
+///
+/// 在默认的 `repr(Rust)` 下编译器可以（且确实会）重排字段，
+/// 不同编译器版本的重排方式也可能不同。基于字段列表手写的指纹无法检测
+/// 此类漂移：它会误判两个实际布局不同的状态为“兼容”。
+///
+///
 pub trait StateSchema {
-    /// Fingerprint of the memory layout. Equal values mean "binary compatible".
+    /// 内存布局指纹。值相等即表示“二进制兼容”。
     const SCHEMA_HASH: u64;
 }
 
-/// Hand-write a schema hash for a type.
+/// 为类型手写 schema 哈希。
 ///
 /// ```ignore
 /// unbound_abi::impl_schema_hash!(MyState, 0x1234, "field_a", "u32", 0, "field_b", "f32", 4);
 /// ```
 ///
-/// The `nested` section mixes the schema hashes of the types the state points
-/// at. A `Vec<Row>` is 24 bytes whatever `Row` looks like, so without it a
-/// change inside `Row` would leave the parent's fingerprint untouched and the
-/// host would hand the old memory to the new guest as if the layouts still
-/// matched.
+/// `nested` 分段会混入状态所指向类型的 schema 哈希。
+/// 无论 `Row` 长什么样，`Vec<Row>` 始终占 24 字节；若无此分段，
+/// `Row` 内部的变更不会改变父级指纹，host 便会误将旧内存原样交给新 guest。
+///
+///
 #[macro_export]
 macro_rules! impl_schema_hash {
     ($ty:ty, $seed:expr, nested: [$($nested:ty),* $(,)?]
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn known_fnv_value() {
-        // FNV-1a("a") is a well-known test vector.
+        // FNV-1a("a") 是已知的标准测试向量。
         assert_eq!(hash_str(FNV_OFFSET_BASIS, "a"), 0xaf63_dc4c_8601_ec8c);
         assert_eq!(hash_str(FNV_OFFSET_BASIS, "foobar"), 0x8594_4171_f739_67e8);
     }
@@ -178,9 +178,9 @@ mod tests {
         assert_ne!(C::SCHEMA_HASH, D::SCHEMA_HASH);
     }
 
-    /// A `Vec<T>` is 24 bytes whatever `T` looks like, so a change inside `T`
-    /// must be mixed into the parent's fingerprint — otherwise the host hands
-    /// the old memory to the new guest as if the layouts still matched.
+    /// 无论 `T` 长什么样，`Vec<T>` 始终占 24 字节，因此 `T` 内部的变更
+    /// 必须混入父级指纹——否则 host 会误将旧内存原样交给新 guest。
+    ///
     #[test]
     fn a_change_in_a_nested_type_changes_the_parent_hash() {
         struct Inner;
@@ -202,8 +202,8 @@ mod tests {
 
     #[test]
     fn the_nested_hash_is_order_sensitive() {
-        // `A` and `B` differ in one field name, so they hash differently and
-        // the order they are mixed in is observable.
+        // `A` 与 `B` 仅在一个字段名上不同，因此哈希结果不同，
+        // 且混入顺序的差异也是可观测的。
         struct Ab;
         struct Ba;
         impl_schema_hash!(Ab, 2, nested: [A, B], "v", "u32", 0);

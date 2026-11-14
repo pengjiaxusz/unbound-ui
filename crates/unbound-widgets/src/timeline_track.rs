@@ -1,4 +1,4 @@
-//! TimelineTrack / DopeSheet multi-track keyframe & playhead scrubber.
+//! TimelineTrack / DopeSheet 多轨道关键帧与播放头拖拽标尺。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -15,52 +15,52 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 const MAX_TRACKS: usize = 3;
 const MAX_KEYFRAMES: usize = 6;
 
-/// A single keyframe marker `(track_index, time_seconds)`.
+/// 单个关键帧标记 `(轨道索引, 时间秒数)`。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Keyframe {
-    /// Track index `0..3`.
+    /// 轨道索引 `0..3`。
     pub track: usize,
-    /// Time in seconds.
+    /// 时间（秒）。
     pub time: f32,
 }
 
-/// Interactive state for [`TimelineTrackDesc`].
+/// [`TimelineTrackDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TimelineTrackState {
-    /// Playhead position in seconds.
+    /// 播放头位置（秒）。
     pub playhead: f32,
-    /// Total duration in seconds.
+    /// 总时长（秒）。
     pub duration: f32,
-    /// Keyframes.
+    /// 关键帧列表。
     pub keyframes: Vec<Keyframe>,
 }
 
 impl TimelineTrackState {
-    /// Scrub playhead to `t` clamped to `0.0..=duration`.
+    /// 将播放头拖拽到 `t`（夹紧至 `0.0..=duration`）。
     pub fn scrub(&mut self, t: f32) {
         self.playhead = t.clamp(0.0, self.duration.max(0.01));
     }
 }
 
-/// Descriptor for a [`TimelineTrack`].
+/// [`TimelineTrack`] 的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimelineTrackDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Playhead time in seconds.
+    /// 播放头时间（秒）。
     pub playhead: f32,
-    /// Total duration in seconds.
+    /// 总时长（秒）。
     pub duration: f32,
-    /// Keyframe markers.
+    /// 关键帧标记列表。
     pub keyframes: Vec<Keyframe>,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl TimelineTrackDesc {
-    /// Create a timeline track descriptor.
+    /// 创建时间轴轨道描述符。
     #[must_use]
     pub fn new(rect: Rect, playhead: f32, duration: f32, keyframes: Vec<Keyframe>) -> Self {
         Self {
@@ -74,19 +74,19 @@ impl TimelineTrackDesc {
     }
 }
 
-/// Deterministic sub-node id for a timeline keyframe marker (`0..6`).
+/// 时间轴关键帧标记的确定性子节点 ID（`0..6`）。
 #[must_use]
 pub const fn timeline_keyframe_node(node: u64, index: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xF00 + index as u64)
 }
 
-/// Deterministic sub-node id for the timeline playhead scrubber handle.
+/// 时间轴播放头拖拽手柄的确定性子节点 ID。
 #[must_use]
 pub const fn timeline_playhead_node(node: u64) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xF10
 }
 
-/// Emit a stable-shape dope sheet (1 bg + 3 track lanes + 6 keyframe diamonds + 1 playhead + 1 focus ring = 12 primitives).
+/// 输出结构稳定的摄影表（1 个背景 + 3 条轨道 + 6 个关键帧菱形 + 1 个播放头 + 1 个焦点环 = 12 个图元）。
 #[must_use]
 pub fn emit_timeline_track(
     node: u64,
@@ -209,7 +209,8 @@ pub fn emit_timeline_track(
             let track = f.track.min(MAX_TRACKS - 1);
             let norm_t = (f.time / desc.duration).clamp(0.0, 1.0);
             let kx = desc.rect.origin.x + pad + norm_t * (lane_w - 8.0);
-            let ky = desc.rect.origin.y + pad + track as f32 * (lane_h + pad) + (lane_h - 8.0) * 0.5;
+            let ky =
+                desc.rect.origin.y + pad + track as f32 * (lane_h + pad) + (lane_h - 8.0) * 0.5;
             let kf_r = Rect::new(kx - 2.0, ky - 2.0, 12.0, 12.0);
             let key = timeline_keyframe_node(node, k);
             out.with_sub_control(

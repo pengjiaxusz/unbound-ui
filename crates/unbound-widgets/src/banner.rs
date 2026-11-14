@@ -1,4 +1,4 @@
-//! Full-width top global status Banner (e.g. hot-reload / device-lost notice).
+//! 顶部全宽全局状态横幅（Banner，例如热重载或设备丢失提示）。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -12,21 +12,21 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// Descriptor for a full-width top [`Banner`].
+/// 顶部全宽 [`Banner`] 描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct BannerDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Banner message.
+    /// 横幅消息。
     pub message: String,
-    /// Severity tone.
+    /// 严重级别色调。
     pub severity: Severity,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl BannerDesc {
-    /// Create a banner descriptor.
+    /// 创建横幅描述符。
     #[must_use]
     pub fn new(rect: Rect, message: impl Into<String>, severity: Severity) -> Self {
         Self {
@@ -38,7 +38,7 @@ impl BannerDesc {
     }
 }
 
-/// Emit a stable-shape banner (1 bg + 1 accent bar + 1 dismiss pill + 1 focus ring = 4 primitives).
+/// 发射固定形状的横幅（1 背景 + 1 强调条 + 1 关闭胶囊 + 1 焦点环 = 4 个图元）。
 #[must_use]
 pub fn emit_banner(
     node: u64,

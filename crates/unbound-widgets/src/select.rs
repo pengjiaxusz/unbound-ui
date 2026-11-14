@@ -1,12 +1,12 @@
-//! A select control, composed from the popover and menu primitives.
+//! 下拉选择控件，由气泡框与菜单图元组合而成。
 //!
-//! The select owns no menu of its own: [`SelectDesc::menu`] builds a
-//! [`MenuDesc`] anchored under the field, and the caller feeds the resulting
-//! entry into [`crate::OverlayStack`]. That keeps dropdown placement and
-//! dismissal in one place for every popup in the system.
+//! 选择控件本身不持有菜单：[`SelectDesc::menu`] 在输入框下方构建一个
+//! 锚定 [`MenuDesc`]，调用方再将生成的条目推入 [`crate::OverlayStack`]。
+//! 这使系统内所有弹窗的定位与关闭逻辑统一在一处管理。
 //!
-//! The keyboard contract is the one users expect: `Up`/`Down` move the
-//! highlight, `Enter` chooses it, `Escape` closes without choosing.
+//!
+//! 键盘交互符合常规预期：`Up`/`Down` 移动高亮，`Enter` 确认选择，`Escape` 取消并关闭。
+//!
 
 use unbound_gpu::data::{GpuPayload, GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
@@ -19,34 +19,34 @@ use crate::overlay::place_anchored_popup;
 use crate::primitive::{focus_ring, instance, surface};
 use crate::{ControlState, WidgetDesc, WidgetOutput};
 
-/// The hit-test layer of a select field.
+/// 选择框的命中测试层。
 pub const SELECT_LAYER: u8 = 1;
-/// The height of one option row.
+/// 单个选项行的高度。
 pub const SELECT_ROW_HEIGHT: f32 = 30.0;
 const CHEVRON_HALF_WIDTH: f32 = 4.0;
-/// Half the height of the disclosure chevron.
+/// 展开/收起箭头的半高。
 const CHEVRON_HALF_HEIGHT: f32 = 3.0;
-/// Stroke width of the disclosure chevron.
+/// 展开/收起箭头的描边宽度。
 const CHEVRON_STROKE: f32 = 1.5;
 
-/// A select field.
+/// 下拉选择框描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectDesc {
-    /// The closed field rectangle.
+    /// 收起状态下的输入框矩形。
     pub rect: Rect,
-    /// The option labels.
+    /// 选项标签列表。
     pub options: Vec<String>,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The text shown while nothing is selected.
+    /// 未选中任何项时显示的占位文本。
     pub placeholder: String,
-    /// Indices of the options that cannot be chosen.
+    /// 禁止选中的选项索引列表。
     pub disabled_options: Vec<usize>,
-    /// Optional initial selection index for declarative builders.
+    /// 供声明式构建器使用的可选初始选中索引。
     pub initial_selection: Option<usize>,
-    /// The corner radius.
+    /// 圆角半径。
     pub radius: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
@@ -65,14 +65,14 @@ impl SelectDesc {
         }
     }
 
-    /// The same field with a placeholder shown while nothing is selected.
+    /// 设置未选中时显示的占位文本。
     #[must_use]
     pub fn with_placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
     }
 
-    /// The same field with one option disabled.
+    /// 禁用指定选项。
     #[must_use]
     pub fn with_disabled_option(mut self, index: usize) -> Self {
         if !self.disabled_options.contains(&index) {
@@ -81,13 +81,13 @@ impl SelectDesc {
         self
     }
 
-    /// Whether an option cannot be chosen.
+    /// 查询某个选项是否被禁用。
     #[must_use]
     pub fn option_disabled(&self, index: usize) -> bool {
         self.disabled_options.contains(&index)
     }
 
-    /// The text the closed field displays.
+    /// 收起状态下显示的文本。
     #[must_use]
     pub fn display_text<'a>(&'a self, state: &SelectState) -> &'a str {
         self.options
@@ -95,12 +95,11 @@ impl SelectDesc {
             .map_or(self.placeholder.as_str(), String::as_str)
     }
 
-    /// The colour slot of the displayed text.
+    /// 显示文本的颜色槽位。
     ///
-    /// A placeholder reads as secondary text; a real selection as primary
-    /// text. `state.selected` is the only authority, never the label being
-    /// empty, which keeps an option whose label is `""` from looking like a
-    /// placeholder.
+    /// 占位文本使用次要文本色，真实选中项使用主要文本色。
+    /// `state.selected` 是唯一依据而非判断标签是否为空，
+    /// 从而避免标签本身为 `""` 的选项被误当作占位文本。
     #[must_use]
     pub fn text_token(&self, state: &SelectState, control: ControlState) -> Token {
         if control.disabled {
@@ -112,7 +111,7 @@ impl SelectDesc {
         }
     }
 
-    /// The menu descriptor for the open dropdown.
+    /// 打开下拉列表时对应的菜单描述符。
     #[must_use]
     pub fn menu(&self, viewport: Rect) -> crate::menu::MenuDesc {
         let size = Vec2::new(
@@ -147,14 +146,14 @@ impl SelectDesc {
     }
 }
 
-/// The open/closed and selection state of a select.
+/// 选择框的开关与选中状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SelectState {
-    /// Whether the dropdown is open.
+    /// 下拉列表是否处于打开状态。
     pub open: bool,
-    /// The selected option.
+    /// 当前选中的选项索引。
     pub selected: Option<usize>,
-    /// The highlighted option while open.
+    /// 打开状态下当前高亮的选项索引。
     pub highlighted: Option<usize>,
 }
 
@@ -164,19 +163,19 @@ impl SelectState {
         Self::default()
     }
 
-    /// Open the dropdown, highlighting the current selection.
+    /// 打开下拉列表，并高亮当前选中项。
     pub fn open(&mut self) {
         self.open = true;
         self.highlighted = self.selected;
     }
 
-    /// Close without choosing.
+    /// 不做选择直接关闭。
     pub fn close(&mut self) {
         self.open = false;
         self.highlighted = None;
     }
 
-    /// Toggle the dropdown.
+    /// 切换下拉列表开关状态。
     pub fn toggle(&mut self) {
         if self.open {
             self.close();
@@ -185,9 +184,9 @@ impl SelectState {
         }
     }
 
-    /// Move the highlight, wrapping and skipping disabled options.
+    /// 移动高亮索引，到达两端时循环并跳过禁用选项。
     ///
-    /// When every option is disabled the highlight stays where it is.
+    /// 当所有选项均被禁用时，高亮保持原位。
     pub fn step(&mut self, desc: &SelectDesc, forward: bool) {
         let count = desc.options.len();
         if count == 0 {
@@ -209,7 +208,7 @@ impl SelectState {
         }
     }
 
-    /// Commit the highlighted option. Returns the chosen index.
+    /// 提交当前高亮项，返回选中的索引。
     pub fn commit(&mut self) -> Option<usize> {
         let index = self.highlighted?;
         self.selected = Some(index);
@@ -217,7 +216,7 @@ impl SelectState {
         Some(index)
     }
 
-    /// The selected label.
+    /// 获取当前选中项的标签。
     #[must_use]
     pub fn label<'a>(&self, desc: &'a SelectDesc) -> Option<&'a str> {
         desc.options
@@ -225,7 +224,7 @@ impl SelectState {
             .map(std::string::String::as_str)
     }
 
-    /// The menu highlight for the open dropdown.
+    /// 打开下拉列表时的菜单高亮状态。
     #[must_use]
     pub fn menu_state(&self) -> MenuState {
         MenuState {
@@ -235,14 +234,14 @@ impl SelectState {
     }
 }
 
-/// A select bound to an identity.
+/// 绑定了节点标识的选择框描述符。
 #[derive(Clone, Debug)]
 pub struct SelectWidget {
-    /// The widget identity.
+    /// 控件标识。
     pub node: u64,
-    /// The descriptor.
+    /// 描述符。
     pub desc: SelectDesc,
-    /// The state.
+    /// 状态。
     pub state: SelectState,
 }
 
@@ -260,8 +259,7 @@ impl WidgetDesc for SelectWidget {
     }
 }
 
-/// Emit the closed field: fill, border, the disclosure chevron, the caller's
-/// glyphs and the focus ring.
+/// 输出收起状态的输入框：填充、边框、展开箭头、调用方字形与焦点环。
 #[must_use]
 pub fn emit_select(
     node: u64,
@@ -272,11 +270,10 @@ pub fn emit_select(
     emit_select_with_glyphs(node, desc, state, control, &[])
 }
 
-/// Emit the closed field with the shaped label glyphs.
+/// 输出带有已塑形标签字形的收起选择框。
 ///
-/// The glyphs are coloured with [`SelectDesc::text_token`], so an empty select
-/// paints its placeholder in [`Token::TEXT_SECONDARY`] exactly like a text
-/// field does.
+/// 字形使用 [`SelectDesc::text_token`] 着色，因此空选择框会像文本输入框一样
+/// 使用 [`Token::TEXT_SECONDARY`] 绘制占位文本。
 #[must_use]
 pub fn emit_select_with_glyphs(
     node: u64,
@@ -309,8 +306,8 @@ pub fn emit_select_with_glyphs(
         ),
     ];
     let mut payloads: Vec<GpuPayload> = Vec::new();
-    // The disclosure arrow: two strokes meeting at the apex, pointing down
-    // while closed and up while open.
+    // 展开箭头：在顶点交汇的两条线段，收起时朝下，打开时朝上。
+    //
     let apex_y = if state.open {
         -CHEVRON_HALF_HEIGHT
     } else {
@@ -401,7 +398,7 @@ pub fn emit_select_with_glyphs(
     }
 }
 
-/// One quadratic stroke of the disclosure chevron.
+/// 展开箭头的单条二次曲线描边。
 fn chevron_segment(a: Vec2, b: Vec2, color: Token, z: u16) -> (GpuPrimitiveInstance, GpuPayload) {
     let origin = Vec2::new(a.x.min(b.x), a.y.min(b.y));
     let size = Vec2::new((a.x - b.x).abs().max(1.0), (a.y - b.y).abs().max(1.0));

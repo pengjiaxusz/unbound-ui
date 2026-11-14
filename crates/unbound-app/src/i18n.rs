@@ -1,18 +1,18 @@
-//! Internationalization, locale formatting, and RTL directionality (S5.5).
+//! 国际化、区域格式设置与 RTL 书写方向支持（S5.5）。
 
 use rustc_hash::FxHashMap;
 
-/// Layout reading direction for the active locale.
+/// 当前激活区域的布局阅读方向。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum LayoutDirection {
-    /// Left-to-right (e.g. `en-US`, `zh-CN`).
+    /// 从左到右（例如 `en-US`、`zh-CN`）。
     #[default]
     Ltr,
-    /// Right-to-left (e.g. `ar-SA`, `he-IL`).
+    /// 从右到左（例如 `ar-SA`、`he-IL`）。
     Rtl,
 }
 
-/// Lightweight message bundle and locale-aware formatter.
+/// 轻量级消息资源包与区域感知格式化器。
 #[derive(Clone, Debug)]
 pub struct I18nBundle {
     active: String,
@@ -28,7 +28,7 @@ impl Default for I18nBundle {
 }
 
 impl I18nBundle {
-    /// Create a bundle initialized to `active_locale` (also used as fallback).
+    /// 创建初始化为 `active_locale`（同时作为回退语言）的资源包。
     #[must_use]
     pub fn new(active_locale: impl Into<String>) -> Self {
         let locale = active_locale.into();
@@ -40,7 +40,7 @@ impl I18nBundle {
         }
     }
 
-    /// Register a static or dynamic slice of `(key, template)` entries for `locale`.
+    /// 为 `locale` 注册一组静态或动态 `(key, template)` 词条。
     pub fn register_locale(&mut self, locale: impl Into<String>, entries: &[(&str, &str)]) {
         let map = self.tables.entry(locale.into()).or_default();
         for &(k, v) in entries {
@@ -48,28 +48,28 @@ impl I18nBundle {
         }
     }
 
-    /// Switch the active locale at runtime.
+    /// 在运行时切换当前激活区域。
     pub fn set_locale(&mut self, locale: impl Into<String>) {
         self.active = locale.into();
     }
 
-    /// Set the fallback locale used when a key is missing in the active locale.
+    /// 设置当激活区域缺失键时使用的回退区域。
     pub fn set_fallback(&mut self, locale: impl Into<String>) {
         self.fallback = locale.into();
     }
 
-    /// Currently active locale tag (e.g. `"zh-CN"`).
+    /// 当前激活的区域标签（例如 `"zh-CN"`）。
     #[must_use]
     pub fn locale(&self) -> &str {
         &self.active
     }
 
-    /// Override RTL detection (`Some(true)` forces RTL, `None` derives from locale).
+    /// 覆盖 RTL 检测（`Some(true)` 强制 RTL，`None` 由区域自动推导）。
     pub fn set_rtl_override(&mut self, rtl: Option<bool>) {
         self.rtl_override = rtl;
     }
 
-    /// Whether the active locale lays out right-to-left.
+    /// 当前激活区域是否按从右到左布局。
     #[must_use]
     pub fn is_rtl(&self) -> bool {
         if let Some(forced) = self.rtl_override {
@@ -80,7 +80,7 @@ impl I18nBundle {
         matches!(lang, "ar" | "he" | "fa" | "ur" | "iw")
     }
 
-    /// Active [`LayoutDirection`].
+    /// 当前激活的 [`LayoutDirection`]。
     #[must_use]
     pub fn direction(&self) -> LayoutDirection {
         if self.is_rtl() {
@@ -90,7 +90,7 @@ impl I18nBundle {
         }
     }
 
-    /// Look up a raw message template by `key`, falling back to `fallback` then `key`.
+    /// 按 `key` 查找原始消息模板，依次回退至 `fallback` 与 `key` 本身。
     #[must_use]
     pub fn t<'a>(&'a self, key: &'a str) -> &'a str {
         if let Some(val) = self.tables.get(&self.active).and_then(|m| m.get(key)) {
@@ -102,7 +102,7 @@ impl I18nBundle {
         key
     }
 
-    /// Look up `key` and substitute `{name}` placeholders from `args`.
+    /// 查找 `key` 并使用 `args` 替换 `{name}` 占位符。
     #[must_use]
     pub fn format(&self, key: &str, args: &[(&str, &str)]) -> String {
         let mut out = self.t(key).to_owned();
@@ -113,7 +113,7 @@ impl I18nBundle {
         out
     }
 
-    /// Format a number with locale-appropriate grouping and decimal separators.
+    /// 按区域习惯的千分位与小数点分隔符格式化数字。
     #[must_use]
     pub fn format_number(&self, value: f64, decimals: usize) -> String {
         let neg = value.is_sign_negative() && value != 0.0;
@@ -151,7 +151,7 @@ impl I18nBundle {
         grouped
     }
 
-    /// Format a calendar date according to the active locale.
+    /// 按当前激活区域格式化日历日期。
     #[must_use]
     pub fn format_date(&self, year: i32, month: u8, day: u8) -> String {
         let lower = self.active.to_ascii_lowercase();
@@ -188,7 +188,7 @@ mod tests {
             bundle.format("greeting", &[("name", "Alice")]),
             "你好，Alice！"
         );
-        assert_eq!(bundle.t("save"), "Save"); // fallback to en-US
+        assert_eq!(bundle.t("save"), "Save"); // 回退到 en-US
         assert_eq!(bundle.format_date(2026, 11, 13), "2026年11月13日");
 
         bundle.set_locale("ar-SA");

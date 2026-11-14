@@ -1,4 +1,4 @@
-//! Design Guidance: colour, type, elevation and vectors.
+//! 设计指南：色彩、排版、层级阴影与矢量图形。
 
 use unbound_math::f16::f16_to_f32;
 use unbound_math::Rect;
@@ -13,7 +13,7 @@ pub const COLORS_INFO: PageInfo = PageInfo {
     short: "Color palette",
     description: "Semantic tokens are resolved once per theme into a 512-entry lookup table; primitives only carry a token index. Switching theme uploads no geometry.",
     crates: &["unbound-theme", "unbound-math"],
-    docs: "docs/03-core/theme.md",
+    docs: "docs/architecture/animation-and-theme.md",
     keywords: "color token palette theme light dark contrast semantic",
 };
 
@@ -22,7 +22,7 @@ pub const TYPOGRAPHY_INFO: PageInfo = PageInfo {
     short: "Typography",
     description: "MTSDF glyph caches keep stems sharp from 9 pt captions to 60 pt display type, including extreme zoom and CJK fallback.",
     crates: &["unbound-text", "mtsdf.comp"],
-    docs: "docs/03-core/text.md",
+    docs: "docs/architecture/vector-and-text.md",
     keywords: "typography type mtsdf sdf font glyph scale sharpening",
 };
 
@@ -31,7 +31,7 @@ pub const ELEVATION_INFO: PageInfo = PageInfo {
     short: "Elevation",
     description: "Rounded-rect clipping and analytic shadows share the same surface primitive. Radius, blur and border are all uniforms — no extra draw calls.",
     crates: &["unbound-gpu", "unbound-vector"],
-    docs: "docs/03-core/vector.md",
+    docs: "docs/architecture/vector-and-text.md",
     keywords: "elevation shadow radius corner clipping border surface",
 };
 
@@ -40,7 +40,7 @@ pub const VECTOR_INFO: PageInfo = PageInfo {
     short: "Vector",
     description: "Bézier ribbons are expanded on the GPU. The same curve primitive powers the hero banner, focus rings and the infinite canvas minimap.",
     crates: &["unbound-vector", "uber.frag"],
-    docs: "docs/03-core/vector.md",
+    docs: "docs/architecture/vector-and-text.md",
     keywords: "vector bezier curve shape antialias gpu",
 };
 
@@ -196,7 +196,7 @@ fn hex(color: [u16; 4]) -> String {
     )
 }
 
-/// Colour tokens, optionally in light / dark parity mode.
+/// 色彩令牌，支持可选的浅色 / 深色对等模式。
 pub fn palette(ctx: &mut DemoCtx<'_, '_>, compare: bool) {
     if compare {
         palette_compare(ctx);
@@ -304,8 +304,8 @@ fn palette_compare(ctx: &mut DemoCtx<'_, '_>) {
             panel_w,
             rect.size.y,
         );
-        // Both panels use the current shell's typography tokens so text stays
-        // legible while the swatches show the corresponding theme value.
+        // 两个面板均使用当前外壳的排版令牌，使文字保持清晰可读，
+        // 同时色板展示对应的主题值。
         ctx.canvas
             .rect(panel, 12.0, palette.card_bg, palette.card_border, 1.0, 4.0);
         ctx.canvas.text(
@@ -369,7 +369,7 @@ fn palette_compare(ctx: &mut DemoCtx<'_, '_>) {
     }
 }
 
-/// The type ramp, live.
+/// 实时字号阶梯（type ramp）。
 pub fn typography(ctx: &mut DemoCtx<'_, '_>, scaling: bool) {
     if scaling {
         typography_scaling(ctx);
@@ -409,9 +409,9 @@ pub fn typography(ctx: &mut DemoCtx<'_, '_>, scaling: bool) {
     let sample = if ligatures {
         "office · affine · fi fl"
     } else {
-        // ZERO WIDTH NON-JOINER between the glyphs that would form a
-        // ligature. Shaping treats it as a break, so "office" renders as
-        // three separate f/i codes — visibly wider — instead of the ligature.
+        // 在会形成连字（ligature）的字形之间插入零宽不连字（ZERO WIDTH NON-JOINER）。
+        // 塑形器会将其视为断点，因此 "office" 会渲染为三个独立的 f/i 码位——
+        // 视觉上明显更宽——而不是连字。
         "of\u{200c}fice · af\u{200c}fine · f\u{200c}i f\u{200c}l"
     };
     ctx.canvas.divider(rect.origin.x, y + 2.0, rect.size.x);
@@ -481,7 +481,7 @@ fn typography_scaling(ctx: &mut DemoCtx<'_, '_>) {
     );
 }
 
-/// Elevation and clipping.
+/// 层级阴影（Elevation）与裁剪。
 pub fn elevation(ctx: &mut DemoCtx<'_, '_>, clipping: bool) {
     if clipping {
         elevation_clipping(ctx);
@@ -563,7 +563,7 @@ fn elevation_clipping(ctx: &mut DemoCtx<'_, '_>) {
         1.0,
         10.0,
     );
-    // A gradient bar intentionally larger than the surface.
+    // 故意比表面更大的渐变条。
     let child = Rect::new(
         card.origin.x - 18.0,
         card.origin.y + 34.0,
@@ -639,7 +639,7 @@ fn elevation_clipping(ctx: &mut DemoCtx<'_, '_>) {
     );
 }
 
-/// Bézier ribbons and the shape vocabulary.
+/// 贝塞尔丝带与形状词汇表。
 pub fn vector(ctx: &mut DemoCtx<'_, '_>, shapes: bool) {
     if shapes {
         vector_shapes(ctx);

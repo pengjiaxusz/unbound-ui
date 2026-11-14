@@ -1,8 +1,8 @@
-//! The guest, mounted through the real host code path.
+//! 通过真实 host 代码路径挂载 guest。
 //!
-//! These are not unit tests of the guest in isolation: they drive it through
-//! [`unbound_host::GuestHost`], so the allocator hijack, the render context and
-//! the state handoff are all exercised end to end.
+//! 这并非孤立的 guest 单元测试：测试通过 [`unbound_host::GuestHost`] 驱动它，
+//! 因此分配器劫持、渲染上下文与状态移交均得到端到端验证。
+//!
 
 use app_guest::{vtable, State};
 use unbound_abi::action::{ActionKind, RawAction};
@@ -78,7 +78,7 @@ fn a_migration_round_trip_preserves_every_row() {
     }
     host.reduce(&mask_row(1)).unwrap();
     let mut fresh = vtable();
-    // Pretend the business layer changed shape: force the migrate path.
+    // 模拟业务层形态变化：强制走迁移路径。
     fresh.state_schema_hash ^= 0xFFFF;
     let handoff = host.reload_vtable(fresh).unwrap();
     assert_eq!(handoff, StateHandoff::Migrate);
@@ -118,9 +118,9 @@ fn the_state_snapshot_is_a_versioned_postcard_envelope() {
 
 #[test]
 fn the_guest_allocates_through_the_host_heap() {
-    // A guest-side `Vec` grown across the boundary must be freeable by the host.
-    // If the allocator hijack were missing this test would corrupt the heap
-    // instead of failing an assertion.
+    // 跨边界增长的 guest 侧 `Vec` 必须能由 host 释放。
+    // 若缺少分配器劫持，本测试将直接损坏堆内存，而非断言失败。
+    //
     let mut host = GuestHost::new();
     host.mount_vtable(vtable()).unwrap();
     for _ in 0..100 {
@@ -135,12 +135,12 @@ fn the_guest_allocates_through_the_host_heap() {
 
 #[test]
 fn the_dynamic_library_exports_the_entry_point() {
-    // The point of this test is the *real* DLL path: a dynamic library that is
-    // loaded by the host, exports the entry point and carries the same schema
-    // fingerprint as the in-process guest. A missing DLL used to be skipped
-    // with a message on stderr, which let the test pass without ever running
-    // — so the check is a hard failure now. `just test` builds the cdylib
-    // first for exactly this reason.
+    // 本测试的核心是验证*真实* DLL 路径：由 host 加载动态库、导出入口点
+    // 并携带与进程内 guest 相同的 schema 指纹。过去缺失 DLL 时仅向 stderr
+    // 打印消息并跳过，导致测试未实际运行却通过——因此现在改为硬失败。
+    // `just test` 会先构建 cdylib 正是出于此因。
+    //
+    //
     let path = locate_guest_dll().unwrap_or_else(|| {
         panic!(
             "app_guest cdylib not found next to the test binary; \
@@ -161,8 +161,8 @@ fn the_dynamic_library_exports_the_entry_point() {
 fn locate_guest_dll() -> Option<std::path::PathBuf> {
     const NAMES: [&str; 3] = ["app_guest.dll", "libapp_guest.so", "libapp_guest.dylib"];
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
-    // The workspace target directory, regardless of where the harness put the
-    // test executable.
+    // 工作区 target 目录，无论测试框架将测试可执行文件放在何处。
+    //
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     if let Some(workspace) = manifest.parent().and_then(|p| p.parent()) {
         roots.push(workspace.join("target").join("debug"));
@@ -177,11 +177,11 @@ fn locate_guest_dll() -> Option<std::path::PathBuf> {
             dir = current.parent().map(std::path::PathBuf::from);
         }
     }
-    // The *freshest* candidate wins, not the first one found. `cargo test`
-    // writes the cdylib into `target/<profile>/deps`, while `cargo build`
-    // writes it into `target/<profile>` — so the two copies drift apart, and
-    // picking by path order happily hands back a stale one whose schema
-    // fingerprint no longer matches the source it is supposed to describe.
+    // *最新*的候选文件胜出，而非最先找到的那个。`cargo test` 将 cdylib
+    // 写入 `target/<profile>/deps`，而 `cargo build` 写入 `target/<profile>`——
+    // 因此两份副本会逐渐产生偏差，按路径顺序选取容易返回过时的副本，
+    // 其 schema 指纹已不再匹配当前源码。
+    //
     let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
     for root in roots {
         for name in NAMES {

@@ -1,14 +1,14 @@
-//! Virtualised data table: descriptor, row window, selection and emitter.
+//! 虚拟化数据表格：描述符、行窗口、选区与输出器。
 //!
-//! The table never owns the model. [`TableDesc`] describes the columns and the
-//! fixed row rhythm; [`TableState`] owns the scroll offset, the sort key and
-//! the selection set. The caller hands the *visible* rows to [`emit_table`]
-//! together with their shaped glyphs, so a 100 000-row dataset still emits a
-//! dozen row backgrounds per frame.
+//! 表格从不持有数据模型。[`TableDesc`] 描述列定义与固定行节奏；
+//! [`TableState`] 持有滚动偏移、排序键与选中行集合。调用方将*可见*行连同塑形字形传给 [`emit_table`]，
+//! 因此即使十万行数据集每帧也仅输出十几个行背景。
 //!
-//! Sorting is a *request*, not a mutation: [`TableState::sort_by`] flips the
-//! direction and returns it, and the application reorders its model before the
-//! next frame. That keeps the widget free of the row identity problem.
+//!
+//!
+//! 排序是一个*请求*而非原地变更：[`TableState::sort_by`] 翻转排序方向并返回它，
+//! 由应用程序在下一帧前重排自身模型，从而避免行标识跟踪问题。
+//!
 
 use std::ops::Range;
 
@@ -26,20 +26,20 @@ use crate::scroll::{ScrollState, ScrollViewDesc};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// Horizontal alignment of a column's contents.
+/// 单元格内容的水平对齐方式。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AlignX {
-    /// Leading edge.
+    /// 前导对齐（左对齐）。
     #[default]
     Start,
-    /// Centred.
+    /// 居中对齐。
     Center,
-    /// Trailing edge.
+    /// 末尾对齐（右对齐）。
     End,
 }
 
 impl AlignX {
-    /// The x offset of a `width`-wide cell inside a `span`-wide column.
+    /// `width` 宽单元格在 `span` 宽列内的 x 偏移。
     #[must_use]
     pub fn offset(self, span: f32, width: f32) -> f32 {
         match self {
@@ -50,17 +50,17 @@ impl AlignX {
     }
 }
 
-/// Sort direction of one column.
+/// 单列的排序方向。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortDir {
-    /// Smallest first.
+    /// 升序（最小优先）。
     Ascending,
-    /// Largest first.
+    /// 降序（最大优先）。
     Descending,
 }
 
 impl SortDir {
-    /// The opposite direction.
+    /// 相反的排序方向。
     #[must_use]
     pub fn flip(self) -> Self {
         match self {
@@ -70,27 +70,27 @@ impl SortDir {
     }
 }
 
-/// One column's layout policy.
+/// 单列的布局策略。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColumnSpec {
-    /// The header text.
+    /// 表头文本。
     pub title: String,
-    /// The preferred width.
+    /// 首选宽度。
     pub width: f32,
-    /// The width a resize cannot go below.
+    /// 调整列宽时的最小允许宽度。
     pub min_width: f32,
-    /// The user may drag the trailing edge.
+    /// 用户是否可拖拽右边缘调整列宽。
     pub resizable: bool,
-    /// The header toggles the sort.
+    /// 点击表头是否切换排序。
     pub sortable: bool,
-    /// The column stays pinned to the leading edge.
+    /// 列是否固定在左侧前导边缘。
     pub frozen: bool,
-    /// Cell alignment.
+    /// 单元格对齐方式。
     pub align: AlignX,
 }
 
 impl ColumnSpec {
-    /// A resizable, sortable column of `width`.
+    /// 创建宽度为 `width`、可调整宽度且可排序的列。
     #[must_use]
     pub fn new(title: impl Into<String>, width: f32) -> Self {
         Self {
@@ -104,21 +104,21 @@ impl ColumnSpec {
         }
     }
 
-    /// The same column, right-aligned (numbers).
+    /// 设置为右对齐（常用于数字）。
     #[must_use]
     pub fn right_aligned(mut self) -> Self {
         self.align = AlignX::End;
         self
     }
 
-    /// The same column, frozen at the leading edge.
+    /// 冻结在左侧前导边缘。
     #[must_use]
     pub fn frozen(mut self) -> Self {
         self.frozen = true;
         self
     }
 
-    /// The same column with its own minimum width.
+    /// 设置自定义最小宽度。
     #[must_use]
     pub fn min_width(mut self, min_width: f32) -> Self {
         self.min_width = min_width.max(1.0);
@@ -126,27 +126,27 @@ impl ColumnSpec {
     }
 }
 
-/// The pure descriptor of a table.
+/// 表格的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TableDesc {
-    /// The whole table rectangle, header included.
+    /// 整个表格矩形（包含表头）。
     pub rect: Rect,
-    /// The accessible name.
+    /// 无障碍名称。
     pub label: String,
-    /// The columns, in visual order.
+    /// 按视觉顺序排列的列列表。
     pub columns: Vec<ColumnSpec>,
-    /// The header height.
+    /// 表头高度。
     pub header_height: f32,
-    /// The uniform row height.
+    /// 统一行高。
     pub row_height: f32,
-    /// Alternate row backgrounds.
+    /// 是否启用斑马纹交替行背景。
     pub striped: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl TableDesc {
-    /// A table with a 32 px header and 28 px rows.
+    /// 创建带 32 px 表头与 28 px 行高的表格。
     #[must_use]
     pub fn new(rect: Rect, columns: Vec<ColumnSpec>) -> Self {
         Self {
@@ -160,20 +160,20 @@ impl TableDesc {
         }
     }
 
-    /// The same table with an accessible name.
+    /// 设置无障碍名称。
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
     }
 
-    /// The total width of every column.
+    /// 所有列的总宽度。
     #[must_use]
     pub fn total_width(&self) -> f32 {
         self.columns.iter().map(|column| column.width).sum()
     }
 
-    /// The header band.
+    /// 表头区域矩形。
     #[must_use]
     pub fn header_rect(&self) -> Rect {
         Rect::new(
@@ -184,7 +184,7 @@ impl TableDesc {
         )
     }
 
-    /// The body band under the header.
+    /// 表头下方的主体区域矩形。
     #[must_use]
     pub fn body_rect(&self) -> Rect {
         Rect::new(
@@ -195,20 +195,20 @@ impl TableDesc {
         )
     }
 
-    /// The visible height available to rows.
+    /// 可用于显示行内容的可见高度。
     #[must_use]
     pub fn body_height(&self) -> f32 {
         self.body_rect().size.y
     }
 
-    /// How many rows fit in the body.
+    /// 主体区域可容纳的行数。
     #[must_use]
     pub fn visible_row_count(&self) -> usize {
         let rows = self.body_height() / self.row_height.max(1.0);
         rows.floor().max(0.0) as usize
     }
 
-    /// The x offset of a column from the table's leading edge.
+    /// 指定列相对于表格前导边缘的 x 偏移。
     #[must_use]
     pub fn column_x(&self, index: usize) -> f32 {
         self.columns
@@ -218,7 +218,7 @@ impl TableDesc {
             .sum()
     }
 
-    /// One header cell.
+    /// 单个表头单元格矩形。
     #[must_use]
     pub fn column_rect(&self, index: usize) -> Option<Rect> {
         let column = self.columns.get(index)?;
@@ -230,7 +230,7 @@ impl TableDesc {
         ))
     }
 
-    /// The divider the user drags to resize `index`.
+    /// 用户拖拽以调整第 `index` 列宽度的分隔条矩形。
     #[must_use]
     pub fn resize_handle(&self, index: usize) -> Option<Rect> {
         let column = self.columns.get(index)?;
@@ -245,7 +245,7 @@ impl TableDesc {
         ))
     }
 
-    /// The x of the right edge of the last frozen column.
+    /// 最后一个冻结列右边缘的 x 坐标。
     #[must_use]
     pub fn frozen_edge(&self) -> Option<f32> {
         self.columns
@@ -255,7 +255,7 @@ impl TableDesc {
             .filter(|_| self.columns.first().is_some_and(|column| column.frozen))
     }
 
-    /// The body rectangle of a row, accounting for `scroll` pixels.
+    /// 计入 `scroll` 像素偏移后，指定行在主体区域中的矩形。
     #[must_use]
     pub fn row_rect(&self, row: usize, scroll: f32) -> Rect {
         let body = self.body_rect();
@@ -268,35 +268,35 @@ impl TableDesc {
     }
 }
 
-/// Which row range is inside the viewport.
+/// 当前处于视口内的行索引范围。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RowWindow {
-    /// First visible row (inclusive).
+    /// 首个可见行（包含）。
     pub first: usize,
-    /// Last visible row (exclusive).
+    /// 末尾可见行（不包含）。
     pub last: usize,
 }
 
 impl RowWindow {
-    /// Number of rows in the window.
+    /// 窗口内的行数。
     #[must_use]
     pub fn len(&self) -> usize {
         self.last.saturating_sub(self.first)
     }
 
-    /// Whether the window is empty.
+    /// 窗口是否为空。
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Iterate the row indices.
+    /// 迭代行索引。
     pub fn iter(&self) -> Range<usize> {
         self.first..self.last
     }
 }
 
-/// The mutable state of a table.
+/// 表格的可变状态。
 #[derive(Clone, Debug, Default)]
 pub struct TableState {
     scroll: ScrollState,
@@ -307,25 +307,25 @@ pub struct TableState {
 }
 
 impl TableState {
-    /// An unsorted, unselected table.
+    /// 创建未排序、无选区的初始表格状态。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// The scroll state.
+    /// 滚动状态引用。
     #[must_use]
     pub fn scroll(&self) -> &ScrollState {
         &self.scroll
     }
 
-    /// The vertical scroll offset.
+    /// 垂直滚动偏移量。
     #[must_use]
     pub fn offset(&self) -> f32 {
         self.scroll.offset().y
     }
 
-    /// Scroll by `delta` pixels and clamp to the content.
+    /// 按 `delta` 像素滚动并夹紧至内容范围。
     pub fn scroll_by(&mut self, desc: &TableDesc, row_count: usize, delta: f32) -> bool {
         let content = row_count as f32 * desc.row_height;
         let view = ScrollViewDesc::new(desc.body_rect(), unbound_math::Vec2::new(0.0, content));
@@ -335,14 +335,14 @@ impl TableState {
         self.scroll.target() != before
     }
 
-    /// Advance the scroll animation.
+    /// 推进滚动动画。
     pub fn step(&mut self, desc: &TableDesc, row_count: usize, dt: f32) -> bool {
         let content = row_count as f32 * desc.row_height;
         let view = ScrollViewDesc::new(desc.body_rect(), unbound_math::Vec2::new(0.0, content));
         self.scroll.step(&view, dt)
     }
 
-    /// The rows inside the viewport.
+    /// 当前处于视口内的行范围。
     #[must_use]
     pub fn window(&self, desc: &TableDesc, row_count: usize) -> RowWindow {
         if row_count == 0 || desc.body_height() <= 0.0 {
@@ -359,13 +359,13 @@ impl TableState {
         }
     }
 
-    /// The current sort key.
+    /// 当前排序键。
     #[must_use]
     pub fn sort(&self) -> Option<(usize, SortDir)> {
         self.sort
     }
 
-    /// Toggle the sort on `column` and return the new direction.
+    /// 切换 `column` 列的排序方向并返回新方向。
     pub fn sort_by(&mut self, column: usize) -> Option<(usize, SortDir)> {
         self.sort = match self.sort {
             Some((active, direction)) if active == column => Some((column, direction.flip())),
@@ -374,37 +374,37 @@ impl TableState {
         self.sort
     }
 
-    /// The selected rows.
+    /// 已选中的行集合。
     #[must_use]
     pub fn selected(&self) -> &FxHashSet<usize> {
         &self.selected
     }
 
-    /// Whether `row` is selected.
+    /// 查询 `row` 是否处于选中状态。
     #[must_use]
     pub fn is_selected(&self, row: usize) -> bool {
         self.selected.contains(&row)
     }
 
-    /// Select one row and clear the rest.
+    /// 单选指定行并清空其余选区。
     pub fn select_row(&mut self, row: usize) {
         self.selected.clear();
         self.selected.insert(row);
     }
 
-    /// Toggle `row` without touching the others.
+    /// 切换 `row` 的选中状态，不影响其余行。
     pub fn toggle_row(&mut self, row: usize) {
         if !self.selected.remove(&row) {
             self.selected.insert(row);
         }
     }
 
-    /// Clear the selection.
+    /// 清空选区。
     pub fn clear_selection(&mut self) {
         self.selected.clear();
     }
 
-    /// The effective width of `index`, after any user resize.
+    /// 计入用户调整后的第 `index` 列有效宽度。
     #[must_use]
     pub fn column_width(&self, desc: &TableDesc, index: usize) -> f32 {
         self.widths
@@ -414,12 +414,12 @@ impl TableState {
             .unwrap_or(0.0)
     }
 
-    /// Begin dragging the trailing edge of `index`.
+    /// 开始拖拽第 `index` 列的右边缘。
     pub fn begin_resize(&mut self, index: usize, x: f32, width: f32) {
         self.resizing = Some((index, x, width));
     }
 
-    /// Update the drag; returns whether the width changed.
+    /// 更新列宽拖拽；返回宽度是否发生变化。
     pub fn resize_to(&mut self, desc: &TableDesc, x: f32) -> bool {
         let Some((index, origin, width)) = self.resizing else {
             return false;
@@ -442,41 +442,41 @@ impl TableState {
         changed
     }
 
-    /// Finish the drag.
+    /// 结束列宽拖拽。
     pub fn end_resize(&mut self) {
         self.resizing = None;
     }
 
-    /// Whether a resize drag is live.
+    /// 当前是否正在拖拽调整列宽。
     #[must_use]
     pub fn is_resizing(&self) -> bool {
         self.resizing.is_some()
     }
 }
 
-/// The colour slots a table paints with.
+/// 表格绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TableTokens {
-    /// The header surface.
+    /// 表头表面背景。
     pub header: Token,
-    /// The header text.
+    /// 表头文本。
     pub header_text: Token,
-    /// A body row.
+    /// 主体数据行。
     pub row: Token,
-    /// An alternating body row.
+    /// 交替主体数据行。
     pub row_alt: Token,
-    /// A selected row.
+    /// 已选中行。
     pub selected: Token,
-    /// The row and column rules.
+    /// 行与列分隔线。
     pub rule: Token,
-    /// The frozen column divider.
+    /// 冻结列分隔线。
     pub frozen_rule: Token,
-    /// The body text.
+    /// 主体文本。
     pub text: Token,
 }
 
 impl TableTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -492,16 +492,16 @@ impl TableTokens {
     }
 }
 
-/// One visible row and its shaped glyphs.
+/// 单个可见行及其已塑形的字形。
 #[derive(Clone, Copy, Debug)]
 pub struct TableRow<'a> {
-    /// The model row index.
+    /// 模型中的行索引。
     pub index: usize,
-    /// The cell text, already positioned by the caller.
+    /// 调用方已定位好的单元格文本。
     pub glyphs: &'a [GlyphQuad],
 }
 
-/// Emit the header, the visible rows and the a11y grid.
+/// 输出表头、可见行与无障碍网格。
 #[must_use]
 pub fn emit_table(
     node: u64,
@@ -637,7 +637,8 @@ pub fn emit_table(
                 continue;
             }
             let row_key = table_row_node(node, row.index);
-            let mut row_a11y = A11yNode::new(Role::Row, format!("Row {}", row.index + 1), rect).clickable();
+            let mut row_a11y =
+                A11yNode::new(Role::Row, format!("Row {}", row.index + 1), rect).clickable();
             row_a11y.selected = state.is_selected(row.index);
             out.with_sub_control(
                 row_key,
@@ -652,25 +653,25 @@ pub fn emit_table(
     out
 }
 
-/// Deterministic child node key for column header `col`.
+/// 列 `col` 表头的确定性子节点键。
 #[must_use]
 pub const fn column_header_node(base: u64, col: usize) -> u64 {
     base ^ (0x5442_4800_u64 | (col as u64 + 1))
 }
 
-/// Deterministic child node key for column resize handle `col`.
+/// 列 `col` 调整手柄的确定性子节点键。
 #[must_use]
 pub const fn column_resize_node(base: u64, col: usize) -> u64 {
     base ^ (0x5442_5200_u64 | (col as u64 + 1))
 }
 
-/// Deterministic child node key for row `index`.
+/// 行 `index` 的确定性子节点键。
 #[must_use]
 pub const fn table_row_node(base: u64, index: usize) -> u64 {
     base ^ (0x5442_5700_u64 | (index as u64 + 1))
 }
 
-/// A solid line primitive.
+/// 实心线段图元。
 fn line(rect: Rect, color: Token, z: u16) -> GpuPrimitiveInstance {
     instance(
         rect,

@@ -1,54 +1,54 @@
-//! Stable widget identities for the gallery shell.
+//! 展厅外壳的稳定控件标识。
 //!
-//! The renderer never allocates per frame: every interactive control has a
-//! deterministic `u64` key derived from its role and page position. The same
-//! key travels through `unbound-input` (hit regions), `unbound-a11y`
-//! (semantics) and the event reducer, so there is exactly one identity
-//! namespace for the whole shell.
+//! 渲染器从不按帧分配：每个交互控件都有一个由其角色和页面位置派生的确定性 `u64` 键。
+//! 同一个键贯穿 `unbound-input`（命中区域）、`unbound-a11y`（语义）和事件 reducer，
+//! 从而使整个外壳拥有唯一统一的标识命名空间。
+//!
+//!
 
-/// Everything the gallery can activate.
+/// 展厅可激活的所有目标。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
-    /// Collapse / expand the navigation pane.
+    /// 折叠 / 展开导航栏。
     NavToggle,
-    /// Switch to light (`0`) or dark (`1`).
+    /// 切换为浅色（`0`）或深色（`1`）主题。
     Theme(u8),
-    /// Pick a UI zoom step (`0` = 100 %, `3` = 200 %).
+    /// 选择 UI 缩放档位（`0` = 100%，`3` = 200%）。
     Zoom(u8),
-    /// Toggle static pixel snapping.
+    /// 切换静态像素对齐。
     Snap,
-    /// Toggle the performance HUD.
+    /// 切换性能 HUD。
     Hud,
-    /// Focus the global search box.
+    /// 聚焦全局搜索框。
     Search,
-    /// Jump to a search result.
+    /// 跳转到搜索结果。
     SearchResult(u8),
-    /// Navigate to a page.
+    /// 导航到指定页面。
     NavPage(u8),
-    /// Expand / collapse an example card's code panel.
+    /// 展开 / 折叠示例卡片的代码面板。
     Code(u8, u8),
-    /// Activate a knob (toggle / checkbox row).
+    /// 激活旋钮（开关 / 复选框行）。
     Knob(u8, u8, u8),
-    /// Pick a segmented-control option.
+    /// 选择分段控件选项。
     KnobOption(u8, u8, u8, u8),
-    /// Activate a part of an example's live stage.
+    /// 激活示例实时舞台中的某个部件。
     Demo(u8, u8, u16),
-    /// Footer shortcut: `0` telemetry, `1` settings.
+    /// 页脚快捷方式：`0` 遥测，`1` 设置。
     Footer(u8),
-    /// Minimise the native window.
+    /// 最小化原生窗口。
     WindowMinimize,
-    /// Toggle the native window's maximised state.
+    /// 切换原生窗口的最大化状态。
     WindowMaximize,
-    /// Close the native window.
+    /// 关闭原生窗口。
     WindowClose,
-    /// Drag the page's vertical scrollbar.
+    /// 拖拽页面的垂直滚动条。
     ContentScrollbar,
-    /// Drag the navigation pane's vertical scrollbar.
+    /// 拖拽导航栏的垂直滚动条。
     NavScrollbar,
-    /// Pick an FPS limit preset (`0` = 60, `1` = 120, `2` = 144, `3` = 240,
-    /// `4` = unlimited).
+    /// 选择 FPS 上限预设（`0` = 60，`1` = 120，`2` = 144，`3` = 240，
+    /// `4` = 无限制）。
     FpsPreset(u8),
-    /// Focus the custom FPS-limit input.
+    /// 聚焦自定义 FPS 上限输入框。
     FpsInput,
 }
 
@@ -73,14 +73,14 @@ const TAG_FPS_PRESET: u64 = 18;
 const TAG_FPS_INPUT: u64 = 19;
 const TAG_NAV_SCROLLBAR: u64 = 20;
 
-/// The semantic root of the gallery.
+/// 展厅的语义根节点。
 pub const ROOT: u64 = 1;
 
-/// Whether an identity belongs to an example's live stage.
+/// 判断某标识是否属于示例的实时舞台。
 ///
-/// A demo is a bespoke drawing: unlike a standard control it may reveal
-/// widgets when hovered (a table row highlight, a dialog shadow), so it is
-/// allowed to change the scene's shape.
+/// 演示属于定制绘制：与标准控件不同，它可能在悬停时显露新控件
+/// （如表格行高亮、对话框阴影），因此允许改变场景的形状。
+///
 #[must_use]
 pub const fn is_demo(node: u64) -> bool {
     node >> 56 == TAG_DEMO
@@ -90,7 +90,7 @@ const fn tag(value: u64) -> u64 {
     value << 56
 }
 
-/// Encode a target into the shared identity namespace.
+/// 将目标编码进共享标识命名空间。
 #[must_use]
 pub const fn id(target: Target) -> u64 {
     match target {
@@ -127,7 +127,7 @@ pub const fn id(target: Target) -> u64 {
     }
 }
 
-/// Decode an identity produced by [`id`].
+/// 解码由 [`id`] 生成的标识。
 #[must_use]
 pub const fn decode(value: u64) -> Option<Target> {
     let tag = value >> 56;

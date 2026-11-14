@@ -1,4 +1,4 @@
-//! Integration tests for RouterStack & breadcrumb synchronization (S5.4).
+//! RouterStack 与面包屑同步集成测试（S5.4）。
 
 use unbound_app::router::{RouteEntry, RouterStack, TransitionDirection};
 
@@ -20,11 +20,11 @@ fn router_push_pop_forward_replace_and_breadcrumb_sync() {
     assert_eq!(crumbs[1].label, "Projects");
     assert_eq!(crumbs[2].label, "Editor");
 
-    // Advance transition to completion
+    // 推进过渡动画直至完成
     assert!(router.tick(0.5));
     assert_eq!(router.transition(), (TransitionDirection::None, 1.0));
 
-    // Pop and go forward
+    // 弹出并前进
     assert!(router.pop());
     assert_eq!(router.current().name, "projects");
     assert_eq!(router.current().param("org"), Some("unbound"));
@@ -33,12 +33,12 @@ fn router_push_pop_forward_replace_and_breadcrumb_sync() {
     assert!(router.forward());
     assert_eq!(router.current().name, "detail");
 
-    // Replace top
+    // 替换栈顶
     router.replace(RouteEntry::new(4, "settings", "Settings"));
     assert_eq!(router.history().len(), 3);
     assert_eq!(router.current().name, "settings");
 
-    // Jump via breadcrumb index 0
+    // 通过面包屑索引 0 跳转
     assert!(router.pop_to_index(0));
     assert_eq!(router.current().name, "home");
     assert!(!router.can_pop());

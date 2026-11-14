@@ -3,17 +3,15 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // ---------------------------------------------------------------------------
-// Stage 2 — GPU viewport culling + sort-key generation (docs §5.1 / §6.3).
+// 阶段 2 — GPU 视口剔除与排序键生成（参见 `docs/architecture/gpu-renderer.md`）。
 //
-// The CPU already pruned whole chunks with the loose quadtree; this pass does
-// the per-primitive test that is too fine-grained for the CPU:
-//   * camera-relative AABB vs viewport,
-//   * clip-rect rejection,
-//   * sub-0.5px² cull (invisible at any zoom, pure fragment waste),
-//   * 64-bit depth key emission with the layer/barrier/variant prefix supplied
-//     per dispatch by the host pass.
+// CPU 已通过松散四叉树剔除整块 chunk；本 Pass 执行 CPU 难以承担的逐图元精细测试：
+//   * 相机相对 AABB 与视口相交测试，
+//   * 裁剪矩形剔除，
+//   * 小于 0.5px² 的亚像素剔除（任何缩放下均不可见，纯属片元开销），
+//   * 生成 64 位深度排序键（带宿主 Pass 每次调度传入的 layer/barrier/variant 前缀）。
 //
-// Output is a compacted (key, index) list plus an atomic write cursor.
+// 输出为紧凑的 (key, index) 列表及原子写游标。
 // ---------------------------------------------------------------------------
 
 #include "common.glsl"
@@ -41,10 +39,8 @@ void main() {
     float shadow = unpack_shadow(p.border_and_shadow);
     float pad = shadow > 0.0 ? shadow * 3.0 : 0.0;
 
-    // The primitive's transform has to be applied here as well: the vertex
-    // shader places the quad through it, so a box that is culled against the
-    // *untransformed* position would drop primitives that are plainly on
-    // screen — a rotated curve, or anything the animation moved.
+    // 此处也必须应用图元变换：顶点着色器会通过该变换放置四边形，若仅用
+    // 未变换的位置进行剔除，会误删旋转曲线或被动画移入屏幕的可见图元。
     Transform t = TransformBuf(pc.transforms_bda).t[p.transform_idx & TRANSFORM_INDEX_MASK];
     mat2 m = mat2(t.linear.x, t.linear.y, t.linear.z, t.linear.w);
     vec2 trans = t.translation;
@@ -68,25 +64,23 @@ void main() {
     vec2 s_lo = min(min(s0, s1), min(s2, s3));
     vec2 s_hi = max(max(s0, s1), max(s2, s3));
 
-    // Viewport rejection (inclusive of the 1px AA skirt).
+    // 视口剔除（包含 1px 抗锯齿外扩边缘）。
     if (s_hi.x < -1.0 || s_lo.x > pc.viewport_size.x + 1.0 ||
         s_hi.y < -1.0 || s_lo.y > pc.viewport_size.y + 1.0) {
         return;
     }
 
-    // Sub-pixel primitives cost more than they contribute.
+    // 亚像素图元消耗的开销远大于其视觉贡献，直接剔除。
     vec2 extent = max(s_hi - s_lo, vec2(0.0));
     if (extent.x * extent.y < 0.5) {
         return;
     }
 
-    // Clip-rect rejection: a primitive entirely outside its clip is invisible.
+    // 裁剪矩形剔除：完全位于裁剪区域外的图元不可见。
     if (p.clip_idx != CLIP_NONE) {
         ClipNode c = ClipBuf(pc.clips_bda).c[p.clip_idx];
-        // `aabb` is chunk-local, so compare in the same space. The primitive's
-        // own *transformed* box is used: a rotated primitive reaches outside
-        // the box the vertex shader was given, and testing the box alone
-        // would cull it too early.
+        // `aabb` 为 chunk 局部坐标，因此在同一空间下比较。使用图元自身
+        // 变换后的包围盒：旋转图元会超出顶点着色器原始框范围，仅测原始框会过早剔除。
         vec2 aabb_lo = min(min(c0, c1), min(c2, c3)) - chunk_base;
         vec2 aabb_hi = max(max(c0, c1), max(c2, c3)) - chunk_base;
         if (aabb_lo.x >= c.aabb.z || aabb_hi.x <= c.aabb.x ||
@@ -95,12 +89,11 @@ void main() {
         }
     }
 
-    // 64-bit key: [layer 8 | barrier 16 | variant 4 | z 28 | sub 8].
-    // `aux` carries the layer/barrier/variant prefix for this dispatch, so the
-    // shader never needs a second lookup table.
+    // 64 位排序键：[layer 8 | barrier 16 | variant 4 | z 28 | sub 8]。
+    // `aux` 携带本次调度的 layer/barrier/variant 前缀，因此着色器无需二次查表。
     uint z16 = p.z_opacity >> 16;
     uint sub = (p.type_flags >> 16) & 0x7u;
-    uint64_t z28 = uint64_t(z16) << 12;       // 16 -> 28 bits
+    uint64_t z28 = uint64_t(z16) << 12;       // 16 位 -> 28 位
     uint64_t key = pc.scratch_bda4 | (z28 << 8) | uint64_t(sub);
 
     uint slot = atomicAdd(CursorBuf(pc.scratch_bda2).c[0], 1u);

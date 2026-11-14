@@ -1,11 +1,10 @@
 #version 460
 
 // ---------------------------------------------------------------------------
-// Backdrop composite (P1.4).
+// 背景虚化合成（P1.4）。
 //
-// Samples the full-resolution blurred backdrop and keeps it only inside the
-// rounded rectangle that requested it. The scissor-free full-screen triangle
-// keeps the pass to one draw; the SDF mask supplies the rounded corners.
+// 采样全分辨率模糊背景，并仅在请求虚化的圆角矩形区域内保留。无裁剪的全屏三角形
+// 将该 Pass 维持为单次绘制；圆角由 SDF 遮罩提供。
 // ---------------------------------------------------------------------------
 
 layout(set = 0, binding = 0) uniform sampler2D u_blurred;
@@ -14,9 +13,9 @@ layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 out_color;
 
 layout(push_constant) uniform BackdropCompositePush {
-    // Rectangle in physical pixels: (x, y, width, height).
+    // 物理像素矩形：(x, y, width, height)。
     vec4 rect;
-    // Corner radii: top-left, top-right, bottom-right, bottom-left.
+    // 圆角半径：左上、右上、右下、左下。
     vec4 radii;
 } pc;
 

@@ -1,9 +1,9 @@
-//! 07_async_assets_and_i18n: Asynchronous Assets, Images & Multi-Language Switching.
+//! 07_async_assets_and_i18n：异步资产加载、图像与多语言切换示例。
 //!
-//! Demonstrates:
-//! - Background async decoding and staging ring asset pipeline.
-//! - Reactive multi-language localization (English / 中文 / العربية RTL).
-//! - Image quad rendering and loading spinners.
+//! 演示内容：
+//! - 后台异步解码与暂存环（staging ring）资产管线。
+//! - 响应式多语言本地化（English / 中文 / العربية RTL）。
+//! - 图像四边形渲染与加载指示器。
 
 use unbound_app::prelude::*;
 use unbound_input::PointerButton;
@@ -105,7 +105,7 @@ pub fn run_headless_check() {
     assert!(initial_report.primitives > 0);
     assert_eq!(runtime.state().language, Language::English);
 
-    // Switch to Chinese
+    // 切换至中文
     let btn_rect = runtime
         .widget_rect(BTN_LANG_ZH)
         .expect("Chinese button mounted");

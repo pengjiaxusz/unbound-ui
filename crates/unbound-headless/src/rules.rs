@@ -1,10 +1,10 @@
-//! The five layout sanitizers (`docs` §7.2).
+//! 五项布局检查器（`docs` §7.2）。
 //!
-//! Each rule is a pure function of a [`Frame`], so a failure is reproducible
-//! from a binary snapshot alone. Diagnostics carry the node id, the *source
-//! line that built the node* (`#[track_caller]`), the parent chain, the actual
-//! rectangle and the semantic path — the doc's "structured JSON error stack" —
-//! so an agent can jump straight to the offending component.
+//! 每条规则都是 [`Frame`] 的纯函数，因此仅凭二进制快照即可复现任何失败。
+//! 诊断信息携带节点 ID、*构建节点的源码行*（`#[track_caller]`）、
+//! 父节点链、实际矩形与语义路径——即文档中的“结构化 JSON 错误栈”——
+//! 使 Agent 能直接定位到问题组件。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -14,7 +14,7 @@ use unbound_math::Rect;
 
 use crate::frame::{Frame, NodeKind, SourceLoc};
 
-/// Which invariant was violated.
+/// 违反了哪项不变量。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Rule {
     /// `AssertNoNaNOrInf`
@@ -44,7 +44,7 @@ impl Rule {
         Self::TextContrast,
     ];
 
-    /// The doc's name for the assertion.
+    /// 文档中该断言的名称。
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -59,7 +59,7 @@ impl Rule {
     }
 }
 
-/// One failed assertion.
+/// 单条失败的断言。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Diagnostic {
     pub rule: Rule,
@@ -67,14 +67,14 @@ pub struct Diagnostic {
     pub loc: SourceLoc,
     pub path: String,
     pub rect: Rect,
-    /// Root-to-node chain, so the parent constraints are visible.
+    /// 从根节点到当前节点的链条，便于查看父级约束。
     pub chain: Vec<u64>,
     pub message: String,
 }
 
 impl Diagnostic {
-    /// Structured, single-line JSON. Hand-rolled so the harness has no
-    /// serialization dependency and the output is stable enough to diff.
+    /// 结构化单行 JSON。手写序列化使测试框架无需额外序列化依赖，
+    /// 且输出稳定便于 diff 比对。
     #[must_use]
     pub fn to_json(&self) -> String {
         let mut out = String::with_capacity(256);
@@ -114,8 +114,8 @@ fn escape(input: &str) -> String {
     out
 }
 
-/// Run every sanitizer. Diagnostics are sorted by `(rule, node)` so the output
-/// is deterministic.
+/// 运行全部检查器。诊断结果按 `(rule, node)` 排序以确保输出确定性。
+///
 #[must_use]
 pub fn check(frame: &Frame) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -145,7 +145,7 @@ fn push(frame: &Frame, diagnostics: &mut Vec<Diagnostic>, rule: Rule, node: u64,
     });
 }
 
-/// 1. No `NaN`, no `inf`, no negative extents.
+/// 1. 禁止 `NaN`、`inf` 与负尺寸。
 fn check_finite(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     for node in &frame.nodes {
         if !node.rect.is_finite() || !node.rect.origin.is_finite() {
@@ -178,8 +178,8 @@ fn check_finite(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-/// 2. Text ink must survive the effective clip unless it is ellipsised or inside
-///    a scroll container.
+/// 2. 除非启用省略号或位于滚动容器内，否则文本墨迹不得被有效裁剪区截断。
+///
 fn check_text(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     for node in &frame.nodes {
         let NodeKind::Text { ink, ellipsis } = &node.kind else {
@@ -201,8 +201,8 @@ fn check_text(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-/// 3. Interactive targets must keep at least `24 × 24` visible pixels and must
-///    not have their centre swallowed by a sibling.
+/// 3. 交互目标必须保留至少 `24 × 24` 可见像素，且中心点不得被兄弟节点遮挡。
+///
 fn check_targets(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     for node in &frame.nodes {
         let NodeKind::Interactive { min_size, occluded } = &node.kind else {
@@ -233,12 +233,12 @@ fn check_targets(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-/// 4. Siblings in normal flow must not overlap; overlays may.
+/// 4. 常规流中的兄弟节点不得重叠；覆盖层允许重叠。
 ///
-/// The pair scan is a sweep on X: children are sorted by their left edge and the
-/// inner loop stops as soon as a sibling starts to the right of the current one's
-/// right edge. A 5 000 cell grid therefore costs one pass plus a handful of
-/// comparisons, not 12 million pair tests.
+/// 成对扫描采用 X 轴扫描线：子节点按左边缘排序，一旦后续兄弟节点的左边缘
+/// 超过当前节点的右边缘，内层循环即提前终止。因此 5 000 格的网格仅需
+/// 一次排序外加少量比较，而非 1 200 万次两两检测。
+///
 fn check_siblings(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     let mut flow: Vec<&crate::frame::NodeSnapshot> = Vec::new();
     for parent in &frame.nodes {
@@ -260,7 +260,7 @@ fn check_siblings(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
                     break;
                 }
                 let overlap = a.rect.intersect(&b.rect);
-                // A sub-pixel touch is a rounding artefact, not a layout bug.
+                // 亚像素级接触属于舍入误差，并非布局缺陷。
                 if overlap.size.x > 0.5 && overlap.size.y > 0.5 {
                     push(
                         frame,
@@ -278,7 +278,7 @@ fn check_siblings(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-/// 5. Portals must stay inside the physical viewport.
+/// 5. Portal 必须完全保持在物理视口内。
 fn check_portals(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     for node in &frame.nodes {
         if !node.kind.is_portal() {
@@ -299,13 +299,13 @@ fn check_portals(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-/// 6. Text ink must stay horizontally inside its parent's content box.
+/// 6. 文本墨迹在水平方向上必须保持在父节点内容盒之内。
 ///
-/// A pill whose label is wider than the capsule, or a knob label that runs
-/// under its own control, is a real visual defect even when the text is not
-/// clipped by a scroll viewport. Vertical overflow is left to the scroll
-/// container contract (`AssertTextNotClipped`); this rule only asks whether the
-/// laid-out run is wider than the box that owns it. Ellipsised text opts out.
+/// 标签宽于胶囊容器的 pill，或文字跑到自身控件下方的旋钮标签，即便未被
+/// 滚动视口裁剪，也属于真实的视觉缺陷。垂直溢出交由滚动容器契约处理
+/// （`AssertTextNotClipped`）；本规则仅检查排版后的文本行是否宽于其
+/// 所属盒子。启用省略号的文本豁免。
+///
 fn check_text_overflow(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     for node in &frame.nodes {
         let NodeKind::Text { ink, ellipsis } = &node.kind else {
@@ -333,11 +333,11 @@ fn check_text_overflow(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-/// 7. Declared text colours must have readable contrast.
+/// 7. 声明的文本颜色必须具备可读对比度。
 ///
-/// The frame only carries colours for components that opt in with
-/// `set_text_colors`, so the rule cannot guess at a primitive's fill. This is
-/// exactly what catches a dark HUD palette shipping in the light theme.
+/// 帧仅记录通过 `set_text_colors` 显式声明颜色的组件，因此规则无法臆测
+/// 图元的填充色。这正是捕获亮色主题下误用暗色 HUD 配色问题的机制。
+///
 fn check_text_contrast(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     for node in &frame.nodes {
         let Some(colors) = node.text_colors else {
@@ -361,7 +361,7 @@ fn check_text_contrast(frame: &Frame, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-/// WCAG 2.1 relative luminance of an opaque sRGB colour.
+/// 不透明 sRGB 颜色的 WCAG 2.1 相对亮度。
 fn relative_luminance(color: [u8; 3]) -> f32 {
     let channel = |value: u8| {
         let value = f32::from(value) / 255.0;
@@ -544,7 +544,7 @@ mod tests {
         b.close();
         b.close();
         let frame = b.build();
-        // 100×100 clipped to 40×40 is still above 24×24.
+        // 100×100 被裁剪至 40×40 后仍大于 24×24。
         assert!(check(&frame).is_empty());
     }
 

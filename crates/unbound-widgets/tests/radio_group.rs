@@ -1,7 +1,7 @@
-//! Radio-group keyboard behaviour and the roving tab index.
+//! 单选按钮组的键盘行为与游走 Tab 索引测试。
 //!
-//! The group owns the selection; arrow keys cycle it and only the selected
-//! option enters the tab order.
+//! 组持有选中状态；方向键循环切换选中项，且仅选中项进入 Tab 顺序。
+//!
 
 use unbound_math::Rect;
 use unbound_widgets::radio::{

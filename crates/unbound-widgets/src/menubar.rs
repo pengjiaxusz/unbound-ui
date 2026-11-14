@@ -1,9 +1,8 @@
-//! The menu bar: a horizontal row of top-level menus.
+//! 菜单栏（MenuBar）：由顶层菜单组成的水平行。
 //!
-//! The bar owns the open index, never the popup itself. Once a menu is open,
-//! hovering a sibling switches the popup without a click — that is the
-//! "menu bar mode" every desktop app shares — and Left/Right walk the bar
-//! while the arrow handler in [`unbound_widgets::menu`] walks the popup.
+//! 菜单栏仅持有当前打开的索引，绝不持有弹出菜单本身。一旦某个菜单打开，
+//! 悬停到同级菜单项无需点击即可切换弹出菜单——这是所有桌面应用通用的“菜单栏模式”——
+//! 左右方向键在菜单栏间移动，而 [`unbound_widgets::menu`] 中的方向键处理器则遍历弹出菜单。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -16,20 +15,20 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// The default bar height.
+/// 默认菜单栏高度。
 pub const MENUBAR_HEIGHT: f32 = 30.0;
 
-/// One top-level menu.
+/// 单个顶层菜单。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuBarItem {
-    /// Stable identity, also used as the item's node.
+    /// 稳定标识，同时用作菜单项节点。
     pub id: u64,
-    /// The visible title.
+    /// 可见标题。
     pub title: String,
 }
 
 impl MenuBarItem {
-    /// A menu titled `title`.
+    /// 创建标题为 `title` 的菜单项。
     #[must_use]
     pub fn new(id: u64, title: impl Into<String>) -> Self {
         Self {
@@ -39,21 +38,21 @@ impl MenuBarItem {
     }
 }
 
-/// The pure descriptor of a menu bar.
+/// 菜单栏的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuBarDesc {
-    /// The bar rectangle.
+    /// 菜单栏矩形。
     pub rect: Rect,
-    /// The menus, left to right.
+    /// 从左到右排列的菜单列表。
     pub items: Vec<MenuBarItem>,
-    /// The horizontal padding inside one item.
+    /// 单个菜单项内部的水平内边距。
     pub item_padding: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl MenuBarDesc {
-    /// A bar with the default metrics.
+    /// 使用默认度量的菜单栏。
     #[must_use]
     pub fn new(rect: Rect, items: Vec<MenuBarItem>) -> Self {
         Self {
@@ -64,7 +63,7 @@ impl MenuBarDesc {
         }
     }
 
-    /// The width of one item, from a measured label or the title length.
+    /// 根据测量标签或标题长度计算单个菜单项的宽度。
     #[must_use]
     pub fn item_width(&self, index: usize, measured: Option<f32>) -> f32 {
         measured.unwrap_or_else(|| {
@@ -76,7 +75,7 @@ impl MenuBarDesc {
         })
     }
 
-    /// The rectangle of one item.
+    /// 单个菜单项的矩形。
     #[must_use]
     pub fn item_rect(&self, _index: usize, width: f32, offset: f32) -> Rect {
         Rect::new(
@@ -87,7 +86,7 @@ impl MenuBarDesc {
         )
     }
 
-    /// Lay every item out, returning `(rectangle, item index)`.
+    /// 布局所有菜单项，返回 `(rectangle, item index)`。
     #[must_use]
     pub fn layout(&self, widths: &[f32]) -> Vec<(Rect, usize)> {
         let mut out = Vec::with_capacity(self.items.len());
@@ -100,7 +99,7 @@ impl MenuBarDesc {
         out
     }
 
-    /// The point a popup should be anchored to.
+    /// 弹出菜单应当锚定的坐标点。
     #[must_use]
     pub fn popup_anchor(&self, index: usize, widths: &[f32]) -> unbound_math::Vec2 {
         let layout = self.layout(widths);
@@ -112,29 +111,29 @@ impl MenuBarDesc {
     }
 }
 
-/// The live state of a menu bar.
+/// 菜单栏的实时状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MenuBarState {
-    /// The open menu, if any.
+    /// 当前打开的菜单索引（若有）。
     pub open: Option<usize>,
-    /// The item under the pointer.
+    /// 指针下方的菜单项索引。
     pub hovered: Option<usize>,
 }
 
 impl MenuBarState {
-    /// An empty state.
+    /// 创建空状态。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Whether a menu is open.
+    /// 是否有菜单处于打开状态。
     #[must_use]
     pub fn is_open(&self) -> bool {
         self.open.is_some()
     }
 
-    /// Toggle a menu open or closed.
+    /// 切换指定菜单的打开/关闭状态。
     pub fn toggle(&mut self, index: usize) -> bool {
         let next = if self.open == Some(index) {
             None
@@ -146,7 +145,7 @@ impl MenuBarState {
         changed
     }
 
-    /// Open a menu explicitly.
+    /// 显式打开指定菜单。
     pub fn open(&mut self, index: usize) -> bool {
         if self.open == Some(index) {
             return false;
@@ -155,15 +154,14 @@ impl MenuBarState {
         true
     }
 
-    /// Close every menu.
+    /// 关闭所有菜单。
     pub fn close(&mut self) -> bool {
         self.open.take().is_some()
     }
 
-    /// Move the pointer over an item.
+    /// 将指针移动到某个菜单项上方。
     ///
-    /// While a menu is open, hovering a sibling opens it immediately; while
-    /// the bar is closed, hovering only records the highlight.
+    /// 当已有菜单打开时，悬停同级菜单项会立即打开它；当菜单栏关闭时，悬停仅记录高亮。
     pub fn hover(&mut self, index: usize) -> bool {
         if self.hovered == Some(index) {
             return false;
@@ -176,29 +174,29 @@ impl MenuBarState {
         true
     }
 
-    /// Clear the hover highlight.
+    /// 清除悬停高亮。
     pub fn leave(&mut self) {
         self.hovered = None;
     }
 }
 
-/// The keys a focused menu bar understands.
+/// 聚焦状态下的菜单栏识别的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuBarKey {
-    /// Move to the previous menu.
+    /// 移至上一个菜单。
     Left,
-    /// Move to the next menu.
+    /// 移至下一个菜单。
     Right,
-    /// Open or activate the focused menu.
+    /// 打开或激活当前聚焦的菜单。
     Enter,
-    /// Close the open menu.
+    /// 关闭当前打开的菜单。
     Escape,
 }
 
-/// Reduce one key press.
+/// 归约单次按键。
 ///
-/// Returns whether the open menu changed. Left/Right only act while a menu is
-/// open; a closed bar leaves arrow handling to the application's focus order.
+/// 返回打开的菜单是否发生变化。Left/Right 仅在菜单打开时生效；
+/// 菜单栏关闭时方向键交由应用的焦点顺序处理。
 #[must_use]
 pub fn reduce_menubar_key(desc: &MenuBarDesc, state: &mut MenuBarState, key: MenuBarKey) -> bool {
     let count = desc.items.len();
@@ -231,27 +229,27 @@ pub fn reduce_menubar_key(desc: &MenuBarDesc, state: &mut MenuBarState, key: Men
     }
 }
 
-/// The colour slots a menu bar paints with.
+/// 菜单栏绘制使用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MenuBarTokens {
-    /// The bar background.
+    /// 菜单栏背景色。
     pub bar: Token,
-    /// An idle item.
+    /// 闲置菜单项背景色。
     pub item: Token,
-    /// A hovered item.
+    /// 悬停菜单项背景色。
     pub item_hover: Token,
-    /// An open item.
+    /// 打开状态菜单项背景色。
     pub item_open: Token,
-    /// The item text.
+    /// 菜单项文字颜色。
     pub text: Token,
-    /// The text of an open item.
+    /// 打开状态菜单项文字颜色。
     pub text_open: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环颜色。
     pub focus_ring: Token,
 }
 
 impl MenuBarTokens {
-    /// The standard set.
+    /// 标准配色方案。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -266,7 +264,7 @@ impl MenuBarTokens {
     }
 }
 
-/// Emit the bar background.
+/// 发射菜单栏背景。
 #[must_use]
 pub fn emit_menubar(desc: &MenuBarDesc, tokens: MenuBarTokens) -> WidgetOutput {
     WidgetOutput {
@@ -279,7 +277,7 @@ pub fn emit_menubar(desc: &MenuBarDesc, tokens: MenuBarTokens) -> WidgetOutput {
     }
 }
 
-/// Emit one top-level menu title.
+/// 发射单个顶层菜单标题。
 #[must_use]
 pub fn emit_menubar_item(
     desc: &MenuBarDesc,

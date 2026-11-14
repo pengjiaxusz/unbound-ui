@@ -1,22 +1,22 @@
-//! Native Windows 10/11 File Dialogs.
+//! 原生 Windows 10/11 文件对话框。
 //!
-//! Provides synchronous and non-blocking background file picker dialogs
-//! using Win32 `comdlg32` without heavyweight external dependencies.
+//! 基于 Win32 `comdlg32` 提供同步与非阻塞后台文件选择对话框，
+//! 无需引入沉重的外部依赖。
 
 use std::path::PathBuf;
 
-/// Configuration options for file open/save dialogs.
+/// 文件打开/保存对话框的配置选项。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileDialogConfig {
-    /// Window title shown on the dialog.
+    /// 对话框显示的窗口标题。
     pub title: Option<String>,
-    /// Initial directory to open.
+    /// 打开时的初始目录。
     pub initial_dir: Option<PathBuf>,
-    /// Default filename filled in for saving.
+    /// 保存对话框预填的默认文件名。
     pub default_name: Option<String>,
-    /// Pairs of `(Display Name, Glob Pattern)` e.g. `("PNG Image (*.png)", "*.png")`.
+    /// `(显示名称, 通配模式)` 过滤器对，例如 `("PNG Image (*.png)", "*.png")`。
     pub filters: Vec<(String, String)>,
-    /// Whether multiple files may be selected (Open dialog only).
+    /// 是否允许选择多个文件（仅适用于打开对话框）。
     pub multi_select: bool,
 }
 
@@ -179,7 +179,7 @@ mod win32 {
             return Vec::new();
         }
 
-        // Parse null-separated strings from buffer
+        // 从缓冲区解析以 NUL 分隔的字符串列表
         let mut results = Vec::new();
         let mut parts = Vec::new();
         let mut start = 0;
@@ -270,7 +270,7 @@ mod win32 {
     }
 }
 
-/// Open a single file picker synchronously.
+/// 同步打开单文件选择对话框。
 #[must_use]
 pub fn open_file(config: FileDialogConfig) -> Option<PathBuf> {
     #[cfg(windows)]
@@ -284,7 +284,7 @@ pub fn open_file(config: FileDialogConfig) -> Option<PathBuf> {
     }
 }
 
-/// Open a multi-file picker synchronously.
+/// 同步打开多文件选择对话框。
 #[must_use]
 pub fn open_files(config: FileDialogConfig) -> Vec<PathBuf> {
     #[cfg(windows)]
@@ -300,7 +300,7 @@ pub fn open_files(config: FileDialogConfig) -> Vec<PathBuf> {
     }
 }
 
-/// Open a save file picker synchronously.
+/// 同步打开保存文件对话框。
 #[must_use]
 pub fn save_file(config: FileDialogConfig) -> Option<PathBuf> {
     #[cfg(windows)]
@@ -314,7 +314,7 @@ pub fn save_file(config: FileDialogConfig) -> Option<PathBuf> {
     }
 }
 
-/// Non-blocking asynchronous file open picker running on a worker thread.
+/// 在工作线程上运行的非阻塞异步打开文件选择对话框。
 pub fn open_file_async<F: FnOnce(Option<PathBuf>) + Send + 'static>(
     config: FileDialogConfig,
     on_complete: F,
@@ -325,7 +325,7 @@ pub fn open_file_async<F: FnOnce(Option<PathBuf>) + Send + 'static>(
     });
 }
 
-/// Non-blocking asynchronous file save picker running on a worker thread.
+/// 在工作线程上运行的非阻塞异步保存文件选择对话框。
 pub fn save_file_async<F: FnOnce(Option<PathBuf>) + Send + 'static>(
     config: FileDialogConfig,
     on_complete: F,

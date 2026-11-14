@@ -1,19 +1,17 @@
-//! Window-system instance extensions, derived from a display handle.
+//! 根据显示句柄推导窗口系统所需的 Vulkan 实例扩展。
 //!
-//! `VK_KHR_surface` is always needed; the platform counterpart depends entirely
-//! on how the window was created. Hard-coding the Windows pair is what made the
-//! old shell Windows-only — the instance was created before the window's
-//! display handle had a chance to vote.
+//! `VK_KHR_surface` 始终必需；对应的平台扩展完全取决于窗口的创建方式。
+//! 过去硬编码 Windows 扩展对导致旧外壳只能在 Windows 运行——因为在窗口
+//! 显示句柄尚未提供信息前就创建了实例。
 //!
-//! [`required_instance_extensions`] is a pure function of the handle so it can
-//! be tested on every platform, including CI with no display server.
+//! [`required_instance_extensions`] 是仅依赖句柄的纯函数，因此可在包括无显示服务器
+//! 的 CI 在内的所有平台上测试。
 
 use raw_window_handle::RawDisplayHandle;
 
-/// The extensions an instance must enable to present to `display`.
+/// 向 `display` 呈现画面时实例必须启用的扩展列表。
 ///
-/// The list is deterministic and deduplicated, and always begins with
-/// `VK_KHR_surface`.
+/// 返回列表具有确定性且已去重，且始终以 `VK_KHR_surface` 开头。
 #[must_use]
 pub fn required_instance_extensions(display: RawDisplayHandle) -> Vec<&'static str> {
     let mut extensions = vec![name(ash::khr::surface::NAME)];
@@ -34,7 +32,7 @@ pub fn required_instance_extensions(display: RawDisplayHandle) -> Vec<&'static s
     extensions
 }
 
-/// Ash exposes extension names as `&'static CStr`; the public API is text.
+/// Ash 将扩展名暴露为 `&'static CStr`；公开 API 统一使用字符串切片。
 fn name(raw: &'static core::ffi::CStr) -> &'static str {
     raw.to_str().unwrap_or_default()
 }

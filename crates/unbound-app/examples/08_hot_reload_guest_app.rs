@@ -1,9 +1,9 @@
-//! 08_hot_reload_guest_app: Host-Guest C-ABI Dynamic Reload & State Preservation.
+//! 08_hot_reload_guest_app：Host-Guest C-ABI 动态重载与状态保留示例。
 //!
-//! Demonstrates:
-//! - Separation of graphics shell from business domain logic.
-//! - C-ABI boundaries and schema hash checks.
-//! - Preserving client state across code recompilation without closing the window.
+//! 演示内容：
+//! - 图形外壳与业务逻辑领域的分离。
+//! - C-ABI 边界与 schema 哈希校验。
+//! - 代码重编译期间在不关闭窗口的前提下保留客户端状态。
 
 use unbound_app::prelude::*;
 use unbound_host::GuestHost;
@@ -73,7 +73,7 @@ pub fn run_headless_check() {
     assert!(initial_report.primitives > 0);
     assert_eq!(runtime.state().reload_generation, 1);
 
-    // Verify GuestHost initialization
+    // 验证 GuestHost 初始化
     let host = GuestHost::new();
     assert!(!host.is_mounted(), "GuestHost should start unmounted");
 }

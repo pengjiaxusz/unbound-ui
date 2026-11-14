@@ -1,17 +1,17 @@
 //! 无头验证器的几何模型（`docs` §7.2）。
 //!
-//! A [`Frame`] is the *result* of one headless step: the node tree after the
-//! reducer ran and Taffy solved it. It carries exactly the data the five layout
-//! sanitizers need, and nothing that would require a GPU, a window handle or a
-//! font file.
+//! [`Frame`] 是单个无头步骤的*产物*：reducer 运行且 Taffy 求解完成后的节点树。
+//! 它精确携带五项布局检查器所需的全部数据，且不包含任何依赖 GPU、
+//! 窗口句柄或字体文件的内容。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 use core::panic::Location;
 use unbound_math::{Rect, Vec2};
 
-/// Where a node was built. Captured with `#[track_caller]` so a sanitizer can
-/// point at the line that created the node instead of at the node id.
+/// 节点构建位置。通过 `#[track_caller]` 捕获，使检查器能直接指向
+/// 创建该节点的源码行，而非仅报告节点 ID。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub struct SourceLoc {
     pub file: &'static str,
@@ -20,7 +20,7 @@ pub struct SourceLoc {
 }
 
 impl SourceLoc {
-    /// Capture the caller's location.
+    /// 捕获调用方源码位置。
     #[must_use]
     #[track_caller]
     pub fn caller() -> Self {
@@ -43,33 +43,33 @@ impl core::fmt::Display for SourceLoc {
     }
 }
 
-/// What a node is, from the sanitizers' point of view.
+/// 从检查器视角看到的节点类型。
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeKind {
-    /// Plain layout container.
+    /// 普通布局容器。
     Container,
-    /// Text: carries the measured ink box so clipping can be detected.
+    /// 文本：携带测量后的墨迹包围盒（ink box），用于检测裁剪。
     Text {
-        /// Real ink bounds of the shaped text, in the parent's coordinate space.
+        /// 整形后文本在父坐标空间中的真实墨迹边界。
         ink: Rect,
-        /// `true` when the component declares `text-overflow: ellipsis`, which
-        /// makes a clipped ink box intentional.
+        /// 当组件声明 `text-overflow: ellipsis` 时为 `true`，此时裁剪是有意为之。
+        ///
         ellipsis: bool,
     },
-    /// Something clickable: carries the minimum target size and whether a
-    /// sibling painted above it swallows the centre point.
+    /// 可点击元素：携带最小目标尺寸以及中心点是否被上层兄弟节点遮挡。
+    ///
     Interactive {
-        /// Minimum acceptable clipped size; `24 × 24` per the doc's default.
+        /// 可接受的最小裁剪后尺寸；按文档默认为 `24 × 24`。
         min_size: Vec2,
-        /// Set by the hit tester when the node's centre is fully covered.
+        /// 当节点中心被完全遮挡时由命中测试器置位。
         occluded: bool,
     },
-    /// A Portal overlay: must stay inside the physical viewport.
+    /// Portal 覆盖层：必须保持在物理视口内。
     Portal,
 }
 
 impl NodeKind {
-    /// The doc's default minimum interactive target.
+    /// 文档默认的最小可交互目标尺寸。
     pub const DEFAULT_MIN_SIZE: Vec2 = Vec2 { x: 24.0, y: 24.0 };
 
     #[must_use]
@@ -88,40 +88,40 @@ impl NodeKind {
     }
 }
 
-/// The colours a text node was painted with, for the contrast sanitizer.
+/// 文本节点绘制时使用的颜色，供对比度检查器使用。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct TextColors {
-    /// Opaque foreground colour (`sRGB`).
+    /// 不透明前景色（`sRGB`）。
     pub foreground: [u8; 3],
-    /// Opaque background colour (`sRGB`).
+    /// 不透明背景色（`sRGB`）。
     pub background: [u8; 3],
 }
 
-/// One node in a validated frame.
+/// 已验证帧中的单个节点。
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeSnapshot {
     pub id: u64,
     pub parent: Option<u64>,
     pub children: Vec<u64>,
     pub loc: SourceLoc,
-    /// Semantic path, e.g. `Root/Toolbar/Button "Save"`.
+    /// 语义路径，例如 `Root/Toolbar/Button "Save"`。
     pub path: String,
-    /// Border box after layout, in viewport space.
+    /// 布局后的边框盒（视口空间）。
     pub rect: Rect,
-    /// Effective clip (already intersected with every ancestor), if any.
+    /// 有效裁剪区域（已与所有祖先裁剪区域求交），如有。
     pub clip: Option<Rect>,
     pub kind: NodeKind,
-    /// Absolutely positioned overlays are allowed to overlap their siblings.
+    /// 绝对定位的覆盖层允许与其兄弟节点重叠。
     pub overlays_siblings: bool,
-    /// Inside a scroll container: clipped text there is expected.
+    /// 位于滚动容器内：此处的文本裁剪属于预期行为。
     pub scrollable: bool,
-    /// Foreground and background of a text node, when the component declares
-    /// them; the contrast sanitizer only sees what is declared here.
+    /// 当组件声明时记录文本前景色与背景色；对比度检查器仅检查此处声明的颜色。
+    ///
     pub text_colors: Option<TextColors>,
 }
 
 impl NodeSnapshot {
-    /// Rect after applying the effective clip.
+    /// 应用有效裁剪后的矩形区域。
     #[must_use]
     pub fn visible_rect(&self) -> Rect {
         match self.clip {
@@ -130,31 +130,31 @@ impl NodeSnapshot {
         }
     }
 
-    /// True when this node has a scrollable ancestor (including itself).
+    /// 当节点自身或任意祖先为可滚动容器时返回 true。
     #[must_use]
     pub fn in_scroll_container(&self) -> bool {
         self.scrollable
     }
 }
 
-/// A solved frame, ready for the sanitizers.
+/// 已求解完成的帧，可直接交由检查器检查。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Frame {
     pub viewport: Rect,
     pub nodes: Vec<NodeSnapshot>,
-    /// `index[id - 1]` is the position of node `id` in `nodes`.
+    /// `index[id - 1]` 为节点 `id` 在 `nodes` 中的位置。
     ///
-    /// Ids are dense and assigned by the builder, so a plain `Vec` beats a hash
-    /// map here: `get` is two loads, which matters because the sanitizers call
-    /// it millions of times on a large frame.
+    /// ID 稠密且由构建器分配，因此此处普通 `Vec` 远快于哈希表：
+    /// `get` 仅需两次内存加载，这在检查器对大型帧调用数百万次时至关重要。
+    ///
     index: Vec<usize>,
-    /// Fallback lookup for frames whose ids are *not* dense.
+    /// 当帧的 ID *非*稠密时的回退查找表。
     ///
-    /// A frame restored from the wire may carry any id: id 0 has no slot in
-    /// `index`, a huge id would demand an allocation proportional to the id,
-    /// and a duplicate would alias two nodes onto one slot. Such a frame gets
-    /// a sorted `(id, position)` list instead — slower, but it can neither be
-    /// talked into panicking nor into allocating gigabytes.
+    /// 从网络反序列化的帧可能携带任意 ID：ID 0 在 `index` 中无槽位，
+    // 超大 ID 会要求按 ID 大小分配内存，重复 ID 则会让两个节点别名到同一槽位。
+    // 此类帧改用按 `(id, position)` 排序的列表——虽稍慢，但既不会
+    // 被诱导 panic，也不会分配数 GB 内存。
+    //
     sparse: Option<Vec<(u64, usize)>>,
 }
 
@@ -169,7 +169,7 @@ impl Frame {
         }
     }
 
-    /// Build a frame from an existing node list, rebuilding the id index.
+    /// 基于现有节点列表构建帧，并重建 ID 索引。
     #[must_use]
     pub fn from_nodes(viewport: Rect, nodes: Vec<NodeSnapshot>) -> Self {
         let mut frame = Self {
@@ -189,9 +189,9 @@ impl Frame {
         if count == 0 {
             return;
         }
-        // `index[id - 1]` can only hold the ids `1..=count`. Anything else
-        // would either have no slot at all or demand an allocation
-        // proportional to the id, so those frames take the sorted fallback.
+        // `index[id - 1]` 仅能容纳 `1..=count` 的 ID。其余情况要么没有槽位，
+        // 要么需要按 ID 大小分配内存，因此这些帧走有序回退路径。
+        //
         let mut index = vec![usize::MAX; count];
         let mut dense = true;
         for (position, node) in self.nodes.iter().enumerate() {
@@ -203,7 +203,7 @@ impl Frame {
                 break;
             };
             if slot >= count || index[slot] != usize::MAX {
-                // Out of range, or a duplicate id aliasing two nodes.
+                // 超出范围，或存在重复 ID 导致两节点别名冲突。
                 dense = false;
                 break;
             }
@@ -217,7 +217,7 @@ impl Frame {
         }
     }
 
-    /// `(id, position)` pairs sorted by id, for frames whose ids are not dense.
+    /// 按 ID 排序的 `(id, position)` 对列表，用于 ID 非稠密的帧。
     fn sorted_positions(&self) -> Vec<(u64, usize)> {
         let mut sorted: Vec<(u64, usize)> = self
             .nodes
@@ -250,7 +250,7 @@ impl Frame {
         self.position_of(id).map(|position| &self.nodes[position])
     }
 
-    /// Parent chain of `id`, root first.
+    /// `id` 的父节点链，根节点在前。
     #[must_use]
     pub fn chain(&self, id: u64) -> Vec<u64> {
         let mut chain = Vec::new();
@@ -264,14 +264,14 @@ impl Frame {
     }
 }
 
-/// Stack-based frame builder.
+/// 基于栈的帧构建器。
 ///
-/// Every `push` records the calling source line, so the diagnostics point at
-/// component code rather than at a numeric id.
+/// 每次 `push` 均记录调用源码行，使诊断信息直接指向组件代码而非数字 ID。
+///
 #[derive(Debug)]
 pub struct FrameBuilder {
     frame: Frame,
-    /// Open nodes, with a flag telling whether they establish a scroll container.
+    /// 当前打开的节点栈，附带其是否建立滚动容器的标志。
     stack: Vec<(u64, bool)>,
     next_id: u64,
     labels: Vec<String>,
@@ -290,7 +290,7 @@ impl FrameBuilder {
         }
     }
 
-    /// Open a node as a child of the current one.
+    /// 作为当前节点的子节点打开一个新节点。
     #[track_caller]
     pub fn open(&mut self, kind: NodeKind, rect: Rect, label: &str) -> u64 {
         let id = self.next_id;
@@ -306,8 +306,8 @@ impl FrameBuilder {
                 node.children.push(id);
             }
         }
-        // Inherit the parent's clip, intersected with the parent's own bounds
-        // when the parent clips its overflow.
+        // 继承父节点的裁剪区域；若父节点裁剪溢出，则与父节点自身边界求交。
+        //
         let clip = match parent.and_then(|p| self.frame.get(p)) {
             Some(parent_node) => parent_node.clip,
             None => None,
@@ -333,7 +333,7 @@ impl FrameBuilder {
         id
     }
 
-    /// Close the current node.
+    /// 关闭当前节点。
     pub fn close(&mut self) {
         if let Some((_, guard)) = self.stack.pop() {
             if guard {
@@ -342,7 +342,7 @@ impl FrameBuilder {
         }
     }
 
-    /// Mark the current node as an absolutely positioned overlay.
+    /// 将当前节点标记为绝对定位的覆盖层。
     pub fn set_overlays_siblings(&mut self, value: bool) {
         if let Some((id, _)) = self.stack.last().copied() {
             if let Some(node) = self.frame.get_mut(id) {
@@ -351,8 +351,8 @@ impl FrameBuilder {
         }
     }
 
-    /// Mark the current node as a scroll container: its descendants may clip
-    /// their content without that counting as a layout bug.
+    /// 将当前节点标记为滚动容器：其后代内容被裁剪不视为布局缺陷。
+    ///
     pub fn set_scrollable(&mut self, value: bool) {
         if let Some(entry) = self.stack.last_mut() {
             if value && !entry.1 {
@@ -365,7 +365,7 @@ impl FrameBuilder {
         }
     }
 
-    /// Clip the current node (and its descendants) to `rect`.
+    /// 将当前节点（及其后代）裁剪至 `rect`。
     pub fn set_clip(&mut self, rect: Rect) {
         if let Some(id) = self.stack.last().map(|(id, _)| *id) {
             let inherited = self.frame.get(id).and_then(|n| n.clip);
@@ -379,7 +379,7 @@ impl FrameBuilder {
         }
     }
 
-    /// Declare the opaque foreground/background a text node is painted with.
+    /// 声明文本节点绘制时使用的不透明前景色/背景色。
     pub fn set_text_colors(&mut self, foreground: [u8; 3], background: [u8; 3]) {
         if let Some((id, _)) = self.stack.last().copied() {
             if let Some(node) = self.frame.get_mut(id) {
@@ -393,13 +393,13 @@ impl FrameBuilder {
         }
     }
 
-    /// The node currently open.
+    /// 当前打开的节点。
     #[must_use]
     pub fn current(&self) -> Option<u64> {
         self.stack.last().map(|(id, _)| *id)
     }
 
-    /// Finish and hand back the frame.
+    /// 完成构建并返回帧。
     #[must_use]
     pub fn build(self) -> Frame {
         self.frame
@@ -482,9 +482,9 @@ mod tests {
         assert_eq!(node.visible_rect(), rect(0.0, 0.0, 30.0, 30.0));
     }
 
-    /// A frame restored from the wire may carry any id, and the dense index
-    /// has no slot for id 0 — the old code subtracted one from zero and
-    /// panicked while indexing.
+    /// 从网络恢复的帧可能携带任意 ID，而稠密索引没有 ID 0 的槽位——
+    /// 旧代码从零减一并在索引时发生 panic。
+    ///
     #[test]
     fn a_node_with_id_zero_is_still_addressable() {
         let mut b = FrameBuilder::new(rect(0.0, 0.0, 100.0, 100.0));
@@ -500,8 +500,8 @@ mod tests {
         );
     }
 
-    /// A huge id used to size the index by the id itself: `u64::MAX` asked
-    /// for an allocation of `usize::MAX` entries and aborted the process.
+    /// 超大 ID 曾导致按 ID 本身大小分配索引：`u64::MAX` 会请求分配
+    /// `usize::MAX` 个条目并直接中止进程。
     #[test]
     fn an_absurd_id_does_not_demand_an_absurd_allocation() {
         let mut b = FrameBuilder::new(rect(0.0, 0.0, 100.0, 100.0));
@@ -514,8 +514,8 @@ mod tests {
         assert!(frame.get(u64::MAX).is_some());
     }
 
-    /// Two nodes sharing an id cannot both live in a dense index; the frame
-    /// still has to resolve them without aliasing one onto the other.
+    /// 共享同一 ID 的两个节点无法同时存在于稠密索引中；
+    /// 帧仍需正确解析它们而不使彼此产生别名覆盖。
     #[test]
     fn duplicate_ids_do_not_alias_and_do_not_panic() {
         let mut b = FrameBuilder::new(rect(0.0, 0.0, 100.0, 100.0));
@@ -528,8 +528,8 @@ mod tests {
         assert!(frame.get(1).is_some());
     }
 
-    /// The dense fast path has to survive for the frames the builder makes —
-    /// the sanitizers call `get` millions of times on those.
+    /// 构建器生成的帧必须保留稠密快路径——检查器会对这些帧调用
+    /// 数百万次 `get`。
     #[test]
     fn a_builder_frame_uses_the_dense_index() {
         let mut b = FrameBuilder::new(rect(0.0, 0.0, 100.0, 100.0));

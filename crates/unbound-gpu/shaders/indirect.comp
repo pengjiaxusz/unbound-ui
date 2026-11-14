@@ -3,41 +3,35 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // ---------------------------------------------------------------------------
-// Stage 3 — indirect command compaction (docs §6.3).
+// 阶段 3 — 间接绘制命令压缩（参见 `docs/architecture/gpu-renderer.md`）。
 //
-// Walks the sorted key array and emits one `VkDrawIndirectCommand` per
-// contiguous `(layer, barrier, variant)` run. Because the sort orders those
-// three fields first, every run is contiguous, so the frame issues the whole
-// thing with a single `vkCmdDrawIndirectCount`: the count buffer is written
-// here and consumed on the GPU, which means the CPU never reads it back and
-// never stalls.
+// 遍历已排序的键数组，为每个连续的 `(layer, barrier, variant)` 批次生成一条
+// `VkDrawIndirectCommand`。由于排序优先按这三个字段排列，每个批次天然连续，
+// 整帧只需一次 `vkCmdDrawIndirectCount` 即可完成绘制：计数缓冲区在此写入并直接
+// 在 GPU 端消费，CPU 无需回读，也绝不会产生管线停顿。
 //
-// Three details make this correct rather than merely plausible:
-//   * unused key slots were pre-filled with `0xFFFF…` and sort to the end, so
-//     the walk stops at the first sentinel instead of drawing garbage;
-//   * `pc.aux` bounds the number of runs, so a pathological scene cannot
-//     overflow the command buffer;
-//   * the two scans over the key array are **parallel**. A hundred thousand
-//     keys scanned by a single thread cost ten milliseconds — more than the
-//     rest of the frame put together — so the sentinel search and the run
-//     boundary search are both spread over the 256 lanes of the workgroup.
+// 保证正确性的三个关键细节：
+//   * 未使用的键槽预先填充 `0xFFFF…` 并被排到末尾，遍历遇到首个哨兵即停止，避免绘制垃圾数据；
+//   * `pc.aux` 限制最大批次数，防止极端场景溢出命令缓冲区；
+//   * 对键数组的两趟扫描均为**并行**执行。单线程扫描十万个键需耗时约 10 毫秒（超过整帧
+//     其余开销之和），因此哨兵查找与批次边界查找均分摊到工作组的 256 个通道上。
 //
-// Output counters: `c[1]` = run count (read by drawIndirectCount),
-//                  `c[2]` = visible instance count (diagnostics).
+// 输出计数器：`c[1]` = 批次数（由 drawIndirectCount 读取），
+//             `c[2]` = 可见实例数（用于诊断）。
 // ---------------------------------------------------------------------------
 
 #include "common.glsl"
 
 layout(local_size_x = 256) in;
 
-// Must match `MAX_DRAW_RUNS` in the renderer.
+// 必须与渲染器中的 `MAX_DRAW_RUNS` 保持一致。
 #define MAX_RUNS 16
 
 layout(buffer_reference, std430, buffer_reference_align = 8) buffer KeyBuf {
     uint64_t k[];
 };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer CmdBuf {
-    uint v[];  // 4 words per DrawIndirectCommand
+    uint v[];  // 每条 DrawIndirectCommand 占 4 个 uint
 };
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer CursorBuf {
     uint c[];
@@ -51,10 +45,10 @@ shared uint s_bounds[MAX_RUNS];
 
 void emit(CmdBuf cmds, uint run, uint first, uint count) {
     uint o = run * 4u;
-    cmds.v[o + 0u] = 4u;       // vertex_count
-    cmds.v[o + 1u] = count;    // instance_count
-    cmds.v[o + 2u] = 0u;       // first_vertex
-    cmds.v[o + 3u] = first;    // first_instance == sorted slot
+    cmds.v[o + 0u] = 4u;       // 顶点数
+    cmds.v[o + 1u] = count;    // 实例数
+    cmds.v[o + 2u] = 0u;       // 起始顶点
+    cmds.v[o + 3u] = first;    // 起始实例 == 排序后槽位
 }
 
 void main() {
@@ -80,7 +74,7 @@ void main() {
         return;
     }
 
-    // ---- phase 1: the first sentinel, in parallel --------------------------
+    // ---- 阶段 1：并行查找首个哨兵 ------------------------------------------
     uint my_end = n;
     for (uint i = tid; i < n; i += threads) {
         if (keys.k[i] == SENTINEL) {
@@ -100,9 +94,9 @@ void main() {
         return;
     }
 
-    // ---- phase 2: the run boundaries, in parallel --------------------------
-    // A boundary is an index whose run prefix differs from its predecessor's.
-    // Every index is visited by exactly one lane, so no boundary is missed.
+    // ---- 阶段 2：并行查找批次边界 ------------------------------------------
+    // 边界是指批次前缀与其前驱不同的索引位置。
+    // 每个索引恰好由一个通道访问，因此不会遗漏任何边界。
     for (uint i = tid + 1u; i < end; i += threads) {
         if (uint(keys.k[i] >> 36) != uint(keys.k[i - 1u] >> 36)) {
             uint slot = atomicAdd(s_bound_count, 1u);
@@ -113,13 +107,12 @@ void main() {
     }
     barrier();
 
-    // ---- phase 3: order the boundaries and emit the commands ---------------
+    // ---- 阶段 3：对边界排序并生成绘制命令 ------------------------------------
     if (tid != 0u) {
         return;
     }
     uint count = min(s_bound_count, uint(MAX_RUNS));
-    // Insertion sort: at most sixteen entries, and it has to be ordered
-    // because the runs must stay contiguous.
+    // 插入排序：最多 16 项，且必须有序以保持批次连续。
     for (uint a = 1u; a < count; ++a) {
         uint value = s_bounds[a];
         uint b = a;
@@ -139,8 +132,7 @@ void main() {
         run += 1u;
         run_start = boundary;
         if (run >= max_runs) {
-            // Command buffer full: stop compacting, keep the remaining
-            // primitives out rather than writing past the allocation.
+            // 命令缓冲区已满：停止压缩，丢弃剩余图元，防止越界写入分配区。
             counters.c[1] = run;
             counters.c[2] = end;
             return;

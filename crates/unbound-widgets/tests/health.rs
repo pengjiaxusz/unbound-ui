@@ -1,9 +1,9 @@
-//! The headless health check of the standard controls.
+//! 标准控件的无头健康检查。
 //!
-//! Every control has to survive the seven geometry and contrast assertions
-//! of `unbound-headless`: no NaN, no clipped text, an interactive target big
-//! enough, no unintended sibling overlap, nothing outside the viewport, no
-//! text overflowing its parent and enough contrast to be readable.
+//! 每个控件都必须通过 `unbound-headless` 的七项几何与对比度断言：
+//! 无 NaN、无裁剪文本、交互目标足够大、无意外兄弟重叠、
+//! 无视口外溢出、无文本溢出父容器，以及足够的可读对比度。
+//!
 
 use unbound_headless::{Frame, FrameBuilder, Harness, NodeKind};
 use unbound_math::Rect;
@@ -13,13 +13,12 @@ use unbound_widgets::segmented::SegmentedDesc;
 use unbound_widgets::slider::SliderDesc;
 use unbound_widgets::switch::SwitchDesc;
 
-/// The viewport the controls are checked in.
+/// 控件检查所在的视口。
 const VIEWPORT: (f32, f32) = (1280.0, 720.0);
 
-/// A frame with one interactive control and one label inside it.
+/// 包含一个交互控件及内部标签的测试帧。
 ///
-/// The label is a text node with an ink box that fits inside the control, so
-/// the text assertions have something real to look at.
+/// 标签是墨盒完全落入控件内的文本节点，使文本断言有真实对象可检。
 fn control_frame(rect: Rect, label: &str) -> Frame {
     let viewport = Rect::new(0.0, 0.0, VIEWPORT.0, VIEWPORT.1);
     let mut frame = FrameBuilder::new(viewport);
@@ -32,8 +31,8 @@ fn control_frame(rect: Rect, label: &str) -> Frame {
         rect,
         "Control",
     );
-    // The label sits in the left half of the control, the way every row in
-    // the gallery lays it out.
+    // 标签位于控件左半部分，与图库中每行的布局一致。
+    //
     let ink = Rect::new(
         rect.origin.x + 4.0,
         rect.origin.y + (rect.size.y - 13.0) * 0.5,
@@ -55,7 +54,7 @@ fn control_frame(rect: Rect, label: &str) -> Frame {
     frame.build()
 }
 
-/// Run the seven assertions over a control frame.
+/// 对控件帧运行全部七项断言。
 fn assert_clean(rect: Rect, label: &str) {
     let report = Harness::assert_clean(&control_frame(rect, label));
     assert!(report.is_clean(), "{label} 未通过体检");
@@ -93,8 +92,8 @@ fn the_slider_passes_every_assertion() {
 
 #[test]
 fn a_control_that_is_too_small_is_reported() {
-    // A 12 × 12 target is below the 24 × 24 minimum: the harness has to
-    // complain, otherwise the assertion would be worthless.
+    // 12 × 12 的目标小于 24 × 24 最小要求：测试框架必须报错，否则断言毫无意义。
+    //
     let viewport = Rect::new(0.0, 0.0, VIEWPORT.0, VIEWPORT.1);
     let mut frame = FrameBuilder::new(viewport);
     frame.open(NodeKind::Container, viewport, "Root");

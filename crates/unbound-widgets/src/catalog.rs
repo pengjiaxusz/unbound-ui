@@ -1,24 +1,19 @@
-//! The exhaustive component probe: one genuine emitter call per catalog id.
+//! 穷举组件探针：为每个目录 ID 调用一次真实发射器。
 //!
-//! [`probe_widget`] is the compile-time gate of the showcase: its `match`
-//! names every [`WidgetCatalogId`] variant with no wildcard, so adding a
-//! component to the catalog without wiring its real emitter here is a compile
-//! error (`E0004`), not a silently missing showcase branch.
+//! [`probe_widget`] 是展示页的编译期门禁：其 `match` 显式列出
+//! [`WidgetCatalogId`] 的每个变体且不允许通配符，因此向目录添加组件而未在此处
+//! 接入真实发射器将触发编译错误（`E0004`），而非静默遗漏展示分支。
 //!
-//! Every arm builds a minimal but valid descriptor (the same constructions
-//! the component's own unit tests use), runs the component's public `emit_*`
-//! function and returns the emitted primitives. The only input that varies
-//! between calls is [`ControlState`]; every extra state struct is a fixed
-//! representative value. The returned [`WidgetShowcaseWitness`] proves the
-//! emitter really ran — it can only be minted inside this crate.
+//! 每个分支均构造最小但有效的描述符（与组件自身单元测试一致），
+//! 调用组件公开的 `emit_*` 函数并返回发射的图元。每次调用唯一变化的输入是
+//! [`ControlState`]；其余附加状态结构体均为固定的代表性值。返回的
+//! [`WidgetShowcaseWitness`] 证明发射器确实已运行——它只能在本 crate 内部铸造。
 //!
-//! [`emit_widget`] is the full-output form of the same exhaustive match: it
-//! places the component at a caller-supplied rectangle with caller-shaped
-//! glyphs and returns the complete [`WidgetOutput`] (primitives, payloads,
-//! hit region and semantic node). The Showcase component gallery drives it
-//! directly, so every catalog component is painted by its genuine emitter
-//! with a real identity, not a hand-drawn stand-in. `probe_widget` delegates
-//! to it, keeping a single source of truth for the compile-time gate.
+//! [`emit_widget`] 是同一穷举匹配的完整输出形式：它将组件放置在调用方指定的
+//! 矩形内，使用调用方排版的字形，并返回完整的 [`WidgetOutput`]（图元、载荷、
+//! 命中区域与语义节点）。Showcase 组件画廊直接驱动它，因此每个目录组件均由其
+//! 真实发射器配合真实身份绘制，而非手绘替身。`probe_widget` 委托给它，
+//! 从而为编译期门禁保持单一事实来源。
 
 use unbound_math::{Color, Rect, Vec2};
 use unbound_text::GlyphQuad;
@@ -59,10 +54,10 @@ impl ImageAssetResolver for ProbeImageResolver {
     }
 }
 
-/// The standard probe rectangle, comfortably above the minimum target size.
+/// 标准探针矩形，尺寸充裕且高于最小目标尺寸。
 const RECT: Rect = Rect::new(40.0, 40.0, 220.0, 36.0);
 
-/// A small fixed glyph run, shaped like a six-character label.
+/// 小型固定字形串，模拟六字符标签的排版结果。
 fn label() -> Vec<GlyphQuad> {
     (0..6)
         .map(|index| GlyphQuad {
@@ -81,17 +76,15 @@ fn label() -> Vec<GlyphQuad> {
         .collect()
 }
 
-/// The result of probing one component: proof it was really emitted, plus its
-/// primitives so the stable-shape test can count them.
+/// 探测单个组件的结果：证明真实发射器已运行，并附带图元列表供稳定形状测试计数。
 pub struct CatalogProbe {
-    /// Proof that the component's genuine emitter ran.
+    /// 组件真实发射器已运行的证明。
     pub witness: WidgetShowcaseWitness,
-    /// The primitives the emitter produced, in draw order.
+    /// 发射器按绘制顺序产出的图元。
     pub primitives: Vec<unbound_gpu::data::GpuPrimitiveInstance>,
 }
 
-/// Run the genuine emitter for `id` under `state`, with a minimal but valid
-/// descriptor. Exhaustive: NO `_ =>` wildcard arm allowed.
+/// 在 `state` 下使用最小有效描述符运行 `id` 的真实发射器。穷举匹配：禁止 `_ =>` 通配符分支。
 #[deny(unreachable_patterns)]
 pub fn probe_widget(id: WidgetCatalogId, state: ControlState) -> CatalogProbe {
     let output = emit_widget(id, 1, state, RECT, &mut label());
@@ -101,15 +94,13 @@ pub fn probe_widget(id: WidgetCatalogId, state: ControlState) -> CatalogProbe {
     }
 }
 
-/// The full-output form of the exhaustive component match.
+/// 穷举组件匹配的完整输出形式。
 ///
-/// Places the component at `rect` (used both as its bounds and, for overlay
-/// components, as the placement viewport), binds it to `node` and shapes its
-/// primary label from `label`. Returns the complete [`WidgetOutput`] so the
-/// caller gets a real hit region and semantic node alongside the primitives.
+/// 将组件放置在 `rect`（同时用作边界，对浮层组件也用作放置视口），
+/// 绑定到 `node` 并基于 `label` 排版主标签。返回完整的 [`WidgetOutput`]，
+/// 使调用方在获得图元的同时获得真实的命中区域与语义节点。
 ///
-/// Exhaustive: NO `_ =>` wildcard arm allowed — this is the single compile-time
-/// gate that keeps every catalog component wired to its genuine emitter.
+/// 穷举匹配：禁止 `_ =>` 通配符分支——这是确保每个目录组件都接入真实发射器的唯一编译期门禁。
 #[deny(unreachable_patterns)]
 pub fn emit_widget(
     id: WidgetCatalogId,
@@ -286,8 +277,7 @@ pub fn emit_widget(
             crate::containers::emit_card(&desc, CardTokens::standard())
         }
         WidgetCatalogId::ContextMenu => {
-            // The context menu is a placement state machine: it renders
-            // through the genuine menu emitter on the descriptor it places.
+            // 上下文菜单是一个放置状态机：它通过真实菜单发射器渲染所放置的描述符。
             let mut context = ContextMenuState::new();
             context.open_at(o, 1, None);
             let menu = MenuDesc::new(
@@ -351,8 +341,7 @@ pub fn emit_widget(
             crate::file_drop::emit_file_drop(node, &desc, &FileDropState::new(), state, label)
         }
         WidgetCatalogId::Form => {
-            // The form module owns layout and validation; its painted parts
-            // are the field label (with the required marker) and the message.
+            // 表单模块负责布局与校验；其绘制部分为字段标签（含必填标记）与提示消息。
             let desc = FormDesc::new(rect);
             let fields = vec![FormField::new(
                 1,
@@ -463,11 +452,9 @@ pub fn emit_widget(
             crate::number_input::emit_number_input(node, &desc, &number, state, label)
         }
         WidgetCatalogId::Overlay => {
-            // The overlay module is pure placement and stack bookkeeping
-            // (`place_anchored_popup`, `OverlayStack`): it emits NO primitives
-            // of its own. The visible overlay surfaces are painted by the
-            // popover/menu/tooltip/modal emitters, which are probed under
-            // their own catalog ids. This arm is therefore legitimately empty.
+            // overlay 模块仅负责纯定位与栈簿记（`place_anchored_popup`、`OverlayStack`）：
+            // 它自身不发射任何图元。可见的浮层表面由 popover/menu/tooltip/modal 发射器绘制，
+            // 并在各自对应的目录 ID 下探测。因此该分支合理为空。
             WidgetOutput::default()
         }
         WidgetCatalogId::Popover => {
@@ -518,8 +505,7 @@ pub fn emit_widget(
             crate::scroll::emit_scroll_view(node, &desc, &ScrollState::new(), state).output
         }
         WidgetCatalogId::Segmented => {
-            // Probe an *unselected* slot: it is the one that answers the
-            // pointer (the active slot is the selection itself).
+            // 探测*未选中*的槽位：它是响应指针的槽位（当前激活槽位即选中项本身）。
             let desc = SegmentedDesc::new(rect, &["One", "Two", "Three"]);
             let mut out = crate::segmented::emit_segmented_segment(
                 node,
@@ -585,7 +571,7 @@ pub fn emit_widget(
             crate::table::emit_table(node, &desc, &TableState::new(), &[], label, state)
         }
         WidgetCatalogId::Tabs => {
-            // Probe an inactive tab: the active one is the selection itself.
+            // 探测未激活的标签页：当前激活的标签页即选中项本身。
             let desc = TabsDesc::new(rect, &["One", "Two", "Three"]);
             let tabs_state = TabsState::new(0);
             let mut out =
@@ -702,8 +688,7 @@ pub fn emit_widget(
             out
         }
         WidgetCatalogId::VirtualViews => {
-            // The row emitter takes the hover bit directly; derive it from
-            // the control phase so the probe still varies only ControlState.
+            // 行发射器直接接收悬停位；从控制阶段派生该位，使探针仍仅随 ControlState 变化。
             crate::virtual_views::emit_virtual_row(
                 Rect::new(o.x, o.y, rect.size.x, 28.0),
                 label,

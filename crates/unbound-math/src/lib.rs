@@ -1,10 +1,10 @@
-//! Foundational scalar/vector/colour/transform math for the Unbound engine.
+//! Unbound 引擎的基础标量、向量、色彩与变换数学库。
 //!
-//! Everything in this crate is `Copy`, allocation free and `#[repr(C)]` where it
-//! is intended to cross the CPU/GPU boundary. It deliberately avoids generic
-//! scalar traits: the renderer is `f32`-only on the hot path (see
-//! `docs/gpu_ui_v2_0.md` §4.5 — three orthogonal zoom layers all collapse into
-//! one `f32` device-space transform).
+//! 本 crate 中的所有类型均为 `Copy`、零堆分配，并在跨 CPU/GPU 边界时
+//! 标记 `#[repr(C)]`。刻意避免使用泛型标量 trait：渲染器在热路径上
+//! 仅使用 `f32`（参见 `docs/architecture/animation-and-theme.md`——
+//! 三个正交缩放层最终合并为单一的 `f32` 设备空间变换）。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_debug_implementations)]
@@ -21,13 +21,13 @@ pub use rect::{project_rounded_radii, Rect};
 pub use transform::Affine2;
 pub use vec2::Vec2;
 
-/// Logical size of one canvas chunk in world pixels (`docs` §5.2, 4096² grid).
+/// 单个画布分块在世界像素中的逻辑尺寸（`docs` §5.2，4096² 网格）。
 pub const CHUNK_SIZE: f32 = 4096.0;
 
-/// Reciprocal of [`CHUNK_SIZE`], precomputed to keep shader-side maths identical.
+/// [`CHUNK_SIZE`] 的倒数，预计算以确保与着色器端数学运算完全一致。
 pub const INV_CHUNK_SIZE: f32 = 1.0 / CHUNK_SIZE;
 
-/// Clamp helper shared by the layout and animation layers.
+/// 布局层与动画层共用的钳制辅助函数。
 #[inline]
 #[must_use]
 pub fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
@@ -40,18 +40,18 @@ pub fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
     }
 }
 
-/// Linear interpolation that does not overshoot for `t` outside `0..=1` is *not*
-/// wanted here — springs rely on overshoot, so this is a plain lerp.
+/// 纯线性插值：当 `t` 超出 `0..=1` 时不限制过冲——弹簧动画依赖过冲，
+/// 因此此处保留朴素线性插值。
 #[inline]
 #[must_use]
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-/// Snap a device-space coordinate onto the physical pixel grid.
+/// 将设备空间坐标对齐到物理像素网格。
 ///
-/// Used for static UI nodes (`docs` §4.4): `round(pos * dpi) / dpi` keeps 1px
-/// borders razor sharp instead of blurring across two pixel centres.
+/// 用于静态 UI 节点（`docs` §4.4）：`round(pos * dpi) / dpi` 可使 1px
+/// 边框保持锐利，避免跨越两个像素中心产生模糊。
 #[inline]
 #[must_use]
 pub fn snap_to_pixel(v: f32, dpi_scale: f32) -> f32 {
@@ -61,8 +61,8 @@ pub fn snap_to_pixel(v: f32, dpi_scale: f32) -> f32 {
     (v * dpi_scale).round() / dpi_scale
 }
 
-/// Snap a length (width/height) onto whole physical pixels, with a floor of one
-/// physical pixel so that snapped geometry never collapses to zero.
+/// 将长度（宽度/高度）对齐到整物理像素，下限为一物理像素，
+/// 以防对齐后的几何体退化为零。
 #[inline]
 #[must_use]
 pub fn snap_size_to_pixel(v: f32, dpi_scale: f32) -> f32 {
@@ -73,7 +73,7 @@ pub fn snap_size_to_pixel(v: f32, dpi_scale: f32) -> f32 {
     (if snapped < 1.0 { 1.0 } else { snapped }) / dpi_scale
 }
 
-/// True when `v` is a usable finite number (used by the layout sanitizers).
+/// 当 `v` 为可用的有限数值时返回 `true`（供布局合法性检查使用）。
 #[inline]
 #[must_use]
 pub fn is_finite(v: f32) -> bool {
@@ -86,11 +86,11 @@ mod tests {
 
     #[test]
     fn pixel_snap_rounds_to_device_grid() {
-        // 1.5x DPI: 10.2 logical -> 15.3 physical -> 15 -> 10.0 logical
+        // 1.5x DPI：10.2 逻辑像素 -> 15.3 物理像素 -> 15 -> 10.0 逻辑像素
         assert_eq!(snap_to_pixel(10.2, 1.5), 10.0);
         assert!((snap_to_pixel(10.34, 1.5) - 10.666_667).abs() < 1e-5);
         assert!((snap_to_pixel(10.4, 1.5) - 10.666_667).abs() < 1e-5);
-        // Already aligned values stay untouched.
+        // 已对齐的值保持不变。
         assert_eq!(snap_to_pixel(12.0, 1.0), 12.0);
         assert_eq!(snap_to_pixel(12.0, 2.0), 12.0);
     }

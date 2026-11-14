@@ -1,9 +1,7 @@
-//! The floating canvas toolbar: tool selection, zoom and fit.
+//! 浮动画布工具栏（CanvasToolbar）：工具选择、缩放与自适应画布。
 //!
-//! The toolbar is deliberately one *row* of mutually exclusive tools plus a
-//! zoom readout. A tool palette that scrolls or nests costs a second look
-//! every time; a row can be learned once. The bar requests a blur pass behind
-//! itself so it stays legible over arbitrary artwork.
+//! 工具栏刻意设计为单*行*互斥工具加缩放读数。可滚动或嵌套的工具面板每次都需二次查找；
+//! 单行布局只需记忆一次。工具栏会在自身背后请求模糊通道，使其在任意画面上都清晰可读。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -18,39 +16,39 @@ use crate::primitive::{instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The bar height.
+/// 工具栏高度。
 pub const TOOLBAR_HEIGHT: f32 = 44.0;
-/// One tool button.
+/// 单个工具按钮尺寸。
 pub const TOOL_BUTTON: f32 = 32.0;
-/// The gap between buttons.
+/// 按钮间距。
 pub const TOOL_GAP: f32 = 4.0;
-/// The zoom readout width.
+/// 缩放读数区域宽度。
 pub const ZOOM_WIDTH: f32 = 72.0;
-/// The default blur behind the bar.
+/// 工具栏背后的默认模糊半径。
 pub const TOOLBAR_BLUR: f32 = 16.0;
-/// The zoom limits.
+/// 缩放比例上下限。
 pub const ZOOM_RANGE: (f32, f32) = (0.05, 64.0);
 
-/// A canvas tool.
+/// 画布工具类型。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CanvasTool {
-    /// Pick and transform.
+    /// 拾取与变换。
     #[default]
     Select,
-    /// Pan the viewport.
+    /// 平移视口。
     Hand,
-    /// Draw a frame.
+    /// 绘制框架。
     Frame,
-    /// Draw a path.
+    /// 绘制路径。
     Pen,
-    /// Connect two ports.
+    /// 连接两个端口。
     Connect,
-    /// Place text.
+    /// 放置文本。
     Text,
 }
 
 impl CanvasTool {
-    /// Every tool, in toolbar order.
+    /// 按工具栏顺序列出的所有工具。
     pub const ALL: [Self; 6] = [
         Self::Select,
         Self::Hand,
@@ -60,7 +58,7 @@ impl CanvasTool {
         Self::Text,
     ];
 
-    /// The tool name.
+    /// 工具名称。
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -73,7 +71,7 @@ impl CanvasTool {
         }
     }
 
-    /// The keyboard shortcut.
+    /// 键盘快捷键。
     #[must_use]
     pub const fn shortcut(self) -> &'static str {
         match self {
@@ -87,16 +85,16 @@ impl CanvasTool {
     }
 }
 
-/// The toolbar descriptor.
+/// 工具栏描述符。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CanvasToolbarDesc {
-    /// The viewport the bar floats over.
+    /// 工具栏浮动所在的视口。
     pub viewport: Rect,
-    /// The distance from the bottom edge.
+    /// 距底部边缘的距离。
     pub bottom_margin: f32,
-    /// The backdrop blur; `0.0` disables the pass.
+    /// 背景模糊半径；`0.0` 表示禁用。
     pub backdrop_blur: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
@@ -111,7 +109,7 @@ impl CanvasToolbarDesc {
         }
     }
 
-    /// The total bar width.
+    /// 工具栏总宽度。
     #[must_use]
     pub fn width(&self) -> f32 {
         let tools = CanvasTool::ALL.len() as f32;
@@ -119,7 +117,7 @@ impl CanvasToolbarDesc {
         8.0 * 2.0 + tools * TOOL_BUTTON + (tools - 1.0) * TOOL_GAP + separator + ZOOM_WIDTH
     }
 
-    /// The bar rectangle.
+    /// 工具栏矩形区域。
     #[must_use]
     pub fn rect(&self) -> Rect {
         Rect::new(
@@ -130,7 +128,7 @@ impl CanvasToolbarDesc {
         )
     }
 
-    /// The button rectangle for one tool.
+    /// 单个工具的按钮矩形。
     #[must_use]
     pub fn tool_rect(&self, tool: CanvasTool) -> Rect {
         let index = CanvasTool::ALL
@@ -145,7 +143,7 @@ impl CanvasToolbarDesc {
         )
     }
 
-    /// The zoom readout, right of the separator.
+    /// 位于分隔符右侧的缩放读数区域。
     #[must_use]
     pub fn zoom_rect(&self) -> Rect {
         Rect::new(
@@ -156,14 +154,14 @@ impl CanvasToolbarDesc {
         )
     }
 
-    /// The fit button, inside the zoom readout's left half.
+    /// 位于缩放读数左半部分的自适应按钮。
     #[must_use]
     pub fn fit_rect(&self) -> Rect {
         let zoom = self.zoom_rect();
         Rect::new(zoom.origin.x, zoom.origin.y, 24.0, zoom.size.y)
     }
 
-    /// The separator rule.
+    /// 分隔线。
     #[must_use]
     pub fn separator_rect(&self) -> Rect {
         let last = self.tool_rect(CanvasTool::ALL[CanvasTool::ALL.len() - 1]);
@@ -176,12 +174,12 @@ impl CanvasToolbarDesc {
     }
 }
 
-/// The toolbar state.
+/// 工具栏状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CanvasToolbarState {
-    /// The active tool.
+    /// 当前激活的工具。
     pub active: CanvasTool,
-    /// The current zoom.
+    /// 当前缩放倍率。
     pub zoom: f32,
 }
 
@@ -194,42 +192,42 @@ impl CanvasToolbarState {
         }
     }
 
-    /// Switch tools.
+    /// 切换工具。
     pub fn set_tool(&mut self, tool: CanvasTool) {
         self.active = tool;
     }
 
-    /// Multiply the zoom, clamped to [`ZOOM_RANGE`].
+    /// 按倍率缩放，并限制在 [`ZOOM_RANGE`] 内。
     pub fn zoom_by(&mut self, factor: f32) -> f32 {
         self.zoom = (self.zoom * factor).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
         self.zoom
     }
 
-    /// The zoom readout text.
+    /// 缩放读数文本。
     #[must_use]
     pub fn zoom_label(&self) -> String {
         format!("{:.0}%", self.zoom * 100.0)
     }
 }
 
-/// What one toolbar emits.
+/// 单个工具栏的发射结果。
 #[derive(Clone, Debug)]
 pub struct CanvasToolbarOutput {
-    /// The bar, buttons and glyphs.
+    /// 工具栏、按钮与字形。
     pub output: WidgetOutput,
-    /// One hit region per tool.
+    /// 每个工具对应的命中区域。
     pub tools: Vec<(CanvasTool, HitRegion)>,
-    /// The zoom readout.
+    /// 缩放读数。
     pub zoom: HitRegion,
-    /// The fit button.
+    /// 自适应按钮。
     pub fit: HitRegion,
-    /// The blur request, when enabled.
+    /// 启用模糊时的模糊请求。
     pub backdrop: Option<BackdropRequest>,
-    /// The bar rectangle.
+    /// 工具栏矩形。
     pub rect: Rect,
 }
 
-/// Emit the floating toolbar.
+/// 发射浮动工具栏。
 #[must_use]
 pub fn emit_canvas_toolbar(
     node: u64,
@@ -259,9 +257,8 @@ pub fn emit_canvas_toolbar(
     for tool in CanvasTool::ALL {
         let button = desc.tool_rect(tool);
         let active = tool == state.active;
-        // One slot per tool, always in the pool: the active tool paints its
-        // primary fill, every other tool keeps a hover wash whose opacity is
-        // the only thing hovering changes, so the run never reshapes.
+        // 每个工具在池中始终占有一个槽位：激活工具绘制主填充色，
+        // 其余工具保留悬停底色，悬停仅改变其不透明度，因此图元序列永不重排。
         let slot = if active {
             surface(button, 7.0, Token::PRIMARY, desc.z + 1)
         } else {

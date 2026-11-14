@@ -1,14 +1,14 @@
-//! The split pane: two regions separated by a draggable gutter.
+//! 分割面板：由可拖拽分隔条隔开的两个区域。
 //!
-//! The widget owns the *split*, not the panes. A caller lays its own content
-//! out inside [`SplitLayout::first`] and [`SplitLayout::second`]; the pane
-//! only guarantees that the two rectangles never overlap, that the gutter is
-//! hit-testable with the resize cursor, and that the minimum sizes survive a
-//! drag.
+//! 该控件仅持有*分割关系*而非面板内容。调用方自行在 [`SplitLayout::first`] 与
+//! [`SplitLayout::second`] 内布局内容；分割面板仅保证两个矩形永不重叠、
+//! 分隔条可通过调整尺寸光标命中测试，且拖拽时保留最小尺寸约束。
 //!
-//! Ratio lives in the state, geometry lives in the descriptor: moving the
-//! gutter is a pure `state.ratio = …` update, so an animation can drive the
-//! same field without touching the layout tree.
+//!
+//!
+//! 比例保存在状态中，几何信息保存在描述符中：移动分隔条只是纯粹更新 `state.ratio = …`，
+//! 因此动画可直接驱动同一字段而无需触碰布局树。
+//!
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -22,58 +22,57 @@ use crate::scroll::ScrollAxis;
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// The default gutter thickness, in logical pixels.
+/// 默认分隔条厚度（逻辑像素）。
 pub const SPLIT_HANDLE: f32 = 8.0;
 
-/// The minimum length of a pane when the caller does not set one.
+/// 调用方未指定时面板的最小长度。
 pub const SPLIT_MIN_PANE: f32 = 48.0;
 
-/// A keyboard nudge as a fraction of the split region.
+/// 键盘微调占分割区域的比例。
 const KEY_STEP: f32 = 0.02;
 
-/// Which of the two panes a collapse applies to.
+/// 折叠操作作用于两个面板中的哪一个。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitSide {
-    /// The first pane (left or top).
+    /// 第一个面板（左侧或顶部）。
     First,
-    /// The second pane (right or bottom).
+    /// 第二个面板（右侧或底部）。
     Second,
 }
 
-/// The three rectangles a split produces.
+/// 分割产生的三个矩形。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SplitLayout {
-    /// The first pane.
+    /// 第一个面板。
     pub first: Rect,
-    /// The draggable gutter.
+    /// 可拖拽的分隔条。
     pub gutter: Rect,
-    /// The second pane.
+    /// 第二个面板。
     pub second: Rect,
 }
 
-/// The pure data descriptor of a split pane.
+/// 分割面板的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SplitPaneDesc {
-    /// The whole split area.
+    /// 整个分割区域。
     pub rect: Rect,
-    /// `Horizontal` puts the panes side by side, `Vertical` stacks them.
+    /// `Horizontal` 使面板左右并排，`Vertical` 使面板上下堆叠。
     ///
-    /// The variant names the direction the panes are laid out in, so
-    /// `Horizontal` yields a vertical gutter with the east-west resize
-    /// cursor. `Both` falls back to `Horizontal`.
+    /// 变体命名指代面板的排列方向，因此 `Horizontal` 产生带有左右调整光标的垂直分隔条。
+    /// `Both` 会回退到 `Horizontal`。
     pub axis: ScrollAxis,
-    /// The smallest allowed length of the first pane, in pixels.
+    /// 第一个面板允许的最小长度（像素）。
     pub min_first: f32,
-    /// The smallest allowed length of the second pane, in pixels.
+    /// 第二个面板允许的最小长度（像素）。
     pub min_second: f32,
-    /// The gutter thickness, in pixels.
+    /// 分隔条厚度（像素）。
     pub handle_size: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl SplitPaneDesc {
-    /// A split pane with the default metrics.
+    /// 使用默认尺寸创建的分割面板。
     #[must_use]
     pub fn new(rect: Rect, axis: ScrollAxis) -> Self {
         Self {
@@ -86,19 +85,19 @@ impl SplitPaneDesc {
         }
     }
 
-    /// A side-by-side split.
+    /// 创建左右并排的分割面板。
     #[must_use]
     pub fn horizontal(rect: Rect) -> Self {
         Self::new(rect, ScrollAxis::Horizontal)
     }
 
-    /// A stacked split.
+    /// 创建上下堆叠的分割面板。
     #[must_use]
     pub fn vertical(rect: Rect) -> Self {
         Self::new(rect, ScrollAxis::Vertical)
     }
 
-    /// Replace the minimum pane lengths.
+    /// 替换最小面板长度约束。
     #[must_use]
     pub fn with_minimums(mut self, first: f32, second: f32) -> Self {
         self.min_first = first.max(0.0);
@@ -106,20 +105,20 @@ impl SplitPaneDesc {
         self
     }
 
-    /// Replace the gutter thickness.
+    /// 替换分隔条厚度。
     #[must_use]
     pub fn with_handle(mut self, handle: f32) -> Self {
         self.handle_size = handle.max(1.0);
         self
     }
 
-    /// Whether the panes are laid out left-to-right.
+    /// 面板是否按从左到右排列。
     #[must_use]
     pub fn is_horizontal(&self) -> bool {
         !matches!(self.axis, ScrollAxis::Vertical)
     }
 
-    /// The gutter cursor this split uses.
+    /// 该分割面板使用的分隔条光标。
     #[must_use]
     pub fn cursor(&self) -> CursorKind {
         if self.is_horizontal() {
@@ -129,7 +128,7 @@ impl SplitPaneDesc {
         }
     }
 
-    /// The length available to the panes, gutter excluded.
+    /// 扣除分隔条后可用于面板的总长度。
     #[must_use]
     pub fn split_length(&self) -> f32 {
         let total = if self.is_horizontal() {
@@ -140,11 +139,10 @@ impl SplitPaneDesc {
         (total - self.handle_size).max(0.0)
     }
 
-    /// The ratio range the minimum pane sizes allow.
+    /// 最小面板尺寸允许的比例范围。
     ///
-    /// When the minima cannot both fit, the range collapses to the midpoint
-    /// and the panes shrink evenly: refusing to split would be worse than
-    /// violating a constraint that is already impossible.
+    /// 当两个最小值无法同时满足时，范围会坍缩到中点使两面板均匀收缩：
+    /// 完全拒绝分割比违背本就无法满足的约束更糟糕。
     #[must_use]
     pub fn ratio_bounds(&self) -> (f32, f32) {
         let length = self.split_length();
@@ -161,14 +159,14 @@ impl SplitPaneDesc {
         }
     }
 
-    /// Clamp a ratio into the legal range.
+    /// 将比例夹紧到合法范围内。
     #[must_use]
     pub fn clamp_ratio(&self, ratio: f32) -> f32 {
         let (low, high) = self.ratio_bounds();
         ratio.clamp(low, high)
     }
 
-    /// Turn a pointer position into a ratio along the split axis.
+    /// 将指针位置转换为沿分割轴的比例。
     #[must_use]
     pub fn ratio_at(&self, pointer: Vec2) -> f32 {
         let length = self.split_length();
@@ -184,14 +182,14 @@ impl SplitPaneDesc {
     }
 }
 
-/// The live state of a split pane.
+/// 分割面板的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SplitPaneState {
-    /// The share of the split region owned by the first pane, `0.0..=1.0`.
+    /// 第一个面板所占分割区域的比例（`0.0..=1.0`）。
     pub ratio: f32,
-    /// Whether the gutter is currently being dragged.
+    /// 分隔条当前是否正在被拖拽。
     pub dragging: bool,
-    /// The pane collapsed to zero, if any.
+    /// 被折叠为零的面板（若有）。
     pub collapsed: Option<SplitSide>,
     drag_origin: Option<f32>,
 }
@@ -203,7 +201,7 @@ impl Default for SplitPaneState {
 }
 
 impl SplitPaneState {
-    /// A split at the given ratio.
+    /// 创建指定比例的分割状态。
     #[must_use]
     pub fn new(ratio: f32) -> Self {
         Self {
@@ -214,7 +212,7 @@ impl SplitPaneState {
         }
     }
 
-    /// The ratio the panes currently use, after clamping and collapse.
+    /// 经夹紧与折叠处理后，面板当前实际使用的比例。
     #[must_use]
     pub fn effective_ratio(&self, desc: &SplitPaneDesc) -> f32 {
         match self.collapsed {
@@ -224,7 +222,7 @@ impl SplitPaneState {
         }
     }
 
-    /// The three rectangles this state produces.
+    /// 该状态对应的三个矩形。
     #[must_use]
     pub fn layout(&self, desc: &SplitPaneDesc) -> SplitLayout {
         let length = desc.split_length();
@@ -251,7 +249,7 @@ impl SplitPaneState {
         }
     }
 
-    /// Capture the pointer at press time.
+    /// 在按下时捕获指针。
     pub fn begin_drag(&mut self, desc: &SplitPaneDesc, pointer: Vec2) {
         self.dragging = true;
         self.drag_origin = Some(if desc.is_horizontal() {
@@ -259,16 +257,14 @@ impl SplitPaneState {
         } else {
             pointer.y
         });
-        // Dragging a collapsed split implies expanding it: a gutter that
-        // refuses to move reads as broken, not as "locked".
+        // 拖拽已折叠的分割面板意味着将其展开：拒绝移动的分隔条会让用户以为坏掉了，而非“已锁定”。
+        //
         self.collapsed = None;
     }
 
-    /// Update the ratio from a pointer position.
+    /// 根据指针位置更新比例。
     ///
-    /// The ratio follows the pointer directly rather than accumulating a
-    /// delta, so a dropped or coalesced move never leaves the gutter behind
-    /// the cursor.
+    /// 比例直接跟随指针而非累加增量，因此丢帧或合并移动事件绝不会让分隔条落后于光标。
     pub fn drag_to(&mut self, desc: &SplitPaneDesc, pointer: Vec2) {
         if !self.dragging {
             return;
@@ -276,13 +272,13 @@ impl SplitPaneState {
         self.ratio = desc.ratio_at(pointer);
     }
 
-    /// Release the pointer.
+    /// 释放指针。
     pub fn end_drag(&mut self) {
         self.dragging = false;
         self.drag_origin = None;
     }
 
-    /// Collapse the given side, or expand when it is already collapsed.
+    /// 折叠指定侧；若已折叠则展开。
     pub fn toggle_collapsed(&mut self, side: SplitSide) {
         self.collapsed = if self.collapsed == Some(side) {
             None
@@ -293,12 +289,12 @@ impl SplitPaneState {
         self.drag_origin = None;
     }
 
-    /// Expand both panes.
+    /// 展开两个面板。
     pub fn expand(&mut self) {
         self.collapsed = None;
     }
 
-    /// Nudge the ratio by a number of pixels.
+    /// 按指定像素数微调比例。
     pub fn nudge(&mut self, desc: &SplitPaneDesc, pixels: f32) {
         let length = desc.split_length();
         if length <= 0.0 {
@@ -308,36 +304,35 @@ impl SplitPaneState {
         self.ratio = desc.clamp_ratio(self.ratio + pixels / length);
     }
 
-    /// The ratio change one arrow-key press produces.
+    /// 单次方向键按压产生的比例变化量。
     #[must_use]
     pub fn key_step() -> f32 {
         KEY_STEP
     }
 
-    /// The pointer offset recorded at press time, if a drag is active.
+    /// 按下时记录的指针偏移（若正在拖拽）。
     #[must_use]
     pub fn drag_origin(&self) -> Option<f32> {
         self.drag_origin
     }
 }
 
-/// The keys a focused split pane understands.
+/// 聚焦后的分割面板可识别的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitKey {
-    /// Move the gutter towards the start.
+    /// 将分隔条向起始侧移动。
     Back,
-    /// Move the gutter towards the end.
+    /// 将分隔条向末尾侧移动。
     Forward,
-    /// Collapse the second pane.
+    /// 折叠第二个面板。
     Collapse,
-    /// Restore a collapsed pane.
+    /// 恢复已折叠的面板。
     Expand,
 }
 
-/// Reduce one key press into a state update.
+/// 将单次按键归约为状态更新。
 ///
-/// Returns whether the state changed, which is what the caller feeds into its
-/// dirty flags.
+/// 返回状态是否发生变化，供调用方更新脏标记。
 pub fn reduce_split_key(desc: &SplitPaneDesc, state: &mut SplitPaneState, key: SplitKey) -> bool {
     match key {
         SplitKey::Back => {
@@ -369,23 +364,23 @@ pub fn reduce_split_key(desc: &SplitPaneDesc, state: &mut SplitPaneState, key: S
     }
 }
 
-/// The colour slots a split pane paints with.
+/// 分割面板绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SplitPaneTokens {
-    /// The gutter track.
+    /// 分隔条轨道。
     pub track: Token,
-    /// The gutter track while hovered or dragged.
+    /// 悬停或拖拽时的分隔条轨道。
     pub track_active: Token,
-    /// The grabber.
+    /// 抓手把手。
     pub grip: Token,
-    /// The grabber while hovered or dragged.
+    /// 悬停或拖拽时的抓手把手。
     pub grip_active: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环。
     pub focus_ring: Token,
 }
 
 impl SplitPaneTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -398,10 +393,9 @@ impl SplitPaneTokens {
     }
 }
 
-/// Emit the gutter: its track, its grabber and the resize hit region.
+/// 输出分隔条：轨道、抓手与调整尺寸命中区域。
 ///
-/// The two panes are not painted here; the caller paints its own content into
-/// [`SplitLayout::first`] and [`SplitLayout::second`].
+/// 本函数不绘制两个面板；调用方自行在 [`SplitLayout::first`] 与 [`SplitLayout::second`] 内绘制内容。
 #[must_use]
 pub fn emit_split_pane(
     node: u64,
@@ -438,8 +432,8 @@ pub fn emit_split_pane(
         desc.z,
     ));
 
-    // Three dots along the gutter make the drag affordance visible without a
-    // glyph, so a font without "⋮" still renders a usable handle.
+    // 沿分隔条的三个圆点无需字形即可提供拖拽视觉提示，因此即使字体缺少“⋮”也能渲染出可用把手。
+    //
     let (cx, cy) = (
         layout.gutter.origin.x + layout.gutter.size.x * 0.5,
         layout.gutter.origin.y + layout.gutter.size.y * 0.5,
@@ -460,7 +454,7 @@ pub fn emit_split_pane(
         primitives.push(dot_primitive(centre, dot, grip_color, desc.z));
     }
 
-    // The ring is always emitted; focus only changes its opacity.
+    // 焦点环始终输出；聚焦仅改变其不透明度。
     primitives.push(crate::primitive::focus_ring(
         layout.gutter.inflate(1.0),
         3.0,
@@ -490,7 +484,7 @@ pub fn emit_split_pane(
     }
 }
 
-/// A small circular grabber dot.
+/// 小型圆形抓手圆点。
 fn dot_primitive(centre: Vec2, radius: f32, color: Token, z: u16) -> GpuPrimitiveInstance {
     let dot = Rect::new(
         centre.x - radius,
@@ -513,10 +507,10 @@ fn dot_primitive(centre: Vec2, radius: f32, color: Token, z: u16) -> GpuPrimitiv
     primitive
 }
 
-/// Emit the two pane backdrops, if the caller wants the split to paint them.
+/// 若调用方希望由分割面板绘制背景，则输出两个面板的底色。
 ///
-/// Many callers paint their own panels; this helper exists so a bare split
-/// still shows both sides instead of one transparent rectangle.
+/// 多数调用方会自绘面板；提供此辅助函数是为了让裸分割面板
+/// 也能显示两侧区域，而非一整块透明矩形。
 #[must_use]
 pub fn emit_split_pane_panes(
     desc: &SplitPaneDesc,

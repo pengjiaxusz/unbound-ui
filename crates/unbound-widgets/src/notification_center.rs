@@ -1,4 +1,4 @@
-//! NotificationCenter drawer aggregating toast history, severity filters & read state.
+//! NotificationCenter 抽屉，聚合 Toast 历史、严重级别过滤与已读状态。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -15,63 +15,63 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_ITEMS: usize = 4;
 
-/// A single archived notification item.
+/// 单条已归档的通知项。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NotificationItem {
-    /// Stable ID.
+    /// 稳定 ID。
     pub id: u64,
-    /// Title text.
+    /// 标题文本。
     pub title: String,
-    /// Severity level.
+    /// 严重级别。
     pub severity: Severity,
-    /// Whether already read.
+    /// 是否已读。
     pub read: bool,
 }
 
-/// Interactive state for [`NotificationCenterDesc`].
+/// [`NotificationCenterDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NotificationCenterState {
-    /// Archived notifications.
+    /// 已归档的通知列表。
     pub items: Vec<NotificationItem>,
-    /// Optional severity filter.
+    /// 可选严重级别过滤器。
     pub filter: Option<Severity>,
 }
 
 impl NotificationCenterState {
-    /// Mark all notifications as read.
+    /// 将所有通知标记为已读。
     pub fn mark_all_read(&mut self) {
         for item in &mut self.items {
             item.read = true;
         }
     }
 
-    /// Clear all notifications.
+    /// 清空所有通知。
     pub fn clear(&mut self) {
         self.items.clear();
     }
 
-    /// Count unread items.
+    /// 统计未读项数量。
     #[must_use]
     pub fn unread_count(&self) -> usize {
         self.items.iter().filter(|i| !i.read).count()
     }
 }
 
-/// Descriptor for a [`NotificationCenter`].
+/// [`NotificationCenter`] 的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct NotificationCenterDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Visible items.
+    /// 可见项列表。
     pub items: Vec<NotificationItem>,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl NotificationCenterDesc {
-    /// Create a notification center descriptor.
+    /// 创建通知中心描述符。
     #[must_use]
     pub fn new(rect: Rect, items: Vec<NotificationItem>) -> Self {
         Self {
@@ -83,13 +83,13 @@ impl NotificationCenterDesc {
     }
 }
 
-/// Deterministic sub-node id for a notification card item (`0..4`).
+/// 通知卡片项的确定性子节点 ID（`0..4`）。
 #[must_use]
 pub const fn notification_item_node(node: u64, index: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xC00 + index as u64)
 }
 
-/// Emit a stable-shape notification center (1 bg + 4 item cards + 4 unread dots + 1 focus ring = 10 primitives).
+/// 输出结构稳定的通知中心（1 个背景 + 4 张项卡片 + 4 个未读圆点 + 1 个焦点环 = 10 个图元）。
 #[must_use]
 pub fn emit_notification_center(
     node: u64,

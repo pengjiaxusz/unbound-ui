@@ -1,9 +1,9 @@
-//! Canvas rulers and guide lines.
+//! 画布标尺与参考线。
 //!
-//! A ruler is a scale bar, not a list of numbers: it chooses a "nice" step
-//! (1, 2 or 5 times a power of ten) so that labels never collide at the current
-//! zoom, then paints a tick for every step. Dragging out of the ruler creates a
-//! guide, and a guide is just a world coordinate the snapping pass may use.
+//! 标尺是刻度尺而非数字列表：它会在当前缩放下选取“整洁”的步长
+//! （1、2 或 5 乘以 10 的幂）以避免标签重叠，随后为每个步长绘制刻度。
+//! 从标尺拖出即可创建参考线，而参考线本质上是吸附 Pass 可用的世界坐标。
+//!
 
 use unbound_gpu::data::GpuPrimitiveInstance;
 use unbound_input::{CursorKind, HitRegion};
@@ -14,41 +14,41 @@ use crate::primitive::surface;
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The smallest visible tick spacing, in screen pixels.
+/// 最小可见刻度间距（屏幕像素）。
 pub const RULER_MIN_STEP: f32 = 8.0;
-/// The ruler band thickness.
+/// 标尺条带厚度。
 pub const RULER_BAND: f32 = 22.0;
-/// How many minor ticks sit between two major ticks.
+/// 两个主刻度之间的次刻度数量。
 pub const RULER_MINOR_PER_MAJOR: u32 = 5;
 
-/// The axis a ruler or guide follows.
+/// 标尺或参考线所沿的坐标轴。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuideAxis {
-    /// Vertical guides, created on the top ruler.
+    /// 垂直参考线，从顶部标尺拖出。
     X,
-    /// Horizontal guides, created on the left ruler.
+    /// 水平参考线，从左侧标尺拖出。
     Y,
 }
 
-/// A guide line in world coordinates.
+/// 世界坐标下的参考线。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GuideLine {
-    /// The axis the line runs along.
+    /// 线段所沿的坐标轴。
     pub axis: GuideAxis,
-    /// The world coordinate.
+    /// 世界坐标值。
     pub world: f32,
 }
 
-/// The rulers around a canvas viewport.
+/// 环绕画布视口的标尺描述符。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RulerDesc {
-    /// The content area (excluding the rulers).
+    /// 内容区域（不含标尺）。
     pub viewport: Rect,
-    /// The zoom factor.
+    /// 缩放系数。
     pub zoom: f32,
-    /// The world point at the viewport's top-left corner.
+    /// 视口左上角对应的世界坐标点。
     pub origin: Vec2,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
@@ -63,7 +63,7 @@ impl RulerDesc {
         }
     }
 
-    /// The top band.
+    /// 顶部标尺条带矩形。
     #[must_use]
     pub fn top_rect(&self) -> Rect {
         Rect::new(
@@ -74,7 +74,7 @@ impl RulerDesc {
         )
     }
 
-    /// The left band.
+    /// 左侧标尺条带矩形。
     #[must_use]
     pub fn left_rect(&self) -> Rect {
         Rect::new(
@@ -85,7 +85,7 @@ impl RulerDesc {
         )
     }
 
-    /// The square where the two bands meet.
+    /// 两条标尺条带交汇处的角落方块。
     #[must_use]
     pub fn corner_rect(&self) -> Rect {
         Rect::new(
@@ -96,7 +96,7 @@ impl RulerDesc {
         )
     }
 
-    /// The visible world extent along one axis.
+    /// 沿单轴的可见世界坐标范围。
     #[must_use]
     pub fn world_span(&self, axis: GuideAxis) -> (f32, f32) {
         match axis {
@@ -111,7 +111,7 @@ impl RulerDesc {
         }
     }
 
-    /// Convert a world coordinate to a screen offset inside the viewport.
+    /// 将世界坐标转换为视口内的屏幕偏移。
     #[must_use]
     pub fn screen(&self, axis: GuideAxis, world: f32) -> f32 {
         match axis {
@@ -120,7 +120,7 @@ impl RulerDesc {
         }
     }
 
-    /// Convert a screen offset inside the viewport to a world coordinate.
+    /// 将视口内的屏幕偏移转换为世界坐标。
     #[must_use]
     pub fn world(&self, axis: GuideAxis, screen: f32) -> f32 {
         match axis {
@@ -129,7 +129,7 @@ impl RulerDesc {
         }
     }
 
-    /// The ticks along one axis: `(world, major)`.
+    /// 单轴上的刻度列表：`(世界坐标, 是否为主刻度)`。
     #[must_use]
     pub fn ticks(&self, axis: GuideAxis) -> Vec<(f32, bool)> {
         let step = nice_step(self.zoom);
@@ -147,7 +147,7 @@ impl RulerDesc {
         ticks
     }
 
-    /// The label text for a tick, rounded to the step's precision.
+    /// 按步长精度舍入后的刻度标签文本。
     #[must_use]
     pub fn label(&self, world: f32) -> String {
         let step = nice_step(self.zoom);
@@ -160,7 +160,7 @@ impl RulerDesc {
     }
 }
 
-/// A "nice" world step: 1, 2 or 5 times a power of ten at the current zoom.
+/// 当前缩放下的“整洁”世界步长：1、2 或 5 乘以 10 的幂。
 #[must_use]
 pub fn nice_step(zoom: f32) -> f32 {
     let zoom = if zoom > 0.0 { zoom } else { 1.0 };
@@ -179,7 +179,7 @@ pub fn nice_step(zoom: f32) -> f32 {
     (snapped * magnitude).max(f32::EPSILON)
 }
 
-/// The guide state of one canvas.
+/// 单个画布的参考线状态。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RulerState {
     guides: Vec<GuideLine>,
@@ -192,31 +192,31 @@ impl RulerState {
         Self::default()
     }
 
-    /// The committed guides.
+    /// 已提交的参考线列表。
     #[must_use]
     pub fn guides(&self) -> &[GuideLine] {
         &self.guides
     }
 
-    /// The guide being dragged out, if any.
+    /// 正在拖出的参考线（若有）。
     #[must_use]
     pub fn pending(&self) -> Option<GuideLine> {
         self.pending
     }
 
-    /// Start dragging a new guide from a ruler band.
+    /// 从标尺条带开始拖拽一条新参考线。
     pub fn begin(&mut self, axis: GuideAxis, world: f32) {
         self.pending = Some(GuideLine { axis, world });
     }
 
-    /// Move the pending guide.
+    /// 移动待提交的参考线。
     pub fn update(&mut self, world: f32) {
         if let Some(pending) = &mut self.pending {
             pending.world = world;
         }
     }
 
-    /// Commit the pending guide; returns whether one existed.
+    /// 提交待定参考线；返回此前是否存在待定参考线。
     pub fn end(&mut self) -> bool {
         match self.pending.take() {
             Some(guide) => {
@@ -227,12 +227,12 @@ impl RulerState {
         }
     }
 
-    /// Cancel the pending guide.
+    /// 取消待定参考线。
     pub fn cancel(&mut self) {
         self.pending = None;
     }
 
-    /// Remove the guide closest to `world` on `axis`.
+    /// 移除 `axis` 上最接近 `world` 的参考线。
     pub fn remove_near(&mut self, axis: GuideAxis, world: f32, tolerance: f32) -> bool {
         let mut best: Option<(usize, f32)> = None;
         for (index, guide) in self.guides.iter().enumerate() {
@@ -253,23 +253,23 @@ impl RulerState {
         }
     }
 
-    /// Remove every guide.
+    /// 移除所有参考线。
     pub fn clear(&mut self) {
         self.guides.clear();
         self.pending = None;
     }
 }
 
-/// What one ruler emits.
+/// 标尺控件的输出结果。
 #[derive(Clone, Debug)]
 pub struct RulerOutput {
-    /// The bands, ticks and guides.
+    /// 条带、刻度与参考线图元。
     pub output: WidgetOutput,
-    /// The two ruler bands, for starting a guide drag.
+    /// 两条标尺条带命中区域，用于启动参考线拖拽。
     pub bands: Vec<(GuideAxis, HitRegion)>,
 }
 
-/// Emit the rulers and guides.
+/// 输出标尺与参考线。
 #[must_use]
 pub fn emit_rulers(
     node: u64,

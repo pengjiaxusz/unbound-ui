@@ -1,10 +1,10 @@
-//! Skeleton placeholders.
+//! 骨架屏占位符。
 //!
-//! A skeleton is deliberately *not* a spinner: it mirrors the shape of the
-//! content that is about to arrive, so the layout does not jump when the data
-//! lands. The animation is a single moving highlight, and it is purely
-//! decorative — the widget emits no semantic node, so assistive technology
-//! hears the surrounding "loading" announcement instead of a rectangle.
+//! 骨架屏故意*不是*加载转圈：它镜像即将到达内容的形状，使数据加载完成时布局不会跳动。
+//! 其动画仅为单条移动高光，纯属装饰性——控件不输出语义节点，
+//! 因此辅助技术会播报外围的“加载中”提示，而非朗读一个矩形。
+//!
+//!
 
 use unbound_math::Rect;
 use unbound_theme::Token;
@@ -12,26 +12,26 @@ use unbound_theme::Token;
 use crate::primitive::surface;
 use crate::WidgetOutput;
 
-/// The shimmer width, as a fraction of the skeleton.
+/// 扫光宽度占骨架宽度的比例。
 pub const SKELETON_SHIMMER: f32 = 0.32;
-/// The shimmer period at the default speed, in seconds.
+/// 默认速度下的扫光周期（秒）。
 pub const SKELETON_PERIOD: f32 = 1.6;
 
-/// A skeleton block.
+/// 单个骨架块描述符。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SkeletonDesc {
-    /// The block rectangle.
+    /// 骨架块矩形。
     pub rect: Rect,
-    /// The corner radius; defaults to a small block radius.
+    /// 圆角半径；默认使用较小的块级圆角。
     pub radius: f32,
-    /// Whether the shimmer runs.
+    /// 是否启用扫光动画。
     pub animated: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl SkeletonDesc {
-    /// A static block.
+    /// 创建静态骨架块。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -42,21 +42,21 @@ impl SkeletonDesc {
         }
     }
 
-    /// The same block with the shimmer enabled.
+    /// 启用扫光动画。
     #[must_use]
     pub fn animated(mut self) -> Self {
         self.animated = true;
         self
     }
 
-    /// The same block with an explicit radius.
+    /// 指定圆角半径。
     #[must_use]
     pub fn with_radius(mut self, radius: f32) -> Self {
         self.radius = radius.max(0.0);
         self
     }
 
-    /// The shimmer band at `phase`, bouncing between the two edges.
+    /// 计算在 `phase` 相位下往返于两端之间的扫光带矩形。
     #[must_use]
     pub fn shimmer_rect(&self, phase: f32) -> Rect {
         let width = (self.rect.size.x * SKELETON_SHIMMER)
@@ -74,7 +74,7 @@ impl SkeletonDesc {
     }
 }
 
-/// The animation clock of one skeleton.
+/// 单个骨架块的动画时钟。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SkeletonState {
     phase: f32,
@@ -86,18 +86,18 @@ impl SkeletonState {
         Self::default()
     }
 
-    /// The current shimmer phase.
+    /// 当前扫光相位。
     #[must_use]
     pub fn phase(&self) -> f32 {
         self.phase
     }
 
-    /// Set the phase directly (a restored or captured frame).
+    /// 直接设置相位（用于恢复或捕获帧）。
     pub fn set_phase(&mut self, phase: f32) {
         self.phase = phase.rem_euclid(1.0);
     }
 
-    /// Advance the phase; returns whether it moved.
+    /// 推进相位；返回是否发生了移动。
     pub fn tick(&mut self, dt: f32, animated: bool) -> bool {
         if !animated || dt <= 0.0 {
             return false;
@@ -107,7 +107,7 @@ impl SkeletonState {
     }
 }
 
-/// Emit a skeleton block.
+/// 输出骨架块。
 #[must_use]
 pub fn emit_skeleton(desc: &SkeletonDesc, state: &SkeletonState) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(2);
@@ -129,7 +129,7 @@ pub fn emit_skeleton(desc: &SkeletonDesc, state: &SkeletonState) -> WidgetOutput
         primitives,
         payloads: Vec::new(),
         hit: None,
-        // Decorative: the surrounding live region owns the announcement.
+        // 装饰性控件：由外围实时区域（live region）负责播报。
         a11y: None,
         focusable: false,
         ..Default::default()

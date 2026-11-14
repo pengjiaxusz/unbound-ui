@@ -1,8 +1,7 @@
-//! The divider: a hairline that separates two regions, optionally labelled.
+//! 分隔线（Divider）：分隔两个区域的细线，支持可选居中标签。
 //!
-//! A divider is decoration, so it has no hit region and takes no focus. The
-//! only rule it enforces is that its stroke lands on the physical pixel grid:
-//! a one-pixel rule that straddles two pixels reads as a two-pixel blur.
+//! 分隔线属于装饰性元素，因此没有命中区域也不获取焦点。它唯一强制遵守的规则是
+//! 描边必须对齐物理像素网格：跨两个像素的 1 像素细线会显得模糊成 2 像素。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -14,37 +13,37 @@ use unbound_theme::{snap_screen, Token};
 use crate::primitive::{glyphs, instance};
 use crate::WidgetOutput;
 
-/// Which way a divider runs.
+/// 分隔线的方向。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DividerOrientation {
-    /// A horizontal rule spanning the width.
+    /// 跨越宽度的水平线。
     #[default]
     Horizontal,
-    /// A vertical rule spanning the height.
+    /// 跨越高度的垂直线。
     Vertical,
 }
 
-/// The pure descriptor of a divider.
+/// 分隔线的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DividerDesc {
-    /// The region the divider lives in.
+    /// 分隔线所在的区域。
     pub rect: Rect,
-    /// Whether the rule runs horizontally or vertically.
+    /// 线条是水平还是垂直。
     pub orientation: DividerOrientation,
-    /// The optional centred label.
+    /// 可选的居中标签。
     pub label: Option<String>,
-    /// The leading and trailing inset of the rule.
+    /// 线条首尾两端的内缩距离。
     pub inset: f32,
-    /// The gap between the rule and a label.
+    /// 线条与标签之间的间距。
     pub label_gap: f32,
-    /// The hairline thickness.
+    /// 细线厚度。
     pub thickness: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl DividerDesc {
-    /// A horizontal divider across the given rectangle.
+    /// 横跨给定矩形的水平分隔线。
     #[must_use]
     pub fn horizontal(rect: Rect) -> Self {
         Self {
@@ -58,7 +57,7 @@ impl DividerDesc {
         }
     }
 
-    /// A vertical divider down the given rectangle.
+    /// 贯穿给定矩形的垂直分隔线。
     #[must_use]
     pub fn vertical(rect: Rect) -> Self {
         Self {
@@ -67,21 +66,21 @@ impl DividerDesc {
         }
     }
 
-    /// The same divider with a centred label.
+    /// 附加居中标签。
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
         self
     }
 
-    /// The same divider with a leading and trailing inset.
+    /// 设置首尾内缩距离。
     #[must_use]
     pub fn with_inset(mut self, inset: f32) -> Self {
         self.inset = inset.max(0.0);
         self
     }
 
-    /// The snapped stroke rectangle.
+    /// 对齐像素网格后的描边矩形。
     #[must_use]
     pub fn rule_rect(&self) -> Rect {
         let thickness = self.thickness.max(1.0);
@@ -107,9 +106,9 @@ impl DividerDesc {
         }
     }
 
-    /// The two half-rules that make room for a label.
+    /// 为标签留出空间的两段半线。
     ///
-    /// Returns the leading and trailing segments plus the label rectangle.
+    /// 返回前段、后段线条以及标签矩形。
     #[must_use]
     pub fn labelled_segments(&self, label_width: f32) -> Option<(Rect, Rect, Rect)> {
         let rule = self.rule_rect();
@@ -144,8 +143,7 @@ impl DividerDesc {
             );
             Some((first, second, band))
         } else {
-            // A vertical divider with a label is unusual; the label is laid
-            // out as a horizontal band crossing the rule.
+            // 带标签的垂直分隔线较少见；标签布局为横跨线条的水平条带。
             let band = Rect::new(
                 rule.origin.x - self.rect.size.x * 0.25,
                 rule.origin.y,
@@ -164,17 +162,17 @@ impl DividerDesc {
     }
 }
 
-/// The colour slots a divider paints with.
+/// 分隔线绘制使用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DividerTokens {
-    /// The rule.
+    /// 线条颜色。
     pub rule: Token,
-    /// The label text.
+    /// 标签文字颜色。
     pub label: Token,
 }
 
 impl DividerTokens {
-    /// The standard set.
+    /// 标准配色方案。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -184,10 +182,9 @@ impl DividerTokens {
     }
 }
 
-/// Emit the rule, and the label when the caller shaped one.
+/// 发射分隔线，若调用方排版了标签则一并发射。
 ///
-/// `label_width` is the measured width of `label`; pass `0.0` to draw an
-/// unbroken rule even when [`DividerDesc::label`] is set.
+/// `label_width` 为 `label` 的测量宽度；传入 `0.0` 时即使设置了 [`DividerDesc::label`] 也绘制完整连续线条。
 #[must_use]
 pub fn emit_divider(
     desc: &DividerDesc,
@@ -222,7 +219,7 @@ pub fn emit_divider(
     }
 }
 
-/// A solid line primitive.
+/// 实心线段图元。
 fn line(rect: Rect, color: Token, z: u16) -> GpuPrimitiveInstance {
     instance(
         rect,

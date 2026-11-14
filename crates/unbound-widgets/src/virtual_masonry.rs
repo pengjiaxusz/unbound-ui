@@ -1,4 +1,4 @@
-//! VirtualMasonry: Viewport-culled virtualized masonry waterfall layout container.
+//! VirtualMasonry：带视口裁剪的虚拟化瀑布流布局容器。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -10,14 +10,14 @@ use crate::button::BUTTON_LAYER;
 use crate::primitive::{outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
-/// An item in a virtual masonry grid.
+/// 虚拟瀑布流网格中的单个条目。
 #[derive(Clone, Debug, PartialEq)]
 pub struct MasonryItem {
     pub id: u64,
-    pub aspect_ratio: f32, // width / height
+    pub aspect_ratio: f32, // 宽 / 高
 }
 
-/// Descriptor for virtual masonry.
+/// 虚拟瀑布流描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct VirtualMasonryDesc {
     pub rect: Rect,
@@ -57,7 +57,7 @@ impl VirtualMasonryDesc {
     }
 }
 
-/// State for virtual masonry.
+/// 虚拟瀑布流状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct VirtualMasonryState {
     pub scroll_y: f32,
@@ -70,7 +70,7 @@ impl VirtualMasonryState {
     }
 }
 
-/// Emit primitives and hit regions for a virtual masonry layout.
+/// 输出虚拟瀑布流布局的图元与命中区域。
 #[must_use]
 pub fn emit_virtual_masonry(
     node: u64,
@@ -82,11 +82,11 @@ pub fn emit_virtual_masonry(
     let rect = desc.rect;
     let z = 700u16;
 
-    // 1. Container background
+    // 1. 容器背景
     out.primitives
         .push(surface(rect, desc.radius, Token::SURFACE, z));
 
-    // 2. Fixed 6 card slots for stable shape across frames
+    // 2. 固定 6 个卡片槽位，以在帧间保持结构稳定
     let col_count = desc.columns.clamp(1, 4);
     let col_w = (rect.width() - desc.gap * (col_count as f32 - 1.0)) / col_count as f32;
 
@@ -109,7 +109,7 @@ pub fn emit_virtual_masonry(
         ));
     }
 
-    // 3. Outer border
+    // 3. 外边框
     out.primitives.push(outlined(
         rect,
         desc.radius,

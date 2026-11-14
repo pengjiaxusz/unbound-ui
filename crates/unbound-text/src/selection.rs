@@ -1,39 +1,39 @@
 //! 富文本选区合并与 IME 锚定（`docs` §6.2）。
 //!
-//! Two pieces of "text is not just a rectangle" plumbing live here:
+//! 此处包含两项解决“文本并非单个矩形”的基础设施：
 //!
-//! * **Rounded selection union.** Painting one rounded rect per line produces a
-//!   visible notch at every line break. Instead we merge vertically adjacent
-//!   line boxes whose X ranges overlap, and apply a radius only to the corners
-//!   that end up on the outside of the merged run. The result is a single
-//!   capsule-like shape whose outline is *geometrically* one region, without
-//!   needing a general polygon boolean.
-//! * **IME candidate anchoring.** `set_ime_cursor_area` wants a screen-space
-//!   rectangle, but the caret lives in world space. [`ime_cursor_area`] applies
-//!   the camera transform, floors to whole pixels (a fractional anchor makes
-//!   Windows jitter the candidate window) and clamps into the window so the IME
-//!   popup can never open off-screen.
+//! * **圆角选区合并。** 若每行单独绘制一个圆角矩形，换行处会出现明显缺口。
+//!   因此我们合并垂直相邻且 X 范围重叠的行框，仅在合并后区段的外侧角点
+//!   应用圆角半径。所得结果为单个胶囊状外形，其轮廓在**几何上**是连续的
+//!   单一区域，无需通用的多边形布尔运算。
+//! * **IME 候选框锚定。** `set_ime_cursor_area` 需要屏幕空间矩形，
+//!   而文本光标位于世界空间。[`ime_cursor_area`] 会应用相机变换、
+//!   向下取整到整物理像素（小数锚点会导致 Windows 候选框抖动），
+//!   并钳制到窗口范围内，防止 IME 弹窗超出屏幕边界。
+//!
+//!
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 use unbound_math::{Affine2, Rect, Vec2};
 
-/// A merged run of line boxes, ready to be drawn as one rounded rectangle.
+/// 合并后的连续行框区段，可直接作为单个圆角矩形绘制。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct RoundedSlot {
     pub rect: Rect,
-    /// Corner radii in `TL, TR, BR, BL` order. Shared edges get `0`.
+    /// 四角圆角半径，顺序为 `TL, TR, BR, BL`。共享边处为 `0`。
     pub radii: [f32; 4],
 }
 
-/// Merge vertically adjacent selection rectangles into rounded runs.
+/// 将垂直相邻的选区矩形合并为圆角区段。
 ///
-/// Two consecutive line boxes merge when they are vertically adjacent (within
-/// 1 px) and span the same horizontal range. The equal-span rule is deliberate:
-/// a union of two *different* spans is an L-shape, and faking it with one
-/// rectangle would highlight text that is not selected. Different spans stay
-/// separate slots, which is exactly what desktop editors draw for a wrapped
-/// selection.
+/// 当两个连续行框垂直相邻（间距在 1 px 内）且水平跨度相同时合并。
+/// 要求水平跨度相等是刻意为之：两个**不同**跨度的并集呈 L 形，
+/// 若用单个矩形伪造会高亮未选中的文本。不同跨度保持为独立槽位，
+/// 这正是桌面编辑器为折行选区绘制的样式。
+///
+///
 #[must_use]
 pub fn merge_line_rects(lines: &[Rect], radius: f32) -> Vec<RoundedSlot> {
     let mut slots: Vec<RoundedSlot> = Vec::new();
@@ -44,11 +44,11 @@ pub fn merge_line_rects(lines: &[Rect], radius: f32) -> Vec<RoundedSlot> {
         if let Some(last) = slots.last_mut() {
             let spans_match = (last.rect.min().x - rect.min().x).abs() <= 0.5
                 && (last.rect.max().x - rect.max().x).abs() <= 0.5;
-            // The lines must follow each other downwards: the next box has to
-            // start at or below the previous one's top. Without the direction
-            // check, a box that lies *above* the previous one still looked
-            // "adjacent" (the test used the absolute difference), and the
-            // merged height `rect.max().y - top` came out negative.
+            // 行框必须按从上到下顺序衔接：下一个行框的顶部必须位于前一个顶部
+            // 之下或重合。若缺少方向检查，位于前一个**上方**的行框也会被误判为
+            // “相邻”（原测试使用绝对差值），导致合并后的高度 `rect.max().y - top`
+            // 变成负数。
+            //
             let below = rect.min().y >= last.rect.min().y - 0.5;
             let adjacent = (last.rect.max().y - rect.min().y).abs() <= 1.0;
             if spans_match && below && adjacent {
@@ -68,18 +68,18 @@ pub fn merge_line_rects(lines: &[Rect], radius: f32) -> Vec<RoundedSlot> {
     slots
 }
 
-/// Build a closed outline polygon for a rounded slot, for stroking or hit tests.
+/// 为圆角槽位构建闭合轮廓多边形，用于描边或命中测试。
 ///
-/// Corners run clockwise from the top-left; a zero radius emits the exact corner
-/// point, which keeps a square slot a genuine 4-gon instead of a 28-gon with
-/// coincident vertices.
+/// 角点从左上角起顺时针排列；零半径直接输出精确角点坐标，
+/// 使直角槽位保持为真正的四边形，而非带有重合顶点的 28 边形。
+///
 #[must_use]
 pub fn outline_polygon(slot: &RoundedSlot) -> Vec<Vec2> {
     const ARC_STEPS: usize = 6;
     const QUARTER: f32 = core::f32::consts::FRAC_PI_2;
     let min = slot.rect.min();
     let max = slot.rect.max();
-    // (centre, start angle) for TL, TR, BR, BL.
+    // TL、TR、BR、BL 对应的 (圆心, 起始角度)。
     let corners = [
         (
             Vec2::new(min.x + slot.radii[0], min.y + slot.radii[0]),
@@ -119,19 +119,19 @@ pub fn outline_polygon(slot: &RoundedSlot) -> Vec<Vec2> {
     points
 }
 
-/// Screen-space caret rectangle for `set_ime_cursor_area`.
+/// 供 `set_ime_cursor_area` 使用的屏幕空间光标矩形。
 ///
-/// `caret` is in world space, `camera` maps world to *logical* pixels, `dpi` is
-/// the physical-pixels-per-logical-pixel ratio, and `window` is the physical
-/// window size. The result is snapped to whole physical pixels and clamped
-/// inside the window, with a minimum height so the IME window never collapses.
+/// `caret` 位于世界空间，`camera` 将世界坐标映射到**逻辑**像素，
+/// `dpi` 为物理像素与逻辑像素之比，`window` 为物理窗口尺寸。
+/// 结果对齐到整物理像素并钳制在窗口内，同时保证最小高度以防 IME 窗口塌陷。
+///
 #[must_use]
 pub fn ime_cursor_area(caret: Rect, camera: &Affine2, dpi: f32, window: Vec2) -> Rect {
     let transformed = camera.transform_rect_bounds(&caret);
     let scale = dpi.max(0.1);
-    // The rectangle is snapped to whole physical pixels. The origin is rounded
-    // to the nearest pixel and the size follows from the rounded corners, so
-    // the area is never larger than the caret by up to a pixel on each side.
+    // 矩形对齐到整物理像素。原点四舍五入到最近像素，尺寸由取整后的角点决定，
+    // 因此区域每侧最多与光标相差 1 像素，绝不会整体放大。
+    //
     let x = (transformed.origin.x * scale).round();
     let y = (transformed.origin.y * scale).round();
     let right = (transformed.max().x * scale).round();
@@ -161,8 +161,8 @@ mod tests {
         let slots = merge_line_rects(&lines, 6.0);
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].rect, rect(10.0, 0.0, 100.0, 60.0));
-        // One rectangle means every corner is an outer corner, and the interior
-        // line breaks are gone entirely — that is the "no notch" property.
+        // 单个矩形意味着每个角都是外角，内部换行缺口完全消失——即“无缺口”特性。
+        //
         assert_eq!(slots[0].radii, [6.0, 6.0, 6.0, 6.0]);
     }
 
@@ -201,10 +201,10 @@ mod tests {
         };
         let points = outline_polygon(&slot);
         assert!(points.len() >= 16, "{}", points.len());
-        // The first point is on the top-left arc, i.e. left of and below the corner.
+        // 首点位于左上圆弧上，即角点的左下方。
         assert!(points[0].x <= 0.0 + 8.0);
         assert!(points[0].y >= 0.0);
-        // Every point stays inside the rect's bounds (within float error).
+        // 所有点均保持在矩形边界内（浮点误差范围内）。
         for point in &points {
             assert!(point.x >= -0.01 && point.x <= 100.01);
             assert!(point.y >= -0.01 && point.y <= 50.01);
@@ -235,9 +235,9 @@ mod tests {
             ty: 50.0,
         };
         let area = ime_cursor_area(caret, &camera, 2.0, Vec2::new(1920.0, 1080.0));
-        // (10,20) * 2 + (100,50) = (120, 90), times dpi 2 = (240, 180).
+        // (10,20) * 2 + (100,50) = (120, 90)，再乘以 dpi 2 = (240, 180)。
         assert_eq!(area.origin, Vec2::new(240.0, 180.0));
-        // The caret is 2 px wide, 20 tall; doubled by zoom then by dpi.
+        // 光标宽 2 px、高 20 px；先经缩放加倍，再经 dpi 加倍。
         assert_eq!(area.size, Vec2::new(8.0, 80.0));
     }
 
@@ -259,10 +259,10 @@ mod tests {
         assert!(area.size.y >= 1.0);
     }
 
-    /// The IME area must not be larger than the caret.
+    /// IME 区域绝不能大于光标本身。
     ///
-    /// The origin was floored while the size was ceiled, so the rectangle
-    /// could be up to two physical pixels bigger than the caret on each side.
+    /// 原点向下取整而尺寸向上取整曾导致矩形每侧最多比光标大出两个物理像素。
+    ///
     #[test]
     fn ime_area_is_not_larger_than_the_caret() {
         let caret = rect(10.4, 20.6, 2.0, 20.0);
@@ -282,17 +282,17 @@ mod tests {
         );
     }
 
-    /// Merging line boxes must never produce a negative height.
+    /// 合并行框绝不能产生负高度。
     ///
-    /// The adjacency test used the absolute difference, so a box lying *above*
-    /// the previous one looked adjacent too, and the merged height came out
-    /// negative.
+    /// 先前的邻接测试使用绝对差值，导致位于前一个**上方**的矩形也被判定为相邻，
+    /// 进而算出负的合并高度。
+    ///
     #[test]
     fn merging_lines_never_produces_a_negative_height() {
         let above = rect(0.0, 0.0, 20.0, 5.0);
         let below = rect(0.0, 5.0, 20.0, 5.0);
-        // The "below" box comes first, then a box above it: the two must not
-        // merge.
+        // “下方”的框先出现，随后是其上方的框：两者绝不能合并。
+        //
         let slots = merge_line_rects(&[below, above], 4.0);
         for slot in &slots {
             assert!(

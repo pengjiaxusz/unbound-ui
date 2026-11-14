@@ -1,11 +1,10 @@
 #version 460
 
 // ---------------------------------------------------------------------------
-// Dual-Kawase blur — upsample (P1.4).
+// Dual-Kawase 模糊——升采样（P1.4）。
 //
-// Eight tent taps reconstruct a smooth result from the half-resolution image.
-// The last pass writes a full-resolution texture that the backdrop composite
-// samples directly.
+// 通过 8 个帐篷滤波采样从半分辨率图像重建平滑结果。
+// 最后一个 Pass 写入全分辨率纹理，供背景虚化合成直接采样。
 // ---------------------------------------------------------------------------
 
 layout(local_size_x = 8, local_size_y = 8) in;

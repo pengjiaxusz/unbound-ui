@@ -1,10 +1,10 @@
-//! 04_docking_ide_workspace: Multi-pane IDE & Code Editor Workspace.
+//! 04_docking_ide_workspace：多窗格 IDE 与代码编辑器工作区示例。
 //!
-//! Demonstrates:
-//! - Desktop IDE workstation layout with split panes and docks.
-//! - Code surface editing via [`CodeEditorDesc`].
-//! - Navigation and hierarchy exploration with [`TreeView`].
-//! - Status reporting with [`StatusBarDesc`].
+//! 演示内容：
+//! - 带分栏与停靠面板的桌面 IDE 工作台布局。
+//! - 通过 [`CodeEditorDesc`] 提供代码编辑表面。
+//! - 通过 [`TreeView`] 进行导航与层级浏览。
+//! - 通过 [`StatusBarDesc`] 展示状态栏信息。
 
 use unbound_app::prelude::*;
 use unbound_input::PointerButton;
@@ -47,7 +47,7 @@ impl Application for IdeApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("ide_root"), |root| {
-            // Top Toolbar / Menu row
+            // 顶部工具栏 / 菜单栏
             root.row(ui_key!("top_bar"), |bar| {
                 bar.button(
                     BTN_TOGGLE_SIDEBAR,
@@ -61,7 +61,7 @@ impl Application for IdeApp {
 
             root.divider(ui_key!("div_top"), DividerDesc::rule());
 
-            // Workspace body with split panes
+            // 带分栏的工作区主体
             root.split_pane(
                 ui_key!("main_split"),
                 false,
@@ -87,7 +87,7 @@ impl Application for IdeApp {
 
             root.divider(ui_key!("div_bot"), DividerDesc::rule());
 
-            // Bottom status strip
+            // 底部状态栏
             root.row(ui_key!("status_strip"), |bot| {
                 bot.badge(ui_key!("st_ready"), BadgeDesc::label("Ready"));
                 bot.badge(ui_key!("st_ln"), BadgeDesc::label("Ln 1, Col 1"));
@@ -107,7 +107,7 @@ pub fn run_headless_check() {
     );
     assert!(runtime.state().sidebar_visible);
 
-    // Toggle sidebar
+    // 切换侧边栏显示状态
     let btn_rect = runtime
         .widget_rect(BTN_TOGGLE_SIDEBAR)
         .expect("Toggle button mounted");

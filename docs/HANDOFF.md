@@ -61,8 +61,8 @@ crates/unbound-host/src/tests.rs     新 ABI 签名、计数器加锁、EXPORTED
 crates/app-guest/src/lib.rs          ByteBuffer 写入、migrate_import 失败返回 null、
                                     Row/State 嵌套 schema 哈希、repr(C) 固定布局
 crates/app-guest/tests/host_roundtrip.rs  DLL 缺失改为硬失败、按新鲜度挑 DLL
-docs/06-tooling/hot-reload.md        全文重写，与 ABI v4 对齐
-docs/01-graphics/gpu-data-layout.md  GpuClipNode 字段顺序纠正
+docs/architecture/hot-reload-and-assets.md        全文重写，与 ABI v4 对齐
+docs/architecture/gpu-renderer.md  GpuClipNode 字段顺序纠正
 ```
 
 **本轮修掉的 4 个问题**（后两个是接手时文档没提到的**新发现**）：
@@ -226,7 +226,7 @@ just q-run cargo run -p gallery -- --kpi
 但用户数据仍然是丢的。要真正做到"加字段不丢数据"，需要换自描述格式
 （`rmp-serde` / `flexbuffers`，当前 `Cargo.lock` 里只有 `postcard`）。
 
-`docs/06-tooling/hot-reload.md` 已经把这个真相写进文档，不再宣称"彻底告别
+`docs/architecture/hot-reload-and-assets.md` 已经把这个真相写进文档，不再宣称"彻底告别
 热重载必崩溃"。
 
 ### 2.2 中：`app-guest` 的端到端迁移测试靠伪造哈希
@@ -482,3 +482,25 @@ just q-run cargo run -p gallery -- --kpi
                    spatial: 22 of 200 rows visible
                    六项 KPI 全部 ok
 ```
+
+---
+
+## 6. 文档体系迁移（本次重构）
+
+架构文档已按 `arch-align` 规范收敛为 `docs/architecture/` 下的 15 篇智能体原生规范，
+唯一入口是 `docs/architecture/README.md`。原 `docs/00-overview/` ~ `docs/07-roadmap/`
+分层卷与 `docs/README.md` 已删除，映射关系：图形底座 -> `gpu-renderer.md`、
+窗口呈现 -> `platform-and-window.md`、UI 与布局 -> `ui-and-layout.md`、
+主题与缩放 -> `animation-and-theme.md`、输入与无障碍 -> `input-and-a11y.md`、
+画布 -> `canvas-and-graph.md`、无头与 Agent -> `headless-and-agent.md`、
+工具链与热重载 -> `hot-reload-and-assets.md` / `showcase.md`、
+量化红线 -> `kpi-budgets.md`。
+
+本文件、`PROJECT-BRIEF.md`、`USER-GUIDE.md`、`archive/`、`decisions/` 保留：
+它们分别是交接缺陷档案、外部 AI 决策简报、实战教程与历史记录，不属于架构规范，
+新规范不覆盖其内容。后两者中引用的 `docs/0X-*` 路径为重构前的历史快照，
+查阅现行约束请按 `docs/architecture/README.md` 路由。
+
+**验收红线**：开窗呈现链的正确性必须以抓屏像素为准。「无 panic + 无 VUID」不足以
+证明画面正确——主题 LUT 未上传、空 `transforms` 导致图元全被剔除、payload 索引
+未重定位造成的文字串叠，三者都不触发任何校验层报错。

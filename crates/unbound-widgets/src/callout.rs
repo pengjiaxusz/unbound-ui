@@ -1,4 +1,4 @@
-//! Callout: In-page notification banner with title, message, severity, and dismiss action.
+//! 提示框（Callout）：页面内通知横幅，包含标题、消息、严重级别与关闭操作。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -11,7 +11,7 @@ use crate::button::BUTTON_LAYER;
 use crate::primitive::{outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
-/// Descriptor for a callout bar.
+/// 提示框栏描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CalloutDesc {
     pub rect: Rect,
@@ -53,7 +53,7 @@ impl CalloutDesc {
     }
 }
 
-/// State for a callout.
+/// 提示框状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CalloutState {
     pub closed: bool,
@@ -70,7 +70,7 @@ impl CalloutState {
     }
 }
 
-/// Emit primitives and hit regions for a callout banner.
+/// 发射提示框横幅的图元与命中区域。
 #[must_use]
 pub fn emit_callout(
     node: u64,
@@ -89,15 +89,15 @@ pub fn emit_callout(
         Severity::Error => (Token::ERROR_SOFT, Token::ERROR, Token::ERROR),
     };
 
-    // 1. Background surface
+    // 1. 背景表面
     out.primitives.push(surface(rect, desc.radius, bg_token, z));
 
-    // 2. Left severity accent stripe
+    // 2. 左侧严重级别强调条
     let stripe_rect = Rect::new(rect.origin.x, rect.origin.y, 4.0, rect.height());
     out.primitives
         .push(surface(stripe_rect, 2.0, stripe_token, z + 1));
 
-    // 3. Border outline
+    // 3. 边框轮廓
     out.primitives.push(outlined(
         rect,
         desc.radius,
@@ -108,7 +108,7 @@ pub fn emit_callout(
         z + 2,
     ));
 
-    // 4. Close button hit region
+    // 4. 关闭按钮命中区域
     let close_node = node ^ 0xC105E;
     let close_rect = Rect::new(
         rect.origin.x + (rect.width() - 32.0).max(0.0),

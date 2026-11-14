@@ -1,10 +1,8 @@
-//! The transform gizmo: eight resize grips, a rotation grip and the live size
-//! bubble.
+//! 变换操纵器（TransformGizmo）：八个缩放手柄、一个旋转手柄与实时尺寸气泡。
 //!
-//! The gizmo is *screen-space by contract*: its border and grips keep a fixed
-//! pixel size no matter the canvas zoom, which is why the bounds are converted
-//! with the caller's zoom before painting. Every grip reports its own hit
-//! region with the matching resize cursor, so a drag can start on any of them.
+//! 该操纵器按契约处于*屏幕空间*：无论画布如何缩放，其边框与手柄始终保持固定像素大小，
+//! 因此绘制前需先按调用方的缩放倍率转换边界。每个手柄均上报各自带有对应缩放光标的命中区域，
+//! 从而可从任意手柄发起拖拽。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -19,27 +17,27 @@ use crate::primitive::{focus_ring, glyphs, instance, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The grip square.
+/// 手柄正方形尺寸。
 pub const GRIP_SIZE: f32 = 8.0;
-/// The rotation grip diameter.
+/// 旋转手柄直径。
 pub const ROTATE_GRIP: f32 = 10.0;
-/// The gap between the top edge and the rotation grip.
+/// 顶边与旋转手柄之间的间距。
 pub const ROTATE_OFFSET: f32 = 22.0;
-/// The size bubble height.
+/// 尺寸气泡高度。
 pub const SIZE_BUBBLE: f32 = 20.0;
 
-/// The gizmo descriptor. `bounds` is in **screen** space.
+/// 操纵器描述符。`bounds` 位于**屏幕**空间。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GizmoDesc {
-    /// The selection bounds, already projected to screen space.
+    /// 选区边界，已投影至屏幕空间。
     pub bounds: Rect,
-    /// The canvas zoom, used to keep strokes one pixel wide.
+    /// 画布缩放倍率，用于保持描边为 1 像素宽。
     pub zoom: f32,
-    /// The rotation grip offset.
+    /// 旋转手柄偏移距离。
     pub rotate_offset: f32,
-    /// Whether to paint the size bubble.
+    /// 是否绘制尺寸气泡。
     pub show_size: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
@@ -55,32 +53,32 @@ impl GizmoDesc {
         }
     }
 
-    /// The same gizmo without the size bubble.
+    /// 隐藏尺寸气泡的同款操纵器。
     #[must_use]
     pub fn without_size(mut self) -> Self {
         self.show_size = false;
         self
     }
 
-    /// The hairline width, constant in screen pixels.
+    /// 屏幕像素下恒定的细线宽度。
     #[must_use]
     pub fn line_width(&self) -> f32 {
         (1.0 / self.zoom).clamp(0.5, 2.0)
     }
 
-    /// The grip rectangle for one handle, at rest.
+    /// 静息状态下单个手柄的矩形区域。
     #[must_use]
     pub fn grip_rect(&self, handle: Handle) -> Rect {
         grip_rect_for(self.bounds, self.rotate_offset, handle)
     }
 
-    /// The grip under `point`, within `radius`.
+    /// 在 `radius` 范围内查找 `point` 命中的手柄。
     #[must_use]
     pub fn grip_at(&self, point: Vec2, radius: f32) -> Option<Handle> {
         Handle::hit(self.bounds, point, radius, self.rotate_offset)
     }
 
-    /// The size bubble rectangle.
+    /// 尺寸气泡矩形。
     #[must_use]
     pub fn size_bubble_rect(&self, width: f32) -> Rect {
         Rect::new(
@@ -92,7 +90,7 @@ impl GizmoDesc {
     }
 }
 
-/// The grip rectangle for `handle` around `bounds`.
+/// `bounds` 周围 `handle` 对应的手柄矩形。
 #[must_use]
 pub fn grip_rect_for(bounds: Rect, rotate_offset: f32, handle: Handle) -> Rect {
     let centre = handle.position(bounds, rotate_offset);
@@ -104,21 +102,21 @@ pub fn grip_rect_for(bounds: Rect, rotate_offset: f32, handle: Handle) -> Rect {
     Rect::new(centre.x - size * 0.5, centre.y - size * 0.5, size, size)
 }
 
-/// What one gizmo emits.
+/// 单个操纵器的发射结果。
 #[derive(Clone, Debug)]
 pub struct GizmoOutput {
-    /// The outline, grips, guides and bubble.
+    /// 轮廓线、手柄、辅助线与气泡。
     pub output: WidgetOutput,
-    /// One hit region per grip, in [`Handle::ALL`] order.
+    /// 按 [`Handle::ALL`] 顺序排列的各手柄命中区域。
     pub hits: Vec<(Handle, HitRegion)>,
-    /// The size bubble, when painted.
+    /// 尺寸气泡（若绘制）。
     pub bubble: Option<Rect>,
 }
 
-/// Emit the gizmo, the active drag preview and the size bubble.
+/// 发射操纵器、当前拖拽预览与尺寸气泡。
 ///
-/// `preview` is `(handle, bounds)` from the caller's [`unbound_canvas::HandleDrag`];
-/// when present the outline follows it and the dragged grip is highlighted.
+/// `preview` 为来自调用方 [`unbound_canvas::HandleDrag`] 的 `(handle, bounds)`；
+/// 存在时轮廓线跟随预览变化，且被拖拽的手柄高亮显示。
 #[must_use]
 pub fn emit_gizmo(
     node: u64,
@@ -171,8 +169,7 @@ pub fn emit_gizmo(
             Token::OUTLINE_STRONG
         };
         primitives.push(surface(grip.inflate(width), radius + width, ink, desc.z));
-        // The South-East grip always reserves a focus-ring slot; focus only
-        // changes its opacity, keeping the primitive count state-invariant.
+        // 东南角手柄始终预留焦点环槽位；聚焦仅改变其不透明度，使图元数量与状态无关。
         if handle == Handle::SouthEast {
             primitives.push(focus_ring(
                 grip.inflate(3.0),

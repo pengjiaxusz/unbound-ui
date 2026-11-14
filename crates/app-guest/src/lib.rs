@@ -1,20 +1,20 @@
 //! 业务层 Guest（`docs` §8.1）。
 //!
-//! This crate *is* the business layer: a `cdylib` that the host mounts, unmounts
-//! and remounts while the window, the Vulkan device and every GPU pool stay
-//! alive. It touches no graphics API and depends only on `unbound-abi` — the
-//! lightweight POD/`Action` crate — which is what keeps a guest rebuild in the
-//! hundreds of milliseconds instead of the tens of seconds.
+//! 本 crate 即为业务层：一个可在 host 保持窗口、Vulkan 设备及所有 GPU 池
+//! 存活的情况下被挂载、卸载与重新挂载的 `cdylib`。它不接触任何图形 API，
+//! 仅依赖轻量级 POD/`Action` crate `unbound-abi`——这使得 guest 的重新编译
+//! 耗时保持在数百毫秒而非数十秒。
 //!
-//! Two mechanisms make the remount safe:
 //!
-//! * **Allocator hijack.** [`ForwardingAllocator`] replaces the guest's global
-//!   allocator and forwards to the host's vtable, so a `Vec<u8>` the host passes
-//!   in and the guest fills is one heap, not two. Without it, Windows would
-//!   corrupt the heap the moment `migrate_export` pushed a byte.
-//! * **Schema fingerprint.** [`State`] implements `StateSchema`; equal hashes
-//!   let the host hand the old pointer over verbatim, a changed hash routes
-//!   through `migrate_export`/`migrate_import`.
+//! 两种机制保证了重新挂载的安全性：
+//!
+//! * **分配器劫持。** [`ForwardingAllocator`] 替换 guest 的全局分配器并
+//!   转发至 host 的虚表，使 host 传入并由 guest 填充的 `Vec<u8>` 位于同一堆
+//!   而非两个堆。否则 Windows 会在 `migrate_export` 写入字节时立即损坏堆。
+//! *
+//! * **Schema 指纹。** [`State`] 实现 `StateSchema`；哈希相等时 host 可
+//!   直接移交旧指针，哈希变更时则经由 `migrate_export`/`migrate_import` 迁移。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -34,14 +34,14 @@ use unbound_abi::plugin::{
 use unbound_abi::schema::StateSchema;
 
 // ---------------------------------------------------------------------------
-// Allocator hijack
+// 分配器劫持
 // ---------------------------------------------------------------------------
 
-/// Host allocator, installed by `on_load`. Null until then, which is why the
-/// fallback below exists: `on_load` itself needs to allocate.
+/// 由 `on_load` 安装的 host 分配器。此前为空指针，因此下方需要回退逻辑：
+/// `on_load` 本身也可能需要分配内存。
 static HOST_ALLOC: AtomicPtr<HostAllocatorVTable> = AtomicPtr::new(core::ptr::null_mut());
 
-/// Guest allocator that forwards every request to the host.
+/// 将所有分配请求转发至 host 的 guest 分配器。
 struct ForwardingAllocator;
 
 impl ForwardingAllocator {
@@ -54,21 +54,21 @@ unsafe impl GlobalAlloc for ForwardingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let table = Self::table();
         if table.is_null() {
-            // SAFETY: the system allocator is always valid.
+            // SAFETY: 系统分配器始终有效。
             return unsafe { System.alloc(layout) };
         }
-        // SAFETY: the host installed the vtable in `on_load` and keeps it alive
-        // for the whole mount.
+        // SAFETY: host 在 `on_load` 中安装了虚表，并在整个挂载期间保持其存活。
+        //
         unsafe { ((*table).alloc)(layout.size(), layout.align()) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let table = Self::table();
         if table.is_null() {
-            // SAFETY: the block came from `System` because the table was null.
+            // SAFETY: 虚表为空，说明该内存块由 `System` 分配。
             return unsafe { System.dealloc(ptr, layout) };
         }
-        // SAFETY: same allocation source as `alloc`.
+        // SAFETY: 与 `alloc` 使用相同的分配来源。
         unsafe { ((*table).dealloc)(ptr, layout.size(), layout.align()) }
     }
 
@@ -77,7 +77,7 @@ unsafe impl GlobalAlloc for ForwardingAllocator {
         if table.is_null() {
             return unsafe { System.realloc(ptr, layout, new_size) };
         }
-        // SAFETY: same allocation source as `alloc`.
+        // SAFETY: 与 `alloc` 使用相同的分配来源。
         unsafe { ((*table).realloc)(ptr, layout.size(), layout.align(), new_size) }
     }
 }
@@ -86,22 +86,22 @@ unsafe impl GlobalAlloc for ForwardingAllocator {
 static ALLOCATOR: ForwardingAllocator = ForwardingAllocator;
 
 // ---------------------------------------------------------------------------
-// State
+// 状态定义
 // ---------------------------------------------------------------------------
 
-/// One row in the demo list.
+/// 示例列表中的单行数据。
 ///
-/// `repr(C)` is not optional here. The host hands the *old* state to the
-/// *new* guest verbatim when the schema hashes match, so both builds must
-/// agree on the byte layout. Under the default `repr(Rust)` the compiler is
-/// free to reorder fields — and it does: it moved `State::count` to offset
-/// 48 — and it may do so differently in another compiler version. A
-/// hand-written fingerprint cannot protect against that; only a fixed layout
-/// can.
+/// 此处的 `repr(C)` 并非可选。当 schema 哈希匹配时，host 会将*旧*状态
+/// 原样交给*新* guest，因此两次构建必须就字节布局达成一致。在默认 `repr(Rust)`
+/// 下编译器可自由重排字段——实际上它也确实将 `State::count` 移到了偏移 48——
+/// 且不同编译器版本的重排方式可能不同。手写指纹无法防住这种漂移；
+/// 只有固定布局才能保证安全。
 ///
-/// `priority` and `tags` were added after V1 shipped. Rows travel as one UBMF
-/// envelope each (see [`encode_rows`]), so a V1 payload simply has no field 3
-/// or 4 and the new guest fills the defaults instead of losing the rows.
+///
+///
+/// `priority` 与 `tags` 在 V1 发布后新增。每行各自作为一条 UBMF 信封传输
+/// （见 [`encode_rows`]），因此 V1 负载仅缺少字段 3 和 4，新 guest 会填充
+/// 默认值而不会丢失行数据。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Row {
@@ -111,13 +111,13 @@ pub struct Row {
     pub tags: Vec<String>,
 }
 
-// The row's own layout is part of the state's layout: `Vec<Row>` is 24 bytes
-// whatever `Row` looks like, so without this the fingerprint would not change
-// when `Row` gains a field — and the host would hand the old memory to the
-// new guest as if the layouts still matched.
+// 行自身的布局也是状态布局的一部分：无论 `Row` 长什么样，`Vec<Row>`
+// 始终占 24 字节；若无此项，`Row` 新增字段时指纹不会变化——host 便会
+// 误将旧内存当成布局仍匹配直接交给新 guest。
 //
-// The seed changed when `Row` gained `repr(C)`: the field list is unchanged,
-// but the byte layout is not, and the fingerprint has to say so.
+//
+// `Row` 改用 `repr(C)` 时更新了种子值：字段列表未变，但字节布局已变，
+// 指纹必须反映这一点。
 unbound_abi::impl_schema_hash!(
     Row,
     0x524f_5745_4e43, // "ROWNB" + repr(C)
@@ -135,9 +135,9 @@ unbound_abi::impl_schema_hash!(
     32,
 );
 
-/// The guest's whole business state.
+/// guest 的完整业务状态。
 ///
-/// See [`Row`] for why this is `repr(C)`.
+/// 为何使用 `repr(C)` 请参见 [`Row`]。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct State {
@@ -146,10 +146,10 @@ pub struct State {
     pub rows: Vec<Row>,
 }
 
-// The offsets written into the schema hashes above are the contract: if they
-// drift away from the real layout, the fingerprint stops describing the
-// layout and the host's zero-copy fast path becomes unsafe. Pin them here so
-// a wrong offset fails to compile instead of silently weakening the hash.
+// 上方写入 schema 哈希的偏移量即契约：若其与真实布局产生偏移，
+// 指纹便不再描述真实布局，host 的零拷贝快路径也会变得不安全。
+// 在此钉死偏移量，使错误的偏移在编译期失败而非静默削弱哈希。
+//
 const _: () = {
     use core::mem::offset_of;
     assert!(offset_of!(Row, label) == 0);
@@ -166,14 +166,14 @@ const _: () = {
     assert!(core::mem::size_of::<State>() == 56);
 };
 
-// Field order and offsets are the contract: adding `rows` changes the hash, and
-// the host falls back to `migrate_*` instead of reinterpreting the old memory.
+// 字段顺序与偏移量即契约：新增 `rows` 会改变哈希，host 将回退到
+// `migrate_*` 而非重新解释旧内存。
 //
-// `Row` is listed as a nested type: a change inside it changes the state's
-// layout too, even though `Vec<Row>` itself never changes size.
+// `Row` 作为嵌套类型列出：其内部变更同样会改变状态布局，
+// 尽管 `Vec<Row>` 本身大小永不改变。
 //
-// The seed changed when `State` gained `repr(C)`, for the same reason as
-// `Row`'s: the field list is unchanged, the byte layout is not.
+// `State` 改用 `repr(C)` 时更新了种子值，原因同 `Row`：
+// 字段列表未变，但字节布局已变。
 unbound_abi::impl_schema_hash!(
     State,
     0x5542_4f55_4e45, // "UNBOUND" + repr(C)
@@ -200,28 +200,28 @@ impl State {
 }
 
 // ---------------------------------------------------------------------------
-// Migratable state
+// 可迁移状态
 // ---------------------------------------------------------------------------
 
-/// Stable field ids for the versioned envelope. They must never be reused.
+/// 版本化信封的稳定字段 ID。绝不可复用。
 const FIELD_COUNT: u16 = 1;
 const FIELD_TITLE: u16 = 2;
 const FIELD_ROWS: u16 = 3;
-/// `postcard` encoding of an empty `String` / `Vec` / zero `u8`.
+/// 空 `String` / `Vec` / 零值 `u8` 的 `postcard` 编码。
 const EMPTY_COLLECTION: &[u8] = &[0];
-/// An empty row list: the `encode_list` header is a `u32` zero.
+/// 空行列表：`encode_list` 头部为 `u32` 零值。
 const EMPTY_ROWS: &[u8] = &[0, 0, 0, 0];
 
-/// The new shape of the state. Fields absent from an older payload take a
-/// default; a missing `count` is an error the host can see.
+/// 状态的新形态。旧负载中缺失的字段取默认值；缺失 `count` 将返回 host 可见的错误。
+///
 const STATE_FIELDS: &[FieldSpec] = &[
     FieldSpec::required(FIELD_COUNT),
     FieldSpec::optional(FIELD_TITLE, EMPTY_COLLECTION),
     FieldSpec::optional(FIELD_ROWS, EMPTY_ROWS),
 ];
 
-// Row field ids. A V1 row only carries 1 and 2; 3 and 4 are the fields this
-// version added, and their defaults are what a V1 payload gets.
+// 行字段 ID。V1 行仅携带 1 和 2；3 和 4 为本版本新增字段，
+// V1 负载在迁移时会取其默认值。
 const ROW_LABEL: u16 = 1;
 const ROW_DONE: u16 = 2;
 const ROW_PRIORITY: u16 = 3;
@@ -234,10 +234,10 @@ const ROW_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional(ROW_TAGS, EMPTY_COLLECTION),
 ];
 
-/// Encode rows as a list of self-describing envelopes.
+/// 将行列表编码为自描述信封列表。
 ///
 /// # Errors
-/// Propagates a field that cannot be serialised.
+/// 透传无法序列化的字段错误。
 pub fn encode_rows(rows: &[Row]) -> Result<Vec<u8>, MigrationError> {
     encode_list(rows, |row| {
         let label = postcard::to_allocvec(&row.label).map_err(|_| MigrationError::FieldTooLarge)?;
@@ -254,12 +254,12 @@ pub fn encode_rows(rows: &[Row]) -> Result<Vec<u8>, MigrationError> {
     })
 }
 
-/// Decode rows, filling the fields an older row did not have.
+/// 解码行列表，为旧行中缺失的字段填充默认值。
 ///
 /// # Errors
-/// Returns a structural [`MigrationError`] when the list or one row is
-/// corrupt, and [`MigrationError::MissingField`] when a required field is
-/// absent.
+/// 当列表或某行损坏时返回结构性 [`MigrationError`]，缺失必需字段时
+/// 返回 [`MigrationError::MissingField`]。
+///
 pub fn decode_rows(bytes: &[u8]) -> Result<Vec<Row>, MigrationError> {
     migrate_list(bytes, ROW_FIELDS, |fields| {
         Ok(Row {
@@ -283,7 +283,7 @@ fn row_field<T: serde::de::DeserializeOwned>(
 }
 
 // ---------------------------------------------------------------------------
-// Guest lifecycle
+// Guest 生命周期
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" fn on_load(alloc: *const HostAllocatorVTable) {
@@ -291,8 +291,8 @@ unsafe extern "C" fn on_load(alloc: *const HostAllocatorVTable) {
 }
 
 unsafe extern "C" fn on_unload() {
-    // Leave the pointer in place: dropping the guest does not invalidate the
-    // host's vtable, and a re-`on_load` simply overwrites it.
+    // 保留指针原位：卸载 guest 不会使 host 虚表失效，再次 `on_load` 直接覆盖即可。
+    //
 }
 
 unsafe extern "C" fn init_state() -> GuestState {
@@ -303,25 +303,25 @@ unsafe extern "C" fn drop_state(state: GuestState) {
     if state.is_null() {
         return;
     }
-    // SAFETY: `state` came from `Box::into_raw` in this crate (or in a previous
-    // generation with the same layout, which is the whole point of ZeroCopy).
+    // SAFETY: `state` 来自本 crate 的 `Box::into_raw`（或布局相同的上一代 guest，
+    // 这正是 ZeroCopy 的意义所在）。
     drop(unsafe { Box::from_raw(state.cast::<State>()) });
 }
 
 unsafe extern "C" fn adopt_state(_state: GuestState) {
-    // Nothing to do: the host keeps owning the pointer and hands it back to us
-    // on every call. The schema hash proved the layout is identical.
+    // 无需操作：host 继续持有该指针并在每次调用时传回。
+    // schema 哈希已证明布局完全一致。
 }
 
 unsafe extern "C" fn migrate_export(state: GuestState, out: *mut ByteBuffer) {
     if state.is_null() || out.is_null() {
         return;
     }
-    // SAFETY: both pointers are host-provided and live for this call.
+    // SAFETY: 两个指针均由 host 提供且在本次调用期间存活。
     let state = unsafe { &*state.cast::<State>() };
     let out = unsafe { &mut *out };
-    // Each field is encoded on its own so a new field can be added without
-    // reshuffling the bytes of the old ones.
+    // 每个字段独立编码，以便新增字段时无需重排旧字段的字节。
+    //
     let (Ok(count), Ok(title), Ok(rows)) = (
         postcard::to_allocvec(&state.count),
         postcard::to_allocvec(&state.title),
@@ -336,8 +336,8 @@ unsafe extern "C" fn migrate_export(state: GuestState, out: *mut ByteBuffer) {
         Field::new(FIELD_ROWS, &rows),
     ]);
     let Ok(bytes) = envelope else {
-        // The state could not be serialised. Report "needs nothing" so the
-        // host does not allocate a buffer for a payload that does not exist.
+        // 状态无法序列化。报告“无需空间”以免 host 为不存在的负载分配缓冲区。
+        //
         out.len = 0;
         return;
     };
@@ -346,14 +346,14 @@ unsafe extern "C" fn migrate_export(state: GuestState, out: *mut ByteBuffer) {
 
 unsafe extern "C" fn migrate_import(ptr: *const u8, len: usize) -> GuestState {
     if ptr.is_null() {
-        // SAFETY: `init_state` only allocates.
+        // SAFETY: `init_state` 仅执行分配。
         return unsafe { init_state() };
     }
-    // SAFETY: the host passes the exact buffer `migrate_export` filled.
+    // SAFETY: host 传入的正是 `migrate_export` 填充的缓冲区。
     let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
-    // A decode failure must be *visible*: the host falls back to a fresh state
-    // when this returns null, which is better than silently handing back an
-    // empty seed as if the migration had succeeded.
+    // 解码失败必须*可见*：返回空指针时 host 会回退到全新状态，
+    // 这比静默返回空种子假装迁移成功要好得多。
+    //
     let Ok(fields) = migrate(bytes, STATE_FIELDS) else {
         return core::ptr::null_mut();
     };
@@ -375,19 +375,19 @@ unsafe extern "C" fn migrate_import(ptr: *const u8, len: usize) -> GuestState {
     Box::into_raw(Box::new(state)).cast::<c_void>()
 }
 
-/// Write `bytes` into the host's buffer.
+/// 将 `bytes` 写入 host 缓冲区。
 ///
-/// The host owns the allocation; the guest only fills it. When the buffer is
-/// too small the guest writes nothing and reports the size it needs, so the
-/// host can allocate a bigger one and call again.
+/// host 拥有内存分配；guest 仅负责填充。缓冲区过小时 guest 不写入数据
+/// 并报告所需大小，以便 host 分配更大缓冲区后重试。
+///
 fn write_bytes(out: &mut ByteBuffer, bytes: &[u8]) {
     let needed = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
     if out.capacity < needed || out.ptr.is_null() {
-        // Not enough room: report the size the host has to provide.
+        // 空间不足：报告 host 需要提供的大小。
         out.len = needed;
         return;
     }
-    // SAFETY: the host guarantees `capacity` writable bytes at `ptr`.
+    // SAFETY: host 保证在 `ptr` 处有 `capacity` 字节可写。
     unsafe {
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), out.ptr, bytes.len());
     }
@@ -398,7 +398,7 @@ unsafe extern "C" fn reduce(state: GuestState, action: *const RawAction) {
     if state.is_null() || action.is_null() {
         return;
     }
-    // SAFETY: the host guarantees both pointers for the duration of the call.
+    // SAFETY: host 在调用期间保证两个指针均有效。
     let state = unsafe { &mut *state.cast::<State>() };
     let action = unsafe { &*action };
     match action.kind() {
@@ -423,7 +423,7 @@ unsafe extern "C" fn reduce(state: GuestState, action: *const RawAction) {
             }
         }
         ActionKind::SetTheme => {
-            // Demonstrates that the whole business layer is just data.
+            // 证明整个业务层本质上只是纯数据。
             state.count = 0;
             state.rows.clear();
         }
@@ -435,7 +435,7 @@ unsafe extern "C" fn build_view(state: GuestState, ctx: *mut HostRenderContext) 
     if state.is_null() || ctx.is_null() {
         return;
     }
-    // SAFETY: the host passes a state it owns and a context valid for this call.
+    // SAFETY: host 传入其拥有的状态及本次调用有效的上下文。
     let state = unsafe { &*state.cast::<State>() };
     let ctx = unsafe { &*ctx };
 
@@ -467,11 +467,11 @@ unsafe extern "C" fn build_view(state: GuestState, ctx: *mut HostRenderContext) 
 }
 
 unsafe extern "C" fn snapshot(state: GuestState, out: *mut ByteBuffer) {
-    // SAFETY: same contract as `migrate_export`.
+    // SAFETY: 契约同 `migrate_export`。
     unsafe { migrate_export(state, out) };
 }
 
-/// The vtable the host reads through [`unbound_abi::plugin::GUEST_ENTRY_SYMBOL`].
+/// host 通过 [`unbound_abi::plugin::GUEST_ENTRY_SYMBOL`] 读取的虚表。
 static VTABLE: GuestPluginVTable = GuestPluginVTable {
     abi_version: ABI_VERSION,
     struct_size: core::mem::size_of::<GuestPluginVTable>() as u32,
@@ -488,17 +488,17 @@ static VTABLE: GuestPluginVTable = GuestPluginVTable {
     snapshot,
 };
 
-/// The single exported symbol.
+/// 唯一导出符号。
 ///
 /// # Safety
-/// Callers must keep the returned pointer valid for the lifetime of the loaded
-/// library; it points at a `static`, so it always is.
+/// 调用方必须在已加载库的整个生命周期内保持返回指针有效；
+/// 它指向 `static`，因此始终有效。
 #[no_mangle]
 pub extern "C" fn unbound_guest_entry() -> *const GuestPluginVTable {
     &VTABLE
 }
 
-/// The vtable, for statically linked hosts and for tests.
+/// 供静态链接的 host 与测试使用的虚表。
 #[must_use]
 pub fn vtable() -> GuestPluginVTable {
     VTABLE

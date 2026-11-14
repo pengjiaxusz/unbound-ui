@@ -1,4 +1,4 @@
-//! Spring position and pressed-squish geometry of the switch.
+//! 开关的弹簧位置与按下挤压形变几何测试。
 
 use unbound_gpu::data::PrimType;
 use unbound_math::Rect;

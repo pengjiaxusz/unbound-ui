@@ -1,8 +1,8 @@
-//! The runtime must drive a real application with no window and no GPU.
+//! 运行时必须在无窗口、无 GPU 的环境下驱动真实应用。
 //!
-//! This is the acceptance test for the "one event loop" refactor: a counter
-//! application is built, clicked and focused through the same [`AppRuntime`]
-//! the windowed shell uses, and the reports are asserted at the scene level.
+//! 这是“单事件循环”重构的验收测试：计数器应用通过窗口外壳使用的同一个
+//! [`AppRuntime`] 构建、点击与聚焦，并在场景层面断言报告结果。
+//!
 
 use unbound_app::{AppEvent, AppKey, AppRuntime, Application, DirtyFlags, EventOutcome, Modifiers};
 use unbound_gpu::data::GpuPrimitiveInstance;
@@ -75,8 +75,8 @@ fn runtime() -> AppRuntime<Counter> {
     AppRuntime::new(Counter, Vec2::new(800.0, 600.0))
 }
 
-/// A scene with 5,000 inert background primitives and a single text field
-/// whose span is reserved, so typing cannot shift the background.
+/// 包含 5,000 个静态背景图元与单个预留 span 的文本字段，
+/// 使得打字不会移动背景图元。
 #[derive(Default)]
 struct TypingScene;
 
@@ -146,7 +146,7 @@ impl Application for TypingScene {
     }
 }
 
-/// A view whose only interactive node is deliberately below the 24px minimum.
+/// 唯一交互节点刻意小于 24px 下限的视图。
 #[derive(Default)]
 struct TinyTarget;
 
@@ -195,7 +195,7 @@ fn inspector_overlay_renders_on_debug_layer_and_reports_hovered_node_box_model()
         "a 6×6 interactive target must fail the touch-target rule"
     );
 
-    // The pass is per-frame: the same violation comes back on the next frame.
+    // 检查器按帧运行：下一帧会再次报告相同的违规项。
     runtime.frame(1.0 / 60.0);
     assert_eq!(runtime.inspector().violations().len(), violations);
 

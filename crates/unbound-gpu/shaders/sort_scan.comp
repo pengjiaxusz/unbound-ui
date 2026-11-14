@@ -3,11 +3,10 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // ---------------------------------------------------------------------------
-// Stable LSD radix sort, pass 2/3: global bucket scan.
+// 稳定 LSD 基数排序，第 2/3 步：全局桶前缀扫描。
 //
-// One workgroup, one thread per digit (256 threads). Each thread walks the
-// per-block histograms of *its* digit, so the whole scan is O(block_count) per
-// thread instead of O(256 × block_count) serial.
+// 单个工作组，每个数字位值对应一个线程（共 256 线程）。每个线程仅遍历自身位值的
+// 逐块直方图，因此整体扫描复杂度为每线程 O(block_count)，而非 O(256 × block_count) 串行。
 // ---------------------------------------------------------------------------
 
 #include "common.glsl"
@@ -28,7 +27,7 @@ void main() {
     uint hist_words = pc.block_count * BLOCK;
     uint blocks = pc.block_count;
 
-    // Total number of keys with this digit across all blocks.
+    // 所有块中具有该位值的键总数。
     uint total = 0u;
     for (uint b = 0u; b < blocks; ++b) {
         total += scratch.v[b * BLOCK + d];
@@ -36,7 +35,7 @@ void main() {
     s_digit_base[d] = total;
     barrier();
 
-    // Exclusive prefix over digits, done once by thread 0 (256 iterations).
+    // 对各桶总数执行独占前缀和，由线程 0 一次性完成（256 次迭代）。
     if (d == 0u) {
         uint running = 0u;
         for (uint i = 0u; i < 256u; ++i) {
@@ -47,7 +46,7 @@ void main() {
     }
     barrier();
 
-    // Write every block's start offset for this digit.
+    // 写回每个块对应该位值的起始偏移。
     uint running = s_digit_base[d];
     for (uint b = 0u; b < blocks; ++b) {
         uint c = scratch.v[b * BLOCK + d];

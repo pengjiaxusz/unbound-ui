@@ -1,9 +1,9 @@
-//! 05_overlays_and_navigation: Popups, Dialogs, Focus Traps & Router Navigation.
+//! 05_overlays_and_navigation：弹窗、对话框、焦点陷阱与路由导航示例。
 //!
-//! Demonstrates:
-//! - Viewport overlay management via [`OverlayManager`].
-//! - Centered modals and confirmation bubbles via [`PopconfirmDesc`].
-//! - Breadcrumb navigation trail and progressive disclosure.
+//! 演示内容：
+//! - 通过 [`OverlayManager`] 管理视口覆盖层。
+//! - 居中模态框与基于 [`PopconfirmDesc`] 的确认气泡。
+//! - 面包屑导航路径与渐进式信息披露。
 
 use unbound_app::prelude::*;
 use unbound_input::PointerButton;
@@ -116,7 +116,7 @@ pub fn run_headless_check() {
     let _ = runtime.frame(0.0);
     assert!(!runtime.state().modal_open);
 
-    // Open modal
+    // 打开模态框
     let btn_rect = runtime
         .widget_rect(BTN_OPEN_MODAL)
         .expect("Open modal button mounted");
@@ -128,7 +128,7 @@ pub fn run_headless_check() {
     let _ = runtime.frame(1.0 / 60.0);
     assert!(runtime.state().modal_open, "Modal should be open");
 
-    // Close modal
+    // 关闭模态框
     let close_rect = runtime
         .widget_rect(BTN_CLOSE_MODAL)
         .expect("Close modal button mounted");

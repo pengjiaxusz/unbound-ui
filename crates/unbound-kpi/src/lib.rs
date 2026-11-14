@@ -1,25 +1,25 @@
 //! 量化验收红线（`docs` §10.2）的 CPU 侧测量。
 //!
-//! Every number in the doc's acceptance table is a *budget*, and a budget is
-//! only meaningful if something measures it. This crate does exactly that for
-//! the six CPU-resident KPIs:
+//! 文档验收表中的每个数字都是一项*预算*，只有实际测量它才有意义。
+//! 本 crate 针对六项 CPU 常驻 KPI 完成该测量：
 //!
-//! | KPI | Budget |
+//!
+//! | KPI | 预算 |
 //! | --- | --- |
-//! | loose-quadtree viewport cull (1 M entities) | ≤ 150 µs |
-//! | single hit test | ≤ 5 µs |
-//! | viewport smart snapping | ≤ 50 µs |
-//! | one `RelayoutBoundary` solve (100 k nodes) | ≤ 200 µs |
-//! | headless verification (10 k nodes) | ≤ 1 000 µs |
-//! | theme LUT rebuild (1 024 tokens) | ≤ 50 µs |
+//! | 松散四叉树视口裁剪（100 万实体） | ≤ 150 µs |
+//! | 单次命中测试 | ≤ 5 µs |
+//! | 视口智能吸附 | ≤ 50 µs |
+//! | 单次 `RelayoutBoundary` 求解（10 万节点） | ≤ 200 µs |
+//! | 无头验证（1 万节点） | ≤ 1 000 µs |
+//! | 主题 LUT 重建（1 024 tokens） | ≤ 50 µs |
 //!
-//! The GPU-side rows (render time, MDI draw calls, PCIe upload) are asserted in
-//! `unbound-gpu`'s device tests, where a real `VkDevice` is available.
+//! GPU 侧条目（渲染耗时、MDI 绘制调用、PCIe 上传）在 `unbound-gpu` 的设备测试中
+//! 借助真实 `VkDevice` 进行断言。
 //!
-//! Measurements take the **median** of several runs, which is the statistic that
-//! survives a noisy, shared machine. A debug build runs roughly an order of
-//! magnitude slower than release, so the harness scales the budget instead of
-//! silently failing CI.
+//! 测量取多次运行的**中位数**，该统计量能在嘈杂的共享机器上保持稳定。
+//! debug 构建约比 release 慢一个数量级，因此测试框架会缩放预算，
+//! 避免在 CI 中静默失败。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -31,46 +31,46 @@ use unbound_input::{pick, CursorKind, HitRegion};
 use unbound_math::{Rect, Vec2};
 use unbound_world::UiWorld;
 
-/// One measured KPI.
+/// 单项实测 KPI。
 #[derive(Clone, Debug)]
 pub struct Measurement {
     pub name: &'static str,
-    /// What the doc requires, in microseconds.
+    /// 文档要求的目标上限（微秒）。
     pub budget_us: f64,
-    /// The aggregate of [`Self::samples`], in microseconds.
+    /// [`Self::samples`] 的聚合结果（微秒）。
     ///
-    /// Every KPI in this crate reports the **median** of its samples, so the
-    /// number on the table is always the statistic the crate documents — not
-    /// the fastest run, not a single sample, and never a literal.
+    /// 本 crate 中的每项 KPI 均报告样本的**中位数**，因此表中数字始终是
+    /// 文档规定的统计量——既非最快一次，也非单次样本，更绝非硬编码字面量。
+    ///
     pub observed_us: f64,
-    /// The raw timings the aggregate was computed from.
+    /// 用于计算聚合值的原始耗时样本。
     ///
-    /// Keeping them is what makes the measurement auditable: a reviewer can
-    /// recompute [`Self::observed_us`] from the samples and see that it is
-    /// the median rather than a plausible-looking constant.
+    /// 保留原始样本使测量可审计：审阅者可根据样本重新计算 [`Self::observed_us`]，
+    /// 确认其确为中位数而非看似合理的常量。
+    ///
     pub samples: Vec<f64>,
-    /// Extra context: scale of the measurement.
+    /// 额外上下文：测量的规模尺度。
     pub detail: String,
 }
 
 impl Measurement {
-    /// True when the observation fits the (scaled) budget.
+    /// 观测值满足（缩放后）预算时为 true。
     #[must_use]
     pub fn passes(&self, tolerance: f64) -> bool {
         self.observed_us <= self.budget_us * tolerance
     }
 }
 
-/// All measurements from one run.
+/// 单轮运行的全部测量结果。
 #[derive(Clone, Debug, Default)]
 pub struct Report {
     pub rows: Vec<Measurement>,
-    /// Budget multiplier applied to every row (1.0 in release, higher in debug).
+    /// 应用于每一行的预算倍率（release 为 1.0，debug 更高）。
     pub tolerance: f64,
 }
 
 impl Report {
-    /// Rows that exceeded their budget.
+    /// 超出预算的行。
     #[must_use]
     pub fn failures(&self) -> Vec<&Measurement> {
         self.rows
@@ -84,7 +84,7 @@ impl Report {
         self.failures().is_empty()
     }
 
-    /// Markdown table, pasted straight into a status report.
+    /// Markdown 表格，可直接粘贴至状态报告。
     #[must_use]
     pub fn to_markdown(&self) -> String {
         let mut out = String::new();
@@ -106,7 +106,7 @@ impl Report {
         out
     }
 
-    /// One-line summary per row, for a terminal.
+    /// 供终端输出的每行单行摘要。
     #[must_use]
     pub fn to_text(&self) -> String {
         let mut out = String::new();
@@ -136,19 +136,19 @@ fn format_us(us: f64) -> String {
     }
 }
 
-/// The median of a sample set.
+/// 样本集合的中位数。
 ///
-/// The median is the statistic that survives a noisy, shared machine: it
-/// ignores the outliers a single run produces without hiding a regression the
-/// way an average would.
+/// 中位数能在嘈杂的共享机器上保持稳健：它既能忽略单次运行的离群值，
+/// 又不会像平均值那样掩盖性能退化。
+///
 fn median(samples: &[f64]) -> f64 {
     let mut sorted = samples.to_vec();
     sorted.sort_unstable_by(|a, b| a.total_cmp(b));
-    // The upper median for an even count: the conservative side of the two.
+    // 偶数个样本时取上中位数：两者中更保守的一侧。
     sorted[sorted.len() / 2]
 }
 
-/// Run `f` `runs` times and report the median together with the raw samples.
+/// 运行 `f` 共 `runs` 次，报告中位数及原始样本。
 fn measure(runs: usize, mut f: impl FnMut(usize)) -> (f64, Vec<f64>) {
     assert!(runs > 0, "a measurement needs at least one run");
     let mut samples = Vec::with_capacity(runs);
@@ -162,7 +162,7 @@ fn measure(runs: usize, mut f: impl FnMut(usize)) -> (f64, Vec<f64>) {
     (observed, samples)
 }
 
-/// Run every CPU KPI.
+/// 运行全部 CPU KPI。
 #[must_use]
 pub fn measure_all() -> Report {
     let tolerance = if cfg!(debug_assertions) { 25.0 } else { 1.0 };
@@ -180,14 +180,14 @@ pub fn measure_all() -> Report {
     report
 }
 
-/// 1 000 000 entities, one 1920×1080 viewport query.
+/// 100 万实体，单次 1920×1080 视口查询。
 #[must_use]
 pub fn cull() -> Measurement {
     const ENTITIES: u32 = 1_000_000;
     const WORLD: f32 = 1_048_576.0;
     let mut tree = LooseQuadtree::new(WORLD);
     for i in 0..ENTITIES {
-        // Deterministic pseudo-random scatter over a 262 kpx square.
+        // 在 262 kpx 方形区域内确定性伪随机分布。
         let x = ((u64::from(i) * 7919) % 262_144) as f32 - 131_072.0;
         let y = ((u64::from(i) * 104_729) % 262_144) as f32 - 131_072.0;
         tree.insert(i, Rect::new(x, y, 16.0, 16.0), 0);
@@ -206,7 +206,7 @@ pub fn cull() -> Measurement {
     }
 }
 
-/// 1 000 000 entities, one 3840×2160 (4K UHD) viewport query.
+/// 100 万实体，单次 3840×2160（4K UHD）视口查询。
 #[must_use]
 pub fn cull_4k() -> Measurement {
     const ENTITIES: u32 = 1_000_000;
@@ -231,10 +231,10 @@ pub fn cull_4k() -> Measurement {
     }
 }
 
-/// One pick over a realistic overlay stack.
+/// 在真实覆盖层栈上执行单次拾取。
 #[must_use]
 pub fn hit_test() -> Measurement {
-    // 512 overlapping cards plus a toolbar and a dialogue on a portal layer.
+    // 512 张重叠卡片，外加工具栏与位于 portal 层的对话框。
     let mut regions = Vec::with_capacity(600);
     for i in 0..512u64 {
         let x = (i % 32) as f32 * 40.0;
@@ -248,10 +248,10 @@ pub fn hit_test() -> Measurement {
     let (observed, samples) = measure(200, |_| {
         let hit = pick(&regions, point);
         debug_assert!(hit.is_some());
-        // `black_box` keeps the call in a release build: `pick` is a pure
-        // function, and without a use for its result the optimiser is free to
-        // delete the whole thing — which would leave the KPI measuring
-        // nothing at all.
+        // `black_box` 确保在 release 构建中保留该调用：`pick` 是纯函数，
+        // 若不使用其结果，优化器会直接删除整个调用——导致 KPI 什么也没测到。
+        //
+        //
         std::hint::black_box(hit);
     });
     Measurement {
@@ -263,7 +263,7 @@ pub fn hit_test() -> Measurement {
     }
 }
 
-/// One snapping solve against a dense viewport.
+/// 针对密集视口的单次吸附求解。
 #[must_use]
 pub fn snap() -> Measurement {
     let mut tree = LooseQuadtree::new(65_536.0);
@@ -288,7 +288,7 @@ pub fn snap() -> Measurement {
     }
 }
 
-/// One `RelayoutBoundary` solve inside a 1 000 row list.
+/// 1 000 行列表中的单次 `RelayoutBoundary` 求解。
 #[must_use]
 pub fn layout_boundary() -> Measurement {
     use unbound_abi::desc::RawNodeDesc;
@@ -327,10 +327,10 @@ pub fn layout_boundary() -> Measurement {
     engine.solve(&mut world, root, Vec2::new(1200.0, 4000.0));
     let nodes = engine.node_count();
     let target = rows[500];
-    // The engine reports how many nodes the boundary solve actually touched.
-    // Reading it back is the point: a hard-coded "9" in the report would
-    // stay true even if the boundary grew or the engine re-solved the whole
-    // tree, and the number on the table is what a reviewer trusts.
+    // 引擎会报告边界求解实际触及的节点数。
+    // 读回该值正是关键所在：若报告里硬编码“9”，即便边界扩大或引擎重算整棵树
+    // 它也会依然为真；审阅者信任的是引擎实时返回的真实数字。
+    //
     let mut visited = 0u32;
     let (observed, samples) = measure(50, |_| {
         let stats = engine.solve_boundaries(&mut world, &[target], Vec2::new(1200.0, 4000.0));
@@ -345,7 +345,7 @@ pub fn layout_boundary() -> Measurement {
     }
 }
 
-/// Headless verification of a 10 001 node frame.
+/// 10 001 节点帧的无头验证。
 #[must_use]
 pub fn headless_verification() -> Measurement {
     let mut builder = FrameBuilder::new(Rect::new(0.0, 0.0, 4000.0, 4000.0));
@@ -378,10 +378,10 @@ pub fn headless_verification() -> Measurement {
     }
     builder.close();
     let frame = builder.build();
-    // The harness returns the time *it* measured, so the number is the
-    // verification's own — but it is a single sample, and one sample on a
-    // shared machine is whatever the scheduler happened to hand out. Take a
-    // median over repeated runs, like every other KPI here.
+    // 测试框架返回*它自己*测得的耗时，因此该数字确实来自验证自身——
+    // 但它只是单次样本，而共享机器上的单次样本完全取决于调度器。
+    // 与本 crate 其他 KPI 一样，对多次运行取中位数。
+    //
     let (observed, samples) = measure(20, |_| {
         let report = Harness::assert_clean(&frame);
         std::hint::black_box(report.nodes);
@@ -395,18 +395,18 @@ pub fn headless_verification() -> Measurement {
     }
 }
 
-/// Rebuild the 512-entry colour token LUT (`docs` §4.5).
+/// 重建 512 项颜色 token LUT（`docs` §4.5）。
 ///
-/// The budget is 0.05 ms for the *whole* switch, which includes rebuilding
-/// the table; the upload itself is a single 4 KiB write.
+/// *整个*切换过程的预算为 0.05 ms，包含重建查找表；
+/// 上传本身仅为一次 4 KiB 写入。
 #[must_use]
 pub fn theme_lut() -> Measurement {
     use unbound_theme::{ThemeKind, ThemeState};
 
     let mut state = ThemeState::default();
     let mut bytes = 0u32;
-    // Each round switches to a *different* theme, so every measurement is a
-    // genuine rebuild rather than a repeat of an already-warm table.
+    // 每轮切换到*不同*主题，确保每次测量都是真实重建，
+    // 而非重复命中已预热的表。
     let kinds = [
         ThemeKind::Dark,
         ThemeKind::Light,
@@ -418,7 +418,7 @@ pub fn theme_lut() -> Measurement {
     let (observed, samples) = measure(kinds.len(), |run| {
         let started = Instant::now();
         let outcome = state.switch(kinds[run]);
-        // Touch the table so the work cannot be optimised away.
+        // 读取查找表以防止工作被编译器优化消除。
         std::hint::black_box(state.lut().bytes());
         std::hint::black_box(started.elapsed());
         bytes = outcome.bytes_uploaded;
@@ -473,8 +473,8 @@ mod tests {
 
     #[test]
     fn measurements_are_not_vacuous() {
-        // Every measurement must actually do something: a zero-node cull or an
-        // empty frame would pass the budget for the wrong reason.
+        // 每次测量都必须真正执行工作：零节点裁剪或空帧会因错误原因通过预算。
+        //
         let cull = cull();
         assert!(cull.detail.contains("1000000 entities"));
         let snap = snap();
@@ -487,9 +487,9 @@ mod tests {
         assert!(hit.detail.contains("regions"));
     }
 
-    /// Every reported number has to be an aggregate of real samples, so a
-    /// reviewer can recompute it. A literal that merely *looks* like a
-    /// measurement is exactly what this rules out.
+    /// 每个报告数字都必须是真实样本的聚合结果，以便审阅者重新计算。
+    /// 这正是为了排除仅*看似*测量结果的字面量。
+    ///
     #[test]
     fn every_measurement_reports_the_median_of_its_own_samples() {
         for row in measure_all().rows {
@@ -510,8 +510,8 @@ mod tests {
         }
     }
 
-    /// The reported node count has to come from the frame, not from a literal
-    /// that happens to match today.
+    /// 报告的节点数必须来自帧本身，而非凑巧与今天相符的字面量。
+    ///
     #[test]
     fn the_headless_kpi_reports_the_frames_real_node_count() {
         let measurement = headless_verification();
@@ -520,12 +520,12 @@ mod tests {
             "unexpected detail: {}",
             measurement.detail
         );
-        // The frame really has 10 001 nodes: 1 root plus 5 000 pairs.
+        // 该帧确实包含 10 001 个节点：1 个根节点加上 5 000 对子节点。
         assert_eq!(measurement.detail, "10001 nodes");
     }
 
-    /// The layout KPI used to print a hard-coded "9 re-solved". The number
-    /// has to come from the engine's own statistics.
+    /// 布局 KPI 曾硬编码打印“9 re-solved”。该数字必须来自引擎自身的统计信息。
+    ///
     #[test]
     fn the_layout_kpi_reports_the_number_of_nodes_the_engine_re_solved() {
         let measurement = layout_boundary();
@@ -546,8 +546,8 @@ mod tests {
         );
     }
 
-    /// The theme KPI used to report the *fastest* of three switches. The
-    /// median is the honest number, and the budget has to hold for it.
+    /// 主题 KPI 曾报告三次切换中的*最快*一次。中位数才是诚实的数字，
+    /// 且预算必须对中位数成立。
     #[test]
     fn the_theme_kpi_is_not_the_best_of_several_runs() {
         let measurement = theme_lut();

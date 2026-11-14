@@ -1,34 +1,34 @@
-//! Type-safe view router stack & breadcrumb synchronization (S5.4).
+//! 类型安全的视图路由栈与面包屑同步（S5.4）。
 
 use unbound_widgets::breadcrumb::Crumb;
 
-/// Direction of the active route transition animation.
+/// 当前路由过渡动画的方向。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum TransitionDirection {
-    /// No transition currently playing.
+    /// 当前无过渡动画播放。
     #[default]
     None,
-    /// Pushing or navigating forward.
+    /// 推入或向前导航。
     Forward,
-    /// Popping or navigating backward.
+    /// 弹出或向后导航。
     Backward,
 }
 
-/// A single entry on the [`RouterStack`].
+/// [`RouterStack`] 上的单个路由条目。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteEntry {
-    /// Stable route identity.
+    /// 稳定的路由标识。
     pub id: u64,
-    /// Route name / path segment (e.g. `"settings"` or `"users/:id"`).
+    /// 路由名称 / 路径段（例如 `"settings"` 或 `"users/:id"`）。
     pub name: String,
-    /// Human-readable label shown in breadcrumbs.
+    /// 面包屑中展示的可读标签。
     pub label: String,
-    /// Key-value route parameters.
+    /// 键值对路由参数。
     pub params: Vec<(String, String)>,
 }
 
 impl RouteEntry {
-    /// Create a new route entry.
+    /// 创建新路由条目。
     #[must_use]
     pub fn new(id: u64, name: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
@@ -39,14 +39,14 @@ impl RouteEntry {
         }
     }
 
-    /// Attach a route parameter.
+    /// 附加一个路由参数。
     #[must_use]
     pub fn with_param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.params.push((key.into(), value.into()));
         self
     }
 
-    /// Look up a route parameter by key.
+    /// 按键查找路由参数。
     #[must_use]
     pub fn param(&self, key: &str) -> Option<&str> {
         self.params
@@ -56,8 +56,8 @@ impl RouteEntry {
     }
 }
 
-/// History-backed view navigation stack with forward/back, transition progress,
-/// and automatic [`BreadcrumbItem`] generation.
+/// 基于历史记录的视图导航栈，支持前进/后退、过渡进度与自动生成 [`BreadcrumbItem`]。
+///
 #[derive(Clone, Debug)]
 pub struct RouterStack {
     back_stack: Vec<RouteEntry>,
@@ -68,7 +68,7 @@ pub struct RouterStack {
 }
 
 impl RouterStack {
-    /// Create a router seeded with an initial root route.
+    /// 使用初始根路由创建路由器。
     #[must_use]
     pub fn new(root: RouteEntry) -> Self {
         Self {
@@ -80,7 +80,7 @@ impl RouterStack {
         }
     }
 
-    /// Current active route (top of `back_stack`).
+    /// 当前激活路由（`back_stack` 栈顶）。
     #[must_use]
     pub fn current(&self) -> &RouteEntry {
         self.back_stack
@@ -88,19 +88,19 @@ impl RouterStack {
             .expect("RouterStack always contains at least the root route")
     }
 
-    /// Full active breadcrumb trail from root to current route.
+    /// 从根路由到当前路由的完整激活面包屑路径。
     #[must_use]
     pub fn history(&self) -> &[RouteEntry] {
         &self.back_stack
     }
 
-    /// Routes available for [`Self::forward`].
+    /// 可供 [`Self::forward`] 前进的路由列表。
     #[must_use]
     pub fn forward_history(&self) -> &[RouteEntry] {
         &self.forward_stack
     }
 
-    /// Push a new route onto the stack, clearing the forward stack.
+    /// 推入新路由并清空前进栈。
     pub fn push(&mut self, entry: RouteEntry) {
         self.back_stack.push(entry);
         self.forward_stack.clear();
@@ -108,7 +108,7 @@ impl RouterStack {
         self.transition_progress = 0.0;
     }
 
-    /// Replace the current top route without growing history.
+    /// 替换当前栈顶路由而不增加历史记录。
     pub fn replace(&mut self, entry: RouteEntry) {
         if let Some(last) = self.back_stack.last_mut() {
             *last = entry;
@@ -119,7 +119,7 @@ impl RouterStack {
         self.transition_progress = 0.0;
     }
 
-    /// Pop the current route onto the forward stack (never pops the root).
+    /// 将当前路由弹出至前进栈（永不弹出根路由）。
     pub fn pop(&mut self) -> bool {
         if self.back_stack.len() <= 1 {
             return false;
@@ -134,7 +134,7 @@ impl RouterStack {
         }
     }
 
-    /// Navigate forward to the most recently popped route.
+    /// 向前导航至最近弹出的路由。
     pub fn forward(&mut self) -> bool {
         if let Some(next) = self.forward_stack.pop() {
             self.back_stack.push(next);
@@ -146,7 +146,7 @@ impl RouterStack {
         }
     }
 
-    /// Pop back to a specific route index in the history trail (e.g. clicking a breadcrumb).
+    /// 回退至历史路径中的指定路由索引（例如点击面包屑）。
     pub fn pop_to_index(&mut self, index: usize) -> bool {
         if index >= self.back_stack.len().saturating_sub(1) {
             return false;
@@ -161,25 +161,25 @@ impl RouterStack {
         true
     }
 
-    /// Whether [`Self::pop`] can go back.
+    /// [`Self::pop`] 是否可后退。
     #[must_use]
     pub fn can_pop(&self) -> bool {
         self.back_stack.len() > 1
     }
 
-    /// Whether [`Self::forward`] can advance.
+    /// [`Self::forward`] 是否可前进。
     #[must_use]
     pub fn can_forward(&self) -> bool {
         !self.forward_stack.is_empty()
     }
 
-    /// Current transition direction and normalized `[0.0, 1.0]` progress.
+    /// 当前过渡方向及归一化 `[0.0, 1.0]` 进度。
     #[must_use]
     pub fn transition(&self) -> (TransitionDirection, f32) {
         (self.transition_direction, self.transition_progress)
     }
 
-    /// Advance the route transition animation by `dt` seconds.
+    /// 按 `dt` 秒推进路由过渡动画。
     pub fn tick(&mut self, dt: f32) -> bool {
         if self.transition_direction == TransitionDirection::None {
             return false;
@@ -192,7 +192,7 @@ impl RouterStack {
         true
     }
 
-    /// Generate [`Crumb`]s synchronized with the current route stack.
+    /// 生成与当前路由栈同步的 [`Crumb`] 列表。
     #[must_use]
     pub fn breadcrumb_items(&self) -> Vec<Crumb> {
         self.back_stack

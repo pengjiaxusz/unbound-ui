@@ -1,61 +1,56 @@
-//! GPU timestamp queries.
+//! GPU 时间戳查询。
 //!
-//! The acceptance table in the design document states GPU budgets — 1.5 ms
-//! for 100 000 rounded, shadowed canvas nodes, 0.8 ms for 10 000 bézier
-//! connectors. A budget that is not measured is a wish, so the renderer can
-//! bracket its work with timestamps and report the real duration.
+//! 设计文档中的验收表规定了 GPU 耗时预算——10 万个带阴影圆角画布节点 1.5 ms、
+//! 1 万条 Bézier 连接线 0.8 ms。未经过测量的预算只是空谈，因此渲染器通过时间戳
+//! 包围各阶段工作并报告真实耗时。
 //!
-//! The mechanism is the standard one: a query pool of `u64` timestamps,
-//! `vkCmdWriteTimestamp` around the section of interest and
-//! `vkGetQueryPoolResults` back into host-visible memory. The raw values are
-//! GPU clock ticks; the device's `timestampPeriod` converts them to
-//! nanoseconds.
+//! 机制采用标准方式：`u64` 时间戳查询池、在目标区间前后调用 `vkCmdWriteTimestamp`，
+//! 再通过 `vkGetQueryPoolResults` 读回宿主可见内存。原始值为 GPU 时钟滴答数，
+//! 通过设备的 `timestampPeriod` 换算为纳秒。
 
 use ash::vk;
 
 use crate::device::{Gpu, GpuError};
 
-/// The GPU time of one frame, broken down by stage.
+/// 单帧按阶段拆分的 GPU 耗时。
 ///
-/// Every number is *cumulative*: the milliseconds from the start of the frame
-/// until the stage finished.
+/// 每个数值均为*累计值*：即从帧开始到该阶段结束经过的毫秒数。
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct FrameTiming {
-    /// The end of the scatter (the incremental upload) stage.
+    /// Scatter（增量上传）阶段结束时刻。
     pub scatter_ms: f32,
-    /// The end of the viewport cull.
+    /// 视口剔除阶段结束时刻。
     pub cull_ms: f32,
-    /// The end of the radix sort.
+    /// 基数排序阶段结束时刻。
     pub sort_ms: f32,
-    /// The end of the indirect command compaction.
+    /// 间接绘制命令压缩阶段结束时刻。
     pub indirect_ms: f32,
-    /// The end of the graphics pass.
+    /// 图形渲染 Pass 结束时刻。
     pub graphics_ms: f32,
-    /// The end of the frame.
+    /// 整帧结束时刻。
     pub total_ms: f32,
 }
 
-/// A pool of GPU timestamps.
+/// GPU 时间戳查询池。
 #[derive(Debug)]
 pub struct TimestampScope {
     pool: vk::QueryPool,
-    /// The number of timestamps in the pool.
+    /// 查询池中的时间戳数量。
     pub count: u32,
-    /// Nanoseconds per timestamp tick.
+    /// 每个时间戳滴答对应的纳秒数。
     period: f32,
-    /// The last raw values read back, in GPU ticks.
+    /// 最近一次读回的原始 GPU 滴答值。
     ///
-    /// The raw values are kept as `u64`: they are absolute timestamps of the
-    /// order of 10^18, and converting them to `f32` *milliseconds* first
-    /// would round away the very differences the scope exists to measure.
+    /// 原始值以 `u64` 保留：它们是 10^18 量级的绝对时间戳，若先转为 `f32` 毫秒
+    /// 会把本模块旨在测量的微小时间差完全舍入丢失。
     raw: Vec<u64>,
 }
 
 impl TimestampScope {
-    /// Create a scope with `count` timestamps.
+    /// 创建包含 `count` 个时间戳的作用域。
     ///
     /// # Errors
-    /// Returns [`GpuError::Vulkan`] when the query pool cannot be created.
+    /// 当查询池创建失败时返回 [`GpuError::Vulkan`]。
     pub fn new(gpu: &Gpu, count: u32) -> Result<Self, GpuError> {
         let count = count.max(1);
         let info = vk::QueryPoolCreateInfo::default()
@@ -71,29 +66,25 @@ impl TimestampScope {
         })
     }
 
-    /// The raw period, in nanoseconds per tick.
+    /// 原始时钟周期（每滴答对应的纳秒数）。
     #[must_use]
     pub const fn period(&self) -> f32 {
         self.period
     }
 
-    /// Reset every timestamp in the pool.
+    /// 重置查询池中的所有时间戳。
     ///
-    /// The reset happens on the host when `hostQueryReset` is available: a
-    /// reset recorded inside the command buffer races with the writes that
-    /// follow it, and the driver is free to reorder the two.
+    /// 当 `hostQueryReset` 可用时在宿主端执行重置：录制在命令缓冲区内的重置
+    /// 可能与随后的写入发生竞态，驱动有权对两者重排序。
     ///
-    /// Without the feature the reset has to be recorded in the command
-    /// buffer, so that it is ordered before the timestamps that follow it.
-    /// Call [`Self::reset_in_command_buffer`] in that case.
+    /// 若设备不支持该特性，则必须将重置命令录制到命令缓冲区中以保证顺序先于
+    /// 后续时间戳写入，此时请调用 [`Self::reset_in_command_buffer`]。
     ///
     /// # Errors
-    /// Returns [`GpuError::UnsupportedFeatures`] when the host cannot reset
-    /// the pool.
+    /// 当宿主端无法重置查询池时返回 [`GpuError::UnsupportedFeatures`]。
     pub fn reset(&self, gpu: &Gpu) -> Result<(), GpuError> {
         if gpu.features.host_query_reset {
-            // SAFETY: the pool is not in use: the frame that used it has
-            // retired.
+            // SAFETY: 查询池当前未被使用：使用过它的帧已退役。
             unsafe { gpu.device.reset_query_pool(self.pool, 0, self.count) };
             Ok(())
         } else {
@@ -101,33 +92,28 @@ impl TimestampScope {
         }
     }
 
-    /// Record the reset of the query pool inside a command buffer.
+    /// 在命令缓冲区内录制查询池重置命令。
     ///
-    /// This is the fallback for devices without `hostQueryReset`: the reset
-    /// has to be ordered before the timestamps that follow it, and only a
-    /// recorded command can guarantee that.
+    /// 这是不支持 `hostQueryReset` 设备上的回退方案：重置必须先于后续时间戳写入，
+    /// 唯有录制进命令缓冲区才能保证该顺序。
     ///
     /// # Safety
-    /// The command buffer must be in the recording state, must belong to
-    /// `gpu`, and must not already contain timestamps for this pool.
+    /// 命令缓冲区必须处于录制状态、属于 `gpu`，且尚未包含针对本查询池的时间戳。
     pub unsafe fn reset_in_command_buffer(&self, gpu: &Gpu, cmd: vk::CommandBuffer) {
-        // SAFETY: the caller guarantees the command buffer is recording and
-        // belongs to `gpu`.
+        // SAFETY: 调用方保证命令缓冲区处于录制状态且属于 `gpu`。
         unsafe {
             gpu.device
                 .cmd_reset_query_pool(cmd, self.pool, 0, self.count);
         }
     }
 
-    /// Write a timestamp into the command buffer.
+    /// 向命令缓冲区写入一个时间戳。
     ///
-    /// The stage decides *when* the timestamp is taken. `ALL_COMMANDS` is
-    /// deliberately avoided: it forces a full drain of the command buffer,
-    /// which makes the markers useless for locating a slow stage.
+    /// 管线阶段决定时间戳的采样时机。此处刻意避免使用 `ALL_COMMANDS`：
+    /// 它会强制排空整条命令缓冲区，使标记失去定位慢速阶段的作用。
     ///
     /// # Safety
-    /// The command buffer must be in the recording state and must belong to
-    /// `gpu`.
+    /// 命令缓冲区必须处于录制状态且属于 `gpu`。
     pub unsafe fn write_at(
         &self,
         gpu: &Gpu,
@@ -135,21 +121,19 @@ impl TimestampScope {
         index: u32,
         stage: vk::PipelineStageFlags,
     ) {
-        // SAFETY: the caller guarantees the command buffer is recording and
-        // belongs to `gpu`.
+        // SAFETY: 调用方保证命令缓冲区处于录制状态且属于 `gpu`。
         unsafe {
             gpu.device
                 .cmd_write_timestamp(command_buffer, stage, self.pool, index);
         }
     }
 
-    /// Write a timestamp into the command buffer.
+    /// 向命令缓冲区写入一个时间戳。
     ///
     /// # Safety
-    /// The command buffer must be in the recording state and must belong to
-    /// `gpu`.
+    /// 命令缓冲区必须处于录制状态且属于 `gpu`。
     pub unsafe fn write(&self, gpu: &Gpu, command_buffer: vk::CommandBuffer, index: u32) {
-        // SAFETY: the caller guarantees the command buffer is recording.
+        // SAFETY: 调用方保证命令缓冲区处于录制状态。
         unsafe {
             self.write_at(
                 gpu,
@@ -160,12 +144,12 @@ impl TimestampScope {
         };
     }
 
-    /// Read the timestamps back.
+    /// 读回所有时间戳。
     ///
-    /// Returns the timestamps in milliseconds since an arbitrary origin.
+    /// 返回以任意零点为基准的毫秒时间戳。
     ///
     /// # Errors
-    /// Returns [`GpuError::Vulkan`] when the results cannot be fetched.
+    /// 当无法获取查询结果时返回 [`GpuError::Vulkan`]。
     pub fn read(&mut self, gpu: &Gpu) -> Result<Vec<f32>, GpuError> {
         let mut raw = vec![0u64; self.count as usize];
         let result = unsafe {
@@ -181,13 +165,11 @@ impl TimestampScope {
         Ok(self.values())
     }
 
-    /// The elapsed milliseconds between two timestamps.
+    /// 计算两个时间戳之间经过的毫秒数。
     ///
-    /// The subtraction happens on the raw 64-bit ticks; only the *difference*
-    /// is converted to floating point.
+    /// 差值在原始 64 位滴答上完成，仅将*差值*转换为浮点数。
     ///
-    /// Returns `None` when the pair was not measured or the result is
-    /// unavailable.
+    /// 若该对时间戳未测量或结果不可用则返回 `None`。
     #[must_use]
     pub fn elapsed_ms(&self, from: usize, to: usize) -> Option<f32> {
         let start = self.raw.get(from).copied()?;
@@ -198,13 +180,13 @@ impl TimestampScope {
         Some((end - start) as f32 * self.period / 1_000_000.0)
     }
 
-    /// The number of timestamps that were read back.
+    /// 实际读回的时间戳数量。
     #[must_use]
     pub fn raw_len(&self) -> usize {
         self.raw.len()
     }
 
-    /// The frame timing, in cumulative milliseconds.
+    /// 帧耗时明细（累计毫秒数）。
     #[must_use]
     pub fn frame_timing(&self) -> FrameTiming {
         let at = |index: usize| self.elapsed_ms(0, index).unwrap_or(0.0);
@@ -218,10 +200,9 @@ impl TimestampScope {
         }
     }
 
-    /// The last values read back, in milliseconds.
+    /// 最近一次读回的时间戳值（毫秒）。
     ///
-    /// The values are absolute and large, so they are only useful as a
-    /// debugging aid; use [`Self::elapsed_ms`] to measure a duration.
+    /// 该值为绝对值且数值很大，仅作调试参考；测量时间段请使用 [`Self::elapsed_ms`]。
     #[must_use]
     pub fn values(&self) -> Vec<f32> {
         self.raw
@@ -230,7 +211,7 @@ impl TimestampScope {
             .collect()
     }
 
-    /// Destroy the query pool.
+    /// 销毁查询池。
     pub fn destroy(&self, gpu: &Gpu) {
         unsafe { gpu.device.destroy_query_pool(self.pool, None) };
     }
@@ -269,8 +250,7 @@ mod tests {
 
     #[test]
     fn a_large_absolute_timestamp_does_not_swallow_the_difference() {
-        // Absolute GPU timestamps are around 10^18 ticks; an `f32` would
-        // round a two-millisecond difference away completely.
+        // 绝对 GPU 时间戳约为 10^18 滴答；直接用 `f32` 会把 2 毫秒的差值完全舍入掉。
         let base = 1_794_370_484_994_390_592u64;
         let scope = scope(vec![base, base + 2_000_000, base + 4_000_000]);
         assert_eq!(scope.elapsed_ms(0, 1), Some(2.0));

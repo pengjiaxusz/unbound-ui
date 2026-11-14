@@ -1,12 +1,11 @@
 #version 460
 
 // ---------------------------------------------------------------------------
-// Opaque Core pre-pass fragment shader (docs §3.1).
+// 不透明核心预 Pass 片元着色器（参见 `docs/architecture/gpu-renderer.md`）。
 //
-// This pass exists only to write depth for large opaque containers so that the
-// hardware Early-Z unit can reject the thousands of primitives behind them. It
-// intentionally produces no colour output: the render target has zero colour
-// attachments and the shader has no outputs, so the whole pass is pure depth.
+// 此 Pass 仅用于为大型不透明容器写入深度，使硬件 Early-Z 单元能够剔除其后方的
+// 数千个图元。它刻意不产生任何颜色输出：渲染目标零颜色附件且着色器无输出，
+// 整个 Pass 为纯深度写入。
 // ---------------------------------------------------------------------------
 
 void main() {}

@@ -1,18 +1,18 @@
-//! Graphics and compute pipelines.
+//! 图形与计算管线。
 //!
-//! Two graphics pipelines cover every primitive in the engine:
+//! 两条图形管线覆盖引擎中的所有图元：
 //!
-//! | pipeline | depth | blend | used for |
+//! | 管线 | 深度 | 混合模式 | 用途 |
 //! | :--- | :--- | :--- | :--- |
-//! | `uber_normal` | test, no write | src-alpha / one-minus-src-alpha | 99% of the UI |
-//! | `uber_additive` | test, no write | one / one | highlights, cursor trails |
+//! | `uber_normal` | 测试不写入 | src-alpha / one-minus-src-alpha | 99% 的常规 UI |
+//! | `uber_additive` | 测试不写入 | one / one | 高亮、光标拖尾 |
 //!
-//! plus `opaque_core`, the depth-only prepass that lets the hardware Early-Z
-//! reject everything hidden behind a large panel (`docs` §3.1), and one compute
-//! pipeline per GPU-driven stage (cull, scatter, 3× radix, indirect).
+//! 此外还包括 `opaque_core`（仅写深度的预 Pass，使硬件 Early-Z 剔除大型面板后方
+//! 被遮挡的所有图元，参见 `docs/architecture/gpu-renderer.md`），以及各 GPU 驱动阶段的
+//! 计算管线（cull、scatter、3 趟 radix 排序、indirect 压缩）。
 //!
-//! Like [`crate::device`], this module is a thin wrapper over the Vulkan C API
-//! and therefore opts out of the crate-wide `unsafe_op_in_unsafe_fn` deny.
+//! 与 [`crate::device`] 类似，本模块是对 Vulkan C API 的薄封装，
+//! 因此关闭了 crate 级的 `unsafe_op_in_unsafe_fn` 拒绝检查。
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
@@ -21,37 +21,33 @@ use ash::vk;
 use crate::device::{Gpu, GpuError};
 use crate::shader;
 
-/// Colour format the pipelines are compiled against.
+/// 管线编译所针对的颜色附件格式。
 pub const COLOR_FORMAT: vk::Format = vk::Format::B8G8R8A8_SRGB;
-/// Depth format used by the prepass and the uber pass (reverse-Z).
+/// 预 Pass 与 uber Pass 使用的深度格式（反向 Z）。
 pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
-/// Number of bindless atlas layers per binding. 64 layers × 2048² R8 is 256 MiB
-/// of address space, but layers are allocated lazily and `PARTIALLY_BOUND`
-/// makes unused slots free.
+/// 每个绑定暴露的 Bindless 图集图层数。64 层 × 2048² R8 对应 256 MiB 地址空间，
+/// 但图层按需分配，且 `PARTIALLY_BOUND` 使未使用槽位零开销。
 pub const MAX_ATLAS_LAYERS: u32 = 64;
 
-/// First bindless RGBA slot available to caller-owned textures.
+/// 供外部纹理使用的首个 Bindless RGBA 槽位索引。
 ///
-/// Slots `0..EXTERNAL_TEXTURE_BASE` are the internal atlas pages; the remaining
-/// sixteen are registered at runtime through
-/// [`crate::frame::Renderer::register_external_texture`].
+/// `0..EXTERNAL_TEXTURE_BASE` 为内部图集页；其余 16 个槽位在运行时通过
+/// [`crate::frame::Renderer::register_external_texture`] 注册。
 pub const EXTERNAL_TEXTURE_BASE: u32 = 48;
-/// Number of bindless slots reserved for external textures.
+/// 为外部纹理预留的 Bindless 槽位数量。
 pub const EXTERNAL_TEXTURE_SLOTS: u32 = MAX_ATLAS_LAYERS - EXTERNAL_TEXTURE_BASE;
 
-/// Allocator for the external bindless slots.
+/// 外部 Bindless 槽位分配器。
 ///
-/// Kept separate from the device so the bookkeeping — the part that can be
-/// wrong in ways only a real frame would reveal — is unit-testable without a
-/// GPU.
+/// 与设备对象解耦，使槽位簿记逻辑无需 GPU 即可进行单元测试。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExternalTextureSlots {
     used: u32,
 }
 
 impl ExternalTextureSlots {
-    /// Reserve the lowest free slot, or `None` when all sixteen are taken.
+    /// 分配索引最小的空闲槽位；若 16 个槽位已满则返回 `None`。
     pub fn allocate(&mut self) -> Option<u32> {
         for bit in 0..EXTERNAL_TEXTURE_SLOTS {
             if self.used & (1 << bit) == 0 {
@@ -62,8 +58,7 @@ impl ExternalTextureSlots {
         None
     }
 
-    /// Release a slot returned by [`Self::allocate`]. Returns `false` when the
-    /// slot is outside the external range or already free.
+    /// 释放由 [`Self::allocate`] 返回的槽位。若槽位越界或本就空闲则返回 `false`。
     pub fn release(&mut self, slot: u32) -> bool {
         if !Self::owns(slot) {
             return false;
@@ -76,20 +71,20 @@ impl ExternalTextureSlots {
         true
     }
 
-    /// Whether `slot` belongs to the external range.
+    /// 判断 `slot` 是否属于外部纹理槽位范围。
     #[must_use]
     pub const fn owns(slot: u32) -> bool {
         slot >= EXTERNAL_TEXTURE_BASE && slot < MAX_ATLAS_LAYERS
     }
 
-    /// Number of slots currently reserved.
+    /// 当前已预留的外部槽位数量。
     #[must_use]
     pub const fn used(self) -> u32 {
         self.used.count_ones()
     }
 }
 
-/// Compute stages of the GPU-driven pipeline.
+/// GPU 驱动管线的各个计算阶段。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ComputeStage {
     Cull = 0,
@@ -98,8 +93,7 @@ pub enum ComputeStage {
     SortScan = 3,
     SortScatter = 4,
     Indirect = 5,
-    /// The MTSDF pack pass; it has its own shader because the 1D transform
-    /// needs shared memory that the pack pass must not pay for.
+    /// MTSDF 打包 Pass；独立使用单独着色器，避免承担 1D 变换所需的共享内存开销。
     MtsdfPack = 6,
 }
 
@@ -132,7 +126,7 @@ impl ComputeStage {
         }
     }
 
-    /// Workgroup size declared in the shader (`local_size_x`).
+    /// 着色器中声明的工作组大小（`local_size_x`）。
     #[must_use]
     pub const fn workgroup_size(self) -> u32 {
         match self {
@@ -144,7 +138,7 @@ impl ComputeStage {
     }
 }
 
-/// A 1×1 texture used to keep bindless slots well-defined.
+/// 用于保持 Bindless 槽位状态合法的 1×1 占位纹理。
 #[derive(Debug)]
 pub struct DummyTexture {
     pub image: vk::Image,
@@ -152,7 +146,7 @@ pub struct DummyTexture {
     pub view: vk::ImageView,
 }
 
-/// All pipelines and the single bindless descriptor set.
+/// 所有图形/计算管线以及全局唯一的 Bindless 描述符集。
 pub struct Pipelines {
     pub graphics_layout: vk::PipelineLayout,
     pub compute_layout: vk::PipelineLayout,
@@ -163,22 +157,22 @@ pub struct Pipelines {
     pub uber_additive: vk::Pipeline,
     pub opaque_core: vk::Pipeline,
     pub compute: [vk::Pipeline; ComputeStage::COUNT],
-    /// The backdrop-blur descriptor set layout: source sampler + storage image.
+    /// 背景模糊描述符集布局：源采样器 + 存储图像。
     pub blur_set_layout: vk::DescriptorSetLayout,
-    /// The layout shared by the two blur compute pipelines and the composite.
+    /// 两个模糊计算管线与背景合成管线共用的管线布局。
     pub blur_layout: vk::PipelineLayout,
-    /// The pool the blur descriptor sets come from.
+    /// 分配模糊描述符集的描述符池。
     pub blur_pool: vk::DescriptorPool,
-    /// Pre-allocated descriptor sets, one per blur pass.
+    /// 预分配的描述符集列表，每个模糊 Pass 对应一个。
     pub blur_sets: Vec<vk::DescriptorSet>,
     pub blur_down: vk::Pipeline,
     pub blur_up: vk::Pipeline,
-    /// The full-screen backdrop composite pipeline.
+    /// 全屏背景虚化合成图形管线。
     pub backdrop: vk::Pipeline,
     pub sampler: vk::Sampler,
     pub dummy_r8: DummyTexture,
     pub dummy_rgba: DummyTexture,
-    /// The real bindless atlases. `None` until the renderer installs them.
+    /// 真实的 Bindless 图集；在渲染器安装前为 `None`。
     pub atlases: Option<std::sync::Arc<crate::atlas::AtlasSet>>,
 }
 
@@ -196,7 +190,7 @@ fn shader_module(gpu: &Gpu, module: shader::ShaderModule) -> Result<vk::ShaderMo
     let words = module
         .words()
         .map_err(|e| GpuError::Allocation(format!("{}: {e}", module.name)))?;
-    // SAFETY: `words` is a well-formed SPIR-V blob (validated at build time).
+    // SAFETY: `words` 为格式正确的 SPIR-V 模块（已在构建期校验）。
     unsafe {
         gpu.device
             .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
@@ -205,13 +199,12 @@ fn shader_module(gpu: &Gpu, module: shader::ShaderModule) -> Result<vk::ShaderMo
 }
 
 impl Pipelines {
-    /// Build every pipeline for the given colour attachment format.
+    /// 针对给定的颜色附件格式构建所有管线。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn new(gpu: &Gpu) -> Result<Self, GpuError> {
-        // SAFETY: creation only; every object is owned by the returned struct
-        // and destroyed by `destroy`.
+        // SAFETY: 仅创建资源；所有对象均归返回的结构体所有，并由 `destroy` 统一销毁。
         unsafe { Self::new_inner(gpu) }
     }
 
@@ -219,9 +212,8 @@ impl Pipelines {
         let device = &gpu.device;
         let empty = vk::DescriptorSetLayoutBinding::default();
 
-        // ---- descriptor set layout ----------------------------------------
-        // binding 0/1: bindless atlas layers (R8 and RGBA8), binding 2: sorted
-        // primitive indices consumed by the vertex shader.
+        // 描述符集布局
+        // binding 0/1：Bindless 图集图层（R8 与 RGBA8）；binding 2：供顶点着色器读取的已排序图元索引。
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
@@ -260,7 +252,7 @@ impl Pipelines {
             )
             .map_err(GpuError::from)?;
 
-        // ---- pipeline layouts ---------------------------------------------
+        // 管线布局
         let set_layouts = [set_layout];
         let pc_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
@@ -288,7 +280,7 @@ impl Pipelines {
             )
             .map_err(GpuError::from)?;
 
-        // ---- modules -------------------------------------------------------
+        // 着色器模块
         let vert = shader_module(gpu, shader::uber_vert())?;
         let frag = shader_module(gpu, shader::uber_frag())?;
         let opaque_frag = shader_module(gpu, shader::opaque_core_frag())?;
@@ -327,8 +319,8 @@ impl Pipelines {
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
-        // Reverse-Z: nearest == 1.0, so "greater or equal" passes for closer
-        // fragments. The opaque prepass writes depth, the uber pass only tests.
+        // 反向 Z：最近为 1.0，因此“大于等于”通过测试的片元更近。
+        // 不透明预 Pass 写入深度，uber Pass 仅执行深度测试。
         let depth_test_no_write = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(true)
             .depth_write_enable(false)
@@ -350,7 +342,7 @@ impl Pipelines {
             .color_attachment_formats(&color_formats)
             .depth_attachment_format(DEPTH_FORMAT);
 
-        // ---- blend states ---------------------------------------------------
+        // 混合状态
         let alpha_blend = vk::PipelineColorBlendAttachmentState::default()
             .blend_enable(true)
             .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
@@ -417,10 +409,8 @@ impl Pipelines {
             &mut rendering,
         )?;
 
-        // The opaque prepass must still declare the *same* attachment formats as
-        // the dynamic-rendering pass it runs inside — a pipeline with zero
-        // colour attachments is invalid there. Colour writes are masked off
-        // instead, which costs nothing and keeps the pass purely depth.
+        // 不透明预 Pass 仍须声明与所属动态渲染 Pass 相同的附件格式——在其中声明零颜色
+        // 附件是非法的。此处改为屏蔽颜色写入掩码，零额外开销且保持纯深度写入。
         let mut depth_only = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_formats)
             .depth_attachment_format(DEPTH_FORMAT);
@@ -442,7 +432,7 @@ impl Pipelines {
         device.destroy_shader_module(opaque_frag, None);
         device.destroy_shader_module(opaque_vert, None);
 
-        // ---- compute pipelines ---------------------------------------------
+        // 计算管线
         let mut compute = [vk::Pipeline::null(); ComputeStage::COUNT];
         for stage in ComputeStage::all() {
             let module = shader_module(gpu, stage.module())?;
@@ -463,10 +453,8 @@ impl Pipelines {
             compute[stage as usize] = pipeline;
         }
 
-        // ---- backdrop blur ---------------------------------------------------
-        // One sampler for the source, one storage image for the destination.
-        // The same layout is reused by the composite pass, which only needs
-        // the sampler.
+        // 背景模糊
+        // 一个源纹理采样器，一个目标存储图像。合成 Pass 复用同一布局（仅使用其中采样器）。
         let blur_bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
@@ -525,9 +513,8 @@ impl Pipelines {
         let blur_down = make_compute(shader::blur_down())?;
         let blur_up = make_compute(shader::blur_up())?;
 
-        // The composite is a plain alpha-blended full-screen triangle with no
-        // depth attachment: it runs after the main pass and only paints the
-        // blurred backdrop inside the requesting rectangle.
+        // 合成管线为无深度附件的普通 Alpha 混合全屏三角形：在主 Pass 之后运行，
+        // 仅在请求矩形区域内绘制模糊背景。
         let backdrop = {
             let vert = shader_module(gpu, shader::backdrop_vert())?;
             let frag = shader_module(gpu, shader::backdrop_frag())?;
@@ -585,9 +572,8 @@ impl Pipelines {
                 None,
             )
             .map_err(GpuError::from)?;
-        // Four sets per blur round plus one for the composite. A descriptor
-        // set cannot be rebound while a recorded dispatch that uses it is
-        // pending, so each round gets its own.
+        // 每轮模糊 4 个描述符集外加合成 Pass 1 个。当使用某描述符集的已录制调度仍在执行时
+        // 不可重绑该集，因此每轮分配独立描述符集。
         let blur_layouts = [blur_set_layout; 13];
         let blur_sets = device
             .allocate_descriptor_sets(
@@ -597,7 +583,7 @@ impl Pipelines {
             )
             .map_err(GpuError::from)?;
 
-        // ---- descriptor pool + set ------------------------------------------
+        // 描述符池与描述符集
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -624,7 +610,7 @@ impl Pipelines {
             )
             .map_err(GpuError::from)?[0];
 
-        // ---- sampler + dummy textures ---------------------------------------
+        // 采样器与占位纹理
         let sampler = device
             .create_sampler(
                 &vk::SamplerCreateInfo::default()
@@ -698,19 +684,18 @@ impl Pipelines {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(&rgba_infos),
         ];
-        // SAFETY: descriptors belong to `self.set` and the images are alive.
+        // SAFETY: 描述符属于 `self.set` 且图像均处于存活状态。
         unsafe { gpu.device.update_descriptor_sets(&writes, &[]) };
         Ok(())
     }
 
-    /// Install the real atlases and rebind the bindless descriptor slots.
+    /// 安装真实图集并重绑 Bindless 描述符槽位。
     ///
-    /// Until this is called every slot points at a 1x1 dummy texture, so a
-    /// glyph or image primitive samples nothing. After it, slot `n` of
-    /// binding 0/1 addresses layer `n` of the `R8`/`RGBA8` atlas.
+    /// 调用此方法前，所有槽位均指向 1x1 占位纹理；调用后，binding 0/1 的第 `n` 个
+    /// 槽位分别指向 `R8`/`RGBA8` 图集的第 `n` 层。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn install_atlases(
         &mut self,
         gpu: &Gpu,
@@ -724,9 +709,8 @@ impl Pipelines {
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             })
             .collect();
-        // Only the internal pages are rewritten: slots at and above
-        // `EXTERNAL_TEXTURE_BASE` are caller-owned and may already point at a
-        // registered texture.
+        // 仅重写内部图集页对应的槽位：`EXTERNAL_TEXTURE_BASE` 及以上槽位归调用方所有，
+        // 可能已指向已注册的外部纹理。
         debug_assert!(
             atlases.rgba.layers() <= EXTERNAL_TEXTURE_BASE,
             "the RGBA atlas grew past its {} bindless pages",
@@ -757,22 +741,19 @@ impl Pipelines {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(&rgba),
         ];
-        // SAFETY: the descriptors belong to `self.set` and the images are alive
-        // for as long as the `Arc` is held.
+        // SAFETY: 描述符属于 `self.set`，且只要持有 `Arc`，对应图像即保持存活。
         unsafe { gpu.device.update_descriptor_sets(&writes, &[]) };
         self.atlases = Some(atlases);
         Ok(())
     }
 
-    /// Point one external bindless slot at a caller-owned texture.
+    /// 将指定外部 Bindless 槽位指向调用方持有的纹理。
     ///
-    /// `slot` must come from [`ExternalTextureSlots::allocate`]. The caller
-    /// keeps ownership of both handles and must keep them alive until the slot
-    /// is released.
+    /// `slot` 必须来自 [`ExternalTextureSlots::allocate`]。调用方保留句柄所有权，
+    /// 并须在槽位释放前保证纹理视图与采样器存活。
     ///
     /// # Errors
-    /// Returns [`GpuError::InvalidArgument`] when `slot` is not an external
-    /// slot.
+    /// 当 `slot` 不属于外部槽位范围时返回 [`GpuError::InvalidArgument`]。
     pub fn bind_external_texture(
         &self,
         gpu: &Gpu,
@@ -796,17 +777,15 @@ impl Pipelines {
             .dst_array_element(slot)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(&info);
-        // SAFETY: the descriptor belongs to `self.set`; the caller guarantees
-        // the view and sampler outlive the slot.
+        // SAFETY: 描述符属于 `self.set`；调用方保证视图与采样器的生命周期长于槽位。
         unsafe { gpu.device.update_descriptor_sets(&[write], &[]) };
         Ok(())
     }
 
-    /// Restore a released external slot to the 1×1 dummy texture.
+    /// 将已释放的外部槽位恢复为 1×1 占位纹理。
     ///
     /// # Errors
-    /// Returns [`GpuError::InvalidArgument`] when `slot` is not an external
-    /// slot.
+    /// 当 `slot` 不属于外部槽位范围时返回 [`GpuError::InvalidArgument`]。
     pub fn unbind_external_texture(&self, gpu: &Gpu, slot: u32) -> Result<(), GpuError> {
         if !ExternalTextureSlots::owns(slot) {
             return Err(GpuError::InvalidArgument(format!(
@@ -816,10 +795,10 @@ impl Pipelines {
         self.bind_external_texture(gpu, slot, self.dummy_rgba.view, self.sampler)
     }
 
-    /// Point the vertex shader's index binding at the frame's sorted list.
+    /// 将顶点着色器的索引绑定指向当前帧的已排序索引列表。
     ///
     /// # Safety
-    /// `buffer` must stay alive while any frame referencing it is in flight.
+    /// 在任何引用该缓冲区的帧处于在飞状态期间，`buffer` 必须保持存活。
     pub unsafe fn bind_sorted_indices(&self, gpu: &Gpu, buffer: &crate::device::Buffer) {
         let info = [vk::DescriptorBufferInfo::default()
             .buffer(buffer.raw)
@@ -833,13 +812,12 @@ impl Pipelines {
         gpu.device.update_descriptor_sets(&[write], &[]);
     }
 
-    /// Point one of the pre-allocated blur sets at a source/destination pair.
+    /// 将一个预分配的模糊描述符集绑定到指定源/目标图像对。
     ///
-    /// The renderer only calls this when either image view changed, so the
-    /// steady-state frame does no descriptor writes at all.
+    /// 渲染器仅在任一图像视图变化时调用此方法，因此稳态帧完全不执行描述符写入。
     ///
     /// # Safety
-    /// The set must not be in use by an in-flight frame.
+    /// 该描述符集当前不得被任何在飞帧使用。
     pub unsafe fn update_blur_set(
         &self,
         gpu: &Gpu,
@@ -872,7 +850,7 @@ impl Pipelines {
     }
 
     /// # Safety
-    /// The device must be idle.
+    /// 设备必须处于空闲状态。
     pub unsafe fn destroy(&self, gpu: &Gpu) {
         let device = &gpu.device;
         device.destroy_pipeline(self.uber_normal, None);
@@ -936,8 +914,7 @@ unsafe fn create_dummy_texture(gpu: &Gpu, format: vk::Format) -> Result<DummyTex
     )?;
     device.bind_image_memory(image, memory, 0)?;
 
-    // Transition to shader-read and clear to white so an unbound slot reads as
-    // an opaque white texel rather than undefined garbage.
+    // 转换到着色器可读布局并清除为纯白，使未绑定槽位采样结果为不透明白色而非未定义垃圾数据。
     let cmd = gpu.begin_single_time()?;
     let barrier = vk::ImageMemoryBarrier2::default()
         .src_stage_mask(vk::PipelineStageFlags2::NONE)
@@ -1058,7 +1035,7 @@ mod tests {
         let pipelines = Pipelines::new(&gpu).expect("pipelines");
         assert_ne!(pipelines.uber_normal, vk::Pipeline::null());
         assert_ne!(pipelines.opaque_core, vk::Pipeline::null());
-        // SAFETY: nothing is in flight.
+        // SAFETY: 无在飞任务。
         unsafe { pipelines.destroy(&gpu) };
         gpu.destroy();
     }

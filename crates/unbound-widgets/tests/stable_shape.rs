@@ -1,25 +1,25 @@
-//! Every standard control keeps a constant primitive count across states.
+//! 每个标准控件在各状态下都保持恒定的图元数量。
 //!
-//! The renderer can repair a *paint* change by patching the slices that
-//! changed, but only while the scene's shape stays the same: a primitive that
-//! appears or disappears renumbers every primitive after it, and the whole
-//! pool has to be rewritten. Hovering a control is the most common thing a UI
-//! does, so the controls promise the cheap path:
+//! 渲染器可以通过修补发生变化的切片来修复*绘制*变更，但前提是场景结构保持不变：
+//! 图元的出现或消失会使其后所有图元重新编号，从而迫使整个图元池重写。
+//! 悬停控件是 UI 中最常见的操作，因此控件保证走低开销路径：
 //!
-//! > a control's state never changes how many primitives it emits.
 //!
-//! A state that needs a different appearance changes the *fields* of a
-//! primitive — its colour slot, its border width, its opacity — never the
-//! number of primitives.
 //!
-//! The probe is catalog-driven: [`unbound_widgets::catalog::probe_widget`]
-//! runs every component's genuine emitter, and its exhaustive `match` is the
-//! compile-time gate that keeps a new component from skipping this contract.
+//! > 控件的状态绝不会改变其输出的图元数量。
+//!
+//!
+//! 需要不同外观的状态仅修改图元的*字段*——颜色槽位、边框宽度、不透明度——而绝不改变图元数量。
+//!
+//!
+//!
+//! 该探针由目录驱动：[`unbound_widgets::catalog::probe_widget`] 运行每个组件的真实输出器，
+//! 其详尽 `match` 是编译期门禁，防止新组件绕过此契约。
 
 use unbound_widgets::catalog::probe_widget;
 use unbound_widgets::{ControlState, PointerPhase, WidgetCatalogId};
 
-/// Every state a control can be in: phase × focused × disabled × selected.
+/// 控件可能处于的每一种状态组合：阶段 × 聚焦 × 禁用 × 选中。
 fn states() -> Vec<ControlState> {
     let mut states = Vec::new();
     for phase in [
@@ -43,23 +43,22 @@ fn states() -> Vec<ControlState> {
     states
 }
 
-/// Components whose primitives legitimately do not change on hover.
+/// 悬停时合法不改变图元的组件列表。
 ///
-/// Each entry is inert for a documented reason, not by accident:
+/// 每个条目保持惰性都有明确记录的原因，而非疏漏：
 ///
-/// * Decorative / read-only surfaces never answer the pointer:
-///   `Divider`, `Skeleton`, `Progress`, `Image`, `Avatar`, `RichText`,
-///   `Containers`, `Form` (layout + validation only).
-/// * Overlay chrome reacts to `disabled`/`focused` but has no hover wash of
-///   its own: `Modal`, `Drawer`, `AlertDialog`, `Popover`, `Tooltip`,
-///   `HoverCard`, `Alert` (focus ring only), `Toast` (opacity only).
-/// * Components whose hover highlight lives in their own interaction state
-///   (`MenuState::highlighted`, `ChartState::hover`, `TableState`,
-///   `PropertyGridState`, …) rather than in `ControlState::phase`:
-///   `Menu`, `ContextMenu`, `Chart`, `Table`, `PropertyGrid`, `CommandPalette`,
-///   `Breadcrumb`, `ColorPicker`, `CurveEditor`, `DatePicker`, `Minimap`,
-///   `Gizmo`, `NodeGraph`, `Ruler`.
-/// * `Overlay` is pure placement/stack bookkeeping and emits no primitives.
+/// * 装饰性 / 只读表面从不响应指针：
+///   `Divider`、`Skeleton`、`Progress`、`Image`、`Avatar`、`RichText`、
+///   `Containers`、`Form`（仅布局与校验）。
+/// * 浮层外框响应 `disabled`/`focused`，但自身没有悬停底色：
+///   `Modal`、`Drawer`、`AlertDialog`、`Popover`、`Tooltip`、
+///   `HoverCard`、`Alert`（仅焦点环）、`Toast`（仅不透明度）。
+/// * 悬停高亮驻留在各自交互状态（如 `MenuState::highlighted`、`ChartState::hover`、
+///   `TableState`、`PropertyGridState` 等）而非 `ControlState::phase` 中的组件：
+///   `Menu`、`ContextMenu`、`Chart`、`Table`、`PropertyGrid`、`CommandPalette`、
+///   `Breadcrumb`、`ColorPicker`、`CurveEditor`、`DatePicker`、`Minimap`、
+///   `Gizmo`、`NodeGraph`、`Ruler`。
+/// * `Overlay` 仅做定位/栈记账，不输出任何图元。
 const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::Alert,
     WidgetCatalogId::AlertDialog,
@@ -113,9 +112,9 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::Wrap,
 ];
 
-/// The compile-time gate, mirrored in the test crate: an exhaustive `match`
-/// over the catalog with no wildcard. A new variant fails to compile here
-/// until it is named, exactly like the probe in `catalog.rs`.
+/// 在测试 crate 中镜像的编译期门禁：无通配符的详尽 `match`。
+/// 新变体在命名处理前无法通过编译，与 `catalog.rs` 中的探针一致。
+///
 fn component_name(id: WidgetCatalogId) -> &'static str {
     match id {
         WidgetCatalogId::Accordion => "accordion",
@@ -243,13 +242,13 @@ fn no_control_changes_its_primitive_count_between_states() {
     );
 }
 
-/// The probe must not be vacuous: a hover has to change *something*.
+/// 探针不得流于形式：悬停必须实际改变*某些字段*。
 ///
-/// If every state painted identically the shape test above would pass while
-/// proving nothing, so this one states the other half of the contract: a
-/// state change is a change of fields, which is exactly the patch the
-/// renderer can apply. Components listed in [`INERT_BY_DESIGN`] are exempt
-/// for the documented reasons above.
+/// 若所有状态绘制完全相同，上方的形状测试虽会通过却毫无意义，因此本测试断言契约的另一半：
+/// 状态变更即字段变更，这正是渲染器可直接修补的部分。
+/// 上方 [`INERT_BY_DESIGN`] 中列出的组件因已记录的原因豁免。
+///
+///
 #[test]
 fn every_interactive_control_paints_differently_when_hovered() {
     let idle = ControlState {
@@ -278,8 +277,8 @@ fn every_interactive_control_paints_differently_when_hovered() {
 fn the_probe_covers_every_component() {
     let mut probed = Vec::new();
     for &id in WidgetCatalogId::ALL {
-        // The exhaustive match is the gate; the witness proves the probe
-        // really ran this component's emitter.
+        // 详尽 match 是门禁；witness 证明探针确实运行了该组件的输出器。
+        //
         let name = component_name(id);
         assert_eq!(name, id.module_name());
         let probe = probe_widget(id, ControlState::default());

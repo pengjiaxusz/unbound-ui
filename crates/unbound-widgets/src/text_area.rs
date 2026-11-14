@@ -1,18 +1,14 @@
-//! The multi-line editor: vertical caret movement over wrapped lines.
+//! 多行文本编辑器：跨折行的垂直光标移动。
 //!
-//! [`TextEditState`] owns the buffer and every UTF-8 rule; this module adds
-//! only what a *multi-line* field needs:
+//! [`TextEditState`] 持有文本缓冲区与所有 UTF-8 规则；本模块仅补充*多行*输入框所需的功能：
 //!
-//! * a newline insertion reducer,
-//! * vertical movement over a caller-supplied list of visual lines with a
-//!   remembered target column, so moving through a paragraph does not make the
-//!   caret drift left, and
-//! * a vertical scroll spring.
+//! * 换行符插入归约器；
+//! * 基于调用方传入视觉行列表的垂直移动（带目标列记忆功能），
+//!   使光标穿越段落时不会向左漂移；以及
+//! * 垂直滚动弹簧。
 //!
-//! The caller still owns shaping. It passes the wrapped lines as byte ranges
-//! ([`AreaLine`]) and the merged selection slots, which keeps this module free
-//! of font dependencies while producing the same rounded selection geometry
-//! the rest of the text stack draws.
+//! 调用方仍负责文本塑形。它以字节区间（[`AreaLine`]）与合并后的选区槽位形式传入折行结果，
+//! 既使本模块免于字体依赖，又能生成与文本栈其余部分一致的圆角选区几何形状。
 
 use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yNode};
@@ -31,32 +27,32 @@ use crate::text_input::{
 };
 use crate::{ControlState, WidgetOutput};
 
-/// Horizontal padding between the border and the text.
+/// 边框与文本之间的水平内边距。
 pub const AREA_PADDING: f32 = 10.0;
-/// The default corner radius.
+/// 默认圆角半径。
 pub const AREA_RADIUS: f32 = 8.0;
 
-/// One visual (already wrapped) line as a byte range.
+/// 以字节区间表示的单条视觉行（已完成折行）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AreaLine {
-    /// The first byte of the line.
+    /// 该行的起始字节偏移。
     pub start: usize,
-    /// One past the last byte of the line.
+    /// 该行末尾字节之后的偏移（开区间）。
     pub end: usize,
 }
 
 impl AreaLine {
-    /// A line covering `start..end`.
+    /// 创建覆盖 `start..end` 的行。
     #[must_use]
     pub const fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
 }
 
-/// Split `text` on `\n`, ignoring `\r`.
+/// 按 `\n` 拆分 `text`（忽略 `\r`）。
 ///
-/// The result always has at least one line, so `"a\n"` ends with an empty
-/// line — the caret can sit there, which is what an editor is expected to do.
+/// 结果至少包含一行，因此 `"a\n"` 会以一个空行结尾——光标可以停留在那里，
+/// 符合编辑器的常规行为。
 #[must_use]
 pub fn logical_lines(text: &str) -> Vec<AreaLine> {
     let mut lines = Vec::new();
@@ -76,31 +72,31 @@ pub fn logical_lines(text: &str) -> Vec<AreaLine> {
     lines
 }
 
-/// The pure descriptor of a multi-line field.
+/// 多行文本输入框的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextAreaDesc {
-    /// The field rectangle.
+    /// 输入框矩形。
     pub rect: Rect,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The placeholder shown while the buffer is empty.
+    /// 缓冲区为空时显示的占位文本。
     pub placeholder: String,
-    /// The field refuses interaction.
+    /// 是否禁用交互。
     pub disabled: bool,
-    /// The text can be selected but not edited.
+    /// 文本可选中但不可编辑。
     pub read_only: bool,
-    /// The maximum buffer length in bytes.
+    /// 缓冲区最大字节长度。
     pub max_bytes: usize,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
-    /// The corner radius.
+    /// 圆角半径。
     pub radius: f32,
-    /// The line height used by the caller's shaping.
+    /// 调用方塑形所用的行高。
     pub line_height: f32,
 }
 
 impl TextAreaDesc {
-    /// A field with the default metrics.
+    /// 使用默认尺寸创建的输入框。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -116,7 +112,7 @@ impl TextAreaDesc {
         }
     }
 
-    /// The rectangle the text is drawn into.
+    /// 文本绘制的目标矩形。
     #[must_use]
     pub fn text_rect(&self) -> Rect {
         Rect::new(
@@ -132,19 +128,19 @@ impl TextAreaDesc {
     }
 }
 
-/// The live state of a multi-line field.
+/// 多行文本输入框的实时状态。
 #[derive(Clone, Debug)]
 pub struct TextAreaState {
-    /// The shared text buffer, caret and selection.
+    /// 共用的文本缓冲区、光标与选区状态。
     pub edit: TextEditState,
-    /// The vertical column vertical movement tries to keep.
+    /// 垂直移动时尝试保持的目标列。
     preferred_column: Option<usize>,
-    /// The vertical scroll offset.
+    /// 垂直滚动偏移量。
     pub scroll: ScrollState,
 }
 
 impl TextAreaState {
-    /// An empty field.
+    /// 创建空输入框状态。
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -154,7 +150,7 @@ impl TextAreaState {
         }
     }
 
-    /// A field holding `text`.
+    /// 创建持有初始文本 `text` 的输入框状态。
     #[must_use]
     pub fn with_text(text: impl Into<String>) -> Self {
         Self {
@@ -164,24 +160,24 @@ impl TextAreaState {
         }
     }
 
-    /// The buffer.
+    /// 文本缓冲区引用。
     #[must_use]
     pub fn text(&self) -> &str {
         self.edit.text()
     }
 
-    /// The remembered target column, if vertical movement is in progress.
+    /// 若正在进行垂直移动，返回记忆的目标列。
     #[must_use]
     pub fn preferred_column(&self) -> Option<usize> {
         self.preferred_column
     }
 
-    /// Forget the target column; a horizontal edit moves the anchor.
+    /// 清除记忆的目标列；水平编辑会移动锚点。
     pub fn clear_preferred(&mut self) {
         self.preferred_column = None;
     }
 
-    /// Position the caret by clicking at `local_pos` (relative to text_rect origin).
+    /// 通过点击 `local_pos`（相对于 text_rect 原点）定位光标。
     pub fn pointer_down_at(
         &mut self,
         shaped: &unbound_text::ShapedText,
@@ -193,14 +189,14 @@ impl TextAreaState {
         self.edit.set_cursor(offset, extend);
     }
 
-    /// Extend the selection while dragging to `local_pos` (relative to text_rect origin).
+    /// 拖拽到 `local_pos`（相对于 text_rect 原点）时扩展选区。
     pub fn drag_to(&mut self, shaped: &unbound_text::ShapedText, local_pos: Vec2) {
         self.preferred_column = None;
         let offset = shaped.hit_byte_index(self.edit.text(), local_pos + self.scroll.offset());
         self.edit.set_cursor(offset, true);
     }
 
-    /// Insert a newline at the caret.
+    /// 在光标处插入换行符。
     pub fn insert_newline(&mut self, desc: &TextAreaDesc) -> bool {
         if !desc.editable() {
             return false;
@@ -210,8 +206,7 @@ impl TextAreaState {
         true
     }
 
-    /// Route a text event to the buffer, clearing the target column for any
-    /// event that moves the caret horizontally.
+    /// 将文本事件路由至缓冲区，并在任何水平移动光标的事件后清除目标列。
     pub fn handle_event(
         &mut self,
         desc: &TextAreaDesc,
@@ -236,7 +231,7 @@ impl TextAreaState {
         reduce_text_input(&editor, &mut self.edit, event)
     }
 
-    /// The index of the line containing `cursor`.
+    /// 包含 `cursor` 的行索引。
     #[must_use]
     pub fn line_index(lines: &[AreaLine], cursor: usize) -> Option<usize> {
         if lines.is_empty() {
@@ -248,17 +243,16 @@ impl TextAreaState {
             .or(Some(lines.len() - 1))
     }
 
-    /// The caret offset.
+    /// 光标字节偏移量。
     #[must_use]
     pub fn caret(&self) -> usize {
         self.edit.cursor()
     }
 
-    /// Move the caret up or down one visual line.
+    /// 将光标向上或向下移动一个视觉行。
     ///
-    /// The byte column is remembered (`preferred_column`) so a caret that
-    /// leaves a long line for a short one and comes back lands where it
-    /// started instead of at the short line's end.
+    /// 字节列会被记忆（`preferred_column`），因此光标从长行移入短行再移回时，
+    /// 会落回起始列而非停留在短行末尾。
     pub fn move_vertical(&mut self, lines: &[AreaLine], delta: isize, extend: bool) -> bool {
         if lines.is_empty() {
             return false;
@@ -285,13 +279,13 @@ impl TextAreaState {
         true
     }
 
-    /// Move by a whole logical paragraph (`Ctrl+Up` / `Ctrl+Down`).
+    /// 按整段逻辑段落移动（`Ctrl+Up` / `Ctrl+Down`）。
     pub fn move_paragraph(&mut self, delta: isize, extend: bool) -> bool {
         let lines = logical_lines(self.edit.text());
         self.move_vertical(&lines, delta, extend)
     }
 
-    /// Scroll by a pixel delta, clamped to the content.
+    /// 按像素增量滚动并夹紧到内容范围。
     pub fn scroll_by(&mut self, desc: &TextAreaDesc, dy: f32, content_height: f32) -> bool {
         let viewport = desc.text_rect();
         let scroll_desc = ScrollViewDesc::new(viewport, Vec2::new(viewport.size.x, content_height));
@@ -300,7 +294,7 @@ impl TextAreaState {
         (self.scroll.target().y - before).abs() > f32::EPSILON
     }
 
-    /// Advance the scroll spring.
+    /// 推进滚动弹簧动画。
     pub fn step(&mut self, desc: &TextAreaDesc, dt: f32, content_height: f32) -> bool {
         let viewport = desc.text_rect();
         let scroll_desc = ScrollViewDesc::new(viewport, Vec2::new(viewport.size.x, content_height));
@@ -314,18 +308,18 @@ impl Default for TextAreaState {
     }
 }
 
-/// The measured geometry the emitter draws.
+/// 输出器绘制所需的已测量几何信息。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextAreaVisual {
-    /// The caret rectangle.
+    /// 光标矩形。
     pub caret: Rect,
-    /// The merged selection slots, in draw order.
+    /// 按绘制顺序排列的合并选区槽位。
     pub selection: Vec<RoundedSlot>,
-    /// Whether the caret is in its visible blink phase.
+    /// 光标是否处于闪烁可见阶段。
     pub caret_visible: bool,
 }
 
-/// Emit the field chrome, selection, caret and semantic node.
+/// 输出输入框外观、选区、光标与语义节点。
 #[must_use]
 pub fn emit_text_area(
     node: u64,
@@ -378,8 +372,8 @@ pub fn emit_text_area(
         ));
     }
 
-    // The caret slot is always present; opacity alone carries its visibility,
-    // mirroring `emit_text_input`, so focus/blink never reshapes the pool.
+    // 光标槽位始终存在；仅通过不透明度控制可见性（与 `emit_text_input` 一致），
+    // 因此聚焦/闪烁绝不会改变图元池结构。
     let mut caret = surface(visual.caret, 0.0, Token::PRIMARY, desc.z);
     caret.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
         caret.depth_u16(),
@@ -543,7 +537,7 @@ mod tests {
         let a11y = output.a11y.expect("reachable");
         assert_eq!(a11y.role, Role::MultilineTextInput);
         assert_eq!(a11y.value, "one\ntwo");
-        // Surface, border, focus ring and the always-present caret slot.
+        // 表面、边框、焦点环以及始终存在的光标槽位。
         assert_eq!(output.primitives.len(), 4 + visual.selection.len());
         assert_eq!(
             output.hit.as_ref().map(|hit| hit.cursor),

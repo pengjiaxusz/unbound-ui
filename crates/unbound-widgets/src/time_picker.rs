@@ -1,4 +1,4 @@
-//! TimePicker & DateTimePicker stepping/wheel hour-minute-second control.
+//! TimePicker 与 DateTimePicker 步进/滚轮时分秒选择控件。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -11,19 +11,19 @@ use crate::primitive::{focus_ring, glyphs, outlined};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// Time value `(hour, minute, second)`.
+/// 时间值 `(时, 分, 秒)`。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct TimeValue {
-    /// Hour `0..=23`.
+    /// 小时 `0..=23`。
     pub hour: u8,
-    /// Minute `0..=59`.
+    /// 分钟 `0..=59`。
     pub minute: u8,
-    /// Second `0..=59`.
+    /// 秒 `0..=59`。
     pub second: u8,
 }
 
 impl TimeValue {
-    /// Create a clamped time value.
+    /// 创建夹紧后的时间值。
     #[must_use]
     pub fn new(hour: u8, minute: u8, second: u8) -> Self {
         Self {
@@ -33,35 +33,35 @@ impl TimeValue {
         }
     }
 
-    /// Format as `HH:MM:SS`.
+    /// 格式化为 `HH:MM:SS`。
     #[must_use]
     pub fn format_hms(self) -> String {
         format!("{:02}:{:02}:{:02}", self.hour, self.minute, self.second)
     }
 }
 
-/// Interactive state for [`TimePickerDesc`].
+/// [`TimePickerDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TimePickerState {
-    /// Current time value.
+    /// 当前时间值。
     pub value: TimeValue,
-    /// Active column (`0 = hour`, `1 = minute`, `2 = second`).
+    /// 激活列（`0 = 时`，`1 = 分`，`2 = 秒`）。
     pub active_column: usize,
 }
 
-/// Deterministic sub-node id for a time picker H/M/S column (`0..3`).
+/// 时间选择器时/分/秒列的确定性子节点 ID（`0..3`）。
 #[must_use]
 pub const fn time_picker_col_node(node: u64, col: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x700 + col as u64)
 }
 
 impl TimePickerState {
-    /// Select active column (`0 = hour`, `1 = minute`, `2 = second`).
+    /// 选中激活列（`0 = 时`，`1 = 分`，`2 = 秒`）。
     pub fn select_column(&mut self, col: usize) {
         self.active_column = col.min(2);
     }
 
-    /// Handle mouse wheel delta by stepping the active column.
+    /// 通过步进激活列处理鼠标滚轮增量。
     pub fn handle_wheel(&mut self, delta_y: f32) {
         if delta_y > 0.0 {
             self.step_active(1);
@@ -70,7 +70,7 @@ impl TimePickerState {
         }
     }
 
-    /// Step the active column by `delta` (`+1` or `-1`, wrapping).
+    /// 按 `delta`（`+1` 或 `-1`，循环回绕）步进激活列。
     pub fn step_active(&mut self, delta: i32) {
         match self.active_column {
             0 => self.value.hour = (self.value.hour as i32 + delta).rem_euclid(24) as u8,
@@ -80,23 +80,23 @@ impl TimePickerState {
     }
 }
 
-/// Descriptor for a [`TimePicker`].
+/// [`TimePicker`] 的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimePickerDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Selected time.
+    /// 已选时间。
     pub value: TimeValue,
-    /// Active column index (`0..3`).
+    /// 激活列索引（`0..3`）。
     pub active_column: usize,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl TimePickerDesc {
-    /// Create a time picker descriptor.
+    /// 创建时间选择器描述符。
     #[must_use]
     pub fn new(rect: Rect, value: TimeValue) -> Self {
         Self {
@@ -109,7 +109,7 @@ impl TimePickerDesc {
     }
 }
 
-/// Emit a stable-shape time picker (1 bg + 3 H/M/S columns + 1 focus ring = 5 primitives).
+/// 输出结构稳定的时间选择器（1 个背景 + 3 个时/分/秒列 + 1 个焦点环 = 5 个图元）。
 #[must_use]
 pub fn emit_time_picker(
     node: u64,

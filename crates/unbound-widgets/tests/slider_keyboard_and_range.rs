@@ -1,4 +1,4 @@
-//! Slider keyboard stepping, vertical geometry and dual-thumb ranges.
+//! 滑块键盘步进、垂直几何布局与双滑块区间测试。
 
 use unbound_math::{Rect, Vec2};
 use unbound_widgets::slider::{
@@ -107,7 +107,7 @@ fn ticks_and_the_tooltip_add_their_own_primitives() {
         .with_ticks(true);
     assert_eq!(plain.tick_ratios().len(), 5);
     let output = emit_slider(1, &plain, ControlState::default(), &[], tokens);
-    // Track, fill, five ticks, thumb, focus ring.
+    // 轨道、填充、五个刻度、拇指、焦点环。
     assert_eq!(output.primitives.len(), 9);
 
     let with_tooltip = desc().with_value_tooltip(true);

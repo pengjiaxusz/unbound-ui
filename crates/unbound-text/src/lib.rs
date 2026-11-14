@@ -1,17 +1,17 @@
-//! `unbound-text` — industrial text: shaping caches, dual atlases, distance
-//! fields (`docs` §3.5).
+//! `unbound-text` — 工业级文本管线：塑形缓存、双格式图集与距离场
+//! （`docs` §3.5）。
 //!
-//! The modules map one-to-one onto the milestone's deliverables:
+//! 各模块与里程碑交付物一一对应：
 //!
-//! | module | responsibility |
+//! | 模块 | 职责 |
 //! | :--- | :--- |
-//! | [`shaping`] | `cosmic-text` shaping + level-1 shape cache + level-2 wrap cache |
-//! | [`atlas`] | `Atlas_R8` (4 subpixel phases) + `Atlas_RGBA8`, paged, LRU by frame |
-//! | [`glyph`] | rasterisation, atlas residency, quad emission |
-//! | [`sdf`] | exact Euclidean distance transform for scalable canvas text |
+//! | [`shaping`] | `cosmic-text` 塑形 + 一级塑形缓存 + 二级换行缓存 |
+//! | [`atlas`] | `Atlas_R8`（4 个亚像素相位）+ `Atlas_RGBA8`，分页式，按帧 LRU 淘汰 |
+//! | [`glyph`] | 光栅化、图集驻留管理与四边形图元发射 |
+//! | [`sdf`] | 面向可缩放画布文本的精确欧氏距离变换 |
 //!
-//! Nothing here needs a GPU, which is what lets the whole text stack be
-//! regression-tested in CI on a machine without a display.
+//! 此处所有模块均不依赖 GPU，使整个文本栈可在无显示器的 CI 环境中
+//! 完成回归测试。
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 

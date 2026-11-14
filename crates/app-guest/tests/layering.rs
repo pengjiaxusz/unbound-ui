@@ -1,17 +1,17 @@
-//! The dependency layering guardrail (`docs` §7.1).
+//! 依赖分层守卫（`docs` §7.1）。
 //!
-//! The design promises that the business layer stays cheap to compile: it may
-//! only depend on the plain data definitions (the POD descriptors, the action
-//! enum) and must not pull in a graphics stack, a shader compiler or a heavy
-//! macro. That promise is what keeps the incremental build under 800 ms while
-//! a developer works on the application layer.
+//! 架构设计承诺业务层保持极低编译开销：它只能依赖纯数据定义
+//! （POD 描述符、动作枚举），不得引入图形栈、着色器编译器或重型宏。
+//! 该承诺是开发者在应用层迭代时保持增量编译低于 800 ms 的关键。
 //!
-//! The rule is enforced here, as a test, so it cannot rot: a dependency that
-//! would break the layering fails the build.
+//!
+//!
+//! 该规则在此作为测试强制执行，防止随时间腐化：任何破坏分层的依赖都会导致构建失败。
+//!
 
 use std::path::PathBuf;
 
-/// Crates the business layer must never depend on.
+/// 业务层绝不可依赖的 crate。
 const FORBIDDEN: [&str; 8] = [
     "unbound-gpu",
     "unbound-text",
@@ -23,10 +23,10 @@ const FORBIDDEN: [&str; 8] = [
     "unbound-platform",
 ];
 
-/// The crates the business layer is allowed to depend on.
+/// 允许业务层依赖的 crate。
 const ALLOWED: [&str; 3] = ["unbound-abi", "serde", "postcard"];
 
-/// The manifest of the business layer.
+/// 业务层的 manifest 文件。
 fn manifest() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")
 }

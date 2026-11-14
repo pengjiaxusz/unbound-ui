@@ -1,10 +1,10 @@
-//! 06_infinite_canvas_node_editor: Infinite Canvas & Shader Node Graph Editor.
+//! 06_infinite_canvas_node_editor：无限画布与着色器节点图编辑器示例。
 //!
-//! Demonstrates:
-//! - Infinite 2D pan/zoom viewport navigation.
-//! - Node graph connections and port wiring via [`WidgetCatalogId::NodeGraph`].
-//! - Curve parameter tweaking via [`CurveEditorDesc`].
-//! - Undo/redo transaction history.
+//! 演示内容：
+//! - 无限 2D 视口平移与缩放导航。
+//! - 通过 [`WidgetCatalogId::NodeGraph`] 实现节点图连接与端口连线。
+//! - 通过 [`CurveEditorDesc`] 调节曲线参数。
+//! - 撤销/重做事务历史。
 
 use unbound_app::prelude::*;
 use unbound_input::PointerButton;
@@ -86,7 +86,7 @@ pub fn run_headless_check() {
     );
     assert!((runtime.state().zoom - 1.0).abs() < 1e-4);
 
-    // Zoom In
+    // 放大视图
     let btn_rect = runtime
         .widget_rect(BTN_ZOOM_IN)
         .expect("Zoom button mounted");

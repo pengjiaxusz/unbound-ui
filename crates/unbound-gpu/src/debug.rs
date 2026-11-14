@@ -1,14 +1,10 @@
-//! Debug and safety tooling (`docs` §8.3), plus device-lost recovery.
+//! 调试与安全工具（参见 `docs/architecture/gpu-renderer.md`），以及设备丢失恢复。
 //!
-//! Three independent pieces live here because they share one property: none of
-//! them may cost anything when unused.
+//! 这里包含三个独立组件，它们共同满足一个特性：未使用时零开销。
 //!
-//! * [`RenderDoc`] — dynamically loads `renderdoc.dll` so the release binary has
-//!   no hard dependency on it, and triggers captures around a specific action.
-//! * [`ValidationCounter`] — counts validation errors so CI can fail the build
-//!   on a *single* warning instead of relying on someone reading logs.
-//! * [`Recovery`] — rebuilds the device and re-inflates the caller's state after
-//!   `VK_ERROR_DEVICE_LOST`, which is otherwise fatal for a long-running editor.
+//! * [`RenderDoc`] — 动态加载 `renderdoc.dll`，使发布版二进制无硬依赖，并可围绕特定操作触发抓帧。
+//! * [`ValidationCounter`] — 统计校验层错误，使 CI 能在出现*单条*警告时直接失败，而非依赖人工翻阅日志。
+//! * [`Recovery`] — 在发生 `VK_ERROR_DEVICE_LOST` 后重建设备并恢复调用方状态（否则对长驻编辑器将是致命故障）。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -18,7 +14,7 @@ use crate::device::GpuError;
 // RenderDoc
 // ---------------------------------------------------------------------------
 
-/// A loaded RenderDoc API, or `None` when the tool is not installed.
+/// 已加载的 RenderDoc API；未安装该工具时为 `None`。
 pub struct RenderDoc {
     _library: libloading::Library,
     get_api: unsafe extern "C" fn(u32, *mut *mut core::ffi::c_void) -> i32,
@@ -30,8 +26,7 @@ pub struct RenderDoc {
     captures: u32,
 }
 
-// SAFETY: RenderDoc's API object is documented as thread-safe for capture
-// control; we only ever call it from the thread that owns the device.
+// SAFETY: RenderDoc 文档明确其 API 对象的抓帧控制接口线程安全；我们仅在拥有设备的线程上调用。
 unsafe impl Send for RenderDoc {}
 
 impl core::fmt::Debug for RenderDoc {
@@ -43,14 +38,13 @@ impl core::fmt::Debug for RenderDoc {
     }
 }
 
-/// RenderDoc's `eRENDERDOC_API_Version_1_6_0`.
+/// RenderDoc 的 `eRENDERDOC_API_Version_1_6_0` 版本号。
 const RENDERDOC_API_VERSION: u32 = 1_06_00;
 
 impl RenderDoc {
-    /// Try to load `renderdoc.dll` / `librenderdoc.so`.
+    /// 尝试加载 `renderdoc.dll` / `librenderdoc.so`。
     ///
-    /// Returns `None` (never an error) when the tool is absent: a missing
-    /// debugger must not prevent the application from running.
+    /// 工具缺失时返回 `None`（绝不报错）：缺少调试器不应阻碍应用运行。
     #[must_use]
     pub fn load() -> Option<Self> {
         let name = if cfg!(windows) {
@@ -60,8 +54,7 @@ impl RenderDoc {
         } else {
             "librenderdoc.so"
         };
-        // SAFETY: we check every symbol before calling it, and keep the library
-        // alive for as long as the function pointers are reachable.
+        // SAFETY: 调用前逐一检查符号是否存在，并保证动态库在函数指针可达期间保持存活。
         unsafe {
             let library = libloading::Library::new(name).ok()?;
             let get_api = *library
@@ -73,10 +66,8 @@ impl RenderDoc {
             if get_api(RENDERDOC_API_VERSION, &mut api) != 1 || api.is_null() {
                 return None;
             }
-            // The vtable layout is stable per RenderDoc's public header; the
-            // first three slots are GetAPIVersion, SetCaptureOptionU32,
-            // SetCaptureOptionF32, so we read the documented offsets indirectly
-            // by resolving the exported helpers instead.
+            // 虚表布局依据 RenderDoc 公开头文件保持稳定；前三个槽位依次为 GetAPIVersion、
+            // SetCaptureOptionU32、SetCaptureOptionF32，此处按文档偏移解析对应函数指针。
             let start_capture = *library
                 .get::<unsafe extern "C" fn(*mut core::ffi::c_void, *mut core::ffi::c_void) -> u32>(
                     b"RENDERDOC_StartFrameCapture\0",
@@ -105,56 +96,52 @@ impl RenderDoc {
         }
     }
 
-    /// Point captures at `template` (RenderDoc appends the frame number).
+    /// 将抓帧输出路径模板设为 `template`（RenderDoc 会自动追加帧号）。
     pub fn set_capture_path(&self, template: &str) {
         if let Ok(c) = std::ffi::CString::new(template) {
-            // SAFETY: `api` came from `RENDERDOC_GetAPI` and `c` is NUL-terminated.
+            // SAFETY: `api` 来自 `RENDERDOC_GetAPI`，且 `c` 以 NUL 结尾。
             unsafe { (self.set_path)(self.api, c.as_ptr()) };
         }
     }
 
-    /// Begin a capture. `window` may be null for headless/offscreen frames.
+    /// 开始抓帧。无头或离屏帧中 `window` 可为空指针。
     ///
     /// # Safety
-    /// When `window` is not null it must be a live window handle that
-    /// RenderDoc accepts; the pointer is handed to the injected library
-    /// without further validation.
+    /// 当 `window` 非空时，必须是 RenderDoc 可接受的存活窗口句柄；
+    /// 该指针会不经额外校验直接传递给注入的动态库。
     pub unsafe fn begin_capture(&mut self, window: *mut core::ffi::c_void) {
-        // SAFETY: the caller guarantees the window handle is valid.
+        // SAFETY: 调用方保证窗口句柄有效。
         unsafe { (self.start_capture)(self.api, window) };
     }
 
-    /// End the capture and flush it to disk.
+    /// 结束抓帧并将结果刷写到磁盘。
     ///
     /// # Safety
-    /// The matching [`Self::begin_capture`] must have run first; RenderDoc
-    /// keeps global state between the two calls.
+    /// 必须先执行配对的 [`Self::begin_capture`]；RenderDoc 在两次调用间维护全局状态。
     pub unsafe fn end_capture(&mut self, _window: *mut core::ffi::c_void) {
-        // SAFETY: the caller guarantees a capture is in flight.
+        // SAFETY: 调用方保证当前正处于抓帧过程中。
         unsafe { (self.end_capture)(self.api) };
         self.captures += 1;
     }
 
-    /// True when the API pointer round-trips (guards against a half-loaded DLL).
+    /// 当 API 指针可往返验证时返回 true（防止半加载的 DLL）。
     #[must_use]
     pub fn is_usable(&self) -> bool {
-        // SAFETY: a pure read of a value we own.
+        // SAFETY: 纯读取自身拥有的值。
         let mut probe: *mut core::ffi::c_void = core::ptr::null_mut();
-        // SAFETY: `get_api` came from the loaded library and only writes to
-        // `probe`.
+        // SAFETY: `get_api` 来自已加载的动态库，且仅写入 `probe`。
         unsafe { (self.get_api)(RENDERDOC_API_VERSION, &mut probe) == 1 && !probe.is_null() }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Validation counters
+// 校验计数器
 // ---------------------------------------------------------------------------
 
-/// Global validation message counters.
+/// 全局校验消息计数器。
 ///
-/// The debug callback bumps these; CI reads them after a run and fails on any
-/// error. Counting instead of logging is what turns "validation is on" into a
-/// real gate (`docs` §8.3).
+/// 调试回调会递增这些计数；CI 在运行结束后读取并在出现任意错误时失败。
+/// 以计数代替仅打日志，才能让“开启校验”真正成为质量门禁（参见 `docs/architecture/gpu-renderer.md`）。
 #[derive(Debug, Default)]
 pub struct ValidationCounter {
     errors: AtomicU64,
@@ -163,13 +150,13 @@ pub struct ValidationCounter {
 }
 
 impl ValidationCounter {
-    /// Create an empty counter.
+    /// 创建一个空计数器。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Record a message; retains the last one for the CI report.
+    /// 记录一条校验消息；保留最后一条用于 CI 报告。
     pub fn record(&self, severity: &str, message: &str) {
         match severity {
             "ERROR" => {
@@ -200,10 +187,10 @@ impl ValidationCounter {
         self.last_message.lock().ok().and_then(|m| m.clone())
     }
 
-    /// Fail when anything was reported. Used by the CI guard test.
+    /// 若有任何上报消息则报错失败，供 CI 守卫测试使用。
     ///
     /// # Errors
-    /// Returns the count and last message when the run was not clean.
+    /// 当运行过程不干净时返回计数与最后一条消息。
     pub fn assert_clean(&self) -> Result<(), (u64, u64, Option<String>)> {
         if self.errors() > 0 || self.warnings() > 0 {
             Err((self.errors(), self.warnings(), self.last_message()))
@@ -213,20 +200,20 @@ impl ValidationCounter {
     }
 }
 
-/// Process-wide counter, so the debug callback needs no context pointer.
+/// 进程级全局计数器，使调试回调无需上下文指针。
 pub static VALIDATION: std::sync::LazyLock<ValidationCounter> =
     std::sync::LazyLock::new(ValidationCounter::new);
 
 // ---------------------------------------------------------------------------
-// Device-lost recovery
+// 设备丢失恢复
 // ---------------------------------------------------------------------------
 
-/// Why a recovery attempt failed.
+/// 设备恢复尝试失败的原因。
 #[derive(Debug)]
 pub enum RecoveryError {
-    /// The GPU could not be re-acquired (driver reset, GPU removed).
+    /// 无法重新获取 GPU（驱动重置或 GPU 被移除）。
     Unavailable(GpuError),
-    /// The device came back but the rebuild failed.
+    /// 设备已恢复但资源重建失败。
     Rebuild(GpuError),
 }
 
@@ -241,18 +228,18 @@ impl core::fmt::Display for RecoveryError {
 
 impl std::error::Error for RecoveryError {}
 
-/// True when `err` is the resumable device-lost condition.
+/// 当 `err` 为可恢复的设备丢失状态时返回 true。
 #[must_use]
 pub fn is_device_lost(err: &GpuError) -> bool {
     matches!(err, GpuError::DeviceLost)
 }
 
-/// Retry policy for device-lost recovery.
+/// 设备丢失恢复的重试策略。
 #[derive(Copy, Clone, Debug)]
 pub struct RecoveryPolicy {
-    /// Attempts before giving up (drivers usually recover on the first).
+    /// 放弃前的最大尝试次数（驱动通常首次即可恢复）。
     pub max_attempts: u32,
-    /// Milliseconds to wait between attempts.
+    /// 两次尝试之间的等待毫秒数。
     pub backoff_ms: u64,
 }
 
@@ -265,15 +252,13 @@ impl Default for RecoveryPolicy {
     }
 }
 
-/// Run `rebuild` until it succeeds, the policy is exhausted, or `fatal` says the
-/// error is not recoverable.
+/// 重复执行 `rebuild` 直至成功、耗尽重试策略，或 `fatal` 判定错误不可恢复。
 ///
-/// The closure is responsible for dropping the dead device and creating a new
-/// one; this helper only implements the retry/backoff policy so each caller does
-/// not reinvent it slightly differently.
+/// 闭包负责销毁失效设备并创建新设备；本辅助函数仅实现统一的
+/// 重试/退避策略，避免各调用方重复编写略有差异的逻辑。
 ///
 /// # Errors
-/// Returns [`RecoveryError`] when every attempt failed.
+/// 当所有尝试均失败时返回 [`RecoveryError`]。
 pub fn recover_with<T, F>(policy: RecoveryPolicy, mut rebuild: F) -> Result<(T, u32), RecoveryError>
 where
     F: FnMut() -> Result<T, GpuError>,
@@ -381,7 +366,7 @@ mod tests {
 
     #[test]
     fn renderdoc_absence_is_not_an_error() {
-        // The CI machine usually has no RenderDoc; loading must simply fail.
+        // CI 机器通常未安装 RenderDoc；加载应当直接返回失败。
         if let Some(rd) = RenderDoc::load() {
             assert!(rd.is_usable());
         }

@@ -3,25 +3,22 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // ---------------------------------------------------------------------------
-// GPU MTSDF generation, pass 3/3: the pack pass (docs §3.5).
+// GPU MTSDF 生成，第 3/3 步：打包 Pass（参见 `docs/architecture/gpu-renderer.md`）。
 //
-// This pass lives in its own shader for one reason: the 1D transform needs
-// 16 KiB of shared memory for its envelope, and *every* workgroup of a shader
-// reserves that memory — even the ones that only pack a texel. With 16 KiB per
-// workgroup an SM hosts a handful of groups, and the pack pass (one texel per
-// invocation) degenerates into thousands of serial waves.
+// 将此 Pass 独立为单独着色器的原因：1D 变换需要 16 KiB 共享内存用于包络数组，
+// 而同一着色器的*每个*工作组都会预留该内存——哪怕只打包一个纹素。每工作组占用
+// 16 KiB 会使单个 SM 仅能驻留极少工作组，导致打包 Pass 退化为数千个串行波次。
 //
-// Split out, the pack pass has no shared memory at all and 64 texels are
-// packed per workgroup.
+// 拆分之后，打包 Pass 完全不占用共享内存，每个工作组可并发打包 64 个纹素。
 // ---------------------------------------------------------------------------
 
 #include "common.glsl"
 
 layout(local_size_x = 64) in;
 
-// `pc.prim_count` = width, `pc.block_count` = height,
-// `pc.scratch_bda` = coverage, `pc.scratch_bda2` = the squared distances,
-// `pc.scratch_bda3` = the packed output, `pc.digit` = spread in 1/256 texels.
+// `pc.prim_count` = 宽度，`pc.block_count` = 高度，
+// `pc.scratch_bda` = 覆盖率，`pc.scratch_bda2` = 平方距离，
+// `pc.scratch_bda3` = 打包输出，`pc.digit` = 以 1/256 纹素为单位的 spread。
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32Buf {
     uint u[];
 };

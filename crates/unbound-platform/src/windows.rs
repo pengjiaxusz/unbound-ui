@@ -1,31 +1,31 @@
-//! A registry of independent windows.
+//! 独立窗口的注册表。
 //!
-//! The display server may deliver events for any surface, so the shell needs a
-//! stable id-to-context map rather than a single "the window" field. This is
-//! that map, kept pure so the ownership rules can be tested without creating a
-//! window:
+//! 显示服务器可能针对任意表面派发事件，因此外壳需要稳定的 ID 到上下文映射表，
+//! 而非单一的“当前窗口”字段。该映射表保持纯逻辑实现，无需创建真实窗口即可
+//! 测试所有权规则：
 //!
-//! * insertion order is event order, and iteration is stable,
-//! * removing the primary window promotes the oldest survivor,
-//! * a duplicate id is rejected instead of silently replacing a live surface,
-//! * every window owns its own context; closing one never touches another.
+//!
+//! * 插入顺序即事件顺序，迭代顺序稳定；
+//! * 移除主窗口时自动将最老的存活窗口提升为主窗口；
+//! * 拒绝重复 ID，绝不静默替换存活的表面；
+//! * 每个窗口拥有各自独立的上下文；关闭一个窗口绝不影响其他窗口。
 
-/// A window identity allocated by the shell.
+/// 由外壳分配的窗口标识。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WindowId(pub u64);
 
-/// One registered window.
+/// 单个已注册的窗口。
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowSlot<T> {
-    /// The window identity.
+    /// 窗口标识。
     pub id: WindowId,
-    /// The per-window state (surface, swapchain, router, …).
+    /// 逐窗口状态（表面、交换链、路由器等）。
     pub context: T,
-    /// Whether the window is currently mapped.
+    /// 窗口当前是否已映射显示。
     pub visible: bool,
 }
 
-/// The window registry.
+/// 窗口注册表。
 #[derive(Clone, Debug)]
 pub struct WindowRegistry<T> {
     slots: Vec<WindowSlot<T>>,
@@ -47,10 +47,10 @@ impl<T> WindowRegistry<T> {
         Self::default()
     }
 
-    /// Register a new window.
+    /// 注册一个新窗口。
     ///
-    /// Returns the old context when the id was already live; the caller can
-    /// then drop it deliberately instead of leaking a surface.
+    /// 若该 ID 已存在，则返回旧上下文；调用方可显式释放它，避免表面泄漏。
+    ///
     pub fn insert(&mut self, id: WindowId, context: T) -> Option<T> {
         if let Some(index) = self.index_of(id) {
             let old = core::mem::replace(&mut self.slots[index].context, context);
@@ -67,13 +67,13 @@ impl<T> WindowRegistry<T> {
         None
     }
 
-    /// The primary window.
+    /// 返回主窗口。
     #[must_use]
     pub fn primary(&self) -> Option<WindowId> {
         self.primary
     }
 
-    /// Mark an existing window as primary.
+    /// 将指定已存在窗口设为主窗口。
     pub fn set_primary(&mut self, id: WindowId) -> bool {
         if self.index_of(id).is_none() {
             return false;
@@ -82,7 +82,7 @@ impl<T> WindowRegistry<T> {
         true
     }
 
-    /// A window's context.
+    /// 获取指定窗口的上下文引用。
     #[must_use]
     pub fn get(&self, id: WindowId) -> Option<&T> {
         self.slots
@@ -91,7 +91,7 @@ impl<T> WindowRegistry<T> {
             .map(|slot| &slot.context)
     }
 
-    /// A window's mutable context.
+    /// 获取指定窗口的可变上下文引用。
     pub fn get_mut(&mut self, id: WindowId) -> Option<&mut T> {
         self.slots
             .iter_mut()
@@ -99,8 +99,8 @@ impl<T> WindowRegistry<T> {
             .map(|slot| &mut slot.context)
     }
 
-    /// Remove a window. The context is returned so its surface can be dropped
-    /// on the caller's thread.
+    /// 移除一个窗口。返回其上下文，以便在调用方线程上释放其表面。
+    ///
     pub fn remove(&mut self, id: WindowId) -> Option<T> {
         let index = self.index_of(id)?;
         let slot = self.slots.remove(index);
@@ -110,17 +110,17 @@ impl<T> WindowRegistry<T> {
         Some(slot.context)
     }
 
-    /// Every window, in creation order.
+    /// 按创建顺序遍历所有窗口。
     pub fn iter(&self) -> impl Iterator<Item = &WindowSlot<T>> {
         self.slots.iter()
     }
 
-    /// Every window context, in creation order.
+    /// 按创建顺序遍历所有窗口上下文。
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut WindowSlot<T>> {
         self.slots.iter_mut()
     }
 
-    /// The number of live windows.
+    /// 当前存活的窗口数量。
     #[must_use]
     pub fn len(&self) -> usize {
         self.slots.len()
@@ -131,7 +131,7 @@ impl<T> WindowRegistry<T> {
         self.slots.is_empty()
     }
 
-    /// Mark visibility.
+    /// 更新窗口的可见性标记。
     pub fn set_visible(&mut self, id: WindowId, visible: bool) {
         if let Some(index) = self.index_of(id) {
             self.slots[index].visible = visible;

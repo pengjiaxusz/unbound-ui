@@ -1,59 +1,59 @@
-//! Input-to-photon accounting (`docs` §2.3, §10.2).
+//! 输入到光子（Input-to-photon）延迟统计（`docs` §2.3、§10.2）。
 //!
-//! The red line is 8.3 ms — one frame at 120 Hz. Measuring it honestly means
-//! timestamping two different moments:
+//! 红线指标为 8.3 ms——即 120 Hz 下的单帧时长。如实测量该延迟需要
+//! 记录两个不同时刻的时间戳：
 //!
-//! * **input** — when the OS delivered the event to the application,
-//! * **photon** — when the frame that contains the reaction left the GPU.
+//! * **输入（input）**——操作系统将事件投递给应用的时刻；
+//! * **光子（photon）**——包含该响应的帧离开 GPU 的时刻。
 //!
-//! The tracker keeps the *oldest* un-presented input, because a frame
-//! reacts to every input that arrived before it was rendered: averaging
-//! would hide a stall behind a fast frame.
+//! 追踪器保留**最早**的未呈现输入，因为一帧会响应渲染前到达的所有输入：
+//! 若取平均值会将卡顿隐藏在快速帧背后。
+//!
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-/// The budget from the acceptance table: one frame at 120 Hz.
+/// 验收指标表中的延迟预算：120 Hz 下的单帧时长。
 pub const BUDGET: Duration = Duration::from_micros(8_300);
 
-/// Number of samples kept for the worst-case statistic.
+/// 用于最坏情况统计的保留样本数。
 const WINDOW: usize = 240;
 
-/// Tracks the delay between an input event and the frame that showed it.
+/// 追踪输入事件与呈现该输入结果的帧之间的延迟。
 #[derive(Debug, Default)]
 pub struct LatencyTracker {
-    /// The oldest input that has not been presented yet.
+    /// 尚未呈现的最早输入时间戳。
     oldest_input: Option<Instant>,
-    /// Recent samples, oldest first.
+    /// 近期延迟样本，按时间从旧到新排列。
     samples: VecDeque<Duration>,
-    /// The most recent sample.
+    /// 最近一次测量的样本。
     last: Option<Duration>,
-    /// The worst sample in the window.
+    /// 统计窗口内的最坏样本。
     worst: Option<Duration>,
-    /// Number of presented frames that carried a reaction.
+    /// 携带了输入响应的已呈现帧数。
     presented: u64,
-    /// Number of presented frames without any pending input.
+    /// 没有任何挂起输入时呈现的帧数。
     idle: u64,
 }
 
 impl LatencyTracker {
-    /// Create an empty tracker.
+    /// 创建一个空的延迟追踪器。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Record an input event.
+    /// 记录一次输入事件。
     ///
-    /// Only the oldest pending input matters; later ones ride along in the
-    /// same frame.
+    /// 仅需保留最早的挂起输入；后续输入会搭便车在同一帧中呈现。
+    ///
     pub fn on_input(&mut self, now: Instant) {
         if self.oldest_input.is_none() {
             self.oldest_input = Some(now);
         }
     }
 
-    /// Record that a frame was presented.
+    /// 记录一帧已完成呈现。
     pub fn on_present(&mut self, now: Instant) {
         let Some(input) = self.oldest_input.take() else {
             self.idle += 1;
@@ -71,19 +71,19 @@ impl LatencyTracker {
         }
     }
 
-    /// The most recent measured latency.
+    /// 最近一次测量的延迟。
     #[must_use]
     pub const fn last(&self) -> Option<Duration> {
         self.last
     }
 
-    /// The worst latency ever measured.
+    /// 迄今测量的最坏延迟。
     #[must_use]
     pub const fn worst(&self) -> Option<Duration> {
         self.worst
     }
 
-    /// The mean latency over the sample window.
+    /// 样本窗口内的平均延迟。
     #[must_use]
     pub fn mean(&self) -> Option<Duration> {
         if self.samples.is_empty() {
@@ -93,7 +93,7 @@ impl LatencyTracker {
         Some(total / self.samples.len() as u32)
     }
 
-    /// The 99th percentile over the sample window.
+    /// 样本窗口内的 P99 延迟。
     #[must_use]
     pub fn p99(&self) -> Option<Duration> {
         if self.samples.is_empty() {
@@ -105,25 +105,25 @@ impl LatencyTracker {
         Some(sorted[index])
     }
 
-    /// Number of frames that carried a reaction.
+    /// 携带了输入响应的帧数。
     #[must_use]
     pub const fn presented(&self) -> u64 {
         self.presented
     }
 
-    /// Number of frames presented without any pending input.
+    /// 没有任何挂起输入时呈现的帧数。
     #[must_use]
     pub const fn idle(&self) -> u64 {
         self.idle
     }
 
-    /// True when the worst measured latency fits into the budget.
+    /// 当测得的最坏延迟仍在预算范围内时返回 `true`。
     #[must_use]
     pub fn within_budget(&self) -> bool {
         self.worst().is_some_and(|w| w <= BUDGET)
     }
 
-    /// The budget.
+    /// 延迟预算值。
     #[must_use]
     pub const fn budget() -> Duration {
         BUDGET
@@ -190,7 +190,7 @@ mod tests {
             tracker.on_present(now + Duration::from_millis(i % 7 + 1));
         }
         assert_eq!(tracker.presented(), 1000);
-        // The tracker keeps a bounded window, not every sample ever.
+        // 追踪器仅保留有界窗口，而非永久保留所有样本。
         assert!(tracker.samples.len() <= WINDOW);
     }
 }

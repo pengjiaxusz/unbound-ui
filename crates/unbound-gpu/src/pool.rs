@@ -1,25 +1,22 @@
-//! Persistent GPU-resident pool: TLSF + generational handles + epoch quarantine.
+//! GPU 常驻持久化池：TLSF 分配器 + 代际句柄 + Epoch 隔离队列。
 //!
-//! This is the CPU half of the "zero bytes per frame" promise (`docs` §2.2):
+//! 本模块是“每帧零字节上传”承诺的 CPU 侧实现（参见 `docs/architecture/gpu-renderer.md`）：
 //!
-//! * entities live in a long-lived device buffer carved by [`Tlsf`],
-//! * mutation happens *in place* — the frame only ships a sparse list of
-//!   `(destination, source, length)` patches to the incremental-scatter compute
-//!   shader, never the whole array,
-//! * deletion is deferred through [`EpochQuarantine`] so a frame in flight can
-//!   never observe recycled memory.
+//! * 实体驻留在由 [`Tlsf`] 切分的长生命周期设备缓冲区中；
+//! * 变更**就地**发生——每帧仅向增量散布计算着色器发送稀疏的 `(destination, source, length)`
+//!   补丁列表，从不重传整个数组；
+//! * 释放操作通过 [`EpochQuarantine`] 延迟执行，确保在飞帧绝不会读取到已被回收覆写的内存。
 //!
-//! The type is deliberately GPU-agnostic (offsets, not handles) so it can be
-//! tested in a pure-CPU unit test and reused by the device-lost recovery path.
+//! 该类型刻意保持与 GPU API 无关（仅管理偏移量而非句柄），以便在纯 CPU 单元测试中验证，
+//! 并可由设备丢失恢复路径直接复用。
 
 use crate::quarantine::{EpochQuarantine, QuarantinedBlock};
 use crate::tlsf::{AllocError, Tlsf, TlsfStats};
 
-/// A generational handle into the pool.
+/// 指向持久化池的代际句柄。
 ///
-/// The generation counter makes use-after-free detectable instead of silently
-/// returning another node's data — critical when the UI tree mutates while a
-/// guest rebuilds its view.
+/// 代际计数器使释放后使用（UAF）可被检测，而非静默返回另一节点的数据——
+/// 这在宿主重建视图期间 UI 树同时发生变更时至关重要。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PoolHandle {
@@ -39,18 +36,18 @@ impl PoolHandle {
     }
 }
 
-/// One carved region.
+/// 单个已切分分配区域。
 #[derive(Copy, Clone, Debug, Default)]
 struct Slot {
     offset: u32,
-    /// Bytes currently meaningful (what the shader indexes).
+    /// 当前有效字节数（着色器实际索引的范围）。
     len: u32,
-    /// Bytes reserved in TLSF (>= len).
+    /// 在 TLSF 中预留的字节数（>= len）。
     capacity: u32,
     generation: u32,
-    /// 0 == free/never used, 1 == live, 2 == pending free.
+    /// 0 == 空闲/未使用，1 == 存活，2 == 待释放。
     state: u8,
-    /// Frame that last referenced this slot (diagnostics).
+    /// 最后引用该槽位的帧号（用于诊断）。
     last_frame: u32,
 }
 
@@ -58,18 +55,18 @@ const STATE_FREE: u8 = 0;
 const STATE_LIVE: u8 = 1;
 const STATE_PENDING: u8 = 2;
 
-/// A sparse write into the pool, destined for the scatter compute shader.
+/// 写入持久化池的稀疏补丁，将交由散布计算着色器执行。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ScatterPatch {
-    /// Destination byte offset inside the persistent buffer.
+    /// 持久化缓冲区内的目标字节偏移。
     pub dst_offset: u32,
-    /// Length in bytes; `0` means "descriptor-only update" (no payload).
+    /// 字节长度；`0` 表示“仅描述符更新”（无载荷数据）。
     pub len: u32,
-    /// Index of this patch in the frame's staging list.
+    /// 该补丁在当前帧暂存列表中的索引。
     pub patch_index: u32,
 }
 
-/// Pool-wide counters, asserted by the KPI harness.
+/// 池级全局计数器，供 KPI 基准测试断言使用。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct PoolStats {
     pub live_slots: u32,
@@ -83,18 +80,17 @@ pub struct PoolStats {
     pub total_uploaded_bytes: u64,
 }
 
-/// The persistent pool.
+/// 持久化内存池。
 pub struct PersistentPool {
     tlsf: Tlsf,
     slots: Vec<Slot>,
     free_indices: Vec<u32>,
     quarantine: EpochQuarantine,
-    /// Scratch buffer reused by `reclaim` (never reallocated in steady state).
+    /// 由 `reclaim` 复用的暂存缓冲区（稳态下零重新分配）。
     reclaim_buffer: Vec<QuarantinedBlock>,
-    /// The timeline value the current frame will signal.
+    /// 当前帧提交后将触发的时间线值。
     ///
-    /// A block freed during this frame may only be handed back to the
-    /// allocator once the GPU has passed this value.
+    /// 本帧期间释放的内存块，必须等 GPU 执行超过该值后才能归还给分配器。
     pending_epoch: u64,
     patches: Vec<ScatterPatch>,
     stats: PoolStats,
@@ -112,10 +108,10 @@ impl core::fmt::Debug for PersistentPool {
 }
 
 impl PersistentPool {
-    /// Create a pool over `capacity` bytes of device-local memory.
+    /// 基于 `capacity` 字节的设备本地内存创建持久化池。
     ///
     /// # Panics
-    /// Panics when `capacity < 4096`.
+    /// 当 `capacity < 4096` 时触发 panic。
     #[must_use]
     pub fn new(capacity: usize) -> Self {
         assert!(capacity >= 4096, "pool too small");
@@ -136,19 +132,16 @@ impl PersistentPool {
         }
     }
 
-    /// Total device bytes owned by the pool.
+    /// 持久化池拥有的设备内存总字节数。
     #[must_use]
     pub fn capacity(&self) -> u32 {
         self.tlsf.capacity()
     }
 
-    /// Begin a frame; resets per-frame counters.
+    /// 开启新帧并重置逐帧计数器。
     ///
-    /// `timeline_epoch` is the timeline value the frame's submission will
-    /// signal. A block retired during this frame may only be handed back to
-    /// the allocator once the GPU has reached that value: every frame that
-    /// could still be reading it is older, and therefore carries a smaller
-    /// value.
+    /// `timeline_epoch` 为本帧提交后将触发的时间线值。本帧退役的内存块必须等 GPU
+    /// 达到该值后才能归还分配器：所有仍可能读取该块的帧都更早，因此持有更小的时间线值。
     pub fn begin_frame(&mut self, timeline_epoch: u64, frame_slot: u32) {
         self.current_frame = frame_slot;
         self.stats.uploads_this_frame = 0;
@@ -158,26 +151,25 @@ impl PersistentPool {
         self.pending_epoch = timeline_epoch;
     }
 
-    /// The epoch a block retired during the current frame is held back for.
+    /// 当前帧退役内存块所需等待的隔离 epoch。
     ///
-    /// This is the timeline value the current frame will signal. Once the GPU
-    /// has reached it, every older frame — the only ones that could still
-    /// read the block — has completed.
+    /// 即当前帧将触发的时间线值。一旦 GPU 到达该值，所有更早的帧（唯一可能仍在读取
+    /// 该块的帧）均已完成。
     #[must_use]
     pub fn current_epoch(&self) -> u64 {
         self.pending_epoch
     }
 
-    /// Return the sparse patch list produced during the current frame.
+    /// 返回当前帧生成的稀疏补丁列表。
     #[must_use]
     pub fn patches(&self) -> &[ScatterPatch] {
         &self.patches
     }
 
-    /// Reserve `size` bytes and return a handle.
+    /// 预留 `size` 字节并返回代际句柄。
     ///
     /// # Errors
-    /// Propagates [`AllocError`] when the pool is exhausted.
+    /// 当内存池耗尽时透传 [`AllocError`]。
     pub fn allocate(&mut self, size: u32) -> Result<PoolHandle, AllocError> {
         let offset = self.tlsf.allocate_aligned(size, 64)?;
         let capacity = self.tlsf.usable_size(offset);
@@ -213,24 +205,23 @@ impl PersistentPool {
         })
     }
 
-    /// Byte offset of a live block, or `None` for a stale handle.
+    /// 返回存活块的字节偏移；若句柄已失效则返回 `None`。
     #[must_use]
     pub fn offset_of(&self, handle: PoolHandle) -> Option<u32> {
         let slot = self.slots.get(handle.index as usize)?;
         (slot.state == STATE_LIVE && slot.generation == handle.generation).then_some(slot.offset)
     }
 
-    /// Reserved capacity of a live block.
+    /// 返回存活块的预留容量。
     #[must_use]
     pub fn capacity_of(&self, handle: PoolHandle) -> Option<u32> {
         let slot = self.slots.get(handle.index as usize)?;
         (slot.state == STATE_LIVE && slot.generation == handle.generation).then_some(slot.capacity)
     }
 
-    /// Record that `len` bytes at `offset` inside the block must be scattered.
+    /// 记录块内 `offset` 处长度为 `len` 的字节需要执行散布更新。
     ///
-    /// Mirrors the GPU side: the payload bytes themselves live in the frame's
-    /// transient ring; the patch only carries the destination.
+    /// 与 GPU 侧对应：载荷字节本身存放在帧瞬态环中，补丁仅携带目标地址。
     pub fn mark_dirty(&mut self, handle: PoolHandle, offset: u32, len: u32) -> bool {
         let Some(base) = self.offset_of(handle) else {
             return false;
@@ -250,15 +241,12 @@ impl PersistentPool {
         true
     }
 
-    /// Resize a block. The old block is quarantined until the frame that
-    /// referenced it completes; the caller is responsible for re-uploading the
-    /// payload into the new block.
+    /// 调整内存块大小。旧块会被隔离直至引用它的帧完成；调用方负责将载荷重新上传到新块。
     ///
-    /// Returns a **new** handle when the block had to move, or the same handle
-    /// when the existing capacity was sufficient.
+    /// 若需要搬迁则返回一个**新**句柄；若现有容量已足够则返回原句柄。
     ///
     /// # Errors
-    /// Propagates [`AllocError`] when the pool cannot host the larger block.
+    /// 当内存池无法容纳更大的块时透传 [`AllocError`]。
     pub fn grow(
         &mut self,
         handle: PoolHandle,
@@ -276,24 +264,21 @@ impl PersistentPool {
             return Ok(handle);
         }
         let new_handle = self.allocate(new_size)?;
-        // The caller is responsible for re-uploading the payload; we only make
-        // sure the old block outlives the frames that still read it.
+        // 调用方负责重新上传载荷；此处仅确保旧块存活至所有仍读取它的帧结束。
         self.free(handle, epoch);
         Ok(new_handle)
     }
 
-    /// Ensure the block behind `handle` can hold `count` elements of `stride`
-    /// bytes each.
+    /// 确保 `handle` 指向的块能够容纳 `count` 个步长为 `stride` 字节的元素。
     ///
-    /// The pool carves **bytes**, so the element count is converted with the
-    /// array's stride before the capacity is compared. Mixing the two units is
-    /// how a 2 000-element scene came to write 128 KB into a 64 KB block and
-    /// overwrite the transform, clip and payload arrays that followed it.
+    /// 内存池按**字节**切分，因此在比较容量前必须先按数组步长将元素数换算为字节。
+    /// 混用两个单位曾导致 2000 元素的场景把 128 KB 写入 64 KB 块中，进而覆写紧随其后的
+    /// 变换、裁剪与载荷数组。
     ///
-    /// Returns the (possibly new) handle and the block's byte capacity.
+    /// 返回（可能更新的）句柄及该块的字节容量。
     ///
     /// # Errors
-    /// Propagates [`AllocError`] when the pool cannot host the larger block.
+    /// 当内存池无法容纳更大的块时透传 [`AllocError`]。
     pub fn ensure_capacity(
         &mut self,
         handle: PoolHandle,
@@ -307,7 +292,7 @@ impl PersistentPool {
         if needed <= u64::from(capacity) {
             return Ok((handle, capacity));
         }
-        // Double until it fits so growth is amortised.
+        // 成倍扩容直至满足需求，以摊平增长开销。
         let mut new_cap = u64::from(capacity).max(4096);
         while new_cap < needed {
             new_cap = new_cap.saturating_mul(2);
@@ -317,10 +302,9 @@ impl PersistentPool {
         Ok((new_handle, new_capacity))
     }
 
-    /// Mark a block for deletion at `epoch`.
+    /// 标记内存块在 `epoch` 时删除。
     ///
-    /// The block stays readable by the GPU until the timeline reaches `epoch`;
-    /// only then is its memory handed back to TLSF.
+    /// 在时间线到达 `epoch` 前该块对 GPU 仍保持可读；此后其内存才归还给 TLSF。
     pub fn free(&mut self, handle: PoolHandle, epoch: u64) {
         let Some(slot) = self.slots.get_mut(handle.index as usize) else {
             return;
@@ -338,14 +322,12 @@ impl PersistentPool {
         self.stats.live_slots -= 1;
         self.stats.live_bytes = self.stats.live_bytes.saturating_sub(slot.len);
         self.stats.pending_slots += 1;
-        // When the quarantine saturates (the GPU stalled) the block is leaked
-        // on purpose: recycling the slot would hand memory to the GPU while
-        // an in-flight frame may still read it.
+        // 当隔离队列饱和（GPU 停顿）时有意泄漏该块：若强行复用槽位，
+        // 会导致在飞帧仍在读取时就把内存分配给新写入。
         self.quarantine.defer(epoch, block);
     }
 
-    /// Release everything whose epoch has completed. Returns how many slots
-    /// became reusable.
+    /// 释放所有已完成 epoch 的内存块，返回变为可复用的槽位数量。
     pub fn reclaim(&mut self, completed_epoch: u64) -> usize {
         self.reclaim_buffer.clear();
         let mut buf = core::mem::take(&mut self.reclaim_buffer);
@@ -353,9 +335,8 @@ impl PersistentPool {
 
         let mut released = 0;
         for block in buf.drain(..) {
-            // Find the pending slot that owned this payload. Slots are few
-            // (hundreds), and this path runs once per freed node, so the linear
-            // probe is cheaper than maintaining a side map.
+            // 查找拥有该载荷偏移的待释放槽位。槽位总数较少（数百个），且该路径
+            // 每个释放节点仅执行一次，线性扫描比维护额外映射表更省开销。
             if let Some(idx) = self
                 .slots
                 .iter()
@@ -375,25 +356,25 @@ impl PersistentPool {
         released
     }
 
-    /// Pool counters.
+    /// 持久化池统计计数器。
     #[must_use]
     pub fn stats(&self) -> PoolStats {
         self.stats
     }
 
-    /// TLSF health (block count / fragmentation).
+    /// TLSF 分配器健康状态（块数/碎片率）。
     #[must_use]
     pub fn tlsf_stats(&mut self) -> TlsfStats {
         self.tlsf.stats()
     }
 
-    /// Number of blocks parked by the quarantine.
+    /// 当前处于隔离中的块数量。
     #[must_use]
     pub fn parked_blocks(&self) -> usize {
         self.quarantine.parked()
     }
 
-    /// Drop all state for device-lost recovery. Every handle becomes invalid.
+    /// 清空全部状态以供设备丢失恢复。所有旧句柄随之失效。
     pub fn reset(&mut self) {
         self.tlsf.reset();
         self.slots.clear();
@@ -406,7 +387,7 @@ impl PersistentPool {
         };
     }
 
-    /// True when `handle` still refers to a live block.
+    /// 当 `handle` 仍指向有效存活块时返回 true。
     #[must_use]
     pub fn is_live(&self, handle: PoolHandle) -> bool {
         self.offset_of(handle).is_some()
@@ -437,7 +418,7 @@ mod tests {
         p.free(a, 1);
         p.reclaim(1);
         assert!(!p.is_live(a));
-        // A new allocation may reuse the index, but never the old generation.
+        // 新分配可复用槽位索引，但绝不会复用旧代数。
         let b = p.allocate(64).unwrap();
         assert_eq!(a.index, b.index, "index should be recycled");
         assert_ne!(a.generation, b.generation);
@@ -451,15 +432,15 @@ mod tests {
         let a = p.allocate(8192).unwrap();
         let base = p.offset_of(a).unwrap();
         p.free(a, 7);
-        // Frame 7 has not completed: the bytes must stay parked.
+        // 帧 7 尚未完成：内存块必须保持隔离。
         assert_eq!(p.reclaim(6), 0);
         assert_eq!(p.parked_blocks(), 1);
         let b = p.allocate(8192);
-        // Either OOM or a different offset — never the parked one.
+        // 要么 OOM 要么分配到不同偏移——绝不能命中仍在隔离的偏移。
         if let Ok(b) = b {
             assert_ne!(p.offset_of(b).unwrap(), base);
         }
-        // Once frame 7 completes the memory returns.
+        // 帧 7 完成后内存立即归还。
         assert_eq!(p.reclaim(7), 1);
         assert_eq!(p.parked_blocks(), 0);
     }
@@ -494,21 +475,21 @@ mod tests {
         let mut p = PersistentPool::new(1 << 20);
         let handles: Vec<_> = (0..256).map(|_| p.allocate(64).unwrap()).collect();
 
-        // Frame 1: initial full upload (each block written once).
+        // 帧 1：首次全量上传（每个块写入一次）。
         p.begin_frame(1, 0);
         for h in &handles {
             assert!(p.mark_dirty(*h, 0, 64));
         }
         assert_eq!(p.stats().bytes_uploaded_this_frame, 256 * 64);
 
-        // Frame 2: camera pan only — no node changed, so zero uploads.
+        // 帧 2：仅平移相机——无节点变更，零上传。
         p.begin_frame(2, 1);
         assert_eq!(p.stats().uploads_this_frame, 0);
         assert_eq!(p.stats().bytes_uploaded_this_frame, 0);
         assert_eq!(p.stats().allocs_this_frame, 0);
         assert!(p.patches().is_empty());
 
-        // Frame 3: a single node's opacity changed -> exactly 64B.
+        // 帧 3：单个节点不透明度变更 -> 精确上传 64B。
         p.begin_frame(3, 2);
         assert!(p.mark_dirty(handles[0], 0, 64));
         assert_eq!(p.stats().bytes_uploaded_this_frame, 64);
@@ -535,7 +516,7 @@ mod tests {
             assert!(n < 100);
         }
         assert!(n > 0);
-        // Everything that succeeded is still live.
+        // 所有成功分配的句柄均保持存活。
         assert_eq!(p.stats().live_slots, n);
     }
 
@@ -566,12 +547,11 @@ mod tests {
         assert!(p.is_live(b));
     }
 
-    /// The regression test for the bytes-vs-elements confusion.
+    /// 字节与元素数单位混淆的回归测试。
     ///
-    /// The renderer asked the pool for "2 000 primitives" but the pool carves
-    /// bytes. When the two units were mixed, the 64 KB block was considered
-    /// big enough (64 KB > 2 000) and the scatter shader wrote 128 KB into it,
-    /// overwriting the transform, clip and payload arrays that followed.
+    /// 渲染器向池请求“2000 个图元”，而池按字节分配。过去混用单位时，64 KB 块被误判为
+    /// 足够大（64 KB > 2000），导致散布着色器向其中写入 128 KB，覆写了紧邻的
+    /// 变换、裁剪与载荷数组。
     #[test]
     fn capacity_is_measured_in_bytes_not_elements() {
         const STRIDE: u64 = 64;
@@ -581,8 +561,7 @@ mod tests {
         let clip = p.allocate(16 * 1024).unwrap();
         let payload = p.allocate(16 * 1024).unwrap();
 
-        // 2 000 elements * 64 bytes = 128 000 bytes, which does NOT fit in the
-        // 64 KB primitive block.
+        // 2000 个元素 * 64 字节 = 128000 字节，无法装入 64 KB 图元块。
         let (prim, prim_bytes) = p
             .ensure_capacity(prim, 2_000, STRIDE, 0)
             .expect("grow the primitive block");
@@ -591,7 +570,7 @@ mod tests {
             "the block must hold 2 000 elements of {STRIDE} bytes, got {prim_bytes}"
         );
 
-        // The neighbouring arrays must be untouched by the growth.
+        // 相邻数组不得受扩容操作影响。
         let prim_offset = p.offset_of(prim).unwrap();
         let write_end = prim_offset as u64 + 2_000 * STRIDE;
         for (name, handle) in [
@@ -622,29 +601,26 @@ mod tests {
         assert!(u64::from(bytes) >= 100 * 64);
     }
 
-    /// A block retired during a frame must come back once the GPU has
-    /// passed the frame's epoch.
+    /// 帧期间退役的块必须在 GPU 越过该帧 epoch 后归还。
     ///
-    /// The quarantine is what keeps a frame in flight from reading a block
-    /// that has already been handed out again. It only works if something
-    /// actually drains it — which is what the render loop's `reclaim` call
-    /// does.
+    /// 隔离队列防止在飞帧读取已被重新分配的块，而它生效的前提是渲染循环
+    /// 会定期调用 `reclaim` 将其排空。
     #[test]
     fn a_retired_block_comes_back_after_its_epoch() {
         let mut p = PersistentPool::new(1 << 20);
-        // The frame signals the epoch 1.
+        // 该帧将触发 epoch 1。
         p.begin_frame(1, 0);
         let epoch = p.current_epoch();
         assert_eq!(epoch, 1);
         let block = p.allocate(4096).unwrap();
-        // Growing retires the old block at the current epoch.
+        // 扩容操作在当前 epoch 退役旧块。
         let grown = p.ensure_capacity(block, 100_000, 1, epoch).unwrap().0;
         assert_ne!(grown, block, "the block must have moved");
         assert_eq!(p.parked_blocks(), 1, "the old block must be quarantined");
-        // The epoch has not completed: the block must stay parked.
+        // 该 epoch 尚未完成：旧块必须保持隔离。
         assert_eq!(p.reclaim(0), 0);
         assert_eq!(p.parked_blocks(), 1);
-        // Now it has.
+        // 至此该 epoch 已完成。
         assert_eq!(p.reclaim(1), 1);
         assert_eq!(p.parked_blocks(), 0, "the block must be back in the pool");
     }

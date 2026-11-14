@@ -1,8 +1,8 @@
-//! The showcase, driven through the generic application runtime.
+//! 通过通用应用运行时驱动 showcase。
 //!
-//! The window host no longer owns the scene diff: `AppRuntime` rebuilds the
-//! frame, diffs it against the previous one and reports the upload plan. These
-//! tests exercise exactly that path without a GPU.
+//! 窗口宿主不再拥有场景 diff：`AppRuntime` 负责重建帧、将其与上一帧做 diff
+//! 并报告上传计划。这些测试在无 GPU 情况下精确验证该路径。
+//!
 
 use unbound_app::AppRuntime;
 use unbound_math::Vec2;
@@ -52,8 +52,8 @@ fn navigating_rebuilds_and_reports_a_new_scene() {
         .application_mut()
         .shell_mut()
         .navigate(PageId::Telemetry);
-    // A mutation the host made outside the reducer has to be announced, the
-    // same way the window shell does it for zoom and window chrome.
+    // 宿主在 reducer 之外做出的变更必须显式宣告，就像窗口外壳对缩放和窗口外框所做的那样。
+    //
     runtime.invalidate();
     let moved = runtime.frame(0.0);
     assert_ne!(moved.diff, SceneDiff::Identical);
@@ -66,9 +66,9 @@ fn zooming_reflows_for_the_smaller_logical_viewport() {
     let _ = runtime.frame(0.0);
     let wide = runtime.application().shell().layout.content.size.x;
 
-    // Zooming in divides the physical size by the effective scale, so the
-    // host hands the runtime a smaller logical viewport. The page has to be
-    // laid out for it instead of keeping the old geometry and overflowing.
+    // 放大时物理尺寸除以有效缩放，因此宿主交给运行时一个更小的逻辑视口。
+    // 页面必须按该视口重新布局，而不是保留旧几何并发生溢出。
+    //
     runtime.resize(Vec2::new(640.0, 400.0));
     let _ = runtime.frame(0.0);
     let narrow = runtime.application().shell().layout.content.size.x;
@@ -84,8 +84,8 @@ fn zooming_reflows_for_the_smaller_logical_viewport() {
 fn an_accessibility_click_reaches_the_shell() {
     let mut runtime = runtime();
     let _ = runtime.frame(0.0);
-    // The nav rows register stable identities; clicking the Telemetry row
-    // must navigate even though no pointer event ever happened.
+    // 导航行注册了稳定标识；即使从未发生过指针事件，点击 Telemetry 行也必须触发导航。
+    //
     let node = showcase::target::id(showcase::target::Target::NavPage(
         PageId::Telemetry.index() as u8
     ));

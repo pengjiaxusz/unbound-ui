@@ -1,14 +1,14 @@
-//! Axis-aligned rectangle: layout boxes, clip boxes, quadtree bounds, dirty rects.
+//! 轴对齐矩形：布局框、裁剪框、四叉树边界与脏矩形。
 
 use bytemuck::{Pod, Zeroable};
 
 use crate::vec2::Vec2;
 
-/// An axis-aligned rectangle stored as origin + size.
+/// 以原点 + 尺寸存储的轴对齐矩形。
 ///
-/// Invariant used throughout the engine: `size >= 0` for layout rects; empty
-/// intersection is signalled by `size <= 0` on one axis, which the vertex
-/// shader turns into a fully collapsed quad (see `docs` §3.2).
+/// 引擎全局不变量：布局矩形的 `size >= 0`；空交集由任一轴上的
+/// `size <= 0` 表示，顶点着色器会将其折叠为退化四边形（参见 `docs` §3.2）。
+///
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct Rect {
@@ -103,10 +103,10 @@ impl Rect {
             && p.y <= self.origin.y + self.size.y
     }
 
-    /// True when `other` lies entirely inside `self`.
+    /// 当 `other` 完全位于 `self` 内部时返回 `true`。
     ///
-    /// The inclusive edge test matches [`Self::contains_point`], which counts
-    /// a point on the edge as contained.
+    /// 包含边界的判断与 [`Self::contains_point`] 一致，后者将边界上的点
+    /// 视为包含在内。
     #[inline]
     #[must_use]
     pub fn contains_rect(&self, other: &Rect) -> bool {
@@ -127,14 +127,14 @@ impl Rect {
             && other.origin.y < a_max.y
     }
 
-    /// True when the two rectangles overlap *or touch*.
+    /// 当两个矩形重叠**或相触**时返回 `true`。
     ///
-    /// [`Self::intersects`] is strict: two boxes that share only an edge do
-    /// not intersect. That is the right convention for a conservative
-    /// broad-phase filter, but it disagrees with
-    /// [`Self::contains_point`], which counts a point on the edge as
-    /// contained. An exact selection test wants the inclusive rule: a marquee
-    /// that ends exactly on an entity's edge should select it.
+    /// [`Self::intersects`] 为严格相交：仅共享一条边的两个矩形不算相交。
+    /// 这对于保守的粗筛阶段是正确的约定，但与 [`Self::contains_point`] 不同，
+    /// 后者将边界点视为包含在内。精确框选测试需要包含边界的规则：
+    /// 恰好落在图元边缘的选框也应选中该图元。
+    ///
+    ///
     #[inline]
     #[must_use]
     pub fn touches(&self, other: &Rect) -> bool {
@@ -146,8 +146,8 @@ impl Rect {
             && other.origin.y <= a_max.y
     }
 
-    /// Intersection; returns an empty rect (zero or negative size) when the
-    /// boxes are disjoint. Never returns `NaN` for finite inputs.
+    /// 求交集；当两矩形不相交时返回空矩形（尺寸为零或负）。
+    /// 对于有限输入永不返回 `NaN`。
     #[inline]
     #[must_use]
     pub fn intersect(&self, other: &Rect) -> Rect {
@@ -201,7 +201,7 @@ impl Rect {
         }
     }
 
-    /// Scale about the rect origin — used when converting logical -> physical px.
+    /// 绕矩形原点缩放——用于逻辑像素到物理像素的转换。
     #[inline]
     #[must_use]
     pub fn scale(&self, s: f32) -> Rect {
@@ -213,7 +213,7 @@ impl Rect {
         )
     }
 
-    /// Split into `(min_x, min_y, max_x, max_y)` as consumed by `GpuClipNode`.
+    /// 拆分为 `GpuClipNode` 所需的 `(min_x, min_y, max_x, max_y)`。
     #[inline]
     #[must_use]
     pub fn to_min_max_array(&self) -> [f32; 4] {
@@ -221,7 +221,7 @@ impl Rect {
         [self.origin.x, self.origin.y, max.x, max.y]
     }
 
-    /// Rebuild from `(min_x, min_y, max_x, max_y)`.
+    /// 从 `(min_x, min_y, max_x, max_y)` 重建矩形。
     #[inline]
     #[must_use]
     pub fn from_min_max_array(a: [f32; 4]) -> Rect {
@@ -231,7 +231,7 @@ impl Rect {
         }
     }
 
-    /// Centre + half-extent form used by the rounded-clip SDF slots.
+    /// 中心 + 半长形式，供圆角裁剪 SDF 槽位使用。
     #[inline]
     #[must_use]
     pub fn to_center_half(&self) -> [f32; 4] {
@@ -240,17 +240,17 @@ impl Rect {
     }
 }
 
-/// Project an **outer** rounded clip's corner arcs onto an **inner** rectangle.
+/// 将**外层**圆角裁剪的圆角弧投影到**内层**矩形上。
 ///
-/// The shader only carries two rounded clip slots, so a third nested container
-/// has to be folded on the CPU. Intersecting the outer rounded rect with the
-/// inner one turns each outer corner arc into a smaller effective radius at the
-/// corresponding inner corner — the same "inner radius = outer radius − inset"
-/// rule CSS uses for nested rounded containers. The result is only valid when
-/// the two rects are axis-aligned, which is the case the fold path handles.
+/// 着色器仅提供两个圆角裁剪槽位，因此第三层及更深的嵌套容器必须在
+/// CPU 端折叠。将外层圆角矩形与内层矩形求交，会把外层圆角弧转换为
+/// 对应内角处更小的有效半径——即 CSS 用于嵌套圆角容器的
+/// “内半径 = 外半径 − 内边距”规则。该结果仅在两矩形轴对齐时有效，
+/// 这正是折叠路径所处理的情况。
 ///
-/// `radii` are ordered `[top-left, top-right, bottom-right, bottom-left]`,
-/// matching the primitive corner-radius order and `sd_rounded_box`.
+///
+/// `radii` 按 `[左上, 右上, 右下, 左下]` 排序，与图元圆角半径顺序
+/// 及 `sd_rounded_box` 保持一致。
 #[must_use]
 pub fn project_rounded_radii(
     inner: Rect,
@@ -267,16 +267,16 @@ pub fn project_rounded_radii(
         if r <= 0.0 {
             continue;
         }
-        // Distance from the inner corner to the outer corner, per axis.
+        // 按轴计算内角到外角的距离。
         let (dx, dy) = match corner {
             0 => (inner_min.x - outer_min.x, inner_min.y - outer_min.y),
             1 => (outer_max.x - inner.max().x, inner_min.y - outer_min.y),
             2 => (outer_max.x - inner.max().x, outer_max.y - inner.max().y),
             _ => (inner_min.x - outer_min.x, outer_max.y - inner.max().y),
         };
-        // The inner corner needs at least the outer radius minus the inset it
-        // sits at; the larger of the two axes is the conservative choice for
-        // non-uniform insets.
+        // 内角至少需要保留外半径减去所在内边距；对于非均匀内边距，
+        // 取两轴中的较大值作为保守选择。
+        //
         let projected = (r - dx.max(dy)).max(0.0);
         out[corner] = out[corner].max(projected);
     }
@@ -327,12 +327,12 @@ mod tests {
         assert_eq!(Rect::from_min_max_array(r.to_min_max_array()), r);
     }
 
-    /// `intersects` is strict, `touches` is inclusive.
+    /// `intersects` 为严格判断，`touches` 为包含边界的判断。
     ///
-    /// The two boxes share only their edge: `intersects` says no (the
-    /// convention for a conservative broad-phase filter), `touches` says yes
-    /// (the convention for an exact selection test, matching
-    /// `contains_point`).
+    /// 两个矩形仅共享一条边：`intersects` 返回 false（保守粗筛的约定），
+    /// `touches` 返回 true（精确框选测试的约定，与 `contains_point` 一致）。
+    ///
+    ///
     #[test]
     fn touching_rects_are_distinguished_from_intersecting_ones() {
         let a = Rect::new(0.0, 0.0, 10.0, 10.0);
@@ -352,17 +352,17 @@ mod tests {
         let outer = Rect::new(0.0, 0.0, 100.0, 100.0);
         let inner = Rect::new(10.0, 10.0, 80.0, 80.0);
         let projected = project_rounded_radii(inner, [0.0; 4], outer, [20.0; 4]);
-        // Each inner corner sits 10px inside the outer one, so the outer 20px
-        // arc projects to 20 - 10 = 10px at the inner corner.
+        // 每个内角位于外角内侧 10px，因此外层 20px 圆弧在内角处投影为
+        // 20 - 10 = 10px。
         for r in projected {
             assert!((r - 10.0).abs() < 1e-3, "{projected:?}");
         }
 
-        // Containers that share a corner keep the full radius.
+        // 共享同一角点的容器保留完整的圆角半径。
         let same = project_rounded_radii(outer, [0.0; 4], outer, [20.0; 4]);
         assert!(same.iter().all(|r| (r - 20.0).abs() < 1e-4));
 
-        // An inner rect far from an arc needs no radius at all.
+        // 远离外层圆弧的内层矩形不需要任何圆角半径。
         let far = project_rounded_radii(inner, [4.0; 4], outer, [8.0; 4]);
         assert_eq!(far, [4.0; 4]);
     }

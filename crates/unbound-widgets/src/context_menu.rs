@@ -1,59 +1,57 @@
-//! The context menu: an anchored [`MenuDesc`] plus the reason it closed.
+//! 上下文菜单（ContextMenu）：带锚点定位的 [`MenuDesc`] 及关闭原因。
 //!
-//! Rendering is deliberately delegated to [`unbound_widgets::menu`]. This
-//! module only owns the things that make a context menu different from a menu
-//! bar popup: the anchor, the target node, focus restoration and a close
-//! reason the caller can turn into an announcement.
+//! 渲染刻意委托给 [`unbound_widgets::menu`]。本模块仅负责上下文菜单与菜单栏弹出菜单的差异部分：
+//! 锚点位置、目标节点、焦点恢复以及供调用方播报的关闭原因。
 
 use unbound_math::{Rect, Vec2};
 
 use crate::menu::{MenuDesc, MenuState};
 use crate::overlay::{place_anchored_popup, Placement};
 
-/// Why a context menu closed.
+/// 上下文菜单关闭的原因。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContextClose {
-    /// Escape or a back gesture.
+    /// 按下 Escape 或触发返回手势。
     Escape,
-    /// A click outside the menu.
+    /// 点击了菜单外部区域。
     ClickOutside,
-    /// An item was activated.
+    /// 某个菜单项被激活。
     Selection,
-    /// The surface under the menu scrolled.
+    /// 菜单下方的表面发生了滚动。
     Scroll,
 }
 
-/// The keys a context menu understands.
+/// 上下文菜单识别的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContextKey {
-    /// Highlight the previous selectable item.
+    /// 高亮上一个可选菜单项。
     Up,
-    /// Highlight the next selectable item.
+    /// 高亮下一个可选菜单项。
     Down,
-    /// Open the highlighted submenu.
+    /// 打开高亮项的子菜单。
     Right,
-    /// Close the current submenu layer, or the menu.
+    /// 关闭当前子菜单层级或整个菜单。
     Left,
-    /// Activate the highlighted item.
+    /// 激活当前高亮项。
     Enter,
-    /// Close the menu.
+    /// 关闭菜单。
     Escape,
 }
 
-/// The live state of a context menu.
+/// 上下文菜单的实时状态。
 #[derive(Clone, Debug)]
 pub struct ContextMenuState {
-    /// Whether the menu is visible.
+    /// 菜单是否可见。
     pub open: bool,
-    /// The pointer position that opened it.
+    /// 打开菜单时的指针位置。
     pub anchor: Vec2,
-    /// The node the menu applies to.
+    /// 菜单所作用的节点。
     pub target: Option<u64>,
-    /// The focused node before the menu opened.
+    /// 菜单打开前持有焦点的节点。
     pub return_focus: Option<u64>,
-    /// The nested menu state, reused unchanged from the menu widget.
+    /// 嵌套菜单状态，直接复用自 menu 组件。
     pub menu: MenuState,
-    /// Why the menu closed, consumed by the caller.
+    /// 菜单关闭原因，供调用方消费。
     pub close_reason: Option<ContextClose>,
 }
 
@@ -64,7 +62,7 @@ impl Default for ContextMenuState {
 }
 
 impl ContextMenuState {
-    /// A closed context menu.
+    /// 创建关闭状态的上下文菜单。
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -77,7 +75,7 @@ impl ContextMenuState {
         }
     }
 
-    /// Open at a pointer position, remembering the node and focus owner.
+    /// 在指针位置打开菜单，并记录目标节点与原焦点所有者。
     pub fn open_at(&mut self, anchor: Vec2, target: u64, return_focus: Option<u64>) {
         self.open = true;
         self.anchor = anchor;
@@ -87,7 +85,7 @@ impl ContextMenuState {
         self.close_reason = None;
     }
 
-    /// Close and record why.
+    /// 关闭菜单并记录关闭原因。
     pub fn close(&mut self, reason: ContextClose) {
         if !self.open {
             return;
@@ -97,22 +95,20 @@ impl ContextMenuState {
         self.menu = MenuState::new();
     }
 
-    /// Read the close reason once.
+    /// 一次性读取并消费关闭原因。
     pub fn take_close_reason(&mut self) -> Option<ContextClose> {
         self.close_reason.take()
     }
 
-    /// Whether the menu is visible.
+    /// 菜单当前是否可见。
     #[must_use]
     pub fn is_open(&self) -> bool {
         self.open
     }
 
-    /// Place a menu of a given size next to the anchor.
+    /// 将指定尺寸的菜单放置在锚点旁。
     ///
-    /// The menu flips above or left of the pointer when it would leave the
-    /// viewport, which is the difference between a usable context menu on a
-    /// screen edge and one that renders half off-screen.
+    /// 当菜单会超出视口时自动向上或向左翻转，从而避免屏幕边缘菜单被截断。
     #[must_use]
     pub fn place(&self, size: Vec2, viewport: Rect) -> Rect {
         let max = viewport.max();
@@ -132,7 +128,7 @@ impl ContextMenuState {
         )
     }
 
-    /// Fill a menu descriptor with the anchored rectangle.
+    /// 用锚定后的矩形填充菜单描述符。
     #[must_use]
     pub fn desc_at(&self, mut desc: MenuDesc, viewport: Rect) -> MenuDesc {
         let size = Vec2::new(desc.rect.size.x, desc.content_height());
@@ -140,7 +136,7 @@ impl ContextMenuState {
         desc
     }
 
-    /// The same placement through the generic overlay helper.
+    /// 通过通用浮层定位助手执行相同的放置逻辑。
     #[must_use]
     pub fn placed(&self, size: Vec2, viewport: Rect) -> Rect {
         place_anchored_popup(
@@ -151,11 +147,10 @@ impl ContextMenuState {
         )
     }
 
-    /// Reduce one key press.
+    /// 归约单次按键。
     ///
-    /// Returns the activated item index when Enter chose one. Escape closes
-    /// the menu; the caller observes [`Self::is_open`] or
-    /// [`Self::take_close_reason`].
+    /// 当 Enter 选中某项时返回被激活项的索引。Escape 会关闭菜单；
+    /// 调用方可通过 [`Self::is_open`] 或 [`Self::take_close_reason`] 观察状态。
     pub fn key(&mut self, desc: &MenuDesc, key: ContextKey) -> Option<usize> {
         match key {
             ContextKey::Up => {
@@ -279,8 +274,7 @@ mod tests {
         let desc = desc();
         state.key(&desc, ContextKey::Down);
         state.key(&desc, ContextKey::Down);
-        // Two steps from nothing land on "Copy" (index 2); the separator in
-        // between is not selectable.
+        // 从未选中状态步进两步会落在“Copy”（索引 2）；中间的分隔符不可选中。
         assert_eq!(state.menu.highlighted, Some(2));
     }
 }

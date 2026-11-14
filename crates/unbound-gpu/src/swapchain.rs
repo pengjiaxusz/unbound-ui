@@ -1,71 +1,58 @@
-//! Swapchain policy for low-latency windowed presentation (`docs` §2.3, M4).
+//! 低延迟窗口呈现的交换链策略（参见 `docs/architecture/gpu-renderer.md`，M4）。
 //!
-//! The renderer in this crate is deliberately surface-free: every test renders
-//! into an offscreen image, which is what makes the GPU suite runnable on CI.
-//! What *can* live here — and what the platform layer needs — is the policy:
-//! which device extensions are mandatory, which present mode is the right
-//! default, and how a resize must behave so the user never sees a black border
-//! or a stretched frame.
+//! 本 crate 的渲染器刻意保持无表面（surface-free）：所有测试均渲染至离屏图像，
+//! 从而使 GPU 测试套件可在 CI 上运行。此处存放并供平台层使用的，是呈现策略本身：
+//! 哪些设备扩展必需、默认采用何种呈现模式，以及窗口缩放时如何处理以避免黑边或拉伸。
 //!
-//! `VK_EXT_swapchain_maintenance1` is the important one. It lets the
-//! application hand the OS a fence so destroyed swapchains are not reused
-//! while still scanned out, and it lets the application say how the
-//! presentation engine has to scale a swapchain whose size no longer matches
-//! the window.
+//! `VK_EXT_swapchain_maintenance1` 尤为关键：它允许应用向操作系统提交围栏，
+//! 确保已销毁的交换链在仍在扫描输出时不被复用，并允许指定交换链尺寸与窗口不匹配时的
+//! 缩放方式。
 //!
-//! The mode that keeps vsync but presents the newest completed image —
-//! `VK_PRESENT_MODE_FIFO_LATEST_READY_EXT` — comes from a different
-//! extension, `VK_EXT_present_mode_fifo_latest_ready` (promoted to
-//! `VK_KHR_present_mode_fifo_latest_ready`). The policy here only states the
-//! *preference*: the Vulkan mode is resolved in
-//! [`crate::surface`], where the driver's real capabilities are known.
+//! 在保留垂直同步的同时呈现最新完成图像的 `VK_PRESENT_MODE_FIFO_LATEST_READY_EXT`
+//! 模式来自另一扩展 `VK_EXT_present_mode_fifo_latest_ready`（已晋升为
+//! `VK_KHR_present_mode_fifo_latest_ready`）。此处策略仅表达*偏好*；
+//! 实际 Vulkan 模式在 [`crate::surface`] 中结合驱动真实能力解析。
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
-/// Extensions the windowed backend requires on top of the renderer's own set.
+/// 窗口化后端在渲染器基础扩展集之外额外所需的扩展。
 pub const REQUIRED_SWAPCHAIN_EXTENSIONS: [&str; 2] =
     ["VK_KHR_swapchain", "VK_EXT_swapchain_maintenance1"];
 
-/// How the presentation engine must scale a swapchain whose size no longer
-/// matches the window (the resize frame, before the swapchain is recreated).
+/// 当交换链尺寸与窗口不再匹配时（重建交换链前的缩放过渡帧），呈现引擎应采用的缩放策略。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ResizeBehaviour {
-    /// Scale to the window: no black bars, slight aspect distortion for one frame.
+    /// 拉伸至窗口尺寸：无黑边，仅单帧存在轻微纵横比失真。
     Stretch,
-    /// Keep the aspect ratio: letterboxing, no distortion.
+    /// 保持纵横比：可能出现黑边，无失真。
     PreserveAspect,
-    /// Never scale: anchor the old image at the top-left and let the new
-    /// window area show the clear colour until the swapchain is rebuilt.
+    /// 永不缩放：将旧图像锚定在左上角，在交换链重建前由新窗口区域显示清屏色。
     ///
-    /// A stretched frame during a drag is the "jelly" the user sees; a
-    /// one-frame anchored image is invisible because the next frame is
-    /// already rendered at the new size.
+    /// 拖拽缩放时的拉伸帧正是用户看到的“果冻感”；而锚定单帧几乎不可察觉，
+    /// 因为紧接着的下一帧已按新尺寸渲染完成。
     OneToOne,
 }
 
-/// Which present mode to ask for.
+/// 请求使用的呈现模式。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PresentMode {
-    /// Tear-free, lowest latency available with `maintenance1`.
+    /// 无撕裂，配合 `maintenance1` 可获得最低延迟。
     FifoLatestReady,
-    /// Tear-free, but may queue frames.
+    /// 无撕裂，但可能排队缓冲多帧。
     Fifo,
-    /// Tearing, lowest latency.
+    /// 允许撕裂，延迟最低。
     Immediate,
 }
 
 impl PresentMode {
-    /// The mode to request given what the surface reports.
+    /// 根据表面支持情况决定请求的呈现模式。
     ///
-    /// `FifoLatestReady` is preferred whenever the maintenance stack is
-    /// present; `Fifo` is the only mode every Vulkan implementation must
-    /// support, so it is the safe fallback. The preference is resolved into
-    /// a real `VkPresentModeKHR` in [`crate::surface`], where the driver's
-    /// supported present modes are known.
+    /// 当维护扩展栈存在时优先选择 `FifoLatestReady`；`Fifo` 是所有 Vulkan 实现
+    /// 必须支持的唯一模式，因此作为安全回退。该偏好会在 [`crate::surface`] 中
+    /// 结合驱动实际支持的模式解析为具体的 `VkPresentModeKHR`。
     ///
-    /// `allow_tearing` wins over vsync: an uncapped run (`0` FPS limit) is
-    /// asking to be limited by the GPU, not by the display's refresh rate, and
-    /// FIFO would silently pin it to 60 Hz.
+    /// `allow_tearing` 优先于垂直同步：无帧率上限运行（`0` FPS 限制）意味着
+    /// 希望受 GPU 性能而非显示器刷新率限制，而 FIFO 会将其静默锁死在 60 Hz。
     #[must_use]
     pub fn choose(has_maintenance1: bool, allow_tearing: bool) -> Self {
         if allow_tearing {
@@ -77,7 +64,7 @@ impl PresentMode {
         }
     }
 
-    /// Vulkan name, for logs.
+    /// 用于日志输出的 Vulkan 模式名称。
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -92,24 +79,22 @@ fn have_extension(_names: &[&str], available: bool) -> bool {
     available
 }
 
-/// Presentation policy derived from device capabilities.
+/// 根据设备能力推导出的呈现策略。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PresentConfig {
     pub mode: PresentMode,
     pub resize: ResizeBehaviour,
-    /// Ask for a present fence so a swapchain is only destroyed once the GPU is
-    /// done scanning it out.
+    /// 请求呈现围栏，确保仅当 GPU 完成扫描输出后才销毁交换链。
     pub present_fence: bool,
-    /// Block until the presentation has actually reached the screen.
+    /// 阻塞等待直至画面真正呈现到屏幕。
     ///
-    /// This is the low-latency path of `VK_KHR_present_wait`: the CPU waits
-    /// for the real present instead of for the render, so the input queue is
-    /// sampled at the moment the user can see the frame.
+    /// 这是 `VK_KHR_present_wait` 的低延迟路径：CPU 等待真实呈现而非仅等待渲染完成，
+    /// 从而在用户刚能看到上一帧的时刻采样输入队列。
     pub wait_for_present: bool,
 }
 
 impl PresentConfig {
-    /// Build the policy from the extensions the device actually exposes.
+    /// 根据设备实际暴露的扩展构建呈现策略。
     #[must_use]
     pub fn from_capabilities(extensions: &[String], allow_tearing: bool) -> Self {
         let has_maintenance1 = extensions
@@ -118,19 +103,16 @@ impl PresentConfig {
         let has_present_wait = extensions.iter().any(|name| name == "VK_KHR_present_wait");
         Self {
             mode: PresentMode::choose(has_maintenance1, allow_tearing),
-            // Anchor the stale image at the top-left instead of stretching it
-            // across the new window during the one frame between a resize and
-            // the swapchain rebuild (`docs` §2.3).
+            // 在尺寸变更与交换链重建之间的单帧内，将旧图像锚定在左上角而非拉伸铺满
+            // 新窗口（参见 `docs/architecture/gpu-renderer.md`）。
             resize: ResizeBehaviour::OneToOne,
             present_fence: has_maintenance1,
-            // Blocking on the present would cap an uncapped run at the
-            // display's refresh rate, which is exactly what `0` asks not to
-            // happen.
+            // 阻塞等待呈现会将无上限运行锁死在显示器刷新率上，而传入 `0` 正是为了避免此事。
             wait_for_present: has_present_wait && !allow_tearing,
         }
     }
 
-    /// Extensions still missing from `extensions`.
+    /// `extensions` 中仍缺失的扩展列表。
     #[must_use]
     pub fn missing_extensions(extensions: &[String]) -> Vec<&'static str> {
         REQUIRED_SWAPCHAIN_EXTENSIONS
@@ -141,7 +123,7 @@ impl PresentConfig {
     }
 }
 
-/// Convenience: is the surface stack fully supported?
+/// 便捷方法：表面扩展栈是否完全受支持？
 #[must_use]
 pub fn is_supported(extensions: &[String]) -> bool {
     PresentConfig::missing_extensions(extensions).is_empty()
@@ -173,9 +155,7 @@ mod tests {
         assert!(!config.present_fence);
     }
 
-    /// The low-latency present path is only possible with
-    /// `VK_KHR_present_wait`; without it the CPU cannot know when the image
-    /// reached the screen.
+    /// 低延迟呈现路径仅在支持 `VK_KHR_present_wait` 时可用；缺乏该扩展时 CPU 无法获知图像何时上屏。
     #[test]
     fn the_present_wait_path_needs_its_extension() {
         let without = PresentConfig::from_capabilities(&exts(&["VK_KHR_swapchain"]), false);

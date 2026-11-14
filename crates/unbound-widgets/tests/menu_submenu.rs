@@ -1,8 +1,8 @@
-//! Menus grow nested rows and a scrollable body.
+//! 菜单展开嵌套子行与可滚动主体测试。
 //!
-//! The tests drive the highlight through `open_path` the way `ArrowRight`,
-//! `ArrowLeft`, hover and type-ahead do, then check the clamped geometry and the
-//! embedded [`ScrollState`] without a GPU.
+//! 测试按 `ArrowRight`、`ArrowLeft`、悬停与键入前缀的方式驱动 `open_path` 高亮，
+//! 并在无 GPU 环境下验证夹紧后的几何位置与内嵌的 [`ScrollState`]。
+//!
 
 use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
@@ -33,13 +33,13 @@ fn arrow_right_opens_the_highlighted_submenu_and_arrow_left_closes_it() {
     assert_eq!(state.open_path, vec![0]);
     assert_eq!(state.open_items(&desc).len(), 3, "the nested level");
 
-    // A second ArrowRight opens the nested-nested level.
+    // 第二次按 ArrowRight 打开更深一层的嵌套子菜单。
     state.highlighted = Some(2);
     assert!(state.expand(&desc));
     assert_eq!(state.open_path, vec![0, 2]);
     assert_eq!(state.open_items(&desc).len(), 1);
 
-    // ArrowLeft walks back out one level at a time and re-highlights the parent.
+    // ArrowLeft 逐级退回并重新高亮父项。
     assert!(state.collapse());
     assert_eq!(state.open_path, vec![0]);
     assert_eq!(state.highlighted, Some(2));
@@ -125,9 +125,9 @@ fn a_tall_menu_clamps_to_the_viewport_and_embeds_a_scroll_state() {
     assert_eq!(state.scroll_offset().y, 100.0);
 
     let output = emit_menu(1, 2, &desc, &state, ControlState::default()).0;
-    // The row primitives travel with the scroll offset.
+    // 行图元随滚动偏移一起移动。
     assert_eq!(output.primitives[2].local_pos[1], -100.0);
-    // 2 chrome + 20 rows * 2 + border.
+    // 2 个外框图元 + 20 行 * 2 + 边框。
     assert_eq!(output.primitives.len(), 43);
 }
 

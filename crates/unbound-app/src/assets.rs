@@ -1,12 +1,12 @@
-//! The asset hub: `unbound-asset` wired to the atlas and the font system.
+//! 资产中心：将 `unbound-asset` 接入图集（atlas）与字体系统。
 //!
-//! The async pipeline decodes off the render thread; this module is the
-//! main-thread half. Every frame [`AssetHub::poll`] drains whatever finished,
-//! packs decoded images into a shared RGBA8 atlas page, injects fonts into the
-//! text engine, and returns the dirty flags the rebuild needs. Images that are
-//! still in flight are drawn as placeholders by
-//! [`unbound_widgets::emit_image_with_assets`], so a decode never blocks the
-//! frame and the layout never jumps when the texture lands.
+//! 异步管线在渲染线程之外完成解码；本模块是主线程一侧。
+//! 每帧 [`AssetHub::poll`] 会排空已完成的任务，将解码后的图像打包进共享
+//! RGBA8 图集页，将字体注入文本引擎，并返回重建所需的脏标志。
+//! 仍在解码中的图像由 [`unbound_widgets::emit_image_with_assets`] 绘制为占位符，
+//! 因此解码绝不会阻塞帧渲染，纹理到达时布局也不会跳动。
+//!
+//!
 
 use rustc_hash::FxHashMap;
 
@@ -18,25 +18,25 @@ use unbound_widgets::{ImageAssetResolver, ResolvedImage};
 
 use crate::DirtyFlags;
 
-/// Where an asset is in its lifecycle.
+/// 资产在其生命周期中所处的阶段。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum AssetResidency {
-    /// The decode worker still has it.
+    /// 解码工作线程仍在处理中。
     Loading,
-    /// Decoded, packed into `layer` at `uv`, with its natural size.
+    /// 已解码并打包到 `layer` 的 `uv` 区域，附带其原始尺寸。
     Ready {
-        /// The bindless atlas layer.
+        /// 无绑定（bindless）图集数组层索引。
         layer: u32,
-        /// The region of the layer, normalised to `0..1`.
+        /// 层内归一化至 `0..1` 的区域。
         uv: Rect,
-        /// The image's natural size, in pixels.
+        /// 图像的原始像素尺寸。
         size: Vec2,
     },
-    /// The decode or the atlas allocation failed.
+    /// 解码或图集分配失败。
     Failed,
 }
 
-/// One placed rectangle in the shared image atlas.
+/// 共享图像图集中的单个已放置矩形。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct Allocation {
     layer: u32,
@@ -58,11 +58,11 @@ impl Allocation {
     }
 }
 
-/// A shelf packer over the RGBA8 atlas pages.
+/// 基于 RGBA8 图集页的货架式打包器（shelf packer）。
 ///
-/// Images are packed left-to-right in shelves, top-to-bottom. When a page is
-/// full the next array layer starts. The packer never frees: an image lives
-/// for the session, which is what the bindless atlas expects.
+/// 图像按从左到右、从上到下的顺序排入货架；当前页满时开启下一数组层。
+/// 打包器永不释放空间：图像在会话期间常驻，符合无绑定图集的预期。
+///
 #[derive(Debug, Default)]
 struct ShelfAtlas {
     layer: u32,
@@ -72,8 +72,8 @@ struct ShelfAtlas {
 }
 
 impl ShelfAtlas {
-    /// One texel of padding keeps bilinear sampling from bleeding between
-    /// neighbouring images.
+    /// 1 纹素的内边距可防止双线性采样在相邻图像间发生渗色。
+    ///
     const PADDING: u32 = 1;
 
     fn allocate(&mut self, width: u32, height: u32) -> Option<Allocation> {
@@ -107,10 +107,10 @@ impl ShelfAtlas {
     }
 }
 
-/// The main-thread asset front end.
+/// 主线程侧的资产前端。
 ///
-/// Owns the decode pipeline and the residency table; [`AssetHub::poll`] is the
-/// only method the frame loop calls.
+/// 持有解码管线与驻留表；帧循环仅需调用 [`AssetHub::poll`]。
+///
 pub struct AssetHub {
     pipeline: AssetPipeline,
     residency: FxHashMap<AssetId, AssetResidency>,
@@ -135,13 +135,13 @@ impl Default for AssetHub {
 }
 
 impl AssetHub {
-    /// Start the hub with the default decode pool.
+    /// 使用默认解码线程池启动资产中心。
     #[must_use]
     pub fn new() -> Self {
         Self::with_config(PipelineConfig::default())
     }
 
-    /// Start the hub with an explicit pipeline configuration.
+    /// 使用显式管线配置启动资产中心。
     #[must_use]
     pub fn with_config(config: PipelineConfig) -> Self {
         Self {
@@ -153,12 +153,12 @@ impl AssetHub {
         }
     }
 
-    /// Submit an encoded PNG for background decoding.
+    /// 提交已编码的 PNG 进行后台解码。
     pub fn request_png(&mut self, bytes: Vec<u8>) -> AssetId {
         self.request(AssetKind::Image, bytes)
     }
 
-    /// Submit a font file for background parsing.
+    /// 提交字体文件进行后台解析。
     pub fn request_font(&mut self, bytes: Vec<u8>) -> AssetId {
         self.request(AssetKind::Font, bytes)
     }
@@ -174,16 +174,16 @@ impl AssetHub {
         id
     }
 
-    /// Drain finished decodes, upload the images and inject the fonts.
+    /// 排空已完成的解码任务，上传图像并注入字体。
     ///
-    /// Returns the flags a rebuild needs: `PAINT` for a new texture,
-    /// `LAYOUT | TEXT` for a new font.
+    /// 返回重建所需的脏标志：新纹理对应 `PAINT`，新字体对应 `LAYOUT | TEXT`。
+    ///
     pub fn poll(&mut self, text: &mut TextEngine) -> DirtyFlags {
         self.pipeline.begin_frame();
         let completed = match self.pipeline.poll() {
             Ok(completed) => completed,
             Err(_) => {
-                // Every worker died; nothing in flight will ever finish.
+                // 所有工作线程均已退出；飞行中的任务永远不会完成。
                 for state in self.residency.values_mut() {
                     if *state == AssetResidency::Loading {
                         *state = AssetResidency::Failed;
@@ -256,24 +256,24 @@ impl AssetHub {
         }
     }
 
-    /// Take the atlas uploads accumulated since the previous call.
+    /// 取出自上次调用以来累积的图集上传任务。
     pub fn take_uploads(&mut self) -> Vec<AtlasUpload> {
         core::mem::take(&mut self.uploads)
     }
 
-    /// The state of one asset.
+    /// 单个资产的状态。
     #[must_use]
     pub fn residency(&self, id: AssetId) -> Option<AssetResidency> {
         self.residency.get(&id).copied()
     }
 
-    /// Number of decodes still in flight.
+    /// 仍在解码中的任务数量。
     #[must_use]
     pub const fn inflight(&self) -> usize {
         self.pipeline.inflight()
     }
 
-    /// The decode failures, with their reasons.
+    /// 解码失败记录及其原因。
     #[must_use]
     pub fn failures(&self) -> &[(AssetId, String)] {
         self.pipeline.failures()
@@ -316,10 +316,10 @@ mod tests {
         let mut atlas = ShelfAtlas::default();
         let first = atlas.allocate(2000, 10).expect("first shelf");
         assert_eq!((first.layer, first.x, first.y), (0, 0, 0));
-        // 2000 + 1 + 2000 overflows the page: a new shelf starts.
+        // 2000 + 1 + 2000 超出页宽：开启新货架。
         let second = atlas.allocate(2000, 10).expect("second shelf");
         assert_eq!((second.layer, second.x, second.y), (0, 0, 11));
-        // A 2040-pixel-tall image cannot fit below the two shelves.
+        // 2040 像素高的图像无法放入两层货架下方。
         let third = atlas.allocate(4, 2040).expect("next page");
         assert_eq!(third.layer, 1);
         assert_eq!((third.x, third.y), (0, 0));

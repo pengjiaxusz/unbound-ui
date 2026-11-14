@@ -1,28 +1,28 @@
-//! Spring physics, easing and reactive frame pacing (`docs` §4.4).
+//! 弹簧物理、缓动函数与响应式帧调度（`docs` §4.4）。
 //!
-//! The animation channel is deliberately **independent of layout**: a spring
-//! writes a `GpuTransform`, never a Taffy style. That is what lets a card move at
-//! 120 Hz while the layout engine does nothing at all.
+//! 动画通道刻意**独立于布局**：弹簧驱动的是 `GpuTransform`，
+//! 而非 Taffy 样式。因此卡片可以在 120 Hz 下流畅移动，而布局引擎完全无需重算。
 //!
-//! Two details decide whether spring animations feel right in practice:
 //!
-//! * **Substepping.** A single Euler step with a 100 ms hitch injects energy and
-//!   makes the spring explode. Every step is therefore split into slices no
-//!   larger than [`MAX_SUBSTEP`] seconds, which keeps the integrator stable for
-//!   any frame time.
-//! * **Settling.** A spring is declared done when both displacement and velocity
-//!   are below a perceptual threshold, not when it mathematically converges. That
-//!   is what allows the scheduler to park the CPU/GPU at 0% (`docs` §4.4).
+//! 实际体验中，两个细节决定了弹簧动画的手感：
+//!
+//! * **子步进（Substepping）。** 一次 100 ms 的卡顿若用单步欧拉积分会注入能量，
+//!   导致弹簧发散爆炸。因此每帧步进都会切分为不超过 [`MAX_SUBSTEP`] 秒的子步，
+//!   从而保证积分器在任意帧耗时下都保持稳定。
+//!
+//! * **收敛判定（Settling）。** 当位移与速度均低于感知阈值时即判定弹簧静止，
+//!   而非等待数学意义上的绝对收敛。这使调度器能够将 CPU/GPU 占用降至 0%（`docs` §4.4）。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 use unbound_math::Vec2;
 
-/// Largest integration slice; 4 ms keeps semi-implicit Euler stable even for
-/// stiff springs.
+/// 最大积分时间步长；4 ms 可确保半隐式欧拉法即使面对高刚度弹簧也保持稳定。
+///
 pub const MAX_SUBSTEP: f32 = 0.004;
 
-/// A one-dimensional damped harmonic oscillator.
+/// 一维阻尼谐振子。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Spring {
     pub stiffness: f32,
@@ -31,9 +31,9 @@ pub struct Spring {
     pub value: f32,
     pub target: f32,
     pub velocity: f32,
-    /// Displacement below which the spring is considered settled.
+    /// 判定弹簧已静止的位移阈值。
     pub rest_threshold: f32,
-    /// Velocity below which the spring is considered settled.
+    /// 判定弹簧已静止的速度阈值。
     pub rest_velocity: f32,
 }
 
@@ -52,23 +52,23 @@ impl Default for Spring {
     }
 }
 
-/// Named spring feels, tuned for UI motion rather than for physical accuracy.
+/// 预设弹簧手感参数，针对 UI 动效调优而非追求物理精确。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SpringPreset {
-    /// Quick and slightly bouncy: buttons, toggles.
+    /// 轻快且略带回弹：按钮、开关。
     Snappy,
-    /// Smooth without overshoot: panels, sheets.
+    /// 平滑无过冲：面板、抽屉。
     Gentle,
-    /// Heavy and slow: large canvases.
+    /// 沉稳且缓慢：大画布。
     Heavy,
-    /// Nearly critically damped: progress bars.
+    /// 接近临界阻尼：进度条。
     Precise,
 }
 
 impl SpringPreset {
     #[must_use]
     pub const fn config(self) -> (f32, f32) {
-        // (stiffness, damping)
+        // (刚度, 阻尼)
         match self {
             Self::Snappy => (520.0, 26.0),
             Self::Gentle => (220.0, 30.0),
@@ -96,12 +96,12 @@ impl Spring {
         preset.spring(initial)
     }
 
-    /// A critically damped spring: reaches the target without overshoot.
+    /// 临界阻尼弹簧：无过冲地到达目标。
     #[must_use]
     pub fn critically_damped(stiffness: f32, initial: f32) -> Self {
         Self {
             stiffness,
-            // Critical damping for a unit mass: c = 2·sqrt(k).
+            // 单位质量的临界阻尼：c = 2·sqrt(k)。
             damping: 2.0 * stiffness.sqrt(),
             value: initial,
             target: initial,
@@ -113,7 +113,7 @@ impl Spring {
         self.target = target;
     }
 
-    /// Jump instantly (initial layout, no animation).
+    /// 立即跳转到位（用于初始布局，无动画）。
     pub fn snap_to(&mut self, value: f32) {
         self.value = value;
         self.target = value;
@@ -122,10 +122,10 @@ impl Spring {
 
     #[must_use]
     pub fn is_settled(&self) -> bool {
-        // A non-finite state can never satisfy the comparisons below (every
-        // comparison with NaN is false), so the spring would never settle and
-        // the frame scheduler would never sleep. A broken spring counts as
-        // settled: it has nothing left to animate.
+        // 非有限状态永远无法满足下方比较（与 NaN 的任何比较均为 false），
+        // 会导致弹簧永不收敛、帧调度器永不休眠。损坏的弹簧直接视为已静止。
+        //
+        //
         if !self.value.is_finite() || !self.target.is_finite() || !self.velocity.is_finite() {
             return true;
         }
@@ -133,13 +133,13 @@ impl Spring {
             && self.velocity.abs() <= self.rest_velocity
     }
 
-    /// Advance by `dt` seconds. Returns `true` while still moving.
+    /// 推进 `dt` 秒。若仍在运动则返回 `true`。
     pub fn step(&mut self, dt: f32) -> bool {
-        // A non-finite target (a NaN out of layout, a division by zero in the
-        // caller) would poison the state forever: the comparisons in
-        // `is_settled` are false for NaN, so the spring would never settle,
-        // the animator would never drop it, and the frame scheduler would
-        // spin forever. The broken spring is snapped to rest instead.
+        // 非有限目标（如布局输出的 NaN 或调用方除零）会永久污染状态：
+        // `is_settled` 中的比较对 NaN 均为 false，导致弹簧永不收敛、
+        // 动画器永不移除它、帧调度器无限空转。此处直接将异常弹簧归零静止。
+        //
+        //
         if !self.target.is_finite() {
             self.value = 0.0;
             self.target = 0.0;
@@ -152,8 +152,8 @@ impl Spring {
         let mut remaining = dt.min(0.25);
         while remaining > 0.0 {
             let h = remaining.min(MAX_SUBSTEP);
-            // Semi-implicit Euler: integrate velocity first, then position with
-            // the *new* velocity. Symplectic, so it does not gain energy.
+            // 半隐式欧拉法：先积分速度，再用*新*速度积分位置。具有辛几何性质，不会凭空增益能量。
+            //
             let force = -self.stiffness * (self.value - self.target) - self.damping * self.velocity;
             let accel = force / self.mass.max(1e-3);
             self.velocity += accel * h;
@@ -161,15 +161,15 @@ impl Spring {
             remaining -= h;
         }
         if !self.value.is_finite() || !self.velocity.is_finite() {
-            // The integration diverged (an absurd stiffness, or a value that
-            // overflowed). Rest instead of spinning on a broken state.
+            // 积分发散（如刚度过大或数值溢出）。直接静止，避免在损坏状态上空转。
+            //
             self.value = self.target;
             self.velocity = 0.0;
             return false;
         }
         if self.is_settled() {
-            // Snap the residual so the last frame is pixel-identical to rest and
-            // the node can re-enable pixel snapping.
+            // 吸附消除残余误差，使最后一帧与静止状态像素完全一致，节点可重新启用像素对齐。
+            //
             self.value = self.target;
             self.velocity = 0.0;
             false
@@ -178,8 +178,8 @@ impl Spring {
         }
     }
 
-    /// Overshoot of the last step, as a fraction of the travel. Used by tests to
-    /// prove a preset really is critically damped.
+    /// 上一步的过冲量（占总行程的比例）。供测试验证预设确实为临界阻尼。
+    ///
     #[must_use]
     pub fn overshoot(&self, from: f32) -> f32 {
         let travel = self.target - from;
@@ -190,7 +190,7 @@ impl Spring {
     }
 }
 
-/// A two-axis spring, which is what a transform translation actually needs.
+/// 二维弹簧，用于驱动变换平移。
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Spring2 {
     pub x: Spring,
@@ -226,7 +226,7 @@ impl Spring2 {
         Vec2::new(self.x.velocity, self.y.velocity)
     }
 
-    /// Advance both axes; returns `true` while either is moving.
+    /// 推进双轴；任一轴仍在运动则返回 `true`。
     pub fn step(&mut self, dt: f32) -> bool {
         let a = self.x.step(dt);
         let b = self.y.step(dt);
@@ -239,7 +239,7 @@ impl Spring2 {
     }
 }
 
-/// Cubic-bezier easing for one-shot transitions (theme fades, wizard steps).
+/// 用于一次性过渡的三次贝塞尔缓动（如主题渐变、向导步骤）。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct CubicBezier {
     pub x1: f32,
@@ -270,8 +270,8 @@ impl CubicBezier {
 
     #[must_use]
     pub fn sample(&self, t: f32) -> f32 {
-        // Newton iterations on x(t) = u, then evaluate y(t). Eight iterations is
-        // far past visual precision and costs ~40 ns.
+        // 对 x(t) = u 执行牛顿迭代，随后求值 y(t)。8 次迭代远超视觉精度需求，耗时约 40 ns。
+        //
         let u = t.clamp(0.0, 1.0);
         let mut guess = u;
         for _ in 0..8 {
@@ -296,8 +296,8 @@ impl CubicBezier {
     }
 }
 
-/// Which property a spring drives. Kept as data so the animator can be a flat
-/// array (`docs` §4.4: no closures in the view tree).
+/// 弹簧驱动的属性通道。以纯数据形式表示，使动画器可存储为扁平数组
+/// （`docs` §4.4：视图树中不使用闭包）。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Channel {
     TranslateX,
@@ -307,26 +307,26 @@ pub enum Channel {
     Opacity,
 }
 
-/// One running animation.
+/// 单个运行中的动画实例。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Animation {
-    /// Opaque handle of the owning node.
+    /// 所属节点的不透明句柄。
     pub node: u64,
     pub channel: Channel,
     pub spring: Spring,
-    /// Slots that can be reused without allocation.
+    /// 可无分配复用的空闲槽位。
     pub generation: u32,
 }
 
-/// The animator: a flat array of springs, compacted in place.
+/// 动画器：原地压缩的扁平弹簧数组。
 #[derive(Debug, Default)]
 pub struct Animator {
     animations: Vec<Animation>,
-    /// Number of springs still moving last step (drives frame pacing).
+    /// 上一步仍在运动的弹簧数量（用于驱动帧调度）。
     active_count: u32,
-    /// Frames where something actually moved.
+    /// 实际发生运动的帧数。
     pub moving_frames: u64,
-    /// Frames where nothing moved (the scheduler can sleep).
+    /// 无任何运动的帧数（调度器可进入休眠）。
     pub idle_frames: u64,
 }
 
@@ -346,8 +346,8 @@ impl Animator {
         self.animations.is_empty()
     }
 
-    /// Springs still moving. Recomputed from the springs themselves so it is
-    /// correct even before the first `step` of a newly added animation.
+    /// 仍在运动的弹簧数。直接根据弹簧状态重算，因此即使在新动画首次 `step` 前也准确。
+    ///
     #[must_use]
     pub fn active_animations(&self) -> u32 {
         self.animations
@@ -356,10 +356,10 @@ impl Animator {
             .count() as u32
     }
 
-    /// Start (or retarget) an animation for `(node, channel)`.
+    /// 启动或重设 `(node, channel)` 的动画目标。
     ///
-    /// Retargeting an existing animation keeps its velocity, which is what makes
-    /// interrupting a spring feel natural instead of jerky.
+    /// 重设现有动画目标时会保留其当前速度，使打断弹簧运动时手感自然而非生硬跳变。
+    ///
     pub fn animate(&mut self, node: u64, channel: Channel, preset: SpringPreset, target: f32) {
         if let Some(existing) = self
             .animations
@@ -384,7 +384,7 @@ impl Animator {
         });
     }
 
-    /// Start an animation that begins at `from` and moves to `to`.
+    /// 启动一个从 `from` 运动到 `to` 的动画。
     pub fn animate_from(
         &mut self,
         node: u64,
@@ -403,7 +403,7 @@ impl Animator {
         }
     }
 
-    /// Current value for a channel, if animated.
+    /// 获取通道当前值（若正在动画中）。
     #[must_use]
     pub fn value(&self, node: u64, channel: Channel) -> Option<f32> {
         self.animations
@@ -412,8 +412,8 @@ impl Animator {
             .map(|a| a.spring.value)
     }
 
-    /// Advance every spring. Settled animations are removed, so the array stays
-    /// proportional to the number of *moving* nodes, not the number of nodes.
+    /// 推进所有弹簧。已静止的动画会被移除，使数组长度仅与*运动中*节点数成正比，
+    /// 而非总节点数。
     pub fn step(&mut self, dt: f32) {
         let mut active = 0u32;
         let mut i = 0;
@@ -435,7 +435,7 @@ impl Animator {
         }
     }
 
-    /// Snapshot for the transform channel, then drop finished entries.
+    /// 获取变换通道的当前快照，随后丢弃已完成的条目。
     #[must_use]
     pub fn snapshot(&self) -> Vec<Animation> {
         self.animations.clone()
@@ -447,29 +447,29 @@ impl Animator {
     }
 }
 
-/// Why the main loop woke up.
+/// 主循环唤醒原因。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum WakeReason {
-    /// Something is animating: render immediately.
+    /// 有动画正在运行：立即渲染。
     Animating,
-    /// Input arrived.
+    /// 收到输入事件。
     Input,
-    /// Nothing to do: block until the next event with this timeout.
+    /// 无事可做：阻塞等待下一事件或直至超时。
     Idle,
 }
 
-/// Reactive frame pacing (`docs` §4.4).
+/// 响应式帧调度器（`docs` §4.4）。
 ///
-/// The loop asks this whether it needs a frame. When nothing is animating and no
-/// input is queued, the app blocks indefinitely instead of spinning, which is
-/// what makes the "0.0% CPU at rest" line real.
+/// 主循环向其询问是否需要渲染下一帧。当无动画运行且无输入排队时，
+/// 应用将无限期阻塞而非空转，这正是“静止时 0.0% CPU”的保障。
+///
 #[derive(Debug, Default)]
 pub struct FrameScheduler {
     input_pending: bool,
     redraw_requested: bool,
-    /// Frames rendered since the last idle period.
+    /// 自上次空闲期以来已渲染的帧数。
     pub frame_count: u64,
-    /// Consecutive frames with nothing to do.
+    /// 连续无事可做的帧数。
     pub idle_streak: u32,
 }
 
@@ -491,7 +491,7 @@ impl FrameScheduler {
         self.redraw_requested = true;
     }
 
-    /// Decide whether to render this tick.
+    /// 决定本 tick 是否需要渲染。
     #[must_use]
     pub fn poll(&mut self, animator: &Animator) -> WakeReason {
         let animating = animator.active_animations() > 0;
@@ -514,18 +514,18 @@ impl FrameScheduler {
         reason
     }
 
-    /// True when the loop can block on the OS event queue.
+    /// 当主循环可在操作系统事件队列上阻塞等待时返回 true。
     #[must_use]
     pub fn should_sleep(&self) -> bool {
         self.idle_streak > 0
     }
 }
 
-/// Pixel-snapping policy for one node (`docs` §4.4).
+/// 单节点的像素对齐策略（`docs` §4.4）。
 ///
-/// Static geometry snaps to the physical pixel grid so 1px borders stay sharp;
-/// animating geometry must not snap, or the spring visibly "crawls" during its
-/// slow tail.
+/// 静态几何体吸附到物理像素网格以保持 1px 边框锐利；
+/// 动画中的几何体不得吸附，否则弹簧在缓慢收尾阶段会出现肉眼可见的“爬行”抖动。
+///
 #[must_use]
 pub fn should_snap(animating: bool, transform_is_identity: bool) -> bool {
     !animating && transform_is_identity
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn a_long_hitch_does_not_explode_the_spring() {
-        // 250 ms frame: without substepping this diverges to infinity.
+        // 250 ms 帧间隔：若不进行子步进，此处会发散至无穷大。
         let mut s = Spring::new(SpringPreset::Snappy, 0.0);
         s.set_target(1.0);
         for _ in 0..40 {
@@ -682,7 +682,7 @@ mod tests {
     fn scheduler_sleeps_when_nothing_moves() {
         let mut animator = Animator::new();
         let mut scheduler = FrameScheduler::new();
-        // First poll consumes the initial redraw request.
+        // 首次轮询会消耗初始重绘请求。
         assert_eq!(scheduler.poll(&animator), WakeReason::Input);
         assert_eq!(scheduler.poll(&animator), WakeReason::Idle);
         assert!(scheduler.should_sleep());
@@ -717,12 +717,12 @@ mod tests {
         assert!(v > 0.0 && v < 1.0);
     }
 
-    /// A NaN target must not keep the animator awake forever.
+    /// NaN 目标绝不能让动画器永久保持唤醒。
     ///
-    /// Every comparison with NaN is false, so a spring whose target is NaN
-    /// never settles: the animator never drops it, the scheduler never
-    /// reports `Idle`, and the application spins at 100% CPU with a NaN
-    /// transform on screen.
+    /// 与 NaN 的任何比较均为 false，因此目标为 NaN 的弹簧永不收敛：
+    /// 动画器永不移除它，调度器永不返回 `Idle`，导致应用以 100% CPU 空转
+    /// 并在屏幕上出现 NaN 变换。
+    ///
     #[test]
     fn a_nan_target_settles_instead_of_spinning_forever() {
         let mut spring = Spring::default();
@@ -735,7 +735,7 @@ mod tests {
     #[test]
     fn a_nan_target_does_not_wake_the_scheduler_forever() {
         let mut animator = Animator::new();
-        // A NaN arrives from the layout.
+        // 布局输出了一个 NaN。
         animator.animate(1, Channel::Scale, SpringPreset::Gentle, f32::NAN);
         for _ in 0..600 {
             animator.step(1.0 / 60.0);
@@ -745,14 +745,14 @@ mod tests {
             0,
             "the broken animation must be dropped, not kept alive"
         );
-        // The broken animation is gone, so it has no value to report.
+        // 损坏的动画已被移除，因此不再报告其值。
         assert!(
             animator.value(1, Channel::Scale).is_none(),
             "the dropped animation must not report a value"
         );
     }
 
-    /// A diverging integration must not spin either.
+    /// 发散的积分也不得导致空转。
     #[test]
     fn a_diverging_spring_settles() {
         let mut spring = Spring {
@@ -764,7 +764,7 @@ mod tests {
             velocity: 0.0,
             ..Default::default()
         };
-        // A step large enough to overflow the velocity.
+        // 步长大到足以使速度溢出。
         let _ = spring.step(0.25);
         assert!(
             spring.value.is_finite() && spring.velocity.is_finite(),

@@ -1,8 +1,8 @@
-//! Small, reusable gallery controls.
+//! 小型、可复用的展厅控件。
 //!
-//! These are not a second widget framework: each function is a pure renderer
-//! over [`Canvas`]. Identity, hover, press and focus all come from the caller,
-//! which is exactly the same contract the original button established.
+//! 它们并非第二套控件框架：每个函数都是基于 [`Canvas`] 的纯渲染器。
+//! 标识、悬停、按压与焦点均由调用方传入，与最初按钮确立的契约完全一致。
+//!
 
 use accesskit::Role;
 use unbound_input::CursorKind;
@@ -23,30 +23,30 @@ use unbound_widgets::{ControlState, WidgetCatalogId};
 use crate::canvas::{quads_bounds, AlignX, AlignY, Canvas, Visual};
 use crate::target::Target;
 
-/// The visual weight of a button.
+/// 按钮的视觉权重。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ButtonVariant {
     Primary,
     Secondary,
     Subtle,
     Icon,
-    /// A call to action on the saturated hero surface.
+    /// 高饱和度首屏表面上的主行动号召按钮。
     ///
-    /// A filled blue button on a blue gradient has almost no contrast, so
-    /// the primary action is a solid white pill with the brand colour as its
-    /// label, and the secondary action is a dark translucent pill with a
-    /// hairline border.
+    /// 蓝色渐变背景上的实心蓝色按钮几乎没有对比度，因此主操作采用带品牌色标签的
+    /// 纯白胶囊，次操作采用带细边框的深色半透明胶囊。
+    ///
+    ///
     OnHero,
-    /// The secondary call to action on the hero surface.
+    /// 首屏表面上的次要行动号召按钮。
     OnHeroSecondary,
 }
 
-/// A gallery button. Returns the visual state it painted.
+/// 展厅按钮。返回其实际绘制的视觉状态。
 ///
-/// The control itself lives in the engine layer: the shell only supplies the
-/// geometry, the shaped label and the per-variant colour slots, so the five
-/// states and the focus ring come from [`emit_button_with_tokens`] instead of
-/// a second hand-drawn implementation.
+/// 控件本身位于引擎层：外壳仅提供几何信息、塑形后的标签以及各变体的颜色槽位，
+/// 从而使五种状态和焦点环均来自 [`emit_button_with_tokens`]，而非第二套手绘实现。
+///
+///
 pub fn button(
     canvas: &mut Canvas<'_>,
     node: u64,
@@ -71,9 +71,9 @@ pub fn button(
     let output = emit_button_with_tokens(node, &desc, state, button_tokens(variant), &mut quads);
     canvas.widget_output(WidgetCatalogId::Button, node, &output);
     if !enabled {
-        // The engine drops the hit region of a disabled button; the gallery
-        // keeps its disabled buttons absorbing clicks like the hand-drawn
-        // version did.
+        // 引擎会丢弃禁用按钮的命中区域；展厅则像手绘版本那样，
+        // 让禁用按钮继续吸收点击。
+        //
         canvas.control(
             node,
             rect,
@@ -87,10 +87,10 @@ pub fn button(
     visual_of(state)
 }
 
-/// The engine variant used as a carrier.
+/// 用作载体的引擎变体。
 ///
-/// The colour slots are passed explicitly, so the carrier never decides the
-/// palette; it only keeps the descriptor readable.
+/// 颜色槽位是显式传入的，因此载体从不决定调色板；它仅用于保持描述符可读。
+///
 fn carrier_variant(variant: ButtonVariant) -> EngineButtonVariant {
     match variant {
         ButtonVariant::Primary => EngineButtonVariant::Primary,
@@ -101,12 +101,12 @@ fn carrier_variant(variant: ButtonVariant) -> EngineButtonVariant {
     }
 }
 
-/// The colour slots each gallery variant paints with.
+/// 各展厅变体绘制时使用的颜色槽位。
 ///
-/// These are the exact slots the hand-drawn button used, so the migration
-/// keeps the page pixel-identical: the engine's own defaults differ in three
-/// places (Primary's border, every `label_disabled`, and Secondary's disabled
-/// fill) and those are overridden here.
+/// 这些槽位与手绘按钮完全一致，从而保证迁移后的页面像素级一致：
+/// 引擎自身的默认值在三处有所不同（Primary 的边框、所有的 `label_disabled`、
+/// 以及 Secondary 的禁用填充），此处予以覆盖。
+///
 fn button_tokens(variant: ButtonVariant) -> ButtonTokens {
     let focus_ring = Token::FOCUS_RING;
     match variant {
@@ -163,11 +163,11 @@ fn button_tokens(variant: ButtonVariant) -> ButtonTokens {
     }
 }
 
-/// A row with a label and a switch.
+/// 带标签和开关的行。
 ///
-/// The control itself lives in the engine layer
-/// ([`unbound_widgets::switch`]): the shell only supplies the row geometry
-/// and the shaped label.
+/// 控件本身位于引擎层（[`unbound_widgets::switch`]）：
+/// 外壳仅提供行几何信息与塑形后的标签。
+///
 pub fn toggle_switch(
     canvas: &mut Canvas<'_>,
     node: u64,
@@ -195,7 +195,7 @@ pub fn toggle_switch(
     visual_of(state)
 }
 
-/// Translate a control state into the shell's own visual vocabulary.
+/// 将控件状态转换为外壳自身的视觉词汇。
 fn visual_of(state: ControlState) -> Visual {
     if state.disabled {
         return Visual::Disabled;
@@ -207,7 +207,7 @@ fn visual_of(state: ControlState) -> Visual {
     }
 }
 
-/// A checkbox row.
+/// 复选框行。
 pub fn checkbox(
     canvas: &mut Canvas<'_>,
     node: u64,
@@ -238,7 +238,7 @@ pub fn checkbox(
     visual_of(state)
 }
 
-/// A radio-button row.
+/// 单选按钮行。
 pub fn radio(
     canvas: &mut Canvas<'_>,
     node: u64,
@@ -261,7 +261,7 @@ pub fn radio(
     visual_of(state)
 }
 
-/// A horizontal slider. `value` is in `[min, max]`.
+/// 水平滑块。`value` 位于 `[min, max]` 区间内。
 pub fn slider(
     canvas: &mut Canvas<'_>,
     node: u64,
@@ -277,11 +277,11 @@ pub fn slider(
     visual_of(state)
 }
 
-/// A segmented pill control.
+/// 分段胶囊控件。
 ///
-/// The slots are an even grid and the highlight is inset by two pixels on
-/// every side, so the label never touches the frame: a 43 px slot holds
-/// `"100%"` with seven pixels of breathing room on each side.
+/// 各槽位构成均匀网格，高亮区域四边各内缩两像素，使标签绝不触碰边框：
+/// 43 px 的槽位可容纳 `"100%"`，并在两侧保留七像素的呼吸空间。
+///
 pub fn segmented(
     canvas: &mut Canvas<'_>,
     ids: &[u64],
@@ -312,7 +312,7 @@ pub fn segmented(
     }
 }
 
-/// A navigation row: selection pill, label and optional trailing hint.
+/// 导航行：选中胶囊、标签以及可选的尾部提示。
 pub fn nav_row(
     canvas: &mut Canvas<'_>,
     node: u64,
@@ -324,10 +324,10 @@ pub fn nav_row(
     let start = canvas.span_start();
     let palette = *canvas.palette;
     let visual = canvas.visual(node, false);
-    // The row always paints two primitives — a background and the accent
-    // bar — whatever its state. The background's slot is the pane's own
-    // colour while idle, and the accent bar fades out, so neither state
-    // changes the number of primitives the row owns.
+    // 无论处于何种状态，该行始终绘制两个图元——背景与强调条。
+    // 空闲时背景槽位采用导航窗格自身的颜色，强调条淡出，
+    // 因此两种状态都不会改变该行所拥有的图元数量。
+    //
     let background = if selected {
         palette.nav_selected
     } else if visual.is_hovered() {
@@ -376,7 +376,7 @@ pub fn nav_row(
     canvas.record_span(node, start);
 }
 
-/// A small pill badge.
+/// 小号胶囊徽章。
 pub fn badge(
     canvas: &mut Canvas<'_>,
     rect: Rect,
@@ -387,11 +387,11 @@ pub fn badge(
     badge_sized(canvas, rect, label, foreground, background, 11.0)
 }
 
-/// A pill badge at an explicit font size.
+/// 指定字号的胶囊徽章。
 ///
-/// The width always comes from the same font size the text is painted at, so
-/// the caller can advance its cursor by the returned rectangle without the
-/// pills overlapping.
+/// 宽度始终依据文本绘制时所使用的同一字号计算，
+/// 以便调用方按返回的矩形推进游标，避免胶囊之间发生重叠。
+///
 pub fn badge_sized(
     canvas: &mut Canvas<'_>,
     rect: Rect,
@@ -415,7 +415,7 @@ pub fn badge_sized(
     rect
 }
 
-/// The icon vocabulary the shell paints geometrically.
+/// 外壳以几何方式绘制的图标词汇表。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Icon {
     Menu,
@@ -436,7 +436,7 @@ pub enum Icon {
     Redo,
 }
 
-/// Paint an icon centred in `rect`.
+/// 将图标居中绘制在 `rect` 中。
 pub fn icon(canvas: &mut Canvas<'_>, kind: Icon, rect: Rect, color: u16, background: u16) {
     let c = rect.center();
     match kind {
@@ -593,7 +593,7 @@ pub fn icon(canvas: &mut Canvas<'_>, kind: Icon, rect: Rect, color: u16, backgro
     }
 }
 
-/// A clickable icon button.
+/// 可点击的图标按钮。
 pub fn icon_button(
     canvas: &mut Canvas<'_>,
     node: u64,
@@ -631,13 +631,13 @@ pub fn icon_button(
     );
 }
 
-/// The primitive count of a glyph run, used by the telemetry page.
+/// 字形序列的图元计数，供遥测页面使用。
 #[must_use]
 pub fn glyph_count(quads: &[unbound_text::GlyphQuad]) -> usize {
     quads_bounds(quads).map_or(0, |_| quads.len())
 }
 
-/// The demo-part identity helper.
+/// 演示部件标识辅助函数。
 #[must_use]
 pub fn demo_id(page: u8, card: u8, part: u16) -> u64 {
     crate::target::id(Target::Demo(page, card, part))

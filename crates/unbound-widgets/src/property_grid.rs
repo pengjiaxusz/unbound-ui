@@ -1,14 +1,14 @@
-//! Inspector-style property grid: sections, modified markers and resets.
+//! 检查器风格的属性网格：分组、修改标记与重置。
 //!
-//! The grid is the read-mostly half of an inspector. It does not own the
-//! model either: [`PropertyDesc`] carries the current value *and* the default,
-//! so "is this property modified?" and "reset" are pure comparisons. A reset
-//! is reported through [`PropertyGridState::take_reset`] and the application
-//! writes the default back into its own model.
+//! 该网格是检查器的只读/轻交互半边，同样不持有数据模型：
+//! [`PropertyDesc`] 同时携带当前值*与*默认值，因此“属性是否已修改”与“重置”均为纯比较操作。
+//! 重置请求通过 [`PropertyGridState::take_reset`] 上报，由应用程序将默认值写回自身模型。
 //!
-//! Sections collapse independently. Collapsed rows are skipped by the layout,
-//! not merely painted transparent, so a 300-property document emits only the
-//! rows the user can see.
+//!
+//!
+//! 分组可独立折叠。折叠后的行会被布局直接跳过，而非仅仅绘制为透明，
+//! 因此包含 300 个属性的文档也只会输出用户当前可见的行。
+//!
 
 use accesskit::Role;
 use rustc_hash::FxHashSet;
@@ -23,27 +23,27 @@ use crate::primitive::{focus_ring, glyphs, instance, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// How a property is edited.
+/// 属性的编辑方式。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum PropertyKind {
-    /// A free-form string.
+    /// 自由格式字符串。
     #[default]
     Text,
-    /// A number with an optional unit.
+    /// 带可选单位的数字。
     Number {
-        /// The unit shown after the value.
+        /// 显示在数值后的单位。
         unit: String,
     },
-    /// A boolean switch.
+    /// 布尔开关。
     Bool,
-    /// A colour, shown as a hex string.
+    /// 颜色值（以十六进制字符串显示）。
     Color,
-    /// One of a fixed set of strings.
+    /// 固定字符串集合中的枚举项。
     Select(Vec<String>),
 }
 
 impl PropertyKind {
-    /// The role the value cell exposes.
+    /// 值单元格对外暴露的无障碍角色。
     #[must_use]
     pub fn role(&self) -> Role {
         match self {
@@ -56,21 +56,21 @@ impl PropertyKind {
     }
 }
 
-/// One property's value.
+/// 单个属性的值。
 #[derive(Clone, Debug, PartialEq)]
 pub enum PropertyValue {
-    /// A string.
+    /// 字符串。
     Text(String),
-    /// A number, rendered with the caller's precision.
+    /// 数值（按调用方精度渲染）。
     Number(f64),
-    /// A boolean.
+    /// 布尔值。
     Bool(bool),
-    /// A colour in `#rrggbb` form.
+    /// `#rrggbb` 形式的颜色。
     Color(String),
 }
 
 impl PropertyValue {
-    /// The text painted in the value column.
+    /// 值列中绘制的文本。
     #[must_use]
     pub fn display(&self) -> String {
         match self {
@@ -91,23 +91,23 @@ impl PropertyValue {
     }
 }
 
-/// One property row.
+/// 单个属性行。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PropertyDesc {
-    /// The label in the leading column.
+    /// 前导列中的标签。
     pub label: String,
-    /// The current value.
+    /// 当前值。
     pub value: PropertyValue,
-    /// The value a reset restores.
+    /// 重置后恢复的默认值。
     pub default: PropertyValue,
-    /// The editor kind.
+    /// 编辑器类型。
     pub kind: PropertyKind,
-    /// An optional tooltip / a11y description.
+    /// 可选的工具提示 / 无障碍描述。
     pub description: String,
 }
 
 impl PropertyDesc {
-    /// A property with `value` as its own default.
+    /// 创建以 `value` 自身作为默认值的属性。
     #[must_use]
     pub fn new(label: impl Into<String>, value: PropertyValue) -> Self {
         Self {
@@ -119,34 +119,34 @@ impl PropertyDesc {
         }
     }
 
-    /// The same property with an editor kind.
+    /// 指定编辑器类型。
     #[must_use]
     pub fn with_kind(mut self, kind: PropertyKind) -> Self {
         self.kind = kind;
         self
     }
 
-    /// The same property with an explicit default.
+    /// 指定显式默认值。
     #[must_use]
     pub fn with_default(mut self, default: PropertyValue) -> Self {
         self.default = default;
         self
     }
 
-    /// The same property with a description.
+    /// 指定描述文本。
     #[must_use]
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
         self
     }
 
-    /// Whether the value differs from the default.
+    /// 当前值是否与默认值不同。
     #[must_use]
     pub fn is_modified(&self) -> bool {
         self.value != self.default
     }
 
-    /// The value text, including the unit for numbers.
+    /// 格式化后的值文本（数字包含单位）。
     #[must_use]
     pub fn value_text(&self) -> String {
         let mut text = self.value.display();
@@ -160,17 +160,17 @@ impl PropertyDesc {
     }
 }
 
-/// One collapsible group of properties.
+/// 单个可折叠的属性分组。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PropertySection {
-    /// The section heading.
+    /// 分组标题。
     pub title: String,
-    /// The rows, in order.
+    /// 按顺序排列的属性行。
     pub rows: Vec<PropertyDesc>,
 }
 
 impl PropertySection {
-    /// A section with no rows yet.
+    /// 创建空分组。
     #[must_use]
     pub fn new(title: impl Into<String>) -> Self {
         Self {
@@ -179,7 +179,7 @@ impl PropertySection {
         }
     }
 
-    /// The same section with a row appended.
+    /// 向分组追加一行属性。
     #[must_use]
     pub fn with_row(mut self, property: PropertyDesc) -> Self {
         self.rows.push(property);
@@ -187,27 +187,27 @@ impl PropertySection {
     }
 }
 
-/// The pure descriptor of a property grid.
+/// 属性网格的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PropertyGridDesc {
-    /// The whole grid rectangle.
+    /// 整个网格矩形。
     pub rect: Rect,
-    /// The accessible name.
+    /// 无障碍名称。
     pub label: String,
-    /// The leading column width.
+    /// 前导标签列宽度。
     pub label_width: f32,
-    /// The uniform row height.
+    /// 统一行高。
     pub row_height: f32,
-    /// The section heading height.
+    /// 分组标题行高度。
     pub header_height: f32,
-    /// The sections.
+    /// 分组列表。
     pub sections: Vec<PropertySection>,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl PropertyGridDesc {
-    /// A grid with a 140 px label column and 26 px rows.
+    /// 创建带 140 px 标签列与 26 px 行高的属性网格。
     #[must_use]
     pub fn new(rect: Rect, sections: Vec<PropertySection>) -> Self {
         Self {
@@ -221,20 +221,20 @@ impl PropertyGridDesc {
         }
     }
 
-    /// The same grid with an accessible name.
+    /// 设置无障碍名称。
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
     }
 
-    /// Total number of rows, collapsed sections included.
+    /// 总行数（包含已折叠分组）。
     #[must_use]
     pub fn row_count(&self) -> usize {
         self.sections.iter().map(|section| section.rows.len()).sum()
     }
 
-    /// The reset button of a value cell.
+    /// 值单元格内的重置按钮矩形。
     #[must_use]
     pub fn reset_rect(&self, row: Rect) -> Rect {
         let size = (self.row_height * 0.5).min(16.0);
@@ -246,7 +246,7 @@ impl PropertyGridDesc {
         )
     }
 
-    /// The value cell of a row.
+    /// 指定行的值单元格矩形。
     #[must_use]
     pub fn value_rect(&self, row: Rect) -> Rect {
         Rect::new(
@@ -258,26 +258,26 @@ impl PropertyGridDesc {
     }
 }
 
-/// The laid-out rectangle of one visible row.
+/// 单个可见行的布局矩形信息。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PropertyRowLayout {
-    /// The section index.
+    /// 分组索引。
     pub section: usize,
-    /// The row index inside the section.
+    /// 分组内的行索引。
     pub row: usize,
-    /// The whole row.
+    /// 整行矩形。
     pub rect: Rect,
-    /// The label cell.
+    /// 标签单元格矩形。
     pub label_rect: Rect,
-    /// The value cell.
+    /// 值单元格矩形。
     pub value_rect: Rect,
-    /// The reset affordance.
+    /// 重置按钮触发区矩形。
     pub reset_rect: Rect,
-    /// The section heading, when this row is the first of its section.
+    /// 若该行为分组首行，则包含分组标题矩形。
     pub header: Option<Rect>,
 }
 
-/// The mutable state of a property grid.
+/// 属性网格的可变状态。
 #[derive(Clone, Debug, Default)]
 pub struct PropertyGridState {
     collapsed: FxHashSet<usize>,
@@ -287,13 +287,13 @@ pub struct PropertyGridState {
 }
 
 impl PropertyGridState {
-    /// Everything expanded.
+    /// 创建全部展开的初始状态。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Toggle a section and return its new collapsed state.
+    /// 切换分组折叠状态并返回新状态。
     pub fn toggle_section(&mut self, section: usize) -> bool {
         if !self.collapsed.remove(&section) {
             self.collapsed.insert(section);
@@ -303,45 +303,45 @@ impl PropertyGridState {
         }
     }
 
-    /// Whether a section is collapsed.
+    /// 查询分组是否处于折叠状态。
     #[must_use]
     pub fn is_collapsed(&self, section: usize) -> bool {
         self.collapsed.contains(&section)
     }
 
-    /// Select a cell.
+    /// 选中单元格。
     pub fn select(&mut self, section: usize, row: usize) {
         self.selected = Some((section, row));
     }
 
-    /// The selected cell.
+    /// 当前选中的单元格。
     #[must_use]
     pub fn selected(&self) -> Option<(usize, usize)> {
         self.selected
     }
 
-    /// Mark a row as hovered.
+    /// 标记悬停行。
     pub fn hover(&mut self, cell: Option<(usize, usize)>) {
         self.hovered = cell;
     }
 
-    /// The hovered cell.
+    /// 当前悬停的单元格。
     #[must_use]
     pub fn hovered(&self) -> Option<(usize, usize)> {
         self.hovered
     }
 
-    /// Request a reset; the caller drains it with [`Self::take_reset`].
+    /// 请求重置；调用方通过 [`Self::take_reset`] 消费该请求。
     pub fn reset_row(&mut self, section: usize, row: usize) {
         self.reset = Some((section, row));
     }
 
-    /// Take the pending reset request.
+    /// 取出待处理的重置请求。
     pub fn take_reset(&mut self) -> Option<(usize, usize)> {
         self.reset.take()
     }
 
-    /// Lay out every visible row inside `desc`.
+    /// 在 `desc` 内布局所有可见行。
     #[must_use]
     pub fn layout(&self, desc: &PropertyGridDesc) -> Vec<PropertyRowLayout> {
         let mut out = Vec::new();
@@ -390,27 +390,27 @@ impl PropertyGridState {
     }
 }
 
-/// The colour slots a property grid paints with.
+/// 属性网格绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PropertyGridTokens {
-    /// The grid surface.
+    /// 网格表面背景。
     pub background: Token,
-    /// A section heading.
+    /// 分组标题。
     pub header: Token,
-    /// The label text.
+    /// 标签文本。
     pub label: Token,
-    /// The value text.
+    /// 值文本。
     pub value: Token,
-    /// The modified marker.
+    /// 已修改标记。
     pub modified: Token,
-    /// The row rule.
+    /// 行分隔线。
     pub rule: Token,
-    /// The selected cell.
+    /// 选中单元格。
     pub selected: Token,
 }
 
 impl PropertyGridTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -425,7 +425,7 @@ impl PropertyGridTokens {
     }
 }
 
-/// Emit the visible rows and their section headings.
+/// 输出所有可见行及其分组标题。
 #[must_use]
 pub fn emit_property_grid(
     node: u64,
@@ -484,8 +484,8 @@ pub fn emit_property_grid(
                 );
                 primitives.push(surface(dot, 2.5, tokens.modified, desc.z + 3));
             }
-            // The reset-button wash keeps a fixed slot: hovering only changes
-            // its opacity, never the primitive count.
+            // 重置按钮底色保持固定槽位：悬停仅改变其不透明度，不改变图元数量。
+            //
             let mut reset = surface(row.reset_rect.inflate(3.0), 4.0, tokens.header, desc.z + 3);
             reset.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
                 reset.depth_u16(),
@@ -540,8 +540,12 @@ pub fn emit_property_grid(
                     sec_key,
                     HitRegion::new(sec_key, CONTROL_LAYER, u32::from(desc.z) + 1, row.rect)
                         .with_cursor(CursorKind::Pointer),
-                    A11yNode::new(Role::Button, format!("Section {}", row.section + 1), row.rect)
-                        .clickable(),
+                    A11yNode::new(
+                        Role::Button,
+                        format!("Section {}", row.section + 1),
+                        row.rect,
+                    )
+                    .clickable(),
                     false,
                 );
             } else {
@@ -578,25 +582,25 @@ pub fn emit_property_grid(
     out
 }
 
-/// Deterministic child node key for a property grid section header.
+/// 属性网格分组标题的确定性子节点键。
 #[must_use]
 pub const fn property_section_node(base: u64, section: usize) -> u64 {
     base ^ (0x5047_5300_u64 | (section as u64 + 1))
 }
 
-/// Deterministic child node key for a property grid row.
+/// 属性网格行的确定性子节点键。
 #[must_use]
 pub const fn property_row_node(base: u64, section: usize, row: usize) -> u64 {
     base ^ (((section as u64 + 1) << 20) | (row as u64 + 1))
 }
 
-/// Deterministic child node key for a property row's reset-to-default button.
+/// 属性行恢复默认按钮的确定性子节点键。
 #[must_use]
 pub const fn property_reset_node(base: u64, section: usize, row: usize) -> u64 {
     base ^ 0x5047_5200_0000_u64 ^ (((section as u64 + 1) << 20) | (row as u64 + 1))
 }
 
-/// A solid line primitive.
+/// 实心线段图元。
 fn line(rect: Rect, color: Token, z: u16) -> GpuPrimitiveInstance {
     instance(
         rect,

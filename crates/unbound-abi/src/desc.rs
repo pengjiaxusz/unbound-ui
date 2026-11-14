@@ -1,19 +1,19 @@
-//! Flat, POD view-tree descriptor emitted by a guest and consumed by the host.
+//! 由 guest 生成、host 消费的扁平 POD 视图树描述符。
 //!
-//! `docs/gpu_ui_v2_0.md` §7.1 forbids deep generic typestate trees: the guest
-//! emits a **flat concrete descriptor** per node through a C function pointer,
-//! and the host turns that into `LayoutNode` entities. This is also the exact
-//! structure an LLM can generate without API hallucination, because the surface
-//! is one struct and one call.
+//! `docs/architecture/principles.md` 禁止深层泛型 typestate 树：guest
+//! 通过 C 函数指针为每个节点发出**扁平具体描述符**，host 再将其
+//! 转换为 `LayoutNode` 实体。这也正是 LLM 无需臆测 API 即可生成
+//! 的结构——接口表面仅有一个结构体和一次调用。
 //!
-//! Enum-valued fields are stored as `u8` on purpose: a `#[repr(u8)]` enum in a
-//! `Pod` struct would make `bytemuck::from_bytes` unsound for arbitrary guest
-//! bytes. Every reader goes through a `from_u8` normaliser that maps unknown
-//! discriminants (a guest compiled against a newer ABI) to a safe default.
+//!
+//! 枚举字段有意存储为 `u8`：在 `Pod` 结构体中使用 `#[repr(u8)]` 枚举
+//! 会导致 `bytemuck::from_bytes` 对任意 guest 字节流产生未定义行为。
+//! 每个读取端都会经过 `from_u8` 归一化函数，将未知判别值（来自新版本
+//! ABI 编译的 guest）映射为安全默认值。
 
 use bytemuck::{Pod, Zeroable};
 
-/// Stable identifier of a node inside one build pass.
+/// 单次构建过程中的稳定节点标识符。
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 pub struct RawNodeId(pub u32);
@@ -34,7 +34,7 @@ impl RawNodeId {
     }
 }
 
-/// Sentinel meaning "no node". `u32::MAX` is never a legal arena index.
+/// 表示“无节点”的哨兵值。`u32::MAX` 永不为合法 arena 索引。
 pub const NO_NODE: u32 = u32::MAX;
 
 #[repr(u8)]
@@ -59,7 +59,7 @@ impl DimUnit {
     }
 }
 
-/// A single layout dimension: `{unit, value}`.
+/// 单个布局维度：`{unit, value}`。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct Dim {
@@ -111,7 +111,7 @@ impl Dim {
         DimUnit::from_u8(self.unit)
     }
 
-    /// Resolve against a definite container size, if resolvable.
+    /// 若可解析，则基于确定的容器尺寸进行解析。
     #[must_use]
     pub fn resolve(self, basis: Option<f32>) -> Option<f32> {
         match self.kind() {
@@ -126,7 +126,7 @@ impl Dim {
     }
 }
 
-/// Left/top/right/bottom quadruple (padding, margin, border, inset).
+/// 左/上/右/下四元组（内边距、外边距、边框、内嵌偏移）。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct Edges {
@@ -185,10 +185,10 @@ pub enum NodeTag {
     Container = 0,
     Text = 1,
     Image = 2,
-    /// Host viewport leaf that hosts the infinite canvas.
+    /// 承载无限画布的 host 视口叶节点。
     Canvas = 3,
     Scroll = 4,
-    /// Escapes every ancestor clip and paints in the overlay layer (`docs` §6.3).
+    /// 逃逸所有祖先裁剪并在覆盖层（overlay）绘制（`docs` §6.3）。
     Portal = 5,
     Separator = 6,
 }
@@ -327,8 +327,8 @@ impl Position {
 }
 
 bitflags_like! {
-    /// Node flags. Kept as a `u32` so the descriptor stays POD and cheap to ship
-    /// across the C ABI boundary.
+    /// 节点标志位。保留为 `u32` 以维持 POD 特性并降低跨 C-ABI 边界传输开销。
+    ///
     pub struct NodeFlags: u32 {
         const CLIP              = 1 << 0;
         const SCROLL_X          = 1 << 1;
@@ -339,19 +339,19 @@ bitflags_like! {
         const TEXT_ELLIPSIS     = 1 << 6;
         const WRAP              = 1 << 7;
         const ANIMATED          = 1 << 8;
-        /// Bypass pixel snapping permanently (e.g. a cursor overlay).
+        /// 永久跳过像素对齐（例如光标覆盖层）。
         const SUBPIXEL          = 1 << 9;
-        /// Forces a `RelayoutBoundary` even when the heuristic would not.
+        /// 即使启发式规则未触发，也强制设为 `RelayoutBoundary`。
         const RELAYOUT_BOUNDARY = 1 << 10;
         const MEASURE_TEXT      = 1 << 11;
         const DRAG_HANDLE       = 1 << 12;
-        /// Content is provided by the engine's virtualisation container.
+        /// 内容由引擎的虚拟化容器提供。
         const VIRTUALIZED       = 1 << 13;
     }
 }
 
-/// One explicit grid track: the same `Dim` encoding as a box dimension, so
-/// `px`, `%`, `fr` and `auto` all behave consistently between flex and grid.
+/// 单个显式网格轨道：与盒维度采用相同的 `Dim` 编码，因此
+/// `px`、`%`、`fr` 和 `auto` 在 flex 与 grid 间行为一致。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct GridTrack {
@@ -376,14 +376,14 @@ impl GridTrack {
     }
 }
 
-/// A flat, POD node descriptor.
+/// 扁平 POD 节点描述符。
 ///
-/// Field order is grouped by access frequency: geometry first (touched by every
-/// layout pass), then paint (only touched by dirty-paint passes), then identity.
+/// 字段顺序按访问频率分组：几何字段最前（每次布局都会读取），
+/// 其次是绘制字段（仅脏绘制时读取），最后是标识字段。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct RawNodeDesc {
-    // ---- geometry / layout (hot) ----
+    // ---- 几何 / 布局（高频热路径） ----
     pub width: Dim,
     pub height: Dim,
     pub min_width: Dim,
@@ -400,7 +400,7 @@ pub struct RawNodeDesc {
     pub flex_basis: Dim,
     pub aspect_ratio: f32,
 
-    // ---- paint ----
+    // ---- 绘制 ----
     pub fill: u32,
     pub border_color: u32,
     pub text_color: u32,
@@ -415,7 +415,7 @@ pub struct RawNodeDesc {
     pub line_height: f32,
     pub z_index: i32,
 
-    // ---- identity / behaviour ----
+    // ---- 标识 / 行为 ----
     pub tag: u8,
     pub display: u8,
     pub direction: u8,
@@ -425,23 +425,23 @@ pub struct RawNodeDesc {
     pub position: u8,
     pub _pad0: u8,
     pub flags: u32,
-    /// Stable key across rebuilds — the diff/memoization handle.
+    /// 跨重建的稳定键——用于 diff 与记忆化（memoization）的句柄。
     pub key: u64,
-    /// Opaque per-tag payload (virtual list item index, image atlas slot, …).
+    /// 不透明的按 tag 负载（虚拟列表项索引、图集槽位等）。
     pub payload: u64,
 
-    // ---- grid ----
-    /// Explicit column track sizes (only the first `grid_col_count` apply).
+    // ---- 网格 ----
+    /// 显式列轨道尺寸（仅前 `grid_col_count` 项生效）。
     pub grid_cols: [Dim; 8],
-    /// Explicit row track sizes (only the first `grid_row_count` apply).
+    /// 显式行轨道尺寸（仅前 `grid_row_count` 项生效）。
     pub grid_rows: [Dim; 8],
     pub grid_col_count: u8,
     pub grid_row_count: u8,
     pub grid_col_span: u8,
     pub grid_row_span: u8,
-    /// 1-based grid line, `0` means auto placement.
+    /// 从 1 开始的网格线索引，`0` 表示自动放置。
     pub grid_col_start: i16,
-    /// 1-based grid line, `0` means auto placement.
+    /// 从 1 开始的网格线索引，`0` 表示自动放置。
     pub grid_row_start: i16,
 }
 
@@ -500,19 +500,19 @@ impl Default for RawNodeDesc {
 }
 
 impl RawNodeDesc {
-    /// A column-flow container with no decoration.
+    /// 无装饰的纵向流式容器。
     #[must_use]
     pub fn container() -> Self {
         Self::default()
     }
 
-    /// A text node (content is attached separately via the host context).
+    /// 文本节点（内容通过 host 上下文单独附加）。
     #[must_use]
     pub fn text() -> Self {
         Self::default().tag(NodeTag::Text)
     }
 
-    /// Fixed size in logical pixels.
+    /// 逻辑像素表示的固定尺寸。
     #[must_use]
     pub fn size(mut self, w: f32, h: f32) -> Self {
         self.width = Dim::px(w);
@@ -532,9 +532,9 @@ impl RawNodeDesc {
         self
     }
 
-    /// Declare up to eight explicit column tracks.
+    /// 声明最多 8 条显式列轨道。
     ///
-    /// Extra tracks are dropped: the descriptor is a fixed-size POD struct.
+    /// 超出的轨道会被丢弃：描述符为固定大小的 POD 结构体。
     #[must_use]
     pub fn grid_columns(mut self, tracks: &[Dim]) -> Self {
         let count = tracks.len().min(self.grid_cols.len());
@@ -543,7 +543,7 @@ impl RawNodeDesc {
         self
     }
 
-    /// Declare up to eight explicit row tracks.
+    /// 声明最多 8 条显式行轨道。
     #[must_use]
     pub fn grid_rows(mut self, tracks: &[Dim]) -> Self {
         let count = tracks.len().min(self.grid_rows.len());
@@ -552,7 +552,7 @@ impl RawNodeDesc {
         self
     }
 
-    /// Place this item at a 1-based grid line with a span (`0`/`0` = auto).
+    /// 将此项放置在从 1 开始的网格线与跨度上（`0`/`0` = 自动）。
     #[must_use]
     pub fn grid_area(mut self, col: i16, col_span: u8, row: i16, row_span: u8) -> Self {
         self.grid_col_start = col;

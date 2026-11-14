@@ -1,31 +1,31 @@
-//! Serializable action as *data*.
+//! 作为*数据*的可序列化动作（Action）。
 //!
-//! `docs` §4.1: view nodes may not hold `Box<dyn Fn>` closures. Every
-//! interaction binds a strongly typed, `Copy` action record, which makes undo,
-//! replay, network sync and agent-driven fuzzing trivial.
+//! `docs` §4.1：视图节点不得持有 `Box<dyn Fn>` 闭包。每次交互都绑定一个
+//! 强类型且实现 `Copy` 的动作记录，使撤销、重放、网络同步和 Agent 驱动
+//! 的模糊测试（fuzzing）变得简单直接。
 
 use bytemuck::{Pod, Zeroable};
 
-/// Semantic action kind. Kept as a `u32` discriminant so guests and hosts with
-/// different builds can still route actions by number.
+/// 语义动作类型。保留为 `u32` 判别值，使不同构建版本的 guest 与 host
+/// 仍可通过编号路由动作。
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ActionKind {
     #[default]
     None = 0,
-    /// Activate a control (click, Enter, Space, accessibility invoke).
+    /// 激活控件（点击、Enter、Space、无障碍调用）。
     Press = 1,
     PointerDown = 2,
     PointerUp = 3,
     PointerMove = 4,
     PointerCancel = 5,
-    /// Wheel / trackpad; payload = (dx, dy) as `f32` bits.
+    /// 滚轮 / 触控板；payload = 转为 `f32` 位模式的 (dx, dy)。
     Scroll = 6,
-    /// Text editing: insert string from the action arena.
+    /// 文本编辑：从动作 arena 插入字符串。
     TextInsert = 7,
     TextBackspace = 8,
     TextDelete = 9,
-    /// Canvas gestures.
+    /// 画布手势。
     CanvasPan = 10,
     CanvasZoom = 11,
     CanvasSelect = 12,
@@ -34,35 +34,35 @@ pub enum ActionKind {
     CanvasDuplicate = 15,
     CanvasGroup = 16,
     CanvasUngroup = 17,
-    /// Undo/redo scope control (`docs` §5.3).
+    /// 撤销/重做作用域控制（`docs` §5.3）。
     BeginTransaction = 18,
     UpdateTransaction = 19,
     CommitTransaction = 20,
     CancelTransaction = 21,
     Undo = 22,
     Redo = 23,
-    /// Theme & viewport.
+    /// 主题与视口。
     SetTheme = 24,
     Resize = 25,
     Focus = 26,
     Blur = 27,
-    /// OS file drag entered the window (`docs` §6.1).
+    /// 系统文件拖拽进入窗口（`docs` §6.1）。
     DragEnter = 28,
-    /// OS file drag moved over a drop target.
+    /// 系统文件拖拽在放置目标上移动。
     DragOver = 29,
-    /// OS file drag released.
+    /// 系统文件拖拽释放。
     Drop = 30,
-    /// Begin dragging a client-side decorated window.
+    /// 开始拖拽客户端自绘边框窗口。
     WindowDrag = 31,
-    /// Minimise the window.
+    /// 最小化窗口。
     WindowMinimize = 32,
-    /// Toggle the window's maximised state.
+    /// 切换窗口最大化状态。
     WindowToggleMaximize = 33,
-    /// Close the window.
+    /// 关闭窗口。
     WindowClose = 34,
-    /// Ask the host to apply a new zoom factor; payload 0 = `f32` bits.
+    /// 请求 host 应用新的缩放因子；payload 0 = `f32` 位模式。
     SetZoom = 35,
-    /// Escape hatch for application-specific actions.
+    /// 应用自定义动作的逃生通道。
     Custom = 0xFFFF,
 }
 
@@ -110,8 +110,8 @@ impl ActionKind {
         }
     }
 
-    /// Actions that mutate document state and therefore belong in the undo
-    /// stack. Transient pointer traffic explicitly does not.
+    /// 会修改文档状态的动作，因此属于撤销栈；
+    /// 瞬态指针事件明确不入栈。
     #[must_use]
     pub const fn is_transactional(self) -> bool {
         matches!(
@@ -127,8 +127,8 @@ impl ActionKind {
         )
     }
 
-    /// Actions that must never be coalesced even when they arrive inside the
-    /// text-merge time window.
+    /// 即使在文本合并时间窗口内到达也绝不能合并的动作。
+    ///
     #[must_use]
     pub const fn is_boundary(self) -> bool {
         matches!(
@@ -142,20 +142,20 @@ impl ActionKind {
     }
 }
 
-/// A 40-byte POD action record (4B kind + 4B target + 24B payload + 8B time).
+/// 40 字节的 POD 动作记录（4B 类型 + 4B 目标 + 24B 负载 + 8B 时间）。
 ///
-/// `payload` is intentionally untyped: the reducer knows how to interpret it
-/// per [`ActionKind`]. Floats are stored as their bit patterns so the record is
-/// `Eq` + `Hash` (needed for coalescing and for the action journal).
+/// `payload` 有意设计为无类型：reducer 会根据 [`ActionKind`] 解释其含义。
+/// 浮点数以位模式存储，使该记录可实现 `Eq` + `Hash`（用于事件合并与动作日志）。
+///
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Pod, Zeroable)]
 pub struct RawAction {
     pub kind: u32,
-    /// Target node, or `NO_NODE` for global actions.
+    /// 目标节点，全局动作则为 `NO_NODE`。
     pub target: u32,
-    /// `u64` payload slots: indices, token ids, packed coordinate pairs, …
+    /// `u64` 负载槽位：索引、token id、打包坐标对等。
     pub payload: [u64; 3],
-    /// Monotonic input timestamp in microseconds (used for text coalescing).
+    /// 单调递增的输入时间戳（微秒，用于文本输入合并）。
     pub timestamp_us: u64,
 }
 
@@ -213,7 +213,7 @@ impl RawAction {
         (self.f32_at(a), self.f32_at(b))
     }
 
-    /// Pack two `f32` coordinates into one payload slot (exact round-trip).
+    /// 将两个 `f32` 坐标打包进单个负载槽位（可精确往返还原）。
     #[must_use]
     pub const fn pack_vec2(x: f32, y: f32) -> u64 {
         (x.to_bits() as u64) | ((y.to_bits() as u64) << 32)

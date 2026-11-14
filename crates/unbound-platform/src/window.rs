@@ -1,8 +1,8 @@
-//! The windowing backend: `winit` events translated into engine events.
+//! 窗口系统后端：将 `winit` 事件翻译为引擎事件。
 //!
-//! The translation is deliberately one-way and lossy-free: the engine layer
-//! never sees a `winit` type, so the windowing library can be swapped without
-//! touching the renderer.
+//! 翻译过程刻意设计为单向且无损的：引擎层绝不会看到任何 `winit` 类型，
+//! 从而可在不触及渲染器的前提下替换窗口库。
+//!
 
 use std::time::Instant;
 
@@ -10,35 +10,35 @@ use crate::latency::LatencyTracker;
 use crate::pacing::{FramePacer, PresentWaitPolicy};
 use crate::resize::{Extent, ResizeAction, ResizeTracker};
 
-/// How many device pixels one "line" of mouse-wheel travel is worth.
+/// 鼠标滚轮转动一“行”对应的设备像素数。
 ///
-/// Windows reports wheel movement in pixels while most other platforms report
-/// it in lines; the conversion keeps the engine's unit platform-independent.
+/// Windows 以像素为单位上报滚轮位移，而大多数其他平台以行为单位上报；
+/// 此换算使引擎的滚轮单位保持平台无关。
 const PIXELS_PER_LINE: f64 = 40.0;
 
-/// Configuration of the platform window.
+/// 平台窗口的配置参数。
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowConfig {
-    /// Window title.
+    /// 窗口标题。
     pub title: String,
-    /// Initial logical width.
+    /// 初始逻辑宽度。
     pub width: u32,
-    /// Initial logical height.
+    /// 初始逻辑高度。
     pub height: u32,
-    /// Whether the user may resize the window.
+    /// 是否允许用户调整窗口大小。
     pub resizable: bool,
-    /// Whether the OS draws a native title bar and border.
+    /// 系统是否绘制原生标题栏与边框。
     ///
-    /// A client-side decoration application turns this off and drags the
-    /// window itself through the title-bar hit region.
+    /// 采用客户端自绘装饰（CSD）的应用会关闭此项，并通过标题栏命中区域自行拖拽窗口。
+    ///
     pub decorations: bool,
-    /// Smallest logical width the user may resize the window to.
+    /// 用户可将窗口缩小的最小逻辑宽度。
     pub min_width: u32,
-    /// Smallest logical height the user may resize the window to.
+    /// 用户可将窗口缩小的最小逻辑高度。
     pub min_height: u32,
-    /// Whether the window starts visible.
+    /// 窗口启动时是否立即可见。
     pub visible: bool,
-    /// Target refresh interval.
+    /// 目标刷新间隔。
     pub refresh: std::time::Duration,
 }
 
@@ -58,7 +58,7 @@ impl Default for WindowConfig {
     }
 }
 
-/// The state of a modifier key set.
+/// 修饰键集合的当前状态。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Modifiers {
     pub shift: bool,
@@ -67,14 +67,14 @@ pub struct Modifiers {
     pub meta: bool,
 }
 
-/// Whether a button or key is down.
+/// 按键或按钮的按下/释放状态。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ButtonState {
     Pressed,
     Released,
 }
 
-/// A mouse button.
+/// 鼠标按键。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum MouseButton {
     Left,
@@ -83,108 +83,108 @@ pub enum MouseButton {
     Other(u16),
 }
 
-/// A keyboard key, flattened to the few categories the engine cares about.
+/// 键盘按键，扁平化为引擎关心的少数几类。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlatformKey {
-    /// A printable character.
+    /// 可打印字符。
     Character(String),
-    /// A named key such as `Enter` or `ArrowLeft`.
+    /// 具名按键，如 `Enter` 或 `ArrowLeft`。
     Named(String),
-    /// Any other key, identified by its platform code.
+    /// 其余按键，由平台扫描码标识。
     Other(u32),
 }
 
-/// Everything the engine layer needs to know about the window.
+/// 引擎层需要了解的所有窗口事件。
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlatformEvent {
-    /// The window was resized by the OS.
+    /// 操作系统调整了窗口尺寸。
     Resized(Extent),
-    /// The swapchain must be recreated at this extent.
+    /// 必须按该尺寸重建交换链。
     RecreateSwapchain(Extent),
-    /// The OS scale factor changed.
+    /// 系统缩放因子发生变化。
     ScaleFactorChanged(f64),
-    /// The pointer moved, in logical pixels relative to the window.
+    /// 指针移动，坐标为相对于窗口的逻辑像素。
     CursorMoved { x: f64, y: f64 },
-    /// Raw pointer motion, in device pixels.
+    /// 原始指针位移，单位为设备像素。
     PointerRaw { dx: f64, dy: f64 },
-    /// A mouse button changed state.
+    /// 鼠标按键状态发生变化。
     MouseInput {
         state: ButtonState,
         button: MouseButton,
     },
-    /// The mouse wheel turned, in logical lines.
+    /// 鼠标滚轮转动，单位为逻辑行。
     ///
-    /// Windows reports pixel deltas; they are converted to lines here so the
-    /// engine never has to know about the platform's scroll granularity.
+    /// Windows 上报像素增量；此处将其换算为行数，使引擎无需关心平台滚动粒度。
+    ///
     MouseWheel { delta_x: f64, delta_y: f64 },
-    /// A key changed state.
+    /// 键盘按键状态发生变化。
     KeyInput {
         state: ButtonState,
         key: PlatformKey,
         repeat: bool,
     },
-    /// The modifier keys changed.
+    /// 修饰键状态发生变化。
     ModifiersChanged(Modifiers),
-    /// The window gained or lost focus.
+    /// 窗口获得或失去焦点。
     Focused(bool),
-    /// The window became visible or hidden.
+    /// 窗口变为可见或隐藏。
     VisibilityChanged(bool),
-    /// The OS light / dark preference changed.
+    /// 系统的浅色 / 深色主题偏好发生变化。
     ThemeChanged { dark: bool },
-    /// A file is being dragged over the window.
+    /// 有文件正在窗口上方拖拽。
     FileHover(std::path::PathBuf),
-    /// A file was dropped onto the window.
+    /// 有文件被拖放到窗口中。
     FileDrop(std::path::PathBuf),
-    /// A file drag left the window without dropping.
+    /// 文件拖拽离开窗口且未放下。
     FileHoverCancelled,
-    /// An input-method composition or commit event.
+    /// 输入法（IME）组合或提交事件。
     Ime(ImeEvent),
-    /// The OS asks for a new frame.
+    /// 操作系统请求绘制新的一帧。
     RedrawRequested,
-    /// The user asked to close the window.
+    /// 用户请求关闭窗口。
     CloseRequested,
 }
 
-/// An input-method event.
+/// 输入法（IME）事件。
 ///
-/// The engine never sees a `winit` type; the backend translates the platform
-/// IME into this small enum, and [`PlatformState::ime`] keeps the composition
-/// so the application can render it.
+/// 引擎绝不会看到 `winit` 类型；后端将平台 IME 事件翻译为该精简枚举，
+/// 并由 [`PlatformState::ime`] 维护组合串供应用渲染。
+///
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImeEvent {
-    /// The IME is ready to receive composition.
+    /// IME 已就绪，可接收组合输入。
     Enabled,
-    /// The composition string changed.
+    /// 组合字符串发生变化。
     ///
-    /// The tuple is the string plus the byte range of the selection.
+    /// 元组包含组合字符串及选区字节范围。
     Preedit(String, Option<(usize, usize)>),
-    /// A composition was accepted; insert this text.
+    /// 组合输入已确认；插入该文本。
     Commit(String),
-    /// The IME was turned off.
+    /// IME 已关闭。
     Disabled,
 }
 
-/// The live state of the input method.
+/// 输入法的实时状态。
 ///
-/// A text field needs two things from the platform: the composition string it
-/// is currently showing (with the selection range, which it draws as a
-/// highlighted run) and the committed text, which has to be inserted exactly
-/// once. Commits are buffered here because an input event may arrive between
-/// two frames; [`Self::take_commit`] drains them.
+/// 文本输入框需要平台提供两项数据：当前正在显示的组合串（连同用于高亮绘制的
+/// 选区范围）以及必须精确插入一次的已提交文本。提交文本在此缓冲，因为输入事件
+/// 可能在两帧之间到达；[`Self::take_commit`] 负责将其取出。
+///
+///
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImeState {
-    /// Whether the IME is enabled for the focused control.
+    /// 当前聚焦控件是否启用了 IME。
     pub enabled: bool,
-    /// The composition string, empty when there is none.
+    /// 组合字符串；无组合时为空。
     pub preedit: String,
-    /// The byte range of the composition selection.
+    /// 组合选区的字节范围。
     pub selection: Option<(usize, usize)>,
-    /// Committed text waiting to be inserted.
+    /// 等待插入的已提交文本。
     pub commit: String,
 }
 
 impl ImeState {
-    /// Apply one platform event.
+    /// 应用一条平台 IME 事件。
     pub fn apply(&mut self, event: &ImeEvent) {
         match event {
             ImeEvent::Enabled => self.enabled = true,
@@ -193,8 +193,8 @@ impl ImeState {
                 self.selection = *selection;
             }
             ImeEvent::Commit(text) => {
-                // A commit always follows a cleared preedit; clear defensively
-                // for platforms that do not send the empty preedit.
+                // 提交前通常会先清空预编辑串；此处防御性清空，以防部分平台未发送空预编辑事件。
+                //
                 self.preedit.clear();
                 self.selection = None;
                 self.commit.push_str(text);
@@ -207,18 +207,18 @@ impl ImeState {
         }
     }
 
-    /// Take the committed text, leaving the buffer empty.
+    /// 取出已提交文本，并将缓冲区置空。
     pub fn take_commit(&mut self) -> String {
         core::mem::take(&mut self.commit)
     }
 
-    /// The composition string that should be drawn at the caret.
+    /// 应当在光标处绘制的组合字符串。
     #[must_use]
     pub fn preedit(&self) -> &str {
         &self.preedit
     }
 
-    /// Discard a composition (for example when focus moves).
+    /// 丢弃当前组合输入（例如焦点移走时）。
     pub fn clear(&mut self) {
         self.preedit.clear();
         self.selection = None;
@@ -226,12 +226,12 @@ impl ImeState {
     }
 }
 
-/// Errors raised while creating or running the window.
+/// 创建或运行窗口时抛出的错误。
 #[derive(Debug)]
 pub enum PlatformError {
-    /// The windowing system refused the request.
+    /// 窗口系统拒绝了该请求。
     Window(String),
-    /// The event loop could not be created.
+    /// 无法创建事件循环。
     EventLoop(String),
 }
 
@@ -246,38 +246,38 @@ impl core::fmt::Display for PlatformError {
 
 impl std::error::Error for PlatformError {}
 
-/// The live state of the platform layer.
+/// 平台层的实时状态。
 ///
-/// Everything the engine needs to poll each frame lives here, and nothing in
-/// it depends on `winit`.
+/// 引擎每帧需要轮询的所有状态均集中于此，且其中没有任何字段依赖 `winit`。
+///
 #[derive(Debug)]
 pub struct PlatformState {
-    /// Resize bookkeeping.
+    /// 窗口尺寸调整记账。
     pub resize: ResizeTracker,
-    /// Input-to-photon accounting.
+    /// 输入到光子延迟统计。
     pub latency: LatencyTracker,
-    /// Frame pacing.
+    /// 帧率节拍控制。
     pub pacer: FramePacer,
-    /// Presentation policy.
+    /// 呈现同步策略。
     pub present: PresentWaitPolicy,
-    /// The current OS scale factor.
+    /// 当前系统缩放因子。
     pub scale_factor: f64,
-    /// The modifier keys that are currently held.
+    /// 当前处于按住状态的修饰键。
     ///
-    /// A shortcut is only meaningful together with the modifiers, so the
-    /// state keeps them: an application that reads the modifier state from
-    /// the event stream alone has to track it itself.
+    /// 快捷键仅在与修饰键结合时才有意义，因此状态中保留了修饰键信息：
+    /// 仅从事件流读取修饰键状态的应用需要自行追踪。
+    ///
     pub modifiers: Modifiers,
-    /// Whether the window is focused.
+    /// 窗口当前是否拥有焦点。
     pub focused: bool,
-    /// Whether the window is visible.
+    /// 窗口当前是否可见。
     pub visible: bool,
-    /// Input-method composition and committed text.
+    /// 输入法组合串与已提交文本。
     pub ime: ImeState,
 }
 
 impl PlatformState {
-    /// Create the state for a freshly created window.
+    /// 为新创建的窗口初始化平台状态。
     #[must_use]
     pub fn new(config: &WindowConfig, extent: Extent, present: PresentWaitPolicy) -> Self {
         Self {
@@ -293,26 +293,26 @@ impl PlatformState {
         }
     }
 
-    /// Tell the platform which device extensions the renderer actually got.
+    /// 告知平台层渲染器实际获取到的设备扩展。
     ///
-    /// The window exists before the Vulkan device does, so the presentation
-    /// policy cannot be derived at construction time. The application
-    /// creates the device in [`crate::backend::PlatformApp::resumed`] and
-    /// reports the extensions back here; without this the policy would stay
-    /// at its "no extensions" fallback and the low-latency present path
-    /// would never be taken.
+    /// 窗口创建早于 Vulkan 设备，因此构造时无法推导呈现策略。应用在
+    /// [`crate::backend::PlatformApp::resumed`] 中创建设备并在此回传扩展列表；
+    /// 若缺少此步骤，策略将停留在“无扩展”回退模式，永远不会走低延迟呈现路径。
+    ///
+    ///
+    ///
     pub fn set_present_extensions(&mut self, extensions: &[String]) {
         self.present = PresentWaitPolicy::from_extensions(extensions);
     }
 
-    /// Poll the resize tracker and commit a size that has settled.
+    /// 轮询缩放追踪器，并提交已稳定的尺寸。
     ///
-    /// The settle window needs a tick that does **not** depend on another
-    /// resize event arriving. A drag burst ends with one final event, and if
-    /// nothing else ever arrives, that last size would never be committed —
-    /// the window would keep showing the stale extent forever.
+    /// 稳定窗口需要一个**不**依赖后续缩放事件到达的时钟滴答。拖拽风暴以最后
+    /// 一条事件收尾，若此后不再有事件到达，最后那个尺寸将永远无法提交——
+    /// 窗口会永远停留在陈旧尺寸上。
     ///
-    /// Returns the new extent when the swapchain must be rebuilt.
+    ///
+    /// 当必须重建交换链时返回新尺寸。
     pub fn poll_resize(&mut self, now: Instant) -> Option<Extent> {
         match self.resize.poll(now) {
             ResizeAction::None => None,
@@ -321,9 +321,9 @@ impl PlatformState {
     }
 }
 
-/// Translate a `winit` window event into a platform event.
+/// 将 `winit` 窗口事件翻译为平台事件。
 ///
-/// Returns `None` for events the engine does not care about.
+/// 对引擎不关心的事件返回 `None`。
 #[must_use]
 pub fn translate_window_event(event: &winit::event::WindowEvent) -> Option<PlatformEvent> {
     use winit::event::{ElementState, MouseButton as WinitMouseButton, WindowEvent};
@@ -354,8 +354,8 @@ pub fn translate_window_event(event: &winit::event::WindowEvent) -> Option<Platf
             },
         },
         WindowEvent::MouseWheel { delta, .. } => {
-            // Windows reports pixel deltas, most other platforms report lines.
-            // Both are normalised to lines so the engine sees one unit.
+            // Windows 上报像素增量，大多数其他平台按行上报。
+            // 此处统一归一化为行数，使引擎只看到单一单位。
             let (x, y) = match delta {
                 winit::event::MouseScrollDelta::LineDelta(x, y) => (f64::from(*x), f64::from(*y)),
                 winit::event::MouseScrollDelta::PixelDelta(position) => {
@@ -402,11 +402,11 @@ pub fn translate_window_event(event: &winit::event::WindowEvent) -> Option<Platf
     })
 }
 
-/// Translate a `winit` IME event into a platform event.
+/// 将 `winit` IME 事件翻译为平台事件。
 ///
-/// IME events are kept out of [`PlatformEvent`]: they carry text, which the
-/// engine consumes from [`PlatformState::ime`] rather than through the input
-/// delta stream.
+/// IME 事件不混入常规 [`PlatformEvent`] 流：它们携带文本，引擎通过
+/// [`PlatformState::ime`] 而非输入增量流消费它们。
+///
 #[must_use]
 pub fn translate_ime_event(event: &winit::event::WindowEvent) -> Option<ImeEvent> {
     let winit::event::WindowEvent::Ime(ime) = event else {
@@ -420,11 +420,11 @@ pub fn translate_ime_event(event: &winit::event::WindowEvent) -> Option<ImeEvent
     })
 }
 
-/// Flatten a platform-native key code into a stable `u32`.
+/// 将平台原生键码扁平化为稳定的 `u32`。
 ///
-/// The platform codes are not comparable across operating systems, so they are
-/// folded into a single integer space; the engine only needs to distinguish
-/// *different* keys.
+/// 不同操作系统的平台键码不可直接比较，因此折叠到统一的整数空间；
+/// 引擎只需能够区分**不同的**按键即可。
+///
 #[must_use]
 pub fn native_key_code(code: &winit::keyboard::NativeKey) -> u32 {
     use winit::keyboard::NativeKey;
@@ -438,7 +438,7 @@ pub fn native_key_code(code: &winit::keyboard::NativeKey) -> u32 {
     }
 }
 
-/// Flatten a `winit` logical key into the engine's key taxonomy.
+/// 将 `winit` 逻辑按键扁平化为引擎的按键分类。
 #[must_use]
 pub fn translate_key(key: &winit::keyboard::Key) -> PlatformKey {
     use winit::keyboard::{Key as WinitKey, NamedKey};
@@ -463,8 +463,8 @@ pub fn translate_key(key: &winit::keyboard::Key) -> PlatformKey {
             NamedKey::ContextMenu => PlatformKey::Named("ContextMenu".into()),
             NamedKey::CapsLock => PlatformKey::Named("CapsLock".into()),
             NamedKey::Space => PlatformKey::Named("Space".into()),
-            // Editing commands and the function keys (`F1`..`F24`) fold
-            // through the debug name, which is already the stable spelling.
+            // 编辑命令与功能键（`F1`..`F24`）直接通过调试名称折叠，其拼写已是稳定的。
+            //
             NamedKey::Copy => PlatformKey::Named("Copy".into()),
             NamedKey::Cut => PlatformKey::Named("Cut".into()),
             NamedKey::Paste => PlatformKey::Named("Paste".into()),
@@ -473,25 +473,25 @@ pub fn translate_key(key: &winit::keyboard::Key) -> PlatformKey {
             other => PlatformKey::Named(format!("{other:?}")),
         },
         WinitKey::Unidentified(code) => PlatformKey::Other(native_key_code(code)),
-        // A dead key (e.g. the French `^` accent) produces no character yet.
+        // 死键（例如法语的 `^` 重音符）尚未产生字符。
         WinitKey::Dead(_) => PlatformKey::Named("Dead".into()),
     }
 }
 
-/// Apply a platform event to the shared state.
+/// 将平台事件应用到共享状态。
 ///
-/// Returns the events that the engine must react to.
+/// 返回引擎必须响应的事件列表。
 pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> Vec<PlatformEvent> {
     let mut out = Vec::new();
     match event {
         PlatformEvent::Resized(extent) => {
-            // The window changed size. The application has to know: the
-            // layout is recomputed for the new size, and the swapchain has
-            // to be rebuilt for it.
+            // 窗口尺寸发生了变化。必须通知应用：需要按新尺寸重新计算布局，
+            // 且交换链必须随之重建。
             //
-            // The event used to be swallowed here, which meant the renderer
-            // kept drawing at the old size while the window had already
-            // moved on — the stretched frame the user saw.
+            //
+            // 该事件过去曾在此被吞掉，导致窗口已改变大小而渲染器仍按旧尺寸绘制——
+            // 用户看到的就是被拉伸的画面。
+            //
             state.pacer.request_immediate(now);
             out.push(PlatformEvent::Resized(*extent));
             if let ResizeAction::Recreate(new) = state.resize.on_resized(*extent, now) {
@@ -500,9 +500,9 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
         }
         PlatformEvent::ScaleFactorChanged(factor) => {
             state.scale_factor = *factor;
-            // The application lays out in logical units, so it has to know the
-            // device scale to keep input, glyph rasterisation and the camera in
-            // one coordinate space.
+            // 应用按逻辑单位布局，因此必须获知设备缩放比，以使输入、字形光栅化
+            // 与相机保持在同一坐标系中。
+            //
             state.pacer.request_immediate(now);
             out.push(event.clone());
         }
@@ -511,20 +511,20 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
         | PlatformEvent::MouseInput { .. }
         | PlatformEvent::MouseWheel { .. }
         | PlatformEvent::KeyInput { .. } => {
-            // Anything the user did invalidates the pending frame.
+            // 用户的任何操作都会使挂起帧失效。
             state.latency.on_input(now);
-            // The application draws from these events; swallowing them here
-            // is what made every widget look inert while the latency clock
-            // kept ticking.
+            // 应用依赖这些事件驱动绘制；在此吞掉它们会导致延迟时钟持续走时，
+            // 但所有控件看起来却毫无响应。
             //
-            // The frame that reacts to the input must not wait for the next
-            // vsync: the pacer would otherwise hold the response back for a
-            // whole refresh interval.
+            //
+            // 响应该输入的帧绝不能干等下一次垂直同步：否则节拍器会将响应
+            // 延迟整整一个刷新周期。
+            //
             state.pacer.request_immediate(now);
             out.push(event.clone());
         }
         PlatformEvent::ModifiersChanged(mods) => {
-            // The application needs the modifiers to interpret a shortcut.
+            // 应用需要修饰键状态来解析快捷键。
             state.modifiers = *mods;
             out.push(PlatformEvent::ModifiersChanged(*mods));
         }
@@ -563,9 +563,9 @@ mod tests {
     use super::*;
     use crate::pacing::PresentSync;
 
-    /// The resize event reaches the application and rebuilds the swapchain
-    /// at once: the frame has to be drawn at the new resolution, not a
-    /// stretched copy of the previous one.
+    /// 缩放事件直达应用并立即重建交换链：必须按新分辨率绘制帧，
+    /// 而非显示上一帧的拉伸副本。
+    ///
     #[test]
     fn a_resize_event_produces_a_swapchain_recreation_immediately() {
         let config = WindowConfig::default();
@@ -590,8 +590,8 @@ mod tests {
         );
     }
 
-    /// The resize event wakes the frame scheduler: the new size must not
-    /// wait for the next regular deadline.
+    /// 缩放事件立即唤醒帧调度器：新尺寸绝不能干等下一个常规节拍截止时间。
+    ///
     #[test]
     fn a_resize_wakes_the_frame_scheduler() {
         let config = WindowConfig::default();
@@ -601,7 +601,7 @@ mod tests {
             PresentWaitPolicy::from_extensions(&[]),
         );
         let now = Instant::now();
-        // Pretend a frame was presented a moment ago.
+        // 假装片刻前刚刚呈现过一帧。
         state.pacer.on_present(now);
         assert!(
             !state.pacer.should_render(now),
@@ -618,8 +618,8 @@ mod tests {
         );
     }
 
-    /// A drag burst ends with one final resize event. The size is committed
-    /// on every message, so the poll only ever reports "nothing to do".
+    /// 拖拽风暴以最后一条缩放事件结束。实时模式下每条消息都立即提交尺寸，
+    /// 因此轮询只会返回“无需操作”。
     #[test]
     fn a_committed_size_is_not_committed_twice() {
         let config = WindowConfig::default();
@@ -639,7 +639,7 @@ mod tests {
             "the first message must rebuild the chain"
         );
 
-        // No further event arrives; the frame loop polls instead.
+        // 后续不再有事件到达；帧循环改为轮询驱动。
         assert_eq!(
             state.poll_resize(now + std::time::Duration::from_millis(5)),
             None,
@@ -652,8 +652,8 @@ mod tests {
         );
     }
 
-    /// The presentation policy has to follow the device, not a hard-coded
-    /// fallback: the window is created before the Vulkan device exists.
+    /// 呈现策略必须跟随真实设备，而非硬编码回退值：窗口创建早于 Vulkan 设备。
+    ///
     #[test]
     fn the_present_policy_follows_the_device_extensions() {
         let config = WindowConfig::default();
@@ -672,9 +672,9 @@ mod tests {
         assert!(state.present.can_wait_for_present());
     }
 
-    /// Input events must reach the application. The latency clock alone is
-    /// not enough: a window that showed a frozen first frame while every
-    /// click, wheel and key was swallowed looks exactly like a broken widget.
+    /// 输入事件必须直达应用。仅有延迟时钟远远不够：一个首帧冻结、吞掉所有
+    /// 点击、滚轮与按键的窗口，表现起来就像彻底损坏的控件。
+    ///
     #[test]
     fn input_events_reach_the_application() {
         let config = WindowConfig::default();
@@ -713,11 +713,11 @@ mod tests {
         assert!(state.latency.last().is_some());
     }
 
-    /// Every input event has to reach the application.
+    /// 每条输入事件都必须送达应用。
     ///
-    /// The engine draws from these events; swallowing them here is what made
-    /// every widget look inert while the latency clock kept ticking. The
-    /// modifiers, the focus state and the visibility were dropped as well.
+    /// 引擎依赖这些事件驱动绘制；在此吞掉它们曾导致延迟时钟走时而控件毫无反应，
+    /// 修饰键、焦点状态与可见性也一并丢失。
+    ///
     #[test]
     fn input_and_wheel_events_are_forwarded_to_the_application() {
         let config = WindowConfig::default();
@@ -757,8 +757,8 @@ mod tests {
                 "{event:?} must be forwarded: {out:?}"
             );
         }
-        // The modifiers are also remembered on the state, so a shortcut can be
-        // resolved without tracking the event stream.
+        // 修饰键状态同时保存在状态中，使快捷键无需追踪历史事件流即可解析。
+        //
         assert!(state.modifiers.shift);
     }
 

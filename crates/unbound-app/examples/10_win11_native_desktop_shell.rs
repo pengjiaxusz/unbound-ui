@@ -1,10 +1,10 @@
-//! 10_win11_native_desktop_shell: Modern Windows 10/11 Native Desktop Shell.
+//! 10_win11_native_desktop_shell：现代 Windows 10/11 原生桌面外壳示例。
 //!
-//! Demonstrates:
-//! - Frameless window styling and custom title bar with Windows 11 Snap Layouts.
-//! - File drag-and-drop target integration via [`FileDropDesc`].
-//! - System notifications, banners, and security watermarks.
-//! - Clipboard and high-DPI Per-Monitor V2 scaling.
+//! 演示内容：
+//! - 无边框窗口样式与支持 Windows 11 Snap Layouts 的自定义标题栏。
+//! - 通过 [`FileDropDesc`] 集成系统文件拖放目标。
+//! - 系统通知、横幅与安全水印。
+//! - 剪贴板与 Per-Monitor V2 高 DPI 缩放。
 
 use unbound_app::prelude::*;
 use unbound_input::PointerButton;
@@ -53,7 +53,7 @@ impl Application for Win11ShellApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("shell_root"), |col| {
-            // Native Frameless Titlebar
+            // 原生无边框标题栏
             col.row(ui_key!("titlebar"), |bar| {
                 bar.badge(
                     ui_key!("app_title"),
@@ -73,10 +73,10 @@ impl Application for Win11ShellApp {
 
             col.divider(ui_key!("div_title"), DividerDesc::rule());
 
-            // Banner
+            // 横幅提示
             col.add(ui_key!("banner"), WidgetCatalogId::Banner);
 
-            // Main Desktop Stage
+            // 主桌面舞台区域
             col.card(ui_key!("main_card"), CardDesc::default(), |card| {
                 card.badge(
                     ui_key!("drop_info"),
@@ -97,7 +97,7 @@ pub fn run_headless_check() {
     assert!(initial_report.primitives > 0);
     assert!(!runtime.state().is_maximized);
 
-    // Click Maximize button
+    // 点击最大化按钮
     let btn_rect = runtime
         .widget_rect(BTN_MAXIMIZE)
         .expect("Maximize button mounted");

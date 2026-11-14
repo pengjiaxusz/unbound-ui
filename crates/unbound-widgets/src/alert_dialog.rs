@@ -1,13 +1,11 @@
-//! Modal confirmation dialogs.
+//! 模态确认对话框（AlertDialog）。
 //!
-//! An alert dialog is a [`crate::modal::ModalDesc`] with a fixed three-part
-//! structure: an icon and a title, a body message, and a footer with exactly
-//! two actions. That fixed shape is what lets the widget make the *safe*
-//! choice for the caller: a destructive dialog puts the initial keyboard focus
-//! on **Cancel**, so an inattentive `Enter` cannot delete anything.
+//! AlertDialog 是具有固定三段式结构的 [`crate::modal::ModalDesc`]：
+//! 图标与标题、正文消息、以及恰好包含两个操作的底部栏。这种固定结构使组件
+//! 能够为调用方做出*安全*的默认选择：危险操作对话框会将初始键盘焦点放在
+//! **取消**按钮上，防止误按 `Enter` 导致意外删除。
 //!
-//! The dialog emits its scrim separately from the card, exactly like the
-//! generic modal, because both must be installed as hit regions.
+//! 对话框会像通用模态框一样将遮罩层与卡片分开发射，因为两者都需要注册为命中区域。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -22,30 +20,30 @@ use crate::overlay::{BackdropRequest, OverlayEntry};
 use crate::primitive::{instance, surface};
 use crate::{ControlState, WidgetOutput};
 
-/// The dialog body padding.
+/// 对话框内容区内边距。
 pub const DIALOG_PADDING: f32 = 20.0;
-/// The footer height.
+/// 底部栏高度。
 pub const DIALOG_FOOTER: f32 = 56.0;
-/// The action button height.
+/// 操作按钮高度。
 pub const DIALOG_BUTTON_HEIGHT: f32 = 32.0;
-/// The severity icon diameter.
+/// 严重级别图标直径。
 pub const DIALOG_ICON: f32 = 22.0;
-/// The default corner radius.
+/// 默认圆角半径。
 pub const DIALOG_RADIUS: f32 = 14.0;
 const DIALOG_SHADOW: f32 = 40.0;
 
-/// The emphasis of the confirm action.
+/// 确认操作的强调级别。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ConfirmTone {
-    /// A neutral, reversible action.
+    /// 中性、可逆的操作。
     #[default]
     Primary,
-    /// A destructive action: red, and the cancel button takes initial focus.
+    /// 危险操作：显示为红色，且取消按钮获得初始焦点。
     Destructive,
 }
 
 impl ConfirmTone {
-    /// The confirm button fill.
+    /// 确认按钮填充色。
     #[must_use]
     pub fn fill(self) -> Token {
         match self {
@@ -54,7 +52,7 @@ impl ConfirmTone {
         }
     }
 
-    /// The accent used by the warning icon.
+    /// 警告图标使用的强调色。
     #[must_use]
     pub fn accent(self) -> Token {
         match self {
@@ -64,67 +62,67 @@ impl ConfirmTone {
     }
 }
 
-/// Which footer action holds the keyboard focus.
+/// 哪个底部操作按钮持有键盘焦点。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AlertFocus {
-    /// The safe action.
+    /// 安全操作（取消）。
     Cancel,
-    /// The committing action.
+    /// 提交操作（确认）。
     #[default]
     Confirm,
 }
 
-/// The keys the dialog handles.
+/// 对话框处理的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlertDialogKey {
-    /// Cancel and close.
+    /// 取消并关闭。
     Escape,
-    /// Commit and close.
+    /// 提交并关闭。
     Enter,
-    /// Move the focus to the other action.
+    /// 将焦点移至另一个操作。
     Tab,
-    /// Move the focus backwards.
+    /// 反向移动焦点。
     ShiftTab,
 }
 
-/// What a key did.
+/// 按键处理结果。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlertDialogOutcome {
-    /// The key was not handled.
+    /// 按键未被处理。
     Ignored,
-    /// The dialog asks to close without committing.
+    /// 对话框请求不提交直接关闭。
     Cancelled,
-    /// The dialog asks to commit and close.
+    /// 对话框请求提交并关闭。
     Confirmed,
-    /// The focus moved to another action.
+    /// 焦点已移至另一个操作。
     FocusChanged(AlertFocus),
 }
 
-/// A confirmation dialog descriptor.
+/// 确认对话框描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlertDialogDesc {
-    /// The dialog card rectangle.
+    /// 对话框卡片矩形。
     pub rect: Rect,
-    /// The headline.
+    /// 主标题。
     pub title: String,
-    /// The body copy.
+    /// 正文文案。
     pub message: String,
-    /// The cancel label.
+    /// 取消按钮标签。
     pub cancel_label: String,
-    /// The confirm label.
+    /// 确认按钮标签。
     pub confirm_label: String,
-    /// The confirm emphasis.
+    /// 确认操作强调级别。
     pub tone: ConfirmTone,
-    /// The corner radius.
+    /// 圆角半径。
     pub radius: f32,
-    /// The backdrop blur radius; `0.0` disables the pass.
+    /// 背景模糊半径；`0.0` 表示禁用模糊通道。
     pub backdrop_blur: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl AlertDialogDesc {
-    /// A dialog with a title.
+    /// 创建带标题的确认对话框。
     #[must_use]
     pub fn new(rect: Rect, title: impl Into<String>) -> Self {
         Self {
@@ -140,14 +138,14 @@ impl AlertDialogDesc {
         }
     }
 
-    /// The same dialog with body copy.
+    /// 附加正文文案。
     #[must_use]
     pub fn with_message(mut self, message: impl Into<String>) -> Self {
         self.message = message.into();
         self
     }
 
-    /// The same dialog with an explicit action pair.
+    /// 设置明确的操作按钮文本对。
     #[must_use]
     pub fn with_actions(mut self, cancel: impl Into<String>, confirm: impl Into<String>) -> Self {
         self.cancel_label = cancel.into();
@@ -155,17 +153,16 @@ impl AlertDialogDesc {
         self
     }
 
-    /// The same dialog with a destructive confirm action.
+    /// 设为危险确认操作。
     #[must_use]
     pub fn destructive(mut self) -> Self {
         self.tone = ConfirmTone::Destructive;
         self
     }
 
-    /// The focus the dialog opens with.
+    /// 对话框打开时的初始焦点。
     ///
-    /// A destructive action never takes the initial focus: the safe choice is
-    /// the default, which is the whole point of the dialog.
+    /// 危险操作绝不获取初始焦点：安全选项为默认值，这正是该对话框的设计初衷。
     #[must_use]
     pub fn initial_focus(&self) -> AlertFocus {
         match self.tone {
@@ -174,7 +171,7 @@ impl AlertDialogDesc {
         }
     }
 
-    /// The index of the initial focus in `[cancel, confirm]`.
+    /// 初始焦点在 `[cancel, confirm]` 中的索引。
     #[must_use]
     pub fn initial_focus_index(&self) -> usize {
         match self.initial_focus() {
@@ -183,7 +180,7 @@ impl AlertDialogDesc {
         }
     }
 
-    /// The geometry of every part of the dialog.
+    /// 计算对话框各部分的几何布局。
     #[must_use]
     pub fn layout(&self) -> AlertDialogLayout {
         let pad = DIALOG_PADDING;
@@ -235,31 +232,31 @@ impl AlertDialogDesc {
     }
 }
 
-/// The computed rectangles of an alert dialog.
+/// 确认对话框计算后的各矩形区域。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AlertDialogLayout {
-    /// The severity icon.
+    /// 严重级别图标。
     pub icon: Rect,
-    /// The headline.
+    /// 主标题。
     pub title: Rect,
-    /// The body copy.
+    /// 正文文案。
     pub message: Rect,
-    /// The footer bar.
+    /// 底部栏。
     pub footer: Rect,
-    /// The safe action.
+    /// 安全操作。
     pub cancel: Rect,
-    /// The committing action.
+    /// 提交操作。
     pub confirm: Rect,
 }
 
-/// The keyboard state of one dialog.
+/// 单个对话框的键盘状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AlertDialogState {
     focus: AlertFocus,
 }
 
 impl AlertDialogState {
-    /// A dialog opened with the descriptor's safe default.
+    /// 使用描述符的安全默认焦点打开对话框。
     #[must_use]
     pub fn new(desc: &AlertDialogDesc) -> Self {
         Self {
@@ -267,18 +264,18 @@ impl AlertDialogState {
         }
     }
 
-    /// The focused action.
+    /// 当前聚焦的操作。
     #[must_use]
     pub fn focus(&self) -> AlertFocus {
         self.focus
     }
 
-    /// Move the focus explicitly.
+    /// 显式移动焦点。
     pub fn set_focus(&mut self, focus: AlertFocus) {
         self.focus = focus;
     }
 
-    /// Handle one key.
+    /// 处理单个按键。
     pub fn handle_key(&mut self, key: AlertDialogKey) -> AlertDialogOutcome {
         match key {
             AlertDialogKey::Escape => AlertDialogOutcome::Cancelled,
@@ -294,36 +291,36 @@ impl AlertDialogState {
     }
 }
 
-/// What one dialog emits.
+/// 单个对话框的发射结果。
 #[derive(Clone, Debug)]
 pub struct AlertDialogOutput {
-    /// The card, title, message and buttons.
+    /// 卡片、标题、消息与按钮。
     pub output: WidgetOutput,
-    /// The scrim, installed in addition to the card.
+    /// 遮罩层（在卡片之外单独安装）。
     pub scrim: HitRegion,
-    /// The cancel and confirm hit regions, in that order.
+    /// 取消与确认命中区域（按此顺序）。
     pub actions: [HitRegion; 2],
-    /// The overlay entry the caller pushes.
+    /// 调用方需推入的浮层条目。
     pub entry: OverlayEntry,
-    /// The blur request, when `backdrop_blur > 0`.
+    /// 当 `backdrop_blur > 0` 时的模糊请求。
     pub backdrop: Option<BackdropRequest>,
-    /// The computed layout.
+    /// 计算后的布局。
     pub layout: AlertDialogLayout,
 }
 
-/// Deterministic sub-node id for the alert dialog Cancel button.
+/// 确认对话框取消按钮的确定性子节点 ID。
 #[must_use]
 pub const fn alert_cancel_node(node: u64) -> u64 {
     node ^ (1 << 62)
 }
 
-/// Deterministic sub-node id for the alert dialog Confirm button.
+/// 确认对话框确认按钮的确定性子节点 ID。
 #[must_use]
 pub const fn alert_confirm_node(node: u64) -> u64 {
     node ^ (1 << 61)
 }
 
-/// Emit a confirmation dialog.
+/// 发射确认对话框。
 #[must_use]
 pub fn emit_alert_dialog(
     node: u64,
@@ -393,7 +390,7 @@ pub fn emit_alert_dialog(
             Token::DIVIDER,
             desc.z + 1,
         ),
-        // Cancel: an outlined surface.
+        // 取消按钮：描边表面。
         instance(
             layout.cancel,
             [8.0; 4],
@@ -405,7 +402,7 @@ pub fn emit_alert_dialog(
             SubElement::Background,
             desc.z + 1,
         ),
-        // Confirm: the tone fill.
+        // 确认按钮：按色调填充。
         surface(layout.confirm, 8.0, desc.tone.fill(), desc.z + 1),
     ];
     let mut payloads = Vec::with_capacity(glyphs.len());

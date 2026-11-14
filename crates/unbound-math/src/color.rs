@@ -1,18 +1,18 @@
-//! Linear-light colour, sRGB transfer functions, Oklab and RGBA16F LUT packing.
+//! 线性光色彩、sRGB 传输函数、Oklab 与 RGBA16F LUT 打包。
 //!
-//! Per `docs` §2.2 every colour token lives in **linear space** so that
-//! translucent stacking, gradient interpolation and antialiased edges blend
-//! physically correctly and never produce dark fringes. Oklab is provided for
-//! *authoring* (perceptually uniform lightness ramps) — it is converted back to
-//! linear before it ever reaches the GPU.
+//! 根据 `docs` §2.2，所有颜色标记均位于**线性空间**中，使半透明叠加、
+//! 渐变插值与抗锯齿边缘按物理规律正确混合，避免产生暗边。提供 Oklab
+//! 用于**调色**（感知均匀的亮度渐变），在送入 GPU 前均会转换回线性空间。
+//!
+//!
 
 use bytemuck::{Pod, Zeroable};
 use core::ops::{Add, Mul, Sub};
 
 use crate::f16::f32_to_f16;
 
-/// Linear-light RGBA, components nominally in `[0, 1]` but not clamped so that
-/// HDR wide-gamut swapchains can carry values > 1.
+/// 线性光 RGBA，各分量标称范围为 `[0, 1]`，但不做截断，以便 HDR 广色域
+/// 交换链承载大于 1 的值。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct Color {
@@ -45,7 +45,7 @@ impl Color {
         Self::new(r, g, b, 1.0)
     }
 
-    /// Build from 8-bit **sRGB** components (what designers type).
+    /// 从 8 位 **sRGB** 分量构建（即设计师输入的值）。
     #[inline]
     #[must_use]
     pub fn from_srgb8(r: u8, g: u8, b: u8, a: u8) -> Self {
@@ -57,7 +57,7 @@ impl Color {
         )
     }
 
-    /// Build from a `#RRGGBB` / `#RRGGBBAA` hex literal (sRGB).
+    /// 从 `#RRGGBB` / `#RRGGBBAA` 十六进制字面量（sRGB）构建。
     #[must_use]
     pub fn from_hex(hex: u32) -> Self {
         Self::from_srgb8(
@@ -89,33 +89,33 @@ impl Color {
         [self.r, self.g, self.b, self.a]
     }
 
-    /// Premultiplied form for straight-alpha blending pipelines.
+    /// 预乘 Alpha 形式，用于直通 Alpha 混合管线。
     #[inline]
     #[must_use]
     pub fn premultiplied(self) -> Self {
         Self::new(self.r * self.a, self.g * self.a, self.b * self.a, self.a)
     }
 
-    /// Oklab representation (perceptually uniform).
+    /// Oklab 表示形式（感知均匀）。
     #[must_use]
     pub fn to_oklab(self) -> Oklab {
         Oklab::from_linear(self)
     }
 
-    /// Perceptual lightness in `[0, 1]` (Oklab `L`).
+    /// 感知亮度，范围 `[0, 1]`（Oklab `L` 分量）。
     #[must_use]
     pub fn luminance_perceptual(self) -> f32 {
         self.to_oklab().l
     }
 
-    /// Relative luminance (WCAG), linear space.
+    /// 相对亮度（WCAG 标准），线性空间。
     #[must_use]
     pub fn luminance(self) -> f32 {
         0.2126 * self.r + 0.7152 * self.g + 0.0722 * self.b
     }
 
-    /// Pack into four IEEE binary16 words — the `RGBA16F` theme LUT element
-    /// layout (`theme_lut_bda`).
+    /// 打包为四个 IEEE binary16 字——对应 `RGBA16F` 主题 LUT 元素布局
+    /// （`theme_lut_bda`）。
     #[inline]
     #[must_use]
     pub fn to_rgba16f(self) -> [u16; 4] {
@@ -127,8 +127,8 @@ impl Color {
         ]
     }
 
-    /// Linear interpolation in linear space (never in sRGB — that is what
-    /// causes muddy gradients).
+    /// 线性空间线性插值（切勿在 sRGB 中插值，否则会导致渐变发灰）。
+    ///
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self::new(
@@ -139,8 +139,8 @@ impl Color {
         )
     }
 
-    /// Oklab interpolation — perceptually even ramps for gradients and theme
-    /// transitions.
+    /// Oklab 插值——用于渐变和主题过渡的感知均匀色阶。
+    ///
     #[must_use]
     pub fn lerp_oklab(self, other: Self, t: f32) -> Self {
         self.to_oklab().lerp(other.to_oklab(), t).to_linear()
@@ -186,7 +186,7 @@ impl Sub for Color {
     }
 }
 
-/// 8-bit sRGB colour, the authoring/storage format for theme files.
+/// 8 位 sRGB 颜色，主题文件的编写与存储格式。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 pub struct Srgba {
@@ -210,7 +210,7 @@ impl Srgba {
     }
 }
 
-/// sRGB electro-optical transfer function (EOTF).
+/// sRGB 电光传输函数（EOTF）。
 #[inline]
 #[must_use]
 pub fn srgb_to_linear(c: f32) -> f32 {
@@ -221,7 +221,7 @@ pub fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
-/// Inverse sRGB transfer function (OETF).
+/// 逆 sRGB 传输函数（OETF）。
 #[inline]
 #[must_use]
 pub fn linear_to_srgb(c: f32) -> f32 {
@@ -232,7 +232,7 @@ pub fn linear_to_srgb(c: f32) -> f32 {
     }
 }
 
-/// Perceptually uniform Oklab colour.
+/// 感知均匀的 Oklab 颜色。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Oklab {
     pub l: f32,
@@ -242,7 +242,7 @@ pub struct Oklab {
 }
 
 impl Oklab {
-    /// Convert linear sRGB to Oklab (Björn Ottosson's matrices).
+    /// 将线性 sRGB 转换为 Oklab（Björn Ottosson 矩阵）。
     #[must_use]
     pub fn from_linear(c: Color) -> Self {
         let l = 0.412_221_47 * c.r + 0.536_332_55 * c.g + 0.051_445_99 * c.b;
@@ -261,7 +261,7 @@ impl Oklab {
         }
     }
 
-    /// Convert back to linear sRGB.
+    /// 转换回线性 sRGB。
     #[must_use]
     pub fn to_linear(self) -> Color {
         let l_ = self.l + 0.396_337_78 * self.a + 0.215_803_76 * self.b;
@@ -280,7 +280,7 @@ impl Oklab {
         )
     }
 
-    /// Interpolate in Oklab (used by gradient ramps and theme fades).
+    /// 在 Oklab 空间插值（用于渐变色阶与主题淡入淡出）。
     #[must_use]
     pub fn lerp(self, other: Self, t: f32) -> Self {
         Self {
@@ -291,8 +291,8 @@ impl Oklab {
         }
     }
 
-    /// Perceptual lightness delta — theme logic uses this to decide whether a
-    /// surface is "dark" and therefore needs stem darkening compensation.
+    /// 感知亮度差——主题逻辑据此判断表面是否为“深色”，从而决定是否需要
+    /// 笔画加粗补偿（stem darkening）。
     #[must_use]
     pub fn is_dark(self) -> bool {
         self.l < 0.5
@@ -357,19 +357,19 @@ mod tests {
 
     #[test]
     fn oklab_lightness_of_srgb_mid_grey_is_about_0_6() {
-        // Oklab's L is perceptual, so sRGB 0.5 lands near 0.5987 rather than
-        // 0.5 — this is the whole point of using it for ramps.
+        // Oklab 的 L 为感知亮度，因此 sRGB 0.5 落在约 0.5987 而非 0.5——
+        // 这正是将其用于渐变色阶的意义所在。
         let l = Color::from_srgb8(128, 128, 128, 255).to_oklab().l;
         assert!((l - 0.598_7).abs() < 0.01, "L = {l}");
     }
 
     #[test]
     fn interpolation_never_produces_dark_fringe() {
-        // Linear-space lerp of black -> white must be the arithmetic mean.
+        // 黑到白的线性空间插值必须等于算术平均值。
         let mid = Color::BLACK.lerp(Color::WHITE, 0.5);
         assert!((mid.r - 0.5).abs() < 1e-6);
-        // sRGB-space lerp would have produced 0.5 sRGB == 0.214 linear; assert
-        // we are clearly brighter than that.
+        // sRGB 空间插值会得到 0.5 sRGB == 0.214 线性值；断言当前结果
+        // 明显高于该值。
         assert!(mid.r > srgb_to_linear(0.5));
     }
 

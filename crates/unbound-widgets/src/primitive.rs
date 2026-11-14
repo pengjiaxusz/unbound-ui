@@ -1,9 +1,9 @@
-//! Shared primitive construction for the control emitters.
+//! 控件输出器共用的图元构建辅助函数。
 //!
-//! Every control draws the same four things — a surface, a border, a run of
-//! glyphs and an optional focus ring — so the construction lives here once.
-//! The emitters only decide *what* to draw and *where*; this module decides
-//! *how* a primitive instance is packed.
+//! 每个控件都绘制相同的四类元素——表面、边框、字形串与可选的焦点环——
+//! 因此将构建逻辑集中于此。各输出器只需决定*画什么*和*画在哪里*；
+//! 本模块决定*如何*打包图元实例。
+//!
 
 use unbound_gpu::data::{
     BlendMode, GpuPayload, GpuPrimitiveInstance, PrimFlags, PrimType, SubElement, CLIP_NONE,
@@ -12,7 +12,7 @@ use unbound_math::{f16, Rect};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-/// Build a primitive instance.
+/// 构建图元实例。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn instance(
     rect: Rect,
@@ -42,7 +42,7 @@ pub(crate) fn instance(
     }
 }
 
-/// A filled rounded rectangle.
+/// 填充圆角矩形。
 pub(crate) fn surface(rect: Rect, radius: f32, fill: Token, z: u16) -> GpuPrimitiveInstance {
     instance(
         rect,
@@ -57,7 +57,7 @@ pub(crate) fn surface(rect: Rect, radius: f32, fill: Token, z: u16) -> GpuPrimit
     )
 }
 
-/// A rounded rectangle with a hairline border.
+/// 带细边框的圆角矩形。
 pub(crate) fn outlined(
     rect: Rect,
     radius: f32,
@@ -80,12 +80,11 @@ pub(crate) fn outlined(
     )
 }
 
-/// An outward stroke, used for the keyboard focus ring.
+/// 向外描边，用于键盘焦点环。
 ///
-/// The ring is emitted whether or not the control has focus, and `focused`
-/// only decides its opacity. Gaining or losing focus is then a *paint*
-/// change — one primitive in the pool — instead of a *shape* change, which
-/// would invalidate every index after it and force a full re-upload.
+/// 无论控件是否聚焦都会输出焦点环，`focused` 仅决定其不透明度。
+/// 这样获得或失去焦点只是一次*绘制*变更（图元池中的单个图元），
+/// 而非会使其后所有索引失效并触发全量重传的*结构*变更。
 pub(crate) fn focus_ring(
     rect: Rect,
     radius: f32,
@@ -110,11 +109,10 @@ pub(crate) fn focus_ring(
     ring
 }
 
-/// A run of glyphs, already positioned by the caller.
+/// 已由调用方定位好的字形串。
 ///
-/// The caller shapes the text with its own text engine — which knows the
-/// baseline, the raster scale and the atlas — so the emitter never has to
-/// know anything about fonts.
+/// 调用方使用自身的文本引擎（了解基线、光栅化缩放与图集）进行塑形，
+/// 因此输出器完全无需关心字体细节。
 pub(crate) fn glyphs(
     quads: &[GlyphQuad],
     color: Token,
@@ -148,12 +146,12 @@ pub(crate) fn glyphs(
             SubElement::Content,
             z,
         );
-        // The atlas layer travels in the border slot, which the background
-        // does not use.
+        // 图集层级通过边框槽位传递（背景图元不使用该槽位）。
+        //
         glyph.border_token_or_tex = quad.layer;
         glyph.extra_payload_idx = payload_idx;
-        // A distance-field glyph must be decoded as one; the flag rides in the
-        // high half of the type word.
+        // 距离场字形必须按距离场解码；该标志位于类型字的高半部分。
+        //
         if quad.msdf {
             glyph.prim_type_and_flags |= u32::from(PrimFlags::MSDF.bits()) << 16;
         }

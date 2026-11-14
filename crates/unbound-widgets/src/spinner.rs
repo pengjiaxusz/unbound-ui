@@ -1,4 +1,4 @@
-//! Spinner & LoadingOverlay local loading indicator and lock scrim.
+//! Spinner 与 LoadingOverlay 局部加载指示器及锁定遮罩。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -9,21 +9,21 @@ use unbound_theme::Token;
 use crate::primitive::{outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
-/// Descriptor for a [`Spinner`] ring.
+/// [`Spinner`] 加载环的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpinnerDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Normalized animation phase `[0.0, 1.0]`.
+    /// 归一化动画相位 `[0.0, 1.0]`。
     pub phase: f32,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl SpinnerDesc {
-    /// Create a spinner descriptor.
+    /// 创建加载环描述符。
     #[must_use]
     pub fn new(rect: Rect, phase: f32) -> Self {
         Self {
@@ -35,22 +35,22 @@ impl SpinnerDesc {
     }
 }
 
-/// Descriptor for a [`LoadingOverlay`] covering an arbitrary target rectangle.
+/// 覆盖任意目标矩形的 [`LoadingOverlay`] 描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadingOverlayDesc {
-    /// Target area to mask.
+    /// 需要遮罩的目标区域。
     pub rect: Rect,
-    /// Whether loading is active.
+    /// 加载是否处于激活状态。
     pub active: bool,
-    /// Spinner phase `[0.0, 1.0]`.
+    /// 加载环相位 `[0.0, 1.0]`。
     pub phase: f32,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
-/// Emit a stable-shape spinner (1 outer ring + 1 rotating indicator dot = 2 primitives).
+/// 输出结构稳定的加载环（1 个外环 + 1 个旋转指示圆点 = 2 个图元）。
 #[must_use]
 pub fn emit_spinner(desc: &SpinnerDesc, state: ControlState) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(2);
@@ -102,7 +102,7 @@ pub fn emit_spinner(desc: &SpinnerDesc, state: ControlState) -> WidgetOutput {
     }
 }
 
-/// Emit a stable-shape loading overlay (1 scrim + 2 spinner primitives = 3 primitives).
+/// 输出结构稳定的加载遮罩（1 个半透明遮罩 + 2 个加载环图元 = 3 个图元）。
 #[must_use]
 pub fn emit_loading_overlay(desc: &LoadingOverlayDesc, state: ControlState) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(3);

@@ -1,14 +1,14 @@
-//! Builds the component gallery scene.
+//! 构建组件展厅场景。
 //!
-//! Every entry here corresponds to a primitive type the uber shader knows
-//! about, so the window shows the whole rendering vocabulary at once: rounded
-//! rectangles, borders, analytic shadows, curves, images and glyphs.
+//! 此处的每个条目都对应超级着色器（uber shader）所支持的一种图元类型，
+//! 因此窗口会一次性展示完整的渲染词汇表：圆角矩形、边框、解析阴影、曲线、
+//! 图像与字形。
 //!
-//! The scene is rebuilt when a discrete interaction state changes (hover /
-//! press / focus / click count), not when the canvas camera moves. Panning,
-//! zooming and switching themes only touch the camera uniform or the 4 KiB
-//! colour table, so the primitive buffers stay untouched — that is the
-//! "0 byte upload" claim the engine makes for those operations.
+//! 场景仅在离散交互状态变化（悬停 / 按压 / 焦点 / 点击计数）时重建，
+//! 而非在画布相机移动时重建。平移、缩放与切换主题仅触及相机 uniform 或 4 KiB
+//! 颜色表，因此图元缓冲区保持不变——这正是引擎对这些操作宣称“0 字节上传”的原因。
+//!
+//!
 
 use accesskit::Role;
 use unbound_a11y::{A11yNode, Semantics};
@@ -25,117 +25,117 @@ use unbound_theme::Token;
 
 use crate::button::{self, ButtonDesc, ButtonVisualState};
 
-/// The colour tokens the gallery uses.
+/// 展厅使用的色彩令牌。
 ///
-/// The theme LUT is written once per theme; the primitives only ever store
-/// these indices.
+/// 主题查找表（LUT）按主题一次性写入；图元仅存储这些索引。
 ///
-/// Both themes use the **same** slot layout — only the colours differ — which
-/// is what makes a theme switch a single 4 KiB overwrite of the table. Slot 0
-/// is reserved for "no colour" and slot 1 is the engine's shadow slot
-/// (`SHADOW_TOKEN` in `common.glsl`).
+///
+/// 两个主题使用**完全相同**的槽位布局——仅颜色不同——这使得切换主题只需对表
+/// 进行一次 4 KiB 覆写。槽位 0 保留给“无颜色”，槽位 1 为引擎的阴影槽位
+/// （`common.glsl` 中的 `SHADOW_TOKEN`）。
+///
 #[derive(Copy, Clone, Debug)]
 pub struct Palette {
-    /// The page background.
+    /// 页面背景。
     pub background: u16,
-    /// The panel surface.
+    /// 面板表面。
     pub surface: u16,
-    /// The panel border.
+    /// 面板边框。
     pub border: u16,
-    /// The primary accent.
+    /// 主强调色。
     pub primary: u16,
-    /// The secondary accent.
+    /// 次强调色。
     pub secondary: u16,
-    /// The success colour.
+    /// 成功色。
     pub success: u16,
-    /// The warning colour.
+    /// 警告色。
     pub warning: u16,
-    /// The danger colour.
+    /// 危险色。
     pub danger: u16,
-    /// The body text colour.
+    /// 正文文本色。
     pub text: u16,
-    /// The muted text colour.
+    /// 弱化文本色。
     pub text_muted: u16,
-    /// The shadow colour.
+    /// 阴影色。
     pub shadow: u16,
-    /// The button fill while hovered.
+    /// 悬停时的按钮填充。
     pub primary_hover: u16,
-    /// The button fill while pressed.
+    /// 按压时的按钮填充。
     pub primary_pressed: u16,
-    /// The button label colour.
+    /// 按钮标签颜色。
     pub on_primary: u16,
-    /// The focus ring colour.
+    /// 焦点环颜色。
     pub focus_ring: u16,
-    /// The disabled fill.
+    /// 禁用状态填充。
     pub disabled_fill: u16,
-    /// The title bar / global header surface.
+    /// 标题栏 / 全局页头表面。
     pub header_bg: u16,
-    /// The navigation pane surface.
+    /// 导航窗格表面。
     pub nav_bg: u16,
-    /// A hovered navigation row.
+    /// 悬停中的导航行。
     pub nav_hover: u16,
-    /// The selected navigation row.
+    /// 选中的导航行。
     pub nav_selected: u16,
-    /// The example card surface.
+    /// 示例卡片表面。
     pub card_bg: u16,
-    /// The example card outline.
+    /// 示例卡片描边。
     pub card_border: u16,
-    /// The live stage background.
+    /// 实时舞台背景。
     pub stage_bg: u16,
-    /// The stage's grid dots.
+    /// 舞台的网格点。
     pub stage_grid: u16,
-    /// Slider / switch tracks.
+    /// 滑块 / 开关轨道。
     pub control_track: u16,
-    /// Slider thumbs and switch knobs.
+    /// 滑块拇指与开关旋钮。
     pub control_thumb: u16,
-    /// A hovered control surface.
+    /// 悬停中的控件表面。
     pub control_hover: u16,
-    /// The code panel background.
+    /// 代码面板背景。
     pub code_bg: u16,
-    /// The code panel foreground.
+    /// 代码面板前景。
     pub code_text: u16,
-    /// The modal scrim.
+    /// 模态遮罩层（scrim）。
     pub overlay_scrim: u16,
-    /// The overlay surface.
+    /// 浮层表面。
     pub overlay_bg: u16,
-    /// A 12 % primary tint.
+    /// 12% 透明度的主强调色。
     pub primary_soft: u16,
-    /// A 12 % success tint.
+    /// 12% 透明度的成功色。
     pub success_soft: u16,
-    /// A 12 % warning tint.
+    /// 12% 透明度的警告色。
     pub warning_soft: u16,
-    /// A 12 % danger tint.
+    /// 12% 透明度的危险色。
     pub danger_soft: u16,
-    /// Hero gradient start.
+    /// 首屏渐变起点色。
     pub hero_start: u16,
-    /// Hero gradient end.
+    /// 首屏渐变终点色。
     pub hero_end: u16,
-    /// Text and icons painted on the hero gradient.
+    /// 绘制在首屏渐变上的文本与图标色。
     pub on_hero: u16,
-    /// Text selection fill.
+    /// 文本选区填充色。
     pub selection_fill: u16,
-    /// Hairline dividers.
+    /// 细线分隔符。
     pub divider: u16,
-    /// The performance HUD background.
+    /// 性能 HUD 背景。
     pub hud_bg: u16,
-    /// The performance HUD foreground.
+    /// 性能 HUD 前景。
     pub hud_text: u16,
-    /// A 12 % accent tint.
+    /// 12% 透明度的强调色。
     pub accent_soft: u16,
-    /// Canvas / stage grid dots.
+    /// 画布 / 舞台网格点。
     pub grid_dot: u16,
-    /// A 12 % secondary tint.
+    /// 12% 透明度的次强调色。
     pub secondary_soft: u16,
-    /// Navigation primary text.
+    /// 导航主文本色。
     pub nav_text: u16,
-    /// Navigation secondary text.
+    /// 导航次文本色。
     pub nav_text_muted: u16,
-    /// The scrim behind a call-to-action on the hero surface.
+    /// 首屏表面上行动号召按钮背后的遮罩。
     pub hero_scrim: u16,
 }
 
 impl Palette {
-    /// The colour swatches the Design Guidance page displays.
+    /// 设计指南页面展示的色板。
     #[must_use]
     pub fn swatches(&self) -> [(&'static str, u16); 12] {
         [
@@ -155,29 +155,29 @@ impl Palette {
     }
 }
 
-/// The token layout, shared by both themes.
+/// 两个主题共用的令牌布局。
 ///
-/// | slot | meaning |
+/// | 槽位 | 含义 |
 /// | ---: | :--- |
-/// | 0 | none (fully transparent) |
-/// | 1 | shadow — fixed by the engine's `SHADOW_TOKEN` |
-/// | 2 | page background |
-/// | 3 | panel surface |
-/// | 4 | panel border |
-/// | 5..9 | primary, secondary, success, warning, danger |
-/// | 10 | body text |
-/// | 11 | muted text |
-/// | 12 | button primary — hover |
-/// | 13 | button primary — pressed |
-/// | 14 | button label (on primary) |
-/// | 15 | focus ring |
-/// | 16 | disabled fill |
-/// The tokens the gallery uses.
+/// | 0 | 无（完全透明） |
+/// | 1 | 阴影——由引擎的 `SHADOW_TOKEN` 固定 |
+/// | 2 | 页面背景 |
+/// | 3 | 面板表面 |
+/// | 4 | 面板边框 |
+/// | 5..9 | 主色、次色、成功、警告、危险 |
+/// | 10 | 正文文本 |
+/// | 11 | 弱化文本 |
+/// | 12 | 主按钮——悬停 |
+/// | 13 | 主按钮——按压 |
+/// | 14 | 按钮标签（位于主按钮上） |
+/// | 15 | 焦点环 |
+/// | 16 | 禁用填充 |
+/// 展厅使用的令牌。
 ///
-/// Both themes share the same slots — only the colours in the table differ —
-/// so switching themes never touches the scene data. The slot numbers come
-/// from the engine's semantic vocabulary ([`unbound_theme::Token`]); the
-/// colours themselves live in [`crate::theme`].
+/// 两个主题共享相同的槽位——仅表中的颜色不同——因此切换主题绝不会触及场景数据。
+/// 槽位编号来自引擎的语义词汇表（[`unbound_theme::Token`]）；
+/// 具体颜色则定义在 [`crate::theme`] 中。
+///
 #[must_use]
 pub const fn palette() -> Palette {
     Palette {
@@ -232,23 +232,23 @@ pub const fn palette() -> Palette {
     }
 }
 
-/// The gallery scene, ready to be uploaded.
+/// 准备就绪待上传的展厅场景。
 #[derive(Default)]
 pub struct Gallery {
-    /// The primitives, in draw order.
+    /// 按绘制顺序排列的图元。
     pub primitives: Vec<GpuPrimitiveInstance>,
-    /// The transform table; the scene only uses the identity.
+    /// 变换表；本场景仅使用单位变换。
     pub transforms: Vec<GpuTransform>,
-    /// The clip nodes.
+    /// 裁剪节点。
     pub clips: Vec<GpuClipNode>,
-    /// The payloads for curves and glyphs.
+    /// 曲线与字形的载荷数据。
     pub payloads: Vec<GpuPayload>,
-    /// The camera.
+    /// 相机。
     pub camera: Camera,
 }
 
 impl Gallery {
-    /// Start an empty scene.
+    /// 初始化空场景。
     pub(crate) fn new() -> Self {
         Self {
             primitives: Vec::new(),
@@ -259,7 +259,7 @@ impl Gallery {
         }
     }
 
-    /// Add a rounded rectangle.
+    /// 添加圆角矩形。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn rect(
         &mut self,
@@ -296,7 +296,7 @@ impl Gallery {
         self.primitives.push(prim);
     }
 
-    /// Add a stroke (a hollow rounded rectangle).
+    /// 添加描边（空心圆角矩形）。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn stroke(
         &mut self,
@@ -330,7 +330,7 @@ impl Gallery {
         self.primitives.push(prim);
     }
 
-    /// Add a glyph quad.
+    /// 添加字形四边形。
     pub(crate) fn glyph(&mut self, quad: &GlyphQuad, color: u16, z: u16) {
         let payload = GpuPayload {
             p0: [quad.uv[0], quad.uv[1]],
@@ -354,7 +354,7 @@ impl Gallery {
             transform_idx: 0,
             clip_idx: unbound_gpu::data::CLIP_NONE,
             fill_token_or_uv: u32::from(color),
-            // The atlas layer rides in the border slot.
+            // 图集图层复用边框槽位。
             border_token_or_tex: quad.layer,
             prim_type_and_flags: GpuPrimitiveInstance::pack_type(
                 if quad.color {
@@ -363,9 +363,9 @@ impl Gallery {
                     PrimType::Glyph
                 },
                 BlendMode::Normal,
-                // The shader has to know that the RGBA texel is a distance
-                // field; without the flag it treats it as a plain colour
-                // bitmap and paints an opaque blob.
+                // 着色器必须知道 RGBA 纹素是距离场；
+                // 若缺少该标志，它会将其当作普通彩色位图并绘制成不透明色块。
+                //
                 SubElement::Content as u16 | if quad.msdf { PrimFlags::MSDF.bits() } else { 0 },
             ),
             z_and_opacity: GpuPrimitiveInstance::pack_z_opacity(z, 1.0),
@@ -374,7 +374,7 @@ impl Gallery {
         self.primitives.push(prim);
     }
 
-    /// Add a quadratic curve segment.
+    /// 添加二次曲线段。
     pub(crate) fn curve(
         &mut self,
         p0: [f32; 2],
@@ -398,10 +398,10 @@ impl Gallery {
             BlendMode::Normal,
             SubElement::Content as u16,
         );
-        // The control points live in the oriented box's *own* frame, so the
-        // box's rotation has to reach the vertex shader. Without it the curve
-        // is drawn unrotated, in the wrong place, and cut off at the edge of
-        // an axis-aligned box that was never rotated.
+        // 控制点位于有向包围盒*自身*的坐标系中，因此包围盒的旋转必须传递给顶点着色器。
+        // 若缺少旋转信息，曲线会按未旋转状态画在错误位置，
+        // 并在从未旋转过的轴对齐包围盒边缘被裁剪。
+        //
         let transform_idx = if draw.transform == GpuTransform::IDENTITY {
             0
         } else {
@@ -414,12 +414,12 @@ impl Gallery {
         self.primitives.push(prim);
     }
 
-    /// The scene as an upload plan.
+    /// 作为上传计划的场景。
     ///
-    /// `dirty_ranges` are the primitive ranges that changed since the last
-    /// upload. An empty slice means "upload everything"; a non-empty one
-    /// makes the renderer patch just those slices, which is what turns a
-    /// hover into a handful of uploaded bytes.
+    /// `dirty_ranges` 是自上次上传以来发生变化的图元范围。
+    /// 空切片表示“全量上传”；非空切片则让渲染器仅修补这些切片，
+    /// 从而将悬停交互转化为寥寥几个字节的上传。
+    ///
     #[must_use]
     pub fn upload<'a>(
         &'a self,
@@ -441,58 +441,58 @@ impl Gallery {
     }
 }
 
-/// The metrics of a laid-out run, in logical units.
+/// 已布局文本运行段的度量信息（逻辑单位）。
 ///
-/// The vertical metrics come from the **font**, not from the run's ink. Two
-/// runs of the same size have to share a baseline — otherwise a row of
-/// buttons shows `"Comfortable"` a couple of pixels lower than `"Compact"`,
-/// because the second string has no descender and the first one has an
-/// ascender.
+/// 垂直度量来自**字体**而非文本段的墨水边界。同字号的两个运行段必须共享基线——
+/// 否则一排按钮中的 `"Comfortable"` 会比 `"Compact"` 低几个像素，
+/// 因为后者没有降部（descender）而前者有升部（ascender）。
+///
+///
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct TextMetrics {
-    /// The advance width of the widest line.
+    /// 最宽行的步进宽度。
     pub width: f32,
-    /// The height of the whole text block.
+    /// 整个文本块的高度。
     pub height: f32,
-    /// The distance from the top of the line box to the baseline.
+    /// 从行框顶部到基线的距离。
     pub ascent: f32,
-    /// The distance from the baseline to the bottom of the line box.
+    /// 从基线到行框底部的距离。
     pub descent: f32,
-    /// The baseline of the first line, relative to the top of the line box.
+    /// 首行基线相对于行框顶部的位置。
     pub first_baseline: f32,
-    /// How many lines the run occupies.
+    /// 运行段占用的行数。
     pub line_count: u32,
 }
 
 impl TextMetrics {
-    /// The height of one line box.
+    /// 单个行框的高度。
     #[must_use]
     pub fn line_height(&self) -> f32 {
         self.ascent + self.descent
     }
 }
 
-/// The text engine that drives the gallery's labels.
+/// 驱动展厅标签的文本引擎。
 ///
-/// `TextEngine` is both the shaper and the two-level cache owner; the
-/// `GlyphCache` on top rasterises glyphs and keeps them in the atlas.
+/// `TextEngine` 同时负责塑形并持有两级缓存；其上的 `GlyphCache` 负责光栅化字形
+/// 并将其保存在图集中。
 pub struct Labels {
-    /// The glyph cache.
+    /// 字形缓存。
     pub cache: GlyphCache,
-    /// The shaping engine.
+    /// 塑形引擎。
     pub engine: TextEngine,
-    /// How many atlas texels one logical unit covers.
+    /// 每个逻辑单位覆盖的图集纹素数。
     ///
-    /// The layout stays in logical units; rasterising at
-    /// `font_size × raster_scale` and scaling the quads back keeps every glyph
-    /// sharp when the OS scale or the app zoom magnifies the whole UI.
+    /// 布局保持在逻辑单位；按 `font_size × raster_scale` 光栅化并将四边形缩回，
+    /// 可在 OS 缩放或应用缩放放大整个 UI 时保持每个字形锐利清晰。
+    ///
     raster_scale: f32,
-    /// The size and raster scale the dynamic button label was prewarmed at.
+    /// 动态按钮标签预热时所使用的字号与光栅化缩放。
     prewarmed: Option<(f32, f32)>,
 }
 
 impl Labels {
-    /// Create the label engine.
+    /// 创建标签引擎。
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -503,7 +503,7 @@ impl Labels {
         }
     }
 
-    /// Rasterise at `logical_size × scale` and place the quads in logical units.
+    /// 按 `logical_size × scale` 光栅化，并以逻辑单位放置四边形。
     pub fn set_raster_scale(&mut self, scale: f32) {
         let scale = if scale.is_finite() && scale > 0.0 {
             scale
@@ -513,47 +513,47 @@ impl Labels {
         self.raster_scale = scale.clamp(0.5, 4.0);
     }
 
-    /// Whether glyphs are rasterised for the whole-pixel grid.
+    /// 是否按整像素网格光栅化字形。
     pub fn set_snap_phases(&mut self, snap: bool) {
         self.cache.snap_phases = snap;
     }
 
-    /// The scale glyphs are rasterised at.
+    /// 字形光栅化所采用的缩放比例。
     #[must_use]
     pub fn raster_scale(&self) -> f32 {
         self.raster_scale
     }
 
-    /// The origin that centres a run inside `rect`.
+    /// 使运行段在 `rect` 内居中的原点。
     ///
-    /// The vertical centring uses the font's ascent and descent rather than
-    /// the run's ink box, so every label of the same size lands on the same
-    /// baseline. The horizontal centring uses the advance width, which is
-    /// what the font itself considers the run's width.
+    /// 垂直居中采用字体的升部与降部而非运行段的墨水框，使同字号的所有标签
+    /// 落在同一条基线上。水平居中采用步进宽度，即字体自身认定的运行段宽度。
+    ///
+    ///
     #[must_use]
     pub fn center_in_rect(metrics: &TextMetrics, rect: Rect) -> Vec2 {
         let x = rect.origin.x + (rect.size.x - metrics.width) * 0.5;
-        // The optical middle of the line box: the baseline sits half a line
-        // box above the centre of the box.
+        // 行框的视觉中线：基线位于框中心上方半个行框高度处。
+        //
         let middle = (metrics.ascent - metrics.descent) * 0.5;
         let target_baseline = rect.origin.y + rect.size.y * 0.5 + middle;
         Vec2::new(x, target_baseline - metrics.first_baseline)
     }
 
-    /// The metrics of a run at `size`, in logical units.
+    /// 运行段在 `size` 字号下的度量信息（逻辑单位）。
     pub fn metrics(&mut self, text: &str, size: f32) -> TextMetrics {
         let scale = self.raster_scale;
         let shaped = self.engine.shape(text, &TextStyle::sized(size * scale));
         metrics_of(&shaped, scale)
     }
 
-    /// Rasterise every glyph a dynamic label can produce before it is shown.
+    /// 在显示之前预先光栅化动态标签可能产生的所有字形。
     ///
-    /// The atlas is uploaded once at startup. If clicking the button changed
-    /// `"Clicked: 0"` to `"Clicked: 1"` and `'1'` had never been shaped, the
-    /// quad would sample an empty atlas page and the glyph would render as a
-    /// blank box. Shaping the whole alphabet up front keeps the click at zero
-    /// texture uploads.
+    /// 图集在启动时一次性上传。若点击按钮使 `"Clicked: 0"` 变为 `"Clicked: 1"`
+    /// 而 `'1'` 从未被塑形过，四边形就会采样空的图集页并渲染成空白方块。
+    /// 预先塑形整套字符表可使点击保持零纹理上传。
+    ///
+    ///
     pub fn prewarm(&mut self, text: &str, size: f32) {
         let scale = self.raster_scale;
         if self.prewarmed == Some((size, scale)) {
@@ -567,26 +567,26 @@ impl Labels {
         self.prewarmed = Some((size, scale));
     }
 
-    /// Lay out a label and return its glyph quads.
+    /// 布局标签并返回其字形四边形。
     ///
-    /// `origin` is the top-left of the text's **line box** in logical units:
-    /// the baseline of the first line sits at `origin.y + ascent` and the
-    /// glyphs hang above it.
+    /// `origin` 为文本**行框**的左上角（逻辑单位）：首行基线位于 `origin.y + ascent`，
+    /// 字形悬挂在其上方。
     ///
-    /// The run is deliberately *not* aligned by its ink. Aligning by the ink
-    /// box moves every string to a different baseline, because the ink top
-    /// depends on the string's own tallest glyph — and that is what made the
-    /// labels of a row of buttons sit at slightly different heights.
     ///
-    /// The origin is passed to the glyph cache *before* the quads are
-    /// produced, so the sub-pixel phase of every glyph is derived from its
-    /// real position on screen. A phase derived from a run-relative position
-    /// would shift each glyph by up to a pixel.
+    /// 运行段刻意**不**按墨水对齐。按墨水框对齐会把每个字符串移到不同的基线上，
+    /// 因为墨水顶部取决于字符串自身最高的字形——这正是导致一排按钮的标签
+    /// 处于略微不同高度的原因。
+    ///
+    ///
+    /// 原点在生成四边形**之前**传入字形缓存，使每个字形的亚像素相位均由其
+    /// 在屏幕上的真实位置推导。若从相对运行段的位置推导相位，
+    /// 每个字形最多会偏移一个像素。
+    ///
     pub fn layout(&mut self, text: &str, origin: Vec2, size: f32) -> Vec<GlyphQuad> {
         self.layout_measured(text, origin, size).0
     }
 
-    /// Lay out a label and report its metrics.
+    /// 布局标签并报告其度量信息。
     pub fn layout_measured(
         &mut self,
         text: &str,
@@ -611,17 +611,17 @@ impl Labels {
         (quads, metrics)
     }
 
-    /// Measure a single-line run without emitting glyphs.
+    /// 测量单行运行段，不发射字形。
     #[must_use]
     pub fn measure(&mut self, text: &str, size: f32) -> Vec2 {
         let scale = self.raster_scale;
         self.engine.measure(text, &TextStyle::sized(size * scale)) / scale
     }
 
-    /// Lay out a wrapped paragraph, one shaped line at a time.
+    /// 逐行布局自动换行段落，每次塑形一行。
     ///
-    /// The line breaks come from the engine's wrap cache, so resizing a card
-    /// only recomputes the break positions, never the glyph shapes.
+    /// 换行位置来自引擎的换行缓存，因此调整卡片尺寸仅重算断行位置，
+    /// 绝不重新塑形字形。
     pub fn layout_wrapped(
         &mut self,
         text: &str,
@@ -648,17 +648,17 @@ impl Labels {
         quads
     }
 
-    /// Lay out a label with an explicit weight, slant and family.
+    /// 使用显式字重、倾斜与字体族布局标签。
     ///
-    /// [`Self::layout`] is a fixed regular upright run. The font inspector
-    /// moves the whole axis, and the raster weight has to be the shaped weight
-    /// — a heavier raster with regular advances is what made small labels look
-    /// cramped.
+    /// [`Self::layout`] 固定为常规正体。字体检查器会调节整条轴，且光栅化字重
+    /// 必须与塑形字重一致——更粗的光栅配常规步进正是导致小标签显得拥挤的原因。
+    ///
+    ///
     pub fn layout_styled(&mut self, text: &str, origin: Vec2, style: &TextStyle) -> Vec<GlyphQuad> {
         self.layout_styled_measured(text, origin, style).0
     }
 
-    /// Lay out a styled run and report its logical metrics.
+    /// 布局带样式的运行段并报告其逻辑度量信息。
     pub fn layout_styled_measured(
         &mut self,
         text: &str,
@@ -688,7 +688,7 @@ impl Labels {
         (quads, metrics)
     }
 
-    /// Measure a styled run without emitting glyphs.
+    /// 测量带样式的运行段，不发射字形。
     #[must_use]
     pub fn measure_styled(&mut self, text: &str, style: &TextStyle) -> Vec2 {
         let scale = self.raster_scale;
@@ -697,7 +697,7 @@ impl Labels {
         self.engine.measure(text, &style) / scale
     }
 
-    /// The logical metrics of a styled run.
+    /// 带样式运行段的逻辑度量信息。
     pub fn metrics_styled(&mut self, text: &str, style: &TextStyle) -> TextMetrics {
         let scale = self.raster_scale;
         let mut style = style.clone();
@@ -706,7 +706,7 @@ impl Labels {
         metrics_of(&shaped, scale)
     }
 
-    /// The system families that actually shaped `text`.
+    /// 实际塑形 `text` 所使用的系统字体族。
     pub fn resolved_families(&mut self, text: &str, style: &TextStyle) -> Vec<String> {
         let scale = self.raster_scale;
         let mut style = style.clone();
@@ -715,7 +715,7 @@ impl Labels {
     }
 }
 
-/// The logical metrics of a shaped run.
+/// 已塑形运行段的逻辑度量信息。
 fn metrics_of(shaped: &ShapedText, scale: f32) -> TextMetrics {
     TextMetrics {
         width: shaped.width / scale,
@@ -733,27 +733,27 @@ impl Default for Labels {
     }
 }
 
-/// The button's rect in canvas coordinates.
+/// 按钮在画布坐标中的矩形。
 #[must_use]
 pub fn button_rect() -> Rect {
     Rect::new(120.0, 468.0, 200.0, 44.0)
 }
 
-/// The placeholder identity [`build`] gives the button when the caller does
-/// not own a `UiWorld` (the offscreen `--shot` path and the visual tests).
+/// 当调用方不持有 `UiWorld`（离屏 `--shot` 路径与视觉测试）时，
+/// [`build`] 赋予按钮的占位标识。
 pub const DEFAULT_BUTTON_NODE: u64 = 2;
 
-/// The root of the semantic tree the gallery reports.
+/// 展厅上报的语义树根节点。
 const A11Y_ROOT: u64 = 1;
 
-/// The characters the dynamic button label can contain. Shaped up front so a
-/// click never grows the atlas.
+/// 动态按钮标签可能包含的字符。预先塑形以使点击永不扩容图集。
+///
 const BUTTON_LABEL_ALPHABET: &str = "Clicked: 0123456789";
 
-/// Build the whole gallery with the button in its idle state.
+/// 构建处于空闲状态的完整展厅。
 ///
-/// Returns the scene and the glyph quads the caller still has to upload to
-/// the GPU atlas.
+/// 返回场景以及调用方仍需上传到 GPU 图集的字形四边形。
+///
 pub fn build(
     labels: &mut Labels,
     palette: &Palette,
@@ -772,12 +772,12 @@ pub fn build(
     (scene, glyphs)
 }
 
-/// Build the gallery with the button in `visual` state.
+/// 构建按钮处于 `visual` 状态的展厅。
 ///
-/// Returns the scene, the button label's glyph quads (already placed in scene
-/// space), the hit regions the pointer router should own, and the semantic
-/// tree. The signature is the first step towards the `(Scene, HitRegions,
-/// Semantics)` triple the platform layer will consume.
+/// 返回场景、按钮标签的字形四边形（已置于场景空间）、指针路由器应持有的命中区域，
+/// 以及语义树。该签名是迈向平台层将消费的 `(Scene, HitRegions, Semantics)` 三元组的第一步。
+///
+///
 pub fn build_interactive(
     labels: &mut Labels,
     palette: &Palette,
@@ -790,12 +790,12 @@ pub fn build_interactive(
     let mut scene = Gallery::new();
     scene.camera = Camera::ui(viewport, 1.0);
 
-    // `local_pos` is the absolute position inside chunk [0, 0], which for a
-    // UI primitive *is* the screen position: the shader subtracts the camera
-    // offset itself (`chunk_base = -camera_local`).
+    // `local_pos` 是区块 [0, 0] 内的绝对位置，对于 UI 图元而言*就是*屏幕位置：
+    // 着色器会自行减去相机偏移（`chunk_base = -camera_local`）。
+    //
     let at = |x: f32, y: f32| (x, y);
 
-    // ---- the page background ------------------------------------------
+    // ---- 页面背景 ------------------------------------------------------------
     let (bx, by) = at(0.0, 0.0);
     scene.rect(
         bx,
@@ -810,7 +810,7 @@ pub fn build_interactive(
         0,
     );
 
-    // ---- the title -----------------------------------------------------
+    // ---- 标题 ----------------------------------------------------------------
     let title = labels.layout(
         "Unbound UI — 组件展台",
         Vec2::new(at(40.0, 32.0).0, at(40.0, 32.0).1),
@@ -820,7 +820,7 @@ pub fn build_interactive(
         scene.glyph(quad, palette.text, 100);
     }
 
-    // ---- the primitive grid --------------------------------------------
+    // ---- 图元网格 ------------------------------------------------------------
     let swatches = [
         ("Primary", palette.primary),
         ("Secondary", palette.secondary),
@@ -831,13 +831,13 @@ pub fn build_interactive(
 
     for (index, (name, token)) in swatches.iter().enumerate() {
         let x = 40.0 + index as f32 * 150.0;
-        // Reverse-Z: a larger depth is nearer and is drawn later, so the
-        // swatch sits above the page background and its label above the
-        // swatch.
+        // 反向 Z（Reverse-Z）：深度越大越近且越后绘制，
+        // 因此色板位于页面背景之上，其标签位于色板之上。
+        //
         let z = 200 + index as u16;
         let (rx, ry) = at(x, 100.0);
-        // The analytic shadow is a property of the primitive itself: the
-        // shader derives it from `shadow_blur`, no extra draw is needed.
+        // 解析阴影是图元自身的属性：着色器根据 `shadow_blur` 推导，
+        // 无需额外的绘制调用。
         scene.rect(
             rx,
             ry,
@@ -860,7 +860,7 @@ pub fn build_interactive(
         }
     }
 
-    // ---- a card with a border and a shadow ------------------------------
+    // ---- 带边框和阴影的卡片 --------------------------------------------------
     let (cx, cy) = at(40.0, 230.0);
     scene.rect(
         cx,
@@ -891,7 +891,7 @@ pub fn build_interactive(
         scene.glyph(quad, palette.text_muted, 302);
     }
 
-    // ---- stroke (focus ring) -------------------------------------------
+    // ---- 描边（焦点环）------------------------------------------------------
     let (sx, sy) = at(430.0, 230.0);
     scene.rect(
         sx,
@@ -915,7 +915,7 @@ pub fn build_interactive(
         scene.glyph(quad, palette.text_muted, 402);
     }
 
-    // ---- curves ---------------------------------------------------------
+    // ---- 曲线 ----------------------------------------------------------------
     let (gx, gy) = at(620.0, 230.0);
     scene.rect(
         gx,
@@ -952,7 +952,7 @@ pub fn build_interactive(
         scene.glyph(quad, palette.text_muted, 505);
     }
 
-    // ---- the interactive card ------------------------------------------
+    // ---- 交互式卡片 ----------------------------------------------------------
     scene.rect(
         40.0,
         410.0,
@@ -992,7 +992,7 @@ pub fn build_interactive(
         scene.glyph(quad, palette.text_muted, 701);
     }
 
-    // ---- the theme hint -------------------------------------------------
+    // ---- 主题提示 ------------------------------------------------------------
     let hint = labels.layout(
         "T / 切换主题    Space / 主题    滚轮 / 缩放    拖拽 / 平移",
         Vec2::new(at(40.0, viewport.1 - 60.0).0, at(40.0, viewport.1 - 60.0).1),
@@ -1002,7 +1002,7 @@ pub fn build_interactive(
         scene.glyph(quad, palette.text_muted, 600);
     }
 
-    // ---- semantics ------------------------------------------------------
+    // ---- 语义 ----------------------------------------------------------------
     let mut semantics = Semantics::new(A11Y_ROOT);
     semantics.upsert(
         A11Y_ROOT,
@@ -1017,8 +1017,8 @@ pub fn build_interactive(
     semantics.upsert(node, button_node);
     semantics.set_children(A11Y_ROOT, &[node]);
 
-    // The glyphs are already part of the scene; the atlas updates they
-    // produced are drained by the caller and uploaded to the GPU.
+    // 字形已纳入场景中；它们产生的图集更新由调用方排空并上传至 GPU。
+    //
     (
         scene,
         glyphs,
@@ -1027,10 +1027,10 @@ pub fn build_interactive(
     )
 }
 
-/// The button's geometry as a headless frame, for the five sanitizers.
+/// 供五项校验器使用的按钮无头几何帧。
 ///
-/// Kept next to the emitter so the rect the pointer hits, the rect the frame
-/// validates and the rect the primitives paint can never drift apart.
+/// 紧邻发射器存放，使指针命中的矩形、帧校验的矩形与图元绘制的矩形永不漂移。
+///
 #[must_use]
 pub fn button_frame(viewport: (f32, f32), button: &ButtonDesc, glyphs: &[GlyphQuad]) -> Frame {
     let viewport = Rect::new(0.0, 0.0, viewport.0, viewport.1);
@@ -1067,7 +1067,7 @@ pub fn button_frame(viewport: (f32, f32), button: &ButtonDesc, glyphs: &[GlyphQu
     frame.build()
 }
 
-/// The scene's bounding rect, used by the layout tests.
+/// 场景的包围矩形，供布局测试使用。
 #[must_use]
 pub fn scene_bounds(scene: &Gallery) -> Rect {
     let mut bounds = Rect::ZERO;

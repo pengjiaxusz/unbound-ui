@@ -1,13 +1,10 @@
-//! Inline alert banners.
+//! 行内提示横幅（Alert）。
 //!
-//! An alert is a *persistent* message inside the page: unlike a toast it does
-//! not time out, and unlike a dialog it does not interrupt. Its severity is
-//! carried by three channels at once — a left accent bar, an icon and the
-//! accessible label — so it survives a monochrome theme or a colour-blind
-//! reader without losing meaning.
+//! Alert 是页面内的*常驻*消息：与 Toast 不同，它不会自动超时消失；
+//! 与 Dialog 不同，它不会打断用户操作。其严重级别同时通过三个通道传达——
+//! 左侧强调条、图标与无障碍标签——即使在单色主题或色盲场景下也能清晰传达语义。
+//! 横幅本身不持有状态。关闭控件作为单一命中区域上报；点击后的处理由 reducer 决定。
 //!
-//! The banner never owns state. The dismiss affordance is reported as the
-//! single hit region; clicking it is the reducer's decision.
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -21,33 +18,33 @@ use crate::primitive::{instance, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The width of the left accent bar.
+/// 左侧强调条宽度。
 pub const ALERT_ACCENT_WIDTH: f32 = 4.0;
-/// The banner's inner padding.
+/// 横幅内边距。
 pub const ALERT_PADDING: f32 = 14.0;
-/// The severity icon diameter.
+/// 严重级别图标直径。
 pub const ALERT_ICON_SIZE: f32 = 18.0;
-/// The dismiss button square.
+/// 关闭按钮正方形边长。
 pub const ALERT_CLOSE_SIZE: f32 = 20.0;
-/// The banner corner radius.
+/// 横幅圆角半径。
 pub const ALERT_RADIUS: f32 = 8.0;
 
-/// The semantic family of an alert.
+/// 提示横幅的语义类别。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Severity {
-    /// Neutral information.
+    /// 中性信息。
     #[default]
     Info,
-    /// A completed operation.
+    /// 操作已完成。
     Success,
-    /// Something needs attention but is not broken.
+    /// 需要关注但尚未出错。
     Warning,
-    /// Something failed.
+    /// 发生错误或失败。
     Error,
 }
 
 impl Severity {
-    /// The low-saturation banner fill.
+    /// 低饱和度横幅填充色。
     #[must_use]
     pub fn fill(self) -> Token {
         match self {
@@ -58,7 +55,7 @@ impl Severity {
         }
     }
 
-    /// The saturated accent used by the bar and the icon.
+    /// 强调条与图标使用的饱和强调色。
     #[must_use]
     pub fn accent(self) -> Token {
         match self {
@@ -69,7 +66,7 @@ impl Severity {
         }
     }
 
-    /// The text label a screen reader announces with the title.
+    /// 屏幕阅读器随标题一同播报的文本标签。
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -81,27 +78,27 @@ impl Severity {
     }
 }
 
-/// An inline alert banner.
+/// 行内提示横幅描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlertDesc {
-    /// The banner rectangle.
+    /// 横幅矩形区域。
     pub rect: Rect,
-    /// The severity family.
+    /// 严重级别类别。
     pub severity: Severity,
-    /// The headline.
+    /// 主标题。
     pub title: String,
-    /// The optional body copy.
+    /// 可选正文文案。
     pub message: String,
-    /// Show a close affordance.
+    /// 是否显示关闭控件。
     pub dismissible: bool,
-    /// The corner radius.
+    /// 圆角半径。
     pub radius: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl AlertDesc {
-    /// A banner with a title.
+    /// 创建带标题的提示横幅。
     #[must_use]
     pub fn new(rect: Rect, severity: Severity, title: impl Into<String>) -> Self {
         Self {
@@ -115,21 +112,21 @@ impl AlertDesc {
         }
     }
 
-    /// The same banner with body copy.
+    /// 附加正文文案。
     #[must_use]
     pub fn with_message(mut self, message: impl Into<String>) -> Self {
         self.message = message.into();
         self
     }
 
-    /// The same banner with a close affordance.
+    /// 附加关闭控件。
     #[must_use]
     pub fn dismissible(mut self) -> Self {
         self.dismissible = true;
         self
     }
 
-    /// The left accent bar.
+    /// 左侧强调条矩形。
     #[must_use]
     pub fn accent_rect(&self) -> Rect {
         Rect::new(
@@ -140,7 +137,7 @@ impl AlertDesc {
         )
     }
 
-    /// The icon square, just inside the accent bar.
+    /// 位于强调条内侧的图标正方形区域。
     #[must_use]
     pub fn icon_rect(&self) -> Rect {
         Rect::new(
@@ -151,7 +148,7 @@ impl AlertDesc {
         )
     }
 
-    /// The dismiss button, when the banner is dismissible.
+    /// 可关闭时的关闭按钮矩形。
     #[must_use]
     pub fn close_rect(&self) -> Option<Rect> {
         self.dismissible.then(|| {
@@ -164,7 +161,7 @@ impl AlertDesc {
         })
     }
 
-    /// The text block, right of the icon and left of the close button.
+    /// 位于图标右侧、关闭按钮左侧的文本区域。
     #[must_use]
     pub fn content_rect(&self) -> Rect {
         let icon = self.icon_rect();
@@ -182,7 +179,7 @@ impl AlertDesc {
     }
 }
 
-/// Emit a banner and its dismiss hit region.
+/// 发射提示横幅及其关闭命中区域。
 #[must_use]
 pub fn emit_alert(
     node: u64,
@@ -274,7 +271,7 @@ pub fn emit_alert(
     }
 }
 
-/// A small severity mark inside the icon circle.
+/// 图标圆圈内部的小型严重级别标记。
 fn severity_mark(
     severity: Severity,
     icon: Rect,
@@ -345,7 +342,7 @@ fn severity_mark(
     }
 }
 
-/// A straight stroke encoded as a degenerate quadratic curve.
+/// 以退化二次贝塞尔曲线编码的直线描边。
 #[allow(clippy::too_many_arguments)]
 fn stroke(
     from: (f32, f32),
@@ -483,8 +480,8 @@ mod tests {
             let alert = AlertDesc::new(Rect::new(0.0, 0.0, 400.0, 64.0), severity, "x");
             let output = emit_alert(1, &alert, &[], ControlState::default());
             let icon = alert.icon_rect();
-            // Background, accent bar and icon circle are indices 0..=2; the
-            // always-present focus ring is the last slot and is not a mark.
+            // 背景、强调条与图标圆圈占用索引 0..=2；
+            // 始终存在的焦点环位于最后一个槽位，不属于标记图形。
             let marks = &output.primitives[3..output.primitives.len() - 1];
             for primitive in marks {
                 let bounds = Rect::new(

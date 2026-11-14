@@ -1,11 +1,11 @@
-//! The concrete `winit` backend.
+//! 具体的 `winit` 平台后端。
 //!
-//! The backend owns the event loop; the window itself is created *inside* the
-//! loop, as `winit` requires, so the Vulkan surface is always created against
-//! a live window.
+//! 后端持有事件循环；窗口本身按 `winit` 要求在事件循环**内部**创建，
+//! 从而确保 Vulkan 表面始终针对存活的窗口创建。
 //!
-//! The engine never sees a `winit` type: everything is translated into
-//! [`PlatformEvent`] and applied to a [`PlatformState`].
+//!
+//! 引擎层永远不会看到任何 `winit` 类型：所有事件均翻译为 [`PlatformEvent`]
+//! 并应用到 [`PlatformState`]。
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -25,50 +25,50 @@ use crate::window::{
     PlatformState, WindowConfig,
 };
 
-/// What the engine wants the platform to do next.
+/// 引擎期望平台下一步执行的操作。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Flow {
-    /// Keep running.
+    /// 继续运行事件循环。
     Continue,
-    /// Close the window and end the loop.
+    /// 关闭窗口并结束事件循环。
     Exit,
 }
 
-/// The engine side of the platform layer.
+/// 平台层的引擎侧回调接口。
 ///
-/// The trait is deliberately small: the platform layer owns the timing and
-/// the resize policy, the application owns the scene.
+/// 该 trait 刻意保持精简：平台层负责帧时序与缩放策略，应用层负责场景逻辑。
+///
 pub trait PlatformApp {
-    /// The window exists and the application may create its renderer.
+    /// 窗口已就绪，应用可创建渲染器。
     fn resumed(&mut self, state: &mut PlatformState, window: &Window);
 
-    /// A platform event happened.
+    /// 发生了平台事件。
     fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow;
 
-    /// Draw one frame.
+    /// 绘制一帧。
     ///
-    /// Called from the event loop's idle point, after every pending event has
-    /// been delivered. The application acquires a swapchain image, renders
-    /// into it and presents it.
+    /// 在事件循环空闲点调用，此时所有待处理事件已派发完毕。
+    /// 应用在此获取交换链图像、执行渲染并提交呈现。
+    ///
     fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow;
 
-    /// The window was hidden; the renderer must stop drawing.
+    /// 窗口已隐藏；渲染器必须停止绘制。
     fn suspended(&mut self, state: &mut PlatformState) {
         let _ = state;
     }
 
-    /// The pending accessibility delta, if the application publishes one.
+    /// 待发布的无障碍语义增量（若应用发布了更新）。
     ///
-    /// Called only while an assistive technology is listening; returning
-    /// `None` means "nothing changed".
+    /// 仅当辅助技术正在监听时调用；返回 `None` 表示“无变更”。
+    ///
     fn accessibility_update(&mut self) -> Option<accesskit::TreeUpdate> {
         None
     }
 
-    /// An assistive technology requested an action.
+    /// 辅助技术请求执行某个动作。
     ///
-    /// The application handles it exactly like the equivalent pointer or
-    /// keyboard event.
+    /// 应用应像处理等价的指针或键盘事件一样处理它。
+    ///
     fn accessibility_action(
         &mut self,
         state: &mut PlatformState,
@@ -79,45 +79,45 @@ pub trait PlatformApp {
         Flow::Continue
     }
 
-    /// A secondary window exists and may create its own surface.
+    /// 辅助窗口已创建，可创建其独立渲染表面。
     ///
-    /// The default treats it like the primary window, so an application that
-    /// only knows one window still runs (it simply builds a second renderer).
+    /// 默认实现将其视同主窗口，使仅支持单窗口的应用也能正常运行
+    /// （仅多创建一个渲染器实例）。
     fn window_created(&mut self, state: &mut PlatformState, window: &Window) {
         self.resumed(state, window);
     }
 
-    /// A secondary window is about to close; release its resources.
+    /// 辅助窗口即将关闭；释放其相关资源。
     fn window_closing(&mut self, window: &Window) {
         let _ = window;
     }
 
-    /// Ask the platform to open another window.
+    /// 请求平台打开另一个窗口。
     ///
-    /// The event loop polls this after every frame; returning `Some` opens a
-    /// window with that configuration and delivers [`Self::window_created`].
+    /// 事件循环在每帧结束后轮询此方法；返回 `Some` 时按指定配置打开新窗口
+    /// 并回调 [`Self::window_created`]。
     fn take_window_request(&mut self) -> Option<WindowConfig> {
         None
     }
 
-    /// When the application needs the loop to wake up even with no input.
+    /// 当应用即使在无输入时也需要唤醒事件循环的时间点。
     ///
-    /// A pending timer (a blinking caret, a tooltip delay) answers here so the
-    /// loop can park in `WaitUntil` instead of polling every frame.
+    /// 挂起的定时器（光标闪烁、提示框延迟）在此返回截止时间，
+    /// 使循环可休眠在 `WaitUntil` 上而非每帧轮询。
     fn next_wake(&self) -> Option<Instant> {
         None
     }
 
-    /// Hand the application a callback that wakes the parked event loop.
+    /// 向应用交付一个可唤醒休眠事件循环的回调。
     ///
-    /// Called once the event loop exists; a background task calls it when its
-    /// result is ready, so `about_to_wait` runs and the result is reduced.
+    /// 事件循环创建后调用一次；后台任务就绪时调用该回调，触发 `about_to_wait`
+    /// 以归约任务结果。
     fn attach_waker(&mut self, waker: Arc<dyn Fn() + Send + Sync>) {
         let _ = waker;
     }
 }
 
-/// The platform window: an event loop that will own a window.
+/// 平台窗口：持有未来将拥有窗口的事件循环。
 pub struct PlatformWindow {
     event_loop: EventLoop<()>,
     config: WindowConfig,
@@ -125,13 +125,13 @@ pub struct PlatformWindow {
 }
 
 impl PlatformWindow {
-    /// Create the event loop.
+    /// 创建事件循环。
     ///
-    /// The window itself is created once the loop runs, because `winit`
-    /// requires the window to be created from inside the event loop.
+    /// 窗口本身在循环启动后创建，因为 `winit` 要求必须从事件循环内部创建窗口。
+    ///
     ///
     /// # Errors
-    /// Returns [`PlatformError`] when the event loop cannot be created.
+    /// 当无法创建事件循环时返回 [`PlatformError`]。
     pub fn new(config: &WindowConfig) -> Result<Self, PlatformError> {
         let event_loop =
             EventLoop::new().map_err(|error| PlatformError::EventLoop(error.to_string()))?;
@@ -146,10 +146,10 @@ impl PlatformWindow {
         })
     }
 
-    /// Run the event loop until the application exits.
+    /// 运行事件循环直至应用退出。
     ///
     /// # Errors
-    /// Returns [`PlatformError`] when the event loop itself fails.
+    /// 当事件循环自身失败时返回 [`PlatformError`]。
     pub fn run<A: PlatformApp>(self, app: A) -> Result<(), PlatformError> {
         let Self {
             event_loop,
@@ -169,20 +169,20 @@ impl PlatformWindow {
     }
 }
 
-/// One live window and everything the platform owns for it.
+/// 单个存活窗口及其归属的所有平台状态。
 struct WindowEntry {
     window: Window,
     state: PlatformState,
     a11y: WinitA11y,
 }
 
-/// The glue between `winit` and [`PlatformApp`].
+/// `winit` 与 [`PlatformApp`] 之间的粘合层。
 ///
-/// Every window owns its own `PlatformState` (resize tracker, pacer, IME) and
-/// its own accessibility adapter, while the application receives the `winit`
-/// handle and can key its rendering resources on `window.id()`. Closing a
-/// secondary window removes only that entry; closing the primary ends the
-/// loop.
+/// 每个窗口拥有各自的 `PlatformState`（缩放追踪器、节拍器、IME）及独立的
+/// 无障碍适配器；应用接收 `winit` 句柄并按 `window.id()` 索引渲染资源。
+/// 关闭辅助窗口仅移除该条目；关闭主窗口则结束整个事件循环。
+///
+///
 struct Runner<A> {
     app: A,
     config: WindowConfig,
@@ -192,11 +192,11 @@ struct Runner<A> {
 }
 
 impl<A: PlatformApp> Runner<A> {
-    /// Drain inbound accessibility actions and publish the outbound delta.
+    /// 排空入站无障碍动作并发布出站增量。
     ///
-    /// Accessibility is pumped at the frame boundary, never per event: the
-    /// semantic tree is a frame product, and a static frame produces no
-    /// update at all.
+    /// 无障碍更新在帧边界泵送，绝不逐事件触发：语义树是帧产物，
+    /// 静止帧不产生任何更新。
+    ///
     fn pump(app: &mut A, a11y: &mut WinitA11y, state: &mut PlatformState, window: &Window) -> Flow {
         for request in a11y.drain_requests() {
             if app.accessibility_action(state, window, request) == Flow::Exit {
@@ -207,10 +207,10 @@ impl<A: PlatformApp> Runner<A> {
         Flow::Continue
     }
 
-    /// Create one window, its accessibility adapter and its platform state.
+    /// 创建单个窗口、其无障碍适配器与平台状态。
     ///
-    /// The window is created hidden because AccessKit requires the adapter to
-    /// exist before the first `show`.
+    /// 窗口以隐藏状态创建，因为 AccessKit 要求适配器必须在首次 `show` 前存在。
+    ///
     fn create_window(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -232,7 +232,7 @@ impl<A: PlatformApp> Runner<A> {
             ));
         }
         let window = event_loop.create_window(attributes).ok()?;
-        // The adapter owns the window's UI Automation provider on Windows.
+        // 适配器在 Windows 上持有窗口的 UI Automation 提供程序。
         let a11y = WinitA11y::new(event_loop, &window);
         window.set_visible(config.visible);
         let size = window.inner_size();
@@ -250,7 +250,7 @@ impl<A: PlatformApp> Runner<A> {
         })
     }
 
-    /// Translate and dispatch one window event.
+    /// 翻译并派发单个窗口事件。
     fn on_window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -265,11 +265,11 @@ impl<A: PlatformApp> Runner<A> {
             return Flow::Continue;
         };
         let entry = &mut self.windows[index];
-        // The adapter has to see every event before the application does.
+        // 适配器必须在应用之前看到每一条事件。
         entry.a11y.process_event(&entry.window, event);
-        // IME composition is state, not a delta: fold it into the platform
-        // state before anything else looks at the event. Without this an East
-        // Asian keyboard could only ever type ASCII.
+        // IME 组合输入是状态而非增量：在任何其他逻辑查看该事件前先将其折叠进
+        // 平台状态。缺失此步骤会导致东亚输入法只能输入 ASCII。
+        //
         if let Some(ime) = translate_ime_event(event) {
             entry.state.ime.apply(&ime);
         }
@@ -293,19 +293,19 @@ impl<A: PlatformApp> Runner<A> {
                 return Flow::Exit;
             }
         }
-        // Windows runs a *modal* loop while the user drags a window edge
-        // (`WM_ENTERSIZEMOVE`): the event loop is suspended and
-        // `about_to_wait` is not called until the drag ends. A frame that is
-        // only driven from `about_to_wait` therefore freezes for the whole
-        // drag, and the compositor stretches the last frame to the new size.
+        // 当用户拖拽窗口边缘时（`WM_ENTERSIZEMOVE`），Windows 会运行**模态**循环：
+        // 事件循环被挂起，直到拖拽结束才会调用 `about_to_wait`。因此仅由
+        // `about_to_wait` 驱动的帧渲染会在整个拖拽期间冻结，合成器只能将最后一帧
+        // 拉伸到新尺寸。
         //
-        // Driving the frame right here makes every `WM_SIZE` produce a
-        // freshly rendered image at the new resolution.
         //
-        // Only a resize is driven this way: `RedrawRequested` carries no
-        // size information and is served by `about_to_wait` outside the
-        // modal loop — rendering it here as well would draw every frame
-        // twice.
+        // 直接在此处驱动帧绘制，使每次 `WM_SIZE` 都能按新分辨率生成全新图像。
+        //
+        //
+        // 仅尺寸调整采用此方式驱动：`RedrawRequested` 不携带尺寸信息，由模态循环外的
+        // `about_to_wait` 服务——若此处也渲染，每帧会被绘制两次。
+        //
+        //
         if matches!(platform_event, PlatformEvent::Resized(_)) {
             entry.state.pacer.request_immediate(now);
             if self.app.frame(&mut entry.state, &entry.window) == Flow::Exit {
@@ -342,8 +342,8 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
         self.windows.push(entry);
     }
 
-    /// A background task asked for a frame; `about_to_wait` runs next and
-    /// reduces its result.
+    /// 后台任务请求重绘一帧；随后 `about_to_wait` 将运行并归约其结果。
+    ///
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, (): ()) {}
 
     fn window_event(
@@ -397,13 +397,13 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // The window may come back after a suspend/resume cycle.
+        // 窗口可能在挂起/恢复周期后重新出现。
         if self.windows.is_empty() {
             event_loop.exit();
             return;
         }
-        // Draw one frame per window: the application keys its resources on
-        // the handle, and the per-window state owns its own cadence.
+        // 为每个窗口绘制一帧：应用按句柄索引其资源，各窗口状态独立掌控各自节拍。
+        //
         for index in 0..self.windows.len() {
             let entry = &mut self.windows[index];
             if self.app.frame(&mut entry.state, &entry.window) == Flow::Exit {
@@ -422,8 +422,8 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
             }
         }
 
-        // A secondary window requested during the frame is created here, so
-        // the application never has to reach into the event loop.
+        // 帧期间请求的辅助窗口在此处创建，使应用无需深入事件循环内部。
+        //
         while let Some(config) = self.app.take_window_request() {
             let Some(mut entry) = self.create_window(event_loop, &config) else {
                 break;
@@ -432,12 +432,12 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
             self.windows.push(entry);
         }
 
-        // The frame loop has to drive itself. `ControlFlow::Wait` — the
-        // default — parks the loop until the *next input event*, so an
-        // application that only draws on demand would show a frozen window.
-        // The pacer knows when the next frame is due; the loop sleeps until
-        // then and wakes up on its own. The primary window's cadence drives
-        // the loop.
+        // 帧循环必须自行驱动。默认的 `ControlFlow::Wait` 会将循环休眠至**下一次输入事件**，
+        // 因此仅按需绘制的应用会显示冻结窗口。节拍器知道下一帧何时到期；循环休眠至
+        // 该时刻并自行唤醒。主窗口的节拍驱动整个事件循环。
+        //
+        //
+        //
         let Some(index) = self.primary.and_then(|id| {
             self.windows
                 .iter()
@@ -448,32 +448,32 @@ impl<A: PlatformApp> ApplicationHandler<()> for Runner<A> {
         };
         let state = &self.windows[index].state;
         let now = Instant::now();
-        // The pacer knows when the next *frame* is due; the application knows
-        // when its next *timer* is due. The loop has to wake for whichever
-        // comes first.
+        // 节拍器知道下一**帧**何时到期；应用知道下一**定时器**何时到期。
+        // 循环必须按两者中较早到达的时刻唤醒。
+        //
         let deadline = match (state.pacer.next_wake(now), self.app.next_wake()) {
             (Some(frame), Some(timer)) => Some(frame.min(timer)),
             (frame, timer) => frame.or(timer),
         };
         let flow = match deadline {
             Some(deadline) => winit::event_loop::ControlFlow::WaitUntil(deadline),
-            // Nothing has been presented yet *and* the application still
-            // wants frames: poll so the first frame gets through.
+            // 尚未呈现任何帧**且**应用仍请求绘制：轮询以确保首帧顺利通过。
+            //
             None if state.visible && state.pacer.animating() => {
                 winit::event_loop::ControlFlow::Poll
             }
-            // The window is hidden, or the page is static and idle: park
-            // until an event arrives instead of spinning on an empty loop.
+            // 窗口已隐藏，或页面处于静止空闲状态：休眠等待事件到达而非空转。
+            //
             None => winit::event_loop::ControlFlow::Wait,
         };
         event_loop.set_control_flow(flow);
     }
 }
 
-/// The raw window handle of a window, for `vkCreateWin32SurfaceKHR`.
+/// 获取窗口的原始句柄，供 `vkCreateWin32SurfaceKHR` 使用。
 ///
-/// Returns `None` when the platform refuses to hand out a handle, which
-/// happens for windows that are not backed by a native surface.
+/// 当平台拒绝提供句柄时返回 `None`（例如无原生表面支撑的窗口）。
+///
 #[must_use]
 pub fn raw_window_handle(window: &Window) -> Option<raw_window_handle::RawWindowHandle> {
     use raw_window_handle::HasWindowHandle;

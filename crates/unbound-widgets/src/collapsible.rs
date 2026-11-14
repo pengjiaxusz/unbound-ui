@@ -1,4 +1,4 @@
-//! Single-section Collapsible / Disclosure panel with spring progress.
+//! 单分区折叠面板（Collapsible / Disclosure），支持弹簧展开进度。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -12,12 +12,12 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// Interactive state for a [`CollapsibleDesc`].
+/// [`CollapsibleDesc`] 的交互状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CollapsibleState {
-    /// Target expanded state.
+    /// 目标展开状态。
     pub open: bool,
-    /// Normalized `[0.0, 1.0]` spring reveal progress.
+    /// 归一化 `[0.0, 1.0]` 弹簧展开进度。
     pub progress: f32,
 }
 
@@ -31,12 +31,12 @@ impl Default for CollapsibleState {
 }
 
 impl CollapsibleState {
-    /// Toggle open/closed.
+    /// 切换展开/折叠状态。
     pub fn toggle(&mut self) {
         self.open = !self.open;
     }
 
-    /// Advance animation toward `open`.
+    /// 朝目标状态 `open` 步进动画。
     pub fn tick(&mut self, dt: f32) -> bool {
         let target = if self.open { 1.0 } else { 0.0 };
         let diff = target - self.progress;
@@ -50,23 +50,23 @@ impl CollapsibleState {
     }
 }
 
-/// Descriptor for a single-section [`Collapsible`].
+/// 单分区 [`Collapsible`] 描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CollapsibleDesc {
-    /// Outer bounding rectangle.
+    /// 外层边界矩形。
     pub rect: Rect,
-    /// Header trigger title.
+    /// 标题栏触发文本。
     pub title: String,
-    /// Whether expanded (`progress` in `0.0..=1.0`).
+    /// 是否处于展开状态（`progress` 位于 `0.0..=1.0`）。
     pub open: bool,
-    /// Normalized reveal progress `[0.0, 1.0]`.
+    /// 归一化展开进度 `[0.0, 1.0]`。
     pub progress: f32,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl CollapsibleDesc {
-    /// Create a collapsible descriptor.
+    /// 创建折叠面板描述符。
     #[must_use]
     pub fn new(rect: Rect, title: impl Into<String>, open: bool) -> Self {
         Self {
@@ -79,7 +79,7 @@ impl CollapsibleDesc {
     }
 }
 
-/// Emit a stable-shape collapsible disclosure (1 outer + 1 header + 1 chevron + 1 body + 1 focus ring = 5 primitives).
+/// 发射固定形状的折叠面板（1 外框 + 1 标题栏 + 1 箭头 + 1 内容区 + 1 焦点环 = 5 个图元）。
 #[must_use]
 pub fn emit_collapsible(
     node: u64,

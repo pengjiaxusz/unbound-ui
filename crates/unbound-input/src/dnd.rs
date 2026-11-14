@@ -1,15 +1,15 @@
 //! OS 原生拖拽穿透（`docs` §6.1）。
 //!
-//! When the user drags a file from Explorer into the window, the OS owns the
-//! drag. The engine's job is to turn that stream into the *same* kind of
-//! transient `DragOver` action the internal drag gestures produce, so the
-//! existing double-layer pick test highlights the drop target and the reducer
-//! never learns where the file came from.
+//! 当用户从资源管理器将文件拖入窗口时，拖拽由操作系统接管。
+//! 引擎的任务是将该事件流转换为与内部拖拽手势**相同**类型的瞬态
+//! `DragOver` 动作，从而复用现有的双层拾取测试高亮放置目标，
+//! 使 reducer 无需关心文件究竟来自何处。
 //!
-//! File paths do not fit in the 24-byte action payload, so they live in a small
-//! arena and the action carries an index. The arena is transient by design: it
-//! is cleared when the drag leaves, which is what keeps a 100 000-file drop from
-//! growing the undo stack.
+//!
+//! 文件路径无法塞入 24 字节的动作负载中，因此它们存放在一个小型
+//! arena 中，动作仅携带索引。该 arena 按设计为瞬态：拖拽离开窗口时
+//! 即被清空，从而避免 10 万个文件的拖放操作撑大撤销栈。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -19,22 +19,22 @@ use unbound_abi::action::{ActionKind, RawAction};
 use unbound_abi::desc::RawNodeId;
 use unbound_math::Vec2;
 
-/// What the OS is carrying.
+/// 操作系统正在携带的拖拽内容。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DragPayload {
     pub paths: Vec<PathBuf>,
-    /// Plain-text drags (from a browser or an editor) arrive without paths.
+    /// 来自浏览器或编辑器的纯文本拖拽（不带文件路径）。
     pub text: Option<String>,
 }
 
 impl DragPayload {
-    /// A file drag.
+    /// 文件拖拽载荷。
     #[must_use]
     pub fn files(paths: Vec<PathBuf>) -> Self {
         Self { paths, text: None }
     }
 
-    /// A text drag.
+    /// 纯文本拖拽载荷。
     #[must_use]
     pub fn text(text: impl Into<String>) -> Self {
         Self {
@@ -48,14 +48,14 @@ impl DragPayload {
         self.paths.is_empty() && self.text.is_none()
     }
 
-    /// Number of files, for the event log.
+    /// 文件数量，供事件日志记录使用。
     #[must_use]
     pub fn len(&self) -> usize {
         self.paths.len()
     }
 }
 
-/// Arena of live drag payloads.
+/// 活跃拖拽载荷的 arena 存储区。
 #[derive(Clone, Debug, Default)]
 pub struct PayloadArena {
     entries: Vec<Option<DragPayload>>,
@@ -67,7 +67,7 @@ impl PayloadArena {
         Self::default()
     }
 
-    /// Store a payload and return its id.
+    /// 存入载荷并返回其 ID。
     pub fn insert(&mut self, payload: DragPayload) -> u64 {
         if let Some((index, slot)) = self
             .entries
@@ -82,26 +82,26 @@ impl PayloadArena {
         self.entries.len() as u64
     }
 
-    /// Payload for `id`.
+    /// 获取 `id` 对应的载荷。
     #[must_use]
     pub fn get(&self, id: u64) -> Option<&DragPayload> {
         let index = usize::try_from(id).ok()?.checked_sub(1)?;
         self.entries.get(index)?.as_ref()
     }
 
-    /// Drop a payload. Ids are never reused while any other payload is alive,
-    /// but the slot is recycled, so a long drag session does not grow.
+    /// 释放载荷。只要仍有其他载荷存活，ID 就绝不会复用，
+    /// 但底层槽位会被回收，因此长时间拖拽会话不会导致内存持续增长。
     pub fn remove(&mut self, id: u64) -> Option<DragPayload> {
         let index = usize::try_from(id).ok()?.checked_sub(1)?;
         self.entries.get_mut(index)?.take()
     }
 
-    /// Forget everything (drag left the window).
+    /// 清空所有载荷（拖拽已离开窗口）。
     pub fn clear(&mut self) {
         self.entries.clear();
     }
 
-    /// Number of live payloads.
+    /// 当前存活的载荷数量。
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.iter().filter(|slot| slot.is_some()).count()
@@ -113,20 +113,20 @@ impl PayloadArena {
     }
 }
 
-/// One frame of an OS drag.
+/// 单帧 OS 拖拽状态。
 #[derive(Clone, Debug)]
 pub struct DragOver {
     pub position: Vec2,
-    /// Hit-test target under the pointer, if the window accepted the drag.
+    /// 若窗口接受该拖拽，则为指针下方的命中测试目标。
     pub target: Option<RawNodeId>,
     pub payload_id: u64,
 }
 
 impl DragOver {
-    /// Build the transient action the reducer and the overlay layer consume.
+    /// 构建供 reducer 与浮层消费的瞬态动作。
     ///
-    /// The action is *not* transactional: it never enters the undo stack
-    /// (`docs` §5.3 keeps ephemeral state out of history).
+    /// 该动作**非**事务性的：它绝不会进入撤销栈
+    /// （`docs` §5.3 将临时状态排除在历史记录之外）。
     #[must_use]
     pub fn to_action(&self, kind: ActionKind) -> RawAction {
         let mut action = RawAction::new(
@@ -134,14 +134,14 @@ impl DragOver {
             self.target.map_or(RawNodeId::ROOT.0, |target| target.0),
         );
         action.payload[0] = self.payload_id;
-        // Pack the position as two `f32` bit patterns so the 40-byte record
-        // stays `Eq + Hash` (required by the action journal).
+        // 将坐标打包为两个 `f32` 位模式，使 40 字节记录保持
+        // `Eq + Hash`（动作日志所需）。
         action.payload[1] = u64::from(self.position.x.to_bits());
         action.payload[2] = u64::from(self.position.y.to_bits());
         action
     }
 
-    /// Decode a position previously packed by [`Self::to_action`].
+    /// 解码此前由 [`Self::to_action`] 打包的坐标。
     #[must_use]
     pub fn position_from(action: &RawAction) -> Vec2 {
         Vec2::new(

@@ -1,19 +1,19 @@
-//! Variable-height virtual list backed by a Fenwick tree.
+//! 基于树状数组（Fenwick Tree）的可变高度虚拟列表。
 //!
-//! A uniform list answers "which rows are visible?" with one division. A list
-//! whose rows grow with their content (log lines, wrapped comments, expanded
-//! groups) cannot: the offset of row `i` is the sum of every height before it.
-//! Recomputing that prefix per frame is O(n) and, at 100 000 rows, it shows up
-//! as scroll jank.
+//! 等高列表通过一次除法即可回答“哪些行可见？”，但行高随内容增长的列表
+//! （如日志行、自动折行评论、展开分组）无法做到：第 `i` 行的偏移是其之前所有行高之和。
+//! 每帧重算该前缀和是 O(n) 复杂度，在 10 万行规模下会导致明显滚动卡顿。
 //!
-//! [`VariableVirtualList`] keeps the heights in a Fenwick tree. Prefix sums,
-//! point updates and the "first row at or below this offset" search are all
-//! O(log n), so a row that expands mid-scroll only touches a logarithmic
-//! number of counters instead of re-summing the list.
 //!
-//! The tree is deliberately floats, not integers: the caller measures text in
-//! logical pixels and the accumulated error over 100 000 rows is far below one
-//! physical pixel.
+//!
+//! [`VariableVirtualList`] 将行高保存在树状数组中。前缀和、单点更新以及
+//! “首个位于或低于该偏移的行”查找均为 O(log n)，因此滚动中途某行展开时
+//! 仅触及对数个计数器，而无需重新对整张列表求和。
+//!
+//!
+//! 树状数组故意使用浮点数而非整数：调用方以逻辑像素测量文本，
+//! 十万行累积的浮点误差也远低于一个物理像素。
+//!
 
 use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_math::{Rect, Vec2};
@@ -24,34 +24,34 @@ use crate::primitive::{glyphs, surface};
 use crate::scroll::ScrollViewDesc;
 use crate::WidgetOutput;
 
-/// A visible slice of a variable list.
+/// 可变高度列表的可见切片。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VariableWindow {
-    /// First row to emit (inclusive).
+    /// 首个待输出行（包含）。
     pub first: usize,
-    /// Last row to emit (exclusive).
+    /// 末尾待输出行（不包含）。
     pub last: usize,
-    /// The scroll offset the window was computed for.
+    /// 计算该窗口时所用的滚动偏移量。
     pub offset: f32,
-    /// The total content height.
+    /// 内容总高度。
     pub total: f32,
 }
 
 impl VariableWindow {
-    /// Number of rows in the window.
+    /// 窗口内的行数。
     #[must_use]
     pub fn len(&self) -> usize {
         self.last.saturating_sub(self.first)
     }
 
-    /// Whether the window has no rows.
+    /// 窗口是否为空（无可见行）。
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
-/// A Fenwick tree of row heights.
+/// 维护行高的树状数组。
 #[derive(Clone, Debug, Default)]
 pub struct VariableVirtualList {
     heights: Vec<f32>,
@@ -60,7 +60,7 @@ pub struct VariableVirtualList {
 }
 
 impl VariableVirtualList {
-    /// A list of `rows` rows, each `height` tall.
+    /// 创建包含 `rows` 行、每行高度为 `height` 的列表。
     #[must_use]
     pub fn new(rows: usize, height: f32) -> Self {
         let height = height.max(1.0);
@@ -73,7 +73,7 @@ impl VariableVirtualList {
         list
     }
 
-    /// A list with explicit heights.
+    /// 使用显式行高列表创建。
     #[must_use]
     pub fn from_heights(heights: impl IntoIterator<Item = f32>) -> Self {
         let mut list = Self {
@@ -85,37 +85,37 @@ impl VariableVirtualList {
         list
     }
 
-    /// Number of rows.
+    /// 行数。
     #[must_use]
     pub fn len(&self) -> usize {
         self.heights.len()
     }
 
-    /// Whether the list is empty.
+    /// 列表是否为空。
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.heights.is_empty()
     }
 
-    /// The height of one row.
+    /// 单行高度。
     #[must_use]
     pub fn height(&self, row: usize) -> f32 {
         self.heights.get(row).copied().unwrap_or(0.0)
     }
 
-    /// The total content height.
+    /// 内容总高度。
     #[must_use]
     pub fn total_height(&self) -> f32 {
         self.total
     }
 
-    /// The y offset of a row's leading edge.
+    /// 指定行前导边缘的 y 偏移量。
     #[must_use]
     pub fn offset_of(&self, row: usize) -> f32 {
         self.prefix(row.min(self.heights.len()))
     }
 
-    /// Set one row's height, updating only O(log n) counters.
+    /// 设置单行高度，仅更新 O(log n) 个计数器。
     pub fn set_height(&mut self, row: usize, height: f32) {
         if row >= self.heights.len() {
             return;
@@ -134,21 +134,21 @@ impl VariableVirtualList {
         }
     }
 
-    /// Grow or shrink the list, keeping the existing heights.
+    /// 扩充或缩减列表长度，保留已有行高。
     pub fn resize(&mut self, rows: usize, height: f32) {
         let height = height.max(1.0);
         self.heights.resize(rows, height);
         self.rebuild();
     }
 
-    /// The first row intersecting `offset`.
+    /// 与 `offset` 相交的首个行索引。
     #[must_use]
     pub fn first_visible(&self, offset: f32) -> usize {
         let offset = offset.max(0.0);
         if self.heights.is_empty() || offset >= self.total {
             return self.heights.len().saturating_sub(1);
         }
-        // Binary lifting: the largest index whose prefix sum is <= offset.
+        // 倍增查找：前缀和 <= offset 的最大索引。
         let mut index = 0usize;
         let mut remaining = offset;
         let mut step = self.highest_power_of_two();
@@ -163,7 +163,7 @@ impl VariableVirtualList {
         index.min(self.heights.len().saturating_sub(1))
     }
 
-    /// The window of rows intersecting `[offset, offset + viewport)`.
+    /// 与 `[offset, offset + viewport)` 相交的行窗口。
     #[must_use]
     pub fn window(&self, offset: f32, viewport: f32, overscan: usize) -> VariableWindow {
         if self.is_empty() || viewport <= 0.0 {
@@ -189,7 +189,7 @@ impl VariableVirtualList {
         }
     }
 
-    /// The rectangle of one row inside a viewport.
+    /// 单行在视口内的矩形。
     #[must_use]
     pub fn row_rect(&self, row: usize, offset: f32, origin: Vec2, width: f32) -> Rect {
         Rect::new(
@@ -200,7 +200,7 @@ impl VariableVirtualList {
         )
     }
 
-    /// A scroll view descriptor for this list.
+    /// 该列表对应的滚动视图描述符。
     #[must_use]
     pub fn scroll_view(&self, viewport: Rect) -> ScrollViewDesc {
         ScrollViewDesc::new(viewport, Vec2::new(viewport.size.x, self.total))
@@ -238,23 +238,23 @@ impl VariableVirtualList {
     }
 }
 
-/// The colour slots a virtual row paints with.
+/// 虚拟行绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VirtualRowTokens {
-    /// The row surface.
+    /// 行表面背景。
     pub row: Token,
-    /// The hovered row surface.
+    /// 悬停行表面背景。
     pub hover: Token,
-    /// The selected row surface.
+    /// 选中行表面背景。
     pub selected: Token,
-    /// The row text.
+    /// 行文本。
     pub text: Token,
-    /// The row separator.
+    /// 行分隔线。
     pub rule: Token,
 }
 
 impl VirtualRowTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -267,7 +267,7 @@ impl VirtualRowTokens {
     }
 }
 
-/// Emit one virtual row.
+/// 输出单个虚拟行。
 #[must_use]
 pub fn emit_virtual_row(
     rect: Rect,

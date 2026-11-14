@@ -1,16 +1,14 @@
-//! The numeric field: scrub to change, click to edit, Enter to evaluate.
+//! 数字输入框：滑动调值、点击编辑、回车求值。
 //!
-//! Two interaction modes share one state machine:
+//! 两种交互模式共享同一个状态机：
 //!
-//! * **Scrub** — dragging horizontally with the primary button changes the
-//!   value by `delta_x * step`. `Shift` multiplies the step by ten and `Alt`
-//!   divides it by ten, so coarse and fine adjustments need no extra widget.
-//! * **Edit** — a click without movement (or a double click) swaps in a
-//!   [`TextEditState`]. Committing evaluates a small arithmetic expression, so
-//!   `120 + 45 * 2` becomes `210` instead of being rejected.
+//! * **滑动（Scrub）** — 按住主键水平拖拽可按 `delta_x * step` 改变数值。
+//!   `Shift` 将步长乘以 10，`Alt` 将步长除以 10，无需额外控件即可粗调与微调。
+//! * **编辑（Edit）** — 无位移点击（或双击）切换为 [`TextEditState`]。
+//!   提交时会计算简单算术表达式，例如 `120 + 45 * 2` 会得出 `210` 而非被拒绝。
 //!
-//! The emitter never shapes text: the caller lays out [`NumberInputState::display_text`]
-//! and hands the quads back, exactly like the text input does.
+//! 输出器不负责文本塑形：调用方需排版 [`NumberInputState::display_text`]，
+//! 并将字形四边形传回，方式与文本输入框一致。
 
 use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yNode};
@@ -25,40 +23,40 @@ use crate::switch::CONTROL_LAYER;
 use crate::text_input::{reduce_text_input, TextEditState, TextInputDesc, TextInputEvent};
 use crate::{ControlState, WidgetOutput};
 
-/// The width of the spinner column.
+/// 微调按钮列的宽度。
 pub const SPIN_WIDTH: f32 = 18.0;
-/// The padding between the field border and the text.
+/// 输入框边框与文本之间的内边距。
 pub const NUMBER_PADDING: f32 = 10.0;
-/// The corner radius of the field.
+/// 输入框的圆角半径。
 pub const NUMBER_RADIUS: f32 = 8.0;
 
-/// Formatting policy and hard bounds for a numeric field.
+/// 数字输入框的格式化策略与硬性边界。
 #[derive(Clone, Debug, PartialEq)]
 pub struct NumberInputDesc {
-    /// The field rectangle.
+    /// 输入框矩形。
     pub rect: Rect,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The lowest accepted value.
+    /// 允许的最小值。
     pub min: f64,
-    /// The highest accepted value.
+    /// 允许的最大值。
     pub max: f64,
-    /// The scrub / spinner increment.
+    /// 滑动/微调步长。
     pub step: f64,
-    /// Digits kept after the decimal point.
+    /// 小数点后保留的位数。
     pub precision: u8,
-    /// A unit suffix (`"px"`, `"%"`).
+    /// 单位后缀（`"px"`、`"%"`）。
     pub unit: String,
-    /// A prefix (`"$"`, `"≈"`).
+    /// 前缀（`"$"`、`"≈"`）。
     pub prefix: String,
-    /// The field refuses interaction.
+    /// 是否禁用交互。
     pub disabled: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl NumberInputDesc {
-    /// A field bounded by `min` and `max`, stepping by one.
+    /// 创建限制在 `min` 与 `max` 之间、步长为 1 的输入框描述符。
     #[must_use]
     pub fn new(rect: Rect, min: f64, max: f64) -> Self {
         Self {
@@ -76,16 +74,16 @@ impl NumberInputDesc {
     }
 }
 
-/// Which mode the field is in.
+/// 输入框当前所处的模式。
 #[derive(Clone, Debug, PartialEq)]
 pub enum NumberMode {
-    /// Drag horizontally to change the value.
+    /// 水平拖拽以修改数值。
     Scrub,
-    /// An inline text editor owns the keyboard.
+    /// 内联文本编辑器接管键盘输入。
     Edit(TextEditState),
 }
 
-/// The live state of one numeric field.
+/// 单个数字输入框的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct NumberInputState {
     value: f64,
@@ -96,7 +94,7 @@ pub struct NumberInputState {
 }
 
 impl NumberInputState {
-    /// A field holding `value`.
+    /// 创建持有初始值 `value` 的状态。
     #[must_use]
     pub fn new(value: f64) -> Self {
         Self {
@@ -108,25 +106,25 @@ impl NumberInputState {
         }
     }
 
-    /// The current value.
+    /// 当前数值。
     #[must_use]
     pub fn value(&self) -> f64 {
         self.value
     }
 
-    /// The current mode.
+    /// 当前模式。
     #[must_use]
     pub fn mode(&self) -> &NumberMode {
         &self.mode
     }
 
-    /// Whether an inline editor is open.
+    /// 内联编辑器是否处于打开状态。
     #[must_use]
     pub fn is_editing(&self) -> bool {
         matches!(self.mode, NumberMode::Edit(_))
     }
 
-    /// The inline editor, when one is open.
+    /// 打开时的内联编辑器引用。
     #[must_use]
     pub fn edit(&self) -> Option<&TextEditState> {
         match &self.mode {
@@ -135,7 +133,7 @@ impl NumberInputState {
         }
     }
 
-    /// Set the value, clamped to `[min, max]` and rounded to `precision`.
+    /// 设置数值，夹紧至 `[min, max]` 并按 `precision` 四舍五入。
     pub fn set_value(&mut self, value: f64, desc: &NumberInputDesc) -> bool {
         if !value.is_finite() {
             return false;
@@ -146,22 +144,21 @@ impl NumberInputState {
         changed
     }
 
-    /// Step by whole increments (the spinner buttons and arrow keys).
+    /// 按整数倍步长增减（用于微调按钮与方向键）。
     pub fn step_by(&mut self, steps: i32, desc: &NumberInputDesc) -> bool {
         self.set_value(self.value + desc.step * f64::from(steps), desc)
     }
 
-    /// Begin a scrub gesture at `x`.
+    /// 在 `x` 处开始滑动手势。
     pub fn begin_drag(&mut self, x: f32) {
         self.drag_origin_x = x;
         self.drag_origin_value = self.value;
         self.dragging = true;
     }
 
-    /// Continue a scrub gesture.
+    /// 继续滑动手势。
     ///
-    /// The new value is always derived from the gesture's origin, so a drag
-    /// that moves back and forth never accumulates rounding drift.
+    /// 新值始终基于手势起点计算，因此来回拖拽不会累积舍入误差。
     pub fn drag_to(&mut self, x: f32, shift: bool, alt: bool, desc: &NumberInputDesc) -> bool {
         if !self.dragging {
             return false;
@@ -178,23 +175,23 @@ impl NumberInputState {
         self.set_value(value, desc)
     }
 
-    /// Finish the scrub gesture.
+    /// 结束滑动手势。
     pub fn end_drag(&mut self) {
         self.dragging = false;
     }
 
-    /// Whether a scrub gesture is in progress.
+    /// 是否正在进行滑动手势。
     #[must_use]
     pub fn is_dragging(&self) -> bool {
         self.dragging
     }
 
-    /// Open the inline editor, prefilled with the current value.
+    /// 打开内联编辑器，并预填当前数值。
     pub fn begin_edit(&mut self, desc: &NumberInputDesc) {
         self.mode = NumberMode::Edit(TextEditState::with_text(self.format_value(desc)));
     }
 
-    /// Route a text-input event to the inline editor.
+    /// 将文本输入事件路由至内联编辑器。
     pub fn edit_event(
         &mut self,
         desc: &NumberInputDesc,
@@ -207,10 +204,9 @@ impl NumberInputState {
         }
     }
 
-    /// Commit the inline editor.
+    /// 提交内联编辑器。
     ///
-    /// A expression that cannot be evaluated leaves the editor open and the
-    /// value untouched, so a typo never destroys the previous number.
+    /// 若表达式无法求值，编辑器保持打开且原值不变，避免误输入破坏原有数值。
     pub fn commit_edit(&mut self, desc: &NumberInputDesc) -> Option<f64> {
         let NumberMode::Edit(edit) = &self.mode else {
             return None;
@@ -221,12 +217,12 @@ impl NumberInputState {
         Some(self.value)
     }
 
-    /// Abandon the inline editor.
+    /// 放弃编辑并关闭内联编辑器。
     pub fn cancel_edit(&mut self) {
         self.mode = NumberMode::Scrub;
     }
 
-    /// The text the caller should shape for display.
+    /// 调用方应塑形显示的文本。
     #[must_use]
     pub fn display_text(&self, desc: &NumberInputDesc) -> String {
         match &self.mode {
@@ -235,7 +231,7 @@ impl NumberInputState {
         }
     }
 
-    /// `prefix + number + unit`.
+    /// `prefix + number + unit`。
     #[must_use]
     pub fn format_value(&self, desc: &NumberInputDesc) -> String {
         format!(
@@ -255,14 +251,14 @@ fn edit_desc(desc: &NumberInputDesc) -> TextInputDesc {
     editor
 }
 
-/// Round to `precision` digits after the decimal point.
+/// 四舍五入到小数点后 `precision` 位。
 #[must_use]
 pub fn round_to(value: f64, precision: u8) -> f64 {
     let factor = 10f64.powi(i32::from(precision.min(12)));
     (value * factor).round() / factor
 }
 
-/// Format with fixed decimals and no trailing zeros beyond `precision`.
+/// 固定小数位格式化，去除超出 `precision` 的末尾零。
 #[must_use]
 pub fn format_number(value: f64, precision: u8) -> String {
     let mut text = format!(
@@ -283,11 +279,9 @@ pub fn format_number(value: f64, precision: u8) -> String {
     text
 }
 
-/// Evaluate `+ - * /` with parentheses and unary minus.
+/// 支持括号与一元负号的 `+ - * /` 求值。
 ///
-/// The parser is deliberately tiny: it accepts the arithmetic a user types
-/// into a numeric field, rejects everything else by returning `None`, and
-/// never panics.
+/// 解析器故意保持极简：仅接受数字框中常见的算术表达式，其余返回 `None`，且永不 panic。
 #[must_use]
 pub fn evaluate_expression(input: &str) -> Option<f64> {
     let mut parser = Parser {
@@ -406,7 +400,7 @@ impl Parser<'_> {
     }
 }
 
-/// The spinner column splits into an upper and a lower button.
+/// 微调列拆分为上按钮与下按钮，此处返回上按钮矩形。
 #[must_use]
 pub fn spin_up_rect(rect: Rect) -> Rect {
     Rect::new(
@@ -417,7 +411,7 @@ pub fn spin_up_rect(rect: Rect) -> Rect {
     )
 }
 
-/// The lower spinner button.
+/// 下微调按钮矩形。
 #[must_use]
 pub fn spin_down_rect(rect: Rect) -> Rect {
     let up = spin_up_rect(rect);
@@ -429,7 +423,7 @@ pub fn spin_down_rect(rect: Rect) -> Rect {
     )
 }
 
-/// The rectangle available to the formatted number.
+/// 可用于显示格式化数字的文本矩形。
 #[must_use]
 pub fn number_text_rect(rect: Rect) -> Rect {
     Rect::new(
@@ -440,10 +434,9 @@ pub fn number_text_rect(rect: Rect) -> Rect {
     )
 }
 
-/// Emit the field chrome, spinner buttons and semantic node.
+/// 输出输入框外观、微调按钮与语义节点。
 ///
-/// `glyphs` must already be positioned inside [`number_text_rect`]; the
-/// emitter only decides colours.
+/// `glyphs` 必须已定位在 [`number_text_rect`] 内；输出器仅决定颜色。
 #[must_use]
 pub fn emit_number_input(
     node: u64,
@@ -488,9 +481,9 @@ pub fn emit_number_input(
     };
     emit_glyphs(glyphs, ink, desc.z, &mut primitives, &mut payloads);
 
-    // The spinner column: a hairline separator and two slim buttons. The
-    // buttons are painted whether or not they are hovered; only the fill
-    // token changes, so the primitive count stays constant.
+    // 微调列：一条细分隔线与两个窄按钮。无论是否悬停都会绘制按钮，
+    // 仅填充令牌发生变化，从而保持图元数量恒定。
+    //
     let up = spin_up_rect(rect);
     let down = spin_down_rect(rect);
     primitives.push(instance(

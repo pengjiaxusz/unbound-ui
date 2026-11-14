@@ -1,25 +1,25 @@
-//! Viewport-bounded smart snapping (`docs` §5.3).
+//! 视口限定的智能吸附求解器（`docs` §5.3）。
 //!
-//! When an entity is dragged, the canvas does not snap against the world: it
-//! snaps against what the user can *see*. The solver therefore
+//! 拖拽实体时，画布不会针对整个世界进行吸附，而是仅针对用户*可见*的内容。
+//! 因此求解器执行以下步骤：
 //!
-//! 1. asks the loose quadtree for everything inside the viewport inflated by
-//!    [`SnapConfig::padding_px`] (64 px by default),
-//! 2. ranks those candidates by `area / distance` and keeps the first
-//!    [`SnapConfig::max_candidates`] (128) — a 1 M element canvas must not turn
-//!    a drag into a million-edge scan,
-//! 3. projects the survivors onto two sorted 1D interval tables (X and Y),
-//! 4. looks up left/centre/right and top/middle/bottom alignment with a binary
-//!    search, and finally
-//! 5. looks for equal-spacing runs on both axes.
+//! 1. 向松散四叉树查询视口向外扩展 [`SnapConfig::padding_px`]（默认 64 px）
+//!    范围内的所有元素；
+//! 2. 按 `area / distance` 对候选元素排序并保留前 [`SnapConfig::max_candidates`]（128）个——
+//!    百万元素画布绝不能让一次拖拽变成百万条边的扫描；
 //!
-//! Distances are *screen* pixels: the threshold is divided by the camera zoom so
-//! that a 5 px magnet stays 5 px whether the user is at 10 % or 6400 %.
+//! 3. 将保留的候选投影到两张有序一维区间表（X 轴与 Y 轴）；
+//! 4. 使用二分查找匹配左/中/右与上/中/下对齐；最后
+//!    （若启用）
+//! 5. 在双轴上查找等间距分布。
 //!
-//! The output is a pure correction plus a list of transient guides. Guides are
-//! ephemeral by construction (`docs` §5.3): they are returned in a reusable
-//! buffer that the caller copies straight into the frame's transient ring and
-//! never into the reducer state or the undo stack.
+//! 距离以*屏幕*像素计：阈值会除以相机缩放倍率，
+//! 使 5 px 的吸附磁力在 10% 或 6400% 缩放下始终保持 5 屏幕像素。
+//!
+//! 输出为纯修正量与一组瞬态参考线。参考线在设计上即为瞬态（`docs` §5.3）：
+//! 它们通过可复用缓冲区返回，由调用方直接拷贝进帧瞬态环中，
+//! 绝不写入归约器状态或撤销栈。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -27,62 +27,62 @@ use unbound_math::{Rect, Vec2};
 
 use crate::quadtree::LooseQuadtree;
 
-/// Axis a guide runs along. `X` means a *vertical* line at `coordinate`.
+/// 参考线所沿的坐标轴。`X` 表示位于 `coordinate` 处的*垂直*参考线。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Axis {
     X,
     Y,
 }
 
-/// Which feature produced a snap.
+/// 触发吸附的对齐特征类型。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SnapKind {
-    /// Moving left edge met a left edge.
+    /// 移动左边缘对齐目标左边缘。
     Left,
-    /// Moving centre met a centre.
+    /// 移动中心线对齐目标中心线。
     Centre,
-    /// Moving right edge met a right edge.
+    /// 移动右边缘对齐目标右边缘。
     Right,
     Top,
     Middle,
     Bottom,
-    /// Equal-spacing run.
+    /// 等间距分布对齐。
     Spacing,
 }
 
 impl SnapKind {
-    /// True for the X-axis variants.
+    /// 属于 X 轴变体时返回 true。
     #[must_use]
     pub fn is_x(self) -> bool {
         matches!(self, Self::Left | Self::Centre | Self::Right)
     }
 }
 
-/// A transient alignment line, in world space.
+/// 世界空间中的一条瞬态对齐参考线。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct SnapGuide {
     pub axis: Axis,
-    /// World coordinate of the line (X for a vertical line).
+    /// 参考线的世界坐标（垂直线对应 X 坐标）。
     pub coordinate: f32,
-    /// Span along the other axis, so the renderer can draw a segment instead of
-    /// an infinite rule.
+    /// 沿另一轴的跨度，使渲染器可绘制有限线段而非无限延长线。
+    ///
     pub start: f32,
     pub end: f32,
     pub kind: SnapKind,
 }
 
-/// Tuning knobs. Defaults are the values from `docs` §5.3.
+/// 调优参数配置。默认值取自 `docs` §5.3。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct SnapConfig {
-    /// Screen-space magnet radius.
+    /// 屏幕空间吸附磁力半径。
     pub threshold_px: f32,
-    /// Viewport inflation used when gathering candidates.
+    /// 收集候选元素时对视口的扩展边距。
     pub padding_px: f32,
-    /// Hard cap on candidates; the ranking keeps the most significant ones.
+    /// 候选元素硬上限；排序会保留最具显著性的元素。
     pub max_candidates: usize,
-    /// Enable equal-spacing detection.
+    /// 是否启用等间距检测。
     pub equal_spacing: bool,
-    /// Gaps narrower than this (in screen px) are ignored as noise.
+    /// 小于该宽度（屏幕像素）的间隙视为噪声予以忽略。
     pub min_spacing_px: f32,
 }
 
@@ -98,21 +98,21 @@ impl Default for SnapConfig {
     }
 }
 
-/// Result of one drag frame.
+/// 单帧拖拽的吸附求解结果。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SnapResult {
-    /// Correction to add to the dragged rectangle's origin, in world units.
+    /// 需加到被拖拽矩形原点上的修正量（世界单位）。
     pub offset: Vec2,
-    /// True when the X axis found a target.
+    /// X 轴是否找到吸附目标。
     pub snapped_x: bool,
-    /// True when the Y axis found a target.
+    /// Y 轴是否找到吸附目标。
     pub snapped_y: bool,
-    /// Transient guides for this frame, deduplicated by `(axis, coordinate)`.
+    /// 本帧生成的瞬态参考线，按 `(axis, coordinate)` 去重。
     pub guides: Vec<SnapGuide>,
 }
 
 impl SnapResult {
-    /// True when any axis moved the rectangle.
+    /// 当任一轴产生位置修正时返回 true。
     #[must_use]
     pub fn is_snapped(&self) -> bool {
         self.snapped_x || self.snapped_y
@@ -138,31 +138,31 @@ impl SnapResult {
     }
 }
 
-/// One ranked candidate rect.
+/// 经排序的单个候选矩形。
 #[derive(Copy, Clone, Debug)]
 struct Candidate {
     rect: Rect,
     score: f32,
 }
 
-/// One edge on an axis table.
+/// 轴向表中的一条边缘记录。
 #[derive(Copy, Clone, Debug)]
 struct Edge {
     coord: f32,
 }
 
-/// Reusable snapping solver: owns its buffers so a drag allocates nothing.
+/// 可复用的吸附求解器：自持内部缓冲区，拖拽过程零内存分配。
 pub struct Snapper {
     config: SnapConfig,
     candidates: Vec<Candidate>,
     edges_x: Vec<Edge>,
     edges_y: Vec<Edge>,
     result: SnapResult,
-    /// Reused id buffer for quadtree queries.
+    /// 复用的四叉树查询 ID 缓冲区。
     ids: Vec<u32>,
-    /// Reused rect buffer for the equal-spacing pass.
+    /// 复用的等间距检测矩形缓冲区。
     scratch: Vec<Rect>,
-    /// Number of candidates that survived ranking in the last call.
+    /// 上一次调用中通过排序保留的候选数量。
     retained: usize,
 }
 
@@ -177,7 +177,7 @@ impl core::fmt::Debug for Snapper {
 }
 
 impl Snapper {
-    /// Build a solver with the given configuration.
+    /// 使用指定配置构建求解器。
     #[must_use]
     pub fn new(config: SnapConfig) -> Self {
         Self {
@@ -192,22 +192,22 @@ impl Snapper {
         }
     }
 
-    /// Configuration in use.
+    /// 当前使用的配置。
     #[must_use]
     pub fn config(&self) -> &SnapConfig {
         &self.config
     }
 
-    /// Candidates retained by the last call, exposed for the KPI tests.
+    /// 上一次调用保留的候选数量，供 KPI 测试检查。
     #[must_use]
     pub fn retained_candidates(&self) -> usize {
         self.retained
     }
 
-    /// Gather candidates around `viewport` from `tree` and solve for `moving`.
+    /// 从 `tree` 中收集 `viewport` 周围的候选元素并对 `moving` 执行吸附求解。
     ///
-    /// `moving_id` is excluded from the candidate set so an entity never snaps
-    /// to its own stale bounds.
+    /// `moving_id` 会从候选集中排除，避免实体吸附到自身的旧包围盒。
+    ///
     pub fn snap_against_tree(
         &mut self,
         tree: &mut LooseQuadtree,
@@ -235,7 +235,7 @@ impl Snapper {
         self.solve(moving, zoom)
     }
 
-    /// Solve against an explicit candidate list (headless harness and tests).
+    /// 针对显式候选列表执行求解（用于无头测试套件与单元测试）。
     pub fn snap(&mut self, moving: Rect, others: &[Rect], zoom: f32) -> &SnapResult {
         self.candidates.clear();
         self.candidates.extend(others.iter().map(|rect| Candidate {
@@ -246,26 +246,26 @@ impl Snapper {
         self.solve(moving, zoom)
     }
 
-    /// Result of the last call.
+    /// 上一次调用的求解结果。
     #[must_use]
     pub fn result(&self) -> &SnapResult {
         &self.result
     }
 
-    /// Rank by significance (`area / distance`) and truncate.
+    /// 按显著性（`area / distance`）排序并截断。
     ///
-    /// Area matters because a 40 000 px group frame is a far better alignment
-    /// reference than an 8 px icon; distance matters because off-screen-in-
-    /// spirit references are noise. The quotient is the cheapest score that
-    /// respects both, and it is computed once per candidate.
+    /// 面积很关键，因为 40 000 px 的分组框比 8 px 图标更适合作为对齐参照；
+    /// 距离同样关键，因为远离屏幕的参照物只是噪声。两者的商是兼顾两因素的
+    /// 最低开销评分，每个候选只需计算一次。
     ///
-    /// Both terms are converted to *screen* pixels first: the area is in
-    /// world units squared and the distance in world units, so mixing them
-    /// raw would make the score depend on the zoom and change which
-    /// candidates survive the cut.
+    ///
+    /// 两项均先转换为*屏幕*像素：面积原为世界单位平方，距离为世界单位，
+    /// 若直接混合未缩放数值会导致评分依赖缩放倍率，并改变截断后保留的候选集。
+    ///
+    ///
     fn rank(&mut self, moving: Rect, zoom: f32) {
         let centre = moving.center();
-        // One world unit is `zoom` screen pixels.
+        // 1 个世界单位等于 `zoom` 个屏幕像素。
         let to_screen = zoom.max(1e-6);
         for candidate in &mut self.candidates {
             let delta = candidate.rect.center() - centre;
@@ -349,7 +349,7 @@ impl Snapper {
         &self.result
     }
 
-    /// Nearest edge to any of `values`, within `threshold`.
+    /// 在 `threshold` 范围内查找距离 `values` 中任意值最近的边缘。
     fn best_axis(&self, values: [f32; 3], kinds: [SnapKind; 3], threshold: f32) -> Option<Hit> {
         let table: &[Edge] = if kinds[0].is_x() {
             &self.edges_x
@@ -373,10 +373,10 @@ impl Snapper {
                 if delta.abs() > threshold {
                     continue;
                 }
-                // Prefer the smallest correction. On a tie the earlier entry
-                // wins, and the table is sorted by coordinate — not by the
-                // significance ranking, which only decided which candidates
-                // survived the cut.
+                // 优先选择最小修正量。相同时较早的表项胜出，
+                // 该表按坐标排序——而非按显著性排序（显著性仅决定哪些候选能进入截断后的表）。
+                //
+                //
                 if best.as_ref().is_none_or(|b| delta.abs() < b.delta.abs()) {
                     best = Some(Hit {
                         coord: edge.coord,
@@ -389,7 +389,7 @@ impl Snapper {
         best
     }
 
-    /// Equal-spacing pass on X, keeping whichever correction moves less.
+    /// 在 X 轴执行等间距检测，保留移动量更小的修正。
     fn blend_spacing_x(
         &mut self,
         moving: Rect,
@@ -411,7 +411,7 @@ impl Snapper {
             if gap < min_gap {
                 continue;
             }
-            // Place the moving rect after `b`, or before `a`, at the same gap.
+            // 将移动矩形置于 `b` 之后或 `a` 之前，保持相同间距。
             let after = b.max().x + gap - moving.min().x;
             let before = a.min().x - gap - moving.max().x;
             for delta in [after, before] {
@@ -430,7 +430,7 @@ impl Snapper {
         best
     }
 
-    /// Equal-spacing pass on Y.
+    /// 在 Y 轴执行等间距检测。
     fn blend_spacing_y(
         &mut self,
         moving: Rect,
@@ -470,11 +470,11 @@ impl Snapper {
         best
     }
 
-    /// Guide span on Y for an X-axis snap.
+    /// 计算 X 轴吸附参考线在 Y 轴上的跨度。
     ///
-    /// The span covers the dragged rect *and every* candidate that shares the
-    /// matched coordinate, so three boxes aligned on one edge produce one line
-    /// that visibly touches all of them instead of a stub between two.
+    /// 跨度覆盖被拖拽矩形*以及所有*共享该匹配坐标的候选矩形，
+    /// 因此三个共边对齐的盒子会生成一条贯穿全部三者的完整参考线，而非两两之间的一小段。
+    ///
     fn span_y(&self, hit: &Hit, moving: Rect) -> (f32, f32) {
         let mut start = moving.min().y;
         let mut end = moving.max().y;
@@ -494,7 +494,7 @@ impl Snapper {
         (start, end)
     }
 
-    /// Guide span on X for a Y-axis snap, unioned over every co-aligned rect.
+    /// 计算 Y 轴吸附参考线在 X 轴上的跨度（取所有共线矩形的并集）。
     fn span_x(&self, hit: &Hit, moving: Rect) -> (f32, f32) {
         let mut start = moving.min().x;
         let mut end = moving.max().x;
@@ -515,12 +515,12 @@ impl Snapper {
     }
 }
 
-/// One accepted alignment.
+/// 单次采纳的对齐结果。
 #[derive(Copy, Clone, Debug)]
 struct Hit {
-    /// World coordinate the edge landed on.
+    /// 边缘落定的世界坐标。
     coord: f32,
-    /// Correction applied to the moving rect.
+    /// 施加到移动矩形上的修正量。
     delta: f32,
     kind: SnapKind,
 }
@@ -537,8 +537,8 @@ mod tests {
     fn left_edges_align_within_threshold() {
         let mut s = Snapper::new(SnapConfig::default());
         let others = [rect(100.0, 0.0, 50.0, 50.0)];
-        // Moving left edge is 3 px right of the neighbour's left edge; the
-        // 10 px width keeps the other two edges out of magnet range.
+        // 移动左边缘位于邻居左边缘右侧 3 px 处；10 px 宽度使另外两条边缘超出磁力范围。
+        //
         let moving = rect(103.0, 200.0, 10.0, 20.0);
         let r = s.snap(moving, &others, 1.0);
         assert!(r.snapped_x);
@@ -561,10 +561,10 @@ mod tests {
     #[test]
     fn centre_to_centre_alignment_wins_over_a_farther_edge() {
         let mut s = Snapper::new(SnapConfig::default());
-        // The centre of this rect is at x = 125.
+        // 该矩形中心位于 x = 125。
         let others = [rect(100.0, 0.0, 50.0, 50.0)];
-        // Moving centre at 127 → 2 px off centre; moving left at 117 → 17 px off
-        // the left edge, out of range. Only the centre can match.
+        // 移动中心在 127 → 偏离中心 2 px；移动左边缘在 117 → 偏离左边缘 17 px（超出范围）。只有中心能匹配。
+        //
         let moving = rect(117.0, 200.0, 20.0, 20.0);
         let r = s.snap(moving, &others, 1.0);
         assert!(r.snapped_x);
@@ -576,7 +576,7 @@ mod tests {
     fn threshold_is_measured_in_screen_pixels() {
         let mut s = Snapper::new(SnapConfig::default());
         let others = [rect(100.0, 0.0, 50.0, 50.0)];
-        // 4 world units = 4 px at zoom 1 (snaps), 0.4 px at zoom 10 (does not).
+        // 4 个世界单位在 zoom=1 时为 4 px（吸附），在 zoom=10 时为 0.4 px（Wait: 40px! 实际上注释原意是在不同缩放下像素不同）。
         let moving = rect(104.0, 200.0, 20.0, 20.0);
         assert!(s.snap(moving, &others, 1.0).snapped_x);
         assert!(!s.snap(moving, &others, 10.0).snapped_x);
@@ -585,9 +585,9 @@ mod tests {
     #[test]
     fn equal_spacing_produces_a_third_slot() {
         let mut s = Snapper::new(SnapConfig::default());
-        // Two 100 px boxes with a 40 px gap: 0..100 and 140..240.
+        // 两个 100 px 的盒子，间距 40 px：0..100 与 140..240。
         let others = [rect(0.0, 0.0, 100.0, 100.0), rect(140.0, 0.0, 100.0, 100.0)];
-        // The third box is 3 px away from the ideal slot at 280.
+        // 第三个盒子距离理想槽位 280 相差 3 px。
         let moving = rect(283.0, 0.0, 100.0, 100.0);
         let r = s.snap(moving, &others, 1.0);
         assert!((r.offset.x - -3.0).abs() < 1e-4, "{:?}", r.offset);
@@ -601,8 +601,8 @@ mod tests {
             ..SnapConfig::default()
         });
         let others = [rect(0.0, 0.0, 100.0, 100.0), rect(140.0, 0.0, 100.0, 100.0)];
-        // 280 is exactly the spacing slot, but the feature is off, and no edge
-        // is within 5 px.
+        // 280 恰好是等间距槽位，但该功能已关闭，且没有边缘在 5 px 以内。
+        //
         let moving = rect(283.0, 0.0, 100.0, 100.0);
         let r = s.snap(moving, &others, 1.0);
         assert!(!r.snapped_x);
@@ -621,7 +621,7 @@ mod tests {
     #[test]
     fn guides_merge_instead_of_piling_up() {
         let mut s = Snapper::new(SnapConfig::default());
-        // Three rects sharing the same left edge.
+        // 三个共享同一左边缘的矩形。
         let others = [
             rect(100.0, 0.0, 10.0, 10.0),
             rect(100.0, 200.0, 10.0, 10.0),
@@ -635,7 +635,7 @@ mod tests {
             1,
             "same coordinate must collapse to one guide"
         );
-        // The surviving guide spans from the first reference to the dragged box.
+        // 保留下来的参考线从第一个参照矩形延伸到被拖拽的盒子。
         assert!(guides[0].start <= 0.0 && guides[0].end >= 320.0);
     }
 
@@ -661,9 +661,9 @@ mod tests {
         let huge_far = rect(5000.0, 5000.0, 2000.0, 2000.0);
         let small_near = rect(0.0, 0.0, 8.0, 8.0);
         s.snap(rect(0.0, 0.0, 20.0, 20.0), &[small_near, huge_far], 1.0);
-        // 8 px at distance ~14 scores ~64/30 = 2; the 4e6 px frame at distance
-        // ~7000 scores ~4e6/7000 = 570, so the significant object survives the
-        // cap. That is the intended tie-break.
+        // 距离 ~14 的 8 px 图标评分约 64/30 = 2；距离 ~7000 的 4e6 px 画框评分约 4e6/7000 = 570，
+        // 因此显著对象在截断中胜出。这正是期望的优先级决策。
+        //
         assert_eq!(s.retained_candidates(), 1);
     }
 
@@ -674,7 +674,7 @@ mod tests {
         tree.insert(2, rect(400.0, 400.0, 50.0, 50.0), 0);
         let mut s = Snapper::new(SnapConfig::default());
         let viewport = rect(0.0, 0.0, 1000.0, 1000.0);
-        // Drag entity 1 to 2 px away from its own old position.
+        // 将实体 1 拖拽到距离自身旧位置 2 px 处。
         let r = s.snap_against_tree(
             &mut tree,
             rect(102.0, 100.0, 50.0, 50.0),

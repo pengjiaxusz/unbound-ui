@@ -1,44 +1,44 @@
-//! Win32 Frameless Window, Snap Layouts, and DWM Integration for Windows 10 & 11.
+//! 适用于 Windows 10 与 11 的 Win32 无边框窗口、贴靠布局（Snap Layouts）与 DWM 集成。
 //!
-//! Provides:
-//! - Seamless borderless window with `WM_NCCALCSIZE` work area clamping (zero maximized overflow).
-//! - Native `WM_NCHITTEST` subclassing:
-//!   - `HTMAXBUTTON` mapping on the custom maximize button, activating Windows 11 Snap Layouts hover menu.
-//!   - `HTCAPTION` mapping on title bar for OS-driven window dragging and Aero Snap (`Win + Arrows`).
-//!   - `HTLEFT..HTBOTTOMRIGHT` edge resizing.
-//! - DWM window attributes:
-//!   - Windows 11 rounded corners (`DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND`).
-//!   - Immersive Dark Mode synchronization (`DWMWA_USE_IMMERSIVE_DARK_MODE`).
-//!   - Windows 10 drop shadow restoration (`DwmExtendFrameIntoClientArea`).
+//! 提供以下能力：
+//! - 无缝无边框窗口，通过 `WM_NCCALCSIZE` 钳制到显示器工作区（最大化零溢出）。
+//! - 原生 `WM_NCHITTEST` 子类化：
+//!   - 在自定义最大化按钮上映射 `HTMAXBUTTON`，激活 Windows 11 贴靠布局悬停菜单。
+//!   - 在标题栏区域映射 `HTCAPTION`，支持系统级窗口拖拽与 Aero 贴靠（`Win + 方向键`）。
+//!   - 映射 `HTLEFT..HTBOTTOMRIGHT` 实现边缘缩放。
+//! - DWM 窗口属性：
+//!   - Windows 11 圆角窗口（`DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND`）。
+//!   - 沉浸式深色模式同步（`DWMWA_USE_IMMERSIVE_DARK_MODE`）。
+//!   - Windows 10 窗口阴影恢复（`DwmExtendFrameIntoClientArea`）。
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::Arc;
 
 pub use unbound_math::Rect;
 
-/// Atomic metrics for hit-testing the custom title bar and window buttons.
+/// 用于自定义标题栏与窗口按钮命中测试的原子指标。
 #[derive(Debug, Default)]
 pub struct FrameHitMetrics {
-    /// Height of the title bar in logical pixels.
+    /// 标题栏高度（单位：逻辑像素）。
     pub title_bar_height: AtomicI32,
-    /// Maximize button bounding box in logical pixels.
+    /// 最大化按钮包围盒（单位：逻辑像素）。
     pub max_btn_left: AtomicI32,
     pub max_btn_top: AtomicI32,
     pub max_btn_right: AtomicI32,
     pub max_btn_bottom: AtomicI32,
-    /// Minimize button bounding box in logical pixels.
+    /// 最小化按钮包围盒（单位：逻辑像素）。
     pub min_btn_left: AtomicI32,
     pub min_btn_top: AtomicI32,
     pub min_btn_right: AtomicI32,
     pub min_btn_bottom: AtomicI32,
-    /// Close button bounding box in logical pixels.
+    /// 关闭按钮包围盒（单位：逻辑像素）。
     pub close_btn_left: AtomicI32,
     pub close_btn_top: AtomicI32,
     pub close_btn_right: AtomicI32,
     pub close_btn_bottom: AtomicI32,
-    /// DPI scale factor multiplied by 1000 (e.g. 1500 for 1.5x scale).
+    /// DPI 缩放因子乘以 1000（例如 1.5x 缩放对应 1500）。
     pub scale_permille: AtomicU32,
-    /// Whether the custom frame hook is active.
+    /// 自定义边框钩子是否处于激活状态。
     pub active: AtomicBool,
 }
 
@@ -52,25 +52,25 @@ impl FrameHitMetrics {
         }
     }
 
-    /// Update scale factor.
+    /// 更新缩放因子。
     pub fn set_scale_factor(&self, factor: f32) {
         let permille = (factor.clamp(0.25, 5.0) * 1000.0).round() as u32;
         self.scale_permille.store(permille, Ordering::Release);
     }
 
-    /// Read scale factor.
+    /// 读取缩放因子。
     #[must_use]
     pub fn scale_factor(&self) -> f32 {
         self.scale_permille.load(Ordering::Acquire) as f32 / 1000.0
     }
 
-    /// Update title bar height (logical pixels).
+    /// 更新标题栏高度（逻辑像素）。
     pub fn set_title_bar_height(&self, height: f32) {
         self.title_bar_height
             .store(height.round() as i32, Ordering::Release);
     }
 
-    /// Update maximize button rectangle (logical pixels).
+    /// 更新最大化按钮矩形（逻辑像素）。
     pub fn set_maximize_button_rect(&self, rect: Rect) {
         self.max_btn_left
             .store(rect.origin.x.round() as i32, Ordering::Release);
@@ -86,7 +86,7 @@ impl FrameHitMetrics {
         );
     }
 
-    /// Update minimize button rectangle (logical pixels).
+    /// 更新最小化按钮矩形（逻辑像素）。
     pub fn set_minimize_button_rect(&self, rect: Rect) {
         self.min_btn_left
             .store(rect.origin.x.round() as i32, Ordering::Release);
@@ -102,7 +102,7 @@ impl FrameHitMetrics {
         );
     }
 
-    /// Update close button rectangle (logical pixels).
+    /// 更新关闭按钮矩形（逻辑像素）。
     pub fn set_close_button_rect(&self, rect: Rect) {
         self.close_btn_left
             .store(rect.origin.x.round() as i32, Ordering::Release);
@@ -118,7 +118,7 @@ impl FrameHitMetrics {
         );
     }
 
-    /// Test whether a logical point falls inside a rect stored as atomic i32.
+    /// 测试逻辑坐标点是否落入以原子 i32 存储的矩形内。
     fn contains_logical(
         &self,
         x: i32,
@@ -292,7 +292,7 @@ mod win32 {
                     if wparam != 0 {
                         let params = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
                         if IsZoomed(hwnd) != 0 {
-                            // Maximize mode: clamp to monitor work area to eliminate 8px overflow
+                            // 最大化模式：钳制到显示器工作区以消除 8px 溢出
                             let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
                             let mut mi = MONITORINFO {
                                 cbSize: core::mem::size_of::<MONITORINFO>() as DWORD,
@@ -314,13 +314,13 @@ mod win32 {
                                 params.rgrc[0] = mi.rcWork;
                             }
                         }
-                        // Return 0 indicates client area fills the window rectangle completely
+                        // 返回 0 表示客户区完全填满整个窗口矩形
                         return 0;
                     }
                     DefSubclassProc(hwnd, msg, wparam, lparam)
                 }
                 WM_NCHITTEST => {
-                    // Low 16 bits = X, high 16 bits = Y in screen coordinates
+                    // 低 16 位 = X，高 16 位 = Y（屏幕坐标）
                     let screen_x = (lparam & 0xFFFF) as i16 as i32;
                     let screen_y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
                     let mut pt = POINT {
@@ -342,7 +342,7 @@ mod win32 {
                     let is_max = IsZoomed(hwnd) != 0;
                     let border_thickness = if is_max { 0 } else { 8 };
 
-                    // 1. Check window borders for resizing
+                    // 1. 检查用于调整大小的窗口边框
                     if !is_max {
                         let on_left = pt.x < border_thickness;
                         let on_right = pt.x >= client_rect.right - border_thickness;
@@ -375,12 +375,12 @@ mod win32 {
                         }
                     }
 
-                    // Convert client physical points to logical coordinates for button hit tests
+                    // 将客户区物理坐标转换为逻辑坐标，用于按钮命中测试
                     let scale = metrics.scale_factor();
                     let logical_x = (pt.x as f32 / scale).round() as i32;
                     let logical_y = (pt.y as f32 / scale).round() as i32;
 
-                    // 2. Maximize Button -> HTMAXBUTTON (Triggers Win11 Snap Layouts!)
+                    // 2. 最大化按钮 -> HTMAXBUTTON（触发 Win11 贴靠布局！）
                     if metrics.contains_logical(
                         logical_x,
                         logical_y,
@@ -392,7 +392,7 @@ mod win32 {
                         return HTMAXBUTTON;
                     }
 
-                    // 3. Minimize Button
+                    // 3. 最小化按钮
                     if metrics.contains_logical(
                         logical_x,
                         logical_y,
@@ -404,7 +404,7 @@ mod win32 {
                         return HTMINBUTTON;
                     }
 
-                    // 4. Close Button
+                    // 4. 关闭按钮
                     if metrics.contains_logical(
                         logical_x,
                         logical_y,
@@ -416,13 +416,13 @@ mod win32 {
                         return HTCLOSE;
                     }
 
-                    // 5. Title Bar Blank Area -> HTCAPTION (Aero Drag & Snap)
+                    // 5. 标题栏空白区域 -> HTCAPTION（Aero 拖拽与贴靠）
                     let title_height = metrics.title_bar_height.load(Ordering::Acquire);
                     if title_height > 0 && logical_y < title_height {
                         return HTCAPTION;
                     }
 
-                    // 6. Otherwise regular client interaction
+                    // 6. 其余情况交由常规客户区交互处理
                     HTCLIENT
                 }
                 WM_NCDESTROY => {
@@ -435,7 +435,7 @@ mod win32 {
         }
     }
 
-    /// Install the Win32 custom frame subclass and enable DWM attributes.
+    /// 安装 Win32 自定义边框子类化并启用 DWM 属性。
     pub fn install_frame_subclass(hwnd: isize, metrics: Arc<FrameHitMetrics>) -> bool {
         let hwnd_ptr = hwnd as HWND;
         let metrics_raw = Arc::into_raw(metrics);
@@ -454,9 +454,9 @@ mod win32 {
             return false;
         }
 
-        // Apply DWM attributes
+        // 应用 DWM 属性
         unsafe {
-            // Enable Win11 Rounded Corners
+            // 启用 Win11 圆角
             let corner_pref = DWMWCP_ROUND;
             let _ = DwmSetWindowAttribute(
                 hwnd_ptr,
@@ -465,7 +465,7 @@ mod win32 {
                 core::mem::size_of::<DWORD>() as DWORD,
             );
 
-            // Enable Win10 / Win11 Drop Shadow
+            // 启用 Win10 / Win11 窗口阴影
             let margins = MARGINS {
                 cxLeftWidth: 0,
                 cxRightWidth: 0,
@@ -474,7 +474,7 @@ mod win32 {
             };
             let _ = DwmExtendFrameIntoClientArea(hwnd_ptr, &margins);
 
-            // Trigger non-client recalculation
+            // 触发非客户区重新计算
             const SWP_NOSIZE: UINT = 0x0001;
             const SWP_NOMOVE: UINT = 0x0002;
             const SWP_NOZORDER: UINT = 0x0004;
@@ -493,7 +493,7 @@ mod win32 {
         true
     }
 
-    /// Update Immersive Dark Mode on the window title/frame.
+    /// 更新窗口标题栏/边框的沉浸式深色模式。
     pub fn set_dark_mode(hwnd: isize, dark: bool) {
         let hwnd_ptr = hwnd as HWND;
         let use_dark: BOOL = if dark { 1 } else { 0 };
@@ -508,7 +508,7 @@ mod win32 {
     }
 }
 
-/// Install custom frame handling on the given HWND.
+/// 在给定 HWND 上安装自定义边框处理。
 pub fn install_custom_frame(hwnd: isize, metrics: Arc<FrameHitMetrics>) -> bool {
     #[cfg(windows)]
     {
@@ -522,7 +522,7 @@ pub fn install_custom_frame(hwnd: isize, metrics: Arc<FrameHitMetrics>) -> bool 
     }
 }
 
-/// Set DWM dark mode attribute.
+/// 设置 DWM 深色模式属性。
 pub fn set_window_dark_mode(hwnd: isize, dark: bool) {
     #[cfg(windows)]
     {

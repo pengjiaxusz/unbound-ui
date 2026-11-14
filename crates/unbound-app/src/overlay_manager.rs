@@ -1,13 +1,13 @@
-//! Runtime overlay stack & focus-trap manager (`docs` §6.2, S5.2).
+//! 运行时覆盖层栈与焦点陷阱管理器（`docs` §6.2，S5.2）。
 //!
-//! Wraps [`OverlayStack`] and coordinates [`FocusManager`] traps, outside-click
-//! light dismissal, `Escape` dismissal, and focus return to the trigger element.
+//! 封装 [`OverlayStack`]，协调 [`FocusManager`] 焦点陷阱、点击外部轻关闭、
+//! `Escape` 关闭以及将焦点归还至触发元素。
 
 use unbound_input::{FocusCause, FocusManager};
 use unbound_math::Vec2;
 use unbound_widgets::overlay::{OverlayEntry, OverlayStack};
 
-/// Coordinates open overlays, modal focus traps, and focus restoration.
+/// 协调已打开的覆盖层、模态焦点陷阱与焦点恢复。
 #[derive(Debug, Default)]
 pub struct OverlayManager {
     stack: OverlayStack,
@@ -15,31 +15,31 @@ pub struct OverlayManager {
 }
 
 impl OverlayManager {
-    /// Create an empty overlay manager.
+    /// 创建空的覆盖层管理器。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Borrow the underlying [`OverlayStack`].
+    /// 借用底层的 [`OverlayStack`]。
     #[must_use]
     pub fn stack(&self) -> &OverlayStack {
         &self.stack
     }
 
-    /// Mutably borrow the underlying [`OverlayStack`].
+    /// 可变借用底层的 [`OverlayStack`]。
     pub fn stack_mut(&mut self) -> &mut OverlayStack {
         &mut self.stack
     }
 
-    /// Whether any modal overlay is currently trapping focus and locking background scroll.
+    /// 当前是否存在模态覆盖层正在捕获焦点并锁定背景滚动。
     #[must_use]
     pub fn is_modal_active(&self) -> bool {
         self.stack.focus_scope().is_some()
     }
 
-    /// Open an overlay, remembering current focus for later restoration and
-    /// installing a focus trap if the overlay stack now has an active modal scope.
+    /// 打开覆盖层，记录当前焦点以便后续恢复，并在存在活跃模态作用域时安装焦点陷阱。
+    ///
     pub fn open(&mut self, entry: OverlayEntry, focus: &mut FocusManager) -> u64 {
         let node = entry.node;
         let prev = focus.focused();
@@ -51,7 +51,7 @@ impl OverlayManager {
         key
     }
 
-    /// Close a specific overlay by `node`, restoring its trigger focus and updating traps.
+    /// 按 `node` 关闭指定覆盖层，恢复其触发元素焦点并更新陷阱。
     pub fn close(&mut self, node: u64, focus: &mut FocusManager) -> bool {
         if !self.stack.close(node) {
             return false;
@@ -60,22 +60,22 @@ impl OverlayManager {
         true
     }
 
-    /// Handle a primary pointer-down at `point`, dismissing the topmost light-dismissable
-    /// overlay if the click fell outside its bounds.
+    /// 处理 `point` 处的主指针按下事件，若点击落在最顶层可轻关闭覆盖层之外则将其关闭。
+    ///
     pub fn handle_pointer_down(&mut self, point: Vec2, focus: &mut FocusManager) -> Option<u64> {
         let closed = self.stack.close_outside(point)?;
         self.restore_and_sync(closed, focus);
         Some(closed)
     }
 
-    /// Handle `Escape`, dismissing the topmost escapable overlay and restoring focus.
+    /// 处理 `Escape` 键，关闭最顶层可按 Esc 关闭的覆盖层并恢复焦点。
     pub fn handle_escape(&mut self, focus: &mut FocusManager) -> Option<u64> {
         let closed = self.stack.close_on_escape()?;
         self.restore_and_sync(closed, focus);
         Some(closed)
     }
 
-    /// Prune overlays whose anchor no longer exists and update focus traps.
+    /// 清理锚点已不存在的覆盖层并更新焦点陷阱。
     pub fn prune_anchors(
         &mut self,
         valid: impl FnMut(u64) -> bool,
@@ -90,7 +90,7 @@ impl OverlayManager {
         removed
     }
 
-    /// Synchronize [`FocusManager`] trap with the topmost modal in [`OverlayStack`].
+    /// 将 [`FocusManager`] 焦点陷阱与 [`OverlayStack`] 中最顶层模态同步。
     pub fn sync_focus_trap(&self, focus: &mut FocusManager) {
         if let Some(scope) = self.stack.focus_scope() {
             focus.set_trap(scope.iter().copied());

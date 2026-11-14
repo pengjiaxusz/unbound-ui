@@ -1,4 +1,4 @@
-//! Multi-level hierarchical Cascader selector.
+//! 多级联动选择器（Cascader）。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -14,19 +14,19 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_LEVELS: usize = 3;
 
-/// Hierarchical option node for a [`CascaderDesc`].
+/// [`CascaderDesc`] 的层级选项节点。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CascaderOption {
-    /// Option value/id.
+    /// 选项值/ID。
     pub value: String,
-    /// Display label.
+    /// 显示标签。
     pub label: String,
-    /// Nested children.
+    /// 嵌套子选项。
     pub children: Vec<CascaderOption>,
 }
 
 impl CascaderOption {
-    /// Create a leaf option.
+    /// 创建叶子选项。
     #[must_use]
     pub fn leaf(value: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
@@ -36,7 +36,7 @@ impl CascaderOption {
         }
     }
 
-    /// Create a branch option with children.
+    /// 创建带子选项的分支选项。
     #[must_use]
     pub fn branch(
         value: impl Into<String>,
@@ -51,32 +51,32 @@ impl CascaderOption {
     }
 }
 
-/// Interactive state for [`CascaderDesc`].
+/// [`CascaderDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CascaderState {
-    /// Selected value path across hierarchy levels.
+    /// 跨层级选中的值路径。
     pub path: Vec<String>,
-    /// Whether the multi-column popup is open.
+    /// 多列弹出面板是否展开。
     pub open: bool,
 }
 
-/// Descriptor for a [`Cascader`].
+/// [`Cascader`] 描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CascaderDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Root options.
+    /// 根级选项列表。
     pub options: Vec<CascaderOption>,
-    /// Selected path.
+    /// 当前选中路径。
     pub path: Vec<String>,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl CascaderDesc {
-    /// Create a cascader descriptor.
+    /// 创建级联选择器描述符。
     #[must_use]
     pub fn new(rect: Rect, options: Vec<CascaderOption>, path: Vec<String>) -> Self {
         Self {
@@ -89,13 +89,13 @@ impl CascaderDesc {
     }
 }
 
-/// Deterministic sub-node id for a cascader breadcrumb level pill (`0..3`).
+/// 级联选择器面包屑层级胶囊（`0..3`）的确定性子节点 ID。
 #[must_use]
 pub const fn cascader_level_node(node: u64, level: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xA00 + level as u64)
 }
 
-/// Emit a stable-shape cascader (1 trigger + 3 level pills + 1 chevron + 1 focus ring = 6 primitives).
+/// 发射固定形状的级联选择器（1 触发器 + 3 层级胶囊 + 1 箭头 + 1 焦点环 = 6 个图元）。
 #[must_use]
 pub fn emit_cascader(
     node: u64,

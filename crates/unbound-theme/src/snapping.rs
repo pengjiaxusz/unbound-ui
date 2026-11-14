@@ -1,41 +1,41 @@
-//! Static pixel-grid snapping (`docs` §4.4, §10.2).
+//! 静态像素网格吸附（`docs` §4.4、§10.2）。
 //!
-//! A static element must land on the physical pixel grid: at 10 % zoom a
-//! border has to be crisp, and at 6400 % it must not crawl. The rule is the
-//! classic "round to nearest" snap, applied to the *screen* position of the
-//! edge — never to the world position, which would make the grid move with
-//! the camera.
+//! 静态元素必须落在物理像素网格上：在 10% 缩放下边框仍需保持锐利，
+//! 在 6400% 缩放下也不得产生爬行抖动。规则是经典的“四舍五入到最近整数”，
+//! 且仅作用于边缘的*屏幕*位置——绝不作用于世界坐标，否则网格会随相机移动。
 //!
-//! The animation engine bypasses the grid while a spring is running: a
-//! sub-pixel smooth position is what makes a motion look continuous, and the
-//! grid would make it stutter.
+//!
+//!
+//! 弹簧动画运行期间，动画引擎会绕过网格吸附：亚像素级平滑位置
+//! 才能让运动看起来连续，若强行吸附网格则会产生卡顿感。
+//!
 
 use unbound_math::snap_to_pixel;
 
-/// The zoom extremes the acceptance table names.
+/// 验收表规定的缩放极值。
 pub const MIN_ZOOM: f32 = 0.1;
-/// 6400 %.
+/// 6400% 缩放。
 pub const MAX_ZOOM: f32 = 64.0;
 
-/// Snap a screen-space position to the pixel grid.
+/// 将屏幕空间位置吸附到像素网格。
 ///
-/// The value is in *physical* pixels, so the device scale is one by default.
+/// 该值单位为*物理*像素，因此默认设备缩放比为 1。
 #[must_use]
 pub fn snap_screen(value: f32) -> f32 {
     snap_to_pixel(value, 1.0)
 }
 
-/// The screen position of a world-space edge.
+/// 计算世界空间边缘在屏幕上的位置。
 ///
-/// `world` is the edge in world units, `camera` the camera's world position,
-/// `zoom` the canvas zoom and `viewport` the half size of the viewport in
-/// physical pixels.
+/// `world` 为世界单位的边缘坐标，`camera` 为相机世界坐标，
+/// `zoom` 为画布缩放倍率，`viewport` 为物理像素视口半尺寸。
+///
 #[must_use]
 pub fn edge_screen(world: f32, camera: f32, zoom: f32, half_viewport: f32) -> f32 {
     (world - camera) * zoom + half_viewport
 }
 
-/// The snapped screen position of a world-space edge.
+/// 计算世界空间边缘吸附后的屏幕位置。
 #[must_use]
 pub fn edge_screen_snapped(
     world: f32,
@@ -46,35 +46,35 @@ pub fn edge_screen_snapped(
 ) -> f32 {
     let screen = edge_screen(world, camera, zoom, half_viewport);
     if animated {
-        // While a spring runs the position stays sub-pixel: the grid would
-        // make the motion stutter.
+        // 弹簧运动期间位置保持亚像素精度：强制吸附网格会导致运动卡顿。
+        //
         screen
     } else {
         snap_screen(screen)
     }
 }
 
-/// The largest deviation of the snapped edge from the ideal one, in pixels.
+/// 吸附后边缘与理想位置之间的最大偏差（像素）。
 ///
-/// A snapped edge is at most half a pixel away from the ideal position; the
-/// number is what the acceptance table calls the "snapping error".
+/// 吸附边缘与理想位置的距离至多为半个像素；该数值即验收表中的“吸附误差”。
+///
 #[must_use]
 pub fn snap_error(world: f32, camera: f32, zoom: f32, half_viewport: f32) -> f32 {
     let ideal = edge_screen(world, camera, zoom, half_viewport);
     (snap_screen(ideal) - ideal).abs()
 }
 
-/// The largest *change* of the snapped edge when the camera moves by a
-/// sub-pixel amount.
+/// 相机移动亚像素距离时，吸附边缘的最大*变化量*。
 ///
-/// This is the jitter metric: as long as the camera stays inside one pixel,
-/// the snapped edge must not move at all.
+/// 这是抖动指标：只要相机停留在同一像素内，吸附边缘就完全不得移动。
+///
+///
 #[must_use]
 pub fn jitter(world: f32, camera: f32, zoom: f32, half_viewport: f32) -> f32 {
     let base = snap_screen(edge_screen(world, camera, zoom, half_viewport));
     let mut worst = 0.0f32;
-    // A whole pixel of camera movement must not move the edge by more than
-    // one pixel; a sub-pixel movement must not move it at all.
+    // 相机移动整整一个像素时，边缘移动不得超过一像素；亚像素移动时边缘必须纹丝不动。
+    //
     for step in 1..=16 {
         let offset = step as f32 / 16.0;
         let moved = snap_screen(edge_screen(
@@ -92,7 +92,7 @@ pub fn jitter(world: f32, camera: f32, zoom: f32, half_viewport: f32) -> f32 {
 mod tests {
     use super::*;
 
-    /// The zoom range of the acceptance table.
+    /// 验收表规定的缩放范围。
     const ZOOMS: [f32; 6] = [0.1, 0.5, 1.0, 2.0, 8.0, 64.0];
 
     #[test]
@@ -113,9 +113,9 @@ mod tests {
     fn a_sub_pixel_camera_move_does_not_jitter_a_static_edge() {
         for zoom in ZOOMS {
             let jitter = jitter(123.0, 0.0, zoom, 256.0);
-            // The camera moved by up to one pixel; the snapped edge may move
-            // by one pixel when the grid boundary is crossed, but it must
-            // never move by a fraction of a pixel.
+            // 相机最多移动一像素；跨过网格边界时吸附边缘可移动一像素，
+            // 但绝不可移动不足一像素的小数距离。
+            //
             assert!(
                 jitter <= 1.0,
                 "zoom {zoom}: the edge jittered by {jitter} px"
@@ -153,8 +153,8 @@ mod tests {
     fn the_zoom_extremes_of_the_acceptance_table_are_covered() {
         assert_eq!(MIN_ZOOM, 0.1);
         assert_eq!(MAX_ZOOM * 100.0, 6400.0);
-        // At 6400 % a one-pixel camera move is 1/64 of a world unit, and the
-        // content moves the other way.
+        // 在 6400% 缩放下，相机移动一像素相当于 1/64 个世界单位，内容向反方向移动。
+        //
         let a = edge_screen(0.0, 0.0, MAX_ZOOM, 256.0);
         let b = edge_screen(0.0, 1.0 / MAX_ZOOM, MAX_ZOOM, 256.0);
         assert!((a - b - 1.0).abs() < 1e-4);

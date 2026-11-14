@@ -1,51 +1,45 @@
-//! Two-Level Segregated Fit (TLSF) allocator over a single contiguous arena.
+//! 基于单一连续内存区的两级隔离适配（TLSF）分配器。
 //!
-//! `docs` §2.2 requires the persistent pool to be a self-managed large
-//! `VkBuffer` carved with TLSF so that:
+//! `docs/architecture/gpu-renderer.md` 要求持久化池采用自管理的超大 `VkBuffer` 并由 TLSF 切分，从而实现：
 //!
-//! * allocation and free are **O(1)** (two bitmap probes + one list pop),
-//! * there is **zero per-frame allocation** — the free lists live in fixed
-//!   arrays, not in a heap structure,
-//! * freed blocks coalesce immediately, keeping fragmentation bounded for the
-//!   insert/remove churn of an editor session.
+//! * **O(1)** 分配与释放（两次位图探测 + 一次链表弹出）；
+//! * **每帧零堆分配**——空闲链表存放在固定大小数组中，不依赖动态堆结构；
+//! * 释放块立即合并，在编辑器会话的频繁增删下将碎片率控制在有界范围内。
 //!
-//! The implementation is 100% safe Rust: the arena is a `Vec<u128>` (guaranteed
-//! 16-byte alignment) reinterpreted as bytes with `bytemuck`, and blocks are
-//! addressed by `u32` byte offsets. Nothing here aliases.
+//! 全模块采用 100% 安全 Rust 实现：内存区底层为 `Vec<u128>`（保证 16 字节对齐），
+//! 通过 `bytemuck` 按字节视图访问，块之间以 `u32` 字节偏移寻址，无任何别名风险。
 
 use bytemuck::{Pod, Zeroable};
 
-/// Minimum block size: 64B header + 64B payload.
+/// 最小块大小：64B 头部 + 64B 载荷。
 ///
-/// A 64-byte header (instead of the usual 16/32) buys a property the renderer
-/// relies on: **every payload offset is a multiple of 64**, i.e. every
-/// allocation is at least `GpuPrimitiveInstance`-aligned without any per-alloc
-/// fix-up. The 32 bytes of padding are pure waste on a 4 GiB pool (~0.5% for
-/// 64B allocations) and are more than paid back by removing an alignment
-/// branch from the hot path.
+/// 采用 64 字节头部（而非通常的 16/32 字节）为渲染器换来关键特性：**每个载荷偏移
+/// 都是 64 的倍数**，即每次分配天然满足 `GpuPrimitiveInstance` 对齐要求，
+/// 无需每次分配后再修正。多出的 32 字节填充在 4 GiB 池中占比极低（64B 分配约 0.5%），
+/// 而从热路径中消去对齐分支的收益远超这点开销。
 pub const MIN_BLOCK: u32 = 128;
 
-/// Second-level subdivision bits: 16 buckets per first level.
+/// 二级细分位数：每个一级桶下设 16 个二级桶。
 const SL_SHIFT: u32 = 4;
 const SL_COUNT: usize = 1 << SL_SHIFT;
-/// First level covers `size < 2^32`, so 32 buckets are enough.
+/// 一级桶覆盖 `size < 2^32`，因此 32 个桶已足够。
 const FL_COUNT: usize = 32;
 
 const NONE: u32 = u32::MAX;
 
-/// 64-byte block header, stored inline at the start of every block.
+/// 64 字节块头部，内联存储在每个块的起始位置。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Pod, Zeroable)]
 struct BlockHeader {
-    /// Total block size **including** this header.
+    /// 块总大小（**包含**本头部）。
     size: u32,
-    /// Size of the physically previous block (0 for the first block).
+    /// 物理相邻前一块的大小（首块为 0）。
     prev_size: u32,
-    /// Next block in the same free list.
+    /// 同一空闲链表中的下一块偏移。
     next_free: u32,
-    /// Previous block in the same free list.
+    /// 同一空闲链表中的前一块偏移。
     prev_free: u32,
-    /// 1 when free.
+    /// 空闲时为 1。
     flags: u32,
     _pad: [u32; 11],
 }
@@ -53,14 +47,14 @@ struct BlockHeader {
 const HEADER_SIZE: u32 = 64;
 const FLAG_FREE: u32 = 1;
 
-/// Why an allocation failed.
+/// 分配失败原因。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AllocError {
-    /// No free block large enough after searching every bucket.
+    /// 遍历所有桶后仍未找到足够大的空闲块。
     OutOfMemory { request: u32, largest_free: u32 },
-    /// Request exceeds the arena capacity.
+    /// 请求大小超出内存区总容量。
     TooLarge { request: u32, capacity: u32 },
-    /// Alignment is not a power of two.
+    /// 请求的对齐值不是 2 的幂。
     InvalidAlignment(usize),
 }
 
@@ -87,8 +81,7 @@ impl core::fmt::Display for AllocError {
 
 impl std::error::Error for AllocError {}
 
-/// A snapshot of allocator health, surfaced in the debug overlay and asserted
-/// by CI (fragmentation must not creep during steady-state editing).
+/// 分配器健康快照，在调试覆盖层展示并由 CI 断言（稳态编辑下碎片率不得持续攀升）。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct TlsfStats {
     pub capacity: u32,
@@ -102,7 +95,7 @@ pub struct TlsfStats {
 }
 
 impl TlsfStats {
-    /// `1 - largest_free / total_free`. 0 means perfectly coalesced.
+    /// `1 - largest_free / total_free`。0 表示完全合并无碎片。
     #[must_use]
     pub fn fragmentation(&self) -> f32 {
         if self.free == 0 {
@@ -122,7 +115,7 @@ impl TlsfStats {
     }
 }
 
-/// Free-list index tables. 32 × 16 buckets ≡ 512 `u32` heads, 2 KiB total.
+/// 空闲链表索引表。32 × 16 个桶共 512 个 `u32` 表头，总计 2 KiB。
 struct FreeLists {
     fl_bitmap: u32,
     sl_bitmap: [u32; FL_COUNT],
@@ -145,7 +138,7 @@ impl FreeLists {
     }
 }
 
-/// Map a block size to `(first_level, second_level)`.
+/// 将块大小映射到 `(first_level, second_level)`。
 #[inline]
 fn mapping(size: u32) -> (usize, usize) {
     let size = size.max(MIN_BLOCK);
@@ -183,8 +176,7 @@ fn patch_header(arena: &mut [u8], off: u32, f: impl FnOnce(&mut BlockHeader)) {
 }
 
 // ---------------------------------------------------------------------------
-// Free-list primitives (free functions so the borrow checker sees disjoint
-// field borrows of `Tlsf`).
+// 空闲链表基础操作（定义为独立函数以便借用检查器识别 `Tlsf` 的不相交字段借用）。
 // ---------------------------------------------------------------------------
 
 fn list_insert(arena: &mut [u8], lists: &mut FreeLists, off: u32) {
@@ -227,12 +219,10 @@ fn list_remove(arena: &mut [u8], lists: &mut FreeLists, off: u32) {
     }
 }
 
-/// The smallest size a block in `(fl, sl)` can have.
+/// 桶 `(fl, sl)` 中块可拥有的最小尺寸。
 ///
-/// A bucket guarantees a *lower* bound and nothing more: the blocks in it
-/// range from the lower bound up to (but excluding) the next bucket's lower
-/// bound. So the bucket a request falls into may still hold blocks that are
-/// smaller than the request.
+/// 桶仅保证**下界**：其中块的尺寸范围从该下界到下一桶下界（不含）。
+/// 因此请求所落入的桶中仍可能存在小于请求大小的块。
 fn bucket_lower_bound(fl: usize, sl: usize) -> u32 {
     if fl < SL_SHIFT as usize {
         return sl as u32;
@@ -241,11 +231,10 @@ fn bucket_lower_bound(fl: usize, sl: usize) -> u32 {
     (1u32 << fl as u32) + ((sl as u32) << shift)
 }
 
-/// The first block in a free list that is at least `size` bytes big.
+/// 在空闲链表中查找首个大小不少于 `size` 字节的块。
 ///
-/// A free list is a plain intrusive doubly-linked list, so this is a walk.
-/// It is only ever called on the request's *own* bucket, whose blocks are all
-/// within a narrow size range, and it stops at the first block that fits.
+/// 空闲链表为嵌入式双向链表，需顺序遍历。本函数仅在请求自身的桶上调用，
+/// 该桶内块尺寸区间很窄，且遇到首个满足大小的块即停止。
 fn first_block_at_least(arena: &[u8], head: u32, size: u32) -> Option<u32> {
     let mut off = head;
     while off != NONE {
@@ -260,16 +249,13 @@ fn first_block_at_least(arena: &[u8], head: u32, size: u32) -> Option<u32> {
 
 fn list_find(arena: &[u8], lists: &FreeLists, size: u32) -> Option<u32> {
     let (fl, sl) = mapping(size);
-    // The request's own bucket is the only one that can hold a block that is
-    // *smaller* than the request: a bucket guarantees a lower bound, and the
-    // request's bucket's lower bound is below the request.
+    // 请求自身所在的桶是唯一可能包含小于请求大小的块的桶：桶只保证下界，
+    // 而该桶下界低于请求大小。
     //
-    // Handing out such a block would make `split_block` compute
-    // `block.size - want` on an unsigned integer. The subtraction wraps
-    // around, and the "remainder" is written as a block header far outside
-    // the arena — a silent heap corruption.
+    // 若直接分出过小的块，`split_block` 会对无符号整数计算 `block.size - want`，
+    // 减法下溢回绕后会将“剩余块”头部写到内存区之外——造成静默堆损坏。
     //
-    // So the bucket is searched for a block that actually fits.
+    // 因此必须在该桶内查找真正满足尺寸的块。
     debug_assert!(
         bucket_lower_bound(fl, sl) <= size,
         "the request must not be below its bucket's lower bound"
@@ -277,19 +263,17 @@ fn list_find(arena: &[u8], lists: &FreeLists, size: u32) -> Option<u32> {
     if let Some(off) = first_block_at_least(arena, lists.heads[fl][sl], size) {
         return Some(off);
     }
-    // Every block in a *higher* bucket is at least that bucket's lower
-    // bound, and the buckets above the request's own start above the
-    // request. Their blocks therefore always fit.
+    // 更高桶中的每个块都至少达到该桶下界，且高于请求所在桶的起始下界必大于请求，
+    // 因此其中的块恒满足需求。
     //
-    // Same first level: look for a bucket at or above `sl + 1`.
+    // 同一一级桶内：查找 `sl + 1` 及以上的二级桶。
     let sl_map = lists.sl_bitmap[fl] & (!0u32 << (sl + 1));
     if sl_map != 0 {
         let bucket = sl_map.trailing_zeros() as usize;
         let off = lists.heads[fl][bucket];
         return (off != NONE).then_some(off);
     }
-    // Otherwise round up to the next non-empty first level. Its lowest
-    // bucket starts at `1 << (fl + 1)`, which is above the request.
+    // 否则向上查找下一个非空一级桶。其最低二级桶起始于 `1 << (fl + 1)`，必大于请求。
     if fl + 1 >= FL_COUNT {
         return None;
     }
@@ -325,15 +309,13 @@ fn largest_free(arena: &[u8], lists: &FreeLists) -> u32 {
     }
 }
 
-/// Split `off` so that it holds a block of exactly `want` bytes, returning the
-/// remainder as a free block.
+/// 将 `off` 分割出精确 `want` 字节的块，并将剩余部分作为空闲块返回。
 fn split_block(arena: &mut [u8], lists: &mut FreeLists, off: u32, want: u32) {
     let h = read_header(arena, off);
     debug_assert!(h.size >= want);
     let rest = h.size - want;
     if rest < MIN_BLOCK {
-        // Not worth splitting: hand the whole block to the caller. Internal
-        // fragmentation is bounded by MIN_BLOCK.
+        // 剩余空间不足 MIN_BLOCK 不值得分割：整块交给调用方，内部碎片受 MIN_BLOCK 上界约束。
         return;
     }
     let rest_off = off + want;
@@ -350,7 +332,7 @@ fn split_block(arena: &mut [u8], lists: &mut FreeLists, off: u32, want: u32) {
             _pad: [0; 11],
         },
     );
-    // The physically next block after the split must learn the new prev_size.
+    // 分割后物理相邻的下一块必须更新其 prev_size。
     let after = rest_off + rest;
     if (after as usize) < arena.len() {
         patch_header(arena, after, |b| b.prev_size = rest);
@@ -359,12 +341,12 @@ fn split_block(arena: &mut [u8], lists: &mut FreeLists, off: u32, want: u32) {
 }
 
 // ---------------------------------------------------------------------------
-// The allocator
+// 分配器主体
 // ---------------------------------------------------------------------------
 
-/// TLSF allocator over a single contiguous arena.
+/// 基于单一连续内存区的 TLSF 分配器。
 pub struct Tlsf {
-    /// Backing storage. `u128` so the base pointer is 16-byte aligned.
+    /// 底层存储。采用 `u128` 以确保基指针 16 字节对齐。
     storage: Vec<u128>,
     len: u32,
     lists: FreeLists,
@@ -381,10 +363,10 @@ impl core::fmt::Debug for Tlsf {
 }
 
 impl Tlsf {
-    /// Create an allocator over `capacity` bytes (rounded up to 16).
+    /// 基于 `capacity` 字节（向上取整到 16 的倍数）创建分配器。
     ///
     /// # Panics
-    /// Panics if `capacity` is smaller than [`MIN_BLOCK`] or does not fit `u32`.
+    /// 当 `capacity` 小于 [`MIN_BLOCK`] 或超出 `u32` 表示范围时触发 panic。
     #[must_use]
     pub fn new(capacity: usize) -> Self {
         assert!(capacity >= MIN_BLOCK as usize, "arena too small");
@@ -434,7 +416,7 @@ impl Tlsf {
         self.len
     }
 
-    /// Recompute and return allocator statistics (walks the block chain).
+    /// 遍历块链重新计算并返回分配器统计信息。
     #[must_use]
     pub fn stats(&mut self) -> TlsfStats {
         self.refresh_stats();
@@ -475,21 +457,20 @@ impl Tlsf {
         self.stats.largest_free = largest;
     }
 
-    /// Allocate `size` bytes with the arena's natural 16-byte alignment.
+    /// 按内存区自然的 16 字节对齐分配 `size` 字节。
     ///
     /// # Errors
-    /// Returns [`AllocError`] when the request cannot be satisfied.
+    /// 无法满足分配请求时返回 [`AllocError`]。
     pub fn allocate(&mut self, size: u32) -> Result<u32, AllocError> {
         self.allocate_aligned(size, 16)
     }
 
-    /// Allocate `size` bytes aligned to `align` (power of two).
+    /// 按 `align`（须为 2 的幂）对齐分配 `size` 字节。
     ///
-    /// Returns the offset of the payload, guaranteed to satisfy
-    /// `offset % align == 0` with at least `size` usable bytes.
+    /// 返回载荷偏移量，保证满足 `offset % align == 0` 且至少有 `size` 字节可用。
     ///
     /// # Errors
-    /// Returns [`AllocError`] when the request cannot be satisfied.
+    /// 无法满足分配请求时返回 [`AllocError`]。
     pub fn allocate_aligned(&mut self, size: u32, align: usize) -> Result<u32, AllocError> {
         if !align.is_power_of_two() {
             self.stats.failed_allocations += 1;
@@ -503,8 +484,7 @@ impl Tlsf {
             });
         }
         let len = self.len;
-        // Header + payload rounded to the 16B granule, plus slack so an
-        // over-aligned payload always has room to be nudged forward.
+        // 头部与载荷按 16B 粒度向上取整，并预留余量以确保超对齐载荷总有空间前移对齐。
         let align32 = align as u32;
         let slack = if align32 > HEADER_SIZE { align32 } else { 0 };
         let total =
@@ -522,9 +502,8 @@ impl Tlsf {
                 }),
                 Some(block) => {
                     list_remove(arena, lists, block);
-                    // The block is live now: clearing FLAG_FREE is essential,
-                    // otherwise the next neighbour free() would try to unlink a
-                    // block that is not in any free list.
+                    // 该块现已处于活跃状态：必须清除 FLAG_FREE，否则相邻块在 free() 时
+                    // 会试图从空闲链表中摘除一个并不在链表中的块。
                     patch_header(arena, block, |b| b.flags &= !FLAG_FREE);
                     split_block(arena, lists, block, total);
 
@@ -532,13 +511,11 @@ impl Tlsf {
                     let mut payload = block + HEADER_SIZE;
 
                     if align32 > HEADER_SIZE {
-                        // We must align the *payload*, not the block: the
-                        // payload sits HEADER_SIZE bytes into the block, so the
-                        // leading block has to absorb that bias.
+                        // 必须对齐的是*载荷*而非块本身：载荷位于块内 HEADER_SIZE 字节之后，
+                        // 因此前置空闲块必须吸收这段偏移差。
                         let aligned = align_up(payload, align32);
                         let lead = aligned - HEADER_SIZE - block;
-                        // Only carve a leading free block when both sides stay
-                        // at least MIN_BLOCK wide.
+                        // 仅当两侧均至少保留 MIN_BLOCK 宽度时才切分出前置空闲块。
                         if lead >= MIN_BLOCK && cur_size > lead + MIN_BLOCK {
                             patch_header(arena, block, |b| b.size = lead);
                             let new_block = block + lead;
@@ -564,8 +541,7 @@ impl Tlsf {
                         }
                     }
 
-                    // Zero the handed-out region: a GPU buffer holding a
-                    // previous node's bytes is the worst class of heisenbug.
+                    // 将分出的区域清零：GPU 缓冲区残留旧节点字节是最难排查的随机故障源。
                     let start = payload as usize;
                     let end = (start + size as usize).min(arena.len());
                     arena[start..end].fill(0);
@@ -586,10 +562,10 @@ impl Tlsf {
         }
     }
 
-    /// Free a previously allocated payload offset.
+    /// 释放先前分配的载荷偏移。
     ///
-    /// Double frees are detected in debug builds and rejected (`false`) in
-    /// release builds, so a corrupt guest cannot abort the host.
+    /// 在调试构建中检测重复释放，在发布构建中安全拒绝并返回 `false`，
+    /// 防止异常调用方导致宿主崩溃。
     pub fn deallocate(&mut self, payload: u32) -> bool {
         if payload < HEADER_SIZE || payload as usize >= self.len as usize {
             debug_assert!(false, "deallocate with out-of-range offset {payload}");
@@ -607,12 +583,12 @@ impl Tlsf {
             return false;
         }
 
-        // Mark free before merging so `list_insert` sees a consistent header.
+        // 合并前先标记为空闲，确保 `list_insert` 看到一致的头部状态。
         patch_header(arena, block, |b| b.flags |= FLAG_FREE);
         let mut cur = block;
         let mut cur_size = h.size;
 
-        // Merge with the physically previous block.
+        // 与物理相邻的前一块合并。
         if h.prev_size != 0 {
             let prev = block - h.prev_size;
             let ph = read_header(arena, prev);
@@ -624,7 +600,7 @@ impl Tlsf {
             }
         }
 
-        // Merge with the physically next block.
+        // 与物理相邻的后一块合并。
         let next = cur + cur_size;
         if (next as usize) + HEADER_SIZE as usize <= arena.len() {
             let nh = read_header(arena, next);
@@ -635,7 +611,7 @@ impl Tlsf {
             }
         }
 
-        // The block after the merged region must learn the new prev_size.
+        // 合并区域之后的下一块必须更新其 prev_size。
         let after = cur + cur_size;
         if (after as usize) < arena.len() {
             patch_header(arena, after, |b| b.prev_size = cur_size);
@@ -645,7 +621,7 @@ impl Tlsf {
         true
     }
 
-    /// Payload capacity of an allocation (may exceed the requested size).
+    /// 返回一次分配的实际载荷容量（可能大于请求大小）。
     #[must_use]
     pub fn usable_size(&self, payload: u32) -> u32 {
         if payload < HEADER_SIZE || payload as usize >= self.len as usize {
@@ -656,7 +632,7 @@ impl Tlsf {
         h.size.saturating_sub(HEADER_SIZE)
     }
 
-    /// Debug helper: every block as `(offset, size, is_free)`.
+    /// 调试辅助方法：以 `(offset, size, is_free)` 形式返回所有块。
     #[must_use]
     pub fn blocks(&self) -> Vec<(u32, u32, bool)> {
         let arena = self.bytes();
@@ -673,7 +649,7 @@ impl Tlsf {
         out
     }
 
-    /// Wipe the arena back to a single free block (device-lost re-inflation).
+    /// 将整个内存区重置为单个空闲块（用于设备丢失重建）。
     pub fn reset(&mut self) {
         let len = self.len;
         let successful = self.stats.successful_allocations;
@@ -795,10 +771,10 @@ mod tests {
                 assert!(t.deallocate(*p));
             }
         }
-        // Integrity: the block chain must still cover the whole arena exactly.
+        // 完整性校验：块链必须仍精确覆盖整个内存区。
         let total: u32 = t.blocks().iter().map(|b| b.1).sum();
         assert_eq!(total, 1 << 20, "block chain must tile the arena");
-        // The freed holes must be reusable.
+        // 已释放的空洞必须可被复用。
         let mut reused = 0;
         for _ in 0..10 {
             if t.allocate(64).is_ok() {
@@ -812,7 +788,7 @@ mod tests {
     #[test]
     fn alignment_is_respected_for_large_alignments() {
         let mut t = Tlsf::new(64 * 1024);
-        // Force a misaligned payload first so the aligned allocator has work.
+        // 先制造一个未对齐载荷，确保后续对齐分配器需要执行对齐调整。
         let _pad = t.allocate(40).unwrap();
         for align in [32usize, 64, 256, 4096] {
             let p = t.allocate_aligned(256, align).unwrap();
@@ -933,59 +909,49 @@ mod tests {
         }
     }
 
-    /// A request that is bigger than every free hole must fail — it must
-    /// never be served from a hole that is too small.
+    /// 大于所有现有空闲空洞的请求必须失败——绝不能从过小的空洞中分配。
     ///
-    /// The bug this guards against is brutal: the allocator used to find a
-    /// free block by its *bucket*, and the bucket only guarantees a lower
-    /// bound. Handing out a block that was smaller than the request made
-    /// `split_block` subtract `want` from `block.size` on an unsigned
-    /// integer; the difference wrapped around to four billion, and the
-    /// "remainder" was written as a block header far outside the arena.
+    /// 本测试防护的 bug 极为严重：过去分配器按*桶*查找空闲块，而桶仅保证下界。
+    /// 分出小于请求的块会导致 `split_block` 用无符号整数计算 `block.size - want`，
+    /// 差值回绕到四十亿并将“剩余块”头部写入内存区之外。
     #[test]
     fn a_request_bigger_than_the_free_hole_is_refused() {
-        // An arena that holds exactly three blocks: filling it leaves the
-        // hole as the *only* candidate, so the request cannot fall back to a
-        // bigger block somewhere else.
+        // 构造恰好容纳三个块的内存区：填满后释放中间块，使其成为*唯一*候选空洞，
+        // 从而防止请求回退到其他更大的块。
         let block = 16384u32;
         let total = (block as usize + 64).next_multiple_of(64) as u32;
         let mut t = Tlsf::new(3 * total as usize);
         let a = t.allocate(block).expect("first block");
         let b = t.allocate(block).expect("second block");
         let c = t.allocate(block).expect("third block");
-        // Free the middle one: a hole of exactly `total` bytes.
+        // 释放中间块：形成精确 `total` 字节的空洞。
         assert!(t.deallocate(b));
 
-        // One notch more than the hole can offer.
+        // 请求比该空洞多一个单位的大小。
         let result = t.allocate(block + 80);
         assert!(
             result.is_err(),
             "a request that does not fit must fail, not overflow the hole: {result:?}"
         );
 
-        // The arena is still intact: the hole is usable again, and the two
-        // live blocks were not touched.
+        // 内存区保持完好：空洞仍可复用，两个存活块未受影响。
         assert_eq!(t.allocate(block).expect("the hole is still free"), b);
         assert!(t.deallocate(a));
         assert!(t.deallocate(c));
     }
 
-    /// The bucket a request falls into may hold blocks that are too small
-    /// for it. The search has to look at the size of the block, not just at
-    /// its bucket.
+    /// 请求落入的桶中可能包含尺寸过小的块，查找时必须检查块实际大小而非仅看桶索引。
     #[test]
     fn a_bucket_never_serves_a_request_it_cannot_hold() {
-        // Every block in a bucket is at least the bucket's lower bound — but
-        // that bound may be *below* the request, which is exactly why the
-        // search checks the size of the block it hands out.
+        // 桶内每个块至少满足桶下界，但该下界可能*低于*请求大小，
+        // 这正是查找逻辑必须校验块实际尺寸的原因。
         for size in [MIN_BLOCK, 1024, 16384, 65536, 1 << 20] {
             let (fl, sl) = mapping(size);
             assert!(
                 bucket_lower_bound(fl, sl) <= size,
                 "the request {size} must not be below its bucket's lower bound"
             );
-            // The next bucket starts strictly above the request, so every
-            // block in it fits.
+            // 下一个桶的下界严格高于请求大小，因此其中的每个块都必然满足要求。
             let (next_fl, next_sl) = if sl + 1 < SL_COUNT {
                 (fl, sl + 1)
             } else {

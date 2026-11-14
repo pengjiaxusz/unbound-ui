@@ -1,9 +1,9 @@
-//! The slider: a track, a filled part and a thumb.
+//! 滑块控件：轨道、已填充部分与滑块拇指。
 //!
-//! The slider is the only control with a *continuous* value, so it is also
-//! the only one that needs a mapping from a pointer position to a number.
-//! That mapping lives in [`value_from_pointer`] and nowhere else: the
-//! application asks for a value, the control paints one.
+//! 滑块是唯一具有*连续*值的控件，因此也是唯一需要将指针位置映射为数值的控件。
+//! 该映射仅存在于 [`value_from_pointer`]：应用请求数值，控件负责绘制。
+//!
+//!
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -16,23 +16,23 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// The default track height.
+/// 默认轨道高度。
 pub const SLIDER_TRACK: f32 = 4.0;
 
-/// The default thumb size.
+/// 默认滑块拇指尺寸。
 pub const SLIDER_THUMB: f32 = 16.0;
 
-/// The direction a slider runs in.
+/// 滑块的运行方向。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Orientation {
-    /// The track runs left to right.
+    /// 轨道从左到右。
     #[default]
     Horizontal,
-    /// The track runs bottom to top.
+    /// 轨道从下到上。
     Vertical,
 }
 
-/// A key the slider understands.
+/// 滑块可识别的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SliderKey {
     Left,
@@ -45,44 +45,42 @@ pub enum SliderKey {
     End,
 }
 
-/// The colour slots a slider paints with.
+/// 滑块绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SliderTokens {
-    /// The track behind the thumb.
+    /// 滑块背后的轨道。
     pub track: Token,
-    /// The filled part of the track.
+    /// 轨道的已填充部分。
     pub fill: Token,
-    /// The filled part while the pointer is over the slider.
+    /// 指针悬停在滑块上时的已填充部分。
     ///
-    /// A slider has to answer the pointer before it is grabbed, otherwise the
-    /// track looks inert until the drag starts. The state only changes which
-    /// colour slot the fill resolves to, so the hover is one patched
-    /// primitive, not a new one.
+    /// 滑块必须在被抓取前就响应指针，否则在开始拖拽前轨道看起来毫无反应。
+    /// 状态仅改变填充解析到的颜色槽位，因此悬停只是修补单个图元，而非新建图元。
     pub fill_hover: Token,
-    /// The filled part while the slider is being dragged.
+    /// 拖拽滑块时的已填充部分。
     pub fill_pressed: Token,
-    /// The thumb.
+    /// 滑块拇指。
     pub thumb: Token,
-    /// The border of the thumb.
+    /// 滑块拇指边框。
     pub thumb_border: Token,
-    /// The track of a disabled slider.
+    /// 禁用滑块的轨道。
     pub track_disabled: Token,
-    /// The filled part of a disabled slider.
+    /// 禁用滑块的已填充部分。
     pub fill_disabled: Token,
-    /// The thumb of a disabled slider.
+    /// 禁用滑块的拇指。
     pub thumb_disabled: Token,
-    /// The border of a disabled thumb.
+    /// 禁用拇指的边框。
     pub thumb_border_disabled: Token,
-    /// The label.
+    /// 标签。
     pub label: Token,
-    /// The label of a disabled slider.
+    /// 禁用滑块的标签。
     pub label_disabled: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环。
     pub focus_ring: Token,
 }
 
 impl SliderTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -103,39 +101,39 @@ impl SliderTokens {
     }
 }
 
-/// The pure data descriptor of a slider.
+/// 滑块的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SliderDesc {
-    /// The row the slider occupies.
+    /// 滑块占用的行矩形。
     pub rect: Rect,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The current value.
+    /// 当前数值。
     pub value: f32,
-    /// The lowest value.
+    /// 最小值。
     pub min: f32,
-    /// The highest value.
+    /// 最大值。
     pub max: f32,
-    /// The step size; zero means continuous.
+    /// 步长；0 表示连续滑动。
     pub step: f32,
-    /// The track height (the track width when vertical).
+    /// 轨道高度（垂直模式下为轨道宽度）。
     pub track_height: f32,
-    /// The thumb size.
+    /// 滑块拇指尺寸。
     pub thumb_size: f32,
-    /// Whether the track runs horizontally or vertically.
+    /// 轨道是水平还是垂直排列。
     pub orientation: Orientation,
-    /// The low end of a dual-thumb range, if any.
+    /// 双滑块区间的下限值（若有）。
     pub range_start: Option<f32>,
-    /// Whether the track paints a tick at every step.
+    /// 是否在每个步进位置绘制刻度。
     pub show_ticks: bool,
-    /// Whether the value tooltip follows the thumb.
+    /// 数值提示气泡是否跟随拇指。
     pub show_value_tooltip: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl SliderDesc {
-    /// A slider with the default metrics.
+    /// 使用默认尺寸创建的滑块。
     #[must_use]
     pub fn new(rect: Rect, label: impl Into<String>, value: f32, min: f32, max: f32) -> Self {
         Self {
@@ -155,42 +153,42 @@ impl SliderDesc {
         }
     }
 
-    /// The same slider with a step size.
+    /// 设置步长。
     #[must_use]
     pub fn with_step(mut self, step: f32) -> Self {
         self.step = step;
         self
     }
 
-    /// The same slider running in `orientation`.
+    /// 设置排列方向。
     #[must_use]
     pub fn with_orientation(mut self, orientation: Orientation) -> Self {
         self.orientation = orientation;
         self
     }
 
-    /// The same slider with a second, lower thumb.
+    /// 添加第二个下限滑块拇指。
     #[must_use]
     pub fn with_range_start(mut self, range_start: f32) -> Self {
         self.range_start = Some(range_start);
         self
     }
 
-    /// The same slider painting a tick at every step.
+    /// 在每个步进位置绘制刻度。
     #[must_use]
     pub fn with_ticks(mut self, show_ticks: bool) -> Self {
         self.show_ticks = show_ticks;
         self
     }
 
-    /// The same slider with a value tooltip.
+    /// 启用数值提示气泡。
     #[must_use]
     pub fn with_value_tooltip(mut self, show_value_tooltip: bool) -> Self {
         self.show_value_tooltip = show_value_tooltip;
         self
     }
 
-    /// A value normalised to `[0, 1]`.
+    /// 将数值归一化到 `[0, 1]`。
     #[must_use]
     pub fn ratio_of(&self, value: f32) -> f32 {
         let span = self.max - self.min;
@@ -201,20 +199,20 @@ impl SliderDesc {
         }
     }
 
-    /// The current value normalised to `[0, 1]`.
+    /// 归一化到 `[0, 1]` 的当前值。
     #[must_use]
     pub fn ratio(&self) -> f32 {
         self.ratio_of(self.value)
     }
 
-    /// The low end of the dual-thumb range, clamped to `[min, value]`.
+    /// 双滑块区间的下限值，夹紧至 `[min, value]`。
     #[must_use]
     pub fn range_start_ratio(&self) -> Option<f32> {
         self.range_start
             .map(|start| self.ratio_of(start.min(self.value)))
     }
 
-    /// The track rectangle, centred in the row.
+    /// 在行内居中的轨道矩形。
     #[must_use]
     pub fn track_rect(&self) -> Rect {
         match self.orientation {
@@ -233,10 +231,9 @@ impl SliderDesc {
         }
     }
 
-    /// The filled part of the track.
+    /// 轨道的已填充部分矩形。
     ///
-    /// With a range start the fill spans both thumbs; otherwise it runs from
-    /// the track's origin to the value.
+    /// 存在区间起点时填充跨越两个拇指；否则从轨道起点延伸到当前值。
     #[must_use]
     pub fn fill_rect(&self) -> Rect {
         let track = self.track_rect();
@@ -260,7 +257,7 @@ impl SliderDesc {
         }
     }
 
-    /// The rectangle of the thumb at `ratio`.
+    /// 在 `ratio` 比例位置处的拇指矩形。
     #[must_use]
     pub fn thumb_rect_at(&self, ratio: f32) -> Rect {
         let track = self.track_rect();
@@ -281,23 +278,22 @@ impl SliderDesc {
         }
     }
 
-    /// The thumb rectangle.
+    /// 当前拇指矩形。
     #[must_use]
     pub fn thumb_rect(&self) -> Rect {
         self.thumb_rect_at(self.ratio())
     }
 
-    /// The low thumb of a dual-thumb range.
+    /// 双滑块区间的下限拇指矩形。
     #[must_use]
     pub fn range_start_thumb_rect(&self) -> Option<Rect> {
         self.range_start_ratio()
             .map(|ratio| self.thumb_rect_at(ratio))
     }
 
-    /// The ratios the tick marks sit at.
+    /// 刻度标记所处的归一化比例列表。
     ///
-    /// A stepped slider ticks at every step (capped at 64 marks); a continuous
-    /// one ticks at the quarter points.
+    /// 步进滑块在每个步进处绘制刻度（上限 64 个）；连续滑块在四分位点绘制刻度。
     #[must_use]
     pub fn tick_ratios(&self) -> Vec<f32> {
         let span = (self.max - self.min).abs();
@@ -315,7 +311,7 @@ impl SliderDesc {
         vec![0.25, 0.5, 0.75]
     }
 
-    /// A tick mark at `ratio`.
+    /// `ratio` 位置处的单个刻度矩形。
     #[must_use]
     pub fn tick_rect(&self, ratio: f32) -> Rect {
         let track = self.track_rect();
@@ -335,7 +331,7 @@ impl SliderDesc {
         }
     }
 
-    /// The tooltip bubble above (or beside) the thumb.
+    /// 拇指上方（或侧方）的提示气泡矩形。
     #[must_use]
     pub fn tooltip_rect(&self) -> Rect {
         let thumb = self.thumb_rect();
@@ -356,12 +352,10 @@ impl SliderDesc {
     }
 }
 
-/// The value a pointer position corresponds to.
+/// 指针位置对应的数值。
 ///
-/// The pointer is clamped to the track, the raw value is snapped to the step
-/// (when there is one) and the result is clamped to `[min, max]`. The step is
-/// applied *relative to `min`*, so a step of `0.5` starting at `10` produces
-/// `10.0, 10.5, 11.0 …` instead of drifting.
+/// 指针被夹紧到轨道范围，原始值按步长吸附（若设置了步长），最终结果夹紧到 `[min, max]`。
+/// 步长*相对于 `min`* 应用，因此从 `10` 开始、步长 `0.5` 会产生 `10.0, 10.5, 11.0 …` 而不会漂移。
 #[must_use]
 pub fn value_from_pointer(pointer: Vec2, desc: &SliderDesc) -> f32 {
     let track = desc.track_rect();
@@ -390,11 +384,10 @@ pub fn value_from_pointer(pointer: Vec2, desc: &SliderDesc) -> f32 {
     stepped.clamp(desc.min.min(desc.max), desc.max.max(desc.min))
 }
 
-/// The value one keyboard event moves the slider to.
+/// 单次键盘事件将滑块移动到的目标值。
 ///
-/// Left/Down decrease, Right/Up increase, PageUp/PageDown move by ten steps
-/// and Home/End jump to the ends. A continuous slider moves by one percent of
-/// its span.
+/// Left/Down 减小，Right/Up 增大，PageUp/PageDown 移动十个步长，Home/End 跳至两端。
+/// 连续滑块每次移动总跨度的 1%。
 #[must_use]
 pub fn reduce_slider_key(desc: &SliderDesc, key: SliderKey) -> f32 {
     let span = desc.max - desc.min;
@@ -414,16 +407,15 @@ pub fn reduce_slider_key(desc: &SliderDesc, key: SliderKey) -> f32 {
     value.clamp(desc.min.min(desc.max), desc.max.max(desc.min))
 }
 
-/// Whether the slider is currently being dragged.
+/// 滑块当前是否处于拖拽状态。
 ///
-/// The router captures the pointer on press, so the answer stays true even
-/// when the pointer leaves the track — exactly like a native slider.
+/// 路由器在按下时会捕获指针，因此即使指针离开轨道返回值仍保持为 true——与原生滑块一致。
 #[must_use]
 pub fn is_dragging(router: &unbound_input::Router, node: u64) -> bool {
     router.pointer().pressed() == Some(node)
 }
 
-/// Emit the slider: track, filled part, thumb and the focus ring.
+/// 输出滑块：轨道、已填充部分、拇指与焦点环。
 #[must_use]
 pub fn emit_slider(
     node: u64,
@@ -530,8 +522,8 @@ pub fn emit_slider(
         &mut payloads,
     );
 
-    // The ring is always emitted: focus changes its opacity, not the
-    // pool's shape, so focus is a paint change and never a re-upload.
+    // 焦点环始终输出：焦点变化仅改变其不透明度而非图元池结构，因此聚焦只是绘制变更而非重传。
+    //
     primitives.push(focus_ring(
         thumb.inflate(3.0),
         desc.thumb_size * 0.5 + 3.0,
@@ -563,7 +555,7 @@ pub fn emit_slider(
     }
 }
 
-/// The colour slot the filled track paints with.
+/// 已填充轨道绘制所用的颜色槽位。
 fn fill_slot(state: ControlState, tokens: SliderTokens) -> Token {
     if state.disabled {
         return tokens.fill_disabled;
@@ -575,7 +567,7 @@ fn fill_slot(state: ControlState, tokens: SliderTokens) -> Token {
     }
 }
 
-/// The state of a slider that is being dragged.
+/// 正在拖拽中的滑块状态。
 #[must_use]
 pub fn pressed_state(dragging: bool) -> ControlState {
     ControlState {

@@ -1,10 +1,10 @@
-//! Zero-dependency `bitflags` replacement.
+//! 零依赖的 `bitflags` 替代方案。
 //!
-//! Exported from the crate root so downstream crates can reuse it without
-//! pulling in a proc-macro dependency (keeping `app_guest` compiles fast, see
-//! `docs` §7.1).
+//! 从 crate 根部导出，供下游 crate 复用，避免引入过程宏依赖
+//! （保持 `app_guest` 快速编译，见 `docs` §7.1）。
+//!
 
-/// Declare a `#[repr(transparent)]` bitflag newtype over an integer.
+/// 基于整数声明 `#[repr(transparent)]` 位标志新类型（newtype）。
 #[macro_export]
 macro_rules! bitflags_like {
     (

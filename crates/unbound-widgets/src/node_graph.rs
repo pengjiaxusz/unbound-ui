@@ -1,10 +1,10 @@
-//! Node graph editor primitives.
+//! 节点图编辑器图元。
 //!
-//! A node graph is a canvas with two extra affordances: draggable cards and
-//! wires between typed ports. The geometry lives here; the model (which nodes
-//! exist, what a wire means) stays with the caller. The state machine only
-//! tracks the *interaction*: the selection, an in-flight wire and the magnet
-//! that snaps a wire end onto a compatible port within 12 px.
+//! 节点图是带有两种额外交互能力（可拖拽卡片与类型化端口间连线）的画布。
+//! 几何信息驻留于此；模型（存在哪些节点、连线含义）由调用方维护。
+//! 状态机仅跟踪*交互*：选区、拖拽中的连线，以及在 12 px 内
+//! 将连线端点吸附到兼容端口的磁力机制。
+//!
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -20,31 +20,31 @@ use crate::primitive::{glyphs, instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::WidgetOutput;
 
-/// The radius of a port dot.
+/// 端口圆点半径。
 pub const PIN_RADIUS: f32 = 5.0;
-/// The distance at which a dragged wire snaps onto a port.
+/// 拖拽连线吸附到端口的距离。
 pub const PIN_SNAP: f32 = 12.0;
-/// The node card header height.
+/// 节点卡片标题栏高度。
 pub const NODE_HEADER: f32 = 28.0;
-/// The vertical spacing between ports.
+/// 端口之间的垂直间距。
 pub const PIN_SPACING: f32 = 22.0;
-/// The curve flattening tolerance, in logical pixels.
+/// 曲线扁平化容差（逻辑像素）。
 pub const WIRE_TOLERANCE: f32 = 0.25;
-/// The wire width.
+/// 连线宽度。
 pub const WIRE_WIDTH: f32 = 2.0;
 
-/// The kind of a port.
+/// 端口类型。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PinKind {
-    /// Carries data.
+    /// 传输数据。
     #[default]
     Data,
-    /// Carries execution flow.
+    /// 传输执行流。
     Flow,
 }
 
 impl PinKind {
-    /// The port colour.
+    /// 端口颜色。
     #[must_use]
     pub fn token(self) -> Token {
         match self {
@@ -54,12 +54,12 @@ impl PinKind {
     }
 }
 
-/// One input or output port.
+/// 单个输入或输出端口。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinSpec {
-    /// The label shown next to the dot.
+    /// 圆点旁显示的标签。
     pub label: String,
-    /// The port kind.
+    /// 端口类型。
     pub kind: PinKind,
 }
 
@@ -72,7 +72,7 @@ impl PinSpec {
         }
     }
 
-    /// The same port as execution flow.
+    /// 构造执行流类型的同名端口。
     #[must_use]
     pub fn flow(mut self) -> Self {
         self.kind = PinKind::Flow;
@@ -80,27 +80,27 @@ impl PinSpec {
     }
 }
 
-/// One card in the graph.
+/// 图中的单个卡片。
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphNodeDesc {
-    /// The stable id.
+    /// 稳定 ID。
     pub id: u32,
-    /// The card origin, in graph space.
+    /// 卡片原点（图空间）。
     pub pos: Vec2,
-    /// The card size.
+    /// 卡片尺寸。
     pub size: Vec2,
-    /// The header title.
+    /// 标题栏文本。
     pub title: String,
-    /// The input ports, top to bottom.
+    /// 输入端口列表（从上到下）。
     pub inputs: Vec<PinSpec>,
-    /// The output ports, top to bottom.
+    /// 输出端口列表（从上到下）。
     pub outputs: Vec<PinSpec>,
-    /// The header fill.
+    /// 标题栏填充色。
     pub header_token: Token,
 }
 
 impl GraphNodeDesc {
-    /// A card with a title.
+    /// 创建带标题的卡片。
     #[must_use]
     pub fn new(id: u32, pos: Vec2, size: Vec2, title: impl Into<String>) -> Self {
         Self {
@@ -114,7 +114,7 @@ impl GraphNodeDesc {
         }
     }
 
-    /// The same card with ports.
+    /// 为卡片设置输入输出端口。
     #[must_use]
     pub fn with_ports(mut self, inputs: Vec<PinSpec>, outputs: Vec<PinSpec>) -> Self {
         self.inputs = inputs;
@@ -122,13 +122,13 @@ impl GraphNodeDesc {
         self
     }
 
-    /// The card rectangle.
+    /// 卡片矩形。
     #[must_use]
     pub fn rect(&self) -> Rect {
         Rect::new(self.pos.x, self.pos.y, self.size.x, self.size.y)
     }
 
-    /// The header rectangle.
+    /// 标题栏矩形。
     #[must_use]
     pub fn header_rect(&self) -> Rect {
         Rect::new(
@@ -139,7 +139,7 @@ impl GraphNodeDesc {
         )
     }
 
-    /// The centre of an input port.
+    /// 输入端口中心点。
     #[must_use]
     pub fn input_center(&self, index: usize) -> Vec2 {
         Vec2::new(
@@ -148,7 +148,7 @@ impl GraphNodeDesc {
         )
     }
 
-    /// The centre of an output port.
+    /// 输出端口中心点。
     #[must_use]
     pub fn output_center(&self, index: usize) -> Vec2 {
         Vec2::new(
@@ -157,7 +157,7 @@ impl GraphNodeDesc {
         )
     }
 
-    /// A port centre, by side and index.
+    /// 按侧边与索引获取端口中心点。
     #[must_use]
     pub fn pin_center(&self, output: bool, index: usize) -> Option<Vec2> {
         let count = if output {
@@ -174,7 +174,7 @@ impl GraphNodeDesc {
         })
     }
 
-    /// The port under `point`, within `radius`.
+    /// 查找 `point` 周围 `radius` 范围内的端口。
     #[must_use]
     pub fn pin_at(&self, point: Vec2, radius: f32) -> Option<(bool, u8)> {
         for output in [false, true] {
@@ -194,42 +194,42 @@ impl GraphNodeDesc {
     }
 }
 
-/// A connection between two ports.
+/// 两个端口之间的连接。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GraphWire {
-    /// The source node.
+    /// 源节点。
     pub from_node: u32,
-    /// The source output index.
+    /// 源输出端口索引。
     pub from_pin: u8,
-    /// The target node.
+    /// 目标节点。
     pub to_node: u32,
-    /// The target input index.
+    /// 目标输入端口索引。
     pub to_pin: u8,
 }
 
-/// The wire currently being dragged.
+/// 当前正在拖拽的连线。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ActiveWire {
-    /// The source node.
+    /// 源节点。
     pub from_node: u32,
-    /// The source output index.
+    /// 源输出端口索引。
     pub from_pin: u8,
-    /// The pointer, in graph space.
+    /// 指针位置（图空间）。
     pub cursor: Vec2,
-    /// The port the wire will snap onto, when it is near one.
+    /// 靠近时连线将吸附到的目标端口。
     pub snap: Option<(u32, u8)>,
 }
 
-/// The interaction state of one graph.
+/// 单个节点图的交互状态。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NodeGraphState {
-    /// The selected nodes.
+    /// 已选中的节点。
     pub selection: Selection,
-    /// The in-flight wire.
+    /// 拖拽中的连线。
     pub dragging: Option<ActiveWire>,
-    /// The viewport pan.
+    /// 视口平移量。
     pub pan: Vec2,
-    /// The viewport zoom.
+    /// 视口缩放比例。
     pub zoom: f32,
 }
 
@@ -242,17 +242,17 @@ impl NodeGraphState {
         }
     }
 
-    /// Select one node, replacing the selection.
+    /// 单选节点，替换当前选区。
     pub fn select(&mut self, id: u32) {
         self.selection.set(&[id]);
     }
 
-    /// Toggle one node.
+    /// 切换单个节点的选中状态。
     pub fn toggle(&mut self, id: u32) {
         self.selection.toggle(id);
     }
 
-    /// Start dragging a wire from an output port.
+    /// 从输出端口开始拖拽连线。
     pub fn begin_wire(&mut self, from_node: u32, from_pin: u8, cursor: Vec2) {
         self.dragging = Some(ActiveWire {
             from_node,
@@ -262,7 +262,7 @@ impl NodeGraphState {
         });
     }
 
-    /// Move the in-flight wire and look for a compatible target port.
+    /// 移动拖拽中的连线并查找兼容的目标端口。
     pub fn drag_wire(&mut self, cursor: Vec2, nodes: &[GraphNodeDesc]) {
         if let Some(wire) = &mut self.dragging {
             wire.cursor = cursor;
@@ -271,7 +271,7 @@ impl NodeGraphState {
         }
     }
 
-    /// Finish the drag, returning the wire when it landed on a port.
+    /// 结束拖拽；若落在端口上则返回新建的连线。
     pub fn end_wire(&mut self) -> Option<GraphWire> {
         let wire = self.dragging.take()?;
         let (to_node, to_pin) = wire.snap?;
@@ -283,13 +283,13 @@ impl NodeGraphState {
         })
     }
 
-    /// Abandon the in-flight wire.
+    /// 放弃当前拖拽中的连线。
     pub fn cancel_wire(&mut self) {
         self.dragging = None;
     }
 }
 
-/// The closest input port within `radius`.
+/// 查找 `radius` 范围内最近的输入端口。
 #[must_use]
 pub fn nearest_input(nodes: &[GraphNodeDesc], point: Vec2, radius: f32) -> Option<(u32, u8)> {
     let mut best: Option<(f32, u32, u8)> = None;
@@ -307,31 +307,31 @@ pub fn nearest_input(nodes: &[GraphNodeDesc], point: Vec2, radius: f32) -> Optio
     best.map(|(_, node, pin)| (node, pin))
 }
 
-/// One port hit region.
+/// 单个端口命中区域。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PinHit {
-    /// The owning node.
+    /// 所属节点。
     pub node: u32,
-    /// The port index.
+    /// 端口索引。
     pub pin: u8,
-    /// Whether it is an output.
+    /// 是否为输出端口。
     pub output: bool,
-    /// The square hit box around the dot.
+    /// 圆点周围的正方形命中框。
     pub rect: Rect,
 }
 
-/// What one graph emits.
+/// 节点图的输出内容。
 #[derive(Clone, Debug)]
 pub struct NodeGraphOutput {
-    /// The cards and wires.
+    /// 卡片与连线图元。
     pub output: WidgetOutput,
-    /// The port hit regions.
+    /// 端口命中区域。
     pub pins: Vec<PinHit>,
-    /// The card hit regions.
+    /// 卡片命中区域。
     pub nodes: Vec<HitRegion>,
 }
 
-/// Emit a node graph. `node_glyphs` must be parallel to `nodes`.
+/// 输出节点图。`node_glyphs` 必须与 `nodes` 一一对应。
 #[must_use]
 pub fn emit_node_graph(
     _node: u64,
@@ -513,7 +513,7 @@ fn push_wire(
     let dx = (to.x - from.x).abs().max(40.0) * 0.5;
     let c1 = Vec2::new(from.x + dx, from.y);
     let c2 = Vec2::new(to.x - dx, to.y);
-    // The widget layer has no camera, so flatten at a fixed screen tolerance.
+    // 控件层没有相机，因此使用固定屏幕容差进行扁平化。
     for quad in cubic_to_quads(from, c1, c2, to, WIRE_TOLERANCE) {
         let min = quad
             .p0

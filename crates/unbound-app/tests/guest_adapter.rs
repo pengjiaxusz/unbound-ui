@@ -1,9 +1,9 @@
-//! A guest-hosted application, driven through the real runtime.
+//! 通过真实运行时驱动的 guest 托管应用测试。
 //!
-//! The guest builds a title and one clickable row per item; the adapter turns
-//! each row into a button. Clicking the row must reduce the bound action in the
-//! guest and repaint the row with its new state — the whole point of hosting a
-//! UBMF guest as an ordinary [`Application`].
+//! guest 构建标题与每项一行可点击行；适配器将每行转为按钮。
+//! 点击行必须在 guest 中 reduce 绑定的动作并以新状态重绘该行——
+//! 这正是将 UBMF guest 托管为普通 [`Application`] 的全部意义。
+//!
 
 use app_guest::vtable;
 use unbound_abi::action::{ActionKind, RawAction};
@@ -11,13 +11,13 @@ use unbound_app::{AppEvent, AppRuntime, DirtyFlags, GuestAppAdapter};
 use unbound_host::GuestHost;
 use unbound_math::Vec2;
 
-/// The key the adapter assigns to the first row (`RawNodeId`, which starts at 1).
+/// 适配器为第一行分配的键（`RawNodeId` 从 1 开始）。
 const FIRST_ROW: u64 = 3;
 
 fn adapter() -> GuestAppAdapter {
     let mut host = GuestHost::new();
     host.mount_vtable(vtable()).expect("the guest mounts");
-    // The demo starts empty; one press creates "item 1".
+    // 示例初始为空；点击一次创建 "item 1"。
     host.reduce(&RawAction::new(ActionKind::Press, 0))
         .expect("the guest reduces a press");
     GuestAppAdapter::new(host)

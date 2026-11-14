@@ -1,68 +1,68 @@
-//! Viewport virtualisation: `VirtualList`, `VirtualGrid`, `VirtualTree`
-//! (`docs` §4.3).
+//! 视口虚拟化：`VirtualList`、`VirtualGrid`、`VirtualTree`（`docs` §4.3）。
 //!
-//! The contract is narrow and testable: the number of instantiated entities is
-//! bounded by the viewport, never by the data set. A 100 000-row list keeps
-//! 60–120 nodes alive regardless of scroll position, and scrolling by less than
-//! one row costs a single `f32` transform update with **zero** rebinding.
 //!
-//! Slot recycling is explicit rather than magical: [`VirtualList::update`]
-//! reports how many slots were reused and how many had to be rebound, which is
-//! exactly what the tests and the KPI harness assert on.
+//! 契约清晰且可测试：实例化实体的数量受限于视口大小，而非数据集大小。
+//! 一个 100 000 行的列表无论滚动到何处都只保持 60–120 个活跃节点，
+//! 并且滚动不足一行时仅需更新单个 `f32` 变换，实现**零**重新绑定。
+//!
+//!
+//! 槽位复用是显式而非隐式的：[`VirtualList::update`] 会准确报告
+//! 复用了多少槽位以及重新绑定了多少槽位，这正是测试与 KPI 套件所断言的指标。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 use crate::{no_node, NodeId};
 use unbound_math::Vec2;
 
-/// What one update cost.
+/// 单次更新的开销统计。
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct WindowUpdate {
-    /// Items that scrolled out and were reused for new items.
+    /// 滚出视口并被复用于新条目的项目数。
     pub recycled: usize,
-    /// Slots whose item index changed.
+    /// 所属条目索引发生变化的槽位数。
     pub rebound: usize,
-    /// Sub-row scroll remainder, to be applied as a translation to every slot.
+    /// 行内滚动余数，作为平移量应用到每个槽位。
     pub offset: f32,
-    /// True when only the offset changed (the "cost 0" fast path).
+    /// 当仅偏移量发生变化时为 true（“零开销”快速路径）。
     pub offset_only: bool,
-    /// True when the window was rebuilt from scratch (large jump).
+    /// 当窗口从头重建时为 true（大幅跳转）。
     pub rebuilt: bool,
 }
 
 impl WindowUpdate {
-    /// True when nothing about the window changed.
+    /// 当窗口未发生任何变化时为 true。
     #[must_use]
     pub fn is_noop(&self) -> bool {
         !self.rebuilt && self.recycled == 0 && self.rebound == 0 && self.offset == 0.0
     }
 }
 
-/// A vertically scrolling list window.
+/// 垂直滚动的列表窗口。
 #[derive(Debug)]
 pub struct VirtualList {
     row_height: f32,
-    /// Extra screens instantiated above and below the viewport.
+    /// 在视口上方与下方额外实例化的缓冲屏数。
     overscan_screens: f32,
-    /// Item index represented by each slot.
+    /// 每个槽位当前代表的条目索引。
     item_of: Vec<usize>,
-    /// Owning node of each slot, `NO_NODE` until bound.
+    /// 每个槽位绑定的节点；未绑定时为 `NO_NODE`。
     node_of: Vec<NodeId>,
-    /// First visible item index (not slot).
+    /// 首个可见条目的索引（而非槽位索引）。
     first_item: usize,
-    /// Cached viewport height.
+    /// 缓存的视口高度。
     viewport: f32,
-    /// Cached total item count.
+    /// 缓存的总条目数。
     total: usize,
-    /// Number of bind calls performed since construction (diagnostics).
+    /// 自构造以来执行的绑定调用次数（用于诊断）。
     binds: u64,
-    /// Number of times the window had to grow (should stay at 0 in steady state).
+    /// 窗口不得不扩容的次数（稳态下应保持为 0）。
     grows: u64,
 }
 
 impl VirtualList {
-    /// # Panics
-    /// Panics when `row_height <= 0`.
+    /// # Panic 说明
+    /// 当 `row_height <= 0` 时 panic。
     #[must_use]
     pub fn new(row_height: f32, overscan_screens: f32) -> Self {
         assert!(row_height > 0.0, "row height must be positive");
@@ -84,7 +84,7 @@ impl VirtualList {
         self.row_height
     }
 
-    /// Number of live slots (the entity budget).
+    /// 活跃槽位数量（即实体预算上限）。
     #[must_use]
     pub fn slot_count(&self) -> usize {
         self.item_of.len()
@@ -100,30 +100,30 @@ impl VirtualList {
         self.grows
     }
 
-    /// Item index held by a slot.
+    /// 查询指定槽位持有的条目索引。
     #[must_use]
     pub fn item_at(&self, slot: usize) -> Option<usize> {
         self.item_of.get(slot).copied()
     }
 
-    /// Node bound to a slot.
+    /// 查询绑定到指定槽位的节点。
     #[must_use]
     pub fn node_at(&self, slot: usize) -> Option<NodeId> {
         self.node_of.get(slot).copied()
     }
 
-    /// Bind (or rebind) a slot to a node. Called by the container widget when it
-    /// creates the node for a newly visible item.
+    /// 将槽位绑定（或重绑）到节点。由容器组件在为新可见条目创建节点时调用。
+    ///
     pub fn set_node(&mut self, slot: usize, node: NodeId) {
         if let Some(slot_ref) = self.node_of.get_mut(slot) {
             *slot_ref = node;
         }
     }
 
-    /// Number of slots needed for a viewport plus overscan.
+    /// 视口加预渲染缓冲区（overscan）所需的槽位数量。
     ///
-    /// Exposed so a host can size its primitive buffer without duplicating the
-    /// overscan policy.
+    /// 暴露此值以便宿主在不重复实现预渲染策略的情况下预估图元缓冲区大小。
+    ///
     #[must_use]
     pub fn desired_slots(&self, viewport: f32) -> usize {
         let visible = (viewport / self.row_height).ceil().max(1.0) as usize;
@@ -131,14 +131,14 @@ impl VirtualList {
         (visible + overscan * 2).max(1)
     }
 
-    /// Recompute the window for a scroll position.
+    /// 根据滚动位置重新计算窗口。
     ///
-    /// `scroll` is the offset of the top of the viewport in content space.
+    /// `scroll` 为视口顶部在内容空间中的偏移量。
     ///
-    /// Slots are a **ring**: slot `k` always represents item `k % capacity`. That
-    /// is what turns a one-row scroll into one rebind instead of a full window
-    /// rebuild — the slot that scrolled out of the top is exactly the slot the
-    /// new item at the bottom maps to.
+    /// 槽位构成一个**环形队列**：槽位 `k` 始终代表条目 `k % capacity`。
+    /// 正因如此，滚动一行只需重绑一个槽位而非重建整个窗口——
+    /// 从顶部滚出的槽位恰好对应底部新进入条目所映射的槽位。
+    ///
     pub fn update(&mut self, scroll: f32, viewport: f32, total: usize) -> WindowUpdate {
         let mut update = WindowUpdate::default();
         let scroll = scroll.max(0.0);
@@ -178,8 +178,8 @@ impl VirtualList {
         }
 
         if capacity_changed {
-            // The only allocation in the whole virtualisation path, and it
-            // happens when the viewport height itself changes.
+            // 整个虚拟化路径中唯一可能发生内存分配的地方，仅在视口高度自身变化时触发。
+            //
             let grew = desired > self.item_of.len();
             self.item_of.resize(desired, usize::MAX);
             self.node_of.resize(desired, no_node());
@@ -188,8 +188,8 @@ impl VirtualList {
             }
         }
 
-        // Rebind only the slots whose item changed. With ring indexing this is
-        // one per item that entered the window.
+        // 仅重绑条目发生变化的槽位。使用环形索引时，这正好等于新进入窗口的条目数。
+        //
         let mut rebound = 0usize;
         let end = (first_item + desired).min(total);
         for item in first_item..end {
@@ -200,7 +200,7 @@ impl VirtualList {
                 self.binds += 1;
             }
         }
-        // Slots that no longer carry an item (list shrank) must be cleared.
+        // 不再承载任何条目的槽位（列表缩短时）必须清空。
         for slot in &mut self.item_of {
             let item = *slot;
             if item != usize::MAX && (item < first_item || item >= end) {
@@ -220,25 +220,25 @@ impl VirtualList {
         update
     }
 
-    /// Content-space y of an item.
+    /// 条目在内容空间中的 y 坐标。
     #[must_use]
     pub fn item_y(&self, item: usize) -> f32 {
         item as f32 * self.row_height
     }
 
-    /// First instantiated item.
+    /// 首个已实例化的条目索引。
     #[must_use]
     pub fn first_item(&self) -> usize {
         self.first_item
     }
 
-    /// Total content height for a list of `total` rows.
+    /// 共 `total` 行的列表在内容空间中的总高度。
     #[must_use]
     pub fn content_height(&self, total: usize) -> f32 {
         total as f32 * self.row_height
     }
 
-    /// Reset for a new data set (keeps the allocated capacity).
+    /// 为新数据集重置状态（保留已分配容量）。
     pub fn reset(&mut self) {
         self.item_of.clear();
         self.node_of.clear();
@@ -247,7 +247,7 @@ impl VirtualList {
     }
 }
 
-/// A row-major grid window (asset browser, thumbnail wall).
+/// 按行优先排列的网格窗口（用于资产浏览器、缩略图墙）。
 #[derive(Debug)]
 pub struct VirtualGrid {
     cell: Vec2,
@@ -258,8 +258,8 @@ pub struct VirtualGrid {
 }
 
 impl VirtualGrid {
-    /// # Panics
-    /// Panics when `columns == 0` or a cell dimension is not positive.
+    /// # Panic 说明
+    /// 当 `columns == 0` 或单元格尺寸非正数时 panic。
     #[must_use]
     pub fn new(cell: Vec2, gap: Vec2, columns: usize, overscan_screens: f32) -> Self {
         assert!(columns > 0, "grid needs at least one column");
@@ -278,14 +278,14 @@ impl VirtualGrid {
         self.columns
     }
 
-    /// Cells instantiated for a given item count.
+    /// 指定条目总数下实际实例化的单元格数量。
     #[must_use]
     pub fn slot_count(&self) -> usize {
         self.list.slot_count() * self.columns
     }
 
-    /// Update the window. Returns the row-level update; rows advance by one per
-    /// row of scroll with a single rebind.
+    /// 更新网格窗口。返回行级更新统计；每滚动一行，行窗口向前推进一行且仅重绑该行。
+    ///
     pub fn update(&mut self, scroll: f32, viewport: f32, items: usize) -> WindowUpdate {
         let rows = items.div_ceil(self.columns);
         let update = self.list.update(scroll, viewport, rows);
@@ -298,7 +298,7 @@ impl VirtualGrid {
         self.first_row
     }
 
-    /// Local position of a slot within the grid, in content space.
+    /// 槽位在网格内容空间中的局部位置。
     #[must_use]
     pub fn cell_origin(&self, row: usize, column: usize) -> Vec2 {
         Vec2::new(
@@ -313,17 +313,17 @@ impl VirtualGrid {
     }
 }
 
-/// One row of a flattened tree, as the virtualiser sees it.
+/// 扁平化树中的单行记录（供虚拟化器使用）。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct TreeRow {
-    /// Stable id in the caller's model.
+    /// 调用方模型中的稳定 ID。
     pub id: u64,
     pub depth: u16,
     pub has_children: bool,
     pub expanded: bool,
 }
 
-/// A tree flattened into rows, windowed like a list.
+/// 扁平化为行并像列表一样分窗的树形视图。
 #[derive(Debug)]
 pub struct VirtualTree {
     rows: Vec<TreeRow>,
@@ -341,9 +341,9 @@ impl VirtualTree {
         }
     }
 
-    /// Replace the model. `children_of` returns the ordered children of a node;
-    /// only expanded nodes contribute rows, so the flattening cost is
-    /// proportional to the *visible* tree, not to the document.
+    /// 替换树模型。`children_of` 返回节点的有序子节点；
+    /// 仅展开的节点会贡献行，因此扁平化开销仅与*可见*树成正比，而非整份文档。
+    ///
     pub fn rebuild<F>(&mut self, roots: &[TreeRow], children_of: F)
     where
         F: Fn(u64) -> Vec<TreeRow>,
@@ -396,34 +396,34 @@ impl VirtualTree {
         self.list.slot_count()
     }
 
-    /// The row height the virtualiser was built with.
+    /// 构建虚拟化器时使用的行高。
     #[must_use]
     pub fn row_height(&self) -> f32 {
         self.list.row_height()
     }
 
-    /// The flattened row index a slot currently represents.
+    /// 指定槽位当前代表的扁平化行索引。
     ///
-    /// Slots are a ring, so a consumer that needs a row's content-space `y`
-    /// must ask for the item index rather than assume `slot == item`.
+    /// 槽位是环形的，因此需要获取某行内容空间 `y` 坐标的消费方
+    /// 必须查询条目索引，而不能假设 `slot == item`。
     #[must_use]
     pub fn slot_item(&self, slot: usize) -> Option<usize> {
         self.list.item_at(slot)
     }
 
-    /// Content-space `y` of a flattened row.
+    /// 扁平化行在内容空间中的 `y` 坐标。
     #[must_use]
     pub fn item_y(&self, item: usize) -> f32 {
         self.list.item_y(item)
     }
 
-    /// First flattened row instantiated in the window.
+    /// 窗口中首个已实例化的扁平化行索引。
     #[must_use]
     pub fn first_item(&self) -> usize {
         self.list.first_item()
     }
 
-    /// Total content height of the flattened rows.
+    /// 所有扁平化行的内容总高度。
     #[must_use]
     pub fn content_height(&self) -> f32 {
         self.list.content_height(self.rows.len())
@@ -469,8 +469,8 @@ mod tests {
         let mut list = VirtualList::new(20.0, 1.0);
         list.update(0.0, 600.0, 1000);
         let binds_before = list.binds();
-        // Overscan means the first item is ahead of the viewport; scrolling far
-        // enough to move the window by one row rebinds one slot.
+        // 预渲染缓冲意味着首个条目位于视口前方；滚动足够距离使窗口推进一行时，
+        // 只会重绑一个槽位。
         let previous_first = list.first_item();
         let mut crossing = None;
         for step in 1..=40 {

@@ -1,15 +1,14 @@
-//! Compiles the GLSL sources to SPIR-V at build time.
+//! 在构建时将 GLSL 源码编译为 SPIR-V。
 //!
-//! `glslc` is looked up in `$VULKAN_SDK/bin` first, then on `PATH`. When it is
-//! absent (CI images without the SDK) the checked-in SPIR-V blobs in
-//! `shaders/spv/` are used instead, so a clean checkout still builds. The build
-//! fails loudly only when neither is available — silently shipping a renderer
-//! without shaders is worse than a red build.
+//! 优先在 `$VULKAN_SDK/bin` 中查找 `glslc`，其次在 `PATH` 中查找。若缺失
+//! （如未安装 SDK 的 CI 环境），则回退使用 `shaders/spv/` 中已签入的 SPIR-V
+//! 二进制文件，确保干净检出仍可正常构建。仅当两者均不可用时才显式报错失败——
+//! 静默打包缺少着色器的渲染器比构建失败更危险。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Shader sources, in the order they are reported.
+/// 着色器源文件列表，按报告顺序排列。
 const SHADERS: &[&str] = &[
     "uber.vert",
     "uber.frag",
@@ -68,7 +67,7 @@ fn main() {
 
     let glslc = find_tool("glslc");
     let Some(glslc) = glslc else {
-        // Fall back to the checked-in blobs.
+        // 回退使用仓库中已签入的 SPIR-V 二进制文件。
         let prebuilt = Path::new("shaders/spv");
         for s in SHADERS {
             let src = prebuilt.join(format!("{s}.spv"));
@@ -120,8 +119,8 @@ fn main() {
         }
     }
 
-    // Validate every module when the validator is available: a malformed but
-    // linkable module is much cheaper to catch here than in a driver.
+    // 若校验器可用则验证每个模块：在构建期捕获格式异常但可链接的模块，
+    // 比留到驱动层再排查代价低得多。
     if let Some(validator) = find_tool("spirv-val") {
         for s in SHADERS {
             let dst = spv_dir.join(format!("{s}.spv"));

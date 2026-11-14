@@ -1,22 +1,22 @@
-//! The application runtime: one event loop shape for every app.
+//! 应用运行时：面向所有应用的统一事件循环模型。
 //!
-//! The runtime owns the pieces that used to be copied by hand into each
-//! application shell:
+//! 运行时统一接管了过去需要在每个应用外壳中手动复制的模块：
 //!
-//! * the [`Application`] contract — `init`, `reduce`, `view`,
-//! * a [`SceneCollector`] rebuilt once per frame and diffed against the
-//!   previous frame, so the renderer receives an upload plan rather than a
-//!   whole scene,
-//! * pointer routing through the real [`Router`], including hover, press,
-//!   click, double-click and drag translation,
-//! * the keyboard focus policy through [`FocusManager`],
-//! * dirty flags that let a frame with no changes skip the rebuild entirely.
 //!
-//! The runtime is intentionally headless: it produces primitives, hit regions
-//! and semantics, never a window or a swapchain. A windowed shell feeds it
-//! window events and uploads [`FrameReport`]s; a test feeds it synthetic
-//! events and asserts on the same reports. The showcase shell and
-//! `runtime_headless.rs` therefore exercise exactly the same code path.
+//! * [`Application`] 契约 —— `init`、`reduce`、`view`；
+//! * 每帧重建并与上一帧 diff 的 [`SceneCollector`]，使渲染器仅接收
+//!   上传计划而非整套场景；
+//!
+//! * 经由真实 [`Router`] 的指针路由，包括悬停、按下、点击、双击与拖拽转换；
+//!
+//! * 经由 [`FocusManager`] 的键盘焦点策略；
+//! * 脏标志机制，使无变更帧可完全跳过重建。
+//!
+//! 运行时刻意保持无头（headless）：它产出图元、命中区域与语义树，
+//! 从不直接创建窗口或交换链。窗口化外壳向其输入窗口事件并上传 [`FrameReport`]；
+//! 测试则向其输入合成事件并对同一份报告进行断言。因此 showcase 外壳与
+//! `runtime_headless.rs` 演练的是完全相同的代码路径。
+//!
 
 use std::cell::{Cell, RefCell, RefMut};
 use std::rc::Rc;
@@ -75,7 +75,7 @@ pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation
 pub use unbound_widgets::ergonomics::UiWidget;
 pub use window_runner::{run_windowed, WindowedRunner};
 
-/// Compile-time 64-bit FNV-1a hash used by [`ui_key!`].
+/// [`ui_key!`] 使用的编译期 64 位 FNV-1a 哈希。
 pub const fn const_fnv1a_hash(file: &str, line: u32, column: u32) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
@@ -95,7 +95,7 @@ pub const fn const_fnv1a_hash(file: &str, line: u32, column: u32) -> u64 {
     hash
 }
 
-/// Mix a base key with a runtime discriminator or loop index.
+/// 将基础键与运行时判别值或循环索引混合。
 pub const fn mix_key(base: u64, discriminator: u64) -> u64 {
     const FNV_PRIME: u64 = 0x100000001b3;
     let mut hash = base ^ discriminator;
@@ -103,9 +103,9 @@ pub const fn mix_key(base: u64, discriminator: u64) -> u64 {
     hash
 }
 
-/// Trait converting various discriminator types into a u64 for [`ui_key!`].
+/// 将各类判别类型转换为用于 [`ui_key!`] 的 u64 的 trait。
 pub trait KeyDiscriminator {
-    /// Convert self to u64 hash/value.
+    /// 将自身转换为 u64 哈希/值。
     fn into_u64(self) -> u64;
 }
 
@@ -151,7 +151,7 @@ impl KeyDiscriminator for &String {
     }
 }
 
-/// Macro producing a stable compile-time widget identifier based on source location.
+/// 基于源码位置生成稳定编译期控件标识符的宏。
 #[macro_export]
 macro_rules! ui_key {
     () => {{
@@ -164,11 +164,11 @@ macro_rules! ui_key {
     }};
 }
 
-/// Type-erased trait object adapter for [`unbound_widgets::UiWidget`].
+/// [`unbound_widgets::UiWidget`] 的类型擦除 trait 对象适配器。
 pub trait ErasedUiWidget: Send + Sync + core::fmt::Debug {
-    /// Compute the widget's intrinsic size using real text shaping.
+    /// 使用真实文本整形计算控件的固有尺寸。
     fn intrinsic_size_erased(&self, text_ctx: &mut unbound_widgets::TextCtx<'_>) -> Vec2;
-    /// Reduce input event directly onto local widget state.
+    /// 将输入事件直接 reduce 到局部控件状态。
     fn reduce_erased(
         &self,
         key: u64,
@@ -176,9 +176,9 @@ pub trait ErasedUiWidget: Send + Sync + core::fmt::Debug {
         event: &unbound_widgets::WidgetInputEvent,
         store: &mut WidgetStateStore,
     ) -> bool;
-    /// Ensure the widget's state is mounted/initialized in the state store.
+    /// 确保控件状态已在状态池中挂载/初始化。
     fn ensure_state_erased(&self, key: u64, store: &mut WidgetStateStore);
-    /// Emit primitives with resolved layout rectangle and typed state.
+    /// 使用已解析的布局矩形与类型化状态发出图元。
     fn emit_laid_out_erased(
         &self,
         node: u64,
@@ -229,40 +229,40 @@ impl<W: unbound_widgets::UiWidget> ErasedUiWidget for W {
     }
 }
 
-/// The semantic root identity.
+/// 语义根节点标识。
 pub const ROOT: u64 = 1;
 
-/// What the application says a reduction invalidated.
+/// 应用声明一次归约（reduction）所失效的范围。
 ///
-/// The runtime uses the flags to skip rebuilds and to tell a window whether it
-/// needs a new accessibility snapshot; the renderer itself only ever sees a
-/// [`SceneDiff`].
+/// 运行时据此跳过不必要的重建并告知窗口是否需要新的无障碍快照；
+/// 渲染器本身始终只看到 [`SceneDiff`]。
+///
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct DirtyFlags {
     bits: u8,
 }
 
 impl DirtyFlags {
-    /// Nothing changed.
+    /// 无任何变更。
     pub const NONE: Self = Self { bits: 0 };
-    /// Only pixel contents changed.
+    /// 仅像素内容变更。
     pub const PAINT: Self = Self { bits: 1 };
-    /// Geometry changed; a rebuild is mandatory.
+    /// 几何变更；必须重建。
     pub const LAYOUT: Self = Self { bits: 1 << 1 };
-    /// The accessibility tree changed.
+    /// 无障碍树变更。
     pub const A11Y: Self = Self { bits: 1 << 2 };
-    /// The text / IME layout changed.
+    /// 文本 / IME 布局变更。
     pub const TEXT: Self = Self { bits: 1 << 3 };
-    /// Everything, including a new scene root.
+    /// 全部失效，包括新的场景根节点。
     pub const ALL: Self = Self { bits: 0b1111 };
 
-    /// The raw bits.
+    /// 原始位标志。
     #[must_use]
     pub const fn bits(self) -> u8 {
         self.bits
     }
 
-    /// Build from raw bits, dropping unknown bits.
+    /// 从原始位标志构建，丢弃未知位。
     #[must_use]
     pub const fn from_bits_truncate(bits: u8) -> Self {
         Self {
@@ -270,13 +270,13 @@ impl DirtyFlags {
         }
     }
 
-    /// Whether every bit of `other` is set.
+    /// 是否已设置 `other` 的所有位。
     #[must_use]
     pub const fn contains(self, other: Self) -> bool {
         self.bits & other.bits == other.bits
     }
 
-    /// Combine two results.
+    /// 合并两个结果。
     #[must_use]
     pub const fn merge(self, other: Self) -> Self {
         Self {
@@ -284,13 +284,13 @@ impl DirtyFlags {
         }
     }
 
-    /// Whether a rebuild is needed.
+    /// 是否需要重建。
     #[must_use]
     pub const fn needs_rebuild(self) -> bool {
         self.contains(Self::LAYOUT) || self.contains(Self::ALL)
     }
 
-    /// Whether the accessibility tree must be re-published.
+    /// 是否必须重新发布无障碍树。
     #[must_use]
     pub const fn needs_a11y(self) -> bool {
         self.contains(Self::A11Y) || self.needs_rebuild()
@@ -311,7 +311,7 @@ impl core::ops::BitOrAssign for DirtyFlags {
     }
 }
 
-/// A keyboard key in the application's vocabulary.
+/// 应用词汇表中的键盘按键。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AppKey {
     Tab,
@@ -331,19 +331,19 @@ pub enum AppKey {
     PageDown,
     ContextMenu,
     CapsLock,
-    /// An `F1`..`F24` function key.
+    /// `F1`..`F24` 功能键。
     F(u8),
     Copy,
     Cut,
     Paste,
     Undo,
     Redo,
-    /// Any other key, identified by its character.
+    /// 其他按键，以其字符标识。
     Character(char),
 }
 
 impl AppKey {
-    /// The stable name a [`KeyChord`] binding uses.
+    /// [`KeyChord`] 绑定使用的稳定名称。
     #[must_use]
     pub const fn chord_name(self) -> Option<&'static str> {
         Some(match self {
@@ -373,10 +373,10 @@ impl AppKey {
         })
     }
 
-    /// The chord this key forms with `modifiers`.
+    /// 该按键与 `modifiers` 构成的组合键。
     ///
-    /// Characters are folded to lower case: a keyboard reports `P` when Shift
-    /// is held, but a binding written as `Ctrl+Shift+P` must match it.
+    /// 字符会折叠为小写：按住 Shift 时键盘上报 `P`，
+    /// 但写作 `Ctrl+Shift+P` 的绑定必须能匹配它。
     #[must_use]
     pub fn chord(self, modifiers: Modifiers) -> KeyChord {
         let key = match self {
@@ -394,7 +394,7 @@ impl AppKey {
     }
 }
 
-/// Held modifier keys.
+/// 当前按下的修饰键。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Modifiers {
     pub shift: bool,
@@ -403,97 +403,97 @@ pub struct Modifiers {
     pub meta: bool,
 }
 
-/// An IME composition update.
+/// IME 组合输入更新。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImeUpdate {
-    /// The composing text, empty when composition ended.
+    /// 正在组合的文本；组合结束时为空。
     pub preedit: String,
-    /// Active cursor / selection byte range inside preedit text.
+    /// 预编辑文本内当前光标 / 选区字节范围。
     pub cursor_range: Option<(usize, usize)>,
-    /// A committed string, when the composition finished this frame.
+    /// 若本帧完成组合输入，则为已提交的字符串。
     pub commit: Option<String>,
 }
 
-/// A **resolved** application event.
+/// **已解析**的应用事件。
 ///
-/// Pointer targets have already been picked from the previous frame's hit
-/// regions; the application never has to know where a widget is.
+/// 指针目标已根据上一帧的命中区域拾取完毕；应用无需关心控件位于何处。
+///
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppEvent {
-    /// The pointer moved; `hovered` is the node under it.
+    /// 指针移动；`hovered` 为其下方的节点。
     PointerMove { pos: Vec2, hovered: Option<u64> },
-    /// A button went down over `target`.
+    /// 鼠标按键在 `target` 上按下。
     PointerDown {
         pos: Vec2,
         target: Option<u64>,
         button: PointerButton,
         click_count: u8,
     },
-    /// A button was released over `target`.
+    /// 鼠标按键在 `target` 上释放。
     PointerUp {
         pos: Vec2,
         target: Option<u64>,
         button: PointerButton,
     },
-    /// A completed click.
+    /// 完成一次单击。
     Click { node: u64, pos: Vec2, count: u8 },
-    /// A completed double click.
+    /// 完成一次双击。
     DoubleClick { node: u64, pos: Vec2 },
-    /// A drag started on `node`.
+    /// 在 `node` 上开始拖拽。
     DragStart { node: u64, pos: Vec2 },
-    /// A drag moved `delta`.
+    /// 拖拽移动了 `delta`。
     Drag { node: u64, pos: Vec2, delta: Vec2 },
-    /// The wheel moved over `target`.
+    /// 滚轮在 `target` 上滚动。
     Wheel {
         pos: Vec2,
         delta: Vec2,
         target: Option<u64>,
     },
-    /// A secondary click completed over `node`.
+    /// 在 `node` 上完成一次右键/辅助点击。
     ContextMenu { node: u64, pos: Vec2 },
-    /// A keyboard shortcut matched a [`Keymap`] binding.
+    /// 键盘快捷键匹配了 [`Keymap`] 绑定。
     Shortcut { action: u64 },
-    /// A key was pressed or released.
+    /// 按键被按下或释放。
     Key {
         key: AppKey,
         pressed: bool,
         modifiers: Modifiers,
     },
-    /// Text was typed (already IME-committed).
+    /// 已键入文本（已经过 IME 提交）。
     Text { text: String },
-    /// The IME composition changed.
+    /// IME 组合输入状态变更。
     Ime { update: ImeUpdate },
-    /// The window changed size.
+    /// 窗口尺寸变更。
     Resize { size: Vec2 },
-    /// The theme changed.
+    /// 主题变更。
     Theme { kind: ThemeKind },
-    /// An assistive technology requested an action.
+    /// 辅助技术请求执行动作。
     A11y {
         target: u64,
         action: A11yAction,
         value: Option<String>,
     },
-    /// A frame clock tick.
+    /// 帧时钟 tick。
     Tick { dt: f32 },
-    /// A timer scheduled through [`AppContext::set_timeout`] fired.
+    /// 通过 [`AppContext::set_timeout`] 调度的定时器触发。
     Timer { token: TimerToken },
-    /// OS files are hovering over the window.
+    /// 系统文件正在窗口上方悬停。
     FileHover(Vec<std::path::PathBuf>),
-    /// OS files were dropped onto the window.
+    /// 系统文件已拖放至窗口。
     FileDrop(Vec<std::path::PathBuf>),
-    /// An OS file drag left the window without dropping.
+    /// 系统文件拖拽离开窗口且未放下。
     FileHoverCancelled,
 }
 
-/// Platform-agnostic clipboard interface for `AppContext`.
+/// 面向 `AppContext` 的平台无关剪贴板接口。
 pub trait ClipboardProvider {
-    /// Read the current clipboard text, if any.
+    /// 读取当前剪贴板文本（如有）。
     fn get_text(&self) -> Option<String>;
-    /// Replace the clipboard contents with `text`.
+    /// 用 `text` 替换剪贴板内容。
     fn set_text(&mut self, text: &str);
 }
 
-/// In-memory clipboard used in headless tests and as a fallback.
+/// 用于无头测试及回退场景的内存剪贴板。
 #[derive(Clone, Debug, Default)]
 pub struct MemoryClipboard {
     text: Option<String>,
@@ -516,46 +516,46 @@ impl ClipboardProvider for MemoryClipboard {
     }
 }
 
-/// The runtime's read/write view of the world during `reduce`.
+/// 运行时在 `reduce` 期间提供的读写世界视图。
 #[derive(Clone)]
 pub struct AppContext {
-    /// The current viewport size.
+    /// 当前视口尺寸。
     pub viewport: Vec2,
-    /// The active theme.
+    /// 当前激活主题。
     pub theme: ThemeKind,
-    /// The focused node, kept in sync with the focus manager.
+    /// 当前聚焦节点，与焦点管理器保持同步。
     pub focused: Option<u64>,
-    /// Whether the focus ring should be painted.
+    /// 是否应绘制焦点环。
     pub focus_visible: bool,
-    /// The node under the pointer.
+    /// 指针下方的节点。
     pub hovered: Option<u64>,
-    /// The node currently pressed.
+    /// 当前按下的节点。
     pub pressed: Option<u64>,
-    /// The requested cursor.
+    /// 请求的光标样式。
     pub cursor: CursorKind,
-    /// The last pointer position.
+    /// 上一次指针位置。
     pub pointer: Vec2,
-    /// Seconds since the runtime started.
+    /// 自运行时启动以来的秒数。
     pub time: f64,
-    /// Ask the runtime to focus a node after this reduction.
+    /// 请求运行时在本次归约后聚焦某个节点。
     pub request_focus: Option<(u64, FocusCause)>,
-    /// Ask the runtime to blur after this reduction.
+    /// 请求运行时在本次归约后失焦。
     pub request_blur: bool,
-    /// The local state pool, shared with the view that renders it.
+    /// 局部状态池，与渲染它的视图共享。
     widget_state: Rc<RefCell<WidgetStateStore>>,
-    /// Timers requested during this reduction, drained by the runtime.
+    /// 本次归约期间请求的定时器，由运行时排空。
     timer_requests: Vec<TimerRequest>,
-    /// Timers cancelled during this reduction, drained by the runtime.
+    /// 本次归约期间取消的定时器，由运行时排空。
     timer_cancels: Vec<TimerToken>,
-    /// Shared with the runtime queue so tokens are unique across both.
+    /// 与运行时队列共享，确保两侧 token 唯一。
     timer_tokens: Rc<Cell<u64>>,
-    /// Where a background task posts its result.
+    /// 后台任务投递结果的目标通道。
     async_sender: Option<Sender<AppEvent>>,
-    /// Wakes the parked event loop when a task posts a result.
+    /// 后台任务投递结果时唤醒休眠的事件循环。
     waker: Option<Arc<dyn AppWaker>>,
-    /// How much of the current wheel delta the last handler consumed.
+    /// 上一个处理器消费了多少当前滚轮增量。
     scroll_consumed: Vec2,
-    /// Shared clipboard provider (SystemClipboard in windowed mode, MemoryClipboard headless).
+    /// 共享剪贴板提供者（窗口模式为 SystemClipboard，无头模式为 MemoryClipboard）。
     clipboard: Rc<RefCell<Box<dyn ClipboardProvider>>>,
 }
 
@@ -602,47 +602,47 @@ impl AppContext {
         }
     }
 
-    /// Replace the clipboard provider (for example with `SystemClipboard`).
+    /// 替换剪贴板提供者（例如替换为 `SystemClipboard`）。
     pub fn set_clipboard(&mut self, provider: Box<dyn ClipboardProvider>) {
         *self.clipboard.borrow_mut() = provider;
     }
 
-    /// Read text from the active clipboard provider.
+    /// 从当前激活的剪贴板提供者读取文本。
     #[must_use]
     pub fn clipboard_get(&self) -> Option<String> {
         self.clipboard.borrow().get_text()
     }
 
-    /// Write text to the active clipboard provider.
+    /// 向当前激活的剪贴板提供者写入文本。
     pub fn clipboard_set(&self, text: &str) {
         self.clipboard.borrow_mut().set_text(text);
     }
 
-    /// The local state for a node key.
+    /// 节点键对应的局部状态。
     ///
-    /// Unlike the view's [`ViewBuilder::use_state`], this does not mark the key
-    /// as rendered: an event handler may poke at a widget's state without
-    /// keeping a removed widget alive.
+    /// 与视图层的 [`ViewBuilder::use_state`] 不同，此方法不会将键标记为已渲染：
+    /// 事件处理器可读写控件状态而不必让已移除的控件继续存活。
+    ///
     pub fn use_state<T: Default + Send + Sync + 'static>(&self, key: u64) -> RefMut<'_, T> {
         RefMut::map(self.widget_state.borrow_mut(), |store| store.entry(key))
     }
 
-    /// Borrow the widget state store immutably.
+    /// 不可变借用控件状态存储。
     #[must_use]
     pub fn state_store(&self) -> core::cell::Ref<'_, WidgetStateStore> {
         self.widget_state.borrow()
     }
 
-    /// Borrow the widget state store mutably.
+    /// 可变借用控件状态存储。
     pub fn state_store_mut(&self) -> RefMut<'_, WidgetStateStore> {
         self.widget_state.borrow_mut()
     }
 
-    /// Schedule a one-shot event `after` this reduction.
+    /// 在本次归约后调度一个经 `after` 触发的单次事件。
     ///
-    /// The token is allocated first and handed to `make`, so the event can
-    /// carry the token it will be dispatched as; the runtime enqueues it once
-    /// the event has been reduced.
+    /// 先分配 token 并传给 `make`，使事件能携带自身将被派发时的 token；
+    /// 事件归约完成后，运行时将其正式入队。
+    ///
     pub fn set_timeout(
         &mut self,
         after: Duration,
@@ -658,7 +658,7 @@ impl AppContext {
         token
     }
 
-    /// Schedule a repeating event every `period`.
+    /// 调度每隔 `period` 触发一次的重复事件。
     pub fn set_interval(
         &mut self,
         period: Duration,
@@ -674,25 +674,25 @@ impl AppContext {
         token
     }
 
-    /// Cancel a timer scheduled earlier.
+    /// 取消先前调度的定时器。
     pub fn cancel_timer(&mut self, token: TimerToken) {
         self.timer_cancels.push(token);
     }
 
-    /// Report how much of a wheel delta this handler used.
+    /// 报告当前处理器消费了多少滚轮增量。
     ///
-    /// The runtime subtracts it from the delta and offers the remainder to the
-    /// next region under the pointer, which is how a nested scroll area hands
-    /// the leftover wheel to its outer scroller.
+    /// 运行时从总增量中减去该值，并将剩余量提供给指针下方的下一个区域，
+    /// 嵌套滚动区域正是借此将多余滚轮事件传递给外层滚动容器。
+    ///
     pub fn consume_scroll(&mut self, delta: Vec2) {
         self.scroll_consumed += delta;
     }
 
-    /// Run `task` on a worker thread and reduce the event it returns.
+    /// 在工作线程上运行 `task` 并归约其返回的事件。
     ///
-    /// The result is delivered on the next [`AppRuntime::poll_async`] (called
-    /// automatically at the top of every frame); [`AppWaker`] wakes a parked
-    /// event loop in the meantime.
+    /// 结果将在下一次 [`AppRuntime::poll_async`]（每帧开头自动调用）中投递；
+    /// 在此期间 [`AppWaker`] 会唤醒休眠的事件循环。
+    ///
     pub fn spawn(&self, task: impl FnOnce() -> AppEvent + Send + 'static) {
         let Some(sender) = self.async_sender.clone() else {
             return;
@@ -714,7 +714,7 @@ impl AppContext {
         TimerToken::new(id)
     }
 
-    /// Drain the timer requests for the runtime.
+    /// 为运行时排空定时器请求。
     fn take_timer_requests(&mut self) -> (Vec<TimerRequest>, Vec<TimerToken>) {
         (
             core::mem::take(&mut self.timer_requests),
@@ -722,17 +722,17 @@ impl AppContext {
         )
     }
 
-    /// Share the runtime's timer token counter.
+    /// 共享运行时的定时器 token 计数器。
     fn share_timer_tokens(&mut self, tokens: Rc<Cell<u64>>) {
         self.timer_tokens = tokens;
     }
 
-    /// Share the runtime's local state pool with the view.
+    /// 与视图共享运行时的局部状态池。
     fn share_state(&mut self, state: Rc<RefCell<WidgetStateStore>>) {
         self.widget_state = state;
     }
 
-    /// Install the channel and waker used by [`Self::spawn`].
+    /// 安装 [`Self::spawn`] 使用的通道与唤醒器。
     fn install_async(&mut self, sender: Sender<AppEvent>, waker: Option<Arc<dyn AppWaker>>) {
         self.async_sender = Some(sender);
         self.waker = waker;
@@ -743,30 +743,30 @@ fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// The immutable context available while `view` builds the scene.
+/// `view` 构建场景期间可用的不可变上下文。
 #[derive(Copy, Clone, Debug)]
 pub struct ViewContext {
-    /// The viewport size.
+    /// 视口尺寸。
     pub viewport: Vec2,
-    /// The active theme.
+    /// 当前激活主题。
     pub theme: ThemeKind,
-    /// The node under the pointer.
+    /// 指针下方的节点。
     pub hovered: Option<u64>,
-    /// The node currently pressed.
+    /// 当前按下的节点。
     pub pressed: Option<u64>,
-    /// The focused node.
+    /// 当前聚焦的节点。
     pub focused: Option<u64>,
-    /// Whether the focus ring should be painted.
+    /// 是否应绘制焦点环。
     pub focus_visible: bool,
-    /// Whether the host asked for a full rebuild.
+    /// host 是否请求了完整重建。
     ///
-    /// Set by [`AppRuntime::invalidate`]: an application that normally skips a
-    /// rebuild when nothing changed must honour this and rebuild anyway.
+    /// 由 [`AppRuntime::invalidate`] 设置：通常在无变更时跳过重建的应用
+    /// 必须遵守此标志并执行重建。
     pub force: bool,
 }
 
 impl ViewContext {
-    /// The control state for a key, resolved from hover / press / focus.
+    /// 基于悬停 / 按下 / 聚焦解析出的键控控件状态。
     #[must_use]
     pub fn control_state(&self, key: u64, disabled: bool, selected: bool) -> ControlState {
         let phase = if disabled {
@@ -787,59 +787,59 @@ impl ViewContext {
     }
 }
 
-/// A widget the declarative view placed in the layout tree.
+/// 声明式视图放置在布局树中的控件。
 ///
-/// The widget is emitted in the second pass, once the layout engine has
-/// resolved its rectangle; the widget itself never guesses its geometry.
+/// 控件在第二遍发射，待布局引擎解析出其矩形后再绘制；
+/// 控件本身从不猜测自身几何。
 #[derive(Clone, Debug)]
 pub enum WidgetSpec {
-    /// A declarative [`UiWidget`] implementing automatic intrinsic sizing and emission.
+    /// 实现自动固有尺寸测量与发射的声明式 [`UiWidget`]。
     UiWidget(Arc<dyn ErasedUiWidget>),
-    /// A flat button. Its descriptor rect is replaced by the laid-out rect.
+    /// 扁平按钮。其描述符矩形会被布局后的矩形替换。
     Button(ButtonDesc),
-    /// A wrapping paragraph measured by the text engine.
+    /// 由文本引擎测量的自动换行段落。
     Text {
-        /// The paragraph contents.
+        /// 段落文本内容。
         text: String,
-        /// The shaping style.
+        /// 文本整形样式。
         style: TextStyle,
     },
-    /// A checkbox control.
+    /// 复选框控件。
     Checkbox(CheckboxDesc),
-    /// A toggle switch.
+    /// 切换开关。
     Switch(SwitchDesc),
-    /// A continuous slider.
+    /// 连续滑动条。
     Slider(SliderDesc),
-    /// A progress bar or ring.
+    /// 进度条或环形进度指示器。
     Progress {
-        /// Descriptor (rect is replaced by layout).
+        /// 描述符（矩形由布局结果替换）。
         desc: ProgressDesc,
-        /// Animation state.
+        /// 动画状态。
         state: ProgressState,
     },
-    /// A pill badge.
+    /// 胶囊徽章。
     Badge(BadgeDesc),
-    /// A hairline divider.
+    /// 细分割线。
     Divider(DividerDesc),
-    /// A status alert banner.
+    /// 状态提示横幅。
     Alert(AlertDesc),
 }
 
-/// One deferred widget together with the node the layout engine solved.
+/// 单个延迟控件及其由布局引擎求解的节点。
 #[derive(Clone, Debug)]
 pub struct PendingWidget {
-    /// The widget identity used by input and accessibility.
+    /// 用于输入与无障碍的控件标识。
     pub key: u64,
-    /// The layout node that owns the widget's geometry.
+    /// 拥有该控件几何信息的布局节点。
     pub node: NodeId,
-    /// What to emit in the second pass.
+    /// 第二遍要发射的内容。
     pub spec: WidgetSpec,
 }
 
-/// The scene builder handed to [`Application::view`].
+/// 传递给 [`Application::view`] 的场景构建器。
 pub struct ViewBuilder<'a> {
     collector: &'a mut SceneCollector,
-    /// The immutable frame context.
+    /// 不可变帧上下文。
     pub ctx: ViewContext,
     world: &'a mut UiWorld,
     parent: NodeId,
@@ -852,42 +852,42 @@ pub struct ViewBuilder<'a> {
 }
 
 impl<'a> ViewBuilder<'a> {
-    /// Register a roving-tabindex focus group for the current frame.
+    /// 为当前帧注册一个漫游 tabindex 焦点组。
     pub fn register_focus_group(&mut self, group: FocusGroup) {
         self.focus_groups.push(group);
     }
 
-    /// The local state for a widget key.
+    /// 控件键对应的局部状态。
     ///
-    /// The key is recorded as rendered, so a key that stops calling this is
-    /// unmounted at the end of the frame and its value reclaimed.
+    /// 该键会被记录为已渲染，因此停止调用此方法的键将在帧末被卸载并回收其值。
+    ///
     pub fn use_state<T: Default + Send + Sync + 'static>(&mut self, key: u64) -> RefMut<'_, T> {
         RefMut::map(self.widget_state.borrow_mut(), |store| store.use_state(key))
     }
 
-    /// Append a widget's output.
+    /// 追加控件的输出。
     pub fn push(&mut self, key: u64, output: WidgetOutput) {
         self.collector.push(key, output);
     }
 
-    /// Append a widget's output with a fixed primitive reservation, so a
-    /// dynamic glyph run does not shift every following widget's span.
+    /// 以固定图元预留空间追加控件输出，使动态字形序列不会移动后续控件的 span。
+    ///
     pub fn push_with_capacity(&mut self, key: u64, output: WidgetOutput, reserved_slots: usize) {
         self.collector
             .push_with_capacity(key, output, reserved_slots);
     }
 
-    /// Declare a vertical stack. Children are laid out in order.
+    /// 声明纵向堆叠容器。子节点按顺序布局。
     pub fn column(&mut self, key: u64, build: impl FnOnce(&mut Self)) -> NodeId {
         self.container(key, RawNodeDesc::container().column().gap(8.0), build)
     }
 
-    /// Declare a horizontal stack.
+    /// 声明横向堆叠容器。
     pub fn row(&mut self, key: u64, build: impl FnOnce(&mut Self)) -> NodeId {
         self.container(key, RawNodeDesc::container().row().gap(8.0), build)
     }
 
-    /// Declare a grid with up to eight explicit column tracks.
+    /// 声明最多包含 8 条显式列轨道的网格容器。
     pub fn grid(&mut self, key: u64, columns: &[Dim], build: impl FnOnce(&mut Self)) -> NodeId {
         let desc = RawNodeDesc::container()
             .display(unbound_abi::Display::Grid)
@@ -923,7 +923,7 @@ impl<'a> ViewBuilder<'a> {
         node
     }
 
-    /// Declare a layout-only container with an explicit descriptor.
+    /// 使用显式描述符声明纯布局容器。
     pub fn container(
         &mut self,
         key: u64,
@@ -937,7 +937,7 @@ impl<'a> ViewBuilder<'a> {
         node
     }
 
-    /// Place a widget in the current container; emit happens after layout.
+    /// 在当前容器中放置控件；实际发射在布局完成后进行。
     pub fn widget(&mut self, key: u64, mut desc: RawNodeDesc, spec: WidgetSpec) -> NodeId {
         desc.key = key;
         let intrinsic = match &spec {
@@ -989,12 +989,12 @@ impl<'a> ViewBuilder<'a> {
         node
     }
 
-    /// Add any declarative [`UiWidget`] with automatic intrinsic sizing and layout.
+    /// 添加任意支持自动固有尺寸测量与布局的声明式 [`UiWidget`]。
     pub fn add<W: unbound_widgets::UiWidget + 'static>(&mut self, key: u64, widget: W) -> NodeId {
         self.add_with_layout(key, RawNodeDesc::container(), widget)
     }
 
-    /// Add any declarative [`UiWidget`] with custom layout constraints.
+    /// 添加任意带自定义布局约束的声明式 [`UiWidget`]。
     pub fn add_with_layout<W: unbound_widgets::UiWidget + 'static>(
         &mut self,
         key: u64,
@@ -1011,57 +1011,57 @@ impl<'a> ViewBuilder<'a> {
         node
     }
 
-    /// Declarative button shortcut.
+    /// 声明式按钮快捷方式。
     pub fn button(&mut self, key: u64, desc: ButtonDesc) -> NodeId {
         self.add(key, desc)
     }
 
-    /// Declarative checkbox shortcut.
+    /// 声明式复选框快捷方式。
     pub fn checkbox(&mut self, key: u64, desc: CheckboxDesc) -> NodeId {
         self.add(key, desc)
     }
 
-    /// Declarative switch shortcut.
+    /// 声明式开关快捷方式。
     pub fn switch(&mut self, key: u64, desc: SwitchDesc) -> NodeId {
         self.add(key, desc)
     }
 
-    /// Declarative slider shortcut.
+    /// 声明式滑动条快捷方式。
     pub fn slider(&mut self, key: u64, desc: SliderDesc) -> NodeId {
         self.add(key, desc)
     }
 
-    /// Declarative text input shortcut.
+    /// 声明式文本输入框快捷方式。
     pub fn text_input(&mut self, key: u64, desc: unbound_widgets::TextInputDesc) -> NodeId {
         self.add(key, desc)
     }
 
-    /// Declarative select dropdown shortcut.
+    /// 声明式下拉选择框快捷方式。
     pub fn select(&mut self, key: u64, desc: unbound_widgets::SelectDesc) -> NodeId {
         self.add(key, desc)
     }
 
-    /// Declarative badge shortcut.
+    /// 声明式徽章快捷方式。
     pub fn badge(&mut self, key: u64, desc: BadgeDesc) -> NodeId {
         self.add(key, desc)
     }
 
-    /// Declarative divider shortcut.
+    /// 声明式分割线快捷方式。
     pub fn divider(&mut self, key: u64, desc: DividerDesc) -> NodeId {
         self.add(key, desc)
     }
 
-    /// Declarative alert banner shortcut.
+    /// 声明式提示横幅快捷方式。
     pub fn alert(&mut self, key: u64, desc: AlertDesc) -> NodeId {
         self.add(key, desc)
     }
 
-    /// Declarative progress indicator shortcut.
+    /// 声明式进度指示器快捷方式。
     pub fn progress(&mut self, key: u64, desc: ProgressDesc) -> NodeId {
         self.add(key, desc)
     }
 
-    /// Declarative card container shortcut.
+    /// 声明式卡片容器快捷方式。
     pub fn card(
         &mut self,
         key: u64,
@@ -1078,7 +1078,7 @@ impl<'a> ViewBuilder<'a> {
         )
     }
 
-    /// Declarative scroll view container shortcut.
+    /// 声明式滚动视图容器快捷方式。
     pub fn scroll_view(
         &mut self,
         key: u64,
@@ -1094,7 +1094,7 @@ impl<'a> ViewBuilder<'a> {
         self.container(key, desc, build)
     }
 
-    /// Declarative split pane container shortcut.
+    /// 声明式分栏容器快捷方式。
     pub fn split_pane(
         &mut self,
         key: u64,
@@ -1113,8 +1113,8 @@ impl<'a> ViewBuilder<'a> {
         })
     }
 
-    /// Place a wrapping paragraph. It spans the container width and its
-    /// measured height comes from [`TextEngine::wrap`].
+    /// 放置自动换行段落。其跨越容器宽度，测量高度来自 [`TextEngine::wrap`]。
+    ///
     pub fn text(&mut self, key: u64, text: impl Into<String>, style: TextStyle) -> NodeId {
         let text = text.into();
         let desc = RawNodeDesc::container()
@@ -1131,40 +1131,40 @@ impl<'a> ViewBuilder<'a> {
         node
     }
 
-    /// Direct access for widgets that need to append transforms or clips.
+    /// 直接访问收集器，供需要追加变换或裁剪的控件使用。
     pub fn collector(&mut self) -> &mut SceneCollector {
         self.collector
     }
 
-    /// Ask the renderer for a backdrop-blur pass behind `rect`.
+    /// 请求渲染器在 `rect` 后方执行背景模糊通道。
     ///
-    /// Overlay emitters return a `BackdropRequest`; forwarding it here puts it
-    /// on the frame report, where a renderer can activate the frosted-glass
-    /// chain. An empty list means the graph skips the blur passes entirely.
+    /// 覆盖层发射器返回 `BackdropRequest`；将其转发至此会写入帧报告，
+    /// 渲染器据此激活毛玻璃管线。列表为空时渲染图将完全跳过模糊通道。
+    ///
     pub fn request_backdrop(&mut self, request: BackdropRequest) {
         self.collector.backdrops.push(request);
     }
 
-    /// The viewport as a rectangle at the origin.
+    /// 以原点为基准的视口矩形。
     #[must_use]
     pub fn viewport_rect(&self) -> Rect {
         Rect::new(0.0, 0.0, self.ctx.viewport.x, self.ctx.viewport.y)
     }
 }
 
-/// The application contract.
+/// 应用契约。
 ///
-/// The trait is deliberately tiny: state in, events in, primitives out. A
-/// windowed shell, a headless test and the showcase all drive the same three
-/// methods.
+/// 该 trait 刻意保持极简：输入状态、输入事件、输出图元。
+/// 窗口化外壳、无头测试与 showcase 均驱动完全相同的三个方法。
+///
 pub trait Application {
-    /// The application state.
+    /// 应用状态类型。
     type State;
 
-    /// Build the initial state.
+    /// 构建初始状态。
     fn init(&mut self, ctx: &mut AppContext) -> Self::State;
 
-    /// Reduce one resolved event.
+    /// 归约单个已解析事件。
     fn reduce(
         &mut self,
         state: &mut Self::State,
@@ -1172,40 +1172,40 @@ pub trait Application {
         ctx: &mut AppContext,
     ) -> EventOutcome;
 
-    /// React to a lifecycle transition for a local state key.
+    /// 响应局部状态键的生命周期转换。
     ///
-    /// Runs after the view, once the runtime knows which keys appeared or
-    /// disappeared, and when the keyboard focus moves. Returning flags that
-    /// need a rebuild schedules one for the next frame.
+    /// 在视图构建之后运行，此时运行时已知晓哪些键出现或消失以及键盘焦点何时移动。
+    /// 返回需要重建的标志将为下一帧安排重建。
+    ///
     fn lifecycle(&mut self, _state: &mut Self::State, _event: LifecycleEvent) -> DirtyFlags {
         DirtyFlags::NONE
     }
 
-    /// Emit the scene for the current state.
+    /// 为当前状态发射场景。
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder<'_>);
 }
 
-/// Whether an event keeps bubbling up the hit path.
+/// 事件是否继续沿命中路径向上冒泡。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum Propagation {
-    /// The event may be offered to the next ancestor.
+    /// 事件可继续提供给下一级祖先。
     #[default]
     Bubble,
-    /// The handler consumed the event; the runtime stops walking the path.
+    /// 处理器已消费事件；运行时停止沿路径向上遍历。
     Stop,
 }
 
-/// What reducing one event produced.
+/// 归约单个事件的产出结果。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct EventOutcome {
-    /// The invalidation the reduction caused.
+    /// 本次归约导致的失效范围。
     pub dirty: DirtyFlags,
-    /// Whether the event should still be offered to an ancestor.
+    /// 事件是否仍应继续提供给祖先。
     pub propagation: Propagation,
 }
 
 impl EventOutcome {
-    /// An outcome that changed `dirty` and keeps bubbling.
+    /// 产生 `dirty` 变更且继续冒泡的结果。
     #[must_use]
     pub const fn new(dirty: DirtyFlags) -> Self {
         Self {
@@ -1214,7 +1214,7 @@ impl EventOutcome {
         }
     }
 
-    /// An outcome that stops the event.
+    /// 停止事件传播的结果。
     #[must_use]
     pub const fn stopping(dirty: DirtyFlags) -> Self {
         Self {
@@ -1223,7 +1223,7 @@ impl EventOutcome {
         }
     }
 
-    /// The same outcome, marked as consumed.
+    /// 将同一结果标记为已消费。
     #[must_use]
     pub const fn stop(self) -> Self {
         Self {
@@ -1233,31 +1233,31 @@ impl EventOutcome {
     }
 }
 
-/// The result of rebuilding one frame.
+/// 重建单帧的结果。
 #[derive(Clone, Debug)]
 pub struct FrameReport {
-    /// What the renderer must upload.
+    /// 渲染器必须上传的差异。
     pub diff: SceneDiff,
-    /// The dirty flags accumulated since the previous frame.
+    /// 自上一帧以来累积的脏标志。
     pub dirty: DirtyFlags,
-    /// The primitive count in the new frame.
+    /// 新帧中的图元数量。
     pub primitives: usize,
-    /// The bytes the diff would upload.
+    /// 本次 diff 需上传的字节数。
     pub bytes: u32,
-    /// Whether one of the lightweight auxiliary tables (payloads, transforms,
-    /// clips) changed and must be re-uploaded without re-sending the
-    /// primitive pool.
-    pub aux_changed: bool,
-    /// Backdrop-blur requests for this frame.
-    pub backdrops: Vec<BackdropRequest>,
-    /// Atlas rectangles the asset hub decoded this frame.
+    /// 某个轻量辅助表（payloads、transforms、clips）是否发生变更，
+    /// 需单独重传而无需重新发送整个图元池。
     ///
-    /// The shell uploads them with [`unbound_gpu::atlas::AtlasSet::upload_batch`]
-    /// before it draws; the runtime itself never touches the GPU.
+    pub aux_changed: bool,
+    /// 本帧的背景模糊请求。
+    pub backdrops: Vec<BackdropRequest>,
+    /// 资产中心本帧解码完成的图集矩形。
+    ///
+    /// 外壳在绘制前通过 [`unbound_gpu::atlas::AtlasSet::upload_batch`] 上传它们；
+    /// 运行时本身从不接触 GPU。
     pub atlas_uploads: Vec<AtlasUpload>,
 }
 
-/// The event-reducing, scene-diffing application runtime.
+/// 负责事件归约与场景 diff 的应用运行时。
 pub struct AppRuntime<A: Application> {
     app: A,
     state: A::State,
@@ -1299,7 +1299,7 @@ pub struct AppRuntime<A: Application> {
 }
 
 impl<A: Application> AppRuntime<A> {
-    /// Build a runtime, initialising the application state.
+    /// 构建运行时并初始化应用状态。
     pub fn new(mut app: A, viewport: Vec2) -> Self {
         let mut ctx = AppContext::new(viewport);
         let widget_state = Rc::new(RefCell::new(WidgetStateStore::new()));
@@ -1348,74 +1348,74 @@ impl<A: Application> AppRuntime<A> {
             layout_initialized: false,
             overlays: OverlayManager::new(),
         };
-        // A timer scheduled from `init` is already due relative to the zero
-        // clock; enqueue it before the first frame can advance past it.
+        // `init` 中调度的定时器相对于零时钟可能已到期；
+        // 在首帧推进越过它之前先将其入队。
         runtime.collect_timer_requests();
         runtime
     }
 
-    /// Install the waker a background task uses to wake a parked event loop.
+    /// 安装后台任务用于唤醒休眠事件循环的唤醒器。
     pub fn set_waker(&mut self, waker: Arc<dyn AppWaker>) {
         self.ctx.waker = Some(waker);
     }
 
-    /// The mutable shortcut table.
+    /// 可变快捷键映射表。
     pub fn keymap_mut(&mut self) -> &mut Keymap {
         &mut self.keymap
     }
 
-    /// Set the active shortcut scope (`"TextInput"`, `"Modal"`, ...).
+    /// 设置当前激活的快捷键作用域（`"TextInput"`、`"Modal"` 等）。
     pub fn set_key_context(&mut self, context: Option<&str>) {
         self.key_context = context.map(str::to_owned);
         self.keymap.clear_pending();
     }
 
-    /// The DevTools inspector state.
+    /// DevTools 检查器状态。
     #[must_use]
     pub const fn inspector(&self) -> &Inspector {
         &self.inspector
     }
 
-    /// Mutable access for shell-side wiring (e.g. a menu item).
+    /// 可变访问检查器，供外壳侧接线使用（例如菜单项）。
     pub fn inspector_mut(&mut self) -> &mut Inspector {
         &mut self.inspector
     }
 
-    /// Toggle the inspector overlay; returns the new state.
+    /// 切换检查器覆盖层；返回新状态。
     pub fn toggle_inspector(&mut self) -> bool {
         let enabled = self.inspector.toggle();
-        // The overlay is part of the scene, so the next frame has to rebuild
-        // even when no widget dirtied itself.
+        // 覆盖层属于场景的一部分，因此即使没有控件变脏，下一帧也必须重建。
+        //
         self.force_rebuild = true;
         self.dirty |= DirtyFlags::PAINT;
         enabled
     }
 
-    /// Turn the per-frame headless sanitizer pass on or off.
+    /// 开启或关闭每帧无头检查器通道。
     ///
-    /// While on, every frame mirrors the world into an `unbound_headless::Frame` and
-    /// runs the five sanitizers; violations show up as blinking boxes in the
-    /// inspector. This is a debug switch and costs a full tree walk per frame.
+    /// 开启时，每帧都会将 world 镜像为 `unbound_headless::Frame` 并运行五项检查器；
+    /// 违规项会在检查器中显示为闪烁边框。这是调试开关，每帧需额外遍历整棵树。
+    ///
     pub fn enable_debug_sanitizers(&mut self, enabled: bool) {
         self.debug_sanitizers = enabled;
         self.force_rebuild = true;
         self.dirty |= DirtyFlags::PAINT;
     }
 
-    /// Whether the sanitizer pass is currently enabled.
+    /// 检查器通道当前是否启用。
     #[must_use]
     pub const fn debug_sanitizers_enabled(&self) -> bool {
         self.debug_sanitizers
     }
 
-    /// Force a full rebuild of the scene and re-upload of all cached resources.
+    /// 强制完整重建场景并重新上传所有缓存资源。
     pub fn request_full_rebuild(&mut self) {
         self.force_rebuild = true;
         self.dirty |= DirtyFlags::ALL;
         self.glyph_cache.clear();
     }
 
-    /// How long until the next timer, for the host's `ControlFlow`.
+    /// 距离下一个定时器触发的剩余时间，供 host 的 `ControlFlow` 使用。
     #[must_use]
     pub fn next_wake_in(&self) -> Option<Duration> {
         let deadline = self.timers.next_deadline_ms()?;
@@ -1424,7 +1424,7 @@ impl<A: Application> AppRuntime<A> {
         ))
     }
 
-    /// Reduce every result a background task posted.
+    /// 归约后台任务投递的所有结果。
     pub fn poll_async(&mut self) -> DirtyFlags {
         let mut flags = DirtyFlags::NONE;
         while let Ok(event) = self.async_rx.try_recv() {
@@ -1433,7 +1433,7 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
-    /// Reduce every timer due at the current clock.
+    /// 归约当前时钟下到期的所有定时器。
     pub fn poll_timers(&mut self) -> DirtyFlags {
         self.collect_timer_requests();
         let due = self.timers.due(self.now_ms());
@@ -1444,7 +1444,7 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
-    /// Access one local state value by key.
+    /// 按键访问单个局部状态值。
     pub fn with_state<T: Default + Send + Sync + 'static, R>(
         &mut self,
         key: u64,
@@ -1454,13 +1454,13 @@ impl<A: Application> AppRuntime<A> {
         f(store.entry(key))
     }
 
-    /// The local state pool, for a test or a host that needs to inspect it.
+    /// 局部状态池，供测试或需要检查它的 host 使用。
     #[must_use]
     pub fn state_store(&self) -> core::cell::Ref<'_, WidgetStateStore> {
         self.widget_state.borrow()
     }
 
-    /// Returns the world rect of a mounted widget by its key.
+    /// 按键返回已挂载控件的世界坐标矩形。
     #[must_use]
     pub fn widget_rect(&self, key: u64) -> Option<Rect> {
         self.mounted_widgets.get(&key).map(|(rect, _)| *rect)
@@ -1487,84 +1487,84 @@ impl<A: Application> AppRuntime<A> {
         }
     }
 
-    /// The application state.
+    /// 获取应用状态。
     #[must_use]
     pub fn state(&self) -> &A::State {
         &self.state
     }
 
-    /// The mutable application state, for a shell that needs to poke it.
+    /// 可变访问应用状态，供需要修改它的外壳使用。
     pub fn state_mut(&mut self) -> &mut A::State {
         &mut self.state
     }
 
-    /// The application itself.
+    /// 获取应用实例本身。
     ///
-    /// A windowed shell needs it for the parts the runtime deliberately does
-    /// not own: the glyph cache, the camera, and the accessibility tree the
-    /// platform adapter publishes.
+    /// 窗口化外壳需要通过它访问运行时刻意不持有的部分：
+    /// 字形缓存、相机以及平台适配器发布的无障碍树。
+    ///
     #[must_use]
     pub fn application(&self) -> &A {
         &self.app
     }
 
-    /// The application itself, mutably.
+    /// 可变访问应用实例。
     pub fn application_mut(&mut self) -> &mut A {
         &mut self.app
     }
 
-    /// Advance the clock and reduce one tick.
+    /// 推进时钟并归约一次 tick。
     ///
-    /// A shell with a frame clock calls this instead of
-    /// [`Self::frame`]'s `dt`, so a time-driven application reports the frame
-    /// it actually needs instead of being rebuilt on every vsync.
+    /// 带帧时钟的外壳应调用此方法而非 [`Self::frame`] 的 `dt`，
+    /// 使时间驱动型应用仅在真正需要时报告脏帧，而非每次 vsync 都重建。
+    ///
     pub fn tick(&mut self, dt: f32) -> DirtyFlags {
         self.advance(dt);
         self.dispatch(AppEvent::Tick { dt })
     }
 
-    /// The current application context.
+    /// 获取当前应用上下文。
     #[must_use]
     pub fn context(&self) -> &AppContext {
         &self.ctx
     }
 
-    /// The scene of the most recent frame.
+    /// 获取最近一帧的场景。
     #[must_use]
     pub fn scene(&self) -> &SceneCollector {
         &self.collector
     }
 
-    /// The scene of the most recent frame, mutably.
+    /// 可变访问最近一帧的场景。
     ///
-    /// A window host uses this to drain the semantic delta into the platform
-    /// accessibility adapter.
+    /// 窗口 host 借此将语义增量排入平台无障碍适配器。
+    ///
     pub fn scene_mut(&mut self) -> &mut SceneCollector {
         &mut self.collector
     }
 
-    /// The diff of the most recent frame.
+    /// 获取最近一帧的 diff。
     #[must_use]
     pub fn last_diff(&self) -> &SceneDiff {
         &self.diff
     }
 
-    /// The dirty flags accumulated since the last frame.
+    /// 获取自上一帧以来累积的脏标志。
     #[must_use]
     pub fn dirty(&self) -> DirtyFlags {
         self.dirty
     }
 
-    /// The focus manager, for a shell that wires platform focus events.
+    /// 获取焦点管理器，供外壳接入平台焦点事件。
     #[must_use]
     pub fn focus(&self) -> &FocusManager {
         &self.focus
     }
 
-    /// Focus a node (or drop focus) without going through an event.
+    /// 不经过事件直接聚焦节点（或失焦）。
     ///
-    /// A host uses this for window-activation changes; a test uses it to
-    /// reproduce the focus the runtime's own pointer policy would resolve.
+    /// host 将其用于窗口激活状态变更；测试用它复现运行时指针策略会解析出的焦点。
+    ///
     pub fn focus_node(&mut self, node: Option<u64>) {
         let changed = match node {
             Some(node) => self.focus.focus(node, FocusCause::Programmatic),
@@ -1576,13 +1576,13 @@ impl<A: Application> AppRuntime<A> {
         }
     }
 
-    /// Mark the next frame as a full rebuild.
+    /// 将下一帧标记为完整重建。
     pub fn invalidate(&mut self) {
         self.dirty = self.dirty.merge(DirtyFlags::ALL);
         self.force_rebuild = true;
     }
 
-    /// Move the pointer, producing hover / move events.
+    /// 移动指针，产生悬停 / 移动事件。
     pub fn pointer_move(&mut self, pos: Vec2) -> DirtyFlags {
         self.ctx.pointer = pos;
         let mut flags = DirtyFlags::PAINT;
@@ -1594,18 +1594,18 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
-    /// Borrow the runtime overlay & focus-trap manager.
+    /// 借用运行时覆盖层与焦点陷阱管理器。
     #[must_use]
     pub fn overlays(&self) -> &OverlayManager {
         &self.overlays
     }
 
-    /// Mutably borrow the runtime overlay & focus-trap manager.
+    /// 可变借用运行时覆盖层与焦点陷阱管理器。
     pub fn overlays_mut(&mut self) -> &mut OverlayManager {
         &mut self.overlays
     }
 
-    /// Open an overlay with automatic focus-trap and focus-return management.
+    /// 打开覆盖层，并自动管理焦点陷阱与焦点恢复。
     pub fn open_overlay(&mut self, entry: unbound_widgets::overlay::OverlayEntry) -> u64 {
         let key = self.overlays.open(entry, &mut self.focus);
         self.sync_focus_context();
@@ -1613,7 +1613,7 @@ impl<A: Application> AppRuntime<A> {
         key
     }
 
-    /// Close an overlay by node ID and restore trigger focus.
+    /// 按节点 ID 关闭覆盖层并恢复触发元素焦点。
     pub fn close_overlay(&mut self, node: u64) -> bool {
         let closed = self.overlays.close(node, &mut self.focus);
         if closed {
@@ -1623,7 +1623,7 @@ impl<A: Application> AppRuntime<A> {
         closed
     }
 
-    /// Press `button`.
+    /// 按下 `button`。
     pub fn pointer_down(&mut self, pos: Vec2, button: PointerButton) -> DirtyFlags {
         let mut flags = DirtyFlags::NONE;
         if button == PointerButton::Left
@@ -1643,7 +1643,7 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
-    /// Release `button`.
+    /// 释放 `button`。
     pub fn pointer_up(&mut self, pos: Vec2, button: PointerButton) -> DirtyFlags {
         let events = self.router.pointer_up_button(pos, button, self.time);
         self.ctx.pointer = pos;
@@ -1656,11 +1656,11 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
-    /// Cancel the pointer capture without synthesising a click.
+    /// 取消指针捕获且不合成点击事件。
     ///
-    /// A host that loses focus mid-press has to drop the capture: the release
-    /// will never arrive, and the next `pointer_up` must not turn the
-    /// abandoned press into an activation.
+    /// 按下中途失焦的 host 必须丢弃捕获：释放事件永远不会到达，
+    /// 下一次 `pointer_up` 绝不能把被放弃的按下变成一次激活。
+    ///
     pub fn cancel_pointer(&mut self) -> DirtyFlags {
         let _ = self.router.cancel();
         self.sync_router_context();
@@ -1668,13 +1668,13 @@ impl<A: Application> AppRuntime<A> {
         DirtyFlags::LAYOUT
     }
 
-    /// A wheel notch at `pos`.
+    /// 在 `pos` 处触发一次滚轮滚动。
     ///
-    /// The delta walks the hit stack topmost-first. Each handler reports what
-    /// it consumed through [`AppContext::consume_scroll`]; the remainder is
-    /// offered to the ancestor under it, so a scroll area at its end hands the
-    /// wheel to the page behind it. A handler that returns
-    /// [`Propagation::Stop`] ends the chain immediately.
+    /// 增量按从顶层到底层的顺序遍历命中栈。每个处理器通过 [`AppContext::consume_scroll`]
+    /// 报告其消费量；剩余部分继续提供给下层祖先，使滚动区域滚到底后将滚轮交给
+    /// 后方页面。返回 [`Propagation::Stop`] 的处理器会立即终止链条。
+    ///
+    ///
     pub fn wheel(&mut self, pos: Vec2, delta: Vec2) -> DirtyFlags {
         let path: Vec<u64> = self
             .router
@@ -1711,16 +1711,16 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
-    /// A raw pointer event, for a shell that owns a different router.
+    /// 处理原始指针事件，供自行持有路由器的外壳使用。
     pub fn pointer_event(&mut self, event: PointerEvent) -> DirtyFlags {
         self.reduce_pointer(event)
     }
 
-    /// A key press or release.
+    /// 处理按键按下或释放。
     pub fn key(&mut self, key: AppKey, pressed: bool, modifiers: Modifiers) -> DirtyFlags {
         let mut flags = DirtyFlags::NONE;
         if pressed && matches!(key, AppKey::F(12)) {
-            // F12 is the DevTools toggle; it never reaches the application.
+            // F12 为 DevTools 开关；绝不传递至应用。
             self.toggle_inspector();
             return DirtyFlags::PAINT;
         }
@@ -1759,8 +1759,8 @@ impl<A: Application> AppRuntime<A> {
                 }
             }
 
-            // A bound chord is a command, not text: reducing it instead of
-            // the raw key stops a focused text field from also inserting it.
+            // 已绑定的组合键是命令而非文本：归约它而非原始按键，
+            // 可防止聚焦的文本字段同时插入该字符。
             let action =
                 self.keymap
                     .feed(key.chord(modifiers), self.key_context.as_deref(), self.time);
@@ -1781,37 +1781,37 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
-    /// Type text.
+    /// 处理文本输入。
     pub fn text(&mut self, text: impl Into<String>) -> DirtyFlags {
         self.dispatch(AppEvent::Text { text: text.into() })
     }
 
-    /// An IME update.
+    /// 处理 IME 更新。
     pub fn ime(&mut self, update: ImeUpdate) -> DirtyFlags {
         self.dispatch(AppEvent::Ime { update })
     }
 
-    /// OS files hovered over the window.
+    /// 系统文件悬停在窗口上方。
     pub fn file_hover(&mut self, paths: Vec<std::path::PathBuf>) -> DirtyFlags {
         self.dispatch(AppEvent::FileHover(paths))
     }
 
-    /// OS files dropped onto the window.
+    /// 系统文件拖放至窗口。
     pub fn file_drop(&mut self, paths: Vec<std::path::PathBuf>) -> DirtyFlags {
         self.dispatch(AppEvent::FileDrop(paths))
     }
 
-    /// OS file hover cancelled.
+    /// 系统文件悬停已取消。
     pub fn file_hover_cancelled(&mut self) -> DirtyFlags {
         self.dispatch(AppEvent::FileHoverCancelled)
     }
 
-    /// Install a platform clipboard provider on the runtime's context.
+    /// 在运行时上下文中安装平台剪贴板提供者。
     pub fn set_clipboard(&mut self, provider: Box<dyn ClipboardProvider>) {
         self.ctx.set_clipboard(provider);
     }
 
-    /// A resize.
+    /// 处理视口尺寸调整。
     pub fn resize(&mut self, size: Vec2) -> DirtyFlags {
         self.ctx.viewport = size;
         self.force_rebuild = true;
@@ -1822,7 +1822,7 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
-    /// A theme change.
+    /// 处理主题变更。
     pub fn set_theme(&mut self, kind: ThemeKind) -> DirtyFlags {
         self.ctx.theme = kind;
         let flags = self
@@ -1832,7 +1832,7 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
-    /// An accessibility action.
+    /// 处理无障碍动作。
     pub fn a11y(&mut self, target: u64, action: A11yAction, value: Option<String>) -> DirtyFlags {
         self.dispatch(AppEvent::A11y {
             target,
@@ -1841,13 +1841,13 @@ impl<A: Application> AppRuntime<A> {
         })
     }
 
-    /// Advance the clock without producing a `Tick` event.
+    /// 推进时钟但不产生 `Tick` 事件。
     pub fn advance(&mut self, dt: f32) {
         self.time += f64::from(dt.max(0.0));
         self.ctx.time = self.time;
     }
 
-    /// Drain pending uploads from both the asset hub and the glyph cache.
+    /// 从资产中心与字形缓存排空待上传任务。
     fn collect_atlas_uploads(&mut self) -> Vec<AtlasUpload> {
         let mut uploads = self.asset_hub.take_uploads();
         for update in self.glyph_cache.take_updates() {
@@ -1868,19 +1868,19 @@ impl<A: Application> AppRuntime<A> {
         uploads
     }
 
-    /// Rebuild the scene, diff it against the previous frame, and update the
-    /// router, the focus order and the accessibility snapshot.
+    /// 重建场景、与上一帧做 diff，并更新路由器、焦点顺序与无障碍快照。
     ///
-    /// A frame with no dirty flags and no forced rebuild is a no-op that
-    /// reports [`SceneDiff::Identical`] — the zero-work path.
+    ///
+    /// 无脏标志且未强制重建的帧为空操作，报告 [`SceneDiff::Identical`]——零开销路径。
+    ///
     pub fn frame(&mut self, dt: f32) -> FrameReport {
         self.frame_count = self.frame_count.wrapping_add(1);
         self.advance(dt);
-        // Results and timers that arrived since the previous frame are
-        // reduced first, so a frame that only woke up for them still rebuilds.
+        // 先归约自上一帧以来到达的异步结果与定时器，
+        // 使仅因它们而唤醒的帧仍会执行重建。
         self.poll_async();
         self.poll_timers();
-        // Decoded assets invalidate the same way a reduction does.
+        // 已解码的资产以与归约相同的方式触发失效。
         let asset_dirty = self.asset_hub.poll(&mut self.text_engine);
         self.dirty = self.dirty.merge(asset_dirty);
         let dirty = core::mem::replace(&mut self.dirty, DirtyFlags::NONE);
@@ -1896,8 +1896,8 @@ impl<A: Application> AppRuntime<A> {
             };
         }
 
-        // The focus order comes from the previous frame; adopting it before
-        // the rebuild lets `Tab` act between frames.
+        // 焦点顺序来自上一帧；在重建前采用它，使 `Tab` 可在帧间生效。
+        //
         self.focus
             .set_order(self.collector.focus_order.iter().copied());
         self.sync_focus_context();
@@ -1955,7 +1955,7 @@ impl<A: Application> AppRuntime<A> {
         self.layout_pending();
         self.dispatch_lifecycle();
 
-        // Publish the new hit regions and focus order.
+        // 发布新的命中区域与焦点顺序。
         let regions = core::mem::take(&mut self.collector.regions);
         self.router.set_regions(regions);
         self.focus
@@ -1966,9 +1966,9 @@ impl<A: Application> AppRuntime<A> {
         }
         self.sync_focus_context();
 
-        // DevTools overlay + the debug sanitizer loop. Both read the world and
-        // the hit regions the frame just produced, and both append to the end
-        // of the primitive list so the debug pass paints last.
+        // DevTools 覆盖层 + 调试检查器循环。两者均读取本帧刚产出的 world 与命中区域，
+        // 且均追加到图元列表末尾，使调试通道最后绘制。
+        //
         let inspector_active = self.inspector.enabled() || self.debug_sanitizers;
         if inspector_active {
             self.inspector.tick(dt);
@@ -2039,10 +2039,10 @@ impl<A: Application> AppRuntime<A> {
             }
         }
 
-        // Only the tables a primitive *indexes into* decide whether a slice
-        // patch can repair the pool. Payload changes (glyphs, gradients) are
-        // uploaded separately through `aux_changed`, so typing in a text
-        // field keeps patching the primitive pool instead of re-sending it.
+        // 仅图元*索引指向*的表决定切片修补（slice patch）能否修复图元池。
+        // 负载变更（字形、渐变）通过 `aux_changed` 单独上传，因此在文本字段中
+        // 打字可以持续修补图元池，而无需重发整个图元池。
+        //
         let structure_changed = self.collector.transforms != self.previous_transforms
             || self.collector.clips != self.previous_clips;
         let aux_changed = self.collector.payloads != self.previous_payloads;
@@ -2068,8 +2068,8 @@ impl<A: Application> AppRuntime<A> {
         self.diff = diff.clone();
         self.backdrops.clear();
         self.backdrops.extend_from_slice(&self.collector.backdrops);
-        // The inspector blinks and follows the pointer, so its presence forces
-        // the next frame to rebuild even when nothing else is dirty.
+        // 检查器会闪烁并跟随指针，因此它的存在会强制下一帧重建，
+        // 即便没有其他元素变脏。
         self.force_rebuild = inspector_active;
 
         FrameReport {
@@ -2083,41 +2083,41 @@ impl<A: Application> AppRuntime<A> {
         }
     }
 
-    /// The asset hub, for submitting images and fonts.
+    /// 资产中心，用于提交图像与字体。
     #[must_use]
     pub fn asset_hub(&self) -> &AssetHub {
         &self.asset_hub
     }
 
-    /// Mutable access to the asset hub.
+    /// 可变访问资产中心。
     pub fn asset_hub_mut(&mut self) -> &mut AssetHub {
         &mut self.asset_hub
     }
 
-    /// The layout world of the most recent frame.
+    /// 最近一帧的布局 world。
     #[must_use]
     pub fn world(&self) -> &UiWorld {
         &self.world
     }
 
-    /// The application itself, for inspection from tests and debug overlays.
+    /// 应用实例本身，供测试与调试覆盖层检查。
     #[must_use]
     pub fn app(&self) -> &A {
         &self.app
     }
 
-    /// The layout statistics from the most recent solve pass.
+    /// 最近一次求解过程的布局统计信息。
     #[must_use]
     pub fn last_layout_stats(&self) -> LayoutStats {
         self.last_layout_stats
     }
 
-    /// Solve the declarative tree and emit the deferred widgets.
+    /// 求解声明式树并发射延迟控件。
     ///
-    /// Pass 1 reconciles the world and pre-measures widgets; pass 2 solves
-    /// either the full tree (on topology/viewport change) or only dirty
-    /// relayout boundaries via [`LayoutEngine::solve_boundaries`], then emits
-    /// every widget at its resolved rectangle.
+    /// 第 1 遍协调 world 并预测量控件；第 2 遍求解整棵树（拓扑/视口变更时）
+    /// 或通过 [`LayoutEngine::solve_boundaries`] 仅求解脏重布局边界，
+    /// 随后在各自解析出的矩形位置发射每个控件。
+    ///
     fn layout_pending(&mut self) {
         if self.pending.is_empty() && !self.world.topology_dirty() {
             let boundaries = self.world.dirty_boundaries();
@@ -2132,7 +2132,7 @@ impl<A: Application> AppRuntime<A> {
             return;
         }
 
-        // Pass 1: Pre-measure widgets using TextCtx
+        // 第 1 遍：使用 TextCtx 预测量控件
         {
             let mut text_ctx = unbound_widgets::TextCtx {
                 engine: &mut self.text_engine,
@@ -2364,8 +2364,8 @@ impl<A: Application> AppRuntime<A> {
                     target,
                     button,
                 });
-                // A secondary click opens the menu only when the release is
-                // still over the node that was pressed.
+                // 仅当释放位置仍在被按下的节点上时，辅助点击才打开菜单。
+                //
                 if button == PointerButton::Right {
                     if let Some(node) = target {
                         if self.router.hover() == Some(node) {
@@ -2397,11 +2397,11 @@ impl<A: Application> AppRuntime<A> {
         }
     }
 
-    /// Report the mount / unmount delta and the focus change to the app.
+    /// 向应用报告挂载 / 卸载差集与焦点变更。
     fn dispatch_lifecycle(&mut self) {
         let changes = {
-            // Do not hold the borrow while the hooks run: a hook may ask for
-            // the same key's state again.
+            // 钩子运行期间不得持有借用：钩子可能会再次请求同一键的状态。
+            //
             self.widget_state.borrow_mut().end_frame()
         };
         let mut flags = DirtyFlags::NONE;
@@ -2437,11 +2437,11 @@ impl<A: Application> AppRuntime<A> {
         self.mark(flags);
     }
 
-    /// Dispatch one resolved event outside the pointer/keyboard path.
+    /// 在指针/键盘路径之外派发单个已解析事件。
     ///
-    /// Embedders that synthesise events (tests, remote control, a scripting
-    /// bridge) use this instead of reaching into the router. The returned flags
-    /// are already marked on the runtime, so the next [`Self::frame`] rebuilds.
+    /// 合成事件的嵌入方（测试、远程控制、脚本桥接）使用此方法，
+    /// 而无需深入路由器内部。返回的脏标志已标记在运行时上，因此下一帧 [`Self::frame`] 会重建。
+    ///
     pub fn dispatch(&mut self, event: AppEvent) -> DirtyFlags {
         self.dispatch_outcome(event).dirty
     }

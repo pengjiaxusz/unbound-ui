@@ -1,4 +1,4 @@
-//! AutoComplete / MentionInput with prefix filtering & suggestion popup indicator.
+//! 自动补全 / 提及输入框（AutoComplete / MentionInput），支持前缀过滤与建议浮层指示。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -12,19 +12,19 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// Interactive state for [`AutoCompleteDesc`].
+/// [`AutoCompleteDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AutoCompleteState {
-    /// Current query text.
+    /// 当前查询文本。
     pub query: String,
-    /// Highlighted suggestion index.
+    /// 当前高亮的建议项索引。
     pub highlighted: usize,
-    /// Whether the suggestion list is open.
+    /// 建议列表是否展开。
     pub open: bool,
 }
 
 impl AutoCompleteState {
-    /// Filter `candidates` case-insensitively by `query`.
+    /// 按 `query` 对 `candidates` 进行大小写不敏感过滤。
     #[must_use]
     pub fn filter<'a>(&self, candidates: &'a [String]) -> Vec<&'a str> {
         let q = self.query.to_ascii_lowercase();
@@ -36,33 +36,33 @@ impl AutoCompleteState {
     }
 }
 
-/// Deterministic sub-node id for an autocomplete suggestion item.
+/// 自动补全建议项的确定性子节点 ID。
 #[must_use]
 pub const fn autocomplete_option_node(node: u64, index: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xB00 + index as u64)
 }
 
-/// Descriptor for an [`AutoComplete`].
+/// [`AutoComplete`] 描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AutoCompleteDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Current input value.
+    /// 当前输入值。
     pub value: String,
-    /// Number of matching suggestions.
+    /// 匹配的建议数量。
     pub suggestion_count: usize,
-    /// Optional suggestion labels rendered when `open` is true.
+    /// `open` 为 true 时渲染的可选建议标签。
     pub suggestions: Vec<String>,
-    /// Whether the suggestion popup is open.
+    /// 建议浮层是否展开。
     pub open: bool,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl AutoCompleteDesc {
-    /// Create an autocomplete descriptor.
+    /// 创建自动补全描述符。
     #[must_use]
     pub fn new(rect: Rect, value: impl Into<String>, suggestion_count: usize) -> Self {
         Self {
@@ -76,7 +76,7 @@ impl AutoCompleteDesc {
         }
     }
 
-    /// Attach suggestion labels and open state.
+    /// 附加建议标签与展开状态。
     #[must_use]
     pub fn with_suggestions(mut self, suggestions: Vec<String>, open: bool) -> Self {
         self.suggestion_count = suggestions.len();
@@ -86,7 +86,7 @@ impl AutoCompleteDesc {
     }
 }
 
-/// Emit a stable-shape autocomplete field (1 input + 1 suggestion badge + 1 focus ring = 3 primitives).
+/// 发射固定形状的自动补全输入框（1 输入框 + 1 建议徽标 + 1 焦点环 = 3 个图元）。
 #[must_use]
 pub fn emit_autocomplete(
     node: u64,
@@ -192,12 +192,8 @@ pub fn emit_autocomplete(
                     (popup_r.width() - 8.0).max(16.0),
                     row_h - 2.0,
                 );
-                out.primitives.push(surface(
-                    row_r,
-                    4.0,
-                    Token::SURFACE,
-                    desc.z + 5,
-                ));
+                out.primitives
+                    .push(surface(row_r, 4.0, Token::SURFACE, desc.z + 5));
                 let key = autocomplete_option_node(node, idx);
                 out.with_sub_control(
                     key,

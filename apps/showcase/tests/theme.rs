@@ -267,7 +267,7 @@ const EXPECTED: &[Expected] = &[
     },
 ];
 
-/// A colour as sRGB hex plus the 8-bit alpha.
+/// 以 sRGB 十六进制加上 8 位 alpha 表示的颜色。
 fn srgb(color: Color) -> (String, u8) {
     let channels = color.to_array();
     let channel = |value: f32| (linear_to_srgb(value.clamp(0.0, 1.0)) * 255.0).round() as u8;
@@ -336,8 +336,8 @@ fn the_unused_slots_stay_transparent() {
 fn the_slot_zero_is_transparent_and_slot_one_is_the_shadow() {
     let lut = theme::lut(true);
     assert_eq!(lut.color(Token::NONE).to_array(), [0.0, 0.0, 0.0, 0.0]);
-    // The engine's shader reads the shadow from slot 1. The table stores
-    // half floats, so the alpha comes back quantised.
+    // 引擎的着色器从槽位 1 读取阴影。颜色表存储半精度浮点数，因此回读的 alpha 会被量化。
+    //
     let shadow_alpha = lut.color(Token::SHADOW).to_array()[3];
     assert!(
         (shadow_alpha - 160.0 / 255.0).abs() < 1e-3,

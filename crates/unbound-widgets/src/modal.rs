@@ -1,17 +1,12 @@
-//! Modal dialogs: scrim, card and focus scope.
+//! 模态对话框（Modal）：遮罩层、卡片与焦点作用域。
 //!
-//! A modal is not just a floating card. It owns three things at once:
+//! 模态框不仅是一张浮动卡片。它同时拥有三项要素：
 //!
-//! * a full-viewport **scrim** hit region that swallows every pointer event
-//!   aimed at the UI beneath it,
-//! * a **card** whose children receive normal input,
-//! * a **focus scope**, which the caller installs into
-//!   [`unbound_input::FocusManager::set_trap`] so `Tab` cannot reach the
-//!   background.
+//! * 覆盖全视口的**遮罩层（scrim）**命中区域，吞掉所有指向底层 UI 的指针事件，
+//! * 接收正常输入的**卡片**及其子控件，
+//! * **焦点作用域**，由调用方安装到 [`unbound_input::FocusManager::set_trap`]，防止 `Tab` 键逃逸到背景。
 //!
-//! Putting all three in one emitter keeps them impossible to drift apart: a
-//! modal that renders without a scrim or without a focus scope is not
-//! representable here.
+//! 将三者置于同一发射器中使其绝不会彼此脱节：没有遮罩层或没有焦点作用域的模态框在此无法构造。
 
 use accesskit::Role;
 use unbound_gpu::data::{GpuPayload, GpuPrimitiveInstance, PrimType, SubElement};
@@ -23,36 +18,36 @@ use crate::overlay::{BackdropRequest, OverlayEntry};
 use crate::primitive::{instance, surface};
 use crate::{ControlState, WidgetDesc, WidgetOutput};
 
-/// The hit-test layer of a modal: above ordinary portals.
+/// 模态框的命中测试层级：高于普通浮层。
 pub const MODAL_LAYER: u8 = PORTAL_LAYER + 1;
 const MODAL_SHADOW: f32 = 40.0;
-/// The standard title-bar close button size.
+/// 标准标题栏关闭按钮尺寸。
 pub const MODAL_CLOSE_SIZE: f32 = 24.0;
-/// The default footer action width.
+/// 默认底部操作按钮宽度。
 pub const MODAL_ACTION_WIDTH: f32 = 88.0;
-/// The gap between two footer actions.
+/// 两个底部操作按钮之间的间距。
 pub const MODAL_ACTION_GAP: f32 = 8.0;
-/// The footer's horizontal padding.
+/// 底部栏水平内边距。
 pub const MODAL_FOOTER_PADDING: f32 = 16.0;
 
-/// A modal dialog descriptor.
+/// 模态对话框描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModalDesc {
-    /// The dialog card rectangle.
+    /// 对话框卡片矩形。
     pub rect: Rect,
-    /// The accessible title.
+    /// 无障碍标题。
     pub label: String,
-    /// The corner radius.
+    /// 圆角半径。
     pub radius: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
-    /// Backdrop blur radius behind the scrim; `0.0` disables the pass.
+    /// 遮罩层背后的背景模糊半径；`0.0` 表示禁用。
     pub backdrop_blur: f32,
-    /// Paint the standard title-bar close button.
+    /// 是否绘制标准标题栏关闭按钮。
     pub close_button: bool,
-    /// The title-bar height the close button centres in.
+    /// 关闭按钮在其中居中的标题栏高度。
     pub title_bar_height: f32,
-    /// The footer action-bar height; `0.0` hides the footer.
+    /// 底部操作栏高度；`0.0` 表示隐藏底部栏。
     pub footer_height: f32,
 }
 
@@ -71,28 +66,28 @@ impl ModalDesc {
         }
     }
 
-    /// The same dialog with a title.
+    /// 设置无障碍标题。
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
     }
 
-    /// The same dialog with the standard title-bar close button.
+    /// 启用标准标题栏关闭按钮。
     #[must_use]
     pub fn with_close_button(mut self) -> Self {
         self.close_button = true;
         self
     }
 
-    /// The same dialog with a footer action bar of the given height.
+    /// 启用指定高度的底部操作栏。
     #[must_use]
     pub fn with_footer(mut self, height: f32) -> Self {
         self.footer_height = height;
         self
     }
 
-    /// The title-bar rectangle.
+    /// 标题栏矩形。
     #[must_use]
     pub fn title_bar_rect(&self) -> Rect {
         Rect::new(
@@ -103,7 +98,7 @@ impl ModalDesc {
         )
     }
 
-    /// The close button rectangle, when the button is enabled.
+    /// 关闭按钮矩形（若已启用）。
     #[must_use]
     pub fn close_button_rect(&self) -> Option<Rect> {
         self.close_button.then(|| {
@@ -116,7 +111,7 @@ impl ModalDesc {
         })
     }
 
-    /// The footer rectangle, when a footer height is configured.
+    /// 底部栏矩形（若配置了底部栏高度）。
     #[must_use]
     pub fn footer_rect(&self) -> Option<Rect> {
         (self.footer_height > 0.0).then(|| {
@@ -129,11 +124,9 @@ impl ModalDesc {
         })
     }
 
-    /// The rectangles of `count` equal-width footer actions.
+    /// `count` 个等宽底部操作按钮的矩形列表。
     ///
-    /// The actions are right-aligned in the footer and read left to right in
-    /// the order the caller emits them, so the primary action is the last
-    /// rectangle.
+    /// 操作按钮在底部栏中右对齐，按调用方发射顺序从左到右排列，因此主操作位于最后一个矩形。
     #[must_use]
     pub fn footer_actions(&self, count: usize) -> Vec<Rect> {
         let Some(footer) = self.footer_rect() else {
@@ -158,11 +151,10 @@ impl ModalDesc {
     }
 }
 
-/// The focus stack of one or more open modals.
+/// 一个或多个打开模态框的焦点栈。
 ///
-/// Opening pushes the node that had focus; closing pops it and restores it.
-/// The stack nests, so an "are you sure?" dialog opened from another dialog
-/// returns the keyboard to the first one.
+/// 打开时压入原焦点节点；关闭时弹出并恢复。该栈支持嵌套，
+/// 因此从另一个对话框打开“确定要继续吗？”对话框后关闭时，键盘焦点会回到第一个对话框。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ModalFocus {
     saved: Vec<Option<u64>>,
@@ -174,15 +166,15 @@ impl ModalFocus {
         Self::default()
     }
 
-    /// Install a focus trap and remember the current focus.
+    /// 安装焦点陷阱并记录当前焦点。
     pub fn open(&mut self, focus: &mut FocusManager, scope: &[u64]) {
         self.saved.push(focus.focused());
         focus.set_trap(scope.iter().copied());
     }
 
-    /// Drop the trap and restore the focus saved by [`Self::open`].
+    /// 移除陷阱并恢复 [`Self::open`] 保存的焦点。
     ///
-    /// Returns the restored node, if there was one.
+    /// 返回恢复的节点（若存在）。
     pub fn close(&mut self, focus: &mut FocusManager) -> Option<u64> {
         focus.clear_trap();
         match self.saved.pop() {
@@ -198,29 +190,29 @@ impl ModalFocus {
         }
     }
 
-    /// The saved focus slots, outermost first.
+    /// 已保存的焦点槽位，最外层在前。
     #[must_use]
     pub fn saved(&self) -> &[Option<u64>] {
         &self.saved
     }
 
-    /// How many modals are open.
+    /// 当前打开的模态框数量。
     #[must_use]
     pub fn depth(&self) -> usize {
         self.saved.len()
     }
 }
 
-/// A modal descriptor bound to an identity.
+/// 绑定了身份标识的模态框描述符。
 #[derive(Clone, Debug)]
 pub struct ModalWidget {
-    /// The card node.
+    /// 卡片节点。
     pub node: u64,
-    /// The viewport the scrim covers.
+    /// 遮罩层覆盖的视口。
     pub viewport: Rect,
-    /// The descriptor.
+    /// 模态框描述符。
     pub desc: ModalDesc,
-    /// The focusable nodes inside the dialog.
+    /// 对话框内部的可聚焦节点列表。
     pub focus_scope: Vec<u64>,
 }
 
@@ -245,20 +237,20 @@ impl WidgetDesc for ModalWidget {
     }
 }
 
-/// What one modal emits.
+/// 单个模态框的发射结果。
 #[derive(Clone, Debug)]
 pub struct ModalOutput {
-    /// The card and its hit region.
+    /// 卡片及其命中区域。
     pub output: WidgetOutput,
-    /// The scrim, which must be installed **in addition** to the card.
+    /// 遮罩层（必须在卡片**之外**单独安装）。
     pub scrim: HitRegion,
-    /// The stack entry the caller pushes.
+    /// 调用方需推入的浮层栈条目。
     pub entry: OverlayEntry,
-    /// The blur request, when `backdrop_blur > 0`.
+    /// 当 `backdrop_blur > 0` 时的模糊请求。
     pub backdrop: Option<BackdropRequest>,
 }
 
-/// Emit a modal dialog.
+/// 发射模态对话框。
 #[must_use]
 pub fn emit_modal(
     node: u64,
@@ -269,7 +261,7 @@ pub fn emit_modal(
 ) -> ModalOutput {
     let rect = desc.rect;
     let radii = [desc.radius; 4];
-    // The scrim is painted, then the shadow, then the card and its border.
+    // 依次绘制遮罩层、阴影、卡片及其边框。
     let mut primitives: Vec<GpuPrimitiveInstance> = vec![
         surface(viewport, 0.0, Token::SCRIM, desc.z),
         instance(
@@ -333,7 +325,7 @@ pub fn emit_modal(
     }
 }
 
-/// One quadratic stroke of the close cross.
+/// 关闭按钮叉号的单段二次描边。
 fn close_stroke(
     from: (f32, f32),
     to: (f32, f32),

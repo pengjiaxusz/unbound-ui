@@ -1,4 +1,4 @@
-//! Editable virtualized DataGrid / Spreadsheet with cell selection, multi-hit cells & inline editing.
+//! 可编辑虚拟化数据表格（DataGrid / Spreadsheet），支持单元格选中、多命中区域与行内编辑。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -15,31 +15,31 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 const GRID_COLS: usize = 3;
 const GRID_ROWS: usize = 3;
 
-/// Deterministic child node key for cell `(row, col)` of a [`DataGridDesc`].
+/// [`DataGridDesc`] 单元格 `(row, col)` 的确定性子节点键。
 #[must_use]
 pub const fn cell_node(base: u64, row: usize, col: usize) -> u64 {
     base ^ (((row as u64 + 1) << 16) | (col as u64 + 1))
 }
 
-/// Interactive state for [`DataGridDesc`].
+/// [`DataGridDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DataGridState {
-    /// Active `(row, col)` cell.
+    /// 当前激活的 `(row, col)` 单元格。
     pub active_cell: (usize, usize),
-    /// Whether the active cell is currently in inline-edit mode.
+    /// 当前激活单元格是否处于行内编辑模式。
     pub editing: bool,
-    /// Draft cell text while editing.
+    /// 编辑中的草稿单元格文本。
     pub edit_buffer: String,
 }
 
 impl DataGridState {
-    /// Select `(row, col)` and exit any active edit.
+    /// 选中 `(row, col)` 并退出当前编辑状态。
     pub fn select_cell(&mut self, row: usize, col: usize) {
         self.active_cell = (row, col);
         self.editing = false;
     }
 
-    /// Move the active cell by `(dr, dc)` clamped to `0..rows` and `0..cols`.
+    /// 按 `(dr, dc)` 移动激活单元格，并限制在 `0..rows` 与 `0..cols` 内。
     pub fn move_cell(&mut self, dr: isize, dc: isize, rows: usize, cols: usize) {
         if rows == 0 || cols == 0 {
             return;
@@ -49,14 +49,14 @@ impl DataGridState {
         self.active_cell = (r, c);
     }
 
-    /// Begin inline editing of `initial`.
+    /// 以 `initial` 文本开始行内编辑。
     pub fn begin_edit(&mut self, row: usize, col: usize, initial: impl Into<String>) {
         self.active_cell = (row, col);
         self.editing = true;
         self.edit_buffer = initial.into();
     }
 
-    /// Commit inline edit and return `(row, col, value)`.
+    /// 提交行内编辑并返回 `(row, col, value)`。
     pub fn commit_edit(&mut self) -> Option<(usize, usize, String)> {
         if !self.editing {
             return None;
@@ -70,29 +70,29 @@ impl DataGridState {
     }
 }
 
-/// Descriptor for a [`DataGrid`].
+/// [`DataGrid`] 描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DataGridDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Active `(row, col)` cell.
+    /// 当前激活的 `(row, col)` 单元格。
     pub active_cell: (usize, usize),
-    /// Whether inline editing is active.
+    /// 是否处于行内编辑状态。
     pub editing: bool,
-    /// Optional column definitions.
+    /// 可选列定义列表。
     pub columns: Vec<ColumnSpec>,
-    /// Visible cell text matrix `[row][col]`.
+    /// 可见单元格文本矩阵 `[row][col]`。
     pub cells: Vec<Vec<String>>,
-    /// Starting logical row index of the visible window.
+    /// 可见窗口的起始逻辑行索引。
     pub row_offset: usize,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl DataGridDesc {
-    /// Create a data grid descriptor.
+    /// 创建数据表格描述符。
     #[must_use]
     pub fn new(rect: Rect, active_cell: (usize, usize), editing: bool) -> Self {
         Self {
@@ -107,28 +107,28 @@ impl DataGridDesc {
         }
     }
 
-    /// Attach column definitions.
+    /// 附加列定义。
     #[must_use]
     pub fn with_columns(mut self, columns: Vec<ColumnSpec>) -> Self {
         self.columns = columns;
         self
     }
 
-    /// Attach visible cell text matrix.
+    /// 附加可见单元格文本矩阵。
     #[must_use]
     pub fn with_cells(mut self, cells: Vec<Vec<String>>) -> Self {
         self.cells = cells;
         self
     }
 
-    /// Set logical starting row offset.
+    /// 设置逻辑起始行偏移量。
     #[must_use]
     pub fn with_row_offset(mut self, offset: usize) -> Self {
         self.row_offset = offset;
         self
     }
 
-    /// Visible column count.
+    /// 可见列数。
     #[must_use]
     pub fn visible_cols(&self) -> usize {
         if self.columns.is_empty() {
@@ -138,7 +138,7 @@ impl DataGridDesc {
         }
     }
 
-    /// Visible row count.
+    /// 可见行数。
     #[must_use]
     pub fn visible_rows(&self) -> usize {
         if self.cells.is_empty() {
@@ -148,7 +148,7 @@ impl DataGridDesc {
         }
     }
 
-    /// Compute the cell rectangle for `(row, col)`.
+    /// 计算 `(row, col)` 对应的单元格矩形。
     #[must_use]
     pub fn cell_rect(&self, row: usize, col: usize) -> Rect {
         let cols = self.visible_cols().max(1);
@@ -165,7 +165,7 @@ impl DataGridDesc {
     }
 }
 
-/// Emit a stable-shape data grid with per-cell sub-hit regions and accessibility nodes.
+/// 发射固定形状的数据表格，包含逐单元格子命中区域与无障碍节点。
 #[must_use]
 pub fn emit_data_grid(
     node: u64,

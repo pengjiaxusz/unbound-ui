@@ -1,10 +1,10 @@
-//! A nested collection must survive a schema change.
+//! 嵌套集合必须在 schema 变更后保持兼容。
 //!
-//! V1 stored `Vec<RowV1>` with positional `postcard`, so adding a field to a
-//! row shifted every following byte and the whole list failed to decode. Rows
-//! now travel as one self-describing UBMF envelope each: the new guest migrates
-//! every row on its own, keeps the fields it knows and fills the new ones from
-//! their declared default. A V1 payload therefore loads without losing a row.
+//! V1 使用位置敏感的 `postcard` 存储 `Vec<RowV1>`，因此向行中新增字段会
+//! 偏移后续所有字节，导致整个列表解码失败。如今每行各自作为独立的自描述
+//! UBMF 信封传输：新 guest 独立迁移每一行，保留已知字段并用声明的默认值
+//! 填充新字段。因此 V1 负载可完整加载而不丢失任何一行。
+//!
 
 use serde::{Deserialize, Serialize};
 use unbound_abi::migration::{
@@ -15,7 +15,7 @@ const ROW_LABEL: u16 = 1;
 const ROW_DONE: u16 = 2;
 const ROW_PRIORITY: u16 = 3;
 const ROW_TAGS: u16 = 4;
-/// The field V2 removed; a new guest must drop it, not choke on it.
+/// V2 移除的字段；新 guest 必须丢弃它，而非解析崩溃。
 const ROW_LEGACY_NOTE: u16 = 9;
 const EMPTY_COLLECTION: &[u8] = &[0];
 
@@ -44,12 +44,12 @@ struct RowV2 {
     tags: Vec<String>,
 }
 
-/// Export through the V1 guest: one envelope per row, no priority or tags.
+/// 通过 V1 guest 导出：每行一个信封，不含 priority 或 tags。
 fn export_v1(rows: &[RowV1]) -> Vec<u8> {
     encode_list(rows, |row| {
         let label = postcard::to_allocvec(&row.label).unwrap();
         let done = postcard::to_allocvec(&row.done).unwrap();
-        // A removed field rides along; migration must drop it.
+        // 已移除的字段随旧数据携带；迁移必须将其丢弃。
         let legacy = postcard::to_allocvec("old note").unwrap();
         encode(&[
             Field::new(ROW_LABEL, &label),
@@ -68,7 +68,7 @@ fn read<T: serde::de::DeserializeOwned>(fields: &[MigratedField<'_>], id: u16) -
     postcard::from_bytes(&field.bytes).unwrap()
 }
 
-/// Import through the V2 guest.
+/// 通过 V2 guest 导入。
 fn import_v2(bytes: &[u8]) -> Vec<RowV2> {
     migrate_list(bytes, ROW_V2_FIELDS, |fields| {
         Ok(RowV2 {
@@ -134,10 +134,10 @@ fn a_v2_list_round_trips_through_the_same_envelopes() {
 
 #[test]
 fn every_row_is_migrated_on_its_own() {
-    // A single corrupt row must fail the list instead of decoding the bytes of
-    // the next row as if they belonged to this one.
+    // 单行损坏必须使列表解码失败，而非把下一行的字节当作当前行来解码。
+    //
     let mut bytes = export_v1(&hundred_rows()[..3]);
-    // The second row starts after: header(4) + len(4) + envelope of row 0.
+    // 第二行起始于：header(4) + len(4) + 第 0 行信封。
     let first = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
     let second_len_at = 4 + 4 + first;
     let second = u32::from_le_bytes([
@@ -146,7 +146,7 @@ fn every_row_is_migrated_on_its_own() {
         bytes[second_len_at + 2],
         bytes[second_len_at + 3],
     ]) as usize;
-    // Drop the last byte of row 1's envelope: its length now overruns.
+    // 丢弃第 1 行信封的最后一个字节：其声明长度此时将越界。
     let cut = second_len_at + 4 + second - 1;
     bytes.truncate(cut);
     let error = migrate_list(bytes.as_slice(), ROW_V2_FIELDS, |fields| {
@@ -183,7 +183,7 @@ fn a_row_missing_a_required_field_is_rejected_visibly() {
 #[test]
 fn a_removed_row_field_is_dropped_by_the_v2_schema() {
     let old = export_v1(&hundred_rows()[..1]);
-    let mut offset = 8; // list header + first row length
+    let mut offset = 8; // 列表头部 + 首行长度
     let len = u32::from_le_bytes([old[4], old[5], old[6], old[7]]) as usize;
     let row = &old[offset..offset + len];
     offset += len;

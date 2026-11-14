@@ -1,4 +1,4 @@
-//! Accessibility bridge round trip through the public API.
+//! 通过公共 API 测试无障碍桥接器的双向往返。
 
 use accesskit::{Action, TreeUpdate};
 use unbound_a11y::{A11yAction, Semantics};

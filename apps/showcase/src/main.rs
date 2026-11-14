@@ -1,12 +1,12 @@
-//! The windowed Unbound UI Gallery.
+//! 窗口化的 Unbound UI 展厅（Gallery）。
 //!
-//! Run it with `cargo run -p showcase`. The window is a dogfooded application
-//! shell: a custom title bar, a collapsible NavigationView, a searchable
-//! command palette, live example cards and a performance HUD.
+//! 通过 `cargo run -p showcase` 运行。该窗口是一个自举的应用外壳：
+//! 自定义标题栏、可折叠的 NavigationView、可搜索的命令面板、实时示例卡片与性能 HUD。
 //!
-//! This is the visible counterpart of `apps/gallery` and
-//! `unbound-headless`: the gallery prints measurements, the headless verifier
-//! checks layout, the showcase shows both.
+//!
+//! 它是 `apps/gallery` 与 `unbound-headless` 的可视化对应物：
+//! gallery 打印测量结果，无头校验器检查布局，showcase 则同时展示两者。
+//!
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -38,84 +38,84 @@ use winit::window::Window;
 
 use showcase::shell::WindowCommand;
 
-/// The window title.
+/// 窗口标题。
 const TITLE: &str = "Unbound UI Gallery";
 
-/// How long to wait for a swapchain image, in nanoseconds.
+/// 等待 swapchain 图像的超时时间（纳秒）。
 const ACQUIRE_TIMEOUT_NS: u64 = 1_000_000_000;
 
-/// One secondary window: its own surface, swapchain and upload generation.
+/// 单个辅助窗口：拥有独立的 surface、swapchain 与上传代次。
 ///
-/// The device, renderer, pipelines and glyph atlases are shared with the
-/// primary window; only the presentation chain is per-window.
+/// 设备、渲染器、管线与字形图集均与主窗口共享；仅呈现链（presentation chain）按窗口独立。
+///
 struct ExtraWindow {
     id: winit::window::WindowId,
     surface: Surface,
     swapchain: Swapchain,
     swapchain_dirty: bool,
-    /// The size the swapchain was last requested at.
+    /// 上次请求重建 swapchain 时的尺寸。
     ///
-    /// The chain's actual extent is the driver's answer and may differ from
-    /// the request; the two are never compared with each other.
+    /// 呈现链的实际范围由驱动返回，可能与请求不同；两者绝不互相比较。
+    ///
     committed_request: (u32, u32),
 }
 
-/// The application state.
+/// 应用状态。
 struct Showcase {
-    /// The generic runtime: it reduces every event, owns the router / focus
-    /// policy and diffs each frame against the previous one.
+    /// 通用运行时：负责归约每个事件、管理路由器 / 焦点策略，并将每帧与上一帧做 diff。
+    ///
     app: AppRuntime<GalleryRuntime>,
     renderer: Option<Renderer>,
     surface: Option<Surface>,
     swapchain: Option<Swapchain>,
     atlases: Option<Arc<AtlasSet>>,
-    /// The theme currently uploaded to the GPU.
+    /// 当前已上传到 GPU 的主题。
     uploaded_theme: Option<ThemeMode>,
-    /// The upload generation of the last `SceneUpload`.
+    /// 上一次 `SceneUpload` 的上传代次。
     ///
-    /// The renderer skips the upload when the generation does not move; the
-    /// host advances it exactly when the runtime reported a whole-scene
-    /// change.
+    /// 当代次未推进时渲染器跳过上传；宿主恰好在运行时报告全场景变更时推进它。
+    ///
+    ///
     scene_generation: u64,
-    /// True when the previous frame was rebuilt but never uploaded.
+    /// 当上一帧已重建但从未上传时为 true。
     ///
-    /// The runtime moves its diff base on every rebuild, whether the frame
-    /// reaches the GPU or not. A dropped frame therefore leaves the pool
-    /// behind the base, and the next upload has to be a full one.
+    /// 运行时每次重建都会推进 diff 基准，无论该帧是否真正到达 GPU。
+    /// 因此丢帧会使缓冲池落后于基准，下一次上传必须是全量上传。
+    ///
     frame_dropped: bool,
-    /// The size the swapchain was last requested at.
+    /// 上次请求创建 swapchain 时的尺寸。
     ///
-    /// The chain's *actual* extent is the driver's answer and may differ from
-    /// the request; this remembers the request so the two are never compared
-    /// with each other.
+    /// 呈现链的*实际*范围由驱动返回，可能与请求不同；此处记住请求尺寸，
+    /// 以便两者绝不互相比较。
+    ///
     committed_request: (u32, u32),
-    /// The live theme: the engine owns the colour table, the app only asks
-    /// for a different palette.
+    /// 当前生效的主题：引擎拥有颜色表，应用仅请求切换不同的调色板。
+    ///
     theme: ThemeState,
-    /// Physical pointer position.
+    /// 物理指针位置。
     pointer: Vec2,
-    /// Keyboard modifiers.
+    /// 键盘修饰键状态。
     modifiers: Modifiers,
     cursor: CursorKind,
     last_frame: Instant,
-    /// The OS scale factor (physical pixels per logical unit).
+    /// OS 缩放因子（每逻辑单位对应的物理像素数）。
     os_scale: f32,
-    /// The window edge under the pointer, if any.
+    /// 指针下方对应的窗口边缘（如有）。
     resize_edge: Option<ResizeEdge>,
-    /// Whether the IME is currently allowed, so the call is only made on
-    /// a transition instead of every frame.
+    /// 当前是否允许 IME，以便仅在状态切换时调用，而非每帧调用。
+    ///
     ime_allowed: bool,
-    /// The last title-bar press, for double-click-to-maximise.
+    /// 上次标题栏按压记录，用于双击最大化。
     last_title_press: Option<(Instant, Vec2)>,
-    /// True when the current press was consumed by the window chrome.
+    /// 当本次按压已被窗口外框（chrome）消费时为 true。
     press_consumed: bool,
-    /// True when the driver reported that the swapchain is stale.
+    /// 当驱动报告 swapchain 已过期时为 true。
     swapchain_dirty: bool,
-    /// The primary window's identity, so secondary windows can be told apart.
+    /// 主窗口标识，用于区分辅助窗口。
     primary: Option<winit::window::WindowId>,
-    /// Secondary windows and their presentation chains.
+    /// 辅助窗口及其呈现链。
     extras: Vec<ExtraWindow>,
-    /// Set by `Ctrl+N`; the platform opens the window at the next frame.
+    /// 由 `Ctrl+N` 置位；平台层在下一帧打开新窗口。
     new_window_requested: bool,
 }
 
@@ -124,8 +124,8 @@ impl Showcase {
         Self {
             app: {
                 let mut app = GalleryRuntime::new();
-                // The runtime diffs the frame, so the shell must not scan the
-                // primitive list a second time for the same answer.
+                // 运行时负责对帧做 diff，因此外壳不得为同一结果再次扫描图元列表。
+                //
                 app.set_external_diff(true);
                 let mut rt = AppRuntime::new(app, Vec2::new(1440.0, 900.0));
                 struct WinClipboard(std::cell::RefCell<unbound_platform::SystemClipboard>);
@@ -169,17 +169,17 @@ impl Showcase {
         }
     }
 
-    /// Physical pixels per logical unit.
+    /// 每逻辑单位对应的物理像素数。
     fn effective_scale(&self) -> f32 {
         (self.os_scale * self.shell().state.zoom()).clamp(0.5, 4.0)
     }
 
-    /// The dogfooded shell the runtime drives.
+    /// 由运行时驱动的自举外壳。
     fn shell(&self) -> &GalleryApp {
         self.app.application().shell()
     }
 
-    /// The shell, mutably.
+    /// 可变外壳引用。
     fn shell_mut(&mut self) -> &mut GalleryApp {
         self.app.application_mut().shell_mut()
     }
@@ -188,12 +188,12 @@ impl Showcase {
         physical / self.effective_scale()
     }
 
-    /// Track the OS scale factor only.
+    /// 仅跟踪 OS 缩放因子。
     ///
-    /// Changing the app zoom must never resize the physical window: the UI
-    /// scales in place because the logical viewport is recomputed from the
-    /// committed extent (`physical_size / (os_scale × app_zoom)`), and the page
-    /// reflows for the smaller logical viewport.
+    /// 改变应用缩放绝不能调整物理窗口大小：UI 会就地缩放，因为逻辑视口是根据
+    /// 已提交范围（`physical_size / (os_scale × app_zoom)`）重新计算的，
+    /// 页面会针对更小的逻辑视口重新排版。
+    ///
     fn sync_window_size(&mut self, window: &Window) {
         let os_scale = window.scale_factor() as f32;
         if os_scale.is_finite() && os_scale > 0.0 {
@@ -205,19 +205,19 @@ impl Showcase {
         if window.is_decorated() || window.is_maximized() {
             return None;
         }
-        // An in-flight capture (a scrollbar grab, a slider drag, a canvas pan)
-        // owns the pointer: the resize border must never interrupt it, and a
-        // hover over a drag-capable control must not turn into a resize cursor.
+        // 进行中的捕获操作（滚动条抓取、滑块拖拽、画布平移）独占指针：
+        // 调整大小边框绝不能打断它，且悬停在可拖拽控件上时也不应变成调整大小光标。
+        //
         let ctx = self.app.context();
         if ctx.pressed.is_some() || self.shell().hover_captures_pointer(ctx.hovered) {
             return None;
         }
         let size = window.inner_size();
         let scale = self.os_scale.max(0.5);
-        // The window buttons live in the top-right 3 × 46 logical px. The
-        // pointer is in physical pixels, so the exclusion has to be converted
-        // to physical too — mixing the two mis-placed the corner on high-DPI
-        // displays and zoomed UIs.
+        // 窗口按钮位于右上角 3 × 46 逻辑像素区域。指针坐标为物理像素，
+        // 因此排除区域也必须转换为物理像素——混用两者在高 DPI 显示器和缩放 UI 下
+        // 会导致角落判定错位。
+        //
         let ui_scale = self.effective_scale();
         let button_h = 48.0 * ui_scale;
         let button_w = 3.0 * 46.0 * ui_scale;
@@ -275,21 +275,21 @@ impl Showcase {
                 }
             })
             .collect();
-        // One batch: a single staging buffer, a single command buffer and a
-        // single queue wait for the whole page of text. Uploading glyph by
-        // glyph stalled the pipeline once per character.
+        // 单批次提交：整页文本共用一个暂存缓冲区、一个命令缓冲区与一次队列等待。
+        // 逐字形上传会按每个字符停顿一次管线。
         //
-        // A failed batch must not lose the glyphs: the cache believes they
-        // are in the atlas, so the text would sample texels that were never
-        // written — blank or garbled glyphs, forever. The updates therefore
-        // go back into the queue and the next frame tries again.
+        //
+        // 失败的批次绝不能丢失字形：缓存认为它们已在图集中，
+        // 若丢失会导致文本采样从未写入的纹素——永久显示空白或乱码字形。
+        // 因此将更新放回队列，在下一帧重试。
+        //
         if let Err(error) = atlases.upload_batch(&renderer.gpu, &uploads) {
             eprintln!("could not upload the glyphs: {error}");
             self.shell_mut().labels.cache.restore_updates(updates);
         }
     }
 
-    /// Upload the RGBA8 rectangles the asset hub decoded this frame.
+    /// 上传本帧由资源中心解码完成的 RGBA8 矩形。
     fn upload_asset_textures(&mut self, uploads: &[AtlasUpload]) {
         if uploads.is_empty() {
             return;
@@ -309,29 +309,28 @@ impl Showcase {
         }
         let dark = mode.is_dark();
         if let Some(renderer) = &mut self.renderer {
-            // Switching the theme only rewrites the 4 KiB colour table: no
-            // layout, no instance re-upload.
+            // 切换主题仅重写 4 KiB 颜色表：无需重新布局，也无需重传实例。
+            //
             let _ = self.theme.switch(theme::kind(dark));
             let _ = renderer.write_theme_lut(self.theme.lut());
             self.uploaded_theme = Some(mode);
         }
     }
 
-    /// Rebuild the scene through the runtime, diff it and upload the glyphs
-    /// the rebuild produced.
+    /// 通过运行时重建场景、做 diff 并上传重建产生的字形。
+    /// 此方法取代了手写的 `sync` / `dirty_ranges` / `generation` 账本：
+    /// 现在由运行时拥有帧管线，宿主仅将返回的报告转换为上传计划。
     ///
-    /// This replaces the hand-written `sync` / `dirty_ranges` / `generation`
-    /// bookkeeping: the runtime owns the frame pipeline now, and the host only
-    /// turns the returned report into an upload plan.
+    ///
     fn advance_scene(&mut self, dt: f32) -> unbound_app::FrameReport {
         let scale = self.effective_scale();
         self.shell_mut().set_effective_scale(scale);
         let report = self.app.frame(dt);
         self.upload_asset_textures(&report.atlas_uploads);
-        // The glyphs are uploaded whenever there are any. A frame whose scene
-        // did not change can still carry fresh glyphs — a re-rasterised glyph
-        // lands in a different atlas slot, so the primitive changed too, but
-        // the upload must not depend on that coincidence.
+        // 只要存在字形就进行上传。场景未变的帧仍可能携带新字形——
+        // 重新光栅化的字形会落入不同的图集槽位，虽然图元也会随之变化，
+        // 但上传逻辑绝不能依赖这种巧合。
+        //
         self.upload_glyphs();
         let shell = self.shell_mut();
         shell.state.demo.upload_bytes = report.bytes;
@@ -349,14 +348,14 @@ impl Showcase {
         }
     }
 
-    /// Rebuild the swapchain for a new surface size.
+    /// 为新的表面尺寸重建 swapchain。
     ///
-    /// The old chain is handed to the driver through `oldSwapchain`, so the
-    /// presentation engine can hand its resources over instead of tearing
-    /// the surface down — that is what removes the flicker on a resize.
+    /// 旧呈现链通过 `oldSwapchain` 交给驱动，使呈现引擎能够移交资源而非撕毁表面——
+    /// 这正是消除调整窗口大小时闪烁的关键。
+    ///
     fn recreate_swapchain(&mut self, window: &Window, width: u32, height: u32) -> bool {
-        // Read the limit before borrowing the renderer: both go through
-        // `self`, and the shell read would conflict with the mutable borrow.
+        // 在借用渲染器前先读取上限：两者都经由 `self`，
+        // 读取外壳会与可变借用产生冲突。
         let limit = self.shell().state.effective_fps_limit();
         let Some(renderer) = &mut self.renderer else {
             return false;
@@ -364,12 +363,12 @@ impl Showcase {
         let Some(surface) = &self.surface else {
             return false;
         };
-        // A limit above the display's physical refresh rate cannot be reached
-        // through FIFO — the compositor would quantise every frame down to the
-        // VBlank (that is why "120" used to run at 60 FPS on a 60 Hz panel).
-        // Any such limit hands the cadence to the software pacer and presents
-        // without vsync; a limit at or below the refresh rate keeps the
-        // tear-free path.
+        // 高于显示器物理刷新率的上限无法通过 FIFO 达成——
+        // 合成器会把每帧量化回 VBlank（这正是过去在 60 Hz 面板上“120”实际只跑 60 FPS 的原因）。
+        // 此类上限会将节奏交由软件 pacer 控制并以无垂直同步模式呈现；
+        // 低于或等于刷新率的上限则保留无撕裂路径。
+        //
+        //
         let refresh_hz = window
             .current_monitor()
             .and_then(|monitor| monitor.refresh_rate_millihertz())
@@ -386,14 +385,14 @@ impl Showcase {
             eprintln!(" could not rebuild the swapchain: {error}");
             return false;
         }
-        // The chain now answers for this request. Its *actual* extent may
-        // still differ from it — the driver clamps it to its own limits — and
-        // that difference must never be mistaken for a new request.
+        // 呈现链现在对此次请求负责。其*实际*范围仍可能与之不同——
+        // 驱动会将其钳制到自身限制——绝不能把这种差异误判为新请求。
+        //
         self.committed_request = (width, height);
-        // The windowed path borrows the swapchain image as its colour
-        // attachment, so only the depth buffer has to follow the new size.
-        // `ensure_depth_size` grows in 256 px steps and never shrinks, which
-        // keeps a 1 px drag step from reallocating anything.
+        // 窗口化路径借用 swapchain 图像作为颜色附件，因此只有深度缓冲需要跟随新尺寸。
+        // `ensure_depth_size` 以 256 px 步长增长且永不收缩，
+        // 使 1 px 的拖拽步进不会触发任何重新分配。
+        //
         let (actual_w, actual_h) = swapchain.extent();
         if let Err(error) = renderer.ensure_depth_size(actual_w, actual_h) {
             eprintln!("could not resize the depth buffer: {error}");
@@ -402,12 +401,12 @@ impl Showcase {
         true
     }
 
-    /// Bring the layout viewport in line with the committed chain extent.
+    /// 使布局视口与已提交的呈现链范围保持一致。
     ///
-    /// The layout follows the *presented* size, not the window: the driver
-    /// decides how large the images are, and the image is what the compositor
-    /// shows. The logical viewport is `physical / effective scale`, so a zoom
-    /// changes it exactly like a physical resize does.
+    /// 布局跟随*呈现*尺寸而非窗口尺寸：驱动决定图像大小，而合成器显示的是图像。
+    /// 逻辑视口为 `physical / effective scale`，因此缩放与物理调整大小具有完全相同的效果。
+    ///
+    ///
     fn sync_viewport(&mut self) {
         let Some(chain) = &self.swapchain else {
             return;
@@ -421,11 +420,11 @@ impl Showcase {
         }
     }
 
-    /// Keep the OS input method in sync with the focused control.
+    /// 使 OS 输入法与当前聚焦控件保持同步。
     ///
-    /// Without `set_ime_allowed` Windows never sends composition at all, so a
-    /// Chinese/Japanese/Korean keyboard could only ever type ASCII. The
-    /// candidate window is anchored at the click position.
+    /// 若不调用 `set_ime_allowed`，Windows 根本不会发送组合事件，
+    /// 导致中日韩输入法只能输入 ASCII。候选框锚定在点击位置。
+    ///
     fn sync_ime(&mut self, state: &mut PlatformState, window: &Window) {
         let active = self.shell().ime_active();
         if active != self.ime_allowed {
@@ -443,12 +442,12 @@ impl Showcase {
                 ),
             );
         }
-        // Committed text must be inserted exactly once, so the buffer is
-        // drained here rather than read.
+        // 已提交文本必须精确插入一次，因此此处直接排空（drain）缓冲区而非仅读取。
+        //
         let commit = state.ime.take_commit();
         let mut changed = false;
         if !commit.is_empty() {
-            // Through the runtime, so the commit also marks the frame dirty.
+            // 经由运行时提交，使提交操作同时将帧标记为脏。
             self.app.text(&commit);
             changed = true;
         }
@@ -463,15 +462,15 @@ impl Showcase {
             self.app.invalidate();
             changed = true;
         }
-        // IME events are not `PlatformEvent`s, so a parked loop would never
-        // learn that a composition appeared. Bypass the cadence for them too.
+        // 经由运行时：IME 事件并非 `PlatformEvent`，处于休眠（parked）状态的循环
+        // 永远不会得知出现了组合输入，因此对它们也绕过帧率节奏限制。
         if changed {
             state.pacer.request_immediate(Instant::now());
         }
     }
 }
 
-/// Map an engine resize edge to the OS drag direction.
+/// 将引擎的调整大小边缘映射为 OS 拖拽方向。
 fn resize_direction(edge: ResizeEdge) -> winit::window::ResizeDirection {
     use winit::window::ResizeDirection as Direction;
     match edge {
@@ -486,7 +485,7 @@ fn resize_direction(edge: ResizeEdge) -> winit::window::ResizeDirection {
     }
 }
 
-/// Translate a platform key into the runtime's key vocabulary.
+/// 将平台按键转换为运行时的按键词汇表。
 fn app_key(key: &PlatformKey) -> AppKey {
     match key {
         PlatformKey::Named(name) => match name.as_str() {
@@ -528,18 +527,18 @@ fn app_key(key: &PlatformKey) -> AppKey {
     }
 }
 
-/// Map a platform mouse button into the runtime's.
+/// 将平台鼠标按键映射为运行时按键。
 fn pointer_button(button: MouseButton) -> Option<PointerButton> {
     match button {
         MouseButton::Left => Some(PointerButton::Left),
         MouseButton::Right => Some(PointerButton::Right),
         MouseButton::Middle => Some(PointerButton::Middle),
-        // Back / forward are navigation, not pointer state the router owns.
+        // 前进 / 后退属于导航操作，并非路由器管理的指针状态。
         MouseButton::Other(_) => None,
     }
 }
 
-/// Adapts the backend's wake callback to the runtime's [`AppWaker`] trait.
+/// 将后端的唤醒回调适配为运行时的 [`AppWaker`] trait。
 struct SignalWaker(std::sync::Arc<dyn Fn() + Send + Sync>);
 
 impl std::fmt::Debug for SignalWaker {
@@ -554,7 +553,7 @@ impl unbound_app::AppWaker for SignalWaker {
     }
 }
 
-/// Translate the platform's modifier set into the runtime's.
+/// 将平台的修饰键集合转换为运行时的修饰键集合。
 fn app_modifiers(modifiers: Modifiers) -> AppModifiers {
     AppModifiers {
         shift: modifiers.shift,
@@ -564,7 +563,7 @@ fn app_modifiers(modifiers: Modifiers) -> AppModifiers {
     }
 }
 
-/// Map an engine cursor to a winit one.
+/// 将引擎光标映射为 winit 光标。
 fn cursor_icon(kind: CursorKind) -> winit::window::CursorIcon {
     use winit::window::CursorIcon as Icon;
     match kind {
@@ -604,10 +603,10 @@ impl PlatformApp for Showcase {
         let gpu = match Gpu::new(config) {
             Ok(gpu) => gpu,
             Err(error) => {
-                // The old message was "could not create a Vulkan device" and
-                // threw the cause away, which left Windows 10 users with no
-                // way to know whether the driver, the loader or a feature was
-                // missing.
+                // 旧报错仅提示“could not create a Vulkan device”并丢弃了原因，
+                // 导致 Windows 10 用户无从得知缺失的是驱动、加载器还是某个特性。
+                //
+                //
                 eprintln!("could not create a Vulkan device: {error}");
                 match &error {
                     unbound_gpu::device::GpuError::UnsupportedFeatures(_) => eprintln!(
@@ -683,8 +682,8 @@ impl PlatformApp for Showcase {
 
         self.os_scale = window.scale_factor() as f32;
         self.primary = Some(window.id());
-        // The chain was just created for the window's size: that request is
-        // committed, so the frame does not rebuild it again.
+        // 呈现链刚刚按窗口尺寸创建：该请求已提交，因此首帧不会再次重建。
+        //
         let size = window.inner_size();
         self.committed_request = (size.width.max(1), size.height.max(1));
         self.sync_viewport();
@@ -696,8 +695,8 @@ impl PlatformApp for Showcase {
             return;
         };
         let Some(raw) = ({
-            // The GPU crate has its own handle enum so it does not have to
-            // depend on winit; extract the native handle once here.
+            // GPU crate 拥有自己的句柄枚举以避免依赖 winit；
+            // 在此处一次性提取原生句柄。
             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
             match window.window_handle().ok().map(|handle| handle.as_raw()) {
                 Some(RawWindowHandle::Win32(handle)) => Some(handle.hwnd.get()),
@@ -751,8 +750,8 @@ impl PlatformApp for Showcase {
     }
 
     fn next_wake(&self) -> Option<Instant> {
-        // A pending timer or a parked background task has to wake the loop;
-        // the pacer's frame deadline is considered separately by the backend.
+        // 待处理的定时器或被挂起的后台任务必须唤醒事件循环；
+        // pacer 的帧截止时间由后端单独考量。
         self.app.next_wake_in().map(|delay| Instant::now() + delay)
     }
 
@@ -761,8 +760,8 @@ impl PlatformApp for Showcase {
     }
 
     fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
-        // Secondary windows present the same application; their input is not
-        // routed yet, so only the presentation chain reacts.
+        // 辅助窗口呈现同一应用；其输入尚未路由，因此仅呈现链响应缩放变化。
+        //
         if Some(window.id()) != self.primary {
             if matches!(event, PlatformEvent::RecreateSwapchain(_)) {
                 if let Some(extra) = self.extras.iter_mut().find(|extra| extra.id == window.id()) {
@@ -778,14 +777,14 @@ impl PlatformApp for Showcase {
         match event {
             PlatformEvent::ScaleFactorChanged(factor) => {
                 self.os_scale = factor as f32;
-                // The scale changes the logical viewport, which the frame
-                // derives from the committed extent. Invalidating makes the
-                // next frame rebuild the scene for the new size.
+                // 缩放改变逻辑视口，帧则从已提交范围推导视口。
+                // 标记失效使下一帧按新尺寸重建场景。
+                //
                 self.app.invalidate();
             }
             PlatformEvent::RecreateSwapchain(extent) => {
-                // The platform layer settled a resize: the swapchain has to
-                // be rebuilt for the new size.
+                // 平台层已完成调整大小：必须按新尺寸重建 swapchain。
+                //
                 self.swapchain_dirty = true;
                 let _ = extent;
             }
@@ -794,8 +793,8 @@ impl PlatformApp for Showcase {
                 key,
                 repeat,
             } => {
-                // Ctrl+N opens a second window: a real second surface and
-                // swapchain on the same device.
+                // Ctrl+N 打开第二个窗口：在同一设备上创建真实的第二个 surface 和 swapchain。
+                //
                 if !repeat
                     && self.modifiers.control
                     && matches!(&key, PlatformKey::Character(text) if text.eq_ignore_ascii_case("n"))
@@ -803,9 +802,9 @@ impl PlatformApp for Showcase {
                     self.new_window_requested = true;
                     state.pacer.request_immediate(Instant::now());
                 }
-                // While the IME owns the text, the platform also reports the
-                // composition's characters as key presses. Forwarding both
-                // would insert every letter twice ("nihao" → "nniihhaaoo").
+                // 当 IME 持有文本时，平台还会把组合字符作为按键上报。
+                // 若两边都转发，每个字母都会被插入两次（"nihao" → "nniihhaaoo"）。
+                //
                 let ime_owns_text = state.ime.enabled && matches!(key, PlatformKey::Character(_));
                 if !ime_owns_text {
                     if repeat {
@@ -826,17 +825,17 @@ impl PlatformApp for Showcase {
                 if let Some(button) = pointer_button(button) {
                     let position = self.logical(self.pointer);
                     if button != PointerButton::Left {
-                        // A secondary press never moves the window chrome; it
-                        // is the UI's context-menu gesture. The middle button
-                        // is a canvas pan, also owned by the runtime.
+                        // 右键按压绝不移动窗口外框；它是 UI 的上下文菜单手势。
+                        // 中键用于画布平移，同样由运行时管理。
+                        //
                         if state == ButtonState::Pressed {
                             self.app.pointer_down(position, button);
                         } else {
                             self.app.pointer_up(position, button);
                         }
                     } else if state == ButtonState::Pressed {
-                        // The window chrome owns its edges and its title bar:
-                        // the UI underneath must not also see the press.
+                        // 窗口外框拥有其边缘和标题栏：下方的 UI 不得再收到该按压事件。
+                        //
                         self.resize_edge = self.resize_edge_at(window);
                         if let Some(edge) = self.resize_edge {
                             self.press_consumed = true;
@@ -901,28 +900,28 @@ impl PlatformApp for Showcase {
                 }
             }
             PlatformEvent::Focused(false) => {
-                // The window lost the focus: whatever the pointer was doing
-                // is over. The capture, the scrollbar grab and the demo
-                // drags have to go, or the shell keeps a ghost drag alive
-                // until the user happens to click somewhere else.
+                // 窗口失去焦点：指针正在进行的任何操作均已结束。
+                // 必须清除捕获、滚动条抓取与演示拖拽，否则外壳会一直保留幽灵拖拽，
+                // 直到用户恰好点击别处为止。
+                //
                 self.shell_mut().cancel_interactions();
                 self.app.cancel_pointer();
                 self.app
                     .pointer_up(self.logical(self.pointer), PointerButton::Left);
             }
             PlatformEvent::RedrawRequested => {
-                // The OS asked to repaint (the window was uncovered, or the
-                // compositor lost the surface). Only a *parked* loop has to be
-                // kicked: while the pacer is animating it already owns the
-                // cadence, and forcing a frame here would cancel the deadline
-                // that was set one moment ago on every single frame.
+                // OS 请求重绘（窗口被取消遮挡，或合成器丢失了 surface）。
+                // 只需唤醒处于*休眠*状态的循环：当 pacer 正在动画时它已掌控节奏，
+                // 此处强行请求一帧会取消每一帧前刚刚设定的截止时间。
+                //
+                //
                 if !state.pacer.animating() {
                     state.pacer.request_immediate(Instant::now());
                 }
             }
             PlatformEvent::ThemeChanged { dark } => {
-                // Follow the OS preference; the in-app toggle still wins
-                // until the next OS change.
+                // 跟随 OS 偏好；在下一次 OS 变更前，应用内切换仍优先。
+                //
                 self.shell_mut().state.theme = if dark {
                     ThemeMode::Dark
                 } else {
@@ -946,14 +945,14 @@ impl PlatformApp for Showcase {
         if flow == Flow::Exit {
             return Flow::Exit;
         }
-        // Re-read the effective scale: a zoom click in this very event changed
-        // it after the pre-handler snapshot.
+        // 重新读取有效缩放：本次事件中的缩放点击可能在处理前快照之后修改了它。
+        //
         let scale = self.effective_scale();
         self.shell_mut().set_effective_scale(scale);
         self.sync_ime(state, window);
-        // The rebuild itself happens in the frame loop, through the runtime.
-        // Kick the pacer when anything in the scene moved, so a click is
-        // visible now instead of at the next vsync.
+        // 重建本身在帧循环中通过运行时完成。
+        // 当场景中有任何元素移动时立即踢醒 pacer，使点击立刻可见，而非等到下次垂直同步。
+        //
         if self.app.dirty() != DirtyFlags::NONE {
             state.pacer.request_immediate(Instant::now());
         }
@@ -981,7 +980,7 @@ impl PlatformApp for Showcase {
 }
 
 impl Showcase {
-    /// Rebuild a secondary window's presentation chain.
+    /// 重建辅助窗口的呈现链。
     fn recreate_extra_swapchain(&mut self, index: usize, width: u32, height: u32) -> bool {
         let Some(renderer) = &mut self.renderer else {
             return false;
@@ -999,9 +998,9 @@ impl Showcase {
             eprintln!("could not rebuild the secondary swapchain: {error}");
             return false;
         }
-        // The chain now answers for this request. Its *actual* extent may
-        // still differ from it — the driver clamps it to its own limits — and
-        // that difference must never be mistaken for a new request.
+        // 呈现链现在对此次请求负责。其*实际*范围仍可能与之不同——
+        // 驱动会将其钳制到自身限制——绝不能把这种差异误判为新请求。
+        //
         extra.committed_request = (width, height);
         let (actual_w, actual_h) = extra.swapchain.extent();
         if let Err(error) = renderer.ensure_depth_size(actual_w, actual_h) {
@@ -1011,23 +1010,23 @@ impl Showcase {
         true
     }
 
-    /// Render one secondary window.
+    /// 渲染单个辅助窗口。
     ///
-    /// The window shares the device and the renderer with the primary one,
-    /// but owns its surface, its swapchain and its cadence. The application is
-    /// laid out for this window's logical viewport right before the draw, so
-    /// the same UI fills either window at its own size.
+    /// 该窗口与主窗口共享设备和渲染器，但拥有独立的 surface、swapchain 与节奏控制。
+    /// 绘制前应用会按此窗口的逻辑视口重新布局，使同一套 UI 按各自尺寸填满两个窗口。
+    ///
+    ///
     fn frame_secondary(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
         let Some(index) = self.extras.iter().position(|extra| extra.id == window.id()) else {
             return Flow::Continue;
         };
         let size = window.inner_size();
         let requested = (size.width.max(1), size.height.max(1));
-        // The rebuild criterion compares two *requested* sizes: the window's
-        // current request against the one the chain was last built for. The
-        // chain's actual extent is the driver's answer and may differ by a
-        // pixel — comparing the two would rebuild on every frame and never
-        // converge.
+        // 重建判据比较两个*请求*尺寸：窗口当前请求与上次构建呈现链时的请求。
+        // 呈现链的实际范围由驱动返回，可能相差一像素——
+        // 若比较两者会导致每帧都重建且永不收敛。
+        //
+        //
         let dirty = self.extras[index].swapchain_dirty;
         if needs_rebuild(requested, self.extras[index].committed_request, dirty) {
             self.extras[index].swapchain_dirty = false;
@@ -1040,10 +1039,10 @@ impl Showcase {
             return Flow::Continue;
         }
 
-        // Lay the shared application out for this window and rebuild. The
-        // viewport follows the committed extent — the same size the frame is
-        // actually drawn at — so the layout and the camera can never describe
-        // two different pictures.
+        // 为此窗口布局共享应用并重建。视口遵循已提交范围——
+        // 即帧实际绘制的尺寸——因此布局与相机绝不会描述两幅不同的画面。
+        //
+        //
         let scale = (window.scale_factor() as f32 * self.shell().state.zoom()).clamp(0.5, 4.0);
         self.shell_mut().set_effective_scale(scale);
         let (chain_w, chain_h) = self.extras[index].swapchain.extent();
@@ -1083,9 +1082,9 @@ impl Showcase {
         self.scene_generation = self.scene_generation.wrapping_add(1);
         let camera = Camera::ui((actual_w as f32, actual_h as f32), scale);
         self.app.application_mut().shell_mut().scene.camera = camera;
-        // Two windows share the pool, so each draw uploads the whole scene
-        // with a fresh generation instead of patching a base that belongs to
-        // the other window.
+        // 两个窗口共享缓冲池，因此每次绘制都使用全新代次全量上传整个场景，
+        // 而非修补属于另一个窗口的基准。
+        //
         let runtime_scene = self.app.scene();
         let scene = SceneUpload {
             primitives: &runtime_scene.primitives,
@@ -1124,50 +1123,50 @@ impl Showcase {
         let scale = self.effective_scale();
         self.shell_mut().set_effective_scale(scale);
 
-        // The window size is only a *request*. The driver decides how large
-        // the swapchain images are, and the image is what the compositor
-        // shows, so everything below derives from the committed extent: the
-        // layout and the camera then always describe the same picture.
+        // 窗口尺寸只是*请求*。驱动决定 swapchain 图像大小，合成器显示的是图像，
+        // 因此以下一切均由已提交范围推导：布局与相机从而始终描述同一幅画面。
+        //
+        //
         let size = window.inner_size();
         let requested = (size.width, size.height);
-        // A minimised window reports a zero extent: there is nothing to
-        // rebuild for, and a one-pixel chain would be nonsense.
+        // 最小化的窗口报告零范围：无需为其重建，且一像素的呈现链毫无意义。
+        //
         let live = size.width > 0 && size.height > 0;
 
-        // A resize that settled, or a swapchain the driver already rejected,
-        // both mean the same thing: rebuild the chain for the new size.
+        // 尺寸调整稳定下来，或驱动已拒绝当前 swapchain，两者含义相同：按新尺寸重建呈现链。
+        //
         let settled = state.poll_resize(Instant::now());
-        // The frame-rate limit lives in the app state; the pacer is the only
-        // place that enforces it. A change also changes the present mode
-        // (capped runs stay tear-free, an uncapped run must not be pinned to
-        // the display's refresh rate), so the chain is rebuilt next.
+        // 帧率上限存储在应用状态中；pacer 是唯一执行该上限的模块。
+        // 上限变更还会改变呈现模式（受限运行保持无撕裂，无限制运行不得被锁死在显示器刷新率上），
+        // 因此接下来会重建呈现链。
+        //
         let limit = self.shell().state.effective_fps_limit();
         let mut dirty = self.swapchain_dirty || settled.is_some();
         if state.pacer.fps_limit() != limit {
             state.pacer.set_fps_limit(limit);
             dirty = true;
         }
-        // The comparison is between two *requested* sizes. The chain's actual
-        // extent is the driver's answer and may legitimately differ from the
-        // request by a pixel; comparing the two would rebuild the chain on
-        // every frame, never converge, and present a layout that belongs to
-        // one size in an image of another.
+        // 比较的是两个*请求*尺寸。呈现链的实际范围由驱动返回，
+        // 合法情况下可能与请求相差一像素；比较两者会导致每帧都重建呈现链、
+        // 永不收敛，并把属于一种尺寸的布局呈现到另一种尺寸的图像中。
+        //
+        //
         let rebuild = live && needs_rebuild(requested, self.committed_request, dirty);
         if rebuild {
             self.swapchain_dirty = false;
             if !self.recreate_swapchain(window, requested.0, requested.1) {
-                // The old chain belongs to the old size: presenting the new
-                // layout in it would put the UI in the wrong place. Skip the
-                // frame and try again on the next one.
+                // 旧呈现链属于旧尺寸：在其中呈现新布局会把 UI 放到错误位置。
+                // 跳过本帧并在下一帧重试。
+                //
                 self.swapchain_dirty = true;
                 state.pacer.request_immediate(Instant::now());
                 return Flow::Continue;
             }
         }
 
-        // The layout follows the *presented* size: the committed extent of
-        // the swapchain. The page can therefore never be laid out for a size
-        // the frame is not drawn at.
+        // 布局跟随*呈现*尺寸：swapchain 的已提交范围。
+        // 因此页面绝不会按帧实际绘制尺寸之外的尺寸进行布局。
+        //
         if self.swapchain.is_none() {
             return Flow::Continue;
         }
@@ -1180,13 +1179,13 @@ impl Showcase {
         }
 
         let mut now = Instant::now();
-        // Check the cadence *before* touching the frame clock: an early
-        // return used to leave `last_frame` and the FPS counter updated for a
-        // frame that was never drawn.
+        // 在触及帧时钟*之前*检查节奏：早退曾导致从未绘制的帧也更新了
+        // `last_frame` 和 FPS 计数器。
         //
-        // The event loop wakes `SPIN_LEAD` before the deadline, so the last
-        // sub-millisecond gap is closed here instead of being left to the
-        // millisecond-granular OS timer.
+        //
+        // 事件循环在截止时间前 `SPIN_LEAD` 唤醒，因此最后不到一毫秒的空隙在此处自旋补齐，
+        // 而非交给毫秒粒度的 OS 定时器。
+        //
         if !rebuild && !state.pacer.should_render(now) {
             if state.pacer.within_spin_lead(now) {
                 now = state.pacer.spin_to_deadline();
@@ -1195,39 +1194,39 @@ impl Showcase {
             }
         }
 
-        // Advance time and rebuild the scene before borrowing the renderer:
-        // the app and the GPU objects are disjoint, but the helper methods
-        // borrow all of `self`.
+        // 在借用渲染器前推进时间并重建场景：应用与 GPU 对象互不相交，
+        // 但辅助方法会借用整个 `self`。
+        //
         let dt = now
             .saturating_duration_since(self.last_frame)
             .as_secs_f32()
             .min(0.1);
         self.last_frame = now;
         if dt > 0.0 {
-            // Exponential moving average: a single hitch must not make the
-            // HUD jump between 40 and 120.
+            // 指数移动平均：单次卡顿不得让 HUD 在 40 与 120 之间剧烈跳动。
+            //
             let instant_fps = 1.0 / dt;
             let alpha = 0.15;
             let demo = &mut self.shell_mut().state.demo;
             demo.fps += (instant_fps - demo.fps) * alpha;
             demo.frame_ms += (dt * 1000.0 - demo.frame_ms) * alpha;
         }
-        // With a second window on the same renderer, every window rebuilds
-        // for its own viewport and uploads the whole scene: the shared
-        // instance pool can only hold one patch base at a time.
+        // 当同一渲染器上存在第二个窗口时，每个窗口都会按自身视口重建并全量上传场景：
+        // 共享实例池一次只能保存一个修补基准。
+        //
         let multi = !self.extras.is_empty();
-        // The runtime reduces the tick, rebuilds the scene and returns the
-        // upload plan for this frame.
+        // 运行时归约 tick、重建场景并返回本帧的上传计划。
+        //
         let dirty = self.app.tick(dt);
         let moving = dirty != DirtyFlags::NONE;
         let report = self.advance_scene(0.0);
         self.write_theme_if_needed();
         self.apply_cursor(window);
 
-        // The upload plan. The generation moves when the scene's shape
-        // changed, and it also moves when the previous frame was dropped:
-        // the runtime's diff base runs ahead of the pool after a dropped
-        // frame, and only a full upload can bring the two back together.
+        // 上传计划。当场景形状变化时推进代次；当上一帧被丢弃时也会推进代次：
+        // 丢帧后运行时的 diff 基准已跑在缓冲池前面，唯有全量上传能使两者重新对齐。
+        //
+        //
         let plan = upload_plan(self.scene_generation, &report.diff, self.frame_dropped);
 
         let scale = self.effective_scale();
@@ -1243,9 +1242,9 @@ impl Showcase {
             self.frame_dropped = true;
             return Flow::Continue;
         }
-        // The driver rejects the image when the surface changed under us.
-        // That is not a failure: the swapchain is rebuilt for the new size
-        // on the next frame.
+        // 当表面在底层发生变化时，驱动会拒绝该图像。
+        // 这并非失败：下一帧会按新尺寸重建 swapchain。
+        //
         let image = match swapchain.acquire_outcome(ACQUIRE_TIMEOUT_NS) {
             Ok(AcquireOutcome::Ready { image, suboptimal }) => {
                 if suboptimal {
@@ -1266,19 +1265,19 @@ impl Showcase {
             }
         };
 
-        // The app lays out in logical units (physical / (OS scale × zoom)); the
-        // UI camera scales those units back up, so a 150 % layout maps exactly
-        // onto the physical viewport at any DPI.
+        // 应用按逻辑单位（physical / (OS scale × zoom)）布局；
+        // UI 相机将这些单位放大回物理像素，使 150% 的布局在任意 DPI 下都能精确映射到物理视口。
         //
-        // The camera is built from the same extent the layout was solved
-        // for, so the two can never describe different pictures.
+        //
+        // 相机基于布局求解所用的同一范围构建，因此两者绝不会描述不同的画面。
+        //
         let camera = Camera::ui((width as f32, height as f32), scale);
         self.app.application_mut().shell_mut().scene.camera = camera;
         let (generation, dirty_ranges): (u64, &[(u32, u32)]) = if multi {
-            // Two windows share the instance pool, so each draw uploads the
-            // whole scene under a *fresh* generation instead of patching a
-            // base that belongs to the other window. The generation moves on
-            // every draw, so the two windows can never claim the same one.
+            // 两个窗口共享实例池，因此每次绘制都在*全新*代次下全量上传整个场景，
+            // 而非修补属于另一个窗口的基准。每次绘制代次都会递增，确保两个窗口绝不会声索同一代次。
+            //
+            //
             (self.scene_generation.wrapping_add(1), &[])
         } else {
             (plan.generation, plan.ranges)
@@ -1317,15 +1316,15 @@ impl Showcase {
             self.frame_dropped = true;
             return Flow::Continue;
         }
-        // The scene reached the pool: the diff base and the GPU are in sync
-        // again, so a later drop starts from a clean slate.
+        // 场景已到达缓冲池：diff 基准与 GPU 再次同步，后续若再丢帧将从干净起点开始。
+        //
         self.frame_dropped = false;
-        // The render-finished semaphore belongs to *this* swapchain image, so
-        // the presentation engine never waits on a semaphore another image
-        // still owns.
+        // 渲染完成信号量属于*当前* swapchain 图像，
+        // 因此呈现引擎绝不会等待另一张图像仍持有的信号量。
+        //
         let finished = image.render_finished;
-        // A present that came back "recreate" means the surface moved under
-        // the swapchain: the frame was shown, but the chain is stale now.
+        // 呈现返回“recreate”意味着表面在 swapchain 下方发生了变化：
+        // 该帧已显示，但当前呈现链已过期。
         match swapchain.present_outcome(&renderer.gpu, image.index, finished) {
             Ok(PresentOutcome::Optimal) => {}
             Ok(PresentOutcome::Recreate) => {
@@ -1337,27 +1336,27 @@ impl Showcase {
             }
         }
         state.pacer.on_present(Instant::now());
-        // A static page with no HUD, no animation and a capped frame rate has
-        // nothing to show: let the event loop park instead of submitting a
-        // full cull + radix sort every refresh.
+        // 无 HUD、无动画且启用帧率上限的静态页面无新内容可显示：
+        // 让事件循环休眠，而非每次刷新都提交全量裁剪与基数排序。
+        //
         let keep_animating = self.shell().state.fps_limit == 0
             || self.shell().state.show_hud
             || self.shell().state.active_page == showcase::pages::PageId::Telemetry
             || moving;
         state.pacer.set_animating(keep_animating);
-        // No `request_redraw` here: `about_to_wait` arms
-        // `ControlFlow::WaitUntil(pacer.next_wake())` on every iteration, so
-        // the loop wakes itself exactly when the next frame is due. Requesting
-        // a redraw as well delivered `RedrawRequested` immediately, whose
-        // handler cancelled the deadline that had just been set — the software
-        // limiter never got to enforce anything.
+        // 此处不调用 `request_redraw`：`about_to_wait` 在每次迭代都会设置
+        // `ControlFlow::WaitUntil(pacer.next_wake())`，因此循环会在下一帧到期时精确自醒。
+        // 若同时请求重绘会立即派发 `RedrawRequested`，其处理函数会取消刚刚设定的截止时间——
+        // 导致软件限帧器根本没有机会生效。
+        //
+        //
         state.latency.on_present(Instant::now());
         Flow::Continue
     }
 
     fn accessibility_update_impl(&mut self) -> Option<accesskit::TreeUpdate> {
-        // The runtime's collector holds the shell's tree; taking the delta
-        // here is what makes a static frame cost no system call.
+        // 运行时的收集器持有外壳的树；此处获取增量（delta）
+        // 正是静态帧不产生任何系统调用的原因。
         self.app.scene_mut().semantics.take_update()
     }
 
@@ -1367,14 +1366,14 @@ impl Showcase {
         _window: &Window,
         request: unbound_platform::A11yRequest,
     ) -> Flow {
-        // Through the reducer, so an assistive-technology click is the same
-        // code path as a mouse click.
+        // 经由 reducer 处理，使辅助技术点击与鼠标点击走同一条代码路径。
+        //
         self.app.a11y(request.node, request.action, request.value);
         Flow::Continue
     }
 }
 
-/// Render the gallery offscreen and write it to a PNG.
+/// 离屏渲染展厅并写入 PNG。
 fn render_to_png(
     path: &str,
     width: u32,
@@ -1437,7 +1436,7 @@ fn render_to_png(
     write_png(path, width, height, &pixels)
 }
 
-/// Write RGBA pixels to a PNG file, creating the parent directory if needed.
+/// 将 RGBA 像素写入 PNG 文件，必要时创建父目录。
 fn write_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
     if let Some(parent) = std::path::Path::new(path).parent() {
         if !parent.as_os_str().is_empty() {
@@ -1535,12 +1534,12 @@ mod tests {
     use super::*;
     use showcase::pages::PageId;
 
-    /// Changing the app zoom must not resize the window.
+    /// 改变应用缩放不得调整窗口大小。
     ///
-    /// The layout is re-derived from `physical / (os_scale × zoom)`, so the
-    /// physical window is left alone; this guards against the old behaviour
-    /// coming back (a resize request per zoom step broke the drag gestures and
-    /// could move the window off-screen at 200 %).
+    /// 布局由 `physical / (os_scale × zoom)` 重新推导，因此物理窗口保持不变；
+    /// 此测试防止旧行为回归（每次缩放都请求调整窗口会打断拖拽手势，
+    /// 且在 200% 缩放下可能把窗口移出屏幕外）。
+    ///
     #[test]
     fn app_zoom_never_changes_the_physical_window_size() {
         let mut app = GalleryApp::new();

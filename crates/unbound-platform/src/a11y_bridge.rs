@@ -1,39 +1,39 @@
-//! The bridge between the semantic tree and an accessibility adapter.
+//! 语义树与无障碍适配器之间的桥接层。
 //!
-//! [`Semantics`] already produces incremental `TreeUpdate`s; this module owns
-//! the two directions around it:
+//! [`Semantics`] 已负责生成增量 `TreeUpdate`；本模块负责其两侧的双向通道：
 //!
-//! * **out** — hand the update to a transport (on Windows, an
-//!   `accesskit_winit::Adapter` pushes it into UI Automation),
-//! * **in** — translate an `ActionRequest` from assistive technology back into
-//!   the engine's [`A11yAction`] plus the target node id, so the application's
-//!   reducer can handle it exactly like a pointer or keyboard event.
+//! *
+//! * **输出方向（out）**—— 将更新交给传输层（在 Windows 上由
+//!   `accesskit_winit::Adapter` 推送至 UI Automation）；
+//! * **输入方向（in）**—— 将来自辅助技术的 `ActionRequest` 翻译回引擎的
+//!   [`A11yAction`] 及目标节点 ID，使应用 reducer 能像处理指针或键盘事件一样
+//!   处理它。
 //!
-//! Keeping the transport a trait is what makes the round trip testable on a
-//! headless machine: the test records what would have crossed the boundary and
-//! feeds a synthetic request back in.
+//! 将传输层抽象为 trait 使双向往返可在无头机器上测试：测试可记录跨边界的
+//! 更新内容，并向回注入合成的动作请求。
+//!
 
 use accesskit::{Action, ActionData, ActionRequest, NodeId, TreeUpdate};
 use unbound_a11y::{A11yAction, Semantics};
 
-/// Where accessibility updates go.
+/// 无障碍更新的输出目标。
 pub trait A11yTransport {
-    /// Send one update to the platform adapter.
+    /// 向平台适配器发送一次更新。
     fn send(&mut self, update: TreeUpdate);
 }
 
-/// One action request, in the engine's vocabulary.
+/// 引擎词汇表中的单条动作请求。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct A11yRequest {
-    /// The target node id.
+    /// 目标节点 ID。
     pub node: u64,
-    /// The requested action.
+    /// 请求执行的动作。
     pub action: A11yAction,
-    /// The new value for `SetValue`.
+    /// `SetValue` 动作携带的新值。
     pub value: Option<String>,
 }
 
-/// The two-way accessibility bridge.
+/// 双向无障碍桥接器。
 pub struct A11yBridge<T: A11yTransport> {
     transport: T,
     enabled: bool,
@@ -52,8 +52,8 @@ impl<T: A11yTransport> A11yBridge<T> {
         }
     }
 
-    /// Accessibility is off until the platform says an assistive technology
-    /// is listening. Publishing while disabled costs nothing.
+    /// 在平台报告有辅助技术正在监听之前，无障碍功能处于关闭状态。
+    /// 关闭状态下调用发布不会产生任何开销。
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
@@ -63,15 +63,15 @@ impl<T: A11yTransport> A11yBridge<T> {
         self.enabled
     }
 
-    /// The transport, for a shell that needs to reach the platform adapter.
+    /// 获取内部传输层，供需要直达平台适配器的外壳使用。
     pub fn transport_mut(&mut self) -> &mut T {
         &mut self.transport
     }
 
-    /// Publish the pending semantic delta, if any.
+    /// 发布待处理的语义增量（若有）。
     ///
-    /// Returns whether an update crossed the boundary. The first call after a
-    /// [`Semantics::reset`] is a full snapshot; later calls are deltas.
+    /// 返回是否有更新跨越边界。[`Semantics::reset`] 后的首次调用为完整快照，
+    /// 后续调用均为增量更新。
     pub fn publish(&mut self, semantics: &mut Semantics) -> bool {
         if !self.enabled {
             return false;
@@ -84,10 +84,10 @@ impl<T: A11yTransport> A11yBridge<T> {
         true
     }
 
-    /// Translate an incoming action request.
+    /// 翻译一条传入的动作请求。
     ///
-    /// Returns `None` when accessibility is disabled or the action has no
-    /// engine equivalent.
+    /// 当无障碍未启用或该动作在引擎中无对应项时返回 `None`。
+    ///
     pub fn translate(&mut self, request: &ActionRequest) -> Option<A11yRequest> {
         if !self.enabled {
             return None;
@@ -106,20 +106,20 @@ impl<T: A11yTransport> A11yBridge<T> {
         })
     }
 
-    /// How many updates crossed the boundary.
+    /// 跨越边界的更新总次数。
     #[must_use]
     pub fn updates(&self) -> u64 {
         self.updates
     }
 
-    /// How many action requests crossed the boundary.
+    /// 跨越边界的动作请求总次数。
     #[must_use]
     pub fn requests(&self) -> u64 {
         self.requests
     }
 }
 
-/// Map an AccessKit action to the engine's action set.
+/// 将 AccessKit 动作映射为引擎动作集。
 #[must_use]
 pub fn engine_action(action: Action) -> Option<A11yAction> {
     Some(match action {
@@ -137,8 +137,8 @@ pub fn engine_action(action: Action) -> Option<A11yAction> {
     })
 }
 
-/// Build a synthetic request (used by tests and by adapters that expose a
-/// custom protocol).
+/// 构建合成动作请求（供测试及暴露自定义协议的适配器使用）。
+///
 #[must_use]
 pub fn action_request(action: Action, node: u64, value: Option<&str>) -> ActionRequest {
     ActionRequest {

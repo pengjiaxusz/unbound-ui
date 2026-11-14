@@ -1,10 +1,8 @@
-//! Canvas minimaps.
+//! 画布小地图（Minimap）。
 //!
-//! The minimap is a second camera into the same world: it maps `world_bounds`
-//! onto its own rectangle with a uniform scale, paints a block per item and
-//! outlines the region the main camera currently shows. Dragging inside it
-//! only moves the camera — no scene graph is rebuilt, so a pan from the
-//! minimap costs one push-constant write.
+//! 小地图是观察同一世界的第二个相机：它以等比缩放将 `world_bounds` 映射到自身矩形内，
+//! 为每个元素绘制一个色块，并勾勒出主相机当前可见的区域。在小地图内部拖拽仅移动相机——
+//! 无需重建场景图，因此从小地图平移仅消耗一次推送常量写入。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -17,27 +15,27 @@ use crate::primitive::{instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The empty margin kept around the world inside the minimap.
+/// 小地图内世界边界四周保留的空白边距。
 pub const MINIMAP_INSET: f32 = 6.0;
-/// One minimap block.
+/// 单个小地图色块。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MinimapItem {
-    /// The item's world bounds.
+    /// 元素在世界空间中的边界。
     pub bounds: Rect,
-    /// The block colour.
+    /// 色块颜色。
     pub token: Token,
 }
 
-/// The minimap descriptor.
+/// 小地图描述符。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MinimapDesc {
-    /// The minimap rectangle, in screen space.
+    /// 小地图矩形（屏幕空间）。
     pub rect: Rect,
-    /// The world rectangle the minimap covers.
+    /// 小地图覆盖的世界矩形。
     pub world_bounds: Rect,
-    /// The camera's current world rectangle.
+    /// 主相机当前的世界矩形。
     pub camera_viewport: Rect,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
@@ -52,7 +50,7 @@ impl MinimapDesc {
         }
     }
 
-    /// The uniform world-to-minimap scale.
+    /// 世界到小地图的统一缩放比例。
     #[must_use]
     pub fn scale(&self) -> f32 {
         let inner = self.inner_rect();
@@ -64,13 +62,13 @@ impl MinimapDesc {
             .max(0.0)
     }
 
-    /// The area world content is mapped into.
+    /// 世界内容映射入的目标区域。
     #[must_use]
     pub fn inner_rect(&self) -> Rect {
         self.rect.inflate(-MINIMAP_INSET)
     }
 
-    /// Project a world point into the minimap.
+    /// 将世界坐标点投影到小地图。
     #[must_use]
     pub fn project(&self, point: Vec2) -> Vec2 {
         let scale = self.scale();
@@ -86,7 +84,7 @@ impl MinimapDesc {
         offset + (point - self.world_bounds.min()) * scale
     }
 
-    /// Project a world rectangle into the minimap.
+    /// 将世界矩形投影到小地图。
     #[must_use]
     pub fn project_rect(&self, rect: Rect) -> Rect {
         let min = self.project(rect.min());
@@ -99,7 +97,7 @@ impl MinimapDesc {
         )
     }
 
-    /// Un-project a minimap point back to world space.
+    /// 将小地图坐标点反投影回世界空间。
     #[must_use]
     pub fn unproject(&self, point: Vec2) -> Vec2 {
         let scale = self.scale();
@@ -110,7 +108,7 @@ impl MinimapDesc {
         self.world_bounds.min() + (point - min) / scale
     }
 
-    /// The world point at the minimap's centre (the camera target for a click).
+    /// 位于小地图中心的世界坐标点（点击时的相机目标点）。
     #[must_use]
     pub fn camera_target(&self, point: Vec2) -> Vec2 {
         let centre = self.unproject(point);
@@ -125,10 +123,10 @@ impl MinimapDesc {
     }
 }
 
-/// The dragging state of one minimap.
+/// 单个小地图的拖拽状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MinimapState {
-    /// Whether the pointer is dragging the camera.
+    /// 指针是否正在拖拽相机。
     pub dragging: bool,
 }
 
@@ -138,18 +136,18 @@ impl MinimapState {
         Self::default()
     }
 
-    /// Begin a camera drag at `point` (minimap space).
+    /// 在 `point`（小地图空间）处开始相机拖拽。
     pub fn begin(&mut self) {
         self.dragging = true;
     }
 
-    /// End the drag.
+    /// 结束拖拽。
     pub fn end(&mut self) {
         self.dragging = false;
     }
 }
 
-/// Emit a minimap and its hit region.
+/// 发射小地图及其命中区域。
 #[must_use]
 pub fn emit_minimap(
     node: u64,
@@ -197,8 +195,7 @@ pub fn emit_minimap(
         0.0,
         desc.z + 2,
     ));
-    // The drag/focus outline always occupies a slot; its opacity alone says
-    // whether it is visible, so the primitive count never changes.
+    // 拖拽/焦点轮廓线始终占用一个槽位；仅通过不透明度控制可见性，因此图元数量永不变化。
     let mut ring = outlined(
         desc.rect,
         10.0,
@@ -314,8 +311,7 @@ mod tests {
             output.hit.as_ref().unwrap().cursor,
             Some(CursorKind::Pointer)
         );
-        // Shadow, background, border, one block, one viewport outline and the
-        // always-present (invisible) drag/focus ring slot.
+        // 阴影、背景、边框、一个色块、一个视口轮廓线以及始终存在（不可见）的拖拽/焦点环槽位。
         assert_eq!(output.primitives.len(), 6);
         assert_eq!(
             output.a11y.as_ref().map(|node| node.role),

@@ -1,8 +1,8 @@
-//! The switch: a track with a knob that slides to the other end.
+//! 开关控件：一条轨道与一个滑向另一端的旋钮。
 //!
-//! The switch is the only control whose *business* state (`on`) is not a
-//! pointer phase: it lives in the descriptor, while the pointer phase and the
-//! focus ring still come from the router.
+//! 开关是唯一其*业务*状态（`on`）不属于指针阶段的控件：
+//! 该状态驻留在描述符中，而指针阶段与焦点环仍由路由器提供。
+//!
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -14,46 +14,46 @@ use unbound_theme::Token;
 use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
-/// The UI layer a control's hit region lives in.
+/// 控件命中区域所在的界面层。
 pub const CONTROL_LAYER: u8 = 1;
 
-/// The default track size.
+/// 默认轨道尺寸。
 pub const SWITCH_TRACK: (f32, f32) = (44.0, 24.0);
 
-/// The default knob size.
+/// 默认旋钮尺寸。
 pub const SWITCH_KNOB: f32 = 16.0;
 
-/// The distance the knob keeps from the track's edge.
+/// 旋钮与轨道边缘保持的距离。
 const KNOB_INSET: f32 = 4.0;
 
-/// How much the knob stretches along the track while pressed.
+/// 按下时旋钮沿轨道方向的拉伸量。
 const KNOB_SQUISH: f32 = 4.0;
 
-/// The colour slots a switch paints with.
+/// 开关绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SwitchTokens {
-    /// The track while the switch is off.
+    /// 关闭状态下的轨道。
     pub track: Token,
-    /// The track while the switch is on.
+    /// 开启状态下的轨道。
     pub track_on: Token,
-    /// The track while disabled.
+    /// 禁用状态下的轨道。
     pub track_disabled: Token,
-    /// The knob.
+    /// 旋钮。
     pub thumb: Token,
-    /// The knob while disabled.
+    /// 禁用状态下的旋钮。
     pub thumb_disabled: Token,
-    /// The label while idle.
+    /// 空闲状态下的标签。
     pub label: Token,
-    /// The label while hovered.
+    /// 悬停状态下的标签。
     pub label_hover: Token,
-    /// The label while disabled.
+    /// 禁用状态下的标签。
     pub label_disabled: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环。
     pub focus_ring: Token,
 }
 
 impl SwitchTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -70,31 +70,30 @@ impl SwitchTokens {
     }
 }
 
-/// The pure data descriptor of a switch.
+/// 开关的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SwitchDesc {
-    /// The row the switch occupies. The track sits at its right end.
+    /// 开关占用的行矩形，轨道位于行末右侧。
     pub rect: Rect,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Whether the switch is on.
+    /// 开关是否处于开启状态。
     pub on: bool,
-    /// The animated knob position, in `0..=1`.
+    /// 旋钮的动画位置（`0..=1`）。
     ///
-    /// `None` snaps the knob to the business state; `Some(t)` is what a
-    /// spring animation writes every frame, so the knob can slide instead of
-    /// jumping when the value flips.
+    /// `None` 表示将旋钮直接对齐到业务状态；`Some(t)` 由弹簧动画每帧写入，
+    /// 使数值切换时旋钮平滑滑动而非瞬移。
     pub thumb_t: Option<f32>,
-    /// The track size.
+    /// 轨道尺寸。
     pub track_size: (f32, f32),
-    /// The knob size.
+    /// 旋钮尺寸。
     pub knob_size: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl SwitchDesc {
-    /// A switch with the default metrics.
+    /// 使用默认尺寸创建的开关。
     #[must_use]
     pub fn new(rect: Rect, label: impl Into<String>) -> Self {
         Self {
@@ -108,21 +107,21 @@ impl SwitchDesc {
         }
     }
 
-    /// The same switch in the other position.
+    /// 切换开关状态。
     #[must_use]
     pub fn with_on(mut self, on: bool) -> Self {
         self.on = on;
         self
     }
 
-    /// Draw the knob at an interpolated position instead of snapping it.
+    /// 在插值位置绘制旋钮，而非直接对齐到目标端。
     #[must_use]
     pub fn with_thumb_t(mut self, thumb_t: f32) -> Self {
         self.thumb_t = Some(thumb_t);
         self
     }
 
-    /// The track rectangle: right-aligned, vertically centred in the row.
+    /// 轨道矩形：右对齐并在行内垂直居中。
     #[must_use]
     pub fn track_rect(&self) -> Rect {
         let (width, height) = self.track_size;
@@ -134,7 +133,7 @@ impl SwitchDesc {
         )
     }
 
-    /// The knob position in `0..=1`, from the animation or the business state.
+    /// 处于 `0..=1` 的旋钮位置（取自动画进度或业务状态）。
     #[must_use]
     pub fn thumb_position(&self) -> f32 {
         self.thumb_t
@@ -142,17 +141,16 @@ impl SwitchDesc {
             .clamp(0.0, 1.0)
     }
 
-    /// The knob rectangle.
+    /// 旋钮矩形。
     #[must_use]
     pub fn knob_rect(&self) -> Rect {
         self.knob_rect_pressed(false)
     }
 
-    /// The knob rectangle while pressed.
+    /// 按下状态的旋钮矩形。
     ///
-    /// Pressing a switch stretches the knob into a capsule: it grows towards
-    /// the centre of the track, away from the end it is anchored to, which is
-    /// the "squish" a physical toggle shows under a thumb.
+    /// 按下开关会将旋钮拉伸为胶囊形：向轨道中心方向延伸、远离其锚定端，
+    /// 模拟拇指按压物理拨动开关时的形变效果。
     #[must_use]
     pub fn knob_rect_pressed(&self, pressed: bool) -> Rect {
         let track = self.track_rect();
@@ -175,10 +173,9 @@ impl SwitchDesc {
     }
 }
 
-/// Emit the switch: track, knob, label and the focus ring.
+/// 输出开关：轨道、旋钮、标签与焦点环。
 ///
-/// `label` carries the glyphs the caller has already positioned; the emitter
-/// never touches them.
+/// `label` 携带调用方已定位好的字形；输出器不会修改它们。
 #[must_use]
 pub fn emit_switch(
     node: u64,
@@ -191,7 +188,7 @@ pub fn emit_switch(
     let mut payloads = Vec::with_capacity(label.len());
     let z = desc.z;
 
-    // The track.
+    // 轨道。
     let track_fill = if state.disabled {
         tokens.track_disabled
     } else if desc.on {
@@ -206,8 +203,8 @@ pub fn emit_switch(
         z,
     ));
 
-    // The knob: it stretches into a capsule while pressed, which is the
-    // tactile feedback of a real toggle.
+    // 旋钮：按下时拉伸为胶囊形，还原真实拨动开关的触觉反馈。
+    //
     let pressed = state.phase == crate::PointerPhase::Pressed && !state.disabled;
     let knob = desc.knob_rect_pressed(pressed);
     let thumb_fill = if state.disabled {
@@ -225,7 +222,7 @@ pub fn emit_switch(
         z,
     ));
 
-    // The label.
+    // 标签。
     let label_color = if state.disabled {
         tokens.label_disabled
     } else if state.phase == crate::PointerPhase::Hovered {
@@ -235,8 +232,8 @@ pub fn emit_switch(
     };
     glyphs(label, label_color, z, &mut primitives, &mut payloads);
 
-    // The focus ring. It is always emitted: focus changes its opacity, not the
-    // pool's shape, so focus is a paint change and never a re-upload.
+    // 焦点环。始终输出：焦点变化仅改变其不透明度而非图元池结构，因此聚焦只是绘制变更而非重传。
+    //
     primitives.push(focus_ring(
         knob.inflate(3.0),
         desc.knob_size * 0.5 + 3.0,

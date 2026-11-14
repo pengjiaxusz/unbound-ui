@@ -1,13 +1,10 @@
-//! Badges and chips: compact status and filter affordances.
+//! 徽标（Badge）与筛选标签（Chip）：紧凑的状态与筛选交互控件。
 //!
-//! Both are labels first: a badge is never the only carrier of meaning, and
-//! its accessible label repeats the text. Colour is a secondary channel, which
-//! is why every variant also has a distinct default label in the audit's
-//! contrast matrix.
+//! 两者均以标签语义为先：徽标绝不是唯一的信息载体，其无障碍标签会重复文本内容。
+//! 颜色仅作为辅助通道，因此每个变体在对比度矩阵审计中均有独立的默认标签。
 //!
-//! A chip owns no state. [`ChipDesc::selected`] and `closable` are policy, and
-//! the emitter reports the two hit regions (body, close) so the reducer can
-//! route a click to either.
+//! Chip 不持有状态。[`ChipDesc::selected`] 与 `closable` 属于外部策略，
+//! 发射器上报两个命中区域（主体、关闭按钮），由 reducer 路由点击事件。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -20,24 +17,24 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The semantic colour family of a badge.
+/// 徽标的语义色系。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BadgeVariant {
-    /// Neutral information.
+    /// 中性信息。
     #[default]
     Neutral,
-    /// The primary accent.
+    /// 主强调色。
     Primary,
-    /// A success state.
+    /// 成功状态。
     Success,
-    /// A warning.
+    /// 警告状态。
     Warning,
-    /// An error or destructive state.
+    /// 错误或危险状态。
     Error,
 }
 
 impl BadgeVariant {
-    /// The low-saturation fill.
+    /// 低饱和度填充色。
     #[must_use]
     pub fn fill(self) -> Token {
         match self {
@@ -49,7 +46,7 @@ impl BadgeVariant {
         }
     }
 
-    /// The saturated text colour.
+    /// 饱和文本颜色。
     #[must_use]
     pub fn text(self) -> Token {
         match self {
@@ -62,25 +59,25 @@ impl BadgeVariant {
     }
 }
 
-/// A pill-shaped status label.
+/// 胶囊形状态标签。
 #[derive(Clone, Debug, PartialEq)]
 pub struct BadgeDesc {
-    /// The badge rectangle.
+    /// 徽标矩形。
     pub rect: Rect,
-    /// The text.
+    /// 显示文本。
     pub text: String,
-    /// The colour family.
+    /// 语义色系。
     pub variant: BadgeVariant,
-    /// Draw a leading status dot.
+    /// 是否绘制前置状态圆点。
     pub dot: bool,
-    /// The corner radius; defaults to a full pill.
+    /// 圆角半径；默认为完整胶囊圆角。
     pub radius: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl BadgeDesc {
-    /// A pill badge.
+    /// 创建胶囊形徽标。
     #[must_use]
     pub fn new(rect: Rect, text: impl Into<String>) -> Self {
         Self {
@@ -93,21 +90,21 @@ impl BadgeDesc {
         }
     }
 
-    /// The same badge in a colour family.
+    /// 设置语义色系。
     #[must_use]
     pub fn variant(mut self, variant: BadgeVariant) -> Self {
         self.variant = variant;
         self
     }
 
-    /// The same badge with a leading dot.
+    /// 附加前置状态圆点。
     #[must_use]
     pub fn with_dot(mut self) -> Self {
         self.dot = true;
         self
     }
 
-    /// A dot-only badge, for counters with no room for text.
+    /// 纯圆点徽标，用于无文本空间的计数器。
     #[must_use]
     pub fn status_dot(rect: Rect, variant: BadgeVariant) -> Self {
         Self {
@@ -120,7 +117,7 @@ impl BadgeDesc {
         }
     }
 
-    /// The leading dot, when there is one.
+    /// 前置状态圆点（若启用）。
     #[must_use]
     pub fn dot_rect(&self) -> Option<Rect> {
         if !self.dot {
@@ -136,7 +133,7 @@ impl BadgeDesc {
     }
 }
 
-/// Emit a badge.
+/// 发射徽标。
 #[must_use]
 pub fn emit_badge(desc: &BadgeDesc, badge_glyphs: &[GlyphQuad]) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(2 + badge_glyphs.len());
@@ -167,25 +164,25 @@ pub fn emit_badge(desc: &BadgeDesc, badge_glyphs: &[GlyphQuad]) -> WidgetOutput 
     }
 }
 
-/// A filter pill with an optional close affordance.
+/// 带可选关闭控件的筛选胶囊标签。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChipDesc {
-    /// The chip rectangle.
+    /// 标签矩形。
     pub rect: Rect,
-    /// The label.
+    /// 标签文本。
     pub text: String,
-    /// The chip is toggled on.
+    /// 标签是否处于选中状态。
     pub selected: bool,
-    /// The chip shows a close button.
+    /// 标签是否显示关闭按钮。
     pub closable: bool,
-    /// The chip refuses interaction.
+    /// 标签是否禁用交互。
     pub disabled: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl ChipDesc {
-    /// A deselected, unclosable chip.
+    /// 创建未选中且不可关闭的标签。
     #[must_use]
     pub fn new(rect: Rect, text: impl Into<String>) -> Self {
         Self {
@@ -198,28 +195,28 @@ impl ChipDesc {
         }
     }
 
-    /// The same chip, selected.
+    /// 设置选中状态。
     #[must_use]
     pub fn selected(mut self) -> Self {
         self.selected = true;
         self
     }
 
-    /// The same chip, closable.
+    /// 设置可关闭状态。
     #[must_use]
     pub fn closable(mut self) -> Self {
         self.closable = true;
         self
     }
 
-    /// The same chip, disabled.
+    /// 设置禁用状态。
     #[must_use]
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
 
-    /// The close affordance; `None` when the chip is not closable.
+    /// 关闭控件矩形；不可关闭时返回 `None`。
     #[must_use]
     pub fn close_rect(&self) -> Option<Rect> {
         if !self.closable {
@@ -234,7 +231,7 @@ impl ChipDesc {
         ))
     }
 
-    /// The body hit region, excluding the close affordance.
+    /// 主体命中区域（排除关闭控件）。
     #[must_use]
     pub fn body_rect(&self) -> Rect {
         match self.close_rect() {
@@ -249,7 +246,7 @@ impl ChipDesc {
     }
 }
 
-/// Emit a chip and the two hit regions.
+/// 发射标签及其两个命中区域。
 #[must_use]
 pub fn emit_chip(
     node: u64,

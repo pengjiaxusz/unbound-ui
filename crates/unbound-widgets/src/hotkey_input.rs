@@ -1,4 +1,4 @@
-//! HotkeyInput / ShortcutRecorder capturing key chords & detecting conflicts.
+//! 快捷键输入框（HotkeyInput / ShortcutRecorder）：捕获组合键并检测冲突。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -11,39 +11,39 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// Interactive state for [`HotkeyInputDesc`].
+/// [`HotkeyInputDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HotkeyInputState {
-    /// Currently bound shortcut chord.
+    /// 当前绑定的快捷键组合。
     pub chord: Option<KeyChord>,
-    /// Whether actively listening for the next key press.
+    /// 是否正在积极监听下一次按键。
     pub recording: bool,
-    /// Whether the captured chord conflicts with another binding.
+    /// 捕获的组合键是否与其他绑定冲突。
     pub conflict: bool,
 }
 
-/// Deterministic sub-node id for the hotkey clear/record indicator button.
+/// 快捷键清除/录制指示按钮的确定性子节点 ID。
 #[must_use]
 pub const fn hotkey_clear_node(node: u64) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x900
 }
 
 impl HotkeyInputState {
-    /// Start listening for a key chord.
+    /// 开始监听组合键。
     pub fn start_recording(&mut self) {
         self.recording = true;
         self.conflict = false;
     }
 
-    /// Clear the bound shortcut and stop recording.
+    /// 清除已绑定的快捷键并停止录制。
     pub fn clear(&mut self) {
         self.chord = None;
         self.recording = false;
         self.conflict = false;
     }
 
-    /// Capture `chord` if `recording` is true, checking `existing_bindings` for conflicts.
-    /// Returns `true` if the chord was accepted without conflict.
+    /// 若 `recording` 为 true 则捕获 `chord`，并检查 `existing_bindings` 是否存在冲突。
+    /// 若组合键无冲突并被接受则返回 `true`。
     pub fn handle_key(&mut self, chord: KeyChord, existing_bindings: &[KeyChord]) -> bool {
         if !self.recording {
             return false;
@@ -55,25 +55,25 @@ impl HotkeyInputState {
     }
 }
 
-/// Descriptor for a [`HotkeyInput`].
+/// [`HotkeyInput`] 描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct HotkeyInputDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Display chord text (e.g. `"Ctrl+K"`).
+    /// 显示的组合键文本（例如 `"Ctrl+K"`）。
     pub shortcut_text: String,
-    /// Whether actively recording.
+    /// 是否正在积极录制。
     pub recording: bool,
-    /// Whether a conflict warning is active.
+    /// 是否激活冲突警告。
     pub conflict: bool,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl HotkeyInputDesc {
-    /// Create a hotkey recorder descriptor.
+    /// 创建快捷键录制器描述符。
     #[must_use]
     pub fn new(rect: Rect, shortcut_text: impl Into<String>) -> Self {
         Self {
@@ -87,7 +87,7 @@ impl HotkeyInputDesc {
     }
 }
 
-/// Emit a stable-shape hotkey recorder (1 bg + 1 recording dot + 1 focus ring = 3 primitives).
+/// 发射固定形状的快捷键录制器（1 背景 + 1 录制圆点 + 1 焦点环 = 3 个图元）。
 #[must_use]
 pub fn emit_hotkey_input(
     node: u64,

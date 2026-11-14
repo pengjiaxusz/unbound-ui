@@ -1,4 +1,4 @@
-//! Integration tests for SVG Path parser & quadratic reduction (S5.6).
+//! SVG Path 解析器与二次降阶的集成测试（S5.6）。
 
 use unbound_math::Vec2;
 use unbound_vector::{parse_svg_path, SvgPathCache};

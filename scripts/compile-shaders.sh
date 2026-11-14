@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Regenerate the checked-in SPIR-V blobs.
+# 重新生成仓库中提交的 SPIR-V 二进制文件。
 #
-# `crates/unbound-gpu/build.rs` prefers a real `glslc` and falls back to the
-# blobs in `shaders/spv/` when the Vulkan SDK is absent. That fallback is only
-# correct if the blobs match the GLSL sources, so this script refreshes them
-# whenever a shader changes.
+# `crates/unbound-gpu/build.rs` 优先使用真实的 `glslc`，在缺少 Vulkan SDK 时
+# 回退到 `shaders/spv/` 中的预编译二进制。该回退仅在二进制与 GLSL 源码一致时
+# 才正确，因此在着色器变更后需运行此脚本刷新。
 #
-# Usage: scripts/compile-shaders.sh [output-dir]
+# 用法：scripts/compile-shaders.sh [output-dir]
 
 set -euo pipefail
 

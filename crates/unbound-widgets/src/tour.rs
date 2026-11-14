@@ -1,4 +1,4 @@
-//! Tour / Spotlight guided walkthrough overlay with target cutout & step bubble.
+//! Tour / Spotlight 引导式漫游浮层，带目标镂空与步骤气泡。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -12,28 +12,28 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// Single step in a [`TourDesc`].
+/// [`TourDesc`] 中的单个引导步骤。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TourStep {
-    /// Target rectangle to spotlight.
+    /// 需要聚光灯高亮的目标矩形。
     pub target: Rect,
-    /// Step title.
+    /// 步骤标题。
     pub title: String,
-    /// Step description.
+    /// 步骤说明。
     pub body: String,
 }
 
-/// Interactive state for [`TourDesc`].
+/// [`TourDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TourState {
-    /// Whether the tour is active.
+    /// 引导漫游是否处于激活状态。
     pub active: bool,
-    /// Current step index.
+    /// 当前步骤索引。
     pub step: usize,
 }
 
 impl TourState {
-    /// Advance to the next step or close if on the last step.
+    /// 前进到下一步；若已在最后一步则关闭引导。
     pub fn next(&mut self, total: usize) {
         if self.step + 1 < total {
             self.step += 1;
@@ -43,25 +43,25 @@ impl TourState {
     }
 }
 
-/// Descriptor for a [`Tour`] spotlight overlay.
+/// [`Tour`] 聚光灯浮层的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TourDesc {
-    /// Viewport bounds.
+    /// 视口边界。
     pub rect: Rect,
-    /// Spotlight target rectangle.
+    /// 聚光灯目标矩形。
     pub target: Rect,
-    /// Step title.
+    /// 步骤标题。
     pub title: String,
-    /// Current 1-based step index.
+    /// 当前步骤序号（从 1 开始）。
     pub step: usize,
-    /// Total steps.
+    /// 总步骤数。
     pub total_steps: usize,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl TourDesc {
-    /// Create a tour descriptor.
+    /// 创建引导漫游描述符。
     #[must_use]
     pub fn new(rect: Rect, target: Rect, title: impl Into<String>) -> Self {
         Self {
@@ -75,26 +75,26 @@ impl TourDesc {
     }
 }
 
-/// Deterministic child node key for the Prev button.
+/// “上一步”按钮的确定性子节点键。
 #[must_use]
 pub const fn tour_prev_node(base: u64) -> u64 {
     base ^ 0x544F_5552_0001
 }
 
-/// Deterministic child node key for the Next button.
+/// “下一步”按钮的确定性子节点键。
 #[must_use]
 pub const fn tour_next_node(base: u64) -> u64 {
     base ^ 0x544F_5552_0002
 }
 
-/// Deterministic child node key for the Skip button.
+/// “跳过”按钮的确定性子节点键。
 #[must_use]
 pub const fn tour_skip_node(base: u64) -> u64 {
     base ^ 0x544F_5552_0003
 }
 
-/// Emit a stable-shape tour spotlight with 4 surrounding scrims (top, bottom, left, right)
-/// leaving `desc.target` transparent and unblocked, plus independent Prev/Next/Skip sub-hits.
+/// 输出结构稳定的引导聚光灯，四周由 4 块遮罩（上、下、左、右）围合，
+/// 使 `desc.target` 保持透明且不被遮挡，并附带独立的上一步/下一步/跳过子命中区域。
 #[must_use]
 pub fn emit_tour(
     node: u64,
@@ -108,14 +108,34 @@ pub fn emit_tour(
     let r = desc.rect;
     let t = desc.target;
     let scrim_rects = [
-        // Top
-        Rect::new(r.origin.x, r.origin.y, r.width(), (t.origin.y - r.origin.y).max(0.0)),
-        // Bottom
-        Rect::new(r.origin.x, t.max().y, r.width(), (r.max().y - t.max().y).max(0.0)),
-        // Left
-        Rect::new(r.origin.x, t.origin.y, (t.origin.x - r.origin.x).max(0.0), t.height()),
-        // Right
-        Rect::new(t.max().x, t.origin.y, (r.max().x - t.max().x).max(0.0), t.height()),
+        // 顶部遮罩
+        Rect::new(
+            r.origin.x,
+            r.origin.y,
+            r.width(),
+            (t.origin.y - r.origin.y).max(0.0),
+        ),
+        // 底部遮罩
+        Rect::new(
+            r.origin.x,
+            t.max().y,
+            r.width(),
+            (r.max().y - t.max().y).max(0.0),
+        ),
+        // 左侧遮罩
+        Rect::new(
+            r.origin.x,
+            t.origin.y,
+            (t.origin.x - r.origin.x).max(0.0),
+            t.height(),
+        ),
+        // 右侧遮罩
+        Rect::new(
+            t.max().x,
+            t.origin.y,
+            (r.max().x - t.max().x).max(0.0),
+            t.height(),
+        ),
     ];
     for sr in scrim_rects {
         let mut scrim = surface(sr, 0.0, Token::SURFACE_SUNKEN, desc.z);

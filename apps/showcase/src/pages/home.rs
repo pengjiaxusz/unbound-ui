@@ -1,4 +1,4 @@
-//! Home: the hero, the capability cards and the full control index.
+//! 首页：首屏横幅、能力卡片与完整控件索引。
 
 use accesskit::Role;
 use unbound_math::Rect;
@@ -12,14 +12,14 @@ pub const INFO: PageInfo = PageInfo {
     short: "Home",
     description: "A live tour of the engine: renderer, text, layout, input, canvas and telemetry. Every example on this page is the framework drawing itself.",
     crates: &["unbound-gpu", "unbound-vector", "unbound-layout"],
-    docs: "docs/06-tooling/showcase.md",
+    docs: "docs/architecture/showcase.md",
     keywords: "overview hero gallery start",
 };
 
-/// The pages the hero CTAs jump to.
+/// 首屏 CTA 跳转的目标页面。
 pub const HERO_TARGETS: [PageId; 2] = [PageId::Buttons, PageId::Viewport];
 
-/// The four featured capabilities.
+/// 四项核心特性展示。
 pub const CAPABILITIES: [(&str, &str, PageId, Icon); 4] = [
     (
         "Typography",
@@ -47,7 +47,7 @@ pub const CAPABILITIES: [(&str, &str, PageId, Icon); 4] = [
     ),
 ];
 
-/// The full catalogue grid.
+/// 完整目录网格。
 pub const INDEX_PAGES: [PageId; 12] = [
     PageId::Colors,
     PageId::Typography,
@@ -108,22 +108,22 @@ for (i, curve) in ribbons.iter().enumerate() {
     .with_height(300.0),
 ];
 
-/// The hero banner.
+/// 首屏横幅。
 pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
-    // The density knob (`0` = comfortable, `1` = compact) and a narrow stage
-    // both tighten the banner. Reading the knob is what makes the segment on
-    // the right actually do something.
+    // 密度旋钮（`0` = 舒适，`1` = 紧凑）和较窄的舞台都会收紧横幅。
+    // 读取该旋钮才能让右侧的分段控件真正起作用。
+    //
     let compact = rect.size.x < 720.0 || ctx.knob_on(0);
 
     ctx.canvas
         .rect(rect, 20.0, palette.hero_start, 0, 0.0, 24.0);
-    // The blobs and ribbons are larger than the hero on purpose; clip them to
-    // the rounded surface instead of letting a scissor rectangle cut a hard
-    // vertical line and square off the corners.
+    // 光斑与丝带故意设计得比首屏更大；应将其裁剪到圆角表面内，
+    // 而非让裁剪矩形切出一条生硬的竖线并把圆角裁成直角。
+    //
     ctx.canvas.begin_clip_rounded(rect, 20.0);
-    // Two soft blobs create the gradient without a per-pixel shader.
+    // 两个柔和的光斑无需逐像素着色器即可营造渐变效果。
     ctx.canvas.rect(
         Rect::new(
             rect.max().x - rect.size.x * 0.52,
@@ -151,16 +151,16 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
         0.0,
     );
 
-    // Decorative ribbon curves.
+    // 装饰性丝带曲线。
     //
-    // They live in the lower right corner: the copy occupies the left 58 %
-    // of the hero, and a ribbon that crosses the paragraph turns the text
-    // into a background pattern instead of a sentence.
+    // 它们位于右下角：文案占据首屏左侧 58%，若丝带穿过段落，
+    // 会把文字变成背景纹理而非可读句子。
     //
-    // The ribbons start *below* the hero and are clipped by the rounded
-    // surface on the way in. Starting them at the inner edge of the violet
-    // blob made them stop dead in mid-air, which read as a broken clip
-    // rectangle rather than a deliberate design.
+    //
+    // 丝带从首屏*下方*起步，并在进入时被圆角表面裁剪。
+    // 若从紫色光斑内边缘起步，它们会在半空中戛然而止，看起来像破损的
+    // 裁剪矩形，而非有意为之的设计。
+    //
     for index in 0..4 {
         let f = index as f32;
         ctx.canvas.curve(
@@ -256,7 +256,7 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
     );
 }
 
-/// Four capability cards.
+/// 四张能力卡片。
 pub fn capability_grid(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
@@ -353,7 +353,7 @@ pub fn capability_grid(ctx: &mut DemoCtx<'_, '_>) {
     }
 }
 
-/// The complete control index.
+/// 完整控件索引。
 pub fn control_index(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;

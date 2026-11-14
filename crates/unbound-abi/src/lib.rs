@@ -1,15 +1,15 @@
-//! `unbound-abi` — the stable boundary between the host process and
-//! hot-reloadable guest UI logic.
+//! `unbound-abi` —— host 进程与可热重载 guest UI 逻辑之间的稳定边界。
 //!
-//! Three concerns live here and nowhere else, because all three must remain
-//! binary-stable across a `guest_gen_N.dll` swap:
+//! 仅以下三项核心契约驻留于此，因为它们必须在 `guest_gen_N.dll` 切换
+//! 过程中保持二进制稳定：
 //!
-//! 1. [`desc`] — the flat POD view-tree descriptor the guest emits.
-//! 2. [`action`] — the serialisable action record (no closures in the tree).
-//! 3. [`plugin`] — the `#[repr(C)]` vtables for allocator and plugin calls.
+//! 1. [`desc`] —— guest 发出的扁平 POD 视图树描述符。
+//! 2. [`action`] —— 可序列化的动作记录（树中不含闭包）。
+//! 3. [`plugin`] —— 分配器与插件调用的 `#[repr(C)]` 虚表。
 //!
-//! Nothing in this crate depends on graphics, layout or text, so `app_guest`
-//! compiles in milliseconds (`docs` §7.1).
+//! 本 crate 不依赖任何图形、布局或文本模块，因此 `app_guest` 可在
+//! 毫秒级内完成编译（`docs` §7.1）。
+//!
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_debug_implementations)]
@@ -38,8 +38,8 @@ pub use plugin::{
 };
 pub use schema::{StateSchema, FNV_OFFSET_BASIS};
 
-/// Re-exports for the `bitflags_like!` macro so callers do not need a direct
-/// `bytemuck` dependency.
+/// 为 `bitflags_like!` 宏重导出符号，使调用方无需直接依赖 `bytemuck`。
+///
 #[doc(hidden)]
 pub mod __private {
     pub use bytemuck::{Pod, Zeroable};

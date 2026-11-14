@@ -1,4 +1,4 @@
-//! Integration tests for OverlayManager (S5.2) and FocusGroup roving tabindex (S5.1).
+//! OverlayManager（S5.2）与 FocusGroup 漫游 tabindex（S5.1）集成测试。
 
 use unbound_app::{
     AppEvent, AppKey, AppRuntime, Application, DirtyFlags, EventOutcome, FocusGroup,
@@ -72,11 +72,11 @@ fn modal_traps_focus_and_escape_restores_trigger_focus() {
     let mut rt = AppRuntime::new(OverlayApp::default(), Vec2::new(800.0, 600.0));
     rt.frame(0.0);
 
-    // Tab to TRIGGER
+    // Tab 切换至 TRIGGER
     rt.key(AppKey::Tab, true, Modifiers::default());
     assert_eq!(rt.context().focused, Some(TRIGGER));
 
-    // Open modal trapping focus to [MODAL_OK, MODAL_CANCEL]
+    // 打开模态框，将焦点限制在 [MODAL_OK, MODAL_CANCEL]
     *rt.state_mut() = true;
     rt.frame(1.0 / 60.0);
     rt.open_overlay(OverlayEntry::modal(
@@ -87,13 +87,13 @@ fn modal_traps_focus_and_escape_restores_trigger_focus() {
     assert!(rt.overlays().is_modal_active());
     assert_eq!(rt.context().focused, Some(MODAL_OK));
 
-    // Tab stays inside modal trap
+    // Tab 保持在模态框焦点陷阱内部
     rt.key(AppKey::Tab, true, Modifiers::default());
     assert_eq!(rt.context().focused, Some(MODAL_CANCEL));
     rt.key(AppKey::Tab, true, Modifiers::default());
     assert_eq!(rt.context().focused, Some(MODAL_OK));
 
-    // Escape closes modal and restores focus to TRIGGER
+    // 按 Escape 关闭模态框并将焦点恢复至 TRIGGER
     rt.key(AppKey::Escape, true, Modifiers::default());
     assert!(!rt.overlays().is_modal_active());
     assert_eq!(rt.context().focused, Some(TRIGGER));
@@ -104,7 +104,7 @@ fn outside_click_dismisses_anchored_overlay_and_roving_arrows_navigate_group() {
     let mut rt = AppRuntime::new(OverlayApp::default(), Vec2::new(800.0, 600.0));
     rt.frame(0.0);
 
-    // Tab twice -> TAB_A, then arrow right -> TAB_B -> TAB_C -> End/Home
+    // 按两次 Tab -> TAB_A，再按右箭头 -> TAB_B -> TAB_C -> End/Home
     rt.key(AppKey::Tab, true, Modifiers::default());
     rt.key(AppKey::Tab, true, Modifiers::default());
     assert_eq!(rt.context().focused, Some(TAB_A));
@@ -115,7 +115,7 @@ fn outside_click_dismisses_anchored_overlay_and_roving_arrows_navigate_group() {
     rt.key(AppKey::Home, true, Modifiers::default());
     assert_eq!(rt.context().focused, Some(TAB_A));
 
-    // Open anchored popover and click outside to dismiss
+    // 打开锚定弹出框并点击外部以轻关闭
     rt.open_overlay(OverlayEntry::popover(
         POPOVER_NODE,
         TAB_A,

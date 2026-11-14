@@ -1,56 +1,56 @@
-//! The Host ↔ Guest C ABI.
+//! Host ↔ Guest C-ABI。
 //!
-//! `docs` §8.1 requires a strictly `#[repr(C)]` function-pointer vtable so the
-//! guest can be unloaded and rebuilt while the host keeps its window, Vulkan
-//! device and memory pools alive.
+//! `docs` §8.1 要求严格使用 `#[repr(C)]` 函数指针虚表，使 guest 可在
+//! host 保持窗口、Vulkan 设备及内存池存活的同时卸载并重新构建。
+//!
 
 use core::ffi::c_void;
 
 use crate::action::RawAction;
 use crate::desc::{RawNodeDesc, RawNodeId};
 
-/// Bumped whenever the *layout* of any POD in this crate changes in a
-/// non-additive way. The host refuses to load a guest with a different major
-/// version instead of corrupting its heap.
+/// 每当本 crate 中任意 POD 的*布局*发生非追加式变更时递增。
+/// host 会拒绝加载主版本号不匹配的 guest，而非破坏其堆内存。
 ///
-/// The version is a plain counter, not a major/minor pair: a guest is either
-/// ABI-compatible or it is not. Every layout change bumps it, and the host
-/// compares the guest's `struct_size` as well, so an additive change that grew
-/// a struct is caught by the size check rather than by the version.
+///
+/// 该版本号是单纯计数器，而非 major/minor 组合：guest 要么 ABI 兼容，
+/// 要么不兼容。每次布局变更都会递增，host 还会比对 guest 的 `struct_size`，
+/// 因此导致结构体增大的追加式变更会由大小检查捕获，而非依赖版本号。
+///
 pub const ABI_VERSION: u32 = 4;
 
-/// A growable byte buffer the guest fills.
+/// 由 guest 填充的可增长字节缓冲区。
 ///
-/// `Vec<u8>` cannot cross the ABI: its layout is not `#[repr(C)]` and is not
-/// covered by Rust's stability guarantees, so a guest built by a different
-/// compiler could interpret it differently. The host owns the allocation and
-/// the guest only writes into it.
+/// `Vec<u8>` 不能跨越 ABI 边界：其布局既非 `#[repr(C)]`，也不受 Rust
+/// 稳定性保证，不同编译器构建的 guest 对其解释可能不同。内存分配由 host
+/// 拥有，guest 仅向其中写入数据。
+///
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct ByteBuffer {
-    /// The bytes. Null when `capacity` is zero.
+    /// 字节指针。`capacity` 为零时为空指针。
     pub ptr: *mut u8,
-    /// How many bytes the buffer can hold.
+    /// 缓冲区可容纳的字节数。
     pub capacity: u32,
-    /// How many bytes were written.
+    /// 已写入的字节数。
     pub len: u32,
 }
 
-/// Allocator vtable handed to the guest at load time.
+/// 加载时移交给 guest 的分配器虚表。
 ///
-/// The guest installs a `#[global_allocator]` that forwards here, so every
-/// `Box`/`Vec`/`String` allocated inside `guest.dll` lives in the host's single
-/// heap (`mimalloc`). This eliminates the Windows cross-CRT-heap corruption
-/// class of bugs (`docs` §8.1).
+/// guest 安装一个转发至此虚表的 `#[global_allocator]`，使 `guest.dll` 内
+/// 分配的每个 `Box`/`Vec`/`String` 都位于 host 的单一堆（`mimalloc`）中。
+/// 这消除了 Windows 跨 CRT 堆损坏这类缺陷（`docs` §8.1）。
+///
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct HostAllocatorVTable {
-    /// Allocate `size` bytes aligned to `align`. Returns null on failure.
+    /// 分配按 `align` 对齐的 `size` 字节内存。失败返回空指针。
     pub alloc: unsafe extern "C" fn(size: usize, align: usize) -> *mut u8,
-    /// Free a block previously returned by `alloc`/`realloc`.
+    /// 释放先前由 `alloc`/`realloc` 返回的内存块。
     pub dealloc: unsafe extern "C" fn(ptr: *mut u8, size: usize, align: usize),
-    /// Grow/shrink in place or move. Returns null on failure (old block stays
-    /// valid, as required by `GlobalAlloc`).
+    /// 原地扩缩容或重分配。失败返回空指针（按 `GlobalAlloc` 要求，旧块保持有效）。
+    ///
     pub realloc: unsafe extern "C" fn(
         ptr: *mut u8,
         old_size: usize,
@@ -59,83 +59,83 @@ pub struct HostAllocatorVTable {
     ) -> *mut u8,
 }
 
-/// Sink the host exposes to the guest so the guest can emit its view tree
-/// without ever allocating host-owned memory or knowing the host's types.
+/// host 暴露给 guest 的接收端（sink），使 guest 无需分配 host 所属内存或
+/// 了解 host 内部类型即可发出视图树。
 ///
-/// Every function is a plain `extern "C"` pointer: no Rust trait objects cross
-/// the dylib boundary, which keeps the ABI stable across compiler versions.
+/// 每个函数均为普通 `extern "C"` 指针：无 Rust trait 对象跨越动态库边界，
+/// 从而跨编译器版本保持 ABI 稳定。
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct HostRenderContext {
     pub abi_version: u32,
-    /// Size of this struct in bytes.
+    /// 此结构体的字节大小。
     ///
-    /// The guest checks it before reading any field: the host may be older
-    /// than the guest and the struct may have grown since.
+    /// guest 在读取任何字段前会检查该值：host 可能比 guest 更旧，
+    /// 结构体此后可能已扩展。
     pub struct_size: u32,
-    /// Bumped by the host every frame; the guest uses it for memoized views.
+    /// 每帧由 host 递增；guest 将其用于记忆化视图。
     pub state_generation: u64,
-    /// Opaque host pointer, passed back verbatim.
+    /// 不透明的 host 指针，原样传回。
     pub ctx: *mut c_void,
 
-    /// Append a child under `parent` and return its id. Roots pass
-    /// `parent = RawNodeId(NO_NODE)`.
+    /// 在 `parent` 下追加子节点并返回其 ID。根节点传入 `parent = RawNodeId(NO_NODE)`。
+    ///
     pub push_node: unsafe extern "C" fn(
         ctx: *mut c_void,
         parent: RawNodeId,
         desc: *const RawNodeDesc,
     ) -> RawNodeId,
-    /// Attach UTF-8 text (copied by the host) to a text node.
+    /// 为文本节点附加 UTF-8 文本（由 host 复制）。
     pub set_text:
         unsafe extern "C" fn(ctx: *mut c_void, node: RawNodeId, ptr: *const u8, len: usize),
-    /// Bind a strongly typed action to a node's activation.
+    /// 将强类型动作绑定到节点的激活事件。
     pub bind_action: unsafe extern "C" fn(ctx: *mut c_void, node: RawNodeId, action: RawAction),
-    /// Declare the build finished and hand over the root.
+    /// 声明构建完成并移交根节点。
     pub finish: unsafe extern "C" fn(ctx: *mut c_void, root: RawNodeId),
 }
 
 impl HostRenderContext {
-    /// Safe wrapper: append a node under `parent`.
+    /// 安全封装：在 `parent` 下追加节点。
     ///
     /// # Safety
-    /// `desc` must point to a valid `RawNodeDesc` for the duration of the call.
+    /// 调用期间 `desc` 必须指向有效的 `RawNodeDesc`。
     #[inline]
     pub unsafe fn push(&self, parent: RawNodeId, desc: *const RawNodeDesc) -> RawNodeId {
-        // SAFETY: forwarded to the host-provided function, which validates its
-        // own `ctx`; `desc` is the caller's responsibility per the signature.
+        // SAFETY: 转发至 host 提供的函数，host 会自行校验 `ctx`；
+        // 按签名约定，`desc` 由调用方负责保证有效性。
         unsafe { (self.push_node)(self.ctx, parent, desc) }
     }
 
-    /// Safe wrapper: attach UTF-8 text to a node.
+    /// 安全封装：为节点附加 UTF-8 文本。
     ///
     /// # Safety
-    /// `ptr`/`len` must describe an initialised UTF-8 byte slice.
+    /// `ptr`/`len` 必须描述已初始化的 UTF-8 字节切片。
     #[inline]
     pub unsafe fn text(&self, node: RawNodeId, ptr: *const u8, len: usize) {
-        // SAFETY: see above.
+        // SAFETY: 同上。
         unsafe { (self.set_text)(self.ctx, node, ptr, len) }
     }
 
-    /// Safe wrapper: bind an action to a node.
+    /// 安全封装：为节点绑定动作。
     #[inline]
     pub fn bind(&self, node: RawNodeId, action: RawAction) {
-        // SAFETY: the host validates `ctx`; the action is a POD value.
+        // SAFETY: host 负责校验 `ctx`；action 为 POD 值。
         unsafe { (self.bind_action)(self.ctx, node, action) }
     }
 
-    /// Safe wrapper: finish the build pass.
+    /// 安全封装：完成构建过程。
     #[inline]
     pub fn done(&self, root: RawNodeId) {
-        // SAFETY: the host validates `ctx`.
+        // SAFETY: host 负责校验 `ctx`。
         unsafe { (self.finish)(self.ctx, root) }
     }
 
-    /// True when the host installed real callbacks *and* the context is one
-    /// this guest understands.
+    /// 当 host 安装了真实回调*且*该上下文为当前 guest 所理解时返回 true。
     ///
-    /// The size check matters: the host may be older than the guest, and the
-    /// context struct may have grown since the guest was built. Reading a
-    /// field past the end of the host's struct would be undefined behaviour.
+    /// 大小检查至关重要：host 可能比 guest 更旧，上下文结构体此后可能已扩展。
+    /// 读取超出 host 结构体末尾的字段将构成未定义行为。
+    ///
+    ///
     #[inline]
     #[must_use]
     pub fn is_connected(&self) -> bool {
@@ -177,56 +177,56 @@ unsafe extern "C" fn no_set_text(
 unsafe extern "C" fn no_bind(_ctx: *mut c_void, _node: RawNodeId, _action: RawAction) {}
 unsafe extern "C" fn no_finish(_ctx: *mut c_void, _root: RawNodeId) {}
 
-/// Opaque guest state handle.
+/// 不透明的 guest 状态句柄。
 pub type GuestState = *mut c_void;
 
-/// The guest's exported vtable. Loaded by symbol name [`GUEST_ENTRY_SYMBOL`].
+/// guest 导出的虚表。通过符号名 [`GUEST_ENTRY_SYMBOL`] 加载。
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct GuestPluginVTable {
     pub abi_version: u32,
-    /// Size of this struct in bytes.
+    /// 此结构体的字节大小。
     ///
-    /// The host reads it *before* copying the vtable, so that a guest built
-    /// against an older ABI — whose struct is smaller — is refused instead of
-    /// being read past its end.
+    /// host 会在复制虚表*之前*读取它，从而拒绝基于更旧 ABI 构建的 guest
+    /// （其结构体更小），避免越界读取。
+    ///
     pub struct_size: u32,
-    /// Compiled-in fingerprint of the guest's `State` memory layout. Equal
-    /// hashes enable the zero-copy hot-reload fast path (`docs` §8.1).
+    /// 编译期生成的 guest `State` 内存布局指纹。哈希相等即可启用
+    /// 零拷贝热重载快路径（`docs` §8.1）。
     pub state_schema_hash: u64,
 
     pub on_load: unsafe extern "C" fn(host_alloc: *const HostAllocatorVTable),
     pub on_unload: unsafe extern "C" fn(),
 
-    /// Create a fresh state. The host owns the returned pointer and frees it by
-    /// calling [`GuestPluginVTable::drop_state`] through the *current* guest.
+    /// 创建全新状态。host 拥有返回指针的所有权，并通过*当前* guest 调用
+    /// [`GuestPluginVTable::drop_state`] 加以释放。
     pub init_state: unsafe extern "C" fn() -> GuestState,
     pub drop_state: unsafe extern "C" fn(state: GuestState),
 
-    /// Fast path: adopt an existing state pointer verbatim (same schema hash).
+    /// 快路径：原样接管现有状态指针（schema 哈希相同）。
     pub adopt_state: unsafe extern "C" fn(state: GuestState),
-    /// Safe path: export the state to a self-describing binary buffer so the
-    /// next guest generation can migrate it field by field.
+    /// 安全路径：将状态导出为自描述二进制缓冲区，供下一代 guest
+    /// 逐字段迁移。
     ///
-    /// The guest writes at most `out.capacity` bytes and reports how many it
-    /// wrote in `out.len`. When the buffer is too small the guest writes
-    /// nothing and sets `out.len` to the size it needs, so the host can
-    /// allocate a bigger one and call again.
+    /// guest 最多写入 `out.capacity` 字节并在 `out.len` 中报告写入量。
+    /// 若缓冲区过小，guest 不写入任何数据并将 `out.len` 设为所需大小，
+    /// 以便 host 分配更大缓冲区后重试。
+    ///
     pub migrate_export: unsafe extern "C" fn(state: GuestState, out: *mut ByteBuffer),
-    /// Safe path: rebuild a state from [`Self::migrate_export`] output, applying
-    /// `serde` defaults for fields the old schema did not have.
+    /// 安全路径：从 [`Self::migrate_export`] 输出重建状态，为旧 schema 中
+    /// 不存在的字段应用 `serde` 默认值。
     ///
-    /// Returns null when the buffer cannot be decoded; the host then falls
-    /// back to a fresh state instead of silently losing the data.
+    /// 当缓冲区无法解码时返回空指针；host 随后会回退到全新状态，
+    /// 而非静默丢失数据。
     pub migrate_import: unsafe extern "C" fn(buf_ptr: *const u8, buf_len: usize) -> GuestState,
 
     pub reduce: unsafe extern "C" fn(state: GuestState, action: *const RawAction),
     pub build_view: unsafe extern "C" fn(state: GuestState, ctx: *mut HostRenderContext),
-    /// Serialise the whole state for time-travel snapshots.
+    /// 序列化完整状态用于时间旅行快照。
     pub snapshot: unsafe extern "C" fn(state: GuestState, out: *mut ByteBuffer),
 }
 
-// SAFETY: the vtable is a plain aggregate of function pointers and integers.
+// SAFETY: 该虚表仅由函数指针与整数构成。
 unsafe impl Send for GuestPluginVTable {}
 unsafe impl Sync for GuestPluginVTable {}
 
@@ -242,20 +242,20 @@ impl core::fmt::Debug for GuestPluginVTable {
     }
 }
 
-/// Name of the single exported symbol every guest `cdylib` must provide.
+/// 每个 guest `cdylib` 必须提供的唯一导出符号名。
 pub const GUEST_ENTRY_SYMBOL: &[u8] = b"unbound_guest_entry\0";
 
-/// Signature of [`GUEST_ENTRY_SYMBOL`].
+/// [`GUEST_ENTRY_SYMBOL`] 的签名。
 pub type GuestEntryFn = unsafe extern "C" fn() -> *const GuestPluginVTable;
 
-/// Compatibility check performed before any vtable field is called.
+/// 在调用任何虚表字段前执行的兼容性检查。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AbiCompat {
-    /// Same major version: safe to call.
+    /// 主版本相同：可安全调用。
     Ok,
-    /// Host is older than the guest build.
+    /// host 比 guest 构建版本更旧。
     HostTooOld { host: u32, guest: u32 },
-    /// Guest is older than the host build.
+    /// guest 比 host 构建版本更旧。
     GuestTooOld { host: u32, guest: u32 },
 }
 
@@ -276,18 +276,18 @@ pub fn check_abi(guest_version: u32) -> AbiCompat {
     }
 }
 
-/// What the host should do with the guest's state after a reload.
+/// 重载后 host 对 guest 状态应采取的处理方式。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum StateHandoff {
-    /// Schema hashes match: hand the raw pointer over, zero copies.
+    /// schema 哈希匹配：直接移交原始指针，零拷贝。
     ZeroCopy,
-    /// Schema changed: round-trip through `migrate_export`/`migrate_import`.
+    /// schema 已变更：通过 `migrate_export`/`migrate_import` 往返迁移。
     Migrate,
-    /// No previous state (first load).
+    /// 无先前状态（首次加载）。
     Fresh,
 }
 
-/// Decide the handoff mode purely from the two schema hashes.
+/// 仅根据两个 schema 哈希决定移交模式。
 #[must_use]
 pub fn classify_handoff(old_hash: Option<u64>, new_hash: u64) -> StateHandoff {
     match old_hash {
@@ -325,7 +325,7 @@ mod tests {
     fn default_context_is_inert_but_callable() {
         let ctx = HostRenderContext::default();
         assert_eq!(ctx.abi_version, ABI_VERSION);
-        // # Safety: the default functions are no-ops by construction.
+        // # Safety: 默认函数在构造上均为无操作（no-op）。
         assert!(!ctx.is_connected());
         unsafe {
             assert!(ctx.push(RawNodeId::ROOT, core::ptr::null()).is_none());

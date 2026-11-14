@@ -1,15 +1,15 @@
-//! 2D affine transform used by the independent animation channel.
+//! 独立动画通道使用的 2D 仿射变换。
 //!
-//! Per `docs` §4.4 the transform never enters Taffy: it lives in
-//! `transforms_bda` and is applied *after* layout. The matrix is stored in the
-//! same 2×3 layout the vertex shader expects.
+//! 根据 `docs` §4.4，该变换从不进入 Taffy：它存储在 `transforms_bda` 中，
+//! 并在布局**之后**应用。矩阵按顶点着色器期望的相同 2×3 布局存储。
+//!
 
 use bytemuck::{Pod, Zeroable};
 
 use crate::rect::Rect;
 use crate::vec2::Vec2;
 
-/// Column-major 2×3 affine matrix:
+/// 列主序 2×3 仿射矩阵：
 ///
 /// ```text
 /// | m00 m01 tx |     x' = m00*x + m01*y + tx
@@ -82,9 +82,9 @@ impl Affine2 {
         }
     }
 
-    /// Scale about a pivot, then rotate about the same pivot, then translate.
-    /// This is the exact composition the animation channel produces for a
-    /// card that scales/rotates in place.
+    /// 绕枢轴缩放，再绕同一枢轴旋转，最后平移。
+    /// 这正是动画通道为原地缩放/旋转卡片生成的复合变换。
+    ///
     #[must_use]
     pub fn around(pivot: Vec2, scale: Vec2, radians: f32, translate: Vec2) -> Self {
         let r = Self::rotation(radians);
@@ -99,7 +99,7 @@ impl Affine2 {
         m
     }
 
-    /// `self * rhs` — applies `rhs` first, then `self`.
+    /// `self * rhs`——先应用 `rhs`，再应用 `self`。
     #[must_use]
     pub fn then(&self, rhs: &Self) -> Self {
         Self {
@@ -118,8 +118,8 @@ impl Affine2 {
         self.m00 * self.m11 - self.m01 * self.m10
     }
 
-    /// Inverse transform. Returns `None` for a singular matrix so callers can
-    /// fall back to the untransformed path instead of producing `NaN`.
+    /// 逆变换。奇异矩阵返回 `None`，以便调用方回退到未变换路径，
+    /// 而非产生 `NaN`。
     #[must_use]
     pub fn inverse(&self) -> Option<Self> {
         let det = self.determinant();
@@ -159,8 +159,8 @@ impl Affine2 {
         )
     }
 
-    /// Approximate uniform scale (geometric mean of the axes) — used to decide
-    /// when sub-pixel animation must bypass pixel snapping.
+    /// 近似均匀缩放（两轴缩放的几何平均值）——用于判断亚像素动画
+    /// 何时必须绕过像素对齐。
     #[must_use]
     pub fn max_scale(&self) -> f32 {
         let sx = Vec2::new(self.m00, self.m10).length();
@@ -183,7 +183,7 @@ impl Affine2 {
             && self.ty.is_finite()
     }
 
-    /// Transformed axis-aligned bounds of `rect`.
+    /// `rect` 变换后的轴对齐包围盒。
     #[must_use]
     pub fn transform_rect_bounds(&self, rect: &Rect) -> Rect {
         let corners = [

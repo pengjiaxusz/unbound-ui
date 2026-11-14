@@ -1,7 +1,7 @@
-//! The DOD UI world: flat entities, intrusive sibling links, dirty triage.
+//! DOD（面向数据设计）UI 世界树：扁平实体、侵入式兄弟链表、脏状态分级。
 //!
-//! `docs` §4.1 forbids pointer trees and `Rc<RefCell<..>>` graphs. Everything
-//! here is a flat array indexed by a generational [`NodeId`]:
+//! `docs` §4.1 禁止指针树与 `Rc<RefCell<..>>` 图。此处所有数据均存放在
+//! 由带代际（generational）[`NodeId`] 索引的扁平数组中：
 //!
 //! ```text
 //! nodes:        [ N0 | N1 | N2 | N3 | ... ]   SlotMap<u32, NodeData>
@@ -9,17 +9,17 @@
 //! next_sibling: [ -  | 3  | -  | -  | ... ]
 //! ```
 //!
-//! Consequences that matter:
+//! 由此带来的关键特性：
 //!
-//! * adding/removing a child is four integer writes, never an allocation,
-//! * walking children is a pointer chase through a contiguous array,
-//! * a removed node's slot is reused with a bumped generation, so stale handles
-//!   are detected instead of silently addressing another node.
+//! * 添加/移除子节点只需四次整数写入，绝不分配内存；
+//! * 遍历子节点是在连续数组上的索引跳转；
+//! * 已移除节点的槽位复用时会递增代际号，因此过期句柄会被检测到，
+//!   而不会静默寻址到另一个节点。
 //!
-//! Dirty state is split into the three levels the architecture defines:
-//! paint-only (opacity, colour, transform), layout (size/position inside a
-//! relayout boundary) and topology (tree shape or viewport). Only the last one
-//! forces a full re-solve.
+//! 脏状态按架构定义的三个层级拆分：
+//! 仅重绘（paint-only：透明度、颜色、变换）、布局（RelayoutBoundary 内的尺寸/位置）
+//! 与拓扑（树结构或视口变化）。只有最后一种才会强制触发全量重算。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -33,12 +33,12 @@ pub mod virtualize;
 pub use virtualize::{TreeRow, VirtualGrid, VirtualList, VirtualTree, WindowUpdate};
 
 new_key_type! {
-    /// Stable, generational handle to a node.
+    /// 节点的稳定代际句柄。
     pub struct NodeId;
 }
 
 impl NodeId {
-    /// True for the sentinel "no node" handle.
+    /// 当句柄为哨兵值“无节点”时返回 true。
     #[inline]
     #[must_use]
     pub fn is_none(self) -> bool {
@@ -46,25 +46,25 @@ impl NodeId {
     }
 }
 
-/// Sentinel for "no node". A function rather than a `const` because
-/// `Key::null()` is not a `const fn` in `slotmap` 1.x.
+/// “无节点”哨兵值。定义为函数而非 `const`，因为 `slotmap` 1.x 中
+/// `Key::null()` 尚非 `const fn`。
 #[inline]
 #[must_use]
 pub fn no_node() -> NodeId {
     NodeId::null()
 }
 
-/// How expensive a change is to apply.
+/// 应用一次变更的开销级别。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DirtyLevel {
-    /// Nothing changed.
+    /// 无任何变化。
     #[default]
     Clean = 0,
-    /// Colour / opacity / transform only: no layout, no re-upload of geometry.
+    /// 仅颜色 / 透明度 / 变换变化：无需重新布局，也无需重新上传几何数据。
     Paint = 1,
-    /// Geometry changed inside a `RelayoutBoundary`.
+    /// `RelayoutBoundary` 内部的几何尺寸发生变更。
     Layout = 2,
-    /// Tree shape or viewport size changed: everything is suspect.
+    /// 树拓扑或视口尺寸发生变更：所有状态均需重新验证。
     Topology = 3,
 }
 
@@ -80,71 +80,71 @@ impl DirtyLevel {
 }
 
 bitflags_like! {
-    /// Per-node state bits, kept in one `u32` so a whole node's flags fit in a
-    /// cache line together with its geometry.
+    /// 每节点状态位标记，打包在单个 `u32` 中，使节点标记与几何信息
+    /// 共同装入同一个缓存行。
     pub struct NodeState: u32 {
-        /// Fixed width and height plus a non-visible overflow: children cannot
-        /// change the parent's size, so layout dirt stops here.
+        /// 固定宽高且溢出不可见：子节点无法改变父节点尺寸，因此布局脏传播止步于此。
+        ///
         const RELAYOUT_BOUNDARY = 1 << 0;
-        /// The node clips its children.
+        /// 节点裁剪其子节点。
         const CLIPS_CHILDREN    = 1 << 1;
-        /// The node is a scroll container.
+        /// 节点为可滚动容器。
         const SCROLLABLE        = 1 << 2;
-        /// The node is currently animating (bypasses pixel snapping).
+        /// 节点当前正在执行动画（绕过像素网格吸附）。
         const ANIMATING         = 1 << 3;
-        /// The node is hidden together with its subtree.
+        /// 节点连同其子树一并隐藏。
         const HIDDEN            = 1 << 4;
-        /// The node escaped its parent's clip via `Portal`.
+        /// 节点通过 `Portal` 逃逸出父节点的裁剪区域。
         const PORTAL            = 1 << 5;
-        /// Layout has been computed at least once.
+        /// 至少已完成过一次布局计算。
         const LAID_OUT          = 1 << 6;
-        /// The node is part of a virtualisation window.
+        /// 节点属于某个虚拟化窗口。
         const VIRTUALIZED       = 1 << 7;
-        /// The node has an action bound to it.
+        /// 节点绑定了交互动作。
         const INTERACTIVE       = 1 << 8;
     }
 }
 
-/// Everything the engine needs to know about one node.
+/// 引擎需要了解的单个节点的全部数据。
 #[derive(Clone, Debug)]
 pub struct NodeData {
-    /// The descriptor the guest/declarative builder emitted.
+    /// 宿主/声明式构建器发出的节点描述符。
     pub desc: RawNodeDesc,
     pub parent: NodeId,
     pub first_child: NodeId,
     pub last_child: NodeId,
     pub next_sibling: NodeId,
     pub prev_sibling: NodeId,
-    /// Depth from the root, used by hit testing and accessibility.
+    /// 距根节点的深度，用于命中测试与无障碍访问。
     pub depth: u16,
     pub state: NodeState,
-    /// Final layout rectangle in the parent's coordinate space (after offsets).
+    /// 位于父节点坐标空间内的最终布局矩形（已含偏移）。
     pub rect: Rect,
-    /// `rect` translated into absolute world space of the UI layer.
+    /// 将 `rect` 平移到 UI 层绝对世界空间的矩形。
     pub world_rect: Rect,
-    /// Folded hard clip in world space; `None` means "no clip".
+    /// 世界空间中的折叠硬裁剪矩形；`None` 表示“无裁剪”。
     pub clip: Option<Rect>,
-    /// Up to two rounded parent clips, innermost first.
+    /// 最多两个圆角父级裁剪槽位，最内层优先。
     pub rounded_clips: [Option<RoundedClip>; 2],
-    /// Pre-measured intrinsic size (text, images). Layout never calls into the
-    /// text engine, which keeps shaping off the layout critical path.
+    /// 预测量固有尺寸（文本、图像）。布局阶段从不调用文本引擎，
+    /// 从而将文本塑形移出布局关键路径。
     pub measure: Option<Vec2>,
-    /// Current scroll offset of a `SCROLLABLE` container, in logical pixels.
+    /// `SCROLLABLE` 容器当前的滚动偏移量（逻辑像素）。
     ///
-    /// The offset is subtracted from the children's world position, so the
-    /// content moves while the container itself stays where it is.
+    /// 该偏移量会从子节点的世界位置中减去，使内容移动而容器自身保持原地。
+    ///
     pub scroll_offset: Vec2,
-    /// The union of the children's extents inside this container.
+    /// 容器内所有子节点范围的并集。
     ///
-    /// It is what bounds the scroll: a container can never scroll past its
-    /// own content.
+    /// 用于限制滚动范围：容器绝不能滚动超出其自身内容。
+    ///
     pub content_size: Vec2,
-    /// Monotonic generation of the state that produced this node's view. A child
-    /// whose generation did not change is skipped by the view builder.
+    /// 生成此节点视图的状态单调代际号。代际号未变的子节点会被视图构建器跳过。
+    ///
     pub state_generation: u64,
-    /// Source location captured by `#[track_caller]`, for sanitizer reports.
+    /// 由 `#[track_caller]` 捕获的源码位置，用于内存检查器报告。
     pub source: &'static core::panic::Location<'static>,
-    /// Action bound to activation, if any.
+    /// 激活时触发的绑定动作（若有）。
     pub action: Option<RawAction>,
 }
 
@@ -194,7 +194,7 @@ impl NodeData {
     }
 }
 
-/// A rounded clip inherited from an ancestor.
+/// 从祖先节点继承的圆角裁剪。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RoundedClip {
@@ -202,7 +202,7 @@ pub struct RoundedClip {
     pub radii: [f32; 4],
 }
 
-/// A flattened child iterator that never allocates.
+/// 零内存分配的扁平化子节点迭代器。
 #[derive(Copy, Clone, Debug)]
 pub struct ChildIter<'a> {
     world: &'a UiWorld,
@@ -222,7 +222,7 @@ impl<'a> Iterator for ChildIter<'a> {
     }
 }
 
-/// Ancestor iterator, used by clip folding and hit testing.
+/// 祖先节点迭代器，用于裁剪链折叠与命中测试。
 #[derive(Copy, Clone, Debug)]
 pub struct AncestorIter<'a> {
     world: &'a UiWorld,
@@ -243,7 +243,7 @@ impl<'a> Iterator for AncestorIter<'a> {
     }
 }
 
-/// Statistics for one rebuild, consumed by the debug overlay and the tests.
+/// 单次重建的统计信息，供调试覆盖层与测试使用。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorldStats {
     pub nodes: u32,
@@ -255,14 +255,14 @@ pub struct WorldStats {
 }
 
 impl WorldStats {
-    /// True when the last frame needed no work at all.
+    /// 当上一帧完全无需工作时返回 true。
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.paint_dirty == 0 && self.layout_dirty == 0 && !self.topology_dirty
     }
 }
 
-/// The UI world.
+/// UI 世界树。
 pub struct UiWorld {
     nodes: SlotMap<NodeId, NodeData>,
     texts: FxHashMap<NodeId, String>,
@@ -270,9 +270,9 @@ pub struct UiWorld {
     layout_dirty: FxHashSet<NodeId>,
     topology_dirty: bool,
     root: NodeId,
-    /// Scratch buffer for boundary collection, reused every frame.
+    /// 用于收集重布局边界的临时缓冲区，每帧复用。
     boundary_scratch: Vec<NodeId>,
-    /// Nodes visited during the last dirty propagation (diagnostics).
+    /// 上一次脏传播期间访问过的节点数（用于诊断）。
     visited: u32,
 }
 
@@ -294,7 +294,7 @@ impl core::fmt::Debug for UiWorld {
 }
 
 impl UiWorld {
-    /// Create a world containing a single root node.
+    /// 创建仅包含单个根节点的世界树。
     #[must_use]
     pub fn new() -> Self {
         let mut nodes = SlotMap::with_key();
@@ -348,8 +348,8 @@ impl UiWorld {
         self.nodes.get_mut(id)
     }
 
-    /// # Panics
-    /// Panics when `id` is not a live node; use [`Self::contains`] to check.
+    /// # Panic 说明
+    /// 当 `id` 不是活跃节点时 panic；可使用 [`Self::contains`] 预先检查。
     #[must_use]
     pub fn node(&self, id: NodeId) -> &NodeData {
         &self.nodes[id]
@@ -359,11 +359,11 @@ impl UiWorld {
         &mut self.nodes[id]
     }
 
-    /// Insert a node as the last child of `parent`.
+    /// 将新节点作为 `parent` 的最后一个子节点插入。
     ///
-    /// `source` should be `core::panic::Location::caller()` — the view builder
-    /// passes it automatically thanks to `#[track_caller]`, which is what lets a
-    /// sanitizer report point at the exact construction site.
+    /// `source` 应为 `core::panic::Location::caller()`——得益于 `#[track_caller]`，
+    /// 视图构建器会自动传入它，使检查器报告能精准指向构造源码位置。
+    ///
     pub fn insert(
         &mut self,
         parent: NodeId,
@@ -378,8 +378,8 @@ impl UiWorld {
         let mut data = NodeData::new(desc, source);
         data.parent = parent;
         data.depth = depth;
-        // Boundary heuristic (`docs` §4.2): a fixed-size, non-visible-overflow
-        // container cannot be resized by its children, so layout dirt stops here.
+        // 边界启发式规则（`docs` §4.2）：固定尺寸且溢出不可见的容器
+        // 不会被子节点改变尺寸，因此布局脏标记止步于此。
         let fixed = matches!(desc.width.kind(), unbound_abi::DimUnit::Px)
             && matches!(desc.height.kind(), unbound_abi::DimUnit::Px);
         if fixed && desc.is_clipping() {
@@ -457,14 +457,14 @@ impl UiWorld {
         }
     }
 
-    /// Remove a node and its whole subtree.
+    /// 移除节点及其整棵子树。
     pub fn remove(&mut self, id: NodeId) {
         if !self.nodes.contains_key(id) || id == self.root {
             return;
         }
         self.unlink(id);
-        // Depth-first removal without recursion (a deep tree would otherwise
-        // overflow the stack on a 1M-node document).
+        // 无递归深度优先移除（百万节点文档中深层树否则会栈溢出）。
+        //
         let mut stack = vec![id];
         let mut doomed = Vec::new();
         while let Some(current) = stack.pop() {
@@ -484,8 +484,8 @@ impl UiWorld {
         self.topology_dirty = true;
     }
 
-    /// Detach a node from its parent without destroying it (Portal adoption,
-    /// virtualised recycling).
+    /// 将节点从其父节点摘除但不销毁（用于 Portal 领养或虚拟化槽位复用）。
+    ///
     pub fn detach(&mut self, id: NodeId) {
         if !self.nodes.contains_key(id) {
             return;
@@ -494,13 +494,13 @@ impl UiWorld {
         self.topology_dirty = true;
     }
 
-    /// Move `id` under `new_parent` as the last child.
+    /// 将 `id` 移动到 `new_parent` 下作为最后一个子节点。
     pub fn reparent(&mut self, id: NodeId, new_parent: NodeId) {
         if id == new_parent || !self.nodes.contains_key(id) || !self.nodes.contains_key(new_parent)
         {
             return;
         }
-        // Refuse cycles: walking up from the new parent must not reach `id`.
+        // 拒绝成环：从新父节点向上回溯绝不能遇到 `id`。
         if self.ancestors(new_parent).any(|a| a == id) {
             return;
         }
@@ -528,7 +528,7 @@ impl UiWorld {
         }
     }
 
-    /// Iterate a node's direct children without allocating.
+    /// 零分配地迭代节点的直接子节点。
     #[must_use]
     pub fn children(&self, id: NodeId) -> ChildIter<'_> {
         ChildIter {
@@ -541,7 +541,7 @@ impl UiWorld {
         }
     }
 
-    /// Iterate `id` and then its ancestors up to the root.
+    /// 依次迭代 `id` 及其向上直至根节点的全部祖先。
     #[must_use]
     pub fn ancestors(&self, id: NodeId) -> AncestorIter<'_> {
         AncestorIter {
@@ -550,10 +550,10 @@ impl UiWorld {
         }
     }
 
-    /// Depth-first pre-order traversal.
+    /// 深度优先前序遍历。
     ///
-    /// Siblings come out in insertion order (left to right), and a whole
-    /// subtree comes out before the next sibling.
+    /// 兄弟节点按插入顺序（从左到右）输出，且整棵子树会在下一个兄弟节点之前输出。
+    ///
     pub fn walk(&self, root: NodeId) -> impl Iterator<Item = NodeId> + '_ {
         let mut stack = vec![root];
         core::iter::from_fn(move || {
@@ -567,8 +567,8 @@ impl UiWorld {
                 kids.push(child);
                 child = self.nodes[child].next_sibling;
             }
-            // A stack pops last-in-first-out, so the children have to be
-            // pushed in reverse to come out left-to-right.
+            // 栈为后进先出，因此必须逆序压入子节点才能按从左到右的顺序弹出。
+            //
             for kid in kids.into_iter().rev() {
                 stack.push(kid);
             }
@@ -576,16 +576,16 @@ impl UiWorld {
         })
     }
 
-    /// Number of children.
+    /// 直接子节点数量。
     #[must_use]
     pub fn child_count(&self, id: NodeId) -> usize {
         self.children(id).count()
     }
 
-    /// Find a node by its stable semantic key.
+    /// 按稳定语义键查找节点。
     ///
-    /// Keys are the diff/memoization handle, so the mapping is one-to-one in
-    /// practice; the first match wins if a builder reuses one by mistake.
+    /// 语义键是 diff/记忆化句柄，因此实践中映射是一对一的；
+    /// 若构建器误复用了同一个键，则返回首个匹配项。
     #[must_use]
     pub fn find_key(&self, key: u64) -> Option<NodeId> {
         if key == 0 {
@@ -595,7 +595,7 @@ impl UiWorld {
             .find(|id| self.node(*id).desc.key == key)
     }
 
-    /// Replace a node's layout descriptor when it changed, marking layout dirty.
+    /// 当节点布局描述符发生变更时替换它，并标记布局为脏。
     pub fn set_desc(&mut self, id: NodeId, desc: RawNodeDesc) {
         let Some(node) = self.nodes.get_mut(id) else {
             return;
@@ -613,7 +613,7 @@ impl UiWorld {
         }
     }
 
-    /// Attach text to a node (replacing any previous text).
+    /// 为节点附加文本（替换先前的文本）。
     pub fn set_text(&mut self, id: NodeId, text: impl Into<String>) {
         let text = text.into();
         if self.texts.get(&id) == Some(&text) {
@@ -628,7 +628,7 @@ impl UiWorld {
         self.texts.get(&id).map(String::as_str)
     }
 
-    /// Bind an action to a node.
+    /// 为节点绑定交互动作。
     pub fn bind_action(&mut self, id: NodeId, action: RawAction) {
         if let Some(n) = self.nodes.get_mut(id) {
             n.action = Some(action);
@@ -637,23 +637,23 @@ impl UiWorld {
         self.mark_paint_dirty(id);
     }
 
-    /// Mark a node as paint-dirty and stop there: no ancestor cares about a
-    /// colour change, so nothing propagates.
+    /// 标记节点为仅重绘脏并立即停止：祖先节点不关心颜色变更，因此无需向上传播。
+    ///
     pub fn mark_paint_dirty(&mut self, id: NodeId) {
         if self.nodes.contains_key(id) {
             self.paint_dirty.insert(id);
         }
     }
 
-    /// Mark a node as layout-dirty and propagate **up to the nearest relayout
-    /// boundary** (`docs` §4.2). This is the core of the incremental cost model:
-    /// a text change inside a fixed-size card costs one card, not the tree.
+    /// 标记节点为布局脏，并向上传播**直至最近的重布局边界**（`docs` §4.2）。
+    /// 这是增量开销模型的核心：固定尺寸卡片内的文本变更只需重算一张卡片，而非整棵树。
+    ///
     pub fn mark_layout_dirty(&mut self, id: NodeId) {
         let Some(node) = self.nodes.get(id) else {
             return;
         };
         self.layout_dirty.insert(id);
-        // A boundary is its own stopping point.
+        // 边界自身即为其停止点。
         if node.is_relayout_boundary() {
             return;
         }
@@ -670,11 +670,11 @@ impl UiWorld {
             }
             current = parent.parent;
         }
-        // A child growing can change any ancestor's measured size, but only up
-        // to the boundary; beyond it the size is fixed by definition.
+        // 子节点变大可能会改变祖先的测量尺寸，但仅限于边界之内；
+        // 越过边界后尺寸按定义是固定的。
     }
 
-    /// Force a full re-layout (viewport resize, root style change).
+    /// 强制全量重新布局（用于视口调整或根节点样式变更）。
     pub fn mark_topology_dirty(&mut self) {
         self.topology_dirty = true;
     }
@@ -684,12 +684,12 @@ impl UiWorld {
         self.topology_dirty
     }
 
-    /// Consume the paint-dirty set (the paint pass owns it from here).
+    /// 消费并清空重绘脏节点集合（此后由绘制 Pass 接管）。
     pub fn take_paint_dirty(&mut self) -> FxHashSet<NodeId> {
         core::mem::take(&mut self.paint_dirty)
     }
 
-    /// Dirty nodes that need a layout solve, sorted so that ancestors come first.
+    /// 需要布局求解的脏节点，按祖先优先排序。
     #[must_use]
     pub fn layout_dirty_sorted(&mut self) -> Vec<NodeId> {
         let mut list: Vec<NodeId> = self.layout_dirty.drain().collect();
@@ -697,7 +697,7 @@ impl UiWorld {
         list
     }
 
-    /// Non-draining view of the layout-dirty set, ordered by depth.
+    /// 按深度排序的布局脏节点集合只读视图（不排空）。
     #[must_use]
     pub fn layout_dirty_snapshot(&self) -> Vec<NodeId> {
         let mut list: Vec<NodeId> = self.layout_dirty.iter().copied().collect();
@@ -705,10 +705,10 @@ impl UiWorld {
         list
     }
 
-    /// Collect the relayout boundaries touched by the pending layout dirt.
+    /// 收集待处理布局脏节点所触及的重布局边界。
     ///
-    /// These subtrees are independent, so the layout engine can solve them in
-    /// parallel.
+    /// 这些子树彼此独立，因此布局引擎可以并行求解它们。
+    ///
     #[must_use]
     pub fn dirty_boundaries(&mut self) -> Vec<NodeId> {
         self.boundary_scratch.clear();
@@ -722,8 +722,8 @@ impl UiWorld {
                 boundaries.push(id);
                 continue;
             }
-            // Find the closest boundary ancestor; if there is none the root
-            // handles it.
+            // 查找最近的边界祖先；若不存在则交由根节点处理。
+            //
             let mut current = node.parent;
             let mut found = no_node();
             while !current.is_null() {
@@ -738,19 +738,19 @@ impl UiWorld {
             }
             boundaries.push(if found.is_null() { self.root } else { found });
         }
-        // Sort by depth so ancestors are solved before their descendants, then
-        // remove the duplicates. `dedup` only drops *adjacent* equal elements,
-        // so the sort has to group equal boundaries together: sorting by
-        // depth alone leaves two boundaries of the same depth with a third
-        // one in between, and the duplicate survived — the layout engine
-        // would then solve the same boundary twice. The id breaks the tie so
-        // the order is total and the duplicates end up next to each other.
+        // 按深度排序使祖先先于后代求解，随后去重。`dedup` 仅移除*相邻*的重复元素，
+        // 因此排序必须把相同边界聚在一起：仅按深度排序可能会让两个同深度边界之间
+        // 夹杂第三个边界，导致重复项保留——进而让布局引擎对同一边界求解两次。
+        // 加入 id 作为次级排序键使顺序全序化，从而保证重复边界必然相邻。
+        //
+        //
+        //
         boundaries.sort_by_key(|id| (self.nodes.get(*id).map_or(0, |n| n.depth), *id));
         boundaries.dedup();
         boundaries
     }
 
-    /// Count relayout boundaries (diagnostics + tests).
+    /// 统计重布局边界数量（用于诊断与测试）。
     #[must_use]
     pub fn relayout_boundary_count(&self) -> usize {
         self.nodes
@@ -759,7 +759,7 @@ impl UiWorld {
             .count()
     }
 
-    /// Statistics for the last propagation.
+    /// 上一次脏传播的统计信息。
     #[must_use]
     pub fn stats(&self) -> WorldStats {
         WorldStats {
@@ -772,7 +772,7 @@ impl UiWorld {
         }
     }
 
-    /// Clear every dirty flag (after a full frame).
+    /// 清除所有脏标记（完整帧结束后调用）。
     pub fn clear_dirty(&mut self) {
         self.paint_dirty.clear();
         self.layout_dirty.clear();
@@ -780,10 +780,10 @@ impl UiWorld {
         self.visited = 0;
     }
 
-    /// Write the computed layout back and fold the clip chain.
+    /// 将计算得到的布局写回世界树，并折叠裁剪链。
     ///
-    /// Clip folding happens **once, on the CPU**, so the shader only ever sees a
-    /// single AABB plus two rounded slots (`docs` §3.2).
+    /// 裁剪折叠**在 CPU 上一次性完成**，因此着色器只需处理单个 AABB
+    /// 外加两个圆角槽位（`docs` §3.2）。
     pub fn apply_rects(&mut self, rects: &FxHashMap<NodeId, Rect>) {
         for (id, rect) in rects {
             if let Some(node) = self.nodes.get_mut(*id) {
@@ -795,11 +795,11 @@ impl UiWorld {
         self.fold_clips(root);
     }
 
-    /// Apply rectangles for a subset of nodes and refold from `start`.
+    /// 应用节点子集的矩形结果，并从 `start` 开始重新折叠裁剪链。
     ///
-    /// An incremental solve touches a handful of nodes; walking the whole tree to
-    /// refresh `world_rect`/`clip` would make a 9 node re-layout cost as much as
-    /// a full one.
+    /// 增量求解只触及少数节点；若为刷新 `world_rect`/`clip` 而遍历整棵树，
+    /// 会让 9 个节点的重布局付出与全量布局相同的代价。
+    ///
     pub fn apply_rects_from(
         &mut self,
         rects: &FxHashMap<NodeId, Rect>,
@@ -818,15 +818,15 @@ impl UiWorld {
     }
 
     fn fold_clips(&mut self, start: NodeId) {
-        // An incremental refold starts in the *middle* of the tree, so the
-        // clip and the rounded slots that `start` inherits from its ancestors
-        // cannot be derived locally — take them from the parent, which
-        // already stores exactly what it passes down to its children.
+        // 增量重折叠从树的*中间*开始，因此 `start` 从祖先继承的硬裁剪与圆角槽位
+        // 无法在局部推导——必须从其父节点获取（父节点已存有向下传递给子节点的完整裁剪）。
         //
-        // Starting from an empty clip made the subtree forget its ancestors:
-        // content that belongs inside a scroll container or a rounded panel
-        // escaped it after an incremental re-layout, because the fold only
-        // saw the boundary's own bounds.
+        //
+        //
+        // 若从空裁剪开始，子树会遗忘其祖先：属于滚动容器或圆角面板内部的内容
+        // 在增量重布局后会逃逸出去，因为折叠过程只看到了边界自身的包围盒。
+        //
+        //
         let (inherited_clip, inherited_rounded) = match self.nodes.get(start) {
             Some(node) if !node.parent.is_null() => match self.nodes.get(node.parent) {
                 Some(parent) => (parent.clip, parent.rounded_clips),
@@ -848,15 +848,15 @@ impl UiWorld {
                     .map_or((Rect::ZERO, Vec2::ZERO), |p| {
                         (p.world_rect, p.scroll_offset)
                     });
-                // The parent's scroll offset moves the content, not the
-                // container: the children follow the scroll.
+                // 父节点的滚动偏移移动的是内容而非容器本身：子节点随滚动而移动。
+                //
                 node.rect.translate(parent_origin.origin - parent_scroll)
             };
             let mut clip = inherited_clip;
             let mut rounded = inherited_rounded;
 
-            // A portal escapes every ancestor clip (`docs` §6.3): it paints in
-            // the overlay layer, so inheriting a parent's scissor would be wrong.
+            // Portal 会逃逸所有祖先裁剪（`docs` §6.3）：它绘制在浮层中，
+            // 因此继承父节点的裁剪矩形是错误的。
             if node.state.contains(NodeState::PORTAL) {
                 clip = None;
                 rounded = [None; 2];
@@ -870,11 +870,11 @@ impl UiWorld {
                     Some(c) => c.intersect(&own),
                     None => own,
                 });
-                // Two rounded slots is what the shader can test. Pushing a
-                // third nested container would silently drop the outermost
-                // arc, so fold the dropped radius into the slot that stays:
-                // the intersection turns the outer arc into a smaller
-                // effective radius at the kept container's corners.
+                // 着色器最多支持测试两个圆角槽位。若压入第三个嵌套容器会静默丢弃最外层圆弧，
+                // 因此将被丢弃的圆角半径折叠进保留槽位中：矩形求交会把外层圆弧转化为
+                // 保留容器角上的较小等效半径。
+                //
+                //
                 if node.desc.radius.iter().any(|r| *r > 0.0) {
                     let own = RoundedClip {
                         rect: world,
@@ -896,9 +896,9 @@ impl UiWorld {
                 }
             }
 
-            // The content size is the union of the children's extents: it is
-            // what bounds the scroll, so it has to be measured before the
-            // scroll can be clamped.
+            // 内容尺寸为所有子节点范围的并集：它限制了滚动范围，
+            // 因此必须在钳制滚动偏移前完成测量。
+            //
             let mut child = node.first_child;
             let mut kids = Vec::new();
             let mut content = Vec2::ZERO;
@@ -916,17 +916,17 @@ impl UiWorld {
             node.rounded_clips = rounded;
             node.content_size = content;
 
-            // Reverse push so the pop order is left-to-right.
+            // 逆序压栈，使弹出顺序保持从左到右。
             for k in kids.into_iter().rev() {
                 stack.push((k, clip, rounded));
             }
         }
     }
 
-    /// Set the scroll offset of a scrollable container.
+    /// 设置可滚动容器的滚动偏移量。
     ///
-    /// The offset is clamped to the container's content, so a scroll can
-    /// never leave a gap at the end. Returns `true` when the offset moved.
+    /// 偏移量会被钳制在容器内容范围内，确保滚动绝不会在末尾留出空白。
+    /// 当偏移量发生实际变化时返回 `true`。
     pub fn set_scroll(&mut self, id: NodeId, offset: Vec2) -> bool {
         let Some(node) = self.nodes.get(id) else {
             return false;
@@ -949,7 +949,7 @@ impl UiWorld {
         true
     }
 
-    /// Scroll a container by `delta` logical pixels (`delta.y > 0` scrolls down).
+    /// 按增量 `delta` 逻辑像素滚动容器（`delta.y > 0` 表示向下滚动）。
     pub fn scroll_by(&mut self, id: NodeId, delta: Vec2) -> bool {
         let Some(node) = self.nodes.get(id) else {
             return false;
@@ -958,8 +958,8 @@ impl UiWorld {
         self.set_scroll(id, target)
     }
 
-    /// Total nodes that would be visited by a naive full re-layout — the
-    /// baseline the incremental path is compared against in tests.
+    /// 朴素全量重布局需访问的节点总数——测试中用作增量路径的对比基线。
+    ///
     #[must_use]
     pub fn full_layout_cost(&self) -> usize {
         self.nodes.len()
@@ -1008,7 +1008,7 @@ mod tests {
         assert_eq!(w.node(a).next_sibling, c);
         assert_eq!(w.node(c).prev_sibling, a);
         assert_eq!(w.len(), 3, "root + a + c");
-        // The stale handle must be rejected, not silently reused.
+        // 过期句柄必须被拒绝，绝不能被静默复用。
         assert!(!w.contains(b));
     }
 
@@ -1027,11 +1027,11 @@ mod tests {
         }
     }
 
-    /// A scrollable container moves its content, and the scroll is bounded
-    /// by the content.
+    /// 可滚动容器移动其内容，且滚动范围受内容边界限制。
+    /// 若未应用偏移量，子节点会留在原地：容器声明了可滚动，但内容纹丝不动。
     ///
-    /// Without the offset the children stayed where they were: the container
-    /// declared itself scrollable, but nothing ever moved.
+    ///
+    ///
     #[test]
     fn scrolling_a_container_translates_its_children_and_clamps() {
         let (mut w, root) = world();
@@ -1049,24 +1049,24 @@ mod tests {
         let before = w.get(child).expect("child").world_rect;
         assert_eq!(before.origin.y, 0.0);
 
-        // The content is 400 tall inside a 100 tall container: 300 px of
-        // scroll are available.
+        // 100 高的容器内有 400 高的内容：可用滚动范围为 300 px。
+        //
         assert_eq!(w.get(container).expect("container").content_size.y, 400.0);
         assert!(w.set_scroll(container, Vec2::new(0.0, 120.0)));
         let after = w.get(child).expect("child").world_rect;
         assert_eq!(after.origin.y, -120.0, "the content follows the scroll");
 
-        // The scroll is clamped to the content.
+        // 滚动偏移被钳制在内容范围内。
         assert!(w.set_scroll(container, Vec2::new(0.0, 9999.0)));
         assert_eq!(w.get(container).expect("container").scroll_offset.y, 300.0);
         let clamped = w.get(child).expect("child").world_rect;
         assert_eq!(clamped.origin.y, -300.0);
 
-        // A container that is not scrollable does not scroll.
+        // 不可滚动的容器不会发生滚动。
         assert!(!w.set_scroll(child, Vec2::new(0.0, 10.0)));
     }
 
-    /// `scroll_by` is the relative form of `set_scroll`.
+    /// `scroll_by` 是 `set_scroll` 的相对位移形式。
     #[test]
     fn scrolling_by_a_delta_moves_the_content() {
         let (mut w, root) = world();
@@ -1157,7 +1157,7 @@ mod tests {
         assert!(!dirty.contains(&root), "root must not be dirtied");
         assert!(w.stats().nodes_visited <= 4);
 
-        // `dirty_boundaries` drains the set, so it runs after the snapshot.
+        // `dirty_boundaries` 会排空集合，因此需在快照之后执行。
         let boundaries = w.dirty_boundaries();
         assert_eq!(boundaries, vec![card]);
         assert!(w.layout_dirty_snapshot().is_empty());
@@ -1210,12 +1210,12 @@ mod tests {
         w.apply_rects(&rects);
 
         let leaf_node = w.node(leaf);
-        // world = root.origin(0) + outer.origin(10) + inner.origin(20) + leaf(5)
+        // 世界坐标：world = root.origin(0) + outer.origin(10) + inner.origin(20) + leaf(5)
         assert_eq!(leaf_node.world_rect, Rect::new(35.0, 35.0, 50.0, 50.0));
-        // Clip is the intersection of both ancestors, in world space.
+        // 裁剪区域为两个祖先裁剪在世界空间中的交集。
         let clip = leaf_node.clip.expect("clipped");
         assert_eq!(clip, Rect::new(30.0, 30.0, 200.0, 200.0));
-        // The innermost rounded container is slot 0.
+        // 最内层的圆角容器位于槽位 0。
         let rounded = leaf_node.rounded_clips[0].expect("rounded clip");
         assert_eq!(rounded.radii, [12.0; 4]);
         assert_eq!(rounded.rect, Rect::new(30.0, 30.0, 200.0, 200.0));
@@ -1251,8 +1251,8 @@ mod tests {
         assert_eq!(slots[0].expect("inner").radii, [8.0; 4]);
         let folded = slots[1].expect("middle slot kept");
         assert_eq!(folded.rect, Rect::new(10.0, 10.0, 380.0, 380.0));
-        // The dropped 40px outer arc projects to 40 - 10 = 30px on the kept
-        // middle container, so the outer rounding still shows.
+        // 被丢弃的 40px 外层圆弧投影到保留的中间容器上变为 40 - 10 = 30px，
+        // 因此外层圆角依然可见。
         assert_eq!(folded.radii, [30.0; 4]);
     }
 
@@ -1286,7 +1286,7 @@ mod tests {
         w.clear_dirty();
         w.set_text(label, "hello");
         let stats = w.stats();
-        // The second set must not dirty anything: compare-and-set on the string.
+        // 第二次设置不得产生脏标记：对字符串执行比较并交换（compare-and-set）。
         assert_eq!(stats.layout_dirty, 0);
         assert_eq!(w.text(label), Some("hello"));
     }
@@ -1304,15 +1304,15 @@ mod tests {
         assert!(visited.contains(&b));
     }
 
-    /// Siblings have to come out in insertion order.
+    /// 兄弟节点必须按插入顺序输出。
     ///
-    /// The traversal pushes the children onto a stack, and a stack pops
-    /// last-in-first-out — so without reversing, every sibling group comes out
-    /// **right-to-left**. The comment in the function promised left-to-right,
-    /// and the two other tree walks in this codebase (`fold_clips` here,
-    /// `preorder` in `unbound-layout`) do reverse. A caller that walks the
-    /// tree to paint or to hit-test would see the children of every node in
-    /// the wrong order.
+    /// 遍历过程将子节点压入栈中，而栈是后进先出的——若不逆序压入，
+    /// 每组兄弟节点都会按**从右到左**的顺序输出。函数注释曾承诺从左到右，
+    /// 且代码库中另外两次树遍历（此处的 `fold_clips` 与 `unbound-layout` 中的 `preorder`）
+    /// 均执行了逆序。按树遍历进行绘制或命中测试的调用方会看到所有节点的子节点顺序颠倒。
+    ///
+    ///
+    ///
     #[test]
     fn walk_yields_siblings_in_insertion_order() {
         let (mut w, root) = world();
@@ -1327,8 +1327,8 @@ mod tests {
         );
     }
 
-    /// The same order guarantee for a deeper tree: a whole subtree has to
-    /// come out before the next sibling.
+    /// 更深层树也需保持同样顺序保证：整棵子树必须在下一个兄弟节点之前输出。
+    ///
     #[test]
     fn walk_yields_a_whole_subtree_before_the_next_sibling() {
         let (mut w, root) = world();
@@ -1340,14 +1340,14 @@ mod tests {
         assert_eq!(visited, vec![root, a, a1, a2, b]);
     }
 
-    /// An incremental solve must not drop the clip chain above the boundary.
+    /// 增量求解不得丢失边界上方的裁剪链。
     ///
-    /// `apply_rects_from` refolds only the boundary's subtree, but the
-    /// subtree's *effective* clip is the intersection of every clipping
-    /// ancestor. Starting the fold with an empty inherited clip made the
-    /// subtree forget its ancestors: content that belongs inside a scroll
-    /// container or a rounded panel would escape it after an incremental
-    /// re-layout.
+    /// `apply_rects_from` 仅重折叠边界子树，但该子树的*有效*裁剪是所有裁剪祖先的交集。
+    /// 从空继承裁剪开始折叠会导致子树遗忘祖先：本应位于滚动容器或圆角面板内的内容
+    /// 在增量重布局后会逃逸出来。
+    ///
+    ///
+    ///
     #[test]
     fn an_incremental_refold_keeps_the_ancestor_clip_chain() {
         let (mut w, root) = world();
@@ -1358,9 +1358,9 @@ mod tests {
                 .flags(NodeFlags::CLIP),
             loc(),
         );
-        // The inner container is *wider* than the outer one, so the
-        // difference between "clipped by the ancestor" and "clipped by
-        // itself" is visible.
+        // 内层容器比外层容器*更宽*，因此“被祖先裁剪”与“被自身裁剪”的区别清晰可见。
+        //
+        //
         let inner = w.insert(
             outer,
             RawNodeDesc::container()
@@ -1377,12 +1377,12 @@ mod tests {
         rects.insert(leaf, Rect::new(0.0, 0.0, 50.0, 50.0));
         w.apply_rects(&rects);
 
-        // The full fold clips the leaf to the outer container.
+        // 全量折叠将叶子节点裁剪到外层容器。
         let full = w.node(leaf).clip.expect("clipped");
         assert_eq!(full, Rect::new(10.0, 10.0, 100.0, 100.0));
 
-        // Now refold only the inner subtree, the way an incremental layout
-        // solve does.
+        // 现在仅重折叠内层子树，模拟增量布局求解的路径。
+        //
         let mut changed = FxHashMap::default();
         changed.insert(inner, Rect::new(0.0, 0.0, 400.0, 400.0));
         changed.insert(leaf, Rect::new(0.0, 0.0, 50.0, 50.0));
@@ -1395,8 +1395,8 @@ mod tests {
         );
     }
 
-    /// The same guarantee for the rounded slots: an incremental refold must
-    /// not forget the rounded ancestor above the boundary.
+    /// 圆角槽位同样适用此保证：增量重折叠不得遗忘边界上方的圆角祖先。
+    ///
     #[test]
     fn an_incremental_refold_keeps_the_ancestor_rounded_clips() {
         let (mut w, root) = world();
@@ -1440,16 +1440,16 @@ mod tests {
         );
     }
 
-    /// The boundary list must not name the same boundary twice.
+    /// 边界列表绝不能两次列出同一个边界。
     ///
-    /// The boundaries were sorted by depth and then `dedup`ed — but `dedup`
-    /// only removes *adjacent* duplicates. Two boundaries at the same depth
-    /// with a third one in between left the duplicate in place, and the
-    /// layout engine then solved that boundary twice.
+    /// 此前边界按深度排序后直接 `dedup`——但 `dedup` 仅移除*相邻*的重复项。
+    /// 若两个同深度边界之间夹了第三个边界，重复项就会保留下来，
+    /// 导致布局引擎对同一边界求解两次。
+    ///
     #[test]
     fn dirty_boundaries_never_repeat_a_boundary() {
         let (mut w, root) = world();
-        // Two boundaries at the same depth.
+        // 两个相同深度的边界。
         let a = w.insert(
             root,
             RawNodeDesc::container()
@@ -1468,8 +1468,8 @@ mod tests {
         let a_leaf2 = w.insert(a, RawNodeDesc::text(), loc());
         let b_leaf = w.insert(b, RawNodeDesc::text(), loc());
 
-        // Dirty nodes inside `a` and inside `b`. `a` is named twice — once
-        // per dirty node inside it.
+        // `a` 与 `b` 内部均有脏节点。`a` 被记录了两次——对应其内部每个脏节点一次。
+        //
         w.mark_layout_dirty(a_leaf);
         w.mark_layout_dirty(a_leaf2);
         w.mark_layout_dirty(b_leaf);

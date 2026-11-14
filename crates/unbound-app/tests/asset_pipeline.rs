@@ -1,8 +1,8 @@
-//! The async image pipeline, end to end minus the GPU.
+//! 异步图像管线端到端测试（不含 GPU）。
 //!
-//! A PNG is submitted, decoded on a worker thread, packed into the atlas and
-//! resolved by the widget layer. The first paint is a placeholder with the
-//! final box; the second is a textured quad sampling exactly the packed rect.
+//! 提交 PNG 后在工作线程解码、打包入图集并由控件层解析。
+//! 首次绘制为最终尺寸的占位符；第二次绘制为精确采样打包矩形的纹理四边形。
+//!
 
 use std::time::Duration;
 
@@ -47,7 +47,7 @@ fn async_png_asset_transitions_from_placeholder_to_textured_quad() {
         ImageDesc::new(Rect::new(20.0, 20.0, 160.0, 80.0), Vec2::new(8.0, 8.0), 0).with_asset(id);
     desc.fit = ObjectFit::Fill;
 
-    // Frame 1: decoding has not started, so the widget paints the placeholder.
+    // 第 1 帧：解码尚未开始，因此控件绘制占位符。
     let placeholder = emit_image_with_assets(7, &desc, ControlState::default(), &hub);
     assert_eq!(placeholder.primitives.len(), 1);
     assert_eq!(placeholder.primitives[0].prim_type(), PrimType::RoundedRect);
@@ -60,7 +60,7 @@ fn async_png_asset_transitions_from_placeholder_to_textured_quad() {
         hub.failures()
     );
 
-    // Frame 2: the same widget now emits a textured quad over the atlas rect.
+    // 第 2 帧：同一控件此时发出覆盖图集矩形的纹理四边形。
     let textured = emit_image_with_assets(7, &desc, ControlState::default(), &hub);
     let quad: &GpuPrimitiveInstance = &textured.primitives[0];
     assert_eq!(quad.prim_type(), PrimType::Image);

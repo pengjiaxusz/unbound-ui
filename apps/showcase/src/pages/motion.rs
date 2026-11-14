@@ -1,4 +1,4 @@
-//! Motion, accessibility, telemetry and settings.
+//! 动效、无障碍、遥测与设置。
 
 use accesskit::Role;
 use unbound_math::{Rect, Vec2};
@@ -17,7 +17,7 @@ pub const SPRINGS_INFO: PageInfo = PageInfo {
     short: "Springs",
     description: "Physical springs with stiffness, damping and mass, plus cubic-bezier easing for one-shot transitions. Tune them live.",
     crates: &["unbound-anim"],
-    docs: "docs/03-core/animation.md",
+    docs: "docs/architecture/animation-and-theme.md",
     keywords: "animation spring physics easing cubic bezier motion",
 };
 
@@ -26,7 +26,7 @@ pub const A11Y_INFO: PageInfo = PageInfo {
     short: "Accessibility",
     description: "Every control publishes a role, name, state and focus order. The panel renders the exact tree exported to the platform adapter.",
     crates: &["unbound-a11y"],
-    docs: "docs/03-core/accessibility.md",
+    docs: "docs/architecture/input-and-a11y.md",
     keywords: "accessibility a11y focus ring tree roles keyboard screen reader",
 };
 
@@ -35,7 +35,7 @@ pub const TELEMETRY_INFO: PageInfo = PageInfo {
     short: "Telemetry",
     description: "Frame timing, primitive counts, draw calls, uploads and pool watermarks. The same meters feed the HUD in the title bar.",
     crates: &["unbound-kpi", "unbound-gpu/src/timing.rs"],
-    docs: "docs/05-runtime/telemetry.md",
+    docs: "docs/architecture/kpi-budgets.md",
     keywords: "telemetry kpi gpu frame time draw calls uploads tlsf memory hud",
 };
 
@@ -44,7 +44,7 @@ pub const SETTINGS_INFO: PageInfo = PageInfo {
     short: "Settings",
     description: "The gallery itself is the compatibility test: theme, zoom, snapping and telemetry preferences are all live.",
     crates: &["unbound-platform", "unbound-theme"],
-    docs: "docs/06-tooling/showcase.md",
+    docs: "docs/architecture/showcase.md",
     keywords: "settings about preferences version build theme zoom",
 };
 
@@ -164,7 +164,7 @@ pub const SETTINGS_EXAMPLES: &[ExampleDef] = &[ExampleDef::new(
 )
 .with_height(348.0)];
 
-/// Spring lab or easing plot.
+/// 弹簧实验室或缓动曲线图。
 pub fn springs(ctx: &mut DemoCtx<'_, '_>, easing: bool) {
     if easing {
         easing_page(ctx);
@@ -271,9 +271,9 @@ fn easing_page(ctx: &mut DemoCtx<'_, '_>) {
         (rect.size.x - 48.0).min(rect.size.y * 1.6),
         rect.size.y - 52.0,
     );
-    // The curve is a real interactive editor: its two control points live in
-    // the demo state and the shell drags them, so the plotted bezier and the
-    // reported cubic-bezier(...) can never disagree.
+    // 该曲线是真实的交互式编辑器：其两个控制点存储在演示状态中并由外壳拖拽，
+    // 因此绘制出的贝塞尔曲线与报告的 cubic-bezier(...) 绝不会不一致。
+    //
     let node = ctx.part(1);
     let control = ctx.canvas.control_state(node, false, false);
     let mut desc = CurveEditorDesc::new(plot);
@@ -299,7 +299,7 @@ fn easing_page(ctx: &mut DemoCtx<'_, '_>) {
     );
 }
 
-/// Semantic tree or focus-ring lab.
+/// 语义树或焦点环实验室。
 pub fn a11y(ctx: &mut DemoCtx<'_, '_>, focus_rings: bool) {
     if focus_rings {
         focus_ring_page(ctx);
@@ -519,7 +519,7 @@ fn focus_ring_page(ctx: &mut DemoCtx<'_, '_>) {
     );
 }
 
-/// KPI cards or a rolling frame graph.
+/// KPI 卡片或滚动帧图表。
 pub fn telemetry(ctx: &mut DemoCtx<'_, '_>, graph: bool) {
     if graph {
         frame_graph(ctx);
@@ -553,7 +553,7 @@ pub fn telemetry(ctx: &mut DemoCtx<'_, '_>, graph: bool) {
     let columns = if rect.size.x > 520.0 { 3 } else { 2 };
     let gap = 10.0;
     let cell_w = (rect.size.x - gap * (columns - 1) as f32) / columns as f32;
-    // The limit bar owns the bottom 34 px of the stage.
+    // 帧率上限栏占用舞台底部 34 px。
     let grid_height = (rect.size.y - 34.0).max(0.0);
     let cell_h = (grid_height - gap) * 0.5;
     for (index, (label, value, detail)) in cards.iter().enumerate() {
@@ -615,9 +615,9 @@ pub fn telemetry(ctx: &mut DemoCtx<'_, '_>, graph: bool) {
     fps_limit_bar(ctx);
 }
 
-/// The frame-rate limit controls: five presets plus a custom input.
+/// 帧率上限控件：五个预设加上一个自定义输入框。
 ///
-/// `0` is unlimited; any other value is floored at 60 FPS by the engine.
+/// `0` 表示无限制；其他值会被引擎钳制到 60 FPS 下限。
 pub fn fps_limit_bar(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
@@ -743,7 +743,7 @@ fn frame_graph(ctx: &mut DemoCtx<'_, '_>) {
     let budget = ctx.knob_on(1);
     let plot = rect.inflate(-8.0);
 
-    // The series is the real rolling frame buffer, not a synthesised curve.
+    // 该序列是真实的滚动帧缓冲区，而非合成曲线。
     let value = |sample: &FrameSample| match metric {
         1 => sample.upload,
         2 => sample.draws,
@@ -757,8 +757,8 @@ fn frame_graph(ctx: &mut DemoCtx<'_, '_>) {
         .enumerate()
         .map(|(index, sample)| Vec2::new(index as f32, value(sample)))
         .collect();
-    // Frame time keeps a fixed two-budget ceiling so the 16.7 ms reference
-    // sits mid-plot; the other metrics scale to their own observed peak.
+    // 帧耗时保持固定的两倍预算上限，使 16.7 ms 参考线位于图表中央；
+    // 其他指标按各自观测到的峰值进行缩放。
     let y_max = match metric {
         0 => 33.4,
         _ => points.iter().map(|point| point.y).fold(1.0, f32::max) * 1.25,
@@ -774,9 +774,9 @@ fn frame_graph(ctx: &mut DemoCtx<'_, '_>) {
     ctx.canvas
         .widget_output(WidgetCatalogId::Chart, node, &output.output);
 
-    // The budget reference and metric caption are annotations the chart
-    // emitter does not model; the reference uses the chart's own mapping so
-    // it can never disagree with the plotted data.
+    // 预算参考线与指标标题是图表发射器未建模的标注；
+    // 参考线使用图表自身的映射，因此绝不会与绘制数据不一致。
+    //
     let inner = desc.plot_rect();
     if budget && metric == 0 {
         let y = desc.map_point(Vec2::new(0.0, 16.7)).y;
@@ -817,7 +817,7 @@ fn frame_graph(ctx: &mut DemoCtx<'_, '_>) {
     ctx.canvas.scroll_zone(rect, 4);
 }
 
-/// Settings / about.
+/// 设置 / 关于。
 pub fn about(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;

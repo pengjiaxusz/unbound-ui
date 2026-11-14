@@ -1,12 +1,10 @@
-//! The date field: a Monday-first calendar with single or range selection.
+//! 日期选择器（DatePicker）：以周一为首日的日历，支持单选或范围选择。
 //!
-//! Dates are plain values ([`NaiveDate`]) with no clock and no time zone, which
-//! is the only sensible contract for a calendar: "2024-03-01" is the same day
-//! in Shanghai and in Berlin until the application attaches a zone.
+//! 日期是没有时钟与时区的纯值（[`NaiveDate`]），这是日历唯一合理的契约：
+//! 在应用附加时区之前，“2024-03-01”在上海和柏林表示同一天。
 //!
-//! The grid is always six rows of seven cells. Rendering a fixed 42-cell grid
-//! keeps the popup height stable while paging, so the surrounding scroll
-//! position never jumps.
+//! 网格固定为 6 行 7 列。渲染固定的 42 格网格可使翻页时弹出面板高度保持稳定，
+//! 周围滚动位置不会发生跳动。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -20,18 +18,18 @@ use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined, su
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// How many cells a calendar shows.
+/// 日历显示的单元格总数。
 pub const CALENDAR_CELLS: usize = 42;
-/// Calendar columns.
+/// 日历列数。
 pub const CALENDAR_COLUMNS: usize = 7;
-/// The header height.
+/// 头部栏高度。
 pub const CALENDAR_HEADER: f32 = 34.0;
-/// The weekday label row height.
+/// 星期标题行高度。
 pub const CALENDAR_WEEKDAYS: f32 = 22.0;
-/// The corner radius of a day cell.
+/// 日期单元格圆角半径。
 pub const CALENDAR_RADIUS: f32 = 6.0;
 
-/// A calendar date without a time or zone.
+/// 不含时间与时区的纯日历日期。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NaiveDate {
     pub year: i32,
@@ -40,7 +38,7 @@ pub struct NaiveDate {
 }
 
 impl NaiveDate {
-    /// A date, when the triple is valid.
+    /// 当三元组有效时构造日期。
     #[must_use]
     pub fn new(year: i32, month: u8, day: u8) -> Option<Self> {
         if !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
@@ -49,13 +47,13 @@ impl NaiveDate {
         Some(Self { year, month, day })
     }
 
-    /// The ISO representation, `YYYY-MM-DD`.
+    /// ISO 格式字符串表示 `YYYY-MM-DD`。
     #[must_use]
     pub fn to_iso(self) -> String {
         format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
     }
 
-    /// Parse `YYYY-MM-DD`.
+    /// 解析 `YYYY-MM-DD`。
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
         let mut parts = text.trim().split('-');
@@ -68,10 +66,10 @@ impl NaiveDate {
         Self::new(year, month, day)
     }
 
-    /// The weekday with Monday as `0`.
+    /// 以周一为 `0` 的星期索引。
     #[must_use]
     pub fn weekday(self) -> u8 {
-        // Sakamoto's algorithm, shifted to a Monday-first index.
+        // Sakamoto 算法，偏移为周一优先索引。
         const OFFSETS: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
         let mut year = self.year;
         if self.month < 3 {
@@ -85,20 +83,20 @@ impl NaiveDate {
         ((sunday + 6) % 7) as u8
     }
 
-    /// The first day of the month.
+    /// 当月第一天。
     #[must_use]
     pub fn month_start(self) -> Self {
         Self { day: 1, ..self }
     }
 }
 
-/// Whether `year` is a leap year in the Gregorian calendar.
+/// 判断 `year` 在公历中是否为闰年。
 #[must_use]
 pub const fn is_leap_year(year: i32) -> bool {
     year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
-/// How many days `month` has.
+/// 计算 `month` 的天数。
 #[must_use]
 pub const fn days_in_month(year: i32, month: u8) -> u8 {
     match month {
@@ -110,7 +108,7 @@ pub const fn days_in_month(year: i32, month: u8) -> u8 {
     }
 }
 
-/// A year and a month.
+/// 年份与月份。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct YearMonth {
     pub year: i32,
@@ -118,7 +116,7 @@ pub struct YearMonth {
 }
 
 impl YearMonth {
-    /// The month containing `date`.
+    /// 包含 `date` 的月份。
     #[must_use]
     pub const fn of(date: NaiveDate) -> Self {
         Self {
@@ -127,7 +125,7 @@ impl YearMonth {
         }
     }
 
-    /// The previous month.
+    /// 上一个月。
     #[must_use]
     pub fn prev(self) -> Self {
         if self.month == 1 {
@@ -143,7 +141,7 @@ impl YearMonth {
         }
     }
 
-    /// The next month.
+    /// 下一个月。
     #[must_use]
     pub fn next(self) -> Self {
         if self.month == 12 {
@@ -159,7 +157,7 @@ impl YearMonth {
         }
     }
 
-    /// The first day of the month.
+    /// 当月第一天。
     #[must_use]
     pub fn first(self) -> NaiveDate {
         NaiveDate {
@@ -170,32 +168,32 @@ impl YearMonth {
     }
 }
 
-/// How many days the selection holds.
+/// 选区包含的天数范围。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SelectionMode {
-    /// Exactly one day.
+    /// 仅选中一天。
     #[default]
     Single,
-    /// An inclusive range.
+    /// 闭区间日期范围。
     Range,
 }
 
-/// One cell of the six-by-seven grid.
+/// 6×7 网格中的单个单元格。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CalendarCell {
-    /// The day, or `None` for the leading / trailing padding.
+    /// 日期值；前置/后置填充格为 `None`。
     pub date: Option<NaiveDate>,
-    /// The day belongs to the viewed month.
+    /// 该日期是否属于当前浏览月份。
     pub in_month: bool,
-    /// The day is selected.
+    /// 该日期是否被选中。
     pub selected: bool,
-    /// The day lies inside a committed range.
+    /// 该日期是否位于已提交的范围内。
     pub in_range: bool,
-    /// The day is `today`.
+    /// 该日期是否为 `today`。
     pub today: bool,
 }
 
-/// The live state of a calendar.
+/// 日历的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CalendarState {
     view: YearMonth,
@@ -207,7 +205,7 @@ pub struct CalendarState {
 }
 
 impl CalendarState {
-    /// A calendar opened on `today`'s month.
+    /// 创建打开在 `today` 所在月份的日历。
     #[must_use]
     pub fn new(today: NaiveDate, mode: SelectionMode) -> Self {
         Self {
@@ -220,24 +218,24 @@ impl CalendarState {
         }
     }
 
-    /// The viewed month.
+    /// 当前浏览的月份。
     #[must_use]
     pub fn view(&self) -> YearMonth {
         self.view
     }
 
-    /// The selection mode.
+    /// 当前选择模式。
     #[must_use]
     pub fn mode(&self) -> SelectionMode {
         self.mode
     }
 
-    /// Open the calendar on `date`'s month.
+    /// 将日历切换至 `date` 所在月份。
     pub fn open(&mut self, date: NaiveDate) {
         self.view = YearMonth::of(date);
     }
 
-    /// Page by whole months.
+    /// 按整月翻页。
     pub fn page(&mut self, months: i32) -> bool {
         if months == 0 {
             return false;
@@ -250,12 +248,12 @@ impl CalendarState {
         true
     }
 
-    /// Go to the month containing `today`.
+    /// 跳转至包含 `today` 的月份。
     pub fn today(&mut self) {
         self.view = YearMonth::of(self.today);
     }
 
-    /// The committed selection, ordered.
+    /// 返回已提交的有序选区。
     #[must_use]
     pub fn range(&self) -> Option<(NaiveDate, NaiveDate)> {
         match (self.selected, self.range_end) {
@@ -269,22 +267,21 @@ impl CalendarState {
         }
     }
 
-    /// The hovered day.
+    /// 当前悬停的日期。
     #[must_use]
     pub fn hovered(&self) -> Option<NaiveDate> {
         self.hovered
     }
 
-    /// Hover a day.
+    /// 设置悬停日期。
     pub fn hover(&mut self, date: Option<NaiveDate>) {
         self.hovered = date;
     }
 
-    /// Pick a day.
+    /// 选择某一天。
     ///
-    /// In single mode this replaces the selection. In range mode the first
-    /// pick starts a range and the second completes it; picking again starts
-    /// a new range.
+    /// 单选模式下直接替换选区；范围模式下第一次选择开启范围，第二次选择完成范围；
+    /// 再次选择则开启新的范围。
     pub fn select(&mut self, date: NaiveDate) {
         match self.mode {
             SelectionMode::Single => {
@@ -303,14 +300,14 @@ impl CalendarState {
         self.view = YearMonth::of(date);
     }
 
-    /// Whether `date` lies inside the committed range.
+    /// 判断 `date` 是否落在已提交范围内。
     #[must_use]
     pub fn contains(&self, date: NaiveDate) -> bool {
         self.range()
             .is_some_and(|(start, end)| date >= start && date <= end)
     }
 
-    /// The 42 cells of the viewed month, Monday first.
+    /// 返回当前浏览月份的 42 个单元格，周一在前。
     #[must_use]
     pub fn cells(&self) -> Vec<CalendarCell> {
         let first = self.view.first();
@@ -390,21 +387,21 @@ fn prev_day(date: NaiveDate) -> NaiveDate {
     }
 }
 
-/// The pure descriptor of a calendar.
+/// 日历的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DatePickerDesc {
-    /// The calendar rectangle.
+    /// 日历矩形。
     pub rect: Rect,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The calendar refuses interaction.
+    /// 日历是否禁用交互。
     pub disabled: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl DatePickerDesc {
-    /// A calendar with the default metrics.
+    /// 使用默认度量的日历。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -415,7 +412,7 @@ impl DatePickerDesc {
         }
     }
 
-    /// The previous-month button.
+    /// 上一月按钮矩形。
     #[must_use]
     pub fn prev_rect(&self) -> Rect {
         Rect::new(
@@ -426,7 +423,7 @@ impl DatePickerDesc {
         )
     }
 
-    /// The next-month button.
+    /// 下一月按钮矩形。
     #[must_use]
     pub fn next_rect(&self) -> Rect {
         Rect::new(
@@ -437,7 +434,7 @@ impl DatePickerDesc {
         )
     }
 
-    /// The rectangle of a grid cell.
+    /// 指定网格单元格的矩形。
     #[must_use]
     pub fn cell_rect(&self, index: usize) -> Rect {
         let column = (index % CALENDAR_COLUMNS) as f32;
@@ -454,7 +451,7 @@ impl DatePickerDesc {
     }
 }
 
-/// Emit the calendar chrome, cells and semantic node.
+/// 发射日历框架、单元格与语义节点。
 #[must_use]
 pub fn emit_calendar(
     node: u64,
@@ -489,7 +486,7 @@ pub fn emit_calendar(
         desc.z,
     ));
 
-    // Prev / next chevrons as two strokes each.
+    // 上一月 / 下一月箭头各自绘制为两条描边。
     for (button, signs) in [
         (desc.prev_rect(), [1.0, -1.0]),
         (desc.next_rect(), [-1.0, 1.0]),

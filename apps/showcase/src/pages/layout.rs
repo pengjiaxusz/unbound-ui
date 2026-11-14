@@ -1,4 +1,4 @@
-//! Layout & Portals: flex sandbox, overlays and drag-and-drop.
+//! 布局与传送门（Portals）：弹性布局沙盒、浮层与拖拽排序。
 
 use accesskit::Role;
 use unbound_abi::{Align, Justify, RawNodeDesc};
@@ -15,7 +15,7 @@ pub const FLEX_INFO: PageInfo = PageInfo {
     short: "Flex layout",
     description: "A real flex solver behind the stage: change direction, gap and alignment and the boxes are re-solved before the frame is built.",
     crates: &["unbound-layout", "unbound-world"],
-    docs: "docs/03-core/layout.md",
+    docs: "docs/architecture/ui-and-layout.md",
     keywords: "flex box layout gap align direction padding margin taffy",
 };
 
@@ -24,7 +24,7 @@ pub const OVERLAYS_INFO: PageInfo = PageInfo {
     short: "Portals",
     description: "Menus, dialogs and tooltips paint above the page on portal layers. Hit testing follows paint order, so the topmost surface wins.",
     crates: &["unbound-input/src/hit.rs", "unbound-graph"],
-    docs: "docs/03-core/input.md",
+    docs: "docs/architecture/input-and-a11y.md",
     keywords: "portal overlay modal dialog dropdown menu tooltip popup z order",
 };
 
@@ -33,7 +33,7 @@ pub const DRAG_INFO: PageInfo = PageInfo {
     short: "Drag & drop",
     description: "Pointer capture, threshold slop and drop-zone resolution. Release commits a reorder into the application state.",
     crates: &["unbound-input/src/dnd.rs", "unbound-input/src/router.rs"],
-    docs: "docs/03-core/input.md",
+    docs: "docs/architecture/input-and-a11y.md",
     keywords: "drag drop dnd reorder pointer capture drop zone",
 };
 
@@ -124,7 +124,7 @@ pub const DRAG_EXAMPLES: &[ExampleDef] = &[ExampleDef::new(
 )
 .with_height(260.0)];
 
-/// Flex layout or the box model.
+/// 弹性布局或盒模型。
 pub fn flex(ctx: &mut DemoCtx<'_, '_>, box_model: bool) {
     if box_model {
         box_model_page(ctx);
@@ -302,7 +302,7 @@ fn box_model_page(ctx: &mut DemoCtx<'_, '_>) {
     );
 }
 
-/// Open menu and modal, or hover tooltips.
+/// 打开菜单与模态框，或悬停提示框。
 pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
     if tooltips {
         tooltip_page(ctx);
@@ -312,7 +312,7 @@ pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
     let palette = *ctx.canvas.palette;
     let anchor = ctx.knob(0) as usize;
     let scrim = ctx.knob_on(1);
-    // Background page content.
+    // 背景页面内容。
     for index in 0..3 {
         let card = Rect::new(
             rect.origin.x + 16.0 + index as f32 * 106.0,
@@ -483,7 +483,7 @@ pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
             ButtonVariant::Primary,
             true,
         );
-        // Re-register the dialog actions on the portal layer.
+        // 在传送门层上重新注册对话框动作。
         for (node, rect, role, label) in [
             (ctx.part(20), cancel, Role::Button, "Cancel"),
             (ctx.part(21), delete, Role::Button, "Delete"),
@@ -570,7 +570,7 @@ fn tooltip_page(ctx: &mut DemoCtx<'_, '_>) {
     );
 }
 
-/// Sortable card row.
+/// 可排序卡片行。
 pub fn drag_drop(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;

@@ -3,16 +3,14 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // ---------------------------------------------------------------------------
-// Stable LSD radix sort, pass 3/3: stable scatter.
+// 稳定 LSD 基数排序，第 3/3 步：稳定散布。
 //
-// Thread 0 of each block walks the block's 256 keys **in index order** and
-// assigns each one the next slot for its digit. That serial walk is what buys
-// exact stability: `atomicAdd` ordering is not defined, and a non-stable scatter
-// would reorder equal keys on every frame.
+// 每个块的线程 0 **按索引顺序**遍历块内 256 个键，并为每个键分配其位值对应的下一个槽位。
+// 这种串行遍历换取了严格稳定性：`atomicAdd` 的执行顺序未定义，非稳定散布会导致
+// 相等键在每帧被重排。
 //
-// Blocks are independent, so the serial walk costs O(BLOCK) per block while all
-// blocks run in parallel. The key array and the index array are permuted with
-// the same positions, keeping the primitive indices attached to their keys.
+// 各块相互独立，因此所有块并行执行时每块串行开销仅 O(BLOCK)。键数组与索引数组按相同
+// 位置置换，确保图元索引始终随其排序键同步移动。
 // ---------------------------------------------------------------------------
 
 #include "common.glsl"
@@ -28,8 +26,8 @@ layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32Buf {
     uint v[];
 };
 
-shared uint s_pos[256];    // running write cursor per digit for this block
-shared uint s_out[BLOCK];  // destination slot for each element
+shared uint s_pos[256];    // 本块内各位值的当前写游标
+shared uint s_out[BLOCK];  // 每个元素的目标槽位
 
 void main() {
     uint block = gl_WorkGroupID.x;

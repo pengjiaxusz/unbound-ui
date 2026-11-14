@@ -1,10 +1,8 @@
-//! Side sheets and drawers.
+//! 侧边面板与抽屉（Drawer）。
 //!
-//! A drawer is a modal that enters from an edge. It shares the modal's scrim,
-//! layer and focus trap; the only thing that differs is geometry, and that
-//! geometry is a pure function of one number — the openness in `0.0..=1.0`.
-//! Keeping the animation in a scalar means a slide never rebuilds the widget
-//! tree: it only moves the same card.
+//! 抽屉是从屏幕边缘滑入的模态框。它与模态框共享遮罩层、层级与焦点陷阱；
+//! 唯一不同的是几何位置，且该几何位置仅是单个数值（`0.0..=1.0` 展开度）的纯函数。
+//! 将动画收敛为单个标量意味着滑动过程绝不重建控件树：仅移动同一张卡片。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -19,47 +17,47 @@ use crate::overlay::{BackdropRequest, OverlayEntry};
 use crate::primitive::{instance, surface};
 use crate::{ControlState, WidgetOutput};
 
-/// The edge a drawer enters from.
+/// 抽屉滑入的边缘方向。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DrawerSide {
-    /// From the left edge.
+    /// 从左边缘滑入。
     Left,
-    /// From the right edge.
+    /// 从右边缘滑入。
     #[default]
     Right,
-    /// From the top edge.
+    /// 从上边缘滑入。
     Top,
-    /// From the bottom edge.
+    /// 从下边缘滑入。
     Bottom,
 }
 
-/// The default backdrop blur.
+/// 默认背景模糊半径。
 pub const DRAWER_BLUR: f32 = 12.0;
-/// The default inner corner radius.
+/// 默认内侧圆角半径。
 pub const DRAWER_RADIUS: f32 = 12.0;
 const DRAWER_SHADOW: f32 = 32.0;
 
-/// A drawer descriptor.
+/// 抽屉描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DrawerDesc {
-    /// The viewport the sheet slides inside.
+    /// 抽屉在其中滑动的视口。
     pub viewport: Rect,
-    /// The edge it enters from.
+    /// 滑入的边缘方向。
     pub side: DrawerSide,
-    /// How far the sheet reaches into the viewport.
+    /// 抽屉伸入视口的深度。
     pub size: f32,
-    /// The corner radius on the inner edge.
+    /// 内侧边缘圆角半径。
     pub radius: f32,
-    /// The backdrop blur radius; `0.0` disables the pass.
+    /// 背景模糊半径；`0.0` 表示禁用。
     pub backdrop_blur: f32,
-    /// Whether `Escape` and the scrim close it.
+    /// 按下 `Escape` 与点击遮罩层是否可关闭抽屉。
     pub dismissible: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl DrawerDesc {
-    /// A dismissible sheet with a blur.
+    /// 创建带模糊背景的可关闭抽屉。
     #[must_use]
     pub fn new(viewport: Rect, side: DrawerSide, size: f32) -> Self {
         Self {
@@ -73,28 +71,28 @@ impl DrawerDesc {
         }
     }
 
-    /// The same sheet with an explicit blur.
+    /// 设置显式背景模糊半径。
     #[must_use]
     pub fn with_backdrop(mut self, blur: f32) -> Self {
         self.backdrop_blur = blur;
         self
     }
 
-    /// A sheet that only closes through an explicit action.
+    /// 设为仅通过显式操作关闭的抽屉。
     #[must_use]
     pub fn permanent(mut self) -> Self {
         self.dismissible = false;
         self
     }
 
-    /// The side the sheet's inner corner faces.
+    /// 抽屉内侧圆角朝向的边。
     #[must_use]
     pub const fn inner_axis(&self) -> bool {
         matches!(self.side, DrawerSide::Left | DrawerSide::Right)
     }
 }
 
-/// The open/closed animation of one drawer.
+/// 单个抽屉的展开/收起动画状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DrawerState {
     openness: f32,
@@ -103,7 +101,7 @@ pub struct DrawerState {
 }
 
 impl DrawerState {
-    /// A drawer that starts open or closed.
+    /// 创建初始为打开或关闭状态的抽屉。
     #[must_use]
     pub fn new(open: bool) -> Self {
         let openness = if open { 1.0 } else { 0.0 };
@@ -114,35 +112,35 @@ impl DrawerState {
         }
     }
 
-    /// How visible the sheet is, `0.0..=1.0`.
+    /// 当前可见程度，`0.0..=1.0`。
     #[must_use]
     pub fn openness(&self) -> f32 {
         self.openness
     }
 
-    /// Whether the sheet is fully open.
+    /// 是否已完全打开。
     #[must_use]
     pub fn is_open(&self) -> bool {
         (self.openness - 1.0).abs() < 0.001
     }
 
-    /// Whether the sheet is fully closed.
+    /// 是否已完全关闭。
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.openness < 0.001
     }
 
-    /// Ask the sheet to open.
+    /// 请求打开抽屉。
     pub fn open(&mut self) {
         self.target = 1.0;
     }
 
-    /// Ask the sheet to close.
+    /// 请求关闭抽屉。
     pub fn close(&mut self) {
         self.target = 0.0;
     }
 
-    /// Advance the spring; returns whether the openness changed.
+    /// 步进弹簧；返回展开度是否发生变化。
     pub fn step(&mut self, dt: f32) -> bool {
         if dt <= 0.0 {
             return false;
@@ -161,7 +159,7 @@ impl DrawerState {
     }
 }
 
-/// The card rectangle at a given openness.
+/// 给定展开度下的卡片矩形。
 #[must_use]
 pub fn drawer_rect(desc: &DrawerDesc, openness: f32) -> Rect {
     let openness = openness.clamp(0.0, 1.0);
@@ -202,22 +200,22 @@ pub fn drawer_rect(desc: &DrawerDesc, openness: f32) -> Rect {
     }
 }
 
-/// What one drawer emits.
+/// 单个抽屉的发射结果。
 #[derive(Clone, Debug)]
 pub struct DrawerOutput {
-    /// The card and its hit region.
+    /// 卡片及其命中区域。
     pub output: WidgetOutput,
-    /// The scrim, installed in addition to the card.
+    /// 遮罩层（在卡片之外单独安装）。
     pub scrim: HitRegion,
-    /// The overlay entry the caller pushes.
+    /// 调用方需推入的浮层条目。
     pub entry: OverlayEntry,
-    /// The blur request, when the blur is non-zero.
+    /// 模糊半径非零时的模糊请求。
     pub backdrop: Option<BackdropRequest>,
-    /// The card rectangle this frame.
+    /// 本帧的卡片矩形。
     pub rect: Rect,
 }
 
-/// Emit a drawer at its current openness.
+/// 按当前展开度发射抽屉。
 #[must_use]
 pub fn emit_drawer(
     node: u64,
@@ -274,7 +272,7 @@ pub fn emit_drawer(
     }
 }
 
-/// Whether `Escape` may close the drawer.
+/// `Escape` 是否允许关闭该抽屉。
 #[must_use]
 pub const fn escape_closes(desc: &DrawerDesc) -> bool {
     desc.dismissible

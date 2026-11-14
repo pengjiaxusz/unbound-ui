@@ -1,4 +1,4 @@
-//! ToggleButton: A two-state button that remains checked when selected.
+//! ToggleButton：选中后保持按下状态的双态切换按钮。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -10,7 +10,7 @@ use crate::button::BUTTON_LAYER;
 use crate::primitive::{outlined, surface};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// Descriptor for a toggle button.
+/// 切换按钮描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToggleButtonDesc {
     pub rect: Rect,
@@ -50,7 +50,7 @@ impl ToggleButtonDesc {
     }
 }
 
-/// State for the toggle button.
+/// 切换按钮状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ToggleButtonState {
     pub checked: bool,
@@ -67,7 +67,7 @@ impl ToggleButtonState {
     }
 }
 
-/// Emit primitives and hit regions for a toggle button.
+/// 输出切换按钮的图元与命中区域。
 #[must_use]
 pub fn emit_toggle_button(
     node: u64,
@@ -98,10 +98,10 @@ pub fn emit_toggle_button(
         (Token::SURFACE, Token::OUTLINE)
     };
 
-    // 1. Surface background
+    // 1. 表面背景
     out.primitives.push(surface(rect, desc.radius, bg_token, z));
 
-    // 2. Border outline
+    // 2. 边框轮廓
     out.primitives.push(outlined(
         rect,
         desc.radius,

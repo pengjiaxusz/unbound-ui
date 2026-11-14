@@ -1,14 +1,14 @@
-//! Deterministic and indeterminate progress indicators.
+//! 确定进度与不确定进度指示器。
 //!
-//! The progress value is *displayed*, not min/max: [`ProgressState::shown`]
-//! eases toward the target so a jump from 20% to 80% reads as movement instead
-//! of a teleport. An indeterminate bar or ring ignores the target and sweeps a
-//! band at a fixed rate, which is the only honest way to say "we do not know
-//! how long this takes".
+//! 进度值是*展示值*而非简单的最小/最大值：[`ProgressState::shown`]
+//! 会向目标值平滑缓动，使 20% 到 80% 的跳变呈现为连续移动而非瞬移。
+//! 不确定状态的进度条或圆环忽略目标值，以固定速率扫过一段亮带——
+//! 这是表达“未知耗时”最诚实的方式。
 //!
-//! The circular variant is built from short rounded segments rather than an
-//! analytic arc: the ring then shares the rounded-rectangle shader with every
-//! other primitive, and a filled and an empty ring are the same pool shape.
+//!
+//! 圆形变体由短圆角线段拼接而非解析圆弧构建：这样圆环可与其余图元共享圆角矩形着色器，
+//! 且已填充与未填充的圆环在图元池中具有完全相同的结构。
+//!
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -18,40 +18,40 @@ use unbound_theme::Token;
 use crate::primitive::surface;
 use crate::WidgetOutput;
 
-/// How many segments approximate a full ring.
+/// 近似完整圆环所用的分段数。
 pub const RING_SEGMENTS: usize = 48;
-/// The target the display chases per second.
+/// 展示值每秒追赶目标值的速率。
 pub const PROGRESS_RATE: f32 = 12.0;
 
-/// A linear bar or a circular ring.
+/// 线性进度条或圆形进度环。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ProgressKind {
-    /// A horizontal bar.
+    /// 水平进度条。
     #[default]
     Linear,
-    /// A ring.
+    /// 圆形进度环。
     Circular,
 }
 
-/// The pure descriptor of a progress indicator.
+/// 进度指示器的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProgressDesc {
-    /// The indicator rectangle.
+    /// 指示器矩形。
     pub rect: Rect,
-    /// The bar or ring form.
+    /// 进度条或圆环形态。
     pub kind: ProgressKind,
-    /// The track thickness.
+    /// 轨道粗细。
     pub thickness: f32,
-    /// `Some(0.0..=1.0)` for a known value, `None` for indeterminate.
+    /// 已知进度时为 `Some(0.0..=1.0)`，不确定进度时为 `None`。
     pub value: Option<f32>,
-    /// The accessible name.
+    /// 无障碍名称。
     pub label: String,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl ProgressDesc {
-    /// A linear bar.
+    /// 创建线性进度条。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -64,7 +64,7 @@ impl ProgressDesc {
         }
     }
 
-    /// A ring inscribed in a square.
+    /// 创建内切于正方形的圆形进度环。
     #[must_use]
     pub fn circular(rect: Rect) -> Self {
         Self {
@@ -74,40 +74,40 @@ impl ProgressDesc {
         }
     }
 
-    /// The same indicator with a target value.
+    /// 设置目标进度值。
     #[must_use]
     pub fn value(mut self, value: f32) -> Self {
         self.value = Some(value.clamp(0.0, 1.0));
         self
     }
 
-    /// The same indicator, indeterminate.
+    /// 将指示器设为不确定进度模式。
     #[must_use]
     pub fn indeterminate(mut self) -> Self {
         self.value = None;
         self
     }
 
-    /// The same indicator with an accessible name.
+    /// 设置无障碍名称。
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
     }
 
-    /// The ring centre.
+    /// 圆环中心点。
     #[must_use]
     pub fn centre(&self) -> Vec2 {
         self.rect.center()
     }
 
-    /// The ring radius.
+    /// 圆环半径。
     #[must_use]
     pub fn radius(&self) -> f32 {
         (self.rect.size.x.min(self.rect.size.y) - self.thickness).max(0.0) * 0.5
     }
 
-    /// The filled part of a linear bar.
+    /// 线性进度条的已填充部分矩形。
     #[must_use]
     pub fn fill_rect(&self, fraction: f32) -> Rect {
         Rect::new(
@@ -118,7 +118,7 @@ impl ProgressDesc {
         )
     }
 
-    /// A segment of the ring, `sweep` being the fraction of a full turn.
+    /// 圆环的单个分段，`sweep` 为占整圆周的比例。
     #[must_use]
     pub fn segment_rect(&self, start: f32, sweep: f32, segment: usize) -> Rect {
         let centre = self.centre();
@@ -137,7 +137,7 @@ impl ProgressDesc {
         )
     }
 
-    /// The rectangle of a rotating indeterminate band.
+    /// 旋转中的不确定亮带矩形。
     #[must_use]
     pub fn slider_rect(&self, phase: f32) -> Rect {
         let width = (self.rect.size.x * 0.32).max(12.0);
@@ -152,7 +152,7 @@ impl ProgressDesc {
     }
 }
 
-/// The animated state of a progress indicator.
+/// 进度指示器的动画状态。
 #[derive(Clone, Debug)]
 pub struct ProgressState {
     shown: f32,
@@ -169,30 +169,30 @@ impl Default for ProgressState {
 }
 
 impl ProgressState {
-    /// A zeroed display.
+    /// 创建归零的初始状态。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// The displayed fraction.
+    /// 当前展示的进度比例。
     #[must_use]
     pub fn shown(&self) -> f32 {
         self.shown
     }
 
-    /// The indeterminate sweep phase, in turns.
+    /// 不确定亮带的扫描相位（以圈为单位）。
     #[must_use]
     pub fn phase(&self) -> f32 {
         self.phase
     }
 
-    /// Snap the display without animating (a restored session).
+    /// 立即对齐到目标值而不播放动画（用于恢复会话）。
     pub fn jump_to(&mut self, value: f32) {
         self.shown = value.clamp(0.0, 1.0);
     }
 
-    /// Advance the display toward `target` and the sweep; returns repaint.
+    /// 推进展示值向 `target` 靠拢及扫描动画；返回是否需要重绘。
     pub fn tick(&mut self, dt: f32, target: Option<f32>, animated: bool) -> bool {
         let mut changed = false;
         if animated && dt > 0.0 {
@@ -217,19 +217,19 @@ impl ProgressState {
     }
 }
 
-/// The colour slots a progress indicator paints with.
+/// 进度指示器绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProgressTokens {
-    /// The unfilled track.
+    /// 未填充轨道。
     pub track: Token,
-    /// The filled part.
+    /// 已填充部分。
     pub fill: Token,
-    /// The indeterminate band.
+    /// 不确定亮带。
     pub sweep: Token,
 }
 
 impl ProgressTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -240,7 +240,7 @@ impl ProgressTokens {
     }
 }
 
-/// Emit a bar or a ring.
+/// 输出进度条或进度环。
 #[must_use]
 pub fn emit_progress(desc: &ProgressDesc, state: &ProgressState) -> WidgetOutput {
     let tokens = ProgressTokens::standard();

@@ -1,4 +1,4 @@
-//! Descriptions: Structured multi-column read-only key-value pair list.
+//! 描述列表（Descriptions）：结构化多列只读键值对列表。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -12,7 +12,7 @@ use crate::{ControlState, WidgetOutput};
 
 pub const DESCRIPTION_ROW_HEIGHT: f32 = 32.0;
 
-/// A single description item.
+/// 单条描述项。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DescriptionItem {
     pub label: String,
@@ -29,7 +29,7 @@ impl DescriptionItem {
     }
 }
 
-/// Descriptor for descriptions display list.
+/// 描述展示列表描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DescriptionsDesc {
     pub rect: Rect,
@@ -69,7 +69,7 @@ impl DescriptionsDesc {
     }
 }
 
-/// State for descriptions list.
+/// 描述列表状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DescriptionsState;
 
@@ -80,7 +80,7 @@ impl DescriptionsState {
     }
 }
 
-/// Emit primitives and hit regions for a descriptions block.
+/// 发射描述列表块的图元与命中区域。
 #[must_use]
 pub fn emit_descriptions(
     node: u64,
@@ -92,11 +92,11 @@ pub fn emit_descriptions(
     let rect = desc.rect;
     let z = 700u16;
 
-    // 1. Outer background
+    // 1. 外层背景
     out.primitives
         .push(surface(rect, desc.radius, Token::SURFACE, z));
 
-    // 2. Fixed 3 divider rows for stable shape
+    // 2. 固定 3 行分隔线以维持固定形状
     for r_idx in 0..3 {
         let y = rect.origin.y + (r_idx + 1) as f32 * DESCRIPTION_ROW_HEIGHT;
         let line_rect = Rect::new(rect.origin.x, y, rect.width(), 1.0);
@@ -108,7 +108,7 @@ pub fn emit_descriptions(
         ));
     }
 
-    // 3. Outer border
+    // 3. 外层边框
     out.primitives.push(outlined(
         rect,
         desc.radius,

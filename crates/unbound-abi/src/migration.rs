@@ -1,43 +1,43 @@
-//! Versioned, field-tagged state migration.
+//! 带版本与字段标签的状态迁移。
 //!
-//! The schema hash in [`crate::schema`] answers "same layout?". When the answer
-//! is no, the guest still has to carry the user's data across the reload. A
-//! monolithic `postcard` blob cannot do that: adding one field at the end
-//! changes every byte offset, and a missing field is indistinguishable from a
-//! corrupt one.
+//! [`crate::schema`] 中的 schema 哈希用于回答“内存布局是否相同”。当结果为否时，
+//! guest 仍需在重载后保留用户数据。单一的 `postcard` 二进制块无法做到这一点：
+//! 在末尾新增一个字段会改变后续所有字节偏移，且缺失字段与损坏数据无法区分。
 //!
-//! The envelope here is the smallest format that survives both:
+//! 此处的信封（envelope）格式是能同时解决这两个问题的最小封装：
+//!
+//!
 //!
 //! ```text
 //! "UBMF" | u16 version | u16 count | count × { u16 field_id, u32 len, len bytes }
 //! ```
 //!
-//! * Fields are encoded one by one by the guest (each with `postcard`), so a
-//!   field can be added or removed independently.
-//! * [`migrate`] reorders, drops unknown fields and fills new ones from a
-//!   declared default.
-//! * A missing **required** field is an error, not a silently zeroed value —
-//!   the host can then fall back to a fresh state and say so.
+//! * 各字段由 guest 逐一编码（均使用 `postcard`），从而可独立增删字段。
+//! * [`migrate`] 会重排字段、丢弃未知字段，并用声明的默认值填充新字段。
+//! * 缺失**必需**字段将返回错误，而非静默清零——host 可据此回退到初始状态并给出提示。
+//! *
 //!
-//! The format is intentionally boring: fixed-width little-endian headers and
-//! opaque payloads, so it can be parsed by a host-side tool without linking
-//! the guest.
+//!
+//!
+//! 该格式刻意保持朴素：固定宽度的小端序头部与不透明负载，
+//! 使 host 侧工具无需链接 guest 即可解析。
+//!
 
 use std::borrow::Cow;
 
-/// Envelope magic, `UBMF` ("Unbound migration format").
+/// 信封魔数，`UBMF`（"Unbound migration format"）。
 pub const MAGIC: [u8; 4] = *b"UBMF";
-/// The current envelope version.
+/// 当前信封版本号。
 pub const ENVELOPE_VERSION: u16 = 1;
 const HEADER_LEN: usize = 8;
 const RECORD_HEADER_LEN: usize = 6;
 
-/// One encoded field.
+/// 单个已编码字段。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Field<'a> {
-    /// The stable field id.
+    /// 稳定的字段 ID。
     pub id: u16,
-    /// The field payload, opaque to this crate.
+    /// 字段负载，对本 crate 不透明。
     pub bytes: &'a [u8],
 }
 
@@ -48,24 +48,24 @@ impl<'a> Field<'a> {
     }
 }
 
-/// Why decoding or migration failed.
+/// 解码或迁移失败的原因。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MigrationError {
-    /// The envelope is shorter than its header claims.
+    /// 信封长度小于头部声明的长度。
     Truncated,
-    /// The magic does not match [`MAGIC`].
+    /// 魔数与 [`MAGIC`] 不匹配。
     BadMagic,
-    /// The envelope version is newer than this build understands.
+    /// 信封版本高于当前构建所能理解的版本。
     UnsupportedVersion(u16),
-    /// The same field id appeared twice.
+    /// 同一字段 ID 出现了两次。
     DuplicateField(u16),
-    /// Bytes remain after the last record.
+    /// 最后一条记录之后仍有剩余字节。
     TrailingBytes,
-    /// The record count does not fit the `u16` header.
+    /// 记录数量超出 `u16` 头部表示范围。
     TooManyFields,
-    /// A payload does not fit the `u32` length field.
+    /// 某条负载超出 `u32` 长度字段表示范围。
     FieldTooLarge,
-    /// A required field is absent from the payload.
+    /// 负载中缺少必需字段。
     MissingField(u16),
 }
 
@@ -88,11 +88,11 @@ impl core::fmt::Display for MigrationError {
 
 impl std::error::Error for MigrationError {}
 
-/// Encode fields into an envelope.
+/// 将字段列表编码为信封格式。
 ///
 /// # Errors
-/// Returns [`MigrationError::TooManyFields`] or [`MigrationError::FieldTooLarge`]
-/// when the payload cannot be represented by the header.
+/// 当负载无法由头部表示时，返回 [`MigrationError::TooManyFields`] 或
+/// [`MigrationError::FieldTooLarge`]。
 pub fn encode(fields: &[Field<'_>]) -> Result<Vec<u8>, MigrationError> {
     let count = u16::try_from(fields.len()).map_err(|_| MigrationError::TooManyFields)?;
     let total = fields.iter().try_fold(HEADER_LEN, |total, field| {
@@ -114,11 +114,11 @@ pub fn encode(fields: &[Field<'_>]) -> Result<Vec<u8>, MigrationError> {
     Ok(out)
 }
 
-/// Decode an envelope without interpreting the payloads.
+/// 在不解析具体负载的前提下解码信封。
 ///
 /// # Errors
-/// Returns a [`MigrationError`] when the payload is corrupt, uses an unknown
-/// version, repeats a field id, or has trailing bytes.
+/// 当负载损坏、版本未知、字段 ID 重复或存在尾部多余字节时，返回 [`MigrationError`]。
+///
 pub fn decode(bytes: &[u8]) -> Result<Vec<Field<'_>>, MigrationError> {
     if bytes.len() < HEADER_LEN {
         return Err(MigrationError::Truncated);
@@ -161,23 +161,23 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Field<'_>>, MigrationError> {
     Ok(fields)
 }
 
-/// The expected shape of one field.
+/// 单个字段的期望形态。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct FieldSpec {
-    /// The stable field id.
+    /// 稳定的字段 ID。
     pub id: u16,
-    /// A payload to use when the id is absent. `None` makes it required.
+    /// ID 缺失时使用的默认负载；为 `None` 表示必需字段。
     pub default: Option<&'static [u8]>,
 }
 
 impl FieldSpec {
-    /// A field that must exist in the payload.
+    /// 负载中必须存在的字段。
     #[must_use]
     pub const fn required(id: u16) -> Self {
         Self { id, default: None }
     }
 
-    /// A field that may be absent; `default` is used when it is.
+    /// 允许缺失的字段；缺失时使用 `default`。
     #[must_use]
     pub const fn optional(id: u16, default: &'static [u8]) -> Self {
         Self {
@@ -187,26 +187,26 @@ impl FieldSpec {
     }
 }
 
-/// One field after migration.
+/// 迁移后的单个字段。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MigratedField<'a> {
-    /// The stable field id.
+    /// 稳定的字段 ID。
     pub id: u16,
-    /// The field payload.
+    /// 字段负载。
     pub bytes: Cow<'a, [u8]>,
-    /// Whether [`FieldSpec::default`] supplied the payload.
+    /// 该负载是否由 [`FieldSpec::default`] 提供。
     pub from_default: bool,
 }
 
-/// Reorder, drop and fill fields according to `schema`.
+/// 按 `schema` 重排、丢弃并填充字段。
 ///
-/// Unknown ids are dropped, schema order is preserved, and new fields take
-/// their defaults. This is the function a new guest calls on the bytes the old
-/// guest exported.
+/// 未知 ID 会被丢弃，保留 schema 顺序，新字段取其默认值。
+/// 新版 guest 会对旧版 guest 导出的字节调用此函数。
+///
 ///
 /// # Errors
-/// Returns [`MigrationError::MissingField`] when a required field is absent,
-/// and the same structural errors as [`decode`].
+/// 缺少必需字段时返回 [`MigrationError::MissingField`]，
+/// 结构性错误同 [`decode`]。
 pub fn migrate<'a>(
     bytes: &'a [u8],
     schema: &[FieldSpec],
@@ -233,20 +233,20 @@ pub fn migrate<'a>(
     Ok(out)
 }
 
-/// Length of the list header, a `u32` item count.
+/// 列表头部长度，即 `u32` 元素计数。
 const LIST_HEADER_LEN: usize = 4;
-/// Length of one item's `u32` envelope length.
+/// 单个元素 `u32` 信封长度字段的字节数。
 const ITEM_LENGTH_LEN: usize = 4;
 
-/// Encode a collection as `u32 count | count × (u32 length | UBMF envelope)`.
+/// 将集合编码为 `u32 count | count × (u32 length | UBMF envelope)`。
 ///
-/// The nesting is what keeps `Row` changes cheap: each item is its own
-/// field-tagged envelope, so adding a field to one row does not shift the
-/// bytes of any other row, and the decoder can migrate every item
-/// independently.
+/// 这种嵌套结构使 `Row` 变更开销极低：每个元素各自拥有带字段标签的信封，
+/// 因此向某一行新增字段不会移动其他行的字节偏移，解码器可独立迁移每一项。
+///
 ///
 /// # Errors
-/// Propagates the encoder's and [`encode`]'s errors.
+/// 透传编码器与 [`encode`] 返回的错误。
+///
 pub fn encode_list<T, F>(items: &[T], mut encode_item: F) -> Result<Vec<u8>, MigrationError>
 where
     F: FnMut(&T) -> Result<Vec<u8>, MigrationError>,
@@ -263,15 +263,15 @@ where
     Ok(out)
 }
 
-/// Decode and migrate a list encoded by [`encode_list`].
+/// 解码并迁移由 [`encode_list`] 编码的列表。
 ///
-/// Every item is migrated against `item_schema` on its own, so a field added
-/// to the item takes its default and a field removed from it is dropped
-/// without touching the neighbouring items.
+/// 每一项均独立按 `item_schema` 迁移，因此新增字段会取默认值，
+/// 移除字段会被丢弃，且不影响相邻元素。
+///
 ///
 /// # Errors
-/// Returns a structural [`MigrationError`] when the list is truncated, has
-/// trailing bytes, or when any item fails to migrate.
+/// 当列表被截断、存在尾部多余字节或任意元素迁移失败时，返回结构性 [`MigrationError`]。
+///
 pub fn migrate_list<T, F>(
     bytes: &[u8],
     item_schema: &[FieldSpec],
@@ -285,7 +285,7 @@ where
     }
     let count = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
     let mut offset = LIST_HEADER_LEN;
-    // A corrupt count must not reserve gigabytes up front.
+    // 损坏的计数不得预先分配数 GB 内存。
     let mut items = Vec::with_capacity(count.min(4096));
     for _ in 0..count {
         if bytes.len() - offset < ITEM_LENGTH_LEN {
@@ -401,14 +401,14 @@ mod tests {
     #[test]
     fn a_field_length_cannot_exceed_the_header() {
         let mut bytes = encode(&[]).unwrap();
-        // One record claiming a 0xFFFF_FFFF byte payload.
+        // 一条声称拥有 0xFFFF_FFFF 字节负载的记录。
         bytes[6] = 1;
         bytes.extend_from_slice(&1u16.to_le_bytes());
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(decode(&bytes), Err(MigrationError::Truncated));
     }
 
-    // ---- nested lists ---------------------------------------------------
+    // ---- 嵌套列表 ---------------------------------------------------
 
     #[derive(Debug, PartialEq)]
     struct Item {
@@ -492,7 +492,7 @@ mod tests {
             Err(MigrationError::Truncated)
         );
 
-        // A huge declared count must not be trusted before the bytes are read.
+        // 读取字节前绝不可轻信声明的超大计数。
         let mut lie = vec![0xFF, 0xFF, 0xFF, 0xFF];
         lie.extend_from_slice(&0u32.to_le_bytes());
         assert_eq!(

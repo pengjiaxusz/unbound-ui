@@ -1,4 +1,4 @@
-//! Stepper / Wizard progress indicator with horizontal and vertical layouts.
+//! Stepper / 向导步骤进度指示器，支持水平与垂直布局。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -14,41 +14,41 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_STEP_SLOTS: usize = 5;
 
-/// Completion status of a step.
+/// 单个步骤的完成状态。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum StepStatus {
-    /// Not yet reached.
+    /// 尚未到达。
     #[default]
     Pending,
-    /// Currently active step.
+    /// 当前激活步骤。
     Active,
-    /// Successfully completed.
+    /// 已成功完成。
     Completed,
-    /// Validation or execution error.
+    /// 校验或执行出错。
     Error,
 }
 
-/// Layout orientation of a stepper.
+/// 步骤条的布局方向。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum StepperOrientation {
-    /// Steps arranged left to right.
+    /// 步骤从左到右排列。
     #[default]
     Horizontal,
-    /// Steps arranged top to bottom.
+    /// 步骤从上到下排列。
     Vertical,
 }
 
-/// Single step descriptor.
+/// 单个步骤描述符。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StepItem {
-    /// Step title.
+    /// 步骤标题。
     pub title: String,
-    /// Step status.
+    /// 步骤状态。
     pub status: StepStatus,
 }
 
 impl StepItem {
-    /// Create a step item.
+    /// 创建步骤项。
     #[must_use]
     pub fn new(title: impl Into<String>, status: StepStatus) -> Self {
         Self {
@@ -58,23 +58,23 @@ impl StepItem {
     }
 }
 
-/// Descriptor for a [`Stepper`].
+/// [`Stepper`] 的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct StepperDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Steps (up to 5 rendered slots).
+    /// 步骤列表（最多渲染 5 个槽位）。
     pub steps: Vec<StepItem>,
-    /// Orientation.
+    /// 排列方向。
     pub orientation: StepperOrientation,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl StepperDesc {
-    /// Create a horizontal stepper descriptor.
+    /// 创建水平步骤条描述符。
     #[must_use]
     pub fn new(rect: Rect, steps: Vec<StepItem>) -> Self {
         Self {
@@ -86,7 +86,7 @@ impl StepperDesc {
         }
     }
 
-    /// Set orientation.
+    /// 设置排列方向。
     #[must_use]
     pub fn with_orientation(mut self, orientation: StepperOrientation) -> Self {
         self.orientation = orientation;
@@ -94,13 +94,13 @@ impl StepperDesc {
     }
 }
 
-/// Deterministic sub-node id for a stepper step node (`0..5`).
+/// 步骤节点的确定性子节点 ID（`0..5`）。
 #[must_use]
 pub const fn stepper_step_node(node: u64, index: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xD00 + index as u64)
 }
 
-/// Emit a stable-shape stepper (1 bg + 4 connectors + 5 step nodes + 1 focus ring = 11 primitives).
+/// 输出结构稳定的步骤条（1 个背景 + 4 条连接线 + 5 个步骤节点 + 1 个焦点环 = 11 个图元）。
 #[must_use]
 pub fn emit_stepper(
     node: u64,

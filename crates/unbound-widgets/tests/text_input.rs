@@ -1,9 +1,9 @@
-//! End-to-end text-input behaviour through the real hit-tester.
+//! 通过真实命中测试器的端到端文本输入行为测试。
 //!
-//! The unit tests in `text_input.rs` cover the reducer in isolation. These
-//! tests install the emitted hit region and semantic node into a `TestApp`, so
-//! clicking, the text cursor and the accessible value are exercised through the
-//! same path the windowed shell uses.
+//! `text_input.rs` 中的单元测试独立覆盖归约器。
+//! 本测试将输出的命中区域与语义节点安装到 `TestApp` 中，
+//! 从而沿用与窗口外壳相同的路径验证点击、文本光标与无障碍值。
+//!
 
 use unbound_headless::driver::TestApp;
 use unbound_input::CursorKind;

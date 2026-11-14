@@ -1,8 +1,8 @@
-//! Popover arrows and the portal child scope.
+//! 气泡框箭头与 Portal 子作用域测试。
 //!
-//! `show_arrow` adds two Bézier edges that meet at [`PlacedPopup::arrow_tip`],
-//! and `emit_popover_scope` collects children inside the popover clip while
-//! lifting them onto the portal hit-test layer.
+//! `show_arrow` 添加两条在 [`PlacedPopup::arrow_tip`] 交汇的贝塞尔边，
+//! `emit_popover_scope` 则在气泡裁剪区域内收集子元素并将其提升到 Portal 命中测试层。
+//!
 
 use unbound_gpu::data::{PrimType, CLIP_NONE};
 use unbound_math::{Rect, Vec2};
@@ -100,7 +100,7 @@ fn the_scope_clips_children_and_lifts_them_onto_the_portal_layer() {
         ]
     );
 
-    // The container itself is not clipped, but the child is.
+    // 容器自身不被裁剪，但子元素会被裁剪。
     let container = collector.span(1).expect("container emitted");
     assert!(container
         .iter()
@@ -113,7 +113,7 @@ fn the_scope_clips_children_and_lifts_them_onto_the_portal_layer() {
         "every child primitive inherits the popover clip"
     );
 
-    // Children are lifted above the base UI for hit-testing.
+    // 子元素被提升到基础界面之上参与命中测试。
     let region = collector
         .regions
         .iter()

@@ -1,4 +1,4 @@
-//! The checkbox: a square that carries a check mark.
+//! 复选框（Checkbox）：带有勾选标记的方框控件。
 
 use accesskit::{Role, Toggled};
 use unbound_a11y::A11yNode;
@@ -12,44 +12,43 @@ use crate::primitive::{focus_ring, glyphs, instance, outlined};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// The default box size.
+/// 默认方框尺寸。
 pub const CHECKBOX_BOX: f32 = 18.0;
 
-/// The gap between the box and the label.
+/// 方框与标签之间的间距。
 pub const CHECKBOX_GAP: f32 = 28.0;
 
-/// The three positions of a checkbox.
+/// 复选框的三种状态。
 ///
-/// `Indeterminate` is the "some of my children are checked" state: a tri-state
-/// list uses it, and it must never be confused with "checked".
+/// `Indeterminate` 表示“部分子节点已选中”：三态列表使用该状态，绝不能与“已选中”混淆。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CheckState {
-    /// The box is empty.
+    /// 方框为空（未选中）。
     #[default]
     Unchecked,
-    /// The box carries a check mark.
+    /// 方框内带有勾选标记（已选中）。
     Checked,
-    /// The box carries a dash.
+    /// 方框内带有短横线（半选/不确定）。
     Indeterminate,
 }
 
 impl CheckState {
-    /// Whether the checkbox is fully checked.
+    /// 判断复选框是否处于完全选中状态。
     #[must_use]
     pub const fn is_checked(self) -> bool {
         matches!(self, Self::Checked)
     }
 
-    /// Whether the checkbox is in the mixed state.
+    /// 判断复选框是否处于混合（半选）状态。
     #[must_use]
     pub const fn is_indeterminate(self) -> bool {
         matches!(self, Self::Indeterminate)
     }
 
-    /// The AccessKit `Toggled` value this state maps to.
+    /// 该状态映射到的 AccessKit `Toggled` 值。
     ///
-    /// `Indeterminate` must reach assistive technology as `Mixed`, not as a
-    /// second "off": a screen reader has to announce a tri-state value.
+    /// `Indeterminate` 必须作为 `Mixed` 传递给辅助技术，而非第二个“关闭”：
+    /// 屏幕阅读器需要播报三态值。
     #[must_use]
     pub const fn toggled(self) -> Toggled {
         match self {
@@ -60,35 +59,35 @@ impl CheckState {
     }
 }
 
-/// The colour slots a checkbox paints with.
+/// 复选框绘制使用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CheckboxTokens {
-    /// The box while unchecked.
+    /// 未选中时的方框填充色。
     pub box_empty: Token,
-    /// The box while hovered.
+    /// 悬停时的方框填充色。
     pub box_hover: Token,
-    /// The box while checked.
+    /// 选中时的方框填充色。
     pub box_checked: Token,
-    /// The box while disabled.
+    /// 禁用时的方框填充色。
     pub box_disabled: Token,
-    /// The border of an unchecked box.
+    /// 未选中方框的边框色。
     pub border: Token,
-    /// The border of a disabled, unchecked box.
+    /// 禁用且未选中方框的边框色。
     pub border_disabled: Token,
-    /// The check mark.
+    /// 勾选标记颜色。
     pub mark: Token,
-    /// The check mark while disabled.
+    /// 禁用状态下的勾选标记颜色。
     pub mark_disabled: Token,
-    /// The label.
+    /// 标签文字颜色。
     pub label: Token,
-    /// The label while disabled.
+    /// 禁用状态下的标签文字颜色。
     pub label_disabled: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环颜色。
     pub focus_ring: Token,
 }
 
 impl CheckboxTokens {
-    /// The standard set.
+    /// 标准配色方案。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -107,25 +106,25 @@ impl CheckboxTokens {
     }
 }
 
-/// The pure data descriptor of a checkbox.
+/// 复选框的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CheckboxDesc {
-    /// The row the checkbox occupies.
+    /// 复选框所占的行矩形。
     pub rect: Rect,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The position of the box.
+    /// 方框状态。
     pub state: CheckState,
-    /// The box size.
+    /// 方框尺寸。
     pub box_size: f32,
-    /// The distance between the box and the label.
+    /// 方框与标签之间的距离。
     pub gap: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl CheckboxDesc {
-    /// A checkbox with the default metrics.
+    /// 使用默认度量的复选框。
     #[must_use]
     pub fn new(rect: Rect, label: impl Into<String>) -> Self {
         Self {
@@ -138,10 +137,9 @@ impl CheckboxDesc {
         }
     }
 
-    /// The same checkbox in another position.
+    /// 设置二态选中状态。
     ///
-    /// Kept as the boolean shortcut so existing callers compile unchanged;
-    /// tri-state callers use [`Self::with_state`].
+    /// 保留为布尔快捷方法以兼容既有调用方；三态调用方请使用 [`Self::with_state`]。
     #[must_use]
     pub fn with_checked(mut self, checked: bool) -> Self {
         self.state = if checked {
@@ -152,14 +150,14 @@ impl CheckboxDesc {
         self
     }
 
-    /// The same checkbox in an explicit position.
+    /// 显式设置三态位置。
     #[must_use]
     pub fn with_state(mut self, state: CheckState) -> Self {
         self.state = state;
         self
     }
 
-    /// The box rectangle: left-aligned, vertically centred in the row.
+    /// 方框矩形：在行内左对齐且垂直居中。
     #[must_use]
     pub fn box_rect(&self) -> Rect {
         Rect::new(
@@ -170,7 +168,7 @@ impl CheckboxDesc {
         )
     }
 
-    /// The label rectangle.
+    /// 标签矩形。
     #[must_use]
     pub fn label_rect(&self) -> Rect {
         Rect::new(
@@ -182,10 +180,10 @@ impl CheckboxDesc {
     }
 }
 
-/// Emit the checkbox: box, check mark, label and the focus ring.
+/// 发射复选框：包含方框、勾选标记、标签与焦点环。
 ///
-/// `mark` is kept for source compatibility; the mark is now drawn as vector
-/// primitives from [`CheckboxDesc::state`], so the glyph run is ignored.
+/// 保留 `mark` 参数以维持源码兼容性；标记现由 [`CheckboxDesc::state`]
+/// 直接绘制为矢量图元，因此会忽略该字形串。
 #[must_use]
 pub fn emit_checkbox(
     node: u64,
@@ -227,8 +225,8 @@ pub fn emit_checkbox(
     };
     primitives.push(outlined(box_rect, 4.0, fill, border, 1.0, 0.0, z));
 
-    // The mark is geometry, not a glyph: a font without `✓` still paints a
-    // correct checkbox, and the stroke thickness scales with the box.
+    // 标记使用几何图元而非字形：即使字体不含 `✓` 也能正确绘制复选框，
+    // 且描边粗细会随方框尺寸等比缩放。
     let mark = if disabled {
         tokens.mark_disabled
     } else {
@@ -247,8 +245,8 @@ pub fn emit_checkbox(
     };
     glyphs(label, label_color, z, &mut primitives, &mut payloads);
 
-    // The ring is always emitted: focus changes its opacity, not the
-    // pool's shape, so focus is a paint change and never a re-upload.
+    // 焦点环始终发射：聚焦仅改变其不透明度而非池结构，
+    // 因此聚焦仅是绘制属性变化，不会触发重新上传。
     primitives.push(focus_ring(
         box_rect.inflate(3.0),
         7.0,
@@ -268,8 +266,7 @@ pub fn emit_checkbox(
         .disabled(disabled);
     a11y.selected = desc.state.is_checked();
     if desc.state.is_indeterminate() {
-        // `A11yNode` carries the toggled value through `value`; the numeric
-        // mapping itself is exposed by [`CheckState::toggled`].
+        // `A11yNode` 通过 `value` 携带开关值；具体数值映射由 [`CheckState::toggled`] 提供。
         a11y.value = "mixed".to_owned();
     }
 
@@ -283,7 +280,7 @@ pub fn emit_checkbox(
     }
 }
 
-/// Two quadratic strokes forming a check mark.
+/// 构成勾选标记的两段二次曲线。
 fn check_mark(
     box_rect: Rect,
     color: Token,
@@ -317,7 +314,7 @@ fn check_mark(
     );
 }
 
-/// A single quadratic stroke, packed into its tight local box.
+/// 单段二次曲线描边，打包进紧凑的局部包围盒。
 fn curve_stroke(
     points: [[f32; 2]; 3],
     width: f32,
@@ -359,7 +356,7 @@ fn curve_stroke(
     primitives.push(primitive);
 }
 
-/// A rounded dash, the mixed-state mark.
+/// 圆角短横线，用于表示半选（混合）状态。
 fn indeterminate_dash(
     box_rect: Rect,
     color: Token,
@@ -386,7 +383,7 @@ fn indeterminate_dash(
 }
 
 impl CheckboxDesc {
-    /// The mixed-state accessibility value.
+    /// 混合状态的无障碍语义值。
     #[must_use]
     pub const fn toggled(&self) -> Toggled {
         self.state.toggled()

@@ -1,15 +1,13 @@
-//! Form layout, validation aggregation and "jump to the first error".
+//! 表单布局、校验聚合与“跳转至首个错误”。
 //!
-//! A form is not a control: it is the *composition* of labels, inputs and
-//! messages. This module owns the three things that are genuinely shared:
+//! 表单不是单个控件，而是标签、输入框与提示消息的*组合*。本模块负责三项真正共享的逻辑：
 //!
-//! * where each label, input and message goes ([`layout_form`]),
-//! * which field failed and what the message is ([`FormState`]), and
-//! * scrolling the first failure into view and focusing it.
+//! * 每个标签、输入框与消息的放置位置（[`layout_form`]），
+//! * 哪个字段校验失败以及错误消息是什么（[`FormState`]），
+//! * 将首个失败字段滚动到视野内并聚焦。
 //!
-//! Validation is circular-safe by construction: the reducer receives the
-//! results, not the widgets, so a field that validates using another field's
-//! value is just an application-level closure.
+//! 校验在结构上天然防循环依赖：reducer 接收的是校验结果而非控件本身，
+//! 因此依赖其他字段值的交叉校验只需编写一个应用级闭包即可。
 
 use accesskit::Role;
 use rustc_hash::FxHashMap;
@@ -23,44 +21,44 @@ use crate::primitive::{instance, surface};
 use crate::scroll::{ScrollState, ScrollViewDesc};
 use crate::WidgetOutput;
 
-/// The height of a standard input row.
+/// 标准输入行高度。
 pub const FORM_INPUT_HEIGHT: f32 = 36.0;
-/// The height of one text line inside a label or message.
+/// 标签或消息内单行文本的高度。
 pub const FORM_LINE: f32 = 18.0;
-/// The gap between a label and its input.
+/// 标签与输入框之间的间距。
 pub const FORM_LABEL_GAP: f32 = 6.0;
-/// The gap between fields.
+/// 字段之间的间距。
 pub const FORM_FIELD_GAP: f32 = 18.0;
-/// The gap between an input and its message.
+/// 输入框与消息之间的间距。
 pub const FORM_MESSAGE_GAP: f32 = 4.0;
 
-/// Where a label sits relative to its input.
+/// 标签相对于输入框的位置。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FormLayout {
-    /// Label above the input.
+    /// 标签位于输入框上方。
     #[default]
     Vertical,
-    /// Label to the left, in a fixed column.
+    /// 标签位于左侧固定列中。
     Horizontal,
 }
 
-/// The pure descriptor of one field.
+/// 单个字段的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct FormFieldDesc {
-    /// The field label.
+    /// 字段标签。
     pub label: String,
-    /// The field must be filled.
+    /// 字段是否必填。
     pub required: bool,
-    /// A short help line shown while there is no error.
+    /// 无错误时显示的简短帮助文本。
     pub help: String,
-    /// The layout used by this field.
+    /// 该字段使用的布局方式。
     pub layout: FormLayout,
-    /// The height of the input control.
+    /// 输入控件高度。
     pub input_height: f32,
 }
 
 impl FormFieldDesc {
-    /// A vertical field with the standard height.
+    /// 创建标准高度的垂直布局字段。
     #[must_use]
     pub fn new(label: impl Into<String>) -> Self {
         Self {
@@ -72,14 +70,14 @@ impl FormFieldDesc {
         }
     }
 
-    /// Mark the field as required.
+    /// 将字段标记为必填。
     #[must_use]
     pub fn required(mut self, required: bool) -> Self {
         self.required = required;
         self
     }
 
-    /// Attach a help line.
+    /// 附加帮助文本。
     #[must_use]
     pub fn help(mut self, help: impl Into<String>) -> Self {
         self.help = help.into();
@@ -87,38 +85,38 @@ impl FormFieldDesc {
     }
 }
 
-/// A field and its stable identity.
+/// 字段及其稳定标识。
 #[derive(Clone, Debug, PartialEq)]
 pub struct FormField {
-    /// The identity the application uses for validation results.
+    /// 应用程序用于关联校验结果的标识。
     pub key: u64,
-    /// The field's presentation.
+    /// 字段展示描述符。
     pub desc: FormFieldDesc,
 }
 
 impl FormField {
-    /// A field with an identity.
+    /// 创建带标识的字段。
     #[must_use]
     pub fn new(key: u64, desc: FormFieldDesc) -> Self {
         Self { key, desc }
     }
 }
 
-/// The pure descriptor of a form.
+/// 表单的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct FormDesc {
-    /// The form's content rectangle.
+    /// 表单内容矩形。
     pub rect: Rect,
-    /// The label column width in horizontal layouts.
+    /// 水平布局时的标签列宽度。
     pub label_width: f32,
-    /// The gap between fields.
+    /// 字段间距。
     pub spacing: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl FormDesc {
-    /// A form with the default metrics.
+    /// 使用默认度量的表单。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -130,24 +128,23 @@ impl FormDesc {
     }
 }
 
-/// The measured geometry of one field.
+/// 单个字段测量后的几何布局。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FormFieldLayout {
-    /// The identity of the field.
+    /// 字段标识。
     pub key: u64,
-    /// The label rectangle.
+    /// 标签矩形。
     pub label: Rect,
-    /// The reserved input rectangle.
+    /// 预留的输入框矩形。
     pub input: Rect,
-    /// The message rectangle (help or error).
+    /// 消息矩形（帮助文本或错误提示）。
     pub message: Rect,
 }
 
-/// Layout every field top to bottom.
+/// 从上到下布局所有字段。
 ///
-/// A field reserves a message line whenever it has help text; an error then
-/// replaces the help line instead of pushing the rest of the form down, which
-/// is what prevents a validation pass from making the layout jump.
+/// 只要字段带有帮助文本就会预留消息行；出错时错误提示直接替换帮助行，
+/// 而不会把表单其余部分向下推移，从而防止校验通过/失败时布局发生跳动。
 #[must_use]
 pub fn layout_form(desc: &FormDesc, fields: &[FormField]) -> Vec<FormFieldLayout> {
     let mut y = desc.rect.origin.y;
@@ -208,7 +205,7 @@ pub fn layout_form(desc: &FormDesc, fields: &[FormField]) -> Vec<FormFieldLayout
     layouts
 }
 
-/// The live validation state of a form.
+/// 表单的实时校验状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FormState {
     errors: FxHashMap<u64, String>,
@@ -216,31 +213,31 @@ pub struct FormState {
 }
 
 impl FormState {
-    /// A form with no errors.
+    /// 创建无错误的表单状态。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// The message for a field, if it failed.
+    /// 获取字段的错误消息（若校验失败）。
     #[must_use]
     pub fn error(&self, key: u64) -> Option<&str> {
         self.errors.get(&key).map(String::as_str)
     }
 
-    /// The field that should own focus.
+    /// 应当持有焦点的字段。
     #[must_use]
     pub fn focused(&self) -> Option<u64> {
         self.focused
     }
 
-    /// Whether every field passed.
+    /// 所有字段是否全部通过校验。
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.errors.is_empty()
     }
 
-    /// Record or clear one field's error.
+    /// 记录或清除单个字段的错误。
     pub fn set_error(&mut self, key: u64, message: Option<String>) -> bool {
         match message.filter(|message| !message.is_empty()) {
             Some(message) => {
@@ -251,12 +248,10 @@ impl FormState {
         }
     }
 
-    /// Replace every error from a validation pass.
+    /// 用一次校验的结果替换所有错误。
     ///
-    /// Returns the first failing field in form order and focuses it. The form
-    /// order is the caller's order, which is also visual order, so "first
-    /// error" means "top-most error" and not "first field that happened to
-    /// fail".
+    /// 按表单顺序返回首个失败字段并使其获得焦点。表单顺序即调用方传入顺序，
+    /// 也是视觉顺序，因此“首个错误”指“最上方的错误”，而非“恰好先失败的字段”。
     pub fn validate<I>(&mut self, results: I) -> Option<u64>
     where
         I: IntoIterator<Item = (u64, Option<String>)>,
@@ -273,12 +268,12 @@ impl FormState {
         first
     }
 
-    /// Focus a field.
+    /// 聚焦指定字段。
     pub fn focus(&mut self, key: u64) {
         self.focused = Some(key);
     }
 
-    /// The vertical offset needed to reveal `field` in `viewport`.
+    /// 在 `viewport` 中显露 `field` 所需的垂直滚动偏移量。
     #[must_use]
     pub fn reveal_offset(viewport: Rect, field: Rect) -> f32 {
         if field.origin.y < viewport.origin.y {
@@ -291,7 +286,7 @@ impl FormState {
     }
 }
 
-/// Scroll `field` into view, returning whether the offset changed.
+/// 将 `field` 滚动到视野内，返回偏移量是否发生变化。
 pub fn reveal_field(
     scroll: &mut ScrollState,
     viewport: Rect,
@@ -308,29 +303,29 @@ pub fn reveal_field(
     (scroll.target().y - before).abs() > f32::EPSILON
 }
 
-/// Type alias for a thread-safe custom field validator closure.
+/// 线程安全自定义字段校验器闭包的类型别名。
 pub type CustomValidatorFn = std::sync::Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
-/// Declarative validation rule for [`FormValidator`].
+/// [`FormValidator`] 的声明式校验规则。
 #[derive(Clone)]
 pub enum ValidationRule {
-    /// Value (trimmed) must be non-empty.
+    /// 值（去除首尾空白后）不能为空。
     Required { message: String },
-    /// Character count bounds.
+    /// 字符长度上下界。
     Length {
         min: Option<usize>,
         max: Option<usize>,
         message: String,
     },
-    /// Numeric `f64` value bounds.
+    /// `f64` 数值上下界。
     Range {
         min: Option<f64>,
         max: Option<f64>,
         message: String,
     },
-    /// Required substring/pattern match.
+    /// 必须包含的子串/模式匹配。
     Pattern { needle: String, message: String },
-    /// Custom validation closure returning `Some(error)` on failure.
+    /// 自定义校验闭包，失败时返回 `Some(error)`。
     Custom(CustomValidatorFn),
 }
 
@@ -363,20 +358,20 @@ impl std::fmt::Debug for ValidationRule {
     }
 }
 
-/// Composable validator chain for a form field.
+/// 表单字段的可组合校验器链。
 #[derive(Clone, Debug, Default)]
 pub struct FormValidator {
     rules: Vec<ValidationRule>,
 }
 
 impl FormValidator {
-    /// Create an empty validator (passes everything).
+    /// 创建空校验器（放行所有输入）。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Require non-empty input after trimming whitespace.
+    /// 要求去除空白后输入非空。
     #[must_use]
     pub fn required(mut self, message: impl Into<String>) -> Self {
         self.rules.push(ValidationRule::Required {
@@ -385,7 +380,7 @@ impl FormValidator {
         self
     }
 
-    /// Require minimum character length.
+    /// 要求最小字符长度。
     #[must_use]
     pub fn min_len(mut self, min: usize, message: impl Into<String>) -> Self {
         self.rules.push(ValidationRule::Length {
@@ -396,7 +391,7 @@ impl FormValidator {
         self
     }
 
-    /// Require maximum character length.
+    /// 要求最大字符长度。
     #[must_use]
     pub fn max_len(mut self, max: usize, message: impl Into<String>) -> Self {
         self.rules.push(ValidationRule::Length {
@@ -407,7 +402,7 @@ impl FormValidator {
         self
     }
 
-    /// Require a numeric value within `[min, max]`.
+    /// 要求数值位于 `[min, max]` 区间内。
     #[must_use]
     pub fn range(mut self, min: Option<f64>, max: Option<f64>, message: impl Into<String>) -> Self {
         self.rules.push(ValidationRule::Range {
@@ -418,7 +413,7 @@ impl FormValidator {
         self
     }
 
-    /// Require that the input contains `needle`.
+    /// 要求输入包含 `needle`。
     #[must_use]
     pub fn pattern(mut self, needle: impl Into<String>, message: impl Into<String>) -> Self {
         self.rules.push(ValidationRule::Pattern {
@@ -428,7 +423,7 @@ impl FormValidator {
         self
     }
 
-    /// Add a custom validator function.
+    /// 添加自定义校验函数。
     #[must_use]
     pub fn custom(mut self, f: impl Fn(&str) -> Option<String> + Send + Sync + 'static) -> Self {
         self.rules
@@ -436,7 +431,7 @@ impl FormValidator {
         self
     }
 
-    /// Evaluate all rules in order, returning the first failure message.
+    /// 按顺序评估所有规则，返回第一条失败消息。
     #[must_use]
     pub fn validate_value(&self, value: &str) -> Option<String> {
         for rule in &self.rules {
@@ -486,8 +481,7 @@ struct ManagedField {
     validator: FormValidator,
 }
 
-/// Stateful form controller tracking values, `touched`/`dirty` flags, validation,
-/// and first-error focus + scroll-into-view on submit.
+/// 有状态表单控制器，跟踪字段值、`touched`/`dirty` 标记、校验以及提交时的首个错误聚焦与滚动显露。
 #[derive(Clone, Debug, Default)]
 pub struct FormController {
     fields: Vec<ManagedField>,
@@ -496,13 +490,13 @@ pub struct FormController {
 }
 
 impl FormController {
-    /// Create a new empty [`FormController`].
+    /// 创建新的空 [`FormController`]。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Register (or update) a field with its initial value and validator.
+    /// 注册（或更新）字段及其初始值与校验器。
     pub fn register_field(
         &mut self,
         key: u64,
@@ -524,7 +518,7 @@ impl FormController {
         });
     }
 
-    /// Update a field's value, updating `dirty` and re-validating if touched or submitted.
+    /// 更新字段值，更新 `dirty` 标记，并在已触碰或已提交时重新校验。
     pub fn set_value(&mut self, key: u64, value: impl Into<String>) {
         let value = value.into();
         if let Some(field) = self.fields.iter_mut().find(|f| f.key == key) {
@@ -537,7 +531,7 @@ impl FormController {
         }
     }
 
-    /// Mark a field as touched (e.g. on blur) and run its validator.
+    /// 将字段标记为已触碰（例如失焦时）并运行其校验器。
     pub fn mark_touched(&mut self, key: u64) {
         if let Some(field) = self.fields.iter_mut().find(|f| f.key == key) {
             field.touched = true;
@@ -546,7 +540,7 @@ impl FormController {
         }
     }
 
-    /// Current value of `key`.
+    /// 获取 `key` 的当前值。
     #[must_use]
     pub fn value(&self, key: u64) -> Option<&str> {
         self.fields
@@ -555,7 +549,7 @@ impl FormController {
             .map(|f| f.value.as_str())
     }
 
-    /// Whether `key` has been touched.
+    /// 判断 `key` 是否已被触碰。
     #[must_use]
     pub fn is_touched(&self, key: u64) -> bool {
         self.fields
@@ -564,7 +558,7 @@ impl FormController {
             .is_some_and(|f| f.touched)
     }
 
-    /// Whether `key` differs from its initial value.
+    /// 判断 `key` 是否与初始值不同。
     #[must_use]
     pub fn is_dirty(&self, key: u64) -> bool {
         self.fields
@@ -573,13 +567,13 @@ impl FormController {
             .is_some_and(|f| f.dirty)
     }
 
-    /// Whether any field in the form is dirty.
+    /// 判断表单中是否存在任何已修改字段。
     #[must_use]
     pub fn any_dirty(&self) -> bool {
         self.fields.iter().any(|f| f.dirty)
     }
 
-    /// Reset all fields to their initial values, clearing errors and dirty/touched flags.
+    /// 将所有字段重置为初始值，清除错误与 `dirty`/`touched` 标记。
     pub fn reset(&mut self) {
         self.submitted = false;
         for field in &mut self.fields {
@@ -591,18 +585,18 @@ impl FormController {
         self.state.validate(empty);
     }
 
-    /// Borrow the underlying [`FormState`] for rendering and error lookup.
+    /// 借用底层 [`FormState`] 用于渲染与错误查询。
     #[must_use]
     pub fn state(&self) -> &FormState {
         &self.state
     }
 
-    /// Mutably borrow the underlying [`FormState`].
+    /// 可变借用底层 [`FormState`]。
     pub fn state_mut(&mut self) -> &mut FormState {
         &mut self.state
     }
 
-    /// Validate all fields in order, focus the first error, and optionally scroll it into view.
+    /// 按顺序校验所有字段，聚焦首个错误并可选将其滚动到视野内。
     pub fn submit(
         &mut self,
         layouts: &[FormFieldLayout],
@@ -627,7 +621,7 @@ impl FormController {
     }
 }
 
-/// The required marker as a two-primitive dot: no glyphs needed.
+/// 以双图元圆点绘制的必填标记：无需字形。
 #[must_use]
 pub fn required_marker(rect: Rect, z: u16) -> Vec<GpuPrimitiveInstance> {
     vec![
@@ -666,10 +660,10 @@ pub fn required_marker(rect: Rect, z: u16) -> Vec<GpuPrimitiveInstance> {
     ]
 }
 
-/// The semantic root of a form.
+/// 表单的语义根节点。
 ///
-/// Screen readers announce the group once and then its labelled children, so
-/// the form itself is a `Form` node with no hit region and no focus slot.
+/// 屏幕阅读器会先播报一次表单分组再逐个播报带标签的子控件，
+/// 因此表单自身是无命中区域、无焦点槽位的 `Form` 节点。
 #[must_use]
 pub fn emit_form_root(rect: Rect, label: impl Into<String>) -> WidgetOutput {
     WidgetOutput {
@@ -678,7 +672,7 @@ pub fn emit_form_root(rect: Rect, label: impl Into<String>) -> WidgetOutput {
     }
 }
 
-/// Emit a field label with its required marker.
+/// 发射字段标签及其必填标记。
 #[must_use]
 pub fn emit_form_label(
     field: &FormField,
@@ -711,10 +705,9 @@ pub fn emit_form_label(
     }
 }
 
-/// Emit the message line for one field.
+/// 发射单个字段的消息行。
 ///
-/// An error gets a filled surface and an error-coloured underline; help text
-/// stays flat. The caller's glyphs are tinted accordingly.
+/// 错误消息带有填充表面与错误色下划线；帮助文本保持扁平。调用方的字形会据此着色。
 #[must_use]
 pub fn emit_form_message(
     field: &FormField,

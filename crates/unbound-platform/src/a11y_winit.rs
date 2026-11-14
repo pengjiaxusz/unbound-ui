@@ -1,14 +1,14 @@
-//! The real platform accessibility adapter (AccessKit + winit).
+//! 真实平台无障碍适配器（AccessKit + winit）。
 //!
-//! [`super::a11y_bridge`] owns the engine-side contract; this module is the
-//! transport that makes it reach the OS. The adapter is created *before* the
-//! window is shown (AccessKit's requirement), publishes one incremental
-//! `TreeUpdate` per dirty frame, and queues incoming `ActionRequest`s on a
-//! channel that the event loop drains — handlers may be called on any thread,
-//! so they cannot touch the application state directly.
+//! [`super::a11y_bridge`] 定义引擎侧契约；本模块负责将其送达操作系统。
+//! 适配器必须在窗口显示**之前**创建（AccessKit 的硬性要求），每个脏帧发布
+//! 一条增量 `TreeUpdate`，并将传入的 `ActionRequest` 排入通道由事件循环排空——
+//! 回调可能在任意线程上被调用，因此不能直接触碰应用状态。
 //!
-//! When no assistive technology is listening, `update_if_active` never calls
-//! the updater: a static frame costs no system call.
+//!
+//!
+//! 当没有辅助技术监听时，`update_if_active` 绝不会调用更新回调：
+//! 静止帧零系统调用开销。
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 
@@ -17,17 +17,17 @@ use unbound_a11y::Semantics;
 
 use super::a11y_bridge::{engine_action, A11yRequest};
 
-/// The inbound half: requests coming from the OS.
+/// 入站通道半端：接收来自操作系统的请求。
 ///
-/// `std::sync::mpsc::Sender` is `Send` but not `Sync`; the adapter only asks
-/// for `Send`, so wrapping it keeps the bound satisfied without changing the
-/// channel semantics.
+/// `std::sync::mpsc::Sender` 满足 `Send` 但非 `Sync`；适配器仅要求 `Send`，
+/// 因此将其封装可在不改变通道语义的前提下满足 trait 约束。
+///
 struct RequestSender(Sender<ActionRequest>);
 
 impl ActionHandler for RequestSender {
     fn do_action(&mut self, request: ActionRequest) {
-        // A closed channel means the window is gone; dropping the request is
-        // the only sane response.
+        // 通道已关闭意味着窗口已销毁；丢弃该请求是唯一合理的处理方式。
+        //
         let _ = self.0.send(request);
     }
 }
@@ -36,9 +36,9 @@ struct Activation;
 
 impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        // The application publishes a full tree on the first frame through
-        // `publish`; returning `None` lets the platform use a placeholder
-        // until that frame lands.
+        // 应用在首帧通过 `publish` 发布完整语义树；此处返回 `None` 让平台在
+        // 首帧落地前先使用占位树。
+        //
         None
     }
 }
@@ -49,7 +49,7 @@ impl DeactivationHandler for Deactivation {
     fn deactivate_accessibility(&mut self) {}
 }
 
-/// The window's accessibility adapter.
+/// 窗口的无障碍适配器。
 pub struct WinitA11y {
     adapter: accesskit_winit::Adapter,
     requests: Receiver<ActionRequest>,
@@ -57,11 +57,11 @@ pub struct WinitA11y {
 }
 
 impl WinitA11y {
-    /// Create the adapter for a window that is still invisible.
+    /// 为尚处于隐藏状态的窗口创建适配器。
     ///
     /// # Panics
-    /// AccessKit panics when the window is already visible; the backend
-    /// therefore creates the window hidden and shows it afterwards.
+    /// 若窗口已显示，AccessKit 会 panic；因此后端先创建隐藏窗口，随后再显示。
+    ///
     #[must_use]
     pub fn new(
         event_loop: &winit::event_loop::ActiveEventLoop,
@@ -82,10 +82,10 @@ impl WinitA11y {
         }
     }
 
-    /// Feed one window event to the adapter.
+    /// 向适配器送入一条窗口事件。
     ///
-    /// Must be called before the event is handled by the application, so the
-    /// adapter sees the same event stream the UI does.
+    /// 必须在应用处理该事件前调用，确保适配器看到与 UI 完全相同的事件流。
+    ///
     pub fn process_event(
         &mut self,
         window: &winit::window::Window,
@@ -94,12 +94,12 @@ impl WinitA11y {
         self.adapter.process_event(window, event);
     }
 
-    /// Publish the pending semantic delta, if an assistive technology is
-    /// listening.
+    /// 若有辅助技术正在监听，则发布待处理的语义增量。
     ///
-    /// Returns whether an update crossed the boundary. `take_update` is only
-    /// called when the tree actually has pending changes, so a static frame
-    /// allocates nothing.
+    /// 返回是否有更新跨越边界。仅当语义树确实存在待处理变更时才调用 `take_update`，
+    /// 因此静止帧零堆分配。
+    ///
+    ///
     pub fn publish(&mut self, semantics: &mut Semantics) -> bool {
         if semantics.pending() == 0 {
             return false;
@@ -112,9 +112,9 @@ impl WinitA11y {
         true
     }
 
-    /// Publish through a closure, so the caller can build the update lazily
-    /// inside `update_if_active` (the tree is not consumed when no client is
-    /// listening).
+    /// 通过闭包发布，使调用方可在 `update_if_active` 内部惰性构建更新
+    /// （无客户端监听时不会消费语义树）。
+    ///
     pub fn publish_with(&mut self, update: impl FnOnce() -> Option<TreeUpdate>) -> bool {
         let Some(update) = update() else {
             return false;
@@ -124,7 +124,7 @@ impl WinitA11y {
         true
     }
 
-    /// Drain the action requests the OS queued since the last frame.
+    /// 排空自上一帧以来操作系统排入队列的动作请求。
     #[must_use]
     pub fn drain_requests(&mut self) -> Vec<A11yRequest> {
         let mut out = Vec::new();
@@ -144,7 +144,7 @@ impl WinitA11y {
         out
     }
 
-    /// How many updates crossed the boundary.
+    /// 跨越边界的更新总次数。
     #[must_use]
     pub fn published(&self) -> u64 {
         self.published

@@ -1,41 +1,30 @@
-//! Standard controls: the vocabulary every widget speaks.
+//! 标准控件库：所有组件共同遵循的语义词汇表。
 //!
-//! The crate sits between the engine's capability crates and the application
-//! layer. It owns the *control* semantics — a pure descriptor, a visual state
-//! derived from the input router, and a scene emission — but no windowing, no
-//! layout solving and no application state.
+//! 本 crate 位于引擎能力层与应用程序层之间。它负责*控件*语义——纯描述符、
+//! 派生自输入路由器的视觉状态与场景发射——但不涉及窗口管理、布局求解或应用状态。
 //!
-//! Three rules hold for every control in this crate:
+//! 本 crate 中的所有控件均遵守三条原则：
 //!
-//! 1. **No interaction booleans.** A widget never stores "am I hovered".
-//!    [`ControlState::resolve`] derives the phase from the
-//!    [`unbound_input::Router`] on every frame, so a pointer that leaves the
-//!    widget while captured still reads as *pressed*.
-//! 2. **No closures, no type erasure.** A control is a plain data struct plus
-//!    a pure function that turns `(descriptor, state)` into primitives, a hit
-//!    region and a semantic node.
-//! 3. **Colours are tokens, never literals.** A widget names
-//!    [`unbound_theme::Token`] slots; the theme decides what they resolve to.
-//!    A theme switch therefore never re-uploads a single primitive.
+//! 1. **禁止交互布尔标志。** 控件绝不存储“我是否悬停”。[`ControlState::resolve`]
+//!    每帧从 [`unbound_input::Router`] 派生交互阶段，因此指针在捕获状态下离开控件时仍保持*按下*。
+//! 2. **无闭包、无类型擦除。** 控件是纯数据结构体加纯函数，将 `(descriptor, state)`
+//!    转换为图元、命中区域与语义节点。
+//! 3. **颜色皆为令牌，绝非字面量。** 控件仅引用 [`unbound_theme::Token`] 槽位；
+//!    具体颜色由主题决定。因此切换主题绝不会重新上传任何图元。
 //!
-//! [`app-guest`](../../app_guest) still depends on [`unbound_abi`] alone, so a
-//! guest application may host these controls without pulling in the engine.
+//! [`app-guest`](../../app_guest) 仍仅依赖 [`unbound_abi`]，因此客体应用无需引入引擎即可宿主这些控件。
 
-// Infrastructure modules: scene diffing and primitive packing helpers. They
-// are not business components, so they stay out of the showcase catalog.
+// 基础设施模块：场景差分与图元打包辅助工具。它们不属于业务组件，因此不纳入展示目录。
 pub mod catalog;
 pub mod diff;
 pub mod ergonomics;
 pub mod primitive;
 
-/// Declare every business component module and derive the exhaustive catalog.
+/// 声明所有业务组件模块并派生穷举目录。
 ///
-/// The macro is the single source of truth for the component vocabulary: it
-/// emits the `pub mod` declarations *and* the [`WidgetCatalogId`] enum. Because
-/// the enum has no `#[non_exhaustive]` marker, every downstream `match` over it
-/// (the stable-shape probe, the showcase coverage gate) must name every variant
-/// — adding a module here without wiring it into those matches is a compile
-/// error (`E0004`), not a silently uncovered component.
+/// 该宏是组件词汇表的单一事实来源：它同时生成 `pub mod` 声明*和* [`WidgetCatalogId`] 枚举。
+/// 由于该枚举未标记 `#[non_exhaustive]`，下游每次对它的 `match`（稳定形状探针、展示覆盖率门禁）
+/// 都必须列出所有变体——在此添加模块而未接入这些匹配分支将触发编译错误（`E0004`），而非静默遗漏。
 macro_rules! define_widget_catalog {
     (
         modules: [ $( $module:ident ),+ $(,)? ],
@@ -43,25 +32,25 @@ macro_rules! define_widget_catalog {
     ) => {
         $( pub mod $module; )+
 
-        /// One variant per business component or sub-component surface.
+        /// 每个业务组件或子组件表面对应一个变体。
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
         pub enum WidgetCatalogId {
             $( $variant, )+
         }
 
         impl WidgetCatalogId {
-            /// Every component, in declaration order.
+            /// 按声明顺序列出的所有组件。
             pub const ALL: &'static [Self] = &[ $( Self::$variant ),+ ];
-            /// The number of business components.
+            /// 业务组件总数。
             pub const COUNT: usize = Self::ALL.len();
 
-            /// The source module that implements this component.
+            /// 实现该组件的源码模块名。
             #[must_use]
             pub const fn module_name(self) -> &'static str {
                 match self { $( Self::$variant => stringify!($cat_module), )+ }
             }
 
-            /// The component at `index` in [`Self::ALL`].
+            /// [`Self::ALL`] 中位于 `index` 处的组件。
             #[must_use]
             pub const fn from_index(index: usize) -> Self {
                 Self::ALL[index]
@@ -264,12 +253,10 @@ define_widget_catalog! {
     ],
 }
 
-/// Proof that a component was really emitted, not faked with a hand-drawn rect.
+/// 证明组件确实通过真实发射器生成，而非手绘矩形伪造。
 ///
-/// The constructor is `pub(crate)`: only `unbound-widgets` itself can mint a
-/// witness, by running the component's genuine emitter through the catalog
-/// probe. An application cannot forge one, so a showcase branch that returns a
-/// witness has demonstrably called the real component.
+/// 构造函数为 `pub(crate)`：只有 `unbound-widgets` 自身能通过目录探针运行真实发射器并铸造见证。
+/// 应用程序无法伪造该见证，因此返回见证的展示分支可确定已调用真实组件。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct WidgetShowcaseWitness {
     id: WidgetCatalogId,
@@ -280,7 +267,7 @@ impl WidgetShowcaseWitness {
         Self { id }
     }
 
-    /// The component this witness proves was emitted.
+    /// 此见证所证明已发射的组件。
     #[must_use]
     pub const fn id(self) -> WidgetCatalogId {
         self.id
@@ -513,46 +500,43 @@ pub use virtual_masonry::{emit_virtual_masonry, VirtualMasonryDesc, VirtualMason
 pub use virtual_views::{emit_virtual_row, VariableVirtualList, VariableWindow, VirtualRowTokens};
 pub use watermark::{emit_watermark, WatermarkDesc};
 
-/// The default viewport a headless widget session renders into.
+/// 无头控件会话渲染使用的默认视口。
 pub const DEFAULT_VIEWPORT: (f32, f32) = (1280.0, 720.0);
 
-/// Where the pointer is relative to a widget.
+/// 指针相对于控件的位置阶段。
 ///
-/// This is the *only* pointer dimension a control needs. Focus is a separate,
-/// orthogonal dimension ([`ControlState::focused`]): a button reached with the
-/// keyboard must show its focus ring even while the mouse hovers elsewhere.
+/// 这是控件唯一需要的指针维度。焦点是另一个正交维度（[`ControlState::focused`]）：
+/// 通过键盘到达的按钮即使在鼠标悬停于别处时也必须显示焦点环。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PointerPhase {
-    /// The pointer is not over the widget.
+    /// 指针不在控件上方。
     #[default]
     Idle,
-    /// The pointer is over the widget.
+    /// 指针位于控件上方。
     Hovered,
-    /// The pointer is over the widget and the button is down.
+    /// 指针位于控件上方且按键按下。
     Pressed,
 }
 
-/// The visual state of a control in one frame.
+/// 单帧内控件的视觉状态。
 ///
-/// Every field is derived, never stored: [`ControlState::resolve`] is the only
-/// constructor the engine uses.
+/// 每个字段均为派生值而非存储状态：[`ControlState::resolve`] 是引擎使用的唯一构造函数。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ControlState {
-    /// Where the pointer is relative to the widget.
+    /// 指针相对于控件的位置阶段。
     pub phase: PointerPhase,
-    /// Whether the widget holds keyboard focus.
+    /// 控件是否持有键盘焦点。
     pub focused: bool,
-    /// Whether the widget refuses interaction.
+    /// 控件是否禁用交互。
     pub disabled: bool,
-    /// Whether the widget is toggled on.
+    /// 控件是否处于开启（切换）状态。
     pub selected: bool,
 }
 
 impl ControlState {
-    /// Derive the state from the pointer router and the focus slot.
+    /// 从指针路由器与焦点槽位派生控件状态。
     ///
-    /// A disabled widget never shows a pointer phase: it is not a target, so
-    /// the pointer cannot be over it.
+    /// 禁用控件绝不显示指针阶段：它不是交互目标，因此指针不可能悬停其上。
     #[must_use]
     pub fn resolve(
         node_key: u64,
@@ -579,35 +563,32 @@ impl ControlState {
     }
 }
 
-/// What one control emits in one frame.
+/// 单个控件在单帧内发射的输出。
 ///
-/// The three parts are deliberately independent: a purely decorative widget
-/// emits no hit region, a widget that is not on screen emits no primitives,
-/// and a widget that is not reachable by assistive technology emits no
-/// semantic node.
+/// 三部分刻意保持独立：纯装饰控件不发射命中区域，不在屏幕内的控件不发射图元，
+/// 辅助技术不可达的控件不发射语义节点。
 #[derive(Clone, Debug, Default)]
 pub struct WidgetOutput {
-    /// The primitives, in draw order.
+    /// 按绘制顺序排列的图元。
     pub primitives: Vec<GpuPrimitiveInstance>,
-    /// The payloads the primitives refer to.
+    /// 图元引用的载荷数据。
     pub payloads: Vec<GpuPayload>,
-    /// The pickable surface, if the widget accepts input.
+    /// 可拾取表面（若控件接受输入）。
     pub hit: Option<HitRegion>,
-    /// Multi-part sub-hit regions (e.g. confirm/cancel buttons, close button, page items).
+    /// 多部件子命中区域（例如确认/取消按钮、关闭按钮、分页项）。
     pub sub_hits: smallvec::SmallVec<[HitRegion; 4]>,
-    /// The semantic node, if the widget is reachable.
+    /// 语义节点（若控件可达）。
     pub a11y: Option<A11yNode>,
-    /// Multi-part sub-semantic nodes `(child_key, A11yNode)`.
+    /// 多部件子语义节点 `(child_key, A11yNode)`。
     pub sub_a11y: smallvec::SmallVec<[(u64, A11yNode); 4]>,
-    /// Whether the widget takes part in the keyboard tab order.
+    /// 控件是否参与键盘 Tab 顺序。
     pub focusable: bool,
-    /// Inner focus order for multi-part widgets.
+    /// 多部件控件的内部焦点顺序。
     pub sub_focus_order: smallvec::SmallVec<[u64; 4]>,
 }
 
 impl WidgetOutput {
-    /// Register a sub-control (e.g. an inline confirm button or close button) with its own key,
-    /// hit region, accessibility node, and keyboard focusability.
+    /// 注册带独立键、命中区域、无障碍节点与键盘可聚焦性的子控件（例如行内确认按钮或关闭按钮）。
     pub fn with_sub_control(
         &mut self,
         sub_key: u64,
@@ -624,40 +605,37 @@ impl WidgetOutput {
     }
 }
 
-/// Collects the output of many widgets into one frame.
+/// 将多个控件的输出收集到同一帧中。
 ///
-/// The collector also records, for every widget, the half-open range of
-/// primitives it owns. That map is what makes a *local* repaint possible: a
-/// hover that changes five primitives can rewrite
-/// `primitives[start..end]` and upload just those bytes instead of the whole
-/// scene.
+/// 收集器还为每个控件记录其拥有的图元半开区间。该映射使*局部*重绘成为可能：
+/// 悬停若仅改变五个图元，只需重写 `primitives[start..end]` 并上传这些字节，而非重传整个场景。
 #[derive(Default)]
 pub struct SceneCollector {
-    /// The primitives, in draw order.
+    /// 按绘制顺序排列的图元。
     pub primitives: Vec<GpuPrimitiveInstance>,
-    /// The transform table.
+    /// 变换表。
     pub transforms: Vec<GpuTransform>,
-    /// The clip nodes.
+    /// 裁剪节点表。
     pub clips: Vec<GpuClipNode>,
-    /// The payloads the primitives refer to.
+    /// 图元引用的载荷数据。
     pub payloads: Vec<GpuPayload>,
-    /// The pickable surfaces.
+    /// 可拾取表面列表。
     pub regions: Vec<HitRegion>,
-    /// The semantic tree.
+    /// 语义树。
     pub semantics: Semantics,
-    /// The keyboard tab order.
+    /// 键盘 Tab 顺序。
     pub focus_order: Vec<u64>,
-    /// The primitive range each widget owns, keyed by widget identity.
+    /// 按控件标识索引的各自图元区间。
     pub node_spans: FxHashMap<u64, (u32, u32)>,
-    /// Backdrop-blur requests produced by overlays this frame.
+    /// 本帧浮层产生的背景模糊请求。
     pub backdrops: Vec<crate::overlay::BackdropRequest>,
-    /// Active clip scopes: `(clip index, screen-space bounds)`.
+    /// 当前激活的裁剪作用域：`(clip index, screen-space bounds)`。
     clip_stack: Vec<(u32, Rect)>,
-    /// Active transform scopes: `(transform index, cumulative translation)`.
+    /// 当前激活的变换作用域：`(transform index, cumulative translation)`。
     transform_stack: Vec<(u32, Vec2)>,
 }
 
-/// Rebuild a clip slot's `(centre, half-extent)` form into a rectangle.
+/// 将裁剪槽位的 `(centre, half-extent)` 形式还原为矩形。
 fn center_half_rect(slot: [f32; 4]) -> Rect {
     Rect::new(
         slot[0] - slot[2],
@@ -668,7 +646,7 @@ fn center_half_rect(slot: [f32; 4]) -> Rect {
 }
 
 impl SceneCollector {
-    /// An empty collector whose semantic tree is rooted at `root`.
+    /// 创建语义树以 `root` 为根的空收集器。
     #[must_use]
     pub fn new(root: u64) -> Self {
         Self {
@@ -677,7 +655,7 @@ impl SceneCollector {
         }
     }
 
-    /// Reset for a new frame, reusing every allocation.
+    /// 为新的一帧重置收集器，复用既有内存分配。
     pub fn reset(&mut self, root: u64) {
         self.primitives.clear();
         self.transforms.clear();
@@ -692,12 +670,10 @@ impl SceneCollector {
         self.semantics.reset(root);
     }
 
-    /// Open a clip scope for every widget pushed until [`Self::pop_clip`].
+    /// 为随后推入的所有控件开启裁剪作用域，直至调用 [`Self::pop_clip`]。
     ///
-    /// `node` describes the new clip; when a parent scope is active its
-    /// rounded slot is folded into `rounded_clip_1` and the effective bounds
-    /// become the intersection of both scopes. The returned index is what the
-    /// children's primitives reference.
+    /// `node` 描述新的裁剪区域；当存在父作用域时，其圆角槽位会折叠进 `rounded_clip_1`，
+    /// 有效边界取两者的交集。返回的索引供子图元引用。
     pub fn push_clip(&mut self, mut node: GpuClipNode, world_bounds: Rect) -> u32 {
         let mut bounds = world_bounds;
         if let Some(&(parent_idx, parent_bounds)) = self.clip_stack.last() {
@@ -719,11 +695,9 @@ impl SceneCollector {
             if let Some(parent) = self.clips.get(parent_idx as usize) {
                 node.rounded_clip_1 = parent.rounded_clip_0;
                 node.radii_1 = parent.radii_0;
-                // A fourth rounded ancestor would be dropped: fold its arc into
-                // the slot that survives so a 3+ level nest keeps its outer
-                // rounding instead of snapping to a square corner. A no-op
-                // slot has zero radii, so the projection leaves the kept slot
-                // untouched.
+                // 第四个圆角祖先会被丢弃：将其圆弧折叠进保留的槽位，
+                // 使 3 层以上嵌套仍保持外层圆角而非退化为直角。
+                // 无操作槽位的圆角半径为零，因此投影不会影响保留槽位。
                 let kept_rect = center_half_rect(node.rounded_clip_1);
                 let dropped_rect = center_half_rect(parent.rounded_clip_1);
                 let kept_radii = node.radii_1.map(f16_to_f32);
@@ -739,17 +713,15 @@ impl SceneCollector {
         index
     }
 
-    /// Close the innermost clip scope.
+    /// 关闭最内层裁剪作用域。
     pub fn pop_clip(&mut self) {
         self.clip_stack.pop();
     }
 
-    /// Open a transform scope for every widget pushed until
-    /// [`Self::pop_transform`].
+    /// 为随后推入的所有控件开启变换作用域，直至调用 [`Self::pop_transform`]。
     ///
-    /// The scope translation is the sum of every active scope, so children
-    /// only ever reference the innermost transform index. Slot `0` of the
-    /// table is always the identity.
+    /// 作用域平移量为所有激活作用域之和，因此子节点只需引用最内层变换索引。
+    /// 表的槽位 `0` 始终为单位变换。
     pub fn push_transform(&mut self, mut transform: GpuTransform) -> u32 {
         if self.transforms.is_empty() {
             self.transforms.push(GpuTransform::IDENTITY);
@@ -765,19 +737,15 @@ impl SceneCollector {
         index
     }
 
-    /// Close the innermost transform scope.
+    /// 关闭最内层变换作用域。
     pub fn pop_transform(&mut self) {
         self.transform_stack.pop();
     }
 
-    /// Append one widget's output, reserving a fixed number of primitive
-    /// slots so a dynamic glyph run keeps every following widget's span
-    /// stable.
+    /// 追加单个控件的输出，并预留固定数量的图元槽位，使动态字形串不会导致后续控件的区间偏移。
     ///
-    /// Unused slots are padded with a fully transparent instance, so adding
-    /// a character changes only the slots it actually paints instead of
-    /// shifting the whole scene. When the output outgrows the reservation the
-    /// span is rounded up to the next power of two.
+    /// 未使用槽位以全透明实例填充，因此增减字符仅改变实际绘制的槽位而不会整体移动场景。
+    /// 当输出超出预留数量时，区间长度向上取整到下一个 2 的幂。
     pub fn push_with_capacity(
         &mut self,
         key: u64,
@@ -795,7 +763,7 @@ impl SceneCollector {
         self.push(key, output);
     }
 
-    /// Append one widget's output and record the primitives it owns.
+    /// 追加单个控件的输出并记录其拥有的图元区间。
     pub fn push(&mut self, key: u64, mut output: WidgetOutput) {
         let active_transform = self.transform_stack.last().copied();
         if let Some((transform_idx, offset)) = active_transform {
@@ -827,11 +795,10 @@ impl SceneCollector {
             self.scope_hit(sub_hit);
         }
 
-        // A widget indexes *its own* `payloads` slice from zero. The collector
-        // concatenates every widget's payloads into one global array, so those
-        // indices have to be rebased before the primitives are appended.
-        // Without this, the second label's glyphs read the first label's UVs
-        // and every text run renders as a garbled mix of the others.
+        // 每个 widget 都从零开始索引*自己的* `payloads` 切片，而收集器把
+        // 所有 widget 的 payload 拼成一个全局数组，因此追加图元前必须重定位
+        // 这些索引。否则第二个标签的字形会读到第一个标签的 UV，每段文字
+        // 都会渲染成其它文字的乱码混合。
         let payload_base = u32::try_from(self.payloads.len()).unwrap_or(u32::MAX);
         if payload_base != 0 {
             for primitive in &mut output.primitives {
@@ -870,14 +837,13 @@ impl SceneCollector {
         }
     }
 
-    /// Register a standalone hit region (a scrollbar thumb, say) under the
-    /// active clip and transform scopes, without owning any primitives.
+    /// 在当前激活的裁剪与变换作用域下注册独立命中区域（例如滚动条滑块），不拥有任何图元。
     pub fn push_hit(&mut self, mut hit: HitRegion) {
         self.scope_hit(&mut hit);
         self.regions.push(hit);
     }
 
-    /// Fold the active transform and clip scopes into a hit region's bounds.
+    /// 将当前激活的变换与裁剪作用域折叠进命中区域边界。
     fn scope_hit(&self, hit: &mut HitRegion) {
         if let Some(&(_, offset)) = self.transform_stack.last() {
             hit.bounds = hit.bounds.translate(offset);
@@ -897,7 +863,7 @@ impl SceneCollector {
         }
     }
 
-    /// The primitives one widget owns.
+    /// 单个控件拥有的图元切片。
     #[must_use]
     pub fn span(&self, key: u64) -> Option<&[GpuPrimitiveInstance]> {
         let (start, end) = *self.node_spans.get(&key)?;
@@ -907,64 +873,60 @@ impl SceneCollector {
     }
 }
 
-/// A widget descriptor: the pure data that determines a widget's scene.
+/// 控件描述符：决定控件场景的纯数据。
 ///
-/// The trait exists so that one harness ([`WidgetHarness`]) can drive any
-/// control: the descriptor answers "where am I" and "what do I look like in
-/// this state", and nothing else.
+/// 该 trait 使同一个测试工具（[`WidgetHarness`]）能驱动任意控件：
+/// 描述符只需回答“我在哪里”和“在此状态下我长什么样”，别无其他。
 pub trait WidgetDesc {
-    /// The interactive rectangle of the widget.
+    /// 控件的交互矩形。
     fn rect(&self) -> Rect;
 
-    /// The stable identity of the widget instance.
+    /// 控件实例的稳定标识。
     ///
-    /// The identity must survive a rebuild: it is what the router captures,
-    /// what the focus slot points at and what the semantic tree is keyed by.
+    /// 该标识必须在重建后保持不变：路由器捕获它，焦点槽位指向它，语义树也以它为键。
     fn key(&self) -> u64;
 
-    /// Whether the widget refuses interaction.
+    /// 控件是否禁用交互。
     fn disabled(&self) -> bool {
         false
     }
 
-    /// Whether the widget is toggled on.
+    /// 控件是否处于开启（切换）状态。
     fn selected(&self) -> bool {
         false
     }
 
-    /// Emit the widget's scene output for a state.
+    /// 为给定状态发射控件的场景输出。
     ///
-    /// `glyphs` carries the shaped text the widget draws; the emitter may
-    /// position it but never re-shapes it.
+    /// `glyphs` 携带控件绘制的已排版文本；发射器可调整其位置，但绝不重新排版。
     fn emit(&self, state: ControlState, glyphs: &mut [GlyphQuad]) -> WidgetOutput;
 }
 
-/// A headless session around one widget.
+/// 围绕单个控件的无头交互会话。
 ///
-/// The harness owns the interaction session, re-derives the visual state from
-/// the router after every input event and re-emits the widget only when that
-/// state actually changed — the same redraw policy the window applies.
+/// 测试工具持有交互会话，在每次输入事件后从路由器重新派生视觉状态，
+/// 仅当状态确实改变时才重新发射控件——与窗口应用的重绘策略一致。
 pub struct WidgetHarness<D: WidgetDesc> {
-    /// The shared interaction session.
+    /// 共享交互会话。
     pub app: TestApp,
-    /// The descriptor under test.
+    /// 待测描述符。
     pub desc: D,
-    /// The shaped glyphs the widget draws.
+    /// 控件绘制的已排版字形。
     pub glyphs: Vec<GlyphQuad>,
-    /// The most recent emission.
+    /// 最近一次发射的输出。
     pub output: WidgetOutput,
-    /// The state currently baked into `output`.
+    /// 当前烘焙在 `output` 中的状态。
     baked: ControlState,
 }
 
 impl<D: WidgetDesc> WidgetHarness<D> {
-    /// A session for the default viewport.
+    /// 使用默认视口创建会话。
     #[must_use]
     pub fn new(desc: D, glyphs: Vec<GlyphQuad>) -> Self {
         Self::with_viewport(desc, glyphs, DEFAULT_VIEWPORT)
     }
 
-    /// A session for an explicit viewport.
+    /// 使用显式视口创建会话。
     #[must_use]
     pub fn with_viewport(desc: D, glyphs: Vec<GlyphQuad>, viewport: (f32, f32)) -> Self {
         let mut harness = Self {
@@ -978,13 +940,13 @@ impl<D: WidgetDesc> WidgetHarness<D> {
         harness
     }
 
-    /// The widget's identity.
+    /// 控件标识。
     #[must_use]
     pub fn node_key(&self) -> u64 {
         self.desc.key()
     }
 
-    /// The state derived from the router and the focus slot.
+    /// 从路由器与焦点槽位派生的状态。
     #[must_use]
     pub fn state(&self) -> ControlState {
         ControlState::resolve(
@@ -996,7 +958,7 @@ impl<D: WidgetDesc> WidgetHarness<D> {
         )
     }
 
-    /// Emit the widget and install the result into the session.
+    /// 发射控件并将结果安装到会话中。
     pub fn rebuild(&mut self) {
         let state = self.state();
         self.output = self.desc.emit(state, &mut self.glyphs);
@@ -1004,9 +966,9 @@ impl<D: WidgetDesc> WidgetHarness<D> {
         self.baked = state;
     }
 
-    /// Re-emit the widget when the visual state changed.
+    /// 当视觉状态发生变化时重新发射控件。
     ///
-    /// Returns whether the scene was rebuilt.
+    /// 返回场景是否被重建。
     pub fn sync(&mut self) -> bool {
         let state = self.state();
         if state == self.baked {
@@ -1026,50 +988,50 @@ impl<D: WidgetDesc> WidgetHarness<D> {
         self.app.install(regions, semantics);
     }
 
-    /// The widget centre in window pixels.
+    /// 控件中心在窗口像素中的坐标。
     #[must_use]
     pub fn screen_center(&self) -> Vec2 {
         self.app.canvas_to_screen(self.desc.rect().center())
     }
 
-    /// Move the pointer onto the widget.
+    /// 将指针移动到控件上方。
     pub fn hover(&mut self) {
         self.hover_at(self.screen_center());
     }
 
-    /// Move the pointer to a window position.
+    /// 将指针移动到指定窗口坐标。
     pub fn hover_at(&mut self, screen: Vec2) {
         self.app.move_to(screen);
         self.sync();
     }
 
-    /// Press the left button at the current pointer position.
+    /// 在当前指针位置按下左键。
     pub fn press(&mut self) {
         self.app.pointer_down();
         self.sync();
     }
 
-    /// Release the left button at the current pointer position.
+    /// 在当前指针位置释放左键。
     pub fn release(&mut self) -> Vec<PointerEvent> {
         let events = self.app.pointer_up();
         self.sync();
         events
     }
 
-    /// Hover, press and release the widget in one step.
+    /// 一步完成悬停、按下并释放控件。
     pub fn click(&mut self) -> ClickReport {
         let report = self.app.click(self.screen_center());
         self.sync();
         report
     }
 
-    /// Give the widget keyboard focus.
+    /// 赋予控件键盘焦点。
     pub fn focus(&mut self) {
         self.app.set_focus_key(self.desc.key());
         self.sync();
     }
 
-    /// Take keyboard focus away from the widget.
+    /// 移除控件键盘焦点。
     pub fn blur(&mut self) {
         self.app.clear_focus();
         self.sync();
@@ -1081,7 +1043,7 @@ mod tests {
     use super::*;
     use unbound_input::PointerConfig;
 
-    /// A router with one square hit region owned by `node`.
+    /// 创建一个包含归属于 `node` 的正方形命中区域的路由器。
     fn router_with(node: u64) -> Router {
         let mut router = Router::new(PointerConfig::default());
         router.set_regions(vec![HitRegion::new(
@@ -1109,7 +1071,7 @@ mod tests {
     fn a_captured_pointer_stays_pressed_after_it_leaves() {
         let mut router = router_with(7);
         router.pointer_down(Vec2::new(10.0, 10.0), 0.0);
-        // The pointer is captured, so moving away must not end the press.
+        // 指针已被捕获，因此移出区域不得结束按下状态。
         router.pointer_move(Vec2::new(500.0, 500.0));
         let state = ControlState::resolve(7, &router, None, false, false);
         assert_eq!(state.phase, PointerPhase::Pressed);
@@ -1132,7 +1094,7 @@ mod tests {
         assert_eq!(state.phase, PointerPhase::Hovered);
         assert!(state.focused);
 
-        // Focus on another widget leaves the phase alone.
+        // 焦点落在其他控件上时不影响指针阶段。
         let state = ControlState::resolve(7, &router, Some(9), false, false);
         assert_eq!(state.phase, PointerPhase::Hovered);
         assert!(!state.focused);
@@ -1172,8 +1134,7 @@ mod tests {
         assert_eq!(collector.focus_order, vec![10]);
     }
 
-    /// Build a clip node with a radius, in the `(centre, half-extent)` form
-    /// the shader's rounded slots use.
+    /// 构造带圆角半径的裁剪节点，采用着色器圆角槽位使用的 `(centre, half-extent)` 形式。
     fn rounded_clip(rect: Rect, radius: f32) -> GpuClipNode {
         let mut node = GpuClipNode::from_aabb(rect.to_min_max_array());
         node.rounded_clip_0 = rect.to_center_half();
@@ -1193,11 +1154,10 @@ mod tests {
         let index = collector.push_clip(rounded_clip(inner, 8.0), inner);
 
         let node = collector.clips[index as usize];
-        // The innermost container keeps its own radius in slot 0.
+        // 最内层容器在槽位 0 中保留自身圆角半径。
         assert_eq!(node.rounded_clip_0, inner.to_center_half());
-        // The middle container keeps its slot, but its corners now also
-        // respect the outer arc: the middle sits 10px inside a 40px arc, so
-        // its effective radius rises from 16px to 30px.
+        // 中间层容器保留自身槽位，但其圆角现在也受外层圆弧约束：
+        // 中间层位于 40px 圆弧内缩 10px 处，因此有效半径从 16px 增至 30px。
         assert_eq!(node.rounded_clip_1, middle.to_center_half());
         let folded = f16_to_f32(node.radii_1[0]);
         assert!(
@@ -1210,9 +1170,8 @@ mod tests {
         );
     }
 
-    /// Each widget indexes its own payload slice from zero, while the
-    /// collector holds one concatenated table. The second label must not
-    /// sample the first label's glyph UVs.
+    /// 每个 widget 从零索引自己的 payload 切片，而收集器持有拼接后的
+    /// 全局表。第二个标签绝不能采样到第一个标签的字形 UV。
     #[test]
     fn payload_indices_are_rebased_for_every_widget() {
         let widget = |indices: &[u32]| WidgetOutput {

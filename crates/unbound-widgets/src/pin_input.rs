@@ -1,4 +1,4 @@
-//! PinInput / OtpInput fixed-length segmented code input with paste-splitting.
+//! PinInput / OtpInput 定长分段验证码输入框，支持粘贴自动拆分。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -14,23 +14,23 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_PIN_SLOTS: usize = 6;
 
-/// Interactive state for [`PinInputDesc`].
+/// [`PinInputDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PinInputState {
-    /// Entered characters up to `length`.
+    /// 已输入的字符（最多 `length` 个）。
     pub digits: Vec<char>,
-    /// Active cell index.
+    /// 当前激活的单元格索引。
     pub cursor: usize,
 }
 
-/// Deterministic sub-node id for a PIN input cell (`0..6`).
+/// PIN 输入单元格的确定性子节点 ID（`0..6`）。
 #[must_use]
 pub const fn pin_cell_node(node: u64, index: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x800 + index as u64)
 }
 
 impl PinInputState {
-    /// Delete the last character or current slot and move cursor back.
+    /// 删除最后一个字符或当前槽位内容并将光标回退。
     pub fn backspace(&mut self) {
         if self.cursor > 0 {
             let idx = (self.cursor - 1).min(self.digits.len().saturating_sub(1));
@@ -41,7 +41,7 @@ impl PinInputState {
         }
     }
 
-    /// Insert a character and advance cursor.
+    /// 插入一个字符并前移光标。
     pub fn push_char(&mut self, ch: char, length: usize) {
         let cap = length.clamp(1, MAX_PIN_SLOTS);
         if self.cursor < cap {
@@ -54,7 +54,7 @@ impl PinInputState {
         }
     }
 
-    /// Paste a string, splitting characters across slots.
+    /// 粘贴字符串，将字符拆分填充到各个槽位。
     pub fn paste(&mut self, text: &str, length: usize) {
         for ch in text.chars().filter(|c| !c.is_whitespace()) {
             if self.cursor >= length.clamp(1, MAX_PIN_SLOTS) {
@@ -65,25 +65,25 @@ impl PinInputState {
     }
 }
 
-/// Descriptor for a [`PinInput`].
+/// [`PinInput`] 的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinInputDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Number of PIN cells (`1..=6`).
+    /// PIN 单元格数量（`1..=6`）。
     pub length: usize,
-    /// Number of currently filled cells.
+    /// 当前已填充的单元格数量。
     pub filled: usize,
-    /// Whether digits are masked.
+    /// 是否掩码隐藏数字。
     pub masked: bool,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl PinInputDesc {
-    /// Create a PIN input descriptor.
+    /// 创建 PIN 输入框描述符。
     #[must_use]
     pub fn new(rect: Rect, length: usize, filled: usize) -> Self {
         Self {
@@ -97,7 +97,7 @@ impl PinInputDesc {
     }
 }
 
-/// Emit a stable-shape PIN input (6 cell boxes + 6 fill dots + 1 focus ring = 13 primitives).
+/// 输出结构稳定的 PIN 输入框（6 个单元格框 + 6 个填充圆点 + 1 个焦点环 = 13 个图元）。
 #[must_use]
 pub fn emit_pin_input(
     node: u64,

@@ -1,4 +1,4 @@
-//! Star Rating control with full/half-star precision and read-only mode.
+//! 星级评分控件，支持整星/半星精度与只读模式。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -12,34 +12,34 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_STARS: usize = 5;
 
-/// Interactive state for [`RatingDesc`].
+/// [`RatingDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RatingState {
-    /// Current rating (`0.0..=5.0` in `0.5` or `1.0` increments).
+    /// 当前评分（`0.0..=5.0`，步进 `0.5` 或 `1.0`）。
     pub value: f32,
-    /// Preview value while hovering.
+    /// 悬停时的预览分值。
     pub hover_value: Option<f32>,
 }
 
-/// Descriptor for a [`Rating`].
+/// [`Rating`] 的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct RatingDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Current rating (`0.0..=5.0`).
+    /// 当前评分（`0.0..=5.0`）。
     pub value: f32,
-    /// Whether half-star steps are allowed.
+    /// 是否允许半星步进。
     pub allow_half: bool,
-    /// Read-only display mode.
+    /// 只读展示模式。
     pub read_only: bool,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl RatingDesc {
-    /// Create a rating descriptor.
+    /// 创建星级评分描述符。
     #[must_use]
     pub fn new(rect: Rect, value: f32) -> Self {
         Self {
@@ -53,7 +53,7 @@ impl RatingDesc {
     }
 }
 
-/// Emit a stable-shape 5-star rating (1 bg + 5 star slots + 1 focus ring = 7 primitives).
+/// 输出结构稳定的 5 星评分控件（1 个背景 + 5 个星形槽位 + 1 个焦点环 = 7 个图元）。
 #[must_use]
 pub fn emit_rating(node: u64, desc: &RatingDesc, state: ControlState) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(7);

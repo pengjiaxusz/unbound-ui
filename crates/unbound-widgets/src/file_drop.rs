@@ -1,13 +1,11 @@
-//! The file drop zone: OS drag feedback and path delivery.
+//! 文件拖放区（FileDropZone）：操作系统拖拽反馈与路径传递。
 //!
-//! The engine never learns where a file came from. The OS drag arrives as a
-//! [`DragOver`] carrying a payload id into the [`PayloadArena`]; this widget
-//! only answers two questions — "is the pointer over me" and "which paths did
-//! I receive" — so a file dropped from Explorer takes the same path as one
-//! dragged inside the app.
+//! 引擎从不关心文件来自何处。操作系统拖拽以携带 [`PayloadArena`] 载荷 ID 的 [`DragOver`] 形式到达；
+//! 本控件仅回答两个问题——“指针是否悬停在我上方”以及“我收到了哪些路径”——
+//! 因此从资源管理器拖入的文件与在应用内部拖拽的文件走完全相同的路径。
 //!
-//! Paths cross the widget boundary as `Vec<PathBuf>`, never as an action
-//! payload: a hundred-file drop therefore costs no undo history.
+//! 路径以 `Vec<PathBuf>` 跨越控件边界，而非作为动作载荷：
+//! 一次拖放一百个文件也不会占用撤销历史。
 
 use std::path::PathBuf;
 
@@ -23,34 +21,34 @@ use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The inset of the dashed outline.
+/// 虚线轮廓的内边距。
 pub const DROP_INSET: f32 = 8.0;
-/// The length of one dash.
+/// 单段虚线长度。
 pub const DROP_DASH: f32 = 10.0;
-/// The gap between dashes.
+/// 虚线之间的间隔。
 pub const DROP_GAP: f32 = 7.0;
-/// The corner radius of the zone.
+/// 拖放区圆角半径。
 pub const DROP_RADIUS: f32 = 10.0;
 
-/// The pure descriptor of a drop zone.
+/// 文件拖放区的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileDropDesc {
-    /// The zone rectangle.
+    /// 区域矩形。
     pub rect: Rect,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The hint shown inside the zone.
+    /// 区域内显示的提示文案。
     pub hint: String,
-    /// Whether a drop may deliver more than one file.
+    /// 是否允许单次拖放多个文件。
     pub accept_multiple: bool,
-    /// The zone refuses interaction.
+    /// 区域是否禁用交互。
     pub disabled: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl FileDropDesc {
-    /// A zone that accepts several files.
+    /// 创建可接收多个文件的拖放区。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -64,7 +62,7 @@ impl FileDropDesc {
     }
 }
 
-/// The live state of a drop zone.
+/// 拖放区的实时状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileDropState {
     hovered: bool,
@@ -72,27 +70,27 @@ pub struct FileDropState {
 }
 
 impl FileDropState {
-    /// An idle zone.
+    /// 闲置状态的拖放区。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Whether a compatible drag is over the zone.
+    /// 是否有兼容的拖拽悬停在区域上方。
     #[must_use]
     pub fn is_hovered(&self) -> bool {
         self.hovered
     }
 
-    /// The payload currently hovering, if any.
+    /// 当前悬停的载荷（若有）。
     #[must_use]
     pub fn payload(&self) -> Option<u64> {
         self.payload
     }
 
-    /// Update the hover state from an OS drag.
+    /// 根据操作系统拖拽更新悬停状态。
     ///
-    /// Returns whether the zone's visual state changed.
+    /// 返回区域视觉状态是否发生变化。
     pub fn drag_over(
         &mut self,
         node: u64,
@@ -117,11 +115,9 @@ impl FileDropState {
         changed
     }
 
-    /// Finish a drag, returning the files to deliver.
+    /// 完成拖拽，返回待传递的文件列表。
     ///
-    /// A single-file zone truncates the list instead of rejecting the drop:
-    /// the first path is the one the user grabbed first, which is the least
-    /// surprising choice.
+    /// 单文件区域会截断列表而非拒绝拖放：第一条路径是用户最先抓取的文件，这是最符合直觉的选择。
     pub fn drop_files(
         &mut self,
         desc: &FileDropDesc,
@@ -143,7 +139,7 @@ impl FileDropState {
         Some(paths)
     }
 
-    /// The drag left the zone or the window.
+    /// 拖拽已离开区域或窗口。
     pub fn leave(&mut self) -> bool {
         let changed = self.hovered || self.payload.is_some();
         self.hovered = false;
@@ -152,7 +148,7 @@ impl FileDropState {
     }
 }
 
-/// A dashed rectangle drawn with line primitives.
+/// 使用线段图元绘制的虚线矩形。
 fn dash_rect(rect: Rect, mut out: impl FnMut(Rect, PrimType)) {
     let step = DROP_DASH + DROP_GAP;
     let mut x = rect.origin.x;
@@ -174,7 +170,7 @@ fn dash_rect(rect: Rect, mut out: impl FnMut(Rect, PrimType)) {
     }
 }
 
-/// Emit the zone chrome, dashed outline and semantic node.
+/// 发射区域框架、虚线轮廓与语义节点。
 #[must_use]
 pub fn emit_file_drop(
     node: u64,
@@ -218,7 +214,7 @@ pub fn emit_file_drop(
         ));
     });
 
-    // A simple "tray" glyph: two strokes and a dot. No font needed.
+    // 简单的“托盘”图标：两段描边加一个圆点，无需字体。
     let cx = rect.center().x;
     let cy = rect.center().y - 6.0;
     for (dx, width) in [(-8.0, 16.0), (-5.0, 1.0)] {
@@ -286,7 +282,7 @@ pub fn emit_file_drop(
     }
 }
 
-/// The point a drag is hovering, for hit-testing in tests and applications.
+/// 拖拽悬停的点坐标，供测试与应用命中测试使用。
 #[must_use]
 pub fn drop_point(rect: Rect) -> Vec2 {
     rect.center()

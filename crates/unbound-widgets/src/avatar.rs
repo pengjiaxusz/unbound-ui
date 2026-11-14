@@ -1,14 +1,11 @@
-//! Avatars and avatar groups.
+//! 头像与头像组（Avatar / AvatarGroup）。
 //!
-//! An avatar is a circle with an optional presence dot. It deliberately does
-//! not sample a texture itself: the emitter returns the circle and the caller
-//! composes an [`crate::emit_image`] inside [`AvatarDesc::image_rect`]. That
-//! keeps the widget free of the asset resolver while still giving the image a
-//! stable, centred box.
+//! 头像是一个带可选在线状态圆点的圆形组件。它刻意不直接采样纹理：
+//! 发射器仅返回圆形图元，调用方可在 [`AvatarDesc::image_rect`] 内组合 [`crate::emit_image`]。
+//! 这样使组件与资源解析器解耦，同时仍为图像提供稳定居中的绘制框。
 //!
-//! Initials are derived from the name rather than stored, so a rename never
-//! leaves a stale two-letter label behind. CJK names keep their first
-//! character (a Chinese given name is one glyph, not two initials).
+//! 首字母缩写直接从名称派生而不单独存储，因此改名后不会残留过期的双字母标签。
+//! 中日韩姓名保留首字（中文名字通常取单字，而非两个字母缩写）。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -21,22 +18,22 @@ use crate::primitive::{glyphs, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The presence state shown on a dot.
+/// 状态圆点显示的在线状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Presence {
-    /// Active.
+    /// 在线活跃。
     #[default]
     Online,
-    /// Idle.
+    /// 离开/空闲。
     Away,
-    /// In a call or focused; do not disturb.
+    /// 通话中或专注模式；请勿打扰。
     Busy,
-    /// Signed out.
+    /// 已离线。
     Offline,
 }
 
 impl Presence {
-    /// The dot colour.
+    /// 状态圆点颜色。
     #[must_use]
     pub fn token(self) -> Token {
         match self {
@@ -47,7 +44,7 @@ impl Presence {
         }
     }
 
-    /// The accessible label.
+    /// 无障碍标签。
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -59,23 +56,23 @@ impl Presence {
     }
 }
 
-/// A circular avatar.
+/// 圆形头像描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AvatarDesc {
-    /// The square the circle inscribes.
+    /// 圆形所内切的正方形区域。
     pub rect: Rect,
-    /// The display name; initials are derived from it.
+    /// 显示名称；首字母缩写由此派生。
     pub name: String,
-    /// The presence dot; `None` hides it.
+    /// 在线状态圆点；`None` 表示隐藏。
     pub presence: Option<Presence>,
-    /// The fill behind the initials.
+    /// 首字母背景填充色。
     pub fill: Token,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl AvatarDesc {
-    /// An avatar with a name.
+    /// 创建带名称的头像。
     #[must_use]
     pub fn new(rect: Rect, name: impl Into<String>) -> Self {
         Self {
@@ -87,20 +84,20 @@ impl AvatarDesc {
         }
     }
 
-    /// The same avatar with a presence dot.
+    /// 附加在线状态圆点。
     #[must_use]
     pub fn presence(mut self, presence: Presence) -> Self {
         self.presence = Some(presence);
         self
     }
 
-    /// The circle radius.
+    /// 圆形半径。
     #[must_use]
     pub fn radius(&self) -> f32 {
         (self.rect.size.x.min(self.rect.size.y) * 0.5).max(0.0)
     }
 
-    /// The square an avatar image should fill.
+    /// 头像图片应填充的正方形区域。
     #[must_use]
     pub fn image_rect(&self) -> Rect {
         let size = self.radius() * 2.0;
@@ -112,7 +109,7 @@ impl AvatarDesc {
         )
     }
 
-    /// The presence dot, on the bottom-trailing edge.
+    /// 位于右下边缘的在线状态圆点。
     #[must_use]
     pub fn presence_rect(&self) -> Option<Rect> {
         self.presence?;
@@ -125,14 +122,14 @@ impl AvatarDesc {
         ))
     }
 
-    /// The initials painted inside the circle.
+    /// 圆形内部绘制的首字母缩写。
     #[must_use]
     pub fn initials(&self) -> String {
         initials(&self.name)
     }
 }
 
-/// Derive one or two initials from a display name.
+/// 从显示名称派生一到两个首字母。
 #[must_use]
 pub fn initials(name: &str) -> String {
     let trimmed = name.trim();
@@ -156,7 +153,7 @@ pub fn initials(name: &str) -> String {
     out
 }
 
-/// Emit the circle, the initials and the presence dot.
+/// 发射圆形背景、首字母缩写与在线状态圆点。
 #[must_use]
 pub fn emit_avatar(
     node: u64,
@@ -210,23 +207,23 @@ pub fn emit_avatar(
     }
 }
 
-/// A stack of overlapping avatars plus an overflow counter.
+/// 堆叠重叠头像组及溢出计数器。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AvatarGroupDesc {
-    /// The group rectangle; avatars are centred vertically.
+    /// 头像组矩形；头像垂直居中排列。
     pub rect: Rect,
-    /// The avatars, most important first.
+    /// 头像列表，优先级高者靠前。
     pub avatars: Vec<AvatarDesc>,
-    /// How far each avatar moves over the previous one.
+    /// 每个头像相对前一个头像的偏移距离。
     pub overlap: f32,
-    /// How many avatars fit before the `+N` counter.
+    /// 在显示 `+N` 计数器前最多显示的头像数量。
     pub max_visible: usize,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl AvatarGroupDesc {
-    /// A group with a 24 px overlap and five visible avatars.
+    /// 创建 24 px 重叠间距、最多显示 5 个头像的头像组。
     #[must_use]
     pub fn new(rect: Rect, avatars: Vec<AvatarDesc>) -> Self {
         Self {
@@ -238,25 +235,25 @@ impl AvatarGroupDesc {
         }
     }
 
-    /// The size of one avatar.
+    /// 单个头像的尺寸。
     #[must_use]
     pub fn avatar_size(&self) -> f32 {
         self.rect.size.y.max(1.0)
     }
 
-    /// How many avatars are painted.
+    /// 实际绘制的头像数量。
     #[must_use]
     pub fn visible_count(&self) -> usize {
         self.avatars.len().min(self.max_visible)
     }
 
-    /// The overflow count (`+N`), zero when everything fits.
+    /// 溢出数量（`+N`），全部容纳时为零。
     #[must_use]
     pub fn overflow(&self) -> usize {
         self.avatars.len().saturating_sub(self.visible_count())
     }
 
-    /// The circle of the `index`-th visible avatar.
+    /// 第 `index` 个可见头像的圆形区域。
     #[must_use]
     pub fn avatar_rect(&self, index: usize) -> Option<Rect> {
         if index >= self.visible_count() {
@@ -272,7 +269,7 @@ impl AvatarGroupDesc {
         ))
     }
 
-    /// The `+N` counter, when some avatars overflow.
+    /// 当存在溢出头像时的 `+N` 计数器。
     #[must_use]
     pub fn overflow_rect(&self) -> Option<Rect> {
         if self.overflow() == 0 {
@@ -288,7 +285,7 @@ impl AvatarGroupDesc {
         ))
     }
 
-    /// The width the painted group needs.
+    /// 头像组绘制所需的总宽度。
     #[must_use]
     pub fn painted_width(&self) -> f32 {
         let size = self.avatar_size();
@@ -301,7 +298,7 @@ impl AvatarGroupDesc {
     }
 }
 
-/// Emit every visible avatar and the overflow counter.
+/// 发射所有可见头像及溢出计数器。
 #[must_use]
 pub fn emit_avatar_group(
     group: &AvatarGroupDesc,

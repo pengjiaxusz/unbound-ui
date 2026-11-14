@@ -1,39 +1,36 @@
-//! GPU-side glyph and image atlases (`docs` §3.5).
+//! GPU 侧字形与图像图集（参见 `docs/architecture/gpu-renderer.md`）。
 //!
-//! The renderer binds two bindless `Texture2DArray` samplers: an `R8` atlas for
-//! coverage glyphs and an `RGBA8` atlas for colour glyphs and images. The CPU
-//! side (`unbound-text`) owns the shelf packer and decides *where* every glyph
-//! lands; this module owns the GPU textures and knows *how* to move the pixels
-//! there.
+//! 渲染器绑定两个 Bindless `Texture2DArray` 采样器：用于覆盖率字形的 `R8` 图集，
+//! 以及用于彩色字形和图像的 `RGBA8` 图集。CPU 侧（`unbound-text`）负责货架装箱并决定
+//! 每个字形落在何处；本模块持有 GPU 纹理并负责将像素搬运到对应位置。
 //!
-//! A page of the CPU atlas maps to one array layer, so an update is a single
-//! `vkCmdCopyBufferToImage` into a sub-region of one layer.
+//! CPU 图集的每一页对应一个数组图层，因此一次更新只需通过单次 `vkCmdCopyBufferToImage`
+//! 写入某一图层的子区域。
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 use crate::device::{Buffer, Gpu, GpuError, MemoryKind};
 use ash::vk;
 
-/// The number of bindless layers each atlas exposes.
+/// 每个图集暴露的 Bindless 图层数量。
 ///
-/// Must match `MAX_ATLAS_LAYERS` in the pipeline module: the descriptor array
-/// is sized once, at pipeline creation.
+/// 必须与管线模块中的 `MAX_ATLAS_LAYERS` 一致：描述符数组大小在管线创建时固定。
 pub const ATLAS_LAYERS: u32 = crate::pipeline::MAX_ATLAS_LAYERS;
 
-/// The edge length of one atlas page, in texels.
+/// 单张图集页的边长（纹素）。
 pub const PAGE_SIZE: u32 = 2048;
 
-/// Which of the two atlases an update targets.
+/// 指定更新操作针对哪一个图集。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AtlasKind {
-    /// Single-channel coverage (glyphs).
+    /// 单通道覆盖率图集（字形）。
     R8,
-    /// Four-channel colour (emoji, images).
+    /// 四通道彩色图集（Emoji、图像）。
     Rgba8,
 }
 
 impl AtlasKind {
-    /// The Vulkan format this atlas uses.
+    /// 该图集使用的 Vulkan 像素格式。
     #[must_use]
     pub const fn format(self) -> vk::Format {
         match self {
@@ -42,7 +39,7 @@ impl AtlasKind {
         }
     }
 
-    /// The bytes per texel.
+    /// 每纹素占用的字节数。
     #[must_use]
     pub const fn bpp(self) -> u32 {
         match self {
@@ -52,32 +49,28 @@ impl AtlasKind {
     }
 }
 
-/// One of the two atlas textures.
+/// 两个图集纹理之一。
 ///
-/// The Vulkan objects are immutable once created; only the *layout* of each
-/// layer changes, and that is tracked separately so the atlas can be shared
-/// behind an `Arc` while still being uploaded into.
+/// Vulkan 对象一旦创建便不可变；仅各图层的图像布局会变化，因此将其单独追踪，
+/// 使图集可在 `Arc` 共享的同时继续接收上传。
 pub struct AtlasTexture {
     image: vk::Image,
     memory: vk::DeviceMemory,
-    /// One view per layer; the bindless descriptor array binds them in order.
+    /// 每层一个图像视图；Bindless 描述符数组按顺序绑定它们。
     views: Vec<vk::ImageView>,
     kind: AtlasKind,
-    /// A shared handle on the device, so the atlas can free itself even when
-    /// it outlives the [`Gpu`] that created it.
+    /// 设备的共享句柄，使图集即便生命周期长于创建它的 [`Gpu`] 也能自行释放资源。
     lifetime: crate::device::DeviceLifetime,
-    /// Set once the images have been freed.
+    /// 图像释放后置为 true。
     ///
-    /// The atlas set is shared with the application, so the renderer frees the
-    /// images explicitly before the device goes away; the `Drop` impl then
-    /// finds them already gone. The flag makes both paths idempotent.
+    /// 图集集合与应用层共享，因此渲染器会在设备销毁前显式释放图像；随后的 `Drop`
+    /// 会发现图像已释放。该标志确保两条释放路径均幂等。
     freed: std::sync::atomic::AtomicBool,
-    /// The current layout of each layer.
+    /// 每个图层的当前图像布局。
     ///
-    /// A layer that has never been written is `UNDEFINED`; after an upload it
-    /// is `SHADER_READ_ONLY_OPTIMAL`. The layout has to be tracked because a
-    /// second upload into the same layer must *not* declare `old_layout` as
-    /// `UNDEFINED`: that would discard the glyphs already in the layer.
+    /// 从未写入的图层为 `UNDEFINED`；首次上传后转为 `SHADER_READ_ONLY_OPTIMAL`。
+    /// 必须追踪布局，因为对同一图层的第二次上传绝不能将 `old_layout` 声明为
+    /// `UNDEFINED`，否则会丢弃该图层中已有的字形。
     layouts: std::sync::Mutex<Vec<vk::ImageLayout>>,
 }
 
@@ -93,13 +86,10 @@ impl core::fmt::Debug for AtlasTexture {
 }
 
 impl AtlasTexture {
-    /// Free the images. Idempotent: the second call does nothing.
+    /// 释放图集图像（幂等：重复调用无副作用）。
     ///
-    /// The atlas set is shared with the application, so the renderer frees the
-    /// images before the device is destroyed; the `Drop` impl then finds them
-    /// already gone. When the atlas outlives the device, the `Drop` impl frees
-    /// them instead — unless the device is already gone, in which case the
-    /// images went with it and the stale handle must not be touched.
+    /// 渲染器在销毁设备前会显式释放图像；当图集生命周期长于设备时，则由 `Drop`
+    /// 负责释放——除非设备已提前销毁，此时旧句柄已随设备失效，严禁再次触碰。
     pub fn free(&self) {
         if self.freed.swap(true, std::sync::atomic::Ordering::AcqRel) {
             return;
@@ -107,8 +97,7 @@ impl AtlasTexture {
         if !self.lifetime.is_alive() {
             return;
         }
-        // SAFETY: the device is alive and the images belong to it. The
-        // renderer waits for the device to be idle before calling this.
+        // SAFETY: 设备仍存活且图像属于该设备；渲染器在调用前已等待设备空闲。
         unsafe {
             let device = self.lifetime.device();
             for view in &self.views {
@@ -122,19 +111,18 @@ impl AtlasTexture {
 
 impl Drop for AtlasTexture {
     fn drop(&mut self) {
-        // The atlas may outlive the `Gpu` that created it: the application
-        // keeps an `Arc` to the atlas set for the whole session.
+        // 图集可能比创建它的 `Gpu` 存活更久：应用层会在整个会话期间持有图集集合的 `Arc`。
         self.free();
     }
 }
 
 impl AtlasTexture {
-    /// Create an empty atlas array.
+    /// 创建空图集纹理数组。
     ///
     /// # Errors
-    /// Propagates Vulkan allocation failures.
+    /// 透传 Vulkan 内存分配错误。
     pub fn new(gpu: &Gpu, kind: AtlasKind, layers: u32) -> Result<Self, GpuError> {
-        // SAFETY: creation only; ownership moves into the returned struct.
+        // SAFETY: 仅创建资源；所有权移交至返回的结构体。
         unsafe {
             let device = &gpu.device;
             let image = device.create_image(
@@ -166,8 +154,7 @@ impl AtlasTexture {
             )?;
             device.bind_image_memory(image, memory, 0)?;
 
-            // A view per layer: the bindless descriptor array holds one slot
-            // per layer, and each slot addresses a single array layer.
+            // 每层一个视图：Bindless 描述符数组为每层分配一个槽位，每个槽位指向单个数组图层。
             let mut views = Vec::with_capacity(layers as usize);
             for layer in 0..layers {
                 let view = device.create_image_view(
@@ -201,19 +188,19 @@ impl AtlasTexture {
         }
     }
 
-    /// The view for one layer.
+    /// 返回指定图层的图像视图。
     #[must_use]
     pub fn layer_view(&self, layer: u32) -> Option<vk::ImageView> {
         self.views.get(layer as usize).copied()
     }
 
-    /// The number of layers this atlas exposes.
+    /// 返回该图集暴露的图层数量。
     #[must_use]
     pub fn layers(&self) -> u32 {
         self.views.len() as u32
     }
 
-    /// The current layout of a layer.
+    /// 获取指定图层的当前布局。
     fn current_layout(&self, layer: u32) -> vk::ImageLayout {
         self.layouts
             .lock()
@@ -221,80 +208,78 @@ impl AtlasTexture {
             .unwrap_or(vk::ImageLayout::UNDEFINED)
     }
 
-    /// Record the new layout of a layer.
+    /// 记录指定图层的新布局。
     fn set_layout(&self, layer: u32, layout: vk::ImageLayout) {
         if let Ok(mut layouts) = self.layouts.lock() {
             layouts[layer as usize] = layout;
         }
     }
 
-    /// The kind of atlas.
+    /// 返回图集类型。
     #[must_use]
     pub const fn kind(&self) -> AtlasKind {
         self.kind
     }
 
-    /// The raw image handle.
+    /// 返回底层 Vulkan 图像句柄。
     #[must_use]
     pub const fn image(&self) -> vk::Image {
         self.image
     }
 }
 
-/// A rectangle of texels to move from the CPU to one atlas layer.
+/// 需要从 CPU 上传到图集某图层的矩形纹素区域。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AtlasUpload {
-    /// Which atlas receives the pixels.
+    /// 接收像素的目标图集。
     pub kind: AtlasKind,
-    /// The array layer.
+    /// 目标数组图层索引。
     pub layer: u32,
-    /// The destination origin inside the layer.
+    /// 图层内的目标起始坐标。
     pub x: u32,
     pub y: u32,
-    /// The size of the region.
+    /// 上传区域的尺寸。
     pub width: u32,
     pub height: u32,
-    /// Row-major texels; `width * height * bpp` bytes.
+    /// 按行主序排列的纹素数据；长度为 `width * height * bpp` 字节。
     pub data: Vec<u8>,
 }
 
 impl AtlasUpload {
-    /// The bytes per texel of this upload.
+    /// 本次上传每纹素的字节数。
     #[must_use]
     pub const fn bpp(&self) -> u32 {
         self.kind.bpp()
     }
 
-    /// The expected payload length.
+    /// 预期的载荷字节长度。
     #[must_use]
     pub fn expected_len(&self) -> usize {
         (self.width as usize) * (self.height as usize) * (self.bpp() as usize)
     }
 }
 
-/// The layout of one batch of atlas uploads.
+/// 单批图集上传在暂存缓冲区中的布局方案。
 ///
-/// Every rectangle is placed in a single staging buffer, and every involved
-/// layer is listed once so its layout is transitioned only once.
+/// 所有矩形均放入同一个暂存缓冲区，且每个涉及的图层仅记录一次，
+/// 确保其布局转换只执行一次。
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BatchPlan {
-    /// The byte offset of each upload inside the staging buffer; `None` for
-    /// an empty rectangle.
+    /// 每次上传在暂存缓冲区中的字节偏移；空矩形对应 `None`。
     offsets: Vec<Option<u64>>,
-    /// The total size of the staging buffer.
+    /// 暂存缓冲区所需总字节大小。
     total: u64,
-    /// The `(kind, layer)` pairs the batch touches.
+    /// 本批次涉及的所有 `(kind, layer)` 二元组（已去重）。
     layers: Vec<(AtlasKind, u32)>,
 }
 
-/// Lay a batch of uploads out in one staging buffer.
+/// 将一批上传请求排布到单个暂存缓冲区中。
 ///
-/// This is a pure function on purpose: the layout is the part that can go
-/// wrong (an offset that is not a multiple of the texel block size, a layer
-/// that is transitioned twice), and it is worth testing on the CPU.
+/// 刻意设计为纯函数：排布逻辑最容易出错（如偏移未按纹素块对齐、同一图层被转换两次），
+/// 因此适合在 CPU 端进行单元测试。
 ///
 /// # Errors
-/// Returns [`GpuError::Allocation`] for a malformed upload.
+/// 若上传参数不合法则返回 [`GpuError::Allocation`]。
 fn plan_batch(
     layer_count: impl Fn(AtlasKind) -> u32,
     updates: &[AtlasUpload],
@@ -321,12 +306,11 @@ fn plan_batch(
                 upload.layer, available
             )));
         }
-        // The copy offset must be a multiple of the texel block size; 4
-        // bytes covers both the 1-byte and the 4-byte atlas.
+        // 拷贝偏移必须是纹素块大小的整数倍；4 字节对齐可同时覆盖 1 字节和 4 字节图集。
         total = (total + 3) & !3;
         offsets.push(Some(total));
         total += expected as u64;
-        // A layer that receives several rectangles is transitioned once.
+        // 接收多个矩形的同一图层仅转换一次布局。
         if !layers
             .iter()
             .any(|(kind, layer)| *kind == upload.kind && *layer == upload.layer)
@@ -341,26 +325,23 @@ fn plan_batch(
     })
 }
 
-/// The pair of atlases the renderer binds into its descriptor slots.
+/// 渲染器绑定到描述符槽位中的一对图集。
 pub struct AtlasSet {
-    /// The coverage atlas.
+    /// 覆盖率图集（R8）。
     pub r8: AtlasTexture,
-    /// The colour atlas.
+    /// 彩色图集（RGBA8）。
     pub rgba: AtlasTexture,
-    /// A staging buffer reused by every upload batch.
+    /// 所有上传批次复用的持久化暂存缓冲区。
     ///
-    /// The glyph cache uploads a handful of small glyphs on many frames;
-    /// allocating and freeing a `VkBuffer` + `VkDeviceMemory` per batch cost
-    /// two driver round-trips for a few kilobytes of data. The buffer is grown
-    /// when needed and kept for the life of the atlas set.
+    /// 字形缓存经常在多帧中零星上传少量小字形；若每批都分配和释放 `VkBuffer` + `VkDeviceMemory`，
+    /// 仅几千字节数据就要付出两次驱动往返开销。因此该缓冲区按需扩容并伴随图集集合整个生命周期。
     staging: std::sync::Mutex<Option<StagingSlot>>,
 }
 
-/// The owned handles of the persistent staging buffer.
+/// 持久化暂存缓冲区持有的底层句柄。
 ///
-/// Only plain integers are stored so the type stays `Send + Sync` without an
-/// `unsafe impl`: the mapped address is kept as a `usize` and turned back into
-/// a pointer at the point of use.
+/// 仅存储普通整数以在不编写 `unsafe impl` 的前提下保持 `Send + Sync`：
+/// 映射地址以 `usize` 保存，在使用点再转回指针。
 struct StagingSlot {
     raw: vk::Buffer,
     memory: vk::DeviceMemory,
@@ -380,15 +361,14 @@ impl core::fmt::Debug for AtlasSet {
     }
 }
 
-/// The layer counts the bindless descriptor array can actually expose.
+/// 按 bindless 描述符数组实际可暴露的槽位钳制图集层数。
 ///
-/// R8 owns all [`crate::pipeline::MAX_ATLAS_LAYERS`] slots, but the RGBA
-/// binding reserves its last [`crate::pipeline::EXTERNAL_TEXTURE_SLOTS`]
-/// slots for caller-owned textures. An RGBA atlas with more layers than
-/// [`crate::pipeline::EXTERNAL_TEXTURE_BASE`] can never be fully bound: pages
-/// beyond that range would sample the external slots, and
-/// `Renderer::install_atlases` rejects the mismatch. Clamping here keeps every
-/// caller — all of which ask for the full 64 — inside the binding's range.
+/// R8 占用全部 [`crate::pipeline::MAX_ATLAS_LAYERS`] 个槽位，而 RGBA 绑定
+/// 末尾的 [`crate::pipeline::EXTERNAL_TEXTURE_SLOTS`] 个槽位留给调用方纹理。
+/// RGBA 图集层数一旦超过 [`crate::pipeline::EXTERNAL_TEXTURE_BASE`] 就无法
+/// 完整绑定：超出范围的页会采样到外部槽位，`Renderer::install_atlases` 也会
+/// 拒绝这种不匹配。在此处钳制可保证所有调用方（它们都请求完整 64 层）
+/// 始终落在绑定范围内。
 #[must_use]
 pub(crate) fn atlas_layer_counts(layers: u32) -> (u32, u32) {
     (
@@ -398,13 +378,13 @@ pub(crate) fn atlas_layer_counts(layers: u32) -> (u32, u32) {
 }
 
 impl AtlasSet {
-    /// Create both atlases.
+    /// 创建覆盖率与彩色两个图集。
     ///
-    /// The RGBA atlas is capped at [`crate::pipeline::EXTERNAL_TEXTURE_BASE`]
-    /// layers because the rest of its binding belongs to external textures.
+    /// RGBA 图集上限为 [`crate::pipeline::EXTERNAL_TEXTURE_BASE`] 层，
+    /// 因为该绑定剩余槽位属于外部纹理。
     ///
     /// # Errors
-    /// Propagates Vulkan allocation failures.
+    /// 透传 Vulkan 内存分配错误。
     pub fn new(gpu: &Gpu, layers: u32) -> Result<Self, GpuError> {
         let (r8_layers, rgba_layers) = atlas_layer_counts(layers);
         Ok(Self {
@@ -414,7 +394,7 @@ impl AtlasSet {
         })
     }
 
-    /// The atlas matching `kind`.
+    /// 返回与 `kind` 匹配的图集引用。
     #[must_use]
     pub const fn get(&self, kind: AtlasKind) -> &AtlasTexture {
         match kind {
@@ -423,21 +403,18 @@ impl AtlasSet {
         }
     }
 
-    /// Free the images of both atlases. Idempotent.
+    /// 释放两个图集的图像资源（幂等）。
     ///
-    /// The renderer calls this before it tears the device down: Vulkan
-    /// requires every object to be destroyed before the device, and the
-    /// application may still hold an `Arc` to the atlas set.
+    /// 渲染器在销毁设备前调用此方法：Vulkan 要求所有子对象必须在设备前销毁，
+    /// 而应用层此时可能仍持有图集集合的 `Arc`。
     pub fn free(&self) {
         self.r8.free();
         self.rgba.free();
-        // The staging buffer is owned by the set, not by an individual atlas,
-        // so it has to be released here too.
+        // 暂存缓冲区归属于图集集合而非单个图集，因此也必须在此一并释放。
         if let Ok(mut slot) = self.staging.lock() {
             if let Some(staging) = slot.take() {
                 if staging.lifetime.is_alive() {
-                    // SAFETY: the device is alive and the buffer belongs to
-                    // it. The caller waits for the device to be idle.
+                    // SAFETY: 设备仍存活且缓冲区属于该设备；调用方已等待设备空闲。
                     unsafe {
                         let device = staging.lifetime.device();
                         device.destroy_buffer(staging.raw, None);
@@ -448,42 +425,35 @@ impl AtlasSet {
         }
     }
 
-    /// Upload one rectangle of texels into the matching atlas.
+    /// 将单个矩形纹素区域上传到对应图集。
     ///
-    /// The pixels travel through a host-visible staging buffer and are copied
-    /// into the destination layer with a single `vkCmdCopyBufferToImage`. The
-    /// copy is recorded on the graphics queue and waited on, so the GPU never
-    /// samples a half-written glyph.
+    /// 像素经宿主可见暂存缓冲区通过单次 `vkCmdCopyBufferToImage` 拷贝到目标图层。
+    /// 拷贝在图形队列上录制并等待完成，确保 GPU 绝不会采样到半写入的字形。
     ///
     /// # Errors
-    /// Returns [`GpuError::Vulkan`] when the copy cannot be recorded.
+    /// 当拷贝命令录制失败时返回 [`GpuError::Vulkan`]。
     pub fn upload(&self, gpu: &Gpu, upload: &AtlasUpload) -> Result<(), GpuError> {
         self.upload_batch(gpu, std::slice::from_ref(upload))
     }
 
-    /// Upload many rectangles into the atlases with **one** queue round trip.
+    /// 通过**单次**队列往返批量上传多个矩形区域到图集。
     ///
-    /// Uploading glyph by glyph was the single worst stutter in the whole
-    /// renderer: every glyph allocated a staging buffer, opened a one-shot
-    /// command buffer and waited for the queue to go idle
-    /// (`vkQueueWaitIdle`), so a page of text stopped the pipeline dozens of
-    /// times in a row.
+    /// 逐字形上传曾是整个渲染器最严重的卡顿源：每个字形都分配一次暂存缓冲区、
+    /// 开启一次性命令缓冲区并调用 `vkQueueWaitIdle`，导致渲染整页文本时管线连续停顿数十次。
     ///
-    /// The batch instead
+    /// 批量上传改为：
     ///
-    /// * allocates **one** staging buffer for all the pixels,
-    /// * records **one** command buffer,
-    /// * transitions every involved `(kind, layer)` pair to
-    ///   `TRANSFER_DST_OPTIMAL` **once**, and
-    /// * transitions them back to `SHADER_READ_ONLY_OPTIMAL` **once**.
+    /// * 仅使用**一个**暂存缓冲区容纳所有像素；
+    /// * 仅录制**一个**命令缓冲区；
+    /// * 将每个涉及的 `(kind, layer)` 图层**一次性**转换到 `TRANSFER_DST_OPTIMAL`；
+    /// * 上传后**一次性**转回 `SHADER_READ_ONLY_OPTIMAL`。
     ///
-    /// The queue is still waited on exactly once, at the end.
+    /// 最终仅在末尾等待队列空闲一次。
     ///
     /// # Errors
-    /// Returns [`GpuError::Allocation`] for a malformed upload and
-    /// [`GpuError::Vulkan`] when the copies cannot be recorded.
+    /// 上传参数不合法时返回 [`GpuError::Allocation`]，录制拷贝失败时返回 [`GpuError::Vulkan`]。
     pub fn upload_batch(&self, gpu: &Gpu, updates: &[AtlasUpload]) -> Result<(), GpuError> {
-        // 1. Validate and lay the pixels out in one staging buffer.
+        // 1. 校验并将所有像素排布到单个暂存缓冲区中。
         let plan = plan_batch(|kind| self.get(kind).layers(), updates)?;
         let BatchPlan {
             offsets,
@@ -494,9 +464,8 @@ impl AtlasSet {
             return Ok(());
         }
 
-        // Grow the persistent staging buffer instead of allocating one per
-        // batch. The mutex guard is held for the whole upload: the staging
-        // contents only need to survive until `end_single_time`.
+        // 按需扩容持久化暂存缓冲区，而非每批重新分配。整个上传过程持有互斥锁：
+        // 暂存区内容只需保持到 `end_single_time` 完成即可。
         let mut slot = self
             .staging
             .lock()
@@ -505,8 +474,7 @@ impl AtlasSet {
         if needs_grow {
             if let Some(old) = slot.take() {
                 if old.lifetime.is_alive() {
-                    // SAFETY: every batch ends with `end_single_time`, which
-                    // idles the queue, so no copy references the old buffer.
+                    // SAFETY: 每批均以 `end_single_time` 结束并等待队列空闲，因此没有拷贝操作仍引用旧缓冲区。
                     unsafe {
                         let device = old.lifetime.device();
                         device.destroy_buffer(old.raw, None);
@@ -533,8 +501,7 @@ impl AtlasSet {
         let staging = slot
             .as_ref()
             .ok_or_else(|| GpuError::Allocation("atlas staging missing".into()))?;
-        // A temporary `Buffer` view so the regular flush path (alignment and
-        // coherence rules) can be reused without duplicating it.
+        // 构造临时 `Buffer` 视图，以复用标准的刷写路径（对齐与一致性规则）而不重复代码。
         let staging_view = Buffer {
             raw: staging.raw,
             memory: staging.memory,
@@ -545,7 +512,7 @@ impl AtlasSet {
             host_visible: true,
             host_coherent: staging.host_coherent,
         };
-        // SAFETY: the staging buffer is exclusively ours until the copy runs.
+        // SAFETY: 在拷贝运行前暂存缓冲区由本批次独占。
         unsafe {
             let base = staging_view
                 .host_ptr(0)
@@ -555,20 +522,19 @@ impl AtlasSet {
                     continue;
                 };
                 let expected = upload.expected_len();
-                // SAFETY: `offset + expected` is inside the staging buffer,
-                // which is exclusively ours.
+                // SAFETY: `offset + expected` 位于暂存缓冲区范围内，且当前由本批次独占。
                 core::ptr::copy_nonoverlapping(
                     upload.data.as_ptr(),
                     base.add(offset as usize),
                     expected,
                 );
             }
-            // One flush for the whole range: the memory may not be coherent.
+            // 对整段范围执行一次刷写：内存可能非宿主一致。
             gpu.flush(&staging_view, 0, total);
         }
 
         let cmd = gpu.begin_single_time()?;
-        // SAFETY: `cmd` is a fresh command buffer we own.
+        // SAFETY: `cmd` 是属于本调用的新命令缓冲区。
         unsafe {
             let to_copy: Vec<vk::ImageMemoryBarrier2> = layers
                 .iter()
@@ -579,9 +545,7 @@ impl AtlasSet {
                         .src_access_mask(vk::AccessFlags2::NONE)
                         .dst_stage_mask(vk::PipelineStageFlags2::COPY)
                         .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                        // The layer's current layout is tracked, so a second
-                        // upload into the same layer keeps the glyphs that are
-                        // already there.
+                        // 图层当前布局已追踪，因此对同一图层的后续上传会保留其中已有的字形。
                         .old_layout(atlas.current_layout(*layer))
                         .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -639,7 +603,7 @@ impl AtlasSet {
                 );
             }
 
-            // Back to shader-read so the graphics queue can sample it.
+            // 转回着色器可读布局，以便图形队列采样。
             let to_read: Vec<vk::ImageMemoryBarrier2> = layers
                 .iter()
                 .map(|(kind, layer)| {
@@ -671,23 +635,22 @@ impl AtlasSet {
         }
         gpu.end_single_time(cmd)?;
 
-        // The layers are now readable by the shader.
+        // 至此所有图层均已处于着色器可读状态。
         for (kind, layer) in layers {
             self.get(kind)
                 .set_layout(layer, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
         }
 
-        // The staging buffer stays alive for the next batch.
+        // 暂存缓冲区保持存活，供下一批上传复用。
         Ok(())
     }
 
-    /// Read back a rectangle of texels from one atlas layer.
+    /// 从图集的指定图层回读一个矩形区域的纹素。
     ///
-    /// This is a debugging aid: it proves the pixels actually landed on the
-    /// GPU rather than only in the staging buffer.
+    /// 用于调试验证：证明像素已真正写入 GPU 图像而非仅停留在暂存缓冲区。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     #[allow(clippy::too_many_arguments)]
     pub fn read_layer(
         &self,
@@ -714,7 +677,7 @@ impl AtlasSet {
         )?;
 
         let cmd = gpu.begin_single_time()?;
-        // SAFETY: the command buffer is ours.
+        // SAFETY: 该命令缓冲区归本调用所有。
         unsafe {
             let barrier = [vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::NONE)
@@ -765,7 +728,7 @@ impl AtlasSet {
                         depth: 1,
                     })],
             );
-            // Back to shader-read so the renderer can keep sampling it.
+            // 转回着色器可读布局，使渲染器可继续采样。
             let to_read = [vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::COPY)
                 .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
@@ -794,7 +757,7 @@ impl AtlasSet {
             .set_layout(layer, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
 
         let mut out = vec![0u8; size as usize];
-        // SAFETY: the copy has retired; the staging buffer is host visible.
+        // SAFETY: 拷贝已完成；暂存缓冲区为宿主可见内存。
         unsafe {
             std::ptr::copy_nonoverlapping(staging.mapped, out.as_mut_ptr(), out.len());
             gpu.destroy_buffer(&staging);
@@ -803,19 +766,19 @@ impl AtlasSet {
     }
 }
 
-/// A staging buffer kept alive for repeated atlas uploads.
+/// 为重复图集上传保留的持久化暂存缓冲区。
 ///
-/// Reusing one buffer avoids a heap allocation per glyph batch.
+/// 复用单个缓冲区可避免每批字形都向驱动申请内存。
 #[derive(Debug)]
 pub struct UploadStaging {
     buffer: Buffer,
 }
 
 impl UploadStaging {
-    /// Allocate a staging buffer of `capacity` bytes.
+    /// 分配 `capacity` 字节的暂存缓冲区。
     ///
     /// # Errors
-    /// Propagates allocation failures.
+    /// 透传分配错误。
     pub fn new(gpu: &Gpu, capacity: u64) -> Result<Self, GpuError> {
         let buffer = gpu.create_buffer(
             capacity.max(1),
@@ -826,23 +789,22 @@ impl UploadStaging {
         Ok(Self { buffer })
     }
 
-    /// The capacity in bytes.
+    /// 缓冲区容量（字节）。
     #[must_use]
     pub fn capacity(&self) -> u64 {
         self.buffer.size
     }
 
-    /// The raw buffer handle.
+    /// 底层 Vulkan 缓冲区句柄。
     #[must_use]
     pub const fn raw(&self) -> vk::Buffer {
         self.buffer.raw
     }
 
     /// # Safety
-    /// The device must be idle.
+    /// 设备必须处于空闲状态。
     pub unsafe fn destroy(&self, gpu: &Gpu) {
-        // SAFETY: the caller guarantees the device is idle, so no command
-        // buffer still references the buffer.
+        // SAFETY: 调用方保证设备处于空闲状态，因此无任何命令缓冲区仍引用该缓冲区。
         unsafe {
             gpu.destroy_buffer(&self.buffer);
         }
@@ -859,13 +821,12 @@ mod tests {
         assert_eq!(AtlasKind::Rgba8.format(), vk::Format::R8G8B8A8_UNORM);
         assert_eq!(AtlasKind::R8.bpp(), 1);
         assert_eq!(AtlasKind::Rgba8.bpp(), 4);
-        // The shader samples a 2048² page.
+        // 着色器采样的图集页尺寸为 2048²。
         assert_eq!(PAGE_SIZE, 2048);
     }
 
-    /// The windowed callers ask for the full 64 layers. The RGBA binding only
-    /// has 48 internal slots, so handing 64 layers to it made
-    /// `install_atlases` trip its debug assertion on every window.
+    /// 窗口调用方请求完整 64 层，而 RGBA 绑定只有 48 个内部槽位，
+    /// 直接传入 64 层会让每个窗口的 `install_atlases` 触发调试断言。
     #[test]
     fn the_rgba_atlas_stays_inside_its_bindless_range() {
         use crate::pipeline::{EXTERNAL_TEXTURE_BASE, MAX_ATLAS_LAYERS};
@@ -878,8 +839,8 @@ mod tests {
             "external textures need their slots"
         );
 
-        // A smaller request is untouched, a larger one is capped, and a zero
-        // request still produces a valid (non-zero) image array.
+        // 较小的请求保持原值，过大的请求被钳制，
+        // 零请求仍产出有效的（非零）图像数组。
         assert_eq!(atlas_layer_counts(4), (4, 4));
         assert_eq!(atlas_layer_counts(0), (1, 1));
         assert_eq!(
@@ -905,12 +866,11 @@ mod tests {
 
     #[test]
     fn the_layer_count_matches_the_bindless_descriptor_array() {
-        // The pipeline binds `MAX_ATLAS_LAYERS` slots; the atlas must not
-        // provide fewer or the descriptor write would go out of range.
+        // 管线绑定了 `MAX_ATLAS_LAYERS` 个槽位；图集层数不得少于此值，否则描述符写入会越界。
         assert_eq!(ATLAS_LAYERS, crate::pipeline::MAX_ATLAS_LAYERS);
     }
 
-    /// A glyph-sized upload.
+    /// 构造一个字形尺寸的上传请求。
     fn glyph(layer: u32) -> AtlasUpload {
         AtlasUpload {
             kind: AtlasKind::R8,
@@ -927,20 +887,18 @@ mod tests {
     fn a_batch_packs_every_glyph_into_one_staging_buffer() {
         let updates = [glyph(0), glyph(0), glyph(1)];
         let plan = plan_batch(|_| 4, &updates).expect("a valid batch");
-        // Two glyphs land back to back; the third starts a new layer but
-        // shares the same staging buffer.
+        // 前两个字形紧邻排布；第三个字形位于新图层但共享同一暂存缓冲区。
         assert_eq!(plan.offsets[0], Some(0));
         assert_eq!(plan.offsets[1], Some(64));
         assert_eq!(plan.offsets[2], Some(128));
         assert_eq!(plan.total, 192);
-        // Two distinct layers, each listed once.
+        // 两个不同图层各只记录一次。
         assert_eq!(plan.layers, vec![(AtlasKind::R8, 0), (AtlasKind::R8, 1)]);
     }
 
     #[test]
     fn a_batch_offset_is_always_a_multiple_of_the_texel_block() {
-        // A colour glyph is four bytes per texel, so a one-byte coverage
-        // upload in front of it would misalign the copy.
+        // 彩色字形每纹素占 4 字节，若其前方的 1 字节覆盖率上传未对齐，会导致拷贝偏移错位。
         let mut colour = glyph(0);
         colour.kind = AtlasKind::Rgba8;
         colour.width = 1;
@@ -951,7 +909,7 @@ mod tests {
         for offset in plan.offsets.iter().flatten() {
             assert_eq!(offset % 4, 0, "the copy offset must be texel aligned");
         }
-        // The colour glyph starts after the 64-byte coverage glyph, aligned.
+        // 彩色字形紧随 64 字节覆盖率字形之后，且满足 4 字节对齐。
         assert_eq!(plan.offsets[1], Some(64));
         assert_eq!(plan.total, 68);
     }

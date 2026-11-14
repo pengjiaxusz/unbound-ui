@@ -1,4 +1,4 @@
-//! Timeline event stream with status nodes, connectors, and timestamps.
+//! 时间线事件流，带状态节点、连接线与时间戳。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -15,32 +15,32 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_TIMELINE_NODES: usize = 4;
 
-/// A single event on a [`TimelineDesc`].
+/// [`TimelineDesc`] 上的单条事件。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TimelineItem {
-    /// Event title.
+    /// 事件标题。
     pub title: String,
-    /// Timestamp string.
+    /// 时间戳字符串。
     pub timestamp: String,
-    /// Status severity.
+    /// 状态严重级别。
     pub severity: Severity,
 }
 
-/// Descriptor for a [`Timeline`].
+/// [`Timeline`] 的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimelineDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Events in chronological order.
+    /// 按时间顺序排列的事件列表。
     pub items: Vec<TimelineItem>,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl TimelineDesc {
-    /// Create a timeline descriptor.
+    /// 创建时间线描述符。
     #[must_use]
     pub fn new(rect: Rect, items: Vec<TimelineItem>) -> Self {
         Self {
@@ -52,13 +52,13 @@ impl TimelineDesc {
     }
 }
 
-/// Deterministic sub-node id for a timeline event item (`0..4`).
+/// 时间线事件项的确定性子节点 ID（`0..4`）。
 #[must_use]
 pub const fn timeline_item_node(node: u64, index: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0xE00 + index as u64)
 }
 
-/// Emit a stable-shape vertical timeline (1 bg + 1 rail + 4 dots + 4 row cards + 1 focus ring = 11 primitives).
+/// 输出结构稳定的垂直时间线（1 个背景 + 1 条轨道线 + 4 个圆点 + 4 张行卡片 + 1 个焦点环 = 11 个图元）。
 #[must_use]
 pub fn emit_timeline(
     node: u64,

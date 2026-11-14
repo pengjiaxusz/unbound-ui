@@ -1,4 +1,4 @@
-//! AspectRatioBox & MasonryGrid adaptive multi-column waterfall layout.
+//! 纵横比容器（AspectRatioBox）与自适应多列瀑布流布局（MasonryGrid）。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -13,17 +13,17 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_MASONRY_ITEMS: usize = 6;
 
-/// Descriptor for an [`AspectRatioBox`] container.
+/// [`AspectRatioBox`] 容器描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AspectRatioBoxDesc {
-    /// Available outer bounds.
+    /// 可用外层边界。
     pub bounds: Rect,
-    /// Target `width / height` ratio.
+    /// 目标 `width / height` 宽高比。
     pub ratio: f32,
 }
 
 impl AspectRatioBoxDesc {
-    /// Compute the largest centered rectangle inside `bounds` matching `ratio`.
+    /// 在 `bounds` 内计算符合 `ratio` 的最大居中矩形。
     #[must_use]
     pub fn fit(&self) -> Rect {
         let r = self.ratio.max(0.05);
@@ -43,32 +43,32 @@ impl AspectRatioBoxDesc {
     }
 }
 
-/// One masonry tile specification.
+/// 单个瀑布流图块规格。
 #[derive(Clone, Debug, PartialEq)]
 pub struct MasonryItem {
-    /// Tile height (or aspect height).
+    /// 图块高度（或纵横比高度）。
     pub height: f32,
 }
 
-/// Descriptor for a [`MasonryGrid`].
+/// [`MasonryGrid`] 描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct MasonryDesc {
-    /// Container rectangle.
+    /// 容器矩形。
     pub rect: Rect,
-    /// Number of columns (>= 1).
+    /// 列数（>= 1）。
     pub columns: usize,
-    /// Gap between tiles in logical pixels.
+    /// 图块间距（逻辑像素）。
     pub gap: f32,
-    /// Tiles to arrange.
+    /// 待排列的图块列表。
     pub items: Vec<MasonryItem>,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl MasonryDesc {
-    /// Create a masonry grid descriptor.
+    /// 创建瀑布流网格描述符。
     #[must_use]
     pub fn new(rect: Rect, columns: usize, items: Vec<MasonryItem>) -> Self {
         Self {
@@ -82,7 +82,7 @@ impl MasonryDesc {
     }
 }
 
-/// Pure masonry shortest-column placement algorithm.
+/// 纯瀑布流最短列放置算法。
 #[must_use]
 pub fn layout_masonry(desc: &MasonryDesc) -> Vec<Rect> {
     let cols = desc.columns.max(1);
@@ -103,7 +103,7 @@ pub fn layout_masonry(desc: &MasonryDesc) -> Vec<Rect> {
     out
 }
 
-/// Emit a stable-shape masonry grid (1 bg + 6 tile slots + 1 focus ring = 8 primitives).
+/// 发射固定形状的瀑布流网格（1 背景 + 6 图块槽位 + 1 焦点环 = 8 个图元）。
 #[must_use]
 pub fn emit_masonry(node: u64, desc: &MasonryDesc, state: ControlState) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(8);

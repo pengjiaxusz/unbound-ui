@@ -1,4 +1,4 @@
-//! Dual-panel DateRangePicker with preset ranges and hover preview.
+//! 双面板日期范围选择器（DateRangePicker），支持预设范围与悬停预览。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -12,17 +12,17 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// Inclusive `[start, end]` date interval.
+/// 闭区间 `[start, end]` 日期范围。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct DateRange {
-    /// Start date.
+    /// 起始日期。
     pub start: NaiveDate,
-    /// End date.
+    /// 结束日期。
     pub end: NaiveDate,
 }
 
 impl DateRange {
-    /// Normalize `[a, b]` so `start <= end`.
+    /// 归一化 `[a, b]`，确保 `start <= end`。
     #[must_use]
     pub fn ordered(a: NaiveDate, b: NaiveDate) -> Self {
         if (a.year, a.month, a.day) <= (b.year, b.month, b.day) {
@@ -33,17 +33,17 @@ impl DateRange {
     }
 }
 
-/// Interactive state for [`DateRangePickerDesc`].
+/// [`DateRangePickerDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DateRangePickerState {
-    /// Selected range if both endpoints picked.
+    /// 若两端点均已选择，则为已选范围。
     pub range: Option<DateRange>,
-    /// In-progress anchor date while picking the second endpoint.
+    /// 选择第二个端点时的进行中锚点日期。
     pub pending_start: Option<NaiveDate>,
 }
 
 impl DateRangePickerState {
-    /// Handle clicking `date`: first click sets `pending_start`, second sets `range`.
+    /// 处理点击 `date`：首次点击设置 `pending_start`，第二次点击设置 `range`。
     pub fn pick(&mut self, date: NaiveDate) {
         if let Some(start) = self.pending_start.take() {
             self.range = Some(DateRange::ordered(start, date));
@@ -53,21 +53,21 @@ impl DateRangePickerState {
     }
 }
 
-/// Descriptor for a dual-month [`DateRangePicker`].
+/// 双月 [`DateRangePicker`] 描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DateRangePickerDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Selected range.
+    /// 已选日期范围。
     pub range: Option<DateRange>,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl DateRangePickerDesc {
-    /// Create a date range picker descriptor.
+    /// 创建日期范围选择器描述符。
     #[must_use]
     pub fn new(rect: Rect, range: Option<DateRange>) -> Self {
         Self {
@@ -79,19 +79,19 @@ impl DateRangePickerDesc {
     }
 }
 
-/// Deterministic sub-node id for a date range preset pill (`0..3`).
+/// 日期范围预设胶囊（`0..3`）的确定性子节点 ID。
 #[must_use]
 pub const fn date_range_preset_node(node: u64, index: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x600 + index as u64)
 }
 
-/// Deterministic sub-node id for a date range month panel (`0..2`).
+/// 日期范围月份面板（`0..2`）的确定性子节点 ID。
 #[must_use]
 pub const fn date_range_panel_node(node: u64, panel: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x610 + panel as u64)
 }
 
-/// Emit a stable-shape dual-panel date range picker (1 bg + 2 month panels + 3 preset pills + 1 range highlight + 1 focus ring = 8 primitives).
+/// 发射固定形状的双面板日期范围选择器（1 背景 + 2 月份面板 + 3 预设胶囊 + 1 范围高亮 + 1 焦点环 = 8 个图元）。
 #[must_use]
 pub fn emit_date_range_picker(
     node: u64,

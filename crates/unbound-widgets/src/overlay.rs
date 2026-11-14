@@ -1,57 +1,56 @@
-//! Overlay placement and the popup stack.
+//! 浮层定位与弹窗栈管理。
 //!
-//! A popup has two problems that the rest of the widget layer does not:
+//! 弹窗面临两个控件层其余部分没有的问题：
 //!
-//! 1. **It must never leave the window.** [`place_anchored_popup`] is the pure
-//!    answer: it prefers the requested side, flips when that side has no room,
-//!    and finally shifts the popup back inside the viewport.
-//! 2. **It must stack, dismiss and clean up in the right order.** The
-//!    [`OverlayStack`] hands out monotonically increasing sort keys, closes
-//!    the top layer on `Escape` or an outside click, and prunes entries whose
-//!    anchor vanished in the same frame — a popup must never outlive its
-//!    trigger and leave a phantom hit region behind.
+//! 1. **绝不能超出窗口。** [`place_anchored_popup`] 是纯几何方案：
+//!    优先选择请求方向，空间不足时翻转，最后将弹窗移回视口内。
+//! 2. **必须按正确顺序堆叠、关闭与清理。** [`OverlayStack`] 分配单调递增的排序键，
+//!    在按下 `Escape` 或点击外部时关闭顶层，并在同一帧内清除锚点已消失的条目——
+//!    弹窗绝不能比其触发器存活更久而留下幽灵命中区。
+//!
+//!
+//!
 
 use unbound_gpu::data::PassLayer;
 use unbound_math::{Rect, Vec2};
 
-/// The gap between an anchor and its popup, in logical pixels.
+/// 锚点与弹窗之间的间距（逻辑像素）。
 pub const POPUP_GAP: f32 = 4.0;
 
-/// Where a popup would like to appear relative to its anchor.
+/// 弹窗相对于锚点的期望出现位置。
 ///
-/// The twelve variants cover the four sides, each in its start, centred and
-/// end alignment.
+/// 十二个变体覆盖四个方向及其起始、居中与末尾对齐。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum Placement {
-    /// Below the anchor, aligned to its start edge.
+    /// 位于锚点下方，与起始边对齐。
     #[default]
     BottomStart,
-    /// Below the anchor, aligned to its end edge.
+    /// 位于锚点下方，与末尾边对齐。
     BottomEnd,
-    /// Below the anchor, horizontally centred on it.
+    /// 位于锚点下方，水平居中。
     Bottom,
-    /// Above the anchor, aligned to its start edge.
+    /// 位于锚点上方，与起始边对齐。
     TopStart,
-    /// Above the anchor, aligned to its end edge.
+    /// 位于锚点上方，与末尾边对齐。
     TopEnd,
-    /// Above the anchor, horizontally centred on it.
+    /// 位于锚点上方，水平居中。
     Top,
-    /// To the right of the anchor, aligned to its top edge.
+    /// 位于锚点右侧，与顶边对齐。
     RightStart,
-    /// To the right of the anchor, aligned to its bottom edge.
+    /// 位于锚点右侧，与底边对齐。
     RightEnd,
-    /// To the right of the anchor, vertically centred on it.
+    /// 位于锚点右侧，垂直居中。
     Right,
-    /// To the left of the anchor, aligned to its top edge.
+    /// 位于锚点左侧，与顶边对齐。
     LeftStart,
-    /// To the left of the anchor, aligned to its bottom edge.
+    /// 位于锚点左侧，与底边对齐。
     LeftEnd,
-    /// To the left of the anchor, vertically centred on it.
+    /// 位于锚点左侧，垂直居中。
     Left,
 }
 
 impl Placement {
-    /// The opposite side, used after a flip.
+    /// 翻转后使用的对向位置。
     #[must_use]
     pub const fn flip(self) -> Self {
         match self {
@@ -90,12 +89,12 @@ impl Placement {
         matches!(self, Self::RightStart | Self::RightEnd | Self::Right)
     }
 
-    /// Horizontal placement aligned to the anchor's trailing edge.
+    /// 水平放置且与锚点末尾边对齐。
     const fn aligned_to_end(self) -> bool {
         matches!(self, Self::BottomEnd | Self::TopEnd)
     }
 
-    /// Side placement aligned to the anchor's bottom edge.
+    /// 侧边放置且与锚点底边对齐。
     const fn aligned_y_to_end(self) -> bool {
         matches!(self, Self::RightEnd | Self::LeftEnd)
     }
@@ -105,28 +104,24 @@ impl Placement {
     }
 }
 
-/// The geometry of a placed popup.
+/// 已放置弹窗的几何信息。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct PlacedPopup {
-    /// The final popup rectangle, always inside the viewport.
+    /// 最终弹窗矩形（始终位于视口内）。
     pub rect: Rect,
-    /// The side the popup actually ended up on (the requested side, or the
-    /// flip when the requested one overflowed).
+    /// 弹窗实际落定的方向（请求方向，或在溢出时翻转后的方向）。
     pub chosen_placement: Placement,
-    /// The point on the popup edge nearest the anchor. The tip of the arrow.
+    /// 弹窗边缘最靠近锚点的点，即箭头尖端位置。
     pub arrow_tip: Vec2,
 }
 
-/// Place a popup next to an anchor, always inside the viewport.
+/// 将弹窗放置在锚点旁，始终保持在视口内。
 ///
-/// The returned rectangle is never larger than the viewport: a popup that does
-/// not fit is shrunk first, then positioned. Flipping and shifting make the
-/// result satisfy `Rule::ViewportContainment` for every anchor on or near an
-/// edge.
+/// 返回的矩形不会大于视口：放不下的弹窗会先缩小再定位。
+/// 翻转与平移确保结果对边缘或近边缘锚点均满足 `Rule::ViewportContainment`。
 ///
-/// New callers bind the result as [`PlacedPopup`] to receive the chosen side
-/// and the arrow tip. Existing call sites that still want only the rectangle
-/// keep working because `Rect: From<PlacedPopup>`:
+/// 新调用方可将结果绑定为 [`PlacedPopup`] 以获取选定方向与箭头尖端。
+/// 仅需矩形的现有调用点仍可正常工作，因为实现了 `Rect: From<PlacedPopup>`：
 ///
 /// ```
 /// # use unbound_math::{Rect, Vec2};
@@ -148,7 +143,7 @@ pub fn place_anchored_popup<T: From<PlacedPopup>>(
     ))
 }
 
-/// The detailed form of [`place_anchored_popup`].
+/// [`place_anchored_popup`] 的详细形式。
 #[must_use]
 pub fn place_anchored_popup_detailed(
     anchor: Rect,
@@ -190,7 +185,7 @@ pub fn place_anchored_popup_detailed(
         Vec2::new(x, y)
     };
 
-    // Flip when the preferred side overflows and the opposite side fits.
+    // 当首选方向溢出且对向方向放得下时翻转。
     if placement.vertical() {
         let overflows = if placement.below() {
             origin.y + height > viewport.max().y
@@ -227,7 +222,7 @@ pub fn place_anchored_popup_detailed(
         }
     }
 
-    // Shift the remaining overflow back inside.
+    // 将剩余溢出部分移回视口内。
     let max_x = (viewport.max().x - width).max(viewport.origin.x);
     let max_y = (viewport.max().y - height).max(viewport.origin.y);
     origin.x = origin.x.clamp(viewport.origin.x, max_x);
@@ -268,44 +263,43 @@ impl From<PlacedPopup> for Rect {
     }
 }
 
-/// A request for the render graph's backdrop-blur pass.
+/// 渲染图背景模糊 Pass 的请求。
 ///
-/// Components that want frosted glass behind them return one of these. The
-/// caller collects the requests into a frame; an empty list means the graph
-/// skips the blur passes entirely.
+/// 需要毛玻璃背景的组件返回此请求。调用方收集一帧内的请求；
+/// 若列表为空，渲染图会完全跳过模糊 Pass。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct BackdropRequest {
-    /// The node that owns the effect.
+    /// 拥有该效果的节点。
     pub node: u64,
-    /// The rectangle to blur behind.
+    /// 需要模糊的背景矩形。
     pub rect: Rect,
-    /// The blur radius, in logical pixels.
+    /// 模糊半径（逻辑像素）。
     pub blur: f32,
 }
 
 impl BackdropRequest {
-    /// A request, or `None` when the radius is zero.
+    /// 构造请求；半径为零时返回 `None`。
     #[must_use]
     pub fn new(node: u64, rect: Rect, blur: f32) -> Option<Self> {
         (blur > 0.0 && !rect.is_empty()).then_some(Self { node, rect, blur })
     }
 }
 
-/// What kind of overlay an entry is.
+/// 浮层条目的类型。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum OverlayKind {
-    /// A dropdown, select or popover.
+    /// 下拉框、选择器或气泡框。
     Popover,
-    /// A context / dropdown menu.
+    /// 上下文或下拉菜单。
     Menu,
-    /// A non-interactive tooltip.
+    /// 非交互式工具提示。
     Tooltip,
-    /// A modal dialog with a scrim.
+    /// 带遮罩的模态对话框。
     Modal,
 }
 
 impl OverlayKind {
-    /// The pass layer this kind paints into.
+    /// 该类型绘制所在的渲染层。
     #[must_use]
     pub const fn layer(self) -> PassLayer {
         match self {
@@ -314,40 +308,39 @@ impl OverlayKind {
         }
     }
 
-    /// Whether an outside click dismisses it.
+    /// 点击外部是否关闭。
     #[must_use]
     pub const fn light_dismiss(self) -> bool {
         !matches!(self, Self::Modal)
     }
 
-    /// Whether `Escape` closes it.
+    /// 按下 `Escape` 是否关闭。
     #[must_use]
     pub const fn escape_closes(self) -> bool {
         !matches!(self, Self::Tooltip)
     }
 }
 
-/// One entry in the overlay stack.
+/// 浮层栈中的单个条目。
 #[derive(Clone, Debug, PartialEq)]
 pub struct OverlayEntry {
-    /// The popup's own node id.
+    /// 弹窗自身的节点 ID。
     pub node: u64,
-    /// The trigger it is anchored to, if any.
+    /// 所锚定的触发器（若有）。
     pub anchor: Option<u64>,
-    /// The kind, which decides the layer and dismissal policy.
+    /// 类型，决定渲染层与关闭策略。
     pub kind: OverlayKind,
-    /// The popup bounds in window space.
+    /// 窗口空间下的弹窗边界。
     pub bounds: Rect,
-    /// The focusable nodes a modal traps `Tab` inside.
+    /// 模态框将 `Tab` 焦点限制在内的可聚焦节点列表。
     pub focus_scope: Vec<u64>,
-    /// Whether the anchor has scrolled out of its clip region. A clipped
-    /// anchor hides the overlay without closing it, so it reappears when the
-    /// anchor scrolls back into view.
+    /// 锚点是否已滚出其裁剪区域。被裁剪的锚点会隐藏浮层但不关闭它，
+    /// 以便锚点滚回视图时重新显示。
     pub anchor_clipped: bool,
 }
 
 impl OverlayEntry {
-    /// A popover anchored to a trigger.
+    /// 创建锚定到触发器的气泡框条目。
     #[must_use]
     pub fn popover(node: u64, anchor: u64, bounds: Rect) -> Self {
         Self {
@@ -360,7 +353,7 @@ impl OverlayEntry {
         }
     }
 
-    /// A menu anchored to a trigger.
+    /// 创建锚定到触发器的菜单条目。
     #[must_use]
     pub fn menu(node: u64, anchor: u64, bounds: Rect) -> Self {
         Self {
@@ -373,7 +366,7 @@ impl OverlayEntry {
         }
     }
 
-    /// A tooltip anchored to a trigger.
+    /// 创建锚定到触发器的工具提示条目。
     #[must_use]
     pub fn tooltip(node: u64, anchor: u64, bounds: Rect) -> Self {
         Self {
@@ -386,7 +379,7 @@ impl OverlayEntry {
         }
     }
 
-    /// A modal dialog with a focus scope.
+    /// 创建带焦点作用域的模态对话框条目。
     #[must_use]
     pub fn modal(node: u64, bounds: Rect, focus_scope: Vec<u64>) -> Self {
         Self {
@@ -399,7 +392,7 @@ impl OverlayEntry {
         }
     }
 
-    /// Mark whether the anchor has scrolled out of its clip region.
+    /// 标记锚点是否已滚出其裁剪区域。
     #[must_use]
     pub fn with_anchor_clipped(mut self, clipped: bool) -> Self {
         self.anchor_clipped = clipped;
@@ -407,12 +400,11 @@ impl OverlayEntry {
     }
 }
 
-/// The popup stack.
+/// 弹窗栈。
 ///
-/// Entry order is insertion order. A later entry paints above an earlier one
-/// when their layers are equal, and `PassLayer::Modal` always paints above
-/// `PassLayer::Overlay` so a select inside a dialog stays inside the dialog's
-/// visual layer.
+/// 条目按插入顺序排列。同层中后插入的条目绘制在先插入的条目之上，
+/// 且 `PassLayer::Modal` 始终绘制在 `PassLayer::Overlay` 之上，
+/// 使对话框内的选择器保持在对话框的视觉层级内。
 #[derive(Clone, Debug, Default)]
 pub struct OverlayStack {
     entries: Vec<OverlayEntry>,
@@ -425,7 +417,7 @@ impl OverlayStack {
         Self::default()
     }
 
-    /// Push an overlay and return its ordering key.
+    /// 推入浮层并返回其排序键。
     pub fn push(&mut self, entry: OverlayEntry) -> u64 {
         self.order = self.order.wrapping_add(1);
         let order = self.order;
@@ -433,7 +425,7 @@ impl OverlayStack {
         self.sort_key(self.entries.len() - 1, order)
     }
 
-    /// The topmost entry that is actually visible.
+    /// 当前实际可见的最顶层条目。
     #[must_use]
     pub fn top(&self) -> Option<&OverlayEntry> {
         self.entries
@@ -442,18 +434,16 @@ impl OverlayStack {
             .max_by_key(|entry| self.key_of(entry))
     }
 
-    /// Every entry whose anchor is still inside its clip region.
+    /// 锚点仍在裁剪区域内的所有条目。
     ///
-    /// Painting iterates this instead of [`Self::entries`] so a clipped anchor
-    /// hides its popup while keeping it in the stack.
+    /// 绘制时遍历此方法而非 [`Self::entries`]，以便锚点被裁剪时隐藏弹窗但保留在栈中。
     pub fn visible_entries(&self) -> impl Iterator<Item = &OverlayEntry> {
         self.entries.iter().filter(|entry| !entry.anchor_clipped)
     }
 
-    /// Hide or reveal an overlay without closing it.
+    /// 隐藏或显示浮层而不关闭它。
     ///
-    /// A clipped anchor hides its popup; the entry stays in the stack so it
-    /// reappears when the anchor scrolls back into view.
+    /// 锚点被裁剪时会隐藏弹窗；条目保留在栈中，以便锚点滚回视图时重新显现。
     pub fn set_anchor_clipped(&mut self, node: u64, clipped: bool) -> bool {
         for entry in &mut self.entries {
             if entry.node == node {
@@ -464,7 +454,7 @@ impl OverlayStack {
         false
     }
 
-    /// How many overlays are open.
+    /// 当前打开的浮层数量。
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -475,33 +465,33 @@ impl OverlayStack {
         self.entries.is_empty()
     }
 
-    /// Every entry, bottom first.
+    /// 按从底到顶顺序遍历所有条目。
     #[must_use]
     pub fn entries(&self) -> &[OverlayEntry] {
         &self.entries
     }
 
-    /// Whether a node is open.
+    /// 判断节点是否处于打开状态。
     #[must_use]
     pub fn contains(&self, node: u64) -> bool {
         self.entries.iter().any(|entry| entry.node == node)
     }
 
-    /// Remove one overlay by node. Returns whether it was open.
+    /// 按节点移除一个浮层，返回其此前是否打开。
     pub fn close(&mut self, node: u64) -> bool {
         let before = self.entries.len();
         self.entries.retain(|entry| entry.node != node);
         before != self.entries.len()
     }
 
-    /// Close the topmost overlay. Returns the closed node.
+    /// 关闭最顶层浮层，返回被关闭的节点。
     pub fn close_top(&mut self) -> Option<u64> {
         let node = self.top()?.node;
         self.close(node);
         Some(node)
     }
 
-    /// Handle `Escape`: close the topmost dismissible overlay.
+    /// 处理 `Escape`：关闭最顶层可关闭的浮层。
     pub fn close_on_escape(&mut self) -> Option<u64> {
         let node = self
             .entries
@@ -514,8 +504,7 @@ impl OverlayStack {
         Some(node)
     }
 
-    /// Handle an outside click: close the topmost light-dismissable overlay
-    /// when the point is outside its bounds.
+    /// 处理外部点击：当点击点位于最顶层可轻触关闭浮层的边界外时关闭它。
     pub fn close_outside(&mut self, point: Vec2) -> Option<u64> {
         let entry = self
             .entries
@@ -530,10 +519,9 @@ impl OverlayStack {
         Some(node)
     }
 
-    /// Drop overlays whose anchor no longer exists.
+    /// 移除锚点已不存在的浮层。
     ///
-    /// Run once per frame after the scene is rebuilt: a trigger that was
-    /// removed must take its popup (and any focus trap) with it.
+    /// 每帧重建场景后运行一次：触发器被移除时，其弹窗（及焦点陷阱）必须一并移除。
     pub fn prune_anchors(&mut self, mut valid: impl FnMut(u64) -> bool) -> usize {
         let before = self.entries.len();
         self.entries.retain(|entry| match entry.anchor {
@@ -543,7 +531,7 @@ impl OverlayStack {
         before - self.entries.len()
     }
 
-    /// The focus scope of the topmost modal, if one is open.
+    /// 若存在打开的模态框，返回最顶层模态框的焦点作用域。
     #[must_use]
     pub fn focus_scope(&self) -> Option<&[u64]> {
         self.entries
@@ -553,13 +541,13 @@ impl OverlayStack {
             .map(|entry| entry.focus_scope.as_slice())
     }
 
-    /// The sort prefix for an entry's layer and order.
+    /// 条目渲染层与顺序的排序前缀。
     #[must_use]
     pub fn sort_key(&self, _index: usize, order: u32) -> u64 {
         (order as u64) << 8
     }
 
-    /// The full ordering key of an entry, layer first.
+    /// 条目的完整排序键（渲染层优先）。
     #[must_use]
     pub fn key_of(&self, entry: &OverlayEntry) -> u64 {
         let index = self
@@ -701,7 +689,7 @@ mod tests {
             Placement::Bottom,
         );
         assert_eq!(placed.chosen_placement, Placement::Top);
-        // The arrow points down at the anchor from the popup's bottom edge.
+        // 箭头从弹窗底边向下指向锚点。
         assert_eq!(placed.arrow_tip.y, placed.rect.max().y);
         assert_eq!(placed.arrow_tip.x, anchor.center().x);
     }

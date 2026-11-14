@@ -1,21 +1,21 @@
-//! Zero-copy time-travel snapshots (`docs` §7.2).
+//! 零拷贝时间旅行快照（`docs` §7.2）。
 //!
-//! When a frame fails, the whole point is to be able to *look at it again*:
-//! replay the exact geometry, step through it, diff it against a later frame.
-//! `rkyv` is the format that makes this cheap — the archived bytes can be
-//! read in place, with no deserialisation pass and no allocation.
+//! 当一帧失败时，核心诉求是能够*重新检视它*：重放精确的几何结构、
+//! 单步调试，或与后续帧进行 diff 比对。`rkyv` 使这一过程极为廉价——
+//! 归档字节可直接原地读取，无需反序列化过程，也无需堆分配。
 //!
-//! Two formats live here on purpose:
 //!
-//! * [`TimeTravel`] — the `rkyv` archive. Read it in place, or restore it into
-//!   a live [`Frame`]. This is the format a debugger keeps.
-//! * [`capture`] / [`restore`] — `postcard`, the compact serde format. Useful
-//!   for shipping a frame over a wire or storing thousands of them.
+//! 此处有意并存两种格式：
 //!
-//! The DTO layer exists because [`crate::frame::NodeSnapshot`] carries a
-//! `&'static str` source location. Serialising a string and leaking it back on
-//! load is fine for a debugging artefact restored once per investigation, and it
-//! keeps the hot path free of `String` churn.
+//! * [`TimeTravel`] —— `rkyv` 归档。可原地读取，或恢复为活跃 [`Frame`]。
+//!   这是调试器保存的格式。
+//! * [`capture`] / [`restore`] —— `postcard` 紧凑 serde 格式。
+//!   适合跨网络传输帧或持久化存储数千帧。
+//!
+//! DTO 层的存在是因为 [`crate::frame::NodeSnapshot`] 携带 `&'static str`
+//! 源码位置。序列化字符串并在加载时将其泄漏回静态区，对每次排查仅恢复
+//! 一次的调试产物完全合理，同时让热路径免于 `String` 分配抖动。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -24,7 +24,7 @@ use unbound_math::Rect;
 
 use crate::frame::{Frame, NodeKind, NodeSnapshot, SourceLoc};
 
-/// Stable wire format for a frame.
+/// 帧的稳定传输格式。
 #[derive(
     Clone,
     Debug,
@@ -40,7 +40,7 @@ pub struct FrameSnapshot {
     pub nodes: Vec<SnapNode>,
 }
 
-/// Stable wire format for one node. Field order is part of the format.
+/// 单个节点的稳定传输格式。字段顺序是格式契约的一部分。
 #[derive(
     Clone,
     Debug,
@@ -61,7 +61,7 @@ pub struct SnapNode {
     pub path: String,
     pub rect: [f32; 4],
     pub clip: Option<[f32; 4]>,
-    /// `0` container, `1` text, `2` interactive, `3` portal.
+    /// `0` 容器，`1` 文本，`2` 可交互，`3` portal。
     pub kind: u8,
     pub ink: [f32; 4],
     pub ellipsis: bool,
@@ -69,7 +69,7 @@ pub struct SnapNode {
     pub min_size: [f32; 2],
     pub overlays_siblings: bool,
     pub scrollable: bool,
-    /// Text foreground and background, `r,g,b,r,g,b`.
+    /// 文本前景色与背景色，`r,g,b,r,g,b`。
     pub text_colors: Option<[u8; 6]>,
 }
 
@@ -82,7 +82,7 @@ fn rect_from_array(array: [f32; 4]) -> Rect {
 }
 
 impl FrameSnapshot {
-    /// Capture a frame.
+    /// 捕获一帧。
     #[must_use]
     pub fn capture(frame: &Frame) -> Self {
         Self {
@@ -134,7 +134,7 @@ impl FrameSnapshot {
         }
     }
 
-    /// Rebuild a frame. Source locations are interned for the process lifetime.
+    /// 重建一帧。源码位置会在进程生命周期内驻留（intern）。
     #[must_use]
     pub fn restore(&self) -> Frame {
         Frame::from_nodes(
@@ -180,77 +180,77 @@ impl FrameSnapshot {
     }
 }
 
-/// Intern a file path for the lifetime of the process.
+/// 将文件路径驻留到进程生命周期。
 fn intern(file: &str) -> &'static str {
-    // A snapshot is restored at most a handful of times per investigation, and
-    // `Location` needs a `&'static str`, so leaking is the correct trade here.
+    // 每次排查至多恢复几次快照，而 `Location` 需要 `&'static str`，
+    // 因此在此处泄漏内存是正确的权衡。
     Box::leak(file.to_owned().into_boxed_str())
 }
 
-/// Serialise a frame to bytes.
+/// 将帧序列化为字节。
 ///
 /// # Errors
-/// Returns the underlying postcard error when the frame does not fit its
-/// declared sizes (which would indicate a corrupt `Frame`).
+/// 当帧超出声明的大小限制（表明 `Frame` 已损坏）时，返回底层 postcard 错误。
+///
 pub fn capture(frame: &Frame) -> Result<Vec<u8>, postcard::Error> {
     postcard::to_allocvec(&FrameSnapshot::capture(frame))
 }
 
-/// Deserialise a frame from bytes.
+/// 从字节反序列化帧。
 ///
 /// # Errors
-/// Returns the underlying postcard error for truncated or corrupt input.
+/// 输入截断或损坏时返回底层 postcard 错误。
 pub fn restore(bytes: &[u8]) -> Result<Frame, postcard::Error> {
     let snapshot: FrameSnapshot = postcard::from_bytes(bytes)?;
     Ok(snapshot.restore())
 }
 
-/// A zero-copy time-travel snapshot.
+/// 零拷贝时间旅行快照。
 ///
-/// The bytes are the archive; every read is a pointer chase into the buffer
-/// instead of a copy. A debugger can keep thousands of these in memory and
-/// still step through them instantly.
+/// 字节本身即归档；每次读取都是直接指向缓冲区内的指针跳转，而非拷贝。
+/// 调试器可在内存中保留数千份此类快照并依然瞬时单步回溯。
+///
 #[derive(Clone, Debug)]
 pub struct TimeTravel {
     bytes: rkyv::util::AlignedVec,
 }
 
 impl TimeTravel {
-    /// Archive a frame.
+    /// 归档一帧。
     ///
     /// # Errors
-    /// Returns the archive error when the frame cannot be serialised.
+    /// 帧无法序列化时返回归档错误。
     pub fn capture(frame: &Frame) -> Result<Self, rkyv::rancor::Error> {
         let snapshot = FrameSnapshot::capture(frame);
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot)?;
         Ok(Self { bytes })
     }
 
-    /// Read the archived frame in place.
+    /// 原地读取已归档的帧。
     ///
     /// # Errors
-    /// Returns the validation error when the buffer is corrupt or was written
-    /// by a different version of the format.
+    /// 缓冲区损坏或由不同版本格式写入时返回校验错误。
+    ///
     pub fn access(&self) -> Result<&rkyv::Archived<FrameSnapshot>, rkyv::rancor::Error> {
         rkyv::access::<rkyv::Archived<FrameSnapshot>, rkyv::rancor::Error>(&self.bytes)
     }
 
-    /// The archived bytes.
+    /// 归档字节切片。
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Number of bytes the snapshot occupies.
+    /// 快照占用的字节数。
     #[must_use]
     pub fn size(&self) -> usize {
         self.bytes.len()
     }
 
-    /// Restore a live frame from the archive.
+    /// 从归档恢复为活跃帧。
     ///
     /// # Errors
-    /// Returns the archive error when the buffer is corrupt.
+    /// 缓冲区损坏时返回归档错误。
     pub fn restore(&self) -> Result<Frame, rkyv::rancor::Error> {
         let archived = self.access()?;
         let restored = rkyv::deserialize::<FrameSnapshot, rkyv::rancor::Error>(archived)?;
@@ -258,13 +258,13 @@ impl TimeTravel {
     }
 }
 
-/// Open an archived snapshot that was written elsewhere.
+/// 打开由外部写入的归档快照。
 ///
 /// # Errors
-/// Returns the validation error when the buffer is corrupt.
+/// 缓冲区损坏时返回校验错误。
 pub fn open(bytes: &[u8]) -> Result<TimeTravel, rkyv::rancor::Error> {
-    // Validate before taking ownership: a corrupt buffer must never reach the
-    // rest of the debugger as if it were a frame.
+    // 接管所有权前先校验：损坏的缓冲区绝不可当作正常帧进入调试器其余部分。
+    //
     rkyv::access::<rkyv::Archived<FrameSnapshot>, rkyv::rancor::Error>(bytes)?;
     let mut owned = rkyv::util::AlignedVec::new();
     owned.extend_from_slice(bytes);
@@ -345,11 +345,11 @@ mod tests {
         let frame = sample();
         let snapshot = TimeTravel::capture(&frame).unwrap();
         let archived = snapshot.access().unwrap();
-        // The archived viewport is read straight out of the buffer.
+        // 直接从缓冲区原地读取归档的视口。
         assert_eq!(archived.viewport[0], 0.0);
         assert_eq!(archived.viewport[2], 800.0);
         assert_eq!(archived.nodes.len(), frame.nodes.len());
-        // The source path survives as a string slice into the archive.
+        // 源码路径作为指向归档内的字符串切片保留。
         assert!(archived.nodes[0].path.as_str().contains("Root"));
     }
 
@@ -377,7 +377,7 @@ mod tests {
     fn the_archive_is_compact() {
         let frame = sample();
         let snapshot = TimeTravel::capture(&frame).unwrap();
-        // Ten kilobytes of geometry must not explode into megabytes.
+        // 10 KB 几何数据不得膨胀成数 MB。
         assert!(
             snapshot.size() < 64 * 1024,
             "archive is {} bytes",
@@ -385,9 +385,9 @@ mod tests {
         );
     }
 
-    /// A snapshot is meant to travel over a wire, so its ids are whatever the
-    /// sender put there. Id 0 has no slot in the dense index: the old code
-    /// subtracted one from zero and panicked instead of restoring the frame.
+    /// 快照用于跨边界传输，其 ID 完全由发送方决定。
+    /// ID 0 在稠密索引中没有槽位：旧代码从零减一并发生 panic，而非恢复帧。
+    ///
     #[test]
     fn a_snapshot_carrying_a_zero_id_is_restored_instead_of_panicking() {
         let frame = sample();
@@ -399,8 +399,8 @@ mod tests {
         assert!(restored.get(0).is_some());
     }
 
-    /// `u64::MAX` used to size the id index by the id itself, which asked the
-    /// allocator for `usize::MAX` entries.
+    /// `u64::MAX` 曾导致按 ID 本身大小分配索引，向分配器请求 `usize::MAX` 个条目。
+    ///
     #[test]
     fn a_snapshot_carrying_an_absurd_id_is_restored_instead_of_panicking() {
         let frame = sample();
@@ -412,8 +412,8 @@ mod tests {
         assert!(restored.get(u64::MAX).is_some());
     }
 
-    /// The same goes through the rkyv path: `open` validates the *archive*,
-    /// but the ids inside it are still the sender's business.
+    /// 经由 rkyv 路径同样如此：`open` 会校验*归档结构*，但内部的 ID 仍由发送方控制。
+    ///
     #[test]
     fn an_archive_carrying_a_zero_id_is_restored_instead_of_panicking() {
         let frame = sample();

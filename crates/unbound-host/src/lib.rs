@@ -1,22 +1,22 @@
 //! 宿主侧热重载（`docs` §8.1）。
 //!
-//! The host keeps the window, the Vulkan device and the persistent pools alive
-//! while the guest — the whole business layer — is unloaded, rebuilt and
-//! remounted. Three things make that safe:
+//! host 在卸载、重编译并重新挂载 guest（即整个业务层）期间保持窗口、
+//! Vulkan 设备与持久内存池存活。三项机制保证了该过程的安全性：
 //!
-//! 1. **A `#[repr(C)]` vtable with a version check** ([`unbound_abi::plugin`]):
-//!    a mismatched guest is refused, never called.
-//! 2. **A single heap.** The host hands the guest an allocator vtable and the
-//!    guest installs a `#[global_allocator]` forwarding to it, so a `Vec<u8>`
-//!    built by the guest can be freed by the host (the classic Windows
-//!    cross-CRT corruption bug).
-//! 3. **A state handoff decision made from the schema hash**, not from a guess:
-//!    equal hashes adopt the old pointer verbatim, different hashes round-trip
-//!    through a self-describing buffer.
 //!
-//! On Windows a loaded `.dll` is locked, so a rebuild cannot overwrite it.
-//! [`GuestHost::reload`] therefore shadow-copies the fresh artefact to a unique
-//! temp path first, which is the doc's "Shadow Copy 自动重挂载".
+//! 1. **带版本检查的 `#[repr(C)]` 虚表**（[`unbound_abi::plugin`]）：
+//!    版本不匹配的 guest 会被直接拒绝，绝不调用。
+//! 2. **单一堆。** host 向 guest 传入分配器虚表，guest 安装转发至此的
+//!    `#[global_allocator]`，从而使 guest 构建的 `Vec<u8>` 可由 host 释放
+//!    （消除经典的 Windows 跨 CRT 堆损坏缺陷）。
+//!
+//! 3. **基于 schema 哈希的状态移交决策**，而非凭空猜测：
+//!    哈希相等则直接接管旧指针，哈希不同则经由自描述缓冲区往返迁移。
+//!
+//!
+//! 在 Windows 上已加载的 `.dll` 会被锁定，重编译无法覆盖它。
+//! 因此 [`GuestHost::reload`] 会先将新产物影子拷贝（shadow-copy）到唯一临时路径，
+//! 即文档所述的“Shadow Copy 自动重挂载”。
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -35,18 +35,18 @@ use unbound_abi::plugin::{
 
 pub use unbound_abi::plugin::{StateHandoff, ABI_VERSION as GUEST_ABI_VERSION};
 
-/// Anything that can go wrong while mounting a guest.
+/// 挂载 guest 时可能发生的各类错误。
 #[derive(Debug)]
 pub enum HostError {
-    /// The dynamic library could not be opened.
+    /// 无法打开动态库。
     Load(libloading::Error),
-    /// The library does not export [`GUEST_ENTRY_SYMBOL`].
+    /// 动态库未导出 [`GUEST_ENTRY_SYMBOL`]。
     MissingEntry,
-    /// The guest was built against a different ABI.
+    /// guest 基于不兼容的 ABI 构建。
     Abi(AbiCompat),
-    /// Filesystem failure while shadow-copying.
+    /// 影子拷贝时发生文件系统错误。
     Io(std::io::Error),
-    /// No guest is mounted.
+    /// 当前未挂载任何 guest。
     NoGuest,
 }
 
@@ -76,7 +76,7 @@ impl From<std::io::Error> for HostError {
     }
 }
 
-/// One node the guest asked the host to create.
+/// guest 请求 host 创建的单个节点。
 #[derive(Clone, Debug)]
 pub struct HostNode {
     pub id: RawNodeId,
@@ -87,7 +87,7 @@ pub struct HostNode {
     pub children: Vec<RawNodeId>,
 }
 
-/// Flat node arena filled by the guest's `build_view` pass.
+/// 由 guest 的 `build_view` 过程填充的扁平节点 arena。
 #[derive(Default, Debug)]
 pub struct NodeArena {
     nodes: Vec<HostNode>,
@@ -97,7 +97,7 @@ pub struct NodeArena {
 }
 
 impl NodeArena {
-    /// Drop the previous frame but keep the allocation.
+    /// 丢弃上一帧数据但保留底层内存分配。
     pub fn clear(&mut self) {
         self.nodes.clear();
         self.index.clear();
@@ -105,7 +105,7 @@ impl NodeArena {
         self.finished_root = None;
     }
 
-    /// Number of nodes built this frame.
+    /// 本帧构建的节点数量。
     #[must_use]
     pub fn len(&self) -> usize {
         self.nodes.len()
@@ -116,19 +116,19 @@ impl NodeArena {
         self.nodes.is_empty()
     }
 
-    /// Nodes in build order.
+    /// 按构建顺序排列的节点。
     #[must_use]
     pub fn nodes(&self) -> &[HostNode] {
         &self.nodes
     }
 
-    /// Root nodes (those pushed with a null parent).
+    /// 根节点列表（以空父节点推入的节点）。
     #[must_use]
     pub fn roots(&self) -> &[RawNodeId] {
         &self.roots
     }
 
-    /// Root handed over by `finish`.
+    /// 由 `finish` 移交的根节点。
     #[must_use]
     pub fn finished_root(&self) -> Option<RawNodeId> {
         self.finished_root
@@ -140,14 +140,14 @@ impl NodeArena {
     }
 
     fn push(&mut self, parent: RawNodeId, desc: RawNodeDesc) -> RawNodeId {
-        // Ids start at 1: `RawNodeId::ROOT` (0) is the "virtual" root that a
-        // guest may use as a parent without owning a node of its own.
+        // ID 从 1 开始：`RawNodeId::ROOT` (0) 是“虚拟”根，guest 可将其
+        // 用作父节点而无需自行持有对应节点。
         let id = RawNodeId(self.nodes.len() as u32 + 1);
         if parent.is_none() || parent == RawNodeId::ROOT {
-            // `ROOT` is a valid parent: the node becomes a root of the tree.
-            // It used to fall through to the `else` branch, where the lookup
-            // of id 0 always failed — the node was then in neither the root
-            // list nor any child list, and silently vanished from the tree.
+            // `ROOT` 是合法父节点：该节点成为树的根节点。
+            // 过去会落入 `else` 分支并查找 ID 0（必然失败）——导致节点既不在
+            // 根列表中也不在任何子节点列表中，静默从树中消失。
+            //
             self.roots.push(id);
         } else if let Some(slot) = self.index.get(&parent.0).copied() {
             self.nodes[slot].children.push(id);
@@ -182,36 +182,36 @@ impl NodeArena {
     }
 }
 
-/// The host's view of one mounted guest.
+/// host 对单个已挂载 guest 的视图。
 pub struct GuestHost {
     library: Option<Library>,
     vtable: Option<GuestPluginVTable>,
     state: GuestState,
     schema_hash: Option<u64>,
-    /// The vtable must outlive the guest: a statically linked guest keeps the
-    /// pointer in a process-wide static, so the host never hands out a pointer
-    /// into its own stack frame.
+    /// 虚表生命周期必须长于 guest：静态链接的 guest 将指针保存在进程级静态变量中，
+    /// 因此 host 绝不能传出指向自身栈帧的指针。
     ///
-    /// The leak is deliberate. The guest caches this pointer for as long as it
-    /// is mounted, and a statically linked guest shares one static across
-    /// every host instance in the process — so the address has to stay valid
-    /// for the whole process, not just for one mount. Storing the vtable in a
-    /// `Box` inside the host does not work: the box is freed with the host,
-    /// and the next host's allocation then goes through a dangling pointer.
+    ///
+    /// 此处的内存泄漏是刻意为之。guest 在挂载期间持续缓存该指针，且静态链接的
+    // guest 在进程内所有 host 实例间共享同一静态变量——因此该地址必须在整个
+    // 进程生命周期内保持有效，而非仅限单次挂载。将虚表存放在 host 内部的 `Box`
+    // 中行不通：box 会随 host 释放，下一个 host 的分配便会经过悬垂指针。
+    ///
+    ///
     alloc: &'static HostAllocatorVTable,
     arena: NodeArena,
     generation: u64,
     loads: u32,
     shadow_counter: u32,
-    /// The shadow copies this host created, removed when the guest is unloaded.
+    /// 本 host 创建的影子拷贝列表，在 guest 卸载时删除。
     ///
-    /// Without this a long dev session with hundreds of reloads leaves
-    /// hundreds of DLL copies in the temp directory.
+    /// 若不清理，长时间开发会话经历数百次重载后会在临时目录留下数百份 DLL 副本。
+    ///
     shadows: Vec<PathBuf>,
-    /// The shadow copy the currently loaded library came from.
+    /// 当前已加载库所源自的影子拷贝。
     ///
-    /// Only this one may be deleted while the library is loaded: the file is
-    /// locked for as long as the library is mapped.
+    /// 仅此文件在库加载期间不可删除：只要动态库处于映射状态，文件即被锁定。
+    ///
     library_shadow: Option<PathBuf>,
 }
 
@@ -234,7 +234,7 @@ impl Default for GuestHost {
 }
 
 impl GuestHost {
-    /// Create an empty host with the default (system) allocator vtable.
+    /// 使用默认（系统）分配器虚表创建空 host。
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -252,10 +252,10 @@ impl GuestHost {
         }
     }
 
-    /// Create a host whose guest allocations are served by `alloc`.
+    /// 创建由 `alloc` 提供 guest 分配服务的 host。
     ///
-    /// The vtable is leaked on purpose — see the field's documentation: the
-    /// guest keeps the pointer in a process-wide static.
+    /// 虚表被刻意泄漏——原因见字段文档：guest 将指针保存在进程级静态变量中。
+    ///
     #[must_use]
     pub fn with_allocator(alloc: HostAllocatorVTable) -> Self {
         let mut host = Self::new();
@@ -263,15 +263,15 @@ impl GuestHost {
         host
     }
 
-    /// Mount a guest from a dynamic library, shadow-copying it first.
+    /// 先影子拷贝再从动态库挂载 guest。
     ///
     /// # Errors
-    /// Returns [`HostError`] when the copy, the load, the ABI check or the
-    /// guest's own `on_load` fails.
+    /// 当拷贝、加载、ABI 检查或 guest 自身的 `on_load` 失败时返回 [`HostError`]。
+    ///
     pub fn load(&mut self, path: impl AsRef<Path>) -> Result<(), HostError> {
         let shadow = self.shadow_copy(path.as_ref())?;
-        // SAFETY: the path is a valid dynamic library produced by cargo; the
-        // library is kept alive for as long as the vtable is used.
+        // SAFETY: 路径为 cargo 生成的有效动态库；只要使用虚表，库就保持存活。
+        //
         let library = unsafe { Library::new(&shadow)? };
         let vtable = unsafe { read_vtable(&library)? };
         self.mount(library, vtable)?;
@@ -279,10 +279,10 @@ impl GuestHost {
         Ok(())
     }
 
-    /// Mount a vtable that is already in memory (tests, statically linked apps).
+    /// 挂载已在内存中的虚表（用于测试、静态链接应用）。
     ///
     /// # Errors
-    /// Returns [`HostError::Abi`] when the version does not match.
+    /// 版本不匹配时返回 [`HostError::Abi`]。
     pub fn mount_vtable(&mut self, vtable: GuestPluginVTable) -> Result<(), HostError> {
         self.mount_linked(vtable)
     }
@@ -300,7 +300,7 @@ impl GuestHost {
         }
         self.unmount();
         unsafe {
-            // SAFETY: the ABI version matched, so the signature is ours.
+            // SAFETY: ABI 版本已匹配，因此签名与己方一致。
             (vtable.on_load)(self.alloc);
             self.state = (vtable.init_state)();
         }
@@ -310,36 +310,36 @@ impl GuestHost {
         Ok(())
     }
 
-    /// Hot-reload from a freshly built artefact.
+    /// 从新构建的产物热重载。
     ///
-    /// The old guest stays mounted until the new one has been verified, then the
-    /// state is handed over according to [`classify_handoff`].
+    /// 新 guest 通过验证前旧 guest 保持挂载，随后按 [`classify_handoff`] 移交状态。
+    ///
     ///
     /// # Errors
-    /// Returns [`HostError`] for the same reasons as [`Self::load`]; on error the
-    /// old guest is left untouched.
+    /// 失败原因同 [`Self::load`]；出错时旧 guest 保持原样不受影响。
+    ///
     pub fn reload(&mut self, path: impl AsRef<Path>) -> Result<StateHandoff, HostError> {
         let shadow = self.shadow_copy(path.as_ref())?;
-        // SAFETY: see `load`.
+        // SAFETY: 见 `load`。
         let library = unsafe { Library::new(&shadow)? };
         let fresh = unsafe { read_vtable(&library)? };
         let handoff = self.reload_vtable(fresh)?;
-        // The old library is unloaded by `reload_vtable`, so the old shadow
-        // copy is unlocked and can go.
+        // 旧库已由 `reload_vtable` 卸载，因此旧影子拷贝已解锁并可删除。
+        //
         self.release_library_shadow();
         self.library = Some(library);
         self.library_shadow = Some(shadow);
         Ok(handoff)
     }
 
-    /// Perform the handoff against an already-read vtable.
+    /// 对已读取的虚表执行状态移交。
     ///
-    /// Split out of [`Self::reload`] so a statically linked guest (and the tests)
-    /// can exercise the same code path without a dynamic library.
+    /// 从 [`Self::reload`] 拆分出来，使静态链接的 guest（及测试）无需动态库
+    /// 即可演练同一代码路径。
     ///
     /// # Errors
-    /// Returns [`HostError::Abi`] when the fresh guest was built against another
-    /// ABI version; the old guest stays mounted in that case.
+    /// 当新 guest 基于其他 ABI 版本构建时返回 [`HostError::Abi`]；此时旧 guest 保持挂载。
+    ///
     pub fn reload_vtable(&mut self, fresh: GuestPluginVTable) -> Result<StateHandoff, HostError> {
         let compat = check_abi(fresh.abi_version);
         if compat != AbiCompat::Ok {
@@ -350,37 +350,37 @@ impl GuestHost {
         let old = self.vtable;
         let old_state = core::mem::replace(&mut self.state, core::ptr::null_mut());
         unsafe {
-            // The new guest's allocator has to be installed *before* it
-            // allocates anything: `init_state` and `migrate_import` both
-            // allocate through the guest's global allocator, which forwards
-            // to the host's vtable. Without the forwarding table the guest
-            // would fall back to a different heap and the state would later
-            // be freed through the host's allocator — a cross-allocator free.
+            // 新 guest 的分配器必须在它分配任何内存*之前*安装：`init_state` 与
+            // `migrate_import` 均通过 guest 的全局分配器分配，该分配器转发至 host 虚表。
+            // 若未安装转发表，guest 将回退到另一个堆，后续通过 host 分配器释放状态
+            // 时便会发生跨分配器释放。
+            //
+            //
             (fresh.on_load)(self.alloc);
-            // SAFETY: `old` and `old_state` belong together and the old library
-            // is still loaded at this point.
+            // SAFETY: `old` 与 `old_state` 配对，且此时旧库仍处于加载状态。
+            //
             match (handoff, old) {
                 (StateHandoff::ZeroCopy, Some(_old)) => {
-                    // Same layout: hand the pointer straight over. The old
-                    // `drop_state` must NOT run — the new guest owns it now —
-                    // but the host keeps using the same pointer.
+                    // 布局相同：直接移交指针。绝对不能运行旧的 `drop_state`——
+                    // 新 guest 现在拥有它——host 则继续使用同一指针。
+                    //
                     (fresh.adopt_state)(old_state);
                     self.state = old_state;
                 }
                 (StateHandoff::Migrate, Some(old)) => {
-                    // A migration exports through the *migration* hook, not
-                    // through `snapshot`: the guest may reshape the state on
-                    // the way out to match the new schema.
+                    // 迁移通过 *migration* 钩子导出，而非 `snapshot`：
+                    // guest 可在导出时重塑状态以匹配新 schema。
+                    //
                     let buffer = export_state(old_state, old.migrate_export);
                     (old.drop_state)(old_state);
-                    // The old guest is done: let it release whatever it
-                    // holds before its library is unloaded.
+                    // 旧 guest 已完成使命：在卸载其动态库前先让它释放所持资源。
+                    //
                     (old.on_unload)();
                     self.state = (fresh.migrate_import)(buffer.as_ptr(), buffer.len());
                     if self.state.is_null() {
-                        // The guest could not decode the buffer. Falling back
-                        // to a fresh state is better than handing the host a
-                        // null pointer it would dereference.
+                        // guest 无法解码缓冲区。回退到全新状态比向 host 交出空指针
+                        // 导致解引用崩溃要安全得多。
+                        //
                         self.state = (fresh.init_state)();
                     }
                 }
@@ -393,7 +393,7 @@ impl GuestHost {
                 }
             }
         }
-        // The old artefact is only released once nothing can call into it.
+        // 仅当确认不再有任何调用会进入旧产物时才释放它。
         self.library = None;
         self.vtable = Some(fresh);
         self.schema_hash = Some(fresh.state_schema_hash);
@@ -402,11 +402,11 @@ impl GuestHost {
         Ok(handoff)
     }
 
-    /// Unmount the guest, dropping its state through its own vtable.
+    /// 卸载 guest，并通过其自身虚表释放其状态。
     pub fn unmount(&mut self) {
         if let Some(vtable) = self.vtable.take() {
             unsafe {
-                // SAFETY: the vtable is live and `state` was produced by it.
+                // SAFETY: 虚表存活且 `state` 由其生成。
                 if !self.state.is_null() {
                     (vtable.drop_state)(self.state);
                 }
@@ -419,9 +419,9 @@ impl GuestHost {
         self.remove_shadows();
     }
 
-    /// Delete the shadow copies this host created.
+    /// 删除本 host 创建的影子拷贝。
     ///
-    /// The library is unloaded by now, so the files are no longer locked.
+    /// 此时动态库已卸载，文件不再被锁定。
     fn remove_shadows(&mut self) {
         for path in self.shadows.drain(..) {
             let _ = std::fs::remove_file(path);
@@ -429,7 +429,7 @@ impl GuestHost {
         self.library_shadow = None;
     }
 
-    /// Delete the shadow copy the unloaded library came from.
+    /// 删除已卸载库所源自的影子拷贝。
     fn release_library_shadow(&mut self) {
         if let Some(path) = self.library_shadow.take() {
             let _ = std::fs::remove_file(&path);
@@ -437,49 +437,49 @@ impl GuestHost {
         }
     }
 
-    /// True when a guest is mounted.
+    /// 已挂载 guest 时返回 true。
     #[must_use]
     pub fn is_mounted(&self) -> bool {
         self.vtable.is_some()
     }
 
-    /// Schema hash of the mounted guest.
+    /// 当前已挂载 guest 的 schema 哈希。
     #[must_use]
     pub fn schema_hash(&self) -> Option<u64> {
         self.schema_hash
     }
 
-    /// Number of times a guest was mounted.
+    /// guest 被挂载的累计次数。
     #[must_use]
     pub fn loads(&self) -> u32 {
         self.loads
     }
 
-    /// Nodes built by the last [`Self::build`].
+    /// 上一次 [`Self::build`] 构建的节点。
     #[must_use]
     pub fn arena(&self) -> &NodeArena {
         &self.arena
     }
 
-    /// Dispatch one action to the guest.
+    /// 向 guest 分发单个动作。
     ///
     /// # Errors
-    /// Returns [`HostError::NoGuest`] when nothing is mounted.
+    /// 未挂载时返回 [`HostError::NoGuest`]。
     pub fn reduce(&mut self, action: &RawAction) -> Result<(), HostError> {
         let Some(vtable) = self.vtable else {
             return Err(HostError::NoGuest);
         };
         unsafe {
-            // SAFETY: the vtable is live and the state belongs to it.
+            // SAFETY: 虚表存活且状态归属于它。
             (vtable.reduce)(self.state, action);
         }
         Ok(())
     }
 
-    /// Run the guest's view build into a fresh arena.
+    /// 运行 guest 的视图构建并将结果写入全新 arena。
     ///
     /// # Errors
-    /// Returns [`HostError::NoGuest`] when nothing is mounted.
+    /// 未挂载时返回 [`HostError::NoGuest`]。
     pub fn build(&mut self) -> Result<(), HostError> {
         let Some(vtable) = self.vtable else {
             return Err(HostError::NoGuest);
@@ -497,17 +497,17 @@ impl GuestHost {
             finish: host_finish,
         };
         unsafe {
-            // SAFETY: the callbacks only touch the arena pointer we just handed
-            // over, and the borrow of `self.arena` does not escape this block.
+            // SAFETY: 回调仅访问我们刚刚传入的 arena 指针，且 `self.arena` 的借用
+            // 不会逃逸出此代码块。
             (vtable.build_view)(self.state, &mut context);
         }
         Ok(())
     }
 
-    /// Ask the guest for a binary state snapshot.
+    /// 向 guest 请求二进制状态快照。
     ///
     /// # Errors
-    /// Returns [`HostError::NoGuest`] when nothing is mounted.
+    /// 未挂载时返回 [`HostError::NoGuest`]。
     pub fn snapshot(&mut self) -> Result<Vec<u8>, HostError> {
         let Some(vtable) = self.vtable else {
             return Err(HostError::NoGuest);
@@ -515,14 +515,14 @@ impl GuestHost {
         Ok(export_state(self.state, vtable.snapshot))
     }
 
-    /// Copy `path` to a unique temp file so the original can be rebuilt.
+    /// 将 `path` 拷贝到唯一临时文件，以便原文件可被重新编译。
     ///
-    /// The copy is remembered so it can be deleted when the guest is unloaded:
-    /// without that, a long dev session with hundreds of reloads leaves
-    /// hundreds of DLL copies in the temp directory.
+    /// 拷贝路径会被记录下来，以便在卸载 guest 时删除：
+    /// 否则经历数百次重载的长开发会话会在临时目录留下数百份 DLL 副本。
+    ///
     fn shadow_copy(&mut self, path: &Path) -> Result<PathBuf, HostError> {
         if !path.exists() {
-            // Nothing to copy (e.g. a test fixture); let the loader report it.
+            // 无需拷贝（例如测试夹具）；交由加载器报告错误。
             return Ok(path.to_path_buf());
         }
         self.shadow_counter += 1;
@@ -547,18 +547,18 @@ impl Drop for GuestHost {
     }
 }
 
-/// Read the guest vtable out of a freshly opened library.
+/// 从刚打开的库中读取 guest 虚表。
 ///
-/// The ABI version and the struct size are read *first*, from the head of the
-/// struct, and the whole vtable is only copied once both have been checked.
-/// Copying it first would read past the end of a guest built against an older
-/// ABI — whose vtable is smaller — before the host got a chance to refuse it.
+/// 必须*先*从结构体头部读取 ABI 版本与结构体大小，仅当两者均校验通过后
+/// 才复制完整虚表。若先复制，对于基于更旧 ABI 构建的 guest（其虚表更小），
+/// 在 host 拒绝前就会发生越界读取。
+///
 ///
 /// # Safety
-/// `library` must stay loaded for as long as the returned vtable is used, and it
-/// must export [`GUEST_ENTRY_SYMBOL`] with the documented signature.
+/// 在使用返回虚表的整个期间 `library` 必须保持加载状态，且必须按约定签名
+/// 导出 [`GUEST_ENTRY_SYMBOL`]。
 unsafe fn read_vtable(library: &Library) -> Result<GuestPluginVTable, HostError> {
-    // The symbol name excludes the trailing NUL that the ABI constant carries.
+    // 符号名不包含 ABI 常量所携带的末尾 NUL。
     let name = &GUEST_ENTRY_SYMBOL[..GUEST_ENTRY_SYMBOL.len() - 1];
     let entry: Symbol<'_, GuestEntryFn> =
         unsafe { library.get(name) }.map_err(|_| HostError::MissingEntry)?;
@@ -566,9 +566,9 @@ unsafe fn read_vtable(library: &Library) -> Result<GuestPluginVTable, HostError>
     if pointer.is_null() {
         return Err(HostError::MissingEntry);
     }
-    // The first two words are the version and the size. Both are present in
-    // every ABI version, so reading them can never go past the guest's
-    // struct.
+    // 前两个字为版本号与大小。每个 ABI 版本都包含这两个字段，
+    // 因此读取它们绝不会越过 guest 结构体末尾。
+    //
     let header = unsafe { *(pointer.cast::<VTableHeader>()) };
     let compat = check_abi(header.abi_version);
     if compat != AbiCompat::Ok {
@@ -581,21 +581,21 @@ unsafe fn read_vtable(library: &Library) -> Result<GuestPluginVTable, HostError>
             guest: header.abi_version,
         }));
     }
-    // A guest whose table is *larger* than ours is accepted on purpose: the
-    // extra members sit at the end, so copying only the fields this host
-    // knows about is still correct — that is the forward-compatible case.
-    // A guest whose table is smaller is refused: the copy would read past its
-    // end. Inserting a member in the *middle* shifts every later field, and
-    // no size check can catch that — which is why `ABI_VERSION` has to be
-    // bumped for every layout change.
+    // 有意接受虚表*大于*己方的 guest：多余成员位于末尾，仅复制本 host
+    // 已知的字段依然正确——这正是向前兼容的情形。
+    // 拒绝虚表更小的 guest：复制操作会越过其末尾。
+    // 若在*中间*插入成员会移动后续所有字段，任何大小检查都无法捕获——
+    // 因此每次布局变更都必须递增 `ABI_VERSION`。
+    //
+    //
     Ok(unsafe { *pointer })
 }
 
-/// The leading words of [`GuestPluginVTable`], read before the whole struct.
+/// [`GuestPluginVTable`] 的前导字，在读取整个结构体前先读取。
 ///
-/// Keeping them in their own `#[repr(C)]` struct makes the offset of the
-/// version and the size explicit, and guarantees that reading them cannot
-/// touch anything past the guest's vtable.
+/// 将其置于独立的 `#[repr(C)]` 结构体中可显式固定版本号与大小的偏移量，
+/// 并保证读取它们不会触及 guest 虚表之外的任何内存。
+///
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 struct VTableHeader {
@@ -603,29 +603,29 @@ struct VTableHeader {
     struct_size: u32,
 }
 
-/// Export a guest's state into a host-owned byte buffer.
+/// 将 guest 状态导出到 host 拥有的字节缓冲区。
 ///
-/// The guest writes into the buffer; it never allocates it. The buffer grows
-/// by asking the guest how much room it needs, so the guest's allocator is
-/// never involved and the host frees the memory with its own allocator.
+/// guest 仅向缓冲区写入，从不自行分配。缓冲区通过询问 guest 所需空间来增长，
+/// 因此不涉及 guest 分配器，host 可用自己的分配器释放该内存。
 ///
-/// `export` selects the guest callback to run, and the two callers need
-/// different ones:
 ///
-/// * [`GuestPluginVTable::snapshot`] for a plain time-travel snapshot;
-/// * [`GuestPluginVTable::migrate_export`] when the bytes are handed over to
-///   the next generation — a migration must go through the export hook so
-///   the guest can reshape its state for the new schema.
+/// `export` 选择要运行的 guest 回调，两个调用方需要不同的回调：
 ///
-/// The callback runs twice: once to probe the required size (no buffer is
-/// given, the guest only reports the length it needs) and once to fill the
-/// buffer the host allocated for it.
+///
+/// * [`GuestPluginVTable::snapshot`] 用于普通的时间旅行快照；
+/// * [`GuestPluginVTable::migrate_export`] 用于将字节移交至下一代——
+///   迁移必须经由导出钩子，以便 guest 为新 schema 重塑状态。
+///
+///
+/// 回调运行两次：首次探测所需大小（不提供缓冲区，guest 仅报告所需长度），
+/// 第二次填充 host 为其分配的缓冲区。
+///
 fn export_state(
     state: GuestState,
     export: unsafe extern "C" fn(GuestState, *mut ByteBuffer),
 ) -> Vec<u8> {
     let mut buffer: Vec<u8> = Vec::new();
-    // The guest reports the size it needs when the buffer is too small.
+    // 缓冲区过小时，guest 报告其所需大小。
     let needed: u32 = unsafe {
         let mut view = ByteBuffer {
             ptr: core::ptr::null_mut(),
@@ -651,7 +651,7 @@ fn export_state(
     buffer
 }
 
-// ---- host → guest callbacks -------------------------------------------------
+// ---- host → guest 回调 -------------------------------------------------
 
 unsafe extern "C" fn host_push_node(
     ctx: *mut c_void,
@@ -697,23 +697,23 @@ unsafe extern "C" fn host_finish(ctx: *mut c_void, root: RawNodeId) {
     arena.finish(root);
 }
 
-// ---- default allocator ------------------------------------------------------
+// ---- 默认分配器 ------------------------------------------------------
 
-/// Allocator vtable backed by the system allocator.
+/// 由系统分配器支撑的分配器虚表。
 ///
-/// Swapping in `mimalloc` is a one-line change: the guest only ever sees the
-/// three function pointers.
+/// 替换为 `mimalloc` 只需一行改动：guest 始终只看到这三个函数指针。
+///
 #[must_use]
 pub fn system_allocator() -> HostAllocatorVTable {
     SYSTEM_ALLOCATOR
 }
 
-/// The process heap, reached through `System` rather than `std::alloc::alloc`.
+/// 通过 `System` 而非 `std::alloc::alloc` 访问进程堆。
 ///
-/// `std::alloc::alloc` routes through the *binary's* `#[global_allocator]`, which
-/// in an in-process test is the guest's own forwarding allocator — an infinite
-/// recursion. `System` always talks to the OS, which is exactly the single heap
-/// the design wants.
+/// `std::alloc::alloc` 会路由至*二进制文件*的 `#[global_allocator]`，而在进程内
+/// 测试中那正是 guest 自身的转发分配器——从而造成无限递归。
+/// `System` 始终直接与操作系统交互，这正是架构所需的单一堆。
+///
 const SYSTEM: std::alloc::System = std::alloc::System;
 
 unsafe extern "C" fn sys_alloc(size: usize, align: usize) -> *mut u8 {
@@ -748,7 +748,7 @@ unsafe extern "C" fn sys_realloc(
     unsafe { SYSTEM.realloc(ptr, layout, new_size.max(1)) }
 }
 
-/// Default allocator vtable, promoted to `'static` so guests can cache it.
+/// 提升为 `'static` 的默认分配器虚表，供 guest 缓存使用。
 static SYSTEM_ALLOCATOR: HostAllocatorVTable = HostAllocatorVTable {
     alloc: sys_alloc,
     dealloc: sys_dealloc,

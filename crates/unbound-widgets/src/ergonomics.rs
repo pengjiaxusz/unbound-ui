@@ -1,12 +1,10 @@
-//! Ergonomic declarative builders, [`TextCtx`] automatic text shaping, and [`UiWidget`] trait.
+//! 声明式构建器、[`TextCtx`] 自动文本排版与 [`UiWidget`] trait。
 //!
-//! This module bridges Unbound UI's zero-allocation flat POD descriptors (`*Desc`)
-//! with the two-pass layout & text-shaping pipeline in `unbound-app`:
-//! 1. **Rect-free constructors & unprefixed builder methods** (`ButtonDesc::label("Save").variant(...)`,
-//!    `CheckboxDesc::labeled("Remember me", true)`, `SwitchDesc::on(true)`,
-//!    `SliderDesc::range(0.0, 100.0, 42.0)`, `TextInputDesc::text("hello")`, etc.).
-//! 2. **[`TextCtx`]** for measuring and shaping single-line or aligned widget labels into [`GlyphQuad`]s.
-//! 3. **[`UiWidget`]** trait implemented across widget descriptors and [`WidgetCatalogId`].
+//! 本模块将 Unbound UI 零分配扁平 POD 描述符（`*Desc`）桥接到 `unbound-app` 的双遍布局与文本排版管线：
+//! 1. **无 Rect 构造函数与无前缀构建方法**（`ButtonDesc::label("Save").variant(...)`、
+//!    `SliderDesc::range(0.0, 100.0, 42.0)`、`TextInputDesc::text("hello")` 等）。
+//! 2. **[`TextCtx`]** 用于将单行或对齐的控件标签测量并排版为 [`GlyphQuad`]。
+//! 3. **[`UiWidget`]** trait，为所有控件描述符与 [`WidgetCatalogId`] 统一实现。
 
 use unbound_input::KeyName;
 use unbound_math::{Rect, Vec2};
@@ -45,42 +43,42 @@ use crate::tree_table::{emit_tree_table, TreeTableDesc, TreeTableState};
 use crate::virtual_masonry::{emit_virtual_masonry, VirtualMasonryDesc, VirtualMasonryState};
 use crate::{ControlState, WidgetCatalogId, WidgetOutput};
 
-/// Horizontal text alignment within a bounding rectangle.
+/// 边界矩形内的水平文本对齐方式。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum AlignX {
-    /// Align to the leading (left) edge.
+    /// 靠前（左）边缘对齐。
     #[default]
     Left,
-    /// Center horizontally.
+    /// 水平居中。
     Center,
-    /// Align to the trailing (right) edge.
+    /// 靠后（右）边缘对齐。
     Right,
 }
 
-/// Vertical text alignment within a bounding rectangle.
+/// 边界矩形内的垂直文本对齐方式。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum AlignY {
-    /// Align to the top edge.
+    /// 靠上边缘对齐。
     Top,
-    /// Center vertically.
+    /// 垂直居中。
     #[default]
     Middle,
-    /// Align to the bottom edge.
+    /// 靠下边缘对齐。
     Bottom,
 }
 
-/// Text shaping and glyph rasterization context passed to [`UiWidget`] methods.
+/// 传递给 [`UiWidget`] 方法的文本排版与字形光栅化上下文。
 pub struct TextCtx<'a> {
-    /// Shared text shaping engine.
+    /// 共享文本排版引擎。
     pub engine: &'a mut unbound_text::TextEngine,
-    /// Shared glyph rasterization & atlas cache.
+    /// 共享字形光栅化与图集缓存。
     pub cache: &'a mut unbound_text::GlyphCache,
-    /// Current frame / atlas clock.
+    /// 当前帧 / 图集时钟。
     pub atlas_clock: u64,
 }
 
 impl TextCtx<'_> {
-    /// Measure a single line of text at `size` and `weight`.
+    /// 按 `size` 与 `weight` 测量单行文本。
     pub fn measure_line(&mut self, text: &str, size: f32, weight: u16) -> Vec2 {
         if text.is_empty() {
             return Vec2::new(0.0, size * 1.35);
@@ -91,7 +89,7 @@ impl TextCtx<'_> {
         Vec2::new(shaped.width, shaped.height.max(size * 1.35))
     }
 
-    /// Shape and rasterize a single line of text aligned within `rect`.
+    /// 在 `rect` 内对齐排版并光栅化单行文本。
     pub fn shape_line(
         &mut self,
         text: &str,
@@ -123,57 +121,56 @@ impl TextCtx<'_> {
     }
 }
 
-/// High-level input event offered to [`UiWidget::reduce`] before bubbling to the application.
+/// 在冒泡到应用程序前提供给 [`UiWidget::reduce`] 的高层输入事件。
 #[derive(Clone, Debug, PartialEq)]
 pub enum WidgetInputEvent {
-    /// Pointer button pressed at screen `pos` with `click_count`.
+    /// 指针按键在屏幕坐标 `pos` 按下（附带 `click_count`）。
     PointerDown {
-        /// Screen-space pointer position.
+        /// 屏幕空间指针位置。
         pos: Vec2,
-        /// Multi-click count (`1`, `2`, `3`).
+        /// 连击次数（`1`、`2`、`3`）。
         click_count: u8,
     },
-    /// Pointer dragged to screen `pos`.
+    /// 指针拖拽至屏幕坐标 `pos`。
     PointerDrag {
-        /// Screen-space pointer position.
+        /// 屏幕空间指针位置。
         pos: Vec2,
     },
-    /// Pointer released at screen `pos`.
+    /// 指针在屏幕坐标 `pos` 释放。
     PointerUp {
-        /// Screen-space pointer position.
+        /// 屏幕空间指针位置。
         pos: Vec2,
     },
-    /// Mouse wheel delta.
+    /// 鼠标滚轮增量。
     Wheel {
-        /// Scroll delta.
+        /// 滚动增量。
         delta: Vec2,
     },
-    /// Committed text / character input.
+    /// 提交的文本 / 字符输入。
     TextInput(String),
-    /// Key chord pressed while focused.
+    /// 聚焦时按下的组合键。
     KeyDown(unbound_input::KeyChord),
 }
 
-/// Unified declarative widget contract for automatic layout measurement, text shaping,
-/// state reduction, and primitive emission.
+/// 统一的声明式控件契约，涵盖自动布局测量、文本排版、状态归约与图元发射。
 pub trait UiWidget: Clone + core::fmt::Debug + Send + Sync + 'static {
-    /// Persistent widget state stored in `WidgetStateStore`.
+    /// 存储在 `WidgetStateStore` 中的持久化控件状态。
     type State: Default + Send + Sync + 'static;
 
-    /// Construct the initial state when the widget key is first mounted.
+    /// 首次挂载控件键时构造初始状态。
     fn initial_state(&self) -> Self::State {
         Self::State::default()
     }
 
-    /// Compute the widget's natural (intrinsic) size using `text_ctx` for real font measurement.
+    /// 使用 `text_ctx` 进行真实字体测量，计算控件的自然（固有）尺寸。
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2;
 
-    /// Reduce a widget-level input event on its persistent state, returning `true` if mutated.
+    /// 在持久化状态上归约控件级输入事件，若状态发生变更则返回 `true`。
     fn reduce(&self, _state: &mut Self::State, _rect: Rect, _event: &WidgetInputEvent) -> bool {
         false
     }
 
-    /// Emit laid-out primitives, payloads, hit regions, and accessibility nodes into `rect`.
+    /// 将已布局的图元、载荷、命中区域与无障碍节点发射到 `rect` 中。
     fn emit_laid_out(
         &self,
         node: u64,
@@ -185,31 +182,31 @@ pub trait UiWidget: Clone + core::fmt::Debug + Send + Sync + 'static {
 }
 
 // ============================================================================
-// Rect-free Constructors & Unprefixed Builder Methods
+// 无 Rect 构造函数与无前缀构建方法
 // ============================================================================
 
 impl ButtonDesc {
-    /// Create a Rect-free button descriptor with `label`.
+    /// 创建带 `label` 的无 Rect 按钮描述符。
     #[must_use]
     pub fn label(label: impl Into<String>) -> Self {
         Self::new(Rect::ZERO, label)
     }
 
-    /// Set button visual variant.
+    /// 设置按钮视觉变体。
     #[must_use]
     pub fn variant(mut self, variant: ButtonVariant) -> Self {
         self.variant = variant;
         self
     }
 
-    /// Set button standard size.
+    /// 设置按钮标准尺寸。
     #[must_use]
     pub fn size(mut self, size: ButtonSize) -> Self {
         self.size = size;
         self
     }
 
-    /// Set loading indicator state.
+    /// 设置加载指示器状态。
     #[must_use]
     pub fn loading(mut self, loading: bool) -> Self {
         self.loading = loading;
@@ -218,19 +215,19 @@ impl ButtonDesc {
 }
 
 impl CheckboxDesc {
-    /// Create a Rect-free checkbox with `label` and `checked` state.
+    /// 创建带 `label` 与 `checked` 状态的无 Rect 复选框。
     #[must_use]
     pub fn labeled(label: impl Into<String>, checked: bool) -> Self {
         Self::new(Rect::ZERO, label).with_checked(checked)
     }
 
-    /// Set checked state.
+    /// 设置选中状态。
     #[must_use]
     pub fn checked(self, checked: bool) -> Self {
         self.with_checked(checked)
     }
 
-    /// Set tri-state check position.
+    /// 设置三态勾选位置。
     #[must_use]
     pub fn state(self, state: CheckState) -> Self {
         self.with_state(state)
@@ -238,13 +235,13 @@ impl CheckboxDesc {
 }
 
 impl SwitchDesc {
-    /// Create a Rect-free switch with `on` state.
+    /// 创建 `on` 状态的无 Rect 开关。
     #[must_use]
     pub fn on(on: bool) -> Self {
         Self::new(Rect::ZERO, "Switch").with_on(on)
     }
 
-    /// Create a Rect-free labeled switch with `on` state.
+    /// 创建带标签与 `on` 状态的无 Rect 开关。
     #[must_use]
     pub fn labeled(label: impl Into<String>, on: bool) -> Self {
         Self::new(Rect::ZERO, label).with_on(on)
@@ -252,26 +249,26 @@ impl SwitchDesc {
 }
 
 impl SliderDesc {
-    /// Create a Rect-free slider with `min`, `max`, and initial `value`.
+    /// 创建带 `min`、`max` 与初始 `value` 的无 Rect 滑块。
     #[must_use]
     pub fn range(min: f32, max: f32, value: f32) -> Self {
         Self::new(Rect::ZERO, "Slider", value, min, max)
     }
 
-    /// Set accessible label.
+    /// 设置无障碍标签。
     #[must_use]
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
     }
 
-    /// Set quantization step.
+    /// 设置量化步长。
     #[must_use]
     pub fn step(self, step: f32) -> Self {
         self.with_step(step)
     }
 
-    /// Set slider orientation.
+    /// 设置滑块方向。
     #[must_use]
     pub fn orientation(self, orientation: Orientation) -> Self {
         self.with_orientation(orientation)
@@ -279,19 +276,19 @@ impl SliderDesc {
 }
 
 impl TextInputDesc {
-    /// Create a Rect-free text input initialized with `initial_text`.
+    /// 创建以 `initial_text` 初始化的无 Rect 文本输入框。
     #[must_use]
     pub fn text(initial_text: impl Into<String>) -> Self {
         Self::new(Rect::ZERO).with_label(initial_text)
     }
 
-    /// Set placeholder text.
+    /// 设置占位文本。
     #[must_use]
     pub fn placeholder(self, placeholder: impl Into<String>) -> Self {
         self.with_placeholder(placeholder)
     }
 
-    /// Set accessible label.
+    /// 设置无障碍标签。
     #[must_use]
     pub fn label(self, label: impl Into<String>) -> Self {
         self.with_label(label)
@@ -299,7 +296,7 @@ impl TextInputDesc {
 }
 
 impl SelectDesc {
-    /// Create a Rect-free select dropdown with `options`.
+    /// 创建带 `options` 的无 Rect 下拉选择框。
     #[must_use]
     pub fn options(options: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         Self::new(
@@ -311,13 +308,13 @@ impl SelectDesc {
         )
     }
 
-    /// Set placeholder text.
+    /// 设置占位文本。
     #[must_use]
     pub fn placeholder(self, placeholder: impl Into<String>) -> Self {
         self.with_placeholder(placeholder)
     }
 
-    /// Pre-select an option index.
+    /// 预选指定索引的选项。
     #[must_use]
     pub fn selected(mut self, index: usize) -> Self {
         self.initial_selection = Some(index);
@@ -326,7 +323,7 @@ impl SelectDesc {
 }
 
 impl TableDesc {
-    /// Create a Rect-free table with `columns`.
+    /// 创建带 `columns` 的无 Rect 表格。
     #[must_use]
     pub fn columns(columns: Vec<ColumnSpec>) -> Self {
         Self::new(Rect::ZERO, columns)
@@ -334,7 +331,7 @@ impl TableDesc {
 }
 
 impl BadgeDesc {
-    /// Create a Rect-free pill badge with `text`.
+    /// 创建带 `text` 的无 Rect 胶囊徽标。
     #[must_use]
     pub fn label(text: impl Into<String>) -> Self {
         Self::new(Rect::ZERO, text)
@@ -342,7 +339,7 @@ impl BadgeDesc {
 }
 
 impl AlertDesc {
-    /// Create a Rect-free inline alert with `severity`, `title`, and `message`.
+    /// 创建带 `severity`、`title` 与 `message` 的无 Rect 行内提示横幅。
     #[must_use]
     pub fn message(
         severity: Severity,
@@ -354,13 +351,13 @@ impl AlertDesc {
 }
 
 impl ProgressDesc {
-    /// Create a Rect-free linear progress bar at `value` (`0.0..=1.0`).
+    /// 创建进度为 `value`（`0.0..=1.0`）的无 Rect 线性进度条。
     #[must_use]
     pub fn bar(value: f32) -> Self {
         Self::new(Rect::ZERO).value(value)
     }
 
-    /// Create a Rect-free circular progress ring at `value` (`0.0..=1.0`).
+    /// 创建进度为 `value`（`0.0..=1.0`）的无 Rect 环形进度条。
     #[must_use]
     pub fn ring(value: f32) -> Self {
         Self::circular(Rect::ZERO).value(value)
@@ -368,7 +365,7 @@ impl ProgressDesc {
 }
 
 impl DividerDesc {
-    /// Create a Rect-free horizontal rule.
+    /// 创建无 Rect 水平分隔线。
     #[must_use]
     pub fn rule() -> Self {
         Self::horizontal(Rect::ZERO)
@@ -376,7 +373,7 @@ impl DividerDesc {
 }
 
 // ============================================================================
-// UiWidget Implementations
+// UiWidget 实现
 // ============================================================================
 
 impl UiWidget for ButtonDesc {

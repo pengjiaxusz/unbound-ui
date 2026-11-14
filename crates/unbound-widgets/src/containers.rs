@@ -1,10 +1,8 @@
-//! The three structural containers: card, wrap row and stack.
+//! 三种结构容器：卡片（Card）、换行行（WrapRow）与堆叠（Stack）。
 //!
-//! None of them owns state. A card is a rectangle with a header and footer
-//! slot, a wrap row is a pure line-breaking function, and a stack is a list of
-//! children sharing one rectangle with increasing depth keys. Keeping them
-//! stateless means a container can be recomputed from layout without an event
-//! loop round-trip.
+//! 三者均不持有状态。Card 是带头部和底部槽位的矩形，WrapRow 是纯换行计算函数，
+//! Stack 是一组共享同一矩形且深度键递增的子节点列表。保持无状态意味着容器可
+//! 直接根据布局重新计算，无需经过事件循环往返。
 
 use unbound_abi::desc::NodeFlags;
 use unbound_gpu::data::{GpuPayload, PrimType, SubElement};
@@ -14,29 +12,29 @@ use unbound_theme::Token;
 use crate::primitive::{instance, outlined, surface};
 use crate::WidgetOutput;
 
-/// The elevation steps a card may use.
+/// 卡片可使用的海拔层级。
 pub const CARD_ELEVATIONS: [f32; 5] = [0.0, 2.0, 6.0, 12.0, 20.0];
 
-/// The default corner radius of a card.
+/// 卡片默认圆角半径。
 pub const CARD_RADIUS: f32 = 10.0;
 
-/// The node flag that turns a row into a wrapping row.
+/// 将行转换为自动换行行的节点标志。
 pub const WRAP_FLAG: NodeFlags = NodeFlags::WRAP;
 
-/// The pure descriptor of a card.
+/// 卡片的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CardDesc {
-    /// The card rectangle.
+    /// 卡片矩形。
     pub rect: Rect,
-    /// The corner radius.
+    /// 圆角半径。
     pub radius: f32,
-    /// The elevation step, `0..=4`.
+    /// 海拔层级，`0..=4`。
     pub elevation: u8,
-    /// The header height, when the card has one.
+    /// 头部高度（若卡片包含头部）。
     pub header_height: Option<f32>,
-    /// The footer height, when the card has one.
+    /// 底部高度（若卡片包含底部）。
     pub footer_height: Option<f32>,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
@@ -47,7 +45,7 @@ impl Default for CardDesc {
 }
 
 impl CardDesc {
-    /// A flat card.
+    /// 创建无阴影扁平卡片。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -60,34 +58,34 @@ impl CardDesc {
         }
     }
 
-    /// The same card with a shadow.
+    /// 设置卡片海拔阴影。
     #[must_use]
     pub fn elevated(mut self, elevation: u8) -> Self {
         self.elevation = elevation.min(CARD_ELEVATIONS.len() as u8 - 1);
         self
     }
 
-    /// The same card with a header band.
+    /// 附加头部条带。
     #[must_use]
     pub fn with_header(mut self, height: f32) -> Self {
         self.header_height = Some(height.max(0.0));
         self
     }
 
-    /// The same card with a footer band.
+    /// 附加底部条带。
     #[must_use]
     pub fn with_footer(mut self, height: f32) -> Self {
         self.footer_height = Some(height.max(0.0));
         self
     }
 
-    /// The shadow blur for the current elevation.
+    /// 当前海拔层级对应的阴影模糊半径。
     #[must_use]
     pub fn shadow(&self) -> f32 {
         CARD_ELEVATIONS[self.elevation.min(4) as usize]
     }
 
-    /// The header band, if the card has one.
+    /// 头部条带矩形（若存在）。
     #[must_use]
     pub fn header_rect(&self) -> Option<Rect> {
         self.header_height.map(|height| {
@@ -100,7 +98,7 @@ impl CardDesc {
         })
     }
 
-    /// The footer band, if the card has one.
+    /// 底部条带矩形（若存在）。
     #[must_use]
     pub fn footer_rect(&self) -> Option<Rect> {
         self.footer_height.map(|height| {
@@ -114,7 +112,7 @@ impl CardDesc {
         })
     }
 
-    /// The content rectangle between the header and footer.
+    /// 头部与底部之间的内容区域矩形。
     #[must_use]
     pub fn body_rect(&self) -> Rect {
         let top = self.header_height.unwrap_or(0.0).min(self.rect.size.y);
@@ -128,23 +126,23 @@ impl CardDesc {
     }
 }
 
-/// The colour slots a card paints with.
+/// 卡片绘制使用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CardTokens {
-    /// The card surface.
+    /// 卡片表面背景色。
     pub surface: Token,
-    /// The card border.
+    /// 卡片边框色。
     pub border: Token,
-    /// The header band.
+    /// 头部条带背景色。
     pub header: Token,
-    /// The footer band.
+    /// 底部条带背景色。
     pub footer: Token,
-    /// The hairline between the body and its bands.
+    /// 主体与条带之间的细分隔线颜色。
     pub divider: Token,
 }
 
 impl CardTokens {
-    /// The standard set.
+    /// 标准配色方案。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -157,7 +155,7 @@ impl CardTokens {
     }
 }
 
-/// Emit a card's surface, border, bands and separators.
+/// 发射卡片表面、边框、条带与分隔线。
 #[must_use]
 pub fn emit_card(desc: &CardDesc, tokens: CardTokens) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(5);
@@ -212,23 +210,23 @@ pub fn emit_card(desc: &CardDesc, tokens: CardTokens) -> WidgetOutput {
     }
 }
 
-/// The pure descriptor of a wrapping row.
+/// 自动换行行的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct WrapDesc {
-    /// The row rectangle.
+    /// 行矩形。
     pub rect: Rect,
-    /// The horizontal gap between items.
+    /// 元素之间的水平间距。
     pub gap_x: f32,
-    /// The vertical gap between lines.
+    /// 行与行之间的垂直间距。
     pub gap_y: f32,
-    /// The height of one line.
+    /// 单行高度。
     pub line_height: f32,
-    /// The node flags a caller should apply; always [`WRAP_FLAG`].
+    /// 调用方应应用的节点标志；恒为 [`WRAP_FLAG`]。
     pub flags: NodeFlags,
 }
 
 impl WrapDesc {
-    /// A wrap row with the default gaps.
+    /// 使用默认间距创建自动换行行。
     #[must_use]
     pub fn new(rect: Rect, line_height: f32) -> Self {
         Self {
@@ -240,7 +238,7 @@ impl WrapDesc {
         }
     }
 
-    /// Override the gaps.
+    /// 覆盖间距设置。
     #[must_use]
     pub fn with_gaps(mut self, x: f32, y: f32) -> Self {
         self.gap_x = x.max(0.0);
@@ -248,11 +246,9 @@ impl WrapDesc {
         self
     }
 
-    /// Break a list of item sizes into lines.
+    /// 将一组元素尺寸拆分为多行。
     ///
-    /// An item wider than the row gets its own line and overflows to the
-    /// right, which is the only choice that does not mutate the item's size
-    /// behind the caller's back.
+    /// 宽于整行的元素会独占一行并向右侧溢出，这是唯一不会背着调用方擅自修改元素尺寸的策略。
     #[must_use]
     pub fn layout(&self, sizes: &[Vec2]) -> Vec<Rect> {
         let mut out = Vec::with_capacity(sizes.len());
@@ -272,7 +268,7 @@ impl WrapDesc {
         out
     }
 
-    /// The number of lines the sizes produce.
+    /// 给定尺寸列表产生的行数。
     #[must_use]
     pub fn line_count(&self, sizes: &[Vec2]) -> usize {
         let mut lines = usize::from(!sizes.is_empty());
@@ -287,7 +283,7 @@ impl WrapDesc {
         lines
     }
 
-    /// The total height the wrapped lines need.
+    /// 换行后所需的总高度。
     #[must_use]
     pub fn content_height(&self, sizes: &[Vec2]) -> f32 {
         let lines = self.line_count(sizes);
@@ -299,19 +295,19 @@ impl WrapDesc {
     }
 }
 
-/// The pure descriptor of a stack.
+/// 堆叠容器的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct StackDesc {
-    /// The shared rectangle every child fills.
+    /// 所有子元素共同填充的共享矩形。
     pub rect: Rect,
-    /// The draw order key of the bottom child.
+    /// 最底层子元素的绘制顺序键。
     pub z: u16,
-    /// The depth increment per layer.
+    /// 每层的深度增量。
     pub z_step: u16,
 }
 
 impl StackDesc {
-    /// A stack over the given rectangle.
+    /// 在指定矩形上创建堆叠容器。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -321,13 +317,13 @@ impl StackDesc {
         }
     }
 
-    /// The rectangle of one layer: every layer shares the stack's box.
+    /// 单层矩形：每一层共享堆叠容器的包围盒。
     #[must_use]
     pub fn layer_rect(&self, _index: usize) -> Rect {
         self.rect
     }
 
-    /// The draw order key of one layer.
+    /// 单层的绘制顺序键。
     #[must_use]
     pub fn layer_z(&self, index: usize) -> u16 {
         self.z.saturating_add(
@@ -336,14 +332,14 @@ impl StackDesc {
         )
     }
 
-    /// Every layer rectangle, bottom first.
+    /// 返回所有层的矩形，最底层在前。
     #[must_use]
     pub fn layout(&self, count: usize) -> Vec<Rect> {
         (0..count).map(|index| self.layer_rect(index)).collect()
     }
 }
 
-/// Emit a stack's optional background.
+/// 发射堆叠容器的可选背景。
 #[must_use]
 pub fn emit_stack(desc: &StackDesc, fill: Token) -> WidgetOutput {
     WidgetOutput {
@@ -360,7 +356,7 @@ pub fn emit_stack(desc: &StackDesc, fill: Token) -> WidgetOutput {
     }
 }
 
-/// A one-pixel separator.
+/// 1 像素分隔线。
 fn hairline(rect: Rect, color: Token, z: u16) -> unbound_gpu::data::GpuPrimitiveInstance {
     instance(
         rect,

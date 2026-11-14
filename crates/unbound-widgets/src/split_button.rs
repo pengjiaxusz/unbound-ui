@@ -1,4 +1,4 @@
-//! SplitButton: Action button with an attached dropdown menu trigger.
+//! SplitButton：带下拉菜单触发器的组合操作按钮。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -12,7 +12,7 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 pub const DROPDOWN_WIDTH: f32 = 32.0;
 
-/// Descriptor for a split button.
+/// 分裂按钮描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SplitButtonDesc {
     pub rect: Rect,
@@ -52,7 +52,7 @@ impl SplitButtonDesc {
     }
 }
 
-/// State for the split button.
+/// 分裂按钮状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SplitButtonState {
     pub menu_open: bool,
@@ -67,7 +67,7 @@ impl SplitButtonState {
     }
 }
 
-/// Emit primitives and hit regions for a split button.
+/// 输出分裂按钮的图元与命中区域。
 #[must_use]
 pub fn emit_split_button(
     node: u64,
@@ -105,11 +105,11 @@ pub fn emit_split_button(
         Token::PRIMARY
     };
 
-    // 1. Main action background surface
+    // 1. 主操作按钮背景表面
     out.primitives
         .push(surface(main_rect, desc.radius, bg_token, z));
 
-    // 2. Dropdown trigger background surface
+    // 2. 下拉触发器背景表面
     let arrow_bg = if state.menu_open || state.arrow_pressed {
         Token::PRIMARY_PRESSED
     } else {
@@ -118,11 +118,11 @@ pub fn emit_split_button(
     out.primitives
         .push(surface(arrow_rect, desc.radius, arrow_bg, z + 1));
 
-    // 3. Divider line
+    // 3. 分隔线
     out.primitives
         .push(surface(divider_rect, 0.0, Token::OUTLINE, z + 2));
 
-    // 4. Outer border outline
+    // 4. 外框轮廓边框
     out.primitives.push(outlined(
         rect,
         desc.radius,
@@ -133,7 +133,7 @@ pub fn emit_split_button(
         z + 3,
     ));
 
-    // Multi-hit regions: Action and Dropdown Arrow
+    // 多命中区域：主操作区与下拉箭头区
     let action_node = node;
     let arrow_node = node ^ 0xFF;
 

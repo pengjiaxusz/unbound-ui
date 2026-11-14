@@ -1,13 +1,13 @@
-//! Integration tests for Phase 2 (M8-Widgets):
-//! - Sub-control hit-testing (`sub_hits`, `sub_a11y`, `sub_focus_order`)
-//! - Tour target hole (click-through) & navigation buttons
-//! - Popconfirm Confirm / Cancel distinct hit regions
-//! - DataGrid cell addressing (`cell_node`) & arrow navigation
-//! - Pagination page buttons & prev/next sub-hits
-//! - Transfer `>` / `<` & item sub-hits + `move_checked`
-//! - TimelineTrack keyframe & playhead sub-hits + `scrub`
-//! - ShapedText hit-testing (`hit_byte_index`, `caret_rect_at`, `selection_rects`)
-//! - CodeEditor bracket matching & TextEditState pointer hit-testing
+//! Phase 2 (M8-Widgets) 集成测试：
+//! - 子控件命中测试（`sub_hits`、`sub_a11y`、`sub_focus_order`）
+//! - Tour 目标镂空（点击穿透）与导航按钮
+//! - Popconfirm 确认/取消独立命中区域
+//! - DataGrid 单元格寻址（`cell_node`）与方向键导航
+//! - Pagination 页码按钮与上一页/下一页子命中
+//! - Transfer `>` / `<` 与条目子命中 + `move_checked`
+//! - TimelineTrack 关键帧与播放头子命中 + `scrub`
+//! - ShapedText 命中测试（`hit_byte_index`、`caret_rect_at`、`selection_rects`）
+//! - CodeEditor 括号匹配与 TextEditState 指针命中测试
 
 use unbound_input::{pick, KeyChord};
 use unbound_math::{Rect, Vec2};
@@ -50,7 +50,7 @@ fn tour_leaves_target_hole_unblocked_and_registers_buttons() {
     let out = emit_tour(base_node, &desc, ControlState::default(), &[]);
     scene.push(base_node, out);
 
-    // Register an underlying button inside `target` at a lower z-index.
+    // 在 `target` 内部以较低的 z-index 注册一个底层按钮。
     scene.regions.push(unbound_input::HitRegion::new(
         underlying_button,
         unbound_widgets::switch::CONTROL_LAYER,
@@ -58,12 +58,12 @@ fn tour_leaves_target_hole_unblocked_and_registers_buttons() {
         target,
     ));
 
-    // Clicking the center of `target` MUST hit the underlying button (scrim does NOT block it!).
+    // 点击 `target` 中心必须命中底层按钮（遮罩不得拦截！）。
     let target_center = Vec2::new(260.0, 174.0);
     let hit = pick(&scene.regions, target_center).expect("underlying target should be pickable");
     assert_eq!(hit.node, underlying_button);
 
-    // Sub-controls for Prev, Next, Skip are registered in `scene.regions` and `scene.focus_order`.
+    // 上一步、下一步、跳过子控件均注册在 `scene.regions` 与 `scene.focus_order` 中。
     let prev_id = tour_prev_node(base_node);
     let next_id = tour_next_node(base_node);
     let skip_id = tour_skip_node(base_node);
@@ -268,7 +268,7 @@ fn shaped_text_hit_testing_and_text_edit_pointer_selection() {
     edit.triple_click();
     assert_eq!(edit.selection(), Some((0, text.len())));
 
-    // TextInput clear button sub-hit when non-empty.
+    // TextInput 非空时的清除按钮子命中。
     let input_desc = TextInputDesc::new(Rect::new(0.0, 0.0, 200.0, 32.0)).clearable(true);
     let base = 7007_u64;
     let out = emit_text_input(

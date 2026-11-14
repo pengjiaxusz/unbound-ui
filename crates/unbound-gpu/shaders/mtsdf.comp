@@ -3,24 +3,20 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // ---------------------------------------------------------------------------
-// GPU MTSDF generation (docs §3.5).
+// GPU MTSDF 生成（参见 `docs/architecture/gpu-renderer.md`）。
 //
-// Three dispatches turn a rasterised coverage bitmap into a signed distance
-// field without touching the CPU:
+// 通过三次调度将光栅化覆盖率位图直接转为有向距离场，全程不经过 CPU：
 //
-//   pass 0 (h)  : 1D squared distance along x, for "to outside" and "to inside"
-//   pass 1 (v)  : the same along y, completing the separable 2D transform
-//   pass 2 (pack): sign, normalise by spread, write RGBA8
+//   Pass 0 (h)   ：沿 X 方向计算“到外部”和“到内部”的 1D 平方距离
+//   Pass 1 (v)   ：沿 Y 方向执行同样计算，完成可分离 2D 变换
+//   Pass 2 (pack)：确定符号、按 spread 归一化并写入 RGBA8
 //
-// The 1D transform is the Felzenszwalb lower-envelope algorithm. It is
-// sequential per row/column by nature, so each invocation owns one row (or one
-// column): for a 64×64 glyph that is 128 invocations of 128 steps, which is
-// nothing on a modern queue and — crucially — produces results that match the
-// CPU reference bit for bit, so the two paths can be diffed in tests.
+// 1D 变换采用 Felzenszwalb 下包络算法。该算法按行/列天然串行，因此每次调用负责
+// 一行（或一列）：对于 64×64 字形仅需 128 次调用各 128 步，在现代队列上开销极低，
+// 且关键在于生成结果与 CPU 参考实现逐比特一致，便于测试比对。
 //
-// Channel strategy: the field is replicated into R, G and B. The fragment
-// shader's median-of-three is then a no-op but stays correct, and the layout is
-// ready for per-edge channel assignment without changing the sampling code.
+// 通道策略：距离场同时复制到 R、G、B 三通道。片元着色器的三通道取中值操作成为恒等变换但
+// 保持正确性，同时布局也为后续无需修改采样代码即可支持按边分配通道做好准备。
 // ---------------------------------------------------------------------------
 
 #include "common.glsl"
@@ -29,10 +25,9 @@ layout(local_size_x = 1) in;
 
 #define INF 1.0e20
 
-// `pc.prim_count` = width, `pc.block_count` = height, `pc.aux` = pass index,
-// `pc.digit` = spread in 1/256 texels.
-// Coverage is byte-packed; reading through a u32 view avoids requiring the
-// 8-bit storage extension, which is not part of the mandatory feature set.
+// `pc.prim_count` = 宽度，`pc.block_count` = 高度，`pc.aux` = Pass 索引，
+// `pc.digit` = 以 1/256 纹素为单位的 spread。
+// 覆盖率按字节打包；通过 u32 视图读取可避免依赖非强制特性集的 8-bit 存储扩展。
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32Buf {
     uint u[];
 };
@@ -47,14 +42,14 @@ layout(buffer_reference, std430, buffer_reference_align = 4) buffer PackBuf {
     uint u[];
 };
 
-// Scratch for the 1D transform. Sized for the largest glyph tile we accept.
+// 1D 变换暂存区，按允许的最大字形图块尺寸分配。
 shared float s_f[1024];
 shared float s_d[1024];
 shared int s_v[1024];
 shared float s_z[1025];
 
 void edt_1d(int n) {
-    // s_f holds the samples; s_d receives squared distances.
+    // s_f 存放采样值；s_d 接收平方距离。
     int k = 0;
     s_v[0] = 0;
     s_z[0] = -INF;
@@ -100,12 +95,12 @@ void main() {
     uint spread_q8 = pc.digit;
 
     U32Buf coverage = U32Buf(pc.scratch_bda);
-    // Two floats per texel: squared distance to outside, squared to inside.
+    // 每纹素两个 float：到外部的平方距离、到内部的平方距离。
     F32Buf temp = F32Buf(pc.scratch_bda2);
     PackBuf out_pack = PackBuf(pc.scratch_bda3);
 
     if (pass_id == 0) {
-        // Horizontal pass: one invocation per row.
+        // 水平 Pass：每次调用处理一行。
         int y = int(gl_WorkGroupID.x);
         if (y >= height) {
             return;
@@ -123,7 +118,7 @@ void main() {
             }
         }
     } else if (pass_id == 1) {
-        // Vertical pass: one invocation per column.
+        // 垂直 Pass：每次调用处理一列。
         int x = int(gl_WorkGroupID.x);
         if (x >= width) {
             return;
@@ -138,7 +133,7 @@ void main() {
             }
         }
     } else {
-        // Pack pass: one invocation per texel.
+        // 打包 Pass：每次调用处理一个纹素。
         int i = int(gl_WorkGroupID.x);
         if (i >= width * height) {
             return;

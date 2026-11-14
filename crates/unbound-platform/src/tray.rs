@@ -1,25 +1,25 @@
-//! Windows Taskbar Progress and System Notification Tray Integration.
+//! Windows 任务栏进度条与系统通知托盘集成。
 //!
-//! Provides:
-//! - Taskbar button progress indicator (`TBPF_NORMAL`, `TBPF_ERROR`, `TBPF_PAUSED`, `TBPF_INDETERMINATE`).
-//! - System notification tray icon (`Shell_NotifyIconW`) with balloons and tooltips.
+//! 提供以下功能：
+//! - 任务栏按钮进度指示器（`TBPF_NORMAL`、`TBPF_ERROR`、`TBPF_PAUSED`、`TBPF_INDETERMINATE`）。
+//! - 系统通知托盘图标（`Shell_NotifyIconW`），支持气泡通知与悬停提示。
 
-/// State of the taskbar progress indicator.
+/// 任务栏进度指示器的状态。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TaskbarProgressState {
-    /// No progress is shown.
+    /// 不显示进度。
     NoProgress,
-    /// Indeterminate marquee progress (spinning / moving bar).
+    /// 不确定跑马灯进度（旋转/滚动条）。
     Indeterminate,
-    /// Normal green progress bar.
+    /// 正常绿色进度条。
     Normal,
-    /// Error red progress bar.
+    /// 错误红色进度条。
     Error,
-    /// Paused yellow progress bar.
+    /// 暂停黄色进度条。
     Paused,
 }
 
-/// Severity of a system tray notification balloon.
+/// 系统托盘气泡通知的严重级别。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TrayNotificationSeverity {
     Info,
@@ -288,7 +288,7 @@ mod win32 {
     }
 }
 
-/// Set the taskbar progress indicator state and values for a window.
+/// 为指定窗口设置任务栏进度指示器状态与进度值。
 pub fn set_taskbar_progress(hwnd: isize, completed: u64, total: u64, state: TaskbarProgressState) {
     #[cfg(windows)]
     {
@@ -300,7 +300,7 @@ pub fn set_taskbar_progress(hwnd: isize, completed: u64, total: u64, state: Task
     }
 }
 
-/// Show or hide the system tray icon for a window.
+/// 为指定窗口显示或隐藏系统托盘图标。
 pub fn set_tray_icon(hwnd: isize, tooltip: &str, visible: bool) -> bool {
     #[cfg(windows)]
     {
@@ -313,7 +313,7 @@ pub fn set_tray_icon(hwnd: isize, tooltip: &str, visible: bool) -> bool {
     }
 }
 
-/// Show a system tray balloon notification.
+/// 显示系统托盘气泡通知。
 pub fn show_tray_balloon(
     hwnd: isize,
     title: &str,

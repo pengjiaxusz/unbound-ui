@@ -1,20 +1,20 @@
-//! Taffy integration with relayout boundaries (`docs` §4.2).
+//! 结合重布局边界（RelayoutBoundary）的 Taffy 集成（`docs` §4.2）。
 //!
-//! Two ideas carry the performance story:
+//! 性能优化围绕两个核心思路展开：
 //!
-//! 1. **Isolation.** A `RelayoutBoundary` has a fixed size and clips its
-//!    children, so nothing inside it can change anything outside it. Layout dirt
-//!    stops there (see `unbound-world`), and this engine only re-solves the
-//!    boundary subtree.
-//! 2. **Parallelism.** Boundaries are disjoint, so when several are dirty they
-//!    are solved concurrently with Rayon. Each worker builds a private small
-//!    `TaffyTree` for its subtree, which avoids requiring `TaffyTree: Sync` and
-//!    keeps workers fully independent.
+//! 1. **隔离性（Isolation）。** `RelayoutBoundary` 具有固定尺寸并裁剪其子节点，
+//!    因此内部任何变化都不会影响外部。布局脏标记止步于此（见 `unbound-world`），
+//!    本引擎只需重新求解该边界子树。
 //!
-//! Text measurement never enters this module: the view builder pre-measures
-//! labels and stores the result on the node, so layout sees only numbers. That
-//! keeps shaping and layout independently testable and means a layout solve can
-//! never accidentally block on the font system.
+//! 2. **并行性（Parallelism）。** 各个边界互不相交，因此当多个边界同时变脏时，
+//!    可通过 Rayon 并发求解。每个工作线程为其子树构建独立的小型 `TaffyTree`，
+//!    从而避免要求 `TaffyTree: Sync` 并保持工作线程完全独立。
+//!
+//!
+//! 文本测量永不进入本模块：视图构建器会预先测量标签尺寸并将结果存放在节点上，
+//! 因此布局引擎只处理数值。这使得文本塑形与布局可独立测试，
+//! 同时保证布局求解绝不会意外阻塞在字体系统上。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -26,14 +26,14 @@ use unbound_abi::{Align, Dim, DimUnit, Display, FlexDirection, Justify, NodeFlag
 use unbound_math::{Rect, Vec2};
 use unbound_world::{NodeId, UiWorld};
 
-/// Result of one solve, for the KPI harness and the debug overlay.
+/// 单次布局求解的结果，供 KPI 基准测试与调试覆盖层使用。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct LayoutStats {
     pub nodes_visited: u32,
     pub boundaries_solved: u32,
-    /// Microseconds spent inside Taffy (excludes tree synchronisation).
+    /// Taffy 内部耗时（微秒，不含树同步耗时）。
     pub taffy_us: u64,
-    /// Microseconds spent copying styles in and out.
+    /// 拷入与拷出样式的耗时（微秒）。
     pub sync_us: u64,
 }
 
@@ -45,15 +45,15 @@ impl LayoutStats {
 }
 
 // ---------------------------------------------------------------------------
-// Descriptor -> Taffy style
+// Descriptor -> Taffy 样式转换
 // ---------------------------------------------------------------------------
 
 fn dim(d: Dim) -> Dimension {
     match d.kind() {
         DimUnit::Px => Dimension::length(d.value),
         DimUnit::Percent => Dimension::percent((d.value / 100.0).max(0.0)),
-        // `fr` is a grid concept; as a flex basis the literal value is the
-        // closest sensible reading.
+        // `fr` 是网格概念；作为 flex basis 时，直接使用字面值是最合理的近似。
+        //
         DimUnit::Fr => Dimension::length(d.value),
         DimUnit::Auto => Dimension::auto(),
     }
@@ -71,7 +71,7 @@ fn fixed(v: f32) -> LengthPercentage {
     LengthPercentage::length(v)
 }
 
-/// Map a `Dim` track onto Taffy's min/max track sizing pair.
+/// 将 `Dim` 轨道映射为 Taffy 的最小/最大轨道尺寸对。
 fn grid_track<S: taffy::style::CheapCloneStr>(d: Dim) -> taffy::style::GridTemplateComponent<S> {
     use taffy::style::{MaxTrackSizingFunction, MinTrackSizingFunction};
     use taffy::style_helpers;
@@ -95,7 +95,7 @@ fn grid_track<S: taffy::style::CheapCloneStr>(d: Dim) -> taffy::style::GridTempl
     }
 }
 
-/// Translate a 1-based start line plus a span into a Taffy placement.
+/// 将基于 1 的起始行号与跨度转换为 Taffy 放置位置。
 fn grid_placement(start: i16, span_count: u8) -> taffy::Line<taffy::style::GridPlacement> {
     use taffy::style::GridPlacement;
     use taffy::style_helpers::{line, span};
@@ -125,8 +125,8 @@ fn grid_placement(start: i16, span_count: u8) -> taffy::Line<taffy::style::GridP
 fn align_items(a: Align) -> taffy::AlignItems {
     match a {
         Align::FlexStart => taffy::AlignItems::FLEX_START,
-        // Taffy implements baseline alignment; folding it into `FLEX_START`
-        // made every "title next to a caption" row top-aligned instead.
+        // Taffy 原生支持基线对齐；若将其折叠为 `FLEX_START`，
+        // 会导致所有“标题紧邻说明文字”的行变为顶部对齐。
         Align::Baseline => taffy::AlignItems::BASELINE,
         Align::FlexEnd => taffy::AlignItems::FLEX_END,
         Align::Center => taffy::AlignItems::CENTER,
@@ -134,10 +134,10 @@ fn align_items(a: Align) -> taffy::AlignItems {
     }
 }
 
-/// `align_self` returns `None` for the descriptor's default so that the value
-/// is *inherited* from the parent's `align_items`, exactly like CSS
-/// `align-self: auto`. Mapping the default to `STRETCH` would make every node
-/// ignore its parent's alignment, which is the single most common flex surprise.
+/// 当描述符未指定对齐时，`align_self` 返回 `None`，使其从父节点的 `align_items` *继承*，
+/// 行为与 CSS `align-self: auto` 完全一致。若将默认值映射为 `STRETCH`，
+/// 会导致每个节点都忽略父节点的对齐方式——这是 Flex 布局中最常见的意外行为。
+///
 fn align_self(a: Align) -> Option<taffy::AlignSelf> {
     match a {
         Align::FlexStart => Some(taffy::AlignSelf::FLEX_START),
@@ -177,7 +177,7 @@ fn direction(d: FlexDirection) -> taffy::FlexDirection {
     }
 }
 
-/// Translate one node's descriptor into a Taffy style.
+/// 将单个节点的描述符转换为 Taffy 样式。
 #[must_use]
 pub fn style_for(world: &UiWorld, id: NodeId) -> Style {
     let Some(node) = world.get(id) else {
@@ -261,14 +261,14 @@ pub fn style_for(world: &UiWorld, id: NodeId) -> Style {
     if d.aspect_ratio > 0.0 {
         style.aspect_ratio = Some(d.aspect_ratio);
     }
-    // `fr` means "share of the free space", not a pixel count. Mapping it to a
-    // literal `1.0` px made a `Dim::fr(1.0)` node one pixel wide; a share is a
-    // `flex-grow` with a zero basis.
+    // `fr` 表示“可用空间的份额”，而非像素值。若将其直接映射为字面 `1.0` 像素，
+    // 会导致 `Dim::fr(1.0)` 节点宽度只有 1 像素；份额应表示为 `flex-grow` 配合零基准。
+    //
     let width_fr = d.width.kind() == DimUnit::Fr;
     let height_fr = d.height.kind() == DimUnit::Fr;
     if width_fr || height_fr {
-        // Only the fractional axis contributes the share; the other axis is
-        // still a length (a `40 px` height must not turn into a grow factor).
+        // 只有比例轴贡献份额；另一轴仍保持长度（例如 `40 px` 的高度不应变成拉伸因子）。
+        //
         style.flex_grow = match (width_fr, height_fr) {
             (true, true) => d.width.value.max(d.height.value),
             (true, false) => d.width.value,
@@ -303,8 +303,8 @@ pub fn style_for(world: &UiWorld, id: NodeId) -> Style {
     style
 }
 
-/// Resolve a leaf's size from taffy's known dimensions, falling back to the
-/// pre-measured intrinsic size (text, images) and finally to zero.
+/// 从 Taffy 已知尺寸解析叶子节点尺寸，若未知则回退到预测量固有尺寸（文本、图像），
+/// 最后回退为零。
 fn measure_leaf(input: &LayoutInput, id: Option<NodeId>, world: &UiWorld) -> LayoutOutput {
     let intrinsic = id
         .and_then(|id| world.get(id))
@@ -326,10 +326,10 @@ fn available(viewport: Vec2) -> taffy::Size<AvailableSpace> {
     }
 }
 
-/// The size a node's own style fixes, per axis.
+/// 节点自身样式在各轴上固定的尺寸。
 ///
-/// A definite size is the node's own business; an automatic one is decided
-/// by its content.
+/// 明确指定的尺寸由节点自身决定；自动尺寸则由其内容决定。
+///
 fn definite_size(world: &UiWorld, id: NodeId) -> (Option<f32>, Option<f32>) {
     let Some(node) = world.get(id) else {
         return (None, None);
@@ -353,7 +353,7 @@ fn rect_of(layout: &Layout) -> Rect {
     )
 }
 
-/// Pre-order walk that yields (node, children) without recursion.
+/// 非递归的前序遍历，依次产出 `(node, children)`。
 fn preorder(world: &UiWorld, root: NodeId) -> Vec<NodeId> {
     let mut out = Vec::new();
     let mut stack = vec![root];
@@ -376,15 +376,15 @@ fn preorder(world: &UiWorld, root: NodeId) -> Vec<NodeId> {
 }
 
 // ---------------------------------------------------------------------------
-// Engine
+// 布局引擎
 // ---------------------------------------------------------------------------
 
-/// Persistent layout engine over the UI world.
+/// 基于 UI 世界树（UiWorld）的持久化布局引擎。
 pub struct LayoutEngine {
     taffy: TaffyTree<NodeId>,
     map: FxHashMap<NodeId, taffy::NodeId>,
     rects: FxHashMap<NodeId, Rect>,
-    /// Nodes touched by the last `collect`, reused across solves.
+    /// 上一次 `collect` 访问过的节点列表，在多次求解间复用以减少分配。
     changed: Vec<NodeId>,
 }
 
@@ -413,7 +413,7 @@ impl LayoutEngine {
         }
     }
 
-    /// Drop every cached node (world rebuild or viewport reset).
+    /// 丢弃所有缓存节点（用于世界重建或视口重置）。
     pub fn clear(&mut self) {
         self.taffy = TaffyTree::new();
         self.map.clear();
@@ -425,14 +425,14 @@ impl LayoutEngine {
         self.map.len()
     }
 
-    /// Create missing Taffy nodes and refresh every style.
+    /// 创建缺失的 Taffy 节点并刷新所有样式。
     ///
-    /// Style writes are unconditional because a style diff would cost as much as
-    /// the write; the dirty tracking that matters happens *above* this layer, by
-    /// deciding whether to call it at all.
+    /// 样式写入是无条件的，因为做样式差异对比的开销与直接写入相当；
+    /// 真正重要的脏跟踪发生在*上层*，由上层决定是否需要调用本方法。
+    ///
     pub fn sync(&mut self, world: &UiWorld, root: NodeId) {
         let order = preorder(world, root);
-        // Pass 1: ensure every node exists and carries the right style.
+        // 第一阶段：确保每个节点都存在并携带正确的样式。
         for id in &order {
             let style = style_for(world, *id);
             match self.map.get(id) {
@@ -448,7 +448,7 @@ impl LayoutEngine {
                 }
             }
         }
-        // Pass 2: attach children now that every node exists.
+        // 第二阶段：在所有节点均已创建后挂接子节点。
         for id in &order {
             let Some(t) = self.map.get(id).copied() else {
                 continue;
@@ -459,12 +459,12 @@ impl LayoutEngine {
                 .collect();
             let _ = self.taffy.set_children(t, &kids);
         }
-        // Pass 3: drop the nodes that left the world.
+        // 第三阶段：移除已离开世界树的节点。
         //
-        // `UiWorld::remove` frees the slot, but the engine kept the node's
-        // Taffy node, its map entry and its cached rectangle forever: a long
-        // session that creates and drops widgets leaked one of each per
-        // removal.
+        // `UiWorld::remove` 会释放槽位，但引擎此前会永久保留对应的 Taffy 节点、
+        // 映射表项与缓存矩形：长时间运行中反复创建和销毁组件会导致每移除一个节点
+        // 就泄漏一份上述数据。
+        //
         self.map.retain(|id, taffy_id| {
             let alive = world.contains(*id);
             if !alive {
@@ -475,7 +475,7 @@ impl LayoutEngine {
         });
     }
 
-    /// Full re-solve under `viewport` (topology changes, resize).
+    /// 在指定 `viewport` 下执行全量重算（用于拓扑变更或视口调整）。
     pub fn solve(&mut self, world: &mut UiWorld, root: NodeId, viewport: Vec2) -> LayoutStats {
         let sync_start = std::time::Instant::now();
         self.sync(world, root);
@@ -490,7 +490,7 @@ impl LayoutEngine {
 
         let start = std::time::Instant::now();
         {
-            // Split the borrows: Taffy is mutated, the world is only read.
+            // 拆分借用：Taffy 被可变借用，世界树仅只读借用。
             let world_ref: &UiWorld = world;
             let taffy = &mut self.taffy;
             let _ = taffy.compute_layout_with_measure(
@@ -500,10 +500,10 @@ impl LayoutEngine {
                  _node: taffy::NodeId,
                  ctx: Option<&mut NodeId>,
                  _style: &Style| {
-                    // Taffy may call the measure function for any node it
-                    // created with a context, including plain containers. The
-                    // known dimensions it passes in are authoritative: ignoring
-                    // them would silently collapse every fixed-size leaf to 0.
+                    // Taffy 可能对其带上下文创建的任何节点调用测量函数（包括普通容器）。
+                    // 它传入的已知尺寸具有权威性：若忽略它们，会导致所有固定尺寸的叶子节点
+                    // 被静默折叠为 0。
+                    //
                     measure_leaf(&input, ctx.map(|c| *c), world_ref)
                 },
             );
@@ -520,14 +520,14 @@ impl LayoutEngine {
         }
     }
 
-    /// Full re-solve, letting the caller measure wrapped text against the
-    /// width Taffy actually offers.
+    /// 执行全量重算，并允许调用方根据 Taffy 实际提供的宽度测量自动换行文本。
     ///
-    /// Nodes without text or without [`NodeFlags::WRAP`] keep using their
-    /// pre-measured intrinsic size. For wrapping nodes the callback is invoked
-    /// with the known width (if any) and Taffy's available space; the returned
-    /// size is written back to `NodeData::measure` so the debug overlay and
-    /// later frames see the resolved paragraph size.
+    ///
+    /// 无文本或未启用 [`NodeFlags::WRAP`] 的节点继续使用预测量固有尺寸。
+    /// 对于需要换行的节点，会以已知宽度（若有）及 Taffy 可用空间调用回调；
+    /// 返回的尺寸会写回 `NodeData::measure`，以便调试覆盖层与后续帧获取解析后的段落尺寸。
+    ///
+    ///
     pub fn solve_with_measurer<F>(
         &mut self,
         world: &mut UiWorld,
@@ -601,11 +601,11 @@ impl LayoutEngine {
         }
     }
 
-    /// Re-solve only the given boundary subtrees.
+    /// 仅重新求解指定的重布局边界子树。
     ///
-    /// One boundary uses the persistent tree (no allocation at all). Several are
-    /// solved in parallel, each in a private tree, because they are disjoint by
-    /// construction.
+    /// 单个边界直接使用持久化树（完全零分配）。多个边界由于结构上互不相交，
+    /// 各自在私有树中并行求解。
+    ///
     pub fn solve_boundaries(
         &mut self,
         world: &mut UiWorld,
@@ -625,9 +625,9 @@ impl LayoutEngine {
             boundaries
                 .par_iter()
                 .map(|b| {
-                    // The boundary is solved as a root, so it is given the
-                    // space it had: a child with `width: 100 %` resolves
-                    // against the containing block.
+                    // 该边界作为根节点求解，因此为其传入原有空间：
+                    // 使 `width: 100%` 的子节点能正确相对于包含块解析。
+                    //
                     let size = world.node(*b).rect.size;
                     let space = Vec2::new(size.x.max(viewport.x), size.y.max(viewport.y));
                     solve_isolated(world, *b, space)
@@ -644,16 +644,16 @@ impl LayoutEngine {
             for (id, r) in chunk {
                 self.rects.insert(id, r);
             }
-            // The subtree was solved with the boundary as its root, so the
-            // boundary's own rectangle comes back at the origin — but in the
-            // tree it sits wherever its parent put it. Keep the parent's
-            // placement and take only the size from the new solve.
+            // 子树以该边界为根求解，因此边界自身的矩形位置会回到原点——
+            // 但在完整树中它位于父节点放置的位置。保留父节点给定的位置，
+            // 仅从本次求解中提取尺寸。
+            //
             let (fixed_width, fixed_height) = definite_size(world, boundary);
             if let Some(rect) = self.rects.get_mut(&boundary) {
                 rect.origin = placement.origin;
-                // A size the style fixes belongs to the node itself: Taffy
-                // sizes a root from its content, so the fixed size has to be
-                // restored.
+                // 样式固定的尺寸属于节点自身：Taffy 会根据内容计算根节点尺寸，
+                // 因此必须恢复样式固定的尺寸。
+                //
                 if let Some(width) = fixed_width {
                     rect.size.x = width;
                 }
@@ -671,7 +671,7 @@ impl LayoutEngine {
         }
     }
 
-    /// Re-solve one subtree on the persistent tree.
+    /// 在持久化树上重新求解单个子树。
     pub fn solve_subtree(
         &mut self,
         world: &mut UiWorld,
@@ -679,7 +679,7 @@ impl LayoutEngine {
         viewport: Vec2,
     ) -> LayoutStats {
         if !self.map.contains_key(&boundary) {
-            // Unknown subtree: a full solve is the only correct answer.
+            // 未知子树：全量求解是唯一正确的做法。
             let root = world.root();
             return self.solve(world, root, viewport);
         }
@@ -688,10 +688,10 @@ impl LayoutEngine {
         let sync_us = sync_start.elapsed().as_micros() as u64;
 
         let taffy_root = self.map[&boundary];
-        // Taffy sizes a *root* node from its children, so the subtree has to
-        // be solved against the space the boundary had: a child with
-        // `width: 100 %` resolves against the containing block, and without
-        // the old size it would resolve against nothing and collapse.
+        // Taffy 会根据子节点计算*根*节点尺寸，因此必须以边界原有的空间作为约束求解子树：
+        // 这样 `width: 100%` 的子节点才能相对于包含块解析，
+        // 否则将无参照可依并塌缩为零。
+        //
         let space = self.rects.get(&boundary).map_or(viewport, |r| r.size);
         let start = std::time::Instant::now();
         {
@@ -704,10 +704,10 @@ impl LayoutEngine {
                  _node: taffy::NodeId,
                  ctx: Option<&mut NodeId>,
                  _style: &Style| {
-                    // Taffy may call the measure function for any node it
-                    // created with a context, including plain containers. The
-                    // known dimensions it passes in are authoritative: ignoring
-                    // them would silently collapse every fixed-size leaf to 0.
+                    // Taffy 可能对其带上下文创建的任何节点调用测量函数（包括普通容器）。
+                    // 它传入的已知尺寸具有权威性：若忽略它们，会导致所有固定尺寸的叶子节点
+                    // 被静默折叠为 0。
+                    //
                     measure_leaf(&input, ctx.map(|c| *c), world_ref)
                 },
             );
@@ -716,16 +716,16 @@ impl LayoutEngine {
 
         let visited = self.collect(world, boundary);
         let changed = core::mem::take(&mut self.changed);
-        // The subtree was solved with the boundary as its root, so the
-        // boundary's own rectangle comes back at the origin — but in the
-        // tree it sits wherever its parent put it. Keep the parent's
-        // placement and take only the size from the new solve.
+        // 子树以该边界为根求解，因此边界自身的矩形位置会回到原点——
+        // 但在完整树中它位于父节点放置的位置。保留父节点给定的位置，
+        // 仅从本次求解中提取尺寸。
+        //
         let placement = world.node(boundary).rect;
         let (fixed_width, fixed_height) = definite_size(world, boundary);
         if let Some(rect) = self.rects.get_mut(&boundary) {
             rect.origin = placement.origin;
-            // A size the style fixes belongs to the node itself: Taffy sizes
-            // a root from its content, so the fixed size has to be restored.
+            // 样式固定的尺寸属于节点自身：Taffy 会根据内容计算根节点尺寸，
+            // 因此必须恢复样式固定的尺寸。
             if let Some(width) = fixed_width {
                 rect.size.x = width;
             }
@@ -743,12 +743,12 @@ impl LayoutEngine {
         }
     }
 
-    /// Read layouts for `root`'s subtree into `self.rects`.
+    /// 将 `root` 子树的布局结果读入 `self.rects`。
     ///
-    /// The map is *not* cleared: an incremental solve only refreshes the nodes it
-    /// touched, and throwing away the untouched geometry would leave
-    /// [`Self::rect`] unable to answer for the rest of the tree — which is
-    /// exactly what a caller painting the frame needs.
+    /// 该映射表*不会*被清空：增量求解仅刷新其触及的节点，
+    /// 若丢弃未触及的几何信息，[`Self::rect`] 将无法回答树中其余节点的位置——
+    /// 而这正是绘制帧的调用方所需要的。
+    ///
     fn collect(&mut self, world: &UiWorld, root: NodeId) -> u32 {
         self.changed.clear();
         let mut visited = 0u32;
@@ -764,31 +764,31 @@ impl LayoutEngine {
         visited
     }
 
-    /// Last computed rectangle for a node, in its parent's coordinate space.
+    /// 节点上一次计算得到的矩形（位于父节点坐标空间内）。
     ///
-    /// Taffy reports a node's position inside its parent, so the rectangle
-    /// is relative — the same space [`unbound_world::UiWorld::apply_rects`]
-    /// writes back into the world. Use [`Self::world_rect`] when absolute
-    /// coordinates are what the caller needs.
+    /// Taffy 报告节点在父节点中的位置，因此该矩形是相对坐标——
+    /// 这也是 [`unbound_world::UiWorld::apply_rects`] 写回世界树的空间。
+    /// 若调用方需要绝对坐标，请使用 [`Self::world_rect`]。
+    ///
     #[must_use]
     pub fn rect(&self, id: NodeId) -> Option<Rect> {
         self.rects.get(&id).copied()
     }
 
-    /// Last computed rectangle for a node in absolute window coordinates.
+    /// 节点上一次计算得到的矩形（绝对窗口坐标）。
     ///
-    /// The world folds every ancestor's offset into `world_rect` when it
-    /// applies a solve, so this is the rectangle a painter wants.
+    /// 世界树在应用求解结果时会将所有祖先节点的偏移量折叠进 `world_rect`，
+    /// 因此这正是绘制器所需的矩形。
     #[must_use]
     pub fn world_rect(&self, world: &UiWorld, id: NodeId) -> Option<Rect> {
         world.get(id).map(|node| node.world_rect)
     }
 }
 
-/// Solve `root`'s subtree in a private Taffy tree.
+/// 在私有 Taffy 树中求解 `root` 的子树。
 ///
-/// Returns the subtree's rectangles; the caller merges them into the world. This
-/// is the unit of parallelism: no shared state, no `Sync` bound on `TaffyTree`.
+/// 返回该子树的矩形映射，由调用方合并回世界树。这是并行计算的基本单元：
+/// 无共享状态，也不要求 `TaffyTree` 实现 `Sync`。
 fn solve_isolated(world: &UiWorld, root: NodeId, viewport: Vec2) -> Vec<(NodeId, Rect)> {
     let order = preorder(world, root);
     if order.is_empty() {
@@ -836,7 +836,7 @@ mod tests {
         core::panic::Location::caller()
     }
 
-    /// Builds: root (400x300) with a fixed 200x100 card containing a label.
+    /// 构建测试树：根节点（400x300）内含一个固定 200x100 的卡片及标签。
     fn fixture() -> (UiWorld, NodeId, NodeId, NodeId) {
         let mut w = UiWorld::new();
         let root = w.root();
@@ -858,12 +858,12 @@ mod tests {
         (w, root, card, label)
     }
 
-    /// A subtree that is re-solved with the boundary as its root comes back
-    /// with the boundary's own rectangle at the origin — but in the tree the
-    /// boundary sits wherever its parent put it.
+    /// 以边界为根重算子树时，边界自身的矩形位置会回到原点——
+    /// 但在完整树中，边界仍位于父节点放置它的位置。
     ///
-    /// Losing that placement is what made a re-solved card jump to the top
-    /// left corner and land on top of its siblings.
+    ///
+    /// 丢失该位置曾导致重算后的卡片跳回左上角并覆盖在兄弟节点之上。
+    ///
     #[test]
     fn incremental_boundary_solve_preserves_the_boundary_origin() {
         let mut w = UiWorld::new();
@@ -878,7 +878,7 @@ mod tests {
         let placement = engine.rect(second).expect("rect").origin;
         assert!(placement.y > 0.0, "the second row is not at the top");
 
-        // Re-solve the second row on its own.
+        // 单独重新求解第二行。
         engine.solve_subtree(&mut w, second, Vec2::new(400.0, 300.0));
         let after = engine.rect(second).expect("rect");
         assert_eq!(
@@ -893,7 +893,7 @@ mod tests {
         assert_ne!(first, second);
     }
 
-    /// A node that left the world must not stay in the engine's tables.
+    /// 离开世界树的节点绝不能残留在引擎的内部表中。
     #[test]
     fn sync_removes_deleted_world_nodes_from_taffy() {
         let (mut w, root, card, _label) = fixture();
@@ -1013,8 +1013,8 @@ mod tests {
     #[test]
     fn measured_text_sets_the_leaf_size() {
         let (mut w, root, card, label) = fixture();
-        // A stretching column would widen the label to the card's content box
-        // (correct flex behaviour); pin it to the intrinsic width instead.
+        // 拉伸列会将标签拓宽至卡片内容盒宽度（符合 Flex 行为）；
+        // 此处将其固定为固有宽度。
         w.node_mut(card).desc.align_items = Align::FlexStart as u8;
         let mut engine = LayoutEngine::new();
         engine.solve(&mut w, root, Vec2::new(400.0, 300.0));
@@ -1086,7 +1086,7 @@ mod tests {
         engine.solve(&mut w, root, Vec2::new(600.0, 400.0));
         w.clear_dirty();
 
-        // Change one label and solve only its card.
+        // 修改一个标签并仅求解其所在卡片。
         w.mark_layout_dirty(labels[1]);
         let boundaries = w.dirty_boundaries();
         assert_eq!(boundaries, vec![cards[1]]);
@@ -1096,8 +1096,8 @@ mod tests {
             "only the card and its label should be visited, got {}",
             stats.nodes_visited
         );
-        // The other cards keep their geometry (read through the world, because
-        // `engine.rect` only reports the most recent solve).
+        // 其他卡片保持其几何位置（通过世界树读取，因为 `engine.rect`
+        // 仅报告最近一次求解的结果）。
         assert_eq!(w.node(cards[0]).rect.size, Vec2::new(100.0, 100.0));
     }
 
@@ -1164,7 +1164,7 @@ mod tests {
         let (mut w, root, card, label) = fixture();
         let mut engine = LayoutEngine::new();
         engine.solve(&mut w, root, Vec2::new(400.0, 300.0));
-        // Make the label enormous; the fixed-size card must not grow.
+        // 将标签设得极大；固定尺寸的卡片不得随之变大。
         w.node_mut(label).measure = Some(Vec2::new(900.0, 400.0));
         w.mark_layout_dirty(label);
         let boundaries = w.dirty_boundaries();
@@ -1186,13 +1186,13 @@ mod tests {
         assert_eq!(style.size.width, Dimension::auto());
     }
 
-    /// An incremental solve must not move the boundary it solves.
+    /// 增量求解绝不能移动其所求解的边界本身。
     ///
-    /// The subtree is re-solved with the boundary as the *root* of that
-    /// computation, so the boundary's own rectangle comes back at the origin
-    /// — while in the tree it sits wherever its parent put it. Writing that
-    /// rectangle back moved the card to the top-left of its parent, and the
-    /// clip folding that follows propagated the wrong position.
+    /// 子树以边界为*根*重新求解，因此边界自身的矩形回到原点——
+    /// 而在树中它位于父节点放置的位置。若直接将该矩形写回，
+    /// 会把卡片移至父节点左上角，随后的裁剪折叠也会传播错误位置。
+    ///
+    ///
     #[test]
     fn an_incremental_solve_keeps_the_boundary_where_it_was() {
         let mut w = UiWorld::new();
@@ -1226,7 +1226,7 @@ mod tests {
             "the card is not at the origin"
         );
 
-        // Change the label and re-solve only the second card's boundary.
+        // 修改标签并仅重新求解第二个卡片的边界。
         w.node_mut(label).measure = Some(Vec2::new(80.0, 12.0));
         w.mark_layout_dirty(label);
         let boundaries = w.dirty_boundaries();
@@ -1242,13 +1242,13 @@ mod tests {
         assert_eq!(w.node(first).rect.origin, Vec2::new(0.0, 0.0));
     }
 
-    /// The same defect, seen the way a long list sees it.
+    /// 长列表场景下表现出的同一缺陷。
     ///
-    /// The gallery lays out 200 rows and re-solves the one in the middle.
-    /// Before the fix that row was teleported to the top of the list — it
-    /// landed *inside the viewport*, so the spatial index reported one row
-    /// too many: a row was drawn on top of the first one, and the one that
-    /// belonged there had vanished.
+    /// 画廊布局了 200 行并重算中间某一行。修复前该行会被瞬移到列表顶部——
+    /// 它落入*视口内部*，导致空间索引多报告了一行：
+    /// 一行被绘制在第一行之上，而原本属于该位置的行则消失了。
+    ///
+    ///
     #[test]
     fn a_row_re_solved_inside_a_list_stays_at_its_index() {
         const ROWS: usize = 200;
@@ -1280,8 +1280,8 @@ mod tests {
             "the row must start at its own index"
         );
 
-        // Re-solve the middle row's boundary, the way an edit would. The
-        // gallery hands the row straight to the engine.
+        // 像真实编辑那样重算中间行的边界：画廊直接将该行交给引擎处理。
+        //
         engine.solve_boundaries(&mut w, &[middle], Vec2::new(1280.0, 720.0));
 
         assert_eq!(
@@ -1290,7 +1290,7 @@ mod tests {
             "the re-solved row was teleported to the top of the list"
         );
 
-        // The row that belongs at the top must still be the one there.
+        // 原本位于顶部的行必须仍然留在顶部。
         assert_eq!(
             w.node(rows[0]).rect.origin,
             Vec2::new(0.0, 0.0),
@@ -1298,7 +1298,7 @@ mod tests {
         );
     }
 
-    /// `fr` is a share of the free space, not a pixel value.
+    /// `fr` 表示可用空间的份额，而非像素值。
     #[test]
     fn a_fractional_size_grows_instead_of_collapsing_to_one_pixel() {
         let mut w = UiWorld::new();
@@ -1327,7 +1327,7 @@ mod tests {
         assert!((a + b - 400.0).abs() <= 1.0, "{a} + {b} must fill the row");
     }
 
-    /// `Align::Baseline` must reach Taffy as baseline alignment.
+    /// `Align::Baseline` 必须作为基线对齐传递给 Taffy。
     #[test]
     fn baseline_alignment_is_not_folded_into_flex_start() {
         let mut w = UiWorld::new();

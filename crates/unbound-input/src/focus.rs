@@ -1,57 +1,57 @@
-//! Framework-level keyboard focus navigation (`docs` §6.2).
+//! 框架级键盘焦点导航（`docs` §6.2）。
 //!
-//! The focus slot itself lives in the router / semantic tree; this module owns
-//! the *policy*: which node receives focus next, whether the focus ring is
-//! allowed to appear, and which nodes a modal dialog traps focus inside.
+//! 焦点槽位本身位于路由器/语义树中；本模块负责**策略**：
+//! 下一个获得焦点的节点、是否允许显示焦点环，以及模态对话框将焦点
+//! 限制在哪些节点内部。
 //!
-//! The manager deliberately stores only `u64` identities. The caller installs
-//! the tab order (usually `SceneCollector::focus_order`) once per frame, and
-//! the manager prunes a focus that points at a node the new scene no longer
-//! contains. Keeping the type free of widget or scene dependencies is what
-//! lets `unbound-input` stay below `unbound-widgets` in the dependency graph.
+//! 管理器刻意只存储 `u64` 节点标识。调用方每帧安装一次 Tab 顺序
+//! （通常为 `SceneCollector::focus_order`），管理器会清理指向新场景中
+//! 已不存在节点的焦点。不引入控件或场景依赖，使得 `unbound-input`
+//! 在依赖图中保持位于 `unbound-widgets` 之下。
 //!
-//! Two rules make the ring feel native:
 //!
-//! * A pointer click focuses a control but, by default, does **not** paint the
-//!   ring; only keyboard navigation (or a text field, which needs its caret)
-//!   reveals it.
-//! * A focus trap never lets `Tab` escape, even when the trap set is empty;
-//!   an empty trap therefore means "focus stays where it is".
+//! 两条规则让焦点环呈现原生手感：
+//!
+//! * 指针点击会使控件聚焦，但默认**不**绘制焦点环；仅键盘导航
+//!   （或需要显示插入符的文本输入框）才会显露焦点环。
+//! * 焦点陷阱绝不允许 `Tab` 逃逸，即使陷阱集合为空亦然；
+//!   因此空陷阱意味着“焦点停留在原地”。
+//!
 
-/// A keyboard key the focus manager understands.
+/// 焦点管理器可识别的键盘按键。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum FocusKey {
-    /// `Tab`: move to the next focusable node.
+    /// `Tab`：移动到下一个可聚焦节点。
     Tab,
-    /// `Shift+Tab`: move to the previous focusable node.
+    /// `Shift+Tab`：移动到上一个可聚焦节点。
     ShiftTab,
-    /// `Escape`: drop focus (or leave the trap).
+    /// `Escape`：清除焦点（或退出焦点陷阱）。
     Escape,
 }
 
-/// Orientation for linear roving tabindex groups.
+/// 线性漫游 tabindex 分组的方向。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RovingOrientation {
-    /// Left/Right arrows move across items.
+    /// 左/右方向键在条目间移动。
     Horizontal,
-    /// Up/Down arrows move across items.
+    /// 上/下方向键在条目间移动。
     Vertical,
-    /// Both Left/Right and Up/Down move linearly.
+    /// 左/右与上/下方向键均按线性顺序移动。
     Both,
 }
 
-/// Navigation topology for a [`FocusGroup`].
+/// [`FocusGroup`] 的导航拓扑结构。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum FocusGroupMode {
-    /// 1D strip (tabs, radio group, segmented control, toolbar, menu).
+    /// 一维条带（选项卡、单选组、分段控件、工具栏、菜单）。
     Linear(RovingOrientation),
-    /// 2D grid (calendar, color swatches, icon picker) with `columns` per row.
+    /// 二维网格（日历、色板、图标选择器），每行 `columns` 列。
     Grid { columns: usize },
-    /// Hierarchical tree (tree view, outline) where Up/Down/Home/End step items.
+    /// 层级树（树形视图、大纲），通过 Up/Down/Home/End 步进条目。
     Tree,
 }
 
-/// Directional key for roving tabindex navigation.
+/// 用于漫游 tabindex 导航的方向键。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RovingKey {
     Left,
@@ -62,23 +62,23 @@ pub enum RovingKey {
     End,
 }
 
-/// A roving-tabindex focus group.
+/// 漫游 tabindex（roving-tabindex）焦点分组。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FocusGroup {
-    /// Stable group identity.
+    /// 稳定的分组标识。
     pub id: u64,
-    /// Navigation mode (`Linear`, `Grid`, `Tree`).
+    /// 导航模式（`Linear`、`Grid`、`Tree`）。
     pub mode: FocusGroupMode,
-    /// Ordered member node IDs.
+    /// 有序的成员节点 ID 列表。
     pub items: Vec<u64>,
-    /// Currently active index inside `items`.
+    /// 当前在 `items` 中激活的索引。
     pub active_index: usize,
-    /// Whether stepping past ends wraps around.
+    /// 越过首尾边界时是否循环回绕。
     pub wrap: bool,
 }
 
 impl FocusGroup {
-    /// Create a new roving focus group.
+    /// 创建新的漫游焦点分组。
     #[must_use]
     pub fn new(id: u64, mode: FocusGroupMode, items: Vec<u64>) -> Self {
         Self {
@@ -90,20 +90,20 @@ impl FocusGroup {
         }
     }
 
-    /// Builder: set wrap-around behavior.
+    /// 构建器方法：设置首尾循环行为。
     #[must_use]
     pub fn with_wrap(mut self, wrap: bool) -> Self {
         self.wrap = wrap;
         self
     }
 
-    /// Currently active node in this group.
+    /// 该分组中当前激活的节点。
     #[must_use]
     pub fn active_node(&self) -> Option<u64> {
         self.items.get(self.active_index).copied()
     }
 
-    /// Sync active index to `node` if present.
+    /// 若 `node` 存在于分组中，则将激活索引同步到该节点。
     pub fn set_active_node(&mut self, node: u64) -> bool {
         if let Some(pos) = self.items.iter().position(|&id| id == node) {
             self.active_index = pos;
@@ -113,7 +113,7 @@ impl FocusGroup {
         }
     }
 
-    /// Navigate according to `key` and return the newly focused node ID, if moved.
+    /// 根据 `key` 执行导航，若焦点发生移动则返回新聚焦的节点 ID。
     pub fn navigate(&mut self, key: RovingKey) -> Option<u64> {
         let len = self.items.len();
         if len == 0 {
@@ -214,14 +214,14 @@ impl FocusGroup {
     }
 }
 
-/// Registry of roving-tabindex [`FocusGroup`]s active for the current frame.
+/// 当前帧活跃的漫游 tabindex [`FocusGroup`] 注册表。
 #[derive(Debug, Default)]
 pub struct RovingRegistry {
     groups: Vec<FocusGroup>,
 }
 
 impl RovingRegistry {
-    /// Register or replace a focus group.
+    /// 注册或替换一个焦点分组。
     pub fn register(&mut self, group: FocusGroup) {
         if let Some(existing) = self.groups.iter_mut().find(|g| g.id == group.id) {
             *existing = group;
@@ -230,24 +230,24 @@ impl RovingRegistry {
         }
     }
 
-    /// Remove all registered groups.
+    /// 移除所有已注册的分组。
     pub fn clear(&mut self) {
         self.groups.clear();
     }
 
-    /// All registered groups.
+    /// 返回所有已注册的分组。
     #[must_use]
     pub fn groups(&self) -> &[FocusGroup] {
         &self.groups
     }
 
-    /// Find the group containing `node`.
+    /// 查找包含 `node` 的分组。
     #[must_use]
     pub fn group_for_node(&self, node: u64) -> Option<&FocusGroup> {
         self.groups.iter().find(|g| g.items.contains(&node))
     }
 
-    /// Handle a directional key for `focused`, returning the next node ID if handled.
+    /// 为 `focused` 处理方向键，若已处理则返回下一个节点 ID。
     pub fn handle_key(&mut self, focused: Option<u64>, key: RovingKey) -> Option<u64> {
         let node = focused?;
         let group = self.groups.iter_mut().find(|g| g.items.contains(&node))?;
@@ -256,39 +256,39 @@ impl RovingRegistry {
     }
 }
 
-/// Why a node received focus.
+/// 节点获得焦点的原因。
 ///
-/// The cause decides whether the focus ring is painted: a pointer click must
-/// not flash a ring, a keyboard traversal must, and a text field always shows
-/// its caret.
+/// 该原因决定是否绘制焦点环：指针点击不应闪烁焦点环，
+/// 键盘遍历必须显示焦点环，文本输入框则始终显示插入符。
+///
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum FocusCause {
-    /// The pointer selected the node.
+    /// 由指针选中节点。
     Pointer,
-    /// Keyboard traversal selected the node.
+    /// 由键盘遍历选中节点。
     Keyboard,
-    /// A text field was activated (click or keyboard).
+    /// 文本输入框被激活（点击或键盘）。
     TextEntry,
-    /// Code called [`FocusManager::focus`].
+    /// 代码显式调用了 [`FocusManager::focus`]。
     Programmatic,
 }
 
 impl FocusCause {
-    /// Whether this cause reveals the focus ring.
+    /// 该焦点原因是否应显示焦点环。
     #[must_use]
     pub const fn reveals_ring(self) -> bool {
         matches!(self, Self::Keyboard | Self::TextEntry)
     }
 }
 
-/// Configuration for the focus policy.
+/// 焦点策略配置。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct FocusConfig {
-    /// Paint the focus ring after a pointer click as well.
+    /// 在指针点击后也绘制焦点环。
     pub ring_on_pointer: bool,
 }
 
-/// The keyboard focus state machine.
+/// 键盘焦点状态机。
 #[derive(Debug)]
 pub struct FocusManager {
     order: Vec<u64>,
@@ -318,20 +318,20 @@ impl FocusManager {
         }
     }
 
-    /// Register a roving-tabindex focus group for the current frame.
+    /// 为当前帧注册一个漫游 tabindex 焦点分组。
     pub fn register_group(&mut self, group: FocusGroup) {
         self.roving.register(group);
     }
 
-    /// Clear all registered roving focus groups.
+    /// 清空所有已注册的漫游焦点分组。
     pub fn clear_groups(&mut self) {
         self.roving.clear();
     }
 
-    /// Handle a roving-tabindex directional key (`Arrow*` / `Home` / `End`).
+    /// 处理漫游 tabindex 方向键（`Arrow*` / `Home` / `End`）。
     ///
-    /// Returns the newly focused node ID if the currently focused node belongs
-    /// to a registered [`FocusGroup`] and moved.
+    /// 若当前聚焦节点属于某个已注册的 [`FocusGroup`] 且发生了移动，
+    /// 则返回新聚焦的节点 ID。
     pub fn handle_roving_key(&mut self, key: RovingKey) -> Option<u64> {
         let next = self.roving.handle_key(self.focused, key)?;
         if self.is_trapped(next) {
@@ -342,13 +342,13 @@ impl FocusManager {
         }
     }
 
-    /// Replace the tab order.
+    /// 替换 Tab 顺序表。
     ///
-    /// Duplicates are removed, keeping the first occurrence. A focus that is
-    /// no longer in the order is dropped — a node that vanished from the scene
-    /// must not keep the keyboard.
+    /// 重复项会被去重，仅保留首次出现的位置。若当前焦点已不在新顺序中，
+    /// 则清除焦点——从场景中消失的节点不应继续占用键盘输入。
     ///
-    /// Returns whether the focus changed.
+    ///
+    /// 返回焦点是否发生变化。
     pub fn set_order(&mut self, order: impl IntoIterator<Item = u64>) -> bool {
         self.order.clear();
         for key in order {
@@ -365,42 +365,42 @@ impl FocusManager {
         false
     }
 
-    /// The current tab order.
+    /// 当前的 Tab 顺序表。
     #[must_use]
     pub fn order(&self) -> &[u64] {
         &self.order
     }
 
-    /// The focused node, if any.
+    /// 当前聚焦的节点（若有）。
     #[must_use]
     pub const fn focused(&self) -> Option<u64> {
         self.focused
     }
 
-    /// Whether the focus ring should be painted this frame.
+    /// 本帧是否应绘制焦点环。
     #[must_use]
     pub const fn focus_visible(&self) -> bool {
         self.visible
     }
 
-    /// Focus a node explicitly.
+    /// 显式聚焦指定节点。
     ///
-    /// Returns whether the focus changed.
+    /// 返回焦点是否发生变化。
     pub fn focus(&mut self, key: u64, cause: FocusCause) -> bool {
         let visible =
             cause.reveals_ring() || (cause == FocusCause::Pointer && self.config.ring_on_pointer);
         self.focus_internal(Some(key), visible)
     }
 
-    /// Drop focus. Returns whether anything changed.
+    /// 清除当前焦点。返回状态是否发生变化。
     pub fn blur(&mut self) -> bool {
         self.focus_internal(None, false)
     }
 
-    /// Move to the next (or previous) node, wrapping around.
+    /// 移动到下一个（或上一个）节点，支持首尾回绕。
     ///
-    /// A focus trap restricts the cycle to the trap set. When nothing is
-    /// focused yet, the first candidate wins.
+    /// 焦点陷阱会将循环限制在陷阱集合内部。当尚未聚焦任何节点时，
+    /// 第一个候选节点胜出。
     pub fn step(&mut self, backwards: bool) -> Option<u64> {
         let candidates = self.candidates();
         if candidates.is_empty() {
@@ -420,10 +420,10 @@ impl FocusManager {
         self.focused
     }
 
-    /// Handle a navigation key.
+    /// 处理焦点导航按键。
     ///
-    /// Returns the newly focused node (`None` after `Escape`), or the current
-    /// focus when the key is not a navigation key.
+    /// 返回新聚焦的节点（`Escape` 后返回 `None`），若按键非导航键
+    /// 则返回当前焦点。
     pub fn handle_key(&mut self, key: FocusKey) -> Option<u64> {
         match key {
             FocusKey::Tab => self.step(false),
@@ -435,11 +435,11 @@ impl FocusManager {
         }
     }
 
-    /// Restrict keyboard traversal to a set of nodes.
+    /// 将键盘遍历限制在指定节点集合内。
     ///
-    /// This is what a modal dialog installs: the nodes behind the scrim must
-    /// not be reachable with `Tab`. If the current focus is outside the trap,
-    /// the first trapped node receives it.
+    /// 模态对话框通过此机制确保遮罩层后方的节点无法通过 `Tab` 访问。
+    /// 若当前焦点位于陷阱之外，则自动将焦点移至陷阱内的第一个节点。
+    ///
     pub fn set_trap(&mut self, nodes: impl IntoIterator<Item = u64>) {
         let mut trap: Vec<u64> = Vec::new();
         for node in nodes {
@@ -456,24 +456,24 @@ impl FocusManager {
         }
     }
 
-    /// Remove the focus trap. Focus is left where it is.
+    /// 移除焦点陷阱，当前焦点保持不变。
     pub fn clear_trap(&mut self) {
         self.trap = None;
     }
 
-    /// The active trap set, if any.
+    /// 当前生效的焦点陷阱集合（若有）。
     #[must_use]
     pub fn trap(&self) -> Option<&[u64]> {
         self.trap.as_deref()
     }
 
-    /// Whether `key` is inside the active trap (or no trap is installed).
+    /// `key` 是否位于当前陷阱内部（或尚未安装陷阱）。
     #[must_use]
     pub fn is_trapped(&self, key: u64) -> bool {
         self.trap.as_ref().is_none_or(|trap| trap.contains(&key))
     }
 
-    /// The candidate list a `Tab` traversal walks.
+    /// `Tab` 遍历所走的候选节点列表。
     fn candidates(&self) -> &[u64] {
         match &self.trap {
             Some(trap) => trap,
@@ -481,7 +481,7 @@ impl FocusManager {
         }
     }
 
-    /// Whether a node is reachable under the current trap.
+    /// 在当前焦点陷阱下某节点是否可达。
     fn is_reachable(&self, key: u64) -> bool {
         match &self.trap {
             Some(trap) => trap.contains(&key),

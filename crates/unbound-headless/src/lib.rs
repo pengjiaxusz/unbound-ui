@@ -1,19 +1,19 @@
 //! 无头验证器（`docs` §7.2）。
 //!
-//! A headless step is: dispatch the input events, run the reducer, solve the
-//! layout incrementally, sync the spatial index, generate primitives, then run
-//! five geometric assertions over the result. None of that needs a window handle
-//! or a Vulkan instance, so it runs in CI, in a unit test, and inside an agent's
-//! edit-verify loop at a fraction of a millisecond.
+//! 单个无头步骤流程为：分发输入事件、运行 reducer、增量求解布局、
+//! 同步空间索引、生成图元，随后对结果运行五项几何断言。以上均不依赖
+//! 窗口句柄或 Vulkan 实例，因此可在 CI、单元测试及 Agent 的
+//! “编辑-验证”循环中以不到一毫秒的速度运行。
 //!
-//! What this crate provides:
 //!
-//! * [`frame::Frame`] / [`frame::FrameBuilder`] — the solved geometry of one
-//!   step, with `#[track_caller]` source locations baked into every node,
-//! * [`rules`] — the doc's five sanitizers, each producing a [`rules::Diagnostic`]
-//!   that serialises to one line of JSON,
-//! * [`snapshot`] — postcard binary capture/restore for time-travel debugging,
-//! * [`Harness`] — runs the checks and reports how long they took.
+//! 本 crate 提供：
+//!
+//! * [`frame::Frame`] / [`frame::FrameBuilder`] —— 单步求解后的几何结构，
+//!   每个节点均内嵌 `#[track_caller]` 源码位置；
+//! * [`rules`] —— 文档规定的五项检查器，每项产出可序列化为单行 JSON 的 [`rules::Diagnostic`]；
+//!
+//! * [`snapshot`] —— 基于 postcard 的二进制捕获/恢复，用于时间旅行调试；
+//! * [`Harness`] —— 执行检查并报告耗时。
 //!
 //! ```no_run
 //! use unbound_headless::{FrameBuilder, Harness, NodeKind};
@@ -41,7 +41,7 @@ pub use frame::{Frame, FrameBuilder, NodeKind, NodeSnapshot, SourceLoc, TextColo
 pub use rules::{check, Diagnostic, Rule};
 pub use snapshot::{capture, open, restore, FrameSnapshot, SnapNode, TimeTravel};
 
-/// Outcome of one verification pass.
+/// 单次验证过程的结果。
 #[derive(Clone, Debug)]
 pub struct Report {
     pub diagnostics: Vec<Diagnostic>,
@@ -50,24 +50,24 @@ pub struct Report {
 }
 
 impl Report {
-    /// True when every sanitizer passed.
+    /// 所有检查器均通过时为 true。
     #[must_use]
     pub fn is_clean(&self) -> bool {
         self.diagnostics.is_empty()
     }
 
-    /// Wall-clock microseconds spent checking.
+    /// 检查所花费的挂钟微秒数。
     #[must_use]
     pub fn elapsed_us(&self) -> u128 {
         self.elapsed.as_micros()
     }
 
-    /// Failures for one rule.
+    /// 某条规则的失败列表。
     pub fn by_rule(&self, rule: Rule) -> impl Iterator<Item = &Diagnostic> {
         self.diagnostics.iter().filter(move |d| d.rule == rule)
     }
 
-    /// Rules that fired at least once.
+    /// 至少触发过一次的规则。
     #[must_use]
     pub fn fired_rules(&self) -> Vec<Rule> {
         let mut rules: Vec<Rule> = self.diagnostics.iter().map(|d| d.rule).collect();
@@ -76,7 +76,7 @@ impl Report {
         rules
     }
 
-    /// Machine-readable report: `{"nodes":N,"elapsedUs":U,"errors":[...]}`.
+    /// 机器可读报告：`{"nodes":N,"elapsedUs":U,"errors":[...]}`。
     #[must_use]
     pub fn to_json(&self) -> String {
         let mut out = String::with_capacity(256 + self.diagnostics.len() * 192);
@@ -97,7 +97,7 @@ impl Report {
         out
     }
 
-    /// Human summary, used by the CLI and by test failure messages.
+    /// 人类可读摘要，用于 CLI 与测试失败信息。
     #[must_use]
     pub fn summary(&self) -> String {
         if self.is_clean() {
@@ -128,12 +128,12 @@ impl Report {
     }
 }
 
-/// Runs the sanitizers and measures how long they took.
+/// 运行检查器并统计耗时。
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Harness;
 
 impl Harness {
-    /// Verify `frame`. Never panics on a violation: the report carries them.
+    /// 验证 `frame`。违规时绝不 panic：诊断结果存储在报告中。
     #[must_use]
     pub fn run(frame: &Frame) -> Report {
         let start = Instant::now();
@@ -145,11 +145,11 @@ impl Harness {
         }
     }
 
-    /// Verify and panic with the full structured report on failure.
+    /// 验证并在失败时携带完整结构化报告 panic。
     ///
-    /// # Panics
-    /// Panics when any sanitizer fires. The message is the `summary()` plus the
-    /// JSON payload, so a CI log is enough to reproduce the bug.
+    /// # Panic
+    /// 任意检查器触发时 panic。消息包含 `summary()` 与 JSON 负载，
+    // 仅凭 CI 日志即可复现缺陷。
     pub fn assert_clean(frame: &Frame) -> Report {
         let report = Self::run(frame);
         assert!(
@@ -214,7 +214,7 @@ mod tests {
         // 1: NaN
         b.open(NodeKind::Container, rect(f32::NAN, 0.0, 1.0, 1.0), "NaN");
         b.close();
-        // 2: clipped text
+        // 2: 文本被裁剪
         b.open(NodeKind::Container, rect(0.0, 0.0, 100.0, 20.0), "Clip");
         b.set_clip(rect(0.0, 0.0, 100.0, 20.0));
         b.open(
@@ -227,7 +227,7 @@ mod tests {
         );
         b.close();
         b.close();
-        // 3: undersized target
+        // 3: 交互目标过小
         b.open(
             NodeKind::Interactive {
                 min_size: NodeKind::DEFAULT_MIN_SIZE,
@@ -237,17 +237,17 @@ mod tests {
             "Tiny",
         );
         b.close();
-        // 4: sibling overlap
+        // 4: 兄弟节点重叠
         b.open(NodeKind::Container, rect(0.0, 300.0, 100.0, 50.0), "Row");
         b.open(NodeKind::Container, rect(0.0, 300.0, 80.0, 50.0), "A");
         b.close();
         b.open(NodeKind::Container, rect(40.0, 300.0, 80.0, 50.0), "B");
         b.close();
         b.close();
-        // 5: portal outside the viewport
+        // 5: portal 超出视口
         b.open(NodeKind::Portal, rect(790.0, 590.0, 100.0, 100.0), "Menu");
         b.close();
-        // 6: text wider than its parent
+        // 6: 文本宽于其父节点
         b.open(NodeKind::Container, rect(0.0, 400.0, 80.0, 40.0), "Pill");
         b.open(
             NodeKind::Text {
@@ -259,7 +259,7 @@ mod tests {
         );
         b.close();
         b.close();
-        // 7: unreadable text colours
+        // 7: 文本颜色对比度不足
         b.open(
             NodeKind::Text {
                 ink: rect(0.0, 500.0, 80.0, 20.0),
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn a_ten_thousand_node_frame_verifies_far_under_a_millisecond() {
-        // 10 000 nodes is the doc's KPI scale.
+        // 10 000 个节点是文档规定的 KPI 规模。
         let mut b = FrameBuilder::new(rect(0.0, 0.0, 4000.0, 4000.0));
         b.open(NodeKind::Container, rect(0.0, 0.0, 4000.0, 4000.0), "Root");
         for i in 0..5000 {
@@ -339,8 +339,8 @@ mod tests {
         let report = Harness::run(&frame);
         assert!(report.is_clean(), "{}", report.summary());
         assert_eq!(report.nodes, 10_001);
-        // Release builds land in the tens of microseconds; the assertion is
-        // generous so a debug build on a busy machine still passes.
+        // release 构建耗时在数十微秒级；此处断言放宽范围，
+        // 以确保繁忙机器上的 debug 构建也能稳定通过。
         assert!(
             report.elapsed_us() < 20_000,
             "verification took {} µs",

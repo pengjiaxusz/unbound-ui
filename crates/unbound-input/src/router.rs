@@ -1,16 +1,16 @@
-//! Input routing: hit test → pointer capture → cursor (`docs` §6.1, §6.2).
+//! 输入路由：命中测试 → 指针捕获 → 光标栈（`docs` §6.1、§6.2）。
 //!
-//! [`Router`] is the piece that turns "the OS said the pointer moved" into "node
-//! 42 is being dragged". It owns the three stateful things that must agree with
-//! each other:
+//! [`Router`] 负责将“系统通知指针移动”转化为“节点 42 正在被拖拽”。
+//! 它统一持有三个必须保持一致的有状态组件：
 //!
-//! * the pointer state machine (press / drag / release / double click),
-//! * the hover target, derived from the same pick the press would use,
-//! * the cursor stack, refreshed from the pick path every frame.
+//! * 指针状态机（按下 / 拖拽 / 释放 / 双击）；
+//! * 悬停目标，源自与按下相同的拾取结果；
+//! * 光标栈，每帧根据拾取路径刷新。
 //!
-//! Keeping them in one place is what makes the cursor *deterministic*: it is
-//! recomputed from the same ordered pick path that decides the click, so a
-//! resize handle can never show an I-beam while it is the click target.
+//!
+//! 将三者集中于一处使光标具有**确定性**：它由决定点击目标的同一条
+//! 有序拾取路径重新计算得出，因此缩放手柄在作为点击目标时绝不会错误显示
+//! 工字光标。
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -20,7 +20,7 @@ use crate::cursor::{CursorKind, CursorSource, CursorStack};
 use crate::hit::{pick, pick_stack, HitRegion, PORTAL_LAYER};
 use crate::pointer::{PointerButton, PointerConfig, PointerEvent, PointerState};
 
-/// Routes pointer input to hit regions.
+/// 将指针输入路由到各命中区域。
 #[derive(Clone, Debug)]
 pub struct Router {
     regions: Vec<HitRegion>,
@@ -28,21 +28,21 @@ pub struct Router {
     cursors: CursorStack,
     hover: Option<u64>,
     tool_cursor: CursorKind,
-    /// The last canvas position the pointer was observed at.
+    /// 最近一次观测到的指针画布坐标。
     ///
-    /// `PointerState::position` only moves when the state machine receives an
-    /// event; a pan, a zoom or a scroll leaves it stale. Hover and cursor must
-    /// be resolved from the freshest point, so every observation — an OS
-    /// event or a camera-driven [`Router::refresh_at`] — is recorded here.
+    /// `PointerState::position` 仅在状态机收到事件时更新；平移、缩放或滚动
+    /// 会使其过时。悬停与光标必须基于最新位置解析，因此每次观测——无论来自
+    /// 系统事件还是相机驱动的 [`Router::refresh_at`]——都会记录在此处。
     ///
-    /// `None` means the pointer never entered: picking at the state machine's
-    /// origin placeholder would invent a hover target out of nothing.
+    ///
+    /// `None` 表示指针尚未进入窗口：在状态机的原点占位值处拾取会凭空捏造
+    /// 悬停目标。
     last_position: Option<Vec2>,
-    /// The last wheel delta the router saw.
+    /// 路由器最近一次收到的滚轮增量。
     ///
-    /// The wheel does not move the pointer, so the delta has to be recorded
-    /// separately: a host that scrolls on the wheel needs to know how far
-    /// the wheel turned even though the pointer stayed where it was.
+    /// 滚轮事件不会移动指针，因此增量需单独记录：依赖滚轮滚动的宿主
+    /// 即使在指针静止时也需要知道滚轮转动了多少。
+    ///
     last_wheel: Vec2,
 }
 
@@ -66,11 +66,11 @@ impl Router {
         }
     }
 
-    /// Replace the pickable set for this frame.
+    /// 替换本帧的可拾取区域集合。
     ///
-    /// The vector is reused, so a steady frame does not allocate. Hover and
-    /// cursor are re-picked because the new set may no longer contain the node
-    /// that was under the pointer.
+    /// 内部向量会被复用，因此稳态帧无堆分配。由于新集合可能不再包含
+    /// 原先位于指针下的节点，此处会重新拾取悬停目标与光标。
+    ///
     pub fn set_regions(&mut self, regions: Vec<HitRegion>) {
         self.regions = regions;
         match self.last_position {
@@ -79,56 +79,56 @@ impl Router {
         }
     }
 
-    /// Pickable regions currently registered.
+    /// 当前已注册的可拾取区域列表。
     #[must_use]
     pub fn regions(&self) -> &[HitRegion] {
         &self.regions
     }
 
-    /// Node under the pointer, if any.
+    /// 当前位于指针下方的节点（若有）。
     #[must_use]
     pub fn hover(&self) -> Option<u64> {
         self.hover
     }
 
-    /// Cursor to show, resolved from the current frame.
+    /// 基于当前帧解析出的待显示光标。
     #[must_use]
     pub fn cursor(&self) -> CursorKind {
         self.cursors.resolve()
     }
 
-    /// Cursor the active canvas tool asks for.
+    /// 当前激活的画布工具所请求的光标。
     pub fn set_tool_cursor(&mut self, cursor: CursorKind) {
         self.tool_cursor = cursor;
         self.refresh_cursor();
     }
 
-    /// Pointer state, for gestures that need the raw capture/drag flags.
+    /// 指针状态，供需要原始捕获/拖拽标志的手势使用。
     #[must_use]
     pub fn pointer(&self) -> &PointerState {
         &self.pointer
     }
 
-    /// Topmost region at `point`.
+    /// `point` 处最顶层的命中区域。
     #[must_use]
     pub fn pick(&self, point: Vec2) -> Option<&HitRegion> {
         pick(&self.regions, point)
     }
 
-    /// Every region under `point`, topmost first.
+    /// `point` 处的所有命中区域，按从顶层到底层排序。
     ///
-    /// This is the "pick path": the top entry is what a click would hit, and
-    /// the rest are its ancestors. A wheel event walks it to find the
-    /// nearest scrollable container.
+    /// 即“拾取路径”：首项是点击将命中的目标，其余项是其祖先节点。
+    /// 滚轮事件会沿该路径查找最近的可滚动容器。
+    ///
     #[must_use]
     pub fn pick_all(&self, point: Vec2) -> Vec<&HitRegion> {
         pick_stack(&self.regions, point)
     }
 
-    /// Route a wheel event to the regions under the pointer.
+    /// 将滚轮事件路由到指针下方的区域。
     ///
-    /// The returned path is topmost first, so the host can walk up it to the
-    /// nearest scrollable ancestor and scroll that one.
+    /// 返回的路径按从顶层到底层排序，宿主可沿其向上查找最近的可滚动祖先
+    /// 并执行滚动。
     pub fn wheel(&mut self, delta: Vec2, point: Vec2) -> Vec<&HitRegion> {
         self.last_wheel = delta;
         self.last_position = Some(point);
@@ -136,22 +136,22 @@ impl Router {
         self.pick_all(point)
     }
 
-    /// The last wheel delta the router saw.
+    /// 路由器最近一次收到的滚轮增量。
     #[must_use]
     pub fn last_wheel(&self) -> Vec2 {
         self.last_wheel
     }
 
-    /// A primary-button press.
+    /// 主键按下。
     ///
-    /// A convenience for hosts that never distinguish the buttons; anything
-    /// that supports a context menu or a middle-drag calls
-    /// [`Self::pointer_down_button`].
+    /// 为不区分按键的宿主提供的便捷方法；需要支持上下文菜单或中键拖拽的
+    /// 宿主应调用 [`Self::pointer_down_button`]。
+    ///
     pub fn pointer_down(&mut self, position: Vec2, now: f64) -> Option<PointerEvent> {
         self.pointer_down_button(position, PointerButton::Left, now)
     }
 
-    /// Any button press.
+    /// 任意按键按下。
     pub fn pointer_down_button(
         &mut self,
         position: Vec2,
@@ -166,8 +166,8 @@ impl Router {
         event
     }
 
-    /// Pointer movement. The hit test is skipped while a capture is active —
-    /// that is the whole point of the capture.
+    /// 指针移动。当存在活跃捕获时跳过命中测试——这正是捕获的意义所在。
+    ///
     pub fn pointer_move(&mut self, position: Vec2) -> Option<PointerEvent> {
         self.last_position = Some(position);
         let event = self.pointer.on_move(position);
@@ -178,17 +178,17 @@ impl Router {
         event
     }
 
-    /// Button release.
+    /// 主键释放。
     ///
-    /// A release that lands outside the region it was pressed on does not
-    /// produce a click, even when the pointer never travelled far enough to
-    /// count as a drag: a button must not activate when the user lets go over
-    /// something else.
+    /// 若释放位置落在原按下区域之外，则不会产生点击，即使指针移动距离
+    /// 尚未达到拖拽阈值亦然：当用户在其他元素上松手时，按钮不应被激活。
+    ///
+    ///
     pub fn pointer_up(&mut self, position: Vec2, now: f64) -> Vec<PointerEvent> {
         self.pointer_up_button(position, PointerButton::Left, now)
     }
 
-    /// Any button release.
+    /// 任意按键释放。
     pub fn pointer_up_button(
         &mut self,
         position: Vec2,
@@ -211,12 +211,12 @@ impl Router {
                         PointerEvent::Click { .. } | PointerEvent::DoubleClick { .. }
                     )
                 });
-                // The click was withheld, so the next press starts a new
-                // click sequence instead of pairing with this one.
+                // 点击已被扣留，因此下一次按下应开启新的点击序列，
+                // 而非与本次按下配对。
                 self.pointer.reset_click_sequence();
             } else if !clicked {
-                // A drag that ends on the target delivers no click either;
-                // it must not pair with the next press as a double click.
+                // 在原目标上结束的拖拽同样不派发点击；
+                // 它绝不能与下一次按下配对构成双击。
                 self.pointer.reset_click_sequence();
             }
         }
@@ -224,24 +224,24 @@ impl Router {
         events
     }
 
-    /// Abort the current interaction.
+    /// 中止当前交互。
     pub fn cancel(&mut self) -> Option<PointerEvent> {
         let event = self.pointer.cancel();
         match self.last_position {
-            // Hover was frozen while the capture was active; the pointer may
-            // now be anywhere, so it must be re-picked.
+            // 捕获期间悬停检测被冻结；现在指针可能位于任何位置，必须重新拾取。
+            //
             Some(position) => self.refresh_at(position),
             None => self.refresh_cursor(),
         }
         event
     }
 
-    /// Re-pick hover and cursor at `position` without moving the state machine.
+    /// 在不移动状态机的前提下，于 `position` 处重新拾取悬停目标与光标。
     ///
-    /// A pan, a zoom or a scene rebuild moves the geometry under a stationary
-    /// pointer. Regions live in canvas space, so the hover target and cursor
-    /// have to be resolved at the new canvas point rather than waiting for the
-    /// next OS cursor event.
+    /// 平移、缩放或场景重建会移动静止指针下方的几何体。命中区域位于画布空间，
+    /// 因此必须在新的画布坐标处解析悬停与光标，而不能干等下一次系统光标事件。
+    ///
+    ///
     pub fn refresh_at(&mut self, position: Vec2) {
         self.last_position = Some(position);
         if self.pointer.capture().is_none() {
@@ -250,16 +250,16 @@ impl Router {
         self.refresh_cursor_at(position);
     }
 
-    /// Recompute the cursor stack from the current pick path.
+    /// 根据当前拾取路径重新计算光标栈。
     fn refresh_cursor(&mut self) {
         self.refresh_cursor_at(self.last_position.unwrap_or(Vec2::ZERO));
     }
 
-    /// Recompute the cursor stack from the pick path at `position`.
+    /// 根据 `position` 处的拾取路径重新计算光标栈。
     ///
-    /// One pass per source, topmost region wins inside a source. That keeps the
-    /// result independent of the region order and needs no temporary vector, so
-    /// a mouse move allocates nothing.
+    /// 每个来源只遍历一趟，同来源内最顶层区域胜出。这使结果与区域顺序无关，
+    /// 且无需临时向量，因此鼠标移动零分配。
+    ///
     fn refresh_cursor_at(&mut self, position: Vec2) {
         self.cursors.clear();
         if self.pointer.capture().is_some() {
@@ -298,8 +298,8 @@ impl Router {
                 self.cursors.push(source, kind);
             }
         }
-        // Only claim the tool slot when the tool actually wants a cursor:
-        // pushing `Default` here would outrank a plain hovered widget.
+        // 仅当工具确实请求了光标时才占领工具槽位：
+        // 在此处推入 `Default` 会压过普通悬停控件的光标。
         if self.tool_cursor != CursorKind::Default {
             self.cursors
                 .push(CursorSource::CanvasTool, self.tool_cursor);
@@ -321,10 +321,10 @@ mod tests {
         HitRegion::new(node, 1, 0, bounds).with_cursor(CursorKind::Pointer)
     }
 
-    /// A wheel event has to reach the regions under the pointer.
+    /// 滚轮事件必须送达指针下方的区域。
     ///
-    /// Without a wheel route the input layer had no way to tell a host
-    /// *where* the wheel turned, so every scrollable area had to guess.
+    /// 若没有滚轮路由，输入层无法告知宿主滚轮在**何处**转动，
+    /// 每个可滚动区域就只能自行猜测。
     #[test]
     fn wheel_events_are_routed_to_the_regions_under_the_pointer() {
         let mut router = Router::new(PointerConfig::default());
@@ -334,16 +334,16 @@ mod tests {
         ]);
         let path = router.wheel(Vec2::new(0.0, 40.0), Vec2::new(10.0, 10.0));
         assert_eq!(path.len(), 2, "both regions are under the pointer");
-        // The topmost region comes first: that is the one a click would hit.
+        // 最顶层区域排在最前：即点击会命中的区域。
         assert_eq!(path[0].node, 2);
         assert_eq!(path[1].node, 1);
         assert_eq!(router.last_wheel(), Vec2::new(0.0, 40.0));
-        // The wheel does not move the pointer, but the router remembers
-        // where the wheel happened.
+        // 滚轮不会移动指针，但路由器会记住滚轮发生的位置。
+        //
         assert_eq!(router.pointer().position(), Vec2::new(10.0, 10.0));
     }
 
-    /// A wheel over nothing returns an empty path.
+    /// 在空白处滚动滚轮返回空路径。
     #[test]
     fn a_wheel_over_nothing_routes_nowhere() {
         let mut router = Router::new(PointerConfig::default());
@@ -411,7 +411,7 @@ mod tests {
         r.pointer_move(Vec2::new(30.0, 10.0));
         assert!(r.pointer().is_dragging());
         assert_eq!(r.cursor(), CursorKind::Grabbing);
-        // Fly over the text region: the capture still owns the cursor.
+        // 划过文本区域：捕获依然拥有光标控制权。
         r.pointer_move(Vec2::new(250.0, 250.0));
         assert_eq!(r.cursor(), CursorKind::Grabbing);
         r.pointer_up(Vec2::new(250.0, 250.0), 0.5);
@@ -493,9 +493,9 @@ mod tests {
         let mut r = router();
         r.set_regions(vec![region(1, rect(0.0, 0.0, 100.0, 100.0))]);
         r.pointer_down(Vec2::new(99.0, 50.0), 0.0);
-        // Two pixels outside: below the three-pixel drag slop, so the state
-        // machine still considers this a click unless the router checks where
-        // the release landed.
+        // 超出边界两像素：低于三像素的拖拽阈值，因此除非路由器检查
+        // 释放落点，否则状态机仍会将其视为点击。
+        //
         let events = r.pointer_up(Vec2::new(101.0, 50.0), 0.1);
         assert!(
             !events
@@ -505,7 +505,7 @@ mod tests {
         );
         assert_eq!(r.hover(), None);
 
-        // The withheld click must not poison the next click sequence.
+        // 被扣留的点击绝不能污染下一次点击序列。
         let down = r.pointer_down(Vec2::new(50.0, 50.0), 0.2).unwrap();
         assert!(matches!(down, PointerEvent::Down { click_count: 1, .. }));
         let events = r.pointer_up(Vec2::new(50.0, 50.0), 0.3);
@@ -555,12 +555,12 @@ mod tests {
         r.pointer_move(Vec2::new(10.0, 10.0));
         assert_eq!(r.hover(), Some(1));
 
-        // The camera pans: the same window point now sits at canvas (500, 500).
+        // 相机平移：同一个窗口坐标点现在对应画布坐标 (500, 500)。
         r.refresh_at(Vec2::new(500.0, 500.0));
         assert_eq!(r.hover(), None);
 
-        // A rebuild must re-pick at the refreshed point, not at the stale
-        // state-machine position where the pointer used to be.
+        // 重建场景时必须在刷新后的坐标处重新拾取，而非指针曾经所在的
+        // 过时状态机坐标。
         r.set_regions(vec![region(1, rect(0.0, 0.0, 100.0, 100.0))]);
         assert_eq!(r.hover(), None, "a stale hover must not come back");
         assert_eq!(r.cursor(), CursorKind::Default);
@@ -573,7 +573,7 @@ mod tests {
         r.pointer_down(Vec2::new(10.0, 10.0), 0.0);
         assert_eq!(r.hover(), Some(1));
 
-        // The canvas moves under the captured pointer.
+        // 画布在被捕获的指针下方移动。
         r.refresh_at(Vec2::new(500.0, 500.0));
         assert_eq!(r.hover(), Some(1), "hover stays frozen while captured");
 

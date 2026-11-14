@@ -1,7 +1,7 @@
-//! The select field's disclosure arrow, placeholder and disabled options.
+//! 选择框的展开箭头、占位符与禁用选项测试。
 //!
-//! The arrow is checked through its two curve payloads, the placeholder through
-//! the ink token of the emitted glyph, and the keyboard through the highlight.
+//! 通过两条曲线载荷验证箭头，通过输出字形的墨色令牌验证占位符，并通过高亮状态验证键盘交互。
+//!
 
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
@@ -44,14 +44,14 @@ fn the_arrow_is_two_curve_strokes_that_flip_when_the_dropdown_opens() {
         .payloads
         .iter()
         .all(|payload| payload.line_width > 0.0));
-    // Closed: the ends sit above the apex in primitive-local space.
+    // 收起时：在图元局部空间中两端位于顶点上方。
     assert!(closed.payloads[0].p0[1] < closed.payloads[0].p2[1]);
 
     state.open();
     let open = emit_select(4, &desc, &state, ControlState::default());
     assert_eq!(open.primitives.len(), closed.primitives.len());
     assert_eq!(open.payloads.len(), 2);
-    // Open: the arrow points up, so the ends sit below the apex.
+    // 打开时：箭头朝上，因此两端位于顶点下方。
     assert!(open.payloads[0].p0[1] > open.payloads[0].p2[1]);
 }
 
@@ -117,7 +117,7 @@ fn disabled_options_are_disabled_menu_rows() {
     assert!(!menu.items[0].disabled);
     assert!(menu.items[2].disabled);
     assert_eq!(menu.items.len(), 4);
-    // The dropdown is clamped against the viewport it was given.
+    // 下拉列表被夹紧在给定的视口范围内。
     assert_eq!(menu.viewport, Some(Rect::new(0.0, 0.0, 800.0, 600.0)));
     assert_eq!(menu.rect.width(), desc.rect.width());
     assert_eq!(menu.rect.origin.y, desc.rect.max().y + 4.0);

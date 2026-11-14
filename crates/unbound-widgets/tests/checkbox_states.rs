@@ -1,4 +1,4 @@
-//! Tri-state behaviour and vector marks of the checkbox.
+//! 复选框的三态行为与矢量标记测试。
 
 use accesskit::{Role, Toggled};
 use unbound_gpu::data::{PrimFlags, PrimType, SubElement};

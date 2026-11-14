@@ -1,17 +1,17 @@
-//! The component gallery: every catalog component painted by its genuine
-//! emitter.
+//! 组件展厅：目录中的每个组件均由其真实发射器（emitter）绘制。
 //!
-//! Each card drives [`unbound_widgets::catalog::emit_widget`] — the same
-//! exhaustive, wildcard-free match that backs the stable-shape probe — so the
-//! surface, hit region and semantic node all come from the real
-//! `unbound-widgets` emitter, never a hand-drawn stand-in. The frame records
-//! the component in `Canvas::emitted_widgets`, which the Showcase coverage
-//! gate reads to prove 100% of the catalog is hosted.
 //!
-//! [`showcase_entry_for_widget`] and [`COMPONENT_EXAMPLES`] are generated from
-//! one id list, so a new catalog variant cannot be added to the gallery
-//! without also being named in the exhaustive entry function (and vice
-//! versa). A `const` assertion below ties both to `WidgetCatalogId::ALL`.
+//! 每张卡片驱动 [`unbound_widgets::catalog::emit_widget`]——与支撑 Stable Shape 探针的
+//! 穷举式、无通配符匹配相同——因此表面、命中区域与语义节点全部来自真实的
+//! `unbound-widgets` 发射器，绝非手绘替身。帧会将组件记录在 `Canvas::emitted_widgets` 中，
+//! Showcase 覆盖率门禁读取该记录以证明目录已 100% 承载。
+//!
+//!
+//!
+//! [`showcase_entry_for_widget`] 与 [`COMPONENT_EXAMPLES`] 由同一份 ID 列表生成，
+//! 因此无法在不命名穷举入口函数的前提下向展厅新增目录变体（反之亦然）。
+//! 下方的 `const` 断言将两者绑定到 `WidgetCatalogId::ALL`。
+//!
 
 use unbound_math::{Rect, Vec2};
 use unbound_widgets::catalog::emit_widget;
@@ -25,7 +25,7 @@ pub const COMPONENTS_INFO: PageInfo = PageInfo {
     short: "Components",
     description: "All 91 standard components, each painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
     crates: &["unbound-widgets"],
-    docs: "docs/05-agent/layering.md",
+    docs: "docs/architecture/principles.md",
     keywords: "component gallery catalog emitter coverage widget showcase every control",
 };
 
@@ -69,7 +69,7 @@ const KNOBS_VISUAL: &[KnobSpec] = &[
     KnobSpec::slider("Scale", 0.5, 2.0, 0.25, 1.0, "x"),
 ];
 
-/// Get non-empty property knobs for any component catalog variant.
+/// 为任意组件目录变体获取非空的属性旋钮。
 #[must_use]
 pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
     match id {
@@ -182,7 +182,7 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
     }
 }
 
-/// Idiomatic declarative Unbound UI code for any component.
+/// 任意组件的惯用声明式 Unbound UI 代码。
 #[must_use]
 pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
     match id {
@@ -288,12 +288,12 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
     }
 }
 
-/// Generate the gallery examples and the exhaustive coverage gate from one
-/// id list. Adding a catalog variant forces a new entry here (the `const`
-/// assertion below fails otherwise) and a new arm in `emit_widget` (`E0004`).
+/// 由同一份 ID 列表生成展厅示例与穷举覆盖率门禁。
+/// 新增目录变体时必须在此补充条目（否则下方 `const` 断言会失败），
+/// 并在 `emit_widget` 中新增分支（`E0004`）。
 macro_rules! define_showcase_components {
     ($( $id:ident => $title:literal, $desc:literal, $height:literal ),+ $(,)?) => {
-        /// One card per catalog component, in catalog order.
+        /// 按目录顺序为每个目录组件生成一张卡片。
         pub const COMPONENT_EXAMPLES: &[ExampleDef] = &[
             $(
                 ExampleDef::new(
@@ -312,11 +312,11 @@ macro_rules! define_showcase_components {
             )+
         ];
 
-        /// Map every catalog component to the page and demo that hosts it.
+        /// 将每个目录组件映射到承载它的页面和演示。
         ///
-        /// Exhaustive: NO `_ =>` wildcard arm. A new `WidgetCatalogId` variant
-        /// fails to compile here until it is named, mirroring the probe gate
-        /// in `unbound-widgets`.
+        /// 穷举匹配：禁止 `_ =>` 通配符分支。新增的 `WidgetCatalogId` 变体
+        /// 在命名之前将无法通过此处编译，与 `unbound-widgets` 中的探针门禁一致。
+        ///
         #[deny(unreachable_patterns)]
         pub const fn showcase_entry_for_widget(id: WidgetCatalogId) -> (super::PageId, DemoKind) {
             match id {
@@ -433,7 +433,7 @@ define_showcase_components! {
     TerminalView => "Terminal view", "ANSI-styled virtualized terminal console log viewer.", 280.0,
 }
 
-/// Whether `examples` mounts a card for `id` (const-comparable).
+/// `examples` 是否为 `id` 挂载了卡片（可 const 比较）。
 const fn hosts(examples: &[ExampleDef], id: WidgetCatalogId) -> bool {
     let mut j = 0;
     while j < examples.len() {
@@ -447,8 +447,8 @@ const fn hosts(examples: &[ExampleDef], id: WidgetCatalogId) -> bool {
     false
 }
 
-/// Compile-time coverage gate: every catalog component must map to a demo
-/// that the target page actually mounts, and have non-empty interactive knobs.
+/// 编译期覆盖率门禁：每个目录组件都必须映射到目标页面实际挂载的演示，
+/// 且拥有非空的交互旋钮。
 const _: () = {
     let mut i = 0;
     while i < WidgetCatalogId::COUNT {
@@ -519,7 +519,7 @@ fn semantic_label_for_id(
     }
 }
 
-/// Render one component card with its genuine emitter.
+/// 使用真实发射器渲染单个组件卡片。
 pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;

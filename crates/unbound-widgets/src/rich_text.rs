@@ -1,14 +1,14 @@
-//! Rich text and Markdown blocks.
+//! 富文本与 Markdown 块渲染。
 //!
-//! Markdown is parsed into [`RichBlock`]s, and every block carries inline
-//! [`TextSpan`]s — bold, inline code and links — that the text engine lays out
-//! in one run. The widget itself only paints block surfaces; the caller passes
-//! the shaped glyphs, exactly like every other text-bearing widget.
+//! Markdown 被解析为多个 [`RichBlock`]，每个块携带行内 [`TextSpan`]——
+//! 包括粗体、行内代码与链接——由文本引擎一次性排版。
+//! 控件自身仅绘制块级表面背景；调用方传入塑形后的字形，与其他文本控件一致。
 //!
-//! Links do not become hit regions here: a paragraph usually contains several,
-//! and [`WidgetOutput`] carries one region. Instead [`RichBlock::link_at`]
-//! answers "which link is under this byte offset?", and the application turns
-//! that into a cursor change and a click action.
+//!
+//! 链接在此不生成独立命中区域：单个段落通常包含多个链接，而 [`WidgetOutput`] 仅携带一个区域。
+//! 相反，[`RichBlock::link_at`] 用于回答“该字节偏移处是哪个链接？”，
+//! 再由应用程序将其转换为光标样式切换与点击动作。
+//!
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -21,28 +21,28 @@ use crate::primitive::{glyphs, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The default body size of parsed Markdown.
+/// 已解析 Markdown 的默认正文字号。
 pub const RICH_TEXT_SIZE: f32 = 14.0;
-/// The scale applied to heading levels.
+/// 应用于标题层级的缩放比例。
 pub const HEADING_SCALE: [f32; 6] = [1.9, 1.6, 1.4, 1.25, 1.15, 1.05];
 
-/// The kind of a Markdown block.
+/// Markdown 块的类型。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockKind {
-    /// An ATX heading, `1..=6`.
+    /// ATX 标题，`1..=6`。
     Heading(u8),
-    /// A paragraph line.
+    /// 段落行。
     Paragraph,
-    /// A bullet list item.
+    /// 无序列表项。
     Bullet,
-    /// A block quote.
+    /// 引用块。
     Quote,
-    /// A fenced code block.
+    /// 围栏代码块。
     Code,
 }
 
 impl BlockKind {
-    /// The line height multiplier for the block.
+    /// 块的行高倍率。
     #[must_use]
     pub fn line_height(self) -> f32 {
         match self {
@@ -54,7 +54,7 @@ impl BlockKind {
         }
     }
 
-    /// Whether the block paints a surface behind the text.
+    /// 该块是否在文本背后绘制表面背景。
     #[must_use]
     pub fn background(self) -> Option<Token> {
         match self {
@@ -65,19 +65,19 @@ impl BlockKind {
     }
 }
 
-/// One parsed block.
+/// 单个已解析的块。
 #[derive(Clone, Debug, PartialEq)]
 pub struct RichBlock {
-    /// What the block is.
+    /// 块类型。
     pub kind: BlockKind,
-    /// The block's source text, without Markdown markers.
+    /// 去除 Markdown 标记后的源文本。
     pub text: String,
-    /// The inline runs covering `text`.
+    /// 覆盖 `text` 的行内片段列表。
     pub spans: Vec<TextSpan>,
 }
 
 impl RichBlock {
-    /// The link under a byte offset.
+    /// 获取字节偏移处的链接。
     #[must_use]
     pub fn link_at(&self, offset: usize) -> Option<u32> {
         self.spans.iter().find_map(|span| {
@@ -85,7 +85,7 @@ impl RichBlock {
         })
     }
 
-    /// The base style of the block, before inline overrides.
+    /// 应用行内覆盖之前的块基础样式。
     #[must_use]
     pub fn base_style(&self) -> TextStyle {
         match self.kind {
@@ -101,15 +101,15 @@ impl RichBlock {
     }
 }
 
-/// A parsed Markdown document.
+/// 已解析的 Markdown 文档。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RichDocument {
-    /// The blocks, in source order.
+    /// 按源顺序排列的块列表。
     pub blocks: Vec<RichBlock>,
 }
 
 impl RichDocument {
-    /// Total number of links.
+    /// 链接总数。
     #[must_use]
     pub fn link_count(&self) -> usize {
         self.blocks
@@ -120,8 +120,8 @@ impl RichDocument {
     }
 }
 
-/// Parse a Markdown subset: headings, paragraphs, bullets, quotes and fenced
-/// code. Inline spans cover bold, inline code and links.
+/// 解析 Markdown 子集：标题、段落、无序列表、引用块与围栏代码块。
+/// 行内片段支持粗体、行内代码与链接。
 #[must_use]
 pub fn parse_markdown(markdown: &str) -> RichDocument {
     let mut blocks = Vec::new();
@@ -206,7 +206,7 @@ fn split_heading(line: &str) -> Option<(u8, &str)> {
     Some((u8::try_from(hashes).ok()?, rest))
 }
 
-/// Split one line into plain, bold, inline-code and link spans.
+/// 将单行拆分为普通文本、粗体、行内代码与链接片段。
 fn parse_inline(text: &str, base: &TextStyle, link_id: &mut u32) -> Vec<TextSpan> {
     let mut spans: Vec<TextSpan> = Vec::new();
     let mut plain_start = 0usize;
@@ -291,23 +291,23 @@ fn push_plain(spans: &mut Vec<TextSpan>, start: usize, end: usize, base: &TextSt
     }
 }
 
-/// The pure descriptor of a rich text block stack.
+/// 富文本块堆栈的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct RichTextDesc {
-    /// The content rectangle.
+    /// 内容区域矩形。
     pub rect: Rect,
-    /// The accessible name.
+    /// 无障碍名称。
     pub label: String,
-    /// The gap between blocks.
+    /// 块与块之间的间距。
     pub gap: f32,
-    /// The leading inset for bullets and quotes.
+    /// 列表项与引用块的前导缩进。
     pub indent: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl RichTextDesc {
-    /// A rich text block with 8 px gaps.
+    /// 创建块间距为 8 px 的富文本描述符。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -319,14 +319,14 @@ impl RichTextDesc {
         }
     }
 
-    /// The same block with an accessible name.
+    /// 设置无障碍名称。
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
     }
 
-    /// Lay the blocks out given their measured heights.
+    /// 根据已测量的各块高度进行布局。
     #[must_use]
     pub fn layout(&self, document: &RichDocument, heights: &[f32]) -> Vec<Rect> {
         let mut out = Vec::with_capacity(document.blocks.len());
@@ -351,7 +351,7 @@ impl RichTextDesc {
     }
 }
 
-/// Emit the block surfaces and the glyphs.
+/// 输出块表面与字形。
 #[must_use]
 pub fn emit_rich_text(
     node: u64,

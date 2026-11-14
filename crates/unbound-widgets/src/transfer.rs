@@ -1,4 +1,4 @@
-//! Dual-column Transfer box with filtering and batch move between source & target.
+//! 双栏穿梭框（Transfer），支持过滤与源/目标列表间的批量移动。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -11,28 +11,28 @@ use crate::primitive::{focus_ring, glyphs, outlined};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// One item in a [`TransferDesc`].
+/// [`TransferDesc`] 中的单个条目。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransferItem {
-    /// Stable item key.
+    /// 稳定条目标识键。
     pub key: u64,
-    /// Display label.
+    /// 显示标签。
     pub label: String,
-    /// Whether this item currently resides in the target (right) list.
+    /// 该条目当前是否位于目标（右侧）列表。
     pub in_target: bool,
-    /// Whether this item is checked for batch transfer.
+    /// 该条目是否已勾选待批量移动。
     pub checked: bool,
 }
 
-/// Interactive state for [`TransferDesc`].
+/// [`TransferDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TransferState {
-    /// Items across both lists.
+    /// 跨越两侧列表的所有条目。
     pub items: Vec<TransferItem>,
 }
 
 impl TransferState {
-    /// Move all checked items into `to_target` (`true` = right, `false` = left) and uncheck them.
+    /// 将所有已勾选项移动到 `to_target`（`true` = 右侧，`false` = 左侧）并取消勾选。
     pub fn move_checked(&mut self, to_target: bool) -> usize {
         let mut moved = 0;
         for item in &mut self.items {
@@ -46,47 +46,47 @@ impl TransferState {
     }
 }
 
-/// Deterministic child node key for the "Move to target (`>`)" button.
+/// “移动到目标（`>`）”按钮的确定性子节点键。
 #[must_use]
 pub const fn move_right_node(base: u64) -> u64 {
     base ^ 0x5452_4652_0001
 }
 
-/// Deterministic child node key for the "Move to source (`<`)" button.
+/// “移动到源（`<`）”按钮的确定性子节点键。
 #[must_use]
 pub const fn move_left_node(base: u64) -> u64 {
     base ^ 0x5452_4652_0002
 }
 
-/// Deterministic child node key for an individual [`TransferItem`].
+/// 单个 [`TransferItem`] 的确定性子节点键。
 #[must_use]
 pub const fn transfer_item_node(base: u64, item_key: u64) -> u64 {
     base ^ (item_key.wrapping_mul(0x9E37_79B9_7F4A_7C15))
 }
 
-/// Descriptor for a dual-list [`Transfer`].
+/// 双列表 [`Transfer`] 穿梭框的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransferDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Left list count.
+    /// 左侧列表条目数。
     pub source_count: usize,
-    /// Right list count.
+    /// 右侧列表条目数。
     pub target_count: usize,
-    /// Items across both panes.
+    /// 两侧面板的全部条目。
     pub items: Vec<TransferItem>,
-    /// Left search filter query.
+    /// 左侧搜索过滤词。
     pub left_query: String,
-    /// Right search filter query.
+    /// 右侧搜索过滤词。
     pub right_query: String,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl TransferDesc {
-    /// Create a transfer descriptor.
+    /// 创建穿梭框描述符。
     #[must_use]
     pub fn new(rect: Rect, source_count: usize, target_count: usize) -> Self {
         Self {
@@ -101,7 +101,7 @@ impl TransferDesc {
         }
     }
 
-    /// Attach items to the transfer descriptor.
+    /// 为穿梭框描述符附加条目列表。
     #[must_use]
     pub fn with_items(mut self, items: Vec<TransferItem>) -> Self {
         self.source_count = items.iter().filter(|i| !i.in_target).count();
@@ -110,7 +110,7 @@ impl TransferDesc {
         self
     }
 
-    /// Attach left/right search queries.
+    /// 附加左右搜索过滤词。
     #[must_use]
     pub fn with_queries(mut self, left: impl Into<String>, right: impl Into<String>) -> Self {
         self.left_query = left.into();
@@ -118,7 +118,7 @@ impl TransferDesc {
         self
     }
 
-    /// Rectangle of the `>` (move right) and `<` (move left) buttons.
+    /// `>`（右移）与 `<`（左移）按钮的矩形。
     #[must_use]
     pub fn action_button_rects(&self) -> (Rect, Rect) {
         let pad = 6.0;
@@ -133,7 +133,7 @@ impl TransferDesc {
     }
 }
 
-/// Emit a stable-shape dual transfer list with independent `>`/`<` and item sub-hit regions.
+/// 输出结构稳定的双栏穿梭框，带有独立的 `>`/`<` 与条目子命中区域。
 #[must_use]
 pub fn emit_transfer(
     node: u64,
@@ -274,9 +274,15 @@ pub fn emit_transfer(
             if y + row_h > pane.max().y {
                 continue;
             }
-            let item_r = Rect::new(pane.origin.x + 4.0, y, (pane.width() - 8.0).max(8.0), row_h - 2.0);
+            let item_r = Rect::new(
+                pane.origin.x + 4.0,
+                y,
+                (pane.width() - 8.0).max(8.0),
+                row_h - 2.0,
+            );
             let item_key = transfer_item_node(node, item.key);
-            let mut item_a11y = A11yNode::new(Role::CheckBox, item.label.clone(), item_r).clickable();
+            let mut item_a11y =
+                A11yNode::new(Role::CheckBox, item.label.clone(), item_r).clickable();
             item_a11y.selected = item.checked;
             out.with_sub_control(
                 item_key,

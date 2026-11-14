@@ -1,4 +1,4 @@
-//! Popconfirm anchored lightweight confirmation bubble.
+//! Popconfirm 锚定式轻量确认气泡。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -11,23 +11,23 @@ use crate::primitive::{focus_ring, glyphs, outlined};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// Descriptor for a [`Popconfirm`] anchored bubble.
+/// [`Popconfirm`] 锚定气泡的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PopconfirmDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Confirmation prompt title.
+    /// 确认提示标题。
     pub title: String,
-    /// Confirm button label.
+    /// 确认按钮文本。
     pub confirm_label: String,
-    /// Cancel button label.
+    /// 取消按钮文本。
     pub cancel_label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl PopconfirmDesc {
-    /// Create a popconfirm descriptor.
+    /// 创建确认气泡描述符。
     #[must_use]
     pub fn new(rect: Rect, title: impl Into<String>) -> Self {
         Self {
@@ -40,19 +40,19 @@ impl PopconfirmDesc {
     }
 }
 
-/// Deterministic sub-node id for the popconfirm Cancel button.
+/// 确认气泡取消按钮的确定性子节点 ID。
 #[must_use]
 pub const fn popconfirm_cancel_node(node: u64) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x101
 }
 
-/// Deterministic sub-node id for the popconfirm Confirm button.
+/// 确认气泡确认按钮的确定性子节点 ID。
 #[must_use]
 pub const fn popconfirm_confirm_node(node: u64) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x102
 }
 
-/// Emit a stable-shape popconfirm bubble (1 card + cancel button + confirm button + 1 focus ring = 4 primitives).
+/// 输出结构稳定的确认气泡（1 张卡片 + 取消按钮 + 确认按钮 + 1 个焦点环 = 4 个图元）。
 #[must_use]
 pub fn emit_popconfirm(
     node: u64,

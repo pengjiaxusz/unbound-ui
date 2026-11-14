@@ -1,10 +1,10 @@
-//! 2D vector / point type shared by layout, canvas and GPU packing.
+//! 布局、画布与 GPU 打包共用的 2D 向量/点类型。
 
 use core::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
 
 use bytemuck::{Pod, Zeroable};
 
-/// A 2D point or vector in `f32`.
+/// `f32` 精度的 2D 点或向量。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct Vec2 {
@@ -36,7 +36,7 @@ impl Vec2 {
         self.x * rhs.x + self.y * rhs.y
     }
 
-    /// 2D cross product (z component of the 3D cross product).
+    /// 2D 叉积（等价于 3D 叉积的 z 分量）。
     #[inline]
     #[must_use]
     pub fn cross(self, rhs: Self) -> f32 {
@@ -72,7 +72,7 @@ impl Vec2 {
         Self::new(-self.y, self.x)
     }
 
-    /// Rotate by `cos`/`sin` without allocating a matrix.
+    /// 通过 `cos`/`sin` 旋转向量，无需构造矩阵。
     #[inline]
     #[must_use]
     pub fn rotate(self, cos: f32, sin: f32) -> Self {

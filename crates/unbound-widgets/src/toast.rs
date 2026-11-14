@@ -1,16 +1,16 @@
-//! Corner notification stacks.
+//! 角落通知堆栈。
 //!
-//! A toast is the opposite of an alert: it is transient, it floats above the
-//! page and it must disappear on its own. The stack therefore owns two clocks
-//! that a stateless banner does not need:
+//! Toast 与警告横幅相反：它是瞬态的、悬浮于页面之上且必须自动消失。
+//! 因此堆栈持有两个无状态横幅不需要的时钟：
 //!
-//! * a per-entry **countdown**, paused while the pointer rests anywhere on the
-//!   stack (reading a message should never be a race against a timer),
-//! * a per-entry **spring** for the slide-in and the cross-fade.
 //!
-//! The widgets stay pure: [`ToastStack::tick`] advances the clocks and returns
-//! the ids that expired, and [`emit_toast`] paints whatever the springs
-//! currently report.
+//! * 每个条目的**倒计时**——当指针停留在堆栈任意位置时暂停（阅读消息绝不应变成与计时器赛跑）；
+//!
+//! * 每个条目的**弹簧**——用于滑入与淡入淡出动画。
+//!
+//!
+//! 控件保持纯函数特性：[`ToastStack::tick`] 推进时钟并返回过期的 ID，
+//! [`emit_toast`] 则仅根据弹簧当前报告的值进行绘制。
 
 use unbound_a11y::A11yNode;
 use unbound_gpu::data::{GpuPayload, GpuPrimitiveInstance, PrimType, SubElement};
@@ -25,31 +25,30 @@ use crate::{ControlState, WidgetOutput};
 
 use accesskit::Role;
 
-/// The default time a toast stays on screen.
 pub const TOAST_DURATION_MS: f32 = 4000.0;
-/// The distance a new toast slides up from.
+/// Toast 在屏幕上停留的默认时长。
 pub const TOAST_SLIDE_IN: f32 = 16.0;
-/// The close button square.
+/// 新 Toast 向上滑入的起始距离。
 pub const TOAST_CLOSE_SIZE: f32 = 18.0;
-/// The action button size.
+/// 关闭按钮正方形尺寸。
 pub const TOAST_ACTION_SIZE: (f32, f32) = (76.0, 24.0);
-/// The toast corner radius.
+/// 操作按钮尺寸。
 pub const TOAST_RADIUS: f32 = 8.0;
 const TOAST_SHADOW: f32 = 18.0;
 
-/// A critically damped spring for a scalar.
+/// Toast 圆角半径。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ToastSpring {
-    /// The current value.
+    /// 标量的临界阻尼弹簧。
     pub value: f32,
-    /// The current velocity.
+    /// 当前值。
     pub velocity: f32,
-    /// The value the spring settles on.
+    /// 当前速度。
     pub target: f32,
 }
 
 impl ToastSpring {
-    /// A spring at rest on `value`.
+    /// 弹簧趋向的静止目标值。
     #[must_use]
     pub fn new(value: f32) -> Self {
         Self {
@@ -59,7 +58,7 @@ impl ToastSpring {
         }
     }
 
-    /// Advance the spring; returns whether the value moved.
+    /// 在 `value` 处静止的弹簧。
     pub fn step(&mut self, dt: f32) -> bool {
         if dt <= 0.0 {
             return false;
@@ -76,38 +75,38 @@ impl ToastSpring {
         (self.value - before).abs() > f32::EPSILON
     }
 
-    /// Whether the spring has come to rest on its target.
+    /// 推进弹簧步进；返回数值是否发生了移动。
     #[must_use]
     pub fn settled(&self) -> bool {
         (self.target - self.value).abs() < 0.001 && self.velocity.abs() < 0.01
     }
 }
 
-/// One notification in the stack.
+/// 弹簧是否已静止在目标值上。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToastEntry {
-    /// The stable identity.
+    /// 堆栈中的单条通知。
     pub id: u64,
-    /// The headline.
+    /// 稳定标识。
     pub title: String,
-    /// The body copy.
+    /// 标题。
     pub message: String,
-    /// The severity family.
+    /// 正文文本。
     pub severity: Severity,
-    /// The total lifetime; `0.0` makes the toast persistent.
+    /// 严重级别分类。
     pub duration_ms: f32,
-    /// The remaining lifetime.
+    /// 总生命周期；`0.0` 表示常驻不自动消失。
     pub remaining_ms: f32,
-    /// The optional action label.
+    /// 剩余生命周期。
     pub action_label: Option<String>,
-    /// The slide-in offset.
+    /// 可选的操作按钮标签。
     pub y_spring: ToastSpring,
-    /// The cross-fade.
+    /// 滑入偏移量。
     pub opacity_spring: ToastSpring,
 }
 
 impl ToastEntry {
-    /// A toast that fades in from below.
+    /// 淡入淡出不透明度。
     #[must_use]
     pub fn new(id: u64, title: impl Into<String>, severity: Severity) -> Self {
         Self {
@@ -131,21 +130,21 @@ impl ToastEntry {
         }
     }
 
-    /// The same toast with body copy.
+    /// 创建从下方淡入的 Toast。
     #[must_use]
     pub fn with_message(mut self, message: impl Into<String>) -> Self {
         self.message = message.into();
         self
     }
 
-    /// The same toast with an action button.
+    /// 附加正文文本。
     #[must_use]
     pub fn with_action(mut self, label: impl Into<String>) -> Self {
         self.action_label = Some(label.into());
         self
     }
 
-    /// The same toast with an explicit lifetime.
+    /// 附加操作按钮。
     #[must_use]
     pub fn with_duration(mut self, duration_ms: f32) -> Self {
         self.duration_ms = duration_ms.max(0.0);
@@ -153,7 +152,7 @@ impl ToastEntry {
         self
     }
 
-    /// A toast that never expires on its own.
+    /// 设置显式生命周期。
     #[must_use]
     pub fn persistent(mut self) -> Self {
         self.duration_ms = 0.0;
@@ -161,13 +160,13 @@ impl ToastEntry {
         self
     }
 
-    /// Whether the toast ignores the countdown.
+    /// 创建永不自动过期的常驻 Toast。
     #[must_use]
     pub fn is_persistent(&self) -> bool {
         self.duration_ms <= 0.0
     }
 
-    /// How much of the lifetime has elapsed, in `0.0..=1.0`.
+    /// 该 Toast 是否忽略倒计时。
     #[must_use]
     pub fn progress(&self) -> f32 {
         if self.is_persistent() {
@@ -176,7 +175,7 @@ impl ToastEntry {
         (1.0 - self.remaining_ms / self.duration_ms).clamp(0.0, 1.0)
     }
 
-    /// Advance the countdown; returns whether the toast expired.
+    /// 生命周期已流逝的比例（`0.0..=1.0`）。
     pub fn tick(&mut self, dt_ms: f32) -> bool {
         if self.is_persistent() || dt_ms <= 0.0 {
             return false;
@@ -185,7 +184,7 @@ impl ToastEntry {
         self.remaining_ms <= 0.0
     }
 
-    /// The close button.
+    /// 推进倒计时；返回 Toast 是否已过期。
     #[must_use]
     pub fn close_rect(&self, rect: Rect) -> Rect {
         Rect::new(
@@ -196,7 +195,7 @@ impl ToastEntry {
         )
     }
 
-    /// The action button, when the toast has an action label.
+    /// 关闭按钮矩形。
     #[must_use]
     pub fn action_rect(&self, rect: Rect) -> Option<Rect> {
         self.action_label.as_ref().map(|_| {
@@ -209,7 +208,7 @@ impl ToastEntry {
         })
     }
 
-    /// The text block, inside the accent bar and clear of the buttons.
+    /// 操作按钮矩形（当 Toast 带有操作标签时）。
     #[must_use]
     pub fn content_rect(&self, rect: Rect) -> Rect {
         let left = rect.origin.x + 16.0;
@@ -223,16 +222,16 @@ impl ToastEntry {
     }
 }
 
-/// What one [`ToastStack::tick`] produced.
+/// 文本区域矩形（位于强调条内侧且避开按钮）。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ToastTick {
-    /// The ids that expired and were removed.
+    /// 单次 [`ToastStack::tick`] 的输出结果。
     pub expired: Vec<u64>,
-    /// Whether any spring is still moving.
+    /// 已过期并被移除的 ID 列表。
     pub animating: bool,
 }
 
-/// The notification stack.
+/// 是否仍有弹簧处于运动状态。
 #[derive(Clone, Debug, Default)]
 pub struct ToastStack {
     entries: Vec<ToastEntry>,
@@ -245,19 +244,19 @@ impl ToastStack {
         Self::default()
     }
 
-    /// Append a toast.
+    /// 通知堆栈。
     pub fn push(&mut self, entry: ToastEntry) {
         self.entries.push(entry);
     }
 
-    /// Remove one toast by id.
+    /// 追加一条 Toast。
     pub fn remove(&mut self, id: u64) -> bool {
         let before = self.entries.len();
         self.entries.retain(|entry| entry.id != id);
         before != self.entries.len()
     }
 
-    /// Remove every toast.
+    /// 按 ID 移除一条 Toast。
     pub fn clear(&mut self) {
         self.entries.clear();
     }
@@ -272,32 +271,32 @@ impl ToastStack {
         self.entries.is_empty()
     }
 
-    /// The entries, oldest first.
+    /// 清空所有 Toast。
     #[must_use]
     pub fn entries(&self) -> &[ToastEntry] {
         &self.entries
     }
 
-    /// One entry by id.
+    /// 按最旧优先顺序遍历条目。
     #[must_use]
     pub fn entry(&self, id: u64) -> Option<&ToastEntry> {
         self.entries.iter().find(|entry| entry.id == id)
     }
 
-    /// Whether the countdown is paused.
+    /// 按 ID 查找条目。
     #[must_use]
     pub fn paused(&self) -> bool {
         self.hovered
     }
 
-    /// Pause or resume the countdown; returns whether the flag changed.
+    /// 倒计时是否处于暂停状态。
     pub fn set_hovered(&mut self, hovered: bool) -> bool {
         let changed = self.hovered != hovered;
         self.hovered = hovered;
         changed
     }
 
-    /// Advance every clock by `dt_ms` and drop the expired toasts.
+    /// 暂停或恢复倒计时；返回标志位是否变化。
     pub fn tick(&mut self, dt_ms: f32) -> ToastTick {
         let dt = dt_ms.max(0.0);
         let dt_s = dt / 1000.0;
@@ -328,23 +327,23 @@ impl ToastStack {
     }
 }
 
-/// Where a stack of equally sized toasts sits.
+/// 将所有时钟推进 `dt_ms` 毫秒，并丢弃过期的 Toast。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToastLayout {
-    /// The viewport the stack stays inside.
+    /// 等尺寸 Toast 堆栈的布局位置。
     pub viewport: Rect,
-    /// The toast width.
+    /// 堆栈保持在内的视口矩形。
     pub width: f32,
-    /// The toast height.
+    /// Toast 宽度。
     pub height: f32,
-    /// The vertical gap between two toasts.
+    /// Toast 高度。
     pub gap: f32,
-    /// The distance to the viewport corner.
+    /// 两条 Toast 之间的垂直间距。
     pub margin: f32,
 }
 
 impl ToastLayout {
-    /// A bottom-right stack.
+    /// 距离视口角落的边距。
     #[must_use]
     pub fn new(viewport: Rect, width: f32, height: f32) -> Self {
         Self {
@@ -356,8 +355,8 @@ impl ToastLayout {
         }
     }
 
-    /// The slot of `index`, where index `0` is the newest toast and sits
-    /// nearest the corner.
+    /// 创建右下角堆栈布局。
+    /// 第 `index` 个槽位的矩形（索引 `0` 为最新 Toast，最靠近角落）。
     #[must_use]
     pub fn slot(&self, index: usize) -> Rect {
         let x = (self.viewport.max().x - self.margin - self.width).max(self.viewport.origin.x);
@@ -368,7 +367,7 @@ impl ToastLayout {
         Rect::new(x, y.max(self.viewport.origin.y), self.width, self.height)
     }
 
-    /// The bounding box of `count` toasts.
+    /// `count` 条 Toast 的总包围盒。
     #[must_use]
     pub fn stack_rect(&self, count: usize) -> Rect {
         if count == 0 {
@@ -390,18 +389,18 @@ impl ToastLayout {
     }
 }
 
-/// What one toast emits.
+/// 单条 Toast 的输出结果。
 #[derive(Clone, Debug)]
 pub struct ToastOutput {
-    /// The body: background, accent bar, glyphs and the dismiss cross.
+    /// 主体部分：背景、强调条、字形与关闭叉号。
     pub output: WidgetOutput,
-    /// The dismiss button.
+    /// 关闭按钮。
     pub close: HitRegion,
-    /// The action button, when there is one.
+    /// 操作按钮（若有）。
     pub action: Option<HitRegion>,
 }
 
-/// Emit a toast card and its hit regions.
+/// 输出 Toast 卡片及其命中区域。
 #[must_use]
 pub fn emit_toast(
     node: u64,
@@ -504,8 +503,8 @@ pub fn emit_toast(
         output: WidgetOutput {
             primitives: primitives_raw,
             payloads,
-            // The body hit region is what pauses the countdown while the
-            // pointer rests on the stack.
+            // 主体命中区域用于在指针停留在堆栈上时暂停倒计时。
+            //
             hit: Some(
                 HitRegion::new(node, PORTAL_LAYER, 560, rect).with_cursor(CursorKind::Default),
             ),
@@ -522,7 +521,7 @@ pub fn emit_toast(
     }
 }
 
-/// A straight stroke encoded as a degenerate quadratic curve.
+/// 编码为退化二次曲线的直线描边。
 #[allow(clippy::too_many_arguments)]
 fn stroke(
     from: (f32, f32),
@@ -560,8 +559,8 @@ fn stroke(
         SubElement::Content,
         z,
     );
-    // Each close stroke owns its own payload slot; the index travels in the
-    // instance, so two curves cannot alias one another.
+    // 每条关闭线描边拥有独立的载荷槽位；索引随实例传递，使两条曲线不会互相覆盖。
+    //
     primitive.extra_payload_idx = payload_idx;
     primitives.push(primitive);
 }
@@ -670,7 +669,7 @@ mod tests {
         faded.opacity_spring.value = 0.5;
         let output = emit_toast(11, &faded, rect, &[], ControlState::default());
         for primitive in &output.output.primitives {
-            // UNORM16 rounding pushes 0.5 to roughly 0.50001.
+            // UNORM16 舍入会将 0.5 推高至约 0.50001。
             assert!(primitive.opacity() <= 0.501);
         }
     }

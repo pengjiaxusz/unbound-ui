@@ -1,10 +1,9 @@
-//! The gallery must actually draw something, and the button must actually be
-//! interactive.
+//! 展厅必须真正绘制出内容，且按钮必须真正可交互。
+//! CPU 部分通过 `unbound_headless` 中的无头驱动和 `showcase::testing` 中的按钮装置
+//! 在所有环境（包括无 GPU 的 CI）运行；像素部分在没有 Vulkan 设备时自动跳过。
 //!
-//! The CPU half runs everywhere (including CI without a GPU) through the
-//! headless driver in `unbound_headless` and the button harness in
-//! `showcase::testing`; the pixel half skips itself when no Vulkan device
-//! exists.
+//!
+//!
 
 use accesskit::Role;
 use showcase::button::{ButtonVisualState, PointerPhase};
@@ -55,8 +54,8 @@ fn a_drag_off_the_button_cancels_the_click() {
     harness.press();
     assert_eq!(harness.visual().phase, PointerPhase::Pressed);
 
-    // The router captured the pointer, so the button stays pressed while the
-    // pointer leaves — that is the state the old `bool` approach used to lose.
+    // 路由器捕获了指针，因此指针离开时按钮仍保持按下状态——
+    // 这正是旧的 `bool` 方案会丢失的状态。
     let centre = harness.screen_center();
     harness.app.move_to(centre + Vec2::new(0.0, 200.0));
     harness.sync();
@@ -165,13 +164,13 @@ fn the_semantics_tree_exposes_a_button() {
     assert_eq!(update.focus, accesskit::NodeId(harness.node_key()));
 }
 
-/// Drive the exact window pipeline without a window: a platform event must be
-/// forwarded, reach the router in canvas coordinates, synthesize a click, and
-/// make the next scene carry the incremented label.
+/// 在无窗口的情况下驱动完全相同的窗口管线：平台事件必须被转发、以画布坐标到达路由器、
+/// 合成一次点击，并使下一帧场景携带递增后的标签。
 ///
-/// This is the regression test for the bug where the platform layer consumed
-/// every input event after only updating its latency clock, leaving the whole
-/// showcase inert.
+///
+/// 这是针对“平台层在仅更新延迟时钟后就消费掉所有输入事件，导致整个 showcase 失去响应”
+/// 这一缺陷的回归测试。
+///
 #[test]
 fn a_platform_click_activates_the_button() {
     use std::time::Instant;
@@ -185,7 +184,7 @@ fn a_platform_click_activates_the_button() {
     let now = Instant::now();
     let centre = harness.screen_center();
 
-    // ---- hover ----------------------------------------------------------
+    // ---- 悬停 ----------------------------------------------------------------
     let forwarded = apply(
         &mut state,
         &PlatformEvent::CursorMoved {
@@ -201,7 +200,7 @@ fn a_platform_click_activates_the_button() {
     harness.sync();
     assert_eq!(harness.visual().phase, PointerPhase::Hovered);
 
-    // ---- press ----------------------------------------------------------
+    // ---- 按下 ----------------------------------------------------------------
     let forwarded = apply(
         &mut state,
         &PlatformEvent::MouseInput {
@@ -217,7 +216,7 @@ fn a_platform_click_activates_the_button() {
     harness.press();
     assert_eq!(harness.visual().phase, PointerPhase::Pressed);
 
-    // ---- release --------------------------------------------------------
+    // ---- 释放 ----------------------------------------------------------------
     let forwarded = apply(
         &mut state,
         &PlatformEvent::MouseInput {
@@ -247,7 +246,7 @@ fn a_platform_click_activates_the_button() {
         "the pointer still rests on the button after the click"
     );
 
-    // ---- the next scene labels itself with the new count ----------------
+    // ---- 下一帧场景以新计数作为标签 -----------------------------------------
     assert_eq!(harness.label(), "Clicked: 1");
     assert_eq!(harness.value(), "1");
     assert!(!harness.glyphs.is_empty(), "the new label must be laid out");
@@ -380,7 +379,7 @@ fn the_keyboard_mapping_matches_the_window_and_can_activate_the_button() {
 #[test]
 fn hover_and_press_change_the_rendered_pixels() {
     let Some(gpu) = unbound_gpu::device::test_device() else {
-        // No Vulkan device: the test cannot run, but it must not fail.
+        // 无 Vulkan 设备：测试无法运行，但不得失败。
         return;
     };
     let mut renderer =
@@ -406,16 +405,16 @@ fn hover_and_press_change_the_rendered_pixels() {
     renderer.destroy();
 }
 
-/// Overdrawing a surface with the same colour must not change one pixel.
+/// 用相同颜色过度绘制表面不得改变任何一个像素。
 ///
-/// The composite used to multiply the fill by its own coverage a second time
-/// and mix the shadow colour into the partially covered pixels, so a rounded
-/// rectangle drawn on a surface of its own colour left a dark rim along its
-/// antialiased edge.
+/// 旧的合成曾将填充色二次乘以自身覆盖率，并把阴影色混入部分覆盖像素，
+/// 导致绘制在同色表面上的圆角矩形沿抗锯齿边缘留下一圈暗边。
+///
+///
 #[test]
 fn overdrawing_the_same_colour_leaves_no_seam() {
     let Some(gpu) = unbound_gpu::device::test_device() else {
-        // No Vulkan device: the test cannot run, but it must not fail.
+        // 无 Vulkan 设备：测试无法运行，但不得失败。
         return;
     };
     let mut renderer = unbound_gpu::Renderer::new(gpu, 256, 256).expect("renderer");
@@ -448,11 +447,11 @@ fn render_button(
     paint_button(renderer, atlases, harness, phase, None)
 }
 
-/// Render one button state, uploading the whole scene.
+/// 渲染单个按钮状态，全量上传整个场景。
 ///
-/// `patch` chooses the upload path: `None` uploads everything under a fresh
-/// generation, `Some((generation, ranges))` keeps the generation and patches
-/// the given slices — the path a hover takes.
+/// `patch` 选择上传路径：`None` 在全新代次下全量上传，
+/// `Some((generation, ranges))` 保持代次并仅修补指定切片——即悬停所走的路径。
+///
 fn paint_button(
     renderer: &mut unbound_gpu::Renderer,
     atlases: &std::sync::Arc<unbound_gpu::atlas::AtlasSet>,
@@ -472,16 +471,16 @@ fn paint_button(
         .write_theme_lut(&showcase::theme::lut(false))
         .expect("theme");
     match &patch {
-        // A patch keeps the generation the pool is already at and names the
-        // slices that changed; the renderer rewrites only those.
+        // 修补路径保持缓冲池当前所处的代次，并列出发生变化的切片；
+        // 渲染器仅重写这些切片。
         Some((generation, ranges)) => {
             renderer
                 .render(&harness.scene.upload(*generation, ranges))
                 .expect("render");
         }
-        // Every state gets its own generation from the driver, otherwise the
-        // primitive buffer is considered unchanged and the previous state is
-        // drawn again.
+        // 每个状态从驱动获取各自独立的代次，否则图元缓冲区会被视为未变化，
+        // 从而再次绘制上一状态。
+        //
         None => {
             renderer
                 .render(&harness.scene.upload(harness.app.generation(), &[]))
@@ -491,7 +490,7 @@ fn paint_button(
     renderer.read_pixels().expect("readback")
 }
 
-/// Send every glyph the last rebuild rasterised to the GPU atlases.
+/// 将上次重建光栅化的所有字形发送到 GPU 图集。
 fn upload_atlases(
     renderer: &mut unbound_gpu::Renderer,
     atlases: &std::sync::Arc<unbound_gpu::atlas::AtlasSet>,
@@ -519,16 +518,16 @@ fn upload_atlases(
     }
 }
 
-/// A patched upload paints exactly the pixels a full one does.
+/// 修补上传绘制的像素与全量上传完全一致。
 ///
-/// The patch path writes slices of the primitive pool and leaves the rest
-/// alone, so a wrong offset, a wrong length or a missed flush would show up
-/// here as a stale pixel. The scene is the same either way, so the two
-/// readbacks must agree byte for byte.
+/// 修补路径只写入图元池的切片并保持其余部分不变，因此错误的偏移、长度或遗漏刷写
+/// 都会在此处表现为过期像素。两种方式下的场景相同，因此两次回读必须逐字节一致。
+///
+///
 #[test]
 fn a_patched_upload_paints_the_same_pixels_as_a_full_one() {
     let Some(gpu) = unbound_gpu::device::test_device() else {
-        // No Vulkan device: the test cannot run, but it must not fail.
+        // 无 Vulkan 设备：测试无法运行，但不得失败。
         return;
     };
     let mut renderer =
@@ -549,7 +548,7 @@ fn a_patched_upload_paints_the_same_pixels_as_a_full_one() {
         selected: false,
     };
 
-    // 1. The idle button goes up in full, under generation 7.
+    // 1. 空闲按钮在代次 7 下全量上传。
     let idle = paint_button(
         &mut renderer,
         &atlases,
@@ -563,8 +562,8 @@ fn a_patched_upload_paints_the_same_pixels_as_a_full_one() {
     let idle_clips = harness.scene.clips.clone();
     let idle_payloads = harness.scene.payloads.clone();
 
-    // 2. The hovered button is the same scene with a handful of colours
-    //    changed, so it is a patch.
+    // 2. 悬停按钮是同一场景仅少数颜色变化，因此走修补路径。
+    //
     harness.rebuild_with(visual(PointerPhase::Hovered), 0);
     upload_atlases(&mut renderer, &atlases, &mut harness);
     let hovered = &harness.scene;
@@ -579,8 +578,8 @@ fn a_patched_upload_paints_the_same_pixels_as_a_full_one() {
         panic!("a hover must be a patch, got {diff:?}");
     };
 
-    // 3. Patch the pool, then upload the same scene in full. Both have to
-    //    paint the hovered button.
+    // 3. 修补缓冲池，然后全量上传同一场景。两者都必须绘制出悬停状态的按钮。
+    //
     renderer
         .render(&hovered.upload(generation, &ranges))
         .expect("patched render");
@@ -624,13 +623,13 @@ fn differing_pixels(left: &[u8], right: &[u8]) -> usize {
 #[test]
 fn the_gallery_draws_something() {
     let Some(gpu) = unbound_gpu::device::test_device() else {
-        // No Vulkan device: the test cannot run, but it must not fail.
+        // 无 Vulkan 设备：测试无法运行，但不得失败。
         return;
     };
     let mut renderer = unbound_gpu::Renderer::new(gpu, 640, 400).expect("renderer");
 
-    // The real atlases, so the labels are not sampled from a dummy 1x1
-    // texture.
+    // 使用真实图集，避免标签从虚拟的 1x1 纹理中采样。
+    //
     let atlases = std::sync::Arc::new(
         unbound_gpu::atlas::AtlasSet::new(&renderer.gpu, 4).expect("atlas set"),
     );
@@ -644,7 +643,7 @@ fn the_gallery_draws_something() {
         scene.primitives.len()
     );
 
-    // Upload the glyphs the labels produced.
+    // 上传标签生成的字形。
     for update in labels.cache.take_updates() {
         let kind = match update.target {
             unbound_text::AtlasTarget::Coverage => unbound_gpu::atlas::AtlasKind::R8,
@@ -672,8 +671,8 @@ fn the_gallery_draws_something() {
     renderer.render(&scene.upload(1, &[])).expect("render");
     let pixels = renderer.read_pixels().expect("readback");
 
-    // The picture must not be uniformly the background: the swatches, the
-    // card and the curves have to be there.
+    // 画面不能全都是统一背景：色板、卡片与曲线必须存在。
+    //
     let mut distinct = 0usize;
     let mut previous = &pixels[0..4];
     for pixel in pixels.chunks_exact(4) {

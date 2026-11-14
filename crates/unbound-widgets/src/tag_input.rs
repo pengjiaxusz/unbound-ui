@@ -1,14 +1,14 @@
-//! The tag field: chips, a trailing editor and comma / Enter commitment.
+//! 标签输入框：标签芯片（chip）、末尾编辑器与逗号/回车提交。
 //!
-//! A tag field is two controls in one box: committed chips and a live editor.
-//! The state machine keeps them separate so deleting a chip never touches the
-//! text buffer, and typing `,` (or pasting `"a, b"`) commits every segment in
-//! one reduction instead of leaving a comma in the buffer.
+//! 标签输入框在一个框内包含两个控件：已提交的芯片与实时编辑器。
+//! 状态机将两者分离，因此删除芯片绝不会触及文本缓冲区，
+//! 而输入 `,`（或粘贴 `"a, b"`）会在单次归约中提交所有分段，而非在缓冲区留下逗号。
 //!
-//! Layout is caller-measured: the widget cannot shape text, so
-//! [`layout_tags`] takes a `measure` closure. That keeps wrapping exact for the
-//! font actually in use and still makes the geometry unit-testable with a
-//! deterministic stub.
+//!
+//! 布局由调用方测量：控件无法塑形文本，因此 [`layout_tags`] 接受一个 `measure` 闭包。
+//! 这既能保证针对实际字体精确换行，也能在单元测试中使用确定性桩函数测试几何布局。
+//!
+//!
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -23,40 +23,40 @@ use crate::switch::CONTROL_LAYER;
 use crate::text_input::{reduce_text_input, TextEditState, TextInputDesc, TextInputEvent};
 use crate::{ControlState, WidgetOutput};
 
-/// The height of one chip.
+/// 单个标签芯片的高度。
 pub const TAG_HEIGHT: f32 = 24.0;
-/// The gap between chips.
+/// 芯片之间的间距。
 pub const TAG_GAP: f32 = 6.0;
-/// The horizontal padding inside a chip.
+/// 芯片内部的水平内边距。
 pub const TAG_PADDING: f32 = 8.0;
-/// The width reserved for a chip's close affordance.
+/// 为芯片关闭按钮预留的宽度。
 pub const TAG_CLOSE: f32 = 14.0;
-/// The inset between the border and the chips.
+/// 边框与芯片之间的内边距。
 pub const TAG_INSET: f32 = 8.0;
-/// The corner radius of the field and its chips.
+/// 输入框与芯片的圆角半径。
 pub const TAG_RADIUS: f32 = 8.0;
 
-/// The pure descriptor of a tag field.
+/// 标签输入框的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TagInputDesc {
-    /// The field rectangle.
+    /// 输入框矩形。
     pub rect: Rect,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The placeholder shown while there are no chips and no text.
+    /// 无芯片且无文本时显示的占位符。
     pub placeholder: String,
-    /// The maximum number of chips.
+    /// 最大芯片数量。
     pub max_tags: usize,
-    /// The maximum byte length of one chip's text.
+    /// 单个芯片文本的最大字节长度。
     pub max_tag_bytes: usize,
-    /// The field refuses interaction.
+    /// 是否禁用交互。
     pub disabled: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl TagInputDesc {
-    /// An empty tag field.
+    /// 创建空的标签输入框描述符。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -71,29 +71,29 @@ impl TagInputDesc {
     }
 }
 
-/// The keys the tag field consumes.
+/// 标签输入框消费的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TagKey {
-    /// Commit the editor's contents.
+    /// 提交编辑器内容。
     Enter,
-    /// Delete the last chip when the editor is empty.
+    /// 编辑器为空时删除最后一个芯片。
     Backspace,
-    /// Select the previous chip.
+    /// 选中上一个芯片。
     Previous,
-    /// Select the next chip.
+    /// 选中下一个芯片。
     Next,
 }
 
-/// What one reduction produced.
+/// 单次归约的结果。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TagInputOutcome {
-    /// The chips or the editor changed.
+    /// 芯片或编辑器是否发生变化。
     pub changed: bool,
-    /// The chips committed this reduction.
+    /// 本次归约新提交的芯片列表。
     pub committed: Vec<String>,
 }
 
-/// The live state of a tag field.
+/// 标签输入框的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TagInputState {
     tags: Vec<String>,
@@ -102,7 +102,7 @@ pub struct TagInputState {
 }
 
 impl TagInputState {
-    /// An empty field.
+    /// 创建空状态。
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -112,7 +112,7 @@ impl TagInputState {
         }
     }
 
-    /// A field pre-filled with `tags`.
+    /// 创建预填 `tags` 的状态。
     #[must_use]
     pub fn with_tags(tags: impl IntoIterator<Item = String>) -> Self {
         Self {
@@ -122,33 +122,32 @@ impl TagInputState {
         }
     }
 
-    /// The committed chips.
+    /// 已提交的芯片列表。
     #[must_use]
     pub fn tags(&self) -> &[String] {
         &self.tags
     }
 
-    /// The trailing editor.
+    /// 末尾编辑器引用。
     #[must_use]
     pub fn input(&self) -> &TextEditState {
         &self.input
     }
 
-    /// The selected chip.
+    /// 当前选中的芯片索引。
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
         self.selected
     }
 
-    /// Make the trailing editor hold `text`.
+    /// 将末尾编辑器文本设为 `text`。
     pub fn set_input(&mut self, text: impl Into<String>) {
         self.input = TextEditState::with_text(text);
     }
 
-    /// Add one chip.
+    /// 添加一个芯片。
     ///
-    /// Surrounding whitespace is trimmed. Empty, duplicate and over-long tags
-    /// are rejected, as is a chip beyond `max_tags`.
+    /// 自动裁剪首尾空白。空标签、重复标签、超长标签以及超出 `max_tags` 的芯片均会被拒绝。
     pub fn insert_tag(&mut self, text: &str, desc: &TagInputDesc) -> bool {
         let tag = text.trim();
         if tag.is_empty()
@@ -162,7 +161,7 @@ impl TagInputState {
         true
     }
 
-    /// Commit the editor's contents as one chip.
+    /// 将编辑器内容提交为一个芯片。
     pub fn commit_input(&mut self, desc: &TagInputDesc) -> bool {
         let text = self.input.text().to_owned();
         if !self.insert_tag(&text, desc) {
@@ -172,7 +171,7 @@ impl TagInputState {
         true
     }
 
-    /// Remove one chip.
+    /// 移除指定芯片。
     pub fn delete_tag(&mut self, index: usize) -> bool {
         if index >= self.tags.len() {
             return false;
@@ -192,7 +191,7 @@ impl TagInputState {
         true
     }
 
-    /// Move the chip selection by whole chips, clamping at the ends.
+    /// 按整块芯片移动选区，到达两端时夹紧。
     pub fn select_step(&mut self, delta: isize) -> bool {
         if self.tags.is_empty() {
             return false;
@@ -204,7 +203,7 @@ impl TagInputState {
         changed
     }
 
-    /// Route a text event, committing on a delimiter or on Enter.
+    /// 路由文本事件，在分隔符或回车时提交。
     pub fn on_text_input(
         &mut self,
         desc: &TagInputDesc,
@@ -235,7 +234,7 @@ impl TagInputState {
         TagInputOutcome { changed, committed }
     }
 
-    /// Reduce a key.
+    /// 归约按键事件。
     pub fn key(&mut self, desc: &TagInputDesc, key: TagKey) -> TagInputOutcome {
         match key {
             TagKey::Enter => {
@@ -276,23 +275,22 @@ impl Default for TagInputState {
     }
 }
 
-/// The measured chip geometry.
+/// 测量后的芯片几何信息。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TagLayout {
-    /// The chip rectangles, in model order.
+    /// 按模型顺序排列的芯片矩形列表。
     pub chips: Vec<Rect>,
-    /// The close affordance of each chip.
+    /// 每个芯片的关闭按钮矩形。
     pub close: Vec<Rect>,
-    /// The trailing editor.
+    /// 末尾编辑器矩形。
     pub input: Rect,
-    /// How many rows the chips occupy.
+    /// 芯片共占用的行数。
     pub lines: usize,
 }
 
-/// Wrap chips and place the trailing editor.
+/// 自动换行排布芯片并放置末尾编辑器。
 ///
-/// `measure` returns the text width of a chip's label. A chip's total width is
-/// that plus its padding and close affordance.
+/// `measure` 返回芯片标签的文本宽度；芯片总宽度为其加上内边距与关闭按钮宽度。
 #[must_use]
 pub fn layout_tags(
     desc: &TagInputDesc,
@@ -335,7 +333,7 @@ pub fn layout_tags(
     }
 }
 
-/// Emit the field chrome, chips and semantic node.
+/// 输出输入框外观、芯片与语义节点。
 #[must_use]
 pub fn emit_tag_input(
     node: u64,
@@ -407,8 +405,8 @@ pub fn emit_tag_input(
         }
     }
 
-    // The empty-editor caret keeps a fixed slot: focus only changes its
-    // opacity, so the primitive count is invariant across states.
+    // 空编辑器光标保持固定槽位：聚焦仅改变其不透明度，使图元数量在各状态下保持不变。
+    //
     let mut caret = surface(
         Rect::new(
             layout.input.origin.x,

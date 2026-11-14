@@ -1,32 +1,32 @@
-//! Texture descriptions and the offscreen pool (`docs` §10.1, M3).
+//! 纹理描述与离屏纹理池（`docs` §10.1，M3）。
 //!
-//! The frosted-glass effect needs a scratch texture: the backdrop is copied
-//! out, blurred and then composited. Doing that with a fresh allocation every
-//! frame would thrash the driver, so the pool hands out a *recycled* target
-//! that matches the requested description.
+//! 毛玻璃效果需要一张临时纹理：先拷贝背景，再执行模糊与合成。
+//! 若每帧都重新分配纹理会导致驱动抖动，因此由纹理池分发与请求描述匹配的*复用*目标。
 //!
-//! The pool is a pure CPU structure: it decides *which* physical slot a
-//! logical texture lives in. The driver-side allocation stays in the GPU
-//! crate, which owns the images.
+//!
+//!
+//! 纹理池是纯 CPU 结构：它只决定逻辑纹理存放在*哪个*物理槽位，驱动侧的图像分配
+//! 仍保留在拥有图像资源的 GPU crate 中。
+//!
 
 use std::collections::VecDeque;
 
 use rustc_hash::FxHashMap;
 
-/// The pixel format of an offscreen target.
+/// 离屏渲染目标的像素格式。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TextureFormat {
-    /// 8 bits per channel, unsigned, normalised.
+    /// 每通道 8 位无符号归一化格式。
     Rgba8,
-    /// 16-bit float per channel — the format a blur wants, because it keeps
-    /// the intermediate values above 1.0 from clipping.
+    /// 每通道 16 位浮点格式——模糊 Pass 的理想格式，可避免超过 1.0 的中间值被截断。
+    ///
     Rgba16f,
-    /// A single 8-bit channel.
+    /// 单通道 8 位格式。
     R8,
 }
 
 impl TextureFormat {
-    /// Bytes per pixel.
+    /// 每像素字节数。
     #[must_use]
     pub const fn bytes_per_pixel(self) -> u32 {
         match self {
@@ -36,21 +36,21 @@ impl TextureFormat {
     }
 }
 
-/// The description of an offscreen target.
+/// 离屏渲染目标的描述信息。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TextureDesc {
-    /// Width in pixels.
+    /// 宽度（像素）。
     pub width: u32,
-    /// Height in pixels.
+    /// 高度（像素）。
     pub height: u32,
-    /// The pixel format.
+    /// 像素格式。
     pub format: TextureFormat,
-    /// The number of samples; 1 means no multisampling.
+    /// 采样数；1 表示无多重采样。
     pub samples: u32,
 }
 
 impl TextureDesc {
-    /// A single-sampled description.
+    /// 创建单采样纹理描述。
     #[must_use]
     pub const fn new(width: u32, height: u32, format: TextureFormat) -> Self {
         Self {
@@ -61,63 +61,63 @@ impl TextureDesc {
         }
     }
 
-    /// The size of the texture in bytes.
+    /// 纹理占用的字节大小。
     #[must_use]
     pub const fn byte_size(self) -> u64 {
         self.width as u64 * self.height as u64 * self.format.bytes_per_pixel() as u64
     }
 
-    /// True when the description describes a usable texture.
+    /// 当描述表示一个可用纹理时返回 true。
     #[must_use]
     pub const fn is_valid(self) -> bool {
         self.width > 0 && self.height > 0 && self.samples > 0
     }
 }
 
-/// A pooled target: a slot index plus the description it was created with.
+/// 池化渲染目标：包含槽位索引及其创建时的纹理描述。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PooledTexture {
-    /// The physical slot in the pool.
+    /// 纹理池中的物理槽位索引。
     pub slot: u32,
-    /// The description the slot holds.
+    /// 该槽位当前持有的纹理描述。
     pub desc: TextureDesc,
 }
 
-/// A recycling pool of offscreen targets.
+/// 离屏渲染目标复用池。
 ///
-/// Targets are matched by description: asking for the same size and format
-/// again returns the same slot, so a steady-state frame allocates nothing.
+/// 按纹理描述匹配目标：再次请求相同尺寸与格式将返回同一槽位，实现稳态帧零分配。
+///
 #[derive(Debug, Default)]
 pub struct OffscreenPool {
-    /// The description of every slot.
+    /// 每个槽位对应的纹理描述。
     slots: Vec<Option<TextureDesc>>,
-    /// Free slot indices.
+    /// 空闲槽位索引列表。
     free: VecDeque<u32>,
-    /// Slots that are in use, with their description.
+    /// 使用中的槽位及其纹理描述。
     live: FxHashMap<u32, TextureDesc>,
-    /// How many times a slot was reused instead of created.
+    /// 槽位被复用（而非新建）的次数。
     reuses: u64,
-    /// How many times a free slot was taken with a *different* description.
+    /// 空闲槽位被*不同*描述重新占用的次数。
     rebinds: u64,
-    /// How many times a slot had to be created.
+    /// 必须新建槽位的次数。
     creations: u64,
-    /// The total number of bytes the pool holds.
+    /// 纹理池当前持有的总字节数。
     bytes: u64,
 }
 
 impl OffscreenPool {
-    /// Create an empty pool.
+    /// 创建空纹理池。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Acquire a target matching `desc`.
+    /// 获取匹配 `desc` 的渲染目标。
     ///
-    /// An existing live slot with the same description is reused; otherwise a
-    /// free slot is claimed, or a new one is created.
+    /// 优先复用描述相同的现有活跃槽位；否则认领空闲槽位或新建槽位。
+    ///
     pub fn acquire(&mut self, desc: TextureDesc) -> PooledTexture {
-        // A live slot with the same description can be shared outright.
+        // 描述相同的活跃槽位可直接共享复用。
         if let Some((slot, existing)) = self
             .live
             .iter()
@@ -134,10 +134,10 @@ impl OffscreenPool {
             Some(slot) => {
                 let previous = self.slots[slot as usize];
                 if previous == Some(desc) {
-                    // The image is still there: nothing to recreate.
+                    // 图像规格未变，无需重建。
                     self.reuses += 1;
                 } else {
-                    // The slot changes shape: the old image is gone.
+                    // 槽位规格变化，旧图像作废。
                     self.rebinds += 1;
                 }
                 self.bytes -= previous.map_or(0, |old| old.byte_size());
@@ -158,72 +158,72 @@ impl OffscreenPool {
         PooledTexture { slot, desc }
     }
 
-    /// Release a target.
+    /// 释放一个渲染目标。
     pub fn release(&mut self, texture: PooledTexture) {
         if self.live.remove(&texture.slot).is_some() {
             self.free.push_back(texture.slot);
         }
     }
 
-    /// Number of slots the pool holds.
+    /// 纹理池持有的总槽位数。
     #[must_use]
     pub fn slot_count(&self) -> usize {
         self.slots.len()
     }
 
-    /// Number of slots currently handed out.
+    /// 当前已分配出去的槽位数。
     #[must_use]
     pub fn live_count(&self) -> usize {
         self.live.len()
     }
 
-    /// Total number of bytes the pool holds.
+    /// 纹理池持有的总字节数。
     #[must_use]
     pub const fn bytes(&self) -> u64 {
         self.bytes
     }
 
-    /// How many acquisitions were served from the pool.
+    /// 从纹理池中直接复用满足的获取次数。
     #[must_use]
     pub const fn reuse_count(&self) -> u64 {
         self.reuses
     }
 
-    /// How many slots had to be created.
+    /// 必须新建的槽位次数。
     #[must_use]
     pub const fn creation_count(&self) -> u64 {
         self.creations
     }
 
-    /// How many times a free slot was taken with a different description.
+    /// 空闲槽位以*不同*描述被复用的次数。
     #[must_use]
     pub const fn rebind_count(&self) -> u64 {
         self.rebinds
     }
 
-    /// The description of a slot.
+    /// 查询指定槽位的纹理描述。
     #[must_use]
     pub fn slot_desc(&self, slot: u32) -> Option<TextureDesc> {
         self.slots.get(slot as usize).copied().flatten()
     }
 }
 
-/// A separable Gaussian kernel for the frosted-glass blur.
+/// 用于毛玻璃模糊的可分离高斯核。
 ///
-/// The frosted-glass effect is a wide, cheap blur. A true Gaussian needs a
-/// large radius to look smooth, so the implementation uses a small Gaussian
-/// followed by a box blur — the classic "stack blur" trick — which is
-/// O(1) per pixel regardless of the radius.
+/// 毛玻璃效果需要大半径且低开销的模糊。真正的高斯模糊在大半径下开销过高，
+/// 因此实现采用小半径高斯后接盒式模糊（经典“stack blur”技巧），无论半径多大
+/// 均为每像素 O(1) 复杂度。
 ///
-/// This function returns the *Gaussian* half of that stack: the weights of a
-/// small kernel that a shader can multiply by.
+///
+/// 本函数返回该组合中的*高斯*部分：供着色器相乘的小卷积核权重。
+///
 #[must_use]
 pub fn gaussian_kernel(radius: u32) -> Vec<f32> {
     if radius == 0 {
         return vec![1.0];
     }
-    // The classic 3-box approximation of a Gaussian uses a sigma of
-    // `radius / 3`; the small kernel below is sampled from that Gaussian.
+    // 经典的 3 次盒式近似高斯使用 `radius / 3` 的 sigma；下方小核即采样自该高斯分布。
+    //
     let sigma = f64::from(radius) / 3.0;
     let size = (radius as usize) * 2 + 1;
     let mut weights = Vec::with_capacity(size);
@@ -240,10 +240,10 @@ pub fn gaussian_kernel(radius: u32) -> Vec<f32> {
         .collect()
 }
 
-/// The box-blur passes that turn the small Gaussian into a wide blur.
+/// 将小高斯模糊扩展为大范围模糊所需的盒式模糊 Pass 数。
 ///
-/// Each pass halves the effective radius, so the number of passes is
-/// `log2(radius)`.
+/// 每次 Pass 将有效半径减半，因此 Pass 数为 `log2(radius)`。
+///
 #[must_use]
 pub fn box_blur_passes(radius: u32) -> u32 {
     if radius == 0 {
@@ -258,7 +258,7 @@ pub fn box_blur_passes(radius: u32) -> u32 {
     passes.max(1)
 }
 
-/// The total weight of a kernel; it must be one.
+/// 卷积核的总权重；必须等于 1。
 #[must_use]
 pub fn kernel_weight(kernel: &[f32]) -> f32 {
     kernel.iter().sum()

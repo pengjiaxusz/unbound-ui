@@ -1,4 +1,4 @@
-//! Collapsible side NavigationRail / SidebarNav with rail mode, groups & badges.
+//! 可折叠的侧边 NavigationRail / SidebarNav，支持轨道模式、分组与徽标。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -14,19 +14,19 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_RAIL_ITEMS: usize = 6;
 
-/// One navigation item in a [`NavigationRailDesc`].
+/// [`NavigationRailDesc`] 中的单个导航项。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NavRailItem {
-    /// Stable item identity.
+    /// 稳定的项标识。
     pub id: u64,
-    /// Display label.
+    /// 显示标签。
     pub label: String,
-    /// Optional badge count (`> 0` lights up the badge pill).
+    /// 可选徽标计数（`> 0` 时点亮徽标胶囊）。
     pub badge_count: u32,
 }
 
 impl NavRailItem {
-    /// Create a navigation item.
+    /// 创建一个导航项。
     #[must_use]
     pub fn new(id: u64, label: impl Into<String>) -> Self {
         Self {
@@ -36,7 +36,7 @@ impl NavRailItem {
         }
     }
 
-    /// Attach a badge count.
+    /// 附加徽标计数。
     #[must_use]
     pub fn with_badge(mut self, count: u32) -> Self {
         self.badge_count = count;
@@ -44,34 +44,34 @@ impl NavRailItem {
     }
 }
 
-/// Interactive state for [`NavigationRailDesc`].
+/// [`NavigationRailDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NavigationRailState {
-    /// Whether the rail is collapsed into compact icon-rail mode.
+    /// 是否折叠为紧凑图标轨道模式。
     pub collapsed: bool,
-    /// Active item identity.
+    /// 当前激活项标识。
     pub active_id: u64,
 }
 
-/// Descriptor for a collapsible [`NavigationRail`].
+/// 可折叠 [`NavigationRail`] 的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct NavigationRailDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Navigation items.
+    /// 导航项列表。
     pub items: Vec<NavRailItem>,
-    /// Active item identity.
+    /// 当前激活项标识。
     pub active_id: u64,
-    /// Whether collapsed to icon-only width.
+    /// 是否折叠为仅图标宽度。
     pub collapsed: bool,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl NavigationRailDesc {
-    /// Create a navigation rail descriptor.
+    /// 创建导航栏描述符。
     #[must_use]
     pub fn new(rect: Rect, items: Vec<NavRailItem>, active_id: u64) -> Self {
         Self {
@@ -85,13 +85,13 @@ impl NavigationRailDesc {
     }
 }
 
-/// Deterministic sub-node id for a navigation rail item.
+/// 导航栏项的确定性子节点 ID。
 #[must_use]
 pub const fn rail_item_node(node: u64, index: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x500 + index as u64)
 }
 
-/// Emit a stable-shape navigation rail (1 bg + 6 item rows + 6 badge pills + 1 focus ring = 14 primitives).
+/// 输出结构稳定的导航栏（1 个背景 + 6 个项行 + 6 个徽标胶囊 + 1 个焦点环 = 14 个图元）。
 #[must_use]
 pub fn emit_navigation_rail(
     node: u64,

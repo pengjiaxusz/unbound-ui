@@ -1,22 +1,22 @@
-//! Async asset streaming (`docs` §8.2).
+//! 异步资产流式加载（`docs` §8.2）。
 //!
-//! The pipeline has four stages, and the crate models the three that live
-//! outside the driver:
+//! 该管线共四个阶段，本 crate 建模了位于驱动外部的前三个阶段：
 //!
-//! 1. **Fetch** — the application hands the pipeline the bytes it already
-//!    read, or the pipeline reads them from disk.
-//! 2. **Decode** — a pool of worker threads turns the bytes into a GPU-ready
-//!    payload. Nothing here ever runs on the thread that draws.
-//! 3. **Stage** — the payload lands in a multi-slot CPU staging ring that
-//!    the transfer queue reads from over PCIe.
-//! 4. **Transfer** — a dedicated transfer queue copies the payload into GPU
-//!    memory and signals a timeline semaphore; the graphics queue waits for
-//!    that value before it samples the texture.
 //!
-//! The design constraint that shapes everything here: **the frame time must
-//! not depend on the asset pipeline**. A request that cannot be queued is
-//! refused, a decode that fails is reported, and an asset that is not ready
-//! is drawn as a placeholder. Nothing ever blocks the render loop.
+//! 1. **Fetch（获取）** — 应用将已读取的字节交给管线，或由管线从磁盘读取。
+//!    （不阻塞渲染线程。）
+//! 2. **Decode（解码）** — 工作线程池将字节解码为 GPU 就绪的载荷，
+//!    所有解码操作均不在渲染线程上执行。
+//! 3. **Stage（暂存）** — 载荷写入多槽位 CPU 暂存环形缓冲区，
+//!    传输队列通过 PCIe 从中读取。
+//! 4. **Transfer（传输）** — 专用传输队列将载荷拷贝到 GPU 显存并触发时间线信号量；
+//!    图形队列在采样纹理前等待该信号量值。
+//!
+//!
+//! 贯穿整体设计的核心约束：**帧耗时绝不能受资产管线影响**。无法入队的请求会被拒绝，
+//! 解码失败会上报错误，未就绪的资产则绘制占位符。任何情况都不会阻塞渲染循环。
+//!
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -33,13 +33,13 @@ pub use transfer::{
     OwnershipTransfer, Placeholder, QueueFamily, TimelineGate, TransferBarrier,
 };
 
-/// Read a file from disk, off the render thread.
+/// 在渲染线程之外从磁盘读取文件。
 ///
-/// The function is blocking on purpose — it is meant to be called from a
-/// worker, never from the frame loop.
+/// 该函数有意设计为阻塞调用——它只应在工作线程中调用，绝不可在帧循环中调用。
+///
 ///
 /// # Errors
-/// Returns the I/O error when the file cannot be read.
+/// 当文件无法读取时返回 I/O 错误。
 pub fn read_file(path: impl AsRef<std::path::Path>) -> Result<Vec<u8>, AssetError> {
     std::fs::read(path).map_err(|error| AssetError::Decode(error.to_string()))
 }

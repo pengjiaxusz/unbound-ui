@@ -1,16 +1,16 @@
-//! Text shaping on top of `cosmic-text`, with the two-level cache the
-//! architecture calls for (`docs` §3.5).
+//! 基于 `cosmic-text` 的文本塑形，配备架构文档要求的两级缓存
+//! （`docs` §3.5）。
 //!
-//! * **Level 1 — shape cache**: keyed by `(text hash, style)`. A button label or
-//!   a fixed phrase is shaped once for the lifetime of the process.
-//! * **Level 2 — wrap cache**: keyed by `(text hash, style, max width)`. Adding
-//!   a width to the key is what makes resizing a panel cheap: the shaped result
-//!   is reused, only the line breaking is recomputed, and only when the width
-//!   actually crosses a bucket boundary.
+//! * **一级 —— 塑形缓存**：以 `(text hash, style)` 为键。按钮标签或固定短语
+//!   在进程生命周期内仅需塑形一次。
+//! * **二级 —— 换行缓存**：以 `(text hash, style, max width)` 为键。将宽度
+//!   纳入键中使面板缩放极其廉价：塑形结果直接复用，仅重新计算断行，
+//!   且仅当宽度跨越量化分桶边界时才重新计算。
 //!
-//! The caches are deliberately per-`TextEngine` rather than global: a global
-//! cache would have to be locked on every frame, and the lock costs more than
-//! the shaping it saves.
+//!
+//! 缓存刻意按每个 `TextEngine` 独立持有而非全局共享：全局缓存每帧都需要
+//! 加锁，而锁开销高于其省下的塑形计算。
+//!
 
 use std::sync::Arc;
 
@@ -19,16 +19,16 @@ use rustc_hash::FxHashMap;
 use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
 
-/// Everything that affects shaping, in one comparable value.
+/// 将所有影响塑形的属性打包为单一可比较的值。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
     pub font_size: f32,
-    /// `0.0` means "use the font's natural line height × 1.2".
+    /// `0.0` 表示“使用字体自然行高 × 1.2”。
     pub line_height: f32,
     pub letter_spacing: f32,
     pub weight: u16,
     pub italic: bool,
-    /// `None` selects the system UI font.
+    /// `None` 表示选择系统 UI 字体。
     pub family: Option<String>,
 }
 
@@ -46,7 +46,7 @@ impl Default for TextStyle {
 }
 
 impl TextStyle {
-    /// Style for a specific size, keeping the rest of the defaults.
+    /// 指定字号的文本样式，其余字段保持默认值。
     #[must_use]
     pub fn sized(size: f32) -> Self {
         Self {
@@ -64,9 +64,9 @@ impl TextStyle {
         Metrics::new(self.font_size, line_height)
     }
 
-    /// Stable hash of the style, used as part of the cache keys. Floats are
-    /// bit-cast so that `14.0` and `14.0` always agree and `14.0`/`14.5` never
-    /// collide.
+    /// 样式的稳定哈希，用作缓存键的一部分。浮点数按位转换，
+    /// 确保相同的 `14.0` 始终一致，且 `14.0` 与 `14.5` 绝不冲突。
+    ///
     fn hash_into(&self, h: &mut u64) {
         fn mix(h: &mut u64, v: u64) {
             *h ^= v;
@@ -77,9 +77,9 @@ impl TextStyle {
         mix(h, self.letter_spacing.to_bits() as u64);
         mix(h, u64::from(self.weight));
         mix(h, u64::from(self.italic));
-        // The family is mixed with its length as well as its bytes: an absent
-        // family and an empty one used to hash the same, so the two styles
-        // shared a cache entry and the wrong shaped run came back.
+        // 字体族名同时混入其长度与字节内容：缺失字体族与空字体族此前哈希相同，
+        // 导致两种样式共享同一缓存条目并返回错误的塑形结果。
+        //
         match &self.family {
             Some(family) => {
                 mix(h, family.len() as u64);
@@ -92,49 +92,49 @@ impl TextStyle {
     }
 }
 
-/// One inline run of rich text.
+/// 富文本中的单个行内片段（span）。
 ///
-/// A span never carries a font or a shaped run: it carries the *policy* for a
-/// byte range, and [`TextEngine::shape_rich`] lays every span out in one
-/// buffer so the baselines of different sizes and weights stay aligned.
+/// span 从不携带字体或已塑形文本段：它只携带某段字节范围的**样式策略**，
+/// [`TextEngine::shape_rich`] 会在同一缓冲区中排版所有片段，
+/// 使不同字号与字重的基线保持对齐。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextSpan {
-    /// The byte range this span covers.
+    /// 该片段覆盖的字节范围。
     pub range: std::ops::Range<usize>,
-    /// The style of the glyphs in the range.
+    /// 该范围内字形的文本样式。
     pub style: TextStyle,
-    /// The semantic colour token the caller paints the glyphs with.
+    /// 调用方用于绘制字形的语义颜色标记。
     pub color: Token,
-    /// Whether the range is underlined (links, emphasis).
+    /// 该范围是否带下划线（用于链接、强调文本）。
     pub underline: bool,
-    /// An optional inline background token (inline code, highlight).
+    /// 可选的行内背景颜色标记（用于行内代码、高亮）。
     pub background: Option<Token>,
-    /// A link identity, when the range is interactive.
+    /// 当该范围可交互时的链接标识。
     pub link_id: Option<u32>,
 }
 
-/// One positioned glyph, in logical pixels relative to the text origin.
+/// 单个已定位的字形，以相对于文本原点的逻辑像素表示。
 ///
-/// The face is referenced by index into [`ShapedText::faces`] rather than by
-/// `fontdb::ID`: the id type is opaque and not `Pod`, and keeping the glyph POD
-/// means a run can be uploaded to the GPU without a conversion pass.
+/// 字体面通过 [`ShapedText::faces`] 的索引引用，而非 `fontdb::ID`：
+/// 该 ID 类型不透明且非 `Pod`，保持字形为 POD 可使文本段无需转换趟
+/// 即可直接上传至 GPU。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PositionedGlyph {
     pub glyph_id: u16,
-    /// Index into [`ShapedText::faces`].
+    /// 在 [`ShapedText::faces`] 中的字体索引。
     pub face_index: u16,
-    /// Pen position of the glyph's left edge.
+    /// 字形左边缘的画笔 X 坐标。
     pub x: f32,
-    /// Pen position of the glyph's top edge (y grows down).
+    /// 字形顶边缘的画笔 Y 坐标（Y 轴向下增长）。
     pub y: f32,
-    /// Advance width of the glyph.
+    /// 字形的步进宽度。
     pub w: f32,
-    /// Font size the glyph was shaped at (part of the raster key).
+    /// 塑形该字形时使用的字号（光栅缓存键的一部分）。
     pub font_size: f32,
-    /// Byte offset in the source string, for hit testing and selection.
+    /// 在源字符串中的字节偏移量，用于命中测试与文本选择。
     pub cluster: u32,
-    /// `BiDi` embedding level: odd means right-to-left.
+    /// `BiDi` 嵌入层级：奇数表示从右到左（RTL）。
     pub level: u8,
     pub _pad: [u8; 3],
 }
@@ -146,54 +146,54 @@ impl PositionedGlyph {
     }
 }
 
-/// The shaped result for a whole paragraph.
+/// 整段文本的塑形结果。
 #[derive(Clone, Debug, Default)]
 pub struct ShapedText {
-    /// Distinct faces used by this run, indexed by `PositionedGlyph::face_index`.
+    /// 本段文本用到的所有不重复字体面，由 `PositionedGlyph::face_index` 索引。
     pub faces: Vec<fontdb::ID>,
     pub glyphs: Vec<PositionedGlyph>,
-    /// Ink-independent layout width (max line width).
+    /// 与墨迹无关的布局宽度（最大行宽）。
     pub width: f32,
     pub height: f32,
     pub line_height: f32,
     pub ascent: f32,
     pub descent: f32,
     pub line_count: u32,
-    /// First line's top offset, so a single-line label can be centred exactly.
+    /// 首行顶部偏移量，使单行标签能够精确居中。
     pub first_baseline: f32,
 }
 
 impl ShapedText {
-    /// True when nothing was laid out (empty or whitespace-only string).
+    /// 当没有任何内容被排版时为 `true`（空字符串或仅含空白符）。
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.glyphs.is_empty()
     }
 
-    /// Byte range of the glyph whose cluster covers `byte`.
+    /// 覆盖 `byte` 所在字形簇（cluster）的字形字节范围。
     ///
-    /// The cluster is the byte offset of the glyph's first character in the
-    /// source string. The glyph that covers `byte` is therefore the last one
-    /// whose cluster starts at or before it — not "the first one within an
-    /// eight-byte window", which could pick a glyph from the next cluster.
+    /// cluster 是字形首个字符在源字符串中的字节偏移量。因此覆盖 `byte` 的字形
+    /// 是最后一个起始位置不晚于 `byte` 的字形——而非“8 字节窗口内的第一个”，
+    /// 后者可能会误选下一个字形簇中的字形。
+    ///
     #[must_use]
     pub fn glyph_at_byte(&self, byte: u32) -> Option<&PositionedGlyph> {
         self.glyphs.iter().rev().find(|g| g.cluster <= byte)
     }
 
-    /// Nearest glyph to a local point (used by hit testing and cursor
-    /// placement).
+    /// 距离局部坐标点最近的字形（用于命中测试与光标定位）。
     ///
-    /// The returned distance is the distance to the nearest glyph *boundary*,
-    /// not to the glyph's left edge: clicking the right half of a character
-    /// has to put the caret after it, not before it.
+    ///
+    /// 返回的距离是到最近字形**边界**的距离，而非到字形左边缘的距离：
+    /// 点击字符右半部分必须将光标放在该字符之后，而非之前。
+    ///
     #[must_use]
     pub fn nearest_glyph(&self, p: Vec2) -> Option<(usize, f32)> {
         let mut best: Option<(usize, f32)> = None;
         for (i, g) in self.glyphs.iter().enumerate() {
             let dx = (p.x - g.x).abs();
             let dy = (p.y - g.y).abs();
-            // Weight x much more than y: a cursor is placed by column.
+            // X 轴权重远大于 Y 轴：光标定位主要按列选择。
             let cost = dx + dy * 0.25;
             if best.map(|(_, c)| cost < c).unwrap_or(true) {
                 best = Some((i, cost));
@@ -202,18 +202,18 @@ impl ShapedText {
         best
     }
 
-    /// Map a local point `(x, y)` to a UTF-8 byte offset in `text`.
+    /// 将局部坐标 `(x, y)` 映射到 `text` 中的 UTF-8 字节偏移量。
     ///
-    /// Selects the line closest to `point.y`, then compares `point.x` against
-    /// each glyph's horizontal midpoint on that line so clicking the right half
-    /// of a glyph advances the caret to the following character boundary.
+    /// 选取距离 `point.y` 最近的行，再将该行每个字形的水平中点与 `point.x` 比较，
+    /// 使点击字形右半部分时将光标推进到下一个字符边界。
+    ///
     #[must_use]
     pub fn hit_test_point(&self, point: Vec2, text: &str) -> usize {
         if self.glyphs.is_empty() || text.is_empty() {
             return 0;
         }
         let line_h = self.line_height.max(1.0);
-        // Group glyphs by line via y coordinate; pick the line closest to point.y.
+        // 按 Y 坐标将字形分组到各行；选取距离 point.y 最近的行。
         let mut best_line_y = self.glyphs[0].y;
         let mut best_dy = (point.y - (best_line_y + line_h * 0.5)).abs();
         for g in &self.glyphs {
@@ -258,10 +258,10 @@ impl ShapedText {
         }
     }
 
-    /// The caret position for a byte offset.
+    /// 指定字节偏移量对应的文本光标位置。
     ///
-    /// The caret sits at the start of the glyph the byte belongs to, or at the
-    /// end of the last glyph when the byte is past the text.
+    /// 光标位于该字节所属字形的起始处；当字节超出文本末尾时，
+    /// 位于最后一个字形的末尾。
     #[must_use]
     pub fn caret_at_byte(&self, byte: u32) -> Option<f32> {
         let glyph = self.glyph_at_byte(byte)?;
@@ -269,8 +269,8 @@ impl ShapedText {
         Some(if at_end { glyph.x + glyph.w } else { glyph.x })
     }
 
-    /// Map a local pixel coordinate `(x, y)` relative to the text origin to the nearest
-    /// UTF-8 byte offset on a valid character boundary.
+    /// 将相对于文本原点的局部像素坐标 `(x, y)` 映射到最近的合法 UTF-8 字符边界字节偏移量。
+    ///
     #[must_use]
     pub fn hit_byte_index(&self, text: &str, local_pos: Vec2) -> usize {
         let idx = self.hit_test_point(local_pos, text).min(text.len());
@@ -285,7 +285,7 @@ impl ShapedText {
         }
     }
 
-    /// Compute the local caret rectangle at `byte_index`.
+    /// 计算 `byte_index` 处的局部光标矩形。
     #[must_use]
     pub fn caret_rect_at(&self, byte_index: usize) -> Rect {
         let line_h = self.line_height.max(14.0);
@@ -314,9 +314,9 @@ impl ShapedText {
         }
     }
 
-    /// Generate per-line selection rectangles for the given UTF-8 byte `range`.
+    /// 为给定的 UTF-8 字节范围 `range` 生成逐行选区矩形。
     ///
-    /// Pass the result to [`crate::selection::merge_line_rects`] for seamless rounded highlights.
+    /// 将结果传给 [`crate::selection::merge_line_rects`] 即可获得无缝圆角高亮。
     #[must_use]
     pub fn selection_rects(&self, range: core::ops::Range<usize>) -> Vec<Rect> {
         if range.is_empty() || self.glyphs.is_empty() {
@@ -350,7 +350,7 @@ impl ShapedText {
     }
 }
 
-/// A wrapped paragraph: line byte ranges plus their measured widths.
+/// 已折行的段落：各行字节范围及其测量宽度。
 #[derive(Clone, Debug, Default)]
 pub struct WrappedText {
     pub lines: Vec<TextLine>,
@@ -359,18 +359,18 @@ pub struct WrappedText {
     pub line_height: f32,
 }
 
-/// One laid-out line.
+/// 排版后的单行。
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct TextLine {
-    /// Byte offset of the first character.
+    /// 首字符的字节偏移量。
     pub start: u32,
-    /// Byte offset one past the last character.
+    /// 末字符之后的字节偏移量（开区间）。
     pub end: u32,
     pub width: f32,
     pub baseline: f32,
 }
 
-/// Cache statistics, surfaced by the debug overlay.
+/// 缓存统计信息，供调试浮层展示。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct TextCacheStats {
     pub shape_hits: u64,
@@ -392,13 +392,13 @@ impl TextCacheStats {
     }
 }
 
-/// The byte offset of every source line in `text`.
+/// `text` 中每个源文本行的起始字节偏移量。
 ///
-/// cosmic-text splits a string into lines at `\r`, `\n`, `\r\n` and `\n\r`,
-/// and reports a glyph's cluster as an index *within its line*. To turn a
-/// cluster index into an absolute byte offset into the source text, the
-/// offset of the line the glyph belongs to has to be known — hence this
-/// helper, which mirrors cosmic-text's own line splitting.
+/// cosmic-text 在 `\r`、`\n`、`\r\n` 和 `\n\r` 处断行，并将字形的 cluster
+/// 上报为**行内**索引。要将 cluster 索引转换为源文本中的绝对字节偏移量，
+/// 必须知道字形所属行的偏移量——本辅助函数即用于此，与 cosmic-text 自身的
+/// 断行逻辑保持一致。
+///
 fn source_line_starts(text: &str) -> Vec<usize> {
     let mut starts = vec![0usize];
     let bytes = text.as_bytes();
@@ -406,7 +406,7 @@ fn source_line_starts(text: &str) -> Vec<usize> {
     while index < bytes.len() {
         match bytes[index] {
             b'\r' => {
-                // `\r\n` and `\n\r` are a single terminator.
+                // `\r\n` 与 `\n\r` 均视为单个换行终止符。
                 if bytes.get(index + 1) == Some(&b'\n') || bytes.get(index + 1) == Some(&b'\r') {
                     index += 2;
                 } else {
@@ -428,10 +428,10 @@ fn source_line_starts(text: &str) -> Vec<usize> {
     starts
 }
 
-/// The shaping engine: owns the font system and both cache levels.
+/// 塑形引擎：持有字体系统与两级缓存。
 pub struct TextEngine {
     font_system: FontSystem,
-    /// Reused across calls so shaping does not allocate a `Buffer` per label.
+    /// 跨调用复用，避免每个标签都分配一个 `Buffer`。
     buffer: Option<Buffer>,
     buffer_metrics: Option<(f32, f32)>,
     shape_cache: FxHashMap<(u64, u64), Arc<ShapedText>>,
@@ -455,13 +455,13 @@ impl Default for TextEngine {
 }
 
 impl TextEngine {
-    /// Load the system fonts. Costs ~50–150 ms; do it once per process.
+    /// 加载系统字体。耗时约 50–150 ms；每个进程只需执行一次。
     #[must_use]
     pub fn new() -> Self {
         Self::with_font_system(FontSystem::new())
     }
 
-    /// Build on an existing `FontSystem` (tests use a minimal one).
+    /// 基于已有 `FontSystem` 构建（测试中可使用最小字体集）。
     #[must_use]
     pub fn with_font_system(mut font_system: FontSystem) -> Self {
         #[cfg(windows)]
@@ -481,17 +481,17 @@ impl TextEngine {
         }
     }
 
-    /// Mutable access for glyph rasterisation (`SwashCache` needs it).
+    /// 提供可变访问以供字形光栅化（`SwashCache` 需要）。
     pub fn font_system_mut(&mut self) -> &mut FontSystem {
         &mut self.font_system
     }
 
-    /// Inject a font from an in-memory byte stream.
+    /// 从内存字节流注入字体。
     ///
-    /// The faces become immediately available to the shaper, and both caches
-    /// are dropped so no label keeps a shape that was resolved against the
-    /// old font list. Returns the number of faces the stream provided; a
-    /// malformed blob loads no faces and returns `0` instead of panicking.
+    /// 注入的字体立即可供塑形器使用，同时清空两级缓存，防止任何标签保留
+    /// 基于旧字体列表解析的塑形结果。返回字节流提供的字体面数量；
+    /// 格式错误的字节块不会加载任何字体并返回 `0`，而不会 panic。
+    ///
     pub fn load_font_bytes(&mut self, data: Vec<u8>) -> usize {
         let faces = self
             .font_system
@@ -506,7 +506,7 @@ impl TextEngine {
         self.stats
     }
 
-    /// Drop both caches (theme/font reload, or after a memory-pressure signal).
+    /// 清空两级缓存（主题/字体重载或收到内存压力信号时调用）。
     pub fn clear_caches(&mut self) {
         self.shape_cache.clear();
         self.wrap_cache.clear();
@@ -515,8 +515,8 @@ impl TextEngine {
     }
 
     fn hash_text(text: &str) -> u64 {
-        // FNV-1a; short labels dominate, so a byte loop is faster than a random
-        // per-frame hasher and the collision rate is irrelevant at 64 bits.
+        // FNV-1a；短标签占绝大多数，字节循环比随机每帧哈希器更快，
+        // 且 64 位下的碰撞率可忽略不计。
         let mut h = 0xcbf2_9ce4_8422_2325u64;
         for b in text.bytes() {
             h ^= u64::from(b);
@@ -544,15 +544,15 @@ impl TextEngine {
             self.buffer = Some(Buffer::new(&mut self.font_system, metrics));
             self.buffer_metrics = Some(key);
         }
-        // Build the `Attrs` first: it borrows `style`, not `self`, so the
-        // mutable buffer borrow below is unambiguous.
+        // 先构建 `Attrs`：它只借用 `style` 而非 `self`，因此下方对缓冲区的可变借用无歧义。
+        //
         let attrs = self.attrs(style);
         let buffer = self.buffer.as_mut().expect("buffer just created");
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
     }
 
-    /// Shape `text` (with caching).
+    /// 对 `text` 进行塑形（带缓存）。
     pub fn shape(&mut self, text: &str, style: &TextStyle) -> Arc<ShapedText> {
         let mut style_hash = 0u64;
         style.hash_into(&mut style_hash);
@@ -564,8 +564,8 @@ impl TextEngine {
         self.stats.shape_misses += 1;
         let shaped = Arc::new(self.shape_uncached(text, style));
         if self.shape_cache.len() >= self.max_cache_entries {
-            // Cheap eviction: clearing beats LRU bookkeeping for a cache that is
-            // only hot for the currently visible screen.
+            // 廉价淘汰：对于仅在当前可见屏幕上热用的缓存，直接清空比维护 LRU 账本更划算。
+            //
             self.shape_cache.clear();
         }
         self.shape_cache.insert(key, Arc::clone(&shaped));
@@ -573,12 +573,12 @@ impl TextEngine {
         shaped
     }
 
-    /// The system font families that shaped `text`, in run order.
+    /// 按文本段顺序返回塑形 `text` 所用到的系统字体族名称。
     ///
-    /// A fallback chain is invisible from the outside: asking for the UI font
-    /// says nothing about whether the CJK part landed on `Microsoft YaHei UI`
-    /// or the Arabic part on `Segoe UI`. The font inspector page needs the
-    /// answer, so it comes from the same shaped run the renderer draws.
+    /// 回退链对外部不可见：请求 UI 字体并不能说明 CJK 部分最终落在了
+    /// `Microsoft YaHei UI` 还是阿拉伯文落在了 `Segoe UI`。字体检查器页面
+    /// 需要此信息，因此直接从渲染器绘制的同一塑形段中提取。
+    ///
     #[must_use]
     pub fn resolved_families(&mut self, text: &str, style: &TextStyle) -> Vec<String> {
         let shaped = self.shape(text, style);
@@ -609,12 +609,12 @@ impl TextEngine {
         Self::extract(buffer, text, style)
     }
 
-    /// Pull the positioned glyphs out of a shaped buffer.
+    /// 从已塑形的缓冲区中提取已定位的字形。
     ///
-    /// Shared by the single-line and the wrapped path: both produce a
-    /// `Buffer` that is already shaped, and both need the same glyph
-    /// extraction. The difference between them is only the buffer's width
-    /// limit.
+    /// 单行路径与折行路径共用：两者都会生成已完成塑形的 `Buffer`，且都需要
+    /// 相同的字形提取逻辑。二者的区别仅在于缓冲区是否设置了宽度限制。
+    ///
+    ///
     fn extract(buffer: &Buffer, text: &str, style: &TextStyle) -> ShapedText {
         let mut faces: Vec<fontdb::ID> = Vec::new();
         let mut glyphs = Vec::with_capacity(text.len());
@@ -647,28 +647,28 @@ impl TextEngine {
                 glyphs.push(PositionedGlyph {
                     glyph_id: g.glyph_id,
                     face_index: u16::try_from(face_index).unwrap_or(0),
-                    // HarfBuzz (through rustybuzz) positions marks out of the
-                    // run's pen stream: an Arabic haraka, a Thai tone mark or
-                    // a Vietnamese double accent carries its real placement in
-                    // `x_offset`/`y_offset` (in em units). Dropping them
-                    // collapses every mark onto the baseline, on top of the
-                    // base letter.
+                    // HarfBuzz（通过 rustybuzz）将附加符号（mark）定位在文本段画笔流之外：
+                    // 阿拉伯文音符、泰文声调符号或越南文双变音符的真实位置保存在
+                    // `x_offset`/`y_offset`（以 em 为单位）中。忽略它们会导致所有附加符号
+                    // 塌陷到基线上并叠在基础字母上方。
                     //
-                    // This mirrors `cosmic_text::LayoutGlyph::physical`:
-                    // `x = g.x + font_size * x_offset`,
-                    // `y = g.y - font_size * y_offset`.
+                    //
+                    //
+                    // 此处与 `cosmic_text::LayoutGlyph::physical` 保持一致：
+                    // `x = g.x + font_size * x_offset`，
+                    // `y = g.y - font_size * y_offset`。
                     x: g.x + g.font_size * g.x_offset,
-                    // The baseline of the glyph, relative to the top of the
-                    // text box.
+                    // 字形基线，相对于文本框顶部。
                     //
-                    // cosmic-text reports the baseline of a line as `line_y`
-                    // (already accumulated over the lines above it) and the
-                    // glyph's own offset within that line as `g.y`, which is
-                    // zero for horizontal text. The old code used
-                    // `g.font_size` as if it were the ascent: that put every
-                    // glyph at the wrong height *and* ignored the line's
-                    // position, so a second line was drawn on top of the
-                    // first.
+                    //
+                    // cosmic-text 将行基线上报为 `line_y`（已累加上方各行高度），将字形在该行内的
+                    // 偏移上报为 `g.y`（水平文本下为零）。旧代码误将 `g.font_size` 当作 ascent：
+                    // 这不仅把每个字形放到了错误的高度，还忽略了行位置，导致第二行直接
+                    // 绘制在第一行之上。
+                    //
+                    //
+                    //
+                    //
                     y: run.line_y + g.y - g.font_size * g.y_offset,
                     w: g.w,
                     font_size: g.font_size,
@@ -692,17 +692,17 @@ impl TextEngine {
         }
     }
 
-    /// Shape `text` and wrap it to `max_width`, returning the positioned
-    /// glyphs of every wrapped line.
+    /// 对 `text` 进行塑形并按 `max_width` 折行，返回每条折行后的已定位字形。
     ///
-    /// The wrap cache only remembers the *line breaks*; the glyph positions of
-    /// a wrapped paragraph were never reachable, so a renderer could not draw
-    /// a paragraph that wraps — it could only draw one line at a time. This
-    /// is the missing piece: the same extraction as [`TextEngine::shape`],
-    /// but on a buffer that was constrained to `max_width` first.
     ///
-    /// The width is mixed into the style hash, so a wrapped run never
-    /// collides with the same text shaped without a width limit.
+    /// 换行缓存仅记录**断点位置**；折行段落的字形位置此前无法获取，导致渲染器
+    /// 无法绘制折行段落——只能一次绘制一行。此方法补齐了这一环：执行与
+    /// [`TextEngine::shape`] 相同的提取流程，但缓冲区预先受限于 `max_width`。
+    ///
+    ///
+    ///
+    /// 宽度会混入样式哈希中，因此折行文本段绝不会与无宽度限制的同一文本发生冲突。
+    ///
     pub fn shape_wrapped(
         &mut self,
         text: &str,
@@ -738,8 +738,8 @@ impl TextEngine {
             return ShapedText::default();
         }
         let metrics = style.metrics();
-        // A separate buffer is used so the shape-cache buffer keeps its
-        // unlimited width: a shaped run must not depend on a wrap width.
+        // 使用独立缓冲区，使塑形缓存缓冲区保持无宽度限制：塑形结果绝不能依赖折行宽度。
+        //
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_size(Some(max_width.max(1.0)), None);
         let attrs = self.attrs(style);
@@ -748,8 +748,8 @@ impl TextEngine {
         Self::extract(&buffer, text, style)
     }
 
-    /// Wrap `text` to `max_width` (with caching). Widths are quantised to ¼ px so
-    /// that a smoothly resizing panel reuses cached results.
+    /// 将 `text` 按 `max_width` 折行（带缓存）。宽度量化为 ¼ px，
+    /// 使平滑缩放面板时能够复用缓存结果。
     pub fn wrap(&mut self, text: &str, style: &TextStyle, max_width: f32) -> Arc<WrappedText> {
         let mut style_hash = 0u64;
         style.hash_into(&mut style_hash);
@@ -771,8 +771,8 @@ impl TextEngine {
 
     fn wrap_uncached(&mut self, text: &str, style: &TextStyle, max_width: f32) -> WrappedText {
         let metrics = style.metrics();
-        // A separate buffer is used so the shape-cache buffer keeps its
-        // unlimited width (shape results must not depend on a wrap width).
+        // 使用独立缓冲区，使塑形缓存缓冲区保持无宽度限制（塑形结果绝不能依赖折行宽度）。
+        //
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_size(Some(max_width.max(1.0)), None);
         let attrs = self.attrs(style);
@@ -783,22 +783,22 @@ impl TextEngine {
         let mut height: f32 = 0.0;
         let mut width: f32 = 0.0;
         let mut line_height = metrics.line_height;
-        // The byte offset of every source line in `text`.
+        // `text` 中每个源文本行的字节偏移量。
         //
-        // cosmic-text reports a glyph's cluster as an index *within its line*,
-        // and `LayoutRun::text` is the whole source line (not the wrapped
-        // fragment). The line offsets are therefore needed to turn a cluster
-        // index into an absolute byte offset into `text`.
+        // cosmic-text 将字形的 cluster 上报为**行内**索引，而 `LayoutRun::text`
+        // 是整条源文本行（而非折行后的片段）。因此需要行偏移量将 cluster 索引
+        // 转换为 `text` 中的绝对字节偏移量。
+        //
         let line_starts = source_line_starts(text);
         for run in buffer.layout_runs() {
             line_height = run.line_height;
             height = height.max(run.line_y + run.line_height);
             width = width.max(run.line_w);
-            // The base offset of the source line this run belongs to.
+            // 该文本段所属源文本行的基准偏移量。
             let line_base = line_starts.get(run.line_i).copied().unwrap_or(0);
-            // The run's glyphs carry cluster indices relative to the source
-            // line, so the run's extent within it is the first glyph's start
-            // and the last glyph's end.
+            // 文本段中的字形携带相对于源文本行的 cluster 索引，因此该段在源行中的
+            // 范围即首个字形的起始位置与末个字形的结束位置。
+            //
             let (rel_start, rel_end) = match (run.glyphs.first(), run.glyphs.last()) {
                 (Some(first), Some(last)) => (first.start, last.end),
                 _ => (0, 0),
@@ -820,12 +820,12 @@ impl TextEngine {
         }
     }
 
-    /// Shape `text` and elide it with `…` when it is wider than `max_width`.
+    /// 对 `text` 进行塑形，并在超出 `max_width` 时以 `…` 省略截断。
     ///
-    /// The ellipsis is shaped first, so the visible prefix is chosen against
-    /// the *combined* width and a wide glyph never pushes the dots outside the
-    /// box. The prefix search is a binary search over character boundaries;
-    /// every trial prefix goes through the shape cache.
+    /// 先对省略号塑形，再依据**合并后**的总宽度选取可见前缀，确保宽字形
+    /// 绝不会把省略号挤出边界。前缀搜索在字符边界上二分查找；每次试探前缀
+    /// 都会经过塑形缓存。
+    ///
     pub fn shape_elided(
         &mut self,
         text: &str,
@@ -847,7 +847,7 @@ impl TextEngine {
         self.shape(&elided, style)
     }
 
-    /// Wrap `text` and clamp the result to `max_lines`, eliding the last line.
+    /// 对 `text` 折行并限制在 `max_lines` 行以内，超出时在末行执行省略截断。
     pub fn wrap_clamped(
         &mut self,
         text: &str,
@@ -876,11 +876,11 @@ impl TextEngine {
         Arc::new(out)
     }
 
-    /// Lay out `text` with per-range styles in one buffer.
+    /// 在同一缓冲区中以分段样式排版 `text`。
     ///
-    /// Every span becomes an `Attrs` run, so a bold word in a 14 px paragraph
-    /// shares the paragraph's baseline instead of being shaped separately and
-    /// pasted on top. Gaps between spans fall back to `base`.
+    /// 每个 span 成为一个 `Attrs` 文本段，使 14 px 段落中的加粗词与段落共享基线，
+    /// 而非单独塑形后强行拼贴。span 之间的空隙回退到 `base` 样式。
+    ///
     pub fn shape_rich(
         &mut self,
         text: &str,
@@ -915,8 +915,8 @@ impl TextEngine {
         }
         self.stats.shape_misses += 1;
 
-        // Build the `Attrs` runs first, then borrow the font system: the runs
-        // borrow the spans, never `self`.
+        // 先构建 `Attrs` 文本段，再借用字体系统：文本段仅借用 spans，绝不借用 `self`。
+        //
         let mut runs: Vec<(&str, Attrs<'_>)> = Vec::new();
         let mut cursor = 0usize;
         for span in spans {
@@ -957,7 +957,7 @@ impl TextEngine {
         shaped
     }
 
-    /// The byte cut a prefix of `text` needs so `prefix + …` fits `max_width`.
+    /// 计算使 `prefix + …` 恰好容纳于 `max_width` 内所需截断的 `text` 前缀字节位置。
     fn elision_cut(&mut self, text: &str, style: &TextStyle, max_width: f32) -> usize {
         let dots = self.measure("\u{2026}", style).x;
         if max_width <= 0.0 {
@@ -987,7 +987,7 @@ impl TextEngine {
         boundaries.get(best).copied().unwrap_or(0)
     }
 
-    /// Measure without keeping the shaped glyphs (still cached).
+    /// 仅测量尺寸而不保留已塑形的字形（仍走缓存）。
     pub fn measure(&mut self, text: &str, style: &TextStyle) -> Vec2 {
         let shaped = self.shape(text, style);
         Vec2::new(shaped.width, shaped.height)
@@ -1093,11 +1093,11 @@ mod tests {
         assert!(shaped.width > 0.0);
     }
 
-    /// An absent family and an empty one are different styles.
+    /// 缺失字体族与空字体族是不同的样式。
     ///
-    /// The family used to be mixed into the hash by its bytes only, so
-    /// `family: None` and `family: Some("")` hashed the same and shared a
-    /// cache entry: the wrong shaped run came back.
+    /// 字体族此前仅按字节混入哈希，导致 `family: None` 与 `family: Some("")`
+    /// 哈希相同并共享缓存条目：返回了错误的塑形结果。
+    ///
     #[test]
     fn an_absent_family_is_not_an_empty_family() {
         let mut e = engine();
@@ -1163,19 +1163,19 @@ mod tests {
         let b = e.wrap(text, &style, 100.0);
         assert!(Arc::ptr_eq(&a, &b));
         assert_eq!(e.stats().wrap_hits, 1);
-        // A tiny width change stays inside the same ¼px bucket.
+        // 微小的宽度变化仍落在同一个 ¼px 分桶内。
         let c = e.wrap(text, &style, 100.04);
         assert!(Arc::ptr_eq(&a, &c), "sub-pixel width changes must reuse");
-        // A real change misses.
+        // 真实跨桶变化则会未命中缓存。
         let d = e.wrap(text, &style, 80.0);
         assert!(!Arc::ptr_eq(&a, &d));
     }
 
-    /// A wrapped paragraph has to come back with the glyphs of every line,
-    /// each one positioned on its own baseline.
+    /// 折行段落必须返回每一行的字形，且每行字形定位在各自的行基线上。
     ///
-    /// The wrap cache only remembers the line breaks, so without this the
-    /// renderer could not draw a paragraph that wraps.
+    ///
+    /// 换行缓存仅记录断行位置，缺失此接口时渲染器无法绘制折行段落。
+    ///
     #[test]
     fn shape_wrapped_produces_multiline_positioned_glyphs() {
         let mut e = engine();
@@ -1192,9 +1192,9 @@ mod tests {
             shaped.glyphs.len() > 1,
             "every wrapped line needs its own glyphs"
         );
-        // The glyphs of one line share a baseline; the lines themselves do
-        // not. A single baseline for the whole paragraph would draw every line
-        // on top of the first.
+        // 同一行内的字形共享一条基线；不同行之间则不共享。
+        // 若整段共用单一基线，每一行都会叠画在第一行上方。
+        //
         let mut baselines: Vec<f32> = shaped.glyphs.iter().map(|g| g.y).collect();
         baselines.sort_by(|a, b| a.total_cmp(b));
         baselines.dedup_by(|a, b| (*a - *b).abs() < 0.01);
@@ -1203,7 +1203,7 @@ mod tests {
             shaped.line_count as usize,
             "each line needs its own baseline: {baselines:?}"
         );
-        // Every line starts at the left edge of the text box.
+        // 每一行都从文本框左边缘开始。
         let first_x = shaped
             .glyphs
             .iter()
@@ -1212,7 +1212,7 @@ mod tests {
         assert!(first_x < 1.0, "the first glyph must start at the left edge");
     }
 
-    /// The wrapped run must not collide with the unwrapped one.
+    /// 折行文本段绝不能与未折行文本段发生缓存碰撞。
     #[test]
     fn a_wrapped_run_is_not_the_unwrapped_run() {
         let mut e = engine();
@@ -1251,7 +1251,7 @@ mod tests {
     fn loading_a_malformed_font_blob_reports_no_faces_and_keeps_shaping() {
         let mut e = engine();
         assert_eq!(e.load_font_bytes(b"this is not a font".to_vec()), 0);
-        // The caches were dropped, but the system faces are still usable.
+        // 缓存已被清空，但系统字体面依然可用。
         let shaped = e.shape("ok", &TextStyle::sized(16.0));
         assert_eq!(shaped.glyphs.len(), 2);
     }
@@ -1266,14 +1266,14 @@ mod tests {
         assert!(ltr.glyphs.iter().all(|g| !g.is_rtl()));
     }
 
-    /// The glyph's `y` is the baseline of its line, relative to the top of
-    /// the text box.
+    /// 字形的 `y` 是其所在行的基线，相对于文本框顶部。
     ///
-    /// cosmic-text reports the baseline of a line as `line_y` and the glyph's
-    /// own offset within that line as `g.y` (zero for horizontal text). The
-    /// old code used `g.font_size` as if it were the ascent, which put every
-    /// glyph at the wrong height and ignored the line's position — so a
-    /// second line was drawn on top of the first.
+    ///
+    /// cosmic-text 将行基线上报为 `line_y`，将字形在该行内的偏移上报为 `g.y`
+    /// （水平文本下为零）。旧代码误将 `g.font_size` 当作 ascent，导致每个字形
+    /// 高度错误且忽略了行位置——使第二行直接画在了第一行之上。
+    ///
+    ///
     #[test]
     fn glyph_baselines_follow_their_line() {
         let mut e = engine();
@@ -1284,14 +1284,14 @@ mod tests {
             "expected six glyphs, got {}",
             shaped.glyphs.len()
         );
-        // The first line's glyphs sit above the second line's.
+        // 第一行的字形位于第二行字形上方。
         let first: Vec<f32> = shaped.glyphs[..3].iter().map(|g| g.y).collect();
         let second: Vec<f32> = shaped.glyphs[3..].iter().map(|g| g.y).collect();
         assert!(
             first.iter().all(|y| *y < second[0]),
             "the first line's baseline ({first:?}) must be above the second's ({second:?})"
         );
-        // The first line's baseline is the line's own baseline.
+        // 第一行的基线即该行自身的基线。
         assert!(
             (first[0] - shaped.first_baseline).abs() < 0.01,
             "the first glyph's baseline {} must be the line's baseline {}",
@@ -1300,7 +1300,7 @@ mod tests {
         );
     }
 
-    /// A single line's glyphs must all share one baseline.
+    /// 单行内的所有字形必须共享同一条基线。
     #[test]
     fn one_line_has_one_baseline() {
         let mut e = engine();
@@ -1314,11 +1314,11 @@ mod tests {
         );
     }
 
-    /// The wrapped lines' byte ranges must point at the right characters.
+    /// 折行后的各行字节范围必须指向正确的字符。
     ///
-    /// cosmic-text's `LayoutRun::text` is the line's content *without* the
-    /// line terminator, so accumulating the run lengths skipped every newline
-    /// and the ranges drifted by one byte per line.
+    /// cosmic-text 的 `LayoutRun::text` 是**不含**换行符的行内容，因此直接累加
+    /// run 长度曾跳过每个换行符，导致字节范围每行漂移一个字节。
+    ///
     #[test]
     fn wrapped_lines_point_at_the_right_bytes() {
         let mut e = engine();
@@ -1357,20 +1357,20 @@ mod tests {
             .map(|g| g.y)
             .find(|&y| (y - first_y).abs() > 1.0)
             .expect("wrapped text must have at least two lines");
-        // Click at origin -> start of first line
+        // 点击原点 -> 第一行起始处
         assert_eq!(
             shaped.hit_test_point(Vec2::new(0.0, first_y + 4.0), text),
             0
         );
-        // Click far right on first line -> byte offset before second line
+        // 点击第一行最右侧 -> 第二行之前的字节偏移
         let first_end = shaped.hit_test_point(Vec2::new(500.0, first_y + 4.0), text);
-        // Click on second line near start -> byte offset at or past first_end
+        // 点击第二行起始附近 -> 大于或等于 first_end 的字节偏移
         let second_start = shaped.hit_test_point(Vec2::new(0.0, second_y + 4.0), text);
         assert!(
             second_start >= first_end && first_end > 0,
             "first_end={first_end}, second_start={second_start}"
         );
-        // Click far right on second line -> end of string (or last line)
+        // 点击第二行最右侧 -> 字符串末尾（或最后一行末尾）
         let last_y = shaped.glyphs.iter().map(|g| g.y).fold(first_y, f32::max);
         let last_end = shaped.hit_test_point(Vec2::new(500.0, last_y + 4.0), text);
         assert_eq!(last_end, text.len());

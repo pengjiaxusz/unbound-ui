@@ -3,34 +3,26 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // ---------------------------------------------------------------------------
-// Opaque Core pre-pass vertex shader (docs §3.1).
+// 不透明核心预 Pass 顶点着色器（参见 `docs/architecture/gpu-renderer.md`）。
 //
-// This pass exists only to write depth for large opaque containers so that
-// the hardware Early-Z unit can reject the thousands of primitives behind
-// them. It intentionally produces no colour output: the render target masks
-// colour writes off and the shader has no outputs, so the whole pass is pure
-// depth.
+// 此 Pass 仅用于为大型不透明容器写入深度，使硬件 Early-Z 单元能够剔除其后方的
+// 数千个图元。它刻意不产生颜色输出：渲染目标屏蔽了颜色写入且着色器无输出，
+// 整个 Pass 为纯深度写入。
 //
-// Two rules make the pass *safe*, and both are load-bearing:
+// 两条核心规则确保该 Pass 的安全性，缺一不可：
 //
-//   1. **Only opaque containers get a core.** A rounded rectangle that is
-//      fully opaque, large enough to be worth the depth write and not
-//      clipped qualifies; everything else (glyphs, curves, strokes, borders,
-//      translucent panels) collapses to a degenerate quad and writes no depth
-//      at all. A core for a translucent primitive would be worse than no core
-//      at all: the depth it writes would reject the opaque pixels *behind*
-//      it, and the painter's algorithm would stop blending.
+//   1. **仅不透明容器生成核心。** 只有完全不透明、尺寸大到值得写入深度且未被
+//      裁剪的圆角矩形才符合条件；其余图元（字形、曲线、描边、边框、半透明面板）
+//      均折叠为退化四边形，完全不写深度。为半透明图元生成核心比不生成更糟：
+//      它写入的深度会剔除其后方的不透明像素，导致画家算法无法正确混合。
 //
-//   2. **The core is the box shrunk by its largest corner radius.** The
-//      rounded rim stays out of the depth buffer, so the uber pass can still
-//      blend its antialiased edge over whatever is behind the container.
+//   2. **核心是矩形按最大圆角半径向内收缩后的区域。** 圆角边缘不写入深度缓冲，
+//      从而使 uber Pass 仍能将其抗锯齿边缘混合到容器后方的内容上。
 //
-// The depth written is the primitive's own depth, so the uber pass — which
-// draws the very same primitive at the very same depth — still passes the
-// `GREATER_OR_EQUAL` test on the core, while everything behind it fails.
+// 写入的深度即为图元自身深度，因此 uber Pass 以相同深度绘制同一图元时，在核心区域
+// 仍能通过 `GREATER_OR_EQUAL` 测试，而其后方所有图元均会测试失败。
 //
-// The shader declares **no varyings**: the prepass writes depth only, so
-// interpolating colour, radii and clip data would be pure bandwidth.
+// 本着色器不声明任何 varying：预 Pass 仅写入深度，插值颜色、圆角和裁剪数据纯粹浪费带宽。
 // ---------------------------------------------------------------------------
 
 #include "common.glsl"
@@ -39,8 +31,7 @@ layout(set = 0, binding = 2, std430) readonly buffer SortedIndices {
     uint indices[];
 } u_sorted;
 
-// A container only becomes an opaque core when it is big enough for the
-// Early-Z win to outweigh the depth write: 64 x 64 logical pixels.
+// 仅当容器足够大（64 x 64 逻辑像素）使 Early-Z 收益大于深度写入开销时，才生成不透明核心。
 #define CORE_MIN_AREA 4096.0
 
 void main() {
@@ -49,11 +40,9 @@ void main() {
 
     Prim p = prims.p[u_sorted.indices[gl_InstanceIndex]];
 
-    // ---- 1. eligibility --------------------------------------------------
-    // The container has to be opaque twice over: the primitive's own opacity
-    // *and* the alpha of the theme colour it fills with. A translucent panel
-    // may not own a core, because the core would hide the content behind it
-    // that the panel is supposed to blend with.
+    // ---- 1. 资格判定 -----------------------------------------------------
+    // 容器必须满足双重不透明：图元自身不透明度与填充主题色的 alpha 均须为 1。
+    // 半透明面板不得拥有核心，否则会遮挡本应与之混合的后方内容。
     float opacity = float(p.z_opacity & 0xFFFFu) / 65535.0;
     vec4 fill = theme_color(p.fill);
     bool eligible = (p.type_flags & 0xFFu) == PRIM_ROUNDED_RECT
@@ -62,9 +51,8 @@ void main() {
         && p.clip_idx == CLIP_NONE
         && p.size.x * p.size.y >= CORE_MIN_AREA;
 
-    // ---- 2. the core rectangle -------------------------------------------
-    // `r` is the largest corner radius; the core is the box pulled in by it
-    // on every side.
+    // ---- 2. 核心矩形计算 -------------------------------------------------
+    // `r` 为最大圆角半径；核心即矩形四边各向内收缩 `r` 后的区域。
     vec4 radii = unpack_radii(p.radii_packed);
     float r = max(max(radii.x, radii.y), max(radii.z, radii.w));
     vec2 core_size = p.size - vec2(2.0 * r);
@@ -73,8 +61,7 @@ void main() {
     }
 
     if (!eligible) {
-        // A degenerate quad: every vertex lands on the same point, so the
-        // rasteriser never produces a fragment and no depth is written.
+        // 退化四边形：所有顶点落在同一点，光栅化器不会产生任何片元，也不会写入深度。
         gl_Position = vec4(0.0);
         return;
     }

@@ -1,4 +1,4 @@
-//! Collections: virtualized rows and streaming asset grids.
+//! 集合控件：虚拟化行与流式资源网格。
 
 use accesskit::Role;
 use unbound_app::AssetResidency;
@@ -17,7 +17,7 @@ pub const LIST_INFO: PageInfo = PageInfo {
     short: "Virtualized list",
     description: "One hundred thousand rows, twelve live nodes. The world only materialises the visible window; scrolling swaps entities instead of allocating.",
     crates: &["unbound-world/src/virtualize.rs", "unbound-world"],
-    docs: "docs/03-core/world.md",
+    docs: "docs/architecture/ui-and-layout.md",
     keywords: "virtual list listview scroll virtualization 100k rows windowing",
 };
 
@@ -26,7 +26,7 @@ pub const ASSETS_INFO: PageInfo = PageInfo {
     short: "Asset grid",
     description: "Asynchronous decode, a ring buffer upload queue and progressive textures. The grid keeps presenting while images arrive.",
     crates: &["unbound-asset", "unbound-asset/src/ring.rs"],
-    docs: "docs/03-core/assets.md",
+    docs: "docs/architecture/hot-reload-and-assets.md",
     keywords: "asset image decode streaming ring buffer upload grid progressive",
 };
 
@@ -82,7 +82,7 @@ pub const ASSET_EXAMPLES: &[ExampleDef] = &[ExampleDef::new(
 )
 .with_height(300.0)];
 
-/// The virtualized list.
+/// 虚拟化列表。
 pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
@@ -250,10 +250,10 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         AlignX::Start,
         AlignY::Center,
     );
-    // Scroll affordance — a real control, not decoration. The thumb can be
-    // dragged and the track clicked; the wheel zone is the *viewport* (header
-    // excluded) so the clamp reaches the last row instead of stopping 38px
-    // short. Each card owns its own zone tag and scroll offset.
+    // 滚动交互控件——真实控件而非装饰。滑块可拖拽、轨道可点击；
+    // 滚轮区域为*视口*（不含表头），以便钳制能触及最后一行而非差 38px。
+    // 每张卡片拥有独立的区域标签和滚动偏移。
+    //
     let track = Rect::new(
         list.max().x - 10.0,
         viewport.origin.y + 4.0,
@@ -381,7 +381,7 @@ fn format_count(value: usize) -> String {
     out
 }
 
-/// Streaming asset tiles.
+/// 流式资源图块。
 pub fn asset_grid(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;

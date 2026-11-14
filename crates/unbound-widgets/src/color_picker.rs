@@ -1,15 +1,11 @@
-//! The colour field: HSV state, hex / rgb / oklch text, and a picker surface.
+//! 颜色选择器（ColorPicker）：HSV 状态、hex / rgb / oklch 文本与拾色面板。
 //!
-//! Colour is stored as [`Hsva`] because that is what a picker manipulates — a
-//! hue ring, a saturation/value pad and an alpha track. Conversion to linear
-//! [`Color`] happens at the edge, so the rest of the engine keeps its single
-//! colour type.
+//! 颜色以 [`Hsva`] 存储，因为拾色器操作的是色相环、饱和度/明度面板与透明度滑轨。
+//! 在边界处转换为线性 [`Color`]，使引擎其余部分保持单一颜色类型。
 //!
-//! The emitter paints the pad, the two tracks and the preset swatches. It does
-//! **not** paint the pad's spectrum: that needs a gradient fill (P3.2) or a
-//! generated atlas. Until then the pad is a sunken surface plus the selection
-//! ring, and the caller can layer a texture underneath without touching the
-//! state machine.
+//! 发射器绘制面板、两条滑轨与预设色块。它**不**绘制面板内的连续色谱：
+//! 那需要渐变填充（P3.2）或预生成图集。在此之前，面板表现为内凹表面加选色圆环，
+//! 调用方可在其下方叠加纹理而无需改动状态机。
 
 use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yNode};
@@ -24,18 +20,18 @@ use crate::switch::CONTROL_LAYER;
 use crate::text_input::TextEditState;
 use crate::{ControlState, WidgetOutput};
 
-/// The inset between the field border and its content.
+/// 控件边框与内部内容之间的内边距。
 pub const PICKER_PADDING: f32 = 10.0;
-/// The height of the hue / alpha track.
+/// 色相 / 透明度滑轨高度。
 pub const PICKER_TRACK: f32 = 10.0;
-/// The gap between stacked parts.
+/// 堆叠部件之间的间距。
 pub const PICKER_GAP: f32 = 8.0;
-/// The radius of the picker surface.
+/// 拾色器表面圆角半径。
 pub const PICKER_RADIUS: f32 = 8.0;
-/// The preset swatch size.
+/// 预设色块尺寸。
 pub const SWATCH_SIZE: f32 = 18.0;
 
-/// Hue, saturation, value and alpha. Hue is in degrees `0..360`, the rest in
+/// 色相、饱和度、明度与透明度。色相范围为角度 `0..360`，其余为 `0..=1`。
 /// `0..=1`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hsva {
@@ -46,7 +42,7 @@ pub struct Hsva {
 }
 
 impl Hsva {
-    /// A colour, normalised into range.
+    /// 创建并归一化到合法范围的颜色。
     #[must_use]
     pub fn new(h: f32, s: f32, v: f32, a: f32) -> Self {
         Self {
@@ -57,7 +53,7 @@ impl Hsva {
         }
     }
 
-    /// The sRGB bytes, for hex formatting and tests.
+    /// sRGB 字节值，用于十六进制格式化与测试。
     #[must_use]
     pub fn to_srgb8(self) -> Srgba {
         let c = self.v * self.s;
@@ -76,14 +72,14 @@ impl Hsva {
         Srgba::new(byte(r), byte(g), byte(b), (self.a * 255.0).round() as u8)
     }
 
-    /// Convert to a linear [`Color`].
+    /// 转换为线性 [`Color`]。
     #[must_use]
     pub fn to_color(self) -> Color {
         let srgb = self.to_srgb8();
         Color::from_srgb8(srgb.r, srgb.g, srgb.b, srgb.a)
     }
 
-    /// Derive the HSV representation of a linear colour.
+    /// 从线性颜色派生 HSV 表示。
     #[must_use]
     pub fn from_color(color: Color) -> Self {
         let r = linear_to_srgb(color.r.clamp(0.0, 1.0));
@@ -109,7 +105,7 @@ impl Hsva {
         Self::new(h, s, max, color.a)
     }
 
-    /// `#rrggbb` or `#rrggbbaa` when the colour is translucent.
+    /// 格式化为 `#rrggbb`，半透明时格式化为 `#rrggbbaa`。
     #[must_use]
     pub fn hex(self) -> String {
         let srgb = self.to_srgb8();
@@ -121,20 +117,20 @@ impl Hsva {
     }
 }
 
-/// How the textual representation is written and parsed.
+/// 文本表示的格式化与解析格式。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ColorFormat {
-    /// `#rrggbb` / `#rrggbbaa`.
+    /// `#rrggbb` / `#rrggbbaa`。
     #[default]
     Hex,
-    /// `rgba(r, g, b, a)` with byte channels and a `0..=1` alpha.
+    /// `rgba(r, g, b, a)`，RGB 为字节通道，alpha 为 `0..=1`。
     Rgba,
-    /// `oklch(l c h / a)`.
+    /// `oklch(l c h / a)`。
     Oklch,
 }
 
 impl ColorFormat {
-    /// The next format in the cycle.
+    /// 循环切换至下一种格式。
     #[must_use]
     pub fn next(self) -> Self {
         match self {
@@ -144,7 +140,7 @@ impl ColorFormat {
         }
     }
 
-    /// Write `hsva` in this format.
+    /// 按当前格式输出 `hsva`。
     #[must_use]
     pub fn format(self, hsva: Hsva) -> String {
         match self {
@@ -162,7 +158,7 @@ impl ColorFormat {
         }
     }
 
-    /// Parse text in this format.
+    /// 按当前格式解析文本。
     #[must_use]
     pub fn parse(self, text: &str) -> Option<Hsva> {
         match self {
@@ -173,7 +169,7 @@ impl ColorFormat {
     }
 }
 
-/// Parse `#rgb`, `#rrggbb` or `#rrggbbaa`, with or without the hash.
+/// 解析 `#rgb`、`#rrggbb` 或 `#rrggbbaa`，可带或不带 `#` 前缀。
 #[must_use]
 pub fn parse_hex(text: &str) -> Option<Hsva> {
     let digits = text.trim().trim_start_matches('#');
@@ -203,7 +199,7 @@ pub fn parse_hex(text: &str) -> Option<Hsva> {
     Some(Hsva::from_color(Color::from_srgb8(r, g, b, a)))
 }
 
-/// Parse `rgb(r, g, b)` or `rgba(r, g, b, a)`; alpha is `0..=1` or `0..=255`.
+/// 解析 `rgb(r, g, b)` 或 `rgba(r, g, b, a)`；alpha 支持 `0..=1` 或 `0..=255`。
 #[must_use]
 pub fn parse_rgba(text: &str) -> Option<Hsva> {
     let open = text.find('(')?;
@@ -235,7 +231,7 @@ pub fn parse_rgba(text: &str) -> Option<Hsva> {
     Some(Hsva::from_color(Color::from_srgb8(r, g, b, a)))
 }
 
-/// Parse `oklch(l c h)` with an optional `/ alpha`.
+/// 解析 `oklch(l c h)`，支持可选的 `/ alpha`。
 #[must_use]
 pub fn parse_oklch(text: &str) -> Option<Hsva> {
     let open = text.find('(')?;
@@ -267,25 +263,25 @@ pub fn parse_oklch(text: &str) -> Option<Hsva> {
     Some(Hsva::from_color(lab.to_linear()))
 }
 
-/// The pure descriptor of a colour field.
+/// 颜色选择器的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColorPickerDesc {
-    /// The field rectangle.
+    /// 控件矩形。
     pub rect: Rect,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The field refuses interaction.
+    /// 是否禁用交互。
     pub disabled: bool,
-    /// The text format used by the inline editor.
+    /// 行内编辑器使用的文本格式。
     pub format: ColorFormat,
-    /// Preset theme colours shown below the tracks.
+    /// 显示在滑轨下方的预设主题色列表。
     pub swatches: Vec<Token>,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl ColorPickerDesc {
-    /// A field with the default metrics and six presets.
+    /// 创建具有默认度量与六个预设色的拾色器。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -306,32 +302,32 @@ impl ColorPickerDesc {
     }
 }
 
-/// Which sub-control a pointer gesture targets.
+/// 指针手势命中的子控件。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorPart {
-    /// The saturation / value pad.
+    /// 饱和度 / 明度面板。
     Sv,
-    /// The hue track.
+    /// 色相滑轨。
     Hue,
-    /// The alpha track.
+    /// 透明度滑轨。
     Alpha,
 }
 
-/// The measured sub-rectangles of a picker.
+/// 拾色器测量后的各子矩形。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColorPickerLayout {
-    /// The saturation / value pad.
+    /// 饱和度 / 明度面板。
     pub sv: Rect,
-    /// The hue track.
+    /// 色相滑轨。
     pub hue: Rect,
-    /// The alpha track.
+    /// 透明度滑轨。
     pub alpha: Rect,
-    /// The preset swatches.
+    /// 预设色块列表。
     pub swatches: Vec<Rect>,
 }
 
 impl ColorPickerDesc {
-    /// Compute the sub-rectangles.
+    /// 计算各子矩形布局。
     #[must_use]
     pub fn layout(&self) -> ColorPickerLayout {
         let content = self.rect.inflate(-PICKER_PADDING);
@@ -379,7 +375,7 @@ impl ColorPickerDesc {
     }
 }
 
-/// The live state of a colour field.
+/// 颜色选择器的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColorPickerState {
     hsva: Hsva,
@@ -389,7 +385,7 @@ pub struct ColorPickerState {
 }
 
 impl ColorPickerState {
-    /// A picker holding `color`.
+    /// 创建持有 `color` 的拾色器状态。
     #[must_use]
     pub fn new(color: Color) -> Self {
         Self {
@@ -400,46 +396,46 @@ impl ColorPickerState {
         }
     }
 
-    /// The current colour.
+    /// 当前颜色。
     #[must_use]
     pub fn hsva(&self) -> Hsva {
         self.hsva
     }
 
-    /// The current colour as linear RGBA.
+    /// 当前颜色的线性 RGBA 表示。
     #[must_use]
     pub fn color(&self) -> Color {
         self.hsva.to_color()
     }
 
-    /// The active gesture target.
+    /// 当前激活的手势目标。
     #[must_use]
     pub fn active(&self) -> Option<ColorPart> {
         self.active
     }
 
-    /// The text format.
+    /// 当前文本格式。
     #[must_use]
     pub fn format(&self) -> ColorFormat {
         self.format
     }
 
-    /// Replace the colour.
+    /// 替换当前颜色。
     pub fn set_hsva(&mut self, hsva: Hsva) {
         self.hsva = hsva;
     }
 
-    /// Replace the colour from a linear value.
+    /// 从线性颜色值替换当前颜色。
     pub fn set_color(&mut self, color: Color) {
         self.hsva = Hsva::from_color(color);
     }
 
-    /// Cycle the text format.
+    /// 循环切换文本格式。
     pub fn cycle_format(&mut self) {
         self.format = self.format.next();
     }
 
-    /// Map a pointer position onto a sub-control.
+    /// 将指针位置映射到子控件并更新颜色。
     pub fn set_from_pointer(&mut self, part: ColorPart, x: f32, y: f32, rect: Rect) {
         if rect.size.x <= 0.0 || rect.size.y <= 0.0 {
             return;
@@ -456,34 +452,34 @@ impl ColorPickerState {
         }
     }
 
-    /// Begin dragging a sub-control.
+    /// 开始拖拽指定子控件。
     pub fn begin(&mut self, part: ColorPart) {
         self.active = Some(part);
     }
 
-    /// End the gesture.
+    /// 结束手势拖拽。
     pub fn end(&mut self) {
         self.active = None;
     }
 
-    /// The inline text editor.
+    /// 行内文本编辑器。
     #[must_use]
     pub fn editor(&self) -> &TextEditState {
         &self.editor
     }
 
-    /// The text the caller should shape.
+    /// 调用方应排版的文本。
     #[must_use]
     pub fn text(&self) -> String {
         self.format.format(self.hsva)
     }
 
-    /// Open the text editor with the current representation.
+    /// 使用当前颜色文本表示打开编辑器。
     pub fn begin_edit(&mut self) {
         self.editor = TextEditState::with_text(self.format.format(self.hsva));
     }
 
-    /// Parse the editor's contents into the colour.
+    /// 将编辑器内容解析为颜色。
     pub fn commit_edit(&mut self) -> bool {
         let Some(hsva) = self.format.parse(self.editor.text()) else {
             return false;
@@ -493,7 +489,7 @@ impl ColorPickerState {
     }
 }
 
-/// Emit the picker chrome, tracks, presets and semantic node.
+/// 发射拾色器框架、滑轨、预设色块与语义节点。
 #[must_use]
 pub fn emit_color_picker(
     node: u64,
@@ -528,8 +524,7 @@ pub fn emit_color_picker(
         z,
     ));
 
-    // The pad and tracks. The spectrum itself is layered by the caller until
-    // the gradient fill lands, so these are deliberately flat surfaces.
+    // 面板与滑轨。在渐变填充就绪前色谱由调用方自行叠加，因此此处刻意使用纯色表面。
     primitives.push(surface(layout.sv, 4.0, Token::SURFACE_SUNKEN, z));
     primitives.push(surface(
         layout.hue,
@@ -543,8 +538,7 @@ pub fn emit_color_picker(
         Token::SURFACE_SUNKEN,
         z,
     ));
-    // Alpha checkerboard: four alternating cells read as transparency even
-    // without a texture.
+    // 透明度棋盘格：四个交替方格即使无纹理也能清晰传达透明语义。
     for index in 0..4u16 {
         let cell = layout.alpha.size.x / 4.0;
         let x = layout.alpha.origin.x + f32::from(index) * cell;

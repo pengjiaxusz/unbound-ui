@@ -1,9 +1,9 @@
-//! Painting surface for the gallery shell.
+//! 展厅外壳的绘制表面。
 //!
-//! [`Canvas`] is the only place that knows about primitive emission, clipping,
-//! hit regions and semantics. Pages call its high-level methods and never touch
-//! `GpuPrimitiveInstance` directly, which keeps the shell code readable and the
-//! event/geometry wiring in one place.
+//! [`Canvas`] 是唯一了解图元发射、裁剪、命中区域与语义的模块。
+//! 页面调用其高层方法，从不直接接触 `GpuPrimitiveInstance`，从而使外壳代码
+//! 保持清晰，并将事件/几何连线集中在一处。
+//!
 
 use accesskit::Role;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -17,7 +17,7 @@ use unbound_widgets::{ControlState, PointerPhase, WidgetCatalogId, WidgetOutput}
 use crate::gallery::{Gallery, Labels, Palette};
 use crate::target::{self, Target, ROOT};
 
-/// Horizontal alignment inside a box.
+/// 框内水平对齐方式。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AlignX {
     Start,
@@ -25,7 +25,7 @@ pub enum AlignX {
     End,
 }
 
-/// Vertical alignment inside a box.
+/// 框内垂直对齐方式。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AlignY {
     Top,
@@ -33,7 +33,7 @@ pub enum AlignY {
     Bottom,
 }
 
-/// The hover / press state of one identity.
+/// 单个标识的悬停 / 按压状态。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Visual {
     Idle,
@@ -57,7 +57,7 @@ impl Visual {
     }
 }
 
-/// What a page build produced.
+/// 单次页面构建的产出。
 pub struct CanvasOutput {
     pub regions: Vec<HitRegion>,
     pub semantics: Semantics,
@@ -65,17 +65,17 @@ pub struct CanvasOutput {
     pub scroll_zones: Vec<(Rect, u8)>,
     pub ranges: Vec<RangeZone>,
     pub glyph_count: usize,
-    /// The primitive range each control owns, `[start, end)`.
+    /// 每个控件拥有的图元范围 `[start, end)`。
     ///
-    /// A control's primitives are emitted consecutively, so the span is what
-    /// lets the upload path say *which control* a dirty slice belongs to —
-    /// and what makes a hover patch provably local.
+    /// 控件的图元是连续发射的，因此该跨度使上传路径能够识别脏切片属于*哪个控件*——
+    /// 这也是悬停修补能够被证明为局部更新的原因。
+    ///
     pub node_spans: FxHashMap<u64, (u32, u32)>,
-    /// The real widget emitters that ran this frame (coverage gate).
+    /// 本帧实际运行的真实控件发射器（覆盖率门禁）。
     pub emitted_widgets: FxHashSet<WidgetCatalogId>,
 }
 
-/// A slider-like region whose value is derived from the pointer's x position.
+/// 类似滑块的区域，其值由指针的 x 坐标推导。
 #[derive(Copy, Clone, Debug)]
 pub struct RangeZone {
     pub node: u64,
@@ -85,17 +85,17 @@ pub struct RangeZone {
     pub step: f32,
 }
 
-/// A rounded clip shape: the rectangle and its corner radii.
+/// 圆角裁剪形状：矩形及其圆角半径。
 ///
-/// This is the CPU-side twin of the two rounded slots a `GpuClipNode`
-/// carries.
+/// 这是 `GpuClipNode` 所携带的两个圆角槽位在 CPU 侧的孪生结构。
+///
 #[derive(Copy, Clone, Debug)]
 struct RoundedSlot {
     rect: Rect,
     radii: [f32; 4],
 }
 
-/// The scene painter.
+/// 场景绘制器。
 pub struct Canvas<'a> {
     pub scene: &'a mut Gallery,
     pub labels: &'a mut Labels,
@@ -114,30 +114,30 @@ pub struct Canvas<'a> {
     z: u16,
     clips: Vec<u32>,
     clip_rects: Vec<ClipRect>,
-    /// The rounded clip slots inherited by the current level.
+    /// 当前层级继承的圆角裁剪槽位。
     ///
-    /// Slot 0 is the innermost rounded ancestor, slot 1 the one above it —
-    /// the same two-slot model the shader evaluates. Keeping them in a stack
-    /// (instead of squeezing them into the single `ClipRect` of the CPU
-    /// mirror) means a plain axis-aligned clip in the middle no longer wipes
-    /// the rounded ancestor out.
+    /// 槽位 0 为最内层的圆角祖先，槽位 1 为其上一层——与着色器评估的双槽位模型一致。
+    /// 将它们保存在栈中（而非塞进 CPU 镜像的单个 `ClipRect` 中），意味着中间插入的
+    /// 普通轴对齐裁剪不再会抹除圆角祖先。
+    ///
+    ///
     rounded_stack: Vec<[Option<RoundedSlot>; 2]>,
     scale: f32,
     snap: bool,
     static_ids: u64,
-    /// The primitive range each control owns.
+    /// 每个控件拥有的图元范围。
     node_spans: FxHashMap<u64, (u32, u32)>,
-    /// The real `unbound-widgets` emitters this frame actually ran.
+    /// 本帧实际运行的真实 `unbound-widgets` 发射器。
     ///
-    /// The compile-time coverage gate maps every [`WidgetCatalogId`] to a
-    /// demo; this set is the runtime half of the proof — a demo that merely
-    /// hand-draws a rectangle never inserts its id, so the coverage test can
-    /// tell a genuine emission from a fake.
+    /// 编译期覆盖率门禁将每个 [`WidgetCatalogId`] 映射到演示；该集合则是运行时的半边证明——
+    /// 仅手绘矩形的演示绝不会插入其 ID，因此覆盖率测试能够区分真实发射与伪造。
+    ///
+    ///
     emitted_widgets: FxHashSet<WidgetCatalogId>,
 }
 
 impl<'a> Canvas<'a> {
-    /// Create a painter over an empty scene.
+    /// 在空场景上创建绘制器。
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         scene: &'a mut Gallery,
@@ -183,17 +183,17 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// The index the next primitive will occupy.
+    /// 下一个图元将占用的索引。
     ///
-    /// A hand-drawn control reads this before its first primitive and hands
-    /// it to [`record_span`](Self::record_span) after its last, which is how
-    /// it joins the span map the same way an emitted control does.
+    /// 手绘控件在发射第一个图元前读取此索引，并在最后一个图元后将其传给
+    /// [`record_span`](Self::record_span)，从而与发射器控件一样加入跨度映射表。
+    ///
     #[must_use]
     pub fn span_start(&self) -> usize {
         self.scene.primitives.len()
     }
 
-    /// Record the primitives emitted since `start` as belonging to `node`.
+    /// 将自 `start` 起发射的图元记录为属于 `node`。
     pub fn record_span(&mut self, node: u64, start: usize) {
         let end = self.scene.primitives.len();
         if end > start {
@@ -201,32 +201,32 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Whether `node` currently owns the hover highlight.
+    /// `node` 当前是否拥有悬停高亮。
     #[must_use]
     pub fn hovered(&self, node: u64) -> bool {
         self.hover == Some(node)
     }
 
-    /// Whether `node` currently owns the pressed highlight.
+    /// `node` 当前是否拥有按压高亮。
     #[must_use]
     pub fn pressed(&self, node: u64) -> bool {
         self.pressed == Some(node)
     }
 
-    /// The current paint depth.
+    /// 当前绘制深度。
     #[must_use]
     pub fn z(&self) -> u16 {
         self.z
     }
 
-    /// Reserve the next paint depth.
+    /// 预留下一个绘制深度。
     pub fn next_z(&mut self) -> u16 {
         let z = self.z;
         self.z = self.z.saturating_add(1);
         z
     }
 
-    /// Snap a logical coordinate to the physical pixel grid.
+    /// 将逻辑坐标对齐到物理像素网格。
     #[must_use]
     pub fn snap_value(&self, value: f32) -> f32 {
         if self.snap {
@@ -236,38 +236,38 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Physical pixels per logical unit.
+    /// 每逻辑单位对应的物理像素数。
     ///
-    /// Geometry that must stay exactly one physical pixel thick (the window
-    /// control strokes) needs this to convert its line width.
+    /// 必须保持精确 1 物理像素粗细的几何体（如窗口控件描边）需要此值来转换线宽。
+    ///
     #[must_use]
     pub fn scale(&self) -> f32 {
         self.scale
     }
 
-    /// The current clip rectangle, if any.
+    /// 当前裁剪矩形（如有）。
     #[must_use]
     pub fn clip_rect(&self) -> Option<Rect> {
         self.clip_rects.last().map(|clip| clip.rect)
     }
 
-    /// The current clip shape, including its rounded corners.
+    /// 当前裁剪形状（含圆角）。
     #[must_use]
     pub fn clip_shape(&self) -> Option<ClipRect> {
         self.clip_rects.last().copied()
     }
 
-    /// Start a clipped region. Clips intersect with the current one.
+    /// 开启一个裁剪区域。新裁剪会与当前裁剪求交。
     pub fn begin_clip(&mut self, rect: Rect) {
         self.push_clip(rect, None);
     }
 
-    /// Start a clip bounded by a rounded rectangle.
+    /// 开启一个由圆角矩形界定的裁剪区域。
     ///
-    /// The uber shader evaluates two rounded parent slots, so a nested
-    /// `begin_clip` (an axis-aligned card) and `begin_clip_rounded` (a hero
-    /// surface inside it) keep both shapes instead of degenerating to a
-    /// scissor rectangle.
+    /// 超级着色器（uber shader）会评估两个圆角父级槽位，因此嵌套的 `begin_clip`
+    /// （轴对齐卡片）与 `begin_clip_rounded`（其内部的首屏表面）可保留两种形状，
+    /// 而不会退化为普通裁剪矩形。
+    ///
     pub fn begin_clip_rounded(&mut self, rect: Rect, radius: f32) {
         self.push_clip(rect, Some(radius));
     }
@@ -285,18 +285,18 @@ impl<'a> Canvas<'a> {
             combined.max().y,
         ]);
 
-        // The rounded ancestors are kept in their own stack, not squeezed
-        // into the single CPU mirror rectangle.
+        // 圆角祖先保存在各自独立的栈中，而非塞进单个 CPU 镜像矩形。
         //
-        // The old code inherited the parent's radii through `ClipRect`, and a
-        // plain axis-aligned clip in the middle reset them to zero — so a
-        // third level lost the rounded shape of the first one entirely. The
-        // GPU then fell back to a scissor rectangle and the rounded card grew
-        // square corners.
+        // 旧代码通过 `ClipRect` 继承父级圆角半径，中间插入普通轴对齐裁剪会将其重置为零——
+        // 导致第三层完全丢失第一层的圆角形状。GPU 随后回退为裁剪矩形，圆角卡片便长出了直角。
         //
-        // Slot 0 is the innermost rounded ancestor, slot 1 the one above it:
-        // exactly what the shader's two-slot mask evaluates, and the same
-        // order `unbound-world` uses.
+        //
+        //
+        //
+        //
+        // 槽位 0 为最内层圆角祖先，槽位 1 为其上一层：
+        // 与着色器的双槽位遮罩评估完全一致，也与 `unbound-world` 使用的顺序相同。
+        //
         let mut slots = self.rounded_stack.last().copied().unwrap_or([None, None]);
         if let Some(value) = radius {
             if value > 0.0 {
@@ -353,7 +353,7 @@ impl<'a> Canvas<'a> {
         *packed = unbound_math::f16::pack_radii(radii);
     }
 
-    /// End the innermost clip.
+    /// 结束最内层裁剪。
     pub fn end_clip(&mut self) {
         self.clips.pop();
         self.clip_rects.pop();
@@ -374,7 +374,7 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Resolve the hover / press state of an identity.
+    /// 解析某个标识的悬停 / 按压状态。
     #[must_use]
     pub fn visual(&self, node: u64, disabled: bool) -> Visual {
         if disabled {
@@ -389,13 +389,13 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Whether an identity has keyboard focus.
+    /// 某个标识是否拥有键盘焦点。
     #[must_use]
     pub fn focused(&self, node: u64) -> bool {
         self.focused == Some(node)
     }
 
-    /// Paint a rounded rectangle and return its depth.
+    /// 绘制圆角矩形并返回其深度。
     #[allow(clippy::too_many_arguments)]
     pub fn rect(
         &mut self,
@@ -407,8 +407,8 @@ impl<'a> Canvas<'a> {
         shadow: f32,
     ) -> u16 {
         let z = self.next_z();
-        // Snap both edges, never the origin and the size independently: the
-        // latter can round a 1.0-wide hairline to zero.
+        // 对两条边同时对齐，绝不分别对原点和尺寸取整：后者可能把 1.0 宽的细线舍入为零。
+        //
         let x0 = self.snap_value(rect.origin.x);
         let y0 = self.snap_value(rect.origin.y);
         let x1 = self.snap_value(rect.max().x);
@@ -430,12 +430,12 @@ impl<'a> Canvas<'a> {
         z
     }
 
-    /// Paint a rounded rectangle at a given opacity.
+    /// 以指定不透明度绘制圆角矩形。
     ///
-    /// The primitive exists in every state; only its opacity changes. That
-    /// keeps a control's primitive count constant, which is what lets a
-    /// state change be repaired by patching one slice of the pool instead of
-    /// re-uploading the whole scene.
+    /// 该图元在所有状态下都存在，变化的只是其不透明度。这使控件的图元数量保持恒定，
+    /// 从而让状态切换可以通过修补缓冲池中的单个切片来完成，而无需全量重传场景。
+    ///
+    ///
     pub fn rect_faded(&mut self, rect: Rect, radius: f32, fill: u16, opacity: f32) -> u16 {
         let start = self.scene.primitives.len();
         let z = self.rect(rect, radius, fill, 0, 0.0, 0.0);
@@ -443,11 +443,11 @@ impl<'a> Canvas<'a> {
         z
     }
 
-    /// Paint a stroke at a given opacity.
+    /// 以指定不透明度绘制描边。
     ///
-    /// The companion of [`rect_faded`](Self::rect_faded) for the keyboard
-    /// focus ring: the ring is always emitted, and losing focus fades it out
-    /// instead of removing a primitive.
+    /// 键盘焦点环对应的 [`rect_faded`](Self::rect_faded) 伴生方法：
+    /// 焦点环始终发射，失去焦点时仅将其淡出，而非移除图元。
+    ///
     pub fn stroke_faded(
         &mut self,
         rect: Rect,
@@ -462,7 +462,7 @@ impl<'a> Canvas<'a> {
         z
     }
 
-    /// Set the opacity of the primitive at `start`.
+    /// 设置 `start` 处图元的不透明度。
     fn fade(&mut self, start: usize, opacity: f32) {
         if let Some(primitive) = self.scene.primitives.get_mut(start) {
             primitive.z_and_opacity = unbound_gpu::data::GpuPrimitiveInstance::pack_z_opacity(
@@ -472,7 +472,7 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Paint a shadow-only rounded rectangle.
+    /// 绘制仅含阴影的圆角矩形。
     pub fn shadow(&mut self, rect: Rect, radius: f32, blur: f32) -> u16 {
         let z = self.next_z();
         let start = self.scene.primitives.len();
@@ -493,7 +493,7 @@ impl<'a> Canvas<'a> {
         z
     }
 
-    /// Paint a hollow rounded rectangle.
+    /// 绘制空心圆角矩形。
     pub fn stroke(&mut self, rect: Rect, radius: f32, color: u16, width: f32) -> u16 {
         let z = self.next_z();
         let start = self.scene.primitives.len();
@@ -510,12 +510,12 @@ impl<'a> Canvas<'a> {
         z
     }
 
-    /// Paint a single-line label inside `rect`.
+    /// 在 `rect` 内绘制单行标签。
     ///
-    /// The vertical placement follows the **baseline**, not the run's ink
-    /// box: two labels of the same size have to share a baseline, otherwise a
-    /// row of buttons shows `"Light"` a couple of pixels higher than
-    /// `"Dark"` — the ink box depends on the string's own tallest glyph.
+    /// 垂直放置遵循**基线（baseline）**而非文本段的墨水框（ink box）：
+    /// 两个同字号标签必须共享同一基线，否则一排按钮中的 `"Light"` 会比 `"Dark"`
+    /// 高出几个像素——因为墨水框取决于字符串自身最高的字形。
+    ///
     #[allow(clippy::too_many_arguments)]
     pub fn text(
         &mut self,
@@ -537,11 +537,11 @@ impl<'a> Canvas<'a> {
         ink
     }
 
-    /// Shape a run of text at its aligned position **without** painting it.
+    /// 在对齐位置塑形一段文本，**不**进行绘制。
     ///
-    /// The standard controls paint their own labels, so the shell needs the
-    /// shaped glyphs at the exact position the painter would have used — the
-    /// baseline, not the ink box, decides where a line sits.
+    /// 标准控件自行绘制标签，因此外壳需要精确位于绘制器所用位置上的已塑形字形——
+    /// 由基线而非墨水框决定行高位置。
+    ///
     #[allow(clippy::too_many_arguments)]
     pub fn layout_text(
         &mut self,
@@ -557,16 +557,16 @@ impl<'a> Canvas<'a> {
             AlignX::Center => rect.origin.x + (rect.size.x - metrics.width) * 0.5,
             AlignX::End => rect.max().x - metrics.width,
         };
-        // The line box is what gets aligned: its top is the top of the box,
-        // its bottom the bottom of the box, and its middle the middle.
+        // 参与对齐的是行框：其顶部对应框顶，底部对应框底，中心对应框中。
+        //
         let y = match align_y {
             AlignY::Top => rect.origin.y,
             AlignY::Center => rect.origin.y + (rect.size.y - metrics.line_height()) * 0.5,
             AlignY::Bottom => rect.max().y - metrics.line_height(),
         };
-        // Snap the run origin, not every glyph: the pen advances are integral
-        // at phase 0, so one snapped origin keeps the whole line on the grid
-        // without changing letter spacing.
+        // 对齐运行段原点而非每个字形：在相位 0 下笔触步进为整数，
+        // 因此对齐一个原点即可在不改变字距的前提下让整行落在像素网格上。
+        //
         let x = self.snap_value(x);
         let y = self.snap_value(y);
         let quads = self.labels.layout(text, Vec2::new(x, y), size);
@@ -574,11 +574,11 @@ impl<'a> Canvas<'a> {
         (quads, ink)
     }
 
-    /// Shape a styled run at its aligned position without painting it.
+    /// 在对齐位置塑形带样式的文本段，不进行绘制。
     ///
-    /// Same alignment rules as [`Self::layout_text`], but with an explicit
-    /// weight, slant and family: the font inspector's whole point is to show
-    /// the difference between them.
+    /// 与 [`Self::layout_text`] 采用相同的对齐规则，但显式指定字重、倾斜与字体族：
+    /// 字体检查器的核心目的正是展示它们之间的差异。
+    ///
     #[allow(clippy::too_many_arguments)]
     pub fn layout_text_styled(
         &mut self,
@@ -606,7 +606,7 @@ impl<'a> Canvas<'a> {
         (quads, ink)
     }
 
-    /// Paint a styled single-line label inside `rect`.
+    /// 在 `rect` 内绘制带样式的单行标签。
     #[allow(clippy::too_many_arguments)]
     pub fn text_styled(
         &mut self,
@@ -622,10 +622,10 @@ impl<'a> Canvas<'a> {
         ink
     }
 
-    /// The visual state of a standard control.
+    /// 标准控件的视觉状态。
     ///
-    /// The shell already resolved hover, press and focus from the router;
-    /// the control layer only needs them in the shape it understands.
+    /// 外壳已从路由器解析出悬停、按压与焦点；控件层只需按其理解的形式接收即可。
+    ///
     #[must_use]
     pub fn control_state(&self, node: u64, disabled: bool, selected: bool) -> ControlState {
         let phase = if disabled {
@@ -645,13 +645,13 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Paint the output of a standard control.
+    /// 绘制标准控件的输出。
     ///
-    /// The control's primitives are rebased onto the canvas paint depth —
-    /// keeping their relative order — and clipped like every other
-    /// primitive. Its hit region and semantic node are registered with the
-    /// canvas bookkeeping, so the shell keeps a single source of truth for
-    /// the focus order.
+    /// 控件的图元会重定基准到画布绘制深度——保持其相对顺序——并像其他图元一样接受裁剪。
+    /// 其命中区域与语义节点会注册到画布账本中，使外壳在焦点顺序上保持单一事实来源。
+    ///
+    ///
+    ///
     pub fn control_output(&mut self, node: u64, output: &WidgetOutput) {
         let start = self.scene.primitives.len();
         if node != 0 {
@@ -690,35 +690,35 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Paint a real component's output and record that its emitter ran.
+    /// 绘制真实组件的输出并记录其发射器已运行。
     ///
-    /// This is the verified counterpart of [`control_output`](Self::control_output):
-    /// the demo names the [`WidgetCatalogId`] it is emitting, so the frame's
-    /// `emitted_widgets` set proves the genuine `unbound-widgets` emitter ran
-    /// rather than a hand-drawn stand-in.
+    /// 这是 [`control_output`](Self::control_output) 的已验证版本：
+    /// 演示需指明其发射的 [`WidgetCatalogId`]，因此帧中的 `emitted_widgets` 集合能证明
+    /// 确实运行了真实的 `unbound-widgets` 发射器而非手绘替身。
+    ///
     pub fn widget_output(&mut self, id: WidgetCatalogId, node: u64, output: &WidgetOutput) {
         self.emitted_widgets.insert(id);
         self.control_output(node, output);
     }
 
-    /// The real component emitters that ran this frame.
+    /// 本帧实际运行的真实组件发射器。
     #[must_use]
     pub fn emitted_widgets(&self) -> &FxHashSet<WidgetCatalogId> {
         &self.emitted_widgets
     }
 
-    /// Read-only access to the live semantic tree built so far this frame.
+    /// 对本帧截至目前已构建的实时语义树的只读访问。
     #[must_use]
     pub fn semantics(&self) -> &Semantics {
         &self.semantics
     }
 
-    /// Shape a single-line label into glyph quads for a component emitter.
+    /// 为组件发射器将单行标签塑形为字形四边形。
     pub fn shape(&mut self, text: &str, origin: Vec2, size: f32) -> Vec<GlyphQuad> {
         self.labels.layout(text, origin, size)
     }
 
-    /// Paint a wrapped paragraph inside `rect`.
+    /// 在 `rect` 内绘制自动换行段落。
     pub fn text_wrapped(&mut self, text: &str, rect: Rect, size: f32, color: u16) -> Rect {
         let x = self.snap_value(rect.origin.x);
         let y = self.snap_value(rect.origin.y);
@@ -736,7 +736,7 @@ impl<'a> Canvas<'a> {
         ink
     }
 
-    /// Paint glyphs that were laid out elsewhere in scene space.
+    /// 在场景空间中绘制已在别处完成布局的字形。
     pub fn glyphs(&mut self, quads: &[GlyphQuad], color: u16) {
         let z = self.next_z();
         let start = self.scene.primitives.len();
@@ -747,7 +747,7 @@ impl<'a> Canvas<'a> {
         self.apply_clip(start);
     }
 
-    /// Paint a quadratic Bézier segment.
+    /// 绘制二次贝塞尔曲线段。
     pub fn curve(&mut self, p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], width: f32, color: u16) {
         let z = self.next_z();
         let start = self.scene.primitives.len();
@@ -755,7 +755,7 @@ impl<'a> Canvas<'a> {
         self.apply_clip(start);
     }
 
-    /// A hairline divider.
+    /// 细线分隔符。
     pub fn divider(&mut self, x: f32, y: f32, width: f32) {
         self.rect(
             Rect::new(x, y, width, 1.0),
@@ -767,7 +767,7 @@ impl<'a> Canvas<'a> {
         );
     }
 
-    /// Register a clickable region plus its semantic node.
+    /// 注册可点击区域及其语义节点。
     #[allow(clippy::too_many_arguments)]
     pub fn control(
         &mut self,
@@ -782,7 +782,7 @@ impl<'a> Canvas<'a> {
         self.control_on_layer(node, rect, role, label, cursor, disabled, selected, 1);
     }
 
-    /// Register a clickable region on an explicit portal layer.
+    /// 在显式传送门（portal）层上注册可点击区域。
     #[allow(clippy::too_many_arguments)]
     pub fn control_on_layer(
         &mut self,
@@ -812,7 +812,7 @@ impl<'a> Canvas<'a> {
         self.a11y_nodes.push(node);
     }
 
-    /// Register a non-interactive semantic node.
+    /// 注册非交互式语义节点。
     pub fn semantic(&mut self, role: Role, label: impl Into<String>, rect: Rect) -> u64 {
         self.static_ids += 1;
         let node = 0x00f0_0000_0000_0000 | self.static_ids;
@@ -823,7 +823,7 @@ impl<'a> Canvas<'a> {
         node
     }
 
-    /// Register a heading semantic node.
+    /// 注册标题语义节点。
     pub fn heading(&mut self, label: impl Into<String>, rect: Rect, level: u32) -> u64 {
         self.static_ids += 1;
         let node = 0x00f0_0000_0000_0000 | self.static_ids;
@@ -834,7 +834,7 @@ impl<'a> Canvas<'a> {
         node
     }
 
-    /// Register a demo part that is not a standard widget.
+    /// 注册非标准控件的演示部件。
     #[allow(clippy::too_many_arguments)]
     pub fn demo_control(
         &mut self,
@@ -859,18 +859,18 @@ impl<'a> Canvas<'a> {
         node
     }
 
-    /// Glyphs emitted so far.
+    /// 截至目前发射的字形。
     #[must_use]
     pub fn glyph_count(&self) -> usize {
         self.glyphs_emitted
     }
 
-    /// Declare a region whose wheel gestures are handled by a demo.
+    /// 声明一个由演示处理滚轮手势的区域。
     pub fn scroll_zone(&mut self, rect: Rect, tag: u8) {
         self.scroll_zones.push((rect, tag));
     }
 
-    /// Declare a horizontal range whose value follows the pointer.
+    /// 声明一个值随指针水平位置变化的水平范围。
     pub fn range(&mut self, node: u64, rect: Rect, min: f32, max: f32, step: f32) {
         self.ranges.push(RangeZone {
             node,
@@ -881,7 +881,7 @@ impl<'a> Canvas<'a> {
         });
     }
 
-    /// Finish painting and hand the interaction data back.
+    /// 完成绘制并交回交互数据。
     #[must_use]
     pub fn finish(mut self) -> CanvasOutput {
         self.semantics.set_children(ROOT, &self.a11y_nodes);
@@ -899,7 +899,7 @@ impl<'a> Canvas<'a> {
     }
 }
 
-/// Ink bounds of a glyph run.
+/// 字形运行段的墨水边界。
 #[must_use]
 pub fn quads_bounds(quads: &[GlyphQuad]) -> Option<Rect> {
     let first = quads.first()?;
@@ -915,7 +915,7 @@ mod tests {
     use super::*;
     use crate::gallery::{palette, Gallery, Labels};
 
-    /// A canvas over an empty scene.
+    /// 基于空场景的画布。
     fn canvas<'a>(
         scene: &'a mut Gallery,
         labels: &'a mut Labels,
@@ -934,7 +934,7 @@ mod tests {
         )
     }
 
-    /// The corner radii of the clip node at `index`.
+    /// `index` 处裁剪节点的圆角半径。
     fn radii_of(node: &GpuClipNode, slot: usize) -> [f32; 4] {
         let packed = if slot == 0 {
             node.radii_0
@@ -944,7 +944,7 @@ mod tests {
         unbound_math::f16::unpack_radii(packed)
     }
 
-    /// The rounded rectangle of the clip node at `index`.
+    /// `index` 处裁剪节点的圆角矩形。
     fn rounded_of(node: &GpuClipNode, slot: usize) -> [f32; 4] {
         if slot == 0 {
             node.rounded_clip_0

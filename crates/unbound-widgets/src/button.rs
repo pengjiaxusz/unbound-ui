@@ -1,20 +1,17 @@
-//! The flat button: the first standard control.
+//! 扁平按钮（Button）：首个标准控件。
 //!
-//! A button is three pieces and nothing more:
+//! 按钮仅由三部分组成：
 //!
-//! * a pure data descriptor [`ButtonDesc`],
-//! * a visual state derived from the pointer router ([`ControlState`]),
-//! * a pure emitter [`emit_button`]: `(descriptor, state) -> primitives + hit
-//!   region + semantic node`.
+//! * 纯数据描述符 [`ButtonDesc`]，
+//! * 派生自指针路由器的视觉状态（[`ControlState`]），
+//! * 纯发射器 [`emit_button`]：`(descriptor, state) -> 图元 + 命中区域 + 语义节点`。
 //!
-//! The interaction transient (hover / pressed) never lands in a `bool`
-//! field: it is derived from the router on every frame, so "press, drag out,
-//! release" cannot leave two states disagreeing with each other.
+//! 交互瞬态（悬停 / 按下）绝不落入 `bool` 字段：每帧从路由器派生，
+//! 因此“按下、拖出、释放”不会导致两个状态相互冲突。
 //!
-//! The primitives are layered with [`SubElement`]
-//! (`Shadow -> Background -> Content -> Border -> FocusRing`) rather than
-//! with hand-tuned `z` offsets, so the 64-bit sort key decides the draw
-//! order.
+//! 图元通过 [`SubElement`] 分层
+//! （`Shadow -> Background -> Content -> Border -> FocusRing`），而非手动调整
+//! `z` 偏移，因此由 64 位排序键决定绘制顺序。
 
 use accesskit::Role;
 use slotmap::Key as _;
@@ -33,37 +30,34 @@ use crate::image::IconDesc;
 use crate::primitive::focus_ring;
 use crate::{ControlState, PointerPhase, WidgetDesc, WidgetOutput};
 
-/// The button label font size. The glyph warm-up must use the same size,
-/// otherwise the digits are rasterised twice.
+/// 按钮标签字体大小。字形预热必须使用相同字号，否则数字会被光栅化两次。
 pub const BUTTON_FONT_SIZE: f32 = 14.0;
 
-/// The button corner radius.
+/// 按钮圆角半径。
 pub const BUTTON_RADIUS: f32 = 10.0;
 
-/// The gap between the label and a leading / trailing icon.
+/// 标签与前置/后置图标之间的间距。
 pub const BUTTON_CONTENT_GAP: f32 = 8.0;
 
-/// The diameter of the loading indicator.
+/// 加载指示器直径。
 pub const BUTTON_LOADING_SIZE: f32 = 12.0;
 
-/// The height of a button, in logical pixels.
+/// 按钮高度（逻辑像素）。
 ///
-/// The size is metadata: a caller that has already solved the layout keeps
-/// its rectangle, but a toolbar can ask for the standard height instead of
-/// hard-coding a number.
+/// 尺寸属于元数据：已完成布局的调用方保留自身矩形，但工具栏可请求标准高度而非硬编码数值。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ButtonSize {
-    /// A compact action, 28 px tall.
+    /// 紧凑操作按钮，高 28 px。
     Sm,
-    /// The standard action, 36 px tall.
+    /// 标准操作按钮，高 36 px。
     #[default]
     Md,
-    /// A prominent action, 44 px tall.
+    /// 醒目操作按钮，高 44 px。
     Lg,
 }
 
 impl ButtonSize {
-    /// The control height for this size.
+    /// 该尺寸对应的控件高度。
     #[must_use]
     pub const fn height(self) -> f32 {
         match self {
@@ -74,42 +68,37 @@ impl ButtonSize {
     }
 }
 
-/// The UI layer a button's hit region lives in (`0` canvas, `1` UI, `2..`
-/// portals).
+/// 按钮命中区域所在的 UI 层级（`0` 画布、`1` UI、`2..` 浮层）。
 pub const BUTTON_LAYER: u8 = 1;
 
-/// The blur radius of the resolved shadow. `PrimType::Shadow` only paints the
-/// shadow, never the fill.
+/// 解析后阴影的模糊半径。`PrimType::Shadow` 仅绘制阴影，不绘制填充。
 const BUTTON_SHADOW: f32 = 16.0;
 
-/// How far the focus ring grows outside the button.
+/// 焦点环向按钮外侧延伸的距离。
 const FOCUS_RING_GAP: f32 = 3.0;
 
-/// The visual role of a button.
+/// 按钮的视觉角色。
 ///
-/// The variant decides *which* colour slots a button paints with; the theme
-/// decides what those slots look like. Adding a variant therefore never
-/// touches a single primitive.
+/// 变体决定按钮使用*哪些*颜色槽位；主题决定这些槽位的外观。因此新增变体无需改动任何图元。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ButtonVariant {
-    /// The call to action: a filled, high-contrast surface.
+    /// 主行动号召：实心高对比度表面。
     #[default]
     Primary,
-    /// A supporting action: an outlined surface.
+    /// 辅助操作：描边表面。
     Secondary,
-    /// A low-emphasis action: no fill, no border.
+    /// 低强调操作：无填充、无边框。
     Subtle,
-    /// A compact, glyph-only action.
+    /// 紧凑的纯图标操作。
     Icon,
-    /// A button painted on top of a hero gradient.
+    /// 绘制在主视觉渐变背景上的按钮。
     OnHero,
 }
 
 impl ButtonVariant {
-    /// The colour slots this variant paints with.
+    /// 此变体绘制使用的颜色槽位。
     ///
-    /// Every state has its own slot, so hovering a button never rewrites
-    /// instance data — it only changes which colour the slot resolves to.
+    /// 每种状态都有独立槽位，因此悬停按钮不会重写实例数据——仅改变槽位解析出的颜色。
     #[must_use]
     pub fn tokens(self) -> ButtonTokens {
         match self {
@@ -167,72 +156,69 @@ impl ButtonVariant {
     }
 }
 
-/// The colour slots a button paints with.
+/// 按钮绘制使用的颜色槽位。
 ///
-/// The emitter only knows slots; the theme decides the colours. Every state
-/// occupies its own slot of the flat colour table, so a theme switch — and a
-/// hover — re-uploads no primitive at all.
+/// 发射器只认槽位，主题决定颜色。每种状态在扁平颜色表中占据独立槽位，
+/// 因此切换主题与悬停状态均无需重新上传任何图元。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ButtonTokens {
-    /// The resting fill.
+    /// 静息状态填充色。
     pub fill: Token,
-    /// The fill while hovered.
+    /// 悬停状态填充色。
     pub fill_hover: Token,
-    /// The fill while pressed.
+    /// 按下状态填充色。
     pub fill_pressed: Token,
-    /// The fill while disabled.
+    /// 禁用状态填充色。
     pub fill_disabled: Token,
-    /// The outline.
+    /// 轮廓线颜色。
     pub border: Token,
-    /// The label colour.
+    /// 标签文字颜色。
     pub label: Token,
-    /// The label colour while disabled.
+    /// 禁用状态下的标签文字颜色。
     pub label_disabled: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环颜色。
     pub focus_ring: Token,
 }
 
-/// The pure data descriptor of a button.
+/// 按钮的纯数据描述符。
 ///
-/// No method mutates it, and it carries no closure and no type erasure: this
-/// is the shape a `RawNodeDesc` converges to, and the second control only has
-/// to write the same kind of struct.
+/// 无任何可变方法，不携带闭包或类型擦除：这是 `RawNodeDesc` 收敛的目标形态，
+/// 第二个控件只需编写同类结构体即可。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ButtonDesc {
-    /// The button rectangle.
+    /// 按钮矩形区域。
     pub rect: Rect,
-    /// The label.
+    /// 按钮标签文本。
     pub label: String,
-    /// The corner radius.
+    /// 圆角半径。
     pub radius: f32,
-    /// The label font size.
+    /// 标签字号。
     pub font_size: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
-    /// The visual role.
+    /// 视觉角色。
     pub variant: ButtonVariant,
-    /// The standard size (28 / 36 / 44 px).
+    /// 标准尺寸（28 / 36 / 44 px）。
     pub size: ButtonSize,
-    /// An icon painted next to the label.
+    /// 绘制在标签旁的图标。
     pub icon: Option<IconDesc>,
-    /// Paint the icon after the label instead of before it.
+    /// 将图标绘制在标签之后而非之前。
     pub icon_trailing: bool,
-    /// Show the loading indicator and refuse interaction.
+    /// 显示加载指示器并禁用交互。
     pub loading: bool,
-    /// The analytic drop-shadow blur. `0.0` paints no shadow at all.
+    /// 解析投影模糊半径。`0.0` 表示不绘制阴影。
     pub shadow: f32,
-    /// Centre the label on its ink bounds.
+    /// 按墨水边界居中标签。
     ///
-    /// A caller that already positioned the glyph run (a page that shaped it
-    /// inside the button rectangle) clears this, so the emitter paints the
-    /// run exactly where it was measured instead of re-centring it.
+    /// 若调用方已自行定位字形串（例如已在按钮矩形内完成排版），可清除此标记，
+    /// 使发射器按测量位置原样绘制，而不再重新居中。
     pub centre_label: bool,
-    /// How far the focus ring grows outside the button.
+    /// 焦点环向按钮外侧延伸的距离。
     pub focus_ring_gap: f32,
 }
 
 impl ButtonDesc {
-    /// A primary button with the default metrics.
+    /// 使用默认度量的主按钮。
     #[must_use]
     pub fn new(rect: Rect, label: impl Into<String>) -> Self {
         Self {
@@ -252,78 +238,76 @@ impl ButtonDesc {
         }
     }
 
-    /// The same button with another label: a click counter only rebuilds the
-    /// descriptor, never the identity.
+    /// 修改标签的同款按钮：点击计数器只需重建描述符，无需重建标识。
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
     }
 
-    /// The same button in another visual role.
+    /// 切换视觉角色的同款按钮。
     #[must_use]
     pub fn with_variant(mut self, variant: ButtonVariant) -> Self {
         self.variant = variant;
         self
     }
 
-    /// The same button at another standard size.
+    /// 切换标准尺寸的同款按钮。
     #[must_use]
     pub fn with_size(mut self, size: ButtonSize) -> Self {
         self.size = size;
         self
     }
 
-    /// The same button with an icon next to its label.
+    /// 在标签旁附加图标的同款按钮。
     #[must_use]
     pub fn with_icon(mut self, icon: IconDesc) -> Self {
         self.icon = Some(icon);
         self
     }
 
-    /// Paint the icon after the label instead of before it.
+    /// 将图标置于标签之后而非之前。
     #[must_use]
     pub fn with_icon_trailing(mut self, trailing: bool) -> Self {
         self.icon_trailing = trailing;
         self
     }
 
-    /// The same button in its loading state: no clicks, an indicator on the
-    /// left.
+    /// 处于加载状态的同款按钮：不可点击，左侧显示指示器。
     #[must_use]
     pub fn with_loading(mut self, loading: bool) -> Self {
         self.loading = loading;
         self
     }
 
-    /// The same button with another shadow blur (`0.0` paints none).
+    /// 修改阴影模糊半径的同款按钮（`0.0` 表示无阴影）。
     #[must_use]
     pub fn with_shadow(mut self, shadow: f32) -> Self {
         self.shadow = shadow;
         self
     }
 
-    /// Paint the label where the caller laid it out instead of re-centring it.
+    /// 按调用方布局位置绘制标签，不重新居中。
     #[must_use]
     pub fn with_centre_label(mut self, centre: bool) -> Self {
         self.centre_label = centre;
         self
     }
 
-    /// The same button with another focus-ring gap.
+    /// 修改焦点环外扩间距的同款按钮。
     #[must_use]
     pub fn with_focus_ring_gap(mut self, gap: f32) -> Self {
         self.focus_ring_gap = gap;
         self
     }
 
-    /// The colour slots this button paints with.
+    /// 此按钮绘制使用的颜色槽位。
     #[must_use]
     pub fn tokens(&self) -> ButtonTokens {
         self.variant.tokens()
     }
 
-    /// The indicator rectangle: left-aligned and vertically centred.
+    /// 指示器矩形：左对齐且垂直居中。
     #[must_use]
     pub fn loading_rect(&self) -> Rect {
         Rect::new(
@@ -335,12 +319,11 @@ impl ButtonDesc {
     }
 }
 
-/// Fold a keyboard activation into the visual state.
+/// 将键盘激活折叠进视觉状态。
 ///
-/// The pointer router never sees Space or Enter. A focused button activated
-/// with either key must paint exactly like a pointer press, so the caller
-/// routes the key through here before it emits the button; the emitter then
-/// only has to honour [`PointerPhase::Pressed`].
+/// 指针路由器不会接收 Space 或 Enter。用这两个键激活聚焦按钮时，
+/// 其绘制效果必须与指针按下完全一致，因此调用方在发射按钮前先经由此处路由按键；
+/// 发射器只需响应 [`PointerPhase::Pressed`] 即可。
 #[must_use]
 pub fn keyboard_activation(state: ControlState, space_or_enter_down: bool) -> ControlState {
     if space_or_enter_down && state.focused && !state.disabled {
@@ -353,15 +336,14 @@ pub fn keyboard_activation(state: ControlState, space_or_enter_down: bool) -> Co
     }
 }
 
-/// A button bound to an identity.
+/// 绑定了身份标识的按钮。
 ///
-/// The descriptor is pure data and therefore identity-free; this wrapper is
-/// what the harness and the scene collector work with.
+/// 描述符是纯数据，不含标识；测试工具与场景收集器操作的是此包装类型。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ButtonWidget {
-    /// The widget identity.
+    /// 控件标识。
     pub node: u64,
-    /// The descriptor.
+    /// 按钮描述符。
     pub desc: ButtonDesc,
 }
 
@@ -379,11 +361,9 @@ impl WidgetDesc for ButtonWidget {
     }
 }
 
-/// Register a button identity in the [`UiWorld`] and return its [`NodeId`].
+/// 在 [`UiWorld`] 中注册按钮标识并返回其 [`NodeId`]。
 ///
-/// Only the identity and the layout intent are registered here: the first
-/// step sizes the button from the descriptor directly, the full layout
-/// engine comes later.
+/// 此处仅注册标识与布局意图：第一步直接按描述符确定按钮尺寸，完整布局引擎留待后续。
 pub fn insert_button(world: &mut UiWorld, rect: Rect) -> NodeId {
     let desc = RawNodeDesc::container()
         .size(rect.width(), rect.height())
@@ -393,20 +373,16 @@ pub fn insert_button(world: &mut UiWorld, rect: Rect) -> NodeId {
     world.insert(root, desc, core::panic::Location::caller())
 }
 
-/// The bridge between a [`NodeId`] and the `u64` identity the input and
-/// semantic layers share.
+/// [`NodeId`] 与输入层、语义层共享的 `u64` 标识之间的桥梁。
 #[must_use]
 pub fn node_u64(node: NodeId) -> u64 {
     node.data().as_ffi()
 }
 
-/// The pure emitter: the same input always yields the same primitives, hit
-/// region and semantic node.
+/// 纯发射器：相同输入始终产出相同的图元、命中区域与语义节点。
 ///
-/// The label arrives as unshaped glyphs (their origin is near the top left);
-/// the emitter centres them inside the button rectangle, so a label that
-/// changes width never breaks the button's own layout and the caller still
-/// gets final scene coordinates.
+/// 传入的标签为未排版字形（原点靠近左上角）；发射器将其在按钮矩形内居中，
+/// 因此标签宽度变化不会破坏按钮自身布局，调用方仍能获得最终场景坐标。
 #[must_use]
 pub fn emit_button(
     node: u64,
@@ -417,7 +393,7 @@ pub fn emit_button(
     emit_button_with_tokens(node, desc, state, desc.tokens(), label)
 }
 
-/// The pure emitter with an explicit set of colour slots.
+/// 使用显式颜色槽位集合的纯发射器。
 #[must_use]
 pub fn emit_button_with_tokens(
     node: u64,
@@ -432,12 +408,10 @@ pub fn emit_button_with_tokens(
     let mut primitives = Vec::with_capacity(8 + label.len());
     let mut payloads = Vec::with_capacity(label.len() + 1);
 
-    // A loading button is not a target and never shows the focus ring: the
-    // spinner says "wait", so accepting a second activation would be wrong.
+    // 加载中的按钮不是交互目标，也不显示焦点环：旋转指示器表示“请等待”，此时不应再接受第二次激活。
     let blocked = state.disabled || desc.loading;
 
-    // 1. The shadow: a dedicated Shadow primitive, fill and border are
-    //    transparent, so only the resolved shadow is painted.
+    // 1. 阴影：专用 Shadow 图元，填充与边框均透明，因此仅绘制解析阴影。
     primitives.push(instance(
         rect,
         radii,
@@ -450,7 +424,7 @@ pub fn emit_button_with_tokens(
         z,
     ));
 
-    // 2. The background: the state colour comes from a colour table slot.
+    // 2. 背景：状态颜色来自颜色表槽位。
     primitives.push(instance(
         rect,
         radii,
@@ -463,9 +437,8 @@ pub fn emit_button_with_tokens(
         z,
     ));
 
-    // 3. The icon, the loading indicator and the label share one centred
-    //    content row. The indicator always leads, so a loading button never
-    //    jumps horizontally when the spinner appears.
+    // 3. 图标、加载指示器与标签共享同一居中内容行。指示器始终前置，
+    //    因此加载状态切换时按钮不会产生水平跳动。
     let ink = ink_bounds(label);
     let leading_icon = desc.icon.is_some() && !desc.icon_trailing;
     let mut content_width = ink.map_or(0.0, |bounds| bounds.width());
@@ -513,8 +486,7 @@ pub fn emit_button_with_tokens(
         }
     }
 
-    // The label: same `z` as the button, drawn later through
-    // `SubElement::Content`.
+    // 标签：与按钮同 `z`，稍后通过 `SubElement::Content` 绘制。
     if let Some(ink) = ink {
         if desc.centre_label {
             let offset = Vec2::new(
@@ -557,8 +529,7 @@ pub fn emit_button_with_tokens(
                 SubElement::Content,
                 z,
             );
-            // The atlas layer travels in the border slot, which the
-            // background does not use.
+            // 图集层通过边框槽位传递，背景不使用该槽位。
             glyph.border_token_or_tex = quad.layer;
             glyph.extra_payload_idx = payload_idx;
             if quad.msdf {
@@ -583,7 +554,7 @@ pub fn emit_button_with_tokens(
         }
     }
 
-    // 4. The border: a hollow rounded rectangle, its own sub element.
+    // 4. 边框：空心圆角矩形，属于独立子元素。
     primitives.push(instance(
         rect,
         radii,
@@ -596,9 +567,8 @@ pub fn emit_button_with_tokens(
         z,
     ));
 
-    // 5. The focus ring: an outward stroke, on top of everything. It is
-    //    always emitted — focus only changes its opacity — so that focusing
-    //    a button repaints one primitive instead of reshuffling the pool.
+    // 5. 焦点环：外扩描边，位于最顶层。它始终被发射——聚焦仅改变其不透明度——
+    //    因此聚焦按钮只需重绘一个图元，而不会打乱图元池。
     primitives.push(focus_ring(
         rect.inflate(desc.focus_ring_gap),
         desc.radius + desc.focus_ring_gap,
@@ -627,7 +597,7 @@ pub fn emit_button_with_tokens(
     }
 }
 
-/// Emit one icon primitive, anchored at `left` and vertically centred.
+/// 发射单个图标图元，锚定于 `left` 并垂直居中。
 #[allow(clippy::too_many_arguments)]
 fn icon_at(
     icon: &IconDesc,
@@ -665,7 +635,7 @@ fn icon_at(
     primitives.push(primitive);
 }
 
-/// The fill slot a state paints with.
+/// 状态绘制使用的填充槽位。
 fn state_fill(state: ControlState, tokens: ButtonTokens) -> Token {
     if state.disabled {
         return tokens.fill_disabled;
@@ -677,8 +647,7 @@ fn state_fill(state: ControlState, tokens: ButtonTokens) -> Token {
     }
 }
 
-/// The ink bounding box of a glyph run, used for centring and for the
-/// headless text checks.
+/// 字形串的墨水边界框，用于居中计算及无头文本测试。
 #[must_use]
 pub fn ink_bounds(glyphs: &[GlyphQuad]) -> Option<Rect> {
     let mut bounds = glyphs.first()?.rect;
@@ -722,12 +691,12 @@ mod tests {
     use super::*;
     use crate::WidgetHarness;
 
-    /// A button descriptor in the middle of the viewport.
+    /// 位于视口中央的按钮描述符。
     fn desc() -> ButtonDesc {
         ButtonDesc::new(Rect::new(100.0, 100.0, 160.0, 44.0), "Press me")
     }
 
-    /// The fill token of the background primitive.
+    /// 背景图元的填充令牌。
     fn fill_token(output: &WidgetOutput) -> u16 {
         output
             .primitives
@@ -848,7 +817,7 @@ mod tests {
         harness.press();
         assert_eq!(harness.state().phase, PointerPhase::Pressed);
 
-        // The pointer is captured, so it stays pressed even far away.
+        // 指针已被捕获，因此即使移出较远仍保持按下状态。
         harness.hover_at(Vec2::new(0.0, 0.0));
         assert_eq!(harness.state().phase, PointerPhase::Pressed);
 

@@ -1,20 +1,20 @@
-//! Pointer capture and the click/drag state machine (`docs` §6.1).
+//! 指针捕获与点击/拖拽状态机（`docs` §6.1）。
 //!
-//! Once a drag starts the pointer is *captured*: every subsequent move and the
-//! release are routed to the captured node, even when the cursor leaves the
-//! window or flies over unrelated widgets. That single rule is what makes
-//! scrollbar thumbs, marquee selection and canvas panning behave under fast
-//! motion, and it is why this module owns the drag decision instead of leaving
-//! it to every widget.
+//! 一旦开始拖拽，指针即被**捕获**：后续所有移动与释放事件都会路由到
+//! 被捕获的节点，即使光标离开窗口或划过其他无关控件亦然。这一条规则
+//! 保证了滚动条滑块、框选与画布平移在快速移动下的稳定表现，也正是本模块
+//! 统一管理拖拽决策而非交由各控件自行处理的原因。
 //!
-//! Time is passed in as `f64` seconds rather than read from the clock, so the
-//! whole state machine is deterministic and replayable in the headless harness.
+//!
+//!
+//! 时间以 `f64` 秒数显式传入，而非直接读取系统时钟，从而使整个状态机
+//! 具有完全的确定性，并可在无头测试框架中重放。
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 use unbound_math::Vec2;
 
-/// Which button produced an event.
+/// 产生该事件的鼠标按键。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PointerButton {
     Left,
@@ -22,7 +22,7 @@ pub enum PointerButton {
     Middle,
 }
 
-/// Buttons currently held.
+/// 当前处于按住状态的按键掩码。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Buttons {
     pub left: bool,
@@ -40,7 +40,7 @@ impl Buttons {
     }
 }
 
-/// Everything the input layer emits.
+/// 输入层向外发送的所有指针事件。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PointerEvent {
     Down {
@@ -77,14 +77,14 @@ pub enum PointerEvent {
         target: u64,
         position: Vec2,
     },
-    /// The capture was taken away (window lost focus, Escape, target removed).
+    /// 捕获被强制收回（窗口失焦、按下 Escape 或目标节点被移除）。
     CaptureLost {
         target: u64,
     },
 }
 
 impl PointerEvent {
-    /// Target node, when the event has one.
+    /// 事件关联的目标节点（若有）。
     #[must_use]
     pub fn target(&self) -> Option<u64> {
         match self {
@@ -100,14 +100,14 @@ impl PointerEvent {
     }
 }
 
-/// Timing and distance thresholds.
+/// 时间与距离阈值配置。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct PointerConfig {
-    /// Distance the pointer must travel before a press becomes a drag.
+    /// 按下后移动多少距离才判定为开始拖拽。
     pub drag_slop: f32,
-    /// Maximum gap between two clicks of a double click, in seconds.
+    /// 双击两次点击之间的最大时间间隔（单位：秒）。
     pub double_click_window: f64,
-    /// Maximum movement between two clicks of a double click.
+    /// 双击两次点击之间的最大允许位移。
     pub double_click_slop: f32,
 }
 
@@ -121,17 +121,17 @@ impl Default for PointerConfig {
     }
 }
 
-/// Per-pointer state machine.
+/// 单指针状态机。
 #[derive(Clone, Debug)]
 pub struct PointerState {
     config: PointerConfig,
     position: Vec2,
     down_position: Vec2,
     pressed: Option<u64>,
-    /// The button that started the current interaction.
+    /// 启动当前交互的按键。
     ///
-    /// Only its release may end the interaction: releasing the secondary
-    /// button while the primary one is held must not abort the drag.
+    /// 只有该按键的释放才能结束当前交互：在主键按住期间释放次键
+    /// 绝不能中止拖拽。
     press_button: Option<PointerButton>,
     capture: Option<u64>,
     dragging: bool,
@@ -186,13 +186,13 @@ impl PointerState {
         self.buttons
     }
 
-    /// Clicks counted for the current press.
+    /// 当前按下周期累计的点击次数。
     #[must_use]
     pub fn click_count(&self) -> u8 {
         self.click_count
     }
 
-    /// Press on `target`.
+    /// 在 `target` 上按下按键。
     pub fn on_down(
         &mut self,
         target: Option<u64>,
@@ -203,11 +203,11 @@ impl PointerState {
         self.position = position;
         self.buttons.set(button, true);
         if button == PointerButton::Right {
-            // A secondary press opens a context menu on release. It is
-            // captured like any other press, but it must not touch the
-            // double-click clock: a right click followed by a left click is
-            // two different gestures. A primary drag already in flight keeps
-            // the capture; the secondary press only reports itself.
+            // 次键按下并在释放时打开上下文菜单。它与其他按键一样被捕获，
+            // 但不得干扰双击计时器：先右键再左键属于两个不同的手势。
+            // 若主键拖拽已在进行中，则保留原捕获，次键仅上报自身事件。
+            //
+            //
             let primary_active = matches!(
                 self.press_button,
                 Some(PointerButton::Left | PointerButton::Middle)
@@ -251,15 +251,15 @@ impl PointerState {
         })
     }
 
-    /// Movement. Returns at most one event: the transition frame reports
-    /// `DragStart` instead of `Drag`, so a consumer never sees both.
+    /// 指针移动。每次最多返回一个事件：发生状态转换的那一帧上报
+    /// `DragStart` 而非 `Drag`，使消费方不会同时收到两者。
     pub fn on_move(&mut self, position: Vec2) -> Option<PointerEvent> {
         let delta = position - self.position;
         self.position = position;
         if let Some(target) = self.pressed {
             if !self.dragging {
-                // Only the buttons that own a drag gesture may cross the
-                // slop: a secondary press stays a press until it is released.
+                // 只有拥有拖拽手势的按键才能跨越移动阈值：
+                // 次键在释放前始终保持按压状态。
                 let draggable = matches!(
                     self.press_button,
                     Some(PointerButton::Left | PointerButton::Middle)
@@ -289,25 +289,25 @@ impl PointerState {
         })
     }
 
-    /// Release.
+    /// 指针释放。
     ///
-    /// Returns the `Up` event followed, when the press never turned into a drag,
-    /// by a `Click` (and a `DoubleClick` for the second click of a pair).
+    /// 返回 `Up` 事件；若该按压从未演变为拖拽，则紧随其后返回 `Click`
+    /// （若为连续第二次点击，则附带 `DoubleClick`）。
     pub fn on_up(&mut self, position: Vec2, button: PointerButton, now: f64) -> Vec<PointerEvent> {
         self.position = position;
         self.buttons.set(button, false);
-        // Only the button that started the interaction may end it. Releasing
-        // the *secondary* button while the primary one is held must not end
-        // the drag: the user is still dragging with the left button.
+        // 只有启动当前交互的按键才能结束它。在主键按住期间释放
+        // **次键**绝不能结束拖拽：用户此时仍按住左键在拖拽。
+        //
         if self.press_button != Some(button) {
             let events = vec![PointerEvent::Up {
                 target: self.pressed,
                 position,
                 button,
             }];
-            // A secondary release is not a click and must not touch the
-            // double-click clock, or a right-click followed by a left-click
-            // would register as a double-click.
+            // 次键释放不构成点击，且不得触动双击计时器，
+            // 否则先右键再左键会被误判为双击。
+            //
             return events;
         }
         let target = self.pressed;
@@ -339,7 +339,7 @@ impl PointerState {
         events
     }
 
-    /// Abort the current interaction (focus loss, Escape, target removed).
+    /// 中止当前交互（窗口失焦、按下 Escape 或目标节点被移除）。
     pub fn cancel(&mut self) -> Option<PointerEvent> {
         let target = self.capture.or(self.pressed)?;
         self.pressed = None;
@@ -350,22 +350,22 @@ impl PointerState {
         Some(PointerEvent::CaptureLost { target })
     }
 
-    /// Forget the pending click pair.
+    /// 重置待配对的点击计数。
     ///
-    /// Called when a release lands outside its press target and the router
-    /// withholds the click: no click was delivered, so the next press must
-    /// start counting from one instead of reporting a phantom double click.
+    /// 当释放位置落在原按下目标之外、路由器扣留点击事件时调用：
+    /// 既然未派发点击，下一次按下必须从 1 重新计数，而非触发幽灵双击。
+    ///
     pub fn reset_click_sequence(&mut self) {
         self.click_count = 0;
         self.last_click_time = f64::NEG_INFINITY;
         self.last_click_target = None;
     }
 
-    /// Take the capture without a press, e.g. when a scrollbar thumb grabs.
+    /// 在未发生按下的情况下直接接管捕获（例如滚动条滑块抓取）。
     ///
-    /// The previous holder is evicted, and it is told so: a capture that
-    /// disappears without a `CaptureLost` leaves its owner stuck in a dragging
-    /// state.
+    /// 原捕获持有者会被逐出并收到通知：若捕获悄无声息地消失而未触发
+    /// `CaptureLost`，原持有者将卡死在拖拽状态中。
+    ///
     pub fn grab(&mut self, target: u64) -> Option<PointerEvent> {
         let previous = self.capture.replace(target)?;
         if previous == target {
@@ -374,9 +374,9 @@ impl PointerState {
         Some(PointerEvent::CaptureLost { target: previous })
     }
 
-    /// Drop the capture but keep the button state.
+    /// 释放捕获但保留按键状态。
     ///
-    /// The holder is told that it lost the capture.
+    /// 通知原持有者其已失去捕获。
     pub fn release_capture(&mut self) -> Option<PointerEvent> {
         let previous = self.capture.take()?;
         Some(PointerEvent::CaptureLost { target: previous })
@@ -512,8 +512,8 @@ mod tests {
         assert!(!p.is_dragging());
     }
 
-    /// A secondary press is captured so its release has a target, but it is
-    /// not a click: the runtime turns it into a context-menu request.
+    /// 次键按下会被捕获以便释放时拥有目标，但它不产生点击：
+    /// 运行时将其转换为上下文菜单请求。
     #[test]
     fn a_secondary_press_is_captured_but_is_not_a_click() {
         let mut p = state();
@@ -546,8 +546,8 @@ mod tests {
         );
     }
 
-    /// The middle button owns a drag (canvas panning) just like the primary
-    /// one, but it never synthesises a click.
+    /// 中键与主键一样拥有拖拽权（用于画布平移），但永不合成点击事件。
+    ///
     #[test]
     fn the_middle_button_drags_without_clicking() {
         let mut p = state();
@@ -584,17 +584,17 @@ mod tests {
         assert!(matches!(events[0], PointerEvent::Up { target: None, .. }));
     }
 
-    /// Releasing the secondary button must not abort the primary drag.
+    /// 释放次键绝不能中止主键拖拽。
     ///
-    /// The user is still holding the left button and still dragging: the
-    /// interaction continues, and the capture is not dropped.
+    /// 用户仍按住左键并继续拖拽：交互持续进行，捕获不会被释放。
+    ///
     #[test]
     fn releasing_the_secondary_button_does_not_abort_the_drag() {
         let mut p = state();
         p.on_down(Some(3), Vec2::new(0.0, 0.0), PointerButton::Left, 0.0);
         p.on_move(Vec2::new(30.0, 0.0));
         assert!(p.is_dragging());
-        // The right button goes down and up while the left one is held.
+        // 左键按住期间，右键完成一次按下与释放。
         p.on_down(Some(3), Vec2::new(30.0, 0.0), PointerButton::Right, 0.1);
         let events = p.on_up(Vec2::new(30.0, 0.0), PointerButton::Right, 0.2);
         assert!(matches!(
@@ -606,21 +606,21 @@ mod tests {
         ));
         assert!(p.is_dragging(), "the drag must survive a secondary release");
         assert_eq!(p.capture(), Some(3), "the capture must survive too");
-        // And the drag still reports drags.
+        // 拖拽依然持续上报 Drag 事件。
         let event = p.on_move(Vec2::new(60.0, 0.0)).unwrap();
         assert!(matches!(event, PointerEvent::Drag { .. }));
     }
 
-    /// A secondary release must not touch the double-click clock.
+    /// 次键释放绝不能触动双击计时器。
     ///
-    /// Otherwise a right-click followed by a left-click on the same target
-    /// reads as a double-click.
+    /// 否则在同一目标上先右键再左键会被误判为双击。
+    ///
     #[test]
     fn a_secondary_release_does_not_create_a_double_click() {
         let mut p = state();
         p.on_down(Some(3), Vec2::new(10.0, 10.0), PointerButton::Right, 0.0);
         p.on_up(Vec2::new(10.0, 10.0), PointerButton::Right, 0.05);
-        // A left click right after must be a single click, not a double one.
+        // 紧随其后的左键点击必须是单击，而非双击。
         p.on_down(Some(3), Vec2::new(10.0, 10.0), PointerButton::Left, 0.1);
         let events = p.on_up(Vec2::new(10.0, 10.0), PointerButton::Left, 0.15);
         assert!(
@@ -631,10 +631,10 @@ mod tests {
         );
     }
 
-    /// Stealing or releasing the capture must tell the previous holder.
+    /// 抢占或释放捕获时必须通知前一个持有者。
     ///
-    /// A capture that disappears without a `CaptureLost` leaves its owner
-    /// stuck in a dragging state.
+    /// 若捕获消失却未收到 `CaptureLost`，原持有者会卡死在拖拽状态中。
+    ///
     #[test]
     fn stealing_the_capture_reports_the_loss() {
         let mut p = state();

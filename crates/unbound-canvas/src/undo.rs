@@ -1,64 +1,64 @@
-//! Transactional undo/redo with copy-on-write snapshots (`docs` §5.3).
+//! 基于写时复制快照的事务型撤销/重做（`docs` §5.3）。
 //!
-//! The doc's shape is: `BeginTransaction` on pointer-down, a stream of cheap
-//! `UpdateTransaction` calls while dragging, `CommitTransaction` on pointer-up,
-//! and exactly **one** undo step at the end. That is what this module implements,
-//! and it implements it as a *patch log* rather than a state snapshot:
+//! 文档定义的形态为：指针按下时 `BeginTransaction`，拖拽期间持续发送低开销
+//! `UpdateTransaction`，指针抬起时 `CommitTransaction`，最终只产生**一个**撤销步骤。
+//! 本模块即实现该机制，且采用*补丁日志（patch log）*而非全量状态快照：
 //!
-//! * a drag of three nodes on a 1 000 000 node canvas records three rectangles,
-//!   not a million — the memory delta per step is a few dozen bytes, which is
-//!   the property the doc's "single step ≤ a few KB" requirement is really
-//!   about,
-//! * the log is also the thing the reducer applies, so undo/redo cannot drift
-//!   away from the state that produced it.
 //!
-//! Text is special: consecutive keystrokes must merge into one undo step, but a
-//! word boundary or a 500 ms pause must start a new one. [`UndoStack::begin`]
-//! decides that by looking at the still-open transaction, so the caller never
-//! has to.
+//! * 在 1 000 000 节点的画布上拖拽三个节点只记录三个矩形，而非一百万个——
+//!   每步内存增量仅数十字节，这正是文档“单步 ≤ 数 KB”要求的本质；
+//!
+//!
+//! * 该日志同时也是归约器（reducer）直接应用的对象，因此撤销/重做绝不会与
+//!   产生它的状态发生漂移。
+//!
+//! 文本编辑较为特殊：连续按键必须合并为单个撤销步骤，但遇到词边界或停顿 500 ms
+//! 必须开启新步骤。[`UndoStack::begin`] 会通过检查当前仍打开的事务自动决策，
+//! 调用方无需关心。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 use rustc_hash::FxHashMap;
 use unbound_math::Rect;
 
-/// How long two text edits may be apart and still merge, in seconds.
+/// 两次文本编辑允许合并的最大时间间隔（秒）。
 pub const TEXT_COALESCE_WINDOW: f64 = 0.5;
 
-/// What kind of interaction opened the transaction.
+/// 开启事务的交互类型。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TransactionKind {
-    /// Anything that should never merge (a button press, a menu command).
+    /// 绝不应合并的操作（如按钮点击、菜单命令）。
     Discrete,
-    /// A drag or resize; per-entity updates overwrite in place.
+    /// 拖拽或缩放；同一实体的更新会原地覆盖。
     Drag,
-    /// Typing; merges within [`TEXT_COALESCE_WINDOW`] unless a word boundary is
-    /// crossed.
+    /// 键盘输入；在 [`TEXT_COALESCE_WINDOW`] 内合并，除非跨越词边界。
+    ///
     Text,
 }
 
-/// One reversible change.
+/// 单条可逆变更记录。
 #[derive(Clone, Debug, PartialEq)]
 pub enum Edit {
-    /// Geometry of one entity.
+    /// 单个实体的几何变更。
     Geometry { id: u32, before: Rect, after: Rect },
-    /// A text buffer edit.
+    /// 文本缓冲区编辑。
     Text { before: String, after: String },
-    /// Creation or destruction of one entity.
+    /// 单个实体的创建或销毁。
     ///
-    /// The entity's bounds travel with the edit: undoing a deletion has to
-    /// put the entity back *where it was*, not just re-create an empty one.
+    /// 实体的包围盒随编辑一并保存：撤销删除操作必须将实体放回*原位*，
+    /// 而非仅仅重新创建一个空实体。
     Exist {
         id: u32,
-        /// True when the entity was created, false when it was destroyed.
+        /// 创建时为 true，销毁时为 false。
         existed: bool,
-        /// The entity's bounds at the time of the edit.
+        /// 编辑发生时实体的包围盒。
         bounds: Rect,
     },
 }
 
 impl Edit {
-    /// The same edit, pointed the other way.
+    /// 返回反向的同一条编辑记录。
     #[must_use]
     pub fn inverted(&self) -> Self {
         match self {
@@ -83,7 +83,7 @@ impl Edit {
         }
     }
 
-    /// Payload bytes, used by the KPI assertions.
+    /// 载荷字节数，供 KPI 断言使用。
     #[must_use]
     pub fn bytes(&self) -> usize {
         core::mem::size_of::<Self>()
@@ -93,7 +93,7 @@ impl Edit {
             }
     }
 
-    /// Entity this edit touches, if it touches one.
+    /// 若此编辑涉及特定实体，则返回其句柄。
     #[must_use]
     pub fn entity(&self) -> Option<u32> {
         match self {
@@ -103,14 +103,14 @@ impl Edit {
     }
 }
 
-/// A committed (or in-progress) group of edits.
+/// 一组已提交（或进行中）的编辑事务。
 #[derive(Clone, Debug)]
 pub struct Transaction {
     label: &'static str,
     kind: TransactionKind,
     edits: Vec<Edit>,
-    /// Index of the geometry edit for each entity, so a drag overwrites instead
-    /// of appending thousands of entries.
+    /// 记录每个实体对应几何编辑在 `edits` 中的索引，使拖拽能原地覆盖而非追加数千条记录。
+    ///
     geometry_slot: FxHashMap<u32, usize>,
     started: f64,
     last_edit: f64,
@@ -128,50 +128,50 @@ impl Transaction {
         }
     }
 
-    /// Human-readable label, e.g. `"drag 3 items"`.
+    /// 可读标签，例如 `"drag 3 items"`。
     #[must_use]
     pub fn label(&self) -> &'static str {
         self.label
     }
 
-    /// Kind that opened the transaction.
+    /// 开启该事务的交互类型。
     #[must_use]
     pub fn kind(&self) -> TransactionKind {
         self.kind
     }
 
-    /// Edits in application order.
+    /// 按应用顺序排列的编辑列表。
     #[must_use]
     pub fn edits(&self) -> &[Edit] {
         &self.edits
     }
 
-    /// True when nothing changed and the transaction should not be recorded.
+    /// 当未发生任何有效变更时返回 true（该事务不应记入历史）。
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.edits.is_empty()
     }
 
-    /// Logical time the transaction opened.
+    /// 事务开启的逻辑时间戳。
     #[must_use]
     pub fn started(&self) -> f64 {
         self.started
     }
 
-    /// Logical time of the last recorded edit.
+    /// 最近一次记录编辑的逻辑时间戳。
     #[must_use]
     pub fn last_edit(&self) -> f64 {
         self.last_edit
     }
 
-    /// Payload bytes, for the KPI assertions.
+    /// 载荷字节数，供 KPI 断言使用。
     #[must_use]
     pub fn bytes(&self) -> usize {
         core::mem::size_of::<Self>() + self.edits.iter().map(Edit::bytes).sum::<usize>()
     }
 
-    /// True when the last recorded text ends on a word boundary, which means
-    /// the next keystroke must open a fresh undo step.
+    /// 若最近一次记录的文本以词边界结尾则返回 true，
+    /// 表示下一次按键必须开启新的撤销步骤。
     fn ends_on_boundary(&self) -> bool {
         match self.edits.last() {
             Some(Edit::Text { after, .. }) => after.chars().last().is_some_and(is_word_boundary),
@@ -179,13 +179,13 @@ impl Transaction {
         }
     }
 
-    /// Iterate the inverse edits, newest first: exactly what undo must apply.
+    /// 按从新到旧的顺序迭代反向编辑：即撤销时必须应用的序列。
     pub fn inverted(&self) -> impl Iterator<Item = Edit> + '_ {
         self.edits.iter().rev().map(Edit::inverted)
     }
 }
 
-/// Undo/redo history.
+/// 撤销/重做历史栈。
 #[derive(Debug)]
 pub struct UndoStack {
     past: Vec<Transaction>,
@@ -201,10 +201,10 @@ impl Default for UndoStack {
 }
 
 impl UndoStack {
-    /// Create a stack that keeps at most `limit` committed steps.
+    /// 创建最多保留 `limit` 个已提交步骤的撤销栈。
     ///
-    /// # Panics
-    /// Panics when `limit` is zero.
+    /// # Panic 说明
+    /// 当 `limit` 为 0 时 panic。
     #[must_use]
     pub fn new(limit: usize) -> Self {
         assert!(limit > 0, "history limit must be positive");
@@ -216,13 +216,13 @@ impl UndoStack {
         }
     }
 
-    /// Number of undoable steps.
+    /// 可撤销的步骤数量。
     #[must_use]
     pub fn depth(&self) -> usize {
         self.past.len()
     }
 
-    /// Number of redoable steps.
+    /// 可重做的步骤数量。
     #[must_use]
     pub fn redo_depth(&self) -> usize {
         self.future.len()
@@ -238,24 +238,24 @@ impl UndoStack {
         !self.future.is_empty()
     }
 
-    /// True while a transaction is open.
+    /// 当存在未提交的打开事务时返回 true。
     #[must_use]
     pub fn is_open(&self) -> bool {
         self.active.is_some()
     }
 
-    /// The open transaction, if any.
+    /// 返回当前打开的事务（若有）。
     #[must_use]
     pub fn active(&self) -> Option<&Transaction> {
         self.active.as_ref()
     }
 
-    /// Open a transaction.
+    /// 开启一个事务。
     ///
-    /// An open text transaction is *kept* when the new one is also text and the
-    /// gap is within [`TEXT_COALESCE_WINDOW`] — that is the merge rule. Anything
-    /// else commits the previous transaction first, so a drag that is interrupted
-    /// by a keyboard shortcut still lands in history.
+    /// 若当前已打开文本事务、新事务也是文本且时间间隔在 [`TEXT_COALESCE_WINDOW`] 内，
+    /// 则*保留*原事务——这就是合并规则。其他任何情况都会先提交上一个事务，
+    /// 从而确保被快捷键打断的拖拽仍能进入历史记录。
+    ///
     pub fn begin(&mut self, kind: TransactionKind, label: &'static str, now: f64) {
         let mergeable = self.active.as_ref().is_some_and(|active| {
             active.kind == TransactionKind::Text
@@ -270,11 +270,11 @@ impl UndoStack {
         self.active = Some(Transaction::new(label, kind, now));
     }
 
-    /// Record a geometry change, returning `false` when nothing moved.
+    /// 记录几何变更；若未发生移动则返回 `false`。
     ///
-    /// Repeated calls for the same entity during a drag overwrite the recorded
-    /// `after` rect and keep the original `before`, so a 120 Hz drag of a second
-    /// still produces a single entry.
+    /// 拖拽期间对同一实体的重复调用会覆盖已记录的 `after` 矩形并保留原始 `before`，
+    /// 因此 120 Hz 拖拽持续一秒也只产生单条记录。
+    ///
     pub fn record_geometry(&mut self, id: u32, before: Rect, after: Rect, now: f64) -> bool {
         if before == after {
             return false;
@@ -295,13 +295,13 @@ impl UndoStack {
         true
     }
 
-    /// Record a text change, merging with the previous keystroke when the doc
-    /// allows it.
+    /// 记录文本变更；当文档规则允许时与上一次按键合并。
     ///
-    /// Merging requires the new buffer to be an extension of the previous one
-    /// (typing at the end of what was just typed) and the appended character to
-    /// be a normal word character. Space, punctuation and newlines end the run,
-    /// which is what makes "undo" step back a word at a time.
+    /// 合并要求新缓冲区是上一缓冲区的扩展（在刚输入内容的末尾继续输入），
+    /// 且追加字符为普通词字符。空格、标点与换行会结束当前合并段，
+    /// 这使得“撤销”能按词回退。
+    ///
+    ///
     pub fn record_text(&mut self, before: &str, after: &str, now: f64) -> bool {
         if before == after {
             return false;
@@ -338,11 +338,11 @@ impl UndoStack {
         true
     }
 
-    /// Record that an entity appeared or disappeared.
+    /// 记录实体的出现或消失。
     ///
-    /// `bounds` is the entity's geometry at the time of the edit. It travels
-    /// with the edit so that undoing a deletion puts the entity back where
-    /// it was instead of re-creating an empty one.
+    /// `bounds` 为编辑时实体的几何信息。它随编辑一并保存，
+    /// 以便撤销删除时将实体放回原位，而非重建空实体。
+    ///
     pub fn record_exist(&mut self, id: u32, existed: bool, bounds: Rect, now: f64) -> bool {
         let Some(active) = &mut self.active else {
             return false;
@@ -356,8 +356,8 @@ impl UndoStack {
         true
     }
 
-    /// Commit the open transaction. Empty transactions are dropped, so a click
-    /// without movement never pollutes the history.
+    /// 提交当前打开的事务。空事务会被直接丢弃，因此无移动的点击不会污染历史栈。
+    ///
     pub fn commit(&mut self) -> Option<&Transaction> {
         let active = self.active.take()?;
         if active.is_empty() {
@@ -372,13 +372,13 @@ impl UndoStack {
         self.past.last()
     }
 
-    /// Throw the open transaction away (Escape during a drag).
+    /// 放弃当前打开的事务（例如拖拽中按下 Escape）。
     ///
-    /// The edits recorded so far are returned, inverted, so the caller can
-    /// put the state back where it was. Dropping them on the floor would
-    /// leave the log and the state out of step: the module's contract is
-    /// that the log *is* what the reducer applies, so an aborted
-    /// transaction has to be undone, not forgotten.
+    /// 返回已记录编辑的反向序列，供调用方将状态恢复原样。若直接丢弃而不回滚，
+    /// 会导致日志与状态失步：本模块的契约是“日志*即*归约器所应用的状态”，
+    /// 因此中止的事务必须被回滚，而不能被遗忘。
+    ///
+    ///
     pub fn abort(&mut self) -> Vec<Edit> {
         let Some(active) = self.active.take() else {
             return Vec::new();
@@ -386,8 +386,8 @@ impl UndoStack {
         active.edits.iter().rev().map(Edit::inverted).collect()
     }
 
-    /// Pop the newest committed transaction and hand it to the caller, which is
-    /// expected to apply [`Transaction::inverted`].
+    /// 弹出最新已提交事务并交给调用方，调用方应应用 [`Transaction::inverted`]。
+    ///
     pub fn undo(&mut self) -> Option<&Transaction> {
         if self.active.is_some() {
             self.commit();
@@ -397,15 +397,15 @@ impl UndoStack {
         self.future.last()
     }
 
-    /// Pop the newest undone transaction and hand it to the caller, which is
-    /// expected to apply [`Transaction::edits`] in order.
+    /// 弹出最新已撤销事务并交给调用方，调用方应按序应用 [`Transaction::edits`]。
+    ///
     pub fn redo(&mut self) -> Option<&Transaction> {
         let entry = self.future.pop()?;
         self.past.push(entry);
         self.past.last()
     }
 
-    /// Total payload bytes held by the history, for the KPI assertions.
+    /// 历史栈持有的总载荷字节数，供 KPI 断言使用。
     #[must_use]
     pub fn bytes(&self) -> usize {
         self.past.iter().map(Transaction::bytes).sum::<usize>()
@@ -413,24 +413,24 @@ impl UndoStack {
             + self.active.as_ref().map_or(0, Transaction::bytes)
     }
 
-    /// Label of the step [`Self::undo`] would revert.
+    /// [`Self::undo`] 将要回退的步骤标签。
     #[must_use]
     pub fn undo_label(&self) -> Option<&'static str> {
         self.past.last().map(Transaction::label)
     }
 
-    /// Label of the step [`Self::redo`] would re-apply.
+    /// [`Self::redo`] 将要重做的步骤标签。
     #[must_use]
     pub fn redo_label(&self) -> Option<&'static str> {
         self.future.last().map(Transaction::label)
     }
 }
 
-/// Characters that end a text-coalescing run.
+/// 终止文本合并段的字符集合。
 ///
-/// Covers ASCII whitespace and punctuation plus the CJK punctuation that a
-/// Chinese IME commits, because for those languages the "word" boundary is a
-/// full-width character rather than a space.
+/// 涵盖 ASCII 空白与标点，以及中文输入法（IME）提交的 CJK 标点——
+/// 对这些语言而言，“词”边界往往是全角字符而非空格。
+///
 #[must_use]
 pub fn is_word_boundary(c: char) -> bool {
     c.is_whitespace() || c.is_ascii_punctuation() || is_cjk_punctuation(c)
@@ -439,9 +439,9 @@ pub fn is_word_boundary(c: char) -> bool {
 fn is_cjk_punctuation(c: char) -> bool {
     matches!(
         c,
-        '\u{3000}'..='\u{303F}'   // CJK symbols and punctuation
-        | '\u{FF00}'..='\u{FF65}' // full-width forms
-        | '\u{2018}'..='\u{201F}' // curly quotes
+        '\u{3000}'..='\u{303F}'   // CJK 符号与标点
+        | '\u{FF00}'..='\u{FF65}' // 全角形式
+        | '\u{2018}'..='\u{201F}' // 中文弯引号
         | '\u{2026}' | '\u{2014}'
     )
 }
@@ -579,7 +579,7 @@ mod tests {
             now += 0.1;
         }
         stack.commit();
-        // "ab " is one step, "cd" is another.
+        // "ab " 为一步，"cd" 为另一步。
         assert_eq!(stack.depth(), 2, "{:?}", stack.past);
     }
 
@@ -606,7 +606,7 @@ mod tests {
         let mut stack = UndoStack::new(16);
         stack.begin(TransactionKind::Text, "type", 0.0);
         stack.record_text("ab", "abc", 0.1);
-        // The user moved the caret and typed elsewhere: not an extension.
+        // 用户移动了光标并在别处输入：不属于末尾扩展。
         stack.record_text("abc", "Xabc", 0.2);
         stack.commit();
         assert_eq!(stack.past[0].edits().len(), 2);
@@ -631,7 +631,7 @@ mod tests {
     #[test]
     fn a_drag_on_a_million_node_canvas_costs_bytes_not_megabytes() {
         let mut stack = UndoStack::new(128);
-        // Only three of the million nodes are selected.
+        // 百万节点中仅选中了三个。
         stack.begin(TransactionKind::Drag, "drag 3", 0.0);
         for frame in 0..600u32 {
             for id in [11u32, 22, 33] {
@@ -692,11 +692,11 @@ mod tests {
         assert_eq!(edit.entity(), Some(4));
     }
 
-    /// Undoing a deletion has to put the entity back *where it was*.
+    /// 撤销删除必须将实体放回*原位*。
     ///
-    /// The edit used to carry only the id and a boolean, so the reducer
-    /// could only re-create an empty entity: its geometry, its z-order and
-    /// its content were gone.
+    /// 此前的编辑记录仅携带 ID 与布尔值，导致归约器只能重建一个空实体：
+    /// 其几何位置、层级顺序与内容全部丢失。
+    ///
     #[test]
     fn an_undone_deletion_restores_the_bounds() {
         let mut stack = UndoStack::new(16);
@@ -717,10 +717,10 @@ mod tests {
         );
     }
 
-    /// Aborting a transaction must hand back the edits that revert it.
+    /// 中止事务必须返回用于回滚它的编辑记录。
     ///
-    /// The log is what the reducer applies, so throwing it away without
-    /// undoing it would leave the state and the log out of step.
+    /// 日志即归约器应用的状态，若直接丢弃而不回滚会导致状态与日志失步。
+    ///
     #[test]
     fn aborting_returns_the_edits_that_revert_it() {
         let mut stack = UndoStack::new(16);

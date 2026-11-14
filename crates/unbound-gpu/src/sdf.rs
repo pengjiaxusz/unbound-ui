@@ -1,14 +1,11 @@
-//! GPU distance-field generation (`docs` §3.5).
+//! GPU 距离场生成（参见 `docs/architecture/gpu-renderer.md`）。
 //!
-//! A thin, self-contained wrapper around `mtsdf.comp`: it owns three device
-//! buffers and a compute pipeline, so the caller can hand it a coverage bitmap
-//! and get an RGBA8 distance field back without knowing anything about Vulkan.
+//! 围绕 `mtsdf.comp` 的轻量自包含封装：内部持有三个设备缓冲区与一个计算管线，
+//! 调用方无需了解 Vulkan 细节即可传入覆盖率位图并取回 RGBA8 距离场。
 //!
-//! Why a separate pipeline instead of the frame's compute stages: glyph
-//! generation happens on demand, once per (glyph, size) pair, and must never
-//! block the frame's command buffer. Keeping its own buffers means it can run on
-//! the transfer queue or an async compute queue later without touching the frame
-//! graph.
+//! 独立于帧计算阶段的原因：字形生成按需触发（每个 `(glyph, size)` 对仅一次），
+//! 绝不能阻塞主帧命令缓冲区。持有独立缓冲区也便于后续迁移到传输队列或异步计算队列，
+//! 而不触及帧渲染图。
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
@@ -19,24 +16,23 @@ use crate::device::{Buffer, Gpu, GpuError, MemoryKind};
 use crate::pipeline::Pipelines;
 use crate::shader;
 
-/// Largest tile the pipeline can process (both dimensions).
+/// 管线可处理的最大图块边长（宽与高）。
 pub const MAX_TILE: u32 = 512;
 
-/// GPU distance-field generator.
+/// GPU 距离场生成器。
 pub struct SdfPipeline {
     pipeline: vk::Pipeline,
-    /// The pack pass, in its own shader so it does not pay for the 16 KiB of
-    /// shared memory the 1D transform needs.
+    /// 打包 Pass 独立置于单独着色器中，避免为 1D 变换所需的 16 KiB 共享内存付费。
     pack_pipeline: vk::Pipeline,
-    /// Borrowed from [`Pipelines`]; the owner outlives this struct.
+    /// 借用自 [`Pipelines`]；其所有者生命周期长于本结构体。
     layout: vk::PipelineLayout,
     coverage: Buffer,
     temp: Buffer,
     output: Buffer,
     staging: Buffer,
-    /// The timestamp scope, when timing is enabled.
+    /// 启用计时时的时间戳作用域。
     timing: Option<crate::timing::TimestampScope>,
-    /// The GPU time of the last generation, in milliseconds.
+    /// 上一次生成的 GPU 耗时（毫秒）。
     last_ms: f32,
 }
 
@@ -49,16 +45,15 @@ impl core::fmt::Debug for SdfPipeline {
 }
 
 impl SdfPipeline {
-    /// Create the pipeline and its buffers.
+    /// 创建管线及其缓冲区。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn new(gpu: &Gpu, pipelines: &Pipelines) -> Result<Self, GpuError> {
         let words = shader::mtsdf()
             .words()
             .map_err(|e| GpuError::Allocation(e.to_string()))?;
-        // SAFETY: the SPIR-V blob is validated at build time and every object is
-        // owned by the returned struct.
+        // SAFETY: SPIR-V 二进制已在构建期校验，且所有对象均由返回的结构体持有。
         unsafe {
             let module = gpu
                 .device
@@ -108,29 +103,28 @@ impl SdfPipeline {
         }
     }
 
-    /// Enable GPU timing for the generations.
+    /// 为距离场生成启用 GPU 计时。
     ///
     /// # Errors
-    /// Returns [`GpuError::Vulkan`] when the query pool cannot be created.
+    /// 当查询池创建失败时返回 [`GpuError::Vulkan`]。
     pub fn enable_timing(&mut self, gpu: &Gpu) -> Result<(), GpuError> {
         let scope = crate::timing::TimestampScope::new(gpu, 2)?;
         self.timing = Some(scope);
         Ok(())
     }
 
-    /// The GPU time of the last generation, in milliseconds.
+    /// 上一次生成的 GPU 耗时（毫秒）。
     ///
-    /// Zero when timing was never enabled.
+    /// 未启用计时时返回 0。
     #[must_use]
     pub fn last_gpu_ms(&self) -> f32 {
         self.last_ms
     }
 
-    /// Generate an RGBA8 distance field for a coverage bitmap.
+    /// 为覆盖率位图生成 RGBA8 距离场。
     ///
     /// # Errors
-    /// Returns an error when the tile is larger than [`MAX_TILE`] or a Vulkan
-    /// call fails.
+    /// 当图块超出 [`MAX_TILE`] 或 Vulkan 调用失败时返回错误。
     pub fn generate(
         &mut self,
         gpu: &Gpu,
@@ -152,8 +146,7 @@ impl SdfPipeline {
             return Err(GpuError::Allocation("coverage bitmap too small".into()));
         }
 
-        // SAFETY: the buffers are exclusively ours and the device is idle after
-        // the blocking submission below.
+        // SAFETY: 缓冲区由本实例独占，且下方阻塞提交结束后设备处于空闲状态。
         unsafe {
             let ptr = self
                 .coverage
@@ -162,11 +155,10 @@ impl SdfPipeline {
             core::ptr::copy_nonoverlapping(coverage.as_ptr(), ptr, texels);
 
             let cmd = gpu.begin_single_time()?;
-            // The generation is bracketed by two timestamps so the GPU time can
-            // be reported separately from the submission overhead.
+            // 使用首尾两个时间戳包围生成过程，以将纯 GPU 计算耗时与提交开销区分统计。
             if let Some(scope) = &self.timing {
                 scope.reset(gpu)?;
-                // SAFETY: our own command buffer.
+                // SAFETY: 属于本结构体的命令缓冲区。
                 scope.write_at(gpu, cmd, 0, vk::PipelineStageFlags::TOP_OF_PIPE);
             }
             let packed_spread = (spread.clamp(0.25, 64.0) * 256.0).round() as u32;
@@ -183,12 +175,11 @@ impl SdfPipeline {
             gpu.device
                 .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.pipeline);
 
-            // pass 0: horizontal, one invocation per row.
+            // Pass 0：水平方向，每行一次调用。
             let mut pc = PushConstants { aux: 0, ..base };
             gpu.device.cmd_push_constants(
                 cmd,
-                // The layout is identical for every compute pipeline; reuse the
-                // one the pipeline was created with.
+                // 所有计算管线共用相同布局；直接复用创建管线时的布局。
                 self.layout,
                 vk::ShaderStageFlags::COMPUTE,
                 0,
@@ -197,7 +188,7 @@ impl SdfPipeline {
             gpu.device.cmd_dispatch(cmd, height, 1, 1);
             self.barrier(gpu, cmd);
 
-            // pass 1: vertical, one invocation per column.
+            // Pass 1：垂直方向，每列一次调用。
             pc.aux = 1;
             gpu.device.cmd_push_constants(
                 cmd,
@@ -209,9 +200,8 @@ impl SdfPipeline {
             gpu.device.cmd_dispatch(cmd, width, 1, 1);
             self.barrier(gpu, cmd);
 
-            // pass 2: pack, one texel per invocation. The pack pass has its
-            // own shader with 64 lanes per workgroup, so the group count is
-            // the texel count divided by 64.
+            // Pass 2：打包，每纹素一次调用。打包 Pass 使用独立着色器，
+            // 每个工作组含 64 个通道，因此工作组数量为纹素总数除以 64。
             pc.aux = 2;
             let groups = (width * height).div_ceil(64);
             gpu.device
@@ -225,7 +215,7 @@ impl SdfPipeline {
             );
             gpu.device.cmd_dispatch(cmd, groups, 1, 1);
 
-            // Copy the result out.
+            // 将结果拷贝回读缓冲区。
             let copy_barrier = [vk::MemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
                 .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
@@ -242,7 +232,7 @@ impl SdfPipeline {
                 &[vk::BufferCopy::default().size(texels as u64 * 4)],
             );
             if let Some(scope) = &self.timing {
-                // SAFETY: our own command buffer.
+                // SAFETY: 属于本结构体的命令缓冲区。
                 scope.write_at(gpu, cmd, 1, vk::PipelineStageFlags::BOTTOM_OF_PIPE);
             }
             gpu.end_single_time(cmd)?;
@@ -263,7 +253,7 @@ impl SdfPipeline {
             .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
             .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE)];
-        // SAFETY: recording into a command buffer we own.
+        // SAFETY: 向自有命令缓冲区录制命令。
         unsafe {
             gpu.device.cmd_pipeline_barrier2(
                 cmd,
@@ -273,7 +263,7 @@ impl SdfPipeline {
     }
 
     /// # Safety
-    /// The device must be idle.
+    /// 设备必须处于空闲状态。
     pub unsafe fn destroy(&self, gpu: &Gpu) {
         if let Some(scope) = &self.timing {
             scope.destroy(gpu);
@@ -290,11 +280,10 @@ mod tests {
     use super::*;
     use crate::device::gpu_test_guard;
 
-    /// `docs` §10.2: the GPU MTSDF generator must turn a glyph tile into a
-    /// distance field in well under a millisecond.
+    /// 参见 `docs/architecture/gpu-renderer.md`：GPU MTSDF 生成器必须在远低于
+    /// 1 毫秒内将字形图块转换为距离场。
     ///
-    /// The measurement is wall-clock around the whole call, so it includes the
-    /// submission and the readback: an upper bound on the GPU work.
+    /// 此处测量整个调用的挂钟时间，包含提交与回读开销，构成 GPU 实际工作量的上界。
     #[test]
     fn a_glyph_tile_becomes_a_distance_field_in_time() {
         let _guard = gpu_test_guard();
@@ -305,8 +294,7 @@ mod tests {
         let mut sdf = SdfPipeline::new(&gpu, &pipelines).expect("sdf pipeline");
         sdf.enable_timing(&gpu).expect("timing");
 
-        // A 64x64 tile with a round-ish blob in the middle: the size of a
-        // typical glyph at 4x device pixel ratio.
+        // 中心带近似圆形斑块的 64x64 图块：相当于 4 倍设备像素比下典型字形的尺寸。
         const TILE: usize = 64;
         let mut coverage = vec![0u8; TILE * TILE];
         for y in 0..TILE {
@@ -318,8 +306,7 @@ mod tests {
                 }
             }
         }
-        // Warm the pipeline up so the measurement is not dominated by the
-        // first-use shader compilation.
+        // 预热管线，避免首次使用时的着色器编译开销主导测量结果。
         sdf.generate(&gpu, &coverage, TILE as u32, TILE as u32, 4.0)
             .expect("generate");
 
@@ -331,15 +318,12 @@ mod tests {
         }
         samples.sort_by(|a, b| a.total_cmp(b));
         let median = samples[samples.len() / 2];
-        // The best sample is the steady-state cost: a 64x64 dispatch is so
-        // short that the GPU timestamp quantisation and the clock ramp after
-        // idle dominate the median on some drivers. The budget is a floor for
-        // the real work, so it is compared against the fastest sample.
+        // 取最快样本代表稳态开销：64x64 调度极短，部分驱动上 GPU 时间戳量化与
+        // 空闲后的频率爬坡会拉高中位数。性能预算针对真实计算耗时，故与最快样本比对。
         let best = samples[0];
         eprintln!("MTSDF {TILE}x{TILE}: {median:.4} ms median, {best:.4} ms best on the GPU");
-        // 0.05 ms is the design target on the reference GPU. A 64x64 dispatch
-        // is dominated by fixed per-dispatch cost, so slower parts land 30–50 %
-        // above it; the 1.5× guard still detects algorithmic regressions.
+        // 参考 GPU 上的设计目标为 0.05 ms。64x64 调度受固定调度开销主导，
+        // 较慢硬件可能高出 30–50%；1.5 倍阈值仍足以捕获算法退化。
         const DESIGN_BUDGET_MS: f32 = 0.05;
         const HARDWARE_ALLOWANCE: f32 = 1.5;
         assert!(
@@ -358,7 +342,7 @@ mod tests {
         let pipelines = Pipelines::new(&gpu).expect("pipelines");
         let mut sdf = SdfPipeline::new(&gpu, &pipelines).expect("sdf pipeline");
 
-        // 16x16 with a filled 8x8 block in the middle.
+        // 16x16 图块，中心填充 8x8 方块。
         let mut coverage = vec![0u8; 16 * 16];
         for y in 4..12 {
             for x in 4..12 {
@@ -370,19 +354,19 @@ mod tests {
             .expect("generate");
         assert_eq!(field.len(), 16 * 16 * 4);
 
-        // Encoding matches `uber.frag`: > 0.5 inside, < 0.5 outside, 0.5 on the
-        // edge. A deep interior texel saturates at 1.0.
+        // 编码与 `uber.frag` 一致：内部 > 0.5、外部 < 0.5、边缘为 0.5。
+        // 深处内部纹素饱和至 1.0。
         let sample = |x: usize, y: usize| field[(y * 16 + x) * 4] as f32 / 255.0;
         assert!(sample(8, 8) > 0.9, "centre = {}", sample(8, 8));
         assert!(sample(0, 0) < 0.1, "corner = {}", sample(0, 0));
-        // One texel outside the block edge: 0.5 - 1/(2*4) = 0.375.
+        // 方块边缘外侧 1 纹素处：0.5 - 1/(2*4) = 0.375。
         let edge = sample(3, 8);
         assert!((0.25..0.5).contains(&edge), "edge = {edge}");
-        // Alpha preserves the coverage.
+        // Alpha 通道保留原始覆盖率。
         assert_eq!(field[(8 * 16 + 8) * 4 + 3], 255);
         assert_eq!(field[3], 0);
 
-        // SAFETY: nothing in flight.
+        // SAFETY: 无在飞任务。
         unsafe {
             sdf.destroy(&gpu);
             pipelines.destroy(&gpu);
@@ -400,7 +384,7 @@ mod tests {
         let mut sdf = SdfPipeline::new(&gpu, &pipelines).expect("sdf pipeline");
         let cov = vec![0u8; 1024];
         assert!(sdf.generate(&gpu, &cov, MAX_TILE + 1, 1, 4.0).is_err());
-        // SAFETY: nothing in flight.
+        // SAFETY: 无在飞任务。
         unsafe {
             sdf.destroy(&gpu);
             pipelines.destroy(&gpu);

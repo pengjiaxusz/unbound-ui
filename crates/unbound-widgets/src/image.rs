@@ -1,10 +1,8 @@
-//! Images and icons: object-fit maths and the textured primitive.
+//! 图像与图标：对象填充（object-fit）数学与纹理图元。
 //!
-//! Fitting is pure geometry and is unit-tested on its own. The emitter then
-//! produces one `PrimType::Image` primitive whose texture layer comes from the
-//! asset atlas and whose UV rectangle comes from [`fit_image`]. Keeping the UV
-//! maths out of the renderer means `Cover` crops the *sampled* region instead
-//! of stretching the image, which is the behaviour users expect.
+//! 填充拟合为纯几何计算，并已单独进行单元测试。发射器随后产出一个 `PrimType::Image` 图元，
+//! 其纹理层来自资源图集，UV 矩形来自 [`fit_image`]。将 UV 计算移出渲染器意味着
+//! `Cover` 会裁剪*采样*区域而非拉伸图像，这正是用户预期的行为。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -17,75 +15,72 @@ use unbound_theme::Token;
 use crate::primitive::instance;
 use crate::{ControlState, WidgetDesc, WidgetOutput};
 
-/// The hit-test layer of an image that accepts clicks.
+/// 可点击图像的命中测试层级。
 pub const IMAGE_LAYER: u8 = 1;
 
-/// One nine-slice span: the start offset and the length along an axis.
+/// 单个九宫格区段：沿某轴的起始偏移与长度。
 type Span = (f32, f32);
 
-/// Where an image's texels come from.
+/// 图像纹素的来源。
 ///
-/// The atlas variant is the immediate path: the caller already knows the
-/// bindless layer and the texture's natural size. The asset variant defers to
-/// an [`ImageAssetResolver`], which is how an asynchronously decoded image
-/// becomes a textured quad once its upload lands.
+/// 图集变体是即时路径：调用方已知无绑定层与纹理自然尺寸。
+/// 资源变体则委托给 [`ImageAssetResolver`]，异步解码的图像在上传完成后即成为纹理四边形。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ImageSource {
-    /// A texture already resident in a bindless atlas layer.
+    /// 已驻留在无绑定图集层中的纹理。
     AtlasLayer {
-        /// The array layer.
+        /// 纹理数组层索引。
         layer: u32,
-        /// The texture's natural size, in pixels.
+        /// 纹理自然尺寸（像素）。
         natural_size: Vec2,
     },
-    /// An asset that may still be decoding.
+    /// 可能仍在解码中的异步资源。
     Asset(AssetId),
 }
 
-/// A resolved image: the layer, the UV rectangle and the natural size.
+/// 已解析的图像：图层、UV 矩形与自然尺寸。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ResolvedImage {
-    /// The bindless atlas layer.
+    /// 无绑定图集层索引。
     pub layer: u32,
-    /// The region of the layer the image occupies, normalised to `0..1`.
+    /// 图像在图层中所占区域，归一化到 `0..1`。
     pub uv: Rect,
-    /// The image's natural size, in pixels.
+    /// 图像自然尺寸（像素）。
     pub size: Vec2,
 }
 
-/// The seam between the widget layer and the asset hub.
+/// 控件层与资源中心之间的接缝。
 ///
-/// The widgets crate must not depend on the application runtime, so it asks
-/// this trait instead: `None` means "not ready yet" and paints the placeholder.
+/// widgets crate 不得依赖应用运行时，因此通过此 trait 查询：`None` 表示“尚未就绪”并绘制占位符。
 pub trait ImageAssetResolver {
-    /// Look up an asset that has finished decoding.
+    /// 查找已完成解码的资源。
     fn resolve(&self, id: AssetId) -> Option<ResolvedImage>;
 }
 
-/// How an image fills its box.
+/// 图像填充其包围盒的方式。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ObjectFit {
-    /// Stretch to the box (may distort).
+    /// 拉伸填满包围盒（可能产生形变）。
     #[default]
     Fill,
-    /// Scale down until the whole image fits, letterboxing the rest.
+    /// 等比缩放直至整张图像完全容纳，留白部分黑边填充。
     Contain,
-    /// Scale up until the box is covered, cropping the overflow.
+    /// 等比放大直至完全覆盖包围盒，裁剪溢出部分。
     Cover,
-    /// Draw at natural size, centred, never upscaled.
+    /// 按自然尺寸居中绘制，绝不放大。
     None,
 }
 
-/// A placed image: where to draw and which part of the texture to sample.
+/// 已放置的图像：绘制目标区域与纹理采样区域。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ImageFit {
-    /// The destination rectangle.
+    /// 目标矩形。
     pub rect: Rect,
-    /// The sampled UV rectangle, normalised to `0..1`.
+    /// 采样的 UV 矩形，归一化到 `0..1`。
     pub uv: Rect,
 }
 
-/// Compute the destination rectangle and UV crop for an object fit.
+/// 计算指定对象填充模式的目标矩形与 UV 裁剪区域。
 #[must_use]
 pub fn fit_image(box_rect: Rect, natural: Vec2, fit: ObjectFit) -> ImageFit {
     let full_uv = Rect::new(0.0, 0.0, 1.0, 1.0);
@@ -150,32 +145,32 @@ pub fn fit_image(box_rect: Rect, natural: Vec2, fit: ObjectFit) -> ImageFit {
     }
 }
 
-/// An image descriptor.
+/// 图像描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageDesc {
-    /// The layout box.
+    /// 布局包围盒。
     pub rect: Rect,
-    /// The texture's natural size, in pixels.
+    /// 纹理自然尺寸（像素）。
     pub natural_size: Vec2,
-    /// The texture layer in the atlas.
+    /// 图集中的纹理层索引。
     pub texture_layer: u32,
-    /// Where the texels come from. Defaults to the atlas layer above.
+    /// 纹素来源，默认为上方的图集层。
     pub source: ImageSource,
-    /// The object fit.
+    /// 对象填充模式。
     pub fit: ObjectFit,
-    /// The per-corner radii: top-left, top-right, bottom-right, bottom-left.
+    /// 四角独立圆角半径：左上、右上、右下、左下。
     pub radius: [f32; 4],
-    /// The border width; `0.0` paints no border.
+    /// 边框宽度；`0.0` 表示不绘制边框。
     pub border_width: f32,
-    /// The border colour slot.
+    /// 边框颜色槽位。
     pub border_color: Token,
-    /// The tint; [`Token::NONE`] leaves the texture untouched.
+    /// 着色色调；[`Token::NONE`] 表示保持纹理原色。
     pub tint: Token,
-    /// The accessible description.
+    /// 无障碍描述。
     pub alt: String,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
-    /// Whether the image accepts clicks.
+    /// 图像是否接受点击。
     pub interactive: bool,
 }
 
@@ -201,35 +196,35 @@ impl ImageDesc {
         }
     }
 
-    /// The same image with an object fit.
+    /// 设置对象填充模式。
     #[must_use]
     pub fn with_fit(mut self, fit: ObjectFit) -> Self {
         self.fit = fit;
         self
     }
 
-    /// The same image with an accessible description.
+    /// 设置无障碍描述。
     #[must_use]
     pub fn with_alt(mut self, alt: impl Into<String>) -> Self {
         self.alt = alt.into();
         self
     }
 
-    /// The same image with a uniform corner radius.
+    /// 设置统一圆角半径。
     #[must_use]
     pub fn with_radius(mut self, radius: f32) -> Self {
         self.radius = [radius; 4];
         self
     }
 
-    /// The same image with per-corner radii.
+    /// 设置四角独立圆角半径。
     #[must_use]
     pub fn with_radii(mut self, radii: [f32; 4]) -> Self {
         self.radius = radii;
         self
     }
 
-    /// The same image with a border.
+    /// 设置边框。
     #[must_use]
     pub fn with_border(mut self, width: f32, color: Token) -> Self {
         self.border_width = width;
@@ -237,7 +232,7 @@ impl ImageDesc {
         self
     }
 
-    /// The same image sourced from an asynchronous asset.
+    /// 设置异步资源作为图像来源。
     #[must_use]
     pub fn with_asset(mut self, id: AssetId) -> Self {
         self.source = ImageSource::Asset(id);
@@ -245,18 +240,18 @@ impl ImageDesc {
     }
 }
 
-/// An icon: a square image painted with a theme tint.
+/// 图标：带主题着色的正方形图像。
 #[derive(Clone, Debug, PartialEq)]
 pub struct IconDesc {
-    /// The square box.
+    /// 正方形包围盒。
     pub rect: Rect,
-    /// The texture layer.
+    /// 纹理层索引。
     pub texture_layer: u32,
-    /// The tint colour.
+    /// 着色颜色。
     pub tint: Token,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
@@ -273,12 +268,12 @@ impl IconDesc {
     }
 }
 
-/// An image bound to an identity.
+/// 绑定了身份标识的图像。
 #[derive(Clone, Debug)]
 pub struct ImageWidget {
-    /// The widget identity.
+    /// 控件标识。
     pub node: u64,
-    /// The descriptor.
+    /// 图像描述符。
     pub desc: ImageDesc,
 }
 
@@ -296,17 +291,16 @@ impl WidgetDesc for ImageWidget {
     }
 }
 
-/// Emit one textured primitive.
+/// 发射单个纹理图元。
 #[must_use]
 pub fn emit_image(node: u64, desc: &ImageDesc, state: ControlState) -> WidgetOutput {
     emit_image_inner(node, desc, state, None)
 }
 
-/// Emit an image whose texels may still be decoding.
+/// 发射纹素可能仍在解码中的图像。
 ///
-/// An asset that the resolver does not know yet (or one that failed) becomes a
-/// sunken rounded placeholder of the same box, so the layout never jumps when
-/// the texture arrives — only the paint changes.
+/// 解析器尚未就绪（或加载失败）的资源会显示为同尺寸的内凹圆角占位符，
+/// 因此纹理到达时布局绝不会跳动——仅绘制内容发生变化。
 #[must_use]
 pub fn emit_image_with_assets(
     node: u64,
@@ -340,8 +334,7 @@ fn emit_image_inner(
     let bounds = match resolved {
         Some(image) => {
             let fit = fit_image(desc.rect, image.size, desc.fit);
-            // Crop the atlas sub-rectangle, not the whole layer: the image is
-            // one shelf of a shared page.
+            // 裁剪图集子矩形而非整层：该图像只是共享图集页中的一个槽位。
             let uv = Rect::new(
                 image.uv.origin.x + fit.uv.origin.x * image.uv.width(),
                 image.uv.origin.y + fit.uv.origin.y * image.uv.height(),
@@ -373,7 +366,7 @@ fn emit_image_inner(
             fit.rect
         }
         None => {
-            // Loading or failed: a sunken surface keeps the box and the radii.
+            // 加载中或失败：内凹表面保留原有包围盒与圆角。
             primitives.push(instance(
                 desc.rect,
                 desc.radius,
@@ -398,8 +391,7 @@ fn emit_image_inner(
         }
     };
 
-    // A textured primitive spends its border slot on the texture layer, so a
-    // border is a separate stroke drawn on top with the image's radii.
+    // 纹理图元将边框槽位用于传递纹理层索引，因此边框作为带相同圆角的独立描边绘制在上方。
     if desc.border_width > 0.0 && desc.border_color != Token::NONE {
         primitives.push(instance(
             bounds,
@@ -442,22 +434,22 @@ fn emit_image_inner(
     }
 }
 
-/// A nine-patch image: a texture stretched with fixed edge insets.
+/// 九宫格图像：按固定边缘内边距拉伸的纹理。
 #[derive(Clone, Debug, PartialEq)]
 pub struct NinePatchDesc {
-    /// The destination box.
+    /// 目标包围盒。
     pub rect: Rect,
-    /// The texture's natural size, in pixels.
+    /// 纹理自然尺寸（像素）。
     pub natural_size: Vec2,
-    /// The texture layer in the atlas.
+    /// 图集中的纹理层索引。
     pub texture_layer: u32,
-    /// The insets in texture pixels: left, top, right, bottom.
+    /// 纹理像素中的内边距：左、上、右、下。
     pub patch: [f32; 4],
-    /// The tint; [`Token::NONE`] leaves the texture untouched.
+    /// 着色色调；[`Token::NONE`] 表示保持纹理原色。
     pub tint: Token,
-    /// The accessible description.
+    /// 无障碍描述。
     pub alt: String,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
@@ -475,7 +467,7 @@ impl NinePatchDesc {
         }
     }
 
-    /// The nine destination cells, row-major from the top-left.
+    /// 九个目标单元格，从左上角起按行主序排列。
     #[must_use]
     pub fn cells(&self) -> [Rect; 9] {
         let (columns, rows) = self.spans();
@@ -493,7 +485,7 @@ impl NinePatchDesc {
         cells
     }
 
-    /// The nine UV cells, row-major from the top-left.
+    /// 九个 UV 单元格，从左上角起按行主序排列。
     #[must_use]
     pub fn uvs(&self) -> [Rect; 9] {
         let nw = self.natural_size.x.max(1.0);
@@ -526,7 +518,7 @@ impl NinePatchDesc {
         cells
     }
 
-    /// `(position, length)` for the three columns and three rows.
+    /// 三列与三行的 `(position, length)` 区间。
     fn spans(&self) -> ([Span; 3], [Span; 3]) {
         let width = self.rect.width();
         let height = self.rect.height();
@@ -549,7 +541,7 @@ impl NinePatchDesc {
     }
 }
 
-/// Emit nine UV-split textured primitives for a nine-patch image.
+/// 为九宫格图像发射九个按 UV 切分的纹理图元。
 #[must_use]
 pub fn emit_nine_patch(_node: u64, desc: &NinePatchDesc, state: ControlState) -> WidgetOutput {
     let cells = desc.cells();
@@ -594,7 +586,7 @@ pub fn emit_nine_patch(_node: u64, desc: &NinePatchDesc, state: ControlState) ->
     }
 }
 
-/// Emit an icon as a tinted image.
+/// 将图标发射为着色图像。
 #[must_use]
 pub fn emit_icon(node: u64, desc: &IconDesc, state: ControlState) -> WidgetOutput {
     let image = ImageDesc {
@@ -617,7 +609,7 @@ pub fn emit_icon(node: u64, desc: &IconDesc, state: ControlState) -> WidgetOutpu
     emit_image(node, &image, state)
 }
 
-/// Built-in 24×24 SVG-path vector icon catalog (66 standard icons, S5.6).
+/// 内置 24×24 SVG 路径矢量图标目录（66 个标准图标，S5.6）。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum IconId {
     ChevronUp,
@@ -689,7 +681,7 @@ pub enum IconId {
 }
 
 impl IconId {
-    /// All 66 built-in vector icons.
+    /// 全部 66 个内置矢量图标。
     pub const ALL: &'static [Self] = &[
         Self::ChevronUp,
         Self::ChevronDown,
@@ -759,7 +751,7 @@ impl IconId {
         Self::Error,
     ];
 
-    /// Standard 24×24 SVG path `d` string for this icon.
+    /// 该图标的标准 24×24 SVG 路径 `d` 字符串。
     #[must_use]
     pub const fn svg_d(self) -> &'static str {
         match self {
@@ -833,20 +825,20 @@ impl IconId {
     }
 }
 
-/// Built-in vector [`IconPack`] resolving [`IconId`] into cached [`unbound_vector::QuadSegment`]s.
+/// 内置矢量 [`IconPack`]，将 [`IconId`] 解析为缓存的 [`unbound_vector::QuadSegment`]。
 #[derive(Debug, Default)]
 pub struct IconPack {
     cache: unbound_vector::SvgPathCache,
 }
 
 impl IconPack {
-    /// Create a new icon pack cache.
+    /// 创建新的图标包缓存。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Resolve an [`IconId`] into quadratic Bézier segments scaled to `target_rect`.
+    /// 将 [`IconId`] 解析为缩放到 `target_rect` 的二次贝塞尔线段。
     pub fn resolve_segments(
         &mut self,
         icon: IconId,
@@ -980,7 +972,7 @@ mod tests {
         assert_eq!(output.primitives.len(), 1);
         assert_eq!(output.primitives[0].prim_type(), PrimType::Image);
         assert_eq!(output.primitives[0].border_token_or_tex, 5);
-        // `Fill` samples the whole image, so the payload is the atlas rect.
+        // `Fill` 采样整张图像，因此载荷即为图集矩形。
         assert_eq!(output.payloads[0].p0, [0.25, 0.5]);
         assert_eq!(output.payloads[0].p1, [0.75, 0.75]);
     }

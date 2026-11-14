@@ -1,4 +1,4 @@
-//! Integration tests for FormController & FormValidator (S5.3).
+//! FormController 与 FormValidator 集成测试（S5.3）。
 
 use unbound_math::Rect;
 use unbound_widgets::form::{
@@ -42,7 +42,7 @@ fn form_controller_tracks_dirty_touched_and_scrolls_to_first_error_on_submit() {
     assert!(!ctrl.any_dirty());
     assert!(!ctrl.is_touched(F_EMAIL));
 
-    // Modify F_NAME -> dirty, not touched yet so no error until touched
+    // 修改 F_NAME -> 变为 dirty，尚未 touched 因此暂不报错
     ctrl.set_value(F_NAME, "A");
     assert!(ctrl.is_dirty(F_NAME));
     assert!(ctrl.state().error(F_NAME).is_none());
@@ -51,7 +51,7 @@ fn form_controller_tracks_dirty_touched_and_scrolls_to_first_error_on_submit() {
     assert!(ctrl.is_touched(F_NAME));
     assert_eq!(ctrl.state().error(F_NAME), Some("Too short"));
 
-    // Fix F_NAME, break F_AGE and F_EMAIL
+    // 修复 F_NAME，破坏 F_AGE 与 F_EMAIL
     ctrl.set_value(F_NAME, "Bob");
     assert!(ctrl.state().error(F_NAME).is_none());
     ctrl.set_value(F_AGE, "12");
@@ -71,7 +71,7 @@ fn form_controller_tracks_dirty_touched_and_scrolls_to_first_error_on_submit() {
     assert_eq!(ctrl.state().focused(), Some(F_AGE));
     assert!(scroll.target().y > 0.0, "scroll must reveal failing F_AGE");
 
-    // Fix remaining fields and resubmit
+    // 修复剩余字段并重新提交
     ctrl.set_value(F_AGE, "30");
     ctrl.set_value(F_EMAIL, "bob@example.com");
     assert_eq!(ctrl.submit(&layouts, None), Ok(()));

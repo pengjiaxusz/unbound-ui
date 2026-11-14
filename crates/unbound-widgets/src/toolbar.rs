@@ -1,9 +1,9 @@
-//! The toolbar and status bar: dense rows of small controls.
+//! 工具栏与状态栏：密集排列的小型控件行。
 //!
-//! A toolbar that runs out of room folds its tail into a "»" button rather
-//! than shrinking every button below a useful size. The status bar is the
-//! same row logic with no interaction: labels and separators, aligned left or
-//! right.
+//! 空间不足时，工具栏会将尾部折叠进一个“»”溢出按钮，而非将每个按钮缩小到无法点击。
+//! 状态栏采用相同的行布局逻辑但无交互：仅含左对齐或右对齐的标签与分隔符。
+//!
+//!
 
 use accesskit::Role;
 use rustc_hash::FxHashSet;
@@ -18,40 +18,40 @@ use crate::primitive::{focus_ring, glyphs, instance, outlined};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// The default button width in a toolbar.
+/// 工具栏中按钮的默认宽度。
 pub const TOOLBAR_BUTTON: f32 = 30.0;
 
-/// The width of a separator.
+/// 分隔符宽度。
 pub const TOOLBAR_SEPARATOR: f32 = 9.0;
 
-/// What a toolbar item is.
+/// 工具栏项的类型。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolbarItemKind {
-    /// A momentary action.
+    /// 瞬时触发操作按钮。
     Button,
-    /// A two-state toggle.
+    /// 双态切换按钮。
     Toggle,
-    /// A vertical rule.
+    /// 垂直分隔线。
     Separator,
-    /// Flexible empty space.
+    /// 弹性空白占位符。
     Spacer,
-    /// A plain text label.
+    /// 纯文本标签。
     Label,
 }
 
-/// One toolbar item.
+/// 单个工具栏项。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolbarItem {
-    /// Stable identity; zero for separators and spacers.
+    /// 稳定标识；分隔符与占位符为 0。
     pub id: u64,
-    /// The item kind.
+    /// 项类型。
     pub kind: ToolbarItemKind,
-    /// The label or tooltip text.
+    /// 标签或工具提示文本。
     pub label: String,
 }
 
 impl ToolbarItem {
-    /// A momentary button.
+    /// 创建瞬时操作按钮。
     #[must_use]
     pub fn button(id: u64, label: impl Into<String>) -> Self {
         Self {
@@ -61,7 +61,7 @@ impl ToolbarItem {
         }
     }
 
-    /// A toggle button.
+    /// 创建切换按钮。
     #[must_use]
     pub fn toggle(id: u64, label: impl Into<String>) -> Self {
         Self {
@@ -71,7 +71,7 @@ impl ToolbarItem {
         }
     }
 
-    /// A vertical rule.
+    /// 创建垂直分隔线。
     #[must_use]
     pub fn separator() -> Self {
         Self {
@@ -81,7 +81,7 @@ impl ToolbarItem {
         }
     }
 
-    /// Flexible space.
+    /// 创建弹性空白占位符。
     #[must_use]
     pub fn spacer() -> Self {
         Self {
@@ -91,7 +91,7 @@ impl ToolbarItem {
         }
     }
 
-    /// A non-interactive label.
+    /// 创建非交互标签。
     #[must_use]
     pub fn label(text: impl Into<String>) -> Self {
         Self {
@@ -101,30 +101,30 @@ impl ToolbarItem {
         }
     }
 
-    /// Whether the item can be clicked.
+    /// 该项是否可点击。
     #[must_use]
     pub fn interactive(&self) -> bool {
         matches!(self.kind, ToolbarItemKind::Button | ToolbarItemKind::Toggle)
     }
 }
 
-/// The pure descriptor of a toolbar.
+/// 工具栏的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolbarDesc {
-    /// The toolbar rectangle.
+    /// 工具栏矩形。
     pub rect: Rect,
-    /// The items, left to right.
+    /// 从左到右排列的项列表。
     pub items: Vec<ToolbarItem>,
-    /// The button size.
+    /// 按钮尺寸。
     pub button_size: Vec2,
-    /// The gap between items.
+    /// 项之间的间距。
     pub gap: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl ToolbarDesc {
-    /// A toolbar with the default metrics.
+    /// 使用默认尺寸创建的工具栏。
     #[must_use]
     pub fn new(rect: Rect, items: Vec<ToolbarItem>) -> Self {
         Self {
@@ -136,7 +136,7 @@ impl ToolbarDesc {
         }
     }
 
-    /// The natural width of one item.
+    /// 单个项的自然宽度。
     #[must_use]
     pub fn item_width(&self, item: &ToolbarItem) -> f32 {
         match item.kind {
@@ -147,11 +147,10 @@ impl ToolbarDesc {
         }
     }
 
-    /// Lay the items out, folding the tail into an overflow button.
+    /// 布局所有项，并将超出部分折叠进溢出按钮。
     ///
-    /// The returned vector is aligned with [`Self::items`]; hidden items have
-    /// no rectangle. Spacers absorb the leftover width before the overflow
-    /// point, so a toolbar with one spacer looks the same as before.
+    /// 返回的向量与 [`Self::items`] 对齐；被隐藏的项没有矩形。
+    /// 溢出点之前的弹性空白会吸收剩余宽度，因此带有一个弹性空白的工具栏外观与以往一致。
     #[must_use]
     pub fn layout(&self) -> ToolbarLayout {
         let available = self.rect.size.x;
@@ -235,40 +234,40 @@ impl ToolbarDesc {
     }
 }
 
-/// The result of laying a toolbar out.
+/// 工具栏布局结果。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolbarLayout {
-    /// One optional rectangle per item.
+    /// 每个项对应的可选矩形。
     pub rects: Vec<Option<Rect>>,
-    /// The overflow button, when the tail did not fit.
+    /// 当尾部放不下时出现的溢出按钮矩形。
     pub overflow: Option<Rect>,
-    /// The hidden item indices.
+    /// 被隐藏的项索引列表。
     pub hidden: Vec<usize>,
 }
 
-/// The live state of a toolbar.
+/// 工具栏的实时状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ToolbarState {
-    /// The toggles that are on.
+    /// 当前处于开启状态的切换按钮集合。
     pub toggles: FxHashSet<u64>,
-    /// Whether the overflow menu is open.
+    /// 溢出菜单是否处于打开状态。
     pub overflow_open: bool,
 }
 
 impl ToolbarState {
-    /// A toolbar with every toggle off.
+    /// 创建所有切换按钮均关闭的工具栏状态。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Whether a toggle is on.
+    /// 查询切换按钮是否开启。
     #[must_use]
     pub fn is_on(&self, id: u64) -> bool {
         self.toggles.contains(&id)
     }
 
-    /// Flip a toggle. Returns the new state.
+    /// 翻转切换按钮状态并返回新状态。
     pub fn toggle(&mut self, id: u64) -> bool {
         if self.toggles.contains(&id) {
             self.toggles.remove(&id);
@@ -279,40 +278,40 @@ impl ToolbarState {
         }
     }
 
-    /// Toggle the overflow menu.
+    /// 切换溢出菜单开关状态。
     pub fn toggle_overflow(&mut self) -> bool {
         self.overflow_open = !self.overflow_open;
         self.overflow_open
     }
 }
 
-/// The colour slots a toolbar paints with.
+/// 工具栏绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ToolbarTokens {
-    /// The toolbar background.
+    /// 工具栏背景。
     pub bar: Token,
-    /// The bottom hairline.
+    /// 底部细分隔线。
     pub border: Token,
-    /// An idle button.
+    /// 空闲按钮。
     pub item: Token,
-    /// A hovered button.
+    /// 悬停按钮。
     pub item_hover: Token,
-    /// A pressed toggle.
+    /// 按下的切换按钮。
     pub item_on: Token,
-    /// The icon and label.
+    /// 图标与标签。
     pub icon: Token,
-    /// The icon of a pressed toggle.
+    /// 按下状态切换按钮的图标。
     pub icon_on: Token,
-    /// A separator.
+    /// 分隔符。
     pub separator: Token,
-    /// A label's text.
+    /// 标签文本。
     pub text: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环。
     pub focus_ring: Token,
 }
 
 impl ToolbarTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -330,7 +329,7 @@ impl ToolbarTokens {
     }
 }
 
-/// Emit the toolbar background and its bottom hairline.
+/// 输出工具栏背景及其底部细分隔线。
 #[must_use]
 pub fn emit_toolbar(desc: &ToolbarDesc, tokens: ToolbarTokens) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(2);
@@ -360,10 +359,9 @@ pub fn emit_toolbar(desc: &ToolbarDesc, tokens: ToolbarTokens) -> WidgetOutput {
     }
 }
 
-/// Emit one toolbar item.
+/// 输出单个工具栏项。
 ///
-/// Separators, spacers and labels emit decoration; buttons and toggles also
-/// emit a hit region and a semantic node.
+/// 分隔符、空白占位符与标签仅输出装饰图元；按钮与切换按钮还会输出命中区域与语义节点。
 #[must_use]
 pub fn emit_toolbar_item(
     desc: &ToolbarDesc,
@@ -462,7 +460,7 @@ pub fn emit_toolbar_item(
     }
 }
 
-/// Emit the "»" overflow button.
+/// 输出“»”溢出按钮。
 #[must_use]
 pub fn emit_toolbar_overflow(
     node: u64,
@@ -523,29 +521,29 @@ pub fn emit_toolbar_overflow(
     }
 }
 
-/// Which edge a status segment hugs.
+/// 状态栏分段贴靠的边缘。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StatusAlign {
-    /// The left edge.
+    /// 左边缘。
     #[default]
     Left,
-    /// The right edge.
+    /// 右边缘。
     Right,
 }
 
-/// One status bar segment.
+/// 单个状态栏分段。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusSegment {
-    /// Stable identity, also used as the node.
+    /// 稳定标识，同时用作节点 ID。
     pub id: u64,
-    /// The visible text.
+    /// 可见文本。
     pub label: String,
-    /// Which edge the segment hugs.
+    /// 分段贴靠的边缘。
     pub align: StatusAlign,
 }
 
 impl StatusSegment {
-    /// A left-aligned segment.
+    /// 创建左对齐分段。
     #[must_use]
     pub fn left(id: u64, label: impl Into<String>) -> Self {
         Self {
@@ -555,7 +553,7 @@ impl StatusSegment {
         }
     }
 
-    /// A right-aligned segment.
+    /// 创建右对齐分段。
     #[must_use]
     pub fn right(id: u64, label: impl Into<String>) -> Self {
         Self {
@@ -566,21 +564,21 @@ impl StatusSegment {
     }
 }
 
-/// The pure descriptor of a status bar.
+/// 状态栏的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct StatusBarDesc {
-    /// The bar rectangle.
+    /// 状态栏矩形。
     pub rect: Rect,
-    /// The segments.
+    /// 分段列表。
     pub segments: Vec<StatusSegment>,
-    /// The horizontal padding inside one segment.
+    /// 单个分段内部的水平内边距。
     pub padding: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl StatusBarDesc {
-    /// A status bar with the given segments.
+    /// 使用指定分段列表创建状态栏。
     #[must_use]
     pub fn new(rect: Rect, segments: Vec<StatusSegment>) -> Self {
         Self {
@@ -591,7 +589,7 @@ impl StatusBarDesc {
         }
     }
 
-    /// The widths of every segment, measured or estimated.
+    /// 每个分段的测量或估算宽度。
     #[must_use]
     pub fn widths(&self) -> Vec<f32> {
         self.segments
@@ -600,9 +598,8 @@ impl StatusBarDesc {
             .collect()
     }
 
-    /// Lay the segments out: left ones from the left, right ones from the
-    /// right. The two groups never overlap; when they would, the later
-    /// segment is dropped.
+    /// 布局所有分段：左对齐分段从左向右排布，右对齐分段从右向左排布。
+    /// 两组永不重叠；若发生冲突，则丢弃靠后的分段。
     #[must_use]
     pub fn layout(&self, widths: &[f32]) -> Vec<Option<Rect>> {
         let mut rects = vec![None; self.segments.len()];
@@ -636,7 +633,7 @@ impl StatusBarDesc {
     }
 }
 
-/// Emit the status bar background and its top hairline.
+/// 输出状态栏背景及其顶部细分隔线。
 #[must_use]
 pub fn emit_status_bar(desc: &StatusBarDesc, tokens: ToolbarTokens) -> WidgetOutput {
     let primitives = vec![
@@ -664,7 +661,7 @@ pub fn emit_status_bar(desc: &StatusBarDesc, tokens: ToolbarTokens) -> WidgetOut
     }
 }
 
-/// Emit one status segment.
+/// 输出单个状态分段。
 #[must_use]
 pub fn emit_status_segment(
     desc: &StatusBarDesc,
@@ -721,7 +718,7 @@ mod tests {
         assert!(!layout.hidden.is_empty());
         let overflow = layout.overflow.expect("overflow");
         assert_eq!(overflow.max().x, 100.0);
-        // No visible item overlaps the overflow button.
+        // 任何可见项均不与溢出按钮重叠。
         for rect in layout.rects.iter().flatten() {
             assert!(rect.max().x <= overflow.origin.x);
         }
@@ -826,9 +823,9 @@ mod tests {
         let widths = desc.widths();
         let rects = desc.layout(&widths);
         assert_eq!(rects[0].expect("left").origin.x, 0.0);
-        // Right-aligned segments are laid out from the right edge inwards,
-        // so the first right segment hugs the edge and the next sits left of
-        // it.
+        // 右对齐分段从右边缘向内排布，因此第一个右分段紧贴边缘，下一个位于其左侧。
+        //
+        //
         assert_eq!(rects[1].expect("right").max().x, 400.0);
         assert_eq!(
             rects[2].expect("right").max().x,

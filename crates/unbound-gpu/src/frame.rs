@@ -1,21 +1,20 @@
-//! Frame orchestration: the GPU-driven pipeline end to end.
+//! 帧编排：端到端的 GPU 驱动渲染管线。
 //!
-//! One call to [`Renderer::render`] performs, in order:
+//! 单次 [`Renderer::render`] 调用按顺序执行：
 //!
 //! ```text
-//! CPU: bump-allocate the transient ring, hash/diff the scene, build patches
-//!  1. upload      : host writes into the ring, patches describe destinations
-//!  2. scatter     : compute copies the patches into the persistent pool
-//!  3. cull        : compute frustum-culls and emits 64-bit keys
-//!  4. sort        : 8 stable LSD radix passes over (key, index)
-//!  5. indirect    : compute compacts equal-run keys into draw commands
-//!  6. opaque core : depth-only prepass, front-to-back, builds the Hi-Z mask
-//!  7. uber pass   : one MDI draw, back-to-front, Early-Z rejects the hidden
+//! CPU：在瞬态环中线性分配、对场景哈希/差分并构建补丁
+//!  1. upload      ：宿主写入瞬态环，补丁描述目标地址
+//!  2. scatter     ：计算着色器将补丁拷贝到持久化池
+//!  3. cull        ：计算着色器执行视口剔除并生成 64 位排序键
+//!  4. sort        ：对 (key, index) 执行 8 趟稳定 LSD 基数排序
+//!  5. indirect    ：计算着色器将连续同前缀键压缩为间接绘制命令
+//!  6. opaque core ：由前向后的纯深度预 Pass，构建 Hi-Z 深度遮挡
+//!  7. uber pass   ：单次 MDI 绘制（由后向前），Early-Z 剔除被遮挡片元
 //! ```
 //!
-//! Everything the CPU touches per frame is O(changed nodes); the O(visible)
-//! work happens on the GPU. A camera-only frame uploads **0 bytes** — the test
-//! `camera_only_frame_uploads_nothing` asserts exactly that.
+//! CPU 每帧仅处理 O(变更节点数)；O(可见图元数) 的工作全部在 GPU 完成。
+//! 仅移动相机的帧上传 **0 字节**——测试 `camera_only_frame_uploads_nothing` 对此进行了断言。
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
@@ -30,16 +29,16 @@ use crate::pipeline::{ExternalTextureSlots, Pipelines, COLOR_FORMAT, DEPTH_FORMA
 use crate::pool::{PersistentPool, PoolHandle};
 use crate::ring::TransientRing;
 
-/// Number of radix digits (8 bits each) needed for a full 64-bit key.
+/// 完整 64 位键所需的基数位趟数（每趟 8 位）。
 const RADIX_PASSES: u32 = 8;
-/// Elements per radix block; must match `BLOCK` in the sort shaders.
+/// 每个基数排序块的元素数；必须与排序着色器中的 `BLOCK` 一致。
 const RADIX_BLOCK: u32 = 256;
-/// Upper bound on indirect draws per layer pass.
+/// 每个图层 Pass 允许的间接绘制批次上限。
 pub const MAX_DRAW_RUNS: u32 = 16;
-/// The number of stage markers written into the command buffer.
+/// 写入命令缓冲区的阶段时间戳标记数量。
 const STAGE_MARKS: u32 = 6;
 
-/// Offscreen render target (colour + depth).
+/// 离屏渲染目标（颜色 + 深度）。
 #[derive(Debug)]
 pub struct RenderTarget {
     pub width: u32,
@@ -50,15 +49,15 @@ pub struct RenderTarget {
     pub depth: vk::Image,
     depth_memory: vk::DeviceMemory,
     pub depth_view: vk::ImageView,
-    /// The allocated size of the depth image.
+    /// 深度图像实际分配的尺寸。
     ///
-    /// It may be larger than `width × height`: the windowed path grows it in
-    /// 256 px steps and never shrinks it, so a drag does not reallocate.
+    /// 可能大于 `width × height`：窗口化路径按 256 px 步长向上增长且永不收缩，
+    /// 避免拖拽缩放窗口时频繁重建分配。
     depth_alloc: (u32, u32),
     layout: vk::ImageLayout,
 }
 
-/// Camera state for one layer pass.
+/// 单个图层 Pass 的相机状态。
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Camera {
     pub chunk: [i32; 2],
@@ -68,13 +67,11 @@ pub struct Camera {
 }
 
 impl Camera {
-    /// Camera for the static UI layer.
+    /// 静态 UI 图层的相机。
     ///
-    /// Convention: `local`/`chunk` describe the world point that maps to the
-    /// **centre** of the viewport, so a UI camera sits at
-    /// `viewport_size / (2 · dpi_scale)` in logical units and a canvas camera
-    /// sits at `canvas_centre`. This is what lets one shader formula serve a
-    /// pannable canvas and a static panel without a branch.
+    /// 约定：`local`/`chunk` 表示映射到视口**中心**的世界坐标点，因此 UI 相机
+    /// 位于逻辑坐标 `viewport_size / (2 · dpi_scale)`，画布相机位于 `canvas_centre`。
+    /// 这使同一套着色器公式无需分支即可同时服务可平移画布与静态面板。
     #[must_use]
     pub fn ui(viewport: (f32, f32), dpi_scale: f32) -> Self {
         let scale = if dpi_scale > 0.0 { dpi_scale } else { 1.0 };
@@ -86,7 +83,7 @@ impl Camera {
         }
     }
 
-    /// Camera centred on a canvas world position.
+    /// 对准指定画布世界坐标中心的相机。
     #[must_use]
     pub fn canvas(chunk: [i32; 2], local: [f32; 2], zoom: f32, dpi_scale: f32) -> Self {
         Self {
@@ -98,22 +95,19 @@ impl Camera {
     }
 }
 
-/// A frosted-glass backdrop requested by the UI.
+/// UI 请求的毛玻璃背景虚化区域。
 ///
-/// The rectangle is in **physical pixels** of the target. The GPU renders the
-/// frame, blurs the region behind the rectangle with a dual-Kawase filter and
-/// composites the result back with the rounded-corner mask — the modal's own
-/// surface is then drawn translucent on top by the normal primitive pass.
+/// 矩形使用渲染目标的**物理像素**坐标。GPU 渲染主场景后，使用 Dual-Kawase 滤镜
+/// 模糊该矩形后方区域并按圆角遮罩合成回目标，随后模态层自身半透明表面由常规图元 Pass 绘制。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct BackdropRequest {
-    /// `(x, y, width, height)` in physical pixels.
+    /// 物理像素坐标 `(x, y, width, height)`。
     pub rect: [f32; 4],
-    /// The uniform corner radius, in physical pixels.
+    /// 统一物理像素圆角半径。
     pub radius: f32,
-    /// Per-corner radii `(top-left, top-right, bottom-right, bottom-left)`.
+    /// 四角独立圆角半径 `(左上, 右上, 右下, 左下)`。
     pub corner_radii: [f32; 4],
-    /// The layer the owning primitive lives on. Kept so a future layered
-    /// renderer can composite the blur under exactly that layer.
+    /// 所属图元所在的图层，保留供未来分层渲染器在对应图层下方精确合成。
     pub layer_key_prefix: u64,
 }
 
@@ -128,38 +122,28 @@ impl Default for BackdropRequest {
     }
 }
 
-/// Everything the renderer needs for one layer pass.
+/// 渲染器执行单个图层 Pass 所需的全部输入数据。
 #[derive(Debug)]
 pub struct SceneUpload<'a> {
     pub primitives: &'a [GpuPrimitiveInstance],
     pub transforms: &'a [GpuTransform],
     pub clips: &'a [GpuClipNode],
     pub payloads: &'a [GpuPayload],
-    /// Bumped by the caller whenever any of the four arrays changed. Equal
-    /// generations skip the upload entirely (this is what makes a pan free).
+    /// 当四个数组任意一项变更时由调用方递增。版本号相同时完全跳过上传（使平移零开销）。
     pub generation: u64,
     pub camera: Camera,
-    /// `(layer << 56) | (barrier << 40) | (variant << 36)` prefix for the
-    /// 64-bit sort key.
+    /// 64 位排序键的前缀：`(layer << 56) | (barrier << 40) | (variant << 36)`。
     pub key_prefix: u64,
-    /// The primitive ranges that changed since the last upload.
+    /// 自上次上传以来发生变更的图元索引区间。
     ///
-    /// An empty slice means "upload everything" — the generation moved and
-    /// the whole scene is staged. A non-empty slice means "only these
-    /// primitives changed": the renderer skips the rest of the scene and
-    /// patches just those slices into the pool, so a hover or a slider drag
-    /// costs a handful of bytes instead of the whole scene.
+    /// 空切片表示“全量上传”；非空切片表示“仅这些图元变更”：渲染器跳过其余场景，
+    /// 仅将这些切片以补丁形式写入持久化池，使悬停或滑块拖拽仅消耗数字节上传。
     ///
-    /// The ranges are half-open primitive indices. The transforms, the
-    /// clips and the payloads are *not* re-uploaded: a paint-only change
-    /// leaves them untouched, and the caller has to fall back to a full
-    /// upload when it does not.
+    /// 区间为半开图元索引。变换、裁剪与载荷不会在此路径重传。
     pub dirty_ranges: &'a [(u32, u32)],
-    /// The lightweight auxiliary tables changed even though the primitive
-    /// pool did not. They are staged in the partial path without forcing a
-    /// whole-scene upload.
+    /// 标记图元池未变但轻量级辅助表已变更，可在局部更新路径中单独暂存而无需全量上传。
     pub aux_changed: bool,
-    /// Frosted-glass regions composited after the main pass, before present.
+    /// 在主 Pass 之后、呈现之前合成的毛玻璃背景区域。
     pub backdrops: &'a [BackdropRequest],
 }
 
@@ -180,8 +164,7 @@ impl Default for SceneUpload<'_> {
     }
 }
 
-/// Per-frame counters, surfaced by the debug overlay and asserted by the KPI
-/// tests.
+/// 逐帧统计计数器，供调试覆盖层展示及 KPI 测试断言。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrameStats {
     pub submitted: u32,
@@ -194,14 +177,14 @@ pub struct FrameStats {
 }
 
 impl FrameStats {
-    /// Draw calls the main pass issued. The KPI red line is `<= 4`.
+    /// 主 Pass 发出的间接绘制批次数，KPI 红线为 `<= 4`。
     #[must_use]
     pub fn mdi_draw_calls(&self) -> u32 {
         self.draw_calls
     }
 }
 
-/// A driver image owned by one offscreen-pool slot.
+/// 离屏池单个槽位持有的驱动图像资源。
 struct BlurTexture {
     desc: unbound_graph::TextureDesc,
     image: vk::Image,
@@ -209,18 +192,16 @@ struct BlurTexture {
     view: vk::ImageView,
 }
 
-/// The backdrop-blur scratch targets and the graph that validates them.
+/// 背景模糊暂存目标及其校验渲染图。
 ///
-/// The [pool](unbound_graph::OffscreenPool) owns the slot bookkeeping; this
-/// struct owns the Vulkan images. A slot keeps its image across frames, so the
-/// steady state creates nothing and writes no descriptors.
+/// [pool](unbound_graph::OffscreenPool) 负责槽位簿记；本结构体拥有 Vulkan 图像。
+/// 槽位跨帧保留图像，因此稳态下零资源创建、零描述符写入。
 struct BlurTargets {
     pool: unbound_graph::OffscreenPool,
     textures: Vec<Option<BlurTexture>>,
-    /// The `(source view, source layout, destination view)` currently written
-    /// into each pre-allocated descriptor set.
+    /// 当前写入每个预分配描述符集的 `(source view, source layout, destination view)` 记录。
     bindings: Vec<Option<(vk::ImageView, vk::ImageLayout, vk::ImageView)>>,
-    /// The compiled graph describing copy → blur → composite.
+    /// 描述 拷贝 → 模糊 → 合成 流程的已编译渲染图。
     graph: unbound_graph::CompiledGraph,
 }
 
@@ -234,10 +215,9 @@ impl BlurTargets {
         }
     }
 
-    /// Declare the backdrop chain and let the graph reject a broken one.
+    /// 声明背景虚化处理链并由渲染图校验合法性。
     ///
-    /// The graph is compiled once: it is a declaration of the passes, not a
-    /// per-frame structure.
+    /// 渲染图仅在初始化时编译一次。
     fn compile_graph() -> unbound_graph::CompiledGraph {
         use unbound_graph::{PassKind, RenderGraph, TextureRole};
         use unbound_graph::{TextureDesc, TextureFormat};
@@ -246,7 +226,7 @@ impl BlurTargets {
         let desc = TextureDesc::new(1, 1, TextureFormat::Rgba8);
         let scene = graph.add_texture(
             desc,
-            TextureRole::External, // the scene colour attachment
+            TextureRole::External, // 场景颜色附件
         );
         let half = graph.add_texture(desc, TextureRole::Transient);
         let full = graph.add_texture(desc, TextureRole::Transient);
@@ -269,10 +249,9 @@ impl BlurTargets {
         })
     }
 
-    /// Make sure `slot` holds an image of `desc` and return its view.
+    /// 确保 `slot` 持有匹配 `desc` 的图像并返回其视图。
     ///
-    /// Returns `true` in the second position when the image was (re)created
-    /// and therefore still needs its `UNDEFINED → GENERAL` transition.
+    /// 第二个返回值若为 `true`，表示图像刚被（重）创建，尚需执行 `UNDEFINED → GENERAL` 布局转换。
     fn ensure(
         &mut self,
         gpu: &Gpu,
@@ -289,15 +268,14 @@ impl BlurTargets {
             }
         }
         if let Some(old) = self.textures[index].take() {
-            // SAFETY: the slot is being rebound and the device is idle between
-            // frames; the old image is ours.
+            // SAFETY: 正在重绑槽位且帧间设备空闲；旧图像归本结构体所有。
             unsafe {
                 gpu.device.destroy_image_view(old.view, None);
                 gpu.device.destroy_image(old.image, None);
                 gpu.device.free_memory(old.memory, None);
             }
         }
-        // SAFETY: creation only; ownership is stored in the slot.
+        // SAFETY: 仅创建资源；所有权存入对应槽位。
         let (image, memory, view) = unsafe {
             RenderTarget::create_image(
                 gpu,
@@ -318,7 +296,7 @@ impl BlurTargets {
     }
 
     /// # Safety
-    /// The device must be idle.
+    /// 设备必须处于空闲状态。
     unsafe fn destroy(&mut self, gpu: &Gpu) {
         for texture in self.textures.drain(..).flatten() {
             gpu.device.destroy_image_view(texture.view, None);
@@ -328,7 +306,7 @@ impl BlurTargets {
     }
 }
 
-/// The renderer: device resources + frame execution.
+/// 渲染器主体：管理设备资源与帧执行调度。
 pub struct Renderer {
     pub gpu: Gpu,
     pub pipelines: Pipelines,
@@ -338,7 +316,7 @@ pub struct Renderer {
     ring: TransientRing,
     ring_buffer: Buffer,
     lut_buffer: Buffer,
-    /// The GPU timestamp scope, when timing is enabled.
+    /// 启用计时时的 GPU 时间戳作用域。
     timing: Option<crate::timing::TimestampScope>,
 
     prim_handle: PoolHandle,
@@ -361,60 +339,44 @@ pub struct Renderer {
     staging: Buffer,
 
     capacity_primitives: u32,
-    /// The upload generation the pool is at.
+    /// 持久化池当前所处的上传版本号。
     generation: UploadGeneration,
     frame_index: u64,
     pub stats: FrameStats,
-    /// Backdrop-blur scratch targets.
+    /// 背景模糊暂存目标。
     blur: BlurTargets,
-    /// Scratch buffer for the staged scene bytes, reused across frames.
-    ///
-    /// The render path allocates nothing per frame: the buffer keeps its
-    /// capacity and is only cleared.
+    /// 用于暂存场景字节的复用缓冲区（跨帧保留容量，仅清空内容以实现每帧零分配）。
     staging_bytes: Vec<u8>,
-    /// The spans of the staged bytes, reused across frames.
+    /// 跨帧复用的暂存字节区间列表。
     staging_spans: Vec<(u32, u32, u32)>,
-    /// The scatter patches, reused across frames.
+    /// 跨帧复用的散布补丁列表。
     staging_patches: Vec<GpuScatterPatch>,
-    /// The atlases bound to the bindless descriptor slots, when installed.
+    /// 安装后绑定到 Bindless 描述符槽位的图集集合。
     atlases: Option<std::sync::Arc<crate::atlas::AtlasSet>>,
-    /// Bookkeeping for the caller-owned bindless slots (`48..64`).
+    /// 供调用方注册外部纹理的 Bindless 槽位（`48..64`）簿记器。
     external_slots: ExternalTextureSlots,
-    /// An externally owned colour attachment to draw into, when set.
-    /// The borrowed colour attachment: the image, its view and the extent.
+    /// 若已设置，则渲染到外部拥有的颜色附件。
+    /// 借用的颜色附件：图像句柄、视图与尺寸。
     ///
-    /// The image handle is needed because only the *image* can be layout
-    /// transitioned — a view carries no layout.
+    /// 必须传入图像句柄，因为仅图像本体可执行布局转换（视图不携带布局信息）。
     external_color: Option<(vk::Image, vk::ImageView, u32, u32)>,
-    /// Whether the borrowed image is a swapchain image that must be handed to
-    /// the presentation engine in `PRESENT_SRC_KHR`.
+    /// 借用图像是否为交换链图像（渲染后须转换至 `PRESENT_SRC_KHR` 交给呈现引擎）。
     ///
-    /// A presentable image presented straight out of
-    /// `COLOR_ATTACHMENT_OPTIMAL` is invalid
-    /// (VUID-VkPresentInfoKHR-pImageIndices-01430); the offscreen path and the
-    /// borrowed-attachment test keep the attachment layout instead.
+    /// 直接以 `COLOR_ATTACHMENT_OPTIMAL` 呈现会触发 `VUID-VkPresentInfoKHR-pImageIndices-01430`；
+    /// 离屏路径与借用附件测试则保留附件布局。
     external_present: bool,
-    /// The semaphore that is signalled once the borrowed image is ready.
-    ///
-    /// The render submission waits on it before it touches the image.
+    /// 借用图像就绪时触发的信号量；渲染提交在访问该图像前须等待它。
     external_ready: vk::Semaphore,
-    /// The semaphore the frame submission signals when the frame is going
-    /// to be presented.
+    /// 待呈现帧在渲染提交完成时触发的信号量。
     ///
-    /// This is the render-finished semaphore of the *acquired swapchain
-    /// image*: one per image, so the presentation engine never waits on a
-    /// semaphore that another image's presentation is still using. A null
-    /// semaphore falls back to [`Self::present_semaphore`].
+    /// 即当前已获取交换链图像专属的渲染完成信号量（每张图像一个）；
+    /// 若为空则回退到 [`Self::present_semaphore`]。
     external_signal: vk::Semaphore,
-    /// Signalled when the frame's rendering has finished.
-    ///
-    /// The presentation engine waits on this before handing the image to the
-    /// display, so the user never sees a half-drawn frame.
+    /// 本帧渲染完成时触发的信号量，供呈现引擎在显示前等待。
     present_semaphore: vk::Semaphore,
-    /// The linear clear colour used by `begin_rendering`.
+    /// `begin_rendering` 使用的线性清屏色。
     ///
-    /// It follows the theme's `SURFACE` token, so a resize never exposes a
-    /// dark border behind a light UI.
+    /// 跟随主题的 `SURFACE` 令牌，确保缩放窗口时浅色 UI 后方不会闪现黑边。
     clear_color: [f32; 4],
 }
 
@@ -463,7 +425,7 @@ fn image_barrier(
 
 impl RenderTarget {
     fn new(gpu: &Gpu, width: u32, height: u32) -> Result<Self, GpuError> {
-        // SAFETY: creation only; ownership is returned to the caller.
+        // SAFETY: 仅创建资源；所有权移交调用方。
         unsafe {
             let (color, color_memory, color_view) = Self::create_image(
                 gpu,
@@ -557,7 +519,7 @@ impl RenderTarget {
     }
 
     /// # Safety
-    /// The device must be idle.
+    /// 设备必须处于空闲状态。
     unsafe fn destroy(&self, gpu: &Gpu) {
         let device = &gpu.device;
         device.destroy_image_view(self.color_view, None);
@@ -570,15 +532,14 @@ impl RenderTarget {
 }
 
 impl Renderer {
-    /// Build all persistent GPU resources for an offscreen target.
+    /// 为离屏渲染目标构建全部持久化 GPU 资源。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn new(gpu: Gpu, width: u32, height: u32) -> Result<Self, GpuError> {
         let pipelines = Pipelines::new(&gpu)?;
         let target = RenderTarget::new(&gpu, width, height)?;
-        // A binary semaphore that marks "the frame is fully drawn". The
-        // presentation engine waits on it.
+        // 标记“帧已完全绘制完成”的二值信号量，供呈现引擎等待。
         let present_semaphore = unsafe {
             gpu.device
                 .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
@@ -599,8 +560,7 @@ impl Renderer {
         let payload_handle = pool
             .allocate(16 * 1024)
             .map_err(|e| GpuError::Allocation(e.to_string()))?;
-        // The capacity counters are byte counts: they must match what the
-        // allocator actually carved, not the requested size.
+        // 容量计数器以字节为单位：须匹配分配器实际切分的容量而非请求大小。
         let prim_capacity = u64::from(pool.capacity_of(prim_handle).unwrap_or(0));
         let transform_capacity = u64::from(pool.capacity_of(transform_handle).unwrap_or(0));
         let clip_capacity = u64::from(pool.capacity_of(clip_handle).unwrap_or(0));
@@ -627,7 +587,7 @@ impl Renderer {
             "theme-lut",
         )?;
 
-        // Worst-case primitive count is bounded by the pool and by the ring.
+        // 最坏情况下的图元数量受持久化池与瞬态环容量共同约束。
         let capacity_primitives = (pool_bytes / 64).min(1 << 20) as u32;
         let max = capacity_primitives as u64;
         let keys_a = gpu.create_buffer(max * 8, bda_usage, MemoryKind::DeviceLocal, "keys-a")?;
@@ -643,9 +603,8 @@ impl Renderer {
         )?;
         let commands = gpu.create_buffer(
             u64::from(MAX_DRAW_RUNS) * 16,
-            // `vkCmdDrawIndirectCount` requires INDIRECT_BUFFER on both the
-            // command buffer and the count buffer, on top of the BDA/STOGARE
-            // usage the compute stage needs.
+            // `vkCmdDrawIndirectCount` 要求命令缓冲区与计数缓冲区除计算阶段所需的
+            // BDA/STORAGE 用途外，还必须具备 `INDIRECT_BUFFER` 用途。
             bda_usage | vk::BufferUsageFlags::INDIRECT_BUFFER,
             MemoryKind::DeviceLocal,
             "indirect",
@@ -656,9 +615,8 @@ impl Renderer {
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::TRANSFER_SRC
                 | vk::BufferUsageFlags::INDIRECT_BUFFER
-                // The culling/indirect stages address this buffer through BDA;
-                // without the usage flag the address is 0 and the shader would
-                // write to NULL (instant device loss).
+                // 剔除与间接压缩阶段通过 BDA 寻址该缓冲区；若缺少该用途标志，地址为 0，
+                // 着色器写入 NULL 会立即导致设备丢失。
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             MemoryKind::HostVisible,
             "counters",
@@ -678,7 +636,7 @@ impl Renderer {
             "staging",
         )?;
 
-        // SAFETY: the buffer is persistent and nothing is in flight yet.
+        // SAFETY: 缓冲区为持久化资源且当前尚无在飞任务。
         unsafe { pipelines.bind_sorted_indices(&gpu, &idx_a) };
 
         let ring = TransientRing::new(ring_bytes as u32, gpu.frames_in_flight());
@@ -731,21 +689,18 @@ impl Renderer {
         Ok(renderer)
     }
 
-    /// Write the 4 KiB theme LUT (`docs` §4.5). Only this buffer changes when
-    /// the theme flips; no primitive is re-uploaded and nothing re-lays out.
+    /// 写入 4 KiB 主题 LUT（参见 `docs/architecture/gpu-renderer.md`）。
+    /// 切换主题时仅更新此缓冲区，无需重传图元或重新布局。
     ///
     /// # Errors
-    /// Propagates write failures.
+    /// 透传写入错误。
     pub fn write_theme(&mut self, colors: &[[u16; 4]]) -> Result<(), GpuError> {
-        // A stack array: the table is a fixed 4 KiB, so there is no reason to
-        // heap-allocate it on every theme switch.
+        // 使用栈数组：LUT 固定为 4 KiB，每次切换主题无需堆分配。
         let mut entries = [[0u16; 4]; 512];
         for (i, c) in colors.iter().take(512).enumerate() {
             entries[i] = *c;
         }
-        // The hardware clear runs before any primitive is drawn, so it cannot
-        // read the LUT. Keep the surface colour in linear space and clear
-        // with it: a light theme must not flash a dark border on resize.
+        // 硬件清屏在绘制任何图元前执行，无法读取 LUT；因此在线性空间保存表面色用于清屏。
         let surface = entries[unbound_theme::Token::SURFACE.raw() as usize];
         self.clear_color = [
             unbound_math::f16_to_f32(surface[0]),
@@ -753,31 +708,27 @@ impl Renderer {
             unbound_math::f16_to_f32(surface[2]),
             unbound_math::f16_to_f32(surface[3]).clamp(0.0, 1.0),
         ];
-        // Layout: 512 × (RGBA16F) = 4 KiB, stored as four u16 per entry.
-        // SAFETY: the LUT buffer is host visible and 4096 bytes long.
+        // 布局：512 × RGBA16F = 4 KiB，每项存储四个 u16。
+        // SAFETY: LUT 缓冲区宿主可见且长度为 4096 字节。
         unsafe {
             let ptr = self
                 .lut_buffer
                 .host_ptr(0)
                 .ok_or_else(|| GpuError::Allocation("lut not mapped".into()))?;
             core::ptr::copy_nonoverlapping(entries.as_ptr().cast::<u8>(), ptr, entries.len() * 8);
-            // The memory may not be host-coherent, so the copy has to be
-            // flushed before the GPU reads the table. Without this the
-            // shader could sample the previous theme.
+            // 内存可能非宿主一致，必须在 GPU 读取前刷写，否则着色器可能采样到旧主题。
             self.gpu
                 .flush(&self.lut_buffer, 0, (entries.len() * 8) as u64);
         }
         Ok(())
     }
 
-    /// Upload a semantic theme (`docs` §4.5).
+    /// 上传语义化主题（参见 `docs/architecture/gpu-renderer.md`）。
     ///
-    /// A theme switch is exactly one 4 KiB write: no instance data changes,
-    /// no layout runs, and the scene is not re-sorted. The primitives
-    /// reference colour *tokens*; the table resolves them.
+    /// 主题切换仅需一次 4 KiB 写入：图元引用颜色令牌，由 LUT 在着色器中实时解析。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn write_theme_lut(&mut self, lut: &unbound_theme::ThemeLut) -> Result<(), GpuError> {
         self.write_theme(lut.entries())
     }
@@ -785,7 +736,7 @@ impl Renderer {
     fn write_default_lut(&mut self) -> Result<(), GpuError> {
         use unbound_math::color::Color;
         let mut colors = vec![[0u16; 4]; 512];
-        colors[1] = Color::from_srgb8(0, 0, 0, 40).to_rgba16f(); // global shadow
+        colors[1] = Color::from_srgb8(0, 0, 0, 40).to_rgba16f(); // 全局阴影颜色
         colors[2] = Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
         colors[3] = Color::from_srgb8(24, 24, 27, 255).to_rgba16f();
         colors[4] = Color::from_srgb8(63, 63, 70, 255).to_rgba16f();
@@ -793,22 +744,22 @@ impl Renderer {
         self.write_theme(&colors)
     }
 
-    /// Primitive capacity of the persistent pool, exposed for diagnostics.
+    /// 持久化池可容纳的图元容量（用于诊断）。
     #[must_use]
     pub fn capacity_primitives(&self) -> u32 {
         self.capacity_primitives
     }
 
-    /// Current target size.
+    /// 当前渲染目标尺寸。
     #[must_use]
     pub fn size(&self) -> (u32, u32) {
         (self.target.width, self.target.height)
     }
 
-    /// Resize the offscreen target (and every dependent image view).
+    /// 调整离屏渲染目标及所有依赖图像视图的尺寸。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), GpuError> {
         if width == 0 || height == 0 {
             return Ok(());
@@ -817,22 +768,22 @@ impl Renderer {
             return Ok(());
         }
         self.gpu.wait_idle();
-        // SAFETY: the device is idle.
+        // SAFETY: 设备处于空闲状态。
         unsafe { self.target.destroy(&self.gpu) };
         self.target = RenderTarget::new(&self.gpu, width, height)?;
         Ok(())
     }
 
-    /// Ensure the depth attachment can cover `width × height`.
+    /// 确保深度附件足以覆盖 `width × height`。
     ///
-    /// A window drag changes the surface size on every `WM_SIZE`. Rebuilding
-    /// the depth image each time costs a `vkDeviceWaitIdle` and a fresh
-    /// allocation per pixel; instead the image grows in 256 px steps and is
-    /// never shrunk. Dynamic rendering allows the attachment to be larger than
-    /// the render area, so the extra rows/columns are simply unused.
+    /// 拖拽缩放窗口时每次 `WM_SIZE` 若都重建深度图会触发 `vkDeviceWaitIdle`；
+    /// 改为按 256 px 步长向上增长且不收缩。动态渲染允许附件大于渲染区域。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
+    ///
+    /// # Errors
+    /// 透传 Vulkan 调用错误。
     pub fn ensure_depth_size(&mut self, width: u32, height: u32) -> Result<(), GpuError> {
         if width == 0 || height == 0 {
             return Ok(());
@@ -844,7 +795,7 @@ impl Renderer {
         let alloc_h = height.max(self.target.depth_alloc.1).div_ceil(256) * 256;
         let gpu = &self.gpu;
         gpu.wait_idle();
-        // SAFETY: the device is idle and the old image is ours.
+        // SAFETY: 设备空闲且旧图像归本结构体所有。
         unsafe {
             let device = &gpu.device;
             device.destroy_image_view(self.target.depth_view, None);
@@ -866,12 +817,9 @@ impl Renderer {
         Ok(())
     }
 
-    /// Ensure the pool block backing `which` can hold `len` elements.
+    /// 确保支撑 `which` 数组的池块可容纳 `len` 个元素。
     ///
-    /// The pool carves bytes, so the element count is converted with the
-    /// array's stride before the comparison. Mixing the two units is what used
-    /// to let a 2 000-element scene write 128 KB into a 64 KB block and
-    /// overwrite the transform, clip and payload arrays that follow it.
+    /// 比较容量前先按元素步长将元素数换算为字节，防止单位混淆导致越界覆写相邻数组。
     fn ensure_pool_capacity(&mut self, len: usize, which: Which) -> Result<(), GpuError> {
         let handle = match which {
             Which::Primitives => self.prim_handle,
@@ -879,11 +827,7 @@ impl Renderer {
             Which::Clips => self.clip_handle,
             Which::Payloads => self.payload_handle,
         };
-        // The epoch a retired block is held back for.
-        //
-        // The pool knows it: it is the timeline value the current frame will
-        // signal. Once the GPU has reached it, every older frame — the only
-        // ones that could still read the block — has completed.
+        // 退役块需隔离等待的 epoch（即当前帧将触发的时间线值）。
         let epoch = self.pool.current_epoch();
         let (new_handle, capacity) = self
             .pool
@@ -909,28 +853,26 @@ impl Renderer {
             }
         }
         if moved {
-            // The array moved: force a full re-upload next frame.
+            // 数组发生搬迁：强制下一帧执行全量重传。
             self.generation.invalidate();
         }
         Ok(())
     }
 
-    /// Render one layer pass offscreen and return its statistics.
+    /// 离屏渲染单个图层 Pass 并返回帧统计信息。
     ///
     /// # Errors
-    /// Propagates Vulkan failures (including device loss).
+    /// 透传 Vulkan 错误（含设备丢失）。
     pub fn render(&mut self, scene: &SceneUpload<'_>) -> Result<FrameStats, GpuError> {
         let frame_count = self.gpu.frames_in_flight();
         let frame_slot = (self.frame_index % u64::from(frame_count)) as usize;
         let cmd = self.gpu.frames[frame_slot].command_buffer;
-        // The previous frame that used this slot has to have retired before
-        // its command buffer may be reused.
+        // 复用命令缓冲区前，上次使用该槽位的帧必须已退役。
         self.wait_for_previous_frame()?;
         {
             let gpu = &self.gpu;
             let sync = &gpu.frames[frame_slot];
-            // SAFETY: the fence, command buffer and queue belong to this
-            // renderer; waiting on our own fence cannot deadlock.
+            // SAFETY: 围栏、命令缓冲区与队列均属于本渲染器；等待自身围栏不会死锁。
             unsafe {
                 gpu.device.reset_fences(&[sync.in_flight])?;
                 gpu.device
@@ -943,21 +885,12 @@ impl Renderer {
             ..Default::default()
         };
 
-        // The pool's frame lifecycle: the epoch the frame will signal, and
-        // the reclamation of the blocks whose epoch the GPU has passed.
-        //
-        // Without this the quarantine never drained: every block that was
-        // ever retired stayed parked, and once the queue saturated the pool
-        // silently leaked the memory instead of reusing it.
+        // 池的帧生命周期：设置本帧时间线 epoch，并回收 GPU 已越过对应 epoch 的隔离块。
+        // 若缺少此步骤，隔离队列永远不会排空并最终导致内存泄漏。
         let timeline_value = self.frame_index + 1;
         self.pool.begin_frame(timeline_value, frame_slot as u32);
-        // The fence wait above retired the frame that used this slot
-        // `frames_in_flight` frames ago, so its timeline value has been
-        // signalled and the blocks it referenced may be handed back.
-        //
-        // The timeline semaphore itself only advances when somebody waits on
-        // it, and nothing does in the render loop, so the completion is
-        // derived from the fence instead.
+        // 上方围栏等待已完成，意味着 `frames_in_flight` 帧前使用该槽位的帧已退役，
+        // 可依据该槽位记录的时间线值安全回收已隔离内存块。
         let retired = self.frame_index.saturating_sub(u64::from(frame_count)) + 1;
         self.pool.reclaim(retired);
 
@@ -965,8 +898,7 @@ impl Renderer {
         self.stats.patches = upload.patch_count;
         self.stats.bytes_uploaded = upload.bytes;
 
-        // SAFETY: the command buffer is exclusively ours until the submit below
-        // and the fence guarantees the previous submission has retired.
+        // SAFETY: 在提交前命令缓冲区由本帧独占，且围栏已保证前次提交退役。
         unsafe {
             self.gpu.device.begin_command_buffer(
                 cmd,
@@ -974,63 +906,43 @@ impl Renderer {
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )?;
         }
-        // The first timestamp brackets the whole frame on the GPU.
+        // 首个时间戳标记整帧在 GPU 上的起始时刻。
         if let Some(scope) = &self.timing {
             if self.gpu.features.host_query_reset {
-                // SAFETY: the pool is not in use: the frame that used it has
-                // retired.
+                // SAFETY: 查询池未被使用：此前使用它的帧已退役。
                 scope.reset(&self.gpu)?;
             } else {
-                // Without the host feature the reset has to be recorded in the
-                // command buffer, so that it is ordered before the
-                // timestamps that follow it.
-                // SAFETY: our own command buffer, freshly begun.
+                // 不支持宿主重置特性时，须在命令缓冲区内录制重置以保证早于后续时间戳写入。
+                // SAFETY: 刚开启的自有命令缓冲区。
                 unsafe {
                     scope.reset_in_command_buffer(&self.gpu, cmd);
                 }
             }
-            // SAFETY: our own command buffer.
+            // SAFETY: 属于本渲染器的命令缓冲区。
             unsafe {
                 scope.write_at(&self.gpu, cmd, 0, vk::PipelineStageFlags::TOP_OF_PIPE);
             }
         }
-        // The stage markers inside `record_frame` close the bracket.
+        // `record_frame` 内部的阶段标记负责闭合时间戳区间。
         self.record_frame(cmd, scene, &upload, frame_slot)?;
 
         {
             let gpu = &self.gpu;
             let sync = &gpu.frames[frame_slot];
-            // SAFETY: the command buffer was just closed and is submitted once.
+            // SAFETY: 命令缓冲区刚结束录制且仅提交一次。
             unsafe {
                 gpu.device.end_command_buffer(cmd)?;
-                // Offscreen: nothing signals `image_available`, so waiting on it
-                // would deadlock. Swapchain presentation supplies that wait.
-                //
-                // The frame signals two semaphores: the timeline semaphore
-                // (with a value) and the plain binary semaphore the
-                // presentation engine waits on. A timeline semaphore cannot
-                // share `VkSubmitInfo::pSignalSemaphores` with a binary one,
-                // so `vkQueueSubmit2` is used instead: each semaphore carries
-                // its own value in a `VkSemaphoreSubmitInfo`.
-                //
-                // The present semaphore is only signalled when the frame is
-                // actually going to be presented. A binary semaphore that is
-                // signalled but never waited on cannot be signalled again, and
-                // the offscreen path never presents — signalling it there
-                // made every offscreen frame after the first an invalid
-                // submission.
+                // 离屏路径无 `image_available` 等待；仅在需要呈现时才触发二值呈现信号量。
+                // 使用 `vkQueueSubmit2` 以在同一提交中同时触发时间线信号量与二值呈现信号量。
                 let mut signal_infos = [
-                    // The timeline semaphore carries the frame's value; a
-                    // binary semaphore ignores the value field.
+                    // 时间线信号量携带本帧时间线值；二值信号量忽略 value 字段。
                     vk::SemaphoreSubmitInfo::default()
                         .semaphore(gpu.timeline.semaphore)
                         .value(timeline_value),
                     vk::SemaphoreSubmitInfo::default(),
                 ];
                 let signal_count = if self.external_present {
-                    // The signal semaphore belongs to the acquired swapchain
-                    // image: signalling it a second time while the previous
-                    // presentation still waits on it is invalid usage.
+                    // 触发当前已获取交换链图像专属的信号量，避免与未完成呈现产生信号量复用冲突。
                     let signal_sem = if self.external_signal != vk::Semaphore::null() {
                         self.external_signal
                     } else {
@@ -1043,13 +955,7 @@ impl Renderer {
                 } else {
                     1
                 };
-                // A borrowed image is only ours once the presentation engine
-                // has handed it over. Waiting on its semaphore here is what
-                // makes the swapchain path safe; the offscreen path has no
-                // such image and waits on nothing.
-                //
-                // The array is on the stack: the render path allocates
-                // nothing per frame.
+                // 若为借用的交换链图像，须等待呈现引擎交出所有权。等待数组置于栈上，零堆分配。
                 let wait_info = vk::SemaphoreSubmitInfo::default()
                     .semaphore(self.external_ready)
                     .value(0)
@@ -1070,15 +976,13 @@ impl Renderer {
                     .queue_submit2(gpu.graphics_queue, &[submit], sync.in_flight)?;
             }
         }
-        // The frame reached the GPU: the pool now holds this scene, so the
-        // generation may be claimed. A frame that failed before this point
-        // left the pool behind, and the next frame has to upload it again.
+        // 帧已成功提交至 GPU：持久化池现已持有该版本场景，可确认提交版本号。
         self.generation.commit();
         self.frame_index += 1;
         Ok(self.stats)
     }
 
-    /// Reset the visibility counter and hand back the resolved addresses.
+    /// 重置可见性计数器并打包解析后的 BDA 帧推送常量。
     fn record_frame(
         &mut self,
         cmd: vk::CommandBuffer,
@@ -1089,11 +993,11 @@ impl Renderer {
         let gpu = &self.gpu;
         let device = &gpu.device;
 
-        // ---- clear counters -------------------------------------------------
-        // SAFETY: our own command buffer, 64 bytes inside a 64-byte buffer.
+        // ---- 清零计数器 -----------------------------------------------------
+        // SAFETY: 自有命令缓冲区，向 64 字节缓冲区写入 64 字节。
         unsafe { device.cmd_fill_buffer(cmd, self.counters.raw, 0, 64, 0) };
 
-        // ---- 1/2. scatter ----------------------------------------------------
+        // ---- 1/2. 增量散布更新 -----------------------------------------------
         if upload.patch_count > 0 {
             let mut pc = PushConstants {
                 prim_count: upload.patch_count,
@@ -1102,8 +1006,7 @@ impl Renderer {
                 scratch_bda3: self.ring_buffer.address,
                 ..Default::default()
             };
-            // One workgroup per patch: the shader copies the patch with all
-            // 64 of its lanes.
+            // 每个补丁一个工作组：着色器用全部 64 个通道并行拷贝。
             self.dispatch(
                 cmd,
                 crate::pipeline::ComputeStage::Scatter,
@@ -1120,7 +1023,7 @@ impl Renderer {
                 )
                 .dst_access_mask(vk::AccessFlags2::SHADER_READ);
             let barriers = [barrier];
-            // SAFETY: recording into our own command buffer.
+            // SAFETY: 向自有命令缓冲区录制命令。
             unsafe {
                 device.cmd_pipeline_barrier2(
                     cmd,
@@ -1131,11 +1034,10 @@ impl Renderer {
 
         self.mark(cmd, 1, vk::PipelineStageFlags::COMPUTE_SHADER);
 
-        // ---- 3. cull ---------------------------------------------------------
+        // ---- 3. 视口剔除 -----------------------------------------------------
         let n = scene.primitives.len() as u32;
-        // Unused slots start at the maximum key so they sort to the very end,
-        // where `indirect.comp` stops. This must happen before the cull pass,
-        // which overwrites slots [0, visible).
+        // 未使用槽位预填充最大键值使其排到末尾（供 `indirect.comp` 哨兵终止）；
+        // 必须在剔除 Pass 之前执行，剔除 Pass 会覆写 `[0, visible)` 槽位。
         self.clear_keys_tail(cmd, n)?;
         let barrier = vk::MemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
@@ -1143,7 +1045,7 @@ impl Renderer {
             .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE);
         let barriers = [barrier];
-        // SAFETY: recording into our own command buffer.
+        // SAFETY: 向自有命令缓冲区录制命令。
         unsafe {
             device.cmd_pipeline_barrier2(
                 cmd,
@@ -1169,10 +1071,7 @@ impl Renderer {
 
         self.mark(cmd, 2, vk::PipelineStageFlags::COMPUTE_SHADER);
 
-        // ---- 4. radix sort ---------------------------------------------------
-        // Sort the *whole* key array: entries beyond the visible count were
-        // filled with the maximum key by the clear below, so they stay at the
-        // end. `n` is the maximum possible visible count.
+        // ---- 4. 基数排序 -----------------------------------------------------
         if n > 0 {
             let barrier = vk::MemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
@@ -1180,7 +1079,7 @@ impl Renderer {
                 .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
                 .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE);
             let barriers = [barrier];
-            // SAFETY: recording into our own command buffer.
+            // SAFETY: 向自有命令缓冲区录制命令。
             unsafe {
                 device.cmd_pipeline_barrier2(
                     cmd,
@@ -1248,7 +1147,7 @@ impl Renderer {
 
         self.mark(cmd, 3, vk::PipelineStageFlags::COMPUTE_SHADER);
 
-        // ---- 5. indirect -----------------------------------------------------
+        // ---- 5. 间接命令压缩 -------------------------------------------------
         let mut pc = PushConstants {
             prim_count: n,
             aux: MAX_DRAW_RUNS,
@@ -1260,10 +1159,8 @@ impl Renderer {
         self.dispatch(cmd, crate::pipeline::ComputeStage::Indirect, &mut pc, 1);
         self.stats.compute_dispatches += 1;
 
-        // The compute stage wrote the draw commands and the run count; both must
-        // be made visible to the *indirect* stage specifically. A
-        // COMPUTE→COMPUTE barrier (what `pipeline_barrier` emits) is not enough
-        // and silently yields zero instances.
+        // 计算阶段写入了绘制命令与批次数；必须通过屏障显式对 `DRAW_INDIRECT` 阶段可见，
+        // 仅用 COMPUTE→COMPUTE 屏障会导致绘制零个实例。
         {
             let barrier = vk::MemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
@@ -1275,7 +1172,7 @@ impl Renderer {
                     vk::AccessFlags2::INDIRECT_COMMAND_READ | vk::AccessFlags2::SHADER_READ,
                 );
             let barriers = [barrier];
-            // SAFETY: recording into our own command buffer.
+            // SAFETY: 向自有命令缓冲区录制命令。
             unsafe {
                 device.cmd_pipeline_barrier2(
                     cmd,
@@ -1286,19 +1183,16 @@ impl Renderer {
 
         self.mark(cmd, 4, vk::PipelineStageFlags::DRAW_INDIRECT);
 
-        // ---- 6/7. graphics ---------------------------------------------------
+        // ---- 6/7. 图形渲染 ---------------------------------------------------
         self.begin_rendering(cmd);
         self.record_graphics(cmd, scene);
         self.end_rendering(cmd);
 
-        // ---- 8. frosted-glass backdrops -------------------------------------
-        // The blur samples the colour attachment, so it runs after the main
-        // pass has finished writing and before the image is handed to present.
+        // ---- 8. 毛玻璃背景虚化 -----------------------------------------------
+        // 模糊 Pass 采样颜色附件，因此在主 Pass 完成后、图像交付呈现前执行。
         self.record_backdrop(cmd, scene)?;
 
-        // A swapchain image must be handed to the presentation engine in
-        // `PRESENT_SRC_KHR`; leaving it in `COLOR_ATTACHMENT_OPTIMAL` makes
-        // every `vkQueuePresentKHR` a validation error.
+        // 交换链图像必须以 `PRESENT_SRC_KHR` 布局交给呈现引擎，否则 `vkQueuePresentKHR` 会报错。
         if let (true, Some((image, _, _, _))) = (self.external_present, self.external_color) {
             let to_present = [image_barrier(
                 image,
@@ -1310,8 +1204,7 @@ impl Renderer {
                 vk::AccessFlags2::NONE,
                 false,
             )];
-            // SAFETY: recording into our own command buffer; the image was
-            // just drawn into and is exclusively owned until present.
+            // SAFETY: 向自有命令缓冲区录制；图像刚绘制完成且在呈现前由本帧独占。
             unsafe {
                 self.gpu.device.cmd_pipeline_barrier2(
                     cmd,
@@ -1325,16 +1218,13 @@ impl Renderer {
         Ok(())
     }
 
-    /// Number of images the backdrop pool had to create.
-    ///
-    /// A steady-state frame reuses every slot: the counter does not move after
-    /// the first backdrop and is what the frosted-glass test asserts.
+    /// 背景虚化池累计创建的图像数量（稳态帧复用全部槽位，该计数不再增长）。
     #[must_use]
     pub fn blur_pool_creation_count(&self) -> u64 {
         self.blur.pool.creation_count()
     }
 
-    /// Run the backdrop chain: sample, blur, composite — for every request.
+    /// 为每个请求执行背景虚化链：采样、模糊、合成。
     fn record_backdrop(
         &mut self,
         cmd: vk::CommandBuffer,
@@ -1380,7 +1270,7 @@ impl Renderer {
         let radius = request.radius.max(1.0);
         let two_levels = radius > 8.0;
 
-        // The scene colour attachment becomes a sampled source.
+        // 场景颜色附件转换为着色器只读采样源。
         let to_sample = [image_barrier(
             color_image,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -1391,7 +1281,7 @@ impl Renderer {
             vk::AccessFlags2::SHADER_READ,
             false,
         )];
-        // SAFETY: recording into our own command buffer.
+        // SAFETY: 向自有命令缓冲区录制命令。
         unsafe {
             self.gpu.device.cmd_pipeline_barrier2(
                 cmd,
@@ -1446,15 +1336,11 @@ impl Renderer {
         let half_size = (half_desc.width, half_desc.height);
         let quarter_size = ((width / 4).max(1), (height / 4).max(1));
 
-        // Three rounds of the dual-Kawase chain. Each round applies the same
-        // tent twice (down and up), and stacking them drives the response at
-        // the checkerboard frequency close to zero instead of leaving a
-        // low-amplitude copy of the pattern.
+        // 执行三轮 Dual-Kawase 链路：多轮叠加将高频棋盘格响应衰减至接近零。
         let mut source_view = color_view;
         let mut source_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         for round in 0..3usize {
-            // Each round owns four descriptor sets: a set updated for round 2
-            // must not change the descriptors round 1 already recorded.
+            // 每轮独占 4 个描述符集，防止后续轮次更新覆盖前轮已录制的描述符。
             let base = round * 4;
             self.blur_pass(
                 cmd,
@@ -1523,9 +1409,7 @@ impl Renderer {
             source_layout = vk::ImageLayout::GENERAL;
         }
 
-        // The composite samples the *destination* of the last blur pass, so
-        // its own descriptor set points the sampler at the full-resolution
-        // result (set 8 is reserved for that).
+        // 合成 Pass 采样最后一轮模糊的输出，因此其专属描述符集（槽位 8）指向全分辨率结果。
         self.bind_blur_binding(8, full_view, vk::ImageLayout::GENERAL, full_view);
         self.composite_backdrop(cmd, request, width, height, color_image, color_view, 8);
 
@@ -1537,8 +1421,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// Transition a freshly created blur image into the layout the compute
-    /// shaders read and write.
+    /// 将新建模糊图像转换到计算着色器可读写的 `GENERAL` 布局。
     fn transition_blur_image(&self, cmd: vk::CommandBuffer, image: vk::Image) {
         let ready = [image_barrier(
             image,
@@ -1550,7 +1433,7 @@ impl Renderer {
             vk::AccessFlags2::SHADER_WRITE,
             false,
         )];
-        // SAFETY: recording into our own command buffer.
+        // SAFETY: 向自有命令缓冲区录制命令。
         unsafe {
             self.gpu.device.cmd_pipeline_barrier2(
                 cmd,
@@ -1559,8 +1442,7 @@ impl Renderer {
         }
     }
 
-    /// Point a pre-allocated descriptor set at a source/destination pair,
-    /// writing the descriptors only when the pair actually changed.
+    /// 将预分配描述符集指向源/目标图像对，仅当绑定发生变化时才写入描述符。
     fn bind_blur_binding(
         &mut self,
         set_index: usize,
@@ -1575,8 +1457,7 @@ impl Renderer {
         if self.blur.bindings[set_index] == Some(binding) {
             return;
         }
-        // SAFETY: the set is not in use by an in-flight frame: the renderer
-        // waited for this frame slot before recording.
+        // SAFETY: 录制前渲染器已等待该帧槽位退役，故该描述符集不在使用中。
         unsafe {
             self.pipelines.update_blur_set(
                 &self.gpu,
@@ -1589,8 +1470,7 @@ impl Renderer {
         self.blur.bindings[set_index] = Some(binding);
     }
 
-    /// Dispatch one dual-Kawase step and make its writes visible to the next
-    /// reader.
+    /// 调度一步 Dual-Kawase 计算并插入屏障使写入对下一读取者可见。
     #[allow(clippy::too_many_arguments)]
     fn blur_pass(
         &mut self,
@@ -1613,7 +1493,7 @@ impl Renderer {
             radius,
             iteration,
         };
-        // SAFETY: recording; the pipeline, layout and set are ours.
+        // SAFETY: 命令缓冲区处于录制状态；管线、布局与描述符集均归本渲染器所有。
         unsafe {
             let device = &self.gpu.device;
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
@@ -1648,7 +1528,7 @@ impl Renderer {
                 vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER,
             )
             .dst_access_mask(vk::AccessFlags2::SHADER_READ)];
-        // SAFETY: recording into our own command buffer.
+        // SAFETY: 向自有命令缓冲区录制命令。
         unsafe {
             self.gpu.device.cmd_pipeline_barrier2(
                 cmd,
@@ -1657,7 +1537,7 @@ impl Renderer {
         }
     }
 
-    /// Paint the blurred full-resolution texture back into the rectangle.
+    /// 将模糊后的全分辨率纹理合成回目标矩形区域。
     #[allow(clippy::too_many_arguments)]
     fn composite_backdrop(
         &mut self,
@@ -1688,7 +1568,7 @@ impl Renderer {
             vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
             false,
         )];
-        // SAFETY: recording; the target is exclusively owned.
+        // SAFETY: 处于录制状态且目标图像由本帧独占。
         unsafe {
             let device = &self.gpu.device;
             device.cmd_pipeline_barrier2(
@@ -1750,18 +1630,16 @@ impl Renderer {
         }
     }
 
-    /// Enable GPU timing for the frames rendered from now on.
+    /// 为后续渲染帧启用 GPU 时间戳计时。
     ///
     /// # Errors
-    /// Returns [`GpuError::Vulkan`] when the query pool cannot be created.
-    /// Install the real bindless atlases.
+    /// 创建查询池失败时返回 [`GpuError::Vulkan`]。
+    /// 安装真实的 Bindless 图集。
     ///
-    /// Until this is called every bindless slot points at a 1x1 dummy texture,
-    /// so glyph and image primitives sample nothing and render as empty
-    /// quads. After the call, slot `n` addresses layer `n` of the atlas.
+    /// 调用前所有槽位指向 1x1 占位纹理；调用后槽位 `n` 指向图集第 `n` 层。
     ///
     /// # Errors
-    /// Propagates Vulkan allocation or descriptor failures.
+    /// 透传分配或描述符更新错误。
     pub fn install_atlases(
         &mut self,
         atlases: std::sync::Arc<crate::atlas::AtlasSet>,
@@ -1771,35 +1649,26 @@ impl Renderer {
         Ok(())
     }
 
-    /// The semaphore that is signalled when the frame has finished drawing.
-    ///
-    /// Pass this to the presentation engine so it waits for the GPU before
-    /// handing the image to the display.
+    /// 帧绘制完成时触发的信号量，供呈现引擎在显示前等待。
     #[must_use]
     pub const fn present_semaphore(&self) -> vk::Semaphore {
         self.present_semaphore
     }
 
-    /// The atlases bound to the renderer, when installed.
+    /// 返回已安装到渲染器的图集引用。
     #[must_use]
     pub fn atlases(&self) -> Option<&std::sync::Arc<crate::atlas::AtlasSet>> {
         self.atlases.as_ref()
     }
 
-    /// Install a caller-owned texture into a bindless slot.
+    /// 将调用方拥有的外部纹理注册到 Bindless 槽位。
     ///
-    /// Returns the layer id to store in [`GpuPrimitiveInstance::border_token_or_tex`]
-    /// (`PrimType::Image` reads it from there). External ids start at
-    /// `EXTERNAL_TEXTURE_BASE`, so they never collide with atlas pages.
-    ///
-    /// The renderer only writes the descriptor; it keeps **no** ownership. The
-    /// caller must keep `view` and `sampler` alive until
-    /// [`Self::release_external_texture`], and must keep the texture in
-    /// `SHADER_READ_ONLY_OPTIMAL` while it is bound.
+    /// 返回图层 ID（存入 [`GpuPrimitiveInstance::border_token_or_tex`]）。
+    /// 调用方须在调用 [`Self::release_external_texture`] 前保持 `view` 与 `sampler` 存活，
+    /// 且纹理保持 `SHADER_READ_ONLY_OPTIMAL` 布局。
     ///
     /// # Errors
-    /// Returns [`GpuError::InvalidArgument`] when the sixteen external slots
-    /// are all taken, or propagates a descriptor update failure.
+    /// 16 个外部槽位已满时返回 [`GpuError::InvalidArgument`]。
     pub fn register_external_texture(
         &mut self,
         view: vk::ImageView,
@@ -1821,11 +1690,10 @@ impl Renderer {
         Ok(slot)
     }
 
-    /// Release an external slot and rebind it to the 1×1 dummy texture.
+    /// 释放外部槽位并重绑回 1×1 占位纹理。
     ///
     /// # Errors
-    /// Returns [`GpuError::InvalidArgument`] when `slot` is not a live external
-    /// slot.
+    /// 若 `slot` 非有效外部槽位则返回 [`GpuError::InvalidArgument`]。
     pub fn release_external_texture(&mut self, slot: u32) -> Result<(), GpuError> {
         if !self.external_slots.release(slot) {
             return Err(GpuError::InvalidArgument(format!(
@@ -1835,33 +1703,24 @@ impl Renderer {
         self.pipelines.unbind_external_texture(&self.gpu, slot)
     }
 
-    /// Number of external slots currently registered.
+    /// 当前已注册的外部纹理槽位数量。
     #[must_use]
     pub const fn external_texture_count(&self) -> u32 {
         self.external_slots.used()
     }
 
-    /// Wait for the previous frame that used this frame slot to retire.
+    /// 等待上一次使用当前帧槽位的帧退役。
     ///
-    /// The windowed path **must** call this before acquiring the next
-    /// swapchain image. The acquire signals the image-available semaphore,
-    /// and a binary semaphore may only carry one pending signal: if the
-    /// previous frame's submission has not started executing yet, its signal
-    /// is still pending and the new signal would be dropped — the next
-    /// frame would then wait for an image that never arrives.
-    ///
-    /// The semaphore pool is as deep as the number of frames in flight, and
-    /// the slot is reused exactly one frame cycle later, so waiting for this
-    /// frame slot's fence guarantees the previous signal was consumed.
+    /// 窗口化路径在获取下一张交换链图像前**必须**调用此方法，以确保对应的
+    /// image-available 二值信号量已被前帧消费完毕。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn wait_for_previous_frame(&mut self) -> Result<(), GpuError> {
         let frame_count = self.gpu.frames_in_flight();
         let frame_slot = (self.frame_index % u64::from(frame_count)) as usize;
         let fence = self.gpu.frames[frame_slot].in_flight;
-        // SAFETY: the fence belongs to this renderer; waiting on our own
-        // fence cannot deadlock.
+        // SAFETY: 围栏归本渲染器所有；等待自身围栏不会死锁。
         unsafe {
             self.gpu
                 .device
@@ -1871,25 +1730,12 @@ impl Renderer {
         Ok(())
     }
 
-    /// Render one frame into an externally owned colour attachment.
+    /// 将单帧渲染到外部拥有的颜色附件（格式须匹配 `COLOR_FORMAT`）。
     ///
-    /// The renderer keeps its own depth buffer but borrows the colour
-    /// attachment, which is what a swapchain image is: the swapchain owns the
-    /// image, the renderer only draws into it. The attachment must have the
-    /// same format as the renderer's own target (`COLOR_FORMAT`).
-    ///
-    /// `color_image` must be the image behind `color_view`: the renderer
-    /// transitions it out of `UNDEFINED` into `COLOR_ATTACHMENT_OPTIMAL`,
-    /// and a view alone carries no layout.
-    ///
-    /// `image_available` is the semaphore the presentation engine signals
-    /// when the image is ready to be drawn into. The submission waits on it,
-    /// so the render can never touch an image the presentation engine still
-    /// owns. Pass a null semaphore only when the caller already guarantees
-    /// the image is ready.
+    /// 渲染器保留自有深度缓冲区并借用颜色附件；提交会等待 `image_available` 信号量。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn render_to_view(
         &mut self,
         scene: &SceneUpload<'_>,
@@ -1911,24 +1757,13 @@ impl Renderer {
         )
     }
 
-    /// Render one frame into a swapchain image and hand it back ready to
-    /// present.
+    /// 渲染单帧到交换链图像并转换至 `VK_IMAGE_LAYOUT_PRESENT_SRC_KHR` 以便呈现。
     ///
-    /// Same as [`Self::render_to_view`], except that the image is transitioned
-    /// to `VK_IMAGE_LAYOUT_PRESENT_SRC_KHR` after the draw: presenting an image
-    /// that is still in `COLOR_ATTACHMENT_OPTIMAL` is invalid and shows up as
-    /// a validation error on every frame.
-    ///
-    /// **Prefer [`Self::render_into_swapchain`].** This entry point has no
-    /// swapchain image to bind the render-finished semaphore to, so it falls
-    /// back to the renderer's single global semaphore. Signalling that
-    /// semaphore again while the presentation engine still waits on it is
-    /// invalid usage (`VUID-vkQueueSubmit2-semaphore-03868`); the
-    /// image-bound semaphore of [`Self::render_into_swapchain`] is the one
-    /// that avoids it.
+    /// **建议优先使用 [`Self::render_into_swapchain`]**：本入口回退使用全局信号量，
+    /// 在多缓冲呈现下可能触发 `VUID-vkQueueSubmit2-semaphore-03868`。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn render_to_swapchain(
         &mut self,
         scene: &SceneUpload<'_>,
@@ -1950,19 +1785,13 @@ impl Renderer {
         )
     }
 
-    /// Render one frame into an acquired swapchain image.
+    /// 将单帧渲染到已获取的交换链图像中（安全的窗口化入口）。
     ///
-    /// This is the safe windowed entry point: the acquired image carries
-    /// both semaphores the submission needs — the one the presentation
-    /// engine signals when the image becomes available (waited on) and the
-    /// one that belongs to *this* image (signalled).
-    ///
-    /// Signalling the image's own semaphore is what keeps the presentation
-    /// engine from waiting on a semaphore another image still owns
-    /// (`VUID-vkQueueSubmit2-semaphore-03868`).
+    /// 自动使用该图像专属的 `image_available` 与 `render_finished` 信号量，
+    /// 彻底避免 `VUID-vkQueueSubmit2-semaphore-03868`。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn render_into_swapchain(
         &mut self,
         scene: &SceneUpload<'_>,
@@ -1994,12 +1823,10 @@ impl Renderer {
         render_finished: vk::Semaphore,
         present: bool,
     ) -> Result<FrameStats, GpuError> {
-        // The borrowed colour image decides `renderArea`, so our own depth
-        // attachment has to cover it. A window that grows after
-        // `Renderer::new` used to leave the depth image at the *initial* size,
-        // which is invalid usage (`VUID-VkRenderingInfo-pNext-06079/06080`)
-        // and can lose the device on drivers that validate the bounds. Grow it
-        // here, once, rather than trusting every caller to remember.
+        // 借用的颜色图像决定 `renderArea`，因此自建深度附件必须覆盖该范围。
+        // 过去窗口在 `Renderer::new` 之后变大时，深度图像仍停留在*初始*尺寸，
+        // 属于非法用法（`VUID-VkRenderingInfo-pNext-06079/06080`），在会校验
+        // 边界的驱动上还可能丢失设备。此处统一扩容，不依赖每个调用方记得处理。
         self.ensure_depth_size(width, height)?;
         self.external_color = Some((color_image, color_view, width, height));
         self.external_ready = image_available;
@@ -2019,21 +1846,18 @@ impl Renderer {
         Ok(())
     }
 
-    /// Write a stage marker into the command buffer.
+    /// 向命令缓冲区写入阶段时间戳标记。
     fn mark(&self, cmd: vk::CommandBuffer, index: u32, stage: vk::PipelineStageFlags) {
         if let Some(scope) = &self.timing {
-            // SAFETY: our own command buffer.
+            // SAFETY: 属于本渲染器的命令缓冲区。
             unsafe { scope.write_at(&self.gpu, cmd, index, stage) };
         }
     }
 
-    /// The GPU duration of the last frame, in milliseconds.
-    ///
-    /// Waits for the frame to retire, so it must not be called from inside the
-    /// render loop.
+    /// 获取上一帧的 GPU 总耗时（毫秒）。会等待帧退役，勿在渲染循环热路径调用。
     ///
     /// # Errors
-    /// Returns [`GpuError::Vulkan`] when the timestamps cannot be read.
+    /// 无法读取时间戳时返回 [`GpuError::Vulkan`]。
     pub fn read_gpu_ms(&mut self) -> Result<Option<f32>, GpuError> {
         if self.timing.is_none() {
             return Ok(None);
@@ -2042,7 +1866,7 @@ impl Renderer {
             let frame_count = self.gpu.frames_in_flight();
             let frame_slot = ((self.frame_index - 1) % u64::from(frame_count)) as usize;
             let fence = self.gpu.frames[frame_slot].in_flight;
-            // SAFETY: waiting on our own fence cannot deadlock.
+            // SAFETY: 等待自有围栏不会死锁。
             unsafe {
                 self.gpu.device.wait_for_fences(&[fence], true, u64::MAX)?;
             }
@@ -2052,13 +1876,10 @@ impl Renderer {
         Ok(scope.elapsed_ms(0, 1))
     }
 
-    /// The GPU time of the last frame, broken down by stage.
-    ///
-    /// Waits for the frame to retire, so it must not be called from inside the
-    /// render loop.
+    /// 获取上一帧按阶段拆分的 GPU 耗时。会等待帧退役，勿在渲染循环热路径调用。
     ///
     /// # Errors
-    /// Returns [`GpuError::Vulkan`] when the timestamps cannot be read.
+    /// 无法读取时间戳时返回 [`GpuError::Vulkan`]。
     pub fn read_frame_timing(&mut self) -> Result<Option<crate::timing::FrameTiming>, GpuError> {
         if self.timing.is_none() {
             return Ok(None);
@@ -2067,35 +1888,27 @@ impl Renderer {
             let frame_count = self.gpu.frames_in_flight();
             let frame_slot = ((self.frame_index - 1) % u64::from(frame_count)) as usize;
             let fence = self.gpu.frames[frame_slot].in_flight;
-            // SAFETY: waiting on our own fence cannot deadlock.
+            // SAFETY: 等待自有围栏不会死锁。
             unsafe {
                 self.gpu.device.wait_for_fences(&[fence], true, u64::MAX)?;
             }
         }
-        // The frame has retired, so the counters are final as well.
+        // 帧已退役，计数器亦已最终落盘。
         self.refresh_counters();
         let scope = self.timing.as_mut().expect("the scope exists");
         scope.read(&self.gpu)?;
         Ok(Some(scope.frame_timing()))
     }
 
-    /// The statistics of the last frame.
-    ///
-    /// The counters are only final after the frame has retired; call
-    /// [`Self::read_frame_timing`] (or [`Self::read_pixels`]) first to make
-    /// them meaningful.
+    /// 上一帧的统计信息（须在帧退役并调用 [`Self::read_frame_timing`] 或 [`Self::read_pixels`] 后读取）。
     #[must_use]
     pub fn last_stats(&self) -> FrameStats {
         self.stats
     }
 
-    /// Copy the frame counters into the statistics.
-    ///
-    /// Only valid once the frame has retired: the counters live in a
-    /// host-visible buffer that the GPU writes while the frame runs.
+    /// 将 GPU 写入的帧计数器拷贝到统计结构体（仅在帧退役后有效）。
     fn refresh_counters(&mut self) {
-        // SAFETY: the buffer is mapped for the whole lifetime of the
-        // renderer, and the frame has retired.
+        // SAFETY: 缓冲区在渲染器全生命周期内保持映射，且当前帧已退役。
         let counters =
             unsafe { core::slice::from_raw_parts(self.counters.mapped.cast::<u32>(), 4) };
         self.stats.visible = counters[2];
@@ -2109,7 +1922,7 @@ impl Renderer {
             .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE);
         let barriers = [barrier];
-        // SAFETY: recording into our own command buffer.
+        // SAFETY: 向自有命令缓冲区录制命令。
         unsafe {
             self.gpu.device.cmd_pipeline_barrier2(
                 cmd,
@@ -2126,7 +1939,7 @@ impl Renderer {
         groups: u32,
     ) {
         let groups = groups.max(1);
-        // SAFETY: recording into our own command buffer; `pc` is 128B.
+        // SAFETY: 向自有命令缓冲区录制；`pc` 为 128B。
         unsafe {
             let device = &self.gpu.device;
             device.cmd_bind_pipeline(
@@ -2165,7 +1978,7 @@ impl Renderer {
                 + u64::from(self.pool_offset(self.payload_handle)),
             camera_chunk: scene.camera.chunk,
             camera_local: scene.camera.local,
-            // The viewport follows the attachment we actually draw into.
+            // 视口尺寸跟随实际绘制的目标附件。
             viewport_size: match self.external_color {
                 Some((_, _, w, h)) => [w as f32, h as f32],
                 None => [self.target.width as f32, self.target.height as f32],
@@ -2180,12 +1993,10 @@ impl Renderer {
     }
 
     fn clear_keys_tail(&self, cmd: vk::CommandBuffer, n: u32) -> Result<(), GpuError> {
-        // Keys are sorted ascending and unused slots must land at the end, so
-        // they are filled with 0xFFFF…; the matching index slots are zeroed.
-        // `vkCmdFillBuffer` writes 32-bit patterns, so fill the whole range with
-        // 0xFFFFFFFF — that is exactly the maximum u64 key.
+        // 键按升序排列，未用槽位须填充 `0xFFFF…` 使其排至末尾；`vkCmdFillBuffer`
+        // 按 32 位模式填充，写入 `0xFFFFFFFF` 即对应最大 `u64` 键值。
         let bytes = u64::from(n) * 8;
-        // SAFETY: range is inside the buffer (capacity_primitives >= n).
+        // SAFETY: 填充范围位于缓冲区内（capacity_primitives >= n）。
         unsafe {
             self.gpu
                 .device
@@ -2199,15 +2010,10 @@ impl Renderer {
 
     fn begin_rendering(&mut self, cmd: vk::CommandBuffer) {
         let device = &self.gpu.device;
-        // SAFETY: recording; the target is exclusively owned.
+        // SAFETY: 处于录制状态且目标图像由本帧独占。
         unsafe {
-            // The colour attachment always needs a layout transition. Our
-            // own image carries its layout; a borrowed one (a swapchain
-            // image) is handed over in `UNDEFINED` and must be transitioned
-            // before it can be a render attachment.
-            //
-            // The barrier is a stack array: the render path allocates
-            // nothing per frame.
+            // 颜色附件始末均需布局转换；借用的交换链图像初始为 `UNDEFINED`。
+            // 屏障结构体置于栈上，零堆分配。
             let to_attachment = [match self.external_color {
                 Some((image, _, _, _)) => image_barrier(
                     image,
@@ -2261,20 +2067,17 @@ impl Renderer {
             }];
             let depth_clear = vk::ClearValue {
                 depth_stencil: vk::ClearDepthStencilValue {
-                    // Reverse-Z: the far plane is 0.
+                    // 反向 Z：远平面为 0。
                     depth: 0.0,
                     stencil: 0,
                 },
             };
-            // The colour attachment may be borrowed from a swapchain image;
-            // the depth attachment is always ours.
+            // 颜色附件可能借用自交换链图像；深度附件始终归本渲染器所有。
             let color_view = match self.external_color {
                 Some((_, view, _, _)) => view,
                 None => self.target.color_view,
             };
-            // The render area follows the borrowed attachment; using the
-            // renderer's own extent during a swapchain commit race would clip
-            // or overrun the presentation image.
+            // 渲染区域跟随借用附件尺寸，避免交换链缩放竞态期间裁剪或越界。
             let (area_width, area_height) = match self.external_color {
                 Some((_, _, w, h)) => (w, h),
                 None => (self.target.width, self.target.height),
@@ -2310,7 +2113,7 @@ impl Renderer {
     }
 
     fn end_rendering(&mut self, cmd: vk::CommandBuffer) {
-        // SAFETY: matches `begin_rendering`.
+        // SAFETY: 与 `begin_rendering` 严格配对。
         unsafe {
             self.gpu.device.cmd_end_rendering(cmd);
         }
@@ -2318,7 +2121,7 @@ impl Renderer {
 
     fn record_graphics(&mut self, cmd: vk::CommandBuffer, scene: &SceneUpload<'_>) {
         let device = &self.gpu.device;
-        // The viewport follows the attachment we actually draw into.
+        // 视口尺寸跟随实际绘制的目标附件。
         let (width, height) = match self.external_color {
             Some((_, _, w, h)) => (w, h),
             None => (self.target.width, self.target.height),
@@ -2338,7 +2141,7 @@ impl Renderer {
         };
         let pc = PushConstants::from_frame(self.frame_constants(scene));
 
-        // SAFETY: recording; all handles are alive and owned by `self`.
+        // SAFETY: 处于录制状态；所有句柄均存活且归 `self` 所有。
         unsafe {
             device.cmd_set_viewport(cmd, 0, &[viewport]);
             device.cmd_set_scissor(cmd, 0, &[scissor]);
@@ -2371,32 +2174,26 @@ impl Renderer {
                 );
             };
 
-            // Pass A: opaque core, front-to-back, depth only. Uses the sorted
-            // (back-to-front) list with GREATER_OR_EQUAL, so the nearest opaque
-            // core wins the depth buffer and everything behind it Early-Z dies.
+            // Pass A：不透明核心预 Pass，纯深度写入；配合 `GREATER_OR_EQUAL` 让最近核心占领深度缓冲以触发 Early-Z 剔除。
             draw(self.pipelines.opaque_core);
 
-            // Pass B: the single blended uber draw.
+            // Pass B：单次带混合的 uber 绘制。
             draw(self.pipelines.uber_normal);
 
             self.stats.draw_calls = 2;
         }
     }
 
-    /// Copy the colour target into a host buffer and return tightly packed
-    /// BGRA8 rows. Used by the golden-image tests and the screenshot command.
+    /// 将颜色目标拷贝到宿主缓冲区并返回紧凑排列的 BGRA8 行数据（用于基准图测试与截图）。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn read_pixels(&mut self) -> Result<Vec<u8>, GpuError> {
         let width = self.target.width;
         let height = self.target.height;
         let row_bytes = u64::from(width) * 4;
         let size = row_bytes * u64::from(height);
-        // The staging buffer is a fixed size. A larger target would make the
-        // copy below read past the end of the mapping — an out-of-bounds read
-        // of device memory — so the limit is checked before anything is
-        // recorded.
+        // 暂存缓冲区大小固定，录制拷贝前先校验尺寸防止越界读取。
         if size > self.staging.size {
             return Err(GpuError::Allocation(format!(
                 "readback of {width}x{height} needs {size} bytes, the staging buffer holds {}",
@@ -2404,7 +2201,7 @@ impl Renderer {
             )));
         }
         let device = &self.gpu.device;
-        // SAFETY: the GPU is idle after `wait_idle`, so the copy cannot race.
+        // SAFETY: `wait_idle` 后 GPU 已空闲，拷贝无数据竞争。
         unsafe {
             self.gpu.wait_idle();
             let barrier = [image_barrier(
@@ -2448,7 +2245,7 @@ impl Renderer {
             let mut out = vec![0u8; size as usize];
             core::ptr::copy_nonoverlapping(self.staging.mapped, out.as_mut_ptr(), size as usize);
 
-            // The GPU is idle, so the counters are final: surface them.
+            // GPU 已空闲，计数器已最终落盘，同步到统计结构体。
             let counters = core::slice::from_raw_parts(self.counters.mapped.cast::<u32>(), 4);
             self.stats.visible = counters[2];
             self.stats.draw_calls = counters[1];
@@ -2456,23 +2253,12 @@ impl Renderer {
         }
     }
 
-    /// Upload the scene into the persistent pool if (and only if) it changed.
-    ///
-    /// Two paths:
-    ///
-    /// * **Full.** The generation moved: the whole scene is staged into the
-    ///   transient ring and scattered into the pool.
-    /// * **Partial.** The generation stayed but the caller marked the
-    ///   primitives that changed: only those slices are staged and
-    ///   scattered. A hover or a slider drag costs a handful of bytes
-    ///   instead of the whole scene.
+    /// 仅当场景发生变化时将场景上传至持久化池（支持全量与局部补丁两条路径）。
     fn prepare_upload(&mut self, scene: &SceneUpload<'_>) -> Result<UploadPlan, GpuError> {
-        // Both the culling and the vertex shaders read transforms[0] for
-        // *every* primitive. A static UI scene emits no transforms at all;
-        // `ensure_pool_capacity` still reserves one stride, but its contents
-        // are uninitialised device memory, so a garbage affine matrix moves
-        // every quad off-screen and the cull pass reports zero visible
-        // primitives. Seed one identity transform for such scenes.
+        // 剔除与顶点着色器对*每个*图元都会读取 `transforms[0]`。静态 UI 场景
+        // 完全不发射变换表；`ensure_pool_capacity` 仍会预留一个 stride，但其内容
+        // 是未初始化的显存，垃圾仿射矩阵会把所有四边形移出屏幕，剔除阶段统计到
+        // 0 个可见图元。为此类场景补一个单位变换。
         static IDENTITY: [GpuTransform; 1] = [GpuTransform::IDENTITY];
         let transforms: &[GpuTransform] = if scene.transforms.is_empty() {
             &IDENTITY
@@ -2492,29 +2278,22 @@ impl Renderer {
             self.ensure_pool_capacity(transforms.len(), Which::Transforms)?;
             self.ensure_pool_capacity(scene.clips.len(), Which::Clips)?;
             self.ensure_pool_capacity(scene.payloads.len(), Which::Payloads)?;
-            // The generation is *not* committed here: the frame can still
-            // fail after this point (the command buffer, the submit), and a
-            // consumed generation would make the next frame believe the pool
-            // already holds this scene. The commit happens once the
-            // submission went through.
+            // 此处暂不提交版本号：后续录制或提交仍可能失败，待提交真正成功后才确认。
             self.generation.stage(scene.generation);
         } else if scene.aux_changed {
-            // Auxiliary tables are small; refreshing them must not force the
-            // primitive pool to travel again.
+            // 辅助表体积较小，刷新它们时无需连带重传整个图元池。
             self.ensure_pool_capacity(transforms.len(), Which::Transforms)?;
             self.ensure_pool_capacity(scene.clips.len(), Which::Clips)?;
             self.ensure_pool_capacity(scene.payloads.len(), Which::Payloads)?;
         }
 
-        // Rotate the ring *before* allocating: the cursor belongs to the frame
-        // slot that `begin_frame` selects.
+        // 分配前先轮转瞬态环：`begin_frame` 选定本帧槽位并重置游标。
         self.ring.begin_frame(self.frame_index);
 
-        // The staging buffers are reused across frames: the render path
-        // allocates nothing per frame.
+        // 暂存缓冲区跨帧复用，渲染路径每帧零堆分配。
         self.staging_bytes.clear();
         self.staging_spans.clear();
-        // The pool offsets are read before the scratch buffers are borrowed.
+        // 在借用暂存缓冲区前先读取各池块偏移。
         let prim_dst = self.pool_offset(self.prim_handle);
         let transform_dst = self.pool_offset(self.transform_handle);
         let clip_dst = self.pool_offset(self.clip_handle);
@@ -2526,8 +2305,7 @@ impl Renderer {
                 if data.is_empty() {
                     return;
                 }
-                // `scatter.comp` copies in 16-byte words; a misaligned span
-                // would silently lose its tail.
+                // `scatter.comp` 按 16 字节字拷贝；未对齐区间会静默丢失尾部字节。
                 debug_assert_eq!(dst % 16, 0, "scatter destination must be 16B aligned");
                 debug_assert_eq!(
                     data.len() % 16,
@@ -2560,8 +2338,7 @@ impl Renderer {
                 spans,
             );
         } else {
-            // Only the dirty slices are staged. The rest of the scene is
-            // already in the pool and did not change, so it is left alone.
+            // 仅暂存脏切片；场景其余部分已在持久化池中且未变更，保持不动。
             let stride =
                 u32::try_from(core::mem::size_of::<GpuPrimitiveInstance>()).unwrap_or(u32::MAX);
             for (start, end) in scene.dirty_ranges {
@@ -2595,8 +2372,7 @@ impl Renderer {
             return Ok(plan);
         }
 
-        // Reserve the payload bytes in the transient ring. The ring is
-        // host-visible, so the copy below needs no staging buffer at all.
+        // 在宿主可见瞬态环中预留载荷空间，直接拷贝无需额外暂存缓冲区。
         let ring_slot = self.ring.allocate(bytes.len() as u32, 256).ok_or_else(|| {
             GpuError::Allocation(format!(
                 "transient ring exhausted: {} bytes needed, {} available (raise GpuConfig::ring_capacity)",
@@ -2605,12 +2381,8 @@ impl Renderer {
             ))
         })?;
 
-        // The patch list is reused across frames as well.
-        //
-        // `scatter.comp` dispatches one workgroup per patch, so a single
-        // 6 MiB patch would copy the whole scene on 64 threads of one SM. A
-        // span is therefore split into 64 KiB slices: the shader can then
-        // fill the GPU with dozens of workgroups instead of serialising.
+        // 补丁列表同样跨帧复用。将大区间拆分为 64 KiB 切片，
+        // 使 `scatter.comp` 能调度多个工作组并行拷贝而非集中在单个 SM 上。
         const SCATTER_SLICE: u32 = 64 * 1024;
         self.staging_patches.clear();
         for (dst, src_rel, len) in spans.iter().copied() {
@@ -2627,8 +2399,7 @@ impl Renderer {
             }
         }
 
-        // SAFETY: both buffers are host visible, mapped for their whole
-        // lifetime, and the ranges were just reserved.
+        // SAFETY: 两个缓冲区均宿主可见且全生命周期映射，范围刚刚预留完毕。
         unsafe {
             core::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
@@ -2646,8 +2417,7 @@ impl Renderer {
                 patches.len() * 16,
             );
             plan.patch_count = patches.len() as u32;
-            // Both buffers may live in non-coherent memory: the GPU would
-            // otherwise read the previous frame's bytes.
+            // 缓冲区可能位于非一致性内存中，必须刷写以确保 GPU 不会读到上一帧的旧字节。
             self.gpu
                 .flush(&self.ring_buffer, u64::from(ring_slot), bytes.len() as u64);
             self.gpu
@@ -2659,9 +2429,9 @@ impl Renderer {
         Ok(plan)
     }
 
-    /// Release every GPU resource. Consumes the renderer.
+    /// 释放全部 GPU 资源并消费渲染器实例。
     pub fn destroy(self) {
-        // SAFETY: we own the semaphore and every frame has retired.
+        // SAFETY: 本渲染器拥有该信号量且所有帧均已退役。
         unsafe {
             self.gpu
                 .device
@@ -2671,27 +2441,18 @@ impl Renderer {
         if let Some(scope) = &self.timing {
             scope.destroy(&self.gpu);
         }
-        // The atlases free their images when the last reference goes away, and
-        // Vulkan requires every object to be destroyed before the device. The
-        // renderer holds the only reference the application kept, so dropping
-        // it here frees the images while the device is still alive.
-        //
-        // The pipelines bind the atlas views into their descriptor sets, so
-        // they have to go first.
+        // 管线描述符集引用了图集视图，因此必须先销毁管线，再释放图集与设备。
         let mut this = self;
-        // SAFETY: the device is idle.
+        // SAFETY: 设备处于空闲状态。
         unsafe {
             this.pipelines.destroy(&this.gpu);
         }
-        // The atlases free their images here, while the device is still
-        // alive: Vulkan requires every object to be destroyed before the
-        // device. The application may still hold an `Arc` to the atlas set,
-        // so the free is idempotent and the later drop finds it already done.
+        // 在设备销毁前显式释放图集图像（幂等），即使应用层仍持有 `Arc` 也不会在设备销毁后触碰悬空句柄。
         if let Some(atlases) = &this.atlases {
             atlases.free();
         }
         this.atlases = None;
-        // SAFETY: the device is idle and `self` is consumed.
+        // SAFETY: 设备已空闲且 `self` 正在被消费。
         unsafe {
             this.target.destroy(&this.gpu);
             this.blur.destroy(&this.gpu);
@@ -2725,10 +2486,7 @@ enum Which {
 }
 
 impl Which {
-    /// Byte stride of one element of the array this block backs.
-    ///
-    /// The pool capacity counters are byte counts, so every conversion from an
-    /// element count to a byte count goes through here.
+    /// 返回该池块所支撑数组单个元素的字节步长（统一元素数到字节数的换算）。
     const fn stride(self) -> usize {
         match self {
             Self::Primitives => crate::data::PRIMITIVE_STRIDE,
@@ -2746,23 +2504,17 @@ struct UploadPlan {
     ring_offset: u32,
 }
 
-/// The upload generation the pool is at.
-///
-/// The generation says "the pool holds this scene". It may only be claimed
-/// after the frame reached the GPU: a frame that failed on the way there
-/// left the pool behind, and a consumed generation would tell the next
-/// frame that there is nothing to upload — the scene would stay stale on
-/// screen forever.
+/// 持久化池当前所处的上传版本号追踪器（仅在帧成功提交到 GPU 后才确认）。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct UploadGeneration {
-    /// The generation the pool holds.
+    /// 池中当前已确认持有的版本号。
     committed: u64,
-    /// The generation the current frame staged, not yet committed.
+    /// 当前帧已暂存但尚未确认的版本号。
     staged: Option<u64>,
 }
 
 impl UploadGeneration {
-    /// A pool that holds nothing yet.
+    /// 尚无任何已上传内容的初始状态。
     const fn empty() -> Self {
         Self {
             committed: u64::MAX,
@@ -2770,24 +2522,24 @@ impl UploadGeneration {
         }
     }
 
-    /// Whether the scene has to be uploaded in full.
+    /// 判断当前场景是否需要全量上传。
     fn needs_full(&self, generation: u64) -> bool {
         self.committed != generation
     }
 
-    /// Stage a generation for the frame that is about to be drawn.
+    /// 为即将绘制的帧暂存版本号。
     fn stage(&mut self, generation: u64) {
         self.staged = Some(generation);
     }
 
-    /// Claim the staged generation: the frame reached the GPU.
+    /// 确认已暂存的版本号：帧已成功送达 GPU。
     fn commit(&mut self) {
         if let Some(generation) = self.staged.take() {
             self.committed = generation;
         }
     }
 
-    /// Forget the pool's generation: the next frame has to upload in full.
+    /// 重置池版本号：强制下一帧执行全量上传。
     fn invalidate(&mut self) {
         self.committed = u64::MAX;
         self.staged = None;
@@ -2800,12 +2552,7 @@ mod tests {
     use crate::data::{PrimFlags, SubElement};
     use unbound_math::Vec2;
 
-    /// A staged generation is not claimed until the frame reached the GPU.
-    ///
-    /// A frame that failed on the way to the GPU left the pool behind. A
-    /// generation that was consumed anyway would tell the next frame that
-    /// there is nothing to upload, and the stale scene would stay on screen
-    /// forever.
+    /// 暂存版本号在帧真正送达 GPU 前不得被确认，防止失败帧导致后续画面永久停留在旧状态。
     #[test]
     fn a_staged_generation_is_claimed_only_after_the_frame_reached_the_gpu() {
         let mut generation = UploadGeneration::empty();
@@ -2828,20 +2575,20 @@ mod tests {
         );
     }
 
-    /// A frame that never reached the GPU keeps the generation unclaimed.
+    /// 未送达 GPU 的失败帧不得确认版本号。
     #[test]
     fn a_failed_frame_keeps_the_generation_unclaimed() {
         let mut generation = UploadGeneration::empty();
         generation.stage(7);
-        // The frame failed: no commit.
+        // 帧失败：不提交版本号。
         assert!(generation.needs_full(7));
-        // The next attempt has to upload the whole scene again.
+        // 下一次尝试必须重新全量上传。
         generation.stage(7);
         generation.commit();
         assert!(!generation.needs_full(7));
     }
 
-    /// A pool that moved has to be filled again.
+    /// 发生搬迁的池块必须重新填充。
     #[test]
     fn an_invalidated_pool_has_to_be_filled_again() {
         let mut generation = UploadGeneration::empty();
@@ -2912,9 +2659,7 @@ mod tests {
             return;
         };
         let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
-        // Token 5 is the fill; token 2 is now the *surface* colour, and the
-        // renderer clears to it (A-03). Keeping the fill off the surface token
-        // is what makes "outside the quad" observable at all.
+        // 令牌 5 为填充色；令牌 2 为清屏表面色，两者错开以便区分矩形内外。
         let prims = vec![quad(16.0, 16.0, 96.0, 96.0, 5)];
         let transforms = vec![GpuTransform::IDENTITY];
         renderer
@@ -2933,14 +2678,14 @@ mod tests {
         let pixels = renderer.read_pixels().expect("readback");
         assert_eq!(pixels.len(), 128 * 128 * 4);
 
-        // Centre of the quad must be the fill token colour (white).
+        // 四边形中心必须为填充色（白色）。
         let idx = (64 * 128 + 64) * 4;
         assert!(
             pixels[idx] > 200 && pixels[idx + 1] > 200 && pixels[idx + 2] > 200,
             "centre pixel was {:?}",
             &pixels[idx..idx + 4]
         );
-        // A pixel outside the quad must be the clear colour (the surface).
+        // 四边形外部像素必须为清屏色。
         let outside = (2 * 128 + 2) * 4;
         let clear = pixels[outside];
         assert!(
@@ -2954,10 +2699,9 @@ mod tests {
         renderer.destroy();
     }
 
-    /// A static UI scene has no animation transforms at all. The culling and
-    /// vertex shaders still read transforms[0], so an empty table must be
-    /// treated as identity — otherwise every primitive is culled and the
-    /// window shows nothing but the clear colour.
+    /// 静态 UI 场景完全没有动画变换表，但剔除与顶点着色器仍会读取
+    /// `transforms[0]`。空表必须按单位变换处理，否则所有图元都会被剔除，
+    /// 窗口只剩清屏色。
     #[test]
     fn a_scene_without_transforms_still_draws() {
         let _guard = crate::device::gpu_test_guard();
@@ -2987,11 +2731,7 @@ mod tests {
         renderer.destroy();
     }
 
-    /// Standard deviation of the red channel over a rectangle.
-    ///
-    /// The checkerboard alternates black and white, so its deviation is ~127;
-    /// a real blur collapses it. Adjacent-pixel differences would miss the
-    /// point because the blurred image keeps the same low-amplitude wave.
+    /// 计算矩形区域内红色通道的标准差（用于验证模糊是否有效消除棋盘格高频对比度）。
     fn region_stddev(pixels: &[u8], width: u32, rect: (u32, u32, u32, u32)) -> f32 {
         let (x0, y0, x1, y1) = rect;
         let mut sum = 0.0;
@@ -3012,12 +2752,7 @@ mod tests {
         (sum_sq / count - mean * mean).max(0.0).sqrt()
     }
 
-    /// P1.4: a modal backdrop must really blur the checkerboard beneath it.
-    ///
-    /// The frame is rendered twice: once unfiltered (the baseline) and once
-    /// with a `radius = 20` backdrop covering the whole target. The blurred
-    /// readback must lose at least 80% of its high-frequency energy, and a
-    /// second blurred frame must not allocate another scratch image.
+    /// P1.4：模态毛玻璃背景必须真正模糊其下方的棋盘格，且第二帧不得重复分配暂存图像。
     #[test]
     fn modal_backdrop_blur_smooths_underlying_checkerboard() {
         let _guard = crate::device::gpu_test_guard();
@@ -3079,12 +2814,7 @@ mod tests {
         renderer.destroy();
     }
 
-    /// `docs` §4.5: switching the theme must recolour the frame while
-    /// uploading nothing but the 4 KiB colour table.
-    ///
-    /// The instance data is *not* re-uploaded: the same generation is
-    /// rendered twice, so the only thing that can change the picture is the
-    /// lookup table.
+    /// 参见 `docs/architecture/gpu-renderer.md`：切换主题时仅上传 4 KiB 颜色查找表即可重绘全帧。
     #[test]
     fn a_theme_switch_recolours_without_re_uploading_instances() {
         let _guard = crate::device::gpu_test_guard();
@@ -3092,7 +2822,7 @@ mod tests {
             return;
         };
         let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
-        // Token 5 is `PRIMARY` in the semantic palette.
+        // 令牌 5 在语义调色板中对应 `PRIMARY`。
         let prims = vec![quad(16.0, 16.0, 96.0, 96.0, 5)];
         let transforms = vec![GpuTransform::IDENTITY];
 
@@ -3116,7 +2846,7 @@ mod tests {
         );
         renderer.write_theme_lut(theme.lut()).unwrap();
 
-        // Same generation: nothing but the colour table changed.
+        // 版本号不变：仅颜色查找表发生变化。
         renderer
             .render(&scene(&prims, &transforms, 1))
             .expect("render");
@@ -3125,7 +2855,7 @@ mod tests {
         let light_px = &light[centre..centre + 4];
         let dark_px = &dark[centre..centre + 4];
         assert_ne!(light_px, dark_px, "the theme switch changed nothing");
-        // The readback is BGRA, so the red channel lives at index 2.
+        // 回读格式为 BGRA，因此红色通道位于索引 2。
         assert!(
             dark_px[2] > light_px[2] + 20,
             "the dark primary must be lighter in red: {light_px:?} vs {dark_px:?}"
@@ -3133,11 +2863,7 @@ mod tests {
         renderer.destroy();
     }
 
-    /// `docs` §3.4: a curve is rasterised by the *analytic* distance to the
-    /// quadratic Bézier, not by a polyline.
-    ///
-    /// The test draws a single arc and checks that the pixel on the curve is
-    /// lit while a pixel well above it stays dark.
+    /// 参见 `docs/architecture/gpu-renderer.md`：曲线通过二次 Bézier 解析距离光栅化而非折线近似。
     #[test]
     fn a_curve_is_rasterised_analytically() {
         let _guard = crate::device::gpu_test_guard();
@@ -3145,7 +2871,7 @@ mod tests {
             return;
         };
         let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
-        // A quadratic arc from (10, 10) to (100, 10) bulging up to y = 45.
+        // 从 (10, 10) 到 (100, 10)、向上拱起至 y = 45 的二次弧线。
         let segment = unbound_vector::QuadSegment::new(
             Vec2::new(10.0, 10.0),
             Vec2::new(50.0, 80.0),
@@ -3171,9 +2897,9 @@ mod tests {
         let pixels = renderer.read_pixels().expect("readback");
         assert_eq!(pixels.len(), 128 * 128 * 4);
 
-        // The curve passes through (55, 45) at t = 0.5.
+        // t = 0.5 时曲线经过 (55, 45)。
         let on_curve = (45 * 128 + 55) * 4;
-        // Fifteen pixels above the curve there is nothing.
+        // 曲线上方 15 像素处应为空白背景。
         let off_curve = (30 * 128 + 55) * 4;
         assert!(
             pixels[on_curve] > 200,
@@ -3189,16 +2915,11 @@ mod tests {
         renderer.destroy();
     }
 
-    /// `docs` §10.2: ten thousand long connectors on screen.
-    ///
-    /// The budget is 0.8 ms of curve shading. Every connector is drawn as a
-    /// tight oriented box plus an analytic distance to a quadratic Bézier, so
-    /// the whole scene is a single MDI draw call.
+    /// 参见 `docs/architecture/gpu-renderer.md`：屏幕上绘制一万条长连接线的 GPU 性能预算测试（0.8 ms）。
     #[test]
     fn ten_thousand_cubic_connectors_stay_inside_the_budget() {
         let _guard = crate::device::gpu_test_guard();
-        // Ten thousand connectors need a bigger ring than the default test
-        // device: every curve is staged through the transient ring.
+        // 一万条连接线需要比默认测试设备更大的瞬态环。
         let gpu = match crate::device::Gpu::new(crate::device::GpuConfig {
             pool_capacity: 64 << 20,
             ring_capacity: 64 << 20,
@@ -3218,16 +2939,11 @@ mod tests {
         let mut payloads = Vec::with_capacity(CURVES as usize);
         let mut transforms = Vec::with_capacity(CURVES as usize);
         for index in 0..CURVES {
-            // A long diagonal span, with a different sag per curve. The
-            // connectors are spread over a huge canvas, exactly like the
-            // scenario in the acceptance table: the viewport only ever shows
-            // a handful of them, and the cost is dominated by the cull.
+            // 分布于超大画布上的长斜向连接线，视口仅覆盖其中一小部分，主要开销在剔除阶段。
             let x = (index % 100) as f32 * 500.0;
             let y = (index / 100) as f32 * 500.0;
             let sag = 40.0 + (index % 17) as f32;
-            // The cubic is split into quadratics first: every segment gets its
-            // own tight box, so the fragments are proportional to the length of
-            // the curve instead of its bounding rectangle.
+            // 先将三次曲线拆分为二次曲线段，使每段拥有紧凑 OBB。
             let draws = crate::curve::cubic_to_draws(
                 Vec2::new(x, y),
                 Vec2::new(x + 50.0, y - sag),
@@ -3257,14 +2973,11 @@ mod tests {
 
         let mut upload = scene_at(&prims, &transforms, 1, (512.0, 512.0));
         upload.payloads = &payloads;
-        // The camera looks at the corner of the canvas: only a few of the ten
-        // thousand connectors are on screen.
+        // 相机对准画布角落：一万条连接线中仅少数处于屏幕内。
         upload.camera = Camera::canvas([0, 0], [256.0, 256.0], 1.0, 1.0);
         renderer.render(&upload).expect("render");
         renderer.render(&upload).expect("render");
-        // GPU timestamps are noisy: clocks ramp up after idle and the first
-        // frames pay for lazily-compiled pipelines. Take three steady-state
-        // frames and score the best one — a budget is a floor, not a lottery.
+        // GPU 时间戳存在波动：先预热，再取三帧稳态样本中的最佳值与预算比较。
         let mut best_ms = f32::MAX;
         let mut timing = None;
         for _ in 0..3 {
@@ -3288,12 +3001,8 @@ mod tests {
             timing.indirect_ms,
             timing.graphics_ms
         );
-        // The design budget (0.8 ms) is stated for the reference desktop GPU
-        // in `docs` §10.2. A test machine may be 30–50 % slower while still
-        // being perfectly healthy, so the guard allows 1.5× the design target:
-        // it still catches a real regression (the previous frame also spends
-        // ~1 ms sorting 124k primitives) without turning the suite into a
-        // hardware lottery.
+        // 参考桌面 GPU 设计预算为 0.8 ms（参见 `docs/architecture/gpu-renderer.md`）；
+        // 允许 1.5 倍余量以兼容较慢的测试硬件同时捕获真实性能退化。
         const DESIGN_BUDGET_MS: f32 = 0.8;
         const HARDWARE_ALLOWANCE: f32 = 1.5;
         assert!(
@@ -3306,13 +3015,7 @@ mod tests {
         renderer.destroy();
     }
 
-    /// `docs` §3.5: a glyph is drawn from the real bindless atlas, not from
-    /// the 1x1 dummy texture the renderer falls back to.
-    ///
-    /// The test installs a one-layer atlas, uploads a white tile into it,
-    /// renders one glyph primitive that samples that layer, and checks that
-    /// the covered pixel is lit. Without the atlas the sampler would read the
-    /// dummy texture and the glyph would be invisible.
+    /// 参见 `docs/architecture/gpu-renderer.md`：验证字形从真实 Bindless 图集而非 1x1 占位纹理采样。
     #[test]
     fn a_glyph_is_drawn_from_the_real_atlas() {
         let _guard = crate::device::gpu_test_guard();
@@ -3321,7 +3024,7 @@ mod tests {
         };
         let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
 
-        // A one-layer atlas with a white tile at the origin.
+        // 在单层图集原点上传一块白色图块。
         let atlases =
             std::sync::Arc::new(crate::atlas::AtlasSet::new(&renderer.gpu, 1).expect("atlas set"));
         let upload = crate::atlas::AtlasUpload {
@@ -3334,7 +3037,7 @@ mod tests {
             data: vec![255u8; 32 * 32],
         };
         atlases.upload(&renderer.gpu, &upload).expect("upload");
-        // Prove the pixels actually landed on the GPU.
+        // 验证像素已实际落地到 GPU 图集。
         let readback = atlases
             .read_layer(&renderer.gpu, crate::atlas::AtlasKind::R8, 0, 0, 0, 4, 4)
             .expect("readback");
@@ -3344,12 +3047,7 @@ mod tests {
         );
         renderer.install_atlases(atlases).expect("install");
 
-        // A glyph primitive covering the middle of the target. The payload
-        // carries the atlas UV range the shader interpolates over, and the
-        // shader reads the atlas layer from `border_or_tex`.
-        // `local_pos` is camera-relative: the camera sits at the viewport
-        // centre, so a primitive whose origin is at (32, 32) and which is
-        // 64x64 large covers the screen centre.
+        // 覆盖目标中心的字形图元；载荷携带图集 UV 范围，`border_or_tex` 指定图集图层。
         let prim = crate::data::GpuPrimitiveInstance {
             chunk_id: [0, 0],
             local_pos: [32.0, 32.0],
@@ -3360,26 +3058,21 @@ mod tests {
                 crate::data::SubElement::Content as u16,
             ),
             fill_token_or_uv: 5,
-            // The shader reads the atlas layer from `border_or_tex`.
+            // 着色器从 `border_or_tex` 读取图集图层。
             border_token_or_tex: 0,
-            extra_payload_idx: 0, // `CLIP_NONE` is `u32::MAX`, not zero: the default zero would
-            // point at a clip node that does not exist and cull the glyph.
+            extra_payload_idx: 0, // `CLIP_NONE` 为 `u32::MAX` 而非 0，默认值 0 会指向不存在的裁剪节点并误剔除字形。
             clip_idx: crate::data::CLIP_NONE,
-            // Opacity must be set explicitly: the default is zero, and a
-            // zero-opacity primitive is culled before it ever reaches the
-            // fragment shader.
+            // 必须显式设置不透明度：默认值为 0，零不透明度图元会在进入片元着色器前被剔除。
             z_and_opacity: crate::data::GpuPrimitiveInstance::pack_z_opacity(1000, 1.0),
             ..Default::default()
         };
         let mut payload = crate::data::GpuPayload::default();
-        // The UV range addresses the tile inside the 2048x2048 page: the tile
-        // sits at the origin and is 32x32 texels, so the range is
-        // [0, 32/2048] — not the whole page.
+        // UV 范围指向 2048x2048 页内原点处的 32x32 纹素图块，即 `[0, 32/2048]`。
         let extent = 32.0 / crate::atlas::PAGE_SIZE as f32;
         payload.p0 = [0.0, 0.0];
         payload.p1 = [extent, extent];
 
-        // The reference quad sits on the left half; the glyph on the right.
+        // 参考矩形位于左半侧，字形位于右半侧。
         let reference = quad(16.0, 16.0, 48.0, 96.0, 5);
         let prims = vec![reference, prim];
         let payloads = vec![payload];
@@ -3399,9 +3092,9 @@ mod tests {
         renderer.render(&upload).expect("render");
         let pixels = renderer.read_pixels().expect("readback");
 
-        // The reference quad (left half) must be lit.
+        // 参考矩形（左半侧）必须被点亮。
         let reference_px = (64 * 128 + 40) * 4;
-        // The centre of the glyph must be lit.
+        // 字形中心必须被点亮。
         let centre = (64 * 128 + 64) * 4;
         assert!(
             pixels[reference_px] > 200,
@@ -3413,12 +3106,9 @@ mod tests {
             "the glyph must be drawn from the atlas: {:?}",
             &pixels[centre..centre + 4]
         );
-        // A pixel above both primitives must stay dark: the glyph tile is
-        // fully opaque, so the whole 64x64 quad is lit, but nothing above it
-        // may be.
+        // 两个图元上方的像素必须保持暗色。
         let outside = (4 * 128 + 100) * 4;
-        // The clear colour is 0.07 in linear space, which is about 80 after
-        // the sRGB encode; anything lit would be far brighter than that.
+        // 清屏色在线性空间为 0.07，经 sRGB 编码后约 80；被点亮的像素远高于此值。
         assert!(
             pixels[outside] < 120,
             "nothing may be drawn above the glyph: {:?}",
@@ -3427,11 +3117,7 @@ mod tests {
         renderer.destroy();
     }
 
-    /// A rounded rectangle with a border must keep its fill colour in the
-    /// interior and the border colour on the ring.
-    ///
-    /// The test renders two primitives side by side — one without a border,
-    /// one with — and checks that the interior of both is the fill colour.
+    /// 验证带边框圆角矩形内部保持填充色、外环保持边框色。
     #[test]
     fn a_bordered_rectangle_keeps_its_fill_colour() {
         let _guard = crate::device::gpu_test_guard();
@@ -3440,15 +3126,14 @@ mod tests {
         };
         let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
 
-        // Token 2 is white, token 1 is a translucent black.
+        // 令牌 2 为白色，令牌 1 为半透明黑色。
         let mut theme = vec![[0u16; 4]; 512];
-        // Opaque: a translucent border would let the surface colour show
-        // through and blur the ring/fill distinction the test checks.
+        // 使用不透明边框以清晰区分外环与内部填充。
         theme[1] = unbound_math::Color::from_srgb8(0, 0, 0, 255).to_rgba16f();
         theme[2] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
         renderer.write_theme(&theme).unwrap();
 
-        // Left: no border. Right: a 4 px border.
+        // 左侧：无边框；右侧：4 px 边框。
         let plain = crate::data::GpuPrimitiveInstance {
             chunk_id: [0, 0],
             local_pos: [8.0, 8.0],
@@ -3482,25 +3167,21 @@ mod tests {
             .expect("render");
         let pixels = renderer.read_pixels().expect("readback");
 
-        // The interior of the plain rectangle.
+        // 普通矩形的内部区域。
         let plain_px = (32 * 128 + 32) * 4;
         assert!(
             pixels[plain_px] > 200,
             "the plain rectangle must be white: {:?}",
             &pixels[plain_px..plain_px + 4]
         );
-        // The interior of the bordered rectangle: the fill still shows.
+        // 带边框矩形的内部：仍显示填充色。
         let bordered_px = (32 * 128 + 96) * 4;
         assert!(
             pixels[bordered_px] > 200,
             "the bordered rectangle must keep its fill: {:?}",
             &pixels[bordered_px..bordered_px + 4]
         );
-        // The ring of the bordered rectangle: the border colour.
-        //
-        // The box starts at x = 72 and the border is 4 px wide, so the ring
-        // covers x 72..76 — pixel 76 is the first *fill* pixel, not a ring
-        // pixel. Sample the middle of the ring instead.
+        // 带边框矩形的外环区域：应为边框色（采样外环中点 x = 74）。
         for x in 72..76usize {
             let ring_px = (32 * 128 + x) * 4;
             assert!(
@@ -3509,7 +3190,7 @@ mod tests {
                 &pixels[ring_px..ring_px + 4]
             );
         }
-        // Immediately inside the ring the fill takes over again.
+        // 紧贴边框内侧恢复为填充色。
         let inner_edge_px = (32 * 128 + 76) * 4;
         assert!(
             pixels[inner_edge_px] > 200,
@@ -3519,15 +3200,7 @@ mod tests {
         renderer.destroy();
     }
 
-    /// The windowed path draws into a *borrowed* colour attachment — the
-    /// swapchain image — while the offscreen path draws into the renderer's
-    /// own target. The two must produce the same picture, or the window
-    /// shows something the test suite never saw.
-    ///
-    /// The test renders the same scene twice and compares the two readbacks
-    /// byte for byte. The borrowed attachment is created with the same usage
-    /// flags a swapchain image has, so the layout transition and the
-    /// attachment setup are exercised exactly as they are in the window.
+    /// 验证窗口化借用附件路径与离屏渲染路径逐字节输出一致。
     #[test]
     fn the_borrowed_attachment_path_matches_the_offscreen_path() {
         let _guard = crate::device::gpu_test_guard();
@@ -3547,13 +3220,13 @@ mod tests {
         let transforms = vec![GpuTransform::IDENTITY];
         let prims = [background, rounded];
 
-        // The reference: the renderer's own offscreen target.
+        // 参考基准：渲染器自有的离屏目标。
         renderer
             .render(&scene_at(&prims, &transforms, 1, (256.0, 256.0)))
             .expect("render");
         let reference = renderer.read_pixels().expect("readback");
 
-        // A borrowed attachment with the usage flags of a swapchain image.
+        // 具备交换链图像相同用途标志的借用附件。
         let (image, memory, view) = borrowed_attachment(&renderer, 256, 256);
         renderer
             .render_to_view(
@@ -3562,8 +3235,7 @@ mod tests {
                 view,
                 256,
                 256,
-                // No presentation engine in the test: the image is already
-                // ours, so there is nothing to wait for.
+                // 测试中无呈现引擎：图像已归本测试所有，无需等待信号量。
                 vk::Semaphore::null(),
             )
             .expect("render");
@@ -3579,9 +3251,7 @@ mod tests {
             "the windowed path must draw the same picture as the offscreen path"
         );
 
-        // Guard against "both are empty" passing the comparison above. The
-        // readback is BGRA, so the blue channel comes first: the fill is
-        // (52, 100, 220) in RGB.
+        // 防止“两者皆空”通过上方比对；回读为 BGRA，RGB(52, 100, 220) 对应蓝色通道在前。
         let lit = borrowed
             .chunks(4)
             .filter(|pixel| pixel[0] > 180 && pixel[2] < 120)
@@ -3591,7 +3261,7 @@ mod tests {
             "the borrowed frame must actually contain the rectangle: {lit} pixels"
         );
 
-        // SAFETY: the image, its view and its memory belong to this test.
+        // SAFETY: 图像、视图与内存均归本测试所有。
         unsafe {
             renderer.gpu.device.destroy_image_view(view, None);
             renderer.gpu.device.destroy_image(image, None);
@@ -3600,13 +3270,13 @@ mod tests {
         renderer.destroy();
     }
 
-    /// Create a colour attachment that behaves like a swapchain image.
+    /// 创建行为与交换链图像一致的颜色附件。
     fn borrowed_attachment(
         renderer: &Renderer,
         width: u32,
         height: u32,
     ) -> (vk::Image, vk::DeviceMemory, vk::ImageView) {
-        // SAFETY: the image is returned to the caller, which destroys it.
+        // SAFETY: 图像所有权移交调用方并由其销毁。
         unsafe {
             RenderTarget::create_image(
                 &renderer.gpu,
@@ -3620,7 +3290,7 @@ mod tests {
         }
     }
 
-    /// Copy an arbitrary colour image into the renderer's staging buffer.
+    /// 将任意颜色图像拷贝到渲染器暂存缓冲区。
     fn read_back(
         renderer: &mut Renderer,
         image: vk::Image,
@@ -3628,8 +3298,7 @@ mod tests {
         height: u32,
     ) -> Result<Vec<u8>, GpuError> {
         let size = u64::from(width) * u64::from(height) * 4;
-        // The staging buffer is a fixed size; a bigger image would make the
-        // copy below read past the end of the mapping.
+        // 暂存缓冲区大小固定，禁止超出映射范围拷贝。
         if size > renderer.staging.size {
             return Err(GpuError::Allocation(format!(
                 "readback of {width}x{height} needs {size} bytes, the staging buffer holds {}",
@@ -3637,7 +3306,7 @@ mod tests {
             )));
         }
         let device = &renderer.gpu.device;
-        // SAFETY: the GPU is idle after `wait_idle`, so the copy cannot race.
+        // SAFETY: `wait_idle` 后 GPU 已空闲，拷贝无数据竞争。
         unsafe {
             renderer.gpu.wait_idle();
             let barrier = [image_barrier(
@@ -3686,12 +3355,7 @@ mod tests {
         }
     }
 
-    /// A rounded rectangle must be filled edge to edge.
-    ///
-    /// The test renders a background and a single rounded rectangle on top of
-    /// it and checks a grid of points inside the rectangle: every one of them
-    /// has to carry the fill colour. A rectangle whose middle is not filled
-    /// means the coverage maths or the depth pre-pass is wrong.
+    /// 验证圆角矩形从边到边完整填充，内部采样网格均呈现填充色。
     #[test]
     fn a_rounded_rectangle_is_filled_edge_to_edge() {
         let _guard = crate::device::gpu_test_guard();
@@ -3704,12 +3368,11 @@ mod tests {
         theme[2] = unbound_math::Color::from_srgb8(52, 100, 220, 255).to_rgba16f();
         renderer.write_theme(&theme).unwrap();
 
-        // The background fills the whole target; the rectangle sits on top.
+        // 背景铺满整个目标；圆角矩形叠放在上方。
         let background = quad(0.0, 0.0, 256.0, 256.0, 1);
         let mut rounded = quad(60.0, 60.0, 120.0, 64.0, 2);
         rounded.corner_radii = unbound_math::f16::pack_radii([12.0; 4]);
-        // Reverse-Z: a *larger* depth value is nearer and is therefore drawn
-        // last, so the rectangle has to sit above the background.
+        // 反向 Z：更大的深度值更近且后绘制，故矩形深度大于背景。
         rounded.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(2000, 1.0);
         let transforms = vec![GpuTransform::IDENTITY];
 
@@ -3723,16 +3386,14 @@ mod tests {
             .expect("render");
         let pixels = renderer.read_pixels().expect("readback");
 
-        // Every sample inside the rectangle must be the fill colour. The
-        // rectangle covers x 60..180, y 60..124; the corners are rounded with
-        // a radius of 12, so the samples stay away from them.
+        // 矩形内部所有采样点（避开圆角）均必须为填充色。
         let mut wrong = 0;
         let mut first_wrong = None;
         for y in 70..115u32 {
             for x in 70..170u32 {
                 let idx = ((y * 256 + x) * 4) as usize;
                 let pixel = &pixels[idx..idx + 4];
-                // The readback is BGRA: the blue channel is first.
+                // 回读格式为 BGRA：蓝色通道在前。
                 if pixel[0] < 180 || pixel[2] > 120 {
                     wrong += 1;
                     first_wrong.get_or_insert((x, y, pixel.to_vec()));
@@ -3747,17 +3408,11 @@ mod tests {
         renderer.destroy();
     }
 
-    /// `docs` §10.2: 100 000 rounded, shadowed canvas nodes on screen must
-    /// collapse into at most four `vkCmdDrawIndirectCount` calls.
-    ///
-    /// The number four is not arbitrary: one call per `(pass layer, barrier id,
-    /// pipeline variant)` run, and the demo scene only exercises one of each.
+    /// 参见 `docs/architecture/gpu-renderer.md`：屏幕上 10 万个带阴影圆角画布节点必须合并为不超过 4 次 `vkCmdDrawIndirectCount` 调用。
     #[test]
     fn a_hundred_thousand_primitives_need_at_most_four_draw_calls() {
         let _guard = crate::device::gpu_test_guard();
-        // The first upload stages the whole scene through one ring slot, so the
-        // slot must hold 100 000 x 64 B. Production hosts size this from their
-        // largest scene; the default 1 MiB test device cannot.
+        // 首次上传需在单个环槽位内暂存 10 万 × 64B 图元，故调大瞬态环容量。
         let gpu = match crate::device::Gpu::new(crate::device::GpuConfig {
             pool_capacity: 32 << 20,
             ring_capacity: 16 << 20,
@@ -3769,10 +3424,9 @@ mod tests {
                 return;
             }
         };
-        const COUNT: u32 = 99_840; // 320 x 312
+        const COUNT: u32 = 99_840; // 320 x 312 网格
         let mut renderer = Renderer::new(gpu, 512, 512).expect("renderer");
-        // A 320 x 312 grid of 1.6 px cells fills a 512 x 512 viewport exactly:
-        // the last column starts at 510.4 and the last row at 510.04.
+        // 320 x 312 个 1.6 px 单元恰好铺满 512 x 512 视口。
         let prims: Vec<_> = (0..COUNT)
             .map(|i| {
                 let x = (i % 320) as f32 * 1.6;
@@ -3782,19 +3436,14 @@ mod tests {
             .collect();
         let transforms = vec![GpuTransform::IDENTITY];
 
-        // The camera must cover the whole grid, otherwise the cull pass
-        // legitimately throws most of it away.
+        // 相机须覆盖整个网格，否则剔除 Pass 会合理丢弃视口外图元。
         renderer.enable_timing().expect("timing");
         let stats = renderer
             .render(&scene_at(&prims, &transforms, 1, (512.0, 512.0)))
             .expect("render");
         assert_eq!(stats.submitted, COUNT);
 
-        // The next frames have nothing to upload: the scene is identical, so
-        // this is the steady state the acceptance table talks about. GPU
-        // timestamps are noisy (clocks ramp after idle, external overlays share
-        // the queue), so score the best of three steady-state frames: a budget
-        // is a floor, not a lottery.
+        // 后续帧场景完全不变，进入零上传稳态；取三帧稳态样本的最佳耗时与预算对比。
         let mut best_ms = f32::MAX;
         let mut timing = None;
         for _ in 0..3 {
@@ -3825,11 +3474,8 @@ mod tests {
             "culling dropped too many: {} of {COUNT}",
             renderer.stats.visible
         );
-        // `docs` §10.2: the GPU budget for 100 000 canvas nodes is 1.5 ms and
-        // the MDI draw calls must stay at four or fewer. The budget is stated
-        // for the reference desktop GPU; a healthy but slower test machine is
-        // allowed 1.5× before the guard fires, which still catches a real
-        // regression (the previous frame spends ~1 ms sorting 124k primitives).
+        // 10 万节点参考 GPU 预算为 1.5 ms 且 MDI 批次数 <= 4（参见 `docs/architecture/gpu-renderer.md`）；
+        // 允许 1.5 倍硬件余量。
         const DESIGN_BUDGET_MS: f32 = 1.5;
         const HARDWARE_ALLOWANCE: f32 = 1.5;
         assert!(
@@ -3846,8 +3492,7 @@ mod tests {
             renderer.stats.draw_calls
         );
 
-        // Second frame, same generation: the persistent pool must not move a
-        // single byte (`docs` §5.2 "0 B per frame").
+        // 第二帧版本号相同：持久化池上传必须为 0 字节（参见 `docs/architecture/gpu-renderer.md`）。
         let again = renderer
             .render(&scene(&prims, &transforms, 1))
             .expect("render");
@@ -3872,7 +3517,7 @@ mod tests {
             .unwrap();
         assert!(first.bytes_uploaded > 0, "first frame uploads the pool");
 
-        // Same generation, different camera: zero bytes must move.
+        // 同一版本号仅移动相机：上传字节数必须为零。
         let mut moved = scene_at(&prims, &transforms, 1, (64.0, 64.0));
         moved.camera = Camera::canvas([0, 0], [32.0, 32.0], 1.5, 1.0);
         let second = renderer.render(&moved).unwrap();
@@ -3888,7 +3533,7 @@ mod tests {
             return;
         };
         let mut renderer = Renderer::new(gpu, 64, 64).expect("renderer");
-        // A dark surface makes "culled" unambiguous.
+        // 深色背景使“已剔除”状态一目了然。
         renderer
             .write_theme(&{
                 let mut colors = vec![[0u16; 4]; 512];
@@ -3901,11 +3546,11 @@ mod tests {
         renderer
             .render(&scene_at(&prims, &transforms, 1, (64.0, 64.0)))
             .unwrap();
-        // The culling shader rejects it; the draw command count drops to zero.
+        // 剔除着色器拒绝该图元；绘制命令数降至零。
         assert_eq!(renderer.stats.submitted, 1);
         let pixels = renderer.read_pixels().unwrap();
         let idx = (32 * 64 + 32) * 4;
-        // Clear colour only: the primitive was rejected before rasterisation.
+        // 仅剩清屏色：图元在光栅化前已被剔除。
         assert!(
             (10..=30).contains(&pixels[idx]),
             "culled primitive painted: {:?}",

@@ -1,9 +1,8 @@
-//! The command palette: a search field over a ranked command list.
+//! 命令面板（CommandPalette）：带排序命令列表的搜索框。
 //!
-//! Ranking is a pure function of `(query, command, recency)`, so the same
-//! query always produces the same order and a test can assert it. The score
-//! is deliberately coarse — prefix beats substring beats subsequence — and
-//! recency only breaks ties, never promotes a non-match.
+//! 排序是 `(query, command, recency)` 的纯函数，因此相同查询总能产出相同顺序，便于测试断言。
+//! 评分刻意保持粗粒度——前缀匹配优于子串匹配，子串匹配优于子序列匹配——
+//! 最近使用度仅用于打破平局，绝不会提升不匹配项。
 
 use accesskit::Role;
 use rustc_hash::FxHashMap;
@@ -18,29 +17,29 @@ use crate::primitive::{focus_ring, glyphs, instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The default row height.
+/// 默认行高。
 pub const COMMAND_ROW: f32 = 32.0;
 
-/// The search field height.
+/// 搜索框高度。
 pub const COMMAND_INPUT: f32 = 44.0;
 
-/// One palette command.
+/// 面板中的单条命令。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Command {
-    /// Stable identity.
+    /// 稳定标识。
     pub id: u64,
-    /// The label shown in the list.
+    /// 列表中显示的标签。
     pub title: String,
-    /// The group heading.
+    /// 分组标题。
     pub group: String,
-    /// Extra words that match but are not shown.
+    /// 参与匹配但不显示的额外关键词。
     pub keywords: Vec<String>,
-    /// The shortcut hint shown on the right.
+    /// 显示在右侧的快捷键提示。
     pub shortcut: Option<String>,
 }
 
 impl Command {
-    /// A command with a title and group.
+    /// 创建带标题与分组的命令。
     #[must_use]
     pub fn new(id: u64, title: impl Into<String>, group: impl Into<String>) -> Self {
         Self {
@@ -52,14 +51,14 @@ impl Command {
         }
     }
 
-    /// Add hidden search keywords.
+    /// 添加隐藏搜索关键词。
     #[must_use]
     pub fn with_keywords(mut self, keywords: &[&str]) -> Self {
         self.keywords = keywords.iter().map(|word| (*word).to_owned()).collect();
         self
     }
 
-    /// Add a shortcut hint.
+    /// 添加快捷键提示。
     #[must_use]
     pub fn with_shortcut(mut self, shortcut: impl Into<String>) -> Self {
         self.shortcut = Some(shortcut.into());
@@ -67,23 +66,23 @@ impl Command {
     }
 }
 
-/// The pure descriptor of a command palette.
+/// 命令面板的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandPaletteDesc {
-    /// The palette rectangle.
+    /// 面板矩形。
     pub rect: Rect,
-    /// The placeholder shown while the query is empty.
+    /// 查询为空时显示的占位文本。
     pub placeholder: String,
-    /// The row height.
+    /// 行高。
     pub row_height: f32,
-    /// The maximum number of rows shown at once.
+    /// 单次最多显示的行数。
     pub max_rows: usize,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl CommandPaletteDesc {
-    /// A palette of the given size.
+    /// 创建指定尺寸的命令面板。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -95,7 +94,7 @@ impl CommandPaletteDesc {
         }
     }
 
-    /// The search field.
+    /// 搜索框矩形。
     #[must_use]
     pub fn input_rect(&self) -> Rect {
         Rect::new(
@@ -106,7 +105,7 @@ impl CommandPaletteDesc {
         )
     }
 
-    /// The list below the field.
+    /// 搜索框下方的列表矩形。
     #[must_use]
     pub fn list_rect(&self) -> Rect {
         let input = self.input_rect();
@@ -118,7 +117,7 @@ impl CommandPaletteDesc {
         )
     }
 
-    /// The rectangle of the nth visible result.
+    /// 第 n 个可见结果的矩形。
     #[must_use]
     pub fn row_rect(&self, index: usize) -> Rect {
         let list = self.list_rect();
@@ -132,24 +131,23 @@ impl CommandPaletteDesc {
     }
 }
 
-/// How well a command matches a query.
+/// 命令与查询的匹配程度。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MatchKind {
-    /// No match.
+    /// 不匹配。
     None,
-    /// The letters appear in order, with gaps.
+    /// 字符按顺序出现，中间存在间隔。
     Subsequence,
-    /// The query appears somewhere in the title or a keyword.
+    /// 查询字符串作为子串出现在标题或关键词中。
     Substring,
-    /// The title or a keyword starts with the query.
+    /// 标题或关键词以查询字符串开头。
     Prefix,
 }
 
-/// Score one command against a query.
+/// 对单条命令与查询进行评分。
 ///
-/// Returns `None` when nothing matches. The recency rank is a tie-breaker
-/// worth at most 90 points, so it can never lift a subsequence above a
-/// substring match.
+/// 无匹配时返回 `None`。最近使用度排名作为平局决胜分最多占 90 分，
+/// 因此绝不会将子序列匹配提升到子串匹配之上。
 #[must_use]
 pub fn score_command(query: &str, command: &Command, recency: u32) -> Option<i32> {
     let query = query.trim().to_lowercase();
@@ -184,7 +182,7 @@ pub fn score_command(query: &str, command: &Command, recency: u32) -> Option<i32
     (best != MatchKind::None).then_some(best_score + bonus)
 }
 
-/// The number of skipped characters when `query` is a subsequence of `text`.
+/// 当 `query` 是 `text` 的子序列时跳过的字符数。
 fn subsequence_gaps(text: &str, query: &str) -> Option<usize> {
     let mut chars = text.chars();
     let mut gaps = 0;
@@ -202,25 +200,25 @@ fn subsequence_gaps(text: &str, query: &str) -> Option<usize> {
     Some(gaps)
 }
 
-/// The live state of a command palette.
+/// 命令面板的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandPaletteState {
-    /// Whether the palette is visible.
+    /// 面板是否可见。
     pub open: bool,
-    /// The current query.
+    /// 当前查询文本。
     pub query: String,
-    /// The index of the highlighted result.
+    /// 当前高亮结果的索引。
     pub selected: usize,
-    /// Every command known to the palette.
+    /// 面板已知的所有命令。
     pub commands: Vec<Command>,
-    /// Usage counters; higher means more recent.
+    /// 使用计数；数值越大表示越近期使用。
     recency: FxHashMap<u64, u32>,
-    /// A monotonically increasing use counter.
+    /// 单调递增的使用计数器。
     tick: u32,
 }
 
 impl CommandPaletteState {
-    /// A closed palette over the given commands.
+    /// 基于给定命令列表创建关闭状态的面板。
     #[must_use]
     pub fn new(commands: Vec<Command>) -> Self {
         Self {
@@ -233,25 +231,25 @@ impl CommandPaletteState {
         }
     }
 
-    /// Show the palette with a fresh query.
+    /// 清空查询并显示面板。
     pub fn open(&mut self) {
         self.open = true;
         self.query.clear();
         self.selected = 0;
     }
 
-    /// Hide the palette.
+    /// 隐藏面板。
     pub fn close(&mut self) {
         self.open = false;
     }
 
-    /// Replace the query and reset the highlight.
+    /// 替换查询并重置高亮索引。
     pub fn set_query(&mut self, query: impl Into<String>) {
         self.query = query.into();
         self.selected = 0;
     }
 
-    /// The result indices, best first.
+    /// 匹配结果的索引列表，最佳匹配在前。
     #[must_use]
     pub fn results(&self) -> Vec<usize> {
         let mut scored: Vec<(i32, usize)> = self
@@ -267,7 +265,7 @@ impl CommandPaletteState {
         scored.into_iter().map(|(_, index)| index).collect()
     }
 
-    /// The highlighted command, if any.
+    /// 当前高亮的命令（若有）。
     #[must_use]
     pub fn selected_command(&self) -> Option<&Command> {
         let results = self.results();
@@ -276,7 +274,7 @@ impl CommandPaletteState {
             .and_then(|index| self.commands.get(*index))
     }
 
-    /// Move the highlight, wrapping around the result list.
+    /// 移动高亮并在结果列表首尾循环。
     pub fn move_selection(&mut self, delta: isize) -> bool {
         let count = self.results().len();
         if count == 0 {
@@ -288,19 +286,19 @@ impl CommandPaletteState {
         changed
     }
 
-    /// Record that a command was invoked: it becomes the most recent.
+    /// 记录某条命令被调用：将其设为最近使用。
     pub fn record_use(&mut self, id: u64) {
         self.tick = self.tick.saturating_add(1);
         self.recency.insert(id, self.tick);
     }
 
-    /// The recency rank of a command.
+    /// 获取命令的近期使用排名。
     #[must_use]
     pub fn recency(&self, id: u64) -> u32 {
         self.recency.get(&id).copied().unwrap_or(0)
     }
 
-    /// The results that fit in the list, in order.
+    /// 按顺序返回列表可容纳的结果。
     #[must_use]
     pub fn visible_results(&self, desc: &CommandPaletteDesc) -> Vec<usize> {
         let mut results = self.results();
@@ -309,31 +307,31 @@ impl CommandPaletteState {
     }
 }
 
-/// The colour slots a command palette paints with.
+/// 命令面板绘制使用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CommandPaletteTokens {
-    /// The palette surface.
+    /// 面板表面背景色。
     pub surface: Token,
-    /// The palette border.
+    /// 面板边框色。
     pub border: Token,
-    /// The search field.
+    /// 搜索框背景色。
     pub input: Token,
-    /// An idle row.
+    /// 闲置行背景色。
     pub row: Token,
-    /// The highlighted row.
+    /// 高亮行背景色。
     pub row_selected: Token,
-    /// The title text.
+    /// 标题文字颜色。
     pub text: Token,
-    /// The title of the highlighted row.
+    /// 高亮行标题文字颜色。
     pub text_selected: Token,
-    /// The group and shortcut hints.
+    /// 分组与快捷键提示文字颜色。
     pub hint: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环颜色。
     pub focus_ring: Token,
 }
 
 impl CommandPaletteTokens {
-    /// The standard set.
+    /// 标准配色方案。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -350,7 +348,7 @@ impl CommandPaletteTokens {
     }
 }
 
-/// Emit the palette shell: surface, border, search field and list backdrop.
+/// 发射面板外壳：表面、边框、搜索框与列表底衬。
 #[must_use]
 pub fn emit_command_palette(
     desc: &CommandPaletteDesc,
@@ -381,7 +379,7 @@ pub fn emit_command_palette(
     }
 }
 
-/// Emit one result row.
+/// 发射单条结果行。
 #[must_use]
 pub fn emit_command_row(
     desc: &CommandPaletteDesc,

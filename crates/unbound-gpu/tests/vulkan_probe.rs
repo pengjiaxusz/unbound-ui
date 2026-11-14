@@ -1,17 +1,14 @@
-//! Environment probe: does this machine expose a Vulkan 1.3 device, and which
-//! of the features the renderer *requires* are actually present?
+//! 环境探测：检查本机是否提供 Vulkan 1.3 设备，以及渲染器所需的各项特性是否实际可用。
 //!
-//! Run with `cargo test -p unbound-gpu --test vulkan_probe -- --ignored --nocapture`.
-//! The test is `#[ignore]`d by default so headless CI without a GPU stays green;
-//! the renderer's own integration tests use the same capability gate.
+//! 运行命令：`cargo test -p unbound-gpu --test vulkan_probe -- --ignored --nocapture`。
+//! 默认标记为 `#[ignore]`，以保证无 GPU 的无头 CI 保持通过；渲染器自身的集成测试复用同一能力门控。
 
 use ash::vk;
 
 #[test]
 #[ignore = "requires a Vulkan 1.3 driver; run explicitly on a GPU machine"]
 fn report_vulkan_capabilities() {
-    // SAFETY: `Entry::load` only loads the loader; every Vulkan object created
-    // below is destroyed before returning.
+    // SAFETY: `Entry::load` 仅加载 Vulkan 加载器；下文创建的每个 Vulkan 对象均会在返回前销毁。
     unsafe {
         let entry = ash::Entry::load().expect("Vulkan loader present");
         let app_info = vk::ApplicationInfo::default()

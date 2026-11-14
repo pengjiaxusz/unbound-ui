@@ -1,49 +1,47 @@
-//! Epoch-quarantined free list (`docs` §2.2).
+//! 基于 Epoch 隔离的延迟释放队列（参见 `docs/architecture/gpu-renderer.md`）。
 //!
-//! With N frames in flight the GPU may still be reading a persistent-pool block
-//! that the CPU already "freed". Handing that block straight back to TLSF lets
-//! the next frame overwrite bytes that are still being sampled — the classic
-//! flicker/tearing bug that only appears under load.
+//! 在 N 帧同时在飞的情况下，GPU 可能仍在读取 CPU 已经“释放”的持久化池内存块。
+//! 若立即将该块归还 TLSF，下一帧就会覆写仍在被采样的字节——这正是高负载下
+//! 闪烁或画面撕裂的典型成因。
 //!
-//! The fix is to keep every freed block quarantined until the timeline
-//! semaphore value of the frame that *last used* it has been signalled. Only
-//! then does the block re-enter the free list.
+//! 解决方式是将每个已释放的块隔离保存，直到*最后使用它*的帧对应的时间线信号量
+//! 完成信号触发后，才重新放回空闲链表。
 
 use std::collections::VecDeque;
 
-/// One block waiting to be returned to the allocator.
+/// 等待归还给分配器的单个内存块。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct QuarantinedBlock {
-    /// Allocator payload offset.
+    /// 分配器载荷偏移量。
     pub payload: u32,
-    /// Size requested at allocation time (diagnostics + stats).
+    /// 分配时请求的字节大小（用于诊断与统计）。
     pub size: u32,
-    /// Frame slot that last referenced the block.
+    /// 最后引用该内存块的帧槽位。
     pub frame_slot: u32,
 }
 
-/// A quarantine queue keyed by timeline semaphore value.
+/// 以时间线信号量值为键的隔离队列。
 #[derive(Debug, Default)]
 pub struct EpochQuarantine {
-    /// Buckets ordered by increasing epoch. Each bucket is drained atomically.
+    /// 按 epoch 递增排列的桶；每个桶以原子方式整体排空。
     pending: VecDeque<(u64, Vec<QuarantinedBlock>)>,
-    /// Highest timeline value the GPU has confirmed complete.
+    /// GPU 已确认完成的最高时间线值。
     completed_epoch: u64,
-    /// Blocks currently parked.
+    /// 当前处于隔离中的块数量。
     parked: usize,
-    /// Peak number of parked blocks (fragmentation early-warning).
+    /// 隔离块数量峰值（碎片化预警指标）。
     peak_parked: usize,
-    /// Total blocks actually reclaimed.
+    /// 累计已实际回收的块总数。
     reclaimed: u64,
-    /// Bytes currently parked.
+    /// 当前处于隔离中的字节数。
     parked_bytes: u64,
-    /// Refused hand-offs because the queue grew past its safety bound.
+    /// 因队列超出安全上限而被拒绝入队的次数。
     dropped: u64,
 }
 
 impl EpochQuarantine {
-    /// Safety bound: if more than this many frames remain unconfirmed, the GPU
-    /// is stalled. We keep the blocks parked (never corrupt) but report it.
+    /// 安全上限：若未确认帧数超过此值，说明 GPU 已停顿。
+    /// 此时继续保留已隔离块（绝不破坏数据）并向上报告。
     pub const MAX_PENDING_EPOCHS: usize = 8;
 
     #[must_use]
@@ -54,52 +52,52 @@ impl EpochQuarantine {
         }
     }
 
-    /// Timeline value of the most recently completed frame.
+    /// 最近一次已完成帧的时间线值。
     #[must_use]
     pub fn completed_epoch(&self) -> u64 {
         self.completed_epoch
     }
 
-    /// Number of blocks currently parked.
+    /// 当前隔离中的块数量。
     #[must_use]
     pub fn parked(&self) -> usize {
         self.parked
     }
 
-    /// Peak number of parked blocks.
+    /// 隔离块数量历史峰值。
     #[must_use]
     pub fn peak_parked(&self) -> usize {
         self.peak_parked
     }
 
-    /// Bytes parked.
+    /// 当前隔离中的字节数。
     #[must_use]
     pub fn parked_bytes(&self) -> u64 {
         self.parked_bytes
     }
 
-    /// Total blocks reclaimed since construction.
+    /// 自创建以来累计回收的块总数。
     #[must_use]
     pub fn reclaimed(&self) -> u64 {
         self.reclaimed
     }
 
-    /// Number of buckets awaiting confirmation.
+    /// 等待确认的桶数量。
     #[must_use]
     pub fn pending_buckets(&self) -> usize {
         self.pending.len()
     }
 
-    /// True when the GPU is so far behind that the quarantine bound tripped.
+    /// 当 GPU 落后过多导致触发隔离上限时返回 true。
     #[must_use]
     pub fn is_saturated(&self) -> bool {
         self.pending.len() >= Self::MAX_PENDING_EPOCHS
     }
 
-    /// Park a block until `epoch` completes.
+    /// 隔离内存块直至 `epoch` 完成。
     ///
-    /// Returns `false` when the quarantine is saturated; the caller must then
-    /// leak the block (safer than corrupting a frame) and surface the incident.
+    /// 若隔离队列已饱和则返回 `false`；调用方此时必须泄漏该块
+    /// （比破坏渲染帧更安全）并上报异常。
     pub fn defer(&mut self, epoch: u64, block: QuarantinedBlock) -> bool {
         if self.is_saturated() && self.pending.back().map(|(e, _)| *e) != Some(epoch) {
             self.dropped += 1;
@@ -132,18 +130,17 @@ impl EpochQuarantine {
         true
     }
 
-    /// Mark `epoch` as GPU-complete and return every block that may now be
-    /// reused, oldest first.
+    /// 将 `epoch` 标记为 GPU 已完成，并按从旧到新顺序返回所有可复用的块。
     ///
-    /// The returned vector is reused across calls by the caller (see
-    /// [`Self::reclaim_into`]) to keep steady-state frames allocation free.
+    /// 调用方可在多次调用间复用返回向量（参见 [`Self::reclaim_into`]），
+    /// 以保持稳态帧零堆分配。
     pub fn reclaim(&mut self, epoch: u64) -> Vec<QuarantinedBlock> {
         let mut out = Vec::new();
         self.reclaim_into(epoch, &mut out);
         out
     }
 
-    /// Allocation-free variant: appends reclaimable blocks to `out`.
+    /// 无分配变体：将可回收块追加到 `out`。
     pub fn reclaim_into(&mut self, epoch: u64, out: &mut Vec<QuarantinedBlock>) {
         self.completed_epoch = self.completed_epoch.max(epoch);
         while let Some((bucket_epoch, _)) = self.pending.front() {
@@ -160,16 +157,15 @@ impl EpochQuarantine {
         }
     }
 
-    /// Number of blocks refused because the queue was saturated.
+    /// 因队列饱和而被拒绝隔离的块总数。
     #[must_use]
     pub fn dropped(&self) -> u64 {
         self.dropped
     }
 
-    /// Drop every parked block *without* returning it to the allocator.
+    /// 丢弃所有隔离块且*不*归还给分配器。
     ///
-    /// Used on device-lost recovery, where the whole pool is rebuilt and the
-    /// individual blocks are meaningless.
+    /// 用于设备丢失恢复场景，此时整个内存池会重建，单个旧块已无意义。
     pub fn clear(&mut self) {
         self.pending.clear();
         self.parked = 0;
@@ -196,11 +192,11 @@ mod tests {
         q.defer(6, block(200, 64));
         assert_eq!(q.parked(), 2);
 
-        // Frame 4 completes: nothing may be released.
+        // 帧 4 完成：尚无任何块可释放。
         assert!(q.reclaim(4).is_empty());
         assert_eq!(q.parked(), 2);
 
-        // Frame 5 completes: only the block parked at epoch 5 returns.
+        // 帧 5 完成：仅释放隔离在 epoch 5 的块。
         let freed = q.reclaim(5);
         assert_eq!(freed.len(), 1);
         assert_eq!(freed[0].payload, 100);
@@ -243,7 +239,7 @@ mod tests {
         assert!(q.is_saturated());
         assert!(!q.defer(999, block(1, 8)));
         assert_eq!(q.dropped(), 1);
-        // Existing buckets are untouched.
+        // 已有桶保持不变。
         assert_eq!(q.parked(), EpochQuarantine::MAX_PENDING_EPOCHS);
     }
 

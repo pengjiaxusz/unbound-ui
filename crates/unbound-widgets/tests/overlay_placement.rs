@@ -1,8 +1,8 @@
-//! Anchored popups must never leave the window.
+//! 锚定弹窗绝不能超出窗口。
 //!
-//! This is the placement half of the overlay contract: for every anchor on or
-//! near an edge and every requested side, the produced rectangle has to be
-//! fully contained in the viewport.
+//! 这是浮层契约中的定位部分：对于边缘或近边缘的任意锚点及任意请求方向，
+//! 生成的矩形必须完全包含在视口内。
+//!
 
 use unbound_math::{Rect, Vec2};
 use unbound_widgets::overlay::{OverlayEntry, OverlayStack, PlacedPopup};
@@ -62,8 +62,8 @@ fn a_preferred_side_is_kept_when_it_fits() {
 
 #[test]
 fn flipping_only_happens_when_the_other_side_fits() {
-    // A popup taller than the space above *and* below cannot flip; it is
-    // shifted inside the viewport instead.
+    // 高于上下可用空间的弹窗无法翻转，而是被平移回视口内。
+    //
     let anchor = Rect::new(400.0, 20.0, 100.0, 30.0);
     let popup: Rect = place_anchored_popup(
         anchor,
@@ -154,7 +154,7 @@ fn the_arrow_tip_sits_on_the_chosen_edge_and_points_at_the_anchor() {
         viewport(),
         Placement::Bottom,
     );
-    // No room below, so it flipped above and the arrow is on the bottom edge.
+    // 下方空间不足，因此向上翻转，箭头位于底边。
     assert_eq!(placed.chosen_placement, Placement::Top);
     assert_eq!(placed.arrow_tip.y, placed.rect.max().y);
     assert_eq!(placed.arrow_tip.x, anchor.center().x);

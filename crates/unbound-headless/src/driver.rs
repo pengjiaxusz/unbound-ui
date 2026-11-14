@@ -1,17 +1,17 @@
-//! A deterministic, GPU-free driver for UI interaction tests.
+//! 确定性、无 GPU 的 UI 交互测试驱动器。
 //!
-//! [`TestApp`] owns the pieces every interactive component shares — the node
-//! world, the pointer router, the semantic tree, the camera and the focus
-//! slot — and exposes synthetic input in **window pixels**. Tests never touch
-//! canvas coordinates: the driver applies the same inverse camera transform
-//! the window does, so a zoomed or panned scene is tested exactly as it is
-//! seen.
+//! [`TestApp`] 持有每个交互组件共享的核心状态——节点世界、指针路由器、
+//! 语义树、相机与焦点槽位——并以**窗口像素**暴露合成输入。
+//! 测试永不直接接触画布坐标：驱动器会应用与窗口相同的逆相机变换，
+//! 因此缩放或平移后的场景与实际所见完全一致。
 //!
-//! The driver deliberately knows nothing about rendering or layout. A widget
-//! supplies a thin harness that builds its scene from the derived state (see
-//! `apps/showcase/src/testing.rs` for the button), installs the hit regions
-//! and semantic tree through [`TestApp::install`], and can then ask for the
-//! five geometry sanitizers via [`TestApp::check`].
+//!
+//!
+//! 驱动器刻意不感知渲染或布局。组件只需提供一个轻量测试夹具，
+//! 根据派生状态构建场景（按钮示例见 `apps/showcase/src/testing.rs`），
+//! 通过 [`TestApp::install`] 安装命中区域与语义树，随后即可通过
+//! [`TestApp::check`] 运行五项几何检查器。
+//!
 //!
 //! ```ignore
 //! let mut app = TestApp::new((1280.0, 720.0));
@@ -30,20 +30,20 @@ use unbound_world::{NodeId, UiWorld};
 
 use crate::{Frame, Harness, Report};
 
-/// The semantic root a fresh [`TestApp`] creates.
+/// 新建 [`TestApp`] 时创建的语义根节点。
 pub const DEFAULT_ROOT: u64 = 1;
 
-/// What a synthetic click produced.
+/// 单次合成点击产生的结果。
 #[derive(Clone, Debug, Default)]
 pub struct ClickReport {
-    /// The node the pointer captured on press, if any.
+    /// 按下时捕获指针的节点（如有）。
     pub pressed: Option<u64>,
-    /// Everything the router emitted, in order.
+    /// 路由器按顺序发出的全部事件。
     pub events: Vec<PointerEvent>,
 }
 
 impl ClickReport {
-    /// The node that received a `Click`, if the press became one.
+    /// 若本次按下演变为点击，则记录收到 `Click` 的节点。
     #[must_use]
     pub fn clicked(&self) -> Option<u64> {
         self.events.iter().find_map(|event| match event {
@@ -52,7 +52,7 @@ impl ClickReport {
         })
     }
 
-    /// How many consecutive clicks the router counted (1 for a single click).
+    /// 路由器统计的连续点击次数（单击为 1）。
     #[must_use]
     pub fn click_count(&self) -> Option<u8> {
         self.events.iter().find_map(|event| match event {
@@ -61,7 +61,7 @@ impl ClickReport {
         })
     }
 
-    /// Whether the pair formed a double click.
+    /// 两次点击是否构成了双击。
     #[must_use]
     pub fn is_double_click(&self) -> bool {
         self.events
@@ -70,38 +70,38 @@ impl ClickReport {
     }
 }
 
-/// The shared state of a headless UI session.
+/// 无头 UI 会话的共享状态。
 pub struct TestApp {
-    /// The node world; widgets allocate their identity here.
+    /// 节点世界；组件在此分配其标识。
     pub world: UiWorld,
-    /// Hit regions, hover and pointer capture.
+    /// 命中区域、悬停与指针捕获状态。
     pub router: Router,
-    /// The semantic tree.
+    /// 语义树。
     pub semantics: Semantics,
-    /// The viewport size, in window pixels.
+    /// 视口尺寸（窗口像素）。
     pub viewport: Vec2,
-    /// The camera zoom.
+    /// 相机缩放倍率。
     pub zoom: f32,
-    /// The camera pan, in window pixels.
+    /// 相机平移量（窗口像素）。
     pub pan: Vec2,
-    /// The focused semantic id, if any.
+    /// 当前聚焦的语义 ID（如有）。
     focus: Option<u64>,
-    /// The last pointer position, in window pixels.
+    /// 上一次指针位置（窗口像素）。
     pointer: Option<Vec2>,
-    /// The logical clock the router timestamps events with.
+    /// 路由器用于为事件打时间戳的逻辑时钟。
     time: f64,
-    /// Bumped on every [`install`](Self::install).
+    /// 每次调用 [`install`](Self::install) 时递增。
     generation: u64,
 }
 
 impl TestApp {
-    /// Create a session with the [`DEFAULT_ROOT`].
+    /// 使用 [`DEFAULT_ROOT`] 创建会话。
     #[must_use]
     pub fn new(viewport: (f32, f32)) -> Self {
         Self::with_root(viewport, DEFAULT_ROOT)
     }
 
-    /// Create a session with an explicit semantic root id.
+    /// 使用显式语义根 ID 创建会话。
     #[must_use]
     pub fn with_root(viewport: (f32, f32), root: u64) -> Self {
         Self {
@@ -118,57 +118,57 @@ impl TestApp {
         }
     }
 
-    /// Advance the logical clock, in seconds.
+    /// 推进逻辑时钟（单位：秒）。
     ///
-    /// Use this between clicks to avoid the router pairing them into a
-    /// double click, or to keep two synthetic events out of one frame.
+    /// 在两次点击之间调用可避免路由器将其配对为双击，
+    /// 或将两个合成事件隔离开到不同帧中。
     pub fn advance(&mut self, seconds: f64) {
         self.time += seconds;
     }
 
-    /// The logical time, in seconds.
+    /// 当前逻辑时间（秒）。
     #[must_use]
     pub fn time(&self) -> f64 {
         self.time
     }
 
-    /// The number of scenes installed so far.
+    /// 迄今已安装的场景次数。
     #[must_use]
     pub fn generation(&self) -> u64 {
         self.generation
     }
 
-    /// The camera anchor implied by `zoom` and `pan`.
+    /// 由 `zoom` 与 `pan` 隐含的相机锚点。
     #[must_use]
     pub fn anchor(&self) -> Vec2 {
         self.viewport * 0.5 - self.pan / self.zoom
     }
 
-    /// Map a window position to canvas coordinates.
+    /// 将窗口位置映射为画布坐标。
     ///
-    /// The shader maps `screen = (canvas - anchor) * zoom + viewport / 2`, so
-    /// the inverse is `canvas = (screen - viewport / 2) / zoom + anchor`.
+    /// 着色器按 `screen = (canvas - anchor) * zoom + viewport / 2` 映射，
+    /// 因此逆变换为 `canvas = (screen - viewport / 2) / zoom + anchor`。
     #[must_use]
     pub fn screen_to_canvas(&self, screen: Vec2) -> Vec2 {
         (screen - self.viewport * 0.5) / self.zoom + self.anchor()
     }
 
-    /// Map a canvas position back to window coordinates.
+    /// 将画布坐标映射回窗口坐标。
     #[must_use]
     pub fn canvas_to_screen(&self, canvas: Vec2) -> Vec2 {
         (canvas - self.anchor()) * self.zoom + self.viewport * 0.5
     }
 
-    /// Pan the camera by a window-space delta.
+    /// 按窗口空间增量平移相机。
     ///
-    /// Hover and cursor are re-picked at the new canvas point: the pointer did
-    /// not move, but the canvas under it did.
+    /// 会在新的画布点位重新拾取悬停与光标：指针未动，但其下方的画布已移动。
+    ///
     pub fn pan_by(&mut self, delta: Vec2) {
         self.pan += delta;
         self.refresh_pointer();
     }
 
-    /// Zoom around a window-space anchor, keeping the canvas point under it.
+    /// 围绕窗口空间锚点缩放，保持锚点下的画布位置不变。
     pub fn zoom_at(&mut self, anchor: Vec2, factor: f32) {
         let before = self.screen_to_canvas(anchor);
         self.zoom = (self.zoom * factor).clamp(0.25, 8.0);
@@ -177,31 +177,31 @@ impl TestApp {
         self.refresh_pointer();
     }
 
-    /// Move the pointer to a window position and update hover.
+    /// 将指针移动到指定窗口位置并更新悬停状态。
     ///
-    /// Returns the hovered node, if any.
+    /// 返回当前悬停的节点（如有）。
     pub fn move_to(&mut self, screen: Vec2) -> Option<u64> {
         self.pointer = Some(screen);
         self.router.pointer_move(self.screen_to_canvas(screen));
         self.router.hover()
     }
 
-    /// Press the left button at the current pointer position.
+    /// 在当前指针位置按下鼠标左键。
     ///
-    /// Returns the node the router captured, if any.
+    /// 返回路由器捕获的节点（如有）。
     pub fn pointer_down(&mut self) -> Option<u64> {
         let position = self.screen_to_canvas(self.pointer_position());
         self.router.pointer_down(position, self.time);
         self.router.pointer().pressed()
     }
 
-    /// Release the left button at the current pointer position.
+    /// 在当前指针位置释放鼠标左键。
     pub fn pointer_up(&mut self) -> Vec<PointerEvent> {
         let position = self.screen_to_canvas(self.pointer_position());
         self.router.pointer_up(position, self.time)
     }
 
-    /// Move, press and release in one step.
+    /// 一步完成移动、按下与释放。
     pub fn click(&mut self, screen: Vec2) -> ClickReport {
         self.move_to(screen);
         let pressed = self.pointer_down();
@@ -209,7 +209,7 @@ impl TestApp {
         ClickReport { pressed, events }
     }
 
-    /// Drag from one window position to another with the left button held.
+    /// 按住左键从一个窗口位置拖拽到另一个位置。
     pub fn drag(&mut self, from: Vec2, to: Vec2) -> ClickReport {
         self.move_to(from);
         let pressed = self.pointer_down();
@@ -218,12 +218,12 @@ impl TestApp {
         ClickReport { pressed, events }
     }
 
-    /// Abort the interaction, as a window focus loss would.
+    /// 中止交互，如同窗口失去焦点。
     pub fn cancel(&mut self) -> Option<PointerEvent> {
         self.router.cancel()
     }
 
-    /// The node under a window position, without moving the pointer.
+    /// 查询指定窗口位置下的节点，不移动指针。
     #[must_use]
     pub fn pick(&self, screen: Vec2) -> Option<u64> {
         self.router
@@ -231,23 +231,23 @@ impl TestApp {
             .map(|region| region.node)
     }
 
-    /// The cursor the router would request at the current pointer position.
+    /// 路由器在当前指针位置请求的鼠标光标样式。
     #[must_use]
     pub fn cursor(&self) -> CursorKind {
         self.router.cursor()
     }
 
-    /// Replace the hit regions and the semantic tree.
+    /// 替换命中区域与语义树。
     ///
-    /// This is the "frame committed" step: the generation is bumped and the
-    /// focus is re-applied to the fresh tree.
+    /// 此步骤对应“帧已提交”：递增代际计数并将焦点重新应用到新树。
     ///
-    /// A rebuild can remove the node that holds the pointer capture or the
-    /// focus. Both are validated against the new scene: a capture on a node
-    /// that no longer exists is cancelled (and the `CaptureLost` event is
-    /// returned), and a focus on a vanished node falls back to the root.
-    /// Without this, a later release would deliver a click for a node that
-    /// the scene no longer contains.
+    ///
+    /// 重建可能会移除当前持有指针捕获或焦点的节点。两者都会针对新场景
+    /// 进行校验：指向已不存在节点的捕获会被取消（并返回 `CaptureLost` 事件），
+    /// 而指向已消失节点的焦点会回退到根节点。
+    /// 否则后续释放事件可能会向场景中已不存在的节点投递点击。
+    ///
+    ///
     pub fn install(
         &mut self,
         regions: Vec<HitRegion>,
@@ -276,38 +276,38 @@ impl TestApp {
         capture_lost
     }
 
-    /// Focus a node and mirror it into the semantic tree.
+    /// 聚焦指定节点并同步至语义树。
     pub fn set_focus(&mut self, node: Option<NodeId>) {
         self.focus = node.map(node_key);
         self.apply_focus();
     }
 
-    /// Focus a raw semantic id, for tests that drive snapshots.
+    /// 聚焦原始语义 ID，供驱动快照的测试使用。
     pub fn set_focus_key(&mut self, key: u64) {
         self.focus = Some(key);
         self.apply_focus();
     }
 
-    /// Remove the keyboard focus.
+    /// 移除键盘焦点。
     ///
-    /// The semantic tree falls back to its root, exactly like a window that
-    /// loses focus to another widget.
+    /// 语义树回退到根节点，与窗口将焦点让渡给其他控件时的行为一致。
+    ///
     pub fn clear_focus(&mut self) {
         self.focus = None;
         self.apply_focus();
     }
 
-    /// The focused semantic id, if any.
+    /// 当前聚焦的语义 ID（如有）。
     #[must_use]
     pub fn focused_key(&self) -> Option<u64> {
         self.focus
     }
 
-    /// The semantic node behind an identity.
+    /// 获取标识对应的语义节点。
     ///
-    /// # Panics
+    /// # Panic
     ///
-    /// Panics when the node is not in the current tree.
+    /// 当节点不在当前树中时 panic。
     #[must_use]
     pub fn semantics_node(&self, node: NodeId) -> &A11yNode {
         let key = node_key(node);
@@ -316,7 +316,7 @@ impl TestApp {
             .unwrap_or_else(|| panic!("node {key} is not in the semantic tree"))
     }
 
-    /// Assert a node's accessible label.
+    /// 断言节点的无障碍标签。
     pub fn assert_label(&self, node: NodeId, expected: &str) {
         assert_eq!(
             self.semantics_node(node).label,
@@ -325,7 +325,7 @@ impl TestApp {
         );
     }
 
-    /// Assert a node's accessible value.
+    /// 断言节点的无障碍值。
     pub fn assert_value(&self, node: NodeId, expected: &str) {
         assert_eq!(
             self.semantics_node(node).value,
@@ -334,7 +334,7 @@ impl TestApp {
         );
     }
 
-    /// Assert the focused semantic id.
+    /// 断言当前聚焦的语义 ID。
     pub fn assert_focus(&self, expected: Option<NodeId>) {
         assert_eq!(
             self.focused_key(),
@@ -347,38 +347,38 @@ impl TestApp {
         );
     }
 
-    /// Run the five geometry sanitizers over a frame.
+    /// 对一帧运行五项几何检查器。
     #[must_use]
     pub fn check(&self, frame: &Frame) -> Report {
         Harness::run(frame)
     }
 
-    /// Run the sanitizers and panic on any violation.
+    /// 运行检查器，若发现任何违规即 panic。
     pub fn assert_clean(&self, frame: &Frame) -> Report {
         Harness::assert_clean(frame)
     }
 
-    /// The current pointer position, in window pixels.
+    /// 当前指针位置（窗口像素）。
     fn pointer_position(&self) -> Vec2 {
         self.pointer
             .expect("move the pointer before pressing or releasing")
     }
 
-    /// Re-pick hover and cursor after the camera moved under the pointer.
+    /// 当相机在指针下方移动后，重新拾取悬停与光标。
     fn refresh_pointer(&mut self) {
         if let Some(screen) = self.pointer {
             self.router.refresh_at(self.screen_to_canvas(screen));
         }
     }
 
-    /// Mirror `focus` into the semantic tree (the root means "no focus").
+    /// 将 `focus` 镜像到语义树（根节点表示“无焦点”）。
     fn apply_focus(&mut self) {
         let target = self.focus.unwrap_or_else(|| self.semantics.root());
         self.semantics.set_focus(target);
     }
 }
 
-/// The semantic id of a node.
+/// 节点的语义 ID。
 #[must_use]
 pub fn node_key(node: NodeId) -> u64 {
     node.data().as_ffi()

@@ -1,13 +1,13 @@
-//! DevTools inspector and the runtime half of the debug loop (`docs` §10).
+//! DevTools 检查器及调试循环的运行时侧实现（`docs` §10）。
 //!
-//! The inspector is deliberately *not* a widget: it paints straight into the
-//! scene collector on the debug pass (the highest `z`, drawn last) and reads
-//! the same [`UiWorld`] and hit regions the runtime uses. That keeps it out of
-//! the layout tree, so toggling it never re-solves a layout.
+//! 检查器刻意*不是*一个控件：它直接向调试通道（最高 `z` 值，最后绘制）
+//! 的场景收集器绘制，并读取运行时使用的同一份 [`UiWorld`] 与命中区域。
+//! 这使其脱离布局树，开关检查器绝不会触发重新布局。
 //!
-//! When debug sanitizers are on, every frame is also mirrored into a
-//! [`unbound_headless::Frame`] and run through the five sanitizers. Their
-//! diagnostics become blinking error boxes plus text lines in the panel.
+//!
+//! 当开启调试检查器时，每帧还会被镜像为 [`unbound_headless::Frame`]
+//! 并运行五项检查器。违规项会表现为闪烁的错误框与面板中的文本行。
+//!
 
 use std::collections::HashMap;
 
@@ -21,35 +21,35 @@ use unbound_math::{f16, Rect, Vec2};
 use unbound_theme::Token;
 use unbound_world::{NodeId, UiWorld};
 
-/// Top of the primitive `z` range: the debug pass is painted above everything.
+/// 图元 `z` 范围顶部：调试通道绘制在所有内容之上。
 pub const INSPECTOR_Z: u16 = u16::MAX;
 
-/// Width of the right-hand panel, in logical pixels.
+/// 右侧面板宽度（逻辑像素）。
 pub const PANEL_WIDTH: f32 = 300.0;
-/// Header strip height.
+/// 标题条高度。
 pub const PANEL_HEADER: f32 = 26.0;
-/// How fast the violation boxes blink, in radians per second.
+/// 违规边框闪烁速度（弧度/秒）。
 const BLINK_HZ: f32 = 2.0;
 
-/// One frame's box model, resolved from the world.
+/// 从 world 解析出的单帧盒模型。
 #[derive(Clone, Debug, PartialEq)]
 pub struct InspectorNode {
     pub id: NodeId,
-    /// Stable semantic key (`RawNodeDesc::key`).
+    /// 稳定语义键（`RawNodeDesc::key`）。
     pub key: u64,
-    /// Where the node was built.
+    /// 节点构建源码位置。
     pub source: SourceLoc,
-    /// Margin box (border box expanded by the declared margins).
+    /// 外边距盒（边框盒向外扩展声明的外边距）。
     pub margin: Rect,
-    /// Border box — the node's own `world_rect`.
+    /// 边框盒——节点自身的 `world_rect`。
     pub border: Rect,
-    /// Border box minus the border width.
+    /// 边框盒减去边框宽度。
     pub padding: Rect,
-    /// Padding box minus the padding.
+    /// 内边距盒减去内边距。
     pub content: Rect,
 }
 
-/// A sanitizer failure, ready to paint.
+/// 待绘制的单条检查器违规项。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Violation {
     pub node: u64,
@@ -58,29 +58,29 @@ pub struct Violation {
     pub message: String,
 }
 
-/// What the inspector contributes to one frame.
+/// 检查器向单帧贡献的调试覆盖层。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InspectorScene {
-    /// Always [`PassLayer::Debug`]: the caller appends this after the scene.
+    /// 始终为 [`PassLayer::Debug`]：调用方在主场景之后追加。
     pub layer: PassLayer,
     pub primitives: Vec<GpuPrimitiveInstance>,
     pub payloads: Vec<GpuPayload>,
-    /// The picked node, when the pointer is over something.
+    /// 指针悬停时拾取到的节点。
     pub node: Option<InspectorNode>,
     pub violations: Vec<Violation>,
-    /// Text the host draws inside the panel (it owns the font).
+    /// 由 host 绘制在面板内的文本（host 拥有字体）。
     pub lines: Vec<String>,
 }
 
 impl InspectorScene {
-    /// True when there is nothing to append.
+    /// 无任何调试内容可追加时为 true。
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.primitives.is_empty()
     }
 }
 
-/// The inspector state: enabled flag, picked node, violations and blink phase.
+/// 检查器状态：启用标志、拾取节点、违规列表与闪烁相位。
 #[derive(Clone, Debug, Default)]
 pub struct Inspector {
     enabled: bool,
@@ -95,7 +95,7 @@ impl Inspector {
         Self::default()
     }
 
-    /// Toggle on/off; returns the new state.
+    /// 切换开关状态；返回新状态。
     pub fn toggle(&mut self) -> bool {
         self.enabled = !self.enabled;
         self.enabled
@@ -110,23 +110,23 @@ impl Inspector {
         self.enabled
     }
 
-    /// Advance the blink phase.
+    /// 推进闪烁相位。
     pub fn tick(&mut self, dt: f32) {
         self.blink = (self.blink + dt * BLINK_HZ * core::f32::consts::TAU)
             .rem_euclid(core::f32::consts::TAU);
     }
 
-    /// Blink opacity in `0.35..=1.0`.
+    /// 闪烁不透明度，范围 `0.35..=1.0`。
     #[must_use]
     pub fn blink_opacity(&self) -> f32 {
         0.35 + 0.325 * (self.blink.sin() + 1.0)
     }
 
-    /// Repick the node under `pointer`.
+    /// 重新拾取 `pointer` 下的节点。
     ///
-    /// The hit stack wins because it is what a click would do; when the pointer
-    /// is over a non-interactive gap the deepest containing node is used so the
-    /// box model still works on plain containers.
+    /// 命中栈优先，因为这与点击行为一致；当指针位于非交互间隙时，
+    /// 回退取最深层包含节点，使普通容器也能查看盒模型。
+    ///
     pub fn update(&mut self, world: &UiWorld, regions: &[HitRegion], pointer: Vec2) {
         let hit = pick_stack(regions, pointer)
             .first()
@@ -137,7 +137,7 @@ impl Inspector {
         self.pick = id.map(|id| describe(world, id));
     }
 
-    /// Replace the violation list from a sanitizer report.
+    /// 从检查器报告更新违规列表。
     pub fn set_diagnostics(&mut self, diagnostics: &[Diagnostic]) {
         self.violations.clear();
         self.violations
@@ -149,7 +149,7 @@ impl Inspector {
             }));
     }
 
-    /// Drop the violation list, e.g. when sanitizers are disabled.
+    /// 清空违规列表（例如关闭检查器时）。
     pub fn clear_diagnostics(&mut self) {
         self.violations.clear();
     }
@@ -164,7 +164,7 @@ impl Inspector {
         self.pick.as_ref()
     }
 
-    /// Build this frame's overlay.
+    /// 构建本帧的检查器覆盖层。
     #[must_use]
     pub fn emit(&self, viewport: Vec2) -> InspectorScene {
         let mut scene = InspectorScene {
@@ -176,7 +176,7 @@ impl Inspector {
             return scene;
         }
 
-        // Violations first so the picked box model paints over them.
+        // 先绘制违规框，使拾取到的盒模型覆盖其上。
         let opacity = self.blink_opacity();
         for violation in &self.violations {
             push_ring(
@@ -216,7 +216,7 @@ impl Inspector {
     }
 }
 
-/// Resolve one node's box model from the world.
+/// 从 world 解析单个节点的盒模型。
 #[must_use]
 pub fn describe(world: &UiWorld, id: NodeId) -> InspectorNode {
     let data = world.node(id);
@@ -254,18 +254,18 @@ pub fn describe(world: &UiWorld, id: NodeId) -> InspectorNode {
     }
 }
 
-/// Mirror the live world into the headless analyzer's frame format.
+/// 将实时 world 镜像为无头分析器的帧格式。
 ///
-/// Ids are the semantic keys, so a diagnostic's `node` maps straight back to a
-/// widget without a side table. A zero key gets a private high id: zero is the
-/// sanitizers' "no node" sentinel.
+/// ID 直接采用语义键，使诊断中的 `node` 无需侧表即可直接映射回控件。
+/// 零键会被分配一个私有高位 ID：0 是检查器的“无节点”哨兵。
+///
 #[must_use]
 pub fn capture_frame(world: &UiWorld, viewport: Vec2) -> Frame {
     let root = world.root();
     let ids: Vec<NodeId> = world.walk(root).collect();
 
-    // First pass: assign ids. A node without a key gets a private high id
-    // because zero is the sanitizers' "no node" sentinel.
+    // 第一遍：分配 ID。无键节点分配私有高位 ID，
+    // 因为 0 是检查器的“无节点”哨兵。
     let mut keys: HashMap<NodeId, u64> = HashMap::with_capacity(ids.len());
     let mut synthetic = 1u64 << 63;
     for id in &ids {
@@ -279,8 +279,8 @@ pub fn capture_frame(world: &UiWorld, viewport: Vec2) -> Frame {
         keys.insert(*id, key);
     }
 
-    // Second pass: build snapshots. `walk` is pre-order, so a parent's path is
-    // always ready before its children ask for it.
+    // 第二遍：构建快照。`walk` 为前序遍历，因此父节点路径在子节点请求前必然就绪。
+    //
     let mut paths: HashMap<NodeId, String> = HashMap::with_capacity(ids.len());
     let mut nodes = Vec::with_capacity(ids.len());
     for id in ids {
@@ -381,7 +381,7 @@ fn zone(rect: Rect, token: Token, z: u16, opacity: f32) -> GpuPrimitiveInstance 
     }
 }
 
-/// Four bands forming the ring between `outer` and `inner`.
+/// 构成 `outer` 与 `inner` 之间环形区域的四个条带。
 fn push_ring(
     out: &mut Vec<GpuPrimitiveInstance>,
     outer: Rect,
@@ -465,8 +465,8 @@ fn push_panel(out: &mut Vec<GpuPrimitiveInstance>, viewport: Vec2, lines: &[Stri
         INSPECTOR_Z - 19,
         1.0,
     ));
-    // One stripe per line, so the panel visibly reflects the report even
-    // though the host owns the font that draws the text.
+    // 每行一条色带，使面板在视觉上直观反映报告，即便字体绘制由 host 负责。
+    //
     let row = 18.0;
     for (index, _) in lines.iter().enumerate().take(16) {
         let y = PANEL_HEADER + 8.0 + index as f32 * row;

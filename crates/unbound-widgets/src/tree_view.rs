@@ -1,11 +1,11 @@
-//! The virtualised tree: only the rows inside the viewport exist.
+//! 虚拟化树形视图：仅实例化视口内的行。
 //!
-//! The flattening and slot recycling live in
-//! [`unbound_world::virtualize::VirtualTree`]; this module adds the control
-//! semantics — selection, focus, inline rename and row painting. A 100 000
-//! node document therefore keeps a constant number of rows alive, and a
-//! collapsed subtree costs nothing because `children_of` is only called for
-//! expanded nodes.
+//! 扁平化与槽位复用逻辑位于 [`unbound_world::virtualize::VirtualTree`]；
+//! 本模块补充控件语义——选区、焦点、内联重命名与行绘制。
+//! 因此十万节点的文档也仅维持恒定数量的存活行，且折叠的子树零开销，
+//! 因为 `children_of` 仅对展开的节点调用。
+//!
+//!
 
 use accesskit::Role;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -23,41 +23,41 @@ use crate::switch::CONTROL_LAYER;
 use crate::text_input::TextEditState;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// The default row height.
+/// 默认行高。
 pub const TREE_ROW: f32 = 26.0;
 
-/// The horizontal indent per depth level.
+/// 每层缩进深度的水平缩进量。
 pub const TREE_INDENT: f32 = 16.0;
 
-/// The number of rows kept alive around a viewport.
+/// 视口周围保持存活的额外行数。
 pub const TREE_OVERSCAN: f32 = 1.0;
 
-/// One instantiated row.
+/// 单个已实例化的行。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TreeViewRow {
-    /// The flattened row.
+    /// 扁平化后的行数据。
     pub row: TreeRow,
-    /// The content-space index of the row.
+    /// 该行在内容空间中的索引。
     pub item: usize,
-    /// The screen rectangle of the row.
+    /// 该行在屏幕上的矩形。
     pub rect: Rect,
 }
 
-/// The pure descriptor of a tree view.
+/// 树形视图的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TreeViewDesc {
-    /// The viewport rectangle.
+    /// 视口矩形。
     pub rect: Rect,
-    /// The row height.
+    /// 行高。
     pub row_height: f32,
-    /// The indent per depth level.
+    /// 每层深度的缩进量。
     pub indent: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl TreeViewDesc {
-    /// A tree viewport with the default metrics.
+    /// 使用默认尺寸创建的树形视口。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -68,7 +68,7 @@ impl TreeViewDesc {
         }
     }
 
-    /// The scroll descriptor for the flattened row count.
+    /// 对应扁平化总行数的滚动描述符。
     #[must_use]
     pub fn scroll_desc(&self, rows: usize) -> ScrollViewDesc {
         ScrollViewDesc::new(
@@ -77,38 +77,38 @@ impl TreeViewDesc {
         )
     }
 
-    /// How many rows fit in the viewport.
+    /// 视口内可容纳的行数。
     #[must_use]
     pub fn visible_capacity(&self) -> usize {
         (self.rect.size.y / self.row_height).ceil().max(1.0) as usize
     }
 }
 
-/// The live state of a tree view.
+/// 树形视图的实时状态。
 #[derive(Debug)]
 pub struct TreeViewState {
-    /// The virtualisation window.
+    /// 虚拟化窗口。
     pub tree: VirtualTree,
-    /// The scroll spring.
+    /// 滚动弹簧。
     pub scroll: ScrollState,
-    /// The selected rows.
+    /// 已选中的行集合。
     pub selected: FxHashSet<u64>,
-    /// The row with keyboard focus.
+    /// 拥有键盘焦点的行。
     pub focused: Option<u64>,
-    /// The row currently being renamed and its editor.
+    /// 当前正在重命名的行及其编辑器。
     pub renaming: Option<(u64, TextEditState)>,
-    /// Every flattened row, for keyboard navigation.
+    /// 所有扁平化行（用于键盘导航）。
     order: Vec<TreeRow>,
-    /// Parent of every flattened row.
+    /// 每个扁平化行的父节点映射。
     parent: FxHashMap<u64, u64>,
-    /// Last window update, for the caller's dirty flag.
+    /// 上一次窗口更新统计，供调用方更新脏标记。
     pub last_window: WindowUpdate,
-    /// Viewport height the last [`TreeViewState::rows`] call used.
+    /// 上一次调用 [`TreeViewState::rows`] 时使用的视口高度。
     viewport_height: f32,
 }
 
 impl TreeViewState {
-    /// An empty tree.
+    /// 创建空树状态。
     #[must_use]
     pub fn new(row_height: f32) -> Self {
         Self {
@@ -124,18 +124,17 @@ impl TreeViewState {
         }
     }
 
-    /// Replace the model.
+    /// 替换数据模型。
     ///
-    /// `children_of` is called for expanded nodes only, so the cost tracks
-    /// the open part of the tree rather than the whole document.
+    /// `children_of` 仅对展开的节点调用，因此开销与树中展开部分成正比，而非整份文档。
     pub fn rebuild<F>(&mut self, roots: &[TreeRow], children_of: F)
     where
         F: Fn(u64) -> Vec<TreeRow>,
     {
         self.order.clear();
         self.parent.clear();
-        // Flatten once to capture parent links for ArrowLeft; the virtual
-        // tree performs the same walk with the same expansion set.
+        // 扁平化一次以记录 ArrowLeft 所需的父节点链接；虚拟树使用相同展开集合执行相同遍历。
+        //
         let mut stack: Vec<(TreeRow, Option<u64>)> =
             roots.iter().rev().map(|row| (*row, None)).collect();
         while let Some((mut row, parent)) = stack.pop() {
@@ -153,31 +152,31 @@ impl TreeViewState {
         self.tree.rebuild(roots, children_of);
     }
 
-    /// The number of flattened rows.
+    /// 扁平化后的总行数。
     #[must_use]
     pub fn row_count(&self) -> usize {
         self.order.len()
     }
 
-    /// The flattened row with a given identity.
+    /// 按节点标识查找扁平化行。
     #[must_use]
     pub fn row(&self, id: u64) -> Option<TreeRow> {
         self.order.iter().copied().find(|row| row.id == id)
     }
 
-    /// The parent of a row, when it is currently visible.
+    /// 获取当前可见行的父节点。
     #[must_use]
     pub fn parent_of(&self, id: u64) -> Option<u64> {
         self.parent.get(&id).copied()
     }
 
-    /// The current scroll offset, including the in-flight spring.
+    /// 当前滚动偏移量（含运动中的弹簧）。
     #[must_use]
     pub fn scroll_offset(&self) -> f32 {
         self.scroll.offset().y
     }
 
-    /// Expand or collapse a row, then rebuild.
+    /// 展开或折叠指定行，随后重建扁平化列表。
     pub fn set_expanded<F>(
         &mut self,
         id: u64,
@@ -196,7 +195,7 @@ impl TreeViewState {
         true
     }
 
-    /// Toggle a row's expansion, then rebuild.
+    /// 切换指定行的展开状态，随后重建扁平化列表。
     pub fn toggle_expanded<F>(&mut self, id: u64, roots: &[TreeRow], children_of: F) -> bool
     where
         F: Fn(u64) -> Vec<TreeRow>,
@@ -205,7 +204,7 @@ impl TreeViewState {
         self.set_expanded(id, !expanded, roots, children_of)
     }
 
-    /// Select a row. Without `additive` the previous selection is replaced.
+    /// 选中指定行。若 `additive` 为 false，则替换先前选区。
     pub fn select(&mut self, id: u64, additive: bool) -> bool {
         let changed = if additive {
             if self.selected.contains(&id) {
@@ -225,12 +224,12 @@ impl TreeViewState {
         changed
     }
 
-    /// Clear the selection.
+    /// 清空选区。
     pub fn clear_selection(&mut self) {
         self.selected.clear();
     }
 
-    /// Move keyboard focus by a number of rows.
+    /// 按指定行数移动键盘焦点。
     pub fn focus_step(&mut self, delta: isize) -> bool {
         if self.order.is_empty() {
             return false;
@@ -247,8 +246,8 @@ impl TreeViewState {
         true
     }
 
-    /// Move focus to the parent row, collapsing the focused row first when it
-    /// is open. This is the `ArrowLeft` contract.
+    /// 将焦点移至父行；若当前聚焦行已展开，则先折叠它。
+    /// 这是 `ArrowLeft` 的交互约定。
     pub fn focus_parent_or_collapse<F>(&mut self, roots: &[TreeRow], children_of: F) -> bool
     where
         F: Fn(u64) -> Vec<TreeRow>,
@@ -272,7 +271,7 @@ impl TreeViewState {
         true
     }
 
-    /// Expand the focused row, or focus its first child when already open.
+    /// 展开当前聚焦行；若已展开，则聚焦其第一个子节点。
     pub fn expand_or_first_child<F>(&mut self, roots: &[TreeRow], children_of: F) -> bool
     where
         F: Fn(u64) -> Vec<TreeRow>,
@@ -297,7 +296,7 @@ impl TreeViewState {
         false
     }
 
-    /// Start an inline rename.
+    /// 开始内联重命名。
     pub fn begin_rename(&mut self, id: u64, current: impl Into<String>) -> bool {
         if self.row(id).is_none() {
             return false;
@@ -309,25 +308,25 @@ impl TreeViewState {
         true
     }
 
-    /// The rename editor, when one is open.
+    /// 若当前正在重命名，返回重命名编辑器引用。
     #[must_use]
     pub fn rename_editor(&self) -> Option<&TextEditState> {
         self.renaming.as_ref().map(|(_, editor)| editor)
     }
 
-    /// Finish the rename and return the new title.
+    /// 完成重命名并返回新标题。
     pub fn finish_rename(&mut self) -> Option<(u64, String)> {
         self.renaming
             .take()
             .map(|(id, editor)| (id, editor.text().to_owned()))
     }
 
-    /// Cancel the rename.
+    /// 取消重命名。
     pub fn cancel_rename(&mut self) {
         self.renaming = None;
     }
 
-    /// Scroll so a flattened row is visible.
+    /// 滚动使指定扁平化行可见。
     pub fn reveal(&mut self, item: usize) {
         let rows = self.order.len();
         let desc = ScrollViewDesc::new(
@@ -345,21 +344,20 @@ impl TreeViewState {
         }
     }
 
-    /// The row height the virtualiser uses.
+    /// 虚拟化器使用的行高。
     #[must_use]
     pub fn row_height(&self) -> f32 {
         self.tree.row_height()
     }
 
-    /// Viewport height the last [`Self::rows`] call used.
+    /// 上一次调用 [`Self::rows`] 时使用的视口高度。
     pub fn set_viewport_height(&mut self, height: f32) {
         self.viewport_height = height.max(0.0);
     }
 
-    /// The instantiated rows for one frame.
+    /// 单帧的实例化行列表。
     ///
-    /// Only slots inside (and just around) the viewport are returned, which
-    /// is the constant-entity guarantee of the virtualiser.
+    /// 仅返回视口内（及紧邻周围）的槽位，这是虚拟化器恒定实体数量的保证。
     pub fn rows(&mut self, desc: &TreeViewDesc) -> Vec<TreeViewRow> {
         self.set_viewport_height(desc.rect.size.y);
         self.last_window = self.tree.update(self.scroll_offset(), desc.rect.size.y);
@@ -379,13 +377,13 @@ impl TreeViewState {
         out
     }
 
-    /// The total content height of the flattened rows.
+    /// 扁平化行的总内容高度。
     #[must_use]
     pub fn content_height(&self) -> f32 {
         self.order.len() as f32 * self.row_height()
     }
 
-    /// Scroll by a wheel delta.
+    /// 按滚轮增量滚动。
     pub fn scroll_by(&mut self, desc: &TreeViewDesc, delta: f32) -> bool {
         let scroll_desc = desc.scroll_desc(self.order.len());
         self.scroll
@@ -393,38 +391,38 @@ impl TreeViewState {
         self.scroll.is_animating()
     }
 
-    /// Step the scroll spring. Returns whether it still moves.
+    /// 推进滚动弹簧步进，返回是否仍在运动。
     pub fn advance(&mut self, desc: &TreeViewDesc, dt: f32) -> bool {
         let scroll_desc = desc.scroll_desc(self.order.len());
         self.scroll.step(&scroll_desc, dt)
     }
 }
 
-/// The colour slots a tree view paints with.
+/// 树形视图绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TreeViewTokens {
-    /// The viewport background.
+    /// 视口背景。
     pub background: Token,
-    /// An idle row.
+    /// 空闲行。
     pub row: Token,
-    /// A hovered row.
+    /// 悬停行。
     pub row_hover: Token,
-    /// A selected row.
+    /// 选中行。
     pub row_selected: Token,
-    /// The text of an idle row.
+    /// 空闲行文本。
     pub text: Token,
-    /// The text of a selected row.
+    /// 选中行文本。
     pub text_selected: Token,
-    /// The indent guides.
+    /// 缩进参考线。
     pub guide: Token,
-    /// The expand arrow.
+    /// 展开箭头。
     pub arrow: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环。
     pub focus_ring: Token,
 }
 
 impl TreeViewTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -441,7 +439,7 @@ impl TreeViewTokens {
     }
 }
 
-/// Emit one tree row: indent guides, expansion arrow, label and selection.
+/// 输出单行树节点：缩进参考线、展开箭头、标签与选中态。
 #[must_use]
 pub fn emit_tree_row(
     desc: &TreeViewDesc,
@@ -465,7 +463,7 @@ pub fn emit_tree_row(
     };
     primitives.push(outlined(rect, 4.0, fill, Token::NONE, 0.0, 0.0, desc.z));
 
-    // One guide per depth level, stopping short of the arrow column.
+    // 每个深度层级一条参考线，停在箭头列之前。
     let indent = desc.indent;
     for level in 0..row.row.depth as usize {
         let x = rect.origin.x + level as f32 * indent + indent * 0.5;
@@ -486,7 +484,7 @@ pub fn emit_tree_row(
     let arrow_x = rect.origin.x + row.row.depth as f32 * indent + 6.0;
     let centre = [arrow_x + 4.0, rect.origin.y + rect.size.y * 0.5];
     if row.row.has_children {
-        // A right-pointing chevron; the expanded state rotates it down.
+        // 朝右的箭头；展开状态时向下旋转。
         let arm = 4.0;
         let (sx, sy, ex, ey) = if row.row.expanded {
             (
@@ -571,13 +569,13 @@ pub fn emit_tree_row(
     out
 }
 
-/// Deterministic child node key for the expand/collapse chevron of a tree row.
+/// 树行展开/折叠箭头的确定性子节点键。
 #[must_use]
 pub const fn tree_toggle_node(row_id: u64) -> u64 {
     row_id ^ 0x5452_4545_0001
 }
 
-/// Emit the viewport background.
+/// 输出视口背景。
 #[must_use]
 pub fn emit_tree_background(desc: &TreeViewDesc, tokens: TreeViewTokens) -> WidgetOutput {
     WidgetOutput {
@@ -598,7 +596,7 @@ pub fn emit_tree_background(desc: &TreeViewDesc, tokens: TreeViewTokens) -> Widg
     }
 }
 
-/// A thin stroke between two points.
+/// 两点之间的细描边。
 fn line(
     start: [f32; 2],
     end: [f32; 2],
@@ -679,7 +677,7 @@ mod tests {
     #[test]
     fn only_visible_rows_are_instantiated() {
         let mut state = TreeViewState::new(TREE_ROW);
-        // 10 000 leaves under one root.
+        // 单个根节点下挂 10 000 个叶子节点。
         let kids: Vec<TreeRow> = (100..10_100).map(|id| leaf(id, 1)).collect();
         state.rebuild(
             &[root(1)],

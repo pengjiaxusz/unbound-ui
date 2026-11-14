@@ -1,9 +1,9 @@
-//! The tab strip: a horizontally scrolling row of tabs with an animated
-//! selection indicator.
+//! 标签页栏：水平滚动的标签页行，带动画选中指示器。
 //!
-//! The strip owns identity and geometry, never content. Each tab is emitted
-//! by its own call so that the close affordance can be a separate hit region,
-//! and so that a caller can put any label quads it likes inside the tab.
+//!
+//! 标签页栏仅持有标识与几何信息，从不持有内容。每个标签页由单独调用输出，
+//! 以便关闭按钮拥有独立的命中区域，且调用方可在标签页内放置任意标签字形四边形。
+//!
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -18,28 +18,28 @@ use crate::primitive::{focus_ring, glyphs, instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// The default width of one tab, in logical pixels.
+/// 单个标签页的默认宽度（逻辑像素）。
 pub const TAB_WIDTH: f32 = 140.0;
 
-/// The default strip height.
+/// 标签页栏默认高度。
 pub const TAB_STRIP_HEIGHT: f32 = 36.0;
 
-/// The width of the close affordance.
+/// 关闭按钮的宽度。
 pub const TAB_CLOSE: f32 = 16.0;
 
-/// One tab.
+/// 单个标签页。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TabItem {
-    /// Stable identity, also used as the tab's node.
+    /// 稳定标识，同时用作该标签页的节点 ID。
     pub id: u64,
-    /// The visible title.
+    /// 可见标题。
     pub title: String,
-    /// Whether this tab has a close button.
+    /// 该标签页是否带有关闭按钮。
     pub closable: bool,
 }
 
 impl TabItem {
-    /// A closable tab.
+    /// 创建可关闭的标签页。
     #[must_use]
     pub fn new(id: u64, title: impl Into<String>) -> Self {
         Self {
@@ -49,7 +49,7 @@ impl TabItem {
         }
     }
 
-    /// The same tab without a close button.
+    /// 设为不带关闭按钮。
     #[must_use]
     pub fn fixed(mut self) -> Self {
         self.closable = false;
@@ -57,25 +57,25 @@ impl TabItem {
     }
 }
 
-/// The pure descriptor of a tab strip.
+/// 标签页栏的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabsDesc {
-    /// The strip rectangle.
+    /// 标签页栏矩形。
     pub rect: Rect,
-    /// The tabs, left to right.
+    /// 从左到右排列的标签页列表。
     pub items: Vec<TabItem>,
-    /// Whether every tab gets a close button.
+    /// 是否为每个标签页显示关闭按钮。
     pub closable: bool,
-    /// Whether the trailing "+" button is shown.
+    /// 是否显示末尾的“+”按钮。
     pub addable: bool,
-    /// The width of one tab.
+    /// 单个标签页的宽度。
     pub tab_width: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl TabsDesc {
-    /// A strip with the given titles.
+    /// 使用指定标题列表创建标签页栏。
     #[must_use]
     pub fn new(rect: Rect, titles: &[&str]) -> Self {
         Self {
@@ -92,47 +92,47 @@ impl TabsDesc {
         }
     }
 
-    /// Use explicit tab identities and titles.
+    /// 使用显式标签页标识与标题。
     #[must_use]
     pub fn with_items(mut self, items: Vec<TabItem>) -> Self {
         self.items = items;
         self
     }
 
-    /// Show or hide the trailing "+" button.
+    /// 显示或隐藏末尾的“+”按钮。
     #[must_use]
     pub fn with_addable(mut self, addable: bool) -> Self {
         self.addable = addable;
         self
     }
 
-    /// Override the tab width.
+    /// 覆盖标签页宽度。
     #[must_use]
     pub fn with_tab_width(mut self, width: f32) -> Self {
         self.tab_width = width.max(24.0);
         self
     }
 
-    /// How many tabs the strip has.
+    /// 标签页数量。
     #[must_use]
     pub fn count(&self) -> usize {
         self.items.len()
     }
 
-    /// The width available to the tabs, the add button excluded.
+    /// 不含新增按钮的标签页可用宽度。
     #[must_use]
     pub fn strip_width(&self) -> f32 {
         let add = if self.addable { TAB_STRIP_HEIGHT } else { 0.0 };
         (self.rect.size.x - add).max(0.0)
     }
 
-    /// The furthest the strip can scroll before the last tab is flush right.
+    /// 最后一个标签页右边缘齐平前可滚动的最大距离。
     #[must_use]
     pub fn max_scroll(&self) -> f32 {
         (self.count() as f32 * self.tab_width - self.strip_width()).max(0.0)
     }
 
-    /// The unclipped rectangle of one tab at a given scroll offset.
+    /// 给定滚动偏移下单个标签页的未裁剪矩形。
     #[must_use]
     pub fn raw_tab_rect(&self, index: usize, scroll: f32) -> Rect {
         Rect::new(
@@ -143,7 +143,7 @@ impl TabsDesc {
         )
     }
 
-    /// The visible rectangle of one tab, clipped to the strip.
+    /// 裁剪至标签页栏范围内的单个标签页可见矩形。
     #[must_use]
     pub fn tab_rect(&self, index: usize, scroll: f32) -> Rect {
         let raw = self.raw_tab_rect(index, scroll);
@@ -156,7 +156,7 @@ impl TabsDesc {
         raw.intersect(&strip)
     }
 
-    /// The close affordance of one tab, if it has one.
+    /// 单个标签页的关闭按钮矩形（若有）。
     #[must_use]
     pub fn close_rect(&self, index: usize, scroll: f32) -> Option<Rect> {
         let tab = self.items.get(index)?;
@@ -175,7 +175,7 @@ impl TabsDesc {
         ))
     }
 
-    /// The trailing "+" button.
+    /// 末尾的“+”按钮矩形。
     #[must_use]
     pub fn add_rect(&self) -> Option<Rect> {
         self.addable.then(|| {
@@ -189,18 +189,18 @@ impl TabsDesc {
     }
 }
 
-/// The live state of a tab strip.
+/// 标签页栏的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabsState {
-    /// The selected tab.
+    /// 当前选中的标签页索引。
     pub active: usize,
-    /// The animated left edge of the indicator.
+    /// 指示器左边缘的动画位置。
     pub indicator_x: Spring,
-    /// The animated width of the indicator.
+    /// 指示器宽度的动画值。
     pub indicator_w: Spring,
-    /// The horizontal scroll offset of the strip.
+    /// 标签页栏的水平滚动偏移。
     pub scroll_x: f32,
-    /// Whether the springs have been placed at their resting target.
+    /// 弹簧是否已定位到静止目标。
     initialised: bool,
 }
 
@@ -211,7 +211,7 @@ impl Default for TabsState {
 }
 
 impl TabsState {
-    /// A strip with the given tab selected.
+    /// 创建选中指定标签页的状态。
     #[must_use]
     pub fn new(active: usize) -> Self {
         Self {
@@ -223,13 +223,13 @@ impl TabsState {
         }
     }
 
-    /// The active tab, clamped to the current tab count.
+    /// 夹紧到当前标签页数量的激活索引。
     #[must_use]
     pub fn active_index(&self, desc: &TabsDesc) -> usize {
         self.active.min(desc.count().saturating_sub(1))
     }
 
-    /// The resting indicator geometry for the active tab.
+    /// 激活标签页对应的静止指示器几何信息。
     #[must_use]
     pub fn indicator_target(&self, desc: &TabsDesc) -> (f32, f32) {
         let index = self.active_index(desc);
@@ -237,7 +237,7 @@ impl TabsState {
         (rect.origin.x, rect.size.x)
     }
 
-    /// Place the indicator at rest, with no animation.
+    /// 无动画直接将指示器放置到静止位置。
     pub fn snap(&mut self, desc: &TabsDesc) {
         let (x, width) = self.indicator_target(desc);
         self.indicator_x.snap_to(x);
@@ -245,10 +245,10 @@ impl TabsState {
         self.initialised = true;
     }
 
-    /// Aim the springs at the active tab.
+    /// 将弹簧目标对准当前激活标签页。
     ///
-    /// Call once per frame before [`Self::advance`]; the caller reads
-    /// [`Self::is_animating`] to decide whether it needs another frame.
+    /// 每帧在 [`Self::advance`] 之前调用一次；调用方读取
+    /// [`Self::is_animating`] 以决定是否需要下一帧。
     pub fn sync(&mut self, desc: &TabsDesc) {
         if !self.initialised {
             self.snap(desc);
@@ -259,20 +259,20 @@ impl TabsState {
         self.indicator_w.set_target(width);
     }
 
-    /// Step the springs by `dt` seconds. Returns whether they still move.
+    /// 推进弹簧物理步进 `dt` 秒，返回是否仍在运动。
     pub fn advance(&mut self, dt: f32) -> bool {
         let moving_x = self.indicator_x.step(dt);
         let moving_w = self.indicator_w.step(dt);
         moving_x || moving_w
     }
 
-    /// Whether the indicator is still moving.
+    /// 指示器是否仍在运动。
     #[must_use]
     pub fn is_animating(&self) -> bool {
         !self.indicator_x.is_settled() || !self.indicator_w.is_settled()
     }
 
-    /// The animated indicator rectangle.
+    /// 动画中的指示器矩形。
     #[must_use]
     pub fn indicator_rect(&self, desc: &TabsDesc) -> Rect {
         Rect::new(
@@ -283,7 +283,7 @@ impl TabsState {
         )
     }
 
-    /// Activate a tab and reveal it. Returns whether the selection changed.
+    /// 激活标签页并滚动使其可见，返回选中项是否变化。
     pub fn activate(&mut self, desc: &TabsDesc, index: usize) -> bool {
         if index >= desc.count() || index == self.active_index(desc) {
             return false;
@@ -293,7 +293,7 @@ impl TabsState {
         true
     }
 
-    /// Scroll so one tab is fully visible.
+    /// 滚动使指定标签页完全可见。
     pub fn reveal(&mut self, desc: &TabsDesc, index: usize) {
         let left = index as f32 * desc.tab_width;
         let right = left + desc.tab_width;
@@ -306,7 +306,7 @@ impl TabsState {
         self.scroll_x = self.scroll_x.clamp(0.0, desc.max_scroll());
     }
 
-    /// Scroll by a wheel delta.
+    /// 按滚轮增量滚动。
     pub fn scroll_by(&mut self, desc: &TabsDesc, delta: f32) -> bool {
         let next = (self.scroll_x + delta).clamp(0.0, desc.max_scroll());
         let changed = (next - self.scroll_x).abs() > 1e-4;
@@ -315,20 +315,20 @@ impl TabsState {
     }
 }
 
-/// The keys a focused tab strip understands.
+/// 聚焦后的标签页栏可识别的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabsKey {
-    /// Select the previous tab, wrapping.
+    /// 选择上一个标签页（循环）。
     Left,
-    /// Select the next tab, wrapping.
+    /// 选择下一个标签页（循环）。
     Right,
-    /// Select the first tab.
+    /// 选择第一个标签页。
     Home,
-    /// Select the last tab.
+    /// 选择最后一个标签页。
     End,
 }
 
-/// Reduce one key press into the next active index.
+/// 将单次按键归约为下一个激活索引。
 #[must_use]
 pub fn reduce_tabs_key(desc: &TabsDesc, active: usize, key: TabsKey) -> usize {
     let count = desc.count();
@@ -343,35 +343,35 @@ pub fn reduce_tabs_key(desc: &TabsDesc, active: usize, key: TabsKey) -> usize {
     }
 }
 
-/// The colour slots a tab strip paints with.
+/// 标签页栏绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TabsTokens {
-    /// The strip background.
+    /// 标签页栏背景。
     pub strip: Token,
-    /// The strip hairline.
+    /// 标签页栏细分隔线。
     pub border: Token,
-    /// An idle tab.
+    /// 空闲标签页。
     pub tab: Token,
-    /// A hovered tab.
+    /// 悬停标签页。
     pub tab_hover: Token,
-    /// The active tab.
+    /// 激活标签页。
     pub tab_active: Token,
-    /// The text of an idle tab.
+    /// 空闲标签页文本。
     pub tab_text: Token,
-    /// The text of the active tab.
+    /// 激活标签页文本。
     pub tab_text_active: Token,
-    /// The selection indicator.
+    /// 选中指示器。
     pub indicator: Token,
-    /// The close glyph.
+    /// 关闭图标。
     pub close: Token,
-    /// The close glyph while hovered.
+    /// 悬停状态的关闭图标。
     pub close_hover: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环。
     pub focus_ring: Token,
 }
 
 impl TabsTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -390,7 +390,7 @@ impl TabsTokens {
     }
 }
 
-/// Emit the strip background, its hairline and the animated indicator.
+/// 输出标签页栏背景、细分隔线与动画指示器。
 #[must_use]
 pub fn emit_tabs_strip(desc: &TabsDesc, state: &TabsState, tokens: TabsTokens) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(3);
@@ -430,7 +430,7 @@ pub fn emit_tabs_strip(desc: &TabsDesc, state: &TabsState, tokens: TabsTokens) -
     }
 }
 
-/// Emit one tab.
+/// 输出单个标签页。
 #[must_use]
 pub fn emit_tab(
     desc: &TabsDesc,
@@ -500,11 +500,10 @@ pub fn emit_tab(
     }
 }
 
-/// Emit the close affordance of one tab.
+/// 输出单个标签页的关闭按钮。
 ///
-/// The close button is its own node so that a click on "×" cannot be
-/// mistaken for a click on the tab, and so that assistive technology can
-/// announce it separately.
+/// 关闭按钮拥有独立节点，使点击“×”不会被误判为点击标签页，
+/// 且辅助技术可以单独播报。
 #[must_use]
 pub fn emit_tab_close(
     node: u64,
@@ -571,7 +570,7 @@ pub fn emit_tab_close(
     }
 }
 
-/// Emit the trailing "+" button.
+/// 输出末尾的“+”按钮。
 #[must_use]
 pub fn emit_tabs_add(
     node: u64,
@@ -641,7 +640,7 @@ pub fn emit_tabs_add(
     }
 }
 
-/// A thin stroke between two points, packed as a line primitive.
+/// 两点之间的细描边，打包为线段图元。
 fn stroke_between(
     start: [f32; 2],
     end: [f32; 2],
@@ -685,7 +684,7 @@ mod tests {
     #[test]
     fn a_tab_past_the_strip_is_clipped_away() {
         let desc = desc();
-        // 300 px wide, 140 px tabs: tab 2 starts at 280 and is 20 px visible.
+        // 300 px 宽，140 px 标签页：标签页 2 从 280 开始，可见 20 px。
         let third = desc.tab_rect(2, 0.0);
         assert_eq!(third.origin.x, 280.0);
         assert_eq!(third.size.x, 20.0);

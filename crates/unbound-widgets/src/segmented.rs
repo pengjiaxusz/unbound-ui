@@ -1,8 +1,8 @@
-//! The segmented control: a row of slots with one of them selected.
+//! 分段控件：一排槽位，其中一项处于选中状态。
 //!
-//! Every slot is its own control — its own identity, its own hit region and
-//! its own semantic node — but they share one descriptor, so the geometry of
-//! the row cannot drift away from the geometry of its slots.
+//! 每个槽位都是独立控件——拥有各自的标识、命中区域与语义节点——
+//! 但它们共享同一个描述符，因此整排的几何形状不会与其槽位发生偏移。
+//!
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -15,30 +15,30 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// The inset of a slot inside its cell.
+/// 槽位在其单元格内的内边距。
 pub const SEGMENT_INSET: f32 = 2.0;
 
-/// The colour slots a segmented control paints with.
+/// 分段控件绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SegmentedTokens {
-    /// The frame behind the slots.
+    /// 槽位背后的外框。
     pub frame: Token,
-    /// The selected slot.
+    /// 已选中的槽位。
     pub selected: Token,
-    /// The border of the selected slot.
+    /// 已选中槽位的边框。
     pub selected_border: Token,
-    /// A hovered slot.
+    /// 悬停状态的槽位。
     pub hover: Token,
-    /// The label of the selected slot.
+    /// 已选中槽位的标签。
     pub label_selected: Token,
-    /// The label of an unselected slot.
+    /// 未选中槽位的标签。
     pub label: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环。
     pub focus_ring: Token,
 }
 
 impl SegmentedTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -53,33 +53,32 @@ impl SegmentedTokens {
     }
 }
 
-/// The pure data descriptor of a segmented control.
+/// 分段控件的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SegmentedDesc {
-    /// The frame rectangle.
+    /// 外框矩形。
     pub rect: Rect,
-    /// The slot labels.
+    /// 槽位标签列表。
     pub labels: Vec<String>,
-    /// The index of the selected slot.
+    /// 当前选中槽位的索引。
     pub selected: usize,
-    /// The animated position of the pill, in slot units.
+    /// 滑块胶囊的动画位置（以槽位为单位）。
     ///
-    /// `None` paints the pill inside [`Self::selected`] (the frame-to-frame
-    /// result). `Some(t)` draws a single floating pill at `t` between slots,
-    /// which is what makes a selection change slide instead of jump.
+    /// `None` 表示将胶囊绘制在 [`Self::selected`] 槽位内（逐帧稳态结果）。
+    /// `Some(t)` 表示在槽位之间的 `t` 处绘制单个浮动胶囊，使切换选中项时呈现滑动而非跳变。
     pub thumb: Option<f32>,
-    /// Per-slot widths, when the row is not split into equal columns.
+    /// 各槽位的自定义宽度（当整行不按等宽列划分时）。
     ///
-    /// A shorter list falls back to the equal split for the missing slots.
+    /// 较短的列表对其余缺失槽位回退到等宽划分。
     pub item_widths: Option<Vec<f32>>,
-    /// One bit per slot: a set bit means the slot refuses interaction.
+    /// 每个槽位占一位的禁用掩码：置位表示该槽位拒绝交互。
     pub disabled_mask: u64,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl SegmentedDesc {
-    /// A segmented control with the given labels.
+    /// 创建带有指定标签的分段控件。
     #[must_use]
     pub fn new(rect: Rect, labels: &[&str]) -> Self {
         Self {
@@ -93,36 +92,35 @@ impl SegmentedDesc {
         }
     }
 
-    /// The same control with another slot selected.
+    /// 切换选中的槽位索引。
     #[must_use]
     pub fn with_selected(mut self, selected: usize) -> Self {
         self.selected = selected;
         self
     }
 
-    /// Draw the pill at an interpolated slot position instead of snapping it
-    /// into the selected slot.
+    /// 在插值后的槽位位置绘制胶囊，而非直接吸附到选中槽位。
     #[must_use]
     pub fn with_thumb(mut self, thumb: f32) -> Self {
         self.thumb = Some(thumb);
         self
     }
 
-    /// Give the slots explicit widths instead of an equal split.
+    /// 为槽位指定显式宽度，替代等宽划分。
     #[must_use]
     pub fn with_item_widths(mut self, widths: Vec<f32>) -> Self {
         self.item_widths = Some(widths);
         self
     }
 
-    /// Disable the slots whose bit is set in `mask`.
+    /// 禁用 `mask` 中置位对应的槽位。
     #[must_use]
     pub fn with_disabled_mask(mut self, mask: u64) -> Self {
         self.disabled_mask = mask;
         self
     }
 
-    /// Disable one slot, preserving the rest of the mask.
+    /// 禁用单个槽位，保留掩码其余位。
     #[must_use]
     pub fn with_disabled(mut self, index: usize, disabled: bool) -> Self {
         if index < u64::BITS as usize {
@@ -136,13 +134,13 @@ impl SegmentedDesc {
         self
     }
 
-    /// Whether one slot refuses interaction.
+    /// 查询某个槽位是否禁用交互。
     #[must_use]
     pub fn is_disabled(&self, index: usize) -> bool {
         index < u64::BITS as usize && (self.disabled_mask >> index) & 1 == 1
     }
 
-    /// The x offset and width of one slot, honouring explicit widths.
+    /// 计算单个槽位的 x 偏移与宽度（遵循显式宽度设置）。
     fn slot_geometry(&self, index: usize) -> (f32, f32) {
         if let Some(widths) = &self.item_widths {
             if let Some(width) = widths.get(index) {
@@ -155,7 +153,7 @@ impl SegmentedDesc {
         (self.rect.origin.x + index as f32 * width, width)
     }
 
-    /// The pill rectangle, interpolated when [`Self::thumb`] is set.
+    /// 胶囊矩形；当设置了 [`Self::thumb`] 时返回插值位置。
     #[must_use]
     pub fn thumb_rect(&self) -> Rect {
         let count = self.count();
@@ -175,20 +173,20 @@ impl SegmentedDesc {
         )
     }
 
-    /// How many slots the control has.
+    /// 控件包含的槽位数量。
     #[must_use]
     pub fn count(&self) -> usize {
         self.labels.len().max(1)
     }
 
-    /// The cell of one slot: equal columns unless [`Self::item_widths`] is set.
+    /// 单个槽位的单元格矩形：未设置 [`Self::item_widths`] 时为等宽列。
     #[must_use]
     pub fn cell_rect(&self, index: usize) -> Rect {
         let (x, width) = self.slot_geometry(index);
         Rect::new(x, self.rect.origin.y, width, self.rect.size.y)
     }
 
-    /// The painted rectangle of one slot, inset from its cell.
+    /// 单个槽位的实际绘制矩形（由单元格向内缩进）。
     #[must_use]
     pub fn segment_rect(&self, index: usize) -> Rect {
         let cell = self.cell_rect(index);
@@ -201,21 +199,19 @@ impl SegmentedDesc {
     }
 }
 
-/// The keys that move a segmented selection.
+/// 可移动分段选区的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SegmentedKey {
-    /// Move to the previous enabled slot.
+    /// 移动到上一个可用槽位。
     ArrowLeft,
-    /// Move to the next enabled slot.
+    /// 移动到下一个可用槽位。
     ArrowRight,
 }
 
-/// Move the selection by one enabled slot.
+/// 将选中项移动一个可用槽位。
 ///
-/// The row is one radio group, so the arrow keys wrap: pressing Left on the
-/// first enabled slot lands on the last enabled one. Disabled slots are
-/// skipped in both directions; when every slot is disabled nothing moves and
-/// `current` comes back unchanged.
+/// 整行构成一个单选组，因此方向键会循环回绕：在首个可用槽位按左键会落到最后一个可用槽位。
+/// 双向都会跳过禁用槽位；若所有槽位均被禁用，则不做任何移动并原样返回 `current`。
 #[must_use]
 pub fn reduce_segmented_key(desc: &SegmentedDesc, current: usize, key: SegmentedKey) -> usize {
     let count = desc.count();
@@ -233,16 +229,16 @@ pub fn reduce_segmented_key(desc: &SegmentedDesc, current: usize, key: Segmented
     current
 }
 
-/// Emit the frame that holds the slots.
+/// 输出承载槽位的外框。
 ///
-/// The frame carries no hit region: only the slots themselves are pickable.
+/// 外框不携带命中区域：仅槽位本身可拾取。
 #[must_use]
 pub fn emit_segmented_frame(desc: &SegmentedDesc, tokens: SegmentedTokens) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(2);
     primitives.push(surface(desc.rect, 7.0, tokens.frame, desc.z));
-    // An animated pill lives in the frame, not in a slot: it has to be one
-    // primitive that moves, otherwise the fill would teleport from one slot
-    // to the next and the "animation" would be a flicker.
+    // 动画胶囊驻留在外框中而非槽位中：它必须是单个可移动的图元，
+    // 否则填充色会在槽位间瞬移，“动画”就会变成闪烁。
+    //
     if desc.thumb.is_some() {
         primitives.push(outlined(
             desc.thumb_rect(),
@@ -264,10 +260,9 @@ pub fn emit_segmented_frame(desc: &SegmentedDesc, tokens: SegmentedTokens) -> Wi
     }
 }
 
-/// Emit one slot of a segmented control.
+/// 输出分段控件的单个槽位。
 ///
-/// `label` carries the glyphs the caller has already positioned inside the
-/// slot.
+/// `label` 携带调用方已在槽位内定位好的字形。
 #[must_use]
 pub fn emit_segmented_segment(
     node: u64,
@@ -284,13 +279,13 @@ pub fn emit_segmented_segment(
     let active = index == desc.selected;
     let disabled = state.disabled || desc.is_disabled(index);
 
-    // One pill, always. The active slot paints it as a raised, bordered
-    // surface; a hovered slot paints the hover fill and no border; an idle
-    // slot paints nothing at all. Because the primitive exists in every
-    // state, hovering a slot patches one instance instead of renumbering the
-    // pool.
+    // 始终仅保留一个胶囊图元。激活槽位将其绘制为带边框的凸起表面；
+    // 悬停槽位绘制悬停填充且无边框；空闲槽位则完全不绘制。
+    // 由于该图元在所有状态下都存在，悬停槽位只需修补单个实例而无需重新编号图元池。
+    //
+    //
     let (fill, border, border_width) = if desc.thumb.is_some() {
-        // The frame owns the pill; a slot only paints its hover fill.
+        // 外框持有主胶囊；槽位仅绘制自身的悬停填充。
         if state.phase == PointerPhase::Hovered && !active && !disabled {
             (tokens.hover, Token::NONE, 0.0)
         } else {
@@ -314,8 +309,8 @@ pub fn emit_segmented_segment(
     };
     glyphs(label, label_color, z, &mut primitives, &mut payloads);
 
-    // The ring is always emitted: focus changes its opacity, not the
-    // pool's shape, so focus is a paint change and never a re-upload.
+    // 焦点环始终输出：焦点变化仅改变其不透明度而非图元池结构，因此聚焦只是绘制变更而非重传。
+    //
     primitives.push(focus_ring(
         segment.inflate(2.0),
         7.0,
@@ -406,9 +401,9 @@ mod tests {
             &[],
             tokens,
         );
-        // An idle slot paints nothing, but it still emits its two
-        // primitives — the invisible pill and the invisible ring — so that
-        // hovering it patches fields instead of inserting primitives.
+        // 空闲槽位不绘制可见内容，但仍输出两个图元——不可见胶囊与不可见焦点环——
+        // 以便悬停时只需修补字段而无需插入图元。
+        //
         assert_eq!(output.primitives.len(), 2);
         assert!(
             output
@@ -472,7 +467,7 @@ mod tests {
     fn the_frame_paints_the_thumb_at_its_interpolated_position() {
         let tokens = SegmentedTokens::standard();
         let desc = desc().with_selected(2).with_thumb(1.5);
-        // 300 px / 3 slots = 100 px per slot; halfway between slot 1 and 2.
+        // 300 px / 3 个槽位 = 每槽位 100 px；位于槽位 1 与 2 正中间。
         assert!((desc.thumb_rect().origin.x - 152.0).abs() < 0.01);
         let output = emit_segmented_frame(&desc, tokens);
         assert_eq!(output.primitives.len(), 2);
@@ -491,7 +486,7 @@ mod tests {
         let tokens = SegmentedTokens::standard();
         let desc = desc().with_selected(1).with_thumb(1.0);
         let output = emit_segmented_segment(1, &desc, 1, ControlState::default(), &[], tokens);
-        // The frame owns the pill; the active slot must not paint a second one.
+        // 外框持有主胶囊；激活槽位不得再绘制第二个胶囊。
         assert_eq!(
             output.primitives[0].fill_token_or_uv,
             Token::NONE.raw() as u32

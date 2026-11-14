@@ -1,27 +1,27 @@
-//! The CPU staging ring (`docs` §8.2).
+//! CPU 暂存环形缓冲区（`docs` §8.2）。
 //!
-//! Decoded assets land in a staging buffer that the GPU reads from over PCIe.
-//! The ring has the same shape as the GPU's transient ring: a fixed number of
-//! slots, one per frame in flight, so a slot can only be recycled once the
-//! frame that referenced it has completed.
+//! 解码后的资产写入暂存缓冲区，GPU 通过 PCIe 从中读取。
+//! 该环形缓冲区与 GPU 瞬态环结构一致：固定数量的槽位对应并发在飞帧数，
+//! 因此只有当引用某槽位的帧执行完毕后，该槽位才能被回收复用。
 //!
-//! The ring is shared between the main thread and the decode workers, so it
-//! carries its own lock. The critical section is a `memcpy` and a cursor bump
-//! — nothing that can stall the main thread.
+//!
+//! 暂存环在主线程与解码工作线程间共享，因此自带互斥锁。
+//! 临界区仅包含一次 `memcpy` 与游标递增——绝不会阻塞主线程。
+//!
 
 use std::sync::Mutex;
 
-/// The staging ring could not accept the data.
+/// 暂存环无法接收数据时返回的错误。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum StagingError {
-    /// The active slot has no room left.
+    /// 当前活跃槽位剩余空间不足。
     SlotFull {
-        /// Bytes the caller wanted to write.
+        /// 调用方请求写入的字节数。
         requested: usize,
-        /// Bytes still free in the slot.
+        /// 槽位中剩余的可用字节数。
         available: usize,
     },
-    /// The active slot is closed because the frame advanced.
+    /// 因帧已推进，活跃槽位已关闭。
     SlotClosed,
 }
 
@@ -42,45 +42,45 @@ impl core::fmt::Display for StagingError {
 
 impl std::error::Error for StagingError {}
 
-/// A location inside the staging ring.
+/// 暂存环内的位置描述。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct StagingRef {
-    /// The slot the data lives in.
+    /// 数据所在的槽位索引。
     pub slot: usize,
-    /// The offset inside the slot.
+    /// 槽位内的字节偏移量。
     pub offset: usize,
-    /// The number of bytes.
+    /// 数据字节长度。
     pub size: usize,
 }
 
-/// Inner state of the ring.
+/// 暂存环的内部状态。
 #[derive(Debug)]
 struct Inner {
-    /// One byte buffer per slot.
+    /// 每个槽位对应的字节缓冲区。
     slots: Vec<Vec<u8>>,
-    /// The slot currently being written to.
+    /// 当前正在写入的槽位索引。
     active: usize,
-    /// The write cursor inside the active slot.
+    /// 活跃槽位内的写入游标。
     cursor: usize,
-    /// Number of completed frames.
+    /// 已完成的帧计数。
     frame: u64,
 }
 
-/// A multi-slot CPU staging buffer.
+/// 多槽位 CPU 暂存缓冲区。
 ///
-/// The buffer is handed to the decode workers; each of them appends its
-/// decoded asset to the active slot.
+/// 缓冲区供解码工作线程使用；每个工作线程将其解码资产追加到当前活跃槽位。
+///
 #[derive(Debug)]
 pub struct StagingRing {
     inner: Mutex<Inner>,
-    /// The size of one slot.
+    /// 单个槽位的容量（字节）。
     pub slot_bytes: usize,
-    /// The number of slots, i.e. the number of frames in flight.
+    /// 槽位数量（即并发在飞帧数）。
     pub frames: usize,
 }
 
 impl StagingRing {
-    /// Create a ring with `frames` slots of `slot_bytes` each.
+    /// 创建一个包含 `frames` 个槽位、每个槽位 `slot_bytes` 字节的暂存环。
     #[must_use]
     pub fn new(slot_bytes: usize, frames: usize) -> Self {
         let frames = frames.max(1);
@@ -96,22 +96,22 @@ impl StagingRing {
         }
     }
 
-    /// The capacity of one slot.
+    /// 单个槽位的容量。
     #[must_use]
     pub const fn slot_capacity(&self) -> usize {
         self.slot_bytes
     }
 
-    /// The number of slots.
+    /// 槽位总数。
     #[must_use]
     pub const fn frame_count(&self) -> usize {
         self.frames
     }
 
-    /// Advance to the next frame and reset the write cursor.
+    /// 推进到下一帧并重置写入游标。
     ///
-    /// The slot that was just left behind is only recycled after `frames`
-    /// advances, which is exactly how long the GPU may still be reading it.
+    /// 刚离开的槽位需在推进 `frames` 帧后才会被回收，
+    /// 这恰好等于 GPU 可能仍在读取该槽位的时长。
     pub fn begin_frame(&self) {
         let mut inner = self.lock();
         inner.active = (inner.active + 1) % self.frames;
@@ -119,25 +119,25 @@ impl StagingRing {
         inner.frame += 1;
     }
 
-    /// Bytes still free in the active slot.
+    /// 当前活跃槽位剩余可用字节数。
     #[must_use]
     pub fn available(&self) -> usize {
         let inner = self.lock();
         self.slot_bytes.saturating_sub(inner.cursor)
     }
 
-    /// The slot currently being written to.
+    /// 当前正在写入的槽位索引。
     #[must_use]
     pub fn active_slot(&self) -> usize {
         self.lock().active
     }
 
-    /// Append data to the active slot.
+    /// 向当前活跃槽位追加数据。
     ///
     /// # Errors
-    /// Returns [`StagingError::SlotFull`] when the slot has no room left. The
-    /// caller decides what to do: dropping the asset is better than stalling
-    /// the frame.
+    /// 当槽位空间不足时返回 [`StagingError::SlotFull`]。
+    /// 由调用方决定处理策略：丢弃资产优于阻塞渲染帧。
+    ///
     pub fn write(&self, bytes: &[u8]) -> Result<StagingRef, StagingError> {
         let mut inner = self.lock();
         if bytes.len() > self.slot_bytes.saturating_sub(inner.cursor) {
@@ -160,10 +160,10 @@ impl StagingRing {
         })
     }
 
-    /// Read back a previously written region.
+    /// 回读先前写入的区域。
     ///
-    /// The data is handed to a closure instead of being returned: the ring's
-    /// lock must not be held while the caller works with the bytes.
+    /// 数据通过闭包交由调用方处理而非直接返回：调用方处理字节期间不能持有环锁。
+    ///
     #[must_use]
     pub fn with<R>(&self, reference: StagingRef, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
         let inner = self.lock();
@@ -172,7 +172,7 @@ impl StagingRing {
         Some(f(slice))
     }
 
-    /// Lock the ring, recovering from a poisoned mutex.
+    /// 加锁访问暂存环，若互斥锁处于 poisoned 状态则自动恢复。
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|error| error.into_inner())
     }
@@ -238,10 +238,10 @@ mod tests {
         for _ in 0..2 {
             ring.begin_frame();
         }
-        // Two advances are not enough: the GPU may still read slot 0.
+        // 推进两帧还不够：GPU 可能仍在读取槽位 0。
         assert_eq!(ring.active_slot(), 2);
         ring.begin_frame();
-        // Only now has the ring lapped and slot 0 become reusable.
+        // 直到此时环才绕回一圈，槽位 0 重新可用。
         assert_eq!(ring.active_slot(), 0);
     }
 

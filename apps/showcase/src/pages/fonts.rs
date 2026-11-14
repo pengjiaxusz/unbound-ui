@@ -1,9 +1,9 @@
-//! Multilingual fonts: script coverage, curve sharpness and BiDi sandbox.
+//! 多语言字体：文字系统覆盖、曲线锐度与双向文本（BiDi）沙盒。
 //!
-//! The type pages prove that one size ramp shares a cache; this page proves
-//! that one *shaping* pipeline can carry twelve writing systems, including the
-//! mark-heavy ones (Arabic harakat, Thai tone marks, Devanagari matras,
-//! Vietnamese double accents) and the right-to-left ones.
+//! 排版页面证明同一套字号阶梯可共享缓存；本页面证明同一套*塑形*管线
+//! 能够承载十二种书写系统，包括附标密集的文字（阿拉伯语 harakat、泰语声调符号、
+//! 天城文 matras、越南语双变音符号）以及从右到左（RTL）的文字。
+//!
 
 use unbound_math::Rect;
 use unbound_text::TextStyle;
@@ -17,7 +17,7 @@ pub const FONTS_INFO: PageInfo = PageInfo {
     short: "Fonts & Scripts",
     description: "Twelve writing systems shaped by one pipeline: HarfBuzz mark offsets, BiDi levels and the system fallback chain are all live in this page.",
     crates: &["unbound-text", "cosmic-text", "rustybuzz"],
-    docs: "docs/03-core/text.md",
+    docs: "docs/architecture/vector-and-text.md",
     keywords: "font multilingual script cjk arabic hebrew thai devanagari cyrillic greek rtl fallback shaping",
 };
 
@@ -88,12 +88,12 @@ let families = labels.resolved_families(text, &style);"#,
     .with_height(330.0),
 ];
 
-/// One preview row of the script matrix.
+/// 文字系统矩阵中的一行预览。
 struct Script {
     tag: &'static str,
     name: &'static str,
     sample: &'static str,
-    /// 1 = East Asian, 2 = European / Cyrillic, 3 = complex / RTL.
+    /// 1 = 东亚文字，2 = 欧洲 / 西里尔文字，3 = 复杂排版 / RTL。
     group: u8,
 }
 
@@ -181,7 +181,7 @@ fn style(size: f32, weight: u16, italic: bool) -> TextStyle {
     }
 }
 
-/// Card 1: the twelve-script matrix.
+/// 卡片 1：十二种书写系统矩阵。
 pub fn script_matrix(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
@@ -225,8 +225,8 @@ pub fn script_matrix(ctx: &mut DemoCtx<'_, '_>) {
             AlignX::Start,
             AlignY::Center,
         );
-        // The family badge is measured before the sample is placed, so a long
-        // fallback chain never gets painted over the specimen.
+        // 在放置示例文本前先测量字体族徽章，避免长回退链
+        // 被绘制到标本文字之上。
         let families = ctx
             .canvas
             .labels
@@ -243,8 +243,8 @@ pub fn script_matrix(ctx: &mut DemoCtx<'_, '_>) {
         };
         let sample_w = rect.size.x - label_w - badge_w - 26.0;
         let sample = Rect::new(rect.origin.x + 8.0 + label_w, y, sample_w.max(40.0), row_h);
-        // Glyph quads are not clipped to the box they were shaped for, so a
-        // long sample would paint over the badge on a narrow (high zoom) card.
+        // 字形四边形不会按塑形时所用的框进行裁剪，因此在较窄（高缩放）的卡片上
+        // 较长的示例文本可能会画到徽章上方。
         ctx.canvas.begin_clip(sample);
         ctx.canvas.text_styled(
             script.sample,
@@ -273,7 +273,7 @@ pub fn script_matrix(ctx: &mut DemoCtx<'_, '_>) {
     }
 }
 
-/// Card 2: the corner-sensitive size and weight waterfall.
+/// 卡片 2：对边角敏感的字号与字重瀑布流。
 pub fn curve_inspector(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
@@ -350,7 +350,7 @@ pub fn curve_inspector(ctx: &mut DemoCtx<'_, '_>) {
     }
 }
 
-/// Card 3: the three-size BiDi specimen plus an IME input.
+/// 卡片 3：三种字号的 BiDi 标本及 IME 输入框。
 pub fn bidi_sandbox(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;

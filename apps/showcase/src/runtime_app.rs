@@ -1,12 +1,12 @@
-//! The dogfooded shell as a generic [`Application`].
+//! 作为通用 [`Application`] 实现的自举外壳。
 //!
-//! The showcase is not a special case any more: `GalleryApp` *is* the
-//! application, and the runtime owns the pointer router, the focus manager
-//! and the scene collector. The adapter that used to sit in between — and the
-//! second router that came with it — is gone. This module only translates the
-//! runtime's resolved events into the shell's methods and publishes the
-//! finished scene into the runtime's collector, so the showcase runs through
-//! exactly the same frame pipeline a third-party application would.
+//! showcase 不再是特例：`GalleryApp` *就是*应用本身，运行时拥有指针路由器、
+//! 焦点管理器与场景收集器。曾经夹在中间的适配器——以及随之而来的第二个路由器——已移除。
+//! 本模块仅将运行时的已解析事件转换为外壳方法调用，并将完成的场景发布到运行时的收集中，
+//! 使 showcase 与第三方应用走完全相同的帧管线。
+//!
+//!
+//!
 
 use unbound_app::{
     AppContext, AppEvent, AppKey, Application, DirtyFlags, EventOutcome, ImeUpdate,
@@ -19,20 +19,20 @@ use unbound_theme::ThemeKind;
 use crate::shell::{GalleryApp, Interaction};
 use crate::state::ThemeMode;
 
-/// The showcase shell, driven by [`unbound_app::AppRuntime`].
+/// 由 [`unbound_app::AppRuntime`] 驱动的 showcase 外壳。
 ///
-/// The alias keeps the window host and the tests reading the same name while
-/// the type itself is the shell.
+/// 该别名让窗口宿主和测试保持相同的类型名，而类型本身即外壳。
+///
 pub type GalleryRuntime = GalleryApp;
 
 impl GalleryApp {
-    /// The shell, for the window host.
+    /// 外壳引用，供窗口宿主使用。
     #[must_use]
     pub fn shell(&self) -> &Self {
         self
     }
 
-    /// The shell, mutably, for the parts the runtime does not own.
+    /// 可变外壳引用，用于访问运行时不拥有的部分。
     pub fn shell_mut(&mut self) -> &mut Self {
         self
     }
@@ -55,29 +55,29 @@ impl Application for GalleryApp {
             AppEvent::PointerMove { pos, .. } => self.pointer_move(pos),
             AppEvent::PointerDown { pos, target, .. } => self.pointer_down(pos, target),
             AppEvent::PointerUp { pos, .. } => self.pointer_up(pos),
-            // The release only ends a drag; the runtime reports the click
-            // separately, and only when the press never became one.
+            // 释放仅结束拖拽；运行时会单独上报点击，且仅当按压从未转为拖拽时才上报。
+            //
             AppEvent::Click { node, pos, .. } => self.click(node, pos),
-            // Once the pointer crosses the drag slop the router stops emitting
-            // `PointerMove` and emits `DragStart`/`Drag` instead. They carry the
-            // same position, so the shell's captured drags (scrollbar grabs,
-            // sliders, canvas pan, marquee, card reorder) keep following the
-            // pointer exactly as they did before the slop was crossed.
+            // 一旦指针越过拖拽阈值（drag slop），路由器就会停止发送 `PointerMove`，
+            // 改为发送 `DragStart`/`Drag`。它们携带相同的位置，因此外壳的捕获拖拽
+            // （滚动条抓取、滑块、画布平移、框选、卡片重排）会像越过阈值前一样继续跟随指针。
+            //
+            //
             AppEvent::DragStart { pos, .. } | AppEvent::Drag { pos, .. } => self.pointer_move(pos),
             AppEvent::DoubleClick { .. } => {}
             AppEvent::ContextMenu { .. } => {
-                // The context-menu widget lands with the P2 container batch;
-                // until then the shell has nothing to open.
+                // 上下文菜单控件随 P2 容器批次一起落地；在此之前外壳没有可打开的菜单。
+                //
             }
             AppEvent::Shortcut { .. } => {
-                // The shell registers no keymap bindings yet; the runtime
-                // resolves shortcuts for applications that do.
+                // 外壳尚未注册按键映射绑定；运行时会为已注册的应用解析快捷键。
+                //
             }
             AppEvent::Wheel { pos, delta, .. } => {
                 self.pointer_move(pos);
                 self.wheel(delta.y);
-                // The page scrolls as far as it can; a nested scroll area
-                // would consume first and let the remainder bubble.
+                // 页面尽可能滚动；嵌套滚动区域会先消费滚动量，再将剩余部分冒泡。
+                //
                 ctx.consume_scroll(delta);
             }
             AppEvent::Key {
@@ -160,8 +160,8 @@ impl Application for GalleryApp {
         if self.take_blur_request() {
             ctx.request_blur = true;
         }
-        // The shell paints every frame it is asked for; `view` decides from
-        // the interaction snapshot whether the scene has to be rebuilt.
+        // 外壳会绘制被请求的每一帧；`view` 根据交互快照决定是否需要重建场景。
+        //
         EventOutcome::new(DirtyFlags::LAYOUT)
     }
 
@@ -184,16 +184,16 @@ impl Application for GalleryApp {
             .extend_from_slice(&self.scene.transforms);
         collector.clips.extend_from_slice(&self.scene.clips);
         collector.payloads.extend_from_slice(&self.scene.payloads);
-        // The regions are what the runtime's router picks from next frame;
-        // the shell never routes on its own. They are copied rather than
-        // moved: a caller that inspects the last frame still sees them.
+        // 这些区域是运行时路由器在下一帧进行拾取的依据；外壳从不自行路由。
+        // 这里采用拷贝而非移动，以便检查上一帧的调用方仍能看到它们。
+        //
         collector.regions.extend_from_slice(&self.regions);
         collector.focus_order.extend_from_slice(&self.focus_order);
         collector
             .node_spans
             .extend(self.node_spans().iter().map(|(k, v)| (*k, *v)));
-        // The shell rebuilds the semantic tree from scratch every frame, so
-        // handing a copy over leaves the last frame inspectable.
+        // 外壳每帧都会从头重建语义树，因此交出一份拷贝可使上一帧保持可检查状态。
+        //
         collector.semantics = self.semantics.clone();
     }
 }
@@ -210,8 +210,8 @@ impl GalleryApp {
     }
 }
 
-/// Translate the runtime's key vocabulary back into the platform one the
-/// shell already understands.
+/// 将运行时的按键词汇表转换回外壳已理解的平台按键词汇表。
+///
 fn platform_key(key: AppKey) -> PlatformKey {
     match key {
         AppKey::Tab => PlatformKey::Named("Tab".into()),

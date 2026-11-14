@@ -1,11 +1,11 @@
-//! Anchored popovers and dropdown containers.
+//! 锚定气泡框与下拉容器。
 //!
-//! A popover is a surface plus an [`OverlayEntry`]: the geometry comes from
-//! [`place_anchored_popup`] so it can never escape the window, and the entry
-//! lets [`OverlayStack`] dismiss it, order it and prune it with its trigger.
+//! 气泡框由表面（surface）与 [`OverlayEntry`] 组成：几何位置由
+//! [`place_anchored_popup`] 计算，确保不会超出窗口；条目则交由
+//! [`OverlayStack`] 负责关闭、排序并随触发器一同清理。
 //!
-//! The content is emitted by the caller; this module paints the container, the
-//! border, the shadow and the (optional) backdrop-blur request.
+//! 内容由调用方输出；本模块负责绘制容器、边框、阴影及（可选的）背景模糊请求。
+//!
 
 use unbound_gpu::data::{GpuClipNode, GpuPayload, GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{HitRegion, PORTAL_LAYER};
@@ -16,33 +16,33 @@ use crate::overlay::{OverlayEntry, PlacedPopup, Placement};
 use crate::primitive::{instance, surface};
 use crate::{ControlState, SceneCollector, WidgetDesc, WidgetOutput};
 
-/// The hit-test layer of a popover: the portal band.
+/// 气泡框的命中测试层：Portal 层级。
 pub const POPOVER_LAYER: u8 = PORTAL_LAYER;
-/// The shadow blur of a popover.
+/// 气泡框阴影模糊半径。
 const POPOVER_SHADOW: f32 = 24.0;
-/// The depth of an arrow tip, and half its base width.
+/// 箭头尖端深度与底边半宽。
 const ARROW_SIZE: f32 = 8.0;
-/// The stroke width of an arrow edge.
+/// 箭头描边宽度。
 const ARROW_STROKE: f32 = 2.0;
 
-/// A popover anchored to a trigger.
+/// 锚定到触发器的气泡框描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PopoverDesc {
-    /// The trigger rectangle.
+    /// 触发器矩形。
     pub anchor: Rect,
-    /// The viewport the popover must stay inside.
+    /// 气泡框必须保持在内的视口矩形。
     pub viewport: Rect,
-    /// The popover's preferred size.
+    /// 气泡框的首选尺寸。
     pub size: Vec2,
-    /// The preferred side.
+    /// 首选放置方向。
     pub placement: Placement,
-    /// The corner radius.
+    /// 圆角半径。
     pub radius: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
-    /// Backdrop blur radius behind the popover; `0.0` disables the pass.
+    /// 气泡框背后的背景模糊半径；`0.0` 表示禁用该 Pass。
     pub backdrop_blur: f32,
-    /// Whether to paint the arrow that points at the anchor.
+    /// 是否绘制指向锚点的箭头。
     pub show_arrow: bool,
 }
 
@@ -61,7 +61,7 @@ impl PopoverDesc {
         }
     }
 
-    /// The placed popup, including the chosen side and the arrow tip.
+    /// 已放置的弹窗信息，包含选定方向与箭头尖端。
     #[must_use]
     pub fn placed(&self) -> PlacedPopup {
         crate::overlay::place_anchored_popup_detailed(
@@ -72,21 +72,21 @@ impl PopoverDesc {
         )
     }
 
-    /// The placed popover rectangle.
+    /// 已放置的气泡框矩形。
     #[must_use]
     pub fn rect(&self) -> Rect {
         self.placed().rect
     }
 }
 
-/// A popover descriptor bound to an identity.
+/// 绑定了节点标识的气泡框描述符。
 #[derive(Clone, Debug)]
 pub struct PopoverWidget {
-    /// The popover's node id.
+    /// 气泡框自身的节点 ID。
     pub node: u64,
-    /// The trigger's node id.
+    /// 触发器的节点 ID。
     pub anchor_node: u64,
-    /// The descriptor.
+    /// 气泡框描述符。
     pub desc: PopoverDesc,
 }
 
@@ -104,18 +104,18 @@ impl WidgetDesc for PopoverWidget {
     }
 }
 
-/// What one popover emits.
+/// 单个气泡框的输出结果。
 #[derive(Clone, Debug)]
 pub struct PopoverOutput {
-    /// The painted container and its hit region.
+    /// 绘制的容器及其命中区域。
     pub output: WidgetOutput,
-    /// The stack entry the caller pushes.
+    /// 调用方需推入栈的浮层条目。
     pub entry: OverlayEntry,
-    /// The blur request, when `backdrop_blur > 0`.
+    /// 当 `backdrop_blur > 0` 时的模糊请求。
     pub backdrop: Option<crate::overlay::BackdropRequest>,
 }
 
-/// Emit a popover container.
+/// 输出气泡框容器。
 #[must_use]
 pub fn emit_popover(
     node: u64,
@@ -183,11 +183,10 @@ pub fn emit_popover(
     }
 }
 
-/// Emit a popover and its children in one scope.
+/// 在同一作用域内输出气泡框及其子元素。
 ///
-/// The container is painted first. The children are then collected inside the
-/// popover's clip and lifted to [`POPOVER_LAYER`] so they win hit-testing
-/// against the UI beneath the portal.
+/// 先绘制容器，再在气泡框裁剪区域内收集子元素并提升至 [`POPOVER_LAYER`]，
+/// 使其在命中测试中优先于 Portal 下方的界面。
 pub fn emit_popover_scope<I>(
     collector: &mut SceneCollector,
     node: u64,
@@ -218,7 +217,7 @@ where
     output
 }
 
-/// Two quadratic strokes forming the arrow that points at the anchor.
+/// 构成指向锚点箭头的两条二次曲线描边。
 fn arrow_edges(
     placement: Placement,
     tip: Vec2,
@@ -226,7 +225,7 @@ fn arrow_edges(
     primitives: &mut Vec<GpuPrimitiveInstance>,
     payloads: &mut Vec<GpuPayload>,
 ) {
-    // The direction from the popup edge back into the popup body.
+    // 从弹窗边缘指向弹窗内部的方向。
     let inward = match placement {
         Placement::BottomStart | Placement::BottomEnd | Placement::Bottom => Vec2::new(0.0, 1.0),
         Placement::TopStart | Placement::TopEnd | Placement::Top => Vec2::new(0.0, -1.0),
@@ -247,7 +246,7 @@ fn arrow_edges(
     }
 }
 
-/// One quadratic stroke packed into its tight local box.
+/// 打包到紧凑局部包围盒中的单条二次曲线描边。
 fn curve_stroke(
     points: [Vec2; 3],
     width: f32,

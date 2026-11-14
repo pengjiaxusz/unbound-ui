@@ -1,10 +1,9 @@
-//! Line, area and bar charts on the canvas.
+//! 画布上的折线图、面积图与柱状图（Chart）。
 //!
-//! The chart is a *view*: it owns ranges and hover state, never the data. The
-//! axes choose round-number guides, and every series is mapped through the same
-//! [`ChartDesc::map_point`] so a tooltip and a plotted dot can never disagree.
-//! Curves are flattened to quadratic segments on the CPU, which keeps the GPU
-//! path identical to the wire renderer.
+//! 图表是一个*视图*：它持有坐标范围与悬停状态，从不持有原始数据。
+//! 坐标轴会选择整数刻度参考线，且每个序列都通过同一 [`ChartDesc::map_point`]
+//! 映射，因此提示框与绘制点绝不会出现位置偏差。曲线在 CPU 上展平为二次段，
+//! 从而使 GPU 路径与线框渲染器保持一致。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -19,35 +18,35 @@ use crate::primitive::{glyphs, instance, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The plot inset: left for value labels, bottom for category labels.
+/// 绘图区内边距：左侧留给数值标签，底部留给分类标签。
 pub const CHART_INSET: (f32, f32, f32, f32) = (36.0, 10.0, 10.0, 20.0);
-/// The curve width.
+/// 曲线宽度。
 pub const CHART_STROKE: f32 = 2.0;
-/// The tooltip size.
+/// 提示框尺寸。
 pub const TOOLTIP_SIZE: (f32, f32) = (140.0, 44.0);
-/// How close the pointer must be to select a point, in screen pixels.
+/// 选中数据点所需的最大指针距离（屏幕像素）。
 pub const HOVER_RADIUS: f32 = 18.0;
 
-/// How a series is drawn.
+/// 序列的绘制方式。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SeriesKind {
-    /// A smooth line.
+    /// 平滑折线。
     #[default]
     Line,
-    /// A line with a filled baseline.
+    /// 带填充基线的折线（面积图）。
     Area,
-    /// One bar per point.
+    /// 每个数据点对应一根柱子。
     Bar,
 }
 
-/// One series.
+/// 单个数据序列。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartSeries {
-    /// The points, in data space.
+    /// 数据空间中的点集。
     pub points: Vec<Vec2>,
-    /// The series colour.
+    /// 序列颜色。
     pub token: Token,
-    /// How to draw it.
+    /// 绘制方式。
     pub kind: SeriesKind,
 }
 
@@ -80,22 +79,22 @@ impl ChartSeries {
     }
 }
 
-/// A chart descriptor.
+/// 图表描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartDesc {
-    /// The full chart rectangle.
+    /// 完整图表矩形。
     pub rect: Rect,
-    /// The series.
+    /// 数据序列列表。
     pub series: Vec<ChartSeries>,
-    /// The x data range.
+    /// X 轴数据范围。
     pub x_range: (f32, f32),
-    /// The y data range.
+    /// Y 轴数据范围。
     pub y_range: (f32, f32),
-    /// The number of guide lines per axis.
+    /// 每个坐标轴的参考线数量。
     pub divisions: u32,
-    /// Whether to paint the grid.
+    /// 是否绘制网格。
     pub show_grid: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
@@ -113,10 +112,10 @@ impl ChartDesc {
         }
     }
 
-    /// The same chart with series.
+    /// 附加数据序列。
     #[must_use]
     pub fn with_series(mut self, series: Vec<ChartSeries>) -> Self {
-        // Derive the ranges from the data when they have not been set.
+        // 当未显式设置范围时，从数据自动派生。
         let bounds = series.iter().flat_map(|series| series.points.iter()).fold(
             None::<(f32, f32, f32, f32)>,
             |acc, point| {
@@ -143,7 +142,7 @@ impl ChartDesc {
         self
     }
 
-    /// The plot area, inside the axes.
+    /// 坐标轴内部的绘图区域。
     #[must_use]
     pub fn plot_rect(&self) -> Rect {
         let (left, top, right, bottom) = CHART_INSET;
@@ -155,7 +154,7 @@ impl ChartDesc {
         )
     }
 
-    /// Map a data point into the plot area.
+    /// 将数据点映射到绘图区域坐标。
     #[must_use]
     pub fn map_point(&self, point: Vec2) -> Vec2 {
         let plot = self.plot_rect();
@@ -169,7 +168,7 @@ impl ChartDesc {
         )
     }
 
-    /// The horizontal guide positions.
+    /// 水平参考线位置。
     #[must_use]
     pub fn y_guides(&self) -> Vec<f32> {
         let plot = self.plot_rect();
@@ -178,7 +177,7 @@ impl ChartDesc {
             .collect()
     }
 
-    /// The vertical guide positions.
+    /// 垂直参考线位置。
     #[must_use]
     pub fn x_guides(&self) -> Vec<f32> {
         let plot = self.plot_rect();
@@ -187,7 +186,7 @@ impl ChartDesc {
             .collect()
     }
 
-    /// The nearest `(series, index)` to a screen point.
+    /// 距离屏幕坐标最近的 `(series, index)`。
     #[must_use]
     pub fn nearest(&self, pointer: Vec2) -> Option<(usize, usize)> {
         let mut best: Option<(f32, usize, usize)> = None;
@@ -206,10 +205,10 @@ impl ChartDesc {
     }
 }
 
-/// The hover state of one chart.
+/// 单个图表的悬停状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ChartState {
-    /// The pointer position, when it is inside the chart.
+    /// 指针位于图表内时的坐标位置。
     pub pointer: Option<Vec2>,
 }
 
@@ -219,29 +218,29 @@ impl ChartState {
         Self::default()
     }
 
-    /// Record the pointer position.
+    /// 记录指针位置。
     pub fn hover(&mut self, pointer: Vec2) {
         self.pointer = Some(pointer);
     }
 
-    /// Clear the hover.
+    /// 清除悬停状态。
     pub fn clear(&mut self) {
         self.pointer = None;
     }
 }
 
-/// What one chart emits.
+/// 单个图表的发射结果。
 #[derive(Clone, Debug)]
 pub struct ChartOutput {
-    /// The grid, series, markers and tooltip.
+    /// 网格、序列、标记点与提示框。
     pub output: WidgetOutput,
-    /// The tooltip rectangle, when a point is hovered.
+    /// 悬停某点时的提示框矩形。
     pub tooltip: Option<Rect>,
-    /// The hovered data point.
+    /// 当前悬停的数据点。
     pub hovered: Option<Vec2>,
 }
 
-/// Emit a chart. `tooltip_glyphs` are painted inside the tooltip.
+/// 发射图表。`tooltip_glyphs` 绘制在提示框内部。
 #[must_use]
 pub fn emit_chart(
     node: u64,
@@ -329,9 +328,8 @@ pub fn emit_chart(
     }
 
     let hovered = state.pointer.and_then(|pointer| desc.nearest(pointer));
-    // The crosshair, highlight dot and tooltip keep fixed slots even when
-    // nothing is hovered: opacity alone carries their visibility, so moving
-    // the pointer never reshapes the primitive pool.
+    // 即使未悬停任何点，十字准线、高亮圆点与提示框也保留固定槽位：
+    // 仅通过不透明度控制可见性，因此移动指针绝不会重排图元池。
     let hover_paint = hovered.map(|(series_index, point_index)| {
         let series = &desc.series[series_index];
         let mapped = desc.map_point(series.points[point_index]);
@@ -568,8 +566,8 @@ mod tests {
     fn an_empty_chart_still_paints_its_grid() {
         let desc = ChartDesc::new(Rect::new(0.0, 0.0, 400.0, 240.0));
         let output = emit_chart(3, &desc, &ChartState::new(), &[], ControlState::default());
-        // Ten grid lines plus the three always-present hover slots
-        // (crosshair, highlight dot, tooltip background), hidden at opacity 0.
+        // 十条网格线加上三个始终存在的悬停槽位
+        // （十字准线、高亮圆点、提示框背景），未悬停时以不透明度 0 隐藏。
         assert_eq!(output.output.primitives.len(), 13);
         assert!(output.tooltip.is_none());
     }

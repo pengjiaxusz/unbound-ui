@@ -1,14 +1,14 @@
-//! Selection, marquee and the transform handles (`docs` §5.3, §6.1).
+//! 选择集、框选（Marquee）与变换控制柄（`docs` §5.3、§6.1）。
 //!
-//! The canvas never asks a *widget* where it is: the selection model works on
-//! world-space rectangles that the caller resolves from the spatial index. That
-//! keeps the gesture code identical for a 20 px icon, a 40 000 px frame and a
-//! multi-item group, and it keeps every pointer interaction a pure function of
-//! `(start bounds, pointer, modifiers)`.
+//! 画布从不向*组件*询问其位置：选择模型完全基于世界空间矩形工作，
+//! 这些矩形由调用方从空间索引中解析得到。这使得 20 px 图标、40 000 px 画框与多选分组
+//! 共用完全一致的手势代码，并保证每次指针交互都是 `(start bounds, pointer, modifiers)` 的纯函数。
 //!
-//! Everything here is ephemeral: no [`Selection`] mutation happens without the
-//! caller opening a transaction on the undo stack, so a cancelled drag leaves no
-//! trace.
+//!
+//!
+//! 此处所有状态均为瞬态：除非调用方在撤销栈上开启事务，否则不会发生任何 [`Selection`] 变更，
+//! 因此取消拖拽不会留下任何痕迹。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -16,7 +16,7 @@ use unbound_math::{Rect, Vec2};
 
 use crate::quadtree::LooseQuadtree;
 
-/// Keyboard modifiers that change gesture semantics.
+/// 改变手势语义的键盘修饰键状态。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Modifiers {
     pub shift: bool,
@@ -32,7 +32,7 @@ impl Modifiers {
     };
 }
 
-/// The eight resize grips plus the rotation grip above the top edge.
+/// 八个缩放控制柄加上位于顶边上方的旋转控制柄。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Handle {
     NorthWest,
@@ -47,7 +47,7 @@ pub enum Handle {
 }
 
 impl Handle {
-    /// All handles in paint order.
+    /// 按绘制顺序排列的所有控制柄。
     pub const ALL: [Self; 9] = [
         Self::NorthWest,
         Self::North,
@@ -60,7 +60,7 @@ impl Handle {
         Self::Rotate,
     ];
 
-    /// True when the handle moves both axes.
+    /// 当控制柄同时缩放双轴时返回 true。
     #[must_use]
     pub fn is_corner(self) -> bool {
         matches!(
@@ -69,7 +69,7 @@ impl Handle {
         )
     }
 
-    /// Position of the grip for `bounds`, in world space.
+    /// 控制柄在 `bounds` 上对应的世界空间位置。
     #[must_use]
     pub fn position(self, bounds: Rect, rotate_offset: f32) -> Vec2 {
         let min = bounds.min();
@@ -88,7 +88,7 @@ impl Handle {
         }
     }
 
-    /// Handle under `point`, if any. `radius` is in world units.
+    /// 查找 `point` 命中的控制柄（若有）。`radius` 单位为世界单位。
     #[must_use]
     pub fn hit(bounds: Rect, point: Vec2, radius: f32, rotate_offset: f32) -> Option<Self> {
         let mut best: Option<(f32, Self)> = None;
@@ -102,18 +102,18 @@ impl Handle {
         best.map(|(_, handle)| handle)
     }
 
-    /// True for handles that only move along one axis.
+    /// 仅沿单轴移动的控制柄返回 true。
     #[must_use]
     pub fn axis_locked(self) -> bool {
         matches!(self, Self::North | Self::South | Self::East | Self::West)
     }
 }
 
-/// Order-independent set of selected entity ids.
+/// 与顺序无关的已选实体 ID 集合。
 ///
-/// A sorted `Vec` beats a hash set here: selections are small, iteration order
-/// must be deterministic for the reducer's `Action` log, and membership tests
-/// are a binary search over contiguous memory.
+/// 此处有序 `Vec` 优于哈希集合：选择集通常较小，迭代顺序必须对归约器 `Action` 日志保持确定性，
+/// 且成员测试只是连续内存上的二分查找。
+///
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Selection {
     ids: Vec<u32>,
@@ -140,7 +140,7 @@ impl Selection {
         self.ids.binary_search(&id).is_ok()
     }
 
-    /// Ids in ascending order.
+    /// 按升序排列的已选 ID 切片。
     #[must_use]
     pub fn ids(&self) -> &[u32] {
         &self.ids
@@ -150,7 +150,7 @@ impl Selection {
         self.ids.clear();
     }
 
-    /// Add if absent. Returns `true` when the set changed.
+    /// 若不存在则添加。集合发生变更时返回 `true`。
     pub fn insert(&mut self, id: u32) -> bool {
         match self.ids.binary_search(&id) {
             Ok(_) => false,
@@ -161,7 +161,7 @@ impl Selection {
         }
     }
 
-    /// Remove if present. Returns `true` when the set changed.
+    /// 若存在则移除。集合发生变更时返回 `true`。
     pub fn remove(&mut self, id: u32) -> bool {
         match self.ids.binary_search(&id) {
             Ok(pos) => {
@@ -172,7 +172,7 @@ impl Selection {
         }
     }
 
-    /// Flip membership. Returns `true` when the id ends up selected.
+    /// 翻转选中状态。若最终为选中状态则返回 `true`。
     pub fn toggle(&mut self, id: u32) -> bool {
         if self.remove(id) {
             false
@@ -182,7 +182,7 @@ impl Selection {
         }
     }
 
-    /// Replace the whole set.
+    /// 替换整个选择集。
     pub fn set(&mut self, ids: &[u32]) {
         self.ids.clear();
         self.ids.extend_from_slice(ids);
@@ -190,7 +190,7 @@ impl Selection {
         self.ids.dedup();
     }
 
-    /// Union of the bounds of every selected entity, resolved through `lookup`.
+    /// 通过 `lookup` 解析并计算所有已选实体的包围盒并集。
     #[must_use]
     pub fn bounds(&self, mut lookup: impl FnMut(u32) -> Option<Rect>) -> Option<Rect> {
         let mut acc: Option<Rect> = None;
@@ -205,7 +205,7 @@ impl Selection {
     }
 }
 
-/// What a marquee drag does to the existing selection.
+/// 框选拖拽对现有选择集的作用模式。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SelectionMode {
     Replace,
@@ -215,7 +215,7 @@ pub enum SelectionMode {
 }
 
 impl SelectionMode {
-    /// Derive the mode from the modifiers the user is holding.
+    /// 根据用户按住的修饰键推导框选模式。
     #[must_use]
     pub fn from(modifiers: Modifiers) -> Self {
         if modifiers.shift && modifiers.ctrl {
@@ -230,7 +230,7 @@ impl SelectionMode {
     }
 }
 
-/// A rubber-band drag.
+/// 橡皮筋框选拖拽状态。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Marquee {
     pub origin: Vec2,
@@ -246,28 +246,28 @@ impl Marquee {
         }
     }
 
-    /// Update the free corner.
+    /// 更新自由角点坐标。
     pub fn drag_to(&mut self, point: Vec2) {
         self.current = point;
     }
 
-    /// Normalised rectangle, never negative.
+    /// 归一化矩形，保证宽高永不为负。
     #[must_use]
     pub fn rect(&self) -> Rect {
         Rect::from_points(self.origin, self.current)
     }
 
-    /// True when the drag is large enough to be a band rather than a click.
+    /// 当拖拽距离大到足以构成框选而非点击时返回 true。
     #[must_use]
     pub fn is_active(&self, threshold: f32) -> bool {
         let r = self.rect();
         r.size.x.max(r.size.y) >= threshold
     }
 
-    /// Collect entities intersecting the band, then apply `mode` to `selection`.
+    /// 收集与框选带相交的实体，并按 `mode` 更新 `selection`。
     ///
-    /// Candidates come from the quadtree, so a 1 M entity canvas only tests what
-    /// the band actually overlaps.
+    /// 候选集来自四叉树，因此在百万实体画布上也只需测试与框选带实际重叠的对象。
+    ///
     pub fn apply(&self, tree: &mut LooseQuadtree, mode: SelectionMode, selection: &mut Selection) {
         let band = self.rect();
         let mut hits = Vec::new();
@@ -293,10 +293,10 @@ impl Marquee {
     }
 }
 
-/// Affine correction produced by a handle drag.
+/// 控制柄拖拽产生的仿射变换修正量。
 ///
-/// Applied to the *start* rectangles of the dragged items, so a 10-frame drag
-/// never accumulates float error: every frame recomputes from the snapshot.
+/// 该变换始终作用于被拖拽元素的*起始*矩形，因此 10 帧拖拽绝不会累积浮点误差：
+/// 每一帧都直接基于初始快照重新计算。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Transform2 {
     pub anchor: Vec2,
@@ -317,13 +317,13 @@ impl Default for Transform2 {
 }
 
 impl Transform2 {
-    /// Identity, used for a click without movement.
+    /// 恒等变换，用于无移动的点击。
     #[must_use]
     pub fn identity() -> Self {
         Self::default()
     }
 
-    /// True when applying this transform cannot change anything.
+    /// 当应用此变换不会产生任何改变时返回 true。
     #[must_use]
     pub fn is_identity(&self) -> bool {
         (self.scale.x - 1.0).abs() < 1e-6
@@ -332,7 +332,7 @@ impl Transform2 {
             && self.rotation.abs() < 1e-6
     }
 
-    /// Map a point through the transform.
+    /// 通过变换矩阵映射一个点。
     #[must_use]
     pub fn apply_point(&self, point: Vec2) -> Vec2 {
         let local = point - self.anchor;
@@ -343,7 +343,7 @@ impl Transform2 {
         )
     }
 
-    /// Map a rectangle, taking the bounds of the four transformed corners.
+    /// 映射一个矩形，取四个变换后角点的包围盒。
     #[must_use]
     pub fn apply_rect(&self, rect: Rect) -> Rect {
         let min = rect.min();
@@ -369,21 +369,21 @@ impl Transform2 {
     }
 }
 
-/// A resize or rotation drag in progress.
+/// 进行中的缩放或旋转拖拽会话。
 #[derive(Copy, Clone, Debug)]
 pub struct HandleDrag {
     handle: Handle,
     start_bounds: Rect,
     start_pointer: Vec2,
-    /// Smallest allowed extent, in world units (the doc's 24 px target applies
-    /// to hit areas; this is the geometric floor so a rect never inverts).
+    /// 允许的最小尺寸（世界单位；文档中的 24 px 目标适用于命中区域，
+    /// 此处是防止矩形翻转的几何下限）。
     min_size: f32,
-    /// Distance of the rotation grip above the top edge, in world units.
+    /// 旋转控制柄位于顶边上方的距离（世界单位）。
     rotate_offset: f32,
 }
 
 impl HandleDrag {
-    /// Begin a drag on `handle` at `pointer`.
+    /// 在 `pointer` 处开始拖拽 `handle`。
     #[must_use]
     pub fn new(handle: Handle, start_bounds: Rect, pointer: Vec2, rotate_offset: f32) -> Self {
         Self {
@@ -400,13 +400,13 @@ impl HandleDrag {
         self.handle
     }
 
-    /// Solve the transform for the current pointer position.
+    /// 针对当前指针位置求解变换。
     ///
-    /// The scale is the ratio between the anchor-to-pointer vector now and at
-    /// drag start. That single expression covers the normal case (anchor on the
-    /// opposite edge) and the Alt case (anchor at the centre) without special
-    /// casing, and it never accumulates error because it is always recomputed
-    /// from the start snapshot.
+    /// 缩放比例为当前锚点到指针向量与拖拽起始时向量之比。
+    /// 这单个表达式同时覆盖常规情况（锚点在对边）与 Alt 情况（锚点在中心），无需特殊分支，
+    /// 且因始终基于起始快照重算而绝不累积误差。
+    ///
+    ///
     pub fn update(&mut self, pointer: Vec2, modifiers: Modifiers) -> Transform2 {
         if self.handle == Handle::Rotate {
             return self.rotate(pointer, modifiers);
@@ -416,7 +416,7 @@ impl HandleDrag {
         let max = bounds.max();
         let centre = bounds.center();
 
-        // Fixed anchor: the opposite edge/corner, or the centre with Alt held.
+        // 固定锚点：对边/对角，或按住 Alt 时的中心点。
         let anchor = if modifiers.alt {
             centre
         } else {
@@ -436,8 +436,8 @@ impl HandleDrag {
         let start_vec = self.start_pointer - anchor;
         let now_vec = pointer - anchor;
         let mut scale = Vec2::ONE;
-        // A zero-extent axis (a hairline) keeps its scale: there is nothing to
-        // resize and dividing by zero would poison the transform.
+        // 零跨度轴（细线）保持其缩放：没有可缩放的长度，除以零会污染变换。
+        //
         if start_vec.x.abs() > 1e-6 {
             scale.x = now_vec.x / start_vec.x;
         }
@@ -445,21 +445,21 @@ impl HandleDrag {
             scale.y = now_vec.y / start_vec.y;
         }
 
-        // Axis-locked handles must not leak scale into the other axis.
+        // 锁定单轴的控制柄不得将缩放泄漏到另一轴。
         match self.handle {
             Handle::East | Handle::West => scale.y = 1.0,
             Handle::North | Handle::South => scale.x = 1.0,
             _ => {}
         }
 
-        // A drag past the anchor must stop at the floor instead of inverting.
+        // 拖过锚点时必须停在几何下限处，而不能翻转。
         let floor_x = self.min_size / bounds.size.x.max(self.min_size);
         let floor_y = self.min_size / bounds.size.y.max(self.min_size);
         scale.x = scale.x.max(floor_x);
         scale.y = scale.y.max(floor_y);
 
         if modifiers.shift && self.handle.is_corner() {
-            // Uniform scale: the axis the pointer moved most wins.
+            // 等比缩放：取指针移动幅度更大的轴为主导。
             let uniform = scale.x.max(scale.y);
             scale = Vec2::splat(uniform);
         }
@@ -477,7 +477,7 @@ impl HandleDrag {
         let start = (self.start_pointer - centre).normalized();
         let now = (pointer - centre).normalized();
         let mut angle = now.y.atan2(now.x) - start.y.atan2(start.x);
-        // Wrap into (-π, π].
+        // 折叠到 (-π, π] 区间。
         while angle > core::f32::consts::PI {
             angle -= core::f32::consts::TAU;
         }
@@ -485,7 +485,7 @@ impl HandleDrag {
             angle += core::f32::consts::TAU;
         }
         if modifiers.shift {
-            // 15° increments.
+            // 以 15° 为步进吸附。
             let step = core::f32::consts::PI / 12.0;
             angle = (angle / step).round() * step;
         }
@@ -497,7 +497,7 @@ impl HandleDrag {
         }
     }
 
-    /// Projected bounds after the current pointer, for the preview outline.
+    /// 当前指针位置对应的投影包围盒，用于绘制预览轮廓。
     #[must_use]
     pub fn preview(&self, pointer: Vec2, modifiers: Modifiers) -> Rect {
         let mut copy = *self;
@@ -505,14 +505,14 @@ impl HandleDrag {
             .apply_rect(self.start_bounds)
     }
 
-    /// Bounds recorded when the drag started.
+    /// 拖拽开始时记录的初始包围盒。
     #[must_use]
     pub fn start_bounds(&self) -> Rect {
         self.start_bounds
     }
 
-    /// Distance of the rotation grip above the top edge, so the caller can draw
-    /// and hit test the grip with the same value.
+    /// 旋转控制柄位于顶边上方的距离，确保调用方用同一数值绘制与命中测试。
+    ///
     #[must_use]
     pub fn rotate_offset(&self) -> f32 {
         self.rotate_offset
@@ -626,7 +626,7 @@ mod tests {
     #[test]
     fn handle_hit_test_picks_the_nearest_grip() {
         let bounds = rect(0.0, 0.0, 100.0, 50.0);
-        // 2 px from the east grip, 30 px from the south-east one.
+        // 距离东侧控制柄 2 px，距离东南角控制柄 30 px。
         let hit = Handle::hit(bounds, Vec2::new(98.0, 26.0), 6.0, 20.0);
         assert_eq!(hit, Some(Handle::East));
         assert_eq!(Handle::hit(bounds, Vec2::new(50.0, 25.0), 6.0, 20.0), None);
@@ -716,7 +716,7 @@ mod tests {
             Vec2::new(centre.x, centre.y - 60.0),
             20.0,
         );
-        // Quarter turn clockwise.
+        // 顺时针旋转四分之一圈（90°）。
         let t = drag.update(Vec2::new(centre.x + 60.0, centre.y), Modifiers::NONE);
         assert!(
             (t.rotation - core::f32::consts::FRAC_PI_2).abs() < 1e-3,

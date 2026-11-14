@@ -1,14 +1,14 @@
-//! Test harness for the showcase button.
+//! showcase 按钮的测试装置（test harness）。
 //!
-//! [`ButtonHarness`] is the thin widget layer on top of
-//! [`unbound_headless::driver::TestApp`]: it owns the button identity, the
-//! label shaper, the activation counter and the most recently built scene.
-//! Every interaction helper re-derives the visual state from the router and
-//! rebuilds only when the discrete `(visual, count)` pair changed — the same
-//! guard the window uses, so the tests exercise the real redraw policy.
+//! [`ButtonHarness`] 是构建在 [`unbound_headless::driver::TestApp`] 之上的薄控件层：
+//! 它持有按钮标识、标签塑形器、激活计数以及最近构建的场景。
+//! 每个交互辅助方法都会从路由器重新推导视觉状态，并仅在离散的 `(visual, count)` 对
+//! 发生变化时才重建场景——这与窗口使用的守卫条件完全相同，因此测试会验证真实的
+//! 重绘策略。
 //!
-//! Integration tests in `tests/gallery.rs` use this harness; the GPU pixel
-//! test uses [`ButtonHarness::rebuild_with`] to bake a specific state.
+//!
+//! `tests/gallery.rs` 中的集成测试使用此装置；GPU 像素测试则使用
+//! [`ButtonHarness::rebuild_with`] 来烘焙特定状态。
 
 use unbound_headless::driver::{ClickReport, TestApp};
 use unbound_headless::Report;
@@ -20,41 +20,40 @@ use unbound_world::NodeId;
 use crate::button::{self, ButtonDesc, ButtonVisualState};
 use crate::gallery::{self, Labels};
 
-/// The virtual viewport the harness renders into.
+/// 测试装置渲染所使用的虚拟视口。
 pub const VIEWPORT: (f32, f32) = (1280.0, 720.0);
 
-/// A headless button session.
+/// 无头按钮会话。
 pub struct ButtonHarness {
-    /// The shared interaction session.
+    /// 共享的交互会话。
     pub app: TestApp,
-    /// The label shaper and glyph cache.
+    /// 标签塑形器与字形缓存。
     pub labels: Labels,
-    /// The geometry and base label.
+    /// 几何信息与基础标签。
     pub desc: ButtonDesc,
-    /// The button identity.
+    /// 按钮标识。
     pub node: NodeId,
-    /// How many times the button was activated.
+    /// 按钮被激活的次数。
     pub count: u32,
-    /// Whether the button is disabled.
+    /// 按钮是否处于禁用状态。
     pub disabled: bool,
-    /// The glyphs of the most recent scene.
+    /// 最近一次场景的字形。
     pub glyphs: Vec<GlyphQuad>,
-    /// The most recent scene.
+    /// 最近一次场景。
     pub scene: gallery::Gallery,
-    /// The visual state currently baked into `scene`.
+    /// 当前烘焙进 `scene` 的视觉状态。
     baked: ButtonVisualState,
-    /// The count currently baked into `scene`.
+    /// 当前烘焙进 `scene` 的计数。
     baked_count: u32,
 }
 
-/// A scene that paints a rounded rectangle over a full-surface rectangle of
-/// the **same colour**.
+/// 在覆盖整个表面的**同色**矩形之上绘制一个圆角矩形的场景。
+/// 正确的直接 alpha（straight-alpha）合成在边缘像素无论如何抗锯齿时都应不可见。
+/// 旧的双重 alpha 混合会把阴影颜色折入每个部分覆盖的像素，
+/// 导致圆角矩形边缘在原本平坦的表面上出现一道暗边——即
+/// “同色却有可见接缝”的缺陷。
 ///
-/// A correct straight-alpha composite is invisible, no matter how the edge
-/// pixels are antialiased. The old double-alpha blend folded the shadow
-/// colour into every partially covered pixel, so the edge of the rounded
-/// rectangle showed up as a dark rim on an otherwise flat surface — the
-/// "same colour, visible seam" bug.
+///
 #[must_use]
 pub fn same_colour_overlay_scene(viewport: (f32, f32)) -> gallery::Gallery {
     let palette = gallery::palette();
@@ -94,7 +93,7 @@ impl Default for ButtonHarness {
 }
 
 impl ButtonHarness {
-    /// Build the default card and bake the idle scene.
+    /// 构建默认卡片并烘焙空闲状态场景。
     #[must_use]
     pub fn new() -> Self {
         let mut app = TestApp::new(VIEWPORT);
@@ -116,13 +115,13 @@ impl ButtonHarness {
         harness
     }
 
-    /// The button's semantic id.
+    /// 按钮的语义 ID。
     #[must_use]
     pub fn node_key(&self) -> u64 {
         button::node_u64(self.node)
     }
 
-    /// The visual state derived from the router and the focus slot.
+    /// 从路由器与焦点槽位推导出的视觉状态。
     #[must_use]
     pub fn visual(&self) -> ButtonVisualState {
         let focused = if self.app.focused_key() == Some(self.node_key()) {
@@ -133,13 +132,13 @@ impl ButtonHarness {
         button::resolve_state(self.node, &self.app.router, focused, self.disabled)
     }
 
-    /// The button centre in window pixels.
+    /// 以窗口像素为单位的按钮中心坐标。
     #[must_use]
     pub fn screen_center(&self) -> Vec2 {
         self.app.canvas_to_screen(self.desc.rect.center())
     }
 
-    /// Rebuild the scene when the discrete state changed.
+    /// 当离散状态改变时重建场景。
     pub fn sync(&mut self) {
         let visual = self.visual();
         if visual != self.baked || self.count != self.baked_count {
@@ -147,10 +146,10 @@ impl ButtonHarness {
         }
     }
 
-    /// Bake a specific state into a fresh scene.
+    /// 将特定状态烘焙到一个新场景中。
     ///
-    /// This is what the GPU test uses to render idle / hover / pressed without
-    /// driving the router; interaction tests should prefer [`sync`](Self::sync).
+    /// GPU 测试通过此方法直接渲染空闲 / 悬停 / 按下状态，而无需驱动路由器；
+    /// 交互测试应优先使用 [`sync`](Self::sync)。
     pub fn rebuild_with(&mut self, visual: ButtonVisualState, count: u32) -> &gallery::Gallery {
         let mut desc = ButtonDesc::new(self.desc.rect, format!("Clicked: {count}"));
         desc.radius = self.desc.radius;
@@ -175,28 +174,28 @@ impl ButtonHarness {
         &self.scene
     }
 
-    /// Move the pointer to the button centre.
+    /// 将指针移动到按钮中心。
     pub fn hover(&mut self) {
         self.hover_at(self.screen_center());
     }
 
-    /// Move the pointer to a window position.
+    /// 将指针移动到窗口中的指定位置。
     pub fn hover_at(&mut self, screen: Vec2) {
         self.app.move_to(screen);
         self.sync();
     }
 
-    /// Press the left button at the current pointer position.
+    /// 在当前指针位置按下鼠标左键。
     pub fn press(&mut self) {
         self.app.pointer_down();
-        // The window focuses a button as soon as the router captures it.
+        // 路由器一捕获按钮，窗口就会立即将其聚焦。
         if self.app.router.pointer().pressed() == Some(button::node_u64(self.node)) {
             self.app.set_focus(Some(self.node));
         }
         self.sync();
     }
 
-    /// Release the left button at the current pointer position.
+    /// 在当前指针位置释放鼠标左键。
     pub fn release(&mut self) -> Vec<PointerEvent> {
         let events = self.app.pointer_up();
         if events
@@ -209,7 +208,7 @@ impl ButtonHarness {
         events
     }
 
-    /// Hover, press and release the button in one step.
+    /// 一步完成悬停、按下和释放按钮。
     pub fn click(&mut self) -> ClickReport {
         let report = self.app.click(self.screen_center());
         if report.pressed == Some(button::node_u64(self.node)) {
@@ -222,49 +221,49 @@ impl ButtonHarness {
         report
     }
 
-    /// Activate the button the way `Enter` / `Space` does in the window.
+    /// 像窗口中按 `Enter` / `Space` 一样激活按钮。
     pub fn activate(&mut self) {
         self.count = self.count.wrapping_add(1);
         self.sync();
     }
 
-    /// Toggle the disabled state and re-bake the scene.
+    /// 切换禁用状态并重新烘焙场景。
     pub fn set_disabled(&mut self, disabled: bool) {
         self.disabled = disabled;
         self.sync();
     }
 
-    /// How many scenes have been installed so far.
+    /// 迄今已安装的场景数量。
     #[must_use]
     pub fn generation(&self) -> u64 {
         self.app.generation()
     }
 
-    /// Focus the button and re-bake the focus ring.
+    /// 聚焦按钮并重新烘焙焦点环。
     pub fn focus(&mut self) {
         self.app.set_focus(Some(self.node));
         self.sync();
     }
 
-    /// Clear focus and re-bake the scene.
+    /// 清除焦点并重新烘焙场景。
     pub fn blur(&mut self) {
         self.app.set_focus(None);
         self.sync();
     }
 
-    /// The accessible label currently baked into the semantic tree.
+    /// 当前烘焙进语义树中的无障碍标签。
     #[must_use]
     pub fn label(&self) -> &str {
         &self.app.semantics_node(self.node).label
     }
 
-    /// The accessible value currently baked into the semantic tree.
+    /// 当前烘焙进语义树中的无障碍值。
     #[must_use]
     pub fn value(&self) -> &str {
         &self.app.semantics_node(self.node).value
     }
 
-    /// The frame the geometry sanitizers inspect.
+    /// 几何校验器所检查的帧。
     #[must_use]
     pub fn frame(&self) -> unbound_headless::Frame {
         let mut desc = ButtonDesc::new(self.desc.rect, format!("Clicked: {}", self.baked_count));
@@ -275,12 +274,12 @@ impl ButtonHarness {
         gallery::button_frame(VIEWPORT, &desc, &self.glyphs)
     }
 
-    /// Run the five geometry sanitizers over the button frame.
+    /// 在按钮帧上运行五项几何校验器。
     pub fn assert_clean(&self) -> Report {
         self.app.assert_clean(&self.frame())
     }
 
-    /// The canvas rectangle the button occupies.
+    /// 按钮所占用的画布矩形。
     #[must_use]
     pub fn rect(&self) -> Rect {
         self.desc.rect

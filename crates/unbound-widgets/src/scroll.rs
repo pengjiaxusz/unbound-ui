@@ -1,14 +1,14 @@
-//! Scroll containers and virtual-list playback.
+//! 滚动容器与虚拟列表回放。
 //!
-//! A [`ScrollViewDesc`] describes a viewport; [`ScrollState`] owns the scroll
-//! offset and its spring. Neither holds child widgets: children are emitted by
-//! the caller, clipped by [`ScrollViewOutput::clip`] and translated by
-//! [`ScrollViewOutput::transform`]. That is what makes sub-pixel scrolling
-//! free — a scroll changes one `GpuTransform`, never a single child primitive.
+//! [`ScrollViewDesc`] 描述视口；[`ScrollState`] 持有滚动偏移量及其弹簧状态。
+//! 两者均不持有子控件：子元素由调用方输出，并由 [`ScrollViewOutput::clip`] 裁剪、
+//! 由 [`ScrollViewOutput::transform`] 平移。这正是亚像素滚动零开销的原因——
+//! 滚动仅修改单个 `GpuTransform`，而不会修改任何子图元。
 //!
-//! Virtualised lists hook in through [`update_virtual_list`]: the window is
-//! recomputed once per frame, and when only the sub-row offset moved the
-//! function reports `WindowUpdate::offset_only` with **zero** rebinds.
+//!
+//! 虚拟列表通过 [`update_virtual_list`] 接入：每帧重算一次可见窗口，
+//! 当仅亚行偏移发生变化时返回 `WindowUpdate::offset_only`，实现**零**重新绑定。
+//!
 
 use unbound_anim::{Spring2, SpringPreset};
 use unbound_gpu::data::{GpuClipNode, GpuPrimitiveInstance, GpuTransform, PrimType, SubElement};
@@ -20,20 +20,20 @@ use unbound_world::virtualize::VirtualList;
 use crate::primitive::surface;
 use crate::{ControlState, SceneCollector, WidgetDesc, WidgetOutput};
 
-/// The UI layer a scroll view lives in.
+/// 滚动视图所在的界面层。
 pub const SCROLL_LAYER: u8 = 1;
-/// The width of a scrollbar, in logical pixels.
+/// 滚动条宽度（逻辑像素）。
 pub const SCROLLBAR_WIDTH: f32 = 8.0;
-/// The smallest scrollbar thumb, in logical pixels.
+/// 滚动条滑块最小长度（逻辑像素）。
 pub const MIN_THUMB: f32 = 24.0;
-/// How long the scrollbar stays visible after the last scroll, in seconds.
+/// 最后一次滚动后滚动条保持可见的时长（秒）。
 pub const SCROLLBAR_HOLD: f32 = 1.0;
-/// How long the fade-out takes once the hold expires.
+/// 保持时间到期后的淡出时长。
 pub const SCROLLBAR_FADE: f32 = 0.25;
-/// How far a fling projects its release velocity into the spring target.
+/// 惯性甩动将释放速度投射到弹簧目标的时长系数。
 pub const FLING_PROJECTION: f32 = 0.25;
 
-/// Which axes a scroll view accepts.
+/// 滚动视图允许滚动的坐标轴。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ScrollAxis {
     #[default]
@@ -52,27 +52,26 @@ impl ScrollAxis {
     }
 }
 
-/// The scrollbar thumb length for a track, shared by painting and dragging so
-/// the thumb's travel is computed identically in both paths.
+/// 轨道上的滑块长度；由绘制与拖拽共用，确保两条路径下的滑块行程计算完全一致。
 fn thumb_length(track_length: f32, viewport: f32, content: f32) -> f32 {
     let ratio = (viewport / content).clamp(0.0, 1.0);
     (track_length * ratio).max(MIN_THUMB).min(track_length)
 }
 
-/// The pure descriptor of a scroll viewport.
+/// 滚动视口的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollViewDesc {
-    /// The viewport rectangle.
+    /// 视口矩形。
     pub rect: Rect,
-    /// The full content size.
+    /// 完整内容尺寸。
     pub content_size: Vec2,
-    /// The accepted axes.
+    /// 允许滚动的坐标轴。
     pub axis: ScrollAxis,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
-    /// The corner radius of the viewport clip.
+    /// 视口裁剪的圆角半径。
     pub radius: f32,
-    /// The scrollbar width.
+    /// 滚动条宽度。
     pub scrollbar_width: f32,
 }
 
@@ -89,7 +88,7 @@ impl ScrollViewDesc {
         }
     }
 
-    /// The largest offset that still keeps the content covering the viewport.
+    /// 仍能使内容覆盖视口的最大偏移量。
     #[must_use]
     pub fn max_offset(&self) -> Vec2 {
         Vec2::new(
@@ -98,7 +97,7 @@ impl ScrollViewDesc {
         )
     }
 
-    /// The clamped offset for a proposed value.
+    /// 将提议值夹紧后的合法偏移量。
     #[must_use]
     pub fn clamp_offset(&self, offset: Vec2) -> Vec2 {
         let max = self.max_offset();
@@ -116,7 +115,7 @@ impl ScrollViewDesc {
         )
     }
 
-    /// The scrollbar track rectangle on one axis.
+    /// 单轴上的滚动条轨道矩形。
     #[must_use]
     pub fn track_rect(&self, horizontal: bool) -> Rect {
         if horizontal {
@@ -136,7 +135,7 @@ impl ScrollViewDesc {
         }
     }
 
-    /// The scrollbar thumb rectangle for an offset.
+    /// 给定偏移量对应的滚动条滑块矩形。
     #[must_use]
     pub fn thumb_rect(&self, offset: Vec2, horizontal: bool) -> Rect {
         let track = self.track_rect(horizontal);
@@ -179,7 +178,7 @@ impl ScrollViewDesc {
     }
 }
 
-/// Which scrollbar is being dragged.
+/// 正在被拖拽的滚动条方向。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ScrollbarAxis {
     Horizontal,
@@ -192,18 +191,18 @@ impl ScrollbarAxis {
     }
 }
 
-/// A pointer gesture routed to a scroll view's scrollbars.
+/// 路由至滚动视图滚动条的指针手势。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ScrollPointerEvent {
-    /// A press landed at a screen-space point.
+    /// 在屏幕空间点处按下。
     Press(Vec2),
-    /// The pointer moved while a thumb is captured.
+    /// 捕获滑块后指针移动。
     Drag(Vec2),
-    /// The pointer released.
+    /// 指针释放。
     Release,
 }
 
-/// One scrollbar drag.
+/// 单次滚动条拖拽状态。
 #[derive(Copy, Clone, Debug)]
 struct Drag {
     axis: ScrollbarAxis,
@@ -211,7 +210,7 @@ struct Drag {
     start_offset: Vec2,
 }
 
-/// The live scroll offset and its spring.
+/// 实时滚动偏移量及其弹簧状态。
 #[derive(Clone, Debug)]
 pub struct ScrollState {
     spring: Spring2,
@@ -239,25 +238,25 @@ impl ScrollState {
         }
     }
 
-    /// The current visual offset.
+    /// 当前视觉偏移量。
     #[must_use]
     pub fn offset(&self) -> Vec2 {
         self.offset
     }
 
-    /// The offset the spring is heading to.
+    /// 弹簧正在趋向的目标偏移量。
     #[must_use]
     pub fn target(&self) -> Vec2 {
         Vec2::new(self.spring.x.target, self.spring.y.target)
     }
 
-    /// Whether the spring is still moving.
+    /// 弹簧是否仍在运动。
     #[must_use]
     pub fn is_animating(&self) -> bool {
         !self.spring.is_settled()
     }
 
-    /// Jump to an offset with no animation.
+    /// 无动画直接跳转到指定偏移量。
     pub fn jump_to(&mut self, desc: &ScrollViewDesc, offset: Vec2) {
         let offset = desc.clamp_offset(offset);
         self.spring.snap_to(offset);
@@ -265,39 +264,38 @@ impl ScrollState {
         self.reveal_scrollbar();
     }
 
-    /// Add a delta (a wheel notch, a drag) and clamp it.
+    /// 累加增量（滚轮格数或拖拽）并夹紧。
     pub fn scroll_by(&mut self, desc: &ScrollViewDesc, delta: Vec2) {
         let target = desc.clamp_offset(self.target() + delta);
         self.spring.set_target(target);
         self.reveal_scrollbar();
     }
 
-    /// Scroll to an absolute offset, clamped.
+    /// 滚动到绝对偏移量并夹紧。
     pub fn scroll_to(&mut self, desc: &ScrollViewDesc, offset: Vec2) {
         let target = desc.clamp_offset(offset);
         self.spring.set_target(target);
         self.reveal_scrollbar();
     }
 
-    /// The scrollbar opacity in `0..=1`.
+    /// 滚动条不透明度（`0..=1`）。
     #[must_use]
     pub fn scrollbar_opacity(&self) -> f32 {
         self.bar_opacity
     }
 
-    /// Show the scrollbar immediately (a wheel event, a hover, a drag).
+    /// 立即显示滚动条（用于滚轮、悬停或拖拽事件）。
     pub fn reveal_scrollbar(&mut self) {
         self.bar_opacity = 1.0;
         self.idle = 0.0;
     }
 
-    /// Advance the scrollbar fade.
+    /// 推进滚动条淡出动画。
     ///
-    /// The bar stays fully opaque while the pointer is over the view, while a
-    /// drag is active and while the spring is still moving. Afterwards it
-    /// holds for [`SCROLLBAR_HOLD`] and fades over [`SCROLLBAR_FADE`].
+    /// 当指针位于视图上方、正在拖拽或弹簧仍在运动时，滚动条保持完全不透明。
+    /// 之后保持 [`SCROLLBAR_HOLD`] 时长并在 [`SCROLLBAR_FADE`] 内淡出。
     ///
-    /// Returns whether the opacity changed.
+    /// 返回不透明度是否发生变化。
     pub fn tick_scrollbar(&mut self, dt: f32, hovering: bool) -> bool {
         let before = self.bar_opacity;
         let active = hovering || self.drag.is_some() || self.is_animating();
@@ -312,18 +310,17 @@ impl ScrollState {
         (self.bar_opacity - before).abs() > f32::EPSILON
     }
 
-    /// Advance the spring. Returns `true` while it is moving.
+    /// 推进弹簧物理步进。仍在运动时返回 `true`。
     ///
-    /// The visual offset is clamped every step: a spring may overshoot by a
-    /// pixel or two on a hard fling, and the content must never show a gap
-    /// above the first row.
+    /// 每步都会夹紧视觉偏移：猛烈甩动时弹簧可能过冲一两像素，
+    /// 而内容绝不应在首行上方露出一道空隙。
     pub fn step(&mut self, desc: &ScrollViewDesc, dt: f32) -> bool {
         let moving = self.spring.step(dt);
         self.offset = desc.clamp_offset(self.spring.value());
         moving
     }
 
-    /// Start dragging a scrollbar thumb.
+    /// 开始拖拽滚动条滑块。
     pub fn begin_drag(&mut self, axis: ScrollbarAxis, pointer: f32) {
         self.drag = Some(Drag {
             axis,
@@ -333,10 +330,9 @@ impl ScrollState {
         self.reveal_scrollbar();
     }
 
-    /// Update a scrollbar drag.
+    /// 更新滚动条拖拽。
     ///
-    /// The thumb moves in track space; the content moves by the same ratio in
-    /// content space, which keeps the thumb glued to the pointer.
+    /// 滑块在轨道空间移动，内容在内容空间按相同比例移动，使滑块始终紧跟指针。
     pub fn drag_to(&mut self, desc: &ScrollViewDesc, pointer: f32) {
         let Some(drag) = self.drag else {
             return;
@@ -362,10 +358,10 @@ impl ScrollState {
         if track_length <= 0.0 || max_scroll <= 0.0 {
             return;
         }
-        // The thumb only travels `track_length - thumb_length`, not the whole
-        // track: dividing by the full track made the thumb lag the pointer and
-        // stop short of the bottom. Mirror `thumb_rect`'s sizing so the thumb
-        // stays glued to the pointer and reaches `max_scroll` exactly.
+        // 滑块实际行程仅为 `track_length - thumb_length` 而非整条轨道：
+        // 若除以整条轨道长度会导致滑块滞后于指针且无法拉到底部。
+        // 此处镜像 `thumb_rect` 的尺寸计算，使滑块紧贴指针并精确抵达 `max_scroll`。
+        //
         let thumb_length = thumb_length(track_length, viewport, content);
         let travel = (track_length - thumb_length).max(1.0);
         let ratio = max_scroll / travel;
@@ -379,18 +375,18 @@ impl ScrollState {
         self.jump_to(desc, offset);
     }
 
-    /// End a scrollbar drag.
+    /// 结束滚动条拖拽。
     pub fn end_drag(&mut self) {
         self.drag = None;
     }
 
-    /// Whether a scrollbar drag is in progress.
+    /// 是否正在拖拽滚动条。
     #[must_use]
     pub fn dragging(&self) -> Option<ScrollbarAxis> {
         self.drag.map(|drag| drag.axis)
     }
 
-    /// The offset a scrollbar press implies (clicking the track jumps).
+    /// 滚动条按下点隐含的目标偏移量（点击轨道将跳转）。
     pub fn jump_from_track(&mut self, desc: &ScrollViewDesc, pointer: Vec2) {
         let horizontal = desc.axis.horizontal()
             && pointer.x >= desc.rect.origin.x
@@ -419,11 +415,9 @@ impl ScrollState {
         }
     }
 
-    /// Page the content by one viewport when the scrollbar **track** is
-    /// clicked outside the thumb.
+    /// 当点击滑块外部的滚动条**轨道**时，按一页视口大小翻页。
     ///
-    /// Clicking above/left of the thumb pages backwards, below/right pages
-    /// forwards. Returns whether a page was triggered.
+    /// 点击滑块上方/左侧向前翻页，点击下方/右侧向后翻页。返回是否触发了翻页。
     pub fn page_at_track_click(&mut self, desc: &ScrollViewDesc, click_pos: Vec2) -> bool {
         let horizontal = desc.axis.horizontal() && desc.track_rect(true).contains_point(click_pos);
         let vertical = desc.axis.vertical() && desc.track_rect(false).contains_point(click_pos);
@@ -463,13 +457,11 @@ impl ScrollState {
         true
     }
 
-    /// Scroll just enough to make `child_rect` visible.
+    /// 滚动最小距离以使 `child_rect` 可见。
     ///
-    /// `child_rect` is in content coordinates: the origin is the top-left of
-    /// the content, so an offset of `o` shows the window `[o, o + viewport]`.
-    /// The spring target is adjusted (not the visual offset) so a focused
-    /// child that is out of view animates into place. Returns whether the
-    /// target moved.
+    /// `child_rect` 处于内容坐标系：原点在内容左上角，偏移 `o` 对应显示窗口 `[o, o + viewport]`。
+    /// 此处调整弹簧目标而非直接修改视觉偏移，使视口外获焦的子元素平滑动画滚入。
+    /// 返回目标是否发生移动。
     pub fn scroll_into_view(&mut self, desc: &ScrollViewDesc, child_rect: Rect) -> bool {
         let before = self.target();
         let mut target = before;
@@ -496,23 +488,19 @@ impl ScrollState {
         true
     }
 
-    /// Project release inertia into the spring target.
+    /// 将释放时的惯性速度投射到弹簧目标。
     ///
-    /// `velocity` is in logical pixels per second; it is extrapolated over
-    /// [`FLING_PROJECTION`] seconds and clamped to the content bounds, so a
-    /// hard flick keeps gliding and then stops exactly at the end of the
-    /// content instead of running off it.
+    /// `velocity` 单位为逻辑像素/秒；按 [`FLING_PROJECTION`] 秒外推并夹紧到内容边界，
+    /// 使快速轻扫先滑行一段距离，随后精确停在内容末尾而不会越界。
     pub fn fling(&mut self, desc: &ScrollViewDesc, velocity: Vec2) {
         self.scroll_to(desc, self.offset() + velocity * FLING_PROJECTION);
     }
 
-    /// Reduce a pointer gesture against the scrollbars.
+    /// 将指针手势归约为滚动条状态变化。
     ///
-    /// A press on a thumb captures it where it was; a press on the track pages
-    /// by one viewport; a drag moves the captured thumb; a release ends the
-    /// drag. Returns whether the offset or the capture changed. This is the
-    /// single entry point a host wires its pointer events into, so thumb
-    /// grabs, track clicks and release cleanup cannot drift apart.
+    /// 按下滑块将其就地捕获；按下轨道翻动一页；拖拽移动已捕获的滑块；释放结束拖拽。
+    /// 返回偏移量或捕获状态是否变化。这是宿主接入指针事件的唯一入口，
+    /// 确保滑块抓取、轨道点击与释放清理不会各自漂移。
     pub fn reduce_pointer(&mut self, desc: &ScrollViewDesc, event: ScrollPointerEvent) -> bool {
         match event {
             ScrollPointerEvent::Press(pos) => {
@@ -550,12 +538,10 @@ impl ScrollState {
 }
 
 impl ScrollViewOutput {
-    /// Collect children inside the viewport clip and the scroll translation.
+    /// 在视口裁剪与滚动平移作用域内收集子元素。
     ///
-    /// This is the bridge between [`emit_scroll_view`] and
-    /// [`SceneCollector::push_clip`] / [`SceneCollector::push_transform`]: every
-    /// primitive the closure pushes inherits both, and the scopes are popped
-    /// even when the closure emits nothing.
+    /// 这是 [`emit_scroll_view`] 与 [`SceneCollector::push_clip`] / [`SceneCollector::push_transform`] 的桥梁：
+    /// 闭包推入的每个图元都会继承这两者，且即使闭包未输出任何图元也会正确弹出作用域。
     pub fn collect_children<F>(&self, collector: &mut SceneCollector, viewport: Rect, children: F)
     where
         F: FnOnce(&mut SceneCollector),
@@ -567,52 +553,48 @@ impl ScrollViewOutput {
         collector.pop_clip();
     }
 
-    /// Register every scrollbar thumb hit region with the collector.
+    /// 向收集器注册所有滚动条滑块的命中区域。
     ///
-    /// [`SceneCollector::push`] only collects a widget's single `hit`, so the
-    /// thumbs — which live outside [`WidgetOutput`] — would otherwise be
-    /// silently dropped every frame and never become draggable.
+    /// [`SceneCollector::push`] 仅收集控件自身的单个 `hit`，
+    /// 因此位于 [`WidgetOutput`] 之外的滑块若不注册，每帧都会被静默丢弃而无法拖拽。
     pub fn register_hits(&self, collector: &mut SceneCollector) {
         for hit in &self.hits {
             collector.push_hit(hit.clone());
         }
     }
 
-    /// Push the scroll view's own output **and** its thumb hit regions in one
-    /// call, so a caller cannot forget the thumbs.
+    /// 一次性推入滚动视图自身输出**以及**滑块命中区域，防止调用方遗漏滑块。
     pub fn push_into(self, collector: &mut SceneCollector, key: u64) {
         self.register_hits(collector);
         collector.push(key, self.output);
     }
 }
 
-/// What one scroll view emits.
+/// 滚动视图的输出结果。
 ///
-/// The clip and transform are separate from [`WidgetOutput`] because they are
-/// applied to the **children**; the scroll view itself only paints its
-/// scrollbars.
+/// 裁剪与变换与 [`WidgetOutput`] 分离，因为它们作用于**子元素**；
+/// 滚动视图自身仅绘制滚动条。
 #[derive(Clone, Debug)]
 pub struct ScrollViewOutput {
-    /// The scrollbars and the wheel hit region.
+    /// 滚动条及滚轮命中区域。
     pub output: WidgetOutput,
-    /// The clip every child primitive must reference.
+    /// 所有子图元必须引用的裁剪区域。
     pub clip: GpuClipNode,
-    /// The translation every child primitive must reference.
+    /// 所有子图元必须引用的平移变换。
     pub transform: GpuTransform,
-    /// The scrollbar thumb hit regions (vertical first, then horizontal), one
-    /// per visible scrollbar. Register them with [`Self::register_hits`] so the
-    /// router can pick and drag the thumbs.
+    /// 滚动条滑块命中区域（先垂直后水平，每个可见滚动条各一个）。
+    /// 请通过 [`Self::register_hits`] 注册，以便路由器拾取并拖拽滑块。
     pub hits: Vec<HitRegion>,
 }
 
-/// A scroll view descriptor bound to an identity.
+/// 绑定了节点标识的滚动视图描述符。
 #[derive(Clone, Debug)]
 pub struct ScrollViewWidget {
-    /// The widget identity.
+    /// 控件标识。
     pub node: u64,
-    /// The descriptor.
+    /// 描述符。
     pub desc: ScrollViewDesc,
-    /// The live offset.
+    /// 实时偏移量。
     pub state: ScrollState,
 }
 
@@ -630,7 +612,7 @@ impl WidgetDesc for ScrollViewWidget {
     }
 }
 
-/// Emit the scrollbars, the clip and the child transform.
+/// 输出滚动条、裁剪区域与子元素变换。
 #[must_use]
 pub fn emit_scroll_view(
     node: u64,
@@ -714,23 +696,23 @@ pub fn emit_scroll_view(
     }
 }
 
-/// The state of a virtualised list's window after one frame.
+/// 单帧之后虚拟列表窗口的状态。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct VirtualWindow {
-    /// The slot / bind accounting from [`VirtualList::update`].
+    /// 来自 [`VirtualList::update`] 的槽位/绑定统计。
     pub update: unbound_world::virtualize::WindowUpdate,
-    /// The transform for the **whole** list, including the sub-row offset.
+    /// **整个**列表的变换（含亚行偏移）。
     pub transform: GpuTransform,
-    /// The first item currently instantiated.
+    /// 当前已实例化的首个条目索引。
     pub first_item: usize,
-    /// How many slots are live.
+    /// 当前存活的槽位数量。
     pub slots: usize,
 }
 
-/// Update a virtual list from a scroll view.
+/// 根据滚动视图更新虚拟列表。
 ///
-/// Sub-row scrolling only changes `transform`: `update.rebound == 0` and no
-/// data is re-bound, which is the "100 000 rows at 120 FPS" path.
+/// 亚行滚动仅修改 `transform`：`update.rebound == 0` 且不重新绑定数据，
+/// 这正是实现“10 万行 @ 120 FPS”的关键路径。
 #[must_use]
 pub fn update_virtual_list(
     list: &mut VirtualList,
@@ -740,8 +722,8 @@ pub fn update_virtual_list(
     let offset = scroll.offset();
     let update = list.update(offset.y, desc.rect.height(), list_total(list, desc));
     let mut transform = GpuTransform::IDENTITY;
-    // `VirtualList` reports the sub-row remainder as `offset`, but the
-    // caller also needs the whole item offset for slot positions.
+    // `VirtualList` 将亚行余量报告为 `offset`，但调用方定位槽位时还需要整行偏移。
+    //
     transform.translation = [-offset.x, -offset.y];
     VirtualWindow {
         update,
@@ -751,11 +733,10 @@ pub fn update_virtual_list(
     }
 }
 
-/// The total row count a list currently reports.
+/// 列表当前报告的总行数。
 ///
-/// `VirtualList` keeps its own `total`; the scroll descriptor carries the
-/// content height. Converting back through the row height keeps a single
-/// source of truth (the descriptor) without duplicating the item count.
+/// `VirtualList` 维护自身的 `total`，而滚动描述符持有内容总高度。
+/// 通过行高反向换算可保持单一数据源（描述符），无需重复维护条目数。
 fn list_total(list: &VirtualList, desc: &ScrollViewDesc) -> usize {
     let rows = (desc.content_size.y / list.row_height()).round();
     if rows.is_finite() && rows >= 0.0 {
@@ -769,7 +750,7 @@ fn set_opacity(primitive: &mut GpuPrimitiveInstance, opacity: f32) {
     primitive.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(primitive.depth_u16(), opacity);
 }
 
-/// One row's position for a virtual list, in viewport space.
+/// 虚拟列表中单行在视口空间的位置。
 #[must_use]
 pub fn virtual_row_rect(
     desc: &ScrollViewDesc,
@@ -785,7 +766,7 @@ pub fn virtual_row_rect(
     )
 }
 
-/// Paint a scrollbar thumb as a standalone primitive (for tests and tools).
+/// 将滚动条滑块绘制为独立图元（供测试与工具使用）。
 #[must_use]
 pub fn scrollbar_thumb_primitive(
     desc: &ScrollViewDesc,
@@ -924,11 +905,11 @@ mod tests {
         state.scroll_by(&desc, Vec2::new(0.0, 60.0));
         assert_eq!(state.scrollbar_opacity(), 1.0);
 
-        // The spring is still moving, so the bar stays visible.
+        // 弹簧仍在运动，因此滚动条保持可见。
         state.tick_scrollbar(0.016, false);
         assert_eq!(state.scrollbar_opacity(), 1.0);
 
-        // Jump to settle instantly, then hold for one second.
+        // 立即跳转稳定，随后保持一秒。
         state.jump_to(&desc, Vec2::new(0.0, 120.0));
         assert_eq!(state.scrollbar_opacity(), 1.0);
         state.tick_scrollbar(SCROLLBAR_HOLD + 0.01, false);

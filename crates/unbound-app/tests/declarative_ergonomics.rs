@@ -1,9 +1,9 @@
-//! Acceptance test for Declarative Ergonomics (Phase 3 / M9).
+//! 声明式易用性验收测试（Phase 3 / M9）。
 //!
-//! Verifies:
-//! 1. Multi-level nested layout (column -> row -> widgets) computes valid world coordinates via Taffy.
-//! 2. FrameReport atlas uploads contains glyph texture updates when emitting text widgets.
-//! 3. Dispatching pointer and text events automatically updates WidgetStateStore and dirty flags.
+//! 验证内容：
+//! 1. 多层嵌套布局（column -> row -> widgets）通过 Taffy 计算出有效世界坐标。
+//! 2. 发出文本控件时，FrameReport 图集上传包含字形纹理更新。
+//! 3. 分发指针与文本事件自动更新 WidgetStateStore 与脏标志。
 
 use unbound_app::prelude::*;
 use unbound_input::PointerButton;
@@ -72,19 +72,19 @@ fn test_declarative_layout_and_world_coordinates() {
     let mut runtime = AppRuntime::new(DeclarativeApp, Vec2::new(800.0, 600.0));
     let report = runtime.frame(0.0);
 
-    // 1. Scene should contain primitives
+    // 1. 场景应包含图元
     assert!(
         report.primitives > 0,
         "Scene primitives count should be non-zero"
     );
 
-    // 2. Glyph atlas uploads should be populated because buttons, checkboxes and inputs have text
+    // 2. 按钮、复选框与输入框均含文本，字形图集上传应非空
     assert!(
         !report.atlas_uploads.is_empty(),
         "FrameReport::atlas_uploads should contain glyph uploads for text widgets"
     );
 
-    // 3. Verify mounted widgets have valid world coordinates
+    // 3. 验证已挂载控件拥有有效的世界坐标
     let btn_rect = runtime.widget_rect(BTN_KEY);
     let chk_rect = runtime.widget_rect(CHK_KEY);
     let swi_rect = runtime.widget_rect(SWI_KEY);
@@ -100,11 +100,11 @@ fn test_declarative_layout_and_world_coordinates() {
     let swi = swi_rect.unwrap();
     let txt = txt_rect.unwrap();
 
-    // Check dimensions are non-zero
+    // 检查尺寸非零
     assert!(btn.width() > 0.0, "Button width must be positive");
     assert!(btn.height() > 0.0, "Button height must be positive");
 
-    // Row layout: checkbox should be to the right of button
+    // 行布局：复选框应位于按钮右侧
     assert!(
         chk.min().x >= btn.max().x,
         "Checkbox should be to the right of button: chk.x={}, btn.max_x={}",
@@ -112,7 +112,7 @@ fn test_declarative_layout_and_world_coordinates() {
         btn.max().x
     );
 
-    // Column layout: switch should be below the first row
+    // 列布局：开关应位于第一行下方
     assert!(
         swi.min().y >= btn.max().y,
         "Switch should be below button: swi.y={}, btn.max_y={}",
@@ -120,7 +120,7 @@ fn test_declarative_layout_and_world_coordinates() {
         btn.max().y
     );
 
-    // Column layout: text input should be below switch
+    // 列布局：文本输入框应位于开关下方
     assert!(
         txt.min().y >= swi.max().y,
         "TextInput should be below switch: txt.y={}, swi.max_y={}",
@@ -138,7 +138,7 @@ fn test_automatic_widget_state_store_and_reduction() {
     let swi_rect = runtime.widget_rect(SWI_KEY).expect("Switch mounted");
     let txt_rect = runtime.widget_rect(TXT_KEY).expect("TextInput mounted");
 
-    // 1. Initial states in WidgetStateStore should be default (unchecked, off, empty text)
+    // 1. WidgetStateStore 中的初始状态应为默认值（未勾选、关闭、空文本）
     assert_eq!(
         runtime.state_store().get::<CheckState>(CHK_KEY).copied(),
         Some(CheckState::Unchecked)
@@ -148,41 +148,41 @@ fn test_automatic_widget_state_store_and_reduction() {
         Some(false)
     );
 
-    // 2. Click Checkbox
+    // 2. 点击复选框
     let chk_center = Vec2::new(chk_rect.min().x + 10.0, chk_rect.min().y + 10.0);
     runtime.pointer_move(chk_center);
     let dirty = runtime.pointer_down(chk_center, PointerButton::Left);
     assert!(dirty.contains(DirtyFlags::PAINT));
     let _ = runtime.pointer_up(chk_center, PointerButton::Left);
 
-    // Checkbox state should now be toggled to Checked!
+    // 复选框状态此时应切换为 Checked！
     assert_eq!(
         runtime.state_store().get::<CheckState>(CHK_KEY).copied(),
         Some(CheckState::Checked),
         "Checkbox should be checked after click"
     );
 
-    // 3. Click Switch
+    // 3. 点击开关
     let swi_center = Vec2::new(swi_rect.min().x + 10.0, swi_rect.min().y + 10.0);
     runtime.pointer_move(swi_center);
     let dirty = runtime.pointer_down(swi_center, PointerButton::Left);
     assert!(dirty.contains(DirtyFlags::PAINT));
     let _ = runtime.pointer_up(swi_center, PointerButton::Left);
 
-    // Switch state should now be toggled to true!
+    // 开关状态此时应切换为 true！
     assert_eq!(
         runtime.state_store().get::<bool>(SWI_KEY).copied(),
         Some(true),
         "Switch should be on after click"
     );
 
-    // 4. Click TextInput to focus, then send text input
+    // 4. 点击文本输入框聚焦，然后发送文本输入
     let txt_center = Vec2::new(txt_rect.min().x + 20.0, txt_rect.min().y + 10.0);
     runtime.pointer_move(txt_center);
     let _ = runtime.pointer_down(txt_center, PointerButton::Left);
     let _ = runtime.pointer_up(txt_center, PointerButton::Left);
 
-    // Send string "Hello"
+    // 发送字符串 "Hello"
     let _ = runtime.text("Hello");
 
     assert_eq!(
@@ -194,14 +194,14 @@ fn test_automatic_widget_state_store_and_reduction() {
         "TextInput should contain typed text"
     );
 
-    // 5. Test Button click dispatch to app.reduce
+    // 5. 测试按钮点击分发至 app.reduce
     let btn_rect = runtime.widget_rect(BTN_KEY).expect("Button mounted");
     let btn_center = Vec2::new(btn_rect.min().x + 10.0, btn_rect.min().y + 10.0);
     runtime.pointer_move(btn_center);
     let _ = runtime.pointer_down(btn_center, PointerButton::Left);
     let _ = runtime.pointer_up(btn_center, PointerButton::Left);
 
-    // Re-render and assert app counter updated
+    // 重新渲染并断言应用计数器已更新
     let _ = runtime.frame(1.0 / 60.0);
     assert_eq!(
         runtime.state().counter,

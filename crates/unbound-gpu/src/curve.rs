@@ -1,11 +1,9 @@
-//! Curves on the GPU (`docs` §3.4).
+//! GPU 曲线渲染（参见 `docs/architecture/gpu-renderer.md`）。
 //!
-//! A curve reaches the GPU as three things: a primitive whose box is the
-//! **tight oriented** bounding rectangle of the segment, a transform that
-//! rotates that box into place, and a payload that carries the three control
-//! points in the box's own frame. The fragment shader then evaluates the
-//! analytic distance to the quadratic Bézier, so the stroke is exact even
-//! though the rasteriser only sees a rectangle.
+//! 曲线以三部分数据提交至 GPU：以线段**紧凑有向包围盒（OBB）**为边界的图元、
+//! 将该包围盒旋转到位的变换矩阵，以及在包围盒自身局部坐标系下存储三个控制点的载荷。
+//! 片元着色器随后计算到二次 Bézier 曲线的解析距离，因此即便光栅化器只看到矩形，
+//! 描边依然精确无误。
 
 use unbound_math::Vec2;
 use unbound_vector::CurveInstance;
@@ -14,28 +12,27 @@ use crate::data::{
     GpuPayload, GpuPrimitiveInstance, GpuTransform, PrimFlags, PrimType, SubElement, CLIP_NONE,
 };
 
-/// A curve, ready to be uploaded.
+/// 已就绪、可直接上传的曲线数据。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct CurveDraw {
-    /// The primitive: the bounding box of the segment.
+    /// 图元：曲线段的包围盒。
     pub primitive: GpuPrimitiveInstance,
-    /// The payload: the control points and the stroke width.
+    /// 载荷：控制点与描边宽度。
     pub payload: GpuPayload,
-    /// The transform: the rotation of the oriented box.
+    /// 变换：有向包围盒的旋转矩阵。
     ///
-    /// The translation is zero: the box is already anchored in the chunk.
+    /// 平移分量为零：包围盒已直接锚定在 chunk 内。
     pub transform: GpuTransform,
 }
 
 impl CurveDraw {
-    /// Build a curve draw call.
+    /// 构建单条曲线的绘制数据。
     ///
-    /// * `chunk_id` — the chunk the curve lives in. Pass `[i32::MAX; 2]` to
-    ///   derive the chunk from the geometry.
-    /// * `instance` — the segment, in world coordinates.
-    /// * `fill_token` — the theme token of the stroke.
-    /// * `line_width` — the stroke width in logical pixels.
-    /// * `z` — the depth of the curve.
+    /// * `chunk_id` — 曲线所属的 chunk；传入 `[i32::MAX; 2]` 时自动从几何坐标推导。
+    /// * `instance` — 世界坐标下的曲线段。
+    /// * `fill_token` — 描边的主题颜色令牌。
+    /// * `line_width` — 逻辑像素描边宽度。
+    /// * `z` — 曲线深度值。
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         chunk_id: [i32; 2],
@@ -44,7 +41,7 @@ impl CurveDraw {
         line_width: f32,
         z: u16,
     ) -> Self {
-        // The box lives in the chunk; its corner is the anchor.
+        // 包围盒位于 chunk 内，以其角点作为锚点。
         let world_origin = Vec2::new(instance.origin[0], instance.origin[1]);
         let (derived, local) = unbound_vector::to_chunk_local(world_origin);
         let primitive = GpuPrimitiveInstance {
@@ -85,10 +82,9 @@ impl CurveDraw {
     }
 }
 
-/// Split a cubic Bézier into GPU-ready curve draw calls.
+/// 将三次 Bézier 曲线拆分为可提交至 GPU 的二次曲线绘制列表。
 ///
-/// The control points must already be in world coordinates; the chunk is
-/// derived from them.
+/// 控制点须已处于世界坐标系；所属 chunk 将自动由控制点推导。
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn cubic_to_draws(

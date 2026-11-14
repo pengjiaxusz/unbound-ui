@@ -1,9 +1,9 @@
-//! Scroll-view integration: picking, scrollbar dragging and clip/transform.
+//! 滚动视图集成测试：拾取、滚动条拖拽与裁剪/变换。
 //!
-//! The scroll view is the one widget whose output is split: its own
-//! primitives (the scrollbars) are clipped by nothing, while every **child**
-//! primitive must use the emitted clip and transform. These tests install the
-//! real hit regions and assert both halves.
+//! 滚动视图是唯一输出被拆分的控件：其自身图元（滚动条）不受任何裁剪，
+//! 而所有**子**图元必须使用输出的裁剪与变换。本测试安装真实命中区域并断言这两部分。
+//!
+//!
 
 use unbound_headless::driver::TestApp;
 use unbound_input::Router;
@@ -54,7 +54,7 @@ fn the_scrollbar_thumb_is_pickable_and_draggable() {
     app.install(vec![thumb.clone()], unbound_a11y::Semantics::new(90));
     assert_eq!(app.click(thumb.bounds.center()).clicked(), Some(thumb.node));
 
-    // A press on the thumb starts the drag; moving down scrolls the content.
+    // 按下滑块开始拖拽；向下移动会滚动内容。
     let start = thumb.bounds.center().y;
     state.begin_drag(ScrollbarAxis::Vertical, start);
     state.drag_to(&desc, start + 40.0);
@@ -116,7 +116,7 @@ fn controls_inside_scroll_view_inherit_clip_and_transform() {
     state.jump_to(&desc, Vec2::new(0.0, 420.0));
     let scroll = emit_scroll_view(90, &desc, &state, tab());
 
-    // The visible button sits at content-space y = 460, the field at y = 100.
+    // 可见按钮位于内容空间 y = 460，输入框位于 y = 100。
     let button = ButtonWidget {
         node: 700,
         desc: ButtonDesc::new(Rect::new(20.0, 460.0, 120.0, 36.0), "Save"),
@@ -153,15 +153,15 @@ fn controls_inside_scroll_view_inherit_clip_and_transform() {
         );
     }
 
-    // The visible button is still pickable at its on-screen position.
+    // 可见按钮在其屏幕位置仍可被拾取。
     let visible = Vec2::new(80.0, 460.0 - 420.0 + 18.0);
     assert_eq!(
         unbound_input::pick(&collector.regions, visible).map(|region| region.node),
         Some(button.key())
     );
 
-    // The field scrolled above the viewport collapses to an empty region and
-    // can no longer be picked.
+    // 滚出视口上方的输入框会坍缩为空区域，无法再被拾取。
+    //
     let outside = Vec2::new(80.0, 100.0 - 420.0);
     assert_eq!(
         unbound_input::pick(&collector.regions, outside).map(|region| region.node),
@@ -203,15 +203,15 @@ fn scroll_into_view_targets_the_nearest_edge() {
     let desc = desc();
     let mut state = ScrollState::new();
 
-    // A child fully below the viewport: align its bottom with the viewport.
+    // 完全位于视口下方的子元素：使其底边与视口对齐。
     assert!(state.scroll_into_view(&desc, Rect::new(20.0, 460.0, 120.0, 36.0)));
     assert_eq!(state.target().y, 460.0 + 36.0 - desc.rect.height());
 
-    // A child fully above: align its top with the viewport.
+    // 完全位于视口上方的子元素：使其顶边与视口对齐。
     assert!(state.scroll_into_view(&desc, Rect::new(20.0, 50.0, 120.0, 36.0)));
     assert_eq!(state.target().y, 50.0);
 
-    // A child already visible: the target does not move.
+    // 已可见的子元素：目标不移动。
     assert!(!state.scroll_into_view(&desc, Rect::new(20.0, 100.0, 120.0, 20.0)));
     assert_eq!(state.target().y, 50.0);
 }
@@ -225,7 +225,7 @@ fn a_fling_projects_the_release_velocity_into_the_target() {
     assert_eq!(state.offset().y, 0.0, "only the target moves");
     assert!(state.is_animating());
 
-    // A hard fling stops exactly at the end of the content.
+    // 猛烈甩动最终精确停在内容末尾。
     state.fling(&desc, Vec2::new(0.0, 1_000_000.0));
     assert_eq!(state.target().y, desc.max_offset().y);
 

@@ -1,4 +1,4 @@
-//! Infinite Canvas: viewport, quadtree, marquee selection and history.
+//! 无限画布：视口、四叉树、框选与历史记录。
 
 use accesskit::Role;
 use unbound_canvas::{Axis, LooseQuadtree, SnapConfig, Snapper};
@@ -13,7 +13,7 @@ pub const VIEWPORT_INFO: PageInfo = PageInfo {
     short: "Viewport",
     description: "An unbounded world with a quadtree spatial index. Wheel to zoom, drag to pan; only intersecting chunks are submitted to the renderer.",
     crates: &["unbound-canvas", "unbound-canvas/src/quadtree.rs"],
-    docs: "docs/03-core/canvas.md",
+    docs: "docs/architecture/canvas-and-graph.md",
     keywords: "canvas viewport pan zoom quadtree cull infinite spatial index",
 };
 
@@ -22,7 +22,7 @@ pub const MARQUEE_INFO: PageInfo = PageInfo {
     short: "Marquee",
     description: "Drag on the stage to box-select. Smart guides snap to node edges and centres while the marquee is live.",
     crates: &["unbound-canvas/src/select.rs", "unbound-canvas/src/snap.rs"],
-    docs: "docs/03-core/canvas.md",
+    docs: "docs/architecture/canvas-and-graph.md",
     keywords: "marquee box selection snap guides align canvas",
 };
 
@@ -31,7 +31,7 @@ pub const UNDO_INFO: PageInfo = PageInfo {
     short: "History",
     description: "Every operation lands on a bounded history stack. The timeline shows the applied cursor and the labels attached to each command.",
     crates: &["unbound-canvas/src/undo.rs"],
-    docs: "docs/03-core/canvas.md",
+    docs: "docs/architecture/canvas-and-graph.md",
     keywords: "undo redo history stack timeline command",
 };
 
@@ -135,7 +135,7 @@ const fn node_color(index: usize) -> usize {
     index % 4
 }
 
-/// Pan / zoom / quadtree stage.
+/// 平移 / 缩放 / 四叉树舞台。
 pub fn viewport(ctx: &mut DemoCtx<'_, '_>, quadtree: bool) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
@@ -220,7 +220,7 @@ pub fn viewport(ctx: &mut DemoCtx<'_, '_>, quadtree: bool) {
         }
     }
 
-    // Populate the real LooseQuadtree in positive world coordinates (offset by +2048).
+    // 以正世界坐标（偏移 +2048）填充真实的 LooseQuadtree。
     const WORLD_HALF: f32 = 2048.0;
     let mut tree = LooseQuadtree::new(WORLD_HALF * 2.0);
     for (index, (_, wx, wy, ww, wh)) in WORLD_NODES.iter().enumerate() {
@@ -307,7 +307,7 @@ pub fn viewport(ctx: &mut DemoCtx<'_, '_>, quadtree: bool) {
     );
     ctx.canvas.end_clip();
     ctx.canvas.scroll_zone(rect, 2);
-    // Dragging the empty stage pans the viewport.
+    // 拖拽空白舞台可平移视口。
     ctx.control(1, rect, Role::Group, "Canvas viewport", false);
     widgets::badge(
         ctx.canvas,
@@ -318,7 +318,7 @@ pub fn viewport(ctx: &mut DemoCtx<'_, '_>, quadtree: bool) {
     );
 }
 
-/// Marquee selection and snapping guides.
+/// 框选与吸附参考线。
 pub fn marquee(ctx: &mut DemoCtx<'_, '_>, snapping: bool) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
@@ -464,7 +464,7 @@ pub fn marquee(ctx: &mut DemoCtx<'_, '_>, snapping: bool) {
     ctx.canvas.scroll_zone(rect, 3);
 }
 
-/// Undo / redo history.
+/// 撤销 / 重做历史记录。
 pub fn undo(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;

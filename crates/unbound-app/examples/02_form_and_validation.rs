@@ -1,9 +1,9 @@
-//! 02_form_and_validation: Enterprise Form Input & Real-time Validation.
+//! 02_form_and_validation：企业级表单输入与实时校验示例。
 //!
-//! Demonstrates:
-//! - Multi-field declarative form layout with [`ViewBuilder`].
-//! - Live text inputs, selects, switches, and checkboxes.
-//! - Reactive validation rules and status banners via [`AlertDesc`].
+//! 演示内容：
+//! - 使用 [`ViewBuilder`] 构建多字段声明式表单布局。
+//! - 实时文本输入、下拉选择、开关与复选框。
+//! - 响应式校验规则及通过 [`AlertDesc`] 展示的状态横幅。
 
 use unbound_app::prelude::*;
 use unbound_input::PointerButton;
@@ -123,7 +123,7 @@ pub fn run_headless_check() {
     let mut runtime = AppRuntime::new(FormApp, Vec2::new(800.0, 600.0));
     let _ = runtime.frame(0.0);
 
-    // 1. Submit without filling username: should trigger validation error
+    // 1. 未填写用户名直接提交：应触发校验错误
     let btn_rect = runtime
         .widget_rect(BTN_SUBMIT)
         .expect("Submit button mounted");
@@ -138,7 +138,7 @@ pub fn run_headless_check() {
         "Should show validation error when username is empty"
     );
 
-    // 2. Focus username input and type "Alice"
+    // 2. 聚焦用户名输入框并输入 "Alice"
     let txt_rect = runtime
         .widget_rect(FIELD_USERNAME)
         .expect("Username mounted");
@@ -148,7 +148,7 @@ pub fn run_headless_check() {
     let _ = runtime.pointer_up(txt_pos, PointerButton::Left);
     let _ = runtime.text("Alice");
 
-    // 3. Click agreement checkbox
+    // 3. 点击同意协议复选框
     let chk_rect = runtime
         .widget_rect(FIELD_AGREE)
         .expect("Agree checkbox mounted");
@@ -157,7 +157,7 @@ pub fn run_headless_check() {
     let _ = runtime.pointer_down(chk_pos, PointerButton::Left);
     let _ = runtime.pointer_up(chk_pos, PointerButton::Left);
 
-    // 4. Click Submit again
+    // 4. 再次点击提交按钮
     runtime.pointer_move(click_pos);
     let _ = runtime.pointer_down(click_pos, PointerButton::Left);
     let _ = runtime.pointer_up(click_pos, PointerButton::Left);

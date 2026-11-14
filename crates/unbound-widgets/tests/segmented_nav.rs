@@ -1,5 +1,5 @@
-//! Arrow-key navigation, per-slot widths and disabled slots of the segmented
-//! control.
+//! 分段控件的方向键导航、自定义槽位宽度与禁用槽位测试。
+//!
 
 use unbound_math::Rect;
 use unbound_widgets::segmented::{
@@ -31,9 +31,9 @@ fn the_thumb_interpolates_over_variable_widths() {
         .with_item_widths(vec![60.0, 90.0, 150.0])
         .with_thumb(1.5);
     let thumb = desc.thumb_rect();
-    // 60 + 90 * 0.5 + inset 2.
+    // 60 + 90 * 0.5 + 内边距 2。
     assert!((thumb.origin.x - 107.0).abs() < 0.01);
-    // 90 + 60 * 0.5 - 2 * inset.
+    // 90 + 60 * 0.5 - 2 * 内边距。
     assert!((thumb.size.x - 116.0).abs() < 0.01);
 }
 
@@ -47,7 +47,7 @@ fn arrow_keys_wrap_around_the_row() {
 
 #[test]
 fn arrow_keys_skip_disabled_slots() {
-    // Slot 1 is disabled.
+    // 槽位 1 已禁用。
     let desc = desc().with_disabled_mask(0b010);
     assert_eq!(reduce_segmented_key(&desc, 0, SegmentedKey::ArrowRight), 2);
     assert_eq!(reduce_segmented_key(&desc, 2, SegmentedKey::ArrowLeft), 0);

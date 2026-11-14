@@ -1,4 +1,4 @@
-//! Clipboard contract through the public API.
+//! 通过公共 API 测试剪贴板契约。
 
 use unbound_platform::{
     ClipboardError, ClipboardProvider, MemoryClipboard, SystemClipboard, MAX_CLIPBOARD_BYTES,

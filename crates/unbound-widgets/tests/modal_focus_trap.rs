@@ -1,9 +1,9 @@
-//! A modal traps the keyboard and swallows clicks aimed at the background.
+//! 模态框捕获键盘焦点并吞掉指向背景的点击测试。
 //!
-//! Both halves are exercised together because they are the same promise: while
-//! a dialog is open, the UI behind it is inert. The focus test drives the real
-//! [`FocusManager`]; the pointer test installs the real scrim hit region in a
-//! [`TestApp`] and clicks through it.
+//! 两部分一起测试，因为它们是同一个契约：对话框打开时，其后的界面必须处于非活动状态。
+//! 焦点测试驱动真实的 [`FocusManager`]；指针测试在 [`TestApp`] 中安装真实遮罩命中区域并穿透点击。
+//!
+//!
 
 use unbound_a11y::Semantics;
 use unbound_headless::driver::TestApp;
@@ -78,7 +78,7 @@ fn clicking_the_scrim_never_reaches_the_background_button() {
     let scrim = modal.scrim.clone();
     app.install(vec![button, scrim, card], Semantics::new(1));
 
-    // A point over the background button but outside the dialog card.
+    // 位于背景按钮上方但在对话框卡片之外的点。
     let report = app.click(Vec2::new(100.0, 40.0));
     assert_ne!(
         report.clicked(),

@@ -58,10 +58,9 @@ cargo test --workspace
 
 ## 架构与技术文档
 
-本项目遵循严格的架构先行与分层设计原则，完整设计规范与分卷文档详见：
+本项目遵循 `arch-align` 智能体原生架构规范，统一入口为：
 
-- **架构主索引**：[`docs/architecture/README.md`](docs/architecture/README.md)（权威规范与模块映射）
-- **主题域专卷**：[`docs/README.md`](docs/README.md)（含总览、图形底座、UI 范式、画布、输入、Agent 友好、工具链与量化红线）
+- **架构主索引**：[`docs/architecture/README.md`](docs/architecture/README.md)（权威规范、任务路由与模块地图）
 
 ---
 

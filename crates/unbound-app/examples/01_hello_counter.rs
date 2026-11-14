@@ -1,10 +1,10 @@
-//! 01_hello_counter: Minimal Hello World & Reactive Counter Application.
+//! 01_hello_counter：最小 Hello World 与响应式计数器示例。
 //!
-//! Demonstrates:
-//! - [`Application`] contract: `init`, `reduce`, `view`.
-//! - High-ergonomics declarative [`ViewBuilder`] with flex column and row.
-//! - Reactive buttons, badges, and runtime theme switching.
-//! - One-line window runner [`unbound_app::run_windowed`].
+//! 演示内容：
+//! - [`Application`] 契约：`init`、`reduce`、`view`。
+//! - 基于 flex 列与行布局的高易用性声明式 [`ViewBuilder`]。
+//! - 响应式按钮、徽章与运行时主题切换。
+//! - 单行窗口启动器 [`unbound_app::run_windowed`]。
 
 use unbound_app::prelude::*;
 use unbound_input::PointerButton;
@@ -99,7 +99,7 @@ pub fn run_headless_check() {
     );
     assert_eq!(runtime.state().count, 0);
 
-    // Simulate clicking Increment button
+    // 模拟点击 Increment 按钮
     let btn_rect = runtime
         .widget_rect(BTN_INCREMENT)
         .expect("Increment button mounted");

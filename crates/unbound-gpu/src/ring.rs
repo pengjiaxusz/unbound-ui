@@ -1,31 +1,27 @@
-//! Per-frame transient ring buffer (`docs` §2.2).
+//! 逐帧瞬态环形缓冲区（参见 `docs/architecture/gpu-renderer.md`）。
 //!
-//! Every frame owns one region of the ring. Because a frame's region is reset
-//! when that frame slot is reused, the CPU never allocates and never stalls on
-//! the GPU: it just bumps a cursor.
+//! 每帧独占环中的一段区域。当该帧槽位被复用时对应区域整体重置，
+//! 因此 CPU 无需动态分配，也不会因等待 GPU 而停顿：只需前移游标即可。
 //!
-//! Invariants:
-//! * an allocation never crosses a region boundary (so a frame can be reset
-//!   without disturbing its neighbours),
-//! * offsets are aligned to the requested alignment relative to ring byte 0,
-//!   which is itself aligned to the buffer's device alignment,
-//! * overflow is reported, never silently wrapped — silent wrap is how
-//!   "sometimes the UI flickers" bugs are born.
+//! 不变量：
+//! * 单次分配绝不跨越区域边界（从而重置某帧时不会干扰相邻帧）；
+//! * 偏移量相对于环字节 0 按请求对齐（环基址本身已满足设备对齐要求）；
+//! * 溢出时显式报错，绝不静默回绕——静默回绕正是“UI 偶发闪烁”类 bug 的根源。
 
-/// One frame slot inside the ring.
+/// 环内的单个帧槽位。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 struct Region {
-    /// Absolute ring offset where this slot begins.
+    /// 该槽位在环中的起始绝对偏移。
     start: u32,
-    /// Bytes granted to this slot.
+    /// 分配给该槽位的字节容量。
     len: u32,
-    /// Bump cursor, absolute ring offset.
+    /// 线性前移游标（环内绝对偏移）。
     cursor: u32,
-    /// Timeline value this slot was last used for.
+    /// 该槽位上次使用对应的时间线值。
     epoch: u64,
 }
 
-/// A rotating per-frame bump allocator.
+/// 轮转式逐帧线性分配器。
 #[derive(Debug)]
 pub struct TransientRing {
     regions: Vec<Region>,
@@ -33,16 +29,15 @@ pub struct TransientRing {
     frame_count: u32,
     high_water: u32,
     overflows: u64,
-    /// Total bytes handed out since construction (diagnostics only).
+    /// 自创建以来累计分配的总字节数（仅用于诊断）。
     total_allocated: u64,
 }
 
 impl TransientRing {
-    /// Split `capacity` bytes into `frames_in_flight` equal slots.
+    /// 将 `capacity` 字节均分为 `frames_in_flight` 个槽位。
     ///
     /// # Panics
-    /// Panics when `frames_in_flight == 0` or the capacity cannot give every
-    /// slot at least 256 bytes.
+    /// 当 `frames_in_flight == 0` 或总容量不足以给每个槽位分配至少 256 字节时触发 panic。
     #[must_use]
     pub fn new(capacity: u32, frames_in_flight: u32) -> Self {
         assert!(frames_in_flight > 0, "need at least one frame slot");
@@ -50,7 +45,7 @@ impl TransientRing {
             capacity / frames_in_flight >= 256,
             "ring too small: {capacity}B for {frames_in_flight} frames"
         );
-        // Round the slot size down to 256B so every slot start is 256-aligned.
+        // 将槽位大小向下取整至 256B 的倍数，确保每个槽位起始均满足 256B 对齐。
         let slot = (capacity / frames_in_flight) & !255;
         let mut regions = Vec::with_capacity(frames_in_flight as usize);
         for i in 0..frames_in_flight {
@@ -63,8 +58,7 @@ impl TransientRing {
         }
         Self {
             regions,
-            // Start one before the first slot so the first `begin_frame`
-            // advances *into* slot 0 and its epoch is recorded there.
+            // 初始索引设为首个槽位之前，使首次 `begin_frame` 恰好推进至槽位 0 并记录其 epoch。
             active: frames_in_flight as usize - 1,
             frame_count: frames_in_flight,
             high_water: 0,
@@ -73,47 +67,46 @@ impl TransientRing {
         }
     }
 
-    /// Bytes available to a single frame.
+    /// 单帧可用的字节容量。
     #[must_use]
     pub fn slot_capacity(&self) -> u32 {
         self.regions.first().map_or(0, |r| r.len)
     }
 
-    /// Number of frame slots.
+    /// 帧槽位数量。
     #[must_use]
     pub fn frames_in_flight(&self) -> u32 {
         self.frame_count
     }
 
-    /// Bytes used by the active slot.
+    /// 当前活跃槽位已使用的字节数。
     #[must_use]
     pub fn frame_used(&self) -> u32 {
         let r = &self.regions[self.active];
         r.cursor - r.start
     }
 
-    /// Peak usage of any slot since construction.
+    /// 自创建以来任意槽位的峰值使用字节数。
     #[must_use]
     pub fn high_water(&self) -> u32 {
         self.high_water
     }
 
-    /// Number of failed allocations (each one means a frame lost transient
-    /// data — the debug overlay shows this in red).
+    /// 分配失败次数（每次失败意味着某帧丢失了瞬态数据——调试覆盖层会标红显示）。
     #[must_use]
     pub fn overflows(&self) -> u64 {
         self.overflows
     }
 
-    /// Total bytes handed out (diagnostics).
+    /// 累计分配总字节数（诊断用）。
     #[must_use]
     pub fn total_allocated(&self) -> u64 {
         self.total_allocated
     }
 
-    /// Advance to the next frame slot and reset its cursor.
+    /// 推进到下一个帧槽位并重置其游标。
     ///
-    /// `epoch` is the timeline value the new frame will signal on completion.
+    /// `epoch` 为新帧完成时将触发的时间线值。
     pub fn begin_frame(&mut self, epoch: u64) {
         self.active = (self.active + 1) % self.regions.len();
         let r = &mut self.regions[self.active];
@@ -121,7 +114,7 @@ impl TransientRing {
         r.epoch = epoch;
     }
 
-    /// Reset every slot (device-lost recovery / resize).
+    /// 重置所有槽位（用于设备丢失恢复或窗口尺寸变更）。
     pub fn reset_all(&mut self) {
         for r in &mut self.regions {
             r.cursor = r.start;
@@ -130,10 +123,9 @@ impl TransientRing {
         self.high_water = 0;
     }
 
-    /// Allocate `size` bytes aligned to `align`, returning the ring offset.
+    /// 按 `align` 对齐分配 `size` 字节，返回环内偏移量。
     ///
-    /// Returns `None` when the current frame slot is exhausted. The caller may
-    /// grow the ring and retry, but must never assume a wrap happened.
+    /// 当当前帧槽位耗尽时返回 `None`。调用方可以扩容后重试，但绝不能假定发生回绕。
     pub fn allocate(&mut self, size: u32, align: u32) -> Option<u32> {
         debug_assert!(align.is_power_of_two());
         let r = &mut self.regions[self.active];
@@ -152,22 +144,21 @@ impl TransientRing {
         Some(aligned)
     }
 
-    /// Allocate a typed slice and copy `data` into the ring's staging view.
+    /// 分配类型化切片并将 `data` 拷贝到环的暂存视图中。
     ///
-    /// Returns `(offset, byte_len)`.
+    /// 返回 `(offset, byte_len)`。
     pub fn allocate_bytes(&mut self, data: &[u8], align: u32) -> Option<(u32, u32)> {
         let off = self.allocate(data.len() as u32, align)?;
         Some((off, data.len() as u32))
     }
 
-    /// Epoch recorded for the active slot.
+    /// 当前活跃槽位记录的 epoch。
     #[must_use]
     pub fn active_epoch(&self) -> u64 {
         self.regions[self.active].epoch
     }
 
-    /// Epoch of an arbitrary slot (used by the presentation path to know which
-    /// timeline value guards a region).
+    /// 获取指定槽位的 epoch（供呈现路径判断保护该区域的时间线值）。
     #[must_use]
     pub fn epoch_of(&self, slot: usize) -> Option<u64> {
         self.regions.get(slot).map(|r| r.epoch)
@@ -182,8 +173,7 @@ mod tests {
     fn slots_do_not_overlap() {
         let ring = TransientRing::new(3 * 1024, 3);
         assert_eq!(ring.slot_capacity(), 1024);
-        // Every slot start is 256-aligned so that 256B-aligned allocations in
-        // different frames never alias.
+        // 每个槽位起始均 256B 对齐，确保不同帧中的 256B 对齐分配互不混叠。
         for (i, region) in ring.regions.iter().enumerate() {
             assert_eq!(region.start % 256, 0);
             assert_eq!(region.start, i as u32 * 1024);
@@ -211,7 +201,7 @@ mod tests {
         }
         assert_eq!(count, 8);
         assert_eq!(ring.overflows(), 1);
-        // A failed allocation must not have moved the cursor.
+        // 分配失败时不得移动游标。
         assert_eq!(ring.frame_used(), 512);
     }
 
@@ -221,10 +211,10 @@ mod tests {
         assert!(ring.allocate(900, 16).is_some());
         assert!(ring.allocate(900, 16).is_none());
         ring.begin_frame(1);
-        // Second slot is empty.
+        // 第二个槽位为空。
         assert!(ring.allocate(900, 16).is_some());
         ring.begin_frame(2);
-        // Back to slot 0, which was reset by `begin_frame`.
+        // 回到槽位 0，其游标已被 `begin_frame` 重置。
         assert!(ring.allocate(900, 16).is_some());
         assert_eq!(ring.overflows(), 1);
     }
@@ -245,7 +235,7 @@ mod tests {
     fn allocation_cannot_cross_into_the_next_slot() {
         let mut ring = TransientRing::new(1024, 2);
         assert!(ring.allocate(512, 16).is_some());
-        // Slot 0 is exactly full; the next 16B must fail rather than spill.
+        // 槽位 0 已恰好填满；接下来的 16B 分配必须失败而非溢出。
         assert!(ring.allocate(16, 16).is_none());
     }
 

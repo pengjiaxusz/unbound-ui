@@ -1,9 +1,9 @@
-//! 09_headless_agent_testing: AI Agent Headless Inspection & Time-Travel Debugging.
+//! 09_headless_agent_testing：AI Agent 无头检查与时间旅行调试示例。
 //!
-//! Demonstrates:
-//! - Pure in-memory event simulation with zero GPU requirement.
-//! - Running the 5 geometry sanitizers (clipping, touch targets, contrast, overflow).
-//! - Fast 1ms regression testing for autonomous test agents and CI gates.
+//! 演示内容：
+//! - 零 GPU 依赖的纯内存事件仿真。
+//! - 运行五项几何检查器（裁剪、触控目标、对比度、溢出等）。
+//! - 面向自动化测试 Agent 与 CI 门禁的 1ms 级快速回归测试。
 
 use unbound_app::prelude::*;
 use unbound_math::Vec2;

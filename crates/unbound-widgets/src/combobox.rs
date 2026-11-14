@@ -1,11 +1,8 @@
-//! The combo box: a text trigger plus a filtered popup list.
+//! 组合框（ComboBox）：文本触发器加可过滤弹出列表。
 //!
-//! Typing filters the list instead of replacing it, which is what makes a
-//! combo box usable for long option sets; the currently highlighted row is
-//! preserved across filters when it survives, otherwise it falls back to the
-//! first match. `Enter` commits, `Escape` closes, and the popup is placed with
-//! the same anchored-placement helper every overlay uses, so it never leaves
-//! the viewport.
+//! 输入会过滤列表而非直接替换文本，这使组合框适用于长选项集；
+//! 若当前高亮行在过滤后仍存在则予以保留，否则回退到首条匹配项。
+//! `Enter` 确认提交，`Escape` 关闭，弹出列表使用与其他浮层相同的锚定定位助手，因此绝不会超出视口。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -21,19 +18,19 @@ use crate::switch::CONTROL_LAYER;
 use crate::text_input::TextEditState;
 use crate::{ControlState, WidgetOutput};
 
-/// One option.
+/// 单个选项。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComboItem {
-    /// The stable value handed back to the application.
+    /// 回传给应用程序的稳定值。
     pub value: String,
-    /// The text shown in the list and the trigger.
+    /// 列表与触发器中显示的文本。
     pub label: String,
-    /// The option cannot be picked.
+    /// 该选项是否不可选择。
     pub disabled: bool,
 }
 
 impl ComboItem {
-    /// A selectable option.
+    /// 创建可选择的选项。
     #[must_use]
     pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
@@ -43,7 +40,7 @@ impl ComboItem {
         }
     }
 
-    /// Mark the option as disabled.
+    /// 将选项标记为禁用。
     #[must_use]
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
@@ -51,34 +48,34 @@ impl ComboItem {
     }
 }
 
-/// The height of one popup row.
+/// 弹出列表单行高度。
 pub const COMBO_ROW: f32 = 28.0;
-/// The popup's vertical padding.
+/// 弹出列表垂直内边距。
 pub const COMBO_PADDING: f32 = 6.0;
-/// The trigger's corner radius.
+/// 触发器圆角半径。
 pub const COMBO_RADIUS: f32 = 8.0;
 
-/// The pure descriptor of a combo box.
+/// 组合框的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ComboboxDesc {
-    /// The trigger rectangle.
+    /// 触发器矩形。
     pub rect: Rect,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The placeholder shown while no option is chosen.
+    /// 未选中任何选项时显示的占位文本。
     pub placeholder: String,
-    /// Every option, in model order.
+    /// 按模型顺序排列的全部选项。
     pub items: Vec<ComboItem>,
-    /// How many rows the popup shows before it scrolls.
+    /// 弹出列表在滚动前最多显示的行数。
     pub max_visible: usize,
-    /// The trigger refuses interaction.
+    /// 触发器是否禁用交互。
     pub disabled: bool,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl ComboboxDesc {
-    /// A combo box over `items`.
+    /// 基于 `items` 创建组合框。
     #[must_use]
     pub fn new(rect: Rect, items: Vec<ComboItem>) -> Self {
         Self {
@@ -92,14 +89,14 @@ impl ComboboxDesc {
         }
     }
 
-    /// The popup size for the current option count.
+    /// 当前选项数量对应的弹出列表尺寸。
     #[must_use]
     pub fn popup_size(&self) -> Vec2 {
         let rows = self.items.len().min(self.max_visible.max(1)) as f32;
         Vec2::new(self.rect.size.x, rows * COMBO_ROW + COMBO_PADDING * 2.0)
     }
 
-    /// Place the popup under the trigger, clamped to `viewport`.
+    /// 将弹出列表置于触发器下方，并约束在 `viewport` 内。
     #[must_use]
     pub fn popup_rect(&self, viewport: Rect) -> Rect {
         let placed: PlacedPopup = place_anchored_popup(
@@ -112,7 +109,7 @@ impl ComboboxDesc {
     }
 }
 
-/// The keys the combo box consumes.
+/// 组合框消费的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComboboxKey {
     Down,
@@ -122,18 +119,18 @@ pub enum ComboboxKey {
     Tab,
 }
 
-/// What a key did.
+/// 按键处理结果。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ComboboxOutcome {
-    /// The key was consumed.
+    /// 按键已被消费。
     pub handled: bool,
-    /// The option index the application should adopt.
+    /// 应用程序应采用的选中选项索引。
     pub committed: Option<usize>,
-    /// The popup should close.
+    /// 弹出列表应关闭。
     pub closed: bool,
 }
 
-/// The live state of a combo box.
+/// 组合框的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ComboboxState {
     query: TextEditState,
@@ -144,7 +141,7 @@ pub struct ComboboxState {
 }
 
 impl ComboboxState {
-    /// An empty combo box with every option visible.
+    /// 创建空组合框，所有选项初始均可见。
     #[must_use]
     pub fn new(desc: &ComboboxDesc) -> Self {
         Self {
@@ -156,43 +153,43 @@ impl ComboboxState {
         }
     }
 
-    /// Whether the popup is open.
+    /// 弹出列表是否展开。
     #[must_use]
     pub fn is_open(&self) -> bool {
         self.open
     }
 
-    /// The filter text.
+    /// 当前过滤文本。
     #[must_use]
     pub fn query(&self) -> &str {
         self.query.text()
     }
 
-    /// The inline filter editor.
+    /// 行内过滤编辑器。
     #[must_use]
     pub fn editor(&self) -> &TextEditState {
         &self.query
     }
 
-    /// The options surviving the current filter, as model indices.
+    /// 通过当前过滤的选项（模型索引列表）。
     #[must_use]
     pub fn filtered(&self) -> &[usize] {
         &self.filtered
     }
 
-    /// The highlighted option, as a model index.
+    /// 当前高亮选项（模型索引）。
     #[must_use]
     pub fn highlighted(&self) -> Option<usize> {
         self.highlighted
     }
 
-    /// The committed option, as a model index.
+    /// 已提交选项（模型索引）。
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
         self.selected
     }
 
-    /// The committed value.
+    /// 已提交的值。
     #[must_use]
     pub fn selected_value<'a>(&self, desc: &'a ComboboxDesc) -> Option<&'a str> {
         self.selected
@@ -200,7 +197,7 @@ impl ComboboxState {
             .map(|item| item.value.as_str())
     }
 
-    /// The text shown by the trigger.
+    /// 触发器显示的文本。
     #[must_use]
     pub fn display_text(&self, desc: &ComboboxDesc) -> String {
         self.selected
@@ -209,12 +206,12 @@ impl ComboboxState {
             .unwrap_or_else(|| self.query.text().to_owned())
     }
 
-    /// Open or close the popup without changing the filter.
+    /// 切换弹出列表展开/关闭，不改变过滤文本。
     pub fn set_open(&mut self, open: bool) {
         self.open = open;
     }
 
-    /// Open the popup and reveal the committed option.
+    /// 打开弹出列表并定位到已提交选项。
     pub fn open(&mut self, desc: &ComboboxDesc) {
         self.open = true;
         self.filtered = (0..desc.items.len()).collect();
@@ -225,12 +222,12 @@ impl ComboboxState {
         });
     }
 
-    /// Close the popup.
+    /// 关闭弹出列表。
     pub fn close(&mut self) {
         self.open = false;
     }
 
-    /// Replace the filter text and refilter.
+    /// 替换过滤文本并重新过滤。
     pub fn set_query(&mut self, desc: &ComboboxDesc, text: impl Into<String>) {
         self.query = TextEditState::with_text(text);
         self.refilter_with(desc);
@@ -245,8 +242,7 @@ impl ComboboxState {
             .filter(|(_, item)| needle.is_empty() || item.label.to_lowercase().contains(&needle))
             .map(|(index, _)| index)
             .collect();
-        // Prefix matches sort first, then model order. A stable partition is
-        // enough: the list is small by definition of a combo box.
+        // 前缀匹配排在前面，随后保持模型顺序。对组合框而言列表规模有限，稳定分区已足够。
         matches.sort_by_key(|index| {
             let label = desc.items[*index].label.to_lowercase();
             (!label.starts_with(&needle), *index)
@@ -258,8 +254,7 @@ impl ComboboxState {
             .or_else(|| self.filtered.first().copied());
     }
 
-    /// Move the highlight by whole rows, skipping disabled options and
-    /// wrapping at the ends.
+    /// 按整行移动高亮，跳过禁用选项并在首尾循环。
     pub fn move_highlight(&mut self, desc: &ComboboxDesc, delta: isize) -> bool {
         if self.filtered.is_empty() {
             return false;
@@ -284,7 +279,7 @@ impl ComboboxState {
         false
     }
 
-    /// Commit the highlighted option.
+    /// 提交当前高亮的选项。
     pub fn accept(&mut self, desc: &ComboboxDesc) -> Option<usize> {
         let index = self.highlighted?;
         if desc.items.get(index).is_some_and(|item| item.disabled) {
@@ -296,7 +291,7 @@ impl ComboboxState {
         Some(index)
     }
 
-    /// Reduce a navigation key.
+    /// 归约导航按键。
     pub fn key(&mut self, desc: &ComboboxDesc, key: ComboboxKey) -> ComboboxOutcome {
         match key {
             ComboboxKey::Down => {
@@ -349,7 +344,7 @@ impl ComboboxState {
     }
 }
 
-/// Emit the trigger.
+/// 发射触发器。
 #[must_use]
 pub fn emit_combobox_trigger(
     node: u64,
@@ -386,7 +381,7 @@ pub fn emit_combobox_trigger(
         desc.z,
     ));
 
-    // A chevron drawn as two strokes, so no glyphs are needed for chrome.
+    // 使用两条描边绘制展开箭头，因此框架无需依赖字形。
     let cx = rect.max().x - 14.0;
     let cy = rect.center().y;
     for (dx, dy) in [(-4.0, -1.0), (4.0, 1.0)] {
@@ -444,7 +439,7 @@ pub fn emit_combobox_trigger(
     }
 }
 
-/// Emit the popup list. The caller owns the overlay entry; this only paints.
+/// 发射弹出列表。浮层条目由调用方持有；此处仅负责绘制。
 #[must_use]
 pub fn emit_combobox_popup(
     desc: &ComboboxDesc,

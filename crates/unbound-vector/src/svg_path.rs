@@ -1,4 +1,4 @@
-//! SVG Path (`M/L/H/V/C/S/Q/T/A/Z`) parser & quadratic Bézier reduction (S5.6).
+//! SVG Path（`M/L/H/V/C/S/Q/T/A/Z`）解析器与二次贝塞尔降阶（S5.6）。
 
 use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -7,44 +7,44 @@ use unbound_math::Vec2;
 
 use crate::{cubic_to_quads, QuadSegment};
 
-/// Error returned when an SVG path `d` attribute is malformed.
+/// SVG 路径 `d` 属性格式错误时返回的错误类型。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SvgPathError {
-    /// Byte offset near the syntax error.
+    /// 语法错误附近的字节偏移量。
     pub offset: usize,
-    /// Human-readable reason.
+    /// 人类可读的错误原因。
     pub message: &'static str,
 }
 
-/// A single closed or open subpath extracted from an SVG path.
+/// 从 SVG 路径中提取的单条闭合或开放子路径。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SvgSubpath {
-    /// Start index into [`SvgPath::segments`].
+    /// 在 [`SvgPath::segments`] 中的起始索引。
     pub start: usize,
-    /// Number of [`QuadSegment`]s in this subpath.
+    /// 该子路径包含的 [`QuadSegment`] 数量。
     pub len: usize,
-    /// Whether this subpath was closed with `Z`/`z`.
+    /// 该子路径是否由 `Z`/`z` 闭合。
     pub closed: bool,
 }
 
-/// Parsed and quadratic-reduced SVG path.
+/// 已解析并降阶为二次贝塞尔的 SVG 路径。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SvgPath {
-    /// Subpath slices inside [`Self::segments`].
+    /// [`Self::segments`] 中的子路径切片范围。
     pub subpaths: Vec<SvgSubpath>,
-    /// All quadratic Bézier segments in order.
+    /// 按顺序排列的所有二次贝塞尔线段。
     pub segments: Vec<QuadSegment>,
-    /// Axis-aligned `(min, max)` bounds of all control points.
+    /// 所有控制点的轴对齐 `(min, max)` 包围盒。
     pub bounds: (Vec2, Vec2),
 }
 
 impl SvgPath {
-    /// Parse an SVG `d` string and reduce all cubics/arcs to quadratics within `tolerance`.
+    /// 解析 SVG `d` 字符串，并在 `tolerance` 容差内将所有三次曲线/圆弧降阶为二次曲线。
     pub fn parse(d: &str, tolerance: f32) -> Result<Self, SvgPathError> {
         parse_svg_path(d, tolerance)
     }
 
-    /// Scale and translate all segments into a target rectangle preserving aspect ratio.
+    /// 在保持宽高比的前提下，将所有线段缩放并平移至目标矩形内。
     #[must_use]
     pub fn scaled_into(
         &self,
@@ -72,14 +72,14 @@ impl SvgPath {
     }
 }
 
-/// Simple cache keyed by `(d_string, quantised_tolerance)` for parsed [`SvgPath`]s.
+/// 以 `(d_string, quantised_tolerance)` 为键的简易 [`SvgPath`] 解析缓存。
 #[derive(Debug, Default)]
 pub struct SvgPathCache {
     entries: HashMap<(String, u32), SvgPath>,
 }
 
 impl SvgPathCache {
-    /// Parse `d` or return a previously cached [`SvgPath`].
+    /// 解析 `d` 或返回此前缓存的 [`SvgPath`]。
     pub fn get_or_parse(&mut self, d: &str, tolerance: f32) -> Result<&SvgPath, SvgPathError> {
         let key = (d.to_owned(), (tolerance.max(1e-4) * 1000.0).round() as u32);
         if let std::collections::hash_map::Entry::Vacant(e) = self.entries.entry(key.clone()) {
@@ -219,7 +219,7 @@ impl<'a> Scanner<'a> {
     }
 }
 
-/// Parse an SVG path `d` attribute into quadratic Bézier segments.
+/// 将 SVG 路径 `d` 属性解析为二次贝塞尔线段。
 pub fn parse_svg_path(d: &str, tolerance: f32) -> Result<SvgPath, SvgPathError> {
     let tol = tolerance.max(1e-3);
     let mut scan = Scanner::new(d);
@@ -249,7 +249,7 @@ pub fn parse_svg_path(d: &str, tolerance: f32) -> Result<SvgPath, SvgPathError> 
             scan.pos += 1;
             active_cmd = Some(cmd);
         } else if active_cmd.is_some() && scan.has_more_numbers() {
-            // Repeat previous command (except M/m becomes L/l).
+            // 重复上一条命令（M/m 除外，后续坐标转为 L/l）。
             if active_cmd == Some(b'M') {
                 active_cmd = Some(b'L');
             } else if active_cmd == Some(b'm') {
@@ -423,7 +423,7 @@ pub fn parse_svg_path(d: &str, tolerance: f32) -> Result<SvgPath, SvgPathError> 
     })
 }
 
-/// Convert an SVG elliptical arc to cubic Bézier segments and then to quadratics.
+/// 将 SVG 椭圆弧转换为三次贝塞尔线段，再降阶为二次贝塞尔线段。
 #[allow(clippy::too_many_arguments)]
 fn arc_to_quads(
     p0: Vec2,

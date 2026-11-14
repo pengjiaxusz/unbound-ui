@@ -1,4 +1,4 @@
-//! The streaming pipeline (`docs` §8.2).
+//! 流式加载管线（`docs` §8.2）。
 //!
 //! ```text
 //! [disk / network I/O] ──> [decode worker pool] ──> [CPU staging ring]
@@ -7,11 +7,11 @@
 //!                                          [GPU memory / bindless texture]
 //! ```
 //!
-//! The main thread only ever *enqueues* work. It never decodes, never copies
-//! a texture and never waits for a file: [`AssetPipeline::request`] is a
-//! channel send, and [`AssetPipeline::poll`] drains whatever the workers have
-//! finished. That is what keeps the frame time independent of the asset
-//! pipeline.
+//! 主线程只负责*入队*任务。它从不解码、从不拷贝纹理，也从不等待文件：
+//! [`AssetPipeline::request`] 仅执行通道发送，[`AssetPipeline::poll`] 则排空
+//! 工作线程已完成的结果。这正是帧耗时独立于资产管线的关键。
+//!
+//!
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 use std::sync::Arc;
@@ -20,17 +20,17 @@ use crate::decode::{Decoder, KindDecoder};
 use crate::ring::{StagingRef, StagingRing};
 use crate::transfer::{AssetError, AssetId, AssetKind, DecodedAsset};
 
-/// How the pipeline is set up.
+/// 管线配置参数。
 #[derive(Clone, Debug)]
 pub struct PipelineConfig {
-    /// Number of decode workers.
+    /// 解码工作线程数量。
     pub workers: usize,
-    /// Size of one staging slot in bytes.
+    /// 单个暂存槽位的字节大小。
     pub slot_bytes: usize,
-    /// Number of staging slots (frames in flight).
+    /// 暂存槽位数量（即并发在飞帧数）。
     pub frames: usize,
-    /// How many requests may be queued before [`AssetPipeline::request`]
-    /// starts refusing work.
+    /// 在 [`AssetPipeline::request`] 开始拒绝新任务前，
+    /// 允许排队的最大请求数。
     pub queue_capacity: usize,
 }
 
@@ -45,59 +45,59 @@ impl Default for PipelineConfig {
     }
 }
 
-/// A request handed to a worker.
+/// 派发给工作线程的解码请求。
 struct Job {
     id: AssetId,
     kind: AssetKind,
     bytes: Vec<u8>,
 }
 
-/// The result of a job.
+/// 单个解码任务的执行结果。
 #[derive(Clone, Debug)]
 pub struct Completed {
-    /// The asset the job belonged to.
+    /// 该任务所属的资产。
     pub id: AssetId,
-    /// The decoded payload, if the decode succeeded.
+    /// 解码成功时的载荷。
     pub asset: Option<DecodedAsset>,
-    /// Where the payload landed in the staging ring.
+    /// 载荷在暂存环中的落点位置。
     pub location: Option<StagingRef>,
-    /// The failure, if the decode failed.
+    /// 解码失败时的错误信息。
     pub error: Option<String>,
 }
 
 impl Completed {
-    /// True when the asset is ready to be transferred.
+    /// 当资产已就绪可传输时返回 true。
     #[must_use]
     pub const fn is_ready(&self) -> bool {
         self.asset.is_some() && self.location.is_some()
     }
 }
 
-/// The shared state of the workers.
+/// 工作线程间的共享状态。
 struct Shared {
     decoder: Box<dyn Decoder>,
     ring: StagingRing,
 }
 
-/// The asset streaming pipeline.
+/// 资产流式加载管线。
 pub struct AssetPipeline {
     jobs: Sender<Job>,
     done: Receiver<Completed>,
     shared: Arc<Shared>,
-    /// Number of jobs that have been enqueued but not yet reported.
+    /// 已入队但尚未上报结果的任务数量。
     inflight: usize,
-    /// The assets that failed, with the reason.
+    /// 解码失败的资产及其原因列表。
     failures: Vec<(AssetId, String)>,
 }
 
 impl AssetPipeline {
-    /// Start the pipeline with the default decoder.
+    /// 使用默认解码器启动管线。
     #[must_use]
     pub fn new(config: PipelineConfig) -> Self {
         Self::with_decoder(config, Box::new(KindDecoder::new()))
     }
 
-    /// Start the pipeline with a custom decoder.
+    /// 使用自定义解码器启动管线。
     #[must_use]
     pub fn with_decoder(config: PipelineConfig, decoder: Box<dyn Decoder>) -> Self {
         let (jobs, job_rx) = crossbeam_channel::bounded(config.queue_capacity.max(1));
@@ -113,8 +113,8 @@ impl AssetPipeline {
             let shared = Arc::clone(&shared);
             std::thread::spawn(move || worker_loop(job_rx, done_tx, shared));
         }
-        // The original receiver and sender are dropped so the workers see the
-        // channel close when the pipeline is dropped.
+        // 丢弃原始接收端与发送端，以便在管线被丢弃时
+        // 工作线程能感知到通道关闭。
         drop(job_rx);
         drop(done_tx);
         Self {
@@ -126,13 +126,13 @@ impl AssetPipeline {
         }
     }
 
-    /// Enqueue an asset for decoding.
+    /// 将资产加入解码队列。
     ///
-    /// This never blocks: when the queue is full the request is refused and
-    /// the caller can retry on the next frame.
+    /// 该方法永不阻塞：队列满时会直接拒绝请求，
+    /// 调用方可在下一帧重试。
     ///
     /// # Errors
-    /// Returns [`AssetError::QueueFull`] when the queue is saturated.
+    /// 当队列饱和时返回 [`AssetError::QueueFull`]。
     pub fn request(
         &mut self,
         id: AssetId,
@@ -149,10 +149,10 @@ impl AssetPipeline {
         }
     }
 
-    /// Drain the finished jobs.
+    /// 排空已完成的任务结果。
     ///
     /// # Errors
-    /// Returns [`AssetError::WorkerGone`] when every worker has died.
+    /// 当所有工作线程均已退出时返回 [`AssetError::WorkerGone`]。
     pub fn poll(&mut self) -> Result<Vec<Completed>, AssetError> {
         let mut out = Vec::new();
         loop {
@@ -176,13 +176,13 @@ impl AssetPipeline {
         Ok(out)
     }
 
-    /// Block until every outstanding job has been reported.
+    /// 阻塞直至所有未完成任务都已上报。
     ///
-    /// Only for tests and for a "wait for everything" shutdown path: the
-    /// render loop must never call this.
+    /// 仅用于测试及“等待全部完成”的关闭路径：渲染循环绝不可调用此方法。
+    ///
     ///
     /// # Errors
-    /// Returns [`AssetError::WorkerGone`] when a worker died.
+    /// 当工作线程退出时返回 [`AssetError::WorkerGone`]。
     pub fn drain(&mut self) -> Result<Vec<Completed>, AssetError> {
         let mut out = Vec::new();
         while self.inflight > 0 {
@@ -200,31 +200,31 @@ impl AssetPipeline {
         Ok(out)
     }
 
-    /// The staging ring the workers write into.
+    /// 工作线程写入的暂存环形缓冲区。
     #[must_use]
     pub fn staging(&self) -> &StagingRing {
         &self.shared.ring
     }
 
-    /// Number of jobs that have not been reported yet.
+    /// 尚未上报结果的任务数量。
     #[must_use]
     pub const fn inflight(&self) -> usize {
         self.inflight
     }
 
-    /// The assets that failed to decode.
+    /// 解码失败的资产列表。
     #[must_use]
     pub fn failures(&self) -> &[(AssetId, String)] {
         &self.failures
     }
 
-    /// Advance the staging ring to the next frame.
+    /// 将暂存环推进到下一帧。
     pub fn begin_frame(&self) {
         self.shared.ring.begin_frame();
     }
 }
 
-/// The worker loop.
+/// 工作线程主循环。
 fn worker_loop(jobs: Receiver<Job>, done: Sender<Completed>, shared: Arc<Shared>) {
     while let Ok(job) = jobs.recv() {
         let outcome = shared.decoder.decode(job.kind, &job.bytes);
@@ -246,7 +246,7 @@ fn worker_loop(jobs: Receiver<Job>, done: Sender<Completed>, shared: Arc<Shared>
             },
         };
         if done.send(completed).is_err() {
-            // The pipeline was dropped; stop working.
+            // 管线已被丢弃，停止工作。
             return;
         }
     }
@@ -257,8 +257,8 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    /// A decoder that burns a fixed amount of time, so the test can prove the
-    /// main thread does not wait for it.
+    /// 消耗固定时长的模拟解码器，用于测试证明主线程不会等待解码。
+    ///
     struct SlowDecoder {
         delay: Duration,
     }
@@ -319,8 +319,8 @@ mod tests {
                 .unwrap();
         }
         let elapsed = start.elapsed();
-        // Eight 40 ms decodes take 320 ms of work; enqueueing must not wait
-        // for any of it.
+        // 8 个 40 ms 的解码共需 320 ms；入队操作绝不能等待其中任何耗时。
+        //
         assert!(
             elapsed < Duration::from_millis(10),
             "enqueueing blocked for {elapsed:?}"
@@ -361,7 +361,7 @@ mod tests {
                 delay: Duration::from_millis(50),
             }),
         );
-        // The first request occupies the worker, the next two fill the queue.
+        // 第一个请求占用工作线程，后续两个请求填满队列。
         let mut refused = 0;
         for index in 0..16 {
             if pipeline

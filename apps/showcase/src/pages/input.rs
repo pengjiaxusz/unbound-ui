@@ -1,4 +1,4 @@
-//! Basic Input: buttons, selection controls, sliders and text fields.
+//! 基础输入：按钮、选择控件、滑块与文本输入框。
 
 use accesskit::Role;
 use unbound_math::Rect;
@@ -14,7 +14,7 @@ pub const BUTTONS_INFO: PageInfo = PageInfo {
     short: "Buttons",
     description: "Four visual weights with normal, hover, pressed, focused and disabled states. Press feedback is a real router hit, not a screenshot.",
     crates: &["unbound-input", "unbound-abi"],
-    docs: "docs/03-core/input.md",
+    docs: "docs/architecture/input-and-a11y.md",
     keywords: "button primary secondary subtle icon four states hover pressed focus disabled",
 };
 
@@ -23,7 +23,7 @@ pub const TOGGLES_INFO: PageInfo = PageInfo {
     short: "Selection",
     description: "Switch, checkbox, radio group and segmented pill. Every control shares the same stable identity and semantics contract.",
     crates: &["unbound-input", "unbound-a11y"],
-    docs: "docs/03-core/input.md",
+    docs: "docs/architecture/input-and-a11y.md",
     keywords: "toggle switch checkbox radio segmented selection control",
 };
 
@@ -32,7 +32,7 @@ pub const SLIDERS_INFO: PageInfo = PageInfo {
     short: "Sliders",
     description: "Continuous values with pointer capture, plus determinate and indeterminate progress driven by the animation clock.",
     crates: &["unbound-input", "unbound-anim"],
-    docs: "docs/03-core/input.md",
+    docs: "docs/architecture/input-and-a11y.md",
     keywords: "slider range progress bar indeterminate drag pointer",
 };
 
@@ -41,7 +41,7 @@ pub const TEXT_INFO: PageInfo = PageInfo {
     short: "Text field",
     description: "A focused text surface with caret blinking, drag selection and an IME candidate strip. Typing is handled by the shell's key reducer.",
     crates: &["unbound-text", "unbound-input"],
-    docs: "docs/03-core/text.md",
+    docs: "docs/architecture/vector-and-text.md",
     keywords: "text field input caret selection ime keyboard shaping",
 };
 
@@ -186,7 +186,7 @@ fn button_variant(index: usize) -> ButtonVariant {
     }
 }
 
-/// Button gallery. `icons` selects the icon-grid variant.
+/// 按钮展厅。`icons` 选择图标网格变体。
 pub fn buttons(ctx: &mut DemoCtx<'_, '_>, icons: bool) {
     if icons {
         icon_buttons(ctx);
@@ -363,7 +363,7 @@ fn icon_buttons(ctx: &mut DemoCtx<'_, '_>) {
     );
 }
 
-/// Selection controls.
+/// 选择控件。
 pub fn selection(ctx: &mut DemoCtx<'_, '_>, segmented: bool) {
     if segmented {
         segmented_page(ctx);
@@ -462,7 +462,7 @@ pub fn selection(ctx: &mut DemoCtx<'_, '_>, segmented: bool) {
         &pills,
         ctx.state.demo.pill_choice.min(2),
         disabled,
-        // The pill slides to its new slot instead of teleporting (`A-04`).
+        // 胶囊会滑动到新槽位，而不是瞬移（`A-04`）。
         Some(ctx.state.demo.pill_spring.value),
     );
     ctx.canvas.text(
@@ -537,7 +537,7 @@ fn segmented_page(ctx: &mut DemoCtx<'_, '_>) {
     );
 }
 
-/// Sliders and progress.
+/// 滑块与进度条。
 pub fn sliders(ctx: &mut DemoCtx<'_, '_>, progress: bool) {
     if progress {
         progress_bar(ctx);
@@ -641,8 +641,8 @@ fn progress_bar(ctx: &mut DemoCtx<'_, '_>) {
         AlignY::Center,
     );
 
-    // The bar and the ring are both painted by the genuine `emit_progress`,
-    // eased by the persistent `ProgressState` the shell ticks each frame.
+    // 进度条和圆环均由真实的 `emit_progress` 绘制，
+    // 并由外壳每帧推进的持久化 `ProgressState` 进行缓动。
     let mut bar = ProgressDesc::new(track).with_label("Upload");
     bar = if indeterminate {
         bar.indeterminate()
@@ -686,7 +686,7 @@ fn progress_bar(ctx: &mut DemoCtx<'_, '_>) {
     );
 }
 
-/// Text fields, selection and IME.
+/// 文本输入框、选区与 IME。
 pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
@@ -725,9 +725,9 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
     } else {
         ""
     };
-    // The composition is drawn as one run after the committed text, exactly
-    // where the caret is: the IME has shaped it already, so re-shaping it
-    // separately would hide the ligatures it just resolved.
+    // 组合文本作为单个运行段绘制在已提交文本之后，紧贴插入符位置：
+    // IME 已经完成了塑形，单独重新塑形会隐藏刚解析出的连字。
+    //
     let display = if preedit.is_empty() {
         ctx.state.demo.text.clone()
     } else {
@@ -743,12 +743,10 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
     } else {
         palette.text
     };
-    // Lay the run out once. The glyphs are painted after the selection band
-    // (which has to sit *under* the text), and the ink box is only used for
-    // the caret and the preedit underline — never as a line box. The old code
-    // fed the ink box back into `text()` with `AlignY::Top`, which shifted a
-    // second copy of the run a few pixels down and left, and that is the
-    // "double image" the screenshot shows.
+    // 仅布局一次运行段。字形在选区带之后绘制（选区带必须位于文字*下方*），
+    // 且墨水框仅用于插入符和预编辑下划线——绝不用作行框。
+    // 旧代码把墨水框传回带 `AlignY::Top` 的 `text()`，导致第二份副本
+    // 向下和向左偏移了几个像素，这正是截图中“重影”的原因。
     let (quads, ink) = ctx
         .canvas
         .layout_text(text, text_rect, 15.0, AlignX::Start, AlignY::Center);

@@ -1,36 +1,36 @@
-//! The clipboard abstraction (`docs` §6.3).
+//! 剪贴板抽象层（`docs` §6.3）。
 //!
-//! The clipboard is a platform service, so the policy half is separated from
-//! the OS half:
+//! 剪贴板属于平台服务，因此将策略层与系统实现层分离：
 //!
-//! * [`ClipboardProvider`] is the trait the editor talks to.
-//! * [`MemoryClipboard`] is the deterministic implementation used by tests and
-//!   headless runs.
-//! * [`SystemClipboard`] is the Windows implementation; on other platforms it
-//!   reports [`ClipboardError::Unavailable`] instead of silently doing nothing.
 //!
-//! Every read is capped at [`MAX_CLIPBOARD_BYTES`]. A paste must not be able to
-//! turn a hostile 2 GB clipboard payload into a 4 GB `String` before the
-//! application has a chance to reject it — the cap is checked before any large
-//! allocation, and the error says how much was refused.
+//! * [`ClipboardProvider`] 是编辑器交互的 trait。
+//! * [`MemoryClipboard`] 是测试与无头运行使用的确定性实现。
+//! * [`SystemClipboard`] 是 Windows 实现；在其他平台上返回
+//!   [`ClipboardError::Unavailable`] 而非静默无操作。
+//!
+//!
+//! 每次读取均受限于 [`MAX_CLIPBOARD_BYTES`]。粘贴操作绝不能在应用有机会
+//! 拒绝之前将恶意的 2 GB 剪贴板载荷变成 4 GB 的 `String`——上限检查在
+//! 任何大内存分配前执行，错误中会报告被拒绝的字节大小。
+//!
 
-/// The largest clipboard payload the engine will accept, in UTF-8 bytes.
+/// 引擎可接受的最大剪贴板载荷（以 UTF-8 字节计）。
 pub const MAX_CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
 
-/// Why a clipboard operation failed.
+/// 剪贴板操作失败原因。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipboardError {
-    /// No clipboard service is available (unsupported platform, or the
-    /// clipboard was locked by another process).
+    /// 剪贴板服务不可用（不支持的平台，或剪贴板被其他进程锁定）。
+    ///
     Unavailable,
-    /// The payload exceeds [`MAX_CLIPBOARD_BYTES`].
+    /// 载荷大小超出 [`MAX_CLIPBOARD_BYTES`]。
     TooLarge {
-        /// The size the clipboard reported.
+        /// 剪贴板报告的字节大小。
         bytes: usize,
-        /// The configured limit.
+        /// 配置的上限。
         limit: usize,
     },
-    /// The platform call failed for a reason worth surfacing.
+    /// 平台调用因需要上报的原因而失败。
     Os,
 }
 
@@ -48,19 +48,19 @@ impl core::fmt::Display for ClipboardError {
 
 impl std::error::Error for ClipboardError {}
 
-/// The clipboard contract used by text widgets and editors.
+/// 文本控件与编辑器使用的剪贴板契约。
 pub trait ClipboardProvider {
-    /// Read the clipboard as UTF-8 text. `Ok(None)` means "empty".
+    /// 以 UTF-8 文本形式读取剪贴板。`Ok(None)` 表示为空。
     fn read_text(&mut self) -> Result<Option<String>, ClipboardError>;
 
-    /// Replace the clipboard with `text`.
+    /// 将剪贴板内容替换为 `text`。
     fn write_text(&mut self, text: &str) -> Result<(), ClipboardError>;
 
-    /// Clear the clipboard.
+    /// 清空剪贴板。
     fn clear(&mut self) -> Result<(), ClipboardError>;
 }
 
-/// A deterministic in-memory clipboard.
+/// 确定性的内存剪贴板实现。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryClipboard {
     text: Option<String>,
@@ -86,29 +86,29 @@ impl MemoryClipboard {
         }
     }
 
-    /// Read copied file paths.
+    /// 读取已复制的文件路径列表。
     #[must_use]
     pub fn read_file_paths(&self) -> Vec<std::path::PathBuf> {
         self.files.clone()
     }
 
-    /// Set file paths in clipboard.
+    /// 在剪贴板中设置文件路径列表。
     pub fn write_file_paths(&mut self, paths: Vec<std::path::PathBuf>) {
         self.files = paths;
     }
 
-    /// Read copied RGBA image.
+    /// 读取已复制的 RGBA 图像。
     #[must_use]
     pub fn read_image_rgba(&self) -> Option<(u32, u32, Vec<u8>)> {
         self.image.clone()
     }
 
-    /// Set RGBA image in clipboard.
+    /// 在剪贴板中设置 RGBA 图像。
     pub fn write_image_rgba(&mut self, width: u32, height: u32, rgba: Vec<u8>) {
         self.image = Some((width, height, rgba));
     }
 
-    /// The same clipboard with a smaller byte budget (useful in tests).
+    /// 使用更小字节预算的同类内存剪贴板（便于测试）。
     #[must_use]
     pub fn with_limit(max_bytes: usize) -> Self {
         Self {
@@ -119,7 +119,7 @@ impl MemoryClipboard {
         }
     }
 
-    /// The clipboard contents, without going through the trait.
+    /// 不经由 trait 直接查看剪贴板内容。
     #[must_use]
     pub fn peek(&self) -> Option<&str> {
         self.text.as_deref()
@@ -148,7 +148,7 @@ impl ClipboardProvider for MemoryClipboard {
     }
 }
 
-/// The system clipboard.
+/// 系统剪贴板实现。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SystemClipboard {
     max_bytes: usize,
@@ -162,7 +162,7 @@ impl SystemClipboard {
         }
     }
 
-    /// Read file paths from clipboard (e.g. from File Explorer copy).
+    /// 从剪贴板读取文件路径列表（例如从文件资源管理器复制的文件）。
     pub fn read_file_paths(&self) -> Result<Vec<std::path::PathBuf>, ClipboardError> {
         #[cfg(windows)]
         {
@@ -174,7 +174,7 @@ impl SystemClipboard {
         }
     }
 
-    /// Read RGBA image from clipboard.
+    /// 从剪贴板读取 RGBA 图像。
     pub fn read_image_rgba(&self) -> Result<Option<(u32, u32, Vec<u8>)>, ClipboardError> {
         #[cfg(windows)]
         {
@@ -186,7 +186,7 @@ impl SystemClipboard {
         }
     }
 
-    /// Write RGBA image to clipboard.
+    /// 将 RGBA 图像写入剪贴板。
     pub fn write_image_rgba(
         &self,
         width: u32,
@@ -213,11 +213,11 @@ impl SystemClipboard {
     dead_code
 )]
 mod win32 {
-    //! Minimal Win32 clipboard bindings.
+    //! 最小化 Win32 剪贴板绑定。
     //!
-    //! The crate forbids unsafe operations inside `unsafe fn`; every FFI call
-    //! here is wrapped in an explicit `unsafe` block with the handle lifetime
-    //! constrained to the open/close window below.
+    //! 本 crate 禁止在 `unsafe fn` 内部执行 unsafe 操作；此处每处 FFI 调用均
+    //! 包裹在显式 `unsafe` 块中，且句柄生命周期严格受限于下方的打开/关闭作用域。
+    //!
 
     use core::ffi::c_void;
 
@@ -269,8 +269,8 @@ mod win32 {
     }
 
     pub(super) fn read(max_bytes: usize) -> Result<Option<String>, super::ClipboardError> {
-        // SAFETY: the clipboard is opened, read and closed inside this scope,
-        // and the pointer is only used while the clipboard owns it.
+        // SAFETY: 剪贴板在此作用域内打开、读取并关闭，指针仅在剪贴板持有
+        // 所有权期间使用。
         unsafe {
             if OpenClipboard(core::ptr::null_mut()) == 0 {
                 return Err(super::ClipboardError::Unavailable);
@@ -296,9 +296,9 @@ mod win32 {
                 return Err(super::ClipboardError::Os);
             }
             let units = units as usize;
-            // UTF-16 never needs more than 4 UTF-8 bytes per unit; check the
-            // worst case before decoding so an oversized paste is rejected
-            // without allocating.
+            // 每个 UTF-16 码元最多需要 4 个 UTF-8 字节；在解码前按最坏情况检查，
+            // 从而在不分配内存的情况下拒绝超大粘贴。
+            //
             if units.saturating_mul(4) > max_bytes {
                 let _ = GlobalUnlock(handle);
                 let _ = CloseClipboard();
@@ -328,8 +328,8 @@ mod win32 {
         }
         let wide: Vec<u16> = text.encode_utf16().chain(core::iter::once(0)).collect();
         let bytes = core::mem::size_of_val(wide.as_slice());
-        // SAFETY: the buffer is allocated and copied before ownership is
-        // transferred to the clipboard; the allocation is freed on failure.
+        // SAFETY: 在所有权移交剪贴板之前完成缓冲区分配与拷贝；失败时释放内存。
+        //
         unsafe {
             if OpenClipboard(core::ptr::null_mut()) == 0 {
                 return Err(super::ClipboardError::Unavailable);
@@ -605,8 +605,8 @@ mod tests {
     #[test]
     fn a_system_clipboard_is_constructed_with_the_default_limit() {
         let mut clipboard = SystemClipboard::new();
-        // Reading is allowed to fail on a headless / locked desktop; what must
-        // never happen is a panic or an unbounded allocation.
+        // 在无头或锁屏桌面上允许读取失败；绝对不能发生的是 panic 或无界内存分配。
+        //
         match clipboard.read_text() {
             Ok(Some(text)) => assert!(text.len() <= MAX_CLIPBOARD_BYTES),
             Ok(None) | Err(ClipboardError::Unavailable) | Err(ClipboardError::Os) => {}

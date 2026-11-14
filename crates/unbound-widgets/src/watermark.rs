@@ -1,4 +1,4 @@
-//! Watermark non-interactive tiled overlay layer.
+//! Watermark 非交互式平铺水印浮层。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -12,21 +12,21 @@ use crate::{ControlState, WidgetOutput};
 
 const WATERMARK_TILES: usize = 6;
 
-/// Descriptor for a [`Watermark`] overlay layer.
+/// [`Watermark`] 水印浮层的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct WatermarkDesc {
-    /// Area covered by the watermark.
+    /// 水印覆盖区域。
     pub rect: Rect,
-    /// Watermark text.
+    /// 水印文本。
     pub text: String,
-    /// Tile opacity (`0.0..=1.0`).
+    /// 平铺不透明度（`0.0..=1.0`）。
     pub opacity: f32,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl WatermarkDesc {
-    /// Create a watermark descriptor.
+    /// 创建水印描述符。
     #[must_use]
     pub fn new(rect: Rect, text: impl Into<String>) -> Self {
         Self {
@@ -38,7 +38,7 @@ impl WatermarkDesc {
     }
 }
 
-/// Emit a stable-shape watermark grid (6 low-opacity tiled stamps).
+/// 输出结构稳定的水印网格（6 个低不透明度平铺印记）。
 #[must_use]
 pub fn emit_watermark(
     desc: &WatermarkDesc,

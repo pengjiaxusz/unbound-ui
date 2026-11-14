@@ -1,16 +1,16 @@
-//! The frame plan: the size a frame is presented at, and what it uploads.
+//! 帧计划：帧的呈现尺寸以及它上传的内容。
 //!
-//! Two invariants live here, and both of them were violated in the field:
+//! 这里包含两条不变量，两者在实践中都曾被违反过：
 //!
-//! * The layout follows the **committed swapchain extent**, not the window
-//!   size. The driver decides how large the images are, and the image is what
-//!   the compositor shows; a layout built for the window size would leave a
-//!   blank band on the right/bottom or be cropped away.
-//! * A frame that was **dropped** (rebuilt, but never drawn) is repaired by a
-//!   **full** upload. The runtime moves its diff base on every rebuild, so
-//!   after a drop the pool is behind the base: patching the diff's slices
-//!   would repair the wrong bytes, and the next identical frame would report
-//!   "nothing changed" and upload nothing at all.
+//! * 布局跟随**已提交的 swapchain 范围（extent）**，而非窗口尺寸。
+//!   驱动决定图像大小，合成器显示的是图像；按窗口尺寸构建的布局会在右侧/底部
+//!   留下空白带或被裁剪掉。
+//!
+//! * **被丢弃**的帧（已重建但未绘制）通过**全量**上传来修复。
+//!   运行时每次重建都会推进 diff 基准，因此丢帧后缓冲池落后于基准：
+//!   若只修补 diff 切片会写错字节位置，且下一帧内容相同时会报告“无变化”并完全不上传。
+//!
+//!
 
 use unbound_app::AppRuntime;
 use unbound_math::Vec2;
@@ -24,29 +24,29 @@ fn runtime() -> AppRuntime<GalleryRuntime> {
     AppRuntime::new(GalleryRuntime::new(), Vec2::new(1280.0, 800.0))
 }
 
-/// The layout viewport is derived from the extent the frame is drawn at.
+/// 布局视口由帧实际绘制的范围推导。
 ///
-/// The chain answers with the driver's own size, which may differ from the
-/// requested one by a pixel. The page has to be laid out for the size the
-/// image actually has.
+/// 呈现链返回驱动自身的尺寸，可能与请求尺寸相差一像素。
+/// 页面必须按图像实际拥有的尺寸进行布局。
+///
 #[test]
 fn the_layout_follows_the_committed_extent() {
     let size = frame_size((1920, 1040), 1.0);
     assert_eq!(size.physical, (1920, 1040));
     assert_eq!(size.logical, (1920.0, 1040.0));
 
-    // A zoom divides the physical size: the layout shrinks, the frame does
-    // not.
+    // 缩放会除物理尺寸：布局缩小，帧尺寸不变。
+    //
     let zoomed = frame_size((1920, 1040), 2.0);
     assert_eq!(zoomed.physical, (1920, 1040));
     assert_eq!(zoomed.logical, (960.0, 520.0));
 }
 
-/// The window's request and the chain's actual extent are never compared.
+/// 窗口请求与呈现链的实际范围绝不互相比较。
 ///
-/// The driver clamps the chain to its own limits and reports its own view of
-/// the window, so the two can differ legitimately. Comparing them would
-/// rebuild the chain on every frame — and never converge.
+/// 驱动会将呈现链钳制到自身限制并上报其视角下的窗口尺寸，因此两者合法存在差异。
+/// 比较两者会导致每帧都重建呈现链——且永不收敛。
+///
 #[test]
 fn a_one_pixel_difference_does_not_rebuild_forever() {
     assert!(
@@ -63,12 +63,12 @@ fn a_one_pixel_difference_does_not_rebuild_forever() {
     );
 }
 
-/// A dropped frame is repaired by a full upload.
+/// 被丢弃的帧通过全量上传修复。
 ///
-/// The runtime's diff base moved on when the dropped frame was rebuilt, so
-/// the pool is behind it. The next upload has to carry the whole scene —
-/// a patch would repair the wrong slices, and the frame after that would
-/// report "identical" and upload nothing at all.
+/// 当被丢弃的帧重建时，运行时的 diff 基准已前移，因此缓冲池落后于它。
+/// 下一次上传必须携带整个场景——修补切片会写错位置，
+/// 再下一帧则会报告“完全相同”从而什么都不上传。
+///
 #[test]
 fn a_dropped_frame_is_repaired_by_a_full_upload() {
     let mut runtime = runtime();
@@ -79,8 +79,8 @@ fn a_dropped_frame_is_repaired_by_a_full_upload() {
         "the first frame has no predecessor"
     );
 
-    // The frame was rebuilt but never drawn: the runtime's base moved on,
-    // the GPU's pool did not.
+    // 帧已重建但未绘制：运行时的基准已前移，GPU 的缓冲池没有。
+    //
     runtime
         .application_mut()
         .shell_mut()
@@ -89,7 +89,7 @@ fn a_dropped_frame_is_repaired_by_a_full_upload() {
     let dropped = runtime.frame(0.0);
     assert_ne!(dropped.diff, SceneDiff::Identical);
 
-    // The next frame would be "identical" — the base already moved.
+    // 下一帧将显示为“完全相同”——基准已经移动过了。
     let next = runtime.frame(0.0);
     assert_eq!(
         next.diff,
@@ -97,8 +97,8 @@ fn a_dropped_frame_is_repaired_by_a_full_upload() {
         "the base moved on when the frame was rebuilt"
     );
 
-    // A patch here would leave the dropped frame's content on screen
-    // forever. The plan has to be a full upload.
+    // 此处若只修补切片，会把丢弃帧的内容永久留在屏幕上。
+    // 计划必须是全量上传。
     let plan = upload_plan(7, &next.diff, true);
     assert!(
         plan.ranges.is_empty(),
@@ -110,7 +110,7 @@ fn a_dropped_frame_is_repaired_by_a_full_upload() {
     );
 }
 
-/// A frame that reached the GPU keeps the cheap path.
+/// 成功到达 GPU 的帧保持低开销增量路径。
 #[test]
 fn an_uploaded_frame_keeps_its_patch() {
     let diff = SceneDiff::Ranges(vec![(3, 4)]);
@@ -119,8 +119,8 @@ fn an_uploaded_frame_keeps_its_patch() {
     assert_eq!(plan.generation, 7);
 }
 
-/// A shape change always moves the generation: the pool has to be rewritten
-/// from scratch.
+/// 形状变化总是推进代次：缓冲池必须从头重写。
+///
 #[test]
 fn a_shape_change_moves_the_generation() {
     let plan = upload_plan(7, &SceneDiff::Whole, false);
@@ -128,19 +128,19 @@ fn a_shape_change_moves_the_generation() {
     assert!(plan.ranges.is_empty());
 }
 
-/// The page reflows for the size the frame is drawn at.
+/// 页面按帧实际绘制的尺寸重新排版。
 ///
-/// The host hands the runtime the logical viewport derived from the
-/// committed extent; the page has to be laid out for *that* viewport, not
-/// for the window's.
+/// 宿主将从已提交范围推导出的逻辑视口交给运行时；
+/// 页面必须按*该*视口布局，而非按窗口视口。
+///
 #[test]
 fn the_page_reflows_for_the_presented_size() {
     let mut runtime = runtime();
     let _ = runtime.frame(0.0);
     let wide = runtime.application().shell().layout.content.size.x;
 
-    // The window was maximised: the chain now answers with a wider extent,
-    // and the logical viewport follows it.
+    // 窗口已最大化：呈现链现在返回更宽的范围，逻辑视口随之跟随。
+    //
     let presented = frame_size((2560, 1400), 1.0);
     runtime.resize(Vec2::new(presented.logical.0, presented.logical.1));
     let _ = runtime.frame(0.0);

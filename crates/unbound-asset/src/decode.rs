@@ -1,27 +1,27 @@
-//! Background decoders.
+//! 后台解码器。
 //!
-//! Decoding is the expensive part of loading an asset: a 4 K PNG takes
-//! milliseconds, a KTX2 transcode takes more. None of that may happen on the
-//! thread that draws the frame.
+//! 解码是资产加载中最耗时的部分：一张 4K PNG 需要数毫秒，KTX2 转码耗时更长。
+//! 这些操作绝不能在绘制帧的线程上执行。
 //!
-//! The [`Decoder`] trait is the seam: the pipeline knows nothing about PNGs,
-//! it only knows how to turn bytes into a [`DecodedAsset`].
+//!
+//! [`Decoder`] trait 是解耦边界：管线本身不了解 PNG 等格式细节，
+//! 只负责将字节流转换为 [`DecodedAsset`]。
 
 use crate::transfer::{AssetError, AssetKind, DecodedAsset};
 
-/// Turns raw bytes into a decoded asset.
+/// 将原始字节解码为资产载荷。
 pub trait Decoder: Send + Sync {
-    /// Decode one payload.
+    /// 解码单个载荷。
     ///
     /// # Errors
-    /// Returns a human-readable description when the payload is malformed.
+    /// 当载荷格式损坏时返回可读的错误描述。
     fn decode(&self, kind: AssetKind, bytes: &[u8]) -> Result<DecodedAsset, AssetError>;
 }
 
-/// A decoder that keeps the payload as it is.
+/// 原样保留载荷的解码器。
 ///
-/// Used for assets the application interprets itself, and as the fallback for
-/// an unknown kind.
+/// 用于由应用自行解释的资产，或作为未知类型的回退解码器。
+///
 #[derive(Copy, Clone, Debug, Default)]
 pub struct RawDecoder;
 
@@ -36,10 +36,10 @@ impl Decoder for RawDecoder {
     }
 }
 
-/// A decoder for PNG images.
+/// PNG 图像解码器。
 ///
-/// The output is always RGBA8, which is the format the bindless atlas
-/// expects.
+/// 输出始终为 RGBA8，这正是无绑定图集（bindless atlas）所期望的格式。
+///
 #[derive(Copy, Clone, Debug, Default)]
 pub struct PngDecoder;
 
@@ -55,8 +55,8 @@ impl Decoder for PngDecoder {
             .map_err(|error| AssetError::Decode(error.to_string()))?;
         let width = info.width;
         let height = info.height;
-        // Normalise every input to RGBA8: the atlas is a single format, and
-        // converting here keeps the shader free of per-format branches.
+        // 将所有输入归一化为 RGBA8：图集使用统一格式，
+        // 在此处完成转换可避免着色器中出现按格式分支。
         let rgba = match info.color_type {
             png::ColorType::Rgba => buffer[..info.buffer_size()].to_vec(),
             png::ColorType::Rgb => {
@@ -101,7 +101,7 @@ impl Decoder for PngDecoder {
     }
 }
 
-/// A decoder that dispatches on the asset kind.
+/// 按资产类型分发的组合解码器。
 pub struct KindDecoder {
     png: PngDecoder,
     raw: RawDecoder,
@@ -114,7 +114,7 @@ impl Default for KindDecoder {
 }
 
 impl KindDecoder {
-    /// Build the dispatcher.
+    /// 构建解码分发器。
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -137,7 +137,7 @@ impl Decoder for KindDecoder {
 mod tests {
     use super::*;
 
-    /// Build a tiny PNG in memory so the test needs no fixture file.
+    /// 在内存中构造一个极小的 PNG，使测试无需依赖外部夹具文件。
     fn tiny_png() -> Vec<u8> {
         let mut bytes = Vec::new();
         {

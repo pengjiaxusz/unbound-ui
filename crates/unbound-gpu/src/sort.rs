@@ -1,47 +1,46 @@
-//! 64-bit depth sort keys and the CPU reference implementation of the GPU
-//! OneSweep radix sort + indirect-command compaction (`docs` §6.3).
+//! 64 位深度排序键及 GPU OneSweep 基数排序 + 间接命令压缩的 CPU 参考实现
+//! （参见 `docs/architecture/gpu-renderer.md`）。
 //!
-//! The GPU does the real work; this module exists for three reasons:
+//! 实际计算在 GPU 上完成；保留本模块基于三个原因：
 //!
-//! 1. the bit layout lives in exactly one place, shared by the compute shader
-//!    and the tests,
-//! 2. a CPU reference lets unit tests assert the GPU output bit-for-bit,
-//! 3. [`build_indirect_runs`] documents precisely how sorted keys collapse into
-//!    the handful of `VkDrawIndirectCommand`s that the frame submits.
+//! 1. 将位布局集中定义在唯一位置，供计算着色器与测试共享；
+//! 2. 提供 CPU 参考实现，使单元测试可逐比特校验 GPU 输出；
+//! 3. [`build_indirect_runs`] 精确记录了排序后的键如何折叠为单帧提交的少量
+//!    `VkDrawIndirectCommand`。
 
 use crate::data::{DrawIndirectCommand, PassLayer, SubElement};
 
-/// Bit layout of the 64-bit key.
+/// 64 位排序键的位布局定义。
 pub mod bits {
-    /// 8-bit pass / portal layer.
+    /// 8 位 Pass / Portal 图层。
     pub const PASS_SHIFT: u32 = 56;
     pub const PASS_MASK: u64 = 0xff << PASS_SHIFT;
-    /// 16-bit render-graph barrier id.
+    /// 16 位渲染图屏障 ID。
     pub const BARRIER_SHIFT: u32 = 40;
     pub const BARRIER_MASK: u64 = 0xffff << BARRIER_SHIFT;
-    /// 4-bit pipeline variant.
+    /// 4 位管线变体。
     pub const VARIANT_SHIFT: u32 = 36;
     pub const VARIANT_MASK: u64 = 0xf << VARIANT_SHIFT;
-    /// 28-bit topological z-order (268 M layers).
+    /// 28 位拓扑 Z 序（约 2.68 亿层）。
     pub const Z_SHIFT: u32 = 8;
     pub const Z_MASK: u64 = 0x0fff_ffff << Z_SHIFT;
-    /// 8-bit sub-element order.
+    /// 8 位子元素顺序。
     pub const SUB_MASK: u64 = 0xff;
     pub const MAX_Z: u32 = 0x0fff_ffff;
     pub const MAX_BARRIER: u16 = 0xffff;
     pub const MAX_VARIANT: u8 = 0x0f;
 }
 
-/// A packed 64-bit depth key.
+/// 打包后的 64 位深度排序键。
 ///
-/// Sorting ascending yields strict back-to-front painter order *within* a pass
-/// layer, and pass/portal layers always sort above canvas layers.
+/// 升序排列可在同一 Pass 图层内得到严格由后向前的画家顺序，
+/// 且 Pass/Portal 图层始终排在画布图层之上。
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SortKey(pub u64);
 
 impl SortKey {
-    /// Build a key, clamping every field into its bit width.
+    /// 构建排序键，将各字段钳制到对应位宽内。
     #[must_use]
     pub const fn new(layer: u8, barrier: u16, variant: u8, z: u32, sub: u8) -> Self {
         let z = if z > bits::MAX_Z { bits::MAX_Z } else { z };
@@ -59,7 +58,7 @@ impl SortKey {
         )
     }
 
-    /// Build a key from a semantic layer and sub-element.
+    /// 根据语义图层与子元素类型构建排序键。
     #[must_use]
     pub const fn simple(layer: PassLayer, z: u32, sub: SubElement) -> Self {
         Self::new(layer as u8, 0, 0, z, sub as u8)
@@ -101,20 +100,20 @@ impl SortKey {
         (self.0 & bits::SUB_MASK) as u8
     }
 
-    /// Replace the z-order while keeping the other fields.
+    /// 替换 Z 序同时保留其余字段。
     #[must_use]
     pub const fn with_z(self, z: u32) -> Self {
         let z = if z > bits::MAX_Z { bits::MAX_Z } else { z };
         Self((self.0 & !bits::Z_MASK) | ((z as u64) << bits::Z_SHIFT))
     }
 
-    /// Replace the barrier id.
+    /// 替换屏障 ID。
     #[must_use]
     pub const fn with_barrier(self, barrier: u16) -> Self {
         Self((self.0 & !bits::BARRIER_MASK) | ((barrier as u64) << bits::BARRIER_SHIFT))
     }
 
-    /// The (layer, barrier, variant) triple that defines one indirect draw run.
+    /// 定义单个间接绘制批次的 `(layer, barrier, variant)` 三元组。
     #[inline]
     #[must_use]
     pub const fn run_id(self) -> u32 {
@@ -122,17 +121,15 @@ impl SortKey {
     }
 }
 
-/// CPU reference: LSD radix sort over 8-bit digits.
+/// CPU 参考实现：基于 8 位数字的 LSD 基数排序。
 ///
-/// Stable, O(8n), and allocation-bounded (one scratch vector). Used by tests to
-/// validate the GPU implementation and as the fallback when a device lacks
-/// `shaderInt64`.
+/// 稳定、复杂度 O(8n) 且分配有界（仅一个暂存向量）。供测试校验 GPU 实现，
+/// 并在设备不支持 `shaderInt64` 时作为回退路径。
 pub fn radix_sort_u64(keys: &mut [u64]) {
     radix_sort_by(keys, |k| *k);
 }
 
-/// Stable radix sort with a key extractor (lets callers sort `(key, payload)`
-/// pairs without a second indirection).
+/// 带键提取器的稳定基数排序（允许直接排序 `(key, payload)` 对而无需二次间接寻址）。
 pub fn radix_sort_by<T, F>(items: &mut [T], key_of: F)
 where
     T: Copy + Default,
@@ -150,7 +147,7 @@ where
             let digit = ((key_of(item) >> shift) & 0xff) as usize;
             counts[digit] += 1;
         }
-        // Early exit: a single non-empty bucket means this pass is a no-op.
+        // 提前退出：仅有一个非空桶说明本趟排序无需搬移数据。
         if counts.iter().filter(|c| **c > 0).count() == 1 {
             continue;
         }
@@ -170,11 +167,10 @@ where
     items.copy_from_slice(&src);
 }
 
-/// Collapse a sorted key array into contiguous indirect draw runs.
+/// 将已排序键数组折叠为连续的间接绘制批次。
 ///
-/// A run changes whenever the `(pass, barrier, variant)` triple changes — that
-/// is exactly where the render graph must insert a barrier or bind a different
-/// pipeline, so each run maps to one `vkCmdDrawIndirect` entry.
+/// 每当 `(pass, barrier, variant)` 三元组变化时即开启新批次——这正是渲染图
+/// 需要插入屏障或切换管线的位置，因此每个批次对应一条 `vkCmdDrawIndirect`。
 #[must_use]
 pub fn build_indirect_runs(keys: &[SortKey]) -> Vec<DrawIndirectCommand> {
     let mut runs: Vec<DrawIndirectCommand> = Vec::new();
@@ -195,7 +191,7 @@ pub fn build_indirect_runs(keys: &[SortKey]) -> Vec<DrawIndirectCommand> {
     runs
 }
 
-/// Total instances covered by a run list (sanity check for the compaction).
+/// 批次列表覆盖的实例总数（用于压缩结果合理性校验）。
 #[must_use]
 pub fn total_instances(runs: &[DrawIndirectCommand]) -> u32 {
     runs.iter().map(|r| r.instance_count).sum()
@@ -259,7 +255,7 @@ mod tests {
         let overlay = SortKey::simple(PassLayer::Overlay, 1, SubElement::Background);
         assert!(behind < front);
         assert!(front < overlay, "portals always paint above the UI layer");
-        // Within one element, shadow < background < content < border.
+        // 同一元素内部顺序：阴影 < 背景 < 内容 < 边框。
         let shadow = SortKey::simple(PassLayer::Ui, 10, SubElement::Shadow);
         let border = SortKey::simple(PassLayer::Ui, 10, SubElement::Border);
         assert!(shadow < behind);
@@ -333,7 +329,7 @@ mod tests {
     #[test]
     fn indirect_runs_cover_every_instance_exactly_once() {
         let mut keys: Vec<SortKey> = Vec::new();
-        // Three UI panels, each with 100 primitives, plus 50 overlay items.
+        // 3 个 UI 面板（各含 100 个图元）外加 50 个浮层项。
         for panel in 0..3u32 {
             for i in 0..100u32 {
                 keys.push(SortKey::simple(

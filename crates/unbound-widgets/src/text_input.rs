@@ -1,24 +1,24 @@
-//! The single-line text input: descriptor, edit state, reducer and emitter.
+//! 单行文本输入框：描述符、编辑状态、归约器与输出器。
 //!
-//! The component is split along the same seams every other control uses:
+//! 该组件按其余控件相同的边界拆分：
 //!
-//! * [`TextInputDesc`] is pure data — geometry, policy and nothing mutable.
-//! * [`TextEditState`] owns the UTF-8 buffer, the cursor, the selection and
-//!   the undo/redo stacks. It never needs a font or a GPU.
-//! * [`reduce_text_input`] is a pure state evolution over [`TextInputEvent`].
-//!   It is where every UTF-8 boundary rule lives: the cursor can only land on
-//!   a `char` boundary, so backspacing a CJK ideograph or an emoji removes the
-//!   whole scalar value instead of panicking on a split code point.
-//! * [`emit_text_input`] turns `(descriptor, state, edit state, measured text
-//!   layout)` into primitives, a hit region and a semantic node.
+//! * [`TextInputDesc`] 为纯数据——仅含几何与策略，不含任何可变状态。
+//! * [`TextEditState`] 持有 UTF-8 缓冲区、光标、选区与撤销/重做栈。完全不依赖字体或 GPU。
 //!
-//! The emitter always writes the same primitive slots — background, border,
-//! selection, caret, focus ring — whether or not there is a selection or
-//! focus. Selection and caret use an opacity of `0.0` when absent, so typing
-//! one character repaints one slot instead of reshaping the whole pool.
+//! * [`reduce_text_input`] 是针对 [`TextInputEvent`] 的纯状态演化函数。
+//!   所有 UTF-8 边界规则均驻留于此：光标只能落在 `char` 边界上，
+//!   因此退格删除中日韩汉字或 Emoji 时会移除整个标量值，而不会因拆分码点而 panic。
 //!
-//! The measured caret / selection rectangles come from the caller: the text
-//! engine knows the shaped advance widths, this crate deliberately does not.
+//! * [`emit_text_input`] 将 `(描述符, 状态, 编辑状态, 已测量文本布局)` 转换为图元、命中区域与语义节点。
+//!
+//!
+//! 无论是否存在选区或焦点，输出器始终写入相同的图元槽位——背景、边框、选区、光标、焦点环。
+//! 缺席时选区与光标使用 `0.0` 不透明度，因此输入单个字符只需重绘一个槽位而无需重建整个图元池。
+//!
+//!
+//!
+//! 已测量的光标/选区矩形由调用方提供：文本引擎了解塑形步进宽度，而本 crate 故意不耦合这些细节。
+//!
 
 use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yNode};
@@ -31,85 +31,83 @@ use unbound_theme::Token;
 use crate::primitive::{focus_ring, outlined, surface};
 use crate::{ControlState, WidgetDesc, WidgetOutput};
 
-/// The UI layer a text input's hit region lives in.
+/// 文本输入框命中区域所在的界面层。
 pub const TEXT_INPUT_LAYER: u8 = 1;
-/// The default font size.
+/// 默认字号。
 pub const TEXT_INPUT_FONT_SIZE: f32 = 14.0;
-/// The default corner radius.
+/// 默认圆角半径。
 pub const TEXT_INPUT_RADIUS: f32 = 8.0;
-/// Horizontal padding between the border and the text.
+/// 边框与文本之间的水平内边距。
 pub const TEXT_INPUT_PADDING: f32 = 10.0;
-/// How far the focus ring grows outside the input.
+/// 焦点环向输入框外侧延伸的距离。
 const FOCUS_RING_GAP: f32 = 3.0;
 
-/// A user action the text input understands.
+/// 文本输入框可识别的用户操作。
 ///
-/// Copy and cut are not performed by the widget: they return the text to copy
-/// in [`TextInputOutcome`], and the application talks to the platform
-/// clipboard. Paste is the mirror image: the application reads the clipboard
-/// and sends [`TextInputEvent::Paste`].
+/// 复制与剪切不由控件直接执行：它们在 [`TextInputOutcome`] 中返回待复制文本，
+/// 由应用程序与平台剪贴板交互。粘贴则相反：由应用程序读取剪贴板后发送 [`TextInputEvent::Paste`]。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextInputEvent {
-    /// Insert text at the cursor (typed characters, IME commit, paste).
+    /// 在光标处插入文本（键入字符、输入法提交、粘贴）。
     Insert(String),
-    /// Delete the selection, or the code point before the cursor.
+    /// 删除选区，或光标前的一个码点。
     Backspace,
-    /// Delete the selection, or the code point after the cursor.
+    /// 删除选区，或光标后的一个码点。
     Delete,
-    /// Move one code point left.
+    /// 向左移动一个码点。
     MoveLeft { extend: bool },
-    /// Move one code point right.
+    /// 向右移动一个码点。
     MoveRight { extend: bool },
-    /// Move one word left (`Ctrl+Left`).
+    /// 向左移动一个单词（`Ctrl+Left`）。
     MoveWordLeft { extend: bool },
-    /// Move one word right (`Ctrl+Right`).
+    /// 向右移动一个单词（`Ctrl+Right`）。
     MoveWordRight { extend: bool },
-    /// Delete the word before the caret (`Ctrl+Backspace`).
+    /// 删除光标前的单词（`Ctrl+Backspace`）。
     DeleteWordBack,
-    /// Delete the word after the caret (`Ctrl+Delete`).
+    /// 删除光标后的单词（`Ctrl+Delete`）。
     DeleteWordForward,
-    /// Move to the start of the text.
+    /// 移动到文本开头。
     Home { extend: bool },
-    /// Move to the end of the text.
+    /// 移动到文本末尾。
     End { extend: bool },
-    /// `Ctrl+A`.
+    /// `Ctrl+A` 全选。
     SelectAll,
-    /// `Ctrl+C`.
+    /// `Ctrl+C` 复制。
     Copy,
-    /// `Ctrl+X`.
+    /// `Ctrl+X` 剪切。
     Cut,
-    /// `Ctrl+V`, after the application read the clipboard.
+    /// `Ctrl+V` 粘贴（应用程序读取剪贴板后发送）。
     Paste(String),
-    /// `Ctrl+Z`.
+    /// `Ctrl+Z` 撤销。
     Undo,
-    /// `Ctrl+Shift+Z` / `Ctrl+Y`.
+    /// `Ctrl+Shift+Z` / `Ctrl+Y` 重做。
     Redo,
-    /// The pointer went down at a byte offset.
+    /// 指针在某字节偏移处按下。
     PointerDown { offset: usize },
-    /// The pointer moved while held, extending the selection.
+    /// 按住指针移动，扩展选区。
     PointerDrag { offset: usize },
-    /// The pointer was released.
+    /// 指针释放。
     PointerUp,
-    /// A double click selected a word around a byte offset.
+    /// 双击选中字节偏移周围的单词。
     DoubleClick { offset: usize },
-    /// A triple click selected the whole line (the whole buffer here).
+    /// 三击选中整行（此处为整个缓冲区）。
     TripleClick,
-    /// IME pre-edit text occupies `start..end` so it can be replaced on commit.
+    /// 输入法预编辑文本占用 `start..end`，以便提交时替换。
     ImePreedit { start: usize, end: usize },
-    /// The composition ended; `text` replaces the pre-edit range.
+    /// 组合输入结束；`text` 替换预编辑区间。
     ImeCommit { text: String },
 }
 
-/// What one reduction produced.
+/// 单次归约的输出结果。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TextInputOutcome {
-    /// The edit buffer or selection changed.
+    /// 编辑缓冲区或选区是否发生变化。
     pub changed: bool,
-    /// Text the application must put on the clipboard (`Ctrl+C`).
+    /// 应用程序必须写入剪贴板的文本（`Ctrl+C`）。
     pub copied: Option<String>,
-    /// Text the application must put on the clipboard and forget (`Ctrl+X`).
+    /// 应用程序必须写入剪贴板并从缓冲区移除的文本（`Ctrl+X`）。
     pub cut: Option<String>,
-    /// The application should read the clipboard and send [`TextInputEvent::Paste`].
+    /// 应用程序应读取剪贴板并发送 [`TextInputEvent::Paste`]。
     pub paste_requested: bool,
 }
 
@@ -122,49 +120,49 @@ impl TextInputOutcome {
     }
 }
 
-/// How the field's contents validate.
+/// 输入框内容的校验状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ValidationState {
-    /// No validation message.
+    /// 无校验消息。
     #[default]
     None,
-    /// The contents are invalid.
+    /// 内容无效。
     Error,
-    /// The contents deserve a warning but are accepted.
+    /// 内容需警告但仍可接受。
     Warning,
 }
 
-/// A single-line text field's pure descriptor.
+/// 单行文本输入框的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextInputDesc {
-    /// The field rectangle.
+    /// 输入框矩形。
     pub rect: Rect,
-    /// The accessible label (falls back to the placeholder when empty).
+    /// 无障碍标签（为空时回退到占位文本）。
     pub label: String,
-    /// The placeholder shown while the buffer is empty.
+    /// 缓冲区为空时显示的占位文本。
     pub placeholder: String,
-    /// The field refuses interaction and focus.
+    /// 禁用交互与聚焦。
     pub disabled: bool,
-    /// The text can be selected and copied but not edited.
+    /// 文本可选中与复制，但不可编辑。
     pub read_only: bool,
-    /// The characters are masked and Copy/Cut are refused.
+    /// 掩码隐藏字符，且拒绝复制/剪切。
     pub password: bool,
-    /// The validation state; it drives the border colour.
+    /// 校验状态，驱动边框颜色。
     pub validation: ValidationState,
-    /// The field shows a clear affordance when it is not empty.
+    /// 非空时显示清除按钮。
     pub clearable: bool,
-    /// The maximum buffer length in bytes.
+    /// 缓冲区最大字节长度。
     pub max_bytes: usize,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
-    /// The corner radius.
+    /// 圆角半径。
     pub radius: f32,
-    /// The font size (used by the caller when shaping).
+    /// 字号（供调用方塑形时使用）。
     pub font_size: f32,
 }
 
 impl TextInputDesc {
-    /// A field with the default metrics.
+    /// 使用默认尺寸创建的输入框。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -183,66 +181,65 @@ impl TextInputDesc {
         }
     }
 
-    /// The same field with a placeholder.
+    /// 设置占位文本。
     #[must_use]
     pub fn with_placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self
     }
 
-    /// The same field with an accessible label.
+    /// 设置无障碍标签。
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
     }
 
-    /// The same field, disabled.
+    /// 设置为禁用状态。
     #[must_use]
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
 
-    /// The same field, read-only.
+    /// 设置为只读状态。
     #[must_use]
     pub fn read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
         self
     }
 
-    /// The same field, masking its contents.
+    /// 设置为密码掩码模式。
     #[must_use]
     pub fn password(mut self, password: bool) -> Self {
         self.password = password;
         self
     }
 
-    /// The same field in `validation`.
+    /// 设置校验状态。
     #[must_use]
     pub fn with_validation(mut self, validation: ValidationState) -> Self {
         self.validation = validation;
         self
     }
 
-    /// The same field with a clear affordance.
+    /// 启用清除按钮。
     #[must_use]
     pub fn clearable(mut self, clearable: bool) -> Self {
         self.clearable = clearable;
         self
     }
 
-    /// The same field with a byte budget.
+    /// 设置最大字节预算。
     #[must_use]
     pub fn max_bytes(mut self, max_bytes: usize) -> Self {
         self.max_bytes = max_bytes;
         self
     }
 
-    /// The text to shape and paint.
+    /// 待塑形与绘制的文本。
     ///
-    /// A password field replaces every scalar value with `•`; the caller shapes
-    /// the result instead of [`TextEditState::text`].
+    /// 密码框会将每个标量值替换为 `•`；调用方应塑形此返回值而非 [`TextEditState::text`]。
     #[must_use]
     pub fn display_text(&self, text: &str) -> String {
         if self.password {
@@ -252,7 +249,7 @@ impl TextInputDesc {
         }
     }
 
-    /// The clear affordance, centred inside the trailing padding.
+    /// 位于尾部内边距内居中的清除按钮矩形。
     #[must_use]
     pub fn clear_rect(&self) -> Rect {
         const SIZE: f32 = 16.0;
@@ -277,7 +274,7 @@ impl TextInputDesc {
     }
 }
 
-/// One undo checkpoint.
+/// 单个撤销检查点。
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Snapshot {
     text: String,
@@ -285,11 +282,10 @@ struct Snapshot {
     anchor: usize,
 }
 
-/// The editable state of one text input.
+/// 单个文本输入框的可编辑状态。
 ///
-/// Cursors and anchors are **byte offsets** into [`Self::text`], always on a
-/// UTF-8 boundary. The pair `(anchor, cursor)` is the selection: equal values
-/// mean "no selection".
+/// 光标与锚点均是进入 [`Self::text`] 的**字节偏移**，且始终位于 UTF-8 边界上。
+/// 二元组 `(anchor, cursor)` 表示选区：两者相等表示“无选区”。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextEditState {
     text: String,
@@ -299,20 +295,20 @@ pub struct TextEditState {
     preedit: Option<(usize, usize)>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
-    /// Consecutive typing merges into one undo step.
+    /// 连续键入合并为单次撤销步骤。
     coalescing: bool,
-    /// The anchor a pointer drag extends from.
+    /// 指针拖拽扩展选区所基于的锚点。
     drag_anchor: Option<usize>,
 }
 
 impl TextEditState {
-    /// An empty field.
+    /// 创建空输入框状态。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// A field initialised with text; the caret sits at the end.
+    /// 创建预填文本的输入框状态，光标位于末尾。
     #[must_use]
     pub fn with_text(text: impl Into<String>) -> Self {
         let text = text.into();
@@ -325,43 +321,43 @@ impl TextEditState {
         }
     }
 
-    /// The buffer.
+    /// 文本缓冲区引用。
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
     }
 
-    /// The caret byte offset.
+    /// 光标字节偏移量。
     #[must_use]
     pub const fn cursor(&self) -> usize {
         self.cursor
     }
 
-    /// The selection anchor byte offset.
+    /// 选区锚点字节偏移量。
     #[must_use]
     pub const fn anchor(&self) -> usize {
         self.anchor
     }
 
-    /// The horizontal scroll offset, in logical pixels.
+    /// 水平滚动偏移量（逻辑像素）。
     #[must_use]
     pub const fn scroll_x(&self) -> f32 {
         self.scroll_x
     }
 
-    /// The pre-edit range, if an IME composition is active.
+    /// 若输入法组合输入激活，返回预编辑字节区间。
     #[must_use]
     pub const fn preedit(&self) -> Option<(usize, usize)> {
         self.preedit
     }
 
-    /// Whether the field has a non-empty selection.
+    /// 输入框是否存在非空选区。
     #[must_use]
     pub fn has_selection(&self) -> bool {
         self.cursor != self.anchor
     }
 
-    /// The selection as a sorted `(start, end)` byte range.
+    /// 排序后的 `(start, end)` 选区字节区间。
     #[must_use]
     pub fn selection(&self) -> Option<(usize, usize)> {
         if !self.has_selection() {
@@ -370,29 +366,28 @@ impl TextEditState {
         Some((self.cursor.min(self.anchor), self.cursor.max(self.anchor)))
     }
 
-    /// The selected text.
+    /// 当前选中的文本。
     #[must_use]
     pub fn selected_text(&self) -> Option<&str> {
         let (start, end) = self.selection()?;
         self.text.get(start..end)
     }
 
-    /// Replace the whole buffer and put the caret at the end.
+    /// 替换整个缓冲区并将光标置于末尾。
     pub fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
         self.normalize();
     }
 
-    /// Set the horizontal scroll offset, clamped to non-negative values.
+    /// 设置水平滚动偏移量，夹紧至非负值。
     pub fn set_scroll_x(&mut self, scroll_x: f32) {
         self.scroll_x = scroll_x.max(0.0);
     }
 
-    /// Scroll just enough that the caret lies inside the visible window.
+    /// 滚动最小距离使光标落入可见窗口内。
     ///
-    /// `caret_x` is the caret's position in the text's own (unscrolled)
-    /// coordinate space; the caret is kept inside
-    /// `[scroll_x, scroll_x + viewport_width]`.
+    /// `caret_x` 为光标在文本自身（未滚动）坐标空间中的位置；
+    /// 光标将被保持在 `[scroll_x, scroll_x + viewport_width]` 范围内。
     pub fn ensure_caret_visible(&mut self, caret_x: f32, viewport_width: f32) {
         let viewport_width = viewport_width.max(0.0);
         if caret_x < self.scroll_x {
@@ -402,9 +397,9 @@ impl TextEditState {
         }
     }
 
-    /// Move the caret to a byte offset, clamped to a character boundary.
+    /// 将光标移动到指定字节偏移并夹紧到字符边界。
     ///
-    /// `extend` keeps the anchor, which grows or shrinks the selection.
+    /// `extend` 为 true 时保留锚点以扩展或收缩选区。
     pub fn set_cursor(&mut self, offset: usize, extend: bool) {
         let cursor = floor_boundary(&self.text, offset);
         self.cursor = cursor;
@@ -413,14 +408,14 @@ impl TextEditState {
         }
     }
 
-    /// Select everything.
+    /// 全选文本。
     pub fn select_all(&mut self) {
         self.anchor = 0;
         self.cursor = self.text.len();
         self.coalescing = false;
     }
 
-    /// Position the caret by clicking at `local_x` (relative to text origin) using `shaped`.
+    /// 使用 `shaped` 通过点击 `local_x`（相对于文本原点）定位光标。
     pub fn pointer_down_at(
         &mut self,
         shaped: &unbound_text::ShapedText,
@@ -431,13 +426,13 @@ impl TextEditState {
         self.set_cursor(offset, extend);
     }
 
-    /// Extend the selection while dragging to `local_x` (relative to text origin).
+    /// 拖拽到 `local_x`（相对于文本原点）时扩展选区。
     pub fn drag_to(&mut self, shaped: &unbound_text::ShapedText, local_x: f32) {
         let offset = shaped.hit_byte_index(&self.text, Vec2::new(local_x + self.scroll_x, 0.0));
         self.set_cursor(offset, true);
     }
 
-    /// Select the word under `local_x` (double-click).
+    /// 选中 `local_x` 处的单词（双击）。
     pub fn double_click_at(&mut self, shaped: &unbound_text::ShapedText, local_x: f32) {
         let offset = shaped.hit_byte_index(&self.text, Vec2::new(local_x + self.scroll_x, 0.0));
         if let Some((start, end)) = word_range(&self.text, offset) {
@@ -447,14 +442,14 @@ impl TextEditState {
         }
     }
 
-    /// Select all text (triple-click).
+    /// 选中全部文本（三击）。
     pub fn triple_click(&mut self) {
         self.select_all();
     }
 
-    /// Insert text at the cursor, replacing the selection.
+    /// 在光标处插入文本并替换当前选区。
     ///
-    /// The buffer is clamped to `max_bytes` without splitting a code point.
+    /// 缓冲区会夹紧至 `max_bytes`，且不会拆分码点。
     pub fn insert(&mut self, text: &str, max_bytes: usize) {
         self.insert_with(text, max_bytes, true);
     }
@@ -470,7 +465,7 @@ impl TextEditState {
         next.push_str(text);
         next.push_str(&self.text[end..]);
         if next.len() > max_bytes {
-            // Take as many whole code points of the insertion as fit.
+            // 尽量取最多能放下的完整码点。
             let room = max_bytes.saturating_sub(self.text.len() - (end - start));
             let mut accepted = 0usize;
             for (index, character) in text.char_indices() {
@@ -491,7 +486,7 @@ impl TextEditState {
         self.normalize();
     }
 
-    /// Delete the selection, or one code point before the caret.
+    /// 删除选区，或光标前的一个码点。
     pub fn backspace(&mut self) {
         let (start, end) = self.selection().unwrap_or_else(|| {
             let start = prev_boundary(&self.text, self.cursor);
@@ -507,7 +502,7 @@ impl TextEditState {
         self.normalize();
     }
 
-    /// Delete the selection, or one code point after the caret.
+    /// 删除选区，或光标后的一个码点。
     pub fn delete_forward(&mut self) {
         let (start, end) = self.selection().unwrap_or_else(|| {
             let end = next_boundary(&self.text, self.cursor);
@@ -523,7 +518,7 @@ impl TextEditState {
         self.normalize();
     }
 
-    /// Delete the selection, or the word before the caret.
+    /// 删除选区，或光标前的单词。
     pub fn delete_word_backward(&mut self) {
         let (start, end) = self
             .selection()
@@ -538,7 +533,7 @@ impl TextEditState {
         self.normalize();
     }
 
-    /// Delete the selection, or the word after the caret.
+    /// 删除选区，或光标后的单词。
     pub fn delete_word_forward(&mut self) {
         let (start, end) = self
             .selection()
@@ -553,7 +548,7 @@ impl TextEditState {
         self.normalize();
     }
 
-    /// Undo one step. Returns whether anything was undone.
+    /// 撤销一步，返回是否实际执行了撤销。
     pub fn undo(&mut self) -> bool {
         let Some(snapshot) = self.undo.pop() else {
             return false;
@@ -564,7 +559,7 @@ impl TextEditState {
         true
     }
 
-    /// Redo one step. Returns whether anything was redone.
+    /// 重做一步，返回是否实际执行了重做。
     pub fn redo(&mut self) -> bool {
         let Some(snapshot) = self.redo.pop() else {
             return false;
@@ -575,14 +570,14 @@ impl TextEditState {
         true
     }
 
-    /// Drop the undo history, e.g. after loading a different document.
+    /// 丢弃撤销历史（例如加载了其他文档之后）。
     pub fn clear_history(&mut self) {
         self.undo.clear();
         self.redo.clear();
         self.coalescing = false;
     }
 
-    /// Replace the pre-edit range with committed text (IME commit).
+    /// 用提交的文本替换预编辑区间（输入法提交）。
     fn commit_preedit(&mut self, text: &str, max_bytes: usize) {
         if let Some((start, end)) = self.preedit.take() {
             let start = floor_boundary(&self.text, start);
@@ -608,12 +603,12 @@ impl TextEditState {
         self.normalize();
     }
 
-    /// Merge a typing run into one undo step.
+    /// 将连续键入合并为单个撤销步骤。
     fn push_undo(&mut self, coalesce: bool) {
         if !(coalesce && self.coalescing) {
             let snapshot = self.snapshot();
             self.undo.push(snapshot);
-            // A long editing session must not grow without bound.
+            // 长时间编辑会话的历史记录不得无限制增长。
             if self.undo.len() > 256 {
                 self.undo.remove(0);
             }
@@ -622,14 +617,14 @@ impl TextEditState {
         self.coalescing = coalesce;
     }
 
-    /// Keep the caret on a boundary and inside the buffer.
+    /// 确保光标保持在字符边界及缓冲区范围内。
     fn normalize(&mut self) {
         self.cursor = floor_boundary(&self.text, self.cursor);
         self.anchor = floor_boundary(&self.text, self.anchor);
     }
 }
 
-/// Evolve a text field for one event.
+/// 响应单个事件推进文本输入框状态。
 pub fn reduce_text_input(
     desc: &TextInputDesc,
     edit: &mut TextEditState,
@@ -794,20 +789,19 @@ pub fn reduce_text_input(
     }
 }
 
-/// The measured text geometry the emitter draws.
+/// 输出器绘制所需的已测量文本几何信息。
 ///
-/// The caller shapes the text (it owns the font, atlas and zoom) and hands
-/// back the caret and selection rectangles in the same coordinate space as
-/// [`TextInputDesc::rect`].
+/// 调用方负责塑形文本（其持有字体、图集与缩放），
+/// 并在与 [`TextInputDesc::rect`] 相同的坐标空间中传回光标与选区矩形。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextInputVisual {
-    /// The caret rectangle.
+    /// 光标矩形。
     pub caret: Rect,
-    /// The selection rectangle, if any text is selected.
+    /// 选区矩形（若选中了任何文本）。
     pub selection: Option<Rect>,
-    /// The measured IME pre-edit rectangle, if a composition is active.
+    /// 已测量的输入法预编辑矩形（若组合输入激活）。
     pub preedit: Option<Rect>,
-    /// Whether the caret is in its visible blink phase.
+    /// 光标是否处于闪烁可见阶段。
     pub caret_visible: bool,
 }
 
@@ -822,16 +816,16 @@ impl Default for TextInputVisual {
     }
 }
 
-/// A text input bound to an identity, its edit state and its measured layout.
+/// 绑定了节点标识、编辑状态与已测量布局的文本输入框。
 #[derive(Clone, Debug)]
 pub struct TextInputWidget {
-    /// The widget identity.
+    /// 控件标识。
     pub node: u64,
-    /// The descriptor.
+    /// 描述符。
     pub desc: TextInputDesc,
-    /// The edit state.
+    /// 编辑状态。
     pub edit: TextEditState,
-    /// The measured caret / selection geometry.
+    /// 已测量的光标/选区几何信息。
     pub visual: TextInputVisual,
 }
 
@@ -860,11 +854,10 @@ impl WidgetDesc for TextInputWidget {
     }
 }
 
-/// The pure emitter.
+/// 纯输出器。
 ///
-/// The primitive count is constant for a fixed glyph run: the selection and
-/// caret slots are always written, and their opacity alone says whether they
-/// are visible.
+/// 对于固定字形串，图元数量保持恒定：选区与光标槽位始终写入，
+/// 仅通过不透明度指示其是否可见。
 #[must_use]
 pub fn emit_text_input(
     node: u64,
@@ -910,7 +903,7 @@ pub fn emit_text_input(
         z,
     ));
 
-    // The selection slot is always present; opacity carries its visibility.
+    // 选区槽位始终存在；通过不透明度控制可见性。
     let mut selection = outlined(
         visual.selection.unwrap_or(Rect::ZERO),
         2.0,
@@ -936,7 +929,7 @@ pub fn emit_text_input(
     );
     primitives.push(selection);
 
-    // The caret slot: one pixel wide, hidden while the field is not focused.
+    // 光标槽位：1 像素宽，未聚焦时隐藏。
     let mut caret = surface(visual.caret, 0.0, Token::PRIMARY, z);
     caret.prim_type_and_flags = GpuPrimitiveInstance::pack_type(
         PrimType::RoundedRect,
@@ -953,8 +946,8 @@ pub fn emit_text_input(
     );
     primitives.push(caret);
 
-    // The IME pre-edit underline. Like the caret it is always in the pool;
-    // the opacity says whether a composition is active.
+    // 输入法预编辑下划线：与光标一样始终存在于图元池中，不透明度指示组合输入是否激活。
+    //
     let mut preedit = surface(
         visual.preedit.unwrap_or(Rect::ZERO),
         0.0,
@@ -976,7 +969,7 @@ pub fn emit_text_input(
     );
     primitives.push(preedit);
 
-    // The glyphs, positioned by the caller.
+    // 调用方定位好的字形。
     let ink = if state.disabled {
         Token::TEXT_DISABLED
     } else if edit.text().is_empty() && !desc.placeholder.is_empty() {
@@ -1067,7 +1060,7 @@ pub fn emit_text_input(
     out
 }
 
-/// Deterministic child node key for the clear button of a [`TextInputDesc`].
+/// [`TextInputDesc`] 清除按钮的确定性子节点键。
 #[must_use]
 pub const fn clear_button_node(node: u64) -> u64 {
     node ^ 0x434C_4541_5200
@@ -1077,7 +1070,7 @@ fn set_opacity(primitive: &mut GpuPrimitiveInstance, opacity: f32) {
     primitive.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(primitive.depth_u16(), opacity);
 }
 
-/// The nearest character boundary at or before `offset`.
+/// `offset` 处或之前的最近字符边界。
 #[must_use]
 pub fn floor_boundary(text: &str, offset: usize) -> usize {
     let mut offset = offset.min(text.len());
@@ -1087,7 +1080,7 @@ pub fn floor_boundary(text: &str, offset: usize) -> usize {
     offset
 }
 
-/// The previous character boundary.
+/// 上一个字符边界。
 #[must_use]
 pub fn prev_boundary(text: &str, offset: usize) -> usize {
     let offset = floor_boundary(text, offset);
@@ -1101,7 +1094,7 @@ pub fn prev_boundary(text: &str, offset: usize) -> usize {
     index
 }
 
-/// The next character boundary.
+/// 下一个字符边界。
 #[must_use]
 pub fn next_boundary(text: &str, offset: usize) -> usize {
     let offset = floor_boundary(text, offset);
@@ -1115,12 +1108,10 @@ pub fn next_boundary(text: &str, offset: usize) -> usize {
     index.min(text.len())
 }
 
-/// The previous word boundary.
+/// 上一个单词边界。
 ///
-/// `unicode_segmentation` is not a dependency of this crate, so a word is a
-/// run of `char::is_alphanumeric` (or `_`) scalars and everything else —
-/// spaces and punctuation — is skipped. This is the same definition
-/// [`word_range`] uses for double-click selection.
+/// 本 crate 不依赖 `unicode_segmentation`，因此“单词”定义为连续的 `char::is_alphanumeric`（或 `_`）标量，
+/// 其余字符（空格与标点）均被跳过。这与 [`word_range`] 用于双击选词的规则一致。
 #[must_use]
 pub fn prev_word_boundary(text: &str, offset: usize) -> usize {
     let mut index = floor_boundary(text, offset);
@@ -1147,7 +1138,7 @@ pub fn prev_word_boundary(text: &str, offset: usize) -> usize {
     index
 }
 
-/// The next word boundary, skipping separators first.
+/// 下一个单词边界（先跳过分隔符）。
 #[must_use]
 pub fn next_word_boundary(text: &str, offset: usize) -> usize {
     let mut index = floor_boundary(text, offset);
@@ -1174,12 +1165,10 @@ pub fn next_word_boundary(text: &str, offset: usize) -> usize {
     index
 }
 
-/// The word range around a byte offset.
+/// 字节偏移周围的单词区间。
 ///
-/// Word characters are Unicode alphanumerics and `_`; punctuation and
-/// whitespace separate words. Scanning outwards from the offset (rather than
-/// relying on a segmenter) keeps a run of CJK ideographs together, which is
-/// what double-click selection is expected to do.
+/// 单词字符为 Unicode 字母数字与 `_`；标点与空白符用于分隔单词。
+/// 从偏移处向外扫描（而非依赖分词器）可将连续的中日韩汉字保持在一起，符合双击选词的预期。
 #[must_use]
 pub fn word_range(text: &str, offset: usize) -> Option<(usize, usize)> {
     let offset = floor_boundary(text, offset);
@@ -1231,7 +1220,7 @@ mod tests {
         assert_eq!(edit.text(), "你好");
         assert_eq!(edit.cursor(), 6);
 
-        // One backspace removes one whole ideograph, not one byte.
+        // 一次退格删除一个完整汉字，而非单个字节。
         reduce(&mut edit, TextInputEvent::Backspace);
         assert_eq!(edit.text(), "你");
         assert!(edit.text().is_char_boundary(edit.cursor()));

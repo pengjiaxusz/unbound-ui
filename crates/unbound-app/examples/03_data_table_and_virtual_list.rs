@@ -1,10 +1,10 @@
-//! 03_data_table_and_virtual_list: High-Performance Virtualized Table & Pagination.
+//! 03_data_table_and_virtual_list：高性能虚拟化表格与分页示例。
 //!
-//! Demonstrates:
-//! - Multi-column tabular data rendering via [`TableDesc`].
-//! - Virtualized grid rendering via [`DataGridDesc`].
-//! - Declarative pagination controls via [`PaginationDesc`].
-//! - Fast 100,000 row virtual list benchmark handling.
+//! 演示内容：
+//! - 通过 [`TableDesc`] 渲染多列表格数据。
+//! - 通过 [`DataGridDesc`] 渲染虚拟化数据网格。
+//! - 通过 [`PaginationDesc`] 实现声明式分页控件。
+//! - 10 万行虚拟列表的高速基准处理。
 
 use unbound_app::prelude::*;
 use unbound_input::PointerButton;
@@ -96,7 +96,7 @@ pub fn run_headless_check() {
     );
     assert_eq!(runtime.state().current_page, 1);
 
-    // Click Next Page button
+    // 点击下一页按钮
     let btn_rect = runtime
         .widget_rect(BTN_NEXT_PAGE)
         .expect("Next page button mounted");

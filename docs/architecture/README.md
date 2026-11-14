@@ -1,37 +1,36 @@
-# Unbound UI 架构主索引
+# 架构索引（智能体路由图）
 
-> **AI / 开发者查阅指南**：本文件是 Unbound UI 项目的**唯一权威架构主索引**（遵照 `arch-align` 技能规范）。
-> 在处理新需求、跨模块重构或定位复杂问题前，必须先查阅对应子系统领域的权威架构文档，对齐架构红线与系统边界后再展开编码。
+> 只读与目标路径或任务意图匹配的 1~2 篇规范。
+> 标签：`[规范]` = 强制全局契约 | `[模块]` = 子系统规范 | 状态：`[已落地]` | `[部分落地]` | `[蓝图]`
 
----
+## 任务路由（一跳查找）
+- 全局边界、依赖分层与零分配原则 -> `./principles.md`
+- 端到端输入/布局/渲染/呈现管道 -> `./dataflow.md`
+- 性能红线、KPI 预算与基准门禁 -> `./kpi-budgets.md`
+- Vulkan 1.3 渲染管线、显存池、Uber-Shader、裁剪与阴影 -> `./gpu-renderer.md`
+- 三次贝塞尔曲线、SVG 路径与 MTSDF 文字渲染 -> `./vector-and-text.md`
+- DOD 状态树、Taffy 增量排版与视口虚拟化 -> `./ui-and-layout.md`
+- 99 款标准控件、24 状态 Stable Shape 与场景差分 -> `./widgets.md`
+- 弹簧物理动画、像素吸附、三层缩放与 4 KiB 主题 LUT -> `./animation-and-theme.md`
+- 无限画布四叉树、4096 分块坐标、磁吸撤销与渲染图 -> `./canvas-and-graph.md`
+- 双层拾取、焦点管理、IME 选区与 AccessKit 无障碍 -> `./input-and-a11y.md`
+- Win32/Winit 窗口、Snap Layouts、对话框、剪贴板与延迟 -> `./platform-and-window.md`
+- 无头几何体检、TestApp 与 rkyv 时间旅行快照 -> `./headless-and-agent.md`
+- C-ABI 热重载、状态迁移与异步资源流送 -> `./hot-reload-and-assets.md`
+- 组件展台 Showcase 与 Gallery 演示入口 -> `./showcase.md`
 
-## 1. 全局系统架构与核心骨架
-
-| 权威架构文档 | 核心内容 / 职责范围 | 关联模块 / 源码路径 | 规范级别 |
-| :--- | :--- | :--- | :--- |
-| [`总览与设计准则`](../00-overview/principles.md) | 性能优先（每帧成本与场景规模无关）、面向数据拓扑、零每帧分配、GPU 端剔除与排序 | 全局架构底座 | 【权威规范】 |
-| [`端到端数据流`](../00-overview/dataflow.md) | 从 OS 事件输入、布局排版、GPU 剔除排序到帧呈现的全链路闭环 | 全局闭环数据流 | 【权威规范】 |
-| [`Crate 依赖与分层地图`](../00-overview/crate-map.md) | 21 个 crate 与 2 个 app 的职责边界、依赖拓扑与物理隔离护栏 | `crates/*`, `apps/*` | 【权威规范】 |
-| [`路线与量化验收红线`](../07-roadmap/acceptance-kpis.md) | 10 万图元同屏、1 万三次贝塞尔连线、100 万实体视口粗筛等量化预算 | `crates/unbound-kpi/` | 【权威规范】 |
-
----
-
-## 2. 核心子系统与领域模块
-
-| 权威架构文档 | 核心内容 / 职责范围 | 关联模块 / 源码路径 | 规范级别 |
-| :--- | :--- | :--- | :--- |
-| [`图形底座与 Vulkan 1.3`](../01-graphics/README.md) | Vulkan 1.3、Bindless、BDA 协议、显存池、瞬态环与呈现同步 | `crates/unbound-gpu/` | 【设计实现】 |
-| [`Uber-Shader 与双通道深度`](../01-graphics/uber-shader.md) | 不透明内核预剔除 + 统一 uber pass，GPU 64 位基数排序 | `crates/unbound-gpu/` | 【权威规范】 |
-| [`矢量曲线与字形渲染`](../01-graphics/curves.md) | 三次贝塞尔自适应降阶、紧致 OBB、解析解 SDF、cosmic-text 双图集与 MTSDF | `crates/unbound-vector/`, `crates/unbound-text/` | 【设计实现】 |
-| [`面向数据拓扑与 UI 状态树`](../02-ui/dod-model.md) | SlotMap 扁平状态树、COW、Action as Data、RelayoutBoundary 隔离增量排版 | `crates/unbound-world/`, `crates/unbound-layout/` | 【权威规范】 |
-| [`视口虚拟化与弹簧动画`](../02-ui/virtualization.md) | 环形槽位复用、物理弹簧引擎、像素吸附、4 KiB 颜色表与主题正交缩放 | `crates/unbound-anim/`, `crates/unbound-theme/` | 【设计实现】 |
-| [`无限画布与空间索引`](../03-canvas/spatial-index.md) | 松散线性四叉树、4096 分块锚定相对坐标、智能磁吸与事务化撤销 | `crates/unbound-canvas/` | 【权威规范】 |
-| [`输入、无障碍与 Portal 排序`](../04-input/README.md) | 双层拾取、指针捕获、CJK IME 候选框、AccessKit 增量语义树、Portal 浮层深度逃逸 | `crates/unbound-input/`, `crates/unbound-a11y/` | 【设计实现】 |
-| [`无头验证与 Agent 友好环境`](../05-agent/headless.md) | 五项几何体检、`TestApp` 无头交互测试驱动、rkyv 时间旅行快照、增量编译防卡顿护栏 | `crates/unbound-headless/` | 【权威规范】 |
-| [`工程工具链与热重载`](../06-tooling/README.md) | C-ABI 隔离、分配器劫持、双模状态迁移、组件展台验收台 | `crates/unbound-host/`, `apps/showcase/` | 【设计实现】 |
-
----
-
-## 3. 完整主题域索引主卷
-
-- 完整多卷架构阅读路径可直接参考：[`docs/README.md`](../README.md)
+## 模块地图
+- `./principles.md` [规范][已落地] | 路径：`crates/*`、`apps/*` | 依赖分层护栏、扁平 POD、正交极简 API
+- `./dataflow.md` [规范][已落地] | 路径：`crates/unbound-app/`、`crates/unbound-abi/` | OS 事件 -> 归约 -> 排版 -> 发射 -> GPU 呈现
+- `./kpi-budgets.md` [规范][已落地] | 路径：`crates/unbound-kpi/`、`apps/gallery/` | 10 万图元/万条曲线/百万实体粗筛等红线
+- `./gpu-renderer.md` [模块][已落地] | 路径：`crates/unbound-gpu/`、`crates/unbound-math/` | BDA/Bindless、MDI、双通道深度、裁剪、erf 阴影
+- `./vector-and-text.md` [模块][已落地] | 路径：`crates/unbound-vector/`、`crates/unbound-text/` | 降阶 OBB、解析 SDF、cosmic-text 双图集、MTSDF
+- `./ui-and-layout.md` [模块][已落地] | 路径：`crates/unbound-world/`、`crates/unbound-layout/` | SlotMap、RelayoutBoundary、VirtualList/Tree/Grid
+- `./widgets.md` [模块][已落地] | 路径：`crates/unbound-widgets/` | `define_widget_catalog!`、24 状态图元恒定、局部补丁
+- `./animation-and-theme.md` [模块][已落地] | 路径：`crates/unbound-anim/`、`crates/unbound-theme/` | 临界阻尼弹簧、亚像素吸附、4 KiB Color LUT
+- `./canvas-and-graph.md` [模块][已落地] | 路径：`crates/unbound-canvas/`、`crates/unbound-graph/` | 松散四叉树、事务撤销、RenderGraph 瞬态纹理池
+- `./input-and-a11y.md` [模块][部分落地] | 路径：`crates/unbound-input/`、`crates/unbound-a11y/` | `pick_stack`、Portal 排序、IME 锚定、AccessKit
+- `./platform-and-window.md` [模块][部分落地] | 路径：`crates/unbound-platform/` | 多窗口事件、Win32 DWM 贴靠、present wait 预算
+- `./headless-and-agent.md` [模块][已落地] | 路径：`crates/unbound-headless/`、`crates/unbound-app/` | 5 项几何体检、`Harness`、rkyv 快照回放
+- `./hot-reload-and-assets.md` [模块][已落地] | 路径：`crates/unbound-host/`、`crates/app-guest/`、`crates/unbound-asset/` | 分配器劫持、双模迁移、暂存环交接
+- `./showcase.md` [模块][已落地] | 路径：`apps/showcase/`、`apps/gallery/` | 21 页自举展台、Knob 调参、无头截图与 KPI 报告

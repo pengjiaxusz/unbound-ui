@@ -1,16 +1,16 @@
-//! Semantic design tokens and the flat colour lookup table (`docs` §4.5).
+//! 语义设计令牌（Design Tokens）与扁平颜色查找表（LUT，`docs` §4.5）。
 //!
-//! The design system is split in two:
+//! 设计系统分为两部分：
 //!
-//! * **Tokens** are stable `u16` identifiers. A primitive instance stores the
-//!   token, never the colour, so a theme switch never touches instance data.
-//! * **Palettes** map every token to a concrete colour. Switching themes
-//!   rebuilds a *flat* 4 KiB table (512 RGBA16F entries) and uploads it in a
-//!   single write.
+//! * **令牌（Tokens）** 是稳定的 `u16` 标识符。图元实例只存储令牌，
+//!   从不存储具体颜色，因此切换主题绝不会触动实例数据。
+//! * **调色板（Palettes）** 将每个令牌映射到具体颜色。切换主题时
+//!   只需重建一张 4 KiB 的*扁平*表（512 个 RGBA16F 表项）并单次写入上传。
 //!
-//! The invariant the whole design rests on: **a theme switch must not cause a
-//! re-layout or an instance re-upload**. Both are enforced here by construction
-//! — [`ThemeState::switch`] only ever produces a new LUT.
+//!
+//! 整个设计赖以成立的不变量：**切换主题不得触发重新布局或重新上传实例**。
+//! 两者均通过结构约束在此强制保证——[`ThemeState::switch`] 只会生成新的 LUT。
+//!
 
 pub mod snapping;
 pub mod zoom;
@@ -20,24 +20,24 @@ pub use zoom::ZoomLayers;
 
 use unbound_math::color::Color;
 
-/// Number of entries in the flat colour table.
+/// 扁平颜色表中的表项数量。
 ///
-/// 512 tokens × 8 bytes (RGBA16F) = 4 KiB, exactly the budget from the design
-/// document.
+/// 512 个令牌 × 8 字节（RGBA16F）= 4 KiB，恰好符合设计文档的预算。
+///
 pub const MAX_TOKENS: usize = 512;
 
-/// Size of the packed table in bytes.
+/// 打包后颜色表的字节大小。
 pub const LUT_BYTES: usize = MAX_TOKENS * 8;
 
-/// A semantic colour token.
+/// 语义颜色令牌。
 ///
-/// The numeric value is part of the ABI: it travels to the GPU inside
-/// `GpuPrimitiveInstance::fill_token_or_uv`, so it must never be reordered.
+/// 其数值属于 ABI 的一部分：会随 `GpuPrimitiveInstance::fill_token_or_uv` 传往 GPU，
+/// 因此绝不可重排。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Token(u16);
 
 impl Token {
-    /// Wrap a raw token id, saturating instead of panicking.
+    /// 包装原始令牌 ID，越界时饱和截断而非 panic。
     #[must_use]
     pub const fn new(raw: u16) -> Self {
         Self(if (raw as usize) < MAX_TOKENS {
@@ -47,30 +47,30 @@ impl Token {
         })
     }
 
-    /// The raw id, as stored in a primitive instance.
+    /// 存储在图元实例中的原始 ID。
     #[must_use]
     pub const fn raw(self) -> u16 {
         self.0
     }
 
-    /// Index into a palette.
+    /// 在调色板中的索引位置。
     #[must_use]
     pub const fn index(self) -> usize {
         self.0 as usize
     }
 
-    /// The reserved "no colour" slot.
+    /// 保留的“无颜色”槽位。
     ///
-    /// The GPU's `common.glsl` hard-codes slot 0 as fully transparent, so
-    /// "no fill" and "no border" cost nothing: a primitive can name slot 0
-    /// and the shader sees a colour with zero alpha.
+    /// GPU 的 `common.glsl` 将槽位 0 硬编码为全透明，因此“无填充”与“无边框”零开销：
+    /// 图元只需指定槽位 0，着色器即读取到 alpha 为 0 的颜色。
+    ///
     pub const NONE: Self = Self(0);
-    /// The global shadow colour.
+    /// 全局阴影颜色。
     ///
-    /// The shadow is a *theme* concept — every primitive shares it — so it
-    /// lives in a fixed slot rather than in a per-primitive field. The slot
-    /// index is part of the engine's contract with whoever fills the LUT
-    /// (`SHADOW_TOKEN` in `unbound-gpu/shaders/common.glsl`).
+    /// 阴影是*主题*级概念——所有图元共享——因此存放在固定槽位而非每个图元的字段中。
+    /// 该槽位索引属于引擎与 LUT 填充方之间的契约
+    /// （对应 `unbound-gpu/shaders/common.glsl` 中的 `SHADOW_TOKEN`）。
+    ///
     pub const SHADOW: Self = Self(1);
     pub const SURFACE: Self = Self(2);
     pub const SURFACE_RAISED: Self = Self(3);
@@ -103,118 +103,118 @@ impl Token {
     pub const TEXT_DISABLED: Self = Self(30);
     pub const SCRIM: Self = Self(31);
 
-    // ---- control states and containers (32..=60) -------------------------
+    // ---- 控件状态与容器（32..=60）----------------------------------------
     //
-    // The first thirty-two slots are the *primitive* vocabulary: surfaces,
-    // accents and text. The slots below are the *control* vocabulary: the
-    // state colours of a standard widget and the containers a shell paints.
+    // 前 32 个槽位属于*基础图元*词汇：表面、强调色与文本。
+    // 下方槽位属于*控件*词汇：标准组件的状态颜色及外壳绘制的容器。
     //
-    // Every control state lives in its own slot, so a hover never rewrites
-    // the instance data — it only changes which colour the token resolves
-    // to. That is what makes a theme switch (and a hover) free of instance
-    // re-uploads.
+    //
+    // 每个控件状态各自占用独立槽位，因此悬停（hover）从不重写实例数据——
+    // 它仅改变令牌解析出的颜色。这正是主题切换与悬停无需重新上传实例的原因。
+    //
+    //
 
-    /// The primary fill while hovered.
+    /// 悬停时的主强调填充色。
     pub const PRIMARY_HOVER: Self = Self(32);
-    /// The primary fill while pressed.
+    /// 按下时的主强调填充色。
     pub const PRIMARY_PRESSED: Self = Self(33);
-    /// A low-saturation primary tint.
+    /// 低饱和度主强调浅色背景。
     pub const PRIMARY_SOFT: Self = Self(34);
-    /// A low-saturation secondary tint.
+    /// 低饱和度次强调浅色背景。
     pub const SECONDARY_SOFT: Self = Self(35);
-    /// A low-saturation success tint.
+    /// 低饱和度成功状态浅色背景。
     pub const SUCCESS_SOFT: Self = Self(36);
-    /// A low-saturation warning tint.
+    /// 低饱和度警告状态浅色背景。
     pub const WARNING_SOFT: Self = Self(37);
-    /// A low-saturation error tint.
+    /// 低饱和度错误状态浅色背景。
     pub const ERROR_SOFT: Self = Self(38);
-    /// The keyboard focus ring.
+    /// 键盘焦点环颜色。
     pub const FOCUS_RING: Self = Self(39);
-    /// The track of a slider or a switch.
+    /// 滑块或开关的轨道颜色。
     pub const CONTROL_TRACK: Self = Self(40);
-    /// The thumb of a slider or the knob of a switch.
+    /// 滑块拇指或开关旋钮颜色。
     pub const CONTROL_THUMB: Self = Self(41);
-    /// A hovered control surface.
+    /// 悬停时的控件表面颜色。
     pub const CONTROL_HOVER: Self = Self(42);
-    /// The title bar surface.
+    /// 标题栏表面颜色。
     pub const HEADER_BG: Self = Self(43);
-    /// The navigation pane surface.
+    /// 导航面板表面颜色。
     pub const NAV_BG: Self = Self(44);
-    /// A hovered navigation row.
+    /// 悬停时的导航行颜色。
     pub const NAV_HOVER: Self = Self(45);
-    /// The selected navigation row.
+    /// 选中的导航行颜色。
     pub const NAV_SELECTED: Self = Self(46);
-    /// A hairline divider.
+    /// 极细分隔线颜色。
     pub const DIVIDER: Self = Self(47);
-    /// The code panel background.
+    /// 代码面板背景色。
     pub const CODE_BG: Self = Self(48);
-    /// The code panel foreground.
+    /// 代码面板前景色。
     pub const CODE_TEXT: Self = Self(49);
-    /// The overlay surface.
+    /// 浮层表面颜色。
     pub const OVERLAY_BG: Self = Self(50);
-    /// The first stop of a hero gradient.
+    /// 主视觉渐变的首个色标。
     pub const HERO_START: Self = Self(51);
-    /// The last stop of a hero gradient.
+    /// 主视觉渐变的末尾色标。
     pub const HERO_END: Self = Self(52);
-    /// Text and icons painted on a hero gradient.
+    /// 绘制在主视觉渐变上的文本与图标颜色。
     pub const ON_HERO: Self = Self(53);
-    /// The scrim behind a call to action on a hero surface.
+    /// 主视觉表面上行动号召按钮背后的遮罩层颜色。
     pub const HERO_SCRIM: Self = Self(54);
-    /// The performance HUD background.
+    /// 性能 HUD 背景色。
     pub const HUD_BG: Self = Self(55);
-    /// The performance HUD foreground.
+    /// 性能 HUD 前景色。
     pub const HUD_TEXT: Self = Self(56);
-    /// A low-saturation accent tint.
+    /// 低饱和度强调浅色。
     pub const ACCENT_SOFT: Self = Self(57);
-    /// The dots of a canvas or stage grid.
+    /// 画布或舞台网格的点阵颜色。
     pub const GRID_DOT: Self = Self(58);
-    /// The primary text of a navigation row.
+    /// 导航行的主文本颜色。
     pub const NAV_TEXT: Self = Self(59);
-    /// The secondary text of a navigation row.
+    /// 导航行的次文本颜色。
     pub const NAV_TEXT_MUTED: Self = Self(60);
-    /// A secondary accent, next to [`Token::PRIMARY`].
+    /// 与 [`Token::PRIMARY`] 并列的次强调色。
     ///
-    /// The primary accent carries the call to action; the secondary one is
-    /// for the supporting highlights of a surface. Both are *solid* colours —
-    /// the tinted variants are [`Token::PRIMARY_SOFT`] and
-    /// [`Token::SECONDARY_SOFT`].
+    /// 主强调色用于核心行动号召；次强调色用于界面的辅助高亮。
+    /// 两者均为*实色*——浅色变体分别为 [`Token::PRIMARY_SOFT`] 与
+    /// [`Token::SECONDARY_SOFT`]。
+    ///
     pub const SECONDARY: Self = Self(61);
-    /// The surface of a card that sits on [`Token::SURFACE`].
+    /// 置于 [`Token::SURFACE`] 之上的卡片表面颜色。
     pub const CARD_BG: Self = Self(62);
-    /// The outline of a card that sits on [`Token::SURFACE`].
+    /// 置于 [`Token::SURFACE`] 之上的卡片轮廓颜色。
     pub const CARD_BORDER: Self = Self(63);
 
-    // ---- disabled / input / editing states (64..=73) ----------------------
+    // ---- 禁用 / 输入 / 编辑状态（64..=73）--------------------------------
 
-    /// The fill of a disabled button, input or select.
+    /// 禁用状态按钮、输入框或下拉框的填充色。
     pub const CONTROL_DISABLED_BG: Self = Self(64);
-    /// The outline of a disabled control.
+    /// 禁用状态控件的轮廓颜色。
     pub const CONTROL_DISABLED_BORDER: Self = Self(65);
-    /// The thumb or knob of a disabled slider / switch.
+    /// 禁用状态滑块或开关的滑块头/旋钮颜色。
     pub const CONTROL_DISABLED_THUMB: Self = Self(66);
-    /// The fill of an indeterminate checkbox or a mixed progress bar.
+    /// 不确定态复选框或混合态进度条的填充色。
     pub const INDETERMINATE_FILL: Self = Self(67);
-    /// The background of a text input.
+    /// 文本输入框背景色。
     pub const INPUT_BG: Self = Self(68);
-    /// The input border while hovered.
+    /// 悬停时的输入框边框颜色。
     pub const INPUT_BORDER_HOVER: Self = Self(69);
-    /// The input border in an error validation state.
+    /// 校验错误状态下的输入框边框颜色。
     pub const INPUT_BORDER_ERROR: Self = Self(70);
-    /// The input border in a warning validation state.
+    /// 校验警告状态下的输入框边框颜色。
     pub const INPUT_BORDER_WARNING: Self = Self(71);
-    /// The IME pre-edit underline.
+    /// 输入法（IME）预编辑下划线颜色。
     pub const PREEDIT_UNDERLINE: Self = Self(72);
-    /// The disclosure arrow of a submenu row.
+    /// 子菜单行的展开箭头颜色。
     pub const SUBMENU_ARROW: Self = Self(73);
 }
 
-/// The set of semantic tokens the design system defines.
+/// 设计系统定义的全部语义令牌集合。
 ///
-/// Keeping the list in one place means a token cannot be renamed in one
-/// palette and forgotten in another.
+/// 将列表集中在一处，可避免令牌在某个调色板中重命名而在另一个中被遗漏。
 ///
-/// [`Token::NONE`] is not in the list: it is a reserved engine slot, not a
-/// semantic colour.
+///
+/// [`Token::NONE`] 不在此列表中：它是引擎保留槽位，而非语义颜色。
+///
 pub const TOKENS: [Token; 73] = [
     Token::SURFACE,
     Token::SURFACE_RAISED,
@@ -291,7 +291,7 @@ pub const TOKENS: [Token; 73] = [
     Token::SUBMENU_ARROW,
 ];
 
-/// Which theme is currently active.
+/// 当前激活的主题。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ThemeKind {
     Light,
@@ -300,10 +300,10 @@ pub enum ThemeKind {
 }
 
 impl ThemeKind {
-    /// Every theme, in a stable order.
+    /// 所有主题，按稳定顺序排列。
     pub const ALL: [ThemeKind; 3] = [ThemeKind::Light, ThemeKind::Dark, ThemeKind::HighContrast];
 
-    /// Short identifier used in diagnostics.
+    /// 用于诊断的简短标识符。
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -314,7 +314,7 @@ impl ThemeKind {
     }
 }
 
-/// A complete colour assignment for every token.
+/// 每个令牌的完整颜色映射。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Palette {
     kind: ThemeKind,
@@ -322,10 +322,10 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// Build a palette from a token → colour mapping.
+    /// 根据令牌 → 颜色映射构建调色板。
     ///
-    /// Tokens that are not mentioned fall back to [`Color::TRANSPARENT`]; the
-    /// table is always exactly [`MAX_TOKENS`] long.
+    /// 未提及的令牌回退为 [`Color::TRANSPARENT`]；表长始终严格为 [`MAX_TOKENS`]。
+    ///
     #[must_use]
     pub fn new(kind: ThemeKind, colors: &[(Token, Color)]) -> Self {
         let mut entries = vec![Color::TRANSPARENT; MAX_TOKENS];
@@ -335,29 +335,29 @@ impl Palette {
         Self { kind, entries }
     }
 
-    /// The theme this palette belongs to.
+    /// 该调色板所属的主题。
     #[must_use]
     pub const fn kind(&self) -> ThemeKind {
         self.kind
     }
 
-    /// Colour assigned to a token.
+    /// 查询分配给指定令牌的颜色。
     #[must_use]
     pub fn color(&self, token: Token) -> Color {
         self.entries[token.index()]
     }
 
-    /// Every entry, in token order.
+    /// 按令牌顺序返回所有表项。
     #[must_use]
     pub fn entries(&self) -> &[Color] {
         &self.entries
     }
 
-    /// Build a palette from 8-bit sRGB components.
+    /// 从 8 位 sRGB 分量构建调色板。
     ///
-    /// The authoring form used by applications: a flat list of
-    /// `(token, rgba)` pairs, one per theme. Unmentioned tokens stay
-    /// transparent.
+    /// 供应用侧编写调色板的便捷形式：每个主题对应一组扁平的 `(token, rgba)` 对，
+    /// 未提及的令牌保持透明。
+    ///
     #[must_use]
     pub fn from_srgb8(kind: ThemeKind, colors: &[(Token, [u8; 4])]) -> Self {
         let mapped: Vec<(Token, Color)> = colors
@@ -373,7 +373,7 @@ impl Palette {
     }
 }
 
-/// The three shipped themes.
+/// 内置的三个主题。
 #[derive(Clone, Debug)]
 pub struct ThemeSet {
     light: Palette,
@@ -382,12 +382,12 @@ pub struct ThemeSet {
 }
 
 impl ThemeSet {
-    /// Build a theme set from three explicit palettes.
+    /// 根据三个显式调色板构建主题集。
     ///
-    /// The shipped [`ThemeSet::default_set`] is one particular set; an
-    /// application that carries its own brand colours builds its own set and
-    /// hands it to [`ThemeState::new`]. The engine does not care where the
-    /// colours come from — only that every token resolves to one.
+    /// 内置 [`ThemeSet::default_set`] 只是其中一种预设；携带自有品牌色的应用
+    /// 可自行构建主题集并交给 [`ThemeState::new`]。引擎不关心颜色来源，
+    /// 只要求每个令牌都能解析出一个颜色。
+    ///
     #[must_use]
     pub fn from_palettes(light: Palette, dark: Palette, high_contrast: Palette) -> Self {
         Self {
@@ -397,7 +397,7 @@ impl ThemeSet {
         }
     }
 
-    /// The default Material-ish light/dark pair plus a high-contrast variant.
+    /// 默认的 Material 风格浅色/深色主题对及高对比度变体。
     #[must_use]
     pub fn default_set() -> Self {
         let light = Palette::new(
@@ -621,8 +621,8 @@ impl ThemeSet {
             ],
         );
 
-        // High contrast is not "dark with more contrast": it removes translucency
-        // entirely so that every token is fully opaque.
+        // 高对比度并非“对比度更高的深色主题”：它会彻底移除半透明效果，
+        // 使每个令牌都完全不透明。
         let high_contrast = Palette::new(
             ThemeKind::HighContrast,
             &[
@@ -730,7 +730,7 @@ impl ThemeSet {
         }
     }
 
-    /// The palette for a theme.
+    /// 指定主题对应的调色板。
     #[must_use]
     pub fn palette(&self, kind: ThemeKind) -> &Palette {
         match kind {
@@ -741,17 +741,17 @@ impl ThemeSet {
     }
 }
 
-/// The packed 4 KiB colour table, ready to be uploaded to the GPU.
+/// 已打包的 4 KiB 颜色表，可直接上传至 GPU。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThemeLut {
-    /// 512 × RGBA16F, in token order.
+    /// 按令牌顺序排列的 512 × RGBA16F 数据。
     entries: Vec<[u16; 4]>,
-    /// The same table, serialised as little-endian bytes.
+    /// 同一张表序列化后的小端序字节流。
     bytes: Vec<u8>,
 }
 
 impl ThemeLut {
-    /// Pack a palette into the flat table.
+    /// 将调色板打包为扁平颜色表。
     #[must_use]
     pub fn from_palette(palette: &Palette) -> Self {
         let entries: Vec<[u16; 4]> = palette.entries().iter().map(|c| c.to_rgba16f()).collect();
@@ -764,19 +764,19 @@ impl ThemeLut {
         Self { entries, bytes }
     }
 
-    /// The raw RGBA16F entries.
+    /// 原始 RGBA16F 表项切片。
     #[must_use]
     pub fn entries(&self) -> &[[u16; 4]] {
         &self.entries
     }
 
-    /// The table as the bytes the GPU expects.
+    /// 按 GPU 期望格式排列的字节切片。
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// The colour of a token, decoded back to linear RGBA.
+    /// 将令牌颜色解码回线性 RGBA。
     #[must_use]
     pub fn color(&self, token: Token) -> Color {
         let e = self.entries[token.index()];
@@ -789,29 +789,29 @@ impl ThemeLut {
     }
 }
 
-/// What a theme switch costs.
+/// 主题切换的开销统计。
 ///
-/// The two `false` fields are the point of the whole design: a theme switch
-/// must not re-run layout and must not re-upload primitive instances.
+/// 其中两个 `false` 字段正是整个设计的核心目标：主题切换既不得触发重新布局，
+/// 也不得重新上传图元实例。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct SwitchOutcome {
-    /// Bytes written to the colour table.
+    /// 写入颜色表的字节数。
     pub bytes_uploaded: u32,
-    /// Whether the layout engine has to run again.
+    /// 布局引擎是否需要重新运行。
     pub relayout_required: bool,
-    /// Whether primitive instances have to be re-uploaded.
+    /// 图元实例是否需要重新上传。
     pub instance_reupload_required: bool,
-    /// Whether the switch actually changed anything.
+    /// 本次切换是否实际改变了主题。
     pub changed: bool,
 }
 
-/// The live theme state of an application.
+/// 应用的实时主题状态。
 #[derive(Clone, Debug)]
 pub struct ThemeState {
     set: ThemeSet,
     current: ThemeKind,
     lut: ThemeLut,
-    /// Number of switches performed, for diagnostics.
+    /// 已执行的切换次数，用于诊断。
     switches: u64,
 }
 
@@ -822,7 +822,7 @@ impl Default for ThemeState {
 }
 
 impl ThemeState {
-    /// Start with an explicit theme set.
+    /// 使用显式主题集初始化状态。
     #[must_use]
     pub fn new(set: ThemeSet, kind: ThemeKind) -> Self {
         let lut = ThemeLut::from_palette(set.palette(kind));
@@ -834,28 +834,28 @@ impl ThemeState {
         }
     }
 
-    /// The active theme.
+    /// 当前激活的主题。
     #[must_use]
     pub const fn current(&self) -> ThemeKind {
         self.current
     }
 
-    /// The packed colour table.
+    /// 已打包的颜色表。
     #[must_use]
     pub const fn lut(&self) -> &ThemeLut {
         &self.lut
     }
 
-    /// How many switches have happened.
+    /// 累计发生的切换次数。
     #[must_use]
     pub const fn switch_count(&self) -> u64 {
         self.switches
     }
 
-    /// Switch to another theme.
+    /// 切换到另一个主题。
     ///
-    /// The only side effect is a new colour table: no layout, no instance
-    /// upload, no re-sorting — the primitives reference tokens, not colours.
+    /// 唯一的副作用是生成新的颜色表：无重新布局、无实例上传、无重排序——
+    /// 图元引用的是令牌而非具体颜色。
     pub fn switch(&mut self, kind: ThemeKind) -> SwitchOutcome {
         if kind == self.current {
             return SwitchOutcome {
@@ -876,7 +876,7 @@ impl ThemeState {
         }
     }
 
-    /// Toggle between light and dark, leaving high contrast alone.
+    /// 在浅色与深色主题间切换，保持高对比度主题不变。
     pub fn toggle_light_dark(&mut self) -> SwitchOutcome {
         match self.current {
             ThemeKind::Light => self.switch(ThemeKind::Dark),
@@ -923,11 +923,11 @@ mod tests {
         }
     }
 
-    /// The GPU reserves two slots: 0 is "no colour" and 1 is the shadow.
+    /// GPU 保留两个槽位：0 为“无颜色”，1 为阴影。
     ///
-    /// A palette that puts a real colour in slot 0 makes every "no fill"
-    /// primitive paint that colour, and a palette that puts something else
-    /// in slot 1 turns every analytic shadow into a solid block.
+    /// 若调色板在槽位 0 放入真实颜色，所有“无填充”图元都会绘制该颜色；
+    /// 若在槽位 1 放入其他颜色，所有解析阴影都会变成实心色块。
+    ///
     #[test]
     fn slot_zero_is_transparent_and_slot_one_is_shadow() {
         let set = ThemeSet::default_set();
@@ -946,15 +946,15 @@ mod tests {
                 "slot 1 must be the shadow colour in {}",
                 kind.name()
             );
-            // The shadow is not transparent: an invisible shadow would be a
-            // shadow that never renders.
+            // 阴影不得为透明：不可见的阴影等于永不渲染。
+            //
             assert!(palette.color(Token::SHADOW).to_array()[3] > 0.0);
             assert_eq!(Token::NONE.raw(), 0);
             assert_eq!(Token::SHADOW.raw(), 1);
         }
     }
 
-    /// Every semantic token owns a slot of its own.
+    /// 每个语义令牌都拥有各自独立的槽位。
     #[test]
     fn the_semantic_tokens_never_share_a_slot() {
         let mut seen = std::collections::HashSet::new();
@@ -965,7 +965,7 @@ mod tests {
                 token.raw()
             );
         }
-        // The reserved engine slots stay reserved.
+        // 引擎保留槽位必须保持保留状态。
         assert!(!seen.contains(&Token::NONE.raw()));
     }
 
@@ -1018,17 +1018,17 @@ mod tests {
         }
     }
 
-    /// The theme used to carry its own half-float decoder next to the
-    /// canonical one in `unbound-math`. Two decoders for the same format is
-    /// two chances to disagree — and this one did: it mapped every
-    /// exponent-31 pattern to infinity, including the NaNs, where the
-    /// canonical decoder returns NaN.
+    /// 主题模块曾在其内部维护与 `unbound-math` 规范解码器并行的半精度浮点解码器。
+    /// 同一格式存在两个解码器就有两处产生分歧的风险——事实也确实如此：
+    /// 旧解码器把所有指数为 31 的位模式（包括 NaN）都映射成了无穷大，
+    /// 而规范解码器对 NaN 会正确返回 NaN。
     ///
-    /// The theme now uses the canonical decoder outright. This test keeps
-    /// the two from drifting apart again, and pins the NaN behaviour.
+    ///
+    /// 主题模块现已直接使用规范解码器。本测试防止两者再次偏离，并锁定 NaN 行为。
+    ///
     #[test]
     fn the_theme_uses_the_canonical_half_float_decoder() {
-        // A signalling NaN and a quiet NaN.
+        // 一个信号 NaN（signalling NaN）与一个安静 NaN（quiet NaN）。
         for bits in [0x7c01u16, 0x7e00, 0xfc01] {
             let decoded = unbound_math::f16_to_f32(bits);
             assert!(
@@ -1036,7 +1036,7 @@ mod tests {
                 "pattern {bits:#06x} must decode to NaN, got {decoded}"
             );
         }
-        // And the ordinary values still decode the way the LUT expects.
+        // 普通数值仍按 LUT 预期的方式解码。
         assert_eq!(unbound_math::f16_to_f32(0x3c00), 1.0);
         assert_eq!(unbound_math::f16_to_f32(0x0000), 0.0);
     }
@@ -1045,9 +1045,9 @@ mod tests {
     fn high_contrast_removes_translucency() {
         let set = ThemeSet::default_set();
         let palette = set.palette(ThemeKind::HighContrast);
-        // Only the three state overlays may stay translucent; every content
-        // colour has to be fully opaque or the high-contrast theme would
-        // wash out against an arbitrary wallpaper.
+        // 仅三种状态叠加层允许保持半透明；所有内容颜色必须完全不透明，
+        // 否则高对比度主题在任意壁纸上都会发虚。
+        //
         let translucent = [
             Token::HOVER,
             Token::PRESSED,
@@ -1071,8 +1071,8 @@ mod tests {
         for token in TOKENS {
             assert!(seen.insert(token.raw()), "duplicate token {}", token.raw());
         }
-        // The two lowest ids are frozen because they are referenced from
-        // built-in shaders: slot 0 is "no colour", slot 1 is the shadow.
+        // 最低的两个 ID 已冻结，因为内置着色器直接引用它们：槽位 0 为“无颜色”，槽位 1 为阴影。
+        //
         assert_eq!(Token::NONE.raw(), 0);
         assert_eq!(Token::SHADOW.raw(), 1);
         assert_eq!(Token::PRIMARY.raw(), 5);

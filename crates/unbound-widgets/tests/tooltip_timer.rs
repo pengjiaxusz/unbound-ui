@@ -1,8 +1,8 @@
-//! Tooltips use an absolute hover deadline and wrap their text at 280px.
+//! 工具提示使用绝对悬停截止时间并在 280px 处自动换行。
 //!
-//! No timer queue lives in this crate yet, so [`TooltipDelay`] is the local
-//! deadline value: it is registered with `schedule` and read once per frame by
-//! `poll`. Both halves are exercised here with a fake clock.
+//! 本 crate 尚无定时器队列，因此 [`TooltipDelay`] 是本地截止时间值：
+//! 通过 `schedule` 注册，每帧通过 `poll` 读取。此处使用模拟时钟测试这两部分。
+//!
 
 use unbound_math::{Rect, Vec2};
 use unbound_widgets::tooltip::{
@@ -42,7 +42,7 @@ fn scheduling_registers_the_delay_and_polling_opens_the_bubble() {
     assert!(state.visible());
     assert_eq!(state.hovered_ms(), 400.0);
 
-    // Re-registering the same node every frame keeps the original deadline.
+    // 每帧重复注册同一节点会保留原始截止时间。
     state.schedule(&desc, Some(7), 1_500.0);
     assert_eq!(state.delay(), Some(TooltipDelay::start(1_000.0, 400.0)));
     assert!(!state.poll(1_500.0), "the visibility did not change again");

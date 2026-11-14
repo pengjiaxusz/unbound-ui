@@ -1,51 +1,51 @@
-//! Context-aware keyboard shortcuts (`docs` §6.4).
+//! 上下文感知键盘快捷键（`docs` §6.4）。
 //!
-//! A key press is not a shortcut until the modifiers and the focused *scope*
-//! agree. [`Keymap`] keeps the bindings and answers one question per press:
-//! "which command does this chord run here, if any?".
+//! 仅当修饰键与当前聚焦的**作用域（scope）**同时匹配时，按键才构成快捷键。
+//! [`Keymap`] 维护所有绑定并在每次按键时回答同一个问题：
+//! “该组合键在此处触发哪条命令（若有）？”。
 //!
-//! Two shapes are supported:
+//! 支持两种按键形态：
 //!
-//! * a single chord, e.g. `Ctrl+Shift+P`;
-//! * a two-chord sequence, e.g. `Ctrl+K, Ctrl+S`, where the first chord only
-//!   arms the sequence and the second one fires it within
-//!   [`Keymap::sequence_window`].
+//! * 单组和弦键，例如 `Ctrl+Shift+P`；
+//! * 双组序列键，例如 `Ctrl+K, Ctrl+S`，其中第一组和弦仅预备序列，
+//!   第二组和弦在 [`Keymap::sequence_window`] 时间窗内触发命令。
 //!
-//! The context is a plain string the application owns (`"TextInput"`,
-//! `"Canvas"`, `"Modal"`). A binding registered *without* a context is global;
-//! a binding registered for the active context wins over it, which is how a
-//! modal can shadow the application's own shortcut without unregistering it.
+//!
+//! 上下文是由应用持有的普通字符串（`"TextInput"`、`"Canvas"`、`"Modal"`）。
+//! 未指定上下文的绑定为全局绑定；为当前活跃上下文注册的绑定优先级高于
+//! 全局绑定，模态框借此无需注销即可遮蔽应用自身的快捷键。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
-/// One physical key in a chord.
+/// 和弦中的单个物理按键。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum KeyName {
-    /// A character key, already mapped from the keyboard layout.
+    /// 已按键盘布局映射后的字符键。
     Char(char),
-    /// A named key such as `"Enter"` or `"ArrowLeft"`.
+    /// 具名按键，如 `"Enter"` 或 `"ArrowLeft"`。
     Named(&'static str),
-    /// A function key, `F1`..`F24`.
+    /// 功能键，`F1`..`F24`。
     Function(u8),
 }
 
-/// A key plus the modifiers that must be held with it.
+/// 按键及必须同时按住的修饰键。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyChord {
-    /// The key itself.
+    /// 按键本身。
     pub key: KeyName,
-    /// `Ctrl` / `Cmd` style modifier (the platform decides which).
+    /// `Ctrl` / `Cmd` 风格修饰键（由平台决定具体映射）。
     pub ctrl: bool,
-    /// Shift.
+    /// Shift 键。
     pub shift: bool,
-    /// Alt / Option.
+    /// Alt / Option 键。
     pub alt: bool,
-    /// Windows / Super / Command.
+    /// Windows / Super / Command 键。
     pub meta: bool,
 }
 
 impl KeyChord {
-    /// A chord with no modifiers.
+    /// 不带任何修饰键的和弦。
     #[must_use]
     pub const fn new(key: KeyName) -> Self {
         Self {
@@ -57,40 +57,40 @@ impl KeyChord {
         }
     }
 
-    /// A character chord with no modifiers.
+    /// 不带修饰键的字符和弦。
     #[must_use]
     pub const fn character(character: char) -> Self {
         Self::new(KeyName::Char(character))
     }
 
-    /// A named chord with no modifiers.
+    /// 不带修饰键的具名按键和弦。
     #[must_use]
     pub const fn named(name: &'static str) -> Self {
         Self::new(KeyName::Named(name))
     }
 
-    /// The same chord with `Ctrl` required.
+    /// 要求同时按住 `Ctrl` 的同一和弦。
     #[must_use]
     pub const fn with_ctrl(mut self) -> Self {
         self.ctrl = true;
         self
     }
 
-    /// The same chord with `Shift` required.
+    /// 要求同时按住 `Shift` 的同一和弦。
     #[must_use]
     pub const fn with_shift(mut self) -> Self {
         self.shift = true;
         self
     }
 
-    /// The same chord with `Alt` required.
+    /// 要求同时按住 `Alt` 的同一和弦。
     #[must_use]
     pub const fn with_alt(mut self) -> Self {
         self.alt = true;
         self
     }
 
-    /// The same chord with `Meta` required.
+    /// 要求同时按住 `Meta` 的同一和弦。
     #[must_use]
     pub const fn with_meta(mut self) -> Self {
         self.meta = true;
@@ -98,27 +98,27 @@ impl KeyChord {
     }
 }
 
-/// One registered shortcut.
+/// 单条已注册的快捷键绑定。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct KeyBinding {
-    /// The chord that fires the action.
+    /// 触发动作的和弦。
     pub chord: KeyChord,
-    /// The chord that arms a sequence, when this binding is two-chord.
+    /// 当该绑定为双组序列键时，用于预备序列的前缀和弦。
     pub prefix: Option<KeyChord>,
-    /// The scope the binding belongs to; `None` is global.
+    /// 绑定所属的作用域；`None` 表示全局。
     pub context: Option<&'static str>,
-    /// The application's command number.
+    /// 应用侧的命令编号。
     pub action: u64,
 }
 
-/// The pending state of a two-chord sequence.
+/// 双组序列键的挂起等待状态。
 #[derive(Copy, Clone, Debug, PartialEq)]
 struct PendingSequence {
     prefix: KeyChord,
     started: f64,
 }
 
-/// The shortcut table.
+/// 快捷键映射表。
 #[derive(Debug)]
 pub struct Keymap {
     bindings: Vec<KeyBinding>,
@@ -133,10 +133,10 @@ impl Default for Keymap {
 }
 
 impl Keymap {
-    /// How long a sequence prefix stays armed, in seconds.
+    /// 序列前缀保持预备状态的时长（单位：秒）。
     pub const DEFAULT_SEQUENCE_WINDOW: f64 = 1.0;
 
-    /// An empty keymap.
+    /// 创建一个空快捷键映射表。
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -146,14 +146,14 @@ impl Keymap {
         }
     }
 
-    /// Override how long a sequence prefix stays armed.
+    /// 覆盖序列前缀保持预备状态的时长。
     #[must_use]
     pub fn with_sequence_window(mut self, seconds: f64) -> Self {
         self.sequence_window = seconds.max(0.0);
         self
     }
 
-    /// Register a single-chord shortcut.
+    /// 注册单组和弦快捷键。
     pub fn bind(&mut self, chord: KeyChord, context: Option<&'static str>, action: u64) {
         self.bindings.push(KeyBinding {
             chord,
@@ -163,7 +163,7 @@ impl Keymap {
         });
     }
 
-    /// Register a two-chord shortcut.
+    /// 注册双组序列快捷键。
     pub fn bind_sequence(
         &mut self,
         prefix: KeyChord,
@@ -179,27 +179,27 @@ impl Keymap {
         });
     }
 
-    /// The bindings, for a help overlay.
+    /// 返回所有绑定列表，供快捷键帮助浮层展示。
     #[must_use]
     pub fn bindings(&self) -> &[KeyBinding] {
         &self.bindings
     }
 
-    /// The armed sequence prefix, if the user is halfway through one.
+    /// 若用户正处于序列按键中途，返回当前已预备的序列前缀。
     #[must_use]
     pub fn pending(&self) -> Option<KeyChord> {
         self.pending.map(|pending| pending.prefix)
     }
 
-    /// Drop an armed prefix (focus change, Escape, a click elsewhere).
+    /// 丢弃已预备的前缀（焦点变化、按下 Escape 或点击别处时调用）。
     pub fn clear_pending(&mut self) {
         self.pending = None;
     }
 
-    /// Feed one press and return the command it fires, if any.
+    /// 送入一次按键并返回其触发的命令（若有）。
     ///
-    /// `now` is the runtime clock in seconds; it only matters for the sequence
-    /// window, so a test can pass `0.0` for every press.
+    /// `now` 为运行时时钟（单位：秒）；仅用于序列时间窗判断，
+    /// 因此测试中每次按键均可传入 `0.0`。
     pub fn feed(&mut self, chord: KeyChord, context: Option<&str>, now: f64) -> Option<u64> {
         if let Some(pending) = self.pending.take() {
             if now - pending.started <= self.sequence_window {
@@ -216,8 +216,8 @@ impl Keymap {
                 if hit.is_some() {
                     return hit;
                 }
-                // The second chord was not part of the sequence. It may still
-                // start or fire a binding of its own, so fall through.
+                // 第二组和弦不属于该序列，但它本身仍可能开启或触发另一条绑定，
+                // 因此继续向下匹配。
             }
         }
 
@@ -237,8 +237,8 @@ impl Keymap {
         None
     }
 
-    /// A single-chord match. An exact context wins over a global binding;
-    /// within the same scope the most recently registered binding wins.
+    /// 单组和弦匹配：精确上下文优先于全局绑定；
+    /// 同一作用域内，最近注册的绑定优先。
     fn match_single(&self, chord: KeyChord, context: Option<&str>) -> Option<u64> {
         let exact = self.bindings.iter().rev().find(|binding| {
             binding.prefix.is_none()

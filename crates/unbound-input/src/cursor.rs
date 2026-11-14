@@ -1,51 +1,51 @@
-//! The deterministic cursor state stack (`docs` §6.2).
+//! 确定性光标状态栈（`docs` §6.2）。
 //!
-//! Cursor resolution is a *priority* problem, not a "last writer wins" problem:
-//! a pointer captured by a scrollbar thumb must keep showing `grabbing` even
-//! while it flies over a text field, and a resize handle must beat the canvas
-//! tool behind it. The doc fixes the order:
+//! 光标解析是一个**优先级**问题，而非“后来者覆盖”问题：
+//! 被滚动条滑块捕获的指针即使划过文本输入框，也必须保持 `grabbing` 状态；
+//! 缩放手柄也必须优先于其后方的画布工具。文档规定了如下优先级顺序：
+//!
 //!
 //! ```text
-//! Active Pointer Capture > Overlay > Resize Handle > Canvas Tool > Text > Default
+//! 指针捕获 > 浮层 > 缩放手柄 > 画布工具 > 文本 > 默认
 //! ```
 //!
-//! Each *source* contributes at most one entry, so pushing the same source every
-//! frame cannot grow the stack, and ties inside one source are broken by an
-//! insertion sequence number — which makes the resolved cursor a pure function
-//! of the frame's inputs.
+//! 每个**来源（source）**最多贡献一条记录，因此每帧重复推入同一来源
+//! 不会使栈无限增长；同一来源内部的平局由插入序号打破——
+//! 这使得最终解析出的光标成为当前帧输入的纯函数。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 use unbound_canvas::Handle;
 
-/// What the OS pointer should look like.
+/// 操作系统指针应呈现的外观形态。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum CursorKind {
     #[default]
     Default,
-    /// Hand over something clickable.
+    /// 悬停在可点击元素上时的手型光标。
     Pointer,
-    /// I-beam over selectable text.
+    /// 悬停在可选中文本上时的工字光标。
     Text,
-    /// Open hand: content can be panned.
+    /// 张开的手掌：表示内容可平移。
     Grab,
-    /// Closed hand: content is being panned.
+    /// 握紧的手掌：表示正在平移内容。
     Grabbing,
-    /// Precise target, e.g. the rotation grip.
+    /// 十字准星，例如旋转控制柄。
     Crosshair,
-    /// Four-way move.
+    /// 四向移动光标。
     Move,
     ResizeNorthSouth,
     ResizeEastWest,
     ResizeNorthWestSouthEast,
     ResizeNorthEastSouthWest,
     NotAllowed,
-    /// Platform-defined cursor id.
+    /// 平台定义的光标 ID。
     Custom(u16),
 }
 
 impl CursorKind {
-    /// Map a transform handle to its cursor.
+    /// 将变换手柄映射到对应的光标类型。
     #[must_use]
     pub fn for_handle(handle: Handle) -> Self {
         match handle {
@@ -57,7 +57,7 @@ impl CursorKind {
         }
     }
 
-    /// Which stack slot this cursor competes for.
+    /// 该光标所竞争的栈槽位。
     #[must_use]
     pub fn source(self) -> CursorSource {
         match self {
@@ -72,7 +72,7 @@ impl CursorKind {
     }
 }
 
-/// Who is asking for the cursor. The numeric value *is* the priority.
+/// 请求光标的来源方，其数值**即**为优先级。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CursorSource {
     Default = 0,
@@ -90,7 +90,7 @@ struct Entry {
     seq: u64,
 }
 
-/// Priority-ordered cursor requests for one frame.
+/// 单帧内按优先级排序的光标请求集合。
 #[derive(Clone, Debug, Default)]
 pub struct CursorStack {
     entries: Vec<Entry>,
@@ -103,12 +103,12 @@ impl CursorStack {
         Self::default()
     }
 
-    /// Start a frame: drop every request from the previous one.
+    /// 开始新一帧：丢弃上一帧的所有请求。
     pub fn clear(&mut self) {
         self.entries.clear();
     }
 
-    /// Request a cursor for `source`, replacing any earlier request from it.
+    /// 为 `source` 请求光标，替换其此前的任意请求。
     pub fn push(&mut self, source: CursorSource, kind: CursorKind) {
         self.seq += 1;
         if let Some(entry) = self.entries.iter_mut().find(|e| e.source == source) {
@@ -123,12 +123,12 @@ impl CursorStack {
         });
     }
 
-    /// Drop the request from `source`.
+    /// 移除来自 `source` 的光标请求。
     pub fn pop(&mut self, source: CursorSource) {
         self.entries.retain(|e| e.source != source);
     }
 
-    /// Highest-priority request, or [`CursorKind::Default`].
+    /// 最高优先级的光标请求，若无请求则返回 [`CursorKind::Default`]。
     #[must_use]
     pub fn resolve(&self) -> CursorKind {
         self.entries
@@ -137,7 +137,7 @@ impl CursorStack {
             .map_or(CursorKind::Default, |e| e.kind)
     }
 
-    /// Number of sources currently requesting a cursor.
+    /// 当前正在请求光标的来源数量。
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()

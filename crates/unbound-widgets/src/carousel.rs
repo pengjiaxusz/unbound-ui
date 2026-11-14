@@ -1,4 +1,4 @@
-//! Carousel / Slider deck with spring snap pagination & indicator dots.
+//! 轮播组件（Carousel / Slider）：支持弹簧吸附分页与指示圆点。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -14,23 +14,23 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_DOTS: usize = 5;
 
-/// Deterministic sub-node id for a carousel indicator dot.
+/// 轮播指示圆点的确定性子节点 ID。
 #[must_use]
 pub const fn carousel_dot_node(node: u64, index: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x400 + index as u64)
 }
 
-/// Interactive state for [`CarouselDesc`].
+/// [`CarouselDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CarouselState {
-    /// Active slide index.
+    /// 当前激活的幻灯片索引。
     pub active: usize,
-    /// Normalized slide offset for spring snap.
+    /// 用于弹簧吸附的归一化幻灯片偏移量。
     pub offset: f32,
 }
 
 impl CarouselState {
-    /// Step forward or backward wrapping around `count`.
+    /// 向前或向后步进，并在 `count` 范围内循环。
     pub fn step(&mut self, delta: isize, count: usize) {
         if count == 0 {
             return;
@@ -40,23 +40,23 @@ impl CarouselState {
     }
 }
 
-/// Descriptor for a [`Carousel`].
+/// [`Carousel`] 描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CarouselDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Total number of slides.
+    /// 幻灯片总数。
     pub slide_count: usize,
-    /// Active slide index.
+    /// 当前激活的幻灯片索引。
     pub active: usize,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl CarouselDesc {
-    /// Create a carousel descriptor.
+    /// 创建轮播描述符。
     #[must_use]
     pub fn new(rect: Rect, slide_count: usize, active: usize) -> Self {
         let count = slide_count.max(1);
@@ -70,7 +70,7 @@ impl CarouselDesc {
     }
 }
 
-/// Emit a stable-shape carousel (1 stage + 5 indicator dots + 1 focus ring = 7 primitives).
+/// 发射固定形状的轮播组件（1 舞台 + 5 指示圆点 + 1 焦点环 = 7 个图元）。
 #[must_use]
 pub fn emit_carousel(
     node: u64,

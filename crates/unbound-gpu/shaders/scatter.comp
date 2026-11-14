@@ -3,20 +3,17 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // ---------------------------------------------------------------------------
-// Stage 1 — Incremental Scatter (docs §2.2).
+// 阶段 1 — 增量散布更新（参见 `docs/architecture/gpu-renderer.md`）。
 //
-// The CPU never re-uploads the persistent pool. Instead it appends a sparse list
-// of `{dst_offset, src_offset, len}` patches to the frame's transient ring and
-// this shader copies them in place. A frame that only moves the camera enqueues
-// zero patches, which is what makes "0 bytes per frame" true rather than
-// aspirational.
+// CPU 永不重传持久化池，而是向帧瞬态环追加稀疏的 `{dst_offset, src_offset, len}` 补丁列表，
+// 由本着色器就地拷贝。仅移动相机的帧入队零个补丁，从而真正实现“每帧 0 字节”上传。
 // ---------------------------------------------------------------------------
 
 #include "common.glsl"
 
-// One *workgroup* per patch: the 64 threads of the group share the copy.
-// A single thread per patch would serialise a multi-megabyte upload into one
-// lane of one SM, which costs hundreds of milliseconds for a full scene.
+// 每个补丁分配一个工作组：组内 64 个线程协作完成拷贝。
+// 若每个补丁仅用单线程，会将数兆字节的上传串行化到单个 SM 的一条通道上，
+// 完整场景下会耗费数百毫秒。
 layout(local_size_x = 64) in;
 
 struct ScatterPatch {
@@ -34,7 +31,7 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer WordBuf {
 };
 
 void main() {
-    // `patch` is a reserved word in GLSL.
+    // `patch` 是 GLSL 保留字，故命名为 p。
     uint patch_index = gl_WorkGroupID.x;
     if (patch_index >= pc.prim_count) {
         return;
@@ -43,13 +40,12 @@ void main() {
     WordBuf dst = WordBuf(pc.scratch_bda2);
     WordBuf src = WordBuf(pc.scratch_bda3);
 
-    // 16-byte granule copies: both ends are documented to be 16B aligned
-    // (pool offsets are 64B aligned, ring offsets are 16B aligned).
+    // 按 16 字节粒度拷贝：两端均已约定 16B 对齐（池偏移 64B 对齐，环偏移 16B 对齐）。
     uint words = sp.len >> 4;
     uint d = sp.dst_offset >> 4;
     uint s = sp.src_offset >> 4;
 
-    // The whole group walks the patch together.
+    // 整个工作组协作遍历并拷贝该补丁。
     uint lid = gl_LocalInvocationID.x;
     for (uint k = lid; k < words; k += 64u) {
         dst.w[d + k] = src.w[s + k];

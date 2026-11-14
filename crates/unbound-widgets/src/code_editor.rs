@@ -1,4 +1,4 @@
-//! Editable CodeEditor with gutter line numbers, active line highlight, selection & bracket match.
+//! 可编辑代码编辑器（CodeEditor），支持行号槽、当前行高亮、选区与括号匹配。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -12,21 +12,21 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// Interactive state for [`CodeEditorDesc`].
+/// [`CodeEditorDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CodeEditorState {
-    /// Source buffer.
+    /// 源码缓冲区。
     pub source: String,
-    /// 0-based active cursor line.
+    /// 0-based 当前光标所在行。
     pub cursor_line: usize,
-    /// 0-based cursor column.
+    /// 0-based 当前光标所在列。
     pub cursor_col: usize,
-    /// Optional `(start_line, start_col)..(end_line, end_col)` selection.
+    /// 可选选区 `(start_line, start_col)..(end_line, end_col)`。
     pub selection: Option<((usize, usize), (usize, usize))>,
 }
 
 impl CodeEditorState {
-    /// Create a state with source text.
+    /// 使用源码文本创建状态。
     #[must_use]
     pub fn new(source: impl Into<String>) -> Self {
         Self {
@@ -37,13 +37,13 @@ impl CodeEditorState {
         }
     }
 
-    /// Highlight every line using [`highlight_line`].
+    /// 使用 [`highlight_line`] 高亮每一行。
     #[must_use]
     pub fn highlight_spans(&self) -> Vec<Vec<CodeSpan>> {
         self.source.lines().map(highlight_line).collect()
     }
 
-    /// Find matching `()`, `[]`, or `{}` around `(cursor_line, cursor_col)` if the character at cursor is a bracket.
+    /// 若光标处为括号，则在 `(cursor_line, cursor_col)` 周围查找匹配的 `()`、`[]` 或 `{}`。
     #[must_use]
     pub fn find_matching_bracket(&self) -> Option<(usize, usize)> {
         let lines: Vec<&str> = self.source.lines().collect();
@@ -61,7 +61,11 @@ impl CodeEditorState {
         let mut depth = 0i32;
         if forward {
             for (li, l) in lines.iter().enumerate().skip(self.cursor_line) {
-                let start_col = if li == self.cursor_line { self.cursor_col } else { 0 };
+                let start_col = if li == self.cursor_line {
+                    self.cursor_col
+                } else {
+                    0
+                };
                 for (ci, &b) in l.as_bytes().iter().enumerate().skip(start_col) {
                     if b == open {
                         depth += 1;
@@ -98,33 +102,33 @@ impl CodeEditorState {
     }
 }
 
-/// Descriptor for a [`CodeEditor`].
+/// [`CodeEditor`] 描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CodeEditorDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Total line count.
+    /// 总行数。
     pub line_count: usize,
-    /// Active 0-based cursor line.
+    /// 0-based 当前光标行。
     pub cursor_line: usize,
-    /// Active 0-based cursor column.
+    /// 0-based 当前光标列。
     pub cursor_col: usize,
-    /// Optional line slices for syntax display.
+    /// 用于语法显示的可选行切片。
     pub lines: Vec<String>,
-    /// Optional single-line selection byte range `(start_col, end_col)` on `cursor_line`.
+    /// `cursor_line` 上可选的单行选区字节范围 `(start_col, end_col)`。
     pub selection: Option<(usize, usize)>,
-    /// Optional matching bracket `(line, col)` to highlight.
+    /// 可选的待高亮匹配括号坐标 `(line, col)`。
     pub matching_bracket: Option<(usize, usize)>,
-    /// Vertical scroll offset.
+    /// 垂直滚动偏移量。
     pub scroll: Vec2,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl CodeEditorDesc {
-    /// Create a code editor descriptor.
+    /// 创建代码编辑器描述符。
     #[must_use]
     pub fn new(rect: Rect, line_count: usize, cursor_line: usize) -> Self {
         Self {
@@ -141,7 +145,7 @@ impl CodeEditorDesc {
         }
     }
 
-    /// Attach source lines to the descriptor.
+    /// 附加源码行到描述符。
     #[must_use]
     pub fn with_lines(mut self, lines: Vec<String>) -> Self {
         self.line_count = lines.len().max(1);
@@ -149,21 +153,21 @@ impl CodeEditorDesc {
         self
     }
 
-    /// Attach a cursor column.
+    /// 附加光标列位置。
     #[must_use]
     pub fn with_cursor_col(mut self, col: usize) -> Self {
         self.cursor_col = col;
         self
     }
 
-    /// Attach an active selection range.
+    /// 附加活动选区范围。
     #[must_use]
     pub fn with_selection(mut self, selection: Option<(usize, usize)>) -> Self {
         self.selection = selection;
         self
     }
 
-    /// Attach a matching bracket coordinate.
+    /// 附加匹配括号坐标。
     #[must_use]
     pub fn with_matching_bracket(mut self, bracket: Option<(usize, usize)>) -> Self {
         self.matching_bracket = bracket;
@@ -171,7 +175,7 @@ impl CodeEditorDesc {
     }
 }
 
-/// Emit a stable-shape code editor (bg + gutter + active line + selection + bracket + caret + focus ring = 7 fixed primitives).
+/// 发射固定形状的代码编辑器（背景 + 行号槽 + 当前行 + 选区 + 括号 + 光标 + 焦点环 = 7 个固定图元）。
 #[must_use]
 pub fn emit_code_editor(
     node: u64,
@@ -211,7 +215,9 @@ pub fn emit_code_editor(
     ));
 
     let line_h = 18.0_f32.min(desc.rect.height() * 0.35);
-    let visible_line = desc.cursor_line.saturating_sub((desc.scroll.y / line_h) as usize);
+    let visible_line = desc
+        .cursor_line
+        .saturating_sub((desc.scroll.y / line_h) as usize);
     let line_y = (desc.rect.origin.y + 6.0 + (visible_line % 16) as f32 * line_h)
         .min(desc.rect.max().y - line_h - 4.0);
     primitives.push(surface(
@@ -226,7 +232,7 @@ pub fn emit_code_editor(
         desc.z + 1,
     ));
 
-    // Selection band (transparent when absent for Stable Shape).
+    // 选区条带（无选区时保持透明以维持固定形状）。
     let (sel_x, sel_w, sel_alpha) = if let Some((s, e)) = desc.selection {
         let lo = s.min(e) as f32 * 8.0;
         let hi = s.max(e) as f32 * 8.0;
@@ -248,14 +254,17 @@ pub fn emit_code_editor(
         unbound_gpu::data::GpuPrimitiveInstance::pack_z_opacity(desc.z + 1, sel_alpha);
     primitives.push(sel_prim);
 
-    // Matching bracket highlight (transparent when absent for Stable Shape).
+    // 匹配括号高亮（无匹配时保持透明以维持固定形状）。
     let (brk_rect, brk_alpha) = if let Some((bl, bc)) = desc.matching_bracket {
         let by = (desc.rect.origin.y + 6.0 + (bl % 16) as f32 * line_h)
             .min(desc.rect.max().y - line_h - 4.0);
         let bx = desc.rect.origin.x + gutter_w + 10.0 + bc as f32 * 8.0;
         (Rect::new(bx, by + 1.0, 8.0, (line_h - 2.0).max(6.0)), 1.0)
     } else {
-        (Rect::new(desc.rect.origin.x, desc.rect.origin.y, 0.0, 0.0), 0.0)
+        (
+            Rect::new(desc.rect.origin.x, desc.rect.origin.y, 0.0, 0.0),
+            0.0,
+        )
     };
     let mut brk_prim = outlined(
         brk_rect,
@@ -270,15 +279,11 @@ pub fn emit_code_editor(
         unbound_gpu::data::GpuPrimitiveInstance::pack_z_opacity(desc.z + 2, brk_alpha);
     primitives.push(brk_prim);
 
-    let caret_x = (desc.rect.origin.x + gutter_w + 10.0 + desc.cursor_col as f32 * 8.0 - desc.scroll.x)
+    let caret_x = (desc.rect.origin.x + gutter_w + 10.0 + desc.cursor_col as f32 * 8.0
+        - desc.scroll.x)
         .clamp(desc.rect.origin.x + gutter_w + 6.0, desc.rect.max().x - 6.0);
     primitives.push(surface(
-        Rect::new(
-            caret_x,
-            line_y + 2.0,
-            2.0,
-            (line_h - 4.0).max(8.0),
-        ),
+        Rect::new(caret_x, line_y + 2.0, 2.0, (line_h - 4.0).max(8.0)),
         1.0,
         Token::PRIMARY,
         desc.z + 2,

@@ -1,37 +1,37 @@
-//! Deferred swapchain recreation (`docs` §2.3).
+//! 延迟交换链重建策略（`docs` §2.3）。
 //!
-//! On Windows, dragging a window edge produces a burst of `WM_SIZE`
-//! messages. The policy implemented here decides *when* the swapchain
-//! follows the window:
+//! 在 Windows 上，拖拽窗口边缘会产生大量 `WM_SIZE` 消息。
+//! 此处实现的策略决定交换链**何时**跟随窗口尺寸：
 //!
-//! * **Real-time mode (the default).** The swapchain is rebuilt for every
-//!   size the OS reports, so the frame is rendered at the new resolution
-//!   and the compositor never has to stretch the previous one.
-//! * **Deferred mode.** The swapchain keeps the committed size while the
-//!   size is still moving and is rebuilt once it settles. This trades a
-//!   stretched frame for a cheaper rebuild, which is what a host that
-//!   cannot afford a rebuild per message wants.
 //!
-//! Both modes never block the message loop: a resize only *records* the new
-//! size, and the rebuild happens in the frame.
+//! * **实时模式（默认）。** 针对系统上报的每一个新尺寸重建交换链，
+//!   使帧按新分辨率渲染，合成器无需拉伸上一帧。
+//! * **延迟模式。** 在尺寸仍在变化时保留已提交尺寸，待尺寸稳定后再重建。
+//!   该模式以拉伸帧换取更少的重建次数，适合无法承担每条消息都重建的宿主。
+//!
+//!
+//!
+//!
+//! 两种模式均绝不阻塞消息循环：尺寸调整仅**记录**新尺寸，实际重建在帧内完成。
+//!
 
 use std::time::{Duration, Instant};
 
-/// The settle window used by default: the swapchain follows the window
-/// size immediately.
+/// 默认使用的稳定窗口时长：交换链立即跟随窗口尺寸。
 ///
-/// Zero means "no settle window at all": every size the OS reports is
-/// committed on the spot. That is what makes a live resize sharp instead
-/// of a stretched copy of the last frame.
+/// 零表示“完全无稳定等待窗口”：系统上报的每个尺寸都会当场提交。
+/// 这正是实时缩放保持锐利、不会出现上一帧拉伸副本的原因。
+///
+///
 pub const DEFAULT_SETTLE: Duration = Duration::ZERO;
 
-/// The settle window of the deferred mode.
+/// 延迟模式的稳定等待窗口。
 ///
-/// Two frames at 120 Hz is ~16 ms: long enough to swallow the event burst of
-/// a drag, short enough that the user never notices a lag.
+/// 120 Hz 下的两帧约为 16 ms：既足以吞并拖拽时的事件风暴，
+/// 又短到用户完全察觉不到延迟。
 pub const DEFERRED_SETTLE: Duration = Duration::from_millis(16);
 
-/// A physical pixel extent.
+/// 物理像素尺寸范围。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub struct Extent {
     pub width: u32,
@@ -39,66 +39,66 @@ pub struct Extent {
 }
 
 impl Extent {
-    /// Build an extent.
+    /// 构建尺寸范围。
     #[must_use]
     pub const fn new(width: u32, height: u32) -> Self {
         Self { width, height }
     }
 
-    /// True when the extent has no area and cannot back a swapchain.
+    /// 当面积为零、无法支撑交换链时返回 `true`。
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.width == 0 || self.height == 0
     }
 
-    /// Number of pixels.
+    /// 总像素数量。
     #[must_use]
     pub const fn pixels(self) -> u64 {
         self.width as u64 * self.height as u64
     }
 }
 
-/// What the platform layer should do about the window size.
+/// 平台层针对窗口尺寸变化应采取的动作。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ResizeAction {
-    /// Nothing to do.
+    /// 无需操作。
     None,
-    /// Recreate the swapchain at this extent.
+    /// 按该尺寸重建交换链。
     Recreate(Extent),
 }
 
-/// Tracks the window size and decides when the swapchain follows.
+/// 追踪窗口尺寸并决定交换链何时跟随重建。
 #[derive(Debug)]
 pub struct ResizeTracker {
-    /// The extent the swapchain is currently at.
+    /// 交换链当前所处的尺寸。
     committed: Extent,
-    /// The most recent extent the OS reported.
+    /// 操作系统最近一次上报的尺寸。
     pending: Extent,
-    /// When `pending` first changed.
+    /// `pending` 首次发生变化的时刻。
     pending_since: Option<Instant>,
-    /// How long the size must be stable before it is committed.
+    /// 尺寸在提交前必须保持稳定的时长。
     settle: Duration,
-    /// Set while the user is dragging a window edge.
+    /// 用户正在拖拽窗口边缘时置位。
     dragging: bool,
-    /// Set when the driver rejected the swapchain.
+    /// 当驱动拒绝现有交换链时置位。
     ///
-    /// The settle window exists to avoid rebuilding the chain while the user
-    /// is still dragging. But once the driver has said `OUT_OF_DATE`, the
-    /// chain is already unusable — waiting for the window to settle would
-    /// leave the window showing the old resolution for another frame.
+    /// 稳定窗口的存在是为了避免在用户仍在拖拽时频繁重建交换链。
+    /// 但一旦驱动返回 `OUT_OF_DATE`，旧链已不可用——继续等待稳定只会让
+    /// 窗口多一帧停留在旧分辨率上。
+    ///
     forced: bool,
-    /// Number of committed recreations, for diagnostics.
+    /// 已提交的重建次数，供诊断使用。
     recreations: u32,
-    /// Number of resize messages that were absorbed instead of acted on.
+    /// 被吸收而非触发重建的尺寸调整消息数。
     absorbed: u32,
 }
 
 impl ResizeTracker {
-    /// Create a tracker for an initial extent.
+    /// 为初始尺寸创建追踪器。
     ///
-    /// A `settle` of [`Duration::ZERO`] selects the real-time mode: every
-    /// size the OS reports is committed at once. A longer window selects the
-    /// deferred mode, which waits for the size to settle before it rebuilds.
+    /// `settle` 为 [`Duration::ZERO`] 时选择实时模式：系统上报的每个尺寸
+    /// 立即提交。更大的窗口时长选择延迟模式，等待尺寸稳定后再重建。
+    ///
     #[must_use]
     pub fn new(initial: Extent, settle: Duration) -> Self {
         Self {
@@ -113,61 +113,61 @@ impl ResizeTracker {
         }
     }
 
-    /// Create a tracker with the default settle window.
+    /// 使用默认稳定窗口创建追踪器。
     #[must_use]
     pub fn with_default_settle(initial: Extent) -> Self {
         Self::new(initial, DEFAULT_SETTLE)
     }
 
-    /// The extent the swapchain is at.
+    /// 交换链当前所处的尺寸。
     #[must_use]
     pub const fn committed(&self) -> Extent {
         self.committed
     }
 
-    /// The extent the window currently has.
+    /// 窗口当前实际尺寸。
     #[must_use]
     pub const fn pending(&self) -> Extent {
         self.pending
     }
 
-    /// True while the swapchain does not match the window.
+    /// 当交换链与窗口尺寸不一致时返回 `true`。
     #[must_use]
     pub fn is_dirty(&self) -> bool {
         self.pending != self.committed
     }
 
-    /// Number of swapchain recreations.
+    /// 交换链重建次数。
     #[must_use]
     pub const fn recreations(&self) -> u32 {
         self.recreations
     }
 
-    /// Number of resize messages that were absorbed.
+    /// 被吸收合并的尺寸调整消息数。
     #[must_use]
     pub const fn absorbed(&self) -> u32 {
         self.absorbed
     }
 
-    /// The user started dragging a window edge.
+    /// 用户开始拖拽窗口边缘。
     pub fn on_drag_started(&mut self) {
         self.dragging = true;
     }
 
-    /// The user finished dragging a window edge.
+    /// 用户结束拖拽窗口边缘。
     ///
-    /// The pending size is committed immediately: the user expects the window
-    /// to match the content the moment they let go.
+    /// 立即提交挂起尺寸：用户期望在松手的瞬间窗口即匹配内容。
+    ///
     pub fn on_drag_ended(&mut self) -> ResizeAction {
         self.dragging = false;
         self.commit()
     }
 
-    /// Record a new window size.
+    /// 记录新的窗口尺寸。
     pub fn on_resized(&mut self, extent: Extent, now: Instant) -> ResizeAction {
         if extent.is_empty() {
-            // A minimised window reports a zero extent. Rebuilding a swapchain
-            // for it is illegal, so the size is ignored until it comes back.
+            // 最小化窗口会上报零尺寸。为其重建交换链是非法的，因此忽略该尺寸
+            // 直至窗口恢复。
             return ResizeAction::None;
         }
         let fresh = extent != self.pending;
@@ -176,32 +176,32 @@ impl ResizeTracker {
             self.pending_since = Some(now);
         }
         if self.settle.is_zero() {
-            // Real-time mode: the swapchain follows the window size at once.
-            // A drag therefore never shows a stretched copy of the previous
-            // frame, and the size is committed even while the edge is being
-            // dragged.
+            // 实时模式：交换链立即跟随窗口尺寸。因此拖拽期间绝不会出现上一帧的
+            // 拉伸副本，即使在边缘拖拽过程中尺寸也会立即提交。
+            //
+            //
             return self.commit();
         }
         if fresh && extent != self.committed {
             self.absorbed += 1;
         }
         if self.dragging {
-            // During a drag the swapchain stays where it is.
+            // 拖拽期间交换链保持原尺寸不变。
             return ResizeAction::None;
         }
-        // The size may already have settled: the settle timer keeps running
-        // even when the OS repeats the same size.
+        // 尺寸可能已经稳定：即使操作系统重复上报相同尺寸，稳定计时器仍继续计时。
+        //
         self.poll(now)
     }
 
-    /// Mark the swapchain as out of date.
+    /// 将交换链标记为已过期（out of date）。
     ///
-    /// The driver already rejected the old swapchain, so the settle window
-    /// is bypassed: the next [`ResizeTracker::poll`] commits immediately.
+    /// 驱动已拒绝旧交换链，因此绕过稳定窗口：下一次 [`ResizeTracker::poll`]
+    /// 将立即提交重建。
     ///
-    /// Without this the window keeps the old resolution until the user stops
-    /// dragging for the settle window — and every frame in between reports
-    /// `ERROR_OUT_OF_DATE_KHR` again.
+    /// 否则窗口会一直维持旧分辨率，直到用户停止拖拽并熬过稳定窗口——
+    /// 而这期间的每一帧都会反复上报 `ERROR_OUT_OF_DATE_KHR`。
+    ///
     pub fn mark_out_of_date(&mut self, extent: Extent) {
         if extent.is_empty() {
             return;
@@ -216,22 +216,22 @@ impl ResizeTracker {
         self.pending_since = Some(Instant::now());
     }
 
-    /// Check whether the pending size has settled and must be committed.
+    /// 检查挂起尺寸是否已稳定并需要提交重建。
     pub fn poll(&mut self, now: Instant) -> ResizeAction {
         if !self.is_dirty() {
             self.forced = false;
             return ResizeAction::None;
         }
         if self.settle.is_zero() {
-            // Real-time mode: there is nothing to wait for, and the drag
-            // never freezes the committed size.
+            // 实时模式：无需任何等待，拖拽也绝不会冻结已提交尺寸。
+            //
             return self.commit();
         }
         if self.dragging {
             return ResizeAction::None;
         }
         if self.forced {
-            // The driver rejected the chain: rebuild now.
+            // 驱动已拒绝旧链：立即重建。
             return self.commit();
         }
         let Some(since) = self.pending_since else {
@@ -243,7 +243,7 @@ impl ResizeTracker {
         self.commit()
     }
 
-    /// Commit the pending extent.
+    /// 提交挂起的尺寸。
     fn commit(&mut self) -> ResizeAction {
         if self.pending == self.committed {
             self.forced = false;
@@ -280,9 +280,9 @@ mod tests {
         assert_eq!(tracker.recreations(), 0);
     }
 
-    /// The real-time mode is the default: a size the OS reports is
-    /// committed at once, so the frame is drawn at the new resolution
-    /// instead of a stretched copy of the previous one.
+    /// 实时模式为默认行为：系统上报尺寸后立即提交，使帧按新分辨率绘制，
+    /// 而非显示上一帧的拉伸副本。
+    ///
     #[test]
     fn a_resize_is_committed_immediately_in_real_time_mode() {
         let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
@@ -301,9 +301,9 @@ mod tests {
         );
     }
 
-    /// A drag produces a burst of sizes. In the real-time mode every one of
-    /// them is committed: freezing the size would show a stretched frame for
-    /// the whole drag.
+    /// 拖拽会产生大量尺寸事件。在实时模式下每一个都会被提交：
+    /// 冻结尺寸会导致整个拖拽期间都显示拉伸帧。
+    ///
     #[test]
     fn every_size_of_a_drag_burst_is_committed_in_real_time_mode() {
         let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
@@ -320,8 +320,8 @@ mod tests {
         assert_eq!(tracker.committed(), extent(820, 600));
     }
 
-    /// The deferred mode keeps the old behaviour: the size is absorbed while
-    /// it is still moving.
+    /// 延迟模式保留旧行为：在尺寸仍在变化时将其吸收合并。
+    ///
     #[test]
     fn a_resize_is_committed_after_the_size_settles() {
         let mut tracker = ResizeTracker::new(extent(800, 600), DEFERRED_SETTLE);
@@ -358,8 +358,8 @@ mod tests {
             );
         }
         assert_eq!(tracker.recreations(), 0);
-        // The swapchain still has the old size: the compositor scales the last
-        // frame, so there is no black border.
+        // 交换链仍保持旧尺寸：合成器缩放上一帧，因此不会出现黑边。
+        //
         assert_eq!(tracker.committed(), extent(800, 600));
 
         assert_eq!(
@@ -370,8 +370,8 @@ mod tests {
         assert_eq!(tracker.recreations(), 1);
     }
 
-    /// The driver has already rejected the swapchain: the settle window is
-    /// pointless, the chain has to be rebuilt on the next poll.
+    /// 驱动已拒绝交换链：稳定窗口已无意义，必须在下一次轮询时立即重建。
+    ///
     #[test]
     fn out_of_date_marks_the_resize_tracker_dirty_immediately() {
         let mut tracker = ResizeTracker::new(extent(800, 600), DEFERRED_SETTLE);
@@ -381,7 +381,7 @@ mod tests {
             ResizeAction::None,
             "the first message must not trigger a rebuild"
         );
-        // The driver rejects the chain before the size has settled.
+        // 在尺寸稳定前驱动拒绝了交换链。
         tracker.mark_out_of_date(extent(900, 600));
         assert_eq!(
             tracker.poll(now + Duration::from_millis(1)),
@@ -392,8 +392,8 @@ mod tests {
         assert_eq!(tracker.recreations(), 1);
     }
 
-    /// A chain the driver rejected at a size the OS has not reported yet is
-    /// still rebuilt — otherwise the window keeps the stale resolution.
+    /// 即使操作系统尚未上报新尺寸，被驱动拒绝的链仍会触发重建——
+    /// 否则窗口将继续停留在陈旧分辨率。
     #[test]
     fn an_out_of_date_chain_is_rebuilt_even_without_a_resize_message() {
         let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
@@ -414,21 +414,21 @@ mod tests {
         );
     }
 
-    /// The deferred mode keeps the render extent stable until the commit.
+    /// 延迟模式在提交前保持渲染尺寸稳定。
     #[test]
     fn the_render_extent_never_changes_before_the_commit() {
         let mut tracker = ResizeTracker::new(extent(800, 600), DEFERRED_SETTLE);
         let now = Instant::now();
         tracker.on_resized(extent(1024, 768), now);
-        // While the size is settling the renderer keeps using the old extent.
+        // 在尺寸稳定期间渲染器继续使用旧尺寸。
         assert_eq!(tracker.committed(), extent(800, 600));
         assert_eq!(tracker.pending(), extent(1024, 768));
         tracker.poll(now + Duration::from_millis(50));
         assert_eq!(tracker.committed(), extent(1024, 768));
     }
 
-    /// The real-time mode changes the render extent as soon as the OS
-    /// reports a new size — that is what removes the stretched frame.
+    /// 实时模式在系统一上报新尺寸时即切换渲染尺寸——这正是消除拉伸帧的关键。
+    ///
     #[test]
     fn the_render_extent_follows_the_window_in_real_time_mode() {
         let mut tracker = ResizeTracker::with_default_settle(extent(800, 600));
@@ -443,7 +443,7 @@ mod tests {
         let mut tracker = ResizeTracker::new(extent(800, 600), DEFERRED_SETTLE);
         let now = Instant::now();
         tracker.on_resized(extent(900, 600), now);
-        // The same size again: the timer must not be restarted.
+        // 再次收到相同尺寸：不得重启计时器。
         tracker.on_resized(extent(900, 600), now + Duration::from_millis(5));
         assert_eq!(
             tracker.poll(now + Duration::from_millis(20)),

@@ -1,10 +1,9 @@
-//! Dropdown and context menus.
+//! 下拉菜单与上下文菜单（Menu）。
 //!
-//! A menu is data: items, their disabled state and their shortcuts. The state
-//! machine ([`MenuState`]) owns only the highlighted index; `Up`/`Down` skip
-//! separators and disabled entries, and `Enter` reports the chosen item. The
-//! emitter paints one background, one highlight slot per item and one line per
-//! separator — again a constant primitive count for a fixed descriptor.
+//! 菜单即数据：包含菜单项、禁用状态与快捷键。状态机（[`MenuState`]）仅持有当前高亮索引；
+//! `Up`/`Down` 会跳过分隔符与禁用项，`Enter` 上报选中的菜单项。
+//! 发射器绘制一个背景、每个菜单项一个高亮槽位以及每条分隔符一条线——
+//! 同样为固定描述符保持恒定的图元数量。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -19,33 +18,33 @@ use crate::primitive::{instance, surface};
 use crate::scroll::{ScrollState, ScrollViewDesc};
 use crate::{ControlState, WidgetDesc, WidgetOutput};
 
-/// The hit-test layer of a menu.
+/// 菜单的命中测试层级。
 pub const MENU_LAYER: u8 = PORTAL_LAYER;
-/// The default row height.
+/// 默认行高。
 pub const MENU_ITEM_HEIGHT: f32 = 30.0;
 const MENU_SHADOW: f32 = 18.0;
 
-/// One row of a menu.
+/// 菜单中的单行条目。
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuItem {
-    /// The visible label.
+    /// 可见标签。
     pub label: String,
-    /// The shortcut hint drawn on the right, if any.
+    /// 绘制在右侧的快捷键提示（若有）。
     pub shortcut: String,
-    /// The row is not selectable.
+    /// 该行是否不可选择。
     pub disabled: bool,
-    /// The row is a separator rather than an action.
+    /// 该行是分隔符而非操作项。
     pub separator: bool,
-    /// The leading icon, if any.
+    /// 前置图标（若有）。
     pub icon: Option<IconDesc>,
-    /// `Some` for a checkable row: the check state.
+    /// 可勾选行的勾选状态（`Some` 表示可勾选）。
     pub checked: Option<bool>,
-    /// The nested menu opened with `ArrowRight`, if any.
+    /// 按 `ArrowRight` 打开的嵌套子菜单（若有）。
     pub submenu: Option<Vec<MenuItem>>,
 }
 
 impl MenuItem {
-    /// A selectable action.
+    /// 创建可选择的操作项。
     #[must_use]
     pub fn action(label: impl Into<String>) -> Self {
         Self {
@@ -59,7 +58,7 @@ impl MenuItem {
         }
     }
 
-    /// A horizontal separator.
+    /// 创建水平分隔符。
     #[must_use]
     pub fn separator() -> Self {
         Self {
@@ -73,68 +72,68 @@ impl MenuItem {
         }
     }
 
-    /// The same item with a shortcut hint.
+    /// 附加快捷键提示。
     #[must_use]
     pub fn with_shortcut(mut self, shortcut: impl Into<String>) -> Self {
         self.shortcut = shortcut.into();
         self
     }
 
-    /// The same item with a leading icon.
+    /// 附加前置图标。
     #[must_use]
     pub fn with_icon(mut self, icon: IconDesc) -> Self {
         self.icon = Some(icon);
         self
     }
 
-    /// The same item as a checked (or unchecked) checkable row.
+    /// 设为可勾选行（已勾选或未勾选）。
     #[must_use]
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
         self
     }
 
-    /// The same item with a nested submenu.
+    /// 附加嵌套子菜单。
     #[must_use]
     pub fn with_submenu(mut self, items: Vec<MenuItem>) -> Self {
         self.submenu = Some(items);
         self
     }
 
-    /// The same item, disabled.
+    /// 将菜单项设为禁用。
     #[must_use]
     pub fn disabled(mut self) -> Self {
         self.disabled = true;
         self
     }
 
-    /// Whether the item can be selected.
+    /// 判断菜单项是否可被选中。
     #[must_use]
     pub fn selectable(&self) -> bool {
         !self.disabled && !self.separator
     }
 
-    /// Whether the item opens a nested menu.
+    /// 判断菜单项是否会打开嵌套子菜单。
     #[must_use]
     pub fn has_submenu(&self) -> bool {
         self.submenu.as_ref().is_some_and(|items| !items.is_empty())
     }
 }
 
-/// The pure descriptor of a menu.
+/// 菜单的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuDesc {
-    /// The menu rectangle.
+    /// 菜单矩形。
     pub rect: Rect,
-    /// The rows, top to bottom.
+    /// 从上到下排列的菜单行列表。
     pub items: Vec<MenuItem>,
-    /// The row height.
+    /// 行高。
     pub item_height: f32,
-    /// The corner radius.
+    /// 圆角半径。
     pub radius: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
-    /// The viewport the menu must stay inside, when known.
+    /// 已知时菜单必须保持在内的视口。
     pub viewport: Option<Rect>,
 }
 
@@ -151,17 +150,16 @@ impl MenuDesc {
         }
     }
 
-    /// The total height the rows need.
+    /// 所有行所需的总高度。
     #[must_use]
     pub fn content_height(&self) -> f32 {
         self.items.len() as f32 * self.item_height
     }
 
-    /// Clamp the menu height to its viewport.
+    /// 将菜单高度约束到视口范围内。
     ///
-    /// Returns whether the rows overflow, i.e. whether a scroll is needed.
-    /// The menu keeps its top edge and shrinks downwards, which is the
-    /// behaviour of a dropdown anchored under a field.
+    /// 返回行是否溢出（即是否需要滚动）。
+    /// 菜单保持顶边不变并向下收缩，符合锚定在输入框下方的下拉列表行为。
     pub fn clamp_height(&mut self) -> bool {
         let overflow = self.content_height() > self.rect.height() + f32::EPSILON;
         let Some(viewport) = self.viewport else {
@@ -182,7 +180,7 @@ impl MenuDesc {
         }
     }
 
-    /// The rows of a nested level, following `path` from the root.
+    /// 沿着从根开始的 `path` 获取嵌套层级的行切片。
     #[must_use]
     pub fn items_at(&self, path: &[usize]) -> Option<&[MenuItem]> {
         let mut level: &[MenuItem] = &self.items;
@@ -192,7 +190,7 @@ impl MenuDesc {
         Some(level)
     }
 
-    /// The rectangle of one row.
+    /// 单行的矩形。
     #[must_use]
     pub fn item_rect(&self, index: usize) -> Rect {
         Rect::new(
@@ -203,13 +201,13 @@ impl MenuDesc {
         )
     }
 
-    /// The row under a point, if any.
+    /// 获取指定坐标点下的行（若有）。
     #[must_use]
     pub fn item_at(&self, point: unbound_math::Vec2) -> Option<usize> {
         self.item_at_offset(point, unbound_math::Vec2::ZERO)
     }
 
-    /// The row under a point, accounting for a scrolled content offset.
+    /// 考虑滚动内容偏移量后，获取指定坐标点下的行。
     #[must_use]
     pub fn item_at_offset(
         &self,
@@ -227,7 +225,7 @@ impl MenuDesc {
         (index < self.items.len()).then_some(index)
     }
 
-    /// The accessible node of one row, for a caller that owns a `Semantics`.
+    /// 为持有 `Semantics` 的调用方构造单行的无障碍节点。
     #[must_use]
     pub fn item_a11y(&self, index: usize) -> Option<A11yNode> {
         let item = self.items.get(index)?;
@@ -242,18 +240,17 @@ impl MenuDesc {
     }
 }
 
-/// The highlighted row of a menu.
+/// 菜单的高亮行状态。
 #[derive(Clone, Debug, Default)]
 pub struct MenuState {
-    /// The highlighted index.
+    /// 当前高亮索引。
     pub highlighted: Option<usize>,
-    /// The indices of the expanded submenus, outermost first.
+    /// 已展开的子菜单索引路径，最外层在前。
     pub open_path: Vec<usize>,
-    /// The scroll state of a menu taller than its viewport.
+    /// 当菜单高于视口时的滚动状态。
     ///
-    /// `None` while the rows fit. [`Self::ensure_scroll`] installs it; the
-    /// scroll offset is deliberately excluded from `PartialEq`, because it is
-    /// live pointer state rather than part of the menu's selection.
+    /// 行未溢出时为 `None`。由 [`Self::ensure_scroll`] 安装；滚动偏移量刻意不参与 `PartialEq`，
+    /// 因为它是实时指针状态，而非菜单选区的一部分。
     pub scroll: Option<ScrollState>,
 }
 
@@ -266,21 +263,21 @@ impl PartialEq for MenuState {
 impl Eq for MenuState {}
 
 impl MenuState {
-    /// A menu with no row highlighted.
+    /// 创建无高亮行的菜单状态。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// The rows of the currently open level.
+    /// 获取当前打开层级的行切片。
     #[must_use]
     pub fn open_items<'a>(&self, desc: &'a MenuDesc) -> &'a [MenuItem] {
         desc.items_at(&self.open_path).unwrap_or(&desc.items)
     }
 
-    /// Move the highlight, skipping separators and disabled rows.
+    /// 移动高亮，自动跳过分隔符与禁用行。
     ///
-    /// Returns the new index.
+    /// 返回新的高亮索引。
     pub fn move_highlight(&mut self, desc: &MenuDesc, forward: bool) -> Option<usize> {
         let items = self.open_items(desc);
         if items.is_empty() {
@@ -304,7 +301,7 @@ impl MenuState {
         None
     }
 
-    /// Highlight the row under the pointer, expanding a submenu.
+    /// 高亮指针下方的行，并在需要时展开子菜单。
     pub fn hover(&mut self, desc: &MenuDesc, point: unbound_math::Vec2) -> Option<usize> {
         let index = desc.item_at_offset(point, self.scroll_offset())?;
         let item = desc.items.get(index)?;
@@ -317,16 +314,16 @@ impl MenuState {
         } else if self.open_path.is_empty() {
             self.highlighted = Some(index);
         } else {
-            // Hovering a leaf at the root level closes the open submenu.
+            // 在根层级悬停叶子项时会关闭已打开的子菜单。
             self.open_path.clear();
             self.highlighted = Some(index);
         }
         self.highlighted
     }
 
-    /// `ArrowRight`: expand the highlighted row's submenu.
+    /// `ArrowRight`：展开高亮行的子菜单。
     ///
-    /// Returns whether a submenu opened.
+    /// 返回是否打开了子菜单。
     pub fn expand(&mut self, desc: &MenuDesc) -> bool {
         let Some(index) = self.highlighted else {
             return false;
@@ -342,9 +339,9 @@ impl MenuState {
         opens
     }
 
-    /// `ArrowLeft`: collapse the innermost open submenu.
+    /// `ArrowLeft`：折叠最内层已打开的子菜单。
     ///
-    /// Returns whether a submenu closed.
+    /// 返回是否关闭了子菜单。
     pub fn collapse(&mut self) -> bool {
         let Some(parent) = self.open_path.pop() else {
             return false;
@@ -353,11 +350,10 @@ impl MenuState {
         true
     }
 
-    /// Highlight the next row whose label starts with `ch`.
+    /// 高亮下一个标签以 `ch` 开头的行。
     ///
-    /// The search is case-insensitive and starts after the current highlight,
-    /// so repeatedly typing the same letter cycles through the matches.
-    /// Returns the highlighted index.
+    /// 搜索大小写不敏感，且从当前高亮之后开始，因此重复输入同一字母会在匹配项间循环。
+    /// 返回新的高亮索引。
     pub fn typeahead(&mut self, desc: &MenuDesc, ch: char) -> Option<usize> {
         let items = self.open_items(desc);
         if items.is_empty() || ch.is_control() {
@@ -382,7 +378,7 @@ impl MenuState {
         self.highlighted
     }
 
-    /// Commit the highlighted row.
+    /// 提交当前高亮行。
     pub fn activate(&self, desc: &MenuDesc) -> Option<usize> {
         let index = self.highlighted?;
         self.open_items(desc)
@@ -391,9 +387,9 @@ impl MenuState {
             .map(|_| index)
     }
 
-    /// Install (or drop) the embedded scroll state.
+    /// 安装（或移除）内嵌滚动状态。
     ///
-    /// Returns whether the rows overflow the clamped menu height.
+    /// 返回行是否超出裁剪后的菜单高度。
     pub fn ensure_scroll(&mut self, desc: &MenuDesc) -> bool {
         let overflow = desc.content_height() > desc.rect.height() + f32::EPSILON;
         if overflow {
@@ -404,7 +400,7 @@ impl MenuState {
         overflow
     }
 
-    /// The current scroll offset.
+    /// 当前滚动偏移量。
     #[must_use]
     pub fn scroll_offset(&self) -> unbound_math::Vec2 {
         self.scroll
@@ -412,7 +408,7 @@ impl MenuState {
             .map_or(unbound_math::Vec2::ZERO, ScrollState::offset)
     }
 
-    /// Scroll the open menu by `delta`, clamped to its content.
+    /// 按 `delta` 滚动打开的菜单，并限制在内容范围内。
     pub fn scroll_by(&mut self, desc: &MenuDesc, delta: unbound_math::Vec2) {
         self.ensure_scroll(desc);
         let view = ScrollViewDesc::new(
@@ -426,16 +422,16 @@ impl MenuState {
     }
 }
 
-/// A menu descriptor bound to an identity.
+/// 绑定了身份标识的菜单描述符。
 #[derive(Clone, Debug)]
 pub struct MenuWidget {
-    /// The menu node.
+    /// 菜单节点。
     pub node: u64,
-    /// The trigger node.
+    /// 触发器节点。
     pub anchor_node: u64,
-    /// The descriptor.
+    /// 菜单描述符。
     pub desc: MenuDesc,
-    /// The highlighted row.
+    /// 当前高亮行。
     pub state: MenuState,
 }
 
@@ -453,7 +449,7 @@ impl WidgetDesc for MenuWidget {
     }
 }
 
-/// Emit a menu, its hit region and its stack entry.
+/// 发射菜单、其命中区域与浮层栈条目。
 #[must_use]
 pub fn emit_menu(
     node: u64,
@@ -496,7 +492,7 @@ pub fn emit_menu(
         if item.separator {
             let line = Rect::new(row.origin.x + 8.0, row.center().y, row.width() - 16.0, 1.0);
             primitives.push(surface(line, 0.0, Token::DIVIDER, desc.z));
-            // Keep the row count constant: an invisible slot for the highlight.
+            // 保持行数恒定：为高亮保留一个不可见槽位。
             let mut placeholder = surface(Rect::ZERO, 0.0, Token::NONE, desc.z);
             placeholder.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(desc.z, 0.0);
             primitives.push(placeholder);
@@ -558,7 +554,7 @@ pub fn emit_menu(
     )
 }
 
-/// The separator rows of a menu.
+/// 菜单中的分隔符行。
 #[must_use]
 pub fn separator_indices(desc: &MenuDesc) -> Vec<usize> {
     desc.items

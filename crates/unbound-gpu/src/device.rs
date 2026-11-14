@@ -1,21 +1,18 @@
-//! Vulkan 1.3 device bring-up (`docs` §2.1).
+//! Vulkan 1.3 设备初始化（参见 `docs/architecture/gpu-renderer.md`）。
 //!
-//! Everything the renderer needs is *requested and verified* here, once:
+//! 渲染器所需的全部能力在此一次性请求并校验：
 //!
-//! * `bufferDeviceAddress` — the 64B push constants carry raw device addresses,
-//! * `descriptorIndexing` (bindless) — one descriptor set for all textures,
-//! * `dynamicRendering` — no `VkRenderPass`/`VkFramebuffer` boilerplate,
-//! * `synchronization2` + `timelineSemaphore` — queue-family-correct barriers
-//!   and multi-frame completion tracking,
-//! * `multiDrawIndirect` + `drawIndirectCount` — GPU-authored draw commands.
+//! * `bufferDeviceAddress` — Push Constant 直接携带设备物理地址（BDA）；
+//! * `descriptorIndexing`（Bindless）— 全局单个描述符集管理所有纹理；
+//! * `dynamicRendering` — 免去 `VkRenderPass`/`VkFramebuffer` 样板代码；
+//! * `synchronization2` + `timelineSemaphore` — 队列族屏障与多帧完成度追踪；
+//! * `multiDrawIndirect` + `drawIndirectCount` — GPU 生成并驱动间接绘制命令。
 //!
-//! A device that cannot provide these is rejected instead of silently degrading
-//! into a slow path: the whole architecture depends on them.
+//! 不满足上述能力的设备会被直接拒绝，而非静默退化到慢速路径。
 //!
-//! This module is the one place in the crate that is unavoidably `unsafe`: it is
-//! a thin, documented wrapper over the Vulkan C API. Every `unsafe` block below
-//! is preceded by the invariant that makes it sound, and all handles are owned
-//! by [`Gpu`] and released exactly once in [`Gpu::destroy`].
+//! 本模块是 crate 中唯一不可避免包含大量 `unsafe` 的地方：它是对 Vulkan C API 的
+//! 薄封装。每个 `unsafe` 块前均注明其安全性不变量，所有句柄归 [`Gpu`] 所有，
+//! 并在 [`Gpu::destroy`] 中严格释放一次。
 #![allow(unsafe_op_in_unsafe_fn)]
 
 use core::ffi::{c_char, CStr};
@@ -23,33 +20,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ash::vk;
 
-/// How a buffer's memory should be sourced.
+/// 缓冲区内存的分配来源策略。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum MemoryKind {
-    /// Fast VRAM, not CPU visible. Uploads go through a staging buffer.
+    /// 高速显存（CPU 不可见），上传需经暂存缓冲区。
     DeviceLocal,
-    /// CPU visible + coherent. Small, frequently rewritten data.
+    /// CPU 可见且一致的内存，适用于频繁重写的小型数据。
     HostVisible,
-    /// CPU visible, prefer device-local (ReBAR / Smart Access Memory).
+    /// CPU 可见且优先设备本地的内存（ReBAR / Smart Access Memory）。
     HostVisibleDeviceLocal,
 }
 
-/// Pick a memory type for `kind` out of the device's `memory_types`.
+/// 从设备的 `memory_types` 中为 `kind` 挑选合适的内存类型。
 ///
-/// `bits` is the resource's `memoryTypeBits`: a type outside that mask cannot
-/// back the allocation at all, whatever its properties say.
+/// `bits` 为资源的 `memoryTypeBits`：不在该掩码内的类型无论属性如何均不可用。
 ///
-/// The ladders matter more than they look. A discrete GPU reports three kinds
-/// of heap: real VRAM (`DEVICE_LOCAL`), system memory (`HOST_VISIBLE`), and a
-/// small window of VRAM the CPU can also map — on NVIDIA the "BAR" window is a
-/// couple of hundred megabytes, and it is the only type that is both device
-/// local and host visible. Preferring it for [`MemoryKind::DeviceLocal`] does
-/// not make anything faster: it caps every pool, sort key buffer and atlas
-/// image at the size of that window, and the failure mode is a
-/// `vkAllocateMemory` that returns `ERROR_OUT_OF_DEVICE_MEMORY` with most of
-/// the card still free. `DeviceLocal` means fast VRAM the CPU never touches, so
-/// a plain device-local type always wins; the window is the fallback for parts
-/// that expose nothing else.
+/// 优先级阶梯非常关键：独显通常报告三类堆——纯显存（`DEVICE_LOCAL`）、
+/// 系统内存（`HOST_VISIBLE`）以及 CPU 可映射的小块显存窗口（NVIDIA 上约两百 MB，
+/// 同时具备设备本地与宿主可见属性）。若将 [`MemoryKind::DeviceLocal`] 优先分配到
+/// 该窗口，会把所有内存池、排序键缓冲区和图集限制在该窗口大小内，导致显存明明充足
+/// 却报 `ERROR_OUT_OF_DEVICE_MEMORY`。因此纯 `DEVICE_LOCAL` 始终优先，仅在无其他
+/// 选择时才回退到可映射显存窗口。
 fn choose_memory_type(types: &[vk::MemoryType], bits: u32, kind: MemoryKind) -> Option<u32> {
     use vk::MemoryPropertyFlags as Flags;
 
@@ -64,18 +55,17 @@ fn choose_memory_type(types: &[vk::MemoryType], bits: u32, kind: MemoryKind) -> 
     };
 
     match kind {
-        // Fast VRAM, never mapped on the host.
+        // 高速纯显存，不在宿主端映射。
         MemoryKind::DeviceLocal => {
             find(&|flags| flags.contains(local) && !flags.contains(coherent))
                 .or_else(|| find(&|flags| flags.contains(local)))
         }
-        // ReBAR / Smart Access Memory: VRAM the CPU may write directly.
+        // ReBAR / SAM：CPU 可直接写入的显存。
         MemoryKind::HostVisibleDeviceLocal => {
             find(&|flags| flags.contains(local) && flags.contains(coherent))
                 .or_else(|| find(&|flags| flags.contains(coherent)))
         }
-        // Staging: system memory, because a mapped write there does not steal
-        // from the VRAM window.
+        // 暂存区：优先系统内存，避免占用有限的 ReBAR 显存映射窗口。
         MemoryKind::HostVisible => {
             find(&|flags| flags.contains(coherent) && !flags.contains(local))
                 .or_else(|| find(&|flags| flags.contains(coherent)))
@@ -83,7 +73,7 @@ fn choose_memory_type(types: &[vk::MemoryType], bits: u32, kind: MemoryKind) -> 
     }
 }
 
-/// Everything the renderer negotiated with the driver.
+/// 渲染器与驱动协商启用的全部能力快照。
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct GpuFeatures {
@@ -97,47 +87,41 @@ pub struct GpuFeatures {
     pub timeline_semaphore: bool,
     pub multi_draw_indirect: bool,
     pub draw_indirect_count: bool,
-    /// `drawIndirectFirstInstance`: the host may set a non-zero
-    /// `firstInstance` in an indirect command.
+    /// `drawIndirectFirstInstance`：允许间接绘制命令使用非零 `firstInstance`。
     ///
-    /// Without it the driver is allowed to ignore `firstInstance`, which
-    /// makes every draw run after the first redraw the *first* run's
-    /// primitives. The renderer's MDI compaction emits one run per
-    /// `(layer, barrier, variant)` group, so the feature is required.
+    /// 若未启用，驱动可忽略 `firstInstance`，导致首个批次之后的每个绘制批次
+    /// 都重复绘制第一批的图元。MDI 压缩为每个 `(layer, barrier, variant)` 组
+    /// 生成独立批次，因此该特性为硬性必需。
     pub draw_indirect_first_instance: bool,
     pub shader_int64: bool,
     pub shader_float64: bool,
     pub independent_blend: bool,
-    /// `shaderDemoteToHelperInvocation`: the fragment shaders' `discard`
-    /// compiles to `OpDemoteToHelperInvocation` under
-    /// `--target-env=vulkan1.3`. Creating such a module without the feature
-    /// enabled is invalid usage (`VUID-VkShaderModuleCreateInfo-pCode-08740`).
+    /// `shaderDemoteToHelperInvocation`：在 `--target-env=vulkan1.3` 下，
+    /// 片元着色器中的 `discard` 会编译为 `OpDemoteToHelperInvocation`。
+    /// 未启用该特性就创建此类模块属于非法用法
+    /// （`VUID-VkShaderModuleCreateInfo-pCode-08740`）。
     ///
-    /// On a Vulkan 1.2 device the feature comes from
-    /// `VK_EXT_shader_demote_to_helper_invocation` instead of core 1.3.
+    /// Vulkan 1.2 设备上该特性来自
+    /// `VK_EXT_shader_demote_to_helper_invocation`，而非 1.3 核心。
     pub shader_demote_to_helper_invocation: bool,
-    /// `hostQueryReset`: the host may reset a query pool between frames.
+    /// `hostQueryReset`：允许宿主端在帧间直接重置查询池。
     pub host_query_reset: bool,
     pub sampler_anisotropy: bool,
-    /// `swapchainMaintenance1`: the application may hand the OS a fence so a
-    /// destroyed swapchain is not reused while it is still scanned out, and
-    /// may ask for a specific present scaling behaviour.
+    /// `swapchainMaintenance1`：允许向操作系统提交呈现围栏并指定呈现缩放行为。
     ///
-    /// True only when the extension *and* the feature are enabled — the
-    /// extension string alone says nothing about the feature.
+    /// 仅当扩展与特性同时启用时为 true——仅有扩展名并不代表特性已开启。
     pub swapchain_maintenance1: bool,
     pub present_wait: bool,
-    /// `presentId`: the application may tag a presentation with an id.
+    /// `presentId`：允许为每次呈现标记递增 ID。
     ///
-    /// Required by `VK_KHR_present_wait`, which the low-latency present path
-    /// uses to wait for a specific presentation.
+    /// 低延迟呈现路径 `VK_KHR_present_wait` 依赖此特性。
     pub present_id: bool,
-    /// True when the persistent pool landed in ReBAR-visible memory.
+    /// 当持久化池位于 ReBAR 宿主可见显存时为 true。
     pub rebar: bool,
 }
 
 impl GpuFeatures {
-    /// Features without which the architecture cannot function.
+    /// 架构正常运行不可或缺的核心特性集合。
     #[must_use]
     pub fn missing_required(&self) -> Vec<&'static str> {
         let mut missing = Vec::new();
@@ -172,22 +156,22 @@ impl GpuFeatures {
     }
 }
 
-/// Device creation failure.
+/// 设备创建与操作错误类型。
 #[derive(Debug)]
 pub enum GpuError {
-    /// The Vulkan loader is missing.
+    /// 缺少 Vulkan 加载器。
     Loader(String),
-    /// `vkCreateInstance` / `vkCreateDevice` failed.
+    /// `vkCreateInstance` 或 `vkCreateDevice` 调用失败。
     Vulkan(vk::Result),
-    /// No physical device matches the requirements.
+    /// 没有满足要求的物理设备。
     NoSuitableDevice(String),
-    /// A required feature or extension is absent.
+    /// 缺少必需的特性或扩展。
     UnsupportedFeatures(Vec<&'static str>),
-    /// Allocation of a `VkBuffer` or `VkDeviceMemory` failed.
+    /// `VkBuffer` 或 `VkDeviceMemory` 分配失败。
     Allocation(String),
-    /// A caller supplied an argument the renderer cannot accept.
+    /// 调用方传入了渲染器无法接受的非法参数。
     InvalidArgument(String),
-    /// The device disappeared (`VK_ERROR_DEVICE_LOST`).
+    /// 设备已丢失（`VK_ERROR_DEVICE_LOST`）。
     DeviceLost,
 }
 
@@ -219,25 +203,25 @@ impl From<vk::Result> for GpuError {
     }
 }
 
-/// Configuration for [`Gpu::new`].
+/// [`Gpu::new`] 的初始化配置。
 #[derive(Clone, Debug)]
 pub struct GpuConfig {
     pub app_name: String,
-    /// Enable `VK_LAYER_KHRONOS_validation` when present.
+    /// 若存在则启用 `VK_LAYER_KHRONOS_validation` 校验层。
     pub validation: bool,
-    /// Extra instance extensions (e.g. the platform surface extensions).
+    /// 额外的实例扩展（如平台表面扩展）。
     pub instance_extensions: Vec<String>,
-    /// Extra device extensions (e.g. `VK_KHR_swapchain`).
+    /// 额外的设备扩展（如 `VK_KHR_swapchain`）。
     pub device_extensions: Vec<String>,
-    /// Frames in flight. 2 keeps input latency minimal, 3 smooths jitter.
+    /// 最大在飞帧数：2 可压低输入延迟，3 可平滑帧间抖动。
     pub frames_in_flight: u32,
-    /// Persistent pool size in bytes.
+    /// 持久化池大小（字节）。
     pub pool_capacity: u64,
-    /// Per-frame transient ring size in bytes.
+    /// 逐帧瞬态环形缓冲区大小（字节）。
     pub ring_capacity: u64,
-    /// Force the first discrete GPU when true; otherwise pick the best score.
+    /// 为 true 时强制选用首个独立 GPU；否则按评分择优。
     pub prefer_discrete: bool,
-    /// Enable GPU-assisted validation when the validation layer is on.
+    /// 开启校验层时同步启用 GPU 辅助校验。
     pub gpu_assisted_validation: bool,
 }
 
@@ -257,39 +241,34 @@ impl Default for GpuConfig {
     }
 }
 
-/// A shared handle on the Vulkan device, so that objects which outlive the
-/// [`Gpu`] can still free themselves.
+/// Vulkan 设备的共享句柄，使生命周期长于 [`Gpu`] 的对象仍能安全释放自身。
 ///
-/// Vulkan requires every child object to be destroyed before the device. The
-/// atlases are handed to the application as an `Arc` and may well outlive the
-/// renderer that owns the `Gpu` — the showcase keeps one for the whole
-/// session. Giving them a clone of the device handle lets them free their
-/// images whenever the last reference goes away, instead of leaking them or
-/// touching a device that has already been destroyed.
+/// Vulkan 要求所有子对象必须在设备之前销毁。图集以 `Arc` 形式交给应用层，
+/// 可能比拥有 `Gpu` 的渲染器存活更久。共享该句柄可让图集在最后一个引用释放时
+/// 自行销毁图像，或感知设备已被销毁而避免触碰悬空句柄。
 #[derive(Clone)]
 pub struct DeviceLifetime {
     device: ash::Device,
-    /// Set to false when the owning [`Gpu`] tears the device down.
+    /// 当所属 [`Gpu`] 销毁设备时置为 false。
     ///
-    /// The atlas checks this before freeing: after `Gpu::destroy` the device
-    /// handle is stale, and Vulkan forbids using it.
+    /// 图集在释放前检查该标志：在 `Gpu::destroy` 之后设备句柄已失效，严禁再使用。
     alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DeviceLifetime {
-    /// The device handle.
+    /// 底层 Vulkan 设备句柄。
     #[must_use]
     pub fn device(&self) -> &ash::Device {
         &self.device
     }
 
-    /// True while the device is still alive.
+    /// 当设备仍处于存活状态时为 true。
     #[must_use]
     pub fn is_alive(&self) -> bool {
         self.alive.load(std::sync::atomic::Ordering::Acquire)
     }
 
-    /// Mark the device as destroyed. Called by `Gpu::destroy`.
+    /// 标记设备已销毁（由 `Gpu::destroy` 调用）。
     fn invalidate(&self) {
         self.alive
             .store(false, std::sync::atomic::Ordering::Release);
@@ -304,47 +283,45 @@ impl core::fmt::Debug for DeviceLifetime {
     }
 }
 
-/// A `VkBuffer` plus its bound memory and (optionally) a persistent mapping.
+/// `VkBuffer` 及其绑定的设备内存与可选的持久映射指针。
 #[derive(Debug)]
 pub struct Buffer {
     pub raw: vk::Buffer,
     pub memory: vk::DeviceMemory,
     pub size: u64,
-    /// The byte size of the bound `VkDeviceMemory` allocation.
+    /// 绑定的 `VkDeviceMemory` 实际分配字节数。
     ///
-    /// The allocator rounds the request up, so this is not always `size`; the
-    /// mapped-range bounds check has to use the allocation, not the buffer.
+    /// 分配器可能会向上取整，故此值不一定等于 `size`；映射范围边界检查须以此为准。
     pub allocation_size: u64,
-    /// Device address (0 when `bufferDeviceAddress` was not requested).
+    /// 设备物理地址（未请求 `bufferDeviceAddress` 时为 0）。
     pub address: u64,
-    /// Non-null when the memory is host visible and permanently mapped.
+    /// 当内存宿主可见且已持久映射时非空。
     pub mapped: *mut u8,
     pub host_visible: bool,
-    /// True when the bound memory type carries `HOST_COHERENT`.
+    /// 当绑定的内存类型具备 `HOST_COHERENT` 属性时为 true。
     ///
-    /// A flush is a no-op there, so the hot path skips the driver call.
+    /// 一致性内存无需刷写，热路径可跳过对应驱动调用。
     pub host_coherent: bool,
 }
 
-// SAFETY: the pointers inside are opaque Vulkan handles; Vulkan objects are
-// externally synchronised by the renderer, which owns the only `Gpu`.
+// SAFETY: 内部指针为不透明 Vulkan 句柄；由唯一持有 `Gpu` 的渲染器负责外部同步。
 unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
 
 impl Buffer {
-    /// Host pointer to `offset`, if the buffer is mapped.
+    /// 若缓冲区已映射，返回指向 `offset` 处的宿主指针。
     #[must_use]
     pub fn host_ptr(&self, offset: u64) -> Option<*mut u8> {
         if self.mapped.is_null() || offset > self.size {
             None
         } else {
-            // SAFETY: pointer arithmetic within the mapped allocation.
+            // SAFETY: 在已映射内存分配范围内的指针算术。
             Some(unsafe { self.mapped.add(offset as usize) })
         }
     }
 }
 
-/// Timeline semaphore wrapper.
+/// 时间线信号量封装。
 #[derive(Debug)]
 pub struct Timeline {
     pub semaphore: vk::Semaphore,
@@ -357,12 +334,12 @@ impl Timeline {
         self.value.load(Ordering::Acquire)
     }
 
-    /// Reserve the next value to be signalled.
+    /// 预留下一个待触发的时间线值。
     pub fn next(&self) -> u64 {
         self.value.fetch_add(1, Ordering::AcqRel) + 1
     }
 
-    /// Record that `value` has completed.
+    /// 记录 `value` 已完成。
     pub fn completed(&self, value: u64) {
         let mut cur = self.value.load(Ordering::Acquire);
         while value > cur {
@@ -377,26 +354,25 @@ impl Timeline {
     }
 }
 
-/// Per-frame synchronisation primitives.
+/// 逐帧同步原语。
 #[derive(Debug)]
 pub struct FrameSync {
     pub in_flight: vk::Fence,
     pub command_buffer: vk::CommandBuffer,
-    /// Timeline value that marks this frame complete.
+    /// 标记本帧完成的时间线值。
     pub timeline_value: u64,
 }
 
-/// Queue family assignment.
+/// 队列族分配结果。
 #[derive(Copy, Clone, Debug, Default)]
 pub struct QueueFamilies {
     pub graphics: u32,
     pub transfer: u32,
-    /// True when the transfer queue is a distinct family (real DMA queue).
+    /// 当传输队列属于独立队列族（真实 DMA 引擎）时为 true。
     pub dedicated_transfer: bool,
 }
 
-/// The whole device bundle: instance, physical device, device, queues and
-/// per-frame synchronisation.
+/// 完整设备集合：实例、物理设备、逻辑设备、队列与逐帧同步原语。
 pub struct Gpu {
     pub entry: ash::Entry,
     pub instance: ash::Instance,
@@ -410,23 +386,21 @@ pub struct Gpu {
     pub transfer_queue: vk::Queue,
     pub features: GpuFeatures,
     pub enabled_device_extensions: Vec<String>,
-    /// The instance extensions that were actually enabled.
+    /// 实际启用的实例扩展列表。
     ///
-    /// The list is resolved, not the requested one: the surface-maintenance
-    /// dependency chain adds extensions the application never asked for.
+    /// 这是解析依赖链后的最终列表，可能包含由表面维护扩展自动引入的依赖项。
     pub enabled_instance_extensions: Vec<String>,
-    /// Dynamic-rendering function table (`vkCmdBeginRendering`).
+    /// 动态渲染函数表（`vkCmdBeginRendering`）。
     pub khr_dynamic_rendering: ash::khr::dynamic_rendering::Device,
-    /// Synchronization2 function table (`vkCmdPipelineBarrier2`).
+    /// Synchronization2 函数表（`vkCmdPipelineBarrier2`）。
     pub khr_synchronization2: ash::khr::synchronization2::Device,
-    /// Draw-indirect-count function table (`vkCmdDrawIndirectCount`).
+    /// 间接计数绘制函数表（`vkCmdDrawIndirectCount`）。
     pub khr_draw_indirect_count: ash::khr::draw_indirect_count::Device,
     pub timeline: Timeline,
     pub frames: Vec<FrameSync>,
     command_pool: vk::CommandPool,
     pub config: GpuConfig,
-    /// A shared handle on the device, handed to the objects that may outlive
-    /// the `Gpu` (the atlases).
+    /// 设备的共享句柄，传递给生命周期可能长于 `Gpu` 的对象（如图集）。
     pub lifetime: DeviceLifetime,
 }
 
@@ -447,29 +421,26 @@ fn push_unique(extensions: &mut Vec<String>, name: &str) {
     }
 }
 
-/// Resolve the *instance*-extension dependencies of the requested device
-/// extensions.
+/// 解析所请求设备扩展对应的*实例*扩展依赖。
 ///
-/// Two chains have their root at `VK_KHR_surface`:
+/// 两条依赖链都以 `VK_KHR_surface` 为根：
 ///
 /// ```text
-/// VK_KHR_swapchain              -> VK_KHR_surface (instance)
-/// VK_EXT_swapchain_maintenance1 -> VK_EXT_surface_maintenance1 (instance)
-///                              -> VK_KHR_get_surface_capabilities2 (instance)
-///                              -> VK_KHR_surface (instance)
+/// VK_KHR_swapchain              -> VK_KHR_surface（实例）
+/// VK_EXT_swapchain_maintenance1 -> VK_EXT_surface_maintenance1（实例）
+///                              -> VK_KHR_get_surface_capabilities2（实例）
+///                              -> VK_KHR_surface（实例）
 /// ```
 ///
-/// Enabling a device extension without its instance dependencies makes
-/// `vkCreateDevice` invalid usage
-/// (`VUID-vkCreateDevice-ppEnabledExtensionNames-01387`); enabling an
-/// instance extension without its own dependencies makes `vkCreateInstance`
-/// invalid (`VUID-vkCreateInstance-ppEnabledExtensionNames-01388`). The
-/// instance has to be created before the device, so both chains are resolved
-/// here, from the request, instead of trusting every caller to know them.
+/// 启用设备扩展却缺少其实例依赖会使 `vkCreateDevice` 成为非法用法
+/// （`VUID-vkCreateDevice-ppEnabledExtensionNames-01387`）；启用实例扩展却缺少
+/// 其自身依赖会使 `vkCreateInstance` 非法
+/// （`VUID-vkCreateInstance-ppEnabledExtensionNames-01388`）。实例必须先于设备
+/// 创建，因此两条链都在此依据请求推导，而非要求每个调用方自行记住。
 ///
-/// The platform counterpart (`VK_KHR_win32_surface` on Windows, …) cannot be
-/// inferred from a device extension: it comes from the window's display handle
-/// through [`crate::surface_extensions::required_instance_extensions`].
+/// 平台对应的扩展（Windows 上的 `VK_KHR_win32_surface` 等）无法从设备扩展反推，
+/// 只能通过窗口显示句柄由
+/// [`crate::surface_extensions::required_instance_extensions`] 得到。
 fn resolve_instance_extension_dependencies(
     instance_exts: &mut Vec<String>,
     device_exts: &[String],
@@ -484,7 +455,7 @@ fn resolve_instance_extension_dependencies(
     if !wants_swapchain && !wants_maintenance && !has_surface_query {
         return;
     }
-    // The root of both chains. The surface module expects it to lead the list.
+    // 两条依赖链的共同根；surface 模块要求它位于列表首位。
     if !instance_exts.iter().any(|e| e == "VK_KHR_surface") {
         instance_exts.insert(0, "VK_KHR_surface".to_string());
     }
@@ -496,10 +467,9 @@ fn resolve_instance_extension_dependencies(
     }
 }
 
-/// Device extensions the renderer can run without.
+/// 渲染器在缺失时仍可运行的可选设备扩展。
 ///
-/// They only improve presentation (frame pacing, tearing control, present
-/// fences), so a missing one is a warning, not a failure.
+/// 它们仅用于改善呈现体验（帧步调、撕裂控制、呈现围栏），缺失时不视为失败。
 #[must_use]
 pub fn is_optional_device_extension(name: &str) -> bool {
     matches!(
@@ -508,9 +478,9 @@ pub fn is_optional_device_extension(name: &str) -> bool {
     )
 }
 
-/// The device extensions a physical device exposes.
+/// 查询物理设备暴露的所有设备扩展名称。
 fn device_extension_names(instance: &ash::Instance, device: vk::PhysicalDevice) -> Vec<String> {
-    // SAFETY: `instance` is alive and `device` was enumerated from it.
+    // SAFETY: `instance` 存活且 `device` 由其枚举得到。
     let properties =
         unsafe { instance.enumerate_device_extension_properties(device) }.unwrap_or_default();
     properties
@@ -533,12 +503,10 @@ fn raw_ptrs(strings: &[std::ffi::CString]) -> Vec<*const c_char> {
     strings.iter().map(|c| c.as_ptr()).collect()
 }
 
-/// Turn a requested `offset..offset+len` into a range that satisfies
-/// `VUID-VkMappedMemoryRange-size-00685`.
+/// 将请求的 `offset..offset+len` 调整为满足 `VUID-VkMappedMemoryRange-size-00685` 的范围。
 ///
-/// Returns `(offset, size)` where `offset` is atom aligned, `size` is either
-/// atom aligned or ends exactly at `allocation`, and `offset + size` never
-/// exceeds the allocation. `None` means there is nothing to flush.
+/// 返回 `(offset, size)`，其中 `offset` 按原子粒度对齐，`size` 要么对齐原子粒度，
+/// 要么恰好到达 `allocation` 末尾；返回 `None` 表示无需刷写。
 #[must_use]
 pub fn align_mapped_range(offset: u64, len: u64, atom: u64, allocation: u64) -> Option<(u64, u64)> {
     if len == 0 || allocation == 0 {
@@ -549,7 +517,7 @@ pub fn align_mapped_range(offset: u64, len: u64, atom: u64, allocation: u64) -> 
     if aligned_offset >= allocation {
         return None;
     }
-    // The *unrounded* end, so a misaligned start does not lose its tail.
+    // 记录未舍入的结束位置，避免起始地址向下对齐时丢失尾部字节。
     let end = offset.saturating_add(len).min(allocation);
     if end <= aligned_offset {
         return None;
@@ -566,22 +534,19 @@ pub fn align_mapped_range(offset: u64, len: u64, atom: u64, allocation: u64) -> 
 const VALIDATION_LAYER: &CStr = c"VK_LAYER_KHRONOS_validation";
 
 impl Gpu {
-    /// Create the instance, pick a device and enable everything the renderer
-    /// needs.
+    /// 创建 Vulkan 实例、挑选物理设备并启用渲染器所需的全部特性。
     ///
     /// # Errors
-    /// Returns [`GpuError`] on loader/instance/device failure or when the GPU
-    /// lacks a required feature.
+    /// 当加载器/实例/设备创建失败或 GPU 缺少必需特性时返回 [`GpuError`]。
     pub fn new(config: GpuConfig) -> Result<Self, GpuError> {
-        // SAFETY: every call below is a plain Vulkan object creation whose
-        // results are checked; all created objects are owned by `Self`.
+        // SAFETY: 下方均为标准 Vulkan 对象创建调用且逐一检查返回值；所有对象归 `Self` 所有。
         unsafe { Self::new_inner(config) }
     }
 
     unsafe fn new_inner(config: GpuConfig) -> Result<Self, GpuError> {
         let entry = ash::Entry::load().map_err(|e| GpuError::Loader(e.to_string()))?;
 
-        // ---- layers -------------------------------------------------------
+        // ---- 校验层 ---------------------------------------------------------
         let available_layers = entry
             .enumerate_instance_layer_properties()
             .unwrap_or_default();
@@ -605,10 +570,8 @@ impl Gpu {
         let ext_cstrings = cstrings(&instance_exts);
         let ext_ptrs = raw_ptrs(&ext_cstrings);
 
-        // The loader may support less than 1.3 (Windows 10 ships an older
-        // loader). Asking for 1.3 unconditionally makes `vkCreateInstance`
-        // fail; asking for what the loader knows keeps the app running and the
-        // device selection below takes care of the 1.2 path.
+        // 加载器版本可能低于 1.3（Windows 10 自带较旧加载器）。无条件请求 1.3 会导致
+        // `vkCreateInstance` 失败；按加载器实际支持版本请求并在下方设备选择中处理 1.2 回退路径。
         let max_api = entry
             .try_enumerate_instance_version()
             .ok()
@@ -632,7 +595,7 @@ impl Gpu {
             )
             .map_err(GpuError::Vulkan)?;
 
-        // ---- debug messenger ---------------------------------------------
+        // ---- 调试信使 -------------------------------------------------------
         let debug = if enable_validation {
             let utils = ash::ext::debug_utils::Instance::new(&entry, &instance);
             let messenger = utils
@@ -643,14 +606,11 @@ impl Gpu {
             None
         };
 
-        // ---- physical device ---------------------------------------------
+        // ---- 物理设备选择 ---------------------------------------------------
         //
-        // A candidate has to be probed *before* it is chosen. Windows 10
-        // drivers commonly expose Vulkan 1.2 only: the 1.3 core features the
-        // renderer uses are also available as `VK_KHR_dynamic_rendering` and
-        // `VK_KHR_synchronization2`, so a 1.2 device is still usable — but
-        // only if those two extensions are present. Selecting by device type
-        // alone used to pick a 1.2 GPU and fail at `vkCreateDevice`.
+        // 候选设备必须在选中前完整探测：Windows 10 驱动常仅暴露 Vulkan 1.2，
+        // 若具备 `VK_KHR_dynamic_rendering` 与 `VK_KHR_synchronization2` 扩展，
+        // 1.2 设备依然可用；仅按设备类型选择会导致选中不可用的 1.2 GPU。
         let devices = instance
             .enumerate_physical_devices()
             .map_err(GpuError::Vulkan)?;
@@ -691,8 +651,7 @@ impl Gpu {
                 vk::PhysicalDeviceType::VIRTUAL_GPU => 250,
                 _ => 100,
             };
-            // Prefer a driver that speaks 1.3 natively, then one that also
-            // exposes the optional present extensions.
+            // 优先选择原生支持 Vulkan 1.3 的驱动，其次优先支持可选呈现扩展的设备。
             if props.api_version >= vk::make_api_version(0, 1, 3, 0) {
                 score += 400;
             }
@@ -718,19 +677,15 @@ impl Gpu {
             }));
         };
 
-        // ---- extension dependencies ----------------------------------------
+        // ---- 扩展依赖解析 ---------------------------------------------------
         //
-        // Vulkan requires the dependencies of an enabled extension to be
-        // enabled too, and a device may simply not offer an optional one. The
-        // old code enabled every requested string unconditionally, so a
-        // driver without `VK_KHR_present_wait` made `vkCreateDevice` fail with
-        // `VK_ERROR_EXTENSION_NOT_PRESENT` — an error the application could
-        // not diagnose.
+        // Vulkan 要求启用扩展的同时必须启用其依赖项，且设备可能未提供某些可选扩展。
+        // 此处先校验设备实际暴露的扩展再按依赖链启用，避免因可选扩展缺失导致 `vkCreateDevice` 失败。
         //
         //   VK_EXT_swapchain_maintenance1 -> VK_EXT_surface_maintenance1
-        //                                       (an *instance* extension)
+        //                                       （实例扩展）
         //   VK_KHR_present_wait            -> VK_KHR_present_id
-        //                                       (a *device* extension)
+        //                                       （设备扩展）
         let has_ext = |name: &str| dev_ext_names.iter().any(|n| n == name);
         let mut device_exts: Vec<String> = Vec::new();
         let mut skipped: Vec<&str> = Vec::new();
@@ -740,23 +695,21 @@ impl Gpu {
             } else if is_optional_device_extension(extension) {
                 skipped.push(extension.as_str());
             } else {
-                // The selection loop already rejected devices without the
-                // required extensions, so this is only a safety net.
+                // 物理设备选择循环已过滤掉缺少必需扩展的设备，此处仅作兜底校验。
                 return Err(GpuError::UnsupportedFeatures(vec!["device extension"]));
             }
         }
         for extension in skipped {
             eprintln!("GPU: {extension} is not supported by this driver; continuing without it");
         }
-        // A 1.2 driver exposes the Vulkan 1.3 features as back-port extensions.
+        // Vulkan 1.2 驱动通过向后移植的 KHR 扩展提供 1.3 核心特性。
         let needs_13_backports = properties.api_version < vk::make_api_version(0, 1, 3, 0);
         if needs_13_backports {
             for extension in ["VK_KHR_dynamic_rendering", "VK_KHR_synchronization2"] {
                 push_unique(&mut device_exts, extension);
             }
-            // `discard` compiles to `OpDemoteToHelperInvocation`; on a 1.2
-            // driver the feature comes from this extension rather than core
-            // 1.3. Without it the shader module is invalid usage.
+            // `discard` 会编译为 `OpDemoteToHelperInvocation`；在 1.2 驱动上
+            // 该特性来自此扩展而非 1.3 核心。缺少它时着色器模块属非法用法。
             if has_ext("VK_EXT_shader_demote_to_helper_invocation") {
                 push_unique(
                     &mut device_exts,
@@ -769,22 +722,18 @@ impl Gpu {
         {
             device_exts.push("VK_KHR_present_id".to_string());
         }
-        // The extension has to be *requested* to be enabled: a driver that
-        // merely exposes it does not enable the feature.
+        // 扩展必须显式请求启用：驱动仅仅暴露扩展名并不会自动开启对应特性。
         let maintenance1_requested = device_exts
             .iter()
             .any(|e| e == "VK_EXT_swapchain_maintenance1");
 
-        // ---- feature discovery -------------------------------------------
+        // ---- 特性探测 -------------------------------------------------------
         let mut f12 = vk::PhysicalDeviceVulkan12Features::default();
-        // Only one of these is chained: `VkPhysicalDeviceVulkan13Features`
-        // is invalid below API 1.3, and querying it there is undefined.
+        // 两者仅挂载其一：API 1.3 以下挂载 `VkPhysicalDeviceVulkan13Features` 属于未定义行为。
         let mut f13 = vk::PhysicalDeviceVulkan13Features::default();
         let mut f_dynamic_rendering = vk::PhysicalDeviceDynamicRenderingFeatures::default();
         let mut f_synchronization2 = vk::PhysicalDeviceSynchronization2Features::default();
-        // The present features live in their own structures, so they have to
-        // be chained into the query as well. An unknown structure type in the
-        // chain makes the query fail, hence the extension checks.
+        // 呈现相关特性位于独立结构体中，同样需链入查询；链中出现未知结构体会导致查询失败，故先检查扩展。
         let mut present_wait_query = vk::PhysicalDevicePresentWaitFeaturesKHR::default();
         let mut present_id_query = vk::PhysicalDevicePresentIdFeaturesKHR::default();
         let mut maintenance1_query = vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
@@ -848,8 +797,7 @@ impl Gpu {
             } else {
                 f13.shader_demote_to_helper_invocation == vk::TRUE
             },
-            // The feature has to be *queried* and then enabled: the extension
-            // string alone says nothing about the feature.
+            // 特性必须先查询再启用：仅有扩展名不能说明特性实际可用。
             swapchain_maintenance1: maintenance1_requested
                 && maintenance1_query.swapchain_maintenance1 == vk::TRUE,
             present_wait: has_ext("VK_KHR_present_wait")
@@ -863,7 +811,7 @@ impl Gpu {
             return Err(GpuError::UnsupportedFeatures(missing));
         }
 
-        // ---- queue families ----------------------------------------------
+        // ---- 队列族选择 -----------------------------------------------------
         let families_props = instance.get_physical_device_queue_family_properties(physical);
         let mut graphics = None;
         let mut transfer = None;
@@ -872,7 +820,7 @@ impl Gpu {
             if f.contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE) {
                 graphics.get_or_insert(i as u32);
             }
-            // Prefer a queue that can ONLY transfer: that is the DMA engine.
+            // 优先选择仅支持传输能力的队列族：即专用 DMA 引擎。
             if f.contains(vk::QueueFlags::TRANSFER) && !f.contains(vk::QueueFlags::GRAPHICS) {
                 transfer.get_or_insert(i as u32);
             }
@@ -887,7 +835,7 @@ impl Gpu {
             dedicated_transfer: dedicated,
         };
 
-        // ---- device -------------------------------------------------------
+        // ---- 逻辑设备创建 ---------------------------------------------------
         let mut used_families = vec![graphics];
         if transfer != graphics {
             used_families.push(transfer);
@@ -925,10 +873,8 @@ impl Gpu {
             .synchronization2(features.synchronization2);
         let enabled_core = vk::PhysicalDeviceFeatures::default()
             .multi_draw_indirect(features.multi_draw_indirect)
-            // The MDI compaction emits one run per (layer, barrier, variant)
-            // group, and every run but the first carries a non-zero
-            // `firstInstance`. Without this feature the driver may ignore it
-            // and redraw the first run's primitives instead.
+            // MDI 压缩为每个 (layer, barrier, variant) 组生成一个批次，除首批次外均携带
+            // 非零 `firstInstance`。若未启用该特性，驱动可能忽略它并重复绘制第一批图元。
             .draw_indirect_first_instance(features.draw_indirect_first_instance)
             .independent_blend(features.independent_blend)
             .sampler_anisotropy(features.sampler_anisotropy)
@@ -938,25 +884,21 @@ impl Gpu {
         let dev_ext_cstrings = cstrings(&device_exts);
         let dev_ext_ptrs = raw_ptrs(&dev_ext_cstrings);
 
-        // `VK_KHR_present_wait` and `VK_KHR_present_id` are two separate
-        // *features*. Without them `vkWaitForPresentKHR` and a non-zero
-        // `VkPresentIdKHR` are invalid usage, even though the extensions are
-        // enabled.
+        // `VK_KHR_present_wait` 与 `VK_KHR_present_id` 各自拥有独立特性开关；
+        // 若未启用特性，即使启用了扩展，调用 `vkWaitForPresentKHR` 仍属于非法用法。
         let present_wait_enabled = device_exts.iter().any(|e| e == "VK_KHR_present_wait");
         let mut present_wait_features = vk::PhysicalDevicePresentWaitFeaturesKHR::default()
             .present_wait(present_wait_enabled && features.present_wait);
         let mut present_id_features = vk::PhysicalDevicePresentIdFeaturesKHR::default()
             .present_id(present_wait_enabled && features.present_id);
 
-        // `VK_EXT_swapchain_maintenance1` has a feature of its own: the
-        // present fence and the present scaling behaviour are only legal
-        // when `swapchainMaintenance1` is enabled. The structure may only be
-        // chained when the extension itself is enabled.
+        // `VK_EXT_swapchain_maintenance1` 同样有独立特性开关：仅当 `swapchainMaintenance1`
+        // 特性启用时，呈现围栏与呈现缩放才合法，且该结构体仅在扩展启用时才可链入。
         let mut maintenance1_features =
             vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default()
                 .swapchain_maintenance1(features.swapchain_maintenance1);
-        // Vulkan 1.2 keeps the demote feature in its own extension structure;
-        // chaining it on a 1.3 device would duplicate the core 1.3 feature.
+        // Vulkan 1.2 把 demote 特性放在独立的扩展结构体中；
+        // 在 1.3 设备上链入它会与 1.3 核心特性重复。
         let mut demote_features =
             vk::PhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT::default()
                 .shader_demote_to_helper_invocation(features.shader_demote_to_helper_invocation);
@@ -969,8 +911,7 @@ impl Gpu {
             .push_next(&mut present_wait_features)
             .push_next(&mut enabled_features12);
         if needs_13_backports {
-            // Vulkan 1.2: the features come from the KHR extensions, and the
-            // core 1.3 structure must not be chained.
+            // Vulkan 1.2 路径：特性来自 KHR 扩展结构体，严禁链入 1.3 核心结构体。
             device_create = device_create
                 .push_next(&mut enabled_dynamic_rendering)
                 .push_next(&mut enabled_synchronization2);
@@ -1026,8 +967,7 @@ impl Gpu {
 
         let memory_properties = instance.get_physical_device_memory_properties(physical);
 
-        // ReBAR detection: the largest device-local heap that is also host
-        // visible means the pool can be written directly from the CPU.
+        // ReBAR 检测：若同时具备设备本地与宿主可见属性的最大堆足够大，说明 CPU 可直接写入显存。
         features.rebar = (0..memory_properties.memory_type_count as usize).any(|i| {
             let t = memory_properties.memory_types[i];
             t.property_flags.contains(
@@ -1035,8 +975,7 @@ impl Gpu {
             ) && memory_properties.memory_heaps[t.heap_index as usize].size > (256 << 20)
         });
 
-        // Timeline semaphore, used by every subsystem to know when a frame is
-        // truly done.
+        // 时间线信号量，供各子系统精确判断某帧何时在 GPU 上真正执行完毕。
         let sem_type = vk::SemaphoreTypeCreateInfo::default()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
             .initial_value(0);
@@ -1143,33 +1082,29 @@ impl Gpu {
         self.frames.len() as u32
     }
 
-    /// Public wrapper over the memory-type search (used by the texture pool).
+    /// 内存类型查找的公开封装（供纹理池使用）。
     #[must_use]
     pub fn memory_type_index_public(&self, kind: MemoryKind) -> Option<u32> {
         choose_memory_type(self.memory_types(), u32::MAX, kind)
     }
 
-    /// The memory types the device actually reports.
+    /// 返回设备实际报告的所有内存类型。
     fn memory_types(&self) -> &[vk::MemoryType] {
         &self.memory_properties.memory_types[..self.memory_properties.memory_type_count as usize]
     }
 
-    /// Find a memory type that both matches `kind` **and** is allowed by the
-    /// resource's `memoryTypeBits` requirement.
+    /// 查找既匹配 `kind` 又满足资源 `memoryTypeBits` 掩码的内存类型。
     ///
-    /// Vulkan rejects `vkBindImageMemory` when the type index is not in the
-    /// image's bit mask, and the "best" type by properties is frequently outside
-    /// it (tiling constraints differ per format).
+    /// 若类型索引不在图像的掩码内，`vkBindImageMemory` 会直接失败。
     #[must_use]
     pub fn memory_type_index_for_bits(&self, bits: u32, kind: MemoryKind) -> Option<u32> {
         choose_memory_type(self.memory_types(), bits, kind)
     }
 
-    /// Create a buffer and bind its memory.
+    /// 创建缓冲区并绑定其设备内存。
     ///
     /// # Errors
-    /// Returns [`GpuError::Allocation`] when no memory type matches or the
-    /// driver rejects the allocation.
+    /// 若无匹配内存类型或驱动拒绝分配则返回 [`GpuError::Allocation`]。
     pub fn create_buffer(
         &self,
         size: u64,
@@ -1180,8 +1115,7 @@ impl Gpu {
         if size == 0 {
             return Err(GpuError::Allocation(format!("{name}: zero-sized buffer")));
         }
-        // SAFETY: straight-line Vulkan creation; on any failure the partially
-        // created objects are destroyed before returning.
+        // SAFETY: 顺序创建 Vulkan 资源；任意步骤失败均会在返回前清理已创建对象。
         unsafe {
             let buffer = self
                 .device
@@ -1259,10 +1193,10 @@ impl Gpu {
         }
     }
 
-    /// Destroy a buffer and its memory.
+    /// 销毁缓冲区及其绑定的内存。
     ///
     /// # Safety
-    /// The caller must ensure no command buffer still references the buffer.
+    /// 调用方须确保已无任何命令缓冲区仍引用该缓冲区。
     pub unsafe fn destroy_buffer(&self, buffer: &Buffer) {
         if !buffer.mapped.is_null() {
             self.device.unmap_memory(buffer.memory);
@@ -1271,11 +1205,10 @@ impl Gpu {
         self.device.free_memory(buffer.memory, None);
     }
 
-    /// Write `data` into a host-visible buffer.
+    /// 将 `data` 写入宿主可见缓冲区。
     ///
     /// # Safety
-    /// `offset + data.len()` must be within the buffer, and the caller must not
-    /// race with the GPU reading that range.
+    /// `offset + data.len()` 必须位于缓冲区范围内，且不得与 GPU 读取该范围产生数据竞争。
     pub unsafe fn write_host<T: bytemuck::Pod>(
         &self,
         buffer: &Buffer,
@@ -1290,23 +1223,18 @@ impl Gpu {
             return false;
         }
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
-        // The memory may not be host-coherent — the driver is free to fall
-        // back to a non-coherent type when the preferred one is unavailable —
-        // and the GPU would then read stale bytes. Flushing is a no-op for
-        // coherent memory.
+        // 所分配内存可能非宿主一致（首选类型不可用时驱动可能回退），
+        // 不刷写会导致 GPU 读到陈旧数据；对一致性内存而言刷写为空操作。
         self.flush(buffer, offset, bytes.len() as u64);
         true
     }
 
-    /// Flush a mapped range (no-op for coherent memory, required otherwise).
+    /// 刷写已映射内存范围（一致性内存为空操作，否则必需）。
     ///
-    /// Vulkan's `VUID-VkMappedMemoryRange-size-00685` requires the range to
-    /// stay inside the allocation, `offset` to be a multiple of
-    /// `nonCoherentAtomSize`, and `size` to be either a multiple of that value
-    /// or to reach exactly the end of the allocation.
+    /// 遵循 `VUID-VkMappedMemoryRange-size-00685` 对 `nonCoherentAtomSize` 对齐的要求。
     ///
     /// # Safety
-    /// `offset..offset+len` must be inside a mapped buffer.
+    /// `offset..offset+len` 必须位于已映射缓冲区范围内。
     pub unsafe fn flush(&self, buffer: &Buffer, offset: u64, len: u64) {
         if buffer.mapped.is_null() || buffer.host_coherent || len == 0 {
             return;
@@ -1324,13 +1252,12 @@ impl Gpu {
         let _ = self.device.flush_mapped_memory_ranges(&[range]);
     }
 
-    /// Begin a one-shot command buffer on the graphics queue.
+    /// 在图形队列上开启一个一次性命令缓冲区。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn begin_single_time(&self) -> Result<vk::CommandBuffer, GpuError> {
-        // SAFETY: standard one-shot pattern; the pair is always ended in
-        // `end_single_time`.
+        // SAFETY: 标准一次性命令缓冲区模式；总是与 `end_single_time` 配对结束。
         unsafe {
             let cmd = self.device.allocate_command_buffers(
                 &vk::CommandBufferAllocateInfo::default()
@@ -1347,12 +1274,12 @@ impl Gpu {
         }
     }
 
-    /// Submit and wait for a one-shot command buffer.
+    /// 提交一次性命令缓冲区并等待执行完成。
     ///
     /// # Errors
-    /// Propagates Vulkan failures.
+    /// 透传 Vulkan 调用错误。
     pub fn end_single_time(&self, cmd: vk::CommandBuffer) -> Result<(), GpuError> {
-        // SAFETY: `cmd` comes from `begin_single_time` and is freed here.
+        // SAFETY: `cmd` 来自 `begin_single_time` 并在此释放。
         unsafe {
             self.device.end_command_buffer(cmd)?;
             let cmds = [cmd];
@@ -1365,10 +1292,10 @@ impl Gpu {
         }
     }
 
-    /// Upload `bytes` to a device-local buffer through a staging buffer.
+    /// 通过暂存缓冲区将 `bytes` 上传到设备本地缓冲区。
     ///
     /// # Errors
-    /// Propagates allocation and Vulkan failures.
+    /// 透传分配与 Vulkan 调用错误。
     pub fn upload_buffer(&self, dst: &Buffer, offset: u64, bytes: &[u8]) -> Result<(), GpuError> {
         if bytes.is_empty() {
             return Ok(());
@@ -1379,7 +1306,7 @@ impl Gpu {
             MemoryKind::HostVisible,
             "staging-upload",
         )?;
-        // SAFETY: the staging buffer is exclusively ours.
+        // SAFETY: 暂存缓冲区由本调用独占。
         unsafe {
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), staging.mapped, bytes.len());
             let cmd = self.begin_single_time()?;
@@ -1398,12 +1325,12 @@ impl Gpu {
         Ok(())
     }
 
-    /// Wait until the GPU has completed `value` on the timeline.
+    /// 阻塞等待直至 GPU 在时间线上完成 `value`。
     ///
     /// # Errors
-    /// Propagates Vulkan failures (including device loss).
+    /// 透传 Vulkan 错误（含设备丢失）。
     pub fn wait_timeline(&self, value: u64) -> Result<(), GpuError> {
-        // SAFETY: plain semaphore wait.
+        // SAFETY: 标准时间线信号量等待。
         unsafe {
             let semaphores = [self.timeline.semaphore];
             let values = [value];
@@ -1416,21 +1343,20 @@ impl Gpu {
         Ok(())
     }
 
-    /// Block until the whole device is idle.
+    /// 阻塞等待整个设备空闲。
     pub fn wait_idle(&self) {
-        // SAFETY: trivial.
+        // SAFETY: 设备存活且无外部约束。
         unsafe {
             let _ = self.device.device_wait_idle();
         }
     }
 
-    /// Tear everything down. Safe to call exactly once.
+    /// 销毁全部设备资源。仅可安全调用一次。
     pub fn destroy(mut self) {
-        // The objects that may outlive the `Gpu` (the atlases) must not touch
-        // the device after this point, so the shared lifetime is invalidated
-        // before the device handle goes away.
+        // 生命周期可能长于 `Gpu` 的对象（如图集）在此之后不得再触碰设备，
+        // 因此在销毁设备句柄前先使共享状态失效。
         self.lifetime.invalidate();
-        // SAFETY: we own every handle and are consuming `self`.
+        // SAFETY: `Self` 拥有全部句柄且正在被消费销毁。
         unsafe {
             let _ = self.device.device_wait_idle();
             for f in &self.frames {
@@ -1470,15 +1396,13 @@ unsafe extern "system" fn vulkan_debug_callback(
     if data.is_null() {
         return vk::FALSE;
     }
-    // SAFETY: the driver guarantees a valid pointer for the callback duration.
+    // SAFETY: 驱动保证指针在回调期间有效。
     let data = unsafe { &*data };
     let message = data
         .message_as_c_str()
         .map(|c| c.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // Validation output must never be swallowed by an unconfigured logger: the
-    // whole point of the layer is to be seen during development and CI.
-    // Count everything so CI can gate on it instead of on log scraping.
+    // 校验层输出绝不能被未配置的日志器吞掉；同时统计计数以供 CI 门禁断言。
     if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
         crate::debug::VALIDATION.record("ERROR", &message);
     } else if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {
@@ -1496,20 +1420,18 @@ unsafe extern "system" fn vulkan_debug_callback(
     vk::FALSE
 }
 
-/// Serialises GPU tests.
+/// 串行化 GPU 测试。
 ///
-/// Multiple `VkInstance`s creating devices simultaneously trips the vendor
-/// overlay layers installed on developer machines (RTSS / FPS Monitor), so the
-/// integration tests take this lock instead of fighting the environment.
+/// 多个 `VkInstance` 并发创建设备容易触发开发者机器上的第三方覆盖层（如 RTSS）崩溃，
+/// 因此集成测试通过此锁串行执行。
 pub fn gpu_test_guard() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Test helper: create a headless device and skip the test when unavailable.
+/// 测试辅助函数：创建无头设备，不可用时跳过测试。
 ///
-/// Returns `None` when the machine has no Vulkan 1.3 device, so CI without a
-/// GPU reports "skipped" instead of "failed".
+/// 当机器无 Vulkan 1.3 设备时返回 `None`，使无 GPU 的 CI 报告跳过而非失败。
 #[must_use]
 pub fn test_device() -> Option<Gpu> {
     let validation = std::env::var("UNBOUND_VALIDATION").is_ok();
@@ -1545,7 +1467,7 @@ mod tests {
             .iter()
             .any(|e| e == "VK_EXT_surface_maintenance1"));
 
-        // A second pass must not duplicate anything.
+        // 第二次解析不得产生重复项。
         let before = extensions.len();
         resolve_instance_extension_dependencies(
             &mut extensions,
@@ -1553,17 +1475,16 @@ mod tests {
         );
         assert_eq!(extensions.len(), before);
 
-        // Without any surface-related request the instance list stays untouched.
+        // 没有任何 surface 相关请求时，实例扩展列表保持为空。
         let mut plain = Vec::new();
         resolve_instance_extension_dependencies(&mut plain, &[]);
         assert!(plain.is_empty());
     }
 
-    /// `VUID-vkCreateDevice-ppEnabledExtensionNames-01387`: a device that
-    /// enables `VK_KHR_swapchain` needs an instance with `VK_KHR_surface`.
-    /// The windowed runner forgot to request the instance extensions at all,
-    /// which turned the missing dependency into a validation error and then
-    /// into an unresolved `vkCreateWin32SurfaceKHR`.
+    /// `VUID-vkCreateDevice-ppEnabledExtensionNames-01387`：启用
+    /// `VK_KHR_swapchain` 的设备要求实例已启用 `VK_KHR_surface`。
+    /// 窗口运行器曾完全忘记请求实例扩展，使缺失的依赖先变成校验错误，
+    /// 进而导致 `vkCreateWin32SurfaceKHR` 无法解析。
     #[test]
     fn the_swapchain_brings_its_instance_extensions() {
         let device = vec!["VK_KHR_swapchain".to_string()];
@@ -1572,8 +1493,7 @@ mod tests {
         resolve_instance_extension_dependencies(&mut bare, &device);
         assert_eq!(bare, vec!["VK_KHR_surface".to_string()]);
 
-        // A caller that supplied the platform extension but forgot the root
-        // gets the root inserted, exactly once.
+        // 调用方若只提供了平台扩展而漏掉根扩展，根扩展应被恰好补入一次。
         let mut platform_only = vec!["VK_KHR_win32_surface".to_string()];
         resolve_instance_extension_dependencies(&mut platform_only, &device);
         assert_eq!(
@@ -1584,7 +1504,7 @@ mod tests {
             ]
         );
 
-        // The fully derived list is left alone.
+        // 已完整派生的列表保持原样。
         let mut complete = vec![
             "VK_KHR_surface".to_string(),
             "VK_KHR_win32_surface".to_string(),
@@ -1664,7 +1584,7 @@ mod tests {
             .expect("buffer");
         assert_ne!(buf.address, 0);
         assert_eq!(buf.address % 64, 0, "BDA must be 64B aligned");
-        // SAFETY: nobody else references the buffer.
+        // SAFETY: 无其他代码引用该缓冲区。
         unsafe { gpu.destroy_buffer(&buf) };
         gpu.destroy();
     }
@@ -1688,7 +1608,7 @@ mod tests {
             .expect("dst");
         gpu.upload_buffer(&dst, 0, &payload).expect("upload");
 
-        // Read it back through a host-visible staging buffer.
+        // 通过宿主可见暂存缓冲区回读数据。
         let readback = gpu
             .create_buffer(
                 payload.len() as u64,
@@ -1697,7 +1617,7 @@ mod tests {
                 "readback",
             )
             .expect("readback");
-        // SAFETY: exclusive ownership + queue idle after upload.
+        // SAFETY: 独占所有权且上传后队列已空闲。
         unsafe {
             let cmd = gpu.begin_single_time().unwrap();
             gpu.device.cmd_copy_buffer(
@@ -1721,7 +1641,7 @@ mod tests {
         let Some(gpu) = test_device() else {
             return;
         };
-        // SAFETY: signalling on the graphics queue with an empty submit.
+        // SAFETY: 在图形队列上通过空提交触发信号量。
         unsafe {
             let value = gpu.timeline.next();
             let semaphores = [gpu.timeline.semaphore];
@@ -1740,9 +1660,8 @@ mod tests {
         gpu.destroy();
     }
 
-    /// The memory layout a discrete NVIDIA card reports: two plain VRAM types,
-    /// a block of system memory, and — as type 5, at the end — the small window
-    /// of VRAM that is also host visible (the Resizable BAR window).
+    /// 模拟 NVIDIA 独显报告的内存布局：两个纯显存类型、一块系统内存，以及末尾的
+    /// 宿主可见显存窗口（Resizable BAR）。
     fn discrete_memory_types() -> Vec<vk::MemoryType> {
         use vk::MemoryPropertyFlags as Flags;
         let ty = |heap_index, property_flags| vk::MemoryType {
@@ -1768,14 +1687,13 @@ mod tests {
     #[test]
     fn device_local_memory_stays_out_of_the_cpu_visible_window() {
         let types = discrete_memory_types();
-        // Plain VRAM is type 1. Type 5 is VRAM too, but it is the cramped
-        // window the CPU can map: putting the primitive pool, the sort keys or
-        // an atlas image there caps them at the size of that window.
+        // 类型 1 为纯显存；类型 5 虽也是显存但受限于狭小的 CPU 映射窗口，
+        // 不可用于存放持久化池、排序键或图集图像。
         assert_eq!(
             choose_memory_type(&types, u32::MAX, MemoryKind::DeviceLocal),
             Some(1)
         );
-        // When the resource may only live in the window, take it anyway.
+        // 当资源掩码仅允许该窗口类型时仍正常选用。
         assert_eq!(
             choose_memory_type(&types, 1 << 5, MemoryKind::DeviceLocal),
             Some(5)
@@ -1800,9 +1718,8 @@ mod tests {
         );
     }
 
-    /// The reported range used to put the *end* offset into `size`, so the
-    /// second frame of a 4 MiB ring flushed `2 MiB + 64 B` starting at `2 MiB`
-    /// and the validation layer rejected it (`VUID-...-00685`).
+    /// 回归测试：过去将结束偏移误填为 `size`，导致 4 MiB 环的第二帧从 `2 MiB` 起
+    /// 刷写 `2 MiB + 64 B` 而被校验层拒绝（`VUID-...-00685`）。
     #[test]
     fn mapped_memory_flush_range_never_exceeds_allocation_bounds() {
         let allocation = 4_194_304;
@@ -1818,23 +1735,22 @@ mod tests {
             );
             assert!(offset + size >= 2_097_152 + len, "the tail must be flushed");
         }
-        // A misaligned start rounds down without losing the requested tail.
+        // 未对齐的起始偏移向下取整，同时不丢失请求尾部。
         let (offset, size) = align_mapped_range(100, 10, 64, 1024).expect("a flushable range");
         assert_eq!(offset, 64);
         assert!(offset + size >= 110);
-        // A range that ends exactly at the allocation may stop unaligned.
+        // 恰好结束于分配末尾的范围允许长度不按原子粒度对齐。
         let (offset, size) = align_mapped_range(1000, 24, 64, 1024).expect("a flushable range");
         assert_eq!(offset, 960);
         assert_eq!(offset + size, 1024);
-        // Degenerate ranges are ignored instead of producing an invalid one.
+        // 退化空范围直接忽略，避免生成非法刷写范围。
         assert_eq!(align_mapped_range(0, 0, atom, allocation), None);
         assert_eq!(align_mapped_range(allocation, 16, atom, allocation), None);
     }
 
     #[test]
     fn a_device_without_vram_still_gets_device_local_memory() {
-        // Integrated parts report a single type that is both device local and
-        // host visible; refusing it would leave nothing to allocate from.
+        // 集成显卡仅报告单一同时具备设备本地与宿主可见的内存类型，必须允许选用。
         let types = vec![vk::MemoryType {
             heap_index: 0,
             property_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL

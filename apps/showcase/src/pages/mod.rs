@@ -1,8 +1,8 @@
-//! The gallery catalogue: categories, pages and example definitions.
+//! 展厅目录：分类、页面与示例定义。
 //!
-//! Pages are data. The shell only knows how to lay out a page, render a card
-//! and route a target; every heading, knob and code snippet comes from the
-//! tables below.
+//! 页面即数据。外壳只知道如何布局页面、渲染卡片和路由目标；
+//! 所有标题、旋钮和代码片段均来自下表。
+//!
 
 pub mod canvas;
 pub mod collections;
@@ -22,7 +22,7 @@ use crate::state::GalleryState;
 
 pub use components::showcase_entry_for_widget;
 
-/// The seven navigation categories.
+/// 七个导航分类。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CategoryId {
     Home,
@@ -37,11 +37,11 @@ pub enum CategoryId {
 }
 
 impl CategoryId {
-    /// The categories rendered in the navigation tree.
+    /// 导航树中渲染的分类。
     ///
-    /// `Design` is part of the tree: leaving it out meant the whole design
-    /// section (colour, type, elevation, vectors, fonts) was reachable only
-    /// through the single "Design Guidance" row that always opened Colors.
+    /// `Design` 也是树的一部分：此前将其漏掉导致整个设计分区
+    /// （色彩、排版、层级阴影、矢量图形、字体）只能通过总是打开 Colors 的
+    /// 单个“Design Guidance”行访问。
     pub const ALL: [CategoryId; 7] = [
         CategoryId::Design,
         CategoryId::Basic,
@@ -94,13 +94,13 @@ impl CategoryId {
     }
 }
 
-/// Every navigable page.
+/// 每个可导航的页面。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PageId {
     Home,
     Colors,
     Typography,
-    /// Multilingual script matrix, curve inspector and BiDi sandbox.
+    /// 多语言书写系统矩阵、曲线检查器与 BiDi 沙盒。
     Fonts,
     Elevation,
     Vector,
@@ -120,7 +120,7 @@ pub enum PageId {
     A11y,
     Telemetry,
     Settings,
-    /// The full component gallery: one card per catalog component.
+    /// 完整组件展厅：每个目录组件对应一张卡片。
     Components,
 }
 
@@ -260,7 +260,7 @@ impl PageId {
         }
     }
 
-    /// Case-insensitive catalogue search.
+    /// 不区分大小写的目录搜索。
     #[must_use]
     pub fn matches(self, query: &str) -> bool {
         let info = self.info();
@@ -278,7 +278,7 @@ impl PageId {
     }
 }
 
-/// Static page metadata.
+/// 静态页面元数据。
 #[derive(Copy, Clone, Debug)]
 pub struct PageInfo {
     pub title: &'static str,
@@ -296,7 +296,7 @@ impl PageInfo {
     }
 }
 
-/// One adjustable property of an example.
+/// 示例的一个可调属性。
 #[derive(Copy, Clone, Debug)]
 pub enum KnobSpec {
     Toggle {
@@ -403,7 +403,7 @@ impl KnobSpec {
     }
 }
 
-/// What the live stage of an example renders.
+/// 示例实时舞台渲染的内容。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DemoKind {
     Hero,
@@ -464,13 +464,13 @@ pub enum DemoKind {
         graph: bool,
     },
     About,
-    /// One catalog component painted by its genuine emitter.
+    /// 由其真实发射器绘制的单个目录组件。
     Component {
         id: WidgetCatalogId,
     },
 }
 
-/// One example card definition.
+/// 单个示例卡片定义。
 #[derive(Copy, Clone, Debug)]
 pub struct ExampleDef {
     pub title: &'static str,
@@ -513,7 +513,7 @@ impl ExampleDef {
     }
 }
 
-/// Context handed to every demo renderer.
+/// 传递给每个演示渲染器的上下文。
 pub struct DemoCtx<'a, 'b> {
     pub canvas: &'a mut Canvas<'b>,
     pub state: &'a GalleryState,
@@ -564,7 +564,7 @@ impl DemoCtx<'_, '_> {
     }
 }
 
-/// Render one example's live stage.
+/// 渲染单个示例的实时舞台。
 pub fn render_demo(ctx: &mut DemoCtx<'_, '_>, demo: DemoKind) {
     match demo {
         DemoKind::Hero => home::hero(ctx),

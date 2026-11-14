@@ -1,36 +1,36 @@
-//! `f16` (IEEE 754 binary16) conversion used by the packed 64-byte primitive.
+//! 用于 64 字节打包图元的 `f16`（IEEE 754 binary16）转换。
 //!
-//! `docs/gpu_ui_v2_0.md` §2.4 stores corner radii, border widths and shadow
-//! blur radii as `u16` f16 bit patterns. Round-tripping through [`half`] keeps
-//! the encoder/decoder identical to what the shader does with `unpackHalf2x16`.
+//! `docs/architecture/gpu-renderer.md` 将圆角半径、边框宽度和阴影模糊半径
+//! 存储为 `u16` 格式的 f16 位模式。通过 [`half`] 进行往返转换可使
+//! 编解码器与着色器中的 `unpackHalf2x16` 行为保持一致。
 
-/// Encode a finite `f32` into an IEEE binary16 bit pattern.
+/// 将有限 `f32` 编码为 IEEE binary16 位模式。
 ///
-/// Non-finite inputs are saturated: `NaN` becomes `0`, `+inf` becomes `65504`
-/// (the largest finite binary16). Saturating rather than propagating keeps the
-/// GPU-side unpack free of NaN-tainted quads, which would otherwise render as
-/// invisible-but-depth-writing geometry.
+/// 非有限输入会被饱和截断：`NaN` 转为 `0`，`+inf` 转为 `65504`
+/// （最大的有限 binary16 值）。采用饱和而非传播可避免 GPU 端解包出
+/// 含 NaN 的四边形，防止其渲染为不可见但仍写入深度的几何体。
+///
 #[inline]
 #[must_use]
 pub fn f32_to_f16(v: f32) -> u16 {
     if v.is_nan() {
         return 0;
     }
-    // Saturate rather than emit an infinity: an inf radius/blur would make the
-    // SDF maths produce inf alpha, which is far harder to diagnose than a
-    // clipped-but-visible primitive.
+    // 饱和截断而非输出无穷大：无穷大的半径或模糊值会导致 SDF 数学计算
+    // 产生无穷大 Alpha，这比被截断但仍可见的图元更难排查。
+    //
     let v = v.clamp(-65504.0, 65504.0);
     half::f16::from_f32(v).to_bits()
 }
 
-/// Decode an IEEE binary16 bit pattern back to `f32` (always exact).
+/// 将 IEEE binary16 位模式解码回 `f32`（始终精确）。
 #[inline]
 #[must_use]
 pub fn f16_to_f32(bits: u16) -> f32 {
     half::f16::from_bits(bits).to_f32()
 }
 
-/// Pack four radii, clamping each to `[0, 65504]` before encoding.
+/// 打包四个圆角半径，编码前将每个值钳制到 `[0, 65504]`。
 #[inline]
 #[must_use]
 pub fn pack_radii(radii: [f32; 4]) -> [u16; 4] {
@@ -42,7 +42,7 @@ pub fn pack_radii(radii: [f32; 4]) -> [u16; 4] {
     ]
 }
 
-/// Unpack four radii.
+/// 解包四个圆角半径。
 #[inline]
 #[must_use]
 pub fn unpack_radii(bits: [u16; 4]) -> [f32; 4] {

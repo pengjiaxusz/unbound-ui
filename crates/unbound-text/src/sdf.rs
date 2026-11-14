@@ -1,65 +1,65 @@
-//! Signed distance field generation for glyphs.
+//! 字形有向距离场（SDF）生成。
 //!
-//! The canvas needs text that stays sharp from 10% to 6400% zoom, which a plain
-//! coverage bitmap cannot provide: at 6400% a 12px raster is a blurry mosaic.
-//! A distance field encodes the *shape* rather than its rasterisation, so the
-//! fragment shader can reconstruct a crisp edge at any scale.
+//! 画布要求文本在 10% 至 6400% 缩放范围内均保持锐利，普通覆盖率位图无法
+//! 满足这一需求：在 6400% 缩放下，12px 光栅化位图会变成模糊的马赛克。
+//! 距离场编码的是字形的**几何轮廓**而非其光栅化结果，因此片元着色器
+//! 可在任意缩放倍率下重建清晰边缘。
 //!
-//! Two producers exist:
+//! 提供两种生成路径：
 //!
-//! * [`from_coverage`] — exact Euclidean distance transform over a rasterised
-//!   coverage bitmap. O(n) with the Felzenszwalb two-pass algorithm, no
-//!   approximation, and it reuses the glyph rasteriser the R8 atlas already
-//!   needs.
-//! * `mtsdf.comp` (GPU) — the same maths per texel on the compute queue, used
-//!   for canvas text so a glyph never blocks the main thread.
+//! * [`from_coverage`] —— 基于光栅化覆盖率位图的精确欧氏距离变换。
+//!   采用 Felzenszwalb 两趟算法实现 O(n) 复杂度，无近似误差，
+//!   且复用 R8 图集已有的字形光栅化器。
+//! * `mtsdf.comp`（GPU）—— 在计算队列上按纹素执行相同数学运算，
+//!   用于画布文本，避免字形生成阻塞主线程。
 //!
-//! Channel strategy: the field is replicated into R, G and B. The shader's
-//! median-of-three is then a no-op but remains correct, and the layout is ready
-//! for per-edge channel assignment (true MSDF) without changing the texture
-//! format or the sampling code.
+//!
+//! 通道策略：距离场同时复制到 R、G、B 三通道。此时着色器的三通道中值
+//! 运算退化为恒等操作但依然正确，且该布局已为后续按边分配通道（真 MSDF）
+//! 预留结构，无需修改纹理格式或采样代码。
+//!
 
-/// A packed distance-field bitmap, RGBA8.
+/// 打包的距离场位图，RGBA8 格式。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SdfBitmap {
     pub width: u32,
     pub height: u32,
-    /// Distance, in texels, that maps to the full 0..1 range on either side of
-    /// the edge. 4–6 is the useful range for text.
+    /// 边缘两侧映射到完整 0..1 范围的距离（单位：纹素）。文本常用 4–6。
+    ///
     pub spread: f32,
-    /// RGBA8: R=G=B=distance field, A=original coverage.
+    /// RGBA8：R=G=B=距离场，A=原始覆盖率。
     pub data: Vec<u8>,
 }
 
 impl SdfBitmap {
-    /// Distance value at a texel, in `0..=1` (0.5 is exactly the edge).
+    /// 单个纹素处的距离值，范围 `0..=1`（0.5 恰好位于边缘）。
     #[must_use]
     pub fn sample(&self, x: u32, y: u32) -> f32 {
         let i = ((y * self.width + x) * 4) as usize;
         f32::from(self.data[i]) / 255.0
     }
 
-    /// Signed distance in texels; negative inside the glyph.
+    /// 以纹素为单位的有向距离；字形内部为负值。
     #[must_use]
     pub fn signed_distance(&self, x: u32, y: u32) -> f32 {
         (0.5 - self.sample(x, y)) * 2.0 * self.spread
     }
 }
 
-/// Exact 1D squared distance transform (Felzenszwalb & Huttenlocher).
+/// 精确一维平方距离变换（Felzenszwalb & Huttenlocher 算法）。
 ///
-/// `f` holds the per-column lower envelope samples (`0` or `INF`), `d` receives
-/// the squared distances, and `v`/`z` are scratch parabolas.
+/// `f` 存储每列的下包络采样值（`0` 或 `INF`），`d` 接收平方距离输出，
+/// `v`/`z` 为抛物线暂存数组。
 fn edt_1d(f: &[f32], d: &mut [f32], v: &mut [usize], z: &mut [f32]) {
     const INF: f32 = 1e20;
     let n = f.len();
     if n == 0 {
         return;
     }
-    // Felzenszwalb & Huttenlocher, "Distance Transforms of Sampled Functions".
-    // The lower envelope of the parabolas rooted at each sample is maintained as
-    // a stack of (root, start) pairs; each sample is pushed and popped at most
-    // once, so the whole transform is O(n).
+    // Felzenszwalb & Huttenlocher, "Distance Transforms of Sampled Functions"。
+    // 以各采样点为顶点的抛物线下包络通过 `(root, start)` 栈维护；
+    // 每个采样点至多入栈与出栈各一次，因此整趟变换复杂度为 O(n)。
+    //
     let mut k = 0usize;
     v[0] = 0;
     z[0] = -INF;
@@ -72,7 +72,7 @@ fn edt_1d(f: &[f32], d: &mut [f32], v: &mut [usize], z: &mut [f32]) {
             let s_intersect = (fq - fp) / (2.0 * q as f32 - 2.0 * p as f32);
             if s_intersect <= z[k] {
                 if k == 0 {
-                    // The new parabola dominates from -inf: it becomes the root.
+                    // 新抛物线从 -inf 起占据主导：直接成为根节点。
                     v[0] = q;
                     z[0] = -INF;
                     z[1] = INF;
@@ -99,8 +99,8 @@ fn edt_1d(f: &[f32], d: &mut [f32], v: &mut [usize], z: &mut [f32]) {
     }
 }
 
-/// Squared distance from every pixel to the nearest pixel where `inside(i)` is
-/// true.
+/// 计算每个像素到满足 `inside(i)` 为真的最近像素的平方距离。
+///
 fn squared_edt(width: usize, height: usize, inside: &[bool]) -> Vec<f32> {
     const INF: f32 = 1e20;
     let max_dim = width.max(height);
@@ -131,11 +131,11 @@ fn squared_edt(width: usize, height: usize, inside: &[bool]) -> Vec<f32> {
     result
 }
 
-/// Build a distance field from an 8-bit coverage bitmap.
+/// 从 8 位覆盖率位图构建距离场。
 ///
-/// `coverage` is row-major, `width * height` bytes. Pixels at or above the
-/// midpoint count as inside. `spread` is the number of texels mapped to the full
-/// range on each side of the edge.
+/// `coverage` 为行主序，共 `width * height` 字节。不低于中值的像素
+/// 视为内部。`spread` 为边缘两侧各自映射到完整范围的纹素数。
+///
 #[must_use]
 pub fn from_coverage(coverage: &[u8], width: u32, height: u32, spread: f32) -> SdfBitmap {
     let w = width as usize;
@@ -154,20 +154,20 @@ pub fn from_coverage(coverage: &[u8], width: u32, height: u32, spread: f32) -> S
     let inside: Vec<bool> = coverage[..w * h].iter().map(|c| *c >= 128).collect();
     let outside: Vec<bool> = inside.iter().map(|b| !b).collect();
 
-    // Distance to the nearest *outside* pixel tells us how deep inside we are;
-    // distance to the nearest *inside* pixel tells us how far outside we are.
-    // A bitmap that is entirely inside (or entirely outside) has no edge, so the
-    // corresponding transform is skipped — otherwise every texel would be INF.
+    // 到最近**外部**像素的距离表示内部深度；到最近**内部**像素的距离表示外部远度。
+    // 完全处于内部（或完全处于外部）的位图不存在边缘，因此跳过对应的变换——
+    // 否则所有纹素都会得到 INF。
+    //
     let has_inside = inside.iter().any(|b| *b);
     let has_outside = inside.iter().any(|b| !*b);
 
-    // A bitmap with no edge at all (a blank glyph padding, or a fully covered
-    // box) has no meaningful signed distance: saturate instead of dividing by an
-    // absent boundary, which would otherwise put every texel at exactly 0.5.
+    // 毫无边缘的位图（空白字形边距或全覆盖方块）没有有意义的有向距离：
+    // 此时应饱和截断而非除以不存在的边界，否则所有纹素都会变成 0.5。
     //
-    // The encoding is "high = inside" — the same one the GPU generator and
-    // `uber.frag` use — so a fully covered bitmap saturates to 255 (deep
-    // inside) and an empty one to 0 (far outside).
+    //
+    // 编码约定为“高值 = 内部”——与 GPU 生成器及 `uber.frag` 一致——
+    // 因此全覆盖位图饱和为 255（深处内部），空位图饱和为 0（远离外部）。
+    //
     if !has_inside || !has_outside {
         let v = if has_inside { 255u8 } else { 0u8 };
         let mut data = vec![0u8; w * h * 4];
@@ -191,13 +191,13 @@ pub fn from_coverage(coverage: &[u8], width: u32, height: u32, spread: f32) -> S
 
     let mut data = vec![0u8; w * h * 4];
     for i in 0..w * h {
-        // Signed distance in texels: negative inside.
+        // 以纹素为单位的有向距离：内部为负。
         let signed = if inside[i] {
             -dist_out[i].sqrt()
         } else {
             dist_in[i].sqrt()
         };
-        // 0.5 at the edge, 0.0 / 1.0 at ±spread.
+        // 边缘处为 0.5，±spread 处为 0.0 / 1.0。
         let value = (0.5 - signed / (2.0 * spread)).clamp(0.0, 1.0);
         let v = (value * 255.0).round() as u8;
         let o = i * 4;
@@ -215,10 +215,10 @@ pub fn from_coverage(coverage: &[u8], width: u32, height: u32, spread: f32) -> S
     }
 }
 
-/// Reconstruct coverage from a distance field, the way the fragment shader does.
+/// 按片元着色器的方式从距离场重建覆盖率。
 ///
-/// Used by tests to prove the field is faithful, and by the headless verifier to
-/// compare a GPU-generated field against the CPU reference.
+/// 供测试验证距离场保真度，也供无头校验器将 GPU 生成场与 CPU 参考实现对比。
+///
 #[must_use]
 pub fn reconstruct_coverage(field: &SdfBitmap, x: u32, y: u32, aa_width: f32) -> f32 {
     let v = field.sample(x, y);
@@ -274,16 +274,16 @@ mod tests {
     #[test]
     fn field_is_half_at_the_boundary_and_signed_inside() {
         let cov = filled_rect(32, 32, 8, 8, 24, 24);
-        // Spread 8 makes the full 8-texel depth representable; a spread of 4
-        // saturates halfway and signed_distance() would legitimately return -4.
+        // spread 为 8 可表示完整的 8 纹素深度；spread 为 4 会在半途饱和，
+        // signed_distance() 将合理地返回 -4。
         let field = from_coverage(&cov, 32, 32, 8.0);
-        // Just inside the left edge.
+        // 紧邻左边缘内侧。
         let inside = field.signed_distance(8, 16);
         assert!(inside <= 0.0, "inside must be negative, got {inside}");
-        // Just outside it.
+        // 紧邻左边缘外侧。
         let outside = field.signed_distance(6, 16);
         assert!(outside > 0.0, "outside must be positive, got {outside}");
-        // The centre is the deepest point.
+        // 中心点为最深处。
         let centre = field.signed_distance(16, 16);
         assert!(centre < inside, "centre {centre} vs edge {inside}");
         assert!(centre <= -7.0, "centre distance {centre}");
@@ -293,7 +293,7 @@ mod tests {
     fn coverage_reconstructs_the_original_shape() {
         let cov = filled_rect(24, 24, 6, 6, 18, 18);
         let field = from_coverage(&cov, 24, 24, 3.0);
-        // Reconstruct with a one-texel antialiasing width and compare.
+        // 使用 1 纹素抗锯齿宽度重建并对比。
         let mut mismatches = 0;
         for y in 0..24 {
             for x in 0..24 {
@@ -316,8 +316,8 @@ mod tests {
         let field = from_coverage(&cov, 16, 16, 4.0);
         for y in 0..16 {
             for x in 0..16 {
-                // "high = inside": an empty bitmap is entirely outside, so it
-                // saturates to 0.
+                // “高值 = 内部”：空位图完全处于外部，因此饱和为 0。
+                //
                 assert!(
                     field.sample(x, y) <= 0.01,
                     "({x},{y}) = {}",
@@ -338,30 +338,30 @@ mod tests {
         }
     }
 
-    /// The CPU field must use the same encoding as the GPU generator.
+    /// CPU 距离场必须与 GPU 生成器采用相同的编码约定。
     ///
-    /// `unbound-gpu`'s reference test asserts that the centre of a covered
-    /// block samples above 0.9 and the corner below 0.1, and `uber.frag`
-    /// turns the field into coverage with `smoothstep(0.5 - w, 0.5 + w, m)`.
-    /// A CPU field with the opposite convention would render every glyph as
-    /// a solid blob.
+    /// `unbound-gpu` 的参考测试断言全覆盖方块中心采样高于 0.9、角点低于 0.1，
+    /// 而 `uber.frag` 通过 `smoothstep(0.5 - w, 0.5 + w, m)` 将距离场转为覆盖率。
+    /// 若 CPU 场采用相反约定，所有字形都会渲染成实心色块。
+    ///
+    ///
     #[test]
     fn the_encoding_is_high_inside_like_the_gpu() {
         let cov = filled_rect(16, 16, 4, 4, 12, 12);
         let field = from_coverage(&cov, 16, 16, 4.0);
-        // The centre is deep inside.
+        // 中心点位于内部深处。
         assert!(
             field.sample(8, 8) > 0.9,
             "the centre must read as inside, got {}",
             field.sample(8, 8)
         );
-        // The corner is far outside.
+        // 角点位于外部远处。
         assert!(
             field.sample(0, 0) < 0.1,
             "the corner must read as outside, got {}",
             field.sample(0, 0)
         );
-        // And `signed_distance` agrees: negative inside.
+        // `signed_distance` 也保持一致：内部为负。
         assert!(field.signed_distance(8, 8) < 0.0);
         assert!(field.signed_distance(0, 0) > 0.0);
     }
@@ -370,7 +370,7 @@ mod tests {
     fn field_saturates_at_the_spread_distance() {
         let cov = filled_rect(32, 32, 4, 4, 28, 28);
         let narrow = from_coverage(&cov, 32, 32, 2.0);
-        // 12 texels inside the edge is far beyond a 2-texel spread.
+        // 距边缘内侧 12 纹素远超 2 纹素的 spread 范围。
         assert!(
             (narrow.signed_distance(16, 16) + 2.0).abs() < 0.1,
             "must clamp at -spread, got {}",
@@ -383,7 +383,7 @@ mod tests {
         let cov = filled_rect(32, 32, 16, 0, 32, 32);
         let narrow = from_coverage(&cov, 32, 32, 2.0);
         let wide = from_coverage(&cov, 32, 32, 8.0);
-        // At the same distance outside the edge, the wide field is closer to 0.5.
+        // 在边缘外侧相同距离处，更宽的 spread 距离场更接近 0.5。
         let a = narrow.sample(12, 16);
         let b = wide.sample(12, 16);
         assert!(b > a, "narrow {a} should decay faster than wide {b}");

@@ -1,8 +1,8 @@
-//! The gallery's single source of truth.
+//! 展厅的单一事实来源（Single Source of Truth）。
 //!
-//! Navigation, environment switches, knob values and the live demo state all
-//! live here. Pages are pure functions of this state, which is what makes the
-//! whole shell testable without a window.
+//! 导航、环境开关、旋钮值与实时演示状态全部集中于此。页面是该状态的纯函数，
+//! 这使得整个外壳无需窗口即可进行测试。
+//!
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -18,7 +18,7 @@ use unbound_world::virtualize::{VirtualList, WindowUpdate};
 
 use crate::pages::{ExampleDef, KnobSpec, PageId};
 
-/// The two shipped application themes.
+/// 随附的两个应用主题。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ThemeMode {
     Light,
@@ -48,31 +48,31 @@ impl ThemeMode {
     }
 }
 
-/// One selectable UI scale step.
+/// 一个可选的 UI 缩放档位。
 pub const ZOOM_STEPS: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
 
-/// How many recent frames the telemetry chart keeps.
+/// 遥测图表保留的最近帧数。
 pub const FRAME_HISTORY_CAP: usize = 96;
 
-/// One recorded frame, fed to the telemetry chart's rolling window.
+/// 单帧记录，送入遥测图表的滑动窗口。
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameSample {
-    /// The frame time in milliseconds.
+    /// 帧耗时（毫秒）。
     pub ms: f32,
-    /// The bytes uploaded this frame.
+    /// 本帧上传的字节数。
     pub upload: f32,
-    /// The draw calls issued this frame.
+    /// 本帧发出的绘制调用次数。
     pub draws: f32,
 }
 
-/// Runtime state that is not derived from an example definition.
+/// 非示例定义派生的运行时状态。
 #[derive(Debug)]
 pub struct DemoState {
-    /// The text-field demo's buffer.
+    /// 文本输入框演示的缓冲区。
     pub text: String,
-    /// Whether the text field owns the keyboard.
+    /// 文本输入框是否持有键盘焦点。
     pub typing: bool,
-    /// A dropdown / modal in the Overlays demo.
+    /// Overlays 演示中的下拉框 / 模态框。
     pub dropdown_open: bool,
     pub modal_open: bool,
     pub toggle_a: bool,
@@ -86,15 +86,15 @@ pub struct DemoState {
     pub drag_position: Option<Vec2>,
     pub list_scroll: [f32; 2],
     pub list_selected: [Option<usize>; 2],
-    /// Real slot-recycling virtualizer per list card.
+    /// 每个列表卡片对应的真实槽位复用虚拟化器。
     pub virtual_lists: [VirtualList; 2],
-    /// Most recent update telemetry from `virtual_lists`.
+    /// 来自 `virtual_lists` 的最新更新遥测。
     pub virtual_updates: [WindowUpdate; 2],
-    /// Async PNG decode hub for the asset streaming grid (lazily started).
+    /// 资源流式加载网格的异步 PNG 解码中心（延迟启动）。
     pub asset_hub: Option<AssetHub>,
-    /// Asset IDs requested from `asset_hub` for the streaming tiles.
+    /// 为流式图块向 `asset_hub` 请求的资源 ID。
     pub asset_ids: Vec<AssetId>,
-    /// Staging ring used by the asset streaming demo.
+    /// 资源流式加载演示使用的暂存环（staging ring）。
     pub asset_ring: StagingRing,
     pub canvas_pan: Vec2,
     pub canvas_zoom: f32,
@@ -102,10 +102,10 @@ pub struct DemoState {
     pub selected_nodes: [bool; 12],
     pub history: Vec<&'static str>,
     pub history_index: usize,
-    /// Real copy-on-write transaction stack from `unbound-canvas`.
+    /// 来自 `unbound-canvas` 的真实写时复制（CoW）事务栈。
     pub undo_stack: UndoStack,
     pub spring: Spring,
-    /// The segmented pill's animated slot position.
+    /// 分段胶囊控件的动画槽位位置。
     pub pill_spring: Spring,
     pub spring_high: bool,
     pub a11y_focus: usize,
@@ -115,17 +115,17 @@ pub struct DemoState {
     pub primitive_count: u32,
     pub draw_calls: u32,
     pub elapsed: f32,
-    /// Button demo activation count.
+    /// 按钮演示的激活次数。
     pub clicks: u32,
-    /// The last icon-button selected in the icon variant.
+    /// 图标变体中上次选中的图标按钮。
     pub selected_icon: usize,
-    /// The progress demo's eased bar display.
+    /// 进度条演示的缓动条显示值。
     pub progress_bar: ProgressState,
-    /// The progress demo's eased ring display.
+    /// 进度条演示的缓动圆环显示值。
     pub progress_ring: ProgressState,
-    /// The rolling window of recent frames feeding the telemetry chart.
+    /// 送入遥测图表的最近帧滑动窗口。
     pub frame_history: VecDeque<FrameSample>,
-    /// The easing demo's interactive cubic-bezier control points.
+    /// 缓动演示的交互式三次贝塞尔控制点。
     pub curve_editor: CurveEditorState,
 }
 
@@ -133,8 +133,8 @@ impl Default for DemoState {
     fn default() -> Self {
         let mut spring = Spring::new(SpringPreset::Snappy, 0.0);
         spring.set_target(0.0);
-        // The default pill sits in slot 1 ("All"), so the spring starts there
-        // instead of sliding in from the left on the first frame.
+        // 默认胶囊位于槽位 1（"All"），因此弹簧从该处起步，
+        // 而不是在首帧从左侧滑入。
         let mut pill_spring = Spring::new(SpringPreset::Snappy, 1.0);
         pill_spring.snap_to(1.0);
         Self {
@@ -199,14 +199,14 @@ impl Default for DemoState {
 }
 
 impl DemoState {
-    /// Select a segmented slot with the sliding pill.
+    /// 使用滑动胶囊选中一个分段槽位。
     pub fn set_pill(&mut self, index: usize) {
         self.pill_choice = index;
         self.pill_spring.set_target(index as f32);
     }
 
-    /// Lazily start the async asset pipeline for the streaming grid and poll
-    /// completed decodes.
+    /// 延迟启动流式网格的异步资源管线并轮询已完成的解码。
+    ///
     pub fn poll_assets(&mut self, text: &mut unbound_text::TextEngine) {
         let hub = self.asset_hub.get_or_insert_with(AssetHub::new);
         if self.asset_ids.is_empty() {
@@ -255,27 +255,27 @@ fn procedural_tile_png(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
     bytes
 }
 
-/// The whole gallery state.
+/// 完整的展厅状态。
 #[derive(Debug)]
 pub struct GalleryState {
     pub active_page: PageId,
     pub nav_expanded: bool,
     pub search_query: String,
     pub search_focused: bool,
-    /// The input method's composition string while a text control is focused.
+    /// 文本控件聚焦时输入法的组合字符串。
     ///
-    /// Kept in the state (instead of in the renderer) so the page and the
-    /// search field draw exactly what the IME is composing.
+    /// 保存在状态中（而非渲染器中），使页面和搜索框能精确绘制 IME 正在组合的内容。
+    ///
     pub ime_preedit: String,
     pub theme: ThemeMode,
     pub zoom_step: usize,
-    /// Whether the pixel grid is snapped.
+    /// 是否启用像素网格对齐。
     pub pixel_snap: bool,
-    /// The frame-rate limit in FPS; `0` means unlimited.
+    /// 帧率上限（FPS）；`0` 表示无限制。
     pub fps_limit: u32,
-    /// The custom FPS-limit input buffer.
+    /// 自定义 FPS 上限的输入缓冲区。
     pub fps_input: String,
-    /// Whether the custom FPS input owns the keyboard.
+    /// 自定义 FPS 输入框是否持有键盘焦点。
     pub fps_focused: bool,
     pub show_hud: bool,
     pub content_scroll: f32,
@@ -284,9 +284,9 @@ pub struct GalleryState {
     pub expanded_code: HashSet<(u8, u8)>,
     pub demo: DemoState,
     pub sandbox: ComponentSandboxState,
-    /// Bumped on every state change, so the window can skip identical frames.
+    /// 每次状态变更时递增，使窗口可跳过完全相同的帧。
     pub revision: u64,
-    /// Accumulator that throttles demo animation rebuilds to ~30 Hz.
+    /// 将演示动画重建节流到约 30 Hz 的累加器。
     animation_clock: f32,
 }
 
@@ -304,8 +304,8 @@ impl Default for GalleryState {
             fps_limit: 120,
             fps_input: "120".to_string(),
             fps_focused: false,
-            // The HUD is a floating popover opened from the top bar; showing
-            // it by default covered the hero card at 960×600.
+            // HUD 是从顶栏打开的浮动弹出层；默认显示会在 960×600 下遮挡首屏卡片。
+            //
             show_hud: false,
             content_scroll: 0.0,
             nav_scroll: 0.0,
@@ -320,18 +320,18 @@ impl Default for GalleryState {
 }
 
 impl GalleryState {
-    /// Mark the state dirty.
+    /// 将状态标记为脏。
     pub fn bump(&mut self) {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// The current UI scale.
+    /// 当前 UI 缩放。
     #[must_use]
     pub fn zoom(&self) -> f32 {
         ZOOM_STEPS[self.zoom_step.min(ZOOM_STEPS.len() - 1)]
     }
 
-    /// Navigate to a page; content scroll resets so the header is visible.
+    /// 导航到指定页面；重置内容滚动位置以使页头可见。
     pub fn navigate(&mut self, page: PageId) {
         if self.active_page != page {
             self.active_page = page;
@@ -342,11 +342,11 @@ impl GalleryState {
         }
     }
 
-    /// Set the frame-rate limit.
+    /// 设置帧率上限。
     ///
-    /// `0` is unlimited; any other value is clamped to the engine's 60 FPS
-    /// floor. The text buffer is normalised so the UI always shows the value
-    /// that is actually in effect.
+    /// `0` 为无限制；其他值会被钳制到引擎的 60 FPS 下限。
+    /// 文本缓冲区会被规范化，使 UI 始终显示实际生效的值。
+    ///
     pub fn set_fps_limit(&mut self, fps: u32) {
         self.fps_limit = if fps == 0 {
             0
@@ -357,11 +357,11 @@ impl GalleryState {
         self.bump();
     }
 
-    /// The limit the pacer should currently use.
+    /// 帧率控制（pacer）当前应使用的上限。
     ///
-    /// While the user is typing `"1"` on the way to `"144"`, the non-zero
-    /// partial value is raised to the 60 FPS floor instead of stalling the
-    /// renderer at 1 FPS.
+    /// 当用户在输入 `"144"` 的过程中先键入 `"1"` 时，该非零部分值会被提升到
+    /// 60 FPS 下限，避免渲染器卡在 1 FPS。
+    ///
     #[must_use]
     pub fn effective_fps_limit(&self) -> u32 {
         if !self.fps_focused {
@@ -374,7 +374,7 @@ impl GalleryState {
         }
     }
 
-    /// Apply the custom input: normalise the text and commit the limit.
+    /// 应用自定义输入：规范化文本并提交上限。
     pub fn commit_fps_input(&mut self) {
         let parsed = self
             .fps_input
@@ -385,7 +385,7 @@ impl GalleryState {
         self.fps_focused = false;
     }
 
-    /// The FPS preset index that matches the current limit, if any.
+    /// 与当前上限匹配的 FPS 预设索引（如有）。
     #[must_use]
     pub fn fps_preset(&self) -> Option<u8> {
         match self.fps_limit {
@@ -398,13 +398,13 @@ impl GalleryState {
         }
     }
 
-    /// The key of one knob.
+    /// 单个旋钮的键。
     #[must_use]
     pub fn knob_key(page: PageId, card: usize, knob: usize) -> u32 {
         ((page.index() as u32) << 16) | ((card as u32) << 8) | knob as u32
     }
 
-    /// A knob's current value, falling back to its declared default.
+    /// 旋钮的当前值，缺省时回退到其声明的默认值。
     #[must_use]
     pub fn knob(&self, page: PageId, card: usize, knob: usize, spec: &KnobSpec) -> f32 {
         self.knobs
@@ -413,7 +413,7 @@ impl GalleryState {
             .unwrap_or_else(|| spec.default_value())
     }
 
-    /// All knob values for one example.
+    /// 单个示例的所有旋钮值。
     #[must_use]
     pub fn knob_values(&self, page: PageId, card: usize, example: &ExampleDef) -> Vec<f32> {
         example
@@ -424,13 +424,13 @@ impl GalleryState {
             .collect()
     }
 
-    /// Write a knob value.
+    /// 写入旋钮值。
     pub fn set_knob(&mut self, page: PageId, card: usize, knob: usize, value: f32) {
         self.knobs.insert(Self::knob_key(page, card, knob), value);
         self.bump();
     }
 
-    /// Toggle a code panel.
+    /// 切换代码面板的展开/收起。
     pub fn toggle_code(&mut self, page: PageId, card: u8) {
         let key = (page.index() as u8, card);
         if !self.expanded_code.remove(&key) {
@@ -439,17 +439,17 @@ impl GalleryState {
         self.bump();
     }
 
-    /// Whether a code panel is open.
+    /// 代码面板是否处于打开状态。
     #[must_use]
     pub fn code_open(&self, page: PageId, card: u8) -> bool {
         self.expanded_code.contains(&(page.index() as u8, card))
     }
 
-    /// Advance time-driven demos. Returns `true` while something moved.
+    /// 推进时间驱动的演示。只要有元素移动则返回 `true`。
     pub fn tick(&mut self, dt: f32) -> bool {
         self.demo.elapsed = (self.demo.elapsed + dt).rem_euclid(3600.0);
-        // Record the live frame stats so the telemetry chart plots real
-        // measurements instead of a synthesised curve.
+        // 记录实时帧统计数据，使遥测图表绘制真实测量值而非合成曲线。
+        //
         self.demo.frame_history.push_back(FrameSample {
             ms: self.demo.frame_ms,
             upload: self.demo.upload_bytes as f32,
@@ -458,9 +458,9 @@ impl GalleryState {
         if self.demo.frame_history.len() > FRAME_HISTORY_CAP {
             self.demo.frame_history.pop_front();
         }
-        // The progress demo eases its bar and ring toward the clock-driven
-        // target through the real `ProgressState`, so a value jump reads as
-        // movement. Pausing freezes both the target and the indeterminate sweep.
+        // 进度条演示通过真实的 `ProgressState` 将条和圆环缓动到时钟驱动的目标值，
+        // 因此数值跳变会表现为平滑移动。暂停会同时冻结目标值与不确定态扫描动画。
+        //
         let progress_example = &PageId::Sliders.examples()[1];
         let progress_knobs = self.knob_values(PageId::Sliders, 1, progress_example);
         let paused = progress_knobs.get(1).copied().unwrap_or(0.0) > 0.5;
@@ -480,8 +480,8 @@ impl GalleryState {
         if !self.demo.pill_spring.is_settled() {
             moving = true;
         }
-        // Re-shape and repaint animated pages at ~30 Hz. Static pages never
-        // rebuild, which is what keeps the gallery idle-light.
+        // 以约 30 Hz 重新塑形并重绘动画页面。静态页面永不重建，
+        // 这正是展厅在空闲时保持低功耗的原因。
         let animated = matches!(
             self.active_page,
             PageId::Assets | PageId::Sliders | PageId::Telemetry | PageId::Springs
@@ -497,7 +497,7 @@ impl GalleryState {
         moving
     }
 
-    /// Push a new operation onto the undo timeline.
+    /// 向撤销时间线推入一个新操作。
     pub fn push_history(&mut self, label: &'static str) {
         self.demo.history.truncate(self.demo.history_index);
         self.demo.history.push(label);
@@ -517,7 +517,7 @@ impl GalleryState {
         self.bump();
     }
 
-    /// Undo one operation.
+    /// 撤销一步操作。
     pub fn undo(&mut self) {
         if self.demo.history_index > 0 {
             self.demo.history_index -= 1;
@@ -526,7 +526,7 @@ impl GalleryState {
         }
     }
 
-    /// Redo one operation.
+    /// 重做一步操作。
     pub fn redo(&mut self) {
         if self.demo.history_index < self.demo.history.len() {
             self.demo.history_index += 1;
@@ -535,7 +535,7 @@ impl GalleryState {
         }
     }
 
-    /// Filter the page catalogue by the search query.
+    /// 按搜索查询词过滤页面目录。
     #[must_use]
     pub fn search_results(&self) -> Vec<PageId> {
         let query = self.search_query.trim().to_lowercase();
@@ -551,7 +551,7 @@ impl GalleryState {
     }
 }
 
-/// Live interactive state for the 91 component showcase sandboxes.
+/// 91 个组件展示沙盒的实时交互状态。
 #[derive(Clone, Debug, Default)]
 pub struct ComponentSandboxState {
     pub click_counts: HashMap<u8, u32>,
@@ -594,7 +594,7 @@ impl ComponentSandboxState {
     }
 }
 
-/// Exhaustive reduction of user interaction on any component card in the gallery.
+/// 展厅中任意组件卡片用户交互的穷举式状态归约。
 #[deny(unreachable_patterns)]
 pub fn reduce_showcase_component(
     id: WidgetCatalogId,

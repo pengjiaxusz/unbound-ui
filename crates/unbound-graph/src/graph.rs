@@ -1,98 +1,98 @@
-//! The render graph (`docs` §10.1, M3).
+//! 渲染图（`docs` §10.1，M3）。
 //!
-//! A render graph is a declaration of what the frame does: which pass reads
-//! which texture and which pass writes it. From that declaration the graph
-//! derives the *order* of the passes and the *lifetime* of every transient
-//! texture, so a scratch texture can be reused as soon as its last reader is
-//! done.
+//! 渲染图是对帧行为的声明：哪个 Pass 读取哪张纹理、哪个 Pass 写入哪张纹理。
+//! 基于该声明，渲染图推导出 Pass 的*执行顺序*以及每张瞬态纹理的*生命周期*，
+//! 从而使临时纹理在最后一个读取者完成后即可立即复用。
 //!
-//! The compile step is where the mistakes surface. A texture that is read
-//! before it is written, written twice without a barrier, or used after its
-//! lifetime ended is a bug that shows up as garbage on screen — or as a
-//! validation error three frames later. The graph rejects it up front.
+//!
+//!
+//! 编译阶段用于暴露配置错误：在写入前被读取、未经屏障即被重复写入，或生命周期结束后
+//! 仍被使用的纹理，都会在屏幕上表现为花屏，或在数帧后触发校验错误。渲染图会在编译期
+//! 提前拦截此类问题。
+//!
 
 use std::collections::HashMap;
 
 use crate::pool::TextureDesc;
 
-/// A logical texture inside the graph.
+/// 渲染图中的逻辑纹理句柄。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TextureId(pub u32);
 
-/// The role a texture plays in the frame.
+/// 纹理在帧中所扮演的角色。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TextureRole {
-    /// Produced outside the graph (the swapchain image, for instance).
+    /// 在渲染图外部生成（例如交换链图像）。
     External,
-    /// Created and destroyed inside the graph.
+    /// 在渲染图内部创建并销毁。
     Transient,
 }
 
-/// What a pass does.
+/// Pass 的操作类型。
 #[derive(Clone, Debug, PartialEq)]
 pub enum PassKind {
-    /// Copies the swapchain image into a scratch texture.
+    /// 将交换链图像拷贝到临时纹理。
     CopyBackdrop,
-    /// Blurs a texture with the given radius.
+    /// 按指定半径对纹理进行模糊。
     Blur {
-        /// The blur radius in pixels.
+        /// 模糊半径（像素）。
         radius: u32,
     },
-    /// Composites a blurred texture over the backdrop.
+    /// 将模糊纹理合成到背景之上。
     Composite,
-    /// Draws the final image into the swapchain.
+    /// 将最终图像绘制到交换链。
     Present,
 }
 
-/// A single pass.
+/// 单个渲染 Pass。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pass {
-    /// The name of the pass, for diagnostics.
+    /// Pass 名称，用于诊断信息。
     pub name: String,
-    /// The textures the pass reads.
+    /// 该 Pass 读取的纹理列表。
     pub reads: Vec<TextureId>,
-    /// The textures the pass writes.
+    /// 该 Pass 写入的纹理列表。
     pub writes: Vec<TextureId>,
-    /// What the pass does.
+    /// 该 Pass 的具体操作。
     pub kind: PassKind,
 }
 
-/// A texture declaration.
+/// 纹理声明。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Texture {
-    /// The description of the texture.
+    /// 纹理描述信息。
     pub desc: TextureDesc,
-    /// The role of the texture.
+    /// 纹理角色。
     pub role: TextureRole,
 }
 
-/// The graph failed to compile.
+/// 渲染图编译失败错误。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GraphError {
-    /// A pass reads a texture no other pass writes.
+    /// 某 Pass 读取了没有任何其他 Pass 写入的纹理。
     ReadBeforeWrite {
-        /// The offending texture.
+        /// 出错的纹理。
         texture: TextureId,
-        /// The pass that read it.
+        /// 读取该纹理的 Pass 名称。
         pass: String,
     },
-    /// A texture is written by two passes without being consumed in between.
+    /// 同一纹理被两个 Pass 连续写入，期间未被消费。
     DoubleWrite {
-        /// The offending texture.
+        /// 出错的纹理。
         texture: TextureId,
-        /// The second writer.
+        /// 第二个写入该纹理的 Pass 名称。
         pass: String,
     },
-    /// The passes form a cycle.
+    /// Pass 之间存在循环依赖。
     Cycle,
-    /// A pass refers to a texture that does not exist.
+    /// 某 Pass 引用了不存在的纹理。
     UnknownTexture {
-        /// The offending texture.
+        /// 出错的纹理。
         texture: TextureId,
-        /// The pass that referred to it.
+        /// 引用该纹理的 Pass 名称。
         pass: String,
     },
-    /// The graph is empty.
+    /// 渲染图为空。
     Empty,
 }
 
@@ -122,30 +122,30 @@ impl core::fmt::Display for GraphError {
 
 impl std::error::Error for GraphError {}
 
-/// A texture together with the pass range it is live for.
+/// 纹理及其存活的 Pass 区间。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lifetime {
-    /// The texture.
+    /// 纹理句柄。
     pub texture: TextureId,
-    /// The first pass that touches it.
+    /// 首次访问该纹理的 Pass 索引。
     pub first_use: usize,
-    /// The last pass that touches it.
+    /// 最后访问该纹理的 Pass 索引。
     pub last_use: usize,
-    /// The role of the texture.
+    /// 纹理角色。
     pub role: TextureRole,
 }
 
-/// A compiled graph: the pass order plus the lifetimes.
+/// 编译后的渲染图：包含 Pass 执行顺序及各纹理生命周期。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledGraph {
-    /// The passes, in execution order.
+    /// 按执行顺序排列的 Pass 列表。
     pub passes: Vec<Pass>,
-    /// The lifetime of every texture.
+    /// 每张纹理的生命周期。
     pub lifetimes: Vec<Lifetime>,
 }
 
 impl CompiledGraph {
-    /// The passes that touch a texture.
+    /// 访问指定纹理的 Pass 区间（起止索引）。
     #[must_use]
     pub fn passes_for(&self, texture: TextureId) -> Vec<usize> {
         self.passes
@@ -156,15 +156,15 @@ impl CompiledGraph {
             .collect()
     }
 
-    /// The lifetime of a texture.
+    /// 查询指定纹理的生命周期。
     #[must_use]
     pub fn lifetime(&self, texture: TextureId) -> Option<&Lifetime> {
         self.lifetimes.iter().find(|life| life.texture == texture)
     }
 
-    /// The textures whose lifetime ends at the given pass.
+    /// 在指定 Pass 结束生命周期的纹理列表。
     ///
-    /// These are the ones the pool can hand out again right after that pass.
+    /// 纹理池可在该 Pass 结束后立即重新分配这些纹理。
     #[must_use]
     pub fn expiring_after(&self, pass_index: usize) -> Vec<TextureId> {
         self.lifetimes
@@ -175,7 +175,7 @@ impl CompiledGraph {
     }
 }
 
-/// The render graph under construction.
+/// 构建中的渲染图。
 #[derive(Clone, Debug, Default)]
 pub struct RenderGraph {
     textures: Vec<Texture>,
@@ -183,20 +183,20 @@ pub struct RenderGraph {
 }
 
 impl RenderGraph {
-    /// Create an empty graph.
+    /// 创建空渲染图。
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Declare a texture.
+    /// 声明一张纹理。
     pub fn add_texture(&mut self, desc: TextureDesc, role: TextureRole) -> TextureId {
         let id = TextureId(self.textures.len() as u32);
         self.textures.push(Texture { desc, role });
         id
     }
 
-    /// Declare a pass.
+    /// 声明一个 Pass。
     pub fn add_pass(
         &mut self,
         name: impl Into<String>,
@@ -212,19 +212,19 @@ impl RenderGraph {
         });
     }
 
-    /// The number of declared textures.
+    /// 已声明的纹理数量。
     #[must_use]
     pub fn texture_count(&self) -> usize {
         self.textures.len()
     }
 
-    /// The number of declared passes.
+    /// 已声明的 Pass 数量。
     #[must_use]
     pub fn pass_count(&self) -> usize {
         self.passes.len()
     }
 
-    /// The description of a texture.
+    /// 获取纹理描述信息。
     #[must_use]
     pub fn texture_desc(&self, texture: TextureId) -> Option<TextureDesc> {
         self.textures
@@ -232,23 +232,23 @@ impl RenderGraph {
             .map(|entry| entry.desc)
     }
 
-    /// Compile the graph.
+    /// 编译渲染图。
     ///
     /// # Errors
-    /// Returns a [`GraphError`] when the graph is inconsistent.
+    /// 当渲染图存在不一致时返回 [`GraphError`]。
     pub fn compile(&self) -> Result<CompiledGraph, GraphError> {
         if self.passes.is_empty() {
             return Err(GraphError::Empty);
         }
-        // Order the passes by their data dependencies: a pass runs after every
-        // pass that writes something it reads.
+        // 按数据依赖关系对 Pass 排序：每个 Pass 必须在其读取纹理的写入者之后运行。
+        //
         let order = self.topological_order()?;
         let mut ordered: Vec<Pass> = order
             .iter()
             .map(|index| self.passes[*index].clone())
             .collect();
 
-        // Validate the write/read pairs and compute the lifetimes.
+        // 校验读写配对并计算各纹理的生命周期。
         let mut written: HashMap<TextureId, String> = HashMap::new();
         let mut first_use: HashMap<TextureId, usize> = HashMap::new();
         let mut last_use: HashMap<TextureId, usize> = HashMap::new();
@@ -261,9 +261,9 @@ impl RenderGraph {
                         pass: pass.name.clone(),
                     });
                 };
-                // An external texture is produced outside the graph (by the
-                // presentation path), so reading it is always legal. A
-                // transient one must have been written already.
+                // 外部纹理在渲染图之外生成（由呈现管线提供），因此读取它总是合法的。
+                // 瞬态纹理则必须已被先前的 Pass 写入。
+                //
                 if entry.role == TextureRole::Transient && !written.contains_key(texture) {
                     return Err(GraphError::ReadBeforeWrite {
                         texture: *texture,
@@ -280,8 +280,8 @@ impl RenderGraph {
                         pass: pass.name.clone(),
                     });
                 };
-                // A transient texture has exactly one producer; an external
-                // one belongs to the presentation path and is not policed.
+                // 每张瞬态纹理只能有一个写入者；外部纹理归呈现管线所有，不在此处限制。
+                //
                 if entry.role == TextureRole::Transient && written.contains_key(texture) {
                     return Err(GraphError::DoubleWrite {
                         texture: *texture,
@@ -311,14 +311,14 @@ impl RenderGraph {
         })
     }
 
-    /// Order the passes by their dependencies.
+    /// 根据依赖关系对 Pass 进行拓扑排序。
     fn topological_order(&self) -> Result<Vec<usize>, GraphError> {
-        // A pass depends on the pass that writes each texture it reads.
+        // Pass 依赖于写入其所读取纹理的所有 Pass。
         let mut writer: HashMap<TextureId, usize> = HashMap::new();
         for (index, pass) in self.passes.iter().enumerate() {
             for texture in &pass.writes {
-                // Only transient textures create a dependency: an external
-                // texture is produced by the presentation path, not by a pass.
+                // 仅瞬态纹理会产生依赖：外部纹理由呈现管线生成，而非由 Pass 生成。
+                //
                 if self
                     .textures
                     .get(texture.0 as usize)
@@ -330,8 +330,8 @@ impl RenderGraph {
         }
         let mut visited = vec![0u8; self.passes.len()];
         let mut order = Vec::with_capacity(self.passes.len());
-        // Depth-first post-order: a pass is emitted after everything it
-        // depends on.
+        // 深度优先后序遍历：确保 Pass 在其所有依赖项之后输出。
+        //
         fn visit(
             index: usize,
             passes: &[Pass],
@@ -372,10 +372,10 @@ mod tests {
         TextureDesc::new(width, height, TextureFormat::Rgba16f)
     }
 
-    /// The frosted-glass chain: copy the backdrop, blur it, composite it.
+    /// 毛玻璃渲染链：拷贝背景、执行模糊、进行合成。
     fn frosted_graph() -> RenderGraph {
         let mut graph = RenderGraph::new();
-        // The swapchain image is owned by the presentation path.
+        // 交换链图像归呈现管线所有。
         let swapchain = graph.add_texture(desc(1920, 1080), TextureRole::External);
         let scratch = graph.add_texture(desc(960, 540), TextureRole::Transient);
         let blurred = graph.add_texture(desc(960, 540), TextureRole::Transient);
@@ -410,8 +410,8 @@ mod tests {
         let compiled = graph.compile().unwrap();
         let scratch = TextureId(1);
         let blurred = TextureId(2);
-        // The scratch texture dies after the blur pass, the blurred one after
-        // the composite pass.
+        // 临时纹理在模糊 Pass 后结束生命周期，模糊纹理在合成 Pass 后结束生命周期。
+        //
         let expiring = compiled.expiring_after(1);
         assert!(expiring.contains(&scratch));
         let expiring = compiled.expiring_after(2);
@@ -467,7 +467,7 @@ mod tests {
         let mut graph = RenderGraph::new();
         let a = graph.add_texture(desc(64, 64), TextureRole::Transient);
         let b = graph.add_texture(desc(64, 64), TextureRole::Transient);
-        // The passes are declared in the wrong order on purpose.
+        // 故意按错误顺序声明 Pass，以测试拓扑排序。
         graph.add_pass("second", PassKind::Blur { radius: 4 }, &[a], &[b]);
         graph.add_pass("first", PassKind::Blur { radius: 4 }, &[], &[a]);
         let compiled = graph.compile().unwrap();

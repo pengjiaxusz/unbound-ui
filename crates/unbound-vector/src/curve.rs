@@ -1,46 +1,46 @@
-//! Turning a Bézier into something the GPU can draw (`docs` §3.4).
+//! 将贝塞尔曲线转换为 GPU 可绘制的实例（`docs` §3.4）。
 //!
-//! The GPU draws a curve as a *box* plus three control points: the box is the
-//! **tight oriented** bounding rectangle of the segment, and the fragment
-//! shader evaluates the analytic distance to the quadratic Bézier inside it.
+//! GPU 将曲线绘制为一个**包围盒**加三个控制点：包围盒是线段控制多边形的
+//! **紧凑有向包围矩形（OBB）**，片元着色器在其内部计算到二次贝塞尔曲线的解析距离。
 //!
-//! The orientation matters: an axis-aligned box around a diagonal connector
-//! covers several times the area of the connector itself, and every extra
-//! fragment pays for a cubic root solve. The tight box is expressed as the
-//! instance's *transform* (a rotation), so the vertex shader can place it
-//! without a second code path, and the control points are stored in the box's
-//! own frame — which is exactly the frame the fragment shader reconstructs.
+//! 方向至关重要：对角连线的轴对齐包围盒覆盖面积是连线本身的数倍，
+//! 每个多余片元都要付出一次三次方程求根的代价。紧凑包围盒表示为实例的
+//! **变换**（旋转矩阵），使顶点着色器无需第二条代码路径即可定位，
+//! 且控制点直接存储在该包围盒的局部坐标系中——这正是片元着色器重建的坐标系。
 //!
-//! The cubic is split into quadratics first. A cubic Bézier has an *exact*
-//! two-quadratic decomposition (at `t = 0.5`), so nothing is approximated by
-//! the split itself; only the flattening tolerance affects the result.
+//! 三次贝塞尔曲线会先拆分为二次贝塞尔曲线。三次曲线存在**精确的**双二次分解
+//! （在 `t = 0.5` 处），因此拆分本身不引入近似；仅展平容差影响最终结果。
+//!
+//!
+//!
+//!
 
 use unbound_math::Vec2;
 
 use crate::{cubic_to_quads, Obb, QuadSegment};
 
-/// A quadratic Bézier prepared for the GPU.
+/// 为 GPU 准备的二次贝塞尔曲线实例。
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct CurveInstance {
-    /// The lower-left corner of the bounding box, in world coordinates.
+    /// 包围盒左下角的世界坐标。
     pub origin: [f32; 2],
-    /// The size of the bounding box, in world units.
+    /// 包围盒在世界单位下的尺寸。
     pub size: [f32; 2],
-    /// The rotation that maps the box onto the world: `m00, m10, m01, m11`.
+    /// 将包围盒映射到世界空间的旋转矩阵：`m00, m10, m01, m11`。
     pub matrix: [f32; 4],
-    /// The first control point, in the box's local frame.
+    /// 第一个控制点，位于包围盒局部坐标系中。
     pub p0: [f32; 2],
-    /// The middle control point, in the box's local frame.
+    /// 中间控制点，位于包围盒局部坐标系中。
     pub p1: [f32; 2],
-    /// The last control point, in the box's local frame.
+    /// 最后一个控制点，位于包围盒局部坐标系中。
     pub p2: [f32; 2],
 }
 
 impl CurveInstance {
-    /// Build an instance from a quadratic segment.
+    /// 从单条二次贝塞尔线段构建 GPU 实例。
     ///
-    /// The box is the tight oriented bounding box of the control polygon,
-    /// padded by half the stroke width plus one pixel of antialiasing.
+    /// 包围盒为控制多边形的紧凑有向包围盒（OBB），向外扩展半个描边宽度
+    /// 加上 1 像素抗锯齿边距。
     #[must_use]
     pub fn from_quad(segment: &QuadSegment, line_width: f32) -> Self {
         let obb = Obb::from_quad(segment, line_width);
@@ -58,10 +58,10 @@ impl CurveInstance {
     }
 }
 
-/// Split a cubic Bézier into GPU-ready quadratic segments.
+/// 将三次贝塞尔曲线拆分为可直接送入 GPU 的二次贝塞尔线段。
 ///
-/// The segments are returned in the order they appear along the curve, and
-/// each one carries the control points in its own box frame.
+/// 返回的线段按沿曲线的顺序排列，每条线段携带其自身包围盒坐标系下的控制点。
+///
 #[must_use]
 pub fn cubic_to_instances(
     p0: Vec2,
@@ -77,7 +77,7 @@ pub fn cubic_to_instances(
         .collect()
 }
 
-/// The bounding box of a whole cubic, in world coordinates.
+/// 整条三次贝塞尔曲线在世界坐标中的轴对齐包围盒。
 #[must_use]
 pub fn cubic_bounds(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2) -> (Vec2, Vec2) {
     let lo = p0.min(p1).min(p2).min(p3);
@@ -97,10 +97,10 @@ mod tests {
             Vec2::new(50.0, 40.0),
         );
         let instance = CurveInstance::from_quad(&segment, 2.0);
-        // The box is oriented: its extents follow the chord, not the world
-        // axes, so they are *not* the control polygon's width and height.
+        // 包围盒是有向的：其尺寸沿弦向而非世界坐标轴，
+        // 因此不等于控制多边形的宽高。
         assert!(instance.size[0] > 0.0 && instance.size[1] > 0.0);
-        // Every control point must be inside the box.
+        // 所有控制点都必须位于包围盒内部。
         for point in [instance.p0, instance.p1, instance.p2] {
             assert!(point[0] >= -0.001 && point[0] <= instance.size[0] + 0.001);
             assert!(point[1] >= -0.001 && point[1] <= instance.size[1] + 0.001);
@@ -109,8 +109,8 @@ mod tests {
 
     #[test]
     fn a_diagonal_curve_gets_a_tighter_box_than_an_axis_aligned_one() {
-        // A diagonal line: the oriented box is a thin strip, the axis-aligned
-        // one a square.
+        // 对角线：有向包围盒是细长条带，而轴对齐包围盒是正方形。
+        //
         let segment = QuadSegment::line(Vec2::new(0.0, 0.0), Vec2::new(100.0, 100.0));
         let instance = CurveInstance::from_quad(&segment, 2.0);
         let area = instance.size[0] * instance.size[1];
@@ -126,7 +126,7 @@ mod tests {
             &QuadSegment::line(Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0)),
             2.0,
         );
-        // A horizontal line: the box is wide and thin.
+        // 水平线：包围盒宽而扁平。
         assert!(instance.size[0] > 90.0);
         assert!(instance.size[1] < 10.0);
     }

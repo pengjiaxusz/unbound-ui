@@ -1,16 +1,16 @@
-//! Glyph rasterisation, atlas residency and quad generation.
+//! 字形光栅化、图集驻留管理与四边形图元生成。
 //!
-//! The pipeline for one glyph:
+//! 单个字形的处理管线：
 //!
-//! 1. rasterise it with `swash` at the subpixel phase implied by its position
-//!    (four phases, so a 12px label keeps even spacing instead of snapping every
-//!    glyph to the same pixel grid),
-//! 2. reserve a slot in the R8 atlas (or the RGBA atlas for colour emoji and
-//!    distance fields),
-//! 3. emit an [`AtlasUpdate`] the renderer uploads to the texture array,
-//! 4. emit a [`GlyphQuad`] the view layer turns into a `GpuPrimitiveInstance`.
+//! 1. 使用 `swash` 按其坐标所隐含的亚像素相位进行光栅化（共 4 个相位，
+//!    使 12px 标签保持均匀字距，而非将每个字形强行对齐到同一像素网格）；
 //!
-//! Steps 1–4 are pure CPU work, so the whole cache is testable without a device.
+//! 2. 在 R8 图集中预留槽位（彩色 Emoji 与距离场则使用 RGBA 图集）；
+//!
+//! 3. 生成供渲染器上传到纹理数组的 [`AtlasUpdate`]；
+//! 4. 生成供视图层转换为 `GpuPrimitiveInstance` 的 [`GlyphQuad`]。
+//!
+//! 步骤 1–4 均为纯 CPU 计算，因此整套缓存无需 GPU 设备即可完成测试。
 
 use cosmic_text::{fontdb, CacheKey, CacheKeyFlags, SwashCache};
 use rustc_hash::FxHashMap;
@@ -20,16 +20,16 @@ use crate::atlas::{GlyphAtlas, GlyphKey, GlyphSlot};
 use crate::sdf;
 use crate::shaping::{PositionedGlyph, ShapedText, TextEngine};
 
-/// Which atlas an update targets.
+/// 更新目标图集类型。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AtlasTarget {
-    /// `Atlas_R8`, one byte per texel.
+    /// `Atlas_R8`，每纹素 1 字节。
     Coverage,
-    /// `Atlas_RGBA8`, four bytes per texel.
+    /// `Atlas_RGBA8`，每纹素 4 字节。
     Color,
 }
 
-/// A rectangle of texels to upload into one atlas layer.
+/// 待上传至某图集层的矩形纹素区域。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AtlasUpdate {
     pub target: AtlasTarget,
@@ -38,7 +38,7 @@ pub struct AtlasUpdate {
     pub y: u32,
     pub width: u32,
     pub height: u32,
-    /// Row-major texels; length is `width * height * bpp`.
+    /// 行主序纹素数据；长度为 `width * height * bpp`。
     pub data: Vec<u8>,
 }
 
@@ -57,40 +57,40 @@ impl AtlasUpdate {
     }
 }
 
-/// A rasterised glyph, atlas-resident.
+/// 已光栅化并驻留于图集中的字形。
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct ResolvedGlyph {
     pub slot: GlyphSlot,
-    /// Offset from the pen position to the quad's top-left, in logical pixels.
+    /// 从画笔位置到四边形左上角的偏移量，单位为逻辑像素。
     pub bearing: Vec2,
-    /// Quad size in logical pixels.
+    /// 四边形尺寸，单位为逻辑像素。
     pub size: Vec2,
-    /// Advance width in logical pixels.
+    /// 步进宽度，单位为逻辑像素。
     pub advance: f32,
-    /// True when the glyph came from the RGBA atlas.
+    /// 当字形来自 RGBA 图集时为 `true`。
     pub color: bool,
-    /// True when the RGBA atlas entry is a multi-channel distance field.
+    /// 当 RGBA 图集条目为多通道距离场时为 `true`。
     ///
-    /// The flag has to reach the fragment shader: without it the distance
-    /// field is sampled as an ordinary RGBA bitmap and the glyph turns into a
-    /// white blob.
+    /// 该标志必须传递到片元着色器：若缺失该标志，距离场会被当作普通
+    /// RGBA 位图采样，导致字形变成白色方块。
+    ///
     pub msdf: bool,
 }
 
 impl ResolvedGlyph {
-    /// Quad in text-local space.
+    /// 文本局部空间中的四边形。
     ///
-    /// The pen is snapped to the raster's own pixel grid: the sub-pixel part
-    /// of the pen position is already baked into the bitmap (the raster is
-    /// generated for the phase implied by `pen.x`), so adding the fractional
-    /// part a second time would shift the glyph twice.
+    /// 画笔坐标会对齐到光栅自身的像素网格：画笔位置的亚像素部分已被烘焙进
+    /// 位图中（光栅按 `pen.x` 隐含的相位生成），若再次叠加小数部分会导致
+    /// 字形发生双重偏移。
     ///
-    /// The horizontal origin comes from [`GlyphCache::quantize_x`], which
-    /// carries the integer pixel along with the phase: a pen fraction in
-    /// `[0.875, 1.0)` rounds to phase 0 of the *next* pixel, and the quad has
-    /// to move with it. Dropping that carry (the old `% 4` on its own) put
-    /// 12.5 % of all glyphs one pixel to the left, where their edge overlapped
-    /// the previous letter.
+    ///
+    /// 水平原点来自 [`GlyphCache::quantize_x`]，它连同相位一起携带了整像素：
+    /// 落在 `[0.875, 1.0)` 的画笔小数部分会舍入到**下一像素**的相位 0，
+    /// 四边形也必须随之移动。丢弃该进位（旧版单纯 `% 4` 的做法）曾使
+    /// 12.5% 的字形向左偏移一个像素，导致其边缘与前一个字母重叠。
+    ///
+    ///
     #[must_use]
     pub fn quad(&self, pen: Vec2, snap_phases: bool) -> Rect {
         let (base_x, _) = GlyphCache::quantize_x(pen.x, snap_phases);
@@ -103,54 +103,54 @@ impl ResolvedGlyph {
     }
 }
 
-/// One glyph ready for the primitive builder.
+/// 准备送入图元构建器的单个字形。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct GlyphQuad {
     pub rect: Rect,
     pub uv: [f32; 4],
     pub layer: u32,
     pub color: bool,
-    /// The glyph lives in the RGBA atlas as a distance field.
+    /// 该字形以距离场形式存放在 RGBA 图集中。
     pub msdf: bool,
-    /// Horizontal subpixel phase (0..3) used for this glyph.
+    /// 该字形使用的水平亚像素相位（0..3）。
     pub phase: u8,
 }
 
-/// Rasterises and caches glyphs, keeping them resident in the atlas.
+/// 光栅化并缓存字形，维护其在图集中的驻留状态。
 pub struct GlyphCache {
     swash: SwashCache,
     pub atlas: GlyphAtlas,
     resolved: FxHashMap<GlyphKey, ResolvedGlyph>,
-    /// Updates produced since the last drain.
+    /// 自上次排空以来产生的图集更新。
     updates: Vec<AtlasUpdate>,
-    /// Emit distance fields instead of plain coverage (canvas text).
+    /// 输出距离场而非普通覆盖率位图（用于画布文本）。
     pub use_sdf: bool,
-    /// Distance-field spread in texels.
+    /// 距离场扩散范围（单位：纹素）。
     pub sdf_spread: f32,
-    /// Extra texels around each glyph (bilinear bleed guard).
+    /// 每个字形四周的额外边距纹素（防止双线性采样渗色）。
     pub padding: u32,
-    /// Raster glyphs on the whole-pixel grid instead of in four subpixel phases.
+    /// 在整像素网格上光栅化字形，而非使用 4 个亚像素相位。
     ///
-    /// The phase has to match the position the quad is finally drawn at: the
-    /// raster is generated for one phase and the quad is snapped to the pixel
-    /// grid, so a phase-specific raster that does not match the pen would be
-    /// sampled away from the position it was generated for and every edge
-    /// would turn into a half-pixel blend.
+    /// 相位必须与四边形最终绘制的位置匹配：光栅按特定相位生成且四边形对齐到
+    /// 像素网格，若相位光栅与画笔位置不匹配，采样点将偏离生成位置，每条边缘
+    /// 都会退化为半像素混合。
     ///
-    /// Turning this on forces every glyph to phase 0, which is only correct
-    /// when the pen itself is always a whole pixel. UI text keeps the four
-    /// phases: the phase is derived from the glyph's absolute position and
-    /// the error against the true pen is at most ⅛ px.
+    ///
+    ///
+    /// 开启此选项会强制所有字形使用相位 0，仅当画笔本身始终位于整像素上时才正确。
+    /// UI 文本保留四相位方案：相位由字形的绝对坐标推导，与真实画笔位置的误差
+    /// 至多为 ⅛ px。
+    ///
     pub snap_phases: bool,
-    /// Bijection between `fontdb::ID` and the compact face index stored in
-    /// [`GlyphKey`]. `fontdb::ID` is an opaque slotmap key with no public
-    /// integer conversion, so the atlas keys on a dense index instead.
+    /// `fontdb::ID` 与 [`GlyphKey`] 中紧凑字体索引之间的双射。`fontdb::ID` 是
+    /// 不透明的 slotmap 键，未公开整数转换，因此图集改用稠密索引作为键。
+    ///
     faces: Vec<fontdb::ID>,
     face_index: FxHashMap<fontdb::ID, u32>,
-    /// Keys the atlas evicted since the last drain.
+    /// 自上次排空以来被图集淘汰的键。
     ///
-    /// The atlas recycles the rectangle of an evicted glyph, so the cache
-    /// entry that still points at it would sample somebody else's texels.
+    /// 图集会回收被淘汰字形的矩形区域，仍指向该区域的缓存条目将采样到
+    /// 其他字形的纹素。
     evicted: Vec<GlyphKey>,
     misses: u64,
     hits: u64,
@@ -193,7 +193,7 @@ impl GlyphCache {
         }
     }
 
-    /// Dense index for a face, allocating a new one on first sight.
+    /// 获取字体对应的稠密索引，首次遇到时分配新索引。
     fn face_id(&mut self, face: fontdb::ID) -> u32 {
         if let Some(i) = self.face_index.get(&face) {
             return *i;
@@ -204,26 +204,26 @@ impl GlyphCache {
         i
     }
 
-    /// Advance the atlas eviction clock.
+    /// 推进图集淘汰时钟。
     pub fn begin_frame(&mut self, frame: u64) {
         self.atlas.begin_frame(frame);
     }
 
-    /// Drain the pending atlas uploads.
+    /// 排空待上传的图集更新队列。
     pub fn take_updates(&mut self) -> Vec<AtlasUpdate> {
         core::mem::take(&mut self.updates)
     }
 
-    /// Put a drained batch back into the queue.
+    /// 将已排空的批次放回队列前端。
     ///
-    /// The upload can fail — the device is gone, the staging buffer is
-    /// exhausted, the queue is full. The cache believes those glyphs are in
-    /// the atlas, so a lost batch means the text samples texels that were
-    /// never written: blank or garbled glyphs, forever. The batch therefore
-    /// goes back into the queue and the next frame tries again.
+    /// 上传可能失败——设备丢失、暂存缓冲区耗尽或队列已满。缓存此时认为
+    /// 这些字形已在图集中，因此丢失批次意味着文本会采样到从未写入的纹素：
+    /// 永久显示空白或乱码字形。因此必须将该批次放回队列，在下一帧重试。
     ///
-    /// The restored updates keep their place at the front of the queue: they
-    /// are older than whatever was produced in the meantime.
+    ///
+    ///
+    /// 恢复的更新保留在队列前端：它们比在此期间新生成的更新更早。
+    ///
     pub fn restore_updates(&mut self, mut updates: Vec<AtlasUpdate>) {
         if updates.is_empty() {
             return;
@@ -232,7 +232,7 @@ impl GlyphCache {
         self.updates = updates;
     }
 
-    /// The uploads that are still queued, for diagnostics and tests.
+    /// 当前仍在队列中的待上传更新，供诊断与测试使用。
     #[must_use]
     pub fn pending_updates(&self) -> &[AtlasUpdate] {
         &self.updates
@@ -258,16 +258,16 @@ impl GlyphCache {
         }
     }
 
-    /// Split a pen position into a whole-pixel origin and a subpixel phase.
+    /// 将画笔坐标拆分为整像素原点与亚像素相位。
     ///
-    /// Four phases cover `[0, 1)` as `0, ¼, ½, ¾`. Rounding decides the phase,
-    /// so the top of the last bucket (`fract ≥ 0.875`) rounds to `4` — that is
-    /// phase 0 of the *next* pixel. The whole-pixel origin has to advance with
-    /// it, which is exactly what `div_euclid`/`rem_euclid` give: one helper
-    /// produces both numbers, so they can never disagree.
+    /// 四个相位覆盖 `[0, 1)`，分别为 `0, ¼, ½, ¾`。相位由四舍五入决定，
+    /// 因此最后一个区间顶端（`fract ≥ 0.875`）会舍入到 `4`——即**下一像素**
+    /// 的相位 0。整像素原点必须随之进位，这正是 `div_euclid`/`rem_euclid`
+    /// 所做的：由同一辅助函数同时生成两个数值，确保二者永不矛盾。
     ///
-    /// `snap_phases` forces the whole-pixel raster instead (phase 0 at
-    /// `round(x)`), for callers whose pen is always on the grid.
+    ///
+    /// `snap_phases` 则强制整像素光栅（在 `round(x)` 处取相位 0），
+    /// 供画笔始终位于像素网格上的调用方使用。
     #[must_use]
     pub fn quantize_x(x: f32, snap_phases: bool) -> (f32, u8) {
         if snap_phases {
@@ -277,26 +277,26 @@ impl GlyphCache {
         (quarters.div_euclid(4.0), quarters.rem_euclid(4.0) as u8)
     }
 
-    /// Subpixel phase implied by a pen position.
+    /// 由画笔位置推导出的亚像素相位。
     #[must_use]
     pub fn phase_for(x: f32) -> u8 {
-        // Four phases: 0, ¼, ½, ¾. Rounding to the nearest phase keeps the
-        // error at most ⅛ px, which is invisible; snapping to whole pixels
-        // instead would visibly change letter spacing.
+        // 四相位：0, ¼, ½, ¾。舍入到最近相位可将误差控制在 ⅛ px 以内，
+        // 肉眼不可见；若改用整像素对齐则会明显改变字母间距。
+        //
         Self::quantize_x(x, false).1
     }
 
-    /// The subpixel phase a glyph at `pen_x` is actually rasterised at.
+    /// `pen_x` 处字形实际光栅化所用的亚像素相位。
     ///
-    /// The phase has to be derived from the glyph's **absolute** position:
-    /// the raster is generated for that phase, so a phase derived from a
-    /// run-relative position would shift every glyph by up to a pixel.
+    /// 相位必须由字形的**绝对**位置推导：光栅按该相位生成，若基于
+    /// 相对文本段的偏移推导，每个字形最多会偏移一个像素。
+    ///
     #[must_use]
     pub fn phase_at(&self, pen_x: f32) -> u8 {
         Self::quantize_x(pen_x, self.snap_phases).1
     }
 
-    /// Resolve (and if needed rasterise) one glyph.
+    /// 解析（并在必要时光栅化）单个字形。
     pub fn resolve(
         &mut self,
         engine: &mut TextEngine,
@@ -309,12 +309,12 @@ impl GlyphCache {
         let phase = self.phase_at(pen.x);
         let sdf_mode = self.use_sdf;
         let face_index = u64::from(self.face_id(face));
-        // The raster weight must be the weight the run was shaped at. Adding
-        // an "optical" bump here made small labels heavier than the advances
-        // they were laid out with, and the step at 18 px made a size change
-        // jump in weight.
-        // The raster depends on the phase, the weight and the italic slant,
-        // so all three are part of the key.
+        // 光栅化字重必须与文本段塑形时使用的字重一致。此前在此叠加“光学”
+        // 补偿导致小号标签比其排版步进更粗，且 18 px 处的阶跃造成字号变化时
+        // 字重突变。
+        //
+        // 光栅化结果取决于相位、字重与斜体倾斜，因此三者均纳入键中。
+        //
         let key = GlyphKey::styled(
             glyph.glyph_id,
             glyph.font_size,
@@ -326,7 +326,7 @@ impl GlyphCache {
         );
         if let Some(hit) = self.resolved.get(&key).copied() {
             if hit.slot.is_valid() {
-                // Refresh the atlas generation without re-rasterising.
+                // 刷新图集代际而无需重新光栅化。
                 self.hits += 1;
                 if hit.color {
                     self.atlas.rgba.touch(&key);
@@ -342,8 +342,8 @@ impl GlyphCache {
         if italic {
             flags |= CacheKeyFlags::FAKE_ITALIC;
         }
-        // Bias the position into the requested subpixel phase before asking
-        // swash for the raster, so the four phases are genuinely different.
+        // 在向 swash 请求光栅化前将坐标偏置到目标亚像素相位，
+        // 确保四个相位生成真正不同的位图。
         let phase_offset = phase as f32 * 0.25;
         let (cache_key, _, _) = CacheKey::new(
             face,
@@ -362,7 +362,7 @@ impl GlyphCache {
         let w = placement.width;
         let h = placement.height;
         if w == 0 || h == 0 {
-            // Whitespace: no texture, only an advance.
+            // 空白字符：无纹理，仅记录步进宽度。
             return Some(ResolvedGlyph {
                 slot: GlyphSlot::default(),
                 bearing: Vec2::new(placement.left as f32, 0.0),
@@ -376,8 +376,8 @@ impl GlyphCache {
         let is_color = matches!(image.content, cosmic_text::SwashContent::Color);
         let pad = self.padding;
         let pad2 = pad * 2;
-        // The atlas may evict a glyph to make room; the evicted key's cache
-        // entry has to go too, or it would point at the recycled rectangle.
+        // 图集可能为腾出空间而淘汰已有字形；被淘汰键的缓存条目也必须一并删除，
+        // 否则它将指向被回收复用的矩形区域。
         let mut evicted = core::mem::take(&mut self.evicted);
         let mut resolved = if is_color || sdf_mode {
             let slot = self
@@ -436,10 +436,10 @@ impl GlyphCache {
             }
         };
 
-        // The UV rect must cover the *whole padded allocation*, because that
-        // is what the quad's size says. The quad is `w + 2·pad` wide and the
-        // padding is what keeps a bilinear tap from reaching the neighbouring
-        // glyph, so both the quad and the UV have to include it.
+        // UV 矩形必须覆盖**整个含边距的分配区域**，因为这与四边形尺寸一致。
+        // 四边形宽 `w + 2·pad`，边距正是防止双线性采样触及相邻字形的屏障，
+        // 因此四边形与 UV 都必须包含该边距。
+        //
         let sz = self.atlas.r8.page_size() as f32;
         resolved.slot.uv = [
             resolved.slot.x as f32 / sz,
@@ -448,9 +448,9 @@ impl GlyphCache {
             (resolved.slot.y + resolved.slot.h) as f32 / sz,
         ];
 
-        // An evicted glyph's rectangle goes back into the free pool and is
-        // handed to the next one, so the cache entry that still points at it
-        // would sample somebody else's texels. Drop those entries now.
+        // 被淘汰字形的矩形会归还空闲池并分配给下一个字形，因此仍指向该矩形的
+        // 缓存条目会采样到别人的纹素。此处立即清除这些条目。
+        //
         for key in evicted.drain(..) {
             self.resolved.remove(&key);
         }
@@ -459,10 +459,10 @@ impl GlyphCache {
         Some(resolved)
     }
 
-    /// Resolve an entire shaped run into quads.
+    /// 将整段已塑形的文本解析为四边形列表。
     ///
-    /// `origin` is the text box's top-left in the caller's space; the returned
-    /// quads are in the same space.
+    /// `origin` 为调用方空间中文本框的左上角；返回的四边形位于同一空间。
+    ///
     pub fn quads_for(
         &mut self,
         engine: &mut TextEngine,
@@ -495,15 +495,15 @@ impl GlyphCache {
         out
     }
 
-    /// Drop every cached glyph (atlas resize, font reload).
+    /// 丢弃所有已缓存字形（图集扩容或字体重载时调用）。
     pub fn clear(&mut self) {
         self.resolved.clear();
         self.atlas = GlyphAtlas::default();
         self.updates.clear();
-        // Face indices stay valid: the atlas only forgot the texels.
+        // 字体索引保持有效：图集仅清除了纹素数据。
     }
 
-    /// Atlas memory in bytes.
+    /// 图集占用的内存字节数。
     #[must_use]
     pub fn atlas_memory_bytes(&self) -> u64 {
         self.atlas.memory_bytes()
@@ -511,18 +511,18 @@ impl GlyphCache {
 }
 
 fn pad_r8(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
-    // A pure transparent gutter around the glyph's tight bounding box.
+    // 围绕字形紧凑包围盒的纯透明边距槽。
     //
-    // The quad is inflated by `padding`, so the outer texels *are* sampled —
-    // but they must sample as fully transparent. A previous version ramped
-    // the edge coverage outwards instead (edge-clamp + a 50 % falloff), which
-    // extruded a grey step next to every texel row that touched the bounding
-    // box: on an `O` those are exactly the four tangent points, so the
-    // letter grew a square smudge at the top, bottom, left and right while
-    // the diagonal corners stayed clean.
+    // 四边形按 `padding` 向外扩展，因此外侧纹素**确实会被采样**——但它们必须
+    // 采样为完全透明。早先版本向外渐变扩展边缘覆盖率（边缘钳制 + 50% 衰减），
+    // 导致每个触及包围盒的纹素行旁都挤出灰色台阶：对于字母 `O`，这恰好发生在
+    // 上下左右四个切点处，使其在四向长出方形污迹而对角处保持干净。
     //
-    // The gutter exists to stop a bilinear tap from reaching the neighbouring
-    // glyph; it is not a place to add ink.
+    //
+    //
+    //
+    // 边距槽的作用是阻止双线性采样触及相邻字形，而非额外增加墨迹。
+    //
     let pw = w + pad * 2;
     let ph = h + pad * 2;
     let mut out = vec![0u8; (pw * ph) as usize];
@@ -550,14 +550,14 @@ fn pad_rgba(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
 }
 
 fn pad_field(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
-    // The distance field's encoding is "high = inside": the GPU reference
-    // (`unbound-gpu/src/sdf.rs`) asserts that the centre of a covered block
-    // samples above 0.9 and the corner below 0.1, and `uber.frag` turns that
-    // into coverage with `smoothstep(0.5 - w, 0.5 + w, m)`.
+    // 距离场的编码约定为“高值 = 内部”：GPU 参考实现（`unbound-gpu/src/sdf.rs`）
+    // 断言全覆盖方块中心采样高于 0.9、角点低于 0.1，而 `uber.frag` 通过
+    // `smoothstep(0.5 - w, 0.5 + w, m)` 将其转为覆盖率。
     //
-    // So the padding must be padded with **0**, which is "far outside".
-    // Padding with 255 would read as "deep inside" and paint an opaque
-    // rectangular halo around every glyph.
+    //
+    // 因此边距必须填充为 **0**（表示“远离外部”）。若填充 255 会被解析为
+    // “深处内部”，并在每个字形周围画出不透明的矩形光晕。
+    //
     let pw = w + pad * 2;
     let ph = h + pad * 2;
     let mut out = vec![0u8; (pw * ph * 4) as usize];
@@ -569,8 +569,8 @@ fn pad_field(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
     out
 }
 
-// `SubpixelBin` documents the four-phase scheme above and is exercised through
-// `CacheKey::new`; keep the import explicit for readers.
+// `SubpixelBin` 体现了上述四相位方案并在 `CacheKey::new` 中使用；
+// 保留显式导入以便读者查阅。
 
 #[cfg(test)]
 mod tests {
@@ -584,15 +584,15 @@ mod tests {
 
     #[test]
     fn the_glyph_gutter_stays_transparent() {
-        // 2 px wide, 3 px tall source with a bright left edge — the shape of a
-        // glyph edge that touches the tight bounding box (the tangent point of
-        // an `O`).
+        // 宽 2 px、高 3 px 且左边缘高亮的源图——模拟触及紧凑包围盒边界的
+        // 字形边缘（例如 `O` 的切点）。
+        //
         let src = [255u8, 128, 64, 200, 40, 10];
         let out = pad_r8(&src, 2, 3, 2);
         let pw = 2 + 4;
         assert_eq!(out.len(), pw * (3 + 4));
-        // Every texel of the gutter is zero: no edge-clamp extrusion, so the
-        // rounded corner cannot grow a square smudge.
+        // 边距槽中的每个纹素均为零：无边缘钳制挤出，圆角不会长出方形污迹。
+        //
         for x in 0..pw {
             assert_eq!(out[x], 0, "top gutter at x={x}");
             assert_eq!(out[(3 + 3) * pw + x], 0, "bottom gutter at x={x}");
@@ -601,7 +601,7 @@ mod tests {
             assert_eq!(out[y * pw], 0, "left gutter at y={y}");
             assert_eq!(out[y * pw + pw - 1], 0, "right gutter at y={y}");
         }
-        // The glyph itself is copied verbatim, with no gamma ramp.
+        // 字形本体原样拷贝，不做伽马渐变。
         assert_eq!(out[2 * pw + 2], 255);
         assert_eq!(out[2 * pw + 3], 128);
         assert_eq!(out[3 * pw + 2], 64);
@@ -644,11 +644,11 @@ mod tests {
         }
     }
 
-    /// A failed upload must not lose the glyphs.
+    /// 上传失败绝不能丢失字形。
     ///
-    /// The cache believes the glyphs are in the atlas, so a lost batch means
-    /// the text samples texels that were never written: blank or garbled
-    /// glyphs, forever. The batch therefore goes back into the queue.
+    /// 缓存认为字形已在图集中，因此丢失批次意味着文本会采样到从未写入的纹素：
+    /// 永久显示空白或乱码字形。因此必须将该批次放回队列。
+    ///
     #[test]
     fn a_failed_upload_puts_the_glyphs_back_into_the_queue() {
         let mut e = engine();
@@ -660,7 +660,7 @@ mod tests {
         assert_eq!(updates.len(), 2);
         assert!(cache.pending_updates().is_empty(), "the batch was drained");
 
-        // The upload failed: the batch goes back.
+        // 上传失败：批次放回队列。
         cache.restore_updates(updates);
         assert_eq!(
             cache.pending_updates().len(),
@@ -669,13 +669,13 @@ mod tests {
         );
         assert!(cache.pending_update_bytes() > 0);
 
-        // And the next attempt takes them out again.
+        // 下一次尝试会再次取出它们。
         let again = cache.take_updates();
         assert_eq!(again.len(), 2);
         assert!(cache.pending_updates().is_empty());
     }
 
-    /// A restored batch goes in front of whatever was queued meanwhile.
+    /// 恢复的批次排在此期间新入队更新的前面。
     #[test]
     fn a_restored_batch_keeps_its_place_at_the_front() {
         let mut cache = GlyphCache::new();
@@ -719,8 +719,8 @@ mod tests {
         assert_eq!(cache.take_updates().len(), 0, "no re-upload on a cache hit");
         assert!(uploads > 0);
         assert!(cache.hit_rate() > 0.3);
-        // h/e/l/o plus a second `l` at a different subpixel phase: the phase is
-        // part of the key because it changes the raster.
+        // h/e/l/o 外加不同亚像素相位的第二个 `l`：相位会改变光栅结果，因此属于键的一部分。
+        //
         assert!(
             (4..=5).contains(&cache.resident_glyphs()),
             "resident = {}",
@@ -728,12 +728,12 @@ mod tests {
         );
     }
 
-    /// An italic run must not reuse the upright glyph's raster.
+    /// 斜体文本段绝不能复用正体字形的光栅结果。
     ///
-    /// `FAKE_ITALIC` makes swash produce a skewed raster from the same face
-    /// id, so the two runs share every part of the key but the slant. Without
-    /// the slant in the key the second run would sample the first one's
-    /// texels.
+    /// `FAKE_ITALIC` 会使 swash 从同一字体 ID 生成倾斜的光栅结果，因此两段文本
+    /// 除倾斜度外共享键的所有其他部分。若键中不含倾斜标记，第二段将采样到第一段的纹素。
+    ///
+    ///
     #[test]
     fn an_italic_run_does_not_reuse_the_upright_raster() {
         let mut e = engine();
@@ -750,11 +750,11 @@ mod tests {
         );
     }
 
-    /// The quad's origin must not carry the pen's fractional part.
+    /// 四边形原点绝不能携带画笔坐标的小数部分。
     ///
-    /// The sub-pixel phase is already baked into the bitmap, so adding the
-    /// fractional part of the pen a second time shifts the glyph twice — and
-    /// leaves the quad on a fractional pixel, which makes the sampler blur it.
+    /// 亚像素相位已烘焙进位图中，再次叠加画笔小数部分会导致字形双重偏移——
+    /// 且使四边形落在非整像素坐标上，导致采样器将其模糊。
+    ///
     #[test]
     fn quad_origin_floors_pen_x_to_avoid_double_subpixel_shift() {
         let glyph = ResolvedGlyph {
@@ -772,11 +772,11 @@ mod tests {
         assert_eq!(quad.size.y, 10.0);
     }
 
-    /// The last phase bucket must carry into the next whole pixel.
+    /// 最后一个相位区间必须向下一整像素进位。
     ///
-    /// `round(fract * 4)` returns 4 for `fract ∈ [0.875, 1)`, which is phase 0
-    /// of the *next* pixel. The old `% 4` folded it back to phase 0 without
-    /// moving the quad, dragging 12.5 % of all glyphs one pixel to the left.
+    /// `round(fract * 4)` 对 `fract ∈ [0.875, 1)` 返回 4，即**下一像素**的相位 0。
+    /// 旧版 `% 4` 将其折回相位 0 却未移动四边形，导致 12.5% 的字形向左偏移一像素。
+    ///
     #[test]
     fn the_last_phase_bucket_carries_into_the_next_pixel() {
         for thousandths in 875..1000 {
@@ -787,8 +787,8 @@ mod tests {
         }
     }
 
-    /// Quantisation is monotonic: no pen position may ever render to the left
-    /// of a smaller one, and the quantised position stays within ⅛ px.
+    /// 量化必须单调：较大画笔位置绝不会渲染到较小位置的左侧，
+    /// 且量化后的位置误差保持在 ⅛ px 以内。
     #[test]
     fn quantize_x_is_monotonic_and_never_jumps_backwards() {
         let mut previous = f32::NEG_INFINITY;
@@ -808,7 +808,7 @@ mod tests {
         }
     }
 
-    /// Whole-pixel snapping puts the quad on the rounded pen, not the floor.
+    /// 整像素对齐将四边形置于四舍五入后的画笔位置，而非向下取整位置。
     #[test]
     fn snapped_phases_use_the_rounded_pen() {
         let glyph = ResolvedGlyph {
@@ -824,9 +824,9 @@ mod tests {
         assert_eq!(GlyphCache::quantize_x(10.6, true), (11.0, 0));
     }
 
-    /// The phase a glyph is rasterised at has to follow its **absolute**
-    /// position: the raster is generated for that phase, so deriving it from
-    /// a run-relative position would shift every glyph by up to a pixel.
+    /// 字形光栅化所用的相位必须遵循其**绝对**坐标：光栅按该相位生成，
+    /// 若从相对于文本段的位置推导，每个字形最多会偏移一像素。
+    ///
     #[test]
     fn the_subpixel_phase_follows_the_absolute_pen_position() {
         let mut e = engine();
@@ -843,9 +843,9 @@ mod tests {
         }
     }
 
-    /// Two runs of the same text at the same absolute position must produce
-    /// the same quads — the phase is derived from the position, not from the
-    /// order the runs were laid out in.
+    /// 位于同一绝对坐标的两段相同文本必须生成完全一致的四边形——
+    /// 相位由坐标位置推导，而非由文本段的排版顺序决定。
+    ///
     #[test]
     fn the_same_absolute_position_produces_the_same_phase() {
         let mut e = engine();
@@ -854,20 +854,20 @@ mod tests {
         let first = cache.quads_for(&mut e, &shaped, Vec2::new(3.25, 0.0), 400, false);
         let second = cache.quads_for(&mut e, &shaped, Vec2::new(3.25, 0.0), 400, false);
         assert_eq!(first, second);
-        // The quad origin is floored onto the raster's pixel grid.
+        // 四边形原点向下取整到光栅的像素网格上。
         for quad in &first {
             assert_eq!(quad.rect.origin.x, quad.rect.origin.x.floor());
             assert_eq!(quad.rect.origin.y, quad.rect.origin.y.floor());
         }
     }
 
-    /// When the atlas evicts a glyph, the cache entry that pointed at it has
-    /// to go: the rectangle is recycled and handed to the next glyph.
+    /// 当图集淘汰字形时，指向它的缓存条目必须一并删除：矩形会被回收并分配给
+    /// 下一个字形。
     #[test]
     fn an_evicted_glyph_leaves_the_cache() {
         let mut e = engine();
         let mut cache = GlyphCache::new();
-        // A tiny atlas that cannot hold the whole string.
+        // 无法容纳整串文本的极小图集。
         cache.atlas = GlyphAtlas::new(AtlasConfig {
             page_size: 32,
             max_layers: 1,
@@ -877,13 +877,13 @@ mod tests {
         cache.quads_for(&mut e, &shaped, Vec2::ZERO, 400, false);
         let resident = cache.resident_glyphs();
         assert!(resident > 0);
-        // The atlas evicted at least one glyph to fit them all.
+        // 图集至少淘汰了一个字形以容纳所有字符。
         assert!(
             cache.atlas.r8.evictions() > 0,
             "the test must actually exercise the eviction path"
         );
-        // Every resident entry must still own a live atlas slot: an entry
-        // whose slot was recycled would sample somebody else's texels.
+        // 每个常驻条目都必须仍拥有存活的图集槽位：槽位已被回收的条目会采样到
+        // 别人的纹素。
         assert!(
             cache.resident_glyphs() <= resident,
             "the cache must not grow beyond the atlas"
@@ -915,9 +915,9 @@ mod tests {
         let updates = cache.take_updates();
         assert_eq!(updates[0].target, AtlasTarget::Color);
         assert_eq!(updates[0].data.len(), updates[0].byte_len());
-        // The distance field's encoding is "high = inside", so the padding
-        // must read as *outside*: a low value. Padding with 255 would read as
-        // "deep inside" and paint an opaque halo around every glyph.
+        // 距离场编码约定为“高值 = 内部”，因此边距必须被解读为**外部**（低值）。
+        // 若填充 255 会被解读为“深处内部”，并在每个字形周围画出不透明光晕。
+        //
         assert!(updates[0].data[0] < 55, "padded SDF must read as outside");
     }
 

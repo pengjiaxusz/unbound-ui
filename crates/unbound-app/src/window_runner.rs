@@ -1,4 +1,4 @@
-//! Windowed application host and runner adapting [`AppRuntime`] to [`PlatformApp`].
+//! 窗口化应用宿主与运行器，将 [`AppRuntime`] 适配至 [`PlatformApp`]。
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,7 +23,7 @@ use winit::window::Window;
 
 use crate::{AppKey, AppRuntime, Application, ImeUpdate, Modifiers as AppModifiers, ThemeKind};
 
-/// Clipboard adapter wrapping platform clipboard.
+/// 封装平台剪贴板的适配器。
 struct WinClipboard(std::cell::RefCell<unbound_platform::SystemClipboard>);
 
 impl crate::ClipboardProvider for WinClipboard {
@@ -38,7 +38,7 @@ impl crate::ClipboardProvider for WinClipboard {
     }
 }
 
-/// Translates a platform key into the runtime's [`AppKey`] vocabulary.
+/// 将平台按键翻译为运行时的 [`AppKey`] 词汇表。
 fn translate_app_key(key: &PlatformKey) -> AppKey {
     match key {
         PlatformKey::Named(name) => match name.as_str() {
@@ -80,7 +80,7 @@ fn translate_app_key(key: &PlatformKey) -> AppKey {
     }
 }
 
-/// Map a platform mouse button into the runtime's [`PointerButton`].
+/// 将平台鼠标按键映射为运行时的 [`PointerButton`]。
 fn translate_pointer_button(button: MouseButton) -> Option<PointerButton> {
     match button {
         MouseButton::Left => Some(PointerButton::Left),
@@ -99,15 +99,14 @@ fn translate_modifiers(m: Modifiers) -> AppModifiers {
     }
 }
 
-/// The instance extensions a window needs in order to present.
+/// 派生窗口呈现所需的实例扩展。
 ///
-/// The platform half (`VK_KHR_win32_surface` on Windows, `VK_KHR_xcb_surface`
-/// on X11, …) can only come from the window's *display* handle: omitting it
-/// leaves `vkCreateWin32SurfaceKHR` an unresolved function pointer, and
-/// omitting `VK_KHR_surface` makes `VK_KHR_swapchain` an invalid device
-/// extension (VUID-vkCreateDevice-ppEnabledExtensionNames-01387). Hard-coding
-/// the pair would make the runner Windows-only, so it is derived instead —
-/// the same way `apps/showcase` does it.
+/// 平台相关的一半（Windows 上是 `VK_KHR_win32_surface`，X11 上是
+/// `VK_KHR_xcb_surface` …）只能从窗口的*显示*句柄取得：缺少它时
+/// `vkCreateWin32SurfaceKHR` 会是无法解析的函数指针；缺少 `VK_KHR_surface`
+/// 则使 `VK_KHR_swapchain` 成为非法设备扩展
+/// （`VUID-vkCreateDevice-ppEnabledExtensionNames-01387`）。若把这一对硬编码，
+/// 运行器将只能在 Windows 工作，因此改为派生，与 `apps/showcase` 保持一致。
 fn window_instance_extensions(window: &Window) -> Result<Vec<String>, String> {
     use raw_window_handle::HasDisplayHandle;
 
@@ -122,7 +121,7 @@ fn window_instance_extensions(window: &Window) -> Result<Vec<String>, String> {
     )
 }
 
-/// The generic windowed host adapter driving [`AppRuntime`].
+/// 驱动 [`AppRuntime`] 的通用窗口化宿主适配器。
 pub struct WindowedRunner<A: Application> {
     runtime: AppRuntime<A>,
     renderer: Option<Renderer>,
@@ -137,15 +136,15 @@ pub struct WindowedRunner<A: Application> {
     scene_generation: u64,
     frame_metrics: Option<Arc<FrameHitMetrics>>,
     hwnd: Option<isize>,
-    /// The semantic colour table the GPU shaders resolve tokens through.
+    /// GPU 着色器用于解析颜色 token 的语义颜色表。
     theme: ThemeState,
-    /// Which theme the current renderer's LUT holds. `None` means the LUT
-    /// still has to be uploaded (including right after a device rebuild).
+    /// 当前渲染器 LUT 中已写入的主题；`None` 表示仍需上传
+    /// （设备重建完成后同样如此）。
     uploaded_theme: Option<ThemeKind>,
 }
 
 impl<A: Application> WindowedRunner<A> {
-    /// Create a new window runner for `app`.
+    /// 为 `app` 创建新的窗口运行器。
     pub fn new(app: A, config: &WindowConfig) -> Self {
         let (w, h) = (config.width.max(1), config.height.max(1));
         let viewport = Vec2::new(w as f32, h as f32);
@@ -174,25 +173,23 @@ impl<A: Application> WindowedRunner<A> {
         }
     }
 
-    /// Access the underlying application runtime.
+    /// 访问底层应用运行时。
     #[must_use]
     pub fn runtime(&self) -> &AppRuntime<A> {
         &self.runtime
     }
 
-    /// Mutably access the underlying application runtime.
+    /// 可变访问底层应用运行时。
     pub fn runtime_mut(&mut self) -> &mut AppRuntime<A> {
         &mut self.runtime
     }
 
-    /// Keep the renderer's 4 KiB colour table in step with the runtime theme.
+    /// 让渲染器的 4 KiB 颜色表与运行时主题保持同步。
     ///
-    /// `Renderer::new` only seeds five placeholder tokens; every other token
-    /// resolves to transparent black and `SURFACE` clears to white. Until a
-    /// real `ThemeLut` is written the whole window is a blank white surface —
-    /// the primitives are drawn, but with fully transparent colours. The
-    /// showcase uploads its LUT itself; the generic runner has to do the same
-    /// for every example, and re-upload after a device rebuild.
+    /// `Renderer::new` 只写入 5 个占位 token，其余 token 一律解析为透明黑，
+    /// 而 `SURFACE` 清屏为白色。在写入真正的 `ThemeLut` 之前，整窗就是一片
+    /// 纯白：图元确实绘制了，但颜色全透明。showcase 自行上传 LUT，通用运行器
+    /// 必须为每个示例做同样的事，并在设备重建后重新上传。
     fn sync_theme(&mut self, window: &Window) {
         let kind = self.runtime.context().theme;
         if self.uploaded_theme == Some(kind) {
@@ -206,8 +203,8 @@ impl<A: Application> WindowedRunner<A> {
         match renderer.write_theme_lut(&lut) {
             Ok(()) => {
                 self.uploaded_theme = Some(kind);
-                // A theme switch changes only colours: no layout and no
-                // instance re-upload, but one more frame has to be presented.
+                // 切换主题只改变颜色：既不重排也不重传图元，
+                // 但需要再多呈现一帧。
                 window.request_redraw();
             }
             Err(error) => {
@@ -217,11 +214,10 @@ impl<A: Application> WindowedRunner<A> {
     }
 
     fn recover_gpu(&mut self, window: &Window) {
-        // None of the Vulkan objects has a `Drop`: assigning `None` used to
-        // leak every handle. The old `VkSurfaceKHR` in particular stayed
-        // bound to the HWND, so the very first rebuild failed with
-        // `ERROR_NATIVE_WINDOW_IN_USE_KHR`. Destroy the children before the
-        // renderer — which owns the device — tears the device down.
+        // 所有 Vulkan 对象都没有 `Drop`：过去直接置 `None` 会泄漏全部句柄。
+        // 尤其是旧 `VkSurfaceKHR` 仍绑定在 HWND 上，导致第一次重建就报
+        // `ERROR_NATIVE_WINDOW_IN_USE_KHR`。必须先销毁子对象，再让持有设备的
+        // renderer 拆除设备本身。
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -278,7 +274,7 @@ impl<A: Application> WindowedRunner<A> {
                 self.surface = Some(surface);
                 self.atlases = Some(atlases);
                 self.swapchain_dirty = true;
-                // A freshly built renderer only has the placeholder LUT.
+                // 新建的渲染器此时只有占位 LUT。
                 self.uploaded_theme = None;
                 self.sync_theme(window);
                 self.runtime.request_full_rebuild();
@@ -489,17 +485,15 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
 
         let report = self.runtime.frame(dt);
 
-        // `reduce` may have changed `ctx.theme` (the theme button in example
-        // 01 does exactly that), so the LUT is checked every frame. The
-        // comparison is a single enum read; the 4 KiB upload only happens on
-        // an actual switch.
+        // `reduce` 可能改动 `ctx.theme`（示例 01 的主题按钮正是如此），
+        // 因此每帧都要检查 LUT。比较只是一次枚举读取，仅当真正切换主题时
+        // 才会发生 4 KiB 上传。
         self.sync_theme(window);
 
         if let (Some(renderer), Some(atlases)) = (&mut self.renderer, &self.atlases) {
-            // One batch for the whole frame: a single staging buffer, one
-            // command buffer and one queue wait for every glyph. Uploading
-            // them one at a time submits a command buffer per character and
-            // stalls the queue just as often.
+            // 整帧合并为一批：一个暂存缓冲、一个命令缓冲、一次队列等待
+            // 即可上传全部字形。逐个上传会为每个字符提交一次命令缓冲，
+            // 并同样频繁地阻塞队列。
             if !report.atlas_uploads.is_empty() {
                 if let Err(error) = atlases.upload_batch(&renderer.gpu, &report.atlas_uploads) {
                     eprintln!("[unbound-app] Could not upload atlas glyphs: {error:?}");
@@ -524,9 +518,8 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                     ) {
                         eprintln!("[unbound-app] Could not recreate swapchain: {error:?}");
                     } else {
-                        // The windowed path borrows the swapchain image as
-                        // its colour attachment, so only the depth buffer has
-                        // to follow the driver's actual extent.
+                        // 窗口路径借用交换链图像作为颜色附件，因此只有
+                        // 深度缓冲需要跟随驱动实际返回的尺寸。
                         let (actual_w, actual_h) = swapchain.extent();
                         if let Err(error) = renderer.ensure_depth_size(actual_w, actual_h) {
                             eprintln!("[unbound-app] Could not resize depth buffer: {error:?}");
@@ -535,13 +528,10 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                     self.swapchain_dirty = false;
                 }
 
-                // The acquire semaphore pool has one slot per frame in
-                // flight. A slot is only reusable once the frame that waited
-                // on it has retired, so the fence has to be awaited *before*
-                // the next acquire. `render()` waits too, but that happens
-                // after the semaphore has already been signalled again —
-                // which is exactly
-                // `VUID-vkAcquireNextImageKHR-semaphore-01779`.
+                // acquire 信号量池按在途帧数分槽。只有等待该信号量的帧退役后
+                // 槽位才可复用，因此必须在下一次 acquire *之前*等待 fence。
+                // `render()` 也会等待，但那时信号量已被再次置位——
+                // 正是 `VUID-vkAcquireNextImageKHR-semaphore-01779`。
                 if let Err(error) = renderer.wait_for_previous_frame() {
                     eprintln!("[unbound-app] Waiting for the previous frame failed: {error:?}");
                     return Flow::Continue;
@@ -611,7 +601,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
     }
 }
 
-/// One-line windowed application entry point.
+/// 单行窗口化应用入口函数。
 pub fn run_windowed<A: Application + 'static>(
     app: A,
     config: WindowConfig,

@@ -1,19 +1,19 @@
-//! Timers and cross-thread work for the application runtime (`docs` §5.5).
+//! 应用运行时的定时器与跨线程任务调度（`docs` §5.5）。
 //!
-//! Two things were missing from the synchronous `reduce` contract:
+//! 同步 `reduce` 契约原本缺少两项能力：
 //!
-//! * a **timer queue**. A caret has to blink every 500 ms, a tooltip has to
-//!   appear after 400 ms, and a debounced search has to fire once the user
-//!   stops typing. Without a queue the only way to do that is to poll a `Tick`
-//!   every frame, which wakes the GPU for nothing.
-//! * an **async wake-up**. A background task (an asset decode, a network
-//!   reply) finishes on another thread; the event loop is parked in
-//!   `ControlFlow::Wait` and has to be woken so the result is reduced.
+//! * **定时器队列**。光标需每 500 ms 闪烁一次，提示框需在 400 ms 后出现，
+//!   防抖搜索需在用户停止输入后触发。若无定时器队列，唯一做法是每帧轮询
+//!   `Tick`，白白唤醒 GPU。
 //!
-//! [`TimerQueue`] is a min-heap keyed on the deadline, so
-//! [`TimerQueue::next_deadline_ms`] answers "when does the loop have to wake
-//! up again" in O(n) over the (small) live set. [`AppWaker`] is the seam the
-//! platform backend implements with an `EventLoopProxy`.
+//! * **异步唤醒**。后台任务（资产解码、网络响应）在另一线程完成时，
+//!   事件循环正休眠在 `ControlFlow::Wait` 中，必须被唤醒才能 reduce 结果。
+//!
+//!
+//! [`TimerQueue`] 是以截止时间为键的最小堆，因此 [`TimerQueue::next_deadline_ms`]
+//! 能在 O(n)（n 为较小的活跃集）内回答“事件循环何时需再次唤醒”。
+//! [`AppWaker`] 则是平台后端通过 `EventLoopProxy` 实现的接缝。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -26,51 +26,51 @@ use rustc_hash::FxHashSet;
 
 use crate::AppEvent;
 
-/// A handle to one scheduled timer.
+/// 单个已调度定时器的句柄。
 ///
-/// The token is stable across reschedules, so an interval keeps the same
-/// token; the application interprets it, the queue only routes it.
+/// token 在重调度期间保持稳定，因此周期定时器始终保留同一 token；
+/// 应用负责解释它，队列仅负责路由。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TimerToken(u64);
 
 impl TimerToken {
-    /// Build a token from raw identity; the runtime's counter is the only
-    /// legitimate source.
+    /// 从原始标识构造 token；运行时计数器是唯一合法来源。
+    ///
     #[must_use]
     pub(crate) const fn new(id: u64) -> Self {
         Self(id)
     }
 
-    /// The raw identity, for an application that stores its own table.
+    /// 原始标识，供自行维护映射表的应用使用。
     #[must_use]
     pub const fn id(self) -> u64 {
         self.0
     }
 }
 
-/// One timer the application asked for during `reduce` or `view`.
+/// 应用在 `reduce` 或 `view` 期间请求的单个定时器。
 ///
-/// The runtime drains these into its [`TimerQueue`] after the event, because
-/// the context cannot own the queue: it is `Clone`, and a clone must not
-/// duplicate the schedule.
+/// 运行时在事件处理结束后将其排入 [`TimerQueue`]，因为上下文无法直接
+/// 持有队列：上下文实现了 `Clone`，克隆不应复制定时器调度。
+///
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimerRequest {
-    /// The token the application was handed.
+    /// 分配给应用的 token。
     pub token: TimerToken,
-    /// Milliseconds from *now* until the first fire.
+    /// 距离*现在*首次触发的毫秒数。
     pub delay_ms: u64,
-    /// `Some(period)` for an interval, `None` for a one-shot.
+    /// 周期定时器为 `Some(period)`，单次定时器为 `None`。
     pub period_ms: Option<u64>,
-    /// The event to dispatch when the timer fires.
+    /// 定时器触发时派发的事件。
     pub event: AppEvent,
 }
 
-/// Something that can wake a parked event loop from another thread.
+/// 可从其他线程唤醒休眠事件循环的抽象。
 ///
-/// `unbound-app` stays free of `winit`: the platform backend implements this
-/// with an `EventLoopProxy`, a test with a channel, a server with a no-op.
+/// `unbound-app` 保持不依赖 `winit`：平台后端用 `EventLoopProxy` 实现，
+/// 测试用 channel 实现，服务端用无操作实现。
 pub trait AppWaker: Send + Sync + 'static {
-    /// Ask the loop to run one more iteration so pending work is reduced.
+    /// 请求事件循环再运行一次迭代以 reduce 待处理任务。
     fn wake(&self);
 }
 
@@ -102,12 +102,12 @@ impl Ord for TimerEntry {
     }
 }
 
-/// A min-heap of pending timers.
+/// 待触发定时器的最小堆。
 pub struct TimerQueue {
     heap: BinaryHeap<Reverse<TimerEntry>>,
     cancelled: FxHashSet<u64>,
-    /// Shared with the [`crate::AppContext`], so a handler can be handed a
-    /// token the queue has not seen yet without a second counter.
+    /// 与 [`crate::AppContext`] 共享，使处理器无需第二个计数器即可
+    /// 获得队列尚未见过的新 token。
     next_id: Rc<Cell<u64>>,
     next_seq: u64,
 }
@@ -129,7 +129,7 @@ impl core::fmt::Debug for TimerQueue {
 }
 
 impl TimerQueue {
-    /// An empty queue.
+    /// 创建空队列。
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -140,14 +140,14 @@ impl TimerQueue {
         }
     }
 
-    /// The shared token counter, so the application context allocates from the
-    /// same space.
+    /// 共享的 token 计数器，使应用上下文在同一空间内分配 token。
+    ///
     #[must_use]
     pub fn tokens(&self) -> Rc<Cell<u64>> {
         Rc::clone(&self.next_id)
     }
 
-    /// Allocate a fresh token.
+    /// 分配一个新 token。
     #[must_use]
     pub fn next_token(&self) -> TimerToken {
         let id = self.next_id.get().saturating_add(1);
@@ -155,21 +155,21 @@ impl TimerQueue {
         TimerToken(id)
     }
 
-    /// Schedule a one-shot timer, returning its token.
+    /// 调度单次定时器并返回其 token。
     pub fn set_timeout(&mut self, now_ms: u64, delay_ms: u64, event: AppEvent) -> TimerToken {
         let token = self.next_token();
         self.schedule(token, now_ms, delay_ms, None, event);
         token
     }
 
-    /// Schedule a repeating timer, returning its token.
+    /// 调度重复定时器并返回其 token。
     pub fn set_interval(&mut self, now_ms: u64, period_ms: u64, event: AppEvent) -> TimerToken {
         let token = self.next_token();
         self.schedule(token, now_ms, period_ms, Some(period_ms), event);
         token
     }
 
-    /// Insert a timer the application already owns a token for.
+    /// 插入应用已持有 token 的定时器。
     pub fn schedule(
         &mut self,
         token: TimerToken,
@@ -189,12 +189,12 @@ impl TimerQueue {
         }));
     }
 
-    /// Cancel a timer. A token that already fired is a no-op.
+    /// 取消定时器。对已触发的 token 调用为空操作。
     pub fn cancel(&mut self, token: TimerToken) {
         self.cancelled.insert(token.id());
     }
 
-    /// The earliest deadline, ignoring cancelled entries.
+    /// 返回最早的截止时间，忽略已取消条目。
     #[must_use]
     pub fn next_deadline_ms(&self) -> Option<u64> {
         self.heap
@@ -204,13 +204,13 @@ impl TimerQueue {
             .min()
     }
 
-    /// Whether no timer is pending.
+    /// 是否没有待触发的定时器。
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.next_deadline_ms().is_none()
     }
 
-    /// Pop every timer due at `now_ms`, rescheduling the intervals.
+    /// 弹出在 `now_ms` 到期的所有定时器，并重调度周期定时器。
     pub fn due(&mut self, now_ms: u64) -> Vec<AppEvent> {
         let mut out = Vec::new();
         while let Some(Reverse(top)) = self.heap.peek() {
@@ -225,8 +225,8 @@ impl TimerQueue {
             }
             out.push(entry.event.clone());
             if let Some(period) = entry.period_ms {
-                // A frame that ran late must not burst every missed tick: the
-                // next fire is measured from now, not from the missed slot.
+                // 延迟的帧绝不能突发补发所有错过的 tick：
+                // 下一次触发从当前时刻起算，而非从错过的槽位起算。
                 let deadline = now_ms.saturating_add(period.max(1));
                 let seq = self.next_seq;
                 self.next_seq = self.next_seq.saturating_add(1);

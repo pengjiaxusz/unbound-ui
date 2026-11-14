@@ -1,10 +1,8 @@
-//! Rich hover cards and empty states.
+//! 富文本悬停卡片（HoverCard）与空状态（EmptyState）。
 //!
-//! A tooltip is information only and passes the pointer straight through. A
-//! hover card is the interactive sibling: the pointer may travel *into* the
-//! card and use whatever it holds. That changes the timing model — leaving the
-//! trigger no longer hides the card, it starts a grace period that only
-//! expires once the pointer is outside both the trigger and the card.
+//! 提示条（Tooltip）仅展示信息且穿透指针事件；悬停卡片则是其可交互的兄弟组件：
+//! 指针可以移*入*卡片内部并操作其中内容。这改变了计时模型——离开触发器不再立即隐藏卡片，
+//! 而是启动宽限期，仅当指针同时离开触发器与卡片后才到期隐藏。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -18,37 +16,37 @@ use crate::overlay::{place_anchored_popup, OverlayEntry, PlacedPopup, Placement}
 use crate::primitive::{instance, surface};
 use crate::{ControlState, WidgetOutput};
 
-/// How long the pointer must rest on the trigger.
+/// 指针必须在触发器上停留的时长。
 pub const HOVER_CARD_DELAY_MS: f32 = 500.0;
-/// How long the card survives after the pointer leaves both regions.
+/// 指针同时离开两个区域后卡片继续保留的时长。
 pub const HOVER_CARD_GRACE_MS: f32 = 150.0;
-/// The card corner radius.
+/// 卡片圆角半径。
 pub const HOVER_CARD_RADIUS: f32 = 10.0;
 const HOVER_CARD_SHADOW: f32 = 22.0;
 
-/// A hover card descriptor.
+/// 悬停卡片描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct HoverCardDesc {
-    /// The trigger rectangle.
+    /// 触发器矩形。
     pub anchor: Rect,
-    /// The viewport the card stays inside.
+    /// 卡片需保持在内的视口。
     pub viewport: Rect,
-    /// The measured card size.
+    /// 测量后的卡片尺寸。
     pub size: Vec2,
-    /// Where the card prefers to sit.
+    /// 卡片首选停靠方向。
     pub placement: Placement,
-    /// The delay before it appears.
+    /// 显示前的延迟时长。
     pub delay_ms: f32,
-    /// The grace period after the pointer leaves.
+    /// 指针离开后的宽限期。
     pub grace_ms: f32,
-    /// The corner radius.
+    /// 圆角半径。
     pub radius: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl HoverCardDesc {
-    /// A card below its trigger.
+    /// 创建位于触发器下方的悬停卡片。
     #[must_use]
     pub fn new(anchor: Rect, viewport: Rect, size: Vec2) -> Self {
         Self {
@@ -63,14 +61,14 @@ impl HoverCardDesc {
         }
     }
 
-    /// The same card on another side.
+    /// 将卡片放置到另一侧。
     #[must_use]
     pub fn with_placement(mut self, placement: Placement) -> Self {
         self.placement = placement;
         self
     }
 
-    /// The placed card rectangle.
+    /// 放置后的卡片矩形。
     #[must_use]
     pub fn rect(&self) -> Rect {
         let placed: PlacedPopup =
@@ -79,7 +77,7 @@ impl HoverCardDesc {
     }
 }
 
-/// The open/close timing of one hover card.
+/// 单个悬停卡片的打开/关闭计时状态。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HoverCardState {
     visible: bool,
@@ -95,16 +93,15 @@ impl HoverCardState {
         Self::default()
     }
 
-    /// Whether the card is currently shown.
+    /// 卡片当前是否显示。
     #[must_use]
     pub const fn visible(&self) -> bool {
         self.visible
     }
 
-    /// Advance one frame.
+    /// 推进一帧。
     ///
-    /// `hovered` is the trigger node under the pointer, `over_card` whether the
-    /// pointer is inside the card. Returns whether the visibility changed.
+    /// `hovered` 为指针下的触发器节点，`over_card` 表示指针是否在卡片内。返回可见性是否发生变化。
     pub fn update(
         &mut self,
         desc: &HoverCardDesc,
@@ -119,8 +116,7 @@ impl HoverCardState {
         match hovered {
             Some(node) => {
                 if self.anchor != Some(node) {
-                    // A different trigger restarts the delay and hides the
-                    // previous card: its content does not apply any more.
+                    // 切换到不同触发器会重新开始延迟并隐藏前一张卡片：其内容已不再适用。
                     self.anchor = Some(node);
                     self.visible = false;
                     self.hide_at = None;
@@ -162,7 +158,7 @@ impl HoverCardState {
         self.visible != was
     }
 
-    /// Hide immediately.
+    /// 立即隐藏。
     pub fn hide(&mut self) {
         self.visible = false;
         self.anchor = None;
@@ -171,8 +167,7 @@ impl HoverCardState {
     }
 }
 
-/// Emit a hover card. The output **does** carry a hit region: the card is
-/// interactive, which is what distinguishes it from a tooltip.
+/// 发射悬停卡片。输出**确实**携带命中区域：卡片可交互，这正是它与提示条的区别。
 #[must_use]
 pub fn emit_hover_card(
     node: u64,
@@ -234,28 +229,28 @@ pub fn emit_hover_card(
     )
 }
 
-/// The icon diameter of an empty state.
+/// 空状态的图标直径。
 pub const EMPTY_ICON: f32 = 48.0;
-/// The action button size.
+/// 操作按钮尺寸。
 pub const EMPTY_ACTION_SIZE: (f32, f32) = (120.0, 32.0);
 
-/// A centred empty-list placeholder.
+/// 居中空列表占位符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct EmptyStateDesc {
-    /// The region the placeholder centres in.
+    /// 占位符在其中居中的区域。
     pub rect: Rect,
-    /// The headline.
+    /// 主标题。
     pub title: String,
-    /// The supporting copy.
+    /// 辅助说明文案。
     pub message: String,
-    /// The optional call to action.
+    /// 可选行动号召按钮文案。
     pub action_label: Option<String>,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl EmptyStateDesc {
-    /// An empty state with a title.
+    /// 创建带标题的空状态。
     #[must_use]
     pub fn new(rect: Rect, title: impl Into<String>) -> Self {
         Self {
@@ -267,21 +262,21 @@ impl EmptyStateDesc {
         }
     }
 
-    /// The same state with supporting copy.
+    /// 附加辅助说明文案。
     #[must_use]
     pub fn with_message(mut self, message: impl Into<String>) -> Self {
         self.message = message.into();
         self
     }
 
-    /// The same state with a call to action.
+    /// 附加行动号召按钮。
     #[must_use]
     pub fn with_action(mut self, label: impl Into<String>) -> Self {
         self.action_label = Some(label.into());
         self
     }
 
-    /// The block height used to centre the content.
+    /// 用于居中计算的内容块高度。
     fn content_height(&self) -> f32 {
         let mut height = EMPTY_ICON + 12.0 + 24.0;
         if !self.message.is_empty() {
@@ -293,12 +288,12 @@ impl EmptyStateDesc {
         height
     }
 
-    /// The top of the centred block.
+    /// 居中内容块的顶部坐标。
     fn content_top(&self) -> f32 {
         self.rect.origin.y + (self.rect.size.y - self.content_height()).max(0.0) * 0.5
     }
 
-    /// The icon square.
+    /// 图标正方形区域。
     #[must_use]
     pub fn icon_rect(&self) -> Rect {
         Rect::new(
@@ -309,7 +304,7 @@ impl EmptyStateDesc {
         )
     }
 
-    /// The headline.
+    /// 主标题区域。
     #[must_use]
     pub fn title_rect(&self) -> Rect {
         Rect::new(
@@ -320,7 +315,7 @@ impl EmptyStateDesc {
         )
     }
 
-    /// The supporting copy.
+    /// 辅助说明文案区域。
     #[must_use]
     pub fn message_rect(&self) -> Rect {
         Rect::new(
@@ -331,7 +326,7 @@ impl EmptyStateDesc {
         )
     }
 
-    /// The call to action, when there is one.
+    /// 行动号召按钮区域（若存在）。
     #[must_use]
     pub fn action_rect(&self) -> Option<Rect> {
         self.action_label.as_ref().map(|_| {
@@ -350,16 +345,16 @@ impl EmptyStateDesc {
     }
 }
 
-/// What one empty state emits.
+/// 单个空状态的发射结果。
 #[derive(Clone, Debug)]
 pub struct EmptyStateOutput {
-    /// The icon, glyphs and action surface.
+    /// 图标、字形与操作按钮表面。
     pub output: WidgetOutput,
-    /// The action button, when there is one.
+    /// 操作按钮命中区域（若存在）。
     pub action: Option<HitRegion>,
 }
 
-/// Emit a centred empty state.
+/// 发射居中空状态。
 #[must_use]
 pub fn emit_empty_state(
     node: u64,
@@ -470,7 +465,7 @@ mod tests {
         let mut state = HoverCardState::new();
         state.update(&desc, Some(7), false, 500.0);
         assert!(state.visible());
-        // The pointer leaves the trigger and enters the card.
+        // 指针离开触发器并进入卡片内部。
         state.update(&desc, None, true, 16.0);
         assert!(!state.update(&desc, None, true, 500.0));
         assert!(state.visible());

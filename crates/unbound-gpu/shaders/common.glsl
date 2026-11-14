@@ -2,11 +2,10 @@
 #define UNBOUND_COMMON_GLSL
 
 // ---------------------------------------------------------------------------
-// Shared GPU-side declarations.
+// GPU 侧共享声明。
 //
-// The structs below mirror `unbound-gpu::data` byte for byte. Nothing here may
-// be reordered without also changing the Rust side: the binding is by physical
-// device address, so there is no reflection to catch a mismatch.
+// 以下结构体与 `unbound-gpu::data` 按字节严格镜像。未同步修改 Rust 侧前严禁
+// 调整字段顺序：绑定基于物理设备地址（BDA），无反射机制可捕获布局不匹配。
 //
 //   Prim          64B  (align 64)
 //   Transform     32B  (align 16)
@@ -24,7 +23,7 @@
 #define TRANSFORM_INDEX_MASK   0x7FFFFFFFu
 #define CLIP_NONE              0xFFFFFFFFu
 
-// Primitive kinds, matching `PrimType`.
+// 图元类型，与 `PrimType` 一一对应。
 #define PRIM_ROUNDED_RECT 0u
 #define PRIM_IMAGE        1u
 #define PRIM_GLYPH        2u
@@ -34,31 +33,27 @@
 #define PRIM_SHADOW       6u
 #define PRIM_LINE         7u
 
-// Primitive flags, mirroring `PrimFlags` on the Rust side. They travel in the
-// high 16 bits of `type_flags`, so both the vertex and the fragment stage can
-// read them without a second unpacking convention.
+// 图元标志位，镜像 Rust 侧的 `PrimFlags`。它们位于 `type_flags` 的高 16 位，
+// 使顶点和片元阶段无需第二套解包约定即可直接读取。
 #define SUB_ELEMENT_MASK 0x7u
 #define FLAG_DARK_BG      (1u << 3)
 #define FLAG_MSDF         (1u << 4)
 #define FLAG_ELLIPSIS     (1u << 5)
 #define FLAG_SUBPIXEL     (1u << 6)
-// Bits 8..10 are the P3.2 graphics markers. They skip 5 and 6 because those
-// already carry the text-run markers above.
+// 第 8..10 位为 P3.2 图形标记；跳过 5 和 6 是因为这两位已被上方文本运行标记占用。
 #define FLAG_GRADIENT_LINEAR (1u << 8)
 #define FLAG_GRADIENT_RADIAL (1u << 9)
 #define FLAG_INNER_SHADOW    (1u << 10)
 #define FLAG_GRADIENT_ANY    (FLAG_GRADIENT_LINEAR | FLAG_GRADIENT_RADIAL)
 
-// `SubElement::InnerShadow`, low three bits of the flags word.
+// `SubElement::InnerShadow`，位于标志字的低 3 位。
 #define SUB_INNER_SHADOW 3u
 
-// Theme LUT slot 0 is always fully transparent so "no colour" is free.
+// 主题 LUT 槽位 0 恒为全透明，使“无颜色”零开销。
 #define TOKEN_NONE 0u
 
-// Theme LUT slot 1 holds the shadow colour. The shadow is a *theme* concept
-// — every primitive shares it — so it lives in a fixed slot rather than in a
-// per-primitive field, and the slot index is part of the engine's contract
-// with whoever fills the LUT.
+// 主题 LUT 槽位 1 存放阴影颜色。阴影属于主题级概念（所有图元共享），
+// 因此存放在固定槽位而非逐图元字段中；该槽位索引是引擎与 LUT 填充方之间的契约。
 #define SHADOW_TOKEN 1u
 
 struct Prim {
@@ -66,7 +61,7 @@ struct Prim {
     vec2  local_pos;         //  8
     vec2  size;              // 16
     uvec2 radii_packed;      // 24 (4 × f16)
-    uint  border_and_shadow; // 32 (u16 border in the low half | u16 shadow in the high half)
+    uint  border_and_shadow; // 32（低半字 u16 边框 | 高半字 u16 阴影）
     uint  transform_idx;     // 36
     uint  clip_idx;          // 40
     uint  fill;              // 44
@@ -77,20 +72,18 @@ struct Prim {
 };
 
 struct Transform {
-    vec4  linear;      // 2×2 column major
+    vec4  linear;      // 2×2 列主序
     vec2  translation;
     float scale_hint;
     uint  flags;
 };
 
-// The `vec4`s come first, then the two `uvec2`s. In std430 a `vec4` must be
-// 16-byte aligned, so interleaving `vec4` and `uvec2` members would push the
-// second `vec4` to offset 48 and give the struct an 80-byte stride — while
-// the `repr(C)` Rust mirror (`GpuClipNode`) has `radii_0` as a `[u16; 4]` with
-// 2-byte alignment and stays 64 bytes. Keeping the wide members together
-// makes both layouts agree; `data.rs` pins the offsets in a unit test.
+// 先放 `vec4` 再放两个 `uvec2`。在 std430 中 `vec4` 必须 16 字节对齐，若交错排布
+// 会将第二个 `vec4` 推至偏移 48，导致结构体步长变为 80 字节；而 Rust 侧 `repr(C)`
+// 镜像（`GpuClipNode`）的 `radii_0` 为 2 字节对齐的 `[u16; 4]`，总长仍为 64 字节。
+// 将宽成员集中放置可使两侧布局一致；`data.rs` 中通过单元测试锁定了这些偏移量。
 struct ClipNode {
-    vec4  aabb;      // chunk-local (min_x, min_y, max_x, max_y)
+    vec4  aabb;      // chunk 局部坐标 (min_x, min_y, max_x, max_y)
     vec4  rounded0;  // (center_x, center_y, half_w, half_h)
     vec4  rounded1;
     uvec2 radii0;    // 4 × f16
@@ -121,17 +114,16 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer ClipBuf {
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer PayloadBuf {
     Payload p[];
 };
-// Theme LUT: one RGBA16F entry per token, stored as two uvec2 halves.
+// 主题 LUT：每个令牌占一个 RGBA16F 条目，以两个 uvec2 半部存储。
 layout(buffer_reference, std430, buffer_reference_align = 8) buffer LutBuf {
     uvec2 e[];
 };
 
-// One push-constant block for every pipeline in the frame.
+// 帧内所有管线共用的 Push Constant 块。
 //
-// The first 72 bytes are the documented `FramePushConstants`; the tail is the
-// compute-stage scratch (digit index, counts, auxiliary buffer addresses).
-// Graphics pipelines push all 128 bytes with a zeroed tail, so a single
-// `VkPipelineLayout` serves the uber shader and every compute stage.
+// 前 72 字节为标准的 `FramePushConstants`；尾部为计算阶段暂存字段
+// （位索引、计数、辅助缓冲区地址）。图形管线推送全部 128 字节并将尾部清零，
+// 从而使单个 `VkPipelineLayout` 可同时服务于 uber 着色器和所有计算阶段。
 layout(push_constant) uniform PC {
     uint64_t primitives_bda;   //   0
     uint64_t transforms_bda;   //   8
@@ -154,24 +146,21 @@ layout(push_constant) uniform PC {
     uint64_t scratch_bda5;     // 120
 } pc;
 
-// `prim_count` etc. are only meaningful for compute stages; graphics stages
-// receive zeros there.
+// `prim_count` 等字段仅对计算阶段有意义；图形阶段在此处接收零值。
 
 // ---------------------------------------------------------------------------
-// Unpacking
+// 解包辅助函数
 // ---------------------------------------------------------------------------
 
 vec4 unpack_radii(uvec2 packed) {
     return vec4(unpackHalf2x16(packed.x), unpackHalf2x16(packed.y));
 }
 
-// `border_and_shadow` packs the border width in the *low* half and the
-// shadow blur in the high half, matching the Rust struct layout
-// (`border_width: u16` at offset 32, then `shadow_blur: u16` at offset 34).
+// `border_and_shadow` 将边框宽度打包在低半字、阴影模糊半径打包在高半字，
+// 与 Rust 结构体布局一致（偏移 32 为 `border_width: u16`，偏移 34 为 `shadow_blur: u16`）。
 //
-// `unpackHalf2x16` returns the 16 *least*-significant bits in `.x` and the
-// 16 most-significant bits in `.y` (GLSL 4.x reference / SPIR-V
-// `GLSL.std.450` §UnpackHalf2x16), so the two map straight across.
+// `unpackHalf2x16` 在 `.x` 中返回最低 16 位、在 `.y` 中返回最高 16 位
+// （符合 GLSL 4.x / SPIR-V `GLSL.std.450` UnpackHalf2x16 规范），两者直接对应。
 float unpack_border(uint v) {
     return unpackHalf2x16(v).x;
 }
@@ -190,8 +179,7 @@ vec4 theme_color(uint token) {
     return vec4(unpackHalf2x16(e.x), unpackHalf2x16(e.y));
 }
 
-// Gradient stops travel as two 16-bit theme tokens packed into the bits of
-// `Payload::p2.x` (see `GpuPayload::gradient_linear`).
+// 渐变色标作为两个 16 位主题令牌打包在 `Payload::p2.x` 的位中（参见 `GpuPayload::gradient_linear`）。
 vec4 gradient_color(Payload pl, float t) {
     uint packed = floatBitsToUint(pl.p2.x);
     vec4 c0 = theme_color(packed & 0xFFFFu);
@@ -199,17 +187,15 @@ vec4 gradient_color(Payload pl, float t) {
     return mix(c0, c1, clamp(t, 0.0, 1.0));
 }
 
-// One LSB of ordered noise, centred on zero. Long gradients on a linear
-// swapchain show Mach bands without it.
+// 零均值、幅值为 1 LSB 的有序抖动噪声。在线性交换链上，若无此抖动，长渐变会出现马赫带。
 float gradient_dither(vec2 frag_coord) {
     float n = fract(sin(dot(frag_coord, vec2(12.9898, 78.233))) * 43758.5453);
     return (n - 0.5) * (1.0 / 255.0);
 }
 
 // ---------------------------------------------------------------------------
-// Space conversions. `scale` folds canvas zoom and DPI together because both
-// are uniform positive scales: (cam_zoom * dpi) is exactly the pixel-per-unit
-// factor the canvas needs, and for UI primitives cam_zoom == 1.
+// 空间转换。`scale` 将画布缩放与 DPI 合并，因为两者均为均匀正缩放：
+// (cam_zoom * dpi) 即画布所需的每单位像素因子，且 UI 图元的 cam_zoom == 1。
 // ---------------------------------------------------------------------------
 
 vec2 rel_to_screen(vec2 rel, float scale, vec2 half_vp) {
@@ -222,8 +208,7 @@ vec2 screen_to_rel(vec2 screen, float scale, vec2 half_vp) {
 
 mat2 inverse2x2(mat2 m) {
     float det = m[0][0] * m[1][1] - m[0][1] * m[1][0];
-    // A singular matrix cannot be inverted; fall back to identity so the
-    // primitive still rasterises (just un-rotated) instead of vanishing.
+    // 奇异矩阵不可求逆；回退为单位矩阵，使图元仍能光栅化（仅不旋转）而不至于消失。
     if (abs(det) < 1e-12) {
         return mat2(1.0);
     }
@@ -232,30 +217,28 @@ mat2 inverse2x2(mat2 m) {
 }
 
 // ---------------------------------------------------------------------------
-// Signed distance fields
+// 有向距离场（SDF）
 // ---------------------------------------------------------------------------
 
-// Rounded box with four independent corner radii, in the box's local space
-// where the centre is the origin.
+// 具有四个独立圆角半径的圆角矩形 SDF，位于以矩形中心为原点的局部空间。
 float sd_rounded_box(vec2 p, vec2 half_size, vec4 radii) {
-    // Pick the radius belonging to the quadrant of `p`.
+    // 选取 `p` 所在象限对应的圆角半径。
     float r = (p.x > 0.0)
-        ? ((p.y > 0.0) ? radii.z : radii.y)   // bottom-right / top-right
-        : ((p.y > 0.0) ? radii.w : radii.x);  // bottom-left  / top-left
-    // Clamp so opposite radii can never overlap and fold the SDF inside out.
+        ? ((p.y > 0.0) ? radii.z : radii.y)   // 右下 / 右上
+        : ((p.y > 0.0) ? radii.w : radii.x);  // 左下 / 左上
+    // 钳制半径，防止对角圆角重叠导致 SDF 内外翻转。
     r = min(r, min(half_size.x, half_size.y));
     vec2 q = abs(p) - half_size + vec2(r);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - r;
 }
 
 float coverage_from_sd(float sd, float aa_width) {
-    // 1 inside, 0 outside, linear ramp one pixel wide. `aa_width` is the
-    // derivative of the SDF along the screen, so the edge is always exactly one
-    // pixel wide regardless of zoom.
+    // 内部为 1、外部为 0，过渡带为 1 像素宽的线性斜坡。`aa_width` 为 SDF
+    // 沿屏幕空间的导数，因此无论缩放比例如何，边缘抗锯齿宽度恒为 1 像素。
     return clamp(0.5 - sd / max(aa_width, 1e-6), 0.0, 1.0);
 }
 
-// Abramowitz & Stegun 7.1.26 — max error 1.5e-7, no texture, no branches.
+// Abramowitz & Stegun 7.1.26 近似——最大误差 1.5e-7，无需纹理查表，无分支。
 float erf_approx(float x) {
     float s = sign(x);
     float a = abs(x);
@@ -265,8 +248,7 @@ float erf_approx(float x) {
     return s * y;
 }
 
-// Analytic Gaussian-blurred box coverage: the convolution of a half-plane with
-// a Gaussian is an erf, and for distances beyond ~3σ the error is < 0.3%.
+// 解析高斯模糊矩形覆盖率：半平面与高斯核的卷积即为 erf，距离超过约 3σ 时误差 < 0.3%。
 float box_shadow_alpha(float sd, float sigma) {
     if (sigma <= 0.0) {
         return sd < 0.0 ? 1.0 : 0.0;
@@ -275,16 +257,15 @@ float box_shadow_alpha(float sd, float sigma) {
 }
 
 // ---------------------------------------------------------------------------
-// Quadratic Bézier: numerically stable closest-point distance (Cardano).
-// `p0`, `p1`, `p2` are the control polygon; the function returns the distance
-// from `p` to the curve, not to the polygon.
+// 二次 Bézier 曲线：数值稳定的最近点距离（Cardano 求根法）。
+// `p0`、`p1`、`p2` 为控制多边形顶点；函数返回 `p` 到曲线本身的距离，而非到控制多边形的距离。
 // ---------------------------------------------------------------------------
 
 float dot2(vec2 v) {
     return dot(v, v);
 }
 
-/// Distance from `p` to the line segment `a..b`.
+/// 点 `p` 到线段 `a..b` 的距离。
 float sd_segment(vec2 p, vec2 a, vec2 b) {
     vec2 pa = p - a;
     vec2 ba = b - a;
@@ -298,12 +279,10 @@ float sd_quadratic_bezier(vec2 pos, vec2 p0, vec2 p1, vec2 p2) {
     vec2 c = a * 2.0;
     vec2 d = p0 - pos;
 
-    // A collinear control polygon — a "curve" that is really a straight line —
-    // makes `b` vanish, and the Cardano solve below divides by `|b|²` clamped
-    // at 1e-12. The roots then explode to ±1e12, clamp to `t = 1`, and the
-    // distance collapses to the *end point*: the stroke disappears and only a
-    // dot is left. Straight strokes (the window close glyph, a flat ribbon)
-    // take this path, so fall back to the exact segment distance.
+    // 当控制多边形共线（即实际退化为直线的“曲线”）时，`b` 趋近于零，下方 Cardano 求解
+    // 会除以被钳制在 1e-12 的 `|b|²`。这会导致根爆炸至 ±1e12 并被钳制到 `t = 1`，
+    // 距离退化为到端点的距离——整条描边消失，只剩一个点。直描边（如窗口关闭图标、平直带）
+    // 会走此路径，因此回退到精确线段距离。
     if (dot(b, b) < 1e-8) {
         return sd_segment(pos, p0, p2);
     }
@@ -320,14 +299,14 @@ float sd_quadratic_bezier(vec2 pos, vec2 p0, vec2 p1, vec2 p2) {
     float h = q * q + 4.0 * p3;
 
     if (h >= 0.0) {
-        // One real root.
+        // 单个实根。
         h = sqrt(h);
         vec2 x = (vec2(h, -h) - q) * 0.5;
         vec2 uv = sign(x) * pow(abs(x), vec2(1.0 / 3.0));
         float t = clamp(uv.x + uv.y - kx, 0.0, 1.0);
         res = dot2(d + (c + b * t) * t);
     } else {
-        // Three real roots: use the trigonometric form to stay stable.
+        // 三个实根：采用三角函数形式以保持数值稳定。
         float z = sqrt(-p);
         float v = acos(clamp(q / (p * z * 2.0), -1.0, 1.0)) / 3.0;
         float m = cos(v);

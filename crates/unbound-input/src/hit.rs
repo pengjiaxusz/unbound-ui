@@ -1,18 +1,18 @@
-//! Double-layer hit testing (`docs` §6.1).
+//! 双层命中测试（`docs` §6.1）。
 //!
-//! The pipeline is deliberately two-staged, exactly as the doc draws it:
+//! 管线刻意分为两阶段，与架构文档完全一致：
 //!
-//! 1. **broad phase** — an AABB test against the region's bounds, and against
-//!    every clip that applies to it,
-//! 2. **narrow phase** — the real geometry: a rounded-rect SDF (four per-corner
-//!    radii, so the GPU's two-slot corner mask is a strict subset), an even-odd
-//!    polygon test, or an analytic quadratic-Bézier distance.
+//! 1. **粗筛阶段（broad phase）**——针对区域包围盒及所有生效裁剪框的 AABB 测试；
+//!    
+//! 2. **精测阶段（narrow phase）**——真实几何求交：圆角矩形 SDF（支持四角独立半径，
+//!    因此 GPU 的双槽位圆角掩码是其严格子集）、奇偶规则多边形测试，
+//!    或二次贝塞尔曲线解析距离。
 //!
-//! Regions are plain values, not trait objects: the caller can build them from
-//! the Taffy tree, from the canvas quadtree, or from a Portal overlay without
-//! this crate knowing about any of them. Ordering is `(layer, z, node)`, which
-//! makes a pick independent of insertion order — the property that keeps input
-//! deterministic across a hot reload.
+//! 命中区域是纯值类型而非 trait 对象：调用方可从 Taffy 树、画布四叉树
+//! 或 Portal 浮层构建它们，而本 crate 无需感知这些上层结构。排序键为
+//! `(layer, z, node)`，使拾取结果与插入顺序无关——这一特性保证了热重载后
+//! 输入行为的确定性。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -21,15 +21,15 @@ use unbound_vector::{hit_quad, QuadSegment};
 
 use crate::cursor::CursorKind;
 
-/// First overlay layer. Anything at or above it wins cursor priority over the
-/// UI layer underneath (`docs` §6.2).
+/// 首个浮层层级。处于该层级或之上的元素在光标优先级上胜过下方的 UI 层
+/// （`docs` §6.2）。
 pub const PORTAL_LAYER: u8 = 2;
 
-/// A rounded-rectangle clip, the CPU mirror of `GpuClipNode`.
+/// 圆角矩形裁剪框，`GpuClipNode` 的 CPU 侧镜像。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ClipRect {
     pub rect: Rect,
-    /// Corner radii in `TL, TR, BR, BL` order.
+    /// 四角圆角半径，顺序为 `TL, TR, BR, BL`（左上、右上、右下、左下）。
     pub radii: [f32; 4],
 }
 
@@ -50,7 +50,7 @@ impl ClipRect {
         }
     }
 
-    /// True when `point` survives this clip.
+    /// 当 `point` 通过该裁剪测试时返回 `true`。
     #[must_use]
     pub fn contains(&self, point: Vec2) -> bool {
         if !self.rect.contains_point(point) {
@@ -63,25 +63,25 @@ impl ClipRect {
     }
 }
 
-/// Narrow-phase geometry of a hit region.
+/// 命中区域的精测几何形状。
 ///
-/// Every variant is evaluated in the **same space as the region's bounds**
-/// (the parent's coordinate space), so the vertices of a polygon, the control
-/// points of a Bézier and the point being tested are all directly
-/// comparable.
+/// 所有变体均在与**区域包围盒相同的空间**（父节点坐标系）中求值，
+/// 因此多边形顶点、贝塞尔控制点与待测点可直接在同一空间内比较。
+///
+///
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
-    /// Plain rectangle.
+    /// 普通矩形。
     Rect,
-    /// Rectangle with four per-corner radii (`TL, TR, BR, BL`).
+    /// 带四角独立圆角半径（`TL, TR, BR, BL`）的矩形。
     Rounded { radii: [f32; 4] },
-    /// Closed polygon, even-odd fill.
+    /// 闭合多边形，采用奇偶填充规则。
     ///
-    /// The vertices are in the same space as the region's `bounds`.
+    /// 顶点坐标与区域的 `bounds` 处于同一坐标系。
     Polygon(Vec<Vec2>),
-    /// A quadratic Bézier stroke: hit when the distance is within the width.
+    /// 二次贝塞尔描边：当距离小于线宽一半时判定命中。
     ///
-    /// The control points are in the same space as the region's `bounds`.
+    /// 控制点与区域的 `bounds` 处于同一坐标系。
     Bezier { quad: QuadSegment, half_width: f32 },
 }
 
@@ -100,28 +100,28 @@ impl Shape {
     }
 }
 
-/// One pickable surface.
+/// 单个可拾取表面区域。
 #[derive(Clone, Debug, PartialEq)]
 pub struct HitRegion {
-    /// Node identity. Must be unique: it is the final ordering tie-break.
+    /// 节点唯一标识，用作最终排序的平局决胜键。
     pub node: u64,
-    /// Overlay layer: `0` canvas, `1` UI, `2..=254` portals, `255` debug.
+    /// 覆盖层级：`0` 画布、`1` UI、`2..=254` Portal、`255` 调试层。
     pub layer: u8,
-    /// Topological order inside the layer; larger is on top.
+    /// 层内拓扑顺序；数值越大越靠上。
     pub z: u32,
     pub bounds: Rect,
     pub shape: Shape,
-    /// Clip inherited from ancestors, already intersected by the caller.
+    /// 从祖先继承的裁剪框，由调用方预先求交。
     pub clip: Option<ClipRect>,
-    /// When false the region is painted but transparent to input (`pointer-events:
-    /// none`), which is what lets a label inside a button be click-through.
+    /// 为 `false` 时该区域正常绘制但对输入透明（`pointer-events: none`），
+    /// 从而允许按钮内部的文本标签实现点击穿透。
     pub receive_events: bool,
-    /// Cursor this region asks for while hovered, if any.
+    /// 指针悬停在该区域上时请求的光标类型（若有）。
     pub cursor: Option<CursorKind>,
 }
 
 impl HitRegion {
-    /// Rectangular, event-receiving region.
+    /// 接收事件的矩形区域。
     #[must_use]
     pub fn new(node: u64, layer: u8, z: u32, bounds: Rect) -> Self {
         Self {
@@ -136,7 +136,7 @@ impl HitRegion {
         }
     }
 
-    /// Ask for a specific cursor while this region is hovered.
+    /// 设置指针悬停在该区域上时请求的光标。
     #[must_use]
     pub fn with_cursor(mut self, cursor: CursorKind) -> Self {
         self.cursor = Some(cursor);
@@ -161,15 +161,15 @@ impl HitRegion {
         self
     }
 
-    /// Broad + narrow phase for one point.
+    /// 对单个点执行粗筛 + 精测。
     #[must_use]
     pub fn hit(&self, point: Vec2) -> bool {
         if !self.receive_events {
             return false;
         }
         if !self.bounds.contains_point(point) {
-            // The Bézier case inflates by half the stroke width inside `Shape`;
-            // everything else can reject here.
+            // 贝塞尔曲线情形会在 `Shape` 内部按半线宽向外膨胀；
+            // 其余形状均可在此直接剔除。
             if !matches!(self.shape, Shape::Bezier { .. }) {
                 return false;
             }
@@ -182,18 +182,18 @@ impl HitRegion {
         self.shape.contains(self.bounds, point)
     }
 
-    /// Sort key: higher wins. Node id makes the order total.
+    /// 排序键：数值越大越优先。节点 ID 确保全序唯一。
     fn rank(&self) -> (u8, u32, u64) {
         (self.layer, self.z, self.node)
     }
 }
 
-/// Signed distance to a rounded rectangle; negative inside.
+/// 到圆角矩形的有向距离；内部为负值。
 ///
-/// The per-corner radius is picked from the quadrant of the sample, which is the
-/// same approximation the uber-shader uses for its two-slot corner mask: exact
-/// for uniform radii, and conservative (never larger than the true shape) for
-/// radii that differ between corners.
+/// 根据采样点所在象限选取对应圆角半径，这与超级着色器（uber-shader）
+/// 双槽位圆角掩码所用的近似一致：等半径时精确，不等半径时保守
+/// （绝不大于真实形状）。
+///
 #[must_use]
 pub fn rounded_rect_sdf(bounds: Rect, radii: [f32; 4], point: Vec2) -> f32 {
     let half = Vec2::new(bounds.size.x * 0.5, bounds.size.y * 0.5);
@@ -219,7 +219,7 @@ pub fn rounded_rect_sdf(bounds: Rect, radii: [f32; 4], point: Vec2) -> f32 {
     outside + inside - radius
 }
 
-/// Even-odd point-in-polygon.
+/// 奇偶规则点在多边形内判定。
 #[must_use]
 pub fn point_in_polygon(points: &[Vec2], point: Vec2) -> bool {
     if points.len() < 3 {
@@ -230,8 +230,8 @@ pub fn point_in_polygon(points: &[Vec2], point: Vec2) -> bool {
     for i in 0..points.len() {
         let a = points[i];
         let b = points[j];
-        // Cast a ray to +X; count crossings. The half-open comparison keeps
-        // vertices from being counted twice.
+        // 向 +X 方向发射射线并统计交点数；半开区间比较可避免顶点被重复计数。
+        //
         if (a.y > point.y) != (b.y > point.y) {
             let t = (point.y - a.y) / (b.y - a.y);
             if point.x < a.x + t * (b.x - a.x) {
@@ -243,7 +243,7 @@ pub fn point_in_polygon(points: &[Vec2], point: Vec2) -> bool {
     inside
 }
 
-/// Topmost region under `point`, or `None`.
+/// 返回 `point` 下方最顶层的命中区域，若无则返回 `None`。
 #[must_use]
 pub fn pick(regions: &[HitRegion], point: Vec2) -> Option<&HitRegion> {
     regions
@@ -252,7 +252,7 @@ pub fn pick(regions: &[HitRegion], point: Vec2) -> Option<&HitRegion> {
         .max_by_key(|region| region.rank())
 }
 
-/// Index of the topmost region under `point`.
+/// 返回 `point` 下方最顶层命中区域的索引。
 #[must_use]
 pub fn pick_index(regions: &[HitRegion], point: Vec2) -> Option<usize> {
     regions
@@ -263,11 +263,11 @@ pub fn pick_index(regions: &[HitRegion], point: Vec2) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
-/// Every region under `point`, topmost first.
+/// 返回 `point` 下方的所有命中区域，按从顶层到底层排序。
 ///
-/// This is the "pick path" the cursor stack consumes: the top entry decides the
-/// click target, the rest decides what the pointer *looks like* when the top
-/// entry is a pass-through or a resize handle.
+/// 即光标栈消费的“拾取路径”：首项决定点击目标，其余项决定当首项为
+/// 穿透区域或缩放手柄时指针应呈现的外观。
+///
 #[must_use]
 pub fn pick_stack(regions: &[HitRegion], point: Vec2) -> Vec<&HitRegion> {
     let mut hits: Vec<&HitRegion> = regions.iter().filter(|r| r.hit(point)).collect();
@@ -275,29 +275,29 @@ pub fn pick_stack(regions: &[HitRegion], point: Vec2) -> Vec<&HitRegion> {
     hits
 }
 
-/// A window edge or corner that starts a native resize drag.
+/// 触发原生窗口缩放拖拽的窗口边缘或角点。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ResizeEdge {
-    /// Top edge.
+    /// 上边缘。
     North,
-    /// Bottom edge.
+    /// 下边缘。
     South,
-    /// Left edge.
+    /// 左边缘。
     West,
-    /// Right edge.
+    /// 右边缘。
     East,
-    /// Top-left corner.
+    /// 左上角。
     NorthWest,
-    /// Top-right corner.
+    /// 右上角。
     NorthEast,
-    /// Bottom-left corner.
+    /// 左下角。
     SouthWest,
-    /// Bottom-right corner.
+    /// 右下角。
     SouthEast,
 }
 
 impl ResizeEdge {
-    /// The cursor that advertises this edge.
+    /// 指示该边缘方向的光标类型。
     #[must_use]
     pub fn cursor(self) -> CursorKind {
         match self {
@@ -309,11 +309,11 @@ impl ResizeEdge {
     }
 }
 
-/// The resize band under `point`, if any.
+/// 返回 `point` 下方的缩放边界带（若有）。
 ///
-/// `border` is the thickness of the straight edges and `corner` the square
-/// reach of the four diagonal handles; the corner test runs first so a point
-/// in both bands gets the two-axis cursor.
+/// `border` 为直边带宽，`corner` 为四个对角手柄的正方形触发范围；
+/// 先检测角点，使同时落入两处边界带的点获得双向对角光标。
+///
 #[must_use]
 pub fn resize_edge(point: Vec2, size: Vec2, border: f32, corner: f32) -> Option<ResizeEdge> {
     if size.x <= 0.0
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn an_asymmetric_radius_cuts_only_its_own_corner() {
         let bounds = rect(0.0, 0.0, 100.0, 100.0);
-        // Only the top-left corner is rounded.
+        // 仅左上角为圆角。
         let radii = [30.0, 0.0, 0.0, 0.0];
         assert!(rounded_rect_sdf(bounds, radii, Vec2::new(2.0, 2.0)) > 0.0);
         assert!(rounded_rect_sdf(bounds, radii, Vec2::new(98.0, 2.0)) < 0.0);
@@ -507,7 +507,7 @@ mod tests {
             quad,
             half_width: 4.0,
         });
-        // The curve's midpoint is (50, 50).
+        // 曲线中点位于 (50, 50)。
         assert!(region.hit(Vec2::new(50.0, 50.0)));
         assert!(!region.hit(Vec2::new(10.0, 90.0)));
     }

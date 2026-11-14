@@ -1,10 +1,10 @@
-//! Build-time AST and symbol coverage validator for `unbound-widgets`.
+//! `unbound-widgets` 的构建期 AST 与符号覆盖校验器。
 //!
-//! Enforces the four-fold compile-time gates:
-//! 1. No bare `pub mod` in `lib.rs` (must be declared in `define_widget_catalog!`).
-//! 2. Every `pub struct *Desc` must be covered in `catalog::emit_widget`.
-//! 3. Every `pub fn emit_*` must be called in `catalog::emit_widget`.
-//! 4. Every business component module must be re-exported in `lib.rs` via `pub use <mod>::`.
+//! 强制执行四项编译期门禁检查：
+//! 1. `lib.rs` 中禁止裸 `pub mod`（必须在 `define_widget_catalog!` 中声明）。
+//! 2. 每个 `pub struct *Desc` 都必须在 `catalog::emit_widget` 中覆盖。
+//! 3. 每个 `pub fn emit_*` 都必须在 `catalog::emit_widget` 中调用。
+//! 4. 每个业务组件模块都必须通过 `pub use <mod>::` 在 `lib.rs` 中重导出。
 
 use std::fs;
 use std::path::Path;
@@ -19,7 +19,7 @@ fn main() {
     let catalog_rs =
         fs::read_to_string(src_dir.join("catalog.rs")).expect("failed to read src/catalog.rs");
 
-    // Rule 1: No bare `pub mod` in `lib.rs` other than infrastructure modules
+    // 规则 1：`lib.rs` 中除基础设施模块外禁止裸 `pub mod`
     const ALLOWED_BARE_MODS: &[&str] = &["catalog", "diff", "primitive", "ergonomics"];
     for line in lib_rs.lines() {
         let trimmed = line.trim();
@@ -35,13 +35,13 @@ fn main() {
         }
     }
 
-    // Extract modules declared inside define_widget_catalog!
+    // 提取 `define_widget_catalog!` 内部声明的模块
     let catalog_macro_start = lib_rs
         .find("define_widget_catalog!")
         .expect("define_widget_catalog! not found");
     let catalog_macro_body = &lib_rs[catalog_macro_start..];
 
-    // Scan all files in src/*.rs
+    // 扫描 `src/*.rs` 下的所有文件
     let entries = fs::read_dir(&src_dir).expect("failed to read src dir");
     for entry in entries {
         let entry = entry.expect("failed to read dir entry");
@@ -62,14 +62,14 @@ fn main() {
 
         let mod_name = path.file_stem().unwrap().to_str().unwrap();
 
-        // Check module is inside define_widget_catalog!
+        // 检查模块是否在 `define_widget_catalog!` 中声明
         if !catalog_macro_body.contains(mod_name) {
             panic!(
                 "Compile error: module `{mod_name}` in `src/{file_name}` is not declared in `define_widget_catalog!` in src/lib.rs"
             );
         }
 
-        // Rule 4: Module must be re-exported in lib.rs
+        // 规则 4：模块必须在 `lib.rs` 中重导出
         let expected_pub_use = format!("pub use {}::", mod_name);
         if !lib_rs.contains(&expected_pub_use) {
             panic!(
@@ -80,7 +80,7 @@ fn main() {
         let content = fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
 
-        // Rule 2: Every pub struct *Desc must be in catalog.rs
+        // 规则 2：每个 `pub struct *Desc` 都必须在 `catalog.rs` 中出现
         for line in content.lines() {
             let trimmed = line.trim();
             if let Some(stripped) = trimmed.strip_prefix("pub struct ") {
@@ -97,7 +97,7 @@ fn main() {
             }
         }
 
-        // Rule 3: Every pub fn emit_* must be called in catalog.rs
+        // 规则 3：每个 `pub fn emit_*` 都必须在 `catalog.rs` 中调用
         for line in content.lines() {
             let trimmed = line.trim();
             if let Some(stripped) = trimmed.strip_prefix("pub fn emit_") {

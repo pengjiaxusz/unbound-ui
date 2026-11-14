@@ -1,13 +1,13 @@
 //! 全链路演示程序（`docs` §9）。
 //!
-//! `gallery` runs the CPU half of the engine end to end on a real scene —
-//! `UiWorld` → incremental Taffy layout → loose quadtree → hit testing →
-//! smart snapping → transactional undo → AccessKit semantics → the five
-//! headless sanitizers — and prints what each stage produced.
+//! `gallery` 在真实场景上端到端运行引擎的 CPU 侧流程——
+//! `UiWorld` → 增量 Taffy 布局 → 松散四叉树（loose quadtree）→ 命中测试 →
+//! 智能吸附 → 事务型撤销 → AccessKit 语义 → 五项无头校验器——并打印各阶段产出。
 //!
-//! It is a *demo and a smoke test at the same time*: every stage asserts its own
-//! invariants, so `cargo run -p gallery` failing is a real signal. Pass `--kpi`
-//! to also print the acceptance table from `docs` §10.2.
+//!
+//! 它同时是*演示与冒烟测试*：每个阶段都会断言自身的不变量，因此
+//! `cargo run -p gallery` 失败即代表真实回归。传入 `--kpi` 可额外打印 `docs` §10.2 中的验收表。
+//!
 //!
 //! ```text
 //! cargo run -p gallery
@@ -55,17 +55,17 @@ fn web_insert(world: &mut UiWorld, parent: NodeId, desc: RawNodeDesc) -> NodeId 
     world.insert(parent, desc, core::panic::Location::caller())
 }
 
-/// Absolute rectangle of a laid-out node.
+/// 已布局节点的绝对矩形。
 ///
-/// `LayoutEngine::rect` is parent-relative, like Taffy's; everything outside the
-/// layout engine (spatial index, hit testing, painting) works in world space.
+/// `LayoutEngine::rect` 与 Taffy 一样是相对父节点的；布局引擎之外的所有模块
+/// （空间索引、命中测试、绘制）均在世界空间中工作。
 fn world_rect(world: &UiWorld, id: NodeId) -> Rect {
     world.get(id).map_or(Rect::ZERO, |node| node.world_rect)
 }
 
-/// Measure the GPU frame time for a hundred thousand canvas nodes at target resolution.
+/// 测量目标分辨率下十万个画布节点的 GPU 帧耗时。
 ///
-/// Returns `None` when the machine has no usable Vulkan device.
+/// 当机器上没有可用的 Vulkan 设备时返回 `None`。
 fn measure_gpu(width: u32, height: u32) -> Option<(f32, u32, u32)> {
     const COUNT: u32 = 99_840;
     let gpu = Gpu::new(GpuConfig {
@@ -114,12 +114,11 @@ fn measure_gpu(width: u32, height: u32) -> Option<(f32, u32, u32)> {
         backdrops: &[],
     };
     renderer.enable_timing().ok()?;
-    // The first frame uploads the scene; the second is the steady state.
+    // 首帧上传场景；第二帧为稳态。
     renderer.render(&scene).ok()?;
     renderer.render(&scene).ok()?;
     let timing = renderer.read_frame_timing().ok()??;
-    // The counters are only final once the frame has retired, so the timing
-    // read is what fills the statistics in.
+    // 仅当帧已退役后计数器才最终确定，因此通过读取计时结果来填充统计信息。
     let stats = renderer.last_stats();
     renderer.destroy();
     Some((timing.total_ms, stats.draw_calls, stats.visible))
@@ -130,7 +129,7 @@ fn main() {
     let with_4k = std::env::args().any(|arg| arg == "--4k");
     let started = Instant::now();
 
-    // ---- 1. World -----------------------------------------------------------
+    // ---- 1. World（世界状态）------------------------------------------------
     let mut world = UiWorld::new();
     let root = world.root();
     let window = insert(
@@ -150,9 +149,9 @@ fn main() {
         desc.flex_shrink = 0.0;
         let button = insert(&mut world, toolbar, desc);
         world.set_text(button, label);
-        // The action target is a stable index into the button table, not the
-        // SlotMap key: the reducer must not depend on a key that a removal can
-        // invalidate.
+        // 动作目标是按钮表中的稳定索引，而非 SlotMap 键：
+        // reducer 不得依赖可能因移除而失效的键。
+        //
         world.bind_action(button, RawAction::new(ActionKind::Press, index as u32));
         buttons.push(button);
     }
@@ -165,8 +164,8 @@ fn main() {
     let mut rows = Vec::new();
     for index in 0..ROWS {
         let mut desc = RawNodeDesc::text().size(VIEWPORT.x, 32.0).row();
-        // A list row keeps its height and overflows the viewport instead of
-        // being squeezed to nothing by flexbox.
+        // 列表行保持自身高度并溢出视口，而非被 flexbox 压缩至零。
+        //
         desc.flex_shrink = 0.0;
         let row = insert(&mut world, list, desc);
         world.set_text(row, format!("row {index:03}"));
@@ -174,19 +173,19 @@ fn main() {
         rows.push(row);
     }
 
-    // ---- 2. Incremental layout ---------------------------------------------
+    // ---- 2. 增量布局 --------------------------------------------------------
     let mut engine = LayoutEngine::new();
     let layout_start = Instant::now();
     let stats = engine.solve(&mut world, root, VIEWPORT);
     let layout_us = layout_start.elapsed().as_secs_f64() * 1e6;
 
-    // A single row edit must re-solve one boundary, not the whole tree.
+    // 单行编辑只能重新求解一个边界，而不能重算整棵树。
     let boundary_start = Instant::now();
     let row = rows[ROWS / 2];
     engine.solve_boundaries(&mut world, &[row], VIEWPORT);
     let boundary_us = boundary_start.elapsed().as_secs_f64() * 1e6;
 
-    // ---- 3. Spatial index ---------------------------------------------------
+    // ---- 3. 空间索引 --------------------------------------------------------
     let mut tree = LooseQuadtree::new(65_536.0);
     for (index, row) in rows.iter().enumerate() {
         tree.insert(index as u32, world_rect(&world, *row), 0);
@@ -197,7 +196,7 @@ fn main() {
     tree.query_exact(viewport_rect, &mut visible);
     let cull_us = cull_start.elapsed().as_secs_f64() * 1e6;
 
-    // ---- 4. Picking ---------------------------------------------------------
+    // ---- 4. 拾取（Picking）--------------------------------------------------
     let mut regions: Vec<HitRegion> = visible
         .iter()
         .filter_map(|id| tree.bounds_of(*id).map(|rect| (*id, rect)))
@@ -221,14 +220,14 @@ fn main() {
         .and_then(|event| event.target());
     router.pointer_up(probe, 0.05);
 
-    // ---- 5. Snapping --------------------------------------------------------
+    // ---- 5. 吸附（Snapping）-------------------------------------------------
     let mut snapper = Snapper::new(SnapConfig::default());
     let dragging = world_rect(&world, rows[10]).translate(Vec2::new(3.0, 2.0));
     let snap = snapper.snap_against_tree(&mut tree, dragging, Some(10), viewport_rect, 1.0);
     let snap_offset = snap.offset;
     let guide_count = snap.guides.len();
 
-    // ---- 6. Marquee + handles ----------------------------------------------
+    // ---- 6. 框选与控制柄 ----------------------------------------------------
     let mut selection = Selection::new();
     let mut marquee = Marquee::new(Vec2::new(0.0, 100.0));
     marquee.drag_to(Vec2::new(VIEWPORT.x, 260.0));
@@ -248,7 +247,7 @@ fn main() {
         Modifiers::NONE,
     );
 
-    // ---- 7. Transactions ----------------------------------------------------
+    // ---- 7. 事务（Transactions）---------------------------------------------
     let mut undo = UndoStack::new(64);
     undo.begin(TransactionKind::Drag, "move 3 rows", 0.0);
     for index in 0..3 {
@@ -263,7 +262,7 @@ fn main() {
     let redo_label = undo.redo_label();
     undo.redo();
 
-    // ---- 8. Semantics -------------------------------------------------------
+    // ---- 8. 语义（Semantics）------------------------------------------------
     let mut semantics = Semantics::new(1);
     semantics.upsert(
         1,
@@ -288,7 +287,7 @@ fn main() {
     let initial_nodes = first_update.as_ref().map_or(0, |update| update.nodes.len());
     let second_update = semantics.take_update();
 
-    // ---- 9. Headless verification ------------------------------------------
+    // ---- 9. 无头校验 --------------------------------------------------------
     let mut frame = FrameBuilder::new(viewport_rect);
     frame.open(NodeKind::Container, viewport_rect, "Root");
     for button in &buttons {
@@ -312,8 +311,8 @@ fn main() {
     let frame = frame.build();
     let report = Harness::run(&frame);
 
-    // ---- 10. Theme switching ------------------------------------------------
-    // A theme switch is one 4 KiB write: no re-layout, no instance upload.
+    // ---- 10. 主题切换 -------------------------------------------------------
+    // 主题切换只需一次 4 KiB 写入：无需重新布局，也无需上传实例数据。
     let mut theme = ThemeState::default();
     let light_primary = theme.lut().color(unbound_theme::Token::PRIMARY);
     let switch = theme.switch(ThemeKind::Dark);
@@ -328,8 +327,8 @@ fn main() {
     );
     assert_ne!(light_primary.to_array(), dark_primary.to_array());
 
-    // ---- 11. Render graph ---------------------------------------------------
-    // The frosted-glass chain: copy the backdrop, blur it, composite it.
+    // ---- 11. 渲染图（Render graph）------------------------------------------
+    // 毛玻璃管线：拷贝背景、模糊处理、合成。
     let mut graph = RenderGraph::new();
     let swapchain = graph.add_texture(
         TextureDesc::new(1920, 1080, TextureFormat::Rgba16f),
@@ -357,7 +356,7 @@ fn main() {
     graph.add_pass("composite", PassKind::Composite, &[blurred], &[composed]);
     graph.add_pass("present", PassKind::Present, &[composed], &[swapchain]);
     let compiled = graph.compile().expect("the graph compiles");
-    // A steady-state frame must not allocate: the pool reuses the targets.
+    // 稳态帧不得发生分配：缓冲池复用渲染目标。
     let mut pool = OffscreenPool::new();
     let mut pool_creations = 0;
     for _ in 0..8 {
@@ -366,8 +365,8 @@ fn main() {
         pool_creations = pool.creation_count();
     }
 
-    // ---- 12. Asset streaming ------------------------------------------------
-    // The decode runs off the main thread; the frame never waits for it.
+    // ---- 12. 资源流式加载 ---------------------------------------------------
+    // 解码在主线程之外运行；渲染帧绝不等待它。
     let mut assets = AssetPipeline::new(PipelineConfig {
         workers: 2,
         slot_bytes: 1 << 20,
@@ -387,10 +386,10 @@ fn main() {
         .filter_map(|item| item.location.map(|reference| reference.size))
         .sum();
 
-    // ---- 13. Platform layer -------------------------------------------------
-    // The deferred mode absorbs a window-edge drag: the swapchain is not
-    // rebuilt for every message of the burst. The *default* mode is the
-    // real-time one, which follows the window size at once.
+    // ---- 13. 平台层 ---------------------------------------------------------
+    // 延迟模式会吸收窗口边缘拖拽：不会为突发消息流中的每条消息重建 swapchain。
+    // *默认*模式为实时模式，会立即跟随窗口尺寸变化。
+    //
     let mut resize = ResizeTracker::new(Extent::new(1280, 720), DEFERRED_SETTLE);
     let now = Instant::now();
     resize.on_drag_started();
@@ -400,16 +399,16 @@ fn main() {
     let recreations_during_drag = resize.recreations();
     resize.on_drag_ended();
 
-    // The input-to-photon budget is one frame at 120 Hz.
+    // 120 Hz 下的输入到光子（input-to-photon）预算为一帧。
     let mut latency = LatencyTracker::new();
     latency.on_input(now);
     latency.on_present(now + std::time::Duration::from_micros(3_000));
     let latency_us = latency.last().unwrap_or_default().as_secs_f64() * 1e6;
 
-    // ---- 14. GPU throughput -------------------------------------------------
-    // The acceptance table asks for 100 000 canvas nodes in 1.5 ms and at most
-    // four MDI draw calls. The measurement is skipped when the machine has no
-    // usable Vulkan device.
+    // ---- 14. GPU 吞吐量 -----------------------------------------------------
+    // 验收表要求 100 000 个画布节点在 1.5 ms 内完成，且 MDI 绘制调用不超过四次。
+    // 当机器上没有可用的 Vulkan 设备时跳过该项测量。
+    //
     let (gpu_w, gpu_h) = if with_4k { (3840, 2160) } else { (1920, 1080) };
     let gpu_line = measure_gpu(gpu_w, gpu_h);
     if let Some((millis, draw_calls, gpu_visible)) = gpu_line {
@@ -422,7 +421,7 @@ fn main() {
         assert!(gpu_visible > 99_000, "the cull dropped too many primitives");
     }
 
-    // ---- Report -------------------------------------------------------------
+    // ---- 报告 ----------------------------------------------------------------
     println!("Unbound UI — gallery");
     println!("====================");
     println!(

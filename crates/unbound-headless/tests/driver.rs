@@ -1,5 +1,5 @@
-//! The driver's own contract: pointer sequences, camera mapping, focus and
-//! sanitizer plumbing. Widget behaviour is tested by the widget's harness.
+//! 驱动器自身契约测试：指针序列、相机映射、焦点与检查器接入。
+//! 组件行为由组件各自的测试夹具负责验证。
 
 use accesskit::Role;
 use unbound_a11y::{A11yNode, Semantics};
@@ -16,14 +16,14 @@ fn target_region() -> HitRegion {
     HitRegion::new(7, 1, 0, target_rect())
 }
 
-/// The semantic tree that matches [`target_region`].
+/// 与 [`target_region`] 匹配的语义树。
 fn target_semantics() -> Semantics {
     let mut semantics = Semantics::new(DEFAULT_ROOT);
     semantics.upsert(7, A11yNode::new(Role::Button, "target", target_rect()));
     semantics
 }
 
-/// A session with one 200 × 40 target at `(100, 100)`.
+/// 包含单个位于 `(100, 100)`、尺寸 `200 × 40` 目标的会话。
 fn app_with_target() -> TestApp {
     let mut app = TestApp::new((1280.0, 720.0));
     app.install(vec![target_region()], target_semantics());
@@ -110,8 +110,8 @@ fn installing_a_scene_preserves_focus_and_bumps_the_generation() {
     assert_eq!(app.semantics.focus(), 7);
     assert_eq!(app.generation(), 2);
 
-    // A node that disappears from the scene must not keep focus: the semantic
-    // tree would otherwise point at an id that no longer exists.
+    // 从场景中消失的节点不得继续保留焦点：否则语义树将指向已不存在的 ID。
+    //
     app.install(Vec::new(), Semantics::new(DEFAULT_ROOT));
     assert_eq!(app.focused_key(), None);
     assert_eq!(app.semantics.focus(), DEFAULT_ROOT);
@@ -220,8 +220,8 @@ fn a_release_just_outside_the_target_is_not_a_click() {
     app.move_to(Vec2::new(101.0, 120.0));
     assert_eq!(app.pointer_down(), Some(7));
 
-    // Two pixels out: below the three-pixel drag slop, so only the release
-    // position can tell that this is not a click.
+    // 偏移两像素：低于三像素的拖拽阈值，因此只有释放位置能判断这并非一次点击。
+    //
     app.move_to(Vec2::new(99.0, 120.0));
     let events = app.pointer_up();
     assert!(

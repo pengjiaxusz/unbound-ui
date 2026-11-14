@@ -1,53 +1,53 @@
-//! Asset identity and the transfer hand-off (`docs` §8.2).
+//! 资产标识与传输交接（`docs` §8.2）。
 //!
-//! The pipeline has three stages, and this module describes the boundary
-//! between the last two:
+//! 管线包含三个阶段，本模块描述最后两个阶段之间的边界：
+//!
 //!
 //! ```text
 //! decode worker ──> CPU staging slot ──> transfer queue ──> GPU memory
 //!                       (this module)      (ownership transfer + timeline)
 //! ```
 
-/// A stable identifier for an asset.
+/// 资产的稳定标识符。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AssetId(pub u32);
 
 impl AssetId {
-    /// The raw identifier.
+    /// 原始标识符值。
     #[must_use]
     pub const fn raw(self) -> u32 {
         self.0
     }
 }
 
-/// What kind of payload an asset carries.
+/// 资产携带的载荷类型。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AssetKind {
-    /// A decoded image, stored as RGBA8.
+    /// 已解码图像，以 RGBA8 格式存储。
     Image,
-    /// A decoded vector scene.
+    /// 已解码矢量场景。
     Vector,
-    /// A parsed font.
+    /// 已解析字体。
     Font,
-    /// Opaque bytes the application interprets itself.
+    /// 由应用自行解释的不透明字节流。
     Raw,
 }
 
-/// The outcome of decoding an asset.
+/// 资产解码结果。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecodedAsset {
-    /// The kind of the asset.
+    /// 资产类型。
     pub kind: AssetKind,
-    /// The decoded payload.
+    /// 解码后的载荷数据。
     pub bytes: Vec<u8>,
-    /// Pixel width, for images.
+    /// 图像宽度（像素）。
     pub width: u32,
-    /// Pixel height, for images.
+    /// 图像高度（像素）。
     pub height: u32,
 }
 
 impl DecodedAsset {
-    /// A raw payload with no dimensions.
+    /// 构造无尺寸信息的原始载荷。
     #[must_use]
     pub fn raw(bytes: Vec<u8>) -> Self {
         Self {
@@ -59,16 +59,16 @@ impl DecodedAsset {
     }
 }
 
-/// Errors raised by the asset pipeline.
+/// 资产管线抛出的错误。
 #[derive(Clone, Debug, PartialEq)]
 pub enum AssetError {
-    /// The request queue is full; the caller must retry later.
+    /// 请求队列已满；调用方需稍后重试。
     QueueFull,
-    /// The payload could not be decoded.
+    /// 载荷解码失败。
     Decode(String),
-    /// The staging ring had no room.
+    /// 暂存环空间不足。
     Staging(crate::ring::StagingError),
-    /// The worker thread died.
+    /// 工作线程已退出。
     WorkerGone,
 }
 
@@ -85,82 +85,82 @@ impl core::fmt::Display for AssetError {
 
 impl std::error::Error for AssetError {}
 
-/// A Vulkan queue family index.
+/// Vulkan 队列族索引。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct QueueFamily(pub u32);
 
-/// The image layouts the transfer path uses.
+/// 传输路径使用的图像布局。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ImageLayout {
-    /// The layout of a freshly created image.
+    /// 新创建图像的初始布局。
     Undefined,
-    /// The source of a copy.
+    /// 拷贝源布局。
     TransferSrc,
-    /// The destination of a copy.
+    /// 拷贝目标布局。
     TransferDst,
-    /// Sampled by a shader.
+    /// 着色器采样布局。
     ShaderReadOnly,
 }
 
-/// The barrier that hands a staged asset over to the graphics queue.
+/// 将已暂存资产移交至图形队列的内存屏障。
 ///
-/// The numbers are the Vulkan stage/access bit values; they are spelled out
-/// here so that the crate stays free of a Vulkan dependency while the
-/// semantics stay checkable.
+/// 数值为 Vulkan 阶段/访问位掩码；在此显式写出是为了让本 crate
+/// 在不引入 Vulkan 依赖的同时保持语义可校验。
+///
 pub mod bits {
-    /// `VK_PIPELINE_STAGE_TRANSFER_BIT`.
+    /// Vulkan 管线阶段：`VK_PIPELINE_STAGE_TRANSFER_BIT`。
     pub const TRANSFER: u32 = 0x0000_1000;
-    /// `VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT`.
+    /// Vulkan 管线阶段：`VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT`。
     pub const FRAGMENT_SHADER: u32 = 0x0080_0000;
-    /// `VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT`.
+    /// Vulkan 管线阶段：`VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT`。
     pub const COMPUTE_SHADER: u32 = 0x0000_8000;
-    /// `VK_ACCESS_TRANSFER_WRITE_BIT`.
+    /// Vulkan 访问掩码：`VK_ACCESS_TRANSFER_WRITE_BIT`。
     pub const TRANSFER_WRITE: u32 = 0x0000_0800;
-    /// `VK_ACCESS_SHADER_READ_BIT`.
+    /// Vulkan 访问掩码：`VK_ACCESS_SHADER_READ_BIT`。
     pub const SHADER_READ: u32 = 0x0020_0000;
 }
 
-/// A queue-family ownership transfer.
+/// 队列族所有权转移描述。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct OwnershipTransfer {
-    /// The queue family that owns the memory during the copy.
+    /// 拷贝期间持有内存所有权的队列族。
     pub from: QueueFamily,
-    /// The queue family that owns the memory afterwards.
+    /// 拷贝完成后接管内存所有权的队列族。
     pub to: QueueFamily,
-    /// The old image layout.
+    /// 旧图像布局。
     pub old_layout: ImageLayout,
-    /// The new image layout.
+    /// 新图像布局。
     pub new_layout: ImageLayout,
-    /// The timeline value at which the transfer is complete.
+    /// 传输完成时对应的时间线信号量值。
     pub timeline_value: u64,
 }
 
-/// The barrier description for an ownership transfer.
+/// 所有权转移对应的屏障描述。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct TransferBarrier {
-    /// Source pipeline stage.
+    /// 源管线阶段。
     pub src_stage: u32,
-    /// Destination pipeline stage.
+    /// 目标管线阶段。
     pub dst_stage: u32,
-    /// Source access mask.
+    /// 源访问掩码。
     pub src_access: u32,
-    /// Destination access mask.
+    /// 目标访问掩码。
     pub dst_access: u32,
-    /// The queue family that releases the memory.
+    /// 释放内存所有权的队列族。
     pub src_family: QueueFamily,
-    /// The queue family that acquires the memory.
+    /// 获取内存所有权的队列族。
     pub dst_family: QueueFamily,
-    /// The old layout.
+    /// 旧布局。
     pub old_layout: ImageLayout,
-    /// The new layout.
+    /// 新布局。
     pub new_layout: ImageLayout,
 }
 
-/// Build the barrier for an ownership transfer.
+/// 构建所有权转移屏障。
 ///
-/// The staging buffer is written by the transfer queue and read by the
-/// graphics queue, so the barrier must be a *release* on the transfer side
-/// and an *acquire* on the graphics side.
+/// 暂存缓冲区由传输队列写入、由图形队列读取，
+/// 因此屏障必须在传输侧执行*释放（release）*，在图形侧执行*获取（acquire）*。
+///
 #[must_use]
 pub fn ownership_barrier(transfer: &OwnershipTransfer) -> TransferBarrier {
     TransferBarrier {
@@ -175,11 +175,11 @@ pub fn ownership_barrier(transfer: &OwnershipTransfer) -> TransferBarrier {
     }
 }
 
-/// A timeline semaphore gate.
+/// 时间线信号量门控。
 ///
-/// The transfer queue signals a value when the DMA has finished; the graphics
-/// queue waits for that value before it touches the memory. A wrong value is
-/// a use-after-free in waiting to happen, so the gate is explicit.
+/// 传输队列在 DMA 完成后触发信号量值；图形队列在访问内存前等待该值。
+/// 错误的值会导致潜在的释放后使用（use-after-free），因此门控逻辑需显式建模。
+///
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct TimelineGate {
     value: u64,
@@ -192,68 +192,68 @@ impl Default for TimelineGate {
 }
 
 impl TimelineGate {
-    /// A gate that has signalled nothing yet.
+    /// 创建一个尚未触发任何信号的门控。
     #[must_use]
     pub const fn new() -> Self {
         Self { value: 0 }
     }
 
-    /// The next value to signal.
+    /// 下一个待触发的信号量值。
     #[must_use]
     pub fn next_value(&self) -> u64 {
         self.value + 1
     }
 
-    /// Signal that the transfer for `value` has completed.
+    /// 标记 `value` 对应的传输已完成。
     pub fn signal(&mut self, value: u64) {
-        // Signals never go backwards: a late worker must not un-complete a
-        // transfer that already finished.
+        // 信号量值永不倒退：迟到的工作线程不能撤销已完成的传输。
+        //
         if value > self.value {
             self.value = value;
         }
     }
 
-    /// The highest signalled value.
+    /// 当前已触发的最高信号量值。
     #[must_use]
     pub const fn signalled(&self) -> u64 {
         self.value
     }
 
-    /// True when the transfer for `value` has completed.
+    /// 当 `value` 对应的传输已完成时返回 true。
     #[must_use]
     pub const fn is_ready(&self, value: u64) -> bool {
         self.value >= value
     }
 }
 
-/// The state of an asset in the pipeline.
+/// 资产在管线中的状态。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AssetStatus {
-    /// Still being fetched or decoded.
+    /// 仍在获取或解码中。
     Pending,
-    /// Decoded and staged, waiting for the transfer queue.
+    /// 已解码并暂存，等待传输队列。
     Staged,
-    /// Transferred and usable by the renderer.
+    /// 已传输完成，可供渲染器使用。
     Ready,
-    /// The decode failed.
+    /// 解码失败。
     Failed,
 }
 
-/// What the renderer should draw for an asset.
+/// 渲染器应对资产采取的绘制策略。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Placeholder {
-    /// Draw the real asset.
+    /// 绘制真实资产。
     Real,
-    /// Draw a low-resolution stand-in (a blurred or tinted rectangle).
+    /// 绘制低分辨率替身（模糊或着色矩形）。
     LowResolution,
-    /// Draw a skeleton (an outline or a loading bar).
+    /// 绘制骨架屏（轮廓或加载条）。
     Skeleton,
 }
 
-/// Choose what to draw for an asset that is not ready yet.
+/// 为尚未就绪的资产选择绘制策略。
 ///
-/// The rule from the design document: never block the frame. A pending asset
-/// gets a placeholder; only a *ready* asset is drawn for real.
+/// 设计文档规则：绝不阻塞帧。未就绪的资产使用占位符；只有*已就绪*的资产才按真实内容绘制。
+///
 #[must_use]
 pub const fn placeholder_for(status: AssetStatus) -> Placeholder {
     match status {
@@ -294,7 +294,7 @@ mod tests {
         assert!(gate.is_ready(2));
         assert!(gate.is_ready(3));
         assert!(!gate.is_ready(4));
-        // A late worker must not un-complete a transfer.
+        // 迟到的工作线程不能撤销已完成的传输。
         gate.signal(1);
         assert_eq!(gate.signalled(), 3);
     }

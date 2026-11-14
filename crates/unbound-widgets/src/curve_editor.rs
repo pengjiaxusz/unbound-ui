@@ -1,14 +1,11 @@
-//! Bezier curve and gradient ramp editors.
+//! 贝塞尔曲线与渐变色带编辑器（CurveEditor / GradientRampEditor）。
 //!
-//! Both editors share one idea: a normalized value in `0..=1` mapped onto a
-//! screen track. The curve editor stores the two control points of a cubic
-//! `(0,0) - p1 - p2 - (1,1)` easing curve; the gradient editor stores sorted
-//! colour stops.
+//! 两者共享同一核心思路：将 `0..=1` 归一化值映射到屏幕轨道上。
+//! 曲线编辑器存储三次缓动曲线 `(0,0) - p1 - p2 - (1,1)` 的两个控制点；
+//! 渐变编辑器存储按偏移排序的色标。
 //!
-//! The curve is painted as a dotted polyline. That is a deliberate choice over
-//! a stroked path primitive: a dotted curve needs no transform table and no
-//! tessellation buffer, so the editor stays a pure emitter while looking
-//! unmistakably like a curve.
+//! 曲线绘制为点状折线。这是刻意为之的设计，而非使用描边路径图元：
+//! 点状曲线无需变换表和曲面细分缓冲区，使编辑器保持纯发射器特性，同时视觉上依然清晰可辨。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -21,39 +18,39 @@ use crate::primitive::{focus_ring, instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// The inner padding of both editors.
+/// 两个编辑器的内边距。
 pub const CURVE_PADDING: f32 = 18.0;
-/// How many dots approximate the curve.
+/// 用于逼近曲线的采样点数。
 pub const CURVE_DOTS: usize = 40;
-/// The radius of a control point handle.
+/// 控制点手柄半径。
 pub const CURVE_HANDLE: f32 = 5.0;
-/// The gradient stop square.
+/// 渐变色标正方形边长。
 pub const STOP_SIZE: f32 = 12.0;
 
-/// Which control point a gesture targets.
+/// 手势操作的目标控制点。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CurveHandle {
-    /// The first control point.
+    /// 第一个控制点。
     P1,
-    /// The second control point.
+    /// 第二个控制点。
     P2,
 }
 
-/// The pure descriptor of a curve editor.
+/// 曲线编辑器的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurveEditorDesc {
-    /// The editor rectangle.
+    /// 编辑器矩形。
     pub rect: Rect,
-    /// The inset used by the normalized frame.
+    /// 归一化坐标系框使用的内边距。
     pub padding: f32,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl CurveEditorDesc {
-    /// An editor with the default padding.
+    /// 使用默认内边距创建曲线编辑器。
     #[must_use]
     pub fn new(rect: Rect) -> Self {
         Self {
@@ -64,13 +61,13 @@ impl CurveEditorDesc {
         }
     }
 
-    /// The drawable frame.
+    /// 可绘制区域框架。
     #[must_use]
     pub fn frame(&self) -> Rect {
         self.rect.inflate(-self.padding)
     }
 
-    /// Map a normalized point into screen space.
+    /// 将归一化点映射到屏幕空间。
     #[must_use]
     pub fn to_screen(&self, point: Vec2) -> Vec2 {
         let frame = self.frame();
@@ -80,7 +77,7 @@ impl CurveEditorDesc {
         )
     }
 
-    /// Map a screen position into normalized space, clamped to `0..=1` on x.
+    /// 将屏幕坐标映射到归一化空间，x 轴限制在 `0..=1`。
     #[must_use]
     pub fn from_screen(&self, position: Vec2) -> Vec2 {
         let frame = self.frame();
@@ -98,7 +95,7 @@ impl CurveEditorDesc {
     }
 }
 
-/// The live state of a curve editor.
+/// 曲线编辑器的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurveEditorState {
     p1: Vec2,
@@ -107,7 +104,7 @@ pub struct CurveEditorState {
 }
 
 impl CurveEditorState {
-    /// The standard `ease` curve.
+    /// 标准 `ease` 缓动曲线。
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -117,7 +114,7 @@ impl CurveEditorState {
         }
     }
 
-    /// A curve with explicit control points.
+    /// 使用显式控制点创建曲线。
     #[must_use]
     pub fn with_points(p1: Vec2, p2: Vec2) -> Self {
         Self {
@@ -127,25 +124,25 @@ impl CurveEditorState {
         }
     }
 
-    /// The first control point.
+    /// 第一个控制点。
     #[must_use]
     pub fn p1(&self) -> Vec2 {
         self.p1
     }
 
-    /// The second control point.
+    /// 第二个控制点。
     #[must_use]
     pub fn p2(&self) -> Vec2 {
         self.p2
     }
 
-    /// The handle being dragged.
+    /// 当前正在拖拽的手柄。
     #[must_use]
     pub fn active(&self) -> Option<CurveHandle> {
         self.active
     }
 
-    /// The value of the curve at time `t`.
+    /// 曲线在时间 `t` 处的值。
     #[must_use]
     pub fn sample(&self, t: f32) -> Vec2 {
         let t = t.clamp(0.0, 1.0);
@@ -159,21 +156,21 @@ impl CurveEditorState {
         )
     }
 
-    /// The `y` value at time `t`.
+    /// 时间 `t` 处的 `y` 值。
     #[must_use]
     pub fn ease(&self, t: f32) -> f32 {
         self.sample(t).y
     }
 
-    /// Begin dragging a handle.
+    /// 开始拖拽手柄。
     pub fn begin(&mut self, handle: CurveHandle) {
         self.active = Some(handle);
     }
 
-    /// Drag the active handle to a normalized point.
+    /// 将当前手柄拖拽至归一化坐标点。
     ///
-    /// The `x` coordinate is clamped to `0..=1` because a cubic-bezier easing
-    /// must stay a function of time; `y` is free so overshoot is expressible.
+    /// `x` 坐标限制在 `0..=1` 内以保证三次贝塞尔缓动仍是时间的单值函数；
+    /// `y` 坐标不受限制以支持过冲效果。
     pub fn drag_to(&mut self, point: Vec2) -> bool {
         let Some(handle) = self.active else {
             return false;
@@ -188,12 +185,12 @@ impl CurveEditorState {
         changed
     }
 
-    /// Finish the gesture.
+    /// 结束手势拖拽。
     pub fn end(&mut self) {
         self.active = None;
     }
 
-    /// The CSS `cubic-bezier(...)` representation.
+    /// CSS `cubic-bezier(...)` 字符串表示。
     #[must_use]
     pub fn css(&self) -> String {
         format!(
@@ -209,16 +206,16 @@ impl Default for CurveEditorState {
     }
 }
 
-/// One colour stop.
+/// 单个渐变色标。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GradientStop {
-    /// Position in `0..=1`.
+    /// 位于 `0..=1` 的位置。
     pub offset: f32,
-    /// The colour at this position.
+    /// 该位置的颜色。
     pub color: Color,
 }
 
-/// The live state of a gradient ramp.
+/// 渐变色带的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct GradientEditorState {
     stops: Vec<GradientStop>,
@@ -226,7 +223,7 @@ pub struct GradientEditorState {
 }
 
 impl GradientEditorState {
-    /// A black to white ramp.
+    /// 创建黑到白的基础渐变色带。
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -244,19 +241,19 @@ impl GradientEditorState {
         }
     }
 
-    /// The stops, sorted by offset.
+    /// 按偏移量排序的色标列表。
     #[must_use]
     pub fn stops(&self) -> &[GradientStop] {
         &self.stops
     }
 
-    /// The stop being dragged.
+    /// 当前正在拖拽的色标索引。
     #[must_use]
     pub fn active(&self) -> Option<usize> {
         self.active
     }
 
-    /// Add a stop, returning its index in the sorted list.
+    /// 添加色标，返回其在排序列表中的索引。
     pub fn add_stop(&mut self, stop: GradientStop) -> usize {
         let offset = stop.offset.clamp(0.0, 1.0);
         let index = self
@@ -268,7 +265,7 @@ impl GradientEditorState {
         index
     }
 
-    /// Remove a stop. A ramp always keeps at least two stops.
+    /// 移除色标。色带至少保留两个色标。
     pub fn remove_stop(&mut self, index: usize) -> bool {
         if self.stops.len() <= 2 || index >= self.stops.len() {
             return false;
@@ -278,7 +275,7 @@ impl GradientEditorState {
         true
     }
 
-    /// Begin dragging a stop.
+    /// 开始拖拽指定色标。
     pub fn begin(&mut self, index: usize) -> bool {
         if index >= self.stops.len() {
             return false;
@@ -287,10 +284,10 @@ impl GradientEditorState {
         true
     }
 
-    /// Drag the active stop to `offset`.
+    /// 将当前色标拖拽至 `offset`。
     ///
-    /// The move is clamped between its neighbours so the list stays sorted,
-    /// which keeps [`Self::color_at`] a simple linear scan.
+    /// 移动范围限制在相邻色标之间以维持列表有序，
+    /// 从而使 [`Self::color_at`] 只需执行简单的线性扫描。
     pub fn drag_to(&mut self, offset: f32) -> bool {
         let Some(index) = self.active else {
             return false;
@@ -311,12 +308,12 @@ impl GradientEditorState {
         changed
     }
 
-    /// Finish the gesture.
+    /// 结束手势拖拽。
     pub fn end(&mut self) {
         self.active = None;
     }
 
-    /// The interpolated colour at `offset`, in Oklab.
+    /// 在 Oklab 空间中插值计算 `offset` 处的颜色。
     #[must_use]
     pub fn color_at(&self, offset: f32) -> Color {
         let offset = offset.clamp(0.0, 1.0);
@@ -346,7 +343,7 @@ impl Default for GradientEditorState {
     }
 }
 
-/// Emit the curve editor.
+/// 发射曲线编辑器。
 #[must_use]
 pub fn emit_curve_editor(
     node: u64,
@@ -405,7 +402,7 @@ pub fn emit_curve_editor(
         ));
     }
 
-    // The two tangent legs, dotted so no transform is needed.
+    // 两条切线辅助杆以点状绘制，因此无需变换矩阵。
     for (from, to) in [(Vec2::ZERO, state.p1), (Vec2::new(1.0, 1.0), state.p2)] {
         for step in 0..=8 {
             let t = step as f32 / 8.0;
@@ -474,7 +471,7 @@ pub fn emit_curve_editor(
     }
 }
 
-/// Emit the gradient ramp editor.
+/// 发射渐变色带编辑器。
 #[must_use]
 pub fn emit_gradient_editor(
     node: u64,
@@ -491,8 +488,7 @@ pub fn emit_gradient_editor(
         12.0,
     );
     primitives.push(surface(rect, 6.0, Token::SURFACE_SUNKEN, z));
-    // Checkerboard under the track, so alpha is legible once the caller
-    // layers the real ramp on top.
+    // 滑轨下方的棋盘格底纹，确保调用方叠加真实渐变后透明度依然清晰可辨。
     for index in 0..8u16 {
         let cell = track.size.x / 8.0;
         let x = track.origin.x + f32::from(index) * cell;

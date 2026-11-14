@@ -1,4 +1,4 @@
-//! The radio button: a circle with a dot in the middle.
+//! 单选按钮：中心带圆点的圆形控件。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -11,41 +11,41 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// The default circle size.
+/// 默认圆圈尺寸。
 pub const RADIO_SIZE: f32 = 18.0;
 
-/// The gap between the circle and the label.
+/// 圆圈与标签之间的间距。
 pub const RADIO_GAP: f32 = 28.0;
 
-/// The colour slots a radio button paints with.
+/// 单选按钮绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RadioTokens {
-    /// The circle.
+    /// 外圆背景。
     pub circle: Token,
-    /// The border of an unselected circle.
+    /// 未选中圆圈的边框。
     pub border: Token,
-    /// The border of a selected circle.
+    /// 已选中圆圈的边框。
     pub border_selected: Token,
-    /// The dot.
+    /// 中心圆点。
     pub dot: Token,
-    /// The circle of a disabled button.
+    /// 禁用状态下的圆圈。
     pub circle_disabled: Token,
-    /// The border of a disabled circle.
+    /// 禁用状态下的圆圈边框。
     pub border_disabled: Token,
-    /// The dot of a disabled, selected button.
+    /// 禁用且选中状态下的中心圆点。
     pub dot_disabled: Token,
-    /// The label while idle.
+    /// 空闲状态的标签。
     pub label: Token,
-    /// The label while hovered.
+    /// 悬停状态的标签。
     pub label_hover: Token,
-    /// The label of a disabled button.
+    /// 禁用状态的标签。
     pub label_disabled: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环。
     pub focus_ring: Token,
 }
 
 impl RadioTokens {
-    /// The standard set.
+    /// 标准配色集。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -64,25 +64,25 @@ impl RadioTokens {
     }
 }
 
-/// The pure data descriptor of a radio button.
+/// 单选按钮的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct RadioDesc {
-    /// The row the radio button occupies.
+    /// 单选按钮占用的行矩形。
     pub rect: Rect,
-    /// The accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Whether this option is the selected one.
+    /// 该选项是否处于选中状态。
     pub selected: bool,
-    /// The circle size.
+    /// 圆圈尺寸。
     pub size: f32,
-    /// The distance between the circle and the label.
+    /// 圆圈与标签之间的距离。
     pub gap: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl RadioDesc {
-    /// A radio button with the default metrics.
+    /// 使用默认尺寸创建的单选按钮。
     #[must_use]
     pub fn new(rect: Rect, label: impl Into<String>) -> Self {
         Self {
@@ -95,14 +95,14 @@ impl RadioDesc {
         }
     }
 
-    /// The same radio button in the other position.
+    /// 更改所在矩形。
     #[must_use]
     pub fn with_selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
     }
 
-    /// The circle rectangle: left-aligned, vertically centred in the row.
+    /// 圆圈矩形：左对齐并在行内垂直居中。
     #[must_use]
     pub fn circle_rect(&self) -> Rect {
         Rect::new(
@@ -113,7 +113,7 @@ impl RadioDesc {
         )
     }
 
-    /// The label rectangle.
+    /// 标签矩形。
     #[must_use]
     pub fn label_rect(&self) -> Rect {
         Rect::new(
@@ -125,57 +125,54 @@ impl RadioDesc {
     }
 }
 
-/// A key a radio group understands.
+/// 单选按钮组可识别的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RadioGroupKey {
-    /// Move to the previous option.
+    /// 移动到上一个选项。
     Up,
-    /// Move to the next option.
+    /// 移动到下一个选项。
     Down,
-    /// Move to the previous option.
+    /// 移动到上一个选项。
     Left,
-    /// Move to the next option.
+    /// 移动到下一个选项。
     Right,
 }
 
-/// A radio group: the options plus the roving selection index.
+/// 单选按钮组：选项列表及游走焦点索引。
 ///
-/// The group is the *only* owner of the selection. A radio button never holds
-/// focus by itself: exactly one option — the selected one — enters the tab
-/// order, and the arrow keys move both the selection and the roving tab stop.
+/// 组是选中状态的*唯一*拥有者。单个单选按钮本身不持有焦点：
+/// 恰有一个选项（当前选中项）进入 Tab 顺序，方向键同时移动选中项与游走焦点。
 #[derive(Clone, Debug, PartialEq)]
 pub struct RadioGroupDesc {
-    /// The options, in visual order.
+    /// 按视觉顺序排列的选项列表。
     pub items: Vec<RadioDesc>,
-    /// The selected option, if any.
+    /// 当前选中的选项（若有）。
     pub selected: Option<usize>,
 }
 
 impl RadioGroupDesc {
-    /// A group over `items`, taking their current selection.
+    /// 基于 `items` 及各自当前选中状态构建单选组。
     #[must_use]
     pub fn new(items: Vec<RadioDesc>) -> Self {
         let selected = items.iter().position(|item| item.selected);
         Self { items, selected }
     }
 
-    /// The number of options.
+    /// 选项数量。
     #[must_use]
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
-    /// Whether the group has no options.
+    /// 组内是否没有选项。
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
 
-    /// The roving tab stop: the selected option, or the first one when the
-    /// group has never been selected.
+    /// 游走 Tab 停靠点：当前选中项；若尚未选中任何项，则为第一项。
     ///
-    /// Radio buttons do not all take part in the tab order — Tab enters the
-    /// group once and the arrow keys move inside it.
+    /// 并非所有单选按钮都参与 Tab 顺序——Tab 进入组一次，组内通过方向键移动。
     #[must_use]
     pub fn focus_order(&self) -> Vec<usize> {
         if self.items.is_empty() {
@@ -185,19 +182,18 @@ impl RadioGroupDesc {
     }
 }
 
-/// What one reduction produced.
+/// 单次状态归约的输出结果。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RadioGroupOutcome {
-    /// The selection after the key.
+    /// 按键后的选中索引。
     pub selected: Option<usize>,
-    /// Whether the selection moved.
+    /// 选中项是否发生了变化。
     pub changed: bool,
 }
 
-/// Evolve a radio group for one arrow key, wrapping at both ends.
+/// 响应方向键推进单选组状态，到达两端时循环回绕。
 ///
-/// Up and Left select the previous option, Down and Right the next one. When
-/// nothing is selected yet, the first key selects the first option.
+/// 上/左键选择上一项，下/右键选择下一项；若当前未选中任何项，则首次按键选中第一项。
 pub fn reduce_radio_group(group: &mut RadioGroupDesc, key: RadioGroupKey) -> RadioGroupOutcome {
     let len = group.items.len();
     if len == 0 {
@@ -224,7 +220,7 @@ pub fn reduce_radio_group(group: &mut RadioGroupDesc, key: RadioGroupKey) -> Rad
     }
 }
 
-/// Emit the radio button: circle, dot, label and the focus ring.
+/// 输出单选按钮：外圆、内点、标签与焦点环。
 #[must_use]
 pub fn emit_radio(
     node: u64,
@@ -258,7 +254,7 @@ pub fn emit_radio(
         z,
     ));
 
-    // The dot: a smaller circle in the middle.
+    // 中心圆点：居中的较小圆形。
     if desc.selected {
         primitives.push(surface(
             circle.inflate(-5.0),
@@ -281,8 +277,8 @@ pub fn emit_radio(
     };
     glyphs(label, label_color, z, &mut primitives, &mut payloads);
 
-    // The ring is always emitted: focus changes its opacity, not the
-    // pool's shape, so focus is a paint change and never a re-upload.
+    // 焦点环始终输出：焦点变化仅改变其不透明度而非图元池结构，因此聚焦只是绘制变更而非重传。
+    //
     primitives.push(focus_ring(
         circle.inflate(3.0),
         desc.size * 0.5 + 3.0,
@@ -330,8 +326,8 @@ mod tests {
             output.primitives[0].border_token_or_tex,
             tokens.border.raw() as u32
         );
-        // The circle and its focus ring — the ring is always emitted, and
-        // opaque only when the control has focus.
+        // 圆圈及其焦点环——焦点环始终输出，仅在控件聚焦时不透明。
+        //
         assert_eq!(output.primitives.len(), 2);
         assert!(
             output
@@ -356,7 +352,7 @@ mod tests {
             output.primitives[0].border_token_or_tex,
             tokens.border_selected.raw() as u32
         );
-        // The circle, the dot and the focus ring.
+        // 圆圈、圆点与焦点环。
         assert_eq!(output.primitives.len(), 3);
         assert_eq!(
             output.primitives[1].fill_token_or_uv,

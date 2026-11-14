@@ -1,23 +1,23 @@
-//! The three orthogonal zoom layers (`docs` §4.5).
+//! 三个正交的缩放层级（`docs` §4.5）。
 //!
-//! Mixing zoom factors is the classic source of "the text is blurry but the
-//! panel is crisp" bugs. The design keeps the three layers strictly separate:
+//! 混用缩放因子是“文字模糊但面板清晰”类缺陷的经典根源。本设计将三层严格分离：
 //!
-//! 1. **OS scale** — the physical display scale. It drives the swapchain
-//!    resolution, the glyph rasterisation size and the 1 physical pixel grid
-//!    used for static snapping.
-//! 2. **App zoom** — the user's UI zoom. It scales the *logical* style
-//!    metrics (Taffy sizes, standard control font size) of the outer chrome.
-//! 3. **Canvas zoom** — the camera zoom. It only affects the projection of
-//!    canvas primitives and their MTSDF sampling; it never touches the UI
-//!    tree's logical sizes.
 //!
-//! Each layer is exposed through its own accessor so that a call site cannot
-//! accidentally use the wrong one.
+//! 1. **OS scale（系统缩放）** — 物理显示缩放比。决定交换链分辨率、
+//!    字形光栅化尺寸以及用于静态吸附的 1 物理像素网格。
+//!
+//! 2. **App zoom（应用缩放）** — 用户的 UI 缩放比例。缩放外围界面框架的
+//!    *逻辑*样式度量（Taffy 尺寸、标准控件字号）。
+//!
+//! 3. **Canvas zoom（画布缩放）** — 相机缩放倍率。仅影响画布图元的投影及
+//!    其 MTSDF 采样；绝不触动 UI 树的逻辑尺寸。
+//!
+//! 每一层都通过独立的访问器暴露，使调用方不可能误用错误层级。
+//!
 
 use unbound_math::clamp;
 
-/// The three zoom layers, kept strictly orthogonal.
+/// 严格正交的三层缩放模型。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ZoomLayers {
     os_scale: f32,
@@ -32,10 +32,10 @@ impl Default for ZoomLayers {
 }
 
 impl ZoomLayers {
-    /// Build the three layers.
+    /// 构建三层缩放配置。
     ///
-    /// All factors are clamped to a sane positive range: a zero or negative
-    /// scale would make the projection matrix singular.
+    /// 所有因子均被钳制在合理的正数范围内：零或负缩放会导致投影矩阵奇异。
+    ///
     #[must_use]
     pub fn new(os_scale: f32, app_zoom: f32, canvas_zoom: f32) -> Self {
         Self {
@@ -45,95 +45,95 @@ impl ZoomLayers {
         }
     }
 
-    /// The physical display scale (layer 1).
+    /// 物理显示缩放比（第 1 层）。
     #[must_use]
     pub const fn os_scale(self) -> f32 {
         self.os_scale
     }
 
-    /// The application UI zoom (layer 2).
+    /// 应用 UI 缩放比例（第 2 层）。
     #[must_use]
     pub const fn app_zoom(self) -> f32 {
         self.app_zoom
     }
 
-    /// The canvas camera zoom (layer 3).
+    /// 画布相机缩放倍率（第 3 层）。
     #[must_use]
     pub const fn canvas_zoom(self) -> f32 {
         self.canvas_zoom
     }
 
-    /// The factor that turns UI logical units into physical pixels.
+    /// 将 UI 逻辑单位转换为物理像素的因子。
     ///
-    /// Only the OS scale and the app zoom participate: the canvas zoom is
-    /// deliberately excluded.
+    /// 仅系统缩放与应用缩放参与计算：画布缩放被刻意排除。
+    ///
     #[must_use]
     pub fn ui_scale(self) -> f32 {
         self.os_scale * self.app_zoom
     }
 
-    /// The factor that turns canvas world units into physical pixels.
+    /// 将画布世界单位转换为物理像素的因子。
     #[must_use]
     pub fn canvas_scale(self) -> f32 {
         self.os_scale * self.canvas_zoom
     }
 
-    /// The size of one physical pixel expressed in UI logical units.
+    /// 以 UI 逻辑单位表示的 1 个物理像素大小。
     ///
-    /// Static geometry snaps to this grid, which is what keeps 1 px borders
-    /// crisp at any OS scale.
+    /// 静态几何体吸附到此网格，从而在任意系统缩放下都能保持 1 px 边框锐利。
+    ///
     #[must_use]
     pub fn physical_pixel(self) -> f32 {
         1.0 / self.ui_scale()
     }
 
-    /// The size of one physical pixel expressed in canvas world units.
+    /// 以画布世界单位表示的 1 个物理像素大小。
     #[must_use]
     pub fn canvas_pixel(self) -> f32 {
         1.0 / self.canvas_scale()
     }
 
-    /// Convert a UI logical length into physical pixels.
+    /// 将 UI 逻辑长度转换为物理像素。
     #[must_use]
     pub fn to_physical(self, logical: f32) -> f32 {
         logical * self.ui_scale()
     }
 
-    /// Convert a physical pixel count into UI logical units.
+    /// 将物理像素数量转换为 UI 逻辑单位。
     #[must_use]
     pub fn to_logical(self, physical: f32) -> f32 {
         physical / self.ui_scale()
     }
 
-    /// Convert a canvas world length into physical pixels.
+    /// 将画布世界长度转换为物理像素。
     #[must_use]
     pub fn world_to_physical(self, world: f32) -> f32 {
         world * self.canvas_scale()
     }
 
-    /// Convert a physical pixel count into canvas world units.
+    /// 将物理像素数量转换为画布世界单位。
     #[must_use]
     pub fn physical_to_world(self, physical: f32) -> f32 {
         physical / self.canvas_scale()
     }
 
-    /// The app zoom, clamped to the range a user interface should allow.
+    /// 应用缩放比例，钳制在用户界面允许的范围内。
     #[must_use]
     pub fn clamped_app_zoom(&self) -> f32 {
         clamp(self.app_zoom, 0.25, 4.0)
     }
 
-    /// The canvas zoom, clamped to the range the canvas supports.
+    /// 画布缩放倍率，钳制在画布支持的范围内。
     ///
-    /// The design allows 10 % … 6400 %; outside that range the chunked
-    /// coordinate system loses precision.
+    /// 设计允许 10% … 6400%；超出该范围后分块坐标系统会损失精度。
+    ///
     #[must_use]
     pub fn clamped_canvas_zoom(&self) -> f32 {
         clamp(self.canvas_zoom, 0.1, 64.0)
     }
 }
 
-/// Keep a scale factor finite and strictly positive.
+/// 确保缩放因子为有限且严格正值。
 fn positive(value: f32) -> f32 {
     if value.is_finite() && value > 0.0 {
         value
@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn the_three_layers_stay_orthogonal() {
         let layers = ZoomLayers::new(2.0, 1.5, 8.0);
-        // The UI scale must not see the canvas zoom.
+        // UI 缩放绝不可受画布缩放影响。
         assert_eq!(layers.ui_scale(), 3.0);
         assert_eq!(layers.canvas_scale(), 16.0);
         assert_ne!(layers.ui_scale(), layers.canvas_scale());
@@ -161,8 +161,8 @@ mod tests {
         let b = ZoomLayers::new(2.0, 1.0, 4.0);
         assert_eq!(a.physical_pixel(), 1.0);
         assert_eq!(b.physical_pixel(), 0.5);
-        // The canvas zoom does not move the UI snap grid: doubling the OS
-        // scale halves the logical size of one physical pixel.
+        // 画布缩放不会移动 UI 吸附网格：系统缩放翻倍会使 1 物理像素对应的逻辑尺寸减半。
+        //
         assert_eq!(a.physical_pixel(), b.physical_pixel() * 2.0);
     }
 

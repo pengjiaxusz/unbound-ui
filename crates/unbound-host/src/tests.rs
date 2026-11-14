@@ -1,9 +1,9 @@
-//! Host tests driven by an in-process guest vtable.
+//! 由进程内 guest 虚表驱动的 host 测试。
 //!
-//! The fake guest is a real `GuestPluginVTable`: same function-pointer
-//! signatures, same ownership rules. That means the handoff paths are exercised
-//! exactly as they would be for a `cdylib`, without needing a compiler round trip
-//! inside the test.
+//! 模拟 guest 是真实的 `GuestPluginVTable`：相同的函数指针签名、
+//! 相同的所有权规则。这意味着状态移交路径的演练方式与真实 `cdylib`
+//! 完全一致，无需在测试内部触发编译器往返构建。
+//!
 
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -26,12 +26,12 @@ static IMPORTED: AtomicU32 = AtomicU32::new(0);
 static ON_LOAD: AtomicU32 = AtomicU32::new(0);
 static ON_UNLOAD: AtomicU32 = AtomicU32::new(0);
 
-/// The counters are process-global, and `cargo test` runs the tests of a binary
-/// in parallel threads: without this lock one test's `reset_counters` would
-/// wipe another's counters between its reset and its assertion.
+/// 计数器为进程全局，而 `cargo test` 在多线程中并行运行同一二进制内的测试：
+/// 若无此锁，一个测试的 `reset_counters` 会在另一个测试重置与断言之间
+/// 清空其计数器。
 static COUNTER_LOCK: Mutex<()> = Mutex::new(());
 
-/// Take the counter lock and reset the counters.
+/// 获取计数器锁并重置计数器。
 fn reset_counters() -> MutexGuard<'static, ()> {
     let guard = COUNTER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     INITIALIZED.store(0, Ordering::SeqCst);
@@ -45,7 +45,7 @@ fn reset_counters() -> MutexGuard<'static, ()> {
     guard
 }
 
-/// Guest business state.
+/// guest 业务状态。
 struct TestState {
     count: i64,
     label: String,
@@ -89,25 +89,25 @@ unsafe extern "C" fn guest_export(state: GuestState, out: *mut ByteBuffer) {
     let mut bytes = Vec::with_capacity(16);
     bytes.extend_from_slice(&state.count.to_le_bytes());
     bytes.extend_from_slice(state.label.as_bytes());
-    // The host asks twice: once to probe the size (nothing is written back)
-    // and once to fill the buffer. Only the second pass is an export that
-    // actually produced state, so only that one is counted.
+    // host 会询问两次：首次探测大小（不写回数据），
+    // 第二次填充缓冲区。只有第二次才是实际产出状态的导出，
+    // 因此仅对第二次计数。
     if write_bytes(out, &bytes) {
         EXPORTED.fetch_add(1, Ordering::SeqCst);
     }
 }
 
-/// Write `bytes` into the host's buffer, the way a real guest does.
+/// 以真实 guest 的方式将 `bytes` 写入 host 缓冲区。
 ///
-/// Returns whether the bytes were written; `false` means the buffer was too
-/// small and only the required length was reported.
+/// 返回是否成功写入字节；`false` 表示缓冲区过小，仅报告了所需长度。
+///
 fn write_bytes(out: &mut ByteBuffer, bytes: &[u8]) -> bool {
     let needed = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
     if out.capacity < needed || out.ptr.is_null() {
         out.len = needed;
         return false;
     }
-    // SAFETY: the host guarantees `capacity` writable bytes at `ptr`.
+    // SAFETY: host 保证在 `ptr` 处有 `capacity` 字节可写。
     unsafe {
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), out.ptr, bytes.len());
     }
@@ -118,8 +118,8 @@ fn write_bytes(out: &mut ByteBuffer, bytes: &[u8]) -> bool {
 unsafe extern "C" fn guest_import(ptr: *const u8, len: usize) -> GuestState {
     IMPORTED.fetch_add(1, Ordering::SeqCst);
     let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
-    // A malformed buffer must not panic: unwinding out of an `extern "C"`
-    // function aborts the process.
+    // 格式错误的缓冲区绝不能 panic：跨 `extern "C"` 函数栈展开会直接中止进程。
+    //
     let Some((count_bytes, label_bytes)) = bytes.split_at_checked(8) else {
         return core::ptr::null_mut();
     };
@@ -245,7 +245,7 @@ fn a_reload_with_the_same_schema_adopts_the_pointer() {
     assert_eq!(DROPPED.load(Ordering::SeqCst), 0, "state was handed over");
     assert_eq!(host.loads(), 2);
 
-    // The adopted state still carries the counter.
+    // 被接管的状态仍保留着计数器。
     host.build().unwrap();
     assert_eq!(host.arena().nodes()[1].text, "clicks: 1");
 }

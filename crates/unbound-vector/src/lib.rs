@@ -1,18 +1,18 @@
-//! Vector geometry for the canvas: cubic→quadratic reduction, tight oriented
-//! bounding boxes, and a numerically stable analytic distance solve.
+//! 画布矢量几何：三次→二次贝塞尔降阶、紧凑有向包围盒（OBB）
+//! 与数值稳定的解析距离求解。
 //!
-//! Why this exists (`docs` §3.4):
+//! 设计动机（`docs` §3.4）：
 //!
-//! * The exact distance from a point to a **cubic** Bézier requires solving a
-//!   quintic — no closed form exists, so a fragment shader would need Newton
-//!   iterations per pixel. Every cubic is therefore reduced to 2–6 quadratics
-//!   whose distance *does* have a closed form.
-//! * An axis-aligned box around a diagonal line wastes 80%+ of its coverage, so
-//!   each segment gets an oriented box whose width is just the arc height plus
-//!   the stroke and one pixel of antialiasing.
-//! * The Cardano solve below is written to avoid catastrophic cancellation: the
-//!   naive form loses all precision for near-straight curves, which is exactly
-//!   the common case for frame borders and connector lines.
+//! * 点到**三次**贝塞尔曲线的精确距离需要求解五次方程——无闭式解，
+//!   片元着色器将不得不逐像素执行牛顿迭代。因此每条三次曲线都降阶为
+//!   2–6 条二次贝塞尔曲线，后者的距离**存在**闭式解。
+//! * 对角线的轴对齐包围盒会浪费 80% 以上的覆盖率，因此每条线段使用
+//!   有向包围盒，其宽度仅为拱高加描边与 1 像素抗锯齿边距。
+//! * 下方的 Cardano 求根公式经过改写以避免灾难性相消：朴素形式在
+//!   近似直线的曲线上会丢失全部精度，而这恰恰是边框与连线的常见情况。
+//!
+//!
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -24,12 +24,12 @@ pub mod svg_path;
 pub use curve::{cubic_bounds, cubic_to_instances, CurveInstance};
 pub use svg_path::{parse_svg_path, SvgPath, SvgPathCache, SvgPathError, SvgSubpath};
 
-/// Hard cap on the number of quadratics per cubic: bounds the per-frame payload
-/// for a pathological 10⁹-px line while still meeting 0.05 px on every curve a
-/// real editor produces.
+/// 每条三次曲线对应的二次段数量硬上限：既能在极端 10⁹ px 线段下
+/// 限制单帧数据负载，又能保证实际编辑器生成的所有曲线满足 0.05 px 精度。
+///
 pub const MAX_SEGMENTS: u32 = 32;
 
-/// One quadratic Bézier segment, stored as its control polygon.
+/// 单条二次贝塞尔线段，以其控制多边形存储。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct QuadSegment {
@@ -44,26 +44,26 @@ impl QuadSegment {
         Self { p0, p1, p2 }
     }
 
-    /// A straight line expressed as a degenerate quadratic.
+    /// 表示为退化二次曲线的直线段。
     #[must_use]
     pub fn line(a: Vec2, b: Vec2) -> Self {
         Self::new(a, a.lerp(b, 0.5), b)
     }
 
-    /// Evaluate at `t ∈ [0, 1]`.
+    /// 在参数 `t ∈ [0, 1]` 处求值。
     #[must_use]
     pub fn eval(&self, t: f32) -> Vec2 {
         let mt = 1.0 - t;
         self.p0 * (mt * mt) + self.p1 * (2.0 * mt * t) + self.p2 * (t * t)
     }
 
-    /// First derivative at `t`.
+    /// 在参数 `t` 处的一阶导数。
     #[must_use]
     pub fn derivative(&self, t: f32) -> Vec2 {
         (self.p1 - self.p0) * (2.0 * (1.0 - t)) + (self.p2 - self.p1) * (2.0 * t)
     }
 
-    /// Axis-aligned bounds of the control polygon (a superset of the curve).
+    /// 控制多边形的轴对齐包围盒（曲线的超集）。
     #[must_use]
     pub fn control_bounds(&self) -> (Vec2, Vec2) {
         (
@@ -72,22 +72,22 @@ impl QuadSegment {
         )
     }
 
-    /// Number of line segments needed to flatten within `tolerance` pixels.
+    /// 在给定像素容差 `tolerance` 下展平所需的直线段数量。
     ///
-    /// Uses the exact bound for quadratics: the maximum deviation of the chord
-    /// from the curve is `|p0 - 2p1 + p2| / 8`.
+    /// 使用二次曲线的精确界：弦与曲线的最大偏差为 `|p0 - 2p1 + p2| / 8`。
+    ///
     #[must_use]
     pub fn flatten_steps(&self, tolerance: f32) -> u32 {
         let dev = (self.p0 - self.p1 * 2.0 + self.p2).length() * 0.25;
         if dev <= tolerance.max(1e-4) {
             return 1;
         }
-        // n segments => error shrinks as 1/n².
+        // 分成 n 段时误差按 1/n² 衰减。
         let n = (dev / tolerance.max(1e-4)).sqrt().ceil() as u32;
         n.clamp(1, 256)
     }
 
-    /// Flatten into `n` line segments, writing `n + 1` points into `out`.
+    /// 展平为 `n` 条直线段，向 `out` 写入 `n + 1` 个顶点。
     pub fn flatten_into(&self, tolerance: f32, out: &mut Vec<Vec2>) {
         let n = self.flatten_steps(tolerance);
         out.clear();
@@ -98,21 +98,21 @@ impl QuadSegment {
     }
 }
 
-/// A tight oriented bounding box.
+/// 紧凑有向包围盒（OBB）。
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Obb {
     pub center: Vec2,
-    /// Unit vector along the segment chord.
+    /// 沿线段弦方向的单位向量。
     pub axis_u: Vec2,
-    /// Unit vector perpendicular to `axis_u`.
+    /// 垂直于 `axis_u` 的单位向量。
     pub axis_v: Vec2,
     pub half_u: f32,
     pub half_v: f32,
 }
 
 impl Obb {
-    /// Build an OBB that contains the whole control polygon, padded by
-    /// `line_width / 2 + 1px` for the stroke and one antialiasing pixel.
+    /// 构建包含整个控制多边形的 OBB，并按 `line_width / 2 + 1px` 扩展
+    /// 以容纳描边和 1 像素抗锯齿边距。
     #[must_use]
     pub fn from_quad(seg: &QuadSegment, line_width: f32) -> Self {
         let chord = seg.p2 - seg.p0;
@@ -120,8 +120,8 @@ impl Obb {
             let u = chord.normalized();
             (u, u.perp())
         } else {
-            // Degenerate chord (a dot or a loop): fall back to the control
-            // polygon's own axes so the box never collapses to zero area.
+            // 退化弦（点或闭环）：回退到控制多边形自身的轴向，
+            // 确保包围盒面积不会退化为零。
             let alt = seg.p1 - seg.p0;
             if alt.length_squared() > 1e-12 {
                 let u = alt.normalized();
@@ -154,7 +154,7 @@ impl Obb {
         }
     }
 
-    /// Width / height of the box in world units.
+    /// 包围盒在世界单位下的宽度/高度。
     #[must_use]
     pub fn size(&self) -> Vec2 {
         Vec2::new(self.half_u * 2.0, self.half_v * 2.0)
@@ -165,13 +165,13 @@ impl Obb {
         self.half_u * self.half_v * 4.0
     }
 
-    /// Transform from OBB space (`0..size`) into world space.
+    /// 从 OBB 局部空间（`0..size`）变换到世界空间。
     #[must_use]
     pub fn to_world(&self, local: Vec2) -> Vec2 {
         self.center + self.axis_u * (local.x - self.half_u) + self.axis_v * (local.y - self.half_v)
     }
 
-    /// Inverse of [`Self::to_world`].
+    /// [`Self::to_world`] 的逆变换。
     #[must_use]
     pub fn to_local(&self, world: Vec2) -> Vec2 {
         let d = world - self.center;
@@ -181,36 +181,36 @@ impl Obb {
         )
     }
 
-    /// 2×2 matrix mapping OBB space to world space (for `GpuTransform`).
+    /// 将 OBB 空间映射到世界空间的 2×2 矩阵（供 `GpuTransform` 使用）。
     #[must_use]
     pub fn matrix(&self) -> [f32; 4] {
         [self.axis_u.x, self.axis_u.y, self.axis_v.x, self.axis_v.y]
     }
 }
 
-/// Adaptive cubic → quadratic reduction.
+/// 自适应三次 → 二次贝塞尔降阶。
 ///
-/// `tolerance` is the maximum allowed geometric error, expressed in the **same
-/// units as the control points**. Callers on the canvas pass
-/// `0.05 / zoom` so that the error stays a constant fraction of a screen pixel
-/// at the current magnification.
+/// `tolerance` 为允许的最大几何误差，使用**与控制点相同的单位**。
+/// 画布调用方传入 `0.05 / zoom`，使误差在当前缩放倍率下始终保持为
+/// 屏幕像素的固定分数。
 ///
-/// The segment count starts from Wang's formula and is then *verified* against
-/// the actual measured deviation, doubling until it fits or the hard cap is
-/// reached. Wang's bound is conservative; measuring avoids paying for segments
-/// that are not needed, while still guaranteeing the error contract.
+/// 段数从 Wang 公式估算开始，随后针对实际测量偏差进行**验证**，
+/// 倍增段数直至满足容差或达到硬上限。Wang 界较为保守；实测偏差可避免
+/// 为多余段数付费，同时严格保证误差契约。
 ///
-/// UI-scale connectors typically land in the 3–6 segment band the architecture
-/// doc cites; a 400 px S-curve at 0.05 px genuinely needs far more, which is
-/// why the cap is 32 rather than 6. Capping at 6 unconditionally would silently
-/// break the error guarantee that the analytic distance solve relies on.
+/// UI 尺度的连线通常落在架构文档所述的 3–6 段区间；在 0.05 px 容差下，
+/// 400 px 长的 S 形曲线确实需要更多段，这也是上限设为 32 而非 6 的原因。
+/// 若无条件截断为 6 段，会悄然破坏解析距离求解所依赖的误差保证。
+///
+///
+///
 #[must_use]
 pub fn cubic_to_quads(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, tolerance: f32) -> Vec<QuadSegment> {
     let tol = tolerance.max(1e-4);
     let l1 = (p0 - p1 * 2.0 + p2).length();
     let l2 = (p1 - p2 * 2.0 + p3).length();
     let l = l1.max(l2);
-    // Wang: error ≈ 0.75·L/n², so n ≈ sqrt(0.75·L/tol).
+    // Wang 公式：误差 ≈ 0.75·L/n²，因此 n ≈ sqrt(0.75·L/tol)。
     let estimate = if l <= 1e-6 {
         1
     } else {
@@ -227,22 +227,22 @@ pub fn cubic_to_quads(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, tolerance: f32) ->
     }
 }
 
-/// Split `[0,1]` into `n` sub-cubics and reduce each to one quadratic.
+/// 将 `[0, 1]` 划分为 `n` 条子三次曲线，并将每条降阶为一条二次曲线。
 fn build_quads(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, n: u32) -> Vec<QuadSegment> {
     let mut out = Vec::with_capacity(n as usize);
     for i in 0..n {
         let t0 = i as f32 / n as f32;
         let t1 = (i + 1) as f32 / n as f32;
         let (a0, a1, a2, a3) = sub_cubic(p0, p1, p2, p3, t0, t1);
-        // Least-squares degree reduction: q1 = (3(a1 + a2) - (a0 + a3)) / 4.
+        // 最小二乘降阶：q1 = (3(a1 + a2) - (a0 + a3)) / 4。
         let q1 = (a1 + a2) * 0.75 - (a0 + a3) * 0.25;
         out.push(QuadSegment::new(a0, q1, a3));
     }
     out
 }
 
-/// Worst-case deviation of the reduced chain from the original cubic, measured
-/// at `SAMPLES` points (cheap and monotone; used only during reduction).
+/// 降阶曲线链与原三次曲线之间的最大偏差，在 `SAMPLES` 个采样点上测量
+/// （计算廉价且单调，仅在降阶阶段使用）。
 fn measure_error(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, quads: &[QuadSegment]) -> f32 {
     const SAMPLES: usize = 32;
     let mut worst: f32 = 0.0;
@@ -262,9 +262,9 @@ fn measure_error(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, quads: &[QuadSegment]) 
     worst
 }
 
-/// Extract the sub-cubic of `[t0, t1]` via de Casteljau.
+/// 通过 de Casteljau 算法提取 `[t0, t1]` 区间上的子三次曲线。
 fn sub_cubic(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t0: f32, t1: f32) -> (Vec2, Vec2, Vec2, Vec2) {
-    // Split at t1, then re-split the left part at t0/t1.
+    // 先在 t1 处分割，再将左半段在 t0/t1 处分割。
     let split = |a: Vec2, b: Vec2, c: Vec2, d: Vec2, t: f32| {
         let ab = a.lerp(b, t);
         let bc = b.lerp(c, t);
@@ -276,17 +276,17 @@ fn sub_cubic(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t0: f32, t1: f32) -> (Vec2,
     };
     let (left, _) = split(p0, p1, p2, p3, t1);
     let t = if t1 > 1e-6 { t0 / t1 } else { 0.0 };
-    // Splitting the [0, t1] sub-curve at `t0/t1` yields [0, t0] on the left and
-    // exactly the [t0, t1] piece on the right — the right part is the one we need.
+    // 在 `t0/t1` 处分割 [0, t1] 子曲线，左侧得到 [0, t0]，
+    // 右侧恰好就是所需的 [t0, t1] 片段。
     let (_, sub) = split(left.0, left.1, left.2, left.3, t);
     sub
 }
 
-/// Squared distance from `p` to the quadratic's closest point, solved
-/// analytically.
+/// 解析求解点 `p` 到二次贝塞尔曲线最近点的距离平方。
 ///
-/// Returns `(distance_squared, t)` where `t` is the parameter of the closest
-/// point (clamped to `[0, 1]`).
+/// 返回 `(distance_squared, t)`，其中 `t` 为最近点参数（钳制在 `[0, 1]`）。
+///
+///
 #[must_use]
 pub fn closest_on_quad(seg: &QuadSegment, p: Vec2) -> (f32, f32) {
     let a = seg.p1 - seg.p0;
@@ -295,7 +295,7 @@ pub fn closest_on_quad(seg: &QuadSegment, p: Vec2) -> (f32, f32) {
 
     let bb = b.dot(b);
     if bb < 1e-12 {
-        // Degenerate (a straight line): the closest point is the projection.
+        // 退化情况（直线）：最近点即投影点。
         let ab = seg.p2 - seg.p0;
         let t = if ab.length_squared() > 1e-12 {
             ((p - seg.p0).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
@@ -317,8 +317,8 @@ pub fn closest_on_quad(seg: &QuadSegment, p: Vec2) -> (f32, f32) {
     let h = q * q + 4.0 * p3;
 
     let t = if h >= 0.0 {
-        // One real root. `sqrt(h)` then a cube root; keep the sign explicit so
-        // that `cbrt` is not needed (and negative zero is handled).
+        // 单实根：先计算 `sqrt(h)` 再开立方根；显式保留符号，
+        // 从而无需依赖特殊处理负零的 `cbrt`。
         let hs = h.sqrt();
         let x0 = (hs - q) * 0.5;
         let x1 = (-hs - q) * 0.5;
@@ -326,7 +326,7 @@ pub fn closest_on_quad(seg: &QuadSegment, p: Vec2) -> (f32, f32) {
         let uv1 = x1.abs().cbrt() * x1.signum();
         (uv0 + uv1 - kx).clamp(0.0, 1.0)
     } else {
-        // Three real roots: trigonometric form avoids the complex branch.
+        // 三实根：使用三角函数形式避免复数分支。
         let z = (-pp).sqrt();
         let v = (q / (pp * z * 2.0)).clamp(-1.0, 1.0).acos() / 3.0;
         let m = v.cos();
@@ -348,23 +348,23 @@ pub fn closest_on_quad(seg: &QuadSegment, p: Vec2) -> (f32, f32) {
     ((p - seg.eval(t)).length_squared(), t)
 }
 
-/// Distance from `p` to the segment.
+/// 点 `p` 到线段的距离。
 #[must_use]
 pub fn distance_to_quad(seg: &QuadSegment, p: Vec2) -> f32 {
     closest_on_quad(seg, p).0.sqrt()
 }
 
-/// True when `p` is within `threshold` of the stroke centreline.
+/// 当 `p` 与描边中心线的距离在 `threshold` 以内时返回 `true`。
 #[must_use]
 pub fn hit_quad(seg: &QuadSegment, p: Vec2, threshold: f32) -> bool {
     distance_to_quad(seg, p) <= threshold.max(0.0)
 }
 
-/// World-space chunk coordinate of a point, clamped into `[0, 4096)`.
+/// 点在世界空间中的分块局部坐标，钳制到 `[0, 4096)`。
 ///
-/// The canvas is chunk-anchored (`docs` §5.2); every curve that reaches the GPU
-/// must be expressed relative to its chunk, so this conversion lives next to the
-/// geometry that produces it.
+/// 画布采用分块锚定（`docs` §5.2）；每条送入 GPU 的曲线都必须
+/// 相对于其所在分块表达，因此该转换放在生成几何体的模块旁。
+///
 #[must_use]
 pub fn to_chunk_local(world: Vec2) -> ([i32; 2], [f32; 2]) {
     let cx = (world.x / CHUNK_SIZE).floor();
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn ui_scale_curve_meets_the_measured_error_bound() {
-        // A typical canvas connector: 200px wide, one gentle bend.
+        // 典型画布连线：200px 宽，带一处平缓弯曲。
         let (p0, p1, p2, p3) = (
             Vec2::new(0.0, 0.0),
             Vec2::new(60.0, 40.0),
@@ -419,10 +419,10 @@ mod tests {
             "worst error {worst} with {} segments",
             quads.len()
         );
-        // Measured reality: this curve needs ~26 segments for 0.05px. The
-        // architecture doc's "2–6 segments" figure corresponds to the ~0.5px
-        // tolerance that is typical once the canvas is even slightly zoomed out
-        // (tolerance is given in world units and callers scale it by 1/zoom).
+        // 实测结果：该曲线在 0.05px 容差下需要约 26 段。架构文档中
+        // “2–6 段”的数字对应画布略微缩小时常见的约 0.5px 容差
+        // （容差以世界单位给出，调用方按 1/zoom 缩放）。
+        //
         assert!(quads.len() <= MAX_SEGMENTS as usize, "{}", quads.len());
     }
 
@@ -434,7 +434,7 @@ mod tests {
             Vec2::new(140.0, 40.0),
             Vec2::new(200.0, 0.0),
         );
-        // 0.5px of world error at 25% zoom is 0.125 screen px: cheap and clean.
+        // 在 25% 缩放倍率下，0.5px 世界误差等价于 0.125 屏幕像素：既轻量又清晰。
         let quads = cubic_to_quads(p0, p1, p2, p3, 0.5);
         assert!(
             (2..=12).contains(&quads.len()),
@@ -447,9 +447,9 @@ mod tests {
 
     #[test]
     fn pathological_curve_is_capped_not_unbounded() {
-        // A 400px tall S-curve: six segments cannot reach 0.05px, so the
-        // segment count grows until the hard cap. The contract is "bounded
-        // payload + best effort error", never "unbounded segments".
+        // 400px 高的 S 形曲线：6 段无法满足 0.05px 容差，因此段数会增长至
+        // 硬上限。契约要求“有界负载 + 尽力误差”，而非“无界段数”。
+        //
         let (p0, p1, p2, p3) = (
             Vec2::new(0.0, 0.0),
             Vec2::new(120.0, 200.0),
@@ -528,7 +528,7 @@ mod tests {
     fn distance_to_a_straight_curve_is_the_projection() {
         let seg = QuadSegment::line(Vec2::ZERO, Vec2::new(10.0, 0.0));
         assert!((distance_to_quad(&seg, Vec2::new(5.0, 3.0)) - 3.0).abs() < 1e-4);
-        // Beyond the end it clamps to the endpoint.
+        // 超出终点范围时钳制到端点。
         assert!((distance_to_quad(&seg, Vec2::new(13.0, 4.0)) - 5.0).abs() < 1e-4);
     }
 
@@ -557,7 +557,7 @@ mod tests {
     fn obb_is_much_tighter_than_the_aabb_for_a_diagonal() {
         let seg = QuadSegment::line(Vec2::new(0.0, 0.0), Vec2::new(100.0, 100.0));
         let obb = Obb::from_quad(&seg, 1.0);
-        // The AABB of this line is 100×100 = 10 000; the OBB is a thin strip.
+        // 该直线的 AABB 面积为 100×100 = 10 000；OBB 则是细长条带。
         assert!(obb.area() < 1000.0, "obb area {}", obb.area());
     }
 
@@ -586,7 +586,7 @@ mod tests {
         let mut pts = Vec::new();
         seg.flatten_into(0.1, &mut pts);
         assert!(pts.len() >= 4);
-        // Every curve point must lie within 0.1 of the polyline.
+        // 曲线上的每个点都必须位于折线 0.1 距离以内。
         for i in 0..=200 {
             let p = seg.eval(i as f32 / 200.0);
             let mut best = f32::INFINITY;

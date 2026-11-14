@@ -1,4 +1,4 @@
-//! TerminalView: High-performance virtualized ANSI log & terminal viewer.
+//! TerminalView：高性能虚拟化 ANSI 日志与终端视图。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -12,7 +12,7 @@ use crate::{ControlState, WidgetOutput};
 
 pub const TERMINAL_LINE_HEIGHT: f32 = 18.0;
 
-/// Descriptor for a terminal log view.
+/// 终端日志视图描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TerminalViewDesc {
     pub rect: Rect,
@@ -52,7 +52,7 @@ impl Default for TerminalViewDesc {
     }
 }
 
-/// State for a terminal view.
+/// 终端视图状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TerminalViewState {
     pub scroll_y: f32,
@@ -66,7 +66,7 @@ impl TerminalViewState {
     }
 }
 
-/// Emit primitives and hit regions for a terminal view.
+/// 输出终端视图的图元与命中区域。
 #[must_use]
 pub fn emit_terminal_view(
     node: u64,
@@ -78,17 +78,17 @@ pub fn emit_terminal_view(
     let rect = desc.rect;
     let z = 700u16;
 
-    // 1. Dark terminal background
+    // 1. 深色终端背景
     out.primitives
         .push(surface(rect, desc.radius, Token::CANVAS_BACKDROP, z));
 
-    // 2. Left line numbers gutter
+    // 2. 左侧行号边栏
     let gutter_w = 40.0;
     let gutter_rect = Rect::new(rect.origin.x, rect.origin.y, gutter_w, rect.height());
     out.primitives
         .push(surface(gutter_rect, 0.0, Token::SURFACE, z + 1));
 
-    // 3. Active cursor row highlight
+    // 3. 当前光标行高亮
     let cursor_y = rect.origin.y + 8.0;
     let cursor_rect = Rect::new(
         rect.origin.x + gutter_w,
@@ -99,7 +99,7 @@ pub fn emit_terminal_view(
     out.primitives
         .push(surface(cursor_rect, 2.0, Token::PRIMARY_SOFT, z + 2));
 
-    // 4. Outer border
+    // 4. 外边框
     out.primitives.push(outlined(
         rect,
         desc.radius,

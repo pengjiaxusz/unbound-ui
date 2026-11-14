@@ -1,8 +1,7 @@
-//! The accordion: a stack of headers, each revealing a body.
+//! 手风琴组件（Accordion）：由一组标题栏堆叠而成，各自展开对应内容区。
 //!
-//! The body height is a spring, not a boolean. Collapsing animates to zero and
-//! the caller can skip building the children as soon as the animated height
-//! drops below a pixel, so a closed section costs neither paint nor layout.
+//! 内容区高度由弹簧驱动而非布尔值。折叠时会动画过渡至零，一旦动画高度
+//! 低于 1 像素，调用方即可跳过构建子节点，因此关闭的分区不产生绘制与布局开销。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -17,25 +16,25 @@ use crate::primitive::{focus_ring, glyphs, instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// The default header height.
+/// 默认标题栏高度。
 pub const ACCORDION_HEADER: f32 = 40.0;
 
-/// A body shorter than this is treated as fully collapsed.
+/// 低于此高度的内容区视为完全折叠。
 pub const ACCORDION_COLLAPSE_EPSILON: f32 = 0.5;
 
-/// One section of an accordion.
+/// 手风琴中的单个分区。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccordionSection {
-    /// Stable identity, also used as the header's node.
+    /// 稳定标识，同时用作标题栏节点。
     pub id: u64,
-    /// The header title.
+    /// 标题文本。
     pub title: String,
-    /// The height the body occupies when fully open.
+    /// 完全展开时内容区占用的高度。
     pub content_height: f32,
 }
 
 impl AccordionSection {
-    /// A section with the given title and open height.
+    /// 创建具有指定标题和展开高度的分区。
     #[must_use]
     pub fn new(id: u64, title: impl Into<String>, content_height: f32) -> Self {
         Self {
@@ -46,23 +45,23 @@ impl AccordionSection {
     }
 }
 
-/// The pure descriptor of an accordion.
+/// 手风琴的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccordionDesc {
-    /// The whole stack.
+    /// 整体堆叠容器。
     pub rect: Rect,
-    /// The sections, top to bottom.
+    /// 从上到下排列的分区列表。
     pub sections: Vec<AccordionSection>,
-    /// Whether more than one section may be open at a time.
+    /// 是否允许同时展开多个分区。
     pub allow_multiple: bool,
-    /// The height of one header.
+    /// 单个标题栏的高度。
     pub header_height: f32,
-    /// The draw order key.
+    /// 绘制顺序键。
     pub z: u16,
 }
 
 impl AccordionDesc {
-    /// An accordion with the given sections.
+    /// 使用指定分区创建手风琴。
     #[must_use]
     pub fn new(rect: Rect, sections: Vec<AccordionSection>) -> Self {
         Self {
@@ -74,14 +73,14 @@ impl AccordionDesc {
         }
     }
 
-    /// Allow only one open section at a time.
+    /// 限制同一时间仅允许展开一个分区。
     #[must_use]
     pub fn exclusive(mut self) -> Self {
         self.allow_multiple = false;
         self
     }
 
-    /// The header of one section.
+    /// 指定分区的标题栏矩形。
     #[must_use]
     pub fn header_rect(&self, state: &AccordionState, index: usize) -> Rect {
         let y = self.section_origin(state, index);
@@ -93,7 +92,7 @@ impl AccordionDesc {
         )
     }
 
-    /// The visible body of one section.
+    /// 指定分区的可见内容区矩形。
     #[must_use]
     pub fn body_rect(&self, state: &AccordionState, index: usize) -> Rect {
         let header = self.header_rect(state, index);
@@ -103,7 +102,7 @@ impl AccordionDesc {
         Rect::new(header.origin.x, header.max().y, header.size.x, height)
     }
 
-    /// The top edge of a section, after every preceding body height.
+    /// 指定分区的顶部边缘位置（位于所有前置内容区高度之后）。
     #[must_use]
     pub fn section_origin(&self, state: &AccordionState, index: usize) -> f32 {
         let mut y = self.rect.origin.y;
@@ -113,7 +112,7 @@ impl AccordionDesc {
         y
     }
 
-    /// The total laid-out height, headers and animated bodies included.
+    /// 包含标题栏与动画内容区在内的总布局高度。
     #[must_use]
     pub fn content_height(&self, state: &AccordionState) -> f32 {
         let headers = self.sections.len() as f32 * self.header_height;
@@ -124,16 +123,16 @@ impl AccordionDesc {
     }
 }
 
-/// The live state of an accordion.
+/// 手风琴的实时状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccordionState {
-    /// One bit per open section.
+    /// 每个分区的展开状态位。
     pub open_mask: u64,
     heights: Vec<Spring>,
 }
 
 impl AccordionState {
-    /// A state of `count` sections, all closed.
+    /// 创建包含 `count` 个分区的状态，初始全部关闭。
     #[must_use]
     pub fn new(count: usize) -> Self {
         Self {
@@ -144,19 +143,19 @@ impl AccordionState {
         }
     }
 
-    /// Whether a section is open (or opening).
+    /// 判断指定分区是否处于展开（或正在展开）状态。
     #[must_use]
     pub fn is_open(&self, index: usize) -> bool {
         index < u64::BITS as usize && (self.open_mask >> index) & 1 == 1
     }
 
-    /// Whether the section's body is fully collapsed and can be skipped.
+    /// 判断指定分区的内容区是否已完全折叠，可跳过构建。
     #[must_use]
     pub fn is_collapsed(&self, index: usize) -> bool {
         self.body_height(index) < ACCORDION_COLLAPSE_EPSILON
     }
 
-    /// The animated body height of one section.
+    /// 指定分区的当前动画内容区高度。
     #[must_use]
     pub fn body_height(&self, index: usize) -> f32 {
         self.heights
@@ -164,10 +163,9 @@ impl AccordionState {
             .map_or(0.0, |spring| spring.value.max(0.0))
     }
 
-    /// The animated openness of one section, `0.0..=1.0`.
+    /// 指定分区的动画展开度，`0.0..=1.0`。
     ///
-    /// This is what rotates the chevron: it uses the same spring as the body,
-    /// so the arrow and the panel can never disagree about progress.
+    /// 用于旋转展开箭头：与内容区共用同一弹簧，因此箭头与面板进度始终一致。
     #[must_use]
     pub fn progress(&self, desc: &AccordionDesc, index: usize) -> f32 {
         let full = desc
@@ -180,10 +178,10 @@ impl AccordionState {
         (self.body_height(index) / full).clamp(0.0, 1.0)
     }
 
-    /// Open a section.
+    /// 展开指定分区。
     ///
-    /// In exclusive mode every other section closes; the caller still runs
-    /// [`Self::advance`] so the closing body animates instead of vanishing.
+    /// 在互斥模式下会关闭其余所有分区；调用方仍需运行
+    /// [`Self::advance`]，使关闭中的内容区以动画收起而非直接消失。
     pub fn open(&mut self, desc: &AccordionDesc, index: usize) -> bool {
         if index >= desc.sections.len() {
             return false;
@@ -197,7 +195,7 @@ impl AccordionState {
         !was_open
     }
 
-    /// Close a section.
+    /// 关闭指定分区。
     pub fn close(&mut self, desc: &AccordionDesc, index: usize) -> bool {
         if !self.is_open(index) {
             return false;
@@ -207,7 +205,7 @@ impl AccordionState {
         true
     }
 
-    /// Toggle a section.
+    /// 切换指定分区的展开状态。
     pub fn toggle(&mut self, desc: &AccordionDesc, index: usize) -> bool {
         if self.is_open(index) {
             self.close(desc, index)
@@ -216,7 +214,7 @@ impl AccordionState {
         }
     }
 
-    /// Aim every spring at its open or closed height.
+    /// 将所有弹簧目标设为各自对应的展开或关闭高度。
     pub fn sync_targets(&mut self, desc: &AccordionDesc) {
         if self.heights.len() < desc.sections.len() {
             self.heights.resize_with(desc.sections.len(), || {
@@ -233,7 +231,7 @@ impl AccordionState {
         }
     }
 
-    /// Step every spring. Returns whether any body still moves.
+    /// 步进所有弹簧。返回是否仍有内容区在运动。
     pub fn advance(&mut self, dt: f32) -> bool {
         let mut moving = false;
         for spring in &mut self.heights {
@@ -242,13 +240,13 @@ impl AccordionState {
         moving
     }
 
-    /// Whether any body is still animating.
+    /// 是否仍有内容区正在播放动画。
     #[must_use]
     pub fn is_animating(&self) -> bool {
         self.heights.iter().any(|spring| !spring.is_settled())
     }
 
-    /// Place every body at its target with no animation.
+    /// 直接将所有内容区置于目标位置，无动画过渡。
     pub fn snap(&mut self, desc: &AccordionDesc) {
         self.sync_targets(desc);
         for spring in &mut self.heights {
@@ -257,31 +255,31 @@ impl AccordionState {
     }
 }
 
-/// The colour slots an accordion paints with.
+/// 手风琴绘制使用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AccordionTokens {
-    /// The body background.
+    /// 内容区背景色。
     pub body: Token,
-    /// An idle header.
+    /// 闲置标题栏背景色。
     pub header: Token,
-    /// A hovered header.
+    /// 悬停标题栏背景色。
     pub header_hover: Token,
-    /// An open header.
+    /// 展开状态标题栏背景色。
     pub header_open: Token,
-    /// The header title.
+    /// 标题文字颜色。
     pub text: Token,
-    /// The header title while open.
+    /// 展开状态下的标题文字颜色。
     pub text_open: Token,
-    /// The chevron.
+    /// 折叠指示箭头颜色。
     pub chevron: Token,
-    /// The hairline under a header.
+    /// 标题栏下方细分隔线颜色。
     pub divider: Token,
-    /// The keyboard focus ring.
+    /// 键盘焦点环颜色。
     pub focus_ring: Token,
 }
 
 impl AccordionTokens {
-    /// The standard set.
+    /// 标准配色方案。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -298,7 +296,7 @@ impl AccordionTokens {
     }
 }
 
-/// Emit one header: background, title, rotating chevron and hit region.
+/// 发射单个标题栏：包含背景、标题、旋转箭头及命中区域。
 #[must_use]
 pub fn emit_accordion_header(
     desc: &AccordionDesc,
@@ -336,8 +334,7 @@ pub fn emit_accordion_header(
         &mut payloads,
     );
 
-    // The chevron rotates from ">" to "v" over the same spring that drives
-    // the body height.
+    // 箭头随驱动内容区高度的同一弹簧从 ">" 旋转为 "v"。
     let progress = state.progress(desc, index);
     let angle = progress * std::f32::consts::FRAC_PI_2;
     let cx = rect.origin.x + 16.0;
@@ -399,10 +396,10 @@ pub fn emit_accordion_header(
     }
 }
 
-/// Emit the body surface of one section.
+/// 发射单个分区的内容区表面。
 ///
-/// The caller clips the children to this rectangle; the emitted surface is
-/// what makes a partly-open body read as a panel rather than as a gap.
+/// 调用方将子节点裁剪到此矩形内；发射的表面使半展开状态
+/// 的内容区呈现为完整面板，而非空白缺口。
 #[must_use]
 pub fn emit_accordion_body(
     desc: &AccordionDesc,
@@ -432,7 +429,7 @@ pub fn emit_accordion_body(
     }
 }
 
-/// A thin stroke between two points.
+/// 两点之间的细描边。
 fn stroke(
     start: [f32; 2],
     end: [f32; 2],

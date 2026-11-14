@@ -1,4 +1,4 @@
-//! Size, icon, loading and keyboard-activation behaviour of the button.
+//! 按钮的尺寸、图标、加载态与键盘激活行为测试。
 
 use unbound_gpu::data::{GpuPrimitiveInstance, PrimFlags, PrimType, SubElement};
 use unbound_math::Rect;
@@ -95,13 +95,13 @@ fn a_keyboard_press_paints_the_pressed_surface() {
         "a key press must not look idle"
     );
 
-    // A key press without focus is not an activation.
+    // 未聚焦时的按键不会触发激活。
     let unfocused = ControlState::default();
     assert_eq!(
         keyboard_activation(unfocused, true).phase,
         PointerPhase::Idle
     );
-    // Releasing the key falls back to the router phase.
+    // 释放按键后回退到路由器阶段。
     let hovered = ControlState {
         phase: PointerPhase::Hovered,
         focused: true,

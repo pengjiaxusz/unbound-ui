@@ -1,4 +1,4 @@
-//! Pagination control: page buttons, ellipsis folding, page-size selector & jump.
+//! 分页控件：页码按钮、省略号折叠、每页条数选择器与跳转。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -14,25 +14,25 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_PAGE_SLOTS: usize = 7;
 
-/// Descriptor for a [`Pagination`] bar.
+/// [`Pagination`] 分页栏的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaginationDesc {
-    /// Bounding rectangle.
+    /// 边界矩形。
     pub rect: Rect,
-    /// Total number of pages (>= 1).
+    /// 总页数（>= 1）。
     pub total_pages: usize,
-    /// Current 1-based active page.
+    /// 当前激活页码（从 1 开始）。
     pub current_page: usize,
-    /// Items per page (displayed as metadata).
+    /// 每页条数（作为元数据显示）。
     pub page_size: usize,
-    /// Accessible label.
+    /// 无障碍标签。
     pub label: String,
-    /// Base z-index.
+    /// 基础 z-index。
     pub z: u16,
 }
 
 impl PaginationDesc {
-    /// Create a pagination descriptor.
+    /// 创建分页描述符。
     #[must_use]
     pub fn new(rect: Rect, total_pages: usize, current_page: usize) -> Self {
         let total = total_pages.max(1);
@@ -46,14 +46,14 @@ impl PaginationDesc {
         }
     }
 
-    /// Set page size.
+    /// 设置每页条数。
     #[must_use]
     pub fn with_page_size(mut self, page_size: usize) -> Self {
         self.page_size = page_size.max(1);
         self
     }
 
-    /// Compute the 7 visible page slots (`Some(page)` or `None` for ellipsis).
+    /// 计算 7 个可见页码槽位（`Some(page)` 为页码，`None` 为省略号）。
     #[must_use]
     pub fn visible_slots(&self) -> [Option<usize>; MAX_PAGE_SLOTS] {
         let total = self.total_pages.max(1);
@@ -90,39 +90,39 @@ impl PaginationDesc {
     }
 }
 
-/// Deterministic sub-node id for the Previous Page button.
+/// 上一页按钮的确定性子节点 ID。
 #[must_use]
 pub const fn pagination_prev_node(node: u64) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x200
 }
 
-/// Deterministic sub-node id for the Next Page button.
+/// 下一页按钮的确定性子节点 ID。
 #[must_use]
 pub const fn pagination_next_node(node: u64) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x201
 }
 
-/// Deterministic sub-node id for a specific 1-based page button.
+/// 指定页码按钮（从 1 开始）的确定性子节点 ID。
 #[must_use]
 pub const fn pagination_page_node(node: u64, page: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x300 + page as u64)
 }
 
-/// Interactive state for pagination navigation.
+/// 分页导航的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PaginationState {
-    /// Current 1-based page.
+    /// 当前页码（从 1 开始）。
     pub page: usize,
 }
 
 impl PaginationState {
-    /// Create state at `page`.
+    /// 在指定 `page` 处创建状态。
     #[must_use]
     pub fn new(page: usize) -> Self {
         Self { page: page.max(1) }
     }
 
-    /// Go to `page`, clamped to `1..=total_pages`.
+    /// 跳转到 `page`，夹紧至 `1..=total_pages`。
     pub fn go_to(&mut self, page: usize, total_pages: usize) -> bool {
         let next = page.clamp(1, total_pages.max(1));
         if next != self.page {
@@ -133,18 +133,18 @@ impl PaginationState {
         }
     }
 
-    /// Advance one page.
+    /// 前进一页。
     pub fn next(&mut self, total_pages: usize) -> bool {
         self.go_to(self.page.saturating_add(1), total_pages)
     }
 
-    /// Go back one page.
+    /// 后退一页。
     pub fn prev(&mut self, total_pages: usize) -> bool {
         self.go_to(self.page.saturating_sub(1), total_pages)
     }
 }
 
-/// Emit a stable-shape pagination bar (1 container + 9 slot buttons + 1 focus ring = 11 primitives).
+/// 输出结构稳定的分页栏（1 个容器 + 9 个槽位按钮 + 1 个焦点环 = 11 个图元）。
 #[must_use]
 pub fn emit_pagination(
     node: u64,

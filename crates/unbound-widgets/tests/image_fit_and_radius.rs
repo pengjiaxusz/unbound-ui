@@ -1,7 +1,7 @@
-//! Images carry per-corner radii, a border and a nine-patch variant.
+//! 图像控件的独立圆角半径、边框与九宫格（nine-patch）变体测试。
 //!
-//! No GPU: the tests inspect the emitted primitive's packed radii, its border
-//! token and the nine UV-split cells of the nine-patch.
+//! 无 GPU：测试直接检查输出图元的打包圆角、边框令牌以及九宫格的九个 UV 切分单元格。
+//!
 
 use unbound_gpu::data::PrimType;
 use unbound_math::{f16, Rect, Vec2};
@@ -80,7 +80,7 @@ fn a_nine_patch_emits_nine_uv_split_primitives() {
         assert_eq!(primitive.extra_payload_idx, index as u32);
     }
 
-    // The corners keep their natural inset; the middle stretches.
+    // 四角保持自然内边距；中间区域拉伸。
     let cells = desc.cells();
     assert_eq!(cells[0], Rect::new(10.0, 20.0, 10.0, 12.0));
     assert_eq!(
@@ -89,7 +89,7 @@ fn a_nine_patch_emits_nine_uv_split_primitives() {
     );
     assert_eq!(cells[8].max(), rect().max());
 
-    // UVs tile the texture from (0, 0) to (1, 1).
+    // UV 将纹理从 (0, 0) 平铺到 (1, 1)。
     assert_eq!(output.payloads[0].p0, [0.0, 0.0]);
     assert_eq!(output.payloads[0].p1, [10.0 / 60.0, 12.0 / 60.0]);
     assert_eq!(output.payloads[8].p1, [1.0, 1.0]);

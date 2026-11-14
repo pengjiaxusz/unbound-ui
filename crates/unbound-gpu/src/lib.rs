@@ -1,22 +1,21 @@
-//! GPU backend: memory protocol, allocators and (later) the Vulkan 1.3 device.
+//! GPU 后端：内存协议、分配器与 Vulkan 1.3 设备层。
 //!
-//! Module layout mirrors the milestones in `docs/gpu_ui_v2_0.md` §10.1:
+//! 模块布局对应 `docs/architecture/gpu-renderer.md` 中的里程碑划分：
 //!
-//! | module | milestone | responsibility |
+//! | 模块 | 里程碑 | 职责 |
 //! | :--- | :--- | :--- |
-//! | [`data`] | M1 | 64B primitive / push-constant memory protocol |
-//! | [`tlsf`] | M1 | O(1) device-memory allocator |
-//! | [`quarantine`] | M1 | epoch-delayed free list for frames in flight |
-//! | [`ring`] | M1 | per-frame transient ring buffer |
-//! | [`pool`] | M1 | persistent pool + sparse scatter patches |
-//! | [`sort`] | M1 | 64-bit sort key encoding and CPU reference sort |
-//! | [`device`] | M1 | Vulkan instance/device/queues/features |
-//! | [`shader`] | M1 | compiled SPIR-V modules |
-//! | [`pipeline`] | M1 | uber-shader + compute pipelines |
-//! | [`frame`] | M1 | pass scheduling and indirect submission |
+//! | [`data`] | M1 | 64B 图元 / Push Constant 内存协议 |
+//! | [`tlsf`] | M1 | O(1) 设备内存分配器 |
+//! | [`quarantine`] | M1 | 面向在飞帧的 epoch 延迟释放队列 |
+//! | [`ring`] | M1 | 逐帧瞬态环形缓冲区 |
+//! | [`pool`] | M1 | 持久化池 + 稀疏散布更新补丁 |
+//! | [`sort`] | M1 | 64 位排序键编码与 CPU 参考排序 |
+//! | [`device`] | M1 | Vulkan 实例/设备/队列/特性初始化 |
+//! | [`shader`] | M1 | 已编译的 SPIR-V 模块 |
+//! | [`pipeline`] | M1 | Uber 着色器与计算管线 |
+//! | [`frame`] | M1 | Pass 调度与间接绘制提交 |
 //!
-//! The first six modules are pure CPU and are covered by unit tests that run on
-//! any machine, including CI without a GPU.
+//! 前六个模块为纯 CPU 实现，覆盖单元测试，可在无 GPU 的任意机器（含 CI）上运行。
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_debug_implementations)]

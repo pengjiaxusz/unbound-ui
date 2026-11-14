@@ -1,44 +1,40 @@
-//! The CPU ⇄ GPU memory protocol (`docs` §2.4).
+//! CPU ⇄ GPU 内存协议（参见 `docs/architecture/gpu-renderer.md`）。
 //!
-//! Every struct here is `#[repr(C)]`, `Pod`, and sized/aligned to a CPU cache
-//! line so that:
+//! 此处所有结构体均为 `#[repr(C)]`、`Pod`，并按 CPU 缓存行大小对齐：
 //!
-//! * a primitive never straddles two cache lines (one instance == one 64B line),
-//! * the shader can index `primitives[i]` with a single `shl 6`,
-//! * `FramePushConstants` is exactly 64B and therefore fits one push-constant
-//!   block on every implementation that supports the minimum 128B guarantee.
+//! * 单个图元绝不跨越两条缓存行（1 个实例 == 1 条 64B 缓存行）；
+//! * 着色器只需单条 `shl 6` 指令即可索引 `primitives[i]`；
+//! * `FramePushConstants` 精简紧凑，远低于所有实现保证的 128B Push Constant 下限。
 //!
-//! Offsets are pinned by tests: a silent field reorder would otherwise corrupt
-//! rendering in a way that is very hard to spot.
+//! 字段偏移由单元测试锁定：若无意中调整字段顺序，会导致难以察觉的渲染损坏。
 
 use bytemuck::{Pod, Zeroable};
 
 use unbound_math::{f16_to_f32, f32_to_f16};
 
-/// Number of bytes in one [`GpuPrimitiveInstance`] — also the cache line size
-/// the whole engine is tuned for.
+/// 单个 [`GpuPrimitiveInstance`] 的字节数——亦为全引擎调优所依据的缓存行大小。
 pub const PRIMITIVE_STRIDE: usize = 64;
 
-/// Primitive kind, packed into the low 8 bits of `prim_type_and_flags`.
+/// 图元类型，打包存储在 `prim_type_and_flags` 的低 8 位。
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PrimType {
-    /// Rounded rectangle with optional border and analytic shadow.
+    /// 带可选边框与解析阴影的圆角矩形。
     #[default]
     RoundedRect = 0,
-    /// Textured quad (image atlas page, `bindless` layer in the border slot).
+    /// 纹理四边形（图像图集页，Bindless 图层索引存放在边框槽位）。
     Image = 1,
-    /// Glyph quad sampling `Atlas_R8` with subpixel phase.
+    /// 采样 `Atlas_R8` 的字形四边形（支持亚像素相位）。
     Glyph = 2,
-    /// Colour glyph from `Atlas_RGBA8` (emoji / MTSDF).
+    /// 来自 `Atlas_RGBA8` 的彩色字形（Emoji / MTSDF）。
     GlyphColor = 3,
-    /// Quadratic Bézier segment rendered as a tight OBB (`docs` §3.4).
+    /// 以紧凑有向包围盒（OBB）渲染的二次 Bézier 曲线段（参见 `docs/architecture/gpu-renderer.md`）。
     Curve = 4,
-    /// Hollow rounded rect used for focus rings / selection outlines.
+    /// 空心圆角矩形，用于焦点环与选区轮廓。
     Stroke = 5,
-    /// Shadow-only instance (no fill), used for detached overlays.
+    /// 纯阴影实例（无填充），用于独立浮层。
     Shadow = 6,
-    /// Solid separator line.
+    /// 实心分隔线。
     Line = 7,
 }
 
@@ -57,27 +53,26 @@ impl PrimType {
         }
     }
 
-    /// True for primitives whose fragment shader reads the glyph atlas and
-    /// therefore needs gamma/stem compensation.
+    /// 当图元的片元着色器需要读取字形图集并应用伽马/字干粗细补偿时返回 true。
     #[must_use]
     pub const fn is_text(self) -> bool {
         matches!(self, Self::Glyph | Self::GlyphColor)
     }
 }
 
-/// Blend mode, packed into bits 8..16 of `prim_type_and_flags`.
+/// 混合模式，打包存储在 `prim_type_and_flags` 的第 8..16 位。
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum BlendMode {
-    /// Straight source-over (premultiplied on the GPU side).
+    /// 标准 Source-Over 混合（GPU 侧按非预乘输入处理）。
     #[default]
     Normal = 0,
-    /// Additive — used by cursor trails and diagnostic overlays.
+    /// 加法混合（Additive）——用于光标拖尾与诊断覆盖层。
     Additive = 1,
-    /// Multiply — used by canvas multiply layers.
+    /// 正片叠底（Multiply）——用于画布正片叠底图层。
     Multiply = 2,
-    /// Replace — no blending at all (opaque core prepass writes depth only,
-    /// but replace is also used for the first opaque layer when MSAA is off).
+    /// 替换模式（Replace）——完全不混合（不透明核心预 Pass 仅写深度，
+    /// 关闭 MSAA 时的首个不透明层也可使用替换模式）。
     Replace = 3,
 }
 
@@ -93,7 +88,7 @@ impl BlendMode {
     }
 }
 
-/// Sub-element order inside one component (`docs` §6.3, bits 7..0 of the key).
+/// 单个组件内部的子元素顺序（排序键的第 7..0 位，参见 `docs/architecture/gpu-renderer.md`）。
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SubElement {
@@ -106,26 +101,26 @@ pub enum SubElement {
     FocusRing = 5,
 }
 
-/// Portal / pass layer, top 8 bits of the 64-bit sort key.
+/// Portal / Pass 图层，位于 64 位排序键的最高 8 位。
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PassLayer {
     #[default]
     Canvas = 0,
     Ui = 1,
-    /// Dropdowns, tooltips, context menus.
+    /// 下拉菜单、工具提示、右键菜单。
     Overlay = 2,
-    /// Modal dialogs.
+    /// 模态对话框。
     Modal = 3,
-    /// Debug/diagnostics overlay is always on top.
+    /// 调试/诊断覆盖层始终置顶。
     Debug = 255,
 }
 
 impl PassLayer {
-    /// Portals start at layer 2 and can go up to 254.
+    /// Portal 从第 2 层开始，最高可达 254。
     #[must_use]
     pub const fn portal(depth: u8) -> Self {
-        // `depth` is clamped to 254 so 255 stays reserved for diagnostics.
+        // `depth` 钳制在 254，使 255 始终保留给诊断覆盖层。
         if depth > 254 {
             Self::Debug
         } else {
@@ -144,83 +139,82 @@ impl PassLayer {
     }
 }
 
-/// 64B push constants — the only per-frame CPU→GPU payload (`docs` §2.4).
+/// 帧 Push Constant 头部——每帧唯一的 CPU→GPU 载荷（参见 `docs/architecture/gpu-renderer.md`）。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct FramePushConstants {
-    /// Physical device address of the `GpuPrimitiveInstance` array.
+    /// `GpuPrimitiveInstance` 数组的物理设备地址（BDA）。
     pub primitives_bda: u64,
-    /// Physical device address of the `GpuTransform` array.
+    /// `GpuTransform` 数组的物理设备地址（BDA）。
     pub transforms_bda: u64,
-    /// Physical device address of the `GpuClipNode` array.
+    /// `GpuClipNode` 数组的物理设备地址（BDA）。
     pub clips_bda: u64,
-    /// Physical device address of the RGBA16F theme LUT.
+    /// RGBA16F 主题颜色查找表（LUT）的物理设备地址。
     pub theme_lut_bda: u64,
-    /// Physical device address of curve/gradient payloads.
+    /// 曲线/渐变载荷数组的物理设备地址。
     pub payloads_bda: u64,
-    /// Chunk containing the camera origin.
+    /// 包含相机原点的世界 chunk ID。
     pub camera_chunk: [i32; 2],
-    /// Camera position inside that chunk, in `[0, 4096)`.
+    /// 相机在该 chunk 内的局部位置，范围 `[0, 4096)`。
     pub camera_local: [f32; 2],
-    /// Physical viewport size in pixels.
+    /// 物理像素视口尺寸。
     pub viewport_size: [f32; 2],
-    /// Canvas zoom factor (1.0 == 100%).
+    /// 画布缩放因子（1.0 == 100%）。
     pub camera_zoom: f32,
-    /// OS DPI × app zoom.
+    /// 操作系统 DPI × 应用缩放比。
     pub dpi_scale: f32,
 }
 
 impl FramePushConstants {
-    /// Size contract for the push-constant range.
+    /// Push Constant 范围大小契约。
     pub const SIZE: u32 = core::mem::size_of::<Self>() as u32;
 }
 
-/// One 64-byte primitive instance. Field packing follows `docs` §2.4 exactly.
+/// 单个 64 字节图元实例，字段排布严格遵循 `docs/architecture/gpu-renderer.md` 规范。
 #[repr(C, align(64))]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct GpuPrimitiveInstance {
-    /// World chunk id. Static UI primitives always use `[0, 0]`.
+    /// 世界 chunk ID。静态 UI 图元恒为 `[0, 0]`。
     pub chunk_id: [i32; 2],
-    /// Position inside the chunk, in `[0.0, 4096.0)`.
+    /// 在 chunk 内的局部坐标，范围 `[0.0, 4096.0)`。
     pub local_pos: [f32; 2],
-    /// Primitive size in logical pixels.
+    /// 逻辑像素尺寸。
     pub size: [f32; 2],
-    /// Corner radii: top-left, top-right, bottom-right, bottom-left (f16).
+    /// 四角圆角半径：左上、右上、右下、左下（f16）。
     pub corner_radii: [u16; 4],
-    /// Border width (f16).
+    /// 边框宽度（f16）。
     pub border_width: u16,
-    /// Analytic shadow blur radius (f16, 0 == no shadow).
+    /// 解析阴影模糊半径（f16，0 表示无阴影）。
     pub shadow_blur: u16,
-    /// Index into `transforms_bda`; bit 31 marks an active animation.
+    /// `transforms_bda` 中的索引；第 31 位标记是否处于动画中。
     pub transform_idx: u32,
-    /// Index into `clips_bda`.
+    /// `clips_bda` 中的索引。
     pub clip_idx: u32,
-    /// Theme colour token or packed atlas UV index.
+    /// 主题颜色令牌或打包后的图集 UV 索引。
     pub fill_token_or_uv: u32,
-    /// Border colour token or bindless texture/atlas layer index.
+    /// 边框颜色令牌或 Bindless 纹理/图集图层索引。
     pub border_token_or_tex: u32,
-    /// `[8b type | 8b blend | 16b flags]`.
+    /// `[8 位类型 | 8 位混合模式 | 16 位标志]`。
     pub prim_type_and_flags: u32,
-    /// `[16b normalised depth | 16b UNORM opacity]`.
+    /// `[16 位归一化深度 | 16 位 UNORM 不透明度]`。
     pub z_and_opacity: u32,
-    /// Index into `payloads_bda` for curves and gradients.
+    /// 曲线与渐变在 `payloads_bda` 中的索引。
     pub extra_payload_idx: u32,
 }
 
-/// Bit 31 of `transform_idx`: the primitive is mid-animation and must bypass
-/// integer pixel snapping (`docs` §4.4).
+/// `transform_idx` 的第 31 位：图元正在动画中，必须跳过整数像素对齐（参见 `docs/architecture/gpu-renderer.md`）。
 pub const TRANSFORM_ANIMATED_BIT: u32 = 1 << 31;
-/// Mask that strips the animation bit, leaving the real table index.
+/// 剥离动画标志位以提取真实变换表索引的掩码。
 pub const TRANSFORM_INDEX_MASK: u32 = !TRANSFORM_ANIMATED_BIT;
 
 impl GpuPrimitiveInstance {
-    /// Pack the `prim_type_and_flags` word.
+    /// 打包 `prim_type_and_flags` 字。
     #[must_use]
     pub const fn pack_type(prim: PrimType, blend: BlendMode, flags: u16) -> u32 {
         (prim as u32) | ((blend as u32) << 8) | ((flags as u32) << 16)
     }
 
-    /// Unpack `[type, blend, flags]`.
+    /// 解包为 `[type, blend, flags]`。
     #[must_use]
     pub const fn unpack_type(word: u32) -> (PrimType, BlendMode, u16) {
         (
@@ -242,7 +236,7 @@ impl GpuPrimitiveInstance {
         BlendMode::from_u8(((self.prim_type_and_flags >> 8) & 0xff) as u8)
     }
 
-    /// `[16b depth | 16b opacity]`.
+    /// `[16 位深度 | 16 位不透明度]`。
     #[must_use]
     pub const fn pack_z_opacity(depth: u16, opacity: f32) -> u32 {
         let o = (opacity.clamp(0.0, 1.0) * 65535.0 + 0.5) as u32;
@@ -255,28 +249,28 @@ impl GpuPrimitiveInstance {
         (self.z_and_opacity >> 16) as u16
     }
 
-    /// Opacity in `[0, 1]` decoded from UNORM16.
+    /// 从 UNORM16 解码的 `[0, 1]` 不透明度。
     #[inline]
     #[must_use]
     pub fn opacity(&self) -> f32 {
         (self.z_and_opacity & 0xffff) as f32 / 65535.0
     }
 
-    /// Reverse-Z depth in `[0, 1]` (1.0 == nearest).
+    /// `[0, 1]` 反向 Z 深度（1.0 == 最近）。
     #[inline]
     #[must_use]
     pub fn depth(&self) -> f32 {
         self.depth_u16() as f32 / 65535.0
     }
 
-    /// True when the primitive participates in the animation channel.
+    /// 当图元参与独立动画通道时返回 true。
     #[inline]
     #[must_use]
     pub const fn is_animated(&self) -> bool {
         self.transform_idx & TRANSFORM_ANIMATED_BIT != 0
     }
 
-    /// Real transform table index (animation bit stripped).
+    /// 剥离动画标志位后的真实变换表索引。
     #[inline]
     #[must_use]
     pub const fn transform_index(&self) -> u32 {
@@ -326,8 +320,7 @@ impl GpuPrimitiveInstance {
         self.shadow_blur = f32_to_f16(b);
     }
 
-    /// Axis-aligned bounds in chunk-local space, expanded by the shadow blur so
-    /// the culling compute shader keeps shadow-only geometry alive.
+    /// chunk 局部空间下的轴对齐包围盒，已按阴影模糊半径外扩，确保剔除计算着色器保留纯阴影几何体。
     #[inline]
     #[must_use]
     pub fn bounds_with_shadow(&self) -> ([f32; 2], [f32; 2]) {
@@ -342,45 +335,37 @@ impl GpuPrimitiveInstance {
     }
 }
 
-/// 64B clip node: one folded hard AABB plus **two** rounded parent slots.
+/// 64B 裁剪节点：一个折叠后的硬裁剪 AABB 外加**两个**圆角父级槽位。
 ///
-/// The spec's doc-comment says "32 bytes", but the declared fields sum to 64B.
-/// The fields are what the shader needs (two nested rounded containers), so the
-/// layout is 64B and we document the discrepancy rather than silently dropping
-/// the second slot.
-/// A clip node: the folded hard clip plus up to two rounded parents.
-///
-/// The field order mirrors `common.glsl`'s `ClipNode` **exactly**. The wide
-/// members come first because std430 forces a `vec4` to a 16-byte boundary:
-/// interleaving `vec4` and `uvec2` members would give the shader an 80-byte
-/// stride while this `repr(C)` struct stays 64 bytes, and every clip with an
-/// index above zero would then be read from the wrong offset.
+/// 字段顺序与 `common.glsl` 中的 `ClipNode` **完全一致**。宽成员须置于前方，
+/// 因为 std430 要求 `vec4` 按 16 字节对齐：若交错排布 `vec4` 与 `uvec2`，
+/// 着色器侧步长会变成 80 字节而本 `repr(C)` 结构体仍为 64 字节，
+/// 导致索引大于 0 的所有裁剪节点均读取错位。
 #[repr(C, align(16))]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct GpuClipNode {
-    /// Folded hard clip `(min_x, min_y, max_x, max_y)`.
+    /// 折叠后的硬裁剪矩形 `(min_x, min_y, max_x, max_y)`。
     pub aabb_clip: [f32; 4],
-    /// First rounded parent `(center_x, center_y, half_w, half_h)`.
+    /// 第一个圆角父级 `(center_x, center_y, half_w, half_h)`。
     pub rounded_clip_0: [f32; 4],
-    /// Second rounded parent.
+    /// 第二个圆角父级。
     pub rounded_clip_1: [f32; 4],
-    /// First parent's four corner radii (f16).
+    /// 第一个圆角父级的四个圆角半径（f16）。
     pub radii_0: [u16; 4],
-    /// Second parent's four corner radii (f16).
+    /// 第二个圆角父级的四个圆角半径（f16）。
     pub radii_1: [u16; 4],
 }
 
-/// Sentinel clip index meaning "unclipped".
+/// 表示“无裁剪”的哨兵裁剪索引。
 pub const CLIP_NONE: u32 = u32::MAX;
 
 impl GpuClipNode {
-    /// A node that clips to `aabb` with no rounded parents.
+    /// 仅按 `aabb` 裁剪、无圆角父级的裁剪节点。
     #[must_use]
     pub fn from_aabb(aabb: [f32; 4]) -> Self {
         Self {
             aabb_clip: aabb,
-            // A degenerate rounded clip with zero radii and an enormous extent
-            // is a no-op in the shader's SDF test.
+            // 零半径且范围极大的退化圆角裁剪在着色器 SDF 测试中为空操作。
             rounded_clip_0: [0.0, 0.0, 1.0e9, 1.0e9],
             radii_0: [0; 4],
             rounded_clip_1: [0.0, 0.0, 1.0e9, 1.0e9],
@@ -388,24 +373,24 @@ impl GpuClipNode {
         }
     }
 
-    /// True when the folded AABB is empty (everything culled).
+    /// 当折叠后的 AABB 为空（全部被剔除）时返回 true。
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.aabb_clip[0] >= self.aabb_clip[2] || self.aabb_clip[1] >= self.aabb_clip[3]
     }
 }
 
-/// 32B transform record for the independent animation channel.
+/// 独立动画通道的 32B 变换记录。
 #[repr(C, align(16))]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct GpuTransform {
-    /// `m00, m10, m01, m11` (column-major 2×2).
+    /// `m00, m10, m01, m11`（列主序 2×2 矩阵）。
     pub linear: [f32; 4],
-    /// Translation in logical pixels.
+    /// 逻辑像素平移量。
     pub translation: [f32; 2],
-    /// `1.0` when the transform is identity and can be skipped entirely.
+    /// 当变换为单位矩阵且可完全跳过时为 `1.0`。
     pub scale_hint: f32,
-    /// Bit-packed flags (see [`TransformFlags`]).
+    /// 位打包标志（参见 [`TransformFlags`]）。
     pub flags: u32,
 }
 
@@ -457,20 +442,20 @@ impl GpuTransform {
     }
 }
 
-/// Flags stored in [`GpuTransform::flags`].
+/// 存储在 [`GpuTransform::flags`] 中的标志位。
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Pod, Zeroable)]
 pub struct TransformFlags(pub u32);
 
 impl TransformFlags {
     pub const EMPTY: Self = Self(0);
-    /// The primitive is currently animating: bypass pixel snapping.
+    /// 图元正在动画中：跳过像素对齐。
     pub const ANIMATED: Self = Self(1 << 0);
-    /// The scale is uniform, so the shader can use a cheap scalar path.
+    /// 缩放为均匀缩放，着色器可走低开销标量路径。
     pub const UNIFORM_SCALE: Self = Self(1 << 1);
-    /// The transform mirrors on X.
+    /// 变换在 X 轴存在镜像翻转。
     pub const MIRROR_X: Self = Self(1 << 2);
-    /// Skip the transform entirely (identity fast path in the VS).
+    /// 完全跳过变换（顶点着色器中的单位矩阵快速路径）。
     pub const SKIP: Self = Self(1 << 3);
 
     #[inline]
@@ -500,25 +485,23 @@ impl core::ops::BitOr for TransformFlags {
     }
 }
 
-/// 48B payload header for curves and gradients.
+/// 曲线与渐变的 48B 载荷头。
 ///
-/// For [`PrimType::Curve`]: `p0`/`p1`/`p2` are the quadratic control polygon in
-/// primitive-local space. For gradients: `p0`/`p1` are the endpoints and `p2.x`
-/// is the stop count (stops follow inline).
+/// 对于 [`PrimType::Curve`]：`p0`/`p1`/`p2` 为图元局部空间中的二次控制多边形顶点。
+/// 对于渐变：`p0`/`p1` 为端点，`p2.x` 携带色标信息。
 #[repr(C, align(16))]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct GpuPayload {
     pub p0: [f32; 2],
     pub p1: [f32; 2],
     pub p2: [f32; 2],
-    /// Stroke width in logical pixels.
+    /// 逻辑像素描边宽度。
     pub line_width: f32,
-    /// Gradient stop offset / curve flags.
+    /// 渐变色标偏移 / 曲线标志。
     pub extra: u32,
-    /// Packed flags.
+    /// 打包标志位。
     pub flags: u32,
-    /// Explicit tail padding: three words keep the struct exactly 48B with no
-    /// implicit padding (a `Pod` type must not contain any).
+    /// 显式尾部填充：3 个字使结构体严格保持 48B 且无隐式填充（`Pod` 类型不得含隐式填充）。
     pub _reserved: [u32; 3],
 }
 
@@ -536,12 +519,10 @@ impl GpuPayload {
         }
     }
 
-    /// Linear gradient from `from` to `to`, both in normalised local
-    /// coordinates (`0..1` of the primitive's box).
+    /// 从 `from` 到 `to` 的线性渐变，两者均为图元包围盒内的归一化局部坐标（`0..1`）。
     ///
-    /// Stops are theme tokens: `token0` at `from`, `token1` at `to`. `exponent`
-    /// biases the interpolation (`1.0` is linear) — useful for perceptually
-    /// even ramps in a linear-sRGB swapchain.
+    /// 色标为主题令牌：`from` 处为 `token0`，`to` 处为 `token1`。`exponent` 调节插值
+    /// 偏置（`1.0` 为线性）——有助于在线性 sRGB 交换链上实现感知均匀的渐变过渡。
     #[must_use]
     pub fn gradient_linear(
         from: [f32; 2],
@@ -553,7 +534,7 @@ impl GpuPayload {
         Self::gradient(from, to, token0, token1, exponent)
     }
 
-    /// Radial gradient centred at `center` with the per-axis radius `radius`.
+    /// 以 `center` 为圆心、各轴半径为 `radius` 的径向渐变。
     #[must_use]
     pub fn gradient_radial(
         center: [f32; 2],
@@ -566,9 +547,8 @@ impl GpuPayload {
     }
 
     fn gradient(p0: [f32; 2], p1: [f32; 2], token0: u32, token1: u32, exponent: f32) -> Self {
-        // `p2.x` carries both stop tokens: low 16 bits = start, high = end.
-        // `p2.y` is the interpolation exponent. The shader unpacks the same
-        // way with `floatBitsToUint`.
+        // `p2.x` 携带两个色标令牌：低 16 位为起点，高 16 位为终点。
+        // `p2.y` 为插值指数。着色器通过 `floatBitsToUint` 按相同方式解包。
         let packed = (token0 & 0xFFFF) | ((token1 & 0xFFFF) << 16);
         Self {
             p0,
@@ -581,22 +561,21 @@ impl GpuPayload {
         }
     }
 
-    /// The two stop tokens of a gradient payload, as written by
-    /// [`Self::gradient_linear`] / [`Self::gradient_radial`].
+    /// 提取由 [`Self::gradient_linear`] / [`Self::gradient_radial`] 写入的两个渐变色标令牌。
     #[must_use]
     pub fn gradient_tokens(&self) -> (u32, u32) {
         let packed = self.p2[0].to_bits();
         (packed & 0xFFFF, packed >> 16)
     }
 
-    /// The gradient interpolation exponent.
+    /// 返回渐变插值指数。
     #[must_use]
     pub fn gradient_exponent(&self) -> f32 {
         self.p2[1]
     }
 }
 
-/// Indirect draw command; layout-compatible with `VkDrawIndirectCommand`.
+/// 间接绘制命令；内存布局与 `VkDrawIndirectCommand` 兼容。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 pub struct DrawIndirectCommand {
@@ -618,41 +597,39 @@ impl DrawIndirectCommand {
     }
 }
 
-/// Flags stored in the high 16 bits of `prim_type_and_flags`.
+/// 存储在 `prim_type_and_flags` 高 16 位中的标志。
 ///
-/// Bits 0..2 are the **sub-element order** that also forms the low byte of the
-/// 64-bit sort key, so a node's shadow always lands behind its background and
-/// its border always lands in front.
+/// 第 0..2 位为**子元素顺序**，同时构成 64 位排序键的低字节，
+/// 确保节点阴影始终在背景之后、边框始终在最前。
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Pod, Zeroable)]
 pub struct PrimFlags(pub u16);
 
 impl PrimFlags {
     pub const EMPTY: Self = Self(0);
-    /// Sub-element order mask (`SubElement`).
+    /// 子元素顺序掩码（`SubElement`）。
     pub const SUB_ELEMENT_MASK: Self = Self(0b111);
-    /// The glyph sits on a dark surface: apply stem darkening.
+    /// 字形位于深色表面上：启用字干加粗补偿。
     pub const DARK_BG: Self = Self(1 << 3);
-    /// Sample the RGBA atlas as a multi-channel distance field.
+    /// 将 RGBA 图集作为多通道距离场（MTSDF）采样。
     pub const MSDF: Self = Self(1 << 4);
-    /// The text run was truncated; the shader may soften the trailing edge.
+    /// 文本行被截断；着色器可柔化尾部边缘。
     pub const ELLIPSIS: Self = Self(1 << 5);
-    /// Rasterised with a horizontal subpixel phase (Atlas_R8 phase layers).
+    /// 使用水平亚像素相位光栅化（`Atlas_R8` 相位层）。
     pub const SUBPIXEL: Self = Self(1 << 6);
-    /// The primitive is the topmost of an opaque core (used by the prepass).
+    /// 该图元位于不透明核心顶层（供预 Pass 使用）。
     pub const OPAQUE_CORE: Self = Self(1 << 7);
-    /// Fill from the linear gradient stored in `extra_payload_idx`.
+    /// 使用 `extra_payload_idx` 中存储的线性渐变填充。
     ///
-    /// Bits 5 and 6 are already taken by `ELLIPSIS`/`SUBPIXEL`, so the gradient
-    /// markers start at bit 8. `common.glsl` mirrors the value exactly.
+    /// 第 5、6 位已被 `ELLIPSIS`/`SUBPIXEL` 占用，故渐变标记从第 8 位开始。
+    /// `common.glsl` 与此值严格镜像。
     pub const GRADIENT_LINEAR: Self = Self(1 << 8);
-    /// Fill from a radial gradient (centre `p0`, radius vector `p1`).
+    /// 使用径向渐变填充（圆心 `p0`，半径向量 `p1`）。
     pub const GRADIENT_RADIAL: Self = Self(1 << 9);
-    /// The primitive is an `InnerShadow` sub-element: `shadow_blur` is the
-    /// inset blur radius and the fill token is the shadow colour.
+    /// 该图元为 `InnerShadow` 子元素：`shadow_blur` 为内阴影模糊半径，填充令牌为阴影颜色。
     pub const INNER_SHADOW: Self = Self(1 << 10);
 
-    /// Either gradient marker.
+    /// 任意渐变标记掩码。
     pub const GRADIENT_ANY: Self = Self(Self::GRADIENT_LINEAR.0 | Self::GRADIENT_RADIAL.0);
 
     #[inline]
@@ -667,13 +644,13 @@ impl PrimFlags {
         self.0 & other.0 == other.0
     }
 
-    /// Build the flags word for a given sub-element plus extra flags.
+    /// 根据子元素类型与附加标志构建标志字。
     #[must_use]
     pub const fn with_sub(sub: SubElement, extra: Self) -> Self {
         Self((sub as u16) | extra.0)
     }
 
-    /// Sub-element encoded in the low three bits.
+    /// 提取编码在低 3 位中的子元素类型。
     #[must_use]
     pub const fn sub_element(self) -> u8 {
         (self.0 & Self::SUB_ELEMENT_MASK.0) as u8
@@ -688,24 +665,22 @@ impl core::ops::BitOr for PrimFlags {
     }
 }
 
-/// The **single** 128-byte push-constant block used by every pipeline.
+/// 所有管线共用的**唯一** 128 字节 Push Constant 块。
 ///
-/// The first 72 bytes are the documented `FramePushConstants`; the tail carries
-/// the compute stage's scratch addresses and counters. Graphics pipelines push
-/// the whole block with a zeroed tail, which lets one `VkPipelineLayout` serve
-/// the uber shader and all six compute stages (and keeps the range under the
-/// 128-byte guaranteed minimum).
+/// 前 72 字节为 `FramePushConstants`；尾部携带计算阶段的暂存地址与计数器。
+/// 图形管线推送整块并将尾部清零，从而使单个 `VkPipelineLayout` 即可服务于
+/// uber 着色器与全部六个计算阶段（且严格位于 128 字节保证下限之内）。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct PushConstants {
     pub frame: FramePushConstants,
-    /// Element count for the current compute dispatch.
+    /// 当前计算调度的元素数量。
     pub prim_count: u32,
-    /// Radix digit shift (0, 8, 16, … 56).
+    /// 基数排序位偏移（0、8、16、… 56）。
     pub digit: u32,
-    /// Number of 256-element blocks in the current sort pass.
+    /// 当前排序 Pass 中 256 元素块的数量。
     pub block_count: u32,
-    /// Generic scratch word (stage specific).
+    /// 通用暂存字（各阶段含义不同）。
     pub aux: u32,
     pub scratch_bda: u64,
     pub scratch_bda2: u64,
@@ -715,10 +690,10 @@ pub struct PushConstants {
 }
 
 impl PushConstants {
-    /// Push-constant range size in bytes.
+    /// Push Constant 范围字节大小。
     pub const SIZE: u32 = core::mem::size_of::<Self>() as u32;
 
-    /// Wrapper carrying only the frame prefix (what most callers have).
+    /// 仅构建包含帧前缀的 Push Constant 块（供大多数调用方使用）。
     #[must_use]
     pub fn from_frame(frame: FramePushConstants) -> Self {
         Self {
@@ -728,41 +703,41 @@ impl PushConstants {
     }
 }
 
-/// Push constants for the dual-Kawase blur passes.
+/// Dual-Kawase 模糊 Pass 的 Push Constant。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct BlurPush {
-    /// Source region in uv space: `(x, y, width, height)`.
+    /// UV 空间源区域：`(x, y, width, height)`。
     pub uv_rect: [f32; 4],
-    /// Destination size in pixels.
+    /// 目标像素尺寸。
     pub dst_size: [f32; 2],
-    /// Blur radius in logical pixels.
+    /// 逻辑像素模糊半径。
     pub radius: f32,
-    /// Which downsample/upsample iteration this is.
+    /// 当前降采样/升采样迭代轮次。
     pub iteration: u32,
 }
 
 impl BlurPush {
-    /// Size contract for the blur pipeline layout.
+    /// 模糊管线布局的 Push Constant 大小契约。
     pub const SIZE: u32 = core::mem::size_of::<Self>() as u32;
 }
 
-/// Push constants for the backdrop composite pass.
+/// 背景虚化合成 Pass 的 Push Constant。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct BackdropCompositePush {
-    /// Rectangle in physical pixels: `(x, y, width, height)`.
+    /// 物理像素矩形：`(x, y, width, height)`。
     pub rect: [f32; 4],
-    /// Corner radii: top-left, top-right, bottom-right, bottom-left.
+    /// 圆角半径：左上、右上、右下、左下。
     pub radii: [f32; 4],
 }
 
 impl BackdropCompositePush {
-    /// Size contract for the composite pipeline layout.
+    /// 背景合成管线布局的 Push Constant 大小契约。
     pub const SIZE: u32 = core::mem::size_of::<Self>() as u32;
 }
 
-/// One incremental-scatter patch, layout-compatible with `scatter.comp`.
+/// 单个增量散布补丁，内存布局与 `scatter.comp` 兼容。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 pub struct GpuScatterPatch {
@@ -772,7 +747,7 @@ pub struct GpuScatterPatch {
     pub _pad: u32,
 }
 
-/// A `(key, primitive index)` pair as produced by the culling pass.
+/// 剔除 Pass 生成的 `(key, primitive_index)` 二元组。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 pub struct SortedEntry {
@@ -788,9 +763,8 @@ mod tests {
 
     #[test]
     fn push_constants_fit_one_block() {
-        // The spec's doc-comment says 64B, but the nine declared fields sum to
-        // 72B (5 BDA pointers + 3 vec2 + 2 scalars). The fields are all needed,
-        // so 72B stands — still far below the 128B guaranteed minimum.
+        // 声明的 9 个字段合计 72B（5 个 BDA 指针 + 3 个 vec2 + 2 个标量），
+        // 所有字段均必需，且 72B 仍远低于 128B 保证下限。
         assert_eq!(size_of::<FramePushConstants>(), 72);
         assert_eq!(align_of::<FramePushConstants>(), 8);
         assert_eq!(FramePushConstants::SIZE, 72);
@@ -812,7 +786,7 @@ mod tests {
     fn primitive_is_one_cache_line() {
         assert_eq!(size_of::<GpuPrimitiveInstance>(), PRIMITIVE_STRIDE);
         assert_eq!(align_of::<GpuPrimitiveInstance>(), 64);
-        // Every field lands inside the single 64B line.
+        // 每个字段均落入同一条 64B 缓存行内。
         assert_eq!(offset_of!(GpuPrimitiveInstance, chunk_id), 0);
         assert_eq!(offset_of!(GpuPrimitiveInstance, local_pos), 8);
         assert_eq!(offset_of!(GpuPrimitiveInstance, size), 16);
@@ -836,7 +810,7 @@ mod tests {
         }
         let bytes: &[u8] = bytemuck::cast_slice(&v);
         assert_eq!(bytes.len(), 16 * PRIMITIVE_STRIDE);
-        // Stride check: instance 3's local_pos.x sits at 3*64 + 8.
+        // 步长校验：第 3 个实例的 local_pos.x 位于 3*64 + 8。
         let off = 3 * PRIMITIVE_STRIDE + 8;
         assert_eq!(
             f32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()),
@@ -906,14 +880,10 @@ mod tests {
         assert!(GpuClipNode::from_aabb([10.0, 0.0, 0.0, 10.0]).is_empty());
     }
 
-    /// The `ClipNode` layout must match `common.glsl`'s `struct ClipNode`.
+    /// `ClipNode` 布局必须与 `common.glsl` 中的 `struct ClipNode` 严格一致。
     ///
-    /// The two sides are bound by physical device address, so there is no
-    /// reflection to catch a mismatch. std430 forces a `vec4` to a 16-byte
-    /// boundary, so the wide members have to come first: with
-    /// `vec4, vec4, uvec2, vec4, uvec2` the shader's stride is 80 bytes while
-    /// this `repr(C)` struct is 64, and every clip above index zero is read
-    /// from the wrong offset.
+    /// 两侧通过物理设备地址绑定，无反射检查机制。std430 强制 `vec4` 16 字节对齐，
+    /// 故宽成员须前置，避免着色器步长膨胀至 80 字节而 Rust 侧仍为 64 字节。
     #[test]
     fn clip_node_layout_matches_the_shader_struct() {
         assert_eq!(offset_of!(GpuClipNode, aabb_clip), 0);
@@ -921,17 +891,14 @@ mod tests {
         assert_eq!(offset_of!(GpuClipNode, rounded_clip_1), 32);
         assert_eq!(offset_of!(GpuClipNode, radii_0), 48);
         assert_eq!(offset_of!(GpuClipNode, radii_1), 56);
-        // The radii arrays are two `u32`s worth of packed f16, exactly like
-        // the `uvec2` members in the shader.
+        // 圆角半径数组等价于两个打包 f16 的 `u32`，与着色器中的 `uvec2` 成员完全对应。
         assert_eq!(size_of::<[u16; 4]>(), 8);
     }
 
-    /// The shader's `ClipNode` member order must mirror the Rust struct.
+    /// 着色器 `ClipNode` 的成员顺序必须与 Rust 结构体完全镜像。
     ///
-    /// The two layouts are bound by physical device address: nothing checks
-    /// them against each other, so a reorder on one side silently corrupts
-    /// every clip above index zero. This test parses the GLSL source and
-    /// compares the member order with the Rust field order.
+    /// 两侧通过物理设备地址绑定，任一侧重排字段都会静默破坏索引 > 0 的裁剪节点。
+    /// 本测试解析 GLSL 源码并比对成员顺序与 Rust 字段顺序。
     #[test]
     fn shader_clip_node_member_order_matches_the_rust_struct() {
         let glsl = include_str!("../shaders/common.glsl");
@@ -943,14 +910,14 @@ mod tests {
         let end = body.find('}').expect("`struct ClipNode` must be closed");
         let body = &body[..end];
 
-        // Collect the member types in declaration order.
+        // 按声明顺序收集成员类型。
         let members: Vec<&str> = body
             .lines()
             .filter_map(|line| {
                 let line = line.split("//").next().unwrap_or("").trim();
                 let mut parts = line.split_whitespace();
                 let ty = parts.next()?;
-                // Skip the member name; only the type drives the layout.
+                // 忽略成员名称，仅类型决定内存布局。
                 parts.next()?;
                 Some(ty)
             })
@@ -961,7 +928,7 @@ mod tests {
             "the shader's ClipNode member order changed; mirror it in `GpuClipNode`"
         );
 
-        // std430: a `vec4` is 16-byte aligned, a `uvec2` 8-byte aligned.
+        // std430 规则：`vec4` 为 16 字节对齐，`uvec2` 为 8 字节对齐。
         let mut offset = 0usize;
         let mut offsets = Vec::new();
         for ty in &members {

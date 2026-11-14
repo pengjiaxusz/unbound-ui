@@ -1,6 +1,6 @@
-//! Behavioral tests for the P1 runtime subsystems: the local state pool and
-//! its lifecycle hooks, timers, cross-thread results, the keymap and the
-//! wheel / context-menu paths.
+//! P1 运行时子系统行为测试：局部状态池及其生命周期钩子、定时器、
+//! 跨线程结果、快捷键映射以及滚轮 / 右键菜单路径。
+//!
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ impl Application for SubsystemApp {
     type State = Probe;
 
     fn init(&mut self, ctx: &mut AppContext) -> Self::State {
-        // A timer scheduled from `init` must still land, not be dropped.
+        // `init` 中调度的定时器也必须正常触发，不可被丢弃。
         ctx.set_timeout(Duration::from_millis(100), |token| AppEvent::Timer {
             token,
         });
@@ -274,7 +274,7 @@ fn a_skipped_frame_does_not_unmount_anything() {
     runtime.frame(0.0);
     assert_eq!(runtime.state().mounted, vec![STATE_KEY]);
 
-    // Nothing changed, so the view is not rebuilt and the key stays mounted.
+    // 未发生任何变更，因此视图不重建且该键保持挂载。
     runtime.frame(0.0);
     assert!(runtime.state().unmounted.is_empty());
 }

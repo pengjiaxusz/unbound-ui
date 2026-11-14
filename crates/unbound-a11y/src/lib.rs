@@ -1,22 +1,22 @@
-//! Incremental accessibility semantics (`docs` §6.4).
+//! 增量无障碍语义树（`docs` §6.4）。
 //!
-//! AccessKit is the *only* semantic output of the engine. There is no second
-//! bespoke AST for agents to learn: the same tree that Windows UI Automation
-//! consumes is the tree an agent introspects, which is exactly the "双模赋能"
-//! the doc asks for.
+//! AccessKit 是引擎**唯一**的语义输出，不存在第二套供 Agent 学习的
+//! 定制 AST：Windows UI Automation 消费的树与 Agent 自省的树完全一致，
+//! 这正是文档所要求的“双模赋能”。
 //!
-//! The interesting constraint is *incrementality*. A 100 000 node canvas cannot
-//! rebuild a `TreeUpdate` per frame; AccessKit's contract is that an update only
-//! carries nodes that are new or changed. So this module is a dirty-set:
+//! 核心约束在于**增量性**。拥有 10 万个节点的画布无法每帧重建一次
+//! `TreeUpdate`；AccessKit 契约规定每次更新仅携带新增或变更的节点。
+//! 因此本模块本质上是一个脏集合（dirty-set）：
 //!
-//! * writing a node marks it dirty,
-//! * changing a child list marks the *parent* dirty (AccessKit requires the
-//!   parent to be re-sent with the new `children` vector),
-//! * removing a subtree records the parent so the removal is visible,
-//! * focus is echoed on every update because the protocol demands it.
+//! * 写入节点会将其标记为脏；
+//! * 修改子节点列表会将其**父节点**标记为脏（AccessKit 要求连同新的 `children`
+//!   向量重新发送父节点）；
+//! * 移除子树会记录其父节点，使移除操作对外可见；
+//! * 每次更新都会回显焦点（focus），因为协议对此有明确要求。
 //!
-//! The first update after [`Semantics::new`] is a full snapshot; everything
-//! after that is a delta.
+//!
+//! [`Semantics::new`] 之后的首次更新为完整快照，此后均为增量更新。
+//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -24,7 +24,7 @@ use accesskit::{Action, Node, NodeId, Role, Tree, TreeId, TreeUpdate};
 use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_math::Rect;
 
-/// Actions a semantic node can expose.
+/// 语义节点可对外暴露的交互动作。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum A11yAction {
     Click,
@@ -40,7 +40,7 @@ pub enum A11yAction {
 }
 
 impl A11yAction {
-    /// The AccessKit equivalent.
+    /// 对应的 AccessKit 动作枚举。
     #[must_use]
     pub fn to_accesskit(self) -> Action {
         match self {
@@ -57,7 +57,7 @@ impl A11yAction {
         }
     }
 
-    /// Short name, used by the structured error output of the headless harness.
+    /// 简短名称，用于无头测试框架（headless harness）的结构化错误输出。
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -75,7 +75,7 @@ impl A11yAction {
     }
 }
 
-/// A compact set of [`A11yAction`]s.
+/// [`A11yAction`] 的紧凑集合。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct A11yActions(u16);
 
@@ -107,7 +107,7 @@ impl A11yActions {
         self.0 == 0
     }
 
-    /// Iterate the actions in declaration order (deterministic).
+    /// 按声明顺序迭代动作（顺序确定）。
     pub fn iter(self) -> impl Iterator<Item = A11yAction> {
         const ALL: [A11yAction; 10] = [
             A11yAction::Click,
@@ -135,21 +135,21 @@ impl FromIterator<A11yAction> for A11yActions {
     }
 }
 
-/// One semantic node. A plain value: the caller (a reducer) owns it.
+/// 单个语义节点。纯值类型，由调用方（reducer）持有所有权。
 #[derive(Clone, Debug, PartialEq)]
 pub struct A11yNode {
     pub role: Role,
     pub label: String,
     pub description: String,
     pub value: String,
-    /// Screen-space bounds, in physical pixels.
+    /// 屏幕空间包围盒，单位为物理像素。
     pub bounds: Rect,
     pub disabled: bool,
     pub selected: bool,
-    /// `Some` only for expandable things.
+    /// 仅对可展开元素为 `Some`。
     pub expanded: Option<bool>,
     pub focusable: bool,
-    /// Heading level / tree depth; `0` when not applicable.
+    /// 标题层级或树深度；不适用时为 `0`。
     pub level: u32,
     pub actions: A11yActions,
 }
@@ -203,7 +203,7 @@ impl A11yNode {
         self
     }
 
-    /// Convert to the AccessKit representation, filling in `children`.
+    /// 转换为 AccessKit 表示形式，并填充 `children`。
     #[must_use]
     pub fn to_accesskit(&self, children: &[u64]) -> Node {
         let mut node = Node::new(self.role);
@@ -236,8 +236,8 @@ impl A11yNode {
             node.set_expanded(expanded);
         }
         if self.focusable {
-            // AccessKit 0.24 has no explicit `focusable` flag: a node is
-            // focusable when it advertises the `Focus` action.
+            // AccessKit 0.24 没有显式的 `focusable` 标志：当节点声明了 `Focus`
+            // 动作时即视为可聚焦。
             node.add_action(Action::Focus);
         }
         if self.level > 0 {
@@ -254,11 +254,11 @@ impl A11yNode {
     }
 }
 
-/// The incremental semantic tree.
+/// 增量语义树。
 ///
-/// Cloning is a full snapshot: an application that rebuilds its semantic tree
-/// from scratch every frame hands a copy to the scene collector while keeping
-/// the original inspectable.
+/// 克隆操作会生成完整快照：每帧从头重建语义树的应用可将副本交给
+/// 场景收集器，同时保留原树用于自省检查。
+///
 #[derive(Clone, Debug)]
 pub struct Semantics {
     nodes: FxHashMap<u64, A11yNode>,
@@ -280,8 +280,8 @@ impl Default for Semantics {
 }
 
 impl Semantics {
-    /// Create a tree with a root node id. The root always exists and is the
-    /// window node.
+    /// 使用指定的根节点 ID 创建语义树。根节点始终存在，即窗口节点。
+    ///
     #[must_use]
     pub fn new(root: u64) -> Self {
         Self {
@@ -328,13 +328,13 @@ impl Semantics {
         self.children.get(&id).map_or(&[], Vec::as_slice)
     }
 
-    /// Insert or update a node. Marks it dirty; returns `true` when this is new.
+    /// 插入或更新节点。将其标记为脏；若为新建节点则返回 `true`。
     pub fn upsert(&mut self, id: u64, node: A11yNode) -> bool {
         let is_new = self.nodes.insert(id, node).is_none();
         self.dirty.insert(id);
         if is_new && id != self.root {
-            // A new node without a parent would violate the protocol; attach it
-            // to the root so the tree stays well formed.
+            // 没有父节点的新节点会违反协议；将其挂载到根节点下，以保持树结构合法。
+            //
             self.children.entry(self.root).or_default().push(id);
             self.parents.insert(id, self.root);
             self.structural.insert(self.root);
@@ -342,11 +342,11 @@ impl Semantics {
         is_new
     }
 
-    /// Reset the tree for a new frame, keeping every allocation.
+    /// 重置语义树以开始新一帧，同时保留所有已分配内存。
     ///
-    /// The root stays the same; the next update is a full snapshot again.
-    /// Reusing the maps is what keeps a steady-state frame from allocating a
-    /// new semantic tree per frame.
+    /// 根节点保持不变；下一次更新将再次为完整快照。
+    /// 复用内部映射表可确保稳态帧不会每帧分配新的语义树。
+    ///
     pub fn reset(&mut self, root: u64) {
         self.nodes.clear();
         self.children.clear();
@@ -359,7 +359,7 @@ impl Semantics {
         self.initialized = false;
     }
 
-    /// Replace the child list of `parent`, reparenting the children as needed.
+    /// 替换 `parent` 的子节点列表，并按需重新挂载子节点。
     pub fn set_children(&mut self, parent: u64, children: &[u64]) {
         let previous = self.children.get(&parent).cloned().unwrap_or_default();
         for old in &previous {
@@ -368,8 +368,8 @@ impl Semantics {
             }
         }
         for child in children {
-            // Moving a node between parents must remove it from the old list:
-            // AccessKit readers would otherwise see the child twice.
+            // 在父节点间移动节点时必须将其从旧列表中移除：
+            // 否则 AccessKit 读取方会看到重复的子节点。
             if let Some(old) = self.parents.get(child).copied() {
                 if old != parent {
                     if let Some(list) = self.children.get_mut(&old) {
@@ -386,7 +386,7 @@ impl Semantics {
         self.structural.insert(parent);
     }
 
-    /// Move a single child to a new parent.
+    /// 将单个子节点移动到新的父节点下。
     pub fn reparent(&mut self, child: u64, parent: u64) {
         if let Some(old) = self.parents.get(&child).copied() {
             if old != parent {
@@ -406,7 +406,7 @@ impl Semantics {
         self.structural.insert(parent);
     }
 
-    /// Move focus. Always echoed in the next update.
+    /// 移动焦点。在下一次更新中始终回显。
     pub fn set_focus(&mut self, id: u64) {
         if self.focus == id {
             return;
@@ -417,7 +417,7 @@ impl Semantics {
         self.dirty.insert(id);
     }
 
-    /// Remove a node and its whole subtree.
+    /// 移除节点及其整棵子树。
     pub fn remove(&mut self, id: u64) {
         let parent = self.parent_of(id);
         let mut stack = vec![id];
@@ -447,7 +447,7 @@ impl Semantics {
         self.parents.get(&id).copied()
     }
 
-    /// Number of nodes the next update will carry. Zero means "nothing to send".
+    /// 下一次更新将携带的节点数量。零表示“无需发送”。
     #[must_use]
     pub fn pending(&self) -> usize {
         if !self.initialized {
@@ -467,10 +467,10 @@ impl Semantics {
         count
     }
 
-    /// Produce the next `TreeUpdate`.
+    /// 生成下一次 `TreeUpdate`。
     ///
-    /// Returns `None` when nothing changed, which lets the caller skip the
-    /// platform call entirely — the "静止态 0% CPU" requirement starts here.
+    /// 若无任何变更则返回 `None`，使调用方可完全跳过平台调用——
+    /// “静止态 0% CPU”要求即由此起步。
     pub fn take_update(&mut self) -> Option<TreeUpdate> {
         if self.initialized && self.dirty.is_empty() && self.structural.is_empty() {
             return None;
@@ -488,10 +488,10 @@ impl Semantics {
             ids.dedup();
             ids
         };
-        // A removed child must not be re-sent, even if a stale dirty mark
-        // survived: AccessKit rejects updates for nodes that no longer exist.
+        // 已移除的子节点绝不能再次发送，即使残留了旧的脏标记：
+        // AccessKit 会拒绝针对已不存在节点的更新。
         ids.retain(|id| self.nodes.contains_key(id));
-        // Root first when present: readers build the tree from the top down.
+        // 若存在根节点则优先输出：读取方自顶向下构建树。
         ids.sort_unstable_by_key(|id| (*id != self.root, *id));
 
         let mut nodes = Vec::with_capacity(ids.len());
@@ -522,10 +522,10 @@ impl Semantics {
         })
     }
 
-    /// Semantic path of a node, e.g. `Window/Panel[2]/Button "Save"`.
+    /// 节点的语义路径，例如 `Window/Panel[2]/Button "Save"`。
     ///
-    /// The headless harness prints this when a layout sanitizer fires, so an
-    /// agent can locate the offending node without a second introspection API.
+    /// 当布局合法性检查器触发时，无头测试框架会打印该路径，使 Agent
+    /// 无需第二套自省 API 即可定位问题节点。
     #[must_use]
     pub fn path(&self, id: u64) -> String {
         let mut segments = Vec::new();
@@ -555,7 +555,7 @@ impl Semantics {
         segments.join("/")
     }
 
-    /// Number of updates produced so far, for the KPI harness.
+    /// 迄今为止生成的更新总次数，供 KPI 基准测试使用。
     #[must_use]
     pub fn updates(&self) -> u64 {
         self.updates
@@ -789,7 +789,7 @@ mod tests {
         assert!(s.children_of(2).is_empty());
     }
 
-    /// A thousand-node canvas where one label changes must send one node.
+    /// 拥有上千个节点的画布中，仅修改一个标签时必须只发送一个节点。
     #[test]
     fn a_single_label_change_costs_one_node() {
         let mut s = tree();

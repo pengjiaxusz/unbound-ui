@@ -1,6 +1,6 @@
 #version 460
 
-// Full-screen triangle for the backdrop composite pass (P1.4).
+// 用于背景虚化合成 Pass 的全屏三角形（P1.4）。
 
 layout(location = 0) out vec2 v_uv;
 
