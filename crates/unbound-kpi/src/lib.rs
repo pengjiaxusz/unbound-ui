@@ -171,6 +171,7 @@ pub fn measure_all() -> Report {
         tolerance,
     };
     report.rows.push(cull());
+    report.rows.push(cull_4k());
     report.rows.push(hit_test());
     report.rows.push(snap());
     report.rows.push(layout_boundary());
@@ -197,8 +198,33 @@ pub fn cull() -> Measurement {
         tree.query_exact(viewport, &mut out);
     });
     Measurement {
-        name: "loose-quadtree viewport cull",
+        name: "loose-quadtree viewport cull (1080p)",
         budget_us: 150.0,
+        observed_us: observed,
+        samples,
+        detail: format!("{ENTITIES} entities, {} returned", out.len()),
+    }
+}
+
+/// 1 000 000 entities, one 3840×2160 (4K UHD) viewport query.
+#[must_use]
+pub fn cull_4k() -> Measurement {
+    const ENTITIES: u32 = 1_000_000;
+    const WORLD: f32 = 1_048_576.0;
+    let mut tree = LooseQuadtree::new(WORLD);
+    for i in 0..ENTITIES {
+        let x = ((u64::from(i) * 7919) % 262_144) as f32 - 131_072.0;
+        let y = ((u64::from(i) * 104_729) % 262_144) as f32 - 131_072.0;
+        tree.insert(i, Rect::new(x, y, 16.0, 16.0), 0);
+    }
+    let viewport = Rect::new(-1920.0, -1080.0, 3840.0, 2160.0);
+    let mut out = Vec::new();
+    let (observed, samples) = measure(20, |_| {
+        tree.query_exact(viewport, &mut out);
+    });
+    Measurement {
+        name: "loose-quadtree viewport cull (4K UHD)",
+        budget_us: 250.0,
         observed_us: observed,
         samples,
         detail: format!("{ENTITIES} entities, {} returned", out.len()),

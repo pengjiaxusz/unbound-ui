@@ -604,6 +604,8 @@ pub fn reduce_showcase_component(
     let key = id as u8;
     match id {
         WidgetCatalogId::Button
+        | WidgetCatalogId::SplitButton
+        | WidgetCatalogId::Descriptions
         | WidgetCatalogId::Alert
         | WidgetCatalogId::AlertDialog
         | WidgetCatalogId::Badge
@@ -638,6 +640,8 @@ pub fn reduce_showcase_component(
         }
         WidgetCatalogId::Checkbox
         | WidgetCatalogId::Switch
+        | WidgetCatalogId::ToggleButton
+        | WidgetCatalogId::Callout
         | WidgetCatalogId::Collapsible
         | WidgetCatalogId::Modal
         | WidgetCatalogId::Drawer
@@ -650,6 +654,8 @@ pub fn reduce_showcase_component(
             true
         }
         WidgetCatalogId::Accordion
+        | WidgetCatalogId::TreeTable
+        | WidgetCatalogId::VirtualMasonry
         | WidgetCatalogId::Tabs
         | WidgetCatalogId::Radio
         | WidgetCatalogId::Segmented
@@ -683,6 +689,7 @@ pub fn reduce_showcase_component(
             true
         }
         WidgetCatalogId::Slider
+        | WidgetCatalogId::MultiSplit
         | WidgetCatalogId::Progress
         | WidgetCatalogId::NumberInput
         | WidgetCatalogId::Spinner
@@ -701,6 +708,7 @@ pub fn reduce_showcase_component(
             true
         }
         WidgetCatalogId::TextInput
+        | WidgetCatalogId::TerminalView
         | WidgetCatalogId::TextArea
         | WidgetCatalogId::AutoComplete
         | WidgetCatalogId::Combobox

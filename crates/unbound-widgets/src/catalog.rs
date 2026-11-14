@@ -977,5 +977,51 @@ pub fn emit_widget(
             let card = CardDesc::new(desc.rect);
             crate::containers::emit_card(&card, CardTokens::standard())
         }
+        WidgetCatalogId::SplitButton => {
+            let desc = crate::split_button::SplitButtonDesc::new(rect, "Action");
+            let s = crate::split_button::SplitButtonState::new();
+            crate::split_button::emit_split_button(node, &desc, &s, state)
+        }
+        WidgetCatalogId::ToggleButton => {
+            let desc = crate::toggle_button::ToggleButtonDesc::new(rect, "Toggle", false);
+            let s = crate::toggle_button::ToggleButtonState::new(false);
+            crate::toggle_button::emit_toggle_button(node, &desc, &s, state)
+        }
+        WidgetCatalogId::TreeTable => {
+            let desc = crate::tree_table::TreeTableDesc::new(
+                rect,
+                vec![
+                    crate::table::ColumnSpec::new("Name", 200.0),
+                    crate::table::ColumnSpec::new("Size", 100.0),
+                ],
+            );
+            let s = crate::tree_table::TreeTableState::new();
+            crate::tree_table::emit_tree_table(node, &desc, &s, state)
+        }
+        WidgetCatalogId::MultiSplit => {
+            let desc = crate::multi_split::MultiSplitDesc::new(rect, 3);
+            let s = crate::multi_split::MultiSplitState::new(3);
+            crate::multi_split::emit_multi_split(node, &desc, &s, state)
+        }
+        WidgetCatalogId::Descriptions => {
+            let desc = crate::descriptions::DescriptionsDesc::new(rect, "Details");
+            let s = crate::descriptions::DescriptionsState::new();
+            crate::descriptions::emit_descriptions(node, &desc, &s, state)
+        }
+        WidgetCatalogId::Callout => {
+            let desc = crate::callout::CalloutDesc::new(rect, "Notice", Severity::Info);
+            let s = crate::callout::CalloutState::new();
+            crate::callout::emit_callout(node, &desc, &s, state)
+        }
+        WidgetCatalogId::VirtualMasonry => {
+            let desc = crate::virtual_masonry::VirtualMasonryDesc::new(rect, 3);
+            let s = crate::virtual_masonry::VirtualMasonryState::new();
+            crate::virtual_masonry::emit_virtual_masonry(node, &desc, &s, state)
+        }
+        WidgetCatalogId::TerminalView => {
+            let desc = crate::terminal_view::TerminalViewDesc::new(rect);
+            let s = crate::terminal_view::TerminalViewState::new();
+            crate::terminal_view::emit_terminal_view(node, &desc, &s, state)
+        }
     }
 }

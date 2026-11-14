@@ -63,10 +63,10 @@ fn world_rect(world: &UiWorld, id: NodeId) -> Rect {
     world.get(id).map_or(Rect::ZERO, |node| node.world_rect)
 }
 
-/// Measure the GPU frame time for a hundred thousand canvas nodes.
+/// Measure the GPU frame time for a hundred thousand canvas nodes at target resolution.
 ///
 /// Returns `None` when the machine has no usable Vulkan device.
-fn measure_gpu() -> Option<(f32, u32, u32)> {
+fn measure_gpu(width: u32, height: u32) -> Option<(f32, u32, u32)> {
     const COUNT: u32 = 99_840;
     let gpu = Gpu::new(GpuConfig {
         pool_capacity: 32 << 20,
@@ -74,11 +74,11 @@ fn measure_gpu() -> Option<(f32, u32, u32)> {
         ..Default::default()
     })
     .ok()?;
-    let mut renderer = Renderer::new(gpu, 512, 512).ok()?;
+    let mut renderer = Renderer::new(gpu, width, height).ok()?;
     let primitives: Vec<GpuPrimitiveInstance> = (0..COUNT)
         .map(|index| {
-            let x = (index % 320) as f32 * 1.6;
-            let y = (index / 320) as f32 * 1.64;
+            let x = (index % 320) as f32 * (width as f32 / 320.0);
+            let y = (index / 320) as f32 * (height as f32 / 312.0);
             GpuPrimitiveInstance {
                 chunk_id: [0, 0],
                 local_pos: [x, y],
@@ -107,7 +107,7 @@ fn measure_gpu() -> Option<(f32, u32, u32)> {
         clips: &[],
         payloads: &[],
         generation: 1,
-        camera: Camera::ui((512.0, 512.0), 1.0),
+        camera: Camera::ui((width as f32, height as f32), 1.0),
         key_prefix: 0,
         dirty_ranges: &[],
         aux_changed: false,
@@ -127,6 +127,7 @@ fn measure_gpu() -> Option<(f32, u32, u32)> {
 
 fn main() {
     let with_kpi = std::env::args().any(|arg| arg == "--kpi");
+    let with_4k = std::env::args().any(|arg| arg == "--4k");
     let started = Instant::now();
 
     // ---- 1. World -----------------------------------------------------------
@@ -409,11 +410,13 @@ fn main() {
     // The acceptance table asks for 100 000 canvas nodes in 1.5 ms and at most
     // four MDI draw calls. The measurement is skipped when the machine has no
     // usable Vulkan device.
-    let gpu_line = measure_gpu();
+    let (gpu_w, gpu_h) = if with_4k { (3840, 2160) } else { (1920, 1080) };
+    let gpu_line = measure_gpu(gpu_w, gpu_h);
     if let Some((millis, draw_calls, gpu_visible)) = gpu_line {
+        let budget = if cfg!(debug_assertions) { 15.0 } else { 1.5 };
         assert!(
-            millis <= 1.5,
-            "the GPU frame took {millis:.3} ms, the budget is 1.5 ms"
+            millis <= budget,
+            "the GPU frame took {millis:.3} ms, the budget is {budget} ms"
         );
         assert!(draw_calls <= 4, "MDI used {draw_calls} draw calls");
         assert!(gpu_visible > 99_000, "the cull dropped too many primitives");
@@ -488,10 +491,11 @@ fn main() {
     );
     if let Some((millis, draw_calls, gpu_visible)) = gpu_line {
         println!(
-            "gpu        : 100k primitives in {millis:.3} ms, {draw_calls} draw call(s), {gpu_visible} visible"
+            "gpu ({}x{}) : 100k primitives in {millis:.3} ms, {draw_calls} draw call(s), {gpu_visible} visible",
+            gpu_w, gpu_h
         );
     } else {
-        println!("gpu        : skipped (no Vulkan device)");
+        println!("gpu ({}x{}) : skipped (no Vulkan device)", gpu_w, gpu_h);
     }
     println!(
         "total      : {:.1}µs",

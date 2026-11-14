@@ -15,26 +15,34 @@ use unbound_text::GlyphQuad;
 use crate::alert::{emit_alert, AlertDesc, Severity};
 use crate::badge::{emit_badge, BadgeDesc};
 use crate::button::{emit_button, ButtonDesc, ButtonSize, ButtonVariant};
+use crate::callout::{emit_callout, CalloutDesc, CalloutState};
 use crate::catalog::emit_widget;
 use crate::checkbox::{emit_checkbox, CheckState, CheckboxDesc, CheckboxTokens};
 use crate::code_editor::{emit_code_editor, CodeEditorDesc, CodeEditorState};
 use crate::containers::{emit_card, CardDesc, CardTokens};
 use crate::data_grid::{emit_data_grid, DataGridDesc, DataGridState};
+use crate::descriptions::{emit_descriptions, DescriptionsDesc, DescriptionsState};
 use crate::divider::{emit_divider, DividerDesc, DividerOrientation, DividerTokens};
+use crate::multi_split::{emit_multi_split, MultiSplitDesc, MultiSplitState};
 use crate::pagination::{emit_pagination, PaginationDesc, PaginationState};
 use crate::popconfirm::{emit_popconfirm, PopconfirmDesc};
 use crate::progress::{emit_progress, ProgressDesc, ProgressState};
 use crate::select::{emit_select, SelectDesc, SelectState};
 use crate::slider::{emit_slider, value_from_pointer, Orientation, SliderDesc, SliderTokens};
+use crate::split_button::{emit_split_button, SplitButtonDesc, SplitButtonState, DROPDOWN_WIDTH};
 use crate::switch::{emit_switch, SwitchDesc, SwitchTokens};
 use crate::table::{emit_table, ColumnSpec, TableDesc, TableRow, TableState};
+use crate::terminal_view::{emit_terminal_view, TerminalViewDesc, TerminalViewState};
 use crate::text_input::{
     emit_text_input, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
     TextInputVisual,
 };
 use crate::timeline_track::{emit_timeline_track, TimelineTrackDesc, TimelineTrackState};
+use crate::toggle_button::{emit_toggle_button, ToggleButtonDesc, ToggleButtonState};
 use crate::tour::{emit_tour, TourDesc};
 use crate::transfer::{emit_transfer, TransferDesc, TransferState};
+use crate::tree_table::{emit_tree_table, TreeTableDesc, TreeTableState};
+use crate::virtual_masonry::{emit_virtual_masonry, VirtualMasonryDesc, VirtualMasonryState};
 use crate::{ControlState, WidgetCatalogId, WidgetOutput};
 
 /// Horizontal text alignment within a bounding rectangle.
@@ -1145,6 +1153,240 @@ impl UiWidget for TimelineTrackDesc {
         desc.rect = rect;
         let glyphs = text_ctx.shape_line(&desc.label, rect, 12.0, 400, AlignX::Left, AlignY::Top);
         emit_timeline_track(node, &desc, control, &glyphs)
+    }
+}
+
+impl UiWidget for SplitButtonDesc {
+    type State = SplitButtonState;
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let m = text_ctx.measure_line(&self.label, 14.0, 500);
+        Vec2::new((m.x + DROPDOWN_WIDTH + 32.0).max(120.0), 36.0)
+    }
+
+    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        if matches!(event, WidgetInputEvent::PointerDown { .. }) {
+            state.menu_open = !state.menu_open;
+            return true;
+        }
+        false
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let action_w = (rect.width() - DROPDOWN_WIDTH).max(0.0);
+        let action_r = Rect::new(rect.origin.x, rect.origin.y, action_w, rect.height());
+        let _glyphs = text_ctx.shape_line(
+            &desc.label,
+            action_r,
+            14.0,
+            500,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        emit_split_button(node, &desc, state, control)
+    }
+}
+
+impl UiWidget for ToggleButtonDesc {
+    type State = ToggleButtonState;
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let m = text_ctx.measure_line(&self.label, 14.0, 500);
+        Vec2::new((m.x + 28.0).max(64.0), 36.0)
+    }
+
+    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        if matches!(event, WidgetInputEvent::PointerDown { .. }) {
+            state.toggle();
+            return true;
+        }
+        false
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let _glyphs =
+            text_ctx.shape_line(&desc.label, rect, 14.0, 500, AlignX::Center, AlignY::Middle);
+        emit_toggle_button(node, &desc, state, control)
+    }
+}
+
+impl UiWidget for TreeTableDesc {
+    type State = TreeTableState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(400.0), self.rect.height().max(180.0))
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        _text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        emit_tree_table(node, &desc, state, control)
+    }
+}
+
+impl UiWidget for MultiSplitDesc {
+    type State = MultiSplitState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(360.0), self.rect.height().max(180.0))
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        _text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        emit_multi_split(node, &desc, state, control)
+    }
+}
+
+impl UiWidget for DescriptionsDesc {
+    type State = DescriptionsState;
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let m = text_ctx.measure_line(&self.title, 16.0, 600);
+        Vec2::new(
+            (m.x + 120.0).max(360.0),
+            (32.0 * (self.items.len().max(2) as f32) + 40.0).max(120.0),
+        )
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let title_r = Rect::new(
+            rect.origin.x + 12.0,
+            rect.origin.y + 4.0,
+            (rect.width() - 24.0).max(0.0),
+            24.0,
+        );
+        let _glyphs = text_ctx.shape_line(
+            &desc.title,
+            title_r,
+            15.0,
+            600,
+            AlignX::Left,
+            AlignY::Middle,
+        );
+        emit_descriptions(node, &desc, state, control)
+    }
+}
+
+impl UiWidget for CalloutDesc {
+    type State = CalloutState;
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let m1 = text_ctx.measure_line(&self.title, 14.0, 600);
+        let m2 = text_ctx.measure_line(&self.message, 13.0, 400);
+        Vec2::new(m1.x.max(m2.x).max(280.0) + 60.0, 64.0)
+    }
+
+    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        if matches!(event, WidgetInputEvent::PointerDown { .. }) {
+            state.dismiss();
+            return true;
+        }
+        false
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let text_r = Rect::new(
+            rect.origin.x + 16.0,
+            rect.origin.y + 8.0,
+            (rect.width() - 50.0).max(0.0),
+            20.0,
+        );
+        let _glyphs =
+            text_ctx.shape_line(&desc.title, text_r, 14.0, 600, AlignX::Left, AlignY::Middle);
+        emit_callout(node, &desc, state, control)
+    }
+}
+
+impl UiWidget for VirtualMasonryDesc {
+    type State = VirtualMasonryState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(400.0), self.rect.height().max(240.0))
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        _text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        emit_virtual_masonry(node, &desc, state, control)
+    }
+}
+
+impl UiWidget for TerminalViewDesc {
+    type State = TerminalViewState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(400.0), self.rect.height().max(200.0))
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        _text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        emit_terminal_view(node, &desc, state, control)
     }
 }
 

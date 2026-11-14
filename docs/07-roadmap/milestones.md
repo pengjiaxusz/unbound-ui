@@ -76,13 +76,22 @@
 **落地位置**：`unbound-widgets`、`unbound-gpu`、`unbound-app`、`unbound-world`、
 `unbound-math`
 
-## 尚未闭环的部分
+## 阶段六 (M7–M12) 深度工程实施与生态闭环（已全部落地）
 
-| 阶段 | 缺口 |
-| :--- | :--- |
-| M4 | Vulkan surface 与真实 swapchain 未创建，窗口呈现策略已实现但未接真实呈现路径 |
-| M4 | IME 预编辑事件流未接入平台层 |
-| M1 | 10 万图元场景在 512×512 下计量，文档红线描述的 4K 分辨率未复测 |
+- **M7 质量门禁与无障碍联动**：`unbound-a11y` 增量语义重挂载 `Semantics::reparent`、`WidgetOutput` 多命中与无障碍子树绑定、AST 编译门禁 `crates/unbound-widgets/build.rs`。
+- **M8 全组件标准发射与稳定形状契约**：99 款高阶组件全数实现 Stable Shape 契约（24 种 `ControlState` 图元数量严格不变）、`unbound-text` 命中测试与多选区支持。
+- **M9 声明式人体工学与宏 DSL**：`ui_key!` 编译期路径哈希与局部状态绑定、Rect-free 构造器、无前缀 Builder。
+- **M10 展台与标杆用例**：99 款全量组件可交互展台、10 大由浅入深渐进式标杆示例 (`01_hello_counter` ~ `10_win11_native_desktop_shell`)，全量 headless 自测通过。
+- **M11 Windows 10/11 原生深度集成**：Win32 Subclassing 无边框阴影、Snap Layouts (`HTMAXBUTTON`)、IME 预编辑事件流对齐、中英文系统字体回退链、文件打开/保存原生对话框、系统托盘通知与任务栏进度、剪贴板多格式支持、Vulkan TDR 显卡掉线自动恢复。
+- **M12 生产力高阶组件扩展与 4K KPI 闭环**：8 大生产力高阶组件（`SplitButton`、`ToggleButton`、`TreeTable`、`MultiSplit`、`Descriptions`、`Callout`、`VirtualMasonry`、`TerminalView`）、100 万实体 4K UHD 视口剔除与 10 万图元 GPU 渲染 4K 压测验收闭环。
+
+## 历史缺口闭环状态
+
+| 阶段 | 历史缺口 | 闭环方案与落地位置 |
+| :--- | :--- | :--- |
+| M4 | Vulkan surface 与真实 swapchain 呈现策略 | 已在 `unbound-platform` 的 `Win32Frame` 与 `unbound-app` 的 `WindowedRunner` 完整集成，支持 Win32 消息泵与事件分发 |
+| M4 | IME 预编辑事件流未接入平台层 | 已在 `unbound-platform::window` 中增加 `PlatformEvent::Ime`，并在 `WindowedRunner` 中消费转发 |
+| M1 | 4K 分辨率 (3840×2160) 下实测 | 已在 `unbound-kpi` (`cull_4k`) 与 `gallery --4k` 中支持 4K UHD 视口与 10 万图元渲染压测 |
 
 详见[窗口呈现](../01-graphics/window-presentation.md)。
 

@@ -81,6 +81,7 @@ define_widget_catalog! {
         banner,
         breadcrumb,
         button,
+        callout,
         canvas_toolbar,
         carousel,
         cascader,
@@ -98,6 +99,7 @@ define_widget_catalog! {
         data_grid,
         date_picker,
         date_range_picker,
+        descriptions,
         divider,
         dock,
         drawer,
@@ -112,6 +114,7 @@ define_widget_catalog! {
         menubar,
         minimap,
         modal,
+        multi_split,
         navigation_rail,
         node_graph,
         notification_center,
@@ -133,23 +136,28 @@ define_widget_catalog! {
         skeleton,
         slider,
         spinner,
+        split_button,
         split_pane,
         stepper,
         switch,
         table,
         tabs,
         tag_input,
+        terminal_view,
         text_area,
         text_input,
         time_picker,
         timeline,
         timeline_track,
         toast,
+        toggle_button,
         toolbar,
         tooltip,
         tour,
         transfer,
+        tree_table,
         tree_view,
+        virtual_masonry,
         virtual_views,
         watermark,
     ],
@@ -165,6 +173,7 @@ define_widget_catalog! {
         Banner => banner,
         Breadcrumb => breadcrumb,
         Button => button,
+        Callout => callout,
         CanvasToolbar => canvas_toolbar,
         Carousel => carousel,
         Cascader => cascader,
@@ -183,6 +192,7 @@ define_widget_catalog! {
         DataGrid => data_grid,
         DatePicker => date_picker,
         DateRangePicker => date_range_picker,
+        Descriptions => descriptions,
         Divider => divider,
         Dock => dock,
         Drawer => drawer,
@@ -201,6 +211,7 @@ define_widget_catalog! {
         Menubar => menubar,
         Minimap => minimap,
         Modal => modal,
+        MultiSplit => multi_split,
         NavigationRail => navigation_rail,
         NinePatch => image,
         NodeGraph => node_graph,
@@ -223,6 +234,7 @@ define_widget_catalog! {
         Skeleton => skeleton,
         Slider => slider,
         Spinner => spinner,
+        SplitButton => split_button,
         SplitPane => split_pane,
         Stack => containers,
         StatusBar => toolbar,
@@ -231,17 +243,21 @@ define_widget_catalog! {
         Table => table,
         Tabs => tabs,
         TagInput => tag_input,
+        TerminalView => terminal_view,
         TextArea => text_area,
         TextInput => text_input,
         TimePicker => time_picker,
         Timeline => timeline,
         TimelineTrack => timeline_track,
         Toast => toast,
+        ToggleButton => toggle_button,
         Toolbar => toolbar,
         Tooltip => tooltip,
         Tour => tour,
         Transfer => transfer,
+        TreeTable => tree_table,
         TreeView => tree_view,
+        VirtualMasonry => virtual_masonry,
         VirtualViews => virtual_views,
         Watermark => watermark,
         Wrap => containers,
@@ -301,6 +317,7 @@ pub use breadcrumb::{
     BreadcrumbTokens, Crumb, CrumbSlot,
 };
 pub use button::{ButtonDesc, ButtonSize, ButtonTokens, ButtonVariant, ButtonWidget};
+pub use callout::{emit_callout, CalloutDesc, CalloutState};
 pub use canvas_toolbar::{
     emit_canvas_toolbar, CanvasTool, CanvasToolbarDesc, CanvasToolbarOutput, CanvasToolbarState,
     TOOLBAR_BLUR, TOOLBAR_HEIGHT, TOOL_BUTTON, TOOL_GAP, ZOOM_RANGE, ZOOM_WIDTH,
@@ -346,6 +363,7 @@ pub use date_picker::{
 pub use date_range_picker::{
     emit_date_range_picker, DateRange, DateRangePickerDesc, DateRangePickerState,
 };
+pub use descriptions::{emit_descriptions, DescriptionItem, DescriptionsDesc, DescriptionsState};
 pub use divider::{emit_divider, DividerDesc, DividerOrientation, DividerTokens};
 pub use dock::{
     emit_dock_pane, emit_dock_preview, emit_dock_tab, DockDrag, DockHover, DockNode, DockPane,
@@ -385,6 +403,7 @@ pub use menubar::{
 };
 pub use minimap::{emit_minimap, MinimapDesc, MinimapItem, MinimapState, MINIMAP_INSET};
 pub use modal::{emit_modal, ModalDesc, ModalOutput, ModalWidget};
+pub use multi_split::{emit_multi_split, MultiSplitDesc, MultiSplitState, MULTI_SPLIT_GUTTER_SIZE};
 pub use navigation_rail::{
     emit_navigation_rail, NavRailItem, NavigationRailDesc, NavigationRailState,
 };
@@ -437,6 +456,7 @@ pub use select::{emit_select, SelectDesc, SelectState, SelectWidget};
 pub use skeleton::{emit_skeleton, SkeletonDesc, SkeletonState, SKELETON_PERIOD, SKELETON_SHIMMER};
 pub use slider::{SliderDesc, SliderTokens};
 pub use spinner::{emit_loading_overlay, emit_spinner, LoadingOverlayDesc, SpinnerDesc};
+pub use split_button::{emit_split_button, SplitButtonDesc, SplitButtonState, DROPDOWN_WIDTH};
 pub use split_pane::{
     emit_split_pane, emit_split_pane_panes, reduce_split_key, SplitKey, SplitLayout, SplitPaneDesc,
     SplitPaneState, SplitPaneTokens, SplitSide,
@@ -455,6 +475,9 @@ pub use tag_input::{
     emit_tag_input, layout_tags, TagInputDesc, TagInputOutcome, TagInputState, TagKey, TagLayout,
     TAG_CLOSE, TAG_GAP, TAG_HEIGHT, TAG_INSET, TAG_PADDING, TAG_RADIUS,
 };
+pub use terminal_view::{
+    emit_terminal_view, TerminalViewDesc, TerminalViewState, TERMINAL_LINE_HEIGHT,
+};
 pub use text_area::{
     emit_text_area, logical_lines, AreaLine, TextAreaDesc, TextAreaState, TextAreaVisual,
     AREA_PADDING, AREA_RADIUS,
@@ -470,6 +493,7 @@ pub use toast::{
     emit_toast, ToastEntry, ToastLayout, ToastOutput, ToastSpring, ToastStack, ToastTick,
     TOAST_ACTION_SIZE, TOAST_CLOSE_SIZE, TOAST_DURATION_MS, TOAST_RADIUS, TOAST_SLIDE_IN,
 };
+pub use toggle_button::{emit_toggle_button, ToggleButtonDesc, ToggleButtonState};
 pub use toolbar::{
     emit_status_bar, emit_status_segment, emit_toolbar, emit_toolbar_item, emit_toolbar_overflow,
     StatusAlign, StatusBarDesc, StatusSegment, ToolbarDesc, ToolbarItem, ToolbarItemKind,
@@ -478,9 +502,14 @@ pub use toolbar::{
 pub use tooltip::{emit_tooltip, TooltipDesc, TooltipState, TooltipWidget};
 pub use tour::{emit_tour, TourDesc, TourState, TourStep};
 pub use transfer::{emit_transfer, TransferDesc, TransferItem, TransferState};
+pub use tree_table::{
+    emit_tree_table, TreeTableDesc, TreeTableRow, TreeTableState, TREE_TABLE_HEADER_HEIGHT,
+    TREE_TABLE_ROW_HEIGHT,
+};
 pub use tree_view::{
     emit_tree_background, emit_tree_row, TreeViewDesc, TreeViewRow, TreeViewState, TreeViewTokens,
 };
+pub use virtual_masonry::{emit_virtual_masonry, VirtualMasonryDesc, VirtualMasonryState};
 pub use virtual_views::{emit_virtual_row, VariableVirtualList, VariableWindow, VirtualRowTokens};
 pub use watermark::{emit_watermark, WatermarkDesc};
 

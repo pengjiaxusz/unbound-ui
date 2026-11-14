@@ -60,7 +60,7 @@
 | `unbound-graph` | 857 | 渲染图瞬态纹理生命周期校验、毛玻璃离屏池 | `unbound-math` |
 | `unbound-asset` | 1222 | 后台解码线程池、CPU 暂存环、传输队列交接 | `unbound-math` |
 | `unbound-platform` | 1562 | 窗口平台层：多窗口事件路由与 Surface/Swapchain 宿主、AccessKit 实机适配、非阻塞缩放、低延迟呈现、延迟计量 | `unbound-math`、`unbound-gpu` |
-| `unbound-widgets` | 3446 | 标准控件层：ControlState、WidgetOutput、SceneCollector、WidgetHarness、帧差分（`diff`：局部补丁上传），以及 Button / Switch / Checkbox / Radio / Segmented / Slider / TextInput / ScrollView / Overlay / Popover / Menu / Select / Modal / Tooltip / Image | `unbound-gpu`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-text`、`unbound-world`、`unbound-anim`、`unbound-headless` |
+| `unbound-widgets` | 3446 | 标准控件层：ControlState、WidgetOutput、SceneCollector、WidgetHarness、帧差分（`diff`：局部补丁上传），全量 99 款标准与高阶组件（含 SplitButton、ToggleButton、TreeTable、MultiSplit、Descriptions、Callout、VirtualMasonry、TerminalView 等），全面通过 Stable Shape 24 状态图元数量恒定测试 | `unbound-gpu`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-text`、`unbound-world`、`unbound-anim`、`unbound-headless` |
 | `unbound-app` | 689 | 应用运行时：`Application::{init,reduce,view}`、事件解析、指针路由、焦点策略、双缓冲场景差分、零工作帧与毛玻璃请求上报 | `unbound-math`、`unbound-input`、`unbound-a11y`、`unbound-theme`、`unbound-gpu`、`unbound-widgets` |
 | `unbound-headless` | 2248 | 无头验证器：五项几何体检、`TestApp` 交互测试驱动、rkyv 时间旅行快照 | `unbound-math`、`unbound-world`、`unbound-input`、`unbound-a11y` |
 | `unbound-host` | 909 | Host-Guest C-ABI 热重载、分配器劫持、状态迁移 | `unbound-abi` |

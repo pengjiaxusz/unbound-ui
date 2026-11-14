@@ -68,6 +68,7 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::AvatarGroup,
     WidgetCatalogId::Badge,
     WidgetCatalogId::Breadcrumb,
+    WidgetCatalogId::Callout,
     WidgetCatalogId::Chart,
     WidgetCatalogId::ColorPicker,
     WidgetCatalogId::CommandPalette,
@@ -75,6 +76,7 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::ContextMenu,
     WidgetCatalogId::CurveEditor,
     WidgetCatalogId::DatePicker,
+    WidgetCatalogId::Descriptions,
     WidgetCatalogId::Divider,
     WidgetCatalogId::Drawer,
     WidgetCatalogId::EmptyState,
@@ -88,6 +90,7 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::Menu,
     WidgetCatalogId::Minimap,
     WidgetCatalogId::Modal,
+    WidgetCatalogId::MultiSplit,
     WidgetCatalogId::NinePatch,
     WidgetCatalogId::NodeGraph,
     WidgetCatalogId::Overlay,
@@ -101,8 +104,11 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::Stack,
     WidgetCatalogId::StatusBar,
     WidgetCatalogId::Table,
+    WidgetCatalogId::TerminalView,
     WidgetCatalogId::Toast,
     WidgetCatalogId::Tooltip,
+    WidgetCatalogId::TreeTable,
+    WidgetCatalogId::VirtualMasonry,
     WidgetCatalogId::Watermark,
     WidgetCatalogId::Wrap,
 ];
@@ -203,6 +209,14 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Stack => "containers",
         WidgetCatalogId::StatusBar => "toolbar",
         WidgetCatalogId::Wrap => "containers",
+        WidgetCatalogId::SplitButton => "split_button",
+        WidgetCatalogId::ToggleButton => "toggle_button",
+        WidgetCatalogId::TreeTable => "tree_table",
+        WidgetCatalogId::MultiSplit => "multi_split",
+        WidgetCatalogId::Descriptions => "descriptions",
+        WidgetCatalogId::Callout => "callout",
+        WidgetCatalogId::VirtualMasonry => "virtual_masonry",
+        WidgetCatalogId::TerminalView => "terminal_view",
     }
 }
 
@@ -279,5 +293,5 @@ fn the_probe_covers_every_component() {
         WidgetCatalogId::COUNT,
         "the probe must cover every component exactly once"
     );
-    assert_eq!(WidgetCatalogId::COUNT, 91);
+    assert_eq!(WidgetCatalogId::COUNT, 99);
 }

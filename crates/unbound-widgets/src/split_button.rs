@@ -1,0 +1,180 @@
+//! SplitButton: Action button with an attached dropdown menu trigger.
+
+use accesskit::Role;
+use unbound_a11y::A11yNode;
+use unbound_input::{CursorKind, HitRegion, Shape};
+use unbound_math::Rect;
+use unbound_theme::Token;
+
+use crate::button::{ButtonVariant, BUTTON_LAYER};
+use crate::primitive::{outlined, surface};
+use crate::{ControlState, PointerPhase, WidgetOutput};
+
+pub const DROPDOWN_WIDTH: f32 = 32.0;
+
+/// Descriptor for a split button.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SplitButtonDesc {
+    pub rect: Rect,
+    pub label: String,
+    pub variant: ButtonVariant,
+    pub radius: f32,
+    pub disabled: bool,
+}
+
+impl SplitButtonDesc {
+    #[must_use]
+    pub fn new(rect: Rect, label: impl Into<String>) -> Self {
+        Self {
+            rect,
+            label: label.into(),
+            variant: ButtonVariant::Primary,
+            radius: 6.0,
+            disabled: false,
+        }
+    }
+
+    #[must_use]
+    pub fn label(label: impl Into<String>) -> Self {
+        Self::new(Rect::ZERO, label)
+    }
+
+    #[must_use]
+    pub fn variant(mut self, variant: ButtonVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    #[must_use]
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+}
+
+/// State for the split button.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SplitButtonState {
+    pub menu_open: bool,
+    pub main_pressed: bool,
+    pub arrow_pressed: bool,
+}
+
+impl SplitButtonState {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Emit primitives and hit regions for a split button.
+#[must_use]
+pub fn emit_split_button(
+    node: u64,
+    desc: &SplitButtonDesc,
+    state: &SplitButtonState,
+    control: ControlState,
+) -> WidgetOutput {
+    let mut out = WidgetOutput::default();
+    let rect = desc.rect;
+    let arrow_w = DROPDOWN_WIDTH.min(rect.width() * 0.4);
+    let main_w = (rect.width() - arrow_w).max(0.0);
+    let z = 700u16;
+
+    let main_rect = Rect::new(rect.origin.x, rect.origin.y, main_w, rect.height());
+    let arrow_rect = Rect::new(
+        rect.origin.x + main_w,
+        rect.origin.y,
+        arrow_w,
+        rect.height(),
+    );
+    let divider_rect = Rect::new(
+        rect.origin.x + main_w - 0.5,
+        rect.origin.y + 4.0,
+        1.0,
+        (rect.height() - 8.0).max(0.0),
+    );
+
+    let bg_token = if control.disabled || desc.disabled {
+        Token::DISABLED
+    } else if control.phase == PointerPhase::Pressed || state.main_pressed {
+        Token::PRIMARY_PRESSED
+    } else if control.phase == PointerPhase::Hovered {
+        Token::PRIMARY_HOVER
+    } else {
+        Token::PRIMARY
+    };
+
+    // 1. Main action background surface
+    out.primitives
+        .push(surface(main_rect, desc.radius, bg_token, z));
+
+    // 2. Dropdown trigger background surface
+    let arrow_bg = if state.menu_open || state.arrow_pressed {
+        Token::PRIMARY_PRESSED
+    } else {
+        bg_token
+    };
+    out.primitives
+        .push(surface(arrow_rect, desc.radius, arrow_bg, z + 1));
+
+    // 3. Divider line
+    out.primitives
+        .push(surface(divider_rect, 0.0, Token::OUTLINE, z + 2));
+
+    // 4. Outer border outline
+    out.primitives.push(outlined(
+        rect,
+        desc.radius,
+        Token::NONE,
+        Token::OUTLINE_STRONG,
+        1.0,
+        0.0,
+        z + 3,
+    ));
+
+    // Multi-hit regions: Action and Dropdown Arrow
+    let action_node = node;
+    let arrow_node = node ^ 0xFF;
+
+    let cursor = if desc.disabled {
+        CursorKind::NotAllowed
+    } else {
+        CursorKind::Pointer
+    };
+
+    out.sub_hits.push(
+        HitRegion::new(action_node, BUTTON_LAYER, u32::from(z + 4), main_rect)
+            .with_shape(Shape::Rounded {
+                radii: [desc.radius; 4],
+            })
+            .with_cursor(cursor),
+    );
+    out.sub_hits.push(
+        HitRegion::new(arrow_node, BUTTON_LAYER, u32::from(z + 4), arrow_rect)
+            .with_shape(Shape::Rounded {
+                radii: [desc.radius; 4],
+            })
+            .with_cursor(cursor),
+    );
+
+    out.hit = Some(
+        HitRegion::new(node, BUTTON_LAYER, u32::from(z), rect)
+            .with_shape(Shape::Rounded {
+                radii: [desc.radius; 4],
+            })
+            .with_cursor(CursorKind::Pointer),
+    );
+
+    out.a11y = Some(A11yNode::new(Role::Button, desc.label.clone(), rect).clickable());
+    out.sub_a11y.push((
+        action_node,
+        A11yNode::new(Role::Button, desc.label.clone(), main_rect).clickable(),
+    ));
+    out.sub_a11y.push((
+        arrow_node,
+        A11yNode::new(Role::Button, "Options", arrow_rect).clickable(),
+    ));
+
+    out
+}

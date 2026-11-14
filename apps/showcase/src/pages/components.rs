@@ -74,6 +74,8 @@ const KNOBS_VISUAL: &[KnobSpec] = &[
 pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
     match id {
         WidgetCatalogId::Button
+        | WidgetCatalogId::SplitButton
+        | WidgetCatalogId::ToggleButton
         | WidgetCatalogId::Badge
         | WidgetCatalogId::Chip
         | WidgetCatalogId::Checkbox
@@ -92,19 +94,24 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::AspectRatioBox => KNOBS_NUMERIC,
 
         WidgetCatalogId::Table
+        | WidgetCatalogId::TreeTable
         | WidgetCatalogId::DataGrid
         | WidgetCatalogId::Chart
         | WidgetCatalogId::CodeBlock
         | WidgetCatalogId::CodeEditor
+        | WidgetCatalogId::Descriptions
+        | WidgetCatalogId::TerminalView
         | WidgetCatalogId::Timeline
         | WidgetCatalogId::TimelineTrack
         | WidgetCatalogId::VirtualViews
         | WidgetCatalogId::Masonry
+        | WidgetCatalogId::VirtualMasonry
         | WidgetCatalogId::AvatarGroup => KNOBS_DATA,
 
         WidgetCatalogId::Alert
         | WidgetCatalogId::AlertDialog
         | WidgetCatalogId::Banner
+        | WidgetCatalogId::Callout
         | WidgetCatalogId::Popconfirm
         | WidgetCatalogId::NotificationCenter
         | WidgetCatalogId::Toast
@@ -130,6 +137,7 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
 
         WidgetCatalogId::Containers
         | WidgetCatalogId::SplitPane
+        | WidgetCatalogId::MultiSplit
         | WidgetCatalogId::Dock
         | WidgetCatalogId::Accordion
         | WidgetCatalogId::Collapsible
@@ -189,6 +197,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Banner => "view.add(ui_key!(\"bnr\"), BannerDesc::new(rect, \"System Banner\"));",
         WidgetCatalogId::Breadcrumb => "view.add(ui_key!(\"bc\"), BreadcrumbDesc::new(rect, crumbs));",
         WidgetCatalogId::Button => "view.button(ui_key!(\"btn\"), ButtonDesc::label(\"Click Me\").variant(ButtonVariant::Primary));",
+        WidgetCatalogId::Callout => "view.callout(ui_key!(\"cal\"), CalloutDesc::new(rect, \"Tip\", \"GPU memory is optimal.\"));",
         WidgetCatalogId::CanvasToolbar => "view.add(ui_key!(\"tb\"), CanvasToolbarDesc::new(rect));",
         WidgetCatalogId::Carousel => "view.add(ui_key!(\"car\"), CarouselDesc::new(rect, slides));",
         WidgetCatalogId::Cascader => "view.add(ui_key!(\"cas\"), CascaderDesc::new(rect, tree));",
@@ -207,6 +216,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::DataGrid => "view.add(ui_key!(\"dg\"), DataGridDesc::new(rect, grid_model));",
         WidgetCatalogId::DatePicker => "view.add(ui_key!(\"dp\"), DatePickerDesc::new(rect));",
         WidgetCatalogId::DateRangePicker => "view.add(ui_key!(\"drp\"), DateRangePickerDesc::new(rect));",
+        WidgetCatalogId::Descriptions => "view.descriptions(ui_key!(\"desc\"), DescriptionsDesc::new(rect, items));",
         WidgetCatalogId::Divider => "view.divider(ui_key!(\"div\"), DividerDesc::rule());",
         WidgetCatalogId::Dock => "view.add(ui_key!(\"dck\"), DockDesc::new(rect, dock_tree));",
         WidgetCatalogId::Drawer => "view.add(ui_key!(\"drw\"), DrawerDesc::new(rect, DrawerSide::Right));",
@@ -225,6 +235,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Menubar => "view.add(ui_key!(\"mb\"), MenuBarDesc::new(rect, menus));",
         WidgetCatalogId::Minimap => "view.add(ui_key!(\"mm\"), MinimapDesc::new(rect));",
         WidgetCatalogId::Modal => "view.add(ui_key!(\"mdl\"), ModalDesc::new(rect, \"Modal Dialog\"));",
+        WidgetCatalogId::MultiSplit => "view.multi_split(ui_key!(\"msplit\"), MultiSplitDesc::new(rect, panes));",
         WidgetCatalogId::NavigationRail => "view.add(ui_key!(\"nr\"), NavigationRailDesc::new(rect, items));",
         WidgetCatalogId::NinePatch => "view.add(ui_key!(\"np\"), NinePatchDesc::new(rect, asset_id));",
         WidgetCatalogId::NodeGraph => "view.add(ui_key!(\"ng\"), NodeGraphDesc::new(rect, graph));",
@@ -247,6 +258,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Skeleton => "view.add(ui_key!(\"skl\"), SkeletonDesc::new(rect));",
         WidgetCatalogId::Slider => "view.slider(ui_key!(\"sld\"), SliderDesc::range(0.0..=100.0).value(50.0));",
         WidgetCatalogId::Spinner => "view.add(ui_key!(\"spn\"), SpinnerDesc::new(rect));",
+        WidgetCatalogId::SplitButton => "view.split_button(ui_key!(\"sbtn\"), SplitButtonDesc::new(rect, \"Run\", \"Build & Run\"));",
         WidgetCatalogId::SplitPane => "view.split_pane(ui_key!(\"sp\"), true, |left| {}, |right| {});",
         WidgetCatalogId::Stack => "view.add(ui_key!(\"stk\"), StackDesc::new(rect));",
         WidgetCatalogId::StatusBar => "view.add(ui_key!(\"sb\"), StatusBarDesc::new(rect, segments));",
@@ -255,18 +267,22 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Table => "view.table(ui_key!(\"tbl\"), TableDesc::columns(cols).rows(rows));",
         WidgetCatalogId::Tabs => "view.add(ui_key!(\"tb\"), TabsDesc::new(rect, tabs));",
         WidgetCatalogId::TagInput => "view.add(ui_key!(\"tag\"), TagInputDesc::new(rect, tags));",
+        WidgetCatalogId::TerminalView => "view.terminal_view(ui_key!(\"term\"), TerminalViewDesc::new(rect, lines));",
         WidgetCatalogId::TextArea => "view.add(ui_key!(\"ta\"), TextAreaDesc::new(rect));",
         WidgetCatalogId::TextInput => "view.text_input(ui_key!(\"txt\"), TextInputDesc::text(\"\").placeholder(\"Search...\"));",
         WidgetCatalogId::TimePicker => "view.add(ui_key!(\"tp\"), TimePickerDesc::new(rect));",
         WidgetCatalogId::Timeline => "view.add(ui_key!(\"tl\"), TimelineDesc::new(rect, events));",
         WidgetCatalogId::TimelineTrack => "view.add(ui_key!(\"tlt\"), TimelineTrackDesc::new(rect));",
         WidgetCatalogId::Toast => "view.add(ui_key!(\"tst\"), ToastDesc::new(rect, \"Notification\"));",
+        WidgetCatalogId::ToggleButton => "view.toggle_button(ui_key!(\"tbtn\"), ToggleButtonDesc::new(rect, \"Pin\", true));",
         WidgetCatalogId::Toolbar => "view.add(ui_key!(\"tbr\"), ToolbarDesc::new(rect, tools));",
         WidgetCatalogId::Tooltip => "view.add(ui_key!(\"ttp\"), TooltipDesc::new(rect, \"Help text\"));",
         WidgetCatalogId::Tour => "view.add(ui_key!(\"tur\"), TourDesc::new(rect, step));",
         WidgetCatalogId::Transfer => "view.add(ui_key!(\"tr\"), TransferDesc::new(rect, items));",
+        WidgetCatalogId::TreeTable => "view.tree_table(ui_key!(\"ttbl\"), TreeTableDesc::new(rect, rows));",
         WidgetCatalogId::TreeView => "view.add(ui_key!(\"tv\"), TreeViewDesc::new(rect, tree_nodes));",
         WidgetCatalogId::VirtualViews => "view.add(ui_key!(\"vv\"), VirtualViewsDesc::new(rect));",
+        WidgetCatalogId::VirtualMasonry => "view.virtual_masonry(ui_key!(\"vm\"), VirtualMasonryDesc::new(rect, 4, 1000));",
         WidgetCatalogId::Watermark => "view.add(ui_key!(\"wm\"), WatermarkDesc::new(rect, \"CONFIDENTIAL\"));",
         WidgetCatalogId::Wrap => "view.add(ui_key!(\"wrp\"), WrapDesc::new(rect));",
     }
@@ -407,6 +423,14 @@ define_showcase_components! {
     Stack => "Stack", "Layered container stacking children in z-order.", 260.0,
     StatusBar => "Status bar", "Desktop status strip with aligned segments.", 220.0,
     Wrap => "Wrap layout", "Flow layout wrapping items into lines.", 260.0,
+    SplitButton => "Split button", "Primary button paired with a dropdown trigger menu.", 220.0,
+    ToggleButton => "Toggle button", "Two-state push button with pressed state lock.", 220.0,
+    TreeTable => "Tree table", "Hierarchical data table with expandable rows and columns.", 280.0,
+    MultiSplit => "Multi-split", "Resizable multi-pane container with draggable splitters.", 280.0,
+    Descriptions => "Descriptions", "Label-value summary display for structured properties.", 260.0,
+    Callout => "Callout", "High-visibility information or warning callout box.", 220.0,
+    VirtualMasonry => "Virtual masonry", "Virtualized staggered column layout for heterogeneous items.", 280.0,
+    TerminalView => "Terminal view", "ANSI-styled virtualized terminal console log viewer.", 280.0,
 }
 
 /// Whether `examples` mounts a card for `id` (const-comparable).
@@ -477,6 +501,20 @@ fn semantic_label_for_id(
         WidgetCatalogId::Select => format!("Option {}", sandbox.get_selected(id) + 1),
         WidgetCatalogId::Tabs => format!("Tab {}", sandbox.get_selected(id) + 1),
         WidgetCatalogId::Accordion => format!("Section {}", sandbox.get_selected(id) + 1),
+        WidgetCatalogId::SplitButton => format!("SplitButton ({})", sandbox.get_clicks(id)),
+        WidgetCatalogId::ToggleButton => {
+            if sandbox.get_toggle(id) {
+                "Active (ON)".to_string()
+            } else {
+                "Inactive (OFF)".to_string()
+            }
+        }
+        WidgetCatalogId::TreeTable => "TreeTable: 12 nodes".to_string(),
+        WidgetCatalogId::MultiSplit => "MultiSplit: 3 panes".to_string(),
+        WidgetCatalogId::Descriptions => "Descriptions: 6 items".to_string(),
+        WidgetCatalogId::Callout => "Callout: Tip".to_string(),
+        WidgetCatalogId::VirtualMasonry => "VirtualMasonry: 1000 items".to_string(),
+        WidgetCatalogId::TerminalView => "Terminal: Ready".to_string(),
         _ => id.module_name().to_string(),
     }
 }

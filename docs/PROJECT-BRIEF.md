@@ -22,9 +22,9 @@
 - 【事实】这是一个用 Rust 写的 **GPU 驱动 UI 引擎 + 无限画布**，目标是把每一帧的成本压到与场景规模无关。
   它不是应用框架，也不是组件库，是一套渲染、布局、输入、语义与验证的底座。
 - 【事实】渲染底座、增量排版、命中测试、动画、无障碍语义、无头验证等**引擎能力层已全部落地**（M1–M5）。
-- 【事实】组件层已经成型：`unbound-widgets` 提供扁平描述符 + 纯发射函数的
-  **59 个模块、40+ 标准组件**（工作区容器、导航命令、高阶表单、富文本与数据集合、
-  反馈浮层、无限画布套件），由 `AppRuntime` 统一接线，见第 6、7 节。
+- 【事实】组件层已全面闭环：`unbound-widgets` 提供扁平描述符 + 纯发射函数的
+  **99 款高阶组件**（工作区容器、导航命令、高阶表单、富文本与数据集合、
+  反馈浮层、无限画布套件以及生产力组件），全量通过 24 状态 Stable Shape 契约，由 `AppRuntime` 统一接线，见第 6、7 节。
 - 【事实】运行时 DevTools Inspector（`F12`）与每帧 5 项无头体检闭环已落地，见第 7.3 节。
 - 【事实】两个应用：`apps/showcase` 是开窗的**渲染验收台**，`apps/gallery` 是**纯控制台**
   的全链路演示，只打印数字、不出画面。
@@ -202,22 +202,24 @@ OS 输入 / 文件拖拽 / Agent 驱动
 
 ## 7. 组件层现状
 
-【事实】通用组件层已经成立，位于 `crates/unbound-widgets`：59 个源码模块、40+ 标准组件，
+【事实】通用组件层已经全面成立，位于 `crates/unbound-widgets`：覆盖 99 款标准与高阶生产力组件，
 统一遵循「扁平描述符 + 纯发射函数」的契约，所有颜色取 `unbound_theme::Token`。
 
 ### 7.1 组件契约
 
 - 每个组件一个模块，导出 `XxxDesc`（纯数据）与 `emit_xxx(...) -> WidgetOutput`。
-- `WidgetOutput { primitives, payloads, hit, a11y, focusable }`：图元、曲线/渐变 payload、
-  命中区域、无障碍节点、是否进入 Tab 序。
+- `WidgetOutput { primitives, payloads, hit, sub_hits, a11y, sub_a11y, focus_order, sub_focus_order, focusable }`：图元、曲线/渐变 payload、
+  命中区域与复合子命中、无障碍节点与语义子树、Tab 聚焦序。
 - 组件不持有状态；交互瞬态由调用方传入的 `ControlState` / 组件自己的 `XxxState` 表达。
 - `SceneCollector::push` 汇总图元与语义树，`push_clip` 负责圆角裁剪槽的折叠继承。
+- 强制通过 Stable Shape 契约：组件在 24 种 `ControlState` 状态组合下发射的图元数量严格恒定，确保状态切换（hover/pressed/focus）在 GPU 实例池中零堆分配与零重排。
 
 ### 7.2 已交付范围
 
-工作区容器（#1–#6）、导航命令（#7–#12）、高阶表单与录入（#13–#21）、
-富文本/数据集合/反馈浮层（#22–#35）、无限画布套件（#36–#41），
-以及 `unbound-gpu` 的渐变、内阴影、多层圆角裁剪与外部纹理绑定。
+工作区容器、导航命令、高阶表单与录入、
+富文本/数据集合/反馈浮层、无限画布套件，以及 8 大生产力高阶组件
+（`SplitButton`、`ToggleButton`、`TreeTable`、`MultiSplit`、`Descriptions`、`Callout`、`VirtualMasonry`、`TerminalView`），
+全量 99 款组件在 `apps/showcase` 具备完整动态交互展台与属性调节旋钮。
 
 ### 7.3 运行时接线与 DevTools
 
