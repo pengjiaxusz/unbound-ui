@@ -61,6 +61,22 @@ pub struct GpuPrimitiveInstance {
 颜色以 16 位 Token ID 存储，实际颜色由主题 LUT 解析，这是[零开销主题切换](../02-ui/theme-and-zoom.md)
 的前提。
 
+### 两个索引的宿主约定
+
+`transform_idx` 与 `extra_payload_idx` 都是**全局数组下标**：着色器直接
+`TransformBuf(...).t[p.transform_idx]` / `PayloadBuf(...).p[v_misc.x]` 取值，
+越界或空表读到的是未初始化的 device-local 显存。
+
+- 静态 UI 场景不产生动画变换，`transforms` 是空表，但每个图元仍引用索引 0。
+  `Renderer::prepare_upload` 因此对空表补一个 `GpuTransform::IDENTITY` 再上传；
+  否则一个垃圾仿射矩阵会把整帧剔除，窗口只剩清屏色。
+- 每个 widget 的 `extra_payload_idx` 是相对自身 `WidgetOutput::payloads`
+  的局部下标。`SceneCollector::push` 把各 widget 的 payload 拼成一张全局表，
+  必须先以 `self.payloads.len()` 为基址重定位这些下标；否则第二段文字会
+  采样第一段文字的字形 UV，多个标签互相串叠。
+
+这两类问题都不会触发验证层，只有对窗口做像素级抓屏才能发现。
+
 ## GpuClipNode
 
 64 字节双槽位裁剪节点，支持任意嵌套 AABB + 两级父容器圆角交集裁剪：

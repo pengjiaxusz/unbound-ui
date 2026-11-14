@@ -18,6 +18,7 @@ use unbound_platform::window::{
     ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
     PlatformState, WindowConfig,
 };
+use unbound_theme::{ThemeSet, ThemeState};
 use winit::window::Window;
 
 use crate::{AppKey, AppRuntime, Application, ImeUpdate, Modifiers as AppModifiers, ThemeKind};
@@ -136,6 +137,11 @@ pub struct WindowedRunner<A: Application> {
     scene_generation: u64,
     frame_metrics: Option<Arc<FrameHitMetrics>>,
     hwnd: Option<isize>,
+    /// The semantic colour table the GPU shaders resolve tokens through.
+    theme: ThemeState,
+    /// Which theme the current renderer's LUT holds. `None` means the LUT
+    /// still has to be uploaded (including right after a device rebuild).
+    uploaded_theme: Option<ThemeKind>,
 }
 
 impl<A: Application> WindowedRunner<A> {
@@ -147,9 +153,12 @@ impl<A: Application> WindowedRunner<A> {
         runtime.set_clipboard(Box::new(WinClipboard(std::cell::RefCell::new(
             unbound_platform::SystemClipboard::new(),
         ))));
+        let theme = ThemeState::new(ThemeSet::default_set(), runtime.context().theme);
 
         Self {
             runtime,
+            theme,
+            uploaded_theme: None,
             renderer: None,
             surface: None,
             swapchain: None,
@@ -174,6 +183,37 @@ impl<A: Application> WindowedRunner<A> {
     /// Mutably access the underlying application runtime.
     pub fn runtime_mut(&mut self) -> &mut AppRuntime<A> {
         &mut self.runtime
+    }
+
+    /// Keep the renderer's 4 KiB colour table in step with the runtime theme.
+    ///
+    /// `Renderer::new` only seeds five placeholder tokens; every other token
+    /// resolves to transparent black and `SURFACE` clears to white. Until a
+    /// real `ThemeLut` is written the whole window is a blank white surface —
+    /// the primitives are drawn, but with fully transparent colours. The
+    /// showcase uploads its LUT itself; the generic runner has to do the same
+    /// for every example, and re-upload after a device rebuild.
+    fn sync_theme(&mut self, window: &Window) {
+        let kind = self.runtime.context().theme;
+        if self.uploaded_theme == Some(kind) {
+            return;
+        }
+        self.theme.switch(kind);
+        let lut = self.theme.lut().clone();
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        match renderer.write_theme_lut(&lut) {
+            Ok(()) => {
+                self.uploaded_theme = Some(kind);
+                // A theme switch changes only colours: no layout and no
+                // instance re-upload, but one more frame has to be presented.
+                window.request_redraw();
+            }
+            Err(error) => {
+                eprintln!("[unbound-app] Could not upload the theme LUT: {error:?}");
+            }
+        }
     }
 
     fn recover_gpu(&mut self, window: &Window) {
@@ -238,6 +278,9 @@ impl<A: Application> WindowedRunner<A> {
                 self.surface = Some(surface);
                 self.atlases = Some(atlases);
                 self.swapchain_dirty = true;
+                // A freshly built renderer only has the placeholder LUT.
+                self.uploaded_theme = None;
+                self.sync_theme(window);
                 self.runtime.request_full_rebuild();
                 window.request_redraw();
             }
@@ -337,6 +380,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.frame_metrics = Some(metrics);
 
         state.set_present_extensions(&device_extensions);
+        self.sync_theme(window);
         self.last_frame = Instant::now();
     }
 
@@ -445,9 +489,21 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
 
         let report = self.runtime.frame(dt);
 
+        // `reduce` may have changed `ctx.theme` (the theme button in example
+        // 01 does exactly that), so the LUT is checked every frame. The
+        // comparison is a single enum read; the 4 KiB upload only happens on
+        // an actual switch.
+        self.sync_theme(window);
+
         if let (Some(renderer), Some(atlases)) = (&mut self.renderer, &self.atlases) {
-            for upload in report.atlas_uploads {
-                let _ = atlases.upload_batch(&renderer.gpu, &[upload]);
+            // One batch for the whole frame: a single staging buffer, one
+            // command buffer and one queue wait for every glyph. Uploading
+            // them one at a time submits a command buffer per character and
+            // stalls the queue just as often.
+            if !report.atlas_uploads.is_empty() {
+                if let Err(error) = atlases.upload_batch(&renderer.gpu, &report.atlas_uploads) {
+                    eprintln!("[unbound-app] Could not upload atlas glyphs: {error:?}");
+                }
             }
 
             if let (Some(swapchain), Some(surface)) = (&mut self.swapchain, &self.surface) {
@@ -520,6 +576,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                                 self.recover_gpu(window);
                                 return Flow::Continue;
                             }
+                            eprintln!("[unbound-app] render failed: {err:?}");
                         }
 
                         if let Err(ref err) = swapchain.present_outcome(

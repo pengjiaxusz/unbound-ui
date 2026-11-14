@@ -60,6 +60,12 @@
 | 交换链重建后同步深度附件 | 深度图小于 `renderArea`（`VUID-...-06079/06080`），驱动可能直接丢设备 | `ensure_depth_size(swapchain.extent())`；`Renderer::render_external` 另有按借用图像尺寸的兜底 |
 | acquire 前等上一帧 fence | acquire 信号量槽位被提前复用（`VUID-...-01779`） | `wait_for_previous_frame()` 在 `acquire_outcome()` 之前 |
 | 设备丢失恢复时显式销毁 | Vulkan 对象没有 `Drop`，旧 `VkSurfaceKHR` 仍占着 HWND，重建报 `ERROR_NATIVE_WINDOW_IN_USE_KHR` | 按 swapchain → surface → renderer 顺序 `destroy()` |
+| 上传主题 LUT 并跟随 `ctx.theme` 切换 | `Renderer::new` 只写 5 个占位颜色槽，`SURFACE` 是白色、其余 token 全透明 → **整窗纯白** | `WindowedRunner::sync_theme()` 持有 `ThemeState`，每帧比对后 `write_theme_lut()`；设备重建后清空 `uploaded_theme` |
+| 整帧一次性上传图集、并保持场景表的全局索引 | 逐字形提交会放大队列等待；空 `transforms` / 局部 payload 下标会让图元被剔除或文字串叠 | `AtlasSet::upload_batch` 一次收齐；变换与 payload 的保底/重定位见 [GPU 数据布局](gpu-data-layout.md) |
+
+后两条**不会产生任何验证层报错**：进程稳定、命令合法、画面却是空白或
+乱码。因此开窗验收必须包含像素级检查（抓窗口位图、统计颜色分布），
+「无 panic + 无 VUID」不足以证明呈现链正确。
 
 深度附件按 256 px 步进增长、只增不减：动态渲染允许附件大于 `renderArea`，
 多出的行列不参与绘制，因此拖拽时不会因为每像素变化而重新分配显存。

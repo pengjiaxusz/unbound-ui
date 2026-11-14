@@ -827,6 +827,19 @@ impl SceneCollector {
             self.scope_hit(sub_hit);
         }
 
+        // A widget indexes *its own* `payloads` slice from zero. The collector
+        // concatenates every widget's payloads into one global array, so those
+        // indices have to be rebased before the primitives are appended.
+        // Without this, the second label's glyphs read the first label's UVs
+        // and every text run renders as a garbled mix of the others.
+        let payload_base = u32::try_from(self.payloads.len()).unwrap_or(u32::MAX);
+        if payload_base != 0 {
+            for primitive in &mut output.primitives {
+                primitive.extra_payload_idx =
+                    primitive.extra_payload_idx.saturating_add(payload_base);
+            }
+        }
+
         let start = u32::try_from(self.primitives.len()).unwrap_or(u32::MAX);
         self.primitives.extend(output.primitives);
         let end = u32::try_from(self.primitives.len()).unwrap_or(u32::MAX);
@@ -1195,5 +1208,35 @@ mod tests {
             folded < 40.0,
             "the folded radius never exceeds the outer one"
         );
+    }
+
+    /// Each widget indexes its own payload slice from zero, while the
+    /// collector holds one concatenated table. The second label must not
+    /// sample the first label's glyph UVs.
+    #[test]
+    fn payload_indices_are_rebased_for_every_widget() {
+        let widget = |indices: &[u32]| WidgetOutput {
+            primitives: indices
+                .iter()
+                .map(|&index| GpuPrimitiveInstance {
+                    extra_payload_idx: index,
+                    ..Default::default()
+                })
+                .collect(),
+            payloads: indices.iter().map(|_| GpuPayload::default()).collect(),
+            ..Default::default()
+        };
+
+        let mut collector = SceneCollector::new(0);
+        collector.push(1, widget(&[0, 1]));
+        collector.push(2, widget(&[0, 1, 2]));
+
+        assert_eq!(collector.payloads.len(), 5);
+        let indices: Vec<u32> = collector
+            .primitives
+            .iter()
+            .map(|p| p.extra_payload_idx)
+            .collect();
+        assert_eq!(indices, vec![0, 1, 2, 3, 4]);
     }
 }

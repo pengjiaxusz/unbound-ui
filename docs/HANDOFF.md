@@ -293,7 +293,27 @@ just q-run cargo run -p gallery -- --kpi
 | acquire 前未等上一帧 fence，acquire 信号量槽位被提前复用（`VUID-...-01779`） | `unbound-app/src/window_runner.rs` | 在 `acquire_outcome` 之前调用 `wait_for_previous_frame()` |
 
 验收：10 个示例逐个跑 `--headless-check` 与限时开窗，均为 0 验证错误 /
-0 panic / 0 设备丢失恢复。
+0 panic / 0 设备丢失恢复。**但这一轮只证明「进程不崩」，没有检查像素**——
+见 §3.1.2。
+
+### 3.1.2 窗口画面空白与文字错乱（第二轮：像素级验收）
+
+用 GDI `PrintWindow` 抓实际窗口后发现 10 个示例全是纯白。逐层定位出三个
+被上一轮缺陷遮住、且都不会触发验证层的问题：
+
+| 缺陷 | 位置 | 修法 |
+| :--- | :--- | :--- |
+| `Renderer::new` 只写 5 个占位颜色槽，`SURFACE(2)` 恰好是白色、其余 507 个 token 全透明；`WindowedRunner` 从未上传主题 LUT → 清屏白 + 控件透明 = 白屏 | `unbound-app/src/window_runner.rs` | 持有 `ThemeState::new(ThemeSet::default_set(), …)`，每帧比对 `runtime.context().theme`（`reduce` 可直接改 `ctx.theme`），切换时 `write_theme_lut`；设备重建后清空 `uploaded_theme` 强制重写 |
+| 静态 UI 场景 `transforms` 为空，但 `cull.comp` / `uber.vert` 无条件读 `transforms[0]`；池只分配一个未初始化的 stride → 垃圾仿射矩阵把 51 个图元全部剔除，只剩清屏色 | `unbound-gpu/src/frame.rs` | `prepare_upload` 对空表补一个 `GpuTransform::IDENTITY`，所有调用方受益，不再要求场景自己塞占位变换 |
+| `SceneCollector::push` 把每个 widget 的局部 `extra_payload_idx` 原样追加到全局 payload 数组；第二个及之后的文本 run 读到第一个 run 的字形 UV → 各标签文字互相串叠 | `unbound-widgets/src/lib.rs` | push 前以 `self.payloads.len()` 为基址重定位该 widget 所有图元的 payload 索引 |
+
+同时把窗口宿主的图集上传由「每个字形一次 `upload_batch`」改为整帧一次
+批量上传（与 `apps/showcase` 一致：一个 staging buffer、一次提交、一次等待）。
+
+验收：逐个开窗并用 GDI 抓屏统计颜色分布、扫描 stderr —— 10/10 画面均有
+UI 内容（285–467 种颜色，主色占比 62%–95%），文字清晰无串叠，0 验证错误 /
+0 panic / 0 渲染失败；`just check`、`just test`、`just test-examples` 全绿，
+新增 2 个回归用例（空 transform 表仍能绘制、payload 索引按 widget 重定位）。
 
 ### 3.2 `unbound-canvas`
 

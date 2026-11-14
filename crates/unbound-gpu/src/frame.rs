@@ -2467,6 +2467,19 @@ impl Renderer {
     ///   scattered. A hover or a slider drag costs a handful of bytes
     ///   instead of the whole scene.
     fn prepare_upload(&mut self, scene: &SceneUpload<'_>) -> Result<UploadPlan, GpuError> {
+        // Both the culling and the vertex shaders read transforms[0] for
+        // *every* primitive. A static UI scene emits no transforms at all;
+        // `ensure_pool_capacity` still reserves one stride, but its contents
+        // are uninitialised device memory, so a garbage affine matrix moves
+        // every quad off-screen and the cull pass reports zero visible
+        // primitives. Seed one identity transform for such scenes.
+        static IDENTITY: [GpuTransform; 1] = [GpuTransform::IDENTITY];
+        let transforms: &[GpuTransform] = if scene.transforms.is_empty() {
+            &IDENTITY
+        } else {
+            scene.transforms
+        };
+
         let full = self.generation.needs_full(scene.generation);
         let partial = !full && (!scene.dirty_ranges.is_empty() || scene.aux_changed);
         if !full && !partial {
@@ -2476,7 +2489,7 @@ impl Renderer {
         let mut plan = UploadPlan::default();
         if full {
             self.ensure_pool_capacity(scene.primitives.len(), Which::Primitives)?;
-            self.ensure_pool_capacity(scene.transforms.len(), Which::Transforms)?;
+            self.ensure_pool_capacity(transforms.len(), Which::Transforms)?;
             self.ensure_pool_capacity(scene.clips.len(), Which::Clips)?;
             self.ensure_pool_capacity(scene.payloads.len(), Which::Payloads)?;
             // The generation is *not* committed here: the frame can still
@@ -2488,7 +2501,7 @@ impl Renderer {
         } else if scene.aux_changed {
             // Auxiliary tables are small; refreshing them must not force the
             // primitive pool to travel again.
-            self.ensure_pool_capacity(scene.transforms.len(), Which::Transforms)?;
+            self.ensure_pool_capacity(transforms.len(), Which::Transforms)?;
             self.ensure_pool_capacity(scene.clips.len(), Which::Clips)?;
             self.ensure_pool_capacity(scene.payloads.len(), Which::Payloads)?;
         }
@@ -2535,7 +2548,7 @@ impl Renderer {
             );
             stage(
                 transform_dst,
-                bytemuck::cast_slice(scene.transforms),
+                bytemuck::cast_slice(transforms),
                 bytes,
                 spans,
             );
@@ -2564,7 +2577,7 @@ impl Renderer {
             if scene.aux_changed {
                 stage(
                     transform_dst,
-                    bytemuck::cast_slice(scene.transforms),
+                    bytemuck::cast_slice(transforms),
                     bytes,
                     spans,
                 );
@@ -2938,6 +2951,39 @@ mod tests {
 
         assert_eq!(renderer.stats.visible, 1, "the quad must survive culling");
         assert_eq!(renderer.stats.draw_calls, 1);
+        renderer.destroy();
+    }
+
+    /// A static UI scene has no animation transforms at all. The culling and
+    /// vertex shaders still read transforms[0], so an empty table must be
+    /// treated as identity — otherwise every primitive is culled and the
+    /// window shows nothing but the clear colour.
+    #[test]
+    fn a_scene_without_transforms_still_draws() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 128, 128).expect("renderer");
+        let prims = vec![quad(16.0, 16.0, 96.0, 96.0, 5)];
+        renderer
+            .write_theme(&{
+                let mut c = vec![[0u16; 4]; 512];
+                c[2] = unbound_math::Color::from_srgb8(18, 18, 20, 255).to_rgba16f();
+                c[5] = unbound_math::Color::from_srgb8(255, 255, 255, 255).to_rgba16f();
+                c
+            })
+            .unwrap();
+
+        renderer.render(&scene(&prims, &[], 1)).expect("render");
+        let pixels = renderer.read_pixels().expect("readback");
+        let idx = (64 * 128 + 64) * 4;
+        assert!(
+            pixels[idx] > 200 && pixels[idx + 1] > 200 && pixels[idx + 2] > 200,
+            "the quad must survive culling with no transform table: {:?}",
+            &pixels[idx..idx + 4]
+        );
+        assert_eq!(renderer.stats.visible, 1);
         renderer.destroy();
     }
 
