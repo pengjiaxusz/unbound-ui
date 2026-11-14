@@ -55,6 +55,7 @@ impl Application for CanvasApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("canvas_root"), |col| {
+            col.title_bar("06 — Infinite Canvas & Node Editor");
             col.card(ui_key!("toolbar_card"), CardDesc::default(), |bar| {
                 bar.row(ui_key!("controls"), |row| {
                     row.badge(

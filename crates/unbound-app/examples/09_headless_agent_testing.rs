@@ -37,6 +37,7 @@ impl Application for HeadlessAgentDemoApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("headless_root"), |col| {
+            col.title_bar("09 — Headless Agent Testing");
             col.card(ui_key!("agent_card"), CardDesc::default(), |card| {
                 card.badge(
                     ui_key!("agent_badge"),

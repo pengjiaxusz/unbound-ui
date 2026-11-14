@@ -67,7 +67,7 @@ pub struct TimerRequest {
 
 /// 可从其他线程唤醒休眠事件循环的抽象。
 ///
-/// `unbound-app` 保持不依赖 `winit`：平台后端用 `EventLoopProxy` 实现，
+/// `unbound-app` 保持不依赖具体窗口消息细节：平台后端用 `PostMessageW(WM_APP_WAKE)` 实现，
 /// 测试用 channel 实现，服务端用无操作实现。
 pub trait AppWaker: Send + Sync + 'static {
     /// 请求事件循环再运行一次迭代以 reduce 待处理任务。

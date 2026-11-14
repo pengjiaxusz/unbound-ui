@@ -10,10 +10,6 @@ use unbound_app::prelude::*;
 use unbound_input::PointerButton;
 use unbound_math::Vec2;
 
-const BTN_MINIMIZE: u64 = 1001;
-const BTN_MAXIMIZE: u64 = 1002;
-const BTN_CLOSE: u64 = 1003;
-
 #[derive(Default)]
 pub struct Win11ShellApp;
 
@@ -39,7 +35,7 @@ impl Application for Win11ShellApp {
         _ctx: &mut AppContext,
     ) -> EventOutcome {
         match event {
-            AppEvent::Click { node, .. } if node == BTN_MAXIMIZE => {
+            AppEvent::Click { node, .. } if node == TITLE_BAR_MAXIMIZE_ID => {
                 state.is_maximized = !state.is_maximized;
                 EventOutcome::new(DirtyFlags::PAINT | DirtyFlags::LAYOUT)
             }
@@ -53,23 +49,10 @@ impl Application for Win11ShellApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("shell_root"), |col| {
-            // 原生无边框标题栏
-            col.row(ui_key!("titlebar"), |bar| {
-                bar.badge(
-                    ui_key!("app_title"),
-                    BadgeDesc::label("Unbound UI Desktop Shell"),
-                );
-                bar.button(BTN_MINIMIZE, ButtonDesc::label(" — "));
-                bar.button(
-                    BTN_MAXIMIZE,
-                    ButtonDesc::label(if state.is_maximized {
-                        " 🗗 "
-                    } else {
-                        " 🗖 "
-                    }),
-                );
-                bar.button(BTN_CLOSE, ButtonDesc::label(" ✕ "));
-            });
+            // 原生无边框默认标题栏（支持拖拽、Win11 贴靠、最小化、最大化与关闭）
+            col.title_bar_with(
+                TitleBarDesc::new("Unbound UI Desktop Shell").maximized(state.is_maximized),
+            );
 
             col.divider(ui_key!("div_title"), DividerDesc::rule());
 
@@ -99,7 +82,7 @@ pub fn run_headless_check() {
 
     // 点击最大化按钮
     let btn_rect = runtime
-        .widget_rect(BTN_MAXIMIZE)
+        .widget_rect(TITLE_BAR_MAXIMIZE_ID)
         .expect("Maximize button mounted");
     let click_pos = btn_rect.center();
     runtime.pointer_move(click_pos);

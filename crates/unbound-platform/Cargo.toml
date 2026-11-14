@@ -12,8 +12,6 @@ unbound-math.workspace = true
 unbound-gpu.workspace = true
 unbound-a11y.workspace = true
 accesskit.workspace = true
-accesskit_winit.workspace = true
-winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 raw-window-handle = "0.6"
 
 [lints]

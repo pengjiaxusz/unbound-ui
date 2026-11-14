@@ -47,6 +47,7 @@ impl Application for IdeApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("ide_root"), |root| {
+            root.title_bar("04 — Docking IDE Workspace");
             // 顶部工具栏 / 菜单栏
             root.row(ui_key!("top_bar"), |bar| {
                 bar.button(

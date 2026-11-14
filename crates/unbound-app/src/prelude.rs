@@ -28,7 +28,8 @@ pub use unbound_widgets::{
     DataGridDesc, DataGridState, DividerDesc, FileDropDesc, PaginationDesc, PaginationState,
     PopconfirmDesc, ProgressDesc, ProgressState, SelectDesc, SelectState, Severity, SliderDesc,
     SwitchDesc, TableDesc, TableRow, TableState, TextEditState, TextInputDesc, TimelineTrackDesc,
-    TimelineTrackState, TourDesc, TransferDesc, TransferState, WatermarkDesc, WidgetCatalogId,
-    WidgetOutput,
+    TimelineTrackState, TitleBarDesc, TourDesc, TransferDesc, TransferState, WatermarkDesc,
+    WidgetCatalogId, WidgetOutput, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT,
+    TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID,
 };
 pub use unbound_world::NodeId;

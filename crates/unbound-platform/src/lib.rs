@@ -13,17 +13,13 @@
 //! * **实测延迟。** [`latency::LatencyTracker`] 对输入与呈现打时间戳，
 //!   以实测验证 8.3 ms 红线而非凭空假设。
 //!
-//!
-//!
-//!
-//! 本 crate 拆分为**策略层**（纯逻辑，完整单元测试）与**后端层**（`winit`），
+//! 本 crate 拆分为**策略层**（纯逻辑，完整单元测试）与**原生 Win32 后端层**，
 //! 从而使核心行为可在无显示器的机器上完成测试。
-//!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod a11y_bridge;
-pub mod a11y_winit;
+pub mod a11y_win32;
 pub mod backend;
 pub mod clipboard;
 pub mod dialogs;
@@ -32,12 +28,13 @@ pub mod pacing;
 pub mod resize;
 pub mod tray;
 pub mod win32_frame;
+pub mod win32_window;
 pub mod window;
 pub mod windows;
 
 pub use a11y_bridge::{action_request, A11yBridge, A11yRequest, A11yTransport};
-pub use a11y_winit::WinitA11y;
-pub use backend::{Flow, PlatformWindow};
+pub use a11y_win32::Win32A11y;
+pub use backend::{Flow, PlatformApp, PlatformWindow};
 pub use clipboard::{
     ClipboardError, ClipboardProvider, MemoryClipboard, SystemClipboard, MAX_CLIPBOARD_BYTES,
 };
@@ -54,9 +51,11 @@ pub use tray::{
     TrayNotificationSeverity,
 };
 pub use win32_frame::{install_custom_frame, set_window_dark_mode, FrameHitMetrics};
+pub use win32_window::{
+    CursorIcon, PhysicalPosition, PhysicalSize, ResizeDirection, Window, WindowId as NativeWindowId,
+};
 pub use window::{
-    apply, translate_ime_event, translate_key, translate_window_event, ButtonState, ImeEvent,
-    ImeState, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey, PlatformState,
-    WindowConfig,
+    apply, ButtonState, ImeEvent, ImeState, Modifiers, MouseButton, PlatformError, PlatformEvent,
+    PlatformKey, PlatformState, WindowConfig,
 };
 pub use windows::{WindowId, WindowRegistry, WindowSlot};

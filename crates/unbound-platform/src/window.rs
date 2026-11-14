@@ -1,6 +1,6 @@
-//! 窗口系统后端：将 `winit` 事件翻译为引擎事件。
+//! 窗口系统后端：将原生 Win32 事件翻译为引擎事件。
 //!
-//! 翻译过程刻意设计为单向且无损的：引擎层绝不会看到任何 `winit` 类型，
+//! 翻译过程刻意设计为单向且无损的：引擎层绝不会看到任何底层窗口库类型，
 //! 从而可在不触及渲染器的前提下替换窗口库。
 //!
 
@@ -9,12 +9,6 @@ use std::time::Instant;
 use crate::latency::LatencyTracker;
 use crate::pacing::{FramePacer, PresentWaitPolicy};
 use crate::resize::{Extent, ResizeAction, ResizeTracker};
-
-/// 鼠标滚轮转动一“行”对应的设备像素数。
-///
-/// Windows 以像素为单位上报滚轮位移，而大多数其他平台以行为单位上报；
-/// 此换算使引擎的滚轮单位保持平台无关。
-const PIXELS_PER_LINE: f64 = 40.0;
 
 /// 平台窗口的配置参数。
 #[derive(Clone, Debug, PartialEq)]
@@ -147,7 +141,7 @@ pub enum PlatformEvent {
 
 /// 输入法（IME）事件。
 ///
-/// 引擎绝不会看到 `winit` 类型；后端将平台 IME 事件翻译为该精简枚举，
+/// 引擎绝不会看到底层窗口库类型；后端将平台 IME 事件翻译为该精简枚举，
 /// 并由 [`PlatformState::ime`] 维护组合串供应用渲染。
 ///
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -248,7 +242,7 @@ impl std::error::Error for PlatformError {}
 
 /// 平台层的实时状态。
 ///
-/// 引擎每帧需要轮询的所有状态均集中于此，且其中没有任何字段依赖 `winit`。
+/// 引擎每帧需要轮询的所有状态均集中于此，且其中没有任何字段依赖外部窗口库。
 ///
 #[derive(Debug)]
 pub struct PlatformState {
@@ -318,163 +312,6 @@ impl PlatformState {
             ResizeAction::None => None,
             ResizeAction::Recreate(extent) => Some(extent),
         }
-    }
-}
-
-/// 将 `winit` 窗口事件翻译为平台事件。
-///
-/// 对引擎不关心的事件返回 `None`。
-#[must_use]
-pub fn translate_window_event(event: &winit::event::WindowEvent) -> Option<PlatformEvent> {
-    use winit::event::{ElementState, MouseButton as WinitMouseButton, WindowEvent};
-
-    Some(match event {
-        WindowEvent::Resized(size) => PlatformEvent::Resized(Extent::new(size.width, size.height)),
-        WindowEvent::ThemeChanged(theme) => PlatformEvent::ThemeChanged {
-            dark: matches!(theme, winit::window::Theme::Dark),
-        },
-        WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-            PlatformEvent::ScaleFactorChanged(*scale_factor)
-        }
-        WindowEvent::CursorMoved { position, .. } => PlatformEvent::CursorMoved {
-            x: position.x,
-            y: position.y,
-        },
-        WindowEvent::MouseInput { state, button, .. } => PlatformEvent::MouseInput {
-            state: match state {
-                ElementState::Pressed => ButtonState::Pressed,
-                ElementState::Released => ButtonState::Released,
-            },
-            button: match button {
-                WinitMouseButton::Left => MouseButton::Left,
-                WinitMouseButton::Right => MouseButton::Right,
-                WinitMouseButton::Middle => MouseButton::Middle,
-                WinitMouseButton::Other(code) => MouseButton::Other(*code),
-                _ => MouseButton::Other(u16::MAX),
-            },
-        },
-        WindowEvent::MouseWheel { delta, .. } => {
-            // Windows 上报像素增量，大多数其他平台按行上报。
-            // 此处统一归一化为行数，使引擎只看到单一单位。
-            let (x, y) = match delta {
-                winit::event::MouseScrollDelta::LineDelta(x, y) => (f64::from(*x), f64::from(*y)),
-                winit::event::MouseScrollDelta::PixelDelta(position) => {
-                    (position.x / PIXELS_PER_LINE, position.y / PIXELS_PER_LINE)
-                }
-            };
-            PlatformEvent::MouseWheel {
-                delta_x: x,
-                delta_y: y,
-            }
-        }
-        WindowEvent::KeyboardInput { event, .. } => PlatformEvent::KeyInput {
-            state: match event.state {
-                ElementState::Pressed => ButtonState::Pressed,
-                ElementState::Released => ButtonState::Released,
-            },
-            key: translate_key(&event.logical_key),
-            repeat: event.repeat,
-        },
-        WindowEvent::ModifiersChanged(mods) => {
-            let state = mods.state();
-            PlatformEvent::ModifiersChanged(Modifiers {
-                shift: state.shift_key(),
-                control: state.control_key(),
-                alt: state.alt_key(),
-                meta: state.super_key(),
-            })
-        }
-        WindowEvent::Focused(focused) => PlatformEvent::Focused(*focused),
-        WindowEvent::HoveredFile(path) => PlatformEvent::FileHover(path.clone()),
-        WindowEvent::DroppedFile(path) => PlatformEvent::FileDrop(path.clone()),
-        WindowEvent::HoveredFileCancelled => PlatformEvent::FileHoverCancelled,
-        WindowEvent::Ime(ime) => match ime {
-            winit::event::Ime::Enabled => PlatformEvent::Ime(ImeEvent::Enabled),
-            winit::event::Ime::Preedit(text, selection) => {
-                PlatformEvent::Ime(ImeEvent::Preedit(text.clone(), *selection))
-            }
-            winit::event::Ime::Commit(text) => PlatformEvent::Ime(ImeEvent::Commit(text.clone())),
-            winit::event::Ime::Disabled => PlatformEvent::Ime(ImeEvent::Disabled),
-        },
-        WindowEvent::CloseRequested => PlatformEvent::CloseRequested,
-        WindowEvent::RedrawRequested => PlatformEvent::RedrawRequested,
-        _ => return None,
-    })
-}
-
-/// 将 `winit` IME 事件翻译为平台事件。
-///
-/// IME 事件不混入常规 [`PlatformEvent`] 流：它们携带文本，引擎通过
-/// [`PlatformState::ime`] 而非输入增量流消费它们。
-///
-#[must_use]
-pub fn translate_ime_event(event: &winit::event::WindowEvent) -> Option<ImeEvent> {
-    let winit::event::WindowEvent::Ime(ime) = event else {
-        return None;
-    };
-    Some(match ime {
-        winit::event::Ime::Enabled => ImeEvent::Enabled,
-        winit::event::Ime::Preedit(text, selection) => ImeEvent::Preedit(text.clone(), *selection),
-        winit::event::Ime::Commit(text) => ImeEvent::Commit(text.clone()),
-        winit::event::Ime::Disabled => ImeEvent::Disabled,
-    })
-}
-
-/// 将平台原生键码扁平化为稳定的 `u32`。
-///
-/// 不同操作系统的平台键码不可直接比较，因此折叠到统一的整数空间；
-/// 引擎只需能够区分**不同的**按键即可。
-///
-#[must_use]
-pub fn native_key_code(code: &winit::keyboard::NativeKey) -> u32 {
-    use winit::keyboard::NativeKey;
-    match code {
-        NativeKey::Unidentified => 0,
-        NativeKey::Android(value) => *value,
-        NativeKey::MacOS(value) => u32::from(*value),
-        NativeKey::Windows(value) => u32::from(*value),
-        NativeKey::Xkb(value) => *value,
-        NativeKey::Web(text) => text.chars().next().map_or(0, |c| c as u32),
-    }
-}
-
-/// 将 `winit` 逻辑按键扁平化为引擎的按键分类。
-#[must_use]
-pub fn translate_key(key: &winit::keyboard::Key) -> PlatformKey {
-    use winit::keyboard::{Key as WinitKey, NamedKey};
-
-    match key {
-        WinitKey::Character(text) => PlatformKey::Character(text.to_string()),
-        WinitKey::Named(named) => match named {
-            NamedKey::Enter => PlatformKey::Named("Enter".into()),
-            NamedKey::Escape => PlatformKey::Named("Escape".into()),
-            NamedKey::Tab => PlatformKey::Named("Tab".into()),
-            NamedKey::Backspace => PlatformKey::Named("Backspace".into()),
-            NamedKey::Delete => PlatformKey::Named("Delete".into()),
-            NamedKey::ArrowLeft => PlatformKey::Named("ArrowLeft".into()),
-            NamedKey::ArrowRight => PlatformKey::Named("ArrowRight".into()),
-            NamedKey::ArrowUp => PlatformKey::Named("ArrowUp".into()),
-            NamedKey::ArrowDown => PlatformKey::Named("ArrowDown".into()),
-            NamedKey::Home => PlatformKey::Named("Home".into()),
-            NamedKey::End => PlatformKey::Named("End".into()),
-            NamedKey::PageUp => PlatformKey::Named("PageUp".into()),
-            NamedKey::PageDown => PlatformKey::Named("PageDown".into()),
-            NamedKey::Insert => PlatformKey::Named("Insert".into()),
-            NamedKey::ContextMenu => PlatformKey::Named("ContextMenu".into()),
-            NamedKey::CapsLock => PlatformKey::Named("CapsLock".into()),
-            NamedKey::Space => PlatformKey::Named("Space".into()),
-            // 编辑命令与功能键（`F1`..`F24`）直接通过调试名称折叠，其拼写已是稳定的。
-            //
-            NamedKey::Copy => PlatformKey::Named("Copy".into()),
-            NamedKey::Cut => PlatformKey::Named("Cut".into()),
-            NamedKey::Paste => PlatformKey::Named("Paste".into()),
-            NamedKey::Undo => PlatformKey::Named("Undo".into()),
-            NamedKey::Redo => PlatformKey::Named("Redo".into()),
-            other => PlatformKey::Named(format!("{other:?}")),
-        },
-        WinitKey::Unidentified(code) => PlatformKey::Other(native_key_code(code)),
-        // 死键（例如法语的 `^` 重音符）尚未产生字符。
-        WinitKey::Dead(_) => PlatformKey::Named("Dead".into()),
     }
 }
 
@@ -760,39 +597,5 @@ mod tests {
         // 修饰键状态同时保存在状态中，使快捷键无需追踪历史事件流即可解析。
         //
         assert!(state.modifiers.shift);
-    }
-
-    #[test]
-    fn modifiers_are_translated_faithfully() {
-        use winit::event::{Modifiers, WindowEvent};
-        use winit::keyboard::ModifiersState;
-        let mods = ModifiersState::SHIFT | ModifiersState::CONTROL;
-        let event = WindowEvent::ModifiersChanged(Modifiers::from(mods));
-        let Some(PlatformEvent::ModifiersChanged(m)) = translate_window_event(&event) else {
-            panic!("expected modifiers");
-        };
-        assert!(m.shift);
-        assert!(m.control);
-        assert!(!m.alt);
-        assert!(!m.meta);
-    }
-
-    #[test]
-    fn keys_are_flattened_into_named_and_character_forms() {
-        use winit::keyboard::{Key, NamedKey};
-        assert_eq!(
-            translate_key(&Key::Character("a".into())),
-            PlatformKey::Character("a".into())
-        );
-        assert_eq!(
-            translate_key(&Key::Named(NamedKey::Escape)),
-            PlatformKey::Named("Escape".into())
-        );
-    }
-
-    #[test]
-    fn unknown_events_are_dropped_rather_than_guessed() {
-        use winit::event::WindowEvent;
-        assert!(translate_window_event(&WindowEvent::Destroyed).is_none());
     }
 }

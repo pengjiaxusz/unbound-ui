@@ -47,6 +47,7 @@ impl Application for DataTableApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("table_root"), |col| {
+            col.title_bar("03 — Data Table & Virtual List");
             col.card(ui_key!("table_card"), CardDesc::default(), |card| {
                 card.row(ui_key!("header_bar"), |hdr| {
                     hdr.badge(

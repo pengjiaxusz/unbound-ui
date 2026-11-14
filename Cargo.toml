@@ -55,7 +55,6 @@ unbound-host = { path = "crates/unbound-host" }
 unbound-kpi = { path = "crates/unbound-kpi" }
 unbound-theme = { path = "crates/unbound-theme" }
 unbound-widgets = { path = "crates/unbound-widgets" }
-winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 
 crossbeam-channel = { version = "0.5", default-features = false, features = ["std"] }
 png = { version = "0.17", default-features = false }
@@ -66,7 +65,6 @@ half = { version = "2.7", features = ["bytemuck"] }
 taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
 cosmic-text = "0.19"
 accesskit = "0.24"
-accesskit_winit = { version = "0.32", default-features = false, features = ["rwh_06"] }
 rayon = "1.12"
 slotmap = "1.1"
 rkyv = { version = "0.8", features = ["alloc", "bytecheck"] }

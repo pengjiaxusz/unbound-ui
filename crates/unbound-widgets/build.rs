@@ -19,8 +19,11 @@ fn main() {
     let catalog_rs =
         fs::read_to_string(src_dir.join("catalog.rs")).expect("failed to read src/catalog.rs");
 
-    // 规则 1：`lib.rs` 中除基础设施模块外禁止裸 `pub mod`
-    const ALLOWED_BARE_MODS: &[&str] = &["catalog", "diff", "primitive", "ergonomics"];
+    // 规则 1：`lib.rs` 中除基础设施模块外禁止裸 `pub mod`。
+    // `title_bar` 仅提供默认标题栏描述符与保留节点 ID，场景由 `unbound-app` 的
+    // `ViewBuilder` 组合既有容器/徽章/按钮生成，没有独立的 `emit_*`，因此按基础设施
+    // 模块处理，不纳入 `define_widget_catalog!` 展示目录。
+    const ALLOWED_BARE_MODS: &[&str] = &["catalog", "diff", "primitive", "ergonomics", "title_bar"];
     for line in lib_rs.lines() {
         let trimmed = line.trim();
         if let Some(stripped) = trimmed.strip_prefix("pub mod ") {
@@ -56,6 +59,7 @@ fn main() {
             || file_name == "diff.rs"
             || file_name == "primitive.rs"
             || file_name == "ergonomics.rs"
+            || file_name == "title_bar.rs"
         {
             continue;
         }

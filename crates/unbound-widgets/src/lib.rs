@@ -14,11 +14,18 @@
 //!
 //! [`app-guest`](../../app_guest) 仍仅依赖 [`unbound_abi`]，因此客体应用无需引入引擎即可宿主这些控件。
 
-// 基础设施模块：场景差分与图元打包辅助工具。它们不属于业务组件，因此不纳入展示目录。
+// 基础设施模块：场景差分、图元打包辅助工具与默认标题栏描述符。它们没有独立的
+// `emit_*` 发射器，不属于业务组件，因此不纳入展示目录。
 pub mod catalog;
 pub mod diff;
 pub mod ergonomics;
 pub mod primitive;
+pub mod title_bar;
+
+pub use title_bar::{
+    TitleBarDesc, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID,
+    TITLE_BAR_MINIMIZE_ID,
+};
 
 /// 声明所有业务组件模块并派生穷举目录。
 ///

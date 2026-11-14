@@ -71,6 +71,7 @@ impl Application for FormApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("form_root"), |col| {
+            col.title_bar("02 — Form & Validation");
             col.card(ui_key!("form_card"), CardDesc::default(), |card| {
                 card.badge(ui_key!("badge"), BadgeDesc::label("User Registration Form"));
 

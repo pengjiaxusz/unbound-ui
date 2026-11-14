@@ -17,6 +17,7 @@ use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::theme;
 
+use raw_window_handle::HasDisplayHandle;
 use unbound_app::{AppKey, AppRuntime, DirtyFlags, Modifiers as AppModifiers};
 use unbound_gpu::atlas::{AtlasKind, AtlasSet, AtlasUpload};
 use unbound_gpu::data::PassLayer;
@@ -31,10 +32,10 @@ use unbound_platform::window::{
     ButtonState, Modifiers, MouseButton, PlatformEvent, PlatformKey, PlatformState, WindowConfig,
 };
 use unbound_platform::Extent;
+use unbound_platform::{
+    CursorIcon, NativeWindowId, PhysicalPosition, PhysicalSize, ResizeDirection, Window,
+};
 use unbound_theme::{ThemeKind, ThemeState};
-use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::raw_window_handle::HasDisplayHandle;
-use winit::window::Window;
 
 use showcase::shell::WindowCommand;
 
@@ -49,7 +50,7 @@ const ACQUIRE_TIMEOUT_NS: u64 = 1_000_000_000;
 /// 设备、渲染器、管线与字形图集均与主窗口共享；仅呈现链（presentation chain）按窗口独立。
 ///
 struct ExtraWindow {
-    id: winit::window::WindowId,
+    id: NativeWindowId,
     surface: Surface,
     swapchain: Swapchain,
     swapchain_dirty: bool,
@@ -112,7 +113,7 @@ struct Showcase {
     /// 当驱动报告 swapchain 已过期时为 true。
     swapchain_dirty: bool,
     /// 主窗口标识，用于区分辅助窗口。
-    primary: Option<winit::window::WindowId>,
+    primary: Option<NativeWindowId>,
     /// 辅助窗口及其呈现链。
     extras: Vec<ExtraWindow>,
     /// 由 `Ctrl+N` 置位；平台层在下一帧打开新窗口。
@@ -369,10 +370,8 @@ impl Showcase {
         // 低于或等于刷新率的上限则保留无撕裂路径。
         //
         //
-        let refresh_hz = window
-            .current_monitor()
-            .and_then(|monitor| monitor.refresh_rate_millihertz())
-            .map_or(60.0, |millihertz| millihertz as f32 / 1000.0);
+        // 原生 Win32 后端通过窗口 DC 查询所在显示器的刷新率；查询失败时回退 60 Hz。
+        let refresh_hz = window.refresh_rate_hz().unwrap_or(60.0);
         let allow_tearing = limit == 0 || (limit as f32) > refresh_hz + 0.5;
         let present = PresentConfig::from_capabilities(
             &renderer.gpu.enabled_device_extensions,
@@ -471,8 +470,8 @@ impl Showcase {
 }
 
 /// 将引擎的调整大小边缘映射为 OS 拖拽方向。
-fn resize_direction(edge: ResizeEdge) -> winit::window::ResizeDirection {
-    use winit::window::ResizeDirection as Direction;
+fn resize_direction(edge: ResizeEdge) -> ResizeDirection {
+    use ResizeDirection as Direction;
     match edge {
         ResizeEdge::North => Direction::North,
         ResizeEdge::South => Direction::South,
@@ -563,9 +562,9 @@ fn app_modifiers(modifiers: Modifiers) -> AppModifiers {
     }
 }
 
-/// 将引擎光标映射为 winit 光标。
-fn cursor_icon(kind: CursorKind) -> winit::window::CursorIcon {
-    use winit::window::CursorIcon as Icon;
+/// 将引擎光标映射为原生平台光标。
+fn cursor_icon(kind: CursorKind) -> CursorIcon {
+    use CursorIcon as Icon;
     match kind {
         CursorKind::Pointer => Icon::Pointer,
         CursorKind::Text => Icon::Text,
@@ -695,7 +694,7 @@ impl PlatformApp for Showcase {
             return;
         };
         let Some(raw) = ({
-            // GPU crate 拥有自己的句柄枚举以避免依赖 winit；
+            // GPU crate 拥有自己的句柄枚举以避免依赖窗口库；
             // 在此处一次性提取原生句柄。
             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
             match window.window_handle().ok().map(|handle| handle.as_raw()) {

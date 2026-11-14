@@ -5,14 +5,15 @@
 守卫：`cargo test -p unbound-platform --test a11y_roundtrip --test clipboard`
 
 ## 范围
-- [负责] 多窗口事件循环、Winit/Win32 后端集成、DWM 无边框圆角阴影与 Snap Layouts (`HTMAXBUTTON`)、原生文件对话框、富剪贴板、AccessKit 实机桥接与延迟计量
+- [负责] 多窗口事件循环、原生 Win32 API 后端集成（已淘汰 `winit`）、DWM 无边框圆角阴影与 Snap Layouts (`HTMAXBUTTON`)、原生文件对话框、富剪贴板、AccessKit 实机桥接与延迟计量
 - [不负责] UI 控件渲染与排版 -> 委托给 `crates/unbound-app/` 与 `crates/unbound-gpu/`
 
 ## 拓扑与流程
-- 窗口链路：`PlatformWindow` 托管多窗口 Surface/Swapchain -> Win32 Subclassing 拦截 `WM_NCCALCSIZE`/`WM_NCHITTEST` 实现无边框贴靠菜单 -> 分发 `AppEvent`
+- 窗口链路：`PlatformWindow` 基于原生 Win32 消息循环托管多窗口 Surface/Swapchain -> Win32 Subclassing 拦截 `WM_NCCALCSIZE`/`WM_NCHITTEST` 实现无边框贴靠菜单（`HTCAPTION`/`HTMAXBUTTON`）与默认标题栏（`TitleBarDesc`） -> 统一处理 `WM_CLOSE` / `Alt+F4`（`WM_SYSKEYDOWN`）/ 标题栏关闭按钮 -> 分发 `AppEvent`
 - 延迟与呈现：`LatencyTracker` 逐帧记录 Input-to-Photon（预算 `LATENCY_BUDGET` <= 8.3ms）；`present wait` 对齐 DWM 合成节拍（实机呈现全链路延迟统计待接通）
-- 系统服务：`dialogs::{open_file, save_file}` 调用原生对话框；`SystemClipboard` 限流 `MAX_CLIPBOARD_BYTES`；`WinitA11y` 桥接 `A11yBridge`
+- 系统服务：`dialogs::{open_file, save_file}` 调用原生对话框；`SystemClipboard` 限流 `MAX_CLIPBOARD_BYTES`；`Win32A11y` 桥接 `A11yBridge`
 - 窗口宿主：`crates/unbound-app/src/window_runner.rs` 用 `window.display_handle()` 派生实例扩展 -> `Gpu` -> `Surface`/`Swapchain`；每帧 `AppRuntime::frame` 产出图元 + 图集批量上传 + 主题 LUT 后 `render_into_swapchain`
+- 呈现刷新率：`Window::refresh_rate_hz()` 经 `GetDC` / `GetDeviceCaps(VREFRESH)` 读取窗口所在显示器刷新率，替代 winit 的 `current_monitor()`；驱动上报无效值时由调用方回退 60 Hz，用于判断是否允许撕裂
 - 帧同步：acquire 前 `Renderer::wait_for_previous_frame()`（在途帧信号量槽位）；交换链重建后按 `swapchain.extent()` 同步深度附件；`recover_gpu` 按 swapchain -> surface -> renderer 显式 `destroy()`
 - 主题交接：宿主持有 `ThemeState`，每帧比对 `ctx.theme` 并 `write_theme_lut`；设备重建后清空标记强制重写
 

@@ -64,6 +64,7 @@ impl Application for CounterApp {
 
     fn view(&self, state: &Self::State, ui: &mut ViewBuilder) {
         ui.column(ui_key!("root"), |col| {
+            col.title_bar("My App");
             col.badge(
                 ui_key!("counter_display"),
                 BadgeDesc::label(format!("Count: {}", state.count)),
@@ -135,7 +136,9 @@ Unbound UI 采用**两阶段声明式管道**：
 
 ## 3. 声明式视图构建 (`ViewBuilder`)
 
-`ViewBuilder` 提供了强大的流式嵌套容器：
+`ViewBuilder` 提供了强大的流式嵌套容器与无边框窗口默认标题栏：
+
+- `view.title_bar("标题")` / `view.title_bar_with(TitleBarDesc::new(...))`：为无边框窗口提供默认标题栏（包含拖拽区、Windows 11 贴靠悬停命中区、最小化、最大化/还原与关闭按钮），由 `WindowedRunner` 自动接管窗口控制与关闭流程。
 
 ### 基础布局容器
 ```rust

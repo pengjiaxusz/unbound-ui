@@ -56,6 +56,7 @@ impl Application for OverlaysApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("overlays_root"), |col| {
+            col.title_bar("05 — Overlays & Navigation");
             col.card(ui_key!("nav_card"), CardDesc::default(), |card| {
                 card.badge(
                     ui_key!("trail_badge"),

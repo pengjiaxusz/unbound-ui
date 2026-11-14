@@ -887,6 +887,57 @@ impl<'a> ViewBuilder<'a> {
         self.container(key, RawNodeDesc::container().row().gap(8.0), build)
     }
 
+    /// 声明无边框窗口的默认标题栏（包含标题文本、最小化、最大化/还原与关闭按钮）。
+    pub fn title_bar(&mut self, title: impl Into<String>) -> NodeId {
+        self.title_bar_with(unbound_widgets::TitleBarDesc::new(title))
+    }
+
+    /// 使用自定义配置声明无边框窗口标题栏。
+    pub fn title_bar_with(&mut self, desc: unbound_widgets::TitleBarDesc) -> NodeId {
+        let bar_desc = RawNodeDesc::container()
+            .row()
+            .height(Dim::px(desc.height))
+            .width(Dim::percent(1.0))
+            .align(unbound_abi::Align::Center)
+            .justify(unbound_abi::Justify::SpaceBetween)
+            .gap(8.0);
+        self.container(unbound_widgets::TITLE_BAR_DRAG_ID, bar_desc, |bar| {
+            bar.badge(
+                unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(10),
+                BadgeDesc::label(desc.title),
+            );
+            bar.row(
+                unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(11),
+                |btns| {
+                    if desc.show_minimize {
+                        btns.button(
+                            desc.minimize_id,
+                            ButtonDesc::label(" — ")
+                                .size(unbound_widgets::ButtonSize::Sm)
+                                .variant(unbound_widgets::ButtonVariant::Subtle),
+                        );
+                    }
+                    if desc.show_maximize {
+                        btns.button(
+                            desc.maximize_id,
+                            ButtonDesc::label(if desc.is_maximized { " ❐ " } else { " □ " })
+                                .size(unbound_widgets::ButtonSize::Sm)
+                                .variant(unbound_widgets::ButtonVariant::Subtle),
+                        );
+                    }
+                    if desc.show_close {
+                        btns.button(
+                            desc.close_id,
+                            ButtonDesc::label(" ✕ ")
+                                .size(unbound_widgets::ButtonSize::Sm)
+                                .variant(unbound_widgets::ButtonVariant::Secondary),
+                        );
+                    }
+                },
+            );
+        })
+    }
+
     /// 声明最多包含 8 条显式列轨道的网格容器。
     pub fn grid(&mut self, key: u64, columns: &[Dim], build: impl FnOnce(&mut Self)) -> NodeId {
         let desc = RawNodeDesc::container()

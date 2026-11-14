@@ -57,6 +57,7 @@ impl Application for AsyncI18nApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("i18n_root"), |col| {
+            col.title_bar("07 — Async Assets & i18n");
             col.card(ui_key!("i18n_card"), CardDesc::default(), |card| {
                 card.row(ui_key!("lang_switcher"), |row| {
                     row.button(

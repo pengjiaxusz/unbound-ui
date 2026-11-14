@@ -61,6 +61,7 @@ impl Application for CounterApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("root"), |col| {
+            col.title_bar("01 — Hello Counter");
             col.card(ui_key!("counter_card"), CardDesc::default(), |card| {
                 card.row(ui_key!("header_row"), |hdr| {
                     hdr.badge(

@@ -52,7 +52,7 @@
 ## 2. 技术栈与工程规范
 
 **主要依赖**（【事实】，来自 `README.md` / `Cargo.toml` / `docs/00-overview/crate-map.md`）：
-Vulkan 1.3（`ash`，强制 BDA / Bindless / Dynamic Rendering / Synchronization2）、`winit 0.30`、
+Vulkan 1.3（`ash`，强制 BDA / Bindless / Dynamic Rendering / Synchronization2）、原生 Win32 API（`RegisterClassExW` / `PeekMessageW` / `MsgWaitForMultipleObjectsEx`，已移除 `winit`）、
 Taffy 0.15（flex / grid 布局）、`cosmic-text 0.19`、AccessKit 0.24、`slotmap`、`rayon`、
 `rkyv` / `postcard`。
 

@@ -18,8 +18,8 @@ use unbound_platform::window::{
     ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
     PlatformState, WindowConfig,
 };
+use unbound_platform::Window;
 use unbound_theme::{ThemeSet, ThemeState};
-use winit::window::Window;
 
 use crate::{AppKey, AppRuntime, Application, ImeUpdate, Modifiers as AppModifiers, ThemeKind};
 
@@ -213,6 +213,18 @@ impl<A: Application> WindowedRunner<A> {
         }
     }
 
+    fn destroy_vulkan(&mut self) {
+        let renderer = self.renderer.take();
+        let swapchain = self.swapchain.take();
+        let surface = self.surface.take();
+        self.atlases = None;
+        if let (Some(renderer), Some(swapchain), Some(surface)) = (renderer, swapchain, surface) {
+            swapchain.destroy(&renderer.gpu);
+            surface.destroy(&renderer.gpu);
+            renderer.destroy();
+        }
+    }
+
     fn recover_gpu(&mut self, window: &Window) {
         // 所有 Vulkan 对象都没有 `Drop`：过去直接置 `None` 会泄漏全部句柄。
         // 尤其是旧 `VkSurfaceKHR` 仍绑定在 HWND 上，导致第一次重建就报
@@ -402,6 +414,31 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                         self.runtime.pointer_down(self.pointer, btn);
                     } else {
                         self.runtime.pointer_up(self.pointer, btn);
+                        if btn == PointerButton::Left {
+                            let scale = window.scale_factor().max(0.5) as f32;
+                            let logical = self.pointer / scale;
+                            if self
+                                .runtime
+                                .widget_rect(unbound_widgets::TITLE_BAR_CLOSE_ID)
+                                .is_some_and(|r| r.contains_point(logical))
+                            {
+                                window.request_close();
+                                return Flow::Exit;
+                            }
+                            if self
+                                .runtime
+                                .widget_rect(unbound_widgets::TITLE_BAR_MINIMIZE_ID)
+                                .is_some_and(|r| r.contains_point(logical))
+                            {
+                                window.set_minimized(true);
+                            } else if self
+                                .runtime
+                                .widget_rect(unbound_widgets::TITLE_BAR_MAXIMIZE_ID)
+                                .is_some_and(|r| r.contains_point(logical))
+                            {
+                                window.set_maximized(!window.is_maximized());
+                            }
+                        }
                     }
                 }
             }
@@ -467,6 +504,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 self.runtime.file_hover_cancelled();
             }
             PlatformEvent::CloseRequested => {
+                self.destroy_vulkan();
                 return Flow::Exit;
             }
             PlatformEvent::RedrawRequested => {
@@ -593,11 +631,46 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             }
         }
 
+        if let Some(metrics) = &self.frame_metrics {
+            metrics.set_scale_factor(window.scale_factor() as f32);
+            if let Some(bar_rect) = self.runtime.widget_rect(unbound_widgets::TITLE_BAR_DRAG_ID) {
+                metrics.set_title_bar_height(bar_rect.height());
+            }
+            if let Some(max_rect) = self
+                .runtime
+                .widget_rect(unbound_widgets::TITLE_BAR_MAXIMIZE_ID)
+            {
+                metrics.set_maximize_button_rect(max_rect);
+            }
+            if let Some(min_rect) = self
+                .runtime
+                .widget_rect(unbound_widgets::TITLE_BAR_MINIMIZE_ID)
+            {
+                metrics.set_minimize_button_rect(min_rect);
+            }
+            if let Some(close_rect) = self
+                .runtime
+                .widget_rect(unbound_widgets::TITLE_BAR_CLOSE_ID)
+            {
+                metrics.set_close_button_rect(close_rect);
+            }
+        }
+
         if report.dirty.needs_rebuild() {
             window.request_redraw();
         }
 
         Flow::Continue
+    }
+
+    fn window_closing(&mut self, _window: &Window) {
+        self.destroy_vulkan();
+    }
+}
+
+impl<A: Application> Drop for WindowedRunner<A> {
+    fn drop(&mut self) {
+        self.destroy_vulkan();
     }
 }
 

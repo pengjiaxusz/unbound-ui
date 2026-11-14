@@ -38,6 +38,7 @@ impl Application for HotReloadDemoApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
         view.column(ui_key!("reload_root"), |col| {
+            col.title_bar("08 — Hot Reload Guest App");
             col.card(ui_key!("reload_card"), CardDesc::default(), |card| {
                 card.badge(
                     ui_key!("gen_badge"),

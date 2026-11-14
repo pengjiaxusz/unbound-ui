@@ -4,7 +4,7 @@
 //!
 //! *
 //! * **输出方向（out）**—— 将更新交给传输层（在 Windows 上由
-//!   `accesskit_winit::Adapter` 推送至 UI Automation）；
+//!   `Win32A11y` 推送至 UI Automation）；
 //! * **输入方向（in）**—— 将来自辅助技术的 `ActionRequest` 翻译回引擎的
 //!   [`A11yAction`] 及目标节点 ID，使应用 reducer 能像处理指针或键盘事件一样
 //!   处理它。

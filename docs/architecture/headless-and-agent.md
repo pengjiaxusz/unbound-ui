@@ -18,5 +18,5 @@
 - [代价] 快照采用 `rkyv` 零拷贝反序列化而非 `serde_json` -> [原因] 满足无头单帧验证 <= 1.0ms（实测 544µs）预算 -> [位置] `crates/unbound-headless/src/snapshot.rs`
 
 ## 不变量与红线
-- [禁止] `unbound-headless` 依赖 `winit`、`ash` 或任何图形驱动 -> [原因] 保障无 GPU/无头 CI 与 Agent 亚毫秒自检 -> [守卫] `crates/unbound-headless/Cargo.toml`
+- [禁止] `unbound-headless` 依赖 Win32 窗口后端、`ash` 或任何图形驱动 -> [原因] 保障无 GPU/无头 CI 与 Agent 亚毫秒自检 -> [守卫] `crates/unbound-headless/Cargo.toml`
 - [必须] 无头单帧验证耗时 <= 1.0ms -> [守卫] `crates/unbound-kpi/src/lib.rs`

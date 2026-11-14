@@ -925,7 +925,7 @@ impl GalleryApp {
 
     /// 处理按住不放时 OS 重复发送的按键。
     ///
-    /// 文本被排除在外：长按 `a` 不是一连串 `a`，且 `winit` 也会再次上报已组合字符。
+    /// 文本被排除在外：长按 `a` 不是一连串 `a`，且平台 IME 也会再次上报已组合字符。
     /// 仅编辑键触发重复。
     pub fn key_repeat(&mut self, key: &PlatformKey) {
         let PlatformKey::Named(name) = key else {
