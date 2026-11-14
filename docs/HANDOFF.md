@@ -277,6 +277,24 @@ just q-run cargo run -p gallery -- --kpi
 | 9 | **write_host 不 flush**：非一致性内存上 GPU 读到旧字节 | `src/device.rs` | DeviceLocal 也要求 HOST_COHERENT；写完统一 flush |
 | 10 | **渲染路径每帧堆分配** | `src/frame.rs` | 等待信号量数组、布局屏障、暂存字节与补丁全部改为栈数组/复用缓冲 |
 
+### 3.1.1 窗口宿主（`unbound-app`）补齐的呈现链缺陷
+
+`apps/showcase` 已经接通的一整条窗口路径，在 `WindowedRunner` 里被漏掉了。
+第一个缺陷会在 `vkCreateWin32SurfaceKHR` 处直接 abort，把后面几个全遮住，
+因此只有逐个修完才能开窗：
+
+| 缺陷 | 位置 | 修法 |
+| :--- | :--- | :--- |
+| `GpuConfig` 只填设备扩展、不填实例扩展：`VK_KHR_swapchain` 缺 `VK_KHR_surface`（`VUID-...-01387`），`VK_KHR_win32_surface` 未启用使 ash 加载器 panic abort | `unbound-app/src/window_runner.rs`、`unbound-gpu/src/device.rs` | `window.display_handle()` → `required_instance_extensions()`；`Gpu::new` 再从设备请求反推 `VK_KHR_surface` 依赖链；`Surface::new_win32` 缺扩展时返回错误而非 panic |
+| `backdrop.frag` 的 `discard` 编译成 `OpDemoteToHelperInvocation`，设备未启用 `shaderDemoteToHelperInvocation` | `unbound-gpu/src/device.rs` | 1.3 走 `Vulkan13Features`、1.2 走 `VK_EXT_shader_demote_to_helper_invocation`，并列入必需特性 |
+| `AtlasSet::new(gpu, 64)` 给 RGBA 图集 64 层，但其绑定只留 48 个内部槽（另 16 个归外部纹理），`install_atlases` 断言失败 | `unbound-gpu/src/atlas.rs` | `atlas_layer_counts()` 按绑定范围钳制：R8 64 / RGBA 48 |
+| 窗口显示后尺寸变化，交换链重建了而深度附件仍是初始尺寸（`VUID-...-06079/06080`，进而 device lost） | `unbound-gpu/src/frame.rs`、`unbound-app/src/window_runner.rs` | `render_external` 自行 `ensure_depth_size`，recreate 后按 `swapchain.extent()` 再同步一次 |
+| `recover_gpu` 把四个 `Option` 置 `None`，而 Vulkan 对象没有 `Drop`：旧 `VkSurfaceKHR` 仍占着 HWND，重建报 `ERROR_NATIVE_WINDOW_IN_USE_KHR` | `unbound-app/src/window_runner.rs` | 按 swapchain → surface → renderer 顺序显式销毁 |
+| acquire 前未等上一帧 fence，acquire 信号量槽位被提前复用（`VUID-...-01779`） | `unbound-app/src/window_runner.rs` | 在 `acquire_outcome` 之前调用 `wait_for_previous_frame()` |
+
+验收：10 个示例逐个跑 `--headless-check` 与限时开窗，均为 0 验证错误 /
+0 panic / 0 设备丢失恢复。
+
 ### 3.2 `unbound-canvas`
 
 | # | 缺陷 | 位置 | 修法 |

@@ -53,6 +53,25 @@ impl Surface {
     /// Propagates Vulkan failures.
     #[cfg(windows)]
     pub fn new_win32(gpu: &Gpu, hwnd: isize) -> Result<Self, GpuError> {
+        // ash resolves the extension's function pointers in `Instance::new`
+        // and *panics* when one is missing. That panic happens inside a
+        // non-unwinding `extern "system"` loader, so it aborts the process
+        // instead of unwinding into the caller's error path. Check the enabled
+        // list first and report the missing extension like any other
+        // unsupported request.
+        const REQUIRED: [&str; 2] = ["VK_KHR_surface", "VK_KHR_win32_surface"];
+        let missing: Vec<&'static str> = REQUIRED
+            .into_iter()
+            .filter(|name| {
+                !gpu.enabled_instance_extensions
+                    .iter()
+                    .any(|enabled| enabled == name)
+            })
+            .collect();
+        if !missing.is_empty() {
+            return Err(GpuError::UnsupportedFeatures(missing));
+        }
+
         let khr_surface = ash::khr::surface::Instance::new(&gpu.entry, &gpu.instance);
         let win32_surface = ash::khr::win32_surface::Instance::new(&gpu.entry, &gpu.instance);
         // SAFETY: the handle comes from a live window and is only read here.
@@ -1091,6 +1110,29 @@ mod tests {
         // Without the swapchain extension the stack is incomplete.
         let incomplete = vec!["VK_KHR_surface".to_string()];
         assert!(!crate::swapchain::is_supported(&incomplete));
+    }
+
+    /// A missing instance extension must be a diagnosable error, not an
+    /// abort: ash's loader panics inside a non-unwinding function when
+    /// `vkCreateWin32SurfaceKHR` cannot be resolved.
+    #[cfg(windows)]
+    #[test]
+    fn new_win32_reports_missing_instance_extensions() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            // No GPU: the pure assertions above are all that can be checked.
+            return;
+        };
+        // The headless test device requests no surface extensions at all, so
+        // the check has to fire before ash tries to load a function pointer.
+        assert!(
+            matches!(
+                Surface::new_win32(&gpu, 0),
+                Err(GpuError::UnsupportedFeatures(_))
+            ),
+            "a missing instance extension must be an error, not an abort"
+        );
+        gpu.destroy();
     }
 
     #[test]

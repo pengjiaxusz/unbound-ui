@@ -1994,6 +1994,13 @@ impl Renderer {
         render_finished: vk::Semaphore,
         present: bool,
     ) -> Result<FrameStats, GpuError> {
+        // The borrowed colour image decides `renderArea`, so our own depth
+        // attachment has to cover it. A window that grows after
+        // `Renderer::new` used to leave the depth image at the *initial* size,
+        // which is invalid usage (`VUID-VkRenderingInfo-pNext-06079/06080`)
+        // and can lose the device on drivers that validate the bounds. Grow it
+        // here, once, rather than trusting every caller to remember.
+        self.ensure_depth_size(width, height)?;
         self.external_color = Some((color_image, color_view, width, height));
         self.external_ready = image_available;
         self.external_signal = render_finished;

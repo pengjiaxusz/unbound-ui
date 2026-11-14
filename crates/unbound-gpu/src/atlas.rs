@@ -380,15 +380,36 @@ impl core::fmt::Debug for AtlasSet {
     }
 }
 
+/// The layer counts the bindless descriptor array can actually expose.
+///
+/// R8 owns all [`crate::pipeline::MAX_ATLAS_LAYERS`] slots, but the RGBA
+/// binding reserves its last [`crate::pipeline::EXTERNAL_TEXTURE_SLOTS`]
+/// slots for caller-owned textures. An RGBA atlas with more layers than
+/// [`crate::pipeline::EXTERNAL_TEXTURE_BASE`] can never be fully bound: pages
+/// beyond that range would sample the external slots, and
+/// `Renderer::install_atlases` rejects the mismatch. Clamping here keeps every
+/// caller — all of which ask for the full 64 — inside the binding's range.
+#[must_use]
+pub(crate) fn atlas_layer_counts(layers: u32) -> (u32, u32) {
+    (
+        layers.clamp(1, crate::pipeline::MAX_ATLAS_LAYERS),
+        layers.clamp(1, crate::pipeline::EXTERNAL_TEXTURE_BASE),
+    )
+}
+
 impl AtlasSet {
     /// Create both atlases.
+    ///
+    /// The RGBA atlas is capped at [`crate::pipeline::EXTERNAL_TEXTURE_BASE`]
+    /// layers because the rest of its binding belongs to external textures.
     ///
     /// # Errors
     /// Propagates Vulkan allocation failures.
     pub fn new(gpu: &Gpu, layers: u32) -> Result<Self, GpuError> {
+        let (r8_layers, rgba_layers) = atlas_layer_counts(layers);
         Ok(Self {
-            r8: AtlasTexture::new(gpu, AtlasKind::R8, layers)?,
-            rgba: AtlasTexture::new(gpu, AtlasKind::Rgba8, layers)?,
+            r8: AtlasTexture::new(gpu, AtlasKind::R8, r8_layers)?,
+            rgba: AtlasTexture::new(gpu, AtlasKind::Rgba8, rgba_layers)?,
             staging: std::sync::Mutex::new(None),
         })
     }
@@ -840,6 +861,31 @@ mod tests {
         assert_eq!(AtlasKind::Rgba8.bpp(), 4);
         // The shader samples a 2048² page.
         assert_eq!(PAGE_SIZE, 2048);
+    }
+
+    /// The windowed callers ask for the full 64 layers. The RGBA binding only
+    /// has 48 internal slots, so handing 64 layers to it made
+    /// `install_atlases` trip its debug assertion on every window.
+    #[test]
+    fn the_rgba_atlas_stays_inside_its_bindless_range() {
+        use crate::pipeline::{EXTERNAL_TEXTURE_BASE, MAX_ATLAS_LAYERS};
+
+        let (r8, rgba) = atlas_layer_counts(ATLAS_LAYERS);
+        assert_eq!(r8, MAX_ATLAS_LAYERS);
+        assert_eq!(rgba, EXTERNAL_TEXTURE_BASE);
+        assert!(
+            rgba < MAX_ATLAS_LAYERS,
+            "external textures need their slots"
+        );
+
+        // A smaller request is untouched, a larger one is capped, and a zero
+        // request still produces a valid (non-zero) image array.
+        assert_eq!(atlas_layer_counts(4), (4, 4));
+        assert_eq!(atlas_layer_counts(0), (1, 1));
+        assert_eq!(
+            atlas_layer_counts(1000),
+            (MAX_ATLAS_LAYERS, EXTERNAL_TEXTURE_BASE)
+        );
     }
 
     #[test]

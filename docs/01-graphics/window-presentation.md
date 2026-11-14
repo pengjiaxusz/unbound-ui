@@ -6,8 +6,8 @@
 > | :--- | :--- |
 > | **已落地** | Vulkan surface 与 swapchain 创建、acquire → render → present 闭环、延迟重建策略、`VK_KHR_present_wait` 低延迟路径、事件循环自驱动、输入到光子延迟计量、多窗口 Surface/Swapchain 宿主、AccessKit 实机适配 |
 > | **缺口** | DWM 实际行为未在真机测量；零黑边仍是设计目标而非实测结论 |
-> | **源码** | `crates/unbound-platform/src/{resize,pacing,latency,backend,window,a11y_winit}.rs`、`crates/unbound-gpu/src/surface.rs` |
-> | **验收** | `apps/showcase` 开窗运行（`Ctrl+N` 开第二窗口）；`--shot` 模式可无头出图；`the_borrowed_attachment_path_matches_the_offscreen_path` 逐像素比对窗口路径 |
+> | **源码** | `crates/unbound-platform/src/{resize,pacing,latency,backend,window,a11y_winit}.rs`、`crates/unbound-gpu/src/surface.rs`、`crates/unbound-app/src/window_runner.rs` |
+> | **验收** | `apps/showcase` 开窗运行（`Ctrl+N` 开第二窗口）；`--shot` 模式可无头出图；`the_borrowed_attachment_path_matches_the_offscreen_path` 逐像素比对窗口路径；`unbound-app` 的 10 个示例逐个跑 `--headless-check` 与开窗烟测 |
 
 ## 呈现链路
 
@@ -47,6 +47,22 @@
 第三条是最隐蔽的一条：信号量池的深度等于「在途帧数」，槽位一个帧周期后才会
 复用。因此**必须在 acquire 之前**等上一帧退役（`Renderer::wait_for_previous_frame`），
 否则 GPU 还没开始执行上一帧的提交时，二次 signal 会把第一次的信号覆盖掉。
+
+### 两个宿主必须共用同一条链
+
+`apps/showcase` 与 `unbound-app::WindowedRunner` 是两条独立的窗口宿主。上面
+的不变量只在 showcase 里落实是不够的：后者每漏一步，故障就沿链路往后移一格，
+且前一步的 abort 会把后面几步全部遮住。宿主侧必须遵守的完整清单：
+
+| 环节 | 漏掉的后果 | 落点 |
+| :--- | :--- | :--- |
+| 创建 `Gpu` 前用 `display_handle()` 派生实例扩展 | `VK_KHR_swapchain` 缺 `VK_KHR_surface`，且 `vkCreateWin32SurfaceKHR` 函数指针加载失败直接 abort | `window_instance_extensions()`；`Gpu::new` 再做一次依赖反推 |
+| 交换链重建后同步深度附件 | 深度图小于 `renderArea`（`VUID-...-06079/06080`），驱动可能直接丢设备 | `ensure_depth_size(swapchain.extent())`；`Renderer::render_external` 另有按借用图像尺寸的兜底 |
+| acquire 前等上一帧 fence | acquire 信号量槽位被提前复用（`VUID-...-01779`） | `wait_for_previous_frame()` 在 `acquire_outcome()` 之前 |
+| 设备丢失恢复时显式销毁 | Vulkan 对象没有 `Drop`，旧 `VkSurfaceKHR` 仍占着 HWND，重建报 `ERROR_NATIVE_WINDOW_IN_USE_KHR` | 按 swapchain → surface → renderer 顺序 `destroy()` |
+
+深度附件按 256 px 步进增长、只增不减：动态渲染允许附件大于 `renderArea`，
+多出的行列不参与绘制，因此拖拽时不会因为每像素变化而重新分配显存。
 
 ### 多窗口
 

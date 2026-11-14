@@ -98,6 +98,29 @@ fn translate_modifiers(m: Modifiers) -> AppModifiers {
     }
 }
 
+/// The instance extensions a window needs in order to present.
+///
+/// The platform half (`VK_KHR_win32_surface` on Windows, `VK_KHR_xcb_surface`
+/// on X11, …) can only come from the window's *display* handle: omitting it
+/// leaves `vkCreateWin32SurfaceKHR` an unresolved function pointer, and
+/// omitting `VK_KHR_surface` makes `VK_KHR_swapchain` an invalid device
+/// extension (VUID-vkCreateDevice-ppEnabledExtensionNames-01387). Hard-coding
+/// the pair would make the runner Windows-only, so it is derived instead —
+/// the same way `apps/showcase` does it.
+fn window_instance_extensions(window: &Window) -> Result<Vec<String>, String> {
+    use raw_window_handle::HasDisplayHandle;
+
+    let handle = window
+        .display_handle()
+        .map_err(|error| format!("window has no native display handle: {error}"))?;
+    Ok(
+        unbound_gpu::surface_extensions::required_instance_extensions(handle.as_raw())
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
 /// The generic windowed host adapter driving [`AppRuntime`].
 pub struct WindowedRunner<A: Application> {
     runtime: AppRuntime<A>,
@@ -154,31 +177,50 @@ impl<A: Application> WindowedRunner<A> {
     }
 
     fn recover_gpu(&mut self, window: &Window) {
-        self.swapchain = None;
-        self.surface = None;
+        // None of the Vulkan objects has a `Drop`: assigning `None` used to
+        // leak every handle. The old `VkSurfaceKHR` in particular stayed
+        // bound to the HWND, so the very first rebuild failed with
+        // `ERROR_NATIVE_WINDOW_IN_USE_KHR`. Destroy the children before the
+        // renderer — which owns the device — tears the device down.
+        let renderer = self.renderer.take();
+        let swapchain = self.swapchain.take();
+        let surface = self.surface.take();
         self.atlases = None;
-        self.renderer = None;
+        if let (Some(renderer), Some(swapchain), Some(surface)) = (renderer, swapchain, surface) {
+            swapchain.destroy(&renderer.gpu);
+            surface.destroy(&renderer.gpu);
+            renderer.destroy();
+        }
 
         let hwnd = match self.hwnd {
             Some(h) => h,
             None => return,
         };
 
+        let instance_extensions = match window_instance_extensions(window) {
+            Ok(extensions) => extensions,
+            Err(error) => {
+                eprintln!("[unbound-app] GPU recovery cannot continue: {error}");
+                return;
+            }
+        };
+
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
         let policy = RecoveryPolicy::default();
+        let device_config = GpuConfig {
+            app_name: "Unbound App (Recovered)".to_string(),
+            instance_extensions,
+            device_extensions: vec![
+                "VK_KHR_swapchain".to_string(),
+                "VK_KHR_dynamic_rendering".to_string(),
+                "VK_KHR_synchronization2".to_string(),
+            ],
+            ..Default::default()
+        };
 
         let recovered = recover_with(policy, || {
-            let config = GpuConfig {
-                app_name: "Unbound App (Recovered)".to_string(),
-                device_extensions: vec![
-                    "VK_KHR_swapchain".to_string(),
-                    "VK_KHR_dynamic_rendering".to_string(),
-                    "VK_KHR_synchronization2".to_string(),
-                ],
-                ..Default::default()
-            };
-            let gpu = Gpu::new(config)?;
+            let gpu = Gpu::new(device_config.clone())?;
             let surface = Surface::new_win32(&gpu, hwnd)?;
             let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false);
             let swapchain = Swapchain::new(&gpu, &surface, width, height, &present)?;
@@ -213,8 +255,16 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.committed_request = (width, height);
         self.runtime.resize(Vec2::new(width as f32, height as f32));
 
+        let instance_extensions = match window_instance_extensions(window) {
+            Ok(extensions) => extensions,
+            Err(error) => {
+                eprintln!("[unbound-app] {error}");
+                return;
+            }
+        };
         let config = GpuConfig {
             app_name: "Unbound App".to_string(),
+            instance_extensions,
             device_extensions: vec![
                 "VK_KHR_swapchain".to_string(),
                 "VK_KHR_dynamic_rendering".to_string(),
@@ -409,14 +459,36 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                         &renderer.gpu.enabled_device_extensions,
                         false,
                     );
-                    let _ = swapchain.recreate(
+                    if let Err(error) = swapchain.recreate(
                         &renderer.gpu,
                         surface,
                         self.committed_request.0,
                         self.committed_request.1,
                         &present,
-                    );
+                    ) {
+                        eprintln!("[unbound-app] Could not recreate swapchain: {error:?}");
+                    } else {
+                        // The windowed path borrows the swapchain image as
+                        // its colour attachment, so only the depth buffer has
+                        // to follow the driver's actual extent.
+                        let (actual_w, actual_h) = swapchain.extent();
+                        if let Err(error) = renderer.ensure_depth_size(actual_w, actual_h) {
+                            eprintln!("[unbound-app] Could not resize depth buffer: {error:?}");
+                        }
+                    }
                     self.swapchain_dirty = false;
+                }
+
+                // The acquire semaphore pool has one slot per frame in
+                // flight. A slot is only reusable once the frame that waited
+                // on it has retired, so the fence has to be awaited *before*
+                // the next acquire. `render()` waits too, but that happens
+                // after the semaphore has already been signalled again —
+                // which is exactly
+                // `VUID-vkAcquireNextImageKHR-semaphore-01779`.
+                if let Err(error) = renderer.wait_for_previous_frame() {
+                    eprintln!("[unbound-app] Waiting for the previous frame failed: {error:?}");
+                    return Flow::Continue;
                 }
 
                 match swapchain.acquire_outcome(1_000_000_000) {

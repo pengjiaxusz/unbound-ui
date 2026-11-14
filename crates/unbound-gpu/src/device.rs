@@ -108,6 +108,14 @@ pub struct GpuFeatures {
     pub shader_int64: bool,
     pub shader_float64: bool,
     pub independent_blend: bool,
+    /// `shaderDemoteToHelperInvocation`: the fragment shaders' `discard`
+    /// compiles to `OpDemoteToHelperInvocation` under
+    /// `--target-env=vulkan1.3`. Creating such a module without the feature
+    /// enabled is invalid usage (`VUID-VkShaderModuleCreateInfo-pCode-08740`).
+    ///
+    /// On a Vulkan 1.2 device the feature comes from
+    /// `VK_EXT_shader_demote_to_helper_invocation` instead of core 1.3.
+    pub shader_demote_to_helper_invocation: bool,
     /// `hostQueryReset`: the host may reset a query pool between frames.
     pub host_query_reset: bool,
     pub sampler_anisotropy: bool,
@@ -156,6 +164,9 @@ impl GpuFeatures {
         }
         if !self.draw_indirect_count {
             missing.push("drawIndirectCount");
+        }
+        if !self.shader_demote_to_helper_invocation {
+            missing.push("shaderDemoteToHelperInvocation");
         }
         missing
     }
@@ -430,29 +441,58 @@ impl core::fmt::Debug for Gpu {
     }
 }
 
-/// Resolve the instance-extension dependencies of the requested device
+fn push_unique(extensions: &mut Vec<String>, name: &str) {
+    if !extensions.iter().any(|e| e == name) {
+        extensions.push(name.to_string());
+    }
+}
+
+/// Resolve the *instance*-extension dependencies of the requested device
 /// extensions.
 ///
-/// `VK_EXT_swapchain_maintenance1` is a device extension, but it depends on
-/// the *instance* extensions `VK_EXT_surface_maintenance1`, which in turn
-/// requires `VK_KHR_get_surface_capabilities2`. Enabling a dependency without
-/// its own dependencies makes `vkCreateInstance` invalid
-/// (VUID-vkCreateInstance-ppEnabledExtensionNames-01388), and the instance has
-/// to be created before the device can be — so the chain is resolved here.
-fn resolve_surface_maintenance(instance_exts: &mut Vec<String>, device_exts: &[String]) {
-    let needs_maintenance = device_exts
+/// Two chains have their root at `VK_KHR_surface`:
+///
+/// ```text
+/// VK_KHR_swapchain              -> VK_KHR_surface (instance)
+/// VK_EXT_swapchain_maintenance1 -> VK_EXT_surface_maintenance1 (instance)
+///                              -> VK_KHR_get_surface_capabilities2 (instance)
+///                              -> VK_KHR_surface (instance)
+/// ```
+///
+/// Enabling a device extension without its instance dependencies makes
+/// `vkCreateDevice` invalid usage
+/// (`VUID-vkCreateDevice-ppEnabledExtensionNames-01387`); enabling an
+/// instance extension without its own dependencies makes `vkCreateInstance`
+/// invalid (`VUID-vkCreateInstance-ppEnabledExtensionNames-01388`). The
+/// instance has to be created before the device, so both chains are resolved
+/// here, from the request, instead of trusting every caller to know them.
+///
+/// The platform counterpart (`VK_KHR_win32_surface` on Windows, …) cannot be
+/// inferred from a device extension: it comes from the window's display handle
+/// through [`crate::surface_extensions::required_instance_extensions`].
+fn resolve_instance_extension_dependencies(
+    instance_exts: &mut Vec<String>,
+    device_exts: &[String],
+) {
+    let wants_swapchain = device_exts.iter().any(|e| e == "VK_KHR_swapchain");
+    let wants_maintenance = device_exts
         .iter()
         .any(|e| e == "VK_EXT_swapchain_maintenance1");
-    if !needs_maintenance {
+    let has_surface_query = instance_exts
+        .iter()
+        .any(|e| e == "VK_KHR_get_surface_capabilities2" || e == "VK_EXT_surface_maintenance1");
+    if !wants_swapchain && !wants_maintenance && !has_surface_query {
         return;
     }
-    for extension in [
-        "VK_KHR_get_surface_capabilities2",
-        "VK_EXT_surface_maintenance1",
-    ] {
-        if !instance_exts.iter().any(|e| e == extension) {
-            instance_exts.push(extension.to_string());
-        }
+    // The root of both chains. The surface module expects it to lead the list.
+    if !instance_exts.iter().any(|e| e == "VK_KHR_surface") {
+        instance_exts.insert(0, "VK_KHR_surface".to_string());
+    }
+    if wants_maintenance || has_surface_query {
+        push_unique(instance_exts, "VK_KHR_get_surface_capabilities2");
+    }
+    if wants_maintenance {
+        push_unique(instance_exts, "VK_EXT_surface_maintenance1");
     }
 }
 
@@ -561,7 +601,7 @@ impl Gpu {
         if enable_validation {
             instance_exts.push("VK_EXT_debug_utils".to_string());
         }
-        resolve_surface_maintenance(&mut instance_exts, &config.device_extensions);
+        resolve_instance_extension_dependencies(&mut instance_exts, &config.device_extensions);
         let ext_cstrings = cstrings(&instance_exts);
         let ext_ptrs = raw_ptrs(&ext_cstrings);
 
@@ -712,9 +752,16 @@ impl Gpu {
         let needs_13_backports = properties.api_version < vk::make_api_version(0, 1, 3, 0);
         if needs_13_backports {
             for extension in ["VK_KHR_dynamic_rendering", "VK_KHR_synchronization2"] {
-                if !device_exts.iter().any(|e| e == extension) {
-                    device_exts.push(extension.to_string());
-                }
+                push_unique(&mut device_exts, extension);
+            }
+            // `discard` compiles to `OpDemoteToHelperInvocation`; on a 1.2
+            // driver the feature comes from this extension rather than core
+            // 1.3. Without it the shader module is invalid usage.
+            if has_ext("VK_EXT_shader_demote_to_helper_invocation") {
+                push_unique(
+                    &mut device_exts,
+                    "VK_EXT_shader_demote_to_helper_invocation",
+                );
             }
         }
         if device_exts.iter().any(|e| e == "VK_KHR_present_wait")
@@ -741,6 +788,8 @@ impl Gpu {
         let mut present_wait_query = vk::PhysicalDevicePresentWaitFeaturesKHR::default();
         let mut present_id_query = vk::PhysicalDevicePresentIdFeaturesKHR::default();
         let mut maintenance1_query = vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
+        let mut demote_query =
+            vk::PhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT::default();
         let core;
         {
             let mut query = vk::PhysicalDeviceFeatures2::default().push_next(&mut f12);
@@ -748,6 +797,9 @@ impl Gpu {
                 query = query
                     .push_next(&mut f_dynamic_rendering)
                     .push_next(&mut f_synchronization2);
+                if has_ext("VK_EXT_shader_demote_to_helper_invocation") {
+                    query = query.push_next(&mut demote_query);
+                }
             } else {
                 query = query.push_next(&mut f13);
             }
@@ -791,6 +843,11 @@ impl Gpu {
             shader_float64: core.shader_float64 == vk::TRUE,
             independent_blend: core.independent_blend == vk::TRUE,
             sampler_anisotropy: core.sampler_anisotropy == vk::TRUE,
+            shader_demote_to_helper_invocation: if needs_13_backports {
+                demote_query.shader_demote_to_helper_invocation == vk::TRUE
+            } else {
+                f13.shader_demote_to_helper_invocation == vk::TRUE
+            },
             // The feature has to be *queried* and then enabled: the extension
             // string alone says nothing about the feature.
             swapchain_maintenance1: maintenance1_requested
@@ -860,7 +917,8 @@ impl Gpu {
             .draw_indirect_count(features.draw_indirect_count);
         let mut enabled_features13 = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(features.dynamic_rendering)
-            .synchronization2(features.synchronization2);
+            .synchronization2(features.synchronization2)
+            .shader_demote_to_helper_invocation(features.shader_demote_to_helper_invocation);
         let mut enabled_dynamic_rendering = vk::PhysicalDeviceDynamicRenderingFeatures::default()
             .dynamic_rendering(features.dynamic_rendering);
         let mut enabled_synchronization2 = vk::PhysicalDeviceSynchronization2Features::default()
@@ -897,6 +955,11 @@ impl Gpu {
         let mut maintenance1_features =
             vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default()
                 .swapchain_maintenance1(features.swapchain_maintenance1);
+        // Vulkan 1.2 keeps the demote feature in its own extension structure;
+        // chaining it on a 1.3 device would duplicate the core 1.3 feature.
+        let mut demote_features =
+            vk::PhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT::default()
+                .shader_demote_to_helper_invocation(features.shader_demote_to_helper_invocation);
 
         let mut device_create = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_infos)
@@ -911,6 +974,9 @@ impl Gpu {
             device_create = device_create
                 .push_next(&mut enabled_dynamic_rendering)
                 .push_next(&mut enabled_synchronization2);
+            if features.shader_demote_to_helper_invocation {
+                device_create = device_create.push_next(&mut demote_features);
+            }
         } else {
             device_create = device_create.push_next(&mut enabled_features13);
         }
@@ -1468,7 +1534,7 @@ mod tests {
     #[test]
     fn the_surface_maintenance_dependency_chain_is_complete() {
         let mut extensions = vec!["VK_KHR_surface".to_string()];
-        resolve_surface_maintenance(
+        resolve_instance_extension_dependencies(
             &mut extensions,
             &["VK_EXT_swapchain_maintenance1".to_string()],
         );
@@ -1481,22 +1547,67 @@ mod tests {
 
         // A second pass must not duplicate anything.
         let before = extensions.len();
-        resolve_surface_maintenance(
+        resolve_instance_extension_dependencies(
             &mut extensions,
             &["VK_EXT_swapchain_maintenance1".to_string()],
         );
         assert_eq!(extensions.len(), before);
 
-        // Without the device extension the instance list stays untouched.
-        let mut plain = vec!["VK_KHR_surface".to_string()];
-        resolve_surface_maintenance(&mut plain, &["VK_KHR_swapchain".to_string()]);
-        assert_eq!(plain, vec!["VK_KHR_surface".to_string()]);
+        // Without any surface-related request the instance list stays untouched.
+        let mut plain = Vec::new();
+        resolve_instance_extension_dependencies(&mut plain, &[]);
+        assert!(plain.is_empty());
+    }
+
+    /// `VUID-vkCreateDevice-ppEnabledExtensionNames-01387`: a device that
+    /// enables `VK_KHR_swapchain` needs an instance with `VK_KHR_surface`.
+    /// The windowed runner forgot to request the instance extensions at all,
+    /// which turned the missing dependency into a validation error and then
+    /// into an unresolved `vkCreateWin32SurfaceKHR`.
+    #[test]
+    fn the_swapchain_brings_its_instance_extensions() {
+        let device = vec!["VK_KHR_swapchain".to_string()];
+
+        let mut bare = Vec::new();
+        resolve_instance_extension_dependencies(&mut bare, &device);
+        assert_eq!(bare, vec!["VK_KHR_surface".to_string()]);
+
+        // A caller that supplied the platform extension but forgot the root
+        // gets the root inserted, exactly once.
+        let mut platform_only = vec!["VK_KHR_win32_surface".to_string()];
+        resolve_instance_extension_dependencies(&mut platform_only, &device);
+        assert_eq!(
+            platform_only,
+            vec![
+                "VK_KHR_surface".to_string(),
+                "VK_KHR_win32_surface".to_string()
+            ]
+        );
+
+        // The fully derived list is left alone.
+        let mut complete = vec![
+            "VK_KHR_surface".to_string(),
+            "VK_KHR_win32_surface".to_string(),
+        ];
+        resolve_instance_extension_dependencies(&mut complete, &device);
+        assert_eq!(complete.len(), 2);
+    }
+
+    #[test]
+    fn a_surface_query_extension_pulls_in_its_dependencies() {
+        let mut extensions = vec!["VK_EXT_surface_maintenance1".to_string()];
+        resolve_instance_extension_dependencies(&mut extensions, &[]);
+        assert_eq!(extensions[0], "VK_KHR_surface");
+        assert!(extensions
+            .iter()
+            .any(|e| e == "VK_KHR_get_surface_capabilities2"));
     }
 
     #[test]
     fn required_feature_list_is_stable() {
         let none = GpuFeatures::default().missing_required();
-        assert_eq!(none.len(), 8);
+        assert_eq!(none.len(), 9);
+        assert!(none.contains(&"shaderDemoteToHelperInvocation"));
         let all = GpuFeatures {
             buffer_device_address: true,
             descriptor_indexing: true,
@@ -1506,6 +1617,7 @@ mod tests {
             multi_draw_indirect: true,
             draw_indirect_first_instance: true,
             draw_indirect_count: true,
+            shader_demote_to_helper_invocation: true,
             ..Default::default()
         };
         assert!(all.missing_required().is_empty());
@@ -1521,6 +1633,10 @@ mod tests {
         assert!(gpu.features.dynamic_rendering);
         assert!(gpu.features.synchronization2);
         assert!(gpu.features.timeline_semaphore);
+        assert!(
+            gpu.features.shader_demote_to_helper_invocation,
+            "the fragment shaders use OpDemoteToHelperInvocation"
+        );
         assert!(gpu.frames_in_flight() >= 2);
         println!(
             "device={} api={:?} rebar={} dedicated_transfer={}",
