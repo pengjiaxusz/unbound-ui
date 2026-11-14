@@ -58,10 +58,8 @@ package-lock.json linguist-generated=true
 yarn.lock linguist-generated=true
 Cargo.lock linguist-generated=true
 
-# Export ignores (exclude workspace configs on git archive)
-.gitattributes export-ignore
-.gitignore export-ignore
-.github/ export-ignore
-.vscode/ export-ignore
-.agents/ export-ignore
+# No export-ignore rules on purpose: source archives (git archive, GitHub ZIP)
+# must keep repo rules (.gitignore, .gitattributes) and AI/editor context
+# (.agents/, .github/, .vscode/). Projects that need a trimmed tarball can add
+# export-ignore entries outside this managed block.
 # PENGJ_TEMPLATE_END
