@@ -1,0 +1,13 @@
+# lefthook.yml — git hooks 配置（lefthook 层）
+pre-commit:
+  commands:
+    rustfmt:
+      glob: "*.rs"
+      run: rustfmt {staged_files}
+      stage_fixed: true
+
+commit-msg:
+  commands:
+    commitlint:
+      # 用 pnpm exec（本地已装 commitlint）而非 npx；"{1}" 是 lefthook 占位符（跨平台，勿用 $1）
+      run: pnpm exec commitlint --edit "{1}"

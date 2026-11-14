@@ -1,0 +1,43 @@
+[package]
+name = "showcase"
+description = "Windowed component gallery: every primitive type, theme switching and canvas navigation in one live window"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "showcase"
+path = "src/lib.rs"
+
+[[bin]]
+name = "showcase"
+path = "src/main.rs"
+
+[dependencies]
+unbound-math.workspace = true
+unbound-gpu.workspace = true
+unbound-app.workspace = true
+unbound-theme.workspace = true
+unbound-widgets.workspace = true
+unbound-text.workspace = true
+unbound-vector.workspace = true
+unbound-platform.workspace = true
+unbound-abi.workspace = true
+unbound-a11y.workspace = true
+unbound-anim.workspace = true
+unbound-headless.workspace = true
+unbound-input.workspace = true
+unbound-world.workspace = true
+unbound-layout.workspace = true
+unbound-canvas.workspace = true
+unbound-asset.workspace = true
+rustc-hash.workspace = true
+accesskit.workspace = true
+slotmap.workspace = true
+raw-window-handle = "0.6"
+png.workspace = true
+
+[lints]
+workspace = true

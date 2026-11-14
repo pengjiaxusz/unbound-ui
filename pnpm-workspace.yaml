@@ -1,0 +1,3 @@
+# pnpm 设置：放行 lefthook 的构建脚本（下载平台二进制），否则 pnpm install 会拦截报错
+allowBuilds:
+  lefthook: true

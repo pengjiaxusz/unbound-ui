@@ -1,0 +1,40 @@
+[package]
+name = "unbound-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Application runtime: event reduction, scene rebuild and frame diffing"
+
+[dependencies]
+unbound-math.workspace = true
+unbound-input.workspace = true
+unbound-a11y.workspace = true
+unbound-theme.workspace = true
+unbound-gpu.workspace = true
+unbound-widgets.workspace = true
+unbound-world.workspace = true
+unbound-layout.workspace = true
+unbound-text.workspace = true
+unbound-abi.workspace = true
+unbound-asset.workspace = true
+unbound-platform.workspace = true
+unbound-host.workspace = true
+unbound-headless.workspace = true
+raw-window-handle.workspace = true
+accesskit.workspace = true
+crossbeam-channel.workspace = true
+rustc-hash.workspace = true
+
+[dev-dependencies]
+unbound-text.workspace = true
+unbound-canvas.workspace = true
+unbound-anim.workspace = true
+unbound-vector.workspace = true
+app-guest = { path = "../app-guest" }
+png.workspace = true
+
+[lints]
+workspace = true

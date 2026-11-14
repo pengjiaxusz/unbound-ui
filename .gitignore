@@ -1,0 +1,37 @@
+# OS / 编辑器
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.log
+
+# Rust / Cargo 构建产物
+/target/
+**/*.rs.bk
+
+# 本地环境与密钥
+.env
+.env.local
+*.pem
+
+# 临时补丁脚本
+.tmp_patch.py
+
+# PENGJ_TEMPLATE_START
+# --- common 层 ---
+
+/node_modules
+.env
+.env.*
+!.env.example
+*.log
+
+/.omo/run-continuation
+
+# --- rust-workspace 层 ---
+
+/target/
+# PENGJ_TEMPLATE_END

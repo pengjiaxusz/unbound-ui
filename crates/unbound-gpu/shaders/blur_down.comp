@@ -1,0 +1,50 @@
+#version 460
+
+// ---------------------------------------------------------------------------
+// Dual-Kawase 模糊——降采样（P1.4）。
+//
+// 使用经典 5-tap Kawase 核采样背景并写入半分辨率存储图像。该核仅需源区域
+// （`uv_rect`）和目标尺寸，因此同一 Pass 可模糊整窗、模态框或弹出层。
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_source;
+layout(set = 0, binding = 1, rgba8) uniform image2D u_dest;
+
+layout(push_constant) uniform BlurPush {
+    // UV 空间中的源区域：(x, y, width, height)。
+    vec4 uv_rect;
+    // 目标像素尺寸。
+    vec2 dst_size;
+    // 逻辑像素模糊半径。
+    float radius;
+    // 当前迭代轮次（从 0 开始）；用于缩放采样核偏移。
+    uint iteration;
+} pc;
+
+// 偏移量为 `o` 的 13-tap 帐篷滤波。中心点仅占 1/13 权重，
+// 避免单个高对比度图块主导模糊结果。
+vec4 tent(vec2 uv, vec2 o) {
+    vec4 c = texture(u_source, uv);
+    c += (texture(u_source, uv + vec2(o.x, 0.0))
+        + texture(u_source, uv - vec2(o.x, 0.0))
+        + texture(u_source, uv + vec2(0.0, o.y))
+        + texture(u_source, uv - vec2(0.0, o.y))) * 2.0;
+    c += texture(u_source, uv + vec2(o.x, o.y));
+    c += texture(u_source, uv + vec2(-o.x, o.y));
+    c += texture(u_source, uv + vec2(o.x, -o.y));
+    c += texture(u_source, uv + vec2(-o.x, -o.y));
+    return c / 13.0;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.dst_size.x) || p.y >= int(pc.dst_size.y)) {
+        return;
+    }
+    vec2 uv = (vec2(p) + 0.5) / pc.dst_size;
+    vec2 suv = pc.uv_rect.xy + uv * pc.uv_rect.zw;
+    vec2 o = pc.uv_rect.zw / pc.dst_size * max(pc.radius, 1.0) * 0.75;
+    imageStore(u_dest, p, tent(suv, o));
+}

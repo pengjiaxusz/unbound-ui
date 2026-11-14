@@ -1,0 +1,47 @@
+//! 常用图元、应用契约、描述符与运行时类型重导出。
+
+pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
+pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};
+pub use crate::state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
+pub use crate::window_runner::{run_windowed, WindowedRunner};
+pub use crate::{
+    const_fnv1a_hash, mix_key, ui_key, AppContext, AppEvent, AppKey, AppRuntime, Application,
+    ClipboardProvider, DirtyFlags, ErasedUiWidget, EventOutcome, FrameReport, KeyDiscriminator,
+    Modifiers, PendingWidget, Propagation, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec,
+    ROOT,
+};
+
+pub use unbound_a11y::A11yAction;
+pub use unbound_abi::{Align, Dim, Display, FlexDirection, Justify, NodeFlags, RawNodeDesc};
+pub use unbound_input::{CursorKind, KeyChord, KeyName, PointerButton, PointerEvent};
+pub use unbound_math::{Color, Rect, Vec2};
+pub use unbound_platform::{
+    open_file, open_file_async, open_files, save_file, save_file_async, set_taskbar_progress,
+    set_tray_icon, show_tray_balloon, FileDialogConfig, FrameHitMetrics, PlatformError,
+    TaskbarProgressState, TrayNotificationSeverity, WindowConfig, WindowPlacement, WindowPosition,
+};
+pub use unbound_text::{
+    global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,
+    set_global_shuangpin_scheme, PinyinConfig, PinyinMatch, PinyinMatcher, ShuangpinScheme,
+    TextStyle,
+};
+pub use unbound_theme::{ThemeKind, ThemeState, Token};
+pub use unbound_widgets::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
+pub use unbound_widgets::{
+    AddressBarDesc, AddressBarState, AlertDesc, BadgeDesc, BannerDesc, ButtonDesc, ButtonSize,
+    ButtonVariant, CardDesc, CheckState, CheckboxDesc, CodeEditorDesc, CodeEditorState, ColumnSpec,
+    ControlState, CurveEditorDesc, DataColumnSpec, DataGridDesc, DataGridState, DividerDesc,
+    DraggableModalState, FileDropDesc, FilterPopupState, GenericDataTableDesc,
+    GenericDataTableState, KeybindingManagerState, PaginationDesc, PaginationState,
+    PipelineStageItem, PipelineViewDesc, Placement, PopconfirmDesc, ProgressDesc, ProgressState,
+    QueryBuilderDesc, QueryCombinator, QueryRule, ReorderableListState, SchemaFieldKind,
+    SchemaFieldSpec, SchemaFormDesc, SchemaFormState, SchemaValue, SelectDesc, SelectState,
+    Severity, ShortcutBarDesc, ShortcutEntry, SliderDesc, SmoothWheelHandler, SortDirection,
+    SwitchDesc, TableDesc, TableRow, TableState, TaskActivityItem, TaskHudDesc, TextEditState,
+    TextInputDesc, ThemeSettingsState, TimelineTrackDesc, TimelineTrackState, TitleBarDesc,
+    TooltipDesc, TooltipState, TourDesc, TransferDesc, TransferState, WatermarkDesc,
+    WidgetCatalogId, WidgetOutput, WindowCaptionButton, WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH,
+    TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID,
+    TITLE_BAR_MINIMIZE_ID,
+};
+pub use unbound_world::NodeId;

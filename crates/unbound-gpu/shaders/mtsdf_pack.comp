@@ -1,0 +1,60 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ---------------------------------------------------------------------------
+// GPU MTSDF 生成，第 3/3 步：打包 Pass（参见 `docs/architecture/gpu-renderer.md`）。
+//
+// 将此 Pass 独立为单独着色器的原因：1D 变换需要 16 KiB 共享内存用于包络数组，
+// 而同一着色器的*每个*工作组都会预留该内存——哪怕只打包一个纹素。每工作组占用
+// 16 KiB 会使单个 SM 仅能驻留极少工作组，导致打包 Pass 退化为数千个串行波次。
+//
+// 拆分之后，打包 Pass 完全不占用共享内存，每个工作组可并发打包 64 个纹素。
+// ---------------------------------------------------------------------------
+
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+// `pc.prim_count` = 宽度，`pc.block_count` = 高度，
+// `pc.scratch_bda` = 覆盖率，`pc.scratch_bda2` = 平方距离，
+// `pc.scratch_bda3` = 打包输出，`pc.digit` = 以 1/256 纹素为单位的 spread。
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32Buf {
+    uint u[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer F32Buf {
+    float f[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer PackBuf {
+    uint u[];
+};
+
+uint coverage_at(U32Buf buf, int i) {
+    return (buf.u[i >> 2] >> uint((i & 3) * 8)) & 0xFFu;
+}
+
+void main() {
+    int width = int(pc.prim_count);
+    int height = int(pc.block_count);
+    uint spread_q8 = pc.digit;
+
+    int texels = width * height;
+    int i = int(gl_GlobalInvocationID.x);
+    if (i >= texels) {
+        return;
+    }
+
+    U32Buf coverage = U32Buf(pc.scratch_bda);
+    F32Buf temp = F32Buf(pc.scratch_bda2);
+    PackBuf out_pack = PackBuf(pc.scratch_bda3);
+
+    bool inside = coverage_at(coverage, i) >= 128u;
+    float d_out = sqrt(temp.f[i * 2 + 0]);
+    float d_in = sqrt(temp.f[i * 2 + 1]);
+    float signed_dist = inside ? -d_out : d_in;
+    float spread = float(spread_q8) / 256.0;
+    float value = clamp(0.5 - signed_dist / (2.0 * spread), 0.0, 1.0);
+    uint v = uint(value * 255.0 + 0.5);
+    uint alpha = coverage_at(coverage, i);
+    out_pack.u[i] = v | (v << 8) | (v << 16) | (alpha << 24);
+}

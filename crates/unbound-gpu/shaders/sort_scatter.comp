@@ -1,0 +1,64 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// ---------------------------------------------------------------------------
+// 稳定 LSD 基数排序，第 3/3 步：稳定散布。
+//
+// 每个块的线程 0 **按索引顺序**遍历块内 256 个键，并为每个键分配其位值对应的下一个槽位。
+// 这种串行遍历换取了严格稳定性：`atomicAdd` 的执行顺序未定义，非稳定散布会导致
+// 相等键在每帧被重排。
+//
+// 各块相互独立，因此所有块并行执行时每块串行开销仅 O(BLOCK)。键数组与索引数组按相同
+// 位置置换，确保图元索引始终随其排序键同步移动。
+// ---------------------------------------------------------------------------
+
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+#define BLOCK 256u
+
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer KeyBuf {
+    uint64_t k[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer U32Buf {
+    uint v[];
+};
+
+shared uint s_pos[256];    // 本块内各位值的当前写游标
+shared uint s_out[BLOCK];  // 每个元素的目标槽位
+
+void main() {
+    uint block = gl_WorkGroupID.x;
+    uint base = block * BLOCK;
+    if (base >= pc.prim_count) {
+        return;
+    }
+    uint lid = gl_LocalInvocationID.x;
+    uint count = min(BLOCK, pc.prim_count - base);
+
+    U32Buf scratch = U32Buf(pc.scratch_bda5);
+    uint hist_words = pc.block_count * BLOCK;
+
+    if (lid < 256u) {
+        s_pos[lid] = scratch.v[hist_words + block * BLOCK + lid];
+    }
+    barrier();
+
+    if (lid == 0u) {
+        for (uint i = 0u; i < count; ++i) {
+            uint64_t key = KeyBuf(pc.scratch_bda).k[base + i];
+            uint digit = uint((key >> pc.digit) & 0xFFu);
+            s_out[i] = s_pos[digit];
+            s_pos[digit] = s_pos[digit] + 1u;
+        }
+    }
+    barrier();
+
+    if (lid < count) {
+        uint dst = s_out[lid];
+        KeyBuf(pc.scratch_bda2).k[dst] = KeyBuf(pc.scratch_bda).k[base + lid];
+        U32Buf(pc.scratch_bda4).v[dst] = U32Buf(pc.scratch_bda3).v[base + lid];
+    }
+}

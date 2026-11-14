@@ -1,0 +1,3 @@
+# rustfmt 无法从 `edition.workspace = true` 继承 edition，
+# pre-commit 里裸调 `rustfmt <files>` 会退化成 2015 并拒绝 c"..." 字面量。
+edition = "2021"

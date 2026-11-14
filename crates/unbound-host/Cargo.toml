@@ -1,0 +1,16 @@
+[package]
+name = "unbound-host"
+description = "Host-side hot reload: guest dylib loading, allocator hijack and state handoff"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-abi.workspace = true
+libloading.workspace = true
+rustc-hash.workspace = true
+
+[lints]
+workspace = true

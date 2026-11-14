@@ -1,0 +1,16 @@
+# .cargo/config.toml — Cargo 本地配置
+
+
+
+# --- 用户自定义配置区域 (User Custom Section) ---
+# 项目特有的 [alias]、rustflags、target 配置请写在受管区域外部
+# 模板更新时仅替换上方 PENGJ_TEMPLATE 区域，本区域内容 100% 保留
+
+# PENGJ_TEMPLATE_START
+# Managed by pengj-templates: update replaces only this block, content outside is user-owned
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+
+[target.x86_64-unknown-linux-gnu]
+linker = "lld"
+# PENGJ_TEMPLATE_END
