@@ -893,15 +893,34 @@ impl<'a> ViewBuilder<'a> {
     }
 
     /// 使用自定义配置声明无边框窗口标题栏。
+    ///
+    /// 与 showcase 的顶栏一致：按视口宽度显式铺满、标题靠左、窗口按钮链贴右边缘，
+    /// 并绘制 `HEADER_BG` 背景与底部分隔线。显式像素宽度是必需的——应用的根容器
+    /// 为 `AUTO`（由内容撑开），百分比宽度在父子循环依赖下会退化成内容宽度，
+    /// 使标题与按钮全挤在窗口左上角。
     pub fn title_bar_with(&mut self, desc: unbound_widgets::TitleBarDesc) -> NodeId {
+        let width = self.ctx.viewport.x;
         let bar_desc = RawNodeDesc::container()
             .row()
+            .width(Dim::px(width))
             .height(Dim::px(desc.height))
-            .width(Dim::percent(1.0))
+            .padding(unbound_abi::Edges::trbl(12.0, 0.0, 0.0, 0.0))
             .align(unbound_abi::Align::Center)
             .justify(unbound_abi::Justify::SpaceBetween)
             .gap(8.0);
-        self.container(unbound_widgets::TITLE_BAR_DRAG_ID, bar_desc, |bar| {
+        // 纯布局容器不在挂载控件表中，因此把拖拽区域键让给覆盖整条标题栏的
+        // 背景装饰控件：窗口运行器用它的包围盒设定 Aero 拖拽高度。
+        let root_key = unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(9);
+        self.container(root_key, bar_desc, |bar| {
+            let chrome_desc = RawNodeDesc::container()
+                .absolute()
+                .width(Dim::px(width))
+                .height(Dim::px(desc.height));
+            bar.add_with_layout(
+                unbound_widgets::TITLE_BAR_DRAG_ID,
+                chrome_desc,
+                unbound_widgets::TitleBarChrome,
+            );
             bar.badge(
                 unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(10),
                 BadgeDesc::label(desc.title),
@@ -930,7 +949,7 @@ impl<'a> ViewBuilder<'a> {
                             desc.close_id,
                             ButtonDesc::label(" ✕ ")
                                 .size(unbound_widgets::ButtonSize::Sm)
-                                .variant(unbound_widgets::ButtonVariant::Secondary),
+                                .variant(unbound_widgets::ButtonVariant::Subtle),
                         );
                     }
                 },

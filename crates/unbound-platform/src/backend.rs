@@ -198,6 +198,7 @@ mod win32 {
     const CS_OWNDC: UINT = 0x0020;
 
     const WS_OVERLAPPED: DWORD = 0x0000_0000;
+    const WS_POPUP: DWORD = 0x8000_0000;
     const WS_CAPTION: DWORD = 0x00C0_0000;
     const WS_SYSMENU: DWORD = 0x0008_0000;
     const WS_THICKFRAME: DWORD = 0x0004_0000;
@@ -906,16 +907,33 @@ mod win32 {
         hwnd: HWND,
     }
 
+    /// 依据窗口配置选择原生窗口样式。
+    ///
+    /// `decorations = false` 时必须彻底去掉 `WS_CAPTION` 与 `WS_THICKFRAME`：
+    /// 前者绘制系统标题栏，后者绘制系统非客户区边框。仅把 `Window::decorated`
+    /// 标记为 `false` 并不会改变窗口外观（这正是此前 showcase 出现双层标题栏的原因）。
+    /// 采用 `WS_POPUP` 后客户区覆盖整个窗口矩形，标题栏由应用自绘，拖拽与
+    /// 边缘缩放由 `Window::drag_window` / `drag_resize_window` 或自定义边框子类派发。
+    /// 保留 `WS_SYSMENU` / `WS_MINIMIZEBOX` / `WS_MAXIMIZEBOX` 使任务栏菜单、
+    /// 最小化动画、最大化与 Win11 贴靠仍由系统处理。
+    fn window_style(config: &WindowConfig) -> DWORD {
+        if config.decorations {
+            if config.resizable {
+                WS_OVERLAPPEDWINDOW
+            } else {
+                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+            }
+        } else {
+            WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+        }
+    }
+
     fn create_native_window(
         class_name: &[u16],
         hinstance: HINSTANCE,
         config: &WindowConfig,
     ) -> Result<WindowEntry, PlatformError> {
-        let style = if config.resizable {
-            WS_OVERLAPPEDWINDOW
-        } else {
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
-        };
+        let style = window_style(config);
 
         let sys_dpi = unsafe { GetDpiForSystem() };
         let scale = if sys_dpi == 0 {
@@ -951,6 +969,12 @@ mod win32 {
             return Err(PlatformError::Window(
                 "CreateWindowExW returned null HWND".to_string(),
             ));
+        }
+
+        if !config.decorations {
+            // 无边框窗口没有系统非客户区，DWM 不会自动给出阴影与圆角；
+            // 扩展 1px 顶边帧可恢复两者，且不会重新引入系统标题栏。
+            crate::win32_frame::apply_borderless_dwm(hwnd as isize);
         }
 
         let redraw_requested = Arc::new(AtomicBool::new(true));
@@ -1195,5 +1219,38 @@ mod win32 {
         }
 
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod style_tests {
+        use super::*;
+
+        fn config(decorations: bool, resizable: bool) -> WindowConfig {
+            WindowConfig {
+                decorations,
+                resizable,
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn decorated_windows_keep_the_system_caption() {
+            let style = window_style(&config(true, true));
+            assert_ne!(style & WS_CAPTION, 0);
+            assert_ne!(style & WS_THICKFRAME, 0);
+        }
+
+        #[test]
+        fn borderless_windows_drop_caption_and_system_frame() {
+            // 无论是否允许缩放，自绘装饰的窗口都不得出现系统标题栏或系统边框。
+            for resizable in [false, true] {
+                let style = window_style(&config(false, resizable));
+                assert_eq!(style & WS_CAPTION, 0);
+                assert_eq!(style & WS_THICKFRAME, 0);
+                assert_ne!(style & WS_POPUP, 0);
+                assert_ne!(style & WS_MINIMIZEBOX, 0);
+                assert_ne!(style & WS_MAXIMIZEBOX, 0);
+            }
+        }
     }
 }

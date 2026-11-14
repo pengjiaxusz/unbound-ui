@@ -342,7 +342,50 @@ mod win32 {
                     let is_max = IsZoomed(hwnd) != 0;
                     let border_thickness = if is_max { 0 } else { 8 };
 
-                    // 1. 检查用于调整大小的窗口边框
+                    // 将客户区物理坐标转换为逻辑坐标，用于窗口按钮命中测试。
+                    let scale = metrics.scale_factor();
+                    let logical_x = (pt.x as f32 / scale).round() as i32;
+                    let logical_y = (pt.y as f32 / scale).round() as i32;
+
+                    // 1. 窗口按钮优先于边框缩放：按钮锚定在右上角，若先判定边框，
+                    // 其上沿会被误判为 HTTOP / HTTOPRIGHT 而无法点击。
+                    // 最大化按钮返回 HTMAXBUTTON 可触发 Win11 贴靠布局。
+                    if metrics.contains_logical(
+                        logical_x,
+                        logical_y,
+                        &metrics.max_btn_left,
+                        &metrics.max_btn_top,
+                        &metrics.max_btn_right,
+                        &metrics.max_btn_bottom,
+                    ) {
+                        return HTMAXBUTTON;
+                    }
+
+                    // 2. 最小化按钮。
+                    if metrics.contains_logical(
+                        logical_x,
+                        logical_y,
+                        &metrics.min_btn_left,
+                        &metrics.min_btn_top,
+                        &metrics.min_btn_right,
+                        &metrics.min_btn_bottom,
+                    ) {
+                        return HTMINBUTTON;
+                    }
+
+                    // 3. 关闭按钮。
+                    if metrics.contains_logical(
+                        logical_x,
+                        logical_y,
+                        &metrics.close_btn_left,
+                        &metrics.close_btn_top,
+                        &metrics.close_btn_right,
+                        &metrics.close_btn_bottom,
+                    ) {
+                        return HTCLOSE;
+                    }
+
+                    // 4. 检查用于调整大小的窗口边框。
                     if !is_max {
                         let on_left = pt.x < border_thickness;
                         let on_right = pt.x >= client_rect.right - border_thickness;
@@ -375,54 +418,13 @@ mod win32 {
                         }
                     }
 
-                    // 将客户区物理坐标转换为逻辑坐标，用于按钮命中测试
-                    let scale = metrics.scale_factor();
-                    let logical_x = (pt.x as f32 / scale).round() as i32;
-                    let logical_y = (pt.y as f32 / scale).round() as i32;
-
-                    // 2. 最大化按钮 -> HTMAXBUTTON（触发 Win11 贴靠布局！）
-                    if metrics.contains_logical(
-                        logical_x,
-                        logical_y,
-                        &metrics.max_btn_left,
-                        &metrics.max_btn_top,
-                        &metrics.max_btn_right,
-                        &metrics.max_btn_bottom,
-                    ) {
-                        return HTMAXBUTTON;
-                    }
-
-                    // 3. 最小化按钮
-                    if metrics.contains_logical(
-                        logical_x,
-                        logical_y,
-                        &metrics.min_btn_left,
-                        &metrics.min_btn_top,
-                        &metrics.min_btn_right,
-                        &metrics.min_btn_bottom,
-                    ) {
-                        return HTMINBUTTON;
-                    }
-
-                    // 4. 关闭按钮
-                    if metrics.contains_logical(
-                        logical_x,
-                        logical_y,
-                        &metrics.close_btn_left,
-                        &metrics.close_btn_top,
-                        &metrics.close_btn_right,
-                        &metrics.close_btn_bottom,
-                    ) {
-                        return HTCLOSE;
-                    }
-
-                    // 5. 标题栏空白区域 -> HTCAPTION（Aero 拖拽与贴靠）
+                    // 5. 标题栏空白区域 -> HTCAPTION（Aero 拖拽与贴靠）。
                     let title_height = metrics.title_bar_height.load(Ordering::Acquire);
                     if title_height > 0 && logical_y < title_height {
                         return HTCAPTION;
                     }
 
-                    // 6. 其余情况交由常规客户区交互处理
+                    // 6. 其余情况交由常规客户区交互处理。
                     HTCLIENT
                 }
                 WM_NCDESTROY => {
@@ -432,6 +434,49 @@ mod win32 {
                 }
                 _ => DefSubclassProc(hwnd, msg, wparam, lparam),
             }
+        }
+    }
+
+    /// 为无边框窗口应用 DWM 圆角与阴影（不涉及消息子类化）。
+    ///
+    /// `WS_POPUP` 窗口没有非客户区，DWM 默认既不绘制阴影也不绘制圆角；
+    /// 把顶边 1px 扩展进客户区并请求圆角，可在不引入系统标题栏的前提下恢复两者。
+    /// 该函数是幂等的，窗口创建时与自定义边框子类安装时各调用一次均无副作用。
+    pub fn apply_borderless_dwm(hwnd: isize) {
+        let hwnd_ptr = hwnd as HWND;
+        unsafe {
+            // 启用 Win11 圆角。
+            let corner_pref = DWMWCP_ROUND;
+            let _ = DwmSetWindowAttribute(
+                hwnd_ptr,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &corner_pref as *const _ as *const c_void,
+                core::mem::size_of::<DWORD>() as DWORD,
+            );
+
+            // 启用 Win10 / Win11 窗口阴影。
+            let margins = MARGINS {
+                cxLeftWidth: 0,
+                cxRightWidth: 0,
+                cyTopHeight: 1,
+                cyBottomHeight: 0,
+            };
+            let _ = DwmExtendFrameIntoClientArea(hwnd_ptr, &margins);
+
+            // 触发非客户区重新计算。
+            const SWP_NOSIZE: UINT = 0x0001;
+            const SWP_NOMOVE: UINT = 0x0002;
+            const SWP_NOZORDER: UINT = 0x0004;
+            const SWP_FRAMECHANGED: UINT = 0x0020;
+            SetWindowPos(
+                hwnd_ptr,
+                core::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            );
         }
     }
 
@@ -454,42 +499,7 @@ mod win32 {
             return false;
         }
 
-        // 应用 DWM 属性
-        unsafe {
-            // 启用 Win11 圆角
-            let corner_pref = DWMWCP_ROUND;
-            let _ = DwmSetWindowAttribute(
-                hwnd_ptr,
-                DWMWA_WINDOW_CORNER_PREFERENCE,
-                &corner_pref as *const _ as *const c_void,
-                core::mem::size_of::<DWORD>() as DWORD,
-            );
-
-            // 启用 Win10 / Win11 窗口阴影
-            let margins = MARGINS {
-                cxLeftWidth: 0,
-                cxRightWidth: 0,
-                cyTopHeight: 1,
-                cyBottomHeight: 0,
-            };
-            let _ = DwmExtendFrameIntoClientArea(hwnd_ptr, &margins);
-
-            // 触发非客户区重新计算
-            const SWP_NOSIZE: UINT = 0x0001;
-            const SWP_NOMOVE: UINT = 0x0002;
-            const SWP_NOZORDER: UINT = 0x0004;
-            const SWP_FRAMECHANGED: UINT = 0x0020;
-            SetWindowPos(
-                hwnd_ptr,
-                core::ptr::null_mut(),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED,
-            );
-        }
-
+        apply_borderless_dwm(hwnd);
         true
     }
 
@@ -519,6 +529,21 @@ pub fn install_custom_frame(hwnd: isize, metrics: Arc<FrameHitMetrics>) -> bool 
         let _ = hwnd;
         let _ = metrics;
         false
+    }
+}
+
+/// 为无边框窗口应用 DWM 圆角与阴影。
+///
+/// 由窗口创建路径在 `decorations = false` 时调用，使未安装自定义边框子类
+/// （例如自行派发拖拽与窗口按钮的 showcase）的窗口同样保留系统阴影与圆角。
+pub fn apply_borderless_dwm(hwnd: isize) {
+    #[cfg(windows)]
+    {
+        win32::apply_borderless_dwm(hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
     }
 }
 

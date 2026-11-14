@@ -11,7 +11,7 @@ use unbound_gpu::surface::{AcquireOutcome, Surface, Swapchain};
 use unbound_gpu::swapchain::PresentConfig;
 use unbound_gpu::{Camera, Renderer, SceneUpload};
 use unbound_input::PointerButton;
-use unbound_math::Vec2;
+use unbound_math::{Rect, Vec2};
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::win32_frame::{install_custom_frame, set_window_dark_mode, FrameHitMetrics};
 use unbound_platform::window::{
@@ -415,12 +415,13 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                     } else {
                         self.runtime.pointer_up(self.pointer, btn);
                         if btn == PointerButton::Left {
-                            let scale = window.scale_factor().max(0.5) as f32;
-                            let logical = self.pointer / scale;
+                            // `AppRuntime` 与平台事件同用物理像素坐标；此处不得再除以
+                            // DPI 缩放，否则高 DPI 下窗口按钮的兜底命中会整体偏移。
+                            let hit = self.pointer;
                             if self
                                 .runtime
                                 .widget_rect(unbound_widgets::TITLE_BAR_CLOSE_ID)
-                                .is_some_and(|r| r.contains_point(logical))
+                                .is_some_and(|r| r.contains_point(hit))
                             {
                                 window.request_close();
                                 return Flow::Exit;
@@ -428,13 +429,13 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                             if self
                                 .runtime
                                 .widget_rect(unbound_widgets::TITLE_BAR_MINIMIZE_ID)
-                                .is_some_and(|r| r.contains_point(logical))
+                                .is_some_and(|r| r.contains_point(hit))
                             {
                                 window.set_minimized(true);
                             } else if self
                                 .runtime
                                 .widget_rect(unbound_widgets::TITLE_BAR_MAXIMIZE_ID)
-                                .is_some_and(|r| r.contains_point(logical))
+                                .is_some_and(|r| r.contains_point(hit))
                             {
                                 window.set_maximized(!window.is_maximized());
                             }
@@ -632,27 +633,38 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         }
 
         if let Some(metrics) = &self.frame_metrics {
-            metrics.set_scale_factor(window.scale_factor() as f32);
+            let scale = window.scale_factor().max(0.5) as f32;
+            metrics.set_scale_factor(scale);
+            // 自定义边框子类把物理像素的客户区坐标除以 scale 后再做命中测试，
+            // 因此这里写入的标题栏/按钮包围盒必须先换算到同一逻辑坐标系。
+            let to_logical = |rect: Rect| {
+                Rect::new(
+                    rect.origin.x / scale,
+                    rect.origin.y / scale,
+                    rect.size.x / scale,
+                    rect.size.y / scale,
+                )
+            };
             if let Some(bar_rect) = self.runtime.widget_rect(unbound_widgets::TITLE_BAR_DRAG_ID) {
-                metrics.set_title_bar_height(bar_rect.height());
+                metrics.set_title_bar_height(to_logical(bar_rect).height());
             }
             if let Some(max_rect) = self
                 .runtime
                 .widget_rect(unbound_widgets::TITLE_BAR_MAXIMIZE_ID)
             {
-                metrics.set_maximize_button_rect(max_rect);
+                metrics.set_maximize_button_rect(to_logical(max_rect));
             }
             if let Some(min_rect) = self
                 .runtime
                 .widget_rect(unbound_widgets::TITLE_BAR_MINIMIZE_ID)
             {
-                metrics.set_minimize_button_rect(min_rect);
+                metrics.set_minimize_button_rect(to_logical(min_rect));
             }
             if let Some(close_rect) = self
                 .runtime
                 .widget_rect(unbound_widgets::TITLE_BAR_CLOSE_ID)
             {
-                metrics.set_close_button_rect(close_rect);
+                metrics.set_close_button_rect(to_logical(close_rect));
             }
         }
 
@@ -677,8 +689,13 @@ impl<A: Application> Drop for WindowedRunner<A> {
 /// 单行窗口化应用入口函数。
 pub fn run_windowed<A: Application + 'static>(
     app: A,
-    config: WindowConfig,
+    mut config: WindowConfig,
 ) -> Result<(), PlatformError> {
+    // `WindowedRunner` 一律自带客户端自绘标题栏并安装自定义边框子类，
+    // 因此必须按无边框窗口创建。此前沿用 `WindowConfig::default()` 的
+    // `decorations = true`，样式上仍带 `WS_CAPTION`，只是被子类事后把非客户区
+    // 削成 0；配置与外观不一致，且子类安装前可能露出系统原生标题栏。
+    config.decorations = false;
     let runner = WindowedRunner::new(app, &config);
     PlatformWindow::new(&config)?.run(runner)
 }

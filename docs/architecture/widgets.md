@@ -21,5 +21,6 @@
 ## 不变量与红线
 - [禁止] 在 `emit_*` 中根据 `hovered`/`disabled` 条件增减图元个数（隐藏态须用零透明或零尺寸占位） -> [原因] 破坏 Stable Shape 恒定契约 -> [守卫] `crates/unbound-widgets/tests/stable_shape.rs`
 - [必须] 新增组件必须接入 `define_widget_catalog!` 并在 `catalog::emit_widget` 实现真实发射 -> [原因] 编译期穷举门禁防遗漏 -> [守卫] `crates/unbound-widgets/src/catalog.rs`
-- [例外] `title_bar` 仅提供 `TitleBarDesc` 描述符与保留节点 ID，场景由 `unbound-app` 的 `ViewBuilder` 组合既有容器/徽章/按钮生成，故按基础设施模块列入 `build.rs` 白名单，不纳入展示目录 -> [原因] 无独立 `emit_*`，纳入穷举目录会迫使伪造发射分支 -> [守卫] `crates/unbound-widgets/build.rs`
+- [例外] `title_bar` 提供 `TitleBarDesc` 描述符、保留节点 ID 与纯装饰控件 `TitleBarChrome`（实现 `UiWidget`，绘制 `HEADER_BG` 背景与 1px `DIVIDER` 分隔线，无独立 `emit_*`），场景由 `unbound-app` 的 `ViewBuilder` 组合既有容器/徽章/按钮生成，故按基础设施模块列入 `build.rs` 白名单，不纳入展示目录 -> [原因] 纳入穷举目录会迫使伪造发射分支 -> [守卫] `crates/unbound-widgets/build.rs`
+- [必须] 默认标题栏以 `Dim::px(viewport.x)` 显式铺满视口，且 `TITLE_BAR_DRAG_ID` 挂在覆盖整条栏的绝对定位背景控件上 -> [原因] 应用根容器为 `AUTO`，百分比宽度会退化成内容宽度，使标题与窗口按钮挤在左上角；纯布局容器不在挂载控件表中，窗口运行器读不到其包围盒便无法设定拖拽高度 -> [守卫] `crates/unbound-app/tests/declarative_ergonomics.rs`
 - [必须] 追加 `WidgetOutput` 时重定位全部 `extra_payload_idx` -> [原因] 着色器按全局索引访问 payload 数组，不做偏移换算 -> [守卫] `crates/unbound-widgets/src/lib.rs::payload_indices_are_rebased_for_every_widget`

@@ -209,3 +209,78 @@ fn test_automatic_widget_state_store_and_reduction() {
         "App counter should increment after button click"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 默认标题栏：与 showcase 顶栏一致，铺满视口且窗口按钮锚定右边缘。
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct TitleBarApp;
+
+impl Application for TitleBarApp {
+    type State = ();
+
+    fn init(&mut self, _ctx: &mut AppContext) -> Self::State {}
+
+    fn reduce(
+        &mut self,
+        _state: &mut Self::State,
+        _event: AppEvent,
+        _ctx: &mut AppContext,
+    ) -> EventOutcome {
+        EventOutcome::new(DirtyFlags::NONE)
+    }
+
+    fn view(&mut self, _state: &Self::State, view: &mut ViewBuilder) {
+        view.column(ui_key!("title_bar_root"), |col| {
+            col.title_bar("Title Bar Layout");
+        });
+    }
+}
+
+#[test]
+fn default_title_bar_spans_viewport_and_anchors_window_buttons_right() {
+    let mut runtime = AppRuntime::new(TitleBarApp, Vec2::new(900.0, 600.0));
+    let _ = runtime.frame(0.0);
+
+    let drag = runtime
+        .widget_rect(TITLE_BAR_DRAG_ID)
+        .expect("标题栏拖拽/背景控件应已挂载");
+    assert!(
+        (drag.size.x - 900.0).abs() < 0.01,
+        "标题栏必须铺满视口宽度，实际 {drag:?}"
+    );
+    assert!(
+        (drag.size.y - TITLE_BAR_HEIGHT).abs() < 0.01,
+        "标题栏高度应来自描述符，实际 {drag:?}"
+    );
+    assert_eq!(drag.origin.y, 0.0);
+
+    let close = runtime
+        .widget_rect(TITLE_BAR_CLOSE_ID)
+        .expect("关闭按钮应已挂载");
+    let maximize = runtime
+        .widget_rect(TITLE_BAR_MAXIMIZE_ID)
+        .expect("最大化按钮应已挂载");
+    let minimize = runtime
+        .widget_rect(TITLE_BAR_MINIMIZE_ID)
+        .expect("最小化按钮应已挂载");
+    assert!(
+        (close.max().x - 900.0).abs() <= 1.0,
+        "关闭按钮应贴右边缘，实际 {close:?}"
+    );
+    assert!(minimize.max().x <= maximize.origin.x + 0.01);
+    assert!(maximize.max().x <= close.origin.x + 0.01);
+    assert!(
+        minimize.origin.x > 450.0,
+        "窗口按钮链应位于右半区，实际 {minimize:?}"
+    );
+
+    let title = runtime
+        .widget_rect(TITLE_BAR_DRAG_ID.wrapping_add(10))
+        .expect("标题徽标应已挂载");
+    assert!(
+        title.max().x < minimize.origin.x,
+        "标题不得与窗口按钮重叠，实际 {title:?} / {minimize:?}"
+    );
+}

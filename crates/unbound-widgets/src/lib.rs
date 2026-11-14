@@ -23,8 +23,8 @@ pub mod primitive;
 pub mod title_bar;
 
 pub use title_bar::{
-    TitleBarDesc, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID,
-    TITLE_BAR_MINIMIZE_ID,
+    TitleBarChrome, TitleBarDesc, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT,
+    TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID,
 };
 
 /// 声明所有业务组件模块并派生穷举目录。

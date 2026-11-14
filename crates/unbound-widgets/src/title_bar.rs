@@ -3,11 +3,75 @@
 //! 所有基于 `unbound-app` 无边框窗口运行的应用与示例均可使用 [`TitleBarDesc`]
 //! 提供一致的窗口标题展示、拖拽区域以及最小化 / 最大化 / 关闭按钮。
 
+use unbound_gpu::data::{PrimType, SubElement};
+use unbound_math::{Rect, Vec2};
+use unbound_theme::Token;
+
+use crate::primitive::instance;
+use crate::{ControlState, TextCtx, UiWidget, WidgetOutput};
+
 /// 默认标题栏高度（逻辑像素）。
 pub const TITLE_BAR_HEIGHT: f32 = 38.0;
 
-/// 标题栏根容器与拖拽区域的保留节点键。
+/// 标题栏拖拽区域（背景装饰控件）的保留节点键。
+///
+/// 该键挂在覆盖整条标题栏的 [`TitleBarChrome`] 控件上，因此
+/// `AppRuntime::widget_rect` 能直接读出标题栏包围盒，供窗口运行器把
+/// 拖拽高度写入 `FrameHitMetrics`；纯布局容器不在挂载控件表中，无法这样读取。
 pub const TITLE_BAR_DRAG_ID: u64 = 0xFFFF_FF00;
+
+/// 默认标题栏的背景表面与底部分隔线。
+///
+/// 与 showcase 的 `draw_top_bar` 保持一致的视觉约定：`HEADER_BG` 铺满整条
+/// 标题栏，底边以 1px `DIVIDER` 与内容区分隔。它是绝对定位的纯装饰控件，
+/// 不参与 flex 排布、不发射命中区域，因此标题栏空白处的拖拽仍由
+/// 自定义边框子类的 `HTCAPTION` 承担。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TitleBarChrome;
+
+impl UiWidget for TitleBarChrome {
+    type State = ();
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        // 真实尺寸由 `ViewBuilder` 以绝对定位的显式宽高给出，此处仅占位。
+        Vec2::new(1.0, 1.0)
+    }
+
+    fn emit_laid_out(
+        &self,
+        _node: u64,
+        rect: Rect,
+        _control: ControlState,
+        _state: &Self::State,
+        _text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut output = WidgetOutput::default();
+        output.primitives.push(instance(
+            rect,
+            [0.0; 4],
+            Token::HEADER_BG,
+            Token::NONE,
+            0.0,
+            0.0,
+            PrimType::RoundedRect,
+            SubElement::Background,
+            0,
+        ));
+        let rule = Rect::new(rect.origin.x, rect.max().y - 1.0, rect.size.x, 1.0);
+        output.primitives.push(instance(
+            rule,
+            [0.0; 4],
+            Token::DIVIDER,
+            Token::NONE,
+            0.0,
+            0.0,
+            PrimType::Line,
+            SubElement::Background,
+            1,
+        ));
+        output
+    }
+}
 
 /// 默认标题栏“最小化”按钮的保留节点键。
 pub const TITLE_BAR_MINIMIZE_ID: u64 = 0xFFFF_FF01;
