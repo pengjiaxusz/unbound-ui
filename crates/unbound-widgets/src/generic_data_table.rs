@@ -120,6 +120,32 @@ impl GenericDataTableState {
         indices
     }
 
+    /// 将当前过滤与排序后的可见行导出为 RFC 4180 兼容的 CSV 字符串。
+    #[must_use]
+    pub fn export_csv(&self, columns: &[DataColumnSpec], rows: &[Vec<String>]) -> String {
+        let mut out = String::new();
+        let header: Vec<String> = columns.iter().map(|c| c.title.clone()).collect();
+        out.push_str(&header.join(","));
+        out.push('\n');
+        for idx in self.resolve_visible_indices(rows) {
+            if let Some(row) = rows.get(idx) {
+                let escaped: Vec<String> = row
+                    .iter()
+                    .map(|cell| {
+                        if cell.contains(',') || cell.contains('"') || cell.contains('\n') {
+                            format!("\"{}\"", cell.replace('"', "\"\""))
+                        } else {
+                            cell.clone()
+                        }
+                    })
+                    .collect();
+                out.push_str(&escaped.join(","));
+                out.push('\n');
+            }
+        }
+        out
+    }
+
     /// 键盘上下行导航。
     pub fn move_focus(&mut self, visible_len: usize, delta: isize) {
         if visible_len == 0 {

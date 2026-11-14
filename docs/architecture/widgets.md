@@ -14,6 +14,7 @@
 - Tooltip 窗口内防溢出自动定位：`overlay::place_tooltip_in_window` 与 `tooltip::TooltipDesc` 支持全部 12 种 `Placement` 偏好方向，按“首选方向 -> 主轴对侧翻转 -> 交叉轴正反方向 -> 安全视口内缩边距（`TOOLTIP_VIEWPORT_MARGIN = 6.0px`）平移钳制”的四级策略自动计算气泡矩形与指示箭头锚点（`arrow_tip`），确保靠近窗口四角或边缘触发的 Tooltip 100% 停留在窗口安全区内；同时实现 `UiWidget` trait 并通过 `ViewBuilder::tooltip` 提供声明式挂载
 - 三级门禁：`define_widget_catalog!` -> `catalog::emit_widget`（`#[deny(unreachable_patterns)]`） -> `tests/stable_shape.rs`
 - payload 索引：`SceneCollector::push` 以 `self.payloads.len()` 为基址重定位每个 widget 的局部 `extra_payload_idx` -> 否则第二段文本会读第一段字形 UV（文字串叠）
+- 组件增量 API：`code_block::CodeLanguage`（7 语言关键字表）、`GenericDataTableState::export_csv`（RFC 4180 转义，仅导出当前过滤/排序后的可见行）、`modal::ModalSizePreset`（Sm/Md/Lg/Xl/Full 五档居中矩形，按视口 -32px 钳制）、`schema_form::FieldInheritanceState`（默认值/继承/覆写徽章）-> 均为无状态纯数据/纯函数，不改 24 态 Stable Shape 契约
 
 ## 取舍（禁止重构）
 - [代价] 组件全部采用扁平 `*Desc` POD + 纯函数 `emit_*`，禁止面向对象组件实例树 -> [原因] 零虚表、零堆分配、天然支持 `diff` 与热重载 -> [位置] `crates/unbound-widgets/src/lib.rs`

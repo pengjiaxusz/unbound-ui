@@ -12,6 +12,8 @@
 - 主链路：`PlatformWindow` 事件 -> `AppEvent` -> `Application::reduce` [同步状态归约] -> `UiWorld` 标脏 -> `LayoutEngine::solve_boundaries` -> `SceneCollector` 发射图元 -> `diff` 局部补丁 / 全量上传 -> `Renderer::render` [GPU 剔除+64位基数排序+MDI] -> 呈现
 - 静止态调度：无输入事件、无活跃 `Spring` 动画、无异步资源就绪时挂起帧渲染，CPU/GPU 零空转
 - 并发：主线程单线程驱动 `UiWorld`/`LayoutEngine`/`SceneCollector`；资源解码与着色器异步任务通过有界队列回传主线程
+- 跨线程唤醒：`AppContext::event_sender` -> `AppEventSender{ Sender<AppEvent>, Option<Arc<dyn AppWaker>> }` -> `send` / `send_custom` 入队后立即 `wake()` -> 下一帧 `poll_async` 投递；新增 `AppEvent::{UiScaleChanged, Custom}` -> [必须] 新增变体须同步所有 `Application::reduce` 穷尽 match（`apps/showcase`、`examples/*`、`tests/*`），否则 E0004 -> [守卫] `just check`
+- UI 缩放与 OSD：`AppContext::{ui_scale, scale_osd_remaining}` 经 `set_ui_scale` / `step_ui_scale` 吸附 `unbound_theme::presets::CANONICAL_SCALE_STEPS`（7 档 `0.75..2.0`）并激活 1.5s OSD；`I18nBundle::format` 兼容 `{name}` 与 `{{name}}`，`t_ns` 按 `命名空间:键` / `命名空间.键` 回退，`key_count` 供词条审计
 - 上传契约：`SceneUpload` 的 `transforms`/`clips`/`payloads` 均为全局数组；空 `transforms` 由 `Renderer::prepare_upload` 补 identity；图集更新整帧一次批量上传
 
 ## 取舍（禁止重构）

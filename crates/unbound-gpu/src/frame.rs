@@ -1668,7 +1668,7 @@ impl Renderer {
     /// 且纹理保持 `SHADER_READ_ONLY_OPTIMAL` 布局。
     ///
     /// # Errors
-    /// 16 个外部槽位已满时返回 [`GpuError::InvalidArgument`]。
+    /// 256 个外部槽位已满时返回 [`GpuError::InvalidArgument`]。
     pub fn register_external_texture(
         &mut self,
         view: vk::ImageView,
@@ -1707,6 +1707,36 @@ impl Renderer {
     #[must_use]
     pub const fn external_texture_count(&self) -> u32 {
         self.external_slots.used()
+    }
+
+    /// 将指定视口子矩形（`x, y, width, height`）内的离屏颜色缓冲像素回读为紧凑 BGRA8 字节数组。
+    ///
+    /// 供 `chahu-render-debugger` 的 `读取原生视口交换链区域诊断` 与像素拾取器（Pixel Picker）调用。
+    pub fn read_region_pixels(
+        &mut self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, GpuError> {
+        let full = self.read_pixels()?;
+        let target_w = self.target.width.max(1);
+        let target_h = self.target.height.max(1);
+        let clamped_w = width.min(target_w.saturating_sub(x));
+        let clamped_h = height.min(target_h.saturating_sub(y));
+        if clamped_w == 0 || clamped_h == 0 {
+            return Ok(Vec::new());
+        }
+        let mut region = Vec::with_capacity((clamped_w * clamped_h * 4) as usize);
+        for row in 0..clamped_h {
+            let src_y = (y + row) as usize;
+            let start = (src_y * target_w as usize + x as usize) * 4;
+            let end = start + (clamped_w as usize) * 4;
+            if end <= full.len() {
+                region.extend_from_slice(&full[start..end]);
+            }
+        }
+        Ok(region)
     }
 
     /// 等待上一次使用当前帧槽位的帧退役。

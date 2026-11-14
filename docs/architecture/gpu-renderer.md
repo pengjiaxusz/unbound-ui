@@ -15,7 +15,7 @@
 - 扩展协商与 Win10 兼容过滤：`Gpu::new` 从设备扩展反推实例依赖链（`VK_KHR_swapchain` -> `VK_KHR_surface`；`VK_EXT_swapchain_maintenance1` -> `VK_EXT_surface_maintenance1` -> `VK_KHR_get_surface_capabilities2` -> `VK_KHR_surface`），并通过 `filter_instance_extensions` 对照 `vkEnumerateInstanceExtensionProperties` 过滤掉当前加载器不支持的可选实例扩展；随后通过 `resolve_device_extensions` 对照物理设备扩展列表与已启用实例扩展，确保仅在实例已启用 `VK_EXT_surface_maintenance1` 时才启用 `VK_EXT_swapchain_maintenance1`，且仅在设备同时支持 `VK_KHR_present_wait` 与 `VK_KHR_present_id`（且对应特性位均为 `VK_TRUE`）时才启用并挂载其 `pNext` 结构体 -> [位置] `crates/unbound-gpu/src/device.rs::{filter_instance_extensions, resolve_device_extensions}`
 - 初始化错误诊断：`Gpu::new_inner` 逐阶段记录 `GpuInitDiagnostics`（加载器版本、请求/启用/跳过的实例与设备扩展、选中的 GPU 详情与淘汰原因），失败时可通过 `GpuError::diagnostic_report()` 输出完整的结构化排障报告 -> [位置] `crates/unbound-gpu/src/device.rs::GpuError::diagnostic_report`
 - 必需特性：`shaderDemoteToHelperInvocation`（1.3 核心 / 1.2 `VK_EXT_shader_demote_to_helper_invocation`）；`glslc --target-env=vulkan1.3` 把 `discard` 编译为 `OpDemoteToHelperInvocation`，缺特性触发 `VUID-VkShaderModuleCreateInfo-pCode-08740`
-- 图集容量：RGBA 图集钳制 48 层（48 内部槽 + 16 外部纹理 = 64 绑定槽），R8 保留 64 层 -> [位置] `crates/unbound-gpu/src/atlas.rs::AtlasSet::new`
+- 图集容量：RGBA 描述符数组 304 槽（`0..48` 内部图集页 + `48..304` 外部共享纹理），R8 保留 64 层；`atlas_layer_counts` 仍把 RGBA 图集钳制 48 层 -> [位置] `crates/unbound-gpu/src/pipeline.rs::MAX_RGBA_BINDLESS_SLOTS`、`crates/unbound-gpu/src/atlas.rs::atlas_layer_counts`
 
 ## 取舍（禁止重构）
 - [代价] 使用 Buffer Device Address (BDA) + Bindless 描述符数组，禁用传统每图元描述符集绑定 -> [原因] 实现单次 MDI 绘制 10 万图元与零描述符切换开销 -> [位置] `crates/unbound-gpu/src/data.rs::FramePushConstants`
@@ -35,3 +35,4 @@
 * **外部显存句柄导入（`unbound_gpu::inspector`）**：通过 `ExternalMemoryHandleKind`（支持 `OpaqueWin32`、`D3D11Texture`、`D3D12Resource`）与 `ExternalImageDesc` 校验并封装跨进程/跨 API 零拷贝共享纹理导入协议。
 * **256 槽扩展 Bindless 分配器（`ExtendedExternalSlots`）**：采用 4×64 位无堆分配位图，在 `O(1)` 时间内分配与回收多达 256 个外部纹理槽位，满足 `dunting` 大规模资产缩略图与 `chahu-render-debugger` 多 RenderTarget 同屏检视需求。
 * **2D 纹理通道检视器与 3D 视口轨道相机**：`TextureInspectorParams` 提供 `ChannelMask`（`Rgba`/`Rgb`/`Red`/`Green`/`Blue`/`Alpha`/`Luminance`）、曝光（EV）、Gamma、Mip 层级与值域归一化计算；`ViewportCamera3D` 与 `RenderGraph` 的 `PassKind::CustomViewport` / `PassKind::TextureInspect` 支撑内嵌 3D 网格预览与 RT 单通道分析。
+* **扩容接线落地**：`MAX_RGBA_BINDLESS_SLOTS = 304`（48 内部 + 256 外部）贯通 descriptor layout(binding 1)、pool 尺寸、`rgba_infos` 占位与 `bind_external_texture` 越界校验；`ExternalTextureSlots` 委托 `ExtendedExternalSlots::new(48)`；新增 `inspector::{ExternalMemoryImporter, ImportedExternalTexture, CustomViewportPass}`（句柄类型映射、导入描述符校验、UI 主 Pass 录制钩子）与 `Renderer::read_region_pixels`（视口子矩形 BGRA8 回读） -> [守卫] `crates/unbound-gpu/src/pipeline.rs::tests::external_slots_never_touch_the_atlas_pages`

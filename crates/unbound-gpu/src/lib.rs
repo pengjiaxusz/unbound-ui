@@ -70,6 +70,10 @@ pub use timing::{FrameTiming, TimestampScope};
 pub use tlsf::{AllocError, Tlsf, TlsfStats, MIN_BLOCK};
 
 pub use inspector::{
-    ChannelMask, ExtendedExternalSlots, ExternalImageDesc, ExternalMemoryHandleKind,
+    ChannelMask, CustomViewportPass, ExtendedExternalSlots, ExternalImageDesc,
+    ExternalMemoryHandleKind, ExternalMemoryImporter, ImportedExternalTexture,
     TextureInspectorParams, ViewportCamera3D, ViewportRenderPassDesc, EXTENDED_EXTERNAL_SLOTS,
+};
+pub use pipeline::{
+    EXTERNAL_TEXTURE_BASE, EXTERNAL_TEXTURE_SLOTS, MAX_ATLAS_LAYERS, MAX_RGBA_BINDLESS_SLOTS,
 };

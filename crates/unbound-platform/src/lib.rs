@@ -40,7 +40,8 @@ pub use clipboard::{
     ClipboardError, ClipboardProvider, MemoryClipboard, SystemClipboard, MAX_CLIPBOARD_BYTES,
 };
 pub use dialogs::{
-    open_file, open_file_async, open_files, save_file, save_file_async, FileDialogConfig,
+    open_file, open_file_async, open_files, pick_folder, pick_folder_async, save_file,
+    save_file_async, set_mock_dialog_path, FileDialogConfig,
 };
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
 pub use pacing::{
@@ -51,7 +52,10 @@ pub use tray::{
     set_taskbar_progress, set_tray_icon, show_tray_balloon, TaskbarProgressState,
     TrayNotificationSeverity,
 };
-pub use win32_frame::{install_custom_frame, set_window_dark_mode, FrameHitMetrics};
+pub use win32_frame::{
+    install_custom_frame, set_window_backdrop, set_window_dark_mode, FrameHitMetrics,
+    WindowBackdropMaterial,
+};
 pub use win32_window::{
     CursorIcon, PhysicalPosition, PhysicalSize, ResizeDirection, Window, WindowId as NativeWindowId,
 };

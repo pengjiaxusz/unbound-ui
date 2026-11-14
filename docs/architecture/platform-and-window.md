@@ -20,6 +20,9 @@
 - 呈现刷新率：`Window::refresh_rate_hz()` 经 `GetDC` / `GetDeviceCaps(VREFRESH)` 读取窗口所在显示器刷新率，替代 winit 的 `current_monitor()`；驱动上报无效值时由调用方回退 60 Hz，用于判断是否允许撕裂
 - 帧同步：acquire 前 `Renderer::wait_for_previous_frame()`（在途帧信号量槽位）；交换链重建后按 `swapchain.extent()` 同步深度附件；`recover_gpu` 按 swapchain -> surface -> renderer 显式 `destroy()`
 - 主题交接：宿主持有 `ThemeState`，每帧比对 `ctx.theme` 并 `write_theme_lut`；设备重建后清空标记强制重写
+- DWM 背景材质与失焦锁定：`win32_frame::WindowBackdropMaterial`（System/Mica/Tabbed/Acrylic/None -> `DWMWA_SYSTEMBACKDROP_TYPE = 38`）经 `set_window_backdrop` 写入；`FrameHitMetrics::lock_mica_active` 在 `WM_NCACTIVATE` 强制 `wParam = 1`，防止失焦时云母/亚克力退化为纯色
+- 覆盖层穿透：`FrameHitMetrics::pass_through_policy` 在 `WM_NCHITTEST` 步骤 6（窗口按钮/边缘缩放判定之后）按 `HitTestPassThroughPolicy::evaluate` 返回 `HTTRANSPARENT(-1)` -> [禁止] 提前应用穿透会使右上角按钮与八方向缩放失效 -> [守卫] `crates/unbound-platform/src/win32_frame.rs::custom_frame_subclass_proc`
+- 目录对话框与 E2E 替身：`dialogs::{pick_folder, pick_folder_async, set_mock_dialog_path}` 支持目录选择；`open_file`/`save_file`/`pick_folder` 仅在显式注入或 `CHAHU_E2E_DIALOG_PATH` 非空时短路返回，否则仍走原生系统对话框
 
 ## 取舍（禁止重构）
 - [代价] Windows 10/11 无边框可缩放窗口保留 `WS_THICKFRAME` 并在 `WM_NCCALCSIZE` 中返回 `0`（最大化时钳制至 `rcWork`） -> [原因] 同时兼顾全客户区自绘外观、系统级八方向边缘拖拽调整大小、Snap Layouts 贴靠与 Aero Snap -> [位置] `crates/unbound-platform/src/backend.rs`

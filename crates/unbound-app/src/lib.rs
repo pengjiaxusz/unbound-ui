@@ -483,6 +483,44 @@ pub enum AppEvent {
     FileDrop(Vec<std::path::PathBuf>),
     /// 系统文件拖拽离开窗口且未放下。
     FileHoverCancelled,
+    /// 全局 UI 逻辑缩放比变更（对齐 `CANONICAL_SCALE_STEPS` 七档缩放）。
+    UiScaleChanged { scale: f32 },
+    /// 宿主后台线程或 Tokio 异步任务投递的自定义事件。
+    Custom { id: u64, payload: String },
+}
+
+/// 跨线程事件投递句柄：供 Tokio 异步运行时、IPC 监听线程或后台作业随时向 UI 线程推送 [`AppEvent`] 并立即唤醒消息循环。
+#[derive(Clone)]
+pub struct AppEventSender {
+    sender: Sender<AppEvent>,
+    waker: Option<Arc<dyn AppWaker>>,
+}
+
+impl core::fmt::Debug for AppEventSender {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AppEventSender").finish_non_exhaustive()
+    }
+}
+
+impl AppEventSender {
+    /// 发送任意 [`AppEvent`] 并唤醒窗口事件循环。
+    pub fn send(&self, event: AppEvent) -> bool {
+        let ok = self.sender.send(event).is_ok();
+        if ok {
+            if let Some(waker) = &self.waker {
+                waker.wake();
+            }
+        }
+        ok
+    }
+
+    /// 发送带数字标识与负载字符串的 [`AppEvent::Custom`] 事件。
+    pub fn send_custom(&self, id: u64, payload: impl Into<String>) -> bool {
+        self.send(AppEvent::Custom {
+            id,
+            payload: payload.into(),
+        })
+    }
 }
 
 /// 面向 `AppContext` 的平台无关剪贴板接口。
@@ -525,6 +563,10 @@ pub struct AppContext {
     pub theme: ThemeKind,
     /// 当前原生窗口是否处于最大化状态（由窗口运行器自动同步）。
     pub window_maximized: bool,
+    /// 全局 7 档 UI 逻辑缩放因子（默认 `1.0`，范围 `0.75..=2.0`）。
+    pub ui_scale: f32,
+    /// 缩放 OSD 浮层剩余显示秒数（`> 0.0` 时在右上角渲染当前缩放百分比胶囊）。
+    pub scale_osd_remaining: f32,
     /// 当前聚焦节点，与焦点管理器保持同步。
     pub focused: Option<u64>,
     /// 是否应绘制焦点环。
@@ -585,6 +627,8 @@ impl AppContext {
             viewport,
             theme: ThemeKind::Dark,
             window_maximized: false,
+            ui_scale: 1.0,
+            scale_osd_remaining: 0.0,
             focused: None,
             focus_visible: false,
             hovered: None,
@@ -696,6 +740,31 @@ impl AppContext {
     /// 结果将在下一次 [`AppRuntime::poll_async`]（每帧开头自动调用）中投递；
     /// 在此期间 [`AppWaker`] 会唤醒休眠的事件循环。
     ///
+    /// 获取可跨线程克隆的事件发送器（供外部 Tokio 任务或 `LauncherEventHub` 桥接使用）。
+    #[must_use]
+    pub fn event_sender(&self) -> Option<AppEventSender> {
+        self.async_sender.as_ref().map(|sender| AppEventSender {
+            sender: sender.clone(),
+            waker: self.waker.clone(),
+        })
+    }
+
+    /// 设置全局 UI 缩放比例（自动吸附到 `CANONICAL_SCALE_STEPS` 并激活 1.5 秒缩放 OSD 提示）。
+    pub fn set_ui_scale(&mut self, scale: f32) -> f32 {
+        let snapped = unbound_theme::presets::snap_ui_scale(scale);
+        self.ui_scale = snapped;
+        self.scale_osd_remaining = 1.5;
+        snapped
+    }
+
+    /// 按档位步进全局 UI 缩放比例（`delta_steps = 1` 放大一档，`-1` 缩小一档）。
+    pub fn step_ui_scale(&mut self, delta_steps: i32) -> f32 {
+        let next = unbound_theme::presets::step_ui_scale(self.ui_scale, delta_steps);
+        self.ui_scale = next;
+        self.scale_osd_remaining = 1.5;
+        next
+    }
+
     pub fn spawn(&self, task: impl FnOnce() -> AppEvent + Send + 'static) {
         let Some(sender) = self.async_sender.clone() else {
             return;

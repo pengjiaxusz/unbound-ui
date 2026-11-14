@@ -16,6 +16,36 @@ use std::sync::Arc;
 
 pub use unbound_math::Rect;
 
+/// Windows 11 DWM 窗口背景材质（对齐 `chahu-render-debugger` 的 5 档材质枚举）。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WindowBackdropMaterial {
+    /// 跟随系统默认策略（`DWMSBT_AUTO`）。
+    #[default]
+    System,
+    /// 标准云母材质（`DWMSBT_MAINWINDOW`）。
+    Mica,
+    /// 高浓度云母标签页材质（`DWMSBT_TABBEDWINDOW`）。
+    Tabbed,
+    /// 亚克力毛玻璃材质（`DWMSBT_TRANSIENTWINDOW`）。
+    Acrylic,
+    /// 禁用背景材质，回退至纯色不透明背景（`DWMSBT_NONE`）。
+    None,
+}
+
+impl WindowBackdropMaterial {
+    /// 转换为 Win32 `DWM_SYSTEMBACKDROP_TYPE` 整数常量。
+    #[must_use]
+    pub const fn dwm_backdrop_type_raw(self) -> i32 {
+        match self {
+            Self::System => 0,  // DWMSBT_AUTO
+            Self::None => 1,    // DWMSBT_NONE
+            Self::Mica => 2,    // DWMSBT_MAINWINDOW
+            Self::Acrylic => 3, // DWMSBT_TRANSIENTWINDOW
+            Self::Tabbed => 4,  // DWMSBT_TABBEDWINDOW
+        }
+    }
+}
+
 /// 用于自定义标题栏与窗口按钮命中测试的原子指标。
 #[derive(Debug, Default)]
 pub struct FrameHitMetrics {
@@ -40,6 +70,11 @@ pub struct FrameHitMetrics {
     pub scale_permille: AtomicU32,
     /// 自定义边框钩子是否处于激活状态。
     pub active: AtomicBool,
+    /// 是否锁定 `WM_NCACTIVATE` 的 `wParam = TRUE`，防止窗口失焦时 Win11 云母/亚克力材质退化为纯色。
+    pub lock_mica_active: AtomicBool,
+    /// 透明覆盖层模式下的动态鼠标穿透策略（为 `Some` 时非交互区返回 `HTTRANSPARENT`）。
+    pub pass_through_policy:
+        std::sync::RwLock<Option<crate::overlay_host::HitTestPassThroughPolicy>>,
 }
 
 impl FrameHitMetrics {
@@ -48,7 +83,24 @@ impl FrameHitMetrics {
         Self {
             scale_permille: AtomicU32::new(1000),
             active: AtomicBool::new(true),
+            lock_mica_active: AtomicBool::new(false),
+            pass_through_policy: std::sync::RwLock::new(None),
             ..Default::default()
+        }
+    }
+
+    /// 设置是否在窗口失焦时锁定云母/亚克力激活态（拦截 `WM_NCACTIVATE` 强制 `wParam = 1`）。
+    pub fn set_lock_mica_active(&self, lock: bool) {
+        self.lock_mica_active.store(lock, Ordering::Release);
+    }
+
+    /// 更新覆盖层窗口的动态鼠标穿透策略。
+    pub fn set_pass_through_policy(
+        &self,
+        policy: Option<crate::overlay_host::HitTestPassThroughPolicy>,
+    ) {
+        if let Ok(mut guard) = self.pass_through_policy.write() {
+            *guard = policy;
         }
     }
 
@@ -318,8 +370,26 @@ mod win32 {
                         return LRESULT(HTCAPTION as isize);
                     }
 
-                    // 6. 其余情况交由常规客户区交互处理。
+                    // 6. 若配置了透明覆盖层穿透策略，则对非交互空白区返回 HTTRANSPARENT (-1)。
+                    if let Ok(guard) = metrics.pass_through_policy.read() {
+                        if let Some(policy) = guard.as_ref() {
+                            let pt_logical = unbound_math::Vec2::new(logical_x as f32, logical_y as f32);
+                            if policy.evaluate(pt_logical)
+                                == crate::overlay_host::OverlayHitDisposition::PassThrough
+                            {
+                                return LRESULT(-1); // HTTRANSPARENT
+                            }
+                        }
+                    }
+
+                    // 7. 其余情况交由常规客户区交互处理。
                     LRESULT(HTCLIENT as isize)
+                }
+                0x0086 /* WM_NCACTIVATE */ => {
+                    if metrics.lock_mica_active.load(Ordering::Acquire) {
+                        return DefSubclassProc(hwnd, msg, WPARAM(1), LPARAM(-1));
+                    }
+                    DefSubclassProc(hwnd, msg, wparam, lparam)
                 }
                 WM_NCDESTROY => {
                     let _ =
@@ -449,6 +519,33 @@ pub fn set_window_dark_mode(hwnd: isize, dark: bool) {
     #[cfg(not(windows))]
     {
         let _ = (hwnd, dark);
+    }
+}
+
+/// 设置 Windows 11 DWM 系统背景材质（`DWMWA_SYSTEMBACKDROP_TYPE = 38`）。
+pub fn set_window_backdrop(hwnd: isize, material: WindowBackdropMaterial) -> bool {
+    #[cfg(windows)]
+    {
+        use ::windows::Win32::Foundation::HWND;
+        use ::windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
+        use core::ffi::c_void;
+        const DWMWA_SYSTEMBACKDROP_TYPE_ID: i32 = 38;
+        let hwnd_ptr = HWND(hwnd as *mut c_void);
+        let val: i32 = material.dwm_backdrop_type_raw();
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd_ptr,
+                DWMWINDOWATTRIBUTE(DWMWA_SYSTEMBACKDROP_TYPE_ID),
+                (&raw const val).cast::<c_void>(),
+                core::mem::size_of_val(&val) as u32,
+            )
+            .is_ok()
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (hwnd, material);
+        false
     }
 }
 

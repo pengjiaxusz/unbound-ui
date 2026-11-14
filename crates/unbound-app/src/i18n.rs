@@ -102,15 +102,41 @@ impl I18nBundle {
         key
     }
 
-    /// 查找 `key` 并使用 `args` 替换 `{name}` 占位符。
+    /// 查找 `key` 并使用 `args` 替换 `{name}` 或 `{{name}}`（i18next 兼容）占位符。
     #[must_use]
     pub fn format(&self, key: &str, args: &[(&str, &str)]) -> String {
         let mut out = self.t(key).to_owned();
         for &(name, value) in args {
-            let token = format!("{{{name}}}");
-            out = out.replace(&token, value);
+            let double_token = format!("{{{{{name}}}}}");
+            out = out.replace(&double_token, value);
+            let single_token = format!("{{{name}}}");
+            out = out.replace(&single_token, value);
         }
         out
+    }
+
+    /// 按命名空间与键路径查找词条（例如 `t_ns("settings", "appearance.theme")` 等价于查找 `"settings:appearance.theme"` 或 `"settings.appearance.theme"`）。
+    #[must_use]
+    pub fn t_ns<'a>(&'a self, namespace: &str, key: &'a str) -> &'a str {
+        let colon_key = format!("{namespace}:{key}");
+        if let Some(val) = self
+            .tables
+            .get(&self.active)
+            .and_then(|m| m.get(&colon_key))
+        {
+            return val.as_str();
+        }
+        let dot_key = format!("{namespace}.{key}");
+        if let Some(val) = self.tables.get(&self.active).and_then(|m| m.get(&dot_key)) {
+            return val.as_str();
+        }
+        self.t(key)
+    }
+
+    /// 返回指定区域已注册的所有键数量（供 `xtask audit` 校验多语言键完整性）。
+    #[must_use]
+    pub fn key_count(&self, locale: &str) -> usize {
+        self.tables.get(locale).map_or(0, FxHashMap::len)
     }
 
     /// 按区域习惯的千分位与小数点分隔符格式化数字。

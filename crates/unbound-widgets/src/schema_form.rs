@@ -13,6 +13,18 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const LAYER: u8 = 1;
 
+/// 字段值的继承与覆写来源状态（供 `chahu-render-debugger` 启动预设配置继承链展示徽章）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FieldInheritanceState {
+    /// 使用 Schema 默认值。
+    #[default]
+    DefaultValue,
+    /// 继承自父级预设（携带父预设名称）。
+    InheritedFrom(String),
+    /// 当前预设显式覆写。
+    Overridden,
+}
+
 /// Schema 字段值类型。
 #[derive(Clone, Debug, PartialEq)]
 pub enum SchemaValue {

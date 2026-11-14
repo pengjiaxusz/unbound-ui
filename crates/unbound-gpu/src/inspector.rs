@@ -348,6 +348,81 @@ pub struct ViewportRenderPassDesc {
     pub show_grid: bool,
 }
 
+/// 已导入的外部共享纹理句柄包（持有 `VkImage`、`VkDeviceMemory`、`VkImageView` 与分配的 Bindless 槽位）。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ImportedExternalTexture {
+    /// 分配的 Bindless 纹理槽位（`48..304`）。
+    pub bindless_slot: u32,
+    /// 导入的 Vulkan 图像句柄。
+    pub image: ash::vk::Image,
+    /// 导入的外部设备内存句柄。
+    pub memory: ash::vk::DeviceMemory,
+    /// 供着色器采样的图像视图。
+    pub view: ash::vk::ImageView,
+    /// 像素尺寸 `(width, height)`。
+    pub extent: (u32, u32),
+}
+
+/// 跨进程 / 跨 API（D3D11/D3D12/Vulkan）Win32 NT 显存句柄零拷贝导入辅助器。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ExternalMemoryImporter;
+
+impl ExternalMemoryImporter {
+    /// 将 [`ExternalMemoryHandleKind`] 映射为 Vulkan `VkExternalMemoryHandleTypeFlags`。
+    #[must_use]
+    pub const fn vk_handle_type(
+        kind: ExternalMemoryHandleKind,
+    ) -> ash::vk::ExternalMemoryHandleTypeFlags {
+        match kind {
+            ExternalMemoryHandleKind::OpaqueWin32 => {
+                ash::vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32
+            }
+            ExternalMemoryHandleKind::OpaqueWin32Kmt => {
+                ash::vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT
+            }
+            ExternalMemoryHandleKind::D3D11Texture => {
+                ash::vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE
+            }
+            ExternalMemoryHandleKind::D3D11TextureKmt => {
+                ash::vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE_KMT
+            }
+            ExternalMemoryHandleKind::D3D12Resource => {
+                ash::vk::ExternalMemoryHandleTypeFlags::D3D12_RESOURCE
+            }
+            ExternalMemoryHandleKind::D3D12Heap => {
+                ash::vk::ExternalMemoryHandleTypeFlags::D3D12_HEAP
+            }
+        }
+    }
+
+    /// 校验外部图像描述符并返回对应的 Vulkan 格式与句柄标志。
+    pub fn prepare_import(
+        desc: &ExternalImageDesc,
+    ) -> Result<(ash::vk::Format, ash::vk::ExternalMemoryHandleTypeFlags), &'static str> {
+        desc.validate()?;
+        let format = ash::vk::Format::from_raw(desc.vk_format_raw);
+        let handle_type = Self::vk_handle_type(desc.handle_kind);
+        Ok((format, handle_type))
+    }
+}
+
+/// 嵌入 `unbound-ui` 帧管线的自定义 2D/3D 视口渲染钩子（供 `chahu-render-debugger` 零拷贝注入）。
+pub trait CustomViewportPass: Send + Sync + core::fmt::Debug {
+    /// 视口唯一标识。
+    fn viewport_id(&self) -> u64;
+
+    /// 视口在 UI 窗口中的裁剪矩形（物理像素）。
+    fn viewport_bounds(&self) -> Rect;
+
+    /// 在 UI 主 Pass 合成阶段录制自定义命令（如 2D 纹理通道检视器全屏 Quad 或 3D 网格/线框预览）。
+    fn record_pass(
+        &mut self,
+        device: &ash::Device,
+        cmd: ash::vk::CommandBuffer,
+        target_extent: (u32, u32),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

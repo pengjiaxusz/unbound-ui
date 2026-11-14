@@ -363,8 +363,9 @@ impl core::fmt::Debug for AtlasSet {
 
 /// 按 bindless 描述符数组实际可暴露的槽位钳制图集层数。
 ///
-/// R8 占用全部 [`crate::pipeline::MAX_ATLAS_LAYERS`] 个槽位，而 RGBA 绑定
-/// 末尾的 [`crate::pipeline::EXTERNAL_TEXTURE_SLOTS`] 个槽位留给调用方纹理。
+/// R8 占用全部 [`crate::pipeline::MAX_ATLAS_LAYERS`] 个槽位；RGBA 绑定共
+/// [`crate::pipeline::MAX_RGBA_BINDLESS_SLOTS`] 个槽位，其中 `0..EXTERNAL_TEXTURE_BASE`
+/// 为内部图集页，其余 [`crate::pipeline::EXTERNAL_TEXTURE_SLOTS`] 个留给调用方纹理。
 /// RGBA 图集层数一旦超过 [`crate::pipeline::EXTERNAL_TEXTURE_BASE`] 就无法
 /// 完整绑定：超出范围的页会采样到外部槽位，`Renderer::install_atlases` 也会
 /// 拒绝这种不匹配。在此处钳制可保证所有调用方（它们都请求完整 64 层）

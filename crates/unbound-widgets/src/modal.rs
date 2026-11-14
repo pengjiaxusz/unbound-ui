@@ -30,6 +30,44 @@ pub const MODAL_ACTION_GAP: f32 = 8.0;
 /// 底部栏水平内边距。
 pub const MODAL_FOOTER_PADDING: f32 = 16.0;
 
+/// 标准模态框尺寸档位（对齐 `cha-set` 的 `sm`/`md`/`lg`/`xl`/`full` 五档规格）。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ModalSizePreset {
+    /// 小尺寸弹窗（420 × 280）。
+    Sm,
+    /// 默认中等尺寸弹窗（560 × 380）。
+    #[default]
+    Md,
+    /// 大尺寸弹窗（760 × 520）。
+    Lg,
+    /// 超大尺寸弹窗（960 × 640）。
+    Xl,
+    /// 近全屏工作台弹窗（占视口 92%）。
+    Full,
+}
+
+impl ModalSizePreset {
+    /// 在给定视口内解析居中模态框矩形。
+    #[must_use]
+    pub fn resolve_centered_rect(self, viewport: Rect) -> Rect {
+        let (target_w, target_h) = match self {
+            Self::Sm => (420.0, 280.0),
+            Self::Md => (560.0, 380.0),
+            Self::Lg => (760.0, 520.0),
+            Self::Xl => (960.0, 640.0),
+            Self::Full => (viewport.width() * 0.92, viewport.height() * 0.90),
+        };
+        let w = target_w.min((viewport.width() - 32.0).max(200.0));
+        let h = target_h.min((viewport.height() - 32.0).max(160.0));
+        Rect::new(
+            viewport.origin.x + (viewport.width() - w) * 0.5,
+            viewport.origin.y + (viewport.height() - h) * 0.5,
+            w,
+            h,
+        )
+    }
+}
+
 /// 模态对话框描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModalDesc {

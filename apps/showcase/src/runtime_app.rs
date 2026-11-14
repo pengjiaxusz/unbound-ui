@@ -148,10 +148,16 @@ impl Application for GalleryApp {
             AppEvent::Tick { dt } => {
                 self.tick(dt);
             }
+            AppEvent::UiScaleChanged { scale } => {
+                // 缩放档位由 AppContext 统一吸附并激活 OSD 提示，随后强制重建场景。
+                ctx.set_ui_scale(scale);
+                self.state.bump();
+            }
             AppEvent::Timer { .. }
             | AppEvent::FileHover(_)
             | AppEvent::FileDrop(_)
-            | AppEvent::FileHoverCancelled => {}
+            | AppEvent::FileHoverCancelled
+            | AppEvent::Custom { .. } => {}
         }
 
         if let Some(node) = self.take_focus_request() {

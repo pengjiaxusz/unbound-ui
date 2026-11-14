@@ -200,6 +200,9 @@ mod win32 {
 /// 同步打开单文件选择对话框。
 #[must_use]
 pub fn open_file(config: FileDialogConfig) -> Option<PathBuf> {
+    if let Some(mock) = take_or_peek_mock_path() {
+        return Some(mock);
+    }
     #[cfg(windows)]
     {
         win32::pick_open(&config).into_iter().next()
@@ -230,6 +233,9 @@ pub fn open_files(config: FileDialogConfig) -> Vec<PathBuf> {
 /// 同步打开保存文件对话框。
 #[must_use]
 pub fn save_file(config: FileDialogConfig) -> Option<PathBuf> {
+    if let Some(mock) = take_or_peek_mock_path() {
+        return Some(mock);
+    }
     #[cfg(windows)]
     {
         win32::pick_save(&config)
@@ -259,6 +265,69 @@ pub fn save_file_async<F: FnOnce(Option<PathBuf>) + Send + 'static>(
 ) {
     std::thread::spawn(move || {
         let result = save_file(config);
+        on_complete(result);
+    });
+}
+
+use std::sync::{Mutex, OnceLock};
+
+fn mock_dialog_slot() -> &'static Mutex<Option<PathBuf>> {
+    static MOCK_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    MOCK_PATH.get_or_init(|| Mutex::new(None))
+}
+
+/// 注入或清除供自动化测试 / E2E 验收使用的模拟对话框返回路径。
+///
+/// 当设置了路径或环境变量 `CHAHU_E2E_DIALOG_PATH` 非空时，`open_file`、`save_file` 与
+/// `pick_folder` 将立即返回该路径而不弹出模态系统窗口。
+pub fn set_mock_dialog_path(path: Option<PathBuf>) {
+    if let Ok(mut guard) = mock_dialog_slot().lock() {
+        *guard = path;
+    }
+}
+
+fn take_or_peek_mock_path() -> Option<PathBuf> {
+    if let Ok(guard) = mock_dialog_slot().lock() {
+        if let Some(p) = guard.clone() {
+            return Some(p);
+        }
+    }
+    if let Ok(env_path) = std::env::var("CHAHU_E2E_DIALOG_PATH") {
+        let trimmed = env_path.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+    None
+}
+
+/// 同步打开文件夹选择对话框（优先检查模拟路径，Windows 下回退至目录选择）。
+#[must_use]
+pub fn pick_folder(config: FileDialogConfig) -> Option<PathBuf> {
+    if let Some(mock) = take_or_peek_mock_path() {
+        return Some(mock);
+    }
+    if let Some(dir) = config.initial_dir.clone() {
+        if dir.exists() {
+            return Some(dir);
+        }
+    }
+    open_file(config).map(|p| {
+        if p.is_dir() {
+            p
+        } else {
+            p.parent().map_or(p.clone(), PathBuf::from)
+        }
+    })
+}
+
+/// 在工作线程上运行的非阻塞异步文件夹选择对话框。
+pub fn pick_folder_async<F: FnOnce(Option<PathBuf>) + Send + 'static>(
+    config: FileDialogConfig,
+    on_complete: F,
+) {
+    std::thread::spawn(move || {
+        let result = pick_folder(config);
         on_complete(result);
     });
 }

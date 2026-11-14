@@ -74,6 +74,112 @@ pub struct CodeSpan {
     pub token: SyntaxToken,
 }
 
+/// 着色器与调试器代码高亮语言枚举（服务于 `chahu-render-debugger` 的 Shader 检视器与报文面板）。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CodeLanguage {
+    #[default]
+    Rust,
+    Hlsl,
+    Glsl,
+    Msl,
+    SpirvAsm,
+    Json,
+    Hex,
+}
+
+impl CodeLanguage {
+    /// 该语言的核心关键字表。
+    #[must_use]
+    pub const fn keywords(self) -> &'static [&'static str] {
+        match self {
+            Self::Rust => &[
+                "fn", "let", "mut", "if", "else", "match", "for", "while", "loop", "return",
+                "struct", "enum", "impl", "trait", "pub", "use", "mod", "const", "static", "async",
+                "await", "self", "Self", "where",
+            ],
+            Self::Hlsl => &[
+                "cbuffer",
+                "StructuredBuffer",
+                "RWStructuredBuffer",
+                "Texture2D",
+                "RWTexture2D",
+                "SamplerState",
+                "register",
+                "packoffset",
+                "float4",
+                "float3",
+                "float2",
+                "float4x4",
+                "uint",
+                "int",
+                "half",
+                "return",
+                "if",
+                "else",
+                "for",
+                "while",
+                "numthreads",
+            ],
+            Self::Glsl => &[
+                "layout",
+                "uniform",
+                "buffer",
+                "in",
+                "out",
+                "inout",
+                "flat",
+                "vec2",
+                "vec3",
+                "vec4",
+                "mat4",
+                "sampler2D",
+                "image2D",
+                "void",
+                "return",
+                "if",
+                "else",
+                "for",
+            ],
+            Self::Msl => &[
+                "kernel",
+                "vertex",
+                "fragment",
+                "device",
+                "constant",
+                "threadgroup",
+                "thread",
+                "float2",
+                "float3",
+                "float4",
+                "float4x4",
+                "texture2d",
+                "sampler",
+                "return",
+            ],
+            Self::SpirvAsm => &[
+                "OpCapability",
+                "OpExtension",
+                "OpMemoryModel",
+                "OpEntryPoint",
+                "OpExecutionMode",
+                "OpDecorate",
+                "OpTypeVoid",
+                "OpTypeFloat",
+                "OpTypeVector",
+                "OpTypePointer",
+                "OpFunction",
+                "OpLabel",
+                "OpLoad",
+                "OpStore",
+                "OpReturn",
+                "OpFunctionEnd",
+            ],
+            Self::Json => &["true", "false", "null"],
+            Self::Hex => &[],
+        }
+    }
+}
+
 /// 对单行代码进行词法分类。
 #[must_use]
 pub fn highlight_line(line: &str) -> Vec<CodeSpan> {

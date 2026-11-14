@@ -26,61 +26,62 @@ pub const COLOR_FORMAT: vk::Format = vk::Format::B8G8R8A8_SRGB;
 /// 预 Pass 与 uber Pass 使用的深度格式（反向 Z）。
 pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
-/// 每个绑定暴露的 Bindless 图集图层数。64 层 × 2048² R8 对应 256 MiB 地址空间，
-/// 但图层按需分配，且 `PARTIALLY_BOUND` 使未使用槽位零开销。
+/// 内部 Bindless 图集图层上限（`0..48` 为 RGBA 图集页，`0..64` 为 R8 字形图集页）。
 pub const MAX_ATLAS_LAYERS: u32 = 64;
 
 /// 供外部纹理使用的首个 Bindless RGBA 槽位索引。
 ///
-/// `0..EXTERNAL_TEXTURE_BASE` 为内部图集页；其余 16 个槽位在运行时通过
-/// [`crate::frame::Renderer::register_external_texture`] 注册。
+/// `0..EXTERNAL_TEXTURE_BASE` 为内部图集页；`48..304` 共 256 个扩展外部槽位在运行时通过
+/// [`crate::frame::Renderer::register_external_texture`] 或 [`crate::inspector::ExtendedExternalSlots`] 注册。
 pub const EXTERNAL_TEXTURE_BASE: u32 = 48;
-/// 为外部纹理预留的 Bindless 槽位数量。
-pub const EXTERNAL_TEXTURE_SLOTS: u32 = MAX_ATLAS_LAYERS - EXTERNAL_TEXTURE_BASE;
+/// 为外部纹理预留的扩展 Bindless 槽位数量（256 槽，对齐 `inspector::EXTENDED_EXTERNAL_SLOTS`）。
+pub const EXTERNAL_TEXTURE_SLOTS: u32 = crate::inspector::EXTENDED_EXTERNAL_SLOTS;
+/// RGBA Bindless 描述符数组总容量（48 内部图集层 + 256 外部共享纹理槽 = 304）。
+pub const MAX_RGBA_BINDLESS_SLOTS: u32 = EXTERNAL_TEXTURE_BASE + EXTERNAL_TEXTURE_SLOTS;
 
 /// 外部 Bindless 槽位分配器。
 ///
 /// 与设备对象解耦，使槽位簿记逻辑无需 GPU 即可进行单元测试。
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ExternalTextureSlots {
-    used: u32,
+    inner: crate::inspector::ExtendedExternalSlots,
+}
+
+impl Default for ExternalTextureSlots {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ExternalTextureSlots {
-    /// 分配索引最小的空闲槽位；若 16 个槽位已满则返回 `None`。
-    pub fn allocate(&mut self) -> Option<u32> {
-        for bit in 0..EXTERNAL_TEXTURE_SLOTS {
-            if self.used & (1 << bit) == 0 {
-                self.used |= 1 << bit;
-                return Some(EXTERNAL_TEXTURE_BASE + bit);
-            }
+    /// 创建管理 `48..304` 共 256 个外部纹理槽位的分配器。
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            inner: crate::inspector::ExtendedExternalSlots::new(EXTERNAL_TEXTURE_BASE),
         }
-        None
+    }
+
+    /// 分配索引最小的空闲槽位；若 256 个槽位已满则返回 `None`。
+    pub fn allocate(&mut self) -> Option<u32> {
+        self.inner.allocate()
     }
 
     /// 释放由 [`Self::allocate`] 返回的槽位。若槽位越界或本就空闲则返回 `false`。
     pub fn release(&mut self, slot: u32) -> bool {
-        if !Self::owns(slot) {
-            return false;
-        }
-        let bit = 1 << (slot - EXTERNAL_TEXTURE_BASE);
-        if self.used & bit == 0 {
-            return false;
-        }
-        self.used &= !bit;
-        true
+        self.inner.release(slot)
     }
 
-    /// 判断 `slot` 是否属于外部纹理槽位范围。
+    /// 判断 `slot` 是否属于外部纹理槽位范围（`48..304`）。
     #[must_use]
     pub const fn owns(slot: u32) -> bool {
-        slot >= EXTERNAL_TEXTURE_BASE && slot < MAX_ATLAS_LAYERS
+        slot >= EXTERNAL_TEXTURE_BASE && slot < MAX_RGBA_BINDLESS_SLOTS
     }
 
     /// 当前已预留的外部槽位数量。
     #[must_use]
     pub const fn used(self) -> u32 {
-        self.used.count_ones()
+        self.inner.used()
     }
 }
 
@@ -223,7 +224,7 @@ impl Pipelines {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(1)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(MAX_ATLAS_LAYERS)
+                .descriptor_count(MAX_RGBA_BINDLESS_SLOTS)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(2)
@@ -587,7 +588,7 @@ impl Pipelines {
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(MAX_ATLAS_LAYERS * 2),
+                .descriptor_count(MAX_ATLAS_LAYERS + MAX_RGBA_BINDLESS_SLOTS),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(4),
@@ -664,7 +665,7 @@ impl Pipelines {
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             })
             .collect();
-        let rgba_infos: Vec<vk::DescriptorImageInfo> = (0..MAX_ATLAS_LAYERS)
+        let rgba_infos: Vec<vk::DescriptorImageInfo> = (0..MAX_RGBA_BINDLESS_SLOTS)
             .map(|_| {
                 vk::DescriptorImageInfo::default()
                     .sampler(self.sampler)
@@ -764,7 +765,7 @@ impl Pipelines {
         if !ExternalTextureSlots::owns(slot) {
             return Err(GpuError::InvalidArgument(format!(
                 "bindless slot {slot} is not an external texture slot \
-                 ({EXTERNAL_TEXTURE_BASE}..{MAX_ATLAS_LAYERS})"
+                 ({EXTERNAL_TEXTURE_BASE}..{MAX_RGBA_BINDLESS_SLOTS})"
             )));
         }
         let info = [vk::DescriptorImageInfo::default()
@@ -1005,14 +1006,18 @@ mod tests {
     #[test]
     fn external_slots_never_touch_the_atlas_pages() {
         assert_eq!(
+            EXTERNAL_TEXTURE_SLOTS,
+            crate::inspector::EXTENDED_EXTERNAL_SLOTS
+        );
+        assert_eq!(
             EXTERNAL_TEXTURE_BASE + EXTERNAL_TEXTURE_SLOTS,
-            MAX_ATLAS_LAYERS
+            MAX_RGBA_BINDLESS_SLOTS
         );
         let mut slots = ExternalTextureSlots::default();
         let mut allocated = Vec::new();
         while let Some(slot) = slots.allocate() {
             assert!(slot >= EXTERNAL_TEXTURE_BASE);
-            assert!(slot < MAX_ATLAS_LAYERS);
+            assert!(slot < MAX_RGBA_BINDLESS_SLOTS);
             allocated.push(slot);
         }
         assert_eq!(allocated.len(), EXTERNAL_TEXTURE_SLOTS as usize);
@@ -1023,7 +1028,7 @@ mod tests {
         assert_eq!(slots.used(), EXTERNAL_TEXTURE_SLOTS - 1);
         assert_eq!(slots.allocate(), Some(allocated[3]));
         assert!(!slots.release(EXTERNAL_TEXTURE_BASE - 1));
-        assert!(!slots.release(MAX_ATLAS_LAYERS));
+        assert!(!slots.release(MAX_RGBA_BINDLESS_SLOTS));
     }
 
     #[test]
