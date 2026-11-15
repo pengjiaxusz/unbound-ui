@@ -28,8 +28,8 @@
     Optional JSON configuration file for custom keyword clustering rules.
 
 .EXAMPLE
-    pwsh .agents/skills/subrepo-sync/scripts/show-unapplied-commits.ps1 -SubrepoPath "submodules/cha-set"
-    pwsh .agents/skills/subrepo-sync/scripts/show-unapplied-commits.ps1 -SubrepoPath "submodules/cha-set" -Update
+    pwsh .agents/skills/subrepo-sync/scripts/show-unapplied-commits.ps1 -SubrepoPath "submodules/<name>"
+    pwsh .agents/skills/subrepo-sync/scripts/show-unapplied-commits.ps1 -SubrepoPath "submodules/<name>" -Update
 #>
 
 [CmdletBinding()]

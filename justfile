@@ -6,6 +6,8 @@
 set shell := ["sh", "-uc"]
 [windows]
 set shell := ["pwsh", "-NoProfile", "-Command"]
+# 允许项目专属区用同名 recipe 覆盖框架配方（例如 `test` 前需要先产出某个产物），避免去改受管的 import 文件。
+set allow-duplicate-recipes := true
 
 
 import 'just/bque.just'
@@ -47,3 +49,17 @@ example NAME *ARGS:
 # 运行所有示例程序的无头自检套件
 test-examples:
     just q-run cargo test -p unbound-app --examples
+
+# app-guest 的 host_roundtrip 集成测试要加载真实 cdylib，而 `cargo test`
+# 不保证在 target/<profile> 下生成该产物，故先显式构建一次，避免干净环境硬失败。
+# 覆盖机制见托管块的 allow-duplicate-recipes。
+
+# 覆盖框架 test：先产出 app-guest cdylib 再跑测试
+[windows]
+test *ARGS:
+    @bque run -- cargo build -p app-guest
+    @bque run -- cargo test --workspace --all-features {{ARGS}}
+[unix]
+test *ARGS:
+    cargo build -p app-guest
+    cargo test --workspace --all-features {{ARGS}}
