@@ -2,17 +2,22 @@
 //! - 离散指针事件沿 `UiWorld` 逻辑父链冒泡与 `Propagation::Stop` 截断
 //! - 内置有状态控件消费 `PointerDown` 后自动阻止继续冒泡
 //! - Portal / 模态边界阻断事件渗透至背景页面
+//! - 高 `z_index` 的普通容器不再被误判为浮层边界
+//! - 多部件控件的合成子命中键经归属表接回逻辑父链
 //! - 键盘焦点链优先于 `OverlayManager::handle_escape` 冒泡，并通过 `ctx.event_target()` 暴露当前祖先
-//! - `Inspector` 事件轨迹追踪
+//! - `Inspector` 对指针 / 键盘 / 滚轮事件统一记录轨迹
 
 use unbound_abi::{Dim, RawNodeDesc};
 use unbound_app::{
     AppContext, AppEvent, AppKey, AppRuntime, Application, DirtyFlags, EventOutcome, Modifiers,
     ViewBuilder,
 };
-use unbound_input::PointerButton;
+use unbound_input::{HitRegion, PointerButton};
 use unbound_math::{Rect, Vec2};
-use unbound_widgets::{ButtonDesc, ButtonVariant, CheckboxDesc, OverlayEntry, OverlayKind};
+use unbound_widgets::ergonomics::{TextCtx, UiWidget};
+use unbound_widgets::{
+    ButtonDesc, ButtonVariant, CheckboxDesc, ControlState, OverlayEntry, OverlayKind, WidgetOutput,
+};
 
 const BG_PAGE: u64 = 100;
 const CARD: u64 = 101;
@@ -20,12 +25,47 @@ const INNER_BTN: u64 = 102;
 const PORTAL_ROOT: u64 = 200;
 const PORTAL_PANEL: u64 = 201;
 const PORTAL_INPUT: u64 = 202;
+const SUB_WIDGET: u64 = 300;
+const SUB_HIT: u64 = SUB_WIDGET ^ (1 << 63);
+
+/// 发射一条与自身位置重叠、但使用合成键的子命中区域，模拟分页项 / 表格行 /
+/// 滚动条滑块等多部件控件的 `sub_hits`。这类键不在世界树中，必须靠归属表接回父链。
+#[derive(Clone, Debug)]
+struct SubHitWidget;
+
+impl UiWidget for SubHitWidget {
+    type State = ();
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(200.0, 60.0)
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        _control: ControlState,
+        _state: &Self::State,
+        _text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut out = WidgetOutput {
+            hit: Some(HitRegion::ui(node, 1, rect)),
+            ..Default::default()
+        };
+        let child = Rect::new(rect.origin.x, rect.origin.y, 80.0, rect.size.y);
+        out.sub_hits.push(HitRegion::ui(node ^ (1 << 63), 2, child));
+        out
+    }
+}
 
 #[derive(Default)]
 struct BubbleProbe {
     stop_at_inner_click: bool,
     stop_escape_in_input: bool,
     show_portal: bool,
+    /// 是否把浮层根声明为事件边界；为 false 时仅抬高 `z_index`。
+    portal_is_boundary: bool,
+    show_sub_hit: bool,
     clicks: Vec<u64>,
     pointer_downs: Vec<Option<u64>>,
     wheels: Vec<Option<u64>>,
@@ -99,30 +139,42 @@ impl Application for BubbleApp {
                     },
                 );
 
-                if state.show_portal {
-                    page.container(
-                        PORTAL_ROOT,
+                if state.show_sub_hit {
+                    page.add_with_layout(
+                        SUB_WIDGET,
                         RawNodeDesc::container()
-                            .absolute()
-                            .size(600.0, 400.0)
-                            .z_index(1200),
-                        |portal| {
-                            portal.container(
-                                PORTAL_PANEL,
-                                RawNodeDesc::container()
-                                    .column()
-                                    .width(Dim::px(240.0))
-                                    .height(Dim::px(140.0)),
-                                |panel| {
-                                    panel.button(
-                                        PORTAL_INPUT,
-                                        ButtonDesc::label("ModalAction")
-                                            .variant(ButtonVariant::Secondary),
-                                    );
-                                },
-                            );
-                        },
+                            .width(Dim::px(200.0))
+                            .height(Dim::px(60.0)),
+                        SubHitWidget,
                     );
+                }
+
+                if state.show_portal {
+                    let portal_desc = RawNodeDesc::container()
+                        .absolute()
+                        .size(600.0, 400.0)
+                        .z_index(1200);
+                    let portal_desc = if state.portal_is_boundary {
+                        portal_desc.portal_root()
+                    } else {
+                        portal_desc
+                    };
+                    page.container(PORTAL_ROOT, portal_desc, |portal| {
+                        portal.container(
+                            PORTAL_PANEL,
+                            RawNodeDesc::container()
+                                .column()
+                                .width(Dim::px(240.0))
+                                .height(Dim::px(140.0)),
+                            |panel| {
+                                panel.button(
+                                    PORTAL_INPUT,
+                                    ButtonDesc::label("ModalAction")
+                                        .variant(ButtonVariant::Secondary),
+                                );
+                            },
+                        );
+                    });
                 }
             },
         );
@@ -157,6 +209,7 @@ fn click_bubbles_along_logical_parents_and_respects_stop() {
 fn portal_boundary_blocks_bubbling_to_background_page() {
     let mut rt = AppRuntime::new(BubbleApp, Vec2::new(600.0, 400.0));
     rt.state_mut().show_portal = true;
+    rt.state_mut().portal_is_boundary = true;
     rt.invalidate();
     rt.frame(0.0);
 
@@ -165,7 +218,7 @@ fn portal_boundary_blocks_bubbling_to_background_page() {
     rt.pointer_down(pos, PointerButton::Left);
     rt.pointer_up(pos, PointerButton::Left);
 
-    // Portal 内按钮未显式 Stop 时，最多冒泡至 PORTAL_PANEL -> PORTAL_ROOT，绝不渗透到 BG_PAGE。
+    // 浮层内按钮未显式 Stop 时，最多冒泡至 PORTAL_PANEL -> PORTAL_ROOT，绝不渗透到 BG_PAGE。
     assert_eq!(
         rt.state().clicks,
         vec![PORTAL_INPUT, PORTAL_PANEL, PORTAL_ROOT]
@@ -179,9 +232,60 @@ fn portal_boundary_blocks_bubbling_to_background_page() {
 }
 
 #[test]
+fn high_z_container_without_portal_flag_does_not_block_bubbling() {
+    let mut rt = AppRuntime::new(BubbleApp, Vec2::new(600.0, 400.0));
+    rt.state_mut().show_portal = true;
+    // 只把绘制层级抬到 1200，不声明浮层根：事件边界与 z_index 解耦后，
+    // 冒泡必须继续抵达背景页面，而不是被魔数阈值提前截断。
+    rt.invalidate();
+    rt.frame(0.0);
+
+    let pos = Vec2::new(32.0, 32.0);
+    rt.pointer_move(pos);
+    rt.pointer_down(pos, PointerButton::Left);
+    rt.pointer_up(pos, PointerButton::Left);
+
+    assert_eq!(
+        rt.state().clicks,
+        vec![PORTAL_INPUT, PORTAL_PANEL, PORTAL_ROOT, BG_PAGE]
+    );
+}
+
+#[test]
+fn sub_hit_key_bubbles_through_owner_and_ancestors() {
+    let mut rt = AppRuntime::new(BubbleApp, Vec2::new(600.0, 400.0));
+    rt.state_mut().show_sub_hit = true;
+    rt.invalidate();
+    rt.frame(0.0);
+
+    let pos = rt
+        .router()
+        .regions()
+        .iter()
+        .find(|r| r.node == SUB_HIT)
+        .map(|r| r.bounds.center())
+        .expect("子命中区域必须已登记到路由器");
+    rt.pointer_move(pos);
+    rt.pointer_down(pos, PointerButton::Left);
+    rt.pointer_up(pos, PointerButton::Left);
+
+    assert!(
+        rt.state().clicks.starts_with(&[SUB_HIT, SUB_WIDGET]),
+        "合成子键须先命中自身、再冒泡到所属控件，实际路径: {:?}",
+        rt.state().clicks
+    );
+    assert!(
+        rt.state().clicks.contains(&BG_PAGE),
+        "子命中区域须继续冒泡到逻辑祖先，实际路径: {:?}",
+        rt.state().clicks
+    );
+}
+
+#[test]
 fn key_bubbles_before_overlay_escape_and_exposes_event_target() {
     let mut rt = AppRuntime::new(BubbleApp, Vec2::new(600.0, 400.0));
     rt.state_mut().show_portal = true;
+    rt.state_mut().portal_is_boundary = true;
     rt.state_mut().stop_escape_in_input = true;
     rt.invalidate();
     rt.frame(0.0);
@@ -235,4 +339,19 @@ fn inspector_records_event_trace_when_enabled() {
     assert_eq!(trace.kind, "Click");
     assert_eq!(trace.path, vec![INNER_BTN]);
     assert_eq!(trace.stopped_at, Some(INNER_BTN));
+}
+
+#[test]
+fn inspector_traces_key_and_wheel_after_unified_dispatch() {
+    let mut rt = AppRuntime::new(BubbleApp, Vec2::new(600.0, 400.0));
+    rt.frame(0.0);
+    rt.key(AppKey::F(12), true, Modifiers::default());
+    rt.focus_node(Some(INNER_BTN));
+
+    rt.key(AppKey::Character('a'), true, Modifiers::default());
+    assert_eq!(rt.last_event_trace().map(|t| t.kind), Some("Key"));
+    assert!(rt.last_event_trace().is_some_and(|t| !t.path.is_empty()));
+
+    rt.wheel(Vec2::new(32.0, 32.0), Vec2::new(0.0, 1.0));
+    assert_eq!(rt.last_event_trace().map(|t| t.kind), Some("Wheel"));
 }

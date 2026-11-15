@@ -26,7 +26,7 @@ pub mod schema;
 pub use action::{ActionKind, RawAction};
 pub use desc::{
     Align, Dim, DimUnit, Display, Edges, FlexDirection, Justify, NodeFlags, NodeTag, Position,
-    RawNodeDesc, RawNodeId, NO_NODE,
+    RawNodeDesc, RawNodeId, NO_NODE, PORTAL_Z_BASE,
 };
 pub use migration::{
     decode, encode, migrate, Field, FieldSpec, MigratedField, MigrationError, ENVELOPE_VERSION,
