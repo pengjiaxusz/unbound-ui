@@ -66,7 +66,7 @@ pub mod window_runner;
 pub use assets::{AssetHub, AssetResidency};
 pub use guest_bridge::GuestAppAdapter;
 pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Locale};
-pub use inspector::{Inspector, InspectorNode, InspectorScene};
+pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
 pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
 pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
@@ -610,6 +610,8 @@ pub struct AppContext {
     waker: Option<Arc<dyn AppWaker>>,
     /// 上一个处理器消费了多少当前滚轮增量。
     scroll_consumed: Vec2,
+    /// 冒泡派发过程中当前正在接收事件的逻辑节点键。
+    event_target: Option<u64>,
     /// 共享剪贴板提供者（窗口模式为 SystemClipboard，无头模式为 MemoryClipboard）。
     clipboard: Rc<RefCell<Box<dyn ClipboardProvider>>>,
 }
@@ -659,6 +661,7 @@ impl AppContext {
             async_sender: None,
             waker: None,
             scroll_consumed: Vec2::ZERO,
+            event_target: None,
             clipboard: Rc::new(RefCell::new(Box::new(MemoryClipboard::new()))),
         }
     }
@@ -888,6 +891,12 @@ impl AppContext {
     ///
     pub fn consume_scroll(&mut self, delta: Vec2) {
         self.scroll_consumed += delta;
+    }
+
+    /// 冒泡派发过程中当前正在处理的节点键（例如在 `AppEvent::Key` 冒泡时区分命中祖先）。
+    #[must_use]
+    pub const fn event_target(&self) -> Option<u64> {
+        self.event_target
     }
 
     /// 在工作线程上运行 `task` 并归约其返回的事件。
@@ -2179,6 +2188,7 @@ pub struct AppRuntime<A: Application> {
     layout_initialized: bool,
     overlays: OverlayManager,
     scroll_regions: Vec<(u64, Rect, Vec2, bool)>,
+    last_pointer_down_target: Option<u64>,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -2231,6 +2241,7 @@ impl<A: Application> AppRuntime<A> {
             layout_initialized: false,
             overlays: OverlayManager::new(),
             scroll_regions: Vec::new(),
+            last_pointer_down_target: None,
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -2605,12 +2616,22 @@ impl<A: Application> AppRuntime<A> {
                 }
             }
         }
-        let path: Vec<u64> = self
+        // 路由器的命中路径借用 `self.router`，先物化为节点键以结束可变借用，
+        // 才能继续查询世界树并沿逻辑父链展开冒泡路径。
+        let hit_nodes: Vec<u64> = self
             .router
             .wheel(delta, pos)
             .iter()
             .map(|region| region.node)
             .collect();
+        let path: Vec<u64> = match hit_nodes.first().copied() {
+            Some(top)
+                if self.node_keys.contains_key(&top) || self.world.find_key(top).is_some() =>
+            {
+                self.ancestors_of(top)
+            }
+            _ => hit_nodes,
+        };
         if path.is_empty() {
             return self
                 .dispatch(AppEvent::Wheel {
@@ -2622,12 +2643,19 @@ impl<A: Application> AppRuntime<A> {
         }
 
         let mut remaining = delta;
-        let mut flags = DirtyFlags::NONE;
+        let mut flags = scroll_dirty;
+        let record_trace = self.inspector.enabled();
+        let mut visited = Vec::new();
+        let mut stopped_at = None;
         for node in path {
             if remaining.length() <= 0.01 {
                 break;
             }
+            if record_trace {
+                visited.push(node);
+            }
             self.ctx.scroll_consumed = Vec2::ZERO;
+            self.ctx.event_target = Some(node);
             let outcome = self.dispatch_outcome(AppEvent::Wheel {
                 pos,
                 delta: remaining,
@@ -2636,8 +2664,17 @@ impl<A: Application> AppRuntime<A> {
             remaining -= self.ctx.scroll_consumed;
             flags = flags.merge(outcome.dirty);
             if outcome.propagation == Propagation::Stop {
+                stopped_at = Some(node);
                 break;
             }
+        }
+        self.ctx.event_target = None;
+        if record_trace {
+            self.inspector.record_event(EventTrace {
+                kind: "Wheel",
+                path: visited,
+                stopped_at,
+            });
         }
         flags
     }
@@ -2655,6 +2692,49 @@ impl<A: Application> AppRuntime<A> {
             self.toggle_inspector();
             return DirtyFlags::PAINT;
         }
+
+        // 先沿当前聚焦节点的逻辑父链冒泡；若某一级消费并返回 `Propagation::Stop`，
+        // 则不再交由外层覆盖层 Escape、焦点导航或全局快捷键兜底截胡。
+        let mut stopped = false;
+        let mut dispatched_to_app = false;
+        if let Some(focused_key) = self.ctx.focused {
+            dispatched_to_app = true;
+            let path = self.ancestors_of(focused_key);
+            let record_trace = self.inspector.enabled();
+            let mut visited = Vec::new();
+            let mut stopped_at = None;
+            for node in path {
+                if record_trace {
+                    visited.push(node);
+                }
+                self.ctx.event_target = Some(node);
+                let outcome = self.dispatch_outcome(AppEvent::Key {
+                    key,
+                    pressed,
+                    modifiers,
+                });
+                flags = flags.merge(outcome.dirty);
+                if outcome.propagation == Propagation::Stop {
+                    stopped = true;
+                    stopped_at = Some(node);
+                    break;
+                }
+            }
+            self.ctx.event_target = None;
+            if record_trace {
+                self.inspector.record_event(EventTrace {
+                    kind: "Key",
+                    path: visited,
+                    stopped_at,
+                });
+            }
+        }
+
+        if stopped {
+            self.mark(flags);
+            return flags;
+        }
+
         if pressed {
             if key == AppKey::Escape && self.overlays.handle_escape(&mut self.focus).is_some() {
                 flags = flags.merge(DirtyFlags::PAINT | DirtyFlags::LAYOUT);
@@ -2701,13 +2781,16 @@ impl<A: Application> AppRuntime<A> {
                 return flags;
             }
         }
-        let flags = self
-            .dispatch(AppEvent::Key {
-                key,
-                pressed,
-                modifiers,
-            })
-            .merge(flags);
+
+        if !dispatched_to_app {
+            flags = self
+                .dispatch(AppEvent::Key {
+                    key,
+                    pressed,
+                    modifiers,
+                })
+                .merge(flags);
+        }
         self.mark(flags);
         flags
     }
@@ -3524,12 +3607,26 @@ impl<A: Application> AppRuntime<A> {
                 position,
                 button,
                 click_count,
-            } => self.dispatch(AppEvent::PointerDown {
-                pos: position,
-                target,
-                button,
-                click_count,
-            }),
+            } => {
+                self.last_pointer_down_target = target;
+                match target {
+                    Some(node) => self.dispatch_bubbling("PointerDown", node, |ancestor| {
+                        AppEvent::PointerDown {
+                            pos: position,
+                            target: Some(ancestor),
+                            button,
+                            click_count,
+                        }
+                    }),
+                    None => self.dispatch(AppEvent::PointerDown {
+                        pos: position,
+                        target: None,
+                        button,
+                        click_count,
+                    }),
+                }
+            }
+            // 高频连续事件与拖拽保持单目标直达，不沿祖先链冒泡。
             PointerEvent::Move {
                 position,
                 delta: _,
@@ -3556,20 +3653,33 @@ impl<A: Application> AppRuntime<A> {
                 position,
                 button,
             } => {
-                let mut flags = self.dispatch(AppEvent::PointerUp {
-                    pos: position,
-                    target,
-                    button,
-                });
+                let mut flags = match target {
+                    Some(node) => {
+                        self.dispatch_bubbling("PointerUp", node, |ancestor| AppEvent::PointerUp {
+                            pos: position,
+                            target: Some(ancestor),
+                            button,
+                        })
+                    }
+                    None => self.dispatch(AppEvent::PointerUp {
+                        pos: position,
+                        target: None,
+                        button,
+                    }),
+                };
                 // 仅当释放位置仍在被按下的节点上时，辅助点击才打开菜单。
                 //
                 if button == PointerButton::Right {
                     if let Some(node) = target {
                         if self.router.hover() == Some(node) {
-                            flags = flags.merge(self.dispatch(AppEvent::ContextMenu {
+                            flags = flags.merge(self.dispatch_bubbling(
+                                "ContextMenu",
                                 node,
-                                pos: position,
-                            }));
+                                |ancestor| AppEvent::ContextMenu {
+                                    node: ancestor,
+                                    pos: position,
+                                },
+                            ));
                         }
                     }
                 }
@@ -3579,18 +3689,30 @@ impl<A: Application> AppRuntime<A> {
                 target,
                 position,
                 count,
-            } => self.dispatch(AppEvent::Click {
-                node: target,
-                pos: position,
-                count,
-            }),
+            } => {
+                let down_matches = self
+                    .last_pointer_down_target
+                    .is_none_or(|down| down == target || self.ancestors_of(down).contains(&target));
+                self.last_pointer_down_target = None;
+                if !down_matches {
+                    return DirtyFlags::NONE;
+                }
+                self.dispatch_bubbling("Click", target, |ancestor| AppEvent::Click {
+                    node: ancestor,
+                    pos: position,
+                    count,
+                })
+            }
             PointerEvent::DoubleClick { target, position } => {
-                self.dispatch(AppEvent::DoubleClick {
-                    node: target,
+                self.dispatch_bubbling("DoubleClick", target, |ancestor| AppEvent::DoubleClick {
+                    node: ancestor,
                     pos: position,
                 })
             }
-            PointerEvent::CaptureLost { .. } => DirtyFlags::NONE,
+            PointerEvent::CaptureLost { .. } => {
+                self.last_pointer_down_target = None;
+                DirtyFlags::NONE
+            }
         }
     }
 
@@ -3643,8 +3765,94 @@ impl<A: Application> AppRuntime<A> {
         self.dispatch_outcome(event).dirty
     }
 
+    /// 读取最近一次记录的事件冒泡轨迹（仅在检查器开启时采集）。
+    #[must_use]
+    pub fn last_event_trace(&self) -> Option<&EventTrace> {
+        self.inspector.last_event()
+    }
+
+    /// 判断节点是否构成 Portal / 浮层边界，防止事件继续穿透至背景页面。
+    fn is_portal_boundary(&self, key: u64, id: NodeId) -> bool {
+        if self.overlays.stack().contains(key) {
+            return true;
+        }
+        self.world
+            .get(id)
+            .is_some_and(|data| data.desc.z_index >= 1000)
+    }
+
+    /// 沿 `UiWorld` 逻辑父链由内向外收集 `[target, parent, ...]`，遇到 Portal 边界即截断。
+    fn ancestors_of(&self, start_key: u64) -> Vec<u64> {
+        let mut path = vec![start_key];
+        let Some(mut curr_id) = self
+            .node_keys
+            .get(&start_key)
+            .copied()
+            .or_else(|| self.world.find_key(start_key))
+        else {
+            return path;
+        };
+        if self.is_portal_boundary(start_key, curr_id) {
+            return path;
+        }
+        for _ in 0..256 {
+            let Some(data) = self.world.get(curr_id) else {
+                break;
+            };
+            let parent_id = data.parent;
+            let Some(parent_data) = self.world.get(parent_id) else {
+                break;
+            };
+            let parent_key = parent_data.desc.key;
+            if parent_key != 0 && !path.contains(&parent_key) {
+                path.push(parent_key);
+                if self.is_portal_boundary(parent_key, parent_id) {
+                    break;
+                }
+            }
+            curr_id = parent_id;
+        }
+        path
+    }
+
+    /// 沿逻辑父链派发离散事件，直到所有祖先处理完毕或某一级返回 [`Propagation::Stop`]。
+    fn dispatch_bubbling(
+        &mut self,
+        kind: &'static str,
+        target: u64,
+        mut make_event: impl FnMut(u64) -> AppEvent,
+    ) -> DirtyFlags {
+        let path = self.ancestors_of(target);
+        let record_trace = self.inspector.enabled();
+        let mut visited = Vec::new();
+        let mut stopped_at = None;
+        let mut flags = DirtyFlags::NONE;
+        for node in path {
+            if record_trace {
+                visited.push(node);
+            }
+            self.ctx.event_target = Some(node);
+            let outcome = self.dispatch_outcome(make_event(node));
+            flags = flags.merge(outcome.dirty);
+            if outcome.propagation == Propagation::Stop {
+                stopped_at = Some(node);
+                break;
+            }
+        }
+        self.ctx.event_target = None;
+        if record_trace {
+            self.inspector.record_event(EventTrace {
+                kind,
+                path: visited,
+                stopped_at,
+            });
+        }
+        flags
+    }
+
     fn dispatch_outcome(&mut self, event: AppEvent) -> EventOutcome {
         let mut widget_dirty = DirtyFlags::NONE;
+        let mut widget_consumed = false;
         match &event {
             AppEvent::PointerDown {
                 pos,
@@ -3666,6 +3874,7 @@ impl<A: Application> AppRuntime<A> {
                     let mut store = self.widget_state.borrow_mut();
                     if widget.reduce_erased(*target_key, rect, &w_evt, &mut store) {
                         widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        widget_consumed = true;
                     }
                 }
             }
@@ -3675,6 +3884,7 @@ impl<A: Application> AppRuntime<A> {
                     let mut store = self.widget_state.borrow_mut();
                     if widget.reduce_erased(*node, rect, &w_evt, &mut store) {
                         widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        widget_consumed = true;
                     }
                 }
             }
@@ -3688,6 +3898,7 @@ impl<A: Application> AppRuntime<A> {
                     let mut store = self.widget_state.borrow_mut();
                     if widget.reduce_erased(*target_key, rect, &w_evt, &mut store) {
                         widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        widget_consumed = true;
                     }
                 }
             }
@@ -3701,6 +3912,7 @@ impl<A: Application> AppRuntime<A> {
                     let mut store = self.widget_state.borrow_mut();
                     if widget.reduce_erased(*target_key, rect, &w_evt, &mut store) {
                         widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        widget_consumed = true;
                     }
                 }
             }
@@ -3711,6 +3923,7 @@ impl<A: Application> AppRuntime<A> {
                         let mut store = self.widget_state.borrow_mut();
                         if widget.reduce_erased(focused_key, rect, &w_evt, &mut store) {
                             widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                            widget_consumed = true;
                         }
                     }
                 }
@@ -3720,13 +3933,14 @@ impl<A: Application> AppRuntime<A> {
                 pressed: true,
                 modifiers,
             } => {
-                if let Some(focused_key) = self.ctx.focused {
-                    if let Some((rect, widget)) = self.mounted_widgets.get(&focused_key).cloned() {
+                if let Some(target_key) = self.ctx.event_target.or(self.ctx.focused) {
+                    if let Some((rect, widget)) = self.mounted_widgets.get(&target_key).cloned() {
                         let chord = key.chord(*modifiers);
                         let w_evt = unbound_widgets::WidgetInputEvent::KeyDown(chord);
                         let mut store = self.widget_state.borrow_mut();
-                        if widget.reduce_erased(focused_key, rect, &w_evt, &mut store) {
+                        if widget.reduce_erased(target_key, rect, &w_evt, &mut store) {
                             widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                            widget_consumed = true;
                         }
                     }
                 }
@@ -3736,6 +3950,9 @@ impl<A: Application> AppRuntime<A> {
 
         let mut outcome = self.app.reduce(&mut self.state, event, &mut self.ctx);
         outcome.dirty = outcome.dirty.merge(widget_dirty);
+        if widget_consumed {
+            outcome.propagation = Propagation::Stop;
+        }
         if let Some((key, cause)) = self.ctx.request_focus.take() {
             self.focus.focus(key, cause);
         }
