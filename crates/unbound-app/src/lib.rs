@@ -1284,6 +1284,8 @@ impl<'a> ViewBuilder<'a> {
                     if node_data.parent == self.parent {
                         self.world.set_desc(existing, desc);
                         return existing;
+                    } else {
+                        self.world.remove(existing);
                     }
                 }
             }
