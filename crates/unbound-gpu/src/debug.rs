@@ -1,4 +1,4 @@
-//! 调试与安全工具（参见 `docs/architecture/gpu-renderer.md`），以及设备丢失恢复。
+//! 调试与安全工具，以及设备丢失恢复。
 //!
 //! 这里包含三个独立组件，它们共同满足一个特性：未使用时零开销。
 //!
@@ -141,7 +141,7 @@ impl RenderDoc {
 /// 全局校验消息计数器。
 ///
 /// 调试回调会递增这些计数；CI 在运行结束后读取并在出现任意错误时失败。
-/// 以计数代替仅打日志，才能让“开启校验”真正成为质量门禁（参见 `docs/architecture/gpu-renderer.md`）。
+/// 以计数代替仅打日志，才能让“开启校验”真正成为质量门禁。
 #[derive(Debug, Default)]
 pub struct ValidationCounter {
     errors: AtomicU64,

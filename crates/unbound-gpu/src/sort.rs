@@ -1,5 +1,4 @@
-//! 64 位深度排序键及 GPU OneSweep 基数排序 + 间接命令压缩的 CPU 参考实现
-//! （参见 `docs/architecture/gpu-renderer.md`）。
+//! 64 位深度排序键及 GPU OneSweep 基数排序 + 间接命令压缩的 CPU 参考实现。
 //!
 //! 实际计算在 GPU 上完成；保留本模块基于三个原因：
 //!

@@ -14,7 +14,6 @@ pub const BUTTONS_INFO: PageInfo = PageInfo {
     short: "Buttons",
     description: "Four visual weights with normal, hover, pressed, focused and disabled states. Press feedback is a real router hit, not a screenshot.",
     crates: &["unbound-input", "unbound-abi"],
-    docs: "docs/architecture/input-and-a11y.md",
     keywords: "button primary secondary subtle icon four states hover pressed focus disabled",
 };
 
@@ -23,7 +22,6 @@ pub const TOGGLES_INFO: PageInfo = PageInfo {
     short: "Selection",
     description: "Switch, checkbox, radio group and segmented pill. Every control shares the same stable identity and semantics contract.",
     crates: &["unbound-input", "unbound-a11y"],
-    docs: "docs/architecture/input-and-a11y.md",
     keywords: "toggle switch checkbox radio segmented selection control",
 };
 
@@ -32,7 +30,6 @@ pub const SLIDERS_INFO: PageInfo = PageInfo {
     short: "Sliders",
     description: "Continuous values with pointer capture, plus determinate and indeterminate progress driven by the animation clock.",
     crates: &["unbound-input", "unbound-anim"],
-    docs: "docs/architecture/input-and-a11y.md",
     keywords: "slider range progress bar indeterminate drag pointer",
 };
 
@@ -41,7 +38,6 @@ pub const TEXT_INFO: PageInfo = PageInfo {
     short: "Text field",
     description: "A focused text surface with caret blinking, drag selection and an IME candidate strip. Typing is handled by the shell's key reducer.",
     crates: &["unbound-text", "unbound-input"],
-    docs: "docs/architecture/vector-and-text.md",
     keywords: "text field input caret selection ime keyboard shaping",
 };
 

@@ -17,7 +17,6 @@ pub const FLEX_INFO: PageInfo = PageInfo {
     short: "Flex layout",
     description: "A real flex solver behind the stage: change direction, gap and alignment and the boxes are re-solved before the frame is built.",
     crates: &["unbound-layout", "unbound-world"],
-    docs: "docs/architecture/ui-and-layout.md",
     keywords: "flex box layout gap align direction padding margin taffy",
 };
 
@@ -26,7 +25,6 @@ pub const OVERLAYS_INFO: PageInfo = PageInfo {
     short: "Portals",
     description: "Menus, dialogs and tooltips paint above the page on portal layers. Tooltips automatically flip and clamp within the window bounds.",
     crates: &["unbound-widgets/src/tooltip.rs", "unbound-widgets/src/overlay.rs"],
-    docs: "docs/architecture/widgets.md",
     keywords: "portal overlay modal dialog dropdown menu tooltip popup z order auto flip clamp",
 };
 
@@ -35,7 +33,6 @@ pub const DRAG_INFO: PageInfo = PageInfo {
     short: "Drag & drop",
     description: "Pointer capture, threshold slop and drop-zone resolution. Release commits a reorder into the application state.",
     crates: &["unbound-input/src/dnd.rs", "unbound-input/src/router.rs"],
-    docs: "docs/architecture/input-and-a11y.md",
     keywords: "drag drop dnd reorder pointer capture drop zone",
 };
 

@@ -13,7 +13,6 @@ pub const COLORS_INFO: PageInfo = PageInfo {
     short: "Color palette",
     description: "Semantic tokens are resolved once per theme into a 512-entry lookup table; primitives only carry a token index. Switching theme uploads no geometry.",
     crates: &["unbound-theme", "unbound-math"],
-    docs: "docs/architecture/animation-and-theme.md",
     keywords: "color token palette theme light dark contrast semantic",
 };
 
@@ -22,7 +21,6 @@ pub const TYPOGRAPHY_INFO: PageInfo = PageInfo {
     short: "Typography",
     description: "MTSDF glyph caches keep stems sharp from 9 pt captions to 60 pt display type, including extreme zoom and CJK fallback.",
     crates: &["unbound-text", "mtsdf.comp"],
-    docs: "docs/architecture/vector-and-text.md",
     keywords: "typography type mtsdf sdf font glyph scale sharpening",
 };
 
@@ -31,7 +29,6 @@ pub const ELEVATION_INFO: PageInfo = PageInfo {
     short: "Elevation",
     description: "Rounded-rect clipping and analytic shadows share the same surface primitive. Radius, blur and border are all uniforms — no extra draw calls.",
     crates: &["unbound-gpu", "unbound-vector"],
-    docs: "docs/architecture/vector-and-text.md",
     keywords: "elevation shadow radius corner clipping border surface",
 };
 
@@ -40,7 +37,6 @@ pub const VECTOR_INFO: PageInfo = PageInfo {
     short: "Vector",
     description: "Bézier ribbons are expanded on the GPU. The same curve primitive powers the hero banner, focus rings and the infinite canvas minimap.",
     crates: &["unbound-vector", "uber.frag"],
-    docs: "docs/architecture/vector-and-text.md",
     keywords: "vector bezier curve shape antialias gpu",
 };
 

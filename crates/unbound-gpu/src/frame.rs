@@ -689,7 +689,7 @@ impl Renderer {
         Ok(renderer)
     }
 
-    /// 写入 4 KiB 主题 LUT（参见 `docs/architecture/gpu-renderer.md`）。
+    /// 写入 4 KiB 主题 LUT。
     /// 切换主题时仅更新此缓冲区，无需重传图元或重新布局。
     ///
     /// # Errors
@@ -723,7 +723,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// 上传语义化主题（参见 `docs/architecture/gpu-renderer.md`）。
+    /// 上传语义化主题。
     ///
     /// 主题切换仅需一次 4 KiB 写入：图元引用颜色令牌，由 LUT 在着色器中实时解析。
     ///
@@ -2845,7 +2845,7 @@ mod tests {
         renderer.destroy();
     }
 
-    /// 参见 `docs/architecture/gpu-renderer.md`：切换主题时仅上传 4 KiB 颜色查找表即可重绘全帧。
+    /// 切换主题时仅上传 4 KiB 颜色查找表即可重绘全帧。
     #[test]
     fn a_theme_switch_recolours_without_re_uploading_instances() {
         let _guard = crate::device::gpu_test_guard();
@@ -2894,7 +2894,7 @@ mod tests {
         renderer.destroy();
     }
 
-    /// 参见 `docs/architecture/gpu-renderer.md`：曲线通过二次 Bézier 解析距离光栅化而非折线近似。
+    /// 曲线通过二次 Bézier 解析距离光栅化而非折线近似。
     #[test]
     fn a_curve_is_rasterised_analytically() {
         let _guard = crate::device::gpu_test_guard();
@@ -2946,7 +2946,7 @@ mod tests {
         renderer.destroy();
     }
 
-    /// 参见 `docs/architecture/gpu-renderer.md`：屏幕上绘制一万条长连接线的 GPU 性能预算测试（0.8 ms）。
+    /// 屏幕上绘制一万条长连接线的 GPU 性能预算测试（0.8 ms）。
     #[test]
     fn ten_thousand_cubic_connectors_stay_inside_the_budget() {
         let _guard = crate::device::gpu_test_guard();
@@ -3032,7 +3032,7 @@ mod tests {
             timing.indirect_ms,
             timing.graphics_ms
         );
-        // 参考桌面 GPU 设计预算为 0.8 ms（参见 `docs/architecture/gpu-renderer.md`）；
+        // 参考桌面 GPU 设计预算为 0.8 ms；
         // 允许 1.5 倍余量以兼容较慢的测试硬件同时捕获真实性能退化。
         const DESIGN_BUDGET_MS: f32 = 0.8;
         const HARDWARE_ALLOWANCE: f32 = 1.5;
@@ -3046,7 +3046,7 @@ mod tests {
         renderer.destroy();
     }
 
-    /// 参见 `docs/architecture/gpu-renderer.md`：验证字形从真实 Bindless 图集而非 1x1 占位纹理采样。
+    /// 验证字形从真实 Bindless 图集而非 1x1 占位纹理采样。
     #[test]
     fn a_glyph_is_drawn_from_the_real_atlas() {
         let _guard = crate::device::gpu_test_guard();
@@ -3439,7 +3439,7 @@ mod tests {
         renderer.destroy();
     }
 
-    /// 参见 `docs/architecture/gpu-renderer.md`：屏幕上 10 万个带阴影圆角画布节点必须合并为不超过 4 次 `vkCmdDrawIndirectCount` 调用。
+    /// 屏幕上 10 万个带阴影圆角画布节点必须合并为不超过 4 次 `vkCmdDrawIndirectCount` 调用。
     #[test]
     fn a_hundred_thousand_primitives_need_at_most_four_draw_calls() {
         let _guard = crate::device::gpu_test_guard();
@@ -3505,7 +3505,7 @@ mod tests {
             "culling dropped too many: {} of {COUNT}",
             renderer.stats.visible
         );
-        // 10 万节点参考 GPU 预算为 1.5 ms 且 MDI 批次数 <= 4（参见 `docs/architecture/gpu-renderer.md`）；
+        // 10 万节点参考 GPU 预算为 1.5 ms 且 MDI 批次数 <= 4；
         // 允许 1.5 倍硬件余量。
         const DESIGN_BUDGET_MS: f32 = 1.5;
         const HARDWARE_ALLOWANCE: f32 = 1.5;
@@ -3523,7 +3523,7 @@ mod tests {
             renderer.stats.draw_calls
         );
 
-        // 第二帧版本号相同：持久化池上传必须为 0 字节（参见 `docs/architecture/gpu-renderer.md`）。
+        // 第二帧版本号相同：持久化池上传必须为 0 字节。
         let again = renderer
             .render(&scene(&prims, &transforms, 1))
             .expect("render");

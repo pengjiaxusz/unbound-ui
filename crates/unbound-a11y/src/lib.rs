@@ -1,4 +1,4 @@
-//! 增量无障碍语义树（`docs` §6.4）。
+//! 增量无障碍语义树。
 //!
 //! AccessKit 是引擎**唯一**的语义输出，不存在第二套供 Agent 学习的
 //! 定制 AST：Windows UI Automation 消费的树与 Agent 自省的树完全一致，

@@ -1,7 +1,7 @@
 //! 零依赖的 `bitflags` 替代方案。
 //!
 //! 从 crate 根部导出，供下游 crate 复用，避免引入过程宏依赖
-//! （保持 `app_guest` 快速编译，见 `docs` §7.1）。
+//! （保持 `app_guest` 快速编译）。
 //!
 
 /// 基于整数声明 `#[repr(transparent)]` 位标志新类型（newtype）。

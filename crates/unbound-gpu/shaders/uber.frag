@@ -4,7 +4,7 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 // ---------------------------------------------------------------------------
-// Uber 片元着色器（参见 `docs/architecture/gpu-renderer.md`）。
+// Uber 片元着色器。
 //
 // 单一着色器统一处理矩形、边框、图像、字形、曲线与阴影：
 //   * 零 `discard`——保持硬件 Early-Z 路径完整，

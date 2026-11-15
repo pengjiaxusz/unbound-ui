@@ -3088,19 +3088,6 @@ fn draw_page(
         );
         badge_x += width + 6.0;
     }
-    canvas.text(
-        &format!("{} › {}", state.t("page.docs_prefix"), info.docs),
-        Rect::new(
-            page.header.origin.x,
-            page.header.origin.y + 124.0,
-            page.header.size.x,
-            14.0,
-        ),
-        9.5,
-        palette.text_muted,
-        AlignX::Start,
-        AlignY::Top,
-    );
 
     for card in &page.cards {
         if card.rect.max().y < layout.content.origin.y

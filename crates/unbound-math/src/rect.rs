@@ -7,7 +7,7 @@ use crate::vec2::Vec2;
 /// 以原点 + 尺寸存储的轴对齐矩形。
 ///
 /// 引擎全局不变量：布局矩形的 `size >= 0`；空交集由任一轴上的
-/// `size <= 0` 表示，顶点着色器会将其折叠为退化四边形（参见 `docs` §3.2）。
+/// `size <= 0` 表示，顶点着色器会将其折叠为退化四边形。
 ///
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]

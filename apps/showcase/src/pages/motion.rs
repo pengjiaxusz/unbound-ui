@@ -17,7 +17,6 @@ pub const SPRINGS_INFO: PageInfo = PageInfo {
     short: "Springs",
     description: "Physical springs with stiffness, damping and mass, plus cubic-bezier easing for one-shot transitions. Tune them live.",
     crates: &["unbound-anim"],
-    docs: "docs/architecture/animation-and-theme.md",
     keywords: "animation spring physics easing cubic bezier motion",
 };
 
@@ -26,7 +25,6 @@ pub const A11Y_INFO: PageInfo = PageInfo {
     short: "Accessibility",
     description: "Every control publishes a role, name, state and focus order. The panel renders the exact tree exported to the platform adapter.",
     crates: &["unbound-a11y"],
-    docs: "docs/architecture/input-and-a11y.md",
     keywords: "accessibility a11y focus ring tree roles keyboard screen reader",
 };
 
@@ -35,7 +33,6 @@ pub const TELEMETRY_INFO: PageInfo = PageInfo {
     short: "Telemetry",
     description: "Frame timing, primitive counts, draw calls, uploads and pool watermarks. The same meters feed the HUD in the title bar.",
     crates: &["unbound-kpi", "unbound-gpu/src/timing.rs"],
-    docs: "docs/architecture/kpi-budgets.md",
     keywords: "telemetry kpi gpu frame time draw calls uploads tlsf memory hud",
 };
 
@@ -44,7 +41,6 @@ pub const SETTINGS_INFO: PageInfo = PageInfo {
     short: "Settings",
     description: "The gallery itself is the compatibility test: theme, zoom, snapping and telemetry preferences are all live.",
     crates: &["unbound-platform", "unbound-theme"],
-    docs: "docs/architecture/showcase.md",
     keywords: "settings about preferences version build theme zoom",
 };
 

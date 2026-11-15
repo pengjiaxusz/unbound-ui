@@ -1,6 +1,6 @@
 //! GPU 常驻持久化池：TLSF 分配器 + 代际句柄 + Epoch 隔离队列。
 //!
-//! 本模块是“每帧零字节上传”承诺的 CPU 侧实现（参见 `docs/architecture/gpu-renderer.md`）：
+//! 本模块是“每帧零字节上传”承诺的 CPU 侧实现：
 //!
 //! * 实体驻留在由 [`Tlsf`] 切分的长生命周期设备缓冲区中；
 //! * 变更**就地**发生——每帧仅向增量散布计算着色器发送稀疏的 `(destination, source, length)`

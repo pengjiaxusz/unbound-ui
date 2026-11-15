@@ -3,7 +3,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // ---------------------------------------------------------------------------
-// 阶段 3 — 间接绘制命令压缩（参见 `docs/architecture/gpu-renderer.md`）。
+// 阶段 3 — 间接绘制命令压缩。
 //
 // 遍历已排序的键数组，为每个连续的 `(layer, barrier, variant)` 批次生成一条
 // `VkDrawIndirectCommand`。由于排序优先按这三个字段排列，每个批次天然连续，

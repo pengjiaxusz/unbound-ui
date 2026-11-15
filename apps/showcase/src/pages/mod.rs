@@ -414,7 +414,6 @@ impl PageId {
             short,
             description,
             crates: base.crates,
-            docs: base.docs,
             keywords: base.keywords,
         }
     }
@@ -545,7 +544,6 @@ pub struct PageInfo {
     pub short: &'static str,
     pub description: &'static str,
     pub crates: &'static [&'static str],
-    pub docs: &'static str,
     pub keywords: &'static str,
 }
 

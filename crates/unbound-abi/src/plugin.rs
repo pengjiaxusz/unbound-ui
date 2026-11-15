@@ -1,6 +1,6 @@
 //! Host ↔ Guest C-ABI。
 //!
-//! `docs` §8.1 要求严格使用 `#[repr(C)]` 函数指针虚表，使 guest 可在
+//! 必须严格使用 `#[repr(C)]` 函数指针虚表，使 guest 可在
 //! host 保持窗口、Vulkan 设备及内存池存活的同时卸载并重新构建。
 //!
 
@@ -40,7 +40,7 @@ pub struct ByteBuffer {
 ///
 /// guest 安装一个转发至此虚表的 `#[global_allocator]`，使 `guest.dll` 内
 /// 分配的每个 `Box`/`Vec`/`String` 都位于 host 的单一堆（`mimalloc`）中。
-/// 这消除了 Windows 跨 CRT 堆损坏这类缺陷（`docs` §8.1）。
+/// 这消除了 Windows 跨 CRT 堆损坏这类缺陷。
 ///
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -192,7 +192,7 @@ pub struct GuestPluginVTable {
     ///
     pub struct_size: u32,
     /// 编译期生成的 guest `State` 内存布局指纹。哈希相等即可启用
-    /// 零拷贝热重载快路径（`docs` §8.1）。
+    /// 零拷贝热重载快路径。
     pub state_schema_hash: u64,
 
     pub on_load: unsafe extern "C" fn(host_alloc: *const HostAllocatorVTable),

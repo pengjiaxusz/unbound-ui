@@ -1,4 +1,4 @@
-//! GPU 侧字形与图像图集（参见 `docs/architecture/gpu-renderer.md`）。
+//! GPU 侧字形与图像图集。
 //!
 //! 渲染器绑定两个 Bindless `Texture2DArray` 采样器：用于覆盖率字形的 `R8` 图集，
 //! 以及用于彩色字形和图像的 `RGBA8` 图集。CPU 侧（`unbound-text`）负责货架装箱并决定

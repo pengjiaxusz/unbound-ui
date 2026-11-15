@@ -21,7 +21,6 @@ pub const SYSTEMS_INFO: PageInfo = PageInfo {
         "unbound-widgets",
         "unbound-app",
     ],
-    docs: "docs/architecture/README.md",
     keywords: "subsystems architecture engine crates platform win32 windows gpu layout text world anim canvas input a11y theme widgets app asset graph headless host guest kpi",
 };
 

@@ -3,7 +3,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // ---------------------------------------------------------------------------
-// 不透明核心预 Pass 顶点着色器（参见 `docs/architecture/gpu-renderer.md`）。
+// 不透明核心预 Pass 顶点着色器。
 //
 // 此 Pass 仅用于为大型不透明容器写入深度，使硬件 Early-Z 单元能够剔除其后方的
 // 数千个图元。它刻意不产生颜色输出：渲染目标屏蔽了颜色写入且着色器无输出，

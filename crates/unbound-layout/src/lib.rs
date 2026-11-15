@@ -1,4 +1,4 @@
-//! 结合重布局边界（RelayoutBoundary）的 Taffy 集成（`docs` §4.2）。
+//! 结合重布局边界（RelayoutBoundary）的 Taffy 集成。
 //!
 //! 性能优化围绕两个核心思路展开：
 //!
