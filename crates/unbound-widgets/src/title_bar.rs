@@ -142,7 +142,8 @@ impl UiWidget for WindowCaptionButton {
             SubElement::Background,
             703,
         );
-        bg.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(703, if active { 1.0 } else { 0.0 });
+        bg.z_and_opacity =
+            GpuPrimitiveInstance::pack_z_opacity(703, if active { 1.0 } else { 0.0 });
         output.primitives.push(bg);
 
         let fg = if destructive && active {
