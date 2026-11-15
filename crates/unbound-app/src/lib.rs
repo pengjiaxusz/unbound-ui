@@ -26,7 +26,7 @@ use std::time::Duration;
 use crossbeam_channel::{Receiver, Sender};
 use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_a11y::A11yAction;
-use unbound_abi::{Dim, NodeFlags, RawNodeDesc};
+use unbound_abi::{Dim, NodeFlags, RawNodeDesc, PORTAL_Z_BASE};
 use unbound_gpu::atlas::AtlasUpload;
 use unbound_gpu::data::{
     BlendMode, GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform, PrimFlags, PrimType,
@@ -1103,7 +1103,8 @@ pub struct PendingWidget {
     pub node: NodeId,
     /// 第二遍要发射的内容。
     pub spec: WidgetSpec,
-    /// 浮层/模态框基准 Z 偏移（>= 1000 表示浮层）。
+    /// 浮层/模态框的基准绘制 Z 偏移（>= `PORTAL_Z_BASE` 时命中区域抬升至 Portal 层）。
+    /// 绘制深度不决定事件边界，边界由 `NodeFlags::PORTAL_ROOT` 显式声明。
     pub z_base: u16,
 }
 
@@ -1400,7 +1401,7 @@ impl<'a> ViewBuilder<'a> {
         let has_surface = desc.fill != 0
             || (desc.border_width > 0.0 && desc.border_color != 0)
             || desc.shadow_blur > 0.0;
-        let next_z_base = if desc.z_index >= 1000 {
+        let next_z_base = if desc.z_index >= PORTAL_Z_BASE {
             (desc.z_index as u16).max(self.z_base)
         } else {
             self.z_base
@@ -1409,8 +1410,8 @@ impl<'a> ViewBuilder<'a> {
         if has_surface {
             let depth_z = (80u16.saturating_add(self.depth.saturating_mul(6))).min(480);
             let surface_z = next_z_base.saturating_add(depth_z);
-            let hit_scrim =
-                next_z_base >= 1000 && desc.fill == u32::from(unbound_theme::Token::SCRIM.raw());
+            let hit_scrim = i32::from(next_z_base) >= PORTAL_Z_BASE
+                && desc.fill == u32::from(unbound_theme::Token::SCRIM.raw());
             self.pending.push(PendingWidget {
                 key: key.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1),
                 node,
@@ -1667,6 +1668,7 @@ impl<'a> ViewBuilder<'a> {
             .absolute()
             .size(vp.x, vp.y)
             .z_index(1200)
+            .portal_root()
             .align(unbound_abi::Align::Center)
             .justify(unbound_abi::Justify::Center)
             .fill_token(u32::from(unbound_theme::Token::SCRIM.raw()));
@@ -1703,6 +1705,7 @@ impl<'a> ViewBuilder<'a> {
             .absolute()
             .size(vp.x, vp.y)
             .z_index(1150)
+            .portal_root()
             .justify(unbound_abi::Justify::FlexEnd)
             .fill_token(u32::from(unbound_theme::Token::SCRIM.raw()));
         self.container(scrim_key, scrim_desc, |overlay| {
@@ -2124,6 +2127,51 @@ impl EventOutcome {
     }
 }
 
+/// 冒泡父链的最大深度：异常树的兜底，正常界面远小于此值。
+const MAX_BUBBLE_DEPTH: usize = 256;
+
+/// 一次冒泡派发的轨迹采集器。
+///
+/// 离散指针事件、滚轮与键盘共用同一套「访问路径 / 终止点 / 检查器记录」语义，
+/// 避免三处循环各自维护 `visited`、`stopped_at` 与 `record_event` 而逐渐漂移。
+struct BubbleTrace {
+    kind: &'static str,
+    path: Vec<u64>,
+    stopped_at: Option<u64>,
+    record: bool,
+}
+
+impl BubbleTrace {
+    fn new(kind: &'static str, record: bool) -> Self {
+        Self {
+            kind,
+            path: Vec::new(),
+            stopped_at: None,
+            record,
+        }
+    }
+
+    fn visit(&mut self, node: u64) {
+        if self.record {
+            self.path.push(node);
+        }
+    }
+
+    fn stop(&mut self, node: u64) {
+        self.stopped_at = Some(node);
+    }
+
+    fn finish(self, inspector: &mut Inspector) {
+        if self.record {
+            inspector.record_event(EventTrace {
+                kind: self.kind,
+                path: self.path,
+                stopped_at: self.stopped_at,
+            });
+        }
+    }
+}
+
 /// 重建单帧的结果。
 #[derive(Clone, Debug)]
 pub struct FrameReport {
@@ -2182,6 +2230,8 @@ pub struct AppRuntime<A: Application> {
     inspector: Inspector,
     debug_sanitizers: bool,
     node_keys: FxHashMap<u64, NodeId>,
+    /// 命中区域键 → 所属控件节点键，由 `SceneCollector` 每帧登记。
+    hit_owners: FxHashMap<u64, u64>,
     seen_keys: FxHashSet<u64>,
     ephemeral_nodes: Vec<NodeId>,
     last_layout_stats: LayoutStats,
@@ -2189,6 +2239,8 @@ pub struct AppRuntime<A: Application> {
     overlays: OverlayManager,
     scroll_regions: Vec<(u64, Rect, Vec2, bool)>,
     last_pointer_down_target: Option<u64>,
+    /// 按下那刻展开的冒泡路径，供释放时校验目标一致性（路径不再随帧间树变化漂移）。
+    last_pointer_down_path: Vec<u64>,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -2235,6 +2287,7 @@ impl<A: Application> AppRuntime<A> {
             inspector: Inspector::new(),
             debug_sanitizers: false,
             node_keys: FxHashMap::default(),
+            hit_owners: FxHashMap::default(),
             seen_keys: FxHashSet::default(),
             ephemeral_nodes: Vec::new(),
             last_layout_stats: LayoutStats::default(),
@@ -2242,6 +2295,7 @@ impl<A: Application> AppRuntime<A> {
             overlays: OverlayManager::new(),
             scroll_regions: Vec::new(),
             last_pointer_down_target: None,
+            last_pointer_down_path: Vec::new(),
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -2625,10 +2679,17 @@ impl<A: Application> AppRuntime<A> {
             .map(|region| region.node)
             .collect();
         let path: Vec<u64> = match hit_nodes.first().copied() {
-            Some(top)
-                if self.node_keys.contains_key(&top) || self.world.find_key(top).is_some() =>
-            {
-                self.ancestors_of(top)
+            Some(top) if self.resolves_to_world_node(top) => {
+                let mut path = self.ancestors_of(top);
+                // 逻辑父链优先；命中栈里未挂进世界树的「裸区域」按空间栈回退补入，
+                // 避免画布四叉树 / 外部注入的命中区域被整条丢弃。已能解析到世界树的
+                // 节点不回退，否则浮层边界截断后背景控件又会渗透进来，破坏模态隔离。
+                for node in hit_nodes.iter().skip(1) {
+                    if !path.contains(node) && !self.resolves_to_world_node(*node) {
+                        path.push(*node);
+                    }
+                }
+                path
             }
             _ => hit_nodes,
         };
@@ -2644,16 +2705,12 @@ impl<A: Application> AppRuntime<A> {
 
         let mut remaining = delta;
         let mut flags = scroll_dirty;
-        let record_trace = self.inspector.enabled();
-        let mut visited = Vec::new();
-        let mut stopped_at = None;
+        let mut trace = BubbleTrace::new("Wheel", self.inspector.enabled());
         for node in path {
             if remaining.length() <= 0.01 {
                 break;
             }
-            if record_trace {
-                visited.push(node);
-            }
+            trace.visit(node);
             self.ctx.scroll_consumed = Vec2::ZERO;
             self.ctx.event_target = Some(node);
             let outcome = self.dispatch_outcome(AppEvent::Wheel {
@@ -2664,18 +2721,12 @@ impl<A: Application> AppRuntime<A> {
             remaining -= self.ctx.scroll_consumed;
             flags = flags.merge(outcome.dirty);
             if outcome.propagation == Propagation::Stop {
-                stopped_at = Some(node);
+                trace.stop(node);
                 break;
             }
         }
         self.ctx.event_target = None;
-        if record_trace {
-            self.inspector.record_event(EventTrace {
-                kind: "Wheel",
-                path: visited,
-                stopped_at,
-            });
-        }
+        trace.finish(&mut self.inspector);
         flags
     }
 
@@ -2700,13 +2751,9 @@ impl<A: Application> AppRuntime<A> {
         if let Some(focused_key) = self.ctx.focused {
             dispatched_to_app = true;
             let path = self.ancestors_of(focused_key);
-            let record_trace = self.inspector.enabled();
-            let mut visited = Vec::new();
-            let mut stopped_at = None;
+            let mut trace = BubbleTrace::new("Key", self.inspector.enabled());
             for node in path {
-                if record_trace {
-                    visited.push(node);
-                }
+                trace.visit(node);
                 self.ctx.event_target = Some(node);
                 let outcome = self.dispatch_outcome(AppEvent::Key {
                     key,
@@ -2716,18 +2763,12 @@ impl<A: Application> AppRuntime<A> {
                 flags = flags.merge(outcome.dirty);
                 if outcome.propagation == Propagation::Stop {
                     stopped = true;
-                    stopped_at = Some(node);
+                    trace.stop(node);
                     break;
                 }
             }
             self.ctx.event_target = None;
-            if record_trace {
-                self.inspector.record_event(EventTrace {
-                    kind: "Key",
-                    path: visited,
-                    stopped_at,
-                });
-            }
+            trace.finish(&mut self.inspector);
         }
 
         if stopped {
@@ -2987,8 +3028,12 @@ impl<A: Application> AppRuntime<A> {
         self.layout_pending();
         self.dispatch_lifecycle();
 
-        // 发布新的命中区域与焦点顺序。
+        // 发布新的命中区域与焦点顺序。命中区域归属表与世界树同帧更新，
+        // 使合成子命中键（sub_hits）能被映射回逻辑父链参与冒泡。
         let regions = core::mem::take(&mut self.collector.regions);
+        self.hit_owners = core::mem::take(&mut self.collector.hit_owners)
+            .into_iter()
+            .collect();
         self.router.set_regions(regions);
         self.focus
             .set_order(self.collector.focus_order.iter().copied());
@@ -3308,18 +3353,18 @@ impl<A: Application> AppRuntime<A> {
                 atlas_clock: self.frame_count,
             };
             let apply_z_base = |mut out: WidgetOutput, z_base: u16| -> WidgetOutput {
-                if z_base >= 1000 {
+                if i32::from(z_base) >= PORTAL_Z_BASE {
                     for prim in &mut out.primitives {
                         let new_z = prim.depth_u16().saturating_add(z_base);
                         let op = prim.opacity();
                         prim.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(new_z, op);
                     }
                     if let Some(hit) = out.hit.as_mut() {
-                        hit.layer = 2;
+                        hit.layer = unbound_input::PORTAL_LAYER;
                         hit.z = hit.z.saturating_add(u32::from(z_base));
                     }
                     for sub_hit in &mut out.sub_hits {
-                        sub_hit.layer = 2;
+                        sub_hit.layer = unbound_input::PORTAL_LAYER;
                         sub_hit.z = sub_hit.z.saturating_add(u32::from(z_base));
                     }
                 }
@@ -3608,7 +3653,13 @@ impl<A: Application> AppRuntime<A> {
                 button,
                 click_count,
             } => {
+                // 路径在按下那一刻固定：释放时无需重算父链，也不受帧间树变化影响。
+                let down_path = match target {
+                    Some(node) => self.ancestors_of(node),
+                    None => Vec::new(),
+                };
                 self.last_pointer_down_target = target;
+                self.last_pointer_down_path = down_path;
                 match target {
                     Some(node) => self.dispatch_bubbling("PointerDown", node, |ancestor| {
                         AppEvent::PointerDown {
@@ -3690,10 +3741,11 @@ impl<A: Application> AppRuntime<A> {
                 position,
                 count,
             } => {
-                let down_matches = self
-                    .last_pointer_down_target
-                    .is_none_or(|down| down == target || self.ancestors_of(down).contains(&target));
+                let down_matches = self.last_pointer_down_target.is_none_or(|down| {
+                    down == target || self.last_pointer_down_path.contains(&target)
+                });
                 self.last_pointer_down_target = None;
+                self.last_pointer_down_path.clear();
                 if !down_matches {
                     return DirtyFlags::NONE;
                 }
@@ -3711,6 +3763,7 @@ impl<A: Application> AppRuntime<A> {
             }
             PointerEvent::CaptureLost { .. } => {
                 self.last_pointer_down_target = None;
+                self.last_pointer_down_path.clear();
                 DirtyFlags::NONE
             }
         }
@@ -3771,40 +3824,72 @@ impl<A: Application> AppRuntime<A> {
         self.inspector.last_event()
     }
 
+    /// 命中键能否解析到世界树中的逻辑节点（即能否展开逻辑父链）。
+    ///
+    /// 只有 `node_keys` / `UiWorld` 中的节点、或经归属表映射到这类节点的多部件子键
+    /// 才算；仅通过 `view.push` / `set_regions` 注入的裸区域必须留给空间栈回退。
+    fn resolves_to_world_node(&self, key: u64) -> bool {
+        self.node_keys.contains_key(&key)
+            || self.world.find_key(key).is_some()
+            || self.hit_owners.get(&key).is_some_and(|owner| {
+                self.node_keys.contains_key(owner) || self.world.find_key(*owner).is_some()
+            })
+    }
+
     /// 判断节点是否构成 Portal / 浮层边界，防止事件继续穿透至背景页面。
+    ///
+    /// 边界由 [`NodeFlags::PORTAL_ROOT`] 或浮层管理器显式声明；`z_index` 只管绘制深度，
+    /// 不再参与判定——否则任何为了盖住兄弟节点而抬高 `z_index` 的普通容器都会提前截断冒泡。
     fn is_portal_boundary(&self, key: u64, id: NodeId) -> bool {
         if self.overlays.stack().contains(key) {
             return true;
         }
         self.world
             .get(id)
-            .is_some_and(|data| data.desc.z_index >= 1000)
+            .is_some_and(|data| data.desc.has(NodeFlags::PORTAL_ROOT))
     }
 
-    /// 沿 `UiWorld` 逻辑父链由内向外收集 `[target, parent, ...]`，遇到 Portal 边界即截断。
+    /// 沿 `UiWorld` 逻辑父链由内向外收集 `[target, owner?, parent, ...]`，遇到浮层边界即截断。
+    ///
+    /// 多部件控件的 `sub_hits` 使用 `node ^ (1 << 63)` 一类合成键，本身不在世界树中；
+    /// 先借助命中归属表把它接到所属控件节点，否则这类子部件永远收不到冒泡。
     fn ancestors_of(&self, start_key: u64) -> Vec<u64> {
         let mut path = vec![start_key];
+        let owner_key = self.hit_owners.get(&start_key).copied();
         let Some(mut curr_id) = self
             .node_keys
             .get(&start_key)
             .copied()
+            .or_else(|| owner_key.and_then(|k| self.node_keys.get(&k).copied()))
             .or_else(|| self.world.find_key(start_key))
+            .or_else(|| owner_key.and_then(|k| self.world.find_key(k)))
         else {
             return path;
         };
+        if let Some(owner) = owner_key.filter(|k| *k != start_key && !path.contains(k)) {
+            path.push(owner);
+        }
         if self.is_portal_boundary(start_key, curr_id) {
             return path;
         }
-        for _ in 0..256 {
+        let mut seen = FxHashSet::default();
+        seen.insert(start_key);
+        if let Some(owner) = owner_key {
+            seen.insert(owner);
+        }
+        for _ in 0..MAX_BUBBLE_DEPTH {
             let Some(data) = self.world.get(curr_id) else {
                 break;
             };
             let parent_id = data.parent;
+            if parent_id == curr_id {
+                break;
+            }
             let Some(parent_data) = self.world.get(parent_id) else {
                 break;
             };
             let parent_key = parent_data.desc.key;
-            if parent_key != 0 && !path.contains(&parent_key) {
+            if parent_key != 0 && seen.insert(parent_key) {
                 path.push(parent_key);
                 if self.is_portal_boundary(parent_key, parent_id) {
                     break;
@@ -3823,30 +3908,20 @@ impl<A: Application> AppRuntime<A> {
         mut make_event: impl FnMut(u64) -> AppEvent,
     ) -> DirtyFlags {
         let path = self.ancestors_of(target);
-        let record_trace = self.inspector.enabled();
-        let mut visited = Vec::new();
-        let mut stopped_at = None;
+        let mut trace = BubbleTrace::new(kind, self.inspector.enabled());
         let mut flags = DirtyFlags::NONE;
         for node in path {
-            if record_trace {
-                visited.push(node);
-            }
+            trace.visit(node);
             self.ctx.event_target = Some(node);
             let outcome = self.dispatch_outcome(make_event(node));
             flags = flags.merge(outcome.dirty);
             if outcome.propagation == Propagation::Stop {
-                stopped_at = Some(node);
+                trace.stop(node);
                 break;
             }
         }
         self.ctx.event_target = None;
-        if record_trace {
-            self.inspector.record_event(EventTrace {
-                kind,
-                path: visited,
-                stopped_at,
-            });
-        }
+        trace.finish(&mut self.inspector);
         flags
     }
 

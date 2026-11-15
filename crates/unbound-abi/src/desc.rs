@@ -326,6 +326,12 @@ impl Position {
     }
 }
 
+/// 浮层绘制基准深度：只决定 GPU 图元与命中区的层内 `z`。
+///
+/// **不得**用作事件冒泡边界的判据——冒泡边界由 [`NodeFlags::PORTAL_ROOT`] 显式声明，
+/// 否则任何为了绘制层级而提高 `z_index` 的普通容器都会被误判成浮层。
+pub const PORTAL_Z_BASE: i32 = 1000;
+
 bitflags_like! {
     /// 节点标志位。保留为 `u32` 以维持 POD 特性并降低跨 C-ABI 边界传输开销。
     ///
@@ -347,6 +353,11 @@ bitflags_like! {
         const DRAG_HANDLE       = 1 << 12;
         /// 内容由引擎的虚拟化容器提供。
         const VIRTUALIZED       = 1 << 13;
+        /// 浮层根：离散事件冒泡到该节点即截断，绝不渗透到背景页面。
+        ///
+        /// 事件边界与绘制 `z_index` 完全解耦；高 `z_index` 只影响绘制顺序与命中层，
+        /// 不再隐含「浮层」语义。
+        const PORTAL_ROOT       = 1 << 14;
     }
 }
 
@@ -602,10 +613,22 @@ impl RawNodeDesc {
         self
     }
 
-    /// 设置绘制层级（>=1000 时按 Portal 层处理表面与命中区域）。
+    /// 设置绘制层级（>= [`PORTAL_Z_BASE`] 时按 Portal 层抬升表面与命中区域深度）。
+    ///
+    /// 仅影响绘制/拾取，**不**声明事件边界；浮层根另用 [`Self::portal_root`] 标记。
     #[must_use]
     pub fn z_index(mut self, z: i32) -> Self {
         self.z_index = z;
+        self
+    }
+
+    /// 声明该节点为浮层根（事件冒泡边界）。
+    ///
+    /// 离散指针、滚轮与键盘事件沿逻辑父链上浮到此处即停止，不透传到背景页面。
+    /// 绘制深度仍由 [`Self::z_index`] 控制，两者互不耦合。
+    #[must_use]
+    pub fn portal_root(mut self) -> Self {
+        self.flags |= NodeFlags::PORTAL_ROOT.bits();
         self
     }
 

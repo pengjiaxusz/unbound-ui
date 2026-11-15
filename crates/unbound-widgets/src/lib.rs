@@ -657,6 +657,24 @@ impl WidgetOutput {
         }
         self
     }
+
+    /// 注册标准 UI 层命中区域与悬停光标。
+    ///
+    /// 控件只需给出自身绘制深度 `z`，无需知道 `layer` 常量或浮层基准值：
+    /// 位于浮层内时由 `AppRuntime` 按节点 `z_base` 统一抬升 `layer` / `z`；
+    /// 命中区域归属（含多部件子区域）也由收集器自动登记，事件因此能沿
+    /// 逻辑父链冒泡，控件不必再为「让父级收到事件」额外发射命中区域。
+    #[must_use]
+    pub fn with_hit_ui(
+        mut self,
+        node: u64,
+        z: u32,
+        rect: Rect,
+        cursor: unbound_input::CursorKind,
+    ) -> Self {
+        self.hit = Some(HitRegion::ui(node, z, rect).with_cursor(cursor));
+        self
+    }
 }
 
 /// 将多个控件的输出收集到同一帧中。
@@ -675,6 +693,11 @@ pub struct SceneCollector {
     pub payloads: Vec<GpuPayload>,
     /// 可拾取表面列表。
     pub regions: Vec<HitRegion>,
+    /// 命中区域键 → 所属控件节点键。
+    ///
+    /// 多部件控件的 `sub_hits` 常用 `node ^ (1 << 63)` 一类合成键，它们不在
+    /// 世界树中；运行时据此把这类命中映射回逻辑父链，使子部件同样参与冒泡。
+    pub hit_owners: Vec<(u64, u64)>,
     /// 语义树。
     pub semantics: Semantics,
     /// 键盘 Tab 顺序。
@@ -716,6 +739,7 @@ impl SceneCollector {
         self.clips.clear();
         self.payloads.clear();
         self.regions.clear();
+        self.hit_owners.clear();
         self.focus_order.clear();
         self.node_spans.clear();
         self.backdrops.clear();
@@ -844,9 +868,11 @@ impl SceneCollector {
 
         if let Some(hit) = output.hit.as_mut() {
             self.scope_hit(hit);
+            self.hit_owners.push((hit.node, key));
         }
         for sub_hit in &mut output.sub_hits {
             self.scope_hit(sub_hit);
+            self.hit_owners.push((sub_hit.node, key));
         }
 
         // 每个 widget 都从零开始索引*自己的* `payloads` 切片，而收集器把

@@ -21,6 +21,10 @@ use unbound_vector::{hit_quad, QuadSegment};
 
 use crate::cursor::CursorKind;
 
+/// UI 主层层级：`0` 画布、[`UI_LAYER`] UI、
+/// [`PORTAL_LAYER`]..=`254` Portal、`255` 调试层。
+pub const UI_LAYER: u8 = 1;
+
 /// 首个浮层层级。处于该层级或之上的元素在光标优先级上胜过下方的 UI 层。
 pub const PORTAL_LAYER: u8 = 2;
 
@@ -133,6 +137,15 @@ impl HitRegion {
             receive_events: true,
             cursor: None,
         }
+    }
+
+    /// 标准 UI 主层的可拾取矩形区域。
+    ///
+    /// `z` 取控件自身的绘制深度即可；当控件位于浮层内，运行时会按该节点的
+    /// `z_base` 统一改写 `layer` 与 `z`，控件无需感知 [`PORTAL_LAYER`] 或浮层基准值。
+    #[must_use]
+    pub fn ui(node: u64, z: u32, bounds: Rect) -> Self {
+        Self::new(node, UI_LAYER, z, bounds)
     }
 
     /// 设置指针悬停在该区域上时请求的光标。
