@@ -45,7 +45,7 @@ impl UiWidget for TitleBarChrome {
 
     fn emit_laid_out(
         &self,
-        _node: u64,
+        node: u64,
         rect: Rect,
         _control: ControlState,
         _state: &Self::State,
@@ -75,6 +75,7 @@ impl UiWidget for TitleBarChrome {
             SubElement::Background,
             101,
         ));
+        output.hit = Some(HitRegion::new(node, 1, 100, rect));
         output
     }
 }
