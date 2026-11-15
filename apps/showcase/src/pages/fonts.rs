@@ -1,4 +1,5 @@
 //! 多语言字体：文字系统覆盖、曲线锐度与双向文本（BiDi）沙盒。
+//! lang-allow: multilingual script specimens; CJK/Arabic/Hebrew sample text is the data
 //!
 //! 排版页面证明同一套字号阶梯可共享缓存；本页面证明同一套*塑形*管线
 //! 能够承载十二种书写系统，包括附标密集的文字（阿拉伯语 harakat、泰语声调符号、

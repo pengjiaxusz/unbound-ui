@@ -1130,7 +1130,7 @@ mod tests {
     #[test]
     fn cjk_text_shapes_without_panicking() {
         let mut e = engine();
-        let shaped = e.shape("中文排版测试", &TextStyle::sized(16.0));
+        let shaped = e.shape("中文排版测试", &TextStyle::sized(16.0)); // lang-ok: CJK shaping sample
         assert_eq!(shaped.glyphs.len(), 6, "one glyph per CJK character");
         assert!(shaped.width > 0.0);
     }
@@ -1258,7 +1258,7 @@ mod tests {
     #[test]
     fn rtl_detection_follows_the_bidi_level() {
         let mut e = engine();
-        let rtl = e.shape("שלום", &TextStyle::sized(16.0));
+        let rtl = e.shape("שלום", &TextStyle::sized(16.0)); // lang-ok: Hebrew RTL sample
         assert!(!rtl.glyphs.is_empty());
         assert!(rtl.glyphs.iter().all(|g| g.is_rtl()), "Hebrew must be RTL");
         let ltr = e.shape("hello", &TextStyle::sized(16.0));

@@ -888,7 +888,10 @@ mod tests {
             },
             &mut glyphs,
         );
-        assert!(output.hit.is_none(), "不可交互的控件必须从命中集合里消失");
+        assert!(
+            output.hit.is_none(),
+            "non-interactive controls must disappear from the hit set"
+        );
         assert!(output.a11y.is_some());
         assert!(!output.focusable);
     }
@@ -907,7 +910,7 @@ mod tests {
             let tokens = variant.tokens();
             assert!(
                 !seen.contains(&tokens),
-                "{:?} 与另一个变体的配色完全相同，视觉上无法区分",
+                "{:?} shares its palette with another variant and cannot be told apart",
                 variant
             );
             seen.push(tokens);
@@ -926,12 +929,12 @@ mod tests {
             let tokens = variant.tokens();
             assert_ne!(
                 tokens.fill_hover, tokens.fill,
-                "{:?} 的悬停色必须与静止色不同，否则悬停没有任何反馈",
+                "{:?} hover fill must differ from the resting fill, otherwise hover gives no feedback",
                 variant
             );
             assert_ne!(
                 tokens.fill_pressed, tokens.fill_hover,
-                "{:?} 的按下色必须与悬停色不同",
+                "{:?} pressed fill must differ from the hover fill",
                 variant
             );
         }

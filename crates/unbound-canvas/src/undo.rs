@@ -745,9 +745,9 @@ mod tests {
         assert!(is_word_boundary(' '));
         assert!(is_word_boundary('\n'));
         assert!(is_word_boundary(','));
-        assert!(is_word_boundary('，'));
-        assert!(is_word_boundary('。'));
+        assert!(is_word_boundary('，')); // lang-ok: CJK word boundary
+        assert!(is_word_boundary('。')); // lang-ok: CJK word boundary
         assert!(!is_word_boundary('a'));
-        assert!(!is_word_boundary('中'));
+        assert!(!is_word_boundary('中')); // lang-ok: CJK non-boundary
     }
 }

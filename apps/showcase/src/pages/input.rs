@@ -838,7 +838,7 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
         ctx.canvas
             .rect(ime, 8.0, palette.overlay_bg, palette.card_border, 1.0, 6.0);
         ctx.canvas.text(
-            "1 无界",
+            "1 Unbound",
             Rect::new(ime.origin.x + 12.0, ime.origin.y, 70.0, ime.size.y),
             12.0,
             palette.text,
@@ -846,7 +846,7 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
             AlignY::Center,
         );
         ctx.canvas.text(
-            "2 界面",
+            "2 UI",
             Rect::new(ime.origin.x + 82.0, ime.origin.y, 70.0, ime.size.y),
             12.0,
             palette.text,
@@ -854,7 +854,7 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
             AlignY::Center,
         );
         ctx.canvas.text(
-            "3 排版",
+            "3 Layout",
             Rect::new(ime.origin.x + 152.0, ime.origin.y, 60.0, ime.size.y),
             12.0,
             palette.text,
@@ -922,10 +922,10 @@ pub fn pinyin_sandbox(ctx: &mut DemoCtx<'_, '_>) {
     );
 
     let items = [
-        "着色器管线_Uber.spv",
-        "材质球_PBR.mat",
-        "重命名文件_Asset",
-        "魑魅魍魉_RareMesh",
+        "shader_pipeline_uber.spv",
+        "material_pbr.mat",
+        "rename_file_asset",
+        "rare_mesh",
     ];
     for (idx, item) in items.iter().enumerate() {
         let y = bar.max().y + 10.0 + idx as f32 * 40.0;

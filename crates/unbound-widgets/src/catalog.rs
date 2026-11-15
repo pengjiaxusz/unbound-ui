@@ -2826,9 +2826,9 @@ where
                 hx += col.width;
             }
             let sample_rows = [
-                ["着色器_Uber.spv", "SPIR-V", "128 KB"],
-                ["材质球_PBR.mat", "Material", "64 KB"],
-                ["环境光照贴图.ktx2", "BC6H", "4.2 MB"],
+                ["shader_uber.spv", "SPIR-V", "128 KB"],
+                ["material_pbr.mat", "Material", "64 KB"],
+                ["environment_lightmap.ktx2", "BC6H", "4.2 MB"],
             ];
             for (r_idx, row) in sample_rows.iter().enumerate() {
                 let ry = dt_r.origin.y + 33.0 + r_idx as f32 * desc.row_height;
@@ -2884,7 +2884,7 @@ where
                 QueryCombinator::And
             };
             let rules = vec![
-                QueryRule::new("tag", "contains", "材质球"),
+                QueryRule::new("tag", "contains", "material"),
                 QueryRule::new("vram_mb", "<=", "16.0"),
             ];
             let desc = QueryBuilderDesc::new(qb_r, comb, rules);
@@ -2921,23 +2921,23 @@ where
             let fields = vec![
                 SchemaFieldSpec::new(
                     "shuangpin",
-                    "双拼方案 (Scheme)",
+                    "Shuangpin scheme",
                     "Input",
                     SchemaFieldKind::Select {
-                        options: vec!["小鹤双拼".into(), "自然码".into(), "微软双拼".into()],
+                        options: vec!["Xiaohe".into(), "Ziranma".into(), "Microsoft".into()],
                     },
                     SchemaValue::EnumIndex(0),
                 ),
                 SchemaFieldSpec::new(
                     "auto_capture",
-                    "自动帧捕获",
+                    "Auto frame capture",
                     "Capture",
                     SchemaFieldKind::Switch,
                     SchemaValue::Bool(true),
                 ),
                 SchemaFieldSpec::new(
                     "frame_budget",
-                    "帧预算上限",
+                    "Frame budget cap",
                     "Capture",
                     SchemaFieldKind::Number {
                         min: 1.0,
@@ -2956,7 +2956,7 @@ where
             }
             let label_col_w = (sf_r.size.x * 0.36).clamp(90.0, 180.0);
             let mut glyphs = Vec::new();
-            let values_preview = ["小鹤双拼 (Xiaohe)", "Enabled", "16.6 ms"];
+            let values_preview = ["Xiaohe Shuangpin", "Enabled", "16.6 ms"];
             for (idx, field) in desc.fields.iter().enumerate() {
                 let y = sf_r.origin.y + 10.0 + idx as f32 * desc.row_height;
                 let row_r = Rect::new(
@@ -3094,7 +3094,10 @@ mod interactive_tests {
         for &id in &[WidgetCatalogId::Progress, WidgetCatalogId::Skeleton] {
             let out =
                 emit_widget_with_params(id, 11, ControlState::default(), rect, &mut glyphs, 0.8, 0);
-            assert!(out.hit.is_some(), "{id:?} 应具备兜底命中区域以支持展厅交互");
+            assert!(
+                out.hit.is_some(),
+                "{id:?} must expose a fallback hit region for showcase interaction"
+            );
         }
     }
 }

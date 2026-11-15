@@ -1,4 +1,5 @@
 //! 组件展厅：目录中的每个组件均由其真实发射器（emitter）绘制，并在侧边栏中一一列出。
+//! lang-allow: bilingual widget catalog labels; Chinese is the zh-CN half
 //!
 //! 每张卡片驱动 [`unbound_widgets::catalog::emit_widget`]——与支撑 Stable Shape 探针的
 //! 穷举式、无通配符匹配相同——因此表面、命中区域与语义节点全部来自真实的

@@ -676,7 +676,7 @@ mod tests {
         let desc = SliderDesc::new(Rect::new(0.0, 0.0, 200.0, 32.0), "Size", 0.0, 10.0, 20.0)
             .with_step(3.0);
         let value = value_from_pointer(Vec2::new(200.0, 0.0), &desc);
-        assert!(value <= 20.0, "{value} 超出了上界");
+        assert!(value <= 20.0, "{value} exceeds the upper bound");
         assert!(value >= 10.0);
     }
 

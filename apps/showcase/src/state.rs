@@ -1,4 +1,5 @@
 //! 展厅的单一事实来源（Single Source of Truth）。
+//! lang-allow: bilingual showcase i18n bundle; Chinese is the zh-CN half
 //!
 //! 导航、环境开关、旋钮值与实时演示状态全部集中于此。页面是该状态的纯函数，
 //! 这使得整个外壳无需窗口即可进行测试。

@@ -812,7 +812,7 @@ pub fn build_interactive(
 
     // ---- 标题 ----------------------------------------------------------------
     let title = labels.layout(
-        "Unbound UI — 组件展台",
+        "Unbound UI — component gallery",
         Vec2::new(at(40.0, 32.0).0, at(40.0, 32.0).1),
         28.0,
     );
@@ -875,7 +875,7 @@ pub fn build_interactive(
         301,
     );
     let card_title = labels.layout(
-        "Card / 圆角 + 边框 + 解析阴影",
+        "Card / radius + border + analytic shadow",
         Vec2::new(at(60.0, 250.0).0, at(60.0, 250.0).1),
         16.0,
     );
@@ -907,7 +907,7 @@ pub fn build_interactive(
     );
     scene.stroke(sx, sy, 160.0, 150.0, 16.0, palette.primary, 401);
     let stroke_label = labels.layout(
-        "Stroke / 焦点环",
+        "Stroke / focus ring",
         Vec2::new(at(sx + 12.0, sy + 120.0).0, at(sx + 12.0, sy + 120.0).1),
         13.0,
     );
@@ -944,7 +944,7 @@ pub fn build_interactive(
         );
     }
     let curve_label = labels.layout(
-        "Curves / 二次贝塞尔解析 SDF",
+        "Curves / quadratic Bezier analytic SDF",
         Vec2::new(at(gx + 14.0, gy + 120.0).0, at(gx + 14.0, gy + 120.0).1),
         13.0,
     );
@@ -965,8 +965,11 @@ pub fn build_interactive(
         18.0,
         700,
     );
-    let interactive_title =
-        labels.layout("Button / 第一个可交互控件", Vec2::new(60.0, 430.0), 16.0);
+    let interactive_title = labels.layout(
+        "Button / the first interactive widget",
+        Vec2::new(60.0, 430.0),
+        16.0,
+    );
     for quad in &interactive_title {
         scene.glyph(quad, palette.text, 701);
     }
@@ -984,7 +987,7 @@ pub fn build_interactive(
     scene.payloads.extend(artifacts.payloads);
 
     let button_hint = labels.layout(
-        "hover / press / click · Tab 聚焦 · Space 激活",
+        "hover / press / click · Tab to focus · Space to activate",
         Vec2::new(60.0, 524.0),
         13.0,
     );
@@ -994,7 +997,7 @@ pub fn build_interactive(
 
     // ---- 主题提示 ------------------------------------------------------------
     let hint = labels.layout(
-        "T / 切换主题    Space / 主题    滚轮 / 缩放    拖拽 / 平移",
+        "T / cycle theme    Space / theme    wheel / zoom    drag / pan",
         Vec2::new(at(40.0, viewport.1 - 60.0).0, at(40.0, viewport.1 - 60.0).1),
         14.0,
     );
@@ -1008,7 +1011,7 @@ pub fn build_interactive(
         A11Y_ROOT,
         A11yNode::new(
             Role::Window,
-            "Unbound UI — 组件展台",
+            "Unbound UI — component gallery",
             Rect::new(0.0, 0.0, viewport.0, viewport.1),
         ),
     );

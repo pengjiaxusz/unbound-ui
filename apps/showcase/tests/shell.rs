@@ -1432,10 +1432,10 @@ fn language_selector_and_i18n_page_work_end_to_end() {
     click_node(&mut app, target::id(Target::Lang(1)));
     assert!(!app.state.lang_dropdown_open);
     assert_eq!(app.state.locale, Locale::ZhCn);
-    assert_eq!(app.state.t("app.title"), "Unbound UI 组件展厅");
+    assert_eq!(app.state.t("app.title"), "Unbound UI 组件展厅"); // lang-ok: expected zh-CN translation
     assert_eq!(
         PageId::I18n.localized_info(app.state.locale).short,
-        "原生 i18n"
+        "原生 i18n" // lang-ok: expected zh-CN translation
     );
 
     // 简体中文模式下全部 25 个页面均通过无头几何体检。
@@ -1482,13 +1482,13 @@ fn every_shell_i18n_key_resolves_in_both_locales() {
     for source in sources {
         for rest in source.split("state.t(\"").skip(1) {
             let key = rest.split("\")").next().unwrap_or_default();
-            assert!(!key.is_empty(), "state.t 调用点缺少键名");
+            assert!(!key.is_empty(), "state.t call site is missing a key");
             keys.insert(key);
         }
     }
     assert!(
         keys.len() >= 30,
-        "扫描到的词条键过少（{} 个），疑为扫描逻辑失效：{keys:?}",
+        "scanned too few keys ({}); the scan logic may be broken: {keys:?}",
         keys.len()
     );
 
@@ -1498,7 +1498,7 @@ fn every_shell_i18n_key_resolves_in_both_locales() {
             assert_ne!(
                 bundle.t(key),
                 *key,
-                "{locale:?} 资源包缺少词条 `{key}`，界面将直接显示键名"
+                "{locale:?} bundle is missing `{key}`; the UI will render the raw key"
             );
         }
     }

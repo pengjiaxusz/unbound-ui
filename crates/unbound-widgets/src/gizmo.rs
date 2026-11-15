@@ -201,7 +201,7 @@ pub fn emit_gizmo(
         rect
     });
 
-    let mut a11y = A11yNode::new(Role::Group, "变换手柄", bounds).clickable();
+    let mut a11y = A11yNode::new(Role::Group, "Transform gizmo", bounds).clickable();
     a11y.value = format!("{:.0} × {:.0}", bounds.size.x, bounds.size.y);
 
     GizmoOutput {

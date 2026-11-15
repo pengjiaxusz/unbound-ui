@@ -10,7 +10,8 @@
   "scripts": {
     "prepare": "node scripts/install-hooks.mjs",
     "lefthook:install": "node scripts/install-hooks.mjs",
-    "commitlint": "commitlint"
+    "commitlint": "commitlint",
+    "lang:check": "node scripts/check-lang.mjs"
   },
   "devDependencies": {
     "@commitlint/cli": "latest",

@@ -328,7 +328,7 @@ pub fn emit_chip(
     a11y.selected = desc.selected;
     a11y.disabled = disabled;
     a11y.description = if desc.closable {
-        "按 Delete 移除".to_owned()
+        "Press Delete to remove".to_owned()
     } else {
         String::new()
     };

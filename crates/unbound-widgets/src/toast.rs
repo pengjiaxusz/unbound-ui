@@ -658,7 +658,7 @@ mod tests {
         );
         let a11y = output.output.a11y.expect("toast");
         assert_eq!(a11y.role, Role::Alert);
-        assert_eq!(a11y.value, "成功");
+        assert_eq!(a11y.value, "Success");
         assert!(!output.output.primitives.is_empty());
     }
 

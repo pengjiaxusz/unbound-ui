@@ -292,14 +292,14 @@ fn every_slot_matches_the_palette_baseline() {
         assert_eq!(
             actual_light,
             (expected.light.0.to_string(), expected.light.1),
-            "亮色主题的 token {} 变了",
+            "light-theme token {} changed",
             expected.token.raw()
         );
         let actual_dark = srgb(dark.color(expected.token));
         assert_eq!(
             actual_dark,
             (expected.dark.0.to_string(), expected.dark.1),
-            "暗色主题的 token {} 变了",
+            "dark-theme token {} changed",
             expected.token.raw()
         );
     }
@@ -313,7 +313,7 @@ fn the_two_themes_share_one_slot_layout() {
         assert_eq!(
             light.color(expected.token).to_array()[3] > 0.0,
             dark.color(expected.token).to_array()[3] > 0.0,
-            "token {} 在两个主题里的存在性必须一致",
+            "token {} must exist in both themes",
             expected.token.raw()
         );
     }
@@ -328,7 +328,7 @@ fn the_unused_slots_stay_transparent() {
         assert_eq!(
             channels,
             [0.0, 0.0, 0.0, 0.0],
-            "槽位 {slot} 必须保持完全透明"
+            "slot {slot} must stay fully transparent"
         );
     }
 }
@@ -342,6 +342,6 @@ fn the_slot_zero_is_transparent_and_slot_one_is_the_shadow() {
     let shadow_alpha = lut.color(Token::SHADOW).to_array()[3];
     assert!(
         (shadow_alpha - 160.0 / 255.0).abs() < 1e-3,
-        "槽位 1 的阴影透明度是 {shadow_alpha}"
+        "slot 1 shadow alpha is {shadow_alpha}"
     );
 }

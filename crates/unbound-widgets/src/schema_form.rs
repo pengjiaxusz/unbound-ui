@@ -43,9 +43,9 @@ impl SchemaValue {
         match (self, kind) {
             (Self::Bool(on), _) => {
                 if *on {
-                    "● 已启用 (true)".to_owned()
+                    "● Enabled (true)".to_owned()
                 } else {
-                    "○ 已禁用 (false)".to_owned()
+                    "○ Disabled (false)".to_owned()
                 }
             }
             (Self::Number(v), SchemaFieldKind::Number { unit, .. }) => {

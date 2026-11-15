@@ -456,9 +456,9 @@ mod tests {
                 &[],
                 tokens,
             );
-            let hit = output.hit.expect("每个槽位都可点击");
+            let hit = output.hit.expect("every segment must be clickable");
             assert_eq!(hit.node, 10 + index as u64);
-            let a11y = output.a11y.expect("每个槽位都有语义节点");
+            let a11y = output.a11y.expect("every segment must expose an a11y node");
             assert_eq!(a11y.role, Role::Tab);
         }
     }

@@ -221,31 +221,31 @@ pub fn last_init_diagnostics() -> Option<GpuInitDiagnostics> {
 pub fn explain_vk_result(result: vk::Result) -> &'static str {
     match result {
         vk::Result::ERROR_EXTENSION_NOT_PRESENT => {
-            "请求的 Vulkan 扩展在当前系统加载器（vulkan-1.dll）或显卡驱动中不存在（常见于 Windows 10 旧版显卡驱动）"
+            "a requested Vulkan extension is missing from the system loader (vulkan-1.dll) or the graphics driver (common with outdated Windows 10 drivers)"
         }
         vk::Result::ERROR_FEATURE_NOT_PRESENT => {
-            "显卡驱动不支持所请求的某项 Vulkan 硬件特性"
+            "the graphics driver does not support one of the requested Vulkan hardware features"
         }
         vk::Result::ERROR_INCOMPATIBLE_DRIVER => {
-            "显卡驱动与请求的 Vulkan API 版本不兼容（需支持 Vulkan 1.2+ 的显卡驱动）"
+            "the graphics driver is incompatible with the requested Vulkan API version (a driver supporting Vulkan 1.2+ is required)"
         }
         vk::Result::ERROR_INITIALIZATION_FAILED => {
-            "Vulkan 底层初始化失败（可能是驱动安装损坏、虚拟显卡环境受限或安全软件拦截）"
+            "low-level Vulkan initialization failed (corrupt driver install, restricted virtual GPU, or security software blocking it)"
         }
         vk::Result::ERROR_LAYER_NOT_PRESENT => {
-            "请求的 Vulkan 校验层（如 VK_LAYER_KHRONOS_validation）未安装"
+            "the requested Vulkan validation layer (e.g. VK_LAYER_KHRONOS_validation) is not installed"
         }
-        vk::Result::ERROR_OUT_OF_HOST_MEMORY => "系统内存（RAM）不足，无法完成 Vulkan 分配",
-        vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => "显卡显存（VRAM）不足，无法完成 Vulkan 分配",
+        vk::Result::ERROR_OUT_OF_HOST_MEMORY => "not enough system RAM to complete the Vulkan allocation",
+        vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => "not enough VRAM to complete the Vulkan allocation",
         vk::Result::ERROR_DEVICE_LOST => {
-            "GPU 设备已丢失（驱动重置/TDR 超时/显卡硬件断开）"
+            "the GPU device was lost (driver reset, TDR timeout, or the card dropped off the bus)"
         }
-        vk::Result::ERROR_SURFACE_LOST_KHR => "窗口渲染表面（VkSurfaceKHR）已失效",
+        vk::Result::ERROR_SURFACE_LOST_KHR => "the window surface (VkSurfaceKHR) is no longer valid",
         vk::Result::ERROR_NATIVE_WINDOW_IN_USE_KHR => {
-            "原生窗口句柄（HWND）已被另一个未销毁的 VkSurfaceKHR 占用"
+            "the native window handle (HWND) is already owned by another live VkSurfaceKHR"
         }
-        vk::Result::ERROR_OUT_OF_DATE_KHR => "交换链尺寸与窗口当前尺寸不一致，需重建交换链",
-        _ => "底层 Vulkan API 调用返回非预期错误码",
+        vk::Result::ERROR_OUT_OF_DATE_KHR => "the swapchain no longer matches the window size and must be recreated",
+        _ => "a low-level Vulkan call returned an unexpected error code",
     }
 }
 
@@ -275,13 +275,13 @@ impl GpuError {
         use core::fmt::Write as _;
 
         let mut out = String::new();
-        let _ = writeln!(out, "=== Unbound UI Vulkan 诊断报告 ===");
-        let _ = writeln!(out, "错误摘要: {self}");
+        let _ = writeln!(out, "=== Unbound UI Vulkan diagnostic report ===");
+        let _ = writeln!(out, "Error summary: {self}");
 
         if let Self::Vulkan(res) = self {
             let _ = writeln!(
                 out,
-                "错误码解析: {res:?} (code = {}) — {}",
+                "Result: {res:?} (code = {}) — {}",
                 res.as_raw(),
                 explain_vk_result(*res)
             );
@@ -289,7 +289,7 @@ impl GpuError {
 
         if let Some(diag) = last_init_diagnostics() {
             if !diag.stage.is_empty() {
-                let _ = writeln!(out, "失败阶段: {}", diag.stage);
+                let _ = writeln!(out, "Failing stage: {}", diag.stage);
             }
             if let Some((maj, min, pat)) = diag.loader_api_version {
                 let req = diag
@@ -298,32 +298,32 @@ impl GpuError {
                     .unwrap_or_else(|| "unknown".into());
                 let _ = writeln!(
                     out,
-                    "Vulkan Loader 版本: {maj}.{min}.{pat} (请求实例版本: {req})"
+                    "Vulkan loader version: {maj}.{min}.{pat} (requested instance version: {req})"
                 );
             }
             if !diag.requested_instance_extensions.is_empty() {
                 let _ = writeln!(
                     out,
-                    "请求的实例扩展: [{}]",
+                    "Requested instance extensions: [{}]",
                     diag.requested_instance_extensions.join(", ")
                 );
                 let _ = writeln!(
                     out,
-                    "启用的实例扩展: [{}]",
+                    "Enabled instance extensions: [{}]",
                     diag.enabled_instance_extensions.join(", ")
                 );
             }
             if !diag.skipped_instance_extensions.is_empty() {
                 let _ = writeln!(
                     out,
-                    "已跳过的可选实例扩展: [{}]",
+                    "Skipped optional instance extensions: [{}]",
                     diag.skipped_instance_extensions.join(", ")
                 );
             }
             if !diag.missing_required_instance_extensions.is_empty() {
                 let _ = writeln!(
                     out,
-                    "缺失的必需实例扩展: [{}]",
+                    "Missing required instance extensions: [{}]",
                     diag.missing_required_instance_extensions.join(", ")
                 );
             }
@@ -343,108 +343,108 @@ impl GpuError {
                     .unwrap_or_default();
                 let _ = writeln!(
                     out,
-                    "目标物理设备: {name} (type={dev_type}, api={api}, driver={drv}, {ids})"
+                    "Target physical device: {name} (type={dev_type}, api={api}, driver={drv}, {ids})"
                 );
             }
             if !diag.requested_device_extensions.is_empty() {
                 let _ = writeln!(
                     out,
-                    "请求的设备扩展: [{}]",
+                    "Requested device extensions: [{}]",
                     diag.requested_device_extensions.join(", ")
                 );
                 let _ = writeln!(
                     out,
-                    "启用的设备扩展: [{}]",
+                    "Enabled device extensions: [{}]",
                     diag.enabled_device_extensions.join(", ")
                 );
             }
             if !diag.skipped_device_extensions.is_empty() {
                 let _ = writeln!(
                     out,
-                    "已跳过的可选设备扩展: [{}]",
+                    "Skipped optional device extensions: [{}]",
                     diag.skipped_device_extensions.join("; ")
                 );
             }
             if !diag.missing_required_features.is_empty() {
                 let _ = writeln!(
                     out,
-                    "缺失的必需硬件特性: [{}]",
+                    "Missing required hardware features: [{}]",
                     diag.missing_required_features.join(", ")
                 );
             }
             if !diag.rejected_devices.is_empty() {
-                let _ = writeln!(out, "被拒绝的候选设备:");
+                let _ = writeln!(out, "Rejected candidate devices:");
                 for item in &diag.rejected_devices {
                     let _ = writeln!(out, "  - {item}");
                 }
             }
         }
 
-        let _ = writeln!(out, "排障建议:");
+        let _ = writeln!(out, "Troubleshooting:");
         match self {
             Self::Loader(_) => {
                 let _ = writeln!(
                     out,
-                    "  1. 请确认系统已安装显卡驱动以及 Vulkan Runtime (vulkan-1.dll)。"
+                    "  1. Make sure a graphics driver and the Vulkan runtime (vulkan-1.dll) are installed."
                 );
                 let _ = writeln!(
                     out,
-                    "  2. 可前往显卡厂商官网（NVIDIA / AMD / Intel）或 https://vulkan.lunarg.com 安装最新运行时。"
+                    "  2. Install the latest runtime from your GPU vendor (NVIDIA / AMD / Intel) or https://vulkan.lunarg.com."
                 );
             }
             Self::NoSuitableDevice(_) => {
                 let _ = writeln!(
                     out,
-                    "  1. 渲染器需要支持 Vulkan 1.3，或支持 Vulkan 1.2 且具备 VK_KHR_dynamic_rendering 与 VK_KHR_synchronization2 扩展的显卡驱动。"
+                    "  1. The renderer needs Vulkan 1.3, or Vulkan 1.2 with the VK_KHR_dynamic_rendering and VK_KHR_synchronization2 extensions."
                 );
                 let _ = writeln!(
                     out,
-                    "  2. 在 Windows 10 机器上，请将独立显卡/核显驱动升级至支持 Vulkan 1.2+ 的较新版本。"
+                    "  2. On Windows 10, update the discrete/integrated GPU driver to a recent build with Vulkan 1.2+ support."
                 );
             }
             Self::UnsupportedFeatures(missing) => {
                 let _ = writeln!(
                     out,
-                    "  1. 当前显卡驱动缺少关键渲染特性: {}。",
+                    "  1. The current graphics driver lacks key rendering features: {}.",
                     missing.join(", ")
                 );
                 let _ = writeln!(
                     out,
-                    "  2. 请更新显卡驱动；若机器存在双显卡（核显+独显），请在 Windows 图形设置中将程序指定为“高性能”独立显卡运行。"
+                    "  2. Update the GPU driver; on dual-GPU laptops, assign this program to the high-performance discrete GPU in Windows graphics settings."
                 );
             }
             Self::Vulkan(vk::Result::ERROR_EXTENSION_NOT_PRESENT) => {
                 let _ = writeln!(
                     out,
-                    "  1. 驱动或 Vulkan Loader 拒绝了某项扩展请求。请检查上方“缺失的必需实例扩展”或“启用的设备扩展”列表。"
+                    "  1. The driver or Vulkan loader rejected an extension request. Check the missing-extension and enabled-extension lists above."
                 );
                 let _ = writeln!(
                     out,
-                    "  2. 在 Windows 10 旧驱动环境下，建议更新显卡驱动并检查是否存在过期的第三方 Vulkan 覆盖层（如旧版 RTSS / OBS Vulkan Hook）。"
+                    "  2. On old Windows 10 drivers, update the GPU driver and check for stale third-party Vulkan overlays (e.g. old RTSS / OBS Vulkan hooks)."
                 );
             }
             Self::Vulkan(_) => {
                 let _ = writeln!(
                     out,
-                    "  1. 请参考上方失败阶段与错误码解析排查驱动状态，必要时可设置环境变量 UNBOUND_VALIDATION=1 获取校验层详细输出。"
+                    "  1. Inspect the failing stage and result above, and set UNBOUND_VALIDATION=1 for detailed validation-layer output if needed."
                 );
             }
             Self::Allocation(_) => {
                 let _ = writeln!(
                     out,
-                    "  1. 显存或主机内存分配失败，请检查是否有其他大型 3D 程序占满 VRAM，或调低 GpuConfig::{{pool_capacity, ring_capacity}}。"
+                    "  1. VRAM or host memory allocation failed; close other large 3D programs or lower GpuConfig::{{pool_capacity, ring_capacity}}."
                 );
             }
             Self::InvalidArgument(_) => {
                 let _ = writeln!(
                     out,
-                    "  1. 请检查调用渲染器 API 时传入的槽位索引或缓冲区参数。"
+                    "  1. Check the slot indices and buffer arguments passed to the renderer API."
                 );
             }
             Self::DeviceLost => {
                 let _ = writeln!(
                     out,
-                    "  1. GPU 设备发生重置（VK_ERROR_DEVICE_LOST），框架将尝试触发自动设备恢复流程。"
+                    "  1. The GPU device was reset (VK_ERROR_DEVICE_LOST); the framework will attempt automatic device recovery."
                 );
             }
         }
@@ -2215,7 +2215,7 @@ mod tests {
         let err = GpuError::Vulkan(vk::Result::ERROR_EXTENSION_NOT_PRESENT);
         let report = err.diagnostic_report();
         assert!(report.contains("ERROR_EXTENSION_NOT_PRESENT"));
-        assert!(report.contains("排障建议"));
+        assert!(report.contains("Troubleshooting"));
     }
 
     #[test]

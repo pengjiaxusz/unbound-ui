@@ -48,10 +48,10 @@ impl Presence {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Online => "在线",
-            Self::Away => "离开",
-            Self::Busy => "忙碌",
-            Self::Offline => "离线",
+            Self::Online => "Online",
+            Self::Away => "Away",
+            Self::Busy => "Busy",
+            Self::Offline => "Offline",
         }
     }
 }
@@ -354,9 +354,9 @@ pub fn emit_avatar_group(
         .take(group.visible_count())
         .map(|avatar| avatar.name.as_str())
         .collect();
-    let mut a11y = A11yNode::new(Role::Group, names.join("、"), group.rect);
+    let mut a11y = A11yNode::new(Role::Group, names.join(", "), group.rect);
     a11y.description = if group.overflow() > 0 {
-        format!("另有 {} 人", group.overflow())
+        format!("{} more", group.overflow())
     } else {
         String::new()
     };
@@ -379,7 +379,7 @@ mod tests {
     fn initials_use_two_words_or_two_characters() {
         assert_eq!(initials("Ada Lovelace"), "AL");
         assert_eq!(initials("grace"), "GR");
-        assert_eq!(initials("张伟"), "张伟");
+        assert_eq!(initials("张伟"), "张伟"); // lang-ok: two-character CJK name
         assert_eq!(initials("  "), "?");
     }
 
@@ -428,7 +428,7 @@ mod tests {
         let a11y = output.a11y.expect("image");
         assert_eq!(a11y.role, Role::Image);
         assert_eq!(a11y.label, "Ada");
-        assert_eq!(a11y.description, "在线");
+        assert_eq!(a11y.description, "Online");
         assert!(output.hit.is_some());
     }
 
