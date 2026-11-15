@@ -24,6 +24,11 @@
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
 
+# Managed agent assets: the engine renders them as LF and fingerprints the
+# exact bytes, so they must stay LF on checkout. Without this, a repo-level
+# `*.ps1 eol=crlf` makes every update think the skill scripts were modified.
+.agents/** text eol=lf
+
 # ==============================================================================
 # 2. Common binary assets (Binary Files)
 # ==============================================================================
