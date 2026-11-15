@@ -9,7 +9,7 @@
 //!
 
 use unbound_app::{
-    AppContext, AppEvent, AppKey, Application, DirtyFlags, EventOutcome, ImeUpdate,
+    AppContext, AppEvent, AppKey, Application, DirtyFlags, EventOutcome, ImeUpdate, Locale,
     Modifiers as AppModifiers, ViewBuilder,
 };
 use unbound_input::FocusCause;
@@ -43,6 +43,7 @@ impl Application for GalleryApp {
 
     fn init(&mut self, ctx: &mut AppContext) -> Self::State {
         ctx.theme = crate::theme::kind(self.state.theme == ThemeMode::Dark);
+        ctx.set_locale_enum(self.state.locale);
     }
 
     fn reduce(
@@ -153,11 +154,21 @@ impl Application for GalleryApp {
                 ctx.set_ui_scale(scale);
                 self.state.bump();
             }
+            AppEvent::LocaleChanged { locale } => {
+                let parsed = Locale::from_tag(&locale);
+                self.state.set_locale(parsed);
+                ctx.set_locale_enum(parsed);
+            }
             AppEvent::Timer { .. }
             | AppEvent::FileHover(_)
             | AppEvent::FileDrop(_)
             | AppEvent::FileHoverCancelled
             | AppEvent::Custom { .. } => {}
+        }
+
+        // 若外壳内部点击（如标题栏语言下拉菜单或 i18n 沙盒按钮）切换了语言，将其同步至 AppContext。
+        if ctx.locale() != self.state.locale {
+            ctx.set_locale_enum(self.state.locale);
         }
 
         if let Some(node) = self.take_focus_request() {

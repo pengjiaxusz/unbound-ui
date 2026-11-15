@@ -1,6 +1,7 @@
 //! 首页：首屏横幅、能力卡片与完整控件索引。
 
 use accesskit::Role;
+use unbound_app::Locale;
 use unbound_math::Rect;
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageId, PageInfo};
@@ -10,10 +11,10 @@ use crate::widgets::{self, ButtonVariant, Icon};
 pub const INFO: PageInfo = PageInfo {
     title: "Unbound UI Gallery",
     short: "Home",
-    description: "A live tour of the engine: renderer, text, layout, input, canvas and telemetry. Every example on this page is the framework drawing itself.",
-    crates: &["unbound-gpu", "unbound-vector", "unbound-layout"],
+    description: "A live tour of the engine: renderer, text, layout, input, canvas, i18n and telemetry. Every example on this page is the framework drawing itself.",
+    crates: &["unbound-gpu", "unbound-vector", "unbound-layout", "unbound-app"],
     docs: "docs/architecture/showcase.md",
-    keywords: "overview hero gallery start",
+    keywords: "overview hero gallery start i18n",
 };
 
 /// 首屏 CTA 跳转的目标页面。
@@ -47,6 +48,19 @@ pub const CAPABILITIES: [(&str, &str, PageId, Icon); 4] = [
     ),
 ];
 
+/// 按当前语言返回四项核心特性的本地化标题与副标题。
+const fn localized_capability(index: usize, locale: Locale) -> (&'static str, &'static str) {
+    match locale {
+        Locale::EnUs => (CAPABILITIES[index].0, CAPABILITIES[index].1),
+        Locale::ZhCn => match index {
+            0 => ("字体与排版", "任意缩放比下的高精 MTSDF 字形"),
+            1 => ("虚拟化列表", "10 万行数据集，仅 12 个活跃节点"),
+            2 => ("无限画布", "四叉树空间剔除与磁吸对齐"),
+            _ => ("GPU 渲染管线", "统一超级着色器，单帧 4 次绘制调用"),
+        },
+    }
+}
+
 /// 完整目录网格。
 pub const INDEX_PAGES: [PageId; 12] = [
     PageId::Colors,
@@ -57,9 +71,9 @@ pub const INDEX_PAGES: [PageId; 12] = [
     PageId::TextField,
     PageId::Flex,
     PageId::Overlays,
-    PageId::DragDrop,
     PageId::ListView,
     PageId::Viewport,
+    PageId::I18n,
     PageId::A11y,
 ];
 
@@ -201,7 +215,7 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
     let title_size = if compact { 34.0 } else { 44.0 };
     let title_y = left.origin.y + if compact { 28.0 } else { 32.0 };
     ctx.canvas.text(
-        "Unbound UI",
+        ctx.state.t("home.hero.title"),
         Rect::new(
             left.origin.x,
             title_y,
@@ -214,7 +228,7 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
         AlignY::Top,
     );
     ctx.canvas.text_wrapped(
-        "An engine-level UI framework: GPU primitives, MTSDF text, Taffy layout, an infinite canvas and a headless verifier — dogfooded by the application you are looking at.",
+        ctx.state.t("home.hero.subtitle"),
         Rect::new(
             left.origin.x,
             title_y + if compact { 44.0 } else { 54.0 },
@@ -236,7 +250,7 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
         ctx.canvas,
         ctx.part(1),
         primary,
-        "Explore components",
+        ctx.state.t("home.hero.cta_primary"),
         ButtonVariant::OnHero,
         true,
     );
@@ -245,13 +259,13 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
         ctx.canvas,
         ctx.part(2),
         secondary,
-        "Open canvas studio",
+        ctx.state.t("home.hero.cta_secondary"),
         ButtonVariant::OnHeroSecondary,
         true,
     );
     ctx.canvas.semantic(
         Role::Heading,
-        "Unbound UI Gallery",
+        ctx.state.t("app.title"),
         Rect::new(left.origin.x, left.origin.y + 32.0, left.size.x, 54.0),
     );
 }
@@ -264,7 +278,8 @@ pub fn capability_grid(ctx: &mut DemoCtx<'_, '_>) {
     let gap = 12.0;
     let cell_w = (rect.size.x - gap * (columns - 1) as f32) / columns as f32;
     let cell_h = (rect.size.y - gap) * 0.5;
-    for (index, (title, subtitle, page, icon)) in CAPABILITIES.iter().enumerate() {
+    for (index, (_, _, page, icon)) in CAPABILITIES.iter().enumerate() {
+        let (title, subtitle) = localized_capability(index, ctx.state.locale);
         let col = index % columns;
         let row = index / columns;
         let cell = Rect::new(
@@ -343,11 +358,12 @@ pub fn capability_grid(ctx: &mut DemoCtx<'_, '_>) {
             AlignX::Center,
             AlignY::Center,
         );
+        let page_info = page.localized_info(ctx.state.locale);
         ctx.control(
             index as u16 + 1,
             cell,
             Role::Link,
-            &format!("{title} — {}", page.info().title),
+            &format!("{title} — {}", page_info.title),
             false,
         );
     }
@@ -398,7 +414,7 @@ pub fn control_index(ctx: &mut DemoCtx<'_, '_>) {
             0.0,
             0.0,
         );
-        let info = page.info();
+        let info = page.localized_info(ctx.state.locale);
         let initial = info.short.chars().next().unwrap_or('U').to_string();
         ctx.canvas.text(
             &initial,

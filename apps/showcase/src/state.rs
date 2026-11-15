@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use unbound_anim::{Spring, SpringPreset};
-use unbound_app::AssetHub;
+use unbound_app::{set_global_locale, AssetHub, I18nBundle, Locale};
 use unbound_asset::{AssetId, StagingRing};
 use unbound_canvas::{TransactionKind, UndoStack};
 use unbound_math::Vec2;
@@ -117,6 +117,8 @@ pub struct DemoState {
     pub elapsed: f32,
     /// 按钮演示的激活次数。
     pub clicks: u32,
+    /// i18n 教学页演示的任务计数增量。
+    pub i18n_counter: u32,
     /// 图标变体中上次选中的图标按钮。
     pub selected_icon: usize,
     /// 系统专页中当前选中的子系统索引（`0..SubsystemId::COUNT`）。
@@ -191,6 +193,7 @@ impl Default for DemoState {
             draw_calls: 4,
             elapsed: 0.0,
             clicks: 0,
+            i18n_counter: 0,
             selected_icon: 0,
             selected_subsystem: 0,
             progress_bar: ProgressState::new(),
@@ -272,6 +275,14 @@ pub struct GalleryState {
     /// 保存在状态中（而非渲染器中），使页面和搜索框能精确绘制 IME 正在组合的内容。
     ///
     pub ime_preedit: String,
+    /// 当前激活的界面语言区域（默认 `Locale::EnUs`，支持 `Locale::ZhCn`）。
+    pub locale: Locale,
+    /// 外壳内建的原生国际化资源包。
+    pub i18n: I18nBundle,
+    /// 标题栏语言下拉菜单是否处于展开状态。
+    pub lang_dropdown_open: bool,
+    /// 标题栏窗口缩放下拉菜单是否处于展开状态。
+    pub zoom_dropdown_open: bool,
     pub theme: ThemeMode,
     pub zoom_step: usize,
     /// 是否启用像素网格对齐。
@@ -304,6 +315,10 @@ impl Default for GalleryState {
             search_query: String::new(),
             search_focused: false,
             ime_preedit: String::new(),
+            locale: Locale::EnUs,
+            i18n: build_showcase_i18n(Locale::EnUs),
+            lang_dropdown_open: false,
+            zoom_dropdown_open: false,
             theme: ThemeMode::Dark,
             zoom_step: 0,
             pixel_snap: true,
@@ -325,7 +340,110 @@ impl Default for GalleryState {
     }
 }
 
+/// 构建 Showcase 外壳的原生中英双语资源包（默认 `en-US` 并以其作为回退语言）。
+#[must_use]
+pub fn build_showcase_i18n(locale: Locale) -> I18nBundle {
+    let mut bundle = I18nBundle::with_locale(locale);
+    bundle.register_bilingual(&[
+        ("app.title", "Unbound UI Gallery", "Unbound UI 组件展厅"),
+        ("a11y.toggle_nav", "Toggle navigation", "折叠或展开导航栏"),
+        (
+            "a11y.search",
+            "Search controls, crates and features",
+            "搜索组件、模块与特性",
+        ),
+        ("a11y.lang_selector", "Language selector", "界面语言选择器"),
+        ("a11y.toggle_theme", "Toggle theme", "切换主题"),
+        (
+            "a11y.zoom_selector",
+            "Window scale selector",
+            "窗口缩放选择器",
+        ),
+        ("a11y.pixel_snap", "Pixel snapping", "像素网格对齐"),
+        ("a11y.hud", "Performance HUD", "性能监控浮窗"),
+        (
+            "a11y.code_and_a11y",
+            "Code and accessibility",
+            "源码与无障碍信息",
+        ),
+        ("top.search.short", "Search…", "搜索…"),
+        (
+            "top.search.placeholder",
+            "Search controls, crates, features…",
+            "搜索组件、模块或特性…",
+        ),
+        ("top.theme.light", "Light", "浅色"),
+        ("top.theme.dark", "Dark", "深色"),
+        ("nav.home", "Home", "首页"),
+        ("nav.footer.telemetry", "Engine Telemetry", "引擎性能遥测"),
+        ("nav.footer.settings", "Settings & About", "设置与关于"),
+        ("page.docs_prefix", "docs", "文档"),
+        ("page.options", "OPTIONS", "可调参数"),
+        (
+            "page.code_bar",
+            "Rust · ABI · accessibility",
+            "Rust 源码 · ABI · 无障碍契约",
+        ),
+        ("page.source", "SOURCE", "源码实现"),
+        ("hud.title", "LIVE FRAME", "实时帧遥测"),
+        ("hud.frame", "FRAME", "帧耗时"),
+        ("hud.fps", "FPS", "帧率"),
+        ("hud.prims", "PRIMS", "图元"),
+        ("hud.glyphs", "GLYPHS", "字形"),
+        ("hud.cards", "CARDS", "卡片"),
+        ("hud.limit", "LIMIT", "帧率上限"),
+        ("hud.uncapped", "uncapped", "无限制"),
+        (
+            "search.palette_title",
+            "COMMAND PALETTE · CTRL K",
+            "命令面板 · CTRL K",
+        ),
+        ("search.matches", "MATCHES", "匹配结果"),
+        (
+            "search.hint",
+            "Try “Button”, “MTSDF”, “Quadtree”, “DnD”…",
+            "试试输入 “Button”、“MTSDF”、“四叉树”、“拖放”…",
+        ),
+        (
+            "search.empty",
+            "No controls match that query.",
+            "未找到匹配的页面或组件。",
+        ),
+        ("home.hero.title", "Unbound UI", "Unbound UI"),
+        (
+            "home.hero.subtitle",
+            "An engine-level UI framework: GPU primitives, MTSDF text, Taffy layout, an infinite canvas and a headless verifier — dogfooded by the application you are looking at.",
+            "引擎级 UI 框架：GPU 图元、MTSDF 矢量文本、Taffy 布局、无限画布与无头几何校验器 —— 全部由你眼前这个应用自举驱动。",
+        ),
+        ("home.hero.cta_primary", "Explore components", "浏览标准组件"),
+        (
+            "home.hero.cta_secondary",
+            "Open canvas studio",
+            "打开画布工作台",
+        ),
+        ("window.minimize", "Minimise window", "最小化窗口"),
+        ("window.maximize", "Maximise window", "最大化窗口"),
+        ("window.close", "Close window", "关闭窗口"),
+    ]);
+    bundle
+}
+
 impl GalleryState {
+    /// 切换 Showcase 激活语言并同步更新内置 `I18nBundle` 与全局语言状态。
+    pub fn set_locale(&mut self, locale: Locale) {
+        set_global_locale(locale);
+        self.locale = locale;
+        self.i18n.set_locale_enum(locale);
+        self.lang_dropdown_open = false;
+        self.bump();
+    }
+
+    /// 按键查询当前语言下的外壳文案。
+    #[must_use]
+    pub fn t<'a>(&'a self, key: &'a str) -> &'a str {
+        self.i18n.t(key)
+    }
+
     /// 将状态标记为脏。
     pub fn bump(&mut self) {
         self.revision = self.revision.wrapping_add(1);
@@ -345,6 +463,8 @@ impl GalleryState {
             self.content_scroll = 0.0;
             self.demo.modal_open = false;
             self.demo.dropdown_open = false;
+            self.lang_dropdown_open = false;
+            self.zoom_dropdown_open = false;
             self.bump();
         }
     }
@@ -356,6 +476,8 @@ impl GalleryState {
         self.content_scroll = component_scroll_offset(id);
         self.demo.modal_open = false;
         self.demo.dropdown_open = false;
+        self.lang_dropdown_open = false;
+        self.zoom_dropdown_open = false;
         self.bump();
     }
 

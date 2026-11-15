@@ -98,6 +98,7 @@ pub struct ShellLayout {
     pub nav_width: f32,
     pub nav_toggle: Rect,
     pub search: Rect,
+    pub lang: Rect,
     pub theme: Rect,
     pub zoom: Rect,
     pub snap: Rect,
@@ -144,6 +145,7 @@ pub struct PageLayout {
 struct ChromeNodes {
     nav_toggle: NodeId,
     search: NodeId,
+    lang: NodeId,
     theme: NodeId,
     zoom: NodeId,
     snap: NodeId,
@@ -253,8 +255,8 @@ fn code_panel_height(example: &ExampleDef) -> f32 {
 /// 标题栏的控件几何布局。
 ///
 /// 标题栏是一条挂在右边缘的控件链，外加位于栏中央的搜索框。
-///
-fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
+/// 窗口缩放控件与语言选择控件均采用紧凑下拉选择器形式，大幅释放顶栏水平空间。
+fn chrome_rects(width: f32, compact: bool) -> [Rect; 10] {
     // 窗口按钮锚定在右边缘且始终优先：窄窗口绝不能把“关闭”挤出屏幕，
     // 且关闭按钮必须紧贴边缘，使屏幕角落成为有效点击目标。
     //
@@ -279,8 +281,7 @@ fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
     let nav_toggle = Rect::new(12.0, 12.0, 32.0, 32.0);
 
     // 其余控件在导航切换按钮与窗口按钮之间的空隙内从右向左排列。
-    // 放不下的控件会被隐藏（宽度设为零）而不是与邻居重叠——
-    // 过去在 320 px 下会导致布局出现负值。
+    // 放不下的控件会被隐藏（宽度设为零）而不是与邻居重叠。
     //
     let left_limit = nav_toggle.origin.x + nav_toggle.size.x + 8.0;
     let right_limit = (minimize.origin.x - 10.0).max(left_limit);
@@ -299,12 +300,12 @@ fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
 
     let hud = take(32.0);
     let snap = take(32.0);
-    // 四个缩放档位需要每个 42 px 的槽位来容纳 `"1.25×"` 及其内边距；
-    // 低于该宽度时改用紧凑标签。
-    let zoom = take(if width < 1000.0 { 168.0 } else { 190.0 });
+    // 窗口缩放与尺寸调整改为紧凑下拉选择器（78px / 64px），取代原先 190px 的四段式分段控件。
+    let zoom = take(if compact { 64.0 } else { 78.0 });
     let theme = take(if compact { 34.0 } else { 118.0 });
+    // 语言下拉选择控件（English / 简体中文）。
+    let lang = take(if compact { 68.0 } else { 96.0 });
 
-    //
     // 窄窗口保留搜索*图标*而非完全丢弃搜索：在 150–200 % 缩放下
     // 逻辑视口太小，无法容纳输入框，此时浮层是唯一的入口。
     let search_width = if width < 900.0 {
@@ -314,11 +315,14 @@ fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
     } else {
         (width * 0.24).clamp(220.0, 380.0)
     };
-    let search_right = if theme.size.x > 0.0 {
-        theme.origin.x - 20.0
+    let rightmost_control_x = if lang.size.x > 0.0 {
+        lang.origin.x
+    } else if theme.size.x > 0.0 {
+        theme.origin.x
     } else {
-        cursor - 12.0
+        cursor + 8.0
     };
+    let search_right = rightmost_control_x - 20.0;
     let search_x = (width * 0.5 - search_width * 0.5)
         .max(left_limit)
         .min((search_right - search_width).max(left_limit));
@@ -328,7 +332,7 @@ fn chrome_rects(width: f32, compact: bool) -> [Rect; 9] {
         Rect::new(0.0, 12.0, 0.0, 32.0)
     };
     [
-        nav_toggle, search, theme, zoom, snap, hud, minimize, maximize, close,
+        nav_toggle, search, lang, theme, zoom, snap, hud, minimize, maximize, close,
     ]
 }
 
@@ -386,6 +390,7 @@ impl ShellTree {
         let chrome = ChromeNodes {
             nav_toggle: insert(&mut world, top_bar, absolute(0.0, 0.0, 0.0, 0.0)),
             search: insert(&mut world, top_bar, absolute(0.0, 0.0, 0.0, 0.0)),
+            lang: insert(&mut world, top_bar, absolute(0.0, 0.0, 0.0, 0.0)),
             theme: insert(&mut world, top_bar, absolute(0.0, 0.0, 0.0, 0.0)),
             zoom: insert(&mut world, top_bar, absolute(0.0, 0.0, 0.0, 0.0)),
             snap: insert(&mut world, top_bar, absolute(0.0, 0.0, 0.0, 0.0)),
@@ -479,6 +484,7 @@ impl ShellTree {
         let ids = [
             self.chrome.nav_toggle,
             self.chrome.search,
+            self.chrome.lang,
             self.chrome.theme,
             self.chrome.zoom,
             self.chrome.snap,
@@ -520,6 +526,7 @@ impl ShellTree {
             nav_width,
             nav_toggle: rect(self.chrome.nav_toggle),
             search: rect(self.chrome.search),
+            lang: rect(self.chrome.lang),
             theme: rect(self.chrome.theme),
             zoom: rect(self.chrome.zoom),
             snap: rect(self.chrome.snap),

@@ -65,7 +65,7 @@ pub mod window_runner;
 
 pub use assets::{AssetHub, AssetResidency};
 pub use guest_bridge::GuestAppAdapter;
-pub use i18n::{I18nBundle, LayoutDirection};
+pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Locale};
 pub use inspector::{Inspector, InspectorNode, InspectorScene};
 pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
@@ -488,6 +488,8 @@ pub enum AppEvent {
     FileHoverCancelled,
     /// 全局 UI 逻辑缩放比变更（对齐 `CANONICAL_SCALE_STEPS` 七档缩放）。
     UiScaleChanged { scale: f32 },
+    /// 界面语言区域变更（默认 `"en-US"`，支持 `"zh-CN"` 等）。
+    LocaleChanged { locale: String },
     /// 宿主后台线程或 Tokio 异步任务投递的自定义事件。
     Custom { id: u64, payload: String },
 }
@@ -574,6 +576,8 @@ pub struct AppContext {
     pub ui_scale: f32,
     /// 缩放 OSD 浮层剩余显示秒数（`> 0.0` 时在右上角渲染当前缩放百分比胶囊）。
     pub scale_osd_remaining: f32,
+    /// 应用内建的国际化资源包与当前语言区域（默认 `en-US`）。
+    pub i18n: Rc<RefCell<I18nBundle>>,
     /// 当前聚焦节点，与焦点管理器保持同步。
     pub focused: Option<u64>,
     /// 是否应绘制焦点环。
@@ -638,6 +642,7 @@ impl AppContext {
             window_maximized: false,
             ui_scale: 1.0,
             scale_osd_remaining: 0.0,
+            i18n: Rc::new(RefCell::new(I18nBundle::with_locale(Locale::EnUs))),
             focused: None,
             focus_visible: false,
             hovered: None,
@@ -692,6 +697,45 @@ impl AppContext {
     /// 可变借用控件状态存储。
     pub fn state_store_mut(&self) -> RefMut<'_, WidgetStateStore> {
         self.widget_state.borrow_mut()
+    }
+
+    /// 获取不可变借用的国际化资源包。
+    #[must_use]
+    pub fn i18n(&self) -> core::cell::Ref<'_, I18nBundle> {
+        self.i18n.borrow()
+    }
+
+    /// 获取可变借用的国际化资源包（用于注册多语言词条或自定义回退）。
+    pub fn i18n_mut(&mut self) -> RefMut<'_, I18nBundle> {
+        self.i18n.borrow_mut()
+    }
+
+    /// 获取当前激活的标准语言区域枚举。
+    #[must_use]
+    pub fn locale(&self) -> Locale {
+        self.i18n.borrow().active_locale_enum()
+    }
+
+    /// 切换当前激活的语言区域（支持传入 `"en-US"` / `"zh-CN"` 等标签）。
+    pub fn set_locale(&mut self, locale: impl Into<String>) {
+        self.i18n.borrow_mut().set_locale(locale);
+    }
+
+    /// 通过强类型 [`Locale`] 枚举切换当前激活的语言区域。
+    pub fn set_locale_enum(&mut self, locale: Locale) {
+        self.i18n.borrow_mut().set_locale_enum(locale);
+    }
+
+    /// 按键翻译文本，若未命中则回退至 fallback 语言或原键名。
+    #[must_use]
+    pub fn t(&self, key: &str) -> String {
+        self.i18n.borrow().t(key).to_owned()
+    }
+
+    /// 按键与参数插值格式化本地化文本。
+    #[must_use]
+    pub fn t_args(&self, key: &str, args: &[(&str, &str)]) -> String {
+        self.i18n.borrow().format(key, args)
     }
 
     /// 设置产品主题风格与 10 套 OKLCH 品牌强调色。
@@ -948,6 +992,10 @@ pub struct ViewContext {
     pub force: bool,
     /// 窗口当前是否处于最大化状态（决定标题栏最大化/还原按钮图标）。
     pub window_maximized: bool,
+    /// 当前激活的标准语言区域。
+    pub locale: Locale,
+    /// 当前激活区域的阅读布局方向（LTR / RTL）。
+    pub direction: LayoutDirection,
 }
 
 impl ViewContext {
@@ -1092,6 +1140,7 @@ pub struct ViewBuilder<'a> {
     parent: NodeId,
     pending: &'a mut Vec<PendingWidget>,
     widget_state: Rc<RefCell<WidgetStateStore>>,
+    i18n: Rc<RefCell<I18nBundle>>,
     node_keys: &'a mut FxHashMap<u64, NodeId>,
     seen_keys: &'a mut FxHashSet<u64>,
     ephemeral_nodes: &'a mut Vec<NodeId>,
@@ -1101,6 +1150,36 @@ pub struct ViewBuilder<'a> {
 }
 
 impl<'a> ViewBuilder<'a> {
+    /// 获取当前激活的标准语言区域枚举。
+    #[must_use]
+    pub fn locale(&self) -> Locale {
+        self.ctx.locale
+    }
+
+    /// 访问只读国际化资源包。
+    #[must_use]
+    pub fn i18n(&self) -> core::cell::Ref<'_, I18nBundle> {
+        self.i18n.borrow()
+    }
+
+    /// 在声明式视图构建期按键翻译文本。
+    #[must_use]
+    pub fn t(&self, key: &str) -> String {
+        self.i18n.borrow().t(key).to_owned()
+    }
+
+    /// 在声明式视图构建期按键与命名参数插值翻译文本。
+    #[must_use]
+    pub fn t_args(&self, key: &str, args: &[(&str, &str)]) -> String {
+        self.i18n.borrow().format(key, args)
+    }
+
+    /// 在声明式视图构建期按数量单复数规则翻译文本。
+    #[must_use]
+    pub fn t_plural(&self, key: &str, count: usize) -> String {
+        self.i18n.borrow().format_plural(key, count)
+    }
+
     /// 为当前帧注册一个漫游 tabindex 焦点组。
     pub fn register_focus_group(&mut self, group: FocusGroup) {
         self.focus_groups.push(group);
@@ -2674,6 +2753,18 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
+    /// 切换运行时语言区域并派发 [`AppEvent::LocaleChanged`]，触发完整布局与文本重绘。
+    pub fn set_locale(&mut self, locale: impl Into<String>) -> DirtyFlags {
+        let tag = locale.into();
+        self.ctx.set_locale(tag.clone());
+        self.force_rebuild = true;
+        let flags = self
+            .dispatch(AppEvent::LocaleChanged { locale: tag })
+            .merge(DirtyFlags::LAYOUT | DirtyFlags::PAINT | DirtyFlags::TEXT);
+        self.mark(flags);
+        flags
+    }
+
     /// 处理主题变更。
     pub fn set_theme(&mut self, kind: ThemeKind) -> DirtyFlags {
         self.ctx.theme = kind;
@@ -2778,6 +2869,8 @@ impl<A: Application> AppRuntime<A> {
             focus_visible: self.ctx.focus_visible,
             force: self.force_rebuild,
             window_maximized: self.ctx.window_maximized,
+            locale: self.ctx.i18n.borrow().active_locale_enum(),
+            direction: self.ctx.i18n.borrow().direction(),
         };
         let mut focus_groups = Vec::new();
         let mut view = ViewBuilder {
@@ -2787,6 +2880,7 @@ impl<A: Application> AppRuntime<A> {
             parent: root,
             pending: &mut self.pending,
             widget_state: Rc::clone(&self.widget_state),
+            i18n: Rc::clone(&self.ctx.i18n),
             node_keys: &mut self.node_keys,
             seen_keys: &mut self.seen_keys,
             ephemeral_nodes: &mut self.ephemeral_nodes,
