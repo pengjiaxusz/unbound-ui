@@ -69,14 +69,14 @@ fn typing_updates_the_accessible_value() {
     let mut harness = WidgetHarness::new(widget(TextEditState::new()), Vec::new());
     harness.focus();
 
-    let outcome = reduce_text_input(&desc(), &mut edit, &TextInputEvent::Insert("你好".into()));
+    let outcome = reduce_text_input(&desc(), &mut edit, &TextInputEvent::Insert("你好".into())); // lang-ok: CJK insert sample
     assert!(outcome.changed);
     harness.desc.edit = edit;
     harness.rebuild();
 
     assert_eq!(
         harness.output.a11y.as_ref().map(|node| node.value.as_str()),
-        Some("你好")
+        Some("你好") // lang-ok: CJK value round-trip
     );
 }
 
@@ -91,9 +91,9 @@ fn the_ime_preedit_is_replaced_by_the_commit_without_duplicating_text() {
     reduce_text_input(
         &desc(),
         &mut edit,
-        &TextInputEvent::ImeCommit { text: "你".into() },
+        &TextInputEvent::ImeCommit { text: "你".into() }, // lang-ok: CJK IME commit sample
     );
-    assert_eq!(edit.text(), "ab你");
+    assert_eq!(edit.text(), "ab你"); // lang-ok: CJK IME result
     assert_eq!(edit.preedit(), None);
     assert_eq!(edit.cursor(), 5);
 }
@@ -164,7 +164,7 @@ fn triple_click_selects_the_whole_buffer() {
 #[test]
 fn a_password_field_masks_its_text_and_refuses_copy_and_cut() {
     let desc = desc().password(true);
-    assert_eq!(desc.display_text("你好abc"), "•••••");
+    assert_eq!(desc.display_text("你好abc"), "•••••"); // lang-ok: CJK masking sample
 
     let mut edit = TextEditState::with_text("secret");
     reduce_text_input(&desc, &mut edit, &TextInputEvent::SelectAll);

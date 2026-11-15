@@ -62,12 +62,12 @@ impl CanvasTool {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Select => "选择",
-            Self::Hand => "抓手",
-            Self::Frame => "框架",
-            Self::Pen => "钢笔",
-            Self::Connect => "连接",
-            Self::Text => "文本",
+            Self::Select => "Select",
+            Self::Hand => "Hand",
+            Self::Frame => "Frame",
+            Self::Pen => "Pen",
+            Self::Connect => "Connect",
+            Self::Text => "Text",
         }
     }
 
@@ -299,7 +299,7 @@ pub fn emit_canvas_toolbar(
         &mut payloads,
     );
 
-    let mut a11y = A11yNode::new(Role::Toolbar, "画布工具", rect).disabled(control.disabled);
+    let mut a11y = A11yNode::new(Role::Toolbar, "Canvas tools", rect).disabled(control.disabled);
     a11y.value = format!("{} · {}", state.active.label(), state.zoom_label());
 
     let sub_hits = if control.disabled {
@@ -406,7 +406,7 @@ mod tests {
         );
         let a11y = output.output.a11y.expect("toolbar");
         assert_eq!(a11y.role, Role::Toolbar);
-        assert!(a11y.value.contains("选择"));
+        assert!(a11y.value.contains("Select"));
     }
 
     #[test]

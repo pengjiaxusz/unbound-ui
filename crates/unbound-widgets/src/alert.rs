@@ -70,10 +70,10 @@ impl Severity {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Info => "提示",
-            Self::Success => "成功",
-            Self::Warning => "警告",
-            Self::Error => "错误",
+            Self::Info => "Info",
+            Self::Success => "Success",
+            Self::Warning => "Warning",
+            Self::Error => "Error",
         }
     }
 }
@@ -256,7 +256,7 @@ pub fn emit_alert(
 
     let mut a11y = A11yNode::new(
         Role::Alert,
-        format!("{}：{}", desc.severity.label(), desc.title),
+        format!("{}: {}", desc.severity.label(), desc.title),
         desc.rect,
     );
     a11y.description = desc.message.clone();
@@ -452,7 +452,7 @@ mod tests {
         let output = emit_alert(9, &alert, &[], ControlState::default());
         let a11y = output.a11y.expect("alert");
         assert_eq!(a11y.role, Role::Alert);
-        assert!(a11y.label.contains("警告"));
+        assert!(a11y.label.contains("Warning"));
         assert!(a11y.label.contains("Low disk space"));
         assert_eq!(a11y.description, "Delete the cache to continue.");
         assert!(output.hit.is_none());

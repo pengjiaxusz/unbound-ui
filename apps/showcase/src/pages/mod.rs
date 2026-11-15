@@ -1,4 +1,5 @@
 //! 展厅目录：分类、页面与示例定义。
+//! lang-allow: bilingual page metadata; Chinese is the zh-CN half
 //!
 //! 页面即数据。外壳只知道如何布局页面、渲染卡片和路由目标；
 //! 所有标题、旋钮和代码片段均来自下表。

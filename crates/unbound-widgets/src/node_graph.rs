@@ -442,8 +442,8 @@ pub fn emit_node_graph(
         ));
     }
 
-    let mut a11y = A11yNode::new(Role::Group, "节点图", Rect::new(0.0, 0.0, 0.0, 0.0));
-    a11y.value = format!("{} 个节点", nodes.len());
+    let mut a11y = A11yNode::new(Role::Group, "Node graph", Rect::new(0.0, 0.0, 0.0, 0.0));
+    a11y.value = format!("{} nodes", nodes.len());
 
     NodeGraphOutput {
         output: WidgetOutput {

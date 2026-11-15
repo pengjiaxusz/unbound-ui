@@ -386,7 +386,7 @@ pub fn emit_rich_text(
 
     let mut a11y = A11yNode::new(Role::Document, desc.label.clone(), desc.rect).clickable();
     a11y.description = format!(
-        "{} 个段落, {} 个链接",
+        "{} paragraphs, {} links",
         document.blocks.len(),
         document.link_count()
     );

@@ -435,8 +435,8 @@ fn typography_scaling(ctx: &mut DemoCtx<'_, '_>) {
     let scale = ctx.knob(0) / 100.0;
     let fallback = ctx.knob(1) as usize;
     let sample = match fallback {
-        1 => "无界界面 · 矢量字形",
-        2 => "Unbound 无界 · 400%",
+        1 => "无界界面 · 矢量字形", // lang-ok: CJK typography specimen
+        2 => "Unbound 无界 · 400%", // lang-ok: CJK typography specimen
         _ => "Unbound UI",
     };
     let size = (30.0 * scale).clamp(24.0, 120.0);

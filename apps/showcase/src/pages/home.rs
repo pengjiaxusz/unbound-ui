@@ -52,10 +52,10 @@ const fn localized_capability(index: usize, locale: Locale) -> (&'static str, &'
     match locale {
         Locale::EnUs => (CAPABILITIES[index].0, CAPABILITIES[index].1),
         Locale::ZhCn => match index {
-            0 => ("字体与排版", "任意缩放比下的高精 MTSDF 字形"),
-            1 => ("虚拟化列表", "10 万行数据集，仅 12 个活跃节点"),
-            2 => ("无限画布", "四叉树空间剔除与磁吸对齐"),
-            _ => ("GPU 渲染管线", "统一超级着色器，单帧 4 次绘制调用"),
+            0 => ("字体与排版", "任意缩放比下的高精 MTSDF 字形"), // lang-ok: zh-CN capability copy
+            1 => ("虚拟化列表", "10 万行数据集，仅 12 个活跃节点"), // lang-ok: zh-CN capability copy
+            2 => ("无限画布", "四叉树空间剔除与磁吸对齐"), // lang-ok: zh-CN capability copy
+            _ => ("GPU 渲染管线", "统一超级着色器，单帧 4 次绘制调用"), // lang-ok: zh-CN capability copy
         },
     }
 }

@@ -57,7 +57,7 @@ fn control_frame(rect: Rect, label: &str) -> Frame {
 /// 对控件帧运行全部七项断言。
 fn assert_clean(rect: Rect, label: &str) {
     let report = Harness::assert_clean(&control_frame(rect, label));
-    assert!(report.is_clean(), "{label} 未通过体检");
+    assert!(report.is_clean(), "{label} failed the health check");
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn a_control_that_is_too_small_is_reported() {
     frame.close();
     frame.close();
     let report = Harness::run(&frame.build());
-    assert!(!report.is_clean(), "太小的目标必须被报告");
+    assert!(!report.is_clean(), "undersized targets must be reported");
     assert!(
         report
             .by_rule(unbound_headless::Rule::InteractiveTargetSize)

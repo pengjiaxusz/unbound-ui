@@ -1,4 +1,5 @@
 //! 动效、无障碍、遥测与设置。
+//! lang-allow: pinyin/Shuangpin demo page; Chinese queries and IME labels are the subject
 
 use accesskit::Role;
 use unbound_math::{Rect, Vec2};
@@ -959,20 +960,20 @@ pub fn pinyin_engine(ctx: &mut DemoCtx<'_, '_>) {
 
     let rule_summary = match scheme {
         ShuangpinScheme::Xiaohe => {
-            "zh=v  ch=i  sh=u  |  零声母: 首字母+韵母键 (ang=ah, eng=eg)  |  默认方案"
+            "zh=v  ch=i  sh=u  |  zero initial: first letter + final key (ang=ah, eng=eg)  |  default scheme"
         }
         ShuangpinScheme::Natural => {
-            "zh=v  ch=i  sh=u  |  零声母: 首字母+韵母键 (ang=ah, eng=eg)  |  自然码"
+            "zh=v  ch=i  sh=u  |  zero initial: first letter + final key (ang=ah, eng=eg)  |  Ziranma"
         }
         ShuangpinScheme::Microsoft => {
-            "zh=v  ch=i  sh=u  |  零声母: o+韵母键 (a=oa, an=oj)  |  üe=v"
+            "zh=v  ch=i  sh=u  |  zero initial: o + final key (a=oa, an=oj)  |  üe=v"
         }
-        ShuangpinScheme::Sogou => "zh=v  ch=i  sh=u  |  零声母: o+韵母键 (a=oa, an=oj)  |  üe=v",
+        ShuangpinScheme::Sogou => "zh=v  ch=i  sh=u  |  zero initial: o + final key (a=oa, an=oj)  |  üe=v",
         ShuangpinScheme::Ziguang => {
-            "zh=u  ch=a  sh=i  |  零声母: o+韵母键 (a=oa, an=or)  |  紫光华宇"
+            "zh=u  ch=a  sh=i  |  zero initial: o + final key (a=oa, an=or)  |  Ziguang"
         }
         ShuangpinScheme::SmartAbc => {
-            "zh=a  ch=e  sh=v  |  零声母: o+韵母键 (a=oa, ei=oq)  |  智能ABC"
+            "zh=a  ch=e  sh=v  |  zero initial: o + final key (a=oa, ei=oq)  |  Intelligent ABC"
         }
     };
     ctx.canvas.text(
@@ -990,10 +991,10 @@ pub fn pinyin_engine(ctx: &mut DemoCtx<'_, '_>) {
     );
 
     let samples = [
-        ("着色器管线_Uber", "zhuoseqi"),
-        ("材质球_PBR", "caizhiqiu"),
-        ("重命名文件", "chongmingming"),
-        ("魑魅魍魉_Rare", "chimeiwangliang"),
+        ("shader_pipeline_uber", "zhuoseqi"),
+        ("material_pbr", "caizhiqiu"),
+        ("rename_file", "chongmingming"),
+        ("rare_mesh", "chimeiwangliang"),
     ];
 
     for (i, (term, full_py)) in samples.iter().enumerate() {
@@ -1018,7 +1019,7 @@ pub fn pinyin_engine(ctx: &mut DemoCtx<'_, '_>) {
             AlignY::Center,
         );
         ctx.canvas.text(
-            &format!("全拼: {full_py}   双拼: {sp_code}   双拼首码: '{init_char}'"),
+            &format!("Full: {full_py}   Shuangpin: {sp_code}   Shuangpin initial: '{init_char}'"),
             Rect::new(row_r.origin.x + 176.0, y + 4.0, row_r.size.x - 276.0, 30.0),
             11.0,
             palette.text_muted,

@@ -293,12 +293,12 @@ pub fn emit_progress(desc: &ProgressDesc, state: &ProgressState) -> WidgetOutput
     }
 
     let value = desc.value.map_or_else(
-        || "进行中".to_owned(),
+        || "In progress".to_owned(),
         |value| format!("{:.0}%", value.clamp(0.0, 1.0) * 100.0),
     );
     let mut a11y = A11yNode::new(Role::ProgressIndicator, desc.label.clone(), desc.rect);
     a11y.value = value;
-    a11y.description = "进度".to_owned();
+    a11y.description = "Progress".to_owned();
 
     WidgetOutput {
         primitives,
@@ -391,6 +391,6 @@ mod tests {
         let desc = ProgressDesc::circular(Rect::new(0.0, 0.0, 40.0, 40.0)).indeterminate();
         let output = emit_progress(&desc, &ProgressState::new());
         assert_eq!(output.primitives.len(), 1 + RING_SEGMENTS / 4);
-        assert_eq!(output.a11y.expect("progress").value, "进行中");
+        assert_eq!(output.a11y.expect("progress").value, "In progress");
     }
 }

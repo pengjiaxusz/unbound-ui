@@ -386,7 +386,7 @@ pub fn emit_chart(
     }
     let tooltip = hover_paint.map(|(_, _, bubble)| bubble);
 
-    let mut a11y = A11yNode::new(Role::Group, "图表", desc.rect).disabled(control.disabled);
+    let mut a11y = A11yNode::new(Role::Group, "Chart", desc.rect).disabled(control.disabled);
     a11y.value = hovered
         .and_then(|(series, point)| {
             desc.series

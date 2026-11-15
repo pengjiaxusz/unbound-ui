@@ -292,7 +292,10 @@ mod tests {
     fn both_themes_define_the_same_tokens() {
         let light: Vec<u16> = LIGHT.iter().map(|(token, _)| token.raw()).collect();
         let dark: Vec<u16> = DARK.iter().map(|(token, _)| token.raw()).collect();
-        assert_eq!(light, dark, "亮暗主题必须共用同一份槽位布局");
+        assert_eq!(
+            light, dark,
+            "light and dark themes must share the same slot layout"
+        );
 
         let contrast: Vec<u16> = HIGH_CONTRAST.iter().map(|(token, _)| token.raw()).collect();
         assert_eq!(light, contrast);
@@ -321,7 +324,7 @@ mod tests {
         for set in [LIGHT, DARK, HIGH_CONTRAST] {
             let mut seen = Vec::new();
             for (token, _) in set {
-                assert!(!seen.contains(&token.raw()), "token 重复");
+                assert!(!seen.contains(&token.raw()), "duplicate token");
                 seen.push(token.raw());
             }
         }
@@ -341,7 +344,7 @@ mod tests {
         assert_eq!(
             light.color(Token::PRIMARY).to_array()[3],
             dark.color(Token::PRIMARY).to_array()[3],
-            "主色在两个主题里都必须不透明"
+            "the primary color must stay opaque in both themes"
         );
     }
 }

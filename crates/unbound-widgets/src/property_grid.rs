@@ -82,9 +82,9 @@ impl PropertyValue {
             }
             Self::Bool(value) => {
                 if *value {
-                    "开".to_owned()
+                    "On".to_owned()
                 } else {
-                    "关".to_owned()
+                    "Off".to_owned()
                 }
             }
         }
@@ -516,7 +516,7 @@ pub fn emit_property_grid(
     ));
 
     let mut a11y = A11yNode::new(Role::Group, desc.label.clone(), desc.rect).clickable();
-    a11y.description = format!("{} 个属性", desc.row_count());
+    a11y.description = format!("{} properties", desc.row_count());
     a11y.disabled = control.disabled;
 
     let mut out = WidgetOutput {
@@ -711,7 +711,7 @@ mod tests {
         let output = emit_property_grid(9, &desc, &state, &[], ControlState::default());
         let a11y = output.a11y.expect("group");
         assert_eq!(a11y.role, Role::Group);
-        assert_eq!(a11y.description, "3 个属性");
+        assert_eq!(a11y.description, "3 properties");
         assert!(output.hit.is_some());
     }
 

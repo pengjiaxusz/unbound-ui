@@ -334,7 +334,7 @@ mod tests {
                 .primitives
                 .iter()
                 .all(|primitive| primitive.fill_token_or_uv != tokens.dot.raw() as u32),
-            "没有选中就没有圆点"
+            "no selection means no dot"
         );
     }
 

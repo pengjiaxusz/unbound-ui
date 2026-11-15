@@ -1263,19 +1263,19 @@ mod tests {
     #[test]
     fn typing_and_backspacing_respect_char_boundaries() {
         let mut edit = TextEditState::new();
-        reduce(&mut edit, TextInputEvent::Insert("你好".into()));
-        assert_eq!(edit.text(), "你好");
+        reduce(&mut edit, TextInputEvent::Insert("你好".into())); // lang-ok: CJK insert sample
+        assert_eq!(edit.text(), "你好"); // lang-ok: CJK insert result
         assert_eq!(edit.cursor(), 6);
 
         // 一次退格删除一个完整汉字，而非单个字节。
         reduce(&mut edit, TextInputEvent::Backspace);
-        assert_eq!(edit.text(), "你");
+        assert_eq!(edit.text(), "你"); // lang-ok: CJK backspace sample
         assert!(edit.text().is_char_boundary(edit.cursor()));
 
         reduce(&mut edit, TextInputEvent::Insert("a".into()));
-        assert_eq!(edit.text(), "你a");
+        assert_eq!(edit.text(), "你a"); // lang-ok: CJK mixed sample
         reduce(&mut edit, TextInputEvent::Backspace);
-        assert_eq!(edit.text(), "你");
+        assert_eq!(edit.text(), "你"); // lang-ok: CJK backspace result
     }
 
     #[test]
@@ -1290,7 +1290,7 @@ mod tests {
 
     #[test]
     fn the_cursor_never_lands_inside_a_multibyte_character() {
-        let mut edit = TextEditState::with_text("你好");
+        let mut edit = TextEditState::with_text("你好"); // lang-ok: CJK delete sample
         edit.set_cursor(1, false);
         assert_eq!(edit.cursor(), 0);
         edit.set_cursor(34, false);
@@ -1312,11 +1312,11 @@ mod tests {
 
     #[test]
     fn double_click_selects_a_word_including_cjk() {
-        let mut edit = TextEditState::with_text("hello 世界 world");
+        let mut edit = TextEditState::with_text("hello 世界 world"); // lang-ok: CJK word selection sample
         reduce(&mut edit, TextInputEvent::DoubleClick { offset: 8 });
-        assert_eq!(edit.selected_text(), Some("世界"));
+        assert_eq!(edit.selected_text(), Some("世界")); // lang-ok: CJK selection result
 
-        let mut edit = TextEditState::with_text("hello 世界 world");
+        let mut edit = TextEditState::with_text("hello 世界 world"); // lang-ok: CJK double-click sample
         reduce(&mut edit, TextInputEvent::DoubleClick { offset: 1 });
         assert_eq!(edit.selected_text(), Some("hello"));
     }
@@ -1380,8 +1380,8 @@ mod tests {
         reduce(&mut edit, TextInputEvent::ImePreedit { start: 2, end: 2 });
         assert_eq!(edit.preedit(), Some((2, 2)));
 
-        reduce(&mut edit, TextInputEvent::ImeCommit { text: "你".into() });
-        assert_eq!(edit.text(), "ab你");
+        reduce(&mut edit, TextInputEvent::ImeCommit { text: "你".into() }); // lang-ok: CJK IME commit sample
+        assert_eq!(edit.text(), "ab你"); // lang-ok: CJK IME result
         assert_eq!(edit.preedit(), None);
     }
 
@@ -1389,8 +1389,8 @@ mod tests {
     fn the_byte_budget_never_splits_a_character() {
         let desc = desc().max_bytes(5);
         let mut edit = TextEditState::new();
-        reduce_text_input(&desc, &mut edit, &TextInputEvent::Insert("你好".into()));
-        assert_eq!(edit.text(), "你", "only the three-byte character fits");
+        reduce_text_input(&desc, &mut edit, &TextInputEvent::Insert("你好".into())); // lang-ok: CJK byte-budget sample
+        assert_eq!(edit.text(), "你", "only the three-byte character fits"); // lang-ok: CJK byte-budget result
     }
 
     #[test]

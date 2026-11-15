@@ -478,10 +478,14 @@ pub fn emit_code_block(
         control.focused,
     ));
 
-    let mut a11y =
-        A11yNode::new(Role::Code, format!("{} 代码块", desc.language), desc.rect).clickable();
+    let mut a11y = A11yNode::new(
+        Role::Code,
+        format!("{} code block", desc.language),
+        desc.rect,
+    )
+    .clickable();
     a11y.value = desc.text.clone();
-    a11y.description = format!("{} 行", desc.line_count());
+    a11y.description = format!("{} lines", desc.line_count());
     a11y.disabled = control.disabled;
 
     WidgetOutput {
@@ -599,7 +603,7 @@ mod tests {
         let a11y = output.a11y.expect("code");
         assert_eq!(a11y.role, Role::Code);
         assert_eq!(a11y.value, desc.text);
-        assert_eq!(a11y.description, "3 行");
+        assert_eq!(a11y.description, "3 lines");
         assert_eq!(
             output.hit.as_ref().map(|hit| hit.cursor),
             Some(Some(CursorKind::Text))

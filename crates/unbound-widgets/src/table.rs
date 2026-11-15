@@ -587,7 +587,7 @@ pub fn emit_table(
     ));
 
     let mut a11y = A11yNode::new(Role::Grid, desc.label.clone(), desc.rect).clickable();
-    a11y.description = format!("{} 行 × {} 列", rows.len(), desc.columns.len());
+    a11y.description = format!("{} × {} grid", rows.len(), desc.columns.len());
     a11y.disabled = control.disabled;
 
     let mut out = WidgetOutput {
@@ -796,7 +796,7 @@ mod tests {
         let output = emit_table(7, &desc, &state, &row, &[], ControlState::default());
         let a11y = output.a11y.expect("grid");
         assert_eq!(a11y.role, Role::Grid);
-        assert_eq!(a11y.description, "1 行 × 3 列");
+        assert_eq!(a11y.description, "1 × 3 grid");
         assert_eq!(
             output.hit.as_ref().map(|hit| hit.cursor),
             Some(Some(CursorKind::Default))

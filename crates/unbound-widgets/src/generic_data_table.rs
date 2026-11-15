@@ -331,9 +331,9 @@ mod tests {
             DataColumnSpec::new("type", "Type", 100.0),
         ];
         let rows = vec![
-            vec!["着色器_Uber.spv".into(), "SPV".into()],
-            vec!["材质球_PBR.mat".into(), "MAT".into()],
-            vec!["角色网格.glb".into(), "GLTF".into()],
+            vec!["着色器_Uber.spv".into(), "SPV".into()], // lang-ok: pinyin/shuangpin matching sample
+            vec!["材质球_PBR.mat".into(), "MAT".into()], // lang-ok: pinyin/shuangpin matching sample
+            vec!["角色网格.glb".into(), "GLTF".into()], // lang-ok: pinyin/shuangpin matching sample
         ];
 
         let mut state = GenericDataTableState::new();

@@ -538,10 +538,10 @@ mod tests {
     fn a_memory_clipboard_round_trips_text() {
         let mut clipboard = MemoryClipboard::new();
         assert_eq!(clipboard.read_text(), Ok(None));
-        clipboard.write_text("你好, unbound").unwrap();
+        clipboard.write_text("你好, unbound").unwrap(); // lang-ok: CJK clipboard sample
         assert_eq!(
             clipboard.read_text().unwrap().as_deref(),
-            Some("你好, unbound")
+            Some("你好, unbound") // lang-ok: CJK clipboard round-trip
         );
         clipboard.clear().unwrap();
         assert_eq!(clipboard.read_text(), Ok(None));

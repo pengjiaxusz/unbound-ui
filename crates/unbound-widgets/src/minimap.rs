@@ -215,8 +215,8 @@ pub fn emit_minimap(
     );
     primitives.push(ring);
 
-    let mut a11y = A11yNode::new(Role::Group, "小地图", desc.rect).clickable();
-    a11y.description = "点击或拖拽以平移画布".to_owned();
+    let mut a11y = A11yNode::new(Role::Group, "Minimap", desc.rect).clickable();
+    a11y.description = "Click or drag to pan the canvas".to_owned();
 
     (
         WidgetOutput {
