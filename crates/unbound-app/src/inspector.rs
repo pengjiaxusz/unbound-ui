@@ -80,12 +80,24 @@ impl InspectorScene {
     }
 }
 
-/// 检查器状态：启用标志、拾取节点、违规列表与闪烁相位。
+/// 最近一次离散事件的冒泡路径记录（用于 DevTools 面板与无头调试）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventTrace {
+    /// 事件类别名称（如 `"Click"`、`"PointerDown"`、`"Wheel"`、`"Key"`）。
+    pub kind: &'static str,
+    /// 实际依次派发到的逻辑祖先节点链（由内向外）。
+    pub path: Vec<u64>,
+    /// 若某一级返回 `Propagation::Stop` 终止传播，则记录该节点键。
+    pub stopped_at: Option<u64>,
+}
+
+/// 检查器状态：启用标志、拾取节点、违规列表、事件追踪与闪烁相位。
 #[derive(Clone, Debug, Default)]
 pub struct Inspector {
     enabled: bool,
     pick: Option<InspectorNode>,
     violations: Vec<Violation>,
+    last_event: Option<EventTrace>,
     blink: f32,
 }
 
@@ -159,6 +171,17 @@ impl Inspector {
         &self.violations
     }
 
+    /// 记录最近一次离散事件的冒泡轨迹。
+    pub fn record_event(&mut self, trace: EventTrace) {
+        self.last_event = Some(trace);
+    }
+
+    /// 读取最近一次记录的事件冒泡轨迹。
+    #[must_use]
+    pub fn last_event(&self) -> Option<&EventTrace> {
+        self.last_event.as_ref()
+    }
+
     #[must_use]
     pub fn picked(&self) -> Option<&InspectorNode> {
         self.pick.as_ref()
@@ -209,6 +232,20 @@ impl Inspector {
                 "[{}] node {} {}",
                 violation.rule, violation.node, violation.message
             ));
+        }
+        if let Some(trace) = &self.last_event {
+            let chain = trace
+                .path
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            let stop = trace
+                .stopped_at
+                .map_or_else(|| "bubble".to_owned(), |id| format!("stop@{id}"));
+            scene
+                .lines
+                .push(format!("event: {} [{}] ({stop})", trace.kind, chain));
         }
 
         push_panel(&mut scene.primitives, viewport, &scene.lines);
