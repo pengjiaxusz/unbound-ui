@@ -25,7 +25,7 @@
 
 ## 不变量与红线
 - [禁止] 在 `emit_*` 中根据 `hovered`/`disabled` 条件增减图元个数（隐藏态须用零透明或零尺寸占位） -> [原因] 破坏 Stable Shape 恒定契约 -> [守卫] `crates/unbound-widgets/tests/stable_shape.rs`
-- [必须] 声明式浮层容器用 `RawNodeDesc` 的 POD 字段而非链式方法设置 `z_index` / `shadow_blur`，全屏遮罩用 `size(w, h)`，右对齐用 `Justify::FlexEnd` -> [原因] `RawNodeDesc` 只提供 `size` / `shadow(color, blur, dy)` 等有限链式 API，不存在 `bounds()` / `z_index()` / `shadow_blur()` 与 `Justify::End`，误用直接 E0599；`ViewBuilder::container` 依赖 `shadow_blur > 0` 判断是否发射表面图元、依赖 `z_index >= 1000` 抬升浮层 Z 基线并命中遮罩 -> [守卫] `just check`
+- [必须] 声明式浮层容器按 ABI 现有构造器组合：全屏遮罩用 `size(w, h)` + `z_index(i32)`（无 `bounds()`），阴影半径写 `shadow_blur` 字段或走 `shadow(color, blur, dy)`（无 `shadow_blur()` 方法），右对齐用 `Justify::FlexEnd`（无 `End` 变体） -> [原因] 臆造不存在的链式方法或枚举变体会直接 E0599；`ViewBuilder::container` 依赖 `shadow_blur > 0` 判断是否发射表面图元、依赖 `z_index >= 1000` 抬升浮层 Z 基线并命中遮罩 -> [守卫] `just check`
 - [必须] 任意锚点位置与任意 `Placement` 下的 `TooltipDesc::rect()` 必须完全落在窗口安全视口内 -> [原因] 防止边缘控件的提示框被窗口边界裁断 -> [守卫] `crates/unbound-widgets/tests/overlay_placement.rs::tooltip_in_window_auto_flips_and_clamps_inside_safe_viewport`
 - [必须] 新增组件必须接入 `define_widget_catalog!` 并在 `catalog::emit_widget` 实现真实发射 -> [原因] 编译期穷举门禁防遗漏 -> [守卫] `crates/unbound-widgets/src/catalog.rs`
 - [例外] `title_bar` 提供 `TitleBarDesc` 描述符、保留节点 ID 与纯装饰控件 `TitleBarChrome`（实现 `UiWidget`，绘制 `HEADER_BG` 背景与 1px `DIVIDER` 分隔线，无独立 `emit_*`），场景由 `unbound-app` 的 `ViewBuilder` 组合既有容器/徽章/按钮生成，故按基础设施模块列入 `build.rs` 白名单，不纳入展示目录 -> [原因] 纳入穷举目录会迫使伪造发射分支 -> [守卫] `crates/unbound-widgets/build.rs`

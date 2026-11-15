@@ -1570,14 +1570,13 @@ impl<'a> ViewBuilder<'a> {
         build: impl FnOnce(&mut Self),
     ) -> NodeId {
         let vp = self.ctx.viewport;
-        let mut scrim_desc = RawNodeDesc::container()
+        let scrim_desc = RawNodeDesc::container()
             .absolute()
             .size(vp.x, vp.y)
+            .z_index(1200)
             .align(unbound_abi::Align::Center)
             .justify(unbound_abi::Justify::Center)
             .fill_token(u32::from(unbound_theme::Token::SCRIM.raw()));
-        // `z_index` 是 POD 字段而非链式方法；不小于 1000 会抬升浮层 z 基线。
-        scrim_desc.z_index = 1200;
         self.container(scrim_key, scrim_desc, |overlay| {
             let dlg_w = width.min((vp.x - 32.0).max(280.0));
             let dlg_h = height.min((vp.y - 32.0).max(200.0));
@@ -1590,7 +1589,8 @@ impl<'a> ViewBuilder<'a> {
                 .radius(12.0)
                 .fill_token(u32::from(unbound_theme::Token::SURFACE_RAISED.raw()))
                 .border(u32::from(unbound_theme::Token::OUTLINE_STRONG.raw()), 1.0);
-            // 阴影半径同样为字段，`container()` 依据它决定是否发射表面图元。
+            // ABI 未提供 `shadow_blur` 链式构造器，直接写 POD 字段；
+            // `container()` 依据它判断是否发射表面图元。
             dlg_desc.shadow_blur = 24.0;
             overlay.container(dialog_key, dlg_desc, build);
         })
@@ -1605,14 +1605,13 @@ impl<'a> ViewBuilder<'a> {
         build: impl FnOnce(&mut Self),
     ) -> NodeId {
         let vp = self.ctx.viewport;
-        let mut scrim_desc = RawNodeDesc::container()
+        let scrim_desc = RawNodeDesc::container()
             .row()
             .absolute()
             .size(vp.x, vp.y)
+            .z_index(1150)
             .justify(unbound_abi::Justify::FlexEnd)
             .fill_token(u32::from(unbound_theme::Token::SCRIM.raw()));
-        // 抽屉层级低于模态弹窗，但同样命中遮罩的浮层 z 基线规则。
-        scrim_desc.z_index = 1150;
         self.container(scrim_key, scrim_desc, |overlay| {
             let w = width.min((vp.x - 48.0).max(280.0));
             let mut drawer_desc = RawNodeDesc::container()
@@ -1623,6 +1622,7 @@ impl<'a> ViewBuilder<'a> {
                 .gap(12.0)
                 .fill_token(u32::from(unbound_theme::Token::SURFACE_RAISED.raw()))
                 .border(u32::from(unbound_theme::Token::OUTLINE_STRONG.raw()), 1.0);
+            // ABI 未提供 `shadow_blur` 链式构造器，直接写 POD 字段。
             drawer_desc.shadow_blur = 24.0;
             overlay.container(drawer_key, drawer_desc, build);
         })
