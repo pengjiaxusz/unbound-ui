@@ -61,7 +61,7 @@ impl UiWidget for TitleBarChrome {
             0.0,
             PrimType::RoundedRect,
             SubElement::Background,
-            0,
+            100,
         ));
         let rule = Rect::new(rect.origin.x, rect.max().y - 1.0, rect.size.x, 1.0);
         output.primitives.push(instance(
@@ -73,7 +73,7 @@ impl UiWidget for TitleBarChrome {
             0.0,
             PrimType::Line,
             SubElement::Background,
-            1,
+            101,
         ));
         output
     }
@@ -139,9 +139,9 @@ impl UiWidget for WindowCaptionButton {
             0.0,
             PrimType::RoundedRect,
             SubElement::Background,
-            0,
+            703,
         );
-        bg.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(0, if active { 1.0 } else { 0.0 });
+        bg.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(703, if active { 1.0 } else { 0.0 });
         output.primitives.push(bg);
 
         let fg = if destructive && active {
@@ -161,7 +161,7 @@ impl UiWidget for WindowCaptionButton {
                     0.0,
                     PrimType::RoundedRect,
                     SubElement::Content,
-                    1,
+                    705,
                 ));
             }
             WindowCaptionKind::Maximize { maximized } => {
@@ -175,7 +175,7 @@ impl UiWidget for WindowCaptionButton {
                         0.0,
                         PrimType::RoundedRect,
                         SubElement::Content,
-                        1,
+                        704,
                     ));
                     let occluder = if active {
                         Token::CONTROL_HOVER
@@ -191,7 +191,7 @@ impl UiWidget for WindowCaptionButton {
                         0.0,
                         PrimType::RoundedRect,
                         SubElement::Content,
-                        2,
+                        705,
                     ));
                 } else {
                     let square = Rect::new(middle.x - 5.0, middle.y - 5.0, 10.0, 10.0);
@@ -204,9 +204,9 @@ impl UiWidget for WindowCaptionButton {
                         0.0,
                         PrimType::RoundedRect,
                         SubElement::Content,
-                        1,
+                        704,
                     );
-                    pad.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(1, 0.0);
+                    pad.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(704, 0.0);
                     output.primitives.push(pad);
                     output.primitives.push(instance(
                         square,
@@ -217,7 +217,7 @@ impl UiWidget for WindowCaptionButton {
                         0.0,
                         PrimType::RoundedRect,
                         SubElement::Content,
-                        2,
+                        705,
                     ));
                 }
             }
@@ -249,7 +249,7 @@ impl UiWidget for WindowCaptionButton {
                         0.0,
                         PrimType::Curve,
                         SubElement::Content,
-                        1,
+                        705,
                     );
                     let payload = GpuPayload::curve(
                         [from.0 - origin.origin.x, from.1 - origin.origin.y],

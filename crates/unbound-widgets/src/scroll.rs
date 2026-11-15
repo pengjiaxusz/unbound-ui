@@ -667,7 +667,8 @@ pub fn emit_scroll_view(
         );
     }
 
-    let hit = Some(HitRegion::new(node, SCROLL_LAYER, u32::from(desc.z), rect));
+    let viewport_z = desc.z.saturating_sub(740);
+    let hit = Some(HitRegion::new(node, SCROLL_LAYER, u32::from(viewport_z), rect));
     let mut a11y =
         unbound_a11y::A11yNode::new(accesskit::Role::ScrollView, "", rect).disabled(state.disabled);
     a11y.actions
