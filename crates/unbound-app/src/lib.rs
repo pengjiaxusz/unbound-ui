@@ -2952,6 +2952,12 @@ impl<A: Application> AppRuntime<A> {
         &self.world
     }
 
+    /// 获取当前帧所有活跃滚动区域的 `(scroll_key, viewport_rect, content_size, vertical)` 清单。
+    #[must_use]
+    pub fn scroll_regions(&self) -> &[(u64, Rect, Vec2, bool)] {
+        &self.scroll_regions
+    }
+
     /// 应用实例本身，供测试与调试覆盖层检查。
     #[must_use]
     pub fn app(&self) -> &A {
