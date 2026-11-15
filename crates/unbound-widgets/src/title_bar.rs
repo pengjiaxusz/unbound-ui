@@ -273,7 +273,7 @@ impl UiWidget for WindowCaptionButton {
             WindowCaptionKind::Maximize { maximized: false } => "Maximize window",
             WindowCaptionKind::Close => "Close window",
         };
-        output.hit = Some(HitRegion::new(node, 0, 0, rect));
+        output.hit = Some(HitRegion::new(node, 1, 703, rect));
         output.a11y = Some(A11yNode::new(Role::Button, label.to_owned(), rect));
         output
     }
