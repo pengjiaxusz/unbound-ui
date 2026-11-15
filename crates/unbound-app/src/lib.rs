@@ -572,6 +572,8 @@ pub struct AppContext {
     pub accent: unbound_theme::AccentBrand,
     /// 当前原生窗口是否处于最大化状态（由窗口运行器自动同步）。
     pub window_maximized: bool,
+    /// 当前原生窗口是否处于激活聚焦状态（由窗口运行器自动同步）。
+    pub window_focused: bool,
     /// 全局 7 档 UI 逻辑缩放因子（默认 `1.0`，范围 `0.75..=2.0`）。
     pub ui_scale: f32,
     /// 缩放 OSD 浮层剩余显示秒数（`> 0.0` 时在右上角渲染当前缩放百分比胶囊）。
@@ -642,6 +644,7 @@ impl AppContext {
             preset: unbound_theme::ProductPreset::RenderWorkbench,
             accent: unbound_theme::AccentBrand::Blue,
             window_maximized: false,
+            window_focused: true,
             ui_scale: 1.0,
             scale_osd_remaining: 0.0,
             i18n: Rc::new(RefCell::new(I18nBundle::with_locale(Locale::EnUs))),
@@ -1001,6 +1004,8 @@ pub struct ViewContext {
     pub force: bool,
     /// 窗口当前是否处于最大化状态（决定标题栏最大化/还原按钮图标）。
     pub window_maximized: bool,
+    /// 窗口当前是否处于激活聚焦状态（决定标题栏失焦降对比度视觉）。
+    pub window_focused: bool,
     /// 当前激活的标准语言区域。
     pub locale: Locale,
     /// 当前激活区域的阅读布局方向（LTR / RTL）。
@@ -1155,6 +1160,7 @@ pub struct ViewBuilder<'a> {
     seen_keys: &'a mut FxHashSet<u64>,
     ephemeral_nodes: &'a mut Vec<NodeId>,
     focus_groups: &'a mut Vec<FocusGroup>,
+    title_bar_bindings: &'a mut FxHashMap<u64, TitleBarBinding>,
     depth: u16,
     z_base: u16,
 }
@@ -1245,111 +1251,123 @@ impl<'a> ViewBuilder<'a> {
         desc: unbound_widgets::TitleBarDesc,
         slots: TitleBarSlots<'_>,
     ) -> NodeId {
-        let width = self.ctx.viewport.x;
-        let maximized = desc.is_maximized || self.ctx.window_maximized;
+        let maximized = desc.maximized_override.unwrap_or(self.ctx.window_maximized);
+        let focused = self.ctx.window_focused;
+        let root_key = desc.id;
+        self.title_bar_bindings.insert(
+            root_key,
+            TitleBarBinding {
+                minimize_id: desc.minimize_id,
+                maximize_id: desc.maximize_id,
+                close_id: desc.close_id,
+            },
+        );
         let bar_desc = RawNodeDesc::container()
             .row()
-            .width(Dim::px(width))
+            .width(Dim::percent(100.0))
             .height(Dim::px(desc.height))
-            .padding(unbound_abi::Edges::trbl(12.0, 0.0, 0.0, 0.0))
             .align(unbound_abi::Align::Center)
-            .justify(unbound_abi::Justify::SpaceBetween)
             .gap(8.0);
-        let root_key = unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(9);
         self.container(root_key, bar_desc, |bar| {
+            // 背景绝对定位铺满整条标题栏，不随左右插槽的内边距偏移。
             let chrome_desc = RawNodeDesc::container()
                 .absolute()
-                .width(Dim::px(width))
+                .inset(unbound_abi::Edges::all(0.0))
+                .width(Dim::percent(100.0))
                 .height(Dim::px(desc.height));
             bar.add_with_layout(
-                unbound_widgets::TITLE_BAR_DRAG_ID,
+                mix_key(root_key, 1),
                 chrome_desc,
-                unbound_widgets::TitleBarChrome,
+                unbound_widgets::TitleBarChrome::new(focused),
             );
-            bar.row(
-                unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(12),
-                |left| {
-                    if desc.show_title && !desc.title.is_empty() {
-                        left.text_primary(
-                            unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(10),
-                            desc.title,
-                            13.0,
-                            600,
-                        );
-                    }
-                    if let Some(build_left) = slots.left {
-                        build_left(left);
-                    }
-                },
-            );
+            // 左区为可压缩的等权伸缩容器（`flex_grow = 1` + `min_width = 0`）：
+            // 空间充足时它与右区等分留白，使 `center` 插槽保持视觉居中；
+            // 空间不足时先压缩左侧留白，绝不挤走上方的窗口控制按钮。
+            // 标题文本本身无法省略号截断（框架尚未提供 `TextOverflow`），
+            // 因此打开裁剪，超长标题在左区边界被切断而不是压到搜索框与关闭按钮上。
+            let mut left_desc = RawNodeDesc::container()
+                .row()
+                .align(unbound_abi::Align::Center)
+                .padding(unbound_abi::Edges::trbl(12.0, 0.0, 0.0, 0.0))
+                .gap(8.0)
+                .flags(unbound_abi::NodeFlags::CLIP)
+                .flex_grow(1.0);
+            // `min-width: auto` 会让左区无法压缩到内容宽度以下，因此显式归零。
+            left_desc.min_width = Dim::px(0.0);
+            bar.container(mix_key(root_key, 2), left_desc, |left| {
+                if desc.show_title && !desc.title.is_empty() {
+                    let mut style = TextStyle::sized(13.0);
+                    style.weight = 600;
+                    let tone = if focused {
+                        unbound_theme::Token::TEXT_PRIMARY
+                    } else {
+                        unbound_theme::Token::TEXT_SECONDARY
+                    };
+                    left.text_inline(mix_key(root_key, 3), desc.title, style, tone);
+                }
+                if let Some(build_left) = slots.left {
+                    build_left(left);
+                }
+            });
             if let Some(build_center) = slots.center {
-                bar.row(
-                    unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(13),
-                    build_center,
-                );
+                bar.row(mix_key(root_key, 4), build_center);
             }
             let right_desc = RawNodeDesc::container()
                 .row()
                 .align(unbound_abi::Align::Center)
-                .gap(8.0);
-            bar.container(
-                unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(14),
-                right_desc,
-                |right| {
-                    if let Some(build_actions) = slots.actions {
-                        right.row(
-                            unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(15),
-                            build_actions,
+                .justify(unbound_abi::Justify::FlexEnd)
+                .gap(8.0)
+                .flex_grow(1.0);
+            bar.container(mix_key(root_key, 5), right_desc, |right| {
+                if let Some(build_actions) = slots.actions {
+                    right.row(mix_key(root_key, 6), build_actions);
+                }
+                let caption_row_desc = RawNodeDesc::container()
+                    .row()
+                    .align(unbound_abi::Align::Center)
+                    .gap(0.0);
+                right.container(mix_key(root_key, 7), caption_row_desc, |btns| {
+                    if desc.show_minimize {
+                        btns.add_with_layout(
+                            desc.minimize_id,
+                            RawNodeDesc::container()
+                                .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
+                                .height(Dim::px(desc.height)),
+                            unbound_widgets::WindowCaptionButton::new(
+                                unbound_widgets::WindowCaptionKind::Minimize,
+                                desc.height,
+                            )
+                            .focused(focused),
                         );
                     }
-                    let caption_row_desc = RawNodeDesc::container()
-                        .row()
-                        .align(unbound_abi::Align::Center)
-                        .gap(0.0);
-                    right.container(
-                        unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(11),
-                        caption_row_desc,
-                        |btns| {
-                            if desc.show_minimize {
-                                btns.add_with_layout(
-                                    desc.minimize_id,
-                                    RawNodeDesc::container()
-                                        .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
-                                        .height(Dim::px(desc.height)),
-                                    unbound_widgets::WindowCaptionButton::new(
-                                        unbound_widgets::WindowCaptionKind::Minimize,
-                                        desc.height,
-                                    ),
-                                );
-                            }
-                            if desc.show_maximize {
-                                btns.add_with_layout(
-                                    desc.maximize_id,
-                                    RawNodeDesc::container()
-                                        .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
-                                        .height(Dim::px(desc.height)),
-                                    unbound_widgets::WindowCaptionButton::new(
-                                        unbound_widgets::WindowCaptionKind::Maximize { maximized },
-                                        desc.height,
-                                    ),
-                                );
-                            }
-                            if desc.show_close {
-                                btns.add_with_layout(
-                                    desc.close_id,
-                                    RawNodeDesc::container()
-                                        .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
-                                        .height(Dim::px(desc.height)),
-                                    unbound_widgets::WindowCaptionButton::new(
-                                        unbound_widgets::WindowCaptionKind::Close,
-                                        desc.height,
-                                    ),
-                                );
-                            }
-                        },
-                    );
-                },
-            );
+                    if desc.show_maximize {
+                        btns.add_with_layout(
+                            desc.maximize_id,
+                            RawNodeDesc::container()
+                                .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
+                                .height(Dim::px(desc.height)),
+                            unbound_widgets::WindowCaptionButton::new(
+                                unbound_widgets::WindowCaptionKind::Maximize { maximized },
+                                desc.height,
+                            )
+                            .focused(focused),
+                        );
+                    }
+                    if desc.show_close {
+                        btns.add_with_layout(
+                            desc.close_id,
+                            RawNodeDesc::container()
+                                .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
+                                .height(Dim::px(desc.height)),
+                            unbound_widgets::WindowCaptionButton::new(
+                                unbound_widgets::WindowCaptionKind::Close,
+                                desc.height,
+                            )
+                            .focused(focused),
+                        );
+                    }
+                });
+            });
         })
     }
 
@@ -2079,6 +2097,26 @@ pub trait Application {
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder<'_>);
 }
 
+/// 标题栏通过冒泡兜底产出的窗口控制意图，由窗口运行器在输入处理后消费执行。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum WindowCommand {
+    /// 启动系统原生窗口拖拽。
+    StartDrag,
+    /// 最小化窗口。
+    Minimize,
+    /// 切换最大化与还原状态。
+    ToggleMaximize,
+    /// 请求关闭窗口。
+    Close,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct TitleBarBinding {
+    minimize_id: u64,
+    maximize_id: u64,
+    close_id: u64,
+}
+
 /// 事件是否继续沿命中路径向上冒泡。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum Propagation {
@@ -2241,6 +2279,10 @@ pub struct AppRuntime<A: Application> {
     last_pointer_down_target: Option<u64>,
     /// 按下那刻展开的冒泡路径，供释放时校验目标一致性（路径不再随帧间树变化漂移）。
     last_pointer_down_path: Vec<u64>,
+    /// 本帧注册的标题栏根容器及其控制按钮映射。
+    title_bar_bindings: FxHashMap<u64, TitleBarBinding>,
+    /// 冒泡终点兜底产出的待执行窗口命令队列。
+    window_commands: Vec<WindowCommand>,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -2296,6 +2338,8 @@ impl<A: Application> AppRuntime<A> {
             scroll_regions: Vec::new(),
             last_pointer_down_target: None,
             last_pointer_down_path: Vec::new(),
+            title_bar_bindings: FxHashMap::default(),
+            window_commands: Vec::new(),
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -2984,6 +3028,7 @@ impl<A: Application> AppRuntime<A> {
             RawNodeDesc::container().size(self.ctx.viewport.x, self.ctx.viewport.y),
         );
 
+        self.title_bar_bindings.clear();
         let view_ctx = ViewContext {
             viewport: self.ctx.viewport,
             theme: self.ctx.theme,
@@ -2993,6 +3038,7 @@ impl<A: Application> AppRuntime<A> {
             focus_visible: self.ctx.focus_visible,
             force: self.force_rebuild,
             window_maximized: self.ctx.window_maximized,
+            window_focused: self.ctx.window_focused,
             locale: self.ctx.i18n.borrow().active_locale_enum(),
             direction: self.ctx.i18n.borrow().direction(),
         };
@@ -3009,6 +3055,7 @@ impl<A: Application> AppRuntime<A> {
             seen_keys: &mut self.seen_keys,
             ephemeral_nodes: &mut self.ephemeral_nodes,
             focus_groups: &mut focus_groups,
+            title_bar_bindings: &mut self.title_bar_bindings,
             depth: 0,
             z_base: 0,
         };
@@ -3187,6 +3234,29 @@ impl<A: Application> AppRuntime<A> {
     #[must_use]
     pub fn router(&self) -> &Router {
         &self.router
+    }
+
+    /// 取出并清空本帧经事件冒泡产出的待执行窗口控制命令。
+    pub fn drain_window_commands(&mut self) -> Vec<WindowCommand> {
+        core::mem::take(&mut self.window_commands)
+    }
+
+    /// 同步原生窗口激活聚焦状态，并在变化时触发重绘以更新标题栏失焦视觉。
+    pub fn set_window_focused(&mut self, focused: bool) {
+        if self.ctx.window_focused != focused {
+            self.ctx.window_focused = focused;
+            self.force_rebuild = true;
+            self.mark(DirtyFlags::PAINT);
+        }
+    }
+
+    /// 返回当前激活标题栏的（最小化、最大化、关闭）按钮节点键，供平台同步原生热区。
+    #[must_use]
+    pub fn primary_title_bar_buttons(&self) -> Option<(u64, u64, u64)> {
+        self.title_bar_bindings
+            .values()
+            .next()
+            .map(|b| (b.minimize_id, b.maximize_id, b.close_id))
     }
 
     /// 应用实例本身，供测试与调试覆盖层检查。
@@ -3910,17 +3980,52 @@ impl<A: Application> AppRuntime<A> {
         let path = self.ancestors_of(target);
         let mut trace = BubbleTrace::new(kind, self.inspector.enabled());
         let mut flags = DirtyFlags::NONE;
+        let mut stopped = false;
+        let mut hit_title_bar: Option<u64> = None;
         for node in path {
             trace.visit(node);
+            if self.title_bar_bindings.contains_key(&node) {
+                hit_title_bar = Some(node);
+            }
             self.ctx.event_target = Some(node);
             let outcome = self.dispatch_outcome(make_event(node));
             flags = flags.merge(outcome.dirty);
             if outcome.propagation == Propagation::Stop {
                 trace.stop(node);
+                stopped = true;
                 break;
             }
         }
         self.ctx.event_target = None;
+        if !stopped {
+            if let Some(tb_root) = hit_title_bar {
+                if let Some(binding) = self.title_bar_bindings.get(&tb_root).copied() {
+                    match make_event(tb_root) {
+                        AppEvent::PointerDown {
+                            button: PointerButton::Left,
+                            click_count,
+                            ..
+                        } => {
+                            if click_count >= 2 {
+                                self.window_commands.push(WindowCommand::ToggleMaximize);
+                            } else {
+                                self.window_commands.push(WindowCommand::StartDrag);
+                            }
+                        }
+                        AppEvent::Click { .. } => {
+                            if target == binding.minimize_id {
+                                self.window_commands.push(WindowCommand::Minimize);
+                            } else if target == binding.maximize_id {
+                                self.window_commands.push(WindowCommand::ToggleMaximize);
+                            } else if target == binding.close_id {
+                                self.window_commands.push(WindowCommand::Close);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         trace.finish(&mut self.inspector);
         flags
     }

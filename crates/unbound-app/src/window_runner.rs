@@ -530,38 +530,23 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 if let Some(btn) = translate_pointer_button(button) {
                     if state == ButtonState::Pressed {
                         self.runtime.pointer_down(self.pointer, btn);
-                        if btn == PointerButton::Left
-                            && self.runtime.context().hovered
-                                == Some(unbound_widgets::TITLE_BAR_DRAG_ID)
-                        {
-                            // 标题栏空白区发起系统拖拽；平台侧可能因窗口状态拒绝，
-                            // 此时忽略结果即可，不影响后续输入分发。
-                            let _ = window.drag_window();
-                        }
                     } else {
                         self.runtime.pointer_up(self.pointer, btn);
-                        if btn == PointerButton::Left {
-                            let hit = self.pointer;
-                            if self
-                                .runtime
-                                .widget_rect(unbound_widgets::TITLE_BAR_CLOSE_ID)
-                                .is_some_and(|r| r.contains_point(hit))
-                            {
+                    }
+                    for cmd in self.runtime.drain_window_commands() {
+                        match cmd {
+                            crate::WindowCommand::StartDrag => {
+                                let _ = window.drag_window();
+                            }
+                            crate::WindowCommand::Minimize => {
+                                window.set_minimized(true);
+                            }
+                            crate::WindowCommand::ToggleMaximize => {
+                                window.set_maximized(!window.is_maximized());
+                            }
+                            crate::WindowCommand::Close => {
                                 window.request_close();
                                 return Flow::Exit;
-                            }
-                            if self
-                                .runtime
-                                .widget_rect(unbound_widgets::TITLE_BAR_MINIMIZE_ID)
-                                .is_some_and(|r| r.contains_point(hit))
-                            {
-                                window.set_minimized(true);
-                            } else if self
-                                .runtime
-                                .widget_rect(unbound_widgets::TITLE_BAR_MAXIMIZE_ID)
-                                .is_some_and(|r| r.contains_point(hit))
-                            {
-                                window.set_maximized(!window.is_maximized());
                             }
                         }
                     }
@@ -646,6 +631,9 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             }
             PlatformEvent::FileHoverCancelled => {
                 self.runtime.file_hover_cancelled();
+            }
+            PlatformEvent::Focused(focused) => {
+                self.runtime.set_window_focused(focused);
             }
             PlatformEvent::CloseRequested => {
                 self.destroy_vulkan();
@@ -785,38 +773,27 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
 
         if let Some(metrics) = &self.frame_metrics {
             let scale = window.scale_factor().max(0.5) as f32;
+            let ui_scale = self.runtime.context().ui_scale.max(0.5);
             metrics.set_scale_factor(scale);
-            // 自定义边框子类把物理像素的客户区坐标除以 scale 后再做命中测试，
-            // 因此这里写入的标题栏/按钮包围盒必须先换算到同一逻辑坐标系。
-            let to_logical = |rect: Rect| {
-                Rect::new(
-                    rect.origin.x / scale,
-                    rect.origin.y / scale,
-                    rect.size.x / scale,
-                    rect.size.y / scale,
-                )
-            };
-            // 保持 FrameHitMetrics 的 title_bar_height 为 0，使标题栏内的搜索框、工具按钮
-            // 均能正常接收客户端鼠标点击事件；空白区域拖拽由 TITLE_BAR_DRAG_ID 调用 drag_window()。
+            // 保持 FrameHitMetrics 的 title_bar_height 为 0：标题栏拖拽与双击最大化
+            // 全部由 UI 层冒泡兜底产出 `WindowCommand`，Win32 不再争夺标题栏内部交互。
             metrics.set_title_bar_height(0.0);
-            if let Some(max_rect) = self
+            // 仅把「最大化」按钮热区交给 Win32：`HTMAXBUTTON` 是 Win11 Snap Layout
+            // 悬停贴靠菜单的唯一钩子。最小化 / 关闭必须留在客户区，否则 Windows 会把
+            // 点击转成 `WM_NCLBUTTONUP` + `SC_MINIMIZE` / `SC_CLOSE`，应用层再也拦不到关闭。
+            let (_, max_id, _) = self.runtime.primary_title_bar_buttons().unwrap_or((
+                unbound_widgets::TITLE_BAR_MINIMIZE_ID,
+                unbound_widgets::TITLE_BAR_MAXIMIZE_ID,
+                unbound_widgets::TITLE_BAR_CLOSE_ID,
+            ));
+            let max_rect = self
                 .runtime
-                .widget_rect(unbound_widgets::TITLE_BAR_MAXIMIZE_ID)
-            {
-                metrics.set_maximize_button_rect(to_logical(max_rect));
-            }
-            if let Some(min_rect) = self
-                .runtime
-                .widget_rect(unbound_widgets::TITLE_BAR_MINIMIZE_ID)
-            {
-                metrics.set_minimize_button_rect(to_logical(min_rect));
-            }
-            if let Some(close_rect) = self
-                .runtime
-                .widget_rect(unbound_widgets::TITLE_BAR_CLOSE_ID)
-            {
-                metrics.set_close_button_rect(to_logical(close_rect));
-            }
+                .widget_rect(max_id)
+                .map(|rect| FrameHitMetrics::ui_rect_to_frame_logical(rect, ui_scale, scale))
+                .unwrap_or(Rect::ZERO);
+            metrics.set_maximize_button_rect(max_rect);
+            metrics.set_minimize_button_rect(Rect::ZERO);
+            metrics.set_close_button_rect(Rect::ZERO);
         }
 
         if report.dirty.needs_rebuild() {

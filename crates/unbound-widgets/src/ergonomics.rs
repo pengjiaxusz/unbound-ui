@@ -401,6 +401,12 @@ impl DividerDesc {
 impl UiWidget for ButtonDesc {
     type State = ();
 
+    fn reduce(&self, _state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        // 按下按钮即吞掉事件：按钮是离散交互控件，按压绝不能再冒泡给祖先。
+        // 例如标题栏里的按钮若不吞掉按压，就会冒泡到标题栏根容器，连带拖走整个窗口。
+        matches!(event, WidgetInputEvent::PointerDown { .. })
+    }
+
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
         let measured = text_ctx.measure_line(&self.label, self.font_size, 500);
         let pad_x = if self.left_align {
@@ -639,10 +645,18 @@ impl UiWidget for TextInputDesc {
     }
 
     fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
-        if self.disabled || self.read_only {
+        if self.disabled {
             return false;
         }
+        if self.read_only {
+            // 只读输入框仍需吞掉按压：命中它即代表用户想在其中选择/复制文本，
+            // 绝不能让事件继续冒泡到标题栏根容器触发窗口拖拽。
+            return matches!(event, WidgetInputEvent::PointerDown { .. });
+        }
         match event {
+            // 按下输入框时吞掉事件并重绘：否则位于标题栏内的搜索框会把按压
+            // 继续冒泡给标题栏根容器，误触发原生窗口拖拽。
+            WidgetInputEvent::PointerDown { .. } => true,
             WidgetInputEvent::TextInput(text) => {
                 let outcome = reduce_text_input(self, state, &TextInputEvent::Insert(text.clone()));
                 outcome.changed
@@ -2353,10 +2367,10 @@ impl UiWidget for SchemaFormDesc {
             let label_txt = match &field.inheritance {
                 crate::schema_form::FieldInheritanceState::DefaultValue => field.label.clone(),
                 crate::schema_form::FieldInheritanceState::InheritedFrom(parent) => {
-                    format!("{} [继承:{}]", field.label, parent)
+                    format!("{} [inherited:{}]", field.label, parent)
                 }
                 crate::schema_form::FieldInheritanceState::Overridden => {
-                    format!("{} [覆写]", field.label)
+                    format!("{} [override]", field.label)
                 }
             };
             glyphs.extend(text_ctx.shape_line(
@@ -2517,7 +2531,7 @@ impl UiWidget for GenericDataTableDesc {
                 desc.summary_text.clone()
             } else {
                 format!(
-                    "显示 {} / 共 {} 条记录",
+                    "Showing {} of {} records",
                     visible_indices.len().min(desc.visible_row_slots),
                     desc.rows.len()
                 )
@@ -2617,9 +2631,9 @@ impl UiWidget for crate::hotkey_input::HotkeyInputDesc {
         desc.recording = desc.recording || state.recording;
         desc.conflict = desc.conflict || state.conflict;
         let display = if desc.recording {
-            "请按下组合键...".to_owned()
+            "Press a shortcut...".to_owned()
         } else if desc.shortcut_text.is_empty() {
-            "未绑定".to_owned()
+            "Not bound".to_owned()
         } else {
             desc.shortcut_text.clone()
         };

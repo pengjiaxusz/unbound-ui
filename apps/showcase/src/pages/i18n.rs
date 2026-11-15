@@ -1,4 +1,5 @@
 //! 原生国际化（i18n）与多语言资源包教学页（I18n）。
+//! zh-strings-allow: i18n 教学页的双语词条，中文是演示数据
 //!
 //! 演示并教授如何在 Unbound UI 中使用引擎原生 `I18nBundle`、`Locale`、`AppContext::i18n`
 //! 与 `ViewBuilder::t / t_args / t_plural`：

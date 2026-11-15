@@ -252,43 +252,43 @@ fn default_title_bar_spans_viewport_and_anchors_window_buttons_right() {
 
     let drag = runtime
         .widget_rect(TITLE_BAR_DRAG_ID)
-        .expect("标题栏拖拽/背景控件应已挂载");
+        .expect("title bar drag surface must be mounted");
     assert!(
         (drag.size.x - 900.0).abs() < 0.01,
-        "标题栏必须铺满视口宽度，实际 {drag:?}"
+        "the title bar must span the viewport width, got {drag:?}"
     );
     assert!(
         (drag.size.y - TITLE_BAR_HEIGHT).abs() < 0.01,
-        "标题栏高度应来自描述符，实际 {drag:?}"
+        "the title bar height must come from the descriptor, got {drag:?}"
     );
     assert_eq!(drag.origin.y, 0.0);
 
     let close = runtime
         .widget_rect(TITLE_BAR_CLOSE_ID)
-        .expect("关闭按钮应已挂载");
+        .expect("close button must be mounted");
     let maximize = runtime
         .widget_rect(TITLE_BAR_MAXIMIZE_ID)
-        .expect("最大化按钮应已挂载");
+        .expect("maximize button must be mounted");
     let minimize = runtime
         .widget_rect(TITLE_BAR_MINIMIZE_ID)
-        .expect("最小化按钮应已挂载");
+        .expect("minimize button must be mounted");
     assert!(
         (close.max().x - 900.0).abs() <= 1.0,
-        "关闭按钮应贴右边缘，实际 {close:?}"
+        "the close button must hug the right edge, got {close:?}"
     );
     assert!(minimize.max().x <= maximize.origin.x + 0.01);
     assert!(maximize.max().x <= close.origin.x + 0.01);
     assert!(
         minimize.origin.x > 450.0,
-        "窗口按钮链应位于右半区，实际 {minimize:?}"
+        "the caption button chain must sit in the right half, got {minimize:?}"
     );
 
     let title = runtime
-        .widget_rect(TITLE_BAR_DRAG_ID.wrapping_add(10))
-        .expect("标题徽标应已挂载");
+        .widget_rect(unbound_app::mix_key(TITLE_BAR_DRAG_ID, 3))
+        .expect("title badge must be mounted");
     assert!(
         title.max().x < minimize.origin.x,
-        "标题不得与窗口按钮重叠，实际 {title:?} / {minimize:?}"
+        "the title must not overlap caption buttons, got {title:?} / {minimize:?}"
     );
 }
 
@@ -343,7 +343,7 @@ fn custom_title_bar_supports_slots_and_showcase_caption_width() {
     let action = runtime.widget_rect(TB_ACTION_THEME).expect("custom action");
     assert!(
         action.max().x <= min.origin.x + 0.01,
-        "自定义操作按钮应位于最小化按钮左侧: {action:?} / {min:?}"
+        "custom action buttons must sit left of minimize: {action:?} / {min:?}"
     );
     assert!(runtime.widget_rect(TB_LEFT_BADGE).is_some());
     assert!(runtime.widget_rect(TB_CENTER_SEARCH).is_some());

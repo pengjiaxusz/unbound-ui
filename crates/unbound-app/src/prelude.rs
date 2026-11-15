@@ -8,7 +8,8 @@ pub use crate::{
     const_fnv1a_hash, global_locale, mix_key, set_global_locale, ui_key, AppContext, AppEvent,
     AppEventSender, AppKey, AppRuntime, Application, ClipboardProvider, DirtyFlags, ErasedUiWidget,
     EventOutcome, FrameReport, I18nBundle, KeyDiscriminator, LayoutDirection, Locale, Modifiers,
-    PendingWidget, Propagation, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec, ROOT,
+    PendingWidget, Propagation, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec, WindowCommand,
+    ROOT,
 };
 
 pub use unbound_a11y::A11yAction;

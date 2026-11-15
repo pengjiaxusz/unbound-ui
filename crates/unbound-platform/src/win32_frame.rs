@@ -186,6 +186,25 @@ impl FrameHitMetrics {
         let b = bottom.load(Ordering::Acquire);
         x >= l && x < r && y >= t && y < b
     }
+
+    /// 把 UI 逻辑像素包围盒换算为 `WM_NCHITTEST` 使用的 Win32 逻辑像素。
+    ///
+    /// UI 坐标系已被 [`crate::backend`] 按 `ui_scale` 压缩过（`widget_rect` 处于该空间），
+    /// 因此需要先乘 `ui_scale` 还原物理像素，再除以窗口 DPI 缩放得到 Win32 逻辑像素。
+    /// 两者混用会让 `HTMAXBUTTON` 等热区在高 DPI 且 `ui_scale != 1.0` 时二次偏移，
+    /// 直接破坏 Win11 贴靠布局的悬停对齐。
+    #[must_use]
+    pub fn ui_rect_to_frame_logical(rect: Rect, ui_scale: f32, scale_factor: f32) -> Rect {
+        let ui_scale = ui_scale.max(0.5);
+        let scale_factor = scale_factor.max(0.5);
+        let factor = ui_scale / scale_factor;
+        Rect::new(
+            rect.origin.x * factor,
+            rect.origin.y * factor,
+            rect.size.x * factor,
+            rect.size.y * factor,
+        )
+    }
 }
 
 #[cfg(windows)]
@@ -386,10 +405,12 @@ mod win32 {
                     LRESULT(HTCLIENT as isize)
                 }
                 0x0086 /* WM_NCACTIVATE */ => {
+                    // 传入 LPARAM(-1) 阻止 DefWindowProc 重绘非客户区 GDI 边框/旧标题栏，
+                    // 同时保留窗口激活状态切换与 DWM 动画语义。
                     if metrics.lock_mica_active.load(Ordering::Acquire) {
                         return DefSubclassProc(hwnd, msg, WPARAM(1), LPARAM(-1));
                     }
-                    DefSubclassProc(hwnd, msg, wparam, lparam)
+                    DefSubclassProc(hwnd, msg, wparam, LPARAM(-1))
                 }
                 WM_NCDESTROY => {
                     let _ =
@@ -582,5 +603,75 @@ mod tests {
             &metrics.max_btn_right,
             &metrics.max_btn_bottom,
         ));
+    }
+
+    #[test]
+    fn ui_rect_conversion_aligns_ui_scale_with_dpi_scale() {
+        let dpi_scale = 1.5_f32;
+        let ui_scale = 1.25_f32;
+        // UI 逻辑矩形 (900, 0, 46, 38) → 物理像素 (1125..1182.5, 0..47.5)
+        // → Win32 逻辑像素 (750..788.33, 0..31.67)。
+        let frame_rect = FrameHitMetrics::ui_rect_to_frame_logical(
+            Rect::new(900.0, 0.0, 46.0, 38.0),
+            ui_scale,
+            dpi_scale,
+        );
+        assert!((frame_rect.origin.x - 750.0).abs() < 0.01, "{frame_rect:?}");
+        assert!((frame_rect.origin.y - 0.0).abs() < 0.01);
+        assert!((frame_rect.size.x - 46.0 * ui_scale / dpi_scale).abs() < 0.01);
+        assert!((frame_rect.size.y - 38.0 * ui_scale / dpi_scale).abs() < 0.01);
+
+        // UI 逻辑 (1.0, 1.0) 缩放下必须与旧口径（rect / dpi_scale）完全一致。
+        let identity = FrameHitMetrics::ui_rect_to_frame_logical(
+            Rect::new(900.0, 0.0, 46.0, 38.0),
+            1.0,
+            dpi_scale,
+        );
+        assert!((identity.origin.x - 600.0).abs() < 0.01);
+        assert!((identity.size.x - 46.0 / dpi_scale).abs() < 0.01);
+    }
+
+    #[test]
+    fn frame_hit_metrics_hit_tests_high_dpi_with_ui_scaling() {
+        let metrics = FrameHitMetrics::new();
+        let dpi_scale = 1.5_f32;
+        let ui_scale = 1.25_f32;
+        metrics.set_scale_factor(dpi_scale);
+        metrics.set_maximize_button_rect(FrameHitMetrics::ui_rect_to_frame_logical(
+            Rect::new(900.0, 0.0, 46.0, 38.0),
+            ui_scale,
+            dpi_scale,
+        ));
+
+        // `WM_NCHITTEST` 收到的物理客户区坐标先除以 DPI 缩放，再与热区比较。
+        // 物理像素 (920 * 1.25 = 1150, 15 * 1.25 = 18.75) → Win32 逻辑 (767, 13)。
+        let inside_x = ((920.0 * ui_scale) / dpi_scale).round() as i32;
+        let inside_y = ((15.0 * ui_scale) / dpi_scale).round() as i32;
+        let hit = |x: i32, y: i32| {
+            metrics.contains_logical(
+                x,
+                y,
+                &metrics.max_btn_left,
+                &metrics.max_btn_top,
+                &metrics.max_btn_right,
+                &metrics.max_btn_bottom,
+            )
+        };
+        assert!(
+            hit(inside_x, inside_y),
+            "the button hot zone must hit precisely at ui_scale=1.25 and dpi=1.5"
+        );
+
+        // 旧实现漏乘 `ui_scale`，会把热区压到 (600..630)，同一点将落在区外；
+        // 这里显式复算旧口径，确保该回归一旦复活能被本测试捕获。
+        let legacy_right = ((900.0 + 46.0) / dpi_scale).round() as i32;
+        assert!(
+            inside_x > legacy_right,
+            "the probe point must fall outside the legacy hot zone so the two conversions really differ"
+        );
+        // 左侧边界同样必须精确：热区左沿减一像素点在区外。
+        assert!(!hit(749, inside_y));
+        // 上边界为 0：负坐标必然在外。
+        assert!(!hit(inside_x, -1));
     }
 }
