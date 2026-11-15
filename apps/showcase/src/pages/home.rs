@@ -13,7 +13,6 @@ pub const INFO: PageInfo = PageInfo {
     short: "Home",
     description: "A live tour of the engine: renderer, text, layout, input, canvas, i18n and telemetry. Every example on this page is the framework drawing itself.",
     crates: &["unbound-gpu", "unbound-vector", "unbound-layout", "unbound-app"],
-    docs: "docs/architecture/showcase.md",
     keywords: "overview hero gallery start i18n",
 };
 

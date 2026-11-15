@@ -2,8 +2,7 @@
 //!
 //! 本 crate 中的所有类型均为 `Copy`、零堆分配，并在跨 CPU/GPU 边界时
 //! 标记 `#[repr(C)]`。刻意避免使用泛型标量 trait：渲染器在热路径上
-//! 仅使用 `f32`（参见 `docs/architecture/animation-and-theme.md`——
-//! 三个正交缩放层最终合并为单一的 `f32` 设备空间变换）。
+//! 仅使用 `f32`：三个正交缩放层最终合并为单一的 `f32` 设备空间变换。
 //!
 
 #![forbid(unsafe_op_in_unsafe_fn)]
@@ -21,7 +20,7 @@ pub use rect::{project_rounded_radii, Rect};
 pub use transform::Affine2;
 pub use vec2::Vec2;
 
-/// 单个画布分块在世界像素中的逻辑尺寸（`docs` §5.2，4096² 网格）。
+/// 单个画布分块在世界像素中的逻辑尺寸（4096² 网格）。
 pub const CHUNK_SIZE: f32 = 4096.0;
 
 /// [`CHUNK_SIZE`] 的倒数，预计算以确保与着色器端数学运算完全一致。
@@ -50,7 +49,7 @@ pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
 
 /// 将设备空间坐标对齐到物理像素网格。
 ///
-/// 用于静态 UI 节点（`docs` §4.4）：`round(pos * dpi) / dpi` 可使 1px
+/// 用于静态 UI 节点：`round(pos * dpi) / dpi` 可使 1px
 /// 边框保持锐利，避免跨越两个像素中心产生模糊。
 #[inline]
 #[must_use]

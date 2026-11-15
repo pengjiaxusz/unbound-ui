@@ -1,6 +1,6 @@
-//! 双层命中测试（`docs` §6.1）。
+//! 双层命中测试。
 //!
-//! 管线刻意分为两阶段，与架构文档完全一致：
+//! 管线刻意分为两阶段：
 //!
 //! 1. **粗筛阶段（broad phase）**——针对区域包围盒及所有生效裁剪框的 AABB 测试；
 //!    
@@ -21,8 +21,7 @@ use unbound_vector::{hit_quad, QuadSegment};
 
 use crate::cursor::CursorKind;
 
-/// 首个浮层层级。处于该层级或之上的元素在光标优先级上胜过下方的 UI 层
-/// （`docs` §6.2）。
+/// 首个浮层层级。处于该层级或之上的元素在光标优先级上胜过下方的 UI 层。
 pub const PORTAL_LAYER: u8 = 2;
 
 /// 圆角矩形裁剪框，`GpuClipNode` 的 CPU 侧镜像。

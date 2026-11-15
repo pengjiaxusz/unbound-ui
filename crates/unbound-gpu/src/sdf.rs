@@ -1,4 +1,4 @@
-//! GPU 距离场生成（参见 `docs/architecture/gpu-renderer.md`）。
+//! GPU 距离场生成。
 //!
 //! 围绕 `mtsdf.comp` 的轻量自包含封装：内部持有三个设备缓冲区与一个计算管线，
 //! 调用方无需了解 Vulkan 细节即可传入覆盖率位图并取回 RGBA8 距离场。
@@ -280,7 +280,7 @@ mod tests {
     use super::*;
     use crate::device::gpu_test_guard;
 
-    /// 参见 `docs/architecture/gpu-renderer.md`：GPU MTSDF 生成器必须在远低于
+    /// GPU MTSDF 生成器必须在远低于
     /// 1 毫秒内将字形图块转换为距离场。
     ///
     /// 此处测量整个调用的挂钟时间，包含提交与回读开销，构成 GPU 实际工作量的上界。

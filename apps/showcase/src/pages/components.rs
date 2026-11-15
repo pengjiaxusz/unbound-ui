@@ -21,7 +21,6 @@ pub const COMPONENTS_INFO: PageInfo = PageInfo {
     short: "All Components",
     description: "All 106 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
     crates: &["unbound-widgets"],
-    docs: "docs/architecture/widgets.md",
     keywords: "component gallery catalog emitter coverage widget showcase every control tooltip",
 };
 

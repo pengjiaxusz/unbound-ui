@@ -1,4 +1,4 @@
-//! Vulkan 1.3 设备初始化（参见 `docs/architecture/gpu-renderer.md`）。
+//! Vulkan 1.3 设备初始化。
 //!
 //! 渲染器所需的全部能力在此一次性请求并校验：
 //!

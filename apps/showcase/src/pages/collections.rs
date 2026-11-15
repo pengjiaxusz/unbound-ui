@@ -17,7 +17,6 @@ pub const LIST_INFO: PageInfo = PageInfo {
     short: "Virtualized list",
     description: "One hundred thousand rows, twelve live nodes. The world only materialises the visible window; scrolling swaps entities instead of allocating.",
     crates: &["unbound-world/src/virtualize.rs", "unbound-world"],
-    docs: "docs/architecture/ui-and-layout.md",
     keywords: "virtual list listview scroll virtualization 100k rows windowing",
 };
 
@@ -26,7 +25,6 @@ pub const ASSETS_INFO: PageInfo = PageInfo {
     short: "Asset grid",
     description: "Asynchronous decode, a ring buffer upload queue and progressive textures. The grid keeps presenting while images arrive.",
     crates: &["unbound-asset", "unbound-asset/src/ring.rs"],
-    docs: "docs/architecture/hot-reload-and-assets.md",
     keywords: "asset image decode streaming ring buffer upload grid progressive",
 };
 

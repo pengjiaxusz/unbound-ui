@@ -1,6 +1,6 @@
 //! 由 guest 生成、host 消费的扁平 POD 视图树描述符。
 //!
-//! `docs/architecture/principles.md` 禁止深层泛型 typestate 树：guest
+//! 架构约束禁止深层泛型 typestate 树：guest
 //! 通过 C 函数指针为每个节点发出**扁平具体描述符**，host 再将其
 //! 转换为 `LayoutNode` 实体。这也正是 LLM 无需臆测 API 即可生成
 //! 的结构——接口表面仅有一个结构体和一次调用。
@@ -188,7 +188,7 @@ pub enum NodeTag {
     /// 承载无限画布的 host 视口叶节点。
     Canvas = 3,
     Scroll = 4,
-    /// 逃逸所有祖先裁剪并在覆盖层（overlay）绘制（`docs` §6.3）。
+    /// 逃逸所有祖先裁剪并在覆盖层（overlay）绘制。
     Portal = 5,
     Separator = 6,
 }

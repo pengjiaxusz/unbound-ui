@@ -3,7 +3,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // ---------------------------------------------------------------------------
-// GPU MTSDF 生成（参见 `docs/architecture/gpu-renderer.md`）。
+// GPU MTSDF 生成。
 //
 // 通过三次调度将光栅化覆盖率位图直接转为有向距离场，全程不经过 CPU：
 //

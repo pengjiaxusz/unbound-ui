@@ -1,6 +1,6 @@
 //! DOD（面向数据设计）UI 世界树：扁平实体、侵入式兄弟链表、脏状态分级。
 //!
-//! `docs` §4.1 禁止指针树与 `Rc<RefCell<..>>` 图。此处所有数据均存放在
+//! 架构约束禁止指针树与 `Rc<RefCell<..>>` 图。此处所有数据均存放在
 //! 由带代际（generational）[`NodeId`] 索引的扁平数组中：
 //!
 //! ```text
@@ -378,7 +378,7 @@ impl UiWorld {
         let mut data = NodeData::new(desc, source);
         data.parent = parent;
         data.depth = depth;
-        // 边界启发式规则（`docs` §4.2）：固定尺寸且溢出不可见的容器
+        // 边界启发式规则：固定尺寸且溢出不可见的容器
         // 不会被子节点改变尺寸，因此布局脏标记止步于此。
         let fixed = matches!(desc.width.kind(), unbound_abi::DimUnit::Px)
             && matches!(desc.height.kind(), unbound_abi::DimUnit::Px);
@@ -645,7 +645,7 @@ impl UiWorld {
         }
     }
 
-    /// 标记节点为布局脏，并向上传播**直至最近的重布局边界**（`docs` §4.2）。
+    /// 标记节点为布局脏，并向上传播**直至最近的重布局边界**。
     /// 这是增量开销模型的核心：固定尺寸卡片内的文本变更只需重算一张卡片，而非整棵树。
     ///
     pub fn mark_layout_dirty(&mut self, id: NodeId) {
@@ -783,7 +783,7 @@ impl UiWorld {
     /// 将计算得到的布局写回世界树，并折叠裁剪链。
     ///
     /// 裁剪折叠**在 CPU 上一次性完成**，因此着色器只需处理单个 AABB
-    /// 外加两个圆角槽位（`docs` §3.2）。
+    /// 外加两个圆角槽位。
     pub fn apply_rects(&mut self, rects: &FxHashMap<NodeId, Rect>) {
         for (id, rect) in rects {
             if let Some(node) = self.nodes.get_mut(*id) {
@@ -855,7 +855,7 @@ impl UiWorld {
             let mut clip = inherited_clip;
             let mut rounded = inherited_rounded;
 
-            // Portal 会逃逸所有祖先裁剪（`docs` §6.3）：它绘制在浮层中，
+            // Portal 会逃逸所有祖先裁剪：它绘制在浮层中，
             // 因此继承父节点的裁剪矩形是错误的。
             if node.state.contains(NodeState::PORTAL) {
                 clip = None;

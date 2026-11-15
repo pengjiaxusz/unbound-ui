@@ -8,7 +8,7 @@
 //! | `uber_additive` | 测试不写入 | one / one | 高亮、光标拖尾 |
 //!
 //! 此外还包括 `opaque_core`（仅写深度的预 Pass，使硬件 Early-Z 剔除大型面板后方
-//! 被遮挡的所有图元，参见 `docs/architecture/gpu-renderer.md`），以及各 GPU 驱动阶段的
+//! 被遮挡的所有图元），以及各 GPU 驱动阶段的
 //! 计算管线（cull、scatter、3 趟 radix 排序、indirect 压缩）。
 //!
 //! 与 [`crate::device`] 类似，本模块是对 Vulkan C API 的薄封装，

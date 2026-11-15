@@ -1,4 +1,4 @@
-//! 流式加载管线（`docs` §8.2）。
+//! 流式加载管线。
 //!
 //! ```text
 //! [disk / network I/O] ──> [decode worker pool] ──> [CPU staging ring]

@@ -377,7 +377,6 @@ pub fn build_showcase_i18n(locale: Locale) -> I18nBundle {
         ("nav.home", "Home", "首页"),
         ("nav.footer.telemetry", "Engine Telemetry", "引擎性能遥测"),
         ("nav.footer.settings", "Settings & About", "设置与关于"),
-        ("page.docs_prefix", "docs", "文档"),
         ("page.options", "OPTIONS", "可调参数"),
         (
             "page.code_bar",

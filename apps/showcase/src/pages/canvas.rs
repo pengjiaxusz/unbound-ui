@@ -13,7 +13,6 @@ pub const VIEWPORT_INFO: PageInfo = PageInfo {
     short: "Viewport",
     description: "An unbounded world with a quadtree spatial index. Wheel to zoom, drag to pan; only intersecting chunks are submitted to the renderer.",
     crates: &["unbound-canvas", "unbound-canvas/src/quadtree.rs"],
-    docs: "docs/architecture/canvas-and-graph.md",
     keywords: "canvas viewport pan zoom quadtree cull infinite spatial index",
 };
 
@@ -22,7 +21,6 @@ pub const MARQUEE_INFO: PageInfo = PageInfo {
     short: "Marquee",
     description: "Drag on the stage to box-select. Smart guides snap to node edges and centres while the marquee is live.",
     crates: &["unbound-canvas/src/select.rs", "unbound-canvas/src/snap.rs"],
-    docs: "docs/architecture/canvas-and-graph.md",
     keywords: "marquee box selection snap guides align canvas",
 };
 
@@ -31,7 +29,6 @@ pub const UNDO_INFO: PageInfo = PageInfo {
     short: "History",
     description: "Every operation lands on a bounded history stack. The timeline shows the applied cursor and the labels attached to each command.",
     crates: &["unbound-canvas/src/undo.rs"],
-    docs: "docs/architecture/canvas-and-graph.md",
     keywords: "undo redo history stack timeline command",
 };
 

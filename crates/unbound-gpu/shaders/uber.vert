@@ -4,7 +4,7 @@
 #extension GL_EXT_nonuniform_qualifier : require
 
 // ---------------------------------------------------------------------------
-// Uber 顶点着色器（参见 `docs/architecture/gpu-renderer.md`）。
+// Uber 顶点着色器。
 //
 // 计算顺序至关重要，不可随意调换：
 //   1. 基于 chunk 锚点的相机相对坐标（每帧零上传）
@@ -126,7 +126,7 @@ void main() {
         bb_max = min(bb_max, max(clip_min, clip_max));
     }
 
-    // 交集为空：折叠图元。光栅化器会零开销丢弃它——不会执行任何片元（参见 `docs/architecture/gpu-renderer.md`）。
+    // 交集为空：折叠图元。光栅化器会零开销丢弃它——不会执行任何片元。
     if (bb_min.x >= bb_max.x || bb_min.y >= bb_max.y) {
         gl_Position = vec4(0.0);
         v_local = vec2(0.0);

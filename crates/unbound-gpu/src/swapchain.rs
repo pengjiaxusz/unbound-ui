@@ -1,4 +1,4 @@
-//! 低延迟窗口呈现的交换链策略（参见 `docs/architecture/gpu-renderer.md`，M4）。
+//! 低延迟窗口呈现的交换链策略（M4）。
 //!
 //! 本 crate 的渲染器刻意保持无表面（surface-free）：所有测试均渲染至离屏图像，
 //! 从而使 GPU 测试套件可在 CI 上运行。此处存放并供平台层使用的，是呈现策略本身：
@@ -104,7 +104,7 @@ impl PresentConfig {
         Self {
             mode: PresentMode::choose(has_maintenance1, allow_tearing),
             // 在尺寸变更与交换链重建之间的单帧内，将旧图像锚定在左上角而非拉伸铺满
-            // 新窗口（参见 `docs/architecture/gpu-renderer.md`）。
+            // 新窗口。
             resize: ResizeBehaviour::OneToOne,
             present_fence: has_maintenance1,
             // 阻塞等待呈现会将无上限运行锁死在显示器刷新率上，而传入 `0` 正是为了避免此事。

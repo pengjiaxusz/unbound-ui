@@ -1,4 +1,4 @@
-//! CPU ⇄ GPU 内存协议（参见 `docs/architecture/gpu-renderer.md`）。
+//! CPU ⇄ GPU 内存协议。
 //!
 //! 此处所有结构体均为 `#[repr(C)]`、`Pod`，并按 CPU 缓存行大小对齐：
 //!
@@ -28,7 +28,7 @@ pub enum PrimType {
     Glyph = 2,
     /// 来自 `Atlas_RGBA8` 的彩色字形（Emoji / MTSDF）。
     GlyphColor = 3,
-    /// 以紧凑有向包围盒（OBB）渲染的二次 Bézier 曲线段（参见 `docs/architecture/gpu-renderer.md`）。
+    /// 以紧凑有向包围盒（OBB）渲染的二次 Bézier 曲线段。
     Curve = 4,
     /// 空心圆角矩形，用于焦点环与选区轮廓。
     Stroke = 5,
@@ -88,7 +88,7 @@ impl BlendMode {
     }
 }
 
-/// 单个组件内部的子元素顺序（排序键的第 7..0 位，参见 `docs/architecture/gpu-renderer.md`）。
+/// 单个组件内部的子元素顺序（排序键的第 7..0 位）。
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SubElement {
@@ -139,7 +139,7 @@ impl PassLayer {
     }
 }
 
-/// 帧 Push Constant 头部——每帧唯一的 CPU→GPU 载荷（参见 `docs/architecture/gpu-renderer.md`）。
+/// 帧 Push Constant 头部——每帧唯一的 CPU→GPU 载荷。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct FramePushConstants {
@@ -170,7 +170,7 @@ impl FramePushConstants {
     pub const SIZE: u32 = core::mem::size_of::<Self>() as u32;
 }
 
-/// 单个 64 字节图元实例，字段排布严格遵循 `docs/architecture/gpu-renderer.md` 规范。
+/// 单个 64 字节图元实例，字段排布严格对齐缓存行。
 #[repr(C, align(64))]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct GpuPrimitiveInstance {
@@ -202,7 +202,7 @@ pub struct GpuPrimitiveInstance {
     pub extra_payload_idx: u32,
 }
 
-/// `transform_idx` 的第 31 位：图元正在动画中，必须跳过整数像素对齐（参见 `docs/architecture/gpu-renderer.md`）。
+/// `transform_idx` 的第 31 位：图元正在动画中，必须跳过整数像素对齐。
 pub const TRANSFORM_ANIMATED_BIT: u32 = 1 << 31;
 /// 剥离动画标志位以提取真实变换表索引的掩码。
 pub const TRANSFORM_INDEX_MASK: u32 = !TRANSFORM_ANIMATED_BIT;

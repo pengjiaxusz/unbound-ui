@@ -1,4 +1,4 @@
-//! 视口虚拟化：`VirtualList`、`VirtualGrid`、`VirtualTree`（`docs` §4.3）。
+//! 视口虚拟化：`VirtualList`、`VirtualGrid`、`VirtualTree`。
 //!
 //!
 //! 契约清晰且可测试：实例化实体的数量受限于视口大小，而非数据集大小。

@@ -18,7 +18,6 @@ pub const I18N_INFO: PageInfo = PageInfo {
     short: "Native i18n",
     description: "Built-in zero-overhead internationalization engine: Locale presets (English & Simplified Chinese), fallback chains, {name} interpolation, pluralization, locale-aware numbers/dates, and live runtime switching.",
     crates: &["unbound-app/src/i18n.rs", "unbound-text"],
-    docs: "docs/architecture/dataflow.md",
     keywords: "i18n l10n locale language translation english chinese zh-CN en-US bundle format plural interpolation rtl",
 };
 

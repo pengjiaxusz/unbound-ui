@@ -1,6 +1,6 @@
 //! 作为*数据*的可序列化动作（Action）。
 //!
-//! `docs` §4.1：视图节点不得持有 `Box<dyn Fn>` 闭包。每次交互都绑定一个
+//! 视图节点不得持有 `Box<dyn Fn>` 闭包。每次交互都绑定一个
 //! 强类型且实现 `Copy` 的动作记录，使撤销、重放、网络同步和 Agent 驱动
 //! 的模糊测试（fuzzing）变得简单直接。
 
@@ -34,7 +34,7 @@ pub enum ActionKind {
     CanvasDuplicate = 15,
     CanvasGroup = 16,
     CanvasUngroup = 17,
-    /// 撤销/重做作用域控制（`docs` §5.3）。
+    /// 撤销/重做作用域控制。
     BeginTransaction = 18,
     UpdateTransaction = 19,
     CommitTransaction = 20,
@@ -46,7 +46,7 @@ pub enum ActionKind {
     Resize = 25,
     Focus = 26,
     Blur = 27,
-    /// 系统文件拖拽进入窗口（`docs` §6.1）。
+    /// 系统文件拖拽进入窗口。
     DragEnter = 28,
     /// 系统文件拖拽在放置目标上移动。
     DragOver = 29,

@@ -17,7 +17,6 @@ pub const FONTS_INFO: PageInfo = PageInfo {
     short: "Fonts & Scripts",
     description: "Twelve writing systems shaped by one pipeline: HarfBuzz mark offsets, BiDi levels and the system fallback chain are all live in this page.",
     crates: &["unbound-text", "cosmic-text", "rustybuzz"],
-    docs: "docs/architecture/vector-and-text.md",
     keywords: "font multilingual script cjk arabic hebrew thai devanagari cyrillic greek rtl fallback shaping",
 };
 

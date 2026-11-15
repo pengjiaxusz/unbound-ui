@@ -1,6 +1,6 @@
 //! 编译期状态 schema 指纹生成。
 //!
-//! 热重载快路径（`docs` §8.1）会比对 guest `State` 内存布局的 64 位哈希。
+//! 热重载快路径会比对 guest `State` 内存布局的 64 位哈希。
 //! 哈希匹配时，旧 `State` 会原样移交给新的 `guest_gen_N.dll`——完全无需序列化。
 //! 若不一致，host 则走 `migrate_export`/`migrate_import` 往返迁移，避免崩溃。
 //!
