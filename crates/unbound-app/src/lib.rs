@@ -878,6 +878,33 @@ pub enum WidgetSpec {
         /// 文本整形样式。
         style: TextStyle,
     },
+    /// 单行自适应宽度的行内文本标签（带语义颜色令牌）。
+    TextInline {
+        /// 文本内容。
+        text: String,
+        /// 文本整形样式。
+        style: TextStyle,
+        /// 文本颜色令牌。
+        color: unbound_theme::Token,
+    },
+    /// 容器或卡片表面背景、边框与阴影图元。
+    BoxSurface {
+        fill: u16,
+        border: u16,
+        border_width: f32,
+        radii: [f32; 4],
+        shadow_blur: f32,
+        z: u16,
+        hit_scrim: bool,
+    },
+    /// 开启滚动裁剪与平移作用域。
+    ScrollScopeBegin {
+        scroll_key: u64,
+        content_node: NodeId,
+        vertical: bool,
+    },
+    /// 关闭滚动裁剪与平移作用域。
+    ScrollScopeEnd,
     /// 复选框控件。
     Checkbox(CheckboxDesc),
     /// 切换开关。
@@ -908,6 +935,8 @@ pub struct PendingWidget {
     pub node: NodeId,
     /// 第二遍要发射的内容。
     pub spec: WidgetSpec,
+    /// 浮层/模态框基准 Z 偏移（>= 1000 表示浮层）。
+    pub z_base: u16,
 }
 
 /// 标题栏插槽的构建闭包：接收插槽容器并在其中声明自定义控件。
@@ -956,6 +985,8 @@ pub struct ViewBuilder<'a> {
     seen_keys: &'a mut FxHashSet<u64>,
     ephemeral_nodes: &'a mut Vec<NodeId>,
     focus_groups: &'a mut Vec<FocusGroup>,
+    depth: u16,
+    z_base: u16,
 }
 
 impl<'a> ViewBuilder<'a> {
@@ -1038,10 +1069,12 @@ impl<'a> ViewBuilder<'a> {
             bar.row(
                 unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(12),
                 |left| {
-                    if desc.show_title {
-                        left.badge(
+                    if desc.show_title && !desc.title.is_empty() {
+                        left.text_primary(
                             unbound_widgets::TITLE_BAR_DRAG_ID.wrapping_add(10),
-                            BadgeDesc::label(desc.title),
+                            desc.title,
+                            13.0,
+                            600,
                         );
                     }
                     if let Some(build_left) = slots.left {
@@ -1156,16 +1189,50 @@ impl<'a> ViewBuilder<'a> {
         node
     }
 
-    /// 使用显式描述符声明纯布局容器。
+    /// 使用显式描述符声明布局容器（若配置了背景填充、边框或阴影，将自动按树深度发射表面图元）。
     pub fn container(
         &mut self,
         key: u64,
         desc: RawNodeDesc,
         build: impl FnOnce(&mut Self),
     ) -> NodeId {
+        let has_surface = desc.fill != 0
+            || (desc.border_width > 0.0 && desc.border_color != 0)
+            || desc.shadow_blur > 0.0;
+        let next_z_base = if desc.z_index >= 1000 {
+            (desc.z_index as u16).max(self.z_base)
+        } else {
+            self.z_base
+        };
         let node = self.reconcile_node(key, desc, core::panic::Location::caller());
+        if has_surface {
+            let depth_z = (80u16.saturating_add(self.depth.saturating_mul(6))).min(480);
+            let surface_z = next_z_base.saturating_add(depth_z);
+            let hit_scrim =
+                next_z_base >= 1000 && desc.fill == u32::from(unbound_theme::Token::SCRIM.raw());
+            self.pending.push(PendingWidget {
+                key: key.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1),
+                node,
+                spec: WidgetSpec::BoxSurface {
+                    fill: u16::try_from(desc.fill).unwrap_or(u16::MAX),
+                    border: u16::try_from(desc.border_color).unwrap_or(u16::MAX),
+                    border_width: desc.border_width,
+                    radii: desc.radius,
+                    shadow_blur: desc.shadow_blur,
+                    z: surface_z,
+                    hit_scrim,
+                },
+                z_base: next_z_base,
+            });
+        }
         let parent = core::mem::replace(&mut self.parent, node);
+        let prev_depth = self.depth;
+        let prev_z_base = self.z_base;
+        self.depth = self.depth.saturating_add(1);
+        self.z_base = next_z_base;
         build(self);
+        self.depth = prev_depth;
+        self.z_base = prev_z_base;
         self.parent = parent;
         node
     }
@@ -1196,8 +1263,8 @@ impl<'a> ViewBuilder<'a> {
                 pr.rect.height().max(12.0),
             )),
             WidgetSpec::Badge(badge) => Some(Vec2::new(
-                badge.rect.width().max(64.0),
-                badge.rect.height().max(22.0),
+                badge.rect.width().max(22.0),
+                badge.rect.height().max(20.0),
             )),
             WidgetSpec::Divider(div) => Some(Vec2::new(
                 div.rect.width().max(1.0),
@@ -1207,7 +1274,11 @@ impl<'a> ViewBuilder<'a> {
                 alert.rect.width().max(240.0),
                 alert.rect.height().max(48.0),
             )),
-            WidgetSpec::Text { .. } => None,
+            WidgetSpec::Text { .. }
+            | WidgetSpec::TextInline { .. }
+            | WidgetSpec::BoxSurface { .. }
+            | WidgetSpec::ScrollScopeBegin { .. }
+            | WidgetSpec::ScrollScopeEnd => None,
         };
         if let Some(size) = intrinsic {
             desc = desc.size(size.x, size.y);
@@ -1218,13 +1289,20 @@ impl<'a> ViewBuilder<'a> {
                 data.measure = Some(size);
             }
         }
-        self.pending.push(PendingWidget { key, node, spec });
+        self.pending.push(PendingWidget {
+            key,
+            node,
+            spec,
+            z_base: self.z_base,
+        });
         node
     }
 
     /// 添加任意支持自动固有尺寸测量与布局的声明式 [`UiWidget`]。
     pub fn add<W: unbound_widgets::UiWidget + 'static>(&mut self, key: u64, widget: W) -> NodeId {
-        self.add_with_layout(key, RawNodeDesc::container(), widget)
+        let mut desc = RawNodeDesc::container();
+        desc.flex_shrink = 0.0;
+        self.add_with_layout(key, desc, widget)
     }
 
     /// 添加任意带自定义布局约束的声明式 [`UiWidget`]。
@@ -1240,6 +1318,7 @@ impl<'a> ViewBuilder<'a> {
             key,
             node,
             spec: WidgetSpec::UiWidget(Arc::new(widget)),
+            z_base: self.z_base,
         });
         node
     }
@@ -1299,37 +1378,187 @@ impl<'a> ViewBuilder<'a> {
         self.add(key, desc)
     }
 
-    /// 声明式卡片容器快捷方式。
+    /// 声明式卡片容器快捷方式（自动绘制 `CARD_BG` 背景、`CARD_BORDER` 边框与圆角）。
     pub fn card(
         &mut self,
         key: u64,
-        _desc: unbound_widgets::CardDesc,
+        desc: unbound_widgets::CardDesc,
         build: impl FnOnce(&mut Self),
     ) -> NodeId {
-        self.container(
-            key,
-            RawNodeDesc::container()
-                .column()
-                .padding(unbound_abi::Edges::all(16.0))
-                .gap(8.0),
-            build,
-        )
+        let mut node_desc = RawNodeDesc::container()
+            .column()
+            .width(Dim::percent(100.0))
+            .padding(unbound_abi::Edges::all(16.0))
+            .gap(10.0)
+            .radius(desc.radius.max(8.0))
+            .fill_token(u32::from(unbound_theme::Token::CARD_BG.raw()));
+        node_desc.flex_shrink = 0.0;
+        node_desc = node_desc.border(u32::from(unbound_theme::Token::CARD_BORDER.raw()), 1.0);
+        self.container(key, node_desc, build)
     }
 
-    /// 声明式滚动视图容器快捷方式。
+    /// 声明带圆角边框的面板卡片。
+    pub fn panel_card(
+        &mut self,
+        key: u64,
+        padding: f32,
+        gap: f32,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let mut desc = RawNodeDesc::container()
+            .column()
+            .width(Dim::percent(100.0))
+            .padding(unbound_abi::Edges::all(padding))
+            .gap(gap)
+            .radius(8.0)
+            .fill_token(u32::from(unbound_theme::Token::CARD_BG.raw()))
+            .border(u32::from(unbound_theme::Token::CARD_BORDER.raw()), 1.0);
+        desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 声明深色内凹容器框（适用于代码预览、路径框、子列表）。
+    pub fn sunken_box(
+        &mut self,
+        key: u64,
+        padding: f32,
+        gap: f32,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let mut desc = RawNodeDesc::container()
+            .column()
+            .width(Dim::percent(100.0))
+            .padding(unbound_abi::Edges::all(padding))
+            .gap(gap)
+            .radius(6.0)
+            .fill_token(u32::from(unbound_theme::Token::SURFACE_SUNKEN.raw()))
+            .border(u32::from(unbound_theme::Token::OUTLINE.raw()), 1.0);
+        desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 声明两端对齐的水平行容器（`width: 100%`, `Justify::SpaceBetween`, `Align::Center`）。
+    pub fn row_between(&mut self, key: u64, build: impl FnOnce(&mut Self)) -> NodeId {
+        let mut desc = RawNodeDesc::container()
+            .row()
+            .width(Dim::percent(100.0))
+            .align(unbound_abi::Align::Center)
+            .justify(unbound_abi::Justify::SpaceBetween)
+            .gap(8.0);
+        desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 声明垂直居中的水平行容器（`Align::Center`）。
+    pub fn row_center(&mut self, key: u64, gap: f32, build: impl FnOnce(&mut Self)) -> NodeId {
+        let mut desc = RawNodeDesc::container()
+            .row()
+            .align(unbound_abi::Align::Center)
+            .gap(gap);
+        desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 声明自动换行的水平流式容器（适用于筛选项胶囊组、工具栏按钮组）。
+    pub fn row_wrap(&mut self, key: u64, gap: f32, build: impl FnOnce(&mut Self)) -> NodeId {
+        let mut desc = RawNodeDesc::container()
+            .row()
+            .width(Dim::percent(100.0))
+            .align(unbound_abi::Align::Center)
+            .gap(gap)
+            .flags(NodeFlags::WRAP);
+        desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 声明占满宽度的纵向堆叠容器。
+    pub fn col_stretch(&mut self, key: u64, gap: f32, build: impl FnOnce(&mut Self)) -> NodeId {
+        let mut desc = RawNodeDesc::container()
+            .column()
+            .width(Dim::percent(100.0))
+            .gap(gap);
+        desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 弹性空白占位节点（`flex_grow = 1.0`）。
+    pub fn spacer(&mut self, key: u64) -> NodeId {
+        let mut desc = RawNodeDesc::container();
+        desc.flex_grow = 1.0;
+        self.reconcile_node(key, desc, core::panic::Location::caller())
+    }
+
+    /// 声明式滚动视图容器快捷方式（支持真实裁剪、平移与滚轮滚动）。
     pub fn scroll_view(
         &mut self,
         key: u64,
         vertical: bool,
         build: impl FnOnce(&mut Self),
     ) -> NodeId {
-        let mut desc = RawNodeDesc::container();
+        let mut desc = RawNodeDesc::container()
+            .width(Dim::fr(1.0))
+            .height(Dim::fr(1.0));
         if vertical {
             desc = desc.column().flags(NodeFlags::CLIP | NodeFlags::SCROLL_Y);
         } else {
             desc = desc.row().flags(NodeFlags::CLIP | NodeFlags::SCROLL_X);
         }
-        self.container(key, desc, build)
+        self.scroll_view_with(key, desc, vertical, build)
+    }
+
+    /// 使用自定义外部布局描述符声明滚动视图容器。
+    pub fn scroll_view_with(
+        &mut self,
+        key: u64,
+        mut desc: RawNodeDesc,
+        vertical: bool,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        if vertical {
+            desc = desc.column().flags(NodeFlags::CLIP | NodeFlags::SCROLL_Y);
+        } else {
+            desc = desc.row().flags(NodeFlags::CLIP | NodeFlags::SCROLL_X);
+        }
+        let scroll_node = self.reconcile_node(key, desc, core::panic::Location::caller());
+        let parent_saved = core::mem::replace(&mut self.parent, scroll_node);
+        let mut inner_desc = if vertical {
+            RawNodeDesc::container()
+                .column()
+                .width(Dim::percent(100.0))
+                .gap(12.0)
+        } else {
+            RawNodeDesc::container()
+                .row()
+                .height(Dim::percent(100.0))
+                .gap(12.0)
+        };
+        inner_desc.flex_shrink = 0.0;
+        let content_key = key.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(17);
+        let content_node =
+            self.reconcile_node(content_key, inner_desc, core::panic::Location::caller());
+        self.pending.push(PendingWidget {
+            key,
+            node: scroll_node,
+            spec: WidgetSpec::ScrollScopeBegin {
+                scroll_key: key,
+                content_node,
+                vertical,
+            },
+            z_base: self.z_base,
+        });
+        self.parent = content_node;
+        let prev_depth = self.depth;
+        self.depth = self.depth.saturating_add(1);
+        build(self);
+        self.depth = prev_depth;
+        self.pending.push(PendingWidget {
+            key: key.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(18),
+            node: scroll_node,
+            spec: WidgetSpec::ScrollScopeEnd,
+            z_base: self.z_base,
+        });
+        self.parent = parent_saved;
+        scroll_node
     }
 
     /// 声明式分栏容器快捷方式。
@@ -1352,21 +1581,102 @@ impl<'a> ViewBuilder<'a> {
     }
 
     /// 放置自动换行段落。其跨越容器宽度，测量高度来自 [`TextEngine::wrap`]。
-    ///
     pub fn text(&mut self, key: u64, text: impl Into<String>, style: TextStyle) -> NodeId {
         let text = text.into();
-        let desc = RawNodeDesc::container()
-            .key(key)
-            .width(Dim::percent(100.0))
-            .flags(NodeFlags::WRAP);
+        let is_long_paragraph = text.len() > 64 || text.contains('\n');
+        let mut desc = RawNodeDesc::container().key(key);
+        if is_long_paragraph {
+            desc = desc.width(Dim::percent(100.0)).flags(NodeFlags::WRAP);
+        } else {
+            desc.flex_shrink = 0.0;
+        }
+        let node = self.reconcile_node(key, desc, core::panic::Location::caller());
+        self.world.set_text(node, text.clone());
+        if is_long_paragraph {
+            self.pending.push(PendingWidget {
+                key,
+                node,
+                spec: WidgetSpec::Text { text, style },
+                z_base: self.z_base,
+            });
+        } else {
+            self.pending.push(PendingWidget {
+                key,
+                node,
+                spec: WidgetSpec::TextInline {
+                    text,
+                    style,
+                    color: unbound_theme::Token::TEXT_PRIMARY,
+                },
+                z_base: self.z_base,
+            });
+        }
+        node
+    }
+
+    /// 放置带语义颜色令牌的单行自适应宽度文本标签。
+    pub fn text_inline(
+        &mut self,
+        key: u64,
+        text: impl Into<String>,
+        style: TextStyle,
+        color: unbound_theme::Token,
+    ) -> NodeId {
+        let text = text.into();
+        let mut desc = RawNodeDesc::container().key(key);
+        desc.flex_shrink = 0.0;
         let node = self.reconcile_node(key, desc, core::panic::Location::caller());
         self.world.set_text(node, text.clone());
         self.pending.push(PendingWidget {
             key,
             node,
-            spec: WidgetSpec::Text { text, style },
+            spec: WidgetSpec::TextInline { text, style, color },
+            z_base: self.z_base,
         });
         node
+    }
+
+    /// `text_inline` 的语义别名。
+    pub fn text_colored(
+        &mut self,
+        key: u64,
+        text: impl Into<String>,
+        style: TextStyle,
+        color: unbound_theme::Token,
+    ) -> NodeId {
+        self.text_inline(key, text, style, color)
+    }
+
+    /// 放置主前景色（`TEXT_PRIMARY`）单行文本。
+    pub fn text_primary(
+        &mut self,
+        key: u64,
+        text: impl Into<String>,
+        size: f32,
+        weight: u16,
+    ) -> NodeId {
+        let mut style = TextStyle::sized(size);
+        style.weight = weight;
+        self.text_inline(key, text, style, unbound_theme::Token::TEXT_PRIMARY)
+    }
+
+    /// 放置次级柔和色（`TEXT_SECONDARY`）单行文本。
+    pub fn text_muted(&mut self, key: u64, text: impl Into<String>, size: f32) -> NodeId {
+        let style = TextStyle::sized(size);
+        self.text_inline(key, text, style, unbound_theme::Token::TEXT_SECONDARY)
+    }
+
+    /// 放置强调色（`PRIMARY`）单行文本。
+    pub fn text_accent(
+        &mut self,
+        key: u64,
+        text: impl Into<String>,
+        size: f32,
+        weight: u16,
+    ) -> NodeId {
+        let mut style = TextStyle::sized(size);
+        style.weight = weight;
+        self.text_inline(key, text, style, unbound_theme::Token::PRIMARY)
     }
 
     /// 直接访问收集器，供需要追加变换或裁剪的控件使用。
@@ -1534,6 +1844,7 @@ pub struct AppRuntime<A: Application> {
     last_layout_stats: LayoutStats,
     layout_initialized: bool,
     overlays: OverlayManager,
+    scroll_regions: Vec<(u64, Rect, Vec2, bool)>,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -1585,6 +1896,7 @@ impl<A: Application> AppRuntime<A> {
             last_layout_stats: LayoutStats::default(),
             layout_initialized: false,
             overlays: OverlayManager::new(),
+            scroll_regions: Vec::new(),
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -1698,10 +2010,21 @@ impl<A: Application> AppRuntime<A> {
         self.widget_state.borrow()
     }
 
-    /// 按键返回已挂载控件的世界坐标矩形。
+    /// 按键返回控件的世界坐标矩形。
+    ///
+    /// 已发射的 [`UiWidget`] 优先从挂载表读取；行内文本、容器表面等纯声明式节点
+    /// 不会进入挂载表，此时回退到布局树按 key 查询，保证无头体检也能观测其矩形。
     #[must_use]
     pub fn widget_rect(&self, key: u64) -> Option<Rect> {
-        self.mounted_widgets.get(&key).map(|(rect, _)| *rect)
+        self.mounted_widgets
+            .get(&key)
+            .map(|(rect, _)| *rect)
+            .or_else(|| {
+                self.node_keys
+                    .get(&key)
+                    .and_then(|node| self.world.get(*node))
+                    .map(|node| node.world_rect)
+            })
     }
 
     fn now_ms(&self) -> u64 {
@@ -1921,6 +2244,33 @@ impl<A: Application> AppRuntime<A> {
     ///
     ///
     pub fn wheel(&mut self, pos: Vec2, delta: Vec2) -> DirtyFlags {
+        let mut scroll_dirty = DirtyFlags::NONE;
+        for &(scroll_key, viewport_rect, content_size, vertical) in self.scroll_regions.iter().rev()
+        {
+            if viewport_rect.contains_point(pos) {
+                let mut desc = unbound_widgets::ScrollViewDesc::new(viewport_rect, content_size);
+                desc.axis = if vertical {
+                    unbound_widgets::ScrollAxis::Vertical
+                } else {
+                    unbound_widgets::ScrollAxis::Horizontal
+                };
+                let step_px = Vec2::new(-delta.x * 44.0, -delta.y * 44.0);
+                let mut store = self.widget_state.borrow_mut();
+                let state = store.use_state_or_init::<unbound_widgets::ScrollState>(
+                    scroll_key,
+                    unbound_widgets::ScrollState::new,
+                );
+                let before = state.offset();
+                state.jump_to(&desc, before + step_px);
+                if (state.offset() - before).length() > 0.01 {
+                    scroll_dirty = DirtyFlags::PAINT | DirtyFlags::LAYOUT;
+                    drop(store);
+                    self.force_rebuild = true;
+                    self.mark(scroll_dirty);
+                    break;
+                }
+            }
+        }
         let path: Vec<u64> = self
             .router
             .wheel(delta, pos)
@@ -1928,11 +2278,13 @@ impl<A: Application> AppRuntime<A> {
             .map(|region| region.node)
             .collect();
         if path.is_empty() {
-            return self.dispatch(AppEvent::Wheel {
-                pos,
-                delta,
-                target: None,
-            });
+            return self
+                .dispatch(AppEvent::Wheel {
+                    pos,
+                    delta,
+                    target: None,
+                })
+                .merge(scroll_dirty);
         }
 
         let mut remaining = delta;
@@ -2184,6 +2536,8 @@ impl<A: Application> AppRuntime<A> {
             seen_keys: &mut self.seen_keys,
             ephemeral_nodes: &mut self.ephemeral_nodes,
             focus_groups: &mut focus_groups,
+            depth: 0,
+            z_base: 0,
         };
         self.app.view(&self.state, &mut view);
         let vanished: Vec<(u64, NodeId)> = self
@@ -2413,13 +2767,25 @@ impl<A: Application> AppRuntime<A> {
                     WidgetSpec::Alert(al) => {
                         Some(unbound_widgets::UiWidget::intrinsic_size(al, &mut text_ctx))
                     }
-                    WidgetSpec::Text { .. } => None,
+                    WidgetSpec::TextInline { text, style, .. } => {
+                        if text.is_empty() {
+                            Some(Vec2::new(0.0, (style.font_size * 1.35).ceil()))
+                        } else {
+                            let shaped = text_ctx.engine.shape(text, style);
+                            Some(Vec2::new(
+                                shaped.width.ceil() + 2.0,
+                                shaped.height.max(style.font_size * 1.35).ceil(),
+                            ))
+                        }
+                    }
+                    WidgetSpec::Text { .. }
+                    | WidgetSpec::BoxSurface { .. }
+                    | WidgetSpec::ScrollScopeBegin { .. }
+                    | WidgetSpec::ScrollScopeEnd => None,
                 };
                 if let Some(size) = intrinsic {
                     if let Some(data) = self.world.get_mut(entry.node) {
-                        if data.measure.is_none() {
-                            data.measure = Some(size);
-                        }
+                        data.measure = Some(size);
                     }
                 }
             }
@@ -2471,6 +2837,7 @@ impl<A: Application> AppRuntime<A> {
         }
 
         self.mounted_widgets.clear();
+        self.scroll_regions.clear();
         let pending = core::mem::take(&mut self.pending);
         for entry in &pending {
             let rect = self
@@ -2496,41 +2863,70 @@ impl<A: Application> AppRuntime<A> {
                 cache: &mut self.glyph_cache,
                 atlas_clock: self.frame_count,
             };
+            let apply_z_base = |mut out: WidgetOutput, z_base: u16| -> WidgetOutput {
+                if z_base >= 1000 {
+                    for prim in &mut out.primitives {
+                        let new_z = prim.depth_u16().saturating_add(z_base);
+                        let op = prim.opacity();
+                        prim.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(new_z, op);
+                    }
+                    if let Some(hit) = out.hit.as_mut() {
+                        hit.layer = 2;
+                        hit.z = hit.z.saturating_add(u32::from(z_base));
+                    }
+                    for sub_hit in &mut out.sub_hits {
+                        sub_hit.layer = 2;
+                        sub_hit.z = sub_hit.z.saturating_add(u32::from(z_base));
+                    }
+                }
+                out
+            };
             match &entry.spec {
                 WidgetSpec::UiWidget(widget) => {
                     self.mounted_widgets
                         .insert(entry.key, (rect, Arc::clone(widget)));
                     widget.ensure_state_erased(entry.key, &mut self.widget_state.borrow_mut());
                     let store = self.widget_state.borrow();
-                    let output =
-                        widget.emit_laid_out_erased(entry.key, rect, state, &store, &mut text_ctx);
+                    let output = apply_z_base(
+                        widget.emit_laid_out_erased(entry.key, rect, state, &store, &mut text_ctx),
+                        entry.z_base,
+                    );
                     self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Button(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    let output = desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx);
+                    let output = apply_z_base(
+                        desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx),
+                        entry.z_base,
+                    );
                     self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Checkbox(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    let output =
-                        desc.emit_laid_out(entry.key, rect, state, &desc.state, &mut text_ctx);
+                    let output = apply_z_base(
+                        desc.emit_laid_out(entry.key, rect, state, &desc.state, &mut text_ctx),
+                        entry.z_base,
+                    );
                     self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Switch(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    let output =
-                        desc.emit_laid_out(entry.key, rect, state, &desc.on, &mut text_ctx);
+                    let output = apply_z_base(
+                        desc.emit_laid_out(entry.key, rect, state, &desc.on, &mut text_ctx),
+                        entry.z_base,
+                    );
                     self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Slider(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    let output =
-                        desc.emit_laid_out(entry.key, rect, state, &desc.value, &mut text_ctx);
+                    let output = apply_z_base(
+                        desc.emit_laid_out(entry.key, rect, state, &desc.value, &mut text_ctx),
+                        entry.z_base,
+                    );
                     self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Progress {
@@ -2539,28 +2935,222 @@ impl<A: Application> AppRuntime<A> {
                 } => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    let output = desc.emit_laid_out(entry.key, rect, state, pstate, &mut text_ctx);
+                    let output = apply_z_base(
+                        desc.emit_laid_out(entry.key, rect, state, pstate, &mut text_ctx),
+                        entry.z_base,
+                    );
                     self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Badge(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    let output = desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx);
+                    let output = apply_z_base(
+                        desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx),
+                        entry.z_base,
+                    );
                     self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Divider(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    let output = desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx);
+                    let output = apply_z_base(
+                        desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx),
+                        entry.z_base,
+                    );
                     self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Alert(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
-                    let output = desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx);
+                    let output = apply_z_base(
+                        desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx),
+                        entry.z_base,
+                    );
                     self.collector.push(entry.key, output);
                 }
-                WidgetSpec::Text { .. } => {}
+                WidgetSpec::BoxSurface {
+                    fill,
+                    border,
+                    border_width,
+                    radii,
+                    shadow_blur,
+                    z,
+                    hit_scrim,
+                } => {
+                    if rect.width() > 0.0 && rect.height() > 0.0 {
+                        let mut primitives = Vec::with_capacity(2);
+                        let fill_tok = unbound_theme::Token::new(*fill);
+                        let border_tok = unbound_theme::Token::new(*border);
+                        if *shadow_blur > 0.0 {
+                            primitives.push(unbound_widgets::primitive::instance(
+                                rect,
+                                *radii,
+                                unbound_theme::Token::NONE,
+                                unbound_theme::Token::NONE,
+                                0.0,
+                                *shadow_blur,
+                                PrimType::Shadow,
+                                SubElement::Shadow,
+                                *z,
+                            ));
+                        }
+                        primitives.push(unbound_widgets::primitive::instance(
+                            rect,
+                            *radii,
+                            fill_tok,
+                            border_tok,
+                            *border_width,
+                            0.0,
+                            PrimType::RoundedRect,
+                            SubElement::Background,
+                            *z,
+                        ));
+                        let hit = if *hit_scrim {
+                            Some(unbound_input::HitRegion::new(
+                                entry.key,
+                                2,
+                                u32::from(*z),
+                                rect,
+                            ))
+                        } else {
+                            None
+                        };
+                        self.collector.push(
+                            entry.key,
+                            WidgetOutput {
+                                primitives,
+                                hit,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
+                WidgetSpec::ScrollScopeBegin {
+                    scroll_key,
+                    content_node,
+                    vertical,
+                } => {
+                    let content_size = self
+                        .world
+                        .get(*content_node)
+                        .map(|n| n.world_rect.size)
+                        .unwrap_or(rect.size);
+                    let mut scroll_desc = unbound_widgets::ScrollViewDesc::new(rect, content_size);
+                    scroll_desc.axis = if *vertical {
+                        unbound_widgets::ScrollAxis::Vertical
+                    } else {
+                        unbound_widgets::ScrollAxis::Horizontal
+                    };
+                    scroll_desc.z = entry.z_base.saturating_add(740);
+                    let scroll_state = {
+                        let mut store = self.widget_state.borrow_mut();
+                        let st = store.use_state_or_init::<unbound_widgets::ScrollState>(
+                            *scroll_key,
+                            unbound_widgets::ScrollState::new,
+                        );
+                        let clamped = scroll_desc.clamp_offset(st.offset());
+                        if (clamped - st.offset()).length() > 0.01 {
+                            st.jump_to(&scroll_desc, clamped);
+                        }
+                        st.reveal_scrollbar();
+                        st.clone()
+                    };
+                    self.scroll_regions
+                        .push((*scroll_key, rect, content_size, *vertical));
+                    let sv_out = unbound_widgets::emit_scroll_view(
+                        *scroll_key,
+                        &scroll_desc,
+                        &scroll_state,
+                        state,
+                    );
+                    let clip = sv_out.clip;
+                    let transform = sv_out.transform;
+                    sv_out.push_into(&mut self.collector, *scroll_key);
+                    self.collector.push_clip(clip, rect);
+                    self.collector.push_transform(transform);
+                }
+                WidgetSpec::ScrollScopeEnd => {
+                    self.collector.pop_transform();
+                    self.collector.pop_clip();
+                }
+                WidgetSpec::TextInline { text, style, color } => {
+                    if !text.is_empty() && rect.width() > 0.0 && rect.height() > 0.0 {
+                        let quads = text_ctx.shape_line(
+                            text,
+                            rect,
+                            style.font_size,
+                            style.weight,
+                            unbound_widgets::AlignX::Left,
+                            unbound_widgets::AlignY::Middle,
+                        );
+                        let mut primitives = Vec::with_capacity(quads.len());
+                        let mut payloads = Vec::with_capacity(quads.len());
+                        let z = entry.z_base.saturating_add(705);
+                        unbound_widgets::primitive::glyphs(
+                            &quads,
+                            *color,
+                            z,
+                            &mut primitives,
+                            &mut payloads,
+                        );
+                        self.collector.push(
+                            entry.key,
+                            WidgetOutput {
+                                primitives,
+                                payloads,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
+                WidgetSpec::Text { text, style } => {
+                    if !text.is_empty() && rect.width() > 0.0 && rect.height() > 0.0 {
+                        let wrapped = text_ctx.engine.wrap(text, style, rect.width().max(1.0));
+                        let line_h = wrapped.line_height.max(style.font_size * 1.3);
+                        let mut primitives = Vec::new();
+                        let mut payloads = Vec::new();
+                        let z = entry.z_base.saturating_add(705);
+                        for (idx, line) in wrapped.lines.iter().enumerate() {
+                            let start = (line.start as usize).min(text.len());
+                            let end = (line.end as usize).min(text.len()).max(start);
+                            if let Some(slice) = text.get(start..end) {
+                                let trimmed = slice.trim_end_matches(['\r', '\n']);
+                                if trimmed.is_empty() {
+                                    continue;
+                                }
+                                let line_r = Rect::new(
+                                    rect.origin.x,
+                                    rect.origin.y + idx as f32 * line_h,
+                                    rect.width(),
+                                    line_h,
+                                );
+                                let quads = text_ctx.shape_line(
+                                    trimmed,
+                                    line_r,
+                                    style.font_size,
+                                    style.weight,
+                                    unbound_widgets::AlignX::Left,
+                                    unbound_widgets::AlignY::Middle,
+                                );
+                                unbound_widgets::primitive::glyphs(
+                                    &quads,
+                                    unbound_theme::Token::TEXT_PRIMARY,
+                                    z,
+                                    &mut primitives,
+                                    &mut payloads,
+                                );
+                            }
+                        }
+                        self.collector.push(
+                            entry.key,
+                            WidgetOutput {
+                                primitives,
+                                payloads,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
             }
         }
         self.pending = pending;

@@ -487,26 +487,36 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             PlatformEvent::Resized(extent) => {
                 let size = window.inner_size();
                 self.committed_request = (size.width.max(1), size.height.max(1));
-                self.runtime
-                    .resize(Vec2::new(extent.width as f32, extent.height as f32));
+                let ui_scale = self.runtime.context().ui_scale.max(0.5);
+                self.runtime.resize(Vec2::new(
+                    extent.width as f32 / ui_scale,
+                    extent.height as f32 / ui_scale,
+                ));
                 self.swapchain_dirty = true;
             }
             PlatformEvent::RecreateSwapchain(_) => {
                 self.swapchain_dirty = true;
             }
             PlatformEvent::CursorMoved { x, y } => {
-                self.pointer = Vec2::new(x as f32, y as f32);
+                let ui_scale = self.runtime.context().ui_scale.max(0.5);
+                self.pointer = Vec2::new(x as f32 / ui_scale, y as f32 / ui_scale);
                 self.runtime.pointer_move(self.pointer);
             }
             PlatformEvent::MouseInput { state, button } => {
                 if let Some(btn) = translate_pointer_button(button) {
                     if state == ButtonState::Pressed {
                         self.runtime.pointer_down(self.pointer, btn);
+                        if btn == PointerButton::Left
+                            && self.runtime.context().hovered
+                                == Some(unbound_widgets::TITLE_BAR_DRAG_ID)
+                        {
+                            // 标题栏空白区发起系统拖拽；平台侧可能因窗口状态拒绝，
+                            // 此时忽略结果即可，不影响后续输入分发。
+                            let _ = window.drag_window();
+                        }
                     } else {
                         self.runtime.pointer_up(self.pointer, btn);
                         if btn == PointerButton::Left {
-                            // `AppRuntime` 与平台事件同用物理像素坐标；此处不得再除以
-                            // DPI 缩放，否则高 DPI 下窗口按钮的兜底命中会整体偏移。
                             let hit = self.pointer;
                             if self
                                 .runtime
@@ -534,8 +544,27 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 }
             }
             PlatformEvent::MouseWheel { delta_x, delta_y } => {
-                self.runtime
-                    .wheel(self.pointer, Vec2::new(delta_x as f32, delta_y as f32));
+                if self.modifiers.control {
+                    let step = if delta_y > 0.0 {
+                        1
+                    } else if delta_y < 0.0 {
+                        -1
+                    } else {
+                        0
+                    };
+                    if step != 0 {
+                        let next_scale = self.runtime.context_mut().step_ui_scale(step);
+                        let size = window.inner_size();
+                        self.runtime.resize(Vec2::new(
+                            size.width.max(1) as f32 / next_scale,
+                            size.height.max(1) as f32 / next_scale,
+                        ));
+                        window.request_redraw();
+                    }
+                } else {
+                    self.runtime
+                        .wheel(self.pointer, Vec2::new(delta_x as f32, delta_y as f32));
+                }
             }
             PlatformEvent::KeyInput { state, key, .. } => {
                 let app_k = translate_app_key(&key);
@@ -674,7 +703,13 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                             self.swapchain_dirty = true;
                         }
                         self.scene_generation = self.scene_generation.wrapping_add(1);
-                        let camera = Camera::ui((width as f32, height as f32), 1.0);
+                        let ui_scale = self.runtime.context().ui_scale.max(0.5);
+                        let expected_vp =
+                            Vec2::new(width as f32 / ui_scale, height as f32 / ui_scale);
+                        if (self.runtime.context().viewport - expected_vp).length() > 0.5 {
+                            self.runtime.resize(expected_vp);
+                        }
+                        let camera = Camera::ui((expected_vp.x, expected_vp.y), ui_scale);
                         let scene_data = self.runtime.scene();
                         let scene = SceneUpload {
                             primitives: &scene_data.primitives,
@@ -737,9 +772,9 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                     rect.size.y / scale,
                 )
             };
-            if let Some(bar_rect) = self.runtime.widget_rect(unbound_widgets::TITLE_BAR_DRAG_ID) {
-                metrics.set_title_bar_height(to_logical(bar_rect).height());
-            }
+            // 保持 FrameHitMetrics 的 title_bar_height 为 0，使标题栏内的搜索框、工具按钮
+            // 均能正常接收客户端鼠标点击事件；空白区域拖拽由 TITLE_BAR_DRAG_ID 调用 drag_window()。
+            metrics.set_title_bar_height(0.0);
             if let Some(max_rect) = self
                 .runtime
                 .widget_rect(unbound_widgets::TITLE_BAR_MAXIMIZE_ID)

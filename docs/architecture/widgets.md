@@ -15,6 +15,7 @@
 - 三级门禁：`define_widget_catalog!` -> `catalog::emit_widget`（`#[deny(unreachable_patterns)]`） -> `tests/stable_shape.rs`
 - payload 索引：`SceneCollector::push` 以 `self.payloads.len()` 为基址重定位每个 widget 的局部 `extra_payload_idx` -> 否则第二段文本会读第一段字形 UV（文字串叠）
 - 组件增量 API：`code_block::CodeLanguage`（7 语言关键字表）、`GenericDataTableState::export_csv`（RFC 4180 转义，仅导出当前过滤/排序后的可见行）、`modal::ModalSizePreset`（Sm/Md/Lg/Xl/Full 五档居中矩形，按视口 -32px 钳制）、`schema_form::FieldInheritanceState`（默认值/继承/覆写徽章）-> 均为无状态纯数据/纯函数，不改 24 态 Stable Shape 契约
+- 声明式容器与标签 API：`ViewBuilder` 新增 `card`/`panel_card`/`sunken_box`/`row_between`/`row_center`/`row_wrap`/`col_stretch`/`spacer` 与 `text_inline`/`text_primary`/`text_muted`/`text_accent`，由 `unbound-app` 组合 `RawNodeDesc` 与 `BoxSurface`/`TextInline` 发射，不新增目录组件；`ButtonDesc` 增加 `left_align`/`active_selected` 及 `nav_item`/`nav_sub_item`/`tab_item`/`pill_filter`/`icon_btn` 预设，`BadgeDesc` 收紧至 11.5px 字号 / 20px 最小高；`primitive::{instance, surface, outlined, focus_ring, glyphs, curve_stroke, gradient_surface}` 由 `pub(crate)` 提升为 `pub`，供 app 层直接发射图元 -> [守卫] `crates/unbound-widgets/tests/stable_shape.rs`
 
 ## 取舍（禁止重构）
 - [代价] 组件全部采用扁平 `*Desc` POD + 纯函数 `emit_*`，禁止面向对象组件实例树 -> [原因] 零虚表、零堆分配、天然支持 `diff` 与热重载 -> [位置] `crates/unbound-widgets/src/lib.rs`
@@ -26,7 +27,7 @@
 - [必须] 任意锚点位置与任意 `Placement` 下的 `TooltipDesc::rect()` 必须完全落在窗口安全视口内 -> [原因] 防止边缘控件的提示框被窗口边界裁断 -> [守卫] `crates/unbound-widgets/tests/overlay_placement.rs::tooltip_in_window_auto_flips_and_clamps_inside_safe_viewport`
 - [必须] 新增组件必须接入 `define_widget_catalog!` 并在 `catalog::emit_widget` 实现真实发射 -> [原因] 编译期穷举门禁防遗漏 -> [守卫] `crates/unbound-widgets/src/catalog.rs`
 - [例外] `title_bar` 提供 `TitleBarDesc` 描述符、保留节点 ID 与纯装饰控件 `TitleBarChrome`（实现 `UiWidget`，绘制 `HEADER_BG` 背景与 1px `DIVIDER` 分隔线，无独立 `emit_*`），场景由 `unbound-app` 的 `ViewBuilder` 组合既有容器/徽章/按钮生成，故按基础设施模块列入 `build.rs` 白名单，不纳入展示目录 -> [原因] 纳入穷举目录会迫使伪造发射分支 -> [守卫] `crates/unbound-widgets/build.rs`
-- [必须] 默认标题栏以 `Dim::px(viewport.x)` 显式铺满视口，且 `TITLE_BAR_DRAG_ID` 挂在覆盖整条栏的绝对定位背景控件上 -> [原因] 应用根容器为 `AUTO`，百分比宽度会退化成内容宽度，使标题与窗口按钮挤在左上角；纯布局容器不在挂载控件表中，窗口运行器读不到其包围盒便无法设定拖拽高度 -> [守卫] `crates/unbound-app/tests/declarative_ergonomics.rs`
+- [必须] 默认标题栏以 `Dim::px(viewport.x)` 显式铺满视口，且 `TITLE_BAR_DRAG_ID` 挂在覆盖整条栏的绝对定位背景控件上 -> [原因] 应用根容器为 `AUTO`，百分比宽度会退化成内容宽度，使标题与窗口按钮挤在左上角；栏内标题现为 `TextInline` 行内文本而非徽标，空白区拖拽改由运行器在 `hovered == TITLE_BAR_DRAG_ID` 时调用 `drag_window()`（`FrameHitMetrics::title_bar_height` 恒为 0 以保留栏内控件点击），标题矩形经 `widget_rect` 的布局树回退仍可被测试断言 -> [守卫] `crates/unbound-app/tests/declarative_ergonomics.rs`
 - [必须] 追加 `WidgetOutput` 时重定位全部 `extra_payload_idx` -> [原因] 着色器按全局索引访问 payload 数组，不做偏移换算 -> [守卫] `crates/unbound-widgets/src/lib.rs::payload_indices_are_rebased_for_every_widget`
 - [新增] `title_bar` 模块提供与 Showcase 1:1 一致的 `WindowCaptionButton`（46px 贴边几何图元：像素对齐最小化横线、双图元最大化/还原框、解析交叉关闭线及 `Token::ERROR` 悬停警示），并由 `unbound-app` 的 `ViewBuilder::title_bar_custom` + `TitleBarSlots`（`left` / `center` / `actions`）与 `AppContext::window_maximized` 为所有窗口应用提供统一且可自定义扩展的默认标题栏 -> [位置] `crates/unbound-widgets/src/title_bar.rs`、`crates/unbound-app/src/lib.rs`
 - [新增] `ergonomics` 中全部 16 个声明式适配器与 `WidgetCatalogId` 统一通过 `ViewCtx::shape` 完成全量文本字形排版，并完整闭环指针/键盘状态归约；`catalog::emit_widget_with_shaper` 统一透传 `CatalogParams`（含 `toggled` 与 `click_count`），补齐全部 106 个组件在亮/暗主题与 24 态下的几何与字形渲染 -> [位置] `crates/unbound-widgets/src/{catalog.rs, ergonomics.rs, pin_input.rs}`

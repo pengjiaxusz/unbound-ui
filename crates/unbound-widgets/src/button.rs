@@ -209,12 +209,13 @@ pub struct ButtonDesc {
     /// 解析投影模糊半径。`0.0` 表示不绘制阴影。
     pub shadow: f32,
     /// 按墨水边界居中标签。
-    ///
-    /// 若调用方已自行定位字形串（例如已在按钮矩形内完成排版），可清除此标记，
-    /// 使发射器按测量位置原样绘制，而不再重新居中。
     pub centre_label: bool,
     /// 焦点环向按钮外侧延伸的距离。
     pub focus_ring_gap: f32,
+    /// 文本左对齐（适用于侧边栏菜单项、列表行按钮与下拉触发器）。
+    pub left_align: bool,
+    /// 是否处于激活/选中态（渲染选中高亮表面与左侧指示条）。
+    pub active_selected: bool,
 }
 
 impl ButtonDesc {
@@ -235,7 +236,113 @@ impl ButtonDesc {
             shadow: BUTTON_SHADOW,
             centre_label: true,
             focus_ring_gap: FOCUS_RING_GAP,
+            left_align: false,
+            active_selected: false,
         }
+    }
+
+    /// 将标签设为左对齐。
+    #[must_use]
+    pub fn left_align(mut self) -> Self {
+        self.left_align = true;
+        self
+    }
+
+    /// 设置按钮激活/选中高亮态。
+    #[must_use]
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.active_selected = selected;
+        self
+    }
+
+    /// 紧凑无阴影按钮样式（28px 高，6px 圆角）。
+    #[must_use]
+    pub fn compact(mut self) -> Self {
+        self.size = ButtonSize::Sm;
+        self.radius = 6.0;
+        self.font_size = 12.5;
+        self.shadow = 0.0;
+        self
+    }
+
+    /// 自定义圆角半径。
+    #[must_use]
+    pub fn with_radius(mut self, radius: f32) -> Self {
+        self.radius = radius;
+        self
+    }
+
+    /// 自定义字体大小。
+    #[must_use]
+    pub fn with_font_size(mut self, font_size: f32) -> Self {
+        self.font_size = font_size;
+        self
+    }
+
+    /// 侧边栏一级导航菜单项。
+    #[must_use]
+    pub fn nav_item(label: impl Into<String>, active: bool) -> Self {
+        Self::new(Rect::ZERO, label)
+            .with_variant(if active {
+                ButtonVariant::Secondary
+            } else {
+                ButtonVariant::Subtle
+            })
+            .with_size(ButtonSize::Sm)
+            .with_shadow(0.0)
+            .with_radius(6.0)
+            .with_font_size(12.5)
+            .left_align()
+            .selected(active)
+    }
+
+    /// 侧边栏二级子菜单项。
+    #[must_use]
+    pub fn nav_sub_item(label: impl Into<String>, active: bool) -> Self {
+        Self::nav_item(label, active).with_font_size(12.0)
+    }
+
+    /// 顶部/页内分段标签页按钮。
+    #[must_use]
+    pub fn tab_item(label: impl Into<String>, active: bool) -> Self {
+        Self::new(Rect::ZERO, label)
+            .with_variant(if active {
+                ButtonVariant::Secondary
+            } else {
+                ButtonVariant::Subtle
+            })
+            .with_size(ButtonSize::Sm)
+            .with_shadow(0.0)
+            .with_radius(6.0)
+            .with_font_size(12.5)
+            .selected(active)
+    }
+
+    /// 胶囊筛选按钮（如命令面板分类、通信通道筛选器）。
+    #[must_use]
+    pub fn pill_filter(label: impl Into<String>, active: bool) -> Self {
+        Self::new(Rect::ZERO, label)
+            .with_variant(if active {
+                ButtonVariant::Primary
+            } else {
+                ButtonVariant::Secondary
+            })
+            .with_size(ButtonSize::Sm)
+            .with_shadow(0.0)
+            .with_radius(11.0)
+            .with_font_size(11.5)
+            .selected(active)
+    }
+
+    /// 紧凑图标/工具栏按钮。
+    #[must_use]
+    pub fn icon_btn(label: impl Into<String>) -> Self {
+        Self::new(Rect::ZERO, label)
+            .with_variant(ButtonVariant::Subtle)
+            .with_size(ButtonSize::Sm)
+            .with_shadow(0.0)
+            .with_radius(5.0)
+            .with_font_size(12.0)
     }
 
     /// 修改标签的同款按钮：点击计数器只需重建描述符，无需重建标识。
@@ -304,7 +411,14 @@ impl ButtonDesc {
     /// 此按钮绘制使用的颜色槽位。
     #[must_use]
     pub fn tokens(&self) -> ButtonTokens {
-        self.variant.tokens()
+        let mut t = self.variant.tokens();
+        if self.active_selected && self.variant != ButtonVariant::Primary {
+            t.fill = Token::NAV_SELECTED;
+            t.fill_hover = Token::CONTROL_HOVER;
+            t.border = Token::PRIMARY;
+            t.label = Token::TEXT_PRIMARY;
+        }
+        t
     }
 
     /// 指示器矩形：左对齐且垂直居中。
@@ -566,6 +680,27 @@ pub fn emit_button_with_tokens(
         SubElement::Border,
         z,
     ));
+
+    if desc.active_selected && desc.left_align {
+        let bar_h = (rect.size.y * 0.52).clamp(10.0, 16.0);
+        let bar_rect = Rect::new(
+            rect.origin.x + 2.0,
+            rect.origin.y + (rect.size.y - bar_h) * 0.5,
+            3.0,
+            bar_h,
+        );
+        primitives.push(instance(
+            bar_rect,
+            [1.5; 4],
+            Token::PRIMARY,
+            Token::NONE,
+            0.0,
+            0.0,
+            PrimType::RoundedRect,
+            SubElement::Border,
+            z,
+        ));
+    }
 
     // 5. 焦点环：外扩描边，位于最顶层。它始终被发射——聚焦仅改变其不透明度——
     //    因此聚焦按钮只需重绘一个图元，而不会打乱图元池。

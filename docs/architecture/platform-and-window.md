@@ -17,6 +17,7 @@
 - 延迟与呈现：`LatencyTracker` 逐帧记录 Input-to-Photon（预算 `LATENCY_BUDGET` <= 8.3ms）；`present wait` 对齐 DWM 合成节拍
 - 系统服务：`dialogs::{open_file, save_file}` 调用 `::windows::Win32::UI::Controls::Dialogs::{GetOpenFileNameW, GetSaveFileNameW}`；`SystemClipboard` 基于 `::windows::Win32::System::DataExchange` 限流 `MAX_CLIPBOARD_BYTES`；`tray` 基于 `::windows::Win32::UI::Shell::Shell_NotifyIconW` 与 `ITaskbarList3`；`Win32A11y` 桥接 `A11yBridge`
 - 窗口宿主：`crates/unbound-app/src/window_runner.rs` 用 `window.display_handle()` 派生实例扩展 -> `Gpu` -> `Surface`/`Swapchain`；每帧 `AppRuntime::frame` 产出图元 + 图集批量上传 + 主题 LUT 后 `render_into_swapchain`；初始化失败时输出 `GpuError::diagnostic_report()` 完整诊断信息并调用 `window.request_close()` 安全退出
+- UI 缩放坐标域：`WindowedRunner` 在 `Resized`/`CursorMoved`/每帧 acquire 前按 `AppContext::ui_scale` 把物理像素换算为逻辑像素（`extent / scale`，下限 0.5），`Camera::ui` 接收同一 scale；Ctrl+滚轮经 `step_ui_scale` 调档后立即按新 scale `resize` 并请求重绘；标题栏空白区（hover 命中 `TITLE_BAR_DRAG_ID`）由 `drag_window()` 发起系统拖拽，`FrameHitMetrics::set_title_bar_height(0)` 使栏内搜索框与按钮仍可接收客户端点击 -> [位置] `crates/unbound-app/src/window_runner.rs`
 - 呈现刷新率：`Window::refresh_rate_hz()` 经 `GetDC` / `GetDeviceCaps(VREFRESH)` 读取窗口所在显示器刷新率，替代 winit 的 `current_monitor()`；驱动上报无效值时由调用方回退 60 Hz，用于判断是否允许撕裂
 - 帧同步：acquire 前 `Renderer::wait_for_previous_frame()`（在途帧信号量槽位）；交换链重建后按 `swapchain.extent()` 同步深度附件；`recover_gpu` 按 swapchain -> surface -> renderer 显式 `destroy()`
 - 主题交接：宿主持有 `ThemeState`，每帧比对 `ctx.theme` 并 `write_theme_lut`；设备重建后清空标记强制重写

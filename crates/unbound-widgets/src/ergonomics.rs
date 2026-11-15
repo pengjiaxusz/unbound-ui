@@ -205,10 +205,13 @@ pub trait UiWidget: Clone + core::fmt::Debug + Send + Sync + 'static {
 // ============================================================================
 
 impl ButtonDesc {
-    /// 创建带 `label` 的无 Rect 按钮描述符。
+    /// 创建带 `label` 的无 Rect 按钮描述符（默认无重阴影、6px 圆角、13px 字号）。
     #[must_use]
     pub fn label(label: impl Into<String>) -> Self {
         Self::new(Rect::ZERO, label)
+            .with_shadow(0.0)
+            .with_radius(6.0)
+            .with_font_size(13.0)
     }
 
     /// 设置按钮视觉变体。
@@ -400,7 +403,21 @@ impl UiWidget for ButtonDesc {
 
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
         let measured = text_ctx.measure_line(&self.label, self.font_size, 500);
-        let w = (measured.x + 32.0).max(self.rect.width()).max(64.0);
+        let pad_x = if self.left_align {
+            20.0
+        } else if self.size == ButtonSize::Sm {
+            18.0
+        } else {
+            24.0
+        };
+        let min_w = if self.label.chars().count() <= 2 {
+            26.0
+        } else if self.size == ButtonSize::Sm {
+            42.0
+        } else {
+            56.0
+        };
+        let w = (measured.x + pad_x).max(self.rect.width()).max(min_w);
         let h = self.size.height().max(self.rect.height());
         Vec2::new(w, h)
     }
@@ -416,12 +433,26 @@ impl UiWidget for ButtonDesc {
         let mut desc = self.clone();
         desc.rect = rect;
         desc.centre_label = false;
+        let (text_rect, align_x) = if desc.left_align {
+            let inset_left = if desc.active_selected { 11.0 } else { 9.0 };
+            (
+                Rect::new(
+                    rect.origin.x + inset_left,
+                    rect.origin.y,
+                    (rect.width() - inset_left - 6.0).max(0.0),
+                    rect.height(),
+                ),
+                AlignX::Left,
+            )
+        } else {
+            (rect, AlignX::Center)
+        };
         let mut glyphs = text_ctx.shape_line(
             &desc.label,
-            rect,
+            text_rect,
             desc.font_size,
             500,
-            AlignX::Center,
+            align_x,
             AlignY::Middle,
         );
         emit_button(node, &desc, control, &mut glyphs)
@@ -932,10 +963,13 @@ impl UiWidget for BadgeDesc {
     type State = ();
 
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
-        let measured = text_ctx.measure_line(&self.text, 12.0, 500);
+        let measured = text_ctx.measure_line(&self.text, 11.5, 500);
+        let dot_extra = if self.dot { 10.0 } else { 0.0 };
         Vec2::new(
-            (measured.x + 18.0).max(self.rect.width()).max(48.0),
-            self.rect.height().max(22.0),
+            (measured.x + 14.0 + dot_extra)
+                .max(self.rect.width())
+                .max(20.0),
+            self.rect.height().max(20.0),
         )
     }
 
@@ -949,8 +983,27 @@ impl UiWidget for BadgeDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let glyphs =
-            text_ctx.shape_line(&desc.text, rect, 12.0, 500, AlignX::Center, AlignY::Middle);
+        if desc.radius <= 0.0 {
+            desc.radius = (rect.size.y * 0.32).clamp(4.0, 9.0);
+        }
+        let text_r = if desc.dot {
+            Rect::new(
+                rect.origin.x + 10.0,
+                rect.origin.y,
+                (rect.width() - 12.0).max(0.0),
+                rect.height(),
+            )
+        } else {
+            rect
+        };
+        let glyphs = text_ctx.shape_line(
+            &desc.text,
+            text_r,
+            11.5,
+            500,
+            AlignX::Center,
+            AlignY::Middle,
+        );
         emit_badge(&desc, &glyphs)
     }
 }

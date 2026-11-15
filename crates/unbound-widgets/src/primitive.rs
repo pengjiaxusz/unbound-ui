@@ -14,7 +14,7 @@ use unbound_theme::Token;
 
 /// 构建图元实例。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn instance(
+pub fn instance(
     rect: Rect,
     radii: [f32; 4],
     fill: Token,
@@ -51,7 +51,7 @@ pub(crate) fn instance(
 }
 
 /// 填充圆角矩形。
-pub(crate) fn surface(rect: Rect, radius: f32, fill: Token, z: u16) -> GpuPrimitiveInstance {
+pub fn surface(rect: Rect, radius: f32, fill: Token, z: u16) -> GpuPrimitiveInstance {
     instance(
         rect,
         [radius; 4],
@@ -66,7 +66,7 @@ pub(crate) fn surface(rect: Rect, radius: f32, fill: Token, z: u16) -> GpuPrimit
 }
 
 /// 带细边框的圆角矩形。
-pub(crate) fn outlined(
+pub fn outlined(
     rect: Rect,
     radius: f32,
     fill: Token,
@@ -93,7 +93,7 @@ pub(crate) fn outlined(
 /// 无论控件是否聚焦都会输出焦点环，`focused` 仅决定其不透明度。
 /// 这样获得或失去焦点只是一次*绘制*变更（图元池中的单个图元），
 /// 而非会使其后所有索引失效并触发全量重传的*结构*变更。
-pub(crate) fn focus_ring(
+pub fn focus_ring(
     rect: Rect,
     radius: f32,
     color: Token,
@@ -121,7 +121,7 @@ pub(crate) fn focus_ring(
 ///
 /// 调用方使用自身的文本引擎（了解基线、光栅化缩放与图集）进行塑形，
 /// 因此输出器完全无需关心字体细节。
-pub(crate) fn glyphs(
+pub fn glyphs(
     quads: &[GlyphQuad],
     color: Token,
     z: u16,
@@ -172,7 +172,7 @@ pub(crate) fn glyphs(
 /// 包围盒向外扩充 `half_thickness + 1.5px`，确保水平/垂直直线与斜线端点的半宽及抗锯齿过渡带
 /// 绝不会被光栅化四边形边界截断。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn curve_stroke(
+pub fn curve_stroke(
     start: [f32; 2],
     end: [f32; 2],
     thickness: f32,
@@ -213,7 +213,7 @@ pub(crate) fn curve_stroke(
 
 /// 发射带硬件线性渐变的圆角矩形表面。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn gradient_surface(
+pub fn gradient_surface(
     rect: Rect,
     radius: f32,
     from_uv: [f32; 2],
