@@ -63,13 +63,13 @@
     ".gitattributes": "4ee58e87bb8620c14bb17475b90c9ffbf5baf0d804eee9c8a29071c1f9f04a63",
     ".gitignore": "7dfaa8c81536367e53f3dc009c222f4d691a80b129f1ec6862b5b57f89ef20e8",
     ".vscode\\settings.json": "5ccf099e6f346fa5e3d18a280f96571f21aaeda1c323dca064bc66e03ea00c0f",
-    "AGENTS.md": "ffc63f19d271e0a7355bb3524020d494c9cb86ba47197e0da5a30331ba0bdacf",
+    "AGENTS.md": "d31f4b5d0eb2725334427ccbe067cd7ee88dbe6ff25fc4a2d893292c40c06311",
     "commitlint.base.js": "0d81be3222e681a569c4b9c0a39a2cc93c68190252bdbd652d15e187a2f0de42",
     "just\\bque.just": "cf01148f49e980d5df19c46e7c616cc3812cd3a52b613779da1f4aa918b3f487",
     "just\\rust-workspace.just": "5aae64c139f55f40f3cc65705d436ee549fb650d84038ef885f7d4d07f5fb87c",
     "justfile": "af2768bb4f65c14f1aa218aa31ea206f370a1fa31416b69346836c9f134dabdd",
     "package.json": "a8693faac4a002fc5adf046b4b920583b6596ed363580f695a6a6cb61e7a9906",
-    "scripts\\check-lang.mjs": "8784427b4e2c6701dc0dde6759c6bc64107cd9a698fe0cc79866d66ec4064b33",
+    "scripts\\check-lang.mjs": "37f1cbf0750e7854857809dd2b7ccc232386ff4690e2890d118ed5ac98fd698c",
     "scripts\\install-hooks.mjs": "617941adf71bde9644d6ff833ffe373298f77025497eb2c12f5c895d6b8c491f"
   }
 }
