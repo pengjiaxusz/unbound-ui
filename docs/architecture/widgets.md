@@ -16,6 +16,7 @@
 - payload 索引：`SceneCollector::push` 以 `self.payloads.len()` 为基址重定位每个 widget 的局部 `extra_payload_idx` -> 否则第二段文本会读第一段字形 UV（文字串叠）
 - 组件增量 API：`code_block::CodeLanguage`（7 语言关键字表）、`GenericDataTableState::export_csv`（RFC 4180 转义，仅导出当前过滤/排序后的可见行）、`modal::ModalSizePreset`（Sm/Md/Lg/Xl/Full 五档居中矩形，按视口 -32px 钳制）、`schema_form::FieldInheritanceState`（默认值/继承/覆写徽章）-> 均为无状态纯数据/纯函数，不改 24 态 Stable Shape 契约
 - 声明式容器与标签 API：`ViewBuilder` 新增 `card`/`panel_card`/`sunken_box`/`row_between`/`row_center`/`row_wrap`/`col_stretch`/`spacer` 与 `text_inline`/`text_primary`/`text_muted`/`text_accent`，由 `unbound-app` 组合 `RawNodeDesc` 与 `BoxSurface`/`TextInline` 发射，不新增目录组件；`ButtonDesc` 增加 `left_align`/`active_selected` 及 `nav_item`/`nav_sub_item`/`tab_item`/`pill_filter`/`icon_btn` 预设，`BadgeDesc` 收紧至 11.5px 字号 / 20px 最小高；`primitive::{instance, surface, outlined, focus_ring, glyphs, curve_stroke, gradient_surface}` 由 `pub(crate)` 提升为 `pub`，供 app 层直接发射图元 -> [守卫] `crates/unbound-widgets/tests/stable_shape.rs`
+- 声明式控件契约补齐：`ergonomics` 为 `HotkeyInputDesc`、`ColorPickerDesc`、`CodeBlockDesc`、`NumberInputDesc`、`ComboboxDesc`、`AutoCompleteDesc`、`TabsDesc`、`ChartDesc`、`SplitPaneDesc` 补齐无 `Rect` 构造函数与 `UiWidget` 实现（`initial_state`/`intrinsic_size`/`reduce`/`emit_laid_out`）；`GenericDataTableDesc` 与 `SchemaFormDesc` 补齐单元格/汇总行文本排版及 `FieldInheritanceState` 继承徽标的点击/键盘归约；`unbound-app::prelude` 全量重导出上述 `Desc`/`State` 与 `AppEventSender`、主题预设类型 -> [守卫] `just check`
 
 ## 取舍（禁止重构）
 - [代价] 组件全部采用扁平 `*Desc` POD + 纯函数 `emit_*`，禁止面向对象组件实例树 -> [原因] 零虚表、零堆分配、天然支持 `diff` 与热重载 -> [位置] `crates/unbound-widgets/src/lib.rs`
@@ -24,6 +25,7 @@
 
 ## 不变量与红线
 - [禁止] 在 `emit_*` 中根据 `hovered`/`disabled` 条件增减图元个数（隐藏态须用零透明或零尺寸占位） -> [原因] 破坏 Stable Shape 恒定契约 -> [守卫] `crates/unbound-widgets/tests/stable_shape.rs`
+- [必须] 声明式浮层容器用 `RawNodeDesc` 的 POD 字段而非链式方法设置 `z_index` / `shadow_blur`，全屏遮罩用 `size(w, h)`，右对齐用 `Justify::FlexEnd` -> [原因] `RawNodeDesc` 只提供 `size` / `shadow(color, blur, dy)` 等有限链式 API，不存在 `bounds()` / `z_index()` / `shadow_blur()` 与 `Justify::End`，误用直接 E0599；`ViewBuilder::container` 依赖 `shadow_blur > 0` 判断是否发射表面图元、依赖 `z_index >= 1000` 抬升浮层 Z 基线并命中遮罩 -> [守卫] `just check`
 - [必须] 任意锚点位置与任意 `Placement` 下的 `TooltipDesc::rect()` 必须完全落在窗口安全视口内 -> [原因] 防止边缘控件的提示框被窗口边界裁断 -> [守卫] `crates/unbound-widgets/tests/overlay_placement.rs::tooltip_in_window_auto_flips_and_clamps_inside_safe_viewport`
 - [必须] 新增组件必须接入 `define_widget_catalog!` 并在 `catalog::emit_widget` 实现真实发射 -> [原因] 编译期穷举门禁防遗漏 -> [守卫] `crates/unbound-widgets/src/catalog.rs`
 - [例外] `title_bar` 提供 `TitleBarDesc` 描述符、保留节点 ID 与纯装饰控件 `TitleBarChrome`（实现 `UiWidget`，绘制 `HEADER_BG` 背景与 1px `DIVIDER` 分隔线，无独立 `emit_*`），场景由 `unbound-app` 的 `ViewBuilder` 组合既有容器/徽章/按钮生成，故按基础设施模块列入 `build.rs` 白名单，不纳入展示目录 -> [原因] 纳入穷举目录会迫使伪造发射分支 -> [守卫] `crates/unbound-widgets/build.rs`

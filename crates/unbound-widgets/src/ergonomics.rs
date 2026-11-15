@@ -2255,9 +2255,79 @@ impl UiWidget for TaskHudDesc {
 impl UiWidget for SchemaFormDesc {
     type State = SchemaFormState;
 
+    fn initial_state(&self) -> Self::State {
+        SchemaFormState::from_schema(&self.fields)
+    }
+
     fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
         let h = 20.0 + self.fields.len().max(1) as f32 * self.row_height;
         Vec2::new(self.rect.width().max(280.0), self.rect.height().max(h))
+    }
+
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        if let WidgetInputEvent::PointerDown { pos, .. } = event {
+            let rel_y = pos.y - (rect.origin.y + 10.0);
+            if rel_y < 0.0 {
+                return false;
+            }
+            let idx = (rel_y / self.row_height).floor() as usize;
+            let Some(field) = self.fields.get(idx) else {
+                return false;
+            };
+            // 点击左侧指示点重置该字段为默认值
+            if pos.x <= rect.origin.x + 28.0 {
+                state.reset_field(field);
+                return true;
+            }
+            if !state.is_field_enabled(field) {
+                return false;
+            }
+            let label_col_w = (rect.size.x * 0.36).clamp(90.0, 220.0);
+            let ctrl_x = rect.origin.x + 8.0 + label_col_w;
+            if pos.x >= ctrl_x {
+                let current = state
+                    .get(&field.key)
+                    .cloned()
+                    .unwrap_or_else(|| field.default_value.clone());
+                match (&field.kind, current) {
+                    (
+                        crate::schema_form::SchemaFieldKind::Switch,
+                        crate::schema_form::SchemaValue::Bool(b),
+                    ) => {
+                        state.set(field.key.clone(), crate::schema_form::SchemaValue::Bool(!b));
+                        return true;
+                    }
+                    (
+                        crate::schema_form::SchemaFieldKind::Select { options },
+                        crate::schema_form::SchemaValue::EnumIndex(cur_i),
+                    ) => {
+                        if !options.is_empty() {
+                            let next = (cur_i + 1) % options.len();
+                            state.set(
+                                field.key.clone(),
+                                crate::schema_form::SchemaValue::EnumIndex(next),
+                            );
+                            return true;
+                        }
+                    }
+                    (
+                        crate::schema_form::SchemaFieldKind::Number { min, max, step, .. },
+                        crate::schema_form::SchemaValue::Number(cur_v),
+                    ) => {
+                        let ctrl_mid = ctrl_x + ((rect.max().x - 8.0 - ctrl_x) * 0.5).max(16.0);
+                        let delta = if pos.x >= ctrl_mid { *step } else { -*step };
+                        let next = (cur_v + delta).clamp(*min, *max);
+                        state.set(
+                            field.key.clone(),
+                            crate::schema_form::SchemaValue::Number(next),
+                        );
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
     }
 
     fn emit_laid_out(
@@ -2270,19 +2340,45 @@ impl UiWidget for SchemaFormDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let label_col_w = (rect.size.x * 0.36).clamp(90.0, 180.0);
+        let label_col_w = (rect.size.x * 0.36).clamp(90.0, 220.0);
         let mut glyphs = Vec::new();
         for (idx, field) in desc.fields.iter().enumerate() {
             let y = rect.origin.y + 10.0 + idx as f32 * desc.row_height;
             let row_r = Rect::new(
-                rect.origin.x + 16.0,
+                rect.origin.x + 20.0,
                 y,
-                label_col_w - 12.0,
+                (label_col_w - 16.0).max(24.0),
                 desc.row_height - 4.0,
             );
+            let label_txt = match &field.inheritance {
+                crate::schema_form::FieldInheritanceState::DefaultValue => field.label.clone(),
+                crate::schema_form::FieldInheritanceState::InheritedFrom(parent) => {
+                    format!("{} [继承:{}]", field.label, parent)
+                }
+                crate::schema_form::FieldInheritanceState::Overridden => {
+                    format!("{} [覆写]", field.label)
+                }
+            };
             glyphs.extend(text_ctx.shape_line(
-                &field.label,
+                &label_txt,
                 row_r,
+                12.0,
+                400,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+
+            let ctrl_r = Rect::new(
+                rect.origin.x + 8.0 + label_col_w + 10.0,
+                y + 2.0,
+                (rect.size.x - 24.0 - label_col_w - 16.0).max(24.0),
+                (desc.row_height - 8.0).max(16.0),
+            );
+            let val = state.get(&field.key).unwrap_or(&field.default_value);
+            let val_txt = val.display_text(&field.kind);
+            glyphs.extend(text_ctx.shape_line(
+                &val_txt,
+                ctrl_r,
                 12.0,
                 400,
                 AlignX::Left,
@@ -2303,6 +2399,48 @@ impl UiWidget for GenericDataTableDesc {
         Vec2::new(self.rect.width().max(300.0), self.rect.height().max(h))
     }
 
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        match event {
+            WidgetInputEvent::PointerDown { pos, .. } => {
+                let header_bottom = rect.origin.y + 33.0;
+                if pos.y <= header_bottom {
+                    let mut col_x = rect.origin.x;
+                    for (idx, col) in self.columns.iter().enumerate() {
+                        if pos.x >= col_x && pos.x < col_x + col.width {
+                            if col.sortable {
+                                state.cycle_sort(idx);
+                                return true;
+                            }
+                            break;
+                        }
+                        col_x += col.width;
+                    }
+                    return false;
+                }
+                let body_y = pos.y - header_bottom;
+                let slot_idx = (body_y / self.row_height.max(1.0)).floor() as usize;
+                if slot_idx < self.visible_row_slots {
+                    state.focused_row = Some(slot_idx);
+                    state.selected_rows = vec![slot_idx];
+                    return true;
+                }
+                false
+            }
+            WidgetInputEvent::KeyDown(chord) => match chord.key {
+                KeyName::Named("ArrowUp") => {
+                    state.move_focus(self.visible_row_slots, -1);
+                    true
+                }
+                KeyName::Named("ArrowDown") => {
+                    state.move_focus(self.visible_row_slots, 1);
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
     fn emit_laid_out(
         &self,
         node: u64,
@@ -2315,19 +2453,842 @@ impl UiWidget for GenericDataTableDesc {
         desc.rect = rect;
         let mut glyphs = Vec::new();
         let mut hx = rect.origin.x + 10.0;
-        for col in &desc.columns {
+        for (col_idx, col) in desc.columns.iter().enumerate() {
             let hr = Rect::new(hx, rect.origin.y + 2.0, (col.width - 12.0).max(24.0), 28.0);
+            let title_txt = match state.sort_column {
+                Some((idx, crate::generic_data_table::SortDirection::Ascending))
+                    if idx == col_idx =>
+                {
+                    format!("{} ▲", col.title)
+                }
+                Some((idx, crate::generic_data_table::SortDirection::Descending))
+                    if idx == col_idx =>
+                {
+                    format!("{} ▼", col.title)
+                }
+                _ => col.title.clone(),
+            };
             glyphs.extend(text_ctx.shape_line(
-                &col.title,
+                &title_txt,
                 hr,
                 12.0,
-                500,
+                600,
                 AlignX::Left,
                 AlignY::Middle,
             ));
             hx += col.width;
         }
+
+        let visible_indices = state.resolve_visible_indices(&desc.rows);
+        let header_bottom = rect.origin.y + 33.0;
+        for slot_idx in 0..desc.visible_row_slots {
+            let Some(&row_idx) = visible_indices.get(slot_idx) else {
+                break;
+            };
+            let Some(row_cells) = desc.rows.get(row_idx) else {
+                continue;
+            };
+            let ry = header_bottom + slot_idx as f32 * desc.row_height;
+            let mut cx = rect.origin.x + 10.0;
+            for (c_idx, col) in desc.columns.iter().enumerate() {
+                if let Some(cell_text) = row_cells.get(c_idx) {
+                    let cell_r = Rect::new(cx, ry, (col.width - 14.0).max(16.0), desc.row_height);
+                    glyphs.extend(text_ctx.shape_line(
+                        cell_text,
+                        cell_r,
+                        12.0,
+                        400,
+                        AlignX::Left,
+                        AlignY::Middle,
+                    ));
+                }
+                cx += col.width;
+            }
+        }
+
+        if desc.show_summary_footer {
+            let footer_r = Rect::new(
+                rect.origin.x + 12.0,
+                rect.max().y - 27.0,
+                (rect.size.x - 24.0).max(24.0),
+                25.0,
+            );
+            let summary = if !desc.summary_text.is_empty() {
+                desc.summary_text.clone()
+            } else {
+                format!(
+                    "显示 {} / 共 {} 条记录",
+                    visible_indices.len().min(desc.visible_row_slots),
+                    desc.rows.len()
+                )
+            };
+            glyphs.extend(text_ctx.shape_line(
+                &summary,
+                footer_r,
+                11.5,
+                500,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+        }
+
         emit_generic_data_table(node, &desc, state, control, &glyphs)
+    }
+}
+
+// ============================================================================
+// 扩展声明式控件：HotkeyInput / ColorPicker / CodeBlock / NumberInput /
+// Combobox / AutoComplete / Tabs / Chart / SplitPane
+// ============================================================================
+
+impl crate::hotkey_input::HotkeyInputDesc {
+    /// 创建无 Rect 的快捷键录制器描述符。
+    #[must_use]
+    pub fn shortcut(shortcut_text: impl Into<String>) -> Self {
+        Self::new(Rect::ZERO, shortcut_text)
+    }
+
+    /// 设置录制状态。
+    #[must_use]
+    pub fn recording(mut self, recording: bool) -> Self {
+        self.recording = recording;
+        self
+    }
+
+    /// 设置冲突告警状态。
+    #[must_use]
+    pub fn conflict(mut self, conflict: bool) -> Self {
+        self.conflict = conflict;
+        self
+    }
+
+    /// 设置无障碍标签。
+    #[must_use]
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
+        self
+    }
+}
+
+impl UiWidget for crate::hotkey_input::HotkeyInputDesc {
+    type State = crate::hotkey_input::HotkeyInputState;
+
+    fn initial_state(&self) -> Self::State {
+        crate::hotkey_input::HotkeyInputState {
+            chord: None,
+            recording: self.recording,
+            conflict: self.conflict,
+        }
+    }
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let m = text_ctx.measure_line(&self.shortcut_text, 12.5, 500);
+        Vec2::new(
+            (m.x + 48.0).max(self.rect.width()).max(148.0),
+            self.rect.height().max(32.0),
+        )
+    }
+
+    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        match event {
+            WidgetInputEvent::PointerDown { .. } => {
+                state.recording = !state.recording;
+                true
+            }
+            WidgetInputEvent::KeyDown(chord) if state.recording => {
+                state.chord = Some(*chord);
+                state.recording = false;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        desc.recording = desc.recording || state.recording;
+        desc.conflict = desc.conflict || state.conflict;
+        let display = if desc.recording {
+            "请按下组合键...".to_owned()
+        } else if desc.shortcut_text.is_empty() {
+            "未绑定".to_owned()
+        } else {
+            desc.shortcut_text.clone()
+        };
+        let text_r = Rect::new(
+            rect.origin.x + 12.0,
+            rect.origin.y + 4.0,
+            (rect.width() - 36.0).max(16.0),
+            (rect.height() - 8.0).max(12.0),
+        );
+        let glyphs =
+            text_ctx.shape_line(&display, text_r, 12.0, 500, AlignX::Center, AlignY::Middle);
+        crate::hotkey_input::emit_hotkey_input(node, &desc, control, &glyphs)
+    }
+}
+
+impl crate::color_picker::ColorPickerDesc {
+    /// 创建无 Rect 的颜色选择器描述符。
+    #[must_use]
+    pub fn picker() -> Self {
+        Self::new(Rect::ZERO)
+    }
+
+    /// 设置颜色文本显示格式。
+    #[must_use]
+    pub fn with_format(mut self, format: crate::color_picker::ColorFormat) -> Self {
+        self.format = format;
+        self
+    }
+}
+
+impl UiWidget for crate::color_picker::ColorPickerDesc {
+    type State = crate::color_picker::ColorPickerState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(220.0), self.rect.height().max(180.0))
+    }
+
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let layout = desc.layout();
+        match event {
+            WidgetInputEvent::PointerDown { pos, .. } => {
+                if layout.sv.contains_point(*pos) {
+                    state.begin(crate::color_picker::ColorPart::Sv);
+                    state.set_from_pointer(
+                        crate::color_picker::ColorPart::Sv,
+                        pos.x,
+                        pos.y,
+                        layout.sv,
+                    );
+                    return true;
+                }
+                if layout.hue.contains_point(*pos) {
+                    state.begin(crate::color_picker::ColorPart::Hue);
+                    state.set_from_pointer(
+                        crate::color_picker::ColorPart::Hue,
+                        pos.x,
+                        pos.y,
+                        layout.hue,
+                    );
+                    return true;
+                }
+                if layout.alpha.contains_point(*pos) {
+                    state.begin(crate::color_picker::ColorPart::Alpha);
+                    state.set_from_pointer(
+                        crate::color_picker::ColorPart::Alpha,
+                        pos.x,
+                        pos.y,
+                        layout.alpha,
+                    );
+                    return true;
+                }
+                false
+            }
+            WidgetInputEvent::PointerDrag { pos } => {
+                if let Some(part) = state.active() {
+                    let target_r = match part {
+                        crate::color_picker::ColorPart::Sv => layout.sv,
+                        crate::color_picker::ColorPart::Hue => layout.hue,
+                        crate::color_picker::ColorPart::Alpha => layout.alpha,
+                    };
+                    state.set_from_pointer(part, pos.x, pos.y, target_r);
+                    return true;
+                }
+                false
+            }
+            WidgetInputEvent::PointerUp { .. } => {
+                if state.active().is_some() {
+                    state.end();
+                    return true;
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let txt = desc.format.format(state.hsva());
+        let label_r = Rect::new(
+            rect.origin.x + 12.0,
+            rect.max().y - 26.0,
+            (rect.width() - 24.0).max(24.0),
+            20.0,
+        );
+        let mut glyphs =
+            text_ctx.shape_line(&txt, label_r, 11.5, 500, AlignX::Right, AlignY::Middle);
+        crate::color_picker::emit_color_picker(node, &desc, state, control, &mut glyphs)
+    }
+}
+
+impl crate::code_block::CodeBlockDesc {
+    /// 创建无 Rect 的只读语法代码块描述符。
+    #[must_use]
+    pub fn code(text: impl Into<String>, language: impl Into<String>) -> Self {
+        Self::new(Rect::ZERO, text, language)
+    }
+
+    /// 设置高亮行号列表（1-based）。
+    #[must_use]
+    pub fn with_highlight_lines(mut self, lines: Vec<usize>) -> Self {
+        self.highlight_lines = lines;
+        self
+    }
+
+    /// 设置是否显示行号栏。
+    #[must_use]
+    pub fn with_line_numbers(mut self, show_numbers: bool) -> Self {
+        self.show_numbers = show_numbers;
+        self
+    }
+}
+
+impl UiWidget for crate::code_block::CodeBlockDesc {
+    type State = crate::code_block::CodeBlockState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let lines = self.line_count().clamp(2, 32) as f32;
+        Vec2::new(
+            self.rect.width().max(320.0),
+            (lines * crate::code_block::CODE_LINE_HEIGHT + 12.0)
+                .max(self.rect.height())
+                .max(48.0),
+        )
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let max_lines = (rect.height() / crate::code_block::CODE_LINE_HEIGHT)
+            .floor()
+            .max(1.0) as usize;
+        let mut glyphs = Vec::new();
+        let gutter_w = desc.gutter_width();
+        for (idx, line) in desc.text.lines().take(max_lines).enumerate() {
+            let line_r = desc.line_rect(idx);
+            if desc.show_numbers {
+                let num_r = Rect::new(
+                    rect.origin.x + 4.0,
+                    line_r.origin.y,
+                    (gutter_w - 10.0).max(8.0),
+                    line_r.height(),
+                );
+                glyphs.extend(text_ctx.shape_line(
+                    &format!("{}", desc.start_line + idx),
+                    num_r,
+                    11.5,
+                    400,
+                    AlignX::Right,
+                    AlignY::Middle,
+                ));
+            }
+            let code_r = Rect::new(
+                rect.origin.x + gutter_w + 10.0,
+                line_r.origin.y,
+                (rect.width() - gutter_w - 18.0).max(16.0),
+                line_r.height(),
+            );
+            glyphs.extend(text_ctx.shape_line(
+                line,
+                code_r,
+                12.0,
+                400,
+                AlignX::Left,
+                AlignY::Middle,
+            ));
+        }
+        crate::code_block::emit_code_block(node, &desc, state, &glyphs, control)
+    }
+}
+
+impl crate::number_input::NumberInputDesc {
+    /// 创建无 Rect 的数字输入框描述符。
+    #[must_use]
+    pub fn number(min: f64, max: f64) -> Self {
+        Self::new(Rect::ZERO, min, max)
+    }
+
+    /// 设置微调步长。
+    #[must_use]
+    pub fn with_step(mut self, step: f64) -> Self {
+        self.step = step;
+        self
+    }
+
+    /// 设置小数精度。
+    #[must_use]
+    pub fn with_precision(mut self, precision: u8) -> Self {
+        self.precision = precision;
+        self
+    }
+
+    /// 设置单位后缀。
+    #[must_use]
+    pub fn with_unit(mut self, unit: impl Into<String>) -> Self {
+        self.unit = unit.into();
+        self
+    }
+}
+
+impl UiWidget for crate::number_input::NumberInputDesc {
+    type State = crate::number_input::NumberInputState;
+
+    fn initial_state(&self) -> Self::State {
+        crate::number_input::NumberInputState::new(self.min.max(0.0).min(self.max))
+    }
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(120.0), self.rect.height().max(32.0))
+    }
+
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        match event {
+            WidgetInputEvent::PointerDown { pos, .. } => {
+                if crate::number_input::spin_up_rect(rect).contains_point(*pos) {
+                    return state.step_by(1, &desc);
+                }
+                if crate::number_input::spin_down_rect(rect).contains_point(*pos) {
+                    return state.step_by(-1, &desc);
+                }
+                state.begin_drag(pos.x);
+                true
+            }
+            WidgetInputEvent::PointerDrag { pos } => state.drag_to(pos.x, false, false, &desc),
+            WidgetInputEvent::PointerUp { .. } => {
+                if state.is_dragging() {
+                    state.end_drag();
+                    return true;
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let text_r = crate::number_input::number_text_rect(rect);
+        let display = state.display_text(&desc);
+        let mut glyphs =
+            text_ctx.shape_line(&display, text_r, 13.0, 500, AlignX::Left, AlignY::Middle);
+        crate::number_input::emit_number_input(node, &desc, state, control, &mut glyphs)
+    }
+}
+
+impl crate::combobox::ComboboxDesc {
+    /// 创建无 Rect 的可搜索组合框描述符。
+    #[must_use]
+    pub fn options(items: Vec<crate::combobox::ComboItem>) -> Self {
+        Self::new(Rect::ZERO, items)
+    }
+
+    /// 设置占位文本。
+    #[must_use]
+    pub fn with_placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.placeholder = placeholder.into();
+        self
+    }
+}
+
+impl UiWidget for crate::combobox::ComboboxDesc {
+    type State = crate::combobox::ComboboxState;
+
+    fn initial_state(&self) -> Self::State {
+        crate::combobox::ComboboxState::new(self)
+    }
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(180.0), self.rect.height().max(34.0))
+    }
+
+    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        match event {
+            WidgetInputEvent::PointerDown { .. } => {
+                if state.is_open() {
+                    state.close();
+                } else {
+                    state.open(self);
+                }
+                true
+            }
+            WidgetInputEvent::KeyDown(chord) => match chord.key {
+                KeyName::Named("ArrowDown") => {
+                    state.key(self, crate::combobox::ComboboxKey::Down).handled
+                }
+                KeyName::Named("ArrowUp") => {
+                    state.key(self, crate::combobox::ComboboxKey::Up).handled
+                }
+                KeyName::Named("Enter") => {
+                    state.key(self, crate::combobox::ComboboxKey::Enter).handled
+                }
+                KeyName::Named("Escape") => {
+                    state
+                        .key(self, crate::combobox::ComboboxKey::Escape)
+                        .handled
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let display = {
+            let txt = state.display_text(&desc);
+            if txt.is_empty() {
+                desc.placeholder.clone()
+            } else {
+                txt
+            }
+        };
+        let text_r = Rect::new(
+            rect.origin.x + 10.0,
+            rect.origin.y + 2.0,
+            (rect.width() - 30.0).max(16.0),
+            (rect.height() - 4.0).max(16.0),
+        );
+        let mut glyphs =
+            text_ctx.shape_line(&display, text_r, 13.0, 400, AlignX::Left, AlignY::Middle);
+        crate::combobox::emit_combobox_trigger(node, &desc, state, control, &mut glyphs)
+    }
+}
+
+impl crate::autocomplete::AutoCompleteDesc {
+    /// 创建无 Rect 的自动补全输入框描述符。
+    #[must_use]
+    pub fn input(value: impl Into<String>, suggestions: Vec<String>) -> Self {
+        let count = suggestions.len();
+        Self::new(Rect::ZERO, value, count).with_suggestions(suggestions, false)
+    }
+}
+
+impl UiWidget for crate::autocomplete::AutoCompleteDesc {
+    type State = crate::autocomplete::AutoCompleteState;
+
+    fn initial_state(&self) -> Self::State {
+        crate::autocomplete::AutoCompleteState {
+            query: self.value.clone(),
+            highlighted: 0,
+            open: self.open,
+        }
+    }
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(180.0), self.rect.height().max(34.0))
+    }
+
+    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        match event {
+            WidgetInputEvent::PointerDown { .. } => {
+                state.open = !state.open;
+                true
+            }
+            WidgetInputEvent::TextInput(txt) => {
+                state.query.push_str(txt);
+                state.open = true;
+                true
+            }
+            WidgetInputEvent::KeyDown(chord) => match chord.key {
+                KeyName::Named("Backspace") => {
+                    state.query.pop();
+                    true
+                }
+                KeyName::Named("Escape") => {
+                    state.open = false;
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        if !state.query.is_empty() {
+            desc.value = state.query.clone();
+        }
+        desc.open = desc.open || state.open;
+        let text_r = Rect::new(
+            rect.origin.x + 10.0,
+            rect.origin.y + 2.0,
+            (rect.width() - 32.0).max(16.0),
+            (rect.height() - 4.0).max(16.0),
+        );
+        let glyphs =
+            text_ctx.shape_line(&desc.value, text_r, 13.0, 400, AlignX::Left, AlignY::Middle);
+        crate::autocomplete::emit_autocomplete(node, &desc, control, &glyphs)
+    }
+}
+
+impl crate::tabs::TabsDesc {
+    /// 创建无 Rect 的标签页栏描述符。
+    #[must_use]
+    pub fn titles(titles: &[&str]) -> Self {
+        Self::new(Rect::ZERO, titles)
+    }
+}
+
+impl UiWidget for crate::tabs::TabsDesc {
+    type State = crate::tabs::TabsState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let w = (self.count() as f32 * self.tab_width)
+            .max(self.rect.width())
+            .max(200.0);
+        Vec2::new(w, self.rect.height().max(crate::tabs::TAB_STRIP_HEIGHT))
+    }
+
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        if let WidgetInputEvent::PointerDown { pos, .. } = event {
+            let mut desc = self.clone();
+            desc.rect = rect;
+            let rel_x = pos.x - rect.origin.x + state.scroll_x;
+            if rel_x >= 0.0 {
+                let idx = (rel_x / desc.tab_width.max(1.0)).floor() as usize;
+                if idx < desc.count() {
+                    state.activate(&desc, idx);
+                    state.snap(&desc);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let mut st = state.clone();
+        st.snap(&desc);
+        let tokens = crate::tabs::TabsTokens::standard();
+        let mut out = crate::tabs::emit_tabs_strip(&desc, &st, tokens);
+        for idx in 0..desc.count() {
+            let tab_r = desc.tab_rect(idx, st.scroll_x);
+            if tab_r.width() <= 0.0 {
+                continue;
+            }
+            let title = &desc.items[idx].title;
+            let glyphs = text_ctx.shape_line(
+                title,
+                tab_r,
+                12.5,
+                if idx == st.active_index(&desc) {
+                    600
+                } else {
+                    400
+                },
+                AlignX::Center,
+                AlignY::Middle,
+            );
+            let tab_out = crate::tabs::emit_tab(&desc, &st, idx, control, &glyphs, tokens);
+            out.primitives.extend(tab_out.primitives);
+            out.payloads.extend(tab_out.payloads);
+        }
+        out.hit = Some(
+            unbound_input::HitRegion::new(node, 1, u32::from(desc.z), rect)
+                .with_cursor(unbound_input::CursorKind::Pointer),
+        );
+        out
+    }
+}
+
+impl crate::chart::ChartDesc {
+    /// 创建无 Rect 的折线/柱状/面积图表描述符。
+    #[must_use]
+    pub fn plot(series: Vec<crate::chart::ChartSeries>) -> Self {
+        Self::new(Rect::ZERO).with_series(series)
+    }
+
+    /// 显式指定 X/Y 轴数据范围。
+    #[must_use]
+    pub fn with_ranges(mut self, x_range: (f32, f32), y_range: (f32, f32)) -> Self {
+        self.x_range = x_range;
+        self.y_range = y_range;
+        self
+    }
+}
+
+impl UiWidget for crate::chart::ChartDesc {
+    type State = crate::chart::ChartState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(320.0), self.rect.height().max(180.0))
+    }
+
+    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        match event {
+            WidgetInputEvent::PointerDown { pos, .. } | WidgetInputEvent::PointerDrag { pos } => {
+                state.hover(*pos);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let mut tooltip_glyphs = Vec::new();
+        if let Some(ptr) = state.pointer {
+            if let Some((s_idx, p_idx)) = desc.nearest(ptr) {
+                let pt = desc.series[s_idx].points[p_idx];
+                let mapped = desc.map_point(pt);
+                let plot = desc.plot_rect();
+                let bubble = Rect::new(
+                    (mapped.x + 14.0)
+                        .min(plot.max().x - crate::chart::TOOLTIP_SIZE.0)
+                        .max(plot.origin.x),
+                    (mapped.y - crate::chart::TOOLTIP_SIZE.1 - 8.0).max(plot.origin.y),
+                    crate::chart::TOOLTIP_SIZE.0 - 8.0,
+                    crate::chart::TOOLTIP_SIZE.1,
+                );
+                tooltip_glyphs = text_ctx.shape_line(
+                    &format!("({:.2}, {:.2})", pt.x, pt.y),
+                    bubble,
+                    11.5,
+                    500,
+                    AlignX::Center,
+                    AlignY::Middle,
+                );
+            }
+        }
+        crate::chart::emit_chart(node, &desc, state, &tooltip_glyphs, control).output
+    }
+}
+
+impl crate::split_pane::SplitPaneDesc {
+    /// 创建无 Rect 的左右分割面板描述符。
+    #[must_use]
+    pub fn horizontal_pane() -> Self {
+        Self::horizontal(Rect::ZERO)
+    }
+
+    /// 创建无 Rect 的上下分割面板描述符。
+    #[must_use]
+    pub fn vertical_pane() -> Self {
+        Self::vertical(Rect::ZERO)
+    }
+}
+
+impl UiWidget for crate::split_pane::SplitPaneDesc {
+    type State = crate::split_pane::SplitPaneState;
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(self.rect.width().max(240.0), self.rect.height().max(160.0))
+    }
+
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        match event {
+            WidgetInputEvent::PointerDown { pos, .. } => {
+                state.begin_drag(&desc, *pos);
+                true
+            }
+            WidgetInputEvent::PointerDrag { pos } => {
+                if state.dragging {
+                    state.drag_to(&desc, *pos);
+                    return true;
+                }
+                false
+            }
+            WidgetInputEvent::PointerUp { .. } => {
+                if state.dragging {
+                    state.end_drag();
+                    return true;
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        _text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        crate::split_pane::emit_split_pane(
+            node,
+            &desc,
+            state,
+            control,
+            crate::split_pane::SplitPaneTokens::standard(),
+        )
     }
 }
 

@@ -140,6 +140,18 @@ pub struct ComboboxState {
     selected: Option<usize>,
 }
 
+impl Default for ComboboxState {
+    fn default() -> Self {
+        Self {
+            query: TextEditState::new(),
+            open: false,
+            filtered: Vec::new(),
+            highlighted: None,
+            selected: None,
+        }
+    }
+}
+
 impl ComboboxState {
     /// 创建空组合框，所有选项初始均可见。
     #[must_use]

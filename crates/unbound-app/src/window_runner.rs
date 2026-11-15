@@ -138,9 +138,15 @@ pub struct WindowedRunner<A: Application> {
     hwnd: Option<isize>,
     /// GPU 着色器用于解析颜色 token 的语义颜色表。
     theme: ThemeState,
-    /// 当前渲染器 LUT 中已写入的主题；`None` 表示仍需上传
+    /// 当前渲染器 LUT 中已写入的主题与品牌色三元组；`None` 表示仍需上传
     /// （设备重建完成后同样如此）。
-    uploaded_theme: Option<ThemeKind>,
+    uploaded_theme: Option<(
+        ThemeKind,
+        unbound_theme::ProductPreset,
+        unbound_theme::AccentBrand,
+    )>,
+    /// 原生窗口句柄创建完成后的可选宿主回调（例如供 `chahu-render-debugger` 注册主窗口 HWND）。
+    on_hwnd_created: Option<Box<dyn FnMut(isize) + Send>>,
 }
 
 impl<A: Application> WindowedRunner<A> {
@@ -152,12 +158,14 @@ impl<A: Application> WindowedRunner<A> {
         runtime.set_clipboard(Box::new(WinClipboard(std::cell::RefCell::new(
             unbound_platform::SystemClipboard::new(),
         ))));
-        let theme = ThemeState::new(ThemeSet::default_set(), runtime.context().theme);
+        let ctx = runtime.context();
+        let theme = ThemeState::new(ThemeSet::for_product(ctx.preset, ctx.accent), ctx.theme);
 
         Self {
             runtime,
             theme,
             uploaded_theme: None,
+            on_hwnd_created: None,
             renderer: None,
             surface: None,
             swapchain: None,
@@ -171,6 +179,13 @@ impl<A: Application> WindowedRunner<A> {
             frame_metrics: None,
             hwnd: None,
         }
+    }
+
+    /// 注册原生窗口句柄（Win32 `HWND`）就绪时的回调函数。
+    #[must_use]
+    pub fn with_hwnd_callback(mut self, callback: impl FnMut(isize) + Send + 'static) -> Self {
+        self.on_hwnd_created = Some(Box::new(callback));
+        self
     }
 
     /// 访问底层应用运行时。
@@ -191,19 +206,25 @@ impl<A: Application> WindowedRunner<A> {
     /// 纯白：图元确实绘制了，但颜色全透明。showcase 自行上传 LUT，通用运行器
     /// 必须为每个示例做同样的事，并在设备重建后重新上传。
     fn sync_theme(&mut self, window: &Window) {
-        let kind = self.runtime.context().theme;
-        if self.uploaded_theme == Some(kind) {
+        let ctx = self.runtime.context();
+        let key = (ctx.theme, ctx.preset, ctx.accent);
+        if self.uploaded_theme == Some(key) {
             return;
         }
-        self.theme.switch(kind);
+        let prev_preset_accent = self.uploaded_theme.map(|(_, p, a)| (p, a));
+        if prev_preset_accent != Some((key.1, key.2)) {
+            self.theme = ThemeState::new(ThemeSet::for_product(key.1, key.2), key.0);
+        } else {
+            self.theme.switch(key.0);
+        }
         let lut = self.theme.lut().clone();
         let Some(renderer) = &mut self.renderer else {
             return;
         };
         match renderer.write_theme_lut(&lut) {
             Ok(()) => {
-                self.uploaded_theme = Some(kind);
-                // 切换主题只改变颜色：既不重排也不重传图元，
+                self.uploaded_theme = Some(key);
+                // 切换主题或强调色只改变 4 KiB LUT：既不重排也不重传图元，
                 // 但需要再多呈现一帧。
                 window.request_redraw();
             }
@@ -471,6 +492,9 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.surface = Some(surface);
         self.renderer = Some(renderer);
         self.hwnd = Some(hwnd);
+        if let Some(cb) = &mut self.on_hwnd_created {
+            cb(hwnd);
+        }
 
         let metrics = Arc::new(FrameHitMetrics::new());
         metrics.set_scale_factor(window.scale_factor() as f32);
@@ -824,5 +848,16 @@ pub fn run_windowed<A: Application + 'static>(
     // 削成 0；配置与外观不一致，且子类安装前可能露出系统原生标题栏。
     config.decorations = false;
     let runner = WindowedRunner::new(app, &config);
+    PlatformWindow::new(&config)?.run(runner)
+}
+
+/// 带原生窗口句柄（`HWND`）就绪回调的单行窗口化应用入口函数。
+pub fn run_windowed_with_hwnd<A: Application + 'static>(
+    app: A,
+    mut config: WindowConfig,
+    on_hwnd: impl FnMut(isize) + Send + 'static,
+) -> Result<(), PlatformError> {
+    config.decorations = false;
+    let runner = WindowedRunner::new(app, &config).with_hwnd_callback(on_hwnd);
     PlatformWindow::new(&config)?.run(runner)
 }

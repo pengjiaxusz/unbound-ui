@@ -12,6 +12,7 @@
 - 动画链路：`Spring::set_target` -> 每帧 `Spring::step` 积分（`is_settled` 达稳态后停止唤醒） -> `snap_screen` / `edge_screen_snapped` 像素吸附
 - 缩放链路：`ZoomLayers`（OS DPI × 用户 UI 缩放 × 画布视口缩放）折叠为统一 `Affine2`，确保文字与 1px 边框在 10%~6400% 下零抖动
 - 主题链路：`ThemeSet::palette` -> `ThemeLut` 4 KiB -> 宿主每帧比对 `ctx.theme` 后 `write_theme_lut`（0 次重排、0 次图元重建）；`Renderer::new` 只写 5 个占位槽，`SURFACE(2)` 为白、其余 507 token 透明
+- 产品预设与强调色：`AppContext::{preset, accent}`（默认 `ProductPreset::RenderDebuggerLauncher` + `AccentBrand::Blue`）经 `set_theme_preset` / `set_accent_brand` 写入；宿主以 `(ThemeKind, ProductPreset, AccentBrand)` 三元组为 LUT 缓存键，预设或品牌色变化时用 `ThemeSet::for_product` 重建 4 KiB LUT，仍保持 0 次重排与 0 次图元重传 -> [位置] `crates/unbound-app/src/window_runner.rs::sync_theme`
 
 ## 取舍（禁止重构）
 - [代价] 图元实例只存 `Token` 颜色索引而非 RGBA 颜色值，通过 4 KiB `ThemeLut` 间接查表 -> [原因] 一键切换深浅/高对比度主题实现 <= 0.05ms、0 次重排 -> [位置] `crates/unbound-theme/src/lib.rs::ThemeLut`

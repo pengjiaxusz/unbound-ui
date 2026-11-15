@@ -384,6 +384,12 @@ pub struct ColorPickerState {
     editor: TextEditState,
 }
 
+impl Default for ColorPickerState {
+    fn default() -> Self {
+        Self::new(Color::from_srgb8(59, 130, 246, 255))
+    }
+}
+
 impl ColorPickerState {
     /// 创建持有 `color` 的拾色器状态。
     #[must_use]

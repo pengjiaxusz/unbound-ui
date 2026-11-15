@@ -164,6 +164,8 @@ impl GenericDataTableState {
 pub struct GenericDataTableDesc {
     pub rect: Rect,
     pub columns: Vec<DataColumnSpec>,
+    pub rows: Vec<Vec<String>>,
+    pub summary_text: String,
     pub visible_row_slots: usize,
     pub row_height: f32,
     pub show_summary_footer: bool,
@@ -176,11 +178,40 @@ impl GenericDataTableDesc {
         Self {
             rect,
             columns,
+            rows: Vec::new(),
+            summary_text: String::new(),
             visible_row_slots: visible_row_slots.max(1),
             row_height: 30.0,
             show_summary_footer: true,
             z: 10,
         }
+    }
+
+    /// 创建无 Rect 的声明式泛型数据表描述符。
+    #[must_use]
+    pub fn table(columns: Vec<DataColumnSpec>, visible_row_slots: usize) -> Self {
+        Self::new(Rect::ZERO, columns, visible_row_slots)
+    }
+
+    /// 绑定表格行数据矩阵。
+    #[must_use]
+    pub fn with_rows(mut self, rows: Vec<Vec<String>>) -> Self {
+        self.rows = rows;
+        self
+    }
+
+    /// 绑定底部汇总栏文本。
+    #[must_use]
+    pub fn with_summary(mut self, summary_text: impl Into<String>) -> Self {
+        self.summary_text = summary_text.into();
+        self
+    }
+
+    /// 控制是否显示底部汇总统计栏。
+    #[must_use]
+    pub fn with_footer(mut self, show_summary_footer: bool) -> Self {
+        self.show_summary_footer = show_summary_footer;
+        self
     }
 }
 

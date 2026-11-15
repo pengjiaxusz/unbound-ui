@@ -95,6 +95,12 @@ pub struct NumberInputState {
     dragging: bool,
 }
 
+impl Default for NumberInputState {
+    fn default() -> Self {
+        Self::new(0.0)
+    }
+}
+
 impl NumberInputState {
     /// 创建持有初始值 `value` 的状态。
     #[must_use]
