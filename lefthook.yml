@@ -5,6 +5,11 @@ pre-commit:
       glob: "*.rs"
       run: rustfmt {staged_files}
       stage_fixed: true
+    # 中文字符守卫：本项目 chinese_programming 为 false，标识符必须英文；
+    # 字符串里的中文仅限 i18n 翻译表等经 `zh-ok` / `zh-strings-allow` 认证的场景。
+    zh-strings:
+      glob: "*.rs"
+      run: node scripts/check-zh-strings.mjs {staged_files}
 
 commit-msg:
   commands:

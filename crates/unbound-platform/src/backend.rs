@@ -156,6 +156,9 @@ pub(crate) fn pump_a11y<A: PlatformApp>(
 /// Win32 窗口样式位常量（独立于目标平台暴露，便于跨平台单元测试验证样式选择策略）。
 pub(crate) mod style_bits {
     pub const WS_OVERLAPPED: u32 = 0x0000_0000;
+    /// `WS_POPUP`：无边框方案曾使用的样式位。当前实现改用保留 `WS_CAPTION` 的
+    /// `WS_OVERLAPPEDWINDOW`，本常量仅由样式单元测试断言"绝不出现 POPUP"时引用。
+    #[allow(dead_code)]
     pub const WS_POPUP: u32 = 0x8000_0000;
     pub const WS_CAPTION: u32 = 0x00C0_0000;
     pub const WS_SYSMENU: u32 = 0x0008_0000;
@@ -169,11 +172,10 @@ pub(crate) mod style_bits {
 /// 依据窗口配置选择原生窗口样式。
 ///
 /// - `decorations = true`：标准系统装饰窗口（`WS_OVERLAPPEDWINDOW` 或不含 `WS_THICKFRAME`）。
-/// - `decorations = false`：去掉 `WS_CAPTION`（消除系统标题栏），而在 `resizable = true` 时
-///   **保留 `WS_THICKFRAME`**：Win32 唯有在窗口具备 `WS_THICKFRAME` 时才响应 `WM_NCHITTEST`
-///   的 `HTLEFT..HTBOTTOMRIGHT` 与 `WM_SYSCOMMAND(SC_SIZE + WMSZ_*)` 边缘拖拽缩放，以及
-///   Windows 11 贴靠布局。配合 `WM_NCCALCSIZE` 返回 `0` 可将非客户区边框裁切为 0，
-///   既无双层标题栏或系统白边，又完整保留原生四边/四角缩放能力。
+/// - `decorations = false`：保留 `WS_OVERLAPPED | WS_CAPTION`（而非 `WS_POPUP`），确保 DWM
+///   完整保留最小化/最大化/关闭系统过渡动画、阴影、Win11 圆角与 `HTTOP` 双击纵向全高显示；
+///   同时在 `resizable = true` 时保留 `WS_THICKFRAME` 以支持四边/四角缩放与 Snap Layout，
+///   非客户区标题栏与边框统一由 `WM_NCCALCSIZE` 返回 `0` 裁切，避免出现系统白边。
 #[must_use]
 pub(crate) fn compute_window_style(config: &WindowConfig) -> u32 {
     use style_bits::*;
@@ -184,9 +186,9 @@ pub(crate) fn compute_window_style(config: &WindowConfig) -> u32 {
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
         }
     } else if config.resizable {
-        WS_POPUP | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+        WS_OVERLAPPEDWINDOW
     } else {
-        WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
     }
 }
 
@@ -1281,20 +1283,21 @@ mod style_tests {
     }
 
     #[test]
-    fn borderless_windows_drop_caption_and_preserve_thickframe_when_resizable() {
-        // 无边框可缩放窗口必须去掉 WS_CAPTION（消除系统标题栏），但保留 WS_THICKFRAME
-        // 以支持 Win32 原生四边/四角拖拽调整大小与 Win11 贴靠布局（非客户区由 WM_NCCALCSIZE 归零）。
+    fn borderless_windows_keep_overlapped_caption_for_dwm_animations() {
+        // 无边框可缩放窗口必须保留 WS_CAPTION 与 WS_THICKFRAME（不使用 WS_POPUP），
+        // 确保 DWM 保留最小化/最大化系统动画、阴影与 HTTOP 双击全高，非客户区由 WM_NCCALCSIZE 归零。
         let resizable_style = compute_window_style(&config(false, true));
-        assert_eq!(resizable_style & WS_CAPTION, 0);
+        assert_ne!(resizable_style & WS_CAPTION, 0);
         assert_ne!(resizable_style & WS_THICKFRAME, 0);
-        assert_ne!(resizable_style & WS_POPUP, 0);
+        assert_eq!(resizable_style & WS_POPUP, 0);
         assert_ne!(resizable_style & WS_MINIMIZEBOX, 0);
         assert_ne!(resizable_style & WS_MAXIMIZEBOX, 0);
 
-        // 不可缩放的无边框窗口同时去掉 WS_CAPTION 与 WS_THICKFRAME。
+        // 不可缩放的无边框窗口保留 WS_CAPTION 以维持系统动画，去掉 WS_THICKFRAME 与 WS_MAXIMIZEBOX。
         let fixed_style = compute_window_style(&config(false, false));
-        assert_eq!(fixed_style & WS_CAPTION, 0);
+        assert_ne!(fixed_style & WS_CAPTION, 0);
         assert_eq!(fixed_style & WS_THICKFRAME, 0);
-        assert_ne!(fixed_style & WS_POPUP, 0);
+        assert_eq!(fixed_style & WS_MAXIMIZEBOX, 0);
+        assert_eq!(fixed_style & WS_POPUP, 0);
     }
 }

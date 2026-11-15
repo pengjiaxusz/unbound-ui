@@ -11,7 +11,7 @@ use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
 
 use crate::primitive::instance;
-use crate::{ControlState, PointerPhase, TextCtx, UiWidget, WidgetOutput};
+use crate::{ControlState, PointerPhase, TextCtx, UiWidget, WidgetInputEvent, WidgetOutput};
 
 /// 默认标题栏高度（逻辑像素）。
 pub const TITLE_BAR_HEIGHT: f32 = 38.0;
@@ -19,21 +19,55 @@ pub const TITLE_BAR_HEIGHT: f32 = 38.0;
 /// 窗口控制按钮（最小化 / 最大化 / 关闭）的默认宽度（逻辑像素，与 Showcase 一致）。
 pub const TITLE_BAR_CAPTION_WIDTH: f32 = 46.0;
 
+/// 标题栏背景表面与底部分隔线的图元深度。
+///
+/// 窗口根背景固定落在 `80`、普通容器表面按树深度递增（上限 `480`），
+/// 因此标题栏 chrome 必须落在它们之上、页面交互控件之下。
+pub const TITLE_BAR_CHROME_Z: u16 = 100;
+
+/// 标题栏底部 1px 分隔线的图元深度（紧贴背景之上）。
+pub const TITLE_BAR_CHROME_RULE_Z: u16 = 101;
+
+/// 窗口控制按钮底色与命中区域的深度。
+///
+/// 与 `Button` 默认深度（`703`）同带并高一级，保证标题栏 chrome 永远压住页面表面，
+/// 同时不再与任何节点键耦合。
+pub const TITLE_BAR_CAPTION_Z: u16 = 704;
+
+/// 窗口控制按钮几何图元（最小化横线 / 还原方框 / 关闭叉）的深度。
+pub const TITLE_BAR_CAPTION_GLYPH_Z: u16 = 706;
+
 /// 标题栏拖拽区域（背景装饰控件）的保留节点键。
 ///
-/// 该键挂在覆盖整条标题栏的 [`TitleBarChrome`] 控件上，因此
-/// `AppRuntime::widget_rect` 能直接读出标题栏包围盒，供窗口运行器把
-/// 拖拽高度写入 `FrameHitMetrics`；纯布局容器不在挂载控件表中，无法这样读取。
+/// 该键是默认标题栏的根容器键，[`TitleBarChrome`] 使用它的派生键挂载，
+/// 因此 `AppRuntime::widget_rect` 能直接读出标题栏包围盒；纯布局容器不在挂载控件表中，
+/// 无法这样读取。
 pub const TITLE_BAR_DRAG_ID: u64 = 0xFFFF_FF00;
 
 /// 默认标题栏的背景表面与底部分隔线。
 ///
 /// 与 showcase 的 `draw_top_bar` 保持一致的视觉约定：`HEADER_BG` 铺满整条
 /// 标题栏，底边以 1px `DIVIDER` 与内容区分隔。它是绝对定位的纯装饰控件，
-/// 不参与 flex 排布、不发射命中区域，因此标题栏空白处的拖拽仍由
-/// 自定义边框子类的 `HTCAPTION` 承担。
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TitleBarChrome;
+/// 不参与 flex 排布；只发射 `layer = 0` 的最低优先级命中区，作为标题栏空白处的
+/// 冒泡起点（拖动窗口 / 双击最大化由标题栏根容器的冒泡兜底接管）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TitleBarChrome {
+    /// 当前窗口是否处于激活聚焦状态（失焦时降低标题文本与图标对比度）。
+    pub focused: bool,
+}
+
+impl Default for TitleBarChrome {
+    fn default() -> Self {
+        Self { focused: true }
+    }
+}
+
+impl TitleBarChrome {
+    #[must_use]
+    pub const fn new(focused: bool) -> Self {
+        Self { focused }
+    }
+}
 
 impl UiWidget for TitleBarChrome {
     type State = ();
@@ -61,7 +95,7 @@ impl UiWidget for TitleBarChrome {
             0.0,
             PrimType::RoundedRect,
             SubElement::Background,
-            100,
+            TITLE_BAR_CHROME_Z,
         ));
         let rule = Rect::new(rect.origin.x, rect.max().y - 1.0, rect.size.x, 1.0);
         output.primitives.push(instance(
@@ -73,9 +107,11 @@ impl UiWidget for TitleBarChrome {
             0.0,
             PrimType::Line,
             SubElement::Background,
-            101,
+            TITLE_BAR_CHROME_RULE_Z,
         ));
-        output.hit = Some(HitRegion::new(node, 1, 100, rect));
+        // 发射 layer=0、层内 z=0 的最低优先级命中区：标题栏空白处的按压由它作为冒泡起点，
+        // 任何 layer>=1 的交互控件与浮层都天然覆盖其上，无需依赖图元深度差。
+        output.hit = Some(HitRegion::new(node, 0, 0, rect));
         output
     }
 }
@@ -96,6 +132,7 @@ pub enum WindowCaptionKind {
 pub struct WindowCaptionButton {
     pub kind: WindowCaptionKind,
     pub height: f32,
+    pub focused: bool,
 }
 
 impl WindowCaptionButton {
@@ -104,7 +141,15 @@ impl WindowCaptionButton {
         Self {
             kind,
             height: height.max(24.0),
+            focused: true,
         }
+    }
+
+    /// 设置窗口是否处于激活聚焦状态（失焦时降低图标fg对比度）。
+    #[must_use]
+    pub const fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
     }
 }
 
@@ -113,6 +158,11 @@ impl UiWidget for WindowCaptionButton {
 
     fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
         Vec2::new(TITLE_BAR_CAPTION_WIDTH, self.height)
+    }
+
+    fn reduce(&self, _state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        // 消费 PointerDown 以阻止按压控制按钮时事件继续冒泡到标题栏根容器触发窗口拖拽。
+        matches!(event, WidgetInputEvent::PointerDown { .. })
     }
 
     fn emit_laid_out(
@@ -140,16 +190,21 @@ impl UiWidget for WindowCaptionButton {
             0.0,
             PrimType::RoundedRect,
             SubElement::Background,
-            703,
+            TITLE_BAR_CAPTION_Z,
         );
-        bg.z_and_opacity =
-            GpuPrimitiveInstance::pack_z_opacity(703, if active { 1.0 } else { 0.0 });
+        bg.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+            TITLE_BAR_CAPTION_Z,
+            if active { 1.0 } else { 0.0 },
+        );
         output.primitives.push(bg);
 
         let fg = if destructive && active {
             Token::ON_ERROR
-        } else {
+        } else if self.focused || active {
             Token::TEXT_PRIMARY
+        } else {
+            // 窗口失焦时降低图标对比度，贴近 Win11 原生非激活标题栏质感。
+            Token::TEXT_SECONDARY
         };
         let middle = rect.center();
         match self.kind {
@@ -163,53 +218,49 @@ impl UiWidget for WindowCaptionButton {
                     0.0,
                     PrimType::RoundedRect,
                     SubElement::Content,
-                    705,
+                    TITLE_BAR_CAPTION_GLYPH_Z,
                 ));
             }
             WindowCaptionKind::Maximize { maximized } => {
                 if maximized {
-                    output.primitives.push(instance(
-                        Rect::new(middle.x - 3.0, middle.y - 5.0, 8.0, 8.0),
-                        [0.0; 4],
-                        Token::NONE,
-                        fg,
-                        1.0,
-                        0.0,
-                        PrimType::RoundedRect,
-                        SubElement::Content,
-                        704,
-                    ));
-                    let occluder = if active {
-                        Token::CONTROL_HOVER
-                    } else {
-                        Token::HEADER_BG
-                    };
+                    // 前方 8x8 完整镂空方框 + 后方 L 形外露两条边，避免实心遮挡块在透明/Mica 背景下露馅。
                     output.primitives.push(instance(
                         Rect::new(middle.x - 5.0, middle.y - 3.0, 8.0, 8.0),
                         [0.0; 4],
-                        occluder,
+                        Token::NONE,
                         fg,
                         1.0,
                         0.0,
                         PrimType::RoundedRect,
                         SubElement::Content,
-                        705,
+                        TITLE_BAR_CAPTION_GLYPH_Z,
                     ));
-                } else {
-                    let square = Rect::new(middle.x - 5.0, middle.y - 5.0, 10.0, 10.0);
-                    let mut pad = instance(
-                        square,
+                    // 后方方框上沿横边 (x: -3..+5, y: -5)
+                    output.primitives.push(instance(
+                        Rect::new(middle.x - 3.0, middle.y - 5.0, 8.0, 1.0),
                         [0.0; 4],
-                        Token::NONE,
+                        fg,
                         Token::NONE,
                         0.0,
                         0.0,
                         PrimType::RoundedRect,
                         SubElement::Content,
-                        704,
-                    );
-                    pad.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(704, 0.0);
-                    output.primitives.push(pad);
+                        TITLE_BAR_CAPTION_GLYPH_Z,
+                    ));
+                    // 后方方框右沿竖边 (x: +4, y: -4..+3)
+                    output.primitives.push(instance(
+                        Rect::new(middle.x + 4.0, middle.y - 4.0, 1.0, 7.0),
+                        [0.0; 4],
+                        fg,
+                        Token::NONE,
+                        0.0,
+                        0.0,
+                        PrimType::RoundedRect,
+                        SubElement::Content,
+                        TITLE_BAR_CAPTION_GLYPH_Z,
+                    ));
+                } else {
+                    let square = Rect::new(middle.x - 5.0, middle.y - 5.0, 10.0, 10.0);
                     output.primitives.push(instance(
                         square,
                         [0.0; 4],
@@ -219,7 +270,7 @@ impl UiWidget for WindowCaptionButton {
                         0.0,
                         PrimType::RoundedRect,
                         SubElement::Content,
-                        705,
+                        TITLE_BAR_CAPTION_GLYPH_Z,
                     ));
                 }
             }
@@ -251,7 +302,7 @@ impl UiWidget for WindowCaptionButton {
                         0.0,
                         PrimType::Curve,
                         SubElement::Content,
-                        705,
+                        TITLE_BAR_CAPTION_GLYPH_Z,
                     );
                     let payload = GpuPayload::curve(
                         [from.0 - origin.origin.x, from.1 - origin.origin.y],
@@ -274,7 +325,12 @@ impl UiWidget for WindowCaptionButton {
             WindowCaptionKind::Maximize { maximized: false } => "Maximize window",
             WindowCaptionKind::Close => "Close window",
         };
-        output.hit = Some(HitRegion::new(node, 1, 703, rect));
+        output.hit = Some(HitRegion::new(
+            node,
+            crate::button::BUTTON_LAYER,
+            u32::from(TITLE_BAR_CAPTION_Z),
+            rect,
+        ));
         output.a11y = Some(A11yNode::new(Role::Button, label.to_owned(), rect));
         output
     }
@@ -292,12 +348,16 @@ pub const TITLE_BAR_CLOSE_ID: u64 = 0xFFFF_FF03;
 /// 无边框窗口默认标题栏配置。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TitleBarDesc {
+    /// 标题栏根容器节点键（默认 [`TITLE_BAR_DRAG_ID`]，多标题栏场景可自定义避免键冲突）。
+    pub id: u64,
     /// 显示在标题栏左侧的窗口标题。
     pub title: String,
     /// 标题栏高度（逻辑像素）。
     pub height: f32,
     /// 窗口当前是否处于最大化状态（用于切换最大化/还原图标）。
     pub is_maximized: bool,
+    /// 显式覆盖最大化状态（`None` 时自动跟随 `ViewContext::window_maximized`）。
+    pub maximized_override: Option<bool>,
     /// 是否显示最小化按钮。
     pub show_minimize: bool,
     /// 是否显示最大化/还原按钮。
@@ -325,9 +385,11 @@ impl TitleBarDesc {
     #[must_use]
     pub fn new(title: impl Into<String>) -> Self {
         Self {
+            id: TITLE_BAR_DRAG_ID,
             title: title.into(),
             height: TITLE_BAR_HEIGHT,
             is_maximized: false,
+            maximized_override: None,
             show_minimize: true,
             show_maximize: true,
             show_close: true,
@@ -345,10 +407,18 @@ impl TitleBarDesc {
         self
     }
 
-    /// 设置窗口最大化状态（影响按钮显示符号）。
+    /// 自定义标题栏根容器节点键（多标题栏场景用于隔离键空间）。
+    #[must_use]
+    pub fn id(mut self, id: u64) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// 显式设置窗口最大化状态（影响按钮显示符号）。
     #[must_use]
     pub fn maximized(mut self, maximized: bool) -> Self {
         self.is_maximized = maximized;
+        self.maximized_override = Some(maximized);
         self
     }
 
@@ -406,6 +476,17 @@ impl TitleBarDesc {
 mod tests {
     use super::*;
 
+    fn text_ctx<'a>(
+        engine: &'a mut unbound_text::TextEngine,
+        cache: &'a mut unbound_text::GlyphCache,
+    ) -> crate::TextCtx<'a> {
+        crate::TextCtx {
+            engine,
+            cache,
+            atlas_clock: 0,
+        }
+    }
+
     #[test]
     fn title_bar_desc_defaults_and_builders() {
         let desc = TitleBarDesc::new("My App")
@@ -415,29 +496,120 @@ mod tests {
         assert_eq!(desc.title, "My App");
         assert_eq!(desc.height, 42.0);
         assert!(desc.is_maximized);
+        assert_eq!(desc.maximized_override, Some(true));
         assert!(!desc.show_minimize);
         assert!(desc.show_maximize);
         assert!(desc.show_close);
+        assert_eq!(desc.id, TITLE_BAR_DRAG_ID);
         assert_eq!(desc.close_id, TITLE_BAR_CLOSE_ID);
         assert!(desc.show_title);
     }
 
     #[test]
-    fn window_caption_button_emits_showcase_geometry() {
-        // 几何图元按钮不排版文字，但仍需提供合法的文本上下文给 `UiWidget` 调用。
+    fn title_bar_desc_id_and_maximized_override_default_to_follow_context() {
+        // 未显式调用 `.maximized()` 时保持 `None`，由 `ViewContext::window_maximized` 决定。
+        let desc = TitleBarDesc::new("Multi");
+        assert_eq!(desc.maximized_override, None);
+        // 多标题栏场景必须能用 `.id()` 隔离根容器键空间。
+        let custom = desc.clone().id(0x1234_5678);
+        assert_eq!(custom.id, 0x1234_5678);
+        assert_ne!(custom.id, TITLE_BAR_DRAG_ID);
+    }
+
+    #[test]
+    fn title_bar_chrome_emits_background_band_and_lowest_priority_hit() {
         let mut engine = unbound_text::TextEngine::new();
         let mut cache = unbound_text::GlyphCache::new();
-        let mut font = crate::TextCtx {
-            engine: &mut engine,
-            cache: &mut cache,
-            atlas_clock: 0,
-        };
-        let rect = Rect::new(0.0, 0.0, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_HEIGHT);
-        let min_out = WindowCaptionButton::new(WindowCaptionKind::Minimize, TITLE_BAR_HEIGHT)
-            .emit_laid_out(1, rect, ControlState::default(), &(), &mut font);
-        assert_eq!(min_out.primitives.len(), 2);
-        assert!(min_out.hit.is_some());
+        let mut font = text_ctx(&mut engine, &mut cache);
+        let rect = Rect::new(0.0, 0.0, 1000.0, TITLE_BAR_HEIGHT);
+        let out = TitleBarChrome::new(true).emit_laid_out(
+            1,
+            rect,
+            ControlState::default(),
+            &(),
+            &mut font,
+        );
 
+        // 背景铺满整条标题栏 + 底部 1px 分隔线，且深度落在窗口根背景（80）之上。
+        assert_eq!(out.primitives.len(), 2);
+        assert_eq!(out.primitives[0].depth_u16(), TITLE_BAR_CHROME_Z);
+        const { assert!(TITLE_BAR_CHROME_Z > 80) };
+        assert_eq!(out.primitives[1].depth_u16(), TITLE_BAR_CHROME_RULE_Z);
+        const { assert!(TITLE_BAR_CHROME_RULE_Z > TITLE_BAR_CHROME_Z) };
+        assert_eq!(
+            out.primitives[1].size[1], 1.0,
+            "divider must be exactly 1px"
+        );
+
+        // 命中区必须是最低优先级：layer 0（画布层）且层内 z 为 0，
+        // 任何 layer >= 1 的交互控件与浮层都天然覆盖其上。
+        let hit = out
+            .hit
+            .as_ref()
+            .expect("the title bar background must emit a hit region as the bubbling origin");
+        assert_eq!((hit.layer, hit.z), (0, 0));
+        assert_eq!(hit.bounds, rect);
+    }
+
+    #[test]
+    fn window_caption_button_consumes_pointer_down_only() {
+        let button = WindowCaptionButton::new(WindowCaptionKind::Close, TITLE_BAR_HEIGHT);
+        let mut state = ();
+        let rect = Rect::new(0.0, 0.0, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_HEIGHT);
+        assert!(button.reduce(
+            &mut state,
+            rect,
+            &WidgetInputEvent::PointerDown {
+                pos: rect.center(),
+                click_count: 1,
+            }
+        ));
+        // 释放不得吞掉，`Router` 合成的 `Click` 还要继续冒泡给应用层做拦截判定。
+        assert!(!button.reduce(
+            &mut state,
+            rect,
+            &WidgetInputEvent::PointerUp { pos: rect.center() }
+        ));
+    }
+
+    #[test]
+    fn window_caption_button_hover_highlight_and_geometry() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut font = text_ctx(&mut engine, &mut cache);
+        let rect = Rect::new(0.0, 0.0, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_HEIGHT);
+
+        // 空闲态：底色图元存在但不透明度为 0；悬停态：不透明度为 1。
+        let idle = WindowCaptionButton::new(WindowCaptionKind::Minimize, TITLE_BAR_HEIGHT)
+            .emit_laid_out(1, rect, ControlState::default(), &(), &mut font);
+        assert_eq!(idle.primitives.len(), 2);
+        assert_eq!(idle.primitives[0].depth_u16(), TITLE_BAR_CAPTION_Z);
+        assert_eq!(idle.primitives[0].opacity(), 0.0);
+        assert_eq!(idle.primitives[1].depth_u16(), TITLE_BAR_CAPTION_GLYPH_Z);
+
+        let hovered = WindowCaptionButton::new(WindowCaptionKind::Minimize, TITLE_BAR_HEIGHT)
+            .emit_laid_out(
+                1,
+                rect,
+                ControlState {
+                    phase: PointerPhase::Hovered,
+                    ..ControlState::default()
+                },
+                &(),
+                &mut font,
+            );
+        assert_eq!(hovered.primitives[0].opacity(), 1.0);
+        assert_eq!(hovered.primitives[0].size, [rect.size.x, rect.size.y]);
+
+        // 命中区深度与控制按钮底色同带，高于页面按钮默认深度。
+        let hit = hovered
+            .hit
+            .as_ref()
+            .expect("caption buttons must emit a hit region");
+        assert_eq!(hit.layer, crate::button::BUTTON_LAYER);
+        assert_eq!(hit.z, u32::from(TITLE_BAR_CAPTION_Z));
+
+        // 还原图标必须是 4 个图元：底色 + front_square + 后方两条外露边。
         let max_out = WindowCaptionButton::new(
             WindowCaptionKind::Maximize { maximized: false },
             TITLE_BAR_HEIGHT,
@@ -448,11 +620,76 @@ mod tests {
             TITLE_BAR_HEIGHT,
         )
         .emit_laid_out(2, rect, ControlState::default(), &(), &mut font);
-        assert_eq!(max_out.primitives.len(), restore_out.primitives.len());
+        assert_eq!(max_out.primitives.len(), 2);
+        assert_eq!(restore_out.primitives.len(), 4);
 
         let close_out = WindowCaptionButton::new(WindowCaptionKind::Close, TITLE_BAR_HEIGHT)
             .emit_laid_out(3, rect, ControlState::default(), &(), &mut font);
         assert_eq!(close_out.primitives.len(), 3);
         assert_eq!(close_out.payloads.len(), 2);
+    }
+
+    #[test]
+    fn restore_icon_is_hollow_outline_without_solid_occluder() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut font = text_ctx(&mut engine, &mut cache);
+        let rect = Rect::new(0.0, 0.0, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_HEIGHT);
+        let out = WindowCaptionButton::new(
+            WindowCaptionKind::Maximize { maximized: true },
+            TITLE_BAR_HEIGHT,
+        )
+        .emit_laid_out(2, rect, ControlState::default(), &(), &mut font);
+
+        // 旧实现用 `HEADER_BG` / `CONTROL_HOVER` 实心块遮挡后方方框；新实现里除了
+        // 前景描边色与 `Token::NONE`，任何图元都不得再引用背景类令牌。
+        let fg = u32::from(Token::TEXT_PRIMARY.raw());
+        for prim in &out.primitives[1..] {
+            assert!(
+                prim.fill_token_or_uv == fg
+                    || prim.fill_token_or_uv == u32::from(Token::NONE.raw()),
+                "restore icon fills may only be the foreground color or none; never mask the back square with a background block"
+            );
+            assert!(
+                prim.border_token_or_tex == fg
+                    || prim.border_token_or_tex == u32::from(Token::NONE.raw()),
+                "restore icon borders may only be the foreground color or none"
+            );
+            assert_eq!(prim.depth_u16(), TITLE_BAR_CAPTION_GLYPH_Z);
+        }
+
+        // front_square必须是真的镂空：无填充 + 1px 前景描边。
+        let front_square = &out.primitives[1];
+        assert_eq!(front_square.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert_eq!(front_square.border_token_or_tex, fg);
+
+        // 后方方框只保留「上沿横边 + 右沿竖边」两条 1px 前景线，其余边绝不出现。
+        assert_eq!(out.primitives[2].size, [8.0, 1.0]);
+        assert_eq!(out.primitives[3].size, [1.0, 7.0]);
+    }
+
+    #[test]
+    fn unfocused_caption_button_lowers_foreground_contrast() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut font = text_ctx(&mut engine, &mut cache);
+        let rect = Rect::new(0.0, 0.0, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_HEIGHT);
+
+        let focused = WindowCaptionButton::new(WindowCaptionKind::Minimize, TITLE_BAR_HEIGHT)
+            .focused(true)
+            .emit_laid_out(1, rect, ControlState::default(), &(), &mut font);
+        let unfocused = WindowCaptionButton::new(WindowCaptionKind::Minimize, TITLE_BAR_HEIGHT)
+            .focused(false)
+            .emit_laid_out(1, rect, ControlState::default(), &(), &mut font);
+
+        assert_eq!(
+            focused.primitives[1].fill_token_or_uv,
+            u32::from(Token::TEXT_PRIMARY.raw())
+        );
+        assert_eq!(
+            unfocused.primitives[1].fill_token_or_uv,
+            u32::from(Token::TEXT_SECONDARY.raw()),
+            "an unfocused window must lower the icon contrast"
+        );
     }
 }
