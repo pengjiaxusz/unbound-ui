@@ -509,7 +509,7 @@ mod tests {
             let mut desc = RawNodeDesc::container()
                 .size(120.0, 32.0)
                 .padding(Edges::all(8.0))
-                .border(0, 1.0)
+                .border(0u32, 1.0)
                 .margin(Edges::all(4.0))
                 .key(42);
             desc.flags |= NodeFlags::INTERACTIVE.bits();

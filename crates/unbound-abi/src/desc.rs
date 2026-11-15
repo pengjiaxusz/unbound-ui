@@ -574,10 +574,38 @@ impl RawNodeDesc {
         self
     }
 
+    /// 设置背景填充颜色令牌（兼容 `Token::raw()` 的 u16 与裸 u32 值）。
     #[must_use]
-    pub fn border(mut self, color: u32, width: f32) -> Self {
-        self.border_color = color;
+    pub fn fill(mut self, token: impl Into<u32>) -> Self {
+        self.fill = token.into();
+        self
+    }
+
+    /// 设置弹性增长系数。
+    #[must_use]
+    pub fn flex_grow(mut self, grow: f32) -> Self {
+        self.flex_grow = grow;
+        self
+    }
+
+    /// 设置内嵌偏移（绝对定位浮层的边距）。
+    #[must_use]
+    pub fn inset(mut self, i: Edges) -> Self {
+        self.inset = i;
+        self
+    }
+
+    #[must_use]
+    pub fn border(mut self, color: impl Into<u32>, width: f32) -> Self {
+        self.border_color = color.into();
         self.border_width = width;
+        self
+    }
+
+    /// 设置绘制层级（>=1000 时按 Portal 层处理表面与命中区域）。
+    #[must_use]
+    pub fn z_index(mut self, z: i32) -> Self {
+        self.z_index = z;
         self
     }
 

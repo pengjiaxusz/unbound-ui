@@ -17,6 +17,7 @@
 - 声明式发射扩展：`WidgetSpec` 新增 `TextInline`（单行自适应宽度文本 + 语义色令牌）、`BoxSurface`（容器填充/边框/阴影圆角表面）、`ScrollScopeBegin`/`ScrollScopeEnd`（裁剪与平移作用域）四类变体；`ViewBuilder::container` 依据 `RawNodeDesc.{fill, border_color, radius, shadow_blur}` 自动补发表面图元，`scroll_view_with` 以独立内容节点配合 `push_clip`/`push_transform` 建立滚动作用域；`PendingWidget.z_base` 与树深度 `depth` 共同决定图元 Z（`80 + 6 * depth`，上限 480），浮层（`z_index >= 1000`）经 `apply_z_base` 抬升图元 Z 与 `HitRegion.layer/z` -> [守卫] `just check` + `just test`
 - 滚动输入闭环：`AppRuntime::scroll_regions` 每帧重建，`wheel` 逆序命中包含指针的滚动视口后以 44px 步长驱动 `ScrollState::jump_to`，位移有效时置 `force_rebuild` 并标脏 `PAINT|LAYOUT`，同时仍照常派发 `AppEvent::Wheel` -> [位置] `crates/unbound-app/src/lib.rs::AppRuntime::wheel`
 - 上传契约：`SceneUpload` 的 `transforms`/`clips`/`payloads` 均为全局数组；空 `transforms` 由 `Renderer::prepare_upload` 补 identity；图集更新整帧一次批量上传
+- 描述符构造器契约：`RawNodeDesc` 的绘制/布局字段统一由 `unbound-abi` 的 builder 写入（`fill(impl Into<u32>)`、`border(impl Into<u32>, f32)`、`flex_grow(f32)`、`z_index(i32)`、`inset(Edges)`、`shadow(u32, f32, f32)`），颜色参数兼容 `Token::raw()` 的 `u16`；调用方不得把字段当方法调用，也不得臆造不存在的关联项 -> [守卫] `just check`
 
 ## 取舍（禁止重构）
 - [代价] 采用 Action as Data（可序列化枚举 `ActionKind`）替代闭包回调 -> [原因] 跨越 Host-Guest C-ABI 边界、支持确定性回放与 `rkyv` 时间旅行快照 -> [位置] `crates/unbound-abi/src/action.rs::ActionKind`
