@@ -152,6 +152,10 @@ impl KeyDiscriminator for &String {
 }
 
 /// 基于源码位置生成稳定编译期控件标识符的宏。
+///
+/// 若未传入区分符，则基于当前源码文件、行号与列号生成唯一的匿名容器键；
+/// 若传入了区分符（如字符串字面量标识或基于索引的数值），则直接转换为确定性的 64 位键，
+/// 确保声明处（view）与事件比对处（reduce）能够稳定匹配同一控件标识。
 #[macro_export]
 macro_rules! ui_key {
     () => {{
@@ -159,8 +163,7 @@ macro_rules! ui_key {
         KEY
     }};
     ($discriminator:expr) => {{
-        const BASE: u64 = $crate::const_fnv1a_hash(file!(), line!(), column!());
-        $crate::mix_key(BASE, $crate::KeyDiscriminator::into_u64($discriminator))
+        $crate::KeyDiscriminator::into_u64($discriminator)
     }};
 }
 
@@ -2956,6 +2959,12 @@ impl<A: Application> AppRuntime<A> {
     #[must_use]
     pub fn scroll_regions(&self) -> &[(u64, Rect, Vec2, bool)] {
         &self.scroll_regions
+    }
+
+    /// 借用路由状态，供测试与调试检查命中区域。
+    #[must_use]
+    pub fn router(&self) -> &Router {
+        &self.router
     }
 
     /// 应用实例本身，供测试与调试覆盖层检查。
