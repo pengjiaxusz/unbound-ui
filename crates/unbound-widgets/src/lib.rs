@@ -314,8 +314,8 @@ pub use query_builder::{
     emit_query_builder, FilterPopupState, QueryBuilderDesc, QueryCombinator, QueryRule,
 };
 pub use schema_form::{
-    emit_schema_form, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc, SchemaFormState,
-    SchemaValue,
+    emit_schema_form, FieldInheritanceState, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc,
+    SchemaFormState, SchemaValue,
 };
 pub use shortcut_bar::{emit_shortcut_bar, KeybindingManagerState, ShortcutBarDesc, ShortcutEntry};
 pub use task_hud::{emit_task_hud, TaskActivityItem, TaskHudDesc};
@@ -355,8 +355,8 @@ pub use chart::{
 };
 pub use checkbox::{CheckState, CheckboxDesc, CheckboxTokens};
 pub use code_block::{
-    emit_code_block, highlight_line, CodeBlockDesc, CodeBlockState, CodeSpan, SyntaxToken,
-    CODE_GUTTER, CODE_LINE_HEIGHT, COPY_CONFIRM_SECONDS,
+    emit_code_block, highlight_line, CodeBlockDesc, CodeBlockState, CodeLanguage, CodeSpan,
+    SyntaxToken, CODE_GUTTER, CODE_LINE_HEIGHT, COPY_CONFIRM_SECONDS,
 };
 pub use code_editor::{emit_code_editor, CodeEditorDesc, CodeEditorState};
 pub use collapsible::{emit_collapsible, CollapsibleDesc, CollapsibleState};

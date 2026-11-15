@@ -73,7 +73,7 @@ pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
 pub use unbound_widgets::ergonomics::UiWidget;
-pub use window_runner::{run_windowed, WindowedRunner};
+pub use window_runner::{run_windowed, run_windowed_with_hwnd, WindowedRunner};
 
 /// [`ui_key!`] 使用的编译期 64 位 FNV-1a 哈希。
 pub const fn const_fnv1a_hash(file: &str, line: u32, column: u32) -> u64 {
@@ -561,6 +561,10 @@ pub struct AppContext {
     pub viewport: Vec2,
     /// 当前激活主题。
     pub theme: ThemeKind,
+    /// 当前宿主产品主题风格预设（如 `ProductPreset::RenderWorkbench`）。
+    pub preset: unbound_theme::ProductPreset,
+    /// 当前 OKLCH 品牌强调色预设（共 10 套）。
+    pub accent: unbound_theme::AccentBrand,
     /// 当前原生窗口是否处于最大化状态（由窗口运行器自动同步）。
     pub window_maximized: bool,
     /// 全局 7 档 UI 逻辑缩放因子（默认 `1.0`，范围 `0.75..=2.0`）。
@@ -626,6 +630,8 @@ impl AppContext {
         Self {
             viewport,
             theme: ThemeKind::Dark,
+            preset: unbound_theme::ProductPreset::RenderWorkbench,
+            accent: unbound_theme::AccentBrand::Blue,
             window_maximized: false,
             ui_scale: 1.0,
             scale_osd_remaining: 0.0,
@@ -683,6 +689,108 @@ impl AppContext {
     /// 可变借用控件状态存储。
     pub fn state_store_mut(&self) -> RefMut<'_, WidgetStateStore> {
         self.widget_state.borrow_mut()
+    }
+
+    /// 设置产品主题风格与 10 套 OKLCH 品牌强调色。
+    pub fn set_theme_preset(
+        &mut self,
+        preset: unbound_theme::ProductPreset,
+        accent: unbound_theme::AccentBrand,
+    ) {
+        self.preset = preset;
+        self.accent = accent;
+    }
+
+    /// 切换 OKLCH 品牌强调色。
+    pub fn set_accent_brand(&mut self, accent: unbound_theme::AccentBrand) {
+        self.accent = accent;
+    }
+
+    /// 读取指定 `TextInputDesc` 控件键当前的文本内容。
+    #[must_use]
+    pub fn text_input_value(&self, key: u64) -> Option<String> {
+        self.widget_state
+            .borrow()
+            .get::<unbound_widgets::TextEditState>(key)
+            .map(|st| st.text().to_owned())
+    }
+
+    /// 写入指定 `TextInputDesc` 控件键的文本内容。
+    pub fn set_text_input_value(&self, key: u64, text: impl Into<String>) {
+        self.widget_state
+            .borrow_mut()
+            .insert_state(key, unbound_widgets::TextEditState::with_text(text));
+    }
+
+    /// 读取指定 `SelectDesc` 控件键当前选中的索引。
+    #[must_use]
+    pub fn select_index(&self, key: u64) -> Option<usize> {
+        self.widget_state
+            .borrow()
+            .get::<unbound_widgets::SelectState>(key)
+            .and_then(|st| st.selected)
+    }
+
+    /// 设置指定 `SelectDesc` 控件键的选中索引。
+    pub fn set_select_index(&self, key: u64, selected: Option<usize>) {
+        let mut store = self.widget_state.borrow_mut();
+        let st = store.entry::<unbound_widgets::SelectState>(key);
+        st.selected = selected;
+        st.highlighted = selected;
+    }
+
+    /// 读取指定 `SwitchDesc` 控件键当前的布尔开关状态。
+    #[must_use]
+    pub fn switch_value(&self, key: u64) -> Option<bool> {
+        self.widget_state.borrow().get::<bool>(key).copied()
+    }
+
+    /// 设置指定 `SwitchDesc` 控件键的布尔开关状态。
+    pub fn set_switch_value(&self, key: u64, on: bool) {
+        self.widget_state.borrow_mut().insert_state(key, on);
+    }
+
+    /// 读取指定 `SliderDesc` 控件键当前的浮点值。
+    #[must_use]
+    pub fn slider_value(&self, key: u64) -> Option<f32> {
+        self.widget_state.borrow().get::<f32>(key).copied()
+    }
+
+    /// 设置指定 `SliderDesc` 控件键的浮点值。
+    pub fn set_slider_value(&self, key: u64, value: f32) {
+        self.widget_state.borrow_mut().insert_state(key, value);
+    }
+
+    /// 读取指定 `NumberInputDesc` 控件键当前的数值。
+    #[must_use]
+    pub fn number_input_value(&self, key: u64) -> Option<f64> {
+        self.widget_state
+            .borrow()
+            .get::<unbound_widgets::NumberInputState>(key)
+            .map(unbound_widgets::NumberInputState::value)
+    }
+
+    /// 设置指定 `NumberInputDesc` 控件键的数值。
+    pub fn set_number_input_value(&self, key: u64, value: f64) {
+        self.widget_state
+            .borrow_mut()
+            .insert_state(key, unbound_widgets::NumberInputState::new(value));
+    }
+
+    /// 读取指定 `TabsDesc` 控件键当前激活的标签索引。
+    #[must_use]
+    pub fn tab_active(&self, key: u64) -> Option<usize> {
+        self.widget_state
+            .borrow()
+            .get::<unbound_widgets::TabsState>(key)
+            .map(|st| st.active)
+    }
+
+    /// 设置指定 `TabsDesc` 控件键当前激活的标签索引。
+    pub fn set_tab_active(&self, key: u64, active: usize) {
+        let mut store = self.widget_state.borrow_mut();
+        let st = store.entry::<unbound_widgets::TabsState>(key);
+        st.active = active;
     }
 
     /// 在本次归约后调度一个经 `after` 触发的单次事件。
@@ -1376,6 +1484,148 @@ impl<'a> ViewBuilder<'a> {
     /// 声明式工具提示（Tooltip）快捷方式（支持窗口内自动翻转与安全边距钳制）。
     pub fn tooltip(&mut self, key: u64, desc: unbound_widgets::TooltipDesc) -> NodeId {
         self.add(key, desc)
+    }
+
+    /// 声明式快捷键录制框快捷方式。
+    pub fn hotkey_input(&mut self, key: u64, desc: unbound_widgets::HotkeyInputDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式颜色选择器快捷方式。
+    pub fn color_picker(&mut self, key: u64, desc: unbound_widgets::ColorPickerDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式语法高亮只读代码块快捷方式。
+    pub fn code_block(&mut self, key: u64, desc: unbound_widgets::CodeBlockDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式代码编辑器快捷方式。
+    pub fn code_editor(&mut self, key: u64, desc: unbound_widgets::CodeEditorDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式数字输入框快捷方式。
+    pub fn number_input(&mut self, key: u64, desc: unbound_widgets::NumberInputDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式可搜索组合框快捷方式。
+    pub fn combobox(&mut self, key: u64, desc: unbound_widgets::ComboboxDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式自动补全输入框快捷方式。
+    pub fn autocomplete(&mut self, key: u64, desc: unbound_widgets::AutoCompleteDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式标签页栏快捷方式。
+    pub fn tabs(&mut self, key: u64, desc: unbound_widgets::TabsDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式折线/柱状/面积图表快捷方式。
+    pub fn chart(&mut self, key: u64, desc: unbound_widgets::ChartDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式泛型数据表快捷方式。
+    pub fn generic_data_table(
+        &mut self,
+        key: u64,
+        desc: unbound_widgets::GenericDataTableDesc,
+    ) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式 Schema 驱动表单快捷方式。
+    pub fn schema_form(&mut self, key: u64, desc: unbound_widgets::SchemaFormDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式终端日志视图快捷方式。
+    pub fn terminal_view(&mut self, key: u64, desc: unbound_widgets::TerminalViewDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式任务进度悬浮坞快捷方式。
+    pub fn task_hud(&mut self, key: u64, desc: unbound_widgets::TaskHudDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式流水线阶段条快捷方式。
+    pub fn pipeline_view(&mut self, key: u64, desc: unbound_widgets::PipelineViewDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明全屏遮罩居中模态弹窗容器（自动开启 `z_index = 1200` 浮层与 `SCRIM` 命中遮罩）。
+    pub fn modal_scrim(
+        &mut self,
+        scrim_key: u64,
+        dialog_key: u64,
+        width: f32,
+        height: f32,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let vp = self.ctx.viewport;
+        let mut scrim_desc = RawNodeDesc::container()
+            .absolute()
+            .size(vp.x, vp.y)
+            .align(unbound_abi::Align::Center)
+            .justify(unbound_abi::Justify::Center)
+            .fill_token(u32::from(unbound_theme::Token::SCRIM.raw()));
+        // `z_index` 是 POD 字段而非链式方法；不小于 1000 会抬升浮层 z 基线。
+        scrim_desc.z_index = 1200;
+        self.container(scrim_key, scrim_desc, |overlay| {
+            let dlg_w = width.min((vp.x - 32.0).max(280.0));
+            let dlg_h = height.min((vp.y - 32.0).max(200.0));
+            let mut dlg_desc = RawNodeDesc::container()
+                .column()
+                .width(Dim::px(dlg_w))
+                .height(Dim::px(dlg_h))
+                .padding(unbound_abi::Edges::all(18.0))
+                .gap(12.0)
+                .radius(12.0)
+                .fill_token(u32::from(unbound_theme::Token::SURFACE_RAISED.raw()))
+                .border(u32::from(unbound_theme::Token::OUTLINE_STRONG.raw()), 1.0);
+            // 阴影半径同样为字段，`container()` 依据它决定是否发射表面图元。
+            dlg_desc.shadow_blur = 24.0;
+            overlay.container(dialog_key, dlg_desc, build);
+        })
+    }
+
+    /// 声明右侧滑出抽屉浮层容器（自动开启 `z_index = 1150` 浮层与左侧半透明遮罩）。
+    pub fn drawer_right(
+        &mut self,
+        scrim_key: u64,
+        drawer_key: u64,
+        width: f32,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let vp = self.ctx.viewport;
+        let mut scrim_desc = RawNodeDesc::container()
+            .row()
+            .absolute()
+            .size(vp.x, vp.y)
+            .justify(unbound_abi::Justify::FlexEnd)
+            .fill_token(u32::from(unbound_theme::Token::SCRIM.raw()));
+        // 抽屉层级低于模态弹窗，但同样命中遮罩的浮层 z 基线规则。
+        scrim_desc.z_index = 1150;
+        self.container(scrim_key, scrim_desc, |overlay| {
+            let w = width.min((vp.x - 48.0).max(280.0));
+            let mut drawer_desc = RawNodeDesc::container()
+                .column()
+                .width(Dim::px(w))
+                .height(Dim::percent(100.0))
+                .padding(unbound_abi::Edges::all(18.0))
+                .gap(12.0)
+                .fill_token(u32::from(unbound_theme::Token::SURFACE_RAISED.raw()))
+                .border(u32::from(unbound_theme::Token::OUTLINE_STRONG.raw()), 1.0);
+            drawer_desc.shadow_blur = 24.0;
+            overlay.container(drawer_key, drawer_desc, build);
+        })
     }
 
     /// 声明式卡片容器快捷方式（自动绘制 `CARD_BG` 背景、`CARD_BORDER` 边框与圆角）。

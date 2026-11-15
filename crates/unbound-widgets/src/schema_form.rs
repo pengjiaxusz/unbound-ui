@@ -36,6 +36,47 @@ pub enum SchemaValue {
     Vec3([f32; 3]),
 }
 
+impl SchemaValue {
+    /// 将当前 Schema 字段值格式化为适合表单控件槽位显示的文本。
+    #[must_use]
+    pub fn display_text(&self, kind: &SchemaFieldKind) -> String {
+        match (self, kind) {
+            (Self::Bool(on), _) => {
+                if *on {
+                    "● 已启用 (true)".to_owned()
+                } else {
+                    "○ 已禁用 (false)".to_owned()
+                }
+            }
+            (Self::Number(v), SchemaFieldKind::Number { unit, .. }) => {
+                if unit.is_empty() {
+                    format!("{v}")
+                } else {
+                    format!("{v} {unit}")
+                }
+            }
+            (Self::Number(v), _) => format!("{v}"),
+            (Self::Text(s), SchemaFieldKind::Text { placeholder, .. }) => {
+                if s.is_empty() {
+                    (*placeholder).to_owned()
+                } else {
+                    s.clone()
+                }
+            }
+            (Self::Text(s), _) => s.clone(),
+            (Self::EnumIndex(idx), SchemaFieldKind::Select { options }) => options
+                .get(*idx)
+                .cloned()
+                .unwrap_or_else(|| format!("#{idx}")),
+            (Self::EnumIndex(idx), _) => format!("#{idx}"),
+            (Self::ColorRgba([r, g, b, a]), _) => {
+                format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
+            }
+            (Self::Vec3([x, y, z]), _) => format!("[{x:.2}, {y:.2}, {z:.2}]"),
+        }
+    }
+}
+
 /// Schema 字段控件类型声明。
 #[derive(Clone, Debug, PartialEq)]
 pub enum SchemaFieldKind {
@@ -61,7 +102,7 @@ pub enum SchemaFieldKind {
     ReadOnly,
 }
 
-/// 单个 Schema 字段定义（支持跨字段联动显隐/启用）。
+/// 单个 Schema 字段定义（支持跨字段联动显隐/启用与继承来源标注）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SchemaFieldSpec {
     pub key: String,
@@ -71,6 +112,8 @@ pub struct SchemaFieldSpec {
     pub default_value: SchemaValue,
     /// 当指定的布尔字段为 `true` 时才激活本字段。
     pub enabled_when_field: Option<String>,
+    /// 可选的继承来源状态标注。
+    pub inheritance: FieldInheritanceState,
 }
 
 impl SchemaFieldSpec {
@@ -89,12 +132,19 @@ impl SchemaFieldSpec {
             kind,
             default_value,
             enabled_when_field: None,
+            inheritance: FieldInheritanceState::DefaultValue,
         }
     }
 
     #[must_use]
     pub fn enabled_when(mut self, controlling_bool_key: impl Into<String>) -> Self {
         self.enabled_when_field = Some(controlling_bool_key.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_inheritance(mut self, inheritance: FieldInheritanceState) -> Self {
+        self.inheritance = inheritance;
         self
     }
 }
@@ -129,6 +179,12 @@ impl SchemaFormState {
     /// 更新指定字段的值。
     pub fn set(&mut self, key: impl Into<String>, value: SchemaValue) {
         self.values.insert(key.into(), value);
+    }
+
+    /// 获取全部字段值映射表。
+    #[must_use]
+    pub const fn values(&self) -> &FxHashMap<String, SchemaValue> {
+        &self.values
     }
 
     /// 判断某字段是否已偏离其 Schema 默认值。
@@ -207,6 +263,12 @@ impl SchemaFormDesc {
             z: 10,
         }
     }
+
+    /// 创建无 Rect 的声明式 Schema 表单描述符。
+    #[must_use]
+    pub fn form(fields: Vec<SchemaFieldSpec>) -> Self {
+        Self::new(Rect::ZERO, fields)
+    }
 }
 
 /// 发射 `SchemaForm`（保持 24 态恒定图元数）。
@@ -230,7 +292,7 @@ pub fn emit_schema_form(
     };
     primitives.push(outlined(r, 8.0, Token::SURFACE, outer_border, 1.0, 0.0, z));
 
-    let label_col_w = (r.size.x * 0.36).clamp(90.0, 180.0);
+    let label_col_w = (r.size.x * 0.36).clamp(90.0, 220.0);
     for (idx, field) in desc.fields.iter().enumerate() {
         let y = r.origin.y + 10.0 + idx as f32 * desc.row_height;
         let row_r = Rect::new(
@@ -240,12 +302,15 @@ pub fn emit_schema_form(
             desc.row_height - 4.0,
         );
         let enabled = !control.disabled && state.is_field_enabled(field);
-        let modified = state.is_modified(field);
+        let modified = state.is_modified(field)
+            || matches!(field.inheritance, FieldInheritanceState::Overridden);
 
-        // 左侧已修改高亮指示点（恒定发射，未修改时透明）
+        // 左侧已修改/继承高亮指示点（恒定发射，未修改时根据继承状态着色）
         let dot_r = Rect::new(row_r.origin.x + 2.0, row_r.center().y - 3.0, 6.0, 6.0);
         let dot_tok = if modified {
             Token::PRIMARY
+        } else if matches!(field.inheritance, FieldInheritanceState::InheritedFrom(_)) {
+            Token::ACCENT
         } else {
             Token::NONE
         };

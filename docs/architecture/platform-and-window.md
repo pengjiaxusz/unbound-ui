@@ -20,7 +20,8 @@
 - UI 缩放坐标域：`WindowedRunner` 在 `Resized`/`CursorMoved`/每帧 acquire 前按 `AppContext::ui_scale` 把物理像素换算为逻辑像素（`extent / scale`，下限 0.5），`Camera::ui` 接收同一 scale；Ctrl+滚轮经 `step_ui_scale` 调档后立即按新 scale `resize` 并请求重绘；标题栏空白区（hover 命中 `TITLE_BAR_DRAG_ID`）由 `drag_window()` 发起系统拖拽，`FrameHitMetrics::set_title_bar_height(0)` 使栏内搜索框与按钮仍可接收客户端点击 -> [位置] `crates/unbound-app/src/window_runner.rs`
 - 呈现刷新率：`Window::refresh_rate_hz()` 经 `GetDC` / `GetDeviceCaps(VREFRESH)` 读取窗口所在显示器刷新率，替代 winit 的 `current_monitor()`；驱动上报无效值时由调用方回退 60 Hz，用于判断是否允许撕裂
 - 帧同步：acquire 前 `Renderer::wait_for_previous_frame()`（在途帧信号量槽位）；交换链重建后按 `swapchain.extent()` 同步深度附件；`recover_gpu` 按 swapchain -> surface -> renderer 显式 `destroy()`
-- 主题交接：宿主持有 `ThemeState`，每帧比对 `ctx.theme` 并 `write_theme_lut`；设备重建后清空标记强制重写
+- 主题交接：宿主持有 `ThemeState`，每帧比对 `(ctx.theme, ctx.preset, ctx.accent)` 三元组并 `write_theme_lut`；仅明暗主题变化时 `ThemeState::switch`，产品预设或品牌强调色变化时用 `ThemeSet::for_product` 重建 `ThemeState`；设备重建后清空三元组标记强制重写
+- 原生句柄回调：`run_windowed_with_hwnd` / `WindowedRunner::with_hwnd_callback` 在 `resumed` 取得原生 `HWND` 后立即触发一次宿主回调（供外部进程注册主窗口句柄），回调为 `FnMut(isize) + Send`，仅在句柄就绪时调用一次 -> [位置] `crates/unbound-app/src/window_runner.rs`
 - DWM 背景材质与失焦锁定：`win32_frame::WindowBackdropMaterial`（System/Mica/Tabbed/Acrylic/None -> `DWMWA_SYSTEMBACKDROP_TYPE = 38`）经 `set_window_backdrop` 写入；`FrameHitMetrics::lock_mica_active` 在 `WM_NCACTIVATE` 强制 `wParam = 1`，防止失焦时云母/亚克力退化为纯色
 - 覆盖层穿透：`FrameHitMetrics::pass_through_policy` 在 `WM_NCHITTEST` 步骤 6（窗口按钮/边缘缩放判定之后）按 `HitTestPassThroughPolicy::evaluate` 返回 `HTTRANSPARENT(-1)` -> [禁止] 提前应用穿透会使右上角按钮与八方向缩放失效 -> [守卫] `crates/unbound-platform/src/win32_frame.rs::custom_frame_subclass_proc`
 - 目录对话框与 E2E 替身：`dialogs::{pick_folder, pick_folder_async, set_mock_dialog_path}` 支持目录选择；`open_file`/`save_file`/`pick_folder` 仅在显式注入或 `UNBOUND_E2E_DIALOG_PATH` 非空时短路返回，否则仍走原生系统对话框

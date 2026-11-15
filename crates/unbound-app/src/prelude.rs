@@ -3,12 +3,12 @@
 pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
 pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};
 pub use crate::state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
-pub use crate::window_runner::{run_windowed, WindowedRunner};
+pub use crate::window_runner::{run_windowed, run_windowed_with_hwnd, WindowedRunner};
 pub use crate::{
-    const_fnv1a_hash, mix_key, ui_key, AppContext, AppEvent, AppKey, AppRuntime, Application,
-    ClipboardProvider, DirtyFlags, ErasedUiWidget, EventOutcome, FrameReport, KeyDiscriminator,
-    Modifiers, PendingWidget, Propagation, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec,
-    ROOT,
+    const_fnv1a_hash, mix_key, ui_key, AppContext, AppEvent, AppEventSender, AppKey, AppRuntime,
+    Application, ClipboardProvider, DirtyFlags, ErasedUiWidget, EventOutcome, FrameReport,
+    KeyDiscriminator, Modifiers, PendingWidget, Propagation, TitleBarSlots, ViewBuilder,
+    ViewContext, WidgetSpec, ROOT,
 };
 
 pub use unbound_a11y::A11yAction;
@@ -25,23 +25,34 @@ pub use unbound_text::{
     set_global_shuangpin_scheme, PinyinConfig, PinyinMatch, PinyinMatcher, ShuangpinScheme,
     TextStyle,
 };
-pub use unbound_theme::{ThemeKind, ThemeState, Token};
+pub use unbound_theme::{
+    snap_ui_scale, step_ui_scale, AccentBrand, ProductPreset, ThemeKind, ThemeState, Token,
+    CANONICAL_SCALE_STEPS,
+};
 pub use unbound_widgets::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 pub use unbound_widgets::{
-    AddressBarDesc, AddressBarState, AlertDesc, BadgeDesc, BannerDesc, ButtonDesc, ButtonSize,
-    ButtonVariant, CardDesc, CheckState, CheckboxDesc, CodeEditorDesc, CodeEditorState, ColumnSpec,
-    ControlState, CurveEditorDesc, DataColumnSpec, DataGridDesc, DataGridState, DividerDesc,
-    DraggableModalState, FileDropDesc, FilterPopupState, GenericDataTableDesc,
-    GenericDataTableState, KeybindingManagerState, PaginationDesc, PaginationState,
-    PipelineStageItem, PipelineViewDesc, Placement, PopconfirmDesc, ProgressDesc, ProgressState,
-    QueryBuilderDesc, QueryCombinator, QueryRule, ReorderableListState, SchemaFieldKind,
-    SchemaFieldSpec, SchemaFormDesc, SchemaFormState, SchemaValue, SelectDesc, SelectState,
-    Severity, ShortcutBarDesc, ShortcutEntry, SliderDesc, SmoothWheelHandler, SortDirection,
-    SwitchDesc, TableDesc, TableRow, TableState, TaskActivityItem, TaskHudDesc, TextEditState,
+    AddressBarDesc, AddressBarState, AlertDesc, AutoCompleteDesc, AutoCompleteState, BadgeDesc,
+    BannerDesc, ButtonDesc, ButtonSize, ButtonVariant, CalloutDesc, CalloutState, CardDesc,
+    ChartDesc, ChartSeries, ChartState, CheckState, CheckboxDesc, CodeBlockDesc, CodeBlockState,
+    CodeEditorDesc, CodeEditorState, CodeLanguage, ColorFormat, ColorPart, ColorPickerDesc,
+    ColorPickerState, ColumnSpec, ComboItem, ComboboxDesc, ComboboxState, ControlState,
+    CurveEditorDesc, DataColumnSpec, DataGridDesc, DataGridState, DescriptionItem,
+    DescriptionsDesc, DescriptionsState, DividerDesc, DraggableModalState, EmptyStateDesc,
+    FieldInheritanceState, FileDropDesc, FilterPopupState, GenericDataTableDesc,
+    GenericDataTableState, HotkeyInputDesc, HotkeyInputState, KeybindingManagerState,
+    MultiSplitDesc, MultiSplitState, NumberInputDesc, NumberInputState, PaginationDesc,
+    PaginationState, PipelineStageItem, PipelineViewDesc, Placement, PopconfirmDesc, ProgressDesc,
+    ProgressState, QueryBuilderDesc, QueryCombinator, QueryRule, ReorderableListState,
+    SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc, SchemaFormState, SchemaValue, SelectDesc,
+    SelectState, SeriesKind, Severity, ShortcutBarDesc, ShortcutEntry, SliderDesc,
+    SmoothWheelHandler, SortDirection, SplitButtonDesc, SplitButtonState, SplitPaneDesc,
+    SplitPaneState, SwitchDesc, TabItem, TableDesc, TableRow, TableState, TabsDesc, TabsState,
+    TaskActivityItem, TaskHudDesc, TerminalViewDesc, TerminalViewState, TextEditState,
     TextInputDesc, ThemeSettingsState, TimelineTrackDesc, TimelineTrackState, TitleBarDesc,
-    TooltipDesc, TooltipState, TourDesc, TransferDesc, TransferState, WatermarkDesc,
-    WidgetCatalogId, WidgetOutput, WindowCaptionButton, WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH,
-    TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID,
-    TITLE_BAR_MINIMIZE_ID,
+    ToggleButtonDesc, ToggleButtonState, TooltipDesc, TooltipState, TourDesc, TransferDesc,
+    TransferState, TreeTableDesc, TreeTableState, TreeViewDesc, TreeViewState, VirtualMasonryDesc,
+    VirtualMasonryState, WatermarkDesc, WidgetCatalogId, WidgetOutput, WindowCaptionButton,
+    WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID,
+    TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID,
 };
 pub use unbound_world::NodeId;
