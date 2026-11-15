@@ -14,6 +14,8 @@
 - 并发：主线程单线程驱动 `UiWorld`/`LayoutEngine`/`SceneCollector`；资源解码与着色器异步任务通过有界队列回传主线程
 - 跨线程唤醒：`AppContext::event_sender` -> `AppEventSender{ Sender<AppEvent>, Option<Arc<dyn AppWaker>> }` -> `send` / `send_custom` 入队后立即 `wake()` -> 下一帧 `poll_async` 投递；新增 `AppEvent::{UiScaleChanged, Custom}` -> [必须] 新增变体须同步所有 `Application::reduce` 穷尽 match（`apps/showcase`、`examples/*`、`tests/*`），否则 E0004 -> [守卫] `just check`
 - UI 缩放与 OSD：`AppContext::{ui_scale, scale_osd_remaining}` 经 `set_ui_scale` / `step_ui_scale` 吸附 `unbound_theme::presets::CANONICAL_SCALE_STEPS`（7 档 `0.75..2.0`）并激活 1.5s OSD；`I18nBundle::format` 兼容 `{name}` 与 `{{name}}`，`t_ns` 按 `命名空间:键` / `命名空间.键` 回退，`key_count` 供词条审计
+- 声明式发射扩展：`WidgetSpec` 新增 `TextInline`（单行自适应宽度文本 + 语义色令牌）、`BoxSurface`（容器填充/边框/阴影圆角表面）、`ScrollScopeBegin`/`ScrollScopeEnd`（裁剪与平移作用域）四类变体；`ViewBuilder::container` 依据 `RawNodeDesc.{fill, border_color, radius, shadow_blur}` 自动补发表面图元，`scroll_view_with` 以独立内容节点配合 `push_clip`/`push_transform` 建立滚动作用域；`PendingWidget.z_base` 与树深度 `depth` 共同决定图元 Z（`80 + 6 * depth`，上限 480），浮层（`z_index >= 1000`）经 `apply_z_base` 抬升图元 Z 与 `HitRegion.layer/z` -> [守卫] `just check` + `just test`
+- 滚动输入闭环：`AppRuntime::scroll_regions` 每帧重建，`wheel` 逆序命中包含指针的滚动视口后以 44px 步长驱动 `ScrollState::jump_to`，位移有效时置 `force_rebuild` 并标脏 `PAINT|LAYOUT`，同时仍照常派发 `AppEvent::Wheel` -> [位置] `crates/unbound-app/src/lib.rs::AppRuntime::wheel`
 - 上传契约：`SceneUpload` 的 `transforms`/`clips`/`payloads` 均为全局数组；空 `transforms` 由 `Renderer::prepare_upload` 补 identity；图集更新整帧一次批量上传
 
 ## 取舍（禁止重构）

@@ -19,11 +19,15 @@ check *ARGS:
     cargo clippy --workspace --all-targets --all-features -- -D warnings {{ARGS}}
 
 # 全工作区测试
+# `app-guest` 的 host_roundtrip 集成测试要加载真实 cdylib，而 `cargo test`
+# 不保证在 target/<profile> 下生成该产物，故先显式构建一次，避免干净环境硬失败。
 [windows]
 test *ARGS:
+    @bque run -- cargo build -p app-guest
     @bque run -- cargo test --workspace --all-features {{ARGS}}
 [unix]
 test *ARGS:
+    cargo build -p app-guest
     cargo test --workspace --all-features {{ARGS}}
 
 # 专项基准测试（自动挂起后台编译，提供纯净 CPU 环境）

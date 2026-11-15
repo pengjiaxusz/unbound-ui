@@ -11,6 +11,7 @@
 ## 拓扑与流程
 - 体检链路：`FrameBuilder` 收集 `NodeSnapshot`（含 `SourceLoc`） -> `Harness::run` 执行 `rules::check` 5 项几何断言（越界/重叠/零尺寸/裁剪失衡/对比度等） -> `Report::assert_clean`
 - 交互测试：`TestApp` 驱动 `Application::{init,reduce,view}` 注入模拟输入事件并校验状态与 `A11yNode`
+- 布局节点可观测性：`AppRuntime::widget_rect(key)` 先查 `mounted_widgets`，未挂载的纯声明式节点（行内文本、容器表面、滚动作用域等）回退 `node_keys` -> `UiWorld::world_rect`，使无头体检与集成测试能按 key 断言任意节点的布局矩形 -> [守卫] `crates/unbound-app/tests/declarative_ergonomics.rs`
 - 时间旅行：`snapshot::capture` 将帧状态序列化为 `rkyv` 零拷贝 `FrameSnapshot` -> `TimeTravel` 支持 `restore` 任意历史帧回放
 
 ## 取舍（禁止重构）
