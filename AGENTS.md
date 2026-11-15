@@ -14,4 +14,4 @@
 
 ## 代码注释与文档语言规范
 - **代码注释必须使用中文**：所有源码文件（`.rs`、`.wgsl`、`.js`/`.mjs`、`.sh` 等）中的文档注释（`//!`、`///`）与行内注释（`//`、`/* */`）必须使用中文编写；API 标识符、符号名、路径与专有名词（如 `SlotMap`、`Vulkan`、`BDA`、`MTSDF`、`RelayoutBoundary`）可保留英文原文。
-- **架构文档规范**：`docs/architecture/` 遵循 `.agents/skills/arch-align/SKILL.md` 规范，统一使用中文编写。修改代码前先核对 `docs/architecture/README.md` 路由至对应领域文档。
+- **架构文档规范**：`docs/architecture/` 的写法遵循该目录 `README.md` 末尾的《架构文档编写规范》（分层导航、五段式、禁代码级符号、必须配 Mermaid），统一使用中文编写。修改代码前先核对 `docs/architecture/README.md` 路由至对应领域文档。

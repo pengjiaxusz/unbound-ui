@@ -58,7 +58,7 @@ cargo test --workspace
 
 ## 架构与技术文档
 
-本项目遵循 `arch-align` 智能体原生架构规范，统一入口为：
+本项目架构文档的写法见 [`docs/architecture/README.md`](docs/architecture/README.md) 末尾的《架构文档编写规范》，统一入口为：
 
 - **架构主索引**：[`docs/architecture/README.md`](docs/architecture/README.md)（权威规范、任务路由与模块地图）
 
