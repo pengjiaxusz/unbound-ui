@@ -13,8 +13,14 @@ pub enum Target {
     NavToggle,
     /// 切换为浅色（`0`）或深色（`1`）主题。
     Theme(u8),
+    /// 展开 / 收起标题栏窗口与缩放下拉选择菜单。
+    ZoomMenu,
     /// 选择 UI 缩放档位（`0` = 100%，`3` = 200%）。
     Zoom(u8),
+    /// 展开 / 收起标题栏语言下拉选择菜单。
+    LangMenu,
+    /// 选择界面语言（`0` = English，`1` = 简体中文）。
+    Lang(u8),
     /// 切换静态像素对齐。
     Snap,
     /// 切换性能 HUD。
@@ -78,6 +84,9 @@ const TAG_FPS_INPUT: u64 = 19;
 const TAG_NAV_SCROLLBAR: u64 = 20;
 const TAG_NAV_COMPONENT: u64 = 21;
 const TAG_SEARCH_COMPONENT: u64 = 22;
+const TAG_ZOOM_MENU: u64 = 23;
+const TAG_LANG_MENU: u64 = 24;
+const TAG_LANG: u64 = 25;
 
 /// 展厅的语义根节点。
 pub const ROOT: u64 = 1;
@@ -102,7 +111,10 @@ pub const fn id(target: Target) -> u64 {
     match target {
         Target::NavToggle => tag(TAG_NAV_TOGGLE),
         Target::Theme(bit) => tag(TAG_THEME) | bit as u64,
+        Target::ZoomMenu => tag(TAG_ZOOM_MENU),
         Target::Zoom(step) => tag(TAG_ZOOM) | step as u64,
+        Target::LangMenu => tag(TAG_LANG_MENU),
+        Target::Lang(index) => tag(TAG_LANG) | index as u64,
         Target::Snap => tag(TAG_SNAP),
         Target::Hud => tag(TAG_HUD),
         Target::Search => tag(TAG_SEARCH),
@@ -143,7 +155,10 @@ pub const fn decode(value: u64) -> Option<Target> {
     Some(match tag {
         TAG_NAV_TOGGLE => Target::NavToggle,
         TAG_THEME => Target::Theme((low & 0xff) as u8),
+        TAG_ZOOM_MENU => Target::ZoomMenu,
         TAG_ZOOM => Target::Zoom((low & 0xff) as u8),
+        TAG_LANG_MENU => Target::LangMenu,
+        TAG_LANG => Target::Lang((low & 0xff) as u8),
         TAG_SNAP => Target::Snap,
         TAG_HUD => Target::Hud,
         TAG_SEARCH => Target::Search,
@@ -189,7 +204,10 @@ mod tests {
         let targets = [
             Target::NavToggle,
             Target::Theme(1),
+            Target::ZoomMenu,
             Target::Zoom(3),
+            Target::LangMenu,
+            Target::Lang(1),
             Target::Snap,
             Target::Hud,
             Target::Search,

@@ -5,10 +5,10 @@ pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};
 pub use crate::state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use crate::window_runner::{run_windowed, run_windowed_with_hwnd, WindowedRunner};
 pub use crate::{
-    const_fnv1a_hash, mix_key, ui_key, AppContext, AppEvent, AppEventSender, AppKey, AppRuntime,
-    Application, ClipboardProvider, DirtyFlags, ErasedUiWidget, EventOutcome, FrameReport,
-    KeyDiscriminator, Modifiers, PendingWidget, Propagation, TitleBarSlots, ViewBuilder,
-    ViewContext, WidgetSpec, ROOT,
+    const_fnv1a_hash, global_locale, mix_key, set_global_locale, ui_key, AppContext, AppEvent,
+    AppEventSender, AppKey, AppRuntime, Application, ClipboardProvider, DirtyFlags, ErasedUiWidget,
+    EventOutcome, FrameReport, I18nBundle, KeyDiscriminator, LayoutDirection, Locale, Modifiers,
+    PendingWidget, Propagation, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec, ROOT,
 };
 
 pub use unbound_a11y::A11yAction;

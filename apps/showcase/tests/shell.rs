@@ -271,7 +271,11 @@ fn theme_and_zoom_switches_are_one_click() {
     let mut app = app();
     click_node(&mut app, target::id(Target::Theme(0)));
     assert_eq!(app.state.theme, ThemeMode::Light);
+    // 窗口缩放控件现为紧凑型下拉选择框：先点击触发器展开下拉列表，再点击 150% 档位。
+    click_node(&mut app, target::id(Target::ZoomMenu));
+    assert!(app.state.zoom_dropdown_open);
     click_node(&mut app, target::id(Target::Zoom(2)));
+    assert!(!app.state.zoom_dropdown_open);
     assert_eq!(app.state.zoom_step, 2);
     assert!((app.state.zoom() - 1.5).abs() < f32::EPSILON);
 }
@@ -1362,7 +1366,7 @@ fn sidebar_collapse_and_expand_is_monotonic_without_jitter() {
     assert!((app.layout.nav_width - 248.0).abs() < 0.5);
 }
 
-/// 侧边栏导航目标 100% 覆盖全部 24 个页面与全部 91 个目录组件，且点击组件导航项可精确定位。
+/// 侧边栏导航目标 100% 覆盖全部 25 个页面与全部 106 个目录组件，且点击组件导航项可精确定位。
 #[test]
 fn sidebar_covers_every_page_and_every_catalog_component() {
     use showcase::pages::{component_scroll_offset, SIDEBAR_COMPONENT_IDS};
@@ -1411,4 +1415,91 @@ fn systems_page_covers_all_21_engine_subsystems() {
     let node = target::id(Target::Demo(PageId::Systems.index() as u8, 0, 105));
     click_node(&mut app, node);
     assert_eq!(app.state.demo.selected_subsystem, 5);
+}
+
+/// 标题栏语言下拉选择器（默认 English / 简体中文）与独立 `PageId::I18n` 教学沙盒端到端行为验证。
+#[test]
+fn language_selector_and_i18n_page_work_end_to_end() {
+    use unbound_app::Locale;
+
+    let mut app = app();
+    assert_eq!(app.state.locale, Locale::EnUs);
+    assert_eq!(app.state.t("app.title"), "Unbound UI Gallery");
+
+    // 展开标题栏语言选择下拉菜单并切换至简体中文。
+    click_node(&mut app, target::id(Target::LangMenu));
+    assert!(app.state.lang_dropdown_open);
+    click_node(&mut app, target::id(Target::Lang(1)));
+    assert!(!app.state.lang_dropdown_open);
+    assert_eq!(app.state.locale, Locale::ZhCn);
+    assert_eq!(app.state.t("app.title"), "Unbound UI 组件展厅");
+    assert_eq!(
+        PageId::I18n.localized_info(app.state.locale).short,
+        "原生 i18n"
+    );
+
+    // 简体中文模式下全部 25 个页面均通过无头几何体检。
+    for page in PageId::ALL {
+        app.navigate(page);
+        app.rebuild(VIEWPORT);
+        let report = Harness::run(&app.frame());
+        assert!(
+            report.is_clean(),
+            "{page:?} (zh-CN) produced {} diagnostic(s): {:?}",
+            report.diagnostics.len(),
+            report.diagnostics
+        );
+    }
+
+    // 导航至独立 i18n 教学页并触发交互式复数计数器与语言切换按钮。
+    app.navigate(PageId::I18n);
+    app.rebuild(VIEWPORT);
+    let before_count = app.state.demo.i18n_counter;
+    click_node(
+        &mut app,
+        target::id(Target::Demo(PageId::I18n.index() as u8, 0, 3)),
+    );
+    assert_eq!(app.state.demo.i18n_counter, before_count + 1);
+}
+
+/// 外壳与首页引用的每一个 i18n 键都必须在双语资源包中命中真实词条。
+///
+/// `I18nBundle::t` 在缺键时会原样返回键名，界面便会把 `a11y.toggle_nav` 这类内部标识
+/// 直接暴露给用户；这里从源码字面量反向扫描 `state.t("…")` 的调用点，作为词条表与
+/// 绘制代码之间的编译外门禁。
+#[test]
+fn every_shell_i18n_key_resolves_in_both_locales() {
+    use std::collections::BTreeSet;
+
+    use showcase::state::build_showcase_i18n;
+    use unbound_app::Locale;
+
+    let sources = [
+        include_str!("../src/shell.rs"),
+        include_str!("../src/pages/home.rs"),
+    ];
+    let mut keys: BTreeSet<&str> = BTreeSet::new();
+    for source in sources {
+        for rest in source.split("state.t(\"").skip(1) {
+            let key = rest.split("\")").next().unwrap_or_default();
+            assert!(!key.is_empty(), "state.t 调用点缺少键名");
+            keys.insert(key);
+        }
+    }
+    assert!(
+        keys.len() >= 30,
+        "扫描到的词条键过少（{} 个），疑为扫描逻辑失效：{keys:?}",
+        keys.len()
+    );
+
+    for locale in Locale::ALL {
+        let bundle = build_showcase_i18n(locale);
+        for key in &keys {
+            assert_ne!(
+                bundle.t(key),
+                *key,
+                "{locale:?} 资源包缺少词条 `{key}`，界面将直接显示键名"
+            );
+        }
+    }
 }

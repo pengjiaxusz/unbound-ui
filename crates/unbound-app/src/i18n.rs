@@ -1,6 +1,119 @@
 //! 国际化、区域格式设置与 RTL 书写方向支持（S5.5）。
+//!
+//! 提供引擎级原生多语言与本地化支持：
+//! - [`Locale`]：标准常用语言预设（默认 `English` `en-US` 与 `简体中文` `zh-CN` 等）。
+//! - [`I18nBundle`]：零外部重型依赖的轻量级词条资源包，支持回退链、命名空间、参数插值（`{name}` / `{{name}}`）、单复数选择、数字千分位与日期本地化格式，以及 RTL 布局方向推导。
+//! - 全局与上下文级绑定：支持通过 [`global_locale`] / [`set_global_locale`] 或 `AppContext::i18n` 在声明式视图与自举外壳中无缝读取当前激活语言。
+
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use rustc_hash::FxHashMap;
+
+/// 内置标准语言区域预设（默认 `English`）。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Locale {
+    /// 英语（美国，`en-US`）—— 默认语言。
+    #[default]
+    EnUs = 0,
+    /// 简体中文（中国大陆，`zh-CN`）。
+    ZhCn = 1,
+}
+
+static GLOBAL_LOCALE: AtomicU8 = AtomicU8::new(0);
+
+/// 获取全局当前激活的标准语言区域。
+#[must_use]
+pub fn global_locale() -> Locale {
+    Locale::from_index(GLOBAL_LOCALE.load(Ordering::Relaxed) as usize)
+}
+
+/// 设置全局当前激活的标准语言区域。
+pub fn set_global_locale(locale: Locale) {
+    GLOBAL_LOCALE.store(locale as u8, Ordering::Relaxed);
+}
+
+impl Locale {
+    /// 全部内置预设语言列表（顺序：`English`、`简体中文`）。
+    pub const ALL: [Self; 2] = [Self::EnUs, Self::ZhCn];
+
+    /// 按索引还原 [`Locale`]，超出范围时回退至默认 [`Self::EnUs`]。
+    #[must_use]
+    pub const fn from_index(index: usize) -> Self {
+        match index {
+            1 => Self::ZhCn,
+            _ => Self::EnUs,
+        }
+    }
+
+    /// 预设语言在 [`Self::ALL`] 中的稳定索引。
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
+    /// 标准 BCP-47 语言标签（如 `"en-US"`、`"zh-CN"`）。
+    #[must_use]
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::EnUs => "en-US",
+            Self::ZhCn => "zh-CN",
+        }
+    }
+
+    /// 语言自称显示名（用于标题栏语言下拉选择器与设置项）。
+    #[must_use]
+    pub const fn native_name(self) -> &'static str {
+        match self {
+            Self::EnUs => "English",
+            Self::ZhCn => "简体中文",
+        }
+    }
+
+    /// 紧凑短标签（用于窄标题栏胶囊显示）。
+    #[must_use]
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::EnUs => "EN",
+            Self::ZhCn => "中文",
+        }
+    }
+
+    /// 从任意 BCP-47 标签字符串解析内置 [`Locale`]（不区分大小写，如 `"zh"`、`"zh-CN"`、`"en"`、`"en-US"`）。
+    #[must_use]
+    pub fn from_tag(tag: &str) -> Self {
+        let lower = tag.trim().to_ascii_lowercase();
+        if lower.starts_with("zh") {
+            Self::ZhCn
+        } else {
+            Self::EnUs
+        }
+    }
+
+    /// 是否为简体中文。
+    #[must_use]
+    pub const fn is_zh(self) -> bool {
+        matches!(self, Self::ZhCn)
+    }
+
+    /// 在两种内置语言之间快速切换。
+    #[must_use]
+    pub const fn toggled(self) -> Self {
+        match self {
+            Self::EnUs => Self::ZhCn,
+            Self::ZhCn => Self::EnUs,
+        }
+    }
+
+    /// 双语内联选择辅助方法：英文返回 `en`，简体中文返回 `zh`。
+    #[must_use]
+    pub const fn pick<'a>(self, en: &'a str, zh: &'a str) -> &'a str {
+        match self {
+            Self::EnUs => en,
+            Self::ZhCn => zh,
+        }
+    }
+}
 
 /// 当前激活区域的布局阅读方向。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -23,7 +136,7 @@ pub struct I18nBundle {
 
 impl Default for I18nBundle {
     fn default() -> Self {
-        Self::new("en-US")
+        Self::new(Locale::EnUs.tag())
     }
 }
 
@@ -40,6 +153,14 @@ impl I18nBundle {
         }
     }
 
+    /// 使用内置 [`Locale`] 创建资源包（回退语言固定为 `en-US`）。
+    #[must_use]
+    pub fn with_locale(locale: Locale) -> Self {
+        let mut bundle = Self::new(locale.tag());
+        bundle.set_fallback(Locale::EnUs.tag());
+        bundle
+    }
+
     /// 为 `locale` 注册一组静态或动态 `(key, template)` 词条。
     pub fn register_locale(&mut self, locale: impl Into<String>, entries: &[(&str, &str)]) {
         let map = self.tables.entry(locale.into()).or_default();
@@ -48,9 +169,45 @@ impl I18nBundle {
         }
     }
 
-    /// 在运行时切换当前激活区域。
+    /// 同时注册 `en-US` 与 `zh-CN` 双语词条表 `(key, en_text, zh_text)`。
+    pub fn register_bilingual(&mut self, entries: &[(&str, &str, &str)]) {
+        {
+            let en_map = self
+                .tables
+                .entry(Locale::EnUs.tag().to_owned())
+                .or_default();
+            for &(k, en, _) in entries {
+                en_map.insert(k.to_owned(), en.to_owned());
+            }
+        }
+        {
+            let zh_map = self
+                .tables
+                .entry(Locale::ZhCn.tag().to_owned())
+                .or_default();
+            for &(k, _, zh) in entries {
+                zh_map.insert(k.to_owned(), zh.to_owned());
+            }
+        }
+    }
+
+    /// 在运行时切换当前激活区域，并同步更新全局 [`Locale`]。
     pub fn set_locale(&mut self, locale: impl Into<String>) {
-        self.active = locale.into();
+        let tag = locale.into();
+        set_global_locale(Locale::from_tag(&tag));
+        self.active = tag;
+    }
+
+    /// 通过强类型 [`Locale`] 枚举切换当前激活区域。
+    pub fn set_locale_enum(&mut self, locale: Locale) {
+        set_global_locale(locale);
+        self.active = locale.tag().to_owned();
+    }
+
+    /// 获取当前激活区域对应的 [`Locale`] 枚举。
+    #[must_use]
+    pub fn active_locale_enum(&self) -> Locale {
+        Locale::from_tag(&self.active)
     }
 
     /// 设置当激活区域缺失键时使用的回退区域。
@@ -58,10 +215,24 @@ impl I18nBundle {
         self.fallback = locale.into();
     }
 
-    /// 当前激活的区域标签（例如 `"zh-CN"`）。
+    /// 获取当前回退区域标签。
+    #[must_use]
+    pub fn fallback_locale(&self) -> &str {
+        &self.fallback
+    }
+
+    /// 当前激活的区域标签（例如 `"en-US"`、`"zh-CN"`）。
     #[must_use]
     pub fn locale(&self) -> &str {
         &self.active
+    }
+
+    /// 返回当前已注册的所有区域标签列表（按字典序排序以确保确定性）。
+    #[must_use]
+    pub fn available_locales(&self) -> Vec<String> {
+        let mut locales: Vec<String> = self.tables.keys().cloned().collect();
+        locales.sort();
+        locales
     }
 
     /// 覆盖 RTL 检测（`Some(true)` 强制 RTL，`None` 由区域自动推导）。
@@ -90,6 +261,18 @@ impl I18nBundle {
         }
     }
 
+    /// 检查指定 `key` 在当前激活区域或回退区域中是否已注册。
+    #[must_use]
+    pub fn has_key(&self, key: &str) -> bool {
+        self.tables
+            .get(&self.active)
+            .is_some_and(|m| m.contains_key(key))
+            || self
+                .tables
+                .get(&self.fallback)
+                .is_some_and(|m| m.contains_key(key))
+    }
+
     /// 按 `key` 查找原始消息模板，依次回退至 `fallback` 与 `key` 本身。
     #[must_use]
     pub fn t<'a>(&'a self, key: &'a str) -> &'a str {
@@ -115,6 +298,28 @@ impl I18nBundle {
         out
     }
 
+    /// 按数量 `count` 进行单复数格式化：
+    /// 优先查找 `{key}.zero`（当 `count == 0`）、`{key}.one`（当 `count == 1`）、`{key}.other`，
+    /// 若未注册子键则回退到 `key` 本身，并自动注入 `{count}` 占位符。
+    #[must_use]
+    pub fn format_plural(&self, key: &str, count: usize) -> String {
+        let suffix = match count {
+            0 => "zero",
+            1 => "one",
+            _ => "other",
+        };
+        let candidate = format!("{key}.{suffix}");
+        let other_candidate = format!("{key}.other");
+        let count_str = count.to_string();
+        if self.has_key(&candidate) {
+            self.format(&candidate, &[("count", &count_str)])
+        } else if self.has_key(&other_candidate) {
+            self.format(&other_candidate, &[("count", &count_str)])
+        } else {
+            self.format(key, &[("count", &count_str)])
+        }
+    }
+
     /// 按命名空间与键路径查找词条（例如 `t_ns("settings", "appearance.theme")` 等价于查找 `"settings:appearance.theme"` 或 `"settings.appearance.theme"`）。
     #[must_use]
     pub fn t_ns<'a>(&'a self, namespace: &str, key: &'a str) -> &'a str {
@@ -128,6 +333,20 @@ impl I18nBundle {
         }
         let dot_key = format!("{namespace}.{key}");
         if let Some(val) = self.tables.get(&self.active).and_then(|m| m.get(&dot_key)) {
+            return val.as_str();
+        }
+        if let Some(val) = self
+            .tables
+            .get(&self.fallback)
+            .and_then(|m| m.get(&colon_key))
+        {
+            return val.as_str();
+        }
+        if let Some(val) = self
+            .tables
+            .get(&self.fallback)
+            .and_then(|m| m.get(&dot_key))
+        {
             return val.as_str();
         }
         self.t(key)
@@ -221,5 +440,27 @@ mod tests {
         assert!(bundle.is_rtl());
         assert_eq!(bundle.direction(), LayoutDirection::Rtl);
         assert_eq!(bundle.format_date(2026, 11, 13), "13/11/2026");
+    }
+
+    #[test]
+    fn bilingual_registration_and_pluralization_work_cleanly() {
+        let mut bundle = I18nBundle::with_locale(Locale::EnUs);
+        bundle.register_bilingual(&[
+            ("items.zero", "No items selected", "未选中任何项"),
+            ("items.one", "1 item selected", "已选中 1 项"),
+            ("items.other", "{count} items selected", "已选中 {count} 项"),
+            ("nav:home", "Home", "首页"),
+        ]);
+
+        assert_eq!(bundle.format_plural("items", 0), "No items selected");
+        assert_eq!(bundle.format_plural("items", 1), "1 item selected");
+        assert_eq!(bundle.format_plural("items", 5), "5 items selected");
+        assert_eq!(bundle.t_ns("nav", "home"), "Home");
+
+        bundle.set_locale_enum(Locale::ZhCn);
+        assert_eq!(bundle.active_locale_enum(), Locale::ZhCn);
+        assert_eq!(bundle.format_plural("items", 0), "未选中任何项");
+        assert_eq!(bundle.format_plural("items", 5), "已选中 5 项");
+        assert_eq!(bundle.t_ns("nav", "home"), "首页");
     }
 }

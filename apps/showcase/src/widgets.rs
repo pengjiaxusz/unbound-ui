@@ -16,6 +16,7 @@ use unbound_widgets::radio::{emit_radio, RadioDesc, RadioTokens};
 use unbound_widgets::segmented::{
     emit_segmented_frame, emit_segmented_segment, SegmentedDesc, SegmentedTokens,
 };
+use unbound_widgets::select::{emit_select_with_glyphs, SelectDesc, SelectState};
 use unbound_widgets::slider::{emit_slider, SliderDesc, SliderTokens};
 use unbound_widgets::switch::{emit_switch, SwitchDesc, SwitchTokens};
 use unbound_widgets::{ControlState, WidgetCatalogId};
@@ -55,6 +56,7 @@ pub fn button(
     variant: ButtonVariant,
     enabled: bool,
 ) -> Visual {
+    let start = canvas.span_start();
     let state = canvas.control_state(node, !enabled, false);
     let font_size = if variant == ButtonVariant::Icon {
         15.0
@@ -84,6 +86,7 @@ pub fn button(
             false,
         );
     }
+    canvas.record_span(node, start);
     visual_of(state)
 }
 
@@ -176,6 +179,7 @@ pub fn toggle_switch(
     on: bool,
     disabled: bool,
 ) -> Visual {
+    let start = canvas.span_start();
     let state = canvas.control_state(node, disabled, on);
     let desc = SwitchDesc::new(rect, label).with_on(on);
     let (quads, _) = canvas.layout_text(
@@ -192,6 +196,7 @@ pub fn toggle_switch(
     );
     let output = emit_switch(node, &desc, state, &quads, SwitchTokens::standard());
     canvas.widget_output(WidgetCatalogId::Switch, node, &output);
+    canvas.record_span(node, start);
     visual_of(state)
 }
 
@@ -216,6 +221,7 @@ pub fn checkbox(
     checked: bool,
     disabled: bool,
 ) -> Visual {
+    let start = canvas.span_start();
     let state = canvas.control_state(node, disabled, checked);
     let desc = CheckboxDesc::new(rect, label).with_checked(checked);
     let (mark, _) = canvas.layout_text("✓", desc.box_rect(), 12.0, AlignX::Center, AlignY::Center);
@@ -235,6 +241,7 @@ pub fn checkbox(
         CheckboxTokens::standard(),
     );
     canvas.widget_output(WidgetCatalogId::Checkbox, node, &output);
+    canvas.record_span(node, start);
     visual_of(state)
 }
 
@@ -247,6 +254,7 @@ pub fn radio(
     selected: bool,
     disabled: bool,
 ) -> Visual {
+    let start = canvas.span_start();
     let state = canvas.control_state(node, disabled, selected);
     let desc = RadioDesc::new(rect, label).with_selected(selected);
     let (quads, _) = canvas.layout_text(
@@ -258,6 +266,7 @@ pub fn radio(
     );
     let output = emit_radio(node, &desc, state, &quads, RadioTokens::standard());
     canvas.widget_output(WidgetCatalogId::Radio, node, &output);
+    canvas.record_span(node, start);
     visual_of(state)
 }
 
@@ -270,10 +279,12 @@ pub fn slider(
     min: f32,
     max: f32,
 ) -> Visual {
+    let start = canvas.span_start();
     let state = canvas.control_state(node, false, false);
     let desc = SliderDesc::new(rect, "Slider", value, min, max);
     let output = emit_slider(node, &desc, state, &[], SliderTokens::standard());
     canvas.widget_output(WidgetCatalogId::Slider, node, &output);
+    canvas.record_span(node, start);
     visual_of(state)
 }
 
@@ -299,6 +310,7 @@ pub fn segmented(
     let frame = emit_segmented_frame(&desc, tokens);
     canvas.widget_output(WidgetCatalogId::Segmented, 0, &frame);
     for index in 0..labels.len() {
+        let seg_start = canvas.span_start();
         let state = canvas.control_state(ids[index], disabled, index == selected);
         let (quads, _) = canvas.layout_text(
             labels[index],
@@ -309,6 +321,123 @@ pub fn segmented(
         );
         let output = emit_segmented_segment(ids[index], &desc, index, state, &quads, tokens);
         canvas.control_output(ids[index], &output);
+        canvas.record_span(ids[index], seg_start);
+    }
+}
+
+/// 紧凑型下拉选择触发器（用于标题栏语言选择与窗口缩放大小下拉框）。
+///
+/// 复用引擎层的 [`emit_select_with_glyphs`]，在所有指针状态下发射恒定数量的图元
+/// （背景表面 + 边框 + 两条箭头曲线段 + 字形 + 焦点环），保证悬停仅产生局部切片修补。
+pub fn select_trigger(
+    canvas: &mut Canvas<'_>,
+    node: u64,
+    rect: Rect,
+    display: &str,
+    a11y_label: &str,
+    open: bool,
+) -> Visual {
+    let start = canvas.span_start();
+    let state = canvas.control_state(node, false, open);
+    let mut desc = SelectDesc::new(rect, vec![display.to_string()]);
+    desc.label = a11y_label.to_string();
+    let mut select_state = SelectState::new();
+    select_state.selected = Some(0);
+    select_state.open = open;
+    let text_rect = Rect::new(
+        rect.origin.x + 10.0,
+        rect.origin.y,
+        (rect.size.x - 28.0).max(0.0),
+        rect.size.y,
+    );
+    let (quads, _) = canvas.layout_text(display, text_rect, 11.5, AlignX::Start, AlignY::Center);
+    let output = emit_select_with_glyphs(node, &desc, &select_state, state, &quads);
+    canvas.widget_output(WidgetCatalogId::Select, node, &output);
+    canvas.record_span(node, start);
+    visual_of(state)
+}
+
+/// 标题栏下拉菜单的行高（绘制与无障碍语义节点共用，避免两处魔数漂移）。
+pub const MENU_ROW_HEIGHT: f32 = 30.0;
+
+/// 标题栏锚定下拉菜单浮层（绘制在 Portal 层级 2，确保覆盖下方页面内容并优先拾取）。
+///
+/// `panel` 由调用方经 `shell::dropdown_panel_rect` 统一求解，使绘制几何与无障碍语义节点
+/// 共用同一份面板矩形，避免两处重复推导而产生漂移。
+pub fn dropdown_menu(
+    canvas: &mut Canvas<'_>,
+    panel: Rect,
+    options: &[(&str, Target)],
+    selected: usize,
+) {
+    let palette = *canvas.palette;
+    let row_h = MENU_ROW_HEIGHT;
+    canvas.rect(
+        panel,
+        10.0,
+        palette.overlay_bg,
+        palette.card_border,
+        1.0,
+        20.0,
+    );
+    for (idx, &(label, target)) in options.iter().enumerate() {
+        let node = crate::target::id(target);
+        let start = canvas.span_start();
+        let row = Rect::new(
+            panel.origin.x + 4.0,
+            panel.origin.y + 4.0 + idx as f32 * row_h,
+            panel.size.x - 8.0,
+            row_h,
+        );
+        let is_selected = idx == selected;
+        let visual = canvas.visual(node, false);
+        let bg = if is_selected {
+            palette.primary_soft
+        } else if visual.is_hovered() {
+            palette.control_hover
+        } else {
+            palette.overlay_bg
+        };
+        canvas.rect(row, 6.0, bg, 0, 0.0, 0.0);
+        canvas.rect_faded(
+            Rect::new(
+                row.origin.x + 6.0,
+                row.origin.y + 8.0,
+                3.0,
+                row.size.y - 16.0,
+            ),
+            1.5,
+            palette.primary,
+            if is_selected { 1.0 } else { 0.0 },
+        );
+        canvas.text(
+            label,
+            Rect::new(
+                row.origin.x + 16.0,
+                row.origin.y,
+                row.size.x - 24.0,
+                row.size.y,
+            ),
+            11.5,
+            if is_selected {
+                palette.primary
+            } else {
+                palette.text
+            },
+            AlignX::Start,
+            AlignY::Center,
+        );
+        canvas.control_on_layer(
+            node,
+            row,
+            Role::MenuItem,
+            label,
+            CursorKind::Pointer,
+            false,
+            is_selected,
+            2,
+        );
+        canvas.record_span(node, start);
     }
 }
 
@@ -613,6 +742,7 @@ pub fn icon_button(
     label: &str,
     selected: bool,
 ) {
+    let start = canvas.span_start();
     let palette = *canvas.palette;
     let visual = canvas.visual(node, false);
     let fill = match visual {
@@ -628,9 +758,13 @@ pub fn icon_button(
     };
     canvas.rect(rect, 8.0, fill, 0, 0.0, 0.0);
     icon(canvas, kind, rect, palette.text, palette.card_bg);
-    if canvas.focused(node) {
-        canvas.stroke(rect.inflate(1.0), 9.0, palette.focus_ring, 2.0);
-    }
+    canvas.stroke_faded(
+        rect.inflate(1.0),
+        9.0,
+        palette.focus_ring,
+        2.0,
+        if canvas.focused(node) { 1.0 } else { 0.0 },
+    );
     canvas.control(
         node,
         rect,
@@ -640,6 +774,7 @@ pub fn icon_button(
         false,
         selected,
     );
+    canvas.record_span(node, start);
 }
 
 /// 字形序列的图元计数，供遥测页面使用。

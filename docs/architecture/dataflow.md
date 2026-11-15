@@ -1,19 +1,19 @@
 # 架构：dataflow
 状态：已落地
 路径：`crates/unbound-app/`、`crates/unbound-abi/`
-入口：`crates/unbound-app/src/lib.rs::AppContext`、`crates/unbound-abi/src/lib.rs`
+入口：`crates/unbound-app/src/lib.rs::AppContext`、`crates/unbound-app/src/i18n.rs::I18nBundle`、`crates/unbound-abi/src/lib.rs`
 守卫：`cargo test -p unbound-app --test runtime_headless --test runtime_subsystems`
 
 ## 范围
-- [负责] 串联 OS 输入事件、状态归约、增量排版、场景发射与 GPU 呈现的全链路闭环
+- [负责] 串联 OS 输入事件、状态归约、原生国际化（i18n）状态分发、增量排版、场景发射与 GPU 呈现的全链路闭环
 - [不负责] 窗口后端事件采集 -> 委托给 `crates/unbound-platform/`；GPU 管线执行 -> 委托给 `crates/unbound-gpu/`
 
 ## 拓扑与流程
 - 主链路：`PlatformWindow` 事件 -> `AppEvent` -> `Application::reduce` [同步状态归约] -> `UiWorld` 标脏 -> `LayoutEngine::solve_boundaries` -> `SceneCollector` 发射图元 -> `diff` 局部补丁 / 全量上传 -> `Renderer::render` [GPU 剔除+64位基数排序+MDI] -> 呈现
 - 静止态调度：无输入事件、无活跃 `Spring` 动画、无异步资源就绪时挂起帧渲染，CPU/GPU 零空转
 - 并发：主线程单线程驱动 `UiWorld`/`LayoutEngine`/`SceneCollector`；资源解码与着色器异步任务通过有界队列回传主线程
-- 跨线程唤醒：`AppContext::event_sender` -> `AppEventSender{ Sender<AppEvent>, Option<Arc<dyn AppWaker>> }` -> `send` / `send_custom` 入队后立即 `wake()` -> 下一帧 `poll_async` 投递；新增 `AppEvent::{UiScaleChanged, Custom}` -> [必须] 新增变体须同步所有 `Application::reduce` 穷尽 match（`apps/showcase`、`examples/*`、`tests/*`），否则 E0004 -> [守卫] `just check`
-- UI 缩放与 OSD：`AppContext::{ui_scale, scale_osd_remaining}` 经 `set_ui_scale` / `step_ui_scale` 吸附 `unbound_theme::presets::CANONICAL_SCALE_STEPS`（7 档 `0.75..2.0`）并激活 1.5s OSD；`I18nBundle::format` 兼容 `{name}` 与 `{{name}}`，`t_ns` 按 `命名空间:键` / `命名空间.键` 回退，`key_count` 供词条审计
+- 跨线程唤醒：`AppContext::event_sender` -> `AppEventSender{ Sender<AppEvent>, Option<Arc<dyn AppWaker>> }` -> `send` / `send_custom` 入队后立即 `wake()` -> 下一帧 `poll_async` 投递；新增 `AppEvent::{UiScaleChanged, LocaleChanged, Custom}` -> [必须] 新增变体须同步所有 `Application::reduce` 穷尽 match（`apps/showcase`、`examples/*`、`tests/*`），否则 E0004 -> [守卫] `just check`
+- 原生 i18n 与 UI 缩放：`AppContext` 原生持有 `Rc<RefCell<I18nBundle>>`（默认 `Locale::EnUs`，内置 `Locale::ZhCn` 双语预设与 `GLOBAL_LOCALE` 原子同步），暴露 `ctx.i18n_mut().register_bilingual(...)`、`ctx.set_locale` / `ctx.set_locale_enum`、`ctx.t` / `ctx.t_args`；切换语言自动入队 `AppEvent::LocaleChanged { locale }` 并经 `ViewContext::{locale, direction}` 快照传给 `ViewBuilder::{t, t_args, t_plural}`；`I18nBundle` 支持 `{name}` / `{{name}}` 插值、`format_plural`（`.zero`/`.one`/`.other` 复数规则）、`format_number`/`format_date` 本地化格式与 RTL 方向推导；`AppContext::{ui_scale, scale_osd_remaining}` 经 `set_ui_scale` / `step_ui_scale` 吸附 `unbound_theme::presets::CANONICAL_SCALE_STEPS`（7 档 `0.75..2.0`）并激活 1.5s OSD
 - 声明式发射扩展：`WidgetSpec` 新增 `TextInline`（单行自适应宽度文本 + 语义色令牌）、`BoxSurface`（容器填充/边框/阴影圆角表面）、`ScrollScopeBegin`/`ScrollScopeEnd`（裁剪与平移作用域）四类变体；`ViewBuilder::container` 依据 `RawNodeDesc.{fill, border_color, radius, shadow_blur}` 自动补发表面图元，`scroll_view_with` 以独立内容节点配合 `push_clip`/`push_transform` 建立滚动作用域；`PendingWidget.z_base` 与树深度 `depth` 共同决定图元 Z（`80 + 6 * depth`，上限 480），浮层（`z_index >= 1000`）经 `apply_z_base` 抬升图元 Z 与 `HitRegion.layer/z` -> [守卫] `just check` + `just test`
 - 滚动输入闭环：`AppRuntime::scroll_regions` 每帧重建，`wheel` 逆序命中包含指针的滚动视口后以 44px 步长驱动 `ScrollState::jump_to`，位移有效时置 `force_rebuild` 并标脏 `PAINT|LAYOUT`，同时仍照常派发 `AppEvent::Wheel` -> [位置] `crates/unbound-app/src/lib.rs::AppRuntime::wheel`
 - 表单状态与声明式构建器：`AppContext` 新增 `text_input_value`/`select_index`/`switch_value`/`slider_value`/`number_input_value`/`tab_active` 及对应 `set_*`，按控件键直接读写 `WidgetStateStore` 中的 `*State`（不标记视图已渲染，供宿主预填与无头断言）；`ViewBuilder` 补齐 15 个声明式控件构建器与 `modal_scrim`/`drawer_right` 浮层容器 -> [位置] `crates/unbound-app/src/lib.rs`

@@ -28,7 +28,13 @@ const NAV_COLLAPSED: f32 = 68.0;
 /// 侧边栏在展开树与折叠图标栏之间切换的宽度阈值（绘制、无头帧校验与高度计算统一复用）。
 const NAV_COLLAPSE_THRESHOLD: f32 = 140.0;
 
-/// 编译期完备性门禁：验证侧边栏 100% 覆盖全部 `PageId::ALL`（24 页）、全部 `WidgetCatalogId::ALL`（91 组件）以及 `PageId::Systems` 覆盖全部 21 个引擎子系统。
+/// 标题栏语言下拉菜单的面板最小宽度（绘制与无障碍语义节点共用）。
+const LANG_MENU_WIDTH: f32 = 148.0;
+
+/// 标题栏窗口缩放下拉菜单的面板最小宽度（绘制与无障碍语义节点共用）。
+const ZOOM_MENU_WIDTH: f32 = 132.0;
+
+/// 编译期完备性门禁：验证侧边栏 100% 覆盖全部 `PageId::ALL`（25 页）、全部 `WidgetCatalogId::ALL`（106 组件）以及 `PageId::Systems` 覆盖全部 21 个引擎子系统。
 const _: () = {
     let mut page_idx = 0;
     while page_idx < PageId::ALL.len() {
@@ -296,6 +302,7 @@ struct LayoutKey {
     height: u32,
     nav_width: u32,
     page: u8,
+    locale: u8,
     /// 处于打开状态的代码面板。
     code_mask: u64,
 }
@@ -359,6 +366,7 @@ impl GalleryApp {
                 height: 0,
                 nav_width: 0,
                 page: 0,
+                locale: 0,
                 code_mask: 0,
             },
             external_diff: false,
@@ -431,6 +439,8 @@ impl GalleryApp {
         self.state.search_query.clear();
         self.state.demo.modal_open = false;
         self.state.demo.dropdown_open = false;
+        self.state.lang_dropdown_open = false;
+        self.state.zoom_dropdown_open = false;
         self.pending_focus = Some(target::id(Target::NavPage(page.index() as u8)));
     }
 
@@ -441,6 +451,8 @@ impl GalleryApp {
         self.state.search_query.clear();
         self.state.demo.modal_open = false;
         self.state.demo.dropdown_open = false;
+        self.state.lang_dropdown_open = false;
+        self.state.zoom_dropdown_open = false;
         self.pending_focus = Some(target::id(Target::NavComponent(id as u8)));
     }
 
@@ -596,6 +608,7 @@ impl GalleryApp {
             height: viewport.1.to_bits(),
             nav_width: nav_width.to_bits(),
             page: page.index() as u8,
+            locale: self.state.locale.index() as u8,
             code_mask,
         }
     }
@@ -712,6 +725,7 @@ impl GalleryApp {
         draw_page(&mut canvas, state, &layout, &page_layout);
         draw_hud(&mut canvas, state, &layout, page_layout.cards.len());
         draw_search_overlay(&mut canvas, state, &layout);
+        draw_top_bar_dropdowns(&mut canvas, state, &layout);
         let output = canvas.finish();
         let scrollbar = content_scrollbar(&layout, &page_layout);
         let scene_len = scene.primitives.len() as u32;
@@ -869,6 +883,17 @@ impl GalleryApp {
         //
         if self.state.fps_focused && target != Some(target::id(Target::FpsInput)) {
             self.state.commit_fps_input();
+        }
+        // 点击标题栏语言或缩放下拉菜单之外的区域时自动收起浮层。
+        if (self.state.lang_dropdown_open || self.state.zoom_dropdown_open)
+            && !matches!(
+                target.and_then(target::decode),
+                Some(Target::LangMenu | Target::Lang(_) | Target::ZoomMenu | Target::Zoom(_))
+            )
+        {
+            self.state.lang_dropdown_open = false;
+            self.state.zoom_dropdown_open = false;
+            self.state.bump();
         }
         if let Some(node) = target {
             self.pending_focus = Some(node);
@@ -1128,6 +1153,8 @@ impl GalleryApp {
             PlatformKey::Named(name) if name == "Escape" => {
                 self.state.demo.modal_open = false;
                 self.state.demo.dropdown_open = false;
+                self.state.lang_dropdown_open = false;
+                self.state.zoom_dropdown_open = false;
                 self.state.search_focused = false;
                 self.state.search_query.clear();
                 self.state.bump();
@@ -1347,9 +1374,24 @@ impl GalleryApp {
                 };
                 self.state.bump();
             }
+            Target::ZoomMenu => {
+                self.state.zoom_dropdown_open = !self.state.zoom_dropdown_open;
+                self.state.lang_dropdown_open = false;
+                self.state.bump();
+            }
             Target::Zoom(step) => {
                 self.state.zoom_step = (step as usize).min(ZOOM_STEPS.len() - 1);
+                self.state.zoom_dropdown_open = false;
                 self.state.bump();
+            }
+            Target::LangMenu => {
+                self.state.lang_dropdown_open = !self.state.lang_dropdown_open;
+                self.state.zoom_dropdown_open = false;
+                self.state.bump();
+            }
+            Target::Lang(idx) => {
+                self.state
+                    .set_locale(unbound_app::Locale::from_index(idx as usize));
             }
             Target::Snap => {
                 self.state.pixel_snap = !self.state.pixel_snap;
@@ -1702,6 +1744,24 @@ impl GalleryApp {
                     self.state.bump();
                 }
             }
+            PageId::I18n => {
+                if card == 0 {
+                    match part {
+                        1 => self.state.set_locale(unbound_app::Locale::EnUs),
+                        2 => self.state.set_locale(unbound_app::Locale::ZhCn),
+                        3 => {
+                            self.state.demo.i18n_counter =
+                                self.state.demo.i18n_counter.saturating_add(1);
+                            self.state.bump();
+                        }
+                        4 => {
+                            self.state.demo.i18n_counter = 0;
+                            self.state.bump();
+                        }
+                        _ => {}
+                    }
+                }
+            }
             _ => {
                 let _ = position;
             }
@@ -1876,7 +1936,7 @@ impl GalleryApp {
         builder.set_clip(self.layout.content);
         builder.set_scrollable(true);
         if let Some(page) = &self.page_layout {
-            let info = page.page.info();
+            let info = page.page.localized_info(self.state.locale);
             text_node(
                 &mut builder,
                 Rect::new(
@@ -1987,6 +2047,50 @@ impl GalleryApp {
             builder.close();
             builder.close();
         }
+        if self.state.lang_dropdown_open && self.layout.lang.size.x >= 24.0 {
+            let items = unbound_app::Locale::ALL.len();
+            let menu = dropdown_panel_rect(
+                self.layout.lang,
+                LANG_MENU_WIDTH,
+                items,
+                self.layout.viewport,
+            );
+            builder.open(NodeKind::Portal, menu, "Language menu");
+            builder.set_overlays_siblings(true);
+            for idx in 0..items {
+                let row = Rect::new(
+                    menu.origin.x + 4.0,
+                    menu.origin.y + 4.0 + idx as f32 * widgets::MENU_ROW_HEIGHT,
+                    menu.size.x - 8.0,
+                    widgets::MENU_ROW_HEIGHT,
+                );
+                builder.open(interactive_rect(row), row, "Language option");
+                builder.close();
+            }
+            builder.close();
+        }
+        if self.state.zoom_dropdown_open && self.layout.zoom.size.x >= 24.0 {
+            let items = ZOOM_STEPS.len();
+            let menu = dropdown_panel_rect(
+                self.layout.zoom,
+                ZOOM_MENU_WIDTH,
+                items,
+                self.layout.viewport,
+            );
+            builder.open(NodeKind::Portal, menu, "Scale menu");
+            builder.set_overlays_siblings(true);
+            for idx in 0..items {
+                let row = Rect::new(
+                    menu.origin.x + 4.0,
+                    menu.origin.y + 4.0 + idx as f32 * widgets::MENU_ROW_HEIGHT,
+                    menu.size.x - 8.0,
+                    widgets::MENU_ROW_HEIGHT,
+                );
+                builder.open(interactive_rect(row), row, "Scale option");
+                builder.close();
+            }
+            builder.close();
+        }
         if self.state.show_hud {
             if let Some(rect) = hud_rect(&self.layout) {
                 builder.open(NodeKind::Portal, rect, "Stats HUD");
@@ -2055,6 +2159,7 @@ fn text_node(builder: &mut FrameBuilder, rect: Rect, text: &str) {
 
 fn bundle_controls(builder: &mut FrameBuilder, layout: &ShellLayout) {
     for (rect, label) in [
+        (layout.lang, "Language selector"),
         (layout.theme, "Theme selector"),
         (layout.zoom, "Zoom selector"),
         (layout.snap, "Button \"Pixel snapping\""),
@@ -2198,6 +2303,17 @@ fn draw_background(canvas: &mut Canvas<'_>, layout: &ShellLayout) {
     canvas.rect(layout.viewport, 0.0, palette.background, 0, 0.0, 0.0);
 }
 
+fn dropdown_panel_rect(anchor: Rect, width: f32, count: usize, viewport: Rect) -> Rect {
+    let row_h = widgets::MENU_ROW_HEIGHT;
+    let menu_w = width.max(anchor.size.x);
+    let menu_h = count as f32 * row_h + 8.0;
+    let x = (anchor.max().x - menu_w)
+        .max(8.0)
+        .min(viewport.max().x - menu_w - 8.0);
+    let y = anchor.max().y + 6.0;
+    Rect::new(x, y, menu_w, menu_h)
+}
+
 fn draw_top_bar(
     canvas: &mut Canvas<'_>,
     state: &GalleryState,
@@ -2213,7 +2329,7 @@ fn draw_top_bar(
         target::id(Target::NavToggle),
         layout.nav_toggle,
         Icon::Menu,
-        "Toggle navigation",
+        state.t("a11y.toggle_nav"),
         !state.nav_expanded,
     );
 
@@ -2227,12 +2343,17 @@ fn draw_top_bar(
         AlignX::Center,
         AlignY::Center,
     );
-    // 标题在可能与主题控件碰撞前让位：在 200% 缩放下逻辑视口仅约 512 px 宽，
-    // 标题撞进分段控件里比没有标题更糟糕。
-    //
-    if layout.theme.origin.x > 292.0 {
+    // 右侧工具区最左边界：按 语言 -> 主题 -> 缩放 顺序回退，防止窄视口下标题或面包屑撞进控件。
+    let right_bound = if layout.lang.size.x > 0.0 {
+        layout.lang.origin.x
+    } else if layout.theme.size.x > 0.0 {
+        layout.theme.origin.x
+    } else {
+        layout.zoom.origin.x
+    };
+    if right_bound > 292.0 {
         canvas.text(
-            "Unbound UI Gallery",
+            state.t("app.title"),
             Rect::new(88.0, 12.0, 190.0, 32.0),
             13.5,
             palette.text,
@@ -2242,8 +2363,8 @@ fn draw_top_bar(
     }
 
     if layout.wide {
-        let info = state.active_page.info();
-        let category = state.active_page.category().label();
+        let info = state.active_page.localized_info(state.locale);
+        let category = state.active_page.category().localized_label(state.locale);
         let crumb = if category == info.short {
             info.short.to_string()
         } else {
@@ -2251,7 +2372,7 @@ fn draw_top_bar(
         };
         canvas.text(
             &crumb,
-            Rect::new(220.0, 12.0, layout.theme.origin.x - 240.0, 32.0),
+            Rect::new(220.0, 12.0, (right_bound - 240.0).max(0.0), 32.0),
             10.5,
             palette.text_muted,
             AlignX::Start,
@@ -2261,6 +2382,7 @@ fn draw_top_bar(
 
     let search = layout.search;
     if search.size.x >= 100.0 {
+        let start = canvas.span_start();
         canvas.rect(
             search,
             8.0,
@@ -2288,9 +2410,9 @@ fn draw_top_bar(
         let composed;
         let placeholder = if state.search_query.is_empty() {
             if search.size.x < 280.0 {
-                "Search…"
+                state.t("top.search.short")
             } else {
-                "Search controls, crates, features…"
+                state.t("top.search.placeholder")
             }
         } else if preedit.is_empty() {
             state.search_query.as_str()
@@ -2342,11 +2464,12 @@ fn draw_top_bar(
             target::id(Target::Search),
             search,
             Role::Search,
-            "Search controls, crates and features",
+            state.t("a11y.search"),
             CursorKind::Text,
             false,
             state.search_focused,
         );
+        canvas.record_span(target::id(Target::Search), start);
     } else if search.size.x > 0.0 {
         // 窄窗口保留放大镜作为打开同一命令面板的按钮。
         // 若完全丢弃搜索，150–200% 缩放下将完全没有指针入口。
@@ -2356,8 +2479,25 @@ fn draw_top_bar(
             target::id(Target::Search),
             search,
             Icon::Search,
-            "Search controls, crates and features",
+            state.t("a11y.search"),
             state.search_focused,
+        );
+    }
+
+    // 语言下拉选择控件（默认 English，支持切换简体中文）。
+    if layout.lang.size.x >= 24.0 {
+        let lang_label = if layout.compact {
+            state.locale.short_label()
+        } else {
+            state.locale.native_name()
+        };
+        widgets::select_trigger(
+            canvas,
+            target::id(Target::LangMenu),
+            layout.lang,
+            lang_label,
+            state.t("a11y.lang_selector"),
+            state.lang_dropdown_open,
         );
     }
 
@@ -2372,50 +2512,44 @@ fn draw_top_bar(
             } else {
                 Icon::Moon
             },
-            "Toggle theme",
+            state.t("a11y.toggle_theme"),
             false,
         );
     } else {
         let ids = [target::id(Target::Theme(0)), target::id(Target::Theme(1))];
+        let light_label = state.t("top.theme.light");
+        let dark_label = state.t("top.theme.dark");
         widgets::segmented(
             canvas,
             &ids,
             layout.theme,
-            &["Light", "Dark"],
+            &[light_label, dark_label],
             if state.theme.is_dark() { 1 } else { 0 },
             false,
             None,
         );
     }
 
-    // 缩放。
-    let labels: [&str; 4] = if layout.zoom.size.x >= 170.0 {
-        ["100%", "125%", "150%", "200%"]
-    } else {
-        ["1×", "1.25×", "1.5×", "2×"]
-    };
-    let zoom_ids = [
-        target::id(Target::Zoom(0)),
-        target::id(Target::Zoom(1)),
-        target::id(Target::Zoom(2)),
-        target::id(Target::Zoom(3)),
-    ];
-    widgets::segmented(
-        canvas,
-        &zoom_ids,
-        layout.zoom,
-        &labels,
-        state.zoom_step,
-        false,
-        None,
-    );
+    // 窗口/界面大小缩放下拉选择控件（替代原先占地方的 4 段式胶囊）。
+    if layout.zoom.size.x >= 24.0 {
+        let zoom_labels = ["100%", "125%", "150%", "200%"];
+        let zoom_label = zoom_labels.get(state.zoom_step).copied().unwrap_or("100%");
+        widgets::select_trigger(
+            canvas,
+            target::id(Target::ZoomMenu),
+            layout.zoom,
+            zoom_label,
+            state.t("a11y.zoom_selector"),
+            state.zoom_dropdown_open,
+        );
+    }
 
     widgets::icon_button(
         canvas,
         target::id(Target::Snap),
         layout.snap,
         Icon::Snap,
-        "Pixel snapping",
+        state.t("a11y.pixel_snap"),
         state.pixel_snap,
     );
     widgets::icon_button(
@@ -2423,33 +2557,61 @@ fn draw_top_bar(
         target::id(Target::Hud),
         layout.hud,
         Icon::Chart,
-        "Performance HUD",
+        state.t("a11y.hud"),
         state.show_hud,
     );
 
     // 客户端窗口按钮。
-    draw_window_controls(canvas, layout, window_maximized);
+    draw_window_controls(canvas, state, layout, window_maximized);
 }
 
-fn draw_window_controls(canvas: &mut Canvas<'_>, layout: &ShellLayout, canvas_maximized: bool) {
+fn draw_top_bar_dropdowns(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
+    if state.lang_dropdown_open && layout.lang.size.x >= 24.0 {
+        let options = [
+            ("English (en-US)", Target::Lang(0)),
+            ("简体中文 (zh-CN)", Target::Lang(1)),
+        ];
+        let panel =
+            dropdown_panel_rect(layout.lang, LANG_MENU_WIDTH, options.len(), layout.viewport);
+        widgets::dropdown_menu(canvas, panel, &options, state.locale.index());
+    }
+    if state.zoom_dropdown_open && layout.zoom.size.x >= 24.0 {
+        let options = [
+            ("100% (1.0×)", Target::Zoom(0)),
+            ("125% (1.25×)", Target::Zoom(1)),
+            ("150% (1.5×)", Target::Zoom(2)),
+            ("200% (2.0×)", Target::Zoom(3)),
+        ];
+        let panel =
+            dropdown_panel_rect(layout.zoom, ZOOM_MENU_WIDTH, options.len(), layout.viewport);
+        widgets::dropdown_menu(canvas, panel, &options, state.zoom_step);
+    }
+}
+
+fn draw_window_controls(
+    canvas: &mut Canvas<'_>,
+    state: &GalleryState,
+    layout: &ShellLayout,
+    canvas_maximized: bool,
+) {
     let palette = *canvas.palette;
     let buttons = [
         (
             Target::WindowMinimize,
             layout.window_minimize,
-            "Minimise window",
+            state.t("window.minimize"),
             false,
         ),
         (
             Target::WindowMaximize,
             layout.window_maximize,
-            "Maximise window",
+            state.t("window.maximize"),
             false,
         ),
         (
             Target::WindowClose,
             layout.window_close,
-            "Close window",
+            state.t("window.close"),
             true,
         ),
     ];
@@ -2593,7 +2755,7 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
         canvas,
         layout,
         Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 36.0),
-        "Home",
+        state.t("nav.home"),
         Icon::Grid,
         state.active_page == PageId::Home,
         Target::NavPage(PageId::Home.index() as u8),
@@ -2614,7 +2776,7 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
         );
         if header_rect.max().y > tree.origin.y && header_rect.origin.y < tree.max().y {
             canvas.text(
-                &category.label().to_uppercase(),
+                &category.localized_label(state.locale).to_uppercase(),
                 header_rect,
                 9.5,
                 if active {
@@ -2646,7 +2808,7 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
                     canvas,
                     layout,
                     row_rect,
-                    page.info().short,
+                    page.localized_info(state.locale).short,
                     page_icon,
                     selected,
                     Target::NavPage(page.index() as u8),
@@ -2668,7 +2830,7 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
                             canvas,
                             layout,
                             comp_rect,
-                            pages::component_nav_label(comp_id),
+                            pages::component_nav_label_localized(comp_id, state.locale),
                             Icon::Dot,
                             comp_selected,
                             Target::NavComponent(comp_id as u8),
@@ -2697,7 +2859,7 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
             layout.nav_width - 20.0,
             34.0,
         ),
-        "Engine Telemetry",
+        state.t("nav.footer.telemetry"),
         Icon::Chart,
         state.active_page == PageId::Telemetry,
         Target::Footer(0),
@@ -2711,7 +2873,7 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
             layout.nav_width - 20.0,
             34.0,
         ),
-        "Settings & About",
+        state.t("nav.footer.settings"),
         Icon::Layers,
         state.active_page == PageId::Settings,
         Target::Footer(1),
@@ -2859,7 +3021,7 @@ fn draw_collapsed_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &Sh
             target::id(Target::NavPage(page.index() as u8)),
             rect,
             icon,
-            page.info().short,
+            page.localized_info(state.locale).short,
             selected,
         );
         y += 42.0;
@@ -2878,7 +3040,7 @@ fn draw_page(
     page: &PageLayout,
 ) {
     let palette = *canvas.palette;
-    let info = page.page.info();
+    let info = page.page.localized_info(state.locale);
     canvas.begin_clip(layout.content);
     canvas.semantic(
         Role::Heading,
@@ -2927,7 +3089,7 @@ fn draw_page(
         badge_x += width + 6.0;
     }
     canvas.text(
-        &format!("docs › {}", info.docs),
+        &format!("{} › {}", state.t("page.docs_prefix"), info.docs),
         Rect::new(
             page.header.origin.x,
             page.header.origin.y + 124.0,
@@ -2990,6 +3152,7 @@ fn draw_example(
 ) {
     let palette = *canvas.palette;
     let example = &page.page.examples()[card.index];
+    let (localized_title, localized_desc) = example.localized_header(state.locale);
     canvas.rect(
         card.rect,
         14.0,
@@ -3000,7 +3163,7 @@ fn draw_example(
     );
     canvas.begin_clip(card.rect);
     canvas.text(
-        example.title,
+        localized_title,
         Rect::new(
             card.rect.origin.x + 18.0,
             card.rect.origin.y + 12.0,
@@ -3013,7 +3176,7 @@ fn draw_example(
         AlignY::Top,
     );
     canvas.text_wrapped(
-        example.description,
+        localized_desc,
         Rect::new(
             card.rect.origin.x + 18.0,
             card.rect.origin.y + 38.0,
@@ -3071,7 +3234,7 @@ fn draw_example(
     if !example.knobs.is_empty() {
         canvas.divider(card.knobs.origin.x - 9.0, card.knobs.origin.y, 1.0);
         canvas.text(
-            "OPTIONS",
+            state.t("page.options"),
             Rect::new(
                 card.knobs.origin.x,
                 card.knobs.origin.y,
@@ -3216,7 +3379,7 @@ fn draw_code_bar(
         AlignY::Center,
     );
     canvas.text(
-        "Rust · ABI · accessibility",
+        state.t("page.code_bar"),
         Rect::new(
             card.code_bar.origin.x + 40.0,
             card.code_bar.origin.y,
@@ -3248,7 +3411,7 @@ fn draw_code_bar(
         node,
         card.code_bar,
         Role::Button,
-        "Code and accessibility",
+        state.t("a11y.code_and_a11y"),
         CursorKind::Pointer,
         false,
         open,
@@ -3261,7 +3424,7 @@ fn draw_code_bar(
         canvas.rect(panel, 10.0, palette.code_bg, 0, 0.0, 0.0);
         canvas.begin_clip(panel);
         canvas.text(
-            "SOURCE",
+            state.t("page.source"),
             Rect::new(
                 panel.origin.x + 12.0,
                 panel.origin.y + 5.0,
@@ -3343,7 +3506,7 @@ fn draw_hud(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout,
     //
     canvas.rect(rect, 10.0, palette.hud_bg, palette.card_border, 1.0, 18.0);
     canvas.text(
-        "LIVE FRAME",
+        state.t("hud.title"),
         Rect::new(
             rect.origin.x + 12.0,
             rect.origin.y + 8.0,
@@ -3359,15 +3522,15 @@ fn draw_hud(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout,
     let prims = canvas.scene.primitives.len();
     let glyphs = canvas.glyph_count();
     let rows = [
-        ("FRAME", format!("{:.2} ms", stats.frame_ms)),
-        ("FPS", format!("{:.0}", stats.fps)),
-        ("PRIMS", format!("{prims}")),
-        ("GLYPHS", format!("{glyphs}")),
-        ("CARDS", format!("{cards}")),
+        (state.t("hud.frame"), format!("{:.2} ms", stats.frame_ms)),
+        (state.t("hud.fps"), format!("{:.0}", stats.fps)),
+        (state.t("hud.prims"), format!("{prims}")),
+        (state.t("hud.glyphs"), format!("{glyphs}")),
+        (state.t("hud.cards"), format!("{cards}")),
         (
-            "LIMIT",
+            state.t("hud.limit"),
             if state.fps_limit == 0 {
-                "uncapped".to_string()
+                state.t("hud.uncapped").to_string()
             } else {
                 format!("{} fps", state.fps_limit)
             },
@@ -3440,9 +3603,9 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
     );
     canvas.text(
         if state.search_query.is_empty() {
-            "COMMAND PALETTE · CTRL K"
+            state.t("search.palette_title")
         } else {
-            "MATCHES"
+            state.t("search.matches")
         },
         Rect::new(
             panel.origin.x + 14.0,
@@ -3457,7 +3620,7 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
     );
     if state.search_query.is_empty() {
         canvas.text(
-            "Try “Button”, “MTSDF”, “Quadtree”, “DnD”…",
+            state.t("search.hint"),
             Rect::new(
                 panel.origin.x + 14.0,
                 panel.origin.y + 30.0,
@@ -3473,7 +3636,7 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
     }
     if hits.is_empty() {
         canvas.text(
-            "No controls match that query.",
+            state.t("search.empty"),
             Rect::new(
                 panel.origin.x + 14.0,
                 panel.origin.y + 30.0,
@@ -3496,14 +3659,14 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
         );
         let (node, active, title, meta, a11y_label) = match *hit {
             crate::state::SearchHit::Page(page) => {
-                let info = page.info();
+                let info = page.localized_info(state.locale);
                 (
                     target::id(Target::SearchResult(page.index() as u8)),
                     page == state.active_page,
                     info.short.to_string(),
                     format!(
                         "{} · {}",
-                        page.category().label(),
+                        page.category().localized_label(state.locale),
                         info.crates.first().copied().unwrap_or("unbound")
                     ),
                     info.title.to_string(),
@@ -3512,7 +3675,8 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
             crate::state::SearchHit::Component(id) => (
                 target::id(Target::SearchComponent(id as u8)),
                 state.active_page == PageId::Components,
-                crate::pages::components::component_nav_label(id).to_string(),
+                crate::pages::components::component_nav_label_localized(id, state.locale)
+                    .to_string(),
                 format!("Component · {}", id.module_name()),
                 format!("Component {}", id.module_name()),
             ),
