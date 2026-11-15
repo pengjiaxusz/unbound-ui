@@ -19,7 +19,6 @@
     "edition": "2021",
     "skill_lang": "zh",
     "skills": [
-      "arch-align",
       "bque",
       "caveman",
       "git-workflow",
@@ -27,16 +26,14 @@
       "mcp-bootstrap",
       "subrepo-sync",
       "template-sync",
-      "write-a-skill"
+      "write-a-skill",
+      "write-docs"
     ],
     "use_lld": true,
     "use_sccache": false
   },
   "generated_at": "2026-11-11T09:33:50Z",
   "files": {
-    ".agents\\skills\\arch-align\\SKILL.md": "6efa6b1b88114b06eca815e2b6b12f2372852aea95a1ad6d83e20a66e4867051",
-    ".agents\\skills\\arch-align\\references\\GENERATE-DOC.md": "5375edc2e05d5a892411fcfb8f6f68e1524ee6794d25909e40fc0b5bb64c5bc2",
-    ".agents\\skills\\arch-align\\references\\GENERATE-INDEX.md": "382d2e4899ff3cab28d95d371f6a8175717f35d8e63eb460bf722258afcaffb0",
     ".agents\\skills\\bque\\SKILL.md": "7c28d97fe60922e0d0500b191b22635c2897319ba608c2612de3c4bc4619309e",
     ".agents\\skills\\bque\\references\\install.md": "1b87fa1ccf520a90a57b62555b3672b12b7f423eacf6b04d8aede13c1c6e83ff",
     ".agents\\skills\\bque\\references\\usage-matrix.md": "2c11dcb32f89a20284d7a6bff587d818e7e80ca925336ce4b8f1aac9eb8b97c9",
@@ -61,6 +58,7 @@
     ".agents\\skills\\template-sync\\SKILL.md": "17aadd708b2999d59906cd3e644c2abed02d7f89244eb23a9e64ab05ea9853e3",
     ".agents\\skills\\template-sync\\scripts\\sync-template.ps1": "4ff8dba1749e8055a541718c9c66bd4fed6259482b0388e58eabc1ef45a1791a",
     ".agents\\skills\\write-a-skill\\SKILL.md": "aa7a797d0322191365c40eaff606a713247428eaaf11a4423870daa15b5dafac",
+    ".agents\\skills\\write-docs\\SKILL.md": "873c5688743b786c3f445229240d9faf562c5179f484be5b04d00b85a9dcfeca",
     ".cargo\\config.toml": "1b06aced2448d86dc3dffeba01ffac746b65059315367c4d54e5801e5af7b98d",
     ".gitattributes": "f0a5682286e5b1f2d0425c055c63c1a7a1c985c2f9358f841f25147be7026be7",
     ".gitignore": "7dfaa8c81536367e53f3dc009c222f4d691a80b129f1ec6862b5b57f89ef20e8",
