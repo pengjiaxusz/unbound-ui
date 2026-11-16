@@ -1,4 +1,4 @@
-//! 内置 Material 风格矢量图标与 `旧版组件库` 22 类文件类型图标注册表（阶段 1 WP3）。
+//! 内置 Material 风格矢量图标与 22 类文件类型图标注册表（阶段 1 WP3）。
 //!
 //! 所有图标均以标准 SVG 路径指令定义（`24×24` 规范视口），可直接交由 [`crate::parse_svg_path`]
 //! 解析并降阶为 GPU 二次贝塞尔曲线段，无需外部位图依赖，在任意 DPI 与画布缩放下保持绝对锐利。
@@ -127,7 +127,7 @@ impl MaterialIcon {
     }
 }
 
-/// 与 `旧版组件库` 对齐的 22 类专业文件与图形资产图标。
+/// 22 类专业文件与图形资产图标。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FileTypeIcon {
     Folder,

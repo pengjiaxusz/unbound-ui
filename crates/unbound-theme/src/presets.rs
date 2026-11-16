@@ -1,4 +1,4 @@
-//! `旧版组件库` 双产品主题预设（`AssetManager` 与 `RenderWorkbench`）、10 套 OKLCH 品牌强调色与 7 档规范 UI 缩放阶梯（阶段 1 WP3）。
+//! 双产品主题预设（`AssetManager` 与 `RenderWorkbench`）、10 套 OKLCH 品牌强调色与 7 档规范 UI 缩放阶梯（阶段 1 WP3）。
 //!
 //! 严格遵循 `unbound-theme` 的核心不变量：
 //! * 所有预设最终生成标准的 512 槽 RGBA16F（4 KiB）颜色查找表 [`ThemeLut`]；
@@ -8,7 +8,7 @@ use unbound_math::color::{Color, Oklch};
 
 use crate::{Palette, ThemeKind, ThemeSet, Token};
 
-/// 与 `旧版组件库` 对齐的 7 档规范 UI 缩放步进（75% ~ 200%）。
+/// 7 档规范 UI 缩放步进（75% ~ 200%）。
 pub const CANONICAL_SCALE_STEPS: [f32; 7] = [0.75, 0.875, 1.0, 1.125, 1.25, 1.5, 2.0];
 
 /// 将任意缩放因子吸附到最近的规范缩放档位。
@@ -58,7 +58,7 @@ pub enum ProductPreset {
     RenderWorkbench,
 }
 
-/// `旧版组件库` 10 套 OKLCH 品牌强调色预设。
+/// 10 套 OKLCH 品牌强调色预设。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AccentBrand {
     #[default]

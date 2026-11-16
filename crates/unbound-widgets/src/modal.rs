@@ -30,7 +30,7 @@ pub const MODAL_ACTION_GAP: f32 = 8.0;
 /// 底部栏水平内边距。
 pub const MODAL_FOOTER_PADDING: f32 = 16.0;
 
-/// 标准模态框尺寸档位（对齐 `旧版组件库` 的 `sm`/`md`/`lg`/`xl`/`full` 五档规格）。
+/// 标准模态框尺寸档位（`sm`/`md`/`lg`/`xl`/`full` 五档规格）。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ModalSizePreset {
     /// 小尺寸弹窗（420 × 280）。
