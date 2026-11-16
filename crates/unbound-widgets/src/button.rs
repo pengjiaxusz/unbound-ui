@@ -245,6 +245,7 @@ impl ButtonDesc {
     #[must_use]
     pub fn left_align(mut self) -> Self {
         self.left_align = true;
+        self.centre_label = false;
         self
     }
 
@@ -564,7 +565,11 @@ pub fn emit_button_with_tokens(
     if desc.icon.is_some() && desc.icon_trailing {
         content_width += desc.font_size + BUTTON_CONTENT_GAP;
     }
-    let mut cursor = rect.center().x - content_width * 0.5;
+    let mut cursor = if desc.left_align {
+        rect.origin.x + 12.0
+    } else {
+        rect.center().x - content_width * 0.5
+    };
 
     if desc.loading {
         let indicator = desc.loading_rect();
@@ -602,7 +607,7 @@ pub fn emit_button_with_tokens(
 
     // 标签：与按钮同 `z`，稍后通过 `SubElement::Content` 绘制。
     if let Some(ink) = ink {
-        if desc.centre_label {
+        if desc.centre_label || desc.left_align {
             let offset = Vec2::new(
                 cursor - ink.min().x,
                 rect.center().y - (ink.min().y + ink.height() * 0.5),
@@ -981,5 +986,24 @@ mod tests {
             .primitives
             .iter()
             .any(|primitive| primitive.prim_type() == PrimType::Stroke));
+    }
+
+    #[test]
+    fn left_aligned_button_anchors_label_near_left_edge() {
+        let mut glyphs = vec![GlyphQuad {
+            rect: Rect::new(0.0, 0.0, 30.0, 14.0),
+            uv: [0.0, 0.0, 1.0, 1.0],
+            layer: 0,
+            color: false,
+            msdf: false,
+            phase: 0,
+        }];
+        let d = desc().left_align();
+        let _ = emit_button(1, &d, ControlState::default(), &mut glyphs);
+        assert!(
+            (glyphs[0].rect.origin.x - (d.rect.origin.x + 12.0)).abs() < 0.01,
+            "left_align button should place label at rect.origin.x + 12.0, got {}",
+            glyphs[0].rect.origin.x
+        );
     }
 }

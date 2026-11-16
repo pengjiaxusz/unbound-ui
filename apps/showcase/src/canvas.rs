@@ -847,17 +847,24 @@ impl<'a> Canvas<'a> {
         if let Some(clip) = self.clip_shape() {
             region = region.with_clip(clip);
         }
-        self.regions.push(region);
-
         let mut a11y = A11yNode::new(role, label, rect);
         if !disabled {
             a11y = a11y.clickable();
-            self.focus_order.push(node);
         }
         a11y.disabled = disabled;
         a11y.selected = selected;
-        self.semantics.upsert(node, a11y);
-        self.a11y_nodes.push(node);
+
+        if let Some(existing) = self.regions.iter_mut().find(|r| r.node == node) {
+            *existing = region;
+            self.semantics.upsert(node, a11y);
+        } else {
+            self.regions.push(region);
+            if !disabled {
+                self.focus_order.push(node);
+            }
+            self.semantics.upsert(node, a11y);
+            self.a11y_nodes.push(node);
+        }
     }
 
     /// 注册非交互式语义节点。

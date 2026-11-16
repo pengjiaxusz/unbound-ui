@@ -374,16 +374,18 @@ impl GlyphCache {
         }
 
         let is_color = matches!(image.content, cosmic_text::SwashContent::Color);
+        // 彩色字形（如 Emoji）已经是 4 通道 RGBA 位图，不能按单通道覆盖率生成距离场。
+        let use_sdf = sdf_mode && !is_color;
         let pad = self.padding;
         let pad2 = pad * 2;
         // 图集可能为腾出空间而淘汰已有字形；被淘汰键的缓存条目也必须一并删除，
         // 否则它将指向被回收复用的矩形区域。
         let mut evicted = core::mem::take(&mut self.evicted);
-        let mut resolved = if is_color || sdf_mode {
+        let mut resolved = if is_color || use_sdf {
             let slot = self
                 .atlas
                 .allocate_color(key, w + pad2, h + pad2, &mut evicted)?;
-            let data = if sdf_mode {
+            let data = if use_sdf {
                 let field = sdf::from_coverage(&image.data, w, h, self.sdf_spread);
                 pad_field(&field.data, w, h, pad)
             } else {
@@ -407,7 +409,7 @@ impl GlyphCache {
                 size: Vec2::new(w as f32 + pad2 as f32, h as f32 + pad2 as f32),
                 advance: glyph.w,
                 color: true,
-                msdf: sdf_mode,
+                msdf: use_sdf,
             }
         } else {
             let slot = self

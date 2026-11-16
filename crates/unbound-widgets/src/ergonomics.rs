@@ -751,10 +751,21 @@ impl UiWidget for TextInputDesc {
             AlignX::Left,
             AlignY::Middle,
         );
-        let caret_x = text_r.origin.x
-            + glyphs
-                .last()
-                .map_or(0.0, |g| (g.rect.max().x - text_r.origin.x).max(0.0));
+        let caret_x = if state.text().is_empty() || state.cursor() == 0 {
+            text_r.origin.x
+        } else {
+            let cursor_byte = state.cursor().min(state.text().len());
+            let char_idx = state.text()[..cursor_byte].chars().count();
+            if char_idx == 0 {
+                text_r.origin.x
+            } else if let Some(g) = glyphs.get(char_idx - 1) {
+                g.rect.max().x.max(text_r.origin.x)
+            } else {
+                glyphs
+                    .last()
+                    .map_or(text_r.origin.x, |g| g.rect.max().x.max(text_r.origin.x))
+            }
+        };
         let visual = TextInputVisual {
             caret: Rect::new(
                 caret_x,

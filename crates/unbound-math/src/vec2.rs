@@ -91,6 +91,13 @@ impl Vec2 {
         Self::new(self.x.max(rhs.x), self.y.max(rhs.y))
     }
 
+    /// 逐分量钳制在 `[min, max]` 区间内。
+    #[inline]
+    #[must_use]
+    pub fn clamp(self, min: Self, max: Self) -> Self {
+        self.max(min).min(max)
+    }
+
     #[inline]
     #[must_use]
     pub fn abs(self) -> Self {

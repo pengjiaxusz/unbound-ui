@@ -297,9 +297,10 @@ pub fn style_for(world: &UiWorld, id: NodeId) -> Style {
             .copied()
             .map(grid_track)
             .collect();
-        style.grid_column = grid_placement(d.grid_col_start, d.grid_col_span);
-        style.grid_row = grid_placement(d.grid_row_start, d.grid_row_span);
     }
+    // 网格子项自身通常是 Flex 或叶子节点（`display != Grid`），仍需读取其行列放置属性。
+    style.grid_column = grid_placement(d.grid_col_start, d.grid_col_span);
+    style.grid_row = grid_placement(d.grid_row_start, d.grid_row_span);
     style
 }
 
@@ -620,16 +621,20 @@ impl LayoutEngine {
         }
 
         let start = std::time::Instant::now();
+        // 并行孤立求解前同步持久化 Taffy 树，并按边界自身尺寸（而非放大到 viewport）作为包含块空间。
+        for &b in boundaries {
+            self.sync(world, b);
+        }
         let nested: Vec<Vec<(NodeId, Rect)>> = {
             use rayon::prelude::*;
             boundaries
                 .par_iter()
                 .map(|b| {
-                    // 该边界作为根节点求解，因此为其传入原有空间：
-                    // 使 `width: 100%` 的子节点能正确相对于包含块解析。
-                    //
                     let size = world.node(*b).rect.size;
-                    let space = Vec2::new(size.x.max(viewport.x), size.y.max(viewport.y));
+                    let space = Vec2::new(
+                        if size.x > 0.0 { size.x } else { viewport.x },
+                        if size.y > 0.0 { size.y } else { viewport.y },
+                    );
                     solve_isolated(world, *b, space)
                 })
                 .collect()
@@ -1353,6 +1358,52 @@ mod tests {
         assert!(
             b.origin.y > a.origin.y,
             "the shorter box must be pushed down onto the shared baseline"
+        );
+    }
+
+    /// 网格容器中的非 Grid 子项必须遵循 `grid_col_start` / `grid_row_start` 显式放置。
+    #[test]
+    fn grid_item_placement_applies_to_non_grid_children() {
+        let mut w = UiWorld::new();
+        let root = w.root();
+        let mut grid_desc = RawNodeDesc::container().size(300.0, 100.0);
+        grid_desc.display = Display::Grid as u8;
+        grid_desc.grid_cols = [
+            Dim::fr(1.0),
+            Dim::fr(1.0),
+            Dim::fr(1.0),
+            Dim::AUTO,
+            Dim::AUTO,
+            Dim::AUTO,
+            Dim::AUTO,
+            Dim::AUTO,
+        ];
+        grid_desc.grid_col_count = 3;
+        grid_desc.grid_rows = [
+            Dim::px(100.0),
+            Dim::AUTO,
+            Dim::AUTO,
+            Dim::AUTO,
+            Dim::AUTO,
+            Dim::AUTO,
+            Dim::AUTO,
+            Dim::AUTO,
+        ];
+        grid_desc.grid_row_count = 1;
+        w.set_desc(root, grid_desc);
+
+        let mut item_desc = RawNodeDesc::container().size(80.0, 40.0);
+        item_desc.grid_col_start = 3;
+        item_desc.grid_col_span = 1;
+        let item = w.insert(root, item_desc, loc());
+
+        let mut engine = LayoutEngine::new();
+        engine.solve(&mut w, root, Vec2::new(300.0, 100.0));
+        let r = engine.rect(item).expect("grid item rect");
+        assert!(
+            (r.origin.x - 200.0).abs() <= 1.0,
+            "column 3 in a 3x100px grid must start near x=200, got {:?}",
+            r
         );
     }
 }

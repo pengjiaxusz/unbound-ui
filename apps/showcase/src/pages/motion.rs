@@ -991,10 +991,10 @@ pub fn pinyin_engine(ctx: &mut DemoCtx<'_, '_>) {
     );
 
     let samples = [
-        ("shader_pipeline_uber", "zhuoseqi"),
-        ("material_pbr", "caizhiqiu"),
-        ("rename_file", "chongmingming"),
-        ("rare_mesh", "chimeiwangliang"),
+        ("着色器", "zhuoseqi"),          // lang-ok: Pinyin & Shuangpin demo sample
+        ("材质球", "caizhiqiu"),         // lang-ok: Pinyin & Shuangpin demo sample
+        ("重命名", "chongmingming"),     // lang-ok: Pinyin & Shuangpin demo sample
+        ("魑魅魍魉", "chimeiwangliang"), // lang-ok: Pinyin & Shuangpin demo sample
     ];
 
     for (i, (term, full_py)) in samples.iter().enumerate() {

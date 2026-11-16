@@ -176,6 +176,18 @@ impl Edges {
             bottom,
         }
     }
+
+    /// 按“左、上、右、下”（LTRB）显式命名构造四边间距，消除与 CSS `trbl` 顺序混淆的隐患。
+    #[inline]
+    #[must_use]
+    pub const fn ltrb(left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
 }
 
 #[repr(u8)]
@@ -870,5 +882,14 @@ mod tests {
         assert_eq!(d.opacity, 1.0);
         assert_eq!(d.position_kind(), Position::Relative);
         assert!(!d.is_clipping());
+    }
+
+    #[test]
+    fn edges_ltrb_constructs_explicit_left_top_right_bottom() {
+        let e = Edges::ltrb(1.0, 2.0, 3.0, 4.0);
+        assert_eq!(e.left, 1.0);
+        assert_eq!(e.top, 2.0);
+        assert_eq!(e.right, 3.0);
+        assert_eq!(e.bottom, 4.0);
     }
 }

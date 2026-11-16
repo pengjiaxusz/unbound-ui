@@ -922,10 +922,10 @@ pub fn pinyin_sandbox(ctx: &mut DemoCtx<'_, '_>) {
     );
 
     let items = [
-        "shader_pipeline_uber.spv",
-        "material_pbr.mat",
-        "rename_file_asset",
-        "rare_mesh",
+        "着色器管线", // lang-ok: Pinyin & Shuangpin demo target
+        "材质球资产", // lang-ok: Pinyin & Shuangpin demo target
+        "重命名文件", // lang-ok: Pinyin & Shuangpin demo target
+        "魑魅魍魉",   // lang-ok: Pinyin & Shuangpin demo target
     ];
     for (idx, item) in items.iter().enumerate() {
         let y = bar.max().y + 10.0 + idx as f32 * 40.0;

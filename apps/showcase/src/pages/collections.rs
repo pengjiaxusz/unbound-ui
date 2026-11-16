@@ -89,8 +89,12 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         1 => 10_000,
         _ => 100_000,
     };
-    let row_h = ctx.knob(1).clamp(24.0, 48.0);
-    let overscan = ctx.knob_on(2);
+    let row_h = if metrics {
+        32.0
+    } else {
+        ctx.knob(1).clamp(24.0, 48.0)
+    };
+    let overscan = ctx.knob_on(if metrics { 1 } else { 2 });
     let panel_w = if metrics {
         (rect.size.x * 0.3).clamp(150.0, 220.0)
     } else {

@@ -321,7 +321,10 @@ impl CalendarState {
             cells.push(CalendarCell {
                 date,
                 in_month,
-                selected: date.is_some() && self.range().is_some_and(|(s, _)| Some(s) == date),
+                selected: date.is_some()
+                    && self
+                        .range()
+                        .is_some_and(|(s, e)| Some(s) == date || Some(e) == date),
                 in_range: date.is_some() && self.contains(date.unwrap()),
                 today: date == Some(self.today),
             });
@@ -678,6 +681,13 @@ mod tests {
         assert!(state.contains(date(2024, 3, 10)));
         assert!(!state.contains(date(2024, 3, 21)));
         assert!(state.cells().iter().any(|cell| cell.in_range));
+        let selected_dates: Vec<NaiveDate> = state
+            .cells()
+            .into_iter()
+            .filter(|cell| cell.selected)
+            .filter_map(|cell| cell.date)
+            .collect();
+        assert_eq!(selected_dates, vec![date(2024, 3, 5), date(2024, 3, 20)]);
     }
 
     #[test]

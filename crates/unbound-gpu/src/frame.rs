@@ -1409,9 +1409,10 @@ impl Renderer {
             source_layout = vk::ImageLayout::GENERAL;
         }
 
-        // 合成 Pass 采样最后一轮模糊的输出，因此其专属描述符集（槽位 8）指向全分辨率结果。
-        self.bind_blur_binding(8, full_view, vk::ImageLayout::GENERAL, full_view);
-        self.composite_backdrop(cmd, request, width, height, color_image, color_view, 8);
+        // 合成 Pass 采样最后一轮模糊的输出，前三轮 Kawase 模糊占用了槽位 0..12，
+        // 因此使用独立预留的第 12 号描述符集，避免在提交前覆写第 2 轮正在引用的槽位 8。
+        self.bind_blur_binding(12, full_view, vk::ImageLayout::GENERAL, full_view);
+        self.composite_backdrop(cmd, request, width, height, color_image, color_view, 12);
 
         self.blur.pool.release(half);
         if let Some(quarter) = quarter_handle {
@@ -2025,8 +2026,13 @@ impl Renderer {
     fn clear_keys_tail(&self, cmd: vk::CommandBuffer, n: u32) -> Result<(), GpuError> {
         // 键按升序排列，未用槽位须填充 `0xFFFF…` 使其排至末尾；`vkCmdFillBuffer`
         // 按 32 位模式填充，写入 `0xFFFFFFFF` 即对应最大 `u64` 键值。
+        // Vulkan 规范 `VUID-vkCmdFillBuffer-size-00026` 严禁 `size == 0`，故在 `n == 0` 时直接返回。
+        let n = n.min(self.capacity_primitives);
+        if n == 0 {
+            return Ok(());
+        }
         let bytes = u64::from(n) * 8;
-        // SAFETY: 填充范围位于缓冲区内（capacity_primitives >= n）。
+        // SAFETY: `n > 0` 且填充范围位于缓冲区内（`capacity_primitives >= n`）。
         unsafe {
             self.gpu
                 .device
@@ -2439,19 +2445,27 @@ impl Renderer {
                 bytes.len(),
             );
             let patches = &self.staging_patches;
-            core::ptr::copy_nonoverlapping(
-                patches.as_ptr().cast::<u8>(),
-                self.patches
-                    .host_ptr(0)
-                    .ok_or_else(|| GpuError::Allocation("patches not mapped".into()))?,
-                patches.len() * 16,
-            );
-            plan.patch_count = patches.len() as u32;
+            let max_patches = (self.patches.size as usize) / 16;
+            let patch_count = patches.len().min(max_patches);
+            let patch_bytes = patch_count * 16;
+            if patch_bytes > 0 {
+                core::ptr::copy_nonoverlapping(
+                    patches.as_ptr().cast::<u8>(),
+                    self.patches
+                        .host_ptr(0)
+                        .ok_or_else(|| GpuError::Allocation("patches not mapped".into()))?,
+                    patch_bytes,
+                );
+            }
+            plan.patch_count = patch_count as u32;
             // 缓冲区可能位于非一致性内存中，必须刷写以确保 GPU 不会读到上一帧的旧字节。
-            self.gpu
-                .flush(&self.ring_buffer, u64::from(ring_slot), bytes.len() as u64);
-            self.gpu
-                .flush(&self.patches, 0, (patches.len() * 16) as u64);
+            if !bytes.is_empty() {
+                self.gpu
+                    .flush(&self.ring_buffer, u64::from(ring_slot), bytes.len() as u64);
+            }
+            if patch_bytes > 0 {
+                self.gpu.flush(&self.patches, 0, patch_bytes as u64);
+            }
         }
 
         plan.bytes = bytes.len() as u32;

@@ -211,8 +211,14 @@ pub fn parse_rgba(text: &str) -> Option<Hsva> {
         .split([',', ' '])
         .filter(|part| !part.trim().is_empty());
     let mut channel = || -> Option<u8> {
-        let value: f32 = parts.next()?.trim().trim_end_matches('%').parse().ok()?;
-        Some(value.round().clamp(0.0, 255.0) as u8)
+        let raw = parts.next()?.trim();
+        if let Some(pct) = raw.strip_suffix('%') {
+            let value: f32 = pct.trim().parse().ok()?;
+            Some((value / 100.0 * 255.0).round().clamp(0.0, 255.0) as u8)
+        } else {
+            let value: f32 = raw.parse().ok()?;
+            Some(value.round().clamp(0.0, 255.0) as u8)
+        }
     };
     let r = channel()?;
     let g = channel()?;
@@ -220,11 +226,17 @@ pub fn parse_rgba(text: &str) -> Option<Hsva> {
     let a = match parts.next() {
         None => 255,
         Some(raw) => {
-            let value: f32 = raw.trim().parse().ok()?;
-            if value <= 1.0 {
-                (value * 255.0).round() as u8
+            let raw = raw.trim();
+            if let Some(pct) = raw.strip_suffix('%') {
+                let value: f32 = pct.trim().parse().ok()?;
+                (value / 100.0 * 255.0).round().clamp(0.0, 255.0) as u8
             } else {
-                value.round().clamp(0.0, 255.0) as u8
+                let value: f32 = raw.parse().ok()?;
+                if value <= 1.0 {
+                    (value * 255.0).round() as u8
+                } else {
+                    value.round().clamp(0.0, 255.0) as u8
+                }
             }
         }
     };
@@ -823,5 +835,15 @@ mod tests {
             output.hit.as_ref().map(|hit| hit.cursor),
             Some(Some(CursorKind::Crosshair))
         );
+    }
+
+    #[test]
+    fn percentage_rgb_and_rgba_strings_scale_to_0_255() {
+        let parsed = parse_rgba("rgb(100%, 50%, 0%, 50%)").expect("percentage rgb");
+        let srgb = parsed.to_srgb8();
+        assert_eq!(srgb.r, 255);
+        assert_eq!(srgb.g, 128);
+        assert_eq!(srgb.b, 0);
+        assert_eq!(srgb.a, 128);
     }
 }

@@ -378,28 +378,7 @@ impl UiWorld {
         let mut data = NodeData::new(desc, source);
         data.parent = parent;
         data.depth = depth;
-        // 边界启发式规则：固定尺寸且溢出不可见的容器
-        // 不会被子节点改变尺寸，因此布局脏标记止步于此。
-        let fixed = matches!(desc.width.kind(), unbound_abi::DimUnit::Px)
-            && matches!(desc.height.kind(), unbound_abi::DimUnit::Px);
-        if fixed && desc.is_clipping() {
-            data.state |= NodeState::RELAYOUT_BOUNDARY;
-        }
-        if desc.is_clipping() {
-            data.state |= NodeState::CLIPS_CHILDREN;
-        }
-        if desc.has(NodeFlags::SCROLL_Y) || desc.has(NodeFlags::SCROLL_X) {
-            data.state |= NodeState::SCROLLABLE;
-        }
-        if desc.kind() == NodeTag::Portal {
-            data.state |= NodeState::PORTAL;
-        }
-        if desc.has(NodeFlags::HIDDEN) {
-            data.state |= NodeState::HIDDEN;
-        }
-        if desc.has(NodeFlags::ANIMATED) {
-            data.state |= NodeState::ANIMATING;
-        }
+        data.state = state_from_desc(&desc);
 
         let id = self.nodes.insert(data);
         if !parent.is_null() {
@@ -487,10 +466,17 @@ impl UiWorld {
     /// 将节点从其父节点摘除但不销毁（用于 Portal 领养或虚拟化槽位复用）。
     ///
     pub fn detach(&mut self, id: NodeId) {
-        if !self.nodes.contains_key(id) {
+        let Some(old_parent) = self.nodes.get(id).map(|n| n.parent) else {
             return;
-        }
+        };
         self.unlink(id);
+        if let Some(p) = self.nodes.get_mut(old_parent) {
+            p.state.remove(NodeState::LAID_OUT);
+        }
+        if !old_parent.is_null() {
+            self.mark_layout_dirty(old_parent);
+        }
+        self.refresh_depth(id);
         self.topology_dirty = true;
     }
 
@@ -595,7 +581,7 @@ impl UiWorld {
             .find(|id| self.node(*id).desc.key == key)
     }
 
-    /// 当节点布局描述符发生变更时替换它，并标记布局为脏。
+    /// 当节点布局描述符发生变更时替换它，并同步派生运行时状态与脏标记。
     pub fn set_desc(&mut self, id: NodeId, desc: RawNodeDesc) {
         let Some(node) = self.nodes.get_mut(id) else {
             return;
@@ -604,7 +590,9 @@ impl UiWorld {
             return;
         }
         let was_boundary = node.is_relayout_boundary();
+        let preserved = node.state & (NodeState::LAID_OUT | NodeState::VIRTUALIZED);
         node.desc = desc;
+        node.state = state_from_desc(&node.desc) | preserved;
         let is_boundary = node.is_relayout_boundary();
         if was_boundary != is_boundary {
             self.mark_topology_dirty();
@@ -896,16 +884,20 @@ impl UiWorld {
                 }
             }
 
-            // 内容尺寸为所有子节点范围的并集：它限制了滚动范围，
-            // 因此必须在钳制滚动偏移前完成测量。
-            //
+            // 内容尺寸为所有参与常规流的子节点范围并集（排除隐藏节点与 Portal）：
+            // 它限制了滚动范围，并在尺寸收缩时自动钳制残留的 `scroll_offset`。
             let mut child = node.first_child;
             let mut kids = Vec::new();
             let mut content = Vec2::ZERO;
             while !child.is_null() {
                 kids.push(child);
                 if let Some(kid) = self.nodes.get(child) {
-                    content = content.max(kid.rect.max());
+                    let participates = !kid.state.contains(NodeState::PORTAL)
+                        && !kid.state.contains(NodeState::HIDDEN)
+                        && kid.desc.display_kind() != unbound_abi::Display::None;
+                    if participates {
+                        content = content.max(kid.rect.max().max(Vec2::ZERO));
+                    }
                 }
                 child = self.nodes[child].next_sibling;
             }
@@ -915,6 +907,10 @@ impl UiWorld {
             node.clip = clip;
             node.rounded_clips = rounded;
             node.content_size = content;
+            if node.state.contains(NodeState::SCROLLABLE) {
+                let max_scroll = (content - node.rect.size).max(Vec2::ZERO);
+                node.scroll_offset = node.scroll_offset.clamp(Vec2::ZERO, max_scroll);
+            }
 
             // 逆序压栈，使弹出顺序保持从左到右。
             for k in kids.into_iter().rev() {
@@ -964,6 +960,32 @@ impl UiWorld {
     pub fn full_layout_cost(&self) -> usize {
         self.nodes.len()
     }
+}
+
+/// 根据节点描述符计算派生状态位（`RELAYOUT_BOUNDARY`、`CLIPS_CHILDREN`、`SCROLLABLE` 等）。
+fn state_from_desc(desc: &RawNodeDesc) -> NodeState {
+    let mut state = NodeState::EMPTY;
+    let fixed = matches!(desc.width.kind(), unbound_abi::DimUnit::Px)
+        && matches!(desc.height.kind(), unbound_abi::DimUnit::Px);
+    if fixed && desc.is_clipping() {
+        state |= NodeState::RELAYOUT_BOUNDARY;
+    }
+    if desc.is_clipping() {
+        state |= NodeState::CLIPS_CHILDREN;
+    }
+    if desc.has(NodeFlags::SCROLL_Y) || desc.has(NodeFlags::SCROLL_X) {
+        state |= NodeState::SCROLLABLE;
+    }
+    if desc.kind() == NodeTag::Portal || desc.has(NodeFlags::PORTAL_ROOT) {
+        state |= NodeState::PORTAL;
+    }
+    if desc.has(NodeFlags::HIDDEN) || desc.display_kind() == unbound_abi::Display::None {
+        state |= NodeState::HIDDEN;
+    }
+    if desc.has(NodeFlags::ANIMATED) {
+        state |= NodeState::ANIMATING;
+    }
+    state
 }
 
 #[cfg(test)]
@@ -1514,5 +1536,55 @@ mod tests {
         assert_eq!(w.children(root).count(), 1);
         assert!(w.contains(a));
         assert_eq!(w.node(a).desc.padding.left, 4.0);
+    }
+
+    #[test]
+    fn set_desc_synchronizes_all_runtime_state_flags() {
+        let (mut w, root) = world();
+        let a = w.insert(root, RawNodeDesc::container(), loc());
+        assert!(!w.node(a).state.contains(NodeState::CLIPS_CHILDREN));
+        assert!(!w.node(a).state.contains(NodeState::RELAYOUT_BOUNDARY));
+
+        w.set_desc(
+            a,
+            RawNodeDesc::container()
+                .size(120.0, 80.0)
+                .flags(NodeFlags::CLIP | NodeFlags::SCROLL_Y),
+        );
+        let state = w.node(a).state;
+        assert!(state.contains(NodeState::CLIPS_CHILDREN));
+        assert!(state.contains(NodeState::SCROLLABLE));
+        assert!(state.contains(NodeState::RELAYOUT_BOUNDARY));
+    }
+
+    #[test]
+    fn fold_clips_ignores_hidden_children_and_clamps_scroll_offset() {
+        let (mut w, root) = world();
+        let scroller = w.insert(
+            root,
+            RawNodeDesc::container()
+                .size(100.0, 100.0)
+                .flags(NodeFlags::CLIP | NodeFlags::SCROLL_Y),
+            loc(),
+        );
+        let visible_child = w.insert(scroller, RawNodeDesc::container().size(100.0, 150.0), loc());
+        let hidden_child = w.insert(
+            scroller,
+            RawNodeDesc::container()
+                .size(100.0, 900.0)
+                .flags(NodeFlags::HIDDEN),
+            loc(),
+        );
+        w.node_mut(scroller).scroll_offset = Vec2::new(0.0, 400.0);
+
+        let mut rects = FxHashMap::default();
+        rects.insert(root, Rect::new(0.0, 0.0, 200.0, 200.0));
+        rects.insert(scroller, Rect::new(0.0, 0.0, 100.0, 100.0));
+        rects.insert(visible_child, Rect::new(0.0, 0.0, 100.0, 150.0));
+        rects.insert(hidden_child, Rect::new(0.0, 0.0, 100.0, 900.0));
+        w.apply_rects(&rects);
+
+        assert_eq!(w.node(scroller).content_size, Vec2::new(100.0, 150.0));
+        assert_eq!(w.node(scroller).scroll_offset, Vec2::new(0.0, 50.0));
     }
 }

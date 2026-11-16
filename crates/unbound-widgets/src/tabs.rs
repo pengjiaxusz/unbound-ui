@@ -8,7 +8,7 @@
 use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_anim::Spring;
-use unbound_gpu::data::{GpuPayload, GpuPrimitiveInstance, PrimType, SubElement};
+use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
@@ -567,7 +567,7 @@ pub fn emit_tab_close(
         .unwrap_or_else(|| "Close".to_owned());
     WidgetOutput {
         primitives,
-        payloads: Vec::<GpuPayload>::new(),
+        payloads,
         hit,
         a11y: Some(
             A11yNode::new(Role::Button, title, rect)
@@ -822,6 +822,11 @@ mod tests {
         let output = emit_tab_close(77, &desc, &state, 0, ControlState::default(), tokens);
         let hit = output.hit.expect("the close button is pickable");
         assert_eq!(hit.node, 77);
+        assert_eq!(
+            output.payloads.len(),
+            2,
+            "the close icon's two curve strokes must retain their GPU payloads"
+        );
         let a11y = output.a11y.expect("the close button is reachable");
         assert_eq!(a11y.role, Role::Button);
         assert_eq!(a11y.label, "Close One");
