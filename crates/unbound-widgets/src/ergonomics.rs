@@ -361,6 +361,48 @@ impl BadgeDesc {
     pub fn label(text: impl Into<String>) -> Self {
         Self::new(Rect::ZERO, text)
     }
+
+    /// 切换为主强调色胶囊样式（`PRIMARY_SOFT` 底 + `PRIMARY` 文本）。
+    #[must_use]
+    pub fn primary(mut self) -> Self {
+        self.variant = crate::badge::BadgeVariant::Primary;
+        self
+    }
+
+    /// 切换为成功语义胶囊样式（`SUCCESS_SOFT` 底 + `SUCCESS` 文本）。
+    #[must_use]
+    pub fn success(mut self) -> Self {
+        self.variant = crate::badge::BadgeVariant::Success;
+        self
+    }
+
+    /// 切换为警告语义胶囊样式（`WARNING_SOFT` 底 + `WARNING` 文本）。
+    #[must_use]
+    pub fn warning(mut self) -> Self {
+        self.variant = crate::badge::BadgeVariant::Warning;
+        self
+    }
+
+    /// 切换为危险/错误语义胶囊样式（`ERROR_SOFT` 底 + `ERROR` 文本）。
+    #[must_use]
+    pub fn error(mut self) -> Self {
+        self.variant = crate::badge::BadgeVariant::Error;
+        self
+    }
+
+    /// 切换为中性语义胶囊样式（`SURFACE_SUNKEN` 底 + `TEXT_SECONDARY` 文本）。
+    #[must_use]
+    pub fn neutral(mut self) -> Self {
+        self.variant = crate::badge::BadgeVariant::Neutral;
+        self
+    }
+
+    /// 设置是否显示前置状态圆点。
+    #[must_use]
+    pub fn dot(mut self, enabled: bool) -> Self {
+        self.dot = enabled;
+        self
+    }
 }
 
 impl AlertDesc {
@@ -1018,12 +1060,12 @@ impl UiWidget for BadgeDesc {
 
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
         let measured = text_ctx.measure_line(&self.text, 11.5, 500);
-        let dot_extra = if self.dot { 10.0 } else { 0.0 };
+        let dot_extra = if self.dot { 12.0 } else { 0.0 };
         Vec2::new(
-            (measured.x + 14.0 + dot_extra)
+            (measured.x + 18.0 + dot_extra)
                 .max(self.rect.width())
-                .max(20.0),
-            self.rect.height().max(20.0),
+                .max(22.0),
+            self.rect.height().max(22.0),
         )
     }
 
@@ -1038,7 +1080,7 @@ impl UiWidget for BadgeDesc {
         let mut desc = self.clone();
         desc.rect = rect;
         if desc.radius <= 0.0 {
-            desc.radius = (rect.size.y * 0.32).clamp(4.0, 9.0);
+            desc.radius = rect.size.y * 0.5;
         }
         let text_r = if desc.dot {
             Rect::new(
