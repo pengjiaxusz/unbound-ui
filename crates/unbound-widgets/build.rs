@@ -19,11 +19,22 @@ fn main() {
     let catalog_rs =
         fs::read_to_string(src_dir.join("catalog.rs")).expect("failed to read src/catalog.rs");
 
-    // 规则 1：`lib.rs` 中除基础设施模块外禁止裸 `pub mod`。
+    // 规则 1：`lib.rs` 中除基础设施与组合层模块外禁止裸 `pub mod`。
     // `title_bar` 仅提供默认标题栏描述符与保留节点 ID，场景由 `unbound-app` 的
     // `ViewBuilder` 组合既有容器/徽章/按钮生成，没有独立的 `emit_*`，因此按基础设施
     // 模块处理，不纳入 `define_widget_catalog!` 展示目录。
-    const ALLOWED_BARE_MODS: &[&str] = &["catalog", "diff", "ergonomics", "primitive", "title_bar"];
+    // `shell` 是应用外壳与展厅的组合层组件集合（品牌徽标、导航项、分组标题、图标按钮、
+    // 特性卡片与首屏横幅），由 `unbound-app` 的 `ViewBuilder` 与 `apps/showcase` 直接
+    // 组合使用；它不是单一控件，若纳入目录会为每个组合件各生成一个 `WidgetCatalogId`，
+    // 与 `WidgetCatalogId::COUNT` 的控件词汇表契约冲突，故按组合层处理。
+    const ALLOWED_BARE_MODS: &[&str] = &[
+        "catalog",
+        "diff",
+        "ergonomics",
+        "primitive",
+        "shell",
+        "title_bar",
+    ];
 
     for line in lib_rs.lines() {
         let trimmed = line.trim();
@@ -55,17 +66,17 @@ fn main() {
         }
 
         let file_name = path.file_name().unwrap().to_str().unwrap();
-        if file_name == "lib.rs"
-            || file_name == "catalog.rs"
-            || file_name == "diff.rs"
-            || file_name == "primitive.rs"
-            || file_name == "ergonomics.rs"
-            || file_name == "title_bar.rs"
-        {
+        if file_name == "lib.rs" {
             continue;
         }
 
         let mod_name = path.file_stem().unwrap().to_str().unwrap();
+
+        // 基础设施与组合层模块（与规则 1 同一白名单）没有独立的展示目录条目，
+        // 跳过“目录声明 / 重导出 / 发射覆盖”三项检查。
+        if ALLOWED_BARE_MODS.contains(&mod_name) {
+            continue;
+        }
 
         // 检查模块是否在 `define_widget_catalog!` 中声明
         if !catalog_macro_body.contains(mod_name) {
