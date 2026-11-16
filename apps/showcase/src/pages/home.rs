@@ -272,7 +272,6 @@ pub fn hero(ctx: &mut DemoCtx<'_, '_>) {
 /// 四张能力卡片。
 pub fn capability_grid(ctx: &mut DemoCtx<'_, '_>) {
     let rect = ctx.rect;
-    let palette = *ctx.canvas.palette;
     let columns = if rect.size.x >= 620.0 { 2 } else { 1 };
     let gap = 12.0;
     let cell_w = (rect.size.x - gap * (columns - 1) as f32) / columns as f32;
@@ -287,84 +286,19 @@ pub fn capability_grid(ctx: &mut DemoCtx<'_, '_>) {
             cell_w,
             cell_h,
         );
-        let hover = ctx.canvas.visual(ctx.part(index as u16 + 1), false);
-        ctx.canvas.rect(
-            cell,
-            12.0,
-            if hover.is_hovered() {
-                palette.control_hover
-            } else {
-                palette.card_bg
-            },
-            palette.card_border,
-            1.0,
-            4.0,
-        );
-        ctx.canvas.rect(
-            Rect::new(cell.origin.x + 14.0, cell.origin.y + 14.0, 34.0, 34.0),
-            9.0,
-            match index {
-                0 => palette.primary_soft,
-                1 => palette.success_soft,
-                2 => palette.warning_soft,
-                _ => palette.secondary_soft,
-            },
-            0,
-            0.0,
-            0.0,
-        );
-        widgets::icon(
-            ctx.canvas,
-            *icon,
-            Rect::new(cell.origin.x + 14.0, cell.origin.y + 14.0, 34.0, 34.0),
-            match index {
-                0 => palette.primary,
-                1 => palette.success,
-                2 => palette.warning,
-                _ => palette.secondary,
-            },
-            palette.card_bg,
-        );
-        ctx.canvas.text(
-            title,
-            Rect::new(
-                cell.origin.x + 58.0,
-                cell.origin.y + 15.0,
-                cell.size.x - 70.0,
-                20.0,
-            ),
-            14.0,
-            palette.text,
-            AlignX::Start,
-            AlignY::Top,
-        );
-        ctx.canvas.text_wrapped(
-            subtitle,
-            Rect::new(
-                cell.origin.x + 58.0,
-                cell.origin.y + 36.0,
-                cell.size.x - 72.0,
-                cell.size.y - 48.0,
-            ),
-            11.5,
-            palette.text_muted,
-        );
-        ctx.canvas.text(
-            "→",
-            Rect::new(cell.max().x - 30.0, cell.max().y - 30.0, 18.0, 18.0),
-            15.0,
-            palette.primary,
-            AlignX::Center,
-            AlignY::Center,
-        );
         let page_info = page.localized_info(ctx.state.locale);
-        ctx.control(
-            index as u16 + 1,
+        let label = format!("{title} — {}", page_info.title);
+        widgets::feature_card(
+            ctx.canvas,
+            ctx.part(index as u16 + 1),
             cell,
-            Role::Link,
-            &format!("{title} — {}", page_info.title),
-            false,
+            *icon,
+            title,
+            subtitle,
+            &label,
+            index,
         );
+        ctx.control(index as u16 + 1, cell, Role::Link, &label, false);
     }
 }
 
