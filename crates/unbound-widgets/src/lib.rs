@@ -820,6 +820,14 @@ impl SceneCollector {
         self.transform_stack.pop();
     }
 
+    /// 返回当前最内层变换作用域累积的屏幕空间平移偏移量。
+    #[must_use]
+    pub fn active_offset(&self) -> Vec2 {
+        self.transform_stack
+            .last()
+            .map_or(Vec2::ZERO, |&(_, offset)| offset)
+    }
+
     /// 追加单个控件的输出，并预留固定数量的图元槽位，使动态字形串不会导致后续控件的区间偏移。
     ///
     /// 未使用槽位以全透明实例填充，因此增减字符仅改变实际绘制的槽位而不会整体移动场景。

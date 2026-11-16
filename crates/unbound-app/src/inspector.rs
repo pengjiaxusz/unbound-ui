@@ -313,6 +313,7 @@ pub fn capture_frame(world: &UiWorld, viewport: Vec2) -> Frame {
     // 第二遍：构建快照。`walk` 为前序遍历，因此父节点路径在子节点请求前必然就绪。
     //
     let mut paths: HashMap<NodeId, String> = HashMap::with_capacity(ids.len());
+    let mut scrollable_ancestors: HashMap<NodeId, bool> = HashMap::with_capacity(ids.len());
     let mut nodes = Vec::with_capacity(ids.len());
     for id in ids {
         let data = world.node(id);
@@ -326,12 +327,28 @@ pub fn capture_frame(world: &UiWorld, viewport: Vec2) -> Frame {
         let path = format!("{parent_path}/{:?}#{key}", data.tag());
         paths.insert(id, path.clone());
 
+        let parent_scrollable = if id == root {
+            false
+        } else {
+            scrollable_ancestors
+                .get(&data.parent)
+                .copied()
+                .unwrap_or(false)
+        };
+        let is_scrollable = parent_scrollable
+            || data.desc.has(NodeFlags::SCROLL_X)
+            || data.desc.has(NodeFlags::SCROLL_Y);
+        scrollable_ancestors.insert(id, is_scrollable);
+
+        let is_portal = matches!(data.tag(), unbound_abi::NodeTag::Portal)
+            || data.desc.has(NodeFlags::PORTAL_ROOT);
+
         let kind = if world.text(id).is_some() {
             NodeKind::Text {
                 ink: data.world_rect,
                 ellipsis: data.desc.has(NodeFlags::TEXT_ELLIPSIS),
             }
-        } else if matches!(data.tag(), unbound_abi::NodeTag::Portal) {
+        } else if is_portal {
             NodeKind::Portal
         } else if data.desc.has(NodeFlags::INTERACTIVE) {
             NodeKind::Interactive {
@@ -341,6 +358,10 @@ pub fn capture_frame(world: &UiWorld, viewport: Vec2) -> Frame {
         } else {
             NodeKind::Container
         };
+
+        let overlays_siblings = is_portal
+            || data.desc.position_kind() == unbound_abi::Position::Absolute
+            || data.desc.z_index > 0;
 
         nodes.push(NodeSnapshot {
             id: key,
@@ -354,8 +375,8 @@ pub fn capture_frame(world: &UiWorld, viewport: Vec2) -> Frame {
             rect: data.world_rect,
             clip: data.clip,
             kind,
-            overlays_siblings: false,
-            scrollable: data.desc.has(NodeFlags::SCROLL_X) || data.desc.has(NodeFlags::SCROLL_Y),
+            overlays_siblings,
+            scrollable: is_scrollable,
             text_colors: None,
         });
     }

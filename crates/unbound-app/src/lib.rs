@@ -198,10 +198,10 @@ impl<W: unbound_widgets::UiWidget> ErasedUiWidget for W {
     }
 
     fn ensure_state_erased(&self, key: u64, store: &mut WidgetStateStore) {
-        if store.get::<W::State>(key).is_none() {
-            let initial = self.initial_state();
-            store.insert_state::<W::State>(key, initial);
-        }
+        // 命中既有状态时也必须把本帧标记为「已访问」，否则状态池的帧末回收会把仍在渲染的
+        // 控件误判为已卸载并丢弃其状态（表现为隔帧重置）。此处统一走 `use_state_or_init`。
+        let state = store.use_state_or_init::<W::State>(key, || self.initial_state());
+        self.sync_state(state);
     }
 
     fn reduce_erased(
@@ -846,6 +846,39 @@ impl AppContext {
         st.active = active;
     }
 
+    /// 读取指定 `HotkeyInputDesc` 控件键已录制的快捷键字符串。
+    #[must_use]
+    pub fn hotkey_input_text(&self, key: u64) -> Option<String> {
+        self.widget_state
+            .borrow()
+            .get::<unbound_widgets::hotkey_input::HotkeyInputState>(key)
+            .and_then(unbound_widgets::hotkey_input::HotkeyInputState::formatted_chord)
+    }
+
+    /// 重置或清空指定 `HotkeyInputDesc` 控件键的录制状态。
+    pub fn clear_hotkey_input(&self, key: u64, start_recording: bool) {
+        let mut store = self.widget_state.borrow_mut();
+        let st = store.entry::<unbound_widgets::hotkey_input::HotkeyInputState>(key);
+        st.clear();
+        st.recording = start_recording;
+    }
+
+    /// 读取指定 `AutoCompleteDesc` 控件键当前的查询文本。
+    #[must_use]
+    pub fn autocomplete_value(&self, key: u64) -> Option<String> {
+        self.widget_state
+            .borrow()
+            .get::<unbound_widgets::autocomplete::AutoCompleteState>(key)
+            .map(|st| st.query.clone())
+    }
+
+    /// 设置指定 `AutoCompleteDesc` 控件键的查询文本。
+    pub fn set_autocomplete_value(&self, key: u64, value: impl Into<String>) {
+        let mut store = self.widget_state.borrow_mut();
+        let st = store.entry::<unbound_widgets::autocomplete::AutoCompleteState>(key);
+        st.query = value.into();
+    }
+
     /// 在本次归约后调度一个经 `after` 触发的单次事件。
     ///
     /// 先分配 token 并传给 `make`，使事件能携带自身将被派发时的 token；
@@ -1010,6 +1043,10 @@ pub struct ViewContext {
     pub locale: Locale,
     /// 当前激活区域的阅读布局方向（LTR / RTL）。
     pub direction: LayoutDirection,
+    /// 当前全局 UI 缩放比例（`0.75..=2.0`）。
+    pub ui_scale: f32,
+    /// 缩放 OSD 悬浮提示剩余可见时间（秒）。
+    pub scale_osd_remaining: f32,
 }
 
 impl ViewContext {
@@ -1385,15 +1422,36 @@ impl<'a> ViewBuilder<'a> {
         key: u64,
         mut desc: RawNodeDesc,
         loc: &'static core::panic::Location<'static>,
-    ) -> NodeId {
-        desc.key = key;
-        if key != 0 {
-            self.seen_keys.insert(key);
-            if let Some(&existing) = self.node_keys.get(&key) {
+    ) -> (u64, NodeId) {
+        let mut effective_key = key;
+        if effective_key != 0 && !self.seen_keys.insert(effective_key) {
+            // 当调用方在循环体或复用辅助函数内使用无参 `ui_key!()` 时，同一帧会出现重复键；
+            // 若直接覆盖 `node_keys` 并因父节点不同执行 `world.remove(existing)`，会把前序循环项
+            // 的整棵子树误删。此处结合当前父节点键与递增序号派生确定性去重键，保证所有循环项完整保留。
+            let parent_key = self
+                .world
+                .get(self.parent)
+                .map_or(0, |parent_node| parent_node.desc.key);
+            let mut salt = 1u64;
+            loop {
+                let candidate = mix_key(
+                    effective_key ^ parent_key.rotate_left(13),
+                    salt.wrapping_add(0x517C_C1B7_2722_0A95),
+                );
+                if candidate != 0 && self.seen_keys.insert(candidate) {
+                    effective_key = candidate;
+                    break;
+                }
+                salt = salt.wrapping_add(1);
+            }
+        }
+        desc.key = effective_key;
+        if effective_key != 0 {
+            if let Some(&existing) = self.node_keys.get(&effective_key) {
                 if let Some(node_data) = self.world.get(existing) {
                     if node_data.parent == self.parent {
                         self.world.set_desc(existing, desc);
-                        return existing;
+                        return (effective_key, existing);
                     } else {
                         self.world.remove(existing);
                     }
@@ -1401,12 +1459,12 @@ impl<'a> ViewBuilder<'a> {
             }
         }
         let node = self.world.insert(self.parent, desc, loc);
-        if key != 0 {
-            self.node_keys.insert(key, node);
+        if effective_key != 0 {
+            self.node_keys.insert(effective_key, node);
         } else {
             self.ephemeral_nodes.push(node);
         }
-        node
+        (effective_key, node)
     }
 
     /// 使用显式描述符声明布局容器（若配置了背景填充、边框或阴影，将自动按树深度发射表面图元）。
@@ -1424,14 +1482,16 @@ impl<'a> ViewBuilder<'a> {
         } else {
             self.z_base
         };
-        let node = self.reconcile_node(key, desc, core::panic::Location::caller());
+        let (effective_key, node) = self.reconcile_node(key, desc, core::panic::Location::caller());
         if has_surface {
             let depth_z = (80u16.saturating_add(self.depth.saturating_mul(6))).min(480);
             let surface_z = next_z_base.saturating_add(depth_z);
             let hit_scrim = i32::from(next_z_base) >= PORTAL_Z_BASE
                 && desc.fill == u32::from(unbound_theme::Token::SCRIM.raw());
             self.pending.push(PendingWidget {
-                key: key.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1),
+                key: effective_key
+                    .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    .wrapping_add(1),
                 node,
                 spec: WidgetSpec::BoxSurface {
                     fill: u16::try_from(desc.fill).unwrap_or(u16::MAX),
@@ -1503,14 +1563,14 @@ impl<'a> ViewBuilder<'a> {
         if let Some(size) = intrinsic {
             desc = desc.size(size.x, size.y);
         }
-        let node = self.reconcile_node(key, desc, core::panic::Location::caller());
+        let (effective_key, node) = self.reconcile_node(key, desc, core::panic::Location::caller());
         if let Some(size) = intrinsic {
             if let Some(data) = self.world.get_mut(node) {
                 data.measure = Some(size);
             }
         }
         self.pending.push(PendingWidget {
-            key,
+            key: effective_key,
             node,
             spec,
             z_base: self.z_base,
@@ -1533,9 +1593,9 @@ impl<'a> ViewBuilder<'a> {
         widget: W,
     ) -> NodeId {
         desc.key = key;
-        let node = self.reconcile_node(key, desc, core::panic::Location::caller());
+        let (effective_key, node) = self.reconcile_node(key, desc, core::panic::Location::caller());
         self.pending.push(PendingWidget {
-            key,
+            key: effective_key,
             node,
             spec: WidgetSpec::UiWidget(Arc::new(widget)),
             z_base: self.z_base,
@@ -1850,6 +1910,7 @@ impl<'a> ViewBuilder<'a> {
         let mut desc = RawNodeDesc::container();
         desc.flex_grow = 1.0;
         self.reconcile_node(key, desc, core::panic::Location::caller())
+            .1
     }
 
     /// 声明式滚动视图容器快捷方式（支持真实裁剪、平移与滚轮滚动）。
@@ -1883,7 +1944,8 @@ impl<'a> ViewBuilder<'a> {
         } else {
             desc = desc.row().flags(NodeFlags::CLIP | NodeFlags::SCROLL_X);
         }
-        let scroll_node = self.reconcile_node(key, desc, core::panic::Location::caller());
+        let (effective_key, scroll_node) =
+            self.reconcile_node(key, desc, core::panic::Location::caller());
         let parent_saved = core::mem::replace(&mut self.parent, scroll_node);
         let mut inner_desc = if vertical {
             RawNodeDesc::container()
@@ -1897,14 +1959,16 @@ impl<'a> ViewBuilder<'a> {
                 .gap(12.0)
         };
         inner_desc.flex_shrink = 0.0;
-        let content_key = key.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(17);
-        let content_node =
+        let content_key = effective_key
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(17);
+        let (_, content_node) =
             self.reconcile_node(content_key, inner_desc, core::panic::Location::caller());
         self.pending.push(PendingWidget {
-            key,
+            key: effective_key,
             node: scroll_node,
             spec: WidgetSpec::ScrollScopeBegin {
-                scroll_key: key,
+                scroll_key: effective_key,
                 content_node,
                 vertical,
             },
@@ -1916,7 +1980,9 @@ impl<'a> ViewBuilder<'a> {
         build(self);
         self.depth = prev_depth;
         self.pending.push(PendingWidget {
-            key: key.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(18),
+            key: effective_key
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .wrapping_add(18),
             node: scroll_node,
             spec: WidgetSpec::ScrollScopeEnd,
             z_base: self.z_base,
@@ -1954,18 +2020,18 @@ impl<'a> ViewBuilder<'a> {
         } else {
             desc.flex_shrink = 0.0;
         }
-        let node = self.reconcile_node(key, desc, core::panic::Location::caller());
+        let (effective_key, node) = self.reconcile_node(key, desc, core::panic::Location::caller());
         self.world.set_text(node, text.clone());
         if is_long_paragraph {
             self.pending.push(PendingWidget {
-                key,
+                key: effective_key,
                 node,
                 spec: WidgetSpec::Text { text, style },
                 z_base: self.z_base,
             });
         } else {
             self.pending.push(PendingWidget {
-                key,
+                key: effective_key,
                 node,
                 spec: WidgetSpec::TextInline {
                     text,
@@ -1989,10 +2055,10 @@ impl<'a> ViewBuilder<'a> {
         let text = text.into();
         let mut desc = RawNodeDesc::container().key(key);
         desc.flex_shrink = 0.0;
-        let node = self.reconcile_node(key, desc, core::panic::Location::caller());
+        let (effective_key, node) = self.reconcile_node(key, desc, core::panic::Location::caller());
         self.world.set_text(node, text.clone());
         self.pending.push(PendingWidget {
-            key,
+            key: effective_key,
             node,
             spec: WidgetSpec::TextInline { text, style, color },
             z_base: self.z_base,
@@ -2688,8 +2754,36 @@ impl<A: Application> AppRuntime<A> {
     ///
     pub fn wheel(&mut self, pos: Vec2, delta: Vec2) -> DirtyFlags {
         let mut scroll_dirty = DirtyFlags::NONE;
+        // 若当前存在位于 Portal / 模态层的滚动区或遮罩覆盖，背景层的滚动区不得越界抢夺滚轮。
+        let has_portal_layer = self
+            .router
+            .regions()
+            .iter()
+            .any(|r| r.layer == unbound_input::PORTAL_LAYER && r.bounds.contains_point(pos));
         for &(scroll_key, viewport_rect, content_size, vertical) in self.scroll_regions.iter().rev()
         {
+            let in_portal = self.node_keys.get(&scroll_key).copied().is_some_and(|id| {
+                let mut cur = id;
+                for _ in 0..MAX_BUBBLE_DEPTH {
+                    let Some(d) = self.world.get(cur) else {
+                        break;
+                    };
+                    if d.desc.has(NodeFlags::PORTAL_ROOT)
+                        || d.desc.z_index >= PORTAL_Z_BASE
+                        || self.overlays.stack().contains(d.desc.key)
+                    {
+                        return true;
+                    }
+                    if d.parent == cur {
+                        break;
+                    }
+                    cur = d.parent;
+                }
+                false
+            });
+            if has_portal_layer && !in_portal {
+                continue;
+            }
             if viewport_rect.contains_point(pos) {
                 let mut desc = unbound_widgets::ScrollViewDesc::new(viewport_rect, content_size);
                 desc.axis = if vertical {
@@ -3014,10 +3108,10 @@ impl<A: Application> AppRuntime<A> {
             };
         }
 
-        // 焦点顺序来自上一帧；在重建前采用它，使 `Tab` 可在帧间生效。
-        //
-        self.focus
-            .set_order(self.collector.focus_order.iter().copied());
+        // 焦点顺序在重建完成后（见下方 `set_order`）统一发布：此处不得提前用上一帧的
+        // 顺序表裁剪焦点，否则同一帧内由事件请求聚焦、本帧才挂载的控件（如刚打开的命令
+        // 面板搜索框）会因「不在上一帧顺序表里」被立刻清空焦点。`Tab` 事件在帧前归约时
+        // 读取的仍是上一帧发布的顺序表，语义不受影响。
         self.sync_focus_context();
 
         self.collector.reset(ROOT);
@@ -3048,6 +3142,8 @@ impl<A: Application> AppRuntime<A> {
             window_focused: self.ctx.window_focused,
             locale: self.ctx.i18n.borrow().active_locale_enum(),
             direction: self.ctx.i18n.borrow().direction(),
+            ui_scale: self.ctx.ui_scale,
+            scale_osd_remaining: self.ctx.scale_osd_remaining,
         };
         let mut focus_groups = Vec::new();
         let mut view = ViewBuilder {
@@ -3449,8 +3545,9 @@ impl<A: Application> AppRuntime<A> {
             };
             match &entry.spec {
                 WidgetSpec::UiWidget(widget) => {
+                    let scrolled_rect = rect.translate(self.collector.active_offset());
                     self.mounted_widgets
-                        .insert(entry.key, (rect, Arc::clone(widget)));
+                        .insert(entry.key, (scrolled_rect, Arc::clone(widget)));
                     widget.ensure_state_erased(entry.key, &mut self.widget_state.borrow_mut());
                     let store = self.widget_state.borrow();
                     let output = apply_z_base(
@@ -3623,12 +3720,22 @@ impl<A: Application> AppRuntime<A> {
                     };
                     self.scroll_regions
                         .push((*scroll_key, rect, content_size, *vertical));
-                    let sv_out = unbound_widgets::emit_scroll_view(
+                    let mut sv_out = unbound_widgets::emit_scroll_view(
                         *scroll_key,
                         &scroll_desc,
                         &scroll_state,
                         state,
                     );
+                    if i32::from(entry.z_base) >= PORTAL_Z_BASE {
+                        if let Some(hit) = sv_out.output.hit.as_mut() {
+                            hit.layer = unbound_input::PORTAL_LAYER;
+                            hit.z = hit.z.saturating_add(u32::from(entry.z_base));
+                        }
+                        for hit in &mut sv_out.hits {
+                            hit.layer = unbound_input::PORTAL_LAYER;
+                            hit.z = hit.z.saturating_add(u32::from(entry.z_base));
+                        }
+                    }
                     let clip = sv_out.clip;
                     let transform = sv_out.transform;
                     sv_out.push_into(&mut self.collector, *scroll_key);
@@ -3730,6 +3837,53 @@ impl<A: Application> AppRuntime<A> {
                 button,
                 click_count,
             } => {
+                if button == PointerButton::Left {
+                    for &(scroll_key, viewport_rect, content_size, vertical) in
+                        self.scroll_regions.iter().rev()
+                    {
+                        let mut desc =
+                            unbound_widgets::ScrollViewDesc::new(viewport_rect, content_size);
+                        desc.axis = if vertical {
+                            unbound_widgets::ScrollAxis::Vertical
+                        } else {
+                            unbound_widgets::ScrollAxis::Horizontal
+                        };
+                        let on_scrollbar = (vertical
+                            && content_size.y > viewport_rect.height()
+                            && desc.track_rect(false).contains_point(position))
+                            || (!vertical
+                                && content_size.x > viewport_rect.width()
+                                && desc.track_rect(true).contains_point(position))
+                            || target == Some(scroll_key ^ (1 << 63))
+                            || target == Some(scroll_key ^ (1 << 62));
+                        if on_scrollbar {
+                            let handled = {
+                                let mut store = self.widget_state.borrow_mut();
+                                let st = store.use_state_or_init::<unbound_widgets::ScrollState>(
+                                    scroll_key,
+                                    unbound_widgets::ScrollState::new,
+                                );
+                                let changed = st.reduce_pointer(
+                                    &desc,
+                                    unbound_widgets::ScrollPointerEvent::Press(position),
+                                );
+                                if changed && st.dragging().is_none() {
+                                    let tgt = st.target();
+                                    st.jump_to(&desc, tgt);
+                                }
+                                changed
+                            };
+                            if handled {
+                                self.last_pointer_down_target = None;
+                                self.last_pointer_down_path.clear();
+                                self.force_rebuild = true;
+                                let dirty = DirtyFlags::PAINT | DirtyFlags::LAYOUT;
+                                self.mark(dirty);
+                                return dirty;
+                            }
+                        }
+                    }
+                }
                 // 路径在按下那一刻固定：释放时无需重算父链，也不受帧间树变化影响。
                 let down_path = match target {
                     Some(node) => self.ancestors_of(node),
@@ -3771,16 +3925,72 @@ impl<A: Application> AppRuntime<A> {
                 target,
                 position,
                 delta,
-            } => self.dispatch(AppEvent::Drag {
-                node: target,
-                pos: position,
-                delta,
-            }),
+            } => {
+                for &(scroll_key, viewport_rect, content_size, vertical) in
+                    self.scroll_regions.iter().rev()
+                {
+                    let mut desc =
+                        unbound_widgets::ScrollViewDesc::new(viewport_rect, content_size);
+                    desc.axis = if vertical {
+                        unbound_widgets::ScrollAxis::Vertical
+                    } else {
+                        unbound_widgets::ScrollAxis::Horizontal
+                    };
+                    let dragged = {
+                        let mut store = self.widget_state.borrow_mut();
+                        if let Some(st) = store.get_mut::<unbound_widgets::ScrollState>(scroll_key)
+                        {
+                            st.reduce_pointer(
+                                &desc,
+                                unbound_widgets::ScrollPointerEvent::Drag(position),
+                            )
+                        } else {
+                            false
+                        }
+                    };
+                    if dragged {
+                        self.force_rebuild = true;
+                        let dirty = DirtyFlags::PAINT | DirtyFlags::LAYOUT;
+                        self.mark(dirty);
+                        return dirty;
+                    }
+                }
+                self.dispatch(AppEvent::Drag {
+                    node: target,
+                    pos: position,
+                    delta,
+                })
+            }
             PointerEvent::Up {
                 target,
                 position,
                 button,
             } => {
+                let mut scroll_released = false;
+                for &(scroll_key, viewport_rect, content_size, vertical) in
+                    self.scroll_regions.iter().rev()
+                {
+                    let mut desc =
+                        unbound_widgets::ScrollViewDesc::new(viewport_rect, content_size);
+                    desc.axis = if vertical {
+                        unbound_widgets::ScrollAxis::Vertical
+                    } else {
+                        unbound_widgets::ScrollAxis::Horizontal
+                    };
+                    let mut store = self.widget_state.borrow_mut();
+                    if let Some(st) = store.get_mut::<unbound_widgets::ScrollState>(scroll_key) {
+                        if st.reduce_pointer(&desc, unbound_widgets::ScrollPointerEvent::Release) {
+                            scroll_released = true;
+                        }
+                    }
+                }
+                if scroll_released {
+                    self.last_pointer_down_target = None;
+                    self.last_pointer_down_path.clear();
+                    let dirty = DirtyFlags::PAINT;
+                    self.mark(dirty);
+                    return dirty;
+                }
                 let mut flags = match target {
                     Some(node) => {
                         self.dispatch_bubbling("PointerUp", node, |ancestor| AppEvent::PointerUp {

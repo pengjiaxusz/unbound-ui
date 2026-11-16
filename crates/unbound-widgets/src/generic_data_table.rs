@@ -146,6 +146,16 @@ impl GenericDataTableState {
         out
     }
 
+    /// 计算当前滚动偏移对应的首个可视行逻辑索引。
+    #[must_use]
+    pub fn first_row_index(&self, row_height: f32, visible_len: usize, slots: usize) -> usize {
+        let max_first = visible_len.saturating_sub(slots);
+        ((self.scroll_offset_y / row_height.max(1.0))
+            .floor()
+            .max(0.0) as usize)
+            .min(max_first)
+    }
+
     /// 键盘上下行导航。
     pub fn move_focus(&mut self, visible_len: usize, delta: isize) {
         if visible_len == 0 {
@@ -213,6 +223,24 @@ impl GenericDataTableDesc {
         self.show_summary_footer = show_summary_footer;
         self
     }
+
+    /// 当表格容器宽度大于列宽总和时按比例拉伸各列宽度，填满整张表格。
+    #[must_use]
+    pub fn effective_column_widths(&self, table_width: f32) -> Vec<f32> {
+        let sum: f32 = self.columns.iter().map(|c| c.width.max(c.min_width)).sum();
+        if sum > 0.0 && table_width > sum {
+            let scale = table_width / sum;
+            self.columns
+                .iter()
+                .map(|c| c.width.max(c.min_width) * scale)
+                .collect()
+        } else {
+            self.columns
+                .iter()
+                .map(|c| c.width.max(c.min_width))
+                .collect()
+        }
+    }
 }
 
 /// 发射泛型数据表（保持 24 态恒定图元数）。
@@ -247,15 +275,20 @@ pub fn emit_generic_data_table(
     primitives.push(surface(header_r, 7.0, Token::HEADER_BG, z + 1));
 
     // 列分隔把手线
+    let col_widths = desc.effective_column_widths(r.size.x);
     let mut col_x = r.origin.x;
-    for col in &desc.columns {
-        col_x += col.width;
+    for &col_w in &col_widths {
+        col_x += col_w;
         let sep_r = Rect::new(col_x.min(r.max().x - 2.0), r.origin.y + 6.0, 1.0, 20.0);
         primitives.push(surface(sep_r, 0.0, Token::DIVIDER, z + 2));
     }
 
+    let visible_len = state.resolve_visible_indices(&desc.rows).len();
+    let first_row = state.first_row_index(desc.row_height, visible_len, desc.visible_row_slots);
+
     // 固定数量的虚拟化可视行槽位（保证 24 态恒定图元数）
     for slot_idx in 0..desc.visible_row_slots {
+        let logical_idx = first_row + slot_idx;
         let ry = header_r.max().y + slot_idx as f32 * desc.row_height;
         let row_r = Rect::new(
             r.origin.x + 2.0,
@@ -263,7 +296,7 @@ pub fn emit_generic_data_table(
             (r.size.x - 4.0).max(1.0),
             desc.row_height,
         );
-        let is_selected = state.selected_rows.contains(&slot_idx);
+        let is_selected = logical_idx < visible_len && state.selected_rows.contains(&logical_idx);
         let fill = if is_selected {
             Token::SELECTION
         } else if slot_idx % 2 == 1 {

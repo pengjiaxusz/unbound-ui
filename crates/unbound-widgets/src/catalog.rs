@@ -2044,7 +2044,15 @@ where
                 Vec2::new(ctrl_rect.origin.x + 10.0, ctrl_rect.origin.y + 10.0),
                 12.5,
             );
-            crate::autocomplete::emit_autocomplete(node, &desc, state, &glyphs)
+            // 走带候选字形入口，保证展示目录也覆盖新增的下拉候选渲染通路。
+            crate::autocomplete::emit_autocomplete_with_suggestions(
+                node,
+                &desc,
+                state,
+                None,
+                &glyphs,
+                &[],
+            )
         }
         WidgetCatalogId::Banner => {
             let sev = match variant_idx % 4 {
