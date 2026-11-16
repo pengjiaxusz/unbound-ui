@@ -38,6 +38,21 @@ impl crate::ClipboardProvider for WinClipboard {
     }
 }
 
+/// 将平台后端唤醒闭包适配为运行时 [`crate::AppWaker`] 的桥接器。
+struct SignalWaker(Arc<dyn Fn() + Send + Sync>);
+
+impl core::fmt::Debug for SignalWaker {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SignalWaker")
+    }
+}
+
+impl crate::AppWaker for SignalWaker {
+    fn wake(&self) {
+        (self.0)();
+    }
+}
+
 /// 将平台按键翻译为运行时的 [`AppKey`] 词汇表。
 fn translate_app_key(key: &PlatformKey) -> AppKey {
     match key {
@@ -134,6 +149,12 @@ pub struct WindowedRunner<A: Application> {
     swapchain_dirty: bool,
     committed_request: (u32, u32),
     scene_generation: u64,
+    /// 上一帧是否已执行场景构建但未能送达 GPU（例如交换链过期或获取图像失败）。
+    ///
+    /// 运行时每次构建都会推进 diff 基准；若上一帧被丢弃，下一帧必须推进代次并执行全量上传。
+    frame_dropped: bool,
+    /// 当前窗口的系统物理显示 DPI 缩放比（`window.scale_factor()`）。
+    os_scale: f32,
     frame_metrics: Option<Arc<FrameHitMetrics>>,
     hwnd: Option<isize>,
     /// GPU 着色器用于解析颜色 token 的语义颜色表。
@@ -176,6 +197,8 @@ impl<A: Application> WindowedRunner<A> {
             swapchain_dirty: false,
             committed_request: (w, h),
             scene_generation: 0,
+            frame_dropped: false,
+            os_scale: 1.0,
             frame_metrics: None,
             hwnd: None,
         }
@@ -197,6 +220,15 @@ impl<A: Application> WindowedRunner<A> {
     /// 可变访问底层应用运行时。
     pub fn runtime_mut(&mut self) -> &mut AppRuntime<A> {
         &mut self.runtime
+    }
+
+    /// 同步窗口当前系统 DPI 缩放因子（`os_scale`）。
+    fn sync_os_scale(&mut self, window: &Window) -> f32 {
+        let raw = window.scale_factor() as f32;
+        if raw.is_finite() && raw > 0.0 {
+            self.os_scale = raw.clamp(0.5, 4.0);
+        }
+        self.os_scale
     }
 
     /// 让渲染器的 4 KiB 颜色表与运行时主题保持同步。
@@ -352,6 +384,7 @@ impl<A: Application> WindowedRunner<A> {
                 self.surface = Some(surface);
                 self.atlases = Some(atlases);
                 self.swapchain_dirty = true;
+                self.frame_dropped = true;
                 // 新建的渲染器此时只有占位 LUT。
                 self.uploaded_theme = None;
                 self.sync_theme(window);
@@ -366,11 +399,23 @@ impl<A: Application> WindowedRunner<A> {
 }
 
 impl<A: Application> PlatformApp for WindowedRunner<A> {
+    fn attach_waker(&mut self, waker: Arc<dyn Fn() + Send + Sync>) {
+        self.runtime.set_waker(Arc::new(SignalWaker(waker)));
+    }
+
+    fn next_wake(&self) -> Option<Instant> {
+        self.runtime
+            .next_wake_in()
+            .map(|delay| Instant::now() + delay)
+    }
+
     fn resumed(&mut self, state: &mut PlatformState, window: &Window) {
+        let os_scale = self.sync_os_scale(window);
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
         self.committed_request = (width, height);
-        self.runtime.resize(Vec2::new(width as f32, height as f32));
+        self.runtime
+            .sync_physical_viewport(Vec2::new(width as f32, height as f32), os_scale);
 
         let instance_extensions = match window_instance_extensions(window) {
             Ok(extensions) => extensions,
@@ -487,6 +532,12 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             return;
         }
 
+        let (chain_w, chain_h) = swapchain.extent();
+        self.runtime.sync_physical_viewport(
+            Vec2::new(chain_w.max(1) as f32, chain_h.max(1) as f32),
+            os_scale,
+        );
+
         self.atlases = Some(atlases);
         self.swapchain = Some(swapchain);
         self.surface = Some(surface);
@@ -497,7 +548,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         }
 
         let metrics = Arc::new(FrameHitMetrics::new());
-        metrics.set_scale_factor(window.scale_factor() as f32);
+        metrics.set_scale_factor(os_scale);
         install_custom_frame(hwnd, metrics.clone());
         self.frame_metrics = Some(metrics);
 
@@ -506,24 +557,27 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.last_frame = Instant::now();
     }
 
-    fn event(&mut self, _state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
+    fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
+        let os_scale = self.sync_os_scale(window);
         match event {
-            PlatformEvent::Resized(extent) => {
+            PlatformEvent::Resized(_) => {
+                // 始终读取窗口当前实时客户区尺寸（而非事件中可能滞后的历史尺寸），
+                // 并且仅标记 `swapchain_dirty = true`，不在交换链真正重建前提前覆写 `committed_request`。
                 let size = window.inner_size();
-                self.committed_request = (size.width.max(1), size.height.max(1));
-                let ui_scale = self.runtime.context().ui_scale.max(0.5);
-                self.runtime.resize(Vec2::new(
-                    extent.width as f32 / ui_scale,
-                    extent.height as f32 / ui_scale,
-                ));
-                self.swapchain_dirty = true;
+                if size.width > 0 && size.height > 0 {
+                    self.runtime.sync_physical_viewport(
+                        Vec2::new(size.width as f32, size.height as f32),
+                        os_scale,
+                    );
+                    self.swapchain_dirty = true;
+                }
             }
             PlatformEvent::RecreateSwapchain(_) => {
                 self.swapchain_dirty = true;
             }
             PlatformEvent::CursorMoved { x, y } => {
-                let ui_scale = self.runtime.context().ui_scale.max(0.5);
-                self.pointer = Vec2::new(x as f32 / ui_scale, y as f32 / ui_scale);
+                let effective_scale = self.runtime.context().effective_scale();
+                self.pointer = Vec2::new(x as f32 / effective_scale, y as f32 / effective_scale);
                 self.runtime.pointer_move(self.pointer);
             }
             PlatformEvent::MouseInput { state, button } => {
@@ -562,12 +616,12 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                         0
                     };
                     if step != 0 {
-                        let next_scale = self.runtime.context_mut().step_ui_scale(step);
+                        let _ = self.runtime.context_mut().step_ui_scale(step);
                         let size = window.inner_size();
-                        self.runtime.resize(Vec2::new(
-                            size.width.max(1) as f32 / next_scale,
-                            size.height.max(1) as f32 / next_scale,
-                        ));
+                        self.runtime.sync_physical_viewport(
+                            Vec2::new(size.width.max(1) as f32, size.height.max(1) as f32),
+                            os_scale,
+                        );
                         window.request_redraw();
                     }
                 } else {
@@ -609,9 +663,18 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 ImeEvent::Enabled => {}
             },
             PlatformEvent::ScaleFactorChanged(scale) => {
+                let new_os_scale = (scale as f32).clamp(0.5, 4.0);
+                self.os_scale = new_os_scale;
                 if let Some(metrics) = &self.frame_metrics {
-                    metrics.set_scale_factor(scale as f32);
+                    metrics.set_scale_factor(new_os_scale);
                 }
+                let size = window.inner_size();
+                self.runtime.sync_physical_viewport(
+                    Vec2::new(size.width.max(1) as f32, size.height.max(1) as f32),
+                    new_os_scale,
+                );
+                self.swapchain_dirty = true;
+                window.request_redraw();
             }
             PlatformEvent::ThemeChanged { dark } => {
                 self.runtime.set_theme(if dark {
@@ -645,67 +708,80 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             _ => {}
         }
 
+        if self.runtime.dirty() != crate::DirtyFlags::NONE {
+            state.pacer.request_immediate(Instant::now());
+            window.request_redraw();
+        }
+
         Flow::Continue
     }
 
-    fn frame(&mut self, _state: &mut PlatformState, window: &Window) -> Flow {
+    fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return Flow::Continue;
+        }
+        let (width, height) = (size.width.max(1), size.height.max(1));
+        let os_scale = self.sync_os_scale(window);
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
 
-        // 标题栏在构建视图时读取该状态，必须在 `runtime.frame` 之前同步，避免滞后一帧。
-        self.runtime.context_mut().window_maximized = window.is_maximized();
-        let report = self.runtime.frame(dt);
+        // 1. 在构建场景与求解布局*之前*先检查并重建交换链（对齐 `Showcase::frame_impl`）：
+        //    驱动决定交换链图像的真实呈现尺寸，提前重建可确保本帧直接按最终新尺寸布局与渲染，
+        //    杜绝“先按旧视口排版一帧、渲染阶段才发现视口不一致”的单帧滞后与反复重排。
+        let settled = state.poll_resize(now);
+        if self.swapchain_dirty || settled.is_some() || self.committed_request != (width, height) {
+            if let (Some(renderer), Some(swapchain), Some(surface)) =
+                (&mut self.renderer, &mut self.swapchain, &self.surface)
+            {
+                let present = PresentConfig::from_capabilities(
+                    &renderer.gpu.enabled_device_extensions,
+                    false,
+                );
+                if let Err(error) =
+                    swapchain.recreate(&renderer.gpu, surface, width, height, &present)
+                {
+                    eprintln!("[unbound-app] Could not recreate swapchain: {error:?}");
+                    self.swapchain_dirty = true;
+                    return Flow::Continue;
+                }
+                self.committed_request = (width, height);
+                self.swapchain_dirty = false;
+                let (actual_w, actual_h) = swapchain.extent();
+                if let Err(error) = renderer.ensure_depth_size(actual_w, actual_h) {
+                    eprintln!("[unbound-app] Could not resize depth buffer: {error:?}");
+                }
+            }
+        }
 
-        // `reduce` 可能改动 `ctx.theme`（示例 01 的主题按钮正是如此），
-        // 因此每帧都要检查 LUT。比较只是一次枚举读取，仅当真正切换主题时
-        // 才会发生 4 KiB 上传。
+        // 2. 将运行时物理视口对齐到交换链已提交范围，并在 `runtime.frame` 之前同步最大化状态与帧时钟。
+        let (chain_w, chain_h) = self
+            .swapchain
+            .as_ref()
+            .map_or((width, height), Swapchain::extent);
+        self.runtime.sync_physical_viewport(
+            Vec2::new(chain_w.max(1) as f32, chain_h.max(1) as f32),
+            os_scale,
+        );
+        self.runtime.context_mut().window_maximized = window.is_maximized();
+        let _ = self.runtime.tick(dt);
+        let report = self.runtime.frame(0.0);
+
+        // `reduce` 可能改动 `ctx.theme`，每帧检查 4 KiB LUT 是否需要上传。
         self.sync_theme(window);
 
         if let (Some(renderer), Some(atlases)) = (&mut self.renderer, &self.atlases) {
-            // 整帧合并为一批：一个暂存缓冲、一个命令缓冲、一次队列等待
-            // 即可上传全部字形。逐个上传会为每个字符提交一次命令缓冲，
-            // 并同样频繁地阻塞队列。
             if !report.atlas_uploads.is_empty() {
                 if let Err(error) = atlases.upload_batch(&renderer.gpu, &report.atlas_uploads) {
                     eprintln!("[unbound-app] Could not upload atlas glyphs: {error:?}");
                 }
             }
 
-            if let (Some(swapchain), Some(surface)) = (&mut self.swapchain, &self.surface) {
-                let size = window.inner_size();
-                let (width, height) = (size.width.max(1), size.height.max(1));
-                if self.swapchain_dirty || self.committed_request != (width, height) {
-                    self.committed_request = (width, height);
-                    let present = PresentConfig::from_capabilities(
-                        &renderer.gpu.enabled_device_extensions,
-                        false,
-                    );
-                    if let Err(error) = swapchain.recreate(
-                        &renderer.gpu,
-                        surface,
-                        self.committed_request.0,
-                        self.committed_request.1,
-                        &present,
-                    ) {
-                        eprintln!("[unbound-app] Could not recreate swapchain: {error:?}");
-                    } else {
-                        // 窗口路径借用交换链图像作为颜色附件，因此只有
-                        // 深度缓冲需要跟随驱动实际返回的尺寸。
-                        let (actual_w, actual_h) = swapchain.extent();
-                        if let Err(error) = renderer.ensure_depth_size(actual_w, actual_h) {
-                            eprintln!("[unbound-app] Could not resize depth buffer: {error:?}");
-                        }
-                    }
-                    self.swapchain_dirty = false;
-                }
-
-                // acquire 信号量池按在途帧数分槽。只有等待该信号量的帧退役后
-                // 槽位才可复用，因此必须在下一次 acquire *之前*等待 fence。
-                // `render()` 也会等待，但那时信号量已被再次置位——
-                // 正是 `VUID-vkAcquireNextImageKHR-semaphore-01779`。
+            if let Some(swapchain) = &mut self.swapchain {
                 if let Err(error) = renderer.wait_for_previous_frame() {
                     eprintln!("[unbound-app] Waiting for the previous frame failed: {error:?}");
+                    self.frame_dropped = true;
                     return Flow::Continue;
                 }
 
@@ -714,27 +790,34 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                         if suboptimal {
                             self.swapchain_dirty = true;
                         }
-                        if self.scene_generation == 0 || report.diff.bumps_generation() {
+                        if self.scene_generation == 0
+                            || report.diff.bumps_generation()
+                            || self.frame_dropped
+                        {
                             self.scene_generation = self.scene_generation.wrapping_add(1).max(1);
                         }
-                        let ui_scale = self.runtime.context().ui_scale.max(0.5);
-                        let expected_vp =
-                            Vec2::new(width as f32 / ui_scale, height as f32 / ui_scale);
-                        if (self.runtime.context().viewport - expected_vp).length() > 0.5 {
-                            self.runtime.resize(expected_vp);
-                        }
-                        let camera = Camera::ui((expected_vp.x, expected_vp.y), ui_scale);
+                        let dirty_ranges = if self.frame_dropped {
+                            &[][..]
+                        } else {
+                            report.diff.ranges()
+                        };
+                        let (actual_w, actual_h) = swapchain.extent();
+                        let effective_scale = self.runtime.context().effective_scale();
+                        // `Camera::ui` 接收物理像素视口并在内部除以 `dpi_scale` 得到逻辑中心点；
+                        // 此处必须传入交换链物理尺寸 `(actual_w, actual_h)`，严禁传入已除以缩放比的逻辑尺寸。
+                        let camera =
+                            Camera::ui((actual_w as f32, actual_h as f32), effective_scale);
                         let backdrops: Vec<unbound_gpu::frame::BackdropRequest> = report
                             .backdrops
                             .iter()
                             .map(|b| unbound_gpu::frame::BackdropRequest {
                                 rect: [
-                                    b.rect.origin.x * ui_scale,
-                                    b.rect.origin.y * ui_scale,
-                                    b.rect.size.x * ui_scale,
-                                    b.rect.size.y * ui_scale,
+                                    b.rect.origin.x * effective_scale,
+                                    b.rect.origin.y * effective_scale,
+                                    b.rect.size.x * effective_scale,
+                                    b.rect.size.y * effective_scale,
                                 ],
-                                radius: b.blur * ui_scale,
+                                radius: b.blur * effective_scale,
                                 corner_radii: [0.0; 4],
                                 layer_key_prefix: (PassLayer::Overlay as u64) << 56,
                             })
@@ -748,20 +831,23 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                             generation: self.scene_generation,
                             camera,
                             key_prefix: (PassLayer::Ui as u64) << 56,
-                            dirty_ranges: report.diff.ranges(),
+                            dirty_ranges,
                             aux_changed: report.aux_changed,
                             backdrops: &backdrops,
                         };
 
                         if let Err(ref err) =
-                            renderer.render_into_swapchain(&scene, &image, width, height)
+                            renderer.render_into_swapchain(&scene, &image, actual_w, actual_h)
                         {
+                            self.frame_dropped = true;
                             if is_device_lost(err) {
                                 eprintln!("[unbound-app] GPU device lost during render. Triggering recovery...");
                                 self.recover_gpu(window);
                                 return Flow::Continue;
                             }
                             eprintln!("[unbound-app] render failed: {err:?}");
+                        } else {
+                            self.frame_dropped = false;
                         }
 
                         match swapchain.present_outcome(
@@ -772,6 +858,9 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                             Ok(unbound_gpu::surface::PresentOutcome::Optimal) => {}
                             Ok(unbound_gpu::surface::PresentOutcome::Recreate) => {
                                 self.swapchain_dirty = true;
+                                state.resize.mark_out_of_date(unbound_platform::Extent::new(
+                                    actual_w, actual_h,
+                                ));
                             }
                             Err(ref err) => {
                                 if is_device_lost(err) {
@@ -782,26 +871,33 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                                 self.swapchain_dirty = true;
                             }
                         }
+                        state.pacer.on_present(Instant::now());
                     }
                     Ok(AcquireOutcome::OutOfDate) => {
                         self.swapchain_dirty = true;
+                        self.frame_dropped = true;
+                        state
+                            .resize
+                            .mark_out_of_date(unbound_platform::Extent::new(width, height));
                     }
                     Err(ref err) if is_device_lost(err) => {
+                        self.frame_dropped = true;
                         eprintln!(
                             "[unbound-app] GPU device lost during acquire. Triggering recovery..."
                         );
                         self.recover_gpu(window);
                         return Flow::Continue;
                     }
-                    _ => {}
+                    _ => {
+                        self.frame_dropped = true;
+                    }
                 }
             }
         }
 
         if let Some(metrics) = &self.frame_metrics {
-            let scale = window.scale_factor().max(0.5) as f32;
-            let ui_scale = self.runtime.context().ui_scale.max(0.5);
-            metrics.set_scale_factor(scale);
+            let effective_scale = self.runtime.context().effective_scale();
+            metrics.set_scale_factor(os_scale);
             // 保持 FrameHitMetrics 的 title_bar_height 为 0：标题栏拖拽与双击最大化
             // 全部由 UI 层冒泡兜底产出 `WindowCommand`，Win32 不再争夺标题栏内部交互。
             metrics.set_title_bar_height(0.0);
@@ -816,14 +912,19 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             let max_rect = self
                 .runtime
                 .widget_rect(max_id)
-                .map(|rect| FrameHitMetrics::ui_rect_to_frame_logical(rect, ui_scale, scale))
+                .map(|rect| {
+                    FrameHitMetrics::ui_rect_to_frame_logical(rect, effective_scale, os_scale)
+                })
                 .unwrap_or(Rect::ZERO);
             metrics.set_maximize_button_rect(max_rect);
             metrics.set_minimize_button_rect(Rect::ZERO);
             metrics.set_close_button_rect(Rect::ZERO);
         }
 
-        if report.dirty.needs_rebuild() {
+        let keep_animating =
+            self.runtime.context().scale_osd_remaining > 0.0 || report.dirty.needs_rebuild();
+        state.pacer.set_animating(keep_animating);
+        if keep_animating {
             window.request_redraw();
         }
 

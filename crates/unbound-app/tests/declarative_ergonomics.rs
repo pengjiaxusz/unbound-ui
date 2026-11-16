@@ -536,3 +536,108 @@ fn progress_syncs_state_across_frames_and_context_exposes_ui_scale() {
         "ProgressDesc must sync external progress updates into WidgetStateStore"
     );
 }
+
+#[test]
+fn ui_scale_and_os_scale_sync_viewport_immediately_and_keep_titlebar_buttons_in_bounds() {
+    struct ScaleAndTitleBarApp;
+    impl Application for ScaleAndTitleBarApp {
+        type State = ();
+        fn init(&mut self, _ctx: &mut AppContext) -> Self::State {}
+        fn reduce(
+            &mut self,
+            _state: &mut Self::State,
+            event: AppEvent,
+            ctx: &mut AppContext,
+        ) -> EventOutcome {
+            if let AppEvent::Key {
+                key: AppKey::Character('='),
+                pressed: true,
+                modifiers,
+            } = event
+            {
+                if modifiers.ctrl {
+                    ctx.step_ui_scale(1);
+                    return EventOutcome::stopping(DirtyFlags::ALL);
+                }
+            }
+            EventOutcome::new(DirtyFlags::NONE)
+        }
+        fn view(&mut self, _state: &Self::State, view: &mut ViewBuilder) {
+            view.title_bar_custom(
+                unbound_widgets::TitleBarDesc::new("Scale Test").height(46.0),
+                unbound_app::TitleBarSlots::default()
+                    .left(|left| {
+                        left.badge(
+                            ui_key!("left_badge"),
+                            BadgeDesc::label("Session Online").primary(),
+                        );
+                    })
+                    .center(|center| {
+                        center.text_input(
+                            ui_key!("center_search"),
+                            unbound_widgets::TextInputDesc::text("")
+                                .placeholder("Search shaders, textures, pipelines..."),
+                        );
+                    })
+                    .actions(|actions| {
+                        actions.button(
+                            ui_key!("act_btn_1"),
+                            ButtonDesc::label("Tasks (3)").size(ButtonSize::Sm),
+                        );
+                        actions.button(
+                            ui_key!("act_btn_2"),
+                            ButtonDesc::label("Floating").size(ButtonSize::Sm),
+                        );
+                        actions.button(
+                            ui_key!("act_btn_3"),
+                            ButtonDesc::label("Theme").size(ButtonSize::Sm),
+                        );
+                    }),
+            );
+        }
+    }
+
+    let mut rt = AppRuntime::new(ScaleAndTitleBarApp, Vec2::new(1440.0, 900.0));
+    let _ = rt.frame(0.0);
+    assert_eq!(rt.context().viewport, Vec2::new(1440.0, 900.0));
+
+    // Ctrl + '=' in reduce must immediately recompute logical viewport in the SAME frame
+    let mut ctrl = Modifiers::default();
+    ctrl.ctrl = true;
+    let _ = rt.key(AppKey::Character('='), true, ctrl);
+    let _ = rt.frame(0.016);
+    assert!((rt.context().ui_scale - 1.125).abs() < 1e-4);
+    assert!(
+        (rt.context().viewport.x - 1280.0).abs() < 0.5
+            && (rt.context().viewport.y - 800.0).abs() < 0.5,
+        "viewport must update in the same frame after step_ui_scale: {:?}",
+        rt.context().viewport
+    );
+
+    // Verify 200% zoom (ui_scale = 2.0) keeps caption buttons inside logical viewport [0, 720]
+    rt.context_mut().set_ui_scale(2.0);
+    let _ = rt.frame(0.016);
+    assert!((rt.context().viewport.x - 720.0).abs() < 0.5);
+    let close_rect = rt
+        .widget_rect(unbound_widgets::TITLE_BAR_CLOSE_ID)
+        .expect("close button mounted");
+    let min_rect = rt
+        .widget_rect(unbound_widgets::TITLE_BAR_MINIMIZE_ID)
+        .expect("minimize button mounted");
+    assert!(
+        close_rect.max().x <= rt.context().viewport.x + 0.5,
+        "close button must not overflow right edge at 200% zoom: close={close_rect:?}, viewport={:?}",
+        rt.context().viewport
+    );
+    assert!(
+        min_rect.origin.x >= 68.0,
+        "caption buttons must leave room for left slot at 200% zoom: min={min_rect:?}"
+    );
+
+    // Verify OS DPI + UI scale combined via sync_physical_viewport
+    let dirty = rt.sync_physical_viewport(Vec2::new(1920.0, 1080.0), 1.5);
+    assert!(dirty.needs_rebuild());
+    let vp = rt.context().viewport;
+    assert!((rt.context().effective_scale() - 3.0).abs() < 1e-4);
+    assert!((vp.x - 640.0).abs() < 0.5 && (vp.y - 360.0).abs() < 0.5);
+}

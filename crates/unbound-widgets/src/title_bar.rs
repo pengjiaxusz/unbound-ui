@@ -484,6 +484,7 @@ mod tests {
             engine,
             cache,
             atlas_clock: 0,
+            raster_scale: 1.0,
         }
     }
 

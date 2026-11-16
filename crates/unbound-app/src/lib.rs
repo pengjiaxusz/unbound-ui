@@ -574,8 +574,12 @@ pub struct AppContext {
     pub window_maximized: bool,
     /// 当前原生窗口是否处于激活聚焦状态（由窗口运行器自动同步）。
     pub window_focused: bool,
-    /// 全局 7 档 UI 逻辑缩放因子（默认 `1.0`，范围 `0.75..=2.0`）。
+    /// 操作系统物理显示 DPI 缩放比（第 1 层缩放，默认 `1.0`）。
+    pub os_scale: f32,
+    /// 全局 7 档 UI 逻辑缩放因子（第 2 层缩放，默认 `1.0`，范围 `0.75..=2.0`）。
     pub ui_scale: f32,
+    /// 当前渲染表面物理像素尺寸基准（用于缩放档位或 DPI 变更时同步推导逻辑 `viewport`）。
+    physical_viewport: Vec2,
     /// 缩放 OSD 浮层剩余显示秒数（`> 0.0` 时在右上角渲染当前缩放百分比胶囊）。
     pub scale_osd_remaining: f32,
     /// 应用内建的国际化资源包与当前语言区域（默认 `en-US`）。
@@ -645,7 +649,9 @@ impl AppContext {
             accent: unbound_theme::AccentBrand::Blue,
             window_maximized: false,
             window_focused: true,
+            os_scale: 1.0,
             ui_scale: 1.0,
+            physical_viewport: viewport,
             scale_osd_remaining: 0.0,
             i18n: Rc::new(RefCell::new(I18nBundle::with_locale(Locale::EnUs))),
             focused: None,
@@ -949,19 +955,71 @@ impl AppContext {
         })
     }
 
-    /// 设置全局 UI 缩放比例（自动吸附到 `CANONICAL_SCALE_STEPS` 并激活 1.5 秒缩放 OSD 提示）。
+    /// 当前生效的物理/逻辑总缩放比例（`os_scale * ui_scale`，钳制在 `[0.5, 4.0]`）。
+    ///
+    /// 对齐 `unbound_theme::ZoomLayers::ui_scale` 与 `Showcase::effective_scale`：
+    /// 布局在逻辑单位（`physical_viewport / effective_scale`）下求解，
+    /// 字形光栅化与 GPU 相机再按 `effective_scale` 映射回物理像素。
+    #[must_use]
+    pub fn effective_scale(&self) -> f32 {
+        let os = if self.os_scale.is_finite() && self.os_scale > 0.0 {
+            self.os_scale
+        } else {
+            1.0
+        };
+        let ui = if self.ui_scale.is_finite() && self.ui_scale > 0.0 {
+            self.ui_scale
+        } else {
+            1.0
+        };
+        (os * ui).clamp(0.5, 4.0)
+    }
+
+    /// 当前渲染表面的物理像素尺寸基准。
+    #[must_use]
+    pub const fn physical_viewport(&self) -> Vec2 {
+        self.physical_viewport
+    }
+
+    /// 根据当前物理像素视口与有效缩放比（`os_scale * ui_scale`）立即重算逻辑视口 `self.viewport`。
+    pub fn sync_viewport_from_physical(&mut self) -> Vec2 {
+        let scale = self.effective_scale();
+        if self.physical_viewport.x > 0.0 && self.physical_viewport.y > 0.0 {
+            self.viewport = Vec2::new(
+                (self.physical_viewport.x / scale).max(1.0),
+                (self.physical_viewport.y / scale).max(1.0),
+            );
+        }
+        self.viewport
+    }
+
+    /// 更新操作系统物理显示 DPI 缩放比（`os_scale`）并同步重算逻辑视口。
+    pub fn set_os_scale(&mut self, os_scale: f32) -> f32 {
+        let valid = if os_scale.is_finite() && os_scale > 0.0 {
+            os_scale.clamp(0.5, 4.0)
+        } else {
+            1.0
+        };
+        self.os_scale = valid;
+        self.sync_viewport_from_physical();
+        valid
+    }
+
+    /// 设置全局 UI 缩放比例（自动吸附到 `CANONICAL_SCALE_STEPS`、同步逻辑视口并激活 1.5 秒缩放 OSD 提示）。
     pub fn set_ui_scale(&mut self, scale: f32) -> f32 {
         let snapped = unbound_theme::presets::snap_ui_scale(scale);
         self.ui_scale = snapped;
         self.scale_osd_remaining = 1.5;
+        self.sync_viewport_from_physical();
         snapped
     }
 
-    /// 按档位步进全局 UI 缩放比例（`delta_steps = 1` 放大一档，`-1` 缩小一档）。
+    /// 按档位步进全局 UI 缩放比例（`delta_steps = 1` 放大一档，`-1` 缩小一档，同步重算逻辑视口）。
     pub fn step_ui_scale(&mut self, delta_steps: i32) -> f32 {
         let next = unbound_theme::presets::step_ui_scale(self.ui_scale, delta_steps);
         self.ui_scale = next;
         self.scale_osd_remaining = 1.5;
+        self.sync_viewport_from_physical();
         next
     }
 
@@ -1043,8 +1101,12 @@ pub struct ViewContext {
     pub locale: Locale,
     /// 当前激活区域的阅读布局方向（LTR / RTL）。
     pub direction: LayoutDirection,
+    /// 当前操作系统 DPI 缩放比例。
+    pub os_scale: f32,
     /// 当前全局 UI 缩放比例（`0.75..=2.0`）。
     pub ui_scale: f32,
+    /// 当前生效的物理/逻辑总缩放比例（`os_scale * ui_scale`）。
+    pub effective_scale: f32,
     /// 缩放 OSD 悬浮提示剩余可见时间（秒）。
     pub scale_osd_remaining: f32,
 }
@@ -1329,8 +1391,8 @@ impl<'a> ViewBuilder<'a> {
                 .gap(8.0)
                 .flags(unbound_abi::NodeFlags::CLIP)
                 .flex_grow(1.0);
-            // `min-width: auto` 会让左区无法压缩到内容宽度以下，因此显式归零。
-            left_desc.min_width = Dim::px(0.0);
+            // 保留左侧最小安全宽度（容纳导航折叠按钮与品牌徽标），超出部分由 `CLIP` 裁剪。
+            left_desc.min_width = Dim::px(68.0);
             bar.container(mix_key(root_key, 2), left_desc, |left| {
                 if desc.show_title && !desc.title.is_empty() {
                     let mut style = TextStyle::sized(13.0);
@@ -1347,22 +1409,41 @@ impl<'a> ViewBuilder<'a> {
                 }
             });
             if let Some(build_center) = slots.center {
-                bar.row(mix_key(root_key, 4), build_center);
+                let mut center_desc = RawNodeDesc::container()
+                    .row()
+                    .align(unbound_abi::Align::Center)
+                    .gap(8.0)
+                    .flags(unbound_abi::NodeFlags::CLIP);
+                center_desc.min_width = Dim::px(0.0);
+                bar.container(mix_key(root_key, 4), center_desc, build_center);
             }
-            let right_desc = RawNodeDesc::container()
+            let caption_count = u32::from(desc.show_minimize)
+                + u32::from(desc.show_maximize)
+                + u32::from(desc.show_close);
+            let caption_min_w = caption_count as f32 * unbound_widgets::TITLE_BAR_CAPTION_WIDTH;
+            let mut right_desc = RawNodeDesc::container()
                 .row()
                 .align(unbound_abi::Align::Center)
                 .justify(unbound_abi::Justify::FlexEnd)
                 .gap(8.0)
                 .flex_grow(1.0);
+            right_desc.min_width = Dim::px(caption_min_w);
             bar.container(mix_key(root_key, 5), right_desc, |right| {
                 if let Some(build_actions) = slots.actions {
-                    right.row(mix_key(root_key, 6), build_actions);
+                    let mut actions_desc = RawNodeDesc::container()
+                        .row()
+                        .align(unbound_abi::Align::Center)
+                        .gap(8.0)
+                        .flags(unbound_abi::NodeFlags::CLIP);
+                    actions_desc.min_width = Dim::px(0.0);
+                    right.container(mix_key(root_key, 6), actions_desc, build_actions);
                 }
-                let caption_row_desc = RawNodeDesc::container()
+                let mut caption_row_desc = RawNodeDesc::container()
                     .row()
                     .align(unbound_abi::Align::Center)
                     .gap(0.0);
+                // 窗口控制按钮（最小化/最大化/关闭）严禁被 Flex 压缩或挤出视口右边界。
+                caption_row_desc.flex_shrink = 0.0;
                 right.container(mix_key(root_key, 7), caption_row_desc, |btns| {
                     if desc.show_minimize {
                         btns.add_with_layout(
@@ -2513,6 +2594,8 @@ pub struct AppRuntime<A: Application> {
     title_bar_bindings: FxHashMap<u64, TitleBarBinding>,
     /// 冒泡终点兜底产出的待执行窗口命令队列。
     window_commands: Vec<WindowCommand>,
+    /// 上一帧生效的总缩放比（`os_scale * ui_scale`），用于检测 `reduce` 内缩放变更并同帧重排。
+    last_effective_scale: f32,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -2570,6 +2653,7 @@ impl<A: Application> AppRuntime<A> {
             last_pointer_down_path: Vec::new(),
             title_bar_bindings: FxHashMap::default(),
             window_commands: Vec::new(),
+            last_effective_scale: 1.0,
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -3168,15 +3252,49 @@ impl<A: Application> AppRuntime<A> {
         self.ctx.set_clipboard(provider);
     }
 
-    /// 处理视口尺寸调整。
+    /// 处理逻辑视口尺寸调整（无头测试或直接指定逻辑尺寸时调用；同步更新物理视口基准）。
     pub fn resize(&mut self, size: Vec2) -> DirtyFlags {
+        let size = Vec2::new(size.x.max(1.0), size.y.max(1.0));
+        let scale = self.ctx.effective_scale();
         self.ctx.viewport = size;
+        self.ctx.physical_viewport = Vec2::new(size.x * scale, size.y * scale);
+        self.last_effective_scale = scale;
         self.force_rebuild = true;
         let flags = self
             .dispatch(AppEvent::Resize { size })
             .merge(DirtyFlags::LAYOUT);
         self.mark(flags);
         flags
+    }
+
+    /// 按物理像素视口尺寸与系统 DPI 缩放比同步更新运行时视口（窗口宿主专用）。
+    ///
+    /// 逻辑视口由 `physical_size / (os_scale * ui_scale)` 推导；当逻辑视口或有效缩放比
+    /// 发生变化时立即触发 `AppEvent::Resize` 并标记完整重排，消除缩放与调整窗口大小时的帧间延迟。
+    pub fn sync_physical_viewport(&mut self, physical_size: Vec2, os_scale: f32) -> DirtyFlags {
+        let phys = Vec2::new(physical_size.x.max(1.0), physical_size.y.max(1.0));
+        let valid_os = if os_scale.is_finite() && os_scale > 0.0 {
+            os_scale.clamp(0.5, 4.0)
+        } else {
+            1.0
+        };
+        let prev_vp = self.ctx.viewport;
+        let prev_scale = self.ctx.effective_scale();
+        self.ctx.physical_viewport = phys;
+        self.ctx.os_scale = valid_os;
+        let next_vp = self.ctx.sync_viewport_from_physical();
+        let next_scale = self.ctx.effective_scale();
+        if (next_vp - prev_vp).length() > 0.01 || (next_scale - prev_scale).abs() > 1e-4 {
+            self.last_effective_scale = next_scale;
+            self.force_rebuild = true;
+            let flags = self
+                .dispatch(AppEvent::Resize { size: next_vp })
+                .merge(DirtyFlags::ALL);
+            self.mark(flags);
+            flags
+        } else {
+            DirtyFlags::NONE
+        }
     }
 
     /// 切换运行时语言区域并派发 [`AppEvent::LocaleChanged`]，触发完整布局与文本重绘。
@@ -3218,7 +3336,8 @@ impl<A: Application> AppRuntime<A> {
         if self.ctx.scale_osd_remaining > 0.0 {
             self.ctx.scale_osd_remaining = (self.ctx.scale_osd_remaining - step).max(0.0);
             if self.ctx.scale_osd_remaining == 0.0 {
-                self.mark(DirtyFlags::PAINT);
+                self.force_rebuild = true;
+                self.mark(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
             }
         }
     }
@@ -3256,6 +3375,16 @@ impl<A: Application> AppRuntime<A> {
         // 使仅因它们而唤醒的帧仍会执行重建。
         self.poll_async();
         self.poll_timers();
+        // 若事件归约、快捷键、设置页按钮或异步命令修改了 `ui_scale` / `os_scale`，
+        // 在本帧视图构建与布局求解前立即同步逻辑视口并强制全量重排。
+        let current_scale = self.ctx.effective_scale();
+        if (current_scale - self.last_effective_scale).abs() > 1e-4 {
+            self.last_effective_scale = current_scale;
+            let resized_vp = self.ctx.sync_viewport_from_physical();
+            let _ = self.dispatch(AppEvent::Resize { size: resized_vp });
+            self.force_rebuild = true;
+            self.dirty |= DirtyFlags::ALL;
+        }
         // 已解码的资产以与归约相同的方式触发失效。
         let asset_dirty = self.asset_hub.poll(&mut self.text_engine);
         self.dirty = self.dirty.merge(asset_dirty);
@@ -3306,7 +3435,9 @@ impl<A: Application> AppRuntime<A> {
             window_focused: self.ctx.window_focused,
             locale: self.ctx.i18n.borrow().active_locale_enum(),
             direction: self.ctx.i18n.borrow().direction(),
+            os_scale: self.ctx.os_scale,
             ui_scale: self.ctx.ui_scale,
+            effective_scale: self.ctx.effective_scale(),
             scale_osd_remaining: self.ctx.scale_osd_remaining,
         };
         let mut focus_groups = Vec::new();
@@ -3378,18 +3509,25 @@ impl<A: Application> AppRuntime<A> {
                 self.collector.payloads.extend(scene.payloads);
                 let panel_w = inspector::PANEL_WIDTH.min(self.ctx.viewport.x * 0.45);
                 let panel_x = self.ctx.viewport.x - panel_w + 12.0;
-                let style = TextStyle::sized(11.0);
+                let scale = self.ctx.effective_scale();
+                let style = TextStyle::sized(11.0 * scale);
                 for (index, line) in scene.lines.iter().enumerate().take(16) {
                     let shaped = self.text_engine.shape(line, &style);
-                    let origin = Vec2::new(panel_x, 16.0 + index as f32 * 18.0);
-                    let quads = self.glyph_cache.quads_for(
+                    let origin = Vec2::new(panel_x * scale, (16.0 + index as f32 * 18.0) * scale);
+                    let mut quads = self.glyph_cache.quads_for(
                         &mut self.text_engine,
                         &shaped,
                         origin,
                         400,
                         false,
                     );
-                    for quad in quads {
+                    for quad in &mut quads {
+                        if (scale - 1.0).abs() > 1e-6 {
+                            quad.rect.origin.x /= scale;
+                            quad.rect.origin.y /= scale;
+                            quad.rect.size.x /= scale;
+                            quad.rect.size.y /= scale;
+                        }
                         let payload_idx = self.collector.payloads.len() as u32;
                         self.collector.payloads.push(GpuPayload {
                             p0: [quad.uv[0], quad.uv[1]],
@@ -3558,12 +3696,16 @@ impl<A: Application> AppRuntime<A> {
             return;
         }
 
+        let raster_scale = self.ctx.effective_scale();
+        self.glyph_cache.begin_frame(self.frame_count);
+
         // 第 1 遍：使用 TextCtx 预测量控件
         {
             let mut text_ctx = unbound_widgets::TextCtx {
                 engine: &mut self.text_engine,
                 cache: &mut self.glyph_cache,
                 atlas_clock: self.frame_count,
+                raster_scale,
             };
             for entry in &self.pending {
                 let intrinsic = match &entry.spec {
@@ -3597,10 +3739,11 @@ impl<A: Application> AppRuntime<A> {
                         if text.is_empty() {
                             Some(Vec2::new(0.0, (style.font_size * 1.35).ceil()))
                         } else {
-                            let shaped = text_ctx.engine.shape(text, style);
+                            let measured =
+                                text_ctx.measure_line(text, style.font_size, style.weight);
                             Some(Vec2::new(
-                                shaped.width.ceil() + 2.0,
-                                shaped.height.max(style.font_size * 1.35).ceil(),
+                                measured.x.ceil() + 2.0,
+                                measured.y.max(style.font_size * 1.35).ceil(),
                             ))
                         }
                     }
@@ -3688,6 +3831,7 @@ impl<A: Application> AppRuntime<A> {
                 engine: &mut self.text_engine,
                 cache: &mut self.glyph_cache,
                 atlas_clock: self.frame_count,
+                raster_scale,
             };
             let apply_z_base = |mut out: WidgetOutput, z_base: u16| -> WidgetOutput {
                 if i32::from(z_base) >= PORTAL_Z_BASE {

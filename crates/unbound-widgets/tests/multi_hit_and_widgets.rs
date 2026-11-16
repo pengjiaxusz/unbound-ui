@@ -333,6 +333,7 @@ fn autocomplete_shapes_suggestions_and_selects_items_and_generic_table_scrolls()
         engine: &mut engine,
         cache: &mut cache,
         atlas_clock: 1,
+        raster_scale: 1.0,
     };
 
     // 1. AutoComplete 展开时必须为候选列表生成字形，并支持方向键+回车选择与清空查询
