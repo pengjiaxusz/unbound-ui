@@ -544,193 +544,208 @@ pub fn badge_sized(
     rect
 }
 
-/// 外壳以几何方式绘制的图标词汇表。
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum Icon {
-    Menu,
-    Search,
-    Sun,
-    Moon,
-    Snap,
-    Chart,
-    Grid,
-    Layers,
-    ChevronDown,
-    ChevronRight,
-    Check,
-    Close,
-    Plus,
-    Play,
-    Undo,
-    Redo,
-    Dot,
-}
+pub use unbound_widgets::shell::{
+    emit_shell_icon_primitives, AppBrandBadgeDesc, FeatureCardDesc, HeroBackdropDesc,
+    IconButtonDesc, ShellIcon as Icon, SidebarItemDesc, SidebarSectionHeaderDesc,
+};
 
 /// 将图标居中绘制在 `rect` 中。
 pub fn icon(canvas: &mut Canvas<'_>, kind: Icon, rect: Rect, color: u16, background: u16) {
-    let c = rect.center();
-    match kind {
-        Icon::Dot => {
-            canvas.rect(
-                Rect::new(c.x - 2.0, c.y - 2.0, 4.0, 4.0),
-                2.0,
-                color,
-                0,
-                0.0,
-                0.0,
-            );
-        }
-        Icon::Menu => {
-            for i in 0..3 {
-                canvas.rect(
-                    Rect::new(c.x - 8.0, c.y - 6.0 + i as f32 * 5.0, 16.0, 2.0),
-                    1.0,
-                    color,
-                    0,
-                    0.0,
-                    0.0,
-                );
-            }
-        }
-        Icon::Search => {
-            canvas.stroke(Rect::new(c.x - 9.0, c.y - 9.0, 13.0, 13.0), 6.5, color, 2.0);
-            canvas.rect(
-                Rect::new(c.x + 3.0, c.y + 3.0, 6.0, 2.0),
-                1.0,
-                color,
-                0,
-                0.0,
-                0.0,
-            );
-        }
-        Icon::Sun => {
-            canvas.rect(
-                Rect::new(c.x - 6.0, c.y - 6.0, 12.0, 12.0),
-                6.0,
-                color,
-                0,
-                0.0,
-                0.0,
-            );
-            for (dx, dy, w, h) in [
-                (0.0, -10.0, 2.0, 4.0),
-                (0.0, 6.0, 2.0, 4.0),
-                (-10.0, 0.0, 4.0, 2.0),
-                (6.0, 0.0, 4.0, 2.0),
-            ] {
-                canvas.rect(Rect::new(c.x + dx, c.y + dy, w, h), 1.0, color, 0, 0.0, 0.0);
-            }
-        }
-        Icon::Moon => {
-            canvas.rect(
-                Rect::new(c.x - 8.0, c.y - 8.0, 16.0, 16.0),
-                8.0,
-                color,
-                0,
-                0.0,
-                0.0,
-            );
-            canvas.rect(
-                Rect::new(c.x - 2.0, c.y - 9.0, 11.0, 14.0),
-                7.0,
-                background,
-                0,
-                0.0,
-                0.0,
-            );
-        }
-        Icon::Snap => {
-            for row in 0..3 {
-                for col in 0..3 {
-                    canvas.rect(
-                        Rect::new(
-                            c.x - 8.0 + col as f32 * 6.0,
-                            c.y - 8.0 + row as f32 * 6.0,
-                            3.0,
-                            3.0,
-                        ),
-                        1.0,
-                        color,
-                        0,
-                        0.0,
-                        0.0,
-                    );
-                }
-            }
-        }
-        Icon::Chart => {
-            for (i, height) in [6.0f32, 12.0, 9.0].iter().enumerate() {
-                canvas.rect(
-                    Rect::new(c.x - 8.0 + i as f32 * 6.0, c.y + 6.0 - height, 4.0, *height),
-                    1.5,
-                    color,
-                    0,
-                    0.0,
-                    0.0,
-                );
-            }
-        }
-        Icon::Grid => {
-            for row in 0..2 {
-                for col in 0..2 {
-                    canvas.rect(
-                        Rect::new(
-                            c.x - 8.0 + col as f32 * 9.0,
-                            c.y - 8.0 + row as f32 * 9.0,
-                            7.0,
-                            7.0,
-                        ),
-                        2.0,
-                        color,
-                        0,
-                        0.0,
-                        0.0,
-                    );
-                }
-            }
-        }
-        Icon::Layers => {
-            for i in 0..3 {
-                canvas.rect(
-                    Rect::new(
-                        c.x - 8.0 + i as f32 * 2.0,
-                        c.y - 6.0 + i as f32 * 5.0,
-                        12.0,
-                        4.0,
-                    ),
-                    2.0,
-                    color,
-                    0,
-                    0.0,
-                    0.0,
-                );
-            }
-        }
-        Icon::ChevronDown => {
-            canvas.text("⌄", rect, 16.0, color, AlignX::Center, AlignY::Center);
-        }
-        Icon::ChevronRight => {
-            canvas.text("›", rect, 16.0, color, AlignX::Center, AlignY::Center);
-        }
-        Icon::Check => {
-            canvas.text("✓", rect, 14.0, color, AlignX::Center, AlignY::Center);
-        }
-        Icon::Close => {
-            canvas.text("×", rect, 16.0, color, AlignX::Center, AlignY::Center);
-        }
-        Icon::Plus => {
-            canvas.text("+", rect, 16.0, color, AlignX::Center, AlignY::Center);
-        }
-        Icon::Play => {
-            canvas.text("▶", rect, 12.0, color, AlignX::Center, AlignY::Center);
-        }
-        Icon::Undo => {
-            canvas.text("↶", rect, 17.0, color, AlignX::Center, AlignY::Center);
-        }
-        Icon::Redo => {
-            canvas.text("↷", rect, 17.0, color, AlignX::Center, AlignY::Center);
-        }
-    }
+    let mut primitives = Vec::new();
+    let mut payloads = Vec::new();
+    emit_shell_icon_primitives(
+        kind,
+        rect,
+        Token::new(color),
+        Token::new(background),
+        canvas.z(),
+        &mut primitives,
+        &mut payloads,
+    );
+    canvas.control_output(
+        0,
+        &unbound_widgets::WidgetOutput {
+            primitives,
+            payloads,
+            ..Default::default()
+        },
+    );
+}
+
+/// 应用品牌徽标（基于 [`AppBrandBadgeDesc`] 组件描述符）。
+pub fn brand_badge(canvas: &mut Canvas<'_>, rect: Rect, letter: &str) {
+    let palette = *canvas.palette;
+    let desc = AppBrandBadgeDesc::new(letter).size(rect.size.x).radius(8.0);
+    canvas.rect(rect, desc.radius, palette.primary, 0, 0.0, 4.0);
+    canvas.text(
+        &desc.symbol,
+        rect,
+        15.0,
+        palette.on_primary,
+        AlignX::Center,
+        AlignY::Center,
+    );
+}
+
+/// 侧边栏分组大写小标题（基于 [`SidebarSectionHeaderDesc`] 组件描述符）。
+pub fn sidebar_section_header(canvas: &mut Canvas<'_>, rect: Rect, label: &str, active: bool) {
+    let palette = *canvas.palette;
+    let desc = SidebarSectionHeaderDesc::new(label).active(active);
+    let upper = desc.title.to_uppercase();
+    canvas.text(
+        &upper,
+        rect,
+        9.5,
+        if desc.active {
+            palette.primary
+        } else {
+            palette.nav_text_muted
+        },
+        AlignX::Start,
+        AlignY::Center,
+    );
+}
+
+/// 侧边栏胶囊导航项（基于 [`SidebarItemDesc`] 组件描述符，保持恒定图元跨度）。
+pub fn sidebar_item(
+    canvas: &mut Canvas<'_>,
+    node: u64,
+    rect: Rect,
+    label: &str,
+    kind: Icon,
+    selected: bool,
+) {
+    let palette = *canvas.palette;
+    let start = canvas.span_start();
+    let hover = canvas.visual(node, false);
+    let desc = SidebarItemDesc::new(label, kind)
+        .selected(selected)
+        .with_rect(rect);
+    let background = if desc.selected {
+        palette.nav_selected
+    } else if hover.is_hovered() {
+        palette.nav_hover
+    } else {
+        palette.nav_bg
+    };
+    canvas.rect(desc.rect, desc.radius, background, 0, 0.0, 0.0);
+    canvas.rect_faded(
+        desc.indicator_rect(),
+        1.5,
+        palette.primary,
+        if desc.selected { 1.0 } else { 0.0 },
+    );
+    icon(
+        canvas,
+        desc.icon,
+        desc.icon_rect(),
+        if desc.selected {
+            palette.primary
+        } else {
+            palette.nav_text_muted
+        },
+        palette.nav_bg,
+    );
+    canvas.text(
+        &desc.label,
+        desc.label_rect(0.0),
+        12.0,
+        if desc.selected {
+            palette.nav_text
+        } else {
+            palette.nav_text_muted
+        },
+        AlignX::Start,
+        AlignY::Center,
+    );
+    canvas.control(
+        node,
+        desc.rect,
+        Role::Link,
+        &desc.label,
+        CursorKind::Pointer,
+        false,
+        desc.selected,
+    );
+    canvas.record_span(node, start);
+}
+
+/// 展厅特性入口卡片（基于 [`FeatureCardDesc`] 组件描述符）。
+#[allow(clippy::too_many_arguments)]
+pub fn feature_card(
+    canvas: &mut Canvas<'_>,
+    node: u64,
+    cell: Rect,
+    kind: Icon,
+    title: &str,
+    subtitle: &str,
+    a11y_label: &str,
+    accent_index: usize,
+) {
+    let palette = *canvas.palette;
+    let desc = FeatureCardDesc::new(title, subtitle, kind).with_rect(cell);
+    let hover = canvas.visual(node, false);
+    canvas.rect(
+        desc.rect,
+        desc.radius,
+        if hover.is_hovered() {
+            palette.control_hover
+        } else {
+            palette.card_bg
+        },
+        palette.card_border,
+        1.0,
+        4.0,
+    );
+    let icon_box = desc.icon_box_rect();
+    canvas.rect(
+        icon_box,
+        9.0,
+        match accent_index {
+            0 => palette.primary_soft,
+            1 => palette.success_soft,
+            2 => palette.warning_soft,
+            _ => palette.secondary_soft,
+        },
+        0,
+        0.0,
+        0.0,
+    );
+    icon(
+        canvas,
+        desc.icon,
+        icon_box,
+        match accent_index {
+            0 => palette.primary,
+            1 => palette.success,
+            2 => palette.warning,
+            _ => palette.secondary,
+        },
+        palette.card_bg,
+    );
+    canvas.text(
+        &desc.title,
+        desc.title_rect(),
+        14.0,
+        palette.text,
+        AlignX::Start,
+        AlignY::Top,
+    );
+    canvas.text_wrapped(
+        &desc.subtitle,
+        desc.subtitle_rect(),
+        11.5,
+        palette.text_muted,
+    );
+    canvas.text(
+        "→",
+        desc.arrow_rect(),
+        15.0,
+        palette.primary,
+        AlignX::Center,
+        AlignY::Center,
+    );
+    let _ = a11y_label;
 }
 
 /// 可点击的图标按钮。

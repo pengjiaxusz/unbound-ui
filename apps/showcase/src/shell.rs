@@ -2341,15 +2341,7 @@ fn draw_top_bar(
     );
 
     let logo = Rect::new(52.0, 14.0, 28.0, 28.0);
-    canvas.rect(logo, 8.0, palette.primary, 0, 0.0, 4.0);
-    canvas.text(
-        "U",
-        logo,
-        15.0,
-        palette.on_primary,
-        AlignX::Center,
-        AlignY::Center,
-    );
+    widgets::brand_badge(canvas, logo, "U");
     // 右侧工具区最左边界：按 语言 -> 主题 -> 缩放 顺序回退，防止窄视口下标题或面包屑撞进控件。
     let right_bound = if layout.lang.size.x > 0.0 {
         layout.lang.origin.x
@@ -2782,17 +2774,11 @@ fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout)
             22.0,
         );
         if header_rect.max().y > tree.origin.y && header_rect.origin.y < tree.max().y {
-            canvas.text(
-                &category.localized_label(state.locale).to_uppercase(),
+            widgets::sidebar_section_header(
+                canvas,
                 header_rect,
-                9.5,
-                if active {
-                    palette.primary
-                } else {
-                    palette.nav_text_muted
-                },
-                AlignX::Start,
-                AlignY::Center,
+                category.localized_label(state.locale),
+                active,
             );
         }
         tree_y += 24.0;
@@ -2925,82 +2911,14 @@ fn draw_nav_scrollbar(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &Sh
 
 fn nav_item(
     canvas: &mut Canvas<'_>,
-    layout: &ShellLayout,
+    _layout: &ShellLayout,
     rect: Rect,
     label: &str,
     icon: Icon,
     selected: bool,
     target: Target,
 ) {
-    let palette = *canvas.palette;
-    let node = target::id(target);
-    let start = canvas.span_start();
-    let hover = canvas.visual(node, false);
-    // 无论处于何种状态，该行始终绘制两个图元——胶囊与选中指示条。
-    // 空闲时胶囊采用窗格自身颜色，未选中时指示条淡出，
-    // 因此悬停行只需重绘两个实例，而无需重新编号缓冲池。
-    //
-    let background = if selected {
-        palette.nav_selected
-    } else if hover.is_hovered() {
-        palette.nav_hover
-    } else {
-        palette.nav_bg
-    };
-    canvas.rect(rect, 8.0, background, 0, 0.0, 0.0);
-    // 选中指示条位于胶囊*内部*。紧贴窗口边缘时它看起来像渲染伪影，
-    // 而非该行的一部分。
-    //
-    canvas.rect_faded(
-        Rect::new(
-            rect.origin.x + 4.0,
-            rect.origin.y + (rect.size.y - 16.0) * 0.5,
-            3.0,
-            16.0,
-        ),
-        1.5,
-        palette.primary,
-        if selected { 1.0 } else { 0.0 },
-    );
-    widgets::icon(
-        canvas,
-        icon,
-        Rect::new(rect.origin.x + 14.0, rect.origin.y, 20.0, rect.size.y),
-        if selected {
-            palette.primary
-        } else {
-            palette.nav_text_muted
-        },
-        palette.nav_bg,
-    );
-    canvas.text(
-        label,
-        Rect::new(
-            rect.origin.x + 40.0,
-            rect.origin.y,
-            rect.size.x - 46.0,
-            rect.size.y,
-        ),
-        12.0,
-        if selected {
-            palette.nav_text
-        } else {
-            palette.nav_text_muted
-        },
-        AlignX::Start,
-        AlignY::Center,
-    );
-    let _ = layout;
-    canvas.control(
-        node,
-        rect,
-        Role::Link,
-        label,
-        CursorKind::Pointer,
-        false,
-        selected,
-    );
-    canvas.record_span(node, start);
+    widgets::sidebar_item(canvas, target::id(target), rect, label, icon, selected);
 }
 
 fn draw_collapsed_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
