@@ -27,16 +27,18 @@ fn thumb_t_interpolates_the_knob() {
     let on = desc().with_on(true);
     let halfway = desc().with_on(true).with_thumb_t(0.5);
 
-    assert_eq!(off.knob_rect().origin.x, 160.0);
-    assert_eq!(on.knob_rect().origin.x, 180.0);
-    assert_eq!(halfway.knob_rect().origin.x, 170.0);
+    // 轨道 40px 宽、旋钮 12px 直径、旋钮与轨道边缘各留 4px 内缩，
+    // 因此行程（travel）为 40 - 12 - 4 - 4 = 20px。
+    assert_eq!(off.knob_rect().origin.x, 164.0);
+    assert_eq!(on.knob_rect().origin.x, 184.0);
+    assert_eq!(halfway.knob_rect().origin.x, 174.0);
     assert_eq!(halfway.thumb_position(), 0.5);
 }
 
 #[test]
 fn thumb_t_is_clamped_to_the_track() {
-    assert_eq!(desc().with_thumb_t(-1.0).knob_rect().origin.x, 160.0);
-    assert_eq!(desc().with_thumb_t(9.0).knob_rect().origin.x, 180.0);
+    assert_eq!(desc().with_thumb_t(-1.0).knob_rect().origin.x, 164.0);
+    assert_eq!(desc().with_thumb_t(9.0).knob_rect().origin.x, 184.0);
 }
 
 #[test]
@@ -44,16 +46,17 @@ fn a_pressed_knob_stretches_into_a_capsule() {
     let off = desc();
     let idle = off.knob_rect_pressed(false);
     let pressed = off.knob_rect_pressed(true);
-    assert_eq!(idle.size.x, 16.0);
-    assert_eq!(pressed.size.x, 20.0);
+    // 旋钮直径 12px；按下时沿轨道方向再拉长 3px，变成胶囊。
+    assert_eq!(idle.size.x, 12.0);
+    assert_eq!(pressed.size.x, 15.0);
     assert_eq!(pressed.origin.x, idle.origin.x, "an off knob grows right");
-    assert_eq!(pressed.max().x, idle.max().x + 4.0);
+    assert_eq!(pressed.max().x, idle.max().x + 3.0);
 
     let on_idle = desc().with_on(true).knob_rect_pressed(false);
     let on_pressed = desc().with_on(true).knob_rect_pressed(true);
-    assert_eq!(on_pressed.size.x, 20.0);
+    assert_eq!(on_pressed.size.x, 15.0);
     assert_eq!(on_pressed.max().x, on_idle.max().x, "an on knob grows left");
-    assert_eq!(on_pressed.origin.x, on_idle.origin.x - 4.0);
+    assert_eq!(on_pressed.origin.x, on_idle.origin.x - 3.0);
 }
 
 #[test]
@@ -63,7 +66,7 @@ fn the_pressed_state_uses_the_squished_knob() {
         ..ControlState::default()
     };
     let output = switch::emit_switch(1, &desc(), pressed, &[], SwitchTokens::standard());
-    assert_eq!(output.primitives[1].size[0], 20.0);
+    assert_eq!(output.primitives[1].size[0], 15.0);
     let idle = switch::emit_switch(
         1,
         &desc(),
@@ -71,7 +74,7 @@ fn the_pressed_state_uses_the_squished_knob() {
         &[],
         SwitchTokens::standard(),
     );
-    assert_eq!(idle.primitives[1].size[0], 16.0);
+    assert_eq!(idle.primitives[1].size[0], 12.0);
 }
 
 #[test]
