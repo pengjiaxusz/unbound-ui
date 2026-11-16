@@ -94,21 +94,42 @@ pub struct TextCtx<'a> {
     pub cache: &'a mut unbound_text::GlyphCache,
     /// 当前帧 / 图集时钟。
     pub atlas_clock: u64,
+    /// 每逻辑像素对应的物理纹素光栅化缩放比（`os_scale * ui_scale`，默认 `1.0`）。
+    ///
+    /// 对齐 `Showcase::Labels` 与 `uber.vert` 的位图字形契约：
+    /// 文本按 `size * raster_scale` 与物理起点 `origin * raster_scale` 整形及光栅化，
+    /// 再将产出的 [`GlyphQuad`] 矩形除以 `raster_scale` 还原回逻辑坐标系，
+    /// 使 GPU 顶点着色器乘回 `scale` 后严格实现「1 图集纹素 = 1 物理屏幕像素」。
+    pub raster_scale: f32,
 }
 
 impl TextCtx<'_> {
-    /// 按 `size` 与 `weight` 测量单行文本。
+    /// 返回钳制在安全正数区间 `[0.5, 4.0]` 内的物理光栅化缩放因子。
+    #[must_use]
+    pub fn effective_raster_scale(&self) -> f32 {
+        if self.raster_scale.is_finite() && self.raster_scale > 0.0 {
+            self.raster_scale.clamp(0.5, 4.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// 按 `size` 与 `weight` 测量单行文本（返回逻辑像素尺寸）。
     pub fn measure_line(&mut self, text: &str, size: f32, weight: u16) -> Vec2 {
         if text.is_empty() {
             return Vec2::new(0.0, size * 1.35);
         }
-        let mut style = unbound_text::TextStyle::sized(size);
+        let scale = self.effective_raster_scale();
+        let mut style = unbound_text::TextStyle::sized(size * scale);
         style.weight = weight;
         let shaped = self.engine.shape(text, &style);
-        Vec2::new(shaped.width, shaped.height.max(size * 1.35))
+        Vec2::new(
+            shaped.width / scale,
+            (shaped.height / scale).max(size * 1.35),
+        )
     }
 
-    /// 在 `rect` 内对齐排版并光栅化单行文本。
+    /// 在 `rect` 内对齐排版并按物理缩放因子光栅化单行文本（返回逻辑像素坐标系的 [`GlyphQuad`]）。
     pub fn shape_line(
         &mut self,
         text: &str,
@@ -121,22 +142,38 @@ impl TextCtx<'_> {
         if text.is_empty() || rect.width() <= 0.0 || rect.height() <= 0.0 {
             return Vec::new();
         }
-        let mut style = unbound_text::TextStyle::sized(size);
+        let scale = self.effective_raster_scale();
+        let mut style = unbound_text::TextStyle::sized(size * scale);
         style.weight = weight;
         let shaped = self.engine.shape(text, &style);
+        let logical_w = shaped.width / scale;
+        let logical_h = (shaped.height / scale).max(size);
         let x = match align_x {
             AlignX::Left => rect.origin.x,
-            AlignX::Center => rect.origin.x + ((rect.width() - shaped.width) * 0.5).max(0.0),
-            AlignX::Right => (rect.max().x - shaped.width).max(rect.origin.x),
+            AlignX::Center => rect.origin.x + ((rect.width() - logical_w) * 0.5).max(0.0),
+            AlignX::Right => (rect.max().x - logical_w).max(rect.origin.x),
         };
-        let line_h = shaped.height.max(size);
         let y = match align_y {
             AlignY::Top => rect.origin.y,
-            AlignY::Middle => rect.origin.y + ((rect.height() - line_h) * 0.5).max(0.0),
-            AlignY::Bottom => (rect.max().y - line_h).max(rect.origin.y),
+            AlignY::Middle => rect.origin.y + ((rect.height() - logical_h) * 0.5).max(0.0),
+            AlignY::Bottom => (rect.max().y - logical_h).max(rect.origin.y),
         };
-        self.cache
-            .quads_for(self.engine, &shaped, Vec2::new(x, y), weight, false)
+        let mut quads = self.cache.quads_for(
+            self.engine,
+            &shaped,
+            Vec2::new(x * scale, y * scale),
+            weight,
+            false,
+        );
+        if (scale - 1.0).abs() > 1e-6 {
+            for quad in &mut quads {
+                quad.rect.origin.x /= scale;
+                quad.rect.origin.y /= scale;
+                quad.rect.size.x /= scale;
+                quad.rect.size.y /= scale;
+            }
+        }
+        quads
     }
 }
 

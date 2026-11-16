@@ -169,6 +169,41 @@ pub(crate) mod style_bits {
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
 }
 
+/// 向窗口事件队列推入新事件，并对连续的窗口调整尺寸（`Resized`）与鼠标移动（`CursorMoved`）执行原地合并。
+///
+/// 在 Win32 模态拖拽调整窗口大小（`WM_ENTERSIZEMOVE`..`WM_EXITSIZEMOVE`）期间，操作系统会在单次
+/// `DispatchMessageW` 调用内高频派发数百条 `WM_SIZE`。若逐条排队而不合并，消息循环在退出模态拖拽
+/// 或单轮排空时会逐帧回放整条历史尺寸轨迹，在视觉上表现为极其缓慢的“滞后缩放过渡动画”。
+/// 原地覆盖未消费的旧 `Resized` 事件可确保任意时刻队列中最多只保留最后一次真实窗口尺寸。
+pub(crate) fn push_coalesced_event(events: &mut Vec<PlatformEvent>, event: PlatformEvent) {
+    match event {
+        PlatformEvent::Resized(extent) => {
+            if let Some(existing) = events
+                .iter_mut()
+                .rev()
+                .find(|ev| matches!(ev, PlatformEvent::Resized(_)))
+            {
+                *existing = PlatformEvent::Resized(extent);
+            } else {
+                events.push(PlatformEvent::Resized(extent));
+            }
+        }
+        PlatformEvent::CursorMoved { x, y } => {
+            if let Some(PlatformEvent::CursorMoved {
+                x: prev_x,
+                y: prev_y,
+            }) = events.last_mut()
+            {
+                *prev_x = x;
+                *prev_y = y;
+            } else {
+                events.push(PlatformEvent::CursorMoved { x, y });
+            }
+        }
+        other => events.push(other),
+    }
+}
+
 /// 依据窗口配置选择原生窗口样式。
 ///
 /// - `decorations = true`：标准系统装饰窗口（`WS_OVERLAPPEDWINDOW` 或不含 `WS_THICKFRAME`）。
@@ -252,6 +287,56 @@ mod win32 {
     };
 
     const INFINITE_TIMEOUT: u32 = u32::MAX;
+
+    std::thread_local! {
+        /// 在 `DispatchMessageW` 进入系统模态移动/缩放循环期间挂载的单步即时渲染回调。
+        static MODAL_RESIZE_CALLBACK: std::cell::Cell<Option<*mut dyn FnMut(HWND)>> = const { std::cell::Cell::new(None) };
+        /// 防止 `WM_SIZE` 即时渲染期间产生递归重入的守卫标志。
+        static MODAL_RESIZE_BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    struct ModalDispatchGuard;
+
+    impl ModalDispatchGuard {
+        fn install<'a>(cb: &'a mut dyn FnMut(HWND)) -> Self {
+            // SAFETY: 裸指针仅在当前栈帧 `ModalDispatchGuard` 存活期内有效，`Drop` 时无条件清空。
+            let raw: *mut dyn FnMut(HWND) = unsafe {
+                core::mem::transmute::<&'a mut dyn FnMut(HWND), *mut (dyn FnMut(HWND) + 'static)>(
+                    cb,
+                )
+            };
+            MODAL_RESIZE_CALLBACK.with(|slot| slot.set(Some(raw)));
+            Self
+        }
+    }
+
+    impl Drop for ModalDispatchGuard {
+        fn drop(&mut self) {
+            MODAL_RESIZE_CALLBACK.with(|slot| slot.set(None));
+        }
+    }
+
+    fn trigger_modal_resize_frame(hwnd: HWND) {
+        let busy = MODAL_RESIZE_BUSY.with(|flag| {
+            if flag.get() {
+                true
+            } else {
+                flag.set(true);
+                false
+            }
+        });
+        if busy {
+            return;
+        }
+        let cb_ptr = MODAL_RESIZE_CALLBACK.with(std::cell::Cell::get);
+        if let Some(ptr) = cb_ptr {
+            // SAFETY: `ptr` 由当前线程上层的 `ModalDispatchGuard` 挂载，且 `MODAL_RESIZE_BUSY` 已阻止重入。
+            unsafe {
+                (*ptr)(hwnd);
+            }
+        }
+        MODAL_RESIZE_BUSY.with(|flag| flag.set(false));
+    }
 
     pub(super) fn enable_per_monitor_v2_dpi() {
         unsafe {
@@ -543,10 +628,12 @@ mod win32 {
                 let width = (lparam.0 & 0xFFFF) as u32;
                 let height = ((lparam.0 >> 16) & 0xFFFF) as u32;
                 if width > 0 && height > 0 {
-                    data.events
-                        .borrow_mut()
-                        .push(PlatformEvent::Resized(Extent::new(width, height)));
+                    push_coalesced_event(
+                        &mut data.events.borrow_mut(),
+                        PlatformEvent::Resized(Extent::new(width, height)),
+                    );
                     data.redraw_requested.store(true, Ordering::Release);
+                    trigger_modal_resize_frame(hwnd);
                 }
                 LRESULT(0)
             }
@@ -615,9 +702,10 @@ mod win32 {
                 }
                 let x = (lparam.0 & 0xFFFF) as i16 as f64;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f64;
-                data.events
-                    .borrow_mut()
-                    .push(PlatformEvent::CursorMoved { x, y });
+                push_coalesced_event(
+                    &mut data.events.borrow_mut(),
+                    PlatformEvent::CursorMoved { x, y },
+                );
                 LRESULT(0)
             }
             WM_MOUSELEAVE => {
@@ -1131,13 +1219,58 @@ mod win32 {
         let mut msg = MSG::default();
 
         'main_loop: while !windows.is_empty() {
+            let mut modal_exit = false;
             while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
                 if msg.message == WM_QUIT {
                     break 'main_loop;
                 }
                 unsafe {
                     let _ = TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
+                }
+                {
+                    let mut modal_step = |target_hwnd: HWND| {
+                        if modal_exit {
+                            return;
+                        }
+                        let Some(entry) = windows.iter_mut().find(|e| e.hwnd == target_hwnd) else {
+                            return;
+                        };
+                        let pending: Vec<PlatformEvent> =
+                            entry.user_data.events.borrow_mut().drain(..).collect();
+                        if pending.is_empty() {
+                            return;
+                        }
+                        let now = Instant::now();
+                        for platform_event in pending {
+                            if matches!(platform_event, PlatformEvent::CloseRequested) {
+                                entry.user_data.events.borrow_mut().push(platform_event);
+                                return;
+                            }
+                            for out in apply(&mut entry.state, &platform_event, now) {
+                                if app.event(&mut entry.state, &entry.window, out) == Flow::Exit {
+                                    modal_exit = true;
+                                    return;
+                                }
+                            }
+                        }
+                        entry.state.pacer.request_immediate(now);
+                        if app.frame(&mut entry.state, &entry.window) == Flow::Exit {
+                            modal_exit = true;
+                            return;
+                        }
+                        if pump_a11y(&mut app, &mut entry.a11y, &mut entry.state, &entry.window)
+                            == Flow::Exit
+                        {
+                            modal_exit = true;
+                        }
+                    };
+                    let _guard = ModalDispatchGuard::install(&mut modal_step);
+                    unsafe {
+                        DispatchMessageW(&msg);
+                    }
+                }
+                if modal_exit {
+                    break 'main_loop;
                 }
             }
 
@@ -1158,22 +1291,8 @@ mod win32 {
                         break;
                     }
 
-                    let is_resize = matches!(platform_event, PlatformEvent::Resized(_));
                     for out in apply(&mut entry.state, &platform_event, now) {
                         if app.event(&mut entry.state, &entry.window, out) == Flow::Exit {
-                            break 'main_loop;
-                        }
-                    }
-
-                    // 拖拽调整窗口大小期间 Windows 会进入模态循环，立即渲染新帧避免黑边拉伸
-                    if is_resize {
-                        entry.state.pacer.request_immediate(now);
-                        if app.frame(&mut entry.state, &entry.window) == Flow::Exit {
-                            break 'main_loop;
-                        }
-                        if pump_a11y(&mut app, &mut entry.a11y, &mut entry.state, &entry.window)
-                            == Flow::Exit
-                        {
                             break 'main_loop;
                         }
                     }
@@ -1299,5 +1418,19 @@ mod style_tests {
         assert_eq!(fixed_style & WS_THICKFRAME, 0);
         assert_eq!(fixed_style & WS_MAXIMIZEBOX, 0);
         assert_eq!(fixed_style & WS_POPUP, 0);
+    }
+
+    #[test]
+    fn coalescing_resize_events_retains_only_the_latest_extent() {
+        use crate::resize::Extent;
+        let mut queue = Vec::new();
+        for w in 1000..=1050 {
+            push_coalesced_event(&mut queue, PlatformEvent::Resized(Extent::new(w, 700)));
+        }
+        assert_eq!(
+            queue,
+            vec![PlatformEvent::Resized(Extent::new(1050, 700))],
+            "a burst of WM_SIZE messages must coalesce into a single final Resized event"
+        );
     }
 }
