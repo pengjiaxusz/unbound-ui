@@ -192,31 +192,51 @@ impl ThemeSet {
                 );
             }
             ProductPreset::RenderWorkbench => {
-                // RenderDebugger Launcher 采用高对比度深石墨蓝灰工程底座
+                // RenderDebugger Launcher 对齐 Showcase Gallery 的深邃石板层次配色体系
                 set_tok(
                     &mut dark_entries,
                     Token::SURFACE,
-                    Color::from_srgb8(16, 19, 26, 255),
+                    Color::from_srgb8(18, 19, 24, 255),
                 );
                 set_tok(
                     &mut dark_entries,
                     Token::SURFACE_RAISED,
-                    Color::from_srgb8(24, 29, 39, 255),
+                    Color::from_srgb8(26, 28, 35, 255),
                 );
                 set_tok(
                     &mut dark_entries,
                     Token::SURFACE_SUNKEN,
-                    Color::from_srgb8(11, 13, 18, 255),
+                    Color::from_srgb8(13, 14, 19, 255),
                 );
                 set_tok(
                     &mut dark_entries,
                     Token::CARD_BG,
-                    Color::from_srgb8(22, 27, 36, 255),
+                    Color::from_srgb8(25, 27, 34, 255),
+                );
+                set_tok(
+                    &mut dark_entries,
+                    Token::CARD_BORDER,
+                    Color::from_srgb8(44, 48, 59, 255),
                 );
                 set_tok(
                     &mut dark_entries,
                     Token::HEADER_BG,
-                    Color::from_srgb8(14, 17, 23, 255),
+                    Color::from_srgb8(17, 18, 23, 255),
+                );
+                set_tok(
+                    &mut dark_entries,
+                    Token::NAV_BG,
+                    Color::from_srgb8(21, 22, 28, 255),
+                );
+                set_tok(
+                    &mut dark_entries,
+                    Token::NAV_HOVER,
+                    Color::from_srgb8(33, 36, 45, 255),
+                );
+                set_tok(
+                    &mut dark_entries,
+                    Token::NAV_SELECTED,
+                    Color::from_srgb8(34, 52, 86, 255),
                 );
             }
         }
