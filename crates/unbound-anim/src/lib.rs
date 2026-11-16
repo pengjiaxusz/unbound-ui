@@ -366,6 +366,9 @@ impl Animator {
             .iter_mut()
             .find(|a| a.node == node && a.channel == channel)
         {
+            let (stiffness, damping) = preset.config();
+            existing.spring.stiffness = stiffness;
+            existing.spring.damping = damping;
             existing.spring.set_target(target);
             return;
         }
@@ -400,6 +403,7 @@ impl Animator {
             .find(|a| a.node == node && a.channel == channel)
         {
             a.spring.value = from;
+            a.spring.velocity = 0.0;
         }
     }
 
@@ -771,5 +775,16 @@ mod tests {
             "the spring must stay finite"
         );
         assert!(spring.is_settled());
+    }
+
+    #[test]
+    fn retargeting_updates_spring_preset_and_animate_from_resets_velocity() {
+        let mut animator = Animator::new();
+        animator.animate_from(9, Channel::TranslateX, SpringPreset::Gentle, 0.0, 100.0);
+        animator.step(1.0 / 60.0);
+        // 切换为 Heavy 预设并调用 animate_from 重置起点，必须清零残留速度并更新刚度。
+        animator.animate_from(9, Channel::TranslateX, SpringPreset::Heavy, 50.0, 50.0);
+        animator.step(1.0 / 60.0);
+        assert_eq!(animator.active_animations(), 0);
     }
 }

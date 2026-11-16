@@ -11,7 +11,8 @@
 use rustc_hash::FxHashMap;
 
 use unbound_asset::{AssetId, AssetKind, AssetPipeline, Completed, PipelineConfig};
-use unbound_gpu::atlas::{AtlasKind, AtlasUpload, ATLAS_LAYERS, PAGE_SIZE};
+use unbound_gpu::atlas::{AtlasKind, AtlasUpload, PAGE_SIZE};
+use unbound_gpu::pipeline::EXTERNAL_TEXTURE_BASE;
 use unbound_math::{Rect, Vec2};
 use unbound_text::TextEngine;
 use unbound_widgets::{ImageAssetResolver, ResolvedImage};
@@ -91,7 +92,9 @@ impl ShelfAtlas {
             self.shelf_height = 0;
             self.cursor_x = 0;
         }
-        if self.layer >= ATLAS_LAYERS {
+        // `AtlasKind::Rgba8` 在 GPU 上分配了 `EXTERNAL_TEXTURE_BASE`（48）层，
+        // 48..64 预留给外部注册的独立 Vulkan 纹理。
+        if self.layer >= EXTERNAL_TEXTURE_BASE {
             return None;
         }
         let allocation = Allocation {
@@ -374,5 +377,20 @@ mod tests {
         }
         assert_eq!(hub.residency(id), Some(AssetResidency::Failed));
         assert_eq!(hub.inflight(), 0);
+    }
+
+    #[test]
+    fn shelf_atlas_never_spills_into_external_texture_slots() {
+        let mut atlas = ShelfAtlas::default();
+        for expected_layer in 0..EXTERNAL_TEXTURE_BASE {
+            let slot = atlas
+                .allocate(PAGE_SIZE, PAGE_SIZE)
+                .expect("layer fits in RGBA8 pool");
+            assert_eq!(slot.layer, expected_layer);
+        }
+        assert!(
+            atlas.allocate(16, 16).is_none(),
+            "layer >= EXTERNAL_TEXTURE_BASE must be refused"
+        );
     }
 }

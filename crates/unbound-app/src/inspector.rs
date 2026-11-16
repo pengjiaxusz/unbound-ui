@@ -259,19 +259,13 @@ pub fn describe(world: &UiWorld, id: NodeId) -> InspectorNode {
     let data = world.node(id);
     let border = data.world_rect;
     let bw = data.desc.border_width.max(0.0);
-    let padding = inset(
-        border,
-        data.desc.padding.left + bw,
-        data.desc.padding.top + bw,
-        data.desc.padding.right + bw,
-        data.desc.padding.bottom + bw,
-    );
+    let padding = inset(border, bw, bw, bw, bw);
     let content = inset(
         padding,
-        data.desc.padding.left + bw,
-        data.desc.padding.top + bw,
-        data.desc.padding.right + bw,
-        data.desc.padding.bottom + bw,
+        data.desc.padding.left,
+        data.desc.padding.top,
+        data.desc.padding.right,
+        data.desc.padding.bottom,
     );
     let margin = outset(
         border,
@@ -571,8 +565,13 @@ mod tests {
         assert_eq!(picked.key, 42);
         assert_eq!(
             picked.padding,
+            Rect::new(101.0, 101.0, 118.0, 30.0),
+            "padding box = border box inset by border width"
+        );
+        assert_eq!(
+            picked.content,
             Rect::new(109.0, 109.0, 102.0, 14.0),
-            "padding box = border box inset by border + padding"
+            "content box = padding box inset by padding"
         );
     }
 

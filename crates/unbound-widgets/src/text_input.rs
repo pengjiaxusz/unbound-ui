@@ -491,6 +491,7 @@ impl TextEditState {
         next.push_str(&self.text[..start]);
         next.push_str(text);
         next.push_str(&self.text[end..]);
+        let mut inserted_len = text.len();
         if next.len() > max_bytes {
             // 尽量取最多能放下的完整码点。
             let room = max_bytes.saturating_sub(self.text.len() - (end - start));
@@ -502,13 +503,14 @@ impl TextEditState {
                 }
                 accepted = after;
             }
+            inserted_len = accepted;
             next.clear();
             next.push_str(&self.text[..start]);
             next.push_str(&text[..accepted]);
             next.push_str(&self.text[end..]);
         }
         self.text = next;
-        self.cursor = floor_boundary(&self.text, start + text.len());
+        self.cursor = floor_boundary(&self.text, start + inserted_len);
         self.anchor = self.cursor;
         self.normalize();
     }
@@ -1476,5 +1478,15 @@ mod tests {
             counts.windows(2).all(|pair| pair[0] == pair[1]),
             "{counts:?}"
         );
+    }
+
+    #[test]
+    fn mid_string_insert_truncated_by_max_bytes_places_cursor_after_accepted_prefix() {
+        let mut edit = TextEditState::with_text("abYZ");
+        edit.cursor = 2;
+        edit.anchor = 2;
+        edit.insert("123456", 6);
+        assert_eq!(edit.text(), "ab12YZ");
+        assert_eq!(edit.cursor(), 4);
     }
 }

@@ -263,9 +263,10 @@ impl ShapedText {
     /// 位于最后一个字形的末尾。
     #[must_use]
     pub fn caret_at_byte(&self, byte: u32) -> Option<f32> {
-        let glyph = self.glyph_at_byte(byte)?;
-        let at_end = byte >= glyph.cluster + glyph.w as u32;
-        Some(if at_end { glyph.x + glyph.w } else { glyph.x })
+        if self.glyphs.is_empty() {
+            return None;
+        }
+        Some(self.caret_rect_at(byte as usize).origin.x)
     }
 
     /// 将相对于文本原点的局部像素坐标 `(x, y)` 映射到最近的合法 UTF-8 字符边界字节偏移量。
@@ -299,12 +300,10 @@ impl ShapedText {
             .rev()
             .find(|(_, g)| g.cluster <= byte)
         {
-            let next_cluster = self
-                .glyphs
-                .get(pos + 1)
-                .map(|g| g.cluster)
-                .unwrap_or(u32::MAX);
-            let at_end = byte > glyph.cluster && next_cluster == u32::MAX;
+            let next_glyph = self.glyphs.get(pos + 1);
+            let next_cluster = next_glyph.map(|g| g.cluster).unwrap_or(u32::MAX);
+            let next_on_new_line = next_glyph.is_some_and(|ng| (ng.y - glyph.y).abs() > 0.5);
+            let at_end = byte > glyph.cluster && (next_cluster == u32::MAX || next_on_new_line);
             let x = if at_end { glyph.x + glyph.w } else { glyph.x };
             Rect::new(x, glyph.y, 1.5, line_h)
         } else {
@@ -405,8 +404,8 @@ fn source_line_starts(text: &str) -> Vec<usize> {
     while index < bytes.len() {
         match bytes[index] {
             b'\r' => {
-                // `\r\n` 与 `\n\r` 均视为单个换行终止符。
-                if bytes.get(index + 1) == Some(&b'\n') || bytes.get(index + 1) == Some(&b'\r') {
+                // 仅标准 CRLF（`\r\n`）作为单次 2 字节换行；连续 `\r\r` 属于两个独立空行。
+                if bytes.get(index + 1) == Some(&b'\n') {
                     index += 2;
                 } else {
                     index += 1;
@@ -414,11 +413,7 @@ fn source_line_starts(text: &str) -> Vec<usize> {
                 starts.push(index);
             }
             b'\n' => {
-                if bytes.get(index + 1) == Some(&b'\r') {
-                    index += 2;
-                } else {
-                    index += 1;
-                }
+                index += 1;
                 starts.push(index);
             }
             _ => index += 1,
@@ -624,8 +619,10 @@ impl TextEngine {
         let mut line_height = style.metrics().line_height;
         let mut ascent = 0.0;
         let mut descent = 0.0;
+        let line_starts = source_line_starts(text);
 
         for run in buffer.layout_runs() {
+            let line_base = line_starts.get(run.line_i).copied().unwrap_or(0);
             line_count += 1;
             line_height = run.line_height;
             if line_count == 1 {
@@ -671,7 +668,7 @@ impl TextEngine {
                     y: run.line_y + g.y - g.font_size * g.y_offset,
                     w: g.w,
                     font_size: g.font_size,
-                    cluster: u32::try_from(g.start).unwrap_or(u32::MAX),
+                    cluster: u32::try_from(line_base + g.start).unwrap_or(u32::MAX),
                     level: g.level.number(),
                     _pad: [0; 3],
                 });
@@ -1373,5 +1370,24 @@ mod tests {
         let last_y = shaped.glyphs.iter().map(|g| g.y).fold(first_y, f32::max);
         let last_end = shaped.hit_test_point(Vec2::new(500.0, last_y + 4.0), text);
         assert_eq!(last_end, text.len());
+    }
+
+    #[test]
+    fn multiline_glyph_clusters_use_global_byte_offsets() {
+        let mut e = engine();
+        let text = "abc\ndef";
+        let shaped = e.shape_wrapped(text, &TextStyle::sized(16.0), 400.0);
+        let second_line_first = shaped
+            .glyphs
+            .iter()
+            .find(|g| g.cluster >= 4)
+            .expect("second line glyphs must carry global byte offsets >= 4");
+        assert_eq!(second_line_first.cluster, 4);
+    }
+
+    #[test]
+    fn consecutive_newlines_produce_distinct_line_starts() {
+        let starts = source_line_starts("a\r\nb\n\nc\r\rd");
+        assert_eq!(starts, vec![0, 3, 5, 6, 8, 9]);
     }
 }

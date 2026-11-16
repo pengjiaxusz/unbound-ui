@@ -311,6 +311,7 @@ impl MenuState {
         if item.has_submenu() {
             self.open_path = vec![index];
             self.highlighted = None;
+            return Some(index);
         } else if self.open_path.is_empty() {
             self.highlighted = Some(index);
         } else {
@@ -498,7 +499,12 @@ pub fn emit_menu(
             primitives.push(placeholder);
             continue;
         }
-        let highlighted = state.highlighted == Some(index) && item.selectable();
+        let active_row = if state.open_path.is_empty() {
+            state.highlighted == Some(index)
+        } else {
+            state.open_path.first() == Some(&index)
+        };
+        let highlighted = active_row && item.selectable();
         let pill = Rect::new(
             row.origin.x + 4.0,
             row.origin.y + 2.0,

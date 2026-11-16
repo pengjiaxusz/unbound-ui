@@ -486,7 +486,13 @@ impl Tlsf {
         let len = self.len;
         // 头部与载荷按 16B 粒度向上取整，并预留余量以确保超对齐载荷总有空间前移对齐。
         let align32 = align as u32;
-        let slack = if align32 > HEADER_SIZE { align32 } else { 0 };
+        // 当前置偏移差在 (0, MIN_BLOCK) 之间时，需要再向前推一个 `align32` 步长才能切出合法的 `MIN_BLOCK` 空闲块，
+        // 因此预留 `align32 + MIN_BLOCK` 的裕量以保证任何超对齐请求都能精确对齐。
+        let slack = if align32 > HEADER_SIZE {
+            align32.saturating_add(MIN_BLOCK)
+        } else {
+            0
+        };
         let total =
             align_up(size.saturating_add(HEADER_SIZE).saturating_add(slack), 64).max(MIN_BLOCK);
 
@@ -512,10 +518,15 @@ impl Tlsf {
 
                     if align32 > HEADER_SIZE {
                         // 必须对齐的是*载荷*而非块本身：载荷位于块内 HEADER_SIZE 字节之后，
-                        // 因此前置空闲块必须吸收这段偏移差。
-                        let aligned = align_up(payload, align32);
+                        // 因此前置空闲块必须吸收这段偏移差。若初始对齐点的前置间隙不足 `MIN_BLOCK`，
+                        // 则继续步进 `align32` 直至前置块可作为独立空闲块插入。
+                        let mut aligned = align_up(payload, align32);
+                        if aligned > payload {
+                            while aligned - HEADER_SIZE - block < MIN_BLOCK {
+                                aligned = aligned.saturating_add(align32);
+                            }
+                        }
                         let lead = aligned - HEADER_SIZE - block;
-                        // 仅当两侧均至少保留 MIN_BLOCK 宽度时才切分出前置空闲块。
                         if lead >= MIN_BLOCK && cur_size > lead + MIN_BLOCK {
                             patch_header(arena, block, |b| b.size = lead);
                             let new_block = block + lead;
@@ -977,5 +988,24 @@ mod tests {
             prev = m;
             size *= 2;
         }
+    }
+
+    /// 超对齐请求在前导间隙小于 `MIN_BLOCK` 时仍必须返回严格对齐的载荷偏移。
+    #[test]
+    fn over_aligned_allocations_always_honor_alignment_across_small_leads() {
+        let mut t = Tlsf::new(1 << 20);
+        // 先分配一个 64 字节块，使后续空闲块的 payload 落在非 256 对齐但差值 < MIN_BLOCK 的位置。
+        let first = t.allocate(64).expect("first block");
+        for align in [128usize, 256, 512, 1024] {
+            let alloc = t.allocate_aligned(256, align).expect("aligned allocation");
+            assert_eq!(
+                alloc as usize % align,
+                0,
+                "payload offset {} is not aligned to {align}",
+                alloc
+            );
+            assert!(t.deallocate(alloc));
+        }
+        assert!(t.deallocate(first));
     }
 }

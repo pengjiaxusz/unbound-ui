@@ -303,8 +303,8 @@ struct LayoutKey {
     nav_width: u32,
     page: u8,
     locale: u8,
-    /// 处于打开状态的代码面板。
-    code_mask: u64,
+    /// 处于打开状态的代码面板（支持最多 128 张卡片，覆盖 Components 页全部 106 个组件）。
+    code_mask: [u64; 2],
 }
 
 impl Default for GalleryApp {
@@ -367,7 +367,7 @@ impl GalleryApp {
                 nav_width: 0,
                 page: 0,
                 locale: 0,
-                code_mask: 0,
+                code_mask: [0; 2],
             },
             external_diff: false,
             frame_layout_stats: LayoutStats::default(),
@@ -597,10 +597,10 @@ impl GalleryApp {
     /// 布局所依赖的输入。
     fn layout_key(&self, viewport: (f32, f32), nav_width: f32) -> LayoutKey {
         let page = self.state.active_page;
-        let mut code_mask = 0u64;
+        let mut code_mask = [0u64; 2];
         for (index, _) in page.examples().iter().enumerate() {
-            if self.state.code_open(page, index as u8) {
-                code_mask |= 1u64 << index;
+            if self.state.code_open(page, index as u8) && index < 128 {
+                code_mask[index / 64] |= 1u64 << (index % 64);
             }
         }
         LayoutKey {
@@ -1785,17 +1785,21 @@ impl GalleryApp {
             self.state.bump();
         }
         if let Some(index) = self.state.demo.drag_active {
-            let target_slot = (1..=4u16)
+            let target_card = (1..=4u16)
                 .filter_map(|part| {
-                    demo_rect(self, PageId::DragDrop, 0, part).map(|rect| (part, rect))
+                    demo_rect(self, PageId::DragDrop, 0, part).map(|rect| (part as usize - 1, rect))
                 })
                 .min_by(|(_, a), (_, b)| {
                     let da = (a.center() - position).length_squared();
                     let db = (b.center() - position).length_squared();
                     da.total_cmp(&db)
                 })
-                .map_or(index, |(part, _)| part as usize - 1);
+                .map_or(index, |(card_id, _)| card_id);
             let mut order = self.state.demo.drag_order.clone();
+            let target_slot = order
+                .iter()
+                .position(|&value| value == target_card)
+                .unwrap_or(index);
             if let Some(from) = order.iter().position(|value| *value == index) {
                 let card = order.remove(from);
                 let slot = target_slot.min(order.len());
@@ -1853,6 +1857,9 @@ impl GalleryApp {
     }
 
     fn list_row_height(&self, card: usize) -> f32 {
+        if card != 0 {
+            return 32.0;
+        }
         let spec = PageId::ListView.examples()[card].knobs[1];
         self.state
             .knob(PageId::ListView, card, 1, &spec)
@@ -2017,12 +2024,12 @@ impl GalleryApp {
             let overlay = search_overlay_rect(&self.layout, self.state.search_hits().len());
             builder.open(NodeKind::Portal, overlay, "Command palette");
             builder.set_overlays_siblings(true);
-            let results = self.state.search_results();
-            let count = results.len().max(1);
+            let hits = self.state.search_hits();
+            let count = hits.len().max(1);
             for index in 0..count {
                 let row = Rect::new(
                     overlay.origin.x + 6.0,
-                    overlay.origin.y + 34.0 + index as f32 * 36.0,
+                    overlay.origin.y + 30.0 + index as f32 * 36.0,
                     overlay.size.x - 12.0,
                     34.0,
                 );
@@ -2110,7 +2117,7 @@ impl GalleryApp {
                     ),
                     "LIVE FRAME",
                 );
-                for index in 0..5 {
+                for index in 0..6 {
                     hud_text(
                         &mut builder,
                         Rect::new(

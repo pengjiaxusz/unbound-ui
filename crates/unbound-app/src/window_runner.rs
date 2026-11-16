@@ -714,7 +714,9 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                         if suboptimal {
                             self.swapchain_dirty = true;
                         }
-                        self.scene_generation = self.scene_generation.wrapping_add(1);
+                        if self.scene_generation == 0 || report.diff.bumps_generation() {
+                            self.scene_generation = self.scene_generation.wrapping_add(1).max(1);
+                        }
                         let ui_scale = self.runtime.context().ui_scale.max(0.5);
                         let expected_vp =
                             Vec2::new(width as f32 / ui_scale, height as f32 / ui_scale);
@@ -722,6 +724,21 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                             self.runtime.resize(expected_vp);
                         }
                         let camera = Camera::ui((expected_vp.x, expected_vp.y), ui_scale);
+                        let backdrops: Vec<unbound_gpu::frame::BackdropRequest> = report
+                            .backdrops
+                            .iter()
+                            .map(|b| unbound_gpu::frame::BackdropRequest {
+                                rect: [
+                                    b.rect.origin.x * ui_scale,
+                                    b.rect.origin.y * ui_scale,
+                                    b.rect.size.x * ui_scale,
+                                    b.rect.size.y * ui_scale,
+                                ],
+                                radius: b.blur * ui_scale,
+                                corner_radii: [0.0; 4],
+                                layer_key_prefix: (PassLayer::Overlay as u64) << 56,
+                            })
+                            .collect();
                         let scene_data = self.runtime.scene();
                         let scene = SceneUpload {
                             primitives: &scene_data.primitives,
@@ -731,9 +748,9 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                             generation: self.scene_generation,
                             camera,
                             key_prefix: (PassLayer::Ui as u64) << 56,
-                            dirty_ranges: &[],
+                            dirty_ranges: report.diff.ranges(),
                             aux_changed: report.aux_changed,
-                            backdrops: &[],
+                            backdrops: &backdrops,
                         };
 
                         if let Err(ref err) =
@@ -747,17 +764,27 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                             eprintln!("[unbound-app] render failed: {err:?}");
                         }
 
-                        if let Err(ref err) = swapchain.present_outcome(
+                        match swapchain.present_outcome(
                             &renderer.gpu,
                             image.index,
                             image.render_finished,
                         ) {
-                            if is_device_lost(err) {
-                                eprintln!("[unbound-app] GPU device lost during present. Triggering recovery...");
-                                self.recover_gpu(window);
-                                return Flow::Continue;
+                            Ok(unbound_gpu::surface::PresentOutcome::Optimal) => {}
+                            Ok(unbound_gpu::surface::PresentOutcome::Recreate) => {
+                                self.swapchain_dirty = true;
+                            }
+                            Err(ref err) => {
+                                if is_device_lost(err) {
+                                    eprintln!("[unbound-app] GPU device lost during present. Triggering recovery...");
+                                    self.recover_gpu(window);
+                                    return Flow::Continue;
+                                }
+                                self.swapchain_dirty = true;
                             }
                         }
+                    }
+                    Ok(AcquireOutcome::OutOfDate) => {
+                        self.swapchain_dirty = true;
                     }
                     Err(ref err) if is_device_lost(err) => {
                         eprintln!(

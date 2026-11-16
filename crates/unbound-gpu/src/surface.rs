@@ -552,7 +552,12 @@ impl Swapchain {
         );
 
         let image_count = (capabilities.min_image_count + 1).max(2);
-        let image_count = image_count.min(capabilities.max_image_count);
+        // Vulkan 规范中 `max_image_count == 0` 表示无上限，不能直接 `min(0)`。
+        let image_count = if capabilities.max_image_count > 0 {
+            image_count.min(capabilities.max_image_count)
+        } else {
+            image_count
+        };
 
         let queue_family_index = gpu.families.graphics;
         let queue_family_indices = [queue_family_index];

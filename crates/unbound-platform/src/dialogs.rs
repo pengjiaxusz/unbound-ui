@@ -217,6 +217,9 @@ pub fn open_file(config: FileDialogConfig) -> Option<PathBuf> {
 /// 同步打开多文件选择对话框。
 #[must_use]
 pub fn open_files(config: FileDialogConfig) -> Vec<PathBuf> {
+    if let Some(mock) = take_or_peek_mock_path() {
+        return vec![mock];
+    }
     #[cfg(windows)]
     {
         let mut cfg = config;
@@ -330,4 +333,18 @@ pub fn pick_folder_async<F: FnOnce(Option<PathBuf>) + Send + 'static>(
         let result = pick_folder(config);
         on_complete(result);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mock_dialog_path_intercepts_open_files_as_well_as_open_file() {
+        let sample = PathBuf::from("/tmp/mock_selection.png");
+        set_mock_dialog_path(Some(sample.clone()));
+        assert_eq!(open_file(FileDialogConfig::default()), Some(sample.clone()));
+        assert_eq!(open_files(FileDialogConfig::default()), vec![sample]);
+        set_mock_dialog_path(None);
+    }
 }

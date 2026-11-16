@@ -2954,8 +2954,15 @@ impl<A: Application> AppRuntime<A> {
 
     /// 推进时钟但不产生 `Tick` 事件。
     pub fn advance(&mut self, dt: f32) {
-        self.time += f64::from(dt.max(0.0));
+        let step = dt.max(0.0);
+        self.time += f64::from(step);
         self.ctx.time = self.time;
+        if self.ctx.scale_osd_remaining > 0.0 {
+            self.ctx.scale_osd_remaining = (self.ctx.scale_osd_remaining - step).max(0.0);
+            if self.ctx.scale_osd_remaining == 0.0 {
+                self.mark(DirtyFlags::PAINT);
+            }
+        }
     }
 
     /// 从资产中心与字形缓存排空待上传任务。

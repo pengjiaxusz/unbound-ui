@@ -1503,3 +1503,29 @@ fn every_shell_i18n_key_resolves_in_both_locales() {
         }
     }
 }
+
+/// 在拥有 106 张卡片的 `PageId::Components` 页面上展开第 64..106 张卡片的源码面板不得触发位移溢出，
+/// 且打开模态框（`modal_open = true`）时仍保持命中区域唯一。
+#[test]
+fn high_index_component_code_toggles_and_open_modals_keep_unique_hit_regions() {
+    let mut app = app();
+    app.navigate(PageId::Components);
+    app.state.toggle_code(PageId::Components, 64);
+    app.state.toggle_code(PageId::Components, 105);
+    app.rebuild(VIEWPORT);
+    assert!(app.state.code_open(PageId::Components, 64));
+    assert!(app.state.code_open(PageId::Components, 105));
+
+    // 打开 Overlays 模态框后校验所有命中区域唯一，无重复注册。
+    app.navigate(PageId::Overlays);
+    app.state.demo.modal_open = true;
+    app.rebuild(VIEWPORT);
+    let mut seen = rustc_hash::FxHashSet::default();
+    for region in app.regions.iter() {
+        assert!(
+            seen.insert(region.node),
+            "duplicate hit region registered for node {:#x} when modal is open",
+            region.node
+        );
+    }
+}

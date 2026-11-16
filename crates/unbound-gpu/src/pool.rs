@@ -260,7 +260,13 @@ impl PersistentPool {
             });
         };
         if new_size <= capacity {
+            let old_len = self.slots[handle.index as usize].len;
             self.slots[handle.index as usize].len = new_size;
+            if new_size >= old_len {
+                self.stats.live_bytes += new_size - old_len;
+            } else {
+                self.stats.live_bytes = self.stats.live_bytes.saturating_sub(old_len - new_size);
+            }
             return Ok(handle);
         }
         let new_handle = self.allocate(new_size)?;
@@ -623,5 +629,18 @@ mod tests {
         // 至此该 epoch 已完成。
         assert_eq!(p.reclaim(1), 1);
         assert_eq!(p.parked_blocks(), 0, "the block must be back in the pool");
+    }
+
+    #[test]
+    fn in_place_grow_updates_live_bytes_accurately() {
+        let mut p = PersistentPool::new(1 << 20);
+        let h = p.allocate(80).unwrap();
+        assert_eq!(p.stats().live_bytes, 80);
+        // 80 字节块底层对齐后有余量，原地扩容到 100 字节应同步更新 live_bytes。
+        let h2 = p.grow(h, 100, 0).unwrap();
+        assert_eq!(h, h2);
+        assert_eq!(p.stats().live_bytes, 100);
+        p.free(h2, 0);
+        assert_eq!(p.stats().live_bytes, 0);
     }
 }

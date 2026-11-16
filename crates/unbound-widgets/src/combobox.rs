@@ -223,14 +223,18 @@ impl ComboboxState {
         self.open = open;
     }
 
-    /// 打开弹出列表并定位到已提交选项。
+    /// 打开弹出列表并定位到已提交选项（保留当前过滤文本并跳过禁用项）。
     pub fn open(&mut self, desc: &ComboboxDesc) {
         self.open = true;
-        self.filtered = (0..desc.items.len()).collect();
-        self.highlighted = self.selected.or(if self.filtered.is_empty() {
-            None
-        } else {
-            Some(self.filtered[0])
+        self.refilter_with(desc);
+        let valid_selected = self.selected.filter(|&idx| {
+            self.filtered.contains(&idx) && !desc.items.get(idx).is_some_and(|item| item.disabled)
+        });
+        self.highlighted = valid_selected.or_else(|| {
+            self.filtered
+                .iter()
+                .copied()
+                .find(|&idx| !desc.items.get(idx).is_some_and(|item| item.disabled))
         });
     }
 
@@ -262,8 +266,16 @@ impl ComboboxState {
         self.filtered = matches;
         self.highlighted = self
             .highlighted
-            .filter(|index| self.filtered.contains(index))
-            .or_else(|| self.filtered.first().copied());
+            .filter(|&index| {
+                self.filtered.contains(&index)
+                    && !desc.items.get(index).is_some_and(|item| item.disabled)
+            })
+            .or_else(|| {
+                self.filtered
+                    .iter()
+                    .copied()
+                    .find(|&index| !desc.items.get(index).is_some_and(|item| item.disabled))
+            });
     }
 
     /// 按整行移动高亮，跳过禁用选项并在首尾循环。
@@ -321,12 +333,28 @@ impl ComboboxState {
                     closed: false,
                 }
             }
-            ComboboxKey::Up => ComboboxOutcome {
-                handled: self.move_highlight(desc, -1),
-                committed: None,
-                closed: false,
-            },
+            ComboboxKey::Up => {
+                if !self.open {
+                    return ComboboxOutcome {
+                        handled: false,
+                        committed: None,
+                        closed: false,
+                    };
+                }
+                ComboboxOutcome {
+                    handled: self.move_highlight(desc, -1),
+                    committed: None,
+                    closed: false,
+                }
+            }
             ComboboxKey::Enter => {
+                if !self.open {
+                    return ComboboxOutcome {
+                        handled: false,
+                        committed: None,
+                        closed: false,
+                    };
+                }
                 let committed = self.accept(desc);
                 ComboboxOutcome {
                     handled: committed.is_some(),
@@ -639,5 +667,16 @@ mod tests {
             "chrome plus one row surface each"
         );
         assert_eq!(output.a11y.expect("reachable").role, Role::ListBox);
+    }
+
+    #[test]
+    fn closed_combobox_ignores_up_and_enter_and_open_skips_disabled_first_item() {
+        let mut d = desc();
+        d.items[0].disabled = true;
+        let mut state = ComboboxState::new(&d);
+        assert!(!state.key(&d, ComboboxKey::Up).handled);
+        assert!(!state.key(&d, ComboboxKey::Enter).handled);
+        state.open(&d);
+        assert_eq!(state.highlighted(), Some(1));
     }
 }

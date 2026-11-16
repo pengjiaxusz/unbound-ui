@@ -252,17 +252,29 @@ impl CommandPaletteState {
     /// 匹配结果的索引列表，最佳匹配在前。
     #[must_use]
     pub fn results(&self) -> Vec<usize> {
-        let mut scored: Vec<(i32, usize)> = self
+        // 将单调递增的 tick 映射为相对于当前最新调用的 1..=9 档位，避免超过 9 次调用后全部饱和为 9。
+        let max_tick = self.recency.values().copied().max().unwrap_or(0);
+        let mut scored: Vec<(i32, u32, usize)> = self
             .commands
             .iter()
             .enumerate()
             .filter_map(|(index, command)| {
-                let recency = self.recency.get(&command.id).copied().unwrap_or(0);
-                score_command(&self.query, command, recency).map(|score| (score, index))
+                let tick = self.recency.get(&command.id).copied().unwrap_or(0);
+                let relative_recency = if tick == 0 || max_tick == 0 {
+                    0
+                } else {
+                    9u32.saturating_sub(max_tick.saturating_sub(tick)).max(1)
+                };
+                score_command(&self.query, command, relative_recency)
+                    .map(|score| (score, tick, index))
             })
             .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-        scored.into_iter().map(|(_, index)| index).collect()
+        scored.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| b.1.cmp(&a.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+        scored.into_iter().map(|(_, _, index)| index).collect()
     }
 
     /// 当前高亮的命令（若有）。
@@ -401,7 +413,7 @@ pub fn emit_command_row(
     if rect.size.y <= 0.0 {
         return WidgetOutput::default();
     }
-    let highlighted = visible_index == state.selected.min(results.len() - 1);
+    let highlighted = visible_index == state.selected;
     let disabled = control.disabled;
     let mut primitives = Vec::with_capacity(3 + label.len() + shortcut.len());
     let mut payloads = Vec::with_capacity(label.len() + shortcut.len());
@@ -617,5 +629,20 @@ mod tests {
             CommandPaletteTokens::standard(),
         );
         assert!(output.primitives.is_empty());
+    }
+
+    #[test]
+    fn recency_continues_to_distinguish_commands_beyond_nine_invocations() {
+        let mut state = state();
+        for _ in 0..12 {
+            state.record_use(1);
+        }
+        state.record_use(3);
+        state.set_query("open");
+        assert_eq!(
+            state.results()[0],
+            2,
+            "the most recently used command must still outrank older commands after >9 ticks"
+        );
     }
 }

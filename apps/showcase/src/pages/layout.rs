@@ -667,6 +667,13 @@ pub fn drag_drop(ctx: &mut DemoCtx<'_, '_>) {
                 AlignX::Center,
                 AlignY::Center,
             );
+            ctx.control(
+                1 + index as u16,
+                cell,
+                Role::ListItem,
+                &format!("Card {}", index + 1),
+                false,
+            );
             continue;
         }
         let card = Rect::new(cell.origin.x, cell.origin.y, card_w, card_h);

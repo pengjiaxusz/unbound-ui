@@ -422,6 +422,9 @@ impl Semantics {
         let parent = self.parent_of(id);
         let mut stack = vec![id];
         while let Some(current) = stack.pop() {
+            if current == self.focus {
+                self.focus = self.root;
+            }
             if let Some(children) = self.children.remove(&current) {
                 stack.extend(children);
             }
@@ -436,9 +439,6 @@ impl Semantics {
                 children.retain(|child| *child != id);
             }
             self.structural.insert(parent);
-        }
-        if self.focus == id {
-            self.focus = self.root;
         }
     }
 
@@ -808,5 +808,33 @@ mod tests {
         let update = s.take_update().unwrap();
         assert_eq!(update.nodes.len(), 1);
         assert_eq!(update.nodes[0].0, NodeId(500));
+    }
+
+    #[test]
+    fn removing_an_ancestor_of_the_focused_node_resets_focus_to_root() {
+        let mut s = tree();
+        s.upsert(
+            2,
+            A11yNode::new(
+                Role::GenericContainer,
+                "Dialog",
+                rect(0.0, 0.0, 100.0, 100.0),
+            ),
+        );
+        s.upsert(
+            3,
+            A11yNode::new(Role::Button, "Confirm", rect(10.0, 10.0, 40.0, 20.0)).clickable(),
+        );
+        s.set_children(1, &[2]);
+        s.set_children(2, &[3]);
+        s.set_focus(3);
+        let _ = s.take_update();
+
+        s.remove(2);
+        assert_eq!(s.focus(), 1);
+        let update = s
+            .take_update()
+            .expect("removing focused subtree must emit an update");
+        assert_eq!(update.focus, NodeId(1));
     }
 }

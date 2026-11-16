@@ -283,6 +283,12 @@ fn palette_compare(ctx: &mut DemoCtx<'_, '_>) {
             ("Primary", palette.primary),
             ("Border", palette.border),
         ],
+        2 => &[
+            ("Primary", palette.primary),
+            ("Success", palette.success),
+            ("Warning", palette.warning),
+            ("Danger", palette.danger),
+        ],
         _ => &[
             ("Background", palette.background),
             ("Surface", palette.surface),
