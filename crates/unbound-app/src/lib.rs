@@ -589,6 +589,11 @@ pub struct AppContext {
     pub scale_osd_remaining: f32,
     /// 应用内建的国际化资源包与当前语言区域（默认 `en-US`）。
     pub i18n: Rc<RefCell<I18nBundle>>,
+    /// 东亚文字显式绑定的系统字体族（`None` 表示按文本内容自动判定）。
+    ///
+    /// 界面语言切换时必须同步：简中 / 繁中 / 日文 / 韩文的汉字字形各不相同，
+    /// 用错字体族会让繁体界面出现简体字、日文界面出现简体字形。
+    pub cjk_family: Option<&'static str>,
     /// 当前聚焦节点，与焦点管理器保持同步。
     pub focused: Option<u64>,
     /// 是否应绘制焦点环。
@@ -660,6 +665,7 @@ impl AppContext {
             physical_viewport: viewport,
             scale_osd_remaining: 0.0,
             i18n: Rc::new(RefCell::new(I18nBundle::with_locale(Locale::EnUs))),
+            cjk_family: None,
             focused: None,
             focus_visible: false,
             hovered: None,
@@ -737,6 +743,20 @@ impl AppContext {
     /// 切换当前激活的语言区域（支持传入 `"en-US"` / `"zh-CN"` 等标签）。
     pub fn set_locale(&mut self, locale: impl Into<String>) {
         self.i18n.borrow_mut().set_locale(locale);
+    }
+
+    /// 指定东亚文字使用的系统字体族。
+    ///
+    /// 传 `None` 表示按文本内容自动判定（假名 → 日文字体、谚文 → 韩文字体、
+    /// 其余 → 中文字体）。给定语言标签更稳妥：繁体中文与简体中文的汉字字形
+    /// 并不相同，仅凭字符无法区分。
+    pub fn set_cjk_family(&mut self, family: Option<&'static str>) {
+        self.cjk_family = family;
+    }
+
+    /// 按界面语言标签自动选定东亚字体族。
+    pub fn set_cjk_family_for_locale(&mut self, tag: &str) {
+        self.cjk_family = unbound_text::东亚字体族_按语言(tag);
     }
 
     /// 通过强类型 [`Locale`] 枚举切换当前激活的语言区域。
@@ -1303,6 +1323,22 @@ impl<'a> ViewBuilder<'a> {
         self.i18n.borrow().format_plural(key, count)
     }
 
+    /// 按键返回控件在**上一帧布局**中的世界坐标矩形。
+    ///
+    /// 视图构建发生在布局求解之前，因此这里给出的是上一帧算出的矩形：
+    /// 浮层（如下拉菜单弹层）用它做锚点时，弹层正好贴在用户看到的控件下方。
+    /// 控件在当前帧首次挂载时还没有布局结果，返回 `None`。
+    ///
+    /// 与 [`AppRuntime::widget_rect`] 的区别：后者读的是本帧挂载表（含控件自身的
+    /// 布局矩形），只能在帧外访问；本方法供视图构建期使用。
+    #[must_use]
+    pub fn widget_rect(&self, key: u64) -> Option<Rect> {
+        self.node_keys
+            .get(&key)
+            .and_then(|node| self.world.get(*node))
+            .map(|node| node.world_rect)
+    }
+
     /// 为当前帧注册一个漫游 tabindex 焦点组。
     pub fn register_focus_group(&mut self, group: FocusGroup) {
         self.focus_groups.push(group);
@@ -1757,6 +1793,11 @@ impl<'a> ViewBuilder<'a> {
         self.add(key, desc)
     }
 
+    /// 声明式颜色色块快捷方式（Win11 设置应用「个性化 > 颜色」里的色块网格单元）。
+    pub fn color_swatch(&mut self, key: u64, desc: unbound_widgets::ColorSwatchDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
     /// 声明式语法高亮只读代码块快捷方式。
     pub fn code_block(&mut self, key: u64, desc: unbound_widgets::CodeBlockDesc) -> NodeId {
         self.add(key, desc)
@@ -1886,7 +1927,7 @@ impl<'a> ViewBuilder<'a> {
             .width(Dim::percent(100.0))
             .padding(unbound_abi::Edges::all(padding))
             .gap(gap)
-            .radius(10.0)
+            .radius(unbound_theme::typography::geometry::CARD_RADIUS)
             .fill_token(u32::from(unbound_theme::Token::SURFACE_SUNKEN.raw()))
             .border(u32::from(unbound_theme::Token::OUTLINE.raw()), 1.0);
         desc.flex_shrink = 0.0;
@@ -1909,11 +1950,10 @@ impl<'a> ViewBuilder<'a> {
             .width(Dim::percent(100.0))
             .padding(unbound_abi::Edges::all(20.0))
             .gap(14.0)
-            .radius(12.0)
+            .radius(unbound_theme::typography::geometry::CARD_RADIUS)
             .fill_token(u32::from(unbound_theme::Token::CARD_BG.raw()))
             .border(u32::from(unbound_theme::Token::CARD_BORDER.raw()), 1.0);
         card_desc.flex_shrink = 0.0;
-        card_desc.shadow_blur = 10.0;
         self.container(key, card_desc, |card| {
             card.row_between(mix_key(key, 1), |hdr| {
                 hdr.col_grow(mix_key(key, 2), 4.0, |titles| {
@@ -1951,11 +1991,20 @@ impl<'a> ViewBuilder<'a> {
         self.col_stretch(key, 4.0, |hdr| {
             hdr.row_between(mix_key(key, 1), |top| {
                 top.col_grow(mix_key(key, 2), 6.0, |left| {
-                    // Win11 的内容页大标题：26px / 600，与副标题之间只留 2px 的呼吸，
+                    // Win11 的内容页大标题：28px / 600，与副标题之间只留 2px 的呼吸，
                     // 让「标题 + 一句说明」读成一个整体，而不是两行各自为政。
-                    left.text_primary(mix_key(key, 3), title_str, 26.0, 600);
+                    left.text_primary(
+                        mix_key(key, 3),
+                        title_str,
+                        unbound_theme::typography::font_size::PAGE_TITLE,
+                        unbound_theme::typography::weight::SEMIBOLD,
+                    );
                     if !subtitle_str.is_empty() {
-                        left.text_muted(mix_key(key, 4), subtitle_str, 12.5);
+                        left.text_muted(
+                            mix_key(key, 4),
+                            subtitle_str,
+                            unbound_theme::typography::font_size::CAPTION,
+                        );
                     }
                 });
                 top.row_center(mix_key(key, 5), 8.0, actions);
@@ -2000,7 +2049,7 @@ impl<'a> ViewBuilder<'a> {
                 .height(Dim::px(dlg_h))
                 .padding(unbound_abi::Edges::all(18.0))
                 .gap(12.0)
-                .radius(12.0)
+                .radius(8.0)
                 .fill_token(u32::from(unbound_theme::Token::SURFACE_RAISED.raw()))
                 .border(u32::from(unbound_theme::Token::OUTLINE_STRONG.raw()), 1.0);
             // ABI 未提供 `shadow_blur` 链式构造器，直接写 POD 字段；
@@ -2055,14 +2104,18 @@ impl<'a> ViewBuilder<'a> {
             .width(Dim::percent(100.0))
             .padding(unbound_abi::Edges::all(16.0))
             .gap(10.0)
-            .radius(desc.radius.max(8.0))
+            .radius(desc.radius.max(unbound_theme::typography::geometry::CARD_RADIUS))
             .fill_token(u32::from(unbound_theme::Token::CARD_BG.raw()));
         node_desc.flex_shrink = 0.0;
         node_desc = node_desc.border(u32::from(unbound_theme::Token::CARD_BORDER.raw()), 1.0);
         self.container(key, node_desc, build)
     }
 
-    /// 声明带圆角边框与柔和阴影的 Showcase 风格面板卡片。
+    /// 声明 Win11 风格面板卡片。
+    ///
+    /// Win11 的分组卡片是**近乎方角**的 4px 圆角 + 一层极细描边，
+    /// 层次来自「同一张云母上叠一层薄纱」，而不是大圆角加投影——
+    /// 后者是 Material / Fluent 旧版观感。这里刻意不发射阴影。
     pub fn panel_card(
         &mut self,
         key: u64,
@@ -2075,11 +2128,10 @@ impl<'a> ViewBuilder<'a> {
             .width(Dim::percent(100.0))
             .padding(unbound_abi::Edges::all(padding))
             .gap(gap)
-            .radius(12.0)
+            .radius(unbound_theme::typography::geometry::CARD_RADIUS)
             .fill_token(u32::from(unbound_theme::Token::CARD_BG.raw()))
             .border(u32::from(unbound_theme::Token::CARD_BORDER.raw()), 1.0);
         desc.flex_shrink = 0.0;
-        desc.shadow_blur = 8.0;
         self.container(key, desc, build)
     }
 
@@ -2096,11 +2148,75 @@ impl<'a> ViewBuilder<'a> {
             .width(Dim::percent(100.0))
             .padding(unbound_abi::Edges::all(padding))
             .gap(gap)
-            .radius(10.0)
+            .radius(unbound_theme::typography::geometry::CARD_RADIUS)
             .fill_token(u32::from(unbound_theme::Token::SURFACE_SUNKEN.raw()))
             .border(u32::from(unbound_theme::Token::OUTLINE.raw()), 1.0);
         desc.flex_shrink = 0.0;
         self.container(key, desc, build)
+    }
+
+    /// 声明 Win11 设置应用风格的分组卡片。
+    ///
+    /// 与 [`Self::panel_card`] 的关键差别：卡片**不承载内边距**，行与行之间
+    /// 靠 1px 分隔线而不是留白隔开——这正是 Win11 设置页「一张卡片里排若干行」
+    /// 的读法。卡片本身是 4px 圆角的薄纱加细描边，没有阴影。
+    pub fn settings_card(&mut self, key: u64, build: impl FnOnce(&mut Self)) -> NodeId {
+        let mut desc = RawNodeDesc::container()
+            .column()
+            .width(Dim::percent(100.0))
+            .padding(unbound_abi::Edges::all(0.0))
+            .gap(0.0)
+            .radius(unbound_theme::typography::geometry::CARD_RADIUS)
+            .fill_token(u32::from(unbound_theme::Token::CARD_BG.raw()))
+            .border(u32::from(unbound_theme::Token::CARD_BORDER.raw()), 1.0);
+        desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 声明设置卡片内的一行（扁平排布：标题在上、说明在下，右侧可放行内控件）。
+    ///
+    /// 文字左缩进恒为 57px（`SETTINGS_ROW_TEXT_INSET`）——与 Win11 原生一致：
+    /// 不论该行有没有前置图标，标题与副标题都落在同一条竖线上。
+    pub fn settings_row(&mut self, key: u64, build: impl FnOnce(&mut Self)) -> NodeId {
+        let mut desc = RawNodeDesc::container()
+            .column()
+            .width(Dim::percent(100.0))
+            .padding(unbound_abi::Edges::trbl(
+                unbound_theme::typography::geometry::SETTINGS_ROW_TEXT_INSET,
+                12.0,
+                16.0,
+                12.0,
+            ))
+            .gap(2.0);
+        desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 声明带前置图标槽的设置行（左侧留出图标位，文字缩进与无图标行对齐）。
+    pub fn settings_row_with_icon(&mut self, key: u64, build: impl FnOnce(&mut Self)) -> NodeId {
+        let mut desc = RawNodeDesc::container()
+            .column()
+            .width(Dim::percent(100.0))
+            .padding(unbound_abi::Edges::trbl(
+                unbound_theme::typography::geometry::SETTINGS_ROW_ICON_INSET,
+                12.0,
+                16.0,
+                12.0,
+            ))
+            .gap(2.0);
+        desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 声明设置页的分组小标题（`相关设置` / `相关支持` 那种 15px 半粗小节标题）。
+    pub fn settings_group_header(&mut self, key: u64, text: impl Into<String>) -> NodeId {
+        let text = text.into();
+        self.text_primary(
+            key,
+            text,
+            unbound_theme::typography::font_size::SECTION_TITLE,
+            unbound_theme::typography::weight::SEMIBOLD,
+        )
     }
 
     /// 声明两端对齐的水平行容器（`width: 100%`, `Justify::SpaceBetween`, `Align::Center`）。
@@ -2111,6 +2227,22 @@ impl<'a> ViewBuilder<'a> {
             .align(unbound_abi::Align::Center)
             .justify(unbound_abi::Justify::SpaceBetween)
             .gap(8.0);
+        desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 声明左对齐的满宽水平行容器（`width: 100%`, `Justify::FlexStart`, `Align::Center`）。
+    ///
+    /// 与 [`Self::row_between`] 的差别：两端对齐会把「图标 + 文字」这一组整体
+    /// 推到最左、把行内控件推到最右；左对齐版本让中间的 `col_grow` 自然吸收
+    /// 剩余宽度，于是**文字紧跟在图标之后**——这正是 Win11 设置行的读法。
+    pub fn row_start(&mut self, key: u64, gap: f32, build: impl FnOnce(&mut Self)) -> NodeId {
+        let mut desc = RawNodeDesc::container()
+            .row()
+            .width(Dim::percent(100.0))
+            .align(unbound_abi::Align::Center)
+            .justify(unbound_abi::Justify::FlexStart)
+            .gap(gap);
         desc.flex_shrink = 0.0;
         self.container(key, desc, build)
     }
@@ -2645,6 +2777,8 @@ pub struct AppRuntime<A: Application> {
     window_commands: Vec<WindowCommand>,
     /// 上一帧生效的总缩放比（`os_scale * ui_scale`），用于检测 `reduce` 内缩放变更并同帧重排。
     last_effective_scale: f32,
+    /// 已同步到文本引擎的东亚字体族（用于检测界面语言切换）。
+    applied_cjk_family: Option<&'static str>,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -2703,6 +2837,7 @@ impl<A: Application> AppRuntime<A> {
             title_bar_bindings: FxHashMap::default(),
             window_commands: Vec::new(),
             last_effective_scale: 1.0,
+            applied_cjk_family: None,
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -3426,6 +3561,14 @@ impl<A: Application> AppRuntime<A> {
     pub fn frame(&mut self, dt: f32) -> FrameReport {
         self.frame_count = self.frame_count.wrapping_add(1);
         self.advance(dt);
+        // 界面语言切换会改变东亚字体族（简中 / 繁中 / 日文 / 韩文的汉字字形不同）。
+        // 这里在视图构建前同步给文本引擎，并强制整帧重排——否则旧字形会留在缓存里。
+        if self.ctx.cjk_family != self.applied_cjk_family {
+            self.applied_cjk_family = self.ctx.cjk_family;
+            self.text_engine.set_cjk_family(self.applied_cjk_family);
+            self.force_rebuild = true;
+            self.dirty |= DirtyFlags::ALL;
+        }
         // 先归约自上一帧以来到达的异步结果与定时器，
         // 使仅因它们而唤醒的帧仍会执行重建。
         self.poll_async();

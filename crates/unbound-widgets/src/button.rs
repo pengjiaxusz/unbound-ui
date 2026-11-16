@@ -216,6 +216,15 @@ pub struct ButtonDesc {
     pub left_align: bool,
     /// 是否处于激活/选中态（渲染选中高亮表面与左侧指示条）。
     pub active_selected: bool,
+    /// 左对齐时标签与按钮左沿的间距。
+    pub label_inset: f32,
+    /// 覆盖变体默认的颜色槽位。
+    ///
+    /// 变体只决定「用哪一组槽位」，主题决定「槽位长什么样」；
+    /// 但 Win11 的下拉列表项并不属于任何现成变体——它的选中态是
+    /// 「浅一档的高亮块 + 左侧强调条」，而不是按钮的填充/描边。
+    /// 因此这里允许调用方直接给出槽位集合。
+    pub tokens_override: Option<ButtonTokens>,
 }
 
 impl ButtonDesc {
@@ -238,6 +247,8 @@ impl ButtonDesc {
             focus_ring_gap: FOCUS_RING_GAP,
             left_align: false,
             active_selected: false,
+            label_inset: 12.0,
+            tokens_override: None,
         }
     }
 
@@ -335,6 +346,86 @@ impl ButtonDesc {
             .selected(active)
     }
 
+    /// 单选列表项（WinUI `ListViewItem` 选中态）。
+    ///
+    /// Win11 的单选列表用**浅底 + 左侧 3px 强调条**标出当前项，
+    /// 文字始终是正文色；它不是实心填充的按钮，也不是胶囊。
+    #[must_use]
+    pub fn list_item(label: impl Into<String>, active: bool) -> Self {
+        let 槽位 = if active {
+            ButtonTokens {
+                fill: Token::NAV_SELECTED,
+                fill_hover: Token::CONTROL_HOVER,
+                fill_pressed: Token::SURFACE_SUNKEN,
+                fill_disabled: Token::NONE,
+                border: Token::NONE,
+                label: Token::TEXT_PRIMARY,
+                label_disabled: Token::ON_DISABLED,
+                focus_ring: Token::NONE,
+            }
+        } else {
+            ButtonTokens {
+                fill: Token::NONE,
+                fill_hover: Token::CONTROL_HOVER,
+                fill_pressed: Token::SURFACE_SUNKEN,
+                fill_disabled: Token::NONE,
+                border: Token::NONE,
+                label: Token::TEXT_PRIMARY,
+                label_disabled: Token::ON_DISABLED,
+                focus_ring: Token::NONE,
+            }
+        };
+        Self::new(Rect::ZERO, label)
+            .variant(ButtonVariant::Subtle)
+            .with_size(ButtonSize::Sm)
+            .with_shadow(0.0)
+            .with_radius(4.0)
+            .left_align()
+            .selected(active)
+            .with_tokens(槽位)
+    }
+
+    /// Win11 切换按钮（`ToggleButton`）。
+    ///
+    /// Win11 的 ToggleButton 有两副面孔：
+    /// - **未按下**：透明底 + 一圈淡描边，正文色文字；
+    /// - **按下**：整颗按钮被强调色填满，文字换成强调色的反色。
+    ///
+    /// 用普通按钮的 Secondary 变体冒充它，会丢掉「当前处于开启态」这层信息——
+    /// 开关按下去之后看上去和按之前一模一样。
+    #[must_use]
+    pub fn toggle_button(label: impl Into<String>, on: bool) -> Self {
+        let 槽位 = if on {
+            ButtonTokens {
+                fill: Token::PRIMARY,
+                fill_hover: Token::PRIMARY_HOVER,
+                fill_pressed: Token::PRIMARY_PRESSED,
+                fill_disabled: Token::DISABLED,
+                border: Token::NONE,
+                label: Token::ON_PRIMARY,
+                label_disabled: Token::ON_DISABLED,
+                focus_ring: Token::FOCUS_RING,
+            }
+        } else {
+            ButtonTokens {
+                fill: Token::NONE,
+                fill_hover: Token::CONTROL_HOVER,
+                fill_pressed: Token::SURFACE_SUNKEN,
+                fill_disabled: Token::NONE,
+                border: Token::CONTROL_STROKE,
+                label: Token::TEXT_PRIMARY,
+                label_disabled: Token::ON_DISABLED,
+                focus_ring: Token::FOCUS_RING,
+            }
+        };
+        Self::new(Rect::ZERO, label)
+            .variant(ButtonVariant::Subtle)
+            .with_size(ButtonSize::Sm)
+            .with_shadow(0.0)
+            .with_radius(4.0)
+            .with_tokens(槽位)
+    }
+
     /// 紧凑图标/工具栏按钮。
     #[must_use]
     pub fn icon_btn(label: impl Into<String>) -> Self {
@@ -412,6 +503,9 @@ impl ButtonDesc {
     /// 此按钮绘制使用的颜色槽位。
     #[must_use]
     pub fn tokens(&self) -> ButtonTokens {
+        if let Some(覆盖) = self.tokens_override {
+            return 覆盖;
+        }
         let mut t = self.variant.tokens();
         if self.active_selected && self.variant != ButtonVariant::Primary {
             t.fill = Token::NAV_SELECTED;
@@ -420,6 +514,20 @@ impl ButtonDesc {
             t.label = Token::TEXT_PRIMARY;
         }
         t
+    }
+
+    /// 覆盖颜色槽位（绕过变体默认）。
+    #[must_use]
+    pub fn with_tokens(mut self, tokens: ButtonTokens) -> Self {
+        self.tokens_override = Some(tokens);
+        self
+    }
+
+    /// 设置左对齐标签与按钮左沿的间距。
+    #[must_use]
+    pub fn with_label_inset(mut self, inset: f32) -> Self {
+        self.label_inset = inset;
+        self
     }
 
     /// 指示器矩形：左对齐且垂直居中。
@@ -566,7 +674,7 @@ pub fn emit_button_with_tokens(
         content_width += desc.font_size + BUTTON_CONTENT_GAP;
     }
     let mut cursor = if desc.left_align {
-        rect.origin.x + 12.0
+        rect.origin.x + desc.label_inset
     } else {
         rect.center().x - content_width * 0.5
     };

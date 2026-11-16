@@ -11,35 +11,50 @@ use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs, outlined, surface};
+use crate::primitive::{focus_ring, glyphs, outlined};
 use crate::{ControlState, WidgetOutput};
 
 /// 控件命中区域所在的界面层。
 pub const CONTROL_LAYER: u8 = 1;
 
 /// 默认轨道尺寸。
-pub const SWITCH_TRACK: (f32, f32) = (44.0, 24.0);
+///
+/// Win11 的 `ToggleSwitch` 是 40 × 20 的扁胶囊；旧版 Fluent 的 44 × 24
+/// 偏厚，放在设置页里会立刻露出「不是 Win11」的观感。
+pub const SWITCH_TRACK: (f32, f32) = (40.0, 20.0);
 
 /// 默认旋钮尺寸。
-pub const SWITCH_KNOB: f32 = 16.0;
+///
+/// Win11 关闭态的旋钮是 12px 的小圆点（悬停时才长到 16px）。
+pub const SWITCH_KNOB: f32 = 12.0;
 
 /// 旋钮与轨道边缘保持的距离。
 const KNOB_INSET: f32 = 4.0;
 
+/// 开关标签与轨道之间的最小间距（逻辑像素）。
+///
+/// Win11 的设置行是「文字在左、开关在右」：标签占满轨道左侧的可用宽度，
+/// 轨道固定贴在行末，两者之间留出这一段呼吸空间。
+pub const SWITCH_LABEL_GAP: f32 = 10.0;
+
 /// 按下时旋钮沿轨道方向的拉伸量。
-const KNOB_SQUISH: f32 = 4.0;
+const KNOB_SQUISH: f32 = 3.0;
 
 /// 开关绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SwitchTokens {
-    /// 关闭状态下的轨道。
+    /// 关闭状态下的轨道填充。
     pub track: Token,
+    /// 关闭状态下的轨道描边。
+    pub track_border: Token,
     /// 开启状态下的轨道。
     pub track_on: Token,
     /// 禁用状态下的轨道。
     pub track_disabled: Token,
     /// 旋钮。
     pub thumb: Token,
+    /// 开启状态下的旋钮（纯黑）。
+    pub thumb_on: Token,
     /// 禁用状态下的旋钮。
     pub thumb_disabled: Token,
     /// 空闲状态下的标签。
@@ -57,10 +72,15 @@ impl SwitchTokens {
     #[must_use]
     pub fn standard() -> Self {
         Self {
-            track: Token::CONTROL_TRACK,
+            // 关闭态：透明底 + 1px 淡描边（Win11 实测）。
+            track: Token::NONE,
+            track_border: Token::CONTROL_TRACK_STROKE,
             track_on: Token::PRIMARY,
             track_disabled: Token::CONTROL_DISABLED_BG,
-            thumb: Token::CONTROL_THUMB,
+            // 关闭态旋钮用 `TextFillColorSecondary`（次级文字色）而不是纯白：
+            // 浅色主题下白色旋钮会与白色轨道糊成一片。
+            thumb: Token::SWITCH_THUMB_OFF,
+            thumb_on: Token::CONTROL_THUMB_ON,
             thumb_disabled: Token::CONTROL_DISABLED_THUMB,
             label: Token::TEXT_SECONDARY,
             label_hover: Token::TEXT_PRIMARY,
@@ -189,17 +209,27 @@ pub fn emit_switch(
     let z = desc.z;
 
     // 轨道。
-    let track_fill = if state.disabled {
-        tokens.track_disabled
+    //
+    // Win11 的 `ToggleSwitch`：
+    // - 开启：实心强调色胶囊，无描边；
+    // - 关闭：**透明底 + 1px 淡描边**（实测本机 Win11，轨道内部与卡片同色）。
+    // 早期实现把关闭态画成实心灰块，一眼就���「不是 Win11」。
+    let track_rect = desc.track_rect();
+    let track_radius = desc.track_size.1 * 0.5;
+    let (track_fill, track_border) = if state.disabled {
+        (tokens.track_disabled, Token::NONE)
     } else if desc.on {
-        tokens.track_on
+        (tokens.track_on, Token::NONE)
     } else {
-        tokens.track
+        (tokens.track, tokens.track_border)
     };
-    primitives.push(surface(
-        desc.track_rect(),
-        desc.track_size.1 * 0.5,
+    primitives.push(outlined(
+        track_rect,
+        track_radius,
         track_fill,
+        track_border,
+        1.0,
+        0.0,
         z,
     ));
 
@@ -209,6 +239,8 @@ pub fn emit_switch(
     let knob = desc.knob_rect_pressed(pressed);
     let thumb_fill = if state.disabled {
         tokens.thumb_disabled
+    } else if desc.on {
+        tokens.thumb_on
     } else {
         tokens.thumb
     };
@@ -280,8 +312,8 @@ mod tests {
         let desc = desc();
         let track = desc.track_rect();
         assert_eq!(track.max().x, 200.0);
-        assert_eq!(track.size, Vec2::new(44.0, 24.0));
-        assert_eq!(track.origin.y, 8.0);
+        assert_eq!(track.size, Vec2::new(40.0, 20.0));
+        assert_eq!(track.origin.y, 10.0);
     }
 
     #[test]
