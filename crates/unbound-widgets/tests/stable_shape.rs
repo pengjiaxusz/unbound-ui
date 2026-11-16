@@ -302,5 +302,7 @@ fn the_probe_covers_every_component() {
         WidgetCatalogId::COUNT,
         "the probe must cover every component exactly once"
     );
-    assert_eq!(WidgetCatalogId::COUNT, 107);
+    // 控件目录的条目数：这个数字是门禁——新增控件必须同步更新，
+    // 否则「每个控件都被探针覆盖」这句话就不再成立。
+    assert_eq!(WidgetCatalogId::COUNT, 108);
 }

@@ -34,7 +34,7 @@ fn glyph() -> GlyphQuad {
 }
 
 #[test]
-fn the_arrow_is_two_curve_strokes_that_flip_when_the_dropdown_opens() {
+fn the_arrow_is_two_curve_strokes_that_stay_pointing_down() {
     let desc = desc();
     let mut state = SelectState::new();
     let closed = emit_select(4, &desc, &state, ControlState::default());
@@ -51,8 +51,9 @@ fn the_arrow_is_two_curve_strokes_that_flip_when_the_dropdown_opens() {
     let open = emit_select(4, &desc, &state, ControlState::default());
     assert_eq!(open.primitives.len(), closed.primitives.len());
     assert_eq!(open.payloads.len(), 2);
-    // 打开时：箭头朝上，因此两端位于顶点下方。
-    assert!(open.payloads[0].p0[1] > open.payloads[0].p2[1]);
+    // 展开时：箭头**仍朝下**。Win11 的 ComboBox 不会随展开翻转箭头——
+    // 翻转是 WinForms/WPF 的老习惯，WinUI 没有沿用。
+    assert!(open.payloads[0].p0[1] < open.payloads[0].p2[1]);
 }
 
 #[test]
@@ -123,6 +124,7 @@ fn disabled_options_are_disabled_menu_rows() {
     assert_eq!(menu.rect.origin.y, desc.rect.max().y + 4.0);
     assert_eq!(
         Vec2::new(menu.rect.width(), menu.rect.height()),
-        Vec2::new(220.0, 120.0)
+        // 四行 × 37px：Win11 菜单项的行高实测值（`SELECT_ROW_HEIGHT`）。
+        Vec2::new(220.0, 148.0)
     );
 }
