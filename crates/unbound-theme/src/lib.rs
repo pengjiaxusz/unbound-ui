@@ -14,6 +14,7 @@
 
 pub mod presets;
 pub mod snapping;
+pub mod typography;
 pub mod win11;
 pub mod zoom;
 
@@ -211,6 +212,101 @@ impl Token {
     pub const PREEDIT_UNDERLINE: Self = Self(72);
     /// 子菜单行的展开箭头颜色。
     pub const SUBMENU_ARROW: Self = Self(73);
+
+    // ---- 品牌强调色色板（74..=83）--------------------------------------
+    //
+    // 10 套品牌强调色各占一个槽位，使「颜色网格」这类需要**逐格上色**的
+    // 控件可以直接用图元填充表达，而不必为每种品牌新增图元类型。
+    //
+    // 槽位顺序与 [`crate::AccentBrand::ALL`] 严格一致。
+    //
+    /// 品牌色板第 0 格（工程蓝）。
+    pub const ACCENT_SWATCH_0: Self = Self(74);
+    /// 品牌色板第 1 格（靛青）。
+    pub const ACCENT_SWATCH_1: Self = Self(75);
+    /// 品牌色板第 2 格（紫罗兰）。
+    pub const ACCENT_SWATCH_2: Self = Self(76);
+    /// 品牌色板第 3 格（翡翠绿）。
+    pub const ACCENT_SWATCH_3: Self = Self(77);
+    /// 品牌色板第 4 格（青碧）。
+    pub const ACCENT_SWATCH_4: Self = Self(78);
+    /// 品牌色板第 5 格（琥珀金）。
+    pub const ACCENT_SWATCH_5: Self = Self(79);
+    /// 品牌色板第 6 格（玫瑰红）。
+    pub const ACCENT_SWATCH_6: Self = Self(80);
+    /// 品牌色板第 7 格（绯红）。
+    pub const ACCENT_SWATCH_7: Self = Self(81);
+    /// 品牌色板第 8 格（极光青）。
+    pub const ACCENT_SWATCH_8: Self = Self(82);
+    /// 品牌色板第 9 格（冷岩灰）。
+    pub const ACCENT_SWATCH_9: Self = Self(83);
+
+    /// 按序号取品牌色板槽位；序号越界时饱和截断到最后一格。
+    #[must_use]
+    pub const fn accent_swatch(index: usize) -> Self {
+        match index {
+            0 => Self::ACCENT_SWATCH_0,
+            1 => Self::ACCENT_SWATCH_1,
+            2 => Self::ACCENT_SWATCH_2,
+            3 => Self::ACCENT_SWATCH_3,
+            4 => Self::ACCENT_SWATCH_4,
+            5 => Self::ACCENT_SWATCH_5,
+            6 => Self::ACCENT_SWATCH_6,
+            7 => Self::ACCENT_SWATCH_7,
+            8 => Self::ACCENT_SWATCH_8,
+            _ => Self::ACCENT_SWATCH_9,
+        }
+    }
+
+    // ---- 控件填充（84）---------------------------------------------------
+
+    /// 下拉框、输入框一类「控件表面」的填充色。
+    ///
+    /// WinUI 的 `ControlFillColorDefault` 是**叠在卡片之上的 6% 白色薄纱**，
+    /// 因此它必须比卡片亮一档：实测 Win11「个性化 > 颜色 > 选择模式」一行的
+    /// 下拉框底色为 `#37373C`，而它所在的卡片是 `#2A2A31`——差 13 级。
+    /// 直接拿实色 `SURFACE_RAISED` 去填，下拉框会与卡片几乎同色而「消失」。
+    pub const CONTROL_FILL: Self = Self(84);
+
+    // ---- 控件描边（85）---------------------------------------------------
+
+    /// 下拉框、输入框一类「控件表面」的描边色。
+    ///
+    /// WinUI 的 `ControlStrokeColorDefault` 是 6% 的白色/黑色薄纱：
+    /// 暗色下几乎看不见（实测 Win11 下拉框左沿只比填充亮 3 级），
+    /// 浅色下则是把白色控件从浅灰卡片上「抠」出来的那一圈灰线。
+    pub const CONTROL_STROKE: Self = Self(85);
+
+    // ---- 开关轨道描边（86）-----------------------------------------------
+
+    /// `ToggleSwitch` 关闭态轨道的描边色。
+    ///
+    /// Win11 的关闭态开关是**透明底 + 一圈淡描边**的胶囊，而不是实心灰块：
+    /// 实测本机 Windows 11「个性化 > 任务栏 > 任务视图」一行的关闭态开关，
+    /// 轨道内部与卡片同色（#2C2932），只有 1px 的淡灰描边（#BEBEC0）。
+    pub const CONTROL_TRACK_STROKE: Self = Self(86);
+
+    // ---- 开启态旋钮（87）-------------------------------------------------
+
+    /// `ToggleSwitch` 开启态的旋钮颜色。
+    ///
+    /// Win11 的开关是「填充式」：开启时轨道被强调色填满，旋钮变成**纯黑**
+    /// （实测本机 Win11：轨道 `#DB9AE5`，旋钮 `#000000`），靠明暗对比读出状态。
+    ///
+    /// 严格对应 WinUI 的 `TextOnAccentFillColorPrimary`：浅色 `#FFFFFF`、
+    /// 深色 `#000000`——强调色上的文字颜色是**跟着主题翻转**的。
+    pub const CONTROL_THUMB_ON: Self = Self(87);
+
+    // ---- 关闭态旋钮（88）-------------------------------------------------
+
+    /// `ToggleSwitch` 关闭态的旋钮颜色。
+    ///
+    /// 对应 WinUI 的 `TextFillColorSecondary`（浅色 `#9E000000` / 深色 `#C5FFFFFF`）。
+    ///
+    /// 它必须与通用的 [`Token::CONTROL_THUMB`] 分开：滑块与滚动条的把手用
+    /// `CONTROL_THUMB`（纯白/纯黑），而开关的旋钮是**次级文字色**——
+    /// 浅色下若也用白色，旋钮会与白色轨道糊成一片，开关直接「消失」。
+    pub const SWITCH_THUMB_OFF: Self = Self(88);
 }
 
 /// 设计系统定义的全部语义令牌集合。
@@ -220,7 +316,7 @@ impl Token {
 ///
 /// [`Token::NONE`] 不在此列表中：它是引擎保留槽位，而非语义颜色。
 ///
-pub const TOKENS: [Token; 73] = [
+pub const TOKENS: [Token; 88] = [
     Token::SURFACE,
     Token::SURFACE_RAISED,
     Token::SURFACE_SUNKEN,
@@ -294,6 +390,21 @@ pub const TOKENS: [Token; 73] = [
     Token::INPUT_BORDER_WARNING,
     Token::PREEDIT_UNDERLINE,
     Token::SUBMENU_ARROW,
+    Token::ACCENT_SWATCH_0,
+    Token::ACCENT_SWATCH_1,
+    Token::ACCENT_SWATCH_2,
+    Token::ACCENT_SWATCH_3,
+    Token::ACCENT_SWATCH_4,
+    Token::ACCENT_SWATCH_5,
+    Token::ACCENT_SWATCH_6,
+    Token::ACCENT_SWATCH_7,
+    Token::ACCENT_SWATCH_8,
+    Token::ACCENT_SWATCH_9,
+    Token::CONTROL_FILL,
+    Token::CONTROL_STROKE,
+    Token::CONTROL_TRACK_STROKE,
+    Token::CONTROL_THUMB_ON,
+    Token::SWITCH_THUMB_OFF,
 ];
 
 /// 当前激活的主题。
@@ -497,6 +608,11 @@ impl ThemeSet {
                     Color::from_srgb8(38, 110, 255, 255),
                 ),
                 (Token::INPUT_BG, Color::WHITE),
+                (Token::CONTROL_FILL, Color::WHITE),
+                (Token::CONTROL_STROKE, Color::from_srgb8(46, 49, 58, 255)),
+                (Token::CONTROL_TRACK_STROKE, Color::from_srgb8(138, 138, 138, 255)),
+                (Token::CONTROL_THUMB_ON, Color::BLACK),
+                (Token::SWITCH_THUMB_OFF, Color::from_srgb8(0, 0, 0, 158)),
                 (
                     Token::INPUT_BORDER_HOVER,
                     Color::from_srgb8(154, 163, 181, 255),
@@ -606,6 +722,11 @@ impl ThemeSet {
                     Color::from_srgb8(59, 130, 246, 255),
                 ),
                 (Token::INPUT_BG, Color::from_srgb8(20, 21, 26, 255)),
+                (Token::CONTROL_FILL, Color::from_srgb8(20, 21, 26, 255)),
+                (Token::CONTROL_STROKE, Color::from_srgb8(46, 49, 58, 255)),
+                (Token::CONTROL_TRACK_STROKE, Color::from_srgb8(138, 138, 138, 255)),
+                (Token::CONTROL_THUMB_ON, Color::BLACK),
+                (Token::SWITCH_THUMB_OFF, Color::from_srgb8(0, 0, 0, 158)),
                 (
                     Token::INPUT_BORDER_HOVER,
                     Color::from_srgb8(96, 104, 122, 255),
@@ -708,6 +829,11 @@ impl ThemeSet {
                     Color::from_srgb8(255, 230, 0, 255),
                 ),
                 (Token::INPUT_BG, Color::BLACK),
+                (Token::CONTROL_FILL, Color::BLACK),
+                (Token::CONTROL_STROKE, Color::WHITE),
+                (Token::CONTROL_TRACK_STROKE, Color::from_srgb8(138, 138, 138, 255)),
+                (Token::CONTROL_THUMB_ON, Color::BLACK),
+                (Token::SWITCH_THUMB_OFF, Color::from_srgb8(0, 0, 0, 158)),
                 (
                     Token::INPUT_BORDER_HOVER,
                     Color::from_srgb8(255, 230, 0, 255),

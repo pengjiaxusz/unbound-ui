@@ -22,10 +22,15 @@ use crate::{ControlState, WidgetDesc, WidgetOutput};
 /// 选择框的命中测试层。
 pub const SELECT_LAYER: u8 = 1;
 /// 单个选项行的高度。
-pub const SELECT_ROW_HEIGHT: f32 = 30.0;
+///
+/// 实测 Win11「个性化 > 颜色 > 选择模式」下拉列表：三行文字基线间距 37px，
+/// 选中项高亮块高 32px（上下各留 2.5px 间隙）。
+pub const SELECT_ROW_HEIGHT: f32 = 37.0;
 const CHEVRON_HALF_WIDTH: f32 = 4.0;
-/// 展开/收起箭头的半高。
-const CHEVRON_HALF_HEIGHT: f32 = 3.0;
+/// 展开箭头的半高。
+///
+/// 实测 Win11 下拉框里的倒三角宽 8px、高 4px——比 Segoe 的普通箭头更扁。
+const CHEVRON_HALF_HEIGHT: f32 = 2.0;
 /// 展开/收起箭头的描边宽度。
 const CHEVRON_STROKE: f32 = 1.5;
 
@@ -60,7 +65,9 @@ impl SelectDesc {
             placeholder: String::new(),
             disabled_options: Vec::new(),
             initial_selection: None,
-            radius: 8.0,
+            // Win11 的控件圆角是 4px（`ControlCornerRadius`），不是 8px：
+            // 8px 那套圆角属于菜单与对话框，输入框/下拉框一律 4px。
+            radius: unbound_theme::typography::geometry::CONTROL_RADIUS,
             z: 730,
         }
     }
@@ -287,9 +294,13 @@ pub fn emit_select_with_glyphs(
     let fill = if control.disabled {
         Token::DISABLED
     } else if state.open || control.phase == crate::PointerPhase::Hovered {
-        Token::CONTROL_HOVER
+        // 悬停/展开态：Win11 的下拉框在悬停时**变亮**一档（`ControlFillColorDefault`
+        // 之上再叠一层白色薄纱），而不是变暗——用实色 `CONTROL_HOVER` 会让框
+        // 在悬停时反而比常态更暗。
+        Token::HOVER
     } else {
-        Token::SURFACE_RAISED
+        // 常态：叠在卡片之上的 6% 白色薄纱（实测比卡片亮 13 级）。
+        Token::CONTROL_FILL
     };
     let mut primitives: Vec<GpuPrimitiveInstance> = vec![
         surface(rect, desc.radius, fill, desc.z),
@@ -297,7 +308,9 @@ pub fn emit_select_with_glyphs(
             rect,
             radii,
             Token::NONE,
-            Token::OUTLINE,
+            // `ControlStrokeColorDefault`：6% 薄纱，暗色下几乎不可见。
+            // 用 `OUTLINE` 会把下拉框描成一道明显的黑边，与 Win11 不符。
+            Token::CONTROL_STROKE,
             1.0,
             0.0,
             PrimType::RoundedRect,
@@ -306,14 +319,12 @@ pub fn emit_select_with_glyphs(
         ),
     ];
     let mut payloads: Vec<GpuPayload> = Vec::new();
-    // 展开箭头：在顶点交汇的两条线段，收起时朝下，打开时朝上。
+    // 展开箭头：在顶点交汇的两条线段，**恒定朝下**。
     //
-    let apex_y = if state.open {
-        -CHEVRON_HALF_HEIGHT
-    } else {
-        CHEVRON_HALF_HEIGHT
-    };
-    let center = Vec2::new(rect.max().x - 16.0, rect.origin.y + rect.height() * 0.5);
+    // Win11 的 ComboBox 箭头不会随展开/收起翻转——实测展开态下它仍是向下的
+    // 「⌄」。翻转是 WinForms/WPF 的老习惯，WinUI 没有沿用。
+    let apex_y = CHEVRON_HALF_HEIGHT;
+    let center = Vec2::new(rect.max().x - 20.0, rect.origin.y + rect.height() * 0.5);
     let left = Vec2::new(center.x - CHEVRON_HALF_WIDTH, center.y - apex_y);
     let apex = Vec2::new(center.x, center.y + apex_y);
     let right = Vec2::new(center.x + CHEVRON_HALF_WIDTH, center.y - apex_y);
@@ -472,7 +483,7 @@ mod tests {
         let menu = desc.menu(viewport());
         assert_eq!(menu.rect.origin.x, 20.0);
         assert_eq!(menu.rect.origin.y, 60.0);
-        assert_eq!(menu.rect.height(), 90.0);
+        assert_eq!(menu.rect.height(), 3.0 * SELECT_ROW_HEIGHT);
         assert!(viewport().contains_rect(&menu.rect));
     }
 

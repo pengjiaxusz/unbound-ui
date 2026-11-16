@@ -96,6 +96,7 @@ define_widget_catalog! {
         code_editor,
         collapsible,
         color_picker,
+        color_swatch,
         combobox,
         command_palette,
         containers,
@@ -197,6 +198,7 @@ define_widget_catalog! {
         CodeEditor => code_editor,
         Collapsible => collapsible,
         ColorPicker => color_picker,
+        ColorSwatch => color_swatch,
         Combobox => combobox,
         CommandPalette => command_palette,
         Containers => containers,
@@ -378,6 +380,9 @@ pub use collapsible::{emit_collapsible, CollapsibleDesc, CollapsibleState};
 pub use color_picker::{
     emit_color_picker, parse_hex, parse_oklch, parse_rgba, ColorFormat, ColorPart, ColorPickerDesc,
     ColorPickerLayout, ColorPickerState, Hsva, ThemeSettingsState,
+};
+pub use color_swatch::{
+    emit_color_swatch, ColorSwatchDesc, SWATCH_GAP, SWATCH_RADIUS, SWATCH_SIZE,
 };
 pub use combobox::{
     emit_combobox_popup, emit_combobox_trigger, ComboItem, ComboboxDesc, ComboboxKey,

@@ -58,7 +58,12 @@ impl TextStyle {
         let line_height = if self.line_height > 0.0 {
             self.line_height
         } else {
-            (self.font_size * 1.2).round()
+            // WinUI 的行高约为字号的 1.4 倍：Segoe UI Variable 在 14px 下
+            // 天然行高 20px，正是 Win11 界面里正文行距的观感来源。
+            //
+            // 旧值 1.2 过密——同一段文字在 Win11 与本渲染器里几乎少掉一整行
+            // 的呼吸，是「界面不像 Win11」最容易被察觉、却最容易被忽略的一项。
+            (self.font_size * 1.4).round()
         };
         Metrics::new(self.font_size, line_height)
     }
@@ -422,6 +427,36 @@ fn source_line_starts(text: &str) -> Vec<usize> {
     starts
 }
 
+/// 把文本切成「东亚 / 非东亚」的连续片段。
+///
+/// 返回的每个片段都是原文本的连续切片（按字符边界切分，不破坏 UTF-8），
+/// 标记该片段是否应绑定 CJK 字体。
+#[must_use]
+fn 切分东亚(text: &str) -> Vec<(&str, bool)> {
+    let mut 结果: Vec<(&str, bool)> = Vec::new();
+    let mut 起点 = 0usize;
+    let mut 当前: Option<bool> = None;
+    for (偏移, ch) in text.char_indices() {
+        let 东亚 = 是东亚字符(ch);
+        match 当前 {
+            Some(旧) if 旧 == 东亚 => {}
+            Some(旧) => {
+                结果.push((&text[起点..偏移], 旧));
+                起点 = 偏移;
+                当前 = Some(东亚);
+            }
+            None => {
+                起点 = 偏移;
+                当前 = Some(东亚);
+            }
+        }
+    }
+    if let Some(类) = 当前 {
+        结果.push((&text[起点..], 类));
+    }
+    结果
+}
+
 /// 塑形引擎：持有字体系统与两级缓存。
 pub struct TextEngine {
     font_system: FontSystem,
@@ -432,7 +467,99 @@ pub struct TextEngine {
     wrap_cache: FxHashMap<(u64, u64, u32), Arc<WrappedText>>,
     stats: TextCacheStats,
     max_cache_entries: usize,
+    /// 东亚文字显式绑定的系统字体族（`None` 表示按文本内容自动判定）。
+    ///
+    /// 见 [`东亚字体族`]：Windows 的 CJK 界面字体与拉丁界面字体是两套，
+    /// 必须显式绑定，否则塑形器的回退会挑到日文或楷体字库。
+    东亚字体覆盖: Option<&'static str>,
 }
+
+/// Windows 简体中文界面使用的 CJK 字体族。
+///
+/// 与 `Segoe UI Variable` 一样，Windows 11 的中文界面字体是
+/// `Microsoft YaHei UI`（而非「微软雅黑」旧名），字形重心更低、笔画更均匀。
+pub const 微软雅黑: &str = "Microsoft YaHei UI";
+/// Windows 繁体中文界面使用的 CJK 字体族。
+///
+/// 繁体字形与简体不同（`設` / `计` 的写法差异），用简体字体会让整个界面
+/// 在繁体语言下「字都对、但看着不像中文」。
+pub const 微软正黑: &str = "Microsoft JhengHei UI";
+/// Windows 日文界面字体。
+pub const 游ゴシック: &str = "Yu Gothic UI";
+/// Windows 韩文界面字体。
+pub const 맑은고딕: &str = "Malgun Gothic";
+
+/// 按界面语言标签选出应当使用的东亚字体族。
+///
+/// `None` 表示该语言不使用东亚文字（回退到按文本内容自动判定）。
+#[must_use]
+pub fn 东亚字体族_按语言(tag: &str) -> Option<&'static str> {
+    let t = tag.trim().to_ascii_lowercase();
+    if t.starts_with("zh") {
+        if t.contains("tw") || t.contains("hk") || t.contains("mo") || t.contains("hant") {
+            Some(微软正黑)
+        } else {
+            Some(微软雅黑)
+        }
+    } else if t.starts_with("ja") {
+        Some(游ゴシック)
+    } else if t.starts_with("ko") {
+        Some(맑은고딕)
+    } else {
+        None
+    }
+}
+
+/// 判断一个字符是否属于东亚文字（汉字、假名、谚文及其标点与全角形式）。
+///
+/// 东亚文字必须落到系统 CJK 字体上：拉丁界面字体 `Segoe UI Variable`
+/// 根本没有这些字形，若交给塑形器回退，它会按「字重距离」挑到
+/// `Yu Gothic UI`（日文）或 `LXGW WenKai Mono`（楷体）——
+/// 标题因此变成日文/书法字，与 Windows 11 原生界面一眼可辨。
+#[must_use]
+fn 是东亚字符(ch: char) -> bool {
+    matches!(ch as u32,
+        // 假名（平假名 / 片假名 / 竖排标点 / 半角片假名）
+        0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9D
+        // 谚文（谚文字母、兼容谚文、谚文音节）
+        | 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F
+        | 0xAC00..=0xD7A3 | 0xD7B0..=0xD7FF
+        // 汉字（部首、扩展 A、常用、兼容、表意文字补充）
+        | 0x2E80..=0x2EFF | 0x3005 | 0x3007 | 0x3021..=0x3029
+        | 0x3038..=0x303B | 0x3400..=0x4DBF | 0x4E00..=0x9FFF
+        | 0xF900..=0xFAFF | 0x20000..=0x2FA1F
+        // 中日韩标点与全角形式
+        | 0x3000..=0x3037 | 0xFE10..=0xFE1F | 0xFE30..=0xFE4F
+        | 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6
+    )
+}
+
+/// 判定一段文本应当绑定的东亚字体族。
+///
+/// 依据文本内出现的文字体系选择：出现假名即日文，出现谚文即韩文，
+/// 否则按简体中文处理。返回 `None` 表示该字体在系统上不可用，
+/// 此时回退到塑形器默认行为（可能落到非 CJK 字体，但不会崩溃）。
+#[must_use]
+fn 东亚字体族(text: &str, 可用: impl Fn(&str) -> bool) -> Option<&'static str> {
+    let mut 有假名 = false;
+    let mut 有谚文 = false;
+    for ch in text.chars() {
+        match ch as u32 {
+            0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9D => 有假名 = true,
+            0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7A3 => 有谚文 = true,
+            _ => {}
+        }
+    }
+    let 候选: [&'static str; 3] = if 有假名 {
+        [游ゴシック, 微软雅黑, 맑은고딕]
+    } else if 有谚文 {
+        [맑은고딕, 微软雅黑, 游ゴシック]
+    } else {
+        [微软雅黑, 游ゴシック, 맑은고딕]
+    };
+    候选.into_iter().find(|族| 可用(族))
+}
+
 
 impl core::fmt::Debug for TextEngine {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -461,7 +588,27 @@ impl TextEngine {
         #[cfg(windows)]
         {
             let db = font_system.db_mut();
-            db.set_sans_serif_family("Segoe UI");
+            // Windows 11 的系统 UI 字体是**可变字体** `Segoe UI Variable`
+            // （`SegUIVar.ttf`），而静态 `Segoe UI` 是 Windows 10 时代的字体：
+            // 两者字形轮廓、字距与重心都不同，与原生 Win11 界面并排时一眼可辨。
+            //
+            // fontdb 只枚举出 `Segoe UI Variable` 的单个 face（weight=400），
+            // 但 cosmic-text 会按 `wght` 变体轴匹配实际字重，swash 光栅化时
+            // 再把变体坐标注入轮廓——因此 400/600/700 三档都能取到正确的变体，
+            // 而不需要系统里真的存在三个静态字体文件。
+            //
+            // 老系统（Windows 10）没有该可变字体，此时回退到静态 `Segoe UI`，
+            // 保证不会出现「字体找不到 → 落到随机字体」的观感事故。
+            let has_variable_ui_font = db.faces().any(|face| {
+                face.families
+                    .iter()
+                    .any(|(family, _)| family == "Segoe UI Variable")
+            });
+            db.set_sans_serif_family(if has_variable_ui_font {
+                "Segoe UI Variable"
+            } else {
+                "Segoe UI"
+            });
             db.set_monospace_family("Cascadia Mono");
         }
         Self {
@@ -472,7 +619,37 @@ impl TextEngine {
             wrap_cache: FxHashMap::default(),
             stats: TextCacheStats::default(),
             max_cache_entries: 4096,
+            东亚字体覆盖: None,
         }
+    }
+
+    /// 显式指定东亚文字使用的系统字体族。
+    ///
+    /// 界面语言切换时必须调用：中文界面用 `Microsoft YaHei UI`，
+    /// 日文界面用 `Yu Gothic UI`，韩文界面用 `Malgun Gothic`——
+    /// 三者的汉字字形并不相同（简繁日韩各有专属写法），
+    /// 用错字体族会让日文界面出现简体字。
+    ///
+    /// 传入 `None` 恢复为「按文本内容自动判定」。
+    pub fn set_east_asian_family(&mut self, family: Option<&'static str>) {
+        if self.东亚字体覆盖 != family {
+            self.东亚字体覆盖 = family;
+            self.clear_caches();
+        }
+    }
+
+    /// 指定东亚文字使用的系统字体族（`None` 表示自动判定）。
+    ///
+    /// 见 [`Self::set_east_asian_family`]。
+    pub fn set_cjk_family(&mut self, family: Option<&'static str>) {
+        self.set_east_asian_family(family);
+    }
+
+    /// 系统上是否存在指定字体族。
+    fn 字体族可用(&self, 族: &str) -> bool {
+        self.font_system.db().faces().any(|face| {
+            face.families.iter().any(|(family, _)| family == 族)
+        })
     }
 
     /// 提供可变访问以供字形光栅化（`SwashCache` 需要）。
@@ -541,8 +718,39 @@ impl TextEngine {
         // 先构建 `Attrs`：它只借用 `style` 而非 `self`，因此下方对缓冲区的可变借用无歧义。
         //
         let attrs = self.attrs(style);
+        // 东亚文字单独绑定系统 CJK 字体。调用方显式指定字体族时不做接管——
+        // 那是刻意的排版选择，框架不应覆盖。
+        let 东亚 = if style.family.is_some() {
+            None
+        } else {
+            let 自动 = || 东亚字体族(text, |族| self.字体族可用(族));
+            match self.东亚字体覆盖 {
+                // 显式指定的字体族在系统上缺失时仍要退回自动判定，
+                // 否则整段东亚文字会失去 CJK 绑定、落回塑形器的任意回退。
+                Some(族) => self.字体族可用(族).then_some(族).or_else(自动),
+                None => 自动(),
+            }
+        };
         let buffer = self.buffer.as_mut().expect("buffer just created");
-        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        match 东亚 {
+            Some(族) => {
+                // 按「东亚 / 非东亚」把文本切成连续片段，每段单独给出字体族。
+                // 同一段内不做更细的切分：中文标点与全角符号必须与相邻汉字同族，
+                // 否则日文界面里的「。」会跳到中文字体上。
+                let 分段 = 切分东亚(text);
+                let mut spans: Vec<(&str, Attrs<'_>)> = Vec::with_capacity(分段.len());
+                for (片段, 是东亚) in 分段 {
+                    let 段属性 = if 是东亚 {
+                        attrs.clone().family(Family::Name(族))
+                    } else {
+                        attrs.clone()
+                    };
+                    spans.push((片段, 段属性));
+                }
+                buffer.set_rich_text(spans, &attrs, Shaping::Advanced, None);
+            }
+            None => buffer.set_text(text, &attrs, Shaping::Advanced, None),
+        }
         buffer.shape_until_scroll(&mut self.font_system, false);
     }
 
@@ -996,6 +1204,61 @@ mod tests {
 
     fn engine() -> TextEngine {
         TextEngine::new()
+    }
+
+    #[test]
+    fn 东亚文本被切分为连续的东亚与非东亚片段() {
+        let 片段 = 切分东亚("启动 universal-3d 预设");
+        assert_eq!(片段.len(), 3);
+        assert!(片段[0].1, "汉字片段应标记为东亚");
+        assert_eq!(片段[0].0, "启动");
+        assert!(!片段[1].1, "拉丁片段不应标记为东亚");
+        assert_eq!(片段[1].0, " universal-3d ");
+        assert!(片段[2].1);
+        assert_eq!(片段[2].0, "预设");
+    }
+
+    #[test]
+    fn 中文标点与汉字同族不会被拆开() {
+        let 片段 = 切分东亚("启动。预设");
+        assert_eq!(片段.len(), 1, "中文标点必须与相邻汉字同段");
+        assert!(片段[0].1);
+    }
+
+    #[test]
+    fn 东亚字体族按文本内的文字体系选择() {
+        let 全可用 = |_: &str| true;
+        assert_eq!(东亚字体族("启动预设", 全可用), Some(微软雅黑));
+        assert_eq!(东亚字体族("設定と地域", 全可用), Some(游ゴシック));
+        assert_eq!(东亚字体族("설정과 지역", 全可用), Some(맑은고딕));
+        assert_eq!(东亚字体族("只有拉丁 ASCII", 全可用), Some(微软雅黑));
+    }
+
+    #[test]
+    fn 东亚字体缺失时回退到下一个可用字体() {
+        let 仅日文 = |族: &str| 族 == 游ゴシック;
+        assert_eq!(东亚字体族("启动预设", 仅日文), Some(游ゴシック));
+        let 全不可用 = |_: &str| false;
+        assert_eq!(东亚字体族("启动预设", 全不可用), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn 中文标题落到微软雅黑而不是日文或楷体字库() {
+        // 回归防线：塑形器的自动回退按「字重距离」挑字体，
+        // 半粗（600）会命中带 600 字重的 `Yu Gothic UI`，
+        // 使中文标题渲染成日文或楷体——与 Windows 11 原生界面一眼可辨。
+        let mut e = engine();
+        let style = TextStyle::sized(28.0);
+        let 族 = e.resolved_families("启动预设", &style);
+        assert!(
+            族.iter().any(|f| f == 微软雅黑),
+            "中文应落到 {微软雅黑}，实际 {族:?}"
+        );
+        assert!(
+            !族.iter().any(|f| f.contains("Yu Gothic") || f.contains("LXGW")),
+            "中文不应落到日文或楷体字库，实际 {族:?}"
+        );
     }
 
     #[test]

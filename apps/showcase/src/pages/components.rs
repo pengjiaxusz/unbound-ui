@@ -162,6 +162,7 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::TimePicker
         | WidgetCatalogId::HotkeyInput
         | WidgetCatalogId::ColorPicker
+        | WidgetCatalogId::ColorSwatch
         | WidgetCatalogId::GradientEditor
         | WidgetCatalogId::CurveEditor
         | WidgetCatalogId::Form
@@ -212,6 +213,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::CodeEditor => "view.add(ui_key!(\"ce\"), CodeEditorDesc::new(rect, buffer));",
         WidgetCatalogId::Collapsible => "view.add(ui_key!(\"col\"), CollapsibleDesc::new(rect, \"Details\"));",
         WidgetCatalogId::ColorPicker => "view.add(ui_key!(\"cp\"), ColorPickerDesc::new(rect));",
+        WidgetCatalogId::ColorSwatch => "view.color_swatch(ui_key!(\"csw\"), ColorSwatchDesc::swatch(Token::accent_swatch(0), \"Accent\"));",
         WidgetCatalogId::Combobox => "view.add(ui_key!(\"cmb\"), ComboboxDesc::new(rect, items));",
         WidgetCatalogId::CommandPalette => "view.add(ui_key!(\"cmd\"), CommandPaletteDesc::new(rect));",
         WidgetCatalogId::Containers => "view.card(ui_key!(\"crd\"), CardDesc::default(), |card| { /* content */ });",
@@ -371,6 +373,7 @@ define_showcase_components! {
     Checkbox => "Checkbox", "A checked box with a shaped mark and label.", 240.0,
     CodeBlock => "Code block", "Syntax-highlighted source with a copy affordance.", 300.0,
     ColorPicker => "Color picker", "HSVA field with HEX / OKLCH readouts.", 360.0,
+    ColorSwatch => "Color swatch", "Accent palette tile with a selection ring.", 240.0,
     Combobox => "Combobox", "Editable trigger with a filtered suggestion list.", 260.0,
     CommandPalette => "Command palette", "Fuzzy command search with shortcuts.", 360.0,
     Containers => "Card container", "Header / body / footer surface from the containers module.", 300.0,
@@ -502,6 +505,7 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::CodeEditor => "代码编辑器 (Code Editor)",
         WidgetCatalogId::Collapsible => "可折叠区 (Collapsible)",
         WidgetCatalogId::ColorPicker => "颜色选择器 (Color Picker)",
+        WidgetCatalogId::ColorSwatch => "颜色色块 (Color Swatch)",
         WidgetCatalogId::Combobox => "组合框 (Combobox)",
         WidgetCatalogId::CommandPalette => "命令面板 (Command Palette)",
         WidgetCatalogId::Containers => "卡片容器 (Card Container)",
@@ -617,6 +621,7 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::CodeEditor => "代码编辑器 着色器编辑 code editor",
         WidgetCatalogId::Collapsible => "可折叠区域 展开收起 collapsible",
         WidgetCatalogId::ColorPicker => "颜色选择器 调色盘 材质球色彩 color picker",
+        WidgetCatalogId::ColorSwatch => "颜色色块 品牌色板 调色板方块 color swatch",
         WidgetCatalogId::Combobox => "组合框 可编辑下拉 combobox",
         WidgetCatalogId::CommandPalette => "命令面板 快捷指令搜索 command palette",
         WidgetCatalogId::Containers => "卡片容器 面板 containers card",

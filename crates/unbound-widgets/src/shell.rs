@@ -1489,8 +1489,8 @@ impl SidebarItemDesc {
             collapsed: false,
             indent: 0.0,
             badge: None,
-            height: 40.0,
-            radius: 4.0,
+            height: unbound_theme::typography::geometry::NAV_ITEM_HEIGHT,
+            radius: unbound_theme::typography::geometry::NAV_RADIUS,
             z: 630,
         }
     }
@@ -1550,7 +1550,7 @@ impl SidebarItemDesc {
         Rect::new(
             self.rect.origin.x + 4.0 + self.indent,
             self.rect.origin.y + (self.rect.size.y - 16.0) * 0.5,
-            3.0,
+            unbound_theme::typography::geometry::NAV_INDICATOR_WIDTH,
             16.0,
         )
     }
@@ -1710,7 +1710,11 @@ impl UiWidget for SidebarItemDesc {
         if self.collapsed {
             return Vec2::new(40.0, h);
         }
-        let m = text_ctx.measure_line(&self.label, 12.5, if self.selected { 600 } else { 400 });
+        let m = text_ctx.measure_line(
+            &self.label,
+            unbound_theme::typography::font_size::BODY,
+            if self.selected { 600 } else { 400 },
+        );
         let badge_w = self
             .badge
             .as_ref()
@@ -1741,7 +1745,11 @@ impl UiWidget for SidebarItemDesc {
             return emit_sidebar_item(node, &desc, control, &[], &[], None);
         }
         let (badge_rect, badge_glyphs, badge_reserve) = if let Some(badge_str) = &desc.badge {
-            let bm = text_ctx.measure_line(badge_str, 10.5, 600);
+            let bm = text_ctx.measure_line(
+                badge_str,
+                unbound_theme::typography::font_size::MICRO,
+                unbound_theme::typography::weight::SEMIBOLD,
+            );
             let bw = (bm.x + 12.0).max(20.0);
             let bh = 18.0;
             let br = Rect::new(
@@ -1750,7 +1758,14 @@ impl UiWidget for SidebarItemDesc {
                 bw,
                 bh,
             );
-            let bg = text_ctx.shape_line(badge_str, br, 10.5, 600, AlignX::Center, AlignY::Middle);
+            let bg = text_ctx.shape_line(
+                badge_str,
+                br,
+                unbound_theme::typography::font_size::MICRO,
+                unbound_theme::typography::weight::SEMIBOLD,
+                AlignX::Center,
+                AlignY::Middle,
+            );
             (Some(br), bg, bw + 12.0)
         } else {
             (None, Vec::new(), 6.0)
@@ -1770,7 +1785,7 @@ impl UiWidget for SidebarItemDesc {
         let label_glyphs = text_ctx.shape_line(
             &desc.label,
             text_rect,
-            12.5,
+            unbound_theme::typography::font_size::BODY,
             weight,
             AlignX::Left,
             AlignY::Middle,

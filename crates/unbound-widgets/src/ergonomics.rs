@@ -40,7 +40,7 @@ use crate::slider::{emit_slider, value_from_pointer, Orientation, SliderDesc, Sl
 use crate::split_button::{
     emit_split_button_with_glyphs, SplitButtonDesc, SplitButtonState, DROPDOWN_WIDTH,
 };
-use crate::switch::{emit_switch, SwitchDesc, SwitchTokens};
+use crate::switch::{emit_switch, SwitchDesc, SwitchTokens, SWITCH_LABEL_GAP};
 use crate::table::{emit_table, ColumnSpec, TableDesc, TableRow, TableState};
 use crate::task_hud::{emit_task_hud, TaskHudDesc};
 use crate::terminal_view::{
@@ -618,9 +618,12 @@ impl UiWidget for SwitchDesc {
         let label_w = if self.label.is_empty() {
             0.0
         } else {
-            measured.x + 12.0
+            measured.x
         };
-        let w = (self.track_size.0 + label_w).max(self.rect.width());
+        // 标签在左、轨道在右，两者之间留 10px：
+        // 旧算法只按「轨道宽 + 标签宽」估算总宽，却把标签画在轨道右侧 50px 处，
+        // 于是标签必然压在轨道上——设置页里的开关会盖住自己的文字。
+        let w = (label_w + SWITCH_LABEL_GAP + self.track_size.0).max(self.rect.width());
         let h = self.track_size.1.max(26.0).max(self.rect.height());
         Vec2::new(w, h)
     }
@@ -645,10 +648,12 @@ impl UiWidget for SwitchDesc {
         desc.rect = rect;
         desc.on = *state;
         control.selected = desc.on;
+        // Win11 的设置行是「文字在左、开关在右」：标签占据轨道左侧的全部可用宽度，
+        // 轨道固定贴在行末，两者互不重叠。
         let label_r = Rect::new(
-            rect.origin.x + desc.track_size.0 + 10.0,
+            rect.origin.x,
             rect.origin.y,
-            (rect.width() - desc.track_size.0 - 10.0).max(0.0),
+            (rect.width() - desc.track_size.0 - SWITCH_LABEL_GAP).max(0.0),
             rect.height(),
         );
         let glyphs = text_ctx.shape_line(
@@ -899,6 +904,20 @@ impl UiWidget for SelectDesc {
         }
     }
 
+    fn sync_state(&self, state: &mut Self::State) {
+        // 受控控件：描述符里的 `initial_selection` 是选中项的唯一真源。
+        // 应用侧改了值（例如下拉列表里选了另一项）之后，框架每帧把它同步回局部状态，
+        // 收起态的输入框才会立刻显示新值，而不必等控件被重新挂载。
+        if let Some(选中) = self.initial_selection {
+            if state.selected != Some(选中) {
+                state.selected = Some(选中);
+            }
+            if state.highlighted.is_none() {
+                state.highlighted = state.selected;
+            }
+        }
+    }
+
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
         let longest = self
             .options
@@ -910,21 +929,18 @@ impl UiWidget for SelectDesc {
         let measured = text_ctx.measure_line(longest, 14.0, 400);
         Vec2::new(
             (measured.x + 40.0).max(self.rect.width()).max(140.0),
-            self.rect.height().max(34.0),
+            // Win11 的下拉框与输入框同高（32px），不是 34px。
+            self.rect.height().max(unbound_theme::typography::geometry::INPUT_HEIGHT),
         )
     }
 
     fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
         match event {
             WidgetInputEvent::PointerDown { .. } => {
-                if !self.options.is_empty() {
-                    let next = match state.selected {
-                        Some(idx) => (idx + 1) % self.options.len(),
-                        None => 0,
-                    };
-                    state.selected = Some(next);
-                    state.highlighted = Some(next);
-                }
+                // 只负责开合：真正的选项切换发生在应用渲染的下拉列表里。
+                // 旧实现在按下时顺手把选中项跳到下一项，于是「点一下输入框」
+                // 会悄悄改掉用户的设置——这既不是 WinUI 的行为，也没法承载
+                // 「打开列表 → 选中某一项 → 应用变更」这条标准链路。
                 state.open = !state.open;
                 true
             }
@@ -962,10 +978,11 @@ impl UiWidget for SelectDesc {
         let mut desc = self.clone();
         desc.rect = rect;
         let display = desc.display_text(state);
+        // Win11 下拉框的文本左内边距是 14px（实测：框左边缘 x=1302，文字起点 x=1316）。
         let text_r = Rect::new(
-            rect.origin.x + 12.0,
+            rect.origin.x + 14.0,
             rect.origin.y,
-            (rect.width() - 32.0).max(0.0),
+            (rect.width() - 34.0).max(0.0),
             rect.height(),
         );
         let glyphs = text_ctx.shape_line(display, text_r, 14.0, 400, AlignX::Left, AlignY::Middle);
@@ -2846,13 +2863,48 @@ impl UiWidget for crate::hotkey_input::HotkeyInputDesc {
     }
 }
 
+impl crate::color_swatch::ColorSwatchDesc {
+    /// 创建无 Rect 的颜色色块描述符。
+    #[must_use]
+    pub fn swatch(fill: unbound_theme::Token, label: impl Into<String>) -> Self {
+        Self::new(Rect::ZERO, fill, label)
+    }
+}
+
+impl UiWidget for crate::color_swatch::ColorSwatchDesc {
+    type State = ();
+
+    fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        Vec2::new(
+            self.rect.width().max(crate::color_swatch::SWATCH_SIZE),
+            self.rect.height().max(crate::color_swatch::SWATCH_SIZE),
+        )
+    }
+
+    fn reduce(&self, _state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        matches!(event, WidgetInputEvent::PointerDown { .. })
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        _state: &Self::State,
+        _text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        crate::color_swatch::emit_color_swatch(node, &desc, control)
+    }
+}
+
 impl crate::color_picker::ColorPickerDesc {
     /// 创建无 Rect 的颜色选择器描述符。
     #[must_use]
     pub fn picker() -> Self {
         Self::new(Rect::ZERO)
     }
-
     /// 设置颜色文本显示格式。
     #[must_use]
     pub fn with_format(mut self, format: crate::color_picker::ColorFormat) -> Self {

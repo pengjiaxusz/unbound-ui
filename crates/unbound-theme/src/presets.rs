@@ -189,6 +189,22 @@ impl ThemeSet {
             }
         }
 
+        // 10 套品牌色板：每格填入对应品牌的主强调色，供「颜色网格」逐格上色。
+        for (idx, brand) in crate::AccentBrand::ALL.iter().enumerate() {
+            let light = if preset == ProductPreset::Win11 {
+                crate::win11::accent_ramp(*brand, false).0
+            } else {
+                brand.light_ramp().0
+            };
+            let dark = if preset == ProductPreset::Win11 {
+                crate::win11::accent_ramp(*brand, true).0
+            } else {
+                brand.dark_ramp().0
+            };
+            set_tok(&mut light_entries, Token::accent_swatch(idx), light);
+            set_tok(&mut dark_entries, Token::accent_swatch(idx), dark);
+        }
+
         match preset {
             ProductPreset::Win11 | ProductPreset::Standard => {}
             ProductPreset::Dunting => {

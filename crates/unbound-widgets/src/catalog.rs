@@ -28,7 +28,8 @@ use crate::{
     BadgeDesc, BreadcrumbDesc, BreadcrumbState, BreadcrumbTokens, ButtonDesc, CalendarState,
     CanvasToolbarDesc, CanvasToolbarState, CardDesc, CardTokens, ChartDesc, ChartSeries,
     ChartState, CheckboxDesc, CheckboxTokens, ChipDesc, CodeBlockDesc, CodeBlockState,
-    ColorPickerDesc, ColorPickerState, ColumnSpec, ComboItem, ComboboxDesc, ComboboxState, Command,
+    ColorPickerDesc, ColorPickerState, ColorSwatchDesc, ColumnSpec, ComboItem, ComboboxDesc,
+    ComboboxState, Command,
     CommandPaletteDesc, CommandPaletteState, CommandPaletteTokens, ContextMenuState, ControlState,
     Crumb, CurveEditorDesc, CurveEditorState, DataColumnSpec, DatePickerDesc, DividerDesc,
     DividerTokens, DockTab, DockTokens, DockTree, DrawerDesc, DrawerSide, DrawerState,
@@ -697,6 +698,17 @@ where
             };
             let mut glyphs = shape(&hex, hex_pos, 12.0);
             crate::color_picker::emit_color_picker(node, &desc, &picker, state, &mut glyphs)
+        }
+        WidgetCatalogId::ColorSwatch => {
+            // 品牌色板：十格依次上色，选中项套强调色细环。
+            let swatch_rect = Rect::new(o.x, o.y, crate::color_swatch::SWATCH_SIZE, crate::color_swatch::SWATCH_SIZE);
+            let desc = ColorSwatchDesc::new(
+                swatch_rect,
+                Token::accent_swatch(variant_idx % 10),
+                "Accent swatch",
+            )
+            .selected(variant_idx % 2 == 1);
+            crate::color_swatch::emit_color_swatch(node, &desc, state)
         }
         WidgetCatalogId::Combobox => {
             let desc = ComboboxDesc::new(

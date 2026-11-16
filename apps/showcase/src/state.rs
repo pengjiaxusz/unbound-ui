@@ -816,7 +816,8 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::RichText
         | WidgetCatalogId::Overlay
         | WidgetCatalogId::Image
-        | WidgetCatalogId::ShortcutBar => {
+        | WidgetCatalogId::ShortcutBar
+        | WidgetCatalogId::ColorSwatch => {
             let count = sandbox.click_counts.entry(key).or_insert(0);
             *count = count.wrapping_add(1);
             true
