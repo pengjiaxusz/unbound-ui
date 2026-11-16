@@ -1732,6 +1732,156 @@ impl<'a> ViewBuilder<'a> {
         self.add(key, desc)
     }
 
+    /// 声明式几何矢量外壳图标快捷方式。
+    pub fn shell_icon(&mut self, key: u64, desc: unbound_widgets::ShellIconDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式几何矢量图标按钮快捷方式。
+    pub fn icon_button(&mut self, key: u64, desc: unbound_widgets::IconButtonDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式应用品牌徽标（圆角渐变色块 + 中心字母）快捷方式。
+    pub fn brand_badge(&mut self, key: u64, desc: unbound_widgets::AppBrandBadgeDesc) -> NodeId {
+        self.add(key, desc)
+    }
+
+    /// 声明式侧边栏分组标题快捷方式。
+    pub fn sidebar_section(
+        &mut self,
+        key: u64,
+        desc: unbound_widgets::SidebarSectionHeaderDesc,
+    ) -> NodeId {
+        let mut layout = RawNodeDesc::container()
+            .width(Dim::percent(100.0))
+            .height(Dim::px(desc.height));
+        layout.flex_shrink = 0.0;
+        self.add_with_layout(key, layout, desc)
+    }
+
+    /// 声明式侧边栏导航项（含矢量图标、选中态胶囊高亮、左侧 3px 强调色竖条与尾部徽标）快捷方式。
+    pub fn sidebar_item(&mut self, key: u64, desc: unbound_widgets::SidebarItemDesc) -> NodeId {
+        let mut layout = if desc.collapsed {
+            RawNodeDesc::container()
+                .width(Dim::px(40.0))
+                .height(Dim::px(desc.height))
+        } else {
+            RawNodeDesc::container()
+                .width(Dim::percent(100.0))
+                .height(Dim::px(desc.height))
+        };
+        layout.flex_shrink = 0.0;
+        self.add_with_layout(key, layout, desc)
+    }
+
+    /// 声明式 Showcase 风格特性入口卡片快捷方式。
+    pub fn feature_card(&mut self, key: u64, desc: unbound_widgets::FeatureCardDesc) -> NodeId {
+        let mut layout = RawNodeDesc::container()
+            .width(Dim::percent(100.0))
+            .height(Dim::px(desc.height));
+        layout.flex_shrink = 0.0;
+        self.add_with_layout(key, layout, desc)
+    }
+
+    /// 声明式 Showcase 风格内凹舞台容器（`radius = 10.0`, `SURFACE_SUNKEN`, `OUTLINE`）。
+    pub fn stage_box(
+        &mut self,
+        key: u64,
+        padding: f32,
+        gap: f32,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let mut desc = RawNodeDesc::container()
+            .column()
+            .width(Dim::percent(100.0))
+            .padding(unbound_abi::Edges::all(padding))
+            .gap(gap)
+            .radius(10.0)
+            .fill_token(u32::from(unbound_theme::Token::SURFACE_SUNKEN.raw()))
+            .border(u32::from(unbound_theme::Token::OUTLINE.raw()), 1.0);
+        desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 声明式 Showcase 风格章节卡片容器（`radius = 12.0`, 标题 + 右侧胶囊徽章组 + 副标题 + 内容区）。
+    pub fn showcase_card(
+        &mut self,
+        key: u64,
+        title: impl Into<String>,
+        subtitle: impl Into<String>,
+        badges: &[(&str, unbound_widgets::BadgeVariant)],
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let title_str = title.into();
+        let subtitle_str = subtitle.into();
+        let mut card_desc = RawNodeDesc::container()
+            .column()
+            .width(Dim::percent(100.0))
+            .padding(unbound_abi::Edges::all(20.0))
+            .gap(14.0)
+            .radius(12.0)
+            .fill_token(u32::from(unbound_theme::Token::CARD_BG.raw()))
+            .border(u32::from(unbound_theme::Token::CARD_BORDER.raw()), 1.0);
+        card_desc.flex_shrink = 0.0;
+        card_desc.shadow_blur = 10.0;
+        self.container(key, card_desc, |card| {
+            card.row_between(mix_key(key, 1), |hdr| {
+                hdr.col_grow(mix_key(key, 2), 4.0, |titles| {
+                    titles.text_primary(mix_key(key, 3), title_str, 16.0, 600);
+                    if !subtitle_str.is_empty() {
+                        titles.text_muted(mix_key(key, 4), subtitle_str, 12.5);
+                    }
+                });
+                if !badges.is_empty() {
+                    hdr.row_center(mix_key(key, 5), 6.0, |pills| {
+                        for (idx, (label, variant)) in badges.iter().enumerate() {
+                            pills.badge(
+                                mix_key(key, 100 + idx as u64),
+                                BadgeDesc::label(*label).variant(*variant),
+                            );
+                        }
+                    });
+                }
+            });
+            build(card);
+        })
+    }
+
+    /// 声明式 Showcase 风格页面大标题头部（22px 粗体标题 + 副标题 + 顶部胶囊组 + 右侧动作栏）。
+    pub fn page_header(
+        &mut self,
+        key: u64,
+        title: impl Into<String>,
+        subtitle: impl Into<String>,
+        pills: &[(&str, unbound_widgets::BadgeVariant)],
+        actions: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let title_str = title.into();
+        let subtitle_str = subtitle.into();
+        self.col_stretch(key, 10.0, |hdr| {
+            hdr.row_between(mix_key(key, 1), |top| {
+                top.col_grow(mix_key(key, 2), 6.0, |left| {
+                    left.text_primary(mix_key(key, 3), title_str, 22.0, 600);
+                    if !subtitle_str.is_empty() {
+                        left.text_muted(mix_key(key, 4), subtitle_str, 13.0);
+                    }
+                });
+                top.row_center(mix_key(key, 5), 8.0, actions);
+            });
+            if !pills.is_empty() {
+                hdr.row_wrap(mix_key(key, 6), 8.0, |row| {
+                    for (idx, (label, variant)) in pills.iter().enumerate() {
+                        row.badge(
+                            mix_key(key, 200 + idx as u64),
+                            BadgeDesc::label(*label).variant(*variant),
+                        );
+                    }
+                });
+            }
+        })
+    }
+
     /// 声明全屏遮罩居中模态弹窗容器（自动开启 `z_index = 1200` 浮层与 `SCRIM` 命中遮罩）。
     pub fn modal_scrim(
         &mut self,
@@ -1821,7 +1971,7 @@ impl<'a> ViewBuilder<'a> {
         self.container(key, node_desc, build)
     }
 
-    /// 声明带圆角边框的面板卡片。
+    /// 声明带圆角边框与柔和阴影的 Showcase 风格面板卡片。
     pub fn panel_card(
         &mut self,
         key: u64,
@@ -1834,14 +1984,15 @@ impl<'a> ViewBuilder<'a> {
             .width(Dim::percent(100.0))
             .padding(unbound_abi::Edges::all(padding))
             .gap(gap)
-            .radius(8.0)
+            .radius(12.0)
             .fill_token(u32::from(unbound_theme::Token::CARD_BG.raw()))
             .border(u32::from(unbound_theme::Token::CARD_BORDER.raw()), 1.0);
         desc.flex_shrink = 0.0;
+        desc.shadow_blur = 8.0;
         self.container(key, desc, build)
     }
 
-    /// 声明深色内凹容器框（适用于代码预览、路径框、子列表）。
+    /// 声明深色内凹舞台容器框（适用于代码预览、路径框、子列表）。
     pub fn sunken_box(
         &mut self,
         key: u64,
@@ -1854,7 +2005,7 @@ impl<'a> ViewBuilder<'a> {
             .width(Dim::percent(100.0))
             .padding(unbound_abi::Edges::all(padding))
             .gap(gap)
-            .radius(6.0)
+            .radius(10.0)
             .fill_token(u32::from(unbound_theme::Token::SURFACE_SUNKEN.raw()))
             .border(u32::from(unbound_theme::Token::OUTLINE.raw()), 1.0);
         desc.flex_shrink = 0.0;
@@ -1902,6 +2053,19 @@ impl<'a> ViewBuilder<'a> {
             .width(Dim::percent(100.0))
             .gap(gap);
         desc.flex_shrink = 0.0;
+        self.container(key, desc, build)
+    }
+
+    /// 声明弹性填充剩余宽度的纵向分栏（`flex_grow = 1.0`，最小宽度 `0`）。
+    ///
+    /// 与 [`Self::col_stretch`] 的区别：`col_stretch` 直接声明 `width: 100%`，
+    /// 只适合独占整行的列。当左列要与右侧操作区共享同一个 `row` / `row_between` 时
+    /// 必须改用本方法，否则左列会吃掉整行宽度，把右侧按钮挤出可视区。
+    pub fn col_grow(&mut self, key: u64, gap: f32, build: impl FnOnce(&mut Self)) -> NodeId {
+        let mut desc = RawNodeDesc::container().column().gap(gap);
+        desc.min_width = Dim::px(0.0);
+        desc.flex_grow = 1.0;
+        desc.flex_basis = Dim::px(0.0);
         self.container(key, desc, build)
     }
 
