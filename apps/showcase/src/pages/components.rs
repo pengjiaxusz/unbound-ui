@@ -20,7 +20,7 @@ use crate::canvas::{AlignX, AlignY};
 pub const COMPONENTS_INFO: PageInfo = PageInfo {
     title: "Component gallery",
     short: "All Components",
-    description: "All 106 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
+    description: "All 107 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
     crates: &["unbound-widgets"],
     keywords: "component gallery catalog emitter coverage widget showcase every control tooltip",
 };
@@ -123,6 +123,7 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
 
         WidgetCatalogId::Breadcrumb
         | WidgetCatalogId::NavigationRail
+        | WidgetCatalogId::Sidebar
         | WidgetCatalogId::Pagination
         | WidgetCatalogId::Tabs
         | WidgetCatalogId::TreeView
@@ -294,6 +295,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::QueryBuilder => "view.add(ui_key!(\"qb\"), QueryBuilderDesc::new(rect, QueryCombinator::And, rules));",
         WidgetCatalogId::SchemaForm => "view.add(ui_key!(\"sf\"), SchemaFormDesc::new(rect, fields));",
         WidgetCatalogId::ShortcutBar => "view.add(ui_key!(\"scb\"), ShortcutBarDesc::new(rect, entries));",
+        WidgetCatalogId::Sidebar => "view.add(ui_key!(\"sb\"), SidebarDesc::new(rect, sections).active(id));",
         WidgetCatalogId::TaskHud => "view.add(ui_key!(\"hud\"), TaskHudDesc::new(rect, tasks));",
     }
 }
@@ -463,6 +465,7 @@ define_showcase_components! {
     SchemaForm => "Schema form", "Declarative schema-driven inspector form with dirty tracking and conditional fields.", 280.0,
     ShortcutBar => "Shortcut bar", "Contextual keycap shortcut hint bar with conflict detection.", 220.0,
     TaskHud => "Task HUD", "Background task progress stack with cancellation affordances.", 260.0,
+    Sidebar => "Sidebar", "Full-height navigation panel with grouped sections, active and hovered rows, badges and a pinned footer.", 420.0,
 }
 
 /// 按激活语言返回目录组件的侧边栏与卡片标题。
@@ -551,6 +554,7 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::Segmented => "分段控制器 (Segmented)",
         WidgetCatalogId::Select => "下拉选择框 (Select)",
         WidgetCatalogId::ShortcutBar => "快捷键提示栏 (Shortcut Bar)",
+        WidgetCatalogId::Sidebar => "侧边栏 (Sidebar)",
         WidgetCatalogId::Skeleton => "骨架占位屏 (Skeleton)",
         WidgetCatalogId::Slider => "滑块 (Slider)",
         WidgetCatalogId::Spinner => "加载转圈 (Spinner)",
@@ -667,6 +671,7 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Segmented => "分段控制器 胶囊切换 segmented",
         WidgetCatalogId::Select => "下拉选择器 枚举选择 select",
         WidgetCatalogId::ShortcutBar => "快捷键提示栏 键位冲突检测 shortcut bar",
+        WidgetCatalogId::Sidebar => "侧边栏 导航面板 分组条目 sidebar nav panel",
         WidgetCatalogId::Skeleton => "骨架屏 加载占位 skeleton",
         WidgetCatalogId::Slider => "滑块 区间滑块 磁吸刻度 slider range snap",
         WidgetCatalogId::Spinner => "加载转圈 旋转指示器 spinner",

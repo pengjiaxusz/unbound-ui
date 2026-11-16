@@ -371,7 +371,7 @@ where
                 1 => (
                     Severity::Success,
                     "Build succeeded",
-                    "All 106 components compiled with zero warnings.",
+                    "All 107 components compiled with zero warnings.",
                 ),
                 2 => (
                     Severity::Warning,
@@ -3033,6 +3033,93 @@ where
                 x += keycap_w + (entry.label.len() as f32 * 7.0) + 20.0;
             }
             emit_shortcut_bar(node, &desc, state, &glyphs)
+        }
+        WidgetCatalogId::Sidebar => {
+            let panel_w = rect.size.x.clamp(180.0, crate::sidebar::SIDEBAR_WIDTH);
+            let panel_h = rect.size.y.max(240.0);
+            let panel_r = Rect::new(o.x, o.y, panel_w, panel_h);
+            // 点击卡片时按 `variant_idx` 循环切换高亮条目，悬停项始终错开一格，
+            // 因此展厅里能一眼看出“选中 + 悬停”两个状态互不干扰。
+            let active = 1 + (variant_idx % 5) as u64;
+            let hovered = 1 + ((variant_idx + 2) % 5) as u64;
+            let sections = vec![
+                crate::sidebar::SidebarSection::new("Workspace")
+                    .with_entry(crate::sidebar::SidebarEntry::new(
+                        1,
+                        "Overview",
+                        crate::ShellIcon::Grid,
+                    ))
+                    .with_entry(
+                        crate::sidebar::SidebarEntry::new(2, "Sessions", crate::ShellIcon::Bolt)
+                            .badge("3"),
+                    )
+                    .with_entry(crate::sidebar::SidebarEntry::new(
+                        3,
+                        "Shaders",
+                        crate::ShellIcon::Code,
+                    )),
+                crate::sidebar::SidebarSection::new("System")
+                    .with_entry(crate::sidebar::SidebarEntry::new(
+                        4,
+                        "Settings",
+                        crate::ShellIcon::Settings,
+                    ))
+                    .with_entry(crate::sidebar::SidebarEntry::new(
+                        5,
+                        "Extensions",
+                        crate::ShellIcon::Package,
+                    )),
+            ];
+            let desc = crate::sidebar::SidebarDesc::new(panel_r, sections)
+                .active(active)
+                .hovered(hovered)
+                .label("Component gallery sidebar")
+                .footer(vec![crate::sidebar::SidebarEntry::new(
+                    9,
+                    "Help",
+                    crate::ShellIcon::Search,
+                )]);
+            let rows = desc.rows();
+            let mut shaped = Vec::with_capacity(rows.len());
+            for row in &rows {
+                let label_rect = desc.row_label_rect(row);
+                if let crate::sidebar::SidebarRowKind::Section { section } = row.kind {
+                    let title = desc
+                        .sections
+                        .get(section)
+                        .map_or("", |value| value.title.as_str());
+                    shaped.push(crate::sidebar::SidebarRowGlyphs {
+                        label: shape_centered_y(
+                            &mut shape,
+                            title,
+                            label_rect,
+                            label_rect.origin.x,
+                            10.5,
+                        ),
+                        badge: Vec::new(),
+                    });
+                    continue;
+                }
+                let Some(entry) = desc.row_entry(row) else {
+                    shaped.push(crate::sidebar::SidebarRowGlyphs::default());
+                    continue;
+                };
+                let badge_rect = desc.row_badge_rect(row);
+                let badge = entry.badge.as_deref().map_or_else(Vec::new, |text| {
+                    shape_centered(&mut shape, text, badge_rect, 10.5)
+                });
+                shaped.push(crate::sidebar::SidebarRowGlyphs {
+                    label: shape_centered_y(
+                        &mut shape,
+                        &entry.label,
+                        label_rect,
+                        label_rect.origin.x,
+                        12.5,
+                    ),
+                    badge,
+                });
+            }
+            crate::sidebar::emit_sidebar(node, &desc, state, &shaped)
         }
         WidgetCatalogId::TaskHud => {
             let hud_r = Rect::new(o.x, o.y, rect.size.x.min(340.0), 92.0);

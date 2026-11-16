@@ -34,7 +34,7 @@ const LANG_MENU_WIDTH: f32 = 148.0;
 /// 标题栏窗口缩放下拉菜单的面板最小宽度（绘制与无障碍语义节点共用）。
 const ZOOM_MENU_WIDTH: f32 = 132.0;
 
-/// 编译期完备性门禁：验证侧边栏 100% 覆盖全部 `PageId::ALL`（25 页）、全部 `WidgetCatalogId::ALL`（106 组件）以及 `PageId::Systems` 覆盖全部 21 个引擎子系统。
+/// 编译期完备性门禁：验证侧边栏 100% 覆盖全部 `PageId::ALL`（25 页）、全部 `WidgetCatalogId::ALL`（107 组件）以及 `PageId::Systems` 覆盖全部 21 个引擎子系统。
 const _: () = {
     let mut page_idx = 0;
     while page_idx < PageId::ALL.len() {
@@ -303,7 +303,7 @@ struct LayoutKey {
     nav_width: u32,
     page: u8,
     locale: u8,
-    /// 处于打开状态的代码面板（支持最多 128 张卡片，覆盖 Components 页全部 106 个组件）。
+    /// 处于打开状态的代码面板（支持最多 128 张卡片，覆盖 Components 页全部 107 个组件）。
     code_mask: [u64; 2],
 }
 

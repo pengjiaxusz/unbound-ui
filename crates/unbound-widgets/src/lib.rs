@@ -143,6 +143,7 @@ define_widget_catalog! {
         segmented,
         select,
         shortcut_bar,
+        sidebar,
         skeleton,
         slider,
         spinner,
@@ -248,6 +249,7 @@ define_widget_catalog! {
         Segmented => segmented,
         Select => select,
         ShortcutBar => shortcut_bar,
+        Sidebar => sidebar,
         Skeleton => skeleton,
         Slider => slider,
         Spinner => spinner,
@@ -325,6 +327,12 @@ pub use schema_form::{
     SchemaFormState, SchemaValue,
 };
 pub use shortcut_bar::{emit_shortcut_bar, KeybindingManagerState, ShortcutBarDesc, ShortcutEntry};
+pub use sidebar::{
+    emit_sidebar, sidebar_row_node, SidebarDesc, SidebarEntry, SidebarRow, SidebarRowGlyphs,
+    SidebarRowKind, SidebarSection, SIDEBAR_BADGE_HEIGHT, SIDEBAR_BADGE_WIDTH,
+    SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_FOOTER_GAP, SIDEBAR_ITEM_HEIGHT, SIDEBAR_PADDING,
+    SIDEBAR_SECTION_GAP, SIDEBAR_SECTION_HEIGHT, SIDEBAR_WIDTH,
+};
 pub use task_hud::{emit_task_hud, TaskActivityItem, TaskHudDesc};
 
 pub use accordion::{

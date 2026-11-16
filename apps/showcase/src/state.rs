@@ -850,6 +850,7 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::Pagination
         | WidgetCatalogId::Carousel
         | WidgetCatalogId::NavigationRail
+        | WidgetCatalogId::Sidebar
         | WidgetCatalogId::Menu
         | WidgetCatalogId::Menubar
         | WidgetCatalogId::ContextMenu
