@@ -566,6 +566,11 @@ pub struct AppContext {
     pub viewport: Vec2,
     /// 当前激活主题。
     pub theme: ThemeKind,
+    /// 是否跟随操作系统明暗设置。
+    ///
+    /// `false` 时窗口运行器不再把 `ThemeChanged` 事件套用到应用上——应用自己管主题，
+    /// 系统换肤不应该偷偷覆盖用户的选择（启动器的「主题跟随系统」开关就依赖这个位）。
+    pub follow_system_theme: bool,
     /// 当前宿主产品主题风格预设（如 `ProductPreset::RenderWorkbench`）。
     pub preset: unbound_theme::ProductPreset,
     /// 当前 OKLCH 品牌强调色预设（共 10 套）。
@@ -645,7 +650,8 @@ impl AppContext {
         Self {
             viewport,
             theme: ThemeKind::Dark,
-            preset: unbound_theme::ProductPreset::RenderWorkbench,
+            follow_system_theme: true,
+            preset: unbound_theme::ProductPreset::Win11,
             accent: unbound_theme::AccentBrand::Blue,
             window_maximized: false,
             window_focused: true,
@@ -1251,6 +1257,8 @@ pub struct ViewBuilder<'a> {
     /// 不可变帧上下文。
     pub ctx: ViewContext,
     world: &'a mut UiWorld,
+    /// 运行时资产中心：应用可在此提交 PNG 字节并绘制已解码的位图。
+    assets: &'a mut AssetHub,
     parent: NodeId,
     pending: &'a mut Vec<PendingWidget>,
     widget_state: Rc<RefCell<WidgetStateStore>>,
@@ -1940,12 +1948,14 @@ impl<'a> ViewBuilder<'a> {
     ) -> NodeId {
         let title_str = title.into();
         let subtitle_str = subtitle.into();
-        self.col_stretch(key, 10.0, |hdr| {
+        self.col_stretch(key, 4.0, |hdr| {
             hdr.row_between(mix_key(key, 1), |top| {
                 top.col_grow(mix_key(key, 2), 6.0, |left| {
-                    left.text_primary(mix_key(key, 3), title_str, 22.0, 600);
+                    // Win11 的内容页大标题：26px / 600，与副标题之间只留 2px 的呼吸，
+                    // 让「标题 + 一句说明」读成一个整体，而不是两行各自为政。
+                    left.text_primary(mix_key(key, 3), title_str, 26.0, 600);
                     if !subtitle_str.is_empty() {
-                        left.text_muted(mix_key(key, 4), subtitle_str, 13.0);
+                        left.text_muted(mix_key(key, 4), subtitle_str, 12.5);
                     }
                 });
                 top.row_center(mix_key(key, 5), 8.0, actions);
@@ -2357,6 +2367,45 @@ impl<'a> ViewBuilder<'a> {
     /// 直接访问收集器，供需要追加变换或裁剪的控件使用。
     pub fn collector(&mut self) -> &mut SceneCollector {
         self.collector
+    }
+
+    /// 运行时资产中心（只读）：查询已解码位图、字体等资源。
+    #[must_use]
+    pub fn assets(&self) -> &AssetHub {
+        self.assets
+    }
+
+    /// 提交一张 PNG 供运行时异步解码并打包进图集，返回资源句柄。
+    ///
+    /// 解码发生在工作线程，本帧不会阻塞；调用方应在后续帧用
+    /// [`Self::backdrop_image`] 或 [`unbound_widgets::emit_image_with_assets`] 绘制它。
+    pub fn request_png(&mut self, bytes: Vec<u8>) -> unbound_asset::AssetId {
+        self.assets.request_png(bytes)
+    }
+
+    /// 在整窗最底层绘制一张位图（云母/壁纸背板）。
+    ///
+    /// 图元在本次视图构建的最开头压入收集器，因此位于所有容器与卡片之下；
+    /// 资源仍在解码时返回 `false` 且什么都不画——占位符会把整窗涂成内凹灰块。
+    pub fn backdrop_image(&mut self, key: u64, asset: unbound_asset::AssetId) -> bool {
+        use unbound_widgets::{ImageAssetResolver, ImageDesc, ObjectFit};
+        if self.assets.resolve(asset).is_none() {
+            return false;
+        }
+        let viewport = self.ctx.viewport;
+        let mut desc = ImageDesc::new(Rect::new(0.0, 0.0, viewport.x, viewport.y), viewport, 0)
+            .with_asset(asset)
+            .with_fit(ObjectFit::Fill);
+        // z = 0：位列所有容器与卡片之下（图元按 z 排序，卡片背景在 1 以上）。
+        desc.z = 0;
+        let output = unbound_widgets::emit_image_with_assets(
+            key,
+            &desc,
+            ControlState::default(),
+            self.assets,
+        );
+        self.collector.push(key, output);
+        true
     }
 
     /// 请求渲染器在 `rect` 后方执行背景模糊通道。
@@ -3309,6 +3358,12 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
+    /// 应用是否声明跟随操作系统明暗设置。
+    #[must_use]
+    pub const fn follows_system_theme(&self) -> bool {
+        self.ctx.follow_system_theme
+    }
+
     /// 处理主题变更。
     pub fn set_theme(&mut self, kind: ThemeKind) -> DirtyFlags {
         self.ctx.theme = kind;
@@ -3445,6 +3500,7 @@ impl<A: Application> AppRuntime<A> {
             collector: &mut self.collector,
             ctx: view_ctx,
             world: &mut self.world,
+            assets: &mut self.asset_hub,
             parent: root,
             pending: &mut self.pending,
             widget_state: Rc::clone(&self.widget_state),

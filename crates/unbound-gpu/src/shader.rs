@@ -37,6 +37,10 @@ macro_rules! embedded {
         pub fn $fn_name() -> ShaderModule {
             ShaderModule {
                 name: $name,
+                // 注意：`include_bytes!` 指向 `OUT_DIR`，Cargo 不会把构建脚本产物纳入
+                // 增量编译指纹。改了 `shaders/*.frag` 之后若界面毫无变化，请顺手
+                // `touch` 本文件强制重建；未装 glslc 的机器还会回退到 `shaders/spv/`
+                // 下签入的二进制，因此改着色器时必须同步刷新那份预编译产物。
                 spirv: include_bytes!(concat!(env!("OUT_DIR"), "/spv/", $file, ".spv")),
             }
         }

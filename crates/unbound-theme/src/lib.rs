@@ -14,6 +14,7 @@
 
 pub mod presets;
 pub mod snapping;
+pub mod win11;
 pub mod zoom;
 
 pub use presets::{
