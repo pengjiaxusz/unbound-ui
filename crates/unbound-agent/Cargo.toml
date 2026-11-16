@@ -1,0 +1,20 @@
+[package]
+name = "unbound-agent"
+description = "Agent-native projection over the semantic tree: perception, addressing, action, assertion and replay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+unbound-math.workspace = true
+unbound-a11y.workspace = true
+unbound-input.workspace = true
+unbound-app.workspace = true
+unbound-widgets.workspace = true
+accesskit.workspace = true
+rustc-hash.workspace = true
+
+[lints]
+workspace = true

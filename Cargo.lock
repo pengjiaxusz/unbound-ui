@@ -989,6 +989,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "unbound-agent"
+version = "0.1.0"
+dependencies = [
+ "accesskit",
+ "rustc-hash",
+ "unbound-a11y",
+ "unbound-app",
+ "unbound-input",
+ "unbound-math",
+ "unbound-widgets",
+]
+
+[[package]]
 name = "unbound-anim"
 version = "0.1.0"
 dependencies = [

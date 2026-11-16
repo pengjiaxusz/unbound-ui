@@ -20,6 +20,7 @@ members = [
     "crates/unbound-graph",
     "crates/unbound-headless",
     "crates/unbound-host",
+    "crates/unbound-agent",
     "crates/app-guest",
     "crates/unbound-kpi",
     "apps/gallery",
@@ -52,6 +53,7 @@ unbound-app = { path = "crates/unbound-app" }
 unbound-asset = { path = "crates/unbound-asset" }
 unbound-graph = { path = "crates/unbound-graph" }
 unbound-host = { path = "crates/unbound-host" }
+unbound-agent = { path = "crates/unbound-agent" }
 unbound-kpi = { path = "crates/unbound-kpi" }
 unbound-theme = { path = "crates/unbound-theme" }
 unbound-widgets = { path = "crates/unbound-widgets" }

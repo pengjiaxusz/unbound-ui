@@ -12,7 +12,8 @@ pub use crate::{
     ROOT,
 };
 
-pub use unbound_a11y::A11yAction;
+pub use accesskit::Role;
+pub use unbound_a11y::{A11yAction, SemanticIntent};
 pub use unbound_abi::{Align, Dim, Display, FlexDirection, Justify, NodeFlags, RawNodeDesc};
 pub use unbound_input::{CursorKind, KeyChord, KeyName, PointerButton, PointerEvent};
 pub use unbound_math::{Color, Rect, Vec2};
