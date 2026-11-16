@@ -94,8 +94,21 @@ pub fn emit_autocomplete(
     state: ControlState,
     label_glyphs: &[GlyphQuad],
 ) -> WidgetOutput {
-    let mut primitives = Vec::with_capacity(3 + label_glyphs.len());
-    let mut payloads = Vec::with_capacity(label_glyphs.len());
+    emit_autocomplete_with_suggestions(node, desc, state, None, label_glyphs, &[])
+}
+
+/// 发射带下拉候选文本字形与高亮索引的自动补全输入框。
+#[must_use]
+pub fn emit_autocomplete_with_suggestions(
+    node: u64,
+    desc: &AutoCompleteDesc,
+    state: ControlState,
+    highlighted: Option<usize>,
+    label_glyphs: &[GlyphQuad],
+    suggestion_glyphs: &[GlyphQuad],
+) -> WidgetOutput {
+    let mut primitives = Vec::with_capacity(3 + label_glyphs.len() + suggestion_glyphs.len());
+    let mut payloads = Vec::with_capacity(label_glyphs.len() + suggestion_glyphs.len());
 
     let hovered = state.phase == PointerPhase::Hovered;
     primitives.push(outlined(
@@ -192,8 +205,13 @@ pub fn emit_autocomplete(
                     (popup_r.width() - 8.0).max(16.0),
                     row_h - 2.0,
                 );
+                let row_fill = if highlighted == Some(idx) {
+                    Token::SELECTION
+                } else {
+                    Token::SURFACE
+                };
                 out.primitives
-                    .push(surface(row_r, 4.0, Token::SURFACE, desc.z + 5));
+                    .push(surface(row_r, 4.0, row_fill, desc.z + 5));
                 let key = autocomplete_option_node(node, idx);
                 out.with_sub_control(
                     key,
@@ -201,6 +219,15 @@ pub fn emit_autocomplete(
                         .with_cursor(CursorKind::Pointer),
                     A11yNode::new(Role::ListItem, label.clone(), row_r).clickable(),
                     true,
+                );
+            }
+            if !suggestion_glyphs.is_empty() {
+                glyphs(
+                    suggestion_glyphs,
+                    Token::TEXT_PRIMARY,
+                    desc.z + 6,
+                    &mut out.primitives,
+                    &mut out.payloads,
                 );
             }
         }

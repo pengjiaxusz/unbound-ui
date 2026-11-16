@@ -28,7 +28,42 @@ pub const fn hotkey_clear_node(node: u64) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x900
 }
 
+/// 将组合键格式化为标准的人类可读快捷键字符串（如 `"Ctrl+Shift+K"`、`"F12"`）。
+#[must_use]
+pub fn format_key_chord(chord: &KeyChord) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(5);
+    if chord.ctrl {
+        parts.push("Ctrl".to_owned());
+    }
+    if chord.alt {
+        parts.push("Alt".to_owned());
+    }
+    if chord.shift {
+        parts.push("Shift".to_owned());
+    }
+    if chord.meta {
+        parts.push("Win".to_owned());
+    }
+    match chord.key {
+        unbound_input::KeyName::Char(c) => {
+            parts.push(c.to_ascii_uppercase().to_string());
+        }
+        unbound_input::KeyName::Named(name) => {
+            parts.push(name.to_owned());
+        }
+        unbound_input::KeyName::Function(n) => {
+            parts.push(format!("F{n}"));
+        }
+    }
+    parts.join("+")
+}
+
 impl HotkeyInputState {
+    /// 若已捕获快捷键，返回其格式化文本。
+    #[must_use]
+    pub fn formatted_chord(&self) -> Option<String> {
+        self.chord.as_ref().map(format_key_chord)
+    }
     /// 开始监听组合键。
     pub fn start_recording(&mut self) {
         self.recording = true;

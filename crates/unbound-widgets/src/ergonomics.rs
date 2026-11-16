@@ -181,6 +181,9 @@ pub trait UiWidget: Clone + core::fmt::Debug + Send + Sync + 'static {
         Self::State::default()
     }
 
+    /// 当控件键已存在于状态池中时，将外部描述符的最新受控值同步进局部状态。
+    fn sync_state(&self, _state: &mut Self::State) {}
+
     /// 使用 `text_ctx` 进行真实字体测量，计算控件的自然（固有）尺寸。
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2;
 
@@ -644,7 +647,7 @@ impl UiWidget for TextInputDesc {
         )
     }
 
-    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
         if self.disabled {
             return false;
         }
@@ -654,9 +657,35 @@ impl UiWidget for TextInputDesc {
             return matches!(event, WidgetInputEvent::PointerDown { .. });
         }
         match event {
-            // 按下输入框时吞掉事件并重绘：否则位于标题栏内的搜索框会把按压
-            // 继续冒泡给标题栏根容器，误触发原生窗口拖拽。
-            WidgetInputEvent::PointerDown { .. } => true,
+            // 按下输入框时：若命中可清除输入框右侧清除按钮则清空内容；
+            // 否则按点击位置估算字符索引定位光标，并吞掉事件防止触发标题栏拖拽。
+            WidgetInputEvent::PointerDown { pos, click_count } => {
+                let mut desc = self.clone();
+                desc.rect = rect;
+                if self.clearable
+                    && !state.text().is_empty()
+                    && desc.clear_rect().contains_point(*pos)
+                {
+                    // 复用「全选 + 退格」既有编辑通路清空内容，使清除动作同样进入撤销历史。
+                    state.select_all();
+                    let outcome = reduce_text_input(&desc, state, &TextInputEvent::Backspace);
+                    return outcome.changed;
+                }
+                if *click_count >= 2 {
+                    state.select_all();
+                } else {
+                    let rel_x = (pos.x - (rect.origin.x + 10.0)).max(0.0);
+                    let approx_char_w = (self.font_size * 0.56).max(6.0);
+                    let target_chars = (rel_x / approx_char_w).round() as usize;
+                    let byte_idx = state
+                        .text()
+                        .char_indices()
+                        .nth(target_chars)
+                        .map_or_else(|| state.text().len(), |(idx, _)| idx);
+                    state.set_cursor(byte_idx, false);
+                }
+                true
+            }
             WidgetInputEvent::TextInput(text) => {
                 let outcome = reduce_text_input(self, state, &TextInputEvent::Insert(text.clone()));
                 outcome.changed
@@ -773,7 +802,7 @@ impl UiWidget for TextInputDesc {
                 1.5,
                 (rect.height() - 12.0).max(1.0),
             ),
-            caret_visible: true,
+            caret_visible: control.focused && !self.disabled,
             ..TextInputVisual::default()
         };
         emit_text_input(node, &desc, control, state, &visual, &mut glyphs)
@@ -1137,6 +1166,12 @@ impl UiWidget for ProgressDesc {
             st.jump_to(v);
         }
         st
+    }
+
+    fn sync_state(&self, state: &mut Self::State) {
+        if let Some(v) = self.value {
+            state.jump_to(v);
+        }
     }
 
     fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
@@ -2425,39 +2460,82 @@ impl UiWidget for GenericDataTableDesc {
     }
 
     fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        let visible_len = state.resolve_visible_indices(&self.rows).len();
+        let col_widths = self.effective_column_widths(rect.width());
         match event {
             WidgetInputEvent::PointerDown { pos, .. } => {
                 let header_bottom = rect.origin.y + 33.0;
                 if pos.y <= header_bottom {
                     let mut col_x = rect.origin.x;
                     for (idx, col) in self.columns.iter().enumerate() {
-                        if pos.x >= col_x && pos.x < col_x + col.width {
+                        let col_w = col_widths.get(idx).copied().unwrap_or(col.width);
+                        if pos.x >= col_x && pos.x < col_x + col_w {
                             if col.sortable {
                                 state.cycle_sort(idx);
                                 return true;
                             }
                             break;
                         }
-                        col_x += col.width;
+                        col_x += col_w;
                     }
                     return false;
                 }
                 let body_y = pos.y - header_bottom;
                 let slot_idx = (body_y / self.row_height.max(1.0)).floor() as usize;
                 if slot_idx < self.visible_row_slots {
-                    state.focused_row = Some(slot_idx);
-                    state.selected_rows = vec![slot_idx];
+                    let first_row =
+                        state.first_row_index(self.row_height, visible_len, self.visible_row_slots);
+                    let logical_idx = first_row + slot_idx;
+                    if logical_idx < visible_len {
+                        state.focused_row = Some(logical_idx);
+                        state.selected_rows = vec![logical_idx];
+                        return true;
+                    }
+                }
+                false
+            }
+            WidgetInputEvent::Wheel { delta } => {
+                if visible_len <= self.visible_row_slots {
+                    return false;
+                }
+                let max_scroll =
+                    (visible_len.saturating_sub(self.visible_row_slots) as f32) * self.row_height;
+                let next =
+                    (state.scroll_offset_y - delta.y * self.row_height).clamp(0.0, max_scroll);
+                if (next - state.scroll_offset_y).abs() > 0.01 {
+                    state.scroll_offset_y = next;
                     return true;
                 }
                 false
             }
             WidgetInputEvent::KeyDown(chord) => match chord.key {
                 KeyName::Named("ArrowUp") => {
-                    state.move_focus(self.visible_row_slots, -1);
+                    state.move_focus(visible_len, -1);
+                    if let Some(focused) = state.focused_row {
+                        let first = state.first_row_index(
+                            self.row_height,
+                            visible_len,
+                            self.visible_row_slots,
+                        );
+                        if focused < first {
+                            state.scroll_offset_y = focused as f32 * self.row_height;
+                        }
+                    }
                     true
                 }
                 KeyName::Named("ArrowDown") => {
-                    state.move_focus(self.visible_row_slots, 1);
+                    state.move_focus(visible_len, 1);
+                    if let Some(focused) = state.focused_row {
+                        let first = state.first_row_index(
+                            self.row_height,
+                            visible_len,
+                            self.visible_row_slots,
+                        );
+                        if focused >= first + self.visible_row_slots {
+                            state.scroll_offset_y =
+                                (focused + 1 - self.visible_row_slots) as f32 * self.row_height;
+                        }
+                    }
                     true
                 }
                 _ => false,
@@ -2476,10 +2554,12 @@ impl UiWidget for GenericDataTableDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
+        let col_widths = desc.effective_column_widths(rect.width());
         let mut glyphs = Vec::new();
         let mut hx = rect.origin.x + 10.0;
         for (col_idx, col) in desc.columns.iter().enumerate() {
-            let hr = Rect::new(hx, rect.origin.y + 2.0, (col.width - 12.0).max(24.0), 28.0);
+            let col_w = col_widths.get(col_idx).copied().unwrap_or(col.width);
+            let hr = Rect::new(hx, rect.origin.y + 2.0, (col_w - 12.0).max(24.0), 28.0);
             let title_txt = match state.sort_column {
                 Some((idx, crate::generic_data_table::SortDirection::Ascending))
                     if idx == col_idx =>
@@ -2501,13 +2581,18 @@ impl UiWidget for GenericDataTableDesc {
                 AlignX::Left,
                 AlignY::Middle,
             ));
-            hx += col.width;
+            hx += col_w;
         }
 
         let visible_indices = state.resolve_visible_indices(&desc.rows);
+        let first_row = state.first_row_index(
+            desc.row_height,
+            visible_indices.len(),
+            desc.visible_row_slots,
+        );
         let header_bottom = rect.origin.y + 33.0;
         for slot_idx in 0..desc.visible_row_slots {
-            let Some(&row_idx) = visible_indices.get(slot_idx) else {
+            let Some(&row_idx) = visible_indices.get(first_row + slot_idx) else {
                 break;
             };
             let Some(row_cells) = desc.rows.get(row_idx) else {
@@ -2516,8 +2601,9 @@ impl UiWidget for GenericDataTableDesc {
             let ry = header_bottom + slot_idx as f32 * desc.row_height;
             let mut cx = rect.origin.x + 10.0;
             for (c_idx, col) in desc.columns.iter().enumerate() {
+                let col_w = col_widths.get(c_idx).copied().unwrap_or(col.width);
                 if let Some(cell_text) = row_cells.get(c_idx) {
-                    let cell_r = Rect::new(cx, ry, (col.width - 14.0).max(16.0), desc.row_height);
+                    let cell_r = Rect::new(cx, ry, (col_w - 14.0).max(16.0), desc.row_height);
                     glyphs.extend(text_ctx.shape_line(
                         cell_text,
                         cell_r,
@@ -2527,7 +2613,7 @@ impl UiWidget for GenericDataTableDesc {
                         AlignY::Middle,
                     ));
                 }
-                cx += col.width;
+                cx += col_w;
             }
         }
 
@@ -2614,13 +2700,31 @@ impl UiWidget for crate::hotkey_input::HotkeyInputDesc {
         )
     }
 
-    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
         match event {
-            WidgetInputEvent::PointerDown { .. } => {
+            WidgetInputEvent::PointerDown { pos, .. } => {
+                let clear_r = Rect::new(
+                    rect.max().x - 20.0,
+                    rect.origin.y + (rect.height() - 16.0) * 0.5,
+                    16.0,
+                    16.0,
+                );
+                if clear_r.contains_point(*pos) && state.chord.is_some() {
+                    state.clear();
+                    return true;
+                }
                 state.recording = !state.recording;
                 true
             }
             WidgetInputEvent::KeyDown(chord) if state.recording => {
+                if matches!(chord.key, KeyName::Named("Escape"))
+                    && !chord.ctrl
+                    && !chord.alt
+                    && !chord.shift
+                {
+                    state.recording = false;
+                    return true;
+                }
                 state.chord = Some(*chord);
                 state.recording = false;
                 true
@@ -2639,7 +2743,10 @@ impl UiWidget for crate::hotkey_input::HotkeyInputDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        desc.recording = desc.recording || state.recording;
+        if let Some(chord_text) = state.formatted_chord() {
+            desc.shortcut_text = chord_text;
+        }
+        desc.recording = state.recording;
         desc.conflict = desc.conflict || state.conflict;
         let display = if desc.recording {
             "Press a shortcut...".to_owned()
@@ -3048,21 +3155,75 @@ impl UiWidget for crate::autocomplete::AutoCompleteDesc {
         Vec2::new(self.rect.width().max(180.0), self.rect.height().max(34.0))
     }
 
-    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        let filtered: Vec<String> = state
+            .filter(&self.suggestions)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let visible_count = filtered.len().min(6);
         match event {
-            WidgetInputEvent::PointerDown { .. } => {
+            WidgetInputEvent::PointerDown { pos, .. } => {
+                if state.open && visible_count > 0 {
+                    let row_h = 26.0;
+                    let popup_r = Rect::new(
+                        rect.origin.x,
+                        rect.max().y + 4.0,
+                        rect.width(),
+                        visible_count as f32 * row_h + 8.0,
+                    );
+                    if popup_r.contains_point(*pos) {
+                        let idx =
+                            ((pos.y - (popup_r.origin.y + 4.0)).max(0.0) / row_h).floor() as usize;
+                        if let Some(chosen) = filtered.get(idx) {
+                            state.query = chosen.clone();
+                            state.highlighted = idx;
+                            state.open = false;
+                            return true;
+                        }
+                    }
+                }
                 state.open = !state.open;
                 true
             }
             WidgetInputEvent::TextInput(txt) => {
                 state.query.push_str(txt);
+                state.highlighted = 0;
                 state.open = true;
                 true
             }
             WidgetInputEvent::KeyDown(chord) => match chord.key {
                 KeyName::Named("Backspace") => {
                     state.query.pop();
+                    state.highlighted = 0;
+                    state.open = true;
                     true
+                }
+                KeyName::Named("ArrowDown") => {
+                    if !state.open {
+                        state.open = true;
+                    } else if visible_count > 0 {
+                        state.highlighted = (state.highlighted + 1) % visible_count;
+                    }
+                    true
+                }
+                KeyName::Named("ArrowUp") => {
+                    if !state.open {
+                        state.open = true;
+                    } else if visible_count > 0 {
+                        state.highlighted = (state.highlighted + visible_count - 1) % visible_count;
+                    }
+                    true
+                }
+                KeyName::Named("Enter") => {
+                    if state.open {
+                        if let Some(chosen) = filtered.get(state.highlighted) {
+                            state.query = chosen.clone();
+                        }
+                        state.open = false;
+                        return true;
+                    }
+                    false
                 }
                 KeyName::Named("Escape") => {
                     state.open = false;
@@ -3084,9 +3245,14 @@ impl UiWidget for crate::autocomplete::AutoCompleteDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        if !state.query.is_empty() {
-            desc.value = state.query.clone();
-        }
+        desc.value = state.query.clone();
+        let filtered: Vec<String> = state
+            .filter(&self.suggestions)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        desc.suggestion_count = filtered.len();
+        desc.suggestions = filtered;
         desc.open = desc.open || state.open;
         let text_r = Rect::new(
             rect.origin.x + 10.0,
@@ -3096,7 +3262,36 @@ impl UiWidget for crate::autocomplete::AutoCompleteDesc {
         );
         let glyphs =
             text_ctx.shape_line(&desc.value, text_r, 13.0, 400, AlignX::Left, AlignY::Middle);
-        crate::autocomplete::emit_autocomplete(node, &desc, control, &glyphs)
+        let mut suggestion_glyphs = Vec::new();
+        if desc.open && !control.disabled {
+            let count = desc.suggestions.len().min(6);
+            let row_h = 26.0;
+            let popup_y = rect.max().y + 4.0;
+            for (idx, item) in desc.suggestions.iter().take(count).enumerate() {
+                let item_r = Rect::new(
+                    rect.origin.x + 10.0,
+                    popup_y + 4.0 + idx as f32 * row_h,
+                    (rect.width() - 20.0).max(16.0),
+                    row_h - 2.0,
+                );
+                suggestion_glyphs.extend(text_ctx.shape_line(
+                    item,
+                    item_r,
+                    12.5,
+                    400,
+                    AlignX::Left,
+                    AlignY::Middle,
+                ));
+            }
+        }
+        crate::autocomplete::emit_autocomplete_with_suggestions(
+            node,
+            &desc,
+            control,
+            Some(state.highlighted),
+            &glyphs,
+            &suggestion_glyphs,
+        )
     }
 }
 

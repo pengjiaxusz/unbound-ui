@@ -565,6 +565,9 @@ impl ScrollViewOutput {
 
     /// 一次性推入滚动视图自身输出**以及**滑块命中区域，防止调用方遗漏滑块。
     pub fn push_into(self, collector: &mut SceneCollector, key: u64) {
+        for hit in &self.hits {
+            collector.hit_owners.push((hit.node, key));
+        }
         self.register_hits(collector);
         collector.push(key, self.output);
     }
@@ -668,7 +671,12 @@ pub fn emit_scroll_view(
     }
 
     let viewport_z = desc.z.saturating_sub(740);
-    let hit = Some(HitRegion::new(node, SCROLL_LAYER, u32::from(viewport_z), rect));
+    let hit = Some(HitRegion::new(
+        node,
+        SCROLL_LAYER,
+        u32::from(viewport_z),
+        rect,
+    ));
     let mut a11y =
         unbound_a11y::A11yNode::new(accesskit::Role::ScrollView, "", rect).disabled(state.disabled);
     a11y.actions

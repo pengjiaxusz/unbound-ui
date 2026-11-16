@@ -318,3 +318,96 @@ fn code_editor_matching_bracket_and_hotkey_recording() {
         .iter()
         .any(|r| r.node == hotkey_clear_node(9009)));
 }
+
+#[test]
+fn autocomplete_shapes_suggestions_and_selects_items_and_generic_table_scrolls() {
+    use unbound_input::KeyName;
+    use unbound_widgets::autocomplete::AutoCompleteDesc;
+    use unbound_widgets::ergonomics::{TextCtx, UiWidget, WidgetInputEvent};
+    use unbound_widgets::generic_data_table::{DataColumnSpec, GenericDataTableDesc};
+    use unbound_widgets::hotkey_input::format_key_chord;
+
+    let mut engine = TextEngine::new();
+    let mut cache = unbound_text::GlyphCache::new();
+    let mut text_ctx = TextCtx {
+        engine: &mut engine,
+        cache: &mut cache,
+        atlas_clock: 1,
+    };
+
+    // 1. AutoComplete 展开时必须为候选列表生成字形，并支持方向键+回车选择与清空查询
+    let ac_desc = AutoCompleteDesc::input(
+        "vk",
+        vec![
+            "vkCmdDrawIndexed".to_owned(),
+            "vkCmdDispatch".to_owned(),
+            "dx12ExecuteIndirect".to_owned(),
+        ],
+    );
+    let mut ac_state = ac_desc.initial_state();
+    ac_state.open = true;
+    let rect = Rect::new(20.0, 20.0, 240.0, 32.0);
+    let out_open = ac_desc.emit_laid_out(
+        9100,
+        rect,
+        ControlState::default(),
+        &ac_state,
+        &mut text_ctx,
+    );
+    assert_eq!(
+        out_open.sub_hits.len(),
+        2,
+        "only 2 vk* suggestions match query"
+    );
+    assert!(
+        out_open.payloads.len() > 2,
+        "open AutoComplete must emit glyph payloads for both input value and suggestion rows"
+    );
+
+    // 按下 ArrowDown 再按 Enter 选中第二项 "vkCmdDispatch"
+    assert!(ac_desc.reduce(
+        &mut ac_state,
+        rect,
+        &WidgetInputEvent::KeyDown(KeyChord::named("ArrowDown"))
+    ));
+    assert!(ac_desc.reduce(
+        &mut ac_state,
+        rect,
+        &WidgetInputEvent::KeyDown(KeyChord::named("Enter"))
+    ));
+    assert_eq!(ac_state.query, "vkCmdDispatch");
+    assert!(!ac_state.open);
+
+    // 2. HotkeyInput 格式化录制的组合键
+    let chord = KeyChord {
+        key: KeyName::Char('k'),
+        ctrl: true,
+        shift: true,
+        alt: false,
+        meta: false,
+    };
+    assert_eq!(format_key_chord(&chord), "Ctrl+Shift+K");
+
+    // 3. GenericDataTable 滚轮滚动与列宽自适应拉伸
+    let cols = vec![
+        DataColumnSpec::new("id", "ID", 80.0),
+        DataColumnSpec::new("name", "Name", 120.0),
+    ];
+    let rows: Vec<Vec<String>> = (0..10)
+        .map(|i| vec![format!("{i}"), format!("Item {i}")])
+        .collect();
+    let table_desc = GenericDataTableDesc::table(cols, 4).with_rows(rows);
+    let stretched = table_desc.effective_column_widths(400.0);
+    assert!((stretched.iter().sum::<f32>() - 400.0).abs() < 1e-3);
+
+    let mut table_state = table_desc.initial_state();
+    let table_rect = Rect::new(0.0, 0.0, 400.0, 200.0);
+    assert!(table_desc.reduce(
+        &mut table_state,
+        table_rect,
+        &WidgetInputEvent::Wheel {
+            delta: Vec2::new(0.0, -2.0)
+        }
+    ));
+    assert_eq!(table_state.first_row_index(table_desc.row_height, 10, 4), 2);
+}

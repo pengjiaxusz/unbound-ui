@@ -348,3 +348,191 @@ fn custom_title_bar_supports_slots_and_showcase_caption_width() {
     assert!(runtime.widget_rect(TB_LEFT_BADGE).is_some());
     assert!(runtime.widget_rect(TB_CENTER_SEARCH).is_some());
 }
+
+// ---------------------------------------------------------------------------
+// 循环内无参 `ui_key!()` 子树保留、滚动坐标同步、模态滚轮隔离与缩放上下文回归测试
+// ---------------------------------------------------------------------------
+
+struct LoopAndScrollProbe {
+    progress: f32,
+    show_modal: bool,
+    observed_scale: f32,
+    observed_osd: f32,
+    clicked_row: Option<usize>,
+}
+
+impl Default for LoopAndScrollProbe {
+    fn default() -> Self {
+        Self {
+            progress: 0.2,
+            show_modal: false,
+            observed_scale: 1.0,
+            observed_osd: 0.0,
+            clicked_row: None,
+        }
+    }
+}
+
+struct LoopAndScrollApp;
+
+const LOOP_SCROLL_KEY: u64 = 77_001;
+const LOOP_SLIDER_KEY: u64 = 77_002;
+const LOOP_PROG_KEY: u64 = 77_003;
+const LOOP_ROW_BTN_BASE: usize = 78_000;
+
+impl Application for LoopAndScrollApp {
+    type State = LoopAndScrollProbe;
+
+    fn init(&mut self, _ctx: &mut AppContext) -> Self::State {
+        LoopAndScrollProbe::default()
+    }
+
+    fn reduce(
+        &mut self,
+        state: &mut Self::State,
+        event: AppEvent,
+        _ctx: &mut AppContext,
+    ) -> EventOutcome {
+        if let AppEvent::Click { node, .. } = event {
+            for idx in 0..8 {
+                if node == ui_key!(LOOP_ROW_BTN_BASE + idx) {
+                    state.clicked_row = Some(idx);
+                    return EventOutcome::stopping(DirtyFlags::PAINT);
+                }
+            }
+        }
+        EventOutcome::new(DirtyFlags::NONE)
+    }
+
+    fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
+        let _ = (state.observed_scale, state.observed_osd);
+        view.column(ui_key!("loop_scroll_root"), |root| {
+            root.progress(LOOP_PROG_KEY, ProgressDesc::bar(state.progress));
+            root.scroll_view_with(
+                LOOP_SCROLL_KEY,
+                RawNodeDesc::container()
+                    .width(Dim::px(400.0))
+                    .height(Dim::px(180.0)),
+                true,
+                |sv| {
+                    for idx in 0..8 {
+                        // 外层容器使用索引键，但内层容器与文本特意使用无参 `ui_key!()`，
+                        // 验证同帧重复键去重不会误删前序循环项的子树。
+                        sv.sunken_box(ui_key!(79_000usize + idx), 8.0, 4.0, |card| {
+                            card.row_between(ui_key!(), |row| {
+                                row.text_primary(ui_key!(), format!("Row {idx}"), 13.0, 500);
+                                row.button(
+                                    ui_key!(LOOP_ROW_BTN_BASE + idx),
+                                    ButtonDesc::label("Run").size(ButtonSize::Sm),
+                                );
+                            });
+                        });
+                    }
+                    sv.slider(LOOP_SLIDER_KEY, SliderDesc::range(0.0, 100.0, 10.0));
+                },
+            );
+
+            if state.show_modal {
+                root.modal_scrim(
+                    ui_key!("test_modal_scrim"),
+                    ui_key!("test_modal_dlg"),
+                    260.0,
+                    140.0,
+                    |dlg| {
+                        dlg.text_primary(ui_key!(), "Modal Body", 14.0, 600);
+                    },
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn loop_with_bare_ui_key_preserves_all_subtrees_and_button_rects() {
+    let mut rt = AppRuntime::new(LoopAndScrollApp, Vec2::new(600.0, 400.0));
+    let _ = rt.frame(0.0);
+
+    let mut prev_y = -1.0_f32;
+    for idx in 0..8 {
+        let btn_rect = rt
+            .widget_rect(ui_key!(LOOP_ROW_BTN_BASE + idx))
+            .expect("every loop button must stay mounted in world");
+        assert!(
+            btn_rect.width() >= 26.0 && btn_rect.height() >= 24.0,
+            "row {idx} button rect collapsed: {btn_rect:?}"
+        );
+        assert!(
+            btn_rect.origin.y > prev_y,
+            "row {idx} button y ({}) must increase monotonically after {}",
+            btn_rect.origin.y,
+            prev_y
+        );
+        prev_y = btn_rect.origin.y;
+    }
+}
+
+#[test]
+fn scrolled_scroll_view_translates_mounted_widget_rects_and_blocks_background_wheel_under_modal() {
+    let mut rt = AppRuntime::new(LoopAndScrollApp, Vec2::new(600.0, 400.0));
+    let _ = rt.frame(0.0);
+
+    let before_btn0 = rt.widget_rect(ui_key!(LOOP_ROW_BTN_BASE)).unwrap();
+    // 在滚动视口内向下滚动滚轮
+    let _ = rt.wheel(Vec2::new(120.0, 100.0), Vec2::new(0.0, -2.0));
+    let _ = rt.frame(0.016);
+    let after_btn0 = rt.widget_rect(ui_key!(LOOP_ROW_BTN_BASE)).unwrap();
+    assert!(
+        after_btn0.origin.y < before_btn0.origin.y - 40.0,
+        "mounted widget rect must translate with ScrollView offset: before={before_btn0:?}, after={after_btn0:?}"
+    );
+
+    // 开启模态遮罩后，在模态框上方滚动滚轮不得继续滚动背景 ScrollView
+    let offset_before_modal = rt
+        .state_store()
+        .get::<unbound_widgets::ScrollState>(LOOP_SCROLL_KEY)
+        .unwrap()
+        .offset();
+    rt.state_mut().show_modal = true;
+    rt.invalidate();
+    let _ = rt.frame(0.016);
+    let _ = rt.wheel(Vec2::new(300.0, 200.0), Vec2::new(0.0, -3.0));
+    let _ = rt.frame(0.016);
+    let offset_after_modal = rt
+        .state_store()
+        .get::<unbound_widgets::ScrollState>(LOOP_SCROLL_KEY)
+        .unwrap()
+        .offset();
+    assert_eq!(
+        offset_before_modal, offset_after_modal,
+        "wheel over a modal portal must not scroll background ScrollView"
+    );
+}
+
+#[test]
+fn progress_syncs_state_across_frames_and_context_exposes_ui_scale() {
+    let mut rt = AppRuntime::new(LoopAndScrollApp, Vec2::new(600.0, 400.0));
+    let _ = rt.frame(0.0);
+    let initial_prog = rt
+        .state_store()
+        .get::<unbound_widgets::ProgressState>(LOOP_PROG_KEY)
+        .unwrap()
+        .shown();
+    assert!((initial_prog - 0.2).abs() < 1e-4);
+
+    rt.state_mut().progress = 0.85;
+    let snapped = rt.context_mut().set_ui_scale(1.5);
+    assert!((snapped - 1.5).abs() < 1e-4);
+    assert!(rt.context().scale_osd_remaining > 1.0);
+    rt.invalidate();
+    let _ = rt.frame(0.016);
+
+    let updated_prog = rt
+        .state_store()
+        .get::<unbound_widgets::ProgressState>(LOOP_PROG_KEY)
+        .unwrap()
+        .shown();
+    assert!(
+        (updated_prog - 0.85).abs() < 1e-4,
+        "ProgressDesc must sync external progress updates into WidgetStateStore"
+    );
+}
