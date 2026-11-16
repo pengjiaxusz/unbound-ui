@@ -189,6 +189,64 @@ impl A11yNode {
         self
     }
 
+    /// 构造只读文本节点。
+    ///
+    /// 静态文本在语义树里**不是可有可无的装饰**：屏幕阅读器需要它朗读界面内容，
+    /// Agent 需要它读取界面上的数值与状态。一个缺失文本的界面，在这两者眼里
+    /// 都是空的——这正是「界面存在但 Agent 什么都看不到」的根因。
+    ///
+    /// 因此文本节点同样进入语义树：AccessKit 的 `Label` 角色即静态文本。
+    #[must_use]
+    pub fn static_text(text: impl Into<String>, bounds: Rect) -> Self {
+        Self::new(Role::Label, text, bounds)
+    }
+
+    /// 构造「名称 + 当前值」的只读数据节点。
+    ///
+    /// 例如显存占用这类读数：`label` 是「显存占用」，`value` 是「12.4 GB」。
+    /// 二者分开后，Agent 既能按名称定位，也能直接取到数值而不必解析文本。
+    #[must_use]
+    pub fn data(label: impl Into<String>, value: impl Into<String>, bounds: Rect) -> Self {
+        let mut node = Self::new(Role::Label, label, bounds);
+        node.value = value.into();
+        node
+    }
+
+    /// 设置当前值（如开关的开关态、滑块的数值）。
+    #[must_use]
+    pub fn with_value(mut self, value: impl Into<String>) -> Self {
+        self.value = value.into();
+        self
+    }
+
+    /// 设置补充说明（如占位提示、快捷键、度量单位）。
+    #[must_use]
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    /// 设置选中态（如列表项、页签、单选按钮）。
+    #[must_use]
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    /// 设置展开态（可折叠节点）。
+    #[must_use]
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.expanded = Some(expanded);
+        self
+    }
+
+    /// 设置层级（标题层级或树深度）。
+    #[must_use]
+    pub fn with_level(mut self, level: u32) -> Self {
+        self.level = level;
+        self
+    }
+
     #[must_use]
     pub fn clickable(mut self) -> Self {
         self.actions.insert(A11yAction::Click);
@@ -254,11 +312,132 @@ impl A11yNode {
     }
 }
 
+/// 语义标注意图。
+///
+/// 应用在构建视图时声明「这个控件在语义上是什么」，框架在布局求解**之后**
+/// 把它写成语义节点。意图与节点分离的原因很简单：角色、名称、状态在构建
+/// 视图时就已确定，而矩形要等布局求解完才知道。
+///
+/// 只有显式给出的字段会被写入（`None` 表示不覆盖），因此意图可以叠加在
+/// 控件自身产出的语义之上——例如给一个按钮补上当前值，而不改写它的角色。
+#[derive(Clone, Debug, Default)]
+pub struct SemanticIntent {
+    /// 语义角色。
+    pub role: Option<Role>,
+    /// 可读名称。
+    pub label: Option<String>,
+    /// 补充说明（占位提示、快捷键、度量单位等）。
+    pub description: Option<String>,
+    /// 当前值。
+    pub value: Option<String>,
+    /// 选中态。
+    pub selected: Option<bool>,
+    /// 展开态。
+    pub expanded: Option<bool>,
+    /// 禁用态。
+    pub disabled: Option<bool>,
+    /// 层级（标题层级或树深度）。
+    pub level: Option<u32>,
+    /// 可用动作。
+    pub actions: Option<A11yActions>,
+}
+
+impl SemanticIntent {
+    /// 构造一个带角色与名称的意图。
+    #[must_use]
+    pub fn new(role: Role, label: impl Into<String>) -> Self {
+        Self {
+            role: Some(role),
+            label: Some(label.into()),
+            ..Self::default()
+        }
+    }
+
+    /// 设置当前值。
+    #[must_use]
+    pub fn with_value(mut self, value: impl Into<String>) -> Self {
+        self.value = Some(value.into());
+        self
+    }
+
+    /// 设置补充说明。
+    #[must_use]
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// 设置选中态。
+    #[must_use]
+    pub fn with_selected(mut self, selected: bool) -> Self {
+        self.selected = Some(selected);
+        self
+    }
+
+    /// 设置展开态。
+    #[must_use]
+    pub fn with_expanded(mut self, expanded: bool) -> Self {
+        self.expanded = Some(expanded);
+        self
+    }
+
+    /// 设置禁用态。
+    #[must_use]
+    pub fn with_disabled(mut self, disabled: bool) -> Self {
+        self.disabled = Some(disabled);
+        self
+    }
+
+    /// 设置可用动作。
+    #[must_use]
+    pub fn with_actions(mut self, actions: A11yActions) -> Self {
+        self.actions = Some(actions);
+        self
+    }
+
+    /// 把意图写入节点。只有显式给出的字段会被覆盖。
+    pub fn apply(&self, node: &mut A11yNode) {
+        if let Some(role) = self.role {
+            node.role = role;
+        }
+        if let Some(label) = &self.label {
+            node.label.clone_from(label);
+        }
+        if let Some(description) = &self.description {
+            node.description.clone_from(description);
+        }
+        if let Some(value) = &self.value {
+            node.value.clone_from(value);
+        }
+        if let Some(selected) = self.selected {
+            node.selected = selected;
+        }
+        if let Some(expanded) = self.expanded {
+            node.expanded = Some(expanded);
+        }
+        if let Some(disabled) = self.disabled {
+            node.disabled = disabled;
+        }
+        if let Some(level) = self.level {
+            node.level = level;
+        }
+        if let Some(actions) = self.actions {
+            node.actions = actions;
+        }
+    }
+}
+
 /// 增量语义树。
 ///
 /// 克隆操作会生成完整快照：每帧从头重建语义树的应用可将副本交给
 /// 场景收集器，同时保留原树用于自省检查。
 ///
+/// 语义树的最大合法深度。
+///
+/// 超过此深度说明父链已损坏（成环或数据错乱）。所有沿父链的遍历都以它为界，
+/// 保证任何畸形输入都只会被截断，不会把进程拖进无限循环。
+pub const MAX_TREE_DEPTH: usize = 256;
+
 #[derive(Clone, Debug)]
 pub struct Semantics {
     nodes: FxHashMap<u64, A11yNode>,
@@ -360,7 +539,22 @@ impl Semantics {
     }
 
     /// 替换 `parent` 的子节点列表，并按需重新挂载子节点。
+    ///
+    /// 结构性不变式：父节点不得是自己的子节点，也不得是自己的后代。
+    /// 违反其一都会让树变成环，任何遍历都只会在环上打转——对一个后台运行的
+    /// Agent 框架而言，那是把整个宿主拖死的缺陷。因此这里直接拒绝成环的挂载。
     pub fn set_children(&mut self, parent: u64, children: &[u64]) {
+        let mut accepted: Vec<u64> = Vec::with_capacity(children.len());
+        for child in children {
+            if accepted.contains(child) {
+                continue;
+            }
+            if self.would_create_cycle(*child, parent) {
+                continue;
+            }
+            accepted.push(*child);
+        }
+        let children = &accepted[..];
         let previous = self.children.get(&parent).cloned().unwrap_or_default();
         for old in &previous {
             if !children.contains(old) {
@@ -387,7 +581,12 @@ impl Semantics {
     }
 
     /// 将单个子节点移动到新的父节点下。
+    ///
+    /// 与 [`Self::set_children`] 同样拒绝成环的挂载。
     pub fn reparent(&mut self, child: u64, parent: u64) {
+        if self.would_create_cycle(child, parent) {
+            return;
+        }
         if let Some(old) = self.parents.get(&child).copied() {
             if old != parent {
                 if let Some(list) = self.children.get_mut(&old) {
@@ -406,6 +605,30 @@ impl Semantics {
         self.structural.insert(parent);
     }
 
+    /// 判断把 `child` 挂到 `parent` 下是否会形成环。
+    ///
+    /// 成环的条件有二：`child` 就是 `parent`；或 `child` 是 `parent` 的祖先
+    /// （此时 `parent → … → child → parent`）。父链本身若已损坏，则一律拒绝。
+    fn would_create_cycle(&self, child: u64, parent: u64) -> bool {
+        if child == parent {
+            return true;
+        }
+        let mut current = self.parents.get(&parent).copied();
+        let mut guard = 0usize;
+        while let Some(node_id) = current {
+            guard += 1;
+            if guard > MAX_TREE_DEPTH {
+                // 父链已不可信：保守地拒绝这次挂载。
+                return true;
+            }
+            if node_id == child {
+                return true;
+            }
+            current = self.parents.get(&node_id).copied();
+        }
+        false
+    }
+
     /// 移动焦点。在下一次更新中始终回显。
     pub fn set_focus(&mut self, id: u64) {
         if self.focus == id {
@@ -421,7 +644,12 @@ impl Semantics {
     pub fn remove(&mut self, id: u64) {
         let parent = self.parent_of(id);
         let mut stack = vec![id];
+        let mut seen = FxHashSet::default();
         while let Some(current) = stack.pop() {
+            if !seen.insert(current) {
+                // 子树里出现环：停止展开，避免无限增长。
+                continue;
+            }
             if current == self.focus {
                 self.focus = self.root;
             }
@@ -445,6 +673,56 @@ impl Semantics {
     #[must_use]
     pub fn parent_of(&self, id: u64) -> Option<u64> {
         self.parents.get(&id).copied()
+    }
+
+    /// 迭代语义树中的全部节点。
+    ///
+    /// 这是**只读**遍历：Agent 侧据此构建查询视图，而不必复制整棵树。
+    /// 迭代顺序不保证稳定，调用方若需要稳定输出应自行排序。
+    pub fn iter(&self) -> impl Iterator<Item = (u64, &A11yNode)> {
+        self.nodes.iter().map(|(id, node)| (*id, node))
+    }
+
+    /// 收集以 `id` 为根的整棵子树（含自身），按深度优先前序。
+    ///
+    /// 子树含大量节点时优先用 [`Self::iter`] 自行过滤；本方法为便利封装。
+    ///
+    /// 遍历带**已访问集合**：语义树一旦因外部数据错乱而成环，这里的输出长度
+    /// 依然有界。Agent 框架跑在宿主进程里，一个无界的收集足以把整机拖死。
+    #[must_use]
+    pub fn descendants(&self, id: u64) -> Vec<u64> {
+        let mut out = Vec::new();
+        let mut seen = FxHashSet::default();
+        let mut stack = vec![id];
+        while let Some(current) = stack.pop() {
+            if !self.nodes.contains_key(&current) {
+                continue;
+            }
+            if !seen.insert(current) {
+                // 已访问过：说明出现了环，停止深入。
+                continue;
+            }
+            out.push(current);
+            // 逆序压栈，保证弹出顺序与子节点顺序一致。
+            for child in self.children_of(current).iter().rev() {
+                stack.push(*child);
+            }
+        }
+        out
+    }
+
+    /// 判断树中是否存在文本包含 `needle` 的节点。
+    ///
+    /// 用于「某段文字是否已出现」这类条件等待：比对 `label` 与 `value`，
+    /// 因此只读数据的当前值同样能被匹配到。
+    #[must_use]
+    pub fn contains_text(&self, needle: &str) -> bool {
+        if needle.is_empty() {
+            return false;
+        }
+        self.nodes.values().any(|node| {
+            node.label.contains(needle) || node.value.contains(needle)
+        })
     }
 
     /// 下一次更新将携带的节点数量。零表示“无需发送”。
@@ -568,6 +846,54 @@ mod tests {
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
         Rect::new(x, y, w, h)
+    }
+
+    /// 语义树一旦成环，任何无界的遍历都会把宿主进程拖死。
+    ///
+    /// 这里绕过结构不变式，直接把父指针扭成环——模拟外部数据错乱的最坏情况——
+    /// 确认收集仍然有界。
+    #[test]
+    fn a_cyclic_tree_still_yields_a_bounded_subtree() {
+        let mut s = tree();
+        s.upsert(
+            2,
+            A11yNode::new(Role::Button, "Save", rect(10.0, 10.0, 80.0, 30.0)),
+        );
+        s.upsert(
+            3,
+            A11yNode::new(Role::Button, "Cancel", rect(10.0, 40.0, 80.0, 30.0)),
+        );
+        // 手工制造环：2 的父是 3，3 的父是 2。
+        s.parents.insert(2, 3);
+        s.parents.insert(3, 2);
+        s.children.insert(2, vec![3]);
+        s.children.insert(3, vec![2]);
+
+        let subtree = s.descendants(1);
+        assert!(
+            subtree.len() <= 3,
+            "a cyclic tree must not yield an unbounded subtree, got {}",
+            subtree.len()
+        );
+    }
+
+    /// 结构不变式：父节点不得成为自己的子节点，也不得是自己的后代。
+    #[test]
+    fn cyclic_reparenting_is_refused() {
+        let mut s = tree();
+        s.upsert(
+            2,
+            A11yNode::new(Role::Button, "Save", rect(10.0, 10.0, 80.0, 30.0)),
+        );
+        s.set_children(1, &[1]);
+        assert!(!s.children_of(1).contains(&1), "self parenting is refused");
+
+        s.set_children(1, &[2]);
+        s.set_children(2, &[1]);
+        assert!(
+            !s.children_of(2).contains(&1),
+            "reparenting an ancestor under a descendant is refused"
+        );
     }
 
     fn tree() -> Semantics {

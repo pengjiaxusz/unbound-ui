@@ -307,13 +307,14 @@ impl WidgetShowcaseWitness {
     }
 }
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_a11y::{A11yNode, Semantics};
 use unbound_gpu::data::{GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform, CLIP_NONE};
 use unbound_headless::driver::{ClickReport, TestApp};
 use unbound_input::{ClipRect, HitRegion, PointerEvent, Router};
 use unbound_math::{f16_to_f32, f32_to_f16, project_rounded_radii, Rect, Vec2};
 use unbound_text::GlyphQuad;
+use unbound_world::{NodeId, UiWorld};
 
 pub use address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
 pub use generic_data_table::{
@@ -720,6 +721,14 @@ pub struct SceneCollector {
     pub hit_owners: Vec<(u64, u64)>,
     /// 语义树。
     pub semantics: Semantics,
+    /// 真正承载语义节点的控件键集合。
+    ///
+    /// 这里必须**显式登记**而不能用「语义树里是否存在该键」来反推：
+    /// 语义根本身也占据一个键，若拿它做成员判断，任何恰好撞上该键的控件都会被
+    /// 误判成语义节点，进而让语义根成为自己的子节点——遍历时陷入死循环。
+    ///
+    /// 登记时排除语义根，因此这里只含有真实控件的键。
+    semantic_nodes: FxHashSet<u64>,
     /// 键盘 Tab 顺序。
     pub focus_order: Vec<u64>,
     /// 按控件标识索引的各自图元区间。
@@ -765,7 +774,102 @@ impl SceneCollector {
         self.backdrops.clear();
         self.clip_stack.clear();
         self.transform_stack.clear();
+        self.semantic_nodes.clear();
         self.semantics.reset(root);
+        // 语义根节点必须存在：AccessKit 的树以它为根，语义路径也从它起步。
+        // 若根节点缺席，读取方会收到一棵没有根的树，路径也会缺掉窗口这一段。
+        //
+        // 根不登记进 `semantic_nodes`：它是语义树本身的根，不是某个控件。
+        self.semantics.upsert(
+            root,
+            A11yNode::new(accesskit::Role::Window, String::new(), Rect::ZERO),
+        );
+    }
+
+    /// 登记一个控件的语义节点。
+    ///
+    /// 与 [`Semantics::upsert`] 的区别在于：本方法会把键记入 `semantic_nodes`，
+    /// 使该控件在后续的层级重建中被识别为「承载语义」的世界节点。
+    /// 语义根不经过本方法登记。
+    pub fn upsert_semantic(&mut self, key: u64, node: A11yNode) {
+        self.semantic_nodes.insert(key);
+        self.semantics.upsert(key, node);
+    }
+
+    /// 该键是否承载语义节点（不含语义根）。
+    #[must_use]
+    pub fn has_semantic_node(&self, key: u64) -> bool {
+        self.semantic_nodes.contains(&key)
+    }
+
+    /// 依据世界树的层级关系重建语义树的父子结构。
+    ///
+    /// 语义节点的键与控件键一致；世界树里的纯布局容器（行、列、内边距盒）没有
+    /// 语义节点，其子孙会自动上浮到**最近的语义祖先**之下。这样 Agent 看到的
+    /// 层级与界面上的视觉嵌套一致，而不是一棵扁平的节点列表。
+    ///
+    /// 必须在全部控件推入之后调用：此时世界树与语义节点都已齐备。
+    pub fn rebuild_semantic_hierarchy(&mut self, world: &UiWorld) {
+        if self.semantics.is_empty() {
+            return;
+        }
+        let root = self.semantics.root();
+        // 语义子节点 → 语义父键。
+        let mut links: Vec<(u64, u64)> = Vec::new();
+        self.collect_semantic_links(world, world.root(), root, &mut links);
+        if links.is_empty() {
+            return;
+        }
+        // 按父键分组。分组顺序必须让父节点先于子节点写入：
+        // `set_children` 会把子节点从旧父节点摘下，顺序颠倒会让子节点的父链
+        // 被后写入的父节点清掉。
+        let mut index_of: FxHashMap<u64, usize> = FxHashMap::default();
+        let mut groups: Vec<(u64, Vec<u64>)> = Vec::new();
+        for (child, parent) in links {
+            let index = match index_of.get(&parent) {
+                Some(index) => *index,
+                None => {
+                    groups.push((parent, Vec::new()));
+                    let index = groups.len() - 1;
+                    index_of.insert(parent, index);
+                    index
+                }
+            };
+            groups[index].1.push(child);
+        }
+        for (parent, children) in groups {
+            self.semantics.set_children(parent, &children);
+        }
+    }
+
+    /// 递归收集语义节点与其最近语义祖先的对应关系。
+    fn collect_semantic_links(
+        &self,
+        world: &UiWorld,
+        id: NodeId,
+        ancestor: u64,
+        links: &mut Vec<(u64, u64)>,
+    ) {
+        for child in world.children(id) {
+            let Some(data) = world.get(child) else {
+                continue;
+            };
+            let key = data.desc.key;
+            if key == self.semantics.root() {
+                // 世界节点恰好占用了语义根键：它不是语义节点，语义根另有其人。
+                // 把它当成普通语义节点会产出「根是根的子节点」的自环。
+                // 按纯布局容器的规则处理，让其子孙上浮到最近的语义祖先。
+                self.collect_semantic_links(world, child, ancestor, links);
+                continue;
+            }
+            if self.has_semantic_node(key) {
+                links.push((key, ancestor));
+                self.collect_semantic_links(world, child, key, links);
+            } else {
+                // 纯布局容器自身没有语义，其子孙上浮到最近的语义祖先。
+                self.collect_semantic_links(world, child, ancestor, links);
+            }
+        }
     }
 
     /// 为随后推入的所有控件开启裁剪作用域，直至调用 [`Self::pop_clip`]。
@@ -925,7 +1029,7 @@ impl SceneCollector {
         }
         self.regions.extend(output.sub_hits);
         if let Some(node) = output.a11y {
-            self.semantics.upsert(key, node);
+            self.upsert_semantic(key, node);
         }
         for (sub_key, mut sub_node) in output.sub_a11y {
             if let Some((_, offset)) = active_transform {
@@ -934,7 +1038,7 @@ impl SceneCollector {
             if let Some((_, clip_rect)) = self.clip_stack.last().copied() {
                 sub_node.bounds = sub_node.bounds.intersect(&clip_rect);
             }
-            self.semantics.upsert(sub_key, sub_node);
+            self.upsert_semantic(sub_key, sub_node);
             self.semantics.reparent(sub_key, key);
         }
         if output.focusable {

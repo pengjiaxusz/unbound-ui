@@ -23,9 +23,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use accesskit::Role;
 use crossbeam_channel::{Receiver, Sender};
 use rustc_hash::{FxHashMap, FxHashSet};
-use unbound_a11y::A11yAction;
+use unbound_a11y::{A11yAction, A11yNode, SemanticIntent};
 use unbound_abi::{Dim, NodeFlags, RawNodeDesc, PORTAL_Z_BASE};
 use unbound_gpu::atlas::AtlasUpload;
 use unbound_gpu::data::{
@@ -233,6 +234,10 @@ impl<W: unbound_widgets::UiWidget> ErasedUiWidget for W {
 }
 
 /// 语义根节点标识。
+///
+/// 这是**保留键**：控件键空间不得占用它。语义根本身占据语义树里的这个键，
+/// 若某个控件恰好用同一个键，层级重建时语义根会被挂到它自己的子节点列表里，
+/// 任何树遍历都会陷入死循环。运行时会把撞车的控件改派到派生键上。
 pub const ROOT: u64 = 1;
 
 /// 应用声明一次归约（reduction）所失效的范围。
@@ -1288,6 +1293,10 @@ pub struct ViewBuilder<'a> {
     ephemeral_nodes: &'a mut Vec<NodeId>,
     focus_groups: &'a mut Vec<FocusGroup>,
     title_bar_bindings: &'a mut FxHashMap<u64, TitleBarBinding>,
+    /// 本帧声明的语义标注：控件键 → 标注意图。
+    ///
+    /// 意图在布局求解之后才被写成语义节点，因此控件的最终矩形已确定。
+    semantic_intents: &'a mut FxHashMap<u64, SemanticIntent>,
     depth: u16,
     z_base: u16,
 }
@@ -1355,6 +1364,27 @@ impl<'a> ViewBuilder<'a> {
     /// 追加控件的输出。
     pub fn push(&mut self, key: u64, output: WidgetOutput) {
         self.collector.push(key, output);
+    }
+
+    /// 声明某个控件的语义。
+    ///
+    /// 这是**框架层通用**的标注通道：它只描述「这个控件在语义上是什么」，
+    /// 不含任何业务知识——业务语义由应用通过本方法注入。
+    ///
+    /// 标注在布局求解**之后**生效，因此控件的最终矩形会一并写入语义节点。
+    /// 自绘控件（不走原生控件 API）由此获得与原生控件同等的语义地位：
+    /// 它们同样能被屏幕阅读器朗读、被 Agent 按角色与名称定位。
+    ///
+    /// 同一控件重复声明时，后一次覆盖前一次。
+    pub fn declare_semantics(&mut self, key: u64, intent: SemanticIntent) {
+        self.semantic_intents.insert(key, intent);
+    }
+
+    /// 声明某个控件的语义角色与名称。
+    ///
+    /// [`Self::declare_semantics`] 的简写形式。
+    pub fn declare_semantic(&mut self, key: u64, role: Role, label: impl Into<String>) {
+        self.declare_semantics(key, SemanticIntent::new(role, label));
     }
 
     /// 以固定图元预留空间追加控件输出，使动态字形序列不会移动后续控件的 span。
@@ -1542,6 +1572,21 @@ impl<'a> ViewBuilder<'a> {
         self.container(key, desc, build)
     }
 
+    /// 为撞上保留键的控件推导一个可用键。
+    ///
+    /// 结果保证非零、不等于语义根键，且本帧尚未被占用。
+    /// 调用方负责把它登记进 `seen_keys`。
+    fn derive_reserved_key(&self, base: u64) -> u64 {
+        let mut salt = 1u64;
+        loop {
+            let candidate = mix_key(base, salt);
+            if candidate != 0 && candidate != ROOT && !self.seen_keys.contains(&candidate) {
+                return candidate;
+            }
+            salt = salt.wrapping_add(1);
+        }
+    }
+
     fn reconcile_node(
         &mut self,
         key: u64,
@@ -1549,6 +1594,11 @@ impl<'a> ViewBuilder<'a> {
         loc: &'static core::panic::Location<'static>,
     ) -> (u64, NodeId) {
         let mut effective_key = key;
+        if effective_key == ROOT {
+            // 语义根键是保留键。控件占用它会让语义根成为自身的子节点，
+            // 树遍历随即死循环；此处把控件改派到一个未被占用的派生键上。
+            effective_key = self.derive_reserved_key(mix_key(key, 0x9E37_79B9_7F4A_7C15));
+        }
         if effective_key != 0 && !self.seen_keys.insert(effective_key) {
             // 当调用方在循环体或复用辅助函数内使用无参 `ui_key!()` 时，同一帧会出现重复键；
             // 若直接覆盖 `node_keys` 并因父节点不同执行 `world.remove(existing)`，会把前序循环项
@@ -2779,6 +2829,10 @@ pub struct AppRuntime<A: Application> {
     last_effective_scale: f32,
     /// 已同步到文本引擎的东亚字体族（用于检测界面语言切换）。
     applied_cjk_family: Option<&'static str>,
+    /// 本帧声明的语义标注：控件键 → 标注意图。
+    ///
+    /// 复用同一张表，避免每帧重新分配；语义标注的规模通常远小于控件数量。
+    semantic_intents: FxHashMap<u64, SemanticIntent>,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -2838,6 +2892,7 @@ impl<A: Application> AppRuntime<A> {
             window_commands: Vec::new(),
             last_effective_scale: 1.0,
             applied_cjk_family: None,
+            semantic_intents: FxHashMap::default(),
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -3050,6 +3105,50 @@ impl<A: Application> AppRuntime<A> {
     ///
     pub fn scene_mut(&mut self) -> &mut SceneCollector {
         &mut self.collector
+    }
+
+    /// 只读访问最近一帧的语义树。
+    ///
+    /// 这是 Agent 与屏幕阅读器**共享**的那棵树 —— 不存在第二套供 Agent 自学的
+    /// 定制 AST。Agent 侧的一切查询（按角色找控件、按名称定位、读文本与数值）
+    /// 都从这里出发。
+    ///
+    /// 注意：语义树在每帧的布局求解之后才完成层级重建，因此帧内调用应发生在
+    /// [`Self::frame`] 返回之后。
+    #[must_use]
+    pub fn semantics(&self) -> &unbound_a11y::Semantics {
+        &self.collector.semantics
+    }
+
+    /// 把本帧声明的语义标注写入语义树。
+    ///
+    /// 标注在布局求解之后应用，因此控件矩形已是最终值。已有语义节点的控件
+    /// 只覆盖显式给出的字段；自绘控件（自身不产出语义节点）则据此新建节点，
+    /// 从而与原生控件享有同等的语义地位。
+    fn apply_semantic_intents(&mut self) {
+        if self.semantic_intents.is_empty() {
+            return;
+        }
+        for (&key, intent) in self.semantic_intents.iter() {
+            let Some(node_id) = self.node_keys.get(&key).copied() else {
+                continue;
+            };
+            let rect = self
+                .world
+                .get(node_id)
+                .map(|node| node.world_rect)
+                .unwrap_or(Rect::ZERO);
+            let existing = self.collector.semantics.get(key).cloned();
+            let mut node = existing.unwrap_or_default();
+            intent.apply(&mut node);
+            if node.role == Role::Unknown {
+                // 未指定角色的标注退化为通用容器，而不是「未知」——
+                // 后者在读取方眼里等同于没有这个节点。
+                node.role = Role::GenericContainer;
+            }
+            node.bounds = rect;
+            self.collector.upsert_semantic(key, node);
+        }
     }
 
     /// 获取最近一帧的 diff。
@@ -3607,6 +3706,7 @@ impl<A: Application> AppRuntime<A> {
 
         self.collector.reset(ROOT);
         self.pending.clear();
+        self.semantic_intents.clear();
         self.widget_state.borrow_mut().begin_frame();
         for old_ephemeral in self.ephemeral_nodes.drain(..) {
             if self.world.get(old_ephemeral).is_some() {
@@ -3653,6 +3753,7 @@ impl<A: Application> AppRuntime<A> {
             ephemeral_nodes: &mut self.ephemeral_nodes,
             focus_groups: &mut focus_groups,
             title_bar_bindings: &mut self.title_bar_bindings,
+            semantic_intents: &mut self.semantic_intents,
             depth: 0,
             z_base: 0,
         };
@@ -3670,6 +3771,10 @@ impl<A: Application> AppRuntime<A> {
             }
         }
         self.layout_pending();
+        // 语义标注在布局求解之后应用：控件的最终矩形此时已确定。
+        self.apply_semantic_intents();
+        // 语义层级依据世界树重建，使 Agent 看到的嵌套与界面视觉一致。
+        self.collector.rebuild_semantic_hierarchy(&self.world);
         self.dispatch_lifecycle();
 
         // 发布新的命中区域与焦点顺序。命中区域归属表与世界树同帧更新，
@@ -4278,6 +4383,10 @@ impl<A: Application> AppRuntime<A> {
                             WidgetOutput {
                                 primitives,
                                 payloads,
+                                // 只读文本同样进入语义树：屏幕阅读器要靠它朗读内容，
+                                // Agent 要靠它读到界面上的数值与状态。缺少文本节点的
+                                // 界面在这两者眼里都是空的。
+                                a11y: Some(A11yNode::static_text(text.clone(), rect)),
                                 ..Default::default()
                             },
                         );
@@ -4326,6 +4435,9 @@ impl<A: Application> AppRuntime<A> {
                             WidgetOutput {
                                 primitives,
                                 payloads,
+                                // 多行文本同样进入语义树：整段内容作为一个节点，
+                                // Agent 一次读取即可，不必逐行拼接。
+                                a11y: Some(A11yNode::static_text(text.clone(), rect)),
                                 ..Default::default()
                             },
                         );
