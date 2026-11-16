@@ -831,9 +831,12 @@ pub fn emit_button_with_tokens(
             .with_shape(Shape::Rounded { radii })
             .with_cursor(CursorKind::Pointer)
     });
-    let a11y = A11yNode::new(Role::Button, desc.label.clone(), rect)
+    let mut a11y = A11yNode::new(Role::Button, desc.label.clone(), rect)
         .clickable()
         .disabled(blocked);
+    // 选中态必须进入语义：药丸筛选、分段「多选一」这类按钮，Agent 需要知道
+    // 「当前选的是哪一个」。丢掉它，Agent 就只能靠读视觉样式去猜。
+    a11y.selected = desc.active_selected;
 
     WidgetOutput {
         primitives,
