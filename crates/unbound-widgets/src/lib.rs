@@ -20,8 +20,15 @@ pub mod catalog;
 pub mod diff;
 pub mod ergonomics;
 pub mod primitive;
+pub mod shell;
 pub mod title_bar;
 
+pub use shell::{
+    emit_brand_badge, emit_feature_card, emit_hero_backdrop, emit_icon_button,
+    emit_shell_icon_primitives, emit_sidebar_item, AppBrandBadgeDesc, FeatureCardDesc,
+    HeroBackdropDesc, IconButtonDesc, ShellIcon, ShellIconDesc, SidebarItemDesc,
+    SidebarSectionHeaderDesc,
+};
 pub use title_bar::{
     TitleBarChrome, TitleBarDesc, WindowCaptionButton, WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH,
     TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID,
