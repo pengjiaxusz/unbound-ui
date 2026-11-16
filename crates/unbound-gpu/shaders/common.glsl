@@ -319,4 +319,14 @@ float sd_quadratic_bezier(vec2 pos, vec2 p0, vec2 p1, vec2 p2) {
     return sqrt(res);
 }
 
+// sRGB 编码的 8 位纹素 → 线性光。
+//
+// 主题令牌在 LUT 中已是线性值，而图集里的位图（PNG/JPEG 解码结果）仍是 sRGB 编码；
+// 若直接在线性空间参与混合，深色图片会被整体提亮一档（发灰、发白）。
+vec3 srgb_to_linear(vec3 c) {
+    vec3 lo = c / 12.92;
+    vec3 hi = pow((c + 0.055) / 1.055, vec3(2.4));
+    return mix(lo, hi, step(vec3(0.04045), c));
+}
+
 #endif // UNBOUND_COMMON_GLSL

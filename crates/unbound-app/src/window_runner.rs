@@ -677,11 +677,15 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 window.request_redraw();
             }
             PlatformEvent::ThemeChanged { dark } => {
-                self.runtime.set_theme(if dark {
-                    ThemeKind::Dark
-                } else {
-                    ThemeKind::Light
-                });
+                // 非客户区永远跟随系统（标题栏/边框由 DWM 绘制），
+                // 内容主题只在应用声明「跟随系统」时才切换。
+                if self.runtime.follows_system_theme() {
+                    self.runtime.set_theme(if dark {
+                        ThemeKind::Dark
+                    } else {
+                        ThemeKind::Light
+                    });
+                }
                 if let Some(hwnd) = self.hwnd {
                     set_window_dark_mode(hwnd, dark);
                 }

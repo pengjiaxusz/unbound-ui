@@ -172,7 +172,15 @@ void main() {
                 tex_a = glyph_alpha(coverage, on_dark);
                 texel = fill.rgb;
             } else if (prim_type == PRIM_IMAGE) {
-                texel = t.rgb * fill.rgb;
+                // 位图纹素是 sRGB 编码，必须转到线性空间才能与令牌颜色正确混合。
+                // `Token::NONE` 表示「保持纹理原色」：槽位 0 解析为全透明黑，
+                // 既不能拿来做乘法（整图乘成黑），也不能留作 alpha（整图不可见）。
+                vec3 tint = fill.rgb;
+                if (fill.a <= 0.0) {
+                    tint = vec3(1.0);
+                    fill.a = 1.0;
+                }
+                texel = srgb_to_linear(t.rgb) * tint;
                 tex_a = t.a;
             } else {
                 texel = t.rgb;

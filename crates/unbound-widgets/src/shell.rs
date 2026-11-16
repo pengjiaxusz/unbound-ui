@@ -1135,7 +1135,7 @@ impl IconButtonDesc {
             label: label.into(),
             selected: false,
             size: 32.0,
-            radius: 8.0,
+            radius: 4.0,
             background: Token::CARD_BG,
             z: 702,
         }
@@ -1403,8 +1403,8 @@ impl UiWidget for SidebarSectionHeaderDesc {
     type State = ();
 
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
-        let m = text_ctx.measure_line(&self.title, 10.5, 700);
-        Vec2::new((m.x + 20.0).max(self.rect.width()), 24.0)
+        let m = text_ctx.measure_line(&self.title, 11.5, 600);
+        Vec2::new((m.x + 20.0).max(self.rect.width()), 30.0)
     }
 
     fn emit_laid_out(
@@ -1415,27 +1415,26 @@ impl UiWidget for SidebarSectionHeaderDesc {
         _state: &Self::State,
         text_ctx: &mut TextCtx<'_>,
     ) -> WidgetOutput {
+        // 分组标题在行内偏下：上方留白把「新分组」与上一项拉开，下方贴近所属条目。
         let text_rect = Rect::new(
-            rect.origin.x + 10.0,
-            rect.origin.y + 2.0,
+            rect.origin.x + 12.0,
+            rect.origin.y + 8.0,
             (rect.width() - 16.0).max(0.0),
-            (rect.height() - 2.0).max(16.0),
+            (rect.height() - 8.0).max(16.0),
         );
         let quads = text_ctx.shape_line(
             &self.title,
             text_rect,
-            10.5,
-            700,
+            11.5,
+            600,
             AlignX::Left,
             AlignY::Middle,
         );
         let mut primitives = Vec::with_capacity(quads.len());
         let mut payloads = Vec::with_capacity(quads.len());
-        let color = if self.active {
-            Token::PRIMARY
-        } else {
-            Token::NAV_TEXT_MUTED
-        };
+        // Win11 的导航分组标题是中性灰的小字，不用强调色——强调色只属于选中项本身。
+        // `active` 仍保留给无障碍与外部状态使用，但不参与着色。
+        let color = Token::NAV_TEXT_MUTED;
         glyphs(&quads, color, self.z, &mut primitives, &mut payloads);
         WidgetOutput {
             primitives,
@@ -1490,8 +1489,8 @@ impl SidebarItemDesc {
             collapsed: false,
             indent: 0.0,
             badge: None,
-            height: 34.0,
-            radius: 8.0,
+            height: 40.0,
+            radius: 4.0,
             z: 630,
         }
     }

@@ -34,7 +34,7 @@ use crate::{ControlState, PointerPhase, WidgetDesc, WidgetOutput};
 pub const BUTTON_FONT_SIZE: f32 = 14.0;
 
 /// 按钮圆角半径。
-pub const BUTTON_RADIUS: f32 = 10.0;
+pub const BUTTON_RADIUS: f32 = 4.0;
 
 /// 标签与前置/后置图标之间的间距。
 pub const BUTTON_CONTENT_GAP: f32 = 8.0;

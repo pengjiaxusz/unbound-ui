@@ -44,8 +44,13 @@ pub fn step_ui_scale(current: f32, delta: i32) -> f32 {
 /// 宿主产品主题风格预设。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ProductPreset {
-    /// Unbound 标准 Material 风格。
+    /// Windows 11 Fluent（WinUI 3）云母灰阶风格——`unbound-ui` 的**默认**风格。
+    ///
+    /// 卡片与控件填充是叠在云母背板上的白色薄纱（半透明令牌），
+    /// 因此宿主应在窗口下方绘制「壁纸派生云母」背板，才能得到完整的层次感。
     #[default]
+    Win11,
+    /// Unbound 标准 Material 风格。
     Standard,
     /// `dunting` 数字资产管理器深邃暗房灰阶风格（低干扰中性灰底，突出贴图与模型固有色彩）。
     Dunting,
@@ -129,16 +134,23 @@ impl ThemeSet {
     #[must_use]
     pub fn for_product(preset: ProductPreset, accent: AccentBrand) -> Self {
         let base = Self::default_set();
-        let (lp, lh, lpr, lsoft) = accent.light_ramp();
-        let (dp, dh, dpr, dsoft) = accent.dark_ramp();
+        // Win11 预设自带完整八套调色板与专用强调色阶梯（WinUI 的强调填充更亮、
+        // 且深色下配深色前景），因此以它为底再套品牌色；其余预设以 Material 为底。
+        let (seed_light, seed_dark) = match preset {
+            ProductPreset::Win11 => (crate::win11::light(), crate::win11::dark()),
+            _ => (
+                base.palette(ThemeKind::Light).clone(),
+                base.palette(ThemeKind::Dark).clone(),
+            ),
+        };
 
         let mut light_entries: Vec<(Token, Color)> = crate::TOKENS
             .iter()
-            .map(|&t| (t, base.palette(ThemeKind::Light).color(t)))
+            .map(|&t| (t, seed_light.color(t)))
             .collect();
         let mut dark_entries: Vec<(Token, Color)> = crate::TOKENS
             .iter()
-            .map(|&t| (t, base.palette(ThemeKind::Dark).color(t)))
+            .map(|&t| (t, seed_dark.color(t)))
             .collect();
 
         let set_tok = |list: &mut Vec<(Token, Color)>, tok: Token, col: Color| {
@@ -147,9 +159,22 @@ impl ThemeSet {
             }
         };
 
-        for (entries, (p, h, pr, soft)) in [
-            (&mut light_entries, (lp, lh, lpr, lsoft)),
-            (&mut dark_entries, (dp, dh, dpr, dsoft)),
+        let (lp, lh, lpr, lsoft, lon) = if preset == ProductPreset::Win11 {
+            crate::win11::accent_ramp(accent, false)
+        } else {
+            let (p, h, pr, soft) = accent.light_ramp();
+            (p, h, pr, soft, Color::WHITE)
+        };
+        let (dp, dh, dpr, dsoft, don) = if preset == ProductPreset::Win11 {
+            crate::win11::accent_ramp(accent, true)
+        } else {
+            let (p, h, pr, soft) = accent.dark_ramp();
+            (p, h, pr, soft, Color::WHITE)
+        };
+
+        for (entries, (p, h, pr, soft, on)) in [
+            (&mut light_entries, (lp, lh, lpr, lsoft, lon)),
+            (&mut dark_entries, (dp, dh, dpr, dsoft, don)),
         ] {
             set_tok(entries, Token::PRIMARY, p);
             set_tok(entries, Token::PRIMARY_HOVER, h);
@@ -159,10 +184,13 @@ impl ThemeSet {
             set_tok(entries, Token::SELECTION, p.with_alpha(0.22));
             set_tok(entries, Token::INDETERMINATE_FILL, p);
             set_tok(entries, Token::PREEDIT_UNDERLINE, p);
+            if preset == ProductPreset::Win11 {
+                set_tok(entries, Token::ON_PRIMARY, on);
+            }
         }
 
         match preset {
-            ProductPreset::Standard => {}
+            ProductPreset::Win11 | ProductPreset::Standard => {}
             ProductPreset::Dunting => {
                 // Dunting 采用中性暗房灰底，消除蓝色偏色对贴图/材质审视的干扰
                 set_tok(
@@ -268,6 +296,7 @@ mod tests {
     #[test]
     fn all_ten_oklch_accents_and_product_presets_produce_valid_4kib_luts() {
         for preset in [
+            ProductPreset::Win11,
             ProductPreset::Standard,
             ProductPreset::Dunting,
             ProductPreset::RenderDebuggerLauncher,
