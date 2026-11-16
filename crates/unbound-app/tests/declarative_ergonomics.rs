@@ -602,8 +602,10 @@ fn ui_scale_and_os_scale_sync_viewport_immediately_and_keep_titlebar_buttons_in_
     assert_eq!(rt.context().viewport, Vec2::new(1440.0, 900.0));
 
     // Ctrl + '=' in reduce must immediately recompute logical viewport in the SAME frame
-    let mut ctrl = Modifiers::default();
-    ctrl.ctrl = true;
+    let ctrl = Modifiers {
+        ctrl: true,
+        ..Modifiers::default()
+    };
     let _ = rt.key(AppKey::Character('='), true, ctrl);
     let _ = rt.frame(0.016);
     assert!((rt.context().ui_scale - 1.125).abs() < 1e-4);
