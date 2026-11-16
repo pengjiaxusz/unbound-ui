@@ -222,6 +222,7 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::QueryBuilder => "query_builder",
         WidgetCatalogId::SchemaForm => "schema_form",
         WidgetCatalogId::ShortcutBar => "shortcut_bar",
+        WidgetCatalogId::Sidebar => "sidebar",
         WidgetCatalogId::TaskHud => "task_hud",
     }
 }
@@ -299,5 +300,5 @@ fn the_probe_covers_every_component() {
         WidgetCatalogId::COUNT,
         "the probe must cover every component exactly once"
     );
-    assert_eq!(WidgetCatalogId::COUNT, 106);
+    assert_eq!(WidgetCatalogId::COUNT, 107);
 }
