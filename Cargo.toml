@@ -92,6 +92,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Registry",
+    "Win32_System_SystemInformation",
     "Win32_System_SystemServices",
     "Win32_UI_Controls",
     "Win32_UI_Controls_Dialogs",
@@ -101,6 +102,7 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
+    "Wdk_System_SystemServices",
 ] }
 
 [workspace.lints.cargo]

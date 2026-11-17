@@ -1,9 +1,27 @@
 //! 后景模式：用户选择、平台能力解析与两条语义查询。
 
+/// 原生云母路径要求的最低 Windows 构建号（Windows 11 22H2）。
+pub const NATIVE_MICA_MIN_BUILD: u32 = 22621;
+
+/// 判定原生后景路径是否可用。
+///
+/// 只有构建号已知且不低于 [`NATIVE_MICA_MIN_BUILD`]、同时图形表面支持
+/// 预乘 alpha 合成时，才能启用 DWM 原生材质。未知构建号（非 Windows 或
+/// 探测失败）一律视为不可用，从而回退到自绘路径。
+#[must_use]
+pub fn native_backdrop_available(
+    windows_build: Option<u32>,
+    premultiplied_alpha_supported: bool,
+) -> bool {
+    windows_build.is_some_and(|build| build >= NATIVE_MICA_MIN_BUILD)
+        && premultiplied_alpha_supported
+}
+
 /// 用户可选的整窗后景路径。
 ///
-/// `Auto` 是默认值：宿主根据平台能力把它解析为 [`ResolvedBackdrop`]；
-/// 其余三种是用户的显式选择，不会被能力探测改写。
+/// `Auto` 是默认值：宿主根据平台能力把它解析为 [`ResolvedBackdrop`]。
+/// 显式 `SelfDrawn` 与 `Off` 不会被能力探测改写；显式 `Native` 在平台
+/// 无法承载原生材质时会回退为自绘，避免使用不透明交换链却清屏为全透明。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum BackdropMode {
     /// 按平台能力自动选择原生或自绘。
@@ -87,20 +105,20 @@ pub enum ResolvedBackdrop {
 impl ResolvedBackdrop {
     /// 将用户选择解析为实际路径。
     ///
-    /// `native_available` 由平台能力探测提供（本工单尚未实现，调用方传 `false`
-    /// 即可保持无头与非 Windows 环境下的自绘行为）。
+    /// 原生不可用时，`Auto` 与显式 `Native` 都解析为 [`Self::SelfDrawn`]：
+    /// 平台无法承载 DWM 材质，继续走原生只会得到一张空透明窗口。
+    /// `SelfDrawn` 与 `Off` 永不改写。
     #[must_use]
     #[deny(unreachable_patterns)]
     pub const fn resolve(choice: BackdropMode, native_available: bool) -> Self {
         match choice {
-            BackdropMode::Auto => {
+            BackdropMode::Auto | BackdropMode::Native => {
                 if native_available {
                     Self::Native
                 } else {
                     Self::SelfDrawn
                 }
             }
-            BackdropMode::Native => Self::Native,
             BackdropMode::SelfDrawn => Self::SelfDrawn,
             BackdropMode::Off => Self::Off,
         }
@@ -162,13 +180,8 @@ mod tests {
     }
 
     #[test]
-    fn explicit_choices_ignore_availability() {
+    fn explicit_self_drawn_and_off_ignore_availability() {
         for available in [false, true] {
-            assert_eq!(
-                ResolvedBackdrop::resolve(BackdropMode::Native, available),
-                ResolvedBackdrop::Native,
-                "an explicit Native choice must never be rewritten by the probe"
-            );
             assert_eq!(
                 ResolvedBackdrop::resolve(BackdropMode::SelfDrawn, available),
                 ResolvedBackdrop::SelfDrawn,
@@ -180,6 +193,46 @@ mod tests {
                 "an explicit Off choice must stay off"
             );
         }
+    }
+
+    #[test]
+    fn explicit_native_falls_back_when_native_is_unavailable() {
+        assert_eq!(
+            ResolvedBackdrop::resolve(BackdropMode::Native, false),
+            ResolvedBackdrop::SelfDrawn,
+            "an explicit Native choice must fall back to the self-drawn texture when the platform cannot host it"
+        );
+        assert_eq!(
+            ResolvedBackdrop::resolve(BackdropMode::Native, true),
+            ResolvedBackdrop::Native,
+            "an explicit Native choice must stay native when the platform can host it"
+        );
+    }
+
+    #[test]
+    fn native_availability_requires_a_known_win11_build() {
+        for build in [None, Some(10), Some(19045), Some(22000), Some(22620)] {
+            assert!(
+                !native_backdrop_available(build, true),
+                "build {build:?} must not enable the native backdrop"
+            );
+        }
+        assert!(
+            native_backdrop_available(Some(NATIVE_MICA_MIN_BUILD), true),
+            "the 22621 boundary with driver support must enable the native backdrop"
+        );
+        assert!(
+            native_backdrop_available(Some(26100), true),
+            "later Win11 builds with driver support must enable the native backdrop"
+        );
+    }
+
+    #[test]
+    fn native_availability_requires_premultiplied_alpha_support() {
+        assert!(
+            !native_backdrop_available(Some(26100), false),
+            "a Win11 build without premultiplied alpha composition must not enable the native backdrop"
+        );
     }
 
     #[test]

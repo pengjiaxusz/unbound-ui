@@ -506,6 +506,23 @@ impl GalleryApp {
         }
     }
 
+    /// 写入平台能力探测结果并立即重新解析后景模式。
+    ///
+    /// 宿主在创建首条交换链之前调用，使首帧即落到正确的后景路径；
+    /// 返回实际生效模式是否发生变化。
+    pub fn set_backdrop_capabilities(
+        &mut self,
+        windows_build: Option<u32>,
+        premultiplied_alpha_supported: bool,
+    ) -> bool {
+        self.state.windows_build = windows_build;
+        self.state.native_backdrop_available = unbound_backdrop::native_backdrop_available(
+            windows_build,
+            premultiplied_alpha_supported,
+        );
+        self.sync_backdrop_mode()
+    }
+
     /// 按当前能力重新解析后景模式；变化时写入实际生效模式并请求重建。
     ///
     /// 实际路径由能力探测与用户选择共同决定，页面只读取解析结果，不自行推导。

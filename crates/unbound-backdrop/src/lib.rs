@@ -26,6 +26,6 @@ pub mod wallpaper;
 pub use mica::{
     generate, generate_blurred_rect, MicaImage, MicaRequest, DEFAULT_MAX_WIDTH, DEFAULT_SIGMA,
 };
-pub use mode::{BackdropMode, ResolvedBackdrop};
+pub use mode::{native_backdrop_available, BackdropMode, ResolvedBackdrop, NATIVE_MICA_MIN_BUILD};
 pub use state::{BackdropGenerator, MICA_READY_EVENT_ID};
 pub use wallpaper::wallpaper_path;

@@ -711,12 +711,12 @@ impl PlatformApp for Showcase {
 
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
-        // 原生后景可用性的图形层一半：表面必须支持预乘 alpha 合成。
-        // 操作系统构建号条件由后续工单在同一接缝补充（#4）。
-        let native_available = surface.supports_premultiplied_alpha(&gpu).unwrap_or(false);
-        self.shell_mut().state.native_backdrop_available = native_available;
-        self.shell_mut().sync_backdrop_mode();
-        // 必须在创建首条交换链之前解析实际模式，使首帧就是正确后景而非先错后纠正。
+        // 原生后景可用性由「Windows 构建号 ≥ 22621」与「表面支持预乘 alpha」共同决定。
+        // 两者必须在创建首条交换链之前完成，使首帧就是正确后景而非先错后纠正。
+        let windows_build = unbound_platform::windows_build();
+        let premultiplied_alpha = surface.supports_premultiplied_alpha(&gpu).unwrap_or(false);
+        self.shell_mut()
+            .set_backdrop_capabilities(windows_build, premultiplied_alpha);
         let native_backdrop = self.shell().state.resolved_backdrop.uses_native_path();
         let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false)
             .with_composite_alpha(if native_backdrop {

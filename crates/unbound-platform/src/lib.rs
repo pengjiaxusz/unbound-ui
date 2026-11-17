@@ -34,6 +34,7 @@ pub mod win32_frame;
 pub mod win32_window;
 pub mod window;
 pub mod windows;
+pub mod windows_build;
 
 pub use a11y_bridge::{action_request, A11yBridge, A11yRequest, A11yTransport};
 pub use a11y_win32::Win32A11y;
@@ -67,6 +68,7 @@ pub use window::{
     WindowPosition,
 };
 pub use windows::{WindowId, WindowRegistry, WindowSlot};
+pub use windows_build::windows_build;
 
 pub use overlay_host::{
     is_rect_fully_covered, FileDragDropBridge, FileDragEffect, HitTestPassThroughPolicy,

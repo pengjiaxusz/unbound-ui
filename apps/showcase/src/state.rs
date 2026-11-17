@@ -294,9 +294,9 @@ pub struct GalleryState {
     pub backdrop_mode: BackdropMode,
     /// 宿主按平台能力解析后的实际生效路径。
     pub resolved_backdrop: ResolvedBackdrop,
-    /// 原生后景路径是否可用（能力探测在后续工单接入，当前保持 `false`）。
+    /// 原生后景路径是否可用（构建号 ≥ 22621 且表面支持预乘 alpha）。
     pub native_backdrop_available: bool,
-    /// Windows 构建号；`None` 表示尚未探测或非 Windows 环境。
+    /// Windows 构建号；`None` 表示非 Windows 环境或探测失败。
     pub windows_build: Option<u32>,
     /// 当通过侧边栏直接选中某个具体组件时记录该组件 ID。
     pub active_component: Option<WidgetCatalogId>,
