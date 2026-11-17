@@ -410,18 +410,46 @@ fn render_html(
             mean = case.mean_de,
             p99 = case.p99_de,
             bbox = case.ours_bbox,
-            ref_url = file_url(&reference_png),
-            ours_url = file_url(&ours_png),
-            heat_url = file_url(&heat_png),
+            ref_url = png_data_url(&reference_png),
+            ours_url = png_data_url(&ours_png),
+            heat_url = png_data_url(&heat_png),
         );
     }
 
     html
 }
 
-fn file_url(path: &Path) -> String {
-    let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    format!("file:///{}", absolute.to_string_lossy().replace('\\', "/"))
+/// 把 PNG 内联成 data URI：报告单文件可移动，浏览器不会拦截本地子资源。
+fn png_data_url(path: &Path) -> String {
+    match std::fs::read(path) {
+        Ok(bytes) => format!("data:image/png;base64,{}", base64(&bytes)),
+        Err(error) => format!("missing: {error}"),
+    }
+}
+
+fn base64(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        encoded.push(char::from(ALPHABET[(first >> 2) as usize]));
+        encoded.push(char::from(
+            ALPHABET[(((first & 0b11) << 4) | (second >> 4)) as usize],
+        ));
+        encoded.push(if chunk.len() > 1 {
+            char::from(ALPHABET[(((second & 0b1111) << 2) | (third >> 6)) as usize])
+        } else {
+            '='
+        });
+        encoded.push(if chunk.len() > 2 {
+            char::from(ALPHABET[(third & 0b11_1111) as usize])
+        } else {
+            '='
+        });
+    }
+    encoded
 }
 
 // ============================================================================
