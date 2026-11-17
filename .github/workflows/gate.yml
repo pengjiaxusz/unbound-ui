@@ -1,0 +1,89 @@
+name: 提交门禁
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+# 同一个分支只保留最新一次运行：过期的运行报告的提交范围早已不存在。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 本地提交钩子的服务端对应物。它不需要贡献者机器上的任何配置，所以即使作者从未安装 CLI，PR 一样会被校验。
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  gate:
+    # 这里的名字是刻意保持稳定的标识：必需状态检查引用的就是它，而这份引用不能因为文档语言切换就失效。
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 校验提交范围需要完整历史；检出 head ref 可避免把 GitHub 自动生成的合并提交算进来。
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: 安装 pengj-templates-cli
+        run: |
+          curl -fsSL https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.sh | sh
+          echo "${XDG_DATA_HOME:-$HOME/.local/share}/pengj-templates/bin" >> "$GITHUB_PATH"
+
+      - name: 校验提交标题
+        env:
+          # 范围的基准：PR 用目标分支，推送用上一个提交。
+          GATE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base="${GATE_BASE:-}"
+          if printf '%s' "$base" | grep -qE '^0+$'; then
+            base=""
+          fi
+          set +e
+          if [ -n "$base" ]; then
+            output=$(pengj-templates-cli gate check-commits --base "$base" 2>&1)
+          else
+            output=$(pengj-templates-cli gate check-commits 2>&1)
+          fi
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "## 提交门禁拦下了这段提交"
+              echo ""
+              echo '```'
+              printf '%s\n' "$output"
+              echo '```'
+              echo ""
+              echo "范围内每个提交的标题都要写成 `type(scope): 摘要`。规则集在 `.gate.toml` 里。"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+
+      - name: 运行代码语言守卫
+        run: |
+          set +e
+          output=$(pengj-templates-cli gate check 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "## 代码语言守卫报了违规"
+              echo ""
+              echo '```'
+              printf '%s\n' "$output"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+
+      # 本地 pre-commit 钩子会格式化暂存的 Rust 文件；没装 CLI 时这一步不会发生，所以由服务端补上。
+      - name: 检查代码格式
+        run: cargo fmt --check

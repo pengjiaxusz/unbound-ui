@@ -1,0 +1,37 @@
+#!/bin/sh
+# gate hook: 提交前的 pre-commit 阶段。
+#
+# 提交落地前会跑两项检查：
+#   1. 用 rustfmt 格式化暂存区里的 Rust 文件；
+#   2. 代码语言守卫按 `.gate.toml` 检查暂存的文件。
+#
+# 门禁内置在 `pengj-templates-cli` 里，本钩子调用 `pengj-templates-cli gate hook pre-commit`。一个二进制同时覆盖模板引擎、MCP 安装与提交门禁。
+
+set -e
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+# 定位 CLI：先找 PATH，再回落到安装目录。回落这一步是为了应付「装好 CLI 之前就打开的终端」——PATH 没刷新时不该被当成没装。
+if command -v pengj-templates-cli >/dev/null 2>&1; then
+    exec pengj-templates-cli gate hook pre-commit
+fi
+
+for candidate in \
+    "${PENGJ_INSTALL_DIR:+$PENGJ_INSTALL_DIR/bin/pengj-templates-cli.exe}" \
+    "${PENGJ_INSTALL_DIR:+$PENGJ_INSTALL_DIR/bin/pengj-templates-cli}" \
+    "${LOCALAPPDATA:+$LOCALAPPDATA/pengj-templates/bin/pengj-templates-cli.exe}" \
+    "${XDG_DATA_HOME:+$XDG_DATA_HOME/pengj-templates/bin/pengj-templates-cli}" \
+    "${HOME:+$HOME/.local/share/pengj-templates/bin/pengj-templates-cli}"
+do
+    if [ -x "$candidate" ]; then
+        exec "$candidate" gate hook pre-commit
+    fi
+done
+
+# 没有 CLI：rustfmt 与代码语言守卫在这个钩子里跑不了——它们没法用 shell 复刻。这里选择放行并大声提示，而不是让一个跑不起来的检查把提交堵死；同样的规则由服务端 CI 在推送时把关。
+echo "[gate] 找不到 pengj-templates-cli：rustfmt 与代码语言守卫这次没有运行。" >&2
+echo "[gate] 本次提交会通过；同样的规则由服务端 CI 把关。想在本地也跑，装一次 CLI：" >&2
+echo "[gate]   irm https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.ps1 | iex" >&2
+echo "[gate]   curl -fsSL https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.sh | sh" >&2
+exit 0

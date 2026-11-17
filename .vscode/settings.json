@@ -3,10 +3,11 @@
   "explorer.fileNesting.expand": false,
   "explorer.fileNesting.patterns": {
     "README.md": "CHANGELOG*, HISTORY*, LICENSE*, LICENCE*, CONTRIBUTING*, CODE_OF_CONDUCT*, CODEOWNERS, AUTHORS, SECURITY*",
-    "package.json": "pnpm-*, package-lock.json, yarn.lock, bun.lock*, .npmrc, .nvmrc, .node-version, commitlint.*, lefthook.yml, .commitlintrc*, .pnpmfile.cjs",
+    "package.json": "pnpm-*, package-lock.json, yarn.lock, bun.lock*, .npmrc, .nvmrc, .node-version",
     "Cargo.toml": "Cargo.lock, rust-toolchain*, .rustfmt.toml, rustfmt.toml, clippy.toml, .clippy.toml, deny.toml, audit.toml, .cargo, cross.toml, justfile, Justfile",
     ".gitignore": ".gitattributes, .gitmodules, .gitmessage, .mailmap",
     "tsconfig.json": "tsconfig.*.json, jsconfig.*.json",
-    ".env.example": ".env, .env.*"
+    ".env.example": ".env, .env.*",
+    ".gate.toml": ".githooks"
   }
 }
