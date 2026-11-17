@@ -97,6 +97,8 @@ pub struct DemoState {
     pub asset_ids: Vec<AssetId>,
     /// 资源流式加载演示使用的暂存环（staging ring）。
     pub asset_ring: StagingRing,
+    /// WinUI 3 像素对照报告（进入报告页时延迟载入一次）。
+    pub parity_report: Option<crate::pages::parity_report::ParityReport>,
     pub canvas_pan: Vec2,
     pub canvas_zoom: f32,
     pub marquee: Option<(Vec2, Vec2)>,
@@ -163,6 +165,7 @@ impl Default for DemoState {
             asset_hub: None,
             asset_ids: Vec::new(),
             asset_ring: StagingRing::new(4096, 3),
+            parity_report: None,
             canvas_pan: Vec2::new(18.0, 12.0),
             canvas_zoom: 1.0,
             marquee: None,
@@ -235,6 +238,26 @@ impl DemoState {
             self.asset_ring.begin_frame();
         }
         let _ = hub.poll(text);
+    }
+
+    /// 延迟载入像素对照报告，并为参考 / 本框架 / 热力图三组截图提交异步解码。
+    pub fn poll_parity(&mut self, text: &mut unbound_text::TextEngine) {
+        let hub = self.asset_hub.get_or_insert_with(AssetHub::new);
+        if self.parity_report.is_none() {
+            self.parity_report = Some(crate::pages::parity_report::ParityReport::load(hub));
+        }
+        let _ = hub.poll(text);
+    }
+
+    /// 取出演示资产中心累积的图集上传任务。
+    ///
+    /// 该中心独立于运行时内置的资产管线，因此宿主必须在每帧重建后主动排空，
+    /// 否则解码完成的截图永远不会写入 GPU 图集。
+    pub fn take_asset_uploads(&mut self) -> Vec<unbound_gpu::atlas::AtlasUpload> {
+        self.asset_hub
+            .as_mut()
+            .map(|hub| hub.take_uploads())
+            .unwrap_or_default()
     }
 }
 
@@ -621,10 +644,16 @@ impl GalleryState {
         }
         // 以约 30 Hz 重新塑形并重绘动画页面。静态页面永不重建，
         // 这正是展厅在空闲时保持低功耗的原因。
-        let animated = matches!(
-            self.active_page,
-            PageId::Assets | PageId::Sliders | PageId::Telemetry | PageId::Springs
-        );
+        let animated = match self.active_page {
+            PageId::Assets | PageId::Sliders | PageId::Telemetry | PageId::Springs => true,
+            // 对照报告只在截图仍在解码时保持重建，纹理到齐后即恢复空闲。
+            PageId::Parity => self
+                .demo
+                .asset_hub
+                .as_ref()
+                .is_some_and(|hub| hub.inflight() > 0),
+            _ => false,
+        };
         self.animation_clock += dt;
         if animated && self.animation_clock >= 1.0 / 30.0 {
             self.animation_clock = 0.0;

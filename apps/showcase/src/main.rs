@@ -352,6 +352,8 @@ impl Showcase {
         self.shell_mut().set_effective_scale(scale);
         let report = self.app.frame(dt);
         self.upload_asset_textures(&report.atlas_uploads);
+        let demo_uploads = self.shell_mut().state.demo.take_asset_uploads();
+        self.upload_asset_textures(&demo_uploads);
         // 只要存在字形就进行上传。场景未变的帧仍可能携带新字形——
         // 重新光栅化的字形会落入不同的图集槽位，虽然图元也会随之变化，
         // 但上传逻辑绝不能依赖这种巧合。
@@ -1159,6 +1161,8 @@ impl Showcase {
             .resize(Vec2::new(presented.logical.0, presented.logical.1));
         let report = self.app.frame(0.0);
         self.upload_asset_textures(&report.atlas_uploads);
+        let demo_uploads = self.shell_mut().state.demo.take_asset_uploads();
+        self.upload_asset_textures(&demo_uploads);
         self.upload_glyphs();
         self.write_theme_if_needed();
 
@@ -1523,6 +1527,7 @@ fn render_to_png(
     dark: bool,
     zoom_step: usize,
     show_hud: bool,
+    page: Option<&str>,
 ) -> Result<(), String> {
     let gpu = Gpu::new(GpuConfig::default()).map_err(|e| e.diagnostic_report())?;
     let mut renderer = Renderer::new(gpu, width, height).map_err(|e| e.diagnostic_report())?;
@@ -1539,14 +1544,68 @@ fn render_to_png(
     };
     app.state.zoom_step = zoom_step.min(showcase::state::ZOOM_STEPS.len() - 1);
     app.state.show_hud = show_hud;
+    if let Some(name) = page {
+        let wanted = name.to_ascii_lowercase();
+        let selected = showcase::pages::PageId::ALL
+            .into_iter()
+            .find(|candidate| format!("{candidate:?}").to_ascii_lowercase() == wanted)
+            .ok_or_else(|| format!("unknown page: {name}"))?;
+        app.state.active_page = selected;
+    }
     let zoom = app.state.zoom();
     app.set_effective_scale(zoom);
-    app.rebuild(
-        (width as f32 / zoom, height as f32 / zoom),
-        showcase::shell::Interaction::default(),
-    );
+    let logical = (width as f32 / zoom, height as f32 / zoom);
+    app.rebuild(logical, showcase::shell::Interaction::default());
     app.scene.camera = Camera::ui((width as f32, height as f32), zoom);
+    if page.is_some() {
+        // 资源页与对照报告页的截图在后台线程解码；单帧截图若停在占位符上
+        // 毫无验证价值，因此等待飞行中的解码任务清零后再取最终帧。
+        for _ in 0..400 {
+            upload_pending_textures(&mut app, &renderer, &atlases)?;
+            let pending = app
+                .state
+                .demo
+                .asset_hub
+                .as_ref()
+                .is_some_and(|hub| hub.inflight() > 0);
+            if !pending {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            app.rebuild(logical, showcase::shell::Interaction::default());
+            app.scene.camera = Camera::ui((width as f32, height as f32), zoom);
+        }
+        app.rebuild(logical, showcase::shell::Interaction::default());
+        app.scene.camera = Camera::ui((width as f32, height as f32), zoom);
+    }
 
+    upload_pending_textures(&mut app, &renderer, &atlases)?;
+    renderer
+        .write_theme_lut(&theme::lut(dark))
+        .map_err(|e| e.to_string())?;
+    renderer
+        .render(&app.scene.upload(1, &[]))
+        .map_err(|e| e.to_string())?;
+    let pixels = renderer.read_pixels().map_err(|e| e.to_string())?;
+    renderer.destroy();
+    write_png(path, width, height, &pixels)
+}
+
+/// 上传本帧字形与演示资产中心解码完成的纹理。
+///
+/// `--shot` 与 `--parity-run` 都走离线渲染器，没有窗口宿主代为排空上传队列，
+/// 因此截图路径必须自己把字形与图像纹理送进图集。
+fn upload_pending_textures(
+    app: &mut GalleryApp,
+    renderer: &Renderer,
+    atlases: &AtlasSet,
+) -> Result<(), String> {
+    let uploads = app.state.demo.take_asset_uploads();
+    if !uploads.is_empty() {
+        atlases
+            .upload_batch(&renderer.gpu, &uploads)
+            .map_err(|error| error.to_string())?;
+    }
     for update in app.labels.cache.take_updates() {
         let kind = match update.target {
             unbound_text::AtlasTarget::Coverage => AtlasKind::R8,
@@ -1565,17 +1624,9 @@ fn render_to_png(
                     data: update.data,
                 },
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| error.to_string())?;
     }
-    renderer
-        .write_theme_lut(&theme::lut(dark))
-        .map_err(|e| e.to_string())?;
-    renderer
-        .render(&app.scene.upload(1, &[]))
-        .map_err(|e| e.to_string())?;
-    let pixels = renderer.read_pixels().map_err(|e| e.to_string())?;
-    renderer.destroy();
-    write_png(path, width, height, &pixels)
+    Ok(())
 }
 
 /// 将渲染器回读的 BGRA 像素写入 PNG 文件，必要时创建父目录。
@@ -1658,6 +1709,7 @@ fn main() {
             dark,
             zoom_step,
             args.iter().any(|a| a == "--hud"),
+            arg_value(&args, "--page").as_deref(),
         ) {
             Ok(()) => println!("wrote {path}"),
             Err(error) => eprintln!("could not render:\n{error}"),
@@ -1708,7 +1760,7 @@ mod tests {
     fn the_gallery_starts_on_home_with_a_full_catalogue() {
         let app = GalleryApp::new();
         assert_eq!(app.state.active_page, PageId::Home);
-        assert_eq!(PageId::ALL.len(), 25);
+        assert_eq!(PageId::ALL.len(), 26);
         assert!(!PageId::Home.examples().is_empty());
         assert!(PageId::Telemetry.examples().len() >= 2);
         assert!(!PageId::Systems.examples().is_empty());
