@@ -130,6 +130,7 @@ define_widget_catalog! {
         pagination,
         pin_input,
         pipeline_view,
+        pivot,
         popconfirm,
         popover,
         progress,
@@ -237,6 +238,7 @@ define_widget_catalog! {
         Pagination => pagination,
         PinInput => pin_input,
         PipelineView => pipeline_view,
+        Pivot => pivot,
         Popconfirm => popconfirm,
         Popover => popover,
         Progress => progress,
@@ -322,6 +324,10 @@ pub use generic_data_table::{
     SortDirection,
 };
 pub use pipeline_view::{emit_pipeline_view, PipelineStageItem, PipelineViewDesc};
+pub use pivot::{
+    emit_pivot_item, PivotDesc, PivotItem, PivotState, PIVOT_GAP, PIVOT_HEIGHT,
+    PIVOT_INDICATOR_HEIGHT,
+};
 pub use query_builder::{
     emit_query_builder, FilterPopupState, QueryBuilderDesc, QueryCombinator, QueryRule,
 };

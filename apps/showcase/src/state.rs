@@ -844,6 +844,7 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::TreeTable
         | WidgetCatalogId::VirtualMasonry
         | WidgetCatalogId::Tabs
+        | WidgetCatalogId::Pivot
         | WidgetCatalogId::Radio
         | WidgetCatalogId::Segmented
         | WidgetCatalogId::Stepper

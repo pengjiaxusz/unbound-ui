@@ -59,6 +59,8 @@ fn states() -> Vec<ControlState> {
 ///   `Breadcrumb`、`ColorPicker`、`CurveEditor`、`DatePicker`、`Minimap`、
 ///   `Gizmo`、`NodeGraph`、`Ruler`。
 /// * `Overlay` 仅做定位/栈记账，不输出任何图元。
+/// * `Pivot` 的整排只有一个命中区域，`ControlState` 不携带「悬停在哪一项」，
+///   逐标签悬停反馈由调用方用独立命中区域自行维护。
 const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::Alert,
     WidgetCatalogId::AlertDialog,
@@ -94,6 +96,7 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::NinePatch,
     WidgetCatalogId::NodeGraph,
     WidgetCatalogId::Overlay,
+    WidgetCatalogId::Pivot,
     WidgetCatalogId::Popover,
     WidgetCatalogId::Progress,
     WidgetCatalogId::PropertyGrid,
@@ -221,6 +224,7 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::AddressBar => "address_bar",
         WidgetCatalogId::GenericDataTable => "generic_data_table",
         WidgetCatalogId::PipelineView => "pipeline_view",
+        WidgetCatalogId::Pivot => "pivot",
         WidgetCatalogId::QueryBuilder => "query_builder",
         WidgetCatalogId::SchemaForm => "schema_form",
         WidgetCatalogId::ShortcutBar => "shortcut_bar",
@@ -304,5 +308,5 @@ fn the_probe_covers_every_component() {
     );
     // 控件目录的条目数：这个数字是门禁——新增控件必须同步更新，
     // 否则「每个控件都被探针覆盖」这句话就不再成立。
-    assert_eq!(WidgetCatalogId::COUNT, 108);
+    assert_eq!(WidgetCatalogId::COUNT, 109);
 }

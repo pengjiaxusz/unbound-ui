@@ -71,7 +71,7 @@ impl CategoryId {
             Self::Collections => "Collections",
             Self::Canvas => "Infinite Canvas",
             Self::Motion => "Motion, A11y & Telemetry",
-            Self::Components => "Components (107)",
+            Self::Components => "Components (109)",
             Self::System => "Engine Systems",
         }
     }
@@ -89,7 +89,7 @@ impl CategoryId {
                 Self::Collections => "集合与流式资产",
                 Self::Canvas => "无限画布",
                 Self::Motion => "动效、无障碍与遥测",
-                Self::Components => "组件展厅 (107)",
+                Self::Components => "组件展厅 (109)",
                 Self::System => "引擎系统与国际化",
             }
         } else {
@@ -395,9 +395,9 @@ impl PageId {
                 "展台本身即兼容性基准：主题、缩放、像素吸附、帧率上限与双拼方案均支持运行时即时切换。",
             ),
             Self::Components => (
-                "107 款标准组件展厅",
+                "109 款标准组件展厅",
                 "全部组件",
-                "收录全部 107 款标准组件，每个组件均在侧边栏拥有直达入口并由真实 unbound-widgets 发射器绘制。",
+                "收录全部 109 款标准组件，每个组件均在侧边栏拥有直达入口并由真实 unbound-widgets 发射器绘制。",
             ),
             Self::Systems => (
                 "21 个引擎核心子系统全景",
