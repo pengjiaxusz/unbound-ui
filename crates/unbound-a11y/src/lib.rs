@@ -757,6 +757,14 @@ impl Semantics {
         let first = !self.initialized;
         self.initialized = true;
 
+        // 焦点必须是读取方拿得到的节点。视口重建后旧焦点可能已随控件消失
+        // （菜单收起、页面切换），但调用方仍可能把上一帧的焦点键原样传回来；
+        // 若照原样回显，平台适配器的消费者树会因「焦点不在节点表里」直接 panic。
+        // 与 `remove` 的既有策略保持一致：回退到根。
+        if !self.nodes.contains_key(&self.focus) {
+            self.focus = self.root;
+        }
+
         let mut ids: Vec<u64> = if first {
             self.nodes.keys().copied().collect()
         } else {
@@ -1017,6 +1025,22 @@ mod tests {
         s.set_children(1, &[2]);
         s.set_focus(2);
         s.remove(2);
+        assert_eq!(s.focus(), 1);
+    }
+
+    #[test]
+    fn focus_set_to_a_missing_node_is_clamped_to_the_root_on_emit() {
+        let mut s = tree();
+        s.upsert(
+            2,
+            A11yNode::new(Role::Button, "Save", rect(0.0, 0.0, 10.0, 10.0)),
+        );
+        s.set_children(1, &[2]);
+        s.take_update();
+        // 典型来源：重建后焦点仍在上一帧的菜单项键上，而该节点已被移除。
+        s.set_focus(99);
+        let update = s.take_update().expect("focus change must emit an update");
+        assert_eq!(update.focus, NodeId(1));
         assert_eq!(s.focus(), 1);
     }
 
