@@ -15,6 +15,7 @@ pub mod i18n;
 pub mod input;
 pub mod layout;
 pub mod motion;
+pub mod parity_report;
 pub mod systems;
 
 use unbound_app::Locale;
@@ -120,7 +121,12 @@ impl CategoryId {
             Self::Canvas => &[PageId::Viewport, PageId::Marquee, PageId::Undo],
             Self::Motion => &[PageId::Springs, PageId::A11y, PageId::Telemetry],
             Self::Components => &[PageId::Components],
-            Self::System => &[PageId::Systems, PageId::I18n, PageId::Settings],
+            Self::System => &[
+                PageId::Systems,
+                PageId::Parity,
+                PageId::I18n,
+                PageId::Settings,
+            ],
         }
     }
 }
@@ -157,10 +163,12 @@ pub enum PageId {
     Systems,
     /// 原生国际化（i18n）与多语言资源包教学页。
     I18n,
+    /// WinUI 3 像素对照报告：参考截图、本框架渲染与 ΔE 热力图。
+    Parity,
 }
 
 impl PageId {
-    pub const ALL: [PageId; 25] = [
+    pub const ALL: [PageId; 26] = [
         PageId::Home,
         PageId::Colors,
         PageId::Typography,
@@ -186,6 +194,7 @@ impl PageId {
         PageId::Components,
         PageId::Systems,
         PageId::I18n,
+        PageId::Parity,
     ];
 
     #[must_use]
@@ -217,6 +226,7 @@ impl PageId {
             Self::Components => 22,
             Self::Systems => 23,
             Self::I18n => 24,
+            Self::Parity => 25,
         }
     }
 
@@ -239,7 +249,7 @@ impl PageId {
             Self::Viewport | Self::Marquee | Self::Undo => CategoryId::Canvas,
             Self::Springs | Self::A11y | Self::Telemetry => CategoryId::Motion,
             Self::Components => CategoryId::Components,
-            Self::Systems | Self::I18n | Self::Settings => CategoryId::System,
+            Self::Systems | Self::Parity | Self::I18n | Self::Settings => CategoryId::System,
         }
     }
 
@@ -272,6 +282,7 @@ impl PageId {
             Self::Components => components::COMPONENTS_INFO,
             Self::Systems => systems::SYSTEMS_INFO,
             Self::I18n => i18n::I18N_INFO,
+            Self::Parity => parity_report::PARITY_INFO,
         }
     }
 
@@ -409,6 +420,11 @@ impl PageId {
                 "原生 i18n",
                 "零外部重型依赖的原生多语言系统：内置中英预设、回退链、占位符插值、单复数、区域数字/日期格式化与三步接入教程。",
             ),
+            Self::Parity => (
+                "WinUI 3 像素对照报告",
+                "像素对照报告",
+                "在框架内部直接浏览 WinUI 3 参考截图、本框架同边界渲染与 CIEDE2000 热力图；按色差均值、p99 与包围盒三重阈值判定一致性。",
+            ),
         };
         PageInfo {
             title,
@@ -448,6 +464,7 @@ impl PageId {
             Self::Components => components::COMPONENT_EXAMPLES,
             Self::Systems => systems::SYSTEMS_EXAMPLES,
             Self::I18n => i18n::I18N_EXAMPLES,
+            Self::Parity => parity_report::PARITY_EXAMPLES,
         }
     }
 
@@ -482,6 +499,7 @@ impl PageId {
             Self::Components => "组件展厅 全部标准组件 目录",
             Self::Systems => "引擎子系统 架构全景 渲染管线",
             Self::I18n => "国际化 本地化 多语言 翻译 中英文切换 i18n locale",
+            Self::Parity => "像素对照 差分报告 参考截图 色差 热力图 winui parity",
         };
         let haystack = format!(
             "{} {} {} {} {} {} {} {} {}",
@@ -735,6 +753,8 @@ pub enum DemoKind {
     I18n {
         mode: u8,
     },
+    /// WinUI 3 像素对照报告：参考截图、本框架渲染与 ΔE 热力图。
+    ParityReport,
     /// 由其真实发射器绘制的单个目录组件。
     Component {
         id: WidgetCatalogId,
@@ -990,6 +1010,10 @@ impl ExampleDef {
                 "三步接入原生 i18n 指南 (3-Step Integration Guide)",
                 "手把手教你如何在自己的 Unbound UI 项目中注册双语词条、绑定语言切换与声明式渲染。",
             ),
+            DemoKind::ParityReport => (
+                "WinUI 3 像素对照矩阵 (WinUI 3 Pixel Parity)",
+                "28 个用例逐像素比对：左为 WinUI 3 官方截图，中为本框架同边界渲染，右为 CIEDE2000 热力图；本页完全由框架自身绘制。",
+            ),
             DemoKind::Component { id } => (
                 components::component_nav_label_localized(id, locale),
                 self.description,
@@ -1082,6 +1106,7 @@ pub fn render_demo(ctx: &mut DemoCtx<'_, '_>, demo: DemoKind) {
         DemoKind::PinyinEngine => motion::pinyin_engine(ctx),
         DemoKind::Systems { mode } => systems::systems(ctx, mode),
         DemoKind::I18n { mode } => i18n::i18n_demo(ctx, mode),
+        DemoKind::ParityReport => parity_report::report(ctx),
         DemoKind::Component { id } => components::component(ctx, id),
     }
 }

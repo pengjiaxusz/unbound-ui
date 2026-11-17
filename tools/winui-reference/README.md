@@ -37,11 +37,16 @@ dotnet build -c Release
 该命令对每张参考图调用 `unbound-widgets` 的同一个控件，按参考 JSON 的
 `controlBounds` 渲染到同尺寸画布，然后逐像素计算 CIEDE2000，输出：
 
+- `target/parity/reference/<用例>.png`：参考截图副本，框架内报告页只依赖 `target/parity`；
 - `target/parity/ours/<用例>.png`：本框架渲染结果（附同名 JSON）；
 - `target/parity/heat/<用例>.png`：ΔE 热力图（黑→蓝→绿→黄→红，30 封顶）；
 - `target/parity/report.html` / `report.json`：逐用例指标与通过状态。
 
 判定阈值：内容包围盒必须逐边相等，全图 ΔE2000 均值 ≤ 1.0，p99 ≤ 3.0。
+
+报告同时内置于展厅「Engine Systems → Pixel parity」页：三张截图经 `AssetHub`
+异步解码后由框架自己的图像发射器绘制，可用
+`showcase --shot target/parity-page.png --page parity` 离线截图验证。
 
 > 构建/还原由主代理统一执行；本目录的创建过程不运行任何构建命令。
 

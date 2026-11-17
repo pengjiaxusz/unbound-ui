@@ -34,7 +34,7 @@ const LANG_MENU_WIDTH: f32 = 148.0;
 /// 标题栏窗口缩放下拉菜单的面板最小宽度（绘制与无障碍语义节点共用）。
 const ZOOM_MENU_WIDTH: f32 = 132.0;
 
-/// 编译期完备性门禁：验证侧边栏 100% 覆盖全部 `PageId::ALL`（25 页）、全部 `WidgetCatalogId::ALL`（109 组件）以及 `PageId::Systems` 覆盖全部 21 个引擎子系统。
+/// 编译期完备性门禁：验证侧边栏 100% 覆盖全部 `PageId::ALL`（26 页）、全部 `WidgetCatalogId::ALL`（109 组件）以及 `PageId::Systems` 覆盖全部 21 个引擎子系统。
 const _: () = {
     let mut page_idx = 0;
     while page_idx < PageId::ALL.len() {
@@ -683,6 +683,8 @@ impl GalleryApp {
             }
         } else if self.state.active_page == PageId::Assets {
             self.state.demo.poll_assets(&mut self.labels.engine);
+        } else if self.state.active_page == PageId::Parity {
+            self.state.demo.poll_parity(&mut self.labels.engine);
         }
 
         // 上一帧场景保留一帧：与新场景做 diff 可告知渲染器哪些图元实际发生了变化。

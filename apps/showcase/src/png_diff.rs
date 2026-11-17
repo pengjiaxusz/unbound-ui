@@ -86,8 +86,12 @@ pub fn run_batch(reference_dir: &str, out_dir: &str) -> Result<BatchSummary, Str
     let out_root = Path::new(out_dir);
     let ours_dir = out_root.join("ours");
     let heat_dir = out_root.join("heat");
+    // 参考截图一并复制进产物目录：框架内报告页只依赖 `target/parity`，
+    // 不再需要回头读取采集目录，HTML 报告也能独立分发。
+    let reference_out = out_root.join("reference");
     std::fs::create_dir_all(&ours_dir).map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&heat_dir).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&reference_out).map_err(|error| error.to_string())?;
 
     let mut png_files: Vec<PathBuf> = std::fs::read_dir(reference_dir)
         .map_err(|error| format!("{}: {error}", reference_dir.display()))?
@@ -111,6 +115,11 @@ pub fn run_batch(reference_dir: &str, out_dir: &str) -> Result<BatchSummary, Str
         let meta_path = reference_png.with_extension("json");
         let meta = std::fs::read_to_string(&meta_path)
             .map_err(|error| format!("{}: {error}", meta_path.display()))?;
+        let reference_copy = reference_out.join(format!("{name}.png"));
+        if reference_copy != reference_png {
+            std::fs::copy(&reference_png, &reference_copy)
+                .map_err(|error| format!("{}: {error}", reference_copy.display()))?;
+        }
 
         let control =
             json_string(&meta, "control").ok_or_else(|| format!("{name}: missing control"))?;
@@ -176,7 +185,7 @@ pub fn run_batch(reference_dir: &str, out_dir: &str) -> Result<BatchSummary, Str
         cases,
         out_dir: out_root.to_path_buf(),
     };
-    write_reports(&summary, &ours_dir, &heat_dir, reference_dir)?;
+    write_reports(&summary, &ours_dir, &heat_dir, &reference_out)?;
     Ok(summary)
 }
 
