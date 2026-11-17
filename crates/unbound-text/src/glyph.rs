@@ -29,6 +29,28 @@ pub enum AtlasTarget {
     Color,
 }
 
+/// 字形光栅化后端。
+///
+/// `DirectWrite` 与 WinUI 使用同一套抗锯齿与网格拟合；`Cosmic` 是纯 Rust
+/// 回退路径，用于非 Windows 平台、彩色字形与距离场。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RasterBackend {
+    /// Windows DirectWrite 覆盖率位图。
+    DirectWrite,
+    /// `swash` 覆盖率位图。
+    Cosmic,
+}
+
+impl Default for RasterBackend {
+    fn default() -> Self {
+        if cfg!(windows) {
+            Self::DirectWrite
+        } else {
+            Self::Cosmic
+        }
+    }
+}
+
 /// 待上传至某图集层的矩形纹素区域。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AtlasUpdate {
@@ -154,6 +176,11 @@ pub struct GlyphCache {
     evicted: Vec<GlyphKey>,
     misses: u64,
     hits: u64,
+    /// 当前生效的字形光栅化后端。
+    backend: RasterBackend,
+    /// DirectWrite 光栅化器；初始化失败时为 `None`，并自动回退到 `Cosmic`。
+    #[cfg(windows)]
+    directwrite: Option<crate::directwrite::DirectWriteRasterizer>,
 }
 
 impl core::fmt::Debug for GlyphCache {
@@ -176,6 +203,33 @@ impl Default for GlyphCache {
 impl GlyphCache {
     #[must_use]
     pub fn new() -> Self {
+        // 环境变量用于 A/B 对照与 CI：`cosmic` 强制回退，`directwrite` 强制首选。
+        let requested = match std::env::var("UNBOUND_TEXT_BACKEND").ok().as_deref() {
+            Some("cosmic") => RasterBackend::Cosmic,
+            Some("directwrite") => RasterBackend::DirectWrite,
+            _ => RasterBackend::default(),
+        };
+        Self::with_backend(requested)
+    }
+
+    /// 按指定后端创建缓存；DirectWrite 不可用时自动回退到 `Cosmic`。
+    #[must_use]
+    pub fn with_backend(requested: RasterBackend) -> Self {
+        let mut backend = requested;
+        #[cfg(windows)]
+        let directwrite = if backend == RasterBackend::DirectWrite {
+            let instance = crate::directwrite::DirectWriteRasterizer::new();
+            if instance.is_none() {
+                backend = RasterBackend::Cosmic;
+            }
+            instance
+        } else {
+            None
+        };
+        #[cfg(not(windows))]
+        if backend == RasterBackend::DirectWrite {
+            backend = RasterBackend::Cosmic;
+        }
         Self {
             swash: SwashCache::new(),
             atlas: GlyphAtlas::default(),
@@ -190,7 +244,16 @@ impl GlyphCache {
             evicted: Vec::new(),
             misses: 0,
             hits: 0,
+            backend,
+            #[cfg(windows)]
+            directwrite,
         }
+    }
+
+    /// 当前实际使用的光栅化后端。
+    #[must_use]
+    pub fn backend(&self) -> RasterBackend {
+        self.backend
     }
 
     /// 获取字体对应的稠密索引，首次遇到时分配新索引。
@@ -338,6 +401,25 @@ impl GlyphCache {
         }
         self.misses += 1;
 
+        // Windows 上优先使用 DirectWrite：覆盖率位图、网格拟合与 WinUI 同源。
+        // 彩色字体、距离场或字体解析失败时继续走 swash。
+        #[cfg(windows)]
+        if !sdf_mode && self.backend == RasterBackend::DirectWrite {
+            if let Some(raster) = self.raster_directwrite(engine, face, glyph, phase) {
+                return self.commit_raster(
+                    key,
+                    glyph,
+                    raster.width,
+                    raster.height,
+                    raster.bearing_x,
+                    -raster.bearing_y,
+                    false,
+                    raster.data,
+                    false,
+                );
+            }
+        }
+
         let mut flags = CacheKeyFlags::empty();
         if italic {
             flags |= CacheKeyFlags::FAKE_ITALIC;
@@ -359,21 +441,47 @@ impl GlyphCache {
             .as_ref()?;
 
         let placement = image.placement;
-        let w = placement.width;
-        let h = placement.height;
-        if w == 0 || h == 0 {
+        let is_color = matches!(image.content, cosmic_text::SwashContent::Color);
+        // 先复制出所有字段，结束对 swash 内部的借用，再进入可变的图集写入。
+        let data = image.data.to_vec();
+        let width = placement.width;
+        let height = placement.height;
+        let left = placement.left as f32;
+        let top = placement.top as f32;
+        self.commit_raster(
+            key, glyph, width, height, left, top, is_color, data, sdf_mode,
+        )
+    }
+
+    /// 将一块已光栅化的位图写入图集并登记缓存。
+    ///
+    /// `left` 为位图左缘相对画笔原点的偏移，`top` 为位图顶缘相对基线的
+    /// **向上**偏移（与 `swash` 的 `Placement.top` 一致）。
+    #[allow(clippy::too_many_arguments)]
+    fn commit_raster(
+        &mut self,
+        key: GlyphKey,
+        glyph: &PositionedGlyph,
+        width: u32,
+        height: u32,
+        left: f32,
+        top: f32,
+        is_color: bool,
+        data: Vec<u8>,
+        sdf_mode: bool,
+    ) -> Option<ResolvedGlyph> {
+        if width == 0 || height == 0 {
             // 空白字符：无纹理，仅记录步进宽度。
             return Some(ResolvedGlyph {
                 slot: GlyphSlot::default(),
-                bearing: Vec2::new(placement.left as f32, 0.0),
+                bearing: Vec2::new(left, 0.0),
                 size: Vec2::ZERO,
                 advance: glyph.w,
-                color: matches!(image.content, cosmic_text::SwashContent::Color),
+                color: is_color,
                 msdf: false,
             });
         }
 
-        let is_color = matches!(image.content, cosmic_text::SwashContent::Color);
         // 彩色字形（如 Emoji）已经是 4 通道 RGBA 位图，不能按单通道覆盖率生成距离场。
         let use_sdf = sdf_mode && !is_color;
         let pad = self.padding;
@@ -384,12 +492,12 @@ impl GlyphCache {
         let mut resolved = if is_color || use_sdf {
             let slot = self
                 .atlas
-                .allocate_color(key, w + pad2, h + pad2, &mut evicted)?;
+                .allocate_color(key, width + pad2, height + pad2, &mut evicted)?;
             let data = if use_sdf {
-                let field = sdf::from_coverage(&image.data, w, h, self.sdf_spread);
-                pad_field(&field.data, w, h, pad)
+                let field = sdf::from_coverage(&data, width, height, self.sdf_spread);
+                pad_field(&field.data, width, height, pad)
             } else {
-                pad_rgba(&image.data, w, h, pad)
+                pad_rgba(&data, width, height, pad)
             };
             self.updates.push(AtlasUpdate {
                 target: AtlasTarget::Color,
@@ -402,20 +510,17 @@ impl GlyphCache {
             });
             ResolvedGlyph {
                 slot,
-                bearing: Vec2::new(
-                    placement.left as f32 - pad as f32,
-                    -(placement.top as f32) - pad as f32,
-                ),
-                size: Vec2::new(w as f32 + pad2 as f32, h as f32 + pad2 as f32),
+                bearing: Vec2::new(left - pad as f32, -(top) - pad as f32),
+                size: Vec2::new(width as f32 + pad2 as f32, height as f32 + pad2 as f32),
                 advance: glyph.w,
                 color: true,
                 msdf: use_sdf,
             }
         } else {
-            let slot = self
-                .atlas
-                .allocate_coverage(key, w + pad2, h + pad2, &mut evicted)?;
-            let data = pad_r8(&image.data, w, h, pad);
+            let slot =
+                self.atlas
+                    .allocate_coverage(key, width + pad2, height + pad2, &mut evicted)?;
+            let data = pad_r8(&data, width, height, pad);
             self.updates.push(AtlasUpdate {
                 target: AtlasTarget::Coverage,
                 layer: slot.layer,
@@ -427,11 +532,8 @@ impl GlyphCache {
             });
             ResolvedGlyph {
                 slot,
-                bearing: Vec2::new(
-                    placement.left as f32 - pad as f32,
-                    -(placement.top as f32) - pad as f32,
-                ),
-                size: Vec2::new(w as f32 + pad2 as f32, h as f32 + pad2 as f32),
+                bearing: Vec2::new(left - pad as f32, -(top) - pad as f32),
+                size: Vec2::new(width as f32 + pad2 as f32, height as f32 + pad2 as f32),
                 advance: glyph.w,
                 color: false,
                 msdf: false,
@@ -459,6 +561,33 @@ impl GlyphCache {
 
         self.resolved.insert(key, resolved);
         Some(resolved)
+    }
+
+    /// 用 DirectWrite 光栅化单个字形；字体家族或彩色字体不适用时返回 `None`。
+    #[cfg(windows)]
+    fn raster_directwrite(
+        &mut self,
+        engine: &mut TextEngine,
+        face: fontdb::ID,
+        glyph: &PositionedGlyph,
+        phase: u8,
+    ) -> Option<crate::directwrite::RasterizedGlyph> {
+        let directwrite = self.directwrite.as_mut()?;
+        let (family, weight, italic) = {
+            let info = engine.font_system_mut().db().face(face)?;
+            let family = info.families.first()?.0.clone();
+            let italic = matches!(info.style, fontdb::Style::Italic | fontdb::Style::Oblique);
+            (family, info.weight.0, italic)
+        };
+        directwrite.rasterize(
+            &family,
+            weight,
+            italic,
+            glyph.glyph_id,
+            glyph.font_size,
+            glyph.w,
+            phase,
+        )
     }
 
     /// 将整段已塑形的文本解析为四边形列表。
@@ -582,6 +711,21 @@ mod tests {
 
     fn engine() -> TextEngine {
         TextEngine::new()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_default_backend_is_directwrite_unless_overridden() {
+        // 环境变量是 A/B 对照入口，设置时允许测试机主动选择 cosmic。
+        if std::env::var_os("UNBOUND_TEXT_BACKEND").is_some() {
+            return;
+        }
+        let cache = GlyphCache::new();
+        assert_eq!(
+            cache.backend(),
+            RasterBackend::DirectWrite,
+            "DirectWrite initialization failed and silently fell back to swash"
+        );
     }
 
     #[test]

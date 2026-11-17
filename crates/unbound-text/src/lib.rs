@@ -16,6 +16,8 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod atlas;
+#[cfg(windows)]
+mod directwrite;
 pub mod glyph;
 pub mod pinyin;
 pub mod pinyin_data;
@@ -24,7 +26,7 @@ pub mod selection;
 pub mod shaping;
 
 pub use atlas::{Atlas, AtlasConfig, GlyphAtlas, GlyphKey, GlyphSlot, SUBPIXEL_PHASES};
-pub use glyph::{AtlasTarget, AtlasUpdate, GlyphCache, GlyphQuad, ResolvedGlyph};
+pub use glyph::{AtlasTarget, AtlasUpdate, GlyphCache, GlyphQuad, RasterBackend, ResolvedGlyph};
 pub use pinyin::{
     global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,
     set_global_shuangpin_scheme, PinyinConfig, PinyinMatch, PinyinMatcher, ShuangpinScheme,

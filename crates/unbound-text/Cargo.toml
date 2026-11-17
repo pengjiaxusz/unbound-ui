@@ -14,5 +14,8 @@ bytemuck.workspace = true
 cosmic-text.workspace = true
 rustc-hash.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
 [lints]
 workspace = true
