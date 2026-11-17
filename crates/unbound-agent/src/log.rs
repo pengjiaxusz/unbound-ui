@@ -85,8 +85,17 @@ impl ActionLog {
     /// 不是鼠标轨迹。
     #[must_use]
     pub fn to_script(&self) -> String {
+        Self::script_of(&self.steps)
+    }
+
+    /// 生成任意一段步骤的可读脚本。
+    ///
+    /// 最小复现剪枝产出的子序列也要能直接贴进 issue，因此脚本生成不能
+    /// 只认「已经录好的那一份」。
+    #[must_use]
+    pub fn script_of(steps: &[RecordedStep]) -> String {
         let mut out = String::new();
-        for (index, step) in self.steps.iter().enumerate() {
+        for (index, step) in steps.iter().enumerate() {
             out.push_str(&format!("{index:>3}. {}", describe_step(step)));
             out.push('\n');
         }

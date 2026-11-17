@@ -14,6 +14,8 @@ use crate::assert::{Assertion, AssertionFailure, BoundsExpect};
 use crate::log::{ActionLog, RecordedStep};
 use crate::pixel::{CapturedFrame, OffscreenPixelSource, PixelSource};
 use crate::query::{NodePredicate, NodeQuery};
+use crate::replay::MinimalReproduction;
+use crate::snapshot::{SemanticsEntry, SessionSnapshot, SnapshotError};
 use crate::view::AgentView;
 use crate::wait::{WaitCondition, WaitTimeout};
 
@@ -113,6 +115,11 @@ fn describe_candidates(candidates: &[String]) -> String {
 
 /// 默认帧步长：每秒 60 帧。
 const DEFAULT_FRAME_DT: f32 = 1.0 / 60.0;
+
+/// 回放时单个等待条件的超时上限。
+///
+/// 回放不该无限期地等：条件达不成就是达不成，等再久也没用。
+const REPLAY_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Agent 会话。
 ///
@@ -225,6 +232,128 @@ impl<'a, A: Application> AgentSession<'a, A> {
         self.advance_frames(steps);
     }
 
+    /// 采集会话快照。
+    ///
+    /// 快照含三部分：应用自己序列化的状态、框架采集的语义树，以及焦点与
+    /// 指针位置。应用不提供状态快照时，快照仍然可用——只是无法用来
+    /// **恢复**（见 [`Self::restore`]）。
+    pub fn snapshot(&self) -> SessionSnapshot {
+        let app_state = self
+            .runtime
+            .application()
+            .snapshot_state(self.runtime.state());
+        let view = self.view();
+        let order = view.tree_order();
+        let mut semantics = Vec::with_capacity(order.len());
+        for id in order {
+            let Some(node) = view.node(id) else {
+                continue;
+            };
+            semantics.push(SemanticsEntry {
+                id,
+                node: node.clone(),
+                children: view.semantics().children_of(id).to_vec(),
+            });
+        }
+        SessionSnapshot {
+            app_state,
+            focus: self.runtime.focus().focused(),
+            semantics,
+            pointer: self.runtime.context().pointer,
+        }
+    }
+
+    /// 恢复会话快照。
+    ///
+    /// 顺序是**状态 → 焦点 → 指针 → 重建**：焦点节点可能随状态一起消失，
+    /// 指针的悬停事件也应当作用在已恢复的状态上。最后推进一帧，
+    /// 让语义树与像素跟随状态一起回到原样。
+    ///
+    /// 快照可反复恢复：回放与最小复现剪枝正是靠这一点。
+    pub fn restore(&mut self, snapshot: &SessionSnapshot) -> Result<(), SnapshotError> {
+        let Some(app_state) = snapshot.app_state.as_ref() else {
+            return Err(SnapshotError::StateUnavailable);
+        };
+        {
+            let (app, state) = self.runtime.application_and_state_mut();
+            app.restore_state(state, app_state.as_ref());
+        }
+        self.runtime.focus_node(snapshot.focus);
+        self.runtime.pointer_move(snapshot.pointer);
+        self.advance();
+        Ok(())
+    }
+
+    /// 回放一段已录制的动作序列。
+    ///
+    /// 回放期间**不再录制**：否则日志会自己套自己地长。返回实际执行的
+    /// 步数；遇到失败即停，并把失败原因作为 [`ActionError::Rejected`] 抛出。
+    pub fn replay(&mut self, steps: &[RecordedStep]) -> Result<usize, ActionError> {
+        let was_recording = self.record;
+        self.record = false;
+        let mut executed = 0usize;
+        let outcome = (|| -> Result<(), ActionError> {
+            for step in steps {
+                match step {
+                    RecordedStep::Action(action) => self.perform(action)?,
+                    RecordedStep::Wait(condition) => {
+                        self.wait_for(condition, REPLAY_WAIT_TIMEOUT)
+                            .map_err(|timeout| ActionError::Rejected {
+                                action: condition.name().to_owned(),
+                                reason: timeout.describe(),
+                            })?;
+                    }
+                    RecordedStep::Assert(assertion) => {
+                        self.assert(assertion)
+                            .map_err(|failure| ActionError::Rejected {
+                                action: assertion.name().to_owned(),
+                                reason: failure.describe(),
+                            })?;
+                    }
+                    // 标记只是给人看的注记，回放时跳过。
+                    RecordedStep::Marker(_) => {}
+                }
+                executed += 1;
+            }
+            Ok(())
+        })();
+        self.record = was_recording;
+        outcome.map(|()| executed)
+    }
+
+    /// 从基线出发回放，并剪出最小失败复现。
+    ///
+    /// `fails` 判定当前会话**是否仍处于失败状态**：它在每次候选回放之后
+    /// 被调用一次。剪枝的每一步判定都会先恢复到 `baseline`——否则结果只对
+    /// 那一次有效，剪出来的序列换个起点就复现不了。
+    ///
+    /// 返回最小失败子序列与它的可读脚本。
+    pub fn minimize_failure<F>(
+        &mut self,
+        baseline: &SessionSnapshot,
+        steps: &[RecordedStep],
+        mut fails: F,
+    ) -> MinimalReproduction
+    where
+        F: FnMut(&AgentSession<'_, A>) -> bool,
+    {
+        let mut probe = |candidate: &[RecordedStep]| -> bool {
+            if self.restore(baseline).is_err() {
+                return false;
+            }
+            // 回放本身出错也算「仍能复现问题」——出错正是要抓的东西。
+            if self.replay(candidate).is_err() {
+                return true;
+            }
+            fails(&*self)
+        };
+        let minimal = crate::replay::minimize_failing_steps(steps, &mut probe);
+        MinimalReproduction {
+            script: crate::replay::script_of(&minimal),
+            steps: minimal,
+        }
+    }
+
     /// 推进若干帧。
     pub fn advance_frames(&mut self, frames: usize) {
         for _ in 0..frames {
@@ -332,8 +461,11 @@ impl<'a, A: Application> AgentSession<'a, A> {
     }
 
     /// 执行一个语义动作。
+    ///
+    /// 录制由各个动作方法自己负责：直接调用 [`Self::click`] 与经由本方法
+    /// 执行，录下来的东西必须一模一样。
     pub fn perform(&mut self, action: &SemanticAction) -> Result<(), ActionError> {
-        let result = match action {
+        match action {
             SemanticAction::Click { node } => self.click(*node),
             SemanticAction::Focus { node } => self.focus(*node),
             SemanticAction::Toggle { node } => self.toggle(*node),
@@ -343,15 +475,25 @@ impl<'a, A: Application> AgentSession<'a, A> {
             SemanticAction::Expand { node, expanded } => self.set_expanded(*node, *expanded),
             SemanticAction::ScrollIntoView { node } => self.scroll_into_view(*node),
             SemanticAction::Scroll { node, delta } => self.scroll(*node, *delta),
-        };
-        if result.is_ok() && self.record {
-            self.log.push(RecordedStep::Action(action.clone()));
         }
-        result
+    }
+
+    /// 记录一个动作。
+    fn record_action(&mut self, action: SemanticAction) {
+        if self.record {
+            self.log.push(RecordedStep::Action(action));
+        }
     }
 
     /// 点击节点。
     pub fn click(&mut self, node: u64) -> Result<(), ActionError> {
+        self.click_internal(node)?;
+        self.record_action(SemanticAction::Click { node });
+        Ok(())
+    }
+
+    /// 执行点击本身，不记录。
+    fn click_internal(&mut self, node: u64) -> Result<(), ActionError> {
         let pos = self.center_of(node)?;
         self.click_at(pos);
         self.advance();
@@ -381,12 +523,15 @@ impl<'a, A: Application> AgentSession<'a, A> {
         }
         self.runtime.focus_node(Some(node));
         self.advance();
+        self.record_action(SemanticAction::Focus { node });
         Ok(())
     }
 
     /// 切换开关 / 复选框 / 药丸按钮的选中态。
     pub fn toggle(&mut self, node: u64) -> Result<(), ActionError> {
-        self.click(node)
+        self.click_internal(node)?;
+        self.record_action(SemanticAction::Toggle { node });
+        Ok(())
     }
 
     /// 设置文本输入框的内容。
@@ -397,6 +542,10 @@ impl<'a, A: Application> AgentSession<'a, A> {
         self.runtime.focus_node(Some(node));
         self.runtime.text(text);
         self.advance();
+        self.record_action(SemanticAction::SetText {
+            node,
+            text: text.to_owned(),
+        });
         Ok(())
     }
 
@@ -409,21 +558,26 @@ impl<'a, A: Application> AgentSession<'a, A> {
             return Err(ActionError::NodeMissing { node });
         }
         if let Some(option_node) = self.find_option(node, option) {
-            self.click(option_node)?;
-            return Ok(());
+            self.click_internal(option_node)?;
+        } else {
+            // 选项尚未出现：展开下拉框后重试。
+            self.click_internal(node)?;
+            self.settle(12);
+            if let Some(option_node) = self.find_option(node, option) {
+                self.click_internal(option_node)?;
+            } else {
+                return Err(ActionError::OptionMissing {
+                    node,
+                    option: option.to_owned(),
+                    available: self.available_options(node),
+                });
+            }
         }
-        // 选项尚未出现：展开下拉框后重试。
-        self.click(node)?;
-        self.settle(12);
-        if let Some(option_node) = self.find_option(node, option) {
-            self.click(option_node)?;
-            return Ok(());
-        }
-        Err(ActionError::OptionMissing {
+        self.record_action(SemanticAction::SelectOption {
             node,
             option: option.to_owned(),
-            available: self.available_options(node),
-        })
+        });
+        Ok(())
     }
 
     /// 查找选项节点。
@@ -473,6 +627,7 @@ impl<'a, A: Application> AgentSession<'a, A> {
         self.runtime
             .a11y(node, A11yAction::SetValue, Some(value.to_string()));
         self.advance();
+        self.record_action(SemanticAction::SetValue { node, value });
         Ok(())
     }
 
@@ -488,6 +643,7 @@ impl<'a, A: Application> AgentSession<'a, A> {
         };
         self.runtime.a11y(node, action, None);
         self.advance();
+        self.record_action(SemanticAction::Expand { node, expanded });
         Ok(())
     }
 
@@ -498,6 +654,7 @@ impl<'a, A: Application> AgentSession<'a, A> {
         }
         self.runtime.a11y(node, A11yAction::ScrollIntoView, None);
         self.advance();
+        self.record_action(SemanticAction::ScrollIntoView { node });
         Ok(())
     }
 
@@ -506,6 +663,7 @@ impl<'a, A: Application> AgentSession<'a, A> {
         let pos = self.center_of(node)?;
         self.runtime.wheel(pos, delta);
         self.advance();
+        self.record_action(SemanticAction::Scroll { node, delta });
         Ok(())
     }
 

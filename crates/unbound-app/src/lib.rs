@@ -18,6 +18,7 @@
 //! `runtime_headless.rs` 演练的是完全相同的代码路径。
 //!
 
+use std::any::Any;
 use std::cell::{Cell, RefCell, RefMut};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -2642,6 +2643,23 @@ pub trait Application {
 
     /// 为当前状态发射场景。
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder<'_>);
+
+    /// 快照应用状态。
+    ///
+    /// 默认返回 `None`——表示该应用不提供状态快照。框架不关心状态的形状：
+    /// 应用想支持「回到探索之前的样子」，就把自己的状态序列化后放进这个
+    /// 盒子；不想支持，就让默认实现留着。
+    ///
+    /// 盒子用 `Arc` 包裹，因此快照可以**反复恢复**——回放与最小复现剪枝
+    /// 正是靠这一点：同一个基线要跑上很多遍。
+    fn snapshot_state(&self, _state: &Self::State) -> Option<Arc<dyn Any>> {
+        None
+    }
+
+    /// 恢复应用状态。
+    ///
+    /// 与 [`Self::snapshot_state`] 配对。默认什么都不做。
+    fn restore_state(&mut self, _state: &mut Self::State, _snapshot: &dyn Any) {}
 }
 
 /// 标题栏通过冒泡兜底产出的窗口控制意图，由窗口运行器在输入处理后消费执行。
@@ -3073,6 +3091,14 @@ impl<A: Application> AppRuntime<A> {
     /// 可变访问应用实例。
     pub fn application_mut(&mut self) -> &mut A {
         &mut self.app
+    }
+
+    /// 同时可变借用应用实例与状态。
+    ///
+    /// 快照恢复需要成对地拿到两者：分两次借会与借用检查冲突——
+    /// 第一个可变借用还活着，第二个就借不出来了。
+    pub fn application_and_state_mut(&mut self) -> (&mut A, &mut A::State) {
+        (&mut self.app, &mut self.state)
     }
 
     /// 推进时钟并归约一次 tick。

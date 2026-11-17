@@ -16,6 +16,9 @@ raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
+# UI Automation 提供者：把同一棵语义树暴露给屏幕阅读器与第三方工具。
+# 与 accesskit 0.25 配对的版本是 0.35.x。
+accesskit_windows = "0.35.2"
 
 [lints]
 workspace = true

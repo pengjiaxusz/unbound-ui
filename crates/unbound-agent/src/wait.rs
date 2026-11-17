@@ -31,6 +31,20 @@ pub enum WaitCondition {
     },
 }
 
+impl WaitCondition {
+    /// 条件的简短名称。
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::NodeExists { .. } => "node-exists",
+            Self::NodeGone { .. } => "node-gone",
+            Self::NodeState { .. } => "node-state",
+            Self::Settled => "settled",
+            Self::TextVisible { .. } => "text-visible",
+        }
+    }
+}
+
 /// 等待超时。
 ///
 /// 失败时携带**已经观察到的状态**，让 Agent 能立刻判断「差在哪里」，

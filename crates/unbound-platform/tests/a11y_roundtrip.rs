@@ -71,3 +71,47 @@ fn set_value_carries_the_text_and_unknown_actions_are_dropped() {
         .translate(&action_request(Action::ScrollLeft, 7, None))
         .is_none());
 }
+
+/// 模拟 UI Automation：辅助技术接入之前不消费任何更新。
+struct DeafTransport {
+    /// 是否已接入。
+    active: bool,
+    updates: Vec<TreeUpdate>,
+}
+
+impl A11yTransport for DeafTransport {
+    fn send(&mut self, update: TreeUpdate) {
+        self.updates.push(update);
+    }
+
+    fn wants_update(&self) -> bool {
+        self.active
+    }
+}
+
+#[test]
+fn a_deaf_transport_leaves_the_semantic_tree_untouched() {
+    let mut bridge = A11yBridge::new(DeafTransport {
+        active: false,
+        updates: Vec::new(),
+    });
+    bridge.set_enabled(true);
+    let mut tree = semantics();
+
+    // 没人听的时候，一次发布都不该发生——更重要的是，语义树不能被摘走。
+    assert!(!bridge.publish(&mut tree));
+    assert_eq!(bridge.transport_mut().updates.len(), 0);
+
+    // 接入之后，第一次发布必须是一棵**完整**的树。
+    bridge.transport_mut().active = true;
+    assert!(bridge.publish(&mut tree));
+    let update = &bridge.transport_mut().updates[0];
+    assert!(
+        update.tree.is_some(),
+        "the first update after activation must carry the full tree"
+    );
+    assert!(
+        update.nodes.iter().any(|(id, _)| id.0 == 50),
+        "the full tree must carry every node, not just the changed ones"
+    );
+}

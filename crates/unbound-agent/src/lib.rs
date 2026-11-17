@@ -25,7 +25,9 @@ pub mod assert;
 pub mod log;
 pub mod pixel;
 pub mod query;
+pub mod replay;
 pub mod session;
+pub mod snapshot;
 pub mod view;
 pub mod wait;
 
@@ -34,7 +36,9 @@ pub use assert::{Assertion, AssertionFailure, BoundsExpect};
 pub use log::{ActionLog, RecordedStep};
 pub use pixel::{CapturedFrame, OffscreenPixelSource, PixelSource};
 pub use query::{NodePredicate, NodeQuery, SpatialRelation};
+pub use replay::{minimize_failing_steps, MinimalReproduction};
 pub use session::{ActionError, AgentSession};
+pub use snapshot::{SemanticsEntry, SessionSnapshot, SnapshotError};
 pub use view::{AgentView, NodeSnapshot, TreeSnapshot};
 pub use wait::{WaitCondition, WaitTimeout};
 

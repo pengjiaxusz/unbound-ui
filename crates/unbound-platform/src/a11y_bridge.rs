@@ -20,6 +20,19 @@ use unbound_a11y::{A11yAction, Semantics};
 pub trait A11yTransport {
     /// 向平台适配器发送一次更新。
     fn send(&mut self, update: TreeUpdate);
+
+    /// 平台当前是否需要更新。
+    ///
+    /// 绝大多数传输层始终为真——数据发给谁都一样。只有 UI Automation
+    /// 例外：辅助技术接入之前，Windows 不会消费任何更新。那时的发布
+    /// 不但白费力气，还会把「完整树」从语义树上摘走，等辅助技术真正
+    /// 接入时只剩一截残缺的增量，屏幕阅读器看到的就是个空壳。
+    ///
+    /// 传输层在这里发问，语义树那一侧就能**先问再取**：没人在听的时候
+    /// 一份增量都不构造，整棵树的构建成本也就归零。
+    fn wants_update(&self) -> bool {
+        true
+    }
 }
 
 /// 引擎词汇表中的单条动作请求。
@@ -72,8 +85,16 @@ impl<T: A11yTransport> A11yBridge<T> {
     ///
     /// 返回是否有更新跨越边界。[`Semantics::reset`] 后的首次调用为完整快照，
     /// 后续调用均为增量更新。
+    ///
+    /// **先问再取**：传输层说不要，就一格增量都不取。这不只是省力气——
+    /// [`Semantics::take_update`] 是消费式的，取走就不再有。UI Automation
+    /// 在辅助技术接入之前不消费任何更新，那时就取走，等接入时拿到的
+    /// 只会是一截残缺的增量，而不是一棵完整的树。
     pub fn publish(&mut self, semantics: &mut Semantics) -> bool {
         if !self.enabled {
+            return false;
+        }
+        if !self.transport.wants_update() {
             return false;
         }
         let Some(update) = semantics.take_update() else {
