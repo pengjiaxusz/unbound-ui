@@ -684,17 +684,11 @@ impl PlatformApp for Showcase {
             }
         };
 
-        let hwnd = {
-            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            match window.window_handle().ok().map(|h| h.as_raw()) {
-                Some(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
-                _ => {
-                    eprintln!("the window has no native handle");
-                    gpu.destroy();
-                    window.request_close();
-                    return;
-                }
-            }
+        let Some(hwnd) = window_hwnd(window) else {
+            eprintln!("the window has no native handle");
+            gpu.destroy();
+            window.request_close();
+            return;
         };
         let surface = match Surface::new_win32(&gpu, hwnd) {
             Ok(surface) => surface,
@@ -810,15 +804,7 @@ impl PlatformApp for Showcase {
         let Some(renderer) = &self.renderer else {
             return;
         };
-        let Some(raw) = ({
-            // GPU crate 拥有自己的句柄枚举以避免依赖窗口库；
-            // 在此处一次性提取原生句柄。
-            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            match window.window_handle().ok().map(|handle| handle.as_raw()) {
-                Some(RawWindowHandle::Win32(handle)) => Some(handle.hwnd.get()),
-                _ => None,
-            }
-        }) else {
+        let Some(raw) = window_hwnd(window) else {
             eprintln!("the secondary window has no native handle");
             return;
         };

@@ -59,7 +59,7 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
 
     let build_text = windows_build
         .map(|build| format!("Build {build}"))
-        .unwrap_or_else(|| "Unknown (non-Windows)".to_string());
+        .unwrap_or_else(|| "Unknown".to_string());
     let availability_text = if native_available {
         "Available".to_string()
     } else {

@@ -45,6 +45,7 @@ flowchart TB
     Available --> Choose{"解析用户选择"}
     Unavailable --> Choose
     Choose -- "自动且原生可用" --> Native["实际生效：原生"]
+    Choose -- "显式原生且原生可用" --> Native
     Choose -- "自动或显式原生但原生不可用" --> Self["实际生效：自绘"]
     Choose -- "显式自绘" --> Self
     Choose -- "关闭" --> Off["实际生效：关闭"]
