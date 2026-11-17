@@ -1578,29 +1578,43 @@ fn render_to_png(
     write_png(path, width, height, &pixels)
 }
 
-/// 将 RGBA 像素写入 PNG 文件，必要时创建父目录。
-fn write_png(path: &str, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-    }
-    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    let writer = std::io::BufWriter::new(file);
-    let mut encoder = png::Encoder::new(writer, width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-    let mut rgba = rgba.to_vec();
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
-    writer.write_image_data(&rgba).map_err(|e| e.to_string())?;
-    Ok(())
+/// 将渲染器回读的 BGRA 像素写入 PNG 文件，必要时创建父目录。
+fn write_png(path: &str, width: u32, height: u32, bgra: &[u8]) -> Result<(), String> {
+    showcase::shot::write_bgra_png(path, width, height, bgra)
+}
+
+/// 读取 `--name value` 形式的参数值。
+fn arg_value(args: &[String], name: &str) -> Option<String> {
+    args.windows(2)
+        .find(|window| window[0] == name && !window[1].starts_with("--"))
+        .map(|window| window[1].clone())
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--parity-run") {
+        let reference = arg_value(&args, "--reference")
+            .unwrap_or_else(|| "tools/winui-reference/captures".into());
+        let out = arg_value(&args, "--out").unwrap_or_else(|| "target/parity".into());
+        match showcase::png_diff::run_batch(&reference, &out) {
+            Ok(summary) => {
+                println!(
+                    "parity: {}/{} cases pass · {}",
+                    summary.passed(),
+                    summary.cases.len(),
+                    summary.out_dir.join("report.html").display()
+                );
+                for case in summary.cases.iter().filter(|case| !case.passes()).take(8) {
+                    println!(
+                        "  {} mean={:.2} p99={:.2} bbox={:?} ref={:?}",
+                        case.name, case.mean_de, case.p99_de, case.ours_bbox, case.reference_bbox
+                    );
+                }
+            }
+            Err(error) => eprintln!("parity run failed:\n{error}"),
+        }
+        return;
+    }
     if args.iter().any(|a| a == "--shot") {
         let dark = args.iter().any(|a| a == "--dark");
         let zoom_step = args

@@ -67,10 +67,11 @@ internal static class Catalog
                 return true;
 
             case "ToggleSwitch":
+                // 用 Header 而不是 OnContent/OffContent：参考布局是「左侧文案 + 右侧开关」，
+                // 与 unbound-ui 的 SwitchDesc 结构一致，避免比较两套不同的排列。
                 element = new ToggleSwitch
                 {
-                    OnContent = "On",
-                    OffContent = "Off",
+                    Header = "ToggleSwitch",
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
                 };
@@ -170,7 +171,7 @@ internal static class Catalog
     {
         if (string.Equals(state, "focused", StringComparison.OrdinalIgnoreCase))
         {
-            // 窗口未激活时可能失败，实际结果记录在 meta.json 的 controlFocusState 中。
+            // 窗口未激活时可能失败，实际结果记录在用例 JSON 的 controlFocusState 中。
             element.Focus(FocusState.Programmatic);
         }
     }
