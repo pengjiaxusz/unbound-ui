@@ -55,6 +55,11 @@ const LIGHT: &[(Token, [u8; 4])] = &[
     (Token::CONTROL_TRACK, [222, 226, 236, 255]),
     (Token::CONTROL_THUMB, [255, 255, 255, 255]),
     (Token::CONTROL_HOVER, [234, 238, 246, 255]),
+    (Token::CONTROL_FILL, [246, 248, 252, 255]),
+    (Token::CONTROL_STROKE, [205, 210, 222, 255]),
+    (Token::CONTROL_TRACK_STROKE, [186, 192, 206, 255]),
+    (Token::CONTROL_THUMB_ON, [255, 255, 255, 255]),
+    (Token::SWITCH_THUMB_OFF, [110, 115, 132, 255]),
     (Token::HEADER_BG, [255, 255, 255, 255]),
     (Token::NAV_BG, [247, 248, 251, 255]),
     (Token::NAV_HOVER, [236, 238, 244, 255]),
@@ -132,6 +137,11 @@ const DARK: &[(Token, [u8; 4])] = &[
     (Token::CONTROL_TRACK, [46, 52, 66, 255]),
     (Token::CONTROL_THUMB, [242, 245, 252, 255]),
     (Token::CONTROL_HOVER, [54, 62, 78, 255]),
+    (Token::CONTROL_FILL, [40, 45, 58, 255]),
+    (Token::CONTROL_STROKE, [78, 85, 102, 255]),
+    (Token::CONTROL_TRACK_STROKE, [96, 104, 122, 255]),
+    (Token::CONTROL_THUMB_ON, [255, 255, 255, 255]),
+    (Token::SWITCH_THUMB_OFF, [154, 160, 178, 255]),
     (Token::HEADER_BG, [23, 26, 33, 255]),
     (Token::NAV_BG, [20, 23, 29, 255]),
     (Token::NAV_HOVER, [35, 40, 51, 255]),
@@ -209,6 +219,11 @@ const HIGH_CONTRAST: &[(Token, [u8; 4])] = &[
     (Token::CONTROL_TRACK, [60, 60, 60, 255]),
     (Token::CONTROL_THUMB, [255, 255, 255, 255]),
     (Token::CONTROL_HOVER, [64, 64, 64, 255]),
+    (Token::CONTROL_FILL, [0, 0, 0, 255]),
+    (Token::CONTROL_STROKE, [255, 255, 255, 255]),
+    (Token::CONTROL_TRACK_STROKE, [138, 138, 138, 255]),
+    (Token::CONTROL_THUMB_ON, [0, 0, 0, 255]),
+    (Token::SWITCH_THUMB_OFF, [255, 255, 255, 255]),
     (Token::HEADER_BG, [0, 0, 0, 255]),
     (Token::NAV_BG, [8, 8, 8, 255]),
     (Token::NAV_HOVER, [48, 48, 48, 255]),
@@ -251,10 +266,43 @@ pub fn theme_set() -> ThemeSet {
 /// 三套配色。
 fn palettes() -> (Palette, Palette, Palette) {
     (
-        Palette::from_srgb8(ThemeKind::Light, LIGHT),
-        Palette::from_srgb8(ThemeKind::Dark, DARK),
-        Palette::from_srgb8(ThemeKind::HighContrast, HIGH_CONTRAST),
+        with_swatch(ThemeKind::Light, LIGHT),
+        with_swatch(ThemeKind::Dark, DARK),
+        with_swatch(ThemeKind::HighContrast, HIGH_CONTRAST),
     )
+}
+
+/// 给一套配色补上 10 格品牌色板。
+///
+/// 「颜色网格」这类控件按槽位逐格上色，因此每套品牌各占一个调色板槽位。
+/// 静态表只写死界面外壳的颜色，色板由 [`AccentBrand`] 的 OKLCH 阶梯生成，
+/// 与框架侧 [`unbound_theme`] 的槽位顺序严格一致。
+fn with_swatch(kind: ThemeKind, base: &[(Token, [u8; 4])]) -> Palette {
+    let mut entries: Vec<(Token, [u8; 4])> = base.to_vec();
+    for (idx, brand) in unbound_theme::AccentBrand::ALL.iter().enumerate() {
+        let ramp = if kind == ThemeKind::Dark {
+            brand.dark_ramp().0
+        } else {
+            brand.light_ramp().0
+        };
+        let [r, g, b, _a] = ramp.to_array();
+        entries.push((
+            Token::accent_swatch(idx),
+            [
+                linear_to_srgb8(r),
+                linear_to_srgb8(g),
+                linear_to_srgb8(b),
+                255,
+            ],
+        ));
+    }
+    Palette::from_srgb8(kind, &entries)
+}
+
+/// 线性分量转 8 位 sRGB。
+fn linear_to_srgb8(v: f32) -> u8 {
+    let srgb = unbound_math::color::linear_to_srgb(v).clamp(0.0, 1.0);
+    (srgb * 255.0).round() as u8
 }
 
 /// 一套主题的颜色表。
