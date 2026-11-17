@@ -8,7 +8,7 @@ use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs, outlined};
+use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -144,7 +144,8 @@ impl PaginationState {
     }
 }
 
-/// 输出结构稳定的分页栏（1 个容器 + 9 个槽位按钮 + 1 个焦点环 = 11 个图元）。
+/// 输出结构稳定的分页栏
+/// （1 个容器 + 9 个槽位按钮 + 9 条选中下划线 + 1 个焦点环 = 20 个图元）。
 #[must_use]
 pub fn emit_pagination(
     node: u64,
@@ -152,7 +153,7 @@ pub fn emit_pagination(
     state: ControlState,
     label_glyphs: &[GlyphQuad],
 ) -> WidgetOutput {
-    let mut primitives = Vec::with_capacity(11 + label_glyphs.len());
+    let mut primitives = Vec::with_capacity(20 + label_glyphs.len());
     let mut payloads = Vec::with_capacity(label_glyphs.len());
 
     let hovered = state.phase == PointerPhase::Hovered;
@@ -165,7 +166,8 @@ pub fn emit_pagination(
     };
     primitives.push(outlined(
         desc.rect,
-        6.0,
+        // WinUI `ControlCornerRadius = 4`。
+        4.0,
         Token::SURFACE_SUNKEN,
         border,
         1.0,
@@ -174,7 +176,8 @@ pub fn emit_pagination(
     ));
 
     let total_slots = MAX_PAGE_SLOTS + 2;
-    let gap = 4.0;
+    // WinUI `PagerControl` 的页码面板 `StackLayout.Spacing = 5`。
+    let gap = 5.0;
     let pad = 4.0;
     let slot_w = ((desc.rect.width() - pad * 2.0 - gap * (total_slots - 1) as f32)
         / total_slots as f32)
@@ -193,22 +196,18 @@ pub fn emit_pagination(
             let is_vis = idx - 1 < desc.total_pages || desc.total_pages > MAX_PAGE_SLOTS;
             (is_cur, is_vis)
         };
-        let fill = if active {
-            Token::PRIMARY
-        } else if hovered {
+        // `PagerControl` 的页码按钮是透明底，选中态只靠底部的 2px 强调色下划线表达。
+        let fill = if hovered {
             Token::SURFACE_RAISED
         } else {
             Token::SURFACE
         };
         let mut inst = outlined(
             r,
+            // WinUI `ControlCornerRadius = 4`。
             4.0,
             fill,
-            if active {
-                Token::PRIMARY
-            } else {
-                Token::CARD_BORDER
-            },
+            Token::CARD_BORDER,
             if visible { 1.0 } else { 0.0 },
             0.0,
             desc.z + 1,
@@ -217,14 +216,23 @@ pub fn emit_pagination(
             inst.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(inst.depth_u16(), 0.0);
         }
         primitives.push(inst);
+
+        // `NumberPanelCurrentPageIndicator`：高 2、圆角 1 的强调色下划线。
+        let underline = Rect::new(r.origin.x, r.max().y - 2.0, r.width(), 2.0);
+        let mut indicator = surface(underline, 1.0, Token::PRIMARY, desc.z + 2);
+        if !(active && visible) {
+            indicator.z_and_opacity =
+                GpuPrimitiveInstance::pack_z_opacity(indicator.depth_u16(), 0.0);
+        }
+        primitives.push(indicator);
     }
 
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        4.0,
         Token::FOCUS_RING,
         2.0,
-        desc.z + 2,
+        desc.z + 3,
         state.focused,
     ));
 
@@ -232,7 +240,7 @@ pub fn emit_pagination(
         glyphs(
             label_glyphs,
             Token::TEXT_PRIMARY,
-            desc.z + 3,
+            desc.z + 4,
             &mut primitives,
             &mut payloads,
         );

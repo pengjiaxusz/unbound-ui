@@ -13,6 +13,12 @@ use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_PIN_SLOTS: usize = 6;
+/// 单元格圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+const CELL_RADIUS: f32 = 4.0;
+/// 单元格之间的间距。
+const CELL_GAP: f32 = 6.0;
+/// 单元格最小高度。对齐 WinUI `TextControlThemeMinHeight = 32`。
+const CELL_MIN_HEIGHT: f32 = 32.0;
 
 /// [`PinInputDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -107,11 +113,10 @@ impl PinInputDesc {
     #[must_use]
     pub fn cell_rect(&self, index: usize) -> Rect {
         let len = self.length.clamp(1, MAX_PIN_SLOTS);
-        let gap = 6.0;
-        let cell_w = ((self.rect.width() - gap * (len - 1) as f32) / len as f32).max(14.0);
-        let cell_h = self.rect.height().max(20.0);
+        let cell_w = ((self.rect.width() - CELL_GAP * (len - 1) as f32) / len as f32).max(14.0);
+        let cell_h = self.rect.height().max(CELL_MIN_HEIGHT);
         Rect::new(
-            self.rect.origin.x + index.min(len - 1) as f32 * (cell_w + gap),
+            self.rect.origin.x + index.min(len - 1) as f32 * (cell_w + CELL_GAP),
             self.rect.origin.y,
             cell_w,
             cell_h,
@@ -132,30 +137,31 @@ pub fn emit_pin_input(
 
     let hovered = state.phase == PointerPhase::Hovered;
     let len = desc.length.clamp(1, MAX_PIN_SLOTS);
-    let gap = 6.0;
-    let cell_w = ((desc.rect.width() - gap * (len - 1) as f32) / len as f32).max(14.0);
-    let cell_h = desc.rect.height().max(20.0);
+    let cell_w = ((desc.rect.width() - CELL_GAP * (len - 1) as f32) / len as f32).max(14.0);
+    let cell_h = desc.rect.height().max(CELL_MIN_HEIGHT);
 
     for idx in 0..MAX_PIN_SLOTS {
         let visible = idx < len;
         let r = Rect::new(
-            desc.rect.origin.x + idx.min(len - 1) as f32 * (cell_w + gap),
+            desc.rect.origin.x + idx.min(len - 1) as f32 * (cell_w + CELL_GAP),
             desc.rect.origin.y,
             cell_w,
             cell_h,
         );
+        // 填充/描边对齐 WinUI 文本控件：`ControlFillColorDefault` +
+        // `ControlStrokeColorDefault`；聚焦单元格用强调色描边。
         let mut cell = outlined(
             r,
-            6.0,
+            CELL_RADIUS,
             if hovered {
-                Token::SURFACE_RAISED
+                Token::CONTROL_HOVER
             } else {
-                Token::SURFACE
+                Token::CONTROL_FILL
             },
             if state.focused && idx == desc.filled.min(len - 1) {
-                Token::FOCUS_RING
+                Token::PRIMARY
             } else {
-                Token::CARD_BORDER
+                Token::CONTROL_STROKE
             },
             1.0,
             0.0,
@@ -182,7 +188,7 @@ pub fn emit_pin_input(
 
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        CELL_RADIUS,
         Token::FOCUS_RING,
         2.0,
         desc.z + 2,
@@ -218,7 +224,7 @@ pub fn emit_pin_input(
     if !state.disabled {
         for idx in 0..len {
             let r = Rect::new(
-                desc.rect.origin.x + idx as f32 * (cell_w + gap),
+                desc.rect.origin.x + idx as f32 * (cell_w + CELL_GAP),
                 desc.rect.origin.y,
                 cell_w,
                 cell_h,

@@ -45,6 +45,9 @@ pub struct ChartSeries {
     /// 数据空间中的点集。
     pub points: Vec<Vec2>,
     /// 序列颜色。
+    ///
+    /// 标准系列色取 `PRIMARY` / `SUCCESS` / `WARNING` / `ERROR`，
+    /// 与 WinUI Fluent 2 数据可视化的语义色一致。
     pub token: Token,
     /// 绘制方式。
     pub kind: SeriesKind,
@@ -259,7 +262,8 @@ pub fn emit_chart(
             primitives.push(surface(
                 Rect::new(plot.origin.x, y - 0.5, plot.size.x, 1.0),
                 0.0,
-                Token::DIVIDER,
+                // 网格/参考线 1px `GRID`，对齐 WinUI `DividerStrokeColorDefault` 的数据网格档。
+                Token::GRID,
                 z,
             ));
         }
@@ -267,7 +271,7 @@ pub fn emit_chart(
             primitives.push(surface(
                 Rect::new(x - 0.5, plot.origin.y, 1.0, plot.size.y),
                 0.0,
-                Token::DIVIDER,
+                Token::GRID,
                 z,
             ));
         }
@@ -317,7 +321,8 @@ pub fn emit_chart(
                                 plot.max().y - mapped.y,
                             ),
                             0.0,
-                            Token::PRIMARY_SOFT,
+                            // 面积底色跟随系列色：四个标准系列各取对应的低饱和 `*_SOFT` 令牌。
+                            area_fill(series.token),
                             z + 1,
                         ));
                     }
@@ -412,6 +417,24 @@ pub fn emit_chart(
                 .and_then(|series| series.points.get(point))
                 .copied()
         }),
+    }
+}
+
+/// 面积图的填充底色：标准系列色映射到各自的低饱和 `*_SOFT` 令牌。
+///
+/// 之前一律硬编码 `PRIMARY_SOFT`，导致 SUCCESS/WARNING/ERROR 面积图也披着主色蓝底；
+/// 映射后「系列色用 PRIMARY/SUCCESS/WARNING/ERROR」在面积图上同样成立。
+fn area_fill(token: Token) -> Token {
+    if token == Token::PRIMARY {
+        Token::PRIMARY_SOFT
+    } else if token == Token::SUCCESS {
+        Token::SUCCESS_SOFT
+    } else if token == Token::WARNING {
+        Token::WARNING_SOFT
+    } else if token == Token::ERROR {
+        Token::ERROR_SOFT
+    } else {
+        token
     }
 }
 

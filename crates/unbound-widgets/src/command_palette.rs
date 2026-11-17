@@ -7,7 +7,7 @@
 use accesskit::Role;
 use rustc_hash::FxHashMap;
 use unbound_a11y::A11yNode;
-use unbound_gpu::data::{PrimType, SubElement};
+use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
@@ -15,13 +15,23 @@ use unbound_theme::Token;
 
 use crate::primitive::{focus_ring, glyphs, instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
-use crate::{ControlState, WidgetOutput};
+use crate::text_input::focus_underline;
+use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 默认行高。
+/// 默认行高。对齐 WinUI `MenuFlyoutThemeMinHeight = 32`（建议行与菜单行同档）。
 pub const COMMAND_ROW: f32 = 32.0;
 
-/// 搜索框高度。
-pub const COMMAND_INPUT: f32 = 44.0;
+/// 搜索框高度。对齐 WinUI `TextControlThemeMinHeight = 32`（AutoSuggestBox / TextBox）。
+pub const COMMAND_INPUT: f32 = 32.0;
+
+/// 面板（浮层）圆角。对齐 WinUI `OverlayCornerRadius = 8`（FlyoutPresenter）。
+const PALETTE_RADIUS: f32 = 8.0;
+/// 搜索框圆角。对齐 WinUI `ControlCornerRadius = 4`。
+const INPUT_RADIUS: f32 = 4.0;
+/// 结果行圆角。对齐 WinUI `ListViewItemCornerRadius = 4` / `ControlCornerRadius = 4`。
+const ROW_RADIUS: f32 = 4.0;
+/// 高亮行左侧强调条宽度（沿用本组件既有的行标记语义）。
+const ROW_MARKER_WIDTH: f32 = 3.0;
 
 /// 面板中的单条命令。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -349,7 +359,8 @@ impl CommandPaletteTokens {
         Self {
             surface: Token::OVERLAY_BG,
             border: Token::OUTLINE,
-            input: Token::SURFACE_SUNKEN,
+            // 搜索框底色对齐 WinUI `ControlFillColorDefault`（AutoSuggestBox）。
+            input: Token::CONTROL_FILL,
             row: Token::NONE,
             row_selected: Token::PRIMARY_SOFT,
             text: Token::TEXT_PRIMARY,
@@ -360,7 +371,7 @@ impl CommandPaletteTokens {
     }
 }
 
-/// 发射面板外壳：表面、边框、搜索框与列表底衬。
+/// 发射面板外壳：表面、边框、搜索框与聚焦强调条。
 #[must_use]
 pub fn emit_command_palette(
     desc: &CommandPaletteDesc,
@@ -368,19 +379,37 @@ pub fn emit_command_palette(
     tokens: CommandPaletteTokens,
 ) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(4);
+    // 面板圆角 `OverlayCornerRadius = 8`，1px 描边对齐浮层边框。
     primitives.push(outlined(
         desc.rect,
-        12.0,
+        PALETTE_RADIUS,
         tokens.surface,
         tokens.border,
         1.0,
         24.0,
         desc.z,
     ));
-    primitives.push(surface(desc.input_rect(), 8.0, tokens.input, desc.z));
-    if !state.open || state.results().is_empty() {
-        primitives.push(surface(desc.list_rect(), 0.0, tokens.surface, desc.z));
-    }
+    let input = desc.input_rect();
+    // 搜索框圆角 `ControlCornerRadius = 4`，底色 `ControlFillColorDefault`。
+    primitives.push(surface(input, INPUT_RADIUS, tokens.input, desc.z));
+    // 描边 `ControlStrokeColorDefault`：1px（`TextControlBorderThemeThickness = 1`）。
+    primitives.push(outlined(
+        input,
+        INPUT_RADIUS,
+        Token::NONE,
+        Token::CONTROL_STROKE,
+        1.0,
+        0.0,
+        desc.z,
+    ));
+    // 聚焦态底部 2px 强调条（`TextControlBorderThemeThicknessFocused = 1,1,1,2`）。
+    // 图元始终存在，用不透明度表达“面板打开即有焦点”，保证图元数恒定。
+    primitives.push(focus_underline(
+        input,
+        INPUT_RADIUS,
+        desc.z,
+        if state.open { 1.0 } else { 0.0 },
+    ));
     WidgetOutput {
         primitives,
         payloads: Vec::new(),
@@ -420,23 +449,40 @@ pub fn emit_command_row(
 
     let fill = if highlighted {
         tokens.row_selected
+    } else if !disabled && control.phase == PointerPhase::Hovered {
+        // 建议行悬停底色对齐 WinUI `ListViewItemBackgroundPointerOver`
+        // （`SubtleFillColorSecondary`，即 HOVER 令牌）。
+        Token::HOVER
     } else {
         tokens.row
     };
-    primitives.push(outlined(rect, 6.0, fill, Token::NONE, 0.0, 0.0, desc.z));
-    if highlighted {
-        primitives.push(instance(
-            Rect::new(rect.origin.x, rect.origin.y, 3.0, rect.size.y),
-            [0.0; 4],
-            tokens.text_selected,
-            Token::NONE,
-            0.0,
-            0.0,
-            PrimType::Line,
-            SubElement::Content,
-            desc.z,
-        ));
-    }
+    // 行圆角 `ControlCornerRadius = 4`。
+    primitives.push(outlined(
+        rect,
+        ROW_RADIUS,
+        fill,
+        Token::NONE,
+        0.0,
+        0.0,
+        desc.z,
+    ));
+    // 高亮标记槽位始终存在，仅用不透明度切换，保证各状态图元数恒定。
+    let mut marker = instance(
+        Rect::new(rect.origin.x, rect.origin.y, ROW_MARKER_WIDTH, rect.size.y),
+        [0.0; 4],
+        tokens.text_selected,
+        Token::NONE,
+        0.0,
+        0.0,
+        PrimType::Line,
+        SubElement::Content,
+        desc.z,
+    );
+    marker.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+        marker.depth_u16(),
+        if highlighted { 1.0 } else { 0.0 },
+    );
+    primitives.push(marker);
     glyphs(
         label,
         if highlighted {
@@ -457,7 +503,7 @@ pub fn emit_command_row(
     );
     primitives.push(focus_ring(
         rect.inflate(1.0),
-        7.0,
+        ROW_RADIUS + 1.0,
         tokens.focus_ring,
         2.0,
         desc.z,
@@ -466,7 +512,9 @@ pub fn emit_command_row(
 
     let hit = (!disabled).then(|| {
         HitRegion::new(command.id, CONTROL_LAYER, u32::from(desc.z), rect)
-            .with_shape(Shape::Rounded { radii: [6.0; 4] })
+            .with_shape(Shape::Rounded {
+                radii: [ROW_RADIUS; 4],
+            })
             .with_cursor(CursorKind::Pointer)
     });
     let mut a11y = A11yNode::new(Role::Button, command.title.clone(), rect)

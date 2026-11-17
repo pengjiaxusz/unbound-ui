@@ -25,18 +25,19 @@ use crate::{ControlState, WidgetOutput};
 
 use accesskit::Role;
 
-pub const TOAST_DURATION_MS: f32 = 4000.0;
 /// Toast 在屏幕上停留的默认时长。
-pub const TOAST_SLIDE_IN: f32 = 16.0;
+pub const TOAST_DURATION_MS: f32 = 4000.0;
 /// 新 Toast 向上滑入的起始距离。
-pub const TOAST_CLOSE_SIZE: f32 = 18.0;
+pub const TOAST_SLIDE_IN: f32 = 16.0;
 /// 关闭按钮正方形尺寸。
-pub const TOAST_ACTION_SIZE: (f32, f32) = (76.0, 24.0);
-/// 操作按钮尺寸。
-pub const TOAST_RADIUS: f32 = 8.0;
+pub const TOAST_CLOSE_SIZE: f32 = 18.0;
+/// 操作按钮尺寸（高 32 对齐 WinUI 标准 `Button` 高度）。
+pub const TOAST_ACTION_SIZE: (f32, f32) = (76.0, 32.0);
+/// Toast 圆角半径。对齐 WinUI `ControlCornerRadius = 4`（InfoBar 的 CornerRadius）。
+pub const TOAST_RADIUS: f32 = 4.0;
 const TOAST_SHADOW: f32 = 18.0;
 
-/// Toast 圆角半径。
+/// 临界阻尼标量弹簧。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ToastSpring {
     /// 标量的临界阻尼弹簧。
@@ -213,11 +214,12 @@ impl ToastEntry {
     pub fn content_rect(&self, rect: Rect) -> Rect {
         let left = rect.origin.x + 16.0;
         let right = self.close_rect(rect).origin.x - 6.0;
+        // 垂直内边距对齐 WinUI `InfoBarIconMargin = 0,16,14,16` 的上下 16。
         Rect::new(
             left,
-            rect.origin.y + 10.0,
+            rect.origin.y + 16.0,
             (right - left).max(0.0),
-            (rect.size.y - 20.0).max(0.0),
+            (rect.size.y - 32.0).max(0.0),
         )
     }
 }
@@ -445,8 +447,9 @@ pub fn emit_toast(
             560,
         ),
         surface(
-            Rect::new(rect.origin.x, rect.origin.y + 10.0, 3.0, rect.size.y - 20.0),
-            1.5,
+            // 左侧状态条 4px，与 InfoBar 的严重级别状态条一致。
+            Rect::new(rect.origin.x, rect.origin.y, 4.0, rect.size.y),
+            2.0,
             accent,
             561,
         ),
@@ -484,7 +487,8 @@ pub fn emit_toast(
 
     let action = entry.action_rect(rect);
     if let Some(action) = action {
-        primitives_raw.push(surface(action, 6.0, Token::PRIMARY_SOFT, 561));
+        // 操作按钮圆角对齐 WinUI `ControlCornerRadius = 4`。
+        primitives_raw.push(surface(action, 4.0, Token::PRIMARY_SOFT, 561));
     }
 
     primitives_raw.extend(glyph_primitives);

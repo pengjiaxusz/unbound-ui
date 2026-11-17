@@ -8,7 +8,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
-use crate::{ControlState, PointerPhase, WidgetOutput};
+use crate::{ControlState, WidgetOutput};
 
 const LAYER: u8 = 1;
 
@@ -62,31 +62,50 @@ pub fn emit_task_hud(
     let r = desc.rect;
     let z = desc.z;
 
-    let border = if !control.disabled && control.phase == PointerPhase::Hovered {
-        Token::OUTLINE_STRONG
-    } else {
-        Token::CARD_BORDER
-    };
-    primitives.push(outlined(r, 10.0, Token::HUD_BG, border, 1.0, 12.0, z));
+    // 浮层圆角对齐 WinUI `OverlayCornerRadius`（8），描边用 1px `ControlStrokeColorDefault`。
+    // Win11 的 Flyout 没有悬停态，因此这里不再按悬停更换描边色。
+    primitives.push(outlined(
+        r,
+        8.0,
+        Token::HUD_BG,
+        Token::CONTROL_STROKE,
+        1.0,
+        12.0,
+        z,
+    ));
 
     for (idx, task) in desc.tasks.iter().enumerate() {
-        let y = r.origin.y + 12.0 + idx as f32 * 38.0;
+        // 行距对齐 WinUI `ListViewItemMinHeight`（40）。
+        let y = r.origin.y + 12.0 + idx as f32 * 40.0;
         let track_r = Rect::new(
             r.origin.x + 12.0,
             y + 20.0,
             (r.size.x - 24.0).max(20.0),
-            6.0,
+            3.0,
         );
-        primitives.push(surface(track_r, 3.0, Token::CONTROL_TRACK, z + 1));
+        // 进度条按 WinUI ProgressBar 规格：3px 高、1.5px 圆角（`ProgressBarMinHeight` /
+        // `ProgressBarCornerRadius`）。
+        primitives.push(surface(track_r, 1.5, Token::CONTROL_TRACK, z + 1));
         let fill_r = Rect::new(
             track_r.origin.x,
             track_r.origin.y,
             track_r.size.x * task.progress.clamp(0.0, 1.0),
             track_r.size.y,
         );
-        primitives.push(surface(fill_r, 3.0, Token::PRIMARY, z + 2));
+        primitives.push(surface(fill_r, 1.5, Token::PRIMARY, z + 2));
+        // 取消按钮按控件级 4px 圆角（`ControlCornerRadius`）绘制；
+        // 悬停/按压沿用 Win11 按钮的 `SubtleFillColorSecondary/Tertiary` 语义。
+        let cancel_fill = if control.disabled {
+            Token::CONTROL_DISABLED_BG
+        } else if control.phase == crate::PointerPhase::Pressed {
+            Token::PRESSED
+        } else if control.phase == crate::PointerPhase::Hovered {
+            Token::HOVER
+        } else {
+            Token::SURFACE_RAISED
+        };
         let cancel_r = Rect::new(r.max().x - 26.0, y, 14.0, 14.0);
-        primitives.push(surface(cancel_r, 3.0, Token::SURFACE_RAISED, z + 2));
+        primitives.push(surface(cancel_r, 4.0, cancel_fill, z + 2));
     }
 
     emit_glyphs(
@@ -98,7 +117,7 @@ pub fn emit_task_hud(
     );
     primitives.push(focus_ring(
         r.inflate(2.0),
-        12.0,
+        10.0,
         Token::FOCUS_RING,
         2.0,
         z + 4,

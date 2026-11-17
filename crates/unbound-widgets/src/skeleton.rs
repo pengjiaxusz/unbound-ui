@@ -36,7 +36,8 @@ impl SkeletonDesc {
     pub fn new(rect: Rect) -> Self {
         Self {
             rect,
-            radius: 6.0,
+            // 块级圆角对齐 WinUI `ControlCornerRadius = 4`。
+            radius: 4.0,
             animated: false,
             z: 400,
         }

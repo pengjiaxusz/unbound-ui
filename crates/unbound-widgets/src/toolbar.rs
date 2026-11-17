@@ -18,11 +18,25 @@ use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 工具栏中按钮的默认宽度。
-pub const TOOLBAR_BUTTON: f32 = 30.0;
+/// 工具栏中按钮的默认宽度（高低同宽，正方形）。
+///
+/// 对齐 WinUI CommandBar 中的 `AppBarButton` 紧凑图标按钮 32 × 32。
+pub const TOOLBAR_BUTTON: f32 = 32.0;
+
+/// 工具栏默认高度。
+///
+/// WinUI `AppBarThemeCompactHeight` = 48（`CommandBar_themeresources.xaml`）。
+pub const TOOLBAR_HEIGHT: f32 = 48.0;
+
+/// 紧凑工具栏高度。
+///
+/// WinUI `MediaTransportControls` 将 `AppBarThemeCompactHeight` 覆写为 40。
+pub const TOOLBAR_HEIGHT_COMPACT: f32 = 40.0;
 
 /// 分隔符宽度。
-pub const TOOLBAR_SEPARATOR: f32 = 9.0;
+///
+/// 对齐 WinUI `AppBarSeparatorWidth` = 1（`AppBarSeparator_themeresources.xaml`）。
+pub const TOOLBAR_SEPARATOR: f32 = 1.0;
 
 /// 工具栏项的类型。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,7 +144,9 @@ impl ToolbarDesc {
         Self {
             rect,
             items,
-            button_size: Vec2::new(TOOLBAR_BUTTON, rect.size.y.min(28.0)),
+            // WinUI `AppBarButton` 为 32 × 32 的正方形，图标 `AppBarButtonContentHeight` = 16。
+            button_size: Vec2::new(TOOLBAR_BUTTON, rect.size.y.min(TOOLBAR_BUTTON)),
+            // WinUI CommandBar 分组间距 4（`AppBarSeparatorMargin` 两侧各 2）。
             gap: 4.0,
             z: 680,
         }
@@ -212,17 +228,27 @@ impl ToolbarDesc {
 
         let mut rects = vec![None; count];
         let mut x = self.rect.origin.x;
+        let button_height = self.button_size.y.min(self.rect.size.y);
         for index in 0..visible_count.min(count) {
             let width = widths[index];
-            rects[index] = Some(Rect::new(x, self.rect.origin.y, width, self.rect.size.y));
+            // 按钮按 `AppBarButton` 的 32 × 32 尺寸在工具栏内垂直居中，其余项铺满整行。
+            let (y, height) = if self.items[index].interactive() {
+                (
+                    self.rect.origin.y + (self.rect.size.y - button_height) * 0.5,
+                    button_height,
+                )
+            } else {
+                (self.rect.origin.y, self.rect.size.y)
+            };
+            rects[index] = Some(Rect::new(x, y, width, height));
             x += width + self.gap;
         }
         let overflow = overflow.then(|| {
             Rect::new(
                 self.rect.max().x - self.button_size.x,
-                self.rect.origin.y,
+                self.rect.origin.y + (self.rect.size.y - button_height) * 0.5,
                 self.button_size.x,
-                self.rect.size.y,
+                button_height,
             )
         });
         let hidden = (visible_count..count).collect();
@@ -318,7 +344,8 @@ impl ToolbarTokens {
             bar: Token::HEADER_BG,
             border: Token::DIVIDER,
             item: Token::NONE,
-            item_hover: Token::CONTROL_HOVER,
+            // WinUI `AppBarButton` 的指针悬停底色为 `SubtleFillColorSecondaryBrush`，即 HOVER 令牌。
+            item_hover: Token::HOVER,
             item_on: Token::PRIMARY_SOFT,
             icon: Token::TEXT_SECONDARY,
             icon_on: Token::PRIMARY,
@@ -421,7 +448,8 @@ pub fn emit_toolbar_item(
             } else {
                 tokens.item
             };
-            primitives.push(outlined(rect, 6.0, fill, Token::NONE, 0.0, 0.0, desc.z));
+            // WinUI `ControlCornerRadius` = 4。
+            primitives.push(outlined(rect, 4.0, fill, Token::NONE, 0.0, 0.0, desc.z));
             glyphs(
                 label,
                 if on { tokens.icon_on } else { tokens.icon },
@@ -431,7 +459,7 @@ pub fn emit_toolbar_item(
             );
             primitives.push(focus_ring(
                 rect.inflate(1.0),
-                7.0,
+                5.0,
                 tokens.focus_ring,
                 2.0,
                 desc.z,
@@ -440,7 +468,7 @@ pub fn emit_toolbar_item(
 
             let hit = (!disabled).then(|| {
                 HitRegion::new(item.id, CONTROL_LAYER, u32::from(desc.z), rect)
-                    .with_shape(Shape::Rounded { radii: [6.0; 4] })
+                    .with_shape(Shape::Rounded { radii: [4.0; 4] })
                     .with_cursor(CursorKind::Pointer)
             });
             let mut a11y = A11yNode::new(Role::Button, item.label.clone(), rect)
@@ -470,14 +498,16 @@ pub fn emit_toolbar_overflow(
     z: u16,
 ) -> WidgetOutput {
     let disabled = control.disabled;
+    // WinUI `AppBarButton` 悬停态使用 `SubtleFillColorSecondaryBrush`，即 HOVER 令牌。
     let fill = if control.phase == PointerPhase::Hovered {
-        tokens.item_hover
+        Token::HOVER
     } else {
         tokens.item
     };
     let mut primitives = Vec::with_capacity(5);
     let mut payloads = Vec::with_capacity(4);
-    primitives.push(outlined(rect, 6.0, fill, Token::NONE, 0.0, 0.0, z));
+    // WinUI `ControlCornerRadius` = 4。
+    primitives.push(outlined(rect, 4.0, fill, Token::NONE, 0.0, 0.0, z));
     let cx = rect.origin.x + rect.size.x * 0.5;
     let cy = rect.origin.y + rect.size.y * 0.5;
     let arm = (rect.size.y * 0.14).clamp(2.5, 4.5);
@@ -503,7 +533,7 @@ pub fn emit_toolbar_overflow(
     }
     let hit = (!disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(z), rect)
-            .with_shape(Shape::Rounded { radii: [6.0; 4] })
+            .with_shape(Shape::Rounded { radii: [4.0; 4] })
             .with_cursor(CursorKind::Pointer)
     });
     WidgetOutput {
@@ -704,7 +734,7 @@ mod tests {
         let layout = desc.layout();
         assert!(layout.overflow.is_none());
         assert_eq!(layout.rects[0].expect("button").origin.x, 0.0);
-        assert_eq!(layout.rects[1].expect("toggle").origin.x, 34.0);
+        assert_eq!(layout.rects[1].expect("toggle").origin.x, 36.0);
         assert_eq!(layout.hidden.len(), 0);
     }
 
@@ -729,7 +759,7 @@ mod tests {
         desc.items = vec![ToolbarItem::button(1, "A"), ToolbarItem::spacer()];
         let layout = desc.layout();
         let spacer = layout.rects[1].expect("spacer");
-        assert!((spacer.size.x - (300.0 - 34.0)).abs() < 1e-3);
+        assert!((spacer.size.x - (300.0 - 36.0)).abs() < 1e-3);
     }
 
     #[test]

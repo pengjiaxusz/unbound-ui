@@ -28,7 +28,10 @@ pub const DROP_DASH: f32 = 10.0;
 /// 虚线之间的间隔。
 pub const DROP_GAP: f32 = 7.0;
 /// 拖放区圆角半径。
-pub const DROP_RADIUS: f32 = 10.0;
+///
+/// 对齐 WinUI `OverlayCornerRadius = 8`：拖放区是容器级浮层表面，
+/// 与已校准的卡片容器同档。
+pub const DROP_RADIUS: f32 = 8.0;
 
 /// 文件拖放区的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -183,22 +186,28 @@ pub fn emit_file_drop(
     let mut primitives = Vec::new();
     let mut payloads = Vec::with_capacity(glyphs.len());
 
+    // 接受态（携带兼容载荷的拖拽悬停）才点亮 `PRIMARY_SOFT`；
+    // 普通指针悬停只是 WinUI `ListViewItemBackgroundPointerOver` 级别的 HOVER 薄纱。
+    let accept = state.hovered;
     let fill = if control.disabled {
         Token::CONTROL_DISABLED_BG
-    } else if state.hovered || control.phase == crate::PointerPhase::Hovered {
+    } else if accept {
         Token::PRIMARY_SOFT
+    } else if control.phase == crate::PointerPhase::Hovered {
+        Token::HOVER
     } else {
         Token::SURFACE_SUNKEN
     };
     primitives.push(surface(rect, DROP_RADIUS, fill, desc.z));
 
     let inner = rect.inflate(-DROP_INSET);
+    // 默认描边对齐 WinUI `ControlStrokeColorDefault`（CONTROL_STROKE），接受态/聚焦态转强调色。
     let mark = if control.disabled {
         Token::CONTROL_DISABLED_BORDER
-    } else if state.hovered || control.focused {
+    } else if accept || control.focused {
         Token::PRIMARY
     } else {
-        Token::OUTLINE_STRONG
+        Token::CONTROL_STROKE
     };
     dash_rect(inner, |dash, kind| {
         primitives.push(instance(

@@ -39,15 +39,23 @@ pub struct SegmentedTokens {
 
 impl SegmentedTokens {
     /// 标准配色集。
+    ///
+    /// WinUI 没有原生分段控件，这里以 ToggleButton 组为基准：
+    /// 选中槽位取 `ToggleButtonBackgroundChecked`（AccentFillColorDefault），
+    /// 文字取 `ToggleButtonForegroundChecked`（TextOnAccentFillColorPrimary）。
     #[must_use]
     pub fn standard() -> Self {
         Self {
-            frame: Token::CONTROL_TRACK,
-            selected: Token::PRIMARY_SOFT,
+            // 外框即未选中槽位的 ToggleButtonBackground = ControlFillColorDefault。
+            frame: Token::CONTROL_FILL,
+            selected: Token::PRIMARY,
+            // ToggleButtonBorderBrushChecked 在强调色填充上不可见，取同色描边。
             selected_border: Token::PRIMARY,
+            // ToggleButtonBackgroundPointerOver = ControlFillColorSecondary。
             hover: Token::CONTROL_HOVER,
-            label_selected: Token::PRIMARY,
-            label: Token::TEXT_SECONDARY,
+            label_selected: Token::ON_PRIMARY,
+            // ToggleButtonForeground = TextFillColorPrimary。
+            label: Token::TEXT_PRIMARY,
             focus_ring: Token::FOCUS_RING,
         }
     }
@@ -235,14 +243,15 @@ pub fn reduce_segmented_key(desc: &SegmentedDesc, current: usize, key: Segmented
 #[must_use]
 pub fn emit_segmented_frame(desc: &SegmentedDesc, tokens: SegmentedTokens) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(2);
-    primitives.push(surface(desc.rect, 7.0, tokens.frame, desc.z));
+    // WinUI ControlCornerRadius = 4。
+    primitives.push(surface(desc.rect, 4.0, tokens.frame, desc.z));
     // 动画胶囊驻留在外框中而非槽位中：它必须是单个可移动的图元，
     // 否则填充色会在槽位间瞬移，“动画”就会变成闪烁。
     //
     if desc.thumb.is_some() {
         primitives.push(outlined(
             desc.thumb_rect(),
-            5.0,
+            4.0,
             tokens.selected,
             tokens.selected_border,
             1.0,
@@ -298,7 +307,7 @@ pub fn emit_segmented_segment(
     } else {
         (Token::NONE, Token::NONE, 0.0)
     };
-    primitives.push(outlined(segment, 5.0, fill, border, border_width, 0.0, z));
+    primitives.push(outlined(segment, 4.0, fill, border, border_width, 0.0, z));
 
     let label_color = if disabled {
         Token::TEXT_DISABLED
@@ -313,7 +322,7 @@ pub fn emit_segmented_segment(
     //
     primitives.push(focus_ring(
         segment.inflate(2.0),
-        7.0,
+        4.0,
         tokens.focus_ring,
         2.0,
         z,
@@ -322,7 +331,7 @@ pub fn emit_segmented_segment(
 
     let hit = (!disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(z), segment)
-            .with_shape(Shape::Rounded { radii: [5.0; 4] })
+            .with_shape(Shape::Rounded { radii: [4.0; 4] })
             .with_cursor(CursorKind::Pointer)
     });
     let label_text = desc.labels.get(index).cloned().unwrap_or_default();

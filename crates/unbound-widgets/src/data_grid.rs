@@ -159,8 +159,8 @@ impl DataGridDesc {
         Rect::new(
             self.rect.origin.x + pad + col as f32 * cw,
             self.rect.origin.y + pad + row as f32 * ch,
-            (cw - 2.0).max(8.0),
-            (ch - 2.0).max(8.0),
+            (cw - 1.0).max(8.0), // 1px 网格线
+            (ch - 1.0).max(8.0),
         )
     }
 }
@@ -181,12 +181,12 @@ pub fn emit_data_grid(
     let hovered = state.phase == PointerPhase::Hovered;
     primitives.push(outlined(
         desc.rect,
-        6.0,
-        Token::SURFACE_SUNKEN,
+        4.0,            // ControlCornerRadius = 4
+        Token::CARD_BG, // CardBackgroundFillColorDefault
         if hovered || state.focused {
             Token::FOCUS_RING
         } else {
-            Token::CARD_BORDER
+            Token::CARD_BORDER // CardStrokeColorDefault
         },
         1.0,
         0.0,
@@ -198,20 +198,20 @@ pub fn emit_data_grid(
             let cell_r = desc.cell_rect(r, c);
             let is_active = desc.active_cell == (r + desc.row_offset, c);
             let fill = if is_active {
-                Token::PRIMARY_SOFT
-            } else if r == 0 || hovered {
-                Token::SURFACE_RAISED
+                Token::HOVER // TabularSurfaceRowBackgroundSelected = SubtleFillColorSecondary
+            } else if hovered || r == 0 {
+                Token::HOVER // SubtleFillColorSecondary
             } else {
-                Token::SURFACE
+                Token::NONE // TabularSurfaceRowBackground = SubtleFillColorTransparent
             };
             primitives.push(outlined(
                 cell_r,
-                2.0,
+                0.0, // TableView 单元格无圆角
                 fill,
                 if is_active {
-                    Token::PRIMARY
+                    Token::PRIMARY // TabularSurfaceSelectionIndicator = AccentFillColorDefault
                 } else {
-                    Token::CARD_BORDER
+                    Token::DIVIDER // TabularSurfaceGridLine = DividerStrokeColorDefault
                 },
                 if is_active && desc.editing { 1.5 } else { 1.0 },
                 0.0,
@@ -222,7 +222,7 @@ pub fn emit_data_grid(
 
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        4.0, // ControlCornerRadius = 4
         Token::FOCUS_RING,
         2.0,
         desc.z + 2,

@@ -28,7 +28,8 @@ impl ToggleButtonDesc {
             rect,
             label: label.into(),
             checked,
-            radius: 6.0,
+            // WinUI ToggleButton CornerRadius = ControlCornerRadius = 4。
+            radius: 4.0,
             disabled: false,
         }
     }
@@ -93,44 +94,71 @@ pub fn emit_toggle_button_with_glyphs(
     let is_checked = state.checked || desc.checked;
     let z = 700u16;
 
-    let (bg_token, border_token) = if control.disabled || desc.disabled {
-        (Token::DISABLED, Token::OUTLINE)
+    let disabled = control.disabled || desc.disabled;
+    let (bg_token, border_token) = if disabled {
+        if is_checked {
+            // WinUI ToggleButtonBackgroundCheckedDisabled = AccentFillColorDisabled；
+            // ToggleButtonBorderBrushCheckedDisabled = ControlFillColorTransparent。
+            (Token::PRIMARY_SOFT, Token::NONE)
+        } else {
+            // ToggleButtonBackgroundDisabled = ControlFillColorDisabled；
+            // ToggleButtonBorderBrushDisabled = ControlStrokeColorDefault。
+            (Token::CONTROL_DISABLED_BG, Token::CONTROL_STROKE)
+        }
     } else if is_checked {
+        // Checked = AccentFillColorDefault，CheckedPointerOver = AccentFillColorSecondary，
+        // CheckedPressed = AccentFillColorTertiary；按下态边框为透明。
         if control.phase == PointerPhase::Pressed {
-            (Token::PRIMARY_PRESSED, Token::PRIMARY)
+            (Token::PRIMARY_PRESSED, Token::NONE)
         } else if control.phase == PointerPhase::Hovered {
             (Token::PRIMARY_HOVER, Token::PRIMARY)
         } else {
             (Token::PRIMARY, Token::PRIMARY)
         }
     } else if control.phase == PointerPhase::Pressed {
-        (Token::PRIMARY_PRESSED, Token::OUTLINE_STRONG)
+        // ToggleButtonBackgroundPressed = ControlFillColorTertiary；
+        // ToggleButtonBorderBrushPressed = ControlStrokeColorDefault。
+        (Token::SURFACE_SUNKEN, Token::CONTROL_STROKE)
     } else if control.phase == PointerPhase::Hovered {
-        (Token::PRIMARY_HOVER, Token::OUTLINE_STRONG)
+        // ToggleButtonBackgroundPointerOver = ControlFillColorSecondary。
+        (Token::CONTROL_HOVER, Token::CONTROL_STROKE)
     } else {
-        (Token::SURFACE, Token::OUTLINE)
+        // ToggleButtonBackground = ControlFillColorDefault；
+        // ToggleButtonBorderBrush = ControlElevationBorderBrush。
+        (Token::CONTROL_FILL, Token::CONTROL_STROKE)
     };
 
     // 1. 表面背景
     out.primitives.push(surface(rect, desc.radius, bg_token, z));
 
-    // 2. 边框轮廓
+    // 2. 边框轮廓：WinUI ToggleButtonBorderThemeThickness = 1，各状态宽度一致。
     out.primitives.push(outlined(
         rect,
         desc.radius,
         Token::NONE,
         border_token,
-        if is_checked { 1.5 } else { 1.0 },
+        1.0,
         0.0,
         z + 1,
     ));
 
     if !label_glyphs.is_empty() {
-        let ink = if control.disabled || desc.disabled {
-            Token::TEXT_SECONDARY
+        let ink = if disabled {
+            if is_checked {
+                // ToggleButtonForegroundCheckedDisabled = TextOnAccentFillColorDisabled。
+                Token::ON_DISABLED
+            } else {
+                // ToggleButtonForegroundDisabled = TextFillColorDisabled。
+                Token::TEXT_DISABLED
+            }
         } else if is_checked {
+            // ToggleButtonForegroundChecked = TextOnAccentFillColorPrimary。
             Token::ON_PRIMARY
+        } else if control.phase == PointerPhase::Pressed {
+            // ToggleButtonForegroundPressed = TextFillColorSecondary。
+            Token::TEXT_SECONDARY
         } else {
+            // ToggleButtonForeground = TextFillColorPrimary。
             Token::TEXT_PRIMARY
         };
         emit_glyphs(
@@ -143,7 +171,6 @@ pub fn emit_toggle_button_with_glyphs(
     }
 
     // 3. 焦点环
-    let disabled = control.disabled || desc.disabled;
     out.primitives.push(focus_ring(
         rect,
         desc.radius,

@@ -54,7 +54,8 @@ impl PopoverDesc {
             viewport,
             size,
             placement: Placement::BottomStart,
-            radius: 10.0,
+            // 对齐 WinUI `OverlayCornerRadius = 8`（FlyoutPresenter 的 CornerRadius）。
+            radius: 8.0,
             z: 900,
             backdrop_blur: 0.0,
             show_arrow: false,

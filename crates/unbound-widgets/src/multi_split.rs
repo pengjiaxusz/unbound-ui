@@ -11,7 +11,11 @@ use crate::primitive::{focus_ring, outlined, surface};
 use crate::scroll::ScrollAxis;
 use crate::{ControlState, WidgetOutput};
 
-pub const MULTI_SPLIT_GUTTER_SIZE: f32 = 6.0;
+/// 分隔槽的可交互带宽。
+///
+/// 8px 与已校准的 `split_pane::SPLIT_HANDLE` 一致：视觉上只画 1px 细线，
+/// 其余宽度全部让给指针命中，避免把分隔槽画成粗条。
+pub const MULTI_SPLIT_GUTTER_SIZE: f32 = 8.0;
 
 /// 多重分割容器描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -29,7 +33,7 @@ impl MultiSplitDesc {
             rect,
             axis: ScrollAxis::Horizontal,
             count: count.max(2),
-            radius: 6.0,
+            radius: 4.0, // 面板圆角对齐 WinUI `ControlCornerRadius = 4`
         }
     }
 
@@ -104,16 +108,32 @@ pub fn emit_multi_split(
             }
         };
         let is_dragging = !control.disabled && state.dragging_gutter == Some(g_idx);
-        let gutter_bg = if control.disabled {
-            Token::DISABLED
+        let gutter_tok = if control.disabled {
+            Token::CONTROL_DISABLED_BORDER
         } else if is_dragging {
+            // 拖拽中的分隔线用强调色，对应 WinUI `AccentFillColorDefault`。
             Token::PRIMARY
         } else {
-            Token::OUTLINE
+            Token::DIVIDER
+        };
+        // 命中带 8px，但视觉上只画 1px 分隔线（与 `split_pane` 的 1px 细线一致）。
+        let divider_r = match desc.axis {
+            ScrollAxis::Horizontal | ScrollAxis::Both => Rect::new(
+                gutter_rect.center().x - 0.5,
+                gutter_rect.origin.y,
+                1.0,
+                gutter_rect.size.y,
+            ),
+            ScrollAxis::Vertical => Rect::new(
+                gutter_rect.origin.x,
+                gutter_rect.center().y - 0.5,
+                gutter_rect.size.x,
+                1.0,
+            ),
         };
 
         out.primitives
-            .push(surface(gutter_rect, 2.0, gutter_bg, z + 1 + g_idx as u16));
+            .push(surface(divider_r, 0.0, gutter_tok, z + 1 + g_idx as u16));
     }
 
     // 3. 容器轮廓线

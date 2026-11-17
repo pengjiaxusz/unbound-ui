@@ -84,39 +84,43 @@ pub fn emit_carousel(
     let hovered = state.phase == PointerPhase::Hovered;
     primitives.push(outlined(
         desc.rect,
-        8.0,
+        4.0, // ControlCornerRadius = 4
         if hovered {
-            Token::SURFACE_RAISED
+            Token::HOVER // SubtleFillColorSecondary
         } else {
-            Token::SURFACE_SUNKEN
+            Token::CARD_BG // CardBackgroundFillColorDefault
         },
         if hovered || state.focused {
             Token::FOCUS_RING
         } else {
-            Token::CARD_BORDER
+            Token::CARD_BORDER // CardStrokeColorDefault
         },
         1.0,
         0.0,
         desc.z,
     ));
 
+    // PipsPager：普通圆点 4px、选中圆点 6px，按钮节距 12px。
     let dots = desc.slide_count.min(MAX_DOTS);
-    let dot_sz = 8.0;
-    let gap = 6.0;
+    let dot_sz = 4.0; // PipsPagerNormalGlyphFontSize = 4
+    let gap = 8.0; // PipsPagerHorizontalOrientationButtonWidth 12 - 4
     let total_w = dots as f32 * dot_sz + (dots.saturating_sub(1)) as f32 * gap;
     let start_x = desc.rect.origin.x + (desc.rect.width() - total_w) * 0.5;
     let dot_y = desc.rect.max().y - dot_sz - 8.0;
     for i in 0..MAX_DOTS {
         let visible = i < dots;
         let is_active = i == desc.active.min(dots.saturating_sub(1));
+        let size = if is_active { 6.0 } else { dot_sz }; // PipsPagerSelectedGlyphFontSize = 6
         let mut dot = surface(
-            Rect::new(start_x + i as f32 * (dot_sz + gap), dot_y, dot_sz, dot_sz),
-            dot_sz * 0.5,
-            if is_active {
-                Token::PRIMARY
-            } else {
-                Token::CARD_BORDER
-            },
+            Rect::new(
+                start_x + i as f32 * (dot_sz + gap) + (dot_sz - size) * 0.5,
+                dot_y + (dot_sz - size) * 0.5,
+                size,
+                size,
+            ),
+            size * 0.5,
+            // PipsPagerSelectionIndicatorForeground = ControlStrongFillColorDefault
+            Token::CONTROL_TRACK_STROKE,
             desc.z + 1,
         );
         if !visible {
@@ -127,7 +131,7 @@ pub fn emit_carousel(
 
     primitives.push(focus_ring(
         desc.rect,
-        8.0,
+        4.0, // ControlCornerRadius = 4
         Token::FOCUS_RING,
         2.0,
         desc.z + 2,
@@ -161,7 +165,13 @@ pub fn emit_carousel(
 
     if !state.disabled {
         for i in 0..dots {
-            let dot_r = Rect::new(start_x + i as f32 * (dot_sz + gap), dot_y, dot_sz, dot_sz);
+            let cx = start_x + i as f32 * (dot_sz + gap) + dot_sz * 0.5;
+            let dot_r = Rect::new(
+                cx - 6.0,
+                dot_y + dot_sz * 0.5 - 6.0,
+                12.0, // PipsPagerHorizontalOrientationButtonWidth = 12
+                12.0,
+            );
             let key = carousel_dot_node(node, i);
             out.with_sub_control(
                 key,

@@ -18,14 +18,29 @@ use unbound_theme::Token;
 use unbound_world::virtualize::VirtualList;
 
 use crate::primitive::surface;
-use crate::{ControlState, SceneCollector, WidgetDesc, WidgetOutput};
+use crate::{ControlState, PointerPhase, SceneCollector, WidgetDesc, WidgetOutput};
 
 /// 滚动视图所在的界面层。
 pub const SCROLL_LAYER: u8 = 1;
-/// 滚动条宽度（逻辑像素）。
-pub const SCROLLBAR_WIDTH: f32 = 8.0;
-/// 滚动条滑块最小长度（逻辑像素）。
-pub const MIN_THUMB: f32 = 24.0;
+/// 滚动条占据的带宽（逻辑像素）。
+///
+/// WinUI 3 的 `ScrollBarSize` = 12：它既是滚动条的命中带宽度，
+/// 也是悬停展开后滑块矩形（含透明描边）的宽度。
+pub const SCROLLBAR_WIDTH: f32 = 12.0;
+/// 滚动条滑块的最小长度（逻辑像素）。
+///
+/// WinUI `ScrollBarVerticalThumbMinHeight` / `ScrollBarHorizontalThumbMinWidth` = 30。
+pub const MIN_THUMB: f32 = 30.0;
+/// 悬停 / 拖拽时滑块实际可见的宽度（逻辑像素）。
+///
+/// WinUI：`ScrollBarSize`(12) − `ScrollBarThumbStrokeThickness`(6) = 6；
+/// 配合 `ScrollBarCornerRadius` 3，圆角正好是宽度的一半。
+pub const SCROLLBAR_THUMB_WIDTH: f32 = 6.0;
+/// 静止（收起）态滑块实际可见的宽度（逻辑像素）。
+///
+/// WinUI：`ScrollBarVerticalThumbMinWidth`(8) − `ScrollBarThumbStrokeThickness`(6) = 2，
+/// 即 Windows 11 那条 2px 细线；轨道透明、无箭头按钮。
+pub const SCROLLBAR_THUMB_IDLE_WIDTH: f32 = 2.0;
 /// 最后一次滚动后滚动条保持可见的时长（秒）。
 pub const SCROLLBAR_HOLD: f32 = 1.0;
 /// 保持时间到期后的淡出时长。
@@ -58,6 +73,29 @@ fn thumb_length(track_length: f32, viewport: f32, content: f32) -> f32 {
     (track_length * ratio).max(MIN_THUMB).min(track_length)
 }
 
+/// 把命中带内的滑块收窄成 WinUI 的可见宽度，并沿垂直于滚动方向居中。
+///
+/// 命中带保持 [`SCROLLBAR_WIDTH`] 全宽，可见的胶囊只有 2px（收起）或 6px（展开）。
+fn visible_thumb_rect(thumb: Rect, width: f32, horizontal: bool) -> Rect {
+    if horizontal {
+        let height = width.min(thumb.size.y);
+        Rect::new(
+            thumb.origin.x,
+            thumb.origin.y + (thumb.size.y - height) * 0.5,
+            thumb.size.x,
+            height,
+        )
+    } else {
+        let visible = width.min(thumb.size.x);
+        Rect::new(
+            thumb.origin.x + (thumb.size.x - visible) * 0.5,
+            thumb.origin.y,
+            visible,
+            thumb.size.y,
+        )
+    }
+}
+
 /// 滚动视口的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollViewDesc {
@@ -71,7 +109,7 @@ pub struct ScrollViewDesc {
     pub z: u16,
     /// 视口裁剪的圆角半径。
     pub radius: f32,
-    /// 滚动条宽度。
+    /// 滚动条占据的带宽（逻辑像素，WinUI `ScrollBarSize` = 12）。
     pub scrollbar_width: f32,
 }
 
@@ -116,6 +154,8 @@ impl ScrollViewDesc {
     }
 
     /// 单轴上的滚动条轨道矩形。
+    ///
+    /// 轨道距视口右沿 / 下沿 2px，对应 WinUI 的 `ScrollBarThumbOffset` = 2。
     #[must_use]
     pub fn track_rect(&self, horizontal: bool) -> Rect {
         if horizontal {
@@ -625,43 +665,54 @@ pub fn emit_scroll_view(
 ) -> ScrollViewOutput {
     let rect = desc.rect;
     let offset = scroll.offset();
-    let mut primitives: Vec<GpuPrimitiveInstance> = Vec::with_capacity(4);
+    let mut primitives: Vec<GpuPrimitiveInstance> = Vec::with_capacity(2);
 
-    let track_token = if state.disabled {
-        Token::DISABLED
+    // 轨道本身透明：WinUI `ScrollBarBackground` = `SubtleFillColorTransparentBrush`，
+    // 因此不发射轨道图元；整条滚动条只由滑块呈现，且没有箭头按钮。
+    let thumb_token = if state.disabled {
+        // WinUI `ScrollBarThumbFillDisabled` = `ControlStrongFillColorDisabledBrush`。
+        Token::CONTROL_DISABLED_THUMB
     } else {
-        Token::CONTROL_TRACK
+        // WinUI `ScrollBarThumbFill` = `ControlStrongFillColorDefaultBrush`，
+        // 其数值等于 `ControlStrongStrokeColorDefault`（浅色 #72000000 / 深色 #8BFFFFFF）。
+        // 悬停 `ScrollBarThumbFillPointerOver` 与静止态同色，差异只体现在宽度（2 → 6）。
+        Token::CONTROL_TRACK_STROKE
     };
-    let thumb_token = if state.phase == crate::PointerPhase::Hovered || scroll.dragging().is_some()
-    {
-        Token::CONTROL_THUMB
+    // 悬停 / 按压 / 拖拽时滑块展开，对应 WinUI 的 Expand 视觉状态。
+    let expanded = matches!(state.phase, PointerPhase::Hovered | PointerPhase::Pressed)
+        || scroll.dragging().is_some();
+    let visible_width = if expanded {
+        SCROLLBAR_THUMB_WIDTH
     } else {
-        Token::OUTLINE_STRONG
+        SCROLLBAR_THUMB_IDLE_WIDTH
     };
 
     let mut hits: Vec<HitRegion> = Vec::with_capacity(2);
     let opacity = scroll.scrollbar_opacity();
     if desc.axis.vertical() && desc.content_size.y > rect.height() {
-        let track = desc.track_rect(false);
-        let mut track_primitive = surface(track, desc.scrollbar_width * 0.5, track_token, desc.z);
-        set_opacity(&mut track_primitive, opacity);
-        primitives.push(track_primitive);
         let thumb = desc.thumb_rect(offset, false);
-        let mut thumb_primitive = surface(thumb, desc.scrollbar_width * 0.5, thumb_token, desc.z);
+        let mut thumb_primitive = surface(
+            visible_thumb_rect(thumb, visible_width, false),
+            visible_width * 0.5,
+            thumb_token,
+            desc.z,
+        );
         set_opacity(&mut thumb_primitive, opacity);
         primitives.push(thumb_primitive);
+        // 命中带仍取 12px 全宽（WinUI `ScrollBarSize`），窄线也容易抓取。
         hits.push(
             HitRegion::new(node ^ (1 << 63), SCROLL_LAYER, u32::from(desc.z) + 1, thumb)
                 .with_cursor(CursorKind::Pointer),
         );
     }
     if desc.axis.horizontal() && desc.content_size.x > rect.width() {
-        let track = desc.track_rect(true);
-        let mut track_primitive = surface(track, desc.scrollbar_width * 0.5, track_token, desc.z);
-        set_opacity(&mut track_primitive, opacity);
-        primitives.push(track_primitive);
         let thumb = desc.thumb_rect(offset, true);
-        let mut thumb_primitive = surface(thumb, desc.scrollbar_width * 0.5, thumb_token, desc.z);
+        let mut thumb_primitive = surface(
+            visible_thumb_rect(thumb, visible_width, true),
+            visible_width * 0.5,
+            thumb_token,
+            desc.z,
+        );
         set_opacity(&mut thumb_primitive, opacity);
         primitives.push(thumb_primitive);
         hits.push(
@@ -776,16 +827,24 @@ pub fn virtual_row_rect(
 }
 
 /// 将滚动条滑块绘制为独立图元（供测试与工具使用）。
+///
+/// 与 [`emit_scroll_view`] 一致：按展开态宽度 [`SCROLLBAR_THUMB_WIDTH`] 绘制，
+/// 颜色取 WinUI `ScrollBarThumbFill`（`ControlStrongFillColorDefault`）。
 #[must_use]
 pub fn scrollbar_thumb_primitive(
     desc: &ScrollViewDesc,
     offset: Vec2,
     horizontal: bool,
 ) -> GpuPrimitiveInstance {
-    let mut primitive = surface(
+    let thumb = visible_thumb_rect(
         desc.thumb_rect(offset, horizontal),
-        desc.scrollbar_width * 0.5,
-        Token::CONTROL_THUMB,
+        SCROLLBAR_THUMB_WIDTH,
+        horizontal,
+    );
+    let mut primitive = surface(
+        thumb,
+        SCROLLBAR_THUMB_WIDTH * 0.5,
+        Token::CONTROL_TRACK_STROKE,
         desc.z,
     );
     primitive.prim_type_and_flags = GpuPrimitiveInstance::pack_type(
@@ -981,12 +1040,33 @@ mod tests {
         let mut state = ScrollState::new();
         state.jump_to(&desc, Vec2::new(0.0, 60.0));
         let output = emit_scroll_view(9, &desc, &state, ControlState::default());
-        assert_eq!(output.output.primitives.len(), 2, "track and thumb");
+        // 轨道透明（WinUI `ScrollBarBackground` = `SubtleFillColorTransparentBrush`），只画滑块。
+        assert_eq!(
+            output.output.primitives.len(),
+            1,
+            "only the thumb is painted"
+        );
+        assert_eq!(
+            output.output.primitives[0].size[0],
+            SCROLLBAR_THUMB_IDLE_WIDTH
+        );
         assert!(output
             .output
             .primitives
             .iter()
             .all(|primitive| primitive.opacity() > 0.99));
+
+        // 悬停展开到 6px：WinUI `ScrollBarSize`(12) − `ScrollBarThumbStrokeThickness`(6)。
+        let hovered = emit_scroll_view(
+            9,
+            &desc,
+            &state,
+            ControlState {
+                phase: PointerPhase::Hovered,
+                ..ControlState::default()
+            },
+        );
+        assert_eq!(hovered.output.primitives[0].size[0], SCROLLBAR_THUMB_WIDTH);
     }
 
     #[test]

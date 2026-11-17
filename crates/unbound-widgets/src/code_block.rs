@@ -18,7 +18,7 @@ use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs, instance, surface};
+use crate::primitive::{focus_ring, glyphs, instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
@@ -28,6 +28,11 @@ pub const CODE_LINE_HEIGHT: f32 = 20.0;
 pub const CODE_GUTTER: f32 = 44.0;
 /// 复制确认提示的持续时长。
 pub const COPY_CONFIRM_SECONDS: f32 = 1.4;
+
+/// 代码容器圆角，对齐 WinUI `ControlCornerRadius`（4）。
+const CODE_RADIUS: f32 = 4.0;
+/// 代码容器描边宽度，对齐 WinUI `TextControlBorderThemeThickness`（1）。
+const CODE_BORDER: f32 = 1.0;
 
 /// 粗粒度语法分类。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -407,17 +412,34 @@ pub fn emit_code_block(
     let mut primitives = Vec::with_capacity(6 + desc.highlight_lines.len() + code_glyphs.len());
     let mut payloads = Vec::with_capacity(code_glyphs.len());
 
-    primitives.push(surface(desc.rect, 8.0, Token::CODE_BG, desc.z));
+    // 代码容器：WinUI 控件级 4px 圆角 + 1px `ControlStrokeColorDefault` 描边，
+    // 与 TextBox / TextArea 同档（`ControlCornerRadius` + `TextControlBorderThemeThickness`）。
+    primitives.push(outlined(
+        desc.rect,
+        CODE_RADIUS,
+        Token::CODE_BG,
+        Token::CONTROL_STROKE,
+        CODE_BORDER,
+        0.0,
+        desc.z,
+    ));
     if desc.show_numbers {
-        primitives.push(surface(
+        // 行号槽只贴容器左侧，左侧两角跟随容器圆角，右侧保持直角以便与源码区拼合。
+        // 底色用 SURFACE_RAISED：暗色主题下 CODE_BG 与 SURFACE_SUNKEN 同色，槽会消失。
+        primitives.push(instance(
             Rect::new(
                 desc.rect.origin.x,
                 desc.rect.origin.y,
                 CODE_GUTTER,
                 desc.rect.size.y,
             ),
+            [CODE_RADIUS, 0.0, 0.0, CODE_RADIUS],
+            Token::SURFACE_RAISED,
+            Token::NONE,
             0.0,
-            Token::SURFACE_SUNKEN,
+            0.0,
+            PrimType::RoundedRect,
+            SubElement::Background,
             desc.z + 1,
         ));
         primitives.push(line(
@@ -437,7 +459,7 @@ pub fn emit_code_block(
         }
         primitives.push(surface(
             desc.line_rect(index),
-            0.0,
+            CODE_RADIUS,
             Token::SELECTION,
             desc.z + 1,
         ));
@@ -456,9 +478,19 @@ pub fn emit_code_block(
         } else {
             Token::SURFACE_RAISED
         };
-        primitives.push(surface(button, 5.0, fill, desc.z + 4));
+        // 复制按钮按 WinUI 次级按钮绘制：4px 圆角 + 1px 描边。
+        primitives.push(outlined(
+            button,
+            CODE_RADIUS,
+            fill,
+            Token::CONTROL_STROKE,
+            CODE_BORDER,
+            0.0,
+            desc.z + 4,
+        ));
         // 悬停底色始终保留在图元池中；仅改变其不透明度，因此悬停绝不会重排图元序列。
-        let mut hover = surface(button, 5.0, Token::CONTROL_HOVER, desc.z + 5);
+        // 悬停色用 `SubtleFillColorSecondary`（HOVER 令牌），与 ListViewItem 悬停态同档。
+        let mut hover = surface(button, CODE_RADIUS, Token::HOVER, desc.z + 5);
         hover.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
             hover.depth_u16(),
             if control.phase == crate::PointerPhase::Hovered {
@@ -471,7 +503,7 @@ pub fn emit_code_block(
     }
     primitives.push(focus_ring(
         desc.rect,
-        8.0,
+        CODE_RADIUS,
         Token::FOCUS_RING,
         2.0,
         desc.z + 6,
@@ -493,7 +525,9 @@ pub fn emit_code_block(
         payloads,
         hit: Some(
             HitRegion::new(node, CONTROL_LAYER, u32::from(desc.z), desc.rect)
-                .with_shape(Shape::Rounded { radii: [8.0; 4] })
+                .with_shape(Shape::Rounded {
+                    radii: [CODE_RADIUS; 4],
+                })
                 .with_cursor(CursorKind::Text),
         ),
         a11y: Some(a11y),

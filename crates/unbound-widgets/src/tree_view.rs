@@ -23,10 +23,10 @@ use crate::switch::CONTROL_LAYER;
 use crate::text_input::TextEditState;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 默认行高。
-pub const TREE_ROW: f32 = 26.0;
+/// 默认行高。对齐 WinUI `TreeViewItemMinHeight = 28`。
+pub const TREE_ROW: f32 = 28.0;
 
-/// 每层缩进深度的水平缩进量。
+/// 每层缩进深度的水平缩进量。对齐 `TreeViewItem::UpdateIndentation`（depth × 16）。
 pub const TREE_INDENT: f32 = 16.0;
 
 /// 视口周围保持存活的额外行数。
@@ -428,10 +428,10 @@ impl TreeViewTokens {
         Self {
             background: Token::SURFACE,
             row: Token::NONE,
-            row_hover: Token::CONTROL_HOVER,
-            row_selected: Token::PRIMARY_SOFT,
+            row_hover: Token::HOVER, // TreeViewItemBackgroundPointerOver = SubtleFillColorSecondary
+            row_selected: Token::HOVER, // TreeViewItemBackgroundSelected = SubtleFillColorSecondary
             text: Token::TEXT_PRIMARY,
-            text_selected: Token::PRIMARY,
+            text_selected: Token::TEXT_PRIMARY, // TreeViewItemForegroundSelected = TextFillColorPrimary
             guide: Token::DIVIDER,
             arrow: Token::TEXT_SECONDARY,
             focus_ring: Token::FOCUS_RING,
@@ -461,7 +461,22 @@ pub fn emit_tree_row(
     } else {
         tokens.row
     };
-    primitives.push(outlined(rect, 4.0, fill, Token::NONE, 0.0, 0.0, desc.z));
+    // TreeViewItemPresenterMargin = 4,2：行背景在列表内左右各内缩 4、上下各 2。
+    let background = Rect::new(
+        rect.origin.x + 4.0,
+        rect.origin.y + 2.0,
+        (rect.size.x - 8.0).max(0.0),
+        (rect.size.y - 4.0).max(0.0),
+    );
+    primitives.push(outlined(
+        background,
+        4.0, // ControlCornerRadius = 4
+        fill,
+        Token::NONE,
+        0.0,
+        0.0,
+        desc.z,
+    ));
 
     // 每个深度层级一条参考线，停在箭头列之前。
     let indent = desc.indent;
@@ -481,11 +496,12 @@ pub fn emit_tree_row(
         ));
     }
 
-    let arrow_x = rect.origin.x + row.row.depth as f32 * indent + 6.0;
-    let centre = [arrow_x + 4.0, rect.origin.y + rect.size.y * 0.5];
+    // ExpandCollapseChevron 左侧 Padding = 14，字形 12 × 12。
+    let arrow_x = rect.origin.x + row.row.depth as f32 * indent + 14.0;
+    let centre = [arrow_x + 6.0, rect.origin.y + rect.size.y * 0.5];
     if row.row.has_children {
         // 朝右的箭头；展开状态时向下旋转。
-        let arm = 3.5;
+        let arm = 4.0;
         let (a, b, c) = if row.row.expanded {
             (
                 [centre[0] - arm, centre[1] - arm * 0.5],
@@ -563,7 +579,7 @@ pub fn emit_tree_row(
     };
     if row.row.has_children && !disabled {
         let toggle_key = tree_toggle_node(row.row.id);
-        let toggle_r = Rect::new(arrow_x - 2.0, rect.origin.y, 16.0, rect.size.y);
+        let toggle_r = Rect::new(arrow_x - 4.0, rect.origin.y, 20.0, rect.size.y);
         out.with_sub_control(
             toggle_key,
             HitRegion::new(toggle_key, CONTROL_LAYER, u32::from(desc.z) + 1, toggle_r)

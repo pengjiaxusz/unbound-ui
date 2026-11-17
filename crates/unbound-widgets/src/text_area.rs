@@ -23,14 +23,21 @@ use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined, su
 use crate::scroll::{ScrollState, ScrollViewDesc};
 use crate::switch::CONTROL_LAYER;
 use crate::text_input::{
-    floor_boundary, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
+    floor_boundary, focus_underline, reduce_text_input, TextEditState, TextInputDesc,
+    TextInputEvent,
 };
 use crate::{ControlState, WidgetOutput};
 
-/// 边框与文本之间的水平内边距。
+/// 边框与文本之间的水平内边距（左）。
 pub const AREA_PADDING: f32 = 10.0;
-/// 默认圆角半径。
-pub const AREA_RADIUS: f32 = 8.0;
+/// 默认圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+pub const AREA_RADIUS: f32 = 4.0;
+/// 右侧内边距。对齐 WinUI `TextControlThemePadding = 10,5,6,6` 的右值 6。
+const AREA_PADDING_RIGHT: f32 = 6.0;
+/// 顶部内边距。对齐 WinUI `TextControlThemePadding` 的上值 5。
+const AREA_PADDING_TOP: f32 = 5.0;
+/// 底部内边距。对齐 WinUI `TextControlThemePadding` 的下值 6。
+const AREA_PADDING_BOTTOM: f32 = 6.0;
 
 /// 以字节区间表示的单条视觉行（已完成折行）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,13 +120,15 @@ impl TextAreaDesc {
     }
 
     /// 文本绘制的目标矩形。
+    ///
+    /// 内边距对齐 WinUI `TextControlThemePadding = 10,5,6,6`。
     #[must_use]
     pub fn text_rect(&self) -> Rect {
         Rect::new(
             self.rect.origin.x + AREA_PADDING,
-            self.rect.origin.y + AREA_PADDING * 0.5,
-            (self.rect.size.x - AREA_PADDING * 2.0).max(0.0),
-            (self.rect.size.y - AREA_PADDING).max(0.0),
+            self.rect.origin.y + AREA_PADDING_TOP,
+            (self.rect.size.x - AREA_PADDING - AREA_PADDING_RIGHT).max(0.0),
+            (self.rect.size.y - AREA_PADDING_TOP - AREA_PADDING_BOTTOM).max(0.0),
         )
     }
 
@@ -333,20 +342,21 @@ pub fn emit_text_area(
     let mut primitives = Vec::with_capacity(6 + visual.selection.len() + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len());
 
+    // 填充槽位对齐 WinUI：静息 `ControlFillColorDefault`、悬停
+    // `ControlFillColorSecondary`、禁用 `ControlFillColorDisabled`。
     let fill = if control.disabled {
         Token::CONTROL_DISABLED_BG
     } else if control.phase == crate::PointerPhase::Hovered {
         Token::CONTROL_HOVER
     } else {
-        Token::INPUT_BG
+        Token::CONTROL_FILL
     };
     primitives.push(surface(rect, desc.radius, fill, desc.z));
+    // 描边 `ControlStrokeColorDefault` 为 1px（`TextControlBorderThemeThickness = 1`）。
     let border = if control.disabled {
         Token::CONTROL_DISABLED_BORDER
-    } else if control.focused {
-        Token::OUTLINE_STRONG
     } else {
-        Token::OUTLINE
+        Token::CONTROL_STROKE
     };
     primitives.push(outlined(
         rect,
@@ -356,6 +366,19 @@ pub fn emit_text_area(
         1.0,
         0.0,
         desc.z,
+    ));
+
+    // 聚焦态底部 2px 强调条（`TextControlBorderThemeThicknessFocused = 1,1,1,2`）。
+    // 始终写入图元池，仅调整不透明度。
+    primitives.push(focus_underline(
+        rect,
+        desc.radius,
+        desc.z,
+        if control.focused && !control.disabled {
+            1.0
+        } else {
+            0.0
+        },
     ));
 
     for slot in &visual.selection {
@@ -373,8 +396,8 @@ pub fn emit_text_area(
     }
 
     // 光标槽位始终存在；仅通过不透明度控制可见性（与 `emit_text_input` 一致），
-    // 因此聚焦/闪烁绝不会改变图元池结构。
-    let mut caret = surface(visual.caret, 0.0, Token::PRIMARY, desc.z);
+    // 因此聚焦/闪烁绝不会改变图元池结构。WinUI 的插入符跟随正文色。
+    let mut caret = surface(visual.caret, 0.0, Token::TEXT_PRIMARY, desc.z);
     caret.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
         caret.depth_u16(),
         if control.focused && !control.disabled && visual.caret_visible {
@@ -537,8 +560,8 @@ mod tests {
         let a11y = output.a11y.expect("reachable");
         assert_eq!(a11y.role, Role::MultilineTextInput);
         assert_eq!(a11y.value, "one\ntwo");
-        // 表面、边框、焦点环以及始终存在的光标槽位。
-        assert_eq!(output.primitives.len(), 4 + visual.selection.len());
+        // 表面、边框、聚焦强调条、焦点环以及始终存在的光标槽位。
+        assert_eq!(output.primitives.len(), 5 + visual.selection.len());
         assert_eq!(
             output.hit.as_ref().map(|hit| hit.cursor),
             Some(Some(CursorKind::Text))

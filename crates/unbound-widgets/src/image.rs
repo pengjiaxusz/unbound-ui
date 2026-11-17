@@ -13,10 +13,20 @@ use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
 
 use crate::primitive::instance;
-use crate::{ControlState, WidgetDesc, WidgetOutput};
+use crate::{ControlState, PointerPhase, WidgetDesc, WidgetOutput};
 
 /// 可点击图像的命中测试层级。
 pub const IMAGE_LAYER: u8 = 1;
+
+/// 图像默认圆角半径。
+///
+/// 对齐 WinUI `ControlCornerRadius = 4,4,4,4`：缩略图、列表配图等常规图像。
+pub const IMAGE_RADIUS: f32 = 4.0;
+
+/// 大幅图像（封面、预览）圆角半径。
+///
+/// 对齐 WinUI `OverlayCornerRadius = 8,8,8,8`：卡片主图与浮层预览共用这一档。
+pub const IMAGE_RADIUS_LARGE: f32 = 8.0;
 
 /// 单个九宫格区段：沿某轴的起始偏移与长度。
 type Span = (f32, f32);
@@ -186,7 +196,8 @@ impl ImageDesc {
                 natural_size,
             },
             fit: ObjectFit::Cover,
-            radius: [0.0; 4],
+            // 默认按 WinUI `ControlCornerRadius` 取 4px，调用方可另设 8px（`OverlayCornerRadius`）。
+            radius: [IMAGE_RADIUS; 4],
             border_width: 0.0,
             border_color: Token::NONE,
             tint: Token::NONE,
@@ -367,10 +378,17 @@ fn emit_image_inner(
         }
         None => {
             // 加载中或失败：内凹表面保留原有包围盒与圆角。
+            // 交互图像悬停时改用 HOVER 薄纱，与 WinUI 缩略图占位态一致；
+            // 只切换令牌而不增减图元，保持交互态的图元拓扑恒定。
+            let placeholder = if desc.interactive && state.phase == PointerPhase::Hovered {
+                Token::HOVER
+            } else {
+                Token::SURFACE_SUNKEN
+            };
             primitives.push(instance(
                 desc.rect,
                 desc.radius,
-                Token::SURFACE_SUNKEN,
+                placeholder,
                 Token::NONE,
                 0.0,
                 0.0,

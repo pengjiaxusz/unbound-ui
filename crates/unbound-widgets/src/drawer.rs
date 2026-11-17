@@ -33,8 +33,8 @@ pub enum DrawerSide {
 
 /// 默认背景模糊半径。
 pub const DRAWER_BLUR: f32 = 12.0;
-/// 默认内侧圆角半径。
-pub const DRAWER_RADIUS: f32 = 12.0;
+/// 默认内侧圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（浮层类容器）。
+pub const DRAWER_RADIUS: f32 = 8.0;
 const DRAWER_SHADOW: f32 = 32.0;
 
 /// 抽屉描述符。

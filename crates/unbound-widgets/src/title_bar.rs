@@ -14,10 +14,27 @@ use crate::primitive::instance;
 use crate::{ControlState, PointerPhase, TextCtx, UiWidget, WidgetInputEvent, WidgetOutput};
 
 /// 默认标题栏高度（逻辑像素）。
-pub const TITLE_BAR_HEIGHT: f32 = 38.0;
+///
+/// WinUI：`TitleBarCompactHeight` = 32，`AppWindowTitleBar` 的标题栏高度同样是 32；
+/// 取紧凑高度后，窗口控制按钮为 46×32 的贴边矩形。
+pub const TITLE_BAR_HEIGHT: f32 = 32.0;
 
 /// 窗口控制按钮（最小化 / 最大化 / 关闭）的默认宽度（逻辑像素，与 Showcase 一致）。
+///
+/// Win11 的标题栏按钮固定 46 宽（`AppWindowTitleBar` 的 caption button 度量），
+/// 三枚按钮合计 138；[`TitleBarChrome`] 的拖拽命中区据此让出右侧这一段。
 pub const TITLE_BAR_CAPTION_WIDTH: f32 = 46.0;
+
+/// 默认标题栏三枚窗口控制按钮占用的横向空间（46 × 3 = 138）。
+///
+/// Win11 的窗口控制按钮属于 non-client 区域，DWM 会把它们从拖拽区里挖掉；
+/// 这里同样让拖拽命中区止于按钮列的左沿，避免与按钮命中区重叠。
+const TITLE_BAR_CAPTION_RESERVE: f32 = TITLE_BAR_CAPTION_WIDTH * 3.0;
+
+/// 拖拽区至少保留的宽度（WinUI `TitleBarMinDragRegionWidth` = 48）。
+///
+/// 窗口窄到按钮列几乎占满标题栏时，优先保住这段可拖拽区域而不是让它归零。
+const TITLE_BAR_MIN_DRAG_WIDTH: f32 = 48.0;
 
 /// 标题栏背景表面与底部分隔线的图元深度。
 ///
@@ -109,9 +126,18 @@ impl UiWidget for TitleBarChrome {
             SubElement::Background,
             TITLE_BAR_CHROME_RULE_Z,
         ));
-        // 发射 layer=0、层内 z=0 的最低优先级命中区：标题栏空白处的按压由它作为冒泡起点，
-        // 任何 layer>=1 的交互控件与浮层都天然覆盖其上，无需依赖图元深度差。
-        output.hit = Some(HitRegion::new(node, 0, 0, rect));
+        // 发射 layer=0、层内 z=0 的最低优先级命中区：标题栏空白处的按压由它作为冒泡起点。
+        // 命中区止于右侧窗口控制按钮列的左沿（Win11 的 non-client 拖拽区同样排除按钮区），
+        // 因此拖拽区与三枚按钮的命中区在几何上互不重叠。
+        let reserve =
+            TITLE_BAR_CAPTION_RESERVE.min((rect.size.x - TITLE_BAR_MIN_DRAG_WIDTH).max(0.0));
+        let drag = Rect::new(
+            rect.origin.x,
+            rect.origin.y,
+            (rect.size.x - reserve).max(0.0),
+            rect.size.y,
+        );
+        output.hit = Some(HitRegion::new(node, 0, 0, drag));
         output
     }
 }
@@ -175,11 +201,18 @@ impl UiWidget for WindowCaptionButton {
     ) -> WidgetOutput {
         let mut output = WidgetOutput::default();
         let active = matches!(control.phase, PointerPhase::Hovered | PointerPhase::Pressed);
+        let pressed = matches!(control.phase, PointerPhase::Pressed);
         let destructive = matches!(self.kind, WindowCaptionKind::Close);
+        // WinUI 的窗口控制按钮是「透明底 + 状态薄纱」：悬停 `SubtleFillColorSecondary`、
+        // 按压 `SubtleFillColorTertiary`（即既有 `HOVER` / `PRESSED` 令牌）。
+        // 关闭按钮例外：悬停/按压铺 `WindowCaptionCloseButtonBackgroundPointerOver` =
+        // #C42B1C，本仓库 `Token::ERROR` 在 Win11 浅色调色板中正是该值。
         let bg_token = if destructive {
             Token::ERROR
+        } else if pressed {
+            Token::PRESSED
         } else {
-            Token::CONTROL_HOVER
+            Token::HOVER
         };
         let mut bg = instance(
             rect,
@@ -199,12 +232,15 @@ impl UiWidget for WindowCaptionButton {
         output.primitives.push(bg);
 
         let fg = if destructive && active {
+            // 关闭按钮悬停/按压时图标反白：WinUI `WindowCaptionCloseButtonForegroundPointerOver`
+            // 取 `TextOnAccentFillColorPrimary`（浅色 #FFFFFF）。
             Token::ON_ERROR
         } else if self.focused || active {
             Token::TEXT_PRIMARY
         } else {
-            // 窗口失焦时降低图标对比度，贴近 Win11 原生非激活标题栏质感。
-            Token::TEXT_SECONDARY
+            // 窗口失焦：WinUI `TitleBarDeactivatedForegroundBrush` = `TextFillColorTertiaryBrush`，
+            // 并叠加 `TitleBarDeactivatedOpacity` 0.5；这里用同量级的既有 TEXT_DISABLED。
+            Token::TEXT_DISABLED
         };
         let middle = rect.center();
         match self.kind {
@@ -549,7 +585,13 @@ mod tests {
             .as_ref()
             .expect("the title bar background must emit a hit region as the bubbling origin");
         assert_eq!((hit.layer, hit.z), (0, 0));
-        assert_eq!(hit.bounds, rect);
+        // 拖拽区止于三枚窗口控制按钮（46 × 3）的左沿，与按钮命中区互不重叠。
+        assert_eq!(hit.bounds.origin, rect.origin);
+        assert_eq!(hit.bounds.size.y, rect.size.y);
+        assert_eq!(
+            hit.bounds.size.x,
+            rect.size.x - TITLE_BAR_CAPTION_WIDTH * 3.0
+        );
     }
 
     #[test]
@@ -689,7 +731,7 @@ mod tests {
         );
         assert_eq!(
             unfocused.primitives[1].fill_token_or_uv,
-            u32::from(Token::TEXT_SECONDARY.raw()),
+            u32::from(Token::TEXT_DISABLED.raw()),
             "an unfocused window must lower the icon contrast"
         );
     }

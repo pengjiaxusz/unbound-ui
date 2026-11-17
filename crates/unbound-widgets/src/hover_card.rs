@@ -20,8 +20,8 @@ use crate::{ControlState, WidgetOutput};
 pub const HOVER_CARD_DELAY_MS: f32 = 500.0;
 /// 指针同时离开两个区域后卡片继续保留的时长。
 pub const HOVER_CARD_GRACE_MS: f32 = 150.0;
-/// 卡片圆角半径。
-pub const HOVER_CARD_RADIUS: f32 = 10.0;
+/// 卡片圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（Flyout/TeachingTip）。
+pub const HOVER_CARD_RADIUS: f32 = 8.0;
 const HOVER_CARD_SHADOW: f32 = 22.0;
 
 /// 悬停卡片描述符。
@@ -392,10 +392,11 @@ pub fn emit_empty_state(
 
     let action = desc.action_rect();
     if let Some(action) = action {
-        primitives.push(surface(action, 8.0, Token::PRIMARY_SOFT, desc.z + 1));
+        // 空状态行动按钮沿用 WinUI `ControlCornerRadius = 4`。
+        primitives.push(surface(action, 4.0, Token::PRIMARY_SOFT, desc.z + 1));
         primitives.push(crate::primitive::focus_ring(
             action,
-            8.0,
+            4.0,
             Token::FOCUS_RING,
             2.0,
             desc.z + 2,

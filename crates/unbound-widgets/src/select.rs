@@ -311,7 +311,11 @@ pub fn emit_select_with_glyphs(
     let rect = desc.rect;
     let radii = [desc.radius; 4];
     let fill = if control.disabled {
-        Token::DISABLED
+        // ComboBoxBackgroundDisabled = ControlFillColorDisabled。
+        Token::CONTROL_DISABLED_BG
+    } else if control.phase == crate::PointerPhase::Pressed {
+        // ComboBoxBackgroundPressed = ControlFillColorTertiary。
+        Token::SURFACE_SUNKEN
     } else if state.open || control.phase == crate::PointerPhase::Hovered {
         // 悬停/展开态：Win11 的下拉框在悬停时**变亮**一档（`ControlFillColorDefault`
         // 之上再叠一层白色薄纱），而不是变暗——用实色 `CONTROL_HOVER` 会让框
@@ -328,8 +332,15 @@ pub fn emit_select_with_glyphs(
             radii,
             Token::NONE,
             // `ControlStrokeColorDefault`：6% 薄纱，暗色下几乎不可见。
-            // 用 `OUTLINE` 会把下拉框描成一道明显的黑边，与 Win11 不符。
-            Token::CONTROL_STROKE,
+            // 用 `OUTLINE` 会把下拉框描成一道明显的黑边，与 Win11 不符；
+            // 聚焦/展开时换成 `FocusStrokeColorOuter`（强描边）。
+            if control.disabled {
+                Token::CONTROL_DISABLED_BORDER
+            } else if control.focused || state.open {
+                Token::OUTLINE_STRONG
+            } else {
+                Token::CONTROL_STROKE
+            },
             1.0,
             0.0,
             PrimType::RoundedRect,

@@ -13,6 +13,10 @@ use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_STEP_SLOTS: usize = 5;
+/// 容器圆角半径。对齐 WinUI `OverlayCornerRadius = 8`。
+const STEPPER_RADIUS: f32 = 8.0;
+/// 连接线厚度。对齐 WinUI 分隔描边的 2px 观感。
+const CONNECTOR_THICKNESS: f32 = 2.0;
 
 /// 单个步骤的完成状态。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -114,16 +118,20 @@ pub fn emit_stepper(
     let hovered = state.phase == PointerPhase::Hovered;
     primitives.push(outlined(
         desc.rect,
-        6.0,
+        STEPPER_RADIUS,
+        // 容器填充 `ControlFillColorDefault`，悬停 `ControlFillColorSecondary`。
         if hovered {
-            Token::SURFACE_RAISED
+            Token::CONTROL_HOVER
         } else {
-            Token::SURFACE_SUNKEN
+            Token::CONTROL_FILL
         },
-        if hovered || state.focused {
-            Token::FOCUS_RING
+        // 描边 `ControlStrokeColorDefault`，悬停加亮，聚焦用强调色。
+        if state.focused {
+            Token::PRIMARY
+        } else if hovered {
+            Token::INPUT_BORDER_HOVER
         } else {
-            Token::CARD_BORDER
+            Token::CONTROL_STROKE
         },
         1.0,
         0.0,
@@ -167,15 +175,15 @@ pub fn emit_stepper(
         let conn_rect = if horizontal {
             Rect::new(
                 cx0 + badge_sz * 0.5 + 2.0,
-                cy0 - 1.5,
+                cy0 - CONNECTOR_THICKNESS * 0.5,
                 (cx1 - cx0 - badge_sz - 4.0).max(2.0),
-                3.0,
+                CONNECTOR_THICKNESS,
             )
         } else {
             Rect::new(
-                cx0 - 1.5,
+                cx0 - CONNECTOR_THICKNESS * 0.5,
                 cy0 + badge_sz * 0.5 + 2.0,
-                3.0,
+                CONNECTOR_THICKNESS,
                 (cy1 - cy0 - badge_sz - 4.0).max(2.0),
             )
         };
@@ -185,11 +193,11 @@ pub fn emit_stepper(
             .is_some_and(|s| s.status == StepStatus::Completed);
         let mut inst = surface(
             conn_rect,
-            1.5,
+            1.0,
             if completed {
                 Token::PRIMARY
             } else {
-                Token::CARD_BORDER
+                Token::CONTROL_STROKE
             },
             desc.z + 1,
         );
@@ -207,9 +215,9 @@ pub fn emit_stepper(
         let (fill, border) = match status {
             StepStatus::Completed | StepStatus::Active => (Token::PRIMARY, Token::PRIMARY),
             StepStatus::Error => (Token::ERROR, Token::ERROR),
-            StepStatus::Pending => (Token::SURFACE, Token::CARD_BORDER),
+            StepStatus::Pending => (Token::CONTROL_FILL, Token::CONTROL_STROKE),
         };
-        let mut inst = outlined(r, badge_sz * 0.5, fill, border, 1.5, 0.0, desc.z + 2);
+        let mut inst = outlined(r, badge_sz * 0.5, fill, border, 1.0, 0.0, desc.z + 2);
         if step.is_none() {
             inst.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(inst.depth_u16(), 0.0);
         }
@@ -218,7 +226,7 @@ pub fn emit_stepper(
 
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        STEPPER_RADIUS,
         Token::FOCUS_RING,
         2.0,
         desc.z + 3,

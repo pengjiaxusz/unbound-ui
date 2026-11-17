@@ -207,15 +207,15 @@ pub struct PropertyGridDesc {
 }
 
 impl PropertyGridDesc {
-    /// 创建带 140 px 标签列与 26 px 行高的属性网格。
+    /// 创建带 140 px 标签列与 32 px 行高的属性网格。
     #[must_use]
     pub fn new(rect: Rect, sections: Vec<PropertySection>) -> Self {
         Self {
             rect,
             label: String::new(),
             label_width: 140.0,
-            row_height: 26.0,
-            header_height: 28.0,
+            row_height: 32.0,    // TableViewRowMinHeightMedium = 32
+            header_height: 32.0, // TableViewGroupHeaderMinHeightMedium = 32
             sections,
             z: 620,
         }
@@ -420,7 +420,7 @@ impl PropertyGridTokens {
             value: Token::TEXT_PRIMARY,
             modified: Token::PRIMARY,
             rule: Token::DIVIDER,
-            selected: Token::SELECTION,
+            selected: Token::HOVER, // TabularSurfaceRowBackgroundSelected = SubtleFillColorSecondary
         }
     }
 }
@@ -486,7 +486,12 @@ pub fn emit_property_grid(
             }
             // 重置按钮底色保持固定槽位：悬停仅改变其不透明度，不改变图元数量。
             //
-            let mut reset = surface(row.reset_rect.inflate(3.0), 4.0, tokens.header, desc.z + 3);
+            let mut reset = surface(
+                row.reset_rect.inflate(3.0),
+                4.0,                 // ControlCornerRadius = 4
+                Token::CONTROL_FILL, // ControlFillColorDefault
+                desc.z + 3,
+            );
             reset.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
                 reset.depth_u16(),
                 if state.hovered() == Some((row.section, row.row)) {

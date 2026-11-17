@@ -48,12 +48,21 @@ impl ComboItem {
     }
 }
 
-/// 弹出列表单行高度。
-pub const COMBO_ROW: f32 = 28.0;
-/// 弹出列表垂直内边距。
-pub const COMBO_PADDING: f32 = 6.0;
-/// 触发器圆角半径。
-pub const COMBO_RADIUS: f32 = 8.0;
+/// 弹出列表单行高度。对齐 WinUI `ComboBoxItemThemePadding = 11,5,11,7` 下的约 32px 行高。
+pub const COMBO_ROW: f32 = 32.0;
+/// 弹出列表垂直内边距。对齐 WinUI `ComboBoxItem` 模板的 `Margin="5,2,5,2"`。
+pub const COMBO_PADDING: f32 = 2.0;
+/// 触发器圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+pub const COMBO_RADIUS: f32 = 4.0;
+
+/// 弹出层圆角半径。对齐 WinUI `OverlayCornerRadius = 8`。
+const COMBO_POPUP_RADIUS: f32 = 8.0;
+
+/// 弹出列表项左右内缩。对齐 WinUI `ComboBoxItem` 模板的 `Margin="5,2,5,2"`。
+const COMBO_ROW_INSET: f32 = 5.0;
+
+/// 弹出列表项圆角。对齐 WinUI `ComboBoxItemCornerRadius = 3`。
+const COMBO_ITEM_RADIUS: f32 = 3.0;
 
 /// 组合框的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -398,11 +407,14 @@ pub fn emit_combobox_trigger(
     let mut payloads = Vec::with_capacity(glyphs.len());
 
     let fill = if control.disabled {
+        // ComboBoxBackgroundDisabled = ControlFillColorDisabled。
         Token::CONTROL_DISABLED_BG
     } else if control.phase == crate::PointerPhase::Hovered {
-        Token::CONTROL_HOVER
+        // ComboBoxBackgroundPointerOver = ControlFillColorSecondary。
+        Token::HOVER
     } else {
-        Token::INPUT_BG
+        // ComboBoxBackground = ControlFillColorDefault。
+        Token::CONTROL_FILL
     };
     primitives.push(surface(rect, COMBO_RADIUS, fill, desc.z));
     primitives.push(outlined(
@@ -412,9 +424,11 @@ pub fn emit_combobox_trigger(
         if control.disabled {
             Token::CONTROL_DISABLED_BORDER
         } else if control.focused || state.open {
+            // ComboBoxBackgroundBorderBrushFocused = FocusStrokeColorOuter。
             Token::OUTLINE_STRONG
         } else {
-            Token::OUTLINE
+            // ComboBoxBorderBrush = ControlElevationBorderBrush。
+            Token::CONTROL_STROKE
         },
         1.0,
         0.0,
@@ -422,7 +436,8 @@ pub fn emit_combobox_trigger(
     ));
 
     // 使用两条描边绘制展开箭头，因此框架无需依赖字形。
-    let cx = rect.max().x - 14.0;
+    // WinUI 的下拉图标是 12×12、Margin 右 14px，故中心在右沿内 20px。
+    let cx = rect.max().x - 20.0;
     let cy = rect.center().y;
     for (dx, dy) in [(-4.0, -1.0), (4.0, 1.0)] {
         primitives.push(instance(
@@ -490,10 +505,15 @@ pub fn emit_combobox_popup(
 ) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(4 + state.filtered.len() * 2 + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len());
-    primitives.push(surface(popup, 8.0, Token::OVERLAY_BG, desc.z));
+    primitives.push(surface(
+        popup,
+        COMBO_POPUP_RADIUS,
+        Token::OVERLAY_BG,
+        desc.z,
+    ));
     primitives.push(outlined(
         popup,
-        8.0,
+        COMBO_POPUP_RADIUS,
         Token::NONE,
         Token::CARD_BORDER,
         1.0,
@@ -503,9 +523,9 @@ pub fn emit_combobox_popup(
     for (row, index) in state.filtered.iter().take(desc.max_visible).enumerate() {
         let item = &desc.items[*index];
         let rect = Rect::new(
-            popup.origin.x + 4.0,
+            popup.origin.x + COMBO_ROW_INSET,
             popup.origin.y + COMBO_PADDING + row as f32 * COMBO_ROW,
-            popup.size.x - 8.0,
+            popup.size.x - COMBO_ROW_INSET * 2.0,
             COMBO_ROW,
         );
         let fill = if state.highlighted == Some(*index) {
@@ -515,7 +535,7 @@ pub fn emit_combobox_popup(
         } else {
             Token::NONE
         };
-        primitives.push(surface(rect, 6.0, fill, desc.z));
+        primitives.push(surface(rect, COMBO_ITEM_RADIUS, fill, desc.z));
         if item.disabled {
             primitives.push(surface(
                 Rect::new(

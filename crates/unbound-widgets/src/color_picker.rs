@@ -23,13 +23,20 @@ use crate::{ControlState, WidgetOutput};
 /// 控件边框与内部内容之间的内边距。
 pub const PICKER_PADDING: f32 = 10.0;
 /// 色相 / 透明度滑轨高度。
-pub const PICKER_TRACK: f32 = 10.0;
+///
+/// WinUI 的 `ColorPickerSlider` 轨道高 16px（官方 `ColorPickerSliderCornerRadius = 6`，
+/// 这里取整高半圆 8px，使 16px 轨道呈胶囊形）。
+pub const PICKER_TRACK: f32 = 16.0;
+/// 滑轨圆角半径。取轨道半高，形成 WinUI 滑轨的胶囊轮廓。
+pub const PICKER_TRACK_RADIUS: f32 = PICKER_TRACK * 0.5;
 /// 堆叠部件之间的间距。
 pub const PICKER_GAP: f32 = 8.0;
-/// 拾色器表面圆角半径。
-pub const PICKER_RADIUS: f32 = 8.0;
-/// 预设色块尺寸。
-pub const SWATCH_SIZE: f32 = 18.0;
+/// 拾色器表面圆角半径。对齐 WinUI `ControlCornerRadius = 4`（ColorPicker 模板）。
+pub const PICKER_RADIUS: f32 = 4.0;
+/// 预设色块 / 预览块尺寸。对齐 WinUI ColorPicker 的 32px 预览块。
+pub const SWATCH_SIZE: f32 = 32.0;
+/// 色块圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+pub const SWATCH_RADIUS: f32 = 4.0;
 
 /// 色相、饱和度、明度与透明度。色相范围为角度 `0..360`，其余为 `0..=1`。
 /// `0..=1`.
@@ -344,10 +351,14 @@ impl ColorPickerDesc {
     pub fn layout(&self) -> ColorPickerLayout {
         let content = self.rect.inflate(-PICKER_PADDING);
         let track = PICKER_TRACK;
+        // 色块按可用宽度换行，避免 32px 色块在窄面板里溢出右沿。
+        let stride = SWATCH_SIZE + PICKER_GAP;
+        let columns = (((content.size.x + PICKER_GAP) / stride).floor() as usize).max(1);
+        let rows = self.swatches.len().div_ceil(columns).max(1);
         let swatch_row = if self.swatches.is_empty() {
             0.0
         } else {
-            SWATCH_SIZE + PICKER_GAP
+            rows as f32 * SWATCH_SIZE + (rows as f32 - 1.0) * PICKER_GAP + PICKER_GAP
         };
         let sv_height = (content.size.y - track * 2.0 - PICKER_GAP * 2.0 - swatch_row).max(0.0);
         let sv = Rect::new(
@@ -370,9 +381,11 @@ impl ColorPickerDesc {
         );
         let swatches = (0..self.swatches.len())
             .map(|index| {
+                let column = index % columns;
+                let row = index / columns;
                 Rect::new(
-                    content.origin.x + index as f32 * (SWATCH_SIZE + PICKER_GAP),
-                    alpha.max().y + PICKER_GAP,
+                    content.origin.x + column as f32 * stride,
+                    alpha.max().y + PICKER_GAP + row as f32 * stride,
                     SWATCH_SIZE,
                     SWATCH_SIZE,
                 )
@@ -535,7 +548,8 @@ pub fn emit_color_picker(
         if control.disabled {
             Token::CONTROL_DISABLED_BORDER
         } else {
-            Token::CARD_BORDER
+            // WinUI `ColorPickerBorderBrush = ControlStrokeColorDefaultBrush`。
+            Token::CONTROL_STROKE
         },
         1.0,
         0.0,
@@ -545,12 +559,12 @@ pub fn emit_color_picker(
     // 面板与滑轨：使用硬件线性渐变呈现饱和度-明度（SV）色板、色相条与透明度棋盘格。
     crate::primitive::gradient_surface(
         layout.sv,
-        6.0,
+        PICKER_RADIUS,
         [0.0, 0.0],
         [1.0, 1.0],
         Token::PRIMARY,
         Token::SURFACE_SUNKEN,
-        Token::CARD_BORDER,
+        Token::CONTROL_STROKE,
         1.0,
         z,
         &mut primitives,
@@ -558,12 +572,12 @@ pub fn emit_color_picker(
     );
     crate::primitive::gradient_surface(
         layout.hue,
-        PICKER_TRACK * 0.5,
+        PICKER_TRACK_RADIUS,
         [0.0, 0.5],
         [1.0, 0.5],
         Token::PRIMARY,
         Token::ACCENT,
-        Token::CARD_BORDER,
+        Token::CONTROL_STROKE,
         1.0,
         z,
         &mut primitives,
@@ -571,9 +585,9 @@ pub fn emit_color_picker(
     );
     primitives.push(outlined(
         layout.alpha,
-        PICKER_TRACK * 0.5,
+        PICKER_TRACK_RADIUS,
         Token::SURFACE_SUNKEN,
-        Token::CARD_BORDER,
+        Token::CONTROL_STROKE,
         1.0,
         0.0,
         z,
@@ -622,12 +636,12 @@ pub fn emit_color_picker(
     ));
 
     for (token, swatch) in desc.swatches.iter().zip(&layout.swatches) {
-        primitives.push(surface(*swatch, 4.0, *token, z));
+        primitives.push(surface(*swatch, SWATCH_RADIUS, *token, z));
         primitives.push(outlined(
             *swatch,
-            4.0,
+            SWATCH_RADIUS,
             Token::NONE,
-            Token::CARD_BORDER,
+            Token::CONTROL_STROKE,
             1.0,
             0.0,
             z,

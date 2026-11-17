@@ -16,7 +16,19 @@ use crate::WidgetOutput;
 pub const CARD_ELEVATIONS: [f32; 5] = [0.0, 2.0, 6.0, 12.0, 20.0];
 
 /// 卡片默认圆角半径。
-pub const CARD_RADIUS: f32 = 10.0;
+///
+/// 对齐 WinUI `OverlayCornerRadius = 8,8,8,8`：卡片与浮层共用同一档容器圆角。
+pub const CARD_RADIUS: f32 = 8.0;
+
+/// 卡片描边宽度。
+///
+/// 对齐 WinUI `CardStrokeColorDefaultBrush` 的 1px 描边（`ExpanderHeaderBorderThickness = 1`）。
+pub const CARD_BORDER_WIDTH: f32 = 1.0;
+
+/// 卡片头部标题字号。
+///
+/// 对齐 WinUI 排版阶梯的正文档（`font_size::BODY = 14`），与 `Expander` 头部标题同档。
+pub const CARD_TITLE_FONT_SIZE: f32 = unbound_theme::typography::font_size::BODY;
 
 /// 将行转换为自动换行行的节点标志。
 pub const WRAP_FLAG: NodeFlags = NodeFlags::WRAP;
@@ -164,7 +176,7 @@ pub fn emit_card(desc: &CardDesc, tokens: CardTokens) -> WidgetOutput {
         desc.radius,
         tokens.surface,
         tokens.border,
-        1.0,
+        CARD_BORDER_WIDTH,
         desc.shadow(),
         desc.z,
     ));

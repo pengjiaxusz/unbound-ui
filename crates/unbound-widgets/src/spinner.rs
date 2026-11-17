@@ -9,6 +9,11 @@ use unbound_theme::Token;
 use crate::primitive::{outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
+/// 加载环描边宽度。对齐 WinUI `ProgressRingStrokeThickness = 4`。
+const SPINNER_STROKE: f32 = 4.0;
+/// 旋转圆点直径，与描边同宽。
+const SPINNER_DOT: f32 = 4.0;
+
 /// [`Spinner`] 加载环的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpinnerDesc {
@@ -54,6 +59,7 @@ pub struct LoadingOverlayDesc {
 #[must_use]
 pub fn emit_spinner(desc: &SpinnerDesc, state: ControlState) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(2);
+    // WinUI `ProgressRing` 的 MinWidth/MinHeight = 16。
     let sz = desc.rect.width().min(desc.rect.height()).max(16.0);
     let cx = desc.rect.origin.x + desc.rect.width() * 0.5;
     let cy = desc.rect.origin.y + desc.rect.height() * 0.5;
@@ -64,14 +70,15 @@ pub fn emit_spinner(desc: &SpinnerDesc, state: ControlState) -> WidgetOutput {
         sz * 0.5,
         Token::SURFACE_SUNKEN,
         Token::CARD_BORDER,
-        2.0,
+        SPINNER_STROKE,
         0.0,
         desc.z,
     ));
 
     let angle = desc.phase * core::f32::consts::TAU;
-    let orbit = (sz * 0.5 - 4.0).max(2.0);
-    let dot_sz = 6.0_f32.min(sz * 0.35);
+    // 圆点中心落在 4px 描边的中心线上。
+    let orbit = (sz * 0.5 - SPINNER_STROKE * 0.5).max(2.0);
+    let dot_sz = SPINNER_DOT.min(sz * 0.35);
     let dot_r = Rect::new(
         cx + angle.cos() * orbit - dot_sz * 0.5,
         cy + angle.sin() * orbit - dot_sz * 0.5,
@@ -113,7 +120,8 @@ pub fn emit_loading_overlay(desc: &LoadingOverlayDesc, state: ControlState) -> W
     );
     primitives.push(scrim);
 
-    let spin_sz = desc.rect.width().min(desc.rect.height()).clamp(16.0, 44.0);
+    // 小/大两档 20/32；WinUI `ProgressRing` 的默认 Width/Height = 32。
+    let spin_sz = desc.rect.width().min(desc.rect.height()).clamp(20.0, 32.0);
     let spin_rect = Rect::new(
         desc.rect.origin.x + (desc.rect.width() - spin_sz) * 0.5,
         desc.rect.origin.y + (desc.rect.height() - spin_sz) * 0.5,

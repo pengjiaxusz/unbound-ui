@@ -21,6 +21,10 @@ use crate::{ControlState, WidgetDesc, WidgetOutput};
 /// 菜单的命中测试层级。
 pub const MENU_LAYER: u8 = PORTAL_LAYER;
 /// 默认行高。
+///
+/// WinUI `MenuFlyoutItemThemePadding = 11,8,11,9` 叠加 20px 行高即 37px；
+/// 这里沿用 30px，因为集成测试 `tests/menu_submenu.rs` 以 20 行 × 30 = 600
+/// 锁定了菜单内容高度，调整需同步该测试（不在本次允许修改的文件范围内）。
 pub const MENU_ITEM_HEIGHT: f32 = 30.0;
 const MENU_SHADOW: f32 = 18.0;
 /// 下拉框选中项左侧强调条的宽度。
@@ -160,6 +164,7 @@ impl MenuDesc {
             rect,
             items,
             item_height: MENU_ITEM_HEIGHT,
+            // `MenuFlyoutPresenter` 的 `CornerRadius = OverlayCornerRadius = 8`。
             radius: 8.0,
             z: 905,
             viewport: None,
@@ -521,6 +526,7 @@ pub fn emit_menu(
             state.open_path.first() == Some(&index)
         };
         let highlighted = active_row && item.selectable();
+        // `MenuFlyoutItemMargin = 4,2,4,2`：高亮胶囊与菜单边缘留 4 / 2。
         let pill = Rect::new(
             row.origin.x + 4.0,
             row.origin.y + 2.0,
@@ -529,9 +535,11 @@ pub fn emit_menu(
         );
         let mut slot = surface(
             pill,
-            5.0,
+            // `MenuFlyoutItem` 的 `CornerRadius = ControlCornerRadius = 4`。
+            4.0,
+            // `MenuFlyoutItemBackgroundPointerOver` = SubtleFillColorSecondary。
             if highlighted {
-                Token::CONTROL_HOVER
+                Token::HOVER
             } else {
                 Token::NONE
             },
@@ -578,7 +586,8 @@ pub fn emit_menu(
         rect,
         radii,
         Token::NONE,
-        Token::OUTLINE,
+        // `MenuFlyoutPresenterBorderBrush` = SurfaceStrokeColorFlyout。
+        Token::CARD_BORDER,
         1.0,
         0.0,
         PrimType::RoundedRect,

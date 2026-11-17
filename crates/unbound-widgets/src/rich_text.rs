@@ -17,7 +17,7 @@ use unbound_math::Rect;
 use unbound_text::{GlyphQuad, TextSpan, TextStyle};
 use unbound_theme::Token;
 
-use crate::primitive::{glyphs, surface};
+use crate::primitive::{glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
@@ -25,6 +25,13 @@ use crate::{ControlState, WidgetOutput};
 pub const RICH_TEXT_SIZE: f32 = 14.0;
 /// 应用于标题层级的缩放比例。
 pub const HEADING_SCALE: [f32; 6] = [1.9, 1.6, 1.4, 1.25, 1.15, 1.05];
+
+/// 正文行高：14px 正文配 20px，与只读代码块的 `CODE_LINE_HEIGHT` 保持同一节奏。
+const RICH_LINE_HEIGHT: f32 = 20.0;
+/// 块级表面圆角，对齐 WinUI `ControlCornerRadius`（4）。
+const BLOCK_RADIUS: f32 = 4.0;
+/// 代码块描边宽度，对齐 WinUI `TextControlBorderThemeThickness`（1）。
+const BLOCK_BORDER: f32 = 1.0;
 
 /// Markdown 块的类型。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,15 +49,14 @@ pub enum BlockKind {
 }
 
 impl BlockKind {
-    /// 块的行高倍率。
+    /// 块的行高（逻辑像素）。
     #[must_use]
     pub fn line_height(self) -> f32 {
         match self {
             Self::Heading(level) => {
                 RICH_TEXT_SIZE * HEADING_SCALE[(level.clamp(1, 6) - 1) as usize] * 1.25
             }
-            Self::Code => RICH_TEXT_SIZE * 1.45,
-            _ => RICH_TEXT_SIZE * 1.5,
+            Self::Code | Self::Paragraph | Self::Bullet | Self::Quote => RICH_LINE_HEIGHT,
         }
     }
 
@@ -365,7 +371,21 @@ pub fn emit_rich_text(
     let mut payloads = Vec::with_capacity(rich_glyphs.len());
     for (block, rect) in document.blocks.iter().zip(layout) {
         if let Some(fill) = block.kind.background() {
-            primitives.push(surface(*rect, 6.0, fill, desc.z));
+            // 围栏代码块与代码容器同规格：4px 圆角 + 1px `ControlStrokeColorDefault` 描边；
+            // 引用块只是次级表面，保持无描边。
+            if block.kind == BlockKind::Code {
+                primitives.push(outlined(
+                    *rect,
+                    BLOCK_RADIUS,
+                    fill,
+                    Token::CONTROL_STROKE,
+                    BLOCK_BORDER,
+                    0.0,
+                    desc.z,
+                ));
+            } else {
+                primitives.push(surface(*rect, BLOCK_RADIUS, fill, desc.z));
+            }
         }
         if block.kind == BlockKind::Quote {
             primitives.push(surface(

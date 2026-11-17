@@ -72,12 +72,12 @@ pub fn emit_timeline(
     let hovered = state.phase == PointerPhase::Hovered;
     primitives.push(outlined(
         desc.rect,
-        6.0,
-        Token::SURFACE_SUNKEN,
+        4.0,            // ControlCornerRadius = 4
+        Token::CARD_BG, // CardBackgroundFillColorDefault
         if hovered || state.focused {
             Token::FOCUS_RING
         } else {
-            Token::CARD_BORDER
+            Token::CARD_BORDER // CardStrokeColorDefault
         },
         1.0,
         0.0,
@@ -90,7 +90,12 @@ pub fn emit_timeline(
         2.0,
         (desc.rect.height() - 20.0).max(4.0),
     );
-    primitives.push(surface(rail_r, 1.0, Token::CARD_BORDER, desc.z + 1));
+    primitives.push(surface(
+        rail_r,
+        1.0,
+        Token::DIVIDER, // DividerStrokeColorDefault
+        desc.z + 1,
+    ));
 
     let row_h = ((desc.rect.height() - 16.0) / MAX_TIMELINE_NODES as f32).max(14.0);
     for i in 0..MAX_TIMELINE_NODES {
@@ -121,13 +126,13 @@ pub fn emit_timeline(
         );
         let mut card = outlined(
             card_r,
-            4.0,
+            4.0, // ControlCornerRadius = 4
             if hovered {
-                Token::SURFACE_RAISED
+                Token::HOVER // SubtleFillColorSecondary
             } else {
-                Token::SURFACE
+                Token::CARD_BG // CardBackgroundFillColorDefault
             },
-            Token::CARD_BORDER,
+            Token::CARD_BORDER, // CardStrokeColorDefault
             1.0,
             0.0,
             desc.z + 1,
@@ -140,7 +145,7 @@ pub fn emit_timeline(
 
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        4.0, // ControlCornerRadius = 4
         Token::FOCUS_RING,
         2.0,
         desc.z + 3,

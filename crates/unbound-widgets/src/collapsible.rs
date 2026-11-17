@@ -98,15 +98,16 @@ pub fn emit_collapsible(
     };
     primitives.push(outlined(
         desc.rect,
-        6.0,
-        Token::SURFACE,
+        4.0,            // ControlCornerRadius = 4
+        Token::CARD_BG, // CardBackgroundFillColorDefault
         border,
         1.0,
         0.0,
         desc.z,
     ));
 
-    let header_h = 32.0_f32.min(desc.rect.height());
+    // ExpanderMinHeight = 48
+    let header_h = 48.0_f32.min(desc.rect.height());
     let header_r = Rect::new(
         desc.rect.origin.x,
         desc.rect.origin.y,
@@ -115,22 +116,20 @@ pub fn emit_collapsible(
     );
     primitives.push(surface(
         header_r,
-        6.0,
+        4.0, // ControlCornerRadius = 4
         if hovered {
-            Token::SURFACE_RAISED
+            Token::HOVER // SubtleFillColorSecondary
         } else {
-            Token::SURFACE_SUNKEN
+            Token::CARD_BG // CardBackgroundFillColorDefault
         },
         desc.z + 1,
     ));
 
-    let chev_cx = header_r.max().x - 16.0;
+    // ExpanderChevronButtonSize = 32，ExpanderChevronMargin = 20,0,8,0。
+    let chev_cx = header_r.max().x - 8.0 - 16.0;
     let chev_cy = header_r.origin.y + header_h * 0.5;
-    let chev_col = if desc.open {
-        Token::PRIMARY
-    } else {
-        Token::TEXT_SECONDARY
-    };
+    // ExpanderChevronForeground = TextFillColorPrimary（开关两态同色）。
+    let chev_col = Token::TEXT_PRIMARY;
     if desc.open {
         curve_stroke(
             [chev_cx - 4.0, chev_cy - 2.0],
@@ -178,7 +177,7 @@ pub fn emit_collapsible(
         (desc.rect.width() - 4.0).max(1.0),
         body_h.max(1.0),
     );
-    let mut body = surface(body_r, 4.0, Token::SURFACE_SUNKEN, desc.z + 1);
+    let mut body = surface(body_r, 4.0, Token::CARD_BG, desc.z + 1);
     if desc.progress <= 0.01 {
         body.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(body.depth_u16(), 0.0);
     }
@@ -186,7 +185,7 @@ pub fn emit_collapsible(
 
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        4.0, // ControlCornerRadius = 4
         Token::FOCUS_RING,
         2.0,
         desc.z + 3,

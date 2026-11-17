@@ -16,11 +16,11 @@ use crate::primitive::{instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// 工具栏高度。
-pub const TOOLBAR_HEIGHT: f32 = 44.0;
-/// 单个工具按钮尺寸。
+/// 工具栏高度。对齐 WinUI `AppBarThemeCompactHeight = 48`（`CommandBar_themeresources.xaml`）。
+pub const TOOLBAR_HEIGHT: f32 = 48.0;
+/// 单个工具按钮尺寸。对齐 WinUI `AppBarButton` 32 × 32。
 pub const TOOL_BUTTON: f32 = 32.0;
-/// 按钮间距。
+/// 按钮间距。对齐 WinUI CommandBar 分组间距 4。
 pub const TOOL_GAP: f32 = 4.0;
 /// 缩放读数区域宽度。
 pub const ZOOM_WIDTH: f32 = 72.0;
@@ -28,6 +28,13 @@ pub const ZOOM_WIDTH: f32 = 72.0;
 pub const TOOLBAR_BLUR: f32 = 16.0;
 /// 缩放比例上下限。
 pub const ZOOM_RANGE: (f32, f32) = (0.05, 64.0);
+
+/// 浮动工具栏圆角。对齐 WinUI `OverlayCornerRadius = 8`（浮层容器）。
+const TOOLBAR_RADIUS: f32 = 8.0;
+/// 按钮与缩放读数圆角。对齐 WinUI `ControlCornerRadius = 4`。
+const BUTTON_RADIUS: f32 = 4.0;
+/// 分隔线上下留白。对齐 WinUI `AppBarSeparatorMargin = 2,8,2,8`。
+const SEPARATOR_MARGIN: f32 = 8.0;
 
 /// 画布工具类型。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -155,21 +162,25 @@ impl CanvasToolbarDesc {
     }
 
     /// 位于缩放读数左半部分的自适应按钮。
+    ///
+    /// 宽度对齐 WinUI `AppBarButton` 的 32 × 32；高度随缩放读数撑满工具栏内高。
     #[must_use]
     pub fn fit_rect(&self) -> Rect {
         let zoom = self.zoom_rect();
-        Rect::new(zoom.origin.x, zoom.origin.y, 24.0, zoom.size.y)
+        Rect::new(zoom.origin.x, zoom.origin.y, TOOL_BUTTON, zoom.size.y)
     }
 
     /// 分隔线。
+    ///
+    /// WinUI `AppBarSeparatorMargin = 2,8,2,8`：上下各留 8，宽度 1。
     #[must_use]
     pub fn separator_rect(&self) -> Rect {
         let last = self.tool_rect(CanvasTool::ALL[CanvasTool::ALL.len() - 1]);
         Rect::new(
             last.max().x + TOOL_GAP,
-            self.rect().origin.y + 10.0,
+            self.rect().origin.y + SEPARATOR_MARGIN,
             1.0,
-            TOOLBAR_HEIGHT - 20.0,
+            (TOOLBAR_HEIGHT - SEPARATOR_MARGIN * 2.0).max(0.0),
         )
     }
 }
@@ -240,7 +251,7 @@ pub fn emit_canvas_toolbar(
     let mut primitives: Vec<GpuPrimitiveInstance> = vec![
         instance(
             rect,
-            [10.0; 4],
+            [TOOLBAR_RADIUS; 4],
             Token::NONE,
             Token::NONE,
             0.0,
@@ -249,7 +260,16 @@ pub fn emit_canvas_toolbar(
             SubElement::Shadow,
             desc.z,
         ),
-        outlined(rect, 10.0, Token::HUD_BG, Token::OUTLINE, 1.0, 0.0, desc.z),
+        // 浮层圆角 `OverlayCornerRadius = 8`，1px 描边对齐浮动工具条表面。
+        outlined(
+            rect,
+            TOOLBAR_RADIUS,
+            Token::HUD_BG,
+            Token::OUTLINE,
+            1.0,
+            0.0,
+            desc.z,
+        ),
     ];
 
     let mut tools = Vec::with_capacity(CanvasTool::ALL.len());
@@ -260,9 +280,11 @@ pub fn emit_canvas_toolbar(
         // 每个工具在池中始终占有一个槽位：激活工具绘制主填充色，
         // 其余工具保留悬停底色，悬停仅改变其不透明度，因此图元序列永不重排。
         let slot = if active {
-            surface(button, 7.0, Token::PRIMARY, desc.z + 1)
+            surface(button, BUTTON_RADIUS, Token::PRIMARY, desc.z + 1)
         } else {
-            let mut wash = surface(button, 7.0, Token::CONTROL_HOVER, desc.z + 1);
+            // 悬停底色对齐 WinUI `AppBarButtonBackgroundPointerOver`
+            // （`SubtleFillColorSecondary`，即 HOVER 令牌）。
+            let mut wash = surface(button, BUTTON_RADIUS, Token::HOVER, desc.z + 1);
             wash.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
                 wash.depth_u16(),
                 if hovered { 1.0 } else { 0.0 },
@@ -283,10 +305,11 @@ pub fn emit_canvas_toolbar(
         Token::OUTLINE,
         desc.z + 1,
     ));
+    // 缩放读数是一枚控件表面：`ControlFillColorDefault` + `ControlCornerRadius = 4`。
     primitives.push(surface(
         desc.zoom_rect(),
-        7.0,
-        Token::CONTROL_HOVER,
+        BUTTON_RADIUS,
+        Token::CONTROL_FILL,
         desc.z + 1,
     ));
 
