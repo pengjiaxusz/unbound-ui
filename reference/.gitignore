@@ -1,0 +1,6 @@
+# Reference checkouts are research material, never source of truth.
+# Only the manifest, the clone script and the notes are tracked.
+*
+!.gitignore
+!README.md
+!clone.ps1
