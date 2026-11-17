@@ -1,16 +1,16 @@
-# scripts/doctor.ps1 - 项目环境自检.
+# .pengj-templates/scripts/doctor.ps1 - 项目环境自检.
 #
-# 只检查所选模板层实际用到的工具，再按文件名顺序运行 scripts/doctor.d/*.ps1
+# 只检查所选模板层实际用到的工具，再按文件名顺序运行 .pengj-templates/scripts/doctor.d/*.ps1
 # 下的所有自定义检查。
 #
 # 用法：
-#   pwsh -NoProfile -File scripts/doctor.ps1                  仅输出报告
-#   pwsh -NoProfile -File scripts/doctor.ps1 --fix            同时激活提交钩子
-#   pwsh -NoProfile -File scripts/doctor.ps1 --install-cli    下载并安装 pengj-templates-cli
+#   pwsh -NoProfile -File .pengj-templates/scripts/doctor.ps1                  仅输出报告
+#   pwsh -NoProfile -File .pengj-templates/scripts/doctor.ps1 --fix            同时激活提交钩子
+#   pwsh -NoProfile -File .pengj-templates/scripts/doctor.ps1 --install-cli    下载并安装 pengj-templates-cli
 #                                                             （唯一会联网的步骤；不会被 --fix 隐含）
 #   （just 配方在两个平台上都原样转发 `just doctor --fix`）
 #
-# 自定义检查：把 *.ps1 放进 scripts/doctor.d/。每个脚本从项目根目录运行，
+# 自定义检查：把 *.ps1 放进 .pengj-templates/scripts/doctor.d/。每个脚本从项目根目录运行，
 # DOCTOR_ROOT 指向项目根目录，带 --fix 时设置 DOCTOR_FIX=1。
 # 退出码 0 为通过，非 0 为失败；输出按原样显示。
 
@@ -23,11 +23,11 @@ foreach ($arg in $args) {
         "--install-cli" { $InstallCli = $true }
         "-installcli" { $InstallCli = $true }
         "-h" {
-            Write-Host "用法：pwsh -NoProfile -File scripts/doctor.ps1 [--fix] [--install-cli]"
+            Write-Host "用法：pwsh -NoProfile -File .pengj-templates/scripts/doctor.ps1 [--fix] [--install-cli]"
             exit 0
         }
         "--help" {
-            Write-Host "用法：pwsh -NoProfile -File scripts/doctor.ps1 [--fix] [--install-cli]"
+            Write-Host "用法：pwsh -NoProfile -File .pengj-templates/scripts/doctor.ps1 [--fix] [--install-cli]"
             exit 0
         }
         default {
@@ -192,7 +192,7 @@ if ($inside) {
             Report-Fail "无法激活提交钩子；请运行：git config core.hooksPath .githooks"
         }
     } else {
-        Report-Warn "提交钩子未激活；请运行 'pwsh -NoProfile -File scripts/doctor.ps1 --fix' 或 'git config core.hooksPath .githooks'"
+        Report-Warn "提交钩子未激活；请运行 'pwsh -NoProfile -File .pengj-templates/scripts/doctor.ps1 --fix' 或 'git config core.hooksPath .githooks'"
     }
 } else {
     Report-Warn "当前不是 git 工作树；跳过提交钩子检查"
@@ -228,7 +228,7 @@ if (Test-Path ".agents") {
 # --- custom checks ---------------------------------------------------------
 
 $custom = 0
-$customDir = Join-Path $root "scripts/doctor.d"
+$customDir = Join-Path $root ".pengj-templates/scripts/doctor.d"
 if (Test-Path $customDir) {
     Get-ChildItem -Path $customDir -Filter "*.ps1" | Sort-Object Name | ForEach-Object {
         $custom++
@@ -245,7 +245,7 @@ if (Test-Path $customDir) {
     }
 }
 if ($custom -eq 0) {
-    Write-Host "[doctor] 自定义检查：无（在 scripts/doctor.d/ 下添加 *.ps1 脚本即可扩展本检查）"
+    Write-Host "[doctor] 自定义检查：无（在 .pengj-templates/scripts/doctor.d/ 下添加 *.ps1 脚本即可扩展本检查）"
 }
 
 Write-Host "[doctor] 共 $script:checks 项检查：$script:errors 个错误，$script:warnings 个警告"

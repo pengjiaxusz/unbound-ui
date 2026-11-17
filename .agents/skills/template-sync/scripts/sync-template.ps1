@@ -165,9 +165,9 @@ function Invoke-Git {
 function Get-DefaultCommitMessage {
     param([string]$ProjectDir)
     $scope = "template"
-    # The commit gate keeps the scope whitelist in `.gate.toml`:
+    # The commit gate keeps the scope whitelist in `.pengj-templates/gate.toml`:
     # `commit.scopes = []` means "any scope allowed".
-    $gateConfigPath = Join-Path $ProjectDir ".gate.toml"
+    $gateConfigPath = Join-Path $ProjectDir ".pengj-templates/gate.toml"
     if (Test-Path $gateConfigPath) {
         $config = Get-Content $gateConfigPath -Raw
         if ($config -match "commit\.scopes\s*=\s*\[(?<scopes>[^\]]*)\]") {
@@ -186,7 +186,7 @@ function Get-DefaultCommitMessage {
     # Commit language axis: follow the applied project's commit_zh, otherwise the
     # commit-msg hook rejects the generated commit subject.
     $commitZh = $true
-    $manifestPath = Join-Path $ProjectDir ".pengj-templates.json"
+    $manifestPath = Join-Path $ProjectDir ".pengj-templates/manifest.json"
     if (Test-Path $manifestPath) {
         try {
             $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
@@ -229,10 +229,10 @@ foreach ($rawProj in $targetProjects) {
         continue
     }
     $projDir = (Resolve-Path $rawProj).Path
-    $manifestPath = Join-Path $projDir ".pengj-templates.json"
+    $manifestPath = Join-Path $projDir ".pengj-templates/manifest.json"
 
     if (-not (Test-Path $manifestPath)) {
-        Write-Warning "Project unmanaged (missing .pengj-templates.json), skipping: $projDir"
+        Write-Warning "Project unmanaged (missing .pengj-templates/manifest.json), skipping: $projDir"
         continue
     }
 
@@ -318,7 +318,7 @@ foreach ($rawProj in $targetProjects) {
 
     $stagedFiles = @()
     # Selective staging red line: only git add files modified by update and manifest
-    $candidateFiles = @($updatedFiles + $createdFiles + @(".pengj-templates.json")) | Select-Object -Unique
+    $candidateFiles = @($updatedFiles + $createdFiles + @(".pengj-templates/manifest.json")) | Select-Object -Unique
     foreach ($rel in $candidateFiles) {
         $fullPath = Join-Path $projDir $rel
         if (Test-Path $fullPath) {

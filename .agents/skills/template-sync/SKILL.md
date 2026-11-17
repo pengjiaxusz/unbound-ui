@@ -46,7 +46,7 @@ cargo run -p pengj-templates-cli -- adopt --dir <目标项目目录> --layers <�
 
 ### 1. 状态诊断与模式判定
 
-检查目标项目根目录是否存在 `.pengj-templates.json`：
+检查目标项目根目录是否存在 `.pengj-templates/manifest.json`：
 
 - **巡检排查**：需检查下游是否出现私自修改脚本或违规漂移，进入 **Audit 模式（步骤 2C）**。
 - **存在 manifest**：说明项目已纳管，直接进入 **Update 模式（步骤 2A）**。
@@ -140,7 +140,7 @@ cargo run -p pengj-templates-cli -- audit --dir <目标项目目录> --diff
 - **`conflicted`（无受管块冲突）**：
   - 查看冲突路径与原因，按需手动将模板变更合入对应文件。
 - **配置与工具链接线核验**：
-  - 检查 `gate` 层是否按预期落地（`.gate.toml` 与 `.githooks/*`），以及 `.vscode/settings.json`、`.cargo/config.toml` 合并是否符合预期。
+  - 检查 `gate` 层是否按预期落地（`.pengj-templates/gate.toml` 与 `.githooks/*`），以及 `.vscode/settings.json`、`.cargo/config.toml` 合并是否符合预期。
 
 ### 4. 验证并自动提交被应用的项目
 
@@ -154,8 +154,8 @@ cargo run -p pengj-templates-cli -- audit --dir <目标项目目录> --diff
 2. **自动提交策略与精准暂存红线**：
    - **默认必须提交**：`update` / `adopt` 成功后，Agent 必须在**被应用的项目**中提交本次模板同步并 `git push`，不得把已应用的模板更新留在工作区等待用户确认——「每次改了都不提交」正是要消除的旧行为。
    - **提交正确的仓库**：上述提交属于下游被应用的项目；上游 `pengj-templates` 仓库自身的改动（模板源、引擎、文档）在该仓库单独提交，两者绝不混在一起。
-   - **精准暂存（红线）**：**只能单独 `git add <file>` 本次同步报告里的 `[更新]` / `[新增]` 路径与 `.pengj-templates.json`**，**严禁 `git add .` 或 `git commit -a`**，防止误将工作区既有的无关改动或脏文件一并带入提交。
-   - **提交信息语言跟随目标项目**：读取目标项目 `.pengj-templates.json` 的 `options.commit_zh`；为 `true` 时标题必须中文（如 `chore: 同步分层模板更新`），为 `false` 时必须英文（如 `chore: sync layered template updates`），commit-msg 钩子会强制校验。
+   - **精准暂存（红线）**：**只能单独 `git add <file>` 本次同步报告里的 `[更新]` / `[新增]` 路径与 `.pengj-templates/manifest.json`**，**严禁 `git add .` 或 `git commit -a`**，防止误将工作区既有的无关改动或脏文件一并带入提交。
+   - **提交信息语言跟随目标项目**：读取目标项目 `.pengj-templates/manifest.json` 的 `options.commit_zh`；为 `true` 时标题必须中文（如 `chore: 同步分层模板更新`），为 `false` 时必须英文（如 `chore: sync layered template updates`），commit-msg 钩子会强制校验。
    - **仅在用户明确要求不提交时豁免**：极速脚本传 `-NoCommit` / `-NoPush`，或手动跳过本步骤。
 
 <!-- PENGJ_TEMPLATE_END -->

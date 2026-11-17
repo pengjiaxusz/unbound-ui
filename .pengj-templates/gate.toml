@@ -1,5 +1,5 @@
 # PENGJ_TEMPLATE_START
-# .gate.toml —— 提交门禁的配置
+# .pengj-templates/gate.toml —— 提交门禁的配置
 #
 # 【本块由模板托管】update 只替换 START/END 之间的说明，块以下的配置值归项目所有，
 # 永不被覆盖。若你把本块整段删掉，update 会重新置顶插入一份并提示你复核残留的旧说明。

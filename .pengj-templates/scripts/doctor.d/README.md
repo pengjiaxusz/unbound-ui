@@ -1,6 +1,6 @@
 # 自定义环境检查
 
-`scripts/doctor.sh`（Unix）与 `scripts/doctor.ps1`（Windows）先检查所选模板层
+`.pengj-templates/scripts/doctor.sh`（Unix）与 `.pengj-templates/scripts/doctor.ps1`（Windows）先检查所选模板层
 实际用到的工具，再按文件名顺序运行本目录下的每个脚本。
 
 ## 契约
@@ -16,7 +16,7 @@
 请让每个脚本自成一体。除非 `DOCTOR_FIX=1`，不要安装任何东西；只打印一行
 简短说明，描述检查发现了什么。
 
-## 示例（`scripts/doctor.d/10-cmake.sh`）
+## 示例（`.pengj-templates/scripts/doctor.d/10-cmake.sh`）
 
 ```sh
 #!/bin/sh
