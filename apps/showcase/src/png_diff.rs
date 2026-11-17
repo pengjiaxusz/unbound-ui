@@ -1,7 +1,7 @@
 //! 像素一致性差分器：官方 WinUI 参考图 vs unbound-ui 渲染图。
 //!
 //! 输入是 `tools/winui-reference/captures`（`<控件>_<状态>_<主题>.png` 与同名 JSON），
-//! 输出是本框架按相同边界、相同画布渲染的 PNG，以及分区指标、热力图与 HTML 报告。
+//! 输出是本框架按相同边界、相同画布渲染的 PNG，以及分区指标、热力图与 JSON 报告。
 //!
 //! 判定口径（与项目约定一致）：
 //! * 几何——内容包围盒必须与参考图完全一致（阴影会一并计入包围盒）；
@@ -93,7 +93,7 @@ pub fn run_batch(reference_dir: &str, out_dir: &str) -> Result<BatchSummary, Str
     let ours_dir = out_root.join("ours");
     let heat_dir = out_root.join("heat");
     // 参考截图一并复制进产物目录：框架内报告页只依赖 `target/parity`，
-    // 不再需要回头读取采集目录，HTML 报告也能独立分发。
+    // 不再需要回头读取采集目录。
     let reference_out = out_root.join("reference");
     std::fs::create_dir_all(&ours_dir).map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&heat_dir).map_err(|error| error.to_string())?;
@@ -191,7 +191,7 @@ pub fn run_batch(reference_dir: &str, out_dir: &str) -> Result<BatchSummary, Str
         cases,
         out_dir: out_root.to_path_buf(),
     };
-    write_reports(&summary, &ours_dir, &heat_dir, &reference_out)?;
+    write_report(&summary)?;
     Ok(summary)
 }
 
@@ -307,12 +307,7 @@ fn heat_color(delta: f64) -> [u8; 3] {
     color
 }
 
-fn write_reports(
-    summary: &BatchSummary,
-    ours_dir: &Path,
-    heat_dir: &Path,
-    reference_dir: &Path,
-) -> Result<(), String> {
+fn write_report(summary: &BatchSummary) -> Result<(), String> {
     let json_path = summary.out_dir.join("report.json");
     let mut json = String::from("{\n  \"cases\": [\n");
     for (index, case) in summary.cases.iter().enumerate() {
@@ -343,128 +338,7 @@ fn write_reports(
         );
     }
     json.push_str("  ]\n}\n");
-    std::fs::write(&json_path, json).map_err(|error| error.to_string())?;
-
-    let html_path = summary.out_dir.join("report.html");
-    std::fs::write(
-        &html_path,
-        render_html(summary, ours_dir, heat_dir, reference_dir),
-    )
-    .map_err(|error| error.to_string())
-}
-
-fn render_html(
-    summary: &BatchSummary,
-    ours_dir: &Path,
-    heat_dir: &Path,
-    reference_dir: &Path,
-) -> String {
-    let mut html = String::from(
-        "<!doctype html><meta charset=\"utf-8\"><title>unbound-ui parity</title>\n\
-         <style>\n\
-         body{font:13px/1.5 'Segoe UI',sans-serif;margin:24px;background:#fafafa;color:#1a1a1a}\n\
-         h1{font-size:20px;margin:0 0 4px} .meta{color:#5c5c5c;margin-bottom:20px}\n\
-         table{border-collapse:collapse;margin-bottom:28px} th,td{padding:4px 10px;border-bottom:1px solid #e3e3e3;text-align:right}\n\
-         th:first-child,td:first-child{text-align:left} .pass{color:#0f7b0f;font-weight:600} .fail{color:#c42b1c;font-weight:600}\n\
-         .case{margin:18px 0;padding:12px;background:#fff;border:1px solid #e3e3e3;border-radius:6px}\n\
-         .case h2{font-size:14px;margin:0 0 8px} .shots{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}\n\
-         figure{margin:0} figcaption{color:#5c5c5c;font-size:11px;margin-top:2px}\n\
-         img{image-rendering:pixelated;border:1px solid #d6d6d6;background:#fff}\n\
-         </style>\n",
-    );
-    let _ = writeln!(
-        html,
-        "<h1>unbound-ui parity report</h1><div class=\"meta\">{} / {} cases pass · mean ΔE2000 ≤ {:.1}, p99 ≤ {:.1}, bbox ±1 px</div>",
-        summary.passed(),
-        summary.cases.len(),
-        MEAN_LIMIT,
-        P99_LIMIT
-    );
-
-    html.push_str("<table><tr><th>case</th><th>mean ΔE</th><th>p95</th><th>p99</th><th>max</th><th>&gt;3 ratio</th><th>bbox Δ</th><th>intrinsic</th><th>status</th></tr>\n");
-    for case in &summary.cases {
-        let delta: Vec<i64> = (0..4)
-            .map(|index| case.ours_bbox[index] - case.reference_bbox[index])
-            .collect();
-        let status = if case.passes() {
-            "<span class=\"pass\">pass</span>"
-        } else {
-            "<span class=\"fail\">fail</span>"
-        };
-        let _ = writeln!(
-            html,
-            "<tr><td>{}</td><td>{:.2}</td><td>{:.2}</td><td>{:.2}</td><td>{:.1}</td><td>{:.2}%</td><td>{:?}</td><td>{:.0}×{:.0} (ref {:.0}×{:.0})</td><td>{}</td></tr>",
-            case.name,
-            case.mean_de,
-            case.p95_de,
-            case.p99_de,
-            case.max_de,
-            case.over_limit_ratio * 100.0,
-            delta,
-            case.intrinsic[0],
-            case.intrinsic[1],
-            case.reference_size[0],
-            case.reference_size[1],
-            status,
-        );
-    }
-    html.push_str("</table>\n");
-
-    for case in &summary.cases {
-        let reference_png = reference_dir.join(format!("{}.png", case.name));
-        let ours_png = ours_dir.join(format!("{}.png", case.name));
-        let heat_png = heat_dir.join(format!("{}.png", case.name));
-        let _ = writeln!(
-            html,
-            "<div class=\"case\"><h2>{name} · mean {mean:.2} · p99 {p99:.2} · bbox {bbox:?}</h2><div class=\"shots\">\
-             <figure><img src=\"{ref_url}\" width=\"420\" height=\"160\"><figcaption>WinUI 3 reference</figcaption></figure>\
-             <figure><img src=\"{ours_url}\" width=\"420\" height=\"160\"><figcaption>unbound-ui</figcaption></figure>\
-             <figure><img src=\"{heat_url}\" width=\"420\" height=\"160\"><figcaption>ΔE heatmap</figcaption></figure>\
-             </div></div>",
-            name = case.name,
-            mean = case.mean_de,
-            p99 = case.p99_de,
-            bbox = case.ours_bbox,
-            ref_url = png_data_url(&reference_png),
-            ours_url = png_data_url(&ours_png),
-            heat_url = png_data_url(&heat_png),
-        );
-    }
-
-    html
-}
-
-/// 把 PNG 内联成 data URI：报告单文件可移动，浏览器不会拦截本地子资源。
-fn png_data_url(path: &Path) -> String {
-    match std::fs::read(path) {
-        Ok(bytes) => format!("data:image/png;base64,{}", base64(&bytes)),
-        Err(error) => format!("missing: {error}"),
-    }
-}
-
-fn base64(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut encoded = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let first = chunk[0];
-        let second = chunk.get(1).copied().unwrap_or(0);
-        let third = chunk.get(2).copied().unwrap_or(0);
-        encoded.push(char::from(ALPHABET[(first >> 2) as usize]));
-        encoded.push(char::from(
-            ALPHABET[(((first & 0b11) << 4) | (second >> 4)) as usize],
-        ));
-        encoded.push(if chunk.len() > 1 {
-            char::from(ALPHABET[(((second & 0b1111) << 2) | (third >> 6)) as usize])
-        } else {
-            '='
-        });
-        encoded.push(if chunk.len() > 2 {
-            char::from(ALPHABET[(third & 0b11_1111) as usize])
-        } else {
-            '='
-        });
-    }
-    encoded
+    std::fs::write(&json_path, json).map_err(|error| error.to_string())
 }
 
 // ============================================================================

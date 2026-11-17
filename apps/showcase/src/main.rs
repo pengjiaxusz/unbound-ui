@@ -1653,7 +1653,7 @@ fn main() {
                     "parity: {}/{} cases pass · {}",
                     summary.passed(),
                     summary.cases.len(),
-                    summary.out_dir.join("report.html").display()
+                    summary.out_dir.join("report.json").display()
                 );
                 for case in summary.cases.iter().filter(|case| !case.passes()).take(8) {
                     println!(
