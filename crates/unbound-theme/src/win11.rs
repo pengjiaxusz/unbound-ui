@@ -102,7 +102,7 @@ pub fn dark() -> Palette {
         (Token::PRESSED, c(255, 255, 255, veil(20))),
         (Token::DISABLED, c(255, 255, 255, veil(15))),
         (Token::ON_DISABLED, c(255, 255, 255, 93)),
-        (Token::CONTROL_TRACK, c(107, 107, 107, 255)),
+        (Token::CONTROL_TRACK, c(154, 154, 154, 255)),
         // 关闭态开关轨道的描边：WinUI 的 `ControlStrongStrokeColorDefault`
         // 深色值 `#8BFFFFFF`（54.5% 白）。实测本机 Win11 关闭态开关的轨道
         // 内部与卡片同色（#2C2932），只有一圈 1px 淡灰描边。
@@ -118,9 +118,16 @@ pub fn dark() -> Palette {
         (Token::SWITCH_THUMB_OFF, c(255, 255, 255, veil(197))),
         (Token::CONTROL_THUMB, c(255, 255, 255, 255)),
         (Token::CONTROL_HOVER, c(45, 45, 45, 255)),
-        (Token::CONTROL_DISABLED_BG, c(255, 255, 255, veil(10))),
+        (Token::CONTROL_DISABLED_BG, c(43, 43, 43, 255)),
         (Token::CONTROL_DISABLED_BORDER, c(255, 255, 255, veil(10))),
-        (Token::CONTROL_DISABLED_THUMB, c(255, 255, 255, 93)),
+        (Token::CONTROL_DISABLED_THUMB, c(116, 116, 116, 255)),
+        // WinUI 深色下复选框未选中与开关关闭态的实际填充（实测 #1D1D1D）。
+        (Token::CONTROL_ALT_FILL_SECONDARY, c(29, 29, 29, 255)),
+        (Token::CONTROL_ALT_FILL_DISABLED, c(36, 36, 36, 255)),
+        (Token::CONTROL_STRONG_STROKE_DISABLED, c(115, 115, 115, 255)),
+        (Token::SLIDER_TRACK_DISABLED, c(87, 87, 87, 255)),
+        (Token::SLIDER_FILL_DISABLED, c(113, 113, 113, 255)),
+        (Token::SLIDER_THUMB_DISABLED, c(98, 98, 98, 255)),
         // ---- 外壳容器（云母之上不再加第二层不透明底） --------------------
         // 标题栏与导航面板不另加底色：Win11 的导航窗格本身就是云母。
         (Token::HEADER_BG, c(32, 32, 32, 0)),
@@ -228,12 +235,18 @@ pub fn light() -> Palette {
         (Token::SWITCH_THUMB_OFF, c(0, 0, 0, light_base_veil(158))),
         (Token::CONTROL_THUMB, c(255, 255, 255, 255)),
         (Token::CONTROL_HOVER, c(245, 245, 245, 255)),
-        (Token::CONTROL_DISABLED_BG, c(0, 0, 0, light_base_veil(8))),
+        (Token::CONTROL_DISABLED_BG, c(248, 248, 248, 255)),
         (
             Token::CONTROL_DISABLED_BORDER,
             c(0, 0, 0, light_base_veil(12)),
         ),
-        (Token::CONTROL_DISABLED_THUMB, c(0, 0, 0, 60)),
+        (Token::CONTROL_DISABLED_THUMB, c(153, 153, 153, 255)),
+        (Token::CONTROL_ALT_FILL_SECONDARY, c(237, 237, 237, 255)),
+        (Token::CONTROL_ALT_FILL_DISABLED, c(240, 240, 240, 255)),
+        (Token::CONTROL_STRONG_STROKE_DISABLED, c(161, 161, 161, 255)),
+        (Token::SLIDER_TRACK_DISABLED, c(166, 166, 166, 255)),
+        (Token::SLIDER_FILL_DISABLED, c(130, 130, 130, 255)),
+        (Token::SLIDER_THUMB_DISABLED, c(200, 200, 200, 255)),
         (Token::HEADER_BG, c(243, 243, 243, 0)),
         (Token::NAV_BG, c(243, 243, 243, 0)),
         (Token::NAV_HOVER, c(0, 0, 0, light_base_veil(8))),

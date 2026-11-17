@@ -307,6 +307,21 @@ impl Token {
     /// `CONTROL_THUMB`（纯白/纯黑），而开关的旋钮是**次级文字色**——
     /// 浅色下若也用白色，旋钮会与白色轨道糊成一片，开关直接「消失」。
     pub const SWITCH_THUMB_OFF: Self = Self(88);
+
+    // ---- 像素对照补充的 WinUI 语义色（89..=94）---------------------------
+
+    /// WinUI `ControlAltFillColorSecondary`：复选框未选中填充与开关关闭态轨道。
+    pub const CONTROL_ALT_FILL_SECONDARY: Self = Self(89);
+    /// WinUI `ControlAltFillColorDisabled`：禁用状态下的复选框填充与开关轨道。
+    pub const CONTROL_ALT_FILL_DISABLED: Self = Self(90);
+    /// WinUI `ControlStrongStrokeColorDisabled`：禁用状态开关轨道与复选框的描边。
+    pub const CONTROL_STRONG_STROKE_DISABLED: Self = Self(91);
+    /// WinUI `SliderTrackFillDisabled`：禁用滑块的未填充轨道。
+    pub const SLIDER_TRACK_DISABLED: Self = Self(92);
+    /// WinUI `SliderTrackValueFillDisabled`：禁用滑块的已填充轨道。
+    pub const SLIDER_FILL_DISABLED: Self = Self(93);
+    /// WinUI `SliderThumbBackgroundDisabled`：禁用滑块的拇指。
+    pub const SLIDER_THUMB_DISABLED: Self = Self(94);
 }
 
 /// 设计系统定义的全部语义令牌集合。
@@ -316,7 +331,7 @@ impl Token {
 ///
 /// [`Token::NONE`] 不在此列表中：它是引擎保留槽位，而非语义颜色。
 ///
-pub const TOKENS: [Token; 88] = [
+pub const TOKENS: [Token; 94] = [
     Token::SURFACE,
     Token::SURFACE_RAISED,
     Token::SURFACE_SUNKEN,
@@ -405,6 +420,12 @@ pub const TOKENS: [Token; 88] = [
     Token::CONTROL_TRACK_STROKE,
     Token::CONTROL_THUMB_ON,
     Token::SWITCH_THUMB_OFF,
+    Token::CONTROL_ALT_FILL_SECONDARY,
+    Token::CONTROL_ALT_FILL_DISABLED,
+    Token::CONTROL_STRONG_STROKE_DISABLED,
+    Token::SLIDER_TRACK_DISABLED,
+    Token::SLIDER_FILL_DISABLED,
+    Token::SLIDER_THUMB_DISABLED,
 ];
 
 /// 当前激活的主题。
@@ -620,6 +641,30 @@ impl ThemeSet {
                 (Token::CONTROL_THUMB_ON, Color::BLACK),
                 (Token::SWITCH_THUMB_OFF, Color::from_srgb8(0, 0, 0, 158)),
                 (
+                    Token::CONTROL_ALT_FILL_SECONDARY,
+                    Color::from_srgb8(237, 237, 237, 255),
+                ),
+                (
+                    Token::CONTROL_ALT_FILL_DISABLED,
+                    Color::from_srgb8(240, 240, 240, 255),
+                ),
+                (
+                    Token::CONTROL_STRONG_STROKE_DISABLED,
+                    Color::from_srgb8(161, 161, 161, 255),
+                ),
+                (
+                    Token::SLIDER_TRACK_DISABLED,
+                    Color::from_srgb8(166, 166, 166, 255),
+                ),
+                (
+                    Token::SLIDER_FILL_DISABLED,
+                    Color::from_srgb8(130, 130, 130, 255),
+                ),
+                (
+                    Token::SLIDER_THUMB_DISABLED,
+                    Color::from_srgb8(200, 200, 200, 255),
+                ),
+                (
                     Token::INPUT_BORDER_HOVER,
                     Color::from_srgb8(154, 163, 181, 255),
                 ),
@@ -737,6 +782,30 @@ impl ThemeSet {
                 (Token::CONTROL_THUMB_ON, Color::BLACK),
                 (Token::SWITCH_THUMB_OFF, Color::from_srgb8(0, 0, 0, 158)),
                 (
+                    Token::CONTROL_ALT_FILL_SECONDARY,
+                    Color::from_srgb8(29, 29, 29, 255),
+                ),
+                (
+                    Token::CONTROL_ALT_FILL_DISABLED,
+                    Color::from_srgb8(36, 36, 36, 255),
+                ),
+                (
+                    Token::CONTROL_STRONG_STROKE_DISABLED,
+                    Color::from_srgb8(115, 115, 115, 255),
+                ),
+                (
+                    Token::SLIDER_TRACK_DISABLED,
+                    Color::from_srgb8(87, 87, 87, 255),
+                ),
+                (
+                    Token::SLIDER_FILL_DISABLED,
+                    Color::from_srgb8(113, 113, 113, 255),
+                ),
+                (
+                    Token::SLIDER_THUMB_DISABLED,
+                    Color::from_srgb8(98, 98, 98, 255),
+                ),
+                (
                     Token::INPUT_BORDER_HOVER,
                     Color::from_srgb8(96, 104, 122, 255),
                 ),
@@ -850,6 +919,21 @@ impl ThemeSet {
             // 会彻底糊掉，用户看不出开关处在关的位置。开启态是黑旋钮，
             // 关闭态用白旋钮，两态在任意底色上都分得开。
             (Token::SWITCH_THUMB_OFF, Color::WHITE),
+            (
+                Token::CONTROL_ALT_FILL_SECONDARY,
+                Color::from_srgb8(0, 0, 0, 255),
+            ),
+            (
+                Token::CONTROL_ALT_FILL_DISABLED,
+                Color::from_srgb8(32, 32, 32, 255),
+            ),
+            (Token::CONTROL_STRONG_STROKE_DISABLED, Color::WHITE),
+            (
+                Token::SLIDER_TRACK_DISABLED,
+                Color::from_srgb8(128, 128, 128, 255),
+            ),
+            (Token::SLIDER_FILL_DISABLED, Color::WHITE),
+            (Token::SLIDER_THUMB_DISABLED, Color::WHITE),
             (
                 Token::INPUT_BORDER_HOVER,
                 Color::from_srgb8(255, 230, 0, 255),
