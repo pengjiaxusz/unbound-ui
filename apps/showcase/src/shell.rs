@@ -172,6 +172,8 @@ fn nav_scrollbar(layout: &ShellLayout) -> Option<Scrollbar> {
 /// 应用程序。
 pub struct GalleryApp {
     pub state: GalleryState,
+    /// 整窗云母背板（壁纸派生；默认启用，Win11 的层次依赖它）。
+    pub mica: unbound_app::MicaBackdrop,
     pub scene: gallery::Gallery,
     pub labels: Labels,
     pub layout: ShellLayout,
@@ -330,6 +332,7 @@ impl GalleryApp {
         nav_spring.set_target(NAV_EXPANDED);
         Self {
             state: GalleryState::default(),
+            mica: unbound_app::MicaBackdrop::new(),
             scene: gallery::Gallery::new(),
             labels: Labels::new(),
             layout,
@@ -626,6 +629,8 @@ impl GalleryApp {
             raw_nav_width
         };
         let palette = gallery::palette();
+        // 云母已覆盖整窗时根背景必须透明，否则不透明底色会把壁纸纹理盖住。
+        let mica_visible = self.mica.visible();
         let hover = inter.hovered;
         let pressed = inter.pressed;
         // 布局树拥有几何信息：标题栏、导航窗格与页面均由树求解，而非手算测量。
@@ -719,7 +724,7 @@ impl GalleryApp {
             scale,
             pixel_snap,
         );
-        draw_background(&mut canvas, &layout);
+        draw_background(&mut canvas, &layout, mica_visible);
         draw_top_bar(&mut canvas, state, &layout, self.window_maximized);
         draw_nav(&mut canvas, state, &layout);
         draw_page(&mut canvas, state, &layout, &page_layout);
@@ -2305,9 +2310,16 @@ fn search_overlay_rect(layout: &ShellLayout, count: usize) -> Rect {
 // 绘制
 // ---------------------------------------------------------------------------
 
-fn draw_background(canvas: &mut Canvas<'_>, layout: &ShellLayout) {
+fn draw_background(canvas: &mut Canvas<'_>, layout: &ShellLayout, mica_visible: bool) {
     let palette = *canvas.palette;
-    canvas.rect(layout.viewport, 0.0, palette.background, 0, 0.0, 0.0);
+    // `Token::NONE` 是引擎保留的透明槽位：云母可见时让根背景完全透明，
+    // 壁纸纹理才能从最底层透出。
+    let fill = if mica_visible {
+        unbound_theme::Token::NONE.raw()
+    } else {
+        palette.background
+    };
+    canvas.rect(layout.viewport, 0.0, fill, 0, 0.0, 0.0);
 }
 
 fn dropdown_panel_rect(anchor: Rect, width: f32, count: usize, viewport: Rect) -> Rect {

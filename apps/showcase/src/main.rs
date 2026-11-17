@@ -725,6 +725,13 @@ impl PlatformApp for Showcase {
         let metrics = Arc::new(FrameHitMetrics::new());
         metrics.set_scale_factor(self.effective_scale());
         install_custom_frame(hwnd, Arc::clone(&metrics));
+        // Win11：DWM 负责圆角、投影与 1px 边框；云母本体由应用自绘
+        // （交换链是 OPAQUE 合成，DWM 材质层透不出来）。
+        unbound_platform::set_window_dark_mode(hwnd, self.shell().state.theme.is_dark());
+        let _ = unbound_platform::set_window_backdrop(
+            hwnd,
+            unbound_platform::WindowBackdropMaterial::Mica,
+        );
         self.frame_metrics = Some(metrics);
 
         // 呈现链刚刚按窗口尺寸创建：该请求已提交，因此首帧不会再次重建。
@@ -1322,6 +1329,12 @@ impl Showcase {
         let moving = dirty != DirtyFlags::NONE;
         let report = self.advance_scene(0.0);
         self.write_theme_if_needed();
+        // 云母纹理在后台生成、资产解码：完成前持续请求帧。
+        // 自绘宿主没有事件驱动时，纹理可能停在「已生成但从未提交」。
+        if self.shell().mica.needs_frame() {
+            self.app.invalidate();
+            state.pacer.request_immediate(Instant::now());
+        }
         self.apply_cursor(window);
 
         if let Some(metrics) = &self.frame_metrics {

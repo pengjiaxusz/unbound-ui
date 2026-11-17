@@ -20,6 +20,7 @@ unbound-layout.workspace = true
 unbound-text.workspace = true
 unbound-abi.workspace = true
 unbound-asset.workspace = true
+unbound-backdrop.workspace = true
 unbound-platform.workspace = true
 unbound-host.workspace = true
 unbound-headless.workspace = true
