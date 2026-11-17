@@ -225,6 +225,8 @@ impl Showcase {
         if os_scale.is_finite() && os_scale > 0.0 {
             self.os_scale = os_scale;
         }
+        let rect = window.client_rect_on_screen();
+        self.shell_mut().state.window_screen_rect = Some(rect);
     }
 
     fn resize_edge_at(&self, window: &Window) -> Option<ResizeEdge> {
@@ -901,6 +903,11 @@ impl PlatformApp for Showcase {
         self.shell_mut().set_effective_scale(scale);
         let mut flow = Flow::Continue;
         match event {
+            PlatformEvent::Moved { .. } => {
+                // 位置变化不改变布局或交换链，但屏幕锚点变了，自绘后景必须重新取样。
+                self.app.invalidate();
+                state.pacer.request_immediate(Instant::now());
+            }
             PlatformEvent::ScaleFactorChanged(factor) => {
                 self.os_scale = factor as f32;
                 // 缩放改变逻辑视口，帧则从已提交范围推导视口。

@@ -272,10 +272,11 @@ mod win32 {
         WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_DROPFILES, WM_GETMINMAXINFO,
         WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
         WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
-        WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
-        WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-        WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
-        WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW,
+        WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST,
+        WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN,
+        WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE,
+        WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW,
+        WS_EX_APPWINDOW,
     };
 
     use crate::pacing::PresentWaitPolicy;
@@ -635,6 +636,14 @@ mod win32 {
                     data.redraw_requested.store(true, Ordering::Release);
                     trigger_modal_resize_frame(hwnd);
                 }
+                LRESULT(0)
+            }
+            WM_MOVE => {
+                // `WM_MOVE` 的 lParam 是客户区左上角的屏幕物理坐标；尺寸变化由 `WM_SIZE` 处理。
+                let x = (lparam.0 & 0xFFFF) as u16 as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
+                data.events.borrow_mut().push(PlatformEvent::Moved { x, y });
+                data.redraw_requested.store(true, Ordering::Release);
                 LRESULT(0)
             }
             WM_DPICHANGED => {

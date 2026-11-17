@@ -155,6 +155,26 @@ pub fn fit_image(box_rect: Rect, natural: Vec2, fit: ObjectFit) -> ImageFit {
     }
 }
 
+/// 将归一化 UV 子矩形钳制到 `0..1`。
+///
+/// 完全落在纹理之外、宽高为零或包含非有限值时返回整张纹理，保证采样区域始终有效。
+#[must_use]
+pub fn clamp_unit_uv(uv: Rect) -> Rect {
+    let full = Rect::new(0.0, 0.0, 1.0, 1.0);
+    let values = [uv.origin.x, uv.origin.y, uv.size.x, uv.size.y];
+    if values.iter().any(|value| !value.is_finite()) {
+        return full;
+    }
+    let left = uv.origin.x.clamp(0.0, 1.0);
+    let top = uv.origin.y.clamp(0.0, 1.0);
+    let right = (uv.origin.x + uv.size.x).clamp(0.0, 1.0);
+    let bottom = (uv.origin.y + uv.size.y).clamp(0.0, 1.0);
+    if right <= left || bottom <= top {
+        return full;
+    }
+    Rect::new(left, top, right - left, bottom - top)
+}
+
 /// 图像描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageDesc {
@@ -168,6 +188,11 @@ pub struct ImageDesc {
     pub source: ImageSource,
     /// 对象填充模式。
     pub fit: ObjectFit,
+    /// 显式指定的归一化采样子矩形；`None` 表示由 [`Self::fit`] 推导。
+    ///
+    /// 该子矩形替换填充模式算出的采样区域，但不会改变目标几何：
+    /// 调用方仍可通过 `fit` 控制图像在包围盒中的位置与尺寸。
+    pub sample_uv: Option<Rect>,
     /// 四角独立圆角半径：左上、右上、右下、左下。
     pub radius: [f32; 4],
     /// 边框宽度；`0.0` 表示不绘制边框。
@@ -196,6 +221,7 @@ impl ImageDesc {
                 natural_size,
             },
             fit: ObjectFit::Cover,
+            sample_uv: None,
             // 默认按 WinUI `ControlCornerRadius` 取 4px，调用方可另设 8px（`OverlayCornerRadius`）。
             radius: [IMAGE_RADIUS; 4],
             border_width: 0.0,
@@ -211,6 +237,16 @@ impl ImageDesc {
     #[must_use]
     pub fn with_fit(mut self, fit: ObjectFit) -> Self {
         self.fit = fit;
+        self
+    }
+
+    /// 指定只采样纹理的归一化子矩形。
+    ///
+    /// 子矩形会被钳制到 `0..1`；完全落在纹理之外或包含非有限值时退化为整张采样。
+    /// 目标几何仍由 [`Self::fit`] 决定，因此该设置不会移动或缩放图像。
+    #[must_use]
+    pub fn with_sample_uv(mut self, uv: Rect) -> Self {
+        self.sample_uv = Some(uv);
         self
     }
 
@@ -345,12 +381,13 @@ fn emit_image_inner(
     let bounds = match resolved {
         Some(image) => {
             let fit = fit_image(desc.rect, image.size, desc.fit);
+            let sample = desc.sample_uv.map_or(fit.uv, clamp_unit_uv);
             // 裁剪图集子矩形而非整层：该图像只是共享图集页中的一个槽位。
             let uv = Rect::new(
-                image.uv.origin.x + fit.uv.origin.x * image.uv.width(),
-                image.uv.origin.y + fit.uv.origin.y * image.uv.height(),
-                fit.uv.width() * image.uv.width(),
-                fit.uv.height() * image.uv.height(),
+                image.uv.origin.x + sample.origin.x * image.uv.width(),
+                image.uv.origin.y + sample.origin.y * image.uv.height(),
+                sample.width() * image.uv.width(),
+                sample.height() * image.uv.height(),
             );
             let mut primitive = instance(
                 fit.rect,
@@ -616,6 +653,7 @@ pub fn emit_icon(node: u64, desc: &IconDesc, state: ControlState) -> WidgetOutpu
             natural_size: desc.rect.size,
         },
         fit: ObjectFit::Contain,
+        sample_uv: None,
         radius: [0.0; 4],
         border_width: 0.0,
         border_color: Token::NONE,
@@ -899,6 +937,26 @@ mod tests {
         let fit = fit_image(box_rect(), Vec2::new(64.0, 64.0), ObjectFit::Fill);
         assert_eq!(fit.rect, box_rect());
         assert_eq!(fit.uv, Rect::new(0.0, 0.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn an_explicit_sample_uv_replaces_the_fit_region_and_is_clamped() {
+        let desc = ImageDesc::new(box_rect(), Vec2::new(200.0, 100.0), 2)
+            .with_fit(ObjectFit::Fill)
+            .with_sample_uv(Rect::new(0.5, 0.25, 1.0, 1.0));
+        let output = emit_image(3, &desc, ControlState::default());
+        assert_eq!(output.primitives[0].size, [200.0, 100.0]);
+        assert_eq!(output.payloads[0].p0, [0.5, 0.25]);
+        assert_eq!(output.payloads[0].p1, [1.0, 1.0]);
+    }
+
+    #[test]
+    fn an_out_of_bounds_sample_uv_degrades_to_the_whole_texture() {
+        let desc = ImageDesc::new(box_rect(), Vec2::new(200.0, 100.0), 2)
+            .with_sample_uv(Rect::new(2.0, 2.0, 1.0, 1.0));
+        let output = emit_image(3, &desc, ControlState::default());
+        assert_eq!(output.payloads[0].p0, [0.0, 0.0]);
+        assert_eq!(output.payloads[0].p1, [1.0, 1.0]);
     }
 
     #[test]

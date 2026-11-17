@@ -64,8 +64,8 @@ pub use win32_window::{
 };
 pub use window::{
     apply, resolve_window_placement, ButtonState, ImeEvent, ImeState, Modifiers, MouseButton,
-    PlatformError, PlatformEvent, PlatformKey, PlatformState, WindowConfig, WindowPlacement,
-    WindowPosition,
+    PlatformError, PlatformEvent, PlatformKey, PlatformState, ScreenRect, WindowConfig,
+    WindowPlacement, WindowPosition,
 };
 pub use windows::{WindowId, WindowRegistry, WindowSlot};
 pub use windows_build::windows_build;

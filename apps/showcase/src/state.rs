@@ -298,6 +298,11 @@ pub struct GalleryState {
     pub native_backdrop_available: bool,
     /// Windows 构建号；`None` 表示非 Windows 环境或探测失败。
     pub windows_build: Option<u32>,
+    /// 客户区在屏幕坐标系中的物理矩形（后景锚点）。
+    ///
+    /// 由平台层在移动、尺寸与 DPI 变化时写入；布局不使用它，只有依赖屏幕位置的
+    /// 自绘后景取样会读取。
+    pub window_screen_rect: Option<unbound_platform::ScreenRect>,
     /// 当通过侧边栏直接选中某个具体组件时记录该组件 ID。
     pub active_component: Option<WidgetCatalogId>,
     pub nav_expanded: bool,
@@ -347,6 +352,7 @@ impl Default for GalleryState {
             resolved_backdrop: ResolvedBackdrop::resolve(BackdropMode::Auto, false),
             native_backdrop_available: false,
             windows_build: None,
+            window_screen_rect: None,
             active_component: None,
             nav_expanded: true,
             search_query: String::new(),
