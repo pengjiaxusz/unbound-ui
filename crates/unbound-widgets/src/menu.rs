@@ -22,10 +22,9 @@ use crate::{ControlState, WidgetDesc, WidgetOutput};
 pub const MENU_LAYER: u8 = PORTAL_LAYER;
 /// 默认行高。
 ///
-/// WinUI `MenuFlyoutItemThemePadding = 11,8,11,9` 叠加 20px 行高即 37px；
-/// 这里沿用 30px，因为集成测试 `tests/menu_submenu.rs` 以 20 行 × 30 = 600
-/// 锁定了菜单内容高度，调整需同步该测试（不在本次允许修改的文件范围内）。
-pub const MENU_ITEM_HEIGHT: f32 = 30.0;
+/// WinUI `MenuFlyoutItemThemePadding = 11,8,11,9` 叠加 20px 行高即 37px，
+/// 与下拉框选中项行高 [`crate::select::SELECT_ROW_HEIGHT`] 保持一致。
+pub const MENU_ITEM_HEIGHT: f32 = 37.0;
 const MENU_SHADOW: f32 = 18.0;
 /// 下拉框选中项左侧强调条的宽度。
 const MENU_ACCENT_BAR_WIDTH: f32 = 3.0;
