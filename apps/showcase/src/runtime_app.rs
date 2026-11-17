@@ -42,6 +42,8 @@ impl Application for GalleryApp {
     type State = ();
 
     fn init(&mut self, ctx: &mut AppContext) -> Self::State {
+        // 初始化即解析默认后景模式，后续每帧再跟随选择变化。
+        self.sync_backdrop_mode();
         ctx.theme = crate::theme::kind(self.state.theme == ThemeMode::Dark);
         ctx.set_locale_enum(self.state.locale);
     }
@@ -195,6 +197,8 @@ impl Application for GalleryApp {
         };
         // 云母纹理在后台生成、解码：先提交/绘制，再用最新可见性决定根背景。
         // 可见性翻转本身必须触发重建，否则不透明底色会一直盖着已经就绪的纹理。
+        // 后景模式先于绘制同步：选择变化会在同一帧写入实际生效模式并请求重建。
+        self.sync_backdrop_mode();
         let was_mica_visible = self.mica.visible();
         self.mica
             .sync(viewport, self.state.theme.is_dark(), view.event_sender());

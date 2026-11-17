@@ -19,11 +19,13 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod mica;
+pub mod mode;
 pub mod state;
 pub mod wallpaper;
 
 pub use mica::{
     generate, generate_blurred_rect, MicaImage, MicaRequest, DEFAULT_MAX_WIDTH, DEFAULT_SIGMA,
 };
+pub use mode::{BackdropMode, ResolvedBackdrop};
 pub use state::{BackdropGenerator, MICA_READY_EVENT_ID};
 pub use wallpaper::wallpaper_path;
