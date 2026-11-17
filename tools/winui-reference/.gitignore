@@ -1,0 +1,6 @@
+# .NET 构建产物与本地截图输出
+bin/
+obj/
+captures/
+*.user
+winui-reference.error.log
