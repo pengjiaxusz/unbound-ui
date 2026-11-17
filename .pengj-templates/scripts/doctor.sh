@@ -1,16 +1,16 @@
 #!/bin/sh
-# scripts/doctor.sh - 项目环境自检.
+# .pengj-templates/scripts/doctor.sh - 项目环境自检.
 #
-# 只检查所选模板层实际用到的工具，再按文件名顺序运行 scripts/doctor.d/*.sh
+# 只检查所选模板层实际用到的工具，再按文件名顺序运行 .pengj-templates/scripts/doctor.d/*.sh
 # 下的所有自定义检查。
 #
 # 用法：
-#   sh scripts/doctor.sh                 仅输出报告
-#   sh scripts/doctor.sh --fix           同时激活提交钩子并修正相关模式
-#   sh scripts/doctor.sh --install-cli   下载并安装 pengj-templates-cli
+#   sh .pengj-templates/scripts/doctor.sh                 仅输出报告
+#   sh .pengj-templates/scripts/doctor.sh --fix           同时激活提交钩子并修正相关模式
+#   sh .pengj-templates/scripts/doctor.sh --install-cli   下载并安装 pengj-templates-cli
 #                                        （唯一会联网的步骤；不会被 --fix 隐含）
 #
-# 自定义检查：把 *.sh 放进 scripts/doctor.d/。每个脚本从项目根目录运行，
+# 自定义检查：把 *.sh 放进 .pengj-templates/scripts/doctor.d/。每个脚本从项目根目录运行，
 # DOCTOR_ROOT 指向项目根目录，带 --fix 时设置 DOCTOR_FIX=1。
 # 退出码 0 为通过，非 0 为失败；输出按原样显示。
 
@@ -23,7 +23,7 @@ for arg in "$@"; do
         --fix) fix=1 ;;
         --install-cli) install_cli=1 ;;
         -h|--help)
-            echo "用法：sh scripts/doctor.sh [--fix] [--install-cli]"
+            echo "用法：sh .pengj-templates/scripts/doctor.sh [--fix] [--install-cli]"
             exit 0
             ;;
         *)
@@ -188,7 +188,7 @@ if have git && git rev-parse --show-toplevel >/dev/null 2>&1; then
             fail "无法激活提交钩子；请运行：git config core.hooksPath .githooks"
         fi
     else
-        warn "提交钩子未激活；请运行 'sh scripts/doctor.sh --fix' 或 'git config core.hooksPath .githooks'"
+        warn "提交钩子未激活；请运行 'sh .pengj-templates/scripts/doctor.sh --fix' 或 'git config core.hooksPath .githooks'"
     fi
 
     # git silently skips a hook without the executable bit on Unix
@@ -232,8 +232,8 @@ fi
 # --- custom checks ---------------------------------------------------------
 
 custom=0
-if [ -d scripts/doctor.d ]; then
-    for script in scripts/doctor.d/*.sh; do
+if [ -d .pengj-templates/scripts/doctor.d ]; then
+    for script in .pengj-templates/scripts/doctor.d/*.sh; do
         [ -f "$script" ] || continue
         custom=$((custom + 1))
         name=$(basename "$script")
@@ -248,7 +248,7 @@ if [ -d scripts/doctor.d ]; then
     done
 fi
 if [ "$custom" -eq 0 ]; then
-    printf '[doctor] 自定义检查：无（在 scripts/doctor.d/ 下添加 *.sh 脚本即可扩展本检查）\n'
+    printf '[doctor] 自定义检查：无（在 .pengj-templates/scripts/doctor.d/ 下添加 *.sh 脚本即可扩展本检查）\n'
 fi
 
 printf '[doctor] 共 %d 项检查：%d 个错误，%d 个警告\n' "$checks" "$errors" "$warnings"

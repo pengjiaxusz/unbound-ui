@@ -1,4 +1,4 @@
-# just/rust-workspace.just — Rust 多 crate 工作区常用任务（rust-workspace 层托管）
+# .pengj-templates/just/rust-workspace.just — Rust 多 crate 工作区常用任务（rust-workspace 层托管）
 # 由 justfile 主入口按层条件 import；项目若有自己的编排，请在 manifest 里设
 # options["just_recipes"] = "none"，把这些配方留给项目专属区。
 

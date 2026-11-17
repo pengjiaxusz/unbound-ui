@@ -40,7 +40,7 @@ git config --get core.hooksPath   # 期望输出：.githooks
 为空或指向别处时执行：
 
 ```bash
-just doctor --fix        # 或：sh scripts/doctor.sh --fix
+just doctor --fix        # 或：sh .pengj-templates/scripts/doctor.sh --fix
 ```
 
 doctor 会检查工具链并在不安装任何东西的前提下激活钩子；若 `core.hooksPath` 属于别的工具，只报告冲突、不覆盖。
@@ -73,7 +73,7 @@ doctor 会检查工具链并在不安装任何东西的前提下激活钩子；�
   - ✅ 必须：`feat(cli): 新增参数支持`
 - **type/scope 用英文**：
   - 常用 type：`feat` `fix` `docs` `style` `refactor` `perf` `test` `build` `ci` `chore` `revert`
-  - scope 参考项目 `.gate.toml` 的 `commit.scopes` 白名单（空列表表示不限），无合适则省略。
+  - scope 参考项目 `.pengj-templates/gate.toml` 的 `commit.scopes` 白名单（空列表表示不限），无合适则省略。
 - **提交入口**：宿主提供的 `/commit` 命令与手写 `git commit` 同样适用；此类命令生成的英文标题必须先改写为中文再提交。
 
 

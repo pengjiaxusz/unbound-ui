@@ -63,7 +63,7 @@ jobs:
               printf '%s\n' "$output"
               echo '```'
               echo ""
-              echo "范围内每个提交的标题都要写成 `type(scope): 摘要`。规则集在 `.gate.toml` 里。"
+              echo "范围内每个提交的标题都要写成 `type(scope): 摘要`。规则集在 `.pengj-templates/gate.toml` 里。"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"

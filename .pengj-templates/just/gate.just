@@ -1,5 +1,5 @@
-# just/gate.just — 提交门禁配方（gate 层托管，模板更新整页覆盖）
-# 提交门禁内置在 `pengj-templates-cli` 里，下面的检查配方都直接调 `pengj-templates-cli gate ...`。钩子激活走 `just doctor --fix`（未装 CLI 时用 `sh scripts/doctor.sh --fix`）——环境自检是唯一的激活入口；`gate-hooks-local` 是它调用的零依赖裸脚本。
+# .pengj-templates/just/gate.just — 提交门禁配方（gate 层托管，模板更新整页覆盖）
+# 提交门禁内置在 `pengj-templates-cli` 里，下面的检查配方都直接调 `pengj-templates-cli gate ...`。钩子激活走 `just doctor --fix`（未装 CLI 时用 `sh .pengj-templates/scripts/doctor.sh --fix`）——环境自检是唯一的激活入口；`gate-hooks-local` 是它调用的零依赖裸脚本。
 
 # 对整个工作树跑代码语言守卫
 gate-check:

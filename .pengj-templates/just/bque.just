@@ -1,4 +1,4 @@
-# just/bque.just — 全局跨工作树编译排队（bque 层托管，模板更新整页覆盖）
+# .pengj-templates/just/bque.just — 全局跨工作树编译排队（bque 层托管，模板更新整页覆盖）
 # bque 是 Windows 全局内核锁调度器：unix 分支不排队，只做等价透传与提示。
 # 任何重型命令都应经 q-run / q-bench，避免裸跑吃满 CPU 与污染跑分。
 
