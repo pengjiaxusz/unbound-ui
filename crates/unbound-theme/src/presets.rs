@@ -172,10 +172,17 @@ impl ThemeSet {
             (p, h, pr, soft, Color::WHITE)
         };
 
+        // Win11 默认蓝就是 WinUI 自己的强调色阶梯：种子调色板里已是
+        // `#005FB8`（浅）/ `#60CDFF`（深），再套 OKLCH 近似反而会让
+        // 复选框、开关与滑块偏离原生像素。仅品牌色才需要重算强调色。
+        let native_accent = preset == ProductPreset::Win11 && accent == crate::AccentBrand::Blue;
         for (entries, (p, h, pr, soft, on)) in [
             (&mut light_entries, (lp, lh, lpr, lsoft, lon)),
             (&mut dark_entries, (dp, dh, dpr, dsoft, don)),
         ] {
+            if native_accent {
+                continue;
+            }
             set_tok(entries, Token::PRIMARY, p);
             set_tok(entries, Token::PRIMARY_HOVER, h);
             set_tok(entries, Token::PRIMARY_PRESSED, pr);
