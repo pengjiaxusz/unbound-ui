@@ -55,7 +55,12 @@ impl BackdropGenerator {
         let slot = Arc::new(Mutex::new(None));
         self.slot = Some(Arc::clone(&slot));
         thread::spawn(move || {
-            let image = generate(&request);
+            // 生成失败（含解码 panic）也要落盘结果并唤醒：否则状态永远停在
+            // “生成中”，自绘宿主会为一张不会到来的纹理持续请求帧。
+            let image =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| generate(&request)))
+                    .ok()
+                    .flatten();
             if let Ok(mut guard) = slot.lock() {
                 *guard = Some((generation, image));
             }
