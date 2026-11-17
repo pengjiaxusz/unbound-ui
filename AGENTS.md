@@ -29,3 +29,17 @@
   - 整文件放行：文件头注释写 `lang-allow: 理由`，仅限“中文即数据”的文件（i18n 词条表、拼音字典、双语展厅文案、CJK 测试样本）。
 - **门禁**：pre-commit 调用 `pengj-templates-cli gate hook pre-commit`，对暂存的 `.rs` 跑 rustfmt 与语言守卫；全量审计运行 `just gate-check`（等价于 `pengj-templates-cli gate check`，可加 `--list` 列出全部违规、`--json` 输出机器可读报告、`--max-ratio` 临时放宽阈值）。
 - **判定方向**来自 `.pengj-templates.json` 的 `options.chinese_programming`（`false` 查非英文、`true` 查非中文），`PENGJ_CODE_LANG=english|chinese` 可临时覆盖。
+
+## Agent skills
+
+### Issue tracker
+
+issue 与 spec 存放在本仓库的 GitHub Issues 中，使用 `gh` CLI 操作。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+沿用默认五角色同名标签：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文（single-context）布局：根目录 `GLOSSARY.md` + `docs/adr/`，缺失时静默继续。详见 `docs/agents/domain.md`。
