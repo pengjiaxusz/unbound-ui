@@ -40,7 +40,7 @@ dotnet build -c Release
 - `target/parity/reference/<用例>.png`：参考截图副本，框架内报告页只依赖 `target/parity`；
 - `target/parity/ours/<用例>.png`：本框架渲染结果（附同名 JSON）；
 - `target/parity/heat/<用例>.png`：ΔE 热力图（黑→蓝→绿→黄→红，30 封顶）；
-- `target/parity/report.html` / `report.json`：逐用例指标与通过状态。
+- `target/parity/report.json`：逐用例指标与通过状态。
 
 判定阈值：内容包围盒逐边相差 ≤ 1 像素（允许字体抗锯齿的单像素溢出），
 全图 ΔE2000 均值 ≤ 1.0，p99 ≤ 3.0。
