@@ -35,7 +35,10 @@ pub const fn is_mica_ready_event(id: u64) -> bool {
 #[derive(Debug)]
 pub struct MicaBackdrop {
     generator: BackdropGenerator,
+    /// 已解码并正在显示的纹理。
     asset: Option<AssetId>,
+    /// 新提交、仍在异步解码的纹理；解码完成前继续用旧纹理垫底。
+    pending: Option<AssetId>,
     visible: bool,
     enabled: bool,
 }
@@ -45,6 +48,7 @@ impl Default for MicaBackdrop {
         Self {
             generator: BackdropGenerator::new(),
             asset: None,
+            pending: None,
             visible: false,
             enabled: true,
         }
@@ -65,6 +69,7 @@ impl MicaBackdrop {
         }
         self.enabled = enabled;
         self.asset = None;
+        self.pending = None;
         self.visible = false;
     }
 
@@ -102,11 +107,25 @@ impl MicaBackdrop {
             return false;
         }
         if let Some(image) = self.generator.take() {
-            self.asset = Some(view.request_png(image.png));
+            self.pending = Some(view.request_png(image.png));
         }
-        self.visible = self
-            .asset
-            .is_some_and(|asset| view.backdrop_image(key, asset));
+
+        if let Some(pending) = self.pending {
+            if view.backdrop_image(key, pending) {
+                self.asset = Some(pending);
+                self.pending = None;
+                self.visible = true;
+            } else {
+                // 新纹理还在解码：继续显示旧纹理，避免主题切换闪一帧纯色。
+                self.visible = self
+                    .asset
+                    .is_some_and(|asset| view.backdrop_image(key, asset));
+            }
+        } else {
+            self.visible = self
+                .asset
+                .is_some_and(|asset| view.backdrop_image(key, asset));
+        }
         self.visible
     }
 
@@ -125,7 +144,7 @@ impl MicaBackdrop {
         if !self.enabled {
             return false;
         }
-        if self.generator.is_pending() || self.generator.has_result() {
+        if self.pending.is_some() || self.generator.is_pending() || self.generator.has_result() {
             return true;
         }
         self.asset.is_some() && !self.visible
