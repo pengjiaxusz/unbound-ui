@@ -33,8 +33,16 @@ use crate::{ControlState, PointerPhase, WidgetDesc, WidgetOutput};
 /// 按钮标签字体大小。字形预热必须使用相同字号，否则数字会被光栅化两次。
 pub const BUTTON_FONT_SIZE: f32 = 14.0;
 
-/// 按钮圆角半径。
+/// 按钮圆角半径。对齐 WinUI `ControlCornerRadius`（4）。
 pub const BUTTON_RADIUS: f32 = 4.0;
+
+/// 按钮标准内边距（左右、上、下），对齐 WinUI `ButtonPadding = 11,5,11,6`。
+///
+/// 垂直方向不对称：文字基线略偏上，是 Win11 按钮的排版特征。
+pub const BUTTON_PADDING: (f32, f32, f32, f32) = (11.0, 5.0, 11.0, 6.0);
+
+/// 按钮描边宽度，对齐 WinUI `ButtonBorderThemeThickness = 1`。
+pub const BUTTON_BORDER: f32 = 1.0;
 
 /// 标签与前置/后置图标之间的间距。
 pub const BUTTON_CONTENT_GAP: f32 = 8.0;
@@ -49,7 +57,7 @@ pub const BUTTON_LOADING_SIZE: f32 = 12.0;
 pub enum ButtonSize {
     /// 紧凑操作按钮，高 28 px。
     Sm,
-    /// 标准操作按钮，高 36 px。
+    /// 标准操作按钮，高 32 px（WinUI `Button` 的标准高度）。
     #[default]
     Md,
     /// 醒目操作按钮，高 44 px。
@@ -62,7 +70,7 @@ impl ButtonSize {
     pub const fn height(self) -> f32 {
         match self {
             Self::Sm => 28.0,
-            Self::Md => 36.0,
+            Self::Md => 32.0,
             Self::Lg => 44.0,
         }
     }
@@ -787,7 +795,7 @@ pub fn emit_button_with_tokens(
         radii,
         Token::NONE,
         tokens.border,
-        1.0,
+        BUTTON_BORDER,
         0.0,
         PrimType::RoundedRect,
         SubElement::Border,

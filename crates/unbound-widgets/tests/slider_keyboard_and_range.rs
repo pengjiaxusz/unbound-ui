@@ -61,11 +61,11 @@ fn a_vertical_slider_runs_bottom_to_top() {
     assert_eq!(track.size.y, 200.0);
 
     desc.value = 0.0;
-    assert_eq!(desc.thumb_rect().origin.y, 192.0);
+    assert_eq!(desc.thumb_rect().origin.y, 191.0);
     desc.value = 100.0;
-    assert_eq!(desc.thumb_rect().origin.y, -8.0);
+    assert_eq!(desc.thumb_rect().origin.y, -9.0);
     desc.value = 50.0;
-    assert_eq!(desc.thumb_rect().origin.y, 92.0);
+    assert_eq!(desc.thumb_rect().origin.y, 91.0);
 
     assert_eq!(value_from_pointer(Vec2::new(0.0, 0.0), &desc), 100.0);
     assert_eq!(value_from_pointer(Vec2::new(0.0, 100.0), &desc), 50.0);
@@ -88,9 +88,9 @@ fn a_range_fills_between_the_two_thumbs() {
     assert_eq!(fill.size.x, 100.0);
     assert_eq!(
         desc.range_start_thumb_rect().map(|thumb| thumb.origin.x),
-        Some(42.0)
+        Some(41.0)
     );
-    assert_eq!(desc.thumb_rect().origin.x, 142.0);
+    assert_eq!(desc.thumb_rect().origin.x, 141.0);
 }
 
 #[test]

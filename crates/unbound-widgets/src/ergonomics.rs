@@ -491,12 +491,13 @@ impl UiWidget for ButtonDesc {
 
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
         let measured = text_ctx.measure_line(&self.label, self.font_size, 500);
+        // WinUI `ButtonPadding = 11,5,11,6`：标准按钮的文本区两侧各让出 11px。
         let pad_x = if self.left_align {
             20.0
         } else if self.size == ButtonSize::Sm {
             18.0
         } else {
-            24.0
+            crate::button::BUTTON_PADDING.0 + crate::button::BUTTON_PADDING.2
         };
         let min_w = if self.label.chars().count() <= 2 {
             26.0
@@ -556,10 +557,12 @@ impl UiWidget for CheckboxDesc {
 
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
         let measured = text_ctx.measure_line(&self.label, 14.0, 400);
+        // WinUI：MinWidth 120、MinHeight 32、方框列 20 + 右边距 8。
         let w = (self.gap + measured.x + 8.0)
             .max(self.rect.width())
-            .max(self.box_size);
-        let h = 24.0_f32.max(self.rect.height());
+            .max(self.box_size)
+            .max(crate::checkbox::CHECKBOX_MIN_WIDTH);
+        let h = crate::checkbox::CHECKBOX_HEIGHT.max(self.rect.height());
         Vec2::new(w, h)
     }
 
