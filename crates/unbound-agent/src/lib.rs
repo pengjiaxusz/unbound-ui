@@ -23,6 +23,7 @@
 pub mod action;
 pub mod assert;
 pub mod log;
+pub mod pixel;
 pub mod query;
 pub mod session;
 pub mod view;
@@ -31,6 +32,7 @@ pub mod wait;
 pub use action::SemanticAction;
 pub use assert::{Assertion, AssertionFailure, BoundsExpect};
 pub use log::{ActionLog, RecordedStep};
+pub use pixel::{CapturedFrame, OffscreenPixelSource, PixelSource};
 pub use query::{NodePredicate, NodeQuery, SpatialRelation};
 pub use session::{ActionError, AgentSession};
 pub use view::{AgentView, NodeSnapshot, TreeSnapshot};

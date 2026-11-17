@@ -60,6 +60,7 @@ pub mod inspector;
 pub mod overlay_manager;
 pub mod prelude;
 pub mod router;
+pub mod scene_upload;
 pub mod scheduler;
 pub mod state_store;
 pub mod window_runner;
@@ -70,6 +71,7 @@ pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Lo
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
 pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
+pub use scene_upload::{collect_backdrops, scene_upload};
 pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};

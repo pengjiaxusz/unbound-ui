@@ -3,7 +3,7 @@
 //! 断言失败时返回**结构化**的诊断，而不是一句「测试挂了」——它同时给出
 //! 期望值、实际值、节点路径，以及**下一步该做什么**。
 
-use unbound_math::{Color, Vec2};
+use unbound_math::Vec2;
 
 use crate::query::{NodePredicate, NodeQuery};
 
@@ -16,15 +16,6 @@ pub struct BoundsExpect {
     pub height: Option<(f32, f32)>,
     /// 必须包含的点（逻辑像素）。
     pub contains: Option<Vec2>,
-}
-
-/// 像素探针。
-///
-/// 由离屏渲染层实现：本 crate 不依赖 GPU，因此像素级断言通过这个接口接入，
-/// 而不必把渲染栈拖进 Agent 层。
-pub trait PixelProbe {
-    /// 读取指定位置的像素颜色。
-    fn color_at(&self, pos: Vec2) -> Option<Color>;
 }
 
 /// 断言。
@@ -62,11 +53,13 @@ pub enum Assertion {
         expect: BoundsExpect,
     },
     /// 指定位置的像素颜色符合预期。
+    ///
+    /// 采样点是**逻辑像素**，与语义树的矩形同一坐标系。
     ColorAt {
         /// 采样位置（逻辑像素）。
         pos: Vec2,
         /// 预期颜色。
-        expect: Color,
+        expect: unbound_math::Color,
         /// 每通道容差（`0`–`255`）。
         tolerance: u8,
     },
