@@ -351,6 +351,25 @@ mod tests {
     }
 
     #[test]
+    fn composition_survives_a_full_mode_round_trip() {
+        let sequence = [
+            BackdropMode::Auto,
+            BackdropMode::SelfDrawn,
+            BackdropMode::Off,
+            BackdropMode::Native,
+            BackdropMode::Auto,
+        ];
+        let expected = BackdropPlan::derive(inputs(BackdropMode::Auto, true)).composition;
+        for choice in sequence {
+            let plan = BackdropPlan::derive(inputs(choice, true));
+            assert_eq!(
+                plan.composition, expected,
+                "switching to {choice:?} must not reconfigure the surface"
+            );
+        }
+    }
+
+    #[test]
     fn texture_geometry_keeps_the_window_size_for_now() {
         let plan = BackdropPlan::derive(inputs(BackdropMode::SelfDrawn, true));
         let texture = plan.texture.expect("self-drawn path needs a texture");
