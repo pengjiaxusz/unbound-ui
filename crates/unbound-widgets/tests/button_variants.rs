@@ -45,7 +45,7 @@ fn background_fill(output: &unbound_widgets::WidgetOutput) -> u16 {
 fn sizes_map_to_the_standard_heights() {
     assert_eq!(ButtonSize::default(), ButtonSize::Md);
     assert_eq!(ButtonSize::Sm.height(), 28.0);
-    assert_eq!(ButtonSize::Md.height(), 36.0);
+    assert_eq!(ButtonSize::Md.height(), 32.0);
     assert_eq!(ButtonSize::Lg.height(), 44.0);
     assert_eq!(desc().size, ButtonSize::Md);
     assert_eq!(desc().with_size(ButtonSize::Lg).size, ButtonSize::Lg);

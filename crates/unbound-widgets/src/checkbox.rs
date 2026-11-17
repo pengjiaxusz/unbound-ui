@@ -12,11 +12,20 @@ use crate::primitive::{focus_ring, glyphs, instance, outlined};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 默认方框尺寸。
-pub const CHECKBOX_BOX: f32 = 18.0;
+/// 默认方框尺寸。对齐 WinUI `CheckBoxSize = 20`。
+pub const CHECKBOX_BOX: f32 = 20.0;
 
-/// 方框与标签之间的间距。
+/// 方框与标签之间的间距。WinUI 的方框列宽 20 + `CheckBoxPadding` 左边距 8。
 pub const CHECKBOX_GAP: f32 = 28.0;
+
+/// 勾选标记尺寸。对齐 WinUI `CheckBoxGlyphSize = 12`。
+pub const CHECKBOX_GLYPH: f32 = 12.0;
+
+/// 复选框标准高度。对齐 WinUI `CheckBoxHeight = 32`。
+pub const CHECKBOX_HEIGHT: f32 = 32.0;
+
+/// 复选框最小宽度。对齐 WinUI `CheckBoxMinWidth = 120`。
+pub const CHECKBOX_MIN_WIDTH: f32 = 120.0;
 
 /// 复选框的三种状态。
 ///
@@ -414,8 +423,8 @@ mod tests {
         let desc = desc();
         let rect = desc.box_rect();
         assert_eq!(rect.origin.x, 0.0);
-        assert_eq!(rect.origin.y, 7.0);
-        assert_eq!(rect.size.x, 18.0);
+        assert_eq!(rect.origin.y, 6.0);
+        assert_eq!(rect.size.x, 20.0);
     }
 
     #[test]

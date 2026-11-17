@@ -19,8 +19,8 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 /// 默认轨道高度。
 pub const SLIDER_TRACK: f32 = 4.0;
 
-/// 默认滑块拇指尺寸。
-pub const SLIDER_THUMB: f32 = 16.0;
+/// 默认滑块拇指尺寸。对齐 WinUI `SliderHorizontalThumbWidth/Height = 18`。
+pub const SLIDER_THUMB: f32 = 18.0;
 
 /// 滑块的运行方向。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -640,11 +640,11 @@ mod tests {
     fn the_thumb_follows_the_value() {
         let mut desc = desc();
         desc.value = 0.0;
-        assert_eq!(desc.thumb_rect().origin.x, -8.0);
+        assert_eq!(desc.thumb_rect().origin.x, -9.0);
         desc.value = 100.0;
-        assert_eq!(desc.thumb_rect().origin.x, 192.0);
+        assert_eq!(desc.thumb_rect().origin.x, 191.0);
         desc.value = 50.0;
-        assert_eq!(desc.thumb_rect().origin.x, 92.0);
+        assert_eq!(desc.thumb_rect().origin.x, 91.0);
     }
 
     #[test]
