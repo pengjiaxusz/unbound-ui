@@ -12,25 +12,29 @@
 
 use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yNode};
-use unbound_gpu::data::{PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{
-    curve_stroke, focus_ring, glyphs as emit_glyphs, instance, outlined, surface,
-};
+use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
-use crate::text_input::{reduce_text_input, TextEditState, TextInputDesc, TextInputEvent};
+use crate::text_input::{
+    focus_underline, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
+};
 use crate::{ControlState, WidgetOutput};
 
-/// 微调按钮列的宽度。
-pub const SPIN_WIDTH: f32 = 18.0;
+/// 微调按钮的宽度。对齐 WinUI `NumberBoxSpinButtonStyle` 的 `MinWidth = 32`。
+pub const SPIN_WIDTH: f32 = 32.0;
+/// 微调按钮的外边距。对齐 WinUI `UpSpinButton Margin = 4`。
+const SPIN_MARGIN: f32 = 4.0;
+/// 微调列总宽度：左右各 4px 外边距加两个 32px 按钮，
+/// 对齐 WinUI `SpinButtonsColumn.Width = 72`。
+const SPIN_AREA: f32 = SPIN_MARGIN * 2.0 + SPIN_WIDTH * 2.0;
 /// 输入框边框与文本之间的内边距。
 pub const NUMBER_PADDING: f32 = 10.0;
-/// 输入框的圆角半径。
-pub const NUMBER_RADIUS: f32 = 8.0;
+/// 输入框的圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+pub const NUMBER_RADIUS: f32 = 4.0;
 
 /// 数字输入框的格式化策略与硬性边界。
 #[derive(Clone, Debug, PartialEq)]
@@ -408,27 +412,25 @@ impl Parser<'_> {
     }
 }
 
-/// 微调列拆分为上按钮与下按钮，此处返回上按钮矩形。
+/// 微调按钮并排位于输入框右端：此处返回左侧的“加”按钮矩形。
+///
+/// WinUI 的 `UpSpinButton` 在左、`DownSpinButton` 在右，两者各占 32px 宽、
+/// 上下各留 4px（`Margin = 4` / `0,4,4,4`）。
 #[must_use]
 pub fn spin_up_rect(rect: Rect) -> Rect {
     Rect::new(
-        rect.max().x - SPIN_WIDTH,
-        rect.origin.y + 1.0,
+        rect.max().x - SPIN_MARGIN - SPIN_WIDTH * 2.0,
+        rect.origin.y + SPIN_MARGIN,
         SPIN_WIDTH,
-        rect.size.y * 0.5 - 1.0,
+        (rect.size.y - SPIN_MARGIN * 2.0).max(0.0),
     )
 }
 
-/// 下微调按钮矩形。
+/// 右侧的“减”按钮矩形，与 [`spin_up_rect`] 等高并紧邻。
 #[must_use]
 pub fn spin_down_rect(rect: Rect) -> Rect {
     let up = spin_up_rect(rect);
-    Rect::new(
-        up.origin.x,
-        up.max().y,
-        up.size.x,
-        rect.max().y - up.max().y,
-    )
+    Rect::new(up.max().x, up.origin.y, up.size.x, up.size.y)
 }
 
 /// 可用于显示格式化数字的文本矩形。
@@ -437,7 +439,7 @@ pub fn number_text_rect(rect: Rect) -> Rect {
     Rect::new(
         rect.origin.x + NUMBER_PADDING,
         rect.origin.y,
-        (rect.size.x - NUMBER_PADDING * 2.0 - SPIN_WIDTH).max(0.0),
+        (rect.size.x - NUMBER_PADDING - SPIN_AREA).max(0.0),
         rect.size.y,
     )
 }
@@ -457,20 +459,21 @@ pub fn emit_number_input(
     let mut primitives = Vec::with_capacity(12 + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len());
 
+    // 填充槽位对齐 WinUI TextBox：静息 `ControlFillColorDefault`、
+    // 悬停 `ControlFillColorSecondary`、禁用 `ControlFillColorDisabled`。
     let fill = if control.disabled {
         Token::CONTROL_DISABLED_BG
     } else if control.phase == crate::PointerPhase::Hovered {
         Token::CONTROL_HOVER
     } else {
-        Token::INPUT_BG
+        Token::CONTROL_FILL
     };
     primitives.push(surface(rect, NUMBER_RADIUS, fill, desc.z));
+    // 描边 `ControlStrokeColorDefault` 为 1px（`TextControlBorderThemeThickness = 1`）。
     let border = if control.disabled {
         Token::CONTROL_DISABLED_BORDER
-    } else if control.focused || state.is_editing() {
-        Token::OUTLINE_STRONG
     } else {
-        Token::OUTLINE
+        Token::CONTROL_STROKE
     };
     primitives.push(outlined(
         rect,
@@ -482,6 +485,18 @@ pub fn emit_number_input(
         desc.z,
     ));
 
+    // 聚焦/编辑态底部 2px 强调条（`TextControlBorderThemeThicknessFocused = 1,1,1,2`）。
+    primitives.push(focus_underline(
+        rect,
+        NUMBER_RADIUS,
+        desc.z,
+        if (control.focused || state.is_editing()) && !control.disabled {
+            1.0
+        } else {
+            0.0
+        },
+    ));
+
     let ink = if control.disabled {
         Token::TEXT_DISABLED
     } else {
@@ -489,35 +504,45 @@ pub fn emit_number_input(
     };
     emit_glyphs(glyphs, ink, desc.z, &mut primitives, &mut payloads);
 
-    // 微调列：一条细分隔线与两个窄按钮。无论是否悬停都会绘制按钮，
-    // 仅填充令牌发生变化，从而保持图元数量恒定。
-    //
+    // 微调列：两枚并排的 32px 按钮（WinUI `SpinButtonsColumn.Width = 72`）。
+    // 无论是否悬停都绘制按钮，仅填充令牌变化，从而保持图元数量恒定。
     let up = spin_up_rect(rect);
     let down = spin_down_rect(rect);
-    primitives.push(instance(
-        Rect::new(up.origin.x, rect.origin.y + 4.0, 1.0, rect.size.y - 8.0),
-        [0.0; 4],
-        Token::OUTLINE,
-        Token::NONE,
-        0.0,
-        0.0,
-        PrimType::Line,
-        SubElement::Background,
-        desc.z,
-    ));
     let spin_fill = |hot: bool| {
         if control.disabled {
             Token::CONTROL_DISABLED_BG
         } else if hot {
             Token::CONTROL_HOVER
         } else {
-            Token::NONE
+            Token::CONTROL_FILL
         }
     };
     let hot_up = control.phase == crate::PointerPhase::Hovered && control.selected;
     let hot_down = control.phase == crate::PointerPhase::Hovered && !control.selected;
-    primitives.push(surface(up, 3.0, spin_fill(hot_up), desc.z));
-    primitives.push(surface(down, 3.0, spin_fill(hot_down), desc.z));
+    // 按钮描边 `ControlStrokeColorDefault`（`NumberBoxSpinButtonBorderThickness = 0,1,1,1`）。
+    let spin_border = if control.disabled {
+        Token::CONTROL_DISABLED_BORDER
+    } else {
+        Token::CONTROL_STROKE
+    };
+    primitives.push(outlined(
+        up,
+        NUMBER_RADIUS,
+        spin_fill(hot_up),
+        spin_border,
+        1.0,
+        0.0,
+        desc.z,
+    ));
+    primitives.push(outlined(
+        down,
+        NUMBER_RADIUS,
+        spin_fill(hot_down),
+        spin_border,
+        1.0,
+        0.0,
+        desc.z,
+    ));
     let mark = if control.disabled {
         Token::TEXT_DISABLED
     } else {
@@ -718,8 +743,11 @@ mod tests {
         let up = spin_up_rect(rect);
         let down = spin_down_rect(rect);
         assert_eq!(up.size.x, SPIN_WIDTH);
-        assert!((up.max().y - down.origin.y).abs() < 1e-6);
-        assert!((down.max().y - rect.max().y).abs() < 1e-6);
+        // WinUI 的加/减按钮并排，等高且紧邻。
+        assert!((up.origin.y - down.origin.y).abs() < 1e-6);
+        assert!((up.max().x - down.origin.x).abs() < 1e-6);
+        assert!((up.size.y - (rect.size.y - SPIN_MARGIN * 2.0)).abs() < 1e-6);
+        assert!((down.max().x - (rect.max().x - SPIN_MARGIN)).abs() < 1e-6);
         assert!(number_text_rect(rect).max().x <= up.origin.x);
     }
 

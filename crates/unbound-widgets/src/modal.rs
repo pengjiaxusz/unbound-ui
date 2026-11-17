@@ -25,10 +25,10 @@ const MODAL_SHADOW: f32 = 40.0;
 pub const MODAL_CLOSE_SIZE: f32 = 24.0;
 /// 默认底部操作按钮宽度。
 pub const MODAL_ACTION_WIDTH: f32 = 88.0;
-/// 两个底部操作按钮之间的间距。
+/// 两个底部操作按钮之间的间距。对齐 WinUI `ContentDialogButtonSpacing = 8`。
 pub const MODAL_ACTION_GAP: f32 = 8.0;
-/// 底部栏水平内边距。
-pub const MODAL_FOOTER_PADDING: f32 = 16.0;
+/// 底部栏水平内边距。对齐 WinUI `ContentDialogPadding = 24`。
+pub const MODAL_FOOTER_PADDING: f32 = 24.0;
 
 /// 标准模态框尺寸档位（`sm`/`md`/`lg`/`xl`/`full` 五档规格）。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -95,7 +95,8 @@ impl ModalDesc {
         Self {
             rect,
             label: String::new(),
-            radius: 14.0,
+            // 对齐 WinUI `OverlayCornerRadius = 8`（ContentDialog 的 CornerRadius）。
+            radius: 8.0,
             z: 950,
             backdrop_blur: 0.0,
             close_button: false,

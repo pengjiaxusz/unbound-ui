@@ -9,7 +9,20 @@ use unbound_theme::Token;
 
 use crate::primitive::{focus_ring, glyphs, outlined};
 use crate::switch::CONTROL_LAYER;
+use crate::text_input::focus_underline;
 use crate::{ControlState, PointerPhase, WidgetOutput};
+
+/// 时 / 分 / 秒列的目标宽度。
+///
+/// WinUI 的三列等分内容区以 64px 为设计基准；官方 `TimePickerSelectorThemeMinWidth = 80`
+/// 是浮层循环列表的最小宽度，内联控件按三列压缩到 64。
+pub const TIME_PICKER_COLUMN_WIDTH: f32 = 64.0;
+/// 选择器行高。
+///
+/// 对齐 WinUI 32px 的控件标准高度（官方 `TimePickerFlyoutPresenterItemHeight = 40` 是浮层列表项）。
+pub const TIME_PICKER_ROW_HEIGHT: f32 = 32.0;
+/// 触发器圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+pub const TIME_PICKER_RADIUS: f32 = 4.0;
 
 /// 时间值 `(时, 分, 秒)`。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -109,7 +122,7 @@ impl TimePickerDesc {
     }
 }
 
-/// 输出结构稳定的时间选择器（1 个背景 + 3 个时/分/秒列 + 1 个焦点环 = 5 个图元）。
+/// 输出结构稳定的时间选择器（1 个背景 + 3 个时/分/秒列 + 1 个焦点强调条 + 1 个焦点环 = 6 个图元）。
 #[must_use]
 pub fn emit_time_picker(
     node: u64,
@@ -117,45 +130,53 @@ pub fn emit_time_picker(
     state: ControlState,
     label_glyphs: &[GlyphQuad],
 ) -> WidgetOutput {
-    let mut primitives = Vec::with_capacity(5 + label_glyphs.len());
+    let mut primitives = Vec::with_capacity(6 + label_glyphs.len());
     let mut payloads = Vec::with_capacity(label_glyphs.len());
 
     let hovered = state.phase == PointerPhase::Hovered;
     primitives.push(outlined(
         desc.rect,
-        6.0,
+        TIME_PICKER_RADIUS,
         if hovered {
-            Token::SURFACE_RAISED
+            Token::CONTROL_HOVER
         } else {
-            Token::SURFACE
+            Token::CONTROL_FILL
         },
         if state.disabled {
-            Token::DISABLED
+            Token::CONTROL_DISABLED_BORDER
         } else if hovered || state.focused {
             Token::FOCUS_RING
         } else {
-            Token::CARD_BORDER
+            // WinUI `TimePickerButtonBorderBrush = ControlElevationBorderBrush`。
+            Token::CONTROL_STROKE
         },
         1.0,
         0.0,
         desc.z,
     ));
 
+    // 槽位沿用与调用方一致的等分算法，视觉列再居中收缩到 64×32：
+    // 字形仍落在槽位中心，不会因列宽变化而偏移。
     let gap = 6.0;
     let pad = 4.0;
-    let col_w = ((desc.rect.width() - pad * 2.0 - gap * 2.0) / 3.0).max(16.0);
-    let col_h = (desc.rect.height() - pad * 2.0).max(16.0);
-    for col in 0..3 {
-        let r = Rect::new(
-            desc.rect.origin.x + pad + col as f32 * (col_w + gap),
-            desc.rect.origin.y + pad,
+    let slot_w = ((desc.rect.width() - pad * 2.0 - gap * 2.0) / 3.0).max(16.0);
+    let slot_h = (desc.rect.height() - pad * 2.0).max(16.0);
+    let col_w = TIME_PICKER_COLUMN_WIDTH.min(slot_w);
+    let col_h = TIME_PICKER_ROW_HEIGHT.min(slot_h);
+    let column_rect = |col: usize| {
+        Rect::new(
+            desc.rect.origin.x + pad + col as f32 * (slot_w + gap) + (slot_w - col_w) * 0.5,
+            desc.rect.origin.y + pad + (slot_h - col_h) * 0.5,
             col_w,
             col_h,
-        );
+        )
+    };
+    for col in 0..3 {
+        let r = column_rect(col);
         let active = col == desc.active_column.min(2);
         primitives.push(outlined(
             r,
-            4.0,
+            TIME_PICKER_RADIUS,
             if active {
                 Token::PRIMARY_SOFT
             } else {
@@ -164,7 +185,7 @@ pub fn emit_time_picker(
             if active {
                 Token::PRIMARY
             } else {
-                Token::CARD_BORDER
+                Token::CONTROL_STROKE
             },
             1.0,
             0.0,
@@ -172,12 +193,20 @@ pub fn emit_time_picker(
         ));
     }
 
+    // 聚焦态底部 2px 强调条（`TextControlBorderThemeThicknessFocused = 1,1,1,2`）。
+    primitives.push(focus_underline(
+        desc.rect,
+        TIME_PICKER_RADIUS,
+        desc.z + 2,
+        if state.focused { 1.0 } else { 0.0 },
+    ));
+
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        TIME_PICKER_RADIUS,
         Token::FOCUS_RING,
         2.0,
-        desc.z + 2,
+        desc.z + 3,
         state.focused,
     ));
 
@@ -185,7 +214,7 @@ pub fn emit_time_picker(
         glyphs(
             label_glyphs,
             Token::TEXT_PRIMARY,
-            desc.z + 3,
+            desc.z + 4,
             &mut primitives,
             &mut payloads,
         );
@@ -211,12 +240,7 @@ pub fn emit_time_picker(
     if !state.disabled {
         const COL_NAMES: [&str; 3] = ["Hour", "Minute", "Second"];
         for (col, name) in COL_NAMES.iter().enumerate() {
-            let r = Rect::new(
-                desc.rect.origin.x + pad + col as f32 * (col_w + gap),
-                desc.rect.origin.y + pad,
-                col_w,
-                col_h,
-            );
+            let r = column_rect(col);
             let key = time_picker_col_node(node, col);
             out.with_sub_control(
                 key,

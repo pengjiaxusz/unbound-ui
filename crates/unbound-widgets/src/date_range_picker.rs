@@ -2,15 +2,23 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
+use unbound_gpu::data::{PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::date_picker::NaiveDate;
-use crate::primitive::{focus_ring, glyphs, outlined, surface};
+use crate::primitive::{focus_ring, glyphs, instance, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
+
+/// 弹出层圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（FlyoutPresenter）。
+pub const DATE_RANGE_RADIUS: f32 = 8.0;
+/// 月份面板与预设胶囊的圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+pub const DATE_RANGE_ITEM_RADIUS: f32 = 4.0;
+/// 弹出层阴影模糊半径。对应 WinUI `FlyoutPresenter.IsDefaultShadowEnabled = True`。
+pub const DATE_RANGE_SHADOW: f32 = 24.0;
 
 /// 闭区间 `[start, end]` 日期范围。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -91,7 +99,7 @@ pub const fn date_range_panel_node(node: u64, panel: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x610 + panel as u64)
 }
 
-/// 发射固定形状的双面板日期范围选择器（1 背景 + 2 月份面板 + 3 预设胶囊 + 1 范围高亮 + 1 焦点环 = 8 个图元）。
+/// 发射固定形状的双面板日期范围选择器（1 阴影 + 1 背景 + 2 月份面板 + 3 预设胶囊 + 1 范围高亮 + 1 焦点环 = 9 个图元）。
 #[must_use]
 pub fn emit_date_range_picker(
     node: u64,
@@ -99,14 +107,26 @@ pub fn emit_date_range_picker(
     state: ControlState,
     label_glyphs: &[GlyphQuad],
 ) -> WidgetOutput {
-    let mut primitives = Vec::with_capacity(8 + label_glyphs.len());
+    let mut primitives = Vec::with_capacity(9 + label_glyphs.len());
     let mut payloads = Vec::with_capacity(label_glyphs.len());
 
     let hovered = state.phase == PointerPhase::Hovered;
+    // WinUI 浮层的默认投影（`FlyoutPresenter.IsDefaultShadowEnabled`）。
+    primitives.push(instance(
+        desc.rect,
+        [0.0; 4],
+        Token::NONE,
+        Token::NONE,
+        0.0,
+        DATE_RANGE_SHADOW,
+        PrimType::Shadow,
+        SubElement::Shadow,
+        desc.z,
+    ));
     primitives.push(outlined(
         desc.rect,
-        8.0,
-        Token::SURFACE,
+        DATE_RANGE_RADIUS,
+        Token::OVERLAY_BG,
         if hovered || state.focused {
             Token::FOCUS_RING
         } else {
@@ -129,7 +149,7 @@ pub fn emit_date_range_picker(
         );
         primitives.push(outlined(
             r,
-            4.0,
+            DATE_RANGE_ITEM_RADIUS,
             if hovered {
                 Token::SURFACE_RAISED
             } else {
@@ -154,7 +174,7 @@ pub fn emit_date_range_picker(
         );
         primitives.push(outlined(
             r,
-            6.0,
+            DATE_RANGE_ITEM_RADIUS,
             Token::SURFACE_SUNKEN,
             Token::CARD_BORDER,
             1.0,
@@ -171,7 +191,7 @@ pub fn emit_date_range_picker(
     );
     primitives.push(surface(
         span_r,
-        4.0,
+        DATE_RANGE_ITEM_RADIUS,
         if desc.range.is_some() {
             Token::PRIMARY_SOFT
         } else {
@@ -182,7 +202,7 @@ pub fn emit_date_range_picker(
 
     primitives.push(focus_ring(
         desc.rect,
-        8.0,
+        DATE_RANGE_RADIUS,
         Token::FOCUS_RING,
         2.0,
         desc.z + 3,

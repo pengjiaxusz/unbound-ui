@@ -12,7 +12,9 @@ use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined
 use crate::table::ColumnSpec;
 use crate::{ControlState, WidgetOutput};
 
-pub const TREE_TABLE_ROW_HEIGHT: f32 = 28.0;
+/// 数据行高度。对齐 WinUI `TableViewRowMinHeightMedium = 32`。
+pub const TREE_TABLE_ROW_HEIGHT: f32 = 32.0;
+/// 表头高度。对齐 WinUI `TableViewHeaderCellPaddingMedium` 的 32px 行。
 pub const TREE_TABLE_HEADER_HEIGHT: f32 = 32.0;
 
 /// 树形表格中带缩进深度的单行。
@@ -40,7 +42,7 @@ impl TreeTableDesc {
             rect,
             columns,
             rows: Vec::new(),
-            radius: 6.0,
+            radius: 4.0, // ControlCornerRadius = 4
         }
     }
 
@@ -121,7 +123,7 @@ pub fn emit_tree_table_with_glyphs(
     out.primitives.push(surface(
         header_rect,
         desc.radius,
-        Token::SURFACE_RAISED,
+        Token::NONE, // TabularSurfaceHeaderBackground = SubtleFillColorTransparent
         z + 1,
     ));
 
@@ -133,7 +135,7 @@ pub fn emit_tree_table_with_glyphs(
         1.0,
     );
     out.primitives
-        .push(surface(header_line, 0.0, Token::OUTLINE, z + 2));
+        .push(surface(header_line, 0.0, Token::DIVIDER, z + 2)); // TabularSurfaceHeaderSeparator
 
     // 4. 数据行（最多 4 个可见行以保持结构稳定，高度自适应容器剩余空间）
     let body_h = (rect.height() - header_rect.height()).max(0.0);
@@ -143,11 +145,11 @@ pub fn emit_tree_table_with_glyphs(
         let row_rect = Rect::new(rect.origin.x, y, rect.width(), row_h.max(0.0));
         let is_selected = state.selected == Some(row_idx as u64);
         let row_bg = if is_selected {
-            Token::PRIMARY_SOFT
+            Token::HOVER // TabularSurfaceRowBackgroundSelected = SubtleFillColorSecondary
         } else if row_idx % 2 == 1 {
-            Token::SURFACE_SUNKEN
+            Token::CONTROL_FILL // TabularSurfaceRowBackgroundAlternating（约 4% 白色）
         } else {
-            Token::SURFACE
+            Token::NONE // TabularSurfaceRowBackground = SubtleFillColorTransparent
         };
 
         out.primitives.push(surface(row_rect, 0.0, row_bg, z + 3));
@@ -165,7 +167,7 @@ pub fn emit_tree_table_with_glyphs(
     for (row_idx, row) in desc.rows.iter().take(4).enumerate() {
         if row.has_children {
             let y = rect.origin.y + header_rect.height() + row_idx as f32 * row_h + row_h * 0.5;
-            let cx = rect.origin.x + 12.0 + row.depth as f32 * 14.0;
+            let cx = rect.origin.x + 12.0 + row.depth as f32 * 16.0; // TableView defaultRowIndentSize = 16
             let expanded = state.is_expanded(row.id);
             if expanded {
                 curve_stroke(
@@ -217,7 +219,7 @@ pub fn emit_tree_table_with_glyphs(
         if control.focused {
             Token::PRIMARY
         } else {
-            Token::OUTLINE
+            Token::DIVIDER // TabularSurfaceOuterBorder = DividerStrokeColorDefault
         },
         1.0,
         0.0,

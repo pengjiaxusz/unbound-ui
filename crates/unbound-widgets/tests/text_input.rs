@@ -205,10 +205,17 @@ fn validation_drives_the_border_token() {
         ..ControlState::default()
     };
     let output = emit_text_input(1, &desc(), focused, &edit, &visual, &mut []);
+    // 聚焦不改变整圈描边（`TextControlBorderThemeThickness = 1`），
+    // 只把底边强调条点亮为 2px PRIMARY。
     assert_eq!(
         output.primitives[1].border_token_or_tex,
-        unbound_theme::Token::OUTLINE_STRONG.raw() as u32
+        unbound_theme::Token::CONTROL_STROKE.raw() as u32
     );
+    assert_eq!(
+        output.primitives[2].fill_token_or_uv,
+        unbound_theme::Token::PRIMARY.raw() as u32
+    );
+    assert!((output.primitives[2].opacity() - 1.0).abs() < 0.01);
 }
 
 #[test]
@@ -221,10 +228,10 @@ fn an_ime_preedit_paints_the_underline_only_while_composing() {
     };
     let composing = emit_text_input(1, &desc(), ControlState::default(), &edit, &visual, &mut []);
     assert_eq!(
-        composing.primitives[4].fill_token_or_uv,
+        composing.primitives[5].fill_token_or_uv,
         unbound_theme::Token::PREEDIT_UNDERLINE.raw() as u32
     );
-    assert!((composing.primitives[4].opacity() - 1.0).abs() < 0.01);
+    assert!((composing.primitives[5].opacity() - 1.0).abs() < 0.01);
 
     let idle = TextInputVisual {
         preedit: Some(Rect::new(38.0, 40.0, 20.0, 2.0)),
@@ -238,7 +245,7 @@ fn an_ime_preedit_paints_the_underline_only_while_composing() {
         &idle,
         &mut [],
     );
-    assert_eq!(output.primitives[4].opacity(), 0.0);
+    assert_eq!(output.primitives[5].opacity(), 0.0);
 }
 
 #[test]
@@ -253,7 +260,7 @@ fn the_caret_respects_its_blink_phase() {
         ..TextInputVisual::default()
     };
     let output = emit_text_input(1, &desc(), focused, &edit, &hidden, &mut []);
-    assert_eq!(output.primitives[3].opacity(), 0.0);
+    assert_eq!(output.primitives[4].opacity(), 0.0);
 
     let shown = emit_text_input(
         1,
@@ -263,14 +270,15 @@ fn the_caret_respects_its_blink_phase() {
         &TextInputVisual::default(),
         &mut [],
     );
-    assert!((shown.primitives[3].opacity() - 1.0).abs() < 0.01);
+    assert!((shown.primitives[4].opacity() - 1.0).abs() < 0.01);
 }
 
 #[test]
 fn the_clear_affordance_sits_inside_the_trailing_padding() {
     let desc = desc().clearable(true);
     let clear = desc.clear_rect();
-    assert!(clear.max().x <= desc.rect.max().x - 10.0);
+    // WinUI 内嵌按钮外边距 `TextBoxInnerButtonMargin = 0,4,4,4`，右缘距栏边 4px。
+    assert!((clear.max().x - (desc.rect.max().x - 4.0)).abs() < 0.01);
     assert!(clear.max().y <= desc.rect.max().y);
     assert!(clear.origin.x >= desc.rect.origin.x);
 }

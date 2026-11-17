@@ -146,15 +146,15 @@ pub struct TableDesc {
 }
 
 impl TableDesc {
-    /// 创建带 32 px 表头与 28 px 行高的表格。
+    /// 创建带 32 px 表头与 32 px 行高的表格。
     #[must_use]
     pub fn new(rect: Rect, columns: Vec<ColumnSpec>) -> Self {
         Self {
             rect,
             label: String::new(),
             columns,
-            header_height: 32.0,
-            row_height: 28.0,
+            header_height: 32.0, // TableViewHeaderCellPaddingMedium（32px 行）
+            row_height: 32.0,    // TableViewRowMinHeightMedium = 32
             striped: true,
             z: 640,
         }
@@ -482,10 +482,10 @@ impl TableTokens {
         Self {
             header: Token::HEADER_BG,
             header_text: Token::TEXT_SECONDARY,
-            row: Token::SURFACE,
-            row_alt: Token::SURFACE_SUNKEN,
-            selected: Token::SELECTION,
-            rule: Token::DIVIDER,
+            row: Token::NONE, // TabularSurfaceRowBackground = SubtleFillColorTransparent
+            row_alt: Token::CONTROL_FILL, // TabularSurfaceRowBackgroundAlternating（约 4% 白色）
+            selected: Token::HOVER, // TabularSurfaceRowBackgroundSelected = SubtleFillColorSecondary
+            rule: Token::DIVIDER,   // TabularSurfaceGridLine = DividerStrokeColorDefault
             frozen_rule: Token::OUTLINE_STRONG,
             text: Token::TEXT_PRIMARY,
         }
@@ -515,7 +515,12 @@ pub fn emit_table(
     let mut primitives = Vec::with_capacity(6 + rows.len() * 4 + header_glyphs.len());
     let mut payloads = Vec::with_capacity(rows.len() + header_glyphs.len());
 
-    primitives.push(surface(desc.header_rect(), 0.0, tokens.header, desc.z));
+    primitives.push(surface(
+        desc.header_rect(),
+        4.0, // TableViewHeaderSingleCornerRadius = 4
+        tokens.header,
+        desc.z,
+    ));
     primitives.push(line(
         Rect::new(
             desc.rect.origin.x,

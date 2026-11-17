@@ -2,14 +2,26 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
+use unbound_gpu::data::GpuPrimitiveInstance;
 use unbound_input::{CursorKind, HitRegion};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs, outlined};
+use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
+
+/// 气泡圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（`FlyoutPresenter` 的 `CornerRadius`）。
+const POPCONFIRM_RADIUS: f32 = 8.0;
+/// 气泡阴影模糊半径，与菜单/Toast 的屏幕级浮层阴影同档。
+const POPCONFIRM_SHADOW: f32 = 18.0;
+/// 按钮圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+const POPCONFIRM_BUTTON_RADIUS: f32 = 4.0;
+/// 按钮高度上限。对齐 WinUI 标准 `Button` 的 `MinHeight = 32`。
+const POPCONFIRM_BUTTON_HEIGHT: f32 = 32.0;
+/// 两个按钮之间的间距。对齐 WinUI 对话框按钮的 8px 间距。
+const POPCONFIRM_BUTTON_GAP: f32 = 8.0;
 
 /// [`Popconfirm`] 锚定气泡的描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -52,7 +64,7 @@ pub const fn popconfirm_confirm_node(node: u64) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x102
 }
 
-/// 输出结构稳定的确认气泡（1 张卡片 + 取消按钮 + 确认按钮 + 1 个焦点环 = 4 个图元）。
+/// 输出结构稳定的确认气泡（1 张卡片 + 1 个悬停层 + 取消按钮 + 确认按钮 + 1 个焦点环 = 5 个图元）。
 #[must_use]
 pub fn emit_popconfirm(
     node: u64,
@@ -60,42 +72,53 @@ pub fn emit_popconfirm(
     state: ControlState,
     label_glyphs: &[GlyphQuad],
 ) -> WidgetOutput {
-    let mut primitives = Vec::with_capacity(4 + label_glyphs.len());
+    let mut primitives = Vec::with_capacity(5 + label_glyphs.len());
     let mut payloads = Vec::with_capacity(label_glyphs.len());
 
     let hovered = state.phase == PointerPhase::Hovered;
+    // 卡片：`FlyoutPresenter` 的 8px 圆角、1px 浮层描边与屏幕级阴影。
     primitives.push(outlined(
         desc.rect,
-        8.0,
+        POPCONFIRM_RADIUS,
         Token::SURFACE_RAISED,
-        if hovered || state.focused {
-            Token::FOCUS_RING
-        } else {
-            Token::CARD_BORDER
-        },
+        Token::CONTROL_STROKE,
         1.0,
-        6.0,
+        POPCONFIRM_SHADOW,
         desc.z,
     ));
 
+    // 悬停层：`SubtleFillColorSecondary`；未悬停时靠不透明度隐藏，保持图元数量恒定。
+    let mut hover_layer = surface(desc.rect, POPCONFIRM_RADIUS, Token::HOVER, desc.z);
+    if !hovered {
+        hover_layer.z_and_opacity =
+            GpuPrimitiveInstance::pack_z_opacity(hover_layer.depth_u16(), 0.0);
+    }
+    primitives.push(hover_layer);
+
     let btn_w = 56.0_f32.min((desc.rect.width() - 24.0) * 0.45);
-    let btn_h = 22.0_f32.min(desc.rect.height() * 0.4);
+    let btn_h = POPCONFIRM_BUTTON_HEIGHT.min(desc.rect.height() * 0.4);
     let btn_y = desc.rect.max().y - btn_h - 8.0;
     let confirm_r = Rect::new(desc.rect.max().x - btn_w - 8.0, btn_y, btn_w, btn_h);
-    let cancel_r = Rect::new(confirm_r.origin.x - btn_w - 6.0, btn_y, btn_w, btn_h);
+    let cancel_r = Rect::new(
+        confirm_r.origin.x - btn_w - POPCONFIRM_BUTTON_GAP,
+        btn_y,
+        btn_w,
+        btn_h,
+    );
 
+    // 次按钮：`ButtonBackground` = `ControlFillColorDefault`，与控件表面同档。
     primitives.push(outlined(
         cancel_r,
-        4.0,
-        Token::SURFACE,
-        Token::CARD_BORDER,
+        POPCONFIRM_BUTTON_RADIUS,
+        Token::CONTROL_FILL,
+        Token::CONTROL_STROKE,
         1.0,
         0.0,
         desc.z + 1,
     ));
     primitives.push(outlined(
         confirm_r,
-        4.0,
+        POPCONFIRM_BUTTON_RADIUS,
         Token::ERROR,
         Token::ERROR,
         1.0,
@@ -105,7 +128,7 @@ pub fn emit_popconfirm(
 
     primitives.push(focus_ring(
         desc.rect,
-        8.0,
+        POPCONFIRM_RADIUS,
         Token::FOCUS_RING,
         2.0,
         desc.z + 2,

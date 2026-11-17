@@ -14,9 +14,31 @@ use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{glyphs, surface};
+use crate::primitive::{glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
+
+/// 默认头像直径（逻辑像素）。
+///
+/// 对应 WinUI `PersonPicture` 的标准 40px 圆形；调用方不指定尺寸时可按此取方形包围盒。
+pub const AVATAR_DEFAULT_SIZE: f32 = 40.0;
+
+/// 首字母字号相对头像直径的比例。
+///
+/// WinUI `PersonPicture::OnSizeChanged` 取 `Width * 0.42`：
+/// 40px 头像对应 16.8px，96px 头像对应 40px。
+pub const AVATAR_FONT_SIZE_RATIO: f32 = 0.42;
+
+/// 头像圆形描边宽度。
+///
+/// 对应 WinUI `PersonPictureEllipseStrokeThickness = 1`；描边色取
+/// `PersonPictureEllipseFillStrokeBrush`（`CardStrokeColorDefaultBrush`）。
+pub const AVATAR_STROKE_WIDTH: f32 = 1.0;
+
+/// 在线状态圆点与头像背景之间的分离环宽度。
+///
+/// 对应 WinUI `PersonPictureEllipseBadgeStrokeThickness = 2`。
+pub const AVATAR_BADGE_STROKE_WIDTH: f32 = 2.0;
 
 /// 状态圆点显示的在线状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -97,6 +119,14 @@ impl AvatarDesc {
         (self.rect.size.x.min(self.rect.size.y) * 0.5).max(0.0)
     }
 
+    /// 圆形内首字母的规范字号。
+    ///
+    /// 遵循 WinUI `PersonPicture` 的「直径 × 42%」规则；实际字形由调用方按此字号塑形。
+    #[must_use]
+    pub fn font_size(&self) -> f32 {
+        (self.radius() * 2.0 * AVATAR_FONT_SIZE_RATIO).max(1.0)
+    }
+
     /// 头像图片应填充的正方形区域。
     #[must_use]
     pub fn image_rect(&self) -> Rect {
@@ -164,7 +194,17 @@ pub fn emit_avatar(
     let radius = desc.radius();
     let mut primitives = Vec::with_capacity(3 + avatar_glyphs.len());
     let mut payloads = Vec::with_capacity(avatar_glyphs.len());
-    primitives.push(surface(desc.image_rect(), radius, desc.fill, desc.z));
+    // 圆形底 + 1px 卡片描边（WinUI `PersonPictureEllipseStrokeThickness`），
+    // 单个带边框圆角矩形同时承载填充与描边，图元拓扑保持不变。
+    primitives.push(outlined(
+        desc.image_rect(),
+        radius,
+        desc.fill,
+        Token::CARD_BORDER,
+        AVATAR_STROKE_WIDTH,
+        0.0,
+        desc.z,
+    ));
     glyphs(
         avatar_glyphs,
         Token::PRIMARY,
@@ -173,12 +213,8 @@ pub fn emit_avatar(
         &mut payloads,
     );
     if let Some(dot) = desc.presence_rect() {
-        primitives.push(surface(
-            dot.inflate(2.0),
-            (dot.size.x + 4.0) * 0.5,
-            Token::SURFACE,
-            desc.z + 2,
-        ));
+        let ring = dot.inflate(AVATAR_BADGE_STROKE_WIDTH);
+        primitives.push(surface(ring, ring.size.x * 0.5, Token::SURFACE, desc.z + 2));
         primitives.push(surface(
             dot,
             dot.size.x * 0.5,

@@ -13,6 +13,23 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const LAYER: u8 = 1;
 
+/// 单个字段输入框的高度。
+///
+/// 对齐 WinUI `TextControlThemeMinHeight = 32`（与已校准的 TextBox/Button 一致）。
+const FIELD_HEIGHT: f32 = 32.0;
+/// 输入框圆角半径。
+///
+/// 对齐 WinUI `ControlCornerRadius = 4`。
+const FIELD_RADIUS: f32 = 4.0;
+/// 标签列与输入框之间的间距。
+///
+/// Fluent 2 表单布局的标签间距取 4（与 `form::FORM_LABEL_GAP` 对齐）。
+const LABEL_GAP: f32 = 4.0;
+/// 字段之间的垂直间距。
+///
+/// Fluent 2 表单节奏取 16（与 `form::FORM_FIELD_GAP` 对齐）。
+const FIELD_GAP: f32 = 16.0;
+
 /// 字段值的继承与覆写来源状态（供 `chahu-render-debugger` 启动预设配置继承链展示徽章）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum FieldInheritanceState {
@@ -259,7 +276,8 @@ impl SchemaFormDesc {
         Self {
             rect,
             fields,
-            row_height: 34.0,
+            // 行距 = 输入框高度 32 + 字段间距 16，保证相邻输入框之间恰好留出 Fluent 2 的 16px。
+            row_height: FIELD_HEIGHT + FIELD_GAP,
             z: 10,
         }
     }
@@ -295,11 +313,12 @@ pub fn emit_schema_form(
     let label_col_w = (r.size.x * 0.36).clamp(90.0, 220.0);
     for (idx, field) in desc.fields.iter().enumerate() {
         let y = r.origin.y + 10.0 + idx as f32 * desc.row_height;
+        // 字段行高固定为输入框高度，剩余行距全部让给字段间距。
         let row_r = Rect::new(
             r.origin.x + 8.0,
             y,
             (r.size.x - 16.0).max(40.0),
-            desc.row_height - 4.0,
+            FIELD_HEIGHT,
         );
         let enabled = !control.disabled && state.is_field_enabled(field);
         let modified = state.is_modified(field)
@@ -316,24 +335,34 @@ pub fn emit_schema_form(
         };
         primitives.push(surface(dot_r, 3.0, dot_tok, z + 1));
 
-        // 右侧控件槽位表面
+        // 右侧控件槽位表面：标签列与输入框之间留出 `LABEL_GAP`。
+        let ctrl_x = row_r.origin.x + label_col_w + LABEL_GAP;
         let ctrl_r = Rect::new(
-            row_r.origin.x + label_col_w,
-            row_r.origin.y + 2.0,
-            (row_r.size.x - label_col_w - 4.0).max(32.0),
-            (row_r.size.y - 4.0).max(18.0),
+            ctrl_x,
+            row_r.origin.y,
+            (row_r.max().x - ctrl_x).max(32.0),
+            FIELD_HEIGHT,
         );
         let (fill, border) = if !enabled {
             (Token::CONTROL_DISABLED_BG, Token::CONTROL_DISABLED_BORDER)
         } else if state.errors.contains_key(&field.key) {
             (Token::INPUT_BG, Token::INPUT_BORDER_ERROR)
         } else {
-            (Token::INPUT_BG, Token::OUTLINE)
+            // WinUI `TextControlBorderBrush` = `ControlStrokeColorDefault`。
+            (Token::INPUT_BG, Token::CONTROL_STROKE)
         };
-        primitives.push(outlined(ctrl_r, 5.0, fill, border, 1.0, 0.0, z + 1));
+        primitives.push(outlined(
+            ctrl_r,
+            FIELD_RADIUS,
+            fill,
+            border,
+            1.0,
+            0.0,
+            z + 1,
+        ));
 
-        // 行底部分隔细线
-        let div_r = Rect::new(row_r.origin.x, row_r.max().y + 1.0, row_r.size.x, 1.0);
+        // 行底部分隔细线：落在字段间距的下沿，避免贴住输入框。
+        let div_r = Rect::new(row_r.origin.x, y + desc.row_height - 1.0, row_r.size.x, 1.0);
         primitives.push(surface(div_r, 0.0, Token::DIVIDER, z + 1));
     }
 

@@ -2,13 +2,14 @@
 //!
 //! Pivot 与 [`crate::tabs`] 是两种不同语义：文档标签页切换的是「同一区域的内容」，
 //! 而 Pivot 切换的是「页面内的视图」，因此没有关闭按钮、拖拽排序和标签背景，
-//! 只有文字、悬停亮度与 2px 强调色下划线——这是 Win11 设置页、任务管理器等
+//! 只有文字、悬停亮度与 3px 强调色下划线——这是 Win11 设置页、任务管理器等
 //! 系统应用里最常见的二级导航形态。
 //!
-//! 几何约定（[`unbound_theme::typography::geometry`]）：
-//! - 高度 [`PIVOT_HEIGHT`]（40px）；
-//! - 标签间距 [`PIVOT_GAP`]（24px）；
-//! - 指示器厚度 [`PIVOT_INDICATOR_HEIGHT`]（2px），贴在控件底边。
+//! 几何约定（对齐 WinUI `PivotHeaderItem`）：
+//! - 高度 [`PIVOT_HEIGHT`]（48px，`Height = 48`）；
+//! - 标签间距 [`PIVOT_GAP`]（24px，`PivotHeaderItemMargin = 12,0,12,0`）；
+//! - 指示器厚度 [`PIVOT_INDICATOR_HEIGHT`]（3px，`SelectedPipe` 的 `Height = 3`），
+//!   距底边 2px（`Margin = 0,0,0,2`）。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -22,12 +23,14 @@ use crate::primitive::{focus_ring, glyphs, outlined};
 use crate::switch::CONTROL_LAYER;
 use crate::{AlignX, AlignY, ControlState, TextCtx, UiWidget, WidgetInputEvent, WidgetOutput};
 
-/// Pivot 高度。
-pub const PIVOT_HEIGHT: f32 = geometry::PIVOT_HEIGHT;
-/// 标签之间的水平间距。
-pub const PIVOT_GAP: f32 = geometry::PIVOT_GAP;
-/// 选中指示器厚度。
-pub const PIVOT_INDICATOR_HEIGHT: f32 = geometry::PIVOT_INDICATOR_HEIGHT;
+/// Pivot 高度。对齐 WinUI `PivotHeaderItem` 的 `Height = 48`。
+pub const PIVOT_HEIGHT: f32 = 48.0;
+/// 标签之间的水平间距。WinUI `PivotHeaderItemMargin = 12,0,12,0`（两侧各 12）。
+pub const PIVOT_GAP: f32 = 24.0;
+/// 选中指示器厚度。WinUI `SelectedPipe` 的 `Height = 3`。
+pub const PIVOT_INDICATOR_HEIGHT: f32 = 3.0;
+/// 选中指示器距控件底边的留白。WinUI `SelectedPipe` 的 `Margin = 0,0,0,2`。
+const PIVOT_INDICATOR_INSET: f32 = 2.0;
 
 /// Pivot 的单个标签。
 #[derive(Clone, Debug, PartialEq)]
@@ -174,7 +177,7 @@ impl PivotDesc {
         let item = self.item_rect(index);
         Rect::new(
             item.origin.x,
-            item.max().y - self.indicator_height,
+            item.max().y - PIVOT_INDICATOR_INSET - self.indicator_height,
             item.width(),
             self.indicator_height,
         )
@@ -231,10 +234,12 @@ pub fn emit_pivot_item(
         z,
     ));
 
+    // `PivotHeaderItemForegroundSelected` = TextFillColorPrimary，
+    // 强调色只用于下划线（`PivotHeaderItemSelectedPipeFill`）。
     let label_color = if disabled {
         Token::TEXT_DISABLED
     } else if active {
-        Token::PRIMARY
+        Token::TEXT_PRIMARY
     } else {
         Token::TEXT_SECONDARY
     };
@@ -253,7 +258,8 @@ pub fn emit_pivot_item(
     let indicator = desc.indicator_rect(index);
     primitives.push(outlined(
         indicator,
-        0.0,
+        // `SelectedPipe` 的圆角取控件自身 CornerRadius（`ControlCornerRadius = 4`）。
+        geometry::CONTROL_RADIUS,
         if active { Token::PRIMARY } else { Token::NONE },
         Token::NONE,
         0.0,
@@ -440,8 +446,8 @@ mod tests {
     fn indicator_hugs_the_bottom_edge() {
         let desc = desc();
         let indicator = desc.indicator_rect(1);
-        assert!((indicator.height() - 2.0).abs() < 0.01);
-        assert!((indicator.max().y - desc.rect.max().y).abs() < 0.01);
+        assert!((indicator.height() - PIVOT_INDICATOR_HEIGHT).abs() < 0.01);
+        assert!((indicator.max().y - (desc.rect.max().y - PIVOT_INDICATOR_INSET)).abs() < 0.01);
         assert!((indicator.width() - desc.item_rect(1).width()).abs() < 0.01);
     }
 

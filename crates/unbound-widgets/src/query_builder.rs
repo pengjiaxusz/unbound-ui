@@ -80,19 +80,13 @@ pub fn emit_query_builder(
     let outer_border = if !control.disabled && control.phase == PointerPhase::Pressed {
         Token::PRIMARY
     } else if !control.disabled && control.phase == PointerPhase::Hovered {
-        Token::OUTLINE_STRONG
+        Token::INPUT_BORDER_HOVER
     } else {
         Token::CARD_BORDER
     };
-    primitives.push(outlined(
-        r,
-        8.0,
-        Token::SURFACE_RAISED,
-        outer_border,
-        1.0,
-        0.0,
-        z,
-    ));
+    // 容器是 WinUI 卡片/浮层：圆角 `OverlayCornerRadius = 8`、
+    // 填充 `CardBackgroundFillColorDefault`、描边 `CardStrokeColorDefault`。
+    primitives.push(outlined(r, 8.0, Token::CARD_BG, outer_border, 1.0, 0.0, z));
 
     // 顶部 AND/OR 切换胶囊
     let comb_r = Rect::new(r.origin.x + 12.0, r.origin.y + 10.0, 56.0, 24.0);
@@ -102,7 +96,8 @@ pub fn emit_query_builder(
     };
     primitives.push(outlined(
         comb_r,
-        5.0,
+        // 控件圆角 `ControlCornerRadius = 4`。
+        4.0,
         comb_fill,
         Token::PRIMARY,
         1.0,
@@ -113,11 +108,12 @@ pub fn emit_query_builder(
     for (idx, _rule) in desc.rules.iter().enumerate() {
         let y = r.origin.y + 42.0 + idx as f32 * 34.0;
         let row_r = Rect::new(r.origin.x + 12.0, y, (r.size.x - 24.0).max(40.0), 28.0);
+        // 规则行是文本控件外观：`ControlFillColorDefault` + `ControlStrokeColorDefault`。
         primitives.push(outlined(
             row_r,
-            5.0,
-            Token::SURFACE_SUNKEN,
-            Token::OUTLINE,
+            4.0,
+            Token::CONTROL_FILL,
+            Token::CONTROL_STROKE,
             1.0,
             0.0,
             z + 1,

@@ -127,8 +127,9 @@ impl TransferDesc {
         let left_max_x = self.rect.origin.x + pad + pane_w;
         let mid_x = left_max_x + pad;
         let cy = self.rect.origin.y + self.rect.height() * 0.5;
-        let right_btn = Rect::new(mid_x + 2.0, cy - 16.0, mid_w - 4.0, 20.0);
-        let left_btn = Rect::new(mid_x + 2.0, cy + 4.0, mid_w - 4.0, 20.0);
+        // WinUI 默认 Button 高 32（ButtonPadding = 11,5,11,6），两枚按钮上下留 8px 间距。
+        let right_btn = Rect::new(mid_x + 2.0, cy - 36.0, mid_w - 4.0, 32.0);
+        let left_btn = Rect::new(mid_x + 2.0, cy + 4.0, mid_w - 4.0, 32.0);
         (right_btn, left_btn)
     }
 }
@@ -147,12 +148,12 @@ pub fn emit_transfer(
     let hovered = state.phase == PointerPhase::Hovered;
     primitives.push(outlined(
         desc.rect,
-        8.0,
-        Token::SURFACE,
+        4.0,            // ControlCornerRadius = 4
+        Token::CARD_BG, // CardBackgroundFillColorDefault
         if hovered || state.focused {
             Token::FOCUS_RING
         } else {
-            Token::CARD_BORDER
+            Token::CARD_BORDER // CardStrokeColorDefault
         },
         1.0,
         0.0,
@@ -179,9 +180,9 @@ pub fn emit_transfer(
     for pane in [left_r, right_r] {
         primitives.push(outlined(
             pane,
-            6.0,
-            Token::SURFACE_SUNKEN,
-            Token::CARD_BORDER,
+            4.0,                   // ControlCornerRadius = 4
+            Token::CONTROL_FILL,   // ControlFillColorDefault
+            Token::CONTROL_STROKE, // ControlStrokeColorDefault
             1.0,
             0.0,
             desc.z + 1,
@@ -192,13 +193,13 @@ pub fn emit_transfer(
     for btn_r in [right_btn, left_btn] {
         primitives.push(outlined(
             btn_r,
-            4.0,
+            4.0, // ControlCornerRadius = 4
             if hovered {
-                Token::PRIMARY_SOFT
+                Token::HOVER // SubtleFillColorSecondary
             } else {
-                Token::SURFACE_RAISED
+                Token::CONTROL_FILL // ControlFillColorDefault
             },
-            Token::PRIMARY,
+            Token::CONTROL_STROKE, // ControlStrokeColorDefault
             1.0,
             0.0,
             desc.z + 2,
@@ -207,7 +208,7 @@ pub fn emit_transfer(
 
     primitives.push(focus_ring(
         desc.rect,
-        8.0,
+        4.0, // ControlCornerRadius = 4
         Token::FOCUS_RING,
         2.0,
         desc.z + 3,
@@ -257,7 +258,8 @@ pub fn emit_transfer(
             true,
         );
 
-        let row_h = 24.0;
+        // ListViewItemMinHeight = 40
+        let row_h = 40.0;
         let mut left_idx = 0usize;
         let mut right_idx = 0usize;
         for item in &desc.items {

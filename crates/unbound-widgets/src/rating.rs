@@ -60,50 +60,53 @@ pub fn emit_rating(node: u64, desc: &RatingDesc, state: ControlState) -> WidgetO
     let payloads = Vec::new();
 
     let hovered = state.phase == PointerPhase::Hovered;
+    // WinUI RatingControl 自身无实心面板，只在悬停时叠 SubtleFillColorSecondary。
     primitives.push(outlined(
         desc.rect,
-        6.0,
+        4.0, // ControlCornerRadius = 4
         if hovered {
-            Token::SURFACE_RAISED
+            Token::HOVER
         } else {
-            Token::SURFACE_SUNKEN
+            Token::CARD_BG // CardBackgroundFillColorDefault
         },
         if state.focused {
             Token::FOCUS_RING
         } else {
-            Token::CARD_BORDER
+            Token::CARD_BORDER // CardStrokeColorDefault
         },
         1.0,
         0.0,
         desc.z,
     ));
 
-    let gap = 6.0;
+    // RatingControlItemSpacing = 8；ActualRatingFontSize = 32 / 2 = 16。
+    let gap = 8.0;
     let sz = ((desc.rect.width() - gap * (MAX_STARS + 1) as f32) / MAX_STARS as f32)
         .min(desc.rect.height() - 8.0)
+        .min(16.0)
         .max(12.0);
     let y = desc.rect.origin.y + (desc.rect.height() - sz) * 0.5;
     for i in 0..MAX_STARS {
         let r = Rect::new(desc.rect.origin.x + gap + i as f32 * (sz + gap), y, sz, sz);
         let star_tok = if state.disabled {
             if desc.value >= i as f32 + 0.5 {
-                Token::DISABLED
+                Token::TEXT_DISABLED // RatingControlDisabledSelectedForeground = TextFillColorDisabled
             } else {
-                Token::CONTROL_DISABLED_BG
+                Token::DISABLED
             }
         } else if desc.value >= i as f32 + 1.0 {
-            Token::WARNING
+            Token::PRIMARY // RatingControlSelectedForeground = AccentFillColorDefault
         } else if desc.allow_half && desc.value >= i as f32 + 0.5 {
-            Token::WARNING_SOFT
+            Token::PRIMARY_SOFT // 半星沿用强调色，WinUI 以同一画刷裁剪 50%
         } else {
-            Token::CARD_BORDER
+            Token::TEXT_SECONDARY // RatingControlUnselectedForeground = TextFillColorSecondary
         };
         primitives.push(surface(r, sz * 0.25, star_tok, desc.z + 1));
     }
 
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        4.0, // ControlCornerRadius = 4
         Token::FOCUS_RING,
         2.0,
         desc.z + 2,

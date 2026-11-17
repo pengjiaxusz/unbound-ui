@@ -15,6 +15,15 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_ITEMS: usize = 4;
 
+/// 面板圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（浮层面板的 `CornerRadius`）。
+const PANEL_RADIUS: f32 = 8.0;
+/// 面板阴影模糊半径，与菜单/Toast 的屏幕级浮层阴影同档。
+const PANEL_SHADOW: f32 = 18.0;
+/// 通知项圆角半径。对齐 WinUI `ControlCornerRadius = 4`（列表项）。
+const ROW_RADIUS: f32 = 4.0;
+/// 未读圆点直径。对齐 WinUI `InfoBadge` 点状规格 `InfoBadgeMinWidth/Height = 4`。
+const UNREAD_DOT_SIZE: f32 = 4.0;
+
 /// 单条已归档的通知项。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NotificationItem {
@@ -101,17 +110,15 @@ pub fn emit_notification_center(
     let mut payloads = Vec::with_capacity(label_glyphs.len());
 
     let hovered = state.phase == PointerPhase::Hovered;
+    // 面板：`FlyoutPresenter` 的 8px 圆角、1px 浮层描边与屏幕级阴影；
+    // 悬停与焦点交给各自的列表项高亮与焦点环表达。
     primitives.push(outlined(
         desc.rect,
-        8.0,
-        Token::SURFACE,
-        if hovered || state.focused {
-            Token::FOCUS_RING
-        } else {
-            Token::CARD_BORDER
-        },
+        PANEL_RADIUS,
+        Token::SURFACE_RAISED,
+        Token::CONTROL_STROKE,
         1.0,
-        0.0,
+        PANEL_SHADOW,
         desc.z,
     ));
 
@@ -125,15 +132,16 @@ pub fn emit_notification_center(
             (desc.rect.width() - pad * 2.0).max(16.0),
             row_h,
         );
+        // 列表项：4px 圆角、1px 描边；悬停改用 `SubtleFillColorSecondary` 的薄纱。
         let mut card = outlined(
             r,
-            5.0,
+            ROW_RADIUS,
             if hovered {
-                Token::SURFACE_RAISED
+                Token::HOVER
             } else {
                 Token::SURFACE_SUNKEN
             },
-            Token::CARD_BORDER,
+            Token::CONTROL_STROKE,
             1.0,
             0.0,
             desc.z + 1,
@@ -143,7 +151,12 @@ pub fn emit_notification_center(
         }
         primitives.push(card);
 
-        let dot_r = Rect::new(r.max().x - 14.0, r.origin.y + (row_h - 6.0) * 0.5, 6.0, 6.0);
+        let dot_r = Rect::new(
+            r.max().x - 14.0,
+            r.origin.y + (row_h - UNREAD_DOT_SIZE) * 0.5,
+            UNREAD_DOT_SIZE,
+            UNREAD_DOT_SIZE,
+        );
         let unread = item.is_some_and(|it| !it.read);
         let dot_tok = match item.map(|it| it.severity).unwrap_or(Severity::Info) {
             Severity::Error => Token::ERROR,
@@ -151,7 +164,7 @@ pub fn emit_notification_center(
             Severity::Success => Token::SUCCESS,
             Severity::Info => Token::PRIMARY,
         };
-        let mut dot = surface(dot_r, 3.0, dot_tok, desc.z + 2);
+        let mut dot = surface(dot_r, UNREAD_DOT_SIZE * 0.5, dot_tok, desc.z + 2);
         if !unread {
             dot.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(dot.depth_u16(), 0.0);
         }
@@ -160,7 +173,7 @@ pub fn emit_notification_center(
 
     primitives.push(focus_ring(
         desc.rect,
-        8.0,
+        PANEL_RADIUS,
         Token::FOCUS_RING,
         2.0,
         desc.z + 3,

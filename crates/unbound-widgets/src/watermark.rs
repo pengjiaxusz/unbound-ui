@@ -12,6 +12,11 @@ use crate::{ControlState, WidgetOutput};
 
 const WATERMARK_TILES: usize = 6;
 
+/// 水印印记圆角。对齐 WinUI `ControlCornerRadius = 4`。
+const STAMP_RADIUS: f32 = 4.0;
+/// 水印印记高度（沿用既有 12px）。
+const STAMP_HEIGHT: f32 = 12.0;
+
 /// [`Watermark`] 水印浮层的描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct WatermarkDesc {
@@ -63,9 +68,9 @@ pub fn emit_watermark(
                 desc.rect.origin.x + c as f32 * cw + cw * 0.2,
                 desc.rect.origin.y + r as f32 * ch + ch * 0.3,
                 (cw * 0.6).max(16.0),
-                12.0,
+                STAMP_HEIGHT,
             );
-            let mut stamp = surface(stamp_r, 3.0, Token::TEXT_SECONDARY, desc.z);
+            let mut stamp = surface(stamp_r, STAMP_RADIUS, Token::TEXT_SECONDARY, desc.z);
             stamp.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(stamp.depth_u16(), opacity);
             primitives.push(stamp);
         }

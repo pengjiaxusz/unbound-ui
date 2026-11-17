@@ -191,7 +191,8 @@ impl GenericDataTableDesc {
             rows: Vec::new(),
             summary_text: String::new(),
             visible_row_slots: visible_row_slots.max(1),
-            row_height: 30.0,
+            // 对齐 WinUI `TableViewRowMinHeightMedium = 32`。
+            row_height: 32.0,
             show_summary_footer: true,
             z: 10,
         }
@@ -263,16 +264,18 @@ pub fn emit_generic_data_table(
     } else {
         Token::CARD_BORDER
     };
-    primitives.push(outlined(r, 8.0, Token::SURFACE, outer_border, 1.0, 0.0, z));
+    // 表格外框圆角对齐 WinUI `ControlCornerRadius = 4`。
+    primitives.push(outlined(r, 4.0, Token::SURFACE, outer_border, 1.0, 0.0, z));
 
-    // 表头栏
+    // 表头栏：高度对齐 WinUI `TableViewRowMinHeightMedium = 32`，
+    // 圆角对齐 `TableViewHeaderSingleCornerRadius = 4`。
     let header_r = Rect::new(
         r.origin.x + 1.0,
         r.origin.y + 1.0,
         (r.size.x - 2.0).max(1.0),
-        32.0,
+        32.0, // TableViewHeaderCellPaddingMedium 上下各 6，行高合计 32
     );
-    primitives.push(surface(header_r, 7.0, Token::HEADER_BG, z + 1));
+    primitives.push(surface(header_r, 4.0, Token::HEADER_BG, z + 1));
 
     // 列分隔把手线
     let col_widths = desc.effective_column_widths(r.size.x);
@@ -285,6 +288,14 @@ pub fn emit_generic_data_table(
 
     let visible_len = state.resolve_visible_indices(&desc.rows).len();
     let first_row = state.first_row_index(desc.row_height, visible_len, desc.visible_row_slots);
+
+    // 悬停行：表格整体悬停时高亮当前焦点行，对应 WinUI
+    // `ListViewItemBackgroundPointerOver` = `SubtleFillColorSecondary`（HOVER 令牌）。
+    let hovered_row = if !control.disabled && control.phase == PointerPhase::Hovered {
+        state.focused_row
+    } else {
+        None
+    };
 
     // 固定数量的虚拟化可视行槽位（保证 24 态恒定图元数）
     for slot_idx in 0..desc.visible_row_slots {
@@ -299,12 +310,21 @@ pub fn emit_generic_data_table(
         let is_selected = logical_idx < visible_len && state.selected_rows.contains(&logical_idx);
         let fill = if is_selected {
             Token::SELECTION
+        } else if hovered_row == Some(logical_idx) {
+            Token::HOVER
         } else if slot_idx % 2 == 1 {
             Token::SURFACE_SUNKEN
         } else {
             Token::SURFACE
         };
         primitives.push(surface(row_r, 4.0, fill, z + 1));
+        // 行底格线：1px `DIVIDER`，对应 WinUI `TabularSurfaceGridLine`。
+        primitives.push(surface(
+            Rect::new(row_r.origin.x, row_r.max().y - 1.0, row_r.size.x, 1.0),
+            0.0,
+            Token::DIVIDER,
+            z + 2,
+        ));
     }
 
     // 底部汇总统计栏（Summary Footer）
@@ -317,7 +337,7 @@ pub fn emit_generic_data_table(
         );
         primitives.push(outlined(
             footer_r,
-            6.0,
+            4.0, // ControlCornerRadius = 4，与表格外框同档
             Token::SURFACE_RAISED,
             Token::DIVIDER,
             1.0,

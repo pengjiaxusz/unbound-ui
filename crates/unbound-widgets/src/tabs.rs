@@ -19,12 +19,20 @@ use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 /// 单个标签页的默认宽度（逻辑像素）。
+///
+/// 落在 WinUI `TabViewItemMinWidth = 100` 与 `TabViewItemMaxWidth = 240` 之间。
 pub const TAB_WIDTH: f32 = 140.0;
 
 /// 标签页栏默认高度。
-pub const TAB_STRIP_HEIGHT: f32 = 36.0;
+///
+/// 对齐 WinUI `TabViewItemMinHeight = 32` 叠加 `TabViewHeaderPadding = 0,8,0,0`
+/// 的顶部留白，即 32 + 8 = 40。
+pub const TAB_STRIP_HEIGHT: f32 = 40.0;
 
-/// 关闭按钮的宽度。
+/// 标签页圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+const TAB_RADIUS: f32 = 4.0;
+
+/// 关闭按钮的宽度。对齐 WinUI `TabViewItemHeaderCloseButtonSize = 16`。
 pub const TAB_CLOSE: f32 = 16.0;
 
 /// 单个标签页。
@@ -375,15 +383,20 @@ impl TabsTokens {
     #[must_use]
     pub fn standard() -> Self {
         Self {
+            // `TabViewBackground` 透明，这里用页面底色 `SolidBackgroundFillColorBase` 承接。
             strip: Token::SURFACE,
-            border: Token::OUTLINE,
+            // `TabViewBorderBrush` = CardStrokeColorDefault。
+            border: Token::CARD_BORDER,
             tab: Token::NONE,
-            tab_hover: Token::CONTROL_HOVER,
-            tab_active: Token::CARD_BG,
+            // `TabViewItemHeaderBackgroundPointerOver` = LayerOnMicaBaseAltFillColorSecondary。
+            tab_hover: Token::NAV_HOVER,
+            // `TabViewItemHeaderBackgroundSelected` = SolidBackgroundFillColorTertiary。
+            tab_active: Token::SURFACE_RAISED,
             tab_text: Token::TEXT_SECONDARY,
             tab_text_active: Token::TEXT_PRIMARY,
             indicator: Token::PRIMARY,
-            close: Token::TEXT_SECONDARY,
+            // `TabViewItemHeaderCloseButtonForeground` = TextFillColorPrimary。
+            close: Token::TEXT_PRIMARY,
             close_hover: Token::TEXT_PRIMARY,
             focus_ring: Token::FOCUS_RING,
         }
@@ -459,7 +472,15 @@ pub fn emit_tab(
     } else {
         tokens.tab
     };
-    primitives.push(outlined(rect, 0.0, fill, Token::NONE, 0.0, 0.0, desc.z));
+    primitives.push(outlined(
+        rect,
+        TAB_RADIUS,
+        fill,
+        Token::NONE,
+        0.0,
+        0.0,
+        desc.z,
+    ));
     glyphs(
         label,
         if active {
@@ -482,7 +503,9 @@ pub fn emit_tab(
 
     let hit = (!disabled).then(|| {
         HitRegion::new(item.id, CONTROL_LAYER, u32::from(desc.z), rect)
-            .with_shape(Shape::Rounded { radii: [0.0; 4] })
+            .with_shape(Shape::Rounded {
+                radii: [TAB_RADIUS; 4],
+            })
             .with_cursor(CursorKind::Pointer)
     });
     let mut a11y = A11yNode::new(Role::Tab, item.title.clone(), rect)
@@ -765,8 +788,8 @@ mod tests {
     fn the_add_button_sits_at_the_trailing_edge() {
         let desc = desc().with_addable(true);
         let add = desc.add_rect().expect("addable");
-        assert_eq!(add.origin.x, 264.0);
-        assert_eq!(desc.strip_width(), 264.0);
+        assert_eq!(add.origin.x, 260.0);
+        assert_eq!(desc.strip_width(), 260.0);
     }
 
     #[test]

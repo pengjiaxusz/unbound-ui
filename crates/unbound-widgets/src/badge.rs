@@ -17,6 +17,24 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
+/// 徽标规范字号。
+///
+/// 对应 WinUI `InfoBadgeValueFontSize = 11`。字形由调用方按此字号塑形，
+/// 输出器本身不持有字体信息。
+pub const BADGE_FONT_SIZE: f32 = 11.0;
+
+/// 徽标文本内边距（左、上、右、下）。
+///
+/// 对应 WinUI `ValueInfoBadgeTextMargin = 4,0,4,2`：左右各留 4px，
+/// 顶部 0、底部 2px，使 11px 数字在 16px 高的胶囊内垂直居中。
+pub const BADGE_PADDING: (f32, f32, f32, f32) = (4.0, 0.0, 4.0, 2.0);
+
+/// 徽标规范高度上限。
+///
+/// 对应 WinUI `InfoBadgeMaxHeight = 16`。16px 高时圆角恰为 8（高度的一半），
+/// 即 WinUI `TemplateSettings.InfoBadgeCornerRadius` 的胶囊形态。
+pub const BADGE_MAX_HEIGHT: f32 = 16.0;
+
 /// 徽标的语义色系。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BadgeVariant {
@@ -34,12 +52,15 @@ pub enum BadgeVariant {
 }
 
 impl BadgeVariant {
-    /// 低饱和度填充色。
+    /// 语义填充色。
+    ///
+    /// `Primary` 使用实心强调色，对应 WinUI `InfoBadgeBackground`
+    /// （`AccentFillColorDefaultBrush`）——数字徽标的默认形态就是强调色底。
     #[must_use]
     pub fn fill(self) -> Token {
         match self {
             Self::Neutral => Token::SURFACE_SUNKEN,
-            Self::Primary => Token::PRIMARY_SOFT,
+            Self::Primary => Token::ACCENT,
             Self::Success => Token::SUCCESS_SOFT,
             Self::Warning => Token::WARNING_SOFT,
             Self::Error => Token::ERROR_SOFT,
@@ -47,11 +68,14 @@ impl BadgeVariant {
     }
 
     /// 饱和文本颜色。
+    ///
+    /// `Primary` 使用强调色上的文字色，对应 WinUI `InfoBadgeForeground`
+    /// （`TextOnAccentFillColorPrimaryBrush`）。
     #[must_use]
     pub fn text(self) -> Token {
         match self {
             Self::Neutral => Token::TEXT_SECONDARY,
-            Self::Primary => Token::PRIMARY,
+            Self::Primary => Token::ON_ACCENT,
             Self::Success => Token::SUCCESS,
             Self::Warning => Token::WARNING,
             Self::Error => Token::ERROR,
@@ -85,6 +109,8 @@ impl BadgeDesc {
             text: text.into(),
             variant: BadgeVariant::Neutral,
             dot: false,
+            // WinUI `TemplateSettings.InfoBadgeCornerRadius` 取高度的一半；
+            // 16px 高的标准徽标即 8px 圆角的胶囊。
             radius: rect.size.y * 0.5,
             z: 560,
         }
@@ -123,7 +149,9 @@ impl BadgeDesc {
         if !self.dot {
             return None;
         }
-        let size = (self.rect.size.y * 0.4).min(8.0);
+        // 圆点直径取高度的 40%，但不超过规范徽标高度的一半（16 / 2 = 8），
+        // 与 WinUI `InfoBadgeIconHeight/Width` 的 8/12 比例一致。
+        let size = (self.rect.size.y * 0.4).min(BADGE_MAX_HEIGHT * 0.5);
         Some(Rect::new(
             self.rect.origin.x + 6.0,
             self.rect.origin.y + (self.rect.size.y - size) * 0.5,

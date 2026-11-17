@@ -13,6 +13,7 @@ use crate::primitive::{
 };
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
+/// 下拉触发器的固定宽度。对齐 WinUI `SplitButtonSecondaryButtonSize = 32`。
 pub const DROPDOWN_WIDTH: f32 = 32.0;
 
 /// 分裂按钮描述符。
@@ -31,8 +32,11 @@ impl SplitButtonDesc {
         Self {
             rect,
             label: label.into(),
-            variant: ButtonVariant::Primary,
-            radius: 6.0,
+            // WinUI DefaultSplitButtonStyle 的底色是 ControlFillColorDefault，
+            // 不是强调色；Primary 变体保留给「已选中」的 SplitButton。
+            variant: ButtonVariant::Secondary,
+            // WinUI SplitButton CornerRadius = ControlCornerRadius = 4。
+            radius: 4.0,
             disabled: false,
         }
     }
@@ -103,22 +107,50 @@ pub fn emit_split_button_with_glyphs(
         arrow_w,
         rect.height(),
     );
+    // 分隔线占满整列高度。WinUI 模板里它是独立的 1px 网格列。
     let divider_rect = Rect::new(
         rect.origin.x + main_w - 0.5,
-        rect.origin.y + 4.0,
+        rect.origin.y,
         1.0,
-        (rect.height() - 8.0).max(0.0),
+        rect.height(),
     );
 
     let disabled = control.disabled || desc.disabled;
+    // Primary 变体对应 WinUI 的 Checked 配色（强调色 + on-accent 文字），
+    // 其余变体使用 DefaultSplitButtonStyle 的中性表面。
+    let accent = desc.variant == ButtonVariant::Primary;
     let bg_token = if disabled {
-        Token::DISABLED
+        // SplitButtonBackgroundDisabled = ControlFillColorDisabled。
+        Token::CONTROL_DISABLED_BG
+    } else if accent {
+        if control.phase == PointerPhase::Pressed || state.main_pressed {
+            // SplitButtonBackgroundCheckedPressed = AccentFillColorTertiary。
+            Token::PRIMARY_PRESSED
+        } else if control.phase == PointerPhase::Hovered {
+            // SplitButtonBackgroundCheckedPointerOver = AccentFillColorSecondary。
+            Token::PRIMARY_HOVER
+        } else {
+            // SplitButtonBackgroundChecked = AccentFillColorDefault。
+            Token::PRIMARY
+        }
     } else if control.phase == PointerPhase::Pressed || state.main_pressed {
-        Token::PRIMARY_PRESSED
+        // SplitButtonBackgroundPressed = ControlFillColorTertiary。
+        Token::SURFACE_SUNKEN
     } else if control.phase == PointerPhase::Hovered {
-        Token::PRIMARY_HOVER
+        // SplitButtonBackgroundPointerOver = ControlFillColorSecondary。
+        Token::CONTROL_HOVER
     } else {
-        Token::PRIMARY
+        // SplitButtonBackground = ControlFillColorDefault。
+        Token::CONTROL_FILL
+    };
+    let divider_token = if disabled {
+        Token::CONTROL_DISABLED_BORDER
+    } else if accent {
+        // SplitButtonBorderBrushCheckedDivider = ControlStrokeColorOnAccentTertiary。
+        Token::PRIMARY_PRESSED
+    } else {
+        // SplitButtonBorderBrushDivider = ControlStrokeColorDefault。
+        Token::CONTROL_STROKE
     };
 
     // 1. 主操作按钮背景表面（仅左侧圆角）
@@ -136,9 +168,13 @@ pub fn emit_split_button_with_glyphs(
 
     // 2. 下拉触发器背景表面（仅右侧圆角）
     let arrow_bg = if disabled {
-        Token::DISABLED
+        Token::CONTROL_DISABLED_BG
     } else if state.menu_open || state.arrow_pressed {
-        Token::PRIMARY_PRESSED
+        if accent {
+            Token::PRIMARY_PRESSED
+        } else {
+            Token::SURFACE_SUNKEN
+        }
     } else {
         bg_token
     };
@@ -156,17 +192,17 @@ pub fn emit_split_button_with_glyphs(
 
     // 3. 分隔线
     out.primitives
-        .push(surface(divider_rect, 0.0, Token::OUTLINE, z + 2));
+        .push(surface(divider_rect, 0.0, divider_token, z + 2));
 
-    // 4. 外框轮廓边框
+    // 4. 外框轮廓边框（SplitButtonBorderThemeThickness = 1）
     out.primitives.push(outlined(
         rect,
         desc.radius,
         Token::NONE,
-        if disabled {
-            Token::DISABLED
+        if accent && !disabled {
+            Token::PRIMARY
         } else {
-            Token::OUTLINE_STRONG
+            Token::CONTROL_STROKE
         },
         1.0,
         0.0,
@@ -174,27 +210,33 @@ pub fn emit_split_button_with_glyphs(
     ));
 
     // 5. 下拉箭头与标签字形
-    let ink = if disabled {
-        Token::TEXT_SECONDARY
+    //
+    // 箭头取 `SplitButtonForegroundSecondary`（TextFillColorSecondary），
+    // 主标签取 `SplitButtonForeground`（TextFillColorPrimary）。
+    let (arrow_ink, ink) = if disabled {
+        (Token::TEXT_DISABLED, Token::TEXT_DISABLED)
+    } else if accent {
+        (Token::ON_PRIMARY, Token::ON_PRIMARY)
     } else {
-        Token::ON_PRIMARY
+        (Token::TEXT_SECONDARY, Token::TEXT_PRIMARY)
     };
-    let acx = arrow_rect.center().x;
+    // WinUI 的下拉图标是 12×12、距右沿 12px 的内容内边距，故中心在右沿内 18px。
+    let acx = arrow_rect.max().x - 18.0;
     let acy = arrow_rect.center().y;
     curve_stroke(
-        [acx - 3.5, acy - 1.5],
+        [acx - 4.0, acy - 2.0],
         [acx, acy + 2.0],
         1.5,
-        ink,
+        arrow_ink,
         z + 4,
         &mut out.primitives,
         &mut out.payloads,
     );
     curve_stroke(
         [acx, acy + 2.0],
-        [acx + 3.5, acy - 1.5],
+        [acx + 4.0, acy - 2.0],
         1.5,
-        ink,
+        arrow_ink,
         z + 4,
         &mut out.primitives,
         &mut out.payloads,

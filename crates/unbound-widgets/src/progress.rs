@@ -22,6 +22,12 @@ use crate::WidgetOutput;
 pub const RING_SEGMENTS: usize = 48;
 /// 展示值每秒追赶目标值的速率。
 pub const PROGRESS_RATE: f32 = 12.0;
+/// 线性进度条的可见高度。
+///
+/// 对齐 WinUI `ProgressBarMinHeight = 3`；轨道 `ProgressBarTrackHeight = 1`
+/// 只是在无值时露出的细分隔线，自绘实现用同一块 3px 条带同时承载
+/// 轨道与指示器，圆角取 `ProgressBarCornerRadius = 1.5`。
+pub const PROGRESS_BAR_HEIGHT: f32 = 3.0;
 
 /// 线性进度条或圆形进度环。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -57,7 +63,7 @@ impl ProgressDesc {
         Self {
             rect,
             kind: ProgressKind::Linear,
-            thickness: 6.0,
+            thickness: PROGRESS_BAR_HEIGHT,
             value: Some(0.0),
             label: String::new(),
             z: 500,
@@ -115,6 +121,20 @@ impl ProgressDesc {
             self.rect.origin.y,
             self.rect.size.x * fraction.clamp(0.0, 1.0),
             self.rect.size.y,
+        )
+    }
+
+    /// 线性进度条在 `rect` 内垂直居中的可见条带（高度取 `thickness`）。
+    ///
+    /// WinUI 的进度条不对齐描述符矩形的上下边缘：它在预留高度中居中绘制，
+    /// 剩余空间用于与相邻标签对齐。
+    fn bar_rect(&self) -> Rect {
+        let height = self.thickness.max(1.0);
+        Rect::new(
+            self.rect.origin.x,
+            self.rect.center().y - height * 0.5,
+            self.rect.size.x,
+            height,
         )
     }
 
@@ -233,7 +253,8 @@ impl ProgressTokens {
     #[must_use]
     pub fn standard() -> Self {
         Self {
-            track: Token::CONTROL_TRACK,
+            // WinUI `ProgressBarBackground = ControlStrongStrokeColorDefault`。
+            track: Token::CONTROL_TRACK_STROKE,
             fill: Token::PRIMARY,
             sweep: Token::PRIMARY_SOFT,
         }
@@ -247,21 +268,28 @@ pub fn emit_progress(desc: &ProgressDesc, state: &ProgressState) -> WidgetOutput
     let mut primitives = Vec::with_capacity(RING_SEGMENTS + 2);
     match desc.kind {
         ProgressKind::Linear => {
-            let radius = desc.rect.size.y * 0.5;
-            primitives.push(surface(desc.rect, radius, tokens.track, desc.z));
+            let bar = desc.bar_rect();
+            let radius = bar.size.y * 0.5;
+            primitives.push(surface(bar, radius, tokens.track, desc.z));
             match desc.value {
-                Some(_) => primitives.push(surface(
-                    desc.fill_rect(state.shown),
-                    radius,
-                    tokens.fill,
-                    desc.z + 1,
-                )),
-                None => primitives.push(surface(
-                    desc.slider_rect(state.phase),
-                    radius,
-                    tokens.fill,
-                    desc.z + 1,
-                )),
+                Some(_) => {
+                    let fill = desc.fill_rect(state.shown);
+                    primitives.push(surface(
+                        Rect::new(fill.origin.x, bar.origin.y, fill.size.x, bar.size.y),
+                        radius,
+                        tokens.fill,
+                        desc.z + 1,
+                    ));
+                }
+                None => {
+                    let sweep = desc.slider_rect(state.phase);
+                    primitives.push(surface(
+                        Rect::new(sweep.origin.x, bar.origin.y, sweep.size.x, bar.size.y),
+                        radius,
+                        tokens.fill,
+                        desc.z + 1,
+                    ));
+                }
             }
         }
         ProgressKind::Circular => {

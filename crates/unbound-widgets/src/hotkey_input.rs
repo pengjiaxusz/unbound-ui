@@ -11,6 +11,9 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
+/// 控件圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+const HOTKEY_RADIUS: f32 = 4.0;
+
 /// [`HotkeyInputDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HotkeyInputState {
@@ -134,27 +137,28 @@ pub fn emit_hotkey_input(
     let mut payloads = Vec::with_capacity(label_glyphs.len());
 
     let hovered = state.phase == PointerPhase::Hovered;
+    // 描边对齐 WinUI 文本控件：常态 `ControlStrokeColorDefault`（1px），
+    // 悬停 `ControlStrokeColorSecondary`，录制/聚焦用强调色，冲突用错误色。
     let border = if desc.conflict {
         Token::ERROR
-    } else if desc.recording || hovered || state.focused {
-        Token::FOCUS_RING
+    } else if desc.recording || state.focused {
+        Token::PRIMARY
+    } else if hovered {
+        Token::INPUT_BORDER_HOVER
     } else {
-        Token::CARD_BORDER
+        Token::CONTROL_STROKE
     };
     primitives.push(outlined(
         desc.rect,
-        6.0,
+        HOTKEY_RADIUS,
+        // 填充 `ControlFillColorDefault`，悬停 `ControlFillColorSecondary`。
         if hovered {
-            Token::SURFACE_RAISED
+            Token::CONTROL_HOVER
         } else {
-            Token::SURFACE_SUNKEN
+            Token::CONTROL_FILL
         },
         border,
-        if desc.recording || desc.conflict {
-            1.5
-        } else {
-            1.0
-        },
+        1.0,
         0.0,
         desc.z,
     ));
@@ -168,12 +172,13 @@ pub fn emit_hotkey_input(
     primitives.push(outlined(
         capsule_r,
         4.0,
+        // 键帽底色比外框浅一档，读取为可按键位。
         if desc.shortcut_text.is_empty() {
-            Token::SURFACE
+            Token::CONTROL_FILL
         } else {
-            Token::SURFACE_RAISED
+            Token::CONTROL_HOVER
         },
-        Token::CARD_BORDER,
+        Token::CONTROL_STROKE,
         1.0,
         0.0,
         desc.z + 1,
@@ -200,7 +205,7 @@ pub fn emit_hotkey_input(
 
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        HOTKEY_RADIUS,
         Token::FOCUS_RING,
         2.0,
         desc.z + 2,

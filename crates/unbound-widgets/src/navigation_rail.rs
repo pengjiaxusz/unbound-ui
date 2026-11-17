@@ -14,6 +14,24 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_RAIL_ITEMS: usize = 6;
 
+/// 导航项行高。对齐 WinUI `NavigationViewItemOnLeftMinHeight = 36`。
+const NAV_ITEM_HEIGHT: f32 = 36.0;
+
+/// 折叠态轨道宽度。对齐 WinUI `NavigationViewCompactPaneLength = 48`。
+const NAV_COMPACT_WIDTH: f32 = 48.0;
+
+/// 导航项圆角。对齐 WinUI `ControlCornerRadius = 4`。
+const NAV_ROW_RADIUS: f32 = 4.0;
+
+/// 选中指示条宽度。对齐 WinUI `NavigationViewSelectionIndicatorWidth = 3`。
+const NAV_INDICATOR_WIDTH: f32 = 3.0;
+
+/// 选中指示条高度。对齐 WinUI `NavigationViewSelectionIndicatorHeight = 16`。
+const NAV_INDICATOR_HEIGHT: f32 = 16.0;
+
+/// 选中指示条圆角。对齐 WinUI `NavigationViewSelectionIndicatorRadius = 2`。
+const NAV_INDICATOR_RADIUS: f32 = 2.0;
+
 /// [`NavigationRailDesc`] 中的单个导航项。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NavRailItem {
@@ -91,7 +109,8 @@ pub const fn rail_item_node(node: u64, index: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x500 + index as u64)
 }
 
-/// 输出结构稳定的导航栏（1 个背景 + 6 个项行 + 6 个徽标胶囊 + 1 个焦点环 = 14 个图元）。
+/// 输出结构稳定的导航栏
+/// （1 个背景 + 6 个项行 + 6 个选中指示条 + 6 个徽标胶囊 + 1 个焦点环 = 20 个图元）。
 #[must_use]
 pub fn emit_navigation_rail(
     node: u64,
@@ -99,7 +118,7 @@ pub fn emit_navigation_rail(
     state: ControlState,
     label_glyphs: &[GlyphQuad],
 ) -> WidgetOutput {
-    let mut primitives = Vec::with_capacity(14 + label_glyphs.len());
+    let mut primitives = Vec::with_capacity(20 + label_glyphs.len());
     let mut payloads = Vec::with_capacity(label_glyphs.len());
 
     let hovered = state.phase == PointerPhase::Hovered;
@@ -117,10 +136,10 @@ pub fn emit_navigation_rail(
         desc.z,
     ));
 
-    let row_h = ((desc.rect.height() - 16.0) / MAX_RAIL_ITEMS as f32).clamp(4.0, 36.0);
+    let row_h = ((desc.rect.height() - 16.0) / MAX_RAIL_ITEMS as f32).clamp(4.0, NAV_ITEM_HEIGHT);
     let pad_x = 6.0;
     let rail_w = if desc.collapsed {
-        desc.rect.width().min(44.0)
+        desc.rect.width().min(NAV_COMPACT_WIDTH)
     } else {
         desc.rect.width()
     };
@@ -132,25 +151,23 @@ pub fn emit_navigation_rail(
             desc.rect.origin.x + pad_x,
             y,
             (rail_w - pad_x * 2.0).max(12.0),
-            (row_h - 4.0).max(12.0),
+            row_h.max(12.0),
         );
         let is_active = item.is_some_and(|it| it.id == desc.active_id);
         let mut row_inst = outlined(
             row_r,
-            5.0,
+            NAV_ROW_RADIUS,
+            // `NavigationViewItemBackgroundSelected` = SubtleFillColorSecondary，
+            // `NavigationViewItemBackgroundPointerOver` 同为该薄纱。
             if is_active {
-                Token::PRIMARY_SOFT
+                Token::NAV_SELECTED
             } else if hovered {
-                Token::SURFACE_RAISED
-            } else {
-                Token::SURFACE
-            },
-            if is_active {
-                Token::PRIMARY
+                Token::NAV_HOVER
             } else {
                 Token::NONE
             },
-            if is_active { 1.0 } else { 0.0 },
+            Token::NONE,
+            0.0,
             0.0,
             desc.z + 1,
         );
@@ -160,6 +177,22 @@ pub fn emit_navigation_rail(
         }
         primitives.push(row_inst);
 
+        // 选中指示条：WinUI 在项左缘绘制 3 × 16、圆角 2 的强调色竖条。
+        // 未选中时保持图元数量不变，仅把不透明度压到 0。
+        let indicator = Rect::new(
+            row_r.origin.x,
+            row_r.origin.y + (row_r.height() - NAV_INDICATOR_HEIGHT) * 0.5,
+            NAV_INDICATOR_WIDTH,
+            NAV_INDICATOR_HEIGHT,
+        );
+        let mut indicator_inst =
+            surface(indicator, NAV_INDICATOR_RADIUS, Token::PRIMARY, desc.z + 2);
+        if !is_active {
+            indicator_inst.z_and_opacity =
+                GpuPrimitiveInstance::pack_z_opacity(indicator_inst.depth_u16(), 0.0);
+        }
+        primitives.push(indicator_inst);
+
         let badge_r = Rect::new(
             row_r.max().x - 16.0,
             row_r.origin.y + (row_r.height() - 10.0) * 0.5,
@@ -167,7 +200,7 @@ pub fn emit_navigation_rail(
             10.0,
         );
         let has_badge = item.is_some_and(|it| it.badge_count > 0);
-        let mut badge_inst = surface(badge_r, 5.0, Token::PRIMARY, desc.z + 2);
+        let mut badge_inst = surface(badge_r, 5.0, Token::PRIMARY, desc.z + 3);
         if !has_badge {
             badge_inst.z_and_opacity =
                 GpuPrimitiveInstance::pack_z_opacity(badge_inst.depth_u16(), 0.0);
@@ -180,7 +213,7 @@ pub fn emit_navigation_rail(
         8.0,
         Token::FOCUS_RING,
         2.0,
-        desc.z + 3,
+        desc.z + 4,
         state.focused,
     ));
 
@@ -188,7 +221,7 @@ pub fn emit_navigation_rail(
         glyphs(
             label_glyphs,
             Token::TEXT_PRIMARY,
-            desc.z + 4,
+            desc.z + 5,
             &mut primitives,
             &mut payloads,
         );
@@ -217,7 +250,7 @@ pub fn emit_navigation_rail(
                 desc.rect.origin.x + pad_x,
                 y,
                 (rail_w - pad_x * 2.0).max(12.0),
-                (row_h - 4.0).max(12.0),
+                row_h.max(12.0),
             );
             let key = rail_item_node(node, idx);
             out.with_sub_control(

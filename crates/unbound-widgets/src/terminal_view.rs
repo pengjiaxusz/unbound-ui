@@ -2,16 +2,18 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
+use unbound_gpu::data::{PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
+use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
-pub const TERMINAL_LINE_HEIGHT: f32 = 18.0;
+/// 终端行高：与只读代码块 `CODE_LINE_HEIGHT` 同档（20px，匹配 14px 正文）。
+pub const TERMINAL_LINE_HEIGHT: f32 = 20.0;
 
 /// 终端日志视图描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -29,7 +31,8 @@ impl TerminalViewDesc {
             rect,
             lines: Vec::new(),
             follow_tail: true,
-            radius: 6.0,
+            // 圆角对齐 WinUI `ControlCornerRadius`（4），与代码块容器一致。
+            radius: 4.0,
         }
     }
 
@@ -91,17 +94,28 @@ pub fn emit_terminal_view_with_glyphs(
     let rect = desc.rect;
     let z = 700u16;
 
-    // 1. 深色终端背景
+    // 1. 终端背景：与只读代码块共用 CODE_BG / CODE_TEXT 这一组代码面板令牌。
     out.primitives
-        .push(surface(rect, desc.radius, Token::CANVAS_BACKDROP, z));
+        .push(surface(rect, desc.radius, Token::CODE_BG, z));
 
-    // 2. 左侧行号边栏
+    // 2. 左侧行号边栏：左侧两角跟随容器圆角，右侧直角与正文区拼合；
+    // 底色与代码块/编辑器的行号槽一致（SURFACE_RAISED）。
     let gutter_w = 40.0_f32.min(rect.width() * 0.25);
     let gutter_rect = Rect::new(rect.origin.x, rect.origin.y, gutter_w, rect.height());
-    out.primitives
-        .push(surface(gutter_rect, 0.0, Token::SURFACE, z + 1));
+    out.primitives.push(instance(
+        gutter_rect,
+        [desc.radius, 0.0, 0.0, desc.radius],
+        Token::SURFACE_RAISED,
+        Token::NONE,
+        0.0,
+        0.0,
+        PrimType::RoundedRect,
+        SubElement::Background,
+        z + 1,
+    ));
 
-    // 3. 当前光标行高亮（跟随 cursor_line 与 scroll_y，限制在视口内）
+    // 3. 当前光标行高亮（跟随 cursor_line 与 scroll_y，限制在视口内）。
+    // 行高与代码块共用 20px 节奏；高亮用 `SubtleFillColorSecondary`（HOVER 令牌），比选区更轻。
     let line_h = TERMINAL_LINE_HEIGHT.min((rect.height() - 8.0).max(4.0));
     let raw_y = rect.origin.y + 8.0 + state.cursor_line as f32 * line_h - state.scroll_y;
     let max_y = (rect.max().y - line_h - 4.0).max(rect.origin.y + 4.0);
@@ -112,29 +126,34 @@ pub fn emit_terminal_view_with_glyphs(
         (rect.width() - gutter_w).max(0.0),
         line_h,
     );
-    out.primitives
-        .push(surface(cursor_rect, 2.0, Token::PRIMARY_SOFT, z + 2));
+    out.primitives.push(instance(
+        cursor_rect,
+        [0.0, desc.radius, desc.radius, 0.0],
+        Token::HOVER,
+        Token::NONE,
+        0.0,
+        0.0,
+        PrimType::RoundedRect,
+        SubElement::Background,
+        z + 2,
+    ));
 
     if !label_glyphs.is_empty() {
         emit_glyphs(
             label_glyphs,
-            Token::TEXT_PRIMARY,
+            Token::CODE_TEXT,
             z + 3,
             &mut out.primitives,
             &mut out.payloads,
         );
     }
 
-    // 4. 外边框
+    // 4. 外边框：1px `ControlStrokeColorDefault`，聚焦由外扩焦点环表达。
     out.primitives.push(outlined(
         rect,
         desc.radius,
         Token::NONE,
-        if control.focused {
-            Token::PRIMARY
-        } else {
-            Token::OUTLINE
-        },
+        Token::CONTROL_STROKE,
         1.0,
         0.0,
         z + 3,

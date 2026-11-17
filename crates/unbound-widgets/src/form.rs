@@ -22,13 +22,21 @@ use crate::scroll::{ScrollState, ScrollViewDesc};
 use crate::WidgetOutput;
 
 /// 标准输入行高度。
-pub const FORM_INPUT_HEIGHT: f32 = 36.0;
+///
+/// 对齐 WinUI 控件的标准高度 32（TextBox 默认 `MinHeight`）。
+pub const FORM_INPUT_HEIGHT: f32 = 32.0;
 /// 标签或消息内单行文本的高度。
-pub const FORM_LINE: f32 = 18.0;
+///
+/// 对齐 WinUI 14 号正文的行高 20（Fluent 2 文本节奏）。
+pub const FORM_LINE: f32 = 20.0;
 /// 标签与输入框之间的间距。
-pub const FORM_LABEL_GAP: f32 = 6.0;
+///
+/// Fluent 2 标签与控件之间的标准间距 4。
+pub const FORM_LABEL_GAP: f32 = 4.0;
 /// 字段之间的间距。
-pub const FORM_FIELD_GAP: f32 = 18.0;
+///
+/// Fluent 2 表单节奏：同组字段 16，分组之间 24。
+pub const FORM_FIELD_GAP: f32 = 16.0;
 /// 输入框与消息之间的间距。
 pub const FORM_MESSAGE_GAP: f32 = 4.0;
 

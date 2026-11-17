@@ -26,8 +26,18 @@ pub const CALENDAR_COLUMNS: usize = 7;
 pub const CALENDAR_HEADER: f32 = 34.0;
 /// 星期标题行高度。
 pub const CALENDAR_WEEKDAYS: f32 = 22.0;
-/// 日期单元格圆角半径。
-pub const CALENDAR_RADIUS: f32 = 6.0;
+/// 日期单元格圆角半径。对齐 WinUI `ControlCornerRadius = 4`（CalendarViewDayItem）。
+pub const CALENDAR_RADIUS: f32 = 4.0;
+/// 日期单元格的最小边长。对齐 WinUI `CalendarViewDayItem` 的 `MinWidth/MinHeight = 40`。
+pub const CALENDAR_CELL_SIZE: f32 = 40.0;
+/// 日期单元格与网格槽位之间的留白。对齐 WinUI `CalendarViewDayItem` 的 `Margin = 1`。
+pub const CALENDAR_CELL_INSET: f32 = 1.0;
+/// 弹出层圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（FlyoutPresenter）。
+pub const CALENDAR_POPUP_RADIUS: f32 = 8.0;
+/// 弹出层阴影模糊半径。对应 WinUI `FlyoutPresenter.IsDefaultShadowEnabled = True`。
+pub const CALENDAR_POPUP_SHADOW: f32 = 24.0;
+/// 弹出层内边距。WinUI 浮层内容外沿保留 4px。
+pub const CALENDAR_POPUP_PADDING: f32 = 4.0;
 
 /// 不含时间与时区的纯日历日期。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -420,7 +430,7 @@ impl DatePickerDesc {
     pub fn prev_rect(&self) -> Rect {
         Rect::new(
             self.rect.origin.x + 6.0,
-            self.rect.origin.y + 4.0,
+            self.rect.origin.y + CALENDAR_POPUP_PADDING,
             28.0,
             26.0,
         )
@@ -431,7 +441,7 @@ impl DatePickerDesc {
     pub fn next_rect(&self) -> Rect {
         Rect::new(
             self.rect.max().x - 34.0,
-            self.rect.origin.y + 4.0,
+            self.rect.origin.y + CALENDAR_POPUP_PADDING,
             28.0,
             26.0,
         )
@@ -442,14 +452,17 @@ impl DatePickerDesc {
     pub fn cell_rect(&self, index: usize) -> Rect {
         let column = (index % CALENDAR_COLUMNS) as f32;
         let row = (index / CALENDAR_COLUMNS) as f32;
-        let width = self.rect.size.x / CALENDAR_COLUMNS as f32;
+        // WinUI 的日单元按列等分并保底 40×40（`CalendarViewDayItem.MinWidth/MinHeight`）。
+        let width = (self.rect.size.x / CALENDAR_COLUMNS as f32).max(CALENDAR_CELL_SIZE);
         let top = CALENDAR_HEADER + CALENDAR_WEEKDAYS;
-        let height = ((self.rect.size.y - top) / 6.0).max(0.0);
+        let height = ((self.rect.size.y - top) / 6.0).max(CALENDAR_CELL_SIZE);
+        // `Margin = 1`：槽位四周各留 1px，选中圆底才不会贴到相邻日期。
+        let inset = CALENDAR_CELL_INSET;
         Rect::new(
-            self.rect.origin.x + column * width + 2.0,
-            self.rect.origin.y + top + row * height + 2.0,
-            (width - 4.0).max(0.0),
-            (height - 4.0).max(0.0),
+            self.rect.origin.x + column * width + inset,
+            self.rect.origin.y + top + row * height + inset,
+            (width - inset * 2.0).max(0.0),
+            (height - inset * 2.0).max(0.0),
         )
     }
 }
@@ -464,13 +477,31 @@ pub fn emit_calendar(
     glyphs: &mut [GlyphQuad],
 ) -> WidgetOutput {
     let rect = desc.rect;
-    let mut primitives = Vec::with_capacity(CALENDAR_CELLS + 8 + glyphs.len());
+    let mut primitives = Vec::with_capacity(CALENDAR_CELLS + 9 + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len());
 
-    primitives.push(surface(rect, 10.0, Token::OVERLAY_BG, desc.z));
+    // 弹出层阴影：WinUI `FlyoutPresenter` 的 `IsDefaultShadowEnabled = True`。
+    primitives.push(instance(
+        rect,
+        [0.0; 4],
+        Token::NONE,
+        Token::NONE,
+        0.0,
+        CALENDAR_POPUP_SHADOW,
+        PrimType::Shadow,
+        SubElement::Shadow,
+        desc.z,
+    ));
+    // 弹出层圆角 `OverlayCornerRadius = 8`，底色沿用浮层表面 `OVERLAY_BG`。
+    primitives.push(surface(
+        rect,
+        CALENDAR_POPUP_RADIUS,
+        Token::OVERLAY_BG,
+        desc.z,
+    ));
     primitives.push(outlined(
         rect,
-        10.0,
+        CALENDAR_POPUP_RADIUS,
         Token::NONE,
         Token::CARD_BORDER,
         1.0,
@@ -525,13 +556,26 @@ pub fn emit_calendar(
         } else {
             Token::NONE
         };
-        primitives.push(surface(cell_rect, CALENDAR_RADIUS, fill, desc.z));
+        // 选中态是强调色**圆底**（`CalendarViewSelectedBorderBrush` 的圆形选中环），
+        // 其余状态沿用 `ControlCornerRadius = 4` 的圆角块。
+        let radius = if cell.selected {
+            cell_rect.size.x.min(cell_rect.size.y) * 0.5
+        } else {
+            CALENDAR_RADIUS
+        };
+        primitives.push(surface(cell_rect, radius, fill, desc.z));
         if cell.today {
+            // 今天用强调色描边；若同时被选中，描边改为 `ON_PRIMARY`，
+            // 对应 WinUI `CalendarViewTodaySelectedInnerBorderBrush = TextOnAccentFillColorPrimary`。
             primitives.push(outlined(
                 cell_rect,
-                CALENDAR_RADIUS,
+                radius,
                 Token::NONE,
-                Token::PRIMARY,
+                if cell.selected {
+                    Token::ON_PRIMARY
+                } else {
+                    Token::PRIMARY
+                },
                 1.0,
                 0.0,
                 desc.z,
@@ -553,7 +597,7 @@ pub fn emit_calendar(
 
     primitives.push(focus_ring(
         rect.inflate(3.0),
-        13.0,
+        CALENDAR_POPUP_RADIUS + 3.0,
         Token::FOCUS_RING,
         2.0,
         desc.z,
@@ -562,7 +606,9 @@ pub fn emit_calendar(
 
     let hit = (!control.disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(desc.z), rect)
-            .with_shape(Shape::Rounded { radii: [10.0; 4] })
+            .with_shape(Shape::Rounded {
+                radii: [CALENDAR_POPUP_RADIUS; 4],
+            })
             .with_cursor(CursorKind::Pointer)
     });
     let mut a11y = A11yNode::new(Role::Grid, desc.label.clone(), rect)

@@ -111,20 +111,29 @@ pub fn emit_autocomplete_with_suggestions(
     let mut payloads = Vec::with_capacity(label_glyphs.len() + suggestion_glyphs.len());
 
     let hovered = state.phase == PointerPhase::Hovered;
+    // WinUI AutoSuggestBox 沿用 TextBox 模板：MinHeight = TextControlThemeMinHeight = 32，
+    // CornerRadius = ControlCornerRadius = 4。
     primitives.push(outlined(
         desc.rect,
-        6.0,
-        if hovered {
-            Token::SURFACE_RAISED
+        4.0,
+        if state.disabled {
+            // TextControlBackgroundDisabled = ControlFillColorDisabled。
+            Token::CONTROL_DISABLED_BG
+        } else if hovered {
+            // TextControlBackgroundPointerOver = ControlFillColorSecondary。
+            Token::CONTROL_HOVER
         } else {
-            Token::SURFACE
+            // TextControlBackground = ControlFillColorDefault。
+            Token::CONTROL_FILL
         },
         if state.disabled {
-            Token::DISABLED
-        } else if hovered || state.focused {
-            Token::FOCUS_RING
+            Token::CONTROL_DISABLED_BORDER
+        } else if state.focused {
+            // TextControlBorderBrushFocused = ControlStrongStrokeColorDefault。
+            Token::OUTLINE_STRONG
         } else {
-            Token::CARD_BORDER
+            // TextControlBorderBrush = TextControlElevationBorderBrush。
+            Token::CONTROL_STROKE
         },
         1.0,
         0.0,
@@ -145,7 +154,7 @@ pub fn emit_autocomplete_with_suggestions(
 
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        4.0,
         Token::FOCUS_RING,
         2.0,
         desc.z + 2,
@@ -191,8 +200,9 @@ pub fn emit_autocomplete_with_suggestions(
             );
             out.primitives.push(outlined(
                 popup_r,
-                6.0,
-                Token::SURFACE_RAISED,
+                // AutoSuggestBoxSuggestionsList 使用 OverlayCornerRadius = 8。
+                8.0,
+                Token::OVERLAY_BG,
                 Token::CARD_BORDER,
                 1.0,
                 6.0,
@@ -208,9 +218,11 @@ pub fn emit_autocomplete_with_suggestions(
                 let row_fill = if highlighted == Some(idx) {
                     Token::SELECTION
                 } else {
-                    Token::SURFACE
+                    // ListViewItem 的静息底色是透明，让浮层底色透出来。
+                    Token::NONE
                 };
                 out.primitives
+                    // ListViewItem 圆角 = ControlCornerRadius = 4。
                     .push(surface(row_r, 4.0, row_fill, desc.z + 5));
                 let key = autocomplete_option_node(node, idx);
                 out.with_sub_control(

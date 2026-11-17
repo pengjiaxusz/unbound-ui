@@ -22,10 +22,28 @@ use crate::scroll::ScrollAxis;
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 默认分隔条厚度（逻辑像素）。
+/// 分隔条的可交互厚度（逻辑像素）。
+///
+/// 视觉上只画 1px 分隔线（WinUI `SplitViewLeftBorderThemeThickness = 0,0,1,0`），
+/// 其余宽度全部让给指针命中：1px 的线抓不住，但也不该把分隔条画成 8px 粗条。
 pub const SPLIT_HANDLE: f32 = 8.0;
 
+/// 分隔线厚度。
+///
+/// WinUI `SplitViewLeftBorderThemeThickness` / `SplitViewRightBorderThemeThickness`
+/// 都是 1px——分割面板只表达一条极细的分界，不画实体轨道。
+pub const SPLIT_DIVIDER: f32 = 1.0;
+
+/// 展开态面板宽度（WinUI `SplitViewOpenPaneThemeLength = 320`）。
+///
+/// Overlay / CompactOverlay / CompactInline 三种模式展开时面板都占 320；
+/// 折叠后保留 [`SPLIT_MIN_PANE`]（= `SplitViewCompactPaneThemeLength`）的紧凑导轨。
+pub const SPLIT_OPEN_PANE: f32 = 320.0;
+
 /// 调用方未指定时面板的最小长度。
+///
+/// 48 与 WinUI `SplitViewCompactPaneThemeLength` 一致：紧凑导轨正是这个宽度，
+/// 因此把它当作最小可用面板宽度不会与系统观感冲突。
 pub const SPLIT_MIN_PANE: f32 = 48.0;
 
 /// 键盘微调占分割区域的比例。
@@ -384,8 +402,12 @@ impl SplitPaneTokens {
     #[must_use]
     pub fn standard() -> Self {
         Self {
-            track: Token::SURFACE_SUNKEN,
-            track_active: Token::CONTROL_HOVER,
+            // 空闲态是一条极细分隔线：WinUI 的 SplitView 分隔由 `SplitViewLeftBorderThemeThickness`
+            // 的 1px 描边表达，框架里对应的语义色是 `DIVIDER`（而不是实心凹陷表面）。
+            track: Token::DIVIDER,
+            // 悬停或拖动时升为强调色 `AccentFillColorDefault`（= `PRIMARY`），
+            // 与焦点环、拖放预览使用同一套强调色节奏。
+            track_active: Token::PRIMARY,
             grip: Token::OUTLINE,
             grip_active: Token::PRIMARY,
             focus_ring: Token::FOCUS_RING,
@@ -425,12 +447,24 @@ pub fn emit_split_pane(
     };
 
     let mut primitives = Vec::with_capacity(5);
-    primitives.push(surface(
-        layout.gutter,
-        desc.handle_size * 0.5,
-        track,
-        desc.z,
-    ));
+    // 分隔线只画 1px：可交互带仍是 `handle_size` 宽，但视觉上只有一条细线。
+    // 圆角 0 对应 WinUI `SplitViewPaneRootCornerRadius = 0`——分隔线是直线，不是胶囊。
+    let divider = if desc.is_horizontal() {
+        Rect::new(
+            layout.gutter.origin.x + (layout.gutter.size.x - SPLIT_DIVIDER) * 0.5,
+            layout.gutter.origin.y,
+            SPLIT_DIVIDER,
+            layout.gutter.size.y,
+        )
+    } else {
+        Rect::new(
+            layout.gutter.origin.x,
+            layout.gutter.origin.y + (layout.gutter.size.y - SPLIT_DIVIDER) * 0.5,
+            layout.gutter.size.x,
+            SPLIT_DIVIDER,
+        )
+    };
+    primitives.push(surface(divider, 0.0, track, desc.z));
 
     // 沿分隔条的三个圆点无需字形即可提供拖拽视觉提示，因此即使字体缺少“⋮”也能渲染出可用把手。
     //
@@ -511,6 +545,11 @@ fn dot_primitive(centre: Vec2, radius: f32, color: Token, z: u16) -> GpuPrimitiv
 ///
 /// 多数调用方会自绘面板；提供此辅助函数是为了让裸分割面板
 /// 也能显示两侧区域，而非一整块透明矩形。
+///
+/// 令牌选择对齐 WinUI `SplitView`：`fill` 是面板底色，对应模板的 `PaneBackground`
+/// （`SURFACE_RAISED`）；`surface_token` 是面板 1px 描边，对应
+/// `SplitViewLeftBorderThemeThickness`；Overlay 模式的遮罩层用 `OVERLAY_BG`
+/// （模板的 `SplitViewLightDismissOverlayBackground`）。
 #[must_use]
 pub fn emit_split_pane_panes(
     desc: &SplitPaneDesc,

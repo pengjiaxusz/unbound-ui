@@ -18,16 +18,21 @@ use crate::primitive::{instance, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
-/// 左侧强调条宽度。
+/// 左侧强调条宽度。WinUI InfoBar 以 4px 状态条表达严重级别。
 pub const ALERT_ACCENT_WIDTH: f32 = 4.0;
-/// 横幅内边距。
-pub const ALERT_PADDING: f32 = 14.0;
-/// 严重级别图标直径。
-pub const ALERT_ICON_SIZE: f32 = 18.0;
-/// 关闭按钮正方形边长。
-pub const ALERT_CLOSE_SIZE: f32 = 20.0;
-/// 横幅圆角半径。
-pub const ALERT_RADIUS: f32 = 8.0;
+/// 横幅内边距。对齐 WinUI `InfoBarContentRootPadding = 16,0,0,0` 与
+/// `InfoBarIconMargin = 0,16,14,16` 的上下 16；`InfoBarMinHeight = 48`。
+pub const ALERT_PADDING: f32 = 16.0;
+/// 严重级别图标直径。对齐 WinUI `InfoBarIconFontSize = 16`。
+pub const ALERT_ICON_SIZE: f32 = 16.0;
+/// 关闭按钮正方形边长。对齐 WinUI `InfoBarCloseButtonSize = 38`。
+pub const ALERT_CLOSE_SIZE: f32 = 38.0;
+/// 关闭按钮距横幅上/右边缘的距离（WinUI InfoBar 关闭按钮的 5px 外边距）。
+const ALERT_CLOSE_MARGIN: f32 = 5.0;
+/// 关闭叉号描边内缩量；38px 按钮内缩 11 后恰为 `InfoBarCloseButtonGlyphSize = 16`。
+const ALERT_CLOSE_INSET: f32 = 11.0;
+/// 横幅圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+pub const ALERT_RADIUS: f32 = 4.0;
 
 /// 提示横幅的语义类别。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -153,8 +158,8 @@ impl AlertDesc {
     pub fn close_rect(&self) -> Option<Rect> {
         self.dismissible.then(|| {
             Rect::new(
-                self.rect.max().x - ALERT_PADDING * 0.5 - ALERT_CLOSE_SIZE,
-                self.rect.origin.y + ALERT_PADDING * 0.5,
+                self.rect.max().x - ALERT_CLOSE_MARGIN - ALERT_CLOSE_SIZE,
+                self.rect.origin.y + ALERT_CLOSE_MARGIN,
                 ALERT_CLOSE_SIZE,
                 ALERT_CLOSE_SIZE,
             )
@@ -220,7 +225,7 @@ pub fn emit_alert(
 
     let mut hit = None;
     if let Some(close) = desc.close_rect() {
-        let inset = 6.0;
+        let inset = ALERT_CLOSE_INSET;
         stroke(
             (close.origin.x + inset, close.origin.y + inset),
             (close.max().x - inset, close.max().y - inset),

@@ -12,6 +12,15 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const LAYER: u8 = 1;
 
+/// 提示栏圆角。对齐 WinUI `ControlCornerRadius = 4`。
+const BAR_RADIUS: f32 = 4.0;
+/// 键帽圆角。对齐 WinUI `ControlCornerRadius = 4`。
+const KEYCAP_RADIUS: f32 = 4.0;
+/// 提示栏左右内边距。沿用既有 10px，与 `StatusBarDesc::padding` 同档。
+const BAR_PADDING: f32 = 10.0;
+/// 键帽与栏体上下边缘的间距（键帽内边距 4）。
+const KEYCAP_INSET: f32 = 4.0;
+
 /// 单个快捷键绑定条目。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShortcutEntry {
@@ -107,17 +116,32 @@ pub fn emit_shortcut_bar(
     } else {
         Token::DIVIDER
     };
-    primitives.push(outlined(r, 6.0, Token::HEADER_BG, border, 1.0, 0.0, z));
+    // 栏体圆角 `ControlCornerRadius = 4`，1px 描边对齐 `ControlStrokeColorDefault` 档。
+    primitives.push(outlined(
+        r,
+        BAR_RADIUS,
+        Token::HEADER_BG,
+        border,
+        1.0,
+        0.0,
+        z,
+    ));
 
-    let mut x = r.origin.x + 10.0;
+    let mut x = r.origin.x + BAR_PADDING;
     for entry in &desc.entries {
         let keycap_w = (entry.chord.len() as f32 * 7.0 + 12.0).max(24.0);
-        let keycap_r = Rect::new(x, r.origin.y + 4.0, keycap_w, (r.size.y - 8.0).max(16.0));
+        let keycap_r = Rect::new(
+            x,
+            r.origin.y + KEYCAP_INSET,
+            keycap_w,
+            (r.size.y - KEYCAP_INSET * 2.0).max(16.0),
+        );
+        // 键帽是控件表面：`ControlFillColorDefault` 填充 + `ControlStrokeColorDefault` 描边。
         primitives.push(outlined(
             keycap_r,
-            4.0,
-            Token::SURFACE_RAISED,
-            Token::CARD_BORDER,
+            KEYCAP_RADIUS,
+            Token::CONTROL_FILL,
+            Token::CONTROL_STROKE,
             1.0,
             0.0,
             z + 1,
@@ -134,7 +158,7 @@ pub fn emit_shortcut_bar(
     );
     primitives.push(focus_ring(
         r.inflate(2.0),
-        8.0,
+        BAR_RADIUS + 2.0,
         Token::FOCUS_RING,
         2.0,
         z + 3,

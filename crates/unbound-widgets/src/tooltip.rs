@@ -22,9 +22,14 @@ use crate::{ControlState, WidgetDesc, WidgetOutput};
 
 /// 工具提示出现前指针必须停留的时长。
 pub const TOOLTIP_DELAY_MS: f32 = 400.0;
-/// 自动换行后工具提示的最大宽度。
-pub const TOOLTIP_MAX_WIDTH: f32 = 280.0;
+/// 自动换行后工具提示的最大宽度。对齐 WinUI `ToolTipMaxWidth = 320`。
+pub const TOOLTIP_MAX_WIDTH: f32 = 320.0;
 const TOOLTIP_SHADOW: f32 = 14.0;
+/// 气泡圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+const TOOLTIP_RADIUS: f32 = 4.0;
+/// 气泡内边距。WinUI `ToolTipBorderPadding = 9,6,9,8`；`Vec2` 只能表达对称的
+/// 水平/垂直值，这里取水平 9、垂直上边 6（下边多的 2px 由文字行高吸收）。
+const TOOLTIP_PADDING: Vec2 = Vec2::new(9.0, 6.0);
 
 /// 绝对悬停截止时间戳（毫秒）。
 ///
@@ -156,12 +161,12 @@ impl TooltipDesc {
             placement: Placement::TopStart,
             delay_ms: TOOLTIP_DELAY_MS,
             max_width: TOOLTIP_MAX_WIDTH,
-            radius: 6.0,
+            radius: TOOLTIP_RADIUS,
             z: 940,
             label: String::new(),
             gap: POPUP_GAP,
             viewport_margin: 0.0,
-            padding: Vec2::new(10.0, 6.0),
+            padding: TOOLTIP_PADDING,
         }
     }
 
@@ -169,7 +174,7 @@ impl TooltipDesc {
     #[must_use]
     pub fn labeled(anchor: Rect, viewport: Rect, label: impl Into<String>) -> Self {
         let label = label.into();
-        let padding = Vec2::new(10.0, 6.0);
+        let padding = TOOLTIP_PADDING;
         let lines = wrap_text(&label, TOOLTIP_MAX_WIDTH - padding.x * 2.0, 7.2);
         let line_count = lines.len().max(1) as f32;
         let widest = lines
@@ -187,7 +192,7 @@ impl TooltipDesc {
             placement: Placement::Top,
             delay_ms: TOOLTIP_DELAY_MS,
             max_width: TOOLTIP_MAX_WIDTH,
-            radius: 6.0,
+            radius: TOOLTIP_RADIUS,
             z: 940,
             label,
             gap: 6.0,

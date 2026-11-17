@@ -12,6 +12,25 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
+/// 气泡圆角。对齐 WinUI `OverlayCornerRadius = 8`（TeachingTip / Flyout 浮层）。
+const TOUR_BUBBLE_RADIUS: f32 = 8.0;
+/// 气泡内容内边距。WinUI `TeachingTipContentMargin` 为 12，此处统一到 Fluent 2 浮层的 16px 档。
+const TOUR_BUBBLE_PADDING: f32 = 16.0;
+/// 主按钮高度。对齐 WinUI 按钮的 `MinHeight = 32`（`DefaultButtonStyle`）。
+const TOUR_BUTTON_HEIGHT: f32 = 32.0;
+/// 气泡内按钮宽度。
+const TOUR_BUTTON_WIDTH: f32 = 56.0;
+/// 相邻按钮之间的间距。
+const TOUR_BUTTON_GAP: f32 = 8.0;
+/// 按钮圆角。对齐 WinUI `ControlCornerRadius = 4`。
+const TOUR_BUTTON_RADIUS: f32 = 4.0;
+/// 气泡高度：32 高按钮行 + 底部 16 内边距 + 顶部标题行余量。
+const TOUR_BUBBLE_HEIGHT: f32 = 72.0;
+/// 气泡最小宽度：左右各 16 内边距 + 三枚 56 宽按钮 + 两处 8 间距（216），留少量余量。
+const TOUR_BUBBLE_MIN_WIDTH: f32 = 240.0;
+/// 气泡与目标之间的间距。
+const TOUR_BUBBLE_GAP: f32 = 8.0;
+
 /// [`TourDesc`] 中的单个引导步骤。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TourStep {
@@ -144,9 +163,10 @@ pub fn emit_tour(
     }
 
     let hovered = state.phase == PointerPhase::Hovered;
+    // 目标高亮环取 `ControlCornerRadius = 4` 的圆角档。
     primitives.push(outlined(
         desc.target,
-        6.0,
+        4.0,
         Token::NONE,
         if hovered {
             Token::PRIMARY
@@ -158,19 +178,29 @@ pub fn emit_tour(
         desc.z + 1,
     ));
 
-    let bubble_w = 180.0_f32.min(desc.rect.width() - 16.0).max(80.0);
-    let bubble_h = 48.0_f32.min(desc.rect.height() * 0.45).max(28.0);
-    let bubble_r = Rect::new(
-        (desc.target.origin.x)
-            .min(desc.rect.max().x - bubble_w - 8.0)
-            .max(desc.rect.origin.x + 8.0),
-        (desc.target.max().y + 6.0).min(desc.rect.max().y - bubble_h - 6.0),
-        bubble_w,
-        bubble_h,
-    );
+    let bubble_w = TOUR_BUBBLE_MIN_WIDTH
+        .min(desc.rect.width() - TOUR_BUBBLE_GAP * 2.0)
+        .max(216.0);
+    let bubble_h = TOUR_BUBBLE_HEIGHT.min((desc.rect.height() - TOUR_BUBBLE_GAP * 2.0).max(48.0));
+    let bubble_x = (desc.target.origin.x)
+        .min(desc.rect.max().x - bubble_w - TOUR_BUBBLE_GAP)
+        .max(desc.rect.origin.x + TOUR_BUBBLE_GAP);
+    // 优先放在目标下方；下方放不下就翻到上方；两侧都放不下时退回下方并允许少量溢出，
+    // 以免气泡遮住需要保持可见的聚光灯目标。
+    let below_y = desc.target.max().y + TOUR_BUBBLE_GAP;
+    let above_y = desc.rect.origin.y + TOUR_BUBBLE_GAP;
+    let bubble_y = if below_y + bubble_h <= desc.rect.max().y - TOUR_BUBBLE_GAP {
+        below_y
+    } else if above_y + bubble_h <= desc.target.origin.y - TOUR_BUBBLE_GAP {
+        above_y
+    } else {
+        below_y
+    };
+    let bubble_r = Rect::new(bubble_x, bubble_y, bubble_w, bubble_h);
+    // 气泡圆角 `OverlayCornerRadius = 8`，1px 描边沿用卡片边框档。
     primitives.push(outlined(
         bubble_r,
-        8.0,
+        TOUR_BUBBLE_RADIUS,
         Token::SURFACE_RAISED,
         Token::CARD_BORDER,
         1.0,
@@ -178,16 +208,55 @@ pub fn emit_tour(
         desc.z + 2,
     ));
 
-    let skip_r = Rect::new(bubble_r.origin.x + 8.0, bubble_r.max().y - 20.0, 32.0, 14.0);
-    let prev_r = Rect::new(bubble_r.max().x - 80.0, bubble_r.max().y - 20.0, 34.0, 14.0);
-    let next_r = Rect::new(bubble_r.max().x - 42.0, bubble_r.max().y - 20.0, 34.0, 14.0);
-    primitives.push(surface(skip_r, 4.0, Token::SURFACE_SUNKEN, desc.z + 3));
-    primitives.push(surface(prev_r, 4.0, Token::SURFACE_SUNKEN, desc.z + 3));
-    primitives.push(surface(next_r, 4.0, Token::PRIMARY, desc.z + 3));
+    let button_y = bubble_r.max().y - TOUR_BUBBLE_PADDING - TOUR_BUTTON_HEIGHT;
+    let skip_r = Rect::new(
+        bubble_r.origin.x + TOUR_BUBBLE_PADDING,
+        button_y,
+        TOUR_BUTTON_WIDTH,
+        TOUR_BUTTON_HEIGHT,
+    );
+    let next_r = Rect::new(
+        bubble_r.max().x - TOUR_BUBBLE_PADDING - TOUR_BUTTON_WIDTH,
+        button_y,
+        TOUR_BUTTON_WIDTH,
+        TOUR_BUTTON_HEIGHT,
+    );
+    let prev_r = Rect::new(
+        next_r.origin.x - TOUR_BUTTON_GAP - TOUR_BUTTON_WIDTH,
+        button_y,
+        TOUR_BUTTON_WIDTH,
+        TOUR_BUTTON_HEIGHT,
+    );
+    // 次级按钮：`ControlFillColorDefault` 填充 + `ControlStrokeColorDefault` 1px 描边。
+    primitives.push(outlined(
+        skip_r,
+        TOUR_BUTTON_RADIUS,
+        Token::CONTROL_FILL,
+        Token::CONTROL_STROKE,
+        1.0,
+        0.0,
+        desc.z + 3,
+    ));
+    primitives.push(outlined(
+        prev_r,
+        TOUR_BUTTON_RADIUS,
+        Token::CONTROL_FILL,
+        Token::CONTROL_STROKE,
+        1.0,
+        0.0,
+        desc.z + 3,
+    ));
+    // 主按钮：强调色填充，高度 32。
+    primitives.push(surface(
+        next_r,
+        TOUR_BUTTON_RADIUS,
+        Token::PRIMARY,
+        desc.z + 3,
+    ));
 
     primitives.push(focus_ring(
         bubble_r,
-        8.0,
+        TOUR_BUBBLE_RADIUS,
         Token::FOCUS_RING,
         2.0,
         desc.z + 4,

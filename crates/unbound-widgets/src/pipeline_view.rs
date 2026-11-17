@@ -70,6 +70,7 @@ pub fn emit_pipeline_view(
     } else {
         Token::CARD_BORDER
     };
+    // 外层容器是卡片，圆角对齐 WinUI `OverlayCornerRadius = 8`。
     primitives.push(outlined(r, 8.0, Token::SURFACE, outer_border, 1.0, 0.0, z));
 
     let count = desc.stages.len().max(1) as f32;
@@ -85,7 +86,8 @@ pub fn emit_pipeline_view(
         } else {
             (Token::SURFACE_RAISED, Token::OUTLINE)
         };
-        primitives.push(outlined(card_r, 6.0, fill, border, 1.0, 0.0, z + 1));
+        // 阶段卡片圆角对齐 WinUI `ControlCornerRadius = 4`，与按钮/输入框同档。
+        primitives.push(outlined(card_r, 4.0, fill, border, 1.0, 0.0, z + 1));
 
         // 底部 GPU 耗时占比进度条
         let ratio = (stage.duration_ms / 4.0).clamp(0.08, 1.0);

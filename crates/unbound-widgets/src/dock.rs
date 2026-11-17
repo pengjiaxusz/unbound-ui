@@ -20,6 +20,18 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 /// 标签栏高度（逻辑像素）。
 pub const DOCK_TAB_BAR: f32 = 32.0;
 
+/// 面板边框与分隔线厚度。
+///
+/// WinUI `SplitViewLeftBorderThemeThickness` 的 1px：停靠面板之间只留一条极细分界，
+/// 而不是把面板包成粗框。
+const DOCK_BORDER: f32 = 1.0;
+
+/// 面板与标签的圆角半径。
+///
+/// WinUI `ControlCornerRadius = 4,4,4,4`：卡片、按钮、页签统一 4px，
+/// 停靠面板沿用同一档，避免在 Fluent 界面里出现方角硬边。
+const DOCK_CORNER: f32 = 4.0;
+
 /// 拖拽分割条时任意一侧可占用的最小比例。
 const SPLIT_LIMIT: f32 = 0.1;
 
@@ -114,6 +126,8 @@ impl DockTree {
         Self {
             nodes: vec![DockNode::Tabs { tabs, active: 0 }],
             root: 0,
+            // 分割条的可交互厚度 8：视觉上相邻面板各留 1px 边框（DOCK_BORDER），
+            // 中间的空隙只用于指针命中——WinUI 的分隔线本身只有 1px。
             handle: 8.0,
         }
     }
@@ -606,7 +620,9 @@ impl DockTokens {
             border: Token::OUTLINE,
             tab_bar: Token::HEADER_BG,
             tab: Token::NONE,
-            tab_hover: Token::CONTROL_HOVER,
+            // 悬停用 WinUI 的 `SubtleFillColorSecondary` 系列薄纱（= `HOVER`），
+            // 而不是实心控件表面色：页签只是被「点亮」一档，不应抢走激活页签的视觉重量。
+            tab_hover: Token::HOVER,
             tab_active: Token::CARD_BG,
             tab_text_active: Token::TEXT_PRIMARY,
             tab_text: Token::TEXT_SECONDARY,
@@ -621,15 +637,18 @@ impl DockTokens {
 #[must_use]
 pub fn emit_dock_pane(pane: &DockPane, tokens: DockTokens, z: u16) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(3);
+    // 面板框：1px 描边 + 4px 圆角，与 WinUI 的 `ControlCornerRadius` / 1px 分隔线同档。
     primitives.push(outlined(
         pane.rect,
-        0.0,
+        DOCK_CORNER,
         tokens.panel,
         tokens.border,
-        1.0,
+        DOCK_BORDER,
         0.0,
         z,
     ));
+    // 标签栏是面板内部的横向条带，保持方角：面板的圆角描边在它外侧，
+    // 条带若也画圆角，底边会在面板底色上留下两处多余的缺口。
     primitives.push(surface(pane.tab_bar(), 0.0, tokens.tab_bar, z));
     if pane.active_tab().is_some() {
         // 激活标签页下方以强调色描线，这是停靠区唯一的常驻状态提示。
@@ -688,7 +707,8 @@ pub fn emit_dock_tab(
     } else {
         tokens.tab
     };
-    primitives.push(outlined(rect, 0.0, fill, Token::NONE, 0.0, 0.0, z));
+    // 页签取 4px 圆角（WinUI `TabViewItem` 的 `CornerRadius` = `ControlCornerRadius`）。
+    primitives.push(outlined(rect, DOCK_CORNER, fill, Token::NONE, 0.0, 0.0, z));
     glyphs(
         label,
         if active {
@@ -711,7 +731,9 @@ pub fn emit_dock_tab(
 
     let hit = (!disabled).then(|| {
         HitRegion::new(tab.id, CONTROL_LAYER, u32::from(z), rect)
-            .with_shape(Shape::Rounded { radii: [0.0; 4] })
+            .with_shape(Shape::Rounded {
+                radii: [DOCK_CORNER; 4],
+            })
             .with_cursor(CursorKind::Pointer)
     });
     let mut a11y = A11yNode::new(Role::Tab, tab.title.clone(), rect)
@@ -736,10 +758,10 @@ pub fn emit_dock_preview(hover: DockHover, tokens: DockTokens, z: u16) -> Widget
     WidgetOutput {
         primitives: vec![outlined(
             rect,
-            4.0,
+            DOCK_CORNER,
             tokens.preview,
             tokens.preview_border,
-            2.0,
+            DOCK_BORDER,
             0.0,
             z,
         )],

@@ -11,6 +11,7 @@ use crate::button::BUTTON_LAYER;
 use crate::primitive::{glyphs as emit_glyphs, outlined, surface};
 use crate::{ControlState, WidgetOutput};
 
+/// 描述行默认高度。对齐 WinUI `TableViewRowMinHeightMedium = 32`。
 pub const DESCRIPTION_ROW_HEIGHT: f32 = 32.0;
 
 /// 单条描述项。
@@ -48,7 +49,7 @@ impl DescriptionsDesc {
             title: title.into(),
             items: Vec::new(),
             columns: 2,
-            radius: 6.0,
+            radius: 4.0, // ControlCornerRadius = 4
         }
     }
 
@@ -106,8 +107,12 @@ pub fn emit_descriptions_with_glyphs(
     let z = 700u16;
 
     // 1. 外层背景
-    out.primitives
-        .push(surface(rect, desc.radius, Token::SURFACE, z));
+    out.primitives.push(surface(
+        rect,
+        desc.radius,
+        Token::CARD_BG, // CardBackgroundFillColorDefault
+        z,
+    ));
 
     // 2. 固定 3 行分隔线以维持固定形状（限制在容器高度内）
     let row_h = DESCRIPTION_ROW_HEIGHT.min((rect.height() / 4.0).max(1.0));
@@ -117,7 +122,7 @@ pub fn emit_descriptions_with_glyphs(
         out.primitives.push(surface(
             line_rect,
             0.0,
-            Token::OUTLINE,
+            Token::DIVIDER, // DividerStrokeColorDefault
             z + 1 + r_idx as u16,
         ));
     }
@@ -140,7 +145,7 @@ pub fn emit_descriptions_with_glyphs(
         if control.focused {
             Token::FOCUS_RING
         } else {
-            Token::OUTLINE
+            Token::CARD_BORDER // CardStrokeColorDefault
         },
         1.0,
         0.0,

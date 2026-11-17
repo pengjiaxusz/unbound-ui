@@ -33,12 +33,21 @@ use crate::{ControlState, WidgetDesc, WidgetOutput};
 
 /// 文本输入框命中区域所在的界面层。
 pub const TEXT_INPUT_LAYER: u8 = 1;
-/// 默认字号。
+/// 默认字号。对齐 WinUI `ControlContentThemeFontSize = 14`。
 pub const TEXT_INPUT_FONT_SIZE: f32 = 14.0;
-/// 默认圆角半径。
-pub const TEXT_INPUT_RADIUS: f32 = 8.0;
+/// 默认圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+pub const TEXT_INPUT_RADIUS: f32 = 4.0;
 /// 边框与文本之间的水平内边距。
+///
+/// 对齐 WinUI `TextControlThemePadding = 10,5,6,6`：左边 10，右边 6
+/// （右侧 6 为滚动条与内嵌按钮预留），顶部 5、底部 6 让文字基线略偏上。
 pub const TEXT_INPUT_PADDING: f32 = 10.0;
+/// 聚焦态底部强调条的厚度。对齐 WinUI `TextControlBorderThemeThicknessFocused = 1,1,1,2`。
+const FOCUS_BAR_HEIGHT: f32 = 2.0;
+/// 内嵌按钮（清除/复制）的宽度。对齐 WinUI TextBox 模板的 `Width = 30`。
+const INNER_BUTTON_WIDTH: f32 = 30.0;
+/// 内嵌按钮的外边距。对齐 WinUI `TextBoxInnerButtonMargin = 0,4,4,4`。
+const INNER_BUTTON_MARGIN: f32 = 4.0;
 /// 焦点环向输入框外侧延伸的距离。
 const FOCUS_RING_GAP: f32 = 3.0;
 
@@ -251,10 +260,17 @@ impl TextInputDesc {
     }
 
     /// 位于尾部的一键复制按钮矩形。
+    ///
+    /// 与 WinUI 内嵌按钮一致：宽 30、上下右各留 4px（`TextBoxInnerButtonMargin = 0,4,4,4`）。
     #[must_use]
     pub fn copy_rect(&self) -> Rect {
-        let h = (self.rect.size.y - 8.0).max(16.0);
-        Rect::new(self.rect.max().x - 28.0, self.rect.origin.y + 4.0, 24.0, h)
+        let height = (self.rect.size.y - INNER_BUTTON_MARGIN * 2.0).max(16.0);
+        Rect::new(
+            self.rect.max().x - INNER_BUTTON_MARGIN - INNER_BUTTON_WIDTH,
+            self.rect.origin.y + INNER_BUTTON_MARGIN,
+            INNER_BUTTON_WIDTH,
+            height,
+        )
     }
 
     /// 设置最大字节预算。
@@ -276,15 +292,18 @@ impl TextInputDesc {
         }
     }
 
-    /// 位于尾部内边距内居中的清除按钮矩形。
+    /// 尾部清除按钮矩形。
+    ///
+    /// WinUI 的 `DeleteButton` 是一枚 30px 宽的内嵌按钮，四周留 4px
+    /// （`TextBoxInnerButtonMargin = 0,4,4,4`），而不是贴着文字的 16px 小圆点。
     #[must_use]
     pub fn clear_rect(&self) -> Rect {
-        const SIZE: f32 = 16.0;
+        let height = (self.rect.size.y - INNER_BUTTON_MARGIN * 2.0).max(16.0);
         Rect::new(
-            self.rect.max().x - TEXT_INPUT_PADDING - SIZE,
-            self.rect.origin.y + (self.rect.size.y - SIZE) * 0.5,
-            SIZE,
-            SIZE,
+            self.rect.max().x - INNER_BUTTON_MARGIN - INNER_BUTTON_WIDTH,
+            self.rect.origin.y + INNER_BUTTON_MARGIN,
+            INNER_BUTTON_WIDTH,
+            height,
         )
     }
 
@@ -902,24 +921,26 @@ pub fn emit_text_input(
     let mut primitives = Vec::with_capacity(5 + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len());
 
+    // 填充槽位对齐 WinUI：静息 `ControlFillColorDefault`、悬停
+    // `ControlFillColorSecondary`、禁用 `ControlFillColorDisabled`。
     let fill = if state.disabled {
-        Token::DISABLED
+        Token::CONTROL_DISABLED_BG
     } else if state.phase == crate::PointerPhase::Hovered {
         Token::CONTROL_HOVER
     } else {
-        Token::SURFACE_RAISED
+        Token::CONTROL_FILL
     };
     primitives.push(surface(rect, desc.radius, fill, z));
 
-    let border = match desc.validation {
-        ValidationState::Error => Token::INPUT_BORDER_ERROR,
-        ValidationState::Warning => Token::INPUT_BORDER_WARNING,
-        ValidationState::None => {
-            if state.focused {
-                Token::OUTLINE_STRONG
-            } else {
-                Token::OUTLINE
-            }
+    // 描边 `ControlStrokeColorDefault` 为 1px（`TextControlBorderThemeThickness = 1`）；
+    // 校验错误/警告改用语义色整圈覆盖。
+    let border = if state.disabled {
+        Token::CONTROL_DISABLED_BORDER
+    } else {
+        match desc.validation {
+            ValidationState::Error => Token::INPUT_BORDER_ERROR,
+            ValidationState::Warning => Token::INPUT_BORDER_WARNING,
+            ValidationState::None => Token::CONTROL_STROKE,
         }
     };
     primitives.push(outlined(
@@ -930,6 +951,19 @@ pub fn emit_text_input(
         1.0,
         0.0,
         z,
+    ));
+
+    // 聚焦态底部 2px 强调条（`TextControlBorderThemeThicknessFocused = 1,1,1,2`）。
+    // 始终写入图元池，仅调整不透明度，避免聚焦时重建图元索引。
+    primitives.push(focus_underline(
+        rect,
+        desc.radius,
+        z,
+        if state.focused && !state.disabled && desc.validation == ValidationState::None {
+            1.0
+        } else {
+            0.0
+        },
     ));
 
     // 选区槽位始终存在；通过不透明度控制可见性。
@@ -958,8 +992,9 @@ pub fn emit_text_input(
     );
     primitives.push(selection);
 
-    // 光标槽位：1 像素宽，未聚焦时隐藏。
-    let mut caret = surface(visual.caret, 0.0, Token::PRIMARY, z);
+    // 光标槽位：1 像素宽，未聚焦时隐藏。WinUI 的插入符跟随正文色
+    // （`TextFillColorPrimary`），而不是强调色。
+    let mut caret = surface(visual.caret, 0.0, Token::TEXT_PRIMARY, z);
     caret.prim_type_and_flags = GpuPrimitiveInstance::pack_type(
         PrimType::RoundedRect,
         Default::default(),
@@ -1053,13 +1088,13 @@ pub fn emit_text_input(
         } else if !state.disabled && state.phase == crate::PointerPhase::Hovered {
             Token::CONTROL_HOVER
         } else {
-            Token::SURFACE_RAISED
+            Token::CONTROL_FILL
         };
         primitives.push(outlined(
             btn_r,
             4.0,
             btn_fill,
-            Token::OUTLINE,
+            Token::CONTROL_STROKE,
             1.0,
             0.0,
             z + 1,
@@ -1117,6 +1152,33 @@ pub const fn clear_button_node(node: u64) -> u64 {
 
 fn set_opacity(primitive: &mut GpuPrimitiveInstance, opacity: f32) {
     primitive.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(primitive.depth_u16(), opacity);
+}
+
+/// WinUI 聚焦态底部强调条。
+///
+/// 官方 `TextControlBorderThemeThicknessFocused = 1,1,1,2` 只把底边加粗到 2px，
+/// 而圆角矩形描边只能四边同宽，因此这里单独叠一条 2px 强调色底边还原该观感。
+/// 两端按圆角半径内缩，避免溢出圆角轮廓。
+pub(crate) fn focus_underline(
+    rect: Rect,
+    radius: f32,
+    z: u16,
+    opacity: f32,
+) -> GpuPrimitiveInstance {
+    let inset = radius.min(rect.size.y * 0.5);
+    let mut bar = surface(
+        Rect::new(
+            rect.origin.x + inset,
+            rect.max().y - FOCUS_BAR_HEIGHT,
+            (rect.size.x - inset * 2.0).max(0.0),
+            FOCUS_BAR_HEIGHT,
+        ),
+        1.0,
+        Token::PRIMARY,
+        z,
+    );
+    set_opacity(&mut bar, opacity);
+    bar
 }
 
 /// `offset` 处或之前的最近字符边界。

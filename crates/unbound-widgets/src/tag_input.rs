@@ -20,7 +20,9 @@ use unbound_theme::Token;
 
 use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
-use crate::text_input::{reduce_text_input, TextEditState, TextInputDesc, TextInputEvent};
+use crate::text_input::{
+    focus_underline, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
+};
 use crate::{ControlState, WidgetOutput};
 
 /// 单个标签芯片的高度。
@@ -33,8 +35,8 @@ pub const TAG_PADDING: f32 = 8.0;
 pub const TAG_CLOSE: f32 = 14.0;
 /// 边框与芯片之间的内边距。
 pub const TAG_INSET: f32 = 8.0;
-/// 输入框与芯片的圆角半径。
-pub const TAG_RADIUS: f32 = 8.0;
+/// 输入框的圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+pub const TAG_RADIUS: f32 = 4.0;
 
 /// 标签输入框的纯数据描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -347,12 +349,14 @@ pub fn emit_tag_input(
     let mut primitives = Vec::with_capacity(6 + layout.chips.len() * 2 + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len());
 
+    // 填充槽位对齐 WinUI：静息 `ControlFillColorDefault`、悬停
+    // `ControlFillColorSecondary`、禁用 `ControlFillColorDisabled`。
     let fill = if control.disabled {
         Token::CONTROL_DISABLED_BG
     } else if control.phase == crate::PointerPhase::Hovered {
         Token::CONTROL_HOVER
     } else {
-        Token::INPUT_BG
+        Token::CONTROL_FILL
     };
     primitives.push(surface(rect, TAG_RADIUS, fill, desc.z));
     primitives.push(outlined(
@@ -361,14 +365,24 @@ pub fn emit_tag_input(
         Token::NONE,
         if control.disabled {
             Token::CONTROL_DISABLED_BORDER
-        } else if control.focused {
-            Token::OUTLINE_STRONG
         } else {
-            Token::OUTLINE
+            Token::CONTROL_STROKE
         },
         1.0,
         0.0,
         desc.z,
+    ));
+
+    // 聚焦态底部 2px 强调条（`TextControlBorderThemeThicknessFocused = 1,1,1,2`）。
+    primitives.push(focus_underline(
+        rect,
+        TAG_RADIUS,
+        desc.z,
+        if control.focused && !control.disabled {
+            1.0
+        } else {
+            0.0
+        },
     ));
 
     for (index, chip) in layout.chips.iter().enumerate() {
@@ -385,7 +399,7 @@ pub fn emit_tag_input(
                 TAG_HEIGHT * 0.5,
                 Token::NONE,
                 Token::PRIMARY,
-                2.0,
+                1.0,
                 0.0,
                 desc.z,
             ));
@@ -425,7 +439,7 @@ pub fn emit_tag_input(
             TAG_HEIGHT - 8.0,
         ),
         0.0,
-        Token::PRIMARY,
+        Token::TEXT_PRIMARY,
         desc.z,
     );
     caret.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(

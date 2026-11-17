@@ -20,16 +20,16 @@ use crate::overlay::{BackdropRequest, OverlayEntry};
 use crate::primitive::{instance, surface};
 use crate::{ControlState, WidgetOutput};
 
-/// 对话框内容区内边距。
-pub const DIALOG_PADDING: f32 = 20.0;
+/// 对话框内容区内边距。对齐 WinUI `ContentDialogPadding = 24`。
+pub const DIALOG_PADDING: f32 = 24.0;
 /// 底部栏高度。
 pub const DIALOG_FOOTER: f32 = 56.0;
 /// 操作按钮高度。
 pub const DIALOG_BUTTON_HEIGHT: f32 = 32.0;
 /// 严重级别图标直径。
 pub const DIALOG_ICON: f32 = 22.0;
-/// 默认圆角半径。
-pub const DIALOG_RADIUS: f32 = 14.0;
+/// 默认圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（ContentDialog 的 CornerRadius）。
+pub const DIALOG_RADIUS: f32 = 8.0;
 const DIALOG_SHADOW: f32 = 40.0;
 
 /// 确认操作的强调级别。
@@ -390,10 +390,10 @@ pub fn emit_alert_dialog(
             Token::DIVIDER,
             desc.z + 1,
         ),
-        // 取消按钮：描边表面。
+        // 取消按钮：描边表面。圆角对齐 WinUI `ControlCornerRadius = 4`。
         instance(
             layout.cancel,
-            [8.0; 4],
+            [4.0; 4],
             Token::SURFACE_RAISED,
             Token::OUTLINE,
             1.0,
@@ -403,7 +403,7 @@ pub fn emit_alert_dialog(
             desc.z + 1,
         ),
         // 确认按钮：按色调填充。
-        surface(layout.confirm, 8.0, desc.tone.fill(), desc.z + 1),
+        surface(layout.confirm, 4.0, desc.tone.fill(), desc.z + 1),
     ];
     let mut payloads = Vec::with_capacity(glyphs.len());
     crate::primitive::glyphs(

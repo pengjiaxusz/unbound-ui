@@ -15,8 +15,8 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 默认菜单栏高度。
-pub const MENUBAR_HEIGHT: f32 = 30.0;
+/// 默认菜单栏高度。对齐 WinUI `MenuBarHeight = 40`。
+pub const MENUBAR_HEIGHT: f32 = 40.0;
 
 /// 单个顶层菜单。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,7 +58,8 @@ impl MenuBarDesc {
         Self {
             rect,
             items,
-            item_padding: 12.0,
+            // WinUI `MenuBarItemButtonPadding = 10,4,10,4`。
+            item_padding: 10.0,
             z: 700,
         }
     }
@@ -303,7 +304,18 @@ pub fn emit_menubar_item(
     } else {
         tokens.item
     };
-    primitives.push(outlined(rect, 4.0, fill, Token::NONE, 0.0, 0.0, desc.z));
+    // WinUI `MenuBarItemMargin = 4,4,4,4`：悬停/打开态胶囊比条目矩形内缩 4px。
+    let pill = rect.inflate(-4.0);
+    primitives.push(outlined(
+        pill,
+        // WinUI `ControlCornerRadius = 4`。
+        4.0,
+        fill,
+        Token::NONE,
+        0.0,
+        0.0,
+        desc.z,
+    ));
     glyphs(
         label,
         if open { tokens.text_open } else { tokens.text },
@@ -312,7 +324,7 @@ pub fn emit_menubar_item(
         &mut payloads,
     );
     primitives.push(focus_ring(
-        rect.inflate(1.0),
+        pill.inflate(1.0),
         5.0,
         tokens.focus_ring,
         2.0,

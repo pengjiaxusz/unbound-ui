@@ -107,20 +107,28 @@ pub fn emit_cascader(
     let mut payloads = Vec::with_capacity(label_glyphs.len());
 
     let hovered = state.phase == PointerPhase::Hovered;
+    // 无原生 WinUI 对应控件；触发器对齐 ComboBox：
+    // CornerRadius = ControlCornerRadius = 4，底色 ControlFillColorDefault。
     primitives.push(outlined(
         desc.rect,
-        6.0,
-        if hovered {
-            Token::SURFACE_RAISED
+        4.0,
+        if state.disabled {
+            // ComboBoxBackgroundDisabled = ControlFillColorDisabled。
+            Token::CONTROL_DISABLED_BG
+        } else if hovered {
+            // ComboBoxBackgroundPointerOver = ControlFillColorSecondary。
+            Token::CONTROL_HOVER
         } else {
-            Token::SURFACE
+            Token::CONTROL_FILL
         },
         if state.disabled {
-            Token::DISABLED
-        } else if hovered || state.focused {
-            Token::FOCUS_RING
+            Token::CONTROL_DISABLED_BORDER
+        } else if state.focused {
+            // ComboBoxBackgroundBorderBrushFocused = FocusStrokeColorOuter。
+            Token::OUTLINE_STRONG
         } else {
-            Token::CARD_BORDER
+            // ComboBoxBorderBrush = ControlElevationBorderBrush。
+            Token::CONTROL_STROKE
         },
         1.0,
         0.0,
@@ -153,10 +161,11 @@ pub fn emit_cascader(
         primitives.push(inst);
     }
 
-    let chev_cx = desc.rect.max().x - 14.0;
+    // 展开箭头：与 ComboBox 一致，12×12 图标距右沿 14px，故中心在右沿内 20px。
+    let chev_cx = desc.rect.max().x - 20.0;
     let chev_cy = desc.rect.origin.y + desc.rect.height() * 0.5;
     curve_stroke(
-        [chev_cx - 3.5, chev_cy - 1.5],
+        [chev_cx - 4.0, chev_cy - 2.0],
         [chev_cx, chev_cy + 2.0],
         1.5,
         Token::TEXT_SECONDARY,
@@ -166,7 +175,7 @@ pub fn emit_cascader(
     );
     curve_stroke(
         [chev_cx, chev_cy + 2.0],
-        [chev_cx + 3.5, chev_cy - 1.5],
+        [chev_cx + 4.0, chev_cy - 2.0],
         1.5,
         Token::TEXT_SECONDARY,
         desc.z + 2,
@@ -176,7 +185,7 @@ pub fn emit_cascader(
 
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        4.0,
         Token::FOCUS_RING,
         2.0,
         desc.z + 3,

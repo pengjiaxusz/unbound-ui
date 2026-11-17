@@ -399,7 +399,7 @@ impl BadgeDesc {
         Self::new(Rect::ZERO, text)
     }
 
-    /// 切换为主强调色胶囊样式（`PRIMARY_SOFT` 底 + `PRIMARY` 文本）。
+    /// 切换为主强调色胶囊样式（`ACCENT` 底 + `ON_ACCENT` 文本）。
     #[must_use]
     pub fn primary(mut self) -> Self {
         self.variant = crate::badge::BadgeVariant::Primary;

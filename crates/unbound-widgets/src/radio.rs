@@ -11,11 +11,23 @@ use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 默认圆圈尺寸。
-pub const RADIO_SIZE: f32 = 18.0;
+/// 默认圆圈尺寸。对齐 WinUI `RadioButton` 的 OuterEllipse Width/Height = 20。
+pub const RADIO_SIZE: f32 = 20.0;
 
-/// 圆圈与标签之间的间距。
+/// 圆圈与标签之间的间距。WinUI 的圆圈列宽 20 + `Padding` 左边距 8。
 pub const RADIO_GAP: f32 = 28.0;
+
+/// 外圈描边宽度。对齐 WinUI `RadioButtonBorderThemeThickness = 1`。
+const RADIO_STROKE: f32 = 1.0;
+
+/// 选中圆点尺寸。对齐 WinUI `RadioButtonCheckGlyphSize = 12`。
+const RADIO_DOT: f32 = 12.0;
+
+/// 悬停时的圆点尺寸。对齐 WinUI `RadioButtonCheckGlyphPointerOverSize = 14`。
+const RADIO_DOT_HOVER: f32 = 14.0;
+
+/// 按下时的圆点尺寸。对齐 WinUI `RadioButtonCheckGlyphPressedOverSize = 10`。
+const RADIO_DOT_PRESSED: f32 = 10.0;
 
 /// 单选按钮绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,13 +62,15 @@ impl RadioTokens {
     pub fn standard() -> Self {
         Self {
             circle: Token::CARD_BG,
-            border: Token::OUTLINE,
+            // RadioButtonOuterEllipseStroke = ControlStrongStrokeColorDefault。
+            border: Token::OUTLINE_STRONG,
             border_selected: Token::PRIMARY,
             dot: Token::PRIMARY,
             circle_disabled: Token::CONTROL_DISABLED_BG,
             border_disabled: Token::CONTROL_DISABLED_BORDER,
             dot_disabled: Token::CONTROL_DISABLED_THUMB,
-            label: Token::TEXT_SECONDARY,
+            // RadioButtonForeground = TextFillColorPrimary。
+            label: Token::TEXT_PRIMARY,
             label_hover: Token::TEXT_PRIMARY,
             label_disabled: Token::TEXT_DISABLED,
             focus_ring: Token::FOCUS_RING,
@@ -249,16 +263,23 @@ pub fn emit_radio(
         } else {
             tokens.border
         },
-        2.0,
+        // RadioButtonBorderThemeThickness = 1（各状态一致）。
+        RADIO_STROKE,
         0.0,
         z,
     ));
 
     // 中心圆点：居中的较小圆形。
     if desc.selected {
+        // 常态 12、悬停 14、按下 10（WinUI 的 `RadioButtonCheckGlyph*Size`）。
+        let dot_size = match state.phase {
+            PointerPhase::Pressed => RADIO_DOT_PRESSED,
+            PointerPhase::Hovered => RADIO_DOT_HOVER,
+            PointerPhase::Idle => RADIO_DOT,
+        };
         primitives.push(surface(
-            circle.inflate(-5.0),
-            4.0,
+            circle.inflate(-(circle.size.x - dot_size) * 0.5),
+            dot_size * 0.5,
             if state.disabled {
                 tokens.dot_disabled
             } else {
@@ -365,7 +386,8 @@ mod tests {
         let desc = desc();
         let circle = desc.circle_rect();
         assert_eq!(circle.origin.x, 0.0);
-        assert_eq!(circle.origin.y, 7.0);
+        // 20px 圆圈在 32px 行内垂直居中：(32 - 20) / 2 = 6。
+        assert_eq!(circle.origin.y, 6.0);
     }
 
     #[test]

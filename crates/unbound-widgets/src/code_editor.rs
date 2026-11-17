@@ -7,10 +7,15 @@ use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::code_block::{highlight_line, CodeSpan};
+use crate::code_block::{highlight_line, CodeSpan, CODE_LINE_HEIGHT};
 use crate::primitive::{focus_ring, glyphs, outlined, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
+
+/// 编辑器容器圆角，对齐 WinUI `ControlCornerRadius`（4）。
+const EDITOR_RADIUS: f32 = 4.0;
+/// 编辑器描边宽度，对齐 WinUI `TextControlBorderThemeThickness`（1）。
+const EDITOR_BORDER: f32 = 1.0;
 
 /// [`CodeEditorDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -186,21 +191,26 @@ pub fn emit_code_editor(
     let mut primitives = Vec::with_capacity(7 + label_glyphs.len());
     let mut payloads = Vec::with_capacity(label_glyphs.len());
 
-    let hovered = state.phase == PointerPhase::Hovered;
+    // 容器与只读代码块统一：CODE_BG 底、4px 圆角、1px `ControlStrokeColorDefault` 描边；
+    // 悬停换成 `TextControlBorderBrushPointerOver`，聚焦改由外扩焦点环表达。
+    let border = if state.disabled {
+        Token::CONTROL_DISABLED_BORDER
+    } else if state.phase == PointerPhase::Hovered {
+        Token::INPUT_BORDER_HOVER
+    } else {
+        Token::CONTROL_STROKE
+    };
     primitives.push(outlined(
         desc.rect,
-        6.0,
-        Token::SURFACE_SUNKEN,
-        if hovered || state.focused {
-            Token::FOCUS_RING
-        } else {
-            Token::CARD_BORDER
-        },
-        1.0,
+        EDITOR_RADIUS,
+        Token::CODE_BG,
+        border,
+        EDITOR_BORDER,
         0.0,
         desc.z,
     ));
 
+    // 行号槽与只读代码块同色；向内缩进 2px，圆角取容器圆角减缩进（4 − 2 = 2）。
     let gutter_w = 34.0_f32.min(desc.rect.width() * 0.25);
     primitives.push(surface(
         Rect::new(
@@ -209,17 +219,20 @@ pub fn emit_code_editor(
             gutter_w,
             (desc.rect.height() - 4.0).max(8.0),
         ),
-        4.0,
+        2.0,
         Token::SURFACE_RAISED,
         desc.z + 1,
     ));
 
-    let line_h = 18.0_f32.min(desc.rect.height() * 0.35);
+    // 行高与只读代码块共用 `CODE_LINE_HEIGHT`（20px，匹配 14px 正文字号）。
+    let line_h = CODE_LINE_HEIGHT.min(desc.rect.height() * 0.35);
     let visible_line = desc
         .cursor_line
         .saturating_sub((desc.scroll.y / line_h) as usize);
     let line_y = (desc.rect.origin.y + 6.0 + (visible_line % 16) as f32 * line_h)
         .min(desc.rect.max().y - line_h - 4.0);
+    // 当前行高亮沿用 Win11 `SubtleFillColorSecondary`（HOVER 令牌），
+    // 比选区更轻；显式选区仍用 SELECTION。
     primitives.push(surface(
         Rect::new(
             desc.rect.origin.x + gutter_w + 4.0,
@@ -227,8 +240,8 @@ pub fn emit_code_editor(
             (desc.rect.width() - gutter_w - 8.0).max(12.0),
             line_h,
         ),
-        3.0,
-        Token::PRIMARY_SOFT,
+        2.0,
+        Token::HOVER,
         desc.z + 1,
     ));
 
@@ -282,16 +295,17 @@ pub fn emit_code_editor(
     let caret_x = (desc.rect.origin.x + gutter_w + 10.0 + desc.cursor_col as f32 * 8.0
         - desc.scroll.x)
         .clamp(desc.rect.origin.x + gutter_w + 6.0, desc.rect.max().x - 6.0);
+    // 插入符跟随正文色（WinUI 的 Caret 使用文本前景色）。
     primitives.push(surface(
         Rect::new(caret_x, line_y + 2.0, 2.0, (line_h - 4.0).max(8.0)),
         1.0,
-        Token::PRIMARY,
+        Token::CODE_TEXT,
         desc.z + 2,
     ));
 
     primitives.push(focus_ring(
         desc.rect,
-        6.0,
+        EDITOR_RADIUS,
         Token::FOCUS_RING,
         2.0,
         desc.z + 3,
@@ -301,7 +315,7 @@ pub fn emit_code_editor(
     if !label_glyphs.is_empty() {
         glyphs(
             label_glyphs,
-            Token::TEXT_PRIMARY,
+            Token::CODE_TEXT,
             desc.z + 4,
             &mut primitives,
             &mut payloads,

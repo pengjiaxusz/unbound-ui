@@ -56,6 +56,7 @@ pub fn emit_banner(
         Severity::Error => (Token::ERROR_SOFT, Token::ERROR),
     };
     let hovered = state.phase == PointerPhase::Hovered;
+    // 容器圆角与描边对齐 WinUI `ControlCornerRadius = 4`、`InfoBarBorderThickness = 1`。
     primitives.push(outlined(
         desc.rect,
         4.0,
@@ -70,6 +71,7 @@ pub fn emit_banner(
         desc.z,
     ));
 
+    // 左侧状态条 4px，与 InfoBar 的严重级别状态条一致。
     let bar_r = Rect::new(
         desc.rect.origin.x,
         desc.rect.origin.y,
@@ -84,12 +86,15 @@ pub fn emit_banner(
         18.0,
         18.0,
     );
-    primitives.push(surface(close_r, 9.0, accent, desc.z + 1));
+    // 关闭按钮圆角对齐 WinUI `ControlCornerRadius = 4`。
+    primitives.push(surface(close_r, 4.0, accent, desc.z + 1));
+    // 关闭叉号取 8px，接近 WinUI `InfoBarCloseButtonGlyphSize = 16` 与
+    // `InfoBarCloseButtonSize = 38` 的比例。
     let cx = close_r.center().x;
     let cy = close_r.center().y;
     curve_stroke(
-        [cx - 3.0, cy - 3.0],
-        [cx + 3.0, cy + 3.0],
+        [cx - 4.0, cy - 4.0],
+        [cx + 4.0, cy + 4.0],
         1.5,
         Token::ON_PRIMARY,
         desc.z + 2,
@@ -97,8 +102,8 @@ pub fn emit_banner(
         &mut payloads,
     );
     curve_stroke(
-        [cx + 3.0, cy - 3.0],
-        [cx - 3.0, cy + 3.0],
+        [cx + 4.0, cy - 4.0],
+        [cx - 4.0, cy + 4.0],
         1.5,
         Token::ON_PRIMARY,
         desc.z + 2,

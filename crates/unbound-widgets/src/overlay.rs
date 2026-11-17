@@ -12,6 +12,10 @@ use unbound_gpu::data::PassLayer;
 use unbound_math::{Rect, Vec2};
 
 /// 锚点与弹窗之间的默认间距（逻辑像素）。
+///
+/// WinUI 的 `FlyoutPresenter` 自身没有外边距、浮层紧贴锚点；这里保留 4px，
+/// 使浮层的 1px 描边与锚点描边不相粘连。该值与翻转/贴合几何一起被
+/// `tests/overlay_placement.rs` 锁定，调整需同步集成测试。
 pub const POPUP_GAP: f32 = 4.0;
 
 /// 工具提示距离窗口视口四边的默认安全内边距（逻辑像素）。

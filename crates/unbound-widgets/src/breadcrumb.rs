@@ -15,7 +15,10 @@ use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
 /// 单个分隔符两侧的间距。
-pub const CRUMB_GAP: f32 = 6.0;
+///
+/// WinUI 的 chevron 文本块 `BreadcrumbBarChevronPadding = 2,0`，叠加面包屑项
+/// 自身的左右各 1px 内边距，视觉上分隔符与两侧文字相距约 8px。
+pub const CRUMB_GAP: f32 = 8.0;
 
 /// 为省略号面包屑预留的宽度。
 pub const CRUMB_ELLIPSIS: f32 = 24.0;
@@ -226,9 +229,12 @@ impl BreadcrumbTokens {
     #[must_use]
     pub fn standard() -> Self {
         Self {
-            text: Token::TEXT_SECONDARY,
+            // `BreadcrumbBarNormalForegroundBrush` = TextFillColorPrimary。
+            text: Token::TEXT_PRIMARY,
+            // `BreadcrumbBarCurrentNormalForegroundBrush` = TextFillColorPrimary。
             text_current: Token::TEXT_PRIMARY,
-            separator: Token::TEXT_DISABLED,
+            // chevron 使用 `BreadcrumbBarNormalForegroundBrush`（TextFillColorPrimary）。
+            separator: Token::TEXT_PRIMARY,
             ellipsis: Token::TEXT_SECONDARY,
             focus_ring: Token::FOCUS_RING,
         }

@@ -16,8 +16,8 @@ use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined, sur
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 默认标题栏高度。
-pub const ACCORDION_HEADER: f32 = 40.0;
+/// 默认标题栏高度。对齐 WinUI `ExpanderMinHeight = 48`。
+pub const ACCORDION_HEADER: f32 = 48.0;
 
 /// 低于此高度的内容区视为完全折叠。
 pub const ACCORDION_COLLAPSE_EPSILON: f32 = 0.5;
@@ -283,14 +283,14 @@ impl AccordionTokens {
     #[must_use]
     pub fn standard() -> Self {
         Self {
-            body: Token::SURFACE,
-            header: Token::SURFACE_RAISED,
-            header_hover: Token::CONTROL_HOVER,
-            header_open: Token::SURFACE,
-            text: Token::TEXT_PRIMARY,
-            text_open: Token::PRIMARY,
-            chevron: Token::TEXT_SECONDARY,
-            divider: Token::DIVIDER,
+            body: Token::CARD_BG,   // Expander background = CardBackgroundFillColorDefault
+            header: Token::CARD_BG, // ExpanderHeaderBackground = CardBackgroundFillColorDefault
+            header_hover: Token::HOVER, // SubtleFillColorSecondary
+            header_open: Token::CARD_BG, // ExpanderHeaderBackground（展开态同色）
+            text: Token::TEXT_PRIMARY, // ExpanderHeaderForeground = TextFillColorPrimary
+            text_open: Token::TEXT_PRIMARY,
+            chevron: Token::TEXT_PRIMARY, // ExpanderChevronForeground = TextFillColorPrimary
+            divider: Token::DIVIDER,      // DividerStrokeColorDefault
             focus_ring: Token::FOCUS_RING,
         }
     }
@@ -325,7 +325,10 @@ pub fn emit_accordion_header(
     } else {
         tokens.header
     };
-    primitives.push(surface(rect, 0.0, fill, desc.z));
+    primitives.push(surface(
+        rect, 4.0, // ControlCornerRadius = 4
+        fill, desc.z,
+    ));
     glyphs(
         title,
         if open { tokens.text_open } else { tokens.text },
@@ -377,7 +380,7 @@ pub fn emit_accordion_header(
     ));
     primitives.push(focus_ring(
         rect.inflate(1.0),
-        3.0,
+        4.0, // ControlCornerRadius = 4
         tokens.focus_ring,
         2.0,
         desc.z,
@@ -386,7 +389,7 @@ pub fn emit_accordion_header(
 
     let hit = (!disabled).then(|| {
         HitRegion::new(section.id, CONTROL_LAYER, u32::from(desc.z), rect)
-            .with_shape(Shape::Rounded { radii: [3.0; 4] })
+            .with_shape(Shape::Rounded { radii: [4.0; 4] })
             .with_cursor(CursorKind::Pointer)
     });
     let mut a11y = A11yNode::new(Role::Button, section.title.clone(), rect)
@@ -422,7 +425,7 @@ pub fn emit_accordion_body(
     WidgetOutput {
         primitives: vec![outlined(
             rect,
-            0.0,
+            4.0, // ControlCornerRadius = 4
             tokens.body,
             tokens.divider,
             1.0,
@@ -458,8 +461,8 @@ mod tests {
         let state = AccordionState::new(3);
         assert_eq!(desc.header_rect(&state, 0).origin.y, 0.0);
         assert_eq!(desc.header_rect(&state, 1).origin.y, ACCORDION_HEADER);
-        assert_eq!(desc.header_rect(&state, 2).origin.y, 80.0);
-        assert_eq!(desc.content_height(&state), 120.0);
+        assert_eq!(desc.header_rect(&state, 2).origin.y, 96.0);
+        assert_eq!(desc.content_height(&state), 144.0);
     }
 
     #[test]
@@ -470,9 +473,9 @@ mod tests {
         state.open(&desc, 0);
         state.snap(&desc);
         assert_eq!(desc.body_rect(&state, 0).size.y, 100.0);
-        assert_eq!(desc.header_rect(&state, 1).origin.y, 140.0);
-        assert_eq!(desc.header_rect(&state, 2).origin.y, 180.0);
-        assert_eq!(desc.content_height(&state), 220.0);
+        assert_eq!(desc.header_rect(&state, 1).origin.y, 148.0);
+        assert_eq!(desc.header_rect(&state, 2).origin.y, 196.0);
+        assert_eq!(desc.content_height(&state), 244.0);
     }
 
     #[test]
@@ -575,7 +578,7 @@ mod tests {
         state.open(&desc, 0);
         state.snap(&desc);
         let body = desc.body_rect(&state, 0);
-        assert_eq!(body.size.y, 360.0, "the stack rect clips the body");
+        assert_eq!(body.size.y, 352.0, "the stack rect clips the body");
     }
 
     #[test]

@@ -52,6 +52,7 @@ impl DividerDesc {
             label: None,
             inset: 0.0,
             label_gap: 12.0,
+            // WinUI 的 Divider 模板只有 1px 高的 Border，线宽恒为 1（`DividerStrokeColorDefault`）。
             thickness: 1.0,
             z: 300,
         }
@@ -173,6 +174,9 @@ pub struct DividerTokens {
 
 impl DividerTokens {
     /// 标准配色方案。
+    ///
+    /// 线条取 WinUI 的 `DividerStrokeColorDefaultBrush`（深色 #15FFFFFF / 浅色 #0F000000），
+    /// 即本仓库的 [`Token::DIVIDER`]；标签用次级文字色 `TextFillColorSecondaryBrush`。
     #[must_use]
     pub fn standard() -> Self {
         Self {

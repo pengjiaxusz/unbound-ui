@@ -8,9 +8,17 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
+use crate::text_input::focus_underline;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const LAYER: u8 = 1;
+
+/// 地址栏圆角。对齐 WinUI `ControlCornerRadius = 4`（AutoSuggestBox）。
+const BAR_RADIUS: f32 = 4.0;
+/// 内嵌导航按钮圆角。对齐 WinUI `ControlCornerRadius = 4`。
+const INNER_BUTTON_RADIUS: f32 = 4.0;
+/// 路径分段胶囊圆角。对齐 WinUI `ControlCornerRadius = 4`。
+const SEGMENT_RADIUS: f32 = 4.0;
 
 /// 双模地址栏描述符（平时显示分段路径面包屑，点击空白或按下快捷键切换为完整路径编辑框）。
 #[derive(Clone, Debug, PartialEq)]
@@ -97,19 +105,33 @@ pub fn emit_address_bar(
 
     let bg = if control.disabled {
         Token::CONTROL_DISABLED_BG
-    } else if state.editing {
-        Token::INPUT_BG
     } else {
-        Token::SURFACE_SUNKEN
+        // `ControlFillColorDefault`：AutoSuggestBox / 地址栏的控件表面填充。
+        Token::CONTROL_FILL
     };
-    let border = if state.editing || (!control.disabled && control.phase == PointerPhase::Pressed) {
-        Token::PRIMARY
-    } else if !control.disabled && control.phase == PointerPhase::Hovered {
+    let border = if control.disabled {
+        Token::CONTROL_DISABLED_BORDER
+    } else if control.phase == PointerPhase::Hovered {
+        // `TextControlBorderBrushPointerOver` 档的浅描边。
         Token::OUTLINE_STRONG
     } else {
-        Token::CARD_BORDER
+        // `ControlStrokeColorDefault`：1px（`TextControlBorderThemeThickness = 1`）。
+        Token::CONTROL_STROKE
     };
-    primitives.push(outlined(r, 6.0, bg, border, 1.0, 0.0, z));
+    primitives.push(outlined(r, BAR_RADIUS, bg, border, 1.0, 0.0, z));
+
+    // 聚焦态底部 2px 强调条（`TextControlBorderThemeThicknessFocused = 1,1,1,2`）：
+    // 图元始终存在，进入编辑或获得焦点时改为不透明，保证图元数恒定。
+    primitives.push(focus_underline(
+        r,
+        BAR_RADIUS,
+        z,
+        if !control.disabled && (state.editing || control.focused) {
+            1.0
+        } else {
+            0.0
+        },
+    ));
 
     // 后退、前进、向上、刷新四个导航槽位背景（恒定 4 个图元）
     for i in 0..4usize {
@@ -119,12 +141,13 @@ pub fn emit_address_bar(
             22.0,
             (r.size.y - 8.0).max(16.0),
         );
+        // 导航按钮是「微妙」按钮：静息透明，悬停才出现 `SubtleFillColorSecondary`。
         let fill = if !control.disabled && control.phase == PointerPhase::Hovered && i == 0 {
-            Token::CONTROL_HOVER
+            Token::HOVER
         } else {
-            Token::SURFACE_RAISED
+            Token::NONE
         };
-        primitives.push(surface(btn_r, 4.0, fill, z + 1));
+        primitives.push(surface(btn_r, INNER_BUTTON_RADIUS, fill, z + 1));
     }
 
     // 路径分段胶囊槽位（对固定 `desc.segments` 恒定发射）
@@ -132,25 +155,31 @@ pub fn emit_address_bar(
     for seg in &desc.segments {
         let w = (seg.chars().count() as f32 * 7.5 + 16.0).clamp(36.0, 140.0);
         let seg_r = Rect::new(x, r.origin.y + 4.0, w, (r.size.y - 8.0).max(16.0));
-        let seg_fill = if state.editing {
+        // 面包屑段落在 WinUI 中静息为 `SubtleFillColorSecondary`（即 HOVER 令牌），
+        // 进入整行文本编辑时隐去，避免与编辑框的纯文本冲突。
+        let seg_fill = if state.editing || control.disabled {
             Token::NONE
         } else {
-            Token::SURFACE_RAISED
+            Token::HOVER
         };
-        primitives.push(surface(seg_r, 4.0, seg_fill, z + 1));
+        primitives.push(surface(seg_r, SEGMENT_RADIUS, seg_fill, z + 1));
         x += w + 6.0;
     }
 
     emit_glyphs(
         glyphs,
-        Token::TEXT_PRIMARY,
+        if control.disabled {
+            Token::TEXT_DISABLED
+        } else {
+            Token::TEXT_PRIMARY
+        },
         z + 2,
         &mut primitives,
         &mut payloads,
     );
     primitives.push(focus_ring(
         r.inflate(2.0),
-        8.0,
+        BAR_RADIUS + 2.0,
         Token::FOCUS_RING,
         2.0,
         z + 3,

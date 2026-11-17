@@ -27,13 +27,19 @@ use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 /// 展开模式下侧边栏的默认宽度。
-pub const SIDEBAR_WIDTH: f32 = 244.0;
+///
+/// 对齐 WinUI `NavigationView.OpenPaneLength` 的默认值 320。
+pub const SIDEBAR_WIDTH: f32 = 320.0;
 
 /// 折叠（仅图标）模式下侧边栏的默认宽度。
-pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 64.0;
+///
+/// 对齐 WinUI `NavigationViewCompactPaneLength` = 48（`NavigationView_themeresources.xaml`）。
+pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 48.0;
 
 /// 导航条目的默认行高。
-pub const SIDEBAR_ITEM_HEIGHT: f32 = 34.0;
+///
+/// 对齐 WinUI `NavigationViewItemOnLeftMinHeight` = 36（`NavigationView_themeresources.xaml`）。
+pub const SIDEBAR_ITEM_HEIGHT: f32 = 36.0;
 
 /// 分组标题的默认行高。
 pub const SIDEBAR_SECTION_HEIGHT: f32 = 26.0;
@@ -42,7 +48,21 @@ pub const SIDEBAR_SECTION_HEIGHT: f32 = 26.0;
 pub const SIDEBAR_SECTION_GAP: f32 = 6.0;
 
 /// 面板内容区四周的内边距。
-pub const SIDEBAR_PADDING: f32 = 10.0;
+///
+/// WinUI `NavigationViewItemButtonMargin` = 4,2：条目胶囊与窗格边缘保留 4 像素间距。
+pub const SIDEBAR_PADDING: f32 = 4.0;
+
+/// 条目标签右侧留白。
+///
+/// WinUI `NavigationViewItemContentPresenterMargin` 右 8 加 `NavigationViewItemButtonMargin`
+/// 右 4，合计 12。
+const SIDEBAR_LABEL_RIGHT_PADDING: f32 = 12.0;
+
+/// 条目文本相对行左缘的额外缩进。
+///
+/// WinUI NavigationViewItem 的文本起点在窗格左缘 48 像素处
+/// （4 外边距 + 40 图标箱 + 4 内距），4 + 38 + 6 补齐到该位置。
+const SIDEBAR_LABEL_INDENT: f32 = 6.0;
 
 /// 页脚与滚动区之间的留白（含分隔线）。
 pub const SIDEBAR_FOOTER_GAP: f32 = 12.0;
@@ -51,7 +71,9 @@ pub const SIDEBAR_FOOTER_GAP: f32 = 12.0;
 pub const SIDEBAR_BADGE_WIDTH: f32 = 26.0;
 
 /// 条目尾部徽标胶囊的高度。
-pub const SIDEBAR_BADGE_HEIGHT: f32 = 18.0;
+///
+/// 对齐 WinUI `InfoBadgeMaxHeight` = 16（`InfoBadge_themeresources.xaml`）。
+pub const SIDEBAR_BADGE_HEIGHT: f32 = 16.0;
 
 /// 侧边栏中的单个导航条目。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -363,15 +385,22 @@ impl SidebarDesc {
     pub fn row_label_rect(&self, row: &SidebarRow) -> Rect {
         match (row.kind, self.row_entry(row)) {
             (SidebarRowKind::Section { .. }, _) => Rect::new(
-                row.rect.origin.x + 8.0,
+                // WinUI `NavigationViewItemInnerHeaderMargin` 左 16 = 面板内边距 4 + 12。
+                row.rect.origin.x + 12.0,
                 row.rect.origin.y,
                 (row.rect.width() - 12.0).max(0.0),
                 row.rect.height(),
             ),
             (_, Some(entry)) => {
-                let base = self.item_desc(row, entry).label_rect(0.0);
+                let base = self.item_desc(row, entry).label_rect(SIDEBAR_LABEL_INDENT);
+                let right_limit = row.rect.max().x - SIDEBAR_LABEL_RIGHT_PADDING;
                 if self.collapsed || entry.badge.is_none() {
-                    return base;
+                    return Rect::new(
+                        base.origin.x,
+                        base.origin.y,
+                        (right_limit - base.origin.x).max(0.0),
+                        base.size.y,
+                    );
                 }
                 let badge = self.row_badge_rect(row);
                 Rect::new(
@@ -565,8 +594,9 @@ impl UiWidget for SidebarDesc {
                         label: text_ctx.shape_line(
                             title,
                             desc.row_label_rect(row),
-                            10.5,
-                            700,
+                            // WinUI `NavigationViewItemHeaderTextStyle`：14 号 SemiBold。
+                            14.0,
+                            600,
                             AlignX::Left,
                             AlignY::Middle,
                         ),
@@ -583,7 +613,8 @@ impl UiWidget for SidebarDesc {
                     let label = text_ctx.shape_line(
                         &item.label,
                         desc.row_label_rect(row),
-                        12.5,
+                        // WinUI NavigationViewItem 默认字号 `ControlContentThemeFontSize` = 14。
+                        14.0,
                         weight,
                         AlignX::Left,
                         AlignY::Middle,
@@ -592,7 +623,8 @@ impl UiWidget for SidebarDesc {
                         Some(text) if !desc.collapsed => text_ctx.shape_line(
                             text,
                             desc.row_badge_rect(row),
-                            10.5,
+                            // WinUI `InfoBadgeValueFontSize` = 11。
+                            11.0,
                             600,
                             AlignX::Center,
                             AlignY::Middle,
