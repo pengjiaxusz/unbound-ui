@@ -36,6 +36,7 @@ Thumbs.db
 # 由 `pengj-templates-cli repo init` 创建的 agent 客户端工作区链接
 /.trae
 /.claude/skills
+/.workbuddy
 
 # --- rust-workspace 层 ---
 

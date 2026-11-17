@@ -1,0 +1,4 @@
+# `.trae` 是指向本目录的符号链接，Trae 写入的 spec/plan 会落在这里。
+/specs
+/plans
+/documents

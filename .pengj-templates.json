@@ -1,6 +1,6 @@
 {
   "tool": "pengj-templates",
-  "version": "0.52.1-beta.1",
+  "version": "0.72.0",
   "project_name": "unbound-ui",
   "layers": [
     "common",
@@ -61,6 +61,7 @@
   },
   "generated_at": "2026-11-11T09:33:50Z",
   "files": {
+    ".agents\\.gitignore": "b765ef8965f8923b4a9d4a239cda9b4c3434d23de79b843f77fded4a03fccfb7",
     ".agents\\skills\\ask-matt\\PHASE-BOUNDARIES.md": "438ab657c2c15c2fe05fa2f53769bb3e31c123ef8bb25ba549264a38b6123bf5",
     ".agents\\skills\\ask-matt\\SKILL.md": "7c49491f14e3dfadc8eea7e5938d3948666a688cebc7bab3f9ac294887f6b692",
     ".agents\\skills\\bque\\SKILL.md": "7c28d97fe60922e0d0500b191b22635c2897319ba608c2612de3c4bc4619309e",
@@ -138,7 +139,7 @@
     ".agents\\skills\\writing-for-agents\\SKILL-MECHANICS.md": "8270f0089a3f0f21ff6df51a728b1ac4fcb71405cc5cc3612fb28e028451edf0",
     ".agents\\skills\\writing-for-agents\\SKILL.md": "97ab5dc50277c8eb78cb83cd36c7b08bd997969fcb7efebcb2cb82f2592e580e",
     ".cargo\\config.toml": "c2b8603537f1a91b6871cae0699bfdc8ec9820b46bf561fedf6e50dabb763bb1",
-    ".gate.toml": "33a510c3f2cbb702706230da7ebd19dd07924e87bd08d82e086300787cc763c6",
+    ".gate.toml": "6deaad4119ef20bad4d585d50962dc732311a2259486b4a4378a7908c1c30961",
     ".gitattributes": "a9dccf6d2265dfc6213af7202303ee90533c3f267a8e5bff81b0bca8811b8600",
     ".githooks\\commit-msg": "9f2030e7562640e3c6e49b5a2665856ca7e9c4d5f39ab5c1a065d8cc9b16bdf9",
     ".githooks\\install.sh": "235c8c2a28cf9651e0b840b77231c87836fa3ea9a1379214ec11211e581682e0",
@@ -146,10 +147,10 @@
     ".github\\pull_request_template.md": "0d6034cb72da4dfdb073d0a2155964aa99590276168ae0245820d6822fb88f4f",
     ".github\\rulesets\\gate.json": "2bb6ffbe9d29e527986b86ec139f8ed6138711b594a43240e4e1954a450d67e8",
     ".github\\workflows\\gate.yml": "e66668059965dcc31c9102e88f92b660987e358d3ddc4579e4e24eac69cd9cf9",
-    ".gitignore": "536ec9efe36606c406a0fbeb00f3bf3f1d9ce90090ce227faca234de21619631",
+    ".gitignore": "9908a23d777d0023f1b112d02159864081a49f86491e0ee5abdadcac137c0f9d",
     ".vscode\\extensions.json": "c7cb87ed3321bc2a3f9d71ebf6b46e4e12b92b6c03ff22af5c08a0a86cc94dec",
     ".vscode\\settings.json": "609e39e16da8c997a0f29253b510558bfbe550dd600badfdae0227a7ebef190f",
-    "AGENTS.md": "f6aea8c1763c00de9a97ad7237c36f76ca1447563dba9434b717c6ddbbecb091",
+    "AGENTS.md": "f1c2bf91664ab8412a66b9c807d750dc009d19ddf04b5882b436a11c7a67b112",
     "Cargo.toml": "6f722ee3f7a969f9b46d867b96c1e14420b5560d7effd65c7c9b183e4e797707",
     "just\\bque.just": "3dbd61b295460de3e4773bdeaacd439d8c3fcfc3b1d9570841c9df9a2a1a854e",
     "just\\gate.just": "b1f89093024b2b66ff178005dfebabb6ea89e217f02d84f8db59f102d8be00fd",
@@ -157,7 +158,7 @@
     "justfile": "72fac8ecfa16eb8191ea9c4eee9c3e8903827e4b869bf9a2cc35eb37d85d85b8",
     "rust-toolchain.toml": "b2bc09cc2b9bfbea423fe65a786d858571071150478018b261181135d4010412",
     "scripts\\doctor.d\\README.md": "28cc1cc72b41f724b8ad2daf0f2d236777b7390e31505ca8240a68bfeeba6057",
-    "scripts\\doctor.ps1": "1395cbe1014530cec892921aa3ff4b71c01b9aa6e1ac6e02b27714a7cc190877",
-    "scripts\\doctor.sh": "753775f3b12693cea05de218a01a69eae1f003180b8956a64fa9d32c7dbdc912"
+    "scripts\\doctor.ps1": "c4c3abc6cd8a927cc4326adac106d09d731ce36f5dc451618f7cc320406d1d85",
+    "scripts\\doctor.sh": "9717c5a4b09698de8ac42748aa88d946131569a3e1fea6f0ce9b63e50eddff87"
   }
 }

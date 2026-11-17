@@ -1,23 +1,36 @@
-# .gate.toml — 提交门禁的配置
+# PENGJ_TEMPLATE_START
+# .gate.toml —— 提交门禁的配置
 #
-# 门禁是一个零第三方依赖的独立 Rust 二进制，它认识的每一个开关都写在这里，而不是项目清单里。模板在生成时渲染本文件；生成之后归项目所有，可自由修改。
+# 【本块由模板托管】update 只替换 START/END 之间的说明，块以下的配置值归项目所有，
+# 永不被覆盖。若你把本块整段删掉，update 会重新置顶插入一份并提示你复核残留的旧说明。
 #
-# 可接受的语法是扁平 TOML 子集：`key = value`，分组配置写成 `section.key = value`。未知键会被忽略，这样旧二进制面对新配置仍能工作；但值类型写错是硬错误——一个笔误绝不能悄悄关掉某项检查。
+# 门禁是一个零第三方依赖的独立 Rust 二进制（随 pengj-templates-cli 一起安装），它认识的
+# 每一个开关都写在这里，而不是项目清单里。可接受的语法是扁平 TOML 子集：`key = value`，
+# 分组配置写成 `section.key = value`。未知键会被忽略，这样旧二进制面对新配置仍能工作；
+# 但值类型写错是硬错误——一个笔误绝不能悄悄关掉某项检查。
+#
+# 键一览：
+#   mode                     chinese | english，驱动代码语言守卫：反向语言的注释会被拦下。
+#   lang.max_ratio           单文件字符串违规的容忍比例，0 表示完全禁止。
+#   lang.max_ident_ratio     单文件标识符违规的容忍比例，0 表示完全禁止。
+#   commit.subject_lang      提交主题语言：zh | en。
+#   commit.subject_min_han   中文主题至少要包含的汉字数。
+#   commit.max_header        标题行字符上限。
+#   commit.types             允许的约定式提交类型。
+#   commit.scopes            scope 三态：整行或整段删掉 = 拒绝所有 scope；["*"] = 放行
+#                            任意 scope；列出条目 = 只放行这些（`a/b` 这类分段 scope
+#                            要求每一段都命中）。
+#
+# 改这一块没有意义——下次 update 会覆盖。要改就改下面的值。
+# 块以下只有键值、没有注释：这是刻意的——说明放在块外就成了永远不更新的冻结文案，
+# 正是本块要根治的那种腐烂。`commit.scopes` 默认放行任意 scope，项目稳定后再收紧成 crate 名列表。
+# PENGJ_TEMPLATE_END
 
-# 项目的代码语言：`english` 或 `chinese`。它驱动代码语言守卫：英文代码里出现中文注释、或中文代码里出现英文注释，都会被拦下。
 mode = "english"
-
-# 单个文件里字符串违规与标识符违规的容忍比例。`0` 表示完全禁止。
 lang.max_ratio = 0.01
 lang.max_ident_ratio = 0.0
-
-# 提交信息主题的语言：`zh` 或 `en`。
 commit.subject_lang = "zh"
-# 中文主题至少要包含这么多个汉字。
 commit.subject_min_han = 2
-# 标题行不得超过这么多个字符。
 commit.max_header = 100
-# 允许的约定式提交类型。
 commit.types = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"]
-# 允许的 scope 白名单。空列表表示接受任意 scope；可以填入本项目的 crate 名把它收紧。
-commit.scopes = []
+commit.scopes = ["*"]
