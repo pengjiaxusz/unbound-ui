@@ -268,7 +268,11 @@ impl<'a> AgentView<'a> {
                 expanded: node.expanded,
                 focusable: node.focusable,
                 level: node.level,
-                actions: node.actions.iter().map(|action| action.name().to_owned()).collect(),
+                actions: node
+                    .actions
+                    .iter()
+                    .map(|action| action.name().to_owned())
+                    .collect(),
                 path: self.semantics.path(current),
                 children: children.clone(),
             });
@@ -276,10 +280,7 @@ impl<'a> AgentView<'a> {
                 stack.push(*child);
             }
         }
-        TreeSnapshot {
-            root,
-            nodes,
-        }
+        TreeSnapshot { root, nodes }
     }
 
     /// 列出树中所有文本内容。

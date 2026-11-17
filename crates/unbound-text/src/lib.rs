@@ -32,6 +32,6 @@ pub use pinyin::{
 pub use sdf::{from_coverage, reconstruct_coverage, SdfBitmap};
 pub use selection::{ime_cursor_area, merge_line_rects, outline_polygon, RoundedSlot};
 pub use shaping::{
-    PositionedGlyph, ShapedText, TextCacheStats, TextEngine, TextLine, TextSpan, TextStyle,
-    WrappedText, 东亚字体族_按语言,
+    cjk_family_for_locale, PositionedGlyph, ShapedText, TextCacheStats, TextEngine, TextLine,
+    TextSpan, TextStyle, WrappedText,
 };

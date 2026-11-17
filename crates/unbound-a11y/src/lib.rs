@@ -720,9 +720,9 @@ impl Semantics {
         if needle.is_empty() {
             return false;
         }
-        self.nodes.values().any(|node| {
-            node.label.contains(needle) || node.value.contains(needle)
-        })
+        self.nodes
+            .values()
+            .any(|node| node.label.contains(needle) || node.value.contains(needle))
     }
 
     /// 下一次更新将携带的节点数量。零表示“无需发送”。

@@ -352,7 +352,7 @@ impl ButtonDesc {
     /// 文字始终是正文色；它不是实心填充的按钮，也不是胶囊。
     #[must_use]
     pub fn list_item(label: impl Into<String>, active: bool) -> Self {
-        let 槽位 = if active {
+        let slot = if active {
             ButtonTokens {
                 fill: Token::NAV_SELECTED,
                 fill_hover: Token::CONTROL_HOVER,
@@ -382,7 +382,7 @@ impl ButtonDesc {
             .with_radius(4.0)
             .left_align()
             .selected(active)
-            .with_tokens(槽位)
+            .with_tokens(slot)
     }
 
     /// Win11 切换按钮（`ToggleButton`）。
@@ -395,7 +395,7 @@ impl ButtonDesc {
     /// 开关按下去之后看上去和按之前一模一样。
     #[must_use]
     pub fn toggle_button(label: impl Into<String>, on: bool) -> Self {
-        let 槽位 = if on {
+        let slot = if on {
             ButtonTokens {
                 fill: Token::PRIMARY,
                 fill_hover: Token::PRIMARY_HOVER,
@@ -423,7 +423,7 @@ impl ButtonDesc {
             .with_size(ButtonSize::Sm)
             .with_shadow(0.0)
             .with_radius(4.0)
-            .with_tokens(槽位)
+            .with_tokens(slot)
     }
 
     /// 紧凑图标/工具栏按钮。
@@ -503,8 +503,8 @@ impl ButtonDesc {
     /// 此按钮绘制使用的颜色槽位。
     #[must_use]
     pub fn tokens(&self) -> ButtonTokens {
-        if let Some(覆盖) = self.tokens_override {
-            return 覆盖;
+        if let Some(override_tokens) = self.tokens_override {
+            return override_tokens;
         }
         let mut t = self.variant.tokens();
         if self.active_selected && self.variant != ButtonVariant::Primary {

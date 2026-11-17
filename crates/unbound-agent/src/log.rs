@@ -97,23 +97,25 @@ impl ActionLog {
 /// 步骤的文本描述。
 fn describe_step(step: &RecordedStep) -> String {
     match step {
-        RecordedStep::Action(action) => format!("动作 {} → 节点 {}", action.name(), action.target()),
-        RecordedStep::Wait(condition) => format!("等待 {}", describe_condition(condition)),
-        RecordedStep::Assert(assertion) => format!("断言 {}", assertion.name()),
-        RecordedStep::Marker(marker) => format!("标记「{marker}」"),
+        RecordedStep::Action(action) => {
+            format!("action {} -> node {}", action.name(), action.target())
+        }
+        RecordedStep::Wait(condition) => format!("wait {}", describe_condition(condition)),
+        RecordedStep::Assert(assertion) => format!("assert {}", assertion.name()),
+        RecordedStep::Marker(marker) => format!("marker \"{marker}\""),
     }
 }
 
 /// 等待条件的文本描述。
 fn describe_condition(condition: &WaitCondition) -> String {
     match condition {
-        WaitCondition::NodeExists { .. } => "节点出现".to_owned(),
-        WaitCondition::NodeGone { .. } => "节点消失".to_owned(),
+        WaitCondition::NodeExists { .. } => "node appears".to_owned(),
+        WaitCondition::NodeGone { .. } => "node disappears".to_owned(),
         WaitCondition::NodeState { node, predicates } => {
             let names: Vec<&str> = predicates.iter().map(|p| p.name()).collect();
-            format!("节点 {node} 满足 [{}]", names.join(", "))
+            format!("node {node} satisfies [{}]", names.join(", "))
         }
-        WaitCondition::Settled => "界面稳定".to_owned(),
-        WaitCondition::TextVisible { text } => format!("文本「{text}」出现"),
+        WaitCondition::Settled => "interface settled".to_owned(),
+        WaitCondition::TextVisible { text } => format!("text \"{text}\" appears"),
     }
 }

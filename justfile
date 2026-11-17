@@ -41,6 +41,12 @@ gallery *ARGS:
 compile-shaders:
     bash scripts/compile-shaders.sh
 
+# 代码语言守卫全量审计。
+# 提交钩子只检查暂存文件，那是最后一道闸；这条是全仓体检，
+# 用来在改动还没被暂存时就把漂移揪出来。
+lang-check:
+    node scripts/check-lang.mjs --list
+
 # 运行指定示例程序
 # 示例：just example 01_hello_counter
 example NAME *ARGS:

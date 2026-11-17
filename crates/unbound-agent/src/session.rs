@@ -71,8 +71,8 @@ impl ActionError {
     #[must_use]
     pub fn describe(&self) -> String {
         match self {
-            Self::NodeMissing { node } => format!("节点 {node} 不在语义树中"),
-            Self::NoBounds { node } => format!("节点 {node} 没有有效矩形"),
+            Self::NodeMissing { node } => format!("node {node} is not in the semantics tree"),
+            Self::NoBounds { node } => format!("node {node} has no valid rectangle"),
             Self::NoMatch {
                 role,
                 name,
@@ -80,12 +80,12 @@ impl ActionError {
             } => {
                 let role_text = role.map_or_else(String::new, |role| format!("{:?}", role));
                 format!(
-                    "未找到角色为 {role_text}、名称为「{name}」的元素；当前候选：{}",
+                    "no element with role {role_text} and name \"{name}\"; current candidates: {}",
                     describe_candidates(candidates)
                 )
             }
             Self::Ambiguous { name, candidates } => format!(
-                "名称为「{name}」的元素有多个，无法自动消歧：{}",
+                "multiple elements named \"{name}\" cannot be disambiguated automatically: {}",
                 describe_candidates(candidates)
             ),
             Self::OptionMissing {
@@ -93,10 +93,10 @@ impl ActionError {
                 option,
                 available,
             } => format!(
-                "节点 {node} 下没有选项「{option}」；可用选项：{}",
+                "node {node} has no option \"{option}\"; available options: {}",
                 describe_candidates(available)
             ),
-            Self::Rejected { action, reason } => format!("动作 {action} 被拒绝：{reason}"),
+            Self::Rejected { action, reason } => format!("action {action} was rejected: {reason}"),
         }
     }
 }
@@ -104,9 +104,9 @@ impl ActionError {
 /// 候选列表的文本描述。
 fn describe_candidates(candidates: &[String]) -> String {
     if candidates.is_empty() {
-        "（空）".to_owned()
+        "(none)".to_owned()
     } else {
-        candidates.join("、")
+        candidates.join(", ")
     }
 }
 
@@ -388,7 +388,8 @@ impl<'a, A: Application> AgentSession<'a, A> {
         if self.runtime.semantics().get(node).is_none() {
             return Err(ActionError::NodeMissing { node });
         }
-        self.runtime.a11y(node, A11yAction::SetValue, Some(value.to_string()));
+        self.runtime
+            .a11y(node, A11yAction::SetValue, Some(value.to_string()));
         self.advance();
         Ok(())
     }
@@ -442,11 +443,15 @@ impl<'a, A: Application> AgentSession<'a, A> {
     }
 
     /// 等待某个条件达成。
+    ///
+    /// 失败类型装箱：诊断信息里带着完整的等待条件（含查询条件），
+    /// 直接按值返回会让 `Result` 的错误分支背上上百字节的栈拷贝。
+    /// 装箱后调用方依然能直接 `timeout.observed` 这样访问字段。
     pub fn wait_for(
         &mut self,
         condition: &WaitCondition,
         timeout: Duration,
-    ) -> Result<(), WaitTimeout> {
+    ) -> Result<(), Box<WaitTimeout>> {
         let start = Instant::now();
         let mut observed = 0usize;
         loop {
@@ -457,11 +462,11 @@ impl<'a, A: Application> AgentSession<'a, A> {
                 return Ok(());
             }
             if start.elapsed() >= timeout {
-                return Err(WaitTimeout {
+                return Err(Box::new(WaitTimeout {
                     condition: condition.clone(),
                     waited_ms: start.elapsed().as_millis() as u64,
                     observed,
-                });
+                }));
             }
             self.advance();
         }
@@ -500,13 +505,16 @@ impl<'a, A: Application> AgentSession<'a, A> {
     }
 
     /// 执行断言。
-    pub fn assert(&self, assertion: &Assertion) -> Result<(), AssertionFailure> {
+    ///
+    /// 失败类型装箱，理由同 [`Self::wait_for`]：诊断信息是给人和 Agent 读的，
+    /// 不值得为它在成功路径上留一份几百字节的栈空间。
+    pub fn assert(&self, assertion: &Assertion) -> Result<(), Box<AssertionFailure>> {
         let view = self.view();
         match assertion {
             Assertion::Exists { query } => {
                 let hits = view.query(query);
                 if hits.is_empty() {
-                    Err(self.failure(assertion, None, "至少一个匹配节点", "零个", None))
+                    Err(self.failure(assertion, None, "at least one matching node", "none", None))
                 } else {
                     Ok(())
                 }
@@ -519,15 +527,21 @@ impl<'a, A: Application> AgentSession<'a, A> {
                     Err(self.failure(
                         assertion,
                         hits.first().copied(),
-                        "零个匹配节点",
-                        &format!("{} 个", hits.len()),
+                        "no matching node",
+                        &format!("{} matching node(s)", hits.len()),
                         None,
                     ))
                 }
             }
             Assertion::State { node, predicates } => {
                 let Some(target) = view.node(*node) else {
-                    return Err(self.failure(assertion, Some(*node), "节点存在", "节点缺失", None));
+                    return Err(self.failure(
+                        assertion,
+                        Some(*node),
+                        "node exists",
+                        "node missing",
+                        None,
+                    ));
                 };
                 let failed = predicates
                     .iter()
@@ -536,8 +550,8 @@ impl<'a, A: Application> AgentSession<'a, A> {
                     Some(predicate) => Err(self.failure(
                         assertion,
                         Some(*node),
-                        &format!("满足 {}", predicate.name()),
-                        "未满足",
+                        &format!("satisfies {}", predicate.name()),
+                        "not satisfied",
                         suggestion_for(target.role),
                     )),
                     None => Ok(()),
@@ -545,7 +559,13 @@ impl<'a, A: Application> AgentSession<'a, A> {
             }
             Assertion::Text { node, expected } => {
                 let Some(target) = view.node(*node) else {
-                    return Err(self.failure(assertion, Some(*node), "节点存在", "节点缺失", None));
+                    return Err(self.failure(
+                        assertion,
+                        Some(*node),
+                        "node exists",
+                        "node missing",
+                        None,
+                    ));
                 };
                 if target.label == *expected {
                     Ok(())
@@ -561,15 +581,21 @@ impl<'a, A: Application> AgentSession<'a, A> {
             }
             Assertion::Bounds { node, expect } => {
                 let Some(rect) = view.bounds(*node) else {
-                    return Err(self.failure(assertion, Some(*node), "节点存在", "节点缺失", None));
+                    return Err(self.failure(
+                        assertion,
+                        Some(*node),
+                        "node exists",
+                        "node missing",
+                        None,
+                    ));
                 };
                 if let Some((low, high)) = expect.width {
                     if rect.width() < low || rect.width() > high {
                         return Err(self.failure(
                             assertion,
                             Some(*node),
-                            &format!("宽度在 [{low}, {high}]"),
-                            &format!("宽度 {}", rect.width()),
+                            &format!("width within [{low}, {high}]"),
+                            &format!("width {}", rect.width()),
                             None,
                         ));
                     }
@@ -579,8 +605,8 @@ impl<'a, A: Application> AgentSession<'a, A> {
                         return Err(self.failure(
                             assertion,
                             Some(*node),
-                            &format!("高度在 [{low}, {high}]"),
-                            &format!("高度 {}", rect.height()),
+                            &format!("height within [{low}, {high}]"),
+                            &format!("height {}", rect.height()),
                             None,
                         ));
                     }
@@ -590,8 +616,8 @@ impl<'a, A: Application> AgentSession<'a, A> {
                         return Err(self.failure(
                             assertion,
                             Some(*node),
-                            &format!("矩形包含 {point:?}"),
-                            &format!("矩形 {rect:?}"),
+                            &format!("rect contains {point:?}"),
+                            &format!("rect {rect:?}"),
                             None,
                         ));
                     }
@@ -607,17 +633,20 @@ impl<'a, A: Application> AgentSession<'a, A> {
                     return Err(self.failure(
                         assertion,
                         None,
-                        "像素探针已接入",
-                        "未接入像素探针",
-                        Some("为会话接入 PixelProbe 后方可做像素级断言".to_owned()),
+                        "a pixel probe is attached",
+                        "no pixel probe attached",
+                        Some(
+                            "attach a PixelProbe to the session before asserting on pixels"
+                                .to_owned(),
+                        ),
                     ));
                 };
                 let Some(actual) = probe.color_at(*pos) else {
                     return Err(self.failure(
                         assertion,
                         None,
-                        &format!("{pos:?} 处可采样"),
-                        "该位置不可采样",
+                        &format!("{pos:?} is sampleable"),
+                        "that position cannot be sampled",
                         None,
                     ));
                 };
@@ -629,7 +658,7 @@ impl<'a, A: Application> AgentSession<'a, A> {
                         None,
                         &format!("{expect:?}"),
                         &format!("{actual:?}"),
-                        Some(format!("容差 {tolerance}，可放宽后重试")),
+                        Some(format!("tolerance is {tolerance}; widen it and retry")),
                     ))
                 }
             }
@@ -644,26 +673,32 @@ impl<'a, A: Application> AgentSession<'a, A> {
         expected: &str,
         actual: &str,
         suggestion: Option<String>,
-    ) -> AssertionFailure {
+    ) -> Box<AssertionFailure> {
         let view = self.view();
-        AssertionFailure {
+        Box::new(AssertionFailure {
             kind: assertion.name(),
             node,
             node_path: node.map(|id| view.path(id)),
             expected: expected.to_owned(),
             actual: actual.to_owned(),
             suggestion,
-        }
+        })
     }
 }
 
 /// 按角色给出下一步动作建议。
 fn suggestion_for(role: Role) -> Option<String> {
     match role {
-        Role::Switch | Role::CheckBox => Some("该节点可通过 Toggle 动作切换状态".to_owned()),
-        Role::ComboBox => Some("该节点可通过 SelectOption 动作直接选取选项".to_owned()),
-        Role::TextInput => Some("该节点可通过 SetText 动作写入内容".to_owned()),
-        Role::Button | Role::MenuItem => Some("该节点可通过 Click 动作触发".to_owned()),
+        Role::Switch | Role::CheckBox => {
+            Some("this node can be toggled with the Toggle action".to_owned())
+        }
+        Role::ComboBox => {
+            Some("this node can pick an option directly with the SelectOption action".to_owned())
+        }
+        Role::TextInput => Some("this node can be filled in with the SetText action".to_owned()),
+        Role::Button | Role::MenuItem => {
+            Some("this node can be triggered with the Click action".to_owned())
+        }
         _ => None,
     }
 }
