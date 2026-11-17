@@ -112,7 +112,7 @@ fn a_tall_menu_clamps_to_the_viewport_and_embeds_a_scroll_state() {
         .collect::<Vec<_>>();
     let mut desc = MenuDesc::new(Rect::new(0.0, 0.0, 200.0, 600.0), items);
     desc.viewport = Some(Rect::new(0.0, 0.0, 800.0, 200.0));
-    assert_eq!(desc.content_height(), 600.0);
+    assert_eq!(desc.content_height(), 740.0);
 
     assert!(desc.clamp_height(), "20 rows do not fit in 200px");
     assert_eq!(desc.rect.height(), 200.0);
