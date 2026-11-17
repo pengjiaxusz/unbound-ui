@@ -121,11 +121,14 @@ impl ButtonVariant {
                 focus_ring: Token::FOCUS_RING,
             },
             ButtonVariant::Secondary => ButtonTokens {
-                fill: Token::SURFACE_RAISED,
+                // WinUI 默认按钮：`ButtonBackground` = `ControlFillColorDefault`
+                // 的 70% 白薄纱（浅色）/ 6% 白薄纱（深色），描边为
+                // `ControlStrokeColorDefault`，禁用填充为 `ControlFillColorDisabled`。
+                fill: Token::CARD_BG,
                 fill_hover: Token::CONTROL_HOVER,
                 fill_pressed: Token::SURFACE_SUNKEN,
-                fill_disabled: Token::DISABLED,
-                border: Token::OUTLINE,
+                fill_disabled: Token::CONTROL_DISABLED_BG,
+                border: Token::CONTROL_STROKE,
                 label: Token::ON_SURFACE,
                 label_disabled: Token::ON_DISABLED,
                 focus_ring: Token::FOCUS_RING,

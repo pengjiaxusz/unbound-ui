@@ -56,6 +56,24 @@ pub const SWITCH_LABEL_GAP: f32 = 12.0;
 /// 按下时旋钮沿轨道方向的拉伸量。
 const KNOB_SQUISH: f32 = 3.0;
 
+/// Header 排版下标签行盒的高度（WinUI 14px 正文行）。
+pub const SWITCH_HEADER_LINE: f32 = 20.0;
+
+/// Header 排版下标签与轨道之间的间距。
+///
+/// 参考 WinUI `ToggleSwitch` 模板：Header 在上，开关轨道在下一行左对齐。
+/// 20px 行盒 + 13px 间距正好落在 Reference 的轨道顶部（控件顶部 +33px）。
+pub const SWITCH_HEADER_GAP: f32 = 13.0;
+
+/// 开关的两种排版。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwitchLayout {
+    /// 文字在左、轨道贴右（设置行默认）。
+    Row,
+    /// WinUI 模板：Header 在上、轨道在左下。
+    Header,
+}
+
 /// 开关绘制所用的颜色槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SwitchTokens {
@@ -67,6 +85,8 @@ pub struct SwitchTokens {
     pub track_on: Token,
     /// 禁用状态下的轨道。
     pub track_disabled: Token,
+    /// 禁用状态下的轨道描边。
+    pub track_border_disabled: Token,
     /// 旋钮。
     pub thumb: Token,
     /// 开启状态下的旋钮（纯黑）。
@@ -88,14 +108,13 @@ impl SwitchTokens {
     #[must_use]
     pub fn standard() -> Self {
         Self {
-            // 关闭态：WinUI `ToggleSwitchFillOff` = `ControlAltFillColorSecondary`，
-            // 是叠在卡片上的淡薄纱而非纯透明。这里取同一资源族的 `CARD_BG`
-            // （复选框的未选中填充 `CheckBoxFillUnchecked` 用的也是这个 WinUI 资源键）。
-            track: Token::CARD_BG,
+            // 关闭态：WinUI `ToggleSwitchFillOff` = `ControlAltFillColorSecondary`。
+            track: Token::CONTROL_ALT_FILL_SECONDARY,
             // WinUI `ToggleSwitchStrokeOff` = `ControlStrongStrokeColorDefault`，厚度 1px。
             track_border: Token::CONTROL_TRACK_STROKE,
             track_on: Token::PRIMARY,
-            track_disabled: Token::CONTROL_DISABLED_BG,
+            track_disabled: Token::CONTROL_ALT_FILL_DISABLED,
+            track_border_disabled: Token::CONTROL_STRONG_STROKE_DISABLED,
             // 关闭态旋钮用 `TextFillColorSecondary`（次级文字色）而不是纯白：
             // 浅色主题下白色旋钮会与白色轨道糊成一片。
             thumb: Token::SWITCH_THUMB_OFF,
@@ -127,6 +146,8 @@ pub struct SwitchDesc {
     pub track_size: (f32, f32),
     /// 旋钮尺寸。
     pub knob_size: f32,
+    /// 排版：设置行（文字在左）或 WinUI Header（文字在上）。
+    pub layout: SwitchLayout,
     /// 绘制顺序键。
     pub z: u16,
 }
@@ -142,8 +163,16 @@ impl SwitchDesc {
             thumb_t: None,
             track_size: SWITCH_TRACK,
             knob_size: SWITCH_KNOB,
+            layout: SwitchLayout::Row,
             z: 700,
         }
+    }
+
+    /// 切换排版。
+    #[must_use]
+    pub fn with_layout(mut self, layout: SwitchLayout) -> Self {
+        self.layout = layout;
+        self
     }
 
     /// 切换开关状态。
@@ -160,16 +189,24 @@ impl SwitchDesc {
         self
     }
 
-    /// 轨道矩形：右对齐并在行内垂直居中。
+    /// 轨道矩形：设置行右对齐并垂直居中；Header 排版在标签行下方左对齐。
     #[must_use]
     pub fn track_rect(&self) -> Rect {
         let (width, height) = self.track_size;
-        Rect::new(
-            self.rect.max().x - width,
-            self.rect.origin.y + (self.rect.size.y - height) * 0.5,
-            width,
-            height,
-        )
+        match self.layout {
+            SwitchLayout::Row => Rect::new(
+                self.rect.max().x - width,
+                self.rect.origin.y + (self.rect.size.y - height) * 0.5,
+                width,
+                height,
+            ),
+            SwitchLayout::Header => Rect::new(
+                self.rect.origin.x,
+                self.rect.origin.y + SWITCH_HEADER_LINE + SWITCH_HEADER_GAP,
+                width,
+                height,
+            ),
+        }
     }
 
     /// 处于 `0..=1` 的旋钮位置（取自动画进度或业务状态）。
@@ -238,7 +275,7 @@ pub fn emit_switch(
     let track_rect = desc.track_rect();
     let track_radius = desc.track_size.1 * 0.5;
     let (track_fill, track_border) = if state.disabled {
-        (tokens.track_disabled, Token::NONE)
+        (tokens.track_disabled, tokens.track_border_disabled)
     } else if desc.on {
         (tokens.track_on, Token::NONE)
     } else {
@@ -335,6 +372,15 @@ mod tests {
         assert_eq!(track.max().x, 200.0);
         assert_eq!(track.size, Vec2::new(40.0, 20.0));
         assert_eq!(track.origin.y, 10.0);
+    }
+
+    #[test]
+    fn the_header_layout_puts_the_track_under_the_label() {
+        let desc = desc().with_layout(SwitchLayout::Header);
+        let track = desc.track_rect();
+        assert_eq!(track.origin.x, 0.0);
+        assert_eq!(track.origin.y, SWITCH_HEADER_LINE + SWITCH_HEADER_GAP);
+        assert_eq!(track.size, Vec2::new(40.0, 20.0));
     }
 
     #[test]

@@ -100,11 +100,11 @@ impl CheckboxTokens {
     #[must_use]
     pub fn standard() -> Self {
         Self {
-            box_empty: Token::CARD_BG,
+            box_empty: Token::CONTROL_ALT_FILL_SECONDARY,
             box_hover: Token::CONTROL_HOVER,
             box_checked: Token::PRIMARY,
-            box_disabled: Token::CONTROL_DISABLED_BG,
-            border: Token::OUTLINE,
+            box_disabled: Token::NONE,
+            border: Token::CONTROL_TRACK_STROKE,
             border_disabled: Token::CONTROL_DISABLED_BORDER,
             mark: Token::ON_PRIMARY,
             mark_disabled: Token::CONTROL_DISABLED_THUMB,
