@@ -378,6 +378,12 @@ pub struct Renderer {
     ///
     /// 跟随主题的 `SURFACE` 令牌，确保缩放窗口时浅色 UI 后方不会闪现黑边。
     clear_color: [f32; 4],
+    /// 主题表面的线性原色（未预乘）。
+    ///
+    /// 清屏 alpha 变化时据此重算 [`Self::clear_color`]，使主题切换后透明性保持不变。
+    surface_color: [f32; 4],
+    /// 根背景清屏 alpha：`1.0` 不透明，`0.0` 完全透明（预乘输出全零）。
+    clear_alpha: f32,
 }
 
 impl core::fmt::Debug for Renderer {
@@ -684,6 +690,8 @@ impl Renderer {
             external_signal: vk::Semaphore::null(),
             present_semaphore,
             clear_color: [0.07, 0.07, 0.08, 1.0],
+            surface_color: [0.07, 0.07, 0.08, 1.0],
+            clear_alpha: 1.0,
         };
         renderer.write_default_lut()?;
         Ok(renderer)
@@ -702,12 +710,13 @@ impl Renderer {
         }
         // 硬件清屏在绘制任何图元前执行，无法读取 LUT；因此在线性空间保存表面色用于清屏。
         let surface = entries[unbound_theme::Token::SURFACE.raw() as usize];
-        self.clear_color = [
+        self.surface_color = [
             unbound_math::f16_to_f32(surface[0]),
             unbound_math::f16_to_f32(surface[1]),
             unbound_math::f16_to_f32(surface[2]),
             unbound_math::f16_to_f32(surface[3]).clamp(0.0, 1.0),
         ];
+        self.recompute_clear_color();
         // 布局：512 × RGBA16F = 4 KiB，每项存储四个 u16。
         // SAFETY: LUT 缓冲区宿主可见且长度为 4096 字节。
         unsafe {
@@ -731,6 +740,42 @@ impl Renderer {
     /// 透传 Vulkan 调用错误。
     pub fn write_theme_lut(&mut self, lut: &unbound_theme::ThemeLut) -> Result<(), GpuError> {
         self.write_theme(lut.entries())
+    }
+
+    /// 设置根背景清屏 alpha。
+    ///
+    /// `1.0` 输出主题表面色；小于 `1.0` 时输出预乘色（RGB 乘以 alpha）；
+    /// `0.0` 输出全零，使根背景完全透明，让 DWM 材质从客户区透出。
+    /// 切换主题只更新表面原色，透明性保持不变。
+    pub fn set_clear_alpha(&mut self, alpha: f32) {
+        let alpha = alpha.clamp(0.0, 1.0);
+        if (self.clear_alpha - alpha).abs() <= f32::EPSILON {
+            return;
+        }
+        self.clear_alpha = alpha;
+        self.recompute_clear_color();
+    }
+
+    /// 当前根背景清屏 alpha。
+    #[must_use]
+    pub const fn clear_alpha(&self) -> f32 {
+        self.clear_alpha
+    }
+
+    /// 按当前 alpha 从主题表面原色重算预乘清屏色。
+    fn recompute_clear_color(&mut self) {
+        let [r, g, b, a] = self.surface_color;
+        self.clear_color = if self.clear_alpha >= 1.0 {
+            [r, g, b, a]
+        } else {
+            // 预乘 alpha：透明模式下清屏色必须与其 alpha 一致，否则合成结果会偏亮。
+            [
+                r * self.clear_alpha,
+                g * self.clear_alpha,
+                b * self.clear_alpha,
+                self.clear_alpha,
+            ]
+        };
     }
 
     fn write_default_lut(&mut self) -> Result<(), GpuError> {
@@ -2741,6 +2786,91 @@ mod tests {
 
         assert_eq!(renderer.stats.visible, 1, "the quad must survive culling");
         assert_eq!(renderer.stats.draw_calls, 1);
+        renderer.destroy();
+    }
+
+    /// alpha 为 0 时清屏输出全零像素，根背景才能完全透明。
+    #[test]
+    fn a_zero_clear_alpha_produces_transparent_pixels() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 64, 64).expect("renderer");
+        renderer
+            .write_theme(&{
+                let mut c = vec![[0u16; 4]; 512];
+                c[2] = unbound_math::Color::from_srgb8(18, 18, 20, 255).to_rgba16f();
+                c
+            })
+            .unwrap();
+        renderer.set_clear_alpha(0.0);
+        renderer.render(&scene(&[], &[], 1)).expect("render");
+        let pixels = renderer.read_pixels().expect("readback");
+        assert!(
+            pixels.iter().all(|byte| *byte == 0),
+            "an alpha of zero must clear the attachment to all zeros: {:?}",
+            &pixels[..pixels.len().min(8)]
+        );
+        renderer.destroy();
+    }
+
+    /// alpha 为 1 时清屏保持主题表面色，现有不透明路径不受影响。
+    #[test]
+    fn an_opaque_clear_alpha_matches_the_theme_surface() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 64, 64).expect("renderer");
+        renderer
+            .write_theme(&{
+                let mut c = vec![[0u16; 4]; 512];
+                c[2] = unbound_math::Color::from_srgb8(18, 18, 20, 255).to_rgba16f();
+                c
+            })
+            .unwrap();
+        renderer.set_clear_alpha(1.0);
+        renderer.render(&scene(&[], &[], 1)).expect("render");
+        let pixels = renderer.read_pixels().expect("readback");
+        // 回读格式为 BGRA。
+        let pixel = &pixels[..4];
+        assert!(
+            pixel[0].abs_diff(20) <= 2
+                && pixel[1].abs_diff(18) <= 2
+                && pixel[2].abs_diff(18) <= 2
+                && pixel[3] == 255,
+            "the opaque clear must keep the theme surface colour: {pixel:?}"
+        );
+        renderer.destroy();
+    }
+
+    /// 切换主题后透明根背景必须保持透明，不能被新主题恢复为不透明。
+    #[test]
+    fn transparency_survives_a_theme_switch() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 64, 64).expect("renderer");
+        let mut theme = unbound_theme::ThemeState::default();
+        renderer.set_clear_alpha(0.0);
+        renderer.write_theme_lut(theme.lut()).unwrap();
+        renderer.render(&scene(&[], &[], 1)).expect("render");
+        let light = renderer.read_pixels().expect("readback");
+        assert!(
+            light.iter().all(|byte| *byte == 0),
+            "the first transparent theme must clear to zeros"
+        );
+
+        theme.switch(unbound_theme::ThemeKind::Dark);
+        renderer.write_theme_lut(theme.lut()).unwrap();
+        renderer.render(&scene(&[], &[], 1)).expect("render");
+        let dark = renderer.read_pixels().expect("readback");
+        assert!(
+            dark.iter().all(|byte| *byte == 0),
+            "switching the theme must not resurrect an opaque background"
+        );
         renderer.destroy();
     }
 

@@ -522,6 +522,15 @@ impl GalleryApp {
         true
     }
 
+    /// 根背景是否必须透明。
+    ///
+    /// 自绘纹理可见时整窗由纹理铺满；实际生效模式为原生时则由 DWM 材质透出。
+    /// 这两种情况都必须让根背景透明，否则不透明底色会盖住后景。
+    #[must_use]
+    pub fn root_background_transparent(&self) -> bool {
+        self.mica.visible() || self.state.resolved_backdrop.uses_native_path()
+    }
+
     /// 是否需要针对此交互快照重建场景。
     ///
     /// 悬停、按压或焦点变化会重绘控件但不会移动任何元素，
@@ -646,8 +655,9 @@ impl GalleryApp {
             raw_nav_width
         };
         let palette = gallery::palette();
-        // 云母已覆盖整窗时根背景必须透明，否则不透明底色会把壁纸纹理盖住。
-        let mica_visible = self.mica.visible();
+        // 云母已覆盖整窗（或原生材质从客户区透出）时根背景必须透明，
+        // 否则不透明底色会把后景盖住。
+        let mica_visible = self.root_background_transparent();
         let hover = inter.hovered;
         let pressed = inter.pressed;
         // 布局树拥有几何信息：标题栏、导航窗格与页面均由树求解，而非手算测量。

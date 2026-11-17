@@ -1559,6 +1559,51 @@ fn the_backdrop_page_sits_in_engine_systems_with_complete_metadata() {
     assert!(!zh.description.is_empty());
 }
 
+/// 原生可用时原生模式让根背景透明且不生成自绘纹理；关闭与自绘各自保持语义。
+#[test]
+fn native_mode_makes_the_root_transparent_without_a_texture() {
+    use unbound_backdrop::{BackdropMode, ResolvedBackdrop};
+
+    let mut app = app();
+    app.state.native_backdrop_available = true;
+    app.state.set_backdrop_mode(BackdropMode::Native);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.state.resolved_backdrop,
+        ResolvedBackdrop::Native,
+        "an explicit Native choice must resolve to the native path when the probe allows it"
+    );
+    assert!(
+        app.root_background_transparent(),
+        "the root background must be transparent so the DWM material can show through"
+    );
+    assert!(
+        !app.mica.is_enabled(),
+        "the native path must not generate the self-drawn texture"
+    );
+    assert!(!app.mica.visible());
+
+    app.state.set_backdrop_mode(BackdropMode::Off);
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::Off);
+    assert!(
+        !app.root_background_transparent(),
+        "the off path must keep the opaque theme background"
+    );
+    assert!(
+        !app.mica.is_enabled(),
+        "the off path must not generate the self-drawn texture"
+    );
+
+    app.state.set_backdrop_mode(BackdropMode::SelfDrawn);
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::SelfDrawn);
+    assert!(
+        app.mica.is_enabled(),
+        "the self-drawn path must keep generating the wallpaper texture"
+    );
+}
+
 /// 点击后景页的四个按钮即可切换用户选择，宿主在下一帧回写实际生效模式。
 #[test]
 fn backdrop_page_switches_every_mode_through_the_runtime() {

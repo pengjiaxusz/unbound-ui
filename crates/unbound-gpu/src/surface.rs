@@ -14,7 +14,7 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 use crate::device::{Gpu, GpuError};
-use crate::swapchain::{PresentConfig, PresentMode, ResizeBehaviour};
+use crate::swapchain::{CompositeAlphaMode, PresentConfig, PresentMode, ResizeBehaviour};
 use ash::vk;
 
 /// 绑定到原生窗口的 `VkSurfaceKHR`。
@@ -114,6 +114,20 @@ impl Surface {
                 .get_physical_device_surface_capabilities(gpu.physical, self.surface)
                 .map_err(GpuError::from)
         }
+    }
+
+    /// 表面是否支持预乘 alpha 合成。
+    ///
+    /// 原生 DWM 后景要求交换链以预乘方式合成；该查询是能力探测的图形层一半，
+    /// 操作系统构建号条件由平台层补充。
+    ///
+    /// # Errors
+    /// 透传 Vulkan 调用错误。
+    pub fn supports_premultiplied_alpha(&self, gpu: &Gpu) -> Result<bool, GpuError> {
+        let capabilities = self.capabilities(gpu)?;
+        Ok(capabilities
+            .supported_composite_alpha
+            .contains(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED))
     }
 
     /// 查询指定物理设备支持的呈现模式列表。
@@ -407,6 +421,8 @@ pub struct Swapchain {
     next_semaphore: usize,
     format: vk::Format,
     color_space: vk::ColorSpaceKHR,
+    /// 创建时实际采用的合成方式（请求不受支持时已回退为不透明）。
+    composite_alpha: CompositeAlphaMode,
     next_index: u32,
     /// 当前已获取的图像索引（若有）。
     acquired: Option<u32>,
@@ -562,11 +578,20 @@ impl Swapchain {
         let queue_family_index = gpu.families.graphics;
         let queue_family_indices = [queue_family_index];
 
+        // 以表面声明的合成能力为准：请求预乘但不受支持时回退为不透明，
+        // 上层无需再次判断能力。预乘合成才能让 DWM 材质透过客户区。
+        let composite_alpha = config.composite_alpha.resolve(
+            capabilities
+                .supported_composite_alpha
+                .contains(vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED),
+        );
+
         // `VK_EXT_swapchain_maintenance1` 允许指定交换链尺寸与表面不匹配时的缩放行为，
         // 且该行为必须在表面声明的支持范围内，因此需先查询缩放能力。
+        // 平台硬限制：预乘 alpha 合成与呈现缩放不能共存，透明模式下不得提交缩放参数。
         let mut scaling_info = vk::SwapchainPresentScalingCreateInfoEXT::default();
         let mut use_scaling = false;
-        if has_maintenance1 {
+        if has_maintenance1 && composite_alpha.allows_present_scaling() {
             if let Some(caps) = surface.present_scaling_capabilities(gpu, present_mode) {
                 match config.resize {
                     ResizeBehaviour::Stretch
@@ -611,7 +636,7 @@ impl Swapchain {
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .queue_family_indices(&queue_family_indices)
             .pre_transform(capabilities.current_transform)
-            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+            .composite_alpha(composite_alpha_flag(composite_alpha))
             .present_mode(present_mode)
             .clipped(true)
             // 将旧交换链移交驱动以复用呈现资源，而非先销毁表面。
@@ -704,6 +729,7 @@ impl Swapchain {
             next_semaphore: 0,
             format: chosen.format,
             color_space: chosen.color_space,
+            composite_alpha,
             next_index: 0,
             acquired: None,
             extent: (extent.width, extent.height),
@@ -727,6 +753,14 @@ impl Swapchain {
     #[must_use]
     pub const fn color_space(&self) -> vk::ColorSpaceKHR {
         self.color_space
+    }
+
+    /// 创建交换链时实际采用的合成方式。
+    ///
+    /// 请求预乘但表面不支持时，这里会报告已回退的不透明合成。
+    #[must_use]
+    pub const fn composite_alpha(&self) -> CompositeAlphaMode {
+        self.composite_alpha
     }
 
     /// 当前交换链尺寸。
@@ -975,6 +1009,14 @@ impl Swapchain {
             }
             self.khr_swapchain.destroy_swapchain(self.swapchain, None);
         }
+    }
+}
+
+/// 将合成方式映射为 Vulkan 标志位。
+fn composite_alpha_flag(mode: CompositeAlphaMode) -> vk::CompositeAlphaFlagsKHR {
+    match mode {
+        CompositeAlphaMode::Opaque => vk::CompositeAlphaFlagsKHR::OPAQUE,
+        CompositeAlphaMode::PreMultiplied => vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
     }
 }
 
