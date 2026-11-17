@@ -10,8 +10,9 @@ use unbound_math::{Color, Vec2};
 use unbound_widgets::diff::SceneDiff;
 
 use crate::action::SemanticAction;
-use crate::assert::{Assertion, AssertionFailure, BoundsExpect, PixelProbe};
+use crate::assert::{Assertion, AssertionFailure, BoundsExpect};
 use crate::log::{ActionLog, RecordedStep};
+use crate::pixel::{CapturedFrame, OffscreenPixelSource, PixelSource};
 use crate::query::{NodePredicate, NodeQuery};
 use crate::view::AgentView;
 use crate::wait::{WaitCondition, WaitTimeout};
@@ -110,6 +111,9 @@ fn describe_candidates(candidates: &[String]) -> String {
     }
 }
 
+/// 默认帧步长：每秒 60 帧。
+const DEFAULT_FRAME_DT: f32 = 1.0 / 60.0;
+
 /// Agent 会话。
 ///
 /// 它**不拥有**运行时，只借用；会话期间对界面的全部操作都走框架自身的
@@ -117,7 +121,17 @@ fn describe_candidates(candidates: &[String]) -> String {
 pub struct AgentSession<'a, A: Application> {
     runtime: &'a mut AppRuntime<A>,
     log: ActionLog,
-    probe: Option<&'a dyn PixelProbe>,
+    probe: Option<&'a mut dyn PixelSource>,
+    /// 最近一次采集的画面。
+    ///
+    /// 离屏采集的结果缓存在这里，像素断言从它取值：断言问的是
+    /// 「**上一次采集到的**画面是什么颜色」，而不是「此刻画面是什么颜色」。
+    frame: Option<CapturedFrame>,
+    /// 帧步长（秒）。
+    ///
+    /// 固定步长是确定性的前提：一旦掺入真实时间，同一串动作跑两遍就会
+    /// 得到不同结果，回归也就无从谈起。
+    dt: f32,
     record: bool,
 }
 
@@ -129,17 +143,21 @@ impl<'a, A: Application> AgentSession<'a, A> {
             runtime,
             log: ActionLog::new(),
             probe: None,
+            frame: None,
+            dt: DEFAULT_FRAME_DT,
             record: true,
         }
     }
 
-    /// 建立会话并接入像素探针（供像素级断言使用）。
+    /// 建立会话并接入像素源（供像素级断言使用）。
     #[must_use]
-    pub fn with_probe(runtime: &'a mut AppRuntime<A>, probe: &'a dyn PixelProbe) -> Self {
+    pub fn with_probe(runtime: &'a mut AppRuntime<A>, probe: &'a mut dyn PixelSource) -> Self {
         Self {
             runtime,
             log: ActionLog::new(),
             probe: Some(probe),
+            frame: None,
+            dt: DEFAULT_FRAME_DT,
             record: true,
         }
     }
@@ -179,10 +197,32 @@ impl<'a, A: Application> AgentSession<'a, A> {
 
     /// 推进一帧。
     ///
-    /// 帧长固定为 1/60 秒：足够让动画与异步结果落地，又不至于让等待条件
-    /// 因时基不同而表现不一致。
+    /// 帧长默认固定为 1/60 秒：足够让动画与异步结果落地，又不至于让等待条件
+    /// 因时基不同而表现不一致。步长可由 [`Self::set_frame_dt`] 调整。
     pub fn advance(&mut self) -> FrameReport {
-        self.runtime.frame(1.0 / 60.0)
+        self.runtime.frame(self.dt)
+    }
+
+    /// 设置帧步长（秒）。
+    ///
+    /// 非正值与非有限值会被忽略：那样的步长会让动画与计时器永远不推进，
+    /// 等待条件也就永远等不到。
+    pub fn set_frame_dt(&mut self, dt: f32) {
+        if dt > 0.0 && dt.is_finite() {
+            self.dt = dt;
+        }
+    }
+
+    /// 当前帧步长（秒）。
+    #[must_use]
+    pub fn frame_dt(&self) -> f32 {
+        self.dt
+    }
+
+    /// 以固定步长推进指定时长。
+    pub fn advance_seconds(&mut self, seconds: f32) {
+        let steps = (seconds / self.dt).round().max(0.0) as usize;
+        self.advance_frames(steps);
     }
 
     /// 推进若干帧。
@@ -190,6 +230,48 @@ impl<'a, A: Application> AgentSession<'a, A> {
         for _ in 0..frames {
             self.advance();
         }
+    }
+
+    /// 采集当前画面。
+    ///
+    /// 使用会话接入的像素源；未接入时返回 `None`。
+    pub fn capture(&mut self) -> Option<&CapturedFrame> {
+        let probe = self.probe.as_mut()?;
+        let frame = probe.capture()?;
+        self.frame = Some(frame.clone());
+        self.frame.as_ref()
+    }
+
+    /// 用离屏渲染采集当前画面。
+    ///
+    /// 场景、主题与字形图集全部由运行时提供：调用方不必关心渲染细节，
+    /// 也不必自备像素源。画面被渲染到独立目标再回读，
+    /// **不占屏幕、不抢鼠标**。
+    ///
+    /// 采集前会先推进一帧，让本轮的状态变化进入场景。
+    pub fn capture_offscreen<'s>(
+        &mut self,
+        source: &'s mut OffscreenPixelSource,
+    ) -> Option<&'s CapturedFrame> {
+        let report = self.advance();
+        let ctx = self.runtime.context().clone();
+        source.sync(&ctx, &report.atlas_uploads).ok()?;
+        source.render(self.runtime.scene()).ok()?;
+        let frame = source.capture()?;
+        self.frame = Some(frame.clone());
+        Some(frame)
+    }
+
+    /// 采样一个逻辑坐标处的像素颜色。
+    ///
+    /// 优先取接入的像素源；像素源没有可用画面时退回最近一次采集的结果。
+    fn sample_pixel(&self, pos: Vec2) -> Option<Color> {
+        if let Some(probe) = self.probe.as_ref() {
+            if let Some(color) = probe.color_at(pos) {
+                return Some(color);
+            }
+        }
+        self.frame.as_ref()?.color_at(pos)
     }
 
     /// 等待界面稳定。
@@ -629,25 +711,16 @@ impl<'a, A: Application> AgentSession<'a, A> {
                 expect,
                 tolerance,
             } => {
-                let Some(probe) = self.probe else {
+                let Some(actual) = self.sample_pixel(*pos) else {
                     return Err(self.failure(
                         assertion,
                         None,
-                        "a pixel probe is attached",
-                        "no pixel probe attached",
+                        "a pixel sample is available",
+                        "no pixel sample is available",
                         Some(
-                            "attach a PixelProbe to the session before asserting on pixels"
+                            "attach a PixelSource to the session and capture a frame before asserting on pixels"
                                 .to_owned(),
                         ),
-                    ));
-                };
-                let Some(actual) = probe.color_at(*pos) else {
-                    return Err(self.failure(
-                        assertion,
-                        None,
-                        &format!("{pos:?} is sampleable"),
-                        "that position cannot be sampled",
-                        None,
                     ));
                 };
                 if colors_close(*expect, actual, *tolerance) {

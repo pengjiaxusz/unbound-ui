@@ -987,11 +987,14 @@ name = "unbound-agent"
 version = "0.1.0"
 dependencies = [
  "accesskit",
+ "png",
  "rustc-hash",
  "unbound-a11y",
  "unbound-app",
+ "unbound-gpu",
  "unbound-input",
  "unbound-math",
+ "unbound-theme",
  "unbound-widgets",
 ]
 

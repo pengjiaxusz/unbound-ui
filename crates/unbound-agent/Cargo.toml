@@ -12,9 +12,15 @@ unbound-math.workspace = true
 unbound-a11y.workspace = true
 unbound-input.workspace = true
 unbound-app.workspace = true
+unbound-gpu.workspace = true
+unbound-theme.workspace = true
 unbound-widgets.workspace = true
 accesskit.workspace = true
 rustc-hash.workspace = true
+
+[dev-dependencies]
+unbound-gpu.workspace = true
+png.workspace = true
 
 [lints]
 workspace = true

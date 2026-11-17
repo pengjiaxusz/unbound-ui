@@ -4,12 +4,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use unbound_gpu::atlas::AtlasSet;
-use unbound_gpu::data::PassLayer;
 use unbound_gpu::debug::{is_device_lost, recover_with, RecoveryPolicy};
 use unbound_gpu::device::{Gpu, GpuConfig};
 use unbound_gpu::surface::{AcquireOutcome, Surface, Swapchain};
 use unbound_gpu::swapchain::PresentConfig;
-use unbound_gpu::{Camera, Renderer, SceneUpload};
+use unbound_gpu::{Camera, Renderer};
 use unbound_input::PointerButton;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
@@ -811,34 +810,17 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                         // 此处必须传入交换链物理尺寸 `(actual_w, actual_h)`，严禁传入已除以缩放比的逻辑尺寸。
                         let camera =
                             Camera::ui((actual_w as f32, actual_h as f32), effective_scale);
-                        let backdrops: Vec<unbound_gpu::frame::BackdropRequest> = report
-                            .backdrops
-                            .iter()
-                            .map(|b| unbound_gpu::frame::BackdropRequest {
-                                rect: [
-                                    b.rect.origin.x * effective_scale,
-                                    b.rect.origin.y * effective_scale,
-                                    b.rect.size.x * effective_scale,
-                                    b.rect.size.y * effective_scale,
-                                ],
-                                radius: b.blur * effective_scale,
-                                corner_radii: [0.0; 4],
-                                layer_key_prefix: (PassLayer::Overlay as u64) << 56,
-                            })
-                            .collect();
+                        let backdrops =
+                            crate::collect_backdrops(&report.backdrops, effective_scale);
                         let scene_data = self.runtime.scene();
-                        let scene = SceneUpload {
-                            primitives: &scene_data.primitives,
-                            transforms: &scene_data.transforms,
-                            clips: &scene_data.clips,
-                            payloads: &scene_data.payloads,
-                            generation: self.scene_generation,
+                        let scene = crate::scene_upload(
+                            scene_data,
+                            &backdrops,
                             camera,
-                            key_prefix: (PassLayer::Ui as u64) << 56,
+                            self.scene_generation,
                             dirty_ranges,
-                            aux_changed: report.aux_changed,
-                            backdrops: &backdrops,
-                        };
+                            report.aux_changed,
+                        );
 
                         if let Err(ref err) =
                             renderer.render_into_swapchain(&scene, &image, actual_w, actual_h)
