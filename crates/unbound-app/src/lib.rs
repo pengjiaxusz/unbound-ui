@@ -761,7 +761,7 @@ impl AppContext {
 
     /// 按界面语言标签自动选定东亚字体族。
     pub fn set_cjk_family_for_locale(&mut self, tag: &str) {
-        self.cjk_family = unbound_text::东亚字体族_按语言(tag);
+        self.cjk_family = unbound_text::cjk_family_for_locale(tag);
     }
 
     /// 通过强类型 [`Locale`] 枚举切换当前激活的语言区域。
@@ -2154,7 +2154,10 @@ impl<'a> ViewBuilder<'a> {
             .width(Dim::percent(100.0))
             .padding(unbound_abi::Edges::all(16.0))
             .gap(10.0)
-            .radius(desc.radius.max(unbound_theme::typography::geometry::CARD_RADIUS))
+            .radius(
+                desc.radius
+                    .max(unbound_theme::typography::geometry::CARD_RADIUS),
+            )
             .fill_token(u32::from(unbound_theme::Token::CARD_BG.raw()));
         node_desc.flex_shrink = 0.0;
         node_desc = node_desc.border(u32::from(unbound_theme::Token::CARD_BORDER.raw()), 1.0);

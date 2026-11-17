@@ -5,7 +5,7 @@
 
 use accesskit::Role;
 use unbound_agent::{
-    AgentSession, Assertion, A11yNode, NodePredicate, NodeQuery, Semantics, SemanticAction,
+    A11yNode, AgentSession, Assertion, NodePredicate, NodeQuery, SemanticAction, Semantics,
     TreeSnapshot,
 };
 use unbound_app::prelude::{
@@ -15,24 +15,31 @@ use unbound_app::prelude::{
 use unbound_math::{Rect, Vec2};
 use unbound_widgets::ButtonDesc;
 
-const 布局键: u64 = 9001;
-const 标题键: u64 = 101;
-const 数值键: u64 = 102;
-const 计数键: u64 = 103;
-const 按钮键: u64 = 104;
-const 状态键: u64 = 105;
+const LAYOUT_KEY: u64 = 9001;
+const TITLE_KEY: u64 = 101;
+const READING_KEY: u64 = 102;
+const COUNT_KEY: u64 = 103;
+const BUTTON_KEY: u64 = 104;
+const STATUS_KEY: u64 = 105;
 
-struct 演示应用;
+const TITLE_TEXT: &str = "VRAM usage";
+const READING_TEXT: &str = "12.4 GB";
+const BUTTON_TEXT: &str = "Reset counter";
+const STATUS_TEXT: &str = "Ready";
+const STATUS_NAME: &str = "Run status";
+const READING_NAME: &str = "VRAM reading";
 
-struct 演示状态 {
-    计数: u32,
+struct DemoApp;
+
+struct DemoState {
+    count: u32,
 }
 
-impl Application for 演示应用 {
-    type State = 演示状态;
+impl Application for DemoApp {
+    type State = DemoState;
 
     fn init(&mut self, _ctx: &mut AppContext) -> Self::State {
-        演示状态 { 计数: 0 }
+        DemoState { count: 0 }
     }
 
     fn reduce(
@@ -42,8 +49,8 @@ impl Application for 演示应用 {
         _ctx: &mut AppContext,
     ) -> EventOutcome {
         let dirty = match event {
-            AppEvent::Click { node, .. } if node == 按钮键 => {
-                state.计数 += 1;
+            AppEvent::Click { node, .. } if node == BUTTON_KEY => {
+                state.count += 1;
                 DirtyFlags::PAINT | DirtyFlags::A11Y
             }
             _ => DirtyFlags::NONE,
@@ -52,22 +59,22 @@ impl Application for 演示应用 {
     }
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
-        view.column(布局键, |col| {
-            col.text_primary(标题键, "显存占用", 16.0, 600);
-            col.text_primary(数值键, "12.4 GB", 16.0, 400);
-            col.text_primary(计数键, format!("计数 {}", state.计数), 14.0, 400);
-            col.button(按钮键, ButtonDesc::label("重置计数"));
-            col.text_primary(状态键, "就绪", 14.0, 400);
+        view.column(LAYOUT_KEY, |col| {
+            col.text_primary(TITLE_KEY, TITLE_TEXT, 16.0, 600);
+            col.text_primary(READING_KEY, READING_TEXT, 16.0, 400);
+            col.text_primary(COUNT_KEY, format!("count {}", state.count), 14.0, 400);
+            col.button(BUTTON_KEY, ButtonDesc::label(BUTTON_TEXT));
+            col.text_primary(STATUS_KEY, STATUS_TEXT, 14.0, 400);
         });
         // 自绘控件的语义标注：框架层不含任何业务知识，语义由应用注入。
         view.declare_semantics(
-            状态键,
-            SemanticIntent::new(Role::Status, "运行状态").with_value("就绪"),
+            STATUS_KEY,
+            SemanticIntent::new(Role::Status, STATUS_NAME).with_value(STATUS_TEXT),
         );
         // 只读读数：名称与当前值分开暴露，Agent 无需解析文本即可取到数值。
         view.declare_semantics(
-            数值键,
-            SemanticIntent::new(Role::Label, "显存读数").with_value("12.4 GB"),
+            READING_KEY,
+            SemanticIntent::new(Role::Label, READING_NAME).with_value(READING_TEXT),
         );
     }
 }
@@ -76,9 +83,9 @@ impl Application for 演示应用 {
 ///
 /// 这正是把整机拖死的场景：控件占用了语义根的键，层级重建时窗口就成了
 /// 自己的子节点，任何树遍历都只会在环上打转。框架必须在源头把它挡下来。
-struct 撞键应用;
+struct CollidingKeyApp;
 
-impl Application for 撞键应用 {
+impl Application for CollidingKeyApp {
     type State = ();
 
     fn init(&mut self, _ctx: &mut AppContext) -> Self::State {}
@@ -94,30 +101,30 @@ impl Application for 撞键应用 {
 
     fn view(&mut self, _state: &Self::State, view: &mut ViewBuilder) {
         view.column(unbound_app::ROOT, |col| {
-            col.text_primary(标题键, "显存占用", 16.0, 600);
-            col.button(按钮键, ButtonDesc::label("重置计数"));
+            col.text_primary(TITLE_KEY, TITLE_TEXT, 16.0, 600);
+            col.button(BUTTON_KEY, ButtonDesc::label(BUTTON_TEXT));
         });
     }
 }
 
-fn runtime() -> AppRuntime<演示应用> {
-    let mut runtime = AppRuntime::new(演示应用, Vec2::new(800.0, 600.0));
+fn runtime() -> AppRuntime<DemoApp> {
+    let mut runtime = AppRuntime::new(DemoApp, Vec2::new(800.0, 600.0));
     runtime.frame(1.0 / 60.0);
     runtime
 }
 
 /// 取语义树快照。
-fn 快照(runtime: &mut AppRuntime<演示应用>) -> TreeSnapshot {
+fn snapshot(runtime: &mut AppRuntime<DemoApp>) -> TreeSnapshot {
     AgentSession::new(runtime).view().to_tree()
 }
 
 /// 按条件查询节点。
-fn 查询(runtime: &mut AppRuntime<演示应用>, query: &NodeQuery) -> Vec<u64> {
+fn query(runtime: &mut AppRuntime<DemoApp>, query: &NodeQuery) -> Vec<u64> {
     AgentSession::new(runtime).view().query(query)
 }
 
 /// 取节点的名称。
-fn 名称(runtime: &mut AppRuntime<演示应用>, id: u64) -> String {
+fn name(runtime: &mut AppRuntime<DemoApp>, id: u64) -> String {
     AgentSession::new(runtime)
         .view()
         .node(id)
@@ -126,12 +133,12 @@ fn 名称(runtime: &mut AppRuntime<演示应用>, id: u64) -> String {
 }
 
 /// 取节点的语义路径。
-fn 路径(runtime: &mut AppRuntime<演示应用>, id: u64) -> String {
+fn path(runtime: &mut AppRuntime<DemoApp>, id: u64) -> String {
     AgentSession::new(runtime).view().path(id)
 }
 
 /// 枚举界面上的全部文本。
-fn 全部文本(runtime: &mut AppRuntime<演示应用>) -> Vec<String> {
+fn all_text(runtime: &mut AppRuntime<DemoApp>) -> Vec<String> {
     AgentSession::new(runtime)
         .view()
         .all_text()
@@ -141,256 +148,307 @@ fn 全部文本(runtime: &mut AppRuntime<演示应用>) -> Vec<String> {
 }
 
 #[test]
-fn 只读文本必须进入语义树() {
+fn read_only_text_must_reach_the_semantics_tree() {
     let mut runtime = runtime();
-    let 文本 = 查询(&mut runtime, &NodeQuery::any().name("显存占用"));
-    assert_eq!(文本.len(), 1, "标题文本必须可被语义查询命中");
-    assert_eq!(名称(&mut runtime, 文本[0]), "显存占用");
-}
-
-#[test]
-fn 只读文本的角色必须是静态文本() {
-    let mut runtime = runtime();
-    let 文本 = 查询(&mut runtime, &NodeQuery::any().name("显存占用"));
-    let 树 = 快照(&mut runtime);
-    let 节点 = 树.node(文本[0]).expect("文本节点必须存在");
-    assert_eq!(节点.role, "Label", "只读文本应使用静态文本角色");
-}
-
-#[test]
-fn 数值内容必须可被读取() {
-    let mut runtime = runtime();
-    let 命中 = 查询(&mut runtime, &NodeQuery::any().value("12.4 GB"));
-    assert_eq!(命中.len(), 1, "只读数据必须能按当前值检索");
-    let 树 = 快照(&mut runtime);
-    let 节点 = 树.node(命中[0]).expect("读数节点必须存在");
-    assert_eq!(节点.value, "12.4 GB", "当前值必须原样可读");
-    assert_eq!(节点.label, "显存读数", "读数的名称与数值必须分开暴露");
-}
-
-#[test]
-fn 全部文本都应可枚举() {
-    let mut runtime = runtime();
-    let 文本 = 全部文本(&mut runtime);
-    assert!(
-        文本.iter().any(|text| text == "显存占用"),
-        "全部文本必须包含标题，实际：{文本:?}"
+    let text = query(&mut runtime, &NodeQuery::any().name(TITLE_TEXT));
+    assert_eq!(
+        text.len(),
+        1,
+        "the title text must be reachable by semantic query"
     );
-    assert!(
-        文本.iter().any(|text| text == "重置计数"),
-        "全部文本必须包含按钮标签，实际：{文本:?}"
-    );
-    assert!(
-        文本.iter().any(|text| text == "12.4 GB"),
-        "只读数据的当前值也必须可枚举，实际：{文本:?}"
+    assert_eq!(name(&mut runtime, text[0]), TITLE_TEXT);
+}
+
+#[test]
+fn read_only_text_must_use_the_static_text_role() {
+    let mut runtime = runtime();
+    let text = query(&mut runtime, &NodeQuery::any().name(TITLE_TEXT));
+    let tree = snapshot(&mut runtime);
+    let node = tree.node(text[0]).expect("the text node must exist");
+    assert_eq!(
+        node.role, "Label",
+        "read-only text must use the static text role"
     );
 }
 
 #[test]
-fn 按钮必须带可读名称() {
+fn numeric_content_must_be_readable() {
     let mut runtime = runtime();
-    let 按钮 = 查询(&mut runtime, &NodeQuery::any().role(Role::Button).name("重置计数"));
-    assert_eq!(按钮.len(), 1, "按钮必须能按角色与名称定位");
-    let 树 = 快照(&mut runtime);
-    let 节点 = 树.node(按钮[0]).expect("按钮节点必须存在");
-    assert!(节点.focusable, "按钮必须标记为可聚焦");
-}
-
-#[test]
-fn 显式标注必须生效() {
-    let mut runtime = runtime();
-    let 状态 = 查询(&mut runtime, &NodeQuery::any().role(Role::Status).name("运行状态"));
-    assert_eq!(状态.len(), 1, "显式语义标注必须写入语义树");
-    let 树 = 快照(&mut runtime);
-    let 节点 = 树.node(状态[0]).expect("状态节点");
-    assert_eq!(节点.value, "就绪", "标注里的当前值必须写入");
-}
-
-#[test]
-fn 语义树必须有层级() {
-    let mut runtime = runtime();
-    let 按钮 = 查询(&mut runtime, &NodeQuery::any().role(Role::Button));
-    let 路径文本 = 路径(&mut runtime, 按钮[0]);
-    assert!(
-        路径文本.starts_with("Window"),
-        "语义路径必须从窗口根节点起步，实际：{路径文本}"
+    let hits = query(&mut runtime, &NodeQuery::any().value(READING_TEXT));
+    assert_eq!(
+        hits.len(),
+        1,
+        "read-only data must be searchable by its current value"
     );
-    assert!(
-        路径文本.contains("Button \"重置计数\""),
-        "语义路径必须包含节点自身，实际：{路径文本}"
+    let tree = snapshot(&mut runtime);
+    let node = tree.node(hits[0]).expect("the reading node must exist");
+    assert_eq!(
+        node.value, READING_TEXT,
+        "the current value must be readable verbatim"
+    );
+    assert_eq!(
+        node.label, READING_NAME,
+        "the reading must expose its name and its value separately"
     );
 }
 
 #[test]
-fn 语义动作必须驱动界面() {
+fn all_text_must_be_enumerable() {
+    let mut runtime = runtime();
+    let text = all_text(&mut runtime);
+    assert!(
+        text.iter().any(|item| item == TITLE_TEXT),
+        "all text must contain the title, actual: {text:?}"
+    );
+    assert!(
+        text.iter().any(|item| item == BUTTON_TEXT),
+        "all text must contain the button label, actual: {text:?}"
+    );
+    assert!(
+        text.iter().any(|item| item == READING_TEXT),
+        "the current value of read-only data must be enumerable too, actual: {text:?}"
+    );
+}
+
+#[test]
+fn buttons_must_carry_a_readable_name() {
+    let mut runtime = runtime();
+    let button = query(
+        &mut runtime,
+        &NodeQuery::any().role(Role::Button).name(BUTTON_TEXT),
+    );
+    assert_eq!(
+        button.len(),
+        1,
+        "the button must be locatable by role and name"
+    );
+    let tree = snapshot(&mut runtime);
+    let node = tree.node(button[0]).expect("the button node must exist");
+    assert!(node.focusable, "the button must be marked focusable");
+}
+
+#[test]
+fn explicit_annotations_must_take_effect() {
+    let mut runtime = runtime();
+    let status = query(
+        &mut runtime,
+        &NodeQuery::any().role(Role::Status).name(STATUS_NAME),
+    );
+    assert_eq!(
+        status.len(),
+        1,
+        "explicit annotations must reach the semantics tree"
+    );
+    let tree = snapshot(&mut runtime);
+    let node = tree.node(status[0]).expect("the status node must exist");
+    assert_eq!(
+        node.value, STATUS_TEXT,
+        "the annotated current value must be written"
+    );
+}
+
+#[test]
+fn the_semantics_tree_must_be_layered() {
+    let mut runtime = runtime();
+    let button = query(&mut runtime, &NodeQuery::any().role(Role::Button));
+    let path_text = path(&mut runtime, button[0]);
+    assert!(
+        path_text.starts_with("Window"),
+        "the semantic path must start at the window root, actual: {path_text}"
+    );
+    assert!(
+        path_text.contains(&format!("Button \"{BUTTON_TEXT}\"")),
+        "the semantic path must contain the node itself, actual: {path_text}"
+    );
+}
+
+#[test]
+fn semantic_actions_must_drive_the_interface() {
     let mut runtime = runtime();
     let mut session = AgentSession::new(&mut runtime);
-    let 按钮 = session
-        .find(Role::Button, "重置计数")
-        .expect("必须能按角色与名称找到按钮");
+    let button = session
+        .find(Role::Button, BUTTON_TEXT)
+        .expect("the button must be findable by role and name");
     session
-        .perform(&SemanticAction::Click { node: 按钮 })
-        .expect("点击必须成功");
+        .perform(&SemanticAction::Click { node: button })
+        .expect("the click must succeed");
     // 点击之后，界面上的计数文本必须同步更新。
-    let 命中 = session.query(&NodeQuery::any().name("计数 1"));
-    assert_eq!(命中.len(), 1, "点击后语义树必须反映新状态");
-}
-
-#[test]
-fn 断言通过与失败都要给出结构化诊断() {
-    let mut runtime = runtime();
-    let session = AgentSession::new(&mut runtime);
-    let 通过 = session.assert(&Assertion::Exists {
-        query: NodeQuery::any().role(Role::Button).name("重置计数"),
-    });
-    assert!(通过.is_ok(), "存在的元素必须通过断言");
-
-    let 失败 = session
-        .assert(&Assertion::Exists {
-            query: NodeQuery::any().role(Role::Button).name("不存在的按钮"),
-        })
-        .expect_err("不存在的元素必须失败");
-    assert_eq!(失败.kind, "exists");
-    assert!(!失败.expected.is_empty());
-    assert!(!失败.actual.is_empty());
-}
-
-#[test]
-fn 状态断言失败时要给出下一步动作() {
-    let mut runtime = runtime();
-    let session = AgentSession::new(&mut runtime);
-    let 按钮 = session
-        .find(Role::Button, "重置计数")
-        .expect("必须能按角色与名称找到按钮");
-    let 失败 = session
-        .assert(&Assertion::State {
-            node: 按钮,
-            predicates: vec![NodePredicate::Selected],
-        })
-        .expect_err("未选中状态必须让断言失败");
-    let 建议 = 失败.suggestion.expect("失败必须给出建议动作");
-    assert!(
-        建议.contains("Click"),
-        "建议动作必须指明下一步怎么做，实际：{建议}"
+    let hits = session.query(&NodeQuery::any().name("count 1"));
+    assert_eq!(
+        hits.len(),
+        1,
+        "the semantics tree must reflect the new state after the click"
     );
 }
 
 #[test]
-fn 条件等待必须能达成() {
+fn assertions_must_give_structured_diagnostics_on_both_outcomes() {
+    let mut runtime = runtime();
+    let session = AgentSession::new(&mut runtime);
+    let passed = session.assert(&Assertion::Exists {
+        query: NodeQuery::any().role(Role::Button).name(BUTTON_TEXT),
+    });
+    assert!(
+        passed.is_ok(),
+        "an existing element must pass the assertion"
+    );
+
+    let failed = session
+        .assert(&Assertion::Exists {
+            query: NodeQuery::any().role(Role::Button).name("no such button"),
+        })
+        .expect_err("a missing element must fail the assertion");
+    assert_eq!(failed.kind, "exists");
+    assert!(!failed.expected.is_empty());
+    assert!(!failed.actual.is_empty());
+}
+
+#[test]
+fn a_failed_state_assertion_must_suggest_the_next_action() {
+    let mut runtime = runtime();
+    let session = AgentSession::new(&mut runtime);
+    let button = session
+        .find(Role::Button, BUTTON_TEXT)
+        .expect("the button must be findable by role and name");
+    let failed = session
+        .assert(&Assertion::State {
+            node: button,
+            predicates: vec![NodePredicate::Selected],
+        })
+        .expect_err("an unselected state must fail the assertion");
+    let suggestion = failed.suggestion.expect("a failure must suggest an action");
+    assert!(
+        suggestion.contains("Click"),
+        "the suggestion must state what to do next, actual: {suggestion}"
+    );
+}
+
+#[test]
+fn a_wait_condition_must_be_reachable() {
     let mut runtime = runtime();
     let mut session = AgentSession::new(&mut runtime);
     session
         .wait_for(
             &unbound_agent::WaitCondition::NodeExists {
-                query: NodeQuery::any().role(Role::Button).name("重置计数"),
+                query: NodeQuery::any().role(Role::Button).name(BUTTON_TEXT),
             },
             std::time::Duration::from_millis(500),
         )
-        .expect("等待条件必须达成");
+        .expect("the wait condition must be met");
 }
 
 #[test]
-fn 条件等待超时必须给出观察结果() {
+fn a_wait_timeout_must_report_what_was_observed() {
     let mut runtime = runtime();
     let mut session = AgentSession::new(&mut runtime);
-    let 超时 = session
+    let timeout = session
         .wait_for(
             &unbound_agent::WaitCondition::NodeExists {
-                query: NodeQuery::any().name("永远不会出现的文本"),
+                query: NodeQuery::any().name("text that never appears"),
             },
             std::time::Duration::from_millis(50),
         )
-        .expect_err("不存在的条件必须超时");
-    assert_eq!(超时.observed, 0);
-    assert!(超时.describe().contains("未达成"));
+        .expect_err("an impossible condition must time out");
+    assert_eq!(timeout.observed, 0);
+    assert!(timeout.describe().contains("not met"));
 }
 
 #[test]
-fn 动作序列必须被录制成可读脚本() {
+fn action_sequences_must_be_recorded_as_a_readable_script() {
     let mut runtime = runtime();
     let mut session = AgentSession::new(&mut runtime);
-    let 按钮 = session
-        .find(Role::Button, "重置计数")
-        .expect("必须能按角色与名称找到按钮");
+    let button = session
+        .find(Role::Button, BUTTON_TEXT)
+        .expect("the button must be findable by role and name");
     session
-        .perform(&SemanticAction::Click { node: 按钮 })
-        .expect("点击必须成功");
-    let 脚本 = session.log().to_script();
+        .perform(&SemanticAction::Click { node: button })
+        .expect("the click must succeed");
+    let script = session.log().to_script();
     assert!(
-        脚本.contains("click"),
-        "录制脚本必须描述动作意图，实际：{脚本}"
+        script.contains("click"),
+        "the recorded script must describe the intent of the action, actual: {script}"
     );
     assert!(
-        !脚本.contains("坐标"),
-        "录制脚本不得包含坐标，实际：{脚本}"
+        !script.contains("coordinates"),
+        "the recorded script must not carry coordinates, actual: {script}"
     );
 }
 
 #[test]
-fn 控件撞上语义根键时语义树不得成环() {
-    let mut runtime = AppRuntime::new(撞键应用, Vec2::new(800.0, 600.0));
+fn a_control_colliding_with_the_root_key_must_not_form_a_cycle() {
+    let mut runtime = AppRuntime::new(CollidingKeyApp, Vec2::new(800.0, 600.0));
     runtime.frame(1.0 / 60.0);
 
-    let 树 = AgentSession::new(&mut runtime).view().to_tree();
-    let 根 = 树.root;
-    let 根节点 = 树.node(根).expect("语义根必须存在");
+    let tree = AgentSession::new(&mut runtime).view().to_tree();
+    let root = tree.root;
+    let root_node = tree.node(root).expect("the semantic root must exist");
     assert!(
-        !根节点.children.contains(&根),
-        "语义根不得成为自己的子节点，实际子节点：{:?}",
-        根节点.children
+        !root_node.children.contains(&root),
+        "the semantic root must not become its own child, actual children: {:?}",
+        root_node.children
     );
-    for 节点 in &树.nodes {
+    for node in &tree.nodes {
         assert!(
-            !节点.children.contains(&节点.id),
-            "节点 {} 不得成为自己的子节点",
-            节点.id
+            !node.children.contains(&node.id),
+            "node {} must not become its own child",
+            node.id
         );
     }
 
     // 遍历必须有界：成环会让收集长度无限膨胀，最终把宿主进程拖死。
-    let 顺序 = AgentSession::new(&mut runtime).view().tree_order();
+    let order = AgentSession::new(&mut runtime).view().tree_order();
     assert!(
-        顺序.len() <= 树.nodes.len().max(1) * 2,
-        "遍历长度必须有界，实际 {}，节点数 {}",
-        顺序.len(),
-        树.nodes.len()
+        order.len() <= tree.nodes.len().max(1) * 2,
+        "the traversal length must stay bounded, actual {}, node count {}",
+        order.len(),
+        tree.nodes.len()
     );
 }
 
 #[test]
-fn 撞键不得吞掉控件的语义() {
-    let mut runtime = AppRuntime::new(撞键应用, Vec2::new(800.0, 600.0));
+fn a_key_collision_must_not_swallow_the_control_semantics() {
+    let mut runtime = AppRuntime::new(CollidingKeyApp, Vec2::new(800.0, 600.0));
     runtime.frame(1.0 / 60.0);
-    let 文本 = AgentSession::new(&mut runtime)
+    let text = AgentSession::new(&mut runtime)
         .view()
-        .query(&NodeQuery::any().name("显存占用"));
-    assert_eq!(文本.len(), 1, "撞键的控件必须被改派，而不是被吞掉");
+        .query(&NodeQuery::any().name(TITLE_TEXT));
+    assert_eq!(
+        text.len(),
+        1,
+        "a control with a colliding key must be re-keyed, not swallowed"
+    );
 }
 
 #[test]
-fn 语义树结构必须拒绝成环挂载() {
-    let mut 语义 = Semantics::new(1);
-    语义.upsert(1, A11yNode::new(Role::Window, "根".to_owned(), Rect::ZERO));
-    语义.upsert(2, A11yNode::new(Role::Button, "按钮".to_owned(), Rect::ZERO));
+fn the_semantics_tree_must_refuse_cycle_mounts() {
+    let mut semantics = Semantics::new(1);
+    semantics.upsert(
+        1,
+        A11yNode::new(Role::Window, "root".to_owned(), Rect::ZERO),
+    );
+    semantics.upsert(
+        2,
+        A11yNode::new(Role::Button, "button".to_owned(), Rect::ZERO),
+    );
 
     // 自环必须被拒绝。
-    语义.set_children(1, &[1]);
+    semantics.set_children(1, &[1]);
     assert!(
-        !语义.children_of(1).contains(&1),
-        "父节点不得成为自己的子节点"
+        !semantics.children_of(1).contains(&1),
+        "a parent must not become its own child"
     );
 
     // 祖先成环必须被拒绝：1 → 2 之后不能再把 1 挂回 2 之下。
-    语义.set_children(1, &[2]);
-    语义.set_children(2, &[1]);
+    semantics.set_children(1, &[2]);
+    semantics.set_children(2, &[1]);
     assert!(
-        !语义.children_of(2).contains(&1),
-        "祖先不得重新挂到后代之下"
+        !semantics.children_of(2).contains(&1),
+        "an ancestor must not be re-mounted under its own descendant"
     );
 
     // 子树收集长度必须有界。
     assert!(
-        语义.descendants(1).len() <= 2,
-        "子树收集必须与实际节点数相符"
+        semantics.descendants(1).len() <= 2,
+        "the subtree collection must match the actual node count"
     );
 }

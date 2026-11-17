@@ -908,9 +908,9 @@ impl UiWidget for SelectDesc {
         // 受控控件：描述符里的 `initial_selection` 是选中项的唯一真源。
         // 应用侧改了值（例如下拉列表里选了另一项）之后，框架每帧把它同步回局部状态，
         // 收起态的输入框才会立刻显示新值，而不必等控件被重新挂载。
-        if let Some(选中) = self.initial_selection {
-            if state.selected != Some(选中) {
-                state.selected = Some(选中);
+        if let Some(selected) = self.initial_selection {
+            if state.selected != Some(selected) {
+                state.selected = Some(selected);
             }
             if state.highlighted.is_none() {
                 state.highlighted = state.selected;
@@ -930,7 +930,9 @@ impl UiWidget for SelectDesc {
         Vec2::new(
             (measured.x + 40.0).max(self.rect.width()).max(140.0),
             // Win11 的下拉框与输入框同高（32px），不是 34px。
-            self.rect.height().max(unbound_theme::typography::geometry::INPUT_HEIGHT),
+            self.rect
+                .height()
+                .max(unbound_theme::typography::geometry::INPUT_HEIGHT),
         )
     }
 

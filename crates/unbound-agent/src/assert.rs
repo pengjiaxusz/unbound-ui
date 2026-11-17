@@ -108,13 +108,16 @@ impl AssertionFailure {
     /// 结构化的错误描述。
     #[must_use]
     pub fn describe(&self) -> String {
-        let mut out = format!("断言 `{}` 失败", self.kind);
+        let mut out = format!("assertion `{}` failed", self.kind);
         if let Some(path) = &self.node_path {
-            out.push_str(&format!("：节点 {path}"));
+            out.push_str(&format!("; node {path}"));
         }
-        out.push_str(&format!("；期望 {}，实际 {}", self.expected, self.actual));
+        out.push_str(&format!(
+            "; expected {}, actual {}",
+            self.expected, self.actual
+        ));
         if let Some(suggestion) = &self.suggestion {
-            out.push_str(&format!("；{suggestion}"));
+            out.push_str(&format!("; {suggestion}"));
         }
         out
     }

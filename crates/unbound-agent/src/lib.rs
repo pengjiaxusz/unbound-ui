@@ -36,5 +36,5 @@ pub use session::{ActionError, AgentSession};
 pub use view::{AgentView, NodeSnapshot, TreeSnapshot};
 pub use wait::{WaitCondition, WaitTimeout};
 
-pub use unbound_a11y::{A11yAction, A11yNode, Semantics};
 pub use accesskit::Role;
+pub use unbound_a11y::{A11yAction, A11yNode, Semantics};

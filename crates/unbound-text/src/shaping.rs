@@ -432,29 +432,29 @@ fn source_line_starts(text: &str) -> Vec<usize> {
 /// 返回的每个片段都是原文本的连续切片（按字符边界切分，不破坏 UTF-8），
 /// 标记该片段是否应绑定 CJK 字体。
 #[must_use]
-fn 切分东亚(text: &str) -> Vec<(&str, bool)> {
-    let mut 结果: Vec<(&str, bool)> = Vec::new();
-    let mut 起点 = 0usize;
-    let mut 当前: Option<bool> = None;
-    for (偏移, ch) in text.char_indices() {
-        let 东亚 = 是东亚字符(ch);
-        match 当前 {
-            Some(旧) if 旧 == 东亚 => {}
-            Some(旧) => {
-                结果.push((&text[起点..偏移], 旧));
-                起点 = 偏移;
-                当前 = Some(东亚);
+fn split_east_asian(text: &str) -> Vec<(&str, bool)> {
+    let mut result: Vec<(&str, bool)> = Vec::new();
+    let mut start = 0usize;
+    let mut current: Option<bool> = None;
+    for (offset, ch) in text.char_indices() {
+        let east_asian = is_east_asian_char(ch);
+        match current {
+            Some(previous) if previous == east_asian => {}
+            Some(previous) => {
+                result.push((&text[start..offset], previous));
+                start = offset;
+                current = Some(east_asian);
             }
             None => {
-                起点 = 偏移;
-                当前 = Some(东亚);
+                start = offset;
+                current = Some(east_asian);
             }
         }
     }
-    if let Some(类) = 当前 {
-        结果.push((&text[起点..], 类));
+    if let Some(kind) = current {
+        result.push((&text[start..], kind));
     }
-    结果
+    result
 }
 
 /// 塑形引擎：持有字体系统与两级缓存。
@@ -469,42 +469,42 @@ pub struct TextEngine {
     max_cache_entries: usize,
     /// 东亚文字显式绑定的系统字体族（`None` 表示按文本内容自动判定）。
     ///
-    /// 见 [`东亚字体族`]：Windows 的 CJK 界面字体与拉丁界面字体是两套，
+    /// 见 [`east_asian_family`]：Windows 的 CJK 界面字体与拉丁界面字体是两套，
     /// 必须显式绑定，否则塑形器的回退会挑到日文或楷体字库。
-    东亚字体覆盖: Option<&'static str>,
+    cjk_family_override: Option<&'static str>,
 }
 
 /// Windows 简体中文界面使用的 CJK 字体族。
 ///
 /// 与 `Segoe UI Variable` 一样，Windows 11 的中文界面字体是
 /// `Microsoft YaHei UI`（而非「微软雅黑」旧名），字形重心更低、笔画更均匀。
-pub const 微软雅黑: &str = "Microsoft YaHei UI";
+pub const MS_YAHEI_UI: &str = "Microsoft YaHei UI";
 /// Windows 繁体中文界面使用的 CJK 字体族。
 ///
 /// 繁体字形与简体不同（`設` / `计` 的写法差异），用简体字体会让整个界面
 /// 在繁体语言下「字都对、但看着不像中文」。
-pub const 微软正黑: &str = "Microsoft JhengHei UI";
+pub const MS_JHENGHEI_UI: &str = "Microsoft JhengHei UI";
 /// Windows 日文界面字体。
-pub const 游ゴシック: &str = "Yu Gothic UI";
+pub const YU_GOTHIC_UI: &str = "Yu Gothic UI";
 /// Windows 韩文界面字体。
-pub const 맑은고딕: &str = "Malgun Gothic";
+pub const MALGUN_GOTHIC: &str = "Malgun Gothic";
 
 /// 按界面语言标签选出应当使用的东亚字体族。
 ///
 /// `None` 表示该语言不使用东亚文字（回退到按文本内容自动判定）。
 #[must_use]
-pub fn 东亚字体族_按语言(tag: &str) -> Option<&'static str> {
+pub fn cjk_family_for_locale(tag: &str) -> Option<&'static str> {
     let t = tag.trim().to_ascii_lowercase();
     if t.starts_with("zh") {
         if t.contains("tw") || t.contains("hk") || t.contains("mo") || t.contains("hant") {
-            Some(微软正黑)
+            Some(MS_JHENGHEI_UI)
         } else {
-            Some(微软雅黑)
+            Some(MS_YAHEI_UI)
         }
     } else if t.starts_with("ja") {
-        Some(游ゴシック)
+        Some(YU_GOTHIC_UI)
     } else if t.starts_with("ko") {
-        Some(맑은고딕)
+        Some(MALGUN_GOTHIC)
     } else {
         None
     }
@@ -517,7 +517,7 @@ pub fn 东亚字体族_按语言(tag: &str) -> Option<&'static str> {
 /// `Yu Gothic UI`（日文）或 `LXGW WenKai Mono`（楷体）——
 /// 标题因此变成日文/书法字，与 Windows 11 原生界面一眼可辨。
 #[must_use]
-fn 是东亚字符(ch: char) -> bool {
+fn is_east_asian_char(ch: char) -> bool {
     matches!(ch as u32,
         // 假名（平假名 / 片假名 / 竖排标点 / 半角片假名）
         0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9D
@@ -540,26 +540,25 @@ fn 是东亚字符(ch: char) -> bool {
 /// 否则按简体中文处理。返回 `None` 表示该字体在系统上不可用，
 /// 此时回退到塑形器默认行为（可能落到非 CJK 字体，但不会崩溃）。
 #[must_use]
-fn 东亚字体族(text: &str, 可用: impl Fn(&str) -> bool) -> Option<&'static str> {
-    let mut 有假名 = false;
-    let mut 有谚文 = false;
+fn east_asian_family(text: &str, is_available: impl Fn(&str) -> bool) -> Option<&'static str> {
+    let mut has_kana = false;
+    let mut has_hangul = false;
     for ch in text.chars() {
         match ch as u32 {
-            0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9D => 有假名 = true,
-            0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7A3 => 有谚文 = true,
+            0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9D => has_kana = true,
+            0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7A3 => has_hangul = true,
             _ => {}
         }
     }
-    let 候选: [&'static str; 3] = if 有假名 {
-        [游ゴシック, 微软雅黑, 맑은고딕]
-    } else if 有谚文 {
-        [맑은고딕, 微软雅黑, 游ゴシック]
+    let candidates: [&'static str; 3] = if has_kana {
+        [YU_GOTHIC_UI, MS_YAHEI_UI, MALGUN_GOTHIC]
+    } else if has_hangul {
+        [MALGUN_GOTHIC, MS_YAHEI_UI, YU_GOTHIC_UI]
     } else {
-        [微软雅黑, 游ゴシック, 맑은고딕]
+        [MS_YAHEI_UI, YU_GOTHIC_UI, MALGUN_GOTHIC]
     };
-    候选.into_iter().find(|族| 可用(族))
+    candidates.into_iter().find(|family| is_available(family))
 }
-
 
 impl core::fmt::Debug for TextEngine {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -619,7 +618,7 @@ impl TextEngine {
             wrap_cache: FxHashMap::default(),
             stats: TextCacheStats::default(),
             max_cache_entries: 4096,
-            东亚字体覆盖: None,
+            cjk_family_override: None,
         }
     }
 
@@ -632,8 +631,8 @@ impl TextEngine {
     ///
     /// 传入 `None` 恢复为「按文本内容自动判定」。
     pub fn set_east_asian_family(&mut self, family: Option<&'static str>) {
-        if self.东亚字体覆盖 != family {
-            self.东亚字体覆盖 = family;
+        if self.cjk_family_override != family {
+            self.cjk_family_override = family;
             self.clear_caches();
         }
     }
@@ -646,10 +645,11 @@ impl TextEngine {
     }
 
     /// 系统上是否存在指定字体族。
-    fn 字体族可用(&self, 族: &str) -> bool {
-        self.font_system.db().faces().any(|face| {
-            face.families.iter().any(|(family, _)| family == 族)
-        })
+    fn font_family_available(&self, family: &str) -> bool {
+        self.font_system
+            .db()
+            .faces()
+            .any(|face| face.families.iter().any(|(actual, _)| actual == family))
     }
 
     /// 提供可变访问以供字形光栅化（`SwashCache` 需要）。
@@ -720,32 +720,35 @@ impl TextEngine {
         let attrs = self.attrs(style);
         // 东亚文字单独绑定系统 CJK 字体。调用方显式指定字体族时不做接管——
         // 那是刻意的排版选择，框架不应覆盖。
-        let 东亚 = if style.family.is_some() {
+        let east_asian = if style.family.is_some() {
             None
         } else {
-            let 自动 = || 东亚字体族(text, |族| self.字体族可用(族));
-            match self.东亚字体覆盖 {
+            let auto = || east_asian_family(text, |family| self.font_family_available(family));
+            match self.cjk_family_override {
                 // 显式指定的字体族在系统上缺失时仍要退回自动判定，
                 // 否则整段东亚文字会失去 CJK 绑定、落回塑形器的任意回退。
-                Some(族) => self.字体族可用(族).then_some(族).or_else(自动),
-                None => 自动(),
+                Some(family) => self
+                    .font_family_available(family)
+                    .then_some(family)
+                    .or_else(auto),
+                None => auto(),
             }
         };
         let buffer = self.buffer.as_mut().expect("buffer just created");
-        match 东亚 {
-            Some(族) => {
+        match east_asian {
+            Some(family) => {
                 // 按「东亚 / 非东亚」把文本切成连续片段，每段单独给出字体族。
                 // 同一段内不做更细的切分：中文标点与全角符号必须与相邻汉字同族，
                 // 否则日文界面里的「。」会跳到中文字体上。
-                let 分段 = 切分东亚(text);
-                let mut spans: Vec<(&str, Attrs<'_>)> = Vec::with_capacity(分段.len());
-                for (片段, 是东亚) in 分段 {
-                    let 段属性 = if 是东亚 {
-                        attrs.clone().family(Family::Name(族))
+                let segments = split_east_asian(text);
+                let mut spans: Vec<(&str, Attrs<'_>)> = Vec::with_capacity(segments.len());
+                for (segment, is_east_asian) in segments {
+                    let segment_attrs = if is_east_asian {
+                        attrs.clone().family(Family::Name(family))
                     } else {
                         attrs.clone()
                     };
-                    spans.push((片段, 段属性));
+                    spans.push((segment, segment_attrs));
                 }
                 buffer.set_rich_text(spans, &attrs, Shaping::Advanced, None);
             }
@@ -1202,62 +1205,94 @@ impl TextEngine {
 mod tests {
     use super::*;
 
+    // 东亚文字检测的测试夹具。它们必须是真的 CJK 文本——换成拉丁字母
+    // 就没有被测对象了，因此逐条认证为例外。
+    const MIXED: &str = "启动 universal-3d 预设"; // lang-ok: CJK fixture for East Asian run detection
+    const HAN_HEAD: &str = "启动"; // lang-ok: CJK fixture for East Asian run detection
+    const HAN_TAIL: &str = "预设"; // lang-ok: CJK fixture for East Asian run detection
+    const HAN_PUNCT: &str = "启动。预设"; // lang-ok: CJK fixture for East Asian run detection
+    const HAN_ONLY: &str = "启动预设"; // lang-ok: CJK fixture for script detection
+    const JAPANESE: &str = "設定と地域"; // lang-ok: CJK fixture for script detection
+    const KOREAN: &str = "설정과 지역"; // lang-ok: CJK fixture for script detection
+    const LATIN_ONLY: &str = "只有拉丁 ASCII"; // lang-ok: CJK fixture for script detection
+
     fn engine() -> TextEngine {
         TextEngine::new()
     }
 
     #[test]
-    fn 东亚文本被切分为连续的东亚与非东亚片段() {
-        let 片段 = 切分东亚("启动 universal-3d 预设");
-        assert_eq!(片段.len(), 3);
-        assert!(片段[0].1, "汉字片段应标记为东亚");
-        assert_eq!(片段[0].0, "启动");
-        assert!(!片段[1].1, "拉丁片段不应标记为东亚");
-        assert_eq!(片段[1].0, " universal-3d ");
-        assert!(片段[2].1);
-        assert_eq!(片段[2].0, "预设");
+    fn east_asian_text_is_split_into_contiguous_runs() {
+        let pieces = split_east_asian(MIXED);
+        assert_eq!(pieces.len(), 3);
+        assert!(pieces[0].1, "a Han run must be marked as East Asian");
+        assert_eq!(pieces[0].0, HAN_HEAD);
+        assert!(!pieces[1].1, "a Latin run must not be marked as East Asian");
+        assert_eq!(pieces[1].0, " universal-3d ");
+        assert!(pieces[2].1);
+        assert_eq!(pieces[2].0, HAN_TAIL);
     }
 
     #[test]
-    fn 中文标点与汉字同族不会被拆开() {
-        let 片段 = 切分东亚("启动。预设");
-        assert_eq!(片段.len(), 1, "中文标点必须与相邻汉字同段");
-        assert!(片段[0].1);
+    fn chinese_punctuation_stays_with_its_han_run() {
+        let pieces = split_east_asian(HAN_PUNCT);
+        assert_eq!(
+            pieces.len(),
+            1,
+            "Chinese punctuation must stay in the same run as its neighbours"
+        );
+        assert!(pieces[0].1);
     }
 
     #[test]
-    fn 东亚字体族按文本内的文字体系选择() {
-        let 全可用 = |_: &str| true;
-        assert_eq!(东亚字体族("启动预设", 全可用), Some(微软雅黑));
-        assert_eq!(东亚字体族("設定と地域", 全可用), Some(游ゴシック));
-        assert_eq!(东亚字体族("설정과 지역", 全可用), Some(맑은고딕));
-        assert_eq!(东亚字体族("只有拉丁 ASCII", 全可用), Some(微软雅黑));
+    fn the_family_follows_the_scripts_inside_the_text() {
+        let all_available = |_: &str| true;
+        assert_eq!(
+            east_asian_family(HAN_ONLY, all_available),
+            Some(MS_YAHEI_UI)
+        );
+        assert_eq!(
+            east_asian_family(JAPANESE, all_available),
+            Some(YU_GOTHIC_UI)
+        );
+        assert_eq!(
+            east_asian_family(KOREAN, all_available),
+            Some(MALGUN_GOTHIC)
+        );
+        assert_eq!(
+            east_asian_family(LATIN_ONLY, all_available),
+            Some(MS_YAHEI_UI)
+        );
     }
 
     #[test]
-    fn 东亚字体缺失时回退到下一个可用字体() {
-        let 仅日文 = |族: &str| 族 == 游ゴシック;
-        assert_eq!(东亚字体族("启动预设", 仅日文), Some(游ゴシック));
-        let 全不可用 = |_: &str| false;
-        assert_eq!(东亚字体族("启动预设", 全不可用), None);
+    fn a_missing_family_falls_back_to_the_next_available_one() {
+        let japanese_only = |family: &str| family == YU_GOTHIC_UI;
+        assert_eq!(
+            east_asian_family(HAN_ONLY, japanese_only),
+            Some(YU_GOTHIC_UI)
+        );
+        let none_available = |_: &str| false;
+        assert_eq!(east_asian_family(HAN_ONLY, none_available), None);
     }
 
     #[cfg(windows)]
     #[test]
-    fn 中文标题落到微软雅黑而不是日文或楷体字库() {
+    fn chinese_headings_use_yahei_not_a_japanese_or_calligraphic_face() {
         // 回归防线：塑形器的自动回退按「字重距离」挑字体，
         // 半粗（600）会命中带 600 字重的 `Yu Gothic UI`，
         // 使中文标题渲染成日文或楷体——与 Windows 11 原生界面一眼可辨。
         let mut e = engine();
         let style = TextStyle::sized(28.0);
-        let 族 = e.resolved_families("启动预设", &style);
+        let family = e.resolved_families(HAN_ONLY, &style);
         assert!(
-            族.iter().any(|f| f == 微软雅黑),
-            "中文应落到 {微软雅黑}，实际 {族:?}"
+            family.iter().any(|f| f == MS_YAHEI_UI),
+            "Chinese text must land on {MS_YAHEI_UI}, actual {family:?}"
         );
         assert!(
-            !族.iter().any(|f| f.contains("Yu Gothic") || f.contains("LXGW")),
-            "中文不应落到日文或楷体字库，实际 {族:?}"
+            !family
+                .iter()
+                .any(|f| f.contains("Yu Gothic") || f.contains("LXGW")),
+            "Chinese text must not land on a Japanese or calligraphic face, actual {family:?}"
         );
     }
 

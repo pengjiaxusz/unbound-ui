@@ -112,11 +112,7 @@ impl SpatialRelation {
 /// ARIA 把 `<option>` 映射为 [`Role::ListBoxOption`]；菜单式下拉也可能用
 /// [`Role::MenuListOption`] 或 [`Role::MenuItem`]。查询时三者都接受，
 /// 免得因实现风格不同而找不到选项。
-pub const OPTION_ROLES: [Role; 3] = [
-    Role::ListBoxOption,
-    Role::MenuListOption,
-    Role::MenuItem,
-];
+pub const OPTION_ROLES: [Role; 3] = [Role::ListBoxOption, Role::MenuListOption, Role::MenuItem];
 
 /// 节点查询条件。
 ///

@@ -159,7 +159,7 @@ mod tests {
         ColorSwatchDesc::new(
             Rect::new(0.0, 0.0, SWATCH_SIZE, SWATCH_SIZE),
             Token::ACCENT_SWATCH_0,
-            "工程蓝",
+            "Engineering Blue",
         )
     }
 

@@ -50,7 +50,7 @@ impl WaitTimeout {
     #[must_use]
     pub fn describe(&self) -> String {
         format!(
-            "等待条件在 {} 毫秒内未达成；期间观察到 {} 个相关节点",
+            "wait condition not met within {} ms; observed {} related nodes meanwhile",
             self.waited_ms, self.observed
         )
     }
