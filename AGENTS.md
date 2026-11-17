@@ -5,7 +5,7 @@
 ## 通用约定
 - 编译/检查/测试/跑分统一走 `just`（`just check`、`just test`、`just q-run <cmd>`），不裸跑 `cargo`/`ninja`/`cmake`；详见 `.agents/skills/bque/SKILL.md`。
 - 完成修改并通过验证后，先 commit & push 再回复；纯问答或构建/测试失败待排查时除外。
-- 克隆后跑 `just doctor --fix`（没有 just 时用 `sh scripts/doctor.sh --fix` / `pwsh -NoProfile -File scripts/doctor.ps1 -Fix`）：检查工具链、激活提交钩子、创建 agent 客户端工作区链接（`.trae` / `.claude/skills`），并执行 `scripts/doctor.d/` 下的项目自检与修复。
+- 克隆后跑 `just doctor --fix`（没有 just 时用 `sh scripts/doctor.sh --fix` / `pwsh -NoProfile -File scripts/doctor.ps1 -Fix`）：检查工具链、激活提交钩子、创建 agent 客户端工作区链接（`.trae` / `.claude/skills` / `.workbuddy/skills`），并执行 `scripts/doctor.d/` 下的项目自检与修复。缺 `pengj-templates-cli` 是**错误**而不是警告（门禁与链接都依赖它），唯一的联网入口是 `--install-cli`，`--fix` 永不联网。
 - 提交标题必须用中文（至少 2 个汉字），type/scope 用英文；任何提交入口（含 /commit 命令）都不得写纯英文标题，commit-msg 钩子会拦截。
 - 提交门禁由 `.githooks/` 执行，激活入口是 `just doctor --fix`（或 `sh scripts/doctor.sh --fix`）：doctor 会调用 `.githooks/install.sh`，后者只需要 git 与一个 POSIX shell，所以激活钩子不需要 CLI。门禁本体在 `pengj-templates-cli` 里：没装它时钩子会拦下提交并打印安装命令。gate 层会自动带上 `ci` 层，服务端跑的是同一个二进制，并把它设成必需状态检查。
 - 规则只有一套：钩子只负责找到 CLI 并把活交给它，模板不带兜底脚本。没装 CLI 的机器在装好之前无法在本地提交，刻意不提供一套可能与 CI 判决不一致的更宽松检查。同样的规则由 `.github/workflows/gate.yml` 的 `gate` 任务与 `.github/rulesets/gate.json` 的必需状态检查在服务端执行。
