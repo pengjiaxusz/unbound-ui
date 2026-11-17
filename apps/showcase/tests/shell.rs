@@ -1645,3 +1645,44 @@ fn backdrop_page_switches_every_mode_through_the_runtime() {
         );
     }
 }
+
+/// 宿主注入构建号与驱动能力后，页面状态与实际生效模式必须同步更新。
+#[test]
+fn backdrop_capabilities_drive_the_resolved_mode() {
+    use unbound_backdrop::{BackdropMode, ResolvedBackdrop};
+
+    let mut app = app();
+    app.navigate(PageId::Backdrop);
+    app.rebuild(VIEWPORT);
+
+    // 原生可用：Auto 与显式 Native 都应走原生路径。
+    app.set_backdrop_capabilities(Some(22621), true);
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.windows_build, Some(22621));
+    assert!(app.state.native_backdrop_available);
+    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::Native);
+
+    app.state.set_backdrop_mode(BackdropMode::Native);
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::Native);
+
+    // Win10：原生不可用，显式 Native 必须回退到自绘。
+    app.set_backdrop_capabilities(Some(19045), true);
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.windows_build, Some(19045));
+    assert!(!app.state.native_backdrop_available);
+    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::SelfDrawn);
+
+    // 驱动不支持预乘：即使构建号达标也必须回退。
+    app.set_backdrop_capabilities(Some(26100), false);
+    app.rebuild(VIEWPORT);
+    assert!(!app.state.native_backdrop_available);
+    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::SelfDrawn);
+
+    // 未知构建号（非 Windows）：同样回退。
+    app.set_backdrop_capabilities(None, true);
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.windows_build, None);
+    assert!(!app.state.native_backdrop_available);
+    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::SelfDrawn);
+}
