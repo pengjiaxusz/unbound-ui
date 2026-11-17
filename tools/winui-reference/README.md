@@ -42,7 +42,8 @@ dotnet build -c Release
 - `target/parity/heat/<用例>.png`：ΔE 热力图（黑→蓝→绿→黄→红，30 封顶）；
 - `target/parity/report.html` / `report.json`：逐用例指标与通过状态。
 
-判定阈值：内容包围盒必须逐边相等，全图 ΔE2000 均值 ≤ 1.0，p99 ≤ 3.0。
+判定阈值：内容包围盒逐边相差 ≤ 1 像素（允许字体抗锯齿的单像素溢出），
+全图 ΔE2000 均值 ≤ 1.0，p99 ≤ 3.0。
 
 报告同时内置于展厅「Engine Systems → Pixel parity」页：三张截图经 `AssetHub`
 异步解码后由框架自己的图像发射器绘制，可用

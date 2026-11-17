@@ -79,11 +79,14 @@ internal static class Catalog
                 return true;
 
             case "ToggleSwitch":
-                // 用 Header 而不是 OnContent/OffContent：参考布局是「左侧文案 + 右侧开关」，
-                // 与 unbound-ui 的 SwitchDesc 结构一致，避免比较两套不同的排列。
+                // Header 即 WinUI 模板的「标题在上、开关在左下」布局。
+                // 显式清空 On/OffContent，避免默认本地化文案（中文系统为「开/关」）
+                // 混进基线，让比较聚焦于控件几何与颜色。
                 element = new ToggleSwitch
                 {
                     Header = "ToggleSwitch",
+                    OnContent = "",
+                    OffContent = "",
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
                 };
