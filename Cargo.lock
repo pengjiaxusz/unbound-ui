@@ -1277,6 +1277,7 @@ dependencies = [
  "rustc-hash",
  "unbound-math",
  "unbound-theme",
+ "windows",
 ]
 
 [[package]]
