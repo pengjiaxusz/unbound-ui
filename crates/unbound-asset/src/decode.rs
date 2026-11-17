@@ -45,11 +45,18 @@ pub struct PngDecoder;
 
 impl Decoder for PngDecoder {
     fn decode(&self, kind: AssetKind, bytes: &[u8]) -> Result<DecodedAsset, AssetError> {
-        let decoder = png::Decoder::new(bytes);
+        // png 0.18 起解码器要求输入同时可读可寻址（`BufRead + Seek`），
+        // 裸切片只满足可读。用游标包一层即可，无需把数据拷进内存。
+        let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
         let mut reader = decoder
             .read_info()
             .map_err(|error| AssetError::Decode(error.to_string()))?;
-        let mut buffer = vec![0u8; reader.output_buffer_size()];
+        // png 0.18 起输出缓冲区大小可能算不出来：只有当图像大到本机地址空间
+        // 装不下时才会这样，属于该明确报出的失败，而不是该猜的尺寸。
+        let buffer_size = reader.output_buffer_size().ok_or_else(|| {
+            AssetError::Decode("PNG image is too large to decode on this machine".to_owned())
+        })?;
+        let mut buffer = vec![0u8; buffer_size];
         let info = reader
             .next_frame(&mut buffer)
             .map_err(|error| AssetError::Decode(error.to_string()))?;

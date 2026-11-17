@@ -20,7 +20,7 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
-use accesskit::{Action, Node, NodeId, Role, Tree, TreeId, TreeUpdate};
+use accesskit::{Action, Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_math::Rect;
 
@@ -784,7 +784,7 @@ impl Semantics {
         self.removed.clear();
 
         let tree = if first {
-            let mut tree = Tree::new(NodeId(self.root));
+            let mut tree = TreeInfo::new(NodeId(self.root));
             tree.toolkit_name = Some("Unbound UI".to_owned());
             tree.toolkit_version = Some(env!("CARGO_PKG_VERSION").to_owned());
             Some(tree)

@@ -59,14 +59,14 @@ unbound-theme = { path = "crates/unbound-theme" }
 unbound-widgets = { path = "crates/unbound-widgets" }
 
 crossbeam-channel = { version = "0.5", default-features = false, features = ["std"] }
-png = { version = "0.17", default-features = false }
+png = { version = "0.18", default-features = false }
 ash = { version = "0.38", default-features = false, features = ["loaded", "debug"] }
 raw-window-handle = "0.6"
 bytemuck = { version = "1.25", features = ["derive"] }
 half = { version = "2.7", features = ["bytemuck"] }
 taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
 cosmic-text = "0.19"
-accesskit = "0.24"
+accesskit = "0.25"
 rayon = "1.12"
 slotmap = "1.1"
 rkyv = { version = "0.8", features = ["alloc", "bytecheck"] }
