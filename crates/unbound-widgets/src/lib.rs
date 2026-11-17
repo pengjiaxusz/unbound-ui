@@ -311,7 +311,10 @@ impl WidgetShowcaseWitness {
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_a11y::{A11yNode, Semantics};
-use unbound_gpu::data::{GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform, CLIP_NONE};
+use unbound_gpu::data::{
+    GpuClipNode, GpuPayload, GpuPrimitiveInstance, GpuTransform, CLIP_NONE, TRANSFORM_ANIMATED_BIT,
+    TRANSFORM_INDEX_MASK,
+};
 use unbound_headless::driver::{ClickReport, TestApp};
 use unbound_input::{ClipRect, HitRegion, PointerEvent, Router};
 use unbound_math::{f16_to_f32, f32_to_f16, project_rounded_radii, Rect, Vec2};
@@ -979,6 +982,41 @@ impl SceneCollector {
         self.push(key, output);
     }
 
+    /// 追加一份自包含的预构建场景（例如外壳自绘的场景表）。
+    ///
+    /// 预构建场景的载荷、变换、裁剪索引都从 0 起算，而收集器把这些表拼成单一的
+    /// 全局数组。直接按切片拼接会让整段文本读到前序控件的 UV——每段文字都渲染成
+    /// 其它文字的乱码混合。这里统一重定位三类索引后再追加。
+    ///
+    /// `transforms` 须自带索引 0 的单位变换，与收集器的约定一致。
+    pub fn append_scene(
+        &mut self,
+        primitives: &[GpuPrimitiveInstance],
+        transforms: &[GpuTransform],
+        clips: &[GpuClipNode],
+        payloads: &[GpuPayload],
+    ) {
+        let payload_base = u32::try_from(self.payloads.len()).unwrap_or(u32::MAX);
+        let transform_base = u32::try_from(self.transforms.len()).unwrap_or(u32::MAX);
+        let clip_base = u32::try_from(self.clips.len()).unwrap_or(u32::MAX);
+        self.primitives.extend(primitives.iter().map(|primitive| {
+            let mut primitive = *primitive;
+            primitive.extra_payload_idx = primitive.extra_payload_idx.saturating_add(payload_base);
+            let animated = primitive.transform_idx & TRANSFORM_ANIMATED_BIT;
+            let index = (primitive.transform_idx & TRANSFORM_INDEX_MASK)
+                .saturating_add(transform_base)
+                & TRANSFORM_INDEX_MASK;
+            primitive.transform_idx = animated | index;
+            if primitive.clip_idx != CLIP_NONE {
+                primitive.clip_idx = primitive.clip_idx.saturating_add(clip_base);
+            }
+            primitive
+        }));
+        self.transforms.extend_from_slice(transforms);
+        self.clips.extend_from_slice(clips);
+        self.payloads.extend_from_slice(payloads);
+    }
+
     /// 追加单个控件的输出并记录其拥有的图元区间。
     pub fn push(&mut self, key: u64, mut output: WidgetOutput) {
         let active_transform = self.transform_stack.last().copied();
@@ -1415,5 +1453,55 @@ mod tests {
             .map(|p| p.extra_payload_idx)
             .collect();
         assert_eq!(indices, vec![0, 1, 2, 3, 4]);
+    }
+
+    /// 外壳自绘的整份场景同样从 0 起算索引。收集器里已有背板等图元时，
+    /// 直接拼接会让每个字形都采样到别人的 UV，必须整体重定位。
+    #[test]
+    fn appended_scenes_are_rebased_after_existing_primitives() {
+        let mut collector = SceneCollector::new(0);
+        // 先模拟云母背板：占用载荷 0、变换 0 与裁剪 0。
+        collector.push(
+            1,
+            WidgetOutput {
+                primitives: vec![GpuPrimitiveInstance::default()],
+                payloads: vec![GpuPayload::default()],
+                ..Default::default()
+            },
+        );
+        collector.push_transform(GpuTransform::IDENTITY);
+        collector.push_clip(GpuClipNode::default(), Rect::ZERO);
+
+        let scene = [
+            GpuPrimitiveInstance {
+                extra_payload_idx: 3,
+                transform_idx: 1,
+                clip_idx: 2,
+                ..Default::default()
+            },
+            GpuPrimitiveInstance {
+                extra_payload_idx: 0,
+                transform_idx: TRANSFORM_ANIMATED_BIT | 1,
+                clip_idx: CLIP_NONE,
+                ..Default::default()
+            },
+        ];
+        collector.append_scene(
+            &scene,
+            &[GpuTransform::IDENTITY],
+            &[GpuClipNode::default()],
+            &[GpuPayload::default()],
+        );
+
+        let rebased = collector.primitives[1];
+        assert_eq!(rebased.extra_payload_idx, 4);
+        // `push_transform` 会在空表里补上槽位 0 的单位变换，因此基准为 2。
+        assert_eq!(rebased.transform_idx, 3);
+        assert_eq!(rebased.clip_idx, 3);
+        // 动画标志位必须保留；`CLIP_NONE` 不得被加上偏移。
+        let animated = collector.primitives[2];
+        assert_eq!(animated.extra_payload_idx, 1);
+        assert_eq!(animated.transform_idx, TRANSFORM_ANIMATED_BIT | 3);
+        assert_eq!(animated.clip_idx, CLIP_NONE);
     }
 }

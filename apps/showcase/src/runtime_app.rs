@@ -206,14 +206,14 @@ impl Application for GalleryApp {
             self.rebuild(viewport, inter);
         }
         let collector = view.collector();
-        collector
-            .primitives
-            .extend_from_slice(&self.scene.primitives);
-        collector
-            .transforms
-            .extend_from_slice(&self.scene.transforms);
-        collector.clips.extend_from_slice(&self.scene.clips);
-        collector.payloads.extend_from_slice(&self.scene.payloads);
+        // 外壳场景自带从 0 起算的载荷 / 变换 / 裁剪索引；收集器里已经压入了
+        // 云母背板等图元，必须重定位后再拼接，否则字形的 UV 会整体错位。
+        collector.append_scene(
+            &self.scene.primitives,
+            &self.scene.transforms,
+            &self.scene.clips,
+            &self.scene.payloads,
+        );
         // 这些区域是运行时路由器在下一帧进行拾取的依据；外壳从不自行路由。
         // 这里采用拷贝而非移动，以便检查上一帧的调用方仍能看到它们。
         //
