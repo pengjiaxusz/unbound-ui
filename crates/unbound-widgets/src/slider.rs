@@ -88,11 +88,13 @@ impl SliderTokens {
             fill: Token::PRIMARY,
             fill_hover: Token::PRIMARY_HOVER,
             fill_pressed: Token::PRIMARY_PRESSED,
-            thumb: Token::CONTROL_THUMB,
+            // WinUI 的滑块拇指内圆是强调色，而不是纯白：
+            // 浅色 `#005FB8` / 深色 `#60CDFF`，与轨道填充同源。
+            thumb: Token::PRIMARY,
             thumb_border: Token::OUTLINE,
-            track_disabled: Token::CONTROL_DISABLED_BG,
-            fill_disabled: Token::CONTROL_DISABLED_BG,
-            thumb_disabled: Token::CONTROL_DISABLED_THUMB,
+            track_disabled: Token::SLIDER_TRACK_DISABLED,
+            fill_disabled: Token::SLIDER_FILL_DISABLED,
+            thumb_disabled: Token::SLIDER_THUMB_DISABLED,
             thumb_border_disabled: Token::CONTROL_DISABLED_BORDER,
             label: Token::TEXT_SECONDARY,
             label_disabled: Token::TEXT_DISABLED,

@@ -40,7 +40,10 @@ use crate::slider::{emit_slider, value_from_pointer, Orientation, SliderDesc, Sl
 use crate::split_button::{
     emit_split_button_with_glyphs, SplitButtonDesc, SplitButtonState, DROPDOWN_WIDTH,
 };
-use crate::switch::{emit_switch, SwitchDesc, SwitchTokens, SWITCH_LABEL_GAP};
+use crate::switch::{
+    emit_switch, SwitchDesc, SwitchLayout, SwitchTokens, SWITCH_HEADER_GAP, SWITCH_HEADER_LINE,
+    SWITCH_LABEL_GAP,
+};
 use crate::table::{emit_table, ColumnSpec, TableDesc, TableRow, TableState};
 use crate::task_hud::{emit_task_hud, TaskHudDesc};
 use crate::terminal_view::{
@@ -623,11 +626,21 @@ impl UiWidget for SwitchDesc {
         } else {
             measured.x
         };
-        // 标签在左、轨道在右，两者之间留 10px：
-        // 旧算法只按「轨道宽 + 标签宽」估算总宽，却把标签画在轨道右侧 50px 处，
-        // 于是标签必然压在轨道上——设置页里的开关会盖住自己的文字。
-        let w = (label_w + SWITCH_LABEL_GAP + self.track_size.0).max(self.rect.width());
-        let h = self.track_size.1.max(26.0).max(self.rect.height());
+        let (w, h) = match self.layout {
+            // Header 排版：标签独占一行，轨道在下一行左对齐。
+            SwitchLayout::Header => (
+                label_w.max(self.track_size.0).max(self.rect.width()),
+                (SWITCH_HEADER_LINE + SWITCH_HEADER_GAP + self.track_size.1)
+                    .max(self.rect.height()),
+            ),
+            // 标签在左、轨道在右，两者之间留 10px：
+            // 旧算法只按「轨道宽 + 标签宽」估算总宽，却把标签画在轨道右侧 50px 处，
+            // 于是标签必然压在轨道上——设置页里的开关会盖住自己的文字。
+            SwitchLayout::Row => (
+                (label_w + SWITCH_LABEL_GAP + self.track_size.0).max(self.rect.width()),
+                self.track_size.1.max(26.0).max(self.rect.height()),
+            ),
+        };
         Vec2::new(w, h)
     }
 
@@ -651,15 +664,23 @@ impl UiWidget for SwitchDesc {
         desc.rect = rect;
         desc.on = *state;
         control.selected = desc.on;
-        // Win11 的设置行是「文字在左、开关在右」：标签占据轨道左侧的全部可用宽度，
-        // 轨道固定贴在行末，两者互不重叠。
-        let label_r = Rect::new(
-            rect.origin.x,
-            rect.origin.y,
-            (rect.width() - desc.track_size.0 - SWITCH_LABEL_GAP).max(0.0),
-            rect.height(),
-        );
-        let glyphs = text_ctx.shape_line(
+        // Win11 设置行是「文字在左、开关在右」；WinUI 模板的 Header 排版则是
+        // 「标题在上、开关在左下」。两种排版各自决定标签字形的位置。
+        let label_r = match desc.layout {
+            SwitchLayout::Header => Rect::new(
+                rect.origin.x,
+                rect.origin.y,
+                rect.width(),
+                SWITCH_HEADER_LINE,
+            ),
+            SwitchLayout::Row => Rect::new(
+                rect.origin.x,
+                rect.origin.y,
+                (rect.width() - desc.track_size.0 - SWITCH_LABEL_GAP).max(0.0),
+                rect.height(),
+            ),
+        };
+        let mut glyphs = text_ctx.shape_line(
             &desc.label,
             label_r,
             14.0,
@@ -667,6 +688,13 @@ impl UiWidget for SwitchDesc {
             AlignX::Left,
             AlignY::Middle,
         );
+        if desc.layout == SwitchLayout::Header {
+            // WinUI 的 Header 行盒顶部内边距比本引擎少 1px。直接平移字形四边形
+            // 可以保证墨迹顶端与参考截图逐像素对齐，且不会触发重新光栅化。
+            for quad in &mut glyphs {
+                quad.rect.origin.y -= 1.0;
+            }
+        }
         emit_switch(node, &desc, control, &glyphs, SwitchTokens::standard())
     }
 }

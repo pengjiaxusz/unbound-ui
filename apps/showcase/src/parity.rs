@@ -184,7 +184,8 @@ fn emit_case(
             size
         }
         "ToggleSwitch" => {
-            let desc = SwitchDesc::labeled("ToggleSwitch", checked);
+            let desc = SwitchDesc::labeled("ToggleSwitch", checked)
+                .with_layout(unbound_widgets::SwitchLayout::Header);
             let state = desc.initial_state();
             let size = desc.intrinsic_size(text_ctx);
             push(

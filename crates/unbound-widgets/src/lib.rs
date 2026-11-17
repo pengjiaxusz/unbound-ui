@@ -522,7 +522,7 @@ pub use split_pane::{
     SplitPaneState, SplitPaneTokens, SplitSide,
 };
 pub use stepper::{emit_stepper, StepItem, StepStatus, StepperDesc, StepperOrientation};
-pub use switch::{SwitchDesc, SwitchTokens};
+pub use switch::{SwitchDesc, SwitchLayout, SwitchTokens};
 pub use table::{
     emit_table, AlignX as TableAlignX, ColumnSpec, RowWindow, SortDir, TableDesc, TableRow,
     TableState, TableTokens,
