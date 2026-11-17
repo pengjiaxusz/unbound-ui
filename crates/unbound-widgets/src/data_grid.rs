@@ -197,10 +197,9 @@ pub fn emit_data_grid(
         for c in 0..cols {
             let cell_r = desc.cell_rect(r, c);
             let is_active = desc.active_cell == (r + desc.row_offset, c);
-            let fill = if is_active {
-                Token::HOVER // TabularSurfaceRowBackgroundSelected = SubtleFillColorSecondary
-            } else if hovered || r == 0 {
-                Token::HOVER // SubtleFillColorSecondary
+            // 选中行与悬停行（含表头行）使用同一个 SubtleFillColorSecondary。
+            let fill = if is_active || hovered || r == 0 {
+                Token::HOVER
             } else {
                 Token::NONE // TabularSurfaceRowBackground = SubtleFillColorTransparent
             };

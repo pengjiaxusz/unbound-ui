@@ -317,12 +317,12 @@ fn write_reports(
     let mut json = String::from("{\n  \"cases\": [\n");
     for (index, case) in summary.cases.iter().enumerate() {
         let _ =
-            write!(
+            writeln!(
             json,
             "    {{ \"name\": \"{}\", \"control\": \"{}\", \"state\": \"{}\", \"theme\": \"{}\", \
              \"meanDe\": {:.4}, \"p95De\": {:.4}, \"p99De\": {:.4}, \"maxDe\": {:.4}, \
              \"overLimitRatio\": {:.6}, \"referenceBbox\": {:?}, \"oursBbox\": {:?}, \
-             \"intrinsic\": [{:.2}, {:.2}], \"referenceSize\": [{:.2}, {:.2}], \"pass\": {} }}{}\n",
+             \"intrinsic\": [{:.2}, {:.2}], \"referenceSize\": [{:.2}, {:.2}], \"pass\": {} }}{}",
             case.name,
             case.control,
             case.state,
@@ -372,9 +372,9 @@ fn render_html(
          img{image-rendering:pixelated;border:1px solid #d6d6d6;background:#fff}\n\
          </style>\n",
     );
-    let _ = write!(
+    let _ = writeln!(
         html,
-        "<h1>unbound-ui parity report</h1><div class=\"meta\">{} / {} cases pass · mean ΔE2000 ≤ {:.1}, p99 ≤ {:.1}, bbox ±1 px</div>\n",
+        "<h1>unbound-ui parity report</h1><div class=\"meta\">{} / {} cases pass · mean ΔE2000 ≤ {:.1}, p99 ≤ {:.1}, bbox ±1 px</div>",
         summary.passed(),
         summary.cases.len(),
         MEAN_LIMIT,
@@ -391,9 +391,9 @@ fn render_html(
         } else {
             "<span class=\"fail\">fail</span>"
         };
-        let _ = write!(
+        let _ = writeln!(
             html,
-            "<tr><td>{}</td><td>{:.2}</td><td>{:.2}</td><td>{:.2}</td><td>{:.1}</td><td>{:.2}%</td><td>{:?}</td><td>{:.0}×{:.0} (ref {:.0}×{:.0})</td><td>{}</td></tr>\n",
+            "<tr><td>{}</td><td>{:.2}</td><td>{:.2}</td><td>{:.2}</td><td>{:.1}</td><td>{:.2}%</td><td>{:?}</td><td>{:.0}×{:.0} (ref {:.0}×{:.0})</td><td>{}</td></tr>",
             case.name,
             case.mean_de,
             case.p95_de,
@@ -414,13 +414,13 @@ fn render_html(
         let reference_png = reference_dir.join(format!("{}.png", case.name));
         let ours_png = ours_dir.join(format!("{}.png", case.name));
         let heat_png = heat_dir.join(format!("{}.png", case.name));
-        let _ = write!(
+        let _ = writeln!(
             html,
             "<div class=\"case\"><h2>{name} · mean {mean:.2} · p99 {p99:.2} · bbox {bbox:?}</h2><div class=\"shots\">\
              <figure><img src=\"{ref_url}\" width=\"420\" height=\"160\"><figcaption>WinUI 3 reference</figcaption></figure>\
              <figure><img src=\"{ours_url}\" width=\"420\" height=\"160\"><figcaption>unbound-ui</figcaption></figure>\
              <figure><img src=\"{heat_url}\" width=\"420\" height=\"160\"><figcaption>ΔE heatmap</figcaption></figure>\
-             </div></div>\n",
+             </div></div>",
             name = case.name,
             mean = case.mean_de,
             p99 = case.p99_de,

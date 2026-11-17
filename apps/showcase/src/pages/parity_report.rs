@@ -367,7 +367,7 @@ fn draw_case(
     let left = row.origin.x + (row.size.x - total) * 0.5;
     let top = row.origin.y + 36.0;
     let hub = ctx.state.demo.asset_hub.as_ref();
-    for which in 0..3 {
+    for (which, image) in case.images.iter().enumerate() {
         let thumb = Rect::new(
             left + which as f32 * (image_width + THUMB_GAP),
             top,
@@ -379,7 +379,7 @@ fn draw_case(
         let Some(hub) = hub else {
             continue;
         };
-        let Some(id) = case.images[which] else {
+        let Some(id) = *image else {
             continue;
         };
         let part = 100 + (index as u16) * 4 + which as u16;
