@@ -63,6 +63,9 @@ impl MicaBackdrop {
     }
 
     /// 开关云母。关闭会立即丢弃纹理，下一帧根背景回到不透明纯色。
+    ///
+    /// 同时重置生成器：自绘路径再次被启用时必须重新请求纹理，
+    /// 否则上一代的「已结算」状态会让背板永远停在不可见。
     pub fn set_enabled(&mut self, enabled: bool) {
         if self.enabled == enabled {
             return;
@@ -71,6 +74,9 @@ impl MicaBackdrop {
         self.asset = None;
         self.pending = None;
         self.visible = false;
+        if !enabled {
+            self.generator = BackdropGenerator::new();
+        }
     }
 
     /// 云母是否启用。

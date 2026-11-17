@@ -23,7 +23,7 @@ use unbound_gpu::atlas::{AtlasKind, AtlasSet, AtlasUpload};
 use unbound_gpu::data::PassLayer;
 use unbound_gpu::device::{Gpu, GpuConfig};
 use unbound_gpu::surface::{AcquireOutcome, PresentOutcome, Surface, Swapchain};
-use unbound_gpu::swapchain::PresentConfig;
+use unbound_gpu::swapchain::{CompositeAlphaMode, PresentConfig};
 use unbound_gpu::{Camera, Renderer, SceneUpload};
 use unbound_input::{resize_edge, CursorKind, PointerButton, ResizeEdge};
 use unbound_math::Vec2;
@@ -374,6 +374,46 @@ impl Showcase {
             window.set_cursor(cursor_icon(kind));
         }
     }
+}
+
+/// 提取 Win32 原生窗口句柄。
+fn window_hwnd(window: &Window) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match window.window_handle().ok().map(|handle| handle.as_raw()) {
+        Some(RawWindowHandle::Win32(handle)) => Some(handle.hwnd.get()),
+        _ => None,
+    }
+}
+
+impl Showcase {
+    /// 将解析后的后景模式同步到宿主资源。
+    ///
+    /// 只有实际生效模式变化时才更新清屏 alpha、DWM 材质与失焦锁定；
+    /// 透明性翻转（原生 ↔ 非原生）会请求重建交换链，同透明性的切换不重建。
+    fn sync_backdrop_host(&mut self, window: &Window) {
+        let was_native = self.shell().state.resolved_backdrop.uses_native_path();
+        if !self.shell_mut().sync_backdrop_mode() {
+            return;
+        }
+        let native = self.shell().state.resolved_backdrop.uses_native_path();
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_clear_alpha(if native { 0.0 } else { 1.0 });
+        }
+        if let Some(hwnd) = window_hwnd(window) {
+            let _ = unbound_platform::set_window_backdrop(
+                hwnd,
+                unbound_platform::WindowBackdropMaterial::for_native_path(native),
+            );
+        }
+        if let Some(metrics) = &self.frame_metrics {
+            // 原生模式下锁定失焦激活态，避免窗口失活时云母退化为纯色。
+            metrics.set_lock_mica_active(native);
+        }
+        if native != was_native {
+            self.swapchain_dirty = true;
+        }
+        self.app.invalidate();
+    }
 
     /// 为新的表面尺寸重建 swapchain。
     ///
@@ -384,6 +424,7 @@ impl Showcase {
         // 在借用渲染器前先读取上限：两者都经由 `self`，
         // 读取外壳会与可变借用产生冲突。
         let limit = self.shell().state.effective_fps_limit();
+        let native_backdrop = self.shell().state.resolved_backdrop.uses_native_path();
         let Some(renderer) = &mut self.renderer else {
             return false;
         };
@@ -399,10 +440,16 @@ impl Showcase {
         // 原生 Win32 后端通过窗口 DC 查询所在显示器的刷新率；查询失败时回退 60 Hz。
         let refresh_hz = window.refresh_rate_hz().unwrap_or(60.0);
         let allow_tearing = limit == 0 || (limit as f32) > refresh_hz + 0.5;
+        // 合成方式跟随实际生效的后景模式：原生路径需要预乘 alpha 才能透出 DWM 材质。
         let present = PresentConfig::from_capabilities(
             &renderer.gpu.enabled_device_extensions,
             allow_tearing,
-        );
+        )
+        .with_composite_alpha(if native_backdrop {
+            CompositeAlphaMode::PreMultiplied
+        } else {
+            CompositeAlphaMode::Opaque
+        });
         let Some(swapchain) = &mut self.swapchain else {
             return false;
         };
@@ -664,7 +711,19 @@ impl PlatformApp for Showcase {
 
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
-        let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false);
+        // 原生后景可用性的图形层一半：表面必须支持预乘 alpha 合成。
+        // 操作系统构建号条件由后续工单在同一接缝补充（#4）。
+        let native_available = surface.supports_premultiplied_alpha(&gpu).unwrap_or(false);
+        self.shell_mut().state.native_backdrop_available = native_available;
+        self.shell_mut().sync_backdrop_mode();
+        // 必须在创建首条交换链之前解析实际模式，使首帧就是正确后景而非先错后纠正。
+        let native_backdrop = self.shell().state.resolved_backdrop.uses_native_path();
+        let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false)
+            .with_composite_alpha(if native_backdrop {
+                CompositeAlphaMode::PreMultiplied
+            } else {
+                CompositeAlphaMode::Opaque
+            });
         let swapchain = match Swapchain::new(&gpu, &surface, width, height, &present) {
             Ok(swapchain) => swapchain,
             Err(error) => {
@@ -691,6 +750,8 @@ impl PlatformApp for Showcase {
                 return;
             }
         };
+        // 清屏 alpha 与交换链合成方式一致：原生模式全透明，其它模式保持主题表面色。
+        renderer.set_clear_alpha(if native_backdrop { 0.0 } else { 1.0 });
         let atlases = match AtlasSet::new(&renderer.gpu, 64) {
             Ok(atlases) => Arc::new(atlases),
             Err(error) => {
@@ -727,13 +788,14 @@ impl PlatformApp for Showcase {
         let metrics = Arc::new(FrameHitMetrics::new());
         metrics.set_scale_factor(self.effective_scale());
         install_custom_frame(hwnd, Arc::clone(&metrics));
-        // Win11：DWM 负责圆角、投影与 1px 边框；云母本体由应用自绘
-        // （交换链是 OPAQUE 合成，DWM 材质层透不出来）。
+        // 后景材质由解析后的实际模式决定：原生 → 标准云母；自绘/关闭 → 禁用材质。
         unbound_platform::set_window_dark_mode(hwnd, self.shell().state.theme.is_dark());
         let _ = unbound_platform::set_window_backdrop(
             hwnd,
-            unbound_platform::WindowBackdropMaterial::Mica,
+            unbound_platform::WindowBackdropMaterial::for_native_path(native_backdrop),
         );
+        // 原生模式启用失焦锁定，避免窗口失活时云母退化为纯色。
+        metrics.set_lock_mica_active(native_backdrop);
         self.frame_metrics = Some(metrics);
 
         // 呈现链刚刚按窗口尺寸创建：该请求已提交，因此首帧不会再次重建。
@@ -1166,6 +1228,13 @@ impl Showcase {
         self.upload_glyphs();
         self.write_theme_if_needed();
 
+        // 次级窗口始终使用不透明交换链，不参与后景模式：
+        // 渲染前临时恢复不透明清屏，结束后还原主窗口的透明度设置。
+        let primary_clear_alpha = if self.shell().state.resolved_backdrop.uses_native_path() {
+            0.0
+        } else {
+            1.0
+        };
         let Some(renderer) = &mut self.renderer else {
             return Flow::Continue;
         };
@@ -1210,7 +1279,10 @@ impl Showcase {
             aux_changed: false,
             backdrops: &[],
         };
-        if let Err(error) = renderer.render_into_swapchain(&scene, &image, actual_w, actual_h) {
+        renderer.set_clear_alpha(1.0);
+        let render_result = renderer.render_into_swapchain(&scene, &image, actual_w, actual_h);
+        renderer.set_clear_alpha(primary_clear_alpha);
+        if let Err(error) = render_result {
             eprintln!("secondary render failed: {error}");
             return Flow::Continue;
         }
@@ -1234,6 +1306,9 @@ impl Showcase {
         self.sync_window_size(window);
         let scale = self.effective_scale();
         self.shell_mut().set_effective_scale(scale);
+        // 每帧在重建交换链之前同步后景模式：选择变化会在本帧写入实际生效模式，
+        // 透明性翻转则在此处标记交换链需要重建。
+        self.sync_backdrop_host(window);
 
         // 窗口尺寸只是*请求*。驱动决定 swapchain 图像大小，合成器显示的是图像，
         // 因此以下一切均由已提交范围推导：布局与相机从而始终描述同一幅画面。

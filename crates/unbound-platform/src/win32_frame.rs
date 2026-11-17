@@ -44,6 +44,19 @@ impl WindowBackdropMaterial {
             Self::Tabbed => 4,  // DWMSBT_TABBEDWINDOW
         }
     }
+
+    /// 把后景路径映射为 DWM 系统背景材质。
+    ///
+    /// 原生路径使用标准云母；自绘与关闭都禁用材质，
+    /// 避免 Win11 的 DWM 材质干扰自绘纹理的视觉对照（等价于 Win10 环境）。
+    #[must_use]
+    pub const fn for_native_path(uses_native_path: bool) -> Self {
+        if uses_native_path {
+            Self::Mica
+        } else {
+            Self::None
+        }
+    }
 }
 
 /// 用于自定义标题栏与窗口按钮命中测试的原子指标。
@@ -573,6 +586,20 @@ pub fn set_window_backdrop(hwnd: isize, material: WindowBackdropMaterial) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backdrop_material_follows_the_resolved_native_path() {
+        assert_eq!(
+            WindowBackdropMaterial::for_native_path(true),
+            WindowBackdropMaterial::Mica,
+            "the native path must use the standard DWM Mica material"
+        );
+        assert_eq!(
+            WindowBackdropMaterial::for_native_path(false),
+            WindowBackdropMaterial::None,
+            "self-drawn and off paths must disable the DWM material"
+        );
+    }
 
     #[test]
     fn frame_hit_metrics_tracks_and_scales_coordinates() {

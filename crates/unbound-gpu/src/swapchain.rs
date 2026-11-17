@@ -33,6 +33,39 @@ pub enum ResizeBehaviour {
     OneToOne,
 }
 
+/// 交换链的合成方式（`VkCompositeAlphaFlagBitsKHR`）。
+///
+/// 只有预乘 alpha 合成才能让 DWM 系统背景材质透过客户区；不透明合成则是既有默认行为。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum CompositeAlphaMode {
+    /// 客户区像素完全不透明（`VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR`）。
+    #[default]
+    Opaque,
+    /// 客户区像素按预乘 alpha 与下层合成（`VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR`）。
+    PreMultiplied,
+}
+
+impl CompositeAlphaMode {
+    /// 以表面声明的合成能力为准解析实际采用的合成方式。
+    ///
+    /// 请求预乘但表面不支持时安全回退到不透明，调用方无需自行判断能力。
+    #[must_use]
+    pub const fn resolve(self, supports_premultiplied: bool) -> Self {
+        match self {
+            Self::PreMultiplied if supports_premultiplied => Self::PreMultiplied,
+            Self::PreMultiplied | Self::Opaque => Self::Opaque,
+        }
+    }
+
+    /// 是否允许提交呈现缩放参数。
+    ///
+    /// 平台硬限制：预乘 alpha 合成与呈现缩放不能共存，因此透明模式下必须放弃缩放请求。
+    #[must_use]
+    pub const fn allows_present_scaling(self) -> bool {
+        matches!(self, Self::Opaque)
+    }
+}
+
 /// 请求使用的呈现模式。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PresentMode {
@@ -84,6 +117,8 @@ fn have_extension(_names: &[&str], available: bool) -> bool {
 pub struct PresentConfig {
     pub mode: PresentMode,
     pub resize: ResizeBehaviour,
+    /// 请求的交换链合成方式；创建时按表面能力解析，默认不透明。
+    pub composite_alpha: CompositeAlphaMode,
     /// 请求呈现围栏，确保仅当 GPU 完成扫描输出后才销毁交换链。
     pub present_fence: bool,
     /// 阻塞等待直至画面真正呈现到屏幕。
@@ -106,10 +141,20 @@ impl PresentConfig {
             // 在尺寸变更与交换链重建之间的单帧内，将旧图像锚定在左上角而非拉伸铺满
             // 新窗口。
             resize: ResizeBehaviour::OneToOne,
+            composite_alpha: CompositeAlphaMode::Opaque,
             present_fence: has_maintenance1,
             // 阻塞等待呈现会将无上限运行锁死在显示器刷新率上，而传入 `0` 正是为了避免此事。
             wait_for_present: has_present_wait && !allow_tearing,
         }
+    }
+
+    /// 覆盖请求的交换链合成方式。
+    ///
+    /// 表面能力不足时由创建流程回退为不透明，调用方只需表达意图。
+    #[must_use]
+    pub const fn with_composite_alpha(mut self, alpha: CompositeAlphaMode) -> Self {
+        self.composite_alpha = alpha;
+        self
     }
 
     /// `extensions` 中仍缺失的扩展列表。
@@ -202,5 +247,45 @@ mod tests {
             "VK_PRESENT_MODE_FIFO_LATEST_READY_EXT"
         );
         assert_eq!(PresentMode::Fifo.name(), "VK_PRESENT_MODE_FIFO_KHR");
+    }
+
+    /// 交换链默认保持不透明合成，既有调用方无需了解新能力。
+    #[test]
+    fn the_default_composition_is_opaque() {
+        let config = PresentConfig::from_capabilities(&exts(&["VK_KHR_swapchain"]), false);
+        assert_eq!(config.composite_alpha, CompositeAlphaMode::Opaque);
+    }
+
+    /// 请求预乘合成时以表面能力为准，不支持则安全回退为不透明。
+    #[test]
+    fn premultiplied_composition_falls_back_without_surface_support() {
+        assert_eq!(
+            CompositeAlphaMode::PreMultiplied.resolve(false),
+            CompositeAlphaMode::Opaque,
+            "a surface without premultiplied support must stay opaque"
+        );
+        assert_eq!(
+            CompositeAlphaMode::PreMultiplied.resolve(true),
+            CompositeAlphaMode::PreMultiplied,
+            "a capable surface must honour the premultiplied request"
+        );
+        assert_eq!(
+            CompositeAlphaMode::Opaque.resolve(true),
+            CompositeAlphaMode::Opaque,
+            "an opaque request must never switch to premultiplied"
+        );
+    }
+
+    /// 预乘合成与呈现缩放互斥，透明模式下不得提交任何缩放参数。
+    #[test]
+    fn premultiplied_composition_forbids_present_scaling() {
+        assert!(
+            !CompositeAlphaMode::PreMultiplied.allows_present_scaling(),
+            "transparent presentation must not request present scaling"
+        );
+        assert!(
+            CompositeAlphaMode::Opaque.allows_present_scaling(),
+            "opaque presentation keeps the existing scaling behaviour"
+        );
     }
 }

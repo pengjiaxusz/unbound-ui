@@ -199,9 +199,15 @@ impl Application for GalleryApp {
         // 可见性翻转本身必须触发重建，否则不透明底色会一直盖着已经就绪的纹理。
         // 后景模式先于绘制同步：选择变化会在同一帧写入实际生效模式并请求重建。
         self.sync_backdrop_mode();
+        // 只有自绘路径才需要生成、同步并绘制壁纸纹理；原生与关闭模式跳过，
+        // 避免无意义的 CPU 与内存开销。
+        let draws_self_drawn = self.state.resolved_backdrop.draws_self_drawn_texture();
+        self.mica.set_enabled(draws_self_drawn);
         let was_mica_visible = self.mica.visible();
-        self.mica
-            .sync(viewport, self.state.theme.is_dark(), view.event_sender());
+        if draws_self_drawn {
+            self.mica
+                .sync(viewport, self.state.theme.is_dark(), view.event_sender());
+        }
         let mica_visible = self
             .mica
             .draw(view, unbound_app::ui_key!("showcase_mica_backdrop"));
