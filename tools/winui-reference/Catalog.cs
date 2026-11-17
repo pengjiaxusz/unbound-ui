@@ -27,6 +27,18 @@ internal static class Catalog
 
     public static IReadOnlyList<string> ReservedStates => ReservedStateList;
 
+    /// <summary>该控件是否支持某个状态（批量采集据此跳过无效组合）。</summary>
+    public static bool SupportsState(string controlName, string state)
+    {
+        var canonical = CanonicalName(controlName);
+        return state.ToLowerInvariant() switch
+        {
+            "normal" or "disabled" or "focused" => true,
+            "checked" => canonical is "CheckBox" or "ToggleSwitch",
+            _ => false,
+        };
+    }
+
     /// <summary>把大小写不敏感的输入还原成清单里的规范名称；未知名称原样返回。</summary>
     public static string CanonicalName(string name)
     {
