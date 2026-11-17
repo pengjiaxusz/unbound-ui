@@ -19,6 +19,9 @@ dotnet build -c Release
 
 .\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe `
     --out .\captures --control Button --state normal --theme light
+
+# 批量采集全部试点组合（单进程、单窗口，不反复弹窗）
+.\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe --batch --out .\captures
 ```
 
 ## 与 unbound-ui 的对照闭环
@@ -52,6 +55,7 @@ dotnet build -c Release
 | `--theme <theme>` | `light` `dark` | `light` | 通过 `Host.RequestedTheme` 切换 |
 | `--width <N>` | 64..8192 | `420` | 窗口客户区宽度（物理像素） |
 | `--height <N>` | 64..8192 | `160` | 窗口客户区高度（物理像素） |
+| `--batch` | 开关 | 关闭 | 单进程跑完全部试点组合（normal / disabled / checked × 明暗），忽略 `--control/--state/--theme` |
 
 未知控件会在错误信息中打印可用控件清单并以退出码 `2` 退出；参数错误同样退出码 `2`；截图过程异常退出码 `1`。错误信息同时写入可执行文件同目录的 `winui-reference.error.log`（WinExe 从控制台启动时不一定能拿到 stderr）。
 
