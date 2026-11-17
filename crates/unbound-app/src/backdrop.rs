@@ -62,19 +62,19 @@ impl MicaBackdrop {
         Self::default()
     }
 
-    /// 开关云母。关闭会立即丢弃纹理，下一帧根背景回到不透明纯色。
+    /// 开关云母。关闭只停止绘制，保留上一代纹理与生成器状态。
     ///
-    /// 同时重置生成器：自绘路径再次被启用时必须重新请求纹理，
-    /// 否则上一代的「已结算」状态会让背板永远停在不可见。
+    /// 原生与关闭模式都不需要壁纸纹理，但用户切回自绘时必须立刻复用旧纹理：
+    /// 若关闭时丢弃纹理，重新生成期间根背景会先闪回不透明纯色，与「新纹理
+    /// 就绪前保留旧纹理」的不变量冲突。只有从未生成成功过（没有旧纹理可复用）
+    /// 时才重置生成器，让重新启用后能再次请求。
     pub fn set_enabled(&mut self, enabled: bool) {
         if self.enabled == enabled {
             return;
         }
         self.enabled = enabled;
-        self.asset = None;
-        self.pending = None;
         self.visible = false;
-        if !enabled {
+        if enabled && self.asset.is_none() {
             self.generator = BackdropGenerator::new();
         }
     }
@@ -175,12 +175,27 @@ mod tests {
     }
 
     #[test]
-    fn disabling_drops_the_texture() {
+    fn disabling_hides_the_texture_but_keeps_it_for_a_flash_free_reenable() {
         let mut backdrop = MicaBackdrop::new();
+        backdrop.asset = Some(AssetId(7));
+        backdrop.visible = true;
+
         backdrop.set_enabled(false);
         assert!(!backdrop.is_enabled());
-        assert!(backdrop.asset().is_none());
         assert!(!backdrop.visible());
+        assert_eq!(
+            backdrop.asset(),
+            Some(AssetId(7)),
+            "the previous texture must survive so re-enabling can draw it immediately"
+        );
+
+        backdrop.set_enabled(true);
+        assert!(backdrop.is_enabled());
+        assert_eq!(
+            backdrop.asset(),
+            Some(AssetId(7)),
+            "re-enabling must not drop the texture that is about to be drawn again"
+        );
     }
 
     #[test]
