@@ -25,6 +25,7 @@ public sealed partial class CaptureWindow : Window
 {
     private readonly CaptureOptions _options;
     private readonly IReadOnlyList<CaptureCase> _cases;
+    private readonly System.Diagnostics.Stopwatch _settle = new();
     private int _caseIndex;
     private FrameworkElement? _control;
     private DispatcherQueueTimer? _timeoutTimer;
@@ -75,6 +76,7 @@ public sealed partial class CaptureWindow : Window
         }
 
         _renderingTicks = 0;
+        _settle.Restart();
         _captureStarted = 0;
         return true;
     }
@@ -113,8 +115,10 @@ public sealed partial class CaptureWindow : Window
             Catalog.ApplyFocus(_control!, ActiveCase.State);
         }
 
-        // 第 3 个渲染帧再截图：前两帧用于布局、主题切换与状态生效上屏。
-        if (_renderingTicks < 3)
+        // 至少 3 个渲染帧，并等待 350ms 让 VisualState 动画收敛：
+        // ToggleSwitch 的开/关过渡约 200ms，过早截图会拍到半透明强调色轨道，
+        // 让「已选中」基线变成动画中间帧。
+        if (_renderingTicks < 3 || _settle.ElapsedMilliseconds < 350)
         {
             return;
         }

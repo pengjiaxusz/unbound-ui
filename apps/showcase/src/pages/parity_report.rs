@@ -228,9 +228,9 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
             report.cases.len(),
             if zh { "通过" } else { "pass" },
             if zh {
-                "包围盒逐边一致"
+                "包围盒 ≤ 1px"
             } else {
-                "exact content bounds"
+                "content bounds ±1 px"
             }
         ),
         Rect::new(
