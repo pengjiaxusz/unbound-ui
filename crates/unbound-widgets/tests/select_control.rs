@@ -114,17 +114,20 @@ fn an_all_disabled_select_never_moves_its_highlight() {
 #[test]
 fn disabled_options_are_disabled_menu_rows() {
     let desc = desc().with_disabled_option(2);
-    let menu = desc.menu(Rect::new(0.0, 0.0, 800.0, 600.0));
+    let menu = desc.menu(&SelectState::new(), Rect::new(0.0, 0.0, 800.0, 600.0));
     assert!(!menu.items[0].disabled);
     assert!(menu.items[2].disabled);
     assert_eq!(menu.items.len(), 4);
     // 下拉列表被夹紧在给定的视口范围内。
     assert_eq!(menu.viewport, Some(Rect::new(0.0, 0.0, 800.0, 600.0)));
     assert_eq!(menu.rect.width(), desc.rect.width());
-    assert_eq!(menu.rect.origin.y, desc.rect.max().y + 4.0);
+    assert_eq!(menu.item_height, 37.0);
     assert_eq!(
         Vec2::new(menu.rect.width(), menu.rect.height()),
         // 四行 × 37px：Win11 菜单项的行高实测值（`SELECT_ROW_HEIGHT`）。
         Vec2::new(220.0, 148.0)
     );
+    // 未选中任何项时，首行中心与触发器中心对齐（WinUI 的「选中项压住触发器」）。
+    let first_row_center = menu.rect.origin.y + 0.5 * 37.0;
+    assert!((first_row_center - desc.rect.center().y).abs() < 0.01);
 }

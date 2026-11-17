@@ -476,8 +476,8 @@ pub use number_input::{
     NUMBER_RADIUS, SPIN_WIDTH,
 };
 pub use overlay::{
-    place_anchored_popup, place_tooltip_in_window, BackdropRequest, OverlayEntry, OverlayKind,
-    OverlayStack, PlacedPopup, Placement, TOOLTIP_VIEWPORT_MARGIN,
+    place_anchored_popup, place_combo_popup, place_tooltip_in_window, BackdropRequest,
+    OverlayEntry, OverlayKind, OverlayStack, PlacedPopup, Placement, TOOLTIP_VIEWPORT_MARGIN,
 };
 pub use pagination::{emit_pagination, PaginationDesc, PaginationState};
 pub use pin_input::{emit_pin_input, PinInputDesc, PinInputState};

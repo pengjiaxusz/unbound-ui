@@ -15,7 +15,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::menu::{MenuItem, MenuState};
-use crate::overlay::place_anchored_popup;
+use crate::overlay::place_combo_popup;
 use crate::primitive::{focus_ring, instance, surface};
 use crate::{ControlState, WidgetDesc, WidgetOutput};
 
@@ -26,6 +26,16 @@ pub const SELECT_LAYER: u8 = 1;
 /// 实测 Win11「个性化 > 颜色 > 选择模式」下拉列表：三行文字基线间距 37px，
 /// 选中项高亮块高 32px（上下各留 2.5px 间隙）。
 pub const SELECT_ROW_HEIGHT: f32 = 37.0;
+/// 选项高亮块相对浮层左沿的水平缩进。
+pub const SELECT_HIGHLIGHT_INSET_X: f32 = 3.0;
+/// 选项高亮块相对行顶 / 行底的垂直缩进。
+pub const SELECT_HIGHLIGHT_INSET_Y: f32 = 2.5;
+/// 选项文字相对高亮块左沿的内边距。
+///
+/// 实测 Win11：高亮块左沿 x=924，文字左沿 x=938，即 14px。
+pub const SELECT_TEXT_INSET: f32 = 14.0;
+/// ComboBox 浮层与视口边缘之间的安全边距。
+pub const SELECT_POPUP_MARGIN: f32 = 8.0;
 const CHEVRON_HALF_WIDTH: f32 = 4.0;
 /// 展开箭头的半高。
 ///
@@ -119,17 +129,24 @@ impl SelectDesc {
     }
 
     /// 打开下拉列表时对应的菜单描述符。
+    ///
+    /// 定位遵循 WinUI ComboBox：弹层不是贴在输入框下方，而是让当前选中项压住
+    /// 触发器（见 [`place_combo_popup`]）；行高固定为 [`SELECT_ROW_HEIGHT`]，
+    /// 选中项同时带 `selected` 标记，菜单发射器会在其左侧画 3px 强调条。
     #[must_use]
-    pub fn menu(&self, viewport: Rect) -> crate::menu::MenuDesc {
+    pub fn menu(&self, state: &SelectState, viewport: Rect) -> crate::menu::MenuDesc {
         let size = Vec2::new(
             self.rect.width(),
             self.options.len() as f32 * SELECT_ROW_HEIGHT,
         );
-        let placed = place_anchored_popup(
+        let placed = place_combo_popup(
             self.rect,
             size,
+            SELECT_ROW_HEIGHT,
+            0.0,
+            state.selected,
             viewport,
-            crate::overlay::Placement::BottomStart,
+            SELECT_POPUP_MARGIN,
         );
         let mut menu = crate::menu::MenuDesc::new(
             placed,
@@ -137,7 +154,8 @@ impl SelectDesc {
                 .iter()
                 .enumerate()
                 .map(|(index, option)| {
-                    let item = MenuItem::action(option.clone());
+                    let item =
+                        MenuItem::action(option.clone()).selected(state.selected == Some(index));
                     if self.option_disabled(index) {
                         item.disabled()
                     } else {
@@ -146,6 +164,7 @@ impl SelectDesc {
                 })
                 .collect(),
         );
+        menu.item_height = SELECT_ROW_HEIGHT;
         menu.z = self.z + 1;
         menu.viewport = Some(viewport);
         menu.clamp_height();
@@ -478,21 +497,27 @@ mod tests {
     }
 
     #[test]
-    fn the_dropdown_is_placed_under_the_field_and_inside_the_viewport() {
+    fn the_selected_row_overlays_the_field() {
         let desc = desc();
-        let menu = desc.menu(viewport());
+        let mut state = SelectState::new();
+        state.selected = Some(0);
+        let menu = desc.menu(&state, viewport());
         assert_eq!(menu.rect.origin.x, 20.0);
-        assert_eq!(menu.rect.origin.y, 60.0);
+        assert_eq!(menu.item_height, SELECT_ROW_HEIGHT);
         assert_eq!(menu.rect.height(), 3.0 * SELECT_ROW_HEIGHT);
+        let selected_center = menu.rect.origin.y + 0.5 * SELECT_ROW_HEIGHT;
+        assert!((selected_center - desc.rect.center().y).abs() < 0.01);
+        assert!(menu.items[0].selected);
         assert!(viewport().contains_rect(&menu.rect));
     }
 
     #[test]
-    fn a_dropdown_near_the_bottom_flips_up() {
+    fn a_dropdown_near_the_bottom_stays_inside_the_viewport() {
         let mut desc = desc();
         desc.rect = Rect::new(20.0, 540.0, 200.0, 36.0);
-        let menu = desc.menu(viewport());
-        assert!(menu.rect.max().y <= desc.rect.origin.y);
+        let state = SelectState::new();
+        let menu = desc.menu(&state, viewport());
+        assert!(menu.rect.max().y <= viewport().max().y - SELECT_POPUP_MARGIN + 0.01);
         assert!(viewport().contains_rect(&menu.rect));
     }
 

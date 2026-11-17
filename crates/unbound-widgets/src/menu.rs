@@ -23,6 +23,8 @@ pub const MENU_LAYER: u8 = PORTAL_LAYER;
 /// 默认行高。
 pub const MENU_ITEM_HEIGHT: f32 = 30.0;
 const MENU_SHADOW: f32 = 18.0;
+/// 下拉框选中项左侧强调条的宽度。
+const MENU_ACCENT_BAR_WIDTH: f32 = 3.0;
 
 /// 菜单中的单行条目。
 #[derive(Clone, Debug, PartialEq)]
@@ -35,6 +37,11 @@ pub struct MenuItem {
     pub disabled: bool,
     /// 该行是分隔符而非操作项。
     pub separator: bool,
+    /// 该行是否为「当前值」。
+    ///
+    /// 与键盘/指针高亮不同：下拉框重新打开时，选中项即使不再被高亮也要保留
+    /// 左侧 3px 强调条，表明「当前选的是这一项」。
+    pub selected: bool,
     /// 前置图标（若有）。
     pub icon: Option<IconDesc>,
     /// 可勾选行的勾选状态（`Some` 表示可勾选）。
@@ -52,6 +59,7 @@ impl MenuItem {
             shortcut: String::new(),
             disabled: false,
             separator: false,
+            selected: false,
             icon: None,
             checked: None,
             submenu: None,
@@ -66,10 +74,18 @@ impl MenuItem {
             shortcut: String::new(),
             disabled: true,
             separator: true,
+            selected: false,
             icon: None,
             checked: None,
             submenu: None,
         }
+    }
+
+    /// 标记该行为当前值（下拉框选中项）。
+    #[must_use]
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
     }
 
     /// 附加快捷键提示。
@@ -536,6 +552,26 @@ pub fn emit_menu(
             SubElement::Content,
             desc.z,
         ));
+        // 「当前值」标记：与高亮分开，键盘移到别的行时仍指示已选中的项。
+        if item.selected {
+            let bar_height = (row.size.y * 0.52).clamp(10.0, 16.0);
+            primitives.push(instance(
+                Rect::new(
+                    pill.origin.x + 2.0,
+                    row.origin.y + (row.size.y - bar_height) * 0.5,
+                    MENU_ACCENT_BAR_WIDTH,
+                    bar_height,
+                ),
+                [MENU_ACCENT_BAR_WIDTH * 0.5; 4],
+                Token::PRIMARY,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::RoundedRect,
+                SubElement::Border,
+                desc.z,
+            ));
+        }
     }
 
     primitives.push(instance(
