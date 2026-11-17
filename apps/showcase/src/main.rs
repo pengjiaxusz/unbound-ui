@@ -398,18 +398,20 @@ impl Showcase {
             return;
         }
         let native = self.shell().state.resolved_backdrop.uses_native_path();
+        let plan = self.shell().state.backdrop_plan.clone();
         if let Some(renderer) = &mut self.renderer {
-            renderer.set_clear_alpha(if native { 0.0 } else { 1.0 });
+            renderer.set_clear_alpha(plan.clear_alpha);
         }
+        let wants_mica = plan.material == unbound_backdrop::DwmMaterial::Mica;
         if let Some(hwnd) = window_hwnd(window) {
             let _ = unbound_platform::set_window_backdrop(
                 hwnd,
-                unbound_platform::WindowBackdropMaterial::for_native_path(native),
+                unbound_platform::WindowBackdropMaterial::for_native_path(wants_mica),
             );
         }
         if let Some(metrics) = &self.frame_metrics {
             // 原生模式下锁定失焦激活态，避免窗口失活时云母退化为纯色。
-            metrics.set_lock_mica_active(native);
+            metrics.set_lock_mica_active(wants_mica);
         }
         if native != was_native {
             self.swapchain_dirty = true;

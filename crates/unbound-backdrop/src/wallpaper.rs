@@ -76,6 +76,27 @@ pub fn load_wallpaper() -> Result<(Arc<DynamicImage>, SystemTime, u64), String> 
     Ok((Arc::clone(&entry.image), modified, len))
 }
 
+/// 主屏在屏幕坐标系中的物理矩形。
+///
+/// 主屏原点固定为 `(0, 0)`；返回的是物理像素，与 `WM_MOVE` / `ClientToScreen`
+/// 使用的坐标系一致，可直接和窗口客户区矩形求交。
+#[must_use]
+pub fn primary_screen_rect() -> Option<crate::plan::PixelRect> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+
+        // SAFETY: 两个调用都是无参数的全局指标查询，不涉及指针或句柄。
+        let width = unsafe { GetSystemMetrics(SM_CXSCREEN) }.max(0) as u32;
+        let height = unsafe { GetSystemMetrics(SM_CYSCREEN) }.max(0) as u32;
+        (width > 0 && height > 0).then(|| crate::plan::PixelRect::new(0, 0, width, height))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
 /// 主屏逻辑尺寸（按系统 DPI 归一化，不含每窗口缩放）。
 ///
 /// Mica 的壁纸取样以**主屏**为参照：Win11 的云母同样只跟随主屏壁纸，

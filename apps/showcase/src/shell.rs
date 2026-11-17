@@ -7,7 +7,7 @@
 
 use accesskit::Role;
 use unbound_anim::{CubicBezier, Spring};
-use unbound_backdrop::{BackdropMode, ResolvedBackdrop};
+use unbound_backdrop::{BackdropMode, BackdropPlan};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
 use unbound_input::CursorKind;
 use unbound_layout::LayoutStats;
@@ -527,25 +527,35 @@ impl GalleryApp {
     ///
     /// 实际路径由能力探测与用户选择共同决定，页面只读取解析结果，不自行推导。
     pub fn sync_backdrop_mode(&mut self) -> bool {
-        let resolved = ResolvedBackdrop::resolve(
-            self.state.backdrop_mode,
-            self.state.native_backdrop_available,
-        );
-        if self.state.resolved_backdrop == resolved {
-            return false;
+        let window = self
+            .state
+            .window_screen_rect
+            .map(|rect| unbound_backdrop::PixelRect::new(rect.x, rect.y, rect.width, rect.height));
+        let plan = BackdropPlan::derive(unbound_backdrop::BackdropInputs {
+            choice: self.state.backdrop_mode,
+            native_available: self.state.native_backdrop_available,
+            window_screen_rect: window,
+            primary_screen_rect: unbound_backdrop::primary_screen_rect(),
+            dark: self.state.theme.is_dark(),
+            self_drawn_ready: self.mica.visible(),
+        });
+        let plan_changed = plan != self.state.backdrop_plan;
+        let resolved_changed = plan.resolved != self.state.resolved_backdrop;
+        self.state.backdrop_plan = plan.clone();
+        self.state.resolved_backdrop = plan.resolved;
+        if plan_changed {
+            self.state.bump();
         }
-        self.state.resolved_backdrop = resolved;
-        self.state.bump();
-        true
+        resolved_changed
     }
 
     /// 根背景是否必须透明。
     ///
-    /// 自绘纹理可见时整窗由纹理铺满；实际生效模式为原生时则由 DWM 材质透出。
-    /// 这两种情况都必须让根背景透明，否则不透明底色会盖住后景。
+    /// 后景计划已经根据实际路径与自绘纹理就绪状态给出结论；宿主不再自行
+    /// 组合「原生路径 || 纹理可见」，避免两处规则漂移。
     #[must_use]
     pub fn root_background_transparent(&self) -> bool {
-        self.mica.visible() || self.state.resolved_backdrop.uses_native_path()
+        self.state.backdrop_plan.root_background_transparent
     }
 
     /// 是否需要针对此交互快照重建场景。

@@ -18,10 +18,14 @@ pub const DEFAULT_SIGMA: f32 = 16.0;
 /// 一次生成请求。
 #[derive(Clone, Copy, Debug)]
 pub struct MicaRequest {
-    /// 窗口逻辑宽。
+    /// 纹理覆盖区域宽（物理像素；当前为窗口宽）。
     pub width: u32,
-    /// 窗口逻辑高。
+    /// 纹理覆盖区域高（物理像素；当前为窗口高）。
     pub height: u32,
+    /// 主屏物理宽。
+    pub screen_width: u32,
+    /// 主屏物理高。
+    pub screen_height: u32,
     /// 深色主题。
     pub dark: bool,
     /// 纹理最大宽度（0 视为 [`DEFAULT_MAX_WIDTH`]）。
@@ -34,12 +38,40 @@ impl MicaRequest {
     /// 按窗口尺寸与主题创建请求，其余参数取默认值。
     #[must_use]
     pub fn new(width: u32, height: u32, dark: bool) -> Self {
+        Self::with_screen(width, height, width, height, dark)
+    }
+
+    /// 按覆盖区域与主屏尺寸创建请求，其余参数取默认值。
+    #[must_use]
+    pub fn with_screen(
+        width: u32,
+        height: u32,
+        screen_width: u32,
+        screen_height: u32,
+        dark: bool,
+    ) -> Self {
         Self {
             width: width.max(1),
             height: height.max(1),
+            screen_width: screen_width.max(1),
+            screen_height: screen_height.max(1),
             dark,
             max_width: DEFAULT_MAX_WIDTH,
             sigma: DEFAULT_SIGMA,
+        }
+    }
+
+    /// 从后景计划给出的纹理规格构造请求。
+    #[must_use]
+    pub fn from_texture(texture: &crate::plan::WallpaperTexture) -> Self {
+        Self {
+            width: texture.width.max(1),
+            height: texture.height.max(1),
+            screen_width: texture.screen_width.max(1),
+            screen_height: texture.screen_height.max(1),
+            dark: texture.dark,
+            max_width: texture.effective_max_width(),
+            sigma: texture.effective_sigma(),
         }
     }
 
@@ -53,6 +85,11 @@ impl MicaRequest {
             return false;
         }
         if (self.sigma.max(0.0) - other.sigma.max(0.0)).abs() > f32::EPSILON {
+            return false;
+        }
+        if self.screen_width.max(1) != other.screen_width.max(1)
+            || self.screen_height.max(1) != other.screen_height.max(1)
+        {
             return false;
         }
         let close = |a: u32, b: u32| {
@@ -80,7 +117,7 @@ pub struct MicaImage {
 /// 该函数会读盘并做 CPU 密集运算，只应在工作线程调用。
 #[must_use]
 pub fn generate(request: &MicaRequest) -> Option<MicaImage> {
-    let screen = primary_screen_logical_size()?;
+    let screen = (request.screen_width.max(1), request.screen_height.max(1));
 
     // 窗口居中于主屏：Win11 的云母取样与窗口在屏上的位置无关，
     // 模糊后的构图差异肉眼不可辨，因此不查询窗口矩形。
@@ -89,7 +126,8 @@ pub fn generate(request: &MicaRequest) -> Option<MicaImage> {
     let x = (screen.0 - width) / 2;
     let y = (screen.1 - height) / 2;
 
-    let blurred = render_blurred_rect(
+    let blurred = render_blurred_rect_for_screen(
+        screen,
         (x as i32, y as i32, width, height),
         request.max_width,
         request.sigma,
@@ -115,8 +153,17 @@ fn render_blurred_rect(
     max_width: u32,
     sigma: f32,
 ) -> Option<ImageBuffer<Rgba<u8>, Vec<u8>>> {
-    let (wallpaper, ..) = load_wallpaper().ok()?;
     let screen = primary_screen_logical_size()?;
+    render_blurred_rect_for_screen(screen, viewport, max_width, sigma)
+}
+
+fn render_blurred_rect_for_screen(
+    screen: (u32, u32),
+    viewport: (i32, i32, u32, u32),
+    max_width: u32,
+    sigma: f32,
+) -> Option<ImageBuffer<Rgba<u8>, Vec<u8>>> {
+    let (wallpaper, ..) = load_wallpaper().ok()?;
     blurred_viewport(
         &wallpaper,
         screen,
@@ -383,9 +430,9 @@ mod tests {
 
     #[test]
     fn request_matching_tolerates_small_resizes_only() {
-        let base = MicaRequest::new(1000, 800, true);
-        assert!(base.matches(&MicaRequest::new(1119, 800, true)));
-        assert!(!base.matches(&MicaRequest::new(1200, 800, true)));
-        assert!(!base.matches(&MicaRequest::new(1000, 800, false)));
+        let base = MicaRequest::with_screen(1000, 800, 2560, 1440, true);
+        assert!(base.matches(&MicaRequest::with_screen(1119, 800, 2560, 1440, true)));
+        assert!(!base.matches(&MicaRequest::with_screen(1200, 800, 2560, 1440, true)));
+        assert!(!base.matches(&MicaRequest::with_screen(1000, 800, 2560, 1440, false)));
     }
 }

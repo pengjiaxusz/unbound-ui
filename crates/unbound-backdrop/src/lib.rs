@@ -20,6 +20,7 @@
 
 pub mod mica;
 pub mod mode;
+pub mod plan;
 pub mod state;
 pub mod wallpaper;
 
@@ -27,5 +28,9 @@ pub use mica::{
     generate, generate_blurred_rect, MicaImage, MicaRequest, DEFAULT_MAX_WIDTH, DEFAULT_SIGMA,
 };
 pub use mode::{native_backdrop_available, BackdropMode, ResolvedBackdrop, NATIVE_MICA_MIN_BUILD};
+pub use plan::{
+    sample_uv, BackdropCompositeAlpha, BackdropInputs, BackdropPlan, DwmMaterial, PixelRect,
+    UvRect, WallpaperTexture,
+};
 pub use state::{BackdropGenerator, MICA_READY_EVENT_ID};
-pub use wallpaper::wallpaper_path;
+pub use wallpaper::{primary_screen_rect, wallpaper_path};

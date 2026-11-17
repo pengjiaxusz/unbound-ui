@@ -135,7 +135,7 @@ mod tests {
         let mut generator = BackdropGenerator::new();
         generator.sync(MicaRequest::new(800, 600, true), || {});
         let generation = generator.generation;
-        generator.sync(MicaRequest::new(810, 600, true), || {});
+        generator.sync(MicaRequest::with_screen(810, 600, 800, 600, true), || {});
         assert_eq!(
             generator.generation, generation,
             "a near-identical request must be reused"
