@@ -22,6 +22,7 @@
 
 pub mod action;
 pub mod assert;
+pub mod bridge;
 pub mod log;
 pub mod pixel;
 pub mod query;
@@ -33,6 +34,7 @@ pub mod wait;
 
 pub use action::SemanticAction;
 pub use assert::{Assertion, AssertionFailure, BoundsExpect};
+pub use bridge::{srgb8, AgentBridge, AgentBridgeHandle, AgentReply, AgentRequest};
 pub use log::{ActionLog, RecordedStep};
 pub use pixel::{CapturedFrame, OffscreenPixelSource, PixelSource};
 pub use query::{NodePredicate, NodeQuery, SpatialRelation};

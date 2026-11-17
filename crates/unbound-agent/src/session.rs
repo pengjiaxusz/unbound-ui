@@ -394,6 +394,14 @@ impl<'a, A: Application> AgentSession<'a, A> {
     /// 采样一个逻辑坐标处的像素颜色。
     ///
     /// 优先取接入的像素源；像素源没有可用画面时退回最近一次采集的结果。
+    #[must_use]
+    pub fn probe_color(&self, pos: Vec2) -> Option<Color> {
+        self.sample_pixel(pos)
+    }
+
+    /// 采样一个逻辑坐标处的像素颜色。
+    ///
+    /// 优先取接入的像素源；像素源没有可用画面时退回最近一次采集的结果。
     fn sample_pixel(&self, pos: Vec2) -> Option<Color> {
         if let Some(probe) = self.probe.as_ref() {
             if let Some(color) = probe.color_at(pos) {

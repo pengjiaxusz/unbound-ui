@@ -77,7 +77,10 @@ pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
 pub use unbound_widgets::ergonomics::UiWidget;
-pub use window_runner::{run_windowed, run_windowed_with_hwnd, WindowedRunner};
+pub use window_runner::{
+    run_windowed, run_windowed_with_frame_callback, run_windowed_with_hooks,
+    run_windowed_with_hwnd, WindowedRunner,
+};
 
 /// [`ui_key!`] 使用的编译期 64 位 FNV-1a 哈希。
 pub const fn const_fnv1a_hash(file: &str, line: u32, column: u32) -> u64 {

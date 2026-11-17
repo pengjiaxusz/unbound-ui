@@ -167,6 +167,13 @@ pub struct WindowedRunner<A: Application> {
     )>,
     /// 原生窗口句柄创建完成后的可选宿主回调（例如供 `chahu-render-debugger` 注册主窗口 HWND）。
     on_hwnd_created: Option<Box<dyn FnMut(isize) + Send>>,
+    /// 每帧开始时的可选宿主回调，拿到运行时的可变引用。
+    ///
+    /// 这条钩子存在只有一个理由：**Agent 能力必须住在 UI 线程上**。
+    /// 界面状态不离开 UI 线程，跨线程的只有纯值请求与回执——这样
+    /// Agent 操作界面时既不抢真实鼠标，也不会把渲染栈的线程约束
+    /// 传染给业务代码。
+    on_frame: Option<Box<dyn FnMut(&mut AppRuntime<A>) + Send>>,
 }
 
 impl<A: Application> WindowedRunner<A> {
@@ -186,6 +193,7 @@ impl<A: Application> WindowedRunner<A> {
             theme,
             uploaded_theme: None,
             on_hwnd_created: None,
+            on_frame: None,
             renderer: None,
             surface: None,
             swapchain: None,
@@ -207,6 +215,20 @@ impl<A: Application> WindowedRunner<A> {
     #[must_use]
     pub fn with_hwnd_callback(mut self, callback: impl FnMut(isize) + Send + 'static) -> Self {
         self.on_hwnd_created = Some(Box::new(callback));
+        self
+    }
+
+    /// 注册每帧回调，回调拿到运行时的可变引用。
+    ///
+    /// 回调在每帧的**最前面**执行——此时上一帧的场景已经提交，
+    /// 本帧尚未构建。Agent 能力在这里排空跨线程请求：动作会走完整的
+    /// 事件管线（合成输入 → 归约 → 重建），语义树与像素随之更新。
+    #[must_use]
+    pub fn with_frame_callback(
+        mut self,
+        callback: impl FnMut(&mut AppRuntime<A>) + Send + 'static,
+    ) -> Self {
+        self.on_frame = Some(Box::new(callback));
         self
     }
 
@@ -768,6 +790,13 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             os_scale,
         );
         self.runtime.context_mut().window_maximized = window.is_maximized();
+
+        // 3. 宿主帧回调先于运行时推进执行：Agent 能力在这里排空跨线程请求，
+        //    动作走完整事件管线后，本帧的场景构建就会带上变化。
+        if let Some(callback) = self.on_frame.as_mut() {
+            callback(&mut self.runtime);
+        }
+
         let _ = self.runtime.tick(dt);
         let report = self.runtime.frame(0.0);
 
@@ -950,5 +979,35 @@ pub fn run_windowed_with_hwnd<A: Application + 'static>(
 ) -> Result<(), PlatformError> {
     config.decorations = false;
     let runner = WindowedRunner::new(app, &config).with_hwnd_callback(on_hwnd);
+    PlatformWindow::new(&config)?.run(runner)
+}
+
+/// 带宿主帧回调的窗口化应用入口函数。
+///
+/// 帧回调拿到运行时的可变引用，因此宿主可以在 UI 线程上做任何事——
+/// 最典型的用法是排空 Agent 的跨线程请求。
+pub fn run_windowed_with_frame_callback<A: Application + 'static>(
+    app: A,
+    mut config: WindowConfig,
+    on_frame: impl FnMut(&mut AppRuntime<A>) + Send + 'static,
+) -> Result<(), PlatformError> {
+    config.decorations = false;
+    let runner = WindowedRunner::new(app, &config).with_frame_callback(on_frame);
+    PlatformWindow::new(&config)?.run(runner)
+}
+
+/// 同时带窗口句柄回调与宿主帧回调的窗口化应用入口函数。
+///
+/// 两个钩子各司其职：句柄回调在窗口创建后触发一次，帧回调每帧触发。
+pub fn run_windowed_with_hooks<A: Application + 'static>(
+    app: A,
+    mut config: WindowConfig,
+    on_hwnd: impl FnMut(isize) + Send + 'static,
+    on_frame: impl FnMut(&mut AppRuntime<A>) + Send + 'static,
+) -> Result<(), PlatformError> {
+    config.decorations = false;
+    let runner = WindowedRunner::new(app, &config)
+        .with_hwnd_callback(on_hwnd)
+        .with_frame_callback(on_frame);
     PlatformWindow::new(&config)?.run(runner)
 }

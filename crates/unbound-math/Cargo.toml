@@ -10,6 +10,9 @@ repository.workspace = true
 [dependencies]
 bytemuck.workspace = true
 half.workspace = true
+# 这些值类型要穿过 Agent 的序列化边界（HTTP / 命名管道），
+# 因此必须能被 serde 编码；派生是零成本的。
+serde = { workspace = true }
 
 [lints.rust]
 # `[lints] workspace = true` cannot coexist with a table override, so this crate

@@ -6,7 +6,9 @@ use bytemuck::{Pod, Zeroable};
 
 /// `f32` 精度的 2D 点或向量。
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable, serde::Serialize, serde::Deserialize,
+)]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,

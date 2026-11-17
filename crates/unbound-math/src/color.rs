@@ -14,7 +14,7 @@ use crate::f16::f32_to_f16;
 /// 线性光 RGBA，各分量标称范围为 `[0, 1]`，但不做截断，以便 HDR 广色域
 /// 交换链承载大于 1 的值。
 #[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
 pub struct Color {
     pub r: f32,
     pub g: f32,

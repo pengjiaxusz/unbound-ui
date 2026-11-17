@@ -6,7 +6,8 @@ use unbound_math::Vec2;
 ///
 /// 动作只接受节点标识。坐标由框架从节点矩形算出中心点后注入合成事件，
 /// 因此**对外不存在坐标契约**——Agent 不需要（也不应当）知道元素在屏幕上的位置。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SemanticAction {
     /// 点击节点。
     Click {

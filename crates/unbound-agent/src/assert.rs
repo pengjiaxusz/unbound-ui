@@ -8,7 +8,10 @@ use unbound_math::Vec2;
 use crate::query::{NodePredicate, NodeQuery};
 
 /// 矩形约束。
-#[derive(Clone, Debug, Default, PartialEq)]
+///
+/// 各字段均可省略：只约束关心的维度即可（`#[serde(default)]`）。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct BoundsExpect {
     /// 允许的宽度区间。
     pub width: Option<(f32, f32)>,
@@ -19,7 +22,8 @@ pub struct BoundsExpect {
 }
 
 /// 断言。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Assertion {
     /// 存在匹配的节点。
     Exists {

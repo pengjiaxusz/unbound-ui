@@ -11,7 +11,8 @@ use crate::query::NodeQuery;
 /// 单个语义节点的快照。
 ///
 /// 这是 Agent 实际消费的数据形状：纯值、可序列化、不含引擎内部类型。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NodeSnapshot {
     /// 节点标识。
     pub id: u64,
@@ -44,7 +45,8 @@ pub struct NodeSnapshot {
 }
 
 /// 语义树快照。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TreeSnapshot {
     /// 根节点标识。
     pub root: u64,
