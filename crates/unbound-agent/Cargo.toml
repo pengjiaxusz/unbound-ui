@@ -17,6 +17,8 @@ unbound-theme.workspace = true
 unbound-widgets.workspace = true
 accesskit.workspace = true
 rustc-hash.workspace = true
+# Agent 请求要穿过 HTTP / 命名管道抵达另一端，必须可序列化。
+serde = { workspace = true }
 
 [dev-dependencies]
 unbound-gpu.workspace = true

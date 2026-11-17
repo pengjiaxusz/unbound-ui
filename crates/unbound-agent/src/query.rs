@@ -8,7 +8,8 @@ use unbound_math::Rect;
 ///
 /// 状态用「谓词」而非「枚举」表达，是因为有些节点同时满足多个状态
 /// （一个被选中的可聚焦按钮），用枚举会强迫调用方二选一。
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum NodePredicate {
     /// 已禁用。
     Disabled,
@@ -64,7 +65,8 @@ impl NodePredicate {
 ///
 /// 有些界面元素**没有语义名称**，只能靠空间关系定位——例如表格某一行右侧
 /// 的操作按钮。此时唯一的线索就是「在某个节点右边」。
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SpatialRelation {
     /// 位于目标右侧（大致同行）。
     RightOf,
@@ -118,7 +120,11 @@ pub const OPTION_ROLES: [Role; 3] = [Role::ListBoxOption, Role::MenuListOption, 
 ///
 /// 查询**返回全部匹配项**而非「第一个」：Agent 拿到候选列表与各自的语义路径，
 /// 自己结合上下文消歧，比框架替它猜一个更可靠。
-#[derive(Clone, Debug, Default, PartialEq)]
+///
+/// 所有字段都可省略（`#[serde(default)]`）：Agent 只要写关心的条件即可，
+/// 剩下的按「不限」处理——线格式不该逼调用方补空数组。
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct NodeQuery {
     /// 角色过滤。
     pub role: Option<Role>,

@@ -61,6 +61,19 @@ impl CapturedFrame {
         // 回读格式是 BGRA：蓝通道在前。
         Some(Color::from_srgb8(slice[2], slice[1], slice[0], slice[3]))
     }
+
+    /// 转成 RGBA8 紧凑排列。
+    ///
+    /// GPU 回读是 BGRA，而大多数图像工具（含像素断言）认的是 RGBA——
+    /// 这一层转换放在框架里，调用方就不必各自记一遍通道顺序。
+    #[must_use]
+    pub fn to_rgba8(&self) -> Vec<u8> {
+        let mut buffer = Vec::with_capacity(self.pixels.len());
+        for pixel in self.pixels.chunks_exact(4) {
+            buffer.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+        buffer
+    }
 }
 
 /// 像素来源：框架级的画面采集能力。
