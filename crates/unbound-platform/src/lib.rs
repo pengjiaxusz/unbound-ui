@@ -28,6 +28,8 @@ pub mod overlay_host;
 pub mod pacing;
 pub mod resize;
 pub mod tray;
+#[cfg(windows)]
+pub mod uia_win32;
 pub mod win32_frame;
 pub mod win32_window;
 pub mod window;
