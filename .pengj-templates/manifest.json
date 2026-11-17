@@ -1,6 +1,6 @@
 {
   "tool": "pengj-templates",
-  "version": "0.73.0",
+  "version": "0.74.0",
   "project_name": "unbound-ui",
   "layers": [
     "common",
@@ -155,8 +155,8 @@
     ".pengj-templates\\scripts\\doctor.ps1": "f8be743e82bd4110428e359e478629aaf01beceba811dbe79b3caa8f1a8e97b3",
     ".pengj-templates\\scripts\\doctor.sh": "14168bb6673b2a08238081ec76f90c26a0f466b5bb6a8062353c3279cd452003",
     ".vscode\\extensions.json": "c7cb87ed3321bc2a3f9d71ebf6b46e4e12b92b6c03ff22af5c08a0a86cc94dec",
-    ".vscode\\settings.json": "ba63cd5ddb364763d918b7c938665314d055a1d53a5d05d2324c70a9924f23bd",
-    "AGENTS.md": "b47adb39d2db4647f1ca818703a86a710e8374c89c1bb9756ff52d3a90cc1c06",
+    ".vscode\\settings.json": "d25f7fee2d39c690a70cd72b6c1d93477e2b306b8027fc4f85c31aa1c1d58135",
+    "AGENTS.md": "e7d9862504afe53e4ec40cffc3fe5965f7ff08ab120f9684f053fceae2860e0b",
     "Cargo.toml": "6f722ee3f7a969f9b46d867b96c1e14420b5560d7effd65c7c9b183e4e797707",
     "justfile": "8f05a2c2003ab825f3a54eb8826e48c9badc7ab1b28f80b3013109282a5fa34f",
     "rust-toolchain.toml": "b2bc09cc2b9bfbea423fe65a786d858571071150478018b261181135d4010412"
