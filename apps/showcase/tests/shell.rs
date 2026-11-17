@@ -1529,3 +1529,74 @@ fn high_index_component_code_toggles_and_open_modals_keep_unique_hit_regions() {
         );
     }
 }
+
+/// 后景页位于「引擎系统」分类末尾，元数据与其它系统页同等完备。
+#[test]
+fn the_backdrop_page_sits_in_engine_systems_with_complete_metadata() {
+    use showcase::pages::CategoryId;
+    use unbound_app::Locale;
+
+    assert_eq!(PageId::Backdrop.category(), CategoryId::System);
+    assert_eq!(
+        CategoryId::System.pages().last().copied(),
+        Some(PageId::Backdrop),
+        "the backdrop page must follow the existing engine system pages"
+    );
+
+    let info = PageId::Backdrop.info();
+    assert!(!info.title.is_empty());
+    assert!(!info.short.is_empty());
+    assert!(!info.description.is_empty());
+    assert!(!info.crates.is_empty());
+    assert!(!info.keywords.is_empty());
+
+    let zh = PageId::Backdrop.localized_info(Locale::ZhCn);
+    assert_ne!(
+        zh.title, info.title,
+        "the backdrop page must provide a Chinese title"
+    );
+    assert_ne!(zh.short, info.short);
+    assert!(!zh.description.is_empty());
+}
+
+/// 点击后景页的四个按钮即可切换用户选择，宿主在下一帧回写实际生效模式。
+#[test]
+fn backdrop_page_switches_every_mode_through_the_runtime() {
+    use unbound_backdrop::{BackdropMode, ResolvedBackdrop};
+
+    let mut app = app();
+    assert_eq!(
+        app.state.backdrop_mode,
+        BackdropMode::Auto,
+        "the showcase must start from the Auto choice"
+    );
+    assert_eq!(
+        app.state.resolved_backdrop,
+        ResolvedBackdrop::SelfDrawn,
+        "without a capability probe the host must resolve Auto to SelfDrawn"
+    );
+    assert!(!app.state.native_backdrop_available);
+    assert_eq!(app.state.windows_build, None);
+
+    app.navigate(PageId::Backdrop);
+    app.rebuild(VIEWPORT);
+
+    for (part, expected) in [
+        (2u16, BackdropMode::Native),
+        (3, BackdropMode::SelfDrawn),
+        (4, BackdropMode::Off),
+        (1, BackdropMode::Auto),
+    ] {
+        let node = target::id(Target::Demo(PageId::Backdrop.index() as u8, 0, part));
+        click_node(&mut app, node);
+        assert_eq!(
+            app.state.backdrop_mode, expected,
+            "clicking {expected:?} must update the user choice"
+        );
+        assert_eq!(
+            app.state.resolved_backdrop,
+            ResolvedBackdrop::resolve(expected, false),
+            "the host must write back the effective mode for {expected:?}"
+        );
+    }
+}

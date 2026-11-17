@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use unbound_anim::{Spring, SpringPreset};
 use unbound_app::{set_global_locale, AssetHub, I18nBundle, Locale};
 use unbound_asset::{AssetId, StagingRing};
+use unbound_backdrop::{BackdropMode, ResolvedBackdrop};
 use unbound_canvas::{TransactionKind, UndoStack};
 use unbound_math::Vec2;
 use unbound_widgets::curve_editor::CurveEditorState;
@@ -289,6 +290,14 @@ fn procedural_tile_png(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
 #[derive(Debug)]
 pub struct GalleryState {
     pub active_page: PageId,
+    /// 后景模式的用户选择（默认 `Auto`）。
+    pub backdrop_mode: BackdropMode,
+    /// 宿主按平台能力解析后的实际生效路径。
+    pub resolved_backdrop: ResolvedBackdrop,
+    /// 原生后景路径是否可用（能力探测在后续工单接入，当前保持 `false`）。
+    pub native_backdrop_available: bool,
+    /// Windows 构建号；`None` 表示尚未探测或非 Windows 环境。
+    pub windows_build: Option<u32>,
     /// 当通过侧边栏直接选中某个具体组件时记录该组件 ID。
     pub active_component: Option<WidgetCatalogId>,
     pub nav_expanded: bool,
@@ -334,6 +343,10 @@ impl Default for GalleryState {
     fn default() -> Self {
         Self {
             active_page: PageId::Home,
+            backdrop_mode: BackdropMode::Auto,
+            resolved_backdrop: ResolvedBackdrop::resolve(BackdropMode::Auto, false),
+            native_backdrop_available: false,
+            windows_build: None,
             active_component: None,
             nav_expanded: true,
             search_query: String::new(),
@@ -452,6 +465,18 @@ pub fn build_showcase_i18n(locale: Locale) -> I18nBundle {
 }
 
 impl GalleryState {
+    /// 写入后景模式选择；返回是否发生变化。
+    ///
+    /// 实际生效模式由宿主在下一帧解析回写，页面无需自行推导。
+    pub fn set_backdrop_mode(&mut self, mode: BackdropMode) -> bool {
+        if self.backdrop_mode == mode {
+            return false;
+        }
+        self.backdrop_mode = mode;
+        self.bump();
+        true
+    }
+
     /// 切换 Showcase 激活语言并同步更新内置 `I18nBundle` 与全局语言状态。
     pub fn set_locale(&mut self, locale: Locale) {
         set_global_locale(locale);

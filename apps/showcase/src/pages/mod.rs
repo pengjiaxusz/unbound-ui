@@ -5,6 +5,7 @@
 //! 所有标题、旋钮和代码片段均来自下表。
 //!
 
+pub mod backdrop;
 pub mod canvas;
 pub mod collections;
 pub mod components;
@@ -126,6 +127,7 @@ impl CategoryId {
                 PageId::Parity,
                 PageId::I18n,
                 PageId::Settings,
+                PageId::Backdrop,
             ],
         }
     }
@@ -165,10 +167,12 @@ pub enum PageId {
     I18n,
     /// WinUI 3 像素对照报告：参考截图、本框架渲染与 ΔE 热力图。
     Parity,
+    /// 后景模式对照页：原生云母、自绘云母与关闭模式的运行时切换。
+    Backdrop,
 }
 
 impl PageId {
-    pub const ALL: [PageId; 26] = [
+    pub const ALL: [PageId; 27] = [
         PageId::Home,
         PageId::Colors,
         PageId::Typography,
@@ -195,6 +199,7 @@ impl PageId {
         PageId::Systems,
         PageId::I18n,
         PageId::Parity,
+        PageId::Backdrop,
     ];
 
     #[must_use]
@@ -227,6 +232,7 @@ impl PageId {
             Self::Systems => 23,
             Self::I18n => 24,
             Self::Parity => 25,
+            Self::Backdrop => 26,
         }
     }
 
@@ -249,7 +255,9 @@ impl PageId {
             Self::Viewport | Self::Marquee | Self::Undo => CategoryId::Canvas,
             Self::Springs | Self::A11y | Self::Telemetry => CategoryId::Motion,
             Self::Components => CategoryId::Components,
-            Self::Systems | Self::Parity | Self::I18n | Self::Settings => CategoryId::System,
+            Self::Systems | Self::Parity | Self::I18n | Self::Settings | Self::Backdrop => {
+                CategoryId::System
+            }
         }
     }
 
@@ -283,6 +291,7 @@ impl PageId {
             Self::Systems => systems::SYSTEMS_INFO,
             Self::I18n => i18n::I18N_INFO,
             Self::Parity => parity_report::PARITY_INFO,
+            Self::Backdrop => backdrop::BACKDROP_INFO,
         }
     }
 
@@ -425,6 +434,11 @@ impl PageId {
                 "像素对照报告",
                 "在框架内部直接浏览 WinUI 3 参考截图、本框架同边界渲染与 CIEDE2000 热力图；按色差均值、p99 与包围盒三重阈值判定一致性。",
             ),
+            Self::Backdrop => (
+                "后景模式与原生云母对照",
+                "后景",
+                "在运行时对比 DWM 原生云母、自绘壁纸模糊与关闭后景三条路径；页面同步显示用户选择、实际生效模式与平台能力占位信息。",
+            ),
         };
         PageInfo {
             title,
@@ -465,6 +479,7 @@ impl PageId {
             Self::Systems => systems::SYSTEMS_EXAMPLES,
             Self::I18n => i18n::I18N_EXAMPLES,
             Self::Parity => parity_report::PARITY_EXAMPLES,
+            Self::Backdrop => backdrop::BACKDROP_EXAMPLES,
         }
     }
 
@@ -500,6 +515,9 @@ impl PageId {
             Self::Systems => "引擎子系统 架构全景 渲染管线",
             Self::I18n => "国际化 本地化 多语言 翻译 中英文切换 i18n locale",
             Self::Parity => "像素对照 差分报告 参考截图 色差 热力图 winui parity",
+            Self::Backdrop => {
+                "后景 云母 原生 自绘 透明 交换链 材质 backdrop mica native self-drawn"
+            }
         };
         let haystack = format!(
             "{} {} {} {} {} {} {} {} {}",
@@ -755,6 +773,8 @@ pub enum DemoKind {
     },
     /// WinUI 3 像素对照报告：参考截图、本框架渲染与 ΔE 热力图。
     ParityReport,
+    /// 后景模式对照舞台：四条路径的运行时切换与能力回读。
+    Backdrop,
     /// 由其真实发射器绘制的单个目录组件。
     Component {
         id: WidgetCatalogId,
@@ -1014,6 +1034,10 @@ impl ExampleDef {
                 "WinUI 3 像素对照矩阵 (WinUI 3 Pixel Parity)",
                 "28 个用例逐像素比对：左为 WinUI 3 官方截图，中为本框架同边界渲染，右为 CIEDE2000 热力图；本页完全由框架自身绘制。",
             ),
+            DemoKind::Backdrop => (
+                "后景模式切换台 (Backdrop Mode Switcher)",
+                "四条后景路径的运行时对照：选择 Auto / Native / SelfDrawn / Off，宿主在下一帧解析并回写实际生效模式。",
+            ),
             DemoKind::Component { id } => (
                 components::component_nav_label_localized(id, locale),
                 self.description,
@@ -1107,6 +1131,7 @@ pub fn render_demo(ctx: &mut DemoCtx<'_, '_>, demo: DemoKind) {
         DemoKind::Systems { mode } => systems::systems(ctx, mode),
         DemoKind::I18n { mode } => i18n::i18n_demo(ctx, mode),
         DemoKind::ParityReport => parity_report::report(ctx),
+        DemoKind::Backdrop => backdrop::backdrop(ctx),
         DemoKind::Component { id } => components::component(ctx, id),
     }
 }
