@@ -133,9 +133,9 @@ impl ThemeSet {
     /// 根据宿主产品预设与 OKLCH 品牌强调色生成完整 3 主题（Light / Dark / HighContrast）调色板集合。
     #[must_use]
     pub fn for_product(preset: ProductPreset, accent: AccentBrand) -> Self {
-        let base = Self::default_set();
+        let base = Self::standard();
         // Win11 预设自带完整八套调色板与专用强调色阶梯（WinUI 的强调填充更亮、
-        // 且深色下配深色前景），因此以它为底再套品牌色；其余预设以 Material 为底。
+        // 且深色下配深色前景），因此以它为底再套品牌色；其余预设以 Material（standard）为底。
         let (seed_light, seed_dark) = match preset {
             ProductPreset::Win11 => (crate::win11::light(), crate::win11::dark()),
             _ => (

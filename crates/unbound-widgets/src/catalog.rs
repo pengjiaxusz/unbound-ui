@@ -38,7 +38,7 @@ use crate::{
     LoadingOverlayDesc, MenuBarDesc, MenuBarItem, MenuBarState, MenuBarTokens, MenuDesc, MenuItem,
     MenuState, MinimapDesc, MinimapItem, MinimapState, ModalDesc, NaiveDate, NinePatchDesc,
     NodeGraphState, NumberInputDesc, NumberInputState, PinSpec, PipelineStageItem,
-    PipelineViewDesc, PointerPhase, PopoverDesc, Presence, ProgressDesc, ProgressState,
+    PipelineViewDesc, PivotDesc, PointerPhase, PopoverDesc, Presence, ProgressDesc, ProgressState,
     PropertyDesc, PropertyGridDesc, PropertyGridState, PropertySection, PropertyValue,
     QueryBuilderDesc, QueryCombinator, QueryRule, RadioDesc, RadioGroupDesc, RadioTokens,
     ResolvedImage, RichTextDesc, RulerDesc, RulerState, SchemaFieldKind, SchemaFieldSpec,
@@ -50,7 +50,7 @@ use crate::{
     TaskHudDesc, TextAreaDesc, TextAreaState, TextAreaVisual, TextEditState, TextInputDesc,
     TextInputVisual, ToastEntry, ToolbarDesc, ToolbarItem, ToolbarState, ToolbarTokens,
     TooltipDesc, TreeViewDesc, TreeViewRow, TreeViewTokens, VirtualRowTokens, WidgetCatalogId,
-    WidgetOutput, WidgetShowcaseWitness, WrapDesc,
+    WidgetOutput, WidgetShowcaseWitness, WrapDesc, PIVOT_HEIGHT,
 };
 
 struct ProbeImageResolver;
@@ -371,7 +371,7 @@ where
                 1 => (
                     Severity::Success,
                     "Build succeeded",
-                    "All 107 components compiled with zero warnings.",
+                    "All 109 components compiled with zero warnings.",
                 ),
                 2 => (
                     Severity::Warning,
@@ -1557,6 +1557,37 @@ where
                     SegmentedTokens::standard(),
                 );
                 merge_output(&mut out, seg);
+            }
+            out
+        }
+        WidgetCatalogId::Pivot => {
+            let labels = ["Overview", "Activity", "Settings"];
+            let desc = PivotDesc::new(
+                Rect::new(o.x, o.y, rect.size.x.min(360.0), PIVOT_HEIGHT),
+                &labels,
+            )
+            .with_item_widths(&[104.0, 96.0, 88.0])
+            .with_selected(variant_idx % 3);
+            let mut out = WidgetOutput::default();
+            for (idx, label) in labels.iter().enumerate() {
+                let item_state = if idx == desc.selected {
+                    state
+                } else {
+                    ControlState {
+                        disabled: state.disabled,
+                        ..ControlState::default()
+                    }
+                };
+                let item_rect = desc.item_rect(idx);
+                let item_label = shape_centered(&mut shape, label, item_rect, 14.0);
+                let item = crate::pivot::emit_pivot_item(
+                    node + idx as u64,
+                    &desc,
+                    idx,
+                    item_state,
+                    &item_label,
+                );
+                merge_output(&mut out, item);
             }
             out
         }

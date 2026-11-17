@@ -500,9 +500,9 @@ pub struct ThemeSet {
 impl ThemeSet {
     /// 根据三个显式调色板构建主题集。
     ///
-    /// 内置 [`ThemeSet::default_set`] 只是其中一种预设；携带自有品牌色的应用
-    /// 可自行构建主题集并交给 [`ThemeState::new`]。引擎不关心颜色来源，
-    /// 只要求每个令牌都能解析出一个颜色。
+    /// 内置的 [`ThemeSet::standard`] 与 [`ThemeSet::default_set`] 只是两种预设；
+    /// 携带自有品牌色的应用可自行构建主题集并交给 [`ThemeState::new`]。
+    /// 引擎不关心颜色来源，只要求每个令牌都能解析出一个颜色。
     ///
     #[must_use]
     pub fn from_palettes(light: Palette, dark: Palette, high_contrast: Palette) -> Self {
@@ -513,9 +513,12 @@ impl ThemeSet {
         }
     }
 
-    /// 默认的 Material 风格浅色/深色主题对及高对比度变体。
+    /// Unbound 标准（Material）浅色/深色主题对及高对比度变体。
+    ///
+    /// 这是与 Win11 预设并列的另一种观感；需要 Material 风格时显式选用
+    /// `ThemeSet::for_product(ProductPreset::Standard, ..)`，不要再把它当作默认。
     #[must_use]
-    pub fn default_set() -> Self {
+    pub fn standard() -> Self {
         let light = Palette::new(
             ThemeKind::Light,
             &[
@@ -875,6 +878,19 @@ impl ThemeSet {
             dark,
             high_contrast,
         }
+    }
+
+    /// 框架默认主题：Windows 11 Fluent（WinUI 3）+ 蓝色强调色。
+    ///
+    /// Win11 是 Unbound UI 的默认观感：卡片与控件填充都是叠在云母背板上的
+    /// 半透明薄纱，因此宿主应在窗口下方绘制壁纸派生背板；标题栏与导航窗格的
+    /// 背景令牌为透明，正是为了让云母透上来。
+    ///
+    /// 需要 Material 观感时使用 [`Self::standard`] 或
+    /// `ThemeSet::for_product(ProductPreset::Standard, ..)`。
+    #[must_use]
+    pub fn default_set() -> Self {
+        Self::for_product(crate::ProductPreset::Win11, crate::AccentBrand::Blue)
     }
 
     /// 指定主题对应的调色板。

@@ -66,6 +66,18 @@ pub mod geometry {
     /// 导航选中指示条宽度。
     pub const NAV_INDICATOR_WIDTH: f32 = 3.0;
 
+    /// Win11 Pivot（页签条）高度。
+    ///
+    /// Pivot 是二级导航，不是文档标签：纯文字标签 + 选中项下方 2px 强调色下划线，
+    /// 高度与 Win11 设置页的页签条一致。
+    pub const PIVOT_HEIGHT: f32 = 40.0;
+    /// Pivot 标签之间的水平间距。
+    pub const PIVOT_GAP: f32 = 24.0;
+    /// Pivot 选中指示器厚度。
+    pub const PIVOT_INDICATOR_HEIGHT: f32 = 2.0;
+    /// Pivot 标签自动测宽时左右各留出的内边距。
+    pub const PIVOT_LABEL_PADDING: f32 = 12.0;
+
     /// 卡片内边距（Win11 设置卡片的标准内边距）。
     pub const CARD_PADDING: f32 = 16.0;
     /// 卡片内行间距。

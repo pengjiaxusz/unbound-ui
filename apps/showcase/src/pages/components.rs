@@ -20,7 +20,7 @@ use crate::canvas::{AlignX, AlignY};
 pub const COMPONENTS_INFO: PageInfo = PageInfo {
     title: "Component gallery",
     short: "All Components",
-    description: "All 107 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
+    description: "All 109 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
     crates: &["unbound-widgets"],
     keywords: "component gallery catalog emitter coverage widget showcase every control tooltip",
 };
@@ -125,6 +125,7 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::NavigationRail
         | WidgetCatalogId::Sidebar
         | WidgetCatalogId::Pagination
+        | WidgetCatalogId::Pivot
         | WidgetCatalogId::Tabs
         | WidgetCatalogId::TreeView
         | WidgetCatalogId::Menu
@@ -294,6 +295,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::AddressBar => "view.add(ui_key!(\"addr\"), AddressBarDesc::new(rect, segments));",
         WidgetCatalogId::GenericDataTable => "view.add(ui_key!(\"gdt\"), GenericDataTableDesc::new(rect, cols, 6));",
         WidgetCatalogId::PipelineView => "view.add(ui_key!(\"pipe\"), PipelineViewDesc::new(rect, stages));",
+        WidgetCatalogId::Pivot => "view.add(ui_key!(\"pivot\"), PivotDesc::new(rect, &[\"Overview\", \"Activity\", \"Settings\"]).with_selected(0));",
         WidgetCatalogId::QueryBuilder => "view.add(ui_key!(\"qb\"), QueryBuilderDesc::new(rect, QueryCombinator::And, rules));",
         WidgetCatalogId::SchemaForm => "view.add(ui_key!(\"sf\"), SchemaFormDesc::new(rect, fields));",
         WidgetCatalogId::ShortcutBar => "view.add(ui_key!(\"scb\"), ShortcutBarDesc::new(rect, entries));",
@@ -464,6 +466,7 @@ define_showcase_components! {
     AddressBar => "Address bar", "Dual-mode path breadcrumb and full-path text editor.", 240.0,
     GenericDataTable => "Generic data table", "Virtualized table with multi-column sort, Pinyin/Shuangpin filter, and summary footer.", 300.0,
     PipelineView => "Pipeline view", "Render pass and build pipeline stage duration inspector.", 240.0,
+    Pivot => "Pivot", "Win11 secondary navigation: plain labels with an accent underline under the selected one.", 240.0,
     QueryBuilder => "Query builder", "Visual AND/OR filter rule builder with field, operator, and value rows.", 280.0,
     SchemaForm => "Schema form", "Declarative schema-driven inspector form with dirty tracking and conditional fields.", 280.0,
     ShortcutBar => "Shortcut bar", "Contextual keycap shortcut hint bar with conflict detection.", 220.0,
@@ -544,6 +547,7 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::Pagination => "分页器 (Pagination)",
         WidgetCatalogId::PinInput => "验证码输入框 (PIN Input)",
         WidgetCatalogId::PipelineView => "管线阶段视图 (Pipeline View)",
+        WidgetCatalogId::Pivot => "页签条 (Pivot)",
         WidgetCatalogId::Popconfirm => "气泡确认框 (Popconfirm)",
         WidgetCatalogId::Popover => "气泡浮层 (Popover)",
         WidgetCatalogId::Progress => "进度指示器 (Progress)",
@@ -662,6 +666,7 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Pagination => "分页器 页码切换 pagination",
         WidgetCatalogId::PinInput => "验证码输入框 PIN码 pin input",
         WidgetCatalogId::PipelineView => "渲染管线视图 阶段耗时分析 着色器管线 pipeline view",
+        WidgetCatalogId::Pivot => "页签条 二级导航 pivot tabs",
         WidgetCatalogId::Popconfirm => "气泡确认框 删除确认 popconfirm",
         WidgetCatalogId::Popover => "气泡浮层 锚定弹窗 popover",
         WidgetCatalogId::Progress => "进度条 环形进度 progress",
