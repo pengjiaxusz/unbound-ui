@@ -1,0 +1,23 @@
+# .gate.toml — 提交门禁的配置
+#
+# 门禁是一个零第三方依赖的独立 Rust 二进制，它认识的每一个开关都写在这里，而不是项目清单里。模板在生成时渲染本文件；生成之后归项目所有，可自由修改。
+#
+# 可接受的语法是扁平 TOML 子集：`key = value`，分组配置写成 `section.key = value`。未知键会被忽略，这样旧二进制面对新配置仍能工作；但值类型写错是硬错误——一个笔误绝不能悄悄关掉某项检查。
+
+# 项目的代码语言：`english` 或 `chinese`。它驱动代码语言守卫：英文代码里出现中文注释、或中文代码里出现英文注释，都会被拦下。
+mode = "english"
+
+# 单个文件里字符串违规与标识符违规的容忍比例。`0` 表示完全禁止。
+lang.max_ratio = 0.01
+lang.max_ident_ratio = 0.0
+
+# 提交信息主题的语言：`zh` 或 `en`。
+commit.subject_lang = "zh"
+# 中文主题至少要包含这么多个汉字。
+commit.subject_min_han = 2
+# 标题行不得超过这么多个字符。
+commit.max_header = 100
+# 允许的约定式提交类型。
+commit.types = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"]
+# 允许的 scope 白名单。空列表表示接受任意 scope；可以填入本项目的 crate 名把它收紧。
+commit.scopes = []

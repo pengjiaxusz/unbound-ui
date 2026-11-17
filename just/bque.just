@@ -8,7 +8,7 @@ queue-status:
     @bque status
 [unix]
 queue-status:
-    @echo "bque is Windows-only: no global build queue on this platform"
+    @echo "bque 仅支持 Windows：当前平台没有全局编译排队"
 
 # 应急清理异常残留的编译锁与孤儿等待记录
 [windows]
@@ -16,7 +16,7 @@ queue-clean:
     @bque clean
 [unix]
 queue-clean:
-    @echo "bque is Windows-only: no global build lock to clean"
+    @echo "bque 仅支持 Windows：没有可清理的全局编译锁"
 
 # 手动暂停后台编译（让路游戏 / 交互压测 / 系统级画像）
 [windows]
@@ -24,7 +24,7 @@ queue-pause:
     @bque pause
 [unix]
 queue-pause:
-    @echo "bque is Windows-only: nothing to pause"
+    @echo "bque 仅支持 Windows：没有可暂停的后台编译"
 
 # 手动恢复后台编译
 [windows]
@@ -32,15 +32,15 @@ queue-resume:
     @bque resume
 [unix]
 queue-resume:
-    @echo "bque is Windows-only: nothing to resume"
+    @echo "bque 仅支持 Windows：没有可恢复的后台编译"
 
 # 环境自检：探测 PATH 中的 bque，回退到默认安装目录，缺失时给出一键安装命令
 [windows]
 queue-doctor:
-    @$cmd = Get-Command bque -ErrorAction SilentlyContinue; if (-not $cmd -and (Test-Path "$env:LOCALAPPDATA\bque\bin\bque.exe")) { $env:Path = "$env:LOCALAPPDATA\bque\bin;$env:Path"; $cmd = Get-Command bque -ErrorAction SilentlyContinue }; if ($cmd) { Write-Host "bque: $($cmd.Source)"; bque --version; bque status } else { Write-Host 'bque missing. Install: irm https://github.com/pengjiaxusz/bque/releases/latest/download/install.ps1 | iex' }
+    @$cmd = Get-Command bque -ErrorAction SilentlyContinue; if (-not $cmd -and (Test-Path "$env:LOCALAPPDATA\bque\bin\bque.exe")) { $env:Path = "$env:LOCALAPPDATA\bque\bin;$env:Path"; $cmd = Get-Command bque -ErrorAction SilentlyContinue }; if ($cmd) { Write-Host "bque: $($cmd.Source)"; bque --version; bque status } else { Write-Host '找不到 bque。安装命令： irm https://github.com/pengjiaxusz/bque/releases/latest/download/install.ps1 | iex' }
 [unix]
 queue-doctor:
-    @echo "bque is Windows-only: no installation check needed"
+    @echo "bque 仅支持 Windows：无需安装检查"
 
 # 用法：just q-run cargo build --release（不要加 `--`，它会成为命令的一部分）
 # 通用排队执行入口：把任意重型命令纳入全局锁 + Idle 优先级

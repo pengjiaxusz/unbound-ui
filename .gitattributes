@@ -2,12 +2,12 @@
 # --- common 层 ---
 
 # ==============================================================================
-# 1. Line endings & normalization (Auto Line Endings & Normalization)
+# 1. 换行符与规范化（自动换行符与规范化）
 # ==============================================================================
-# Default all text files to LF in git repo, auto-adapt on checkout
+# 仓库内所有文本文件默认以 LF 存储，检出时自动适配
 * text=auto eol=lf
 
-# Explicitly declare LF for specific text formats
+# 为常见文本格式显式声明 LF
 *.md text eol=lf
 *.toml text eol=lf
 *.yaml text eol=lf
@@ -16,7 +16,7 @@
 *.txt text eol=lf
 *.env* text eol=lf
 
-# Script file line ending controls
+# 脚本文件的换行符控制
 *.sh text eol=lf
 *.bash text eol=lf
 *.zsh text eol=lf
@@ -24,15 +24,14 @@
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
 
-# Managed agent assets: the engine renders them as LF and fingerprints the
-# exact bytes, so they must stay LF on checkout. Without this, a repo-level
-# `*.ps1 eol=crlf` makes every update think the skill scripts were modified.
+# 托管的 agent 资产：引擎以 LF 渲染并对精确字节做指纹，因此检出后必须保持 LF。
+# 否则仓库级的 `*.ps1 eol=crlf` 会让每次更新都误判技能脚本被改动过。
 .agents/** text eol=lf
 
 # ==============================================================================
-# 2. Common binary assets (Binary Files)
+# 2. 常见二进制资产（二进制文件）
 # ==============================================================================
-# Prevent Git from attempting text merge or line ending conversion on binaries
+# 避免 Git 对二进制文件做文本合并或换行符转换
 *.png binary
 *.jpg binary
 *.jpeg binary
@@ -55,16 +54,15 @@
 *.wasm binary
 
 # ==============================================================================
-# 3. GitHub Linguist & diff controls
+# 3. GitHub Linguist 与 diff 控制
 # ==============================================================================
-# Mark package manager lockfiles as generated to keep PR diffs clean
+# 把包管理器的锁文件标记为生成物，保持 PR diff 干净
 pnpm-lock.yaml linguist-generated=true
 package-lock.json linguist-generated=true
 yarn.lock linguist-generated=true
 Cargo.lock linguist-generated=true
 
-# No export-ignore rules on purpose: source archives (git archive, GitHub ZIP)
-# must keep repo rules (.gitignore, .gitattributes) and AI/editor context
-# (.agents/, .github/, .vscode/). Projects that need a trimmed tarball can add
-# export-ignore entries outside this managed block.
+# 刻意不设 export-ignore 规则：源码归档（git archive、GitHub ZIP）必须保留仓库规则
+#（.gitignore、.gitattributes）与 AI/编辑器上下文（.agents/、.github/、.vscode/）。
+# 需要精简 tarball 的项目可以在本托管块之外自行添加 export-ignore 条目。
 # PENGJ_TEMPLATE_END

@@ -26,6 +26,26 @@ git --no-pager diff --stat
 git --no-pager diff --cached --stat
 ```
 
+
+---
+
+## 2.1 激活提交门禁
+
+门禁钩子放在 `.githooks/` 里，但 git 只有在 `core.hooksPath` 指向它时才会执行。新克隆后的首次提交前：
+
+```bash
+git config --get core.hooksPath   # 期望输出：.githooks
+```
+
+为空或指向别处时执行：
+
+```bash
+just doctor --fix        # 或：sh scripts/doctor.sh --fix
+```
+
+doctor 会检查工具链并在不安装任何东西的前提下激活钩子；若 `core.hooksPath` 属于别的工具，只报告冲突、不覆盖。
+
+
 ---
 
 ## 3. 提交前完整性检查
@@ -53,7 +73,7 @@ git --no-pager diff --cached --stat
   - ✅ 必须：`feat(cli): 新增参数支持`
 - **type/scope 用英文**：
   - 常用 type：`feat` `fix` `docs` `style` `refactor` `perf` `test` `build` `ci` `chore` `revert`
-  - scope 参考项目 `commitlint.config.js` 的 scope-enum 白名单，无合适则省略。
+  - scope 参考项目 `.gate.toml` 的 `commit.scopes` 白名单（空列表表示不限），无合适则省略。
 - **提交入口**：宿主提供的 `/commit` 命令与手写 `git commit` 同样适用；此类命令生成的英文标题必须先改写为中文再提交。
 
 

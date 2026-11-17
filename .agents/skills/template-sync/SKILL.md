@@ -78,7 +78,7 @@ cargo run -p pengj-templates-cli -- adopt --dir <目标项目目录> --layers <�
 AI 应首先巡检目标项目的工作区，按以下维度完成自动化诊断：
 - **技术栈与适用层判定**：
   - 检查项目根目录与源码：包含 `Cargo.toml` 则命中 Rust 技术栈，推荐 `rust` 或 `rust-workspace` 层；**非 Rust 项目严禁引入 Rust 相关层**。
-  - 检查工具链：是否包含 Node.js / 前端生态（`package.json`）？若有或用户希望本地 Git Hooks 物理拦截提交，可推荐 `lefthook`；若为纯脚本/无 Node 生态轻量项目，默认不选 `lefthook`（避免引入 node 依赖），作为可选附加项提示。
+  - 检查工具链：项目是否需要本地 Git Hook 物理拦截提交？需要则推荐 `gate` 层——纯 Rust 实现，无 Node 依赖，钩子统一调用 `pengj-templates-cli`（装这一个二进制就同时有模板 CLI、MCP 安装器与门禁）；只要文件、不要本地拦截的轻量项目默认不选 `gate`，作为可选附加项提示。
   - 编辑器配置：推荐引入 `vscode` 层，提供文件折叠嵌套规则（`explorer.fileNesting`），现有 `.vscode` 配置会自动并集合并。
   - `common` 与 `agent` 为所有项目的基础与核心层（必选）。
 - **编程范式检测（`--chinese` 中文编程）**：
@@ -101,7 +101,7 @@ AI 应首先巡检目标项目的工作区，按以下维度完成自动化诊�
 必须以结构化格式向用户呈现诊断结论并提供选择方案：
 - **项目特征摘要**：技术栈、中文编程范式、提交规范、现有规范保护说明；
 - **首选推荐方案（标记为 `(Recommended)`）**：列出最适合该项目的层组合（如 `--layers common,agent,vscode`）、选项参数（如 `--chinese`、`--commit-and-push`）及选型理由；
-- **备选/增选方案**：列出其他可行组合（如追加 `lefthook` 强化本地 Git 拦截，并说明需引入 Node 依赖的利弊）；
+- **备选/增选方案**：列出其他可行组合（如追加 `gate` 层强化本地 Git 拦截）；
 - **完整 CLI 命令预览**：给出对应的执行命令示例；
 - **咨询与确认**：通过交互式选择（如 `ask_question` 或结构化提问）征询用户意见，获得用户确认或自定义调整。
 
@@ -139,7 +139,7 @@ cargo run -p pengj-templates-cli -- audit --dir <目标项目目录> --diff
 - **`conflicted`（无受管块冲突）**：
   - 查看冲突路径与原因，按需手动将模板变更合入对应文件。
 - **配置与工具链接线核验**：
-  - 检查 `commitlint.base.js` 自动接线、`.vscode/settings.json`、`.cargo/config.toml` 合并是否符合预期。
+  - 检查 `gate` 层是否按预期落地（`.gate.toml` 与 `.githooks/*`），以及 `.vscode/settings.json`、`.cargo/config.toml` 合并是否符合预期。
 
 ### 4. 验证并自动提交被应用的项目
 
