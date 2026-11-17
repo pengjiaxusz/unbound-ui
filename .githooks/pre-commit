@@ -5,7 +5,7 @@
 #   1. 用 rustfmt 格式化暂存区里的 Rust 文件；
 #   2. 代码语言守卫按 `.gate.toml` 检查暂存的文件。
 #
-# 门禁内置在 `pengj-templates-cli` 里，本钩子调用 `pengj-templates-cli gate hook pre-commit`。一个二进制同时覆盖模板引擎、MCP 安装与提交门禁。
+# 门禁只存在于 `pengj-templates-cli` 里：本钩子只负责找到二进制，把活儿交给 `pengj-templates-cli gate hook pre-commit`。一个二进制同时覆盖模板引擎、MCP 安装与提交门禁。没有 CLI 就没有规则集，所以直接拦下提交并给出安装命令，而不是让一个跑不起来的检查放行。
 
 set -e
 
@@ -29,9 +29,8 @@ do
     fi
 done
 
-# 没有 CLI：rustfmt 与代码语言守卫在这个钩子里跑不了——它们没法用 shell 复刻。这里选择放行并大声提示，而不是让一个跑不起来的检查把提交堵死；同样的规则由服务端 CI 在推送时把关。
-echo "[gate] 找不到 pengj-templates-cli：rustfmt 与代码语言守卫这次没有运行。" >&2
-echo "[gate] 本次提交会通过；同样的规则由服务端 CI 把关。想在本地也跑，装一次 CLI：" >&2
+echo "[gate] 提交被拦下：PATH 与安装目录里都找不到 pengj-templates-cli。" >&2
+echo "[gate] rustfmt 与代码语言守卫都在 CLI 里，本地没有另一套检查可回落。安装一次即可带上：" >&2
 echo "[gate]   irm https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.ps1 | iex" >&2
 echo "[gate]   curl -fsSL https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.sh | sh" >&2
-exit 0
+exit 1

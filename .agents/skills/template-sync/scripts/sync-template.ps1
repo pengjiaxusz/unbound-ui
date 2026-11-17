@@ -165,15 +165,20 @@ function Invoke-Git {
 function Get-DefaultCommitMessage {
     param([string]$ProjectDir)
     $scope = "template"
-    $commitlintPath = Join-Path $ProjectDir "commitlint.config.js"
-    if (Test-Path $commitlintPath) {
-        $content = Get-Content $commitlintPath -Raw
-        if ($content -match "scope-enum" -or $content -match "rules:\s*\{") {
-            if ($content -notmatch "['""]template['""]") {
-                if ($content -match "['""]ai-skill['""]") {
-                    $scope = "ai-skill"
-                } else {
-                    $scope = ""
+    # The commit gate keeps the scope whitelist in `.gate.toml`:
+    # `commit.scopes = []` means "any scope allowed".
+    $gateConfigPath = Join-Path $ProjectDir ".gate.toml"
+    if (Test-Path $gateConfigPath) {
+        $config = Get-Content $gateConfigPath -Raw
+        if ($config -match "commit\.scopes\s*=\s*\[(?<scopes>[^\]]*)\]") {
+            $scopes = $Matches["scopes"]
+            if ($scopes.Trim() -ne "") {
+                if ($scopes -notmatch "['""]template['""]") {
+                    if ($scopes -match "['""]ai-skill['""]") {
+                        $scope = "ai-skill"
+                    } else {
+                        $scope = ""
+                    }
                 }
             }
         }

@@ -3,7 +3,7 @@
 #
 # 按 `.gate.toml` 里配置的约定式提交规则校验提交信息。git 会把信息文件路径作为第一个参数传进来。
 #
-# 门禁内置在 `pengj-templates-cli` 里，本钩子调用 `pengj-templates-cli gate hook commit-msg`。一个二进制同时覆盖模板引擎、MCP 安装与提交门禁。机器上没有 CLI 时，钩子回落到 `gate-fallback.sh`——一套只依赖 git 与 POSIX shell 的缩减检查。
+# 门禁只存在于 `pengj-templates-cli` 里：本钩子只负责找到二进制，把信息交给 `pengj-templates-cli gate hook commit-msg`。一个二进制同时覆盖模板引擎、MCP 安装与提交门禁。没有 CLI 就没有规则集，所以直接拦下提交并给出安装命令，而不是用另一套更弱的实现去检查。
 
 set -e
 
@@ -27,14 +27,8 @@ do
     fi
 done
 
-# 没有 CLI：改跑仓库自带的缩减检查。它被刻意做得比 CLI 更宽松，绝不会拒掉 CLI 会放行的提交——完整规则集仍由服务端 CI 把关。
-fallback="$root/.githooks/gate-fallback.sh"
-if [ -f "$fallback" ]; then
-    exec sh "$fallback" "$1"
-fi
-
-echo "[gate] PATH 与安装目录里都找不到 pengj-templates-cli，仓库自带的兜底检查也不在。" >&2
-echo "[gate] 安装一次即可带上提交门禁：" >&2
+echo "[gate] 提交被拦下：PATH 与安装目录里都找不到 pengj-templates-cli。" >&2
+echo "[gate] 门禁就在 CLI 里，本地没有另一套规则可回落。安装一次即可带上：" >&2
 echo "[gate]   irm https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.ps1 | iex" >&2
 echo "[gate]   curl -fsSL https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.sh | sh" >&2
-exit 2
+exit 1

@@ -5,10 +5,10 @@
 ## 通用约定
 - 编译/检查/测试/跑分统一走 `just`（`just check`、`just test`、`just q-run <cmd>`），不裸跑 `cargo`/`ninja`/`cmake`；详见 `.agents/skills/bque/SKILL.md`。
 - 完成修改并通过验证后，先 commit & push 再回复；纯问答或构建/测试失败待排查时除外。
-- 克隆后先跑 `just doctor`（没有 just 时用 `sh scripts/doctor.sh` / `pwsh -NoProfile -File scripts/doctor.ps1`）检查工具链；gate 层项目加 `--fix` / `-Fix` 激活提交钩子。自定义检查放 `scripts/doctor.d/`。
+- 克隆后跑 `just doctor --fix`（没有 just 时用 `sh scripts/doctor.sh --fix` / `pwsh -NoProfile -File scripts/doctor.ps1 -Fix`）：检查工具链、激活提交钩子、创建 agent 客户端工作区链接（`.trae` / `.claude/skills`），并执行 `scripts/doctor.d/` 下的项目自检与修复。
 - 提交标题必须用中文（至少 2 个汉字），type/scope 用英文；任何提交入口（含 /commit 命令）都不得写纯英文标题，commit-msg 钩子会拦截。
-- 提交门禁由 `.githooks/` 执行，激活入口是 `just doctor --fix`（或 `sh scripts/doctor.sh --fix`）：doctor 会调用 `.githooks/install.sh`，后者只需要 git 与一个 POSIX shell，不需要先装 CLI。gate 层会自动带上 `ci` 层，未装 CLI 的机器由服务端 CI 执行同样的规则。
-- 没装 CLI 时，提交标题仍由 `.githooks/gate-fallback.sh` 的缩减规则集检查；`pre-commit` 里的 rustfmt 与语言守卫跑不了，钩子会告警放行而不是堵死提交。完整规则集仍归服务端 CI：`gate` 任务是必需状态检查，ruleset 配置在 `.github/rulesets/gate.json`。
+- 提交门禁由 `.githooks/` 执行，激活入口是 `just doctor --fix`（或 `sh scripts/doctor.sh --fix`）：doctor 会调用 `.githooks/install.sh`，后者只需要 git 与一个 POSIX shell，所以激活钩子不需要 CLI。门禁本体在 `pengj-templates-cli` 里：没装它时钩子会拦下提交并打印安装命令。gate 层会自动带上 `ci` 层，服务端跑的是同一个二进制，并把它设成必需状态检查。
+- 规则只有一套：钩子只负责找到 CLI 并把活交给它，模板不带兜底脚本。没装 CLI 的机器在装好之前无法在本地提交，刻意不提供一套可能与 CI 判决不一致的更宽松检查。同样的规则由 `.github/workflows/gate.yml` 的 `gate` 任务与 `.github/rulesets/gate.json` 的必需状态检查在服务端执行。
 - 提交前自查标题：必须匹配 `type(scope): 摘要`，type 取自 `.gate.toml` 的 `commit.types`，摘要至少 2 个汉字，且不以句号结尾，标题不超过 100 字符。门禁会兜住全部，但先自查比被拦下更快。
 - 代码语言守卫：每次提交按 `.gate.toml` 的 `mode` 校验标识符与字符串文案——英文编程拒绝非英文，中文编程拒绝非中文。中文模式只判定面向人的文案，命令行参数、路径、协议字段名、内嵌源码等机器字面量不算违规（仍计入分母，避免额度被稀释）。每个文件容忍小比例（默认 1%）字符串例外；真实例外必须在源码里认证：行尾 `lang-ok: 理由`，或文件头附近 `lang-allow: 理由`。全量自检：`just gate-check`。
 - 改动涉及模块边界、公共 API、数据流、生命周期或新增模块/子系统时，同步更新对应的架构/设计文档再提交。

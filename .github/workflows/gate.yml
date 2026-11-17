@@ -29,6 +29,8 @@ jobs:
           # 校验提交范围需要完整历史；检出 head ref 可避免把 GitHub 自动生成的合并提交算进来。
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # checkout 默认不检出子模块，路径依赖放在子模块里的项目连 workspace 都加载不了，而报错表现为「找不到依赖」而不是缺子模块。没有子模块的项目不受影响。
+          submodules: true
 
       - name: 安装 pengj-templates-cli
         run: |
@@ -80,6 +82,26 @@ jobs:
               echo '```'
               printf '%s\n' "$output"
               echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+
+      - name: 校验文案语言
+        run: |
+          set +e
+          output=$(pengj-templates-cli check-lang --dir . 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "## 文案语言门禁报了违规"
+              echo ""
+              echo '```'
+              printf '%s\n' "$output"
+              echo '```'
+              echo ""
+              echo "英文项目不得出现汉字，中文项目面向人的文案必须含中文。请到模板源修复后对项目执行 `update`。"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"

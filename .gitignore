@@ -31,6 +31,12 @@ Thumbs.db
 
 /.omo/run-continuation
 
+# --- agent 层 ---
+
+# 由 `pengj-templates-cli repo init` 创建的 agent 客户端工作区链接
+/.trae
+/.claude/skills
+
 # --- rust-workspace 层 ---
 
 /target/

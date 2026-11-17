@@ -23,11 +23,11 @@ import 'just/rust-workspace.just'
 default:
     @just --list
 
-# 环境自检：工具链与提交钩子激活状态（可用 scripts/doctor.d/ 扩展）
+# 环境自检：工具链、提交钩子与工作区链接（可用 scripts/doctor.d/ 扩展）
 [unix]
 doctor *ARGS:
     @sh scripts/doctor.sh {{ARGS}}
-# 环境自检：工具链与提交钩子激活状态（可用 scripts/doctor.d/ 扩展）
+# 环境自检：工具链、提交钩子与工作区链接（可用 scripts/doctor.d/ 扩展）
 [windows]
 doctor *ARGS:
     @pwsh -NoProfile -File scripts/doctor.ps1 {{ARGS}}
