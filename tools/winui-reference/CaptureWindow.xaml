@@ -4,5 +4,77 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="WinUI Reference">
-    <Grid x:Name="Host" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" />
+    <!--
+        Host 背景就是 WinUI 的页面基准面；资源字典把「跟随用户个性化」的强调色
+        钉死成 Windows 11 默认蓝，使基线不随截图机器的主题色漂移。
+        只覆盖对照组控件实际用到的键（复选框 / 滑块 / 开关），不改动其他资源。
+    -->
+    <Grid x:Name="Host" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.Resources>
+            <ResourceDictionary>
+                <ResourceDictionary.ThemeDictionaries>
+                    <ResourceDictionary x:Key="Light">
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillChecked" Color="#005FB8" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPressed" Color="#005FB8" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedDisabled" Color="#37000000" />
+                        <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundChecked" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPointerOver" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedDisabled" Color="#5CFFFFFF" />
+                        <SolidColorBrush x:Key="SliderThumbBackground" Color="#005FB8" />
+                        <SolidColorBrush x:Key="SliderThumbBackgroundPointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="SliderThumbBackgroundPressed" Color="#005FB8" />
+                        <SolidColorBrush x:Key="SliderThumbBackgroundDisabled" Color="#37000000" />
+                        <SolidColorBrush x:Key="SliderTrackValueFill" Color="#005FB8" />
+                        <SolidColorBrush x:Key="SliderTrackValueFillPointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="SliderTrackValueFillPressed" Color="#005FB8" />
+                        <SolidColorBrush x:Key="SliderTrackValueFillDisabled" Color="#37000000" />
+                        <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ToggleSwitchFillOnPressed" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ToggleSwitchFillOnDisabled" Color="#37000000" />
+                        <SolidColorBrush x:Key="ToggleSwitchStrokeOn" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ToggleSwitchStrokeOnPointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ToggleSwitchStrokeOnPressed" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ToggleSwitchStrokeOnDisabled" Color="#37000000" />
+                        <SolidColorBrush x:Key="ToggleSwitchKnobFillOn" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchKnobFillOnPointerOver" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchKnobFillOnPressed" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchKnobFillOnDisabled" Color="#5CFFFFFF" />
+                    </ResourceDictionary>
+                    <ResourceDictionary x:Key="Dark">
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillChecked" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPressed" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedDisabled" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundChecked" Color="#000000" />
+                        <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPointerOver" Color="#000000" />
+                        <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" Color="#000000" />
+                        <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedDisabled" Color="#5C000000" />
+                        <SolidColorBrush x:Key="SliderThumbBackground" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="SliderThumbBackgroundPointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="SliderThumbBackgroundPressed" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="SliderThumbBackgroundDisabled" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="SliderTrackValueFill" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="SliderTrackValueFillPointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="SliderTrackValueFillPressed" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="SliderTrackValueFillDisabled" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchFillOnPressed" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchFillOnDisabled" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchStrokeOn" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchStrokeOnPointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchStrokeOnPressed" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchStrokeOnDisabled" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="ToggleSwitchKnobFillOn" Color="#000000" />
+                        <SolidColorBrush x:Key="ToggleSwitchKnobFillOnPointerOver" Color="#000000" />
+                        <SolidColorBrush x:Key="ToggleSwitchKnobFillOnPressed" Color="#000000" />
+                        <SolidColorBrush x:Key="ToggleSwitchKnobFillOnDisabled" Color="#5C000000" />
+                    </ResourceDictionary>
+                </ResourceDictionary.ThemeDictionaries>
+            </ResourceDictionary>
+        </Grid.Resources>
+    </Grid>
 </Window>

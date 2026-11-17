@@ -18,10 +18,16 @@ pub mod keys;
 pub mod layout_tree;
 /// 页面目录与实时示例渲染器。
 pub mod pages;
+/// 像素一致性基准：按参考截图边界渲染单个试点控件。
+pub mod parity;
+/// 像素一致性差分：ΔE2000 指标、热力图与 HTML 报告。
+pub mod png_diff;
 /// 适配到通用应用运行时的外壳。
 pub mod runtime_app;
 /// 自举（dogfooded）的应用外壳及其状态机。
 pub mod shell;
+/// PNG 读写（展厅截图与差分器共用）。
+pub mod shot;
 /// 导航、旋钮（knob）与演示状态。
 pub mod state;
 /// 稳定的控件标识。

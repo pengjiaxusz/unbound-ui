@@ -141,11 +141,12 @@ public sealed partial class CaptureWindow : Window
             await encoder.FlushAsync();
 
             var pngBytes = await ReadStreamAsync(encodedStream);
-            var fileName = $"{Catalog.CanonicalName(_options.ControlName)}_{_options.State.ToLowerInvariant()}_{_options.Theme}.png";
+            var baseName = $"{Catalog.CanonicalName(_options.ControlName)}_{_options.State.ToLowerInvariant()}_{_options.Theme}";
+            var fileName = $"{baseName}.png";
             var pngPath = Path.Combine(outputDirectory, fileName);
             await File.WriteAllBytesAsync(pngPath, pngBytes);
 
-            await WriteMetaAsync(outputDirectory, bitmap, control);
+            await WriteMetaAsync(outputDirectory, baseName, bitmap, control);
             Console.Out.WriteLine($"已写出 {pngPath}");
         }
         catch (Exception ex)
@@ -172,7 +173,7 @@ public sealed partial class CaptureWindow : Window
         }
     }
 
-    private async Task WriteMetaAsync(string outputDirectory, RenderTargetBitmap bitmap, FrameworkElement control)
+    private async Task WriteMetaAsync(string outputDirectory, string baseName, RenderTargetBitmap bitmap, FrameworkElement control)
     {
         var bounds = control
             .TransformToVisual(Host)
@@ -207,11 +208,12 @@ public sealed partial class CaptureWindow : Window
                 height = bounds.Height,
             },
             controlFocusState = control.FocusState.ToString(),
-            pngFile = $"{Catalog.CanonicalName(_options.ControlName)}_{_options.State.ToLowerInvariant()}_{_options.Theme}.png",
+            pngFile = $"{baseName}.png",
         };
 
+        // 每个用例写独立 JSON：批量采集时不会互相覆盖，差分器可直接按同名读取。
         var json = JsonSerializer.Serialize(meta, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "meta.json"), json);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, $"{baseName}.json"), json);
     }
 
     private static async Task<byte[]> ReadStreamAsync(IRandomAccessStream stream)
