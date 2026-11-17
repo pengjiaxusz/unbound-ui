@@ -573,21 +573,15 @@ impl GlyphCache {
         phase: u8,
     ) -> Option<crate::directwrite::RasterizedGlyph> {
         let directwrite = self.directwrite.as_mut()?;
-        let (family, weight, italic) = {
+        let key = {
             let info = engine.font_system_mut().db().face(face)?;
-            let family = info.families.first()?.0.clone();
-            let italic = matches!(info.style, fontdb::Style::Italic | fontdb::Style::Oblique);
-            (family, info.weight.0, italic)
+            crate::directwrite::FaceKey {
+                family: info.families.first()?.0.clone(),
+                weight: info.weight.0,
+                italic: matches!(info.style, fontdb::Style::Italic | fontdb::Style::Oblique),
+            }
         };
-        directwrite.rasterize(
-            &family,
-            weight,
-            italic,
-            glyph.glyph_id,
-            glyph.font_size,
-            glyph.w,
-            phase,
-        )
+        directwrite.rasterize(&key, glyph.glyph_id, glyph.font_size, glyph.w, phase)
     }
 
     /// 将整段已塑形的文本解析为四边形列表。

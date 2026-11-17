@@ -135,6 +135,9 @@ fn window_instance_extensions(window: &Window) -> Result<Vec<String>, String> {
     )
 }
 
+/// 每帧开始时执行的宿主钩子；在 UI 线程上拿到运行时的可变引用。
+type FrameHook<A> = Box<dyn FnMut(&mut AppRuntime<A>) + Send>;
+
 /// 驱动 [`AppRuntime`] 的通用窗口化宿主适配器。
 pub struct WindowedRunner<A: Application> {
     runtime: AppRuntime<A>,
@@ -173,7 +176,7 @@ pub struct WindowedRunner<A: Application> {
     /// 界面状态不离开 UI 线程，跨线程的只有纯值请求与回执——这样
     /// Agent 操作界面时既不抢真实鼠标，也不会把渲染栈的线程约束
     /// 传染给业务代码。
-    on_frame: Option<Box<dyn FnMut(&mut AppRuntime<A>) + Send>>,
+    on_frame: Option<FrameHook<A>>,
 }
 
 impl<A: Application> WindowedRunner<A> {

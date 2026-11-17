@@ -83,8 +83,7 @@ pub fn emit_rating(node: u64, desc: &RatingDesc, state: ControlState) -> WidgetO
     let gap = 8.0;
     let sz = ((desc.rect.width() - gap * (MAX_STARS + 1) as f32) / MAX_STARS as f32)
         .min(desc.rect.height() - 8.0)
-        .min(16.0)
-        .max(12.0);
+        .clamp(12.0, 16.0);
     let y = desc.rect.origin.y + (desc.rect.height() - sz) * 0.5;
     for i in 0..MAX_STARS {
         let r = Rect::new(desc.rect.origin.x + gap + i as f32 * (sz + gap), y, sz, sz);

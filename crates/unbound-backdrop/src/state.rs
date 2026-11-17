@@ -13,6 +13,11 @@ use crate::mica::{generate, MicaImage, MicaRequest};
 /// 事件映射为一次全量重建。
 pub const MICA_READY_EVENT_ID: u64 = 0xC4A0_0C1A;
 
+/// 后台线程与主线程共享的代次结果槽：`(代次, 图像)`。
+///
+/// 图像为 `None` 表示生成失败，与“尚未结算”区分。
+type SharedSlot = Arc<Mutex<Option<(u64, Option<MicaImage>)>>>;
+
 /// 云母背板的异步生成器。
 ///
 /// 壁纸解码、模糊与 PNG 编码都在工作线程完成；主线程只做「就绪后取走」
@@ -22,7 +27,7 @@ pub struct BackdropGenerator {
     request: Option<MicaRequest>,
     /// 当前代次的结果槽：`None` 图像表示生成失败（拿不到壁纸），
     /// 同样视为“已结算”，调用方据此停止请求后续帧。
-    slot: Option<Arc<Mutex<Option<(u64, Option<MicaImage>)>>>>,
+    slot: Option<SharedSlot>,
     generation: u64,
     delivered: bool,
 }

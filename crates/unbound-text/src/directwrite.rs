@@ -41,10 +41,10 @@ pub(crate) struct RasterizedGlyph {
 /// `fontdb` 为每个命名字体实例分配独立 ID，其家族、字重与斜体信息足以
 /// 在系统字体集合中唯一定位同一个 `IDWriteFontFace`。
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct FaceKey {
-    family: String,
-    weight: u16,
-    italic: bool,
+pub(crate) struct FaceKey {
+    pub(crate) family: String,
+    pub(crate) weight: u16,
+    pub(crate) italic: bool,
 }
 
 /// DirectWrite 字形光栅化器。
@@ -74,29 +74,22 @@ impl DirectWriteRasterizer {
 
     /// 光栅化单个字形。
     ///
-    /// `phase` 为 0..3 的亚像素相位，基线的水平原点取 `phase * 0.25`。
-    /// 返回 `None` 时调用方应回退到 `swash`，包括：字体家族缺失、彩色字体、
-    /// 或 DirectWrite 拒绝该字形。
+    /// `key` 指定字体家族、字重与斜体；`phase` 为 0..3 的亚像素相位，基线的
+    /// 水平原点取 `phase * 0.25`。返回 `None` 时调用方应回退到 `swash`，包括：
+    /// 字体家族缺失、彩色字体、或 DirectWrite 拒绝该字形。
     pub fn rasterize(
         &mut self,
-        family: &str,
-        weight: u16,
-        italic: bool,
+        key: &FaceKey,
         glyph_id: u16,
         font_size: f32,
         advance: f32,
         phase: u8,
     ) -> Option<RasterizedGlyph> {
-        let key = FaceKey {
-            family: family.to_owned(),
-            weight,
-            italic,
-        };
-        let face = if let Some(cached) = self.faces.get(&key) {
+        let face = if let Some(cached) = self.faces.get(key) {
             cached.clone()?
         } else {
-            let found = self.find_face(&key);
-            self.faces.insert(key, found.clone());
+            let found = self.find_face(key);
+            self.faces.insert(key.clone(), found.clone());
             found?
         };
 
