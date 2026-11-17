@@ -205,6 +205,21 @@ impl ThemeSet {
             set_tok(&mut dark_entries, Token::accent_swatch(idx), dark);
         }
 
+        // 高对比主题也要有品牌色板：高对比抹掉一切半透明，
+        // 若色板留空，「颜色网格」控件在高对比下会画出十个空格子。
+        let mut high_contrast_entries: Vec<(Token, Color)> = crate::TOKENS
+            .iter()
+            .map(|&t| (t, base.palette(ThemeKind::HighContrast).color(t)))
+            .collect();
+        for (idx, brand) in crate::AccentBrand::ALL.iter().enumerate() {
+            let ramp = if preset == ProductPreset::Win11 {
+                crate::win11::accent_ramp(*brand, false).0
+            } else {
+                brand.light_ramp().0
+            };
+            set_tok(&mut high_contrast_entries, Token::accent_swatch(idx), ramp);
+        }
+
         match preset {
             ProductPreset::Win11 | ProductPreset::Standard => {}
             ProductPreset::Dunting => {
@@ -288,7 +303,7 @@ impl ThemeSet {
         Self::from_palettes(
             Palette::new(ThemeKind::Light, &light_entries),
             Palette::new(ThemeKind::Dark, &dark_entries),
-            base.palette(ThemeKind::HighContrast).clone(),
+            Palette::new(ThemeKind::HighContrast, &high_contrast_entries),
         )
     }
 }
@@ -311,6 +326,10 @@ mod tests {
 
     #[test]
     fn all_ten_oklch_accents_and_product_presets_produce_valid_4kib_luts() {
+        // 外壳容器槽位刻意保持透明：Win11 的标题栏与导航窗格本身就是云母，
+        // 再铺一层不透明底色会让层次凭空多出一层。状态栏也正是靠
+        // 「无填充 + 顶部分隔线」还原 Win11 观感。
+        const TRANSPARENT_BY_DESIGN: [Token; 2] = [Token::HEADER_BG, Token::NAV_BG];
         for preset in [
             ProductPreset::Win11,
             ProductPreset::Standard,
@@ -325,6 +344,9 @@ mod tests {
                     for token in crate::TOKENS {
                         let c = lut.color(token);
                         assert!(c.is_finite());
+                        if TRANSPARENT_BY_DESIGN.contains(&token) {
+                            continue;
+                        }
                         assert!(c.a > 0.0, "token {:?} transparent in {:?}", token, kind);
                     }
                 }
