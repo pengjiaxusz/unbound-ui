@@ -159,6 +159,10 @@ impl Application for GalleryApp {
                 self.state.set_locale(parsed);
                 ctx.set_locale_enum(parsed);
             }
+            // 云母纹理已生成：下一帧 `view` 会把它提交给资产中心并绘制。
+            AppEvent::Custom { id, .. } if unbound_app::is_mica_ready_event(id) => {
+                self.state.bump();
+            }
             AppEvent::Timer { .. }
             | AppEvent::FileHover(_)
             | AppEvent::FileDrop(_)
@@ -189,7 +193,16 @@ impl Application for GalleryApp {
             pressed: view.ctx.pressed,
             focused: view.ctx.focused,
         };
-        if self.needs_rebuild(viewport, &inter, view.ctx.force) {
+        // 云母纹理在后台生成、解码：先提交/绘制，再用最新可见性决定根背景。
+        // 可见性翻转本身必须触发重建，否则不透明底色会一直盖着已经就绪的纹理。
+        let was_mica_visible = self.mica.visible();
+        self.mica
+            .sync(viewport, self.state.theme.is_dark(), view.event_sender());
+        let mica_visible = self
+            .mica
+            .draw(view, unbound_app::ui_key!("showcase_mica_backdrop"));
+        if mica_visible != was_mica_visible || self.needs_rebuild(viewport, &inter, view.ctx.force)
+        {
             self.rebuild(viewport, inter);
         }
         let collector = view.collector();

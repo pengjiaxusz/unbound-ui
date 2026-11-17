@@ -1,0 +1,18 @@
+[package]
+name = "unbound-backdrop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Wallpaper-derived Mica backdrop generation for Win11-style windows"
+
+[dependencies]
+image.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[lints]
+workspace = true

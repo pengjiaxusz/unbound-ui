@@ -55,6 +55,7 @@ use unbound_widgets::{BackdropRequest, ControlState, SceneCollector, WidgetOutpu
 use unbound_world::{NodeId, UiWorld};
 
 pub mod assets;
+pub mod backdrop;
 pub mod guest_bridge;
 pub mod i18n;
 pub mod inspector;
@@ -67,6 +68,7 @@ pub mod state_store;
 pub mod window_runner;
 
 pub use assets::{AssetHub, AssetResidency};
+pub use backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID};
 pub use guest_bridge::GuestAppAdapter;
 pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Locale};
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
@@ -1303,6 +1305,8 @@ pub struct ViewBuilder<'a> {
     ///
     /// 意图在布局求解之后才被写成语义节点，因此控件的最终矩形已确定。
     semantic_intents: &'a mut FxHashMap<u64, SemanticIntent>,
+    /// 跨线程事件投递句柄：后台任务（如图片生成）完成后唤醒 UI 线程。
+    event_sender: Option<AppEventSender>,
     depth: u16,
     z_base: u16,
 }
@@ -2566,6 +2570,14 @@ impl<'a> ViewBuilder<'a> {
         self.assets
     }
 
+    /// 跨线程事件投递句柄：后台任务完成后可用它唤醒 UI 线程。
+    ///
+    /// 未安装异步通道时返回 `None`；调用方应把“无句柄”视为“本帧不需要唤醒”。
+    #[must_use]
+    pub fn event_sender(&self) -> Option<AppEventSender> {
+        self.event_sender.clone()
+    }
+
     /// 提交一张 PNG 供运行时异步解码并打包进图集，返回资源句柄。
     ///
     /// 解码发生在工作线程，本帧不会阻塞；调用方应在后续帧用
@@ -3773,6 +3785,7 @@ impl<A: Application> AppRuntime<A> {
             scale_osd_remaining: self.ctx.scale_osd_remaining,
         };
         let mut focus_groups = Vec::new();
+        let event_sender = self.ctx.event_sender();
         let mut view = ViewBuilder {
             collector: &mut self.collector,
             ctx: view_ctx,
@@ -3788,6 +3801,7 @@ impl<A: Application> AppRuntime<A> {
             focus_groups: &mut focus_groups,
             title_bar_bindings: &mut self.title_bar_bindings,
             semantic_intents: &mut self.semantic_intents,
+            event_sender,
             depth: 0,
             z_base: 0,
         };
