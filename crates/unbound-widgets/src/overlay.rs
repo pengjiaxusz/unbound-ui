@@ -210,6 +210,54 @@ pub fn place_anchored_popup_detailed(
     }
 }
 
+/// Win11 ComboBox（下拉选择框）弹层的定位：让**当前选中项**压住触发器。
+///
+/// WinUI 的 ComboBox 弹层不是「贴在输入框下方」，而是把选中项的高亮块对齐到
+/// 触发器中心——选中项在列表中的中心与触发器中心重合，其余选项由此向上/向下
+/// 展开。上方空间不足时整片向上翻，让最后一项压住触发器；最后再夹紧到视口内。
+///
+/// `row_height` 是列表行高，`content_inset` 是列表内部上边距（无内边距时为 0）。
+/// 返回的矩形不会超出 `viewport` 四周各 `margin` 的安全区。
+#[must_use]
+pub fn place_combo_popup(
+    anchor: Rect,
+    popup_size: Vec2,
+    row_height: f32,
+    content_inset: f32,
+    selected: Option<usize>,
+    viewport: Rect,
+    margin: f32,
+) -> Rect {
+    let margin = margin.max(0.0);
+    let width = popup_size
+        .x
+        .max(0.0)
+        .min((viewport.width() - margin * 2.0).max(0.0));
+    let height = popup_size
+        .y
+        .max(0.0)
+        .min((viewport.height() - margin * 2.0).max(0.0));
+    let selected_offset =
+        content_inset.max(0.0) + (selected.unwrap_or(0) as f32 + 0.5) * row_height.max(0.0);
+
+    // 让选中项中心与触发器中心重合。
+    let mut y = anchor.center().y - selected_offset;
+    // 上方放不下时改为「列表末项压住触发器」（整片向上翻）。
+    if y < viewport.origin.y + margin {
+        y = anchor.max().y - height;
+    }
+    let min_y = viewport.origin.y + margin;
+    let max_y = (viewport.max().y - height - margin).max(min_y);
+    let min_x = viewport.origin.x + margin;
+    let max_x = (viewport.max().x - width - margin).max(min_x);
+    Rect::new(
+        anchor.origin.x.clamp(min_x, max_x),
+        y.clamp(min_y, max_y),
+        width,
+        height,
+    )
+}
+
 /// 计算指定 [`Placement`] 与 `gap` 下未钳制的浮层左上角坐标。
 #[must_use]
 fn candidate_origin(anchor: Rect, size: Vec2, placement: Placement, gap: f32) -> Vec2 {
@@ -710,6 +758,59 @@ mod tests {
             viewport.contains_rect(&popup),
             "popup {popup:?} escaped viewport {viewport:?}"
         );
+    }
+
+    #[test]
+    fn a_combo_popup_centers_the_selected_row_on_the_anchor() {
+        let anchor = Rect::new(300.0, 200.0, 160.0, 32.0);
+        let popup = place_combo_popup(
+            anchor,
+            Vec2::new(160.0, 3.0 * 37.0),
+            37.0,
+            0.0,
+            Some(1),
+            viewport(),
+            8.0,
+        );
+        let selected_center = popup.origin.y + 1.5 * 37.0;
+        assert!(
+            (selected_center - anchor.center().y).abs() < 0.01,
+            "selected row center {selected_center} != anchor center {}",
+            anchor.center().y
+        );
+        assert_contained(popup, viewport());
+    }
+
+    #[test]
+    fn a_combo_popup_flips_up_when_the_selected_row_would_leave_the_viewport() {
+        let anchor = Rect::new(300.0, 20.0, 160.0, 32.0);
+        let popup = place_combo_popup(
+            anchor,
+            Vec2::new(160.0, 4.0 * 37.0),
+            37.0,
+            0.0,
+            Some(3),
+            viewport(),
+            8.0,
+        );
+        assert!(popup.origin.y >= 8.0 - 0.01);
+        assert_contained(popup, viewport());
+    }
+
+    #[test]
+    fn a_combo_popup_clamps_horizontally() {
+        let anchor = Rect::new(1250.0, 200.0, 160.0, 32.0);
+        let popup = place_combo_popup(
+            anchor,
+            Vec2::new(160.0, 74.0),
+            37.0,
+            0.0,
+            Some(0),
+            viewport(),
+            8.0,
+        );
+        assert!(popup.max().x <= viewport().max().x - 8.0 + 0.01);
+        assert_contained(popup, viewport());
     }
 
     #[test]

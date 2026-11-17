@@ -711,6 +711,25 @@ impl RawNodeDesc {
         self
     }
 
+    /// 把绝对定位节点钉在父容器内的 `(x, y)` 处并给定尺寸。
+    ///
+    /// 这是浮层、右键菜单与下拉列表共用的定位写法：`inset` 只设置左上偏移，
+    /// 右/下留空，因此尺寸完全由 `width` / `height` 决定，不会被父容器拉伸。
+    #[must_use]
+    pub fn bounds(mut self, x: f32, y: f32, width: f32, height: f32) -> Self {
+        self.width = Dim::px(width);
+        self.height = Dim::px(height);
+        self.inset = Edges::trbl(x, y, 0.0, 0.0);
+        self
+    }
+
+    /// 设置投影模糊半径（`0.0` 表示不绘制投影）。
+    #[must_use]
+    pub fn shadow_blur(mut self, blur: f32) -> Self {
+        self.shadow_blur = blur;
+        self
+    }
+
     #[must_use]
     pub fn key(mut self, key: u64) -> Self {
         self.key = key;
