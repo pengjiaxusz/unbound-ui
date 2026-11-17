@@ -1,9 +1,9 @@
 #!/bin/sh
-# gate install: 不依赖 CLI 启用本地提交门禁.
+# gate install: 在当前克隆上激活提交钩子.
 #
-# 这个脚本是给「机器上没有 pengj-templates-cli」准备的答案：只需要 git 与一个 POSIX shell，别的不用。每个克隆跑一次即可。
+# 沿用 `core.hooksPath` 存在 `.git/config` 里、不会随克隆传播，所以每个克隆跑一次即可。脚本只需要 git 与一个 POSIX shell——它不需要 CLI，因为「激活钩子」与「跑钩子」是两件事。
 #
-# 此后门禁以降级模式运行：提交信息照样被检查，只是走 `gate-fallback.sh` 里那套缩减规则，而不是 CLI。完整规则集无论如何都由服务端 CI 兜住。
+# 门禁本体在 `pengj-templates-cli` 里，本脚本不自带规则。没有 CLI 时钩子会拦下提交并打印安装命令，所以下面的检测只做告警。
 
 set -eu
 
@@ -33,10 +33,10 @@ for hook in commit-msg pre-commit; do
 done
 
 if command -v pengj-templates-cli >/dev/null 2>&1; then
-    echo "[gate] 检测到 pengj-templates-cli：完整规则集已就位"
+    echo "[gate] 检测到 pengj-templates-cli：钩子会跑完整规则集"
 else
-    echo "[gate] 没检测到 pengj-templates-cli：钩子会走缩减规则集，服务端 CI 仍按完整规则集把关" >&2
-    echo "[gate]   装一次就能在本地拿到完整规则集：" >&2
+    echo "[gate] 钩子已激活，但没检测到 pengj-templates-cli：装好之前提交会被拦下" >&2
+    echo "[gate]   门禁就在 CLI 里，装一次即可：" >&2
     echo "[gate]   irm https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.ps1 | iex" >&2
     echo "[gate]   curl -fsSL https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.sh | sh" >&2
 fi

@@ -5,9 +5,13 @@
 gate-check:
     @pengj-templates-cli gate check
 
-# 零依赖裸入口：`sh .githooks/install.sh` 只用 git 与 POSIX shell 就把 core.hooksPath 指向 .githooks 并补上可执行位。优先用 `just doctor --fix`；本配方是 doctor 跑不了时的兜底。
+# 裸入口：`sh .githooks/install.sh` 只用 git 与 POSIX shell 就把 core.hooksPath 指向 .githooks 并补上可执行位。优先用 `just doctor --fix`，本配方是它调用的裸入口。
 gate-hooks-local:
     @sh .githooks/install.sh
+
+# 校验生成项目文案是否跟随语言轴：en 项目零汉字，zh 项目面向人的文案必须含中文。只检查 manifest 记录的模板托管文件。
+gate-lang:
+    @pengj-templates-cli check-lang --dir .
 
 # 运行内置规则自检
 gate-selftest:
