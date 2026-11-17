@@ -27,5 +27,5 @@
 - **按占比容忍，例外必须认证**：每个文件单独算占比——字符串违规数 ÷ 字符串总数 ≤ 1%、标识符违规数 ÷ 标识符总数 ≤ 0（额度和违规数都向下取整）。真实需要的例外在源码里认证：
   - 单行放行：该行注释写 `lang-ok: 理由`；
   - 整文件放行：文件头注释写 `lang-allow: 理由`，仅限“中文即数据”的文件（i18n 词条表、拼音字典、双语展厅文案、CJK 测试样本）。
-- **门禁**：pre-commit 由 `scripts/check-lang.mjs` 扫描暂存的 `.rs`；全量审计运行 `node scripts/check-lang.mjs`（`--list` 列出全部违规、`--json` 输出机器可读报告、`--max-ratio` 临时放宽阈值）。
+- **门禁**：pre-commit 调用 `pengj-templates-cli gate hook pre-commit`，对暂存的 `.rs` 跑 rustfmt 与语言守卫；全量审计运行 `just gate-check`（等价于 `pengj-templates-cli gate check`，可加 `--list` 列出全部违规、`--json` 输出机器可读报告、`--max-ratio` 临时放宽阈值）。
 - **判定方向**来自 `.pengj-templates.json` 的 `options.chinese_programming`（`false` 查非英文、`true` 查非中文），`PENGJ_CODE_LANG=english|chinese` 可临时覆盖。
