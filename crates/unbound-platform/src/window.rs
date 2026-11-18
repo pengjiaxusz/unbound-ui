@@ -381,11 +381,8 @@ pub enum ImeEvent {
 
 /// 输入法的实时状态。
 ///
-/// 文本输入框需要平台提供两项数据：当前正在显示的组合串（连同用于高亮绘制的
-/// 选区范围）以及必须精确插入一次的已提交文本。提交文本在此缓冲，因为输入事件
-/// 可能在两帧之间到达；[`Self::take_commit`] 负责将其取出。
-///
-///
+/// 只描述当前组合输入：是否启用、组合字符串与其选区。平台 IME 事件是应用侧
+/// 唯一输入法来源，提交文本不再在此缓冲，因此不存在需要宿主轮询的提交通道。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImeState {
     /// 当前聚焦控件是否启用了 IME。
@@ -394,8 +391,6 @@ pub struct ImeState {
     pub preedit: String,
     /// 组合选区的字节范围。
     pub selection: Option<(usize, usize)>,
-    /// 等待插入的已提交文本。
-    pub commit: String,
 }
 
 impl ImeState {
@@ -407,12 +402,10 @@ impl ImeState {
                 self.preedit.clone_from(text);
                 self.selection = *selection;
             }
-            ImeEvent::Commit(text) => {
-                // 提交前通常会先清空预编辑串；此处防御性清空，以防部分平台未发送空预编辑事件。
-                //
+            ImeEvent::Commit(_) => {
+                // 提交由事件通道直接送达应用；这里只需结束组合显示。
                 self.preedit.clear();
                 self.selection = None;
-                self.commit.push_str(text);
             }
             ImeEvent::Disabled => {
                 self.enabled = false;
@@ -420,11 +413,6 @@ impl ImeState {
                 self.selection = None;
             }
         }
-    }
-
-    /// 取出已提交文本，并将缓冲区置空。
-    pub fn take_commit(&mut self) -> String {
-        core::mem::take(&mut self.commit)
     }
 
     /// 应当在光标处绘制的组合字符串。
@@ -437,7 +425,6 @@ impl ImeState {
     pub fn clear(&mut self) {
         self.preedit.clear();
         self.selection = None;
-        self.commit.clear();
     }
 }
 

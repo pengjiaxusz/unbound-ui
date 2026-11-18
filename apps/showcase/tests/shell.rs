@@ -3,10 +3,10 @@
 use std::ops::{Deref, DerefMut};
 
 use showcase::pages::PageId;
-use showcase::shell::GalleryApp;
+use showcase::shell::{ClipboardRequest, GalleryApp};
 use showcase::state::ThemeMode;
 use showcase::target::{self, Target};
-use unbound_app::{AppKey, AppRuntime, Modifiers as AppModifiers};
+use unbound_app::{AppKey, AppRuntime, ImeUpdate, Modifiers as AppModifiers};
 use unbound_headless::Harness;
 use unbound_input::PointerButton;
 use unbound_math::{Rect, Vec2};
@@ -290,7 +290,7 @@ fn ctrl_k_searches_the_catalogue_by_crate_and_tag() {
             ..Default::default()
         },
     );
-    assert!(app.state.search_focused);
+    assert!(app.state.search.focused);
     for ch in "mtsdf".chars() {
         app.key(
             &PlatformKey::Character(ch.to_string()),
@@ -307,7 +307,161 @@ fn ctrl_k_searches_the_catalogue_by_crate_and_tag() {
         Modifiers::default(),
     );
     assert_eq!(app.state.active_page, PageId::Typography);
-    assert!(!app.state.search_focused);
+    assert!(!app.state.search.focused);
+}
+
+#[test]
+fn ime_composition_is_visible_and_commits_exactly_once() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    assert!(app.state.search.focused);
+
+    // 首字母组合：缓冲区为空时也必须绘制组合文本，而不是回退到占位符。
+    app.runtime.ime(ImeUpdate {
+        enabled: true,
+        preedit: "nihao".into(),
+        cursor_range: None,
+        commit: None,
+        cancelled: false,
+    });
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.search.text(), "nihao");
+
+    // 提交替换组合区间：整条链路上恰好插入一次。
+    app.runtime.ime(ImeUpdate {
+        enabled: false,
+        preedit: String::new(),
+        cursor_range: None,
+        commit: Some("hello".into()),
+        cancelled: false,
+    });
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.search.text(), "hello");
+}
+
+#[test]
+fn escape_cancels_only_the_active_composition() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    app.key(
+        &PlatformKey::Character("a".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(app.state.search.text(), "a");
+
+    app.runtime.ime(ImeUpdate {
+        enabled: true,
+        preedit: "ni".into(),
+        cursor_range: None,
+        commit: None,
+        cancelled: false,
+    });
+    assert_eq!(app.state.search.text(), "ani");
+
+    app.key(
+        &PlatformKey::Named("Escape".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(
+        app.state.search.text(),
+        "a",
+        "escape must drop only the composition and keep committed text"
+    );
+    assert!(app.state.search.focused);
+}
+
+#[test]
+fn fps_input_accepts_only_digits_and_rejects_overflow() {
+    let mut app = app();
+    app.state.fps_input.edit.set_text("60");
+    app.state.fps_input.focus();
+
+    app.key(
+        &PlatformKey::Character("a".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(app.state.fps_input.text(), "60");
+
+    app.key(
+        &PlatformKey::Character("7".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(app.state.fps_input.text(), "607");
+
+    app.key(
+        &PlatformKey::Character("8".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(
+        app.state.fps_input.text(),
+        "607",
+        "the fps buffer is capped at three digits"
+    );
+}
+
+#[test]
+fn editor_menu_actions_respect_selection_and_clipboard_state() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "abc".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    app.rebuild(VIEWPORT);
+    let target = Target::Search;
+    let anchor = rect_of(&app, target::id(target)).center();
+
+    // 剪贴板为空：粘贴项禁用，点击不产生读取请求。
+    app.open_editor_menu(target, anchor, false);
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(2)));
+    assert!(app.take_clipboard_request().is_none());
+    assert_eq!(app.state.search.text(), "abc");
+    assert!(!app.editor_menu_open());
+
+    // 剪贴板有内容：粘贴项可用，点击排队读取请求。
+    app.open_editor_menu(target, anchor, true);
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(2)));
+    assert!(matches!(
+        app.take_clipboard_request(),
+        Some(ClipboardRequest::Read)
+    ));
+    assert!(!app.editor_menu_open());
+
+    // 全选后可复制整段文本。
+    app.open_editor_menu(target, anchor, true);
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(4)));
+    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+
+    app.open_editor_menu(target, anchor, true);
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(1)));
+    match app.take_clipboard_request() {
+        Some(ClipboardRequest::Write(text)) => assert_eq!(text, "abc"),
+        other => panic!("expected a clipboard write, got {other:?}"),
+    }
 }
 
 #[test]

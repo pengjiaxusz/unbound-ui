@@ -60,6 +60,8 @@ pub enum Target {
     FpsPreset(u8),
     /// 聚焦自定义 FPS 上限输入框。
     FpsInput,
+    /// 文本编辑器上下文菜单项（`0` 剪切、`1` 复制、`2` 粘贴、`3` 全选）。
+    EditorMenuItem(u8),
 }
 
 const TAG_NAV_TOGGLE: u64 = 1;
@@ -87,6 +89,7 @@ const TAG_SEARCH_COMPONENT: u64 = 22;
 const TAG_ZOOM_MENU: u64 = 23;
 const TAG_LANG_MENU: u64 = 24;
 const TAG_LANG: u64 = 25;
+const TAG_EDITOR_MENU_ITEM: u64 = 26;
 
 /// 展厅的语义根节点。
 pub const ROOT: u64 = 1;
@@ -144,6 +147,7 @@ pub const fn id(target: Target) -> u64 {
         Target::NavScrollbar => tag(TAG_NAV_SCROLLBAR),
         Target::FpsPreset(index) => tag(TAG_FPS_PRESET) | index as u64,
         Target::FpsInput => tag(TAG_FPS_INPUT),
+        Target::EditorMenuItem(index) => tag(TAG_EDITOR_MENU_ITEM) | index as u64,
     }
 }
 
@@ -191,6 +195,7 @@ pub const fn decode(value: u64) -> Option<Target> {
         TAG_NAV_SCROLLBAR => Target::NavScrollbar,
         TAG_FPS_PRESET => Target::FpsPreset((low & 0xff) as u8),
         TAG_FPS_INPUT => Target::FpsInput,
+        TAG_EDITOR_MENU_ITEM => Target::EditorMenuItem((low & 0xff) as u8),
         _ => return None,
     })
 }
@@ -227,6 +232,7 @@ mod tests {
             Target::NavScrollbar,
             Target::FpsPreset(4),
             Target::FpsInput,
+            Target::EditorMenuItem(2),
         ];
         for target in targets {
             assert_eq!(decode(id(target)), Some(target), "{target:?}");

@@ -9,15 +9,16 @@
 //!
 
 use unbound_app::{
-    AppContext, AppEvent, AppKey, Application, DirtyFlags, EventOutcome, ImeUpdate, Locale,
+    AppContext, AppEvent, AppKey, Application, DirtyFlags, EventOutcome, Locale,
     Modifiers as AppModifiers, ViewBuilder,
 };
 use unbound_input::FocusCause;
 use unbound_platform::{Modifiers, PlatformKey};
 use unbound_theme::ThemeKind;
 
-use crate::shell::{GalleryApp, Interaction};
+use crate::shell::{ClipboardRequest, GalleryApp, Interaction};
 use crate::state::ThemeMode;
+use crate::target;
 
 /// 由 [`unbound_app::AppRuntime`] 驱动的 showcase 外壳。
 ///
@@ -59,18 +60,32 @@ impl Application for GalleryApp {
             AppEvent::PointerDown { pos, target, .. } => self.pointer_down(pos, target),
             AppEvent::PointerUp { pos, .. } => self.pointer_up(pos),
             // 释放仅结束拖拽；运行时会单独上报点击，且仅当按压从未转为拖拽时才上报。
-            //
-            AppEvent::Click { node, pos, .. } => self.click(node, pos),
+            // 第三次及之后的连击由 `count` 标出，此时按“全选”处理而不是重新定位插入符。
+            AppEvent::Click { node, pos, count } => {
+                if count >= 3 {
+                    if let Some(target) = target::decode(node) {
+                        self.triple_click_editor(target);
+                    }
+                } else {
+                    self.click(node, pos);
+                }
+            }
             // 一旦指针越过拖拽阈值（drag slop），路由器就会停止发送 `PointerMove`，
             // 改为发送 `DragStart`/`Drag`。它们携带相同的位置，因此外壳的捕获拖拽
             // （滚动条抓取、滑块、画布平移、框选、卡片重排）会像越过阈值前一样继续跟随指针。
             //
             //
             AppEvent::DragStart { pos, .. } | AppEvent::Drag { pos, .. } => self.pointer_move(pos),
-            AppEvent::DoubleClick { .. } => {}
-            AppEvent::ContextMenu { .. } => {
-                // 上下文菜单控件随 P2 容器批次一起落地；在此之前外壳没有可打开的菜单。
-                //
+            AppEvent::DoubleClick { node, pos } => {
+                if let Some(target) = target::decode(node) {
+                    self.double_click_editor(target, pos);
+                }
+            }
+            AppEvent::ContextMenu { node, pos } => {
+                if let Some(target) = target::decode(node) {
+                    let clipboard_has_text = ctx.clipboard_get().is_some();
+                    self.open_editor_menu(target, pos, clipboard_has_text);
+                }
             }
             AppEvent::Shortcut { .. } => {
                 // 外壳尚未注册按键映射绑定；运行时会为已注册的应用解析快捷键。
@@ -89,49 +104,19 @@ impl Application for GalleryApp {
                 modifiers,
             } => {
                 if pressed {
-                    if modifiers.ctrl && !modifiers.alt && !modifiers.meta {
-                        if let AppKey::Character(ch) = key {
-                            let ch = ch.to_ascii_lowercase();
-                            if ch == 'c' {
-                                if self.state.search_focused && !self.state.search_query.is_empty()
-                                {
-                                    ctx.clipboard_set(&self.state.search_query);
-                                } else if self.state.demo.typing && !self.state.demo.text.is_empty()
-                                {
-                                    ctx.clipboard_set(&self.state.demo.text);
-                                }
-                            } else if ch == 'x' {
-                                if self.state.search_focused && !self.state.search_query.is_empty()
-                                {
-                                    ctx.clipboard_set(&self.state.search_query);
-                                    self.state.search_query.clear();
-                                    self.state.bump();
-                                } else if self.state.demo.typing && !self.state.demo.text.is_empty()
-                                {
-                                    ctx.clipboard_set(&self.state.demo.text);
-                                    self.state.demo.text.clear();
-                                    self.state.bump();
-                                }
-                            } else if ch == 'v' {
-                                if let Some(pasted) = ctx.clipboard_get() {
-                                    if self.state.search_focused {
-                                        self.state.search_query.push_str(&pasted);
-                                        self.state.bump();
-                                    } else if self.state.demo.typing {
-                                        self.state.demo.text.push_str(&pasted);
-                                        self.state.bump();
-                                    }
-                                }
-                            }
-                        }
-                    }
                     let key = platform_key(key);
                     let modifiers = platform_modifiers(modifiers);
                     self.key(&key, modifiers, ctx.focused);
+                    self.drain_clipboard(ctx);
                 }
             }
             AppEvent::Text { text } => self.type_text(&text),
-            AppEvent::Ime { update } => self.apply_ime(&update),
+            AppEvent::Ime { update } => {
+                self.apply_ime(&update);
+                // IME 事件可能同时改变编辑缓冲区，需要同步排空宿主剪贴板请求。
+                //
+                self.drain_clipboard(ctx);
+            }
             AppEvent::Resize { size } => {
                 ctx.viewport = size;
             }
@@ -248,13 +233,17 @@ impl Application for GalleryApp {
 }
 
 impl GalleryApp {
-    fn apply_ime(&mut self, update: &ImeUpdate) {
-        if let Some(commit) = &update.commit {
-            self.type_text(commit);
-        }
-        if self.state.ime_preedit != update.preedit {
-            self.state.ime_preedit = update.preedit.clone();
-            self.state.bump();
+    /// 执行外壳排队的剪贴板动作。
+    fn drain_clipboard(&mut self, ctx: &mut AppContext) {
+        while let Some(request) = self.take_clipboard_request() {
+            match request {
+                ClipboardRequest::Write(text) => ctx.clipboard_set(&text),
+                ClipboardRequest::Read => {
+                    if let Some(text) = ctx.clipboard_get() {
+                        self.paste_text(&text);
+                    }
+                }
+            }
         }
     }
 }

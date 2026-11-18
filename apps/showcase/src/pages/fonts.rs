@@ -6,7 +6,7 @@
 //! 天城文 matras、越南语双变音符号）以及从右到左（RTL）的文字。
 //!
 
-use unbound_math::Rect;
+use unbound_math::{Rect, Vec2};
 use unbound_text::TextStyle;
 
 use super::{DemoCtx, DemoKind, ExampleDef, KnobSpec, PageInfo};
@@ -361,14 +361,14 @@ pub fn bidi_sandbox(ctx: &mut DemoCtx<'_, '_>) {
         1 => "نص حكيم له سر قاطع 1234 abc · שלום עולם",
         2 => "∑ ∫ √ ∞ ≈ ≠ ≤ ≥ → ∀ ∃ ∈ ∇ ∂ © ® ™",
         _ => {
-            if ctx.state.demo.text.is_empty() {
+            if ctx.state.demo.text.text().is_empty() {
                 "Click below, then type with the IME…"
             } else {
-                ctx.state.demo.text.as_str()
+                ctx.state.demo.text.text()
             }
         }
     };
-    let placeholder = custom && ctx.state.demo.text.is_empty();
+    let placeholder = custom && ctx.state.demo.text.text().is_empty();
     let color = if placeholder {
         palette.text_muted
     } else {
@@ -425,7 +425,7 @@ pub fn bidi_sandbox(ctx: &mut DemoCtx<'_, '_>) {
     if field.max().y > rect.max().y {
         return;
     }
-    let focused = ctx.state.demo.typing;
+    let focused = ctx.state.demo.text.focused;
     ctx.canvas.rect(
         field,
         8.0,
@@ -438,19 +438,86 @@ pub fn bidi_sandbox(ctx: &mut DemoCtx<'_, '_>) {
         if focused { 2.0 } else { 1.0 },
         0.0,
     );
-    ctx.canvas.text(
+    let edit = &ctx.state.demo.text.edit;
+    let buffer = edit.text();
+    let scroll = edit.scroll_x();
+    let view_width = (field.size.x - 24.0).max(24.0);
+    ctx.state
+        .set_editor_view(crate::state::EditorId::Demo, view_width);
+    let line = Rect::new(
+        field.origin.x + 12.0,
+        field.origin.y + 7.0,
+        view_width,
+        (field.size.y - 14.0).max(8.0),
+    );
+    if focused {
+        if let Some((from, to)) = crate::editor::selection_span(ctx.canvas.labels, edit, 15.0) {
+            ctx.canvas.rect(
+                Rect::new(
+                    line.origin.x + from - scroll,
+                    line.origin.y,
+                    (to - from).max(1.0),
+                    line.size.y,
+                ),
+                2.0,
+                palette.selection_fill,
+                0,
+                0.0,
+                0.0,
+            );
+        }
+    }
+    ctx.canvas.begin_clip(Rect::new(
+        line.origin.x,
+        field.origin.y,
+        view_width,
+        field.size.y,
+    ));
+    let text_width = ctx.canvas.labels.measure(text, 15.0).x.max(view_width);
+    let (quads, ink) = ctx.canvas.layout_text(
         text,
         Rect::new(
-            field.origin.x + 12.0,
+            line.origin.x - scroll,
             field.origin.y,
-            field.size.x - 24.0,
+            text_width,
             field.size.y,
         ),
         15.0,
-        color,
         AlignX::Start,
         AlignY::Center,
     );
+    ctx.canvas.glyphs(&quads, color);
+    if let Some((from, to)) = crate::editor::preedit_span(ctx.canvas.labels, edit, 15.0) {
+        ctx.canvas.rect(
+            Rect::new(
+                line.origin.x + from - scroll,
+                ink.max().y - 2.0,
+                (to - from).max(1.0),
+                1.5,
+            ),
+            0.5,
+            palette.primary,
+            0,
+            0.0,
+            0.0,
+        );
+    }
+    if focused {
+        let caret = line.origin.x - scroll
+            + crate::editor::caret_x(ctx.canvas.labels, buffer, edit.cursor(), 15.0);
+        if ctx.state.demo.text.caret_visible() {
+            ctx.canvas.rect(
+                Rect::new(caret, line.origin.y, 1.5, line.size.y),
+                0.75,
+                palette.primary,
+                0,
+                0.0,
+                0.0,
+            );
+        }
+        ctx.state.set_ime_anchor(Vec2::new(caret, field.max().y));
+    }
+    ctx.canvas.end_clip();
     ctx.control(
         1,
         field,

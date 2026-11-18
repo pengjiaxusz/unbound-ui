@@ -1,7 +1,7 @@
 //! 基础输入：按钮、选择控件、滑块与文本输入框。
 
 use accesskit::Role;
-use unbound_math::Rect;
+use unbound_math::{Rect, Vec2};
 use unbound_widgets::progress::{emit_progress, ProgressDesc};
 use unbound_widgets::WidgetCatalogId;
 
@@ -721,7 +721,7 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
         rect.size.x - 40.0,
         46.0,
     );
-    let focused = ctx.state.demo.typing;
+    let focused = ctx.state.demo.text.focused;
     ctx.canvas.rect(
         field,
         9.0,
@@ -740,67 +740,71 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
         field.size.x - 28.0,
         field.size.y,
     );
-    let preedit = if focused {
-        ctx.state.ime_preedit.as_str()
-    } else {
-        ""
-    };
-    // 组合文本作为单个运行段绘制在已提交文本之后，紧贴插入符位置：
-    // IME 已经完成了塑形，单独重新塑形会隐藏刚解析出的连字。
-    //
-    let display = if preedit.is_empty() {
-        ctx.state.demo.text.clone()
-    } else {
-        format!("{}{}", ctx.state.demo.text, preedit)
-    };
-    let text = if display.is_empty() {
+    let edit = &ctx.state.demo.text.edit;
+    let buffer = edit.text();
+    let scroll = edit.scroll_x();
+    let view_width = (text_rect.size.x - 8.0).max(24.0);
+    ctx.state
+        .set_editor_view(crate::state::EditorId::Demo, view_width);
+    let line = Rect::new(
+        text_rect.origin.x + 4.0,
+        field.origin.y + 10.0,
+        view_width,
+        (field.size.y - 20.0).max(8.0),
+    );
+    if focused {
+        if let Some((from, to)) = crate::editor::selection_span(ctx.canvas.labels, edit, 15.0) {
+            ctx.canvas.rect(
+                Rect::new(
+                    line.origin.x + from - scroll,
+                    line.origin.y,
+                    (to - from).max(1.0),
+                    line.size.y,
+                ),
+                2.0,
+                palette.selection_fill,
+                0,
+                0.0,
+                0.0,
+            );
+        }
+    }
+    let display = if buffer.is_empty() {
         "Project name"
     } else {
-        display.as_str()
+        buffer
     };
-    let color = if display.is_empty() {
+    let color = if buffer.is_empty() {
         palette.text_muted
     } else {
         palette.text
     };
-    // 仅布局一次运行段。字形在选区带之后绘制（选区带必须位于文字*下方*），
-    // 且墨水框仅用于插入符和预编辑下划线——绝不用作行框。
-    // 旧代码把墨水框传回带 `AlignY::Top` 的 `text()`，导致第二份副本
-    // 向下和向左偏移了几个像素，这正是截图中“重影”的原因。
-    let (quads, ink) = ctx
-        .canvas
-        .layout_text(text, text_rect, 15.0, AlignX::Start, AlignY::Center);
-    let select_mode = if selection { ctx.knob(0) as usize } else { 2 };
-    if select_mode < 2 && !ctx.state.demo.text.is_empty() {
-        let selected = if select_mode == 0 {
-            ctx.state.demo.text.split_whitespace().next().unwrap_or("")
-        } else {
-            ctx.state.demo.text.as_str()
-        };
-        let width = ctx.canvas.labels.measure(selected, 15.0).x;
-        ctx.canvas.rect(
-            Rect::new(
-                text_rect.origin.x,
-                field.origin.y + 8.0,
-                width + 4.0,
-                field.size.y - 16.0,
-            ),
-            4.0,
-            palette.selection_fill,
-            0,
-            0.0,
-            0.0,
-        );
-    }
+    ctx.canvas.begin_clip(Rect::new(
+        text_rect.origin.x + 4.0,
+        field.origin.y,
+        view_width,
+        field.size.y,
+    ));
+    let text_width = ctx.canvas.labels.measure(display, 15.0).x.max(view_width);
+    let (quads, ink) = ctx.canvas.layout_text(
+        display,
+        Rect::new(
+            text_rect.origin.x + 4.0 - scroll,
+            text_rect.origin.y,
+            text_width,
+            text_rect.size.y,
+        ),
+        15.0,
+        AlignX::Start,
+        AlignY::Center,
+    );
     ctx.canvas.glyphs(&quads, color);
-    if !preedit.is_empty() {
-        let committed = ctx.canvas.labels.measure(&ctx.state.demo.text, 15.0).x;
-        let width = ctx.canvas.labels.measure(preedit, 15.0).x;
+    if let Some((from, to)) = crate::editor::preedit_span(ctx.canvas.labels, edit, 15.0) {
         ctx.canvas.rect(
             Rect::new(
-                text_rect.origin.x + committed,
+                text_rect.origin.x + 4.0 + from - scroll,
                 ink.max().y - 2.0,
-                width,
+                (to - from).max(1.0),
                 1.5,
             ),
             0.5,
@@ -810,21 +814,22 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
             0.0,
         );
     }
-    if focused && (ctx.state.demo.elapsed * 2.0).rem_euclid(2.0) < 1.2 {
-        ctx.canvas.rect(
-            Rect::new(
-                ink.max().x + 2.0,
-                field.origin.y + 12.0,
-                2.0,
-                field.size.y - 24.0,
-            ),
-            1.0,
-            palette.primary,
-            0,
-            0.0,
-            0.0,
-        );
+    if focused {
+        let caret = text_rect.origin.x + 4.0 - scroll
+            + crate::editor::caret_x(ctx.canvas.labels, buffer, edit.cursor(), 15.0);
+        if ctx.state.demo.text.caret_visible() {
+            ctx.canvas.rect(
+                Rect::new(caret, line.origin.y, 1.5, line.size.y),
+                0.75,
+                palette.primary,
+                0,
+                0.0,
+                0.0,
+            );
+        }
+        ctx.state.set_ime_anchor(Vec2::new(caret, field.max().y));
     }
+    ctx.canvas.end_clip();
     ctx.canvas.text(
         "Click, then type · Backspace deletes · Esc releases focus",
         Rect::new(field.origin.x, field.max().y + 8.0, field.size.x, 16.0),

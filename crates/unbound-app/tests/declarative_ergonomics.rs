@@ -6,6 +6,7 @@
 //! 3. 分发指针与文本事件自动更新 WidgetStateStore 与脏标志。
 
 use unbound_app::prelude::*;
+use unbound_app::ImeUpdate;
 use unbound_input::PointerButton;
 use unbound_math::Vec2;
 
@@ -26,13 +27,18 @@ struct DeclarativeApp;
 
 struct DeclarativeAppState {
     counter: u32,
+    /// 应用层收到的输入法事件计数；控件消费后这里必须保持为零。
+    ime_events: u32,
 }
 
 impl Application for DeclarativeApp {
     type State = DeclarativeAppState;
 
     fn init(&mut self, _ctx: &mut AppContext) -> Self::State {
-        DeclarativeAppState { counter: 0 }
+        DeclarativeAppState {
+            counter: 0,
+            ime_events: 0,
+        }
     }
 
     fn reduce(
@@ -45,6 +51,10 @@ impl Application for DeclarativeApp {
             AppEvent::Click { node, .. } if node == BTN_KEY => {
                 state.counter += 1;
                 EventOutcome::new(DirtyFlags::PAINT | DirtyFlags::LAYOUT)
+            }
+            AppEvent::Ime { .. } => {
+                state.ime_events += 1;
+                EventOutcome::new(DirtyFlags::PAINT)
             }
             _ => EventOutcome::new(DirtyFlags::NONE),
         }
@@ -215,6 +225,55 @@ fn test_automatic_widget_state_store_and_reduction() {
         1,
         "App counter should increment after button click"
     );
+}
+
+#[test]
+fn ime_updates_are_consumed_by_the_focused_text_input_exactly_once() {
+    let mut runtime = AppRuntime::new(DeclarativeApp, Vec2::new(800.0, 600.0));
+    let _ = runtime.frame(0.0);
+
+    let txt_rect = runtime.widget_rect(TXT_KEY).expect("TextInput mounted");
+    let txt_center = Vec2::new(txt_rect.min().x + 20.0, txt_rect.min().y + 10.0);
+    runtime.pointer_move(txt_center);
+    let _ = runtime.pointer_down(txt_center, PointerButton::Left);
+    let _ = runtime.pointer_up(txt_center, PointerButton::Left);
+
+    // 组合文本进入控件缓冲区，而不是以“待提交”形式滞留在平台层。
+    let _ = runtime.ime(ImeUpdate {
+        enabled: true,
+        preedit: "nihao".into(),
+        cursor_range: None,
+        commit: None,
+        cancelled: false,
+    });
+    assert_eq!(
+        runtime
+            .state_store()
+            .get::<TextEditState>(TXT_KEY)
+            .map(|s| s.text().to_string()),
+        Some("nihao".to_string()),
+        "the composition must be visible in the buffer"
+    );
+
+    // 提交替换组合区间：整条链路上恰好插入一次。
+    let _ = runtime.ime(ImeUpdate {
+        enabled: false,
+        preedit: String::new(),
+        cursor_range: None,
+        commit: Some("nihao".into()),
+        cancelled: false,
+    });
+    assert_eq!(
+        runtime
+            .state_store()
+            .get::<TextEditState>(TXT_KEY)
+            .map(|s| s.text().to_string()),
+        Some("nihao".to_string()),
+        "a commit must replace the composition instead of appending"
+    );
+
+    // 控件消费后应用层不得再收到同一次输入法更新。
+    assert_eq!(runtime.state().ime_events, 0);
 }
 
 // ---------------------------------------------------------------------------

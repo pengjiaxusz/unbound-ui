@@ -15,6 +15,7 @@ use unbound_canvas::{TransactionKind, UndoStack};
 use unbound_math::Vec2;
 use unbound_widgets::curve_editor::CurveEditorState;
 use unbound_widgets::progress::ProgressState;
+use unbound_widgets::text_input::TextEditState;
 use unbound_widgets::WidgetCatalogId;
 use unbound_world::virtualize::{VirtualList, WindowUpdate};
 
@@ -67,13 +68,97 @@ pub struct FrameSample {
     pub draws: f32,
 }
 
+/// 展厅内所有单行文本编辑器共享的编辑状态。
+///
+/// 搜索框、演示输入框与 FPS 输入框都只保存这一份真实缓冲区，光标、选区、
+/// 滚动、撤销和 IME 组合全部由 `TextEditState` 承担，页面不再维护字符串镜像。
+#[derive(Clone, Debug, Default)]
+pub struct TextEditor {
+    /// 真实编辑缓冲区。
+    pub edit: TextEditState,
+    /// 是否持有键盘焦点。
+    pub focused: bool,
+    /// 自上次光标相位归零以来经过的秒数。
+    pub blink: f32,
+}
+
+impl TextEditor {
+    /// 创建带初始文本的编辑器。
+    #[must_use]
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            edit: TextEditState::with_text(text),
+            focused: false,
+            blink: 0.0,
+        }
+    }
+
+    /// 当前缓冲区文本（包含正在组合的 IME 内容）。
+    #[must_use]
+    pub fn text(&self) -> &str {
+        self.edit.text()
+    }
+
+    /// 获取焦点并重置光标相位。
+    pub fn focus(&mut self) {
+        self.focused = true;
+        self.blink = 0.0;
+    }
+
+    /// 释放焦点并丢弃未提交的 IME 组合。
+    pub fn blur(&mut self) {
+        self.focused = false;
+        self.blink = 0.0;
+        self.edit.cancel_composition();
+    }
+
+    /// 用户交互后重置光标闪烁相位。
+    pub fn touch(&mut self) {
+        self.blink = 0.0;
+    }
+
+    /// 推进光标闪烁时钟。
+    pub fn tick(&mut self, dt: f32) {
+        if self.focused {
+            self.blink = (self.blink + dt).rem_euclid(1.06);
+        }
+    }
+
+    /// 插入符当前是否处于可见相位（约 530ms 亮 / 530ms 灭）。
+    #[must_use]
+    pub fn caret_visible(&self) -> bool {
+        self.focused && self.blink < 0.53
+    }
+}
+
+/// 展厅内可编辑文本的标识。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum EditorId {
+    /// 顶栏全局搜索框。
+    Search,
+    /// 文本输入框演示（TextField 页与 Fonts 沙盒共享）。
+    Demo,
+    /// 自定义 FPS 上限输入框。
+    Fps,
+}
+
+impl EditorId {
+    /// 在 `editor_views` 中的下标。
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Search => 0,
+            Self::Demo => 1,
+            Self::Fps => 2,
+        }
+    }
+}
+
 /// 非示例定义派生的运行时状态。
 #[derive(Debug)]
 pub struct DemoState {
-    /// 文本输入框演示的缓冲区。
-    pub text: String,
-    /// 文本输入框是否持有键盘焦点。
-    pub typing: bool,
+    /// 文本输入框演示的共享编辑状态。
+    pub text: TextEditor,
     /// Overlays 演示中的下拉框 / 模态框。
     pub dropdown_open: bool,
     pub modal_open: bool,
@@ -146,8 +231,7 @@ impl Default for DemoState {
         let mut pill_spring = Spring::new(SpringPreset::Snappy, 1.0);
         pill_spring.snap_to(1.0);
         Self {
-            text: "Unbound UI".to_string(),
-            typing: false,
+            text: TextEditor::new("Unbound UI"),
             dropdown_open: false,
             modal_open: false,
             toggle_a: true,
@@ -311,13 +395,12 @@ pub struct GalleryState {
     /// 当通过侧边栏直接选中某个具体组件时记录该组件 ID。
     pub active_component: Option<WidgetCatalogId>,
     pub nav_expanded: bool,
-    pub search_query: String,
-    pub search_focused: bool,
-    /// 文本控件聚焦时输入法的组合字符串。
-    ///
-    /// 保存在状态中（而非渲染器中），使页面和搜索框能精确绘制 IME 正在组合的内容。
-    ///
-    pub ime_preedit: String,
+    /// 顶栏全局搜索框的共享编辑状态。
+    pub search: TextEditor,
+    /// 各编辑器最近一帧的文本视口宽度，用于保持插入符可见。
+    pub editor_views: [core::cell::Cell<f32>; 3],
+    /// 最近一帧记录的插入符位置（IME 候选框锚点）。
+    pub ime_anchor: core::cell::Cell<Vec2>,
     /// 当前激活的界面语言区域（默认 `Locale::EnUs`，支持 `Locale::ZhCn`）。
     pub locale: Locale,
     /// 外壳内建的原生国际化资源包。
@@ -332,10 +415,8 @@ pub struct GalleryState {
     pub pixel_snap: bool,
     /// 帧率上限（FPS）；`0` 表示无限制。
     pub fps_limit: u32,
-    /// 自定义 FPS 上限的输入缓冲区。
-    pub fps_input: String,
-    /// 自定义 FPS 输入框是否持有键盘焦点。
-    pub fps_focused: bool,
+    /// 自定义 FPS 上限的共享编辑状态。
+    pub fps_input: TextEditor,
     pub show_hud: bool,
     pub content_scroll: f32,
     pub nav_scroll: f32,
@@ -361,9 +442,9 @@ impl Default for GalleryState {
             window_screen_rect: None,
             active_component: None,
             nav_expanded: true,
-            search_query: String::new(),
-            search_focused: false,
-            ime_preedit: String::new(),
+            search: TextEditor::default(),
+            editor_views: core::array::from_fn(|_| core::cell::Cell::new(200.0)),
+            ime_anchor: core::cell::Cell::new(Vec2::new(24.0, 60.0)),
             locale: Locale::EnUs,
             i18n: build_showcase_i18n(Locale::EnUs),
             lang_dropdown_open: false,
@@ -372,8 +453,7 @@ impl Default for GalleryState {
             zoom_step: 0,
             pixel_snap: true,
             fps_limit: 120,
-            fps_input: "120".to_string(),
-            fps_focused: false,
+            fps_input: TextEditor::new("120"),
             // HUD 是从顶栏打开的浮动弹出层；默认显示会在 960×600 下遮挡首屏卡片。
             //
             show_hud: false,
@@ -515,6 +595,35 @@ impl GalleryState {
         ZOOM_STEPS[self.zoom_step.min(ZOOM_STEPS.len() - 1)]
     }
 
+    /// 记录编辑器最近一帧的文本视口宽度。
+    pub fn set_editor_view(&self, id: EditorId, width: f32) {
+        self.editor_views[id.index()].set(width.max(24.0));
+    }
+
+    /// 编辑器最近一帧的文本视口宽度。
+    #[must_use]
+    pub fn editor_view(&self, id: EditorId) -> f32 {
+        self.editor_views[id.index()].get().max(24.0)
+    }
+
+    /// 记录最近一帧的插入符位置（IME 候选框锚点）。
+    pub fn set_ime_anchor(&self, position: Vec2) {
+        self.ime_anchor.set(position);
+    }
+
+    /// 最近一帧的插入符位置（IME 候选框锚点）。
+    #[must_use]
+    pub fn ime_anchor(&self) -> Vec2 {
+        self.ime_anchor.get()
+    }
+
+    /// 释放所有文本编辑器的焦点并取消未提交的 IME 组合。
+    pub fn blur_editors(&mut self) {
+        self.search.blur();
+        self.demo.text.blur();
+        self.fps_input.blur();
+    }
+
     /// 导航到指定页面；重置内容滚动位置以使页头可见。
     pub fn navigate(&mut self, page: PageId) {
         if self.active_page != page || self.active_component.is_some() {
@@ -525,6 +634,7 @@ impl GalleryState {
             self.demo.dropdown_open = false;
             self.lang_dropdown_open = false;
             self.zoom_dropdown_open = false;
+            self.blur_editors();
             self.bump();
         }
     }
@@ -538,6 +648,7 @@ impl GalleryState {
         self.demo.dropdown_open = false;
         self.lang_dropdown_open = false;
         self.zoom_dropdown_open = false;
+        self.blur_editors();
         self.bump();
     }
 
@@ -552,7 +663,7 @@ impl GalleryState {
         } else {
             fps.max(unbound_platform::MIN_FPS_LIMIT)
         };
-        self.fps_input = self.fps_limit.to_string();
+        self.fps_input.edit.set_text(self.fps_limit.to_string());
         self.bump();
     }
 
@@ -563,10 +674,10 @@ impl GalleryState {
     ///
     #[must_use]
     pub fn effective_fps_limit(&self) -> u32 {
-        if !self.fps_focused {
+        if !self.fps_input.focused {
             return self.fps_limit;
         }
-        match self.fps_input.trim().parse::<u32>() {
+        match self.fps_input.text().trim().parse::<u32>() {
             Ok(0) => 0,
             Ok(fps) => fps.max(unbound_platform::MIN_FPS_LIMIT),
             Err(_) => self.fps_limit,
@@ -577,11 +688,12 @@ impl GalleryState {
     pub fn commit_fps_input(&mut self) {
         let parsed = self
             .fps_input
+            .text()
             .trim()
             .parse::<u32>()
             .unwrap_or(self.fps_limit);
         self.set_fps_limit(parsed);
-        self.fps_focused = false;
+        self.fps_input.blur();
     }
 
     /// 与当前上限匹配的 FPS 预设索引（如有）。
@@ -671,6 +783,12 @@ impl GalleryState {
         self.demo.progress_bar.tick(dt, Some(target), !paused);
         self.demo.progress_ring.tick(dt, Some(target), !paused);
         let mut moving = false;
+        if self.search.focused || self.demo.text.focused || self.fps_input.focused {
+            self.search.tick(dt);
+            self.demo.text.tick(dt);
+            self.fps_input.tick(dt);
+            moving = true;
+        }
         self.demo.spring.step(dt);
         if !self.demo.spring.is_settled() {
             moving = true;
@@ -743,7 +861,7 @@ impl GalleryState {
     /// 按搜索查询词过滤页面目录。
     #[must_use]
     pub fn search_results(&self) -> Vec<PageId> {
-        let query = self.search_query.trim().to_lowercase();
+        let query = self.search.text().trim().to_lowercase();
         if query.is_empty() {
             return Vec::new();
         }
@@ -758,7 +876,7 @@ impl GalleryState {
     /// 同时检索页面目录与全部 106 个标准组件目录（支持中英文子串、全拼、多方案双拼与首字母缩写）。
     #[must_use]
     pub fn search_hits(&self) -> Vec<SearchHit> {
-        let query = self.search_query.trim();
+        let query = self.search.text().trim();
         if query.is_empty() {
             return Vec::new();
         }
@@ -1019,7 +1137,7 @@ mod search_tests {
     #[test]
     fn search_hits_matches_both_pages_and_catalog_components() {
         let mut state = GalleryState {
-            search_query: "Accordion".to_string(),
+            search: TextEditor::new("Accordion"),
             ..Default::default()
         };
         let hits = state.search_hits();
@@ -1030,7 +1148,7 @@ mod search_tests {
         );
 
         // 支持中文、全拼、小鹤双拼（如 "dzl" / "ulki"）检索组件
-        state.search_query = "地址栏".to_string();
+        state.search.edit.set_text("地址栏");
         assert!(
             state
                 .search_hits()
@@ -1038,13 +1156,13 @@ mod search_tests {
                 .any(|h| matches!(h, SearchHit::Component(WidgetCatalogId::AddressBar))),
             "中文搜索 '地址栏' 应命中 AddressBar"
         );
-        state.search_query = "voseqi".to_string(); // 小鹤双拼 "着色器"
+        state.search.edit.set_text("voseqi"); // 小鹤双拼 "着色器"
         assert!(
             !state.search_hits().is_empty(),
             "小鹤双拼 'voseqi'（着色器）应命中相关页面或组件"
         );
 
-        state.search_query = "Button".to_string();
+        state.search.edit.set_text("Button");
         let hits = state.search_hits();
         assert!(
             hits.iter()
