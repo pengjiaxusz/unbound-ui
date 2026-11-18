@@ -414,14 +414,61 @@ pub fn unavailable_reason(
     })
 }
 
-/// 该材质种类是否有自绘变体。
+/// 材质种类在自绘路径上的覆盖边界。
 ///
-/// 只有标准云母与云母变体有：亚克力的辨识特征是噪点与层叠感，沉浸式后景
-/// 则是系统里并不存在的取值，为它们自造变体只会得到误导性的对照。
+/// 这是「该材质有没有自绘变体」的唯一声明：布尔视图 [`has_self_drawn_variant`]
+/// 与组合解析 [`resolve_combination`] 都从它派生，不得再写第二份判断。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SelfDrawnCoverage {
+    /// 自绘路径能等价重现该材质的观感：自绘变体就是该材质本身。
+    Equivalent,
+    /// 自绘路径没有该材质的变体：显式选择自绘来源时组合非法，只能回退。
+    NoVariant,
+}
+
+/// 某一材质种类在自绘路径上的覆盖声明。
+///
+/// 只有标准云母与云母变体属于「等价重现」：它们本身就是壁纸模糊加主题色调的
+/// 产物，自绘路径复刻的是同一套配方。其余三档各有一条明确的「无变体」理由：
+///
+/// - **亚克力**的辨识特征是噪点纹理与半透明层叠感，壁纸模糊做不出这两点，
+///   自造变体只会得到一份误导性的对照；
+/// - **沉浸式后景**是系统里并不存在的取值，没有可对照的原生外观，自然也无从
+///   自绘；
+/// - **跟随系统**是一条选择策略而不是一种外观，自绘路径无法预知系统会选什么。
+///
+/// 材质为「无」时来源轴整体折叠，覆盖声明不参与解析，但这里仍诚实声明无变体。
 #[must_use]
 #[deny(unreachable_patterns)]
+pub const fn self_drawn_coverage(material: MaterialKind) -> SelfDrawnCoverage {
+    match material {
+        MaterialKind::Mica | MaterialKind::MicaAlt => SelfDrawnCoverage::Equivalent,
+        MaterialKind::None
+        | MaterialKind::FollowSystem
+        | MaterialKind::Acrylic
+        | MaterialKind::Immersive => SelfDrawnCoverage::NoVariant,
+    }
+}
+
+/// 该材质种类是否有自绘变体。
+///
+/// 这是 [`self_drawn_coverage`] 的布尔视图，不得独立判断。
+#[must_use]
 pub const fn has_self_drawn_variant(material: MaterialKind) -> bool {
-    matches!(material, MaterialKind::Mica | MaterialKind::MicaAlt)
+    matches!(self_drawn_coverage(material), SelfDrawnCoverage::Equivalent)
+}
+
+/// 用户选择是否构成「组合非法但允许选中」。
+///
+/// 只有显式选择自绘来源、且该材质在 [`self_drawn_coverage`] 里声明为无变体时，
+/// 组合才非法。它不同于机器能力不足：非法组合仍然可选，由解析给出回退原因；
+/// 自动来源由平台在两条路径间取舍，任何材质都不算非法；材质为「无」时来源轴
+/// 折叠，同样不算非法。
+#[must_use]
+pub fn is_illegal_combination(selection: BackdropSelection) -> bool {
+    selection.material != MaterialKind::None
+        && selection.source == BackdropSource::SelfDrawn
+        && !has_self_drawn_variant(selection.material)
 }
 
 /// 在给定来源下，某一材质种类是否能被用户选中。

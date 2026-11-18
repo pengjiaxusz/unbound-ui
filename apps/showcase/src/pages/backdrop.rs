@@ -7,10 +7,15 @@
 //! 读出面板同时显示四组事实：用户的选择、宿主解析出的实际生效组合、平台探测到的
 //! Windows 构建号、所选材质的原生可用性；回退原因与机器能力不足的原因各占一整行，
 //! 没有发生时显式写「None」。
+//!
+//! 两类不可用在界面上走两条通道：机器承载不了的组合进入禁用态；显式自绘来源撞上
+//! 没有自绘变体的材质属于**非法组合**，仍然可以选中，选中的按钮带告警色顶条、
+//! 告警色边框与 «INVALID COMBO» 角标，避免用户把它误读成禁用。
 
 use accesskit::Role;
 use unbound_backdrop::{
-    BackdropCombination, BackdropSelection, BackdropSource, MaterialKind, UnavailableReason,
+    BackdropCombination, BackdropSelection, BackdropSource, FallbackReason, MaterialKind,
+    UnavailableReason,
 };
 use unbound_math::Rect;
 
@@ -75,6 +80,9 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
     let combination = ctx.state.backdrop_combination;
     let windows_build = ctx.state.windows_build;
     let native_available = ctx.state.backdrop_native_available();
+    // 当前选择是否落在「组合非法但允许选中」上：它与机器能力不足是两回事，
+    // 前者允许选中，只在按钮上做可见标记，不禁用。
+    let illegal_combination = ctx.state.backdrop_combination_illegal();
 
     draw_readout(ctx, selection, combination, windows_build, native_available);
 
@@ -106,6 +114,9 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
     for (kind, (cell, label_size)) in MaterialKind::ALL.iter().zip(material_cells) {
         let part = MATERIAL_PART_BASE + kind.index() as u16;
         let selected = *kind == selection.material;
+        // 组合非法：选中的材质没有自绘变体，却显式要求自绘来源。它仍然可选，
+        // 只是需要与「机器承载不了」的禁用态在视觉上区分开。
+        let illegal = selected && illegal_combination;
         // 逐档门槛：按当前来源与平台能力裁决，机器承载不了就禁用并附上原因。
         let disabled = !ctx.state.backdrop_material_selectable(*kind);
         let reason = if disabled {
@@ -123,11 +134,16 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
                 description: kind.description(),
                 selected,
                 disabled,
+                illegal,
                 experimental: kind.is_experimental(),
                 reason: reason.as_ref(),
             },
         );
-        let accessible_name = format!("Material: {} — {}", kind.label(), kind.description());
+        let mut accessible_name = format!("Material: {} — {}", kind.label(), kind.description());
+        if illegal {
+            let reason = FallbackReason::NoSelfDrawnVariant { material: *kind };
+            accessible_name.push_str(&format!(" — Invalid combination: {}", reason.label()));
+        }
         ctx.canvas.control(
             ctx.part(part),
             cell,
@@ -169,6 +185,7 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
                 description: source.description(),
                 selected,
                 disabled: false,
+                illegal: false,
                 experimental: false,
                 reason: None,
             },
@@ -405,6 +422,8 @@ struct ChoiceButton<'a> {
     description: &'a str,
     selected: bool,
     disabled: bool,
+    /// 选中的组合非法（该材质没有自绘变体）：允许选中，但需要可见标记。
+    illegal: bool,
     experimental: bool,
     reason: Option<&'a UnavailableReason>,
 }
@@ -414,6 +433,10 @@ struct ChoiceButton<'a> {
 /// `disabled` 传给画布视觉状态——`visual` 的第二个形参是 **disabled**，不是
 /// selected（旧实现把 selected 传了进去，导致选中的按钮被画成禁用态，这是
 /// 工单 #32 的遗留缺陷）。禁用时用告警色显示不可用原因，选中按钮则画选中底色。
+///
+/// 非法组合走另一条视觉通道：按钮仍可点击，但顶边加一条告警色细条、边框换成
+/// 告警色，右下角标出 `INVALID COMBO`。这样「我选的组合不合法」与「这台机器
+/// 跑不了」在界面上是两种不同的样子，而不是同一段回退文案。
 fn draw_choice_button(
     ctx: &mut DemoCtx<'_, '_>,
     part: u16,
@@ -434,6 +457,8 @@ fn draw_choice_button(
     };
     let border = if choice.disabled {
         palette.card_border
+    } else if choice.illegal {
+        palette.warning
     } else if choice.selected {
         palette.primary
     } else {
@@ -451,6 +476,22 @@ fn draw_choice_button(
         },
         0.0,
     );
+    // 非法组合的顶边告警色细条：窄视口下即使放不下角标文字，也仍然可见。
+    if choice.illegal {
+        ctx.canvas.rect(
+            Rect::new(
+                cell.origin.x + 10.0,
+                cell.origin.y + 1.5,
+                (cell.size.x - 20.0).max(8.0),
+                3.0,
+            ),
+            1.5,
+            palette.warning,
+            palette.warning,
+            0.0,
+            0.0,
+        );
+    }
     let inner = (cell.size.x - CELL_PADDING).max(20.0);
     ctx.canvas.text(
         choice.label,
@@ -510,6 +551,24 @@ fn draw_choice_button(
             Rect::new(cell.origin.x + 10.0, cell.max().y - 20.0, inner, 12.0),
             8.5,
             palette.primary,
+            AlignX::Start,
+            AlignY::Center,
+        );
+    }
+    // 非法组合的角标：与「SELECTED」同一行、贴右边，宽度够时始终可见。
+    if choice.illegal && cell.size.x >= 160.0 {
+        let badge = "INVALID COMBO";
+        let badge_width = ctx.canvas.labels.metrics(badge, 8.0).width;
+        ctx.canvas.text(
+            badge,
+            Rect::new(
+                cell.max().x - 10.0 - badge_width,
+                cell.max().y - 20.0,
+                badge_width,
+                12.0,
+            ),
+            8.0,
+            palette.warning,
             AlignX::Start,
             AlignY::Center,
         );

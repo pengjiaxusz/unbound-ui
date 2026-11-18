@@ -11,8 +11,9 @@ use unbound_anim::{Spring, SpringPreset};
 use unbound_app::{set_global_locale, AssetHub, I18nBundle, Locale};
 use unbound_asset::{AssetId, StagingRing};
 use unbound_backdrop::{
-    native_available, resolve_combination, selectable, BackdropCapabilities, BackdropCombination,
-    BackdropPlan, BackdropSelection, BackdropSource, MaterialKind,
+    is_illegal_combination, native_available, resolve_combination, selectable,
+    BackdropCapabilities, BackdropCombination, BackdropPlan, BackdropSelection, BackdropSource,
+    MaterialKind,
 };
 use unbound_canvas::{TransactionKind, UndoStack};
 use unbound_math::Vec2;
@@ -539,6 +540,15 @@ impl GalleryState {
             self.backdrop_selection.source,
             &self.backdrop_capabilities(),
         )
+    }
+
+    /// 当前用户选择是否是「组合非法但允许选中」。
+    ///
+    /// 只有显式自绘来源撞上没有自绘变体的材质才算非法；机器能力不足不是非法，
+    /// 它表现为禁用。展台据此在选中的材质按钮上标出非法组合。
+    #[must_use]
+    pub fn backdrop_combination_illegal(&self) -> bool {
+        is_illegal_combination(self.backdrop_selection)
     }
 
     /// 用户选择的材质种类在这台机器上能否走原生路径。

@@ -44,10 +44,10 @@ pub use plan::{
     DwmMaterial, MaterialRequest, PixelRect, UvRect, WallpaperTexture, MATERIAL_REQUEST_TABLE,
 };
 pub use selection::{
-    has_self_drawn_variant, native_available, required_build, resolve_combination, selectable,
-    unavailable_reason, BackdropCapabilities, BackdropCombination, BackdropSelection,
-    BackdropSource, FallbackReason, MaterialKind, UnavailableReason, IMMERSIVE_BACKDROP_MIN_BUILD,
-    NATIVE_MICA_MIN_BUILD,
+    has_self_drawn_variant, is_illegal_combination, native_available, required_build,
+    resolve_combination, selectable, self_drawn_coverage, unavailable_reason, BackdropCapabilities,
+    BackdropCombination, BackdropSelection, BackdropSource, FallbackReason, MaterialKind,
+    SelfDrawnCoverage, UnavailableReason, IMMERSIVE_BACKDROP_MIN_BUILD, NATIVE_MICA_MIN_BUILD,
 };
 pub use state::{BackdropGenerator, MICA_READY_EVENT_ID};
 pub use stats::{texture_statistics, StatisticsRequest, TextureStatistics};
