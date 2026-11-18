@@ -163,7 +163,7 @@ impl PasswordBoxState {
 /// 眼睛按钮的确定性子节点键。
 #[must_use]
 pub const fn reveal_button_node(node: u64) -> u64 {
-    node ^ 0x5042_4559_45
+    node ^ 0x0050_4245_5945
 }
 
 /// 输出密码框的图元、命中区域与语义节点。

@@ -254,8 +254,8 @@ mod tests {
     fn the_selected_row_draws_a_primary_indicator() {
         let d = desc();
         let output = emit_list_box(1, &d, ControlState::default(), &mut []);
-        // 外框 1 个图元，随后每行 2 个。
-        let indicator = output.primitives[1 + 1 * 2 + 1].fill_token_or_uv as u16;
+        // 外框 1 个图元，随后每行 2 个；选中行是第 2 行，其指示条位于下标 4。
+        let indicator = output.primitives[4].fill_token_or_uv as u16;
         assert_eq!(indicator, Token::PRIMARY.raw());
     }
 

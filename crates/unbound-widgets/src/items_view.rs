@@ -98,7 +98,7 @@ impl ItemsViewDesc {
     #[must_use]
     pub fn rows(&self) -> usize {
         let columns = self.effective_columns();
-        (self.items + columns - 1) / columns
+        self.items.div_ceil(columns)
     }
 
     /// 第 `index` 个条目的矩形。
