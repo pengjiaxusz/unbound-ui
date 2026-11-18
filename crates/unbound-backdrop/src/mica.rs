@@ -5,14 +5,21 @@ use std::io::Cursor;
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageBuffer, Rgba};
 
-use crate::wallpaper::{load_wallpaper, primary_screen_logical_size};
+use crate::wallpaper::load_wallpaper;
 
 /// 生成宽度上限：磨砂后降到 640 宽无感知，显著降低模糊、编码与上传成本
 /// （1920×1080 → 640×360）。
 pub const DEFAULT_MAX_WIDTH: u32 = 640;
 
-/// 磨砂 sigma。Mica 是「轻柔化 + 淡化」，不是 Acrylic 的重磨砂：
-/// 保留壁纸构图，只做低频柔化。
+/// 磨砂 sigma，单位是**屏幕物理像素**。
+///
+/// Mica 是「轻柔化 + 淡化」，不是 Acrylic 的重磨砂：保留壁纸构图，只做低频
+/// 柔化。强度锚定屏幕物理像素后，1080p 屏与 4K 屏上的磨砂半径一样宽，
+/// 壁纸分辨率、屏幕分辨率与显示缩放都不再改变观感。
+///
+/// 标定值 16.0：以屏幕物理像素计，16 像素的半径已能把壁纸的硬边与内部笔触
+/// 摊成渐变（8 像素时轮廓仍清晰可辨），而继续加大只会把壁纸压成一片单色
+/// ——那是 Acrylic 的做法，Mica 要保留构图与明暗层次。
 pub const DEFAULT_SIGMA: f32 = 16.0;
 
 /// 一次生成请求。
@@ -28,7 +35,7 @@ pub struct MicaRequest {
     pub dark: bool,
     /// 纹理最大宽度（0 视为 [`DEFAULT_MAX_WIDTH`]）。
     pub max_width: u32,
-    /// 磨砂 sigma（0 表示不模糊）。
+    /// 磨砂 sigma，单位是屏幕物理像素（0 表示不模糊）。
     pub sigma: f32,
     /// 壁纸源指纹；壁纸切换后旧纹理必须失效。
     pub wallpaper: Option<crate::wallpaper::WallpaperStamp>,
@@ -123,51 +130,15 @@ pub struct MicaImage {
 #[must_use]
 pub fn generate(request: &MicaRequest) -> Option<MicaImage> {
     let screen = (request.screen_width.max(1), request.screen_height.max(1));
-    let blurred = render_blurred_rect_for_screen(
-        screen,
-        (0, 0, screen.0, screen.1),
-        request.max_width,
-        request.sigma,
-    )?;
-    encode(tint(&blurred, request.dark))
-}
-
-/// 生成指定屏幕矩形（逻辑坐标）的磨砂壁纸纹理 PNG，**不叠加主题色调**。
-///
-/// WebView 时代由前端 CSS 叠加色调，因此保留这一层；原生窗口应使用
-/// [`generate`]，它会把 WinUI 的 `TintColor` / `LuminosityOpacity` 烘进纹理。
-#[must_use]
-pub fn generate_blurred_rect(
-    viewport: (i32, i32, u32, u32),
-    max_width: u32,
-    sigma: f32,
-) -> Option<MicaImage> {
-    encode(render_blurred_rect(viewport, max_width, sigma)?)
-}
-
-fn render_blurred_rect(
-    viewport: (i32, i32, u32, u32),
-    max_width: u32,
-    sigma: f32,
-) -> Option<ImageBuffer<Rgba<u8>, Vec<u8>>> {
-    let screen = primary_screen_logical_size()?;
-    render_blurred_rect_for_screen(screen, viewport, max_width, sigma)
-}
-
-fn render_blurred_rect_for_screen(
-    screen: (u32, u32),
-    viewport: (i32, i32, u32, u32),
-    max_width: u32,
-    sigma: f32,
-) -> Option<ImageBuffer<Rgba<u8>, Vec<u8>>> {
     let (wallpaper, ..) = load_wallpaper().ok()?;
-    blurred_viewport(
+    let rendered = render_texture(
         &wallpaper,
         screen,
-        viewport,
-        max_width.max(1),
-        sigma.max(0.0),
-    )
+        (0, 0, screen.0, screen.1),
+        request.max_width.max(1),
+        request.sigma.max(0.0),
+    )?;
+    encode(tint(&rendered.blurred, request.dark))
 }
 
 /// 把像素图编码为 PNG。
@@ -184,46 +155,137 @@ fn encode(image: ImageBuffer<Rgba<u8>, Vec<u8>>) -> Option<MicaImage> {
     })
 }
 
-/// 把「壁纸 cover 到主屏」结果中视口矩形对应的区域裁剪出来，
-/// 降采样后磨砂模糊。
+/// 渲染结果：磨砂后的纹理、降采样参考纹理与纹理几何。
+pub(crate) struct RenderedTexture {
+    /// 磨砂后的纹理像素（未叠加主题色调）。
+    pub blurred: ImageBuffer<Rgba<u8>, Vec<u8>>,
+    /// 降采样后未磨砂的纹理像素，用作色偏参考。
+    pub reference: ImageBuffer<Rgba<u8>, Vec<u8>>,
+    /// 纹理几何。
+    pub geometry: TextureGeometry,
+}
+
+/// 纹理几何：cover 裁剪、降采样尺寸与屏幕跨度。
 ///
-/// 降采样先于模糊：Triangle 低通 + 小图模糊（等效 sigma 按比例缩放）与
-/// 原分辨率模糊视觉一致，成本低一个量级。
-fn blurred_viewport(
+/// 这些数字把「壁纸像素」「纹理像素」「屏幕物理像素」三种尺度接在一起，
+/// 磨砂强度只有经过它们换算，才能锚定在屏幕上。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TextureGeometry {
+    /// cover 放大倍数：一个壁纸像素对应多少屏幕物理像素。
+    pub scale: f64,
+    /// 裁剪区域尺寸（壁纸像素）。
+    pub crop_size: (u32, u32),
+    /// 降采样后的纹理尺寸（纹理像素）。
+    pub target_size: (u32, u32),
+}
+
+impl TextureGeometry {
+    /// 裁剪区域在屏幕物理像素中的跨度。
+    pub fn screen_span(&self) -> (f64, f64) {
+        (
+            f64::from(self.crop_size.0) * self.scale,
+            f64::from(self.crop_size.1) * self.scale,
+        )
+    }
+
+    /// 一个纹理像素对应多少屏幕物理像素。
+    pub fn screen_per_texture(&self) -> (f64, f64) {
+        let (span_x, span_y) = self.screen_span();
+        (
+            span_x / f64::from(self.target_size.0),
+            span_y / f64::from(self.target_size.1),
+        )
+    }
+
+    /// 屏幕物理像素的 sigma 换算成纹理像素的 sigma。
+    ///
+    /// 磨砂半径必须锚定屏幕物理像素：同一个 sigma 在 1080p 屏上宽 16 像素，
+    /// 在 4K 屏上也必须宽 16 像素，否则壁纸或屏幕分辨率一变观感就跟着漂。
+    /// 换算按「一个纹理像素等于多少屏幕像素」的比例反推。
+    pub fn texture_sigma(&self, sigma_screen: f32) -> f32 {
+        let (per_x, per_y) = self.screen_per_texture();
+        let per_texture = 0.5 * (per_x + per_y);
+        if per_texture <= 0.0 {
+            return 0.0;
+        }
+        sigma_screen / per_texture as f32
+    }
+}
+
+/// 按真实配方渲染一块纹理：cover 裁剪 → 降采样 → 屏幕锚定磨砂。
+///
+/// 生成路径与纹理统计接缝共用这一份配方，统计量因此反映真实产物，而不是
+/// 另算一套近似。
+///
+/// 降采样先于模糊：Triangle 低通 + 小图模糊与原分辨率模糊视觉一致，成本低
+/// 一个量级；模糊半径按屏幕锚定换算，缩小不会削弱磨砂。
+pub(crate) fn render_texture(
     wallpaper: &DynamicImage,
     screen: (u32, u32),
     viewport: (i32, i32, u32, u32),
     max_width: u32,
     sigma: f32,
-) -> Option<ImageBuffer<Rgba<u8>, Vec<u8>>> {
-    let (left, top, right, bottom) = cover_crop(
+) -> Option<RenderedTexture> {
+    let crop = cover_crop(
         wallpaper.dimensions(),
         (f64::from(screen.0), f64::from(screen.1)),
         viewport,
     )?;
-    let crop = wallpaper.crop_imm(left, top, right - left, bottom - top);
-    let (crop_width, crop_height) = crop.dimensions();
+    let crop_image = wallpaper.crop_imm(
+        crop.rect.0,
+        crop.rect.1,
+        crop.rect.2 - crop.rect.0,
+        crop.rect.3 - crop.rect.1,
+    );
+    let (crop_width, crop_height) = crop_image.dimensions();
 
     let ratio = (f64::from(max_width) / f64::from(crop_width)).min(1.0);
     let target_width = ((f64::from(crop_width) * ratio).round() as u32).max(1);
     let target_height = ((f64::from(crop_height) * ratio).round() as u32).max(1);
-    let small = image::imageops::resize(&crop, target_width, target_height, FilterType::Triangle);
+    let small = image::imageops::resize(
+        &crop_image,
+        target_width,
+        target_height,
+        FilterType::Triangle,
+    );
 
-    if sigma <= f32::EPSILON {
-        Some(small)
+    let geometry = TextureGeometry {
+        scale: crop.scale,
+        crop_size: (crop_width, crop_height),
+        target_size: (target_width, target_height),
+    };
+    let sigma = sigma.max(0.0);
+    let (blurred, reference) = if sigma <= f32::EPSILON {
+        (small.clone(), small)
     } else {
-        Some(blur(&small, sigma * ratio as f32))
-    }
+        (blur(&small, geometry.texture_sigma(sigma)), small)
+    };
+    Some(RenderedTexture {
+        blurred,
+        reference,
+        geometry,
+    })
 }
 
-/// 计算视口矩形在壁纸像素坐标中的可见区域 `(left, top, right, bottom)`。
+/// cover 裁剪结果：壁纸像素中的可见矩形与放大倍数。
+#[derive(Clone, Copy, Debug)]
+struct CoverCrop {
+    /// 可见矩形 `(left, top, right, bottom)`，壁纸像素。
+    rect: (u32, u32, u32, u32),
+    /// cover 放大倍数：一个壁纸像素对应多少屏幕像素。
+    scale: f64,
+}
+
+/// 计算视口矩形在壁纸像素坐标中的可见区域与 cover 放大倍数。
 ///
-/// cover 规则：壁纸等比放大到覆盖主屏，居中裁掉溢出部分。
+/// cover 规则：壁纸等比放大到覆盖主屏，居中裁掉溢出部分。放大倍数同时给出
+/// 「壁纸像素 → 屏幕像素」的比例，调用方据此把锚定屏幕的磨砂强度换算到
+/// 纹理像素。
 fn cover_crop(
     wallpaper: (u32, u32),
     screen: (f64, f64),
     viewport: (i32, i32, u32, u32),
-) -> Option<(u32, u32, u32, u32)> {
+) -> Option<CoverCrop> {
     if wallpaper.0 == 0 || wallpaper.1 == 0 || screen.0 <= 0.0 || screen.1 <= 0.0 {
         return None;
     }
@@ -244,7 +306,10 @@ fn cover_crop(
     let bottom = (((f64::from(y) + f64::from(height) - offset_y) / scale).ceil() as i64)
         .clamp(0, clamp_height) as u32;
 
-    (right > left && bottom > top).then_some((left, top, right, bottom))
+    (right > left && bottom > top).then_some(CoverCrop {
+        rect: (left, top, right, bottom),
+        scale,
+    })
 }
 
 /// 按 WinUI 的三层色调合成 Mica：明度向基准色压缩，色偏稀释后叠加回去。
@@ -255,7 +320,10 @@ fn cover_crop(
 /// - 明度以基准色为轴压缩到 18%，等价于 `LuminosityOpacity`，
 ///   保证任何壁纸上的文字对比度；
 /// - 色偏按 16% 稀释并限制在 ±5，保留壁纸的低频色调，但不铺开彩雾。
-fn tint(image: &ImageBuffer<Rgba<u8>, Vec<u8>>, dark: bool) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
+pub(crate) fn tint(
+    image: &ImageBuffer<Rgba<u8>, Vec<u8>>,
+    dark: bool,
+) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
     // WinUI `SolidBackgroundFillColorBase`: dark #202020, light #F3F3F3.
     let base = if dark { 32.0 } else { 243.0 };
     // 云母的明度区间本来就很窄：再亮的壁纸也不能把窗口烧出高光，
@@ -363,7 +431,8 @@ mod tests {
     fn a_centered_viewport_maps_to_the_whole_wallpaper() {
         // 3840×2160 wallpaper on 1920×1080: exact cover, no offsets.
         let crop = cover_crop((3840, 2160), (1920.0, 1080.0), (0, 0, 1920, 1080)).unwrap();
-        assert_eq!(crop, (0, 0, 3840, 2160));
+        assert_eq!(crop.rect, (0, 0, 3840, 2160));
+        assert_eq!(crop.scale, 0.5);
     }
 
     #[test]
@@ -371,8 +440,8 @@ mod tests {
         // 3840×2160 on 1920×1200: scale 1200/2160, cover width ≈ 2133,
         // so the visible region starts at x ≈ 192 and ends at x ≈ 3648.
         let crop = cover_crop((3840, 2160), (1920.0, 1200.0), (0, 0, 1920, 1200)).unwrap();
-        assert_eq!((crop.0, crop.1), (192, 0));
-        assert_eq!((crop.2, crop.3), (3648, 2160));
+        assert_eq!((crop.rect.0, crop.rect.1), (192, 0));
+        assert_eq!((crop.rect.2, crop.rect.3), (3648, 2160));
     }
 
     #[test]
@@ -423,6 +492,56 @@ mod tests {
         for pixel in blurred.pixels() {
             assert_eq!(pixel.0, [12, 34, 56, 255]);
         }
+    }
+
+    #[test]
+    fn the_same_picture_blurs_the_same_at_any_wallpaper_resolution() {
+        use crate::test_support::{portrait_wallpaper, wallpaper_at};
+
+        let screen = (1920, 1080);
+        let viewport = (0, 0, screen.0, screen.1);
+        let baseline = render_texture(
+            &wallpaper_at(1920, 1080),
+            screen,
+            viewport,
+            DEFAULT_MAX_WIDTH,
+            DEFAULT_SIGMA,
+        )
+        .expect("the wallpaper must render");
+
+        for wallpaper in [wallpaper_at(3840, 2160), portrait_wallpaper(1280)] {
+            let rendered = render_texture(
+                &wallpaper,
+                screen,
+                viewport,
+                DEFAULT_MAX_WIDTH,
+                DEFAULT_SIGMA,
+            )
+            .expect("the wallpaper must render");
+            assert_eq!(rendered.geometry.target_size, baseline.geometry.target_size);
+            let difference = mean_absolute_difference(&baseline.blurred, &rendered.blurred);
+            assert!(
+                difference < 3.0,
+                "the backdrop drifted by {difference} levels at {:?}",
+                wallpaper.dimensions()
+            );
+        }
+    }
+
+    /// 两张纹理的平均绝对差（0..255）。
+    fn mean_absolute_difference(
+        left: &ImageBuffer<Rgba<u8>, Vec<u8>>,
+        right: &ImageBuffer<Rgba<u8>, Vec<u8>>,
+    ) -> f64 {
+        let mut sum = 0.0;
+        let mut count = 0.0;
+        for (left_pixel, right_pixel) in left.pixels().zip(right.pixels()) {
+            for channel in 0..3 {
+                sum += f64::from(left_pixel[channel].abs_diff(right_pixel[channel]));
+            }
+            count += 3.0;
+        }
+        sum / count
     }
 
     #[test]

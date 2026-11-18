@@ -8,13 +8,21 @@
 //! 本 crate 复刻 WinUI 的三步合成：
 //!
 //! 1. 壁纸按 `cover` 规则铺满主屏，截取窗口所在矩形；
-//! 2. 降采样后做 O(n) 盒式模糊（三次近似高斯，等价于 WinUI 的 blur 层）；
-//! 3. 明度向主题基准色压缩、色偏稀释（等价于 `TintColor` / `LuminosityOpacity`）。
+//! 2. 降采样后做 O(n) 盒式模糊（三次近似高斯，等效于 WinUI 的 blur 层）；
+//! 3. 明度向主题基准色压缩、色偏稀释（等效于 `TintColor` / `LuminosityOpacity`）。
+//!
+//! 磨砂强度以**屏幕物理像素**为基准：降采样后的模糊半径按「一个纹理像素等于
+//! 多少屏幕物理像素」换算，因此换壁纸分辨率、换屏幕分辨率、换显示缩放都不
+//! 改变磨砂观感。
 //!
 //! 结果是一张覆盖整窗的**不透明** PNG，由 `unbound-app` 提交给资产中心并画在
 //! 所有图元之下。生成在后台线程完成（壁纸解码是主要成本），主线程只负责上传。
 //!
 //! 拿不到静态壁纸（幻灯片、动态壁纸）时返回 `None`，调用方回退到纯色底。
+//!
+//! 纹理统计接缝 [`texture_statistics`] 输入壁纸像素与目标屏幕像素，输出空间
+//! 梯度能量、明度带宽与色相保真度，走的是与真实生成完全相同的配方，用来在无
+//! 显示环境里守住磨砂锚点的不变量。
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -22,17 +30,20 @@ pub mod mica;
 pub mod mode;
 pub mod plan;
 pub mod state;
+pub mod stats;
 pub mod wallpaper;
 
-pub use mica::{
-    generate, generate_blurred_rect, MicaImage, MicaRequest, DEFAULT_MAX_WIDTH, DEFAULT_SIGMA,
-};
+#[cfg(test)]
+mod test_support;
+
+pub use mica::{generate, MicaImage, MicaRequest, DEFAULT_MAX_WIDTH, DEFAULT_SIGMA};
 pub use mode::{native_backdrop_available, BackdropMode, ResolvedBackdrop, NATIVE_MICA_MIN_BUILD};
 pub use plan::{
     sample_uv, BackdropCompositeAlpha, BackdropInputs, BackdropPlan, DwmMaterial, PixelRect,
     UvRect, WallpaperTexture,
 };
 pub use state::{BackdropGenerator, MICA_READY_EVENT_ID};
+pub use stats::{texture_statistics, StatisticsRequest, TextureStatistics};
 pub use wallpaper::{
     primary_screen_rect, primary_screen_scale, wallpaper_path, wallpaper_stamp, WallpaperStamp,
 };

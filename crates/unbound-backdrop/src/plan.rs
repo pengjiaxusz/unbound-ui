@@ -130,7 +130,7 @@ pub struct WallpaperTexture {
     pub dpi_scale: f32,
     /// 纹理最大宽度（0 视为默认值）。
     pub max_width: u32,
-    /// 磨砂 sigma。
+    /// 磨砂 sigma，单位是屏幕物理像素。
     pub sigma: f32,
     /// 是否使用深色主题色调。
     pub dark: bool,
@@ -147,7 +147,7 @@ impl WallpaperTexture {
         }
     }
 
-    /// 磨砂 sigma，已把负值归一化为 0。
+    /// 磨砂 sigma（屏幕物理像素），已把负值归一化为 0。
     #[must_use]
     pub fn effective_sigma(&self) -> f32 {
         self.sigma.max(0.0)
