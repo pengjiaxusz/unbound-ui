@@ -16,6 +16,8 @@ import '.pengj-templates/just/bque.just'
 import '.pengj-templates/just/gate.just'
 
 
+import '.pengj-templates/just/worktree.just'
+
 import '.pengj-templates/just/rust-workspace.just'
 
 
@@ -75,3 +77,10 @@ test *ARGS:
 test *ARGS:
     cargo build -p app-guest
     cargo test --workspace --all-features {{ARGS}}
+
+# ---------- 共享编译目录（worktree 层） ----------
+
+# 编译产物落在仓库外、按机器推导的共享目录，多个工作树/多份克隆复用同一份依赖产物。
+# 推导逻辑只有 CLI 一份；框架配方与 `just wt-check` 读的是同一个值，这里导出给整份
+# justfile，showcase/gallery/example 这类直连 cargo 的 recipe 同样继承。
+export CARGO_TARGET_DIR := `pengj-templates-cli worktree target-dir --dir .`
