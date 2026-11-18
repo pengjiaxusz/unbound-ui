@@ -54,6 +54,10 @@ internal static class Catalog
         "RichEditBox", "GridView", "ListBox", "CommandBarFlyout", "AppBarButton",
         "AppBarToggleButton", "AppBarSeparator", "SwipeControl", "RefreshContainer",
         "AnnotatedScrollBar", "ItemsView",
+        // 第四批：按钮与切换类补充（4）
+        "HyperlinkButton", "RepeatButton", "DropDownButton", "ToggleSplitButton",
+        // 第五批：输入与日期类补充（3）
+        "PasswordBox", "DatePicker", "CalendarDatePicker",
     };
 
     private static readonly string[] ImplementedStateList = { "normal", "disabled", "checked", "focused" };
@@ -82,7 +86,7 @@ internal static class Catalog
         return state.ToLowerInvariant() switch
         {
             "normal" or "disabled" or "focused" => true,
-            "checked" => canonical is "CheckBox" or "ToggleSwitch" or "ToggleButton" or "RadioButton" or "AppBarToggleButton",
+            "checked" => canonical is "CheckBox" or "ToggleSwitch" or "ToggleButton" or "RadioButton" or "AppBarToggleButton" or "ToggleSplitButton",
             _ => false,
         };
     }
@@ -114,7 +118,8 @@ internal static class Catalog
             "ScrollView" or "TreeView" or "ListView" or "FlipView" or "CalendarView" or
             "TimePicker" or "TitleBar" or "RichEditBox" or "GridView" or "ListBox" or
             "CommandBarFlyout" or "SwipeControl" or "RefreshContainer" or
-            "AnnotatedScrollBar" or "ItemsView";
+            "AnnotatedScrollBar" or "ItemsView" or
+            "HyperlinkButton" or "RepeatButton" or "DropDownButton" or "ToggleSplitButton";
     }
 
     /// <summary>
@@ -1007,6 +1012,93 @@ internal static class Catalog
                 };
                 return true;
 
+            // ------------------------------------------------------------------
+            // 第四批：按钮与切换类补充（4）
+            // ------------------------------------------------------------------
+
+            case "HyperlinkButton":
+                element = new HyperlinkButton
+                {
+                    Content = "HyperlinkButton",
+                    Width = 120,
+                    Height = 32,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
+            case "RepeatButton":
+                element = new RepeatButton
+                {
+                    Content = "RepeatButton",
+                    Width = 120,
+                    Height = 32,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
+            case "DropDownButton":
+                element = new DropDownButton
+                {
+                    Content = "DropDownButton",
+                    Width = 120,
+                    Height = 32,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
+            case "ToggleSplitButton":
+                element = new ToggleSplitButton
+                {
+                    Content = "ToggleSplitButton",
+                    Width = 120,
+                    Height = 32,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
+            // ------------------------------------------------------------------
+            // 第五批：输入与日期类补充（3）
+            // ------------------------------------------------------------------
+
+            case "PasswordBox":
+                element = new PasswordBox
+                {
+                    Password = "Password",
+                    Width = 200,
+                    Height = 32,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
+            case "DatePicker":
+                element = new DatePicker
+                {
+                    SelectedDate = new DateTimeOffset(new DateTime(2024, 4, 15)),
+                    Width = 240,
+                    Height = 32,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
+            case "CalendarDatePicker":
+                element = new CalendarDatePicker
+                {
+                    Date = new DateTimeOffset(new DateTime(2024, 4, 15)),
+                    DateFormat = "{year.full}-{month.integer(2)}-{day.integer(2)}",
+                    PlaceholderText = "Select a date",
+                    Width = 200,
+                    Height = 32,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
             default:
                 return false;
         }
@@ -1066,6 +1158,12 @@ internal static class Catalog
                 if (element is AppBarToggleButton appBarToggle)
                 {
                     appBarToggle.IsChecked = true;
+                    return true;
+                }
+
+                if (element is ToggleSplitButton toggleSplit)
+                {
+                    toggleSplit.IsChecked = true;
                     return true;
                 }
 

@@ -841,6 +841,18 @@ where
                 push_glyphs(&mut out, &g, Token::TEXT_PRIMARY, desc.z + 1);
             }
             let body = desc.body_rect();
+            let border_desc = CardDesc::new(Rect::new(
+                body.origin.x + 8.0,
+                body.origin.y + 8.0,
+                (body.size.x - 16.0).max(40.0),
+                (body.size.y - 16.0).max(20.0),
+            ));
+            let border_out = crate::containers::emit_border(
+                &border_desc,
+                Token::SURFACE_SUNKEN,
+                Token::CARD_BORDER,
+            );
+            merge_output(&mut out, border_out);
             let bg = shape(
                 "Card body container area",
                 Vec2::new(body.origin.x + 16.0, body.origin.y + 16.0),
@@ -1113,9 +1125,9 @@ where
                 0,
                 crate::primitive::outlined(
                     trig_r,
-                    6.0,
+                    4.0,
                     Token::SURFACE_RAISED,
-                    Token::OUTLINE,
+                    Token::CONTROL_STROKE,
                     1.0,
                     0.0,
                     desc.z.saturating_sub(1),
@@ -1361,9 +1373,9 @@ where
                 0,
                 crate::primitive::outlined(
                     trig_r,
-                    6.0,
+                    4.0,
                     Token::SURFACE_RAISED,
-                    Token::OUTLINE,
+                    Token::CONTROL_STROKE,
                     1.0,
                     0.0,
                     desc.z.saturating_sub(1),
@@ -1906,9 +1918,9 @@ where
                 0,
                 crate::primitive::outlined(
                     trig_r,
-                    6.0,
+                    4.0,
                     Token::SURFACE_RAISED,
-                    Token::OUTLINE,
+                    Token::CONTROL_STROKE,
                     1.0,
                     0.0,
                     desc.z.saturating_sub(1),
@@ -1930,12 +1942,12 @@ where
                     expanded: variant_idx % 2 == 1,
                 },
                 item: 0,
-                rect: Rect::new(o.x, o.y, rect.size.x, 28.0),
+                rect: Rect::new(o.x, o.y, rect.size.x, 36.0),
             };
             let mut out = crate::tree_view::emit_tree_background(&desc, TreeViewTokens::standard());
             let row_g = shape(
                 "crates/unbound-widgets",
-                Vec2::new(o.x + 26.0, o.y + 7.0),
+                Vec2::new(o.x + 26.0, o.y + 11.0),
                 13.0,
             );
             let row_out = crate::tree_view::emit_tree_row(
@@ -1950,16 +1962,16 @@ where
             out
         }
         WidgetCatalogId::ListView => {
-            let row_r = Rect::new(o.x, o.y, rect.size.x, 32.0);
+            let row_r = Rect::new(o.x, o.y, rect.size.x, 36.0);
             let g = shape(
                 "Virtual Row #0 (variable height)",
-                Vec2::new(o.x + 12.0, o.y + 9.0),
+                Vec2::new(o.x + 12.0, o.y + 11.0),
                 13.0,
             );
             crate::virtual_views::emit_virtual_row(
                 row_r,
                 &g,
-                false,
+                variant_idx % 2 == 1,
                 state.phase == PointerPhase::Hovered,
                 VirtualRowTokens::standard(),
                 100,
@@ -2776,7 +2788,8 @@ where
         WidgetCatalogId::DatePicker => {
             let dw_r = Rect::new(o.x, o.y, rect.size.x.min(220.0), rect.size.y.min(32.0));
             let desc = crate::date_picker_wheel::DatePickerWheelDesc::new(dw_r);
-            let wheel = crate::date_picker_wheel::DatePickerWheelState::new(2024, 3, 15);
+            let wheel =
+                crate::date_picker_wheel::DatePickerWheelState::new(2024, 3, 15).with_open(true);
             let row_h = crate::date_picker_wheel::DATE_PICKER_WHEEL_ROW_HEIGHT;
             let mut glyphs = Vec::new();
             for column in crate::date_picker_wheel::WheelColumn::ALL {

@@ -78,6 +78,22 @@ impl ScreenRect {
     }
 }
 
+/// 窗口表面的合成方式。
+///
+/// 它决定窗口内容能否与 DWM 后景材质（云母 / 亚克力）合成：不透明表面会把
+/// 应用像素整块盖在系统材质之上，原生后景只剩窗口外框可见。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SurfaceAlpha {
+    /// 不透明表面：根背景清屏 alpha 恒为 1，窗口永远遮住桌面。
+    #[default]
+    Opaque,
+    /// 预乘 alpha 表面：根背景可全透明，让 DWM 材质从客户区透出。
+    ///
+    /// 驱动不支持预乘 alpha 时，交换链创建流程会回退为不透明；调用方只需表达
+    /// 意图，不必自行探测能力。
+    PreMultiplied,
+}
+
 /// 平台窗口的配置参数。
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowConfig {
@@ -104,6 +120,11 @@ pub struct WindowConfig {
     pub refresh: std::time::Duration,
     /// 窗口启动时的初始位置策略（默认为主屏幕工作区居中 [`WindowPosition::CenterPrimary`]）。
     pub position: WindowPosition,
+    /// 表面合成方式（默认为不透明）。
+    ///
+    /// 需要系统原生后景（云母 / 亚克力）从客户区透出的窗口必须选
+    /// [`SurfaceAlpha::PreMultiplied`]，并按后景计划把根背景清屏 alpha 降到 0。
+    pub surface_alpha: SurfaceAlpha,
 }
 
 impl Default for WindowConfig {
@@ -119,6 +140,7 @@ impl Default for WindowConfig {
             visible: true,
             refresh: crate::pacing::REFRESH_120,
             position: WindowPosition::CenterPrimary,
+            surface_alpha: SurfaceAlpha::Opaque,
         }
     }
 }
@@ -179,6 +201,16 @@ impl WindowConfig {
     #[must_use]
     pub const fn at_physical(mut self, x: i32, y: i32) -> Self {
         self.position = WindowPosition::Physical { x, y };
+        self
+    }
+
+    /// 设置表面合成方式。
+    ///
+    /// 原生后景（系统云母 / 亚克力）必须配合 [`SurfaceAlpha::PreMultiplied`]：不透明
+    /// 交换链会把应用像素盖在系统材质上，材质只剩窗口外框可见。
+    #[must_use]
+    pub const fn with_surface_alpha(mut self, alpha: SurfaceAlpha) -> Self {
+        self.surface_alpha = alpha;
         self
     }
 

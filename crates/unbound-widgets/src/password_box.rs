@@ -7,14 +7,16 @@
 
 use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yNode};
-use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::Rect;
+use unbound_input::{CursorKind, HitRegion, KeyChord, KeyName, Shape};
+use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::text_input::{focus_underline, TEXT_INPUT_LAYER};
-use crate::{ControlState, PointerPhase, WidgetOutput};
+use crate::{
+    AlignX, AlignY, ControlState, PointerPhase, TextCtx, UiWidget, WidgetInputEvent, WidgetOutput,
+};
 
 /// 掩码字符（U+2022 圆点）。以转义书写，避免在源码里引入非 ASCII 字面量。
 pub const MASK_CHAR: char = '\u{2022}';
@@ -63,6 +65,33 @@ impl PasswordBoxDesc {
         }
     }
 
+    /// 构造带默认 200px 宽度与 32px 高度的密码框。
+    #[must_use]
+    pub fn password(placeholder: impl Into<String>) -> Self {
+        Self::new(Rect::new(0.0, 0.0, 200.0, PASSWORD_BOX_HEIGHT)).with_placeholder(placeholder)
+    }
+
+    /// 设置绘制深度。
+    #[must_use]
+    pub fn with_z(mut self, z: u16) -> Self {
+        self.z = z;
+        self
+    }
+
+    /// 设置圆角半径。
+    #[must_use]
+    pub fn with_radius(mut self, radius: f32) -> Self {
+        self.radius = radius;
+        self
+    }
+
+    /// 设置字号。
+    #[must_use]
+    pub fn with_font_size(mut self, font_size: f32) -> Self {
+        self.font_size = font_size;
+        self
+    }
+
     /// 设置占位文本。
     #[must_use]
     pub fn with_placeholder(mut self, placeholder: impl Into<String>) -> Self {
@@ -87,8 +116,7 @@ impl PasswordBoxDesc {
     /// 右侧「显示明文」眼睛按钮矩形。
     #[must_use]
     pub fn reveal_rect(&self) -> Rect {
-        let height =
-            (self.rect.size.y - PASSWORD_BOX_INNER_BUTTON_MARGIN * 2.0).max(16.0);
+        let height = (self.rect.size.y - PASSWORD_BOX_INNER_BUTTON_MARGIN * 2.0).max(16.0);
         Rect::new(
             self.rect.max().x - PASSWORD_BOX_INNER_BUTTON_MARGIN - PASSWORD_BOX_INNER_BUTTON_WIDTH,
             self.rect.origin.y + PASSWORD_BOX_INNER_BUTTON_MARGIN,
@@ -157,6 +185,127 @@ impl PasswordBoxState {
     /// 切换明文显示。
     pub fn toggle_reveal(&mut self) {
         self.reveal = !self.reveal;
+    }
+
+    /// 插入文本字符。
+    pub fn insert_text(&mut self, text: &str) {
+        self.text.push_str(text);
+    }
+
+    /// 删除最后一个字符。
+    pub fn backspace(&mut self) -> bool {
+        self.text.pop().is_some()
+    }
+
+    /// 清空密码。
+    pub fn clear(&mut self) {
+        self.text.clear();
+    }
+
+    /// 处理键盘按键输入，若状态发生改变则返回 `true`。
+    pub fn handle_key(&mut self, chord: &KeyChord) -> bool {
+        match chord.key {
+            KeyName::Named("Backspace") => self.backspace(),
+            KeyName::Named("Escape") => {
+                if !self.text.is_empty() {
+                    self.clear();
+                    true
+                } else {
+                    false
+                }
+            }
+            KeyName::Named("F8") if chord.alt => {
+                self.toggle_reveal();
+                true
+            }
+            KeyName::Char(c) if !chord.ctrl && !chord.alt => {
+                self.text.push(c);
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl UiWidget for PasswordBoxDesc {
+    type State = PasswordBoxState;
+
+    fn initial_state(&self) -> Self::State {
+        if self.label.is_empty() {
+            PasswordBoxState::new()
+        } else {
+            PasswordBoxState::with_text(&self.label)
+        }
+    }
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let sample = if !self.label.is_empty() {
+            self.label.as_str()
+        } else {
+            self.placeholder.as_str()
+        };
+        let measured = text_ctx.measure_line(sample, self.font_size, 400);
+        Vec2::new(
+            (measured.x + 44.0).max(self.rect.width()).max(160.0),
+            PASSWORD_BOX_HEIGHT,
+        )
+    }
+
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        if self.disabled {
+            return false;
+        }
+        match event {
+            WidgetInputEvent::PointerDown { pos, .. } => {
+                let mut desc = self.clone();
+                desc.rect = rect;
+                if desc.reveal_rect().contains_point(*pos) {
+                    state.toggle_reveal();
+                    true
+                } else {
+                    true
+                }
+            }
+            WidgetInputEvent::TextInput(text) => {
+                state.insert_text(text);
+                true
+            }
+            WidgetInputEvent::KeyDown(chord) => state.handle_key(chord),
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let display = state.display_text();
+        let sample = if state.text.is_empty() {
+            desc.placeholder.as_str()
+        } else {
+            &display
+        };
+        let text_rect = Rect::new(
+            rect.origin.x + 10.0,
+            rect.origin.y,
+            (rect.width() - 48.0).max(0.0),
+            rect.height(),
+        );
+        let mut glyphs = text_ctx.shape_line(
+            sample,
+            text_rect,
+            desc.font_size,
+            400,
+            AlignX::Left,
+            AlignY::Middle,
+        );
+        emit_password_box(node, &desc, state, control, &mut glyphs)
     }
 }
 
@@ -234,7 +383,11 @@ pub fn emit_password_box(
         rect,
         desc.radius,
         z + 1,
-        if control.focused && !disabled { 1.0 } else { 0.0 },
+        if control.focused && !disabled {
+            1.0
+        } else {
+            0.0
+        },
     ));
 
     // 眼睛按钮：悬停浅底 + 一个圆环与瞳孔。始终写入，确保图元数量恒定。
@@ -256,12 +409,7 @@ pub fn emit_password_box(
         z + 2,
     ));
     primitives.push(surface(
-        Rect::new(
-            eye.center().x - 2.0,
-            eye.center().y - 2.0,
-            4.0,
-            4.0,
-        ),
+        Rect::new(eye.center().x - 2.0, eye.center().y - 2.0, 4.0, 4.0),
         2.0,
         eye_ink,
         z + 2,
@@ -422,6 +570,37 @@ mod tests {
                 }
             }
         }
-        assert!(counts.windows(2).all(|pair| pair[0] == pair[1]), "{counts:?}");
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
+    }
+
+    #[test]
+    fn keyboard_operations_modify_state() {
+        let mut state = PasswordBoxState::new();
+        state.insert_text("123");
+        assert_eq!(state.text, "123");
+        state.insert_text("4");
+        assert_eq!(state.text, "1234");
+        assert!(state.backspace());
+        assert_eq!(state.text, "123");
+
+        let chord_char = KeyChord::character('5');
+        assert!(state.handle_key(&chord_char));
+        assert_eq!(state.text, "1235");
+
+        let chord_bs = KeyChord::named("Backspace");
+        assert!(state.handle_key(&chord_bs));
+        assert_eq!(state.text, "123");
+
+        let mut chord_reveal = KeyChord::named("F8");
+        chord_reveal.alt = true;
+        assert!(state.handle_key(&chord_reveal));
+        assert!(state.reveal);
+
+        let chord_esc = KeyChord::named("Escape");
+        assert!(state.handle_key(&chord_esc));
+        assert_eq!(state.text, "");
     }
 }

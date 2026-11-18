@@ -452,7 +452,8 @@ pub use command_palette::{
     CommandPaletteState, CommandPaletteTokens, MatchKind,
 };
 pub use containers::{
-    emit_card, emit_stack, CardDesc, CardTokens, StackDesc, WrapDesc, CARD_ELEVATIONS, WRAP_FLAG,
+    emit_border, emit_card, emit_stack, CardDesc, CardTokens, StackDesc, WrapDesc,
+    CARD_BORDER_WIDTH, CARD_ELEVATIONS, CARD_RADIUS, WRAP_FLAG,
 };
 pub use context_menu::{ContextClose, ContextKey, ContextMenuState};
 pub use curve_editor::{
@@ -641,14 +642,23 @@ pub use date_picker_wheel::{
     emit_date_picker_wheel, DatePickerWheelDesc, DatePickerWheelState, WheelColumn,
     DATE_PICKER_WHEEL_TRIGGER_HEIGHT,
 };
-pub use drop_down_button::{emit_drop_down_button, DropDownButtonDesc, DropDownButtonState};
-pub use hyperlink_button::{emit_hyperlink_button, HyperlinkButtonDesc};
+pub use drop_down_button::{
+    emit_drop_down_button, DropDownButtonDesc, DropDownButtonKey, DropDownButtonState,
+    DROP_DOWN_BUTTON_CHEVRON_INSET, DROP_DOWN_BUTTON_HEIGHT, DROP_DOWN_BUTTON_RADIUS,
+};
+pub use hyperlink_button::{
+    emit_hyperlink_button, HyperlinkButtonDesc, HYPERLINK_BUTTON_HEIGHT, HYPERLINK_RADIUS,
+};
 pub use password_box::{
     emit_password_box, reveal_button_node, PasswordBoxDesc, PasswordBoxState, MASK_CHAR,
 };
-pub use repeat_button::{emit_repeat_button, RepeatButtonDesc, RepeatButtonState};
+pub use repeat_button::{
+    emit_repeat_button, RepeatButtonDesc, RepeatButtonState, DEFAULT_REPEAT_DELAY_MS,
+    DEFAULT_REPEAT_INTERVAL_MS, REPEAT_BUTTON_HEIGHT, REPEAT_BUTTON_RADIUS,
+};
 pub use toggle_split_button::{
-    emit_toggle_split_button, ToggleSplitButtonDesc, ToggleSplitButtonState,
+    emit_toggle_split_button, ToggleSplitButtonDesc, ToggleSplitButtonState, ToggleSplitKey,
+    ToggleSplitPart, TOGGLE_SPLIT_DROPDOWN_WIDTH, TOGGLE_SPLIT_HEIGHT, TOGGLE_SPLIT_RADIUS,
 };
 
 pub use canonical::{ControlClass, BASELINE_COUNT, EXCLUSIVE_COUNT, TOOLKIT_COUNT};

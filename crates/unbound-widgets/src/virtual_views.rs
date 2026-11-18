@@ -259,8 +259,8 @@ impl VirtualRowTokens {
     pub fn standard() -> Self {
         Self {
             row: Token::SURFACE,
-            hover: Token::CONTROL_HOVER,
-            selected: Token::SELECTION,
+            hover: Token::HOVER,
+            selected: Token::HOVER,
             text: Token::TEXT_PRIMARY,
             rule: Token::DIVIDER,
         }
@@ -277,7 +277,7 @@ pub fn emit_virtual_row(
     tokens: VirtualRowTokens,
     z: u16,
 ) -> WidgetOutput {
-    let mut primitives = Vec::with_capacity(2 + row_glyphs.len());
+    let mut primitives = Vec::with_capacity(3 + row_glyphs.len());
     let mut payloads = Vec::with_capacity(row_glyphs.len());
     let fill = if selected {
         tokens.selected
@@ -292,10 +292,25 @@ pub fn emit_virtual_row(
         tokens.rule,
         z + 1,
     ));
+    // 左侧选中强调指示条（未选中时透明度为 0，保持图元数恒定）
+    // 对齐 WinUI 3 关键规范：3×16px 垂直居中、圆角 1.5px 的选中胶囊条，使用 Token::PRIMARY
+    let indicator = Rect::new(
+        rect.origin.x,
+        rect.origin.y + (rect.size.y - 16.0) * 0.5,
+        3.0,
+        16.0,
+    );
+    let mut indicator_inst = surface(indicator, 1.5, Token::PRIMARY, z + 2);
+    if !selected {
+        indicator_inst.z_and_opacity =
+            GpuPrimitiveInstance::pack_z_opacity(indicator_inst.depth_u16(), 0.0);
+    }
+    primitives.push(indicator_inst);
+
     glyphs(
         row_glyphs,
         tokens.text,
-        z + 2,
+        z + 3,
         &mut primitives,
         &mut payloads,
     );
@@ -432,7 +447,7 @@ mod tests {
             VirtualRowTokens::standard(),
             100,
         );
-        assert_eq!(output.primitives.len(), 2);
+        assert_eq!(output.primitives.len(), 3);
         assert!(output.a11y.is_none());
     }
 }

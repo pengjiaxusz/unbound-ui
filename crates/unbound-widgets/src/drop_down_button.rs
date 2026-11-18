@@ -2,23 +2,39 @@
 //!
 //! 与 [`crate::split_button::SplitButton`] 的区别在于语义：分裂按钮左侧是
 //! 「执行主操作」、右侧才是下拉；本控件整块都可点击，点击只负责打开菜单，
-//! 因此只有单一命中区域，展开状态通过 `selected` 语义与箭头配色表达。
+//! 因此只有单一命中区域，展开状态通过 `selected` 与 `expanded` 语义及箭头配色表达。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
-use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::Rect;
+use unbound_input::{CursorKind, HitRegion, KeyName, Shape};
+use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
+use crate::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 /// 圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
 pub const DROP_DOWN_BUTTON_RADIUS: f32 = 4.0;
+/// 标准控件高度。对齐 WinUI `DropDownButton` 的 32px。
+pub const DROP_DOWN_BUTTON_HEIGHT: f32 = 32.0;
 /// 右侧下拉箭头距控件右沿的距离。
 pub const DROP_DOWN_BUTTON_CHEVRON_INSET: f32 = 16.0;
+
+/// 下拉按钮支持的键盘按键。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropDownButtonKey {
+    /// Enter 键：切换菜单展开状态。
+    Enter,
+    /// Space 键：切换菜单展开状态。
+    Space,
+    /// 下箭头（或 Alt+Down）：展开菜单。
+    ArrowDown,
+    /// Escape 键：收起关闭菜单。
+    Escape,
+}
 
 /// 下拉按钮描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -48,10 +64,30 @@ impl DropDownButtonDesc {
         }
     }
 
+    /// 使用标准高度便捷构造。
+    #[must_use]
+    pub fn label(label: impl Into<String>) -> Self {
+        Self::new(Rect::new(0.0, 0.0, 120.0, DROP_DOWN_BUTTON_HEIGHT), label)
+    }
+
+    /// 设置圆角半径。
+    #[must_use]
+    pub fn with_radius(mut self, radius: f32) -> Self {
+        self.radius = radius;
+        self
+    }
+
     /// 设置为禁用状态。
     #[must_use]
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// 设置绘制图层顺序键。
+    #[must_use]
+    pub fn with_z(mut self, z: u16) -> Self {
+        self.z = z;
         self
     }
 }
@@ -73,6 +109,55 @@ impl DropDownButtonState {
     /// 切换展开状态。
     pub fn toggle(&mut self) {
         self.open = !self.open;
+    }
+
+    /// 展开菜单。
+    pub fn open(&mut self) {
+        self.open = true;
+    }
+
+    /// 收起关闭菜单。
+    pub fn close(&mut self) {
+        self.open = false;
+    }
+
+    /// 处理键盘按键交互。若状态发生改变则返回 `true`。
+    pub fn handle_key(&mut self, key: DropDownButtonKey) -> bool {
+        match key {
+            DropDownButtonKey::Enter | DropDownButtonKey::Space => {
+                self.toggle();
+                true
+            }
+            DropDownButtonKey::ArrowDown => {
+                if !self.open {
+                    self.open = true;
+                    true
+                } else {
+                    false
+                }
+            }
+            DropDownButtonKey::Escape => {
+                if self.open {
+                    self.open = false;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
+
+/// 将键盘激活折叠进视觉状态。
+#[must_use]
+pub fn keyboard_activation(state: ControlState, space_or_enter_down: bool) -> ControlState {
+    if space_or_enter_down && state.focused && !state.disabled {
+        ControlState {
+            phase: PointerPhase::Pressed,
+            ..state
+        }
+    } else {
+        state
     }
 }
 
@@ -173,11 +258,10 @@ pub fn emit_drop_down_button(
     });
 
     // 整块按钮只有一个命中区域：点击任意位置都打开/关闭菜单。
-    let a11y = A11yNode::new(Role::Button, desc.label.clone(), rect)
+    let mut a11y = A11yNode::new(Role::Button, desc.label.clone(), rect)
         .clickable()
         .disabled(disabled)
         .expanded(open);
-    let mut a11y = a11y;
     a11y.selected = open;
 
     WidgetOutput {
@@ -190,12 +274,73 @@ pub fn emit_drop_down_button(
     }
 }
 
+impl UiWidget for DropDownButtonDesc {
+    type State = DropDownButtonState;
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let measured = text_ctx.measure_line(&self.label, 14.0, 500);
+        let w = (measured.x + 39.0).max(self.rect.width()).max(80.0);
+        let h = DROP_DOWN_BUTTON_HEIGHT.max(self.rect.height());
+        Vec2::new(w, h)
+    }
+
+    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        match event {
+            WidgetInputEvent::PointerDown { .. } => {
+                state.toggle();
+                true
+            }
+            WidgetInputEvent::KeyDown(chord) => {
+                let key = match chord.key {
+                    KeyName::Named("Enter") => Some(DropDownButtonKey::Enter),
+                    KeyName::Named("Space") => Some(DropDownButtonKey::Space),
+                    KeyName::Named("ArrowDown") => Some(DropDownButtonKey::ArrowDown),
+                    KeyName::Named("Escape") => Some(DropDownButtonKey::Escape),
+                    _ => None,
+                };
+                key.is_some_and(|k| state.handle_key(k))
+            }
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let content_r = Rect::new(
+            rect.origin.x,
+            rect.origin.y,
+            (rect.width() - DROP_DOWN_BUTTON_CHEVRON_INSET - 8.0).max(0.0),
+            rect.height(),
+        );
+        let mut glyphs = text_ctx.shape_line(
+            &desc.label,
+            content_r,
+            14.0,
+            500,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        emit_drop_down_button(node, &desc, state, control, &mut glyphs)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn desc() -> DropDownButtonDesc {
-        DropDownButtonDesc::new(Rect::new(0.0, 0.0, 150.0, 32.0), "Options")
+        DropDownButtonDesc::new(
+            Rect::new(0.0, 0.0, 150.0, DROP_DOWN_BUTTON_HEIGHT),
+            "Options",
+        )
     }
 
     #[test]
@@ -223,6 +368,19 @@ mod tests {
         assert_eq!(node.role, Role::Button);
         assert_eq!(node.expanded, Some(true));
         assert!(node.selected);
+    }
+
+    #[test]
+    fn keyboard_activation_collapses_to_pressed() {
+        let focused = ControlState {
+            focused: true,
+            ..ControlState::default()
+        };
+        let active = keyboard_activation(focused, true);
+        assert_eq!(active.phase, PointerPhase::Pressed);
+
+        let inactive = keyboard_activation(focused, false);
+        assert_eq!(inactive.phase, PointerPhase::Idle);
     }
 
     #[test]
@@ -257,16 +415,31 @@ mod tests {
                 }
             }
         }
-        assert!(counts.windows(2).all(|pair| pair[0] == pair[1]), "{counts:?}");
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 
     #[test]
-    fn toggling_flips_the_open_flag() {
+    fn toggling_and_key_handling_drive_open_state() {
         let mut state = DropDownButtonState::new();
         assert!(!state.open);
         state.toggle();
         assert!(state.open);
-        state.toggle();
+        state.close();
         assert!(!state.open);
+        state.open();
+        assert!(state.open);
+
+        // 键盘按键驱动
+        assert!(state.handle_key(DropDownButtonKey::Escape));
+        assert!(!state.open);
+        assert!(state.handle_key(DropDownButtonKey::ArrowDown));
+        assert!(state.open);
+        assert!(state.handle_key(DropDownButtonKey::Space));
+        assert!(!state.open);
+        assert!(state.handle_key(DropDownButtonKey::Enter));
+        assert!(state.open);
     }
 }

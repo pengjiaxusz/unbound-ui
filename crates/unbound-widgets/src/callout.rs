@@ -13,9 +13,11 @@ use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined
 use crate::{ControlState, WidgetOutput};
 
 /// 提示框圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（TeachingTip 的 `CornerRadius`）。
-const CALLOUT_RADIUS: f32 = 8.0;
+pub const CALLOUT_RADIUS: f32 = 8.0;
+/// 提示框描边宽度。对齐 WinUI `SurfaceStroke`（1px 微描边）。
+pub const CALLOUT_BORDER_WIDTH: f32 = 1.0;
 /// 内容内边距。对齐 WinUI `TeachingTipContentMargin = 12` 与 `FlyoutContentPadding` 的水平 16。
-const CALLOUT_PADDING: f32 = 16.0;
+pub const CALLOUT_PADDING: f32 = 16.0;
 /// 关闭按钮边长。WinUI `TeachingTipAlternateCloseButtonSize = 40`，这里取 32 的紧凑值。
 const CALLOUT_CLOSE_SIZE: f32 = 32.0;
 /// 关闭叉号半臂长。16px 字形（`TeachingTipAlternateCloseButtonGlyphSize = 16`）在 32px
@@ -121,7 +123,7 @@ pub fn emit_callout_with_glyphs(
             Severity::Warning => Token::WARNING,
             Severity::Error => Token::ERROR,
         };
-        (Token::SURFACE_RAISED, Token::CONTROL_STROKE, accent)
+        (Token::OVERLAY_BG, Token::CARD_BORDER, accent)
     };
 
     // 1. 背景表面
@@ -138,7 +140,7 @@ pub fn emit_callout_with_glyphs(
         desc.radius,
         Token::NONE,
         border_token,
-        1.0,
+        CALLOUT_BORDER_WIDTH,
         0.0,
         z + 2,
     ));

@@ -23,8 +23,12 @@ use unbound_widgets::catalog::{emit_widget_with_shaper, CatalogParams};
 use unbound_widgets::primitive;
 use unbound_widgets::title_bar::{TitleBarChrome, WindowCaptionButton, WindowCaptionKind};
 use unbound_widgets::{
-    ButtonDesc, ButtonVariant, CheckboxDesc, ControlState, PointerPhase, SelectDesc, SliderDesc,
-    SwitchDesc, TextCtx, TextInputDesc, UiWidget, WidgetCatalogId, WidgetOutput,
+    ButtonDesc, ButtonVariant, CalendarDatePickerDesc, CalendarDatePickerState, CheckboxDesc,
+    ControlState, DatePickerWheelDesc, DatePickerWheelState, DropDownButtonDesc,
+    DropDownButtonState, HyperlinkButtonDesc, NaiveDate, PasswordBoxDesc, PasswordBoxState,
+    PointerPhase, RepeatButtonDesc, RepeatButtonState, SelectDesc, SliderDesc, SwitchDesc, TextCtx,
+    TextInputDesc, ToggleSplitButtonDesc, ToggleSplitButtonState, UiWidget, WidgetCatalogId,
+    WidgetOutput,
 };
 
 use crate::gallery::{palette, Gallery, Labels};
@@ -36,7 +40,7 @@ use crate::theme;
 /// 前 6 个是首批试点，其后 12 个为「基础输入与文本类」批次，再后 28 个为
 /// 「导航、浮层、集合与日期类」批次，最后 11 个为后续补齐的 WinUI 3 控件。
 /// 控件名统一使用 WinUI 3 官方规范名。
-pub const SUPPORTED_CONTROLS: [&str; 57] = [
+pub const SUPPORTED_CONTROLS: [&str; 64] = [
     // 首批试点（6）
     "Button",
     "CheckBox",
@@ -98,6 +102,15 @@ pub const SUPPORTED_CONTROLS: [&str; 57] = [
     "RefreshContainer",
     "AnnotatedScrollBar",
     "ItemsView",
+    // 第四批：按钮与切换类补充（4）
+    "HyperlinkButton",
+    "RepeatButton",
+    "DropDownButton",
+    "ToggleSplitButton",
+    // 第五批：输入与日期类补充（3）
+    "PasswordBox",
+    "DatePicker",
+    "CalendarDatePicker",
 ];
 
 /// 把一个 WinUI 3 规范名解析为目录标识。
@@ -1692,6 +1705,1129 @@ fn emit_case(
                 );
             }
             Vec2::new(rect.width(), chrome_size.y.max(rect.height()))
+        }
+        "HyperlinkButton" => {
+            let desc = HyperlinkButtonDesc::new(rect, "HyperlinkButton");
+            let size = desc.intrinsic_size(text_ctx);
+            push(
+                scene,
+                desc.emit_laid_out(NODE, rect, control, &(), text_ctx),
+            );
+            Vec2::new(size.x, 32.0)
+        }
+        "RepeatButton" => {
+            let desc = RepeatButtonDesc::new(rect, "RepeatButton");
+            let state = RepeatButtonState::new();
+            let size = desc.intrinsic_size(text_ctx);
+            push(
+                scene,
+                desc.emit_laid_out(NODE, rect, control, &state, text_ctx),
+            );
+            Vec2::new(size.x, 32.0)
+        }
+        "DropDownButton" => {
+            let desc = DropDownButtonDesc::new(rect, "DropDownButton");
+            let state = DropDownButtonState { open: checked };
+            let size = desc.intrinsic_size(text_ctx);
+            push(
+                scene,
+                desc.emit_laid_out(NODE, rect, control, &state, text_ctx),
+            );
+            Vec2::new(size.x, 32.0)
+        }
+        "ToggleSplitButton" => {
+            let desc = ToggleSplitButtonDesc::new(rect, "ToggleSplitButton");
+            let state = ToggleSplitButtonState {
+                checked,
+                menu_open: false,
+            };
+            let size = desc.intrinsic_size(text_ctx);
+            push(
+                scene,
+                desc.emit_laid_out(NODE, rect, control, &state, text_ctx),
+            );
+            Vec2::new(size.x, 32.0)
+        }
+        "PasswordBox" => {
+            let desc = PasswordBoxDesc::new(rect).with_placeholder("Password");
+            let state = PasswordBoxState::with_text("Password");
+            let size = desc.intrinsic_size(text_ctx);
+            push(
+                scene,
+                desc.emit_laid_out(NODE, rect, control, &state, text_ctx),
+            );
+            Vec2::new(size.x, 32.0)
+        }
+        "DatePicker" => {
+            let desc = DatePickerWheelDesc::new(rect);
+            let state = DatePickerWheelState::new(2024, 4, 15);
+            let size = desc.intrinsic_size(text_ctx);
+            push(
+                scene,
+                desc.emit_laid_out(NODE, rect, control, &state, text_ctx),
+            );
+            Vec2::new(size.x, 32.0)
+        }
+        "CalendarDatePicker" => {
+            let desc = CalendarDatePickerDesc::new(rect).with_placeholder("Select a date");
+            let state = CalendarDatePickerState::with_date(
+                NaiveDate::new(2024, 4, 15).expect("valid parity date"),
+            );
+            let size = desc.intrinsic_size(text_ctx);
+            push(
+                scene,
+                desc.emit_laid_out(NODE, rect, control, &state, text_ctx),
+            );
+            Vec2::new(size.x, 32.0)
+        }
+        "NavigationView" => {
+            // WinUI 3 NavigationView 左侧窗格规范：
+            // 固有尺寸宽 300px、高 200px。
+            // 包含两枚顶层菜单项（Home 与 Library）及底部的 Settings 项。
+            // 选中项绘制左侧 3×16px、圆角 1.5px 的 Accent 强调色胶囊条。
+            let panel_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                300.0
+            };
+            let panel_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                200.0
+            };
+            let item_h = 36.0;
+            let pad_x = 4.0;
+            let pad_y = 4.0;
+            let row_w = panel_w - pad_x * 2.0;
+
+            let mut out = WidgetOutput::default();
+            // 底板与右侧分隔微边框
+            out.primitives
+                .push(primitive::surface(rect, 0.0, Token::CARD_BG, 700));
+            out.primitives.push(primitive::surface(
+                Rect::new(rect.origin.x + panel_w - 1.0, rect.origin.y, 1.0, panel_h),
+                0.0,
+                Token::CARD_BORDER,
+                701,
+            ));
+
+            let disabled = control.disabled;
+            // 状态为 checked 或默认状态下首项选中
+            let home_selected =
+                !disabled && (checked || case.state == "normal" || case.state == "focused");
+
+            // 1. Home 菜单项
+            let home_r = Rect::new(rect.origin.x + pad_x, rect.origin.y + pad_y, row_w, item_h);
+            let home_fill = if disabled {
+                Token::NONE
+            } else if home_selected {
+                Token::NAV_SELECTED
+            } else {
+                Token::NONE
+            };
+            out.primitives
+                .push(primitive::surface(home_r, 4.0, home_fill, 702));
+
+            // Home 项左侧选中指示胶囊条（3×16px，垂直居中，圆角 1.5px）
+            if home_selected {
+                let pill = Rect::new(
+                    home_r.origin.x,
+                    home_r.origin.y + (item_h - 16.0) * 0.5,
+                    3.0,
+                    16.0,
+                );
+                out.primitives
+                    .push(primitive::surface(pill, 1.5, Token::PRIMARY, 705));
+            }
+
+            let home_icon_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else if home_selected {
+                Token::PRIMARY
+            } else {
+                Token::TEXT_SECONDARY
+            };
+            let home_text_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            };
+
+            // 2. Library 菜单项
+            let lib_r = Rect::new(
+                rect.origin.x + pad_x,
+                rect.origin.y + pad_y + item_h,
+                row_w,
+                item_h,
+            );
+            out.primitives
+                .push(primitive::surface(lib_r, 4.0, Token::NONE, 702));
+
+            let lib_icon_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_SECONDARY
+            };
+            let lib_text_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            };
+
+            // 3. 底部 Settings 分隔线与菜单项
+            let footer_y = rect.origin.y + panel_h - item_h - pad_y;
+            out.primitives.push(primitive::surface(
+                Rect::new(rect.origin.x + pad_x, footer_y - 5.0, row_w, 1.0),
+                0.0,
+                Token::DIVIDER,
+                702,
+            ));
+            let settings_r = Rect::new(rect.origin.x + pad_x, footer_y, row_w, item_h);
+            out.primitives
+                .push(primitive::surface(settings_r, 4.0, Token::NONE, 702));
+
+            let settings_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_SECONDARY
+            };
+
+            if control.focused && !disabled {
+                out.primitives.push(primitive::focus_ring(
+                    home_r.inflate(1.0),
+                    5.0,
+                    Token::FOCUS_RING,
+                    2.0,
+                    710,
+                    true,
+                ));
+            }
+
+            push(scene, out);
+
+            // 图标与文本发射
+            let icon_x = rect.origin.x + pad_x + 12.0;
+            let text_x = rect.origin.x + pad_x + 40.0;
+            // Home: "\u{E80F}" (Home)
+            emit_icon_centered(
+                text_ctx,
+                scene,
+                "\u{E80F}",
+                Rect::new(icon_x - 8.0, home_r.origin.y, 16.0, item_h),
+                16.0,
+                home_icon_ink,
+                704,
+            );
+            emit_text_left_middle(
+                text_ctx,
+                scene,
+                "Home",
+                home_r,
+                text_x,
+                14.0,
+                if home_selected { 600 } else { 400 },
+                None,
+                home_text_ink,
+                704,
+            );
+
+            // Library: "\u{E8F1}" (Library)
+            emit_icon_centered(
+                text_ctx,
+                scene,
+                "\u{E8F1}",
+                Rect::new(icon_x - 8.0, lib_r.origin.y, 16.0, item_h),
+                16.0,
+                lib_icon_ink,
+                704,
+            );
+            emit_text_left_middle(
+                text_ctx,
+                scene,
+                "Library",
+                lib_r,
+                text_x,
+                14.0,
+                400,
+                None,
+                lib_text_ink,
+                704,
+            );
+
+            // Settings: "\u{E713}" (Setting)
+            emit_icon_centered(
+                text_ctx,
+                scene,
+                "\u{E713}",
+                Rect::new(icon_x - 8.0, settings_r.origin.y, 16.0, item_h),
+                16.0,
+                settings_ink,
+                704,
+            );
+            emit_text_left_middle(
+                text_ctx,
+                scene,
+                "Settings",
+                settings_r,
+                text_x,
+                14.0,
+                400,
+                None,
+                settings_ink,
+                704,
+            );
+
+            Vec2::new(panel_w, panel_h)
+        }
+        "ListView" => {
+            // WinUI 3 ListView 集合视图规范：
+            // 固有尺寸宽 220px、高 120px。
+            // 包含 3 项标准列表行（Item 1、Item 2、Item 3），标准行高 40px（ListViewItemMinHeight = 40）。
+            // 首项默认处于选中态（SelectedIndex = 0），左侧垂直居中绘制 3×16px、圆角 1.5px 的 Accent 胶囊条。
+            let list_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                220.0
+            };
+            let list_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                120.0
+            };
+            let item_h = 40.0;
+            let disabled = control.disabled;
+
+            let mut out = WidgetOutput::default();
+            out.primitives
+                .push(primitive::surface(rect, 4.0, Token::CONTROL_FILL, 700));
+
+            let items = ["Item 1", "Item 2", "Item 3"];
+            for (idx, _text) in items.iter().enumerate() {
+                let y = rect.origin.y + idx as f32 * item_h;
+                let row_r = Rect::new(rect.origin.x + 3.0, y + 2.0, list_w - 6.0, item_h - 4.0);
+                let selected = !disabled && (idx == 0);
+
+                let fill = if selected {
+                    Token::HOVER // SubtleFillColorSecondary
+                } else {
+                    Token::NONE
+                };
+                out.primitives
+                    .push(primitive::surface(row_r, 4.0, fill, 702));
+
+                if selected {
+                    // 左侧选中胶囊条：3×16px，垂直居中，圆角 1.5px
+                    let pill = Rect::new(row_r.origin.x, y + (item_h - 16.0) * 0.5, 3.0, 16.0);
+                    out.primitives
+                        .push(primitive::surface(pill, 1.5, Token::PRIMARY, 705));
+
+                    if control.focused && !disabled {
+                        out.primitives.push(primitive::focus_ring(
+                            row_r.inflate(1.0),
+                            5.0,
+                            Token::FOCUS_RING,
+                            2.0,
+                            710,
+                            true,
+                        ));
+                    }
+                }
+            }
+
+            push(scene, out);
+
+            // 排版列表项文本
+            for (idx, text) in items.iter().enumerate() {
+                let y = rect.origin.y + idx as f32 * item_h;
+                let row_r = Rect::new(rect.origin.x + 3.0, y + 2.0, list_w - 6.0, item_h - 4.0);
+                let selected = !disabled && (idx == 0);
+                let ink = if disabled {
+                    Token::TEXT_DISABLED
+                } else {
+                    Token::TEXT_PRIMARY
+                };
+                emit_text_left_middle(
+                    text_ctx,
+                    scene,
+                    text,
+                    row_r,
+                    rect.origin.x + 16.0,
+                    14.0,
+                    if selected { 500 } else { 400 },
+                    None,
+                    ink,
+                    704,
+                );
+            }
+
+            Vec2::new(list_w, list_h)
+        }
+        "TreeView" => {
+            // WinUI 3 TreeView 树形结构规范：
+            // 固有尺寸宽 220px、高 140px。
+            // 包含根节点 Root 与其展开的子节点 Child，标准行高 36px。
+            // 根节点（Root）首项处于选中态，左侧垂直居中绘制 3×16px、圆角 1.5px 的 Accent 胶囊条。
+            let tree_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                220.0
+            };
+            let tree_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                140.0
+            };
+            let item_h = 36.0;
+            let disabled = control.disabled;
+
+            let mut out = WidgetOutput::default();
+            out.primitives
+                .push(primitive::surface(rect, 4.0, Token::CONTROL_FILL, 700));
+
+            // 1. Root 根节点行（深度 0，首项选中）
+            let root_y = rect.origin.y + 4.0;
+            let root_r = Rect::new(rect.origin.x + 4.0, root_y, tree_w - 8.0, item_h - 4.0);
+            let root_selected =
+                !disabled && (checked || case.state == "normal" || case.state == "focused");
+
+            let root_fill = if root_selected {
+                Token::HOVER // SubtleFillColorSecondary
+            } else {
+                Token::NONE
+            };
+            out.primitives
+                .push(primitive::surface(root_r, 4.0, root_fill, 702));
+
+            if root_selected {
+                // 左侧选中胶囊条：3×16px，垂直居中，圆角 1.5px
+                let pill = Rect::new(
+                    root_r.origin.x,
+                    root_y + (item_h - 4.0 - 16.0) * 0.5,
+                    3.0,
+                    16.0,
+                );
+                out.primitives
+                    .push(primitive::surface(pill, 1.5, Token::PRIMARY, 705));
+
+                if control.focused && !disabled {
+                    out.primitives.push(primitive::focus_ring(
+                        root_r.inflate(1.0),
+                        5.0,
+                        Token::FOCUS_RING,
+                        2.0,
+                        710,
+                        true,
+                    ));
+                }
+            }
+
+            // 根节点的折叠/展开指示箭头（已展开：朝下箭头）
+            let chevron_cx = root_r.origin.x + 16.0;
+            let chevron_cy = root_y + (item_h - 4.0) * 0.5;
+            let chevron_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_SECONDARY
+            };
+            primitive::curve_stroke(
+                [chevron_cx - 4.0, chevron_cy - 2.0],
+                [chevron_cx, chevron_cy + 2.0],
+                1.5,
+                chevron_ink,
+                704,
+                &mut out.primitives,
+                &mut out.payloads,
+            );
+            primitive::curve_stroke(
+                [chevron_cx, chevron_cy + 2.0],
+                [chevron_cx + 4.0, chevron_cy - 2.0],
+                1.5,
+                chevron_ink,
+                704,
+                &mut out.primitives,
+                &mut out.payloads,
+            );
+
+            // 2. Child 子节点行（深度 1，缩进 16px）
+            let indent = 16.0;
+            let child_y = root_y + item_h;
+            let child_r = Rect::new(
+                rect.origin.x + 4.0 + indent,
+                child_y,
+                tree_w - 8.0 - indent,
+                item_h - 4.0,
+            );
+            out.primitives
+                .push(primitive::surface(child_r, 4.0, Token::NONE, 702));
+
+            // 子节点深度的引导连线
+            out.primitives.push(primitive::surface(
+                Rect::new(root_r.origin.x + 16.0, child_y, 1.0, item_h - 4.0),
+                0.0,
+                Token::DIVIDER,
+                703,
+            ));
+
+            push(scene, out);
+
+            // 文本排版
+            let text_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            };
+            emit_text_left_middle(
+                text_ctx,
+                scene,
+                "Root",
+                root_r,
+                root_r.origin.x + 32.0,
+                14.0,
+                if root_selected { 600 } else { 400 },
+                None,
+                text_ink,
+                704,
+            );
+            emit_text_left_middle(
+                text_ctx,
+                scene,
+                "Child",
+                child_r,
+                child_r.origin.x + 16.0,
+                14.0,
+                400,
+                None,
+                text_ink,
+                704,
+            );
+
+            Vec2::new(tree_w, tree_h)
+        }
+        "SelectorBar" => {
+            // WinUI 3 SelectorBar 选择条规范：
+            // 固有尺寸宽 320px、高 40px。
+            // 包含 3 个选项槽位（Day、Week、Month），首项处于选中态（SelectedItem = Items[0]）。
+            // 选中项左侧垂直居中绘制 3×16px、圆角 1.5px 的 Accent 胶囊条。
+            let bar_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                320.0
+            };
+            let bar_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                40.0
+            };
+            let disabled = control.disabled;
+
+            let mut out = WidgetOutput::default();
+            // 选择条外框
+            out.primitives
+                .push(primitive::surface(rect, 4.0, Token::CONTROL_FILL, 700));
+
+            let items = ["Day", "Week", "Month"];
+            let slot_count = items.len() as f32;
+            let pad = 2.0;
+            let available_w = bar_w - pad * 2.0;
+            let slot_w = available_w / slot_count;
+            let slot_h = bar_h - pad * 2.0;
+
+            for (idx, _text) in items.iter().enumerate() {
+                let slot_x = rect.origin.x + pad + idx as f32 * slot_w;
+                let slot_r = Rect::new(slot_x, rect.origin.y + pad, slot_w, slot_h);
+                let selected = !disabled && (idx == 0);
+
+                let fill = if selected {
+                    Token::HOVER // SubtleFillColorSecondary 悬停薄纱/选中底色
+                } else {
+                    Token::NONE
+                };
+                out.primitives
+                    .push(primitive::surface(slot_r, 4.0, fill, 702));
+
+                if selected {
+                    // 左侧选中指示条（3×16px，垂直居中，圆角 1.5px）
+                    let pill = Rect::new(
+                        slot_r.origin.x + 3.0,
+                        slot_r.origin.y + (slot_h - 16.0) * 0.5,
+                        3.0,
+                        16.0,
+                    );
+                    out.primitives
+                        .push(primitive::surface(pill, 1.5, Token::PRIMARY, 705));
+
+                    if control.focused && !disabled {
+                        out.primitives.push(primitive::focus_ring(
+                            slot_r.inflate(1.0),
+                            5.0,
+                            Token::FOCUS_RING,
+                            2.0,
+                            710,
+                            true,
+                        ));
+                    }
+                }
+            }
+
+            push(scene, out);
+
+            // 文本排版
+            for (idx, text) in items.iter().enumerate() {
+                let slot_x = rect.origin.x + pad + idx as f32 * slot_w;
+                let slot_r = Rect::new(slot_x, rect.origin.y + pad, slot_w, slot_h);
+                let selected = !disabled && (idx == 0);
+                let ink = if disabled {
+                    Token::TEXT_DISABLED
+                } else if selected {
+                    Token::TEXT_PRIMARY
+                } else {
+                    Token::TEXT_SECONDARY
+                };
+
+                let quads = text_ctx.shape_line_styled(
+                    text,
+                    slot_r,
+                    14.0,
+                    if selected { 600 } else { 400 },
+                    None,
+                    unbound_widgets::AlignX::Center,
+                    unbound_widgets::AlignY::Middle,
+                );
+                emit_quads(scene, &quads, ink, 704);
+            }
+
+            Vec2::new(bar_w, bar_h)
+        }
+        "ContentDialog" => {
+            // WinUI 3 ContentDialog 规范：
+            // 固有宽度 320px、高度 180px。
+            // 容器外圆角 8px（OverlayCornerRadius）、1px SurfaceStroke 微描边（CARD_BORDER）。
+            // 40px 海拔解析阴影（DialogElevation）。
+            // 内部包含 Title="ContentDialog"、Content="Message" 以及 PrimaryButton="OK"。
+            let dialog_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                320.0
+            };
+            let dialog_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                180.0
+            };
+            let dialog_r = Rect::new(rect.origin.x, rect.origin.y, dialog_w, dialog_h);
+            let disabled = control.disabled;
+
+            let mut out = WidgetOutput::default();
+            // 1. 40px 海拔解析阴影
+            out.primitives.push(primitive::instance(
+                dialog_r,
+                [8.0; 4],
+                Token::NONE,
+                Token::NONE,
+                0.0,
+                40.0,
+                PrimType::Shadow,
+                SubElement::Shadow,
+                950,
+            ));
+            // 2. 对话框表面背景
+            out.primitives
+                .push(primitive::surface(dialog_r, 8.0, Token::OVERLAY_BG, 950));
+            // 3. 1px SurfaceStroke 微描边
+            out.primitives.push(primitive::instance(
+                dialog_r,
+                [8.0; 4],
+                Token::NONE,
+                Token::CARD_BORDER,
+                1.0,
+                0.0,
+                PrimType::RoundedRect,
+                SubElement::Border,
+                950,
+            ));
+
+            // 4. 底部栏分隔线与主操作按钮
+            let footer_h = 56.0;
+            let footer_y = dialog_r.max().y - footer_h;
+            out.primitives.push(primitive::surface(
+                Rect::new(dialog_r.origin.x, footer_y, dialog_w, 1.0),
+                0.0,
+                Token::DIVIDER,
+                951,
+            ));
+
+            let btn_w = 88.0_f32.min(dialog_w - 48.0);
+            let btn_h = 32.0;
+            let btn_r = Rect::new(
+                dialog_r.max().x - 24.0 - btn_w,
+                footer_y + (footer_h - btn_h) * 0.5,
+                btn_w,
+                btn_h,
+            );
+            let btn_fill = if disabled {
+                Token::CONTROL_DISABLED_BG
+            } else {
+                Token::PRIMARY
+            };
+            let btn_border = if disabled {
+                Token::CONTROL_DISABLED_BORDER
+            } else {
+                Token::NONE
+            };
+            out.primitives.push(primitive::outlined(
+                btn_r, 4.0, btn_fill, btn_border, 1.0, 0.0, 952,
+            ));
+
+            push(scene, out);
+
+            // 5. 排版文本：标题、正文消息与操作按钮文案
+            let title_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            };
+            let title_quads = text_ctx.shape_line_styled(
+                "ContentDialog",
+                Rect::new(
+                    dialog_r.origin.x + 24.0,
+                    dialog_r.origin.y + 20.0,
+                    dialog_w - 48.0,
+                    24.0,
+                ),
+                18.0,
+                600,
+                None,
+                unbound_widgets::AlignX::Left,
+                unbound_widgets::AlignY::Top,
+            );
+            emit_quads(scene, &title_quads, title_ink, 953);
+
+            let body_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_SECONDARY
+            };
+            let body_quads = text_ctx.shape_line_styled(
+                "Message",
+                Rect::new(
+                    dialog_r.origin.x + 24.0,
+                    dialog_r.origin.y + 54.0,
+                    dialog_w - 48.0,
+                    20.0,
+                ),
+                14.0,
+                400,
+                None,
+                unbound_widgets::AlignX::Left,
+                unbound_widgets::AlignY::Top,
+            );
+            emit_quads(scene, &body_quads, body_ink, 953);
+
+            let btn_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::ON_PRIMARY
+            };
+            let btn_quads = text_ctx.shape_line_styled(
+                "OK",
+                btn_r,
+                14.0,
+                500,
+                None,
+                unbound_widgets::AlignX::Center,
+                unbound_widgets::AlignY::Middle,
+            );
+            emit_quads(scene, &btn_quads, btn_ink, 953);
+
+            Vec2::new(dialog_w, dialog_h)
+        }
+        "Flyout" => {
+            // WinUI 3 Flyout / FlyoutPresenter 规范：
+            // 固有宽度 200px、高度 60px。
+            // 容器外圆角 8px（OverlayCornerRadius）、1px SurfaceStroke 微描边（CARD_BORDER）。
+            // 24px 海拔解析阴影（FlyoutElevation）。
+            // 呈现器内部承载 Content="Flyout" 标签。
+            let flyout_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                200.0
+            };
+            let flyout_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                60.0
+            };
+            let flyout_r = Rect::new(rect.origin.x, rect.origin.y, flyout_w, flyout_h);
+            let disabled = control.disabled;
+
+            let mut out = WidgetOutput::default();
+            // 1. 24px 解析阴影
+            out.primitives.push(primitive::instance(
+                flyout_r,
+                [8.0; 4],
+                Token::NONE,
+                Token::NONE,
+                0.0,
+                24.0,
+                PrimType::Shadow,
+                SubElement::Shadow,
+                900,
+            ));
+            // 2. 浮层表面背景
+            out.primitives
+                .push(primitive::surface(flyout_r, 8.0, Token::OVERLAY_BG, 900));
+            // 3. 1px SurfaceStroke 微描边
+            out.primitives.push(primitive::instance(
+                flyout_r,
+                [8.0; 4],
+                Token::NONE,
+                Token::CARD_BORDER,
+                1.0,
+                0.0,
+                PrimType::RoundedRect,
+                SubElement::Border,
+                900,
+            ));
+            push(scene, out);
+
+            // 4. 排版内容文本
+            let text_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            };
+            let quads = text_ctx.shape_line_styled(
+                "Flyout",
+                Rect::new(
+                    flyout_r.origin.x + 12.0,
+                    flyout_r.origin.y + 10.0,
+                    flyout_w - 24.0,
+                    20.0,
+                ),
+                14.0,
+                400,
+                None,
+                unbound_widgets::AlignX::Left,
+                unbound_widgets::AlignY::Top,
+            );
+            emit_quads(scene, &quads, text_ink, 902);
+
+            Vec2::new(flyout_w, flyout_h)
+        }
+        "MenuFlyout" => {
+            // WinUI 3 MenuFlyout / MenuFlyoutPresenter 规范：
+            // 固有宽度 200px。
+            // 容器外圆角 8px（OverlayCornerRadius）、1px SurfaceStroke 微描边（CARD_BORDER）。
+            // 18px 海拔解析阴影（MenuFlyout 阴影阶梯）。
+            // 呈现器内部承载 2 个菜单项：Item 1 与 Item 2，菜单项高 36px。
+            let menu_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                200.0
+            };
+            let item_h = 36.0;
+            let menu_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                item_h * 2.0 + 8.0
+            };
+            let menu_r = Rect::new(rect.origin.x, rect.origin.y, menu_w, menu_h);
+            let disabled = control.disabled;
+
+            let mut out = WidgetOutput::default();
+            // 1. 18px 解析阴影
+            out.primitives.push(primitive::instance(
+                menu_r,
+                [8.0; 4],
+                Token::NONE,
+                Token::NONE,
+                0.0,
+                18.0,
+                PrimType::Shadow,
+                SubElement::Shadow,
+                905,
+            ));
+            // 2. 菜单表面背景
+            out.primitives
+                .push(primitive::surface(menu_r, 8.0, Token::OVERLAY_BG, 905));
+            // 3. 1px SurfaceStroke 微描边
+            out.primitives.push(primitive::instance(
+                menu_r,
+                [8.0; 4],
+                Token::NONE,
+                Token::CARD_BORDER,
+                1.0,
+                0.0,
+                PrimType::RoundedRect,
+                SubElement::Border,
+                905,
+            ));
+
+            // 4. 菜单项行（Item 1 与 Item 2）
+            let items = ["Item 1", "Item 2"];
+            for (idx, _name) in items.iter().enumerate() {
+                let row_y = menu_r.origin.y + 4.0 + idx as f32 * item_h;
+                let row_r = Rect::new(menu_r.origin.x + 4.0, row_y, menu_w - 8.0, item_h);
+                let is_hovered = checked && idx == 0;
+                let fill = if is_hovered {
+                    Token::HOVER
+                } else {
+                    Token::NONE
+                };
+                out.primitives
+                    .push(primitive::surface(row_r, 4.0, fill, 906));
+            }
+            push(scene, out);
+
+            // 5. 排版菜单项文本
+            let text_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            };
+            for (idx, name) in items.iter().enumerate() {
+                let row_y = menu_r.origin.y + 4.0 + idx as f32 * item_h;
+                let text_r = Rect::new(menu_r.origin.x + 16.0, row_y, menu_w - 32.0, item_h);
+                let quads = text_ctx.shape_line_styled(
+                    name,
+                    text_r,
+                    14.0,
+                    400,
+                    None,
+                    unbound_widgets::AlignX::Left,
+                    unbound_widgets::AlignY::Middle,
+                );
+                emit_quads(scene, &quads, text_ink, 907);
+            }
+
+            Vec2::new(menu_w, menu_h)
+        }
+        "TeachingTip" => {
+            // WinUI 3 TeachingTip 引导气泡规范：
+            // 固有宽度 280px、高度 96px。
+            // 容器外圆角 8px（OverlayCornerRadius）、1px SurfaceStroke 微描边（CARD_BORDER）。
+            // 24px 海拔解析阴影（FlyoutElevation）。
+            // 包含 Title="TeachingTip" 与 Subtitle="Message"。
+            let tip_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                280.0
+            };
+            let tip_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                96.0
+            };
+            let tip_r = Rect::new(rect.origin.x, rect.origin.y, tip_w, tip_h);
+            let disabled = control.disabled;
+
+            let mut out = WidgetOutput::default();
+            // 1. 24px 解析阴影
+            out.primitives.push(primitive::instance(
+                tip_r,
+                [8.0; 4],
+                Token::NONE,
+                Token::NONE,
+                0.0,
+                24.0,
+                PrimType::Shadow,
+                SubElement::Shadow,
+                780,
+            ));
+            // 2. 气泡表面背景
+            out.primitives
+                .push(primitive::surface(tip_r, 8.0, Token::OVERLAY_BG, 780));
+            // 3. 1px SurfaceStroke 微描边
+            out.primitives.push(primitive::instance(
+                tip_r,
+                [8.0; 4],
+                Token::NONE,
+                Token::CARD_BORDER,
+                1.0,
+                0.0,
+                PrimType::RoundedRect,
+                SubElement::Border,
+                780,
+            ));
+            push(scene, out);
+
+            // 4. 排版标题与副标题
+            let title_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            };
+            let title_quads = text_ctx.shape_line_styled(
+                "TeachingTip",
+                Rect::new(
+                    tip_r.origin.x + 14.0,
+                    tip_r.origin.y + 12.0,
+                    tip_w - 28.0,
+                    20.0,
+                ),
+                14.0,
+                600,
+                None,
+                unbound_widgets::AlignX::Left,
+                unbound_widgets::AlignY::Top,
+            );
+            emit_quads(scene, &title_quads, title_ink, 782);
+
+            let sub_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_SECONDARY
+            };
+            let sub_quads = text_ctx.shape_line_styled(
+                "Message",
+                Rect::new(
+                    tip_r.origin.x + 14.0,
+                    tip_r.origin.y + 36.0,
+                    tip_w - 28.0,
+                    18.0,
+                ),
+                12.0,
+                400,
+                None,
+                unbound_widgets::AlignX::Left,
+                unbound_widgets::AlignY::Top,
+            );
+            emit_quads(scene, &sub_quads, sub_ink, 782);
+
+            Vec2::new(tip_w, tip_h)
+        }
+        "Card" => {
+            // WinUI 3 Card 容器规范（基于 8px 圆角与 1px 微描边）：
+            // 固有宽度 240px、高度 88px。
+            // 容器外圆角 8px（OverlayCornerRadius）、1px SurfaceStroke 微描边（CARD_BORDER）。
+            // CARD_ELEVATIONS[1] 2.0px 微阴影。
+            // 内部 Padding 12px，承载 "Card" 文本。
+            let card_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                240.0
+            };
+            let card_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                88.0
+            };
+            let card_r = Rect::new(rect.origin.x, rect.origin.y, card_w, card_h);
+            let disabled = control.disabled;
+
+            let mut out = WidgetOutput::default();
+            // 1. 2px 海拔微阴影
+            out.primitives.push(primitive::instance(
+                card_r,
+                [8.0; 4],
+                Token::NONE,
+                Token::NONE,
+                0.0,
+                2.0,
+                PrimType::Shadow,
+                SubElement::Shadow,
+                100,
+            ));
+            // 2. 卡片表面背景
+            out.primitives
+                .push(primitive::surface(card_r, 8.0, Token::CARD_BG, 100));
+            // 3. 1px SurfaceStroke 微描边
+            out.primitives.push(primitive::instance(
+                card_r,
+                [8.0; 4],
+                Token::NONE,
+                Token::CARD_BORDER,
+                1.0,
+                0.0,
+                PrimType::RoundedRect,
+                SubElement::Border,
+                100,
+            ));
+            push(scene, out);
+
+            // 4. 排版内容文本
+            let text_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            };
+            let quads = text_ctx.shape_line_styled(
+                "Card",
+                Rect::new(
+                    card_r.origin.x + 12.0,
+                    card_r.origin.y + 12.0,
+                    card_w - 24.0,
+                    20.0,
+                ),
+                14.0,
+                400,
+                None,
+                unbound_widgets::AlignX::Left,
+                unbound_widgets::AlignY::Top,
+            );
+            emit_quads(scene, &quads, text_ink, 102);
+
+            Vec2::new(card_w, card_h)
+        }
+        "Border" => {
+            // WinUI 3 Border 容器规范：
+            // 固有宽度 200px、高度 64px。
+            // 容器外圆角 8px（OverlayCornerRadius）、1px SurfaceStroke 微描边（CARD_BORDER）。
+            // 内部居中承载 "Border" 文本。
+            let border_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                200.0
+            };
+            let border_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                64.0
+            };
+            let border_r = Rect::new(rect.origin.x, rect.origin.y, border_w, border_h);
+            let disabled = control.disabled;
+
+            let mut out = WidgetOutput::default();
+            // 1. 表面背景
+            out.primitives
+                .push(primitive::surface(border_r, 8.0, Token::CARD_BG, 100));
+            // 2. 1px SurfaceStroke 微描边
+            out.primitives.push(primitive::instance(
+                border_r,
+                [8.0; 4],
+                Token::NONE,
+                Token::CARD_BORDER,
+                1.0,
+                0.0,
+                PrimType::RoundedRect,
+                SubElement::Border,
+                100,
+            ));
+            push(scene, out);
+
+            // 3. 排版内容文本
+            let text_ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            };
+            let quads = text_ctx.shape_line_styled(
+                "Border",
+                Rect::new(
+                    border_r.origin.x + 12.0,
+                    border_r.origin.y + 12.0,
+                    border_w - 24.0,
+                    20.0,
+                ),
+                14.0,
+                400,
+                None,
+                unbound_widgets::AlignX::Left,
+                unbound_widgets::AlignY::Top,
+            );
+            emit_quads(scene, &quads, text_ink, 102);
+
+            Vec2::new(border_w, border_h)
         }
         other => {
             let id: WidgetCatalogId =

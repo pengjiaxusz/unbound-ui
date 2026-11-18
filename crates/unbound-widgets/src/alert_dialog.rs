@@ -30,7 +30,10 @@ pub const DIALOG_BUTTON_HEIGHT: f32 = 32.0;
 pub const DIALOG_ICON: f32 = 22.0;
 /// 默认圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（ContentDialog 的 CornerRadius）。
 pub const DIALOG_RADIUS: f32 = 8.0;
-const DIALOG_SHADOW: f32 = 40.0;
+/// 对话框海拔阴影模糊半径。对齐 WinUI 3 `DialogElevation`（40px 解析阴影）。
+pub const DIALOG_SHADOW: f32 = 40.0;
+/// 对话框外描边厚度。对齐 WinUI 3 `SurfaceStroke`（1px 微描边）。
+pub const DIALOG_BORDER_WIDTH: f32 = 1.0;
 
 /// 确认操作的强调级别。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -344,13 +347,13 @@ pub fn emit_alert_dialog(
             SubElement::Shadow,
             desc.z,
         ),
-        surface(desc.rect, desc.radius, Token::SURFACE_RAISED, desc.z),
+        surface(desc.rect, desc.radius, Token::OVERLAY_BG, desc.z),
         instance(
             desc.rect,
             [desc.radius; 4],
             Token::NONE,
-            Token::OUTLINE,
-            1.0,
+            Token::CARD_BORDER,
+            DIALOG_BORDER_WIDTH,
             0.0,
             PrimType::RoundedRect,
             SubElement::Border,

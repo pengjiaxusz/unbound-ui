@@ -222,6 +222,29 @@ pub fn emit_card(desc: &CardDesc, tokens: CardTokens) -> WidgetOutput {
     }
 }
 
+/// 发射边框容器（Border）。
+///
+/// 对齐 WinUI 3 `Border`：带 8px 容器圆角（`CARD_RADIUS`）、1px SurfaceStroke 描边（`CARD_BORDER_WIDTH`）与表面填充的轻量容器。
+#[must_use]
+pub fn emit_border(desc: &CardDesc, surface: Token, border: Token) -> WidgetOutput {
+    WidgetOutput {
+        primitives: vec![outlined(
+            desc.rect,
+            desc.radius,
+            surface,
+            border,
+            CARD_BORDER_WIDTH,
+            desc.shadow(),
+            desc.z,
+        )],
+        payloads: Vec::new(),
+        hit: None,
+        a11y: None,
+        focusable: false,
+        ..Default::default()
+    }
+}
+
 /// 自动换行行的纯描述符。
 #[derive(Clone, Debug, PartialEq)]
 pub struct WrapDesc {

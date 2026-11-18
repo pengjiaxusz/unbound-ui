@@ -21,7 +21,8 @@ pub use unbound_math::{Color, Rect, Vec2};
 pub use unbound_platform::{
     open_file, open_file_async, open_files, save_file, save_file_async, set_taskbar_progress,
     set_tray_icon, show_tray_balloon, FileDialogConfig, FrameHitMetrics, PlatformError,
-    TaskbarProgressState, TrayNotificationSeverity, WindowConfig, WindowPlacement, WindowPosition,
+    SurfaceAlpha, TaskbarProgressState, TrayNotificationSeverity, WindowConfig, WindowPlacement,
+    WindowPosition,
 };
 pub use unbound_text::{
     global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,
