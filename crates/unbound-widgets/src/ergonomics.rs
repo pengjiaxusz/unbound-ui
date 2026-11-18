@@ -707,7 +707,14 @@ impl UiWidget for SliderDesc {
     }
 
     fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
-        Vec2::new(self.rect.width().max(160.0), self.rect.height().max(28.0))
+        // WinUI `Slider` 与按钮、输入框共享 32px 标准交互行高；旧实现的 28px
+        // 会在自由维度固有尺寸门禁下被参考边界暴露为偏差。
+        Vec2::new(
+            self.rect.width().max(160.0),
+            self.rect
+                .height()
+                .max(unbound_theme::typography::geometry::INPUT_HEIGHT),
+        )
     }
 
     fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
@@ -758,7 +765,11 @@ impl UiWidget for TextInputDesc {
         let measured = text_ctx.measure_line(sample, self.font_size, 400);
         Vec2::new(
             (measured.x + 28.0).max(self.rect.width()).max(160.0),
-            self.rect.height().max(34.0),
+            // WinUI `TextBox` 与 `ComboBox` 同高：32px。旧实现的 34px 会被
+            // 参考边界掩盖，只有在自由维度固有尺寸门禁开启后才会暴露。
+            self.rect
+                .height()
+                .max(unbound_theme::typography::geometry::INPUT_HEIGHT),
         )
     }
 

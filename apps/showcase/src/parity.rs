@@ -386,7 +386,13 @@ fn emit_case(
 
     let intrinsic = match case.control {
         "Button" => {
-            let desc = ButtonDesc::label("Button").variant(ButtonVariant::Secondary);
+            // 参考截图按 WinUI 模板度量：4px 圆角、14px 字号、无外部投影。
+            // 展台的便捷构造器 `label()` 为网页风格预览保留 6px 圆角，差分必须显式校正。
+            let desc = ButtonDesc::label("Button")
+                .variant(ButtonVariant::Secondary)
+                .with_radius(unbound_widgets::button::BUTTON_RADIUS)
+                .with_font_size(unbound_widgets::button::BUTTON_FONT_SIZE)
+                .with_shadow(0.0);
             let size = desc.intrinsic_size(text_ctx);
             push(
                 scene,
