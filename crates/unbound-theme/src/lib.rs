@@ -848,10 +848,7 @@ impl ThemeSet {
                     Token::SLIDER_THUMB_DISABLED,
                     Color::from_srgb8(98, 98, 98, 255),
                 ),
-                (
-                    Token::SLIDER_THUMB_DISK,
-                    Color::from_srgb8(69, 69, 69, 255),
-                ),
+                (Token::SLIDER_THUMB_DISK, Color::from_srgb8(69, 69, 69, 255)),
                 (
                     Token::INPUT_BORDER_HOVER,
                     Color::from_srgb8(96, 104, 122, 255),

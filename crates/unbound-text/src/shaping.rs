@@ -804,11 +804,7 @@ impl TextEngine {
             let face_id = shaped.faces.first().copied()?;
             // 多字体回退（CJK、Emoji）时字形分属不同字体面，单一
             // DirectWrite 布局无法给出正确位置，直接放弃校正。
-            if shaped
-                .glyphs
-                .iter()
-                .any(|glyph| glyph.face_index != 0)
-            {
+            if shaped.glyphs.iter().any(|glyph| glyph.face_index != 0) {
                 return None;
             }
             let (family, weight) = {
