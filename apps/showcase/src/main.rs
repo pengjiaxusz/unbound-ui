@@ -1071,7 +1071,7 @@ impl PlatformApp for Showcase {
                         }
                     }
                     unbound_platform::ImeEvent::Commit(text) => unbound_app::ImeUpdate {
-                        enabled: true,
+                        enabled: false,
                         preedit: String::new(),
                         cursor_range: None,
                         commit: Some(text),

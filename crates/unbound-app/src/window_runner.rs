@@ -674,7 +674,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 }
                 ImeEvent::Commit(text) => {
                     self.runtime.ime(ImeUpdate {
-                        enabled: true,
+                        enabled: false,
                         preedit: String::new(),
                         cursor_range: None,
                         commit: Some(text),

@@ -406,9 +406,9 @@ impl ImeState {
                 self.selection = *selection;
             }
             ImeEvent::Commit(_) => {
-                // 提交由事件通道直接送达应用；这里只需结束组合显示，
-                // 输入法仍在持有文本输入（只有 `Disabled` 才释放）。
-                self.enabled = true;
+                // 组合结束即释放输入法对文本的持有权；提交内容由事件通道直达应用，
+                // 不再需要宿主忽略物理字符键。
+                self.enabled = false;
                 self.preedit.clear();
                 self.selection = None;
             }
@@ -925,15 +925,15 @@ mod tests {
         assert!(ime.enabled);
     }
 
-    /// 提交结束组合显示，但输入法仍与下发给应用的启用标志保持一致。
+    /// 提交结束组合并释放输入法对文本的持有权。
     #[test]
-    fn a_commit_clears_the_composition_and_keeps_the_ime_enabled() {
+    fn a_commit_clears_the_composition_and_releases_the_ime() {
         let mut ime = ImeState::default();
         ime.apply(&ImeEvent::Preedit("ni".to_string(), Some((2, 2))));
         ime.apply(&ImeEvent::Commit("hello".to_string()));
         assert_eq!(ime.preedit(), "");
         assert_eq!(ime.selection, None);
-        assert!(ime.enabled);
+        assert!(!ime.enabled, "a commit means the IME no longer owns text");
     }
 
     /// 输入法关闭后释放文本持有权并清空组合。
