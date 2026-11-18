@@ -8,9 +8,11 @@
 //! gallery 打印测量结果，无头校验器检查布局，showcase 则同时展示两者。
 //!
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use showcase::backdrop_compare::{BackdropCompareRun, CompareReport, CompareStep};
 use showcase::backdrop_host::window_backdrop_request;
 use showcase::frame_plan::{frame_size, needs_rebuild, upload_plan};
 use showcase::runtime_app::GalleryRuntime;
@@ -33,9 +35,9 @@ use unbound_platform::win32_frame::{install_custom_frame, FrameHitMetrics};
 use unbound_platform::window::{
     ButtonState, Modifiers, MouseButton, PlatformEvent, PlatformKey, PlatformState, WindowConfig,
 };
-use unbound_platform::Extent;
 use unbound_platform::{
-    CursorIcon, NativeWindowId, PhysicalPosition, PhysicalSize, ResizeDirection, Window,
+    CursorIcon, Extent, NativeWindowId, PhysicalPosition, PhysicalSize, ResizeDirection, Window,
+    WindowPosition,
 };
 use unbound_theme::{ThemeKind, ThemeState};
 
@@ -127,6 +129,8 @@ struct Showcase {
     extras: Vec<ExtraWindow>,
     /// 由 `Ctrl+N` 置位；平台层在下一帧打开新窗口。
     new_window_requested: bool,
+    /// 无人值守的原生/自绘后景对照运行；`None` 表示普通交互模式。
+    compare: Option<BackdropCompareRun>,
 }
 
 impl Showcase {
@@ -178,7 +182,15 @@ impl Showcase {
             frame_metrics: None,
             extras: Vec::new(),
             new_window_requested: false,
+            compare: None,
         }
+    }
+
+    /// 以对照模式启动：同一窗口位置下先截原生后景、再截自绘后景并写出产物。
+    fn with_compare(compare: BackdropCompareRun) -> Self {
+        let mut showcase = Self::new();
+        showcase.compare = Some(compare);
+        showcase
     }
 
     fn destroy_vulkan(&mut self) {
@@ -1549,10 +1561,23 @@ impl Showcase {
             }
         }
         state.pacer.on_present(Instant::now());
+        if let Some(mut compare) = self.compare.take() {
+            match compare.step(self.shell_mut(), window) {
+                CompareStep::Pending => {
+                    self.compare = Some(compare);
+                    state.pacer.request_immediate(Instant::now());
+                }
+                CompareStep::Finished(result) => {
+                    report_compare(result);
+                    return Flow::Exit;
+                }
+            }
+        }
         // 无 HUD、无动画且启用帧率上限的静态页面无新内容可显示：
         // 让事件循环休眠，而非每次刷新都提交全量裁剪与基数排序。
         //
-        let keep_animating = self.shell().state.fps_limit == 0
+        let keep_animating = self.compare.is_some()
+            || self.shell().state.fps_limit == 0
             || self.shell().state.show_hud
             || self.shell().state.active_page == showcase::pages::PageId::Telemetry
             || moving;
@@ -1708,6 +1733,41 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
         .map(|window| window[1].clone())
 }
 
+/// 解析对照入口的材质名称。
+fn parse_material(name: &str) -> Option<unbound_backdrop::MaterialKind> {
+    match name.to_ascii_lowercase().replace('_', "-").as_str() {
+        "none" => Some(unbound_backdrop::MaterialKind::None),
+        "follow-system" | "followsystem" => Some(unbound_backdrop::MaterialKind::FollowSystem),
+        "mica" => Some(unbound_backdrop::MaterialKind::Mica),
+        "mica-alt" | "micaalt" => Some(unbound_backdrop::MaterialKind::MicaAlt),
+        "acrylic" => Some(unbound_backdrop::MaterialKind::Acrylic),
+        "immersive" => Some(unbound_backdrop::MaterialKind::Immersive),
+        _ => None,
+    }
+}
+
+/// 打印并排对照的产物位置与坐标系信息。
+fn report_compare(result: Result<CompareReport, String>) {
+    match result {
+        Ok(report) => {
+            println!("backdrop compare wrote {}", report.out_dir.display());
+            println!("  native       {}", report.native.display());
+            println!("  self-drawn   {}", report.self_drawn.display());
+            println!("  side-by-side {}", report.side_by_side.display());
+            println!("  diff-heat    {}", report.heat.display());
+            println!(
+                "  capture      {}x{} at ({}, {}) -> uv {:?}",
+                report.capture_size.0,
+                report.capture_size.1,
+                report.capture_origin.x,
+                report.capture_origin.y,
+                report.texture_uv
+            );
+        }
+        Err(error) => eprintln!("backdrop compare failed:\n{error}"),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--parity-run") {
@@ -1780,6 +1840,55 @@ fn main() {
         ) {
             Ok(()) => println!("wrote {path}"),
             Err(error) => eprintln!("could not render:\n{error}"),
+        }
+        return;
+    }
+
+    if args.iter().any(|a| a == "--backdrop-compare") {
+        let name = arg_value(&args, "--name").unwrap_or_else(|| "backdrop".into());
+        let out = arg_value(&args, "--out").unwrap_or_else(|| "target/backdrop-compare".into());
+        let material = match arg_value(&args, "--material") {
+            Some(value) => match parse_material(&value) {
+                Some(material) => material,
+                None => {
+                    eprintln!("unknown backdrop material: {value}");
+                    return;
+                }
+            },
+            None => unbound_backdrop::MaterialKind::Mica,
+        };
+        let width = arg_value(&args, "--width")
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(1280);
+        let height = arg_value(&args, "--height")
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(800);
+        let position = match (
+            arg_value(&args, "--x").and_then(|value| value.parse::<i32>().ok()),
+            arg_value(&args, "--y").and_then(|value| value.parse::<i32>().ok()),
+        ) {
+            (Some(x), Some(y)) => WindowPosition::Physical { x, y },
+            _ => WindowPosition::CenterPrimary,
+        };
+        let config = WindowConfig {
+            title: TITLE.to_string(),
+            width,
+            height,
+            resizable: false,
+            decorations: false,
+            min_width: 320,
+            min_height: 240,
+            visible: true,
+            position,
+            ..Default::default()
+        };
+        let Ok(window) = PlatformWindow::new(&config) else {
+            eprintln!("could not create the window");
+            return;
+        };
+        let run = BackdropCompareRun::new(name, material, PathBuf::from(out));
+        if let Err(error) = window.run(Showcase::with_compare(run)) {
+            eprintln!("the event loop failed: {error}");
         }
         return;
     }
