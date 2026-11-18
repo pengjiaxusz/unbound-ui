@@ -1170,11 +1170,9 @@ impl GalleryApp {
         // 导致满载的图集永远驱逐左上角相同的那几个字形。
         //
         labels.cache.begin_frame(atlas_clock);
-        // 外壳保留四种亚像素相位：字形的光栅按其*绝对*位置隐含的相位生成，
+        // 外壳保留八种亚像素相位：字形的光栅按其*绝对*位置隐含的相位生成，
         // 四边形则围绕它放置在像素网格上。强制相位 0 会使每个字形偏离其应处位置
         // 最多达一像素，这正是字距抖动的原因。
-        //
-        //
         labels.set_snap_phases(false);
         let mut canvas = Canvas::new(
             scene,

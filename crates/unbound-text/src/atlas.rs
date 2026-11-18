@@ -558,7 +558,7 @@ impl Atlas {
 /// 渲染器绑定的一对图集（`Atlas_R8` + `Atlas_RGBA8`）。
 #[derive(Debug)]
 pub struct GlyphAtlas {
-    /// 每个字形 4 个亚像素相位，每纹素 1 字节。
+    /// 覆盖率图集，每纹素 1 字节；同一字形按 [`SUBPIXEL_PHASES`] 个亚像素相位各存一份。
     pub r8: Atlas,
     /// 彩色 Emoji 与距离场，每纹素 4 字节。
     pub rgba: Atlas,
