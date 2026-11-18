@@ -48,6 +48,52 @@
                         <SolidColorBrush x:Key="ToggleSwitchKnobFillOnPointerOver" Color="#FFFFFF" />
                         <SolidColorBrush x:Key="ToggleSwitchKnobFillOnPressed" Color="#FFFFFF" />
                         <SolidColorBrush x:Key="ToggleSwitchKnobFillOnDisabled" Color="#5CFFFFFF" />
+                        <!-- 第一批基准控件（ToggleButton / RadioButton / RatingControl /
+                             ProgressBar / ProgressRing / InfoBadge）同样从系统强调色取色。
+                             这里沿用上面「钉死 Windows 11 默认蓝」的做法，逐个覆盖模板
+                             实际使用的键，保证基线不随截图机器的个性化颜色漂移。 -->
+                        <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedDisabled" Color="#37000000" />
+                        <SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="ToggleButtonForegroundCheckedDisabled" Color="#5CFFFFFF" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedFill" Color="#005FB8" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedFillPointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedFillPressed" Color="#005FB8" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedFillDisabled" Color="#37000000" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStroke" Color="#005FB8" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStrokePointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStrokePressed" Color="#005FB8" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStrokeDisabled" Color="#37000000" />
+                        <SolidColorBrush x:Key="RadioButtonCheckGlyphFill" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="RadioButtonCheckGlyphFillPointerOver" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="RadioButtonCheckGlyphFillPressed" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="RadioButtonCheckGlyphFillDisabled" Color="#5CFFFFFF" />
+                        <SolidColorBrush x:Key="RatingControlSelectedForeground" Color="#005FB8" />
+                        <SolidColorBrush x:Key="RatingControlSelectedForegroundPointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="RatingControlSelectedForegroundPressed" Color="#005FB8" />
+                        <SolidColorBrush x:Key="RatingControlSelectedForegroundDisabled" Color="#37000000" />
+                        <SolidColorBrush x:Key="ProgressBarForeground" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ProgressBarForegroundPointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ProgressBarBackground" Color="#868686" />
+                        <SolidColorBrush x:Key="ProgressRingForeground" Color="#005FB8" />
+                        <SolidColorBrush x:Key="ProgressRingForegroundPointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="InfoBadgeBackground" Color="#005FB8" />
+                        <SolidColorBrush x:Key="InfoBadgeForeground" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="InfoBadgeBackgroundDisabled" Color="#37000000" />
+                        <SolidColorBrush x:Key="InfoBadgeForegroundDisabled" Color="#5CFFFFFF" />
+                        <!-- ProgressRing 在 WinUI 3 里直接引用通用的强调色别名画刷，
+                             不走控件专属键，因此把别名层也钉死。 -->
+                        <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#005FB8" />
+                        <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#005FB8" />
+                        <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#005FB8" />
+                        <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#37000000" />
+                        <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#FFFFFF" />
+                        <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#5CFFFFFF" />
                     </ResourceDictionary>
                     <ResourceDictionary x:Key="Dark">
                         <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillChecked" Color="#60CDFF" />
@@ -82,6 +128,46 @@
                         <SolidColorBrush x:Key="ToggleSwitchKnobFillOnPointerOver" Color="#000000" />
                         <SolidColorBrush x:Key="ToggleSwitchKnobFillOnPressed" Color="#000000" />
                         <SolidColorBrush x:Key="ToggleSwitchKnobFillOnDisabled" Color="#5C000000" />
+                        <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedDisabled" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="#000000" />
+                        <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver" Color="#000000" />
+                        <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed" Color="#000000" />
+                        <SolidColorBrush x:Key="ToggleButtonForegroundCheckedDisabled" Color="#5C000000" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedFill" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedFillPointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedFillPressed" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedFillDisabled" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStroke" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStrokePointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStrokePressed" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="RadioButtonOuterEllipseCheckedStrokeDisabled" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="RadioButtonCheckGlyphFill" Color="#000000" />
+                        <SolidColorBrush x:Key="RadioButtonCheckGlyphFillPointerOver" Color="#000000" />
+                        <SolidColorBrush x:Key="RadioButtonCheckGlyphFillPressed" Color="#000000" />
+                        <SolidColorBrush x:Key="RadioButtonCheckGlyphFillDisabled" Color="#5C000000" />
+                        <SolidColorBrush x:Key="RatingControlSelectedForeground" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="RatingControlSelectedForegroundPointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="RatingControlSelectedForegroundPressed" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="RatingControlSelectedForegroundDisabled" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="ProgressBarForeground" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ProgressBarForegroundPointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ProgressBarBackground" Color="#9A9A9A" />
+                        <SolidColorBrush x:Key="ProgressRingForeground" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="ProgressRingForegroundPointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="InfoBadgeBackground" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="InfoBadgeForeground" Color="#000000" />
+                        <SolidColorBrush x:Key="InfoBadgeBackgroundDisabled" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="InfoBadgeForegroundDisabled" Color="#5C000000" />
+                        <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#000000" />
+                        <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#000000" />
+                        <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#5C000000" />
                     </ResourceDictionary>
                 </ResourceDictionary.ThemeDictionaries>
             </ResourceDictionary>

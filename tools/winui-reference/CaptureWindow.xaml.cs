@@ -178,6 +178,15 @@ public sealed partial class CaptureWindow : Window
             }
 
             control.RequestedTheme = Host.RequestedTheme;
+            // ProgressRing 的弧线颜色不走可覆盖的资源键，而是直接取系统强调色；
+            // 这里显式指定前景色，把基线钉死为 Windows 11 默认蓝/青。
+            if (control is ProgressRing ring)
+            {
+                var accent = control.RequestedTheme == ElementTheme.Dark
+                    ? Windows.UI.Color.FromArgb(255, 0x60, 0xCD, 0xFF)
+                    : Windows.UI.Color.FromArgb(255, 0x00, 0x5F, 0xB8);
+                ring.Foreground = new SolidColorBrush(accent);
+            }
             var slotHost = new Border
             {
                 Width = Catalog.SlotWidthDip,
@@ -290,6 +299,17 @@ public sealed partial class CaptureWindow : Window
             }
         }
 
+        // ProgressRing 的不确定动画由 AnimatedVisualPlayer 驱动，属于合成动画，
+        // 不受 Timeline.AllowDependentAnimations 影响。前两个渲染帧内停止播放器，
+        // 让所有采集都落在同一初始帧上。
+        if (_renderingTicks <= 2)
+        {
+            foreach (var (_, _, control) in _activeSlots)
+            {
+                FreezeAnimations(control);
+            }
+        }
+
         // 同一拼版内的所有状态共享这一次 350ms VisualState 动画收敛等待。
         if (_renderingTicks < 3 || _settle.ElapsedMilliseconds < 350)
         {
@@ -297,6 +317,34 @@ public sealed partial class CaptureWindow : Window
         }
 
         BeginCapture(warning: null);
+    }
+
+    /// <summary>ProgressRing 冻结帧的归一化播放进度（取动画中段的稳定弧段）。</summary>
+    private static readonly double FrozenRingProgress =
+        double.TryParse(
+            Environment.GetEnvironmentVariable("PROGRESS_RING_FRAME"),
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var progress)
+            ? progress
+            : 0.4;
+
+    /// <summary>
+    /// 递归停止模板内的合成动画播放器（ProgressRing 的不确定动画），并固定到指定进度。
+    /// </summary>
+    private static void FreezeAnimations(DependencyObject root)
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var index = 0; index < count; index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is AnimatedVisualPlayer player)
+            {
+                player.Stop();
+                player.SetProgress(FrozenRingProgress);
+            }
+            FreezeAnimations(child);
+        }
     }
 
     private void BeginCapture(string? warning)

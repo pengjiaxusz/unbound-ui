@@ -366,6 +366,9 @@ internal static class Catalog
                 element = new ColorPicker
                 {
                     Width = 240,
+                    // 通道标签（红/绿/蓝）跟随元素 Language 取本地化资源；钉死 en-US
+                    // 让基线不随截图机器的系统区域设置变化。
+                    Language = "en-US",
                     Color = Colors.DodgerBlue,
                     IsAlphaEnabled = false,
                     IsColorSliderVisible = true,
