@@ -4,7 +4,7 @@
 
 ## 通用约定
 - 编译/检查/测试/跑分统一走 `just`（`just check`、`just test`、`just q-run <cmd>`），不裸跑 `cargo`/`ninja`/`cmake`；详见 `.agents/skills/bque/SKILL.md`。
-- 多个并行工作树共享**同一份**仓库外编译目录（`CARGO_TARGET_DIR`，由 `just` 配方注入）：依赖只编译一次，不必每个工作树各编一遍。共享的只有中间产物——**最终二进制在该目录里路径固定，并发的工作树会互相覆盖产物**。运行产物请按工作树自己隔离（复制出去，或另设输出目录），模板刻意不实现隔离机制。新建工作树用 `just wt-create <名称>`，校验用 `just wt-check`。详见 `.agents/skills/worktree/SKILL.md`。
+- 多个并行工作树共享**同一份**编译目录，它就是**主工作树的 `target/`**（链接工作树由 `just` 配方注入 `CARGO_TARGET_DIR` 指过去）：依赖只编译一次，不必每个工作树各编一遍。共享的只有中间产物——**最终二进制在该目录里路径固定，并发的工作树会互相覆盖产物**。运行产物请按工作树自己隔离（复制出去，或另设输出目录），模板刻意不实现隔离机制。因为目录在主工作树里，那里跑 `cargo clean` 会一并清掉所有工作树的中间产物。新建工作树用 `just wt-create <名称>`，校验用 `just wt-check`。详见 `.agents/skills/worktree/SKILL.md`。
 - 完成修改并通过验证后，先 commit & push 再回复；纯问答或构建/测试失败待排查时除外。
 - 克隆后跑 `just doctor --fix`（没有 just 时用 `sh .pengj-templates/scripts/doctor.sh --fix` / `pwsh -NoProfile -File .pengj-templates/scripts/doctor.ps1 -Fix`）：检查工具链、激活提交钩子、创建 agent 客户端工作区链接（`.trae` / `.claude/skills` / `.workbuddy/skills`），并执行 `.pengj-templates/scripts/doctor.d/` 下的项目自检与修复。缺 `pengj-templates-cli` 是**错误**而不是警告（门禁与链接都依赖它），唯一的联网入口是 `--install-cli`，`--fix` 永不联网。
 - 提交标题必须用中文（至少 2 个汉字），type/scope 用英文；任何提交入口（含 /commit 命令）都不得写纯英文标题，commit-msg 钩子会拦截。
