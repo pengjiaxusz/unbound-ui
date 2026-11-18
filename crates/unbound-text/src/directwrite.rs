@@ -1,26 +1,29 @@
 //! DirectWrite 字形光栅化后端。
 //!
 //! 只替换字形位图的生成：塑形、折行与命中测试仍由 `cosmic-text` 负责。
-//! 这样可以保持排版语义不变，同时让覆盖率位图的抗锯齿、网格拟合与
-//! WinUI 使用的 DirectWrite 渲染路径保持一致。
+//! 这样可以保持排版语义不变，同时让字形覆盖率的抗锯齿行为与 WinUI 使用的
+//! DirectWrite 路径同源。
 //!
 //! 设计取舍：
 //!
-//! * 单字形独立光栅化，复用现有四相位图集键，避免引入第二套缓存；
+//! * 单字形独立光栅化，复用现有八相位图集键，避免引入第二套缓存；
 //! * 彩色字体（Emoji）与距离场仍走 `swash`，因为 DirectWrite 的彩色
 //!   字形需要调色板遍历，距离场也需要轮廓数据；
-//! * 字体按「家族 + 字重 + 斜体」解析，首次使用时缓存 `IDWriteFontFace`。
+//! * 字体按「家族 + 字重 + 斜体」解析，首次使用时缓存 `IDWriteFontFace`；
+//! * 渲染模式取 `NATURAL_SYMMETRIC`（横竖双向抗锯齿）并关闭网格拟合：
+//!   本模块按 ⅛ px 相位自行做亚像素定位，网格拟合会把每个相位重新量化到
+//!   整像素，与相位缓存互相打架，小字号下表现为硬阶梯。
 
 use core::mem::ManuallyDrop;
 
 use rustc_hash::FxHashMap;
 use windows::core::{Interface, BOOL, PCWSTR};
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_TEXTURE_ALIASED_1x1, DWRITE_TEXTURE_CLEARTYPE_3x1, DWriteCreateFactory, IDWriteFactory,
-    IDWriteFactory2, IDWriteFont, IDWriteFontCollection, IDWriteFontFace, IDWriteFontFace2,
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
-    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_GLYPH_OFFSET, DWRITE_GLYPH_RUN,
-    DWRITE_GRID_FIT_MODE_DEFAULT, DWRITE_MEASURING_MODE_NATURAL, DWRITE_RENDERING_MODE_NATURAL,
+    DWRITE_TEXTURE_ALIASED_1x1, DWriteCreateFactory, IDWriteFactory, IDWriteFactory2, IDWriteFont,
+    IDWriteFontCollection, IDWriteFontFace, IDWriteFontFace2, DWRITE_FACTORY_TYPE_SHARED,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_WEIGHT, DWRITE_GLYPH_OFFSET, DWRITE_GLYPH_RUN, DWRITE_GRID_FIT_MODE_DISABLED,
+    DWRITE_MEASURING_MODE_NATURAL, DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
     DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
 };
 
@@ -117,9 +120,9 @@ impl DirectWriteRasterizer {
             self.factory.CreateGlyphRunAnalysis(
                 &run,
                 None,
-                DWRITE_RENDERING_MODE_NATURAL,
+                DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
                 DWRITE_MEASURING_MODE_NATURAL,
-                DWRITE_GRID_FIT_MODE_DEFAULT,
+                DWRITE_GRID_FIT_MODE_DISABLED,
                 DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
                 f32::from(phase) * 0.125,
                 0.0,
@@ -129,37 +132,13 @@ impl DirectWriteRasterizer {
         unsafe { ManuallyDrop::drop(&mut run.fontFace) };
         let analysis = analysis.ok()?;
 
-        // 灰度抗锯齿优先取 ClearType 3x1 纹理再折算成单通道：
-        // `DWRITE_TEXTURE_ALIASED_1x1` 只给 1-bit 覆盖率，会让字形边缘出现
-        // 参考截图里没有的锯齿，是跨渲染器文字差异的主要来源。
-        // 部分渲染模式/字体下 ClearType 纹理不可用，此时回退到 1x1 覆盖率，
-        // 保证字形不会整块丢失。
-        let texture = DWRITE_TEXTURE_CLEARTYPE_3x1;
-        if let Ok(bounds) = unsafe { analysis.GetAlphaTextureBounds(texture) } {
-            let width = (bounds.right - bounds.left).max(0) as u32;
-            let height = (bounds.bottom - bounds.top).max(0) as u32;
-            if width > 0 && height > 0 {
-                let mut rgb = vec![0u8; (width * height * 3) as usize];
-                if unsafe { analysis.CreateAlphaTexture(texture, &bounds, &mut rgb) }.is_ok() {
-                    // ClearType 的三个子像素通道按人眼亮度权重合成灰度覆盖率。
-                    let data = rgb
-                        .chunks_exact(3)
-                        .map(|px| {
-                            ((u16::from(px[0]) * 3 + u16::from(px[1]) * 6 + u16::from(px[2])) / 10)
-                                as u8
-                        })
-                        .collect();
-                    return Some(RasterizedGlyph {
-                        width,
-                        height,
-                        bearing_x: bounds.left as f32,
-                        bearing_y: bounds.top as f32,
-                        data,
-                    });
-                }
-            }
-        }
-
+        // 纹理类型必须与抗锯齿模式自洽。
+        //
+        // `DWRITE_TEXTURE_CLEARTYPE_3x1` 只在 `DWRITE_TEXT_ANTIALIAS_MODE_CLEARTYPE`
+        // 下可用；在灰度模式下 `GetAlphaTextureBounds` 会返回空矩形，旧代码因此
+        // 每次都落进下面这条回退分支，注释却声称走的是 ClearType。本管线在
+        // R8 图集里只存单通道覆盖率、并在线性空间与任意后景混合，本来也用不上
+        // 子像素配色，所以这里直接请求 8 位灰度覆盖率。
         let texture = DWRITE_TEXTURE_ALIASED_1x1;
         let bounds = unsafe { analysis.GetAlphaTextureBounds(texture) }.ok()?;
         let width = (bounds.right - bounds.left).max(0) as u32;

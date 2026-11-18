@@ -2,7 +2,7 @@
 //!
 //! 单个字形的处理管线：
 //!
-//! 1. 使用 `swash` 按其坐标所隐含的亚像素相位进行光栅化（共 4 个相位，
+//! 1. 使用 `swash` 按其坐标所隐含的亚像素相位进行光栅化（共 8 个相位，
 //!    使 12px 标签保持均匀字距，而非将每个字形强行对齐到同一像素网格）；
 //!
 //! 2. 在 R8 图集中预留槽位（彩色 Emoji 与距离场则使用 RGBA 图集）；
@@ -160,7 +160,7 @@ pub struct GlyphCache {
     ///
     ///
     /// 开启此选项会强制所有字形使用相位 0，仅当画笔本身始终位于整像素上时才正确。
-    /// UI 文本保留四相位方案：相位由字形的绝对坐标推导，与真实画笔位置的误差
+    /// UI 文本保留八相位方案：相位由字形的绝对坐标推导，与真实画笔位置的误差
     /// 至多为 ⅛ px。
     ///
     pub snap_phases: bool,
@@ -699,7 +699,7 @@ fn pad_field(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
     out
 }
 
-// `SubpixelBin` 体现了上述四相位方案并在 `CacheKey::new` 中使用；
+// `SubpixelBin` 体现了上述八相位方案并在 `CacheKey::new` 中使用；
 // 保留显式导入以便读者查阅。
 
 #[cfg(test)]
@@ -1093,6 +1093,44 @@ mod tests {
         assert_eq!(quads.len(), 2);
         assert!(quads[1].rect.origin.x > quads[0].rect.origin.x);
         assert!(quads[0].rect.origin.x >= 10.0 - 2.0);
+    }
+
+    /// DirectWrite 覆盖率必须是 8 位灰度抗锯齿。
+    ///
+    /// 若抗锯齿模式与纹理类型不匹配（例如在灰度模式下请求 ClearType 纹理），
+    /// DirectWrite 会返回双电平纹理，中间灰占比坍缩到接近 0，字形边缘出现
+    /// 硬阶梯。该断言把这条退化路径钉死在测试里。
+    #[cfg(windows)]
+    #[test]
+    fn directwrite_coverage_is_antialiased() {
+        if std::env::var("UNBOUND_TEXT_BACKEND").is_ok_and(|v| v == "cosmic") {
+            return;
+        }
+        let mut e = engine();
+        let mut cache = GlyphCache::new();
+        if cache.backend() != RasterBackend::DirectWrite {
+            return;
+        }
+        let shaped = e.shape("Hamburgefonstiv AXVW", &TextStyle::sized(14.0));
+        cache.quads_for(&mut e, &shaped, Vec2::new(0.3, 0.0), 400, false);
+        let mut hist = [0u32; 256];
+        for u in cache.take_updates() {
+            if u.target != AtlasTarget::Coverage {
+                continue;
+            }
+            for &b in &u.data {
+                hist[b as usize] += 1;
+            }
+        }
+        let total: u32 = hist.iter().sum();
+        assert!(total > 0, "the test must rasterize at least one glyph");
+        let mid: u32 = hist[1..255].iter().sum();
+        let ratio = f64::from(mid) / f64::from(total);
+        assert!(
+            ratio > 0.12,
+            "DirectWrite coverage looks binarized: only {:.1}% intermediate texels",
+            ratio * 100.0
+        );
     }
 
     #[test]

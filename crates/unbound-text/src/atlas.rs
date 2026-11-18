@@ -2,7 +2,7 @@
 //!
 //! 两个独立的 `Texture2DArray`：
 //!
-//! * `Atlas_R8` —— 每像素 1 字节，每个字形包含 4 个水平亚像素相位。
+//! * `Atlas_R8` —— 每像素 1 字节，每个字形包含 8 个水平亚像素相位（⅛ px）。
 //!   标准 UI 文本仅需覆盖率，为其分配每纹素 4 字节会使图集体积膨胀四倍
 //!   却无任何视觉收益。
 //! * `Atlas_RGBA8` —— 彩色 Emoji 与多通道距离场，必须使用四通道存储。
@@ -22,7 +22,7 @@ use rustc_hash::FxHashMap;
 pub struct GlyphKey {
     /// 字体内的字形 ID。
     pub glyph_id: u16,
-    /// 水平亚像素相位（0..3）；非亚像素图集为 0。
+    /// 水平亚像素相位（0..7，步长 ⅛ px）；非亚像素图集为 0。
     pub phase: u8,
     /// 1 表示距离场，0 表示普通覆盖率位图。
     pub sdf: u8,
@@ -61,7 +61,7 @@ impl GlyphKey {
     ) -> Self {
         Self {
             glyph_id,
-            phase: phase & 3,
+            phase: phase & 7,
             sdf: u8::from(sdf),
             size_q4: (size.max(0.0) * 4.0).round().clamp(0.0, 65535.0) as u16,
             face: (face & 0xffff_ffff) as u32,
@@ -567,7 +567,9 @@ pub struct GlyphAtlas {
 }
 
 /// R8 图集存储的水平亚像素相位数。
-pub const SUBPIXEL_PHASES: u8 = 4;
+///
+/// 必须与 [`GlyphKey`] 的相位掩码保持一致：八相位时键里只留 3 位。
+pub const SUBPIXEL_PHASES: u8 = 8;
 
 impl Default for GlyphAtlas {
     fn default() -> Self {
