@@ -11,6 +11,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use showcase::backdrop_host::window_backdrop_request;
 use showcase::frame_plan::{frame_size, needs_rebuild, upload_plan};
 use showcase::runtime_app::GalleryRuntime;
 use showcase::shell::GalleryApp;
@@ -19,7 +20,6 @@ use showcase::theme;
 
 use raw_window_handle::HasDisplayHandle;
 use unbound_app::{AppKey, AppRuntime, DirtyFlags, Modifiers as AppModifiers};
-use unbound_backdrop::{BackdropPlan, BackdropSource, DwmMaterial, MaterialKind};
 use unbound_gpu::atlas::{AtlasKind, AtlasSet, AtlasUpload};
 use unbound_gpu::data::PassLayer;
 use unbound_gpu::device::{Gpu, GpuConfig};
@@ -36,7 +36,6 @@ use unbound_platform::window::{
 use unbound_platform::Extent;
 use unbound_platform::{
     CursorIcon, NativeWindowId, PhysicalPosition, PhysicalSize, ResizeDirection, Window,
-    WindowBackdropMaterial,
 };
 use unbound_theme::{ThemeKind, ThemeState};
 
@@ -393,30 +392,6 @@ fn window_hwnd(window: &Window) -> Option<isize> {
         Some(RawWindowHandle::Win32(handle)) => Some(handle.hwnd.get()),
         _ => None,
     }
-}
-
-/// 把后景计划翻译成窗口的系统材质请求与失焦锁定状态。
-///
-/// 材质档与系统取值一一对应：跟随系统、标准云母、云母变体、亚克力各有各的取值。
-/// 沉浸式后景的系统取值没有公开文档依据（issue #36 调研后再补），因此它不请求
-/// 任何系统材质——计划给出的不透明清屏负责让窗口退回不透明根背景。
-///
-/// 失焦锁定跟随实际生效的材质档：原生材质在场时，失焦不得让窗口退化为纯色；
-/// 自绘路径与「无后景」都不锁定。
-fn window_backdrop_request(plan: &BackdropPlan) -> (WindowBackdropMaterial, bool) {
-    let material = match plan.material {
-        DwmMaterial::None => WindowBackdropMaterial::None,
-        DwmMaterial::System => WindowBackdropMaterial::System,
-        DwmMaterial::Mica => WindowBackdropMaterial::Mica,
-        // 云母变体走标签页材质：系统取值 4 即 Mica Alt。
-        DwmMaterial::MicaAlt => WindowBackdropMaterial::Tabbed,
-        DwmMaterial::Acrylic => WindowBackdropMaterial::Acrylic,
-        // 沉浸式后景当前没有系统取值（issue #36）：不请求任何材质，窗口保持不透明。
-        DwmMaterial::Immersive => WindowBackdropMaterial::None,
-    };
-    let lock_mica =
-        plan.source == BackdropSource::Native && plan.material_kind != MaterialKind::None;
-    (material, lock_mica)
 }
 
 impl Showcase {
@@ -811,13 +786,15 @@ impl PlatformApp for Showcase {
         let metrics = Arc::new(FrameHitMetrics::new());
         metrics.set_scale_factor(self.effective_scale());
         install_custom_frame(hwnd, Arc::clone(&metrics));
-        // 后景材质由计划决定：材质档与系统取值一一对应，
-        // 云母变体走标签页材质（系统取值 4），不能退化成标准云母。
-        let (material, lock_mica) = window_backdrop_request(&self.shell().state.backdrop_plan);
+        // 后景材质由计划决定：启动时必须请求计划给出的那一档系统材质——亚克力、
+        // 云母变体与跟随系统各有各的系统取值，不能一律当成标准云母。自绘与关闭
+        // 都落在「不请求材质」上，窗口因此保持不透明。
+        let (backdrop_material, lock_backdrop) =
+            window_backdrop_request(&self.shell().state.backdrop_plan);
         unbound_platform::set_window_dark_mode(hwnd, self.shell().state.theme.is_dark());
-        let _ = unbound_platform::set_window_backdrop(hwnd, material);
-        // 原生模式启用失焦锁定，避免窗口失活时材质退化为纯色。
-        metrics.set_lock_mica_active(lock_mica);
+        let _ = unbound_platform::set_window_backdrop(hwnd, backdrop_material);
+        // 原生模式启用失焦锁定，避免窗口失活时云母退化为纯色。
+        metrics.set_lock_mica_active(lock_backdrop);
         self.frame_metrics = Some(metrics);
 
         // 呈现链刚刚按窗口尺寸创建：该请求已提交，因此首帧不会再次重建。
