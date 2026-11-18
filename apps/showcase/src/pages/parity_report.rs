@@ -47,7 +47,7 @@ const THUMB_ASPECT: f32 = 420.0 / 160.0;
 /// 三张缩略图之间的间距。
 const THUMB_GAP: f32 = 10.0;
 
-/// 单个用例的三态结论，与差分器的 `pass` / `fail` / `invalid` 一一对应。
+/// 单个用例的四态结论，与差分器的 `pass` / `known-aa` / `fail` / `invalid` 一一对应。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParityStatus {
     /// 四重门禁全部通过。
@@ -56,6 +56,8 @@ pub enum ParityStatus {
     Fail,
     /// 采集或渲染内容无效，不计入通过率。
     Invalid,
+    /// 几何与整体颜色已对齐，仅剩经视觉复核的轮廓抗锯齿差异。
+    KnownAa,
 }
 
 impl ParityStatus {
@@ -64,6 +66,7 @@ impl ParityStatus {
             "pass" => Some(Self::Pass),
             "fail" => Some(Self::Fail),
             "invalid" => Some(Self::Invalid),
+            "known-aa" => Some(Self::KnownAa),
             _ => None,
         }
     }
@@ -97,6 +100,8 @@ pub struct ParityReport {
     pub passed: usize,
     pub failed: usize,
     pub invalid: usize,
+    /// 经视觉复核的纯轮廓抗锯齿豁免数。
+    pub known_aa: usize,
     pub cache_hits: usize,
     /// 载入失败原因；为 `Some` 时页面显示空态说明。
     pub error: Option<String>,
@@ -115,6 +120,7 @@ impl ParityReport {
                     passed: 0,
                     failed: 0,
                     invalid: 0,
+                    known_aa: 0,
                     cache_hits: 0,
                     error: Some(format!("{REPORT_DIR}/report.json: {error}")),
                 }
@@ -148,6 +154,10 @@ impl ParityReport {
             .iter()
             .filter(|case| case.status == ParityStatus::Invalid)
             .count();
+        let known_aa = cases
+            .iter()
+            .filter(|case| case.status == ParityStatus::KnownAa)
+            .count();
         let cache_hits = cases.iter().filter(|case| case.cache_hit).count();
         if cases.is_empty() {
             return Self {
@@ -155,6 +165,7 @@ impl ParityReport {
                 passed,
                 failed,
                 invalid,
+                known_aa,
                 cache_hits,
                 error: Some(format!("{REPORT_DIR}/report.json 中没有用例")),
             };
@@ -164,6 +175,7 @@ impl ParityReport {
             passed,
             failed,
             invalid,
+            known_aa,
             cache_hits,
             error: None,
         }
@@ -292,11 +304,13 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
     );
     ctx.canvas.text(
         &format!(
-            "{} / {} · {} {} · {} {} · {} {} · {} {} · ROI mean ≤ 1.5 · p95 ≤ 4.0 · outlier ≤ 2% · {}",
+            "{} / {} · {} {} · {} {} · {} {} · {} {} · {} {} · ROI mean ≤ 1.5 · p95 ≤ 4.0 · outlier ≤ 2% · {}",
             report.passed,
             report.cases.len(),
             if zh { "通过" } else { "pass" },
             report.passed,
+            if zh { "抗锯齿豁免" } else { "known-aa" },
+            report.known_aa,
             if zh { "未通过" } else { "fail" },
             report.failed,
             if zh { "无效" } else { "invalid" },
@@ -383,6 +397,11 @@ fn draw_case(
             if zh { "无效" } else { "invalid" },
             palette.warning,
             palette.warning_soft,
+        ),
+        ParityStatus::KnownAa => (
+            if zh { "抗锯齿豁免" } else { "known-aa" },
+            palette.primary,
+            palette.primary_soft,
         ),
     };
     let badge_width = ctx.canvas.labels.measure(status_text, 9.5).x + 18.0;

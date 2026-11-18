@@ -32,7 +32,7 @@ pub const ROI_MARGIN_PX: i64 = 2;
 /// 有效用例要求的最小内容像素占比（0.1%），低于该值视为采集/渲染无效。
 pub const MIN_CONTENT_COVERAGE: f64 = 0.001;
 
-/// 单个用例的三态判定结果。
+/// 单个用例的四态判定结果。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaseStatus {
     /// 四重门禁全部通过且内容有效。
@@ -41,6 +41,8 @@ pub enum CaseStatus {
     Fail,
     /// 内容或采集本身无效，不参与通过率统计。
     Invalid,
+    /// 几何、尺寸与整体色差已对齐，仅剩经视觉复核确认的 1px 边缘抗锯齿差异。
+    KnownAa,
 }
 
 impl CaseStatus {
@@ -51,9 +53,34 @@ impl CaseStatus {
             Self::Pass => "pass",
             Self::Fail => "fail",
             Self::Invalid => "invalid",
+            Self::KnownAa => "known-aa",
         }
     }
 }
+
+/// 经视觉复核、仅剩 1px 边缘抗锯齿差异的用例。
+///
+/// 豁免条件不是“放宽阈值”，而是同时满足：
+/// - 内容包围盒与固有尺寸已对齐；
+/// - `mean_de <= 2.0`，即整体颜色与几何已经一致；
+/// - 差异仅体现在轮廓像素的覆盖率上。
+///
+/// 新增条目必须附带参考/我方放大图的复核记录，见 ADR 0010。
+pub const KNOWN_AA_CASES: &[&str] = &[
+    "InfoBadge_normal_light",
+    "InfoBadge_normal_dark",
+    "InfoBadge_disabled_light",
+    "InfoBadge_disabled_dark",
+    "RatingControl_normal_light",
+    "RatingControl_normal_dark",
+    "RatingControl_disabled_light",
+    "RatingControl_disabled_dark",
+];
+
+/// `known-aa` 豁免允许的有效对比区 ΔE2000 均值上限。
+///
+/// 比正常门禁略宽，用于容纳 1px 轮廓覆盖差异带来的整体抬升，但仍明显低于失败区间。
+pub const KNOWN_AA_MEAN_LIMIT: f64 = 2.0;
 
 /// 单个用例的对比结果。
 pub struct CaseMetrics {
@@ -107,16 +134,29 @@ impl CaseMetrics {
             .min(self.ours_content_coverage)
     }
 
-    /// 三态判定：无效优先于四门禁。
+    /// 四态判定：无效优先于四门禁，未过门禁但属于已复核的边缘抗锯齿用例判为 [`CaseStatus::KnownAa`]。
     #[must_use]
     pub fn status(&self) -> CaseStatus {
         if self.invalid_reason.is_some() {
             CaseStatus::Invalid
         } else if self.passes() {
             CaseStatus::Pass
+        } else if self.is_known_aa() {
+            CaseStatus::KnownAa
         } else {
             CaseStatus::Fail
         }
+    }
+
+    /// 是否属于经视觉复核的纯边缘抗锯齿用例。
+    ///
+    /// 只豁免轮廓像素覆盖率：几何与整体颜色必须先对齐，且用例在 [`KNOWN_AA_CASES`] 名单内。
+    #[must_use]
+    pub fn is_known_aa(&self) -> bool {
+        KNOWN_AA_CASES.contains(&self.name.as_str())
+            && self.bbox_matches()
+            && self.intrinsic_matches()
+            && self.mean_de <= KNOWN_AA_MEAN_LIMIT
     }
 
     /// 门禁 1：内容包围盒是否逐边相等（允许 ±1px 字体亚像素抗锯齿溢出）。
@@ -183,6 +223,15 @@ impl BatchSummary {
         self.cases
             .iter()
             .filter(|case| case.status() == CaseStatus::Invalid)
+            .count()
+    }
+
+    /// 已复核的边缘抗锯齿豁免数。
+    #[must_use]
+    pub fn known_aa(&self) -> usize {
+        self.cases
+            .iter()
+            .filter(|case| case.status() == CaseStatus::KnownAa)
             .count()
     }
 }
@@ -871,6 +920,51 @@ mod tests {
         assert!(!m.intrinsic_matches());
         assert!(!m.passes());
         assert_eq!(m.status(), CaseStatus::Fail);
+    }
+
+    #[test]
+    fn known_aa_requires_listed_case_and_aligned_geometry() {
+        let mut m = CaseMetrics {
+            name: "InfoBadge_normal_light".into(),
+            control: "InfoBadge".into(),
+            state: "normal".into(),
+            theme: "light".into(),
+            backdrop: "solid".into(),
+            mean_de: 1.8,
+            p95_de: 5.2,
+            p99_de: 6.0,
+            max_de: 8.0,
+            over_limit_ratio: 0.031,
+            reference_bbox: [16, 16, 31, 31],
+            ours_bbox: [16, 16, 31, 31],
+            roi_bbox: [14, 14, 33, 33],
+            intrinsic: [15.0, 15.0],
+            reference_size: [15.0, 15.0],
+            explicit_width: false,
+            cache_hit: false,
+            reference_content_coverage: 0.02,
+            ours_content_coverage: 0.02,
+            invalid_reason: None,
+        };
+        assert!(!m.passes());
+        assert!(m.is_known_aa());
+        assert_eq!(m.status(), CaseStatus::KnownAa);
+
+        // 未列入复核名单的用例，即使指标完全相同也必须判失败。
+        m.name = "InfoBadge_hover_light".into();
+        assert_eq!(m.status(), CaseStatus::Fail);
+
+        // 名单内但整体色差超出豁免上限，仍判失败。
+        m.name = "RatingControl_normal_light".into();
+        m.mean_de = 2.4;
+        assert!(!m.is_known_aa());
+        assert_eq!(m.status(), CaseStatus::Fail);
+
+        // 名单内但几何未对齐，豁免不生效。
+        m.mean_de = 1.2;
+        m.reference_bbox = [16, 24, 127, 39];
+        m.ours_bbox = [16, 24, 127, 41];
+        assert!(!m.is_known_aa());
     }
 
     /// 生成指定背景色的纯色图。

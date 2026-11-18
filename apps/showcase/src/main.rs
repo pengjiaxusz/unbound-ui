@@ -1721,8 +1721,9 @@ fn main() {
         match showcase::png_diff::run_batch_with_options(&reference, &out, allow_cache) {
             Ok(summary) => {
                 println!(
-                    "parity: pass={} fail={} invalid={} (of {}, {} cached) · {}",
+                    "parity: pass={} known-aa={} fail={} invalid={} (of {}, {} cached) · {}",
                     summary.passed(),
+                    summary.known_aa(),
                     summary.failed(),
                     summary.invalid(),
                     summary.cases.len(),
@@ -1732,7 +1733,13 @@ fn main() {
                 for case in summary
                     .cases
                     .iter()
-                    .filter(|case| case.status() != showcase::png_diff::CaseStatus::Pass)
+                    .filter(|case| {
+                        !matches!(
+                            case.status(),
+                            showcase::png_diff::CaseStatus::Pass
+                                | showcase::png_diff::CaseStatus::KnownAa
+                        )
+                    })
                     .take(8)
                 {
                     println!(
