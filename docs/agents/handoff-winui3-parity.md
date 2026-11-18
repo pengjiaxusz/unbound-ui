@@ -138,7 +138,7 @@ pwsh -NoProfile -File .scratch/winui3-parity-system/publish-github-issues.ps1
 | 04 第一批 12 个基准控件 | 代码完成 | 参考宿主与差分器已接入 46 个控件；`NumberBox` / `AutoSuggestBox` 固有高度统一 32px |
 | 05 第二批 23 个基准控件 | 代码完成 | 导航、浮层、集合、日期类全部进入 `SUPPORTED_CONTROLS` 与 `Catalog.cs` |
 | 06 P0 缺失控件（7 个） | 已实现 | `HyperlinkButton`、`RepeatButton`、`DropDownButton`、`ToggleSplitButton`、`PasswordBox`、`DatePickerWheel`、`CalendarDatePicker` |
-| 07 P1/P2 缺失控件 | 已实现 | 18 个新目录变体 + `PaginationStyle::Dots`；目录总数 134 |
+| 07 P1/P2 缺失控件 | 已实现 | 18 个新目录变体 + `PaginationStyle::Dots`；目录总数 134；11 个 P1 官方名已加入参考宿主与差分目录（P2 无 WinUI 对应物，仅走 Fluent 巡检） |
 | 08 规范名收缩迁移 | 进行中 | 目录枚举与展台标题切换到 WinUI 3 官方名 |
 | 09 多后景矩阵解锁 | 阻塞 | `--backdrop all` 与四种合成底板已就绪，但 `unbound-backdrop` 目前只实现 Mica，`mica_alt` / `acrylic` 需外部管线完工 |
 | 10 Fluent 技能终版 + 43 控件巡检 | 阻塞 | 依赖 08/09；REFERENCE 已补试点实测表 |
