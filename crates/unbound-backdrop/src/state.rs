@@ -151,4 +151,35 @@ mod tests {
         assert_eq!(generator.generation, generation + 1);
         assert!(!generator.delivered);
     }
+
+    #[test]
+    fn switching_the_material_starts_a_new_generation() {
+        use crate::selection::MaterialKind;
+
+        let mut generator = BackdropGenerator::new();
+        let standard = MicaRequest::new(800, 600, true);
+        generator.sync(standard, || {});
+        let generation = generator.generation;
+
+        // 同一材质、同一参数：复用当前代次，不重新生成。
+        generator.sync(standard, || {});
+        assert_eq!(generator.generation, generation);
+
+        // 换成云母变体：材质进入请求，必须按代次重建。
+        let mut variant = standard;
+        variant.material = MaterialKind::MicaAlt;
+        generator.sync(variant, || {});
+        assert_eq!(
+            generator.generation,
+            generation + 1,
+            "a material switch must start a new texture generation"
+        );
+        assert!(!generator.delivered);
+        assert!(
+            generator
+                .request
+                .is_some_and(|request| request.material == MaterialKind::MicaAlt),
+            "the generator must remember the new material"
+        );
+    }
 }

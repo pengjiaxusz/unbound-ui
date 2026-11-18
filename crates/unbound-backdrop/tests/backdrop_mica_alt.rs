@@ -10,7 +10,8 @@
 use unbound_backdrop::{
     has_self_drawn_variant, required_build, system_material_request, BackdropCapabilities,
     BackdropCompositeAlpha, BackdropInputs, BackdropPlan, BackdropSelection, BackdropSource,
-    DwmMaterial, FallbackReason, MaterialKind, PixelRect, UnavailableReason, NATIVE_MICA_MIN_BUILD,
+    DwmMaterial, FallbackReason, MaterialKind, PixelRect, UnavailableReason, WallpaperTexture,
+    NATIVE_MICA_MIN_BUILD,
 };
 
 /// 主屏物理矩形。
@@ -354,8 +355,8 @@ fn mica_alt_requests_its_own_system_material() {
     );
 }
 
-/// 云母变体与标准云母在自绘路径上必须完全一致：同一份纹理配方、同样的清屏 alpha、
-/// 同样的根背景透明性、同样不请求任何系统材质。
+/// 云母变体与标准云母在自绘路径上共享同一套几何与纹理参数，只有材质（色调配方）
+/// 不同：清屏 alpha、根背景透明性与系统材质请求都必须一致。
 #[test]
 fn mica_alt_and_standard_mica_agree_on_the_self_drawn_path() {
     for case in capability_cases() {
@@ -375,9 +376,25 @@ fn mica_alt_and_standard_mica_agree_on_the_self_drawn_path() {
                 ready,
             ));
             let label = format!("the {} case (ready = {ready})", case.name);
+            let mica_texture = mica.texture.expect("mica must draw a texture");
+            let mica_alt_texture = mica_alt.texture.expect("the variant must draw a texture");
             assert_eq!(
-                mica.texture, mica_alt.texture,
-                "{label} must use the same texture recipe"
+                mica_texture.material,
+                MaterialKind::Mica,
+                "{label} must carry the standard mica recipe"
+            );
+            assert_eq!(
+                mica_alt_texture.material,
+                MaterialKind::MicaAlt,
+                "{label} must carry the variant recipe"
+            );
+            assert_eq!(
+                WallpaperTexture {
+                    material: MaterialKind::Mica,
+                    ..mica_alt_texture
+                },
+                mica_texture,
+                "{label} must share every texture parameter except the material"
             );
             assert_eq!(mica.clear_alpha, mica_alt.clear_alpha, "{label}");
             assert_eq!(

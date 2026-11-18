@@ -5,6 +5,7 @@ use std::io::Cursor;
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView, ImageBuffer, Rgba};
 
+use crate::selection::MaterialKind;
 use crate::wallpaper::load_wallpaper;
 
 /// 生成宽度上限：磨砂后降到 640 宽无感知，显著降低模糊、编码与上传成本
@@ -39,6 +40,8 @@ pub struct MicaRequest {
     pub sigma: f32,
     /// 壁纸源指纹；壁纸切换后旧纹理必须失效。
     pub wallpaper: Option<crate::wallpaper::WallpaperStamp>,
+    /// 实际生效的材质种类；它决定色调配方，切换材质必须重建纹理。
+    pub material: MaterialKind,
 }
 
 impl MicaRequest {
@@ -53,6 +56,7 @@ impl MicaRequest {
             max_width: DEFAULT_MAX_WIDTH,
             sigma: DEFAULT_SIGMA,
             wallpaper: None,
+            material: MaterialKind::Mica,
         }
     }
 
@@ -74,16 +78,20 @@ impl MicaRequest {
             max_width: texture.effective_max_width(),
             sigma: texture.effective_sigma(),
             wallpaper,
+            material: texture.material,
         }
     }
 
     /// 两个请求是否产出视觉等价的结果。
     ///
     /// 纹理覆盖整块主屏，因此窗口位置与窗口尺寸都不参与比较：移动窗口只更新
-    /// 取样 UV，不重新生成纹理。只有主屏尺寸、DPI、主题、纹理参数或壁纸源
-    /// 变化才使旧纹理失效。
+    /// 取样 UV，不重新生成纹理。只有主屏尺寸、DPI、主题、材质、纹理参数或
+    /// 壁纸源变化才使旧纹理失效。
     #[must_use]
     pub fn matches(&self, other: &Self) -> bool {
+        if self.material != other.material {
+            return false;
+        }
         if self.dark != other.dark || self.max_width.max(1) != other.max_width.max(1) {
             return false;
         }
@@ -138,7 +146,10 @@ pub fn generate(request: &MicaRequest) -> Option<MicaImage> {
         request.max_width.max(1),
         request.sigma.max(0.0),
     )?;
-    encode(tint(&rendered.blurred, request.dark))
+    encode(tint(
+        &rendered.blurred,
+        &ToneRecipe::for_material(request.material, request.dark),
+    ))
 }
 
 /// 把像素图编码为 PNG。
@@ -312,27 +323,105 @@ fn cover_crop(
     })
 }
 
-/// 按 WinUI 的三层色调合成 Mica：明度向基准色压缩，色偏稀释后叠加回去。
+/// 自绘材质的色调配方：一层明度压缩，外加一层可选的向更深基准的压缩。
+///
+/// 配方把「磨砂之后怎么上色」的全部自由度收在一处：明度基准、明度区间、
+/// 明度保留系数、色偏保留量与限幅，以及第二层压缩的深度。磨砂强度与锚定
+/// 方式不在这里——它们属于纹理几何，对所有材质完全一致。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ToneRecipe {
+    /// 明度压缩的基准色（WinUI `SolidBackgroundFillColorBase`）。
+    base: f32,
+    /// 明度区间下沿。
+    minimum: f32,
+    /// 明度区间上沿。
+    maximum: f32,
+    /// 明度向基准色压缩的保留系数，等价于 `LuminosityOpacity`。
+    luminance_keep: f32,
+    /// 色偏稀释系数。
+    chroma_keep: f32,
+    /// 色偏限幅。
+    chroma_limit: f32,
+    /// 第二层压缩的基准色，比第一层更深。
+    depth_base: f32,
+    /// 第二层压缩的保留系数；`1.0` 表示不追加这一层。
+    depth_keep: f32,
+}
+
+impl ToneRecipe {
+    /// 按材质种类与主题取色调配方。
+    ///
+    /// 只有云母变体偏离标准云母配方：它在同一套磨砂锚点上再叠一层更深的
+    /// 明度压缩，呈现更低、更窄的明度区间。其余材质（无、跟随系统、亚克力、
+    /// 沉浸式）在自绘路径上不会产出纹理，一律按标准云母处理。
+    pub(crate) const fn for_material(material: MaterialKind, dark: bool) -> Self {
+        if matches!(material, MaterialKind::MicaAlt) {
+            // 云母变体：明度保留系数降到 0.10，区间更靠下、更窄，再向更深的
+            // 基准压缩一次，得到标准云母看不到的深层色调。
+            if dark {
+                Self {
+                    base: 32.0,
+                    minimum: 22.0,
+                    maximum: 40.0,
+                    luminance_keep: 0.10,
+                    chroma_keep: 0.16,
+                    chroma_limit: 5.0,
+                    depth_base: 24.0,
+                    depth_keep: 0.75,
+                }
+            } else {
+                Self {
+                    base: 231.0,
+                    minimum: 206.0,
+                    maximum: 238.0,
+                    luminance_keep: 0.10,
+                    chroma_keep: 0.16,
+                    chroma_limit: 5.0,
+                    depth_base: 216.0,
+                    depth_keep: 0.70,
+                }
+            }
+        } else if dark {
+            // 标准云母：WinUI `SolidBackgroundFillColorBase` #202020，
+            // 明度区间窄到 28..48，再亮的壁纸也不能把窗口烧出高光。
+            Self {
+                base: 32.0,
+                minimum: 28.0,
+                maximum: 48.0,
+                luminance_keep: 0.18,
+                chroma_keep: 0.16,
+                chroma_limit: 5.0,
+                depth_base: 48.0,
+                depth_keep: 1.0,
+            }
+        } else {
+            // 标准云母亮色：基准 #F3F3F3，明度区间 228..255。
+            Self {
+                base: 243.0,
+                minimum: 228.0,
+                maximum: 255.0,
+                luminance_keep: 0.18,
+                chroma_keep: 0.16,
+                chroma_limit: 5.0,
+                depth_base: 255.0,
+                depth_keep: 1.0,
+            }
+        }
+    }
+}
+
+/// 按配方给磨砂纹理上色：明度向基准色压缩，色偏稀释后叠加回去。
 ///
 /// 只做「按比例向基准色混合」会把彩色壁纸整片染成暖棕，正是 Win11 不会
 /// 出现的效果。这里分别处理明度与色度：
 ///
-/// - 明度以基准色为轴压缩到 18%，等价于 `LuminosityOpacity`，
-///   保证任何壁纸上的文字对比度；
-/// - 色偏按 16% 稀释并限制在 ±5，保留壁纸的低频色调，但不铺开彩雾。
+/// - 明度以基准色为轴压缩，保留系数由配方给出，保证任何壁纸上的文字对比度；
+/// - 色偏按配方比例稀释并限幅，保留壁纸的低频色调，但不铺开彩雾；
+/// - 配方需要更深层次时再向第二层基准压缩一次。
 pub(crate) fn tint(
     image: &ImageBuffer<Rgba<u8>, Vec<u8>>,
-    dark: bool,
+    recipe: &ToneRecipe,
 ) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
-    // WinUI `SolidBackgroundFillColorBase`: dark #202020, light #F3F3F3.
-    let base = if dark { 32.0 } else { 243.0 };
-    // 云母的明度区间本来就很窄：再亮的壁纸也不能把窗口烧出高光，
-    // 再暗的区域也不能塌成纯黑。
-    let (minimum, maximum) = if dark { (28.0, 48.0) } else { (228.0, 255.0) };
-    const LUMINANCE_KEEP: f32 = 0.18;
-    const CHROMA_KEEP: f32 = 0.16;
-    const CHROMA_LIMIT: f32 = 5.0;
-
     ImageBuffer::from_fn(image.width(), image.height(), |x, y| {
         let pixel = image.get_pixel(x, y);
         let (r, g, b) = (
@@ -341,10 +430,14 @@ pub(crate) fn tint(
             f32::from(pixel[2]),
         );
         let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        let compressed = (base + (luminance - base) * LUMINANCE_KEEP).clamp(minimum, maximum);
+        let compressed = (recipe.base + (luminance - recipe.base) * recipe.luminance_keep)
+            .clamp(recipe.minimum, recipe.maximum);
+        // 第二层向更深的基准压缩：标准云母的保留系数为 1，这一步是恒等变换。
+        let depth = recipe.depth_base + (compressed - recipe.depth_base) * recipe.depth_keep;
         let mix = |channel: f32| {
-            let bias = ((channel - luminance) * CHROMA_KEEP).clamp(-CHROMA_LIMIT, CHROMA_LIMIT);
-            (compressed + bias).clamp(0.0, 255.0).round() as u8
+            let bias = ((channel - luminance) * recipe.chroma_keep)
+                .clamp(-recipe.chroma_limit, recipe.chroma_limit);
+            (depth + bias).clamp(0.0, 255.0).round() as u8
         };
         Rgba([mix(r), mix(g), mix(b), 255])
     })
@@ -455,34 +548,146 @@ mod tests {
         assert!(cover_crop((100, 100), (0.0, 0.0), (0, 0, 10, 10)).is_none());
     }
 
+    /// 按材质与主题给一张图上色。
+    fn tint_with(
+        image: &ImageBuffer<Rgba<u8>, Vec<u8>>,
+        material: MaterialKind,
+        dark: bool,
+    ) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
+        tint(image, &ToneRecipe::for_material(material, dark))
+    }
+
+    /// 一张纹理的平均明度。
+    fn mean_luminance(image: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> f64 {
+        let sum: f64 = image
+            .pixels()
+            .map(|pixel| {
+                0.2126 * f64::from(pixel[0])
+                    + 0.7152 * f64::from(pixel[1])
+                    + 0.0722 * f64::from(pixel[2])
+            })
+            .sum();
+        sum / f64::from(image.width() * image.height())
+    }
+
     #[test]
     fn dark_mica_compresses_luminance_into_the_win11_band() {
         let image = ImageBuffer::from_pixel(2, 2, Rgba([0, 0, 0, 255]));
-        let tinted = tint(&image, true);
+        let tinted = tint_with(&image, MaterialKind::Mica, true);
         assert_eq!(tinted.get_pixel(0, 0)[0], 28);
 
         let image = ImageBuffer::from_pixel(2, 2, Rgba([255, 255, 255, 255]));
-        let tinted = tint(&image, true);
+        let tinted = tint_with(&image, MaterialKind::Mica, true);
         assert_eq!(tinted.get_pixel(0, 0)[0], 48);
     }
 
     #[test]
     fn light_mica_compresses_luminance_into_the_win11_band() {
         let image = ImageBuffer::from_pixel(2, 2, Rgba([0, 0, 0, 255]));
-        let tinted = tint(&image, false);
+        let tinted = tint_with(&image, MaterialKind::Mica, false);
         assert_eq!(tinted.get_pixel(0, 0)[0], 228);
 
         let image = ImageBuffer::from_pixel(2, 2, Rgba([255, 255, 255, 255]));
-        let tinted = tint(&image, false);
+        let tinted = tint_with(&image, MaterialKind::Mica, false);
         assert_eq!(tinted.get_pixel(0, 0)[0], 245);
     }
 
     #[test]
     fn tinting_keeps_a_trace_of_the_wallpaper_hue() {
         let image = ImageBuffer::from_pixel(2, 2, Rgba([255, 0, 0, 255]));
-        let pixel = tint(&image, true).get_pixel(0, 0).0;
+        let pixel = tint_with(&image, MaterialKind::Mica, true)
+            .get_pixel(0, 0)
+            .0;
         assert!(pixel[0] > pixel[1], "red bias must survive tinting");
         assert!(pixel[0] - pixel[1] <= 10, "bias must stay subtle");
+    }
+
+    #[test]
+    fn the_mica_variant_lays_a_deeper_tone_over_standard_mica() {
+        // 同一张中灰壁纸：变体必须比标准云母更暗，且明度区间更窄。
+        let image = ImageBuffer::from_pixel(2, 2, Rgba([128, 128, 128, 255]));
+        let standard = tint_with(&image, MaterialKind::Mica, true);
+        let variant = tint_with(&image, MaterialKind::MicaAlt, true);
+        let standard_mean = mean_luminance(&standard);
+        let variant_mean = mean_luminance(&variant);
+        assert!(
+            variant_mean + 6.0 < standard_mean,
+            "the mica variant must be clearly darker: {variant_mean} vs {standard_mean}"
+        );
+        assert!(
+            variant.get_pixel(0, 0)[0] < standard.get_pixel(0, 0)[0],
+            "every channel must sit lower in the variant"
+        );
+    }
+
+    #[test]
+    fn the_mica_variant_stays_darker_than_standard_mica_in_light_theme() {
+        let image = ImageBuffer::from_pixel(2, 2, Rgba([128, 128, 128, 255]));
+        let standard = tint_with(&image, MaterialKind::Mica, false);
+        let variant = tint_with(&image, MaterialKind::MicaAlt, false);
+        assert!(
+            mean_luminance(&variant) + 6.0 < mean_luminance(&standard),
+            "the light variant must be clearly darker than the light standard mica"
+        );
+    }
+
+    #[test]
+    fn the_two_materials_share_one_frosting_anchor() {
+        use crate::test_support::wallpaper_at;
+
+        let screen = (1920, 1080);
+        let rendered = render_texture(
+            &wallpaper_at(1920, 1080),
+            screen,
+            (0, 0, screen.0, screen.1),
+            DEFAULT_MAX_WIDTH,
+            DEFAULT_SIGMA,
+        )
+        .expect("the wallpaper must render");
+
+        // 磨砂发生在色调之前：两档材质拿到的纹理像素是同一份输入，
+        // 纹理空间的 sigma 也只有一个来源——差异只在配方，不在磨砂锚点。
+        let sigma = rendered.geometry.texture_sigma(DEFAULT_SIGMA);
+        assert!(
+            sigma > 0.0,
+            "the calibrated blur must stay anchored on the screen"
+        );
+        // 重复渲染必须逐位相同：锚点换算不依赖任何材质状态。
+        let repeated = render_texture(
+            &wallpaper_at(1920, 1080),
+            screen,
+            (0, 0, screen.0, screen.1),
+            DEFAULT_MAX_WIDTH,
+            DEFAULT_SIGMA,
+        )
+        .expect("the wallpaper must render");
+        assert_eq!(rendered.geometry.target_size, repeated.geometry.target_size);
+        assert_eq!(
+            repeated.geometry.texture_sigma(DEFAULT_SIGMA),
+            sigma,
+            "the frosting anchor must be identical for every recipe"
+        );
+        assert_eq!(
+            rendered.blurred, repeated.blurred,
+            "the pre-tint texture must be the shared input of both recipes"
+        );
+
+        let dark_standard = tint(
+            &rendered.blurred,
+            &ToneRecipe::for_material(MaterialKind::Mica, true),
+        );
+        let dark_variant = tint(
+            &rendered.blurred,
+            &ToneRecipe::for_material(MaterialKind::MicaAlt, true),
+        );
+        assert_ne!(
+            dark_standard, dark_variant,
+            "the two materials must produce visibly different tints"
+        );
+        assert!(
+            mean_luminance(&dark_variant) + 4.0 < mean_luminance(&dark_standard),
+            "the variant must keep its deeper tone on the shared anchor"
+        );
     }
 
     #[test]
@@ -575,6 +780,19 @@ mod tests {
         let mut light = base;
         light.dark = false;
         assert!(!base.matches(&light));
+
+        // 材质决定色调配方：换变体必须使旧纹理失效。
+        assert_eq!(base.material, MaterialKind::Mica);
+        let mut variant = base;
+        variant.material = MaterialKind::MicaAlt;
+        assert!(
+            !base.matches(&variant),
+            "a material switch must invalidate the request"
+        );
+        assert!(
+            !variant.matches(&base),
+            "the material comparison must be symmetric"
+        );
 
         let mut repainted = base;
         repainted.wallpaper = Some(WallpaperStamp {

@@ -17,7 +17,9 @@ use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::target::{self, Target};
 use unbound_app::AppRuntime;
-use unbound_backdrop::{BackdropCompositeAlpha, BackdropSource, DwmMaterial, MaterialKind};
+use unbound_backdrop::{
+    BackdropCompositeAlpha, BackdropSource, DwmMaterial, MaterialKind, WallpaperTexture,
+};
 use unbound_input::PointerButton;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::{ScreenRect, WindowBackdropMaterial};
@@ -264,8 +266,8 @@ fn the_mica_alt_native_path_differs_from_standard_mica_only_in_the_material() {
     );
 }
 
-/// 云母变体走自绘来源时，必须与标准云母完全一致：同样的纹理配方、同样的清屏 alpha、
-/// 同样的根透明性，且都不请求任何系统材质。
+/// 云母变体走自绘来源时，与标准云母共享同一套纹理参数与清屏 alpha、根透明性，
+/// 只有材质（色调配方）不同，且都不请求任何系统材质。
 #[test]
 fn the_mica_alt_self_drawn_path_matches_standard_mica() {
     let mut app = backdrop_app();
@@ -287,10 +289,27 @@ fn the_mica_alt_self_drawn_path_matches_standard_mica() {
         BackdropSource::SelfDrawn,
         "the self-drawn source must stay on the self-drawn path for Mica Alt"
     );
-    assert_eq!(
-        mica.texture, mica_alt.texture,
-        "Mica Alt must use the same self-drawn texture recipe as standard Mica"
-    );
+    // 宿主机主屏几何可知时才有纹理；两者必须共享除材质外的全部参数。
+    if let (Some(mica_texture), Some(mica_alt_texture)) = (mica.texture, mica_alt.texture) {
+        assert_eq!(
+            mica_texture.material,
+            MaterialKind::Mica,
+            "standard Mica must carry its own tone recipe"
+        );
+        assert_eq!(
+            mica_alt_texture.material,
+            MaterialKind::MicaAlt,
+            "Mica Alt must carry its own deeper tone recipe"
+        );
+        assert_eq!(
+            WallpaperTexture {
+                material: MaterialKind::Mica,
+                ..mica_alt_texture
+            },
+            mica_texture,
+            "Mica Alt must share every texture parameter except the material"
+        );
+    }
     // 纹理配方依赖宿主几何：主屏矩形可知时纹理必须在场。
     if unbound_backdrop::primary_screen_rect().is_some() {
         assert!(

@@ -210,6 +210,8 @@ pub struct WallpaperTexture {
     pub sigma: f32,
     /// 是否使用深色主题色调。
     pub dark: bool,
+    /// 实际生效的材质种类；它选择色调配方，并纳入纹理失效条件。
+    pub material: MaterialKind,
 }
 
 impl WallpaperTexture {
@@ -330,7 +332,7 @@ impl BackdropPlan {
             BackdropCompositeAlpha::Opaque
         };
         let texture = if self_drawn {
-            wallpaper_texture(inputs)
+            wallpaper_texture(inputs, combination.material)
         } else {
             None
         };
@@ -374,7 +376,12 @@ fn resolved_from(combination: &BackdropCombination) -> ResolvedBackdrop {
     }
 }
 
-fn wallpaper_texture(inputs: BackdropInputs) -> Option<WallpaperTexture> {
+/// 构造自绘纹理规格。
+///
+/// `material` 必须是组合解析出的**实际生效**材质，而不是用户选择值：回退到
+/// 标准云母自绘时它就是 [`MaterialKind::Mica`]，云母变体则保留自己的种类，
+/// 纹理因此带上正确的色调配方。
+fn wallpaper_texture(inputs: BackdropInputs, material: MaterialKind) -> Option<WallpaperTexture> {
     let window = inputs.window_screen_rect?;
     let screen = inputs.primary_screen_rect?;
     if window.is_empty() || screen.is_empty() {
@@ -393,6 +400,7 @@ fn wallpaper_texture(inputs: BackdropInputs) -> Option<WallpaperTexture> {
         max_width: DEFAULT_MAX_WIDTH,
         sigma: DEFAULT_SIGMA,
         dark: inputs.dark,
+        material,
     })
 }
 
@@ -832,7 +840,41 @@ mod tests {
         assert_eq!((texture.width, texture.height), (1920, 1080));
         assert_eq!((texture.screen_width, texture.screen_height), (1920, 1080));
         assert_eq!(texture.dpi_scale, 1.5);
+        assert_eq!(texture.material, MaterialKind::Mica);
         assert_eq!(plan.uv, UvRect::new(0.25, 0.25, 0.5, 0.5));
+    }
+
+    #[test]
+    fn the_texture_carries_the_effective_material_not_the_requested_one() {
+        // 云母变体自绘：纹理必须带变体材质，配方因此比标准云母更深。
+        let variant = BackdropPlan::derive(inputs(
+            BackdropSelection::new(MaterialKind::MicaAlt, BackdropSource::SelfDrawn),
+            Some(26100),
+            true,
+        ));
+        assert_eq!(
+            variant
+                .texture
+                .expect("the variant must draw a texture")
+                .material,
+            MaterialKind::MicaAlt
+        );
+
+        // 亚克力没有自绘变体：解析出的实际材质是标准云母，纹理也必须如此。
+        let fallback = BackdropPlan::derive(inputs(
+            BackdropSelection::new(MaterialKind::Acrylic, BackdropSource::SelfDrawn),
+            Some(19045),
+            true,
+        ));
+        assert_eq!(fallback.material_kind, MaterialKind::Mica);
+        assert_eq!(
+            fallback
+                .texture
+                .expect("the fallback must draw a texture")
+                .material,
+            MaterialKind::Mica,
+            "a fallback texture must not keep the unavailable material"
+        );
     }
 
     #[test]

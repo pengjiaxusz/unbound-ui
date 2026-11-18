@@ -10,7 +10,8 @@
 
 use image::{DynamicImage, ImageBuffer, Rgba};
 
-use crate::mica::{render_texture, tint, TextureGeometry};
+use crate::mica::{render_texture, tint, TextureGeometry, ToneRecipe};
+use crate::selection::MaterialKind;
 
 /// 纹理统计请求。
 #[derive(Clone, Copy, Debug)]
@@ -25,6 +26,8 @@ pub struct StatisticsRequest<'a> {
     pub sigma: f32,
     /// 是否使用深色主题色调。
     pub dark: bool,
+    /// 要统计的材质种类；它选择色调配方，标准云母与云母变体的观感因此不同。
+    pub material: MaterialKind,
 }
 
 /// 纹理统计结果。
@@ -52,7 +55,11 @@ pub fn texture_statistics(request: &StatisticsRequest<'_>) -> Option<TextureStat
         request.max_width.max(1),
         request.sigma.max(0.0),
     )?;
-    let finished = tint(&rendered.blurred, request.dark);
+    // 统计与真实生成走同一份配方：材质决定色调，磨砂锚点与材质无关。
+    let finished = tint(
+        &rendered.blurred,
+        &ToneRecipe::for_material(request.material, request.dark),
+    );
     Some(TextureStatistics {
         spatial_gradient_energy: spatial_gradient_energy(&finished, &rendered.geometry),
         luminance_bandwidth: luminance_bandwidth(&finished),
@@ -190,14 +197,24 @@ mod tests {
     /// 结构略多，实测漂移约 4%；这条断言守住「漂移有界」。
     const SCREEN_TOLERANCE: f64 = 0.06;
 
-    /// 统计一块壁纸在给定屏幕上的纹理指标。
+    /// 统计一块壁纸在给定屏幕上的标准云母纹理指标。
     fn statistics(wallpaper: &DynamicImage, screen: (u32, u32)) -> TextureStatistics {
+        statistics_for(wallpaper, screen, MaterialKind::Mica)
+    }
+
+    /// 统计一块壁纸在给定屏幕、给定材质下的纹理指标。
+    fn statistics_for(
+        wallpaper: &DynamicImage,
+        screen: (u32, u32),
+        material: MaterialKind,
+    ) -> TextureStatistics {
         texture_statistics(&StatisticsRequest {
             wallpaper,
             screen,
             max_width: DEFAULT_MAX_WIDTH,
             sigma: DEFAULT_SIGMA,
             dark: true,
+            material,
         })
         .expect("the wallpaper must render")
     }
@@ -326,6 +343,45 @@ mod tests {
             stats.spatial_gradient_energy < 20_000.0,
             "the hard edge survived with {} gradient energy",
             stats.spatial_gradient_energy
+        );
+    }
+
+    #[test]
+    fn the_statistics_seam_covers_the_mica_variant() {
+        let wallpaper = wallpaper_at(1920, 1080);
+        let screen = (1920, 1080);
+        let standard = statistics_for(&wallpaper, screen, MaterialKind::Mica);
+        let variant = statistics_for(&wallpaper, screen, MaterialKind::MicaAlt);
+
+        // 更深、更窄的色调：明度带宽与梯度能量都必须低于标准云母。
+        assert!(
+            variant.luminance_bandwidth < standard.luminance_bandwidth * 0.8,
+            "the variant keeps too much luminance spread: {} vs {}",
+            variant.luminance_bandwidth,
+            standard.luminance_bandwidth
+        );
+        assert!(
+            variant.spatial_gradient_energy < standard.spatial_gradient_energy * 0.8,
+            "the variant keeps too much contrast: {} vs {}",
+            variant.spatial_gradient_energy,
+            standard.spatial_gradient_energy
+        );
+        // 只有色调不同：色偏仍按同一比例保留，色相保真度必须留在高值区。
+        assert!(
+            variant.hue_fidelity > 0.9,
+            "the variant lost its hue fidelity: {}",
+            variant.hue_fidelity
+        );
+        assert!(
+            variant.hue_fidelity + 0.05 > standard.hue_fidelity,
+            "the variant must not trade hue fidelity for depth: {} vs {}",
+            variant.hue_fidelity,
+            standard.hue_fidelity
+        );
+        // 磨砂强度不变：变体的纹理仍有真实结构，不是一片死平。
+        assert!(
+            variant.spatial_gradient_energy > 0.0,
+            "the variant must keep the blurred wallpaper structure"
         );
     }
 }
