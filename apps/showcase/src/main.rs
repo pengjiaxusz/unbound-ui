@@ -503,8 +503,9 @@ impl Showcase {
     fn sync_ime(&mut self, _state: &mut PlatformState, window: &Window) {
         let active = self.shell().ime_active();
         if active != self.ime_allowed {
-            window.set_ime_allowed(active);
             self.ime_allowed = active;
+            window.set_ime_allowed(active);
+            ime_trace(format!("ime allowed -> {active}"));
         }
         if active {
             let scale = self.effective_scale();
@@ -520,6 +521,27 @@ impl Showcase {
         // 提交文本只经平台 IME 事件通道送达；宿主不再轮询提交通道。
         //
         // 运行时的 `ime` 事件会把帧标记为脏，因此这里无需额外处理。
+    }
+}
+
+/// 输入法诊断日志。
+///
+/// 环境变量 `UNBOUND_IME_TRACE` 或 `%TEMP%\unbound-ime.trace` 标记文件存在时
+/// 追加写入 `%TEMP%\unbound-ime.log`；正常运行时完全不产生输出。
+fn ime_trace(message: impl core::fmt::Display) {
+    if std::env::var_os("UNBOUND_IME_TRACE").is_none()
+        && !std::env::temp_dir().join("unbound-ime.trace").exists()
+    {
+        return;
+    }
+    use std::io::Write;
+    let path = std::env::temp_dir().join("unbound-ime.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{message}");
     }
 }
 
@@ -1086,6 +1108,14 @@ impl PlatformApp for Showcase {
                     },
                     unbound_platform::ImeEvent::Enabled => unbound_app::ImeUpdate::default(),
                 };
+                ime_trace(format!(
+                    "app ime enabled={} preedit={:?} commit={:?} cancelled={} focus={:?}",
+                    update.enabled,
+                    update.preedit,
+                    update.commit,
+                    update.cancelled,
+                    self.shell().focused_editor(),
+                ));
                 self.app.ime(update);
             }
             PlatformEvent::CloseRequested => {
