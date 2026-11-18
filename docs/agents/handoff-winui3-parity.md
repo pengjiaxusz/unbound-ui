@@ -125,3 +125,22 @@ pwsh -NoProfile -File .scratch/winui3-parity-system/publish-github-issues.ps1
 ```
 
 即可自动在 GitHub Issues 中创建父 Spec Issue 及 10 张带 `ready-for-agent` 标签与 `Blocked by` 阻塞依赖关系的子工单。
+
+---
+
+## 5. 2026-11 实施进度快照
+
+| 工单 | 状态 | 说明 |
+| --- | --- | --- |
+| 01 状态拼版 + ROI 四重门禁 + 双端指纹缓存 | 代码完成 | `parity.rs` / `png_diff.rs` / 参考宿主均已落地，纯逻辑测试通过；实机采集仍需 GPU + .NET |
+| 02 三合一清单 + 规范名扩展映射 | 代码完成 | 新增 `canonical.rs`：`WidgetCatalogId::winui3_name` / `from_winui3_name` / `class`，并补公开类型别名 |
+| 03 首批 6 个试点控件 | 代码完成 | `pilot_geometry.rs` 锁定 32px 行高、4px 圆角与 ToggleSwitch Header 53px 三分段；实机 ROI 待 GPU |
+| 04 第一批 12 个基准控件 | 代码完成 | 参考宿主与差分器已接入 46 个控件；`NumberBox` / `AutoSuggestBox` 固有高度统一 32px |
+| 05 第二批 23 个基准控件 | 代码完成 | 导航、浮层、集合、日期类全部进入 `SUPPORTED_CONTROLS` 与 `Catalog.cs` |
+| 06 P0 缺失控件（7 个） | 已实现 | `HyperlinkButton`、`RepeatButton`、`DropDownButton`、`ToggleSplitButton`、`PasswordBox`、`DatePickerWheel`、`CalendarDatePicker` |
+| 07 P1/P2 缺失控件 | 已实现 | 18 个新目录变体 + `PaginationStyle::Dots`；目录总数 134 |
+| 08 规范名收缩迁移 | 进行中 | 目录枚举与展台标题切换到 WinUI 3 官方名 |
+| 09 多后景矩阵解锁 | 阻塞 | `--backdrop all` 与四种合成底板已就绪，但 `unbound-backdrop` 目前只实现 Mica，`mica_alt` / `acrylic` 需外部管线完工 |
+| 10 Fluent 技能终版 + 43 控件巡检 | 阻塞 | 依赖 08/09；REFERENCE 已补试点实测表 |
+
+> 环境约束：当前会话机器没有 .NET SDK、Vulkan 参考截图与云母多材质管线，因此所有「实机像素差分」验收项只能完成代码与门禁层，不能伪造通过结论。拥有 GPU/.NET 的机器按第 2.2 节命令跑矩阵即可。
