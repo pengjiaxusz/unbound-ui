@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use showcase::backdrop_compare::{BackdropCompareRun, CompareReport, CompareStep};
-use showcase::backdrop_host::window_backdrop_request;
+use showcase::backdrop_host::{window_backdrop_request, WindowBackdropRequest};
 use showcase::frame_plan::{frame_size, needs_rebuild, upload_plan};
 use showcase::runtime_app::GalleryRuntime;
 use showcase::shell::GalleryApp;
@@ -406,6 +406,22 @@ fn window_hwnd(window: &Window) -> Option<isize> {
     }
 }
 
+/// 按计划产出的单一请求下发系统材质。
+///
+/// DWM 通道与 accent policy 通道互斥：这里用 `match` 保证每次只走一条。切回
+/// DWM 通道前先清掉可能残留的 accent policy，避免上一档的亚克力继续叠加。
+fn apply_window_backdrop_request(hwnd: isize, request: WindowBackdropRequest) {
+    match request {
+        WindowBackdropRequest::Dwm(material) => {
+            let _ = unbound_platform::clear_window_accent_tint(hwnd);
+            let _ = unbound_platform::set_window_backdrop(hwnd, material);
+        }
+        WindowBackdropRequest::AccentTint(argb) => {
+            let _ = unbound_platform::set_window_accent_tint(hwnd, argb);
+        }
+    }
+}
+
 impl Showcase {
     /// 将解析后的后景计划同步到宿主资源。
     ///
@@ -421,9 +437,9 @@ impl Showcase {
         if let Some(renderer) = &mut self.renderer {
             renderer.set_clear_alpha(plan.clear_alpha);
         }
-        let (material, lock_mica) = window_backdrop_request(&plan);
+        let (request, lock_mica) = window_backdrop_request(&plan);
         if let Some(hwnd) = window_hwnd(window) {
-            let _ = unbound_platform::set_window_backdrop(hwnd, material);
+            apply_window_backdrop_request(hwnd, request);
         }
         if let Some(metrics) = &self.frame_metrics {
             // 原生材质在场时锁定失焦激活态，避免窗口失活时材质退化为纯色。
@@ -724,6 +740,10 @@ impl PlatformApp for Showcase {
         let premultiplied_alpha = surface.supports_premultiplied_alpha(&gpu).unwrap_or(false);
         self.shell_mut()
             .set_backdrop_capabilities(windows_build, premultiplied_alpha);
+        // accent policy 通道的能力单独探测，单独传入：它只影响亚克力自定义色调
+        // 子档，绝不参与其它材质的可用性判定。
+        self.shell_mut()
+            .set_backdrop_accent_capability(unbound_platform::accent_policy_export_available());
         // 合成方式由平台能力固定，与用户当前选择无关：支持的机器整条生命周期都用
         // 预乘 alpha，即使此刻显示的是关闭/自绘路径。这样后续切到原生时无需重配交换链。
         self.composite_alpha = match self.shell().state.backdrop_plan.composition {
@@ -801,10 +821,10 @@ impl PlatformApp for Showcase {
         // 后景材质由计划决定：启动时必须请求计划给出的那一档系统材质——亚克力、
         // 云母变体与跟随系统各有各的系统取值，不能一律当成标准云母。自绘与关闭
         // 都落在「不请求材质」上，窗口因此保持不透明。
-        let (backdrop_material, lock_backdrop) =
+        let (backdrop_request, lock_backdrop) =
             window_backdrop_request(&self.shell().state.backdrop_plan);
         unbound_platform::set_window_dark_mode(hwnd, self.shell().state.theme.is_dark());
-        let _ = unbound_platform::set_window_backdrop(hwnd, backdrop_material);
+        apply_window_backdrop_request(hwnd, backdrop_request);
         // 原生模式启用失焦锁定，避免窗口失活时云母退化为纯色。
         metrics.set_lock_mica_active(lock_backdrop);
         self.frame_metrics = Some(metrics);

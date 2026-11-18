@@ -75,6 +75,7 @@ fn caps_of(case: &CapabilityCase) -> BackdropCapabilities {
     BackdropCapabilities {
         windows_build: case.build,
         premultiplied_alpha_supported: case.premultiplied,
+        accent_policy_export: false,
     }
 }
 
@@ -93,7 +94,8 @@ fn expected_coverage(material: MaterialKind) -> SelfDrawnCoverage {
         MaterialKind::None
         | MaterialKind::FollowSystem
         | MaterialKind::Acrylic
-        | MaterialKind::Immersive => SelfDrawnCoverage::NoVariant,
+        | MaterialKind::Immersive
+        | MaterialKind::AcrylicTint => SelfDrawnCoverage::NoVariant,
     }
 }
 
@@ -115,7 +117,7 @@ fn a_capability_shortfall_never_mixes_with_a_fallback() {
         }
     }
     assert_eq!(
-        checked, 144,
+        checked, 168,
         "every material, source and capability case must be pinned"
     );
 }

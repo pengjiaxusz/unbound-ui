@@ -15,6 +15,7 @@ fn capabilities(
     BackdropCapabilities {
         windows_build,
         premultiplied_alpha_supported,
+        accent_policy_export: false,
     }
 }
 
@@ -23,7 +24,10 @@ fn immersive_is_the_only_experimental_material() {
     for material in MaterialKind::ALL {
         assert_eq!(
             material.is_experimental(),
-            material == MaterialKind::Immersive,
+            matches!(
+                material,
+                MaterialKind::Immersive | MaterialKind::AcrylicTint
+            ),
             "only the immersive material must be marked experimental for {material:?}"
         );
     }

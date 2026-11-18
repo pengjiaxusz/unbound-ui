@@ -1,12 +1,12 @@
 //! 后景两轴对照页（Backdrop）。
 //!
 //! 页面同时暴露后景的两个正交维度：**材质种类**（无、跟随系统、标准云母、云母变体、
-//! 亚克力、沉浸式）与**来源**（自动、系统原生、引擎自绘）。两个维度各自成行，
-//! 互不影响：改材质不会动来源，改来源也不会动材质。
+//! 亚克力、沉浸式、亚克力自定义色调）与**来源**（自动、系统原生、引擎自绘）。两个
+//! 维度各自成行，互不影响：改材质不会动来源，改来源也不会动材质。
 //!
-//! 读出面板同时显示四组事实：用户的选择、宿主解析出的实际生效组合、平台探测到的
-//! Windows 构建号、所选材质的原生可用性；回退原因与机器能力不足的原因各占一整行，
-//! 没有发生时显式写「None」。
+//! 读出面板同时显示五组事实：用户的选择、宿主解析出的实际生效组合、平台探测到的
+//! Windows 构建号、所选材质的原生可用性、当前亚克力自定义色调；回退原因与机器能力
+//! 不足的原因各占一整行，没有发生时显式写「None」。
 //!
 //! 两类不可用在界面上走两条通道：机器承载不了的组合进入禁用态；显式自绘来源撞上
 //! 没有自绘变体的材质属于**非法组合**，仍然可以选中，选中的按钮带告警色顶条、
@@ -26,7 +26,7 @@ use unbound_input::CursorKind;
 /// 材质行的起始部件编号。
 ///
 /// 后景页的部件编号分两段，互不重叠：**材质行**从 [`MATERIAL_PART_BASE`] 起，按材质
-/// 种类顺序占 6 个编号；**来源行**从 [`SOURCE_PART_BASE`] 起，按来源顺序占 3 个编号。
+/// 种类顺序占 7 个编号；**来源行**从 [`SOURCE_PART_BASE`] 起，按来源顺序占 3 个编号。
 /// 外壳按同一套编号派发点击，因此这里定义一次、两处使用。
 pub const MATERIAL_PART_BASE: u16 = 1;
 
@@ -42,7 +42,9 @@ const CELL_PADDING: f32 = 20.0;
 const FIELD_LABEL_W: f32 = 88.0;
 const REASON_NAME_W: f32 = 132.0;
 /// 读出面板的高度。
-const READOUT_H: f32 = 146.0;
+///
+/// 五组事实按两列排成三行，下面再接两行原因，因此比四组事实的面板更高。
+const READOUT_H: f32 = 180.0;
 
 pub const BACKDROP_INFO: PageInfo = PageInfo {
     title: "Backdrop Material & Source Axes",
@@ -80,11 +82,19 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
     let combination = ctx.state.backdrop_combination;
     let windows_build = ctx.state.windows_build;
     let native_available = ctx.state.backdrop_native_available();
+    let accent_tint = ctx.state.backdrop_accent_tint;
     // 当前选择是否落在「组合非法但允许选中」上：它与机器能力不足是两回事，
     // 前者允许选中，只在按钮上做可见标记，不禁用。
     let illegal_combination = ctx.state.backdrop_combination_illegal();
 
-    draw_readout(ctx, selection, combination, windows_build, native_available);
+    draw_readout(
+        ctx,
+        selection,
+        combination,
+        windows_build,
+        native_available,
+        accent_tint,
+    );
 
     // ---------- 两行按钮 ----------
     let hint_h = 30.0;
@@ -218,7 +228,7 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
     );
 }
 
-/// 绘制读出面板：四组事实加两行原因。
+/// 绘制读出面板：五组事实加两行原因。
 ///
 /// 下半部两行整宽，几十个字的原因说明才读得清。
 fn draw_readout(
@@ -227,6 +237,7 @@ fn draw_readout(
     combination: BackdropCombination,
     windows_build: Option<u32>,
     native_available: bool,
+    accent_tint: u32,
 ) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
@@ -268,6 +279,8 @@ fn draw_readout(
         ),
         ("WINDOWS BUILD", build_text, false),
         ("NATIVE AVAILABLE", availability_text, false),
+        // 色调是我们自己的选择，十六进制展示即可（位序为 AABBGGRR）。
+        ("ACCENT TINT", format!("#{accent_tint:08X}"), false),
     ];
     let column_gap = 14.0;
     let column_w = ((info.size.x - 24.0 - column_gap) / 2.0).max(120.0);
@@ -308,8 +321,8 @@ fn draw_readout(
         );
     }
 
-    // 回退原因与不可用原因各占一整行。
-    let reason_top = info.origin.y + 6.0 + 2.0 * field_h + 4.0;
+    // 回退原因与不可用原因各占一整行；五组事实占三行，因此原因行从第三行下方开始。
+    let reason_top = info.origin.y + 6.0 + 3.0 * field_h + 4.0;
     let reason_h = 30.0;
     draw_reason_row(
         ctx,
@@ -577,7 +590,7 @@ fn draw_choice_button(
 
 /// 按标签宽度分配一行按钮，并给出每个按钮的矩形与标签字号。
 ///
-/// 材质行有六档、标签长度相差很大：等分宽度会让长标签挤出按钮，因此按
+/// 材质行有七档、标签长度相差很大：等分宽度会让长标签挤出按钮，因此按
 /// 「标签宽度 + 内边距」加权分配；实在放不下时按比例缩字号，宁可字小也不越界。
 fn button_cells(
     ctx: &mut DemoCtx<'_, '_>,
@@ -633,6 +646,7 @@ fn hint_text(combination: BackdropCombination) -> String {
         (MaterialKind::None, _) => {
             "Backdrop disabled: the root surface uses the opaque theme colour.".to_string()
         }
+        (MaterialKind::AcrylicTint, BackdropSource::Native) => "Accent policy path active: the system compositor draws the tinted acrylic behind a transparent swapchain; this bypasses the DWM system material channel.".to_string(),
         (_, BackdropSource::Native) => format!(
             "Native path active: the system compositor draws the {} material behind a transparent swapchain.",
             combination.material.label()

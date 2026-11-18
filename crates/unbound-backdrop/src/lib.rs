@@ -38,14 +38,17 @@ mod test_support;
 
 pub use mica::{generate, MicaImage, MicaRequest, DEFAULT_MAX_WIDTH, DEFAULT_SIGMA};
 pub use plan::{
-    sample_uv, system_material_request, BackdropCompositeAlpha, BackdropInputs, BackdropPlan,
-    DwmMaterial, MaterialRequest, PixelRect, UvRect, WallpaperTexture, MATERIAL_REQUEST_TABLE,
+    material_channel, sample_uv, system_material_request, AcrylicTintPreset,
+    BackdropCompositeAlpha, BackdropInputs, BackdropPlan, DwmMaterial, MaterialChannel,
+    MaterialRequest, PixelRect, UvRect, WallpaperTexture, ACRYLIC_TINT_PRESETS,
+    DEFAULT_ACRYLIC_TINT_ARGB, MATERIAL_REQUEST_TABLE,
 };
 pub use selection::{
     has_self_drawn_variant, is_illegal_combination, native_available, required_build,
     resolve_combination, selectable, self_drawn_coverage, unavailable_reason, BackdropCapabilities,
     BackdropCombination, BackdropSelection, BackdropSource, FallbackReason, MaterialKind,
-    SelfDrawnCoverage, UnavailableReason, IMMERSIVE_BACKDROP_MIN_BUILD, NATIVE_MICA_MIN_BUILD,
+    SelfDrawnCoverage, UnavailableReason, ACCENT_POLICY_ACRYLIC_MIN_BUILD,
+    IMMERSIVE_BACKDROP_MIN_BUILD, NATIVE_MICA_MIN_BUILD,
 };
 pub use state::{BackdropGenerator, MICA_READY_EVENT_ID};
 pub use stats::{texture_statistics, StatisticsRequest, TextureStatistics};

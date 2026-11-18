@@ -212,6 +212,7 @@ mod win32 {
     use super::*;
     use core::ffi::c_void;
 
+    use ::windows::core::BOOL;
     use ::windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
     use ::windows::Win32::Graphics::Dwm::{
         DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -220,6 +221,7 @@ mod win32 {
     use ::windows::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromWindow, ScreenToClient, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
+    use ::windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
     use ::windows::Win32::UI::Controls::MARGINS;
     use ::windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
     use ::windows::Win32::UI::WindowsAndMessaging::{
@@ -249,6 +251,106 @@ mod win32 {
     /// 候选值的回读相等才可能有意义。这里避开了 `0x7FFFFFFF` 这类极端值：实测写入它
     /// 会让 `dwmapi` 在进程内触发访问冲突，探测代码绝不能拿它当探针。
     const BACKDROP_PROBE_SENTINELS: [i32; 2] = [999, 0x0001_0000];
+
+    /// `WCA_ACCENT_POLICY`：`SetWindowCompositionAttribute` 的 accent policy 属性编号。
+    ///
+    /// 该枚举从未出现在公开头文件里，取值来自社区逆向资料（与 `windows` crate 里
+    /// 未收录的 `WINDOWCOMPOSITIONATTRIB` 一致）。
+    const WCA_ACCENT_POLICY: u32 = 19;
+
+    /// `ACCENT_ENABLE_ACRYLICBLURBEHIND`：亚克力模糊后景。
+    ///
+    /// 公开资料普遍记载为 Windows 10 1803（build 17134）引入。未公开意味着不能
+    /// 把它当稳定契约：系统可能静默忽略，宿主必须按返回值判断是否真正生效。
+    const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
+
+    /// `ACCENT_ENABLE_NONE`：关闭 accent policy，恢复默认合成。
+    const ACCENT_ENABLE_NONE: u32 = 0;
+
+    /// 社区逆向资料里的 `ACCENT_POLICY` 布局（4 个 32 位字段）。
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug, Default)]
+    struct AccentPolicy {
+        /// `ACCENT_STATE` 取值。
+        accent_state: u32,
+        /// 额外的绘制标志位；保持 0 使用默认行为。
+        accent_flags: u32,
+        /// 亚克力色调，ABGR 顺序，alpha 分量参与半透明。
+        gradient_color: u32,
+        /// 动画编号；保持 0 表示不使用动画。
+        animation_id: u32,
+    }
+
+    /// `WINDOWCOMPOSITIONATTRIBDATA` 布局：属性编号、数据指针与字节长度。
+    #[repr(C)]
+    struct WindowCompositionAttributeData {
+        /// `WINDOWCOMPOSITIONATTRIB` 取值。
+        attrib: u32,
+        /// 指向具体属性结构体的指针。
+        data: *mut c_void,
+        /// 属性结构体的字节长度。
+        size: usize,
+    }
+
+    /// 未公开导出 `SetWindowCompositionAttribute` 的函数签名。
+    type SetWindowCompositionAttributeFn =
+        unsafe extern "system" fn(HWND, *mut WindowCompositionAttributeData) -> BOOL;
+
+    /// 动态解析 `SetWindowCompositionAttribute`。
+    ///
+    /// 该导出不在任何公开头文件与导入库里，因此只能用 `GetProcAddress` 运行时解析，
+    /// 绝不能写成硬依赖导入。解析失败返回 `None`，调用方据此判定该通道不可用。
+    fn resolve_set_window_composition_attribute() -> Option<SetWindowCompositionAttributeFn> {
+        use ::windows::core::{s, w};
+
+        unsafe {
+            let module = GetModuleHandleW(w!("user32.dll")).ok()?;
+            let proc = GetProcAddress(module, s!("SetWindowCompositionAttribute"))?;
+            Some(core::mem::transmute::<
+                unsafe extern "system" fn() -> isize,
+                SetWindowCompositionAttributeFn,
+            >(proc))
+        }
+    }
+
+    /// 下发一次 accent policy。语义见外层 [`super::set_window_accent_tint`]。
+    fn set_accent_policy(hwnd: isize, state: u32, gradient_color: u32) -> bool {
+        if hwnd == 0 {
+            return false;
+        }
+        let Some(set_window_composition_attribute) = resolve_set_window_composition_attribute()
+        else {
+            return false;
+        };
+        let mut policy = AccentPolicy {
+            accent_state: state,
+            accent_flags: 0,
+            gradient_color,
+            animation_id: 0,
+        };
+        let mut data = WindowCompositionAttributeData {
+            attrib: WCA_ACCENT_POLICY,
+            data: (&raw mut policy).cast::<c_void>(),
+            size: core::mem::size_of_val(&policy),
+        };
+        unsafe { set_window_composition_attribute(hwnd_from_isize(hwnd), &mut data).as_bool() }
+    }
+
+    /// 亚克力自定义色调：开启 `ACCENT_ENABLE_ACRYLICBLURBEHIND` 并写入色调。
+    pub fn set_accent_tint(hwnd: isize, argb: u32) -> bool {
+        set_accent_policy(hwnd, ACCENT_ENABLE_ACRYLICBLURBEHIND, argb)
+    }
+
+    /// 关闭 accent policy，把窗口交还给默认合成（含 DWM 材质通道）。
+    pub fn clear_accent_tint(hwnd: isize) -> bool {
+        set_accent_policy(hwnd, ACCENT_ENABLE_NONE, 0)
+    }
+
+    /// 运行时能否解析出该未公开导出。语义见外层
+    /// [`super::accent_policy_export_available`]。
+    pub fn accent_policy_export_available() -> bool {
+        resolve_set_window_composition_attribute().is_some()
+    }
 
     #[inline]
     fn hwnd_from_isize(raw: isize) -> HWND {
@@ -678,6 +780,63 @@ pub fn probe_immersive_backdrop(hwnd: isize) -> Option<i32> {
     }
 }
 
+/// 运行时能否解析出未公开导出 `user32.dll!SetWindowCompositionAttribute`。
+///
+/// 这是亚克力自定义色调子档的专属能力探测：该导出不在导入库里，只能运行时
+/// `GetProcAddress`；解析失败就说明这条通道在这台机器上不存在，界面必须禁用该
+/// 子档。函数本身不做窗口级写入，因此可在创建窗口之前调用，且从不 panic。
+///
+/// 「冒烟探测」由宿主在真正下发时通过 [`set_window_accent_tint`] 的返回值完成：
+/// 这里只保证导出存在，返回值才代表系统接受了这次写入。
+#[must_use]
+pub fn accent_policy_export_available() -> bool {
+    #[cfg(windows)]
+    {
+        win32::accent_policy_export_available()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// 通过未公开的 accent policy 通道设置亚克力自定义色调。
+///
+/// 该函数与 [`set_window_backdrop`] 是两条平行的写入路径，宿主必须按实际生效的
+/// 材质二选一，绝不能同时下发。`argb` 是 ABGR 顺序的色调（alpha 分量参与半透明）。
+///
+/// 返回 `true` 表示调用成功且系统接受了本次写入；导出解析失败、窗口句柄为 0、
+/// 或系统拒绝时返回 `false`。本函数从不 panic。
+#[must_use]
+pub fn set_window_accent_tint(hwnd: isize, argb: u32) -> bool {
+    #[cfg(windows)]
+    {
+        win32::set_accent_tint(hwnd, argb)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (hwnd, argb);
+        false
+    }
+}
+
+/// 关闭 accent policy 通道，把窗口交还给默认合成。
+///
+/// 从亚克力自定义色调切到其它材质时必须调用一次，避免上一档的亚克力继续叠加在
+/// 新的系统材质之上。返回 `false` 表示没有可用的通道或系统拒绝；从不 panic。
+#[must_use]
+pub fn clear_window_accent_tint(hwnd: isize) -> bool {
+    #[cfg(windows)]
+    {
+        win32::clear_accent_tint(hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,6 +848,24 @@ mod tests {
             probe_immersive_backdrop(0),
             None,
             "a headless probe must never confirm a system value"
+        );
+    }
+
+    #[test]
+    fn accent_policy_resolution_is_headless_safe() {
+        // 导出解析可能成功也可能失败，取决于运行环境；两种结果都合法，但绝不能 panic。
+        let _resolved = accent_policy_export_available();
+    }
+
+    #[test]
+    fn accent_policy_writes_reject_a_null_window() {
+        assert!(
+            !set_window_accent_tint(0, 0xCC1F_1F1F),
+            "a null window must never receive an accent policy"
+        );
+        assert!(
+            !clear_window_accent_tint(0),
+            "a null window must never receive an accent policy clear"
         );
     }
 

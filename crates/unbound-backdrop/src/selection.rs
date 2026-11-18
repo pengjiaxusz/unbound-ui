@@ -23,9 +23,21 @@ pub const NATIVE_MICA_MIN_BUILD: u32 = 22621;
 /// 该档是公开文档未收录的实验档，只在较新系统版本上生效。
 pub const IMMERSIVE_BACKDROP_MIN_BUILD: u32 = 26100;
 
+/// 亚克力自定义色调子档要求的最低系统构建号。
+///
+/// 该档走 `SetWindowCompositionAttribute` 的 accent policy 通道，而不是
+/// `DWMWA_SYSTEMBACKDROP_TYPE`。`ACCENT_ENABLE_ACRYLICBLURBEHIND = 4` 是社区
+/// 逆向资料给出的取值，普遍记载为 Windows 10 1803（build 17134）引入；微软从未
+/// 公开确认，且该效果在部分后续版本上被系统策略削弱或关闭。因此这里只把它当作
+/// 门槛下沿，真正的可用性还要看运行时能否解析出该导出并通过冒烟探测。
+///
+/// 与 [`NATIVE_MICA_MIN_BUILD`] 刻意分开：这条通道的出现时间早于 Win11 云母，
+/// 复用它会把可用的 Win10 机器误判为不可用。
+pub const ACCENT_POLICY_ACRYLIC_MIN_BUILD: u32 = 17134;
+
 /// 材质种类：后景在视觉上呈现哪一种系统材质。
 ///
-/// 这是封闭的六档集合：新增一档必须同时给出它的门槛、它的系统材质请求，
+/// 这是封闭的七档集合：新增一档必须同时给出它的门槛、它的系统材质请求，
 /// 以及它在没有自绘变体时的回退行为。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum MaterialKind {
@@ -42,17 +54,20 @@ pub enum MaterialKind {
     Acrylic,
     /// 沉浸式后景（实验档）。
     Immersive,
+    /// 亚克力自定义色调（实验档，走 accent policy 通道）。
+    AcrylicTint,
 }
 
 impl MaterialKind {
     /// 全部材质种类，顺序与 [`Self::index`] 一致。
-    pub const ALL: [MaterialKind; 6] = [
+    pub const ALL: [MaterialKind; 7] = [
         Self::None,
         Self::FollowSystem,
         Self::Mica,
         Self::MicaAlt,
         Self::Acrylic,
         Self::Immersive,
+        Self::AcrylicTint,
     ];
 
     /// 稳定的索引（用于界面部件编号与持久化）。
@@ -66,6 +81,7 @@ impl MaterialKind {
             Self::MicaAlt => 3,
             Self::Acrylic => 4,
             Self::Immersive => 5,
+            Self::AcrylicTint => 6,
         }
     }
 
@@ -79,6 +95,7 @@ impl MaterialKind {
             3 => Self::MicaAlt,
             4 => Self::Acrylic,
             5 => Self::Immersive,
+            6 => Self::AcrylicTint,
             _ => Self::Mica,
         }
     }
@@ -94,6 +111,7 @@ impl MaterialKind {
             Self::MicaAlt => "MicaAlt",
             Self::Acrylic => "Acrylic",
             Self::Immersive => "Immersive",
+            Self::AcrylicTint => "AcrylicTint",
         }
     }
 
@@ -108,18 +126,21 @@ impl MaterialKind {
             Self::MicaAlt => "System Mica variant material",
             Self::Acrylic => "System acrylic material",
             Self::Immersive => "Experimental immersive backdrop material",
+            Self::AcrylicTint => {
+                "Experimental acrylic material with a custom tint over the accent policy channel"
+            }
         }
     }
 
     /// 该材质种类是否是实验档。
     ///
     /// 实验档表示「尚未被公开文档或实测证实为稳定可用」的材质：取值可能在任何
-    /// 一次系统更新里改变，界面必须把它与常规档显式区分开。当前只有沉浸式后景
-    /// 是实验档。
+    /// 一次系统更新里改变，界面必须把它与常规档显式区分开。沉浸式后景的系统取值
+    /// 未被公开收录；亚克力自定义色调走未公开的 accent policy 导出。两者都是实验档。
     #[must_use]
     #[deny(unreachable_patterns)]
     pub const fn is_experimental(self) -> bool {
-        matches!(self, Self::Immersive)
+        matches!(self, Self::Immersive | Self::AcrylicTint)
     }
 }
 
@@ -193,6 +214,11 @@ pub struct BackdropCapabilities {
     pub windows_build: Option<u32>,
     /// 图形表面是否支持预乘 alpha 合成。
     pub premultiplied_alpha_supported: bool,
+    /// 运行时能否解析出 `SetWindowCompositionAttribute` 并通过冒烟探测。
+    ///
+    /// 这是亚克力自定义色调子档的专属能力：它走 accent policy 通道，与
+    /// `DWMWA_SYSTEMBACKDROP_TYPE` 没有关系。其余材质档不得读取本字段。
+    pub accent_policy_export: bool,
 }
 
 impl BackdropCapabilities {
@@ -287,6 +313,12 @@ pub enum UnavailableReason {
     /// 平台层的「写入后回读」探测也无法把真实接受与单纯回显区分开，因此宿主
     /// 没有可下发的系统材质请求。该原因必须让用户在界面上看得见。
     SystemChannelUnconfirmed,
+    /// 未公开的 accent policy 通道在运行时不可用。
+    ///
+    /// 亚克力自定义色调子档依赖 `user32.dll` 的未公开导出
+    /// `SetWindowCompositionAttribute`。导出解析失败或冒烟探测失败时，宿主没有
+    /// 任何可下发的通道，该档必须禁用而不是悄悄退回 DWM 材质。
+    AccentPolicyUnavailable,
 }
 
 impl UnavailableReason {
@@ -299,6 +331,7 @@ impl UnavailableReason {
             Self::BuildUnknown => "System build unknown",
             Self::PremultipliedAlphaUnsupported => "Premultiplied alpha unsupported",
             Self::SystemChannelUnconfirmed => "System channel unconfirmed",
+            Self::AccentPolicyUnavailable => "Accent policy unavailable",
         }
     }
 
@@ -319,6 +352,9 @@ impl UnavailableReason {
             Self::SystemChannelUnconfirmed => {
                 "The system backdrop value for this material is unconfirmed, so the system compositor cannot draw it"
                     .to_string()
+            }
+            Self::AccentPolicyUnavailable => {
+                "The undocumented accent policy channel is unavailable on this system".to_string()
             }
         }
     }
@@ -350,6 +386,8 @@ pub const fn required_build(material: MaterialKind) -> u32 {
         | MaterialKind::MicaAlt
         | MaterialKind::Acrylic => NATIVE_MICA_MIN_BUILD,
         MaterialKind::Immersive => IMMERSIVE_BACKDROP_MIN_BUILD,
+        // 自定义色调亚克力走另一条通道，出现时间早于 Win11 云母，必须用自己的门槛。
+        MaterialKind::AcrylicTint => ACCENT_POLICY_ACRYLIC_MIN_BUILD,
     }
 }
 
@@ -363,6 +401,10 @@ pub const fn required_build(material: MaterialKind) -> u32 {
 /// 真实取值（详见 `unbound_platform::win32_frame::probe_immersive_backdrop` 的文档），
 /// 因此宿主没有可下发的系统材质请求，**任何环境都不能走原生路径**。
 /// 构建号未知同样一律视为不可用。
+///
+/// 亚克力自定义色调也不走 DWM 通道：它要求构建号不低于
+/// [`ACCENT_POLICY_ACRYLIC_MIN_BUILD`]、表面支持预乘合成，**并且**运行时能解析出
+/// `SetWindowCompositionAttribute`（由平台层探测后传入 `accent_policy_export`）。
 #[must_use]
 pub fn native_available(material: MaterialKind, caps: &BackdropCapabilities) -> bool {
     match material {
@@ -370,6 +412,12 @@ pub fn native_available(material: MaterialKind, caps: &BackdropCapabilities) -> 
         MaterialKind::None => true,
         // 实验档没有可下发的系统取值，原生通道不存在。
         MaterialKind::Immersive => false,
+        MaterialKind::AcrylicTint => {
+            caps.windows_build
+                .is_some_and(|build| build >= required_build(material))
+                && caps.premultiplied_alpha_supported
+                && caps.accent_policy_export
+        }
         MaterialKind::FollowSystem
         | MaterialKind::Mica
         | MaterialKind::MicaAlt
@@ -385,6 +433,7 @@ pub fn native_available(material: MaterialKind, caps: &BackdropCapabilities) -> 
 ///
 /// 可用时返回 `None`；不可用时给出可展示的原因。沉浸式后景先报构建号门槛，
 /// 通过门槛后再报「系统取值未确认」，避免把实验档的问题误报成机器太旧。
+/// 亚克力自定义色调同样先报构建号与预乘合成，最后才报 accent policy 通道不可用。
 /// 其余各档的构建号不足优先于预乘合成不支持。
 #[must_use]
 pub fn unavailable_reason(
@@ -401,6 +450,23 @@ pub fn unavailable_reason(
                 UnavailableReason::PremultipliedAlphaUnsupported
             }
             Some(_) => UnavailableReason::SystemChannelUnconfirmed,
+        });
+    }
+    if material == MaterialKind::AcrylicTint {
+        if native_available(material, caps) {
+            return None;
+        }
+        return Some(match caps.windows_build {
+            None => UnavailableReason::BuildUnknown,
+            Some(build) if build < ACCENT_POLICY_ACRYLIC_MIN_BUILD => {
+                UnavailableReason::BuildTooLow {
+                    required: ACCENT_POLICY_ACRYLIC_MIN_BUILD,
+                }
+            }
+            Some(_) if !caps.premultiplied_alpha_supported => {
+                UnavailableReason::PremultipliedAlphaUnsupported
+            }
+            Some(_) => UnavailableReason::AccentPolicyUnavailable,
         });
     }
     if native_available(material, caps) {
@@ -429,10 +495,12 @@ pub enum SelfDrawnCoverage {
 /// 某一材质种类在自绘路径上的覆盖声明。
 ///
 /// 只有标准云母与云母变体属于「等价重现」：它们本身就是壁纸模糊加主题色调的
-/// 产物，自绘路径复刻的是同一套配方。其余三档各有一条明确的「无变体」理由：
+/// 产物，自绘路径复刻的是同一套配方。其余四档各有一条明确的「无变体」理由：
 ///
 /// - **亚克力**的辨识特征是噪点纹理与半透明层叠感，壁纸模糊做不出这两点，
 ///   自造变体只会得到一份误导性的对照；
+/// - **亚克力自定义色调**只是亚克力换了一种色调来源，自绘同样做不出噪点与层叠感，
+///   因此与亚克力一样没有变体，非法组合的回退规则也一致；
 /// - **沉浸式后景**是系统里并不存在的取值，没有可对照的原生外观，自然也无从
 ///   自绘；
 /// - **跟随系统**是一条选择策略而不是一种外观，自绘路径无法预知系统会选什么。
@@ -446,7 +514,8 @@ pub const fn self_drawn_coverage(material: MaterialKind) -> SelfDrawnCoverage {
         MaterialKind::None
         | MaterialKind::FollowSystem
         | MaterialKind::Acrylic
-        | MaterialKind::Immersive => SelfDrawnCoverage::NoVariant,
+        | MaterialKind::Immersive
+        | MaterialKind::AcrylicTint => SelfDrawnCoverage::NoVariant,
     }
 }
 
@@ -631,8 +700,8 @@ mod tests {
 
     /// 一档平台能力用例。
     ///
-    /// 期望的不可用原因都是手写字面量，独立于被测实现。沉浸式后景的门槛
-    /// 高于其余四档，因此两者的不可用原因分开声明。
+    /// 期望的不可用原因都是手写字面量，独立于被测实现。沉浸式后景与亚克力自定义
+    /// 色调各有自己的门槛，因此三组不可用原因分开声明。
     struct CapabilityCase {
         /// 用例名称，仅用于断言消息。
         name: &'static str,
@@ -644,6 +713,11 @@ mod tests {
         unavailable_standard: Option<UnavailableReason>,
         /// 沉浸式后景的不可用原因；`None` 表示可用。
         unavailable_immersive: Option<UnavailableReason>,
+        /// 亚克力自定义色调的不可用原因；`None` 表示可用。
+        ///
+        /// 矩阵里 accent policy 导出一律视为可解析；导出缺失的独立用例见
+        /// `the_accent_policy_tier_has_its_own_gate`。
+        unavailable_accent: Option<UnavailableReason>,
     }
 
     /// 能力矩阵：覆盖构建号未知、门槛下沿、门槛上沿与实验档门槛两侧。
@@ -654,6 +728,7 @@ mod tests {
             premultiplied: true,
             unavailable_standard: Some(UnavailableReason::BuildUnknown),
             unavailable_immersive: Some(UnavailableReason::BuildUnknown),
+            unavailable_accent: Some(UnavailableReason::BuildUnknown),
         },
         CapabilityCase {
             name: "unknown build without premultiplied alpha",
@@ -661,6 +736,7 @@ mod tests {
             premultiplied: false,
             unavailable_standard: Some(UnavailableReason::BuildUnknown),
             unavailable_immersive: Some(UnavailableReason::BuildUnknown),
+            unavailable_accent: Some(UnavailableReason::BuildUnknown),
         },
         CapabilityCase {
             name: "build just below the mica gate",
@@ -672,6 +748,8 @@ mod tests {
             unavailable_immersive: Some(UnavailableReason::BuildTooLow {
                 required: IMMERSIVE_BACKDROP_MIN_BUILD,
             }),
+            // 22620 已高于 accent policy 门槛。
+            unavailable_accent: None,
         },
         CapabilityCase {
             name: "build just below the mica gate without premultiplied alpha",
@@ -683,6 +761,7 @@ mod tests {
             unavailable_immersive: Some(UnavailableReason::BuildTooLow {
                 required: IMMERSIVE_BACKDROP_MIN_BUILD,
             }),
+            unavailable_accent: Some(UnavailableReason::PremultipliedAlphaUnsupported),
         },
         CapabilityCase {
             name: "build on the mica gate",
@@ -692,6 +771,7 @@ mod tests {
             unavailable_immersive: Some(UnavailableReason::BuildTooLow {
                 required: IMMERSIVE_BACKDROP_MIN_BUILD,
             }),
+            unavailable_accent: None,
         },
         CapabilityCase {
             name: "build on the mica gate without premultiplied alpha",
@@ -701,6 +781,7 @@ mod tests {
             unavailable_immersive: Some(UnavailableReason::BuildTooLow {
                 required: IMMERSIVE_BACKDROP_MIN_BUILD,
             }),
+            unavailable_accent: Some(UnavailableReason::PremultipliedAlphaUnsupported),
         },
         CapabilityCase {
             name: "build on the immersive gate",
@@ -709,6 +790,7 @@ mod tests {
             unavailable_standard: None,
             // 构建号已够，但沉浸式后景的系统取值未被探测确认，仍然不可用。
             unavailable_immersive: Some(UnavailableReason::SystemChannelUnconfirmed),
+            unavailable_accent: None,
         },
         CapabilityCase {
             name: "build on the immersive gate without premultiplied alpha",
@@ -716,6 +798,7 @@ mod tests {
             premultiplied: false,
             unavailable_standard: Some(UnavailableReason::PremultipliedAlphaUnsupported),
             unavailable_immersive: Some(UnavailableReason::PremultipliedAlphaUnsupported),
+            unavailable_accent: Some(UnavailableReason::PremultipliedAlphaUnsupported),
         },
         CapabilityCase {
             name: "build above the immersive gate",
@@ -723,6 +806,7 @@ mod tests {
             premultiplied: true,
             unavailable_standard: None,
             unavailable_immersive: Some(UnavailableReason::SystemChannelUnconfirmed),
+            unavailable_accent: None,
         },
         CapabilityCase {
             name: "build above the immersive gate without premultiplied alpha",
@@ -730,6 +814,7 @@ mod tests {
             premultiplied: false,
             unavailable_standard: Some(UnavailableReason::PremultipliedAlphaUnsupported),
             unavailable_immersive: Some(UnavailableReason::PremultipliedAlphaUnsupported),
+            unavailable_accent: Some(UnavailableReason::PremultipliedAlphaUnsupported),
         },
     ];
 
@@ -750,6 +835,8 @@ mod tests {
     ) -> Option<UnavailableReason> {
         if material == MaterialKind::Immersive {
             case.unavailable_immersive
+        } else if material == MaterialKind::AcrylicTint {
+            case.unavailable_accent
         } else {
             case.unavailable_standard
         }
@@ -851,6 +938,7 @@ mod tests {
         BackdropCapabilities {
             windows_build: case.build,
             premultiplied_alpha_supported: case.premultiplied,
+            accent_policy_export: true,
         }
     }
 
@@ -858,8 +946,8 @@ mod tests {
     fn material_kinds_expose_stable_metadata() {
         assert_eq!(
             MaterialKind::ALL.len(),
-            6,
-            "all six material kinds must be enumerated once"
+            7,
+            "all seven material kinds must be enumerated once"
         );
         for (index, material) in MaterialKind::ALL.into_iter().enumerate() {
             assert_eq!(
@@ -882,8 +970,11 @@ mod tests {
             );
             assert_eq!(
                 material.is_experimental(),
-                material == MaterialKind::Immersive,
-                "only the immersive material must be marked experimental"
+                matches!(
+                    material,
+                    MaterialKind::Immersive | MaterialKind::AcrylicTint
+                ),
+                "the two undocumented channels must be marked experimental"
             );
         }
         assert_eq!(
@@ -951,6 +1042,11 @@ mod tests {
             26100,
             "the immersive material must require Windows build 26100"
         );
+        assert_eq!(
+            required_build(MaterialKind::AcrylicTint),
+            17134,
+            "the tinted acrylic tier must use its own accent policy gate, not the Mica gate"
+        );
     }
 
     #[test]
@@ -969,6 +1065,7 @@ mod tests {
                     &BackdropCapabilities {
                         windows_build: Some(22620),
                         premultiplied_alpha_supported: true,
+                        accent_policy_export: false,
                     }
                 ),
                 "{material:?} must not be native below build 22621"
@@ -979,6 +1076,7 @@ mod tests {
                     &BackdropCapabilities {
                         windows_build: Some(22621),
                         premultiplied_alpha_supported: true,
+                        accent_policy_export: false,
                     }
                 ),
                 "{material:?} must be native from build 22621 on"
@@ -989,6 +1087,7 @@ mod tests {
                     &BackdropCapabilities {
                         windows_build: Some(22621),
                         premultiplied_alpha_supported: false,
+                        accent_policy_export: false,
                     }
                 ),
                 "{material:?} must not be native without premultiplied alpha support"
@@ -999,6 +1098,7 @@ mod tests {
                     &BackdropCapabilities {
                         windows_build: None,
                         premultiplied_alpha_supported: true,
+                        accent_policy_export: false,
                     }
                 ),
                 "{material:?} must not be native when the build number is unknown"
@@ -1011,6 +1111,7 @@ mod tests {
                 &BackdropCapabilities {
                     windows_build: Some(22621),
                     premultiplied_alpha_supported: true,
+                    accent_policy_export: false,
                 }
             ),
             "the immersive material must not be native below build 26100"
@@ -1022,6 +1123,7 @@ mod tests {
                 &BackdropCapabilities {
                     windows_build: Some(26100),
                     premultiplied_alpha_supported: true,
+                    accent_policy_export: false,
                 }
             ),
             "the immersive material must never be native without a confirmed system value"
@@ -1032,6 +1134,7 @@ mod tests {
                 &BackdropCapabilities {
                     windows_build: Some(26100),
                     premultiplied_alpha_supported: true,
+                    accent_policy_export: false,
                 }
             ),
             Some(UnavailableReason::SystemChannelUnconfirmed),
@@ -1043,9 +1146,80 @@ mod tests {
                 &BackdropCapabilities {
                     windows_build: Some(26100),
                     premultiplied_alpha_supported: false,
+                    accent_policy_export: false,
                 }
             ),
             "the immersive material must not be native without premultiplied alpha support"
+        );
+    }
+
+    #[test]
+    fn the_accent_policy_tier_has_its_own_gate() {
+        // 这条通道的门槛是 17134，与云母的 22621 无关：一台 Win10 1803 机器
+        // 不应因为构建号低于云母门槛而被判不可用。
+        let on_gate = BackdropCapabilities {
+            windows_build: Some(ACCENT_POLICY_ACRYLIC_MIN_BUILD),
+            premultiplied_alpha_supported: true,
+            accent_policy_export: true,
+        };
+        assert!(
+            native_available(MaterialKind::AcrylicTint, &on_gate),
+            "the tinted acrylic tier must be native on build 17134 with the export resolved"
+        );
+        assert_eq!(
+            unavailable_reason(MaterialKind::AcrylicTint, &on_gate),
+            None,
+            "the tinted acrylic tier must be available when all three gates pass"
+        );
+
+        let below_gate = BackdropCapabilities {
+            windows_build: Some(ACCENT_POLICY_ACRYLIC_MIN_BUILD - 1),
+            premultiplied_alpha_supported: true,
+            accent_policy_export: true,
+        };
+        assert_eq!(
+            unavailable_reason(MaterialKind::AcrylicTint, &below_gate),
+            Some(UnavailableReason::BuildTooLow {
+                required: ACCENT_POLICY_ACRYLIC_MIN_BUILD,
+            }),
+            "the tinted acrylic tier must report its own build gate"
+        );
+
+        // 导出解析失败是这条通道的专属失败模式：同一台机器上其它材质的原生
+        // 可用性完全不受影响。
+        let no_export = BackdropCapabilities {
+            windows_build: Some(22621),
+            premultiplied_alpha_supported: true,
+            accent_policy_export: false,
+        };
+        assert_eq!(
+            unavailable_reason(MaterialKind::AcrylicTint, &no_export),
+            Some(UnavailableReason::AccentPolicyUnavailable),
+            "a missing accent policy export must disable only the tinted acrylic tier"
+        );
+        assert!(
+            native_available(MaterialKind::Mica, &no_export),
+            "the accent policy export must not gate the standard system material channel"
+        );
+        assert!(
+            native_available(MaterialKind::Acrylic, &no_export),
+            "the accent policy export must not gate the system acrylic channel"
+        );
+        assert_eq!(
+            unavailable_reason(MaterialKind::AcrylicTint, &no_export),
+            Some(UnavailableReason::AccentPolicyUnavailable),
+            "the tinted acrylic tier must expose the missing export as its reason"
+        );
+
+        let no_premultiplied = BackdropCapabilities {
+            windows_build: Some(22621),
+            premultiplied_alpha_supported: false,
+            accent_policy_export: true,
+        };
+        assert_eq!(
+            unavailable_reason(MaterialKind::AcrylicTint, &no_premultiplied),
+            Some(UnavailableReason::PremultipliedAlphaUnsupported),
+            "the tinted acrylic tier still needs a premultiplied surface"
         );
     }
 
@@ -1054,6 +1228,7 @@ mod tests {
         let caps = BackdropCapabilities {
             windows_build: None,
             premultiplied_alpha_supported: false,
+            accent_policy_export: false,
         };
         assert!(
             native_available(MaterialKind::None, &caps),
@@ -1071,6 +1246,7 @@ mod tests {
         let unknown = BackdropCapabilities {
             windows_build: None,
             premultiplied_alpha_supported: true,
+            accent_policy_export: false,
         };
         assert_eq!(
             unavailable_reason(MaterialKind::Mica, &unknown),
@@ -1081,6 +1257,7 @@ mod tests {
         let too_low = BackdropCapabilities {
             windows_build: Some(19045),
             premultiplied_alpha_supported: true,
+            accent_policy_export: false,
         };
         assert_eq!(
             unavailable_reason(MaterialKind::Mica, &too_low),
@@ -1100,6 +1277,7 @@ mod tests {
         let no_premultiplied = BackdropCapabilities {
             windows_build: Some(26100),
             premultiplied_alpha_supported: false,
+            accent_policy_export: false,
         };
         assert_eq!(
             unavailable_reason(MaterialKind::Mica, &no_premultiplied),
@@ -1110,6 +1288,7 @@ mod tests {
         let available = BackdropCapabilities {
             windows_build: Some(26100),
             premultiplied_alpha_supported: true,
+            accent_policy_export: false,
         };
         assert_eq!(
             unavailable_reason(MaterialKind::Mica, &available),
@@ -1133,6 +1312,7 @@ mod tests {
             MaterialKind::FollowSystem,
             MaterialKind::Acrylic,
             MaterialKind::Immersive,
+            MaterialKind::AcrylicTint,
         ] {
             assert!(
                 !has_self_drawn_variant(material),
@@ -1161,7 +1341,7 @@ mod tests {
             }
         }
         assert_eq!(
-            checked, 180,
+            checked, 210,
             "the ladder must be pinned for every material, source and capability case"
         );
     }
@@ -1171,6 +1351,7 @@ mod tests {
         let caps = BackdropCapabilities {
             windows_build: Some(26100),
             premultiplied_alpha_supported: true,
+            accent_policy_export: true,
         };
         for source in BackdropSource::ALL {
             let combination =
@@ -1193,6 +1374,7 @@ mod tests {
         let caps = BackdropCapabilities {
             windows_build: Some(19045),
             premultiplied_alpha_supported: true,
+            accent_policy_export: false,
         };
         let combination = resolve_combination(
             BackdropSelection::new(MaterialKind::Mica, BackdropSource::Native),
@@ -1234,6 +1416,7 @@ mod tests {
         let caps = BackdropCapabilities {
             windows_build: Some(26100),
             premultiplied_alpha_supported: true,
+            accent_policy_export: false,
         };
         let combination = resolve_combination(
             BackdropSelection::new(MaterialKind::Acrylic, BackdropSource::SelfDrawn),
@@ -1255,6 +1438,7 @@ mod tests {
         let weak = BackdropCapabilities {
             windows_build: Some(19045),
             premultiplied_alpha_supported: true,
+            accent_policy_export: false,
         };
         let fallback = resolve_combination(
             BackdropSelection::new(MaterialKind::Acrylic, BackdropSource::SelfDrawn),
@@ -1279,6 +1463,7 @@ mod tests {
         let weak = BackdropCapabilities {
             windows_build: Some(19045),
             premultiplied_alpha_supported: true,
+            accent_policy_export: false,
         };
         for material in MaterialKind::ALL {
             let combination = resolve_combination(
@@ -1335,6 +1520,7 @@ mod tests {
             UnavailableReason::BuildUnknown,
             UnavailableReason::PremultipliedAlphaUnsupported,
             UnavailableReason::SystemChannelUnconfirmed,
+            UnavailableReason::AccentPolicyUnavailable,
         ] {
             assert!(!reason.label().is_empty());
             assert!(!reason.description().is_empty());
@@ -1353,6 +1539,7 @@ mod tests {
             BackdropCapabilities {
                 windows_build: Some(22621),
                 premultiplied_alpha_supported: true,
+                accent_policy_export: false,
             }
             .baseline_native_available(),
             "the baseline must be available from build 22621 with premultiplied alpha"
@@ -1361,6 +1548,7 @@ mod tests {
             !BackdropCapabilities {
                 windows_build: Some(22620),
                 premultiplied_alpha_supported: true,
+                accent_policy_export: false,
             }
             .baseline_native_available(),
             "the baseline must be unavailable below build 22621"
@@ -1369,6 +1557,7 @@ mod tests {
             !BackdropCapabilities {
                 windows_build: None,
                 premultiplied_alpha_supported: true,
+                accent_policy_export: false,
             }
             .baseline_native_available(),
             "the baseline must be unavailable when the build number is unknown"
@@ -1377,6 +1566,7 @@ mod tests {
             !BackdropCapabilities {
                 windows_build: Some(26100),
                 premultiplied_alpha_supported: false,
+                accent_policy_export: false,
             }
             .baseline_native_available(),
             "the baseline must be unavailable without premultiplied alpha"

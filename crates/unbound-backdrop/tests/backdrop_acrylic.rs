@@ -234,6 +234,7 @@ fn caps_of(case: &AcrylicCase) -> BackdropCapabilities {
     BackdropCapabilities {
         windows_build: case.build,
         premultiplied_alpha_supported: case.premultiplied,
+        accent_policy_export: false,
     }
 }
 
@@ -242,6 +243,8 @@ fn inputs_of(case: &AcrylicCase, source: BackdropSource, self_drawn_ready: bool)
         selection: BackdropSelection::new(MaterialKind::Acrylic, source),
         windows_build: case.build,
         premultiplied_alpha_supported: case.premultiplied,
+        accent_policy_export: false,
+        accent_tint_argb: 0,
         window_screen_rect: Some(WINDOW),
         primary_screen_rect: Some(SCREEN),
         primary_screen_scale: 1.0,
@@ -488,6 +491,8 @@ fn switching_between_mica_and_acrylic_keeps_the_surface_composition() {
         selection: BackdropSelection::new(MaterialKind::Mica, BackdropSource::Native),
         windows_build: case.build,
         premultiplied_alpha_supported: case.premultiplied,
+        accent_policy_export: false,
+        accent_tint_argb: 0,
         window_screen_rect: Some(WINDOW),
         primary_screen_rect: Some(SCREEN),
         primary_screen_scale: 1.0,

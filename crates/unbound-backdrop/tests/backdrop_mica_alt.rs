@@ -202,6 +202,8 @@ fn inputs(
         selection: BackdropSelection::new(material, source),
         windows_build: build,
         premultiplied_alpha_supported: premultiplied,
+        accent_policy_export: false,
+        accent_tint_argb: 0,
         window_screen_rect: Some(WINDOW),
         primary_screen_rect: Some(SCREEN),
         primary_screen_scale: 1.5,
@@ -280,6 +282,7 @@ fn mica_alt_shares_the_gate_with_standard_mica() {
         let caps = BackdropCapabilities {
             windows_build: case.build,
             premultiplied_alpha_supported: case.premultiplied,
+            accent_policy_export: false,
         };
         let mica = BackdropPlan::derive(inputs(
             MaterialKind::Mica,

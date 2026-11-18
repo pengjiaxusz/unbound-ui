@@ -60,7 +60,8 @@ pub use tray::{
     TrayNotificationSeverity,
 };
 pub use win32_frame::{
-    install_custom_frame, probe_immersive_backdrop, set_window_backdrop, set_window_dark_mode,
+    accent_policy_export_available, clear_window_accent_tint, install_custom_frame,
+    probe_immersive_backdrop, set_window_accent_tint, set_window_backdrop, set_window_dark_mode,
     FrameHitMetrics, WindowBackdropMaterial,
 };
 pub use win32_window::{

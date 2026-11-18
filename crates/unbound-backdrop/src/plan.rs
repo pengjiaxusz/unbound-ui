@@ -136,59 +136,124 @@ pub enum DwmMaterial {
     Immersive,
 }
 
-/// 一行材质映射：某个材质种类是否走系统材质通道，以及请求哪一档系统材质。
+/// 材质实际走哪一条系统通道。
+///
+/// DWM 材质通道与 accent policy 通道是两条互斥的写入路径：同一个窗口同时只能
+/// 走其中一条，宿主必须按实际生效的通道二选一，绝不能两条都下发。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum MaterialChannel {
+    /// 不请求任何系统材质。
+    #[default]
+    None,
+    /// 走 `DWMWA_SYSTEMBACKDROP_TYPE` 系统材质通道。
+    Dwm(DwmMaterial),
+    /// 走 `SetWindowCompositionAttribute` 的 accent policy 通道。
+    ///
+    /// 该通道只承载亚克力自定义色调，参数是一个 ABGR 色调值；它不经过 DWM，
+    /// 因此不能表达成 [`DwmMaterial`] 的取值。
+    AccentPolicy,
+}
+
+/// 一行材质映射：某个材质种类走哪条系统通道，以及（走 DWM 时）请求哪一档材质。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct MaterialRequest {
     /// 该行的材质种类。
     pub kind: MaterialKind,
-    /// 系统材质请求；`None` 表示该材质种类不走系统材质通道。
-    pub request: Option<DwmMaterial>,
+    /// 该材质种类使用的系统通道。
+    pub channel: MaterialChannel,
 }
 
-/// 材质种类到系统材质请求的显式映射表。
+/// 材质种类到系统通道的显式映射表。
 ///
 /// 表格是写死的一行一档，而不是从枚举推导出来的：将来出现不走系统材质通道
-/// 的材质（例如亚克力的自定义色调子档）时，只需新增一行，不必改动转换逻辑。
+/// 的材质时，只需新增一行，不必改动转换逻辑。
 pub const MATERIAL_REQUEST_TABLE: [MaterialRequest; MaterialKind::ALL.len()] = [
     MaterialRequest {
         kind: MaterialKind::None,
-        request: None,
+        channel: MaterialChannel::None,
     },
     MaterialRequest {
         kind: MaterialKind::FollowSystem,
-        request: Some(DwmMaterial::System),
+        channel: MaterialChannel::Dwm(DwmMaterial::System),
     },
     MaterialRequest {
         kind: MaterialKind::Mica,
-        request: Some(DwmMaterial::Mica),
+        channel: MaterialChannel::Dwm(DwmMaterial::Mica),
     },
     MaterialRequest {
         kind: MaterialKind::MicaAlt,
-        request: Some(DwmMaterial::MicaAlt),
+        channel: MaterialChannel::Dwm(DwmMaterial::MicaAlt),
     },
     MaterialRequest {
         kind: MaterialKind::Acrylic,
-        request: Some(DwmMaterial::Acrylic),
+        channel: MaterialChannel::Dwm(DwmMaterial::Acrylic),
     },
     // 沉浸式后景的系统取值没有公开文档依据，平台层的写入回读探测也只能看到
     // 「原样回显」，无法证明系统真的接受某个未公开取值。既然确认不了，就不写死
     // 任何数字：该档当前不走系统材质通道，窗口必须保持不透明，界面另给不可用原因。
     MaterialRequest {
         kind: MaterialKind::Immersive,
-        request: None,
+        channel: MaterialChannel::None,
+    },
+    // 亚克力自定义色调走独立的 accent policy 通道，不占用 DWM 材质取值。
+    MaterialRequest {
+        kind: MaterialKind::AcrylicTint,
+        channel: MaterialChannel::AccentPolicy,
     },
 ];
 
-/// 按映射表查出某个材质种类的系统材质请求。
-///
-/// 不走系统材质通道的材质种类返回 `None`。
+/// 按映射表查出某个材质种类使用的系统通道。
 #[must_use]
-pub fn system_material_request(material: MaterialKind) -> Option<DwmMaterial> {
+pub fn material_channel(material: MaterialKind) -> MaterialChannel {
     MATERIAL_REQUEST_TABLE
         .iter()
         .find(|row| row.kind == material)
-        .and_then(|row| row.request)
+        .map_or(MaterialChannel::None, |row| row.channel)
 }
+
+/// 按映射表查出某个材质种类的 DWM 材质请求。
+///
+/// 只有走 DWM 通道的材质种类返回 `Some`；走 accent policy 通道的材质返回
+/// `None`，它的系统请求通过 [`BackdropPlan::accent_tint`] 表达。
+#[must_use]
+pub fn system_material_request(material: MaterialKind) -> Option<DwmMaterial> {
+    match material_channel(material) {
+        MaterialChannel::Dwm(material) => Some(material),
+        MaterialChannel::None | MaterialChannel::AccentPolicy => None,
+    }
+}
+
+/// 默认的亚克力自定义色调（ABGR，中性灰，约 80% 不透明）。
+///
+/// 色调是我们自己的选择，不属于系统取值；alpha 分量参与 accent policy 的
+/// `GradientColor`，让亚克力保持半透明。
+pub const DEFAULT_ACRYLIC_TINT_ARGB: u32 = 0xCC1F1F1F;
+
+/// 一个亚克力自定义色调预设。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct AcrylicTintPreset {
+    /// 预设名称（英文，用于界面展示）。
+    pub name: &'static str,
+    /// 预设色调（ABGR）。
+    pub argb: u32,
+}
+
+/// 少量现成的亚克力自定义色调预设。
+pub const ACRYLIC_TINT_PRESETS: [AcrylicTintPreset; 3] = [
+    AcrylicTintPreset {
+        name: "Neutral",
+        argb: DEFAULT_ACRYLIC_TINT_ARGB,
+    },
+    AcrylicTintPreset {
+        name: "Light",
+        argb: 0xCCF0F0F0,
+    },
+    // 接近 Windows 默认强调蓝（RGB 0x0078D7），ABGR 分量顺序相反。
+    AcrylicTintPreset {
+        name: "Accent",
+        argb: 0xD0D77800,
+    },
+];
 
 /// 自绘后景的纹理规格。
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -243,6 +308,10 @@ pub struct BackdropInputs {
     pub windows_build: Option<u32>,
     /// 图形表面是否支持预乘 alpha 合成。
     pub premultiplied_alpha_supported: bool,
+    /// 运行时能否解析出 `SetWindowCompositionAttribute` 并通过冒烟探测。
+    pub accent_policy_export: bool,
+    /// 亚克力自定义色调（ABGR）；只在自定义色调子档走原生路径时使用。
+    pub accent_tint_argb: u32,
     /// 客户区屏幕物理矩形；未知为 `None`。
     pub window_screen_rect: Option<PixelRect>,
     /// 主屏物理矩形；未知为 `None`。
@@ -277,6 +346,10 @@ pub struct BackdropPlan {
     pub root_background_transparent: bool,
     /// 需要请求的 DWM 材质。
     pub material: DwmMaterial,
+    /// 需要下发的 accent policy 色调（ABGR）；非该通道路径时为 `None`。
+    ///
+    /// 与 [`Self::material`] 互斥：同一份计划最多只有一条系统通道带值。
+    pub accent_tint: Option<u32>,
     /// 自绘纹理规格；非自绘路径或几何未知时为 `None`。
     pub texture: Option<WallpaperTexture>,
     /// 自绘纹理的归一化采样区域。
@@ -294,6 +367,7 @@ impl Default for BackdropPlan {
             clear_alpha: 1.0,
             root_background_transparent: false,
             material: DwmMaterial::None,
+            accent_tint: None,
             texture: None,
             uv: UvRect::FULL,
         }
@@ -305,8 +379,9 @@ impl BackdropPlan {
     ///
     /// 先用组合解析接缝算出实际生效的组合，再把结论展开成计划：
     ///
-    /// - 系统材质请求走显式映射表，且只在实际来源为原生时才请求；
-    /// - 清屏透明度只在真的拿到系统材质请求时才变成 0，其余一律 1；
+    /// - 系统通道走显式映射表，且只在实际来源为原生时才下发；DWM 材质与
+    ///   accent policy 色调互斥，计划里最多只有一边带值；
+    /// - 清屏透明度只在真的拿到系统请求时才变成 0，其余一律 1；
     /// - 根背景透明性由清屏 alpha 与自绘纹理就绪状态共同决定；
     /// - 纹理只在实际来源为自绘时生成；
     /// - 合成方式只由平台基线能力决定，与材质种类、来源无关——交换链在启动时
@@ -316,6 +391,7 @@ impl BackdropPlan {
         let caps = BackdropCapabilities {
             windows_build: inputs.windows_build,
             premultiplied_alpha_supported: inputs.premultiplied_alpha_supported,
+            accent_policy_export: inputs.accent_policy_export,
         };
         let combination = resolve_combination(inputs.selection, &caps);
         // 材质种类为「无」时来源轴折叠：没有任何后景可言。
@@ -332,15 +408,30 @@ impl BackdropPlan {
         } else {
             None
         };
-        // 只有原生来源才可能拿到系统材质请求；请求缺失的材质档一律按「没有材质」
-        // 处理，窗口随之保持不透明。
-        let request = if native {
-            system_material_request(combination.material)
+        // 只有原生来源才可能拿到系统请求。DWM 通道与 accent policy 通道互斥：
+        // 一份计划最多只会填其中一边。
+        let channel = if native {
+            material_channel(combination.material)
+        } else {
+            MaterialChannel::None
+        };
+        let request = match channel {
+            MaterialChannel::Dwm(material) => Some(material),
+            MaterialChannel::None | MaterialChannel::AccentPolicy => None,
+        };
+        // accent policy 通道同样由系统合成器绘制，清屏也必须全透明，否则亚克力
+        // 会被盖住。这里按「有没有系统请求」判定，而不是只看 DWM 材质。
+        let has_system_request = matches!(
+            channel,
+            MaterialChannel::Dwm(_) | MaterialChannel::AccentPolicy
+        );
+        let material = request.unwrap_or(DwmMaterial::None);
+        let accent_tint = if channel == MaterialChannel::AccentPolicy {
+            Some(inputs.accent_tint_argb)
         } else {
             None
         };
-        let material = request.unwrap_or(DwmMaterial::None);
-        let clear_alpha = if request.is_some() { 0.0 } else { 1.0 };
+        let clear_alpha = if has_system_request { 0.0 } else { 1.0 };
         Self {
             material_kind: combination.material,
             source: combination.source,
@@ -351,6 +442,7 @@ impl BackdropPlan {
             root_background_transparent: clear_alpha == 0.0
                 || (self_drawn && inputs.self_drawn_ready),
             material,
+            accent_tint,
             texture,
             // 纹理覆盖整块主屏，窗口只取自己所占的那一块。
             uv: sample_uv(inputs.window_screen_rect, inputs.primary_screen_rect),
@@ -442,6 +534,8 @@ mod tests {
             selection,
             windows_build: build,
             premultiplied_alpha_supported: premultiplied,
+            accent_policy_export: true,
+            accent_tint_argb: DEFAULT_ACRYLIC_TINT_ARGB,
             window_screen_rect: Some(PixelRect::new(480, 270, 960, 540)),
             primary_screen_rect: Some(SCREEN),
             primary_screen_scale: 1.5,
@@ -455,13 +549,15 @@ mod tests {
         BackdropCapabilities {
             windows_build: build,
             premultiplied_alpha_supported: premultiplied,
+            accent_policy_export: false,
         }
         .baseline_native_available()
     }
 
     /// 手写的“该材质种类请求哪一档系统材质”期望，独立于映射表实现。
     ///
-    /// 沉浸式后景的系统取值未被探测确认，因此没有请求。
+    /// 沉浸式后景的系统取值未被探测确认，因此没有请求；亚克力自定义色调走
+    /// accent policy 通道，同样不产生 DWM 请求。
     fn expected_system_request(material: MaterialKind) -> Option<DwmMaterial> {
         match material {
             MaterialKind::None => None,
@@ -470,6 +566,7 @@ mod tests {
             MaterialKind::MicaAlt => Some(DwmMaterial::MicaAlt),
             MaterialKind::Acrylic => Some(DwmMaterial::Acrylic),
             MaterialKind::Immersive => None,
+            MaterialKind::AcrylicTint => None,
         }
     }
 
@@ -549,6 +646,7 @@ mod tests {
                         &BackdropCapabilities {
                             windows_build: build,
                             premultiplied_alpha_supported: premultiplied,
+                            accent_policy_export: true,
                         },
                     );
                     assert_eq!(
@@ -571,15 +669,23 @@ mod tests {
                         && combination.source == BackdropSource::Native;
                     let self_drawn = combination.material != MaterialKind::None
                         && combination.source == BackdropSource::SelfDrawn;
-                    // 只有原生来源且该材质档确有系统材质请求时，窗口才允许清成全透明。
+                    // 只有原生来源且该材质档确有系统请求时，窗口才允许清成全透明。
+                    // 系统请求既可能来自 DWM 通道，也可能来自 accent policy 通道。
                     let request = if native {
                         expected_system_request(combination.material)
                     } else {
                         None
                     };
+                    let accent_tint = if native && combination.material == MaterialKind::AcrylicTint
+                    {
+                        Some(DEFAULT_ACRYLIC_TINT_ARGB)
+                    } else {
+                        None
+                    };
+                    let has_system_request = request.is_some() || accent_tint.is_some();
                     assert_eq!(
                         plan.clear_alpha,
-                        if request.is_some() { 0.0 } else { 1.0 },
+                        if has_system_request { 0.0 } else { 1.0 },
                         "material {material:?} source {source:?} must set the clear alpha"
                     );
                     assert_eq!(
@@ -588,20 +694,28 @@ mod tests {
                         "material {material:?} source {source:?} must request the mapped system material"
                     );
                     assert_eq!(
+                        plan.accent_tint, accent_tint,
+                        "material {material:?} source {source:?} must only tint the accent channel"
+                    );
+                    assert!(
+                        !(plan.material != DwmMaterial::None && plan.accent_tint.is_some()),
+                        "material {material:?} source {source:?} must never use both channels at once"
+                    );
+                    assert_eq!(
                         plan.texture.is_some(),
                         self_drawn,
                         "material {material:?} source {source:?} must only produce a texture when self-drawn"
                     );
                     assert_eq!(
                         plan.root_background_transparent,
-                        request.is_some(),
+                        has_system_request,
                         "material {material:?} source {source:?} must stay opaque until the texture is ready"
                     );
                     input.self_drawn_ready = true;
                     let ready = BackdropPlan::derive(input);
                     assert_eq!(
                         ready.root_background_transparent,
-                        request.is_some() || self_drawn,
+                        has_system_request || self_drawn,
                         "material {material:?} source {source:?} must follow the texture readiness"
                     );
                     assert_eq!(
@@ -618,7 +732,7 @@ mod tests {
             }
         }
         assert_eq!(
-            checked, 180,
+            checked, 210,
             "the plan must be pinned for every material, source and capability case"
         );
     }
@@ -636,13 +750,19 @@ mod tests {
                 .find(|row| row.kind == material)
                 .expect("every material kind must have a request row");
             assert_eq!(
-                row.request,
-                expected_system_request(material),
-                "{material:?} must map to its own system material row"
+                row.channel,
+                match expected_system_request(material) {
+                    Some(request) => MaterialChannel::Dwm(request),
+                    None if material == MaterialKind::AcrylicTint => {
+                        MaterialChannel::AccentPolicy
+                    }
+                    None => MaterialChannel::None,
+                },
+                "{material:?} must map to its own system channel row"
             );
             assert_eq!(
                 system_material_request(material),
-                row.request,
+                expected_system_request(material),
                 "{material:?} must be resolved through the request table"
             );
         }
@@ -672,6 +792,49 @@ mod tests {
             BackdropCompositeAlpha::PreMultiplied,
             "the surface composition must still follow the platform baseline"
         );
+    }
+
+    #[test]
+    fn the_accent_tint_tier_takes_its_own_channel() {
+        let plan = BackdropPlan::derive(inputs(
+            BackdropSelection::new(MaterialKind::AcrylicTint, BackdropSource::Native),
+            Some(26100),
+            true,
+        ));
+        assert_eq!(plan.material_kind, MaterialKind::AcrylicTint);
+        assert_eq!(plan.source, BackdropSource::Native);
+        // 关键断言：它不占用 DWM 材质取值，而是填 accent 色调。
+        assert_eq!(plan.material, DwmMaterial::None);
+        assert_eq!(plan.accent_tint, Some(DEFAULT_ACRYLIC_TINT_ARGB));
+        assert_eq!(
+            plan.clear_alpha, 0.0,
+            "the system compositor draws the material, so the clear must be fully transparent"
+        );
+        assert!(plan.root_background_transparent);
+        assert!(plan.texture.is_none());
+
+        // 其它材质照旧走 DWM 通道，且绝不带 accent 色调。
+        let mica = BackdropPlan::derive(inputs(
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::Native),
+            Some(26100),
+            true,
+        ));
+        assert_eq!(mica.material, DwmMaterial::Mica);
+        assert_eq!(
+            mica.accent_tint, None,
+            "the accent channel must never leak into the system material channel"
+        );
+
+        // 导出解析失败时该档降级，计划里不会出现 accent 色调。
+        let mut missing = inputs(
+            BackdropSelection::new(MaterialKind::AcrylicTint, BackdropSource::Native),
+            Some(26100),
+            true,
+        );
+        missing.accent_policy_export = false;
+        let degraded = BackdropPlan::derive(missing);
+        assert_eq!(degraded.accent_tint, None);
+        assert!(degraded.unavailable.is_some());
     }
 
     #[test]

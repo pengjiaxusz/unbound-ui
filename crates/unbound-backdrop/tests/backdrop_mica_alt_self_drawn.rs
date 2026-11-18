@@ -28,6 +28,8 @@ fn inputs(material: MaterialKind, source: BackdropSource) -> BackdropInputs {
         selection: BackdropSelection::new(material, source),
         windows_build: Some(26100),
         premultiplied_alpha_supported: true,
+        accent_policy_export: false,
+        accent_tint_argb: 0,
         window_screen_rect: Some(WINDOW),
         primary_screen_rect: Some(SCREEN),
         primary_screen_scale: 1.5,

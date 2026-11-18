@@ -10,7 +10,7 @@
 use std::ops::{Deref, DerefMut};
 
 use accesskit::Role;
-use showcase::backdrop_host::window_backdrop_request;
+use showcase::backdrop_host::{window_backdrop_request, WindowBackdropRequest};
 use showcase::pages::backdrop::{MATERIAL_PART_BASE, SOURCE_PART_BASE};
 use showcase::pages::PageId;
 use showcase::shell::GalleryApp;
@@ -203,7 +203,10 @@ fn the_acrylic_native_source_requests_the_acrylic_system_value() {
     );
 
     // 宿主向 DWM 请求的原始取值必须是亚克力对应的那一个。
-    let (material, lock) = window_backdrop_request(&app.state.backdrop_plan);
+    let (request, lock) = window_backdrop_request(&app.state.backdrop_plan);
+    let WindowBackdropRequest::Dwm(material) = request else {
+        panic!("the system acrylic material must stay on the DWM channel");
+    };
     assert_eq!(
         material,
         WindowBackdropMaterial::Acrylic,

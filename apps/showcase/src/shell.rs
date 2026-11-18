@@ -520,6 +520,17 @@ impl GalleryApp {
         self.sync_backdrop_plan()
     }
 
+    /// 写入 accent policy 通道的可用性并立即重新解析后景计划。
+    ///
+    /// 它与 [`Self::set_backdrop_capabilities`] 分开：该能力只影响亚克力自定义
+    /// 色调子档，不能混进其它材质的门槛。返回后景计划是否发生变化。
+    pub fn set_backdrop_accent_capability(&mut self, available: bool) -> bool {
+        if !self.state.set_backdrop_accent_capability(available) {
+            return false;
+        }
+        self.sync_backdrop_plan()
+    }
+
     /// 按当前能力重新解析后景计划；变化时写入实际生效组合并请求重建。
     ///
     /// 实际生效的材质与来源由能力探测和用户选择共同决定，页面只读取解析结果，
@@ -533,6 +544,8 @@ impl GalleryApp {
             selection: self.state.backdrop_selection,
             windows_build: self.state.windows_build,
             premultiplied_alpha_supported: self.state.premultiplied_alpha_supported,
+            accent_policy_export: self.state.accent_policy_export,
+            accent_tint_argb: self.state.backdrop_accent_tint,
             window_screen_rect: window,
             primary_screen_rect: unbound_backdrop::primary_screen_rect(),
             primary_screen_scale: unbound_backdrop::primary_screen_scale(),

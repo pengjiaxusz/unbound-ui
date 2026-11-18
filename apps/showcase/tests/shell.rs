@@ -1627,6 +1627,8 @@ fn the_native_source_makes_the_root_transparent_without_a_texture() {
 fn the_material_row_updates_the_selection_and_the_readout() {
     let mut app = app();
     app.set_backdrop_capabilities(Some(26100), true);
+    // 亚克力自定义色调走独立通道，需要单独打开它的能力。
+    app.set_backdrop_accent_capability(true);
     app.navigate(PageId::Backdrop);
     app.rebuild(VIEWPORT);
 
@@ -1797,7 +1799,7 @@ fn the_two_rows_use_disjoint_parts_and_do_not_overlap() {
     }
 }
 
-/// 六个材质档与三个来源档的组合必须解析出预期的实际组合、回退原因与不可用原因。
+/// 七个材质档与三个来源档的组合必须解析出预期的实际组合、回退原因与不可用原因。
 #[test]
 fn every_material_and_source_combination_resolves_as_expected() {
     use unbound_backdrop::{BackdropCombination, FallbackReason, UnavailableReason};
@@ -1805,6 +1807,8 @@ fn every_material_and_source_combination_resolves_as_expected() {
     let mut app = app();
     // Windows 11 22H2：除沉浸式后景外所有材质档都能走原生路径。
     app.set_backdrop_capabilities(Some(22621), true);
+    // 亚克力自定义色调的独立通道也视为可用。
+    app.set_backdrop_accent_capability(true);
     app.navigate(PageId::Backdrop);
     app.rebuild(VIEWPORT);
 
@@ -1813,6 +1817,7 @@ fn every_material_and_source_combination_resolves_as_expected() {
     let mica = MaterialKind::Mica;
     let mica_alt = MaterialKind::MicaAlt;
     let acrylic = MaterialKind::Acrylic;
+    let acrylic_tint = MaterialKind::AcrylicTint;
     let immersive = MaterialKind::Immersive;
     let auto = BackdropSource::Auto;
     let native = BackdropSource::Native;
@@ -1825,7 +1830,7 @@ fn every_material_and_source_combination_resolves_as_expected() {
         unavailable: None,
     };
 
-    let cases: [(MaterialKind, BackdropSource, BackdropCombination); 18] = [
+    let cases: [(MaterialKind, BackdropSource, BackdropCombination); 21] = [
         (none, auto, plain(none, auto)),
         (none, native, plain(none, native)),
         (none, self_drawn, plain(none, self_drawn)),
@@ -1856,6 +1861,18 @@ fn every_material_and_source_combination_resolves_as_expected() {
                 material: acrylic,
                 source: native,
                 fallback: Some(no_self_drawn(acrylic)),
+                unavailable: None,
+            },
+        ),
+        (acrylic_tint, auto, plain(acrylic_tint, native)),
+        (acrylic_tint, native, plain(acrylic_tint, native)),
+        (
+            acrylic_tint,
+            self_drawn,
+            BackdropCombination {
+                material: acrylic_tint,
+                source: native,
+                fallback: Some(no_self_drawn(acrylic_tint)),
                 unavailable: None,
             },
         ),

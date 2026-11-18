@@ -13,7 +13,7 @@ use unbound_asset::{AssetId, StagingRing};
 use unbound_backdrop::{
     is_illegal_combination, native_available, resolve_combination, selectable,
     BackdropCapabilities, BackdropCombination, BackdropPlan, BackdropSelection, BackdropSource,
-    MaterialKind,
+    MaterialKind, DEFAULT_ACRYLIC_TINT_ARGB,
 };
 use unbound_canvas::{TransactionKind, UndoStack};
 use unbound_math::Vec2;
@@ -312,6 +312,12 @@ pub struct GalleryState {
     ///
     /// 与构建号一起构成逐档材质门槛所需的全部平台能力。
     pub premultiplied_alpha_supported: bool,
+    /// 运行时能否解析出未公开的 accent policy 导出。
+    ///
+    /// 这是亚克力自定义色调子档的专属能力，只影响该档的可用性。
+    pub accent_policy_export: bool,
+    /// 亚克力自定义色调（ABGR）。
+    pub backdrop_accent_tint: u32,
     /// Windows 构建号；`None` 表示非 Windows 环境或探测失败。
     pub windows_build: Option<u32>,
     /// 客户区在屏幕坐标系中的物理矩形（后景锚点）。
@@ -370,11 +376,14 @@ impl Default for GalleryState {
                 &BackdropCapabilities {
                     windows_build: None,
                     premultiplied_alpha_supported: false,
+                    accent_policy_export: false,
                 },
             ),
             backdrop_selection,
             backdrop_plan: BackdropPlan::default(),
             premultiplied_alpha_supported: false,
+            accent_policy_export: false,
+            backdrop_accent_tint: DEFAULT_ACRYLIC_TINT_ARGB,
             windows_build: None,
             window_screen_rect: None,
             active_component: None,
@@ -527,7 +536,30 @@ impl GalleryState {
         BackdropCapabilities {
             windows_build: self.windows_build,
             premultiplied_alpha_supported: self.premultiplied_alpha_supported,
+            accent_policy_export: self.accent_policy_export,
         }
+    }
+
+    /// 写入 accent policy 通道的可用性；返回是否发生变化。
+    ///
+    /// 它只影响亚克力自定义色调子档，其它材质的门槛完全不受影响。
+    pub fn set_backdrop_accent_capability(&mut self, available: bool) -> bool {
+        if self.accent_policy_export == available {
+            return false;
+        }
+        self.accent_policy_export = available;
+        self.bump();
+        true
+    }
+
+    /// 写入亚克力自定义色调（ABGR）；返回是否发生变化。
+    pub fn set_backdrop_accent_tint(&mut self, argb: u32) -> bool {
+        if self.backdrop_accent_tint == argb {
+            return false;
+        }
+        self.backdrop_accent_tint = argb;
+        self.bump();
+        true
     }
 
     /// 某个材质在当前来源与平台能力下是否能被选中。
