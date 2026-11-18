@@ -1,5 +1,6 @@
 # .pengj-templates/just/worktree.just — 多工作树共享编译目录（worktree 层托管，模板更新整页覆盖）
-# 共享目录路径由 CLI 按机器推导（平台数据目录 + 项目标识）；rust.just / rust-workspace.just 的构建配方也通过 `worktree target-dir` 读同一个值，推导逻辑只有一份。
+# 共享目录就是**主工作树的 `target/`**：CLI 从 `git worktree list` 推导，同一仓库的所有工作树都得到同一个值；rust.just / rust-workspace.just 的构建配方也通过 `worktree target-dir` 读同一个值，推导逻辑只有一份。
+# 代价：在主工作树里 `cargo clean`（或 `git clean -xdf`）会清掉所有工作树的中间产物，需全量重建。
 # 共享的只有中间产物。最终二进制在共享目录里路径固定，多个工作树会互相覆盖——运行产物的隔离由项目自理。
 
 # 打印共享编译目录（唯一来源：CLI 推导，配方与自检读同一个值）
