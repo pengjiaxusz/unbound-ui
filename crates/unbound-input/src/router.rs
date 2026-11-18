@@ -262,11 +262,21 @@ impl Router {
     ///
     fn refresh_cursor_at(&mut self, position: Vec2) {
         self.cursors.clear();
-        if self.pointer.capture().is_some() {
-            let kind = if self.pointer.is_dragging() {
+        if let Some(capture) = self.pointer.capture() {
+            // 捕获只说明事件归属，形状仍由被捕获区域声明：文本区域全程工字，
+            // 非文本捕获在拖拽中才切到抓取手。见 ADR 0004。
+            let declared = self
+                .regions
+                .iter()
+                .find(|region| region.node == capture)
+                .and_then(|region| region.cursor)
+                .unwrap_or(CursorKind::Pointer);
+            let kind = if declared == CursorKind::Text {
+                CursorKind::Text
+            } else if self.pointer.is_dragging() {
                 CursorKind::Grabbing
             } else {
-                CursorKind::Pointer
+                declared
             };
             self.cursors.push(CursorSource::Capture, kind);
         }
@@ -416,6 +426,60 @@ mod tests {
         assert_eq!(r.cursor(), CursorKind::Grabbing);
         r.pointer_up(Vec2::new(250.0, 250.0), 0.5);
         assert_eq!(r.cursor(), CursorKind::Text);
+    }
+
+    /// 文本区域被捕获后必须全程保持工字：按下、拖选、松开都不该出现小手。
+    ///
+    #[test]
+    fn a_text_capture_keeps_the_text_cursor_while_selecting() {
+        let mut r = router();
+        r.set_regions(vec![
+            HitRegion::new(1, 1, 0, rect(0.0, 0.0, 200.0, 40.0)).with_cursor(CursorKind::Text),
+            region(2, rect(0.0, 100.0, 100.0, 100.0)),
+        ]);
+        r.pointer_move(Vec2::new(20.0, 20.0));
+        assert_eq!(r.cursor(), CursorKind::Text);
+
+        r.pointer_down(Vec2::new(20.0, 20.0), 0.0);
+        assert_eq!(
+            r.cursor(),
+            CursorKind::Text,
+            "pressing a text region must not turn the cursor into a hand"
+        );
+
+        r.pointer_move(Vec2::new(160.0, 20.0));
+        assert!(r.pointer().is_dragging());
+        assert_eq!(
+            r.cursor(),
+            CursorKind::Text,
+            "selecting text keeps the I-beam even while dragging"
+        );
+
+        r.pointer_up(Vec2::new(160.0, 20.0), 0.5);
+        assert_eq!(r.cursor(), CursorKind::Text);
+    }
+
+    /// 非文本捕获继承目标声明的光标，只在拖拽中改写为抓取手。
+    ///
+    #[test]
+    fn a_grab_capture_turns_grabbing_only_while_dragging() {
+        let mut r = router();
+        r.set_regions(vec![
+            HitRegion::new(1, 1, 0, rect(0.0, 0.0, 100.0, 100.0)).with_cursor(CursorKind::Grab)
+        ]);
+        r.pointer_move(Vec2::new(10.0, 10.0));
+        assert_eq!(r.cursor(), CursorKind::Grab);
+
+        r.pointer_down(Vec2::new(10.0, 10.0), 0.0);
+        assert_eq!(
+            r.cursor(),
+            CursorKind::Grab,
+            "a capture without dragging keeps the declared cursor"
+        );
+
+        r.pointer_move(Vec2::new(40.0, 10.0));
+        assert!(r.pointer().is_dragging());
+        assert_eq!(r.cursor(), CursorKind::Grabbing);
     }
 
     #[test]
