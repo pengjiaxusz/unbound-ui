@@ -7,8 +7,12 @@
 //! 设计取舍：
 //!
 //! * 单字形独立光栅化，复用现有八相位图集键，避免引入第二套缓存；
-//! * 彩色字体（Emoji）与距离场仍走 `swash`，因为 DirectWrite 的彩色
-//!   字形需要调色板遍历，距离场也需要轮廓数据；
+//! * 彩色字体（Emoji）仍走 `swash`：`CreateGlyphRunAnalysis` 只产出覆盖率，
+//!   要拿颜色层得用 `TranslateColorGlyphRun` 逐层遍历调色板（COLR/CPAL、
+//!   SVG、CBDT），本模块未实现，`IsColorFont` 为真时直接放弃；
+//! * 距离场与光栅器无关：`sdf::from_coverage` 的输入就是覆盖率位图。
+//!   `glyph.rs` 里的 `!sdf_mode` 是早期接线遗留，解除后 DirectWrite 位图
+//!   同样可以进 EDT；
 //! * 字体按「家族 + 字重 + 斜体」解析，首次使用时缓存 `IDWriteFontFace`；
 //! * 渲染模式取 `NATURAL_SYMMETRIC`（横竖双向抗锯齿）并关闭网格拟合：
 //!   本模块按 ⅛ px 相位自行做亚像素定位，网格拟合会把每个相位重新量化到
