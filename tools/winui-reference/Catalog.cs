@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
@@ -41,6 +42,10 @@ internal static class Catalog
         "PipsPager", "Expander", "SplitView", "Border", "Card", "StackPanel", "ScrollView",
         "TreeView", "ListView", "FlipView", "CalendarView", "TimePicker", "PersonPicture",
         "Image", "FontIcon", "TitleBar",
+        // 第三批：后续补齐的 WinUI 3 控件（11）
+        "RichEditBox", "GridView", "ListBox", "CommandBarFlyout", "AppBarButton",
+        "AppBarToggleButton", "AppBarSeparator", "SwipeControl", "RefreshContainer",
+        "AnnotatedScrollBar", "ItemsView",
     };
 
     private static readonly string[] ImplementedStateList = { "normal", "disabled", "checked", "focused" };
@@ -576,7 +581,7 @@ internal static class Catalog
                 {
                     Width = 320,
                     Height = 120,
-                    PaneDisplayMode = SplitViewPaneDisplayMode.Left,
+                    DisplayMode = SplitViewDisplayMode.CompactInline,
                     IsPaneOpen = true,
                     OpenPaneLength = 120,
                     Pane = new Border
@@ -956,8 +961,11 @@ internal static class Catalog
                     return true;
                 }
 
-                error = $"控件 {element.GetType().Name} 不支持 disabled 状态";
-                return false;
+                // 纯展示型 FrameworkElement（如 RichTextBlock / FlyoutPresenter）
+                // 没有禁用态模板，用统一透明度模拟禁用并禁止命中。
+                element.Opacity = 0.4;
+                element.IsHitTestVisible = false;
+                return true;
 
             case "checked":
                 if (element is CheckBox checkBox)

@@ -353,7 +353,7 @@ public sealed partial class CaptureWindow : Window
             var srcY = Math.Clamp(y + row, 0, sourceHeight - 1);
             var srcOffset = (srcY * sourceWidth + x) * 4;
             var dstOffset = row * width * 4;
-            Buffer.BlockCopy(source, srcOffset, dst, dstOffset, width * 4);
+            System.Buffer.BlockCopy(source, srcOffset, dst, dstOffset, width * 4);
         }
 
         return dst;
