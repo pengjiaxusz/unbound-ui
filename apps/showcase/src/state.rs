@@ -853,6 +853,9 @@ pub fn reduce_showcase_component(
     match id {
         WidgetCatalogId::Button
         | WidgetCatalogId::SplitButton
+        | WidgetCatalogId::HyperlinkButton
+        | WidgetCatalogId::RepeatButton
+        | WidgetCatalogId::DropDownButton
         | WidgetCatalogId::Descriptions
         | WidgetCatalogId::Alert
         | WidgetCatalogId::AlertDialog
@@ -891,6 +894,8 @@ pub fn reduce_showcase_component(
         WidgetCatalogId::Checkbox
         | WidgetCatalogId::Switch
         | WidgetCatalogId::ToggleButton
+        | WidgetCatalogId::ToggleSplitButton
+        | WidgetCatalogId::CalendarDatePicker
         | WidgetCatalogId::Callout
         | WidgetCatalogId::Collapsible
         | WidgetCatalogId::Modal
@@ -937,6 +942,7 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::Transfer
         | WidgetCatalogId::TreeView
         | WidgetCatalogId::DatePicker
+        | WidgetCatalogId::DatePickerWheel
         | WidgetCatalogId::DateRangePicker
         | WidgetCatalogId::TimePicker
         | WidgetCatalogId::GenericDataTable
@@ -968,6 +974,7 @@ pub fn reduce_showcase_component(
         WidgetCatalogId::TextInput
         | WidgetCatalogId::TerminalView
         | WidgetCatalogId::TextArea
+        | WidgetCatalogId::PasswordBox
         | WidgetCatalogId::AutoComplete
         | WidgetCatalogId::Combobox
         | WidgetCatalogId::PinInput
