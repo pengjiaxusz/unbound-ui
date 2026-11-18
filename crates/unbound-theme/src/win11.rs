@@ -146,7 +146,7 @@ pub fn dark() -> Palette {
         // 叠在卡片之上的 6% 白色薄纱，实测比卡片亮 13 级（#37373C vs #2A2A31）。
         // 薄纱的 alpha 字节按 sRGB 空间的百分比给定，而卡片比薄纱的参照底色
         // #202020 更亮，因此这里取 19（≈6% 在更亮底色上的线性等价值）。
-        (Token::CONTROL_FILL, c(255, 255, 255, veil(19))),
+        (Token::CONTROL_FILL, c(255, 255, 255, veil(15))),
         // 控件描边（`ControlStrokeColorDefault`）：6% 白色薄纱。
         // 实测 Win11 下拉框左沿只比填充亮 3 级，几乎不可见——
         // 因此不能拿 `OUTLINE`（92,92,92）去描边，那会让下拉框变成一个「黑框」。
@@ -258,8 +258,9 @@ pub fn light() -> Palette {
         (Token::HUD_BG, c(249, 249, 249, 246)),
         (Token::HUD_TEXT, c(26, 26, 26, 255)),
         (Token::INPUT_BG, c(255, 255, 255, 178)),
-        // 浅色下的控件表面是纯白（WinUI 浅色下拉框为不透明白，靠描边区分）。
-        (Token::CONTROL_FILL, c(255, 255, 255, 255)),
+        // 浅色 `ControlFillColorDefault` 是 70% 白色薄纱：叠在 `#F3F3F3`
+        // 底上得到实测的 251，而不是不透明白色。
+        (Token::CONTROL_FILL, c(255, 255, 255, 179)),
         // 浅色下的控件描边是 6% 黑色薄纱：白控件靠这圈灰线从卡片上「抠」出来。
         (Token::CONTROL_STROKE, c(0, 0, 0, light_base_veil(15))),
         (
