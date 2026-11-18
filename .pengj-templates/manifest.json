@@ -1,6 +1,6 @@
 {
   "tool": "pengj-templates",
-  "version": "0.75.1",
+  "version": "0.76.1",
   "project_name": "unbound-ui",
   "layers": [
     "common",
@@ -136,7 +136,7 @@
     ".agents\\skills\\wayfinder\\SKILL.md": "74ee42dff609211f880852bcfbb45c54b44d0e381e8099a76ad3cc3fa9226a4c",
     ".agents\\skills\\wizard\\SKILL.md": "3ce4a38f7841e5d52be268f19138ba02bac59d9a9c57716366178b6e4f77c740",
     ".agents\\skills\\wizard\\template.sh": "ba0bdc9bacf902b74277939dfd01973d5ac0815625bb7817123e4a26dabddaf5",
-    ".agents\\skills\\worktree\\SKILL.md": "365cdf16985eebbadc972ed8953e23ce9f7af9304f61790724d7716cef3b7d1e",
+    ".agents\\skills\\worktree\\SKILL.md": "0733707b73721d8646f0d71e2fc6ff71e9f978595a4753abb46aff9307ede9d2",
     ".agents\\skills\\write-a-skill\\SKILL.md": "4d1b1de7937feabcc909050c34d95b149134e2b07baf1521c3f708dcb10e8ba5",
     ".agents\\skills\\write-docs\\SKILL.md": "873c5688743b786c3f445229240d9faf562c5179f484be5b04d00b85a9dcfeca",
     ".agents\\skills\\writing-for-agents\\SKILL-MECHANICS.md": "8270f0089a3f0f21ff6df51a728b1ac4fcb71405cc5cc3612fb28e028451edf0",
@@ -154,7 +154,7 @@
     ".pengj-templates\\just\\bque.just": "d014bf30776544e5cc5084763edef784f0c712d06339b50e4250c853f48e8e3f",
     ".pengj-templates\\just\\gate.just": "848074b50fb8e799c8e0a32d9c76f33527d6f028550709797818b0b5a09a23ef",
     ".pengj-templates\\just\\rust-workspace.just": "bd9450392b6a4f773d531b7297fbbe9faee441e2c64a880926f35c4f60cecc6f",
-    ".pengj-templates\\just\\worktree.just": "59534b775b4a5444bf843a3d1d465731714dacb02d96bf83aeaba2e91a751624",
+    ".pengj-templates\\just\\worktree.just": "fa028c5d36493407cb8713541259262da550e7ceb7631aa171b4cda48b11ce82",
     ".pengj-templates\\scripts\\doctor.d\\README.md": "ad85d611af101327951a12b7bd1c186bdc6cf4da2ddd781b5fdbe4e9fc4361f6",
     ".pengj-templates\\scripts\\doctor.ps1": "9bec0595d25388f54cc84c7fc369cd7d804af05e2a64b099389b9cff5a1ae694",
     ".pengj-templates\\scripts\\doctor.sh": "d4a749741a383fe89688281b391f429dd627f9b0d500027f71ca16161b1aa4a9",

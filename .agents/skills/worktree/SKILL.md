@@ -23,7 +23,9 @@ just wt-create feature-a
 
 ## 共享目录怎么来的
 
-路径**就是主工作树的 `target/`**，由 `git worktree list --porcelain` 推导（第一条即主工作树）。因此同一仓库的所有工作树推出同一个值——你站在特性分支的工作树里，算出来的是主工作树的路径，不是它自己的。`just` 构建配方把它注入为 `CARGO_TARGET_DIR`，自检读的是同一个值——推导逻辑只有一份。
+路径**就是主工作树的 `target/`**。判定方式是比对 `git rev-parse --git-dir` 与 `--git-common-dir`：两者相等说明自己就是主工作树（普通仓库、子模块、`--separate-git-dir` 都属于这态），取 `--show-toplevel`；只有链接工作树才读 `git worktree list --porcelain` 的第一条。因此同一仓库的所有工作树推出同一个值——你站在特性分支的工作树里，算出来的是主工作树的路径，不是它自己的。`just` 构建配方把它注入为 `CARGO_TARGET_DIR`，自检读的是同一个值——推导逻辑只有一份。
+
+别把「`worktree list` 的第一条」当成完整规则：在子模块里那条命令报出来的是 **gitdir**（`.git/modules/<name>`），照它推导会把产物写进仓库的 git 目录。
 
 正因为主工作树的 `target/` 本身就是共享目录，在那里裸跑 `cargo build` 根本不需要注入；被重定向的只有链接工作树。
 
