@@ -16,6 +16,7 @@
 
 // 基础设施模块：场景差分、图元打包辅助工具与默认标题栏描述符。它们没有独立的
 // `emit_*` 发射器，不属于业务组件，因此不纳入展示目录。
+pub mod canonical;
 pub mod catalog;
 pub mod diff;
 pub mod ergonomics;
@@ -583,6 +584,105 @@ pub use virtual_views::{
     emit_virtual_row, ReorderableListState, VariableVirtualList, VariableWindow, VirtualRowTokens,
 };
 pub use watermark::{emit_watermark, WatermarkDesc};
+
+pub use canonical::{ControlClass, BASELINE_COUNT, EXCLUSIVE_COUNT, TOOLKIT_COUNT};
+
+// ---------------------------------------------------------------------------
+// WinUI 3 规范名类型别名（扩展期）
+//
+// 目录目前以历史源码模块名为主键；下列别名让差分器、展台与后续工单可以直接用
+// WinUI 3 官方类型名书写，同时保持全部现有调用点零改动。
+// ---------------------------------------------------------------------------
+
+/// WinUI 3 `CheckBox` 的规范名别名。
+pub type CheckBoxDesc = CheckboxDesc;
+/// WinUI 3 `ToggleSwitch` 的规范名别名。
+pub type ToggleSwitchDesc = SwitchDesc;
+/// WinUI 3 `ToggleSwitch` 布局别名。
+pub type ToggleSwitchLayout = SwitchLayout;
+/// WinUI 3 `ToggleSwitch` 令牌别名。
+pub type ToggleSwitchTokens = SwitchTokens;
+/// WinUI 3 `ComboBox`（不可编辑下拉）的规范名别名。
+pub type ComboBoxDesc = SelectDesc;
+/// WinUI 3 `ComboBox` 状态别名。
+pub type ComboBoxState = SelectState;
+/// WinUI 3 `ComboBox (IsEditable = true)` 的规范名别名。
+pub type ComboBoxEditableDesc = ComboboxDesc;
+/// WinUI 3 `TextBox` 的规范名别名。
+pub type TextBoxDesc = TextInputDesc;
+/// WinUI 3 `TextBox (AcceptsReturn = true)` 的规范名别名。
+pub type TextBoxAreaDesc = TextAreaDesc;
+/// WinUI 3 `RadioButton` 的规范名别名。
+pub type RadioButtonDesc = RadioDesc;
+/// WinUI 3 `NumberBox` 的规范名别名。
+pub type NumberBoxDesc = NumberInputDesc;
+/// WinUI 3 `AutoSuggestBox` 的规范名别名。
+pub type AutoSuggestBoxDesc = AutoCompleteDesc;
+/// WinUI 3 `RichTextBlock` 的规范名别名。
+pub type RichTextBlockDesc = RichTextDesc;
+/// WinUI 3 `ProgressBar` 的规范名别名。
+pub type ProgressBarDesc = ProgressDesc;
+/// WinUI 3 `ProgressRing` 的规范名别名。
+pub type ProgressRingDesc = SpinnerDesc;
+/// WinUI 3 `InfoBar` 的规范名别名。
+pub type InfoBarDesc = AlertDesc;
+/// WinUI 3 `InfoBadge` 的规范名别名。
+pub type InfoBadgeDesc = BadgeDesc;
+/// WinUI 3 `ToolTip` 的规范名别名。
+pub type ToolTipDesc = TooltipDesc;
+/// WinUI 3 `CommandBar` 的规范名别名。
+pub type CommandBarDesc = ToolbarDesc;
+/// WinUI 3 `TabView` 的规范名别名。
+pub type TabViewDesc = TabsDesc;
+/// WinUI 3 `BreadcrumbBar` 的规范名别名。
+pub type BreadcrumbBarDesc = BreadcrumbDesc;
+/// WinUI 3 `SelectorBar` 的规范名别名。
+pub type SelectorBarDesc = SegmentedDesc;
+/// WinUI 3 `PipsPager` 的规范名别名。
+pub type PipsPagerDesc = PaginationDesc;
+/// WinUI 3 `Expander` 的规范名别名。
+pub type ExpanderDesc = CollapsibleDesc;
+/// WinUI 3 `SplitView` 的规范名别名。
+pub type SplitViewDesc = DrawerDesc;
+/// WinUI 3 `FlipView` 的规范名别名。
+pub type FlipViewDesc = CarouselDesc;
+/// WinUI 3 `PersonPicture` 的规范名别名。
+pub type PersonPictureDesc = AvatarDesc;
+/// WinUI 3 `StackPanel` 的规范名别名。
+pub type StackPanelDesc = StackDesc;
+/// WinUI 3 `FontIcon` 的规范名别名。
+pub type FontIconDesc = IconDesc;
+/// WinUI 3 `ContentDialog` 的规范名别名。
+pub type ContentDialogDesc = ModalDesc;
+/// WinUI 3 `Flyout` 的规范名别名。
+pub type FlyoutDesc = PopoverDesc;
+/// WinUI 3 `MenuFlyout` 的规范名别名。
+pub type MenuFlyoutDesc = MenuDesc;
+/// WinUI 3 `NavigationView` 的规范名别名。
+pub type NavigationViewDesc = SidebarDesc;
+/// WinUI 3 `CalendarView` 的规范名别名。
+pub type CalendarViewDesc = DatePickerDesc;
+/// WinUI 3 `Border` 的规范名别名。
+pub type BorderDesc = CardDesc;
+
+/// Community Toolkit `TableView` 的规范名别名。
+pub type TableViewDesc = TableDesc;
+/// Community Toolkit `TokenizingTextBox` 的规范名别名。
+pub type TokenizingTextBoxDesc = TagInputDesc;
+/// Community Toolkit `SettingsCard` 的规范名别名。
+pub type SettingsCardDesc = FormDesc;
+/// Community Toolkit `SettingsExpander` 的规范名别名。
+pub type SettingsExpanderDesc = DescriptionsDesc;
+/// Community Toolkit `WrapPanel` 的规范名别名。
+pub type WrapPanelDesc = WrapDesc;
+/// Community Toolkit `StaggeredPanel` 的规范名别名。
+pub type StaggeredPanelDesc = MasonryDesc;
+/// Community Toolkit `Shimmer` 的规范名别名。
+pub type ShimmerDesc = SkeletonDesc;
+/// Community Toolkit `ColorPalette` 的规范名别名。
+pub type ColorPaletteDesc = ColorSwatchDesc;
+/// Community Toolkit `GridSplitter` 的规范名别名。
+pub type GridSplitterDesc = SplitPaneDesc;
 
 /// 无头控件会话渲染使用的默认视口。
 pub const DEFAULT_VIEWPORT: (f32, f32) = (1280.0, 720.0);
