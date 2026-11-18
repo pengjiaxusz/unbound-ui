@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Text;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
@@ -68,7 +69,7 @@ internal static class Catalog
         return state.ToLowerInvariant() switch
         {
             "normal" or "disabled" or "focused" => true,
-            "checked" => canonical is "CheckBox" or "ToggleSwitch" or "ToggleButton" or "RadioButton",
+            "checked" => canonical is "CheckBox" or "ToggleSwitch" or "ToggleButton" or "RadioButton" or "AppBarToggleButton",
             _ => false,
         };
     }
@@ -98,7 +99,9 @@ internal static class Catalog
             "TabView" or "Pivot" or "BreadcrumbBar" or "SelectorBar" or "PipsPager" or
             "Expander" or "SplitView" or "Border" or "Card" or "StackPanel" or
             "ScrollView" or "TreeView" or "ListView" or "FlipView" or "CalendarView" or
-            "TimePicker" or "TitleBar";
+            "TimePicker" or "TitleBar" or "RichEditBox" or "GridView" or "ListBox" or
+            "CommandBarFlyout" or "SwipeControl" or "RefreshContainer" or
+            "AnnotatedScrollBar" or "ItemsView";
     }
 
     /// <summary>
@@ -761,6 +764,173 @@ internal static class Catalog
                 };
                 return true;
 
+            // ------------------------------------------------------------------
+            // 第三批：后续补齐的 WinUI 3 控件
+            // ------------------------------------------------------------------
+
+            case "RichEditBox":
+                {
+                    var rich = new RichEditBox
+                    {
+                        Width = 240,
+                        Height = 96,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    };
+                    rich.Document.SetText(TextSetOptions.None, "RichEditBox");
+                    element = rich;
+                    return true;
+                }
+
+            case "GridView":
+                {
+                    var grid = new GridView
+                    {
+                        Width = 260,
+                        Height = 140,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    };
+                    grid.Items.Add("Item 1");
+                    grid.Items.Add("Item 2");
+                    grid.Items.Add("Item 3");
+                    grid.Items.Add("Item 4");
+                    grid.SelectedIndex = 0;
+                    element = grid;
+                    return true;
+                }
+
+            case "ListBox":
+                {
+                    var list = new ListBox
+                    {
+                        Width = 220,
+                        Height = 120,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    };
+                    list.Items.Add("Item 1");
+                    list.Items.Add("Item 2");
+                    list.Items.Add("Item 3");
+                    list.SelectedIndex = 0;
+                    element = list;
+                    return true;
+                }
+
+            case "CommandBarFlyout":
+                {
+                    // CommandBarFlyout 是 FlyoutBase，不是 FrameworkElement；
+                    // 静态采集用展开的 CommandBar 呈现同一套命令表面。
+                    var flyout = new CommandBar
+                    {
+                        Width = 280,
+                        IsOpen = true,
+                        DefaultLabelPosition = CommandBarDefaultLabelPosition.Collapsed,
+                    };
+                    flyout.PrimaryCommands.Add(new AppBarButton
+                    {
+                        Label = "Copy",
+                        Icon = new SymbolIcon(Symbol.Copy),
+                    });
+                    flyout.PrimaryCommands.Add(new AppBarButton
+                    {
+                        Label = "Cut",
+                        Icon = new SymbolIcon(Symbol.Cut),
+                    });
+                    flyout.PrimaryCommands.Add(new AppBarSeparator());
+                    flyout.PrimaryCommands.Add(new AppBarButton
+                    {
+                        Label = "More",
+                        Icon = new SymbolIcon(Symbol.More),
+                    });
+                    element = flyout;
+                    return true;
+                }
+
+            case "AppBarButton":
+                element = new AppBarButton
+                {
+                    Label = "Save",
+                    Icon = new SymbolIcon(Symbol.Save),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
+            case "AppBarToggleButton":
+                element = new AppBarToggleButton
+                {
+                    Label = "Bold",
+                    Icon = new SymbolIcon(Symbol.Bold),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
+            case "AppBarSeparator":
+                element = new AppBarSeparator
+                {
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
+            case "SwipeControl":
+                {
+                    var swipe = new SwipeControl
+                    {
+                        Width = 260,
+                        Content = new Border
+                        {
+                            Background = new SolidColorBrush(Color.FromArgb(255, 255, 255, 255)),
+                            Child = new TextBlock { Text = "Swipe me" },
+                        },
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    };
+                    var leftItems = new SwipeItems();
+                    leftItems.Add(new SwipeItem
+                    {
+                        Text = "Delete",
+                        IconSource = new SymbolIconSource { Symbol = Symbol.Delete },
+                        BehaviorOnInvoked = SwipeBehaviorOnInvoked.Close,
+                    });
+                    swipe.LeftItems = leftItems;
+                    element = swipe;
+                    return true;
+                }
+
+            case "RefreshContainer":
+                element = new RefreshContainer
+                {
+                    Width = 260,
+                    Height = 160,
+                    Content = new TextBlock { Text = "Pull to refresh" },
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
+            case "AnnotatedScrollBar":
+                element = new AnnotatedScrollBar
+                {
+                    Width = 16,
+                    Height = 160,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
+            case "ItemsView":
+                element = new ItemsView
+                {
+                    Width = 260,
+                    Height = 160,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                return true;
+
             default:
                 return false;
         }
@@ -811,6 +981,12 @@ internal static class Catalog
                 if (element is RadioButton radioButton)
                 {
                     radioButton.IsChecked = true;
+                    return true;
+                }
+
+                if (element is AppBarToggleButton appBarToggle)
+                {
+                    appBarToggle.IsChecked = true;
                     return true;
                 }
 

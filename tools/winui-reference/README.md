@@ -69,10 +69,11 @@ dotnet build -c Release
 | `--no-cache` | 开关 | 关闭 | 忽略 `fingerprint` 缓存，强制重新采集全部用例 |
 | `--save-sheet` | 开关 | 关闭 | 除切分后的单用例 PNG 外，额外保留 `<Control>_<theme>_<backdrop>_sheet.png` |
 
-### 已接入控件（46 个）
+### 已接入控件（57 个）
 
 - **首批试点**：`Button` `CheckBox` `ToggleSwitch` `Slider` `ComboBox` `TextBox`
 - **第一批（基础输入与文本）**：`ToggleButton` `SplitButton` `RadioButton` `RatingControl` `ColorPicker` `NumberBox` `AutoSuggestBox` `RichTextBlock` `ProgressBar` `ProgressRing` `InfoBadge` `ToolTip`
 - **第二批（导航、浮层、集合与日期）**：`InfoBar` `TeachingTip` `ContentDialog` `Flyout` `MenuFlyout` `MenuBar` `CommandBar` `NavigationView` `TabView` `Pivot` `BreadcrumbBar` `SelectorBar` `PipsPager` `Expander` `SplitView` `Border` `Card` `StackPanel` `ScrollView` `TreeView` `ListView` `FlipView` `CalendarView` `TimePicker` `PersonPicture` `Image` `FontIcon` `TitleBar`
+- **第三批（后续补齐的 WinUI 3 控件）**：`RichEditBox` `GridView` `ListBox` `CommandBarFlyout` `AppBarButton` `AppBarToggleButton` `AppBarSeparator` `SwipeControl` `RefreshContainer` `AnnotatedScrollBar` `ItemsView`
 
 > 说明：`Flyout` 与 `MenuFlyout` 本身不是 `FrameworkElement`，静态拼版以其呈现器（`FlyoutPresenter` / `MenuFlyoutPresenter`）为表面；`ToolTip`、`TeachingTip`、`ContentDialog` 需要运行时宿主才能展开，静态采集只测量其内容盒。这三类浮层后续由结构快照与人工屏幕捕获补足。
