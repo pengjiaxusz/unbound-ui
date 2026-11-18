@@ -9,11 +9,14 @@
 //! 没有发生时显式写「None」。
 
 use accesskit::Role;
-use unbound_backdrop::{BackdropCombination, BackdropSelection, BackdropSource, MaterialKind};
+use unbound_backdrop::{
+    BackdropCombination, BackdropSelection, BackdropSource, MaterialKind, UnavailableReason,
+};
 use unbound_math::Rect;
 
 use super::{DemoCtx, DemoKind, ExampleDef, PageInfo};
 use crate::canvas::{AlignX, AlignY};
+use unbound_input::CursorKind;
 
 /// 材质行的起始部件编号。
 ///
@@ -103,17 +106,37 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
     for (kind, (cell, label_size)) in MaterialKind::ALL.iter().zip(material_cells) {
         let part = MATERIAL_PART_BASE + kind.index() as u16;
         let selected = *kind == selection.material;
+        // 逐档门槛：按当前来源与平台能力裁决，机器承载不了就禁用并附上原因。
+        let disabled = !ctx.state.backdrop_material_selectable(*kind);
+        let reason = if disabled {
+            unbound_backdrop::unavailable_reason(*kind, &ctx.state.backdrop_capabilities())
+        } else {
+            None
+        };
         draw_choice_button(
             ctx,
             part,
             cell,
             label_size,
-            kind.label(),
-            kind.description(),
-            selected,
+            ChoiceButton {
+                label: kind.label(),
+                description: kind.description(),
+                selected,
+                disabled,
+                experimental: kind.is_experimental(),
+                reason: reason.as_ref(),
+            },
         );
         let accessible_name = format!("Material: {} — {}", kind.label(), kind.description());
-        ctx.control(part, cell, Role::Button, &accessible_name, selected);
+        ctx.canvas.control(
+            ctx.part(part),
+            cell,
+            Role::Button,
+            &accessible_name,
+            CursorKind::Pointer,
+            disabled,
+            selected,
+        );
     }
 
     let source_top = material_top + row_header_h + 4.0 + button_h + row_gap;
@@ -141,12 +164,25 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
             part,
             cell,
             label_size,
-            source.label(),
-            source.description(),
-            selected,
+            ChoiceButton {
+                label: source.label(),
+                description: source.description(),
+                selected,
+                disabled: false,
+                experimental: false,
+                reason: None,
+            },
         );
         let accessible_name = format!("Source: {} — {}", source.label(), source.description());
-        ctx.control(part, cell, Role::Button, &accessible_name, selected);
+        ctx.canvas.control(
+            ctx.part(part),
+            cell,
+            Role::Button,
+            &accessible_name,
+            CursorKind::Pointer,
+            false,
+            selected,
+        );
     }
 
     // ---------- 提示行 ----------
@@ -363,26 +399,42 @@ fn draw_row_header(ctx: &mut DemoCtx<'_, '_>, y: f32, title: &str) {
     );
 }
 
+/// 一个选择按钮的展示状态。
+struct ChoiceButton<'a> {
+    label: &'a str,
+    description: &'a str,
+    selected: bool,
+    disabled: bool,
+    experimental: bool,
+    reason: Option<&'a UnavailableReason>,
+}
+
 /// 画一个选择按钮：标题、说明与选中标记。
+///
+/// `disabled` 传给画布视觉状态——`visual` 的第二个形参是 **disabled**，不是
+/// selected（旧实现把 selected 传了进去，导致选中的按钮被画成禁用态，这是
+/// 工单 #32 的遗留缺陷）。禁用时用告警色显示不可用原因，选中按钮则画选中底色。
 fn draw_choice_button(
     ctx: &mut DemoCtx<'_, '_>,
     part: u16,
     cell: Rect,
     label_size: f32,
-    label: &str,
-    description: &str,
-    selected: bool,
+    choice: ChoiceButton<'_>,
 ) {
     let palette = *ctx.canvas.palette;
-    let hover = ctx.canvas.visual(ctx.part(part), selected);
-    let background = if selected {
+    let hover = ctx.canvas.visual(ctx.part(part), choice.disabled);
+    let background = if choice.disabled {
+        palette.card_bg
+    } else if choice.selected {
         palette.primary_soft
     } else if hover.is_hovered() {
         palette.control_hover
     } else {
         palette.card_bg
     };
-    let border = if selected {
+    let border = if choice.disabled {
+        palette.card_border
+    } else if choice.selected {
         palette.primary
     } else {
         palette.card_border
@@ -392,15 +444,21 @@ fn draw_choice_button(
         8.0,
         background,
         border,
-        if selected { 1.5 } else { 1.0 },
+        if choice.selected && !choice.disabled {
+            1.5
+        } else {
+            1.0
+        },
         0.0,
     );
     let inner = (cell.size.x - CELL_PADDING).max(20.0);
     ctx.canvas.text(
-        label,
+        choice.label,
         Rect::new(cell.origin.x + 10.0, cell.origin.y + 8.0, inner, 16.0),
         label_size,
-        if selected {
+        if choice.disabled {
+            palette.text_muted
+        } else if choice.selected {
             palette.primary
         } else {
             palette.text
@@ -408,24 +466,48 @@ fn draw_choice_button(
         AlignX::Start,
         AlignY::Center,
     );
-    // 说明只在按钮够宽时出现：窄视口下让它换行会压到「SELECTED」标记上。
-    if cell.size.x >= 104.0 {
-        ctx.canvas.text_wrapped(
-            description,
+    // 实验档在右上角加一枚小标记，让它在材质行里与常规档显式区分。
+    if choice.experimental && cell.size.x >= 150.0 {
+        let badge = "EXPERIMENTAL";
+        let badge_glyph_width = ctx.canvas.labels.metrics(badge, 8.0).width;
+        ctx.canvas.text(
+            badge,
             Rect::new(
-                cell.origin.x + 10.0,
-                cell.origin.y + 28.0,
-                inner,
-                (cell.size.y - 50.0).max(18.0),
+                cell.max().x - 8.0 - badge_glyph_width,
+                cell.origin.y + 9.0,
+                badge_glyph_width,
+                14.0,
             ),
-            9.0,
-            palette.text_muted,
+            8.0,
+            palette.warning,
+            AlignX::Start,
+            AlignY::Center,
         );
     }
-    if selected {
+    // 选中标记与说明文字各自预留高度，避免「SELECTED」压住说明（#32 遗留缺陷）。
+    let title_bottom = cell.origin.y + 26.0;
+    let selected_strip = if choice.selected { 16.0 } else { 0.0 };
+    let detail = choice.reason.map_or_else(
+        || choice.description.to_string(),
+        |reason| reason.description(),
+    );
+    let detail_height = (cell.max().y - title_bottom - 6.0 - selected_strip).max(0.0);
+    if cell.size.x >= 104.0 && detail_height >= 12.0 {
+        ctx.canvas.text_wrapped(
+            &detail,
+            Rect::new(cell.origin.x + 10.0, title_bottom, inner, detail_height),
+            9.0,
+            if choice.reason.is_some() {
+                palette.warning
+            } else {
+                palette.text_muted
+            },
+        );
+    }
+    if choice.selected {
         ctx.canvas.text(
             "SELECTED",
-            Rect::new(cell.origin.x + 10.0, cell.max().y - 24.0, inner, 14.0),
+            Rect::new(cell.origin.x + 10.0, cell.max().y - 20.0, inner, 12.0),
             8.5,
             palette.primary,
             AlignX::Start,

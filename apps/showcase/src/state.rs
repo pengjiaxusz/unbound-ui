@@ -11,8 +11,8 @@ use unbound_anim::{Spring, SpringPreset};
 use unbound_app::{set_global_locale, AssetHub, I18nBundle, Locale};
 use unbound_asset::{AssetId, StagingRing};
 use unbound_backdrop::{
-    native_available, resolve_combination, BackdropCapabilities, BackdropCombination, BackdropPlan,
-    BackdropSelection, BackdropSource, MaterialKind,
+    native_available, resolve_combination, selectable, BackdropCapabilities, BackdropCombination,
+    BackdropPlan, BackdropSelection, BackdropSource, MaterialKind,
 };
 use unbound_canvas::{TransactionKind, UndoStack};
 use unbound_math::Vec2;
@@ -496,9 +496,13 @@ pub fn build_showcase_i18n(locale: Locale) -> I18nBundle {
 impl GalleryState {
     /// 写入后景的材质种类选择；返回是否发生变化。
     ///
-    /// 实际生效组合由宿主在下一帧解析回写，页面无需自行推导。
+    /// 机器承载不了的材质会被拒绝：禁用按钮即便因为命中区域仍然收到点击，
+    /// 也不会改变选择。实际生效组合由宿主在下一帧解析回写。
     pub fn set_backdrop_material(&mut self, material: MaterialKind) -> bool {
         if self.backdrop_selection.material == material {
+            return false;
+        }
+        if !self.backdrop_material_selectable(material) {
             return false;
         }
         self.backdrop_selection.material = material;
@@ -523,6 +527,18 @@ impl GalleryState {
             windows_build: self.windows_build,
             premultiplied_alpha_supported: self.premultiplied_alpha_supported,
         }
+    }
+
+    /// 某个材质在当前来源与平台能力下是否能被选中。
+    ///
+    /// 展台按钮的禁用态直接取自它；来源为「引擎自绘」时永不因缺少自绘变体而禁用。
+    #[must_use]
+    pub fn backdrop_material_selectable(&self, material: MaterialKind) -> bool {
+        selectable(
+            material,
+            self.backdrop_selection.source,
+            &self.backdrop_capabilities(),
+        )
     }
 
     /// 用户选择的材质种类在这台机器上能否走原生路径。

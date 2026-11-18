@@ -110,6 +110,17 @@ impl MaterialKind {
             Self::Immersive => "Experimental immersive backdrop material",
         }
     }
+
+    /// 该材质种类是否是实验档。
+    ///
+    /// 实验档表示「尚未被公开文档或实测证实为稳定可用」的材质：取值可能在任何
+    /// 一次系统更新里改变，界面必须把它与常规档显式区分开。当前只有沉浸式后景
+    /// 是实验档。
+    #[must_use]
+    #[deny(unreachable_patterns)]
+    pub const fn is_experimental(self) -> bool {
+        matches!(self, Self::Immersive)
+    }
 }
 
 /// 来源：后景材质由哪条路径产出。
@@ -270,6 +281,12 @@ pub enum UnavailableReason {
     BuildUnknown,
     /// 图形表面不支持预乘 alpha 合成。
     PremultipliedAlphaUnsupported,
+    /// 该材质没有经过探测确认的系统取值，系统合成器无法把它画出来。
+    ///
+    /// 沉浸式后景属于这一档：它的 `DWM_SYSTEMBACKDROP_TYPE` 取值从未公开，
+    /// 平台层的「写入后回读」探测也无法把真实接受与单纯回显区分开，因此宿主
+    /// 没有可下发的系统材质请求。该原因必须让用户在界面上看得见。
+    SystemChannelUnconfirmed,
 }
 
 impl UnavailableReason {
@@ -281,6 +298,7 @@ impl UnavailableReason {
             Self::BuildTooLow { .. } => "System build too low",
             Self::BuildUnknown => "System build unknown",
             Self::PremultipliedAlphaUnsupported => "Premultiplied alpha unsupported",
+            Self::SystemChannelUnconfirmed => "System channel unconfirmed",
         }
     }
 
@@ -297,6 +315,10 @@ impl UnavailableReason {
             }
             Self::PremultipliedAlphaUnsupported => {
                 "The graphics surface does not support premultiplied alpha composition".to_string()
+            }
+            Self::SystemChannelUnconfirmed => {
+                "The system backdrop value for this material is unconfirmed, so the system compositor cannot draw it"
+                    .to_string()
             }
         }
     }
@@ -335,19 +357,23 @@ pub const fn required_build(material: MaterialKind) -> u32 {
 ///
 /// 门槛只作用于原生路径：自绘路径在任何环境都可用。
 /// 门槛分三档——「无」不受约束；跟随系统、标准云母、云母变体与亚克力要求
-/// 构建号不低于 [`NATIVE_MICA_MIN_BUILD`] **且**表面支持预乘合成；
-/// 沉浸式后景额外要求构建号不低于 [`IMMERSIVE_BACKDROP_MIN_BUILD`]。
-/// 构建号未知一律视为不可用。
+/// 构建号不低于 [`NATIVE_MICA_MIN_BUILD`] **且**表面支持预乘合成。
+///
+/// 沉浸式后景是例外：它的系统取值从未公开，平台层的写入回读探测也确认不了
+/// 真实取值（详见 `unbound_platform::win32_frame::probe_immersive_backdrop` 的文档），
+/// 因此宿主没有可下发的系统材质请求，**任何环境都不能走原生路径**。
+/// 构建号未知同样一律视为不可用。
 #[must_use]
 pub fn native_available(material: MaterialKind, caps: &BackdropCapabilities) -> bool {
     match material {
         // 无材质不受任何门槛约束：它不请求任何系统材质。
         MaterialKind::None => true,
+        // 实验档没有可下发的系统取值，原生通道不存在。
+        MaterialKind::Immersive => false,
         MaterialKind::FollowSystem
         | MaterialKind::Mica
         | MaterialKind::MicaAlt
-        | MaterialKind::Acrylic
-        | MaterialKind::Immersive => {
+        | MaterialKind::Acrylic => {
             caps.windows_build
                 .is_some_and(|build| build >= required_build(material))
                 && caps.premultiplied_alpha_supported
@@ -357,13 +383,26 @@ pub fn native_available(material: MaterialKind, caps: &BackdropCapabilities) -> 
 
 /// 某一材质种类在当前机器上无法走原生路径的原因。
 ///
-/// 可用时返回 `None`；不可用时给出可展示的原因。构建号不足优先于
-/// 预乘合成不支持：两者都不满足时先报构建号门槛。
+/// 可用时返回 `None`；不可用时给出可展示的原因。沉浸式后景先报构建号门槛，
+/// 通过门槛后再报「系统取值未确认」，避免把实验档的问题误报成机器太旧。
+/// 其余各档的构建号不足优先于预乘合成不支持。
 #[must_use]
 pub fn unavailable_reason(
     material: MaterialKind,
     caps: &BackdropCapabilities,
 ) -> Option<UnavailableReason> {
+    if material == MaterialKind::Immersive {
+        return Some(match caps.windows_build {
+            None => UnavailableReason::BuildUnknown,
+            Some(build) if build < IMMERSIVE_BACKDROP_MIN_BUILD => UnavailableReason::BuildTooLow {
+                required: IMMERSIVE_BACKDROP_MIN_BUILD,
+            },
+            Some(_) if !caps.premultiplied_alpha_supported => {
+                UnavailableReason::PremultipliedAlphaUnsupported
+            }
+            Some(_) => UnavailableReason::SystemChannelUnconfirmed,
+        });
+    }
     if native_available(material, caps) {
         return None;
     }
@@ -383,6 +422,36 @@ pub fn unavailable_reason(
 #[deny(unreachable_patterns)]
 pub const fn has_self_drawn_variant(material: MaterialKind) -> bool {
     matches!(material, MaterialKind::Mica | MaterialKind::MicaAlt)
+}
+
+/// 在给定来源下，某一材质种类是否能被用户选中。
+///
+/// 这是展台逐档门槛的唯一裁决点，展台按钮的禁用状态直接取自它：
+///
+/// - **来源为「系统原生」**：必须能走原生路径，否则禁用；
+/// - **来源为「自动」**：原生可用，或该材质有自绘变体（自动会回退到自绘），
+///   否则禁用；
+/// - **来源为「引擎自绘」**：永远可选——缺少自绘变体只是让组合非法并展示回退，
+///   不是机器能力不足，不能因此禁用（见 #37 的细化）；
+/// - **材质为「无」**永远可选，因为它不请求任何系统材质。
+///
+/// 「禁用」只表达机器承载不了，不表达组合非法。
+#[must_use]
+pub fn selectable(
+    material: MaterialKind,
+    source: BackdropSource,
+    caps: &BackdropCapabilities,
+) -> bool {
+    if material == MaterialKind::None {
+        return true;
+    }
+    match source {
+        BackdropSource::Native => native_available(material, caps),
+        BackdropSource::Auto => {
+            native_available(material, caps) || has_self_drawn_variant(material)
+        }
+        BackdropSource::SelfDrawn => true,
+    }
 }
 
 /// 解析用户选择与平台能力，给出实际生效的后景组合。
@@ -591,7 +660,8 @@ mod tests {
             build: Some(26100),
             premultiplied: true,
             unavailable_standard: None,
-            unavailable_immersive: None,
+            // 构建号已够，但沉浸式后景的系统取值未被探测确认，仍然不可用。
+            unavailable_immersive: Some(UnavailableReason::SystemChannelUnconfirmed),
         },
         CapabilityCase {
             name: "build on the immersive gate without premultiplied alpha",
@@ -605,7 +675,7 @@ mod tests {
             build: Some(26101),
             premultiplied: true,
             unavailable_standard: None,
-            unavailable_immersive: None,
+            unavailable_immersive: Some(UnavailableReason::SystemChannelUnconfirmed),
         },
         CapabilityCase {
             name: "build above the immersive gate without premultiplied alpha",
@@ -763,6 +833,11 @@ mod tests {
                 !material.description().is_empty(),
                 "every material kind must expose a description"
             );
+            assert_eq!(
+                material.is_experimental(),
+                material == MaterialKind::Immersive,
+                "only the immersive material must be marked experimental"
+            );
         }
         assert_eq!(
             MaterialKind::from_index(99),
@@ -893,15 +968,27 @@ mod tests {
             ),
             "the immersive material must not be native below build 26100"
         );
+        // 沉浸式后景即便构建号够高，也因为没有可下发的系统取值而不可走原生。
         assert!(
-            native_available(
+            !native_available(
                 MaterialKind::Immersive,
                 &BackdropCapabilities {
                     windows_build: Some(26100),
                     premultiplied_alpha_supported: true,
                 }
             ),
-            "the immersive material must be native from build 26100 on"
+            "the immersive material must never be native without a confirmed system value"
+        );
+        assert_eq!(
+            unavailable_reason(
+                MaterialKind::Immersive,
+                &BackdropCapabilities {
+                    windows_build: Some(26100),
+                    premultiplied_alpha_supported: true,
+                }
+            ),
+            Some(UnavailableReason::SystemChannelUnconfirmed),
+            "the immersive material must report the unconfirmed system channel"
         );
         assert!(
             !native_available(
@@ -1200,6 +1287,7 @@ mod tests {
             UnavailableReason::BuildTooLow { required: 22621 },
             UnavailableReason::BuildUnknown,
             UnavailableReason::PremultipliedAlphaUnsupported,
+            UnavailableReason::SystemChannelUnconfirmed,
         ] {
             assert!(!reason.label().is_empty());
             assert!(!reason.description().is_empty());

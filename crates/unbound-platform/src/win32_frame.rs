@@ -44,19 +44,6 @@ impl WindowBackdropMaterial {
             Self::Tabbed => 4,  // DWMSBT_TABBEDWINDOW
         }
     }
-
-    /// 把后景路径映射为 DWM 系统背景材质。
-    ///
-    /// 原生路径使用标准云母；自绘与关闭都禁用材质，
-    /// 避免 Win11 的 DWM 材质干扰自绘纹理的视觉对照（等价于 Win10 环境）。
-    #[must_use]
-    pub const fn for_native_path(uses_native_path: bool) -> Self {
-        if uses_native_path {
-            Self::Mica
-        } else {
-            Self::None
-        }
-    }
 }
 
 /// 用于自定义标题栏与窗口按钮命中测试的原子指标。
@@ -244,9 +231,89 @@ mod win32 {
 
     const SUBCLASS_ID: usize = 0x554E42; // "UNB" in hex
 
+    /// `DWMWA_SYSTEMBACKDROP_TYPE` 的属性编号。
+    const DWMWA_SYSTEMBACKDROP_TYPE_ID: i32 = 38;
+
+    /// 沉浸式后景的未公开系统取值候选。
+    ///
+    /// 公开头文件（Windows SDK 10.0.26100）里的 `DWM_SYSTEMBACKDROP_TYPE` 只定义了
+    /// 0..=4；沉浸式后景若真有系统取值，只能落在公开区间之外的这几个数上。这里只放
+    /// 候选，不代表它们被系统接受——是否接受由 [`probe_immersive_backdrop`] 实测。
+    const IMMERSIVE_BACKDROP_CANDIDATES: [i32; 3] = [5, 6, 7];
+
+    /// 回读探测的负对照哨兵：几个必然非法的取值。
+    ///
+    /// 本机实测（Windows 11 build 26100）证明 `DwmSetWindowAttribute` 对 0..=4 之外的
+    /// 任意整数都返回 `S_OK`，而 `DwmGetWindowAttribute` 会原样回读，包括 `999` 与
+    /// `65536`。所以「读回等于写入」本身没有判别力；只有先确认哨兵会被系统拒绝，
+    /// 候选值的回读相等才可能有意义。这里避开了 `0x7FFFFFFF` 这类极端值：实测写入它
+    /// 会让 `dwmapi` 在进程内触发访问冲突，探测代码绝不能拿它当探针。
+    const BACKDROP_PROBE_SENTINELS: [i32; 2] = [999, 0x0001_0000];
+
     #[inline]
     fn hwnd_from_isize(raw: isize) -> HWND {
         HWND(raw as *mut c_void)
+    }
+
+    /// 探测沉浸式后景的系统取值（Win32 实现）。语义见外层
+    /// [`super::probe_immersive_backdrop`]。
+    pub fn probe_immersive_backdrop(hwnd: isize) -> Option<i32> {
+        use ::windows::Win32::Graphics::Dwm::{
+            DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE,
+        };
+
+        if hwnd == 0 {
+            return None;
+        }
+        let hwnd_ptr = hwnd_from_isize(hwnd);
+
+        let write = |value: i32| unsafe {
+            DwmSetWindowAttribute(
+                hwnd_ptr,
+                DWMWINDOWATTRIBUTE(DWMWA_SYSTEMBACKDROP_TYPE_ID),
+                (&raw const value).cast::<c_void>(),
+                core::mem::size_of_val(&value) as u32,
+            )
+            .is_ok()
+        };
+        let read = || -> Option<i32> {
+            let mut value: i32 = 0;
+            let cb = core::mem::size_of_val(&value) as u32;
+            unsafe {
+                DwmGetWindowAttribute(
+                    hwnd_ptr,
+                    DWMWINDOWATTRIBUTE(DWMWA_SYSTEMBACKDROP_TYPE_ID),
+                    (&raw mut value).cast::<c_void>(),
+                    cb,
+                )
+            }
+            .ok()?;
+            Some(value)
+        };
+
+        let original = read();
+
+        // 负对照：只要任一非法哨兵被原样回读，就说明该属性只做整数存储、不做取值
+        // 校验，回读相等毫无证据价值——直接判定为「无法确认」，绝不猜数字。
+        let sentinels_are_rejected = BACKDROP_PROBE_SENTINELS
+            .iter()
+            .all(|sentinel| write(*sentinel) && read().is_some_and(|value| value != *sentinel));
+
+        let mut confirmed = None;
+        if sentinels_are_rejected {
+            for candidate in IMMERSIVE_BACKDROP_CANDIDATES {
+                if write(candidate) && read() == Some(candidate) {
+                    confirmed = Some(candidate);
+                    break;
+                }
+            }
+        }
+
+        // 恢复原值，避免探测把窗口留在非法材质上。
+        if let Some(original) = original {
+            let _ = write(original);
+        }
+        confirmed
     }
 
     unsafe extern "system" fn custom_frame_subclass_proc(
@@ -583,21 +650,45 @@ pub fn set_window_backdrop(hwnd: isize, material: WindowBackdropMaterial) -> boo
     }
 }
 
+/// 探测沉浸式后景的系统取值，返回被系统真正接受的取值。
+///
+/// 做法是「写入后回读」：向真实窗口写入候选 `DWMWA_SYSTEMBACKDROP_TYPE`，再读回
+/// 同一属性；只有读回值等于写入值才认为该取值被接受。
+///
+/// 但回读相等并不充分。本机实测（Windows 11 build 26100）：该属性其实只是一个整数
+/// 存储，`DwmSetWindowAttribute` 对 0..=4 之外的任意值（含 `999`、`65536`）都返回
+/// `S_OK`，`DwmGetWindowAttribute` 原样回读。因此探测先写入必然非法的哨兵值作负对照：
+/// 一旦哨兵也被原样回读，就说明回读通道没有判别力，本函数返回 `None`，绝不猜测。
+///
+/// 返回 `Some(value)` 表示某候选值通过了「可判别」的写入回读校验；返回 `None` 表示
+/// 无法确认（非 Windows、窗口句柄为 0、系统不改写属性、哨兵被回显）。
+///
+/// 本函数从不 panic，可在无头环境安全调用（`hwnd == 0` 直接返回 `None`）。探测会
+/// 临时改写窗口材质并在结束时恢复原值。
+#[must_use]
+pub fn probe_immersive_backdrop(hwnd: isize) -> Option<i32> {
+    #[cfg(windows)]
+    {
+        win32::probe_immersive_backdrop(hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn backdrop_material_follows_the_resolved_native_path() {
+    fn immersive_probe_reports_nothing_without_a_window() {
+        // 无头 / 尚未创建窗口时探测必须安静地返回「无法确认」，不能 panic。
         assert_eq!(
-            WindowBackdropMaterial::for_native_path(true),
-            WindowBackdropMaterial::Mica,
-            "the native path must use the standard DWM Mica material"
-        );
-        assert_eq!(
-            WindowBackdropMaterial::for_native_path(false),
-            WindowBackdropMaterial::None,
-            "self-drawn and off paths must disable the DWM material"
+            probe_immersive_backdrop(0),
+            None,
+            "a headless probe must never confirm a system value"
         );
     }
 

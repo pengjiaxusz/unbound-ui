@@ -1633,6 +1633,25 @@ fn the_material_row_updates_the_selection_and_the_readout() {
     for kind in MaterialKind::ALL {
         let part = MATERIAL_PART_BASE + kind.index() as u16;
         let node = target::id(Target::Demo(PageId::Backdrop.index() as u8, 0, part));
+        // 沉浸式后景的系统取值未确认：自动来源下既不走原生也没有自绘变体，
+        // 因此按钮禁用、点击不改选择。它的完整禁用行为由 backdrop_immersive 用例覆盖。
+        if kind == MaterialKind::Immersive {
+            let a11y = app
+                .semantics
+                .get(node)
+                .expect("the disabled material must still be in the accessibility tree");
+            assert!(
+                a11y.disabled,
+                "the unconfirmed immersive tier must be disabled on the auto source"
+            );
+            click_node(&mut app, node);
+            assert_ne!(
+                app.state.backdrop_selection.material,
+                MaterialKind::Immersive,
+                "clicking the disabled immersive tier must not change the selection"
+            );
+            continue;
+        }
         click_node(&mut app, node);
         assert_eq!(
             app.state.backdrop_selection.material, kind,

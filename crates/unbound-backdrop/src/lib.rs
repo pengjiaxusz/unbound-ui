@@ -44,7 +44,7 @@ pub use plan::{
     DwmMaterial, MaterialRequest, PixelRect, UvRect, WallpaperTexture, MATERIAL_REQUEST_TABLE,
 };
 pub use selection::{
-    has_self_drawn_variant, native_available, required_build, resolve_combination,
+    has_self_drawn_variant, native_available, required_build, resolve_combination, selectable,
     unavailable_reason, BackdropCapabilities, BackdropCombination, BackdropSelection,
     BackdropSource, FallbackReason, MaterialKind, UnavailableReason, IMMERSIVE_BACKDROP_MIN_BUILD,
     NATIVE_MICA_MIN_BUILD,

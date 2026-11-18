@@ -130,8 +130,10 @@ pub enum DwmMaterial {
     Acrylic,
     /// 沉浸式后景（实验档）。
     ///
-    /// 该档的系统取值没有出现在公开文档里，因此当前没有任何材质种类会请求它：
-    /// 它留在枚举里是为了让后续调研（issue #36）有地方落值。
+    /// 该档的系统取值没有出现在公开文档里，平台层的「写入后回读」探测也确认不了
+    /// 真实取值（详见 `unbound_platform::win32_frame::probe_immersive_backdrop`），因此没有任何
+    /// 材质种类会请求它：它留在枚举里只是为将来实测出真实取值后留一个落点，
+    /// 绝不携带猜测出来的数字。
     Immersive,
 }
 
@@ -169,8 +171,9 @@ pub const MATERIAL_REQUEST_TABLE: [MaterialRequest; MaterialKind::ALL.len()] = [
         kind: MaterialKind::Acrylic,
         request: Some(DwmMaterial::Acrylic),
     },
-    // 沉浸式后景的系统取值没有公开文档依据（issue #36 调研后再补），因此它当前
-    // 不走系统材质通道：拿不到材质请求就没有东西可以透出，窗口必须保持不透明。
+    // 沉浸式后景的系统取值没有公开文档依据，平台层的写入回读探测也只能看到
+    // 「原样回显」，无法证明系统真的接受某个未公开取值。既然确认不了，就不写死
+    // 任何数字：该档当前不走系统材质通道，窗口必须保持不透明，界面另给不可用原因。
     MaterialRequest {
         kind: MaterialKind::Immersive,
         request: None,
@@ -268,7 +271,7 @@ pub struct BackdropPlan {
     pub composition: BackdropCompositeAlpha,
     /// 清屏 alpha：真正请求到系统材质时 0，其余路径 1。
     ///
-    /// 没有系统材质请求的材质档（当前是沉浸式后景）即使走原生来源也保持 1，
+    /// 拿不到系统材质请求的路径（含实验档与所有自绘路径）一律保持 1，
     /// 否则窗口会变成「透明却没有材质」的空壳。
     pub clear_alpha: f32,
     /// 根背景是否应为透明，交给后景透出。
@@ -497,7 +500,7 @@ mod tests {
 
     /// 手写的“该材质种类请求哪一档系统材质”期望，独立于映射表实现。
     ///
-    /// 沉浸式后景没有公开的系统取值，因此当前没有请求。
+    /// 沉浸式后景的系统取值未被探测确认，因此没有请求。
     fn expected_system_request(material: MaterialKind) -> Option<DwmMaterial> {
         match material {
             MaterialKind::None => None,
@@ -721,19 +724,24 @@ mod tests {
     }
 
     #[test]
-    fn a_material_without_a_system_request_keeps_the_root_opaque() {
-        // 沉浸式后景没有公开的系统取值，因此拿不到系统材质请求：
-        // 即使原生路径可用，窗口也必须保持不透明，不能变成透明却没有材质的空壳。
+    fn an_unconfirmed_system_channel_keeps_the_root_opaque() {
+        // 沉浸式后景的系统取值未被探测确认：原生来源也拿不到系统材质请求，
+        // 实际组合退化成「没有后景」，窗口必须保持不透明，并报出不可用原因。
         let plan = BackdropPlan::derive(inputs(
             BackdropSelection::new(MaterialKind::Immersive, BackdropSource::Native),
             Some(26100),
             true,
         ));
-        assert_eq!(plan.material_kind, MaterialKind::Immersive);
+        assert_eq!(plan.material_kind, MaterialKind::None);
         assert_eq!(plan.source, BackdropSource::Native);
         assert_eq!(plan.material, DwmMaterial::None);
         assert_eq!(plan.clear_alpha, 1.0);
         assert!(!plan.root_background_transparent);
+        assert_eq!(
+            plan.unavailable,
+            Some(UnavailableReason::SystemChannelUnconfirmed),
+            "the plan must surface the unconfirmed system channel"
+        );
         assert_eq!(
             plan.composition,
             BackdropCompositeAlpha::PreMultiplied,
