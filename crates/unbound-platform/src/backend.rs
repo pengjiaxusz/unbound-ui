@@ -169,12 +169,13 @@ pub(crate) mod style_bits {
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
 }
 
-/// 向窗口事件队列推入新事件，并对连续的窗口调整尺寸（`Resized`）与鼠标移动（`CursorMoved`）执行原地合并。
+/// 向窗口事件队列推入新事件，并对连续的窗口几何变化（`Resized`、`Moved`）与鼠标移动（`CursorMoved`）
+/// 执行原地合并。
 ///
-/// 在 Win32 模态拖拽调整窗口大小（`WM_ENTERSIZEMOVE`..`WM_EXITSIZEMOVE`）期间，操作系统会在单次
-/// `DispatchMessageW` 调用内高频派发数百条 `WM_SIZE`。若逐条排队而不合并，消息循环在退出模态拖拽
-/// 或单轮排空时会逐帧回放整条历史尺寸轨迹，在视觉上表现为极其缓慢的“滞后缩放过渡动画”。
-/// 原地覆盖未消费的旧 `Resized` 事件可确保任意时刻队列中最多只保留最后一次真实窗口尺寸。
+/// 在 Win32 模态移动/缩放（`WM_ENTERSIZEMOVE`..`WM_EXITSIZEMOVE`）期间，操作系统会在单次
+/// `DispatchMessageW` 调用内高频派发数百条 `WM_SIZE` 与 `WM_MOVE`。若逐条排队而不合并，消息循环在
+/// 退出模态拖拽或单轮排空时会逐帧回放整条历史几何轨迹，在视觉上表现为极其缓慢的“滞后过渡动画”。
+/// 原地覆盖未消费的旧几何事件可确保任意时刻队列中最多只保留最后一次真实窗口尺寸与位置。
 pub(crate) fn push_coalesced_event(events: &mut Vec<PlatformEvent>, event: PlatformEvent) {
     match event {
         PlatformEvent::Resized(extent) => {
@@ -186,6 +187,21 @@ pub(crate) fn push_coalesced_event(events: &mut Vec<PlatformEvent>, event: Platf
                 *existing = PlatformEvent::Resized(extent);
             } else {
                 events.push(PlatformEvent::Resized(extent));
+            }
+        }
+        PlatformEvent::Moved { x, y } => {
+            if let Some(PlatformEvent::Moved {
+                x: prev_x,
+                y: prev_y,
+            }) = events
+                .iter_mut()
+                .rev()
+                .find(|ev| matches!(ev, PlatformEvent::Moved { .. }))
+            {
+                *prev_x = x;
+                *prev_y = y;
+            } else {
+                events.push(PlatformEvent::Moved { x, y });
             }
         }
         PlatformEvent::CursorMoved { x, y } => {
@@ -291,11 +307,14 @@ mod win32 {
 
     std::thread_local! {
         /// 在 `DispatchMessageW` 进入系统模态移动/缩放循环期间挂载的单步即时渲染回调。
-        static MODAL_RESIZE_CALLBACK: std::cell::Cell<Option<*mut dyn FnMut(HWND)>> = const { std::cell::Cell::new(None) };
-        /// 防止 `WM_SIZE` 即时渲染期间产生递归重入的守卫标志。
-        static MODAL_RESIZE_BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        static MODAL_FRAME_CALLBACK: std::cell::Cell<Option<*mut dyn FnMut(HWND)>> = const { std::cell::Cell::new(None) };
+        /// 防止模态移动/缩放即时渲染期间产生递归重入的守卫标志。
+        static MODAL_FRAME_BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
+    /// 在单次 `DispatchMessageW` 派发期间临时挂载模态即时帧回调，离开作用域即卸载。
+    ///
+    /// 该守卫同时服务系统模态移动与模态缩放：两者都在派发内高频产生几何变化，必须各自即时出帧。
     struct ModalDispatchGuard;
 
     impl ModalDispatchGuard {
@@ -306,19 +325,20 @@ mod win32 {
                     cb,
                 )
             };
-            MODAL_RESIZE_CALLBACK.with(|slot| slot.set(Some(raw)));
+            MODAL_FRAME_CALLBACK.with(|slot| slot.set(Some(raw)));
             Self
         }
     }
 
     impl Drop for ModalDispatchGuard {
         fn drop(&mut self) {
-            MODAL_RESIZE_CALLBACK.with(|slot| slot.set(None));
+            MODAL_FRAME_CALLBACK.with(|slot| slot.set(None));
         }
     }
 
-    fn trigger_modal_resize_frame(hwnd: HWND) {
-        let busy = MODAL_RESIZE_BUSY.with(|flag| {
+    /// 模态移动与缩放共用的即时帧入口：请求并同步渲染一帧，避免几何变化积压到拖拽结束才消费。
+    fn trigger_modal_immediate_frame(hwnd: HWND) {
+        let busy = MODAL_FRAME_BUSY.with(|flag| {
             if flag.get() {
                 true
             } else {
@@ -329,14 +349,14 @@ mod win32 {
         if busy {
             return;
         }
-        let cb_ptr = MODAL_RESIZE_CALLBACK.with(std::cell::Cell::get);
+        let cb_ptr = MODAL_FRAME_CALLBACK.with(std::cell::Cell::get);
         if let Some(ptr) = cb_ptr {
-            // SAFETY: `ptr` 由当前线程上层的 `ModalDispatchGuard` 挂载，且 `MODAL_RESIZE_BUSY` 已阻止重入。
+            // SAFETY: `ptr` 由当前线程上层的 `ModalDispatchGuard` 挂载，且 `MODAL_FRAME_BUSY` 已阻止重入。
             unsafe {
                 (*ptr)(hwnd);
             }
         }
-        MODAL_RESIZE_BUSY.with(|flag| flag.set(false));
+        MODAL_FRAME_BUSY.with(|flag| flag.set(false));
     }
 
     pub(super) fn enable_per_monitor_v2_dpi() {
@@ -634,7 +654,7 @@ mod win32 {
                         PlatformEvent::Resized(Extent::new(width, height)),
                     );
                     data.redraw_requested.store(true, Ordering::Release);
-                    trigger_modal_resize_frame(hwnd);
+                    trigger_modal_immediate_frame(hwnd);
                 }
                 LRESULT(0)
             }
@@ -642,8 +662,9 @@ mod win32 {
                 // `WM_MOVE` 的 lParam 是客户区左上角的屏幕物理坐标；尺寸变化由 `WM_SIZE` 处理。
                 let x = (lparam.0 & 0xFFFF) as u16 as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
-                data.events.borrow_mut().push(PlatformEvent::Moved { x, y });
+                push_coalesced_event(&mut data.events.borrow_mut(), PlatformEvent::Moved { x, y });
                 data.redraw_requested.store(true, Ordering::Release);
+                trigger_modal_immediate_frame(hwnd);
                 LRESULT(0)
             }
             WM_DPICHANGED => {
@@ -1427,6 +1448,37 @@ mod style_tests {
         assert_eq!(fixed_style & WS_THICKFRAME, 0);
         assert_eq!(fixed_style & WS_MAXIMIZEBOX, 0);
         assert_eq!(fixed_style & WS_POPUP, 0);
+    }
+
+    #[test]
+    fn coalescing_move_events_retains_only_the_latest_position() {
+        let mut queue = Vec::new();
+        for x in 100..=150 {
+            push_coalesced_event(&mut queue, PlatformEvent::Moved { x, y: x * 2 });
+        }
+        assert_eq!(
+            queue,
+            vec![PlatformEvent::Moved { x: 150, y: 300 }],
+            "a burst of WM_MOVE messages must coalesce into a single final Moved event"
+        );
+    }
+
+    #[test]
+    fn coalescing_keeps_resize_and_move_events_independent() {
+        use crate::resize::Extent;
+        let mut queue = Vec::new();
+        push_coalesced_event(&mut queue, PlatformEvent::Moved { x: 10, y: 20 });
+        push_coalesced_event(&mut queue, PlatformEvent::Resized(Extent::new(800, 600)));
+        push_coalesced_event(&mut queue, PlatformEvent::Moved { x: 30, y: 40 });
+        push_coalesced_event(&mut queue, PlatformEvent::Resized(Extent::new(1024, 768)));
+        assert_eq!(
+            queue,
+            vec![
+                PlatformEvent::Moved { x: 30, y: 40 },
+                PlatformEvent::Resized(Extent::new(1024, 768)),
+            ],
+            "move and resize events must each coalesce without swallowing the other"
+        );
     }
 
     #[test]
