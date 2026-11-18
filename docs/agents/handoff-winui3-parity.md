@@ -171,7 +171,9 @@ just q-run cargo run -p showcase -- --parity-run `
 ### 6.2 当前基线（必须原样交接）
 
 - 采集：**57 个控件、214 张有效落盘**；另有 **24 例**因 `controlBounds` 内无非背景像素被采集契约拒收（AppBarSeparator / CommandBarFlyout / ContentDialog / Image / ItemsView / TeachingTip 各 4 例）。
-- 差分：**pass 28 / fail 186 / invalid 0**（214 例，`--no-cache` 全量）；六个试点控件 **28 / 28**。
+- 差分：**pass 72 / known-aa 8 / fail 134 / invalid 0**（214 例，`--no-cache` 全量）。
+- 第一批目标 12 个控件 **52 例：pass 44 / known-aa 8 / fail 0**；六个试点控件 **28 / 28**。
+- `known-aa` 是经放大图复核、只剩轮廓抗锯齿差异的显式白名单（InfoBadge 与 RatingControl 各 4 例），口径见 ADR 0010。
 - 旧基线 6/238 作废：审计发现其中 8 个是空白对空白，见 ADR 0009。
 
 修复后的采集契约：槽位按 `controlBounds + 16px` 出血动态扩张；resize 后重新等待；截图后校验 controlBounds 内存在非背景像素，最多重试 3 次；参考指纹包含宿主 `.cs/.xaml` 哈希与采集配方版本；差分侧指纹包含 `unbound-text` 的 directwrite/glyph/shaping/atlas 源码哈希。
