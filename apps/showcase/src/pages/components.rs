@@ -72,6 +72,10 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         WidgetCatalogId::Button
         | WidgetCatalogId::SplitButton
         | WidgetCatalogId::ToggleButton
+        | WidgetCatalogId::HyperlinkButton
+        | WidgetCatalogId::RepeatButton
+        | WidgetCatalogId::DropDownButton
+        | WidgetCatalogId::ToggleSplitButton
         | WidgetCatalogId::Badge
         | WidgetCatalogId::Chip
         | WidgetCatalogId::Checkbox
@@ -155,6 +159,9 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
 
         WidgetCatalogId::TextInput
         | WidgetCatalogId::TextArea
+        | WidgetCatalogId::PasswordBox
+        | WidgetCatalogId::DatePickerWheel
+        | WidgetCatalogId::CalendarDatePicker
         | WidgetCatalogId::AutoComplete
         | WidgetCatalogId::Cascader
         | WidgetCatalogId::Combobox
@@ -203,6 +210,10 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Banner => "view.add(ui_key!(\"bnr\"), BannerDesc::new(rect, \"System Banner\"));",
         WidgetCatalogId::Breadcrumb => "view.add(ui_key!(\"bc\"), BreadcrumbDesc::new(rect, crumbs));",
         WidgetCatalogId::Button => "view.button(ui_key!(\"btn\"), ButtonDesc::label(\"Click Me\").variant(ButtonVariant::Primary));",
+        WidgetCatalogId::HyperlinkButton => "view.add(ui_key!(\"link\"), HyperlinkButtonDesc::new(rect, \"Open docs\"));",
+        WidgetCatalogId::RepeatButton => "view.add(ui_key!(\"rep\"), RepeatButtonDesc::new(rect, \"Repeat\"));",
+        WidgetCatalogId::DropDownButton => "view.add(ui_key!(\"ddb\"), DropDownButtonDesc::new(rect, \"Options\"));",
+        WidgetCatalogId::ToggleSplitButton => "view.add(ui_key!(\"tsb\"), ToggleSplitButtonDesc::new(rect, \"Bold\"));",
         WidgetCatalogId::Callout => "view.callout(ui_key!(\"cal\"), CalloutDesc::new(rect, \"Tip\", \"GPU memory is optimal.\"));",
         WidgetCatalogId::CanvasToolbar => "view.add(ui_key!(\"tb\"), CanvasToolbarDesc::new(rect));",
         WidgetCatalogId::Carousel => "view.add(ui_key!(\"car\"), CarouselDesc::new(rect, slides));",
@@ -222,6 +233,8 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::CurveEditor => "view.add(ui_key!(\"crv\"), CurveEditorDesc::new(rect));",
         WidgetCatalogId::DataGrid => "view.add(ui_key!(\"dg\"), DataGridDesc::new(rect, grid_model));",
         WidgetCatalogId::DatePicker => "view.add(ui_key!(\"dp\"), DatePickerDesc::new(rect));",
+        WidgetCatalogId::DatePickerWheel => "view.add(ui_key!(\"dpw\"), DatePickerWheelDesc::new(rect, date));",
+        WidgetCatalogId::CalendarDatePicker => "view.add(ui_key!(\"cdp\"), CalendarDatePickerDesc::new(rect, date));",
         WidgetCatalogId::DateRangePicker => "view.add(ui_key!(\"drp\"), DateRangePickerDesc::new(rect));",
         WidgetCatalogId::Descriptions => "view.descriptions(ui_key!(\"desc\"), DescriptionsDesc::new(rect, items));",
         WidgetCatalogId::Divider => "view.divider(ui_key!(\"div\"), DividerDesc::rule());",
@@ -277,6 +290,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::TerminalView => "view.terminal_view(ui_key!(\"term\"), TerminalViewDesc::new(rect, lines));",
         WidgetCatalogId::TextArea => "view.add(ui_key!(\"ta\"), TextAreaDesc::new(rect));",
         WidgetCatalogId::TextInput => "view.text_input(ui_key!(\"txt\"), TextInputDesc::text(\"\").placeholder(\"Search...\"));",
+        WidgetCatalogId::PasswordBox => "view.add(ui_key!(\"pwd\"), PasswordBoxDesc::new(rect, \"Password\"));",
         WidgetCatalogId::TimePicker => "view.add(ui_key!(\"tp\"), TimePickerDesc::new(rect));",
         WidgetCatalogId::Timeline => "view.add(ui_key!(\"tl\"), TimelineDesc::new(rect, events));",
         WidgetCatalogId::TimelineTrack => "view.add(ui_key!(\"tlt\"), TimelineTrackDesc::new(rect));",
@@ -381,14 +395,18 @@ define_showcase_components! {
     Containers => "Card container", "Header / body / footer surface from the containers module.", 300.0,
     ContextMenu => "Context menu", "Right-click placement state machine over the menu emitter.", 300.0,
     CurveEditor => "Curve editor", "Editable bezier curve with draggable handles.", 320.0,
+    CalendarDatePicker => "Calendar date picker", "Collapsed date trigger with a calendar flyout affordance.", 320.0,
     DatePicker => "Date picker", "Month calendar with single-date selection.", 360.0,
+    DatePickerWheel => "Date picker (wheel)", "Three-column month / day / year wheel selector.", 320.0,
     Divider => "Divider", "A hairline separator with an optional label.", 220.0,
     Dock => "Dock", "Tabbed panes with drag-to-dock layout.", 340.0,
     Drawer => "Drawer", "A side drawer with a scrim over the viewport.", 340.0,
+    DropDownButton => "Drop-down button", "A button with a fixed trailing chevron that opens a menu.", 240.0,
     FileDrop => "File drop", "A drop target with idle and drag-over states.", 280.0,
     Form => "Form", "Field label with required marker and validation message.", 280.0,
     Gizmo => "Gizmo", "Eight-handle transform gizmo with a size bubble.", 300.0,
     HoverCard => "Hover card", "A rich preview anchored to a trigger.", 280.0,
+    HyperlinkButton => "Hyperlink button", "Borderless accent text button with hover and pressed veils.", 240.0,
     Image => "Image", "A textured quad bound to an atlas layer.", 280.0,
     Menu => "Menu", "Action rows, separators and shortcuts.", 300.0,
     Menubar => "Menubar", "Top-level menu items with keyboard traversal.", 240.0,
@@ -424,6 +442,7 @@ define_showcase_components! {
     Masonry => "Masonry grid", "Shortest-column adaptive waterfall grid and aspect-ratio box.", 280.0,
     NavigationRail => "Navigation rail", "Collapsible sidebar navigation rail with badges.", 280.0,
     Pagination => "Pagination", "Page buttons with ellipsis folding and page-size metadata.", 220.0,
+    PasswordBox => "Password box", "Masked text field with a press-and-hold reveal button.", 240.0,
     Stepper => "Stepper", "Horizontal or vertical multi-step progress indicator.", 240.0,
     AutoComplete => "AutoComplete", "Prefix-filtered input with live suggestion badge.", 220.0,
     Banner => "Banner", "Full-width top global status and recovery banner.", 220.0,
@@ -434,6 +453,7 @@ define_showcase_components! {
     PinInput => "PIN input", "Segmented verification code input with paste splitting.", 220.0,
     Popconfirm => "Popconfirm", "Anchored confirmation bubble for destructive actions.", 240.0,
     Rating => "Rating", "Five-star rating control with half-star precision.", 220.0,
+    RepeatButton => "Repeat button", "Press and hold to fire repeated clicks after the first delay.", 240.0,
     Spinner => "Spinner", "Continuous loading spinner and overlay lock scrim.", 220.0,
     TimePicker => "Time picker", "Hour, minute, and second stepping time selector.", 220.0,
     Transfer => "Transfer", "Dual-column item transfer list with batch move.", 260.0,
@@ -457,6 +477,7 @@ define_showcase_components! {
     Wrap => "Wrap layout", "Flow layout wrapping items into lines.", 260.0,
     SplitButton => "Split button", "Primary button paired with a dropdown trigger menu.", 220.0,
     ToggleButton => "Toggle button", "Two-state push button with pressed state lock.", 220.0,
+    ToggleSplitButton => "Toggle split button", "A split button whose primary half keeps a checked state.", 240.0,
     TreeTable => "Tree table", "Hierarchical data table with expandable rows and columns.", 280.0,
     MultiSplit => "Multi-split", "Resizable multi-pane container with draggable splitters.", 280.0,
     Descriptions => "Descriptions", "Label-value summary display for structured properties.", 260.0,
@@ -515,12 +536,15 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::ContextMenu => "右键菜单 (Context Menu)",
         WidgetCatalogId::CurveEditor => "曲线编辑器 (Curve Editor)",
         WidgetCatalogId::DataGrid => "电子表格网格 (Data Grid)",
+        WidgetCatalogId::CalendarDatePicker => "日期触发器 (Calendar Date Picker)",
         WidgetCatalogId::DatePicker => "日期选择器 (Date Picker)",
+        WidgetCatalogId::DatePickerWheel => "滚轮日期选择器 (Date Picker Wheel)",
         WidgetCatalogId::DateRangePicker => "日期区间选择器 (Date Range Picker)",
         WidgetCatalogId::Descriptions => "描述列表 (Descriptions)",
         WidgetCatalogId::Divider => "分割线 (Divider)",
         WidgetCatalogId::Dock => "停靠面板 (Dock)",
         WidgetCatalogId::Drawer => "侧边抽屉 (Drawer)",
+        WidgetCatalogId::DropDownButton => "下拉按钮 (Drop-Down Button)",
         WidgetCatalogId::EmptyState => "空状态占位 (Empty State)",
         WidgetCatalogId::FileDrop => "文件拖拽区 (File Drop)",
         WidgetCatalogId::Form => "表单 (Form)",
@@ -529,6 +553,7 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::GradientEditor => "渐变编辑器 (Gradient Editor)",
         WidgetCatalogId::HotkeyInput => "快捷键录制框 (Hotkey Input)",
         WidgetCatalogId::HoverCard => "悬停预览卡 (Hover Card)",
+        WidgetCatalogId::HyperlinkButton => "超链接按钮 (Hyperlink Button)",
         WidgetCatalogId::Icon => "矢量图标 (Icon)",
         WidgetCatalogId::Image => "图像视图 (Image)",
         WidgetCatalogId::LoadingOverlay => "加载遮罩 (Loading Overlay)",
@@ -545,6 +570,7 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::NumberInput => "数值输入框 (Number Input)",
         WidgetCatalogId::Overlay => "浮层栈 (Overlay Stack)",
         WidgetCatalogId::Pagination => "分页器 (Pagination)",
+        WidgetCatalogId::PasswordBox => "密码输入框 (Password Box)",
         WidgetCatalogId::PinInput => "验证码输入框 (PIN Input)",
         WidgetCatalogId::PipelineView => "管线阶段视图 (Pipeline View)",
         WidgetCatalogId::Pivot => "页签条 (Pivot)",
@@ -555,6 +581,7 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::QueryBuilder => "查询构建器 (Query Builder)",
         WidgetCatalogId::Radio => "单选按钮 (Radio)",
         WidgetCatalogId::Rating => "星级评分 (Rating)",
+        WidgetCatalogId::RepeatButton => "长按重复按钮 (Repeat Button)",
         WidgetCatalogId::RichText => "富文本视图 (Rich Text)",
         WidgetCatalogId::Ruler => "标尺参考线 (Ruler)",
         WidgetCatalogId::SchemaForm => "Schema 表单 (Schema Form)",
@@ -584,6 +611,7 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::TimelineTrack => "关键帧轨道 (Timeline Track)",
         WidgetCatalogId::Toast => "吐司通知 (Toast)",
         WidgetCatalogId::ToggleButton => "双态切换按钮 (Toggle Button)",
+        WidgetCatalogId::ToggleSplitButton => "切换分割按钮 (Toggle Split Button)",
         WidgetCatalogId::Toolbar => "工具栏 (Toolbar)",
         WidgetCatalogId::Tooltip => "工具提示 (Tooltip)",
         WidgetCatalogId::Tour => "漫游引导 (Tour)",
@@ -632,12 +660,15 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::ContextMenu => "右键菜单 上下文菜单 context menu",
         WidgetCatalogId::CurveEditor => "曲线编辑器 贝塞尔动画曲线 curve editor",
         WidgetCatalogId::DataGrid => "数据网格 电子表格 data grid",
+        WidgetCatalogId::CalendarDatePicker => "日期触发器 日历弹层 calendar date picker",
         WidgetCatalogId::DatePicker => "日期选择器 日历 date picker",
+        WidgetCatalogId::DatePickerWheel => "滚轮日期选择器 月日年 date picker wheel",
         WidgetCatalogId::DateRangePicker => "日期区间选择器 date range picker",
         WidgetCatalogId::Descriptions => "描述列表 属性键值对 descriptions",
         WidgetCatalogId::Divider => "分割线 分隔符 divider",
         WidgetCatalogId::Dock => "停靠面板 工作区多窗格 dock",
         WidgetCatalogId::Drawer => "抽屉面板 侧边滑出浮层 drawer",
+        WidgetCatalogId::DropDownButton => "下拉按钮 菜单触发器 drop down button",
         WidgetCatalogId::EmptyState => "空状态 占位提示 empty state",
         WidgetCatalogId::FileDrop => "文件拖拽上传 资产导入 file drop",
         WidgetCatalogId::Form => "表单 校验字段 form",
@@ -648,6 +679,7 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::GradientEditor => "渐变编辑器 色阶条 gradient editor",
         WidgetCatalogId::HotkeyInput => "快捷键录制 键位绑定 hotkey input",
         WidgetCatalogId::HoverCard => "悬停预览卡 浮窗卡片 hover card",
+        WidgetCatalogId::HyperlinkButton => "超链接按钮 强调色文字 hyperlink button",
         WidgetCatalogId::Icon => "矢量图标 icon",
         WidgetCatalogId::Image => "图像 纹理贴图预览 image",
         WidgetCatalogId::LoadingOverlay => "加载遮罩 等待浮层 loading overlay",
@@ -664,6 +696,7 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::NumberInput => "数值输入框 步进器 number input",
         WidgetCatalogId::Overlay => "浮层栈 弹出定位层 overlay",
         WidgetCatalogId::Pagination => "分页器 页码切换 pagination",
+        WidgetCatalogId::PasswordBox => "密码输入框 掩码 显密 password box",
         WidgetCatalogId::PinInput => "验证码输入框 PIN码 pin input",
         WidgetCatalogId::PipelineView => "渲染管线视图 阶段耗时分析 着色器管线 pipeline view",
         WidgetCatalogId::Pivot => "页签条 二级导航 pivot tabs",
@@ -674,6 +707,7 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::QueryBuilder => "查询构建器 过滤规则树 query builder",
         WidgetCatalogId::Radio => "单选框 单选组 radio",
         WidgetCatalogId::Rating => "星级评分 资产评级 rating",
+        WidgetCatalogId::RepeatButton => "长按重复按钮 连续触发 repeat button",
         WidgetCatalogId::RichText => "富文本 Markdown渲染 rich text",
         WidgetCatalogId::Ruler => "标尺 辅助参考线 ruler",
         WidgetCatalogId::SchemaForm => "声明式配置表单 属性检查器 schema form",
@@ -703,6 +737,7 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::TimelineTrack => "关键帧轨道 动画时间线 timeline track",
         WidgetCatalogId::Toast => "轻量吐司通知 浮动提示 toast",
         WidgetCatalogId::ToggleButton => "双态切换按钮 按下锁定 toggle button",
+        WidgetCatalogId::ToggleSplitButton => "切换分割按钮 选中态 toggle split button",
         WidgetCatalogId::Toolbar => "工具栏 按钮条 toolbar",
         WidgetCatalogId::Tooltip => "文字提示气泡 窗口防溢出 tooltip",
         WidgetCatalogId::Tour => "漫游引导 新手聚光灯 tour",
