@@ -1721,16 +1721,25 @@ fn main() {
         match showcase::png_diff::run_batch_with_options(&reference, &out, allow_cache) {
             Ok(summary) => {
                 println!(
-                    "parity: {}/{} cases pass ({} cached) · {}",
+                    "parity: pass={} fail={} invalid={} (of {}, {} cached) · {}",
                     summary.passed(),
+                    summary.failed(),
+                    summary.invalid(),
                     summary.cases.len(),
                     summary.cache_hits,
                     summary.out_dir.join("report.json").display()
                 );
-                for case in summary.cases.iter().filter(|case| !case.passes()).take(8) {
+                for case in summary
+                    .cases
+                    .iter()
+                    .filter(|case| case.status() != showcase::png_diff::CaseStatus::Pass)
+                    .take(8)
+                {
                     println!(
-                        "  {} roi_mean={:.2} p95={:.2} over={:.1}% bbox={:?} ref={:?} intrinsic={:?}",
+                        "  {} [{}] {} roi_mean={:.2} p95={:.2} over={:.1}% bbox={:?} ref={:?} intrinsic={:?}",
                         case.name,
+                        case.status().as_str(),
+                        case.invalid_reason.as_deref().unwrap_or("-"),
                         case.mean_de,
                         case.p95_de,
                         case.over_limit_ratio * 100.0,

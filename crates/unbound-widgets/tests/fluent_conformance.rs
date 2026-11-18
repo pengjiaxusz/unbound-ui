@@ -45,7 +45,8 @@ fn radius_literals(source: &str) -> Vec<&str> {
 
 #[test]
 fn exactly_forty_three_exclusive_controls_are_registered() {
-    let ids: Vec<WidgetCatalogId> = WidgetCatalogId::ids_in_class(ControlClass::Exclusive).collect();
+    let ids: Vec<WidgetCatalogId> =
+        WidgetCatalogId::ids_in_class(ControlClass::Exclusive).collect();
     assert_eq!(ids.len(), EXCLUSIVE_COUNT);
     assert_eq!(EXCLUSIVE_COUNT, 43);
     for id in ids {
