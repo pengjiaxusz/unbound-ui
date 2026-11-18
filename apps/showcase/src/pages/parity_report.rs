@@ -47,6 +47,28 @@ const THUMB_ASPECT: f32 = 420.0 / 160.0;
 /// 三张缩略图之间的间距。
 const THUMB_GAP: f32 = 10.0;
 
+/// 单个用例的三态结论，与差分器的 `pass` / `fail` / `invalid` 一一对应。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParityStatus {
+    /// 四重门禁全部通过。
+    Pass,
+    /// 内容有效但至少一门禁未通过。
+    Fail,
+    /// 采集或渲染内容无效，不计入通过率。
+    Invalid,
+}
+
+impl ParityStatus {
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "pass" => Some(Self::Pass),
+            "fail" => Some(Self::Fail),
+            "invalid" => Some(Self::Invalid),
+            _ => None,
+        }
+    }
+}
+
 /// 单个对照用例。
 #[derive(Debug)]
 pub struct ParityCase {
@@ -63,7 +85,7 @@ pub struct ParityCase {
     pub cache_hit: bool,
     /// 本框架包围盒相对参考包围盒的逐边差值。
     pub bbox_delta: [i64; 4],
-    pub pass: bool,
+    pub status: ParityStatus,
     /// 参考 / 本框架 / 热力图三张纹理。
     pub images: [Option<AssetId>; 3],
 }
@@ -73,6 +95,8 @@ pub struct ParityCase {
 pub struct ParityReport {
     pub cases: Vec<ParityCase>,
     pub passed: usize,
+    pub failed: usize,
+    pub invalid: usize,
     pub cache_hits: usize,
     /// 载入失败原因；为 `Some` 时页面显示空态说明。
     pub error: Option<String>,
@@ -89,6 +113,8 @@ impl ParityReport {
                 return Self {
                     cases: Vec::new(),
                     passed: 0,
+                    failed: 0,
+                    invalid: 0,
                     cache_hits: 0,
                     error: Some(format!("{REPORT_DIR}/report.json: {error}")),
                 }
@@ -97,58 +123,38 @@ impl ParityReport {
         let reference = reference_dir(root);
         let ours = root.join("ours");
         let heat = root.join("heat");
-        let mut cases = Vec::new();
-        let mut passed = 0;
-        let mut cache_hits = 0;
-        for line in json.lines() {
-            if !line.contains("\"name\"") {
-                continue;
-            }
-            let Some(name) = string_value(line, "name") else {
-                continue;
-            };
-            let reference_bbox = bbox_value(line, "referenceBbox");
-            let ours_bbox = bbox_value(line, "oursBbox");
-            let bbox_delta = std::array::from_fn(|index| ours_bbox[index] - reference_bbox[index]);
-            let pass = bool_value(line, "pass").unwrap_or(false);
-            if pass {
-                passed += 1;
-            }
-            let cache_hit = bool_value(line, "cacheHit").unwrap_or(false);
-            if cache_hit {
-                cache_hits += 1;
-            }
-            let images = std::array::from_fn(|which| {
+        let mut cases = parse_cases(&json);
+        for case in &mut cases {
+            case.images = std::array::from_fn(|which| {
                 let dir: &Path = match which {
                     0 => &reference,
                     1 => &ours,
                     _ => &heat,
                 };
-                std::fs::read(dir.join(format!("{name}.png")))
+                std::fs::read(dir.join(format!("{}.png", case.name)))
                     .ok()
                     .map(|bytes| hub.request_png(bytes))
             });
-            cases.push(ParityCase {
-                name,
-                control: string_value(line, "control").unwrap_or_default(),
-                state: string_value(line, "state").unwrap_or_default(),
-                theme: string_value(line, "theme").unwrap_or_default(),
-                backdrop: string_value(line, "backdrop").unwrap_or_else(|| "solid".into()),
-                mean_de: number_value(line, "meanDe").unwrap_or(0.0) as f32,
-                p95_de: number_value(line, "p95De").unwrap_or(0.0) as f32,
-                p99_de: number_value(line, "p99De").unwrap_or(0.0) as f32,
-                over_limit_ratio: number_value(line, "overLimitRatio").unwrap_or(0.0) as f32,
-                intrinsic_matches: bool_value(line, "intrinsicMatches").unwrap_or(true),
-                cache_hit,
-                bbox_delta,
-                pass,
-                images,
-            });
         }
+        let passed = cases
+            .iter()
+            .filter(|case| case.status == ParityStatus::Pass)
+            .count();
+        let failed = cases
+            .iter()
+            .filter(|case| case.status == ParityStatus::Fail)
+            .count();
+        let invalid = cases
+            .iter()
+            .filter(|case| case.status == ParityStatus::Invalid)
+            .count();
+        let cache_hits = cases.iter().filter(|case| case.cache_hit).count();
         if cases.is_empty() {
             return Self {
                 cases,
                 passed,
+                failed,
+                invalid,
                 cache_hits,
                 error: Some(format!("{REPORT_DIR}/report.json 中没有用例")),
             };
@@ -156,10 +162,54 @@ impl ParityReport {
         Self {
             cases,
             passed,
+            failed,
+            invalid,
             cache_hits,
             error: None,
         }
     }
+}
+
+/// 逐行解析报告中的用例（图像纹理由 [`ParityReport::load`] 另行提交解码）。
+fn parse_cases(json: &str) -> Vec<ParityCase> {
+    let mut cases = Vec::new();
+    for line in json.lines() {
+        if !line.contains("\"name\"") {
+            continue;
+        }
+        let Some(name) = string_value(line, "name") else {
+            continue;
+        };
+        let reference_bbox = bbox_value(line, "referenceBbox");
+        let ours_bbox = bbox_value(line, "oursBbox");
+        let bbox_delta = std::array::from_fn(|index| ours_bbox[index] - reference_bbox[index]);
+        let pass = bool_value(line, "pass").unwrap_or(false);
+        // 旧报告没有 `status` 字段，按 `pass` 回退成两态。
+        let status = string_value(line, "status")
+            .and_then(|text| ParityStatus::parse(&text))
+            .unwrap_or(if pass {
+                ParityStatus::Pass
+            } else {
+                ParityStatus::Fail
+            });
+        cases.push(ParityCase {
+            name,
+            control: string_value(line, "control").unwrap_or_default(),
+            state: string_value(line, "state").unwrap_or_default(),
+            theme: string_value(line, "theme").unwrap_or_default(),
+            backdrop: string_value(line, "backdrop").unwrap_or_else(|| "solid".into()),
+            mean_de: number_value(line, "meanDe").unwrap_or(0.0) as f32,
+            p95_de: number_value(line, "p95De").unwrap_or(0.0) as f32,
+            p99_de: number_value(line, "p99De").unwrap_or(0.0) as f32,
+            over_limit_ratio: number_value(line, "overLimitRatio").unwrap_or(0.0) as f32,
+            intrinsic_matches: bool_value(line, "intrinsicMatches").unwrap_or(true),
+            cache_hit: bool_value(line, "cacheHit").unwrap_or(false),
+            bbox_delta,
+            status,
+            images: std::array::from_fn(|_| None),
+        });
+    }
+    cases
 }
 
 fn reference_dir(root: &Path) -> PathBuf {
@@ -242,12 +292,17 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
     );
     ctx.canvas.text(
         &format!(
-            "{} / {} {} ({} {}) · ROI mean ≤ 1.5 · p95 ≤ 4.0 · outlier ≤ 2% · {}",
+            "{} / {} · {} {} · {} {} · {} {} · {} {} · ROI mean ≤ 1.5 · p95 ≤ 4.0 · outlier ≤ 2% · {}",
             report.passed,
             report.cases.len(),
             if zh { "通过" } else { "pass" },
+            report.passed,
+            if zh { "未通过" } else { "fail" },
+            report.failed,
+            if zh { "无效" } else { "invalid" },
+            report.invalid,
+            if zh { "缓存" } else { "cached" },
             report.cache_hits,
-            if zh { "缓存命中" } else { "cached" },
             if zh {
                 "包围盒与固有尺寸 ±1px"
             } else {
@@ -313,18 +368,22 @@ fn draw_case(
     let palette = *ctx.canvas.palette;
     ctx.canvas
         .rect(row, 10.0, palette.card_bg, palette.card_border, 1.0, 0.0);
-    let (status_text, status_color, status_bg) = if case.pass {
-        (
+    let (status_text, status_color, status_bg) = match case.status {
+        ParityStatus::Pass => (
             if zh { "通过" } else { "pass" },
             palette.success,
             palette.success_soft,
-        )
-    } else {
-        (
+        ),
+        ParityStatus::Fail => (
             if zh { "未通过" } else { "fail" },
             palette.danger,
             palette.danger_soft,
-        )
+        ),
+        ParityStatus::Invalid => (
+            if zh { "无效" } else { "invalid" },
+            palette.warning,
+            palette.warning_soft,
+        ),
     };
     let badge_width = ctx.canvas.labels.measure(status_text, 9.5).x + 18.0;
     let badge = Rect::new(
@@ -365,7 +424,7 @@ fn draw_case(
     );
     ctx.canvas.text(
         &format!(
-            "ROI mean {:.2} · p95 {:.2} · >5ΔE {:.1}% · {} [{}, {}, {}, {}]",
+            "ROI mean {:.2} · p95 {:.2} · >5ΔE {:.1}% · {} [{}, {}, {}, {}] · intrinsic {}",
             case.mean_de,
             case.p95_de,
             case.over_limit_ratio * 100.0,
@@ -373,7 +432,12 @@ fn draw_case(
             case.bbox_delta[0],
             case.bbox_delta[1],
             case.bbox_delta[2],
-            case.bbox_delta[3]
+            case.bbox_delta[3],
+            if case.intrinsic_matches {
+                "ok"
+            } else {
+                "drift"
+            }
         ),
         Rect::new(
             row.origin.x + row.size.x * 0.32,
@@ -530,4 +594,44 @@ fn bbox_value(line: &str, key: &str) -> [i64; 4] {
         .split(',')
         .filter_map(|value| value.trim().parse::<i64>().ok());
     std::array::from_fn(|_| values.next().unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const THREE_STATE_REPORT: &str = r#"{
+  "cases": [
+    { "name": "Button_normal_light", "control": "Button", "state": "normal", "theme": "light", "backdrop": "mica", "status": "pass", "invalidReason": null, "contentCoverage": 0.210000, "meanDe": 0.4200, "p95De": 1.7500, "p99De": 3.2000, "maxDe": 6.1000, "overLimitRatio": 0.005000, "referenceBbox": [16, 16, 136, 48], "oursBbox": [16, 16, 136, 48], "roiBbox": [14, 14, 138, 50], "intrinsic": [64.40, 32.00], "referenceSize": [120.00, 32.00], "intrinsicMatches": true, "cacheHit": true, "pass": true },
+    { "name": "TextBox_normal_light", "control": "TextBox", "state": "normal", "theme": "light", "backdrop": "solid", "status": "invalid", "invalidReason": "reference content bbox is empty", "contentCoverage": 0.000000, "meanDe": 0.0000, "p95De": 0.0000, "p99De": 0.0000, "maxDe": 0.0000, "overLimitRatio": 0.000000, "referenceBbox": [0, 0, 0, 0], "oursBbox": [0, 0, 0, 0], "roiBbox": [0, 0, 1, 1], "intrinsic": [200.00, 36.00], "referenceSize": [200.00, 32.00], "intrinsicMatches": false, "cacheHit": false, "pass": false }
+  ]
+}"#;
+
+    #[test]
+    fn report_lines_expose_four_gates_backdrop_and_three_states() {
+        let cases = parse_cases(THREE_STATE_REPORT);
+        assert_eq!(cases.len(), 2);
+        let passed = &cases[0];
+        assert_eq!(passed.status, ParityStatus::Pass);
+        assert_eq!(passed.backdrop, "mica");
+        assert!(passed.intrinsic_matches);
+        assert!(passed.cache_hit);
+        assert!((passed.mean_de - 0.42).abs() < 1e-6);
+        assert!((passed.p95_de - 1.75).abs() < 1e-6);
+        assert!((passed.over_limit_ratio - 0.005).abs() < 1e-6);
+        assert_eq!(passed.bbox_delta, [0, 0, 0, 0]);
+
+        let invalid = &cases[1];
+        assert_eq!(invalid.status, ParityStatus::Invalid);
+        assert!(!invalid.intrinsic_matches);
+        assert!(!invalid.cache_hit);
+    }
+
+    #[test]
+    fn legacy_report_lines_without_status_fall_back_to_pass_flag() {
+        let json = r#"    { "name": "Button_normal_light", "control": "Button", "state": "normal", "theme": "light", "backdrop": "solid", "meanDe": 0.1000, "p95De": 0.2000, "overLimitRatio": 0.000000, "intrinsicMatches": true, "cacheHit": false, "pass": true }"#;
+        let cases = parse_cases(json);
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].status, ParityStatus::Pass);
+    }
 }
