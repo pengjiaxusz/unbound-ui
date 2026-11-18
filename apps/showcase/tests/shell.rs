@@ -415,6 +415,97 @@ fn escape_cancels_only_the_active_composition() {
     assert!(app.state.search.focused);
 }
 
+/// 空查询下连续到达的组合更新只保留最新一份，并保持可绘制的组合区间。
+///
+/// 组合串在缓冲区为空时也必须直接参与渲染（而非回退为占位符），
+/// 且每一轮更新替换上一轮，而不是把拼音字母堆叠起来。
+///
+#[test]
+fn consecutive_preedits_replace_each_other_without_accumulating() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    assert!(app.state.search.focused);
+
+    for preedit in ["n", "ni", "nihao"] {
+        app.runtime.ime(ImeUpdate {
+            enabled: true,
+            preedit: preedit.into(),
+            cursor_range: None,
+            commit: None,
+            cancelled: false,
+        });
+    }
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.search.text(), "nihao");
+    assert!(
+        app.state.search.edit.preedit().is_some(),
+        "the composition must remain inline so its underline can be drawn"
+    );
+}
+
+/// 失焦丢弃未提交的组合，文本恢复为组合前内容。
+#[test]
+fn losing_focus_discards_the_active_composition() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    app.runtime.ime(ImeUpdate {
+        enabled: true,
+        preedit: "ni".into(),
+        cursor_range: None,
+        commit: None,
+        cancelled: false,
+    });
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.search.text(), "ni");
+
+    app.state.blur_editors();
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.search.text(), "");
+    assert_eq!(app.state.search.edit.preedit(), None);
+}
+
+/// 切换页面丢弃未提交的组合，不留下组合区间或残留文本。
+#[test]
+fn switching_pages_discards_the_active_composition() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    app.runtime.ime(ImeUpdate {
+        enabled: true,
+        preedit: "ni".into(),
+        cursor_range: None,
+        commit: None,
+        cancelled: false,
+    });
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.search.text(), "ni");
+
+    app.state.navigate(PageId::Typography);
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.search.text(), "");
+    assert_eq!(app.state.search.edit.preedit(), None);
+}
+
 /// 点击输入框后只移动指针，不得改变文本、插入符或选区。
 ///
 /// 回归：释放之后的点击报告曾再次进入拖拽态，导致普通悬停被当作拖拽更新选区。
