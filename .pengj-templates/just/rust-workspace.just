@@ -5,34 +5,34 @@
 # 全工作区构建（Windows 走全局排队 + Idle 优先级）
 [windows]
 build *ARGS:
-    @bque run -- cargo build --workspace {{ARGS}}
+    @$env:CARGO_TARGET_DIR = (pengj-templates-cli worktree target-dir --dir .); bque run -- cargo build --workspace {{ARGS}}
 [unix]
 build *ARGS:
-    cargo build --workspace {{ARGS}}
+    CARGO_TARGET_DIR="$(pengj-templates-cli worktree target-dir --dir .)" cargo build --workspace {{ARGS}}
 
 # 全工作区检查（clippy 警告视为错误）
 [windows]
 check *ARGS:
-    @bque run -- cargo clippy --workspace --all-targets --all-features -- -D warnings {{ARGS}}
+    @$env:CARGO_TARGET_DIR = (pengj-templates-cli worktree target-dir --dir .); bque run -- cargo clippy --workspace --all-targets --all-features -- -D warnings {{ARGS}}
 [unix]
 check *ARGS:
-    cargo clippy --workspace --all-targets --all-features -- -D warnings {{ARGS}}
+    CARGO_TARGET_DIR="$(pengj-templates-cli worktree target-dir --dir .)" cargo clippy --workspace --all-targets --all-features -- -D warnings {{ARGS}}
 
 # 全工作区测试
 [windows]
 test *ARGS:
-    @bque run -- cargo test --workspace --all-features {{ARGS}}
+    @$env:CARGO_TARGET_DIR = (pengj-templates-cli worktree target-dir --dir .); bque run -- cargo test --workspace --all-features {{ARGS}}
 [unix]
 test *ARGS:
-    cargo test --workspace --all-features {{ARGS}}
+    CARGO_TARGET_DIR="$(pengj-templates-cli worktree target-dir --dir .)" cargo test --workspace --all-features {{ARGS}}
 
 # 专项基准测试（自动挂起后台编译，提供纯净 CPU 环境）
 [windows]
 bench *ARGS:
-    @bque bench -- cargo bench --workspace {{ARGS}}
+    @$env:CARGO_TARGET_DIR = (pengj-templates-cli worktree target-dir --dir .); bque bench -- cargo bench --workspace {{ARGS}}
 [unix]
 bench *ARGS:
-    cargo bench --workspace {{ARGS}}
+    CARGO_TARGET_DIR="$(pengj-templates-cli worktree target-dir --dir .)" cargo bench --workspace {{ARGS}}
 
 
 # 代码就地格式化（轻量，不排队）

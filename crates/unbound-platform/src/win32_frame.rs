@@ -44,19 +44,6 @@ impl WindowBackdropMaterial {
             Self::Tabbed => 4,  // DWMSBT_TABBEDWINDOW
         }
     }
-
-    /// 把后景路径映射为 DWM 系统背景材质。
-    ///
-    /// 原生路径使用标准云母；自绘与关闭都禁用材质，
-    /// 避免 Win11 的 DWM 材质干扰自绘纹理的视觉对照（等价于 Win10 环境）。
-    #[must_use]
-    pub const fn for_native_path(uses_native_path: bool) -> Self {
-        if uses_native_path {
-            Self::Mica
-        } else {
-            Self::None
-        }
-    }
 }
 
 /// 用于自定义标题栏与窗口按钮命中测试的原子指标。
@@ -225,6 +212,7 @@ mod win32 {
     use super::*;
     use core::ffi::c_void;
 
+    use ::windows::core::BOOL;
     use ::windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
     use ::windows::Win32::Graphics::Dwm::{
         DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -233,6 +221,7 @@ mod win32 {
     use ::windows::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromWindow, ScreenToClient, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
+    use ::windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
     use ::windows::Win32::UI::Controls::MARGINS;
     use ::windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
     use ::windows::Win32::UI::WindowsAndMessaging::{
@@ -244,9 +233,189 @@ mod win32 {
 
     const SUBCLASS_ID: usize = 0x554E42; // "UNB" in hex
 
+    /// `DWMWA_SYSTEMBACKDROP_TYPE` 的属性编号。
+    const DWMWA_SYSTEMBACKDROP_TYPE_ID: i32 = 38;
+
+    /// 沉浸式后景的未公开系统取值候选。
+    ///
+    /// 公开头文件（Windows SDK 10.0.26100）里的 `DWM_SYSTEMBACKDROP_TYPE` 只定义了
+    /// 0..=4；沉浸式后景若真有系统取值，只能落在公开区间之外的这几个数上。这里只放
+    /// 候选，不代表它们被系统接受——是否接受由 [`probe_immersive_backdrop`] 实测。
+    const IMMERSIVE_BACKDROP_CANDIDATES: [i32; 3] = [5, 6, 7];
+
+    /// 回读探测的负对照哨兵：几个必然非法的取值。
+    ///
+    /// 本机实测（Windows 11 build 26100）证明 `DwmSetWindowAttribute` 对 0..=4 之外的
+    /// 任意整数都返回 `S_OK`，而 `DwmGetWindowAttribute` 会原样回读，包括 `999` 与
+    /// `65536`。所以「读回等于写入」本身没有判别力；只有先确认哨兵会被系统拒绝，
+    /// 候选值的回读相等才可能有意义。这里避开了 `0x7FFFFFFF` 这类极端值：实测写入它
+    /// 会让 `dwmapi` 在进程内触发访问冲突，探测代码绝不能拿它当探针。
+    const BACKDROP_PROBE_SENTINELS: [i32; 2] = [999, 0x0001_0000];
+
+    /// `WCA_ACCENT_POLICY`：`SetWindowCompositionAttribute` 的 accent policy 属性编号。
+    ///
+    /// 该枚举从未出现在公开头文件里，取值来自社区逆向资料（与 `windows` crate 里
+    /// 未收录的 `WINDOWCOMPOSITIONATTRIB` 一致）。
+    const WCA_ACCENT_POLICY: u32 = 19;
+
+    /// `ACCENT_ENABLE_ACRYLICBLURBEHIND`：亚克力模糊后景。
+    ///
+    /// 公开资料普遍记载为 Windows 10 1803（build 17134）引入。未公开意味着不能
+    /// 把它当稳定契约：系统可能静默忽略，宿主必须按返回值判断是否真正生效。
+    const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
+
+    /// `ACCENT_ENABLE_NONE`：关闭 accent policy，恢复默认合成。
+    const ACCENT_ENABLE_NONE: u32 = 0;
+
+    /// 社区逆向资料里的 `ACCENT_POLICY` 布局（4 个 32 位字段）。
+    #[repr(C)]
+    #[derive(Copy, Clone, Debug, Default)]
+    struct AccentPolicy {
+        /// `ACCENT_STATE` 取值。
+        accent_state: u32,
+        /// 额外的绘制标志位；保持 0 使用默认行为。
+        accent_flags: u32,
+        /// 亚克力色调，ABGR 顺序，alpha 分量参与半透明。
+        gradient_color: u32,
+        /// 动画编号；保持 0 表示不使用动画。
+        animation_id: u32,
+    }
+
+    /// `WINDOWCOMPOSITIONATTRIBDATA` 布局：属性编号、数据指针与字节长度。
+    #[repr(C)]
+    struct WindowCompositionAttributeData {
+        /// `WINDOWCOMPOSITIONATTRIB` 取值。
+        attrib: u32,
+        /// 指向具体属性结构体的指针。
+        data: *mut c_void,
+        /// 属性结构体的字节长度。
+        size: usize,
+    }
+
+    /// 未公开导出 `SetWindowCompositionAttribute` 的函数签名。
+    type SetWindowCompositionAttributeFn =
+        unsafe extern "system" fn(HWND, *mut WindowCompositionAttributeData) -> BOOL;
+
+    /// 动态解析 `SetWindowCompositionAttribute`。
+    ///
+    /// 该导出不在任何公开头文件与导入库里，因此只能用 `GetProcAddress` 运行时解析，
+    /// 绝不能写成硬依赖导入。解析失败返回 `None`，调用方据此判定该通道不可用。
+    fn resolve_set_window_composition_attribute() -> Option<SetWindowCompositionAttributeFn> {
+        use ::windows::core::{s, w};
+
+        unsafe {
+            let module = GetModuleHandleW(w!("user32.dll")).ok()?;
+            let proc = GetProcAddress(module, s!("SetWindowCompositionAttribute"))?;
+            Some(core::mem::transmute::<
+                unsafe extern "system" fn() -> isize,
+                SetWindowCompositionAttributeFn,
+            >(proc))
+        }
+    }
+
+    /// 下发一次 accent policy。语义见外层 [`super::set_window_accent_tint`]。
+    fn set_accent_policy(hwnd: isize, state: u32, gradient_color: u32) -> bool {
+        if hwnd == 0 {
+            return false;
+        }
+        let Some(set_window_composition_attribute) = resolve_set_window_composition_attribute()
+        else {
+            return false;
+        };
+        let mut policy = AccentPolicy {
+            accent_state: state,
+            accent_flags: 0,
+            gradient_color,
+            animation_id: 0,
+        };
+        let mut data = WindowCompositionAttributeData {
+            attrib: WCA_ACCENT_POLICY,
+            data: (&raw mut policy).cast::<c_void>(),
+            size: core::mem::size_of_val(&policy),
+        };
+        unsafe { set_window_composition_attribute(hwnd_from_isize(hwnd), &mut data).as_bool() }
+    }
+
+    /// 亚克力自定义色调：开启 `ACCENT_ENABLE_ACRYLICBLURBEHIND` 并写入色调。
+    pub fn set_accent_tint(hwnd: isize, argb: u32) -> bool {
+        set_accent_policy(hwnd, ACCENT_ENABLE_ACRYLICBLURBEHIND, argb)
+    }
+
+    /// 关闭 accent policy，把窗口交还给默认合成（含 DWM 材质通道）。
+    pub fn clear_accent_tint(hwnd: isize) -> bool {
+        set_accent_policy(hwnd, ACCENT_ENABLE_NONE, 0)
+    }
+
+    /// 运行时能否解析出该未公开导出。语义见外层
+    /// [`super::accent_policy_export_available`]。
+    pub fn accent_policy_export_available() -> bool {
+        resolve_set_window_composition_attribute().is_some()
+    }
+
     #[inline]
     fn hwnd_from_isize(raw: isize) -> HWND {
         HWND(raw as *mut c_void)
+    }
+
+    /// 探测沉浸式后景的系统取值（Win32 实现）。语义见外层
+    /// [`super::probe_immersive_backdrop`]。
+    pub fn probe_immersive_backdrop(hwnd: isize) -> Option<i32> {
+        use ::windows::Win32::Graphics::Dwm::{
+            DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE,
+        };
+
+        if hwnd == 0 {
+            return None;
+        }
+        let hwnd_ptr = hwnd_from_isize(hwnd);
+
+        let write = |value: i32| unsafe {
+            DwmSetWindowAttribute(
+                hwnd_ptr,
+                DWMWINDOWATTRIBUTE(DWMWA_SYSTEMBACKDROP_TYPE_ID),
+                (&raw const value).cast::<c_void>(),
+                core::mem::size_of_val(&value) as u32,
+            )
+            .is_ok()
+        };
+        let read = || -> Option<i32> {
+            let mut value: i32 = 0;
+            let cb = core::mem::size_of_val(&value) as u32;
+            unsafe {
+                DwmGetWindowAttribute(
+                    hwnd_ptr,
+                    DWMWINDOWATTRIBUTE(DWMWA_SYSTEMBACKDROP_TYPE_ID),
+                    (&raw mut value).cast::<c_void>(),
+                    cb,
+                )
+            }
+            .ok()?;
+            Some(value)
+        };
+
+        let original = read();
+
+        // 负对照：只要任一非法哨兵被原样回读，就说明该属性只做整数存储、不做取值
+        // 校验，回读相等毫无证据价值——直接判定为「无法确认」，绝不猜数字。
+        let sentinels_are_rejected = BACKDROP_PROBE_SENTINELS
+            .iter()
+            .all(|sentinel| write(*sentinel) && read().is_some_and(|value| value != *sentinel));
+
+        let mut confirmed = None;
+        if sentinels_are_rejected {
+            for candidate in IMMERSIVE_BACKDROP_CANDIDATES {
+                if write(candidate) && read() == Some(candidate) {
+                    confirmed = Some(candidate);
+                    break;
+                }
+            }
+        }
+
+        // 恢复原值，避免探测把窗口留在非法材质上。
+        if let Some(original) = original {
+            let _ = write(original);
+        }
+        confirmed
     }
 
     unsafe extern "system" fn custom_frame_subclass_proc(
@@ -583,21 +752,120 @@ pub fn set_window_backdrop(hwnd: isize, material: WindowBackdropMaterial) -> boo
     }
 }
 
+/// 探测沉浸式后景的系统取值，返回被系统真正接受的取值。
+///
+/// 做法是「写入后回读」：向真实窗口写入候选 `DWMWA_SYSTEMBACKDROP_TYPE`，再读回
+/// 同一属性；只有读回值等于写入值才认为该取值被接受。
+///
+/// 但回读相等并不充分。本机实测（Windows 11 build 26100）：该属性其实只是一个整数
+/// 存储，`DwmSetWindowAttribute` 对 0..=4 之外的任意值（含 `999`、`65536`）都返回
+/// `S_OK`，`DwmGetWindowAttribute` 原样回读。因此探测先写入必然非法的哨兵值作负对照：
+/// 一旦哨兵也被原样回读，就说明回读通道没有判别力，本函数返回 `None`，绝不猜测。
+///
+/// 返回 `Some(value)` 表示某候选值通过了「可判别」的写入回读校验；返回 `None` 表示
+/// 无法确认（非 Windows、窗口句柄为 0、系统不改写属性、哨兵被回显）。
+///
+/// 本函数从不 panic，可在无头环境安全调用（`hwnd == 0` 直接返回 `None`）。探测会
+/// 临时改写窗口材质并在结束时恢复原值。
+#[must_use]
+pub fn probe_immersive_backdrop(hwnd: isize) -> Option<i32> {
+    #[cfg(windows)]
+    {
+        win32::probe_immersive_backdrop(hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        None
+    }
+}
+
+/// 运行时能否解析出未公开导出 `user32.dll!SetWindowCompositionAttribute`。
+///
+/// 这是亚克力自定义色调子档的专属能力探测：该导出不在导入库里，只能运行时
+/// `GetProcAddress`；解析失败就说明这条通道在这台机器上不存在，界面必须禁用该
+/// 子档。函数本身不做窗口级写入，因此可在创建窗口之前调用，且从不 panic。
+///
+/// 「冒烟探测」由宿主在真正下发时通过 [`set_window_accent_tint`] 的返回值完成：
+/// 这里只保证导出存在，返回值才代表系统接受了这次写入。
+#[must_use]
+pub fn accent_policy_export_available() -> bool {
+    #[cfg(windows)]
+    {
+        win32::accent_policy_export_available()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// 通过未公开的 accent policy 通道设置亚克力自定义色调。
+///
+/// 该函数与 [`set_window_backdrop`] 是两条平行的写入路径，宿主必须按实际生效的
+/// 材质二选一，绝不能同时下发。`argb` 是 ABGR 顺序的色调（alpha 分量参与半透明）。
+///
+/// 返回 `true` 表示调用成功且系统接受了本次写入；导出解析失败、窗口句柄为 0、
+/// 或系统拒绝时返回 `false`。本函数从不 panic。
+#[must_use]
+pub fn set_window_accent_tint(hwnd: isize, argb: u32) -> bool {
+    #[cfg(windows)]
+    {
+        win32::set_accent_tint(hwnd, argb)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (hwnd, argb);
+        false
+    }
+}
+
+/// 关闭 accent policy 通道，把窗口交还给默认合成。
+///
+/// 从亚克力自定义色调切到其它材质时必须调用一次，避免上一档的亚克力继续叠加在
+/// 新的系统材质之上。返回 `false` 表示没有可用的通道或系统拒绝；从不 panic。
+#[must_use]
+pub fn clear_window_accent_tint(hwnd: isize) -> bool {
+    #[cfg(windows)]
+    {
+        win32::clear_accent_tint(hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn backdrop_material_follows_the_resolved_native_path() {
+    fn immersive_probe_reports_nothing_without_a_window() {
+        // 无头 / 尚未创建窗口时探测必须安静地返回「无法确认」，不能 panic。
         assert_eq!(
-            WindowBackdropMaterial::for_native_path(true),
-            WindowBackdropMaterial::Mica,
-            "the native path must use the standard DWM Mica material"
+            probe_immersive_backdrop(0),
+            None,
+            "a headless probe must never confirm a system value"
         );
-        assert_eq!(
-            WindowBackdropMaterial::for_native_path(false),
-            WindowBackdropMaterial::None,
-            "self-drawn and off paths must disable the DWM material"
+    }
+
+    #[test]
+    fn accent_policy_resolution_is_headless_safe() {
+        // 导出解析可能成功也可能失败，取决于运行环境；两种结果都合法，但绝不能 panic。
+        let _resolved = accent_policy_export_available();
+    }
+
+    #[test]
+    fn accent_policy_writes_reject_a_null_window() {
+        assert!(
+            !set_window_accent_tint(0, 0xCC1F_1F1F),
+            "a null window must never receive an accent policy"
+        );
+        assert!(
+            !clear_window_accent_tint(0),
+            "a null window must never receive an accent policy clear"
         );
     }
 

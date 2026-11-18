@@ -8,9 +8,12 @@
 //! gallery 打印测量结果，无头校验器检查布局，showcase 则同时展示两者。
 //!
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use showcase::backdrop_compare::{BackdropCompareRun, CompareReport, CompareStep};
+use showcase::backdrop_host::{window_backdrop_request, WindowBackdropRequest};
 use showcase::frame_plan::{frame_size, needs_rebuild, upload_plan};
 use showcase::runtime_app::GalleryRuntime;
 use showcase::shell::GalleryApp;
@@ -32,9 +35,9 @@ use unbound_platform::win32_frame::{install_custom_frame, FrameHitMetrics};
 use unbound_platform::window::{
     ButtonState, Modifiers, MouseButton, PlatformEvent, PlatformKey, PlatformState, WindowConfig,
 };
-use unbound_platform::Extent;
 use unbound_platform::{
-    CursorIcon, NativeWindowId, PhysicalPosition, PhysicalSize, ResizeDirection, Window,
+    CursorIcon, Extent, NativeWindowId, PhysicalPosition, PhysicalSize, ResizeDirection, Window,
+    WindowPosition,
 };
 use unbound_theme::{ThemeKind, ThemeState};
 
@@ -126,6 +129,8 @@ struct Showcase {
     extras: Vec<ExtraWindow>,
     /// 由 `Ctrl+N` 置位；平台层在下一帧打开新窗口。
     new_window_requested: bool,
+    /// 无人值守的原生/自绘后景对照运行；`None` 表示普通交互模式。
+    compare: Option<BackdropCompareRun>,
 }
 
 impl Showcase {
@@ -177,7 +182,15 @@ impl Showcase {
             frame_metrics: None,
             extras: Vec::new(),
             new_window_requested: false,
+            compare: None,
         }
+    }
+
+    /// 以对照模式启动：同一窗口位置下先截原生后景、再截自绘后景并写出产物。
+    fn with_compare(compare: BackdropCompareRun) -> Self {
+        let mut showcase = Self::new();
+        showcase.compare = Some(compare);
+        showcase
     }
 
     fn destroy_vulkan(&mut self) {
@@ -393,31 +406,44 @@ fn window_hwnd(window: &Window) -> Option<isize> {
     }
 }
 
+/// 按计划产出的单一请求下发系统材质。
+///
+/// DWM 通道与 accent policy 通道互斥：这里用 `match` 保证每次只走一条。切回
+/// DWM 通道前先清掉可能残留的 accent policy，避免上一档的亚克力继续叠加。
+fn apply_window_backdrop_request(hwnd: isize, request: WindowBackdropRequest) {
+    match request {
+        WindowBackdropRequest::Dwm(material) => {
+            let _ = unbound_platform::clear_window_accent_tint(hwnd);
+            let _ = unbound_platform::set_window_backdrop(hwnd, material);
+        }
+        WindowBackdropRequest::AccentTint(argb) => {
+            let _ = unbound_platform::set_window_accent_tint(hwnd, argb);
+        }
+    }
+}
+
 impl Showcase {
-    /// 将解析后的后景模式同步到宿主资源。
+    /// 将解析后的后景计划同步到宿主资源。
     ///
-    /// 只有实际生效模式变化时才更新清屏 alpha、DWM 材质与失焦锁定。
+    /// 只有计划变化时才更新清屏 alpha、系统材质请求与失焦锁定。
     ///
-    /// 合成方式在窗口生命周期内固定，切换路径绝不重建交换链；透明性变化只体现为
-    /// 清屏 alpha 与 DWM 材质请求，二者都不会重配表面。
+    /// 合成方式在窗口生命周期内固定，切换材质或来源绝不重建交换链；透明性变化只体现为
+    /// 清屏 alpha 与系统材质请求，二者都不会重配表面。
     fn sync_backdrop_host(&mut self, window: &Window) {
-        if !self.shell_mut().sync_backdrop_mode() {
+        if !self.shell_mut().sync_backdrop_plan() {
             return;
         }
         let plan = self.shell().state.backdrop_plan.clone();
         if let Some(renderer) = &mut self.renderer {
             renderer.set_clear_alpha(plan.clear_alpha);
         }
-        let wants_mica = plan.material == unbound_backdrop::DwmMaterial::Mica;
+        let (request, lock_mica) = window_backdrop_request(&plan);
         if let Some(hwnd) = window_hwnd(window) {
-            let _ = unbound_platform::set_window_backdrop(
-                hwnd,
-                unbound_platform::WindowBackdropMaterial::for_native_path(wants_mica),
-            );
+            apply_window_backdrop_request(hwnd, request);
         }
         if let Some(metrics) = &self.frame_metrics {
-            // 原生模式下锁定失焦激活态，避免窗口失活时云母退化为纯色。
-            metrics.set_lock_mica_active(wants_mica);
+            // 原生材质在场时锁定失焦激活态，避免窗口失活时材质退化为纯色。
+            metrics.set_lock_mica_active(lock_mica);
         }
         self.app.invalidate();
     }
@@ -714,6 +740,10 @@ impl PlatformApp for Showcase {
         let premultiplied_alpha = surface.supports_premultiplied_alpha(&gpu).unwrap_or(false);
         self.shell_mut()
             .set_backdrop_capabilities(windows_build, premultiplied_alpha);
+        // accent policy 通道的能力单独探测，单独传入：它只影响亚克力自定义色调
+        // 子档，绝不参与其它材质的可用性判定。
+        self.shell_mut()
+            .set_backdrop_accent_capability(unbound_platform::accent_policy_export_available());
         // 合成方式由平台能力固定，与用户当前选择无关：支持的机器整条生命周期都用
         // 预乘 alpha，即使此刻显示的是关闭/自绘路径。这样后续切到原生时无需重配交换链。
         self.composite_alpha = match self.shell().state.backdrop_plan.composition {
@@ -788,16 +818,15 @@ impl PlatformApp for Showcase {
         let metrics = Arc::new(FrameHitMetrics::new());
         metrics.set_scale_factor(self.effective_scale());
         install_custom_frame(hwnd, Arc::clone(&metrics));
-        // 后景材质由计划决定：原生 → 标准云母；自绘/关闭 → 禁用材质。
-        let wants_mica =
-            self.shell().state.backdrop_plan.material == unbound_backdrop::DwmMaterial::Mica;
+        // 后景材质由计划决定：启动时必须请求计划给出的那一档系统材质——亚克力、
+        // 云母变体与跟随系统各有各的系统取值，不能一律当成标准云母。自绘与关闭
+        // 都落在「不请求材质」上，窗口因此保持不透明。
+        let (backdrop_request, lock_backdrop) =
+            window_backdrop_request(&self.shell().state.backdrop_plan);
         unbound_platform::set_window_dark_mode(hwnd, self.shell().state.theme.is_dark());
-        let _ = unbound_platform::set_window_backdrop(
-            hwnd,
-            unbound_platform::WindowBackdropMaterial::for_native_path(wants_mica),
-        );
+        apply_window_backdrop_request(hwnd, backdrop_request);
         // 原生模式启用失焦锁定，避免窗口失活时云母退化为纯色。
-        metrics.set_lock_mica_active(wants_mica);
+        metrics.set_lock_mica_active(lock_backdrop);
         self.frame_metrics = Some(metrics);
 
         // 呈现链刚刚按窗口尺寸创建：该请求已提交，因此首帧不会再次重建。
@@ -1570,10 +1599,23 @@ impl Showcase {
             }
         }
         state.pacer.on_present(Instant::now());
+        if let Some(mut compare) = self.compare.take() {
+            match compare.step(self.shell_mut(), window) {
+                CompareStep::Pending => {
+                    self.compare = Some(compare);
+                    state.pacer.request_immediate(Instant::now());
+                }
+                CompareStep::Finished(result) => {
+                    report_compare(result);
+                    return Flow::Exit;
+                }
+            }
+        }
         // 无 HUD、无动画且启用帧率上限的静态页面无新内容可显示：
         // 让事件循环休眠，而非每次刷新都提交全量裁剪与基数排序。
         //
-        let keep_animating = self.shell().state.fps_limit == 0
+        let keep_animating = self.compare.is_some()
+            || self.shell().state.fps_limit == 0
             || self.shell().state.show_hud
             || self.shell().state.active_page == showcase::pages::PageId::Telemetry
             || moving;
@@ -1729,6 +1771,41 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
         .map(|window| window[1].clone())
 }
 
+/// 解析对照入口的材质名称。
+fn parse_material(name: &str) -> Option<unbound_backdrop::MaterialKind> {
+    match name.to_ascii_lowercase().replace('_', "-").as_str() {
+        "none" => Some(unbound_backdrop::MaterialKind::None),
+        "follow-system" | "followsystem" => Some(unbound_backdrop::MaterialKind::FollowSystem),
+        "mica" => Some(unbound_backdrop::MaterialKind::Mica),
+        "mica-alt" | "micaalt" => Some(unbound_backdrop::MaterialKind::MicaAlt),
+        "acrylic" => Some(unbound_backdrop::MaterialKind::Acrylic),
+        "immersive" => Some(unbound_backdrop::MaterialKind::Immersive),
+        _ => None,
+    }
+}
+
+/// 打印并排对照的产物位置与坐标系信息。
+fn report_compare(result: Result<CompareReport, String>) {
+    match result {
+        Ok(report) => {
+            println!("backdrop compare wrote {}", report.out_dir.display());
+            println!("  native       {}", report.native.display());
+            println!("  self-drawn   {}", report.self_drawn.display());
+            println!("  side-by-side {}", report.side_by_side.display());
+            println!("  diff-heat    {}", report.heat.display());
+            println!(
+                "  capture      {}x{} at ({}, {}) -> uv {:?}",
+                report.capture_size.0,
+                report.capture_size.1,
+                report.capture_origin.x,
+                report.capture_origin.y,
+                report.texture_uv
+            );
+        }
+        Err(error) => eprintln!("backdrop compare failed:\n{error}"),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--parity-run") {
@@ -1825,6 +1902,55 @@ fn main() {
         ) {
             Ok(()) => println!("wrote {path}"),
             Err(error) => eprintln!("could not render:\n{error}"),
+        }
+        return;
+    }
+
+    if args.iter().any(|a| a == "--backdrop-compare") {
+        let name = arg_value(&args, "--name").unwrap_or_else(|| "backdrop".into());
+        let out = arg_value(&args, "--out").unwrap_or_else(|| "target/backdrop-compare".into());
+        let material = match arg_value(&args, "--material") {
+            Some(value) => match parse_material(&value) {
+                Some(material) => material,
+                None => {
+                    eprintln!("unknown backdrop material: {value}");
+                    return;
+                }
+            },
+            None => unbound_backdrop::MaterialKind::Mica,
+        };
+        let width = arg_value(&args, "--width")
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(1280);
+        let height = arg_value(&args, "--height")
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(800);
+        let position = match (
+            arg_value(&args, "--x").and_then(|value| value.parse::<i32>().ok()),
+            arg_value(&args, "--y").and_then(|value| value.parse::<i32>().ok()),
+        ) {
+            (Some(x), Some(y)) => WindowPosition::Physical { x, y },
+            _ => WindowPosition::CenterPrimary,
+        };
+        let config = WindowConfig {
+            title: TITLE.to_string(),
+            width,
+            height,
+            resizable: false,
+            decorations: false,
+            min_width: 320,
+            min_height: 240,
+            visible: true,
+            position,
+            ..Default::default()
+        };
+        let Ok(window) = PlatformWindow::new(&config) else {
+            eprintln!("could not create the window");
+            return;
+        };
+        let run = BackdropCompareRun::new(name, material, PathBuf::from(out));
+        if let Err(error) = window.run(Showcase::with_compare(run)) {
+            eprintln!("the event loop failed: {error}");
         }
         return;
     }

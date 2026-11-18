@@ -611,7 +611,10 @@ fn write_heat(
     )
 }
 
-fn heat_color(delta: f64) -> [u8; 3] {
+/// 把 `0..30` 的色差映射为黑→蓝→绿→黄→红的五段配色。
+///
+/// 后景对照热力图复用同一套配色，但色差来源不同；颜色映射本身必须只有一处。
+pub(crate) fn heat_color(delta: f64) -> [u8; 3] {
     let t = (delta / 30.0).clamp(0.0, 1.0) as f32;
     const STOPS: [[f32; 3]; 5] = [
         [0.0, 0.0, 0.0],

@@ -12,6 +12,7 @@ use unbound_app::{
     AppContext, AppEvent, AppKey, Application, DirtyFlags, EventOutcome, Locale,
     Modifiers as AppModifiers, ViewBuilder,
 };
+use unbound_backdrop::{BackdropSource, MaterialKind};
 use unbound_input::FocusCause;
 use unbound_platform::{Modifiers, PlatformKey};
 use unbound_theme::ThemeKind;
@@ -43,8 +44,8 @@ impl Application for GalleryApp {
     type State = ();
 
     fn init(&mut self, ctx: &mut AppContext) -> Self::State {
-        // 初始化即解析默认后景模式，后续每帧再跟随选择变化。
-        self.sync_backdrop_mode();
+        // 初始化即解析默认后景计划，后续每帧再跟随选择变化。
+        self.sync_backdrop_plan();
         ctx.theme = crate::theme::kind(self.state.theme == ThemeMode::Dark);
         ctx.set_locale_enum(self.state.locale);
     }
@@ -193,14 +194,15 @@ impl Application for GalleryApp {
         };
         // 云母纹理在后台生成、解码：先提交/绘制，再用最新可见性决定根背景。
         // 可见性翻转本身必须触发重建，否则不透明底色会一直盖着已经就绪的纹理。
-        // 后景模式先于绘制同步：选择变化会在同一帧写入实际生效模式并请求重建。
-        self.sync_backdrop_mode();
-        // 只有自绘路径才需要生成、同步并绘制壁纸纹理；原生与关闭模式跳过，
+        // 后景计划先于绘制同步：选择变化会在同一帧写入实际生效组合并请求重建。
+        self.sync_backdrop_plan();
+        let plan = self.state.backdrop_plan.clone();
+        // 只有自绘路径才需要生成、同步并绘制壁纸纹理；原生路径与「无后景」跳过，
         // 避免无意义的 CPU 与内存开销。
-        let draws_self_drawn = self.state.backdrop_plan.resolved.draws_self_drawn_texture();
+        let draws_self_drawn =
+            plan.material_kind != MaterialKind::None && plan.source == BackdropSource::SelfDrawn;
         self.mica.set_enabled(draws_self_drawn);
         let was_mica_visible = self.mica.visible();
-        let plan = self.state.backdrop_plan.clone();
         let uv_changed = if draws_self_drawn {
             self.mica.sync(plan.texture, plan.uv, view.event_sender())
         } else {
@@ -212,7 +214,7 @@ impl Application for GalleryApp {
         if mica_visible != was_mica_visible {
             // 纹理就绪会改变计划里的根背景透明性；先刷新计划再重建，避免
             // 用上一帧的结论把刚可见的后景重新盖住。
-            self.sync_backdrop_mode();
+            self.sync_backdrop_plan();
         }
         if mica_visible != was_mica_visible
             || uv_changed
