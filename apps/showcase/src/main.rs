@@ -1717,18 +1717,26 @@ fn main() {
         let reference = arg_value(&args, "--reference")
             .unwrap_or_else(|| "tools/winui-reference/captures".into());
         let out = arg_value(&args, "--out").unwrap_or_else(|| "target/parity".into());
-        match showcase::png_diff::run_batch(&reference, &out) {
+        let allow_cache = !args.iter().any(|a| a == "--no-cache");
+        match showcase::png_diff::run_batch_with_options(&reference, &out, allow_cache) {
             Ok(summary) => {
                 println!(
-                    "parity: {}/{} cases pass · {}",
+                    "parity: {}/{} cases pass ({} cached) · {}",
                     summary.passed(),
                     summary.cases.len(),
+                    summary.cache_hits,
                     summary.out_dir.join("report.json").display()
                 );
                 for case in summary.cases.iter().filter(|case| !case.passes()).take(8) {
                     println!(
-                        "  {} mean={:.2} p99={:.2} bbox={:?} ref={:?}",
-                        case.name, case.mean_de, case.p99_de, case.ours_bbox, case.reference_bbox
+                        "  {} roi_mean={:.2} p95={:.2} over={:.1}% bbox={:?} ref={:?} intrinsic={:?}",
+                        case.name,
+                        case.mean_de,
+                        case.p95_de,
+                        case.over_limit_ratio * 100.0,
+                        case.ours_bbox,
+                        case.reference_bbox,
+                        case.intrinsic
                     );
                 }
             }

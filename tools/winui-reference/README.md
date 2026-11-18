@@ -2,6 +2,12 @@
 
 为 unbound-ui 的像素级一致性校验提供**官方 WinUI 3 控件参考截图**。本目录是一个独立的 .NET 8 / WinUI 3 非打包应用，不属于 Rust workspace，`just build` 不会处理它，也不需要改动仓库任何现有文件。
 
+## 核心特性（v2 拼版 + 紧凑出血 + 指纹缓存）
+
+1. **状态拼版采集（Contact Sheet Batching）**：在 `--batch` 模式下，按「控件 × 主题 × 后景」为单位将同一控件支持的所有状态（如 `normal` / `disabled` / `checked`）并排放入同一张水平网格画布，共享一次 `350ms` 动画收敛与单次 `RenderTargetBitmap` 导出，随后自动按每个控件的 `controlBounds` + `16 DIP` 出血边距切分为紧凑单图。
+2. **版本与规格指纹缓存（Fingerprint Cache）**：每个用例 JSON 记录绑定了 `(WindowsAppSDKVersion, OSVersion, RasterizationScale, Control, State, Theme, Backdrop, SpecSignature)` 的 16 位 SHA-256 指纹。下次运行时若指纹一致且 PNG 存在，直接毫秒级跳过该拼版（可用 `--no-cache` 强制重截）。
+3. **确定性后景合成底板（Synthetic Backdrop）**：通过 `--backdrop solid|mica|mica_alt|acrylic|all` 控制画布底板。默认激活 `solid` 纯色基准面，并为后续云母/亚克力全面完工预留确定性合成底板。
+
 ## 环境要求
 
 - .NET 8 SDK（`dotnet --list-sdks` 能看到 8.x）
@@ -14,14 +20,15 @@
 # 在本目录执行（Project 已把默认 AnyCPU 提升为 x64）
 dotnet build -c Release
 
-# 产物路径形如：
-# bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe
-
+# 采集单个控件用例
 .\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe `
     --out .\captures --control Button --state normal --theme light
 
-# 批量采集全部试点组合（单进程、单窗口，不反复弹窗）
+# 批量状态拼版采集（单进程、状态并排拼版、命中指纹缓存自动跳过）
 .\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe --batch --out .\captures
+
+# 强制忽略缓存重截并同时保存 _sheet.png 拼版总览图
+.\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe --batch --no-cache --save-sheet --out .\captures
 ```
 
 ## 与 unbound-ui 的对照闭环
@@ -34,22 +41,18 @@ dotnet build -c Release
     --out target\parity
 ```
 
-该命令对每张参考图调用 `unbound-widgets` 的同一个控件，按参考 JSON 的
-`controlBounds` 渲染到同尺寸画布，然后逐像素计算 CIEDE2000，输出：
+该命令在**全局复用同一个 Vulkan 渲染器实例**与**源码哈希缓存**的前提下，对每张参考图调用 `unbound-widgets` 的对应控件，并在**有效对比区（ROI：`union(reference_bbox, ours_bbox, controlBounds)` 外扩 2px）**内计算 CIEDE2000 与四重门禁，输出：
 
-- `target/parity/reference/<用例>.png`：参考截图副本，框架内报告页只依赖 `target/parity`；
-- `target/parity/ours/<用例>.png`：本框架渲染结果（附同名 JSON）；
-- `target/parity/heat/<用例>.png`：ΔE 热力图（黑→蓝→绿→黄→红，30 封顶）；
-- `target/parity/report.json`：逐用例指标与通过状态。
+- `target/parity/reference/<用例>.png`：参考截图副本；
+- `target/parity/ours/<用例>.png`：本框架渲染结果（附含源码指纹与固有尺寸的同名 JSON）；
+- `target/parity/heat/<用例>.png`：ΔE 热力图（黑→蓝→绿→黄→红，30 封顶，并高亮 ROI 框）；
+- `target/parity/report.json`：逐用例 ROI 指标、四重门禁与缓存命中状态。
 
-判定阈值：内容包围盒逐边相差 ≤ 1 像素（允许字体抗锯齿的单像素溢出），
-全图 ΔE2000 均值 ≤ 1.0，p99 ≤ 3.0。
-
-报告同时内置于展厅「Engine Systems → Pixel parity」页：三张截图经 `AssetHub`
-异步解码后由框架自己的图像发射器绘制，可用
-`showcase --shot target/parity-page.png --page parity` 离线截图验证。
-
-> 构建/还原由主代理统一执行；本目录的创建过程不运行任何构建命令。
+**四重门禁判定阈值（ADR 0008）**：
+1. 内容包围盒逐边相差 `≤ 1px`；
+2. 自由维度上的控件固有尺寸（`intrinsic`）与参考尺寸相差 `≤ 1px`；
+3. 有效对比区（ROI）内 `mean ΔE2000 ≤ 1.5` 且 `p95 ΔE2000 ≤ 4.0`；
+4. ROI 内显著色差像素（`ΔE2000 > 5.0`）占比 `overLimitRatio ≤ 2.0%`。
 
 ## 参数
 
@@ -59,44 +62,9 @@ dotnet build -c Release
 | `--control <name>` | `Button` `CheckBox` `ToggleSwitch` `Slider` `ComboBox` `TextBox` | `Button` | 大小写不敏感 |
 | `--state <state>` | `normal` `disabled` `checked` `focused` | `normal` | `checked` 仅支持 CheckBox / ToggleSwitch |
 | `--theme <theme>` | `light` `dark` | `light` | 通过 `Host.RequestedTheme` 切换 |
-| `--width <N>` | 64..8192 | `420` | 窗口客户区宽度（物理像素） |
-| `--height <N>` | 64..8192 | `160` | 窗口客户区高度（物理像素） |
-| `--batch` | 开关 | 关闭 | 单进程跑完全部试点组合（normal / disabled / checked × 明暗），忽略 `--control/--state/--theme` |
-
-未知控件会在错误信息中打印可用控件清单并以退出码 `2` 退出；参数错误同样退出码 `2`；截图过程异常退出码 `1`。错误信息同时写入可执行文件同目录的 `winui-reference.error.log`（WinExe 从控制台启动时不一定能拿到 stderr）。
-
-## 输出结构
-
-```
-<out>/
-  Button_normal_light.png      # <控件>_<状态>_<主题>.png
-  Button_normal_light.json     # 同名元数据，见下
-```
-
-每个用例的 JSON 字段：
-
-- `processBitness` / `processArchitecture`：进程位数与架构
-- `osVersion` / `osVersionNumber`：操作系统版本
-- `windowsAppSdkAssemblyVersion` / `windowsAppSdkAssemblyFullName`：WinUI 程序集版本
-- `rasterizationScale`：`Host.XamlRoot.RasterizationScale`
-- `hostActualWidth` / `hostActualHeight`：Host 的 DIP 尺寸
-- `requestedWindowWidth` / `requestedWindowHeight`：命令行请求的物理像素尺寸
-- `imagePixelWidth` / `imagePixelHeight`：PNG 实际像素尺寸
-- `controlBounds`：控件相对 Host 的边界（`TransformToVisual(Host)`，DIP）
-- `controlFocusState`：截图时控件的 `FocusState`
-- `pngFile`：对应 PNG 文件名
-
-## 已知限制
-
-- **hover / pressed 未实现**：枚举里保留，传入会按参数错误退出（需要模拟指针进入/按下，暂不纳入试点）。
-- **不实现弹层**：ComboBox 只截收起状态，不展开下拉；MenuFlyout 等同样不做。
-- **DPI**：截图只在当前桌面会话的缩放比例下有意义。要得到 150% / 200% 的参考图，必须在对应缩放比例的桌面会话里运行（manifest 为 PerMonitorV2）。`--width/--height` 是物理像素，PNG 尺寸 = Host DIP × `rasterizationScale`。
-- **窗口必须可见且未最小化**：`CompositionTarget.Rendering` 在最小化/锁屏时可能不触发，届时 10 秒兜底计时器会直接截图，结果可能不完整。
-- **focus 状态**：`TextBox` 获得焦点后光标会闪烁，不同时刻截图可能不同；窗口未激活时程序化聚焦也可能失败，请以 JSON 的 `controlFocusState` 为准。
-- **元数据按用例落盘**：每次运行只写 `<控件>_<状态>_<主题>.json`，批量采集到同一目录不会互相覆盖；差分器按同名查找。
-- **强调色被钉死**：`CaptureWindow.xaml` 的 `Host.Resources` 把复选框 / 滑块 / 开关的强调色资源固定为 Windows 11 默认蓝（浅色 `#005FB8`、深色 `#60CDFF`）。WinUI 默认跟随用户个性化主题色，不钉死则基线会随截图机器漂移。
-- **ToggleSwitch 使用 Header 布局**：`Header="ToggleSwitch"` 对应「文案在上、开关在下」的 WinUI 模板；unbound-ui 的 `SwitchDesc` 目前是「文案在左、开关在右」的行布局，包围盒差异会被差分器显式报出。
-
-## 扩展方式
-
-在 `Catalog.cs` 的 `ControlNameList` 与 `TryCreate` 中补一条即可，宿主与参数解析会自动跟进；若状态需要额外处理，在 `TryApplyState` / `ApplyFocus` 中扩展。
+| `--backdrop <kind>` | `solid` `mica` `mica_alt` `acrylic` `all` | `solid` | 确定性合成底板类型（`all` 仅限 `--batch`） |
+| `--width <N>` | 64..8192 | `420` | 单例模式窗口宽度（批量模式按状态槽位自动计算并裁剪为紧凑出血画布） |
+| `--height <N>` | 64..8192 | `160` | 单例模式窗口高度 |
+| `--batch` | 开关 | 关闭 | 按「控件 × 主题 × 后景」生成状态拼版并自动切出紧凑单图 |
+| `--no-cache` | 开关 | 关闭 | 忽略 `fingerprint` 缓存，强制重新采集全部用例 |
+| `--save-sheet` | 开关 | 关闭 | 除切分后的单用例 PNG 外，额外保留 `<Control>_<theme>_<backdrop>_sheet.png` |

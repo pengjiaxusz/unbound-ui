@@ -1,24 +1,34 @@
-//! 像素一致性差分器：官方 WinUI 参考图 vs unbound-ui 渲染图。
+//! 像素一致性差分器：官方 WinUI 参考图 vs unbound-ui 渲染图（基于有效对比区 ROI 与四重门禁）。
 //!
-//! 输入是 `tools/winui-reference/captures`（`<控件>_<状态>_<主题>.png` 与同名 JSON），
-//! 输出是本框架按相同边界、相同画布渲染的 PNG，以及分区指标、热力图与 JSON 报告。
+//! 输入是 `tools/winui-reference/captures`（`<控件>_<状态>_<主题>[_<后景>].png` 与同名 JSON），
+//! 输出是本框架按相同边界、相同画布渲染的 PNG，以及基于**有效对比区（ROI）**的指标、热力图与 JSON 报告。
 //!
-//! 判定口径（与项目约定一致）：
-//! * 几何——内容包围盒必须与参考图完全一致（阴影会一并计入包围盒）；
-//! * 颜色——控制区之外以整体 ΔE2000 均值与 p99 衡量，文字抗锯齿允许少量离群像素。
+//! 四重门禁判定口径（ADR 0008）：
+//! 1. **内容包围盒对齐（`bbox_matches`）**：内容包围盒逐边相差 `≤ 1px`（含阴影与焦点环）；
+//! 2. **固有尺寸对齐（`intrinsic_matches`）**：在未显式指定固定宽高的自由维度上，固有尺寸相差 `≤ 1px`；
+//! 3. **ROI 色差均值与分位数**：仅在 `union(reference_bbox, ours_bbox, controlBounds)` 外扩 `2px` 的有效对比区内统计，`mean_de <= 1.5` 且 `p95_de <= 4.0`；
+//! 4. **显著色差像素占比（`over_limit_ratio`）**：ROI 内 `ΔE2000 > 5.0` 的像素占比 `≤ 2.0%`（防止圆角、描边或图标漏画被面积稀释）。
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use unbound_math::Rect;
 
-use crate::parity::{self, ParityCase};
+use crate::parity::{ParityCase, ParitySession};
 use crate::shot::{self, Image};
 
-/// 整体 ΔE2000 均值上限。
-pub const MEAN_LIMIT: f64 = 1.0;
-/// 第 99 百分位 ΔE2000 上限（文字抗锯齿允许少量离群）。
-pub const P99_LIMIT: f64 = 3.0;
+/// 有效对比区（ROI）内 ΔE2000 均值上限。
+pub const MEAN_LIMIT: f64 = 1.5;
+/// 有效对比区（ROI）内第 95 百分位 ΔE2000 上限。
+pub const P95_LIMIT: f64 = 4.0;
+/// 显著色差单像素判定阈值（用于统计 `over_limit_ratio`）。
+pub const SIGNIFICANT_DE_THRESHOLD: f64 = 5.0;
+/// 有效对比区内超过 [`SIGNIFICANT_DE_THRESHOLD`] 的最大允许像素占比（2%）。
+pub const OVER_LIMIT_RATIO_MAX: f64 = 0.02;
+/// 兼容旧常量名。
+pub const P99_LIMIT: f64 = SIGNIFICANT_DE_THRESHOLD;
+/// 有效对比区在联合包围盒四周额外扩展的出血像素数。
+pub const ROI_MARGIN_PX: i64 = 2;
 
 /// 单个用例的对比结果。
 pub struct CaseMetrics {
@@ -30,43 +40,61 @@ pub struct CaseMetrics {
     pub state: String,
     /// 主题。
     pub theme: String,
-    /// 全图 ΔE2000 均值。
+    /// 后景合成底板类型（`solid` / `mica` / `mica_alt` / `acrylic`）。
+    pub backdrop: String,
+    /// 有效对比区（ROI）ΔE2000 均值。
     pub mean_de: f64,
-    /// ΔE2000 第 95 百分位。
+    /// 有效对比区（ROI）ΔE2000 第 95 百分位。
     pub p95_de: f64,
-    /// ΔE2000 第 99 百分位。
+    /// 有效对比区（ROI）ΔE2000 第 99 百分位。
     pub p99_de: f64,
-    /// ΔE2000 最大值。
+    /// 有效对比区（ROI）ΔE2000 最大值。
     pub max_de: f64,
-    /// ΔE 超过 [`P99_LIMIT`] 的像素占比。
+    /// 有效对比区（ROI）内 ΔE 超过 [`SIGNIFICANT_DE_THRESHOLD`] 的像素占比。
     pub over_limit_ratio: f64,
     /// 参考图内容包围盒 `[min_x, min_y, max_x, max_y]`（含端点）。
     pub reference_bbox: [i64; 4],
-    /// 本框架内容包围盒。
+    /// 本框架内容包围盒 `[min_x, min_y, max_x, max_y]`（含端点）。
     pub ours_bbox: [i64; 4],
-    /// 本框架固有尺寸。
+    /// 实际参与色差统计的有效对比区（ROI）`[min_x, min_y, max_x, max_y]`（含端点）。
+    pub roi_bbox: [i64; 4],
+    /// 本框架固有尺寸 `[width, height]`。
     pub intrinsic: [f32; 2],
-    /// 参考 JSON 给出的控件边界尺寸。
+    /// 参考 JSON 给出的控件边界尺寸 `[width, height]`。
     pub reference_size: [f32; 2],
+    /// 参考用例是否显式指定了固定宽度（若为 true，固有尺寸门禁只校验高度）。
+    pub explicit_width: bool,
+    /// 本次运行是否命中了本框架源码指纹缓存。
+    pub cache_hit: bool,
 }
 
 impl CaseMetrics {
-    /// 包围盒是否逐边相等。
+    /// 门禁 1：内容包围盒是否逐边相等（允许 ±1px 字体亚像素抗锯齿溢出）。
     #[must_use]
     pub fn bbox_matches(&self) -> bool {
-        // 字体光栅器的亚像素提示会让单个字母的抗锯齿边越过 1px：
-        // `ToggleSwitch` 的 Header 里有一个字形比 WinUI 多出 3 个淡像素。
-        // 逐边允许 ±1px，仍能捕获 ≥2px 的真实布局漂移。
         self.reference_bbox
             .iter()
             .zip(self.ours_bbox.iter())
             .all(|(reference, ours)| (reference - ours).abs() <= 1)
     }
 
-    /// 是否达到验收阈值。
+    /// 门禁 2：固有尺寸是否与 WinUI 自然尺寸对齐（允许 ±1px；固定宽度的控件只校验固有高度）。
+    #[must_use]
+    pub fn intrinsic_matches(&self) -> bool {
+        let height_ok = (self.intrinsic[1] - self.reference_size[1]).abs() <= 1.0;
+        let width_ok =
+            self.explicit_width || (self.intrinsic[0] - self.reference_size[0]).abs() <= 1.0;
+        width_ok && height_ok
+    }
+
+    /// 四重门禁是否全部通过。
     #[must_use]
     pub fn passes(&self) -> bool {
-        self.bbox_matches() && self.mean_de <= MEAN_LIMIT && self.p99_de <= P99_LIMIT
+        self.bbox_matches()
+            && self.intrinsic_matches()
+            && self.mean_de <= MEAN_LIMIT
+            && self.p95_de <= P95_LIMIT
+            && self.over_limit_ratio <= OVER_LIMIT_RATIO_MAX
     }
 }
 
@@ -76,6 +104,8 @@ pub struct BatchSummary {
     pub cases: Vec<CaseMetrics>,
     /// 报告目录。
     pub out_dir: PathBuf,
+    /// 命中源码指纹缓存跳过的渲染次数。
+    pub cache_hits: usize,
 }
 
 impl BatchSummary {
@@ -86,14 +116,21 @@ impl BatchSummary {
     }
 }
 
-/// 对参考目录中的每个 PNG 渲染本框架对应控件并计算指标。
+/// 对参考目录中的每个用例 PNG 渲染本框架对应控件并计算有效对比区（ROI）指标（默认启用缓存）。
 pub fn run_batch(reference_dir: &str, out_dir: &str) -> Result<BatchSummary, String> {
+    run_batch_with_options(reference_dir, out_dir, true)
+}
+
+/// 带缓存开关的批量差分入口。
+pub fn run_batch_with_options(
+    reference_dir: &str,
+    out_dir: &str,
+    allow_cache: bool,
+) -> Result<BatchSummary, String> {
     let reference_dir = Path::new(reference_dir);
     let out_root = Path::new(out_dir);
     let ours_dir = out_root.join("ours");
     let heat_dir = out_root.join("heat");
-    // 参考截图一并复制进产物目录：框架内报告页只依赖 `target/parity`，
-    // 不再需要回头读取采集目录。
     let reference_out = out_root.join("reference");
     std::fs::create_dir_all(&ours_dir).map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&heat_dir).map_err(|error| error.to_string())?;
@@ -103,7 +140,12 @@ pub fn run_batch(reference_dir: &str, out_dir: &str) -> Result<BatchSummary, Str
         .map_err(|error| format!("{}: {error}", reference_dir.display()))?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "png"))
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "png")
+                && !path
+                    .file_stem()
+                    .is_some_and(|stem| stem.to_string_lossy().ends_with("_sheet"))
+        })
         .collect();
     png_files.sort();
     if png_files.is_empty() {
@@ -113,24 +155,39 @@ pub fn run_batch(reference_dir: &str, out_dir: &str) -> Result<BatchSummary, Str
         ));
     }
 
+    // 整个批量差分只创建一次 Vulkan 渲染会话
+    let mut session = ParitySession::new(420, 160)?;
     let mut cases = Vec::new();
+    let mut cache_hits = 0;
+
     for reference_png in png_files {
         let name = reference_png
             .file_stem()
             .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
         let meta_path = reference_png.with_extension("json");
-        let meta = std::fs::read_to_string(&meta_path)
-            .map_err(|error| format!("{}: {error}", meta_path.display()))?;
+        let meta = match std::fs::read_to_string(&meta_path) {
+            Ok(text) => text,
+            Err(error) => {
+                session.destroy();
+                return Err(format!("{}: {error}", meta_path.display()));
+            }
+        };
         let reference_copy = reference_out.join(format!("{name}.png"));
         if reference_copy != reference_png {
-            std::fs::copy(&reference_png, &reference_copy)
-                .map_err(|error| format!("{}: {error}", reference_copy.display()))?;
+            if let Err(error) = std::fs::copy(&reference_png, &reference_copy) {
+                session.destroy();
+                return Err(format!("{}: {error}", reference_copy.display()));
+            }
         }
 
         let control =
             json_string(&meta, "control").ok_or_else(|| format!("{name}: missing control"))?;
         let state = json_string(&meta, "state").ok_or_else(|| format!("{name}: missing state"))?;
         let theme = json_string(&meta, "theme").ok_or_else(|| format!("{name}: missing theme"))?;
+        let backdrop = json_string(&meta, "backdrop").unwrap_or_else(|| "solid".to_string());
+        let explicit_width =
+            json_bool(&meta, "explicitWidth").unwrap_or_else(|| default_explicit_width(&control));
+        let scale = json_number(&meta, "rasterizationScale").unwrap_or(1.0) as f32;
         let width = json_number(&meta, "imagePixelWidth")
             .ok_or_else(|| format!("{name}: missing imagePixelWidth"))? as u32;
         let height = json_number(&meta, "imagePixelHeight")
@@ -140,34 +197,58 @@ pub fn run_batch(reference_dir: &str, out_dir: &str) -> Result<BatchSummary, Str
 
         let ours_png = ours_dir.join(format!("{name}.png"));
         let ours_png_text = ours_png.to_string_lossy().into_owned();
-        let case = ParityCase {
-            control: &control,
-            state: &state,
-            theme: &theme,
-        };
-        let intrinsic = parity::render_case(
+        let case = ParityCase::new(&control, &state, &theme).with_backdrop(&backdrop);
+        let outcome = match session.render_case_cached(
             &case,
             width,
             height,
             Rect::new(bounds[0], bounds[1], bounds[2], bounds[3]),
             &ours_png_text,
-        )?;
+            allow_cache,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                session.destroy();
+                return Err(error);
+            }
+        };
+        if outcome.cache_hit {
+            cache_hits += 1;
+        }
 
         let reference_image = shot::read_rgba_png(&reference_png)?;
         let ours_image = shot::read_rgba_png(&ours_png)?;
         if reference_image.width != ours_image.width || reference_image.height != ours_image.height
         {
+            session.destroy();
             return Err(format!(
                 "{name}: size mismatch {}x{} vs {}x{}",
                 reference_image.width, reference_image.height, ours_image.width, ours_image.height
             ));
         }
 
-        let metrics = compare(&reference_image, &ours_image);
+        let reference_bbox = content_bbox(&reference_image);
+        let ours_bbox = content_bbox(&ours_image);
+        let control_px_bbox = [
+            (bounds[0] * scale).floor() as i64,
+            (bounds[1] * scale).floor() as i64,
+            ((bounds[0] + bounds[2]) * scale).ceil() as i64,
+            ((bounds[1] + bounds[3]) * scale).ceil() as i64,
+        ];
+        let roi_bbox = compute_roi_bbox(
+            reference_bbox,
+            ours_bbox,
+            control_px_bbox,
+            reference_image.width,
+            reference_image.height,
+        );
+
+        let metrics = compare_roi(&reference_image, &ours_image, roi_bbox);
         write_heat(
             &heat_dir.join(format!("{name}.png")),
             &reference_image,
             &ours_image,
+            roi_bbox,
         )?;
 
         cases.push(CaseMetrics {
@@ -175,27 +256,73 @@ pub fn run_batch(reference_dir: &str, out_dir: &str) -> Result<BatchSummary, Str
             control,
             state,
             theme,
+            backdrop,
             mean_de: metrics.mean_de,
             p95_de: metrics.p95_de,
             p99_de: metrics.p99_de,
             max_de: metrics.max_de,
             over_limit_ratio: metrics.over_limit_ratio,
-            reference_bbox: content_bbox(&reference_image),
-            ours_bbox: content_bbox(&ours_image),
-            intrinsic: [intrinsic.x, intrinsic.y],
+            reference_bbox,
+            ours_bbox,
+            roi_bbox,
+            intrinsic: [outcome.intrinsic.x, outcome.intrinsic.y],
             reference_size: [bounds[2], bounds[3]],
+            explicit_width,
+            cache_hit: outcome.cache_hit,
         });
     }
+
+    session.destroy();
 
     let summary = BatchSummary {
         cases,
         out_dir: out_root.to_path_buf(),
+        cache_hits,
     };
     write_report(&summary)?;
     Ok(summary)
 }
 
-/// 逐像素指标。
+fn default_explicit_width(control: &str) -> bool {
+    matches!(control, "Button" | "Slider" | "ComboBox" | "TextBox")
+}
+
+/// 计算有效对比区（ROI）：取 `reference_bbox`、`ours_bbox` 与 `control_px_bbox` 的并集，
+/// 再向外扩展 [`ROI_MARGIN_PX`] 并钳制在图像像素范围内。
+#[must_use]
+pub fn compute_roi_bbox(
+    reference_bbox: [i64; 4],
+    ours_bbox: [i64; 4],
+    control_px_bbox: [i64; 4],
+    width: u32,
+    height: u32,
+) -> [i64; 4] {
+    let max_w = i64::from(width.saturating_sub(1));
+    let max_h = i64::from(height.saturating_sub(1));
+
+    let mut min_x = control_px_bbox[0];
+    let mut min_y = control_px_bbox[1];
+    let mut max_x = control_px_bbox[2];
+    let mut max_y = control_px_bbox[3];
+
+    for bbox in [reference_bbox, ours_bbox] {
+        if bbox[2] > bbox[0] || bbox[3] > bbox[1] {
+            min_x = min_x.min(bbox[0]);
+            min_y = min_y.min(bbox[1]);
+            max_x = max_x.max(bbox[2]);
+            max_y = max_y.max(bbox[3]);
+        }
+    }
+
+    [
+        (min_x - ROI_MARGIN_PX).clamp(0, max_w),
+        (min_y - ROI_MARGIN_PX).clamp(0, max_h),
+        (max_x + ROI_MARGIN_PX).clamp(0, max_w),
+        (max_y + ROI_MARGIN_PX).clamp(0, max_h),
+    ]
+}
+
+/// 逐像素指标（仅在有效对比区 ROI 内统计）。
 struct PixelMetrics {
     mean_de: f64,
     p95_de: f64,
@@ -204,20 +331,28 @@ struct PixelMetrics {
     over_limit_ratio: f64,
 }
 
-fn compare(reference: &Image, candidate: &Image) -> PixelMetrics {
-    let mut values = Vec::with_capacity((reference.width * reference.height) as usize);
+fn compare_roi(reference: &Image, candidate: &Image, roi: [i64; 4]) -> PixelMetrics {
+    let min_x = (roi[0].max(0) as u32).min(reference.width.saturating_sub(1));
+    let min_y = (roi[1].max(0) as u32).min(reference.height.saturating_sub(1));
+    let max_x = (roi[2].max(0) as u32).min(reference.width.saturating_sub(1));
+    let max_y = (roi[3].max(0) as u32).min(reference.height.saturating_sub(1));
+
+    let roi_w = max_x.saturating_sub(min_x) + 1;
+    let roi_h = max_y.saturating_sub(min_y) + 1;
+    let mut values = Vec::with_capacity((roi_w * roi_h) as usize);
     let mut sum = 0.0_f64;
     let mut max_de = 0.0_f64;
     let mut over = 0_usize;
-    for y in 0..reference.height {
-        for x in 0..reference.width {
+
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
             let delta = delta_e2000(
                 rgb_to_lab(reference.rgb(x, y)),
                 rgb_to_lab(candidate.rgb(x, y)),
             );
             sum += f64::from(delta);
             max_de = max_de.max(f64::from(delta));
-            if f64::from(delta) > P99_LIMIT {
+            if f64::from(delta) > SIGNIFICANT_DE_THRESHOLD {
                 over += 1;
             }
             values.push(delta);
@@ -263,16 +398,30 @@ fn content_bbox(image: &Image) -> [i64; 4] {
     }
 }
 
-/// 写入 ΔE 热力图：黑→蓝→绿→黄→红，`ΔE = 30` 封顶。
-fn write_heat(path: &Path, reference: &Image, candidate: &Image) -> Result<(), String> {
+/// 写入 ΔE 热力图：黑→蓝→绿→黄→红，`ΔE = 30` 封顶，并用暗青色 1px 框标出有效对比区（ROI）边界。
+fn write_heat(
+    path: &Path,
+    reference: &Image,
+    candidate: &Image,
+    roi: [i64; 4],
+) -> Result<(), String> {
     let mut rgba = vec![0_u8; (reference.width * reference.height * 4) as usize];
+    let [min_x, min_y, max_x, max_y] = roi;
+
     for y in 0..reference.height {
         for x in 0..reference.width {
             let delta = f64::from(delta_e2000(
                 rgb_to_lab(reference.rgb(x, y)),
                 rgb_to_lab(candidate.rgb(x, y)),
             ));
-            let color = heat_color(delta);
+            let mut color = heat_color(delta);
+            let xi = i64::from(x);
+            let yi = i64::from(y);
+            let on_roi_border = ((xi == min_x || xi == max_x) && yi >= min_y && yi <= max_y)
+                || ((yi == min_y || yi == max_y) && xi >= min_x && xi <= max_x);
+            if on_roi_border && delta < 0.5 {
+                color = [32, 96, 128];
+            }
             let index = ((y * reference.width + x) * 4) as usize;
             rgba[index..index + 4].copy_from_slice(&[color[0], color[1], color[2], 255]);
         }
@@ -287,7 +436,6 @@ fn write_heat(path: &Path, reference: &Image, candidate: &Image) -> Result<(), S
 
 fn heat_color(delta: f64) -> [u8; 3] {
     let t = (delta / 30.0).clamp(0.0, 1.0) as f32;
-    // 五段线性插值：黑 → 蓝 → 绿 → 黄 → 红。
     const STOPS: [[f32; 3]; 5] = [
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 1.0],
@@ -311,17 +459,18 @@ fn write_report(summary: &BatchSummary) -> Result<(), String> {
     let json_path = summary.out_dir.join("report.json");
     let mut json = String::from("{\n  \"cases\": [\n");
     for (index, case) in summary.cases.iter().enumerate() {
-        let _ =
-            writeln!(
+        let _ = writeln!(
             json,
-            "    {{ \"name\": \"{}\", \"control\": \"{}\", \"state\": \"{}\", \"theme\": \"{}\", \
+            "    {{ \"name\": \"{}\", \"control\": \"{}\", \"state\": \"{}\", \"theme\": \"{}\", \"backdrop\": \"{}\", \
              \"meanDe\": {:.4}, \"p95De\": {:.4}, \"p99De\": {:.4}, \"maxDe\": {:.4}, \
-             \"overLimitRatio\": {:.6}, \"referenceBbox\": {:?}, \"oursBbox\": {:?}, \
-             \"intrinsic\": [{:.2}, {:.2}], \"referenceSize\": [{:.2}, {:.2}], \"pass\": {} }}{}",
+             \"overLimitRatio\": {:.6}, \"referenceBbox\": {:?}, \"oursBbox\": {:?}, \"roiBbox\": {:?}, \
+             \"intrinsic\": [{:.2}, {:.2}], \"referenceSize\": [{:.2}, {:.2}], \
+             \"intrinsicMatches\": {}, \"cacheHit\": {}, \"pass\": {} }}{}",
             case.name,
             case.control,
             case.state,
             case.theme,
+            case.backdrop,
             case.mean_de,
             case.p95_de,
             case.p99_de,
@@ -329,10 +478,13 @@ fn write_report(summary: &BatchSummary) -> Result<(), String> {
             case.over_limit_ratio,
             case.reference_bbox,
             case.ours_bbox,
+            case.roi_bbox,
             case.intrinsic[0],
             case.intrinsic[1],
             case.reference_size[0],
             case.reference_size[1],
+            case.intrinsic_matches(),
+            case.cache_hit,
             case.passes(),
             if index + 1 == summary.cases.len() { "" } else { "," },
         );
@@ -365,6 +517,17 @@ fn json_number(text: &str, key: &str) -> Option<f64> {
         })
         .unwrap_or(rest.len());
     rest[..end].parse().ok()
+}
+
+fn json_bool(text: &str, key: &str) -> Option<bool> {
+    let rest = find_value(text, key)?;
+    if rest.starts_with("true") {
+        Some(true)
+    } else if rest.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn json_bounds(text: &str) -> Option<[f32; 4]> {
@@ -494,9 +657,77 @@ mod tests {
 
     #[test]
     fn reference_metadata_is_parsed() {
-        let text = r#"{"control":"Button","state":"normal","theme":"light","imagePixelWidth":420,"controlBounds":{"x":150,"y":64,"width":120,"height":32}}"#;
+        let text = r#"{"control":"Button","state":"normal","theme":"light","backdrop":"mica","explicitWidth":true,"imagePixelWidth":152,"controlBounds":{"x":16,"y":16,"width":120,"height":32}}"#;
         assert_eq!(json_string(text, "control").as_deref(), Some("Button"));
-        assert_eq!(json_number(text, "imagePixelWidth"), Some(420.0));
-        assert_eq!(json_bounds(text), Some([150.0, 64.0, 120.0, 32.0]));
+        assert_eq!(json_string(text, "backdrop").as_deref(), Some("mica"));
+        assert_eq!(json_bool(text, "explicitWidth"), Some(true));
+        assert_eq!(json_number(text, "imagePixelWidth"), Some(152.0));
+        assert_eq!(json_bounds(text), Some([16.0, 16.0, 120.0, 32.0]));
+    }
+
+    #[test]
+    fn roi_excludes_background_dilution() {
+        // 420x160 大画布，仅中心 20x10 区域有明显色差（蓝 vs 红），其余全为相同浅灰背景。
+        // 全画布均值会被稀释到 < 1.0，但有效对比区（ROI）必须抓出高色差。
+        let width = 420_u32;
+        let height = 160_u32;
+        let mut ref_rgba = vec![243_u8; (width * height * 4) as usize];
+        let mut our_rgba = vec![243_u8; (width * height * 4) as usize];
+        for y in 70..80 {
+            for x in 200..220 {
+                let idx = ((y * width + x) * 4) as usize;
+                ref_rgba[idx..idx + 4].copy_from_slice(&[0, 95, 184, 255]);
+                our_rgba[idx..idx + 4].copy_from_slice(&[220, 40, 40, 255]);
+            }
+        }
+        let ref_img = Image {
+            width,
+            height,
+            rgba: ref_rgba,
+        };
+        let our_img = Image {
+            width,
+            height,
+            rgba: our_rgba,
+        };
+        let ref_bbox = content_bbox(&ref_img);
+        let our_bbox = content_bbox(&our_img);
+        let roi = compute_roi_bbox(ref_bbox, our_bbox, [200, 70, 220, 80], width, height);
+        let metrics = compare_roi(&ref_img, &our_img, roi);
+        assert!(
+            metrics.mean_de > 20.0,
+            "ROI mean_de must not be diluted by background: {}",
+            metrics.mean_de
+        );
+        assert!(metrics.over_limit_ratio > 0.4);
+    }
+
+    #[test]
+    fn four_gates_check_intrinsic_height_and_over_limit_ratio() {
+        let mut m = CaseMetrics {
+            name: "Button_normal_light".into(),
+            control: "Button".into(),
+            state: "normal".into(),
+            theme: "light".into(),
+            backdrop: "solid".into(),
+            mean_de: 0.4,
+            p95_de: 1.2,
+            p99_de: 2.0,
+            max_de: 3.0,
+            over_limit_ratio: 0.005,
+            reference_bbox: [16, 16, 136, 48],
+            ours_bbox: [16, 16, 136, 48],
+            roi_bbox: [14, 14, 138, 50],
+            intrinsic: [80.0, 32.0],
+            reference_size: [120.0, 32.0],
+            explicit_width: true,
+            cache_hit: false,
+        };
+        assert!(m.passes());
+
+        // 若本框架固有高度算成 36px 而 WinUI 标准高度为 32px，固有尺寸门禁必须拦截
+        m.intrinsic = [80.0, 36.0];
+        assert!(!m.intrinsic_matches());
+        assert!(!m.passes());
     }
 }

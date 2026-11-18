@@ -1,16 +1,30 @@
 using System;
 using System.Collections.Generic;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Windows.UI;
 
 namespace WinUiReference;
 
 /// <summary>
-/// 试点控件清单与构造逻辑。新增控件只需在这里补一条，截图宿主无需改动。
+/// 试点控件清单、后景底板配方与用例指纹计算。
 /// 控件内容全部使用确定性文案与固定尺寸，避免系统语言、默认值或窗口宽度影响截图结果。
 /// </summary>
 internal static class Catalog
 {
+    /// <summary>拼版槽位四周预留的阴影与焦点环出血边距（DIP）。</summary>
+    public const int BleedMarginDip = 16;
+
+    /// <summary>拼版图集单个槽位的标准宽度（DIP）。</summary>
+    public const int SlotWidthDip = 260;
+
+    /// <summary>拼版图集单个槽位的标准高度（DIP）。</summary>
+    public const int SlotHeightDip = 96;
+
     private static readonly string[] ControlNameList =
     {
         "Button", "CheckBox", "ToggleSwitch", "Slider", "ComboBox", "TextBox",
@@ -21,11 +35,19 @@ internal static class Catalog
     // hover / pressed 只保留枚举，尚未实现（需要模拟指针状态，暂不纳入试点）。
     private static readonly string[] ReservedStateList = { "hover", "pressed" };
 
+    /// <summary>
+    /// 支持的后景合成底板类型：
+    /// solid 为当前默认激活项；mica / mica_alt / acrylic 预留确定性合成底板，待云母管线完工后全量开启。
+    /// </summary>
+    private static readonly string[] BackdropKindList = { "solid", "mica", "mica_alt", "acrylic" };
+
     public static IReadOnlyList<string> ControlNames => ControlNameList;
 
     public static IReadOnlyList<string> ImplementedStates => ImplementedStateList;
 
     public static IReadOnlyList<string> ReservedStates => ReservedStateList;
+
+    public static IReadOnlyList<string> BackdropKinds => BackdropKindList;
 
     /// <summary>该控件是否支持某个状态（批量采集据此跳过无效组合）。</summary>
     public static bool SupportsState(string controlName, string state)
@@ -51,6 +73,77 @@ internal static class Catalog
         }
 
         return name;
+    }
+
+    /// <summary>该控件在拼版槽位中是否显式指定了固定宽度（供差分器判断固有宽度是否受约束）。</summary>
+    public static bool HasExplicitWidth(string controlName)
+    {
+        return CanonicalName(controlName) is "Button" or "Slider" or "ComboBox" or "TextBox";
+    }
+
+    /// <summary>
+    /// 计算单个用例的规格指纹（SpecFingerprint）：
+    /// 绑定SDK版本、OS版本、DPI缩放、控件规格描述、主题与后景底板配方，供增量缓存判据使用。
+    /// </summary>
+    public static string ComputeFingerprint(
+        string controlName,
+        string state,
+        string theme,
+        string backdrop,
+        double rasterizationScale,
+        string sdkVersion,
+        string osVersion)
+    {
+        var canonical = CanonicalName(controlName);
+        var specSignature = canonical switch
+        {
+            "Button" => "Button:Content=Button,Width=120,Accent=#005FB8/#60CDFF,Bleed=16",
+            "CheckBox" => "CheckBox:Content=CheckBox,AutoSize,Accent=#005FB8/#60CDFF,Bleed=16",
+            "ToggleSwitch" => "ToggleSwitch:Header=ToggleSwitch,OnOffEmpty,Accent=#005FB8/#60CDFF,Bleed=16",
+            "Slider" => "Slider:Min=0,Max=100,Val=50,Width=200,Accent=#005FB8/#60CDFF,Bleed=16",
+            "ComboBox" => "ComboBox:Items=Item 1|Item 2|Item 3,Selected=0,Width=200,Bleed=16",
+            "TextBox" => "TextBox:Text=Text,Width=200,Bleed=16",
+            _ => canonical,
+        };
+
+        var raw = string.Join(
+            "|",
+            "v2-contact-sheet-roi",
+            sdkVersion,
+            osVersion,
+            rasterizationScale.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+            canonical,
+            state.ToLowerInvariant(),
+            theme.ToLowerInvariant(),
+            backdrop.ToLowerInvariant(),
+            specSignature);
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
+        return Convert.ToHexString(hash).ToLowerInvariant()[..16];
+    }
+
+    /// <summary>
+    /// 按主题与后景类型生成确定性合成底板画刷（与 unbound-ui 侧 parity::backdrop_color 完全一致）。
+    /// </summary>
+    public static Brush CreateBackdropBrush(string theme, string backdrop)
+    {
+        var dark = string.Equals(theme, "dark", StringComparison.OrdinalIgnoreCase);
+        var color = (backdrop.ToLowerInvariant(), dark) switch
+        {
+            // 标准云母合成底板：带轻微冷蓝壁纸色偏的确定性基准色
+            ("mica", false) => Color.FromArgb(255, 238, 242, 249),
+            ("mica", true) => Color.FromArgb(255, 29, 32, 39),
+            // 云母变体（Mica Alt / Tabbed）：层次更深的色调配方
+            ("mica_alt", false) => Color.FromArgb(255, 229, 235, 245),
+            ("mica_alt", true) => Color.FromArgb(255, 22, 25, 32),
+            // 亚克力合成底板：带较高饱和度穿透的确定性底色
+            ("acrylic", false) => Color.FromArgb(255, 234, 240, 250),
+            ("acrylic", true) => Color.FromArgb(255, 36, 40, 48),
+            // 默认纯色基准面（ApplicationPageBackgroundThemeBrush：浅色 #F3F3F3 / 深色 #202020）
+            (_, false) => Color.FromArgb(255, 243, 243, 243),
+            (_, true) => Color.FromArgb(255, 32, 32, 32),
+        };
+        return new SolidColorBrush(color);
     }
 
     public static bool TryCreate(string name, out FrameworkElement element)

@@ -19,17 +19,17 @@ use crate::canvas::{AlignX, AlignY};
 pub const PARITY_INFO: PageInfo = PageInfo {
     title: "WinUI 3 pixel parity",
     short: "Pixel parity",
-    description: "Every pilot control compared against its WinUI 3 capture: the reference, this framework's render at the same bounds, and the CIEDE2000 heatmap, judged by mean, p99 and exact content bounds.",
+    description: "Every pilot control compared against its WinUI 3 capture inside the tight Region of Interest (ROI): the reference, this framework's render at the same bounds, and the CIEDE2000 heatmap, judged by 4 gates (ROI mean/p95, outlier ratio, content bbox, and intrinsic size).",
     crates: &["tools/winui-reference", "apps/showcase/src/png_diff.rs"],
-    keywords: "winui parity delta e screenshot pixel comparison heatmap reference",
+    keywords: "winui parity delta e screenshot pixel comparison heatmap reference roi cache",
 };
 
 pub const PARITY_EXAMPLES: &[ExampleDef] = &[ExampleDef::new(
-    "Reference / unbound-ui / ΔE",
-    "Each row holds three captures of the same control: the WinUI 3 reference, the unbound-ui render at identical bounds, and the CIEDE2000 heatmap. A row fails when mean ΔE, p99 or the content box drifts.",
+    "Reference / unbound-ui / ROI ΔE",
+    "Each row holds three captures of the same control: the WinUI 3 reference, the unbound-ui render at identical bounds, and the CIEDE2000 heatmap with ROI bounds. A row fails when ROI mean ΔE, p95, outlier ratio, content bbox, or intrinsic size drifts.",
     &["tools/winui-reference", "apps/showcase/src/png_diff.rs"],
     r#"showcase --parity-run --reference tools/winui-reference/captures --out target/parity"#,
-    "A scrollable parity report rendered by the gallery itself; every case exposes its name, pass state, colour metrics and three captures.",
+    "A scrollable parity report rendered by the gallery itself; every case exposes its name, pass state, ROI colour metrics, intrinsic size check, and three captures.",
     &[],
     DemoKind::ParityReport,
 )
@@ -42,7 +42,7 @@ const REFERENCE_FALLBACK: &str = "tools/winui-reference/captures";
 
 /// 缩略图最大宽度；更窄的窗口按比例缩小。
 const THUMB_MAX_WIDTH: f32 = 320.0;
-/// 参考截图的固有宽高比（420×160）。
+/// 参考缩略图的显示宽高比。
 const THUMB_ASPECT: f32 = 420.0 / 160.0;
 /// 三张缩略图之间的间距。
 const THUMB_GAP: f32 = 10.0;
@@ -54,8 +54,13 @@ pub struct ParityCase {
     pub control: String,
     pub state: String,
     pub theme: String,
+    pub backdrop: String,
     pub mean_de: f32,
+    pub p95_de: f32,
     pub p99_de: f32,
+    pub over_limit_ratio: f32,
+    pub intrinsic_matches: bool,
+    pub cache_hit: bool,
     /// 本框架包围盒相对参考包围盒的逐边差值。
     pub bbox_delta: [i64; 4],
     pub pass: bool,
@@ -68,6 +73,7 @@ pub struct ParityCase {
 pub struct ParityReport {
     pub cases: Vec<ParityCase>,
     pub passed: usize,
+    pub cache_hits: usize,
     /// 载入失败原因；为 `Some` 时页面显示空态说明。
     pub error: Option<String>,
 }
@@ -83,6 +89,7 @@ impl ParityReport {
                 return Self {
                     cases: Vec::new(),
                     passed: 0,
+                    cache_hits: 0,
                     error: Some(format!("{REPORT_DIR}/report.json: {error}")),
                 }
             }
@@ -92,6 +99,7 @@ impl ParityReport {
         let heat = root.join("heat");
         let mut cases = Vec::new();
         let mut passed = 0;
+        let mut cache_hits = 0;
         for line in json.lines() {
             if !line.contains("\"name\"") {
                 continue;
@@ -105,6 +113,10 @@ impl ParityReport {
             let pass = bool_value(line, "pass").unwrap_or(false);
             if pass {
                 passed += 1;
+            }
+            let cache_hit = bool_value(line, "cacheHit").unwrap_or(false);
+            if cache_hit {
+                cache_hits += 1;
             }
             let images = std::array::from_fn(|which| {
                 let dir: &Path = match which {
@@ -121,8 +133,13 @@ impl ParityReport {
                 control: string_value(line, "control").unwrap_or_default(),
                 state: string_value(line, "state").unwrap_or_default(),
                 theme: string_value(line, "theme").unwrap_or_default(),
+                backdrop: string_value(line, "backdrop").unwrap_or_else(|| "solid".into()),
                 mean_de: number_value(line, "meanDe").unwrap_or(0.0) as f32,
+                p95_de: number_value(line, "p95De").unwrap_or(0.0) as f32,
                 p99_de: number_value(line, "p99De").unwrap_or(0.0) as f32,
+                over_limit_ratio: number_value(line, "overLimitRatio").unwrap_or(0.0) as f32,
+                intrinsic_matches: bool_value(line, "intrinsicMatches").unwrap_or(true),
+                cache_hit,
                 bbox_delta,
                 pass,
                 images,
@@ -132,12 +149,14 @@ impl ParityReport {
             return Self {
                 cases,
                 passed,
+                cache_hits,
                 error: Some(format!("{REPORT_DIR}/report.json 中没有用例")),
             };
         }
         Self {
             cases,
             passed,
+            cache_hits,
             error: None,
         }
     }
@@ -188,13 +207,13 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
             &body,
         );
         return;
-    }
+    };
 
     let palette = *ctx.canvas.palette;
     let visible_top = ctx.canvas.viewport.origin.y - 48.0;
     let visible_bottom = ctx.canvas.viewport.max().y + 48.0;
 
-    // 概要横幅：通过数与判定阈值。
+    // 概要横幅：通过数、ROI 四重门禁与缓存命中统计。
     let summary = Rect::new(rect.origin.x, rect.origin.y, rect.size.x, 64.0);
     ctx.canvas.rect(
         summary,
@@ -206,9 +225,9 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
     );
     ctx.canvas.text(
         if zh {
-            "像素对照 · WinUI 3 vs unbound-ui"
+            "像素对照（ROI 四重门禁）· WinUI 3 vs unbound-ui"
         } else {
-            "Pixel parity · WinUI 3 vs unbound-ui"
+            "Pixel parity (ROI 4-Gate) · WinUI 3 vs unbound-ui"
         },
         Rect::new(
             summary.origin.x + 16.0,
@@ -223,14 +242,16 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
     );
     ctx.canvas.text(
         &format!(
-            "{} / {} {} · mean ΔE ≤ 1.0 · p99 ≤ 3.0 · {}",
+            "{} / {} {} ({} {}) · ROI mean ≤ 1.5 · p95 ≤ 4.0 · outlier ≤ 2% · {}",
             report.passed,
             report.cases.len(),
             if zh { "通过" } else { "pass" },
+            report.cache_hits,
+            if zh { "缓存命中" } else { "cached" },
             if zh {
-                "包围盒 ≤ 1px"
+                "包围盒与固有尺寸 ±1px"
             } else {
-                "content bounds ±1 px"
+                "bbox & intrinsic ±1 px"
             }
         ),
         Rect::new(
@@ -324,7 +345,10 @@ fn draw_case(
     let title = if case.control.is_empty() {
         case.name.clone()
     } else {
-        format!("{} · {} · {}", case.control, case.state, case.theme)
+        format!(
+            "{} · {} · {} · {}",
+            case.control, case.state, case.theme, case.backdrop
+        )
     };
     ctx.canvas.text(
         &title,
@@ -341,9 +365,10 @@ fn draw_case(
     );
     ctx.canvas.text(
         &format!(
-            "mean ΔE {:.2} · p99 {:.2} · {} [{}, {}, {}, {}]",
+            "ROI mean {:.2} · p95 {:.2} · >5ΔE {:.1}% · {} [{}, {}, {}, {}]",
             case.mean_de,
-            case.p99_de,
+            case.p95_de,
+            case.over_limit_ratio * 100.0,
             if zh { "包围盒Δ" } else { "bboxΔ" },
             case.bbox_delta[0],
             case.bbox_delta[1],
@@ -351,9 +376,9 @@ fn draw_case(
             case.bbox_delta[3]
         ),
         Rect::new(
-            row.origin.x + row.size.x * 0.35,
+            row.origin.x + row.size.x * 0.32,
             row.origin.y + 9.0,
-            row.size.x * 0.65 - badge_width - 40.0,
+            row.size.x * 0.68 - badge_width - 40.0,
             20.0,
         ),
         9.5,
@@ -384,8 +409,8 @@ fn draw_case(
         };
         let part = 100 + (index as u16) * 4 + which as u16;
         let node = ctx.part(part);
-        let mut desc = ImageDesc::new(thumb, Vec2::new(420.0, 160.0), 0).with_asset(id);
-        desc.fit = ObjectFit::Fill;
+        let mut desc = ImageDesc::new(thumb, Vec2::new(240.0, 96.0), 0).with_asset(id);
+        desc.fit = ObjectFit::Contain;
         desc.radius = [4.0; 4];
         let output = emit_image_with_assets(node, &desc, ControlState::default(), hub);
         ctx.canvas
@@ -401,9 +426,9 @@ fn draw_case(
             1 => "unbound-ui",
             _ => {
                 if zh {
-                    "ΔE2000 热力图"
+                    "ROI ΔE2000 热力图"
                 } else {
-                    "ΔE2000 heatmap"
+                    "ROI ΔE2000 heatmap"
                 }
             }
         };
