@@ -43,7 +43,7 @@ impl ControlClass {
 }
 
 /// 基准对齐控件总数（含 Community Toolkit 之外的 WinUI 3 标准控件与变体）。
-pub const BASELINE_COUNT: usize = 52;
+pub const BASELINE_COUNT: usize = 59;
 
 /// Community Toolkit 对齐控件总数。
 pub const TOOLKIT_COUNT: usize = 14;
@@ -126,6 +126,7 @@ impl WidgetCatalogId {
             | Self::Badge
             | Self::Breadcrumb
             | Self::Button
+            | Self::CalendarDatePicker
             | Self::Carousel
             | Self::Checkbox
             | Self::Collapsible
@@ -134,8 +135,11 @@ impl WidgetCatalogId {
             | Self::Containers
             | Self::ContextMenu
             | Self::DatePicker
+            | Self::DatePickerWheel
             | Self::Drawer
+            | Self::DropDownButton
             | Self::HoverCard
+            | Self::HyperlinkButton
             | Self::Icon
             | Self::Image
             | Self::LoadingOverlay
@@ -145,11 +149,13 @@ impl WidgetCatalogId {
             | Self::NavigationRail
             | Self::NumberInput
             | Self::Pagination
+            | Self::PasswordBox
             | Self::Pivot
             | Self::Popover
             | Self::Progress
             | Self::Radio
             | Self::Rating
+            | Self::RepeatButton
             | Self::RichText
             | Self::Scroll
             | Self::Segmented
@@ -166,6 +172,7 @@ impl WidgetCatalogId {
             | Self::TimePicker
             | Self::Toast
             | Self::ToggleButton
+            | Self::ToggleSplitButton
             | Self::Toolbar
             | Self::Tooltip
             | Self::TreeView
@@ -185,6 +192,7 @@ impl WidgetCatalogId {
             Self::Badge => "InfoBadge",
             Self::Breadcrumb => "BreadcrumbBar",
             Self::Button => "Button",
+            Self::CalendarDatePicker => "CalendarDatePicker",
             Self::Carousel => "FlipView",
             Self::Checkbox => "CheckBox",
             Self::ColorPicker => "ColorPicker",
@@ -192,8 +200,11 @@ impl WidgetCatalogId {
             Self::Containers => "Border",
             Self::ContextMenu | Self::Menu => "MenuFlyout",
             Self::DatePicker => "CalendarView",
+            Self::DatePickerWheel => "DatePicker",
             Self::Drawer => "SplitView",
+            Self::DropDownButton => "DropDownButton",
             Self::HoverCard | Self::Popover => "Flyout",
+            Self::HyperlinkButton => "HyperlinkButton",
             Self::Icon => "FontIcon",
             Self::Image => "Image",
             Self::LoadingOverlay | Self::Spinner => "ProgressRing",
@@ -201,10 +212,12 @@ impl WidgetCatalogId {
             Self::NavigationRail | Self::Sidebar => "NavigationView",
             Self::NumberInput => "NumberBox",
             Self::Pagination => "PipsPager",
+            Self::PasswordBox => "PasswordBox",
             Self::Pivot => "Pivot",
             Self::Progress => "ProgressBar",
             Self::Radio => "RadioButton",
             Self::Rating => "RatingControl",
+            Self::RepeatButton => "RepeatButton",
             Self::RichText => "RichTextBlock",
             Self::Scroll => "ScrollView",
             Self::Segmented => "SelectorBar",
@@ -217,6 +230,7 @@ impl WidgetCatalogId {
             Self::TimePicker => "TimePicker",
             Self::Toast => "TeachingTip",
             Self::ToggleButton => "ToggleButton",
+            Self::ToggleSplitButton => "ToggleSplitButton",
             Self::Toolbar => "CommandBar",
             Self::Tooltip => "ToolTip",
             Self::TreeView => "TreeView",
@@ -338,7 +352,10 @@ impl WidgetCatalogId {
 
     /// 按分类筛选目录标识。
     pub fn ids_in_class(class: ControlClass) -> impl Iterator<Item = Self> {
-        Self::ALL.iter().copied().filter(move |id| id.class() == class)
+        Self::ALL
+            .iter()
+            .copied()
+            .filter(move |id| id.class() == class)
     }
 }
 

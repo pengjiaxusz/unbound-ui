@@ -87,6 +87,7 @@ define_widget_catalog! {
         banner,
         breadcrumb,
         button,
+        calendar_date_picker,
         callout,
         canvas_toolbar,
         carousel,
@@ -105,17 +106,20 @@ define_widget_catalog! {
         curve_editor,
         data_grid,
         date_picker,
+        date_picker_wheel,
         date_range_picker,
         descriptions,
         divider,
         dock,
         drawer,
+        drop_down_button,
         file_drop,
         form,
         generic_data_table,
         gizmo,
         hotkey_input,
         hover_card,
+        hyperlink_button,
         image,
         masonry,
         menu,
@@ -129,6 +133,7 @@ define_widget_catalog! {
         number_input,
         overlay,
         pagination,
+        password_box,
         pin_input,
         pipeline_view,
         pivot,
@@ -139,6 +144,7 @@ define_widget_catalog! {
         query_builder,
         radio,
         rating,
+        repeat_button,
         rich_text,
         ruler,
         schema_form,
@@ -166,6 +172,7 @@ define_widget_catalog! {
         timeline_track,
         toast,
         toggle_button,
+        toggle_split_button,
         toolbar,
         tooltip,
         tour,
@@ -189,6 +196,7 @@ define_widget_catalog! {
         Banner => banner,
         Breadcrumb => breadcrumb,
         Button => button,
+        CalendarDatePicker => calendar_date_picker,
         Callout => callout,
         CanvasToolbar => canvas_toolbar,
         Carousel => carousel,
@@ -208,11 +216,13 @@ define_widget_catalog! {
         CurveEditor => curve_editor,
         DataGrid => data_grid,
         DatePicker => date_picker,
+        DatePickerWheel => date_picker_wheel,
         DateRangePicker => date_range_picker,
         Descriptions => descriptions,
         Divider => divider,
         Dock => dock,
         Drawer => drawer,
+        DropDownButton => drop_down_button,
         EmptyState => hover_card,
         FileDrop => file_drop,
         Form => form,
@@ -221,6 +231,7 @@ define_widget_catalog! {
         GradientEditor => curve_editor,
         HotkeyInput => hotkey_input,
         HoverCard => hover_card,
+        HyperlinkButton => hyperlink_button,
         Icon => image,
         Image => image,
         LoadingOverlay => spinner,
@@ -237,6 +248,7 @@ define_widget_catalog! {
         NumberInput => number_input,
         Overlay => overlay,
         Pagination => pagination,
+        PasswordBox => password_box,
         PinInput => pin_input,
         PipelineView => pipeline_view,
         Pivot => pivot,
@@ -247,6 +259,7 @@ define_widget_catalog! {
         QueryBuilder => query_builder,
         Radio => radio,
         Rating => rating,
+        RepeatButton => repeat_button,
         RichText => rich_text,
         Ruler => ruler,
         SchemaForm => schema_form,
@@ -276,6 +289,7 @@ define_widget_catalog! {
         TimelineTrack => timeline_track,
         Toast => toast,
         ToggleButton => toggle_button,
+        ToggleSplitButton => toggle_split_button,
         Toolbar => toolbar,
         Tooltip => tooltip,
         Tour => tour,
@@ -584,6 +598,24 @@ pub use virtual_views::{
     emit_virtual_row, ReorderableListState, VariableVirtualList, VariableWindow, VirtualRowTokens,
 };
 pub use watermark::{emit_watermark, WatermarkDesc};
+
+pub use calendar_date_picker::{
+    calendar_icon_node, emit_calendar_date_picker, CalendarDatePickerDesc, CalendarDatePickerState,
+    CALENDAR_DATE_PICKER_HEIGHT,
+};
+pub use date_picker_wheel::{
+    emit_date_picker_wheel, DatePickerWheelDesc, DatePickerWheelState, WheelColumn,
+    DATE_PICKER_WHEEL_TRIGGER_HEIGHT,
+};
+pub use drop_down_button::{emit_drop_down_button, DropDownButtonDesc, DropDownButtonState};
+pub use hyperlink_button::{emit_hyperlink_button, HyperlinkButtonDesc};
+pub use password_box::{
+    emit_password_box, reveal_button_node, PasswordBoxDesc, PasswordBoxState, MASK_CHAR,
+};
+pub use repeat_button::{emit_repeat_button, RepeatButtonDesc, RepeatButtonState};
+pub use toggle_split_button::{
+    emit_toggle_split_button, ToggleSplitButtonDesc, ToggleSplitButtonState,
+};
 
 pub use canonical::{ControlClass, BASELINE_COUNT, EXCLUSIVE_COUNT, TOOLKIT_COUNT};
 
