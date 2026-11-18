@@ -6,7 +6,10 @@ description: >-
 
 # WinUI 3 Fluent 控件设计规律（外观与行为）
 
-本技能用于将从 **WinUI 3 基准对齐控件**（经过 `showcase --parity-run` 像素差分校准）中提炼出的视觉和行为规律，体系化地应用到所有组件——尤其是 Win11 官方不存在的 **Unbound 自有独有控件**（见 `docs/winui3-control-inventory.md` 第五节）。
+> **规范状态**：**终版固化（Finalized）**<br/>
+> 全量 134 个目录变体（71 个 WinUI 3 基准对齐控件 + 20 个 Community Toolkit 扩展控件 + 43 个 Unbound 自有独有控件）已完成 Fluent 设计规律同化、多后景材质适配与自动化合规门禁看守。
+
+本技能用于将从 **WinUI 3 基准对齐控件**（经过 `showcase --parity-run` 像素差分校准）与多后景材质体系中提炼出的视觉和行为规律，体系化地应用到所有组件——尤其是 Win11 官方不存在的 **Unbound 自有独有控件**（见 `docs/winui3-control-inventory.md` 第五节）。
 
 ## 核心工作流
 
@@ -36,17 +39,17 @@ description: >-
   - 凡是“行列表/树表/时间轴轨道”（如 `TreeTable`、`TimelineTrack`、`TerminalView`），行高、悬停薄纱（`Token::HOVER`）与左侧 `3px × 16px` 选中指示条（Selection Pill）必须与 `NavigationView` / `ListView` 对齐。
 - [ ] **24 态图元数恒定（Stable Shape）**：同一组件在（Idle / Hovered / Pressed）×（Unfocused / Focused）×（Enabled / Disabled）×（Unselected / Selected）共 24 种控制状态组合下，发射的图元数量必须恒定（仅改变 Token、透明度或几何坐标），确保增量 diff 零抖动。
 
-### 阶段 C：自动化合规巡检（终版固化）
+### 阶段 C：自动化合规巡检与终版固化（Finalized）
 
-阶段 B 的清单已尽量机械化，以下测试在每次 `just test` 时自动执行，防止规律回退：
+阶段 B 的清单已全面机械化看守，以下测试在每次 `just test` 时自动执行，确保规律零回退：
 
-| 测试 | 覆盖内容 |
-| --- | --- |
-| `tests/stable_shape.rs` | 全部目录组件（含 43 个自有独有控件）在 24 种 `ControlState` 组合下图元数量恒定 |
-| `tests/pilot_geometry.rs` | 首批试点与标准输入行的 `32px` 高度、`4px` 圆角、`ToggleSwitch(Header)` `53px` 三分段 |
-| `tests/fluent_conformance.rs` | 43 个自有独有控件的分类与计数、无硬编码颜色构造、生产代码圆角字面量仅允许 `0/4/8` |
+| 测试 | 覆盖内容 | 固化状态 |
+| --- | --- | --- |
+| `tests/stable_shape.rs` | 全部 134 个目录组件（含 43 个自有独有控件）在 24 种 `ControlState` 组合下图元数量严格恒定 | 已固化看守 |
+| `tests/pilot_geometry.rs` | 试点基准控件与标准输入行的 `32px` 高度、`4px` 圆角、`ToggleSwitch(Header)` `53px` 尺寸 | 已固化看守 |
+| `tests/fluent_conformance.rs` | 43 个自有独有控件的分类与计数（43 个 `Exclusive`）、零硬编码颜色构造、生产代码圆角字面量仅允许 `0/4/8` | 已固化看守 |
 
-巡检结果以 `cargo test -p unbound-widgets` 为准；新增自有独有控件时必须先让这三组测试通过，再补 `REFERENCE.md` 的映射表。
+巡检结果以 `cargo test -p unbound-widgets` 为准；新增自有独有组件时必须让这三组测试 100% 通过，并对照 `REFERENCE.md` 第 8 节的规约执行验收。
 
 ## 详细数值与映射参考
 

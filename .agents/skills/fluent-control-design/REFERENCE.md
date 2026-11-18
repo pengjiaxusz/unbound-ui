@@ -135,3 +135,88 @@ Win11 Fluent 不使用多档死板的实色灰，而是通过**在后景（云�
 * **几何规范**：固定为 **宽 `3.0 px`、高 `16.0 px`、全圆角 `1.5 px`**。
 * **对齐与布局**：沿选中项边缘居中对齐（纵向列表居左内缩 `3.0 px`，横向选择条沿底边居中），按下反馈时高度可微缩至 `10.0 px`。
 * **色彩映射**：激活态恒为 `Token::PRIMARY` 强调色；禁用态换为 `Token::TEXT_DISABLED`。
+
+---
+
+## 8. 多后景材质（云母/亚克力）叠色规律与全量 43 个自有独有控件终版巡检
+
+本节收录基于 #50（多后景材质像素差分矩阵）与 #51（自有独有控件终版巡检与同化）实测锁定的终版规约：
+
+### 8.1 多后景材质合成底板与半透明薄纱叠色规律
+
+Windows 11 Fluent 体系的核心特征是窗口后景材质的多样性。控件在不同后景材质上必须保持层级清晰、边缘清晰、文字对比度达标，且不出现死灰或色污。
+
+#### 1. 四种合成底板规格与基准色
+
+| 合成底板 | 材质类型 | 浅色基准色 (sRGB) | 深色基准色 (sRGB) | 最低系统门槛 | 特性与适用场景 |
+| --- | --- | --- | --- | --- | --- |
+| **`solid`** | 纯色无材质 | `[243, 243, 243]` (`#F3F3F3`) | `[32, 32, 32]` (`#202020`) | 无门槛（Win10/Linux/macOS 默认回退） | 不透明窗口表面，基础对照基准 |
+| **`mica`** | 标准云母 | `[238, 242, 249]` (`#EEF2F9`) | `[29, 32, 39]` (`#1D2027`) | Windows 11 Build 22621 (22H2) | 采样桌面壁纸经大半径高斯模糊后注入窗口，呈现柔和的主题色调 |
+| **`mica_alt`** | 云母变体 | `[229, 235, 245]` (`#E5EBF5`) | `[22, 25, 32]` (`#161920`) | Windows 11 Build 22621 (22H2) | 专用于标头、侧边栏或选项卡等层叠结构，较标准云母色调更深、对比更强 |
+| **`acrylic`** | 亚克力 | `[234, 240, 250]` (`#EAF0FA`) | `[36, 40, 48]` (`#242830`) | Windows 11 Build 22621 (22H2) | 双向实时模糊 + 噪点纹理，常用于暂时性浮层、弹出菜单与上下文界面 |
+
+> **实验档补充**：`immersive`（沉浸式后景，最低系统门槛 26100，系统通道取值未公开）与 `acrylic_tint`（自定义色调亚克力，最低系统门槛 17134，走 `SetWindowCompositionAttribute` 的 accent policy 导出）。
+
+#### 2. 半透明薄纱（Veil）在线性空间中的混合适配规律
+
+* **物理空间换算原理**：
+  - GPU 片元着色器管线在 **Linear sRGB 空间** 进行硬件 Alpha Blending，而 WinUI 3 XAML / Windows App SDK 资源中的 `#AARRGGBB` 颜色定义是在 **非线性 sRGB 空间** 混合。
+  - 若直接将 sRGB 下的 Alpha 值传递给 GPU 混合，会导致浅色薄纱在深后景上变暗变脏、深色薄纱在浅后景上产生死灰光晕。
+  - 必须统一通过 `unbound_theme::win11::veil()` 与 `light_base_veil()` 函数反解线性 Alpha 混合因子，保证在 `solid`、`mica`、`mica_alt`、`acrylic` 任意底板上，透过半透明薄纱后呈现的感知相对明度与官方 WinUI 3 像素差分完全重合。
+* **分层叠色不变量**：
+  - **`CARD_BG`（卡片表面）**：浅色模式下为白色 70% 薄纱，深色模式下为白色 ~5% 薄纱（`#2A2A2A` 等效）。在 `mica` / `mica_alt` 上，后景壁纸微弱透出提供环境连续性，但在 `solid` 上表现为柔和的卡片提亮。
+  - **`CONTROL_FILL`（交互控件静止表面）**：浅色下 70% 白薄纱，深色下 6.05% 白薄纱（略高于卡片一档）。悬停态（`HOVER`）提亮（浅色 50% 压暗/深色 8.37% 提亮），按下态（`PRESSED`）压暗（浅色 30%/深色 3.26%）。
+  - **`CARD_BORDER` / `CONTROL_STROKE`（微高光描边）**：浅色模式使用 5.78%~5.9% 黑色薄纱（`#0000000F`），深色模式使用 5.1%~6.98% 白色薄纱（`#FFFFFF12`）。禁止任何实色灰色硬编码描边，防止在亚克力噪点或云母彩色底板上显出突兀硬框。
+  - **`PRIMARY` / `FOCUS_RING`（强调色与焦点）**：实色强调色（`#005FB8` / `#60CDFF`）恒为不透明，底边聚焦强调线固定 `2.0 px`，即使在极端彩色壁纸穿透下也能确保清晰的交互暗示。
+
+#### 3. 自绘变体覆盖边界（SelfDrawnCoverage）
+
+两轴模型（`MaterialKind` × `BackdropSource`）中，自绘路径（`BackdropSource::SelfDrawn`）为无 GPU 原生后景环境提供确定性外观。自绘变体的覆盖边界严格遵循物理渲染能力划分：
+
+| 材质种类 | 自绘覆盖状态 (`SelfDrawnCoverage`) | 依据与渲染配方 | 显式请求自绘时的回退逻辑 |
+| --- | --- | --- | --- |
+| **`Mica`** | `Equivalent` (等价重现) | 壁纸大半径模糊 + 主题色调配方。磨砂 sigma 锚定屏幕物理像素常量，无头纹理统计锁住空间梯度能量与明度带宽 | 无回退，正常走自绘管线 |
+| **`MicaAlt`** | `Equivalent` (等价重现) | 在壁纸模糊基础上叠加加深对比的配方，精准复现次级标头/侧栏层叠质感 | 无回退，正常走自绘管线 |
+| **`Acrylic`** | `NoVariant` (无自绘变体) | 亚克力的本质特征是窗口后景实时双向模糊与动态噪点（Noise）纹理。静态离线壁纸采样无法重现动态穿透，强行自绘会造成误导性伪差分 | 判定为非法组合，自动回退（标明 `FallbackReason::NoSelfDrawnVariant`） |
+| **`AcrylicTint`** | `NoVariant` (无自绘变体) | 同亚克力，依赖实时动态模糊与 accent policy 混合，无离线自绘变体 | 判定为非法组合，自动回退 |
+| **`Immersive`** | `NoVariant` (无自绘变体) | 实验档，系统取值未确认，不存在可供对齐的原生基准 | 判定为非法组合，自动回退 |
+| **`FollowSystem`** | `NoVariant` (无自绘变体) | 动态策略档，自绘引擎无法预判系统合成器行为 | 判定为非法组合，自动回退 |
+
+---
+
+### 8.2 全量 43 个 Unbound 自有独有控件终版巡检验收与同化方法
+
+针对面向专业创作工具、IDE、节点编辑器、时间轴与数据工作台场景的全部 **43 个自有独有控件**（`ControlClass::Exclusive`），全面实施 Fluent 规律同化改造与自动化门禁固化，达成与 Win11 原生组件的无缝融合。
+
+#### 1. 核心巡检验收指标与达标结论
+
+经过 `tests/fluent_conformance.rs`、`tests/stable_shape.rs` 与 `tests/pilot_geometry.rs` 自动化看守，43 个独有控件全部达到以下终版指标：
+
+| 巡检维度 | 严格规范要求 | 43 个自有独有控件验收结论 | 看守测试 |
+| --- | --- | --- | --- |
+| **零硬编码颜色** | 生产源码 100% 杜绝 `Color::rgb` / `Color::rgba` / `Color::from_rgba`，所有颜色必须绑定 `unbound_theme::Token` | **全部 43 个独有控件 100% 合规**。主题在浅色、深色与高对比度间切换时，几何拓扑零重排、GPU 实例缓冲零重传 | `fluent_conformance::exclusive_controls_never_hardcode_colors_or_off_ladder_radii` |
+| **8px / 4px 圆角阶梯** | 严格遵循容器 `8.0 px`、控件 `4.0 px`、胶囊 `height * 0.5` 的阶梯。严禁 `3px / 6px / 10px / 12px` 等非标圆角字面量 | **100% 收敛至 0 / 4 / 8 阶梯**。外部容器卡片（`NodeGraph` 卡片、`Dock`、`CommandPalette`）均为 8px；内部触发器、槽位、键帽均为 4px | `fluent_conformance::exclusive_controls_never_hardcode_colors_or_off_ladder_radii` |
+| **32 / 36 / 40px 行高阶梯** | 交互触发器与输入行固定 `32px`，紧凑数据/属性列表行固定 `36px`，主导航/工具条固定 `40px` | **100% 符合 Fluent 垂直韵律**。`PinInput`、`HotkeyInput`、`AddressBar` 均为 32px；`PropertyGrid`、`TreeTable` 均为 36px 行高 | `pilot_geometry.rs` 与布局回归测试 |
+| **左侧 3×16px 胶囊条** | 凡具备选中/激活态的纵向列表项、轨道或标签页，必须呈现标准 `Token::PRIMARY` 胶囊条 | **全量对齐**。`Dock` 活动标签、`PropertyGrid` 激活行、`TimelineTrack` 选中轨、`TreeTable` 选中行均统一样式与弹簧反馈 | 视觉检查与组件渲染器断言 |
+| **24 态稳定形状** | 在（Idle/Hovered/Pressed）×（Unfocused/Focused）×（Enabled/Disabled）×（Unselected/Selected）全状态下，发射图元数量恒定 | **全部 43 个独有控件图元数 100% 恒定**。状态流转仅改变 Token 槽位、Alpha 或几何坐标，增量 Diff 零增删图元 | `stable_shape.rs::all_catalog_widgets_have_constant_primitive_count_across_all_24_control_states` |
+
+#### 2. 自有独有控件系统同化方法论（Assimilation Methodology）
+
+将复杂专业组件分解为“基准原生规律的组合体”，使得独有控件在具备高密度专业功能的同时，手感与视觉与系统原生控件完全一致：
+
+1. **复合卡片与画布图元同化（NodeGraph / PipelineView / Minimap / Gizmo）**：
+   - 节点外框：采用 `Token::CARD_BG` + `8.0 px` 圆角 + `Token::CARD_BORDER` 微描边；
+   - 节点选中：复用 `Token::PRIMARY` 描边与 `Token::PRIMARY_SOFT` 半透明选择光晕；
+   - 端口（Pin）手感：端口引脚半径静止 `4px`、悬停外扩至 `5px`、连接中按下收缩至 `3.5px`，严格复用 `Slider` 拇指微动效规律。
+2. **代码、终端与停靠面板同化（CodeBlock / CodeEditor / TerminalView / Dock）**：
+   - 面板外壳：统一使用 `Token::SURFACE_SUNKEN` / `CODE_BG` 凹陷底板 + `8.0 px` 外圆角；
+   - 停靠标签头（Dock Tab）：高度收敛至 `36.0 px`，激活态标签复用 `TabView` 顶层平底圆角（顶部 `4.0 px`、底部直角）及关闭按钮悬停微高光；
+   - 分割拖拽条（MultiSplit）：拖拽条静止透明，悬停时高亮 `Token::PRIMARY` 细线，拖拽落点指示框使用 `PRIMARY_SOFT` 浅色薄纱。
+3. **专业数据编辑与属性检视同化（PropertyGrid / SchemaForm / QueryBuilder / TreeTable）**：
+   - 分组折叠头：对齐 `Expander`，左侧展开 Chevron 图标，右侧辅助标签字号 `12.0 px`（`TEXT_SECONDARY`）；
+   - 键值编辑单元：属性行高固定 `36.0 px`，内嵌的数值输入、颜色选择、下拉枚举零二次封装，直接内联 `NumberBox`、`ColorPicker`、`ComboBox` 基准原型；
+   - 选中行指示：激活行背景铺 `Token::CONTROL_FILL` 薄纱，左侧边界内缩 `3.0 px` 绘制 `3.0 × 16.0 px` `PRIMARY` 胶囊条。
+4. **扩展输入与导航同化（PinInput / HotkeyInput / AddressBar / ShortcutBar）**：
+   - 单元格外形：单格输入槽位固定高度 `32.0 px`、圆角 `4.0 px`、背景 `Token::CONTROL_FILL`；
+   - 聚焦反馈：聚焦单元格四周不出现外扩实线框，而是在槽位底边呈现 **`2.0 px` 强调色 `Token::PRIMARY` 底边线**（与 `TextBox` 聚焦底边完全一致）；
+   - 键帽提示：`ShortcutBar` 键帽复用 `Button (Subtle)` 轮廓，背景 `Token::SURFACE_SUNKEN`，文字居中加粗 `12.0 px`。
