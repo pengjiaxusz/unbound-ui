@@ -36,6 +36,18 @@ description: >-
   - 凡是“行列表/树表/时间轴轨道”（如 `TreeTable`、`TimelineTrack`、`TerminalView`），行高、悬停薄纱（`Token::HOVER`）与左侧 `3px × 16px` 选中指示条（Selection Pill）必须与 `NavigationView` / `ListView` 对齐。
 - [ ] **24 态图元数恒定（Stable Shape）**：同一组件在（Idle / Hovered / Pressed）×（Unfocused / Focused）×（Enabled / Disabled）×（Unselected / Selected）共 24 种控制状态组合下，发射的图元数量必须恒定（仅改变 Token、透明度或几何坐标），确保增量 diff 零抖动。
 
+### 阶段 C：自动化合规巡检（终版固化）
+
+阶段 B 的清单已尽量机械化，以下测试在每次 `just test` 时自动执行，防止规律回退：
+
+| 测试 | 覆盖内容 |
+| --- | --- |
+| `tests/stable_shape.rs` | 全部目录组件（含 43 个自有独有控件）在 24 种 `ControlState` 组合下图元数量恒定 |
+| `tests/pilot_geometry.rs` | 首批试点与标准输入行的 `32px` 高度、`4px` 圆角、`ToggleSwitch(Header)` `53px` 三分段 |
+| `tests/fluent_conformance.rs` | 43 个自有独有控件的分类与计数、无硬编码颜色构造、生产代码圆角字面量仅允许 `0/4/8` |
+
+巡检结果以 `cargo test -p unbound-widgets` 为准；新增自有独有控件时必须先让这三组测试通过，再补 `REFERENCE.md` 的映射表。
+
 ## 详细数值与映射参考
 
 具体的 Token 映射表、WinUI 3 XAML 资源对照表、几何常数与自有组件映射矩阵见 [REFERENCE.md](./REFERENCE.md)。
