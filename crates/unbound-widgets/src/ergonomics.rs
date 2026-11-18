@@ -148,8 +148,14 @@ impl TextCtx<'_> {
         let scale = self.effective_raster_scale();
         let mut style = unbound_text::TextStyle::sized(size * scale);
         style.weight = weight;
-        let shaped = self.engine.shape(text, &style);
-        let logical_w = shaped.width / scale;
+        let shaped = match self.engine.shape_laid_out(text, &style) {
+            Some(shaped) => shaped,
+            None => self.engine.shape(text, &style),
+        };
+        // XAML 的 `TextBlock` 在测量时把文本宽度向上取整到整像素，其
+        // ContentPresenter 再按该期望宽度居中；直接用浮点宽度会让居中
+        // 起点系统地偏右零点几像素。
+        let logical_w = (shaped.width / scale).ceil();
         let logical_h = (shaped.height / scale).max(size);
         let x = match align_x {
             AlignX::Left => rect.origin.x,

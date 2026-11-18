@@ -44,6 +44,7 @@
 #define FLAG_GRADIENT_LINEAR (1u << 8)
 #define FLAG_GRADIENT_RADIAL (1u << 9)
 #define FLAG_INNER_SHADOW    (1u << 10)
+#define FLAG_NO_AA           (1u << 11)
 #define FLAG_GRADIENT_ANY    (FLAG_GRADIENT_LINEAR | FLAG_GRADIENT_RADIAL)
 
 // `SubElement::InnerShadow`，位于标志字的低 3 位。

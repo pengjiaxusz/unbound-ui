@@ -464,6 +464,8 @@ pub struct TextEngine {
     buffer: Option<Buffer>,
     buffer_metrics: Option<(f32, f32)>,
     shape_cache: FxHashMap<(u64, u64), Arc<ShapedText>>,
+    /// 经 DirectWrite 布局校正后的塑形结果（键与 `shape_cache` 相同）。
+    layout_cache: FxHashMap<(u64, u64), Arc<ShapedText>>,
     wrap_cache: FxHashMap<(u64, u64, u32), Arc<WrappedText>>,
     stats: TextCacheStats,
     max_cache_entries: usize,
@@ -615,6 +617,7 @@ impl TextEngine {
             buffer: None,
             buffer_metrics: None,
             shape_cache: FxHashMap::default(),
+            layout_cache: FxHashMap::default(),
             wrap_cache: FxHashMap::default(),
             stats: TextCacheStats::default(),
             max_cache_entries: 4096,
@@ -776,6 +779,82 @@ impl TextEngine {
         self.shape_cache.insert(key, Arc::clone(&shaped));
         self.stats.entries = self.shape_cache.len() + self.wrap_cache.len();
         shaped
+    }
+
+    /// 用 DirectWrite 文本布局校正单行字形的水平原点与总宽度。
+    ///
+    /// WinUI 的 `TextBlock` 按 DirectWrite 文本布局排布字形；`cosmic-text` 的
+    /// 前进宽度累计在 14px 正文上与之一串可差零点几像素，并沿字串逐步累积。
+    /// 该差异直接落在字形的亚像素相位上，会让整串标签的竖笔边缘相对参考
+    /// 截图偏移。这里保持塑形（字形、簇、换行）不变，只把每个字形簇的水平
+    /// 原点与布局宽度替换为 DirectWrite 的度量。
+    ///
+    /// 返回 `None` 表示 DirectWrite 不可用（非 Windows、字体缺失或簇数量
+    /// 不一致），调用方应回退到 [`Self::shape`] 的原生结果。
+    pub fn shape_laid_out(&mut self, text: &str, style: &TextStyle) -> Option<Arc<ShapedText>> {
+        let mut style_hash = 0u64;
+        style.hash_into(&mut style_hash);
+        let key = (Self::hash_text(text), style_hash);
+        if let Some(cached) = self.layout_cache.get(&key) {
+            return Some(Arc::clone(cached));
+        }
+        let shaped = self.shape(text, style);
+        #[cfg(windows)]
+        let corrected = {
+            let face_id = shaped.faces.first().copied()?;
+            // 多字体回退（CJK、Emoji）时字形分属不同字体面，单一
+            // DirectWrite 布局无法给出正确位置，直接放弃校正。
+            if shaped
+                .glyphs
+                .iter()
+                .any(|glyph| glyph.face_index != 0)
+            {
+                return None;
+            }
+            let (family, weight) = {
+                let face = self.font_system_mut().db().face(face_id)?;
+                (
+                    face.families.first().map(|(name, _)| name.clone())?,
+                    face.weight.0,
+                )
+            };
+            // `cluster` 是源字符串中的字节偏移；DirectWrite 的命中测试使用
+            // UTF-16 下标，并且在非 BMP 字符前后两者并不等价，必须换算。
+            let mut utf16_indices = Vec::with_capacity(shaped.glyphs.len());
+            for glyph in &shaped.glyphs {
+                let byte = usize::try_from(glyph.cluster).ok()?.min(text.len());
+                let index = if text.is_char_boundary(byte) {
+                    text[..byte].encode_utf16().count()
+                } else {
+                    return None;
+                };
+                utf16_indices.push(u32::try_from(index).ok()?);
+            }
+            let (positions, width) = crate::directwrite::layout_cluster_positions(
+                &family,
+                weight,
+                style.italic,
+                style.font_size,
+                text,
+                &utf16_indices,
+            )?;
+            if positions.len() != shaped.glyphs.len() {
+                return None;
+            }
+            let mut corrected = (*shaped).clone();
+            for (glyph, x) in corrected.glyphs.iter_mut().zip(positions) {
+                glyph.x = x;
+            }
+            corrected.width = width;
+            Arc::new(corrected)
+        };
+        #[cfg(not(windows))]
+        let corrected = shaped;
+        if self.layout_cache.len() >= self.max_cache_entries {
+            self.layout_cache.clear();
+        }
+        self.layout_cache.insert(key, Arc::clone(&corrected));
+        Some(corrected)
     }
 
     /// 按文本段顺序返回塑形 `text` 所用到的系统字体族名称。

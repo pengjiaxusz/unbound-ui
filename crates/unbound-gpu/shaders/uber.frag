@@ -65,16 +65,19 @@ bool glyph_on_dark_surface(vec3 text_rgb, uint flags) {
 
 float glyph_alpha(float a, bool light_text) {
     float c = clamp(a, 0.0, 1.0);
-    // 在单处执行温和校正。
+    // WinUI 在 sRGB 空间按覆盖率混合字形，而本管线在 `B8G8R8A8_SRGB`
+    // 交换链上做线性混合。两种空间的关系近似为
+    // `a = c + k * c * (1 - c)`：线性混合在高覆盖率处低估、在低覆盖率处
+    // 高估字干边缘。旧实现的单幂曲线无法同时校正两端，字干两侧会各留
+    // 约 10% 的覆盖率误差。浅底深字取 k=0.8（由参考截图的边缘覆盖率
+    // 拟合）；深底浅字仍用伽马提升，二次曲线会在低覆盖率处过度放大细笔画。
     //
-    // 交换链格式为 `B8G8R8A8_SRGB`，硬件在线性光空间混合字形覆盖率：半覆盖的黑字
-    // 像素在 sRGB 下会落在 0.735，视觉上发灰。适度的伽马提升可恢复原生伽马空间
-    // 合成器的字干粗细。
+    // 曲线只在这一处施加。在图集构建时再叠一层会放大低覆盖率边缘，
+    // 使圆角（如字母 `O` 的上下切点）出现发黑的方块污迹。
     //
-    // 提升幅度刻意控制得较小。过去在图集构建时叠加第二层曲线（以及本函数内再叠第三层）
-    // 会将 10% 的抗锯齿曲线边缘放大到 28%，使每个圆角（如字母 `O` 的上下左右切点）
-    // 变成发黑的方形污迹。
-    return light_text ? pow(c, 1.15) : pow(c, 0.75);
+    // 曲线只在这一处施加。在图集构建时再叠一层会放大低覆盖率边缘，
+    // 使圆角（如字母 `O` 的上下切点）出现发黑的方块污迹。
+    return light_text ? pow(c, 1.15) : c + 0.8 * c * (1.0 - c);
 }
 
 void main() {
@@ -193,7 +196,9 @@ void main() {
         float d = sd_quadratic_bezier(v_local, pl.p0, pl.p1, pl.p2);
         float w = max(pl.line_width * 0.5, 0.5);
         // 描边解析抗锯齿：以描边边缘为中心的 1px 过渡带。
-        float cov = clamp((w - d) / aa + 0.5, 0.0, 1.0);
+        float cov = ((flags & FLAG_NO_AA) != 0u)
+            ? step(d, w)
+            : clamp((w - d) / aa + 0.5, 0.0, 1.0);
         surface = vec4(fill.rgb, fill.a * cov);
     } else if (prim_type == PRIM_STROKE) {
         // 描边即无填充的边框：颜色存放在边框令牌中，填充令牌保持为“无”，

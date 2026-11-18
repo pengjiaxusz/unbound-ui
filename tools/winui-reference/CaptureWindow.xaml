@@ -18,6 +18,12 @@
                         <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" Color="#005FB8" />
                         <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPressed" Color="#005FB8" />
                         <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedDisabled" Color="#37000000" />
+                        <!-- 选中描边同样必须钉死：它默认取系统强调色，不覆盖会随截图
+                             机器的个性化强调色漂移，在选中框外圈留下 1px 异色环。 -->
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeChecked" Color="#005FB8" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedPointerOver" Color="#005FB8" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedPressed" Color="#005FB8" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedDisabled" Color="#37000000" />
                         <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundChecked" Color="#FFFFFF" />
                         <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPointerOver" Color="#FFFFFF" />
                         <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" Color="#FFFFFF" />
@@ -48,6 +54,10 @@
                         <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" Color="#60CDFF" />
                         <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPressed" Color="#60CDFF" />
                         <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedDisabled" Color="#28FFFFFF" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeChecked" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedPointerOver" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedPressed" Color="#60CDFF" />
+                        <SolidColorBrush x:Key="CheckBoxCheckBackgroundStrokeCheckedDisabled" Color="#28FFFFFF" />
                         <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundChecked" Color="#000000" />
                         <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPointerOver" Color="#000000" />
                         <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" Color="#000000" />
