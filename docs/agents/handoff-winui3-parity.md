@@ -144,3 +144,53 @@ pwsh -NoProfile -File .scratch/winui3-parity-system/publish-github-issues.ps1
 | 10 Fluent 技能终版 + 43 控件巡检 | 阻塞 | 依赖 08/09；REFERENCE 已补试点实测表 |
 
 > 环境约束：当前会话机器没有 .NET SDK、Vulkan 参考截图与云母多材质管线，因此所有「实机像素差分」验收项只能完成代码与门禁层，不能伪造通过结论。拥有 GPU/.NET 的机器按第 2.2 节命令跑矩阵即可。
+
+---
+
+## 6. 实机环境与当前基线（2026-11-18）
+
+### 6.1 可复现命令
+
+本机默认 `dotnet` 只有运行时，**SDK 已安装到** `C:\Users\pengj\.dotnet-sdk`。参考宿主与差分的完整闭环：
+
+```powershell
+# 1. 构建参考宿主（WinUI 3 / Windows App SDK 1.8）
+& "C:\Users\pengj\.dotnet-sdk\dotnet.exe" build -c Release -p:Platform=x64 `
+  # cwd: tools\winui-reference
+
+# 2. 采集 57 个控件 × 状态 × 主题的参考截图
+.\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe --batch --out .\captures
+
+# 3. 跑 ROI 四门禁差分
+just q-run cargo run -p showcase -- --parity-run `
+  --reference tools\winui-reference\captures --out target\parity
+```
+
+产物：`target/parity/report.json`、`target/parity/ours/`、`target/parity/heat/`。参考截图目录已被 `.gitignore` 忽略。
+
+### 6.2 当前基线（必须原样交接）
+
+- 采集：**57 个控件、238 张**。
+- 差分：**6/238 通过**。
+- 六个试点 `normal-light`：
+
+| 控件 | meanDe | p95De | ΔE>5 占比 | 主要差异 |
+| --- | --- | --- | --- | --- |
+| Button | 1.96 | 7.27 | 7.3% | 字形边缘 |
+| CheckBox | 3.15 | 20.53 | 8.3% | 勾形 + 字形 |
+| ToggleSwitch | 0.65 | 1.11 | 3.3% | 标签字形 |
+| Slider | 1.02 | 1.43 | 3.0% | 拇指外环 |
+| ComboBox | 1.64 | 7.48 | 5.9% | Chevron + 字形 |
+| TextBox | 1.82 | 1.72 | 4.7% | 字形/描边 |
+
+已修正：`CONTROL_FILL` 改为 WinUI 的半透明值后，TextBox mean 2.32→1.82、ComboBox 2.12→1.64；参考宿主已可编译并采集。
+
+### 6.3 下一步的关键判断
+
+ROI 第四门禁统计 `ΔE2000 > 5` 的像素占比 ≤2%，而当前主要残差来自**字形抗锯齿**（WinUI DirectWrite vs 我们的文本栅格器）。在继续逐控件校准前，必须先决定：
+
+1. **排除文字字形区域**：ROI 只比较背景、描边、圆角、图标与几何，文字另做基线位置/字号断言；
+2. **或为文字像素设置单独阈值**：几何/填充仍用严格门槛，文字区域放宽；
+3. **或追求逐像素字形一致**：需要与 DirectWrite 完全同源的栅格化，成本最高。
+
+建议采用方案 1，并以 ADR 固化，否则 #44~#48 的“全量通过”在跨渲染器下不可达。
