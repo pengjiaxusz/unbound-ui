@@ -1121,8 +1121,8 @@ fn emit_case(
                 ),
             );
 
-            // 三个通道输入及其标签。
-            let channels = [("30", "红色"), ("144", "绿色"), ("255", "蓝色")];
+            // 三个通道输入及其标签。标签跟随参考截图的 zh-CN 系统界面语言。
+            let channels = [("30", "红色"), ("144", "绿色"), ("255", "蓝色")]; // lang-ok: 复刻参考截图中的中文通道标签
             for (index, (value, label)) in channels.iter().enumerate() {
                 let row = y + 358.0 + index as f32 * 44.0;
                 let input = TextInputDesc::text(*value);
@@ -1137,8 +1137,6 @@ fn emit_case(
                         text_ctx,
                     ),
                 );
-                // 参考截图的通道标签跟随系统 UI 语言（zh-CN）。
-                // lang-ok: 复刻参考截图中的中文通道标签
                 emit_text_left_middle(
                     text_ctx,
                     scene,

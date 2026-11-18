@@ -390,8 +390,9 @@ pub(crate) mod win32 {
     };
     use ::windows::Win32::UI::HiDpi::GetDpiForWindow;
     use ::windows::Win32::UI::Input::Ime::{
-        ImmGetContext, ImmReleaseContext, ImmSetCandidateWindow, ImmSetCompositionWindow,
-        ImmSetOpenStatus, CANDIDATEFORM, CFS_EXCLUDE, CFS_POINT, COMPOSITIONFORM,
+        ImmAssociateContextEx, ImmGetContext, ImmReleaseContext, ImmSetCandidateWindow,
+        ImmSetCompositionWindow, CANDIDATEFORM, CFS_EXCLUDE, CFS_POINT, COMPOSITIONFORM, HIMC,
+        IACE_CHILDREN, IACE_DEFAULT,
     };
     use ::windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
     use ::windows::Win32::UI::WindowsAndMessaging::{
@@ -591,51 +592,114 @@ pub(crate) mod win32 {
     pub(crate) fn set_ime_allowed(hwnd: isize, allowed: bool) {
         unsafe {
             let hwnd = hwnd_from_isize(hwnd);
-            let himc = ImmGetContext(hwnd);
-            if !himc.is_invalid() {
-                let _ = ImmSetOpenStatus(himc, allowed);
-                let _ = ImmReleaseContext(hwnd, himc);
+            // 与 winit 的 Windows 后端保持一致：启用时关联线程默认输入上下文，
+            // 禁用时用 IACE_CHILDREN 把上下文从本窗口摘掉（但保留线程级上下文）。
+            //
+            // 注意不能用 dwFlags = 0：那不是“解除关联”，而是“什么都不做”，
+            // 会让禁用形同虚设；也不能顺手 ImmSetOpenStatus(true)，
+            // 那会盖掉用户用 Shift / Ctrl+Space 切换的中英文状态。
+            let flags = if allowed { IACE_DEFAULT } else { IACE_CHILDREN };
+            let associated = ImmAssociateContextEx(hwnd, HIMC(core::ptr::null_mut()), flags);
+            ime_trace(format!(
+                "associate ime allowed={allowed} flags=0x{flags:X} result={associated:?} err={:?}",
+                ::windows::Win32::Foundation::GetLastError()
+            ));
+            if allowed {
+                // 组合窗位置属于“上一次会话”的状态，重新启用后要重新上报。
+                IME_APPLIED.with(|cell| cell.set(None));
             }
         }
     }
 
-    pub(crate) fn set_ime_cursor_area(hwnd: isize, position: PhysicalPosition, size: PhysicalSize) {
-        unsafe {
-            let hwnd = hwnd_from_isize(hwnd);
-            let himc = ImmGetContext(hwnd);
-            if !himc.is_invalid() {
-                let comp = COMPOSITIONFORM {
-                    dwStyle: CFS_POINT,
-                    ptCurrentPos: POINT {
-                        x: position.x,
-                        y: position.y + size.height as i32,
-                    },
-                    rcArea: RECT {
-                        left: position.x,
-                        top: position.y,
-                        right: position.x + size.width as i32,
-                        bottom: position.y + size.height as i32,
-                    },
-                };
-                let _ = ImmSetCompositionWindow(himc, &comp);
-
-                let cand = CANDIDATEFORM {
-                    dwIndex: 0,
-                    dwStyle: CFS_EXCLUDE,
-                    ptCurrentPos: POINT {
-                        x: position.x,
-                        y: position.y + size.height as i32,
-                    },
-                    rcArea: RECT {
-                        left: position.x,
-                        top: position.y,
-                        right: position.x + size.width as i32,
-                        bottom: position.y + size.height as i32,
-                    },
-                };
-                let _ = ImmSetCandidateWindow(himc, &cand);
-                let _ = ImmReleaseContext(hwnd, himc);
-            }
+    /// 输入法诊断日志（临时）。
+    fn ime_trace(message: impl core::fmt::Display) {
+        if std::env::var_os("UNBOUND_IME_TRACE").is_none()
+            && !std::env::temp_dir().join("unbound-ime.trace").exists()
+        {
+            return;
         }
+        use std::io::Write;
+        let path = std::env::temp_dir().join("unbound-ime.log");
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(file, "{message}");
+        }
+    }
+
+    thread_local! {
+        /// 宿主最近一次上报的插入符：客户区物理像素 (x, y, 宽, 高)。
+        static IME_CARET: core::cell::Cell<Option<(i32, i32, u32, u32)>> =
+            const { core::cell::Cell::new(None) };
+        /// 已经写入 IMM 的插入符区域；与 `IME_CARET` 相同则跳过重复调用。
+        static IME_APPLIED: core::cell::Cell<Option<(i32, i32, u32, u32)>> =
+            const { core::cell::Cell::new(None) };
+    }
+
+    /// 宿主最近一次上报的插入符（客户区坐标，物理像素）与行高。
+    ///
+    /// 自绘组合串的应用要用它回答 `IMR_QUERYCHARPOSITION`，否则候选窗无法锚定。
+    pub(crate) fn ime_caret_client() -> Option<(i32, i32, u32)> {
+        IME_CARET
+            .with(|cell| cell.get())
+            .map(|(x, y, _, h)| (x, y, h))
+    }
+
+    /// 组合开始时重新应用组合窗 / 候选窗位置。
+    ///
+    /// 输入法在每次组合开始时重新建立自己的 UI，因此即使区域没变也要再写一次。
+    pub(crate) fn reapply_ime_area(hwnd: isize) {
+        let Some(area) = IME_CARET.with(|cell| cell.get()) else {
+            return;
+        };
+        apply_ime_area(hwnd_from_isize(hwnd), area);
+        IME_APPLIED.with(|cell| cell.set(Some(area)));
+    }
+
+    fn apply_ime_area(hwnd: HWND, area: (i32, i32, u32, u32)) {
+        let (x, y, width, height) = area;
+        unsafe {
+            let himc = ImmGetContext(hwnd);
+            if himc.is_invalid() {
+                return;
+            }
+            let bottom = y + height as i32;
+            let rc_area = RECT {
+                left: x,
+                top: y,
+                right: x + width as i32,
+                bottom,
+            };
+            let comp = COMPOSITIONFORM {
+                dwStyle: CFS_POINT,
+                ptCurrentPos: POINT { x, y: bottom },
+                rcArea: rc_area,
+            };
+            let _ = ImmSetCompositionWindow(himc, &comp);
+
+            let cand = CANDIDATEFORM {
+                dwIndex: 0,
+                dwStyle: CFS_EXCLUDE,
+                ptCurrentPos: POINT { x, y: bottom },
+                rcArea: rc_area,
+            };
+            let _ = ImmSetCandidateWindow(himc, &cand);
+            let _ = ImmReleaseContext(hwnd, himc);
+        }
+    }
+
+    pub(crate) fn set_ime_cursor_area(hwnd: isize, position: PhysicalPosition, size: PhysicalSize) {
+        let area = (position.x, position.y, size.width, size.height);
+        IME_CARET.with(|cell| cell.set(Some(area)));
+        // 只在区域真正变化时才写 IMM。宿主每个事件后都会重报插入符，
+        // 若每帧无条件调 ImmSetCompositionWindow，输入法会持续重排、重绘，
+        // 表现为 WM_IME_NOTIFY / IMR_QUERYCHARPOSITION 无休止循环。
+        if IME_APPLIED.with(|cell| cell.get()) == Some(area) {
+            return;
+        }
+        apply_ime_area(hwnd_from_isize(hwnd), area);
+        IME_APPLIED.with(|cell| cell.set(Some(area)));
     }
 }

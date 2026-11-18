@@ -381,11 +381,8 @@ pub enum ImeEvent {
 
 /// 输入法的实时状态。
 ///
-/// 文本输入框需要平台提供两项数据：当前正在显示的组合串（连同用于高亮绘制的
-/// 选区范围）以及必须精确插入一次的已提交文本。提交文本在此缓冲，因为输入事件
-/// 可能在两帧之间到达；[`Self::take_commit`] 负责将其取出。
-///
-///
+/// 只描述当前组合输入：是否启用、组合字符串与其选区。平台 IME 事件是应用侧
+/// 唯一输入法来源，提交文本不再在此缓冲，因此不存在需要宿主轮询的提交通道。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImeState {
     /// 当前聚焦控件是否启用了 IME。
@@ -394,8 +391,6 @@ pub struct ImeState {
     pub preedit: String,
     /// 组合选区的字节范围。
     pub selection: Option<(usize, usize)>,
-    /// 等待插入的已提交文本。
-    pub commit: String,
 }
 
 impl ImeState {
@@ -404,15 +399,18 @@ impl ImeState {
         match event {
             ImeEvent::Enabled => self.enabled = true,
             ImeEvent::Preedit(text, selection) => {
+                // 组合串到达即表明输入法正在持有文本：与下发给应用的启用标志
+                // 保持一致，宿主据此忽略被输入法消耗的物理字符键。
+                self.enabled = true;
                 self.preedit.clone_from(text);
                 self.selection = *selection;
             }
-            ImeEvent::Commit(text) => {
-                // 提交前通常会先清空预编辑串；此处防御性清空，以防部分平台未发送空预编辑事件。
-                //
+            ImeEvent::Commit(_) => {
+                // 组合结束即释放输入法对文本的持有权；提交内容由事件通道直达应用，
+                // 不再需要宿主忽略物理字符键。
+                self.enabled = false;
                 self.preedit.clear();
                 self.selection = None;
-                self.commit.push_str(text);
             }
             ImeEvent::Disabled => {
                 self.enabled = false;
@@ -420,11 +418,6 @@ impl ImeState {
                 self.selection = None;
             }
         }
-    }
-
-    /// 取出已提交文本，并将缓冲区置空。
-    pub fn take_commit(&mut self) -> String {
-        core::mem::take(&mut self.commit)
     }
 
     /// 应当在光标处绘制的组合字符串。
@@ -437,7 +430,6 @@ impl ImeState {
     pub fn clear(&mut self) {
         self.preedit.clear();
         self.selection = None;
-        self.commit.clear();
     }
 }
 
@@ -904,5 +896,89 @@ mod tests {
         // 修饰键状态同时保存在状态中，使快捷键无需追踪历史事件流即可解析。
         //
         assert!(state.modifiers.shift);
+    }
+
+    /// 组合串到达的那一刻即视为输入法持有文本。
+    ///
+    /// 平台把该标志下发给应用，宿主据此忽略被输入法消耗的物理字符键；
+    /// 若只在组合开始（`Enabled`）时置位，空查询下首批组合字符会以普通键入
+    /// 抵达应用，并按“非输入法编辑事件”取消组合。
+    ///
+    #[test]
+    fn a_preedit_marks_the_ime_as_owning_text() {
+        let mut ime = ImeState::default();
+        ime.apply(&ImeEvent::Preedit("ni".to_string(), Some((2, 2))));
+        assert!(ime.enabled, "a preedit means the IME now owns the text");
+        assert_eq!(ime.preedit(), "ni");
+        assert_eq!(ime.selection, Some((2, 2)));
+    }
+
+    /// 连续组合更新只保留最新一份，不会累积。
+    #[test]
+    fn successive_preedits_keep_only_the_latest_composition() {
+        let mut ime = ImeState::default();
+        ime.apply(&ImeEvent::Preedit("n".to_string(), None));
+        ime.apply(&ImeEvent::Preedit("ni".to_string(), None));
+        ime.apply(&ImeEvent::Preedit("nihao".to_string(), Some((5, 5))));
+        assert_eq!(ime.preedit(), "nihao");
+        assert_eq!(ime.selection, Some((5, 5)));
+        assert!(ime.enabled);
+    }
+
+    /// 提交结束组合并释放输入法对文本的持有权。
+    #[test]
+    fn a_commit_clears_the_composition_and_releases_the_ime() {
+        let mut ime = ImeState::default();
+        ime.apply(&ImeEvent::Preedit("ni".to_string(), Some((2, 2))));
+        ime.apply(&ImeEvent::Commit("hello".to_string()));
+        assert_eq!(ime.preedit(), "");
+        assert_eq!(ime.selection, None);
+        assert!(!ime.enabled, "a commit means the IME no longer owns text");
+    }
+
+    /// 输入法关闭后释放文本持有权并清空组合。
+    #[test]
+    fn disabling_the_ime_clears_the_composition_and_releases_the_text() {
+        let mut ime = ImeState::default();
+        ime.apply(&ImeEvent::Preedit("ni".to_string(), Some((2, 2))));
+        ime.apply(&ImeEvent::Disabled);
+        assert!(!ime.enabled);
+        assert_eq!(ime.preedit(), "");
+        assert_eq!(ime.selection, None);
+    }
+
+    /// 组合进行中重复的物理字符键不会清掉组合，也不会释放文本持有权。
+    ///
+    /// 平台照旧把按键转发给应用，防御交给宿主依据 `ime.enabled` 完成的
+    /// “被输入法持有的键不走普通键入”门控。
+    ///
+    #[test]
+    fn repeated_character_keys_during_a_preedit_leave_the_composition_intact() {
+        let config = WindowConfig::default();
+        let mut state = PlatformState::new(
+            &config,
+            Extent::new(1280, 800),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        let now = Instant::now();
+        apply(
+            &mut state,
+            &PlatformEvent::Ime(ImeEvent::Preedit("ni".to_string(), None)),
+            now,
+        );
+        assert!(state.ime.enabled);
+
+        let repeated = PlatformEvent::KeyInput {
+            state: ButtonState::Pressed,
+            key: PlatformKey::Character("n".to_string()),
+            repeat: true,
+        };
+        let out = apply(&mut state, &repeated, now);
+        assert!(
+            out.contains(&repeated),
+            "the key must still reach the host, which decides whether it is IME-owned"
+        );
+        assert!(state.ime.enabled);
+        assert_eq!(state.ime.preedit(), "ni");
     }
 }

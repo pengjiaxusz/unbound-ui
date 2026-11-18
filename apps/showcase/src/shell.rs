@@ -9,7 +9,7 @@ use accesskit::Role;
 use unbound_anim::{CubicBezier, Spring};
 use unbound_backdrop::{BackdropMode, BackdropPlan};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
-use unbound_input::CursorKind;
+use unbound_input::{CursorKind, PointerButton};
 use unbound_layout::LayoutStats;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::{Modifiers, PlatformKey};
@@ -20,7 +20,7 @@ use crate::canvas::{AlignX, AlignY, Canvas, RangeZone};
 use crate::gallery::{self, Labels, Palette};
 use crate::layout_tree::{CardLayout, KnobRow, PageLayout, ShellLayout, ShellTree};
 use crate::pages::{self, CategoryId, DemoCtx, KnobSpec, PageId};
-use crate::state::{GalleryState, ThemeMode, ZOOM_STEPS};
+use crate::state::{EditorId, GalleryState, ThemeMode, ZOOM_STEPS};
 use crate::target::{self, Target, ROOT};
 use crate::widgets::{self, Icon};
 
@@ -28,6 +28,14 @@ const NAV_EXPANDED: f32 = 248.0;
 const NAV_COLLAPSED: f32 = 68.0;
 /// 侧边栏在展开树与折叠图标栏之间切换的宽度阈值（绘制、无头帧校验与高度计算统一复用）。
 const NAV_COLLAPSE_THRESHOLD: f32 = 140.0;
+
+/// 过滤出数字字符，最多三位。
+fn numeric_only(text: &str) -> String {
+    text.chars()
+        .filter(|character| character.is_ascii_digit())
+        .take(3)
+        .collect()
+}
 
 /// 标题栏语言下拉菜单的面板最小宽度（绘制与无障碍语义节点共用）。
 const LANG_MENU_WIDTH: f32 = 148.0;
@@ -264,12 +272,6 @@ pub struct GalleryApp {
     node_spans: rustc_hash::FxHashMap<u64, (u32, u32)>,
     /// 本帧实际运行的真实控件发射器，用于覆盖率门禁。
     emitted_widgets: rustc_hash::FxHashSet<unbound_widgets::WidgetCatalogId>,
-    /// 输入法候选框应放置的位置。
-    ///
-    /// 平台层只需近似的光标位置；点击位置已足够精确，且避免了在每个页面间传递插入符矩形。
-    ///
-    ///
-    ime_caret: Vec2,
     /// 由点击、导航或无障碍动作引发的焦点请求。
     ///
     /// 运行时拥有焦点管理器，因此外壳仅记录请求并在归约后交出。
@@ -277,6 +279,25 @@ pub struct GalleryApp {
     pending_focus: Option<u64>,
     /// 由无障碍动作引发的失焦请求。
     pending_blur: bool,
+    /// 编辑器上下文菜单。
+    menu: unbound_widgets::context_menu::ContextMenuState,
+    /// 打开菜单的编辑器。
+    menu_owner: Option<EditorId>,
+    /// 等待宿主执行的剪贴板动作。
+    pending_clipboard: Option<ClipboardRequest>,
+    /// 正在拖拽选择文本的编辑器及其命中节点。
+    drag_editor: Option<(EditorId, u64)>,
+    /// 打开菜单时剪贴板是否含有可粘贴文本。
+    clipboard_has_text: bool,
+}
+
+/// 等待宿主执行的剪贴板动作。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClipboardRequest {
+    /// 将文本写入剪贴板。
+    Write(String),
+    /// 读取剪贴板并粘贴。
+    Read,
 }
 
 /// 运行时为本帧解析出的交互状态。
@@ -383,10 +404,356 @@ impl GalleryApp {
             frame_layout_stats: LayoutStats::default(),
             node_spans: rustc_hash::FxHashMap::default(),
             emitted_widgets: rustc_hash::FxHashSet::default(),
-            ime_caret: Vec2::new(24.0, 60.0),
             pending_focus: None,
             pending_blur: false,
+            menu: unbound_widgets::context_menu::ContextMenuState::default(),
+            menu_owner: None,
+            pending_clipboard: None,
+            drag_editor: None,
+            clipboard_has_text: false,
         }
+    }
+
+    /// 取得指定编辑器的只读状态。
+    fn editor(&self, id: EditorId) -> &crate::state::TextEditor {
+        match id {
+            EditorId::Search => &self.state.search,
+            EditorId::Demo => &self.state.demo.text,
+            EditorId::Fps => &self.state.fps_input,
+        }
+    }
+
+    /// 取得指定编辑器的可变状态。
+    fn editor_mut(&mut self, id: EditorId) -> &mut crate::state::TextEditor {
+        match id {
+            EditorId::Search => &mut self.state.search,
+            EditorId::Demo => &mut self.state.demo.text,
+            EditorId::Fps => &mut self.state.fps_input,
+        }
+    }
+
+    /// 编辑器使用的基础字号。
+    const fn editor_font_size(id: EditorId) -> f32 {
+        match id {
+            EditorId::Search => 11.0,
+            EditorId::Demo => 14.0,
+            EditorId::Fps => 10.0,
+        }
+    }
+
+    /// 让指定编辑器独占键盘焦点。
+    fn focus_editor(&mut self, id: EditorId, node: u64) {
+        for other in [EditorId::Search, EditorId::Demo, EditorId::Fps] {
+            if other != id {
+                self.editor_mut(other).blur();
+            }
+        }
+        self.editor_mut(id).focus();
+        self.pending_focus = Some(node);
+        self.state.bump();
+    }
+
+    /// 当前持有焦点的编辑器。
+    #[must_use]
+    pub fn focused_editor(&self) -> Option<EditorId> {
+        [EditorId::Search, EditorId::Demo, EditorId::Fps]
+            .into_iter()
+            .find(|id| self.editor(*id).focused)
+    }
+
+    /// 向指定编辑器归约一次编辑事件。
+    pub fn editor_event(
+        &mut self,
+        id: EditorId,
+        event: unbound_widgets::text_input::TextInputEvent,
+    ) -> unbound_widgets::text_input::TextInputOutcome {
+        use unbound_widgets::text_input::{reduce_text_input, TextInputDesc, TextInputEvent};
+
+        // FPS 输入只接受数字，最多三位；粘贴与输入法提交同样过滤，
+        // 避免非法字符经非按键通道进入缓冲区。
+        let event = if id == EditorId::Fps {
+            match event {
+                TextInputEvent::Insert(text) => TextInputEvent::Insert(numeric_only(&text)),
+                TextInputEvent::Paste(text) => TextInputEvent::Paste(numeric_only(&text)),
+                TextInputEvent::ImeCommit { text } => TextInputEvent::ImeCommit {
+                    text: numeric_only(&text),
+                },
+                TextInputEvent::ImePreedit { text, cursor } => {
+                    let text = numeric_only(&text);
+                    let cursor = cursor.map(|value| value.min(text.len()));
+                    TextInputEvent::ImePreedit { text, cursor }
+                }
+                other => other,
+            }
+        } else {
+            event
+        };
+        let mut desc = TextInputDesc::new(Rect::new(0.0, 0.0, 1.0, 1.0));
+        desc.font_size = Self::editor_font_size(id);
+        desc.max_bytes = if id == EditorId::Fps { 3 } else { 256 };
+        let outcome = {
+            let editor = self.editor_mut(id);
+            reduce_text_input(&desc, &mut editor.edit, &event)
+        };
+        if outcome.changed {
+            self.editor_mut(id).touch();
+            self.sync_editor_scroll(id);
+            self.state.bump();
+        }
+        if let Some(text) = outcome.copied.clone() {
+            self.pending_clipboard = Some(ClipboardRequest::Write(text));
+        }
+        if let Some(text) = outcome.cut.clone() {
+            self.pending_clipboard = Some(ClipboardRequest::Write(text));
+        }
+        if outcome.paste_requested {
+            self.pending_clipboard = Some(ClipboardRequest::Read);
+        }
+        outcome
+    }
+
+    /// 保持插入符在编辑器可视范围内。
+    fn sync_editor_scroll(&mut self, id: EditorId) {
+        let font = Self::editor_font_size(id);
+        let (text, cursor) = {
+            let editor = self.editor(id);
+            (editor.edit.text().to_owned(), editor.edit.cursor())
+        };
+        let caret = crate::editor::caret_x(&mut self.labels, &text, cursor, font);
+        let width = self.state.editor_view(id);
+        self.editor_mut(id).edit.ensure_caret_visible(caret, width);
+    }
+
+    /// 取出待宿主执行的剪贴板动作。
+    pub fn take_clipboard_request(&mut self) -> Option<ClipboardRequest> {
+        self.pending_clipboard.take()
+    }
+
+    /// 将剪贴板文本粘贴到当前聚焦的编辑器。
+    pub fn paste_text(&mut self, text: &str) {
+        if let Some(id) = self.focused_editor() {
+            self.editor_event(
+                id,
+                unbound_widgets::text_input::TextInputEvent::Paste(text.to_string()),
+            );
+        }
+    }
+
+    /// 目标节点对应的编辑器。
+    #[must_use]
+    pub fn editor_for_target(target: Target) -> Option<EditorId> {
+        match target {
+            Target::Search => Some(EditorId::Search),
+            Target::FpsInput => Some(EditorId::Fps),
+            Target::Demo(page, _, 1)
+                if page == PageId::TextField.index() as u8
+                    || page == PageId::Fonts.index() as u8 =>
+            {
+                Some(EditorId::Demo)
+            }
+            _ => None,
+        }
+    }
+
+    /// 命中区域中指定节点的边界。
+    #[must_use]
+    fn region_bounds(&self, node: u64) -> Option<Rect> {
+        self.regions
+            .iter()
+            .find(|region| region.node == node)
+            .map(|region| region.bounds)
+    }
+
+    /// 聚焦编辑器并把插入符放到指针位置。
+    ///
+    /// 本函数只负责定位插入符，绝不进入拖拽态：点击报告会在释放之后再次抵达这里，
+    /// 若在此捕获拖拽，普通悬停就会被当作拖拽更新，形成幽灵选区。
+    pub fn focus_editor_at(&mut self, id: EditorId, node: u64, position: Vec2, extend: bool) {
+        self.focus_editor(id, node);
+        let font = Self::editor_font_size(id);
+        let padding = Self::editor_padding(id);
+        let bounds = self.region_bounds(node).or(match id {
+            EditorId::Search => Some(self.layout.search),
+            _ => None,
+        });
+        let Some(bounds) = bounds else {
+            return;
+        };
+        let local_x = position.x - bounds.origin.x - padding;
+        let offset = {
+            let edit = self.editor(id).edit.clone();
+            crate::editor::pointer_offset(&mut self.labels, &edit, font, local_x)
+        };
+        let _ = self.editor_event(
+            id,
+            if extend {
+                unbound_widgets::text_input::TextInputEvent::PointerDrag { offset }
+            } else {
+                unbound_widgets::text_input::TextInputEvent::PointerDown { offset }
+            },
+        );
+        self.editor_mut(id).touch();
+    }
+
+    /// 编辑器文本区域与控件边缘的内边距。
+    const fn editor_padding(id: EditorId) -> f32 {
+        match id {
+            EditorId::Search => 36.0,
+            EditorId::Demo => 18.0,
+            EditorId::Fps => 6.0,
+        }
+    }
+
+    /// 在编辑器上双击：选中指针下的单词。
+    pub fn double_click_editor(&mut self, target: Target, position: Vec2) {
+        let Some(id) = Self::editor_for_target(target) else {
+            return;
+        };
+        let node = target::id(target);
+        self.focus_editor(id, node);
+        let bounds = self.region_bounds(node);
+        let Some(bounds) = bounds else {
+            return;
+        };
+        let local_x = position.x - bounds.origin.x - Self::editor_padding(id);
+        let offset = {
+            let edit = self.editor(id).edit.clone();
+            crate::editor::pointer_offset(
+                &mut self.labels,
+                &edit,
+                Self::editor_font_size(id),
+                local_x,
+            )
+        };
+        let _ = self.editor_event(
+            id,
+            unbound_widgets::text_input::TextInputEvent::DoubleClick { offset },
+        );
+    }
+
+    /// 在编辑器上三击：全选。
+    pub fn triple_click_editor(&mut self, target: Target) {
+        let Some(id) = Self::editor_for_target(target) else {
+            return;
+        };
+        let node = target::id(target);
+        self.focus_editor(id, node);
+        let _ = self.editor_event(id, unbound_widgets::text_input::TextInputEvent::TripleClick);
+    }
+
+    /// 在编辑器上右键：按 WinUI 规则定位或保留选区，并在指针处打开上下文菜单。
+    ///
+    /// 绝不在菜单打开时主动做词选：点击位于选区之外时折叠选区并把插入符移到点击处；
+    /// 位于选区内时保留选区；没有选区时只移动插入符。
+    ///
+    pub fn open_editor_menu(&mut self, target: Target, position: Vec2, clipboard_has_text: bool) {
+        let Some(id) = Self::editor_for_target(target) else {
+            return;
+        };
+        self.clipboard_has_text = clipboard_has_text;
+        let node = target::id(target);
+        self.focus_editor(id, node);
+        let bounds = self.region_bounds(node);
+        if let Some(bounds) = bounds {
+            let local_x = position.x - bounds.origin.x - Self::editor_padding(id);
+            let offset = {
+                let edit = self.editor(id).edit.clone();
+                crate::editor::pointer_offset(
+                    &mut self.labels,
+                    &edit,
+                    Self::editor_font_size(id),
+                    local_x,
+                )
+            };
+            // 边界也视作选区内：点击恰好落在选区边缘时不应意外丢掉选区。
+            let inside_selection = self
+                .editor(id)
+                .edit
+                .selection()
+                .is_some_and(|(start, end)| (start..=end).contains(&offset));
+            if !inside_selection {
+                let _ = self.editor_event(
+                    id,
+                    unbound_widgets::text_input::TextInputEvent::PointerDown { offset },
+                );
+            }
+        }
+        self.menu_owner = Some(id);
+        self.menu.open_at(position, node, Some(node));
+        self.state.bump();
+    }
+
+    /// 当前编辑器上下文菜单是否可见。
+    #[must_use]
+    pub fn editor_menu_open(&self) -> bool {
+        self.menu.is_open()
+    }
+
+    /// 编辑器上下文菜单的描述符（已按视口定位）。
+    #[must_use]
+    fn editor_menu_desc(&self) -> Option<unbound_widgets::menu::MenuDesc> {
+        use unbound_widgets::menu::{MenuDesc, MenuItem};
+
+        let id = self.menu_owner?;
+        let editor = self.editor(id);
+        let has_selection = editor.edit.selection().is_some();
+        let has_text = !editor.text().is_empty();
+        let mut cut = MenuItem::action("Cut").with_shortcut("Ctrl+X");
+        let mut copy = MenuItem::action("Copy").with_shortcut("Ctrl+C");
+        let mut paste = MenuItem::action("Paste").with_shortcut("Ctrl+V");
+        let mut select_all = MenuItem::action("Select all").with_shortcut("Ctrl+A");
+        if !has_selection {
+            cut = cut.disabled();
+            copy = copy.disabled();
+        }
+        if !self.clipboard_has_text {
+            paste = paste.disabled();
+        }
+        if !has_text {
+            select_all = select_all.disabled();
+        }
+        let desc = MenuDesc::new(
+            Rect::new(0.0, 0.0, 184.0, 0.0),
+            vec![cut, copy, paste, MenuItem::separator(), select_all],
+        );
+        Some(self.menu.desc_at(desc, self.layout.viewport))
+    }
+
+    /// 激活上下文菜单项。
+    fn activate_editor_menu_item(&mut self, index: usize) {
+        use unbound_widgets::text_input::TextInputEvent;
+        let Some(id) = self.menu_owner else {
+            return;
+        };
+        // 菜单项的可用性在这里再判一次：命中区域可能仍会收到点击，
+        // 不能只依赖绘制阶段的置灰状态。
+        let has_selection = self.editor(id).edit.selection().is_some();
+        let has_text = !self.editor(id).edit.text().is_empty();
+        let clipboard_has_text = self.clipboard_has_text;
+        // 行索引包含分隔符：Cut=0、Copy=1、Paste=2、分隔符=3、Select all=4。
+        match index {
+            0 if has_selection => {
+                let _ = self.editor_event(id, TextInputEvent::Cut);
+            }
+            1 if has_selection => {
+                let _ = self.editor_event(id, TextInputEvent::Copy);
+            }
+            2 if clipboard_has_text => {
+                self.pending_clipboard = Some(ClipboardRequest::Read);
+            }
+            4 if has_text => {
+                let _ = self.editor_event(id, TextInputEvent::SelectAll);
+            }
+            _ => {}
+        }
+        self.close_editor_menu(unbound_widgets::context_menu::ContextClose::Selection);
+    }
+
+    /// 关闭编辑器上下文菜单。
+    fn close_editor_menu(&mut self, reason: unbound_widgets::context_menu::ContextClose) {
+        self.menu.close(reason);
+        self.menu_owner = None;
+        self.state.bump();
     }
 
     /// 为标题栏图标镜像原生窗口的最大化状态。
@@ -445,8 +812,8 @@ impl GalleryApp {
     /// 导航并关闭瞬态表面。
     pub fn navigate(&mut self, page: PageId) {
         self.state.navigate(page);
-        self.state.search_focused = false;
-        self.state.search_query.clear();
+        self.state.blur_editors();
+        self.state.search.edit.set_text(String::new());
         self.state.demo.modal_open = false;
         self.state.demo.dropdown_open = false;
         self.state.lang_dropdown_open = false;
@@ -457,8 +824,8 @@ impl GalleryApp {
     /// 导航至组件展厅中的指定目录组件卡片，并将其滚动到视口顶部。
     pub fn navigate_to_component(&mut self, id: unbound_widgets::WidgetCatalogId) {
         self.state.navigate_to_component(id);
-        self.state.search_focused = false;
-        self.state.search_query.clear();
+        self.state.blur_editors();
+        self.state.search.edit.set_text(String::new());
         self.state.demo.modal_open = false;
         self.state.demo.dropdown_open = false;
         self.state.lang_dropdown_open = false;
@@ -497,11 +864,11 @@ impl GalleryApp {
             }
             A11yAction::SetValue => {
                 if let Some(value) = value {
-                    if self.state.search_focused {
-                        self.state.search_query = value;
+                    if self.state.search.focused {
+                        self.state.search.edit.set_text(value);
                         self.state.bump();
-                    } else if self.state.demo.typing {
-                        self.state.demo.text = value;
+                    } else if self.state.demo.text.focused {
+                        self.state.demo.text.edit.set_text(value);
                         self.state.bump();
                     }
                 }
@@ -768,6 +1135,14 @@ impl GalleryApp {
         //
         self.atlas_clock = self.atlas_clock.wrapping_add(1);
         let atlas_clock = self.atlas_clock;
+        // 上下文菜单属于浮层状态而非页面状态，必须在把 `self` 拆成
+        // 绘制所需的字段之前取出描述符，否则绘制阶段拿不到菜单几何。
+        let editor_menu = if self.editor_menu_open() {
+            self.editor_menu_desc()
+                .map(|desc| (desc, self.menu.menu.highlighted))
+        } else {
+            None
+        };
         let GalleryApp {
             scene,
             labels,
@@ -803,6 +1178,7 @@ impl GalleryApp {
         draw_hud(&mut canvas, state, &layout, page_layout.cards.len());
         draw_search_overlay(&mut canvas, state, &layout);
         draw_top_bar_dropdowns(&mut canvas, state, &layout);
+        draw_editor_menu(&mut canvas, editor_menu.as_ref());
         let output = canvas.finish();
         let scrollbar = content_scrollbar(&layout, &page_layout);
         let scene_len = scene.primitives.len() as u32;
@@ -917,6 +1293,24 @@ impl GalleryApp {
                 }
             }
         }
+        if let Some((id, node)) = self.drag_editor {
+            if let Some(bounds) = self.region_bounds(node) {
+                let local_x = position.x - bounds.origin.x - Self::editor_padding(id);
+                let offset = {
+                    let edit = self.editor(id).edit.clone();
+                    crate::editor::pointer_offset(
+                        &mut self.labels,
+                        &edit,
+                        Self::editor_font_size(id),
+                        local_x,
+                    )
+                };
+                let _ = self.editor_event(
+                    id,
+                    unbound_widgets::text_input::TextInputEvent::PointerDrag { offset },
+                );
+            }
+        }
         // 拖拽仅在外壳于按压时启动后才存在，因此无需查询快照：
         // `Option` *本身*就代表捕获状态。
         //
@@ -953,13 +1347,26 @@ impl GalleryApp {
     /// 仅*捕获*指针的控件在此响应：滚动条、滑块与可拖拽演示舞台。
     /// 所有离散控件均等待释放，因此按下后拖离控件绝不会激活它。
     ///
+    /// 只有左键承担聚焦与拖拽捕获；右键与中键仅执行关闭浮层、失焦等公共逻辑，
+    /// 编辑器聚焦与插入符定位交给随后的上下文菜单事件。
     ///
-    pub fn pointer_down(&mut self, position: Vec2, target: Option<u64>) {
+    pub fn pointer_down(&mut self, position: Vec2, target: Option<u64>, button: PointerButton) {
         self.pointer = position;
         // 点击 FPS 输入框之外的任意位置会提交待定值，就像原生微调框在失焦时一样。
         //
-        if self.state.fps_focused && target != Some(target::id(Target::FpsInput)) {
+        if self.state.fps_input.focused && target != Some(target::id(Target::FpsInput)) {
             self.state.commit_fps_input();
+        }
+        // 点击编辑器上下文菜单之外的区域会关闭菜单，并吞掉这次点击。
+        //
+        if self.menu.is_open()
+            && !matches!(
+                target.and_then(target::decode),
+                Some(Target::EditorMenuItem(_))
+            )
+        {
+            self.close_editor_menu(unbound_widgets::context_menu::ContextClose::ClickOutside);
+            return;
         }
         // 点击标题栏语言或缩放下拉菜单之外的区域时自动收起浮层。
         if (self.state.lang_dropdown_open || self.state.zoom_dropdown_open)
@@ -972,10 +1379,23 @@ impl GalleryApp {
             self.state.zoom_dropdown_open = false;
             self.state.bump();
         }
-        if let Some(node) = target {
-            self.pending_focus = Some(node);
-            if let Some(target) = target::decode(node) {
-                self.begin_press_target(target, position);
+        // 点击编辑器之外的区域时释放编辑器焦点：选区随焦点一起折叠，
+        // 否则旧选区会在后续悬停时继续显示。上下文菜单项属于编辑器本身。
+        let editor_related = target.and_then(target::decode).is_some_and(|item| {
+            Self::editor_for_target(item).is_some() || matches!(item, Target::EditorMenuItem(_))
+        });
+        if self.focused_editor().is_some() && !editor_related {
+            self.state.blur_editors();
+            self.state.bump();
+        }
+        // 右键与中键不聚焦、不进入拖拽：右键的编辑器定位由上下文菜单事件完成，
+        // 若在此处走 `begin_press_target`，选区会在菜单打开前就被折叠。
+        if button == PointerButton::Left {
+            if let Some(node) = target {
+                self.pending_focus = Some(node);
+                if let Some(target) = target::decode(node) {
+                    self.begin_press_target(target, position);
+                }
             }
         }
     }
@@ -987,6 +1407,9 @@ impl GalleryApp {
     ///
     pub fn pointer_up(&mut self, position: Vec2) {
         self.pointer = position;
+        if let Some((id, _)) = self.drag_editor.take() {
+            let _ = self.editor_event(id, unbound_widgets::text_input::TextInputEvent::PointerUp);
+        }
         self.finish_drag(position);
         self.dragging_range = None;
         self.panning = None;
@@ -1007,6 +1430,10 @@ impl GalleryApp {
         self.list_scroll_drag = None;
         self.dragging_range = None;
         self.panning = None;
+        // 编辑器拖拽也必须释放：否则失焦后仍会跟随指针拖动选区。
+        self.drag_editor = None;
+        // 失焦时折叠编辑器选区并丢弃未提交的输入法组合。
+        self.state.blur_editors();
         // 两个拖拽都必须被清除，而非仅第一个：`||` 会短路并使第二个拖拽保持存活。
         //
         let marquee = self.state.demo.marquee.take();
@@ -1023,6 +1450,11 @@ impl GalleryApp {
 
     /// 外壳上的滚轮事件。
     pub fn wheel(&mut self, delta_y: f32) {
+        // 菜单打开时滚轮只负责关闭菜单：不滚动其下方的页面，也不进入任何拖拽。
+        if self.menu.is_open() {
+            self.close_editor_menu(unbound_widgets::context_menu::ContextClose::Scroll);
+            return;
+        }
         let point = self.pointer;
         if self.layout.nav.contains_point(point) {
             self.state.nav_scroll =
@@ -1078,16 +1510,16 @@ impl GalleryApp {
     ///
     #[must_use]
     pub fn ime_active(&self) -> bool {
-        self.state.search_focused || self.state.demo.typing
+        self.focused_editor().is_some()
     }
 
-    /// 候选框应锚定的位置（逻辑像素）。
+    /// 候选框应锚定的位置（逻辑像素），由绘制阶段按插入符位置更新。
     #[must_use]
     pub fn ime_caret(&self) -> Vec2 {
-        self.ime_caret
+        self.state.ime_anchor()
     }
 
-    /// 将已提交的 IME 文本插入当前聚焦控件。
+    /// 将已提交的文本插入当前聚焦控件。
     ///
     /// 控制字符会被丢弃：文本框为单行，提交中混入的换行符会破坏缓冲区。
     ///
@@ -1096,118 +1528,212 @@ impl GalleryApp {
         if filtered.is_empty() {
             return;
         }
-        if self.state.search_focused {
-            self.state.search_query.push_str(&filtered);
-        } else if self.state.demo.typing {
-            self.state.demo.text.push_str(&filtered);
-        } else {
-            return;
+        if let Some(id) = self.focused_editor() {
+            self.editor_event(
+                id,
+                unbound_widgets::text_input::TextInputEvent::Insert(filtered),
+            );
         }
-        self.state.bump();
     }
 
     /// 处理按住不放时 OS 重复发送的按键。
     ///
-    /// 文本被排除在外：长按 `a` 不是一连串 `a`，且平台 IME 也会再次上报已组合字符。
-    /// 仅编辑键触发重复。
-    pub fn key_repeat(&mut self, key: &PlatformKey) {
-        let PlatformKey::Named(name) = key else {
+    /// 字符键与编辑键（含 Shift/Ctrl 修饰）随重复事件持续生效；
+    /// 全选、复制、剪切、粘贴、撤销与重做是语义命令，只响应首次按下，
+    /// 重复事件必须丢弃，否则长按会连续粘贴或连续撤销。
+    pub fn key_repeat(&mut self, key: &PlatformKey, modifiers: Modifiers) {
+        use unbound_widgets::text_input::TextInputEvent;
+
+        let Some(id) = self.focused_editor() else {
             return;
         };
-        if name != "Backspace" {
+        let Some(event) = Self::key_to_edit_event(key, modifiers) else {
+            return;
+        };
+        if matches!(
+            event,
+            TextInputEvent::SelectAll
+                | TextInputEvent::Copy
+                | TextInputEvent::Cut
+                | TextInputEvent::Paste(_)
+                | TextInputEvent::Undo
+                | TextInputEvent::Redo
+        ) {
             return;
         }
-        if self.state.search_focused {
-            self.state.search_query.pop();
-        } else if self.state.demo.typing {
-            self.state.demo.text.pop();
-        } else {
+        let _ = self.editor_event(id, event);
+    }
+
+    /// 应用一次 IME 更新到当前聚焦控件。
+    ///
+    /// 组合文本直接写入编辑缓冲区；提交与取消都只作用于同一份真实文本，
+    /// 因此同一次提交不会在页面上插入两次。
+    pub fn apply_ime(&mut self, update: &unbound_app::ImeUpdate) {
+        use unbound_widgets::text_input::TextInputEvent;
+
+        let Some(id) = self.focused_editor() else {
+            return;
+        };
+        if update.cancelled {
+            self.editor_event(id, TextInputEvent::ImeCancel);
             return;
         }
-        self.state.bump();
+        if let Some(commit) = &update.commit {
+            self.editor_event(
+                id,
+                TextInputEvent::ImeCommit {
+                    text: commit.clone(),
+                },
+            );
+            return;
+        }
+        if update.enabled || !update.preedit.is_empty() {
+            self.editor_event(
+                id,
+                TextInputEvent::ImePreedit {
+                    text: update.preedit.clone(),
+                    cursor: update.cursor_range.map(|(start, _)| start),
+                },
+            );
+        }
+    }
+
+    /// 把平台按键转换为编辑事件。
+    fn key_to_edit_event(
+        key: &PlatformKey,
+        modifiers: Modifiers,
+    ) -> Option<unbound_widgets::text_input::TextInputEvent> {
+        use unbound_widgets::text_input::TextInputEvent;
+        let extend = modifiers.shift;
+        let event = match key {
+            PlatformKey::Named(name) => match name.as_str() {
+                "Backspace" if modifiers.control => TextInputEvent::DeleteWordBack,
+                "Backspace" => TextInputEvent::Backspace,
+                "Delete" if modifiers.control => TextInputEvent::DeleteWordForward,
+                "Delete" => TextInputEvent::Delete,
+                "ArrowLeft" if modifiers.control => TextInputEvent::MoveWordLeft { extend },
+                "ArrowLeft" => TextInputEvent::MoveLeft { extend },
+                "ArrowRight" if modifiers.control => TextInputEvent::MoveWordRight { extend },
+                "ArrowRight" => TextInputEvent::MoveRight { extend },
+                "ArrowUp" | "Home" => TextInputEvent::Home { extend },
+                "ArrowDown" | "End" => TextInputEvent::End { extend },
+                _ => return None,
+            },
+            PlatformKey::Character(text) if modifiers.control => {
+                match text.to_ascii_lowercase().as_str() {
+                    "a" => TextInputEvent::SelectAll,
+                    "c" => TextInputEvent::Copy,
+                    "x" => TextInputEvent::Cut,
+                    "z" if modifiers.shift => TextInputEvent::Redo,
+                    "z" => TextInputEvent::Undo,
+                    "y" => TextInputEvent::Redo,
+                    _ => return None,
+                }
+            }
+            PlatformKey::Character(text) => {
+                if text.is_empty() || text.chars().any(char::is_control) {
+                    return None;
+                }
+                TextInputEvent::Insert(text.clone())
+            }
+            PlatformKey::Other(_) => return None,
+        };
+        Some(event)
     }
 
     /// 处理按键按下。
     /// `focused` 是运行时的聚焦节点：外壳本身不保存聚焦节点。
     /// `Tab` 绝不会到达此方法——运行时的 `FocusManager` 在派发前已步进焦点顺序。
     pub fn key(&mut self, key: &PlatformKey, modifiers: Modifiers, focused: Option<u64>) {
-        if self.state.fps_focused {
-            match key {
-                PlatformKey::Named(name) if name == "Escape" => {
-                    self.state.fps_focused = false;
-                    self.state.fps_input = self.state.fps_limit.to_string();
-                    self.state.bump();
-                }
-                PlatformKey::Named(name) if name == "Enter" => {
-                    self.state.commit_fps_input();
-                }
-                PlatformKey::Named(name) if name == "Backspace" => {
-                    self.state.fps_input.pop();
-                    self.state.bump();
-                }
-                PlatformKey::Character(text) if !modifiers.control => {
-                    // 仅限数字：上限为 FPS 数值。
-                    for c in text.chars().filter(char::is_ascii_digit) {
-                        self.state.fps_input.push(c);
+        use unbound_widgets::context_menu::ContextKey;
+
+        if self.menu.is_open() {
+            let context_key = match key {
+                PlatformKey::Named(name) => match name.as_str() {
+                    "ArrowUp" => Some(ContextKey::Up),
+                    "ArrowDown" => Some(ContextKey::Down),
+                    "ArrowLeft" => Some(ContextKey::Left),
+                    "ArrowRight" => Some(ContextKey::Right),
+                    "Enter" => Some(ContextKey::Enter),
+                    "Escape" => Some(ContextKey::Escape),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(context_key) = context_key {
+                if let Some(desc) = self.editor_menu_desc() {
+                    if let Some(index) = self.menu.key(&desc, context_key) {
+                        self.activate_editor_menu_item(index);
                     }
-                    self.state.bump();
                 }
-                _ => {}
+                self.state.bump();
+                return;
             }
-            return;
+            self.close_editor_menu(unbound_widgets::context_menu::ContextClose::ClickOutside);
         }
-        if self.state.search_focused {
+
+        if let Some(id) = self.focused_editor() {
             match key {
                 PlatformKey::Named(name) if name == "Escape" => {
-                    self.state.search_focused = false;
-                    self.state.search_query.clear();
+                    // 组合进行中优先只取消组合：保留已提交的文本与焦点，
+                    // 符合输入法“Esc 撤销本次组合”的惯例。
+                    if self.editor_mut(id).edit.cancel_composition() {
+                        self.editor_mut(id).touch();
+                        self.state.bump();
+                        return;
+                    }
+                    match id {
+                        EditorId::Search => {
+                            self.editor_mut(id).edit.set_text(String::new());
+                        }
+                        EditorId::Fps => {
+                            let limit = self.state.fps_limit;
+                            self.editor_mut(id).edit.set_text(limit.to_string());
+                        }
+                        EditorId::Demo => {}
+                    }
+                    self.editor_mut(id).blur();
                     self.state.bump();
-                }
-                PlatformKey::Named(name) if name == "Backspace" => {
-                    self.state.search_query.pop();
-                    self.state.bump();
+                    return;
                 }
                 PlatformKey::Named(name) if name == "Enter" => {
-                    if let Some(hit) = self.state.search_hits().first().copied() {
-                        match hit {
-                            crate::state::SearchHit::Page(page) => self.navigate(page),
-                            crate::state::SearchHit::Component(id) => {
-                                self.navigate_to_component(id);
+                    match id {
+                        EditorId::Search => {
+                            if let Some(hit) = self.state.search_hits().first().copied() {
+                                match hit {
+                                    crate::state::SearchHit::Page(page) => self.navigate(page),
+                                    crate::state::SearchHit::Component(component) => {
+                                        self.navigate_to_component(component);
+                                    }
+                                }
                             }
                         }
+                        EditorId::Fps => self.state.commit_fps_input(),
+                        EditorId::Demo => {
+                            self.editor_mut(id).blur();
+                            self.state.bump();
+                        }
                     }
+                    return;
                 }
-                PlatformKey::Character(text) if !modifiers.control => {
-                    self.state.search_query.push_str(text);
-                    self.state.bump();
+                // Ctrl+V 需要宿主先读剪贴板，因此单独排队。
+                PlatformKey::Character(text)
+                    if modifiers.control && text.eq_ignore_ascii_case("v") =>
+                {
+                    self.pending_clipboard = Some(ClipboardRequest::Read);
+                    return;
                 }
                 _ => {}
             }
-            return;
-        }
-        if self.state.demo.typing {
-            match key {
-                PlatformKey::Named(name) if name == "Escape" || name == "Enter" => {
-                    self.state.demo.typing = false;
-                    self.state.bump();
-                }
-                PlatformKey::Named(name) if name == "Backspace" => {
-                    self.state.demo.text.pop();
-                    self.state.bump();
-                }
-                PlatformKey::Character(text) if !modifiers.control => {
-                    self.state.demo.text.push_str(text);
-                    self.state.bump();
-                }
-                _ => {}
+            if let Some(event) = Self::key_to_edit_event(key, modifiers) {
+                let _ = self.editor_event(id, event);
             }
             return;
         }
         if modifiers.control {
             if let PlatformKey::Character(text) = key {
                 if text.eq_ignore_ascii_case("k") {
-                    self.state.search_focused = true;
-                    self.state.bump();
+                    self.focus_editor(EditorId::Search, target::id(Target::Search));
                 }
             }
             return;
@@ -1232,8 +1758,10 @@ impl GalleryApp {
                 self.state.demo.dropdown_open = false;
                 self.state.lang_dropdown_open = false;
                 self.state.zoom_dropdown_open = false;
-                self.state.search_focused = false;
-                self.state.search_query.clear();
+                self.editor_mut(EditorId::Search)
+                    .edit
+                    .set_text(String::new());
+                self.state.blur_editors();
                 self.state.bump();
             }
             PlatformKey::Named(name) if name == "F12" => {
@@ -1399,6 +1927,13 @@ impl GalleryApp {
     ///
     ///
     fn begin_press_target(&mut self, target: Target, position: Vec2) {
+        // 文本编辑器在按下时就定位插入符并开始拖拽选择；
+        // 只有真实按压才捕获拖拽，点击报告绝不进入该状态。
+        if let Some(id) = Self::editor_for_target(target) {
+            self.focus_editor_at(id, target::id(target), position, false);
+            self.drag_editor = Some((id, target::id(target)));
+            return;
+        }
         match target {
             Target::ContentScrollbar => {
                 self.begin_scrollbar_drag(position);
@@ -1432,6 +1967,19 @@ impl GalleryApp {
     ///
     ///
     fn click_target(&mut self, target: Target, position: Vec2) {
+        // 菜单打开时，点击菜单项执行动作，点击其他位置只负责关闭菜单。
+        if self.menu.is_open() {
+            if let Target::EditorMenuItem(index) = target {
+                self.activate_editor_menu_item(usize::from(index));
+            } else {
+                self.close_editor_menu(unbound_widgets::context_menu::ContextClose::ClickOutside);
+            }
+            return;
+        }
+        if let Some(id) = Self::editor_for_target(target) {
+            self.focus_editor_at(id, target::id(target), position, false);
+            return;
+        }
         match target {
             Target::NavPage(page) => self.navigate(PageId::from_index(page as usize)),
             Target::NavComponent(index) => {
@@ -1479,22 +2027,22 @@ impl GalleryApp {
                 self.state.bump();
             }
             Target::Search => {
-                self.state.search_focused = true;
-                self.state.demo.typing = false;
-                self.ime_caret = self.pointer;
-                self.state.bump();
+                self.focus_editor_at(
+                    EditorId::Search,
+                    target::id(Target::Search),
+                    position,
+                    false,
+                );
             }
             Target::FpsPreset(index) => {
                 let fps = [60, 120, 144, 240, 0][usize::from(index).min(4)];
                 self.state.set_fps_limit(fps);
-                self.state.fps_focused = false;
+                self.state.fps_input.blur();
             }
             Target::FpsInput => {
-                self.state.fps_focused = true;
-                self.state.fps_input = self.state.fps_limit.to_string();
-                self.ime_caret = self.pointer;
-                self.state.bump();
+                self.focus_editor_at(EditorId::Fps, target::id(Target::FpsInput), position, false);
             }
+            Target::EditorMenuItem(_) => {}
             Target::Footer(index) => self.navigate(if index == 0 {
                 PageId::Telemetry
             } else {
@@ -1644,13 +2192,14 @@ impl GalleryApp {
                 20..=24 => {
                     let fps = [60, 120, 144, 240, 0][(part - 20) as usize];
                     self.state.set_fps_limit(fps);
-                    self.state.fps_focused = false;
+                    self.state.fps_input.blur();
                     return;
                 }
                 30 => {
-                    self.state.fps_focused = true;
-                    self.state.fps_input = self.state.fps_limit.to_string();
-                    self.ime_caret = position;
+                    let limit = self.state.fps_limit.to_string();
+                    self.focus_editor(EditorId::Fps, target::id(Target::FpsInput));
+                    self.state.fps_input.edit.set_text(limit);
+                    self.state.fps_input.edit.select_all();
                     self.state.bump();
                     return;
                 }
@@ -1714,9 +2263,8 @@ impl GalleryApp {
             },
             PageId::TextField => {
                 if part == 1 {
-                    self.state.demo.typing = true;
-                    self.state.search_focused = false;
-                    self.ime_caret = self.pointer;
+                    let node = target::id(Target::Demo(page.index() as u8, card, part));
+                    self.focus_editor(EditorId::Demo, node);
                     self.state.bump();
                 }
             }
@@ -1726,9 +2274,8 @@ impl GalleryApp {
                 //
                 //
                 if card == 2 && part == 1 {
-                    self.state.demo.typing = true;
-                    self.state.search_focused = false;
-                    self.ime_caret = self.pointer;
+                    let node = target::id(Target::Demo(page.index() as u8, card, part));
+                    self.focus_editor(EditorId::Demo, node);
                     self.state.bump();
                 }
             }
@@ -2103,7 +2650,7 @@ impl GalleryApp {
         builder.close();
 
         // 传送门（Portals）。
-        if self.state.search_focused {
+        if self.state.search.focused {
             let overlay = search_overlay_rect(&self.layout, self.state.search_hits().len());
             builder.open(NodeKind::Portal, overlay, "Command palette");
             builder.set_overlays_siblings(true);
@@ -2471,17 +3018,18 @@ fn draw_top_bar(
 
     let search = layout.search;
     if search.size.x >= 100.0 {
+        let focused = state.search.focused;
         let start = canvas.span_start();
         canvas.rect(
             search,
             8.0,
             palette.card_bg,
-            if state.search_focused {
+            if focused {
                 palette.primary
             } else {
                 palette.card_border
             },
-            if state.search_focused { 2.0 } else { 1.0 },
+            if focused { 2.0 } else { 1.0 },
             0.0,
         );
         widgets::icon(
@@ -2491,34 +3039,57 @@ fn draw_top_bar(
             palette.text_muted,
             palette.card_bg,
         );
-        let preedit = if state.search_focused {
-            state.ime_preedit.as_str()
-        } else {
-            ""
-        };
-        let composed;
-        let placeholder = if state.search_query.is_empty() {
+        let text_x = search.origin.x + 36.0;
+        let view_width = (search.size.x - 84.0).max(24.0);
+        state.set_editor_view(EditorId::Search, view_width);
+        let edit = &state.search.edit;
+        let text = edit.text();
+        let scroll = edit.scroll_x();
+        let line = Rect::new(
+            text_x,
+            search.origin.y + 6.0,
+            view_width,
+            (search.size.y - 12.0).max(8.0),
+        );
+        if focused {
+            if let Some((from, to)) = crate::editor::selection_span(canvas.labels, edit, 11.0) {
+                canvas.rect(
+                    Rect::new(
+                        line.origin.x + from - scroll,
+                        line.origin.y,
+                        (to - from).max(1.0),
+                        line.size.y,
+                    ),
+                    2.0,
+                    palette.selection_fill,
+                    0,
+                    0.0,
+                    0.0,
+                );
+            }
+        }
+        let placeholder = if text.is_empty() {
             if search.size.x < 280.0 {
                 state.t("top.search.short")
             } else {
                 state.t("top.search.placeholder")
             }
-        } else if preedit.is_empty() {
-            state.search_query.as_str()
         } else {
-            composed = format!("{}{}", state.search_query, preedit);
-            composed.as_str()
+            text
         };
-        let ink = canvas.text(
+        canvas.begin_clip(Rect::new(
+            text_x,
+            search.origin.y,
+            view_width,
+            search.size.y,
+        ));
+        let text_width = canvas.labels.measure(placeholder, 11.0).x.max(view_width);
+        let text_rect = Rect::new(text_x - scroll, search.origin.y, text_width, search.size.y);
+        canvas.text(
             placeholder,
-            Rect::new(
-                search.origin.x + 32.0,
-                search.origin.y,
-                search.size.x - 84.0,
-                search.size.y,
-            ),
+            text_rect,
             11.0,
-            if state.search_query.is_empty() {
+            if text.is_empty() {
                 palette.text_muted
             } else {
                 palette.text
@@ -2526,20 +3097,32 @@ fn draw_top_bar(
             AlignX::Start,
             AlignY::Center,
         );
-        // IME 组合文本带下划线，与所有原生文本框的展示方式一致。
+        let caret = if focused {
+            Some(text_x - scroll + crate::editor::caret_x(canvas.labels, text, edit.cursor(), 11.0))
+        } else {
+            None
+        };
+        // IME 组合文本带下划线，与原生文本框的展示方式一致。
         //
-        if !preedit.is_empty() {
-            let committed = canvas.labels.measure(&state.search_query, 11.0).x;
-            let width = canvas.labels.measure(preedit, 11.0).x;
-            canvas.rect(
-                Rect::new(ink.origin.x + committed, ink.max().y - 1.5, width, 1.0),
-                0.5,
-                palette.primary,
-                0,
-                0.0,
-                0.0,
-            );
+        if let Some(underline) =
+            crate::editor::preedit_underline(canvas.labels, edit, 11.0, text_rect)
+        {
+            canvas.rect(underline, 0.5, palette.primary, 0, 0.0, 0.0);
         }
+        if let Some(caret) = caret {
+            if state.search.caret_visible() {
+                canvas.rect(
+                    Rect::new(caret, line.origin.y, 1.0, line.size.y),
+                    0.5,
+                    palette.text,
+                    0,
+                    0.0,
+                    0.0,
+                );
+            }
+            state.set_ime_anchor(Vec2::new(caret, search.max().y));
+        }
+        canvas.end_clip();
         if layout.search.size.x > 280.0 {
             widgets::badge(
                 canvas,
@@ -2556,7 +3139,7 @@ fn draw_top_bar(
             state.t("a11y.search"),
             CursorKind::Text,
             false,
-            state.search_focused,
+            focused,
         );
         canvas.record_span(target::id(Target::Search), start);
     } else if search.size.x > 0.0 {
@@ -2569,7 +3152,7 @@ fn draw_top_bar(
             search,
             Icon::Search,
             state.t("a11y.search"),
-            state.search_focused,
+            state.search.focused,
         );
     }
 
@@ -2674,6 +3257,111 @@ fn draw_top_bar_dropdowns(canvas: &mut Canvas<'_>, state: &GalleryState, layout:
         let panel =
             dropdown_panel_rect(layout.zoom, ZOOM_MENU_WIDTH, options.len(), layout.viewport);
         widgets::dropdown_menu(canvas, panel, &options, state.zoom_step);
+    }
+}
+
+/// 编辑器上下文菜单的绘制载荷：描述符与当前键盘高亮项。
+type EditorMenuPaint = (unbound_widgets::menu::MenuDesc, Option<usize>);
+
+/// 在 Portal 层级绘制编辑器上下文菜单。
+///
+/// 每个可操作行都会注册命中区域与 `MenuItem` 语义节点，使指针点击与
+/// `Up`/`Down`/`Enter` 键盘导航复用同一份几何。
+fn draw_editor_menu(canvas: &mut Canvas<'_>, paint: Option<&EditorMenuPaint>) {
+    let Some((desc, highlighted)) = paint else {
+        return;
+    };
+    let highlighted = *highlighted;
+    let palette = *canvas.palette;
+    canvas.rect(
+        desc.rect,
+        10.0,
+        palette.overlay_bg,
+        palette.card_border,
+        1.0,
+        20.0,
+    );
+    for (index, item) in desc.items.iter().enumerate() {
+        let row = desc.item_rect(index);
+        if item.separator {
+            let y = row.origin.y + row.size.y * 0.5;
+            canvas.rect(
+                Rect::new(row.origin.x + 10.0, y, row.size.x - 20.0, 1.0),
+                0.0,
+                palette.card_border,
+                0,
+                0.0,
+                0.0,
+            );
+            continue;
+        }
+        let Ok(index) = u8::try_from(index) else {
+            continue;
+        };
+        let node = target::id(Target::EditorMenuItem(index));
+        let start = canvas.span_start();
+        let visual = canvas.visual(node, false);
+        let active = highlighted == Some(usize::from(index)) || visual.is_hovered();
+        canvas.rect(
+            Rect::new(
+                row.origin.x + 4.0,
+                row.origin.y + 2.0,
+                row.size.x - 8.0,
+                row.size.y - 4.0,
+            ),
+            6.0,
+            if active {
+                palette.primary_soft
+            } else {
+                palette.overlay_bg
+            },
+            0,
+            0.0,
+            0.0,
+        );
+        canvas.text(
+            &item.label,
+            Rect::new(
+                row.origin.x + 16.0,
+                row.origin.y,
+                row.size.x - 96.0,
+                row.size.y,
+            ),
+            11.5,
+            if item.disabled {
+                palette.text_muted
+            } else {
+                palette.text
+            },
+            AlignX::Start,
+            AlignY::Center,
+        );
+        if !item.shortcut.is_empty() {
+            canvas.text(
+                &item.shortcut,
+                Rect::new(
+                    row.origin.x + row.size.x - 84.0,
+                    row.origin.y,
+                    72.0,
+                    row.size.y,
+                ),
+                10.5,
+                palette.text_muted,
+                AlignX::End,
+                AlignY::Center,
+            );
+        }
+        canvas.control_on_layer(
+            node,
+            row,
+            Role::MenuItem,
+            item.label.clone(),
+            CursorKind::Pointer,
+            item.disabled,
+            active,
+            2,
+        );
+        canvas.record_span(node, start);
     }
 }
 
@@ -3589,7 +4277,7 @@ fn draw_hud(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout,
 }
 
 fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
-    if !state.search_focused {
+    if !state.search.focused {
         return;
     }
     let palette = *canvas.palette;
@@ -3604,7 +4292,7 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
         26.0,
     );
     canvas.text(
-        if state.search_query.is_empty() {
+        if state.search.text().is_empty() {
             state.t("search.palette_title")
         } else {
             state.t("search.matches")
@@ -3620,7 +4308,7 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
         AlignX::Start,
         AlignY::Top,
     );
-    if state.search_query.is_empty() {
+    if state.search.text().is_empty() {
         canvas.text(
             state.t("search.hint"),
             Rect::new(
