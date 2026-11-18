@@ -83,3 +83,26 @@ Win11 Fluent 不使用多档死板的实色灰，而是通过**在后景（云�
 | `PinInput` / `HotkeyInput` / `AddressBar` | `TextBox` + `BreadcrumbBar` | 高度严格 `32px`；圆角 `4px`；激活态底部绘制 `2px` `PRIMARY` 强调线 |
 | `PropertyGrid` / `SchemaForm` / `QueryBuilder` | `Expander` + `TextBox` + `ComboBox` | 分组折叠头严格对齐 `Expander`；字段行高 `32px~36px`；内嵌输入控件与独立 `TextBox`/`ComboBox` 零差异 |
 | `Dock` / `MultiSplit` | `TabView` + `GridSplitter` | 标签栏激活态圆角与关闭按钮同 `TabView`；分割条悬停显示 `PRIMARY` 指示条；拖拽落点预览框使用 `PRIMARY_SOFT` 填充 + `PRIMARY` 描边 |
+
+---
+
+## 6. 首批 6 个试点基准控件实测锁定值（Pilot Calibration）
+
+以下数值由「控件 × 状态 × 明暗主题 × `solid` 后景」试点批次锁定，并由
+`crates/unbound-widgets/tests/pilot_geometry.rs` 以几何断言持续看守：
+
+| 控件 | 固有高度 | 圆角 | 关键边距与描边 | 状态差异 |
+| --- | --- | --- | --- | --- |
+| `Button` | `32.0 px` | `4.0 px` | 内边距 `11, 5, 11, 6`；1px `CONTROL_STROKE`；无外部投影 | 悬停/按下仅改变填充 Token，图元数恒定 |
+| `CheckBox` | `32.0 px` | 方框 `4.0 px` | `MinWidth = 120 px`；方框列 `20 px` + 文字间距 `8 px` | 勾选仅改变勾形与填充，不增删图元 |
+| `ToggleSwitch (Header)` | `53.0 px` | 轨道胶囊 `10.0 px` | 标签行 `20 px` + 间距 `13 px` + 轨道 `20 px`；轨道 `40 × 20`；旋钮 `12 px`、内缩 `4 px` | `Idle → Hovered` 旋钮 `12 → 14 px`，按下沿运动方向拉长 `3 px` |
+| `Slider` | `32.0 px` | 轨道/拇指全圆 | 轨道高 `4 px`；拇指外环 `20 px`、内芯 `12 px` | 悬停内芯 `14 px`、按下回缩 `10 px` |
+| `ComboBox` | `32.0 px` | `4.0 px` | 右侧 Chevron 中心距右沿 `20 px`；弹出列表行高后续批次单独校准 | 展开仅改变 Chevron 方向与焦点底边线 |
+| `TextBox` | `32.0 px` | `4.0 px` | 聚焦态底部 `2 px` `Token::PRIMARY` 强调线；未聚焦底边 `1 px` `OUTLINE_STRONG` | 聚焦线随圆角内缩，不新增图元 |
+
+**校准记录**：
+
+1. `TextBox` 的固有高度由旧实现的 `34 px` 收敛到 `32 px`，与 `ComboBox`、`Button` 共行。
+2. `Slider` 的固有高度由旧实现的 `28 px` 收敛到 `32 px`，避免被外部矩形掩盖。
+3. 参考截图对 `Button` 显式使用 `4 px` 圆角、`14 px` 字号与零投影，绕过展台预览构造器的 `6 px` 网页风格圆角。
+4. `ToggleSwitch` 的 Header 排版高度为 `53 px`，并非 `32 px` 单行——差分器必须按 `explicitWidth/Height` 判定其固有尺寸，而不能套用标准输入行高。
