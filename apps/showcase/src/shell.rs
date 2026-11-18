@@ -639,7 +639,11 @@ impl GalleryApp {
         let _ = self.editor_event(id, unbound_widgets::text_input::TextInputEvent::TripleClick);
     }
 
-    /// 在编辑器上右键：选中单词（若无选区）并打开上下文菜单。
+    /// 在编辑器上右键：按 WinUI 规则定位或保留选区，并在指针处打开上下文菜单。
+    ///
+    /// 绝不在菜单打开时主动做词选：点击位于选区之外时折叠选区并把插入符移到点击处；
+    /// 位于选区内时保留选区；没有选区时只移动插入符。
+    ///
     pub fn open_editor_menu(&mut self, target: Target, position: Vec2, clipboard_has_text: bool) {
         let Some(id) = Self::editor_for_target(target) else {
             return;
@@ -648,7 +652,6 @@ impl GalleryApp {
         let node = target::id(target);
         self.focus_editor(id, node);
         let bounds = self.region_bounds(node);
-        let has_selection = self.editor(id).edit.selection().is_some();
         if let Some(bounds) = bounds {
             let local_x = position.x - bounds.origin.x - Self::editor_padding(id);
             let offset = {
@@ -660,10 +663,16 @@ impl GalleryApp {
                     local_x,
                 )
             };
-            if !has_selection {
+            // 边界也视作选区内：点击恰好落在选区边缘时不应意外丢掉选区。
+            let inside_selection = self
+                .editor(id)
+                .edit
+                .selection()
+                .is_some_and(|(start, end)| (start..=end).contains(&offset));
+            if !inside_selection {
                 let _ = self.editor_event(
                     id,
-                    unbound_widgets::text_input::TextInputEvent::DoubleClick { offset },
+                    unbound_widgets::text_input::TextInputEvent::PointerDown { offset },
                 );
             }
         }
@@ -719,6 +728,7 @@ impl GalleryApp {
         let has_selection = self.editor(id).edit.selection().is_some();
         let has_text = !self.editor(id).edit.text().is_empty();
         let clipboard_has_text = self.clipboard_has_text;
+        // 行索引包含分隔符：Cut=0、Copy=1、Paste=2、分隔符=3、Select all=4。
         match index {
             0 if has_selection => {
                 let _ = self.editor_event(id, TextInputEvent::Cut);
@@ -729,7 +739,7 @@ impl GalleryApp {
             2 if clipboard_has_text => {
                 self.pending_clipboard = Some(ClipboardRequest::Read);
             }
-            3 if has_text => {
+            4 if has_text => {
                 let _ = self.editor_event(id, TextInputEvent::SelectAll);
             }
             _ => {}
@@ -1419,6 +1429,11 @@ impl GalleryApp {
 
     /// 外壳上的滚轮事件。
     pub fn wheel(&mut self, delta_y: f32) {
+        // 菜单打开时滚轮只负责关闭菜单：不滚动其下方的页面，也不进入任何拖拽。
+        if self.menu.is_open() {
+            self.close_editor_menu(unbound_widgets::context_menu::ContextClose::Scroll);
+            return;
+        }
         let point = self.pointer;
         if self.layout.nav.contains_point(point) {
             self.state.nav_scroll =

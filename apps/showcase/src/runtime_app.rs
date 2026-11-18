@@ -92,11 +92,14 @@ impl Application for GalleryApp {
                 //
             }
             AppEvent::Wheel { pos, delta, .. } => {
+                let menu_was_open = self.editor_menu_open();
                 self.pointer_move(pos);
                 self.wheel(delta.y);
-                // 页面尽可能滚动；嵌套滚动区域会先消费滚动量，再将剩余部分冒泡。
+                // 菜单打开时滚轮只关闭菜单，不得再滚动其下方的页面。
                 //
-                ctx.consume_scroll(delta);
+                if !menu_was_open {
+                    ctx.consume_scroll(delta);
+                }
             }
             AppEvent::Key {
                 key,

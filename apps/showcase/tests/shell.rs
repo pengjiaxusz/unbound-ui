@@ -96,6 +96,14 @@ impl App {
         self.runtime.pointer_up(pos, PointerButton::Left);
     }
 
+    /// 像窗口宿主一样右键：移动到目标、按下并释放。
+    fn right_click(&mut self, pos: Vec2) {
+        self.runtime.pointer_move(pos);
+        self.runtime.advance(0.5);
+        self.runtime.pointer_down(pos, PointerButton::Right);
+        self.runtime.pointer_up(pos, PointerButton::Right);
+    }
+
     fn key(&mut self, key: &PlatformKey, modifiers: Modifiers) {
         if let Some(key) = app_key(key) {
             self.runtime.key(key, true, app_modifiers(modifiers));
@@ -179,6 +187,26 @@ fn click_node(app: &mut App, node: u64) {
     app.pointer_down(point, 0.0);
     app.pointer_up(point, 0.1);
     app.rebuild(VIEWPORT);
+}
+
+/// 聚焦搜索框并键入给定文本。
+fn search_with_text(text: &str) -> App {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in text.chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    app.rebuild(VIEWPORT);
+    app
 }
 
 #[test]
@@ -462,6 +490,138 @@ fn editor_menu_actions_respect_selection_and_clipboard_state() {
         Some(ClipboardRequest::Write(text)) => assert_eq!(text, "abc"),
         other => panic!("expected a clipboard write, got {other:?}"),
     }
+}
+
+/// 右键绝不主动做词选：无选区时只把插入符移到点击处。
+#[test]
+fn right_clicking_an_editor_moves_the_caret_without_selecting_a_word() {
+    let mut app = search_with_text("abc def");
+    app.key(
+        &PlatformKey::Named("Home".to_string()),
+        Modifiers::default(),
+    );
+    let rect = rect_of(&app, target::id(Target::Search));
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+
+    assert!(
+        app.editor_menu_open(),
+        "the right click must open the context menu"
+    );
+    assert_eq!(
+        app.state.search.edit.selection(),
+        None,
+        "opening the menu must never select a word"
+    );
+    assert!(
+        app.state.search.edit.cursor() > 0,
+        "the caret must move to the click position"
+    );
+}
+
+/// WinUI 选区规则：点在选区内保留选区，点在选区外折叠并把插入符移到点击处。
+#[test]
+fn right_click_keeps_a_selection_inside_it_and_collapses_it_outside() {
+    let mut app = search_with_text("abc def");
+    app.state.search.edit.set_cursor(0, false);
+    app.state.search.edit.set_cursor(3, true);
+    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    // 点击文本起点附近：落在选区内，选区必须保留。
+    let inside = Vec2::new(rect.origin.x + 36.0 + 1.0, rect.center().y);
+    app.open_editor_menu(Target::Search, inside, false);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.state.search.edit.selected_text(),
+        Some("abc"),
+        "a right click inside the selection must keep it"
+    );
+
+    // 点击文本末尾之外：落在选区外，选区折叠到点击处。
+    let outside = Vec2::new(rect.max().x - 1.0, rect.center().y);
+    app.open_editor_menu(Target::Search, outside, false);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.state.search.edit.selection(),
+        None,
+        "a right click outside the selection must collapse it"
+    );
+    assert_eq!(
+        app.state.search.edit.cursor(),
+        "abc def".len(),
+        "the caret must land on the clicked position"
+    );
+}
+
+/// 「全选」菜单项用鼠标点击必须生效，结果与 Ctrl+A 相同。
+#[test]
+fn context_menu_select_all_works_with_the_mouse() {
+    let mut app = search_with_text("abc");
+    let anchor = rect_of(&app, target::id(Target::Search)).center();
+    app.open_editor_menu(Target::Search, anchor, false);
+    app.rebuild(VIEWPORT);
+
+    click_node(&mut app, target::id(Target::EditorMenuItem(4)));
+
+    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+    assert!(!app.editor_menu_open());
+}
+
+/// 「全选」菜单项用回车必须生效。
+#[test]
+fn context_menu_select_all_works_with_enter() {
+    let mut app = search_with_text("abc");
+    let anchor = rect_of(&app, target::id(Target::Search)).center();
+    app.open_editor_menu(Target::Search, anchor, false);
+    app.rebuild(VIEWPORT);
+
+    // 无选区时剪切/复制禁用、剪贴板为空时粘贴禁用，方向键直接落到「全选」。
+    app.key(
+        &PlatformKey::Named("ArrowDown".to_string()),
+        Modifiers::default(),
+    );
+    app.key(
+        &PlatformKey::Named("Enter".to_string()),
+        Modifiers::default(),
+    );
+
+    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+    assert!(!app.editor_menu_open());
+}
+
+/// Esc、点击外部与滚动都能关闭菜单。
+#[test]
+fn escape_outside_click_and_scroll_close_the_context_menu() {
+    let mut app = search_with_text("abc");
+    let anchor = rect_of(&app, target::id(Target::Search)).center();
+
+    app.open_editor_menu(Target::Search, anchor, false);
+    app.rebuild(VIEWPORT);
+    assert!(app.editor_menu_open());
+    app.key(
+        &PlatformKey::Named("Escape".to_string()),
+        Modifiers::default(),
+    );
+    assert!(!app.editor_menu_open(), "escape must close the menu");
+
+    app.open_editor_menu(Target::Search, anchor, false);
+    app.rebuild(VIEWPORT);
+    let outside = rect_of(&app, target::id(Target::Theme(0))).center();
+    app.pointer_move(outside);
+    app.pointer_down(outside, 0.0);
+    app.pointer_up(outside, 0.1);
+    app.rebuild(VIEWPORT);
+    assert!(
+        !app.editor_menu_open(),
+        "clicking outside must close the menu"
+    );
+
+    app.open_editor_menu(Target::Search, anchor, false);
+    app.rebuild(VIEWPORT);
+    app.runtime.wheel(anchor, Vec2::new(0.0, -1.0));
+    app.rebuild(VIEWPORT);
+    assert!(!app.editor_menu_open(), "scrolling must close the menu");
 }
 
 #[test]
