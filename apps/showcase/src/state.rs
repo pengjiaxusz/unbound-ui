@@ -10,7 +10,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use unbound_anim::{Spring, SpringPreset};
 use unbound_app::{set_global_locale, AssetHub, I18nBundle, Locale};
 use unbound_asset::{AssetId, StagingRing};
-use unbound_backdrop::{BackdropMode, BackdropPlan, ResolvedBackdrop};
+use unbound_backdrop::{
+    is_illegal_combination, native_available, resolve_combination, selectable,
+    BackdropCapabilities, BackdropCombination, BackdropPlan, BackdropSelection, BackdropSource,
+    MaterialKind, DEFAULT_ACRYLIC_TINT_ARGB,
+};
 use unbound_canvas::{TransactionKind, UndoStack};
 use unbound_math::Vec2;
 use unbound_widgets::curve_editor::CurveEditorState;
@@ -376,17 +380,30 @@ fn procedural_tile_png(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
 #[derive(Debug)]
 pub struct GalleryState {
     pub active_page: PageId,
-    /// 后景模式的用户选择（默认 `Auto`）。
-    pub backdrop_mode: BackdropMode,
-    /// 宿主按平台能力解析后的实际生效路径。
-    pub resolved_backdrop: ResolvedBackdrop,
+    /// 用户的后景选择：材质种类与来源两个正交维度。
+    ///
+    /// 默认是「标准云母 + 自动来源」。
+    pub backdrop_selection: BackdropSelection,
+    /// 宿主按平台能力解析后的实际生效组合。
+    ///
+    /// 它由宿主在下一帧回写：包含实际生效的材质与来源，以及回退原因与
+    /// 机器能力不足的原因。
+    pub backdrop_combination: BackdropCombination,
     /// 由路径、能力、屏幕几何与主题共同推导出的完整后景计划。
     ///
     /// 启动、运行期切换与自绘生成只消费这一份结果，不再各自推导清屏 alpha、
     /// 根背景透明性或纹理取样区域。
     pub backdrop_plan: BackdropPlan,
-    /// 原生后景路径是否可用（构建号 ≥ 22621 且表面支持预乘 alpha）。
-    pub native_backdrop_available: bool,
+    /// 图形表面是否支持预乘 alpha 合成。
+    ///
+    /// 与构建号一起构成逐档材质门槛所需的全部平台能力。
+    pub premultiplied_alpha_supported: bool,
+    /// 运行时能否解析出未公开的 accent policy 导出。
+    ///
+    /// 这是亚克力自定义色调子档的专属能力，只影响该档的可用性。
+    pub accent_policy_export: bool,
+    /// 亚克力自定义色调（ABGR）。
+    pub backdrop_accent_tint: u32,
     /// Windows 构建号；`None` 表示非 Windows 环境或探测失败。
     pub windows_build: Option<u32>,
     /// 客户区在屏幕坐标系中的物理矩形（后景锚点）。
@@ -434,12 +451,22 @@ pub struct GalleryState {
 
 impl Default for GalleryState {
     fn default() -> Self {
+        let backdrop_selection = BackdropSelection::new(MaterialKind::Mica, BackdropSource::Auto);
         Self {
             active_page: PageId::Home,
-            backdrop_mode: BackdropMode::Auto,
-            resolved_backdrop: ResolvedBackdrop::resolve(BackdropMode::Auto, false),
+            backdrop_combination: resolve_combination(
+                backdrop_selection,
+                &BackdropCapabilities {
+                    windows_build: None,
+                    premultiplied_alpha_supported: false,
+                    accent_policy_export: false,
+                },
+            ),
+            backdrop_selection,
             backdrop_plan: BackdropPlan::default(),
-            native_backdrop_available: false,
+            premultiplied_alpha_supported: false,
+            accent_policy_export: false,
+            backdrop_accent_tint: DEFAULT_ACRYLIC_TINT_ARGB,
             windows_build: None,
             window_screen_rect: None,
             active_component: None,
@@ -559,16 +586,92 @@ pub fn build_showcase_i18n(locale: Locale) -> I18nBundle {
 }
 
 impl GalleryState {
-    /// 写入后景模式选择；返回是否发生变化。
+    /// 写入后景的材质种类选择；返回是否发生变化。
     ///
-    /// 实际生效模式由宿主在下一帧解析回写，页面无需自行推导。
-    pub fn set_backdrop_mode(&mut self, mode: BackdropMode) -> bool {
-        if self.backdrop_mode == mode {
+    /// 机器承载不了的材质会被拒绝：禁用按钮即便因为命中区域仍然收到点击，
+    /// 也不会改变选择。实际生效组合由宿主在下一帧解析回写。
+    pub fn set_backdrop_material(&mut self, material: MaterialKind) -> bool {
+        if self.backdrop_selection.material == material {
             return false;
         }
-        self.backdrop_mode = mode;
+        if !self.backdrop_material_selectable(material) {
+            return false;
+        }
+        self.backdrop_selection.material = material;
         self.bump();
         true
+    }
+
+    /// 写入后景的来源选择；返回是否发生变化。
+    pub fn set_backdrop_source(&mut self, source: BackdropSource) -> bool {
+        if self.backdrop_selection.source == source {
+            return false;
+        }
+        self.backdrop_selection.source = source;
+        self.bump();
+        true
+    }
+
+    /// 当前平台能力快照：后景逐档门槛所需的全部事实。
+    #[must_use]
+    pub fn backdrop_capabilities(&self) -> BackdropCapabilities {
+        BackdropCapabilities {
+            windows_build: self.windows_build,
+            premultiplied_alpha_supported: self.premultiplied_alpha_supported,
+            accent_policy_export: self.accent_policy_export,
+        }
+    }
+
+    /// 写入 accent policy 通道的可用性；返回是否发生变化。
+    ///
+    /// 它只影响亚克力自定义色调子档，其它材质的门槛完全不受影响。
+    pub fn set_backdrop_accent_capability(&mut self, available: bool) -> bool {
+        if self.accent_policy_export == available {
+            return false;
+        }
+        self.accent_policy_export = available;
+        self.bump();
+        true
+    }
+
+    /// 写入亚克力自定义色调（ABGR）；返回是否发生变化。
+    pub fn set_backdrop_accent_tint(&mut self, argb: u32) -> bool {
+        if self.backdrop_accent_tint == argb {
+            return false;
+        }
+        self.backdrop_accent_tint = argb;
+        self.bump();
+        true
+    }
+
+    /// 某个材质在当前来源与平台能力下是否能被选中。
+    ///
+    /// 展台按钮的禁用态直接取自它；来源为「引擎自绘」时永不因缺少自绘变体而禁用。
+    #[must_use]
+    pub fn backdrop_material_selectable(&self, material: MaterialKind) -> bool {
+        selectable(
+            material,
+            self.backdrop_selection.source,
+            &self.backdrop_capabilities(),
+        )
+    }
+
+    /// 当前用户选择是否是「组合非法但允许选中」。
+    ///
+    /// 只有显式自绘来源撞上没有自绘变体的材质才算非法；机器能力不足不是非法，
+    /// 它表现为禁用。展台据此在选中的材质按钮上标出非法组合。
+    #[must_use]
+    pub fn backdrop_combination_illegal(&self) -> bool {
+        is_illegal_combination(self.backdrop_selection)
+    }
+
+    /// 用户选择的材质种类在这台机器上能否走原生路径。
+    #[must_use]
+    pub fn backdrop_native_available(&self) -> bool {
+        native_available(
+            self.backdrop_selection.material,
+            &self.backdrop_capabilities(),
+        )
     }
 
     /// 切换 Showcase 激活语言并同步更新内置 `I18nBundle` 与全局语言状态。

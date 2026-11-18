@@ -228,6 +228,34 @@ if [ -d .agents ]; then
     fi
 fi
 
+# --- shared build directory ------------------------------------------------
+
+# The shared directory is derived by the CLI, so the build recipes and this
+# check read the same value. Missing or unwritable is an error: silently
+# falling back to a per-worktree target/ is exactly the failure mode this
+# layer exists to kill. Exit 2 means the directory is fine but some
+# CARGO_TARGET_DIR in the environment points elsewhere.
+if have pengj-templates-cli; then
+    if [ "$fix" = "1" ]; then
+        pengj-templates-cli worktree check --dir . --fix >/dev/null 2>&1
+    else
+        pengj-templates-cli worktree check --dir . >/dev/null 2>&1
+    fi
+    worktree_code=$?
+    case "$worktree_code" in
+        0) ok "共享编译目录就绪（各工作树复用同一份编译目录）" ;;
+        2) warn "共享编译目录就绪，但环境里的 CARGO_TARGET_DIR 指向别处；裸跑 cargo 会落到另一个目录。请运行：pengj-templates-cli worktree check --dir ." ;;
+        *) fail "共享编译目录缺失或不可写；请运行：pengj-templates-cli worktree check --dir . --fix" ;;
+    esac
+else
+    if is_windows; then
+        worktree_cli_hint="irm https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.ps1 | iex"
+    else
+        worktree_cli_hint="curl -fsSL https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.sh | sh"
+    fi
+    fail "未找到 pengj-templates-cli；没有它无法推导或校验共享编译目录。安装：${worktree_cli_hint}"
+fi
+
 
 # --- custom checks ---------------------------------------------------------
 

@@ -7,7 +7,7 @@
 
 use accesskit::Role;
 use unbound_anim::{CubicBezier, Spring};
-use unbound_backdrop::{BackdropMode, BackdropPlan};
+use unbound_backdrop::{BackdropCombination, BackdropPlan, BackdropSource, MaterialKind};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
 use unbound_input::{CursorKind, PointerButton};
 use unbound_layout::LayoutStats;
@@ -879,34 +879,46 @@ impl GalleryApp {
         }
     }
 
-    /// 写入平台能力探测结果并立即重新解析后景模式。
+    /// 写入平台能力探测结果并立即重新解析后景计划。
     ///
     /// 宿主在创建首条交换链之前调用，使首帧即落到正确的后景路径；
-    /// 返回实际生效模式是否发生变化。
+    /// 返回后景计划是否发生变化。
     pub fn set_backdrop_capabilities(
         &mut self,
         windows_build: Option<u32>,
         premultiplied_alpha_supported: bool,
     ) -> bool {
         self.state.windows_build = windows_build;
-        self.state.native_backdrop_available = unbound_backdrop::native_backdrop_available(
-            windows_build,
-            premultiplied_alpha_supported,
-        );
-        self.sync_backdrop_mode()
+        self.state.premultiplied_alpha_supported = premultiplied_alpha_supported;
+        self.sync_backdrop_plan()
     }
 
-    /// 按当前能力重新解析后景模式；变化时写入实际生效模式并请求重建。
+    /// 写入 accent policy 通道的可用性并立即重新解析后景计划。
     ///
-    /// 实际路径由能力探测与用户选择共同决定，页面只读取解析结果，不自行推导。
-    pub fn sync_backdrop_mode(&mut self) -> bool {
+    /// 它与 [`Self::set_backdrop_capabilities`] 分开：该能力只影响亚克力自定义
+    /// 色调子档，不能混进其它材质的门槛。返回后景计划是否发生变化。
+    pub fn set_backdrop_accent_capability(&mut self, available: bool) -> bool {
+        if !self.state.set_backdrop_accent_capability(available) {
+            return false;
+        }
+        self.sync_backdrop_plan()
+    }
+
+    /// 按当前能力重新解析后景计划；变化时写入实际生效组合并请求重建。
+    ///
+    /// 实际生效的材质与来源由能力探测和用户选择共同决定，页面只读取解析结果，
+    /// 不自行推导。返回计划是否发生变化：宿主据此重新下发清屏 alpha 与系统材质请求。
+    pub fn sync_backdrop_plan(&mut self) -> bool {
         let window = self
             .state
             .window_screen_rect
             .map(|rect| unbound_backdrop::PixelRect::new(rect.x, rect.y, rect.width, rect.height));
         let plan = BackdropPlan::derive(unbound_backdrop::BackdropInputs {
-            choice: self.state.backdrop_mode,
-            native_available: self.state.native_backdrop_available,
+            selection: self.state.backdrop_selection,
+            windows_build: self.state.windows_build,
+            premultiplied_alpha_supported: self.state.premultiplied_alpha_supported,
+            accent_policy_export: self.state.accent_policy_export,
+            accent_tint_argb: self.state.backdrop_accent_tint,
             window_screen_rect: window,
             primary_screen_rect: unbound_backdrop::primary_screen_rect(),
             primary_screen_scale: unbound_backdrop::primary_screen_scale(),
@@ -914,13 +926,17 @@ impl GalleryApp {
             self_drawn_ready: self.mica.visible(),
         });
         let plan_changed = plan != self.state.backdrop_plan;
-        let resolved_changed = plan.resolved != self.state.resolved_backdrop;
-        self.state.backdrop_plan = plan.clone();
-        self.state.resolved_backdrop = plan.resolved;
+        self.state.backdrop_combination = BackdropCombination {
+            material: plan.material_kind,
+            source: plan.source,
+            fallback: plan.fallback,
+            unavailable: plan.unavailable,
+        };
+        self.state.backdrop_plan = plan;
         if plan_changed {
             self.state.bump();
         }
-        resolved_changed
+        plan_changed
     }
 
     /// 根背景是否必须透明。
@@ -2369,9 +2385,25 @@ impl GalleryApp {
                 }
             }
             PageId::Backdrop => {
-                if card == 0 && (1..=4).contains(&part) {
-                    self.state
-                        .set_backdrop_mode(BackdropMode::ALL[(part - 1) as usize]);
+                if card == 0 {
+                    // 部件编号由后景页定义：材质行 `1..=6`，来源行 `7..=9`。
+                    //
+                    // 两段互不重叠，材质行按材质种类顺序、来源行按来源顺序排列。
+                    if (pages::backdrop::MATERIAL_PART_BASE
+                        ..pages::backdrop::MATERIAL_PART_BASE + MaterialKind::ALL.len() as u16)
+                        .contains(&part)
+                    {
+                        let index = (part - pages::backdrop::MATERIAL_PART_BASE) as usize;
+                        self.state
+                            .set_backdrop_material(MaterialKind::from_index(index));
+                    } else if (pages::backdrop::SOURCE_PART_BASE
+                        ..pages::backdrop::SOURCE_PART_BASE + BackdropSource::ALL.len() as u16)
+                        .contains(&part)
+                    {
+                        let index = (part - pages::backdrop::SOURCE_PART_BASE) as usize;
+                        self.state
+                            .set_backdrop_source(BackdropSource::from_index(index));
+                    }
                 }
             }
             PageId::I18n => {

@@ -27,6 +27,7 @@ pub mod latency;
 pub mod overlay_host;
 pub mod pacing;
 pub mod resize;
+pub mod screen_capture;
 pub mod tray;
 #[cfg(windows)]
 pub mod uia_win32;
@@ -51,13 +52,17 @@ pub use pacing::{
     renderer_present_config, FramePacer, PresentSync, PresentWaitPolicy, MIN_FPS_LIMIT,
 };
 pub use resize::{Extent, ResizeAction, ResizeTracker};
+pub use screen_capture::{
+    capture_screen_region, clamp_to_screen, screen_rect_uv, CaptureError, CapturedScreen,
+};
 pub use tray::{
     set_taskbar_progress, set_tray_icon, show_tray_balloon, TaskbarProgressState,
     TrayNotificationSeverity,
 };
 pub use win32_frame::{
-    install_custom_frame, set_window_backdrop, set_window_dark_mode, FrameHitMetrics,
-    WindowBackdropMaterial,
+    accent_policy_export_available, clear_window_accent_tint, install_custom_frame,
+    probe_immersive_backdrop, set_window_accent_tint, set_window_backdrop, set_window_dark_mode,
+    FrameHitMetrics, WindowBackdropMaterial,
 };
 pub use win32_window::{
     CursorIcon, PhysicalPosition, PhysicalSize, ResizeDirection, Window, WindowId as NativeWindowId,

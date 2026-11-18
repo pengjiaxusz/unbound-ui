@@ -201,6 +201,22 @@ impl MicaBackdrop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unbound_backdrop::MaterialKind;
+
+    /// 一份固定尺寸的自绘纹理规格。
+    fn texture(material: MaterialKind) -> WallpaperTexture {
+        WallpaperTexture {
+            width: 1920,
+            height: 1080,
+            screen_width: 1920,
+            screen_height: 1080,
+            dpi_scale: 1.0,
+            max_width: 640,
+            sigma: 18.0,
+            dark: false,
+            material,
+        }
+    }
 
     #[test]
     fn mica_is_enabled_by_default() {
@@ -235,22 +251,47 @@ mod tests {
 
     #[test]
     fn a_window_move_only_updates_the_sample_rect() {
-        let texture = WallpaperTexture {
-            width: 1920,
-            height: 1080,
-            screen_width: 1920,
-            screen_height: 1080,
-            dpi_scale: 1.0,
-            max_width: 640,
-            sigma: 18.0,
-            dark: false,
-        };
+        let texture = texture(MaterialKind::Mica);
         let mut backdrop = MicaBackdrop::new();
         assert!(backdrop.sync(Some(texture), UvRect::new(0.25, 0.25, 0.5, 0.5), None));
         assert!(!backdrop.sync(Some(texture), UvRect::new(0.25, 0.25, 0.5, 0.5), None));
         assert!(
             backdrop.sync(None, UvRect::new(0.0, 0.0, 0.5, 0.5), None),
             "moving the window must invalidate the emitted overlay even if the texture is reused"
+        );
+    }
+
+    #[test]
+    fn switching_the_material_keeps_the_old_texture_until_the_new_one_is_ready() {
+        let mut backdrop = MicaBackdrop::new();
+        // 先把上一代纹理摆成「正在显示」。
+        backdrop.asset = Some(AssetId(7));
+        backdrop.visible = true;
+
+        backdrop.sync(
+            Some(texture(MaterialKind::Mica)),
+            UvRect::new(0.0, 0.0, 1.0, 1.0),
+            None,
+        );
+        // 切到云母变体：请求失效，生成器进入下一代。
+        backdrop.sync(
+            Some(texture(MaterialKind::MicaAlt)),
+            UvRect::new(0.0, 0.0, 1.0, 1.0),
+            None,
+        );
+
+        assert_eq!(
+            backdrop.asset(),
+            Some(AssetId(7)),
+            "the old texture must survive until the new generation is decoded"
+        );
+        assert!(
+            backdrop.visible(),
+            "the window must keep drawing the old texture instead of flashing the solid color"
+        );
+        assert!(
+            backdrop.needs_frame(),
+            "the backdrop must keep requesting frames while the new texture is pending"
         );
     }
 

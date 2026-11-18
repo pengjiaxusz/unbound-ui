@@ -24,10 +24,40 @@ pwsh .agents/skills/subrepo-sync/scripts/show-unapplied-commits.ps1 -SubrepoPath
 pwsh .agents/skills/subrepo-sync/scripts/show-unapplied-commits.ps1 -SubrepoPath "<子仓库路径>" -Update
 ```
 
+## 登记表是唯一事实源
+
+**先读 `.pengj-templates/subrepo.toml`。** 它是本项目全部外部子仓库的机器可读登记表：
+每个子仓库一张 `[[subrepo]]` 表，记着名称、相对路径、依赖模式、上游跟踪分支，
+以及该子仓库是否自带工作区定义。
+
+```toml
+[[subrepo]]
+name = "example-subrepo"
+path = "submodules/example-subrepo"
+mode = "submodule"        # submodule | fetch | local
+upstream = "origin/main"
+has_workspace = false
+```
+
+由此有两条规矩：
+
+- **登记表决定有哪些子仓库。** 不要依据手工维护的 Markdown 表格行事：那张表无法被程序解析，
+  技能与体检命令会对「本项目依赖哪些子仓库」产生分歧。体检命令
+  （`pengj-templates-cli subrepo check`）读的就是这份文件，因此技能建议升级的对象
+  与体检检查的对象永远是同一批。
+- **依赖模式决定该做什么。** `submodule` 要查指针与就绪状态；`fetch` 的版本锁在宿主构建系统里；
+  `local` 是本机的同级目录。模式是封闭枚举，写出三种之外的值是硬错误，绝不静默跳过。
+
+用下面这条命令把登记表渲染成人类可读的清单：
+
+```powershell
+pengj-templates-cli subrepo list --dir .
+```
+
 ## 标准升级工作流
 
 ```
-[1. 识别基线与目标] ──► [2. 提取未应用提交与聚类] ──► [3. 安全签出与更新] ──► [4. 宿主适配与重构] ──► [5. 门禁验证与提交]
+[0. 读取登记表] ──► [1. 识别基线与目标] ──► [2. 提取未应用提交与聚类] ──► [3. 安全签出与更新] ──► [4. 宿主适配与重构] ──► [5. 门禁验证与提交]
 ```
 
 ### 步骤 1：识别基线与目标
