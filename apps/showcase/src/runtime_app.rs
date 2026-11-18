@@ -201,17 +201,26 @@ impl Application for GalleryApp {
         self.sync_backdrop_mode();
         // 只有自绘路径才需要生成、同步并绘制壁纸纹理；原生与关闭模式跳过，
         // 避免无意义的 CPU 与内存开销。
-        let draws_self_drawn = self.state.resolved_backdrop.draws_self_drawn_texture();
+        let draws_self_drawn = self.state.backdrop_plan.resolved.draws_self_drawn_texture();
         self.mica.set_enabled(draws_self_drawn);
         let was_mica_visible = self.mica.visible();
-        if draws_self_drawn {
-            self.mica
-                .sync(viewport, self.state.theme.is_dark(), view.event_sender());
-        }
+        let plan = self.state.backdrop_plan.clone();
+        let uv_changed = if draws_self_drawn {
+            self.mica.sync(plan.texture, plan.uv, view.event_sender())
+        } else {
+            false
+        };
         let mica_visible = self
             .mica
             .draw(view, unbound_app::ui_key!("showcase_mica_backdrop"));
-        if mica_visible != was_mica_visible || self.needs_rebuild(viewport, &inter, view.ctx.force)
+        if mica_visible != was_mica_visible {
+            // 纹理就绪会改变计划里的根背景透明性；先刷新计划再重建，避免
+            // 用上一帧的结论把刚可见的后景重新盖住。
+            self.sync_backdrop_mode();
+        }
+        if mica_visible != was_mica_visible
+            || uv_changed
+            || self.needs_rebuild(viewport, &inter, view.ctx.force)
         {
             self.rebuild(viewport, inter);
         }

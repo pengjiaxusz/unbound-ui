@@ -14,7 +14,7 @@ use raw_window_handle::{
 };
 
 use crate::resize::Extent;
-use crate::window::PlatformError;
+use crate::window::{PlatformError, ScreenRect};
 
 /// 用于从后台线程唤醒 Win32 消息循环的自定义窗口消息。
 pub(crate) const WM_APP_WAKE: u32 = 0x8001; // WM_APP + 1
@@ -172,6 +172,22 @@ impl Window {
         #[cfg(not(windows))]
         {
             PhysicalSize::new(1, 1)
+        }
+    }
+
+    /// 获取客户区在屏幕坐标系中的物理矩形。
+    ///
+    /// 供依赖屏幕锚点的后景（例如按主屏壁纸取样的自绘纹理）使用；布局仍只消费逻辑视口。
+    #[must_use]
+    pub fn client_rect_on_screen(&self) -> ScreenRect {
+        #[cfg(windows)]
+        {
+            win32::client_rect_on_screen(self.hwnd)
+        }
+        #[cfg(not(windows))]
+        {
+            let size = self.inner_size();
+            ScreenRect::new(0, 0, size.width, size.height)
         }
     }
 
@@ -369,7 +385,9 @@ pub(crate) mod win32 {
 
     use ::windows::core::PCWSTR;
     use ::windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
-    use ::windows::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC, VREFRESH};
+    use ::windows::Win32::Graphics::Gdi::{
+        ClientToScreen, GetDC, GetDeviceCaps, ReleaseDC, VREFRESH,
+    };
     use ::windows::Win32::UI::HiDpi::GetDpiForWindow;
     use ::windows::Win32::UI::Input::Ime::{
         ImmGetContext, ImmReleaseContext, ImmSetCandidateWindow, ImmSetCompositionWindow,
@@ -412,6 +430,27 @@ pub(crate) mod win32 {
             return PhysicalSize::new(1, 1);
         }
         PhysicalSize::new(
+            (rect.right - rect.left).max(1) as u32,
+            (rect.bottom - rect.top).max(1) as u32,
+        )
+    }
+
+    pub(crate) fn client_rect_on_screen(hwnd: isize) -> ScreenRect {
+        let hwnd = hwnd_from_isize(hwnd);
+        let mut rect = RECT::default();
+        let ok = unsafe { GetClientRect(hwnd, &mut rect) };
+        if ok.is_err() {
+            return ScreenRect::new(0, 0, 1, 1);
+        }
+        // `GetClientRect` 的左上角始终是 (0, 0)，需要借助客户区原点的屏幕坐标补上位置。
+        let mut origin = POINT { x: 0, y: 0 };
+        let mapped = unsafe { ClientToScreen(hwnd, &mut origin) };
+        if !mapped.as_bool() {
+            return ScreenRect::new(0, 0, 1, 1);
+        }
+        ScreenRect::new(
+            origin.x,
+            origin.y,
             (rect.right - rect.left).max(1) as u32,
             (rect.bottom - rect.top).max(1) as u32,
         )

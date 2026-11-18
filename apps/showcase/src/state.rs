@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use unbound_anim::{Spring, SpringPreset};
 use unbound_app::{set_global_locale, AssetHub, I18nBundle, Locale};
 use unbound_asset::{AssetId, StagingRing};
-use unbound_backdrop::{BackdropMode, ResolvedBackdrop};
+use unbound_backdrop::{BackdropMode, BackdropPlan, ResolvedBackdrop};
 use unbound_canvas::{TransactionKind, UndoStack};
 use unbound_math::Vec2;
 use unbound_widgets::curve_editor::CurveEditorState;
@@ -294,10 +294,20 @@ pub struct GalleryState {
     pub backdrop_mode: BackdropMode,
     /// 宿主按平台能力解析后的实际生效路径。
     pub resolved_backdrop: ResolvedBackdrop,
+    /// 由路径、能力、屏幕几何与主题共同推导出的完整后景计划。
+    ///
+    /// 启动、运行期切换与自绘生成只消费这一份结果，不再各自推导清屏 alpha、
+    /// 根背景透明性或纹理取样区域。
+    pub backdrop_plan: BackdropPlan,
     /// 原生后景路径是否可用（构建号 ≥ 22621 且表面支持预乘 alpha）。
     pub native_backdrop_available: bool,
     /// Windows 构建号；`None` 表示非 Windows 环境或探测失败。
     pub windows_build: Option<u32>,
+    /// 客户区在屏幕坐标系中的物理矩形（后景锚点）。
+    ///
+    /// 由平台层在移动、尺寸与 DPI 变化时写入；布局不使用它，只有依赖屏幕位置的
+    /// 自绘后景取样会读取。
+    pub window_screen_rect: Option<unbound_platform::ScreenRect>,
     /// 当通过侧边栏直接选中某个具体组件时记录该组件 ID。
     pub active_component: Option<WidgetCatalogId>,
     pub nav_expanded: bool,
@@ -345,8 +355,10 @@ impl Default for GalleryState {
             active_page: PageId::Home,
             backdrop_mode: BackdropMode::Auto,
             resolved_backdrop: ResolvedBackdrop::resolve(BackdropMode::Auto, false),
+            backdrop_plan: BackdropPlan::default(),
             native_backdrop_available: false,
             windows_build: None,
+            window_screen_rect: None,
             active_component: None,
             nav_expanded: true,
             search_query: String::new(),

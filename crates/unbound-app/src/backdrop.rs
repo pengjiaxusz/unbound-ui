@@ -10,15 +10,20 @@
 //! ```ignore
 //! // init: 交给宿主自动处理（默认启用）
 //! // view:
-//! self.mica.sync(viewport, dark, view.ctx.event_sender());
+//! self.mica.sync(plan.texture, plan.uv, view.ctx.event_sender());
 //! let mica_visible = self.mica.draw(view, ui_key!("app_mica_backdrop"));
 //! // 重建场景时用 `mica_visible` 决定根背景是否透明
 //! // reduce:
 //! AppEvent::Custom { id, .. } if unbound_app::is_mica_ready_event(id) => DirtyFlags::ALL,
 //! ```
 
+use std::time::{Duration, Instant};
+
 use unbound_asset::AssetId;
-use unbound_backdrop::{BackdropGenerator, MicaRequest};
+use unbound_backdrop::{
+    wallpaper_stamp, BackdropGenerator, MicaRequest, UvRect, WallpaperStamp, WallpaperTexture,
+};
+use unbound_math::Rect;
 
 use crate::{AppEventSender, ViewBuilder};
 
@@ -41,6 +46,12 @@ pub struct MicaBackdrop {
     pending: Option<AssetId>,
     visible: bool,
     enabled: bool,
+    /// 当前纹理在窗口内的归一化采样区域。
+    uv: Rect,
+    /// 缓存的壁纸源指纹：避免每帧查询注册表与文件元数据。
+    wallpaper: Option<WallpaperStamp>,
+    /// 上次查询壁纸指纹的时间。
+    wallpaper_checked: Option<Instant>,
 }
 
 impl Default for MicaBackdrop {
@@ -51,6 +62,9 @@ impl Default for MicaBackdrop {
             pending: None,
             visible: false,
             enabled: true,
+            uv: Rect::new(0.0, 0.0, 1.0, 1.0),
+            wallpaper: None,
+            wallpaper_checked: None,
         }
     }
 }
@@ -85,22 +99,43 @@ impl MicaBackdrop {
         self.enabled
     }
 
-    /// 让纹理与当前视口 / 主题保持同步。
+    /// 让纹理与后景计划保持同步，并返回采样区域是否变化。
     ///
-    /// `viewport` 为逻辑像素尺寸；`wake` 用于生成完成后唤醒 UI 线程，
-    /// 通常是 [`crate::AppContext::event_sender`] 的返回值。
-    pub fn sync(&mut self, viewport: (f32, f32), dark: bool, wake: Option<AppEventSender>) {
+    /// `texture` 为计划给出的纹理规格；`uv` 为窗口在纹理中的归一化子矩形。
+    /// 采样区域变化不需要重新生成纹理，但会改变叠加图元，调用方应据此重建场景。
+    /// `wake` 用于生成完成后唤醒 UI 线程，通常是 [`crate::AppContext::event_sender`]
+    /// 的返回值。
+    pub fn sync(
+        &mut self,
+        texture: Option<WallpaperTexture>,
+        uv: UvRect,
+        wake: Option<AppEventSender>,
+    ) -> bool {
         if !self.enabled {
-            return;
+            return false;
         }
-        let width = viewport.0.max(1.0).round() as u32;
-        let height = viewport.1.max(1.0).round() as u32;
-        self.generator
-            .sync(MicaRequest::new(width, height, dark), move || {
-                if let Some(sender) = wake {
-                    sender.send_custom(MICA_READY_EVENT_ID, "");
-                }
-            });
+        if let Some(texture) = texture {
+            let now = Instant::now();
+            let stale = self
+                .wallpaper_checked
+                .is_none_or(|checked| now.duration_since(checked) >= Duration::from_secs(2));
+            if stale {
+                self.wallpaper = wallpaper_stamp();
+                self.wallpaper_checked = Some(now);
+            }
+            self.generator.sync(
+                MicaRequest::from_texture(&texture, self.wallpaper),
+                move || {
+                    if let Some(sender) = wake {
+                        sender.send_custom(MICA_READY_EVENT_ID, "");
+                    }
+                },
+            );
+        }
+        let next = Rect::new(uv.x, uv.y, uv.width, uv.height);
+        let changed = next != self.uv;
+        self.uv = next;
+        changed
     }
 
     /// 提交新纹理并把背板画在整窗最底层。
@@ -117,7 +152,7 @@ impl MicaBackdrop {
         }
 
         if let Some(pending) = self.pending {
-            if view.backdrop_image(key, pending) {
+            if view.backdrop_image_sampled(key, pending, Some(self.uv)) {
                 self.asset = Some(pending);
                 self.pending = None;
                 self.visible = true;
@@ -125,12 +160,12 @@ impl MicaBackdrop {
                 // 新纹理还在解码：继续显示旧纹理，避免主题切换闪一帧纯色。
                 self.visible = self
                     .asset
-                    .is_some_and(|asset| view.backdrop_image(key, asset));
+                    .is_some_and(|asset| view.backdrop_image_sampled(key, asset, Some(self.uv)));
             }
         } else {
             self.visible = self
                 .asset
-                .is_some_and(|asset| view.backdrop_image(key, asset));
+                .is_some_and(|asset| view.backdrop_image_sampled(key, asset, Some(self.uv)));
         }
         self.visible
     }
@@ -195,6 +230,27 @@ mod tests {
             backdrop.asset(),
             Some(AssetId(7)),
             "re-enabling must not drop the texture that is about to be drawn again"
+        );
+    }
+
+    #[test]
+    fn a_window_move_only_updates_the_sample_rect() {
+        let texture = WallpaperTexture {
+            width: 1920,
+            height: 1080,
+            screen_width: 1920,
+            screen_height: 1080,
+            dpi_scale: 1.0,
+            max_width: 640,
+            sigma: 18.0,
+            dark: false,
+        };
+        let mut backdrop = MicaBackdrop::new();
+        assert!(backdrop.sync(Some(texture), UvRect::new(0.25, 0.25, 0.5, 0.5), None));
+        assert!(!backdrop.sync(Some(texture), UvRect::new(0.25, 0.25, 0.5, 0.5), None));
+        assert!(
+            backdrop.sync(None, UvRect::new(0.0, 0.0, 0.5, 0.5), None),
+            "moving the window must invalidate the emitted overlay even if the texture is reused"
         );
     }
 
