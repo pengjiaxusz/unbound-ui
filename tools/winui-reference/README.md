@@ -59,8 +59,8 @@ dotnet build -c Release
 | 参数 | 取值 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `--out <dir>` | 任意目录 | `captures` | 输出目录，不存在会自动创建 |
-| `--control <name>` | `Button` `CheckBox` `ToggleSwitch` `Slider` `ComboBox` `TextBox` | `Button` | 大小写不敏感 |
-| `--state <state>` | `normal` `disabled` `checked` `focused` | `normal` | `checked` 仅支持 CheckBox / ToggleSwitch |
+| `--control <name>` | 见下方「已接入控件」 | `Button` | 大小写不敏感 |
+| `--state <state>` | `normal` `disabled` `checked` `focused` | `normal` | `checked` 仅支持 CheckBox / ToggleSwitch / ToggleButton / RadioButton |
 | `--theme <theme>` | `light` `dark` | `light` | 通过 `Host.RequestedTheme` 切换 |
 | `--backdrop <kind>` | `solid` `mica` `mica_alt` `acrylic` `all` | `solid` | 确定性合成底板类型（`all` 仅限 `--batch`） |
 | `--width <N>` | 64..8192 | `420` | 单例模式窗口宽度（批量模式按状态槽位自动计算并裁剪为紧凑出血画布） |
@@ -68,3 +68,11 @@ dotnet build -c Release
 | `--batch` | 开关 | 关闭 | 按「控件 × 主题 × 后景」生成状态拼版并自动切出紧凑单图 |
 | `--no-cache` | 开关 | 关闭 | 忽略 `fingerprint` 缓存，强制重新采集全部用例 |
 | `--save-sheet` | 开关 | 关闭 | 除切分后的单用例 PNG 外，额外保留 `<Control>_<theme>_<backdrop>_sheet.png` |
+
+### 已接入控件（46 个）
+
+- **首批试点**：`Button` `CheckBox` `ToggleSwitch` `Slider` `ComboBox` `TextBox`
+- **第一批（基础输入与文本）**：`ToggleButton` `SplitButton` `RadioButton` `RatingControl` `ColorPicker` `NumberBox` `AutoSuggestBox` `RichTextBlock` `ProgressBar` `ProgressRing` `InfoBadge` `ToolTip`
+- **第二批（导航、浮层、集合与日期）**：`InfoBar` `TeachingTip` `ContentDialog` `Flyout` `MenuFlyout` `MenuBar` `CommandBar` `NavigationView` `TabView` `Pivot` `BreadcrumbBar` `SelectorBar` `PipsPager` `Expander` `SplitView` `Border` `Card` `StackPanel` `ScrollView` `TreeView` `ListView` `FlipView` `CalendarView` `TimePicker` `PersonPicture` `Image` `FontIcon` `TitleBar`
+
+> 说明：`Flyout` 与 `MenuFlyout` 本身不是 `FrameworkElement`，静态拼版以其呈现器（`FlyoutPresenter` / `MenuFlyoutPresenter`）为表面；`ToolTip`、`TeachingTip`、`ContentDialog` 需要运行时宿主才能展开，静态采集只测量其内容盒。这三类浮层后续由结构快照与人工屏幕捕获补足。
