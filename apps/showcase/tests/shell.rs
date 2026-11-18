@@ -415,6 +415,164 @@ fn escape_cancels_only_the_active_composition() {
     assert!(app.state.search.focused);
 }
 
+/// 点击输入框后只移动指针，不得改变文本、插入符或选区。
+///
+/// 回归：释放之后的点击报告曾再次进入拖拽态，导致普通悬停被当作拖拽更新选区。
+///
+#[test]
+fn clicking_an_editor_then_hovering_keeps_the_caret_and_selection() {
+    let mut app = app();
+    app.state.search.edit.set_text("hello world");
+    app.state.search.edit.set_cursor(0, false);
+    app.rebuild(VIEWPORT);
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    let press = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    app.pointer_move(press);
+    app.pointer_down(press, 0.0);
+    app.pointer_up(press, 0.1);
+    app.rebuild(VIEWPORT);
+
+    let text = app.state.search.text().to_string();
+    let cursor = app.state.search.edit.cursor();
+    let anchor = app.state.search.edit.anchor();
+    assert!(!app.state.search.edit.has_selection());
+
+    // 不按键，仅把指针移到输入框另一端。
+    app.pointer_move(Vec2::new(rect.origin.x + rect.size.x - 12.0, press.y));
+
+    assert_eq!(app.state.search.text(), text);
+    assert_eq!(app.state.search.edit.cursor(), cursor);
+    assert_eq!(app.state.search.edit.anchor(), anchor);
+    assert!(
+        !app.state.search.edit.has_selection(),
+        "plain hover after a click must not form a selection"
+    );
+}
+
+/// 组合进行中普通悬停不得取消组合。
+///
+/// 回归：点击释放后的幽灵拖拽会把悬停送成 `PointerDrag`，而该事件属于
+/// “用户编辑”，会取消输入法组合。
+///
+#[test]
+fn hovering_during_a_composition_keeps_the_composition_alive() {
+    let mut app = app();
+    app.state.search.edit.set_text("hello");
+    app.state.search.edit.set_cursor(0, false);
+    app.rebuild(VIEWPORT);
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    let press = Vec2::new(rect.origin.x + 20.0, rect.center().y);
+    app.pointer_move(press);
+    app.pointer_down(press, 0.0);
+    app.pointer_up(press, 0.1);
+    app.rebuild(VIEWPORT);
+
+    app.runtime.ime(ImeUpdate {
+        enabled: true,
+        preedit: "ni".into(),
+        cursor_range: None,
+        commit: None,
+        cancelled: false,
+    });
+    assert!(app.state.search.edit.preedit().is_some());
+
+    app.pointer_move(Vec2::new(rect.origin.x + rect.size.x - 12.0, press.y));
+
+    assert!(
+        app.state.search.edit.preedit().is_some(),
+        "plain hover must not cancel an active IME composition"
+    );
+    assert_eq!(app.state.search.text(), "nihello");
+}
+
+/// 按住左键拖动仍要形成 (anchor, cursor) 选区，释放后定格。
+///
+/// 这是 #10 的红线：拆分点击路径不得牺牲拖拽选择。
+///
+#[test]
+fn pressing_and_dragging_still_forms_a_selection() {
+    let mut app = app();
+    app.state.search.edit.set_text("hello world");
+    app.state.search.edit.set_cursor(0, false);
+    app.rebuild(VIEWPORT);
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    let left = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    let right = Vec2::new(rect.origin.x + rect.size.x - 12.0, rect.center().y);
+
+    app.pointer_move(left);
+    app.pointer_down(left, 0.0);
+    app.pointer_move(right);
+    assert!(
+        app.state.search.edit.has_selection(),
+        "holding the button and dragging must extend a selection"
+    );
+    app.pointer_up(right, 0.1);
+
+    let frozen = app.state.search.edit.selection();
+    assert!(frozen.is_some());
+    app.pointer_move(left);
+    assert_eq!(
+        app.state.search.edit.selection(),
+        frozen,
+        "the selection must freeze once the button is released"
+    );
+}
+
+/// 在输入框外点击后选区折叠，随后的悬停不再复现选区。
+#[test]
+fn clicking_outside_collapses_the_selection() {
+    let mut app = app();
+    app.state.search.edit.set_text("hello world");
+    app.state.search.edit.set_cursor(0, false);
+    app.rebuild(VIEWPORT);
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    let left = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    let right = Vec2::new(rect.origin.x + rect.size.x - 12.0, rect.center().y);
+    app.pointer_move(left);
+    app.pointer_down(left, 0.0);
+    app.pointer_move(right);
+    app.pointer_up(right, 0.1);
+    assert!(app.state.search.edit.has_selection());
+
+    click_node(&mut app, target::id(Target::Theme(0)));
+    assert!(
+        !app.state.search.edit.has_selection(),
+        "clicking outside the editor must collapse the selection"
+    );
+    app.pointer_move(right);
+    assert!(!app.state.search.edit.has_selection());
+}
+
+/// 窗口失焦后选区折叠，随后的悬停不再复现选区。
+#[test]
+fn losing_the_window_focus_collapses_the_selection() {
+    let mut app = app();
+    app.state.search.edit.set_text("hello world");
+    app.state.search.edit.set_cursor(0, false);
+    app.rebuild(VIEWPORT);
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    let left = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    let right = Vec2::new(rect.origin.x + rect.size.x - 12.0, rect.center().y);
+    app.pointer_move(left);
+    app.pointer_down(left, 0.0);
+    app.pointer_move(right);
+    app.pointer_up(right, 0.1);
+    assert!(app.state.search.edit.has_selection());
+
+    app.cancel_interactions();
+    assert!(
+        !app.state.search.edit.has_selection(),
+        "losing the window focus must collapse the selection"
+    );
+    app.pointer_move(left);
+    assert!(!app.state.search.edit.has_selection());
+}
+
 #[test]
 fn held_character_keys_keep_inserting_at_the_caret() {
     let mut app = app();

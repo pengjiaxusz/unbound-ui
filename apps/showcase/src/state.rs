@@ -105,11 +105,13 @@ impl TextEditor {
         self.blink = 0.0;
     }
 
-    /// 释放焦点并丢弃未提交的 IME 组合。
+    /// 释放焦点、折叠选区并丢弃未提交的 IME 组合。
     pub fn blur(&mut self) {
         self.focused = false;
         self.blink = 0.0;
         self.edit.cancel_composition();
+        // 锚点与光标相等即无选区：失焦后悬停不得再复现旧的选区。
+        self.edit.set_cursor(self.edit.cursor(), false);
     }
 
     /// 用户交互后重置光标闪烁相位。

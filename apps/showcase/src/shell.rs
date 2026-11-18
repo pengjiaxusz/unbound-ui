@@ -564,7 +564,10 @@ impl GalleryApp {
             .map(|region| region.bounds)
     }
 
-    /// 点击编辑器时把插入符放到指针位置。
+    /// 聚焦编辑器并把插入符放到指针位置。
+    ///
+    /// 本函数只负责定位插入符，绝不进入拖拽态：点击报告会在释放之后再次抵达这里，
+    /// 若在此捕获拖拽，普通悬停就会被当作拖拽更新，形成幽灵选区。
     pub fn focus_editor_at(&mut self, id: EditorId, node: u64, position: Vec2, extend: bool) {
         self.focus_editor(id, node);
         let font = Self::editor_font_size(id);
@@ -589,7 +592,6 @@ impl GalleryApp {
                 unbound_widgets::text_input::TextInputEvent::PointerDown { offset }
             },
         );
-        self.drag_editor = Some((id, node));
         self.editor_mut(id).touch();
     }
 
@@ -1375,6 +1377,15 @@ impl GalleryApp {
             self.state.zoom_dropdown_open = false;
             self.state.bump();
         }
+        // 点击编辑器之外的区域时释放编辑器焦点：选区随焦点一起折叠，
+        // 否则旧选区会在后续悬停时继续显示。上下文菜单项属于编辑器本身。
+        let editor_related = target.and_then(target::decode).is_some_and(|item| {
+            Self::editor_for_target(item).is_some() || matches!(item, Target::EditorMenuItem(_))
+        });
+        if self.focused_editor().is_some() && !editor_related {
+            self.state.blur_editors();
+            self.state.bump();
+        }
         if let Some(node) = target {
             self.pending_focus = Some(node);
             if let Some(target) = target::decode(node) {
@@ -1413,6 +1424,10 @@ impl GalleryApp {
         self.list_scroll_drag = None;
         self.dragging_range = None;
         self.panning = None;
+        // 编辑器拖拽也必须释放：否则失焦后仍会跟随指针拖动选区。
+        self.drag_editor = None;
+        // 失焦时折叠编辑器选区并丢弃未提交的输入法组合。
+        self.state.blur_editors();
         // 两个拖拽都必须被清除，而非仅第一个：`||` 会短路并使第二个拖拽保持存活。
         //
         let marquee = self.state.demo.marquee.take();
@@ -1906,9 +1921,11 @@ impl GalleryApp {
     ///
     ///
     fn begin_press_target(&mut self, target: Target, position: Vec2) {
-        // 文本编辑器在按下时就定位插入符并开始拖拽选择。
+        // 文本编辑器在按下时就定位插入符并开始拖拽选择；
+        // 只有真实按压才捕获拖拽，点击报告绝不进入该状态。
         if let Some(id) = Self::editor_for_target(target) {
             self.focus_editor_at(id, target::id(target), position, false);
+            self.drag_editor = Some((id, target::id(target)));
             return;
         }
         match target {
