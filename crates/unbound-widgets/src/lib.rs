@@ -182,6 +182,22 @@ define_widget_catalog! {
         virtual_masonry,
         virtual_views,
         watermark,
+        annotated_scroll_bar,
+        app_bar,
+        blade_view,
+        command_bar_flyout,
+        grid_view,
+        headered_content,
+        image_cropper,
+        items_view,
+        list_box,
+        orbit_view,
+        radial_gauge,
+        range_selector,
+        refresh_container,
+        rich_edit_box,
+        swipe_control,
+        teaching_tip,
     ],
     catalog: [
         Accordion => accordion,
@@ -300,6 +316,24 @@ define_widget_catalog! {
         VirtualViews => virtual_views,
         Watermark => watermark,
         Wrap => containers,
+        AnnotatedScrollBar => annotated_scroll_bar,
+        AppBarButton => app_bar,
+        AppBarSeparator => app_bar,
+        AppBarToggleButton => app_bar,
+        BladeView => blade_view,
+        CommandBarFlyout => command_bar_flyout,
+        GridView => grid_view,
+        HeaderedContentControl => headered_content,
+        ImageCropper => image_cropper,
+        ItemsView => items_view,
+        ListBox => list_box,
+        OrbitView => orbit_view,
+        RadialGauge => radial_gauge,
+        RangeSelector => range_selector,
+        RefreshContainer => refresh_container,
+        RichEditBox => rich_edit_box,
+        SwipeControl => swipe_control,
+        TeachingTip => teaching_tip,
     ],
 }
 
@@ -497,7 +531,7 @@ pub use overlay::{
     place_anchored_popup, place_combo_popup, place_tooltip_in_window, BackdropRequest,
     OverlayEntry, OverlayKind, OverlayStack, PlacedPopup, Placement, TOOLTIP_VIEWPORT_MARGIN,
 };
-pub use pagination::{emit_pagination, PaginationDesc, PaginationState};
+pub use pagination::{emit_pagination, PaginationDesc, PaginationState, PaginationStyle};
 pub use pin_input::{emit_pin_input, PinInputDesc, PinInputState};
 pub use popconfirm::{emit_popconfirm, PopconfirmDesc};
 pub use popover::{emit_popover, PopoverDesc, PopoverOutput, PopoverWidget};
@@ -618,6 +652,27 @@ pub use toggle_split_button::{
 };
 
 pub use canonical::{ControlClass, BASELINE_COUNT, EXCLUSIVE_COUNT, TOOLKIT_COUNT};
+
+// 扩展控件（P1 / P2）：WinUI 3 官方核心控件与 Community Toolkit 选补控件。
+pub use annotated_scroll_bar::{emit_annotated_scroll_bar, AnnotatedScrollBarDesc};
+pub use app_bar::{
+    emit_app_bar_button, emit_app_bar_separator, emit_app_bar_toggle_button, AppBarButtonDesc,
+    AppBarSeparatorDesc, AppBarToggleButtonDesc,
+};
+pub use blade_view::{emit_blade_view, BladeViewDesc};
+pub use command_bar_flyout::{emit_command_bar_flyout, CommandBarFlyoutDesc};
+pub use grid_view::{emit_grid_view, GridViewDesc};
+pub use headered_content::{emit_headered_content, HeaderedContentDesc};
+pub use image_cropper::{emit_image_cropper, ImageCropperDesc};
+pub use items_view::{emit_items_view, ItemsLayout, ItemsViewDesc};
+pub use list_box::{emit_list_box, ListBoxDesc};
+pub use orbit_view::{emit_orbit_view, OrbitViewDesc};
+pub use radial_gauge::{emit_radial_gauge, RadialGaugeDesc};
+pub use range_selector::{emit_range_selector, RangeSelectorDesc};
+pub use refresh_container::{emit_refresh_container, RefreshContainerDesc};
+pub use rich_edit_box::{emit_rich_edit_box, RichEditBoxDesc};
+pub use swipe_control::{emit_swipe_control, SwipeControlDesc, SwipeSide};
+pub use teaching_tip::{emit_teaching_tip, TeachingTipDesc, TeachingTipTail};
 
 // ---------------------------------------------------------------------------
 // WinUI 3 规范名类型别名（扩展期）

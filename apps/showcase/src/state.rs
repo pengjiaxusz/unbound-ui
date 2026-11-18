@@ -886,6 +886,9 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::Overlay
         | WidgetCatalogId::Image
         | WidgetCatalogId::ShortcutBar
+        | WidgetCatalogId::CommandBarFlyout
+        | WidgetCatalogId::AppBarButton
+        | WidgetCatalogId::AppBarSeparator
         | WidgetCatalogId::ColorSwatch => {
             let count = sandbox.click_counts.entry(key).or_insert(0);
             *count = count.wrapping_add(1);
@@ -906,7 +909,10 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::LoadingOverlay
         | WidgetCatalogId::AddressBar
         | WidgetCatalogId::QueryBuilder
-        | WidgetCatalogId::SchemaForm => {
+        | WidgetCatalogId::SchemaForm
+        | WidgetCatalogId::AppBarToggleButton
+        | WidgetCatalogId::TeachingTip
+        | WidgetCatalogId::HeaderedContentControl => {
             let on = sandbox.toggles.entry(key).or_insert(false);
             *on = !*on;
             true
@@ -946,7 +952,13 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::DateRangePicker
         | WidgetCatalogId::TimePicker
         | WidgetCatalogId::GenericDataTable
-        | WidgetCatalogId::PipelineView => {
+        | WidgetCatalogId::PipelineView
+        | WidgetCatalogId::GridView
+        | WidgetCatalogId::ListBox
+        | WidgetCatalogId::SwipeControl
+        | WidgetCatalogId::ItemsView
+        | WidgetCatalogId::OrbitView
+        | WidgetCatalogId::BladeView => {
             let sel = sandbox.selected_indices.entry(key).or_insert(0);
             *sel = (*sel + 1) % 5;
             true
@@ -966,7 +978,12 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::CurveEditor
         | WidgetCatalogId::NodeGraph
         | WidgetCatalogId::Gizmo
-        | WidgetCatalogId::TaskHud => {
+        | WidgetCatalogId::TaskHud
+        | WidgetCatalogId::RefreshContainer
+        | WidgetCatalogId::AnnotatedScrollBar
+        | WidgetCatalogId::RangeSelector
+        | WidgetCatalogId::RadialGauge
+        | WidgetCatalogId::ImageCropper => {
             let val = sandbox.slider_values.entry(key).or_insert(50.0);
             *val = (*val + 10.0) % 100.0;
             true
@@ -982,6 +999,7 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::HotkeyInput
         | WidgetCatalogId::CodeBlock
         | WidgetCatalogId::CodeEditor
+        | WidgetCatalogId::RichEditBox
         | WidgetCatalogId::Skeleton => {
             let text = sandbox.text_buffers.entry(key).or_default();
             if text.len() >= 12 {

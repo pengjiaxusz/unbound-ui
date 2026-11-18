@@ -3301,6 +3301,280 @@ where
             }
             emit_task_hud(node, &desc, state, &glyphs)
         }
+        WidgetCatalogId::RichEditBox => {
+            let re_r = Rect::new(o.x, o.y, rect.size.x, rect.size.y.max(96.0));
+            let desc = crate::rich_edit_box::RichEditBoxDesc::new(re_r, "Rich text").with_marks(
+                variant_idx % 2 == 0,
+                variant_idx % 3 == 0,
+                false,
+            );
+            let mut glyphs = Vec::new();
+            for (index, mark) in ["B", "I", "U"].into_iter().enumerate() {
+                let button = desc.format_button_rect(index);
+                glyphs.extend(shape_centered(&mut shape, mark, button, 11.0));
+            }
+            let editor = desc.editor_rect();
+            glyphs.extend(shape(
+                "Formatted document body",
+                Vec2::new(editor.origin.x + 10.0, editor.origin.y + 8.0),
+                12.0,
+            ));
+            crate::rich_edit_box::emit_rich_edit_box(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::GridView => {
+            let gv_r = Rect::new(o.x, o.y, rect.size.x.min(260.0), rect.size.y.min(160.0));
+            let desc = crate::grid_view::GridViewDesc::new(gv_r, 3, 2)
+                .selected(variant_idx % 6)
+                .hovered((variant_idx + 2) % 6);
+            let mut glyphs = Vec::new();
+            for index in 0..desc.cell_count() {
+                if let Some(cell) = desc.cell_rect(index) {
+                    glyphs.extend(shape_centered(&mut shape, "Item", cell, 10.5));
+                }
+            }
+            crate::grid_view::emit_grid_view(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::ListBox => {
+            let lb_r = Rect::new(o.x, o.y, rect.size.x.min(260.0), rect.size.y.min(160.0));
+            let desc = crate::list_box::ListBoxDesc::new(
+                lb_r,
+                ["Overview", "Assets", "Shaders", "Settings"],
+            )
+            .selected(variant_idx % 4);
+            let mut glyphs = Vec::new();
+            for (index, item) in desc.items.iter().enumerate() {
+                if let Some(row) = desc.row_rect(index) {
+                    glyphs.extend(shape_centered_y(
+                        &mut shape,
+                        item,
+                        row,
+                        row.origin.x + 12.0,
+                        12.0,
+                    ));
+                }
+            }
+            crate::list_box::emit_list_box(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::CommandBarFlyout => {
+            let cb_r = Rect::new(o.x, o.y, rect.size.x.min(240.0), 44.0);
+            let desc = crate::command_bar_flyout::CommandBarFlyoutDesc::new(cb_r);
+            let mut glyphs = Vec::new();
+            for (index, mark) in ["B", "I", "U", "S"].into_iter().enumerate() {
+                glyphs.extend(shape_centered(
+                    &mut shape,
+                    mark,
+                    desc.item_rect(index),
+                    11.0,
+                ));
+            }
+            glyphs.extend(shape_centered(&mut shape, "...", desc.more_rect(), 11.0));
+            crate::command_bar_flyout::emit_command_bar_flyout(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::AppBarButton => {
+            let ab_r = Rect::new(o.x, o.y, 32.0, 32.0);
+            let desc = crate::app_bar::AppBarButtonDesc::new(ab_r, "Add");
+            let mut glyphs = shape_centered(&mut shape, "+", ab_r, 14.0);
+            crate::app_bar::emit_app_bar_button(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::AppBarToggleButton => {
+            let at_r = Rect::new(o.x, o.y, 32.0, 32.0);
+            let desc =
+                crate::app_bar::AppBarToggleButtonDesc::new(at_r, "Bold", variant_idx % 2 == 0);
+            let mut glyphs = shape_centered(&mut shape, "B", at_r, 13.0);
+            crate::app_bar::emit_app_bar_toggle_button(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::AppBarSeparator => {
+            let sep = crate::app_bar::AppBarSeparatorDesc::vertical(Rect::new(
+                o.x + 40.0,
+                o.y,
+                9.0,
+                32.0,
+            ));
+            crate::app_bar::emit_app_bar_separator(&sep)
+        }
+        WidgetCatalogId::SwipeControl => {
+            let sw_r = Rect::new(o.x, o.y, rect.size.x.min(300.0), 48.0);
+            let mut desc = crate::swipe_control::SwipeControlDesc::new(sw_r);
+            if variant_idx % 2 == 1 {
+                desc = desc.side(crate::swipe_control::SwipeSide::Left);
+            }
+            let content = desc.content_rect();
+            let mut glyphs = shape(
+                "Swipe a list row",
+                Vec2::new(content.origin.x + 12.0, content.origin.y + 16.0),
+                12.0,
+            );
+            glyphs.extend(shape_centered(&mut shape, "Delete", desc.left_rect(), 11.0));
+            crate::swipe_control::emit_swipe_control(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::RefreshContainer => {
+            let rf_r = Rect::new(o.x, o.y, rect.size.x.min(280.0), rect.size.y.min(180.0));
+            let desc = crate::refresh_container::RefreshContainerDesc::new(rf_r)
+                .pull(value_norm)
+                .refreshing(variant_idx % 3 == 0);
+            let content = desc.content_rect();
+            let mut glyphs = shape_centered_y(
+                &mut shape,
+                "Pull to refresh",
+                content,
+                content.origin.x + 12.0,
+                12.0,
+            );
+            glyphs.extend(shape(
+                "Release to update the workspace.",
+                Vec2::new(content.origin.x + 12.0, content.origin.y + 22.0),
+                11.0,
+            ));
+            crate::refresh_container::emit_refresh_container(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::TeachingTip => {
+            let tt_r = Rect::new(o.x, o.y, rect.size.x, rect.size.y.max(120.0));
+            let desc = crate::teaching_tip::TeachingTipDesc::new(
+                tt_r,
+                "Try the inspector",
+                "Pin the inspector to keep properties visible while editing.",
+            )
+            .with_actions("Pin", "Later");
+            let mut glyphs = shape_centered_y(
+                &mut shape,
+                &desc.title,
+                Rect::new(
+                    tt_r.origin.x + 16.0,
+                    tt_r.origin.y + 12.0,
+                    tt_r.width() - 32.0,
+                    20.0,
+                ),
+                tt_r.origin.x + 16.0,
+                13.0,
+            );
+            glyphs.extend(shape(
+                &desc.body,
+                Vec2::new(tt_r.origin.x + 16.0, tt_r.origin.y + 38.0),
+                11.5,
+            ));
+            glyphs.extend(shape_centered(
+                &mut shape,
+                &desc.primary_label,
+                desc.primary_rect(),
+                11.5,
+            ));
+            glyphs.extend(shape_centered(
+                &mut shape,
+                "Later",
+                desc.secondary_rect(),
+                11.5,
+            ));
+            crate::teaching_tip::emit_teaching_tip(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::AnnotatedScrollBar => {
+            let as_r = Rect::new(o.x, o.y, 28.0, rect.size.y.max(160.0));
+            let desc = crate::annotated_scroll_bar::AnnotatedScrollBarDesc::new(as_r)
+                .thumb(value_norm)
+                .preview(value_norm);
+            let mut glyphs = Vec::new();
+            for (index, label) in desc.labels.iter().enumerate() {
+                let tick = desc.tick_rect(index);
+                glyphs.extend(shape(
+                    label,
+                    Vec2::new(tick.origin.x - 46.0, tick.origin.y - 6.0),
+                    9.5,
+                ));
+            }
+            glyphs.extend(shape_centered(&mut shape, "50%", desc.preview_rect(), 10.5));
+            crate::annotated_scroll_bar::emit_annotated_scroll_bar(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::ItemsView => {
+            let iv_r = Rect::new(o.x, o.y, rect.size.x.min(280.0), rect.size.y.min(180.0));
+            let base = crate::items_view::ItemsViewDesc::new(iv_r, 6).selected(variant_idx % 6);
+            let desc = if variant_idx % 2 == 0 {
+                base.grid(3)
+            } else {
+                base
+            };
+            let mut glyphs = Vec::new();
+            for index in 0..desc.items {
+                if let Some(item) = desc.item_rect(index) {
+                    glyphs.extend(shape_centered(&mut shape, "Item", item, 10.5));
+                }
+            }
+            crate::items_view::emit_items_view(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::RangeSelector => {
+            let rs_r = Rect::new(o.x, o.y, rect.size.x.min(260.0), 36.0);
+            let desc = crate::range_selector::RangeSelectorDesc::new(rs_r, 0.0, 100.0)
+                .with_range(20.0 + value_norm * 20.0, 70.0 + value_norm * 20.0);
+            let mut glyphs = shape_centered(
+                &mut shape,
+                &format!("{:.0} - {:.0}", desc.low, desc.high),
+                Rect::new(rs_r.origin.x, rs_r.max().y, rs_r.width(), 16.0),
+                11.0,
+            );
+            crate::range_selector::emit_range_selector(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::RadialGauge => {
+            let rg_r = Rect::new(o.x, o.y, rect.size.x.min(180.0), rect.size.y.min(180.0));
+            let desc = crate::radial_gauge::RadialGaugeDesc::new(rg_r).value_norm(value_norm);
+            let mut glyphs = shape_centered(
+                &mut shape,
+                &format!("{:.0}%", value_norm * 100.0),
+                Rect::new(rg_r.center().x - 40.0, rg_r.center().y + 16.0, 80.0, 18.0),
+                12.0,
+            );
+            crate::radial_gauge::emit_radial_gauge(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::OrbitView => {
+            let ov_r = Rect::new(o.x, o.y, rect.size.x.min(220.0), rect.size.y.min(220.0));
+            let desc = crate::orbit_view::OrbitViewDesc::new(ov_r).selected(variant_idx % 6);
+            let mut glyphs = shape_centered(
+                &mut shape,
+                "Orbit",
+                Rect::new(ov_r.center().x - 44.0, ov_r.center().y - 8.0, 88.0, 18.0),
+                11.5,
+            );
+            glyphs.extend(shape_centered(&mut shape, "1", desc.node_rect(0), 10.0));
+            crate::orbit_view::emit_orbit_view(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::BladeView => {
+            let bv_r = Rect::new(o.x, o.y, rect.size.x.min(360.0), rect.size.y.min(220.0));
+            let desc = crate::blade_view::BladeViewDesc::new(bv_r).active(variant_idx % 3);
+            let mut glyphs = Vec::new();
+            for (index, title) in ["Overview", "Settings", "Logs"].into_iter().enumerate() {
+                if let Some(header) = desc.header_rect(index) {
+                    glyphs.extend(shape_centered_y(
+                        &mut shape,
+                        title,
+                        header,
+                        header.origin.x + 10.0,
+                        12.0,
+                    ));
+                }
+            }
+            crate::blade_view::emit_blade_view(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::HeaderedContentControl => {
+            let hc_r = Rect::new(o.x, o.y, rect.size.x.min(300.0), rect.size.y.min(160.0));
+            let desc = crate::headered_content::HeaderedContentDesc::new(hc_r, "Appearance");
+            let header = desc.header_rect();
+            let mut glyphs = shape_centered_y(
+                &mut shape,
+                &desc.header,
+                header,
+                header.origin.x + 12.0,
+                12.5,
+            );
+            glyphs.extend(shape(
+                "Content area",
+                Vec2::new(hc_r.origin.x + 12.0, desc.content_rect().origin.y + 12.0),
+                12.0,
+            ));
+            crate::headered_content::emit_headered_content(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::ImageCropper => {
+            let ic_r = Rect::new(o.x, o.y, rect.size.x.min(320.0), rect.size.y.max(140.0));
+            let desc = crate::image_cropper::ImageCropperDesc::new(ic_r);
+            let mut glyphs = shape_centered(&mut shape, "Crop", desc.crop_rect(), 11.0);
+            crate::image_cropper::emit_image_cropper(node, &desc, state, &mut glyphs)
+        }
     };
     if out.hit.is_none() {
         out.hit = Some(unbound_input::HitRegion::new(node, 0, 0, rect));

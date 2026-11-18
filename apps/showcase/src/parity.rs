@@ -30,9 +30,10 @@ use crate::theme;
 
 /// 已接入拼版采集与 ROI 差分的全部基准控件，与 `tools/winui-reference/Catalog.cs` 一一对应。
 ///
-/// 前 6 个是首批试点，其后 12 个为「基础输入与文本类」批次，最后 28 个为
-/// 「导航、浮层、集合与日期类」批次。控件名统一使用 WinUI 3 官方规范名。
-pub const SUPPORTED_CONTROLS: [&str; 46] = [
+/// 前 6 个是首批试点，其后 12 个为「基础输入与文本类」批次，再后 28 个为
+/// 「导航、浮层、集合与日期类」批次，最后 11 个为后续补齐的 WinUI 3 控件。
+/// 控件名统一使用 WinUI 3 官方规范名。
+pub const SUPPORTED_CONTROLS: [&str; 57] = [
     // 首批试点（6）
     "Button",
     "CheckBox",
@@ -82,16 +83,27 @@ pub const SUPPORTED_CONTROLS: [&str; 46] = [
     "Image",
     "FontIcon",
     "TitleBar",
+    // 第三批：后续补齐的 WinUI 3 控件（11）
+    "RichEditBox",
+    "GridView",
+    "ListBox",
+    "CommandBarFlyout",
+    "AppBarButton",
+    "AppBarToggleButton",
+    "AppBarSeparator",
+    "SwipeControl",
+    "RefreshContainer",
+    "AnnotatedScrollBar",
+    "ItemsView",
 ];
 
 /// 把一个 WinUI 3 规范名解析为目录标识。
 ///
-/// `TeachingTip`、`Border` / `Card` 在目录中分别由 `Toast` 与 `Containers`
-/// 承担对应形态；`TitleBar` 不在业务目录内，由独立分支绘制。
+/// `Border` / `Card` 在目录中由 `Containers` 承担对应形态；`TitleBar` 不在业务
+/// 目录内，由独立分支绘制。其余名称（含 `TeachingTip`）直接走目录规范名索引。
 #[must_use]
 pub fn catalog_id_for(control: &str) -> Option<unbound_widgets::WidgetCatalogId> {
     match control {
-        "TeachingTip" => Some(unbound_widgets::WidgetCatalogId::Toast),
         "Border" | "Card" => Some(unbound_widgets::WidgetCatalogId::Containers),
         "TitleBar" => None,
         other => unbound_widgets::WidgetCatalogId::from_winui3_name(other),
@@ -531,7 +543,8 @@ fn emit_case(
             for (index, kind) in kinds.into_iter().enumerate() {
                 let left = rect.max().x - caption_w * (count - index) as f32;
                 let button_rect = Rect::new(left, rect.origin.y, caption_w, rect.height());
-                let button = WindowCaptionButton::new(kind, rect.height()).focused(!control.disabled);
+                let button =
+                    WindowCaptionButton::new(kind, rect.height()).focused(!control.disabled);
                 push(
                     scene,
                     button.emit_laid_out(NODE, button_rect, control, &(), text_ctx),
@@ -540,8 +553,8 @@ fn emit_case(
             Vec2::new(rect.width(), chrome_size.y.max(rect.height()))
         }
         other => {
-            let id: WidgetCatalogId = catalog_id_for(other)
-                .ok_or_else(|| format!("unknown parity control: {other}"))?;
+            let id: WidgetCatalogId =
+                catalog_id_for(other).ok_or_else(|| format!("unknown parity control: {other}"))?;
             let params = CatalogParams {
                 value_norm: 0.5,
                 variant_idx: usize::from(checked),
@@ -553,9 +566,10 @@ fn emit_case(
                 toggled: checked,
                 click_count: 0,
             };
-            let output = emit_widget_with_shaper(id, NODE, control, rect, params, |text, origin, size| {
-                shape_at(text_ctx, text, origin, size)
-            });
+            let output =
+                emit_widget_with_shaper(id, NODE, control, rect, params, |text, origin, size| {
+                    shape_at(text_ctx, text, origin, size)
+                });
             push(scene, output);
             // 没有实现 `UiWidget` 的组件暂时以参考边界作为固有尺寸；一旦其描述符
             // 补齐 `intrinsic_size`，这里会自动被替换为真实测量值。
