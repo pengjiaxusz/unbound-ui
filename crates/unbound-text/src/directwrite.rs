@@ -74,8 +74,8 @@ impl DirectWriteRasterizer {
 
     /// 光栅化单个字形。
     ///
-    /// `key` 指定字体家族、字重与斜体；`phase` 为 0..3 的亚像素相位，基线的
-    /// 水平原点取 `phase * 0.25`。返回 `None` 时调用方应回退到 `swash`，包括：
+    /// `key` 指定字体家族、字重与斜体；`phase` 为 0..7 的亚像素相位，基线的
+    /// 水平原点取 `phase * 0.125`。返回 `None` 时调用方应回退到 `swash`，包括：
     /// 字体家族缺失、彩色字体、或 DirectWrite 拒绝该字形。
     pub fn rasterize(
         &mut self,
@@ -121,7 +121,7 @@ impl DirectWriteRasterizer {
                 DWRITE_MEASURING_MODE_NATURAL,
                 DWRITE_GRID_FIT_MODE_DEFAULT,
                 DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
-                f32::from(phase) * 0.25,
+                f32::from(phase) * 0.125,
                 0.0,
             )
         };

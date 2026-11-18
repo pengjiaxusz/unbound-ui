@@ -50,8 +50,9 @@ fn the_toggle_switch_header_keeps_its_three_row_stack() {
     let mut desc = SwitchDesc::labeled("ToggleSwitch", false).with_layout(SwitchLayout::Header);
     desc.rect = row(200.0);
     let size = measure(desc);
-    // 20px 标签行 + 13px 间距 + 20px 轨道：Header 排版不能被压回 32px 单行。
-    assert_eq!(size.y, 53.0, "ToggleSwitch(Header) stacks label and track");
+    // 20px 标签行 + 13px 间距 + 20px 轨道 + 10px 底部留白：Header 排版
+    // 不能被压回 32px 单行。63px 与 WinUI 默认 ToggleSwitch 控件高度一致。
+    assert_eq!(size.y, 63.0, "ToggleSwitch(Header) stacks label and track");
 }
 
 #[test]

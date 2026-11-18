@@ -19,8 +19,11 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 /// 默认轨道高度。
 pub const SLIDER_TRACK: f32 = 4.0;
 
-/// 默认滑块拇指尺寸。对齐 WinUI `SliderHorizontalThumbWidth/Height = 18`。
-pub const SLIDER_THUMB: f32 = 18.0;
+/// 默认滑块拇指尺寸。对齐 WinUI `SliderHorizontalThumbWidth/Height = 20`。
+pub const SLIDER_THUMB: f32 = 20.0;
+
+/// 拇指内圆点直径。对齐 WinUI `SliderThumbBackground` 内圈 12px。
+pub const SLIDER_THUMB_DOT: f32 = 12.0;
 
 /// 滑块的运行方向。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -509,45 +512,51 @@ pub fn emit_slider(
     } else {
         tokens.thumb
     };
-    let thumb_border = if state.disabled {
-        tokens.thumb_border_disabled
-    } else {
-        tokens.thumb_border
-    };
 
-    if let Some(start) = desc.range_start_thumb_rect() {
-        primitives.push(outlined(
-            start,
-            desc.thumb_size * 0.5,
-            thumb_fill,
-            thumb_border,
-            1.0,
-            4.0,
-            z,
-        ));
-    }
-
+    // WinUI 的滑块拇指是「20px 外盘 + 12px 强调色内圆点」：
+    // 参考截图中外盘浅色纯白、深色 #454545，内圆点大小为 12px。
+    // 旧实现把整个 18px 圆用强调色填满，既不透明也没有白色底盘。
     let thumb = desc.thumb_rect();
-    primitives.push(outlined(
+    primitives.push(surface(
         thumb,
         desc.thumb_size * 0.5,
-        thumb_fill,
-        thumb_border,
-        1.0,
-        if state.phase == PointerPhase::Pressed {
-            8.0
-        } else {
-            4.0
-        },
+        Token::SLIDER_THUMB_DISK,
         z,
     ));
+    let dot = Rect::new(
+        thumb.origin.x + (thumb.size.x - SLIDER_THUMB_DOT) * 0.5,
+        thumb.origin.y + (thumb.size.y - SLIDER_THUMB_DOT) * 0.5,
+        SLIDER_THUMB_DOT,
+        SLIDER_THUMB_DOT,
+    );
+    primitives.push(surface(dot, SLIDER_THUMB_DOT * 0.5, thumb_fill, z));
+
+    if let Some(start) = desc.range_start_thumb_rect() {
+        primitives.push(surface(
+            start,
+            desc.thumb_size * 0.5,
+            Token::SLIDER_THUMB_DISK,
+            z,
+        ));
+        let ring = Rect::new(
+            start.origin.x + (start.size.x - SLIDER_THUMB_DOT) * 0.5,
+            start.origin.y + (start.size.y - SLIDER_THUMB_DOT) * 0.5,
+            SLIDER_THUMB_DOT,
+            SLIDER_THUMB_DOT,
+        );
+        primitives.push(surface(ring, SLIDER_THUMB_DOT * 0.5, thumb_fill, z));
+    }
 
     if desc.show_value_tooltip {
         primitives.push(outlined(
             desc.tooltip_rect(),
             6.0,
             thumb_fill,
-            thumb_border,
+            if state.disabled {
+                tokens.thumb_border_disabled
+            } else {
+                tokens.thumb_border
+            },
             1.0,
             4.0,
             z,
@@ -642,11 +651,11 @@ mod tests {
     fn the_thumb_follows_the_value() {
         let mut desc = desc();
         desc.value = 0.0;
-        assert_eq!(desc.thumb_rect().origin.x, -9.0);
+        assert_eq!(desc.thumb_rect().origin.x, -10.0);
         desc.value = 100.0;
-        assert_eq!(desc.thumb_rect().origin.x, 191.0);
+        assert_eq!(desc.thumb_rect().origin.x, 190.0);
         desc.value = 50.0;
-        assert_eq!(desc.thumb_rect().origin.x, 91.0);
+        assert_eq!(desc.thumb_rect().origin.x, 90.0);
     }
 
     #[test]
