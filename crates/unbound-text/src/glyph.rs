@@ -31,7 +31,7 @@ pub enum AtlasTarget {
 
 /// 字形光栅化后端。
 ///
-/// `DirectWrite` 与 WinUI 使用同一套抗锯齿与网格拟合；`Cosmic` 是纯 Rust
+/// `DirectWrite` 提供 8 位灰度的对称抗锯齿覆盖率；`Cosmic` 是纯 Rust
 /// 回退路径，用于非 Windows 平台、彩色字形与距离场。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RasterBackend {
@@ -406,7 +406,7 @@ impl GlyphCache {
         }
         self.misses += 1;
 
-        // Windows 上优先使用 DirectWrite：覆盖率位图、网格拟合与 WinUI 同源。
+        // Windows 上优先使用 DirectWrite：覆盖率位图直接取自系统光栅器。
         // 彩色字体、距离场或字体解析失败时继续走 swash。
         #[cfg(windows)]
         if !sdf_mode && self.backend == RasterBackend::DirectWrite {
