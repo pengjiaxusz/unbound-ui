@@ -171,7 +171,7 @@ just q-run cargo run -p showcase -- --parity-run `
 ### 6.2 当前基线（必须原样交接）
 
 - 采集：**57 个控件、214 张有效落盘**；另有 **24 例**因 `controlBounds` 内无非背景像素被采集契约拒收（AppBarSeparator / CommandBarFlyout / ContentDialog / Image / ItemsView / TeachingTip 各 4 例）。
-- 差分：**pass 25 / fail 189 / invalid 0**（214 例）；六个试点控件 **26 / 28**（剩余 `CheckBox_checked_light`、`CheckBox_checked_dark`）。
+- 差分：**pass 28 / fail 186 / invalid 0**（214 例，`--no-cache` 全量）；六个试点控件 **28 / 28**。
 - 旧基线 6/238 作废：审计发现其中 8 个是空白对空白，见 ADR 0009。
 
 修复后的采集契约：槽位按 `controlBounds + 16px` 出血动态扩张；resize 后重新等待；截图后校验 controlBounds 内存在非背景像素，最多重试 3 次；参考指纹包含宿主 `.cs/.xaml` 哈希与采集配方版本；差分侧指纹包含 `unbound-text` 的 directwrite/glyph/shaping/atlas 源码哈希。
@@ -184,9 +184,10 @@ just q-run cargo run -p showcase -- --parity-run `
 - `glyph_alpha` 改为 `a = c + 0.8·c·(1-c)`（浅底深字），抵消 sRGB 覆盖率混合与线性交换链混合的差异。
 - 勾选标记按无 AA 折线绘制（`PrimFlags::NO_AA`，对应 WinUI Composition 几何）。
 
-### 6.3 剩余两例的根因（已取证）
+### 6.3 试点清零的根因（已修复）
 
-参考截图的选中复选框外圈有 1px 描边，颜色（light `142,58,167` / dark `219,158,229`）精确等于本机 `UISettings` 的 `AccentDark1` / `AccentLight2`，而填充是钉死的 Fluent 默认蓝 `#005FB8` / `#60CDFF`。原因是采集宿主 `CaptureWindow.xaml` 只覆盖了 `CheckBoxCheckBackgroundFillChecked*`，漏掉了 `CheckBoxCheckBackgroundStrokeChecked*`，描边因此随截图机器的个性化强调色漂移。该配置已补齐，但本机只有 .NET 运行时、没有 SDK，无法重建并重新采集；现有截图保留旧描边，故这两例在框架侧不可达。重新采集后（或为框架增加“系统强调色”图层）即可通过。
+- **CheckBox 选中描边**：参考截图的外圈 1px 描边颜色（light `142,58,167` / dark `219,158,229`）精确等于截图机器 `UISettings` 的 `AccentDark1` / `AccentLight2`，而填充是钉死的 Fluent 默认蓝 `#005FB8` / `#60CDFF`。原因是采集宿主 `CaptureWindow.xaml` 只覆盖了 `CheckBoxCheckBackgroundFillChecked*`，漏掉 `CheckBoxCheckBackgroundStrokeChecked*`。补齐这两项资源并重建宿主、全量重采后，`CheckBox_checked_light` / `CheckBox_checked_dark` 通过。
+- **ToggleSwitch 禁用态**：超限像素来自轨道内部填充与 1px 轨道描边。参考图中禁用轨道内部与后景完全同色（light 243 / dark 32），即 WinUI `ToggleSwitchFillOffDisabled` 不绘制底色；框架此前仍填 `CONTROL_ALT_FILL_DISABLED`，故改为 `track_disabled = Token::NONE`，只保留描边。描边令牌 `CONTROL_STRONG_STROKE_DISABLED` 对齐 `ControlStrongStrokeColorDisabled`（light #37000000 → 191、dark #28FFFFFF → 67）：交换链在线性空间混合，直接写半透明白/黑会把深色抬高到 115，因此按基准表面合成后的实色写入。修复后该例 `over` 由 2.16% 降到 0.42%（mean 0.11、p95 0.77），整个 ToggleSwitch 组 6/6 通过。
 
 ### 6.4 下一步的关键判断
 

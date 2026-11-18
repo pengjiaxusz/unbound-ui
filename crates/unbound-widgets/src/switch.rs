@@ -126,7 +126,10 @@ impl SwitchTokens {
             // WinUI `ToggleSwitchStrokeOff` = `ControlStrongStrokeColorDefault`，厚度 1px。
             track_border: Token::CONTROL_TRACK_STROKE,
             track_on: Token::PRIMARY,
-            track_disabled: Token::CONTROL_ALT_FILL_DISABLED,
+            // 禁用态轨道填充是透明的：参考截图里轨道内部与后景完全同色
+            // （light 243 / dark 32），WinUI 的 `ToggleSwitchFillOffDisabled`
+            // 不绘制底色，只保留 1px 描边。
+            track_disabled: Token::NONE,
             track_border_disabled: Token::CONTROL_STRONG_STROKE_DISABLED,
             // 关闭态旋钮用 `TextFillColorSecondary`（次级文字色）而不是纯白：
             // 浅色主题下白色旋钮会与白色轨道糊成一片。
