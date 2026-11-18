@@ -59,7 +59,7 @@ dotnet build -c Release
 | 参数 | 取值 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `--out <dir>` | 任意目录 | `captures` | 输出目录，不存在会自动创建 |
-| `--control <name>` | 见下方「已接入控件」 | `Button` | 大小写不敏感 |
+| `--control <name>` | 见下方「已接入控件」 | `Button` | 大小写不敏感；与 `--batch` 同用时只采集该控件 |
 | `--state <state>` | `normal` `disabled` `checked` `focused` | `normal` | `checked` 仅支持 CheckBox / ToggleSwitch / ToggleButton / RadioButton |
 | `--theme <theme>` | `light` `dark` | `light` | 通过 `Host.RequestedTheme` 切换 |
 | `--backdrop <kind>` | `solid` `mica` `mica_alt` `acrylic` `all` | `solid` | 确定性合成底板类型（`all` 仅限 `--batch`） |

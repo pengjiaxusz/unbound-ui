@@ -628,6 +628,11 @@ impl PrimFlags {
     pub const GRADIENT_RADIAL: Self = Self(1 << 9);
     /// 该图元为 `InnerShadow` 子元素：`shadow_blur` 为内阴影模糊半径，填充令牌为阴影颜色。
     pub const INNER_SHADOW: Self = Self(1 << 10);
+    /// 曲线描边不做抗锯齿，按像素步进绘制。
+    ///
+    /// WinUI 的复选框勾选标记由 Composition 几何绘制，参考截图中是一条硬边
+    /// 折线（覆盖率只有 0 或 1）。普通曲线保留解析抗锯齿。
+    pub const NO_AA: Self = Self(1 << 11);
 
     /// 任意渐变标记掩码。
     pub const GRADIENT_ANY: Self = Self(Self::GRADIENT_LINEAR.0 | Self::GRADIENT_RADIAL.0);

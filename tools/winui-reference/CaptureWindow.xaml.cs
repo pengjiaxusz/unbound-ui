@@ -781,6 +781,9 @@ public sealed class CaptureOptions
     /// <summary>批量模式：按状态拼版跑完所有试点组合。</summary>
     public bool Batch { get; private init; }
 
+    /// <summary>`--control` 是否由命令行显式给出；批量模式下据此只采集该控件。</summary>
+    public bool ExplicitControl { get; private init; }
+
     /// <summary>禁用指纹缓存，强制重新截图。</summary>
     public bool NoCache { get; private init; }
 
@@ -804,9 +807,10 @@ public sealed class CaptureOptions
             : new[] { Backdrop };
 
         var sheets = new List<ContactSheetBatch>();
+        IReadOnlyList<string> controls = ExplicitControl ? new[] { ControlName } : Catalog.ControlNames;
         foreach (var backdrop in backdrops)
         {
-            foreach (var control in Catalog.ControlNames)
+            foreach (var control in controls)
             {
                 foreach (var theme in new[] { "light", "dark" })
                 {
@@ -847,6 +851,7 @@ public sealed class CaptureOptions
         var batch = false;
         var noCache = false;
         var saveSheet = false;
+        var explicitControl = false;
 
         for (var i = 1; i < args.Length; i++)
         {
@@ -888,6 +893,7 @@ public sealed class CaptureOptions
                     }
 
                     controlName = value;
+                    explicitControl = true;
                     i++;
                     break;
 
@@ -1007,6 +1013,7 @@ public sealed class CaptureOptions
             Width = width,
             Height = height,
             Batch = batch,
+            ExplicitControl = explicitControl,
             NoCache = noCache,
             SaveContactSheet = saveSheet,
         };

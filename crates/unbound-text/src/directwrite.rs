@@ -239,3 +239,142 @@ impl DirectWriteRasterizer {
         unsafe { font.CreateFontFace() }.ok()
     }
 }
+
+/// 在共享的 DirectWrite 文本布局上执行一次测量。
+///
+/// DirectWrite 的文本布局按真实字距（kerning）给出每个字形簇的水平原点和
+/// 总宽度；`cosmic-text` 的前进宽度累计与之在 14px 正文上相差零点几像素，
+/// 长串标签会逐步累积。控件布局与像素对齐都需要与 WinUI 使用同一套度量。
+///
+/// 字体格式按「家族 + 字重 + 斜体 + 字号」缓存；布局本身每次重建。
+fn with_text_layout<R>(
+    family: &str,
+    weight: u16,
+    italic: bool,
+    font_size: f32,
+    text: &str,
+    f: impl FnOnce(&windows::Win32::Graphics::DirectWrite::IDWriteTextLayout) -> Option<R>,
+) -> Option<R> {
+    use std::sync::{Mutex, OnceLock};
+    use windows::core::HSTRING;
+    use windows::Win32::Graphics::DirectWrite::{IDWriteTextFormat, IDWriteTextLayout};
+
+    struct MeasureCache {
+        factory: IDWriteFactory2,
+        collection: IDWriteFontCollection,
+        formats: FxHashMap<(String, u16, bool, u32), IDWriteTextFormat>,
+    }
+
+    static CACHE: OnceLock<Mutex<Option<MeasureCache>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| {
+        let factory: Option<IDWriteFactory> =
+            unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }.ok();
+        let mut state = None;
+        if let Some(factory) = factory {
+            if let Ok(factory2) = factory.cast::<IDWriteFactory2>() {
+                let mut collection = None;
+                if unsafe { factory.GetSystemFontCollection(&mut collection, false) }.is_ok() {
+                    if let Some(collection) = collection {
+                        state = Some(MeasureCache {
+                            factory: factory2,
+                            collection,
+                            formats: FxHashMap::default(),
+                        });
+                    }
+                }
+            }
+        }
+        Mutex::new(state)
+    });
+    let mut guard = cache.lock().ok()?;
+    let cache = guard.as_mut()?;
+
+    let locale = HSTRING::from("en-us");
+    let key = (family.to_owned(), weight, italic, font_size.to_bits());
+    if !cache.formats.contains_key(&key) {
+        let style = if italic {
+            DWRITE_FONT_STYLE_ITALIC
+        } else {
+            DWRITE_FONT_STYLE_NORMAL
+        };
+        // 与光栅化器一致：`fontdb` 暴露的 `Segoe UI Variable` 在 DirectWrite
+        // 的系统集合里按光学尺寸拆成 `... Text` / `... Display`。
+        let mut candidates: Vec<&str> = Vec::with_capacity(4);
+        if family.eq_ignore_ascii_case("Segoe UI Variable") {
+            candidates.push("Segoe UI Variable Text");
+            candidates.push("Segoe UI Variable Display");
+        }
+        candidates.push(family);
+        if !family.eq_ignore_ascii_case("Segoe UI") {
+            candidates.push("Segoe UI");
+        }
+        let mut format: Option<IDWriteTextFormat> = None;
+        for candidate in candidates {
+            let name = HSTRING::from(candidate);
+            let mut index = 0u32;
+            let mut exists = BOOL(0);
+            if unsafe {
+                cache
+                    .collection
+                    .FindFamilyName(PCWSTR(name.as_ptr()), &mut index, &mut exists)
+            }
+            .is_err()
+                || !exists.as_bool()
+            {
+                continue;
+            }
+            if let Ok(created) = unsafe {
+                cache.factory.CreateTextFormat(
+                    PCWSTR(name.as_ptr()),
+                    None,
+                    DWRITE_FONT_WEIGHT(i32::from(weight)),
+                    style,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    font_size,
+                    PCWSTR(locale.as_ptr()),
+                )
+            } {
+                format = Some(created);
+                break;
+            }
+        }
+        let format = format?;
+        cache.formats.insert(key.clone(), format);
+    }
+    let format = cache.formats.get(&key)?;
+
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let layout: IDWriteTextLayout =
+        unsafe { cache.factory.CreateTextLayout(&units, format, f32::MAX, f32::MAX) }.ok()?;
+    f(&layout)
+}
+
+/// 每个字形簇的水平原点与布局总宽度。
+///
+/// `utf16_indices` 给出各字形簇在 UTF-16 文本中的起始下标（与 `text` 同一
+/// 字符串）。返回的 x 相对布局原点，单位与 `font_size` 相同。
+pub(crate) fn layout_cluster_positions(
+    family: &str,
+    weight: u16,
+    italic: bool,
+    font_size: f32,
+    text: &str,
+    utf16_indices: &[u32],
+) -> Option<(Vec<f32>, f32)> {
+    with_text_layout(family, weight, italic, font_size, text, |layout| {
+        use windows::Win32::Graphics::DirectWrite::{
+            DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_METRICS,
+        };
+        let mut positions = Vec::with_capacity(utf16_indices.len());
+        for &index in utf16_indices {
+            let mut x = 0.0f32;
+            let mut y = 0.0f32;
+            let mut hit = DWRITE_HIT_TEST_METRICS::default();
+            unsafe { layout.HitTestTextPosition(index, false, &mut x, &mut y, &mut hit) }.ok()?;
+            positions.push(x);
+        }
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        unsafe { layout.GetMetrics(&mut metrics) }.ok()?;
+        Some((positions, metrics.widthIncludingTrailingWhitespace))
+    })
+}
