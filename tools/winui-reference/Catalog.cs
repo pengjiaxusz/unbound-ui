@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.UI;
@@ -19,6 +21,12 @@ namespace WinUiReference;
 /// </summary>
 internal static class Catalog
 {
+    /// <summary>
+    /// 采集配方版本：槽位按 controlBounds 外扩出血自适应、resize 后再等待、
+    /// 截图后校验非背景像素。配方变化时必须同步提升，确保旧缓存全部失效。
+    /// </summary>
+    public const string CaptureRecipeVersion = "v3-slot-bleed-content-contract";
+
     /// <summary>拼版槽位四周预留的阴影与焦点环出血边距（DIP）。</summary>
     public const int BleedMarginDip = 16;
 
@@ -136,7 +144,7 @@ internal static class Catalog
 
         var raw = string.Join(
             "|",
-            "v2-contact-sheet-roi",
+            CaptureRecipeVersion,
             sdkVersion,
             osVersion,
             rasterizationScale.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
@@ -144,10 +152,70 @@ internal static class Catalog
             state.ToLowerInvariant(),
             theme.ToLowerInvariant(),
             backdrop.ToLowerInvariant(),
-            specSignature);
+            specSignature,
+            SourceHashValue.Value);
 
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
         return Convert.ToHexString(hash).ToLowerInvariant()[..16];
+    }
+
+    private static readonly Lazy<string> SourceHashValue = new(ComputeSourceHash);
+
+    /// <summary>
+    /// 对采集宿主目录下的全部 .cs / .xaml 源码计算 SHA-256 前缀。
+    /// 宿主二进制或采集逻辑变化时，缓存指纹随之失效，避免继续复用旧二进制产出的参考图。
+    /// </summary>
+    private static string ComputeSourceHash()
+    {
+        try
+        {
+            var directory = FindSourceDirectory(AppContext.BaseDirectory);
+            if (directory is null)
+            {
+                return "unknown";
+            }
+
+            var files = Directory
+                .EnumerateFiles(directory)
+                .Where(path =>
+                    path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
+                    path.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => Path.GetFileName(path), StringComparer.Ordinal)
+                .ToArray();
+
+            using var buffer = new MemoryStream();
+            foreach (var file in files)
+            {
+                var name = Encoding.UTF8.GetBytes(Path.GetFileName(file));
+                buffer.Write(name, 0, name.Length);
+                var bytes = File.ReadAllBytes(file);
+                buffer.Write(bytes, 0, bytes.Length);
+            }
+
+            var hash = SHA256.HashData(buffer.ToArray());
+            return Convert.ToHexString(hash).ToLowerInvariant()[..16];
+        }
+        catch
+        {
+            return "unknown";
+        }
+    }
+
+    /// <summary>从输出目录向上查找包含 CaptureWindow.xaml.cs 的采集宿主源码目录。</summary>
+    private static string? FindSourceDirectory(string start)
+    {
+        var directory = new DirectoryInfo(start);
+        for (var depth = 0; depth < 10 && directory is not null; depth++)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "CaptureWindow.xaml.cs")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
     }
 
     /// <summary>

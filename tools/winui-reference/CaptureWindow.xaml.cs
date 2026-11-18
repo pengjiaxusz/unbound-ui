@@ -31,11 +31,16 @@ public sealed partial class CaptureWindow : Window
     private int _sheetIndex;
     private readonly List<(CaptureCase Case, Border SlotHost, FrameworkElement Control)> _activeSlots = new();
     private DispatcherQueueTimer? _timeoutTimer;
+    private DispatcherQueueTimer? _resizeWatchdog;
     private int _renderingTicks;
     private int _captureStarted;
+    private bool _settleStarted;
     private bool _loaded;
     private int _skippedCount;
     private int _capturedCount;
+    private int _failedCount;
+    private double _targetWidthDip;
+    private double _targetHeightDip;
 
     public CaptureWindow(CaptureOptions options)
     {
@@ -90,12 +95,13 @@ public sealed partial class CaptureWindow : Window
                 return;
             }
 
-            ResizeClientAreaForSheet(sheet.Cases.Count);
+            ResizeClientAreaForSheet();
             StartCaptureLoop();
             return;
         }
 
-        Console.Out.WriteLine($"采集完成：新增 {_capturedCount} 个用例，缓存命中跳过 {_skippedCount} 个用例。");
+        Console.Out.WriteLine(
+            $"采集完成：新增 {_capturedCount} 个用例，失败 {_failedCount} 个用例，缓存命中跳过 {_skippedCount} 个用例。");
         Application.Current.Exit();
     }
 
@@ -154,14 +160,11 @@ public sealed partial class CaptureWindow : Window
         Host.RowDefinitions.Clear();
         _activeSlots.Clear();
 
-        for (var idx = 0; idx < sheet.Cases.Count; idx++)
+        // 先把控件挂进槽位，再在可视树内测量期望尺寸，最后扩张槽位：
+        // 槽位至少覆盖 controlBounds 外扩出血，保证 TreeView（高 140）、
+        // CalendarView（高 260）、TitleBar（宽 420）不被裁碎。
+        foreach (var captureCase in sheet.Cases)
         {
-            var captureCase = sheet.Cases[idx];
-            Host.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(Catalog.SlotWidthDip, GridUnitType.Pixel),
-            });
-
             if (!Catalog.TryCreate(captureCase.ControlName, out var control))
             {
                 Fatal.Report($"未知控件：{captureCase.ControlName}{Environment.NewLine}可用控件：{string.Join(", ", Catalog.ControlNames)}");
@@ -174,26 +177,96 @@ public sealed partial class CaptureWindow : Window
                 return false;
             }
 
+            control.RequestedTheme = Host.RequestedTheme;
             var slotHost = new Border
             {
                 Width = Catalog.SlotWidthDip,
                 Height = Catalog.SlotHeightDip,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
                 Background = Catalog.CreateBackdropBrush(sheet.Theme, sheet.Backdrop),
                 Child = control,
             };
-            Grid.SetColumn(slotHost, idx);
+            var column = new ColumnDefinition
+            {
+                Width = new GridLength(Catalog.SlotWidthDip, GridUnitType.Pixel),
+            };
+            Host.ColumnDefinitions.Add(column);
+            Grid.SetColumn(slotHost, Host.Children.Count);
             Host.Children.Add(slotHost);
             _activeSlots.Add((captureCase, slotHost, control));
         }
 
+        for (var idx = 0; idx < _activeSlots.Count; idx++)
+        {
+            var (_, slotHost, control) = _activeSlots[idx];
+            // 只有在可视树内测量才能安全初始化 SwipeControl 等模板。
+            control.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            var desired = control.DesiredSize;
+            var widthDip = Math.Max(
+                Catalog.SlotWidthDip,
+                Math.Ceiling(desired.Width) + 2.0 * Catalog.BleedMarginDip);
+            var heightDip = Math.Max(
+                Catalog.SlotHeightDip,
+                Math.Ceiling(desired.Height) + 2.0 * Catalog.BleedMarginDip);
+            Host.ColumnDefinitions[idx].Width = new GridLength(widthDip, GridUnitType.Pixel);
+            slotHost.Width = widthDip;
+            slotHost.Height = heightDip;
+        }
+
+        Host.UpdateLayout();
         _renderingTicks = 0;
-        _settle.Restart();
         _captureStarted = 0;
+        _settleStarted = false;
         return true;
     }
 
+    /// <summary>
+    /// 等待窗口 resize 生效后才开始 350ms 动画收敛计时，避免在旧尺寸上等待。
+    /// </summary>
     private void StartCaptureLoop()
     {
+        if (SizeMatchesTarget())
+        {
+            BeginSettle();
+            return;
+        }
+
+        Host.SizeChanged += OnHostSizeChangedForCapture;
+        // 兜底：窗口管理器未回报尺寸变化时，3 秒后仍按当前布局继续采集。
+        _resizeWatchdog = DispatcherQueue.CreateTimer();
+        _resizeWatchdog.Interval = TimeSpan.FromSeconds(3);
+        _resizeWatchdog.IsRepeating = false;
+        _resizeWatchdog.Tick += (_, _) => BeginSettle();
+        _resizeWatchdog.Start();
+    }
+
+    private void OnHostSizeChangedForCapture(object sender, SizeChangedEventArgs e)
+    {
+        if (SizeMatchesTarget())
+        {
+            BeginSettle();
+        }
+    }
+
+    private bool SizeMatchesTarget() =>
+        Math.Abs(Host.ActualWidth - _targetWidthDip) <= 1.5 &&
+        Math.Abs(Host.ActualHeight - _targetHeightDip) <= 1.5;
+
+    private void BeginSettle()
+    {
+        if (_settleStarted)
+        {
+            return;
+        }
+
+        _settleStarted = true;
+        Host.SizeChanged -= OnHostSizeChangedForCapture;
+        _resizeWatchdog?.Stop();
+        _resizeWatchdog = null;
+
+        _settle.Restart();
+        _renderingTicks = 0;
         CompositionTarget.Rendering += OnCompositionRendering;
 
         // 兜底：远程桌面/最小化等场景可能收不到渲染回调，超时后仍然尝试截图。
@@ -246,25 +319,66 @@ public sealed partial class CaptureWindow : Window
 
     private async Task CaptureSheetAsync()
     {
+        const int maxAttempts = 3;
+
         try
         {
             var outputDirectory = Path.GetFullPath(_options.OutputDirectory);
             Directory.CreateDirectory(outputDirectory);
 
-            // 单次 RenderTargetBitmap 渲染整张状态拼版
-            var bitmap = new RenderTargetBitmap();
-            await bitmap.RenderAsync(Host);
+            byte[]? sheetPixels = null;
+            var sheetWidth = 0;
+            var sheetHeight = 0;
+            var scale = 1.0;
+            List<SlotPixelRegion>? regions = null;
+            bool[]? valid = null;
 
-            var pixelBuffer = await bitmap.GetPixelsAsync();
-            var sheetPixels = new byte[checked((int)pixelBuffer.Length)];
-            using (var pixelReader = DataReader.FromBuffer(pixelBuffer))
+            // 截图后必须在 controlBounds 内检测到非背景像素；失败重试最多 3 次，
+            // 仍失败则整例失败并跳过落盘，避免把空白图写入参考集。
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                pixelReader.ReadBytes(sheetPixels);
+                var bitmap = new RenderTargetBitmap();
+                await bitmap.RenderAsync(Host);
+
+                var pixelBuffer = await bitmap.GetPixelsAsync();
+                var pixels = new byte[checked((int)pixelBuffer.Length)];
+                using (var pixelReader = DataReader.FromBuffer(pixelBuffer))
+                {
+                    pixelReader.ReadBytes(pixels);
+                }
+
+                sheetPixels = pixels;
+                sheetWidth = bitmap.PixelWidth;
+                sheetHeight = bitmap.PixelHeight;
+                scale = Host.XamlRoot?.RasterizationScale ?? 1.0;
+
+                regions = BuildSlotRegions(scale, sheetWidth, sheetHeight);
+                valid = new bool[regions.Count];
+                var allValid = true;
+                for (var index = 0; index < regions.Count; index++)
+                {
+                    valid[index] = HasNonBackgroundPixels(sheetPixels, sheetWidth, sheetHeight, regions[index]);
+                    if (!valid[index])
+                    {
+                        allValid = false;
+                    }
+                }
+
+                if (allValid)
+                {
+                    break;
+                }
+
+                if (attempt < maxAttempts)
+                {
+                    await Task.Delay(150);
+                }
             }
 
-            var sheetWidth = bitmap.PixelWidth;
-            var sheetHeight = bitmap.PixelHeight;
-            var scale = Host.XamlRoot?.RasterizationScale ?? 1.0;
+            if (sheetPixels is null || regions is null || valid is null)
+            {
+                throw new InvalidOperationException("RenderTargetBitmap returned no pixels");
+            }
 
             // 可选保留拼版总览图供人工速览
             if (_options.SaveContactSheet)
@@ -274,57 +388,44 @@ public sealed partial class CaptureWindow : Window
                 await WriteBgraPngAsync(sheetPath, sheetWidth, sheetHeight, sheetPixels);
             }
 
-            // 按每个槽位中的控件边界 + 16 DIP 出血边距切出紧凑单图与同名 JSON
-            foreach (var (captureCase, slotHost, control) in _activeSlots)
+            for (var index = 0; index < _activeSlots.Count; index++)
             {
-                var boundsInHost = control
-                    .TransformToVisual(Host)
-                    .TransformBounds(new Windows.Foundation.Rect(0, 0, control.ActualWidth, control.ActualHeight));
-
-                var bleedPx = (int)Math.Ceiling(Catalog.BleedMarginDip * scale);
-                var ctrlLeftPx = (int)Math.Floor(boundsInHost.X * scale);
-                var ctrlTopPx = (int)Math.Floor(boundsInHost.Y * scale);
-                var ctrlRightPx = (int)Math.Ceiling((boundsInHost.X + boundsInHost.Width) * scale);
-                var ctrlBottomPx = (int)Math.Ceiling((boundsInHost.Y + boundsInHost.Height) * scale);
-
-                var slotBoundsInHost = slotHost
-                    .TransformToVisual(Host)
-                    .TransformBounds(new Windows.Foundation.Rect(0, 0, slotHost.ActualWidth, slotHost.ActualHeight));
-                var slotMinX = Math.Max(0, (int)Math.Floor(slotBoundsInHost.X * scale));
-                var slotMaxX = Math.Min(sheetWidth, (int)Math.Ceiling((slotBoundsInHost.X + slotBoundsInHost.Width) * scale));
-
-                // 紧凑裁剪框：限制在当前槽位内，防止相邻状态槽位互相串入视野
-                var cropX = Math.Clamp(ctrlLeftPx - bleedPx, slotMinX, Math.Max(slotMinX, sheetWidth - 1));
-                var cropY = Math.Clamp(ctrlTopPx - bleedPx, 0, Math.Max(0, sheetHeight - 1));
-                var cropRight = Math.Clamp(ctrlRightPx + bleedPx, cropX + 1, Math.Max(cropX + 1, slotMaxX));
-                var cropBottom = Math.Clamp(ctrlBottomPx + bleedPx, cropY + 1, Math.Max(cropY + 1, sheetHeight));
-                var cropWidth = cropRight - cropX;
-                var cropHeight = cropBottom - cropY;
-
-                var croppedBytes = CropBgraRegion(sheetPixels, sheetWidth, sheetHeight, cropX, cropY, cropWidth, cropHeight);
-
+                var (captureCase, _, control) = _activeSlots[index];
                 var baseName = captureCase.FileBaseName();
-                var pngPath = Path.Combine(outputDirectory, $"{baseName}.png");
-                await WriteBgraPngAsync(pngPath, cropWidth, cropHeight, croppedBytes);
 
-                // 控件在裁剪后紧凑画布内的相对 DIP 坐标
-                var localBoundsDip = new Windows.Foundation.Rect(
-                    boundsInHost.X - (cropX / scale),
-                    boundsInHost.Y - (cropY / scale),
-                    boundsInHost.Width,
-                    boundsInHost.Height);
+                if (!valid[index])
+                {
+                    _failedCount++;
+                    Environment.ExitCode = 1;
+                    Console.Error.WriteLine(
+                        $"[fail] {baseName}: no non-background pixels within controlBounds after {maxAttempts} attempts; skipped");
+                    continue;
+                }
+
+                var region = regions[index];
+                var croppedBytes = CropBgraRegion(
+                    sheetPixels,
+                    sheetWidth,
+                    sheetHeight,
+                    region.CropX,
+                    region.CropY,
+                    region.CropWidth,
+                    region.CropHeight);
+
+                var pngPath = Path.Combine(outputDirectory, $"{baseName}.png");
+                await WriteBgraPngAsync(pngPath, region.CropWidth, region.CropHeight, croppedBytes);
 
                 await WriteMetaAsync(
                     outputDirectory,
                     baseName,
                     captureCase,
-                    cropWidth,
-                    cropHeight,
-                    localBoundsDip,
+                    region.CropWidth,
+                    region.CropHeight,
+                    region.LocalBoundsDip,
                     control);
 
                 _capturedCount++;
-                Console.Out.WriteLine($"已写出 {pngPath} ({cropWidth}x{cropHeight})");
+                Console.Out.WriteLine($"已写出 {pngPath} ({region.CropWidth}x{region.CropHeight})");
             }
         }
         catch (Exception ex)
@@ -336,6 +437,119 @@ public sealed partial class CaptureWindow : Window
         }
 
         AdvanceToNextUncachedOrStart(initial: false);
+    }
+
+    /// <summary>单个槽位在拼版像素坐标系中的裁剪框、控件区域与背景采样点。</summary>
+    private readonly record struct SlotPixelRegion(
+        int CropX,
+        int CropY,
+        int CropWidth,
+        int CropHeight,
+        int ControlLeft,
+        int ControlTop,
+        int ControlRight,
+        int ControlBottom,
+        int BackgroundX,
+        int BackgroundY,
+        Windows.Foundation.Rect LocalBoundsDip);
+
+    /// <summary>按每个槽位中的控件边界 + 16 DIP 出血边距计算紧凑裁剪框。</summary>
+    private List<SlotPixelRegion> BuildSlotRegions(double scale, int sheetWidth, int sheetHeight)
+    {
+        var regions = new List<SlotPixelRegion>(_activeSlots.Count);
+        var bleedPx = (int)Math.Ceiling(Catalog.BleedMarginDip * scale);
+
+        foreach (var (_, slotHost, control) in _activeSlots)
+        {
+            var boundsInHost = control
+                .TransformToVisual(Host)
+                .TransformBounds(new Windows.Foundation.Rect(0, 0, control.ActualWidth, control.ActualHeight));
+
+            var ctrlLeftPx = (int)Math.Floor(boundsInHost.X * scale);
+            var ctrlTopPx = (int)Math.Floor(boundsInHost.Y * scale);
+            var ctrlRightPx = (int)Math.Ceiling((boundsInHost.X + boundsInHost.Width) * scale);
+            var ctrlBottomPx = (int)Math.Ceiling((boundsInHost.Y + boundsInHost.Height) * scale);
+
+            var slotBoundsInHost = slotHost
+                .TransformToVisual(Host)
+                .TransformBounds(new Windows.Foundation.Rect(0, 0, slotHost.ActualWidth, slotHost.ActualHeight));
+            var slotMinX = Math.Max(0, (int)Math.Floor(slotBoundsInHost.X * scale));
+            var slotMinY = Math.Max(0, (int)Math.Floor(slotBoundsInHost.Y * scale));
+            var slotMaxX = Math.Min(sheetWidth, (int)Math.Ceiling((slotBoundsInHost.X + slotBoundsInHost.Width) * scale));
+            var slotMaxY = Math.Min(sheetHeight, (int)Math.Ceiling((slotBoundsInHost.Y + slotBoundsInHost.Height) * scale));
+
+            // 紧凑裁剪框：限制在当前槽位内，防止相邻状态槽位互相串入视野。
+            var cropX = Math.Clamp(ctrlLeftPx - bleedPx, slotMinX, Math.Max(slotMinX, sheetWidth - 1));
+            var cropY = Math.Clamp(ctrlTopPx - bleedPx, slotMinY, Math.Max(slotMinY, sheetHeight - 1));
+            var cropRight = Math.Clamp(ctrlRightPx + bleedPx, cropX + 1, Math.Max(cropX + 1, slotMaxX));
+            var cropBottom = Math.Clamp(ctrlBottomPx + bleedPx, cropY + 1, Math.Max(cropY + 1, slotMaxY));
+            var cropWidth = cropRight - cropX;
+            var cropHeight = cropBottom - cropY;
+
+            var localBoundsDip = new Windows.Foundation.Rect(
+                boundsInHost.X - (cropX / scale),
+                boundsInHost.Y - (cropY / scale),
+                boundsInHost.Width,
+                boundsInHost.Height);
+
+            regions.Add(new SlotPixelRegion(
+                cropX,
+                cropY,
+                cropWidth,
+                cropHeight,
+                ctrlLeftPx,
+                ctrlTopPx,
+                ctrlRightPx,
+                ctrlBottomPx,
+                Math.Clamp(slotMinX, 0, sheetWidth - 1),
+                Math.Clamp(slotMinY, 0, sheetHeight - 1),
+                localBoundsDip));
+        }
+
+        return regions;
+    }
+
+    /// <summary>
+    /// 在 controlBounds 像素范围内断言至少存在一个与槽位背景不同的像素。
+    /// 控件边界越出图像时直接判失败，避免把被裁碎的控件当成有效参考。
+    /// </summary>
+    private static bool HasNonBackgroundPixels(
+        byte[] pixels,
+        int width,
+        int height,
+        SlotPixelRegion region)
+    {
+        if (region.ControlLeft < 0 ||
+            region.ControlTop < 0 ||
+            region.ControlRight > width ||
+            region.ControlBottom > height ||
+            region.ControlRight <= region.ControlLeft ||
+            region.ControlBottom <= region.ControlTop)
+        {
+            return false;
+        }
+
+        var backgroundOffset = (region.BackgroundY * width + region.BackgroundX) * 4;
+        var backgroundBlue = pixels[backgroundOffset];
+        var backgroundGreen = pixels[backgroundOffset + 1];
+        var backgroundRed = pixels[backgroundOffset + 2];
+
+        for (var y = region.ControlTop; y < region.ControlBottom; y++)
+        {
+            var rowOffset = y * width;
+            for (var x = region.ControlLeft; x < region.ControlRight; x++)
+            {
+                var offset = (rowOffset + x) * 4;
+                if (Math.Abs(pixels[offset] - backgroundBlue) > 2 ||
+                    Math.Abs(pixels[offset + 1] - backgroundGreen) > 2 ||
+                    Math.Abs(pixels[offset + 2] - backgroundRed) > 2)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static byte[] CropBgraRegion(
@@ -377,21 +591,37 @@ public sealed partial class CaptureWindow : Window
         await File.WriteAllBytesAsync(pngPath, pngBytes);
     }
 
-    private void ResizeClientAreaForSheet(int slotCount)
+    private void ResizeClientAreaForSheet()
     {
         try
         {
             var scale = Host.XamlRoot?.RasterizationScale ?? 1.0;
-            var targetWidth = _options.Batch
-                ? Math.Clamp((int)Math.Ceiling(Catalog.SlotWidthDip * Math.Max(1, slotCount) * scale), 260, 8192)
-                : _options.Width;
-            var targetHeight = _options.Batch
-                ? Math.Clamp((int)Math.Ceiling(Catalog.SlotHeightDip * scale), 96, 8192)
-                : _options.Height;
+            if (!_options.Batch)
+            {
+                _targetWidthDip = _options.Width;
+                _targetHeightDip = _options.Height;
+                AppWindow.ResizeClient(new SizeInt32(_options.Width, _options.Height));
+                return;
+            }
+
+            var widthDip = 0.0;
+            var heightDip = 0.0;
+            foreach (var (_, slotHost, _) in _activeSlots)
+            {
+                widthDip += slotHost.Width;
+                heightDip = Math.Max(heightDip, slotHost.Height);
+            }
+
+            _targetWidthDip = Math.Max(260.0, widthDip);
+            _targetHeightDip = Math.Max(96.0, heightDip);
+            var targetWidth = Math.Clamp((int)Math.Ceiling(_targetWidthDip * scale), 260, 8192);
+            var targetHeight = Math.Clamp((int)Math.Ceiling(_targetHeightDip * scale), 96, 8192);
             AppWindow.ResizeClient(new SizeInt32(targetWidth, targetHeight));
         }
         catch (Exception ex)
         {
+            _targetWidthDip = Math.Max(1.0, Host.ActualWidth);
+            _targetHeightDip = Math.Max(1.0, Host.ActualHeight);
             Fatal.Report($"调整窗口大小失败：{ex.Message}");
         }
     }

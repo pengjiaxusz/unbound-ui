@@ -170,20 +170,13 @@ just q-run cargo run -p showcase -- --parity-run `
 
 ### 6.2 当前基线（必须原样交接）
 
-- 采集：**57 个控件、238 张**。
-- 差分：**6/238 通过**。
-- 六个试点 `normal-light`：
+- 采集：**57 个控件、214 张有效落盘**；另有 **24 例**因 `controlBounds` 内无非背景像素被采集契约拒收（AppBarSeparator / CommandBarFlyout / ContentDialog / Image / ItemsView / TeachingTip 各 4 例）。
+- 差分：**pass 2 / fail 212 / invalid 0**（214 例）。两个通过用例为 `Slider_disabled_light`、`TextBox_disabled_light`。
+- 旧基线 6/238 作废：审计发现其中 8 个是空白对空白，见 ADR 0009。
 
-| 控件 | meanDe | p95De | ΔE>5 占比 | 主要差异 |
-| --- | --- | --- | --- | --- |
-| Button | 1.96 | 7.27 | 7.3% | 字形边缘 |
-| CheckBox | 3.15 | 20.53 | 8.3% | 勾形 + 字形 |
-| ToggleSwitch | 0.65 | 1.11 | 3.3% | 标签字形 |
-| Slider | 1.02 | 1.43 | 3.0% | 拇指外环 |
-| ComboBox | 1.64 | 7.48 | 5.9% | Chevron + 字形 |
-| TextBox | 1.82 | 1.72 | 4.7% | 字形/描边 |
+修复后的采集契约：槽位按 `controlBounds + 16px` 出血动态扩张；resize 后重新等待；截图后校验 controlBounds 内存在非背景像素，最多重试 3 次；参考指纹包含宿主 `.cs/.xaml` 哈希与采集配方版本；差分侧指纹包含 `unbound-text` 的 directwrite/glyph/shaping/atlas 源码哈希。
 
-已修正：`CONTROL_FILL` 改为 WinUI 的半透明值后，TextBox mean 2.32→1.82、ComboBox 2.12→1.64；参考宿主已可编译并采集。
+已修正：`CONTROL_FILL` 改为 WinUI 的半透明值；DirectWrite 家族名增加 `Segoe UI Variable Text/Display` 别名。ClearType 3x1 纹理在当前渲染模式下返回空，已回退 1x1 覆盖率。
 
 ### 6.3 下一步的关键判断
 

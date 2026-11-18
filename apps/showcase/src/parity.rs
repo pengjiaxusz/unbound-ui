@@ -390,7 +390,8 @@ pub fn compute_source_fingerprint(
         }
     }
 
-    feed(&mut hash, b"v2-unbound-parity-fingerprint|");
+    // 缓存版本号：字形缓存修复与三态有效性门禁落地后必须让旧缓存整体失效。
+    feed(&mut hash, b"v3-unbound-parity-fingerprint|");
     feed(&mut hash, case.control.as_bytes());
     feed(&mut hash, b"|");
     feed(&mut hash, case.state.as_bytes());
@@ -419,6 +420,11 @@ pub fn compute_source_fingerprint(
         widget_file.as_str(),
         "crates/unbound-widgets/src/primitive.rs",
         "crates/unbound-theme/src/win11.rs",
+        // 字形位图由 DirectWrite/塑形层决定，改动后必须让差分缓存失效。
+        "crates/unbound-text/src/directwrite.rs",
+        "crates/unbound-text/src/glyph.rs",
+        "crates/unbound-text/src/shaping.rs",
+        "crates/unbound-text/src/atlas.rs",
         "apps/showcase/src/parity.rs",
     ] {
         if !path.is_empty() {

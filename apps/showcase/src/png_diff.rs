@@ -29,6 +29,31 @@ pub const OVER_LIMIT_RATIO_MAX: f64 = 0.02;
 pub const P99_LIMIT: f64 = SIGNIFICANT_DE_THRESHOLD;
 /// 有效对比区在联合包围盒四周额外扩展的出血像素数。
 pub const ROI_MARGIN_PX: i64 = 2;
+/// 有效用例要求的最小内容像素占比（0.1%），低于该值视为采集/渲染无效。
+pub const MIN_CONTENT_COVERAGE: f64 = 0.001;
+
+/// 单个用例的三态判定结果。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaseStatus {
+    /// 四重门禁全部通过且内容有效。
+    Pass,
+    /// 内容有效但至少一门禁未通过。
+    Fail,
+    /// 内容或采集本身无效，不参与通过率统计。
+    Invalid,
+}
+
+impl CaseStatus {
+    /// 报告与终端展示用的短名称。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Invalid => "invalid",
+        }
+    }
+}
 
 /// 单个用例的对比结果。
 pub struct CaseMetrics {
@@ -66,9 +91,34 @@ pub struct CaseMetrics {
     pub explicit_width: bool,
     /// 本次运行是否命中了本框架源码指纹缓存。
     pub cache_hit: bool,
+    /// 参考图非背景像素占比。
+    pub reference_content_coverage: f64,
+    /// 本框架图非背景像素占比。
+    pub ours_content_coverage: f64,
+    /// 用例无效原因；`Some` 时判定为 [`CaseStatus::Invalid`]。
+    pub invalid_reason: Option<String>,
 }
 
 impl CaseMetrics {
+    /// 有效用例的内容覆盖率取两侧较小值（任一侧过低即无效）。
+    #[must_use]
+    pub fn content_coverage(&self) -> f64 {
+        self.reference_content_coverage
+            .min(self.ours_content_coverage)
+    }
+
+    /// 三态判定：无效优先于四门禁。
+    #[must_use]
+    pub fn status(&self) -> CaseStatus {
+        if self.invalid_reason.is_some() {
+            CaseStatus::Invalid
+        } else if self.passes() {
+            CaseStatus::Pass
+        } else {
+            CaseStatus::Fail
+        }
+    }
+
     /// 门禁 1：内容包围盒是否逐边相等（允许 ±1px 字体亚像素抗锯齿溢出）。
     #[must_use]
     pub fn bbox_matches(&self) -> bool {
@@ -109,10 +159,31 @@ pub struct BatchSummary {
 }
 
 impl BatchSummary {
-    /// 通过数。
+    /// 通过数（仅统计内容有效且四门禁全过的用例）。
     #[must_use]
     pub fn passed(&self) -> usize {
-        self.cases.iter().filter(|case| case.passes()).count()
+        self.cases
+            .iter()
+            .filter(|case| case.status() == CaseStatus::Pass)
+            .count()
+    }
+
+    /// 失败数（内容有效但门禁未过）。
+    #[must_use]
+    pub fn failed(&self) -> usize {
+        self.cases
+            .iter()
+            .filter(|case| case.status() == CaseStatus::Fail)
+            .count()
+    }
+
+    /// 无效数（空内容、覆盖率过低或参考边界越界）。
+    #[must_use]
+    pub fn invalid(&self) -> usize {
+        self.cases
+            .iter()
+            .filter(|case| case.status() == CaseStatus::Invalid)
+            .count()
     }
 }
 
@@ -227,14 +298,23 @@ pub fn run_batch_with_options(
             ));
         }
 
-        let reference_bbox = content_bbox(&reference_image);
-        let ours_bbox = content_bbox(&ours_image);
+        let reference_stats = content_stats(&reference_image);
+        let ours_stats = content_stats(&ours_image);
+        let reference_bbox = reference_stats.bbox.unwrap_or([0, 0, 0, 0]);
+        let ours_bbox = ours_stats.bbox.unwrap_or([0, 0, 0, 0]);
         let control_px_bbox = [
             (bounds[0] * scale).floor() as i64,
             (bounds[1] * scale).floor() as i64,
             ((bounds[0] + bounds[2]) * scale).ceil() as i64,
             ((bounds[1] + bounds[3]) * scale).ceil() as i64,
         ];
+        let invalid_reason = invalid_reason(
+            &reference_stats,
+            &ours_stats,
+            control_px_bbox,
+            reference_image.width,
+            reference_image.height,
+        );
         let roi_bbox = compute_roi_bbox(
             reference_bbox,
             ours_bbox,
@@ -269,6 +349,9 @@ pub fn run_batch_with_options(
             reference_size: [bounds[2], bounds[3]],
             explicit_width,
             cache_hit: outcome.cache_hit,
+            reference_content_coverage: reference_stats.coverage,
+            ours_content_coverage: ours_stats.coverage,
+            invalid_reason,
         });
     }
 
@@ -369,13 +452,20 @@ fn compare_roi(reference: &Image, candidate: &Image, roi: [i64; 4]) -> PixelMetr
     }
 }
 
-/// 内容包围盒：与左上角背景色差异超过阈值的最外像素。
-fn content_bbox(image: &Image) -> [i64; 4] {
+/// 单张图的内容统计：非背景像素包围盒（空图为 `None`）与内容像素占比。
+struct ContentStats {
+    bbox: Option<[i64; 4]>,
+    coverage: f64,
+}
+
+/// 统计与左上角背景色差异超过阈值的像素：包围盒与内容覆盖率。
+fn content_stats(image: &Image) -> ContentStats {
     let background = image.rgb(0, 0);
     let mut min_x = i64::MAX;
     let mut min_y = i64::MAX;
     let mut max_x = i64::MIN;
     let mut max_y = i64::MIN;
+    let mut content_pixels = 0_u64;
     for y in 0..image.height {
         for x in 0..image.width {
             let pixel = image.rgb(x, y);
@@ -384,6 +474,7 @@ fn content_bbox(image: &Image) -> [i64; 4] {
                 .max()
                 .unwrap_or(0);
             if diff > 2 {
+                content_pixels += 1;
                 min_x = min_x.min(i64::from(x));
                 min_y = min_y.min(i64::from(y));
                 max_x = max_x.max(i64::from(x));
@@ -391,11 +482,48 @@ fn content_bbox(image: &Image) -> [i64; 4] {
             }
         }
     }
-    if min_x == i64::MAX {
-        [0, 0, 0, 0]
+    let total = u64::from(image.width) * u64::from(image.height);
+    let coverage = if total == 0 {
+        0.0
     } else {
-        [min_x, min_y, max_x, max_y]
+        content_pixels as f64 / total as f64
+    };
+    ContentStats {
+        bbox: (min_x != i64::MAX).then_some([min_x, min_y, max_x, max_y]),
+        coverage,
     }
+}
+
+/// 汇总任一无效条件：空内容、覆盖率过低或参考 `controlBounds` 越界。
+fn invalid_reason(
+    reference: &ContentStats,
+    ours: &ContentStats,
+    control_px_bbox: [i64; 4],
+    width: u32,
+    height: u32,
+) -> Option<String> {
+    let mut reasons = Vec::new();
+    for (label, stats) in [("reference", reference), ("ours", ours)] {
+        if stats.bbox.is_none() {
+            reasons.push(format!("{label} content bbox is empty"));
+        } else if stats.coverage < MIN_CONTENT_COVERAGE {
+            reasons.push(format!(
+                "{label} content coverage {:.6} below {MIN_CONTENT_COVERAGE:.4}",
+                stats.coverage
+            ));
+        }
+    }
+    if control_px_bbox[0] < 0
+        || control_px_bbox[1] < 0
+        || control_px_bbox[2] > i64::from(width)
+        || control_px_bbox[3] > i64::from(height)
+    {
+        reasons.push(format!(
+            "reference controlBounds {:?} exceed image {}x{}",
+            control_px_bbox, width, height
+        ));
+    }
+    (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
 /// 写入 ΔE 热力图：黑→蓝→绿→黄→红，`ΔE = 30` 封顶，并用暗青色 1px 框标出有效对比区（ROI）边界。
@@ -459,9 +587,15 @@ fn write_report(summary: &BatchSummary) -> Result<(), String> {
     let json_path = summary.out_dir.join("report.json");
     let mut json = String::from("{\n  \"cases\": [\n");
     for (index, case) in summary.cases.iter().enumerate() {
+        let status = case.status();
+        let invalid_reason = case
+            .invalid_reason
+            .as_deref()
+            .map_or_else(|| "null".to_string(), |reason| format!("\"{reason}\""));
         let _ = writeln!(
             json,
             "    {{ \"name\": \"{}\", \"control\": \"{}\", \"state\": \"{}\", \"theme\": \"{}\", \"backdrop\": \"{}\", \
+             \"status\": \"{}\", \"invalidReason\": {}, \"contentCoverage\": {:.6}, \
              \"meanDe\": {:.4}, \"p95De\": {:.4}, \"p99De\": {:.4}, \"maxDe\": {:.4}, \
              \"overLimitRatio\": {:.6}, \"referenceBbox\": {:?}, \"oursBbox\": {:?}, \"roiBbox\": {:?}, \
              \"intrinsic\": [{:.2}, {:.2}], \"referenceSize\": [{:.2}, {:.2}], \
@@ -471,6 +605,9 @@ fn write_report(summary: &BatchSummary) -> Result<(), String> {
             case.state,
             case.theme,
             case.backdrop,
+            status.as_str(),
+            invalid_reason,
+            case.content_coverage(),
             case.mean_de,
             case.p95_de,
             case.p99_de,
@@ -485,7 +622,7 @@ fn write_report(summary: &BatchSummary) -> Result<(), String> {
             case.reference_size[1],
             case.intrinsic_matches(),
             case.cache_hit,
-            case.passes(),
+            status == CaseStatus::Pass,
             if index + 1 == summary.cases.len() { "" } else { "," },
         );
     }
@@ -690,8 +827,8 @@ mod tests {
             height,
             rgba: our_rgba,
         };
-        let ref_bbox = content_bbox(&ref_img);
-        let our_bbox = content_bbox(&our_img);
+        let ref_bbox = content_stats(&ref_img).bbox.unwrap();
+        let our_bbox = content_stats(&our_img).bbox.unwrap();
         let roi = compute_roi_bbox(ref_bbox, our_bbox, [200, 70, 220, 80], width, height);
         let metrics = compare_roi(&ref_img, &our_img, roi);
         assert!(
@@ -722,12 +859,138 @@ mod tests {
             reference_size: [120.0, 32.0],
             explicit_width: true,
             cache_hit: false,
+            reference_content_coverage: 0.2,
+            ours_content_coverage: 0.2,
+            invalid_reason: None,
         };
         assert!(m.passes());
+        assert_eq!(m.status(), CaseStatus::Pass);
 
         // 若本框架固有高度算成 36px 而 WinUI 标准高度为 32px，固有尺寸门禁必须拦截
         m.intrinsic = [80.0, 36.0];
         assert!(!m.intrinsic_matches());
         assert!(!m.passes());
+        assert_eq!(m.status(), CaseStatus::Fail);
+    }
+
+    /// 生成指定背景色的纯色图。
+    fn solid_image(width: u32, height: u32, rgb: [u8; 3]) -> Image {
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for _ in 0..width * height {
+            rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+        }
+        Image {
+            width,
+            height,
+            rgba,
+        }
+    }
+
+    #[test]
+    fn blank_versus_blank_is_invalid() {
+        let blank = solid_image(64, 64, [243, 243, 243]);
+        let reference = content_stats(&blank);
+        let ours = content_stats(&blank);
+        let reason = invalid_reason(&reference, &ours, [8, 8, 40, 40], 64, 64);
+        assert!(
+            reason
+                .as_deref()
+                .is_some_and(|text| text.contains("content bbox is empty")),
+            "blank vs blank must be invalid: {reason:?}"
+        );
+    }
+
+    #[test]
+    fn one_side_blank_is_invalid() {
+        let mut content = solid_image(64, 64, [243, 243, 243]);
+        for y in 16..48 {
+            for x in 16..48 {
+                let index = ((y * 64 + x) * 4) as usize;
+                content.rgba[index..index + 4].copy_from_slice(&[0, 95, 184, 255]);
+            }
+        }
+        let reference = content_stats(&content);
+        let ours = content_stats(&solid_image(64, 64, [243, 243, 243]));
+        let reason = invalid_reason(&reference, &ours, [8, 8, 56, 56], 64, 64);
+        assert!(
+            reason
+                .as_deref()
+                .is_some_and(|text| text.contains("ours content bbox is empty")),
+            "one blank side must be invalid: {reason:?}"
+        );
+    }
+
+    #[test]
+    fn control_bounds_outside_image_is_invalid() {
+        let mut content = solid_image(64, 64, [243, 243, 243]);
+        for y in 16..48 {
+            for x in 16..48 {
+                let index = ((y * 64 + x) * 4) as usize;
+                content.rgba[index..index + 4].copy_from_slice(&[0, 95, 184, 255]);
+            }
+        }
+        let stats = content_stats(&content);
+        // 参考 controlBounds 向右越出 64px 画布。
+        let reason = invalid_reason(&stats, &stats, [8, 8, 96, 56], 64, 64);
+        assert!(
+            reason
+                .as_deref()
+                .is_some_and(|text| text.contains("exceed image")),
+            "out-of-bounds control bounds must be invalid: {reason:?}"
+        );
+    }
+
+    #[test]
+    fn small_but_valid_images_still_pass() {
+        let mut reference = solid_image(64, 64, [243, 243, 243]);
+        let mut ours = solid_image(64, 64, [243, 243, 243]);
+        for y in 16..48 {
+            for x in 16..48 {
+                let index = ((y * 64 + x) * 4) as usize;
+                reference.rgba[index..index + 4].copy_from_slice(&[0, 95, 184, 255]);
+                ours.rgba[index..index + 4].copy_from_slice(&[0, 95, 184, 255]);
+            }
+        }
+        let reference_stats = content_stats(&reference);
+        let ours_stats = content_stats(&ours);
+        let reason = invalid_reason(&reference_stats, &ours_stats, [16, 16, 48, 48], 64, 64);
+        assert!(
+            reason.is_none(),
+            "valid pair must not be invalid: {reason:?}"
+        );
+        let metrics = compare_roi(
+            &reference,
+            &ours,
+            compute_roi_bbox(
+                reference_stats.bbox.unwrap(),
+                ours_stats.bbox.unwrap(),
+                [16, 16, 48, 48],
+                64,
+                64,
+            ),
+        );
+        let case = CaseMetrics {
+            name: "small_normal_light".into(),
+            control: "small".into(),
+            state: "normal".into(),
+            theme: "light".into(),
+            backdrop: "solid".into(),
+            mean_de: metrics.mean_de,
+            p95_de: metrics.p95_de,
+            p99_de: metrics.p99_de,
+            max_de: metrics.max_de,
+            over_limit_ratio: metrics.over_limit_ratio,
+            reference_bbox: reference_stats.bbox.unwrap(),
+            ours_bbox: ours_stats.bbox.unwrap(),
+            roi_bbox: [16, 16, 48, 48],
+            intrinsic: [32.0, 32.0],
+            reference_size: [32.0, 32.0],
+            explicit_width: true,
+            cache_hit: false,
+            reference_content_coverage: reference_stats.coverage,
+            ours_content_coverage: ours_stats.coverage,
+            invalid_reason: reason,
+        };
+        assert_eq!(case.status(), CaseStatus::Pass);
     }
 }
