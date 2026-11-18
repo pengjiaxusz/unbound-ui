@@ -2721,6 +2721,116 @@ where
             let g = shape_centered(&mut shape, "Pin Panel", tb_r, 13.0);
             crate::toggle_button::emit_toggle_button_with_glyphs(node, &desc, &s, state, &g)
         }
+        WidgetCatalogId::HyperlinkButton => {
+            let hb_r = Rect::new(o.x, o.y, rect.size.x.min(160.0), rect.size.y.min(32.0));
+            let desc = crate::hyperlink_button::HyperlinkButtonDesc::new(hb_r, "Learn more");
+            let mut g = shape_centered(&mut shape, "Learn more", hb_r, 13.0);
+            crate::hyperlink_button::emit_hyperlink_button(node, &desc, state, &mut g)
+        }
+        WidgetCatalogId::RepeatButton => {
+            let rb_r = Rect::new(o.x, o.y, rect.size.x.min(170.0), rect.size.y.min(32.0));
+            let desc = crate::repeat_button::RepeatButtonDesc::new(rb_r, "Hold to repeat");
+            let mut repeat = crate::repeat_button::RepeatButtonState::new();
+            if params.toggled {
+                repeat.begin();
+                repeat.elapsed_ms = 700;
+            }
+            let mut g = shape_centered(&mut shape, "Hold to repeat", rb_r, 13.0);
+            crate::repeat_button::emit_repeat_button(node, &desc, &repeat, state, &mut g)
+        }
+        WidgetCatalogId::DropDownButton => {
+            let dd_r = Rect::new(o.x, o.y, rect.size.x.min(180.0), rect.size.y.min(32.0));
+            let desc = crate::drop_down_button::DropDownButtonDesc::new(dd_r, "Open menu");
+            let menu = crate::drop_down_button::DropDownButtonState {
+                open: state.selected || params.toggled,
+            };
+            let mut g = shape_centered(&mut shape, "Open menu", dd_r, 13.0);
+            crate::drop_down_button::emit_drop_down_button(node, &desc, &menu, state, &mut g)
+        }
+        WidgetCatalogId::ToggleSplitButton => {
+            let ts_r = Rect::new(o.x, o.y, rect.size.x.min(190.0), rect.size.y.min(32.0));
+            let desc = crate::toggle_split_button::ToggleSplitButtonDesc::new(ts_r, "Bold");
+            let split = crate::toggle_split_button::ToggleSplitButtonState {
+                checked: state.selected,
+                menu_open: params.toggled,
+            };
+            let mut g = shape_centered(&mut shape, "Bold", desc.main_rect(), 13.0);
+            crate::toggle_split_button::emit_toggle_split_button(node, &desc, &split, state, &mut g)
+        }
+        WidgetCatalogId::PasswordBox => {
+            let pw_r = Rect::new(o.x, o.y, rect.size.x.min(220.0), rect.size.y.min(32.0));
+            let desc = crate::password_box::PasswordBoxDesc::new(pw_r).with_placeholder("Password");
+            let mut password = crate::password_box::PasswordBoxState::with_text("hunter2");
+            password.reveal = params.toggled;
+            let text = password.display_text();
+            let mut g = shape(
+                &text,
+                Vec2::new(
+                    pw_r.origin.x + 10.0,
+                    pw_r.origin.y + (pw_r.size.y - 13.0) * 0.5,
+                ),
+                13.0,
+            );
+            crate::password_box::emit_password_box(node, &desc, &password, state, &mut g)
+        }
+        WidgetCatalogId::DatePickerWheel => {
+            let dw_r = Rect::new(o.x, o.y, rect.size.x.min(220.0), rect.size.y.min(32.0));
+            let desc = crate::date_picker_wheel::DatePickerWheelDesc::new(dw_r);
+            let wheel = crate::date_picker_wheel::DatePickerWheelState::new(2024, 3, 15);
+            let row_h = crate::date_picker_wheel::DATE_PICKER_WHEEL_ROW_HEIGHT;
+            let mut glyphs = Vec::new();
+            for column in crate::date_picker_wheel::WheelColumn::ALL {
+                let column_rect = desc.column_rect(column);
+                for row in 0..crate::date_picker_wheel::DATE_PICKER_WHEEL_ROWS {
+                    let value = wheel.selected(column) + row as i32 - 2;
+                    let text = value.to_string();
+                    let row_rect = Rect::new(
+                        column_rect.origin.x,
+                        column_rect.origin.y + row as f32 * row_h,
+                        column_rect.size.x,
+                        row_h,
+                    );
+                    glyphs.extend(shape_centered_y(
+                        &mut shape,
+                        &text,
+                        row_rect,
+                        row_rect.origin.x + 4.0,
+                        11.5,
+                    ));
+                }
+            }
+            crate::date_picker_wheel::emit_date_picker_wheel(
+                node,
+                &desc,
+                &wheel,
+                state,
+                &mut glyphs,
+            )
+        }
+        WidgetCatalogId::CalendarDatePicker => {
+            let cd_r = Rect::new(o.x, o.y, rect.size.x.min(240.0), rect.size.y.min(32.0));
+            let desc = crate::calendar_date_picker::CalendarDatePickerDesc::new(cd_r)
+                .with_placeholder("Select a date");
+            let mut picker = crate::calendar_date_picker::CalendarDatePickerState::new();
+            picker.date = NaiveDate::parse("2024-03-15");
+            picker.open = params.toggled;
+            let text = if picker.date.is_some() {
+                "2024-03-15"
+            } else {
+                "Select a date"
+            };
+            let mut g = shape(
+                text,
+                Vec2::new(
+                    cd_r.origin.x + 10.0,
+                    cd_r.origin.y + (cd_r.size.y - 13.0) * 0.5,
+                ),
+                13.0,
+            );
+            crate::calendar_date_picker::emit_calendar_date_picker(
+                node, &desc, &picker, state, &mut g,
+            )
+        }
         WidgetCatalogId::TreeTable => {
             let desc = crate::tree_table::TreeTableDesc::new(
                 rect,

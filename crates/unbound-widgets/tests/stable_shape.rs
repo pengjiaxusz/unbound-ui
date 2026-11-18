@@ -230,6 +230,13 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::ShortcutBar => "shortcut_bar",
         WidgetCatalogId::Sidebar => "sidebar",
         WidgetCatalogId::TaskHud => "task_hud",
+        WidgetCatalogId::CalendarDatePicker => "calendar_date_picker",
+        WidgetCatalogId::DatePickerWheel => "date_picker_wheel",
+        WidgetCatalogId::DropDownButton => "drop_down_button",
+        WidgetCatalogId::HyperlinkButton => "hyperlink_button",
+        WidgetCatalogId::PasswordBox => "password_box",
+        WidgetCatalogId::RepeatButton => "repeat_button",
+        WidgetCatalogId::ToggleSplitButton => "toggle_split_button",
     }
 }
 
@@ -308,5 +315,5 @@ fn the_probe_covers_every_component() {
     );
     // 控件目录的条目数：这个数字是门禁——新增控件必须同步更新，
     // 否则「每个控件都被探针覆盖」这句话就不再成立。
-    assert_eq!(WidgetCatalogId::COUNT, 109);
+    assert_eq!(WidgetCatalogId::COUNT, 116);
 }
