@@ -482,7 +482,7 @@ mod win32 {
     thread_local! {
         /// 上一次已投递给宿主的组合串，用于去重。
         ///
-        /// 只缓存**预编辑**，不缓存也绝不轮询提交串：ADR 0003 规定平台层只有一条
+        /// 只缓存**预编辑**，不缓存也绝不轮询提交串：ADR 0011 规定平台层只有一条
         /// 提交通道（`WM_IME_COMPOSITION`）。
         static LAST_PREEDIT: std::cell::RefCell<String> =
             const { std::cell::RefCell::new(String::new()) };
@@ -1126,7 +1126,7 @@ mod win32 {
                     if (flags & GCS_RESULTSTR.0) != 0 {
                         if let Some(commit) = imm_string(himc, GCS_RESULTSTR) {
                             ime_trace(format!("ime result {commit:?}"));
-                            // 这是全应用唯一的提交通道（ADR 0003）：每条
+                            // 这是全应用唯一的提交通道（ADR 0011）：每条
                             // WM_IME_COMPOSITION 携带的结果就是一次真实上屏，
                             // 不做任何去重——去重反而会吞掉连续输入的同词。
                             mark_ime_preedit_delivered("");
@@ -1447,7 +1447,7 @@ mod win32 {
     /// 本窗口是 TSF-unaware 的 IMM32 应用，正确做法是：只做 COM STA 初始化，
     /// **不要**自己创建 `ITfThreadMgr`（那会把进程标记为 TSF-aware，反而关闭 CUAS
     /// 兼容层，此后必须自己实现 `ITextStoreACP` 才有输入）。初始化后 CUAS 会把
-    /// TSF 输入法的组合过程翻译成标准的 `WM_IME_*` 消息，正好对应 ADR 0003
+    /// TSF 输入法的组合过程翻译成标准的 `WM_IME_*` 消息，正好对应 ADR 0011
     /// “组合串即缓冲区文本”的设计。
     ///
     /// 成功初始化后必须配对反初始化，否则退出时可能残留 COM 引用。

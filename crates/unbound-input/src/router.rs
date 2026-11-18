@@ -264,7 +264,7 @@ impl Router {
         self.cursors.clear();
         if let Some(capture) = self.pointer.capture() {
             // 捕获只说明事件归属，形状仍由被捕获区域声明：文本区域全程工字，
-            // 非文本捕获在拖拽中才切到抓取手。见 ADR 0004。
+            // 非文本捕获在拖拽中才切到抓取手。见 ADR 0012。
             let declared = self
                 .regions
                 .iter()
