@@ -126,7 +126,11 @@ pub fn dark() -> Palette {
         // WinUI 深色下复选框未选中与开关关闭态的实际填充（实测 #1D1D1D）。
         (Token::CONTROL_ALT_FILL_SECONDARY, c(29, 29, 29, 255)),
         (Token::CONTROL_ALT_FILL_DISABLED, c(36, 36, 36, 255)),
-        (Token::CONTROL_STRONG_STROKE_DISABLED, c(115, 115, 115, 255)),
+        // 禁用描边按 WinUI `ControlStrongStrokeColorDisabled`（light #37000000 /
+        // dark #28FFFFFF）在基准表面上的合成结果取实色。交换链在线性空间混合，
+        // 直接写半透明白/黑会在深色主题下把 67 抬到 115；实色同时不受亚像素
+        // 相位影响，禁用开关的 1px 轨道轮廓才与参考一致。
+        (Token::CONTROL_STRONG_STROKE_DISABLED, c(67, 67, 67, 255)),
         (Token::SLIDER_TRACK_DISABLED, c(87, 87, 87, 255)),
         (Token::SLIDER_FILL_DISABLED, c(113, 113, 113, 255)),
         (Token::SLIDER_THUMB_DISABLED, c(98, 98, 98, 255)),
@@ -256,7 +260,7 @@ pub fn light() -> Palette {
         (Token::CONTROL_DISABLED_THUMB, c(153, 153, 153, 255)),
         (Token::CONTROL_ALT_FILL_SECONDARY, c(237, 237, 237, 255)),
         (Token::CONTROL_ALT_FILL_DISABLED, c(240, 240, 240, 255)),
-        (Token::CONTROL_STRONG_STROKE_DISABLED, c(161, 161, 161, 255)),
+        (Token::CONTROL_STRONG_STROKE_DISABLED, c(191, 191, 191, 255)),
         (Token::SLIDER_TRACK_DISABLED, c(166, 166, 166, 255)),
         (Token::SLIDER_FILL_DISABLED, c(130, 130, 130, 255)),
         (Token::SLIDER_THUMB_DISABLED, c(200, 200, 200, 255)),
