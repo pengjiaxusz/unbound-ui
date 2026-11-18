@@ -16,8 +16,11 @@ use unbound_layout::{LayoutEngine, LayoutStats};
 use unbound_math::Rect;
 use unbound_world::{NodeId, UiWorld};
 
-use crate::pages::{ExampleDef, KnobSpec, PageId};
+use crate::pages::{DemoKind, ExampleDef, KnobSpec, PageId};
 use crate::state::GalleryState;
+
+/// 对照报告尚未载入（或为空）时舞台的最小高度，确保空态卡片不会被裁掉。
+const PARITY_STAGE_MIN: f32 = 220.0;
 
 /// 自定义标题栏的高度。
 pub const TOP_BAR_HEIGHT: f32 = 56.0;
@@ -792,8 +795,23 @@ impl ShellTree {
                 0.0
             };
             let folded = folded && nodes.knobs.is_some();
-            let body_height =
-                example.stage_height + if folded { STAGE_GAP + KNOB_FOLDED } else { 0.0 };
+            let stage_height = if matches!(example.demo, DemoKind::ParityReport) {
+                state
+                    .demo
+                    .parity_report
+                    .as_ref()
+                    .map_or(PARITY_STAGE_MIN, |report| {
+                        crate::pages::parity_report::stage_height(report.cases.len(), inner)
+                            .max(PARITY_STAGE_MIN)
+                    })
+            } else {
+                example.stage_height
+            };
+            {
+                let desc = &mut self.world.node_mut(nodes.stage).desc;
+                desc.height = Dim::px(stage_height);
+            }
+            let body_height = stage_height + if folded { STAGE_GAP + KNOB_FOLDED } else { 0.0 };
             let card_height = CARD_PAD_TOP
                 + CARD_HEAD
                 + body_height
