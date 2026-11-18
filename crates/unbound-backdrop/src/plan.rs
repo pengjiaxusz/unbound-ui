@@ -129,6 +129,9 @@ pub enum DwmMaterial {
     /// 亚克力材质。
     Acrylic,
     /// 沉浸式后景（实验档）。
+    ///
+    /// 该档的系统取值没有出现在公开文档里，因此当前没有任何材质种类会请求它：
+    /// 它留在枚举里是为了让后续调研（issue #36）有地方落值。
     Immersive,
 }
 
@@ -166,9 +169,11 @@ pub const MATERIAL_REQUEST_TABLE: [MaterialRequest; MaterialKind::ALL.len()] = [
         kind: MaterialKind::Acrylic,
         request: Some(DwmMaterial::Acrylic),
     },
+    // 沉浸式后景的系统取值没有公开文档依据（issue #36 调研后再补），因此它当前
+    // 不走系统材质通道：拿不到材质请求就没有东西可以透出，窗口必须保持不透明。
     MaterialRequest {
         kind: MaterialKind::Immersive,
-        request: Some(DwmMaterial::Immersive),
+        request: None,
     },
 ];
 
@@ -261,7 +266,10 @@ pub struct BackdropPlan {
     pub unavailable: Option<UnavailableReason>,
     /// 固定合成方式，只由平台能力决定。
     pub composition: BackdropCompositeAlpha,
-    /// 清屏 alpha：原生路径 0，其余路径 1。
+    /// 清屏 alpha：真正请求到系统材质时 0，其余路径 1。
+    ///
+    /// 没有系统材质请求的材质档（当前是沉浸式后景）即使走原生来源也保持 1，
+    /// 否则窗口会变成「透明却没有材质」的空壳。
     pub clear_alpha: f32,
     /// 根背景是否应为透明，交给后景透出。
     pub root_background_transparent: bool,
@@ -296,8 +304,9 @@ impl BackdropPlan {
     ///
     /// 先用组合解析接缝算出实际生效的组合，再把结论展开成计划：
     ///
-    /// - 清屏透明度与根背景透明性只由实际生效的来源决定；
     /// - 系统材质请求走显式映射表，且只在实际来源为原生时才请求；
+    /// - 清屏透明度只在真的拿到系统材质请求时才变成 0，其余一律 1；
+    /// - 根背景透明性由清屏 alpha 与自绘纹理就绪状态共同决定；
     /// - 纹理只在实际来源为自绘时生成；
     /// - 合成方式只由平台基线能力决定，与材质种类、来源无关——交换链在启动时
     ///   一次性建好，切换绝不能重建它。
@@ -322,11 +331,15 @@ impl BackdropPlan {
         } else {
             None
         };
-        let material = if native {
-            system_material_request(combination.material).unwrap_or(DwmMaterial::None)
+        // 只有原生来源才可能拿到系统材质请求；请求缺失的材质档一律按「没有材质」
+        // 处理，窗口随之保持不透明。
+        let request = if native {
+            system_material_request(combination.material)
         } else {
-            DwmMaterial::None
+            None
         };
+        let material = request.unwrap_or(DwmMaterial::None);
+        let clear_alpha = if request.is_some() { 0.0 } else { 1.0 };
         Self {
             resolved: resolved_from(&combination),
             material_kind: combination.material,
@@ -334,8 +347,9 @@ impl BackdropPlan {
             fallback: combination.fallback,
             unavailable: combination.unavailable,
             composition,
-            clear_alpha: if native { 0.0 } else { 1.0 },
-            root_background_transparent: native || (self_drawn && inputs.self_drawn_ready),
+            clear_alpha,
+            root_background_transparent: clear_alpha == 0.0
+                || (self_drawn && inputs.self_drawn_ready),
             material,
             texture,
             // 纹理覆盖整块主屏，窗口只取自己所占的那一块。
@@ -482,14 +496,16 @@ mod tests {
     }
 
     /// 手写的“该材质种类请求哪一档系统材质”期望，独立于映射表实现。
-    fn expected_system_request(material: MaterialKind) -> DwmMaterial {
+    ///
+    /// 沉浸式后景没有公开的系统取值，因此当前没有请求。
+    fn expected_system_request(material: MaterialKind) -> Option<DwmMaterial> {
         match material {
-            MaterialKind::None => DwmMaterial::None,
-            MaterialKind::FollowSystem => DwmMaterial::System,
-            MaterialKind::Mica => DwmMaterial::Mica,
-            MaterialKind::MicaAlt => DwmMaterial::MicaAlt,
-            MaterialKind::Acrylic => DwmMaterial::Acrylic,
-            MaterialKind::Immersive => DwmMaterial::Immersive,
+            MaterialKind::None => None,
+            MaterialKind::FollowSystem => Some(DwmMaterial::System),
+            MaterialKind::Mica => Some(DwmMaterial::Mica),
+            MaterialKind::MicaAlt => Some(DwmMaterial::MicaAlt),
+            MaterialKind::Acrylic => Some(DwmMaterial::Acrylic),
+            MaterialKind::Immersive => None,
         }
     }
 
@@ -627,18 +643,20 @@ mod tests {
                         && combination.source == BackdropSource::Native;
                     let self_drawn = combination.material != MaterialKind::None
                         && combination.source == BackdropSource::SelfDrawn;
+                    // 只有原生来源且该材质档确有系统材质请求时，窗口才允许清成全透明。
+                    let request = if native {
+                        expected_system_request(combination.material)
+                    } else {
+                        None
+                    };
                     assert_eq!(
                         plan.clear_alpha,
-                        if native { 0.0 } else { 1.0 },
+                        if request.is_some() { 0.0 } else { 1.0 },
                         "material {material:?} source {source:?} must set the clear alpha"
                     );
                     assert_eq!(
                         plan.material,
-                        if native {
-                            expected_system_request(combination.material)
-                        } else {
-                            DwmMaterial::None
-                        },
+                        request.unwrap_or(DwmMaterial::None),
                         "material {material:?} source {source:?} must request the mapped system material"
                     );
                     assert_eq!(
@@ -648,14 +666,14 @@ mod tests {
                     );
                     assert_eq!(
                         plan.root_background_transparent,
-                        native,
+                        request.is_some(),
                         "material {material:?} source {source:?} must stay opaque until the texture is ready"
                     );
                     input.self_drawn_ready = true;
                     let ready = BackdropPlan::derive(input);
                     assert_eq!(
                         ready.root_background_transparent,
-                        native || self_drawn,
+                        request.is_some() || self_drawn,
                         "material {material:?} source {source:?} must follow the texture readiness"
                     );
                     assert_eq!(
@@ -691,10 +709,7 @@ mod tests {
                 .expect("every material kind must have a request row");
             assert_eq!(
                 row.request,
-                match material {
-                    MaterialKind::None => None,
-                    other => Some(expected_system_request(other)),
-                },
+                expected_system_request(material),
                 "{material:?} must map to its own system material row"
             );
             assert_eq!(
@@ -703,6 +718,27 @@ mod tests {
                 "{material:?} must be resolved through the request table"
             );
         }
+    }
+
+    #[test]
+    fn a_material_without_a_system_request_keeps_the_root_opaque() {
+        // 沉浸式后景没有公开的系统取值，因此拿不到系统材质请求：
+        // 即使原生路径可用，窗口也必须保持不透明，不能变成透明却没有材质的空壳。
+        let plan = BackdropPlan::derive(inputs(
+            BackdropSelection::new(MaterialKind::Immersive, BackdropSource::Native),
+            Some(26100),
+            true,
+        ));
+        assert_eq!(plan.material_kind, MaterialKind::Immersive);
+        assert_eq!(plan.source, BackdropSource::Native);
+        assert_eq!(plan.material, DwmMaterial::None);
+        assert_eq!(plan.clear_alpha, 1.0);
+        assert!(!plan.root_background_transparent);
+        assert_eq!(
+            plan.composition,
+            BackdropCompositeAlpha::PreMultiplied,
+            "the surface composition must still follow the platform baseline"
+        );
     }
 
     #[test]

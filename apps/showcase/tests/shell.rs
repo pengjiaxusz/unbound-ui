@@ -2,11 +2,14 @@
 
 use std::ops::{Deref, DerefMut};
 
+use accesskit::Role;
+use showcase::pages::backdrop::{MATERIAL_PART_BASE, SOURCE_PART_BASE};
 use showcase::pages::PageId;
 use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::target::{self, Target};
 use unbound_app::{AppKey, AppRuntime, Modifiers as AppModifiers};
+use unbound_backdrop::{BackdropSource, MaterialKind};
 use unbound_headless::Harness;
 use unbound_input::PointerButton;
 use unbound_math::{Rect, Vec2};
@@ -170,6 +173,14 @@ fn rect_of(app: &App, node: u64) -> unbound_math::Rect {
         .find(|region| region.node == node)
         .map(|region| region.bounds)
         .unwrap_or_else(|| panic!("no hit region for node {node:#x}"))
+}
+
+/// 两个矩形是否互相压住。
+fn rects_overlap(a: Rect, b: Rect) -> bool {
+    a.origin.x < b.max().x
+        && b.origin.x < a.max().x
+        && a.origin.y < b.max().y
+        && b.origin.y < a.max().y
 }
 
 fn click_node(app: &mut App, node: u64) {
@@ -1559,19 +1570,17 @@ fn the_backdrop_page_sits_in_engine_systems_with_complete_metadata() {
     assert!(!zh.description.is_empty());
 }
 
-/// 原生可用时原生模式让根背景透明且不生成自绘纹理；关闭与自绘各自保持语义。
+/// 原生可用时原生来源让根背景透明且不生成自绘纹理；「无后景」与自绘各自保持语义。
 #[test]
-fn native_mode_makes_the_root_transparent_without_a_texture() {
-    use unbound_backdrop::{BackdropMode, ResolvedBackdrop};
-
+fn the_native_source_makes_the_root_transparent_without_a_texture() {
     let mut app = app();
-    app.set_backdrop_capabilities(Some(22621), true);
-    app.state.set_backdrop_mode(BackdropMode::Native);
+    app.set_backdrop_capabilities(Some(26100), true);
+    app.state.set_backdrop_source(BackdropSource::Native);
     app.rebuild(VIEWPORT);
     assert_eq!(
-        app.state.resolved_backdrop,
-        ResolvedBackdrop::Native,
-        "an explicit Native choice must resolve to the native path when the probe allows it"
+        app.state.backdrop_combination.source,
+        BackdropSource::Native,
+        "an explicit native source must resolve to the native path when the probe allows it"
     );
     assert!(
         app.root_background_transparent(),
@@ -1583,9 +1592,13 @@ fn native_mode_makes_the_root_transparent_without_a_texture() {
     );
     assert!(!app.mica.visible());
 
-    app.state.set_backdrop_mode(BackdropMode::Off);
+    app.state.set_backdrop_material(MaterialKind::None);
     app.rebuild(VIEWPORT);
-    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::Off);
+    assert_eq!(
+        app.state.backdrop_combination.material,
+        MaterialKind::None,
+        "the None material must leave no backdrop at all"
+    );
     assert!(
         !app.root_background_transparent(),
         "the off path must keep the opaque theme background"
@@ -1595,94 +1608,431 @@ fn native_mode_makes_the_root_transparent_without_a_texture() {
         "the off path must not generate the self-drawn texture"
     );
 
-    app.state.set_backdrop_mode(BackdropMode::SelfDrawn);
+    app.state.set_backdrop_material(MaterialKind::Mica);
+    app.state.set_backdrop_source(BackdropSource::SelfDrawn);
     app.rebuild(VIEWPORT);
-    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::SelfDrawn);
+    assert_eq!(
+        app.state.backdrop_combination.source,
+        BackdropSource::SelfDrawn,
+        "the self-drawn source must resolve to the self-drawn path"
+    );
     assert!(
         app.mica.is_enabled(),
         "the self-drawn path must keep generating the wallpaper texture"
     );
 }
 
-/// 点击后景页的四个按钮即可切换用户选择，宿主在下一帧回写实际生效模式。
+/// 点击后景页的材质行即可切换材质种类，宿主在下一帧回写实际生效组合。
 #[test]
-fn backdrop_page_switches_every_mode_through_the_runtime() {
-    use unbound_backdrop::{BackdropMode, ResolvedBackdrop};
-
+fn the_material_row_updates_the_selection_and_the_readout() {
     let mut app = app();
-    assert_eq!(
-        app.state.backdrop_mode,
-        BackdropMode::Auto,
-        "the showcase must start from the Auto choice"
-    );
-    assert_eq!(
-        app.state.resolved_backdrop,
-        ResolvedBackdrop::SelfDrawn,
-        "without a capability probe the host must resolve Auto to SelfDrawn"
-    );
-    assert!(!app.state.native_backdrop_available);
-    assert_eq!(app.state.windows_build, None);
-
+    app.set_backdrop_capabilities(Some(26100), true);
     app.navigate(PageId::Backdrop);
     app.rebuild(VIEWPORT);
 
-    for (part, expected) in [
-        (2u16, BackdropMode::Native),
-        (3, BackdropMode::SelfDrawn),
-        (4, BackdropMode::Off),
-        (1, BackdropMode::Auto),
-    ] {
+    for kind in MaterialKind::ALL {
+        let part = MATERIAL_PART_BASE + kind.index() as u16;
         let node = target::id(Target::Demo(PageId::Backdrop.index() as u8, 0, part));
         click_node(&mut app, node);
         assert_eq!(
-            app.state.backdrop_mode, expected,
-            "clicking {expected:?} must update the user choice"
+            app.state.backdrop_selection.material, kind,
+            "clicking a material button must update the user choice"
         );
         assert_eq!(
-            app.state.resolved_backdrop,
-            ResolvedBackdrop::resolve(expected, false),
-            "the host must write back the effective mode for {expected:?}"
+            app.state.backdrop_selection.source,
+            BackdropSource::Auto,
+            "picking a material must not move the source axis"
+        );
+        assert_eq!(
+            app.state.backdrop_combination.material, kind,
+            "the host must write back the effective material for {kind:?}"
+        );
+        // 材质为「无」时来源轴折叠：实际来源保留用户请求的自动，其余材质都落到原生。
+        let expected_source = if kind == MaterialKind::None {
+            BackdropSource::Auto
+        } else {
+            BackdropSource::Native
+        };
+        assert_eq!(
+            app.state.backdrop_combination.source, expected_source,
+            "the effective source must follow the resolved combination for {kind:?}"
+        );
+
+        let a11y = app
+            .semantics
+            .get(node)
+            .expect("the material button must be in the accessibility tree");
+        assert_eq!(a11y.role, Role::Button);
+        assert_eq!(
+            a11y.label,
+            format!("Material: {} — {}", kind.label(), kind.description()),
+            "the material button must be named after its axis and material"
+        );
+        assert!(
+            a11y.selected,
+            "the picked material must be marked as selected"
         );
     }
 }
 
-/// 宿主注入构建号与驱动能力后，页面状态与实际生效模式必须同步更新。
+/// 点击后景页的来源行即可切换来源，宿主在下一帧回写实际生效组合。
 #[test]
-fn backdrop_capabilities_drive_the_resolved_mode() {
-    use unbound_backdrop::{BackdropMode, ResolvedBackdrop};
+fn the_source_row_updates_the_selection_and_the_readout() {
+    let mut app = app();
+    app.set_backdrop_capabilities(Some(26100), true);
+    app.navigate(PageId::Backdrop);
+    app.rebuild(VIEWPORT);
 
+    for (source, expected) in [
+        (BackdropSource::Auto, BackdropSource::Native),
+        (BackdropSource::Native, BackdropSource::Native),
+        (BackdropSource::SelfDrawn, BackdropSource::SelfDrawn),
+    ] {
+        let part = SOURCE_PART_BASE + source.index() as u16;
+        let node = target::id(Target::Demo(PageId::Backdrop.index() as u8, 0, part));
+        click_node(&mut app, node);
+        assert_eq!(
+            app.state.backdrop_selection.source, source,
+            "clicking a source button must update the user choice"
+        );
+        assert_eq!(
+            app.state.backdrop_selection.material,
+            MaterialKind::Mica,
+            "picking a source must not move the material axis"
+        );
+        assert_eq!(
+            app.state.backdrop_combination.source, expected,
+            "the host must write back the effective source for {source:?}"
+        );
+
+        let a11y = app
+            .semantics
+            .get(node)
+            .expect("the source button must be in the accessibility tree");
+        assert_eq!(a11y.role, Role::Button);
+        assert_eq!(
+            a11y.label,
+            format!("Source: {} — {}", source.label(), source.description()),
+            "the source button must be named after its axis and source"
+        );
+        assert!(
+            a11y.selected,
+            "the picked source must be marked as selected"
+        );
+    }
+}
+
+/// 材质行与来源行各占一段部件编号，两行按钮互不重叠。
+#[test]
+fn the_two_rows_use_disjoint_parts_and_do_not_overlap() {
     let mut app = app();
     app.navigate(PageId::Backdrop);
     app.rebuild(VIEWPORT);
 
-    // 原生可用：Auto 与显式 Native 都应走原生路径。
+    let material_rects: Vec<Rect> = MaterialKind::ALL
+        .iter()
+        .map(|kind| {
+            rect_of(
+                &app,
+                target::id(Target::Demo(
+                    PageId::Backdrop.index() as u8,
+                    0,
+                    MATERIAL_PART_BASE + kind.index() as u16,
+                )),
+            )
+        })
+        .collect();
+    let source_rects: Vec<Rect> = BackdropSource::ALL
+        .iter()
+        .map(|source| {
+            rect_of(
+                &app,
+                target::id(Target::Demo(
+                    PageId::Backdrop.index() as u8,
+                    0,
+                    SOURCE_PART_BASE + source.index() as u16,
+                )),
+            )
+        })
+        .collect();
+
+    for pair in material_rects.windows(2) {
+        assert!(
+            !rects_overlap(pair[0], pair[1]),
+            "the material row must not overlap itself"
+        );
+    }
+    for pair in source_rects.windows(2) {
+        assert!(
+            !rects_overlap(pair[0], pair[1]),
+            "the source row must not overlap itself"
+        );
+    }
+    for material in &material_rects {
+        for source in &source_rects {
+            assert!(
+                !rects_overlap(*material, *source),
+                "the material row and the source row must not overlap"
+            );
+        }
+    }
+}
+
+/// 六个材质档与三个来源档的组合必须解析出预期的实际组合、回退原因与不可用原因。
+#[test]
+fn every_material_and_source_combination_resolves_as_expected() {
+    use unbound_backdrop::{BackdropCombination, FallbackReason, UnavailableReason};
+
+    let mut app = app();
+    // Windows 11 22H2：除沉浸式后景外所有材质档都能走原生路径。
+    app.set_backdrop_capabilities(Some(22621), true);
+    app.navigate(PageId::Backdrop);
+    app.rebuild(VIEWPORT);
+
+    let none = MaterialKind::None;
+    let follow = MaterialKind::FollowSystem;
+    let mica = MaterialKind::Mica;
+    let mica_alt = MaterialKind::MicaAlt;
+    let acrylic = MaterialKind::Acrylic;
+    let immersive = MaterialKind::Immersive;
+    let auto = BackdropSource::Auto;
+    let native = BackdropSource::Native;
+    let self_drawn = BackdropSource::SelfDrawn;
+    let no_self_drawn = |material| FallbackReason::NoSelfDrawnVariant { material };
+    let plain = |material, source| BackdropCombination {
+        material,
+        source,
+        fallback: None,
+        unavailable: None,
+    };
+
+    let cases: [(MaterialKind, BackdropSource, BackdropCombination); 18] = [
+        (none, auto, plain(none, auto)),
+        (none, native, plain(none, native)),
+        (none, self_drawn, plain(none, self_drawn)),
+        (follow, auto, plain(follow, native)),
+        (follow, native, plain(follow, native)),
+        (
+            follow,
+            self_drawn,
+            BackdropCombination {
+                material: follow,
+                source: native,
+                fallback: Some(no_self_drawn(follow)),
+                unavailable: None,
+            },
+        ),
+        (mica, auto, plain(mica, native)),
+        (mica, native, plain(mica, native)),
+        (mica, self_drawn, plain(mica, self_drawn)),
+        (mica_alt, auto, plain(mica_alt, native)),
+        (mica_alt, native, plain(mica_alt, native)),
+        (mica_alt, self_drawn, plain(mica_alt, self_drawn)),
+        (acrylic, auto, plain(acrylic, native)),
+        (acrylic, native, plain(acrylic, native)),
+        (
+            acrylic,
+            self_drawn,
+            BackdropCombination {
+                material: acrylic,
+                source: native,
+                fallback: Some(no_self_drawn(acrylic)),
+                unavailable: None,
+            },
+        ),
+        (
+            immersive,
+            auto,
+            BackdropCombination {
+                material: mica,
+                source: self_drawn,
+                fallback: Some(no_self_drawn(immersive)),
+                unavailable: None,
+            },
+        ),
+        (
+            immersive,
+            native,
+            BackdropCombination {
+                material: none,
+                source: native,
+                fallback: None,
+                unavailable: Some(UnavailableReason::BuildTooLow { required: 26100 }),
+            },
+        ),
+        (
+            immersive,
+            self_drawn,
+            BackdropCombination {
+                material: mica,
+                source: self_drawn,
+                fallback: Some(no_self_drawn(immersive)),
+                unavailable: None,
+            },
+        ),
+    ];
+
+    for (material, source, expected) in cases {
+        app.state.set_backdrop_material(material);
+        app.state.set_backdrop_source(source);
+        app.rebuild(VIEWPORT);
+        assert_eq!(
+            app.state.backdrop_combination, expected,
+            "material {material:?} with source {source:?} must resolve as expected"
+        );
+    }
+}
+
+/// 读出面板展示回退原因与不可用原因时用的是模型给出的英文文案。
+#[test]
+fn the_readout_reports_the_fallback_and_unavailable_reasons() {
+    let mut app = app();
+    app.set_backdrop_capabilities(Some(19045), true);
+    app.state.set_backdrop_material(MaterialKind::Mica);
+    app.state.set_backdrop_source(BackdropSource::Auto);
+    app.rebuild(VIEWPORT);
+
+    // 自动来源在机器承载不了时是「回退」：原生不可用，改走自绘。
+    let fallback = app
+        .state
+        .backdrop_combination
+        .fallback
+        .expect("the self-drawn fallback must be reported");
+    assert_eq!(fallback.label(), "Native unavailable");
+    assert_eq!(
+        fallback.description(),
+        "The system cannot host the Mica material, so the self-drawn source took over"
+    );
+    assert_eq!(
+        app.state.backdrop_combination.unavailable, None,
+        "an automatic source must not report an unavailable reason"
+    );
+
+    // 显式原生来源在机器承载不了时是「不可用」：机器能力不足，没有降级可言。
+    app.state.set_backdrop_source(BackdropSource::Native);
+    app.rebuild(VIEWPORT);
+    let unavailable = app
+        .state
+        .backdrop_combination
+        .unavailable
+        .expect("the build gate must be reported");
+    assert_eq!(unavailable.label(), "System build too low");
+    assert_eq!(
+        unavailable.description(),
+        "Requires Windows build 22621 or newer"
+    );
+    assert_eq!(
+        app.state.backdrop_combination.fallback, None,
+        "an explicit native source must not report a fallback reason"
+    );
+}
+
+/// 切换材质或来源不重建交换链：合成方式只由平台基线决定，只有清屏 alpha 随计划变化。
+#[test]
+fn switching_material_or_source_keeps_the_swap_chain() {
+    use unbound_backdrop::BackdropCompositeAlpha;
+
+    let mut app = app();
+    app.set_backdrop_capabilities(Some(26100), true);
+    app.rebuild(VIEWPORT);
+
+    // 默认选择是「云母 + 自动」：机器承载得了原生路径，因此清屏 alpha 为 0。
+    let composition = app.state.backdrop_plan.composition;
+    assert_eq!(
+        composition,
+        BackdropCompositeAlpha::PreMultiplied,
+        "a premultiplied-capable host must keep the premultiplied surface"
+    );
+    assert_eq!(app.state.backdrop_plan.clear_alpha, 0.0);
+    assert!(app.root_background_transparent());
+
+    // 切到「无后景」：清屏 alpha 回到 1，合成方式仍然不动。
+    app.state.set_backdrop_material(MaterialKind::None);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.state.backdrop_plan.composition, composition,
+        "disabling the backdrop must not rebuild the swapchain"
+    );
+    assert_eq!(app.state.backdrop_plan.clear_alpha, 1.0);
+    assert!(!app.root_background_transparent());
+
+    // 切到另一档有系统材质请求的材质：清屏 alpha 变 0，合成方式依旧不动。
+    app.state.set_backdrop_material(MaterialKind::Acrylic);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.state.backdrop_plan.composition, composition,
+        "switching the material must not rebuild the swapchain"
+    );
+    assert_eq!(app.state.backdrop_plan.clear_alpha, 0.0);
+    assert!(app.root_background_transparent());
+
+    // 切来源到自绘：不请求系统材质，清屏 alpha 回到 1，合成方式依旧不动。
+    app.state.set_backdrop_material(MaterialKind::Mica);
+    app.state.set_backdrop_source(BackdropSource::SelfDrawn);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.state.backdrop_plan.composition, composition,
+        "switching the source must not rebuild the swapchain"
+    );
+    assert_eq!(app.state.backdrop_plan.clear_alpha, 1.0);
+    assert_eq!(
+        app.state.backdrop_plan.material,
+        unbound_backdrop::DwmMaterial::None,
+        "the self-drawn source must not request a system material"
+    );
+}
+
+/// 宿主注入构建号与驱动能力后，逐档材质门槛与实际生效组合必须同步更新。
+#[test]
+fn backdrop_capabilities_drive_the_effective_combination() {
+    let mut app = app();
+    app.navigate(PageId::Backdrop);
+    app.rebuild(VIEWPORT);
+
+    // 原生可用：所有材质档都能走原生路径。
     app.set_backdrop_capabilities(Some(22621), true);
     app.rebuild(VIEWPORT);
     assert_eq!(app.state.windows_build, Some(22621));
-    assert!(app.state.native_backdrop_available);
-    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::Native);
+    assert!(app.state.backdrop_native_available());
+    assert_eq!(
+        app.state.backdrop_combination.source,
+        BackdropSource::Native
+    );
 
-    app.state.set_backdrop_mode(BackdropMode::Native);
+    app.state.set_backdrop_material(MaterialKind::Mica);
     app.rebuild(VIEWPORT);
-    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::Native);
+    assert_eq!(app.state.backdrop_combination.material, MaterialKind::Mica);
+    assert_eq!(
+        app.state.backdrop_combination.source,
+        BackdropSource::Native
+    );
 
-    // Win10：原生不可用，显式 Native 必须回退到自绘。
+    // Win10：原生不可用，显式原生来源必须回退到自绘。
     app.set_backdrop_capabilities(Some(19045), true);
     app.rebuild(VIEWPORT);
     assert_eq!(app.state.windows_build, Some(19045));
-    assert!(!app.state.native_backdrop_available);
-    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::SelfDrawn);
+    assert!(!app.state.backdrop_native_available());
+    assert_eq!(
+        app.state.backdrop_combination.source,
+        BackdropSource::SelfDrawn
+    );
 
     // 驱动不支持预乘：即使构建号达标也必须回退。
     app.set_backdrop_capabilities(Some(26100), false);
     app.rebuild(VIEWPORT);
-    assert!(!app.state.native_backdrop_available);
-    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::SelfDrawn);
+    assert!(!app.state.backdrop_native_available());
+    assert_eq!(
+        app.state.backdrop_combination.source,
+        BackdropSource::SelfDrawn
+    );
 
     // 未知构建号（非 Windows）：同样回退。
     app.set_backdrop_capabilities(None, true);
     app.rebuild(VIEWPORT);
     assert_eq!(app.state.windows_build, None);
-    assert!(!app.state.native_backdrop_available);
-    assert_eq!(app.state.resolved_backdrop, ResolvedBackdrop::SelfDrawn);
+    assert!(!app.state.backdrop_native_available());
+    assert_eq!(
+        app.state.backdrop_combination.source,
+        BackdropSource::SelfDrawn
+    );
 }
