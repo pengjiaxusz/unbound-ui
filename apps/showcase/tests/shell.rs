@@ -3,7 +3,7 @@
 use std::ops::{Deref, DerefMut};
 
 use showcase::pages::PageId;
-use showcase::shell::{ClipboardRequest, GalleryApp};
+use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::target::{self, Target};
 use unbound_app::{AppKey, AppRuntime, ImeUpdate, Modifiers as AppModifiers};
@@ -376,6 +376,11 @@ fn ime_composition_is_visible_and_commits_exactly_once() {
     });
     app.rebuild(VIEWPORT);
     assert_eq!(app.state.search.text(), "hello");
+    assert_eq!(
+        app.state.search.edit.preedit(),
+        None,
+        "a commit must clear the in-progress composition"
+    );
 }
 
 #[test]
@@ -471,8 +476,8 @@ fn losing_focus_discards_the_active_composition() {
     app.rebuild(VIEWPORT);
     assert_eq!(app.state.search.text(), "ni");
 
-    app.state.blur_editors();
-    app.rebuild(VIEWPORT);
+    // 走真实链路：点击编辑器外部触发失焦，而不是直接调用状态层。
+    click_node(&mut app, target::id(Target::Theme(0)));
 
     assert_eq!(app.state.search.text(), "");
     assert_eq!(app.state.search.edit.preedit(), None);
@@ -981,29 +986,26 @@ fn editor_menu_actions_respect_selection_and_clipboard_state() {
     assert_eq!(app.state.search.text(), "abc");
     assert!(!app.editor_menu_open());
 
-    // 剪贴板有内容：粘贴项可用，点击排队读取请求。
+    // 剪贴板有内容：粘贴项可用，点击后运行时立即读取并插入。
+    app.runtime.context().clipboard_set("xyz");
     app.open_editor_menu(target, anchor, true);
     app.rebuild(VIEWPORT);
     click_node(&mut app, target::id(Target::EditorMenuItem(2)));
-    assert!(matches!(
-        app.take_clipboard_request(),
-        Some(ClipboardRequest::Read)
-    ));
+    assert!(app.take_clipboard_request().is_none());
+    assert_eq!(app.state.search.text(), "abcxyz");
     assert!(!app.editor_menu_open());
 
     // 全选后可复制整段文本。
     app.open_editor_menu(target, anchor, true);
     app.rebuild(VIEWPORT);
     click_node(&mut app, target::id(Target::EditorMenuItem(4)));
-    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+    assert_eq!(app.state.search.edit.selected_text(), Some("abcxyz"));
 
     app.open_editor_menu(target, anchor, true);
     app.rebuild(VIEWPORT);
     click_node(&mut app, target::id(Target::EditorMenuItem(1)));
-    match app.take_clipboard_request() {
-        Some(ClipboardRequest::Write(text)) => assert_eq!(text, "abc"),
-        other => panic!("expected a clipboard write, got {other:?}"),
-    }
+    assert!(app.take_clipboard_request().is_none());
+    assert_eq!(clipboard_text(&app).as_deref(), Some("abcxyz"));
 }
 
 /// 右键绝不主动做词选：无选区时只把插入符移到点击处。
@@ -1066,6 +1068,149 @@ fn right_click_keeps_a_selection_inside_it_and_collapses_it_outside() {
         "abc def".len(),
         "the caret must land on the clicked position"
     );
+}
+
+fn clipboard_text(app: &App) -> Option<String> {
+    app.runtime.context().clipboard_get()
+}
+
+fn select_all(app: &mut App) {
+    app.key(
+        &PlatformKey::Character("a".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+}
+
+/// 右键落在选区内必须保留选区；随后点击「复制」通过真实事件链写入剪贴板。
+///
+/// 回归：右键按下曾走 `focus_editor_at`/`begin_press_target`，在菜单打开前
+/// 就把选区折叠，使「复制」始终禁用。
+#[test]
+fn context_menu_copy_writes_the_selection_through_the_runtime() {
+    let mut app = search_with_text("abc def");
+    select_all(&mut app);
+    let rect = rect_of(&app, target::id(Target::Search));
+    // 点击文本起点附近：落在 (0, len) 选区内。
+    let inside = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    app.right_click(inside);
+    app.rebuild(VIEWPORT);
+
+    assert!(app.editor_menu_open(), "the right click must open the menu");
+    assert_eq!(
+        app.state.search.edit.selected_text(),
+        Some("abc def"),
+        "a right click inside the selection must keep it"
+    );
+
+    click_node(&mut app, target::id(Target::EditorMenuItem(1)));
+
+    assert_eq!(clipboard_text(&app).as_deref(), Some("abc def"));
+    assert!(!app.editor_menu_open());
+}
+
+/// 右键后点击「剪切」：选区文本进入剪贴板并从缓冲区移除。
+#[test]
+fn context_menu_cut_writes_the_clipboard_and_removes_the_selection() {
+    let mut app = search_with_text("abc def");
+    select_all(&mut app);
+    let rect = rect_of(&app, target::id(Target::Search));
+    let inside = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    app.right_click(inside);
+    app.rebuild(VIEWPORT);
+
+    click_node(&mut app, target::id(Target::EditorMenuItem(0)));
+
+    assert_eq!(app.state.search.text(), "");
+    assert_eq!(clipboard_text(&app).as_deref(), Some("abc def"));
+}
+
+/// 右键后点击「粘贴」：剪贴板内容立即插入，无需等待下一次按键。
+#[test]
+fn context_menu_paste_inserts_the_clipboard_through_the_runtime() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    app.runtime.context().clipboard_set("xyz");
+    let rect = rect_of(&app, target::id(Target::Search));
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+
+    click_node(&mut app, target::id(Target::EditorMenuItem(2)));
+
+    assert_eq!(app.state.search.text(), "xyz");
+}
+
+/// 无选区时「剪切」「复制」、空剪贴板时「粘贴」都必须无效果。
+#[test]
+fn disabled_context_menu_items_do_nothing_through_the_runtime() {
+    let mut app = search_with_text("abc");
+    let rect = rect_of(&app, target::id(Target::Search));
+
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(1)));
+    assert_eq!(clipboard_text(&app), None);
+    assert_eq!(app.state.search.text(), "abc");
+
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(0)));
+    assert_eq!(clipboard_text(&app), None);
+    assert_eq!(app.state.search.text(), "abc");
+
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(2)));
+    assert_eq!(app.state.search.text(), "abc");
+}
+
+/// 空文本时「全选」无效果。
+#[test]
+fn context_menu_select_all_on_empty_text_does_nothing() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    let rect = rect_of(&app, target::id(Target::Search));
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+
+    click_node(&mut app, target::id(Target::EditorMenuItem(4)));
+
+    assert_eq!(app.state.search.edit.selection(), None);
+}
+
+/// 右键按住微动不得形成或扩展选区。
+#[test]
+fn right_press_never_starts_a_selection_drag() {
+    let mut app = search_with_text("abc def");
+    let rect = rect_of(&app, target::id(Target::Search));
+    let start = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    let end = Vec2::new(rect.max().x - 10.0, rect.center().y);
+
+    app.runtime.pointer_move(start);
+    app.runtime.pointer_down(start, PointerButton::Right);
+    app.runtime.pointer_move(end);
+
+    assert_eq!(
+        app.state.search.edit.selection(),
+        None,
+        "holding the right button must not extend a selection"
+    );
+
+    app.runtime.pointer_up(end, PointerButton::Right);
 }
 
 /// 「全选」菜单项用鼠标点击必须生效，结果与 Ctrl+A 相同。

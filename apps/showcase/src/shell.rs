@@ -9,7 +9,7 @@ use accesskit::Role;
 use unbound_anim::{CubicBezier, Spring};
 use unbound_backdrop::{BackdropMode, BackdropPlan};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
-use unbound_input::CursorKind;
+use unbound_input::{CursorKind, PointerButton};
 use unbound_layout::LayoutStats;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::{Modifiers, PlatformKey};
@@ -1347,8 +1347,10 @@ impl GalleryApp {
     /// 仅*捕获*指针的控件在此响应：滚动条、滑块与可拖拽演示舞台。
     /// 所有离散控件均等待释放，因此按下后拖离控件绝不会激活它。
     ///
+    /// 只有左键承担聚焦与拖拽捕获；右键与中键仅执行关闭浮层、失焦等公共逻辑，
+    /// 编辑器聚焦与插入符定位交给随后的上下文菜单事件。
     ///
-    pub fn pointer_down(&mut self, position: Vec2, target: Option<u64>) {
+    pub fn pointer_down(&mut self, position: Vec2, target: Option<u64>, button: PointerButton) {
         self.pointer = position;
         // 点击 FPS 输入框之外的任意位置会提交待定值，就像原生微调框在失焦时一样。
         //
@@ -1386,10 +1388,14 @@ impl GalleryApp {
             self.state.blur_editors();
             self.state.bump();
         }
-        if let Some(node) = target {
-            self.pending_focus = Some(node);
-            if let Some(target) = target::decode(node) {
-                self.begin_press_target(target, position);
+        // 右键与中键不聚焦、不进入拖拽：右键的编辑器定位由上下文菜单事件完成，
+        // 若在此处走 `begin_press_target`，选区会在菜单打开前就被折叠。
+        if button == PointerButton::Left {
+            if let Some(node) = target {
+                self.pending_focus = Some(node);
+                if let Some(target) = target::decode(node) {
+                    self.begin_press_target(target, position);
+                }
             }
         }
     }

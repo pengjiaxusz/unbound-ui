@@ -57,7 +57,12 @@ impl Application for GalleryApp {
     ) -> EventOutcome {
         match event {
             AppEvent::PointerMove { pos, .. } => self.pointer_move(pos),
-            AppEvent::PointerDown { pos, target, .. } => self.pointer_down(pos, target),
+            AppEvent::PointerDown {
+                pos,
+                target,
+                button,
+                ..
+            } => self.pointer_down(pos, target, button),
             AppEvent::PointerUp { pos, .. } => self.pointer_up(pos),
             // 释放仅结束拖拽；运行时会单独上报点击，且仅当按压从未转为拖拽时才上报。
             // 第三次及之后的连击由 `count` 标出，此时按“全选”处理而不是重新定位插入符。
@@ -69,6 +74,9 @@ impl Application for GalleryApp {
                 } else {
                     self.click(node, pos);
                 }
+                // 上下文菜单的剪切/复制/粘贴由点击触发，必须在此同步排空
+                // 宿主剪贴板请求，否则复制不会写入、粘贴要等到下一次按键。
+                self.drain_clipboard(ctx);
             }
             // 一旦指针越过拖拽阈值（drag slop），路由器就会停止发送 `PointerMove`，
             // 改为发送 `DragStart`/`Drag`。它们携带相同的位置，因此外壳的捕获拖拽
