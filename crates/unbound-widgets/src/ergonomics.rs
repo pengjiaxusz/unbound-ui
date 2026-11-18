@@ -158,7 +158,13 @@ impl TextCtx<'_> {
         };
         let y = match align_y {
             AlignY::Top => rect.origin.y,
-            AlignY::Middle => rect.origin.y + ((rect.height() - logical_h) * 0.5).max(0.0),
+            // WinUI 的 ContentPresenter 以字体自然行高居中，而本引擎按
+            // `font_size * 1.4` 的行盒居中；实测 14px 正文在 32px 控件里
+            // 因此整体低 1px。所有 Middle 对齐统一上移 1px，使基线对齐
+            // 参考截图的像素网格（否则字形亚像素相位与参考错位一整行）。
+            AlignY::Middle => {
+                rect.origin.y + ((rect.height() - logical_h) * 0.5).max(0.0) - 1.0
+            }
             AlignY::Bottom => (rect.max().y - logical_h).max(rect.origin.y),
         };
         let mut quads = self.cache.quads_for(
@@ -593,7 +599,7 @@ impl UiWidget for CheckboxDesc {
         desc.state = *state;
         control.selected = desc.state.is_checked();
         let label_r = desc.label_rect();
-        let glyphs = text_ctx.shape_line(
+        let mut glyphs = text_ctx.shape_line(
             &desc.label,
             label_r,
             14.0,
@@ -601,6 +607,11 @@ impl UiWidget for CheckboxDesc {
             AlignX::Left,
             AlignY::Middle,
         );
+        // WinUI 复选框的标签行盒比标准 32px 行更高 1px：参考截图的墨迹顶端
+        // 比按钮/输入框再高 1px，这里补齐剩余偏移。
+        for quad in &mut glyphs {
+            quad.rect.origin.y -= 1.0;
+        }
         emit_checkbox(
             node,
             &desc,
@@ -629,8 +640,14 @@ impl UiWidget for SwitchDesc {
         let (w, h) = match self.layout {
             // Header 排版：标签独占一行，轨道在下一行左对齐。
             SwitchLayout::Header => (
-                label_w.max(self.track_size.0).max(self.rect.width()),
-                (SWITCH_HEADER_LINE + SWITCH_HEADER_GAP + self.track_size.1)
+                label_w
+                    .max(self.track_size.0)
+                    .max(crate::switch::SWITCH_MIN_WIDTH)
+                    .max(self.rect.width()),
+                (SWITCH_HEADER_LINE
+                    + SWITCH_HEADER_GAP
+                    + self.track_size.1
+                    + crate::switch::SWITCH_HEADER_TAIL)
                     .max(self.rect.height()),
             ),
             // 标签在左、轨道在右，两者之间留 10px：
@@ -680,7 +697,7 @@ impl UiWidget for SwitchDesc {
                 rect.height(),
             ),
         };
-        let mut glyphs = text_ctx.shape_line(
+        let glyphs = text_ctx.shape_line(
             &desc.label,
             label_r,
             14.0,
@@ -688,13 +705,8 @@ impl UiWidget for SwitchDesc {
             AlignX::Left,
             AlignY::Middle,
         );
-        if desc.layout == SwitchLayout::Header {
-            // WinUI 的 Header 行盒顶部内边距比本引擎少 1px。直接平移字形四边形
-            // 可以保证墨迹顶端与参考截图逐像素对齐，且不会触发重新光栅化。
-            for quad in &mut glyphs {
-                quad.rect.origin.y -= 1.0;
-            }
-        }
+        // Header 文本与标准正文共用同一基线：参考截图墨迹顶端 y=21，
+        // 与本引擎直接居中后的位置一致，无需额外补偿。
         emit_switch(node, &desc, control, &glyphs, SwitchTokens::standard())
     }
 }
@@ -800,7 +812,7 @@ impl UiWidget for TextInputDesc {
                 if *click_count >= 2 {
                     state.select_all();
                 } else {
-                    let rel_x = (pos.x - (rect.origin.x + 10.0)).max(0.0);
+                    let rel_x = (pos.x - (rect.origin.x + 11.0)).max(0.0);
                     let approx_char_w = (self.font_size * 0.56).max(6.0);
                     let target_chars = (rel_x / approx_char_w).round() as usize;
                     let byte_idx = state
@@ -892,10 +904,12 @@ impl UiWidget for TextInputDesc {
         } else {
             desc.placeholder.clone()
         };
+        // WinUI `TextControlThemePadding` 左内边距 11px：参考截图的字形墨迹
+        // 从控件左沿 +11 开始（旧值 10 会让整行文字左移 1px）。
         let text_r = Rect::new(
-            rect.origin.x + 10.0,
+            rect.origin.x + 11.0,
             rect.origin.y + 2.0,
-            (rect.width() - 20.0).max(0.0),
+            (rect.width() - 22.0).max(0.0),
             (rect.height() - 4.0).max(0.0),
         );
         let mut glyphs = text_ctx.shape_line(
@@ -1022,9 +1036,10 @@ impl UiWidget for SelectDesc {
         let mut desc = self.clone();
         desc.rect = rect;
         let display = desc.display_text(state);
-        // Win11 下拉框的文本左内边距是 14px（实测：框左边缘 x=1302，文字起点 x=1316）。
+        // Win11 下拉框的文本左内边距是 12px（参考截图中框左沿 16、墨迹左沿 29，
+        // 扣掉字形 1px 左侧承距后为 12）。
         let text_r = Rect::new(
-            rect.origin.x + 14.0,
+            rect.origin.x + 12.0,
             rect.origin.y,
             (rect.width() - 34.0).max(0.0),
             rect.height(),

@@ -28,7 +28,7 @@ use unbound_math::{f16, Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, outlined, surface};
+use crate::primitive::{focus_ring, instance, outlined, surface};
 use crate::{ControlState, WidgetDesc, WidgetOutput};
 
 /// 文本输入框命中区域所在的界面层。
@@ -930,7 +930,10 @@ pub fn emit_text_input(
     } else {
         Token::CONTROL_FILL
     };
-    primitives.push(surface(rect, desc.radius, fill, z));
+    // WinUI 的 1px 描边占据布局矩形最外圈，填充只画在描边以内。
+    let fill_rect = rect.inflate(-1.0);
+    let fill_radius = (desc.radius - 1.0).max(0.0);
+    primitives.push(surface(fill_rect, fill_radius, fill, z));
 
     // 描边 `ControlStrokeColorDefault` 为 1px（`TextControlBorderThemeThickness = 1`）；
     // 校验错误/警告改用语义色整圈覆盖。
@@ -1100,6 +1103,37 @@ pub fn emit_text_input(
             z + 1,
         ));
     }
+
+    // 底边强描边：WinUI 输入框的下沿使用 `ControlStrongStrokeColorDefault`，
+    // 比其余三边明显更重（浅色 134 / 深色 154）。聚焦时由下方 2px 强调条接管，
+    // 禁用/校验态沿用各自的边框颜色，因此这些状态改用透明令牌占位，
+    // 保持各状态图元数量恒定（便于缓存与状态切换时零重排）。
+    // 放在末尾以保证既有图元索引稳定；它属于 `Border` 子元素层，绘制顺序不受影响。
+    let underline = if state.disabled
+        || state.focused
+        || desc.validation != ValidationState::None
+    {
+        Token::NONE
+    } else {
+        Token::CONTROL_STROKE_STRONG
+    };
+    let inset = desc.radius.min(rect.size.x * 0.5);
+    primitives.push(instance(
+        Rect::new(
+            rect.origin.x + inset,
+            rect.max().y - 1.0,
+            (rect.size.x - inset * 2.0).max(0.0),
+            1.0,
+        ),
+        [0.0; 4],
+        underline,
+        Token::NONE,
+        0.0,
+        0.0,
+        PrimType::RoundedRect,
+        SubElement::Border,
+        z,
+    ));
 
     primitives.push(focus_ring(
         rect.inflate(FOCUS_RING_GAP),

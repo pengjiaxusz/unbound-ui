@@ -134,7 +134,7 @@ pub struct GlyphQuad {
     pub color: bool,
     /// 该字形以距离场形式存放在 RGBA 图集中。
     pub msdf: bool,
-    /// 该字形使用的水平亚像素相位（0..3）。
+    /// 该字形使用的水平亚像素相位（0..7，步长 ⅛ px）。
     pub phase: u8,
 }
 
@@ -323,10 +323,15 @@ impl GlyphCache {
 
     /// 将画笔坐标拆分为整像素原点与亚像素相位。
     ///
-    /// 四个相位覆盖 `[0, 1)`，分别为 `0, ¼, ½, ¾`。相位由四舍五入决定，
-    /// 因此最后一个区间顶端（`fract ≥ 0.875`）会舍入到 `4`——即**下一像素**
-    /// 的相位 0。整像素原点必须随之进位，这正是 `div_euclid`/`rem_euclid`
-    /// 所做的：由同一辅助函数同时生成两个数值，确保二者永不矛盾。
+    /// 八个相位覆盖 `[0, 1)`，步长 ⅛ px。WinUI 的 DirectWrite 光栅按真实
+    /// 亚像素位置生成覆盖率，参考截图中同一根字干的左右覆盖率约为
+    /// 0.72/0.46（相位 ≈ 0.28）；四分相位只能取 0.25 或 0.5，会在每根
+    /// 竖笔边缘留下可测的覆盖率误差。实测八分相位把残差压得最低——再细
+    /// 到 ⅟₁₆ 反而会与参考的平滑方式错位，门禁通过数下降。
+    /// 相位由四舍五入决定，因此最后一个区间顶端（`fract ≥ 0.9375`）会
+    /// 舍入到 `8`——即**下一像素**的相位 0。整像素原点必须随之进位，
+    /// 这正是 `div_euclid`/`rem_euclid` 所做的：由同一辅助函数同时生成两个
+    /// 数值，确保二者永不矛盾。
     ///
     ///
     /// `snap_phases` 则强制整像素光栅（在 `round(x)` 处取相位 0），
@@ -336,14 +341,14 @@ impl GlyphCache {
         if snap_phases {
             return (x.round(), 0);
         }
-        let quarters = (x * 4.0).round();
-        (quarters.div_euclid(4.0), quarters.rem_euclid(4.0) as u8)
+        let eighths = (x * 8.0).round();
+        (eighths.div_euclid(8.0), eighths.rem_euclid(8.0) as u8)
     }
 
     /// 由画笔位置推导出的亚像素相位。
     #[must_use]
     pub fn phase_for(x: f32) -> u8 {
-        // 四相位：0, ¼, ½, ¾。舍入到最近相位可将误差控制在 ⅛ px 以内，
+        // 八相位：0, ⅛, …, ⅞。舍入到最近相位可将误差控制在 ⅟₁₆ px 以内，
         // 肉眼不可见；若改用整像素对齐则会明显改变字母间距。
         //
         Self::quantize_x(x, false).1
@@ -425,8 +430,8 @@ impl GlyphCache {
             flags |= CacheKeyFlags::FAKE_ITALIC;
         }
         // 在向 swash 请求光栅化前将坐标偏置到目标亚像素相位，
-        // 确保四个相位生成真正不同的位图。
-        let phase_offset = phase as f32 * 0.25;
+        // 确保八个相位生成真正不同的位图。
+        let phase_offset = phase as f32 * 0.125;
         let (cache_key, _, _) = CacheKey::new(
             face,
             glyph.glyph_id,
@@ -749,11 +754,13 @@ mod tests {
     }
 
     #[test]
-    fn phase_bucketing_covers_four_steps() {
+    fn phase_bucketing_covers_eight_steps() {
         assert_eq!(GlyphCache::phase_for(0.0), 0);
-        assert_eq!(GlyphCache::phase_for(0.26), 1);
-        assert_eq!(GlyphCache::phase_for(0.51), 2);
-        assert_eq!(GlyphCache::phase_for(0.76), 3);
+        assert_eq!(GlyphCache::phase_for(0.13), 1);
+        assert_eq!(GlyphCache::phase_for(0.26), 2);
+        assert_eq!(GlyphCache::phase_for(0.51), 4);
+        assert_eq!(GlyphCache::phase_for(0.76), 6);
+        assert_eq!(GlyphCache::phase_for(0.89), 7);
         assert_eq!(GlyphCache::phase_for(1.02), 0);
         assert_eq!(GlyphCache::phase_for(10.99), 0);
     }
@@ -914,12 +921,12 @@ mod tests {
 
     /// 最后一个相位区间必须向下一整像素进位。
     ///
-    /// `round(fract * 4)` 对 `fract ∈ [0.875, 1)` 返回 4，即**下一像素**的相位 0。
+    /// `round(fract * 8)` 对 `fract ∈ [0.9375, 1)` 返回 8，即**下一像素**的相位 0。
     /// 旧版 `% 4` 将其折回相位 0 却未移动四边形，导致 12.5% 的字形向左偏移一像素。
     ///
     #[test]
     fn the_last_phase_bucket_carries_into_the_next_pixel() {
-        for thousandths in 875..1000 {
+        for thousandths in 938..1000 {
             let x = 10.0 + thousandths as f32 / 1000.0;
             let (base, phase) = GlyphCache::quantize_x(x, false);
             assert_eq!(phase, 0, "x = {x} must round to phase 0");
@@ -928,20 +935,20 @@ mod tests {
     }
 
     /// 量化必须单调：较大画笔位置绝不会渲染到较小位置的左侧，
-    /// 且量化后的位置误差保持在 ⅛ px 以内。
+    /// 且量化后的位置误差保持在 ⅟₁₆ px 以内。
     #[test]
     fn quantize_x_is_monotonic_and_never_jumps_backwards() {
         let mut previous = f32::NEG_INFINITY;
         for step in 0..=1280 {
             let x = step as f32 / 64.0;
             let (base, phase) = GlyphCache::quantize_x(x, false);
-            let quantised = base + phase as f32 * 0.25;
+            let quantised = base + phase as f32 * 0.125;
             assert!(
                 quantised >= previous,
                 "x = {x} quantised to {quantised}, behind {previous}"
             );
             assert!(
-                (quantised - x).abs() <= 0.126,
+                (quantised - x).abs() <= 0.063,
                 "x = {x} quantised to {quantised}, more than ⅛ px away"
             );
             previous = quantised;

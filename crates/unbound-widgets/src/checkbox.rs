@@ -301,10 +301,13 @@ fn check_mark(
     let y = box_rect.origin.y;
     let w = box_rect.size.x;
     let h = box_rect.size.y;
-    let width = (w * 0.16).max(1.5);
-    let start = [x + w * 0.22, y + h * 0.52];
-    let elbow = [x + w * 0.42, y + h * 0.72];
-    let tip = [x + w * 0.78, y + h * 0.28];
+    // 参考截图中勾选标记是一条 1px 细线：旧实现按 16% 方框宽（3.2px）绘制，
+    // 会糊成一团粗斜块。折点位置同样按实测像素（勾从 0.225/0.475 下折到
+    // 0.375/0.625，再上扬到 0.725/0.325）。
+    let width = 1.0;
+    let start = [x + w * 0.225, y + h * 0.475];
+    let elbow = [x + w * 0.375, y + h * 0.625];
+    let tip = [x + w * 0.725, y + h * 0.325];
     curve_stroke(
         [
             start,

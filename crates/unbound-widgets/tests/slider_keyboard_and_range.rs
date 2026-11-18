@@ -1,6 +1,7 @@
 //! 滑块键盘步进、垂直几何布局与双滑块区间测试。
 
 use unbound_math::{Rect, Vec2};
+use unbound_theme::Token;
 use unbound_widgets::slider::{
     emit_slider, reduce_slider_key, value_from_pointer, Orientation, SliderDesc, SliderKey,
     SliderTokens,
@@ -61,11 +62,11 @@ fn a_vertical_slider_runs_bottom_to_top() {
     assert_eq!(track.size.y, 200.0);
 
     desc.value = 0.0;
-    assert_eq!(desc.thumb_rect().origin.y, 191.0);
+    assert_eq!(desc.thumb_rect().origin.y, 190.0);
     desc.value = 100.0;
-    assert_eq!(desc.thumb_rect().origin.y, -9.0);
+    assert_eq!(desc.thumb_rect().origin.y, -10.0);
     desc.value = 50.0;
-    assert_eq!(desc.thumb_rect().origin.y, 91.0);
+    assert_eq!(desc.thumb_rect().origin.y, 90.0);
 
     assert_eq!(value_from_pointer(Vec2::new(0.0, 0.0), &desc), 100.0);
     assert_eq!(value_from_pointer(Vec2::new(0.0, 100.0), &desc), 50.0);
@@ -88,9 +89,9 @@ fn a_range_fills_between_the_two_thumbs() {
     assert_eq!(fill.size.x, 100.0);
     assert_eq!(
         desc.range_start_thumb_rect().map(|thumb| thumb.origin.x),
-        Some(41.0)
+        Some(40.0)
     );
-    assert_eq!(desc.thumb_rect().origin.x, 141.0);
+    assert_eq!(desc.thumb_rect().origin.x, 140.0);
 }
 
 #[test]
@@ -107,8 +108,8 @@ fn ticks_and_the_tooltip_add_their_own_primitives() {
         .with_ticks(true);
     assert_eq!(plain.tick_ratios().len(), 5);
     let output = emit_slider(1, &plain, ControlState::default(), &[], tokens);
-    // 轨道、填充、五个刻度、拇指、焦点环。
-    assert_eq!(output.primitives.len(), 9);
+    // 轨道、填充、五个刻度、拇指外盘、拇指内圆点、焦点环。
+    assert_eq!(output.primitives.len(), 10);
 
     let with_tooltip = desc().with_value_tooltip(true);
     let tooltip = with_tooltip.tooltip_rect();
@@ -142,10 +143,10 @@ fn a_disabled_slider_paints_the_disabled_slots() {
     );
     assert_eq!(
         output.primitives[2].fill_token_or_uv,
-        tokens.thumb_disabled.raw() as u32
+        Token::SLIDER_THUMB_DISK.raw() as u32
     );
     assert_eq!(
-        output.primitives[2].border_token_or_tex,
-        tokens.thumb_border_disabled.raw() as u32
+        output.primitives[3].fill_token_or_uv,
+        tokens.thumb_disabled.raw() as u32
     );
 }

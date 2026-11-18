@@ -322,6 +322,29 @@ impl Token {
     pub const SLIDER_FILL_DISABLED: Self = Self(93);
     /// WinUI `SliderThumbBackgroundDisabled`：禁用滑块的拇指。
     pub const SLIDER_THUMB_DISABLED: Self = Self(94);
+
+    // ---- 控件描边下半段（95）---------------------------------------------
+
+    /// WinUI `ControlStrokeColorSecondary`：控件描边在底边的加深段。
+    ///
+    /// WinUI 按钮与下拉框的描边不是均匀的一圈，而是自上而下的渐变：
+    /// 顶边用 [`Token::CONTROL_STROKE`]，底边换成本槽位后深一档，形成浮起感。
+    /// 实测浅色顶边 229、底边 204；深色顶边 53、底边 48。
+    pub const CONTROL_STROKE_SECONDARY: Self = Self(95);
+
+    /// WinUI `ControlStrongStrokeColorDefault`：输入框底边的强描边。
+    ///
+    /// 叠在 [`Token::CONTROL_STROKE`] 之上：浅色把 229 压到 134，
+    /// 深色把 53 提亮到 154，正是 Win11 输入框那条加重的下边线。
+    pub const CONTROL_STROKE_STRONG: Self = Self(96);
+
+    // ---- 滑块拇指外盘（97）-----------------------------------------------
+
+    /// WinUI `SliderThumbBackground`：滑块拇指的 20px 外盘。
+    ///
+    /// 浅色为纯白圆盘、深色为 `#454545`；内圈 12px 强调色圆点由
+    /// [`Token::PRIMARY`] / [`Token::SLIDER_THUMB_DISABLED`] 负责。
+    pub const SLIDER_THUMB_DISK: Self = Self(97);
 }
 
 /// 设计系统定义的全部语义令牌集合。
@@ -331,7 +354,7 @@ impl Token {
 ///
 /// [`Token::NONE`] 不在此列表中：它是引擎保留槽位，而非语义颜色。
 ///
-pub const TOKENS: [Token; 94] = [
+pub const TOKENS: [Token; 97] = [
     Token::SURFACE,
     Token::SURFACE_RAISED,
     Token::SURFACE_SUNKEN,
@@ -426,6 +449,9 @@ pub const TOKENS: [Token; 94] = [
     Token::SLIDER_TRACK_DISABLED,
     Token::SLIDER_FILL_DISABLED,
     Token::SLIDER_THUMB_DISABLED,
+    Token::CONTROL_STROKE_SECONDARY,
+    Token::CONTROL_STROKE_STRONG,
+    Token::SLIDER_THUMB_DISK,
 ];
 
 /// 当前激活的主题。
@@ -635,6 +661,14 @@ impl ThemeSet {
                 (Token::CONTROL_FILL, Color::WHITE),
                 (Token::CONTROL_STROKE, Color::from_srgb8(46, 49, 58, 255)),
                 (
+                    Token::CONTROL_STROKE_SECONDARY,
+                    Color::from_srgb8(28, 30, 38, 255),
+                ),
+                (
+                    Token::CONTROL_STROKE_STRONG,
+                    Color::from_srgb8(20, 22, 28, 255),
+                ),
+                (
                     Token::CONTROL_TRACK_STROKE,
                     Color::from_srgb8(138, 138, 138, 255),
                 ),
@@ -664,6 +698,7 @@ impl ThemeSet {
                     Token::SLIDER_THUMB_DISABLED,
                     Color::from_srgb8(200, 200, 200, 255),
                 ),
+                (Token::SLIDER_THUMB_DISK, Color::WHITE),
                 (
                     Token::INPUT_BORDER_HOVER,
                     Color::from_srgb8(154, 163, 181, 255),
@@ -776,6 +811,14 @@ impl ThemeSet {
                 (Token::CONTROL_FILL, Color::from_srgb8(20, 21, 26, 255)),
                 (Token::CONTROL_STROKE, Color::from_srgb8(46, 49, 58, 255)),
                 (
+                    Token::CONTROL_STROKE_SECONDARY,
+                    Color::from_srgb8(28, 30, 38, 255),
+                ),
+                (
+                    Token::CONTROL_STROKE_STRONG,
+                    Color::from_srgb8(20, 22, 28, 255),
+                ),
+                (
                     Token::CONTROL_TRACK_STROKE,
                     Color::from_srgb8(138, 138, 138, 255),
                 ),
@@ -804,6 +847,10 @@ impl ThemeSet {
                 (
                     Token::SLIDER_THUMB_DISABLED,
                     Color::from_srgb8(98, 98, 98, 255),
+                ),
+                (
+                    Token::SLIDER_THUMB_DISK,
+                    Color::from_srgb8(69, 69, 69, 255),
                 ),
                 (
                     Token::INPUT_BORDER_HOVER,
@@ -910,6 +957,8 @@ impl ThemeSet {
             (Token::INPUT_BG, Color::BLACK),
             (Token::CONTROL_FILL, Color::BLACK),
             (Token::CONTROL_STROKE, Color::WHITE),
+            (Token::CONTROL_STROKE_SECONDARY, Color::WHITE),
+            (Token::CONTROL_STROKE_STRONG, Color::WHITE),
             (
                 Token::CONTROL_TRACK_STROKE,
                 Color::from_srgb8(138, 138, 138, 255),
@@ -934,6 +983,7 @@ impl ThemeSet {
             ),
             (Token::SLIDER_FILL_DISABLED, Color::WHITE),
             (Token::SLIDER_THUMB_DISABLED, Color::WHITE),
+            (Token::SLIDER_THUMB_DISK, Color::WHITE),
             (
                 Token::INPUT_BORDER_HOVER,
                 Color::from_srgb8(255, 230, 0, 255),
