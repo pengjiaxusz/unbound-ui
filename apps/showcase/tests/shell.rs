@@ -110,6 +110,11 @@ impl App {
         }
     }
 
+    /// 注入平台上报的按住重复事件，走与窗口宿主相同的外壳入口。
+    fn repeat(&mut self, key: &PlatformKey, modifiers: Modifiers) {
+        self.runtime.application_mut().key_repeat(key, modifiers);
+    }
+
     fn pressed(&self) -> Option<u64> {
         self.runtime.context().pressed
     }
@@ -408,6 +413,266 @@ fn escape_cancels_only_the_active_composition() {
         "escape must drop only the composition and keep committed text"
     );
     assert!(app.state.search.focused);
+}
+
+#[test]
+fn held_character_keys_keep_inserting_at_the_caret() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    app.key(
+        &PlatformKey::Character("a".to_string()),
+        Modifiers::default(),
+    );
+    app.key(
+        &PlatformKey::Character("c".to_string()),
+        Modifiers::default(),
+    );
+    // 光标移到两个字符之间，重复字符必须插在同一插入点。
+    app.key(
+        &PlatformKey::Named("ArrowLeft".to_string()),
+        Modifiers::default(),
+    );
+    for _ in 0..3 {
+        app.repeat(
+            &PlatformKey::Character("b".to_string()),
+            Modifiers::default(),
+        );
+    }
+    assert_eq!(app.state.search.text(), "abbbc");
+    assert_eq!(app.state.search.edit.cursor(), 4);
+    assert_eq!(app.state.search.edit.anchor(), 4);
+}
+
+#[test]
+fn held_backspace_and_delete_keep_removing_text() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "abcd".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    for _ in 0..2 {
+        app.repeat(
+            &PlatformKey::Named("Backspace".to_string()),
+            Modifiers::default(),
+        );
+    }
+    assert_eq!(app.state.search.text(), "ab");
+
+    app.key(
+        &PlatformKey::Named("Home".to_string()),
+        Modifiers::default(),
+    );
+    for _ in 0..2 {
+        app.repeat(
+            &PlatformKey::Named("Delete".to_string()),
+            Modifiers::default(),
+        );
+    }
+    assert_eq!(
+        app.state.search.text(),
+        "",
+        "held Delete must remove forward"
+    );
+    assert_eq!(app.state.search.edit.cursor(), 0);
+}
+
+#[test]
+fn held_ctrl_backspace_deletes_one_word_per_repeat() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "hello world".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    let ctrl = Modifiers {
+        control: true,
+        ..Default::default()
+    };
+    app.repeat(&PlatformKey::Named("Backspace".to_string()), ctrl);
+    assert_eq!(app.state.search.text(), "hello ");
+    app.repeat(&PlatformKey::Named("Backspace".to_string()), ctrl);
+    assert_eq!(app.state.search.text(), "");
+}
+
+#[test]
+fn held_arrows_and_home_end_keep_moving_the_caret() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "abc".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    app.repeat(
+        &PlatformKey::Named("ArrowLeft".to_string()),
+        Modifiers::default(),
+    );
+    app.repeat(
+        &PlatformKey::Named("ArrowLeft".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(app.state.search.edit.cursor(), 1);
+    assert_eq!(app.state.search.edit.anchor(), 1);
+
+    app.repeat(
+        &PlatformKey::Named("Home".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(app.state.search.edit.cursor(), 0);
+    app.repeat(&PlatformKey::Named("End".to_string()), Modifiers::default());
+    assert_eq!(app.state.search.edit.cursor(), 3);
+}
+
+#[test]
+fn held_shift_left_keeps_extending_the_selection() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "abc".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    let shift = Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+    for _ in 0..2 {
+        app.repeat(&PlatformKey::Named("ArrowLeft".to_string()), shift);
+    }
+    assert_eq!(app.state.search.edit.selected_text(), Some("bc"));
+    assert_eq!(app.state.search.edit.anchor(), 3);
+    assert_eq!(app.state.search.edit.cursor(), 1);
+}
+
+#[test]
+fn held_ctrl_commands_do_not_run_again() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "abc".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    let ctrl = Modifiers {
+        control: true,
+        ..Default::default()
+    };
+
+    // 重复的全选不得执行任何命令：第一次按下才生效。
+    app.repeat(&PlatformKey::Character("a".to_string()), ctrl);
+    assert_eq!(app.state.search.edit.selection(), None);
+    app.key(&PlatformKey::Character("a".to_string()), ctrl);
+    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+
+    // 重复的复制、剪切、粘贴、撤销、重做都不得产生动作。
+    app.repeat(&PlatformKey::Character("c".to_string()), ctrl);
+    assert!(app.take_clipboard_request().is_none());
+    app.repeat(&PlatformKey::Character("x".to_string()), ctrl);
+    assert!(app.take_clipboard_request().is_none());
+    assert_eq!(app.state.search.text(), "abc", "held Ctrl+X must not cut");
+    app.repeat(&PlatformKey::Character("v".to_string()), ctrl);
+    assert!(app.take_clipboard_request().is_none());
+    app.repeat(&PlatformKey::Character("z".to_string()), ctrl);
+    app.repeat(
+        &PlatformKey::Character("z".to_string()),
+        Modifiers {
+            control: true,
+            shift: true,
+            ..Default::default()
+        },
+    );
+    app.repeat(&PlatformKey::Character("y".to_string()), ctrl);
+    assert_eq!(
+        app.state.search.text(),
+        "abc",
+        "held undo and redo must not alter the text"
+    );
+    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+}
+
+#[test]
+fn repeats_without_a_focused_editor_change_nothing() {
+    let mut app = app();
+    assert!(app.focused_editor().is_none());
+    let before = (
+        app.state.search.text().to_owned(),
+        app.state.demo.text.text().to_owned(),
+        app.state.fps_input.text().to_owned(),
+    );
+
+    app.repeat(
+        &PlatformKey::Character("x".to_string()),
+        Modifiers::default(),
+    );
+    app.repeat(
+        &PlatformKey::Named("Backspace".to_string()),
+        Modifiers::default(),
+    );
+    app.repeat(
+        &PlatformKey::Named("ArrowLeft".to_string()),
+        Modifiers::default(),
+    );
+    app.repeat(
+        &PlatformKey::Character("a".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        before,
+        (
+            app.state.search.text().to_owned(),
+            app.state.demo.text.text().to_owned(),
+            app.state.fps_input.text().to_owned(),
+        ),
+        "a repeat without focus must not edit any buffer"
+    );
+    assert!(app.take_clipboard_request().is_none());
 }
 
 #[test]

@@ -1517,18 +1517,30 @@ impl GalleryApp {
 
     /// 处理按住不放时 OS 重复发送的按键。
     ///
-    /// 文本被排除在外：长按 `a` 不是一连串 `a`，且平台 IME 也会再次上报已组合字符。
-    /// 仅编辑键触发重复。
-    pub fn key_repeat(&mut self, key: &PlatformKey) {
-        let PlatformKey::Named(name) = key else {
+    /// 字符键与编辑键（含 Shift/Ctrl 修饰）随重复事件持续生效；
+    /// 全选、复制、剪切、粘贴、撤销与重做是语义命令，只响应首次按下，
+    /// 重复事件必须丢弃，否则长按会连续粘贴或连续撤销。
+    pub fn key_repeat(&mut self, key: &PlatformKey, modifiers: Modifiers) {
+        use unbound_widgets::text_input::TextInputEvent;
+
+        let Some(id) = self.focused_editor() else {
             return;
         };
-        if name != "Backspace" {
+        let Some(event) = Self::key_to_edit_event(key, modifiers) else {
+            return;
+        };
+        if matches!(
+            event,
+            TextInputEvent::SelectAll
+                | TextInputEvent::Copy
+                | TextInputEvent::Cut
+                | TextInputEvent::Paste(_)
+                | TextInputEvent::Undo
+                | TextInputEvent::Redo
+        ) {
             return;
         }
-        if let Some(id) = self.focused_editor() {
-            self.editor_event(id, unbound_widgets::text_input::TextInputEvent::Backspace);
-        }
+        let _ = self.editor_event(id, event);
     }
 
     /// 应用一次 IME 更新到当前聚焦控件。

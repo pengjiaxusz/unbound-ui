@@ -925,7 +925,8 @@ impl PlatformApp for Showcase {
                 let ime_owns_text = state.ime.enabled && matches!(key, PlatformKey::Character(_));
                 if !ime_owns_text {
                     if repeat {
-                        self.shell_mut().key_repeat(&key);
+                        let modifiers = self.modifiers;
+                        self.shell_mut().key_repeat(&key, modifiers);
                     } else {
                         let modifiers = app_modifiers(self.modifiers);
                         self.app.key(app_key(&key), true, modifiers);
