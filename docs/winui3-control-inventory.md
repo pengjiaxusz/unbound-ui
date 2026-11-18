@@ -16,8 +16,8 @@
 | **1. 已实现 · WinUI 3 基准对齐控件** | **71 个** | 已在 `unbound-widgets` 中实现，目录枚举、展台展示名与展示文档均统一使用 WinUI 3 官方名称，可直接纳入批量像素差分 |
 | **2. 已实现 · Community Toolkit 社区标准对齐控件** | **20 个** | 对应 `CommunityToolkit.WinUI.Controls` 中的高频官方扩展组件（如 `Segmented`、`SettingsCard`、`TokenizingTextBox` 等） |
 | **3. 已实现 · Unbound 自有独有控件** | **43 个** | WinUI 3 无对应物，属于本框架面向节点图、时间轴、代码/终端、数据工作台等场景的自有独有组件 |
-| **4. 待实现 · WinUI 3 缺失必补控件（P1）** | **0 个**（11 项已全部落地） | P0 的 7 个缺失控件与 P1 的 11 项均已落地为独立目录变体；`PipsPager` 变体以 `PaginationStyle::Dots` 纯圆点样式承载 |
-| **5. 待实现 · Community Toolkit 选补控件（P2）** | **0 个**（6 项已全部落地） | Windows Community Toolkit 的 6 个选补控件均已实现 |
+| **4. 待实现 · WinUI 3 缺失必补控件（P1）** | **0 个**（11 项已全部落地并对齐） | P0 的 7 个缺失控件与 P1 的 11 项均已落地为独立目录变体并完成视觉对齐；`PipsPager` 变体以 `PaginationStyle::Dots` 纯圆点样式承载 |
+| **5. 待实现 · Community Toolkit 选补控件（P2）** | **0 个**（6 项已全部落地并对齐） | Windows Community Toolkit 的 6 个选补控件均已实现并完成对齐 |
 
 > 汇总：71 + 20 + 43 = **134 个目录变体**，与 `WidgetCatalogId::COUNT` 及稳定形状探针一致。
 
@@ -28,7 +28,7 @@
 > **命名对齐规则**：
 > - 表中第一列 **WinUI 3 规范名称** 为主名称（检测系统 `Catalog` 与报告统一使用此名称）。
 > - **命名状态** 标注为 `已一致` 或 `已对应`（`Containers` 等非直接官方名变体保留）。
-> - **差分接入状态** 标注为 `已接入批量差分`（参考宿主与差分器代码已就绪，实机采集需要 GPU/.NET 环境）或 `待接入批量差分`。当前首批 6 个试点 + 两批 40 个 + 后续补齐 11 个共 57 个已接入。
+> - **差分接入状态** 标注为 `已接入批量差分`（参考宿主与差分器代码已就绪，实机采集需要 GPU/.NET 环境）或 `待接入批量差分`。当前首批 6 个试点 + 两批 40 个 + 后续补齐 11 个及 P0 补充控件共 64 个参考用例均已接入批量差分。
 
 | WinUI 3 规范名称 | WinUI 3 分类 | 本框架当前 `WidgetCatalogId` | 源码模块 (`crates/unbound-widgets/src/`) | 命名状态 | 差分接入状态 |
 | --- | --- | --- | --- | --- | --- |
@@ -77,18 +77,18 @@
 | **Image** | Media & Visual | `Image` | `image.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **FontIcon / SymbolIcon** | Media & Visual | `FontIcon` | `image.rs` | `已一致`（`SymbolIcon` 由同一图标发射器承载） | 已接入批量差分（实机采集待 GPU） |
 | **TitleBar** | Windowing | （位于 `title_bar.rs`，未入 `WidgetCatalogId`） | `title_bar.rs` | `已一致`：WinAppSDK 1.5+ 官方 `TitleBar` 控件，已在 `title_bar.rs` 实现，仍建议纳入目录与差分 | 已接入批量差分（实机采集待 GPU） |
-| **RichEditBox** | Text | `RichEditBox` | `rich_edit_box.rs` | `已一致`：顶部 B / I / U 格式工具条 + 细分隔线 + 可编辑文本区 | 已登记，参考截图待采集 |
-| **GridView** | Collections | `GridView` | `grid_view.rs` | `已一致`：等宽网格单元，选中单元用强调色描边、悬停显示圆角 | 已登记，参考截图待采集 |
-| **ListBox** | Collections | `ListBox` | `list_box.rs` | `已一致`：经典单选列表，选中行铺强调浅底并带左侧指示条 | 已登记，参考截图待采集 |
-| **CommandBarFlyout** | Menus & Toolbars | `CommandBarFlyout` | `command_bar_flyout.rs` | `已一致`：迷你图标工具条 + 竖向分隔线 + 右侧更多按钮 | 已登记，参考截图待采集 |
-| **AppBarButton** | Menus & Toolbars | `AppBarButton` | `app_bar.rs` | `已一致`：32px 命令栏图标按钮，悬停 / 按下铺不同表层 | 已登记，参考截图待采集 |
-| **AppBarToggleButton** | Menus & Toolbars | `AppBarToggleButton` | `app_bar.rs` | `已一致`：命令栏切换按钮，选中时底部绘制强调色指示条 | 已登记，参考截图待采集 |
-| **AppBarSeparator** | Menus & Toolbars | `AppBarSeparator` | `app_bar.rs` | `已一致`：命令栏分组之间的 1px 竖向分隔线，纯装饰 | 已登记，参考截图待采集 |
-| **SwipeControl** | Touch & Input | `SwipeControl` | `swipe_control.rs` | `已一致`：内容行 + 左右滑动操作槽，露出方向由描述符控制 | 已登记，参考截图待采集 |
-| **RefreshContainer** | Scrolling | `RefreshContainer` | `refresh_container.rs` | `已一致`：顶部下拉进度指示器 + 内容区 | 已登记，参考截图待采集 |
-| **TeachingTip** | Status & Info | `TeachingTip` | `teaching_tip.rs` | `已一致`：Tail 尖角、标题、正文、主 / 次按钮与关闭按钮；`Toast` / `Tour` 保留各自职责 | 已登记，参考截图待采集 |
-| **AnnotatedScrollBar** | Scrolling | `AnnotatedScrollBar` | `annotated_scroll_bar.rs` | `已一致`：滚动轨道 + 固定刻度标签 + 悬停预览标签 | 已登记，参考截图待采集 |
-| **ItemsView** | Collections | `ItemsView` | `items_view.rs` | `已一致`：列表 / 网格布局切换与统一选中视觉 | 已登记，参考截图待采集 |
+| **RichEditBox** | Text | `RichEditBox` | `rich_edit_box.rs` | `已一致`：顶部 B / I / U 格式工具条 + 细分隔线 + 可编辑文本区 | 已接入批量差分（实机采集待 GPU） |
+| **GridView** | Collections | `GridView` | `grid_view.rs` | `已一致`：等宽网格单元，选中单元用强调色描边、悬停显示圆角 | 已接入批量差分（实机采集待 GPU） |
+| **ListBox** | Collections | `ListBox` | `list_box.rs` | `已一致`：经典单选列表，选中行铺强调浅底并带左侧指示条 | 已接入批量差分（实机采集待 GPU） |
+| **CommandBarFlyout** | Menus & Toolbars | `CommandBarFlyout` | `command_bar_flyout.rs` | `已一致`：迷你图标工具条 + 竖向分隔线 + 右侧更多按钮 | 已接入批量差分（实机采集待 GPU） |
+| **AppBarButton** | Menus & Toolbars | `AppBarButton` | `app_bar.rs` | `已一致`：32px 命令栏图标按钮，悬停 / 按下铺不同表层 | 已接入批量差分（实机采集待 GPU） |
+| **AppBarToggleButton** | Menus & Toolbars | `AppBarToggleButton` | `app_bar.rs` | `已一致`：命令栏切换按钮，选中时底部绘制强调色指示条 | 已接入批量差分（实机采集待 GPU） |
+| **AppBarSeparator** | Menus & Toolbars | `AppBarSeparator` | `app_bar.rs` | `已一致`：命令栏分组之间的 1px 竖向分隔线，纯装饰 | 已接入批量差分（实机采集待 GPU） |
+| **SwipeControl** | Touch & Input | `SwipeControl` | `swipe_control.rs` | `已一致`：内容行 + 左右滑动操作槽，露出方向由描述符控制 | 已接入批量差分（实机采集待 GPU） |
+| **RefreshContainer** | Scrolling | `RefreshContainer` | `refresh_container.rs` | `已一致`：顶部下拉进度指示器 + 内容区 | 已接入批量差分（实机采集待 GPU） |
+| **TeachingTip** | Status & Info | `TeachingTip` | `teaching_tip.rs` | `已一致`：Tail 尖角、标题、正文、主 / 次按钮与关闭按钮；`Toast` / `Tour` 保留各自职责 | 已接入批量差分（实机采集待 GPU） |
+| **AnnotatedScrollBar** | Scrolling | `AnnotatedScrollBar` | `annotated_scroll_bar.rs` | `已一致`：滚动轨道 + 固定刻度标签 + 悬停预览标签 | 已接入批量差分（实机采集待 GPU） |
+| **ItemsView** | Collections | `ItemsView` | `items_view.rs` | `已一致`：列表 / 网格布局切换与统一选中视觉 | 已接入批量差分（实机采集待 GPU） |
 
 ---
 
@@ -125,35 +125,35 @@
 
 | 优先级 | WinUI 3 官方控件名 | 所属分类 | 缺失现状与实现建议 | 状态 |
 | --- | --- | --- | --- | --- |
-| **P0** | **HyperlinkButton** | Basic Input | 独立描述符 `HyperlinkButtonDesc`（无边框、强调色文字、悬停浅底） | 已实现 |
-| **P0** | **RepeatButton** | Basic Input | 按住持续触发点击的按钮（`NumberBox` 步进与滚动条箭头的基础组件） | 已实现 |
-| **P0** | **DropDownButton** | Basic Input | 右侧固定带 Chevron 下拉箭头、点击弹出 `MenuFlyout` 的按钮（区别于左主操作右下拉的 `SplitButton`） | 已实现 |
-| **P0** | **ToggleSplitButton** | Basic Input | 左侧主按钮带选中切换态（Checked）的 `SplitButton` | 已实现 |
-| **P0** | **PasswordBox** | Text | 带掩码字符（`●`）与“按住显示明文（RevealButton）”眼睛图标的密码输入框 | 已实现 |
-| **P0** | **DatePicker（三列滚轮选择器）** | Date & Time | 目录变体 `DatePicker`；展开月历对应 `CalendarView` 语义 | 已实现 |
-| **P0** | **CalendarDatePicker** | Date & Time | 带日历图标的收起态输入框触发器 + 点击弹出 `CalendarView` 浮层 | 已实现 |
-| **P1** | **RichEditBox** | Text | 独立描述符 `RichEditBoxDesc`：顶部 B / I / U 格式工具条 + 可编辑文本区外观 | 已实现 |
-| **P1** | **GridView** | Collections | 独立描述符 `GridViewDesc`：网格单元 + 选中描边 + 悬停圆角 | 已实现 |
-| **P1** | **ListBox** | Collections | 独立描述符 `ListBoxDesc`：经典单选列表，选中行带强调色指示条 | 已实现 |
-| **P1** | **FlipViewIndicator / PipsPager（纯圆点态）** | Navigation | `PaginationStyle::Dots`：纯圆点指示器，选中圆点放大、其余为小圆点 | 已实现 |
-| **P1** | **CommandBarFlyout** | Menus & Toolbars | 独立描述符 `CommandBarFlyoutDesc`：迷你图标工具条 + 竖向分隔线 + 右侧更多按钮 | 已实现 |
-| **P1** | **AppBarButton / AppBarToggleButton / AppBarSeparator** | Menus & Toolbars | `app_bar.rs` 三个描述符与三个发射器：命令栏按钮、带底部指示条的切换按钮、1px 分隔线 | 已实现 |
-| **P1** | **SwipeControl** | Touch & Input | 独立描述符 `SwipeControlDesc`：内容行 + 左右滑动操作槽 | 已实现 |
-| **P1** | **RefreshContainer / PullToRefresh** | Scrolling | 独立描述符 `RefreshContainerDesc`：下拉进度指示器 + 内容区 | 已实现 |
-| **P1** | **TeachingTip（带 Tail 尖角与 Hero 图完整版）** | Status & Info | 独立描述符 `TeachingTipDesc`：Tail 尖角、标题、正文、主 / 次按钮与关闭按钮 | 已实现 |
-| **P1** | **AnnotatedScrollBar** | Scrolling | 独立描述符 `AnnotatedScrollBarDesc`：滚动条 + 固定刻度标签 + 悬停预览标签 | 已实现 |
-| **P1** | **ItemsView** | Collections | 独立描述符 `ItemsViewDesc`：列表 / 网格布局切换与统一选中视觉 | 已实现 |
+| **P0** | **HyperlinkButton** | Basic Input | 独立描述符 `HyperlinkButtonDesc`（无边框、强调色文字、悬停浅底） | 已实现并对齐 |
+| **P0** | **RepeatButton** | Basic Input | 按住持续触发点击的按钮（`NumberBox` 步进与滚动条箭头的基础组件） | 已实现并对齐 |
+| **P0** | **DropDownButton** | Basic Input | 右侧固定带 Chevron 下拉箭头、点击弹出 `MenuFlyout` 的按钮（区别于左主操作右下拉的 `SplitButton`） | 已实现并对齐 |
+| **P0** | **ToggleSplitButton** | Basic Input | 左侧主按钮带选中切换态（Checked）的 `SplitButton` | 已实现并对齐 |
+| **P0** | **PasswordBox** | Text | 带掩码字符（`●`）与“按住显示明文（RevealButton）”眼睛图标的密码输入框 | 已实现并对齐 |
+| **P0** | **DatePicker（三列滚轮选择器）** | Date & Time | 目录变体 `DatePicker`；展开月历对应 `CalendarView` 语义 | 已实现并对齐 |
+| **P0** | **CalendarDatePicker** | Date & Time | 带日历图标的收起态输入框触发器 + 点击弹出 `CalendarView` 浮层 | 已实现并对齐 |
+| **P1** | **RichEditBox** | Text | 独立描述符 `RichEditBoxDesc`：顶部 B / I / U 格式工具条 + 可编辑文本区外观 | 已实现并对齐 |
+| **P1** | **GridView** | Collections | 独立描述符 `GridViewDesc`：网格单元 + 选中描边 + 悬停圆角 | 已实现并对齐 |
+| **P1** | **ListBox** | Collections | 独立描述符 `ListBoxDesc`：经典单选列表，选中行带强调色指示条 | 已实现并对齐 |
+| **P1** | **FlipViewIndicator / PipsPager（纯圆点态）** | Navigation | `PaginationStyle::Dots`：纯圆点指示器，选中圆点放大、其余为小圆点 | 已实现并对齐 |
+| **P1** | **CommandBarFlyout** | Menus & Toolbars | 独立描述符 `CommandBarFlyoutDesc`：迷你图标工具条 + 竖向分隔线 + 右侧更多按钮 | 已实现并对齐 |
+| **P1** | **AppBarButton / AppBarToggleButton / AppBarSeparator** | Menus & Toolbars | `app_bar.rs` 三个描述符与三个发射器：命令栏按钮、带底部指示条的切换按钮、1px 分隔线 | 已实现并对齐 |
+| **P1** | **SwipeControl** | Touch & Input | 独立描述符 `SwipeControlDesc`：内容行 + 左右滑动操作槽 | 已实现并对齐 |
+| **P1** | **RefreshContainer / PullToRefresh** | Scrolling | 独立描述符 `RefreshContainerDesc`：下拉进度指示器 + 内容区 | 已实现并对齐 |
+| **P1** | **TeachingTip（带 Tail 尖角与 Hero 图完整版）** | Status & Info | 独立描述符 `TeachingTipDesc`：Tail 尖角、标题、正文、主 / 次按钮与关闭按钮 | 已实现并对齐 |
+| **P1** | **AnnotatedScrollBar** | Scrolling | 独立描述符 `AnnotatedScrollBarDesc`：滚动条 + 固定刻度标签 + 悬停预览标签 | 已实现并对齐 |
+| **P1** | **ItemsView** | Collections | 独立描述符 `ItemsViewDesc`：列表 / 网格布局切换与统一选中视觉 | 已实现并对齐 |
 
 ### 4.2 Community Toolkit 选补控件（P2 —— 共 6 个）
 
 | 优先级 | Community Toolkit 控件名 | 所属分类 | 用途说明 | 状态 |
 | --- | --- | --- | --- | --- |
-| **P2** | **RangeSelector** | Input | `range_selector.rs`：双拇指区间滑块，已实现 | 已实现 |
-| **P2** | **RadialGauge** | Status & Info | `radial_gauge.rs`：环形刻度仪表，已实现 | 已实现 |
-| **P2** | **OrbitView** | Media & Layout | `orbit_view.rs`：环绕式布局视图，已实现 | 已实现 |
-| **P2** | **BladeView** | Layout | `blade_view.rs`：水平多级刀片面板，已实现 | 已实现 |
-| **P2** | **HeaderedContentControl / HeaderedItemsControl** | Layout | `headered_content.rs`：上方标题 + 下方内容包装器，已实现 | 已实现 |
-| **P2** | **Cropper (ImageCropper)** | Media | `image_cropper.rs`：裁剪框 + 八向手柄，已实现 | 已实现 |
+| **P2** | **RangeSelector** | Input | `range_selector.rs`：双拇指区间滑块，已实现 | 已实现并对齐 |
+| **P2** | **RadialGauge** | Status & Info | `radial_gauge.rs`：环形刻度仪表，已实现 | 已实现并对齐 |
+| **P2** | **OrbitView** | Media & Layout | `orbit_view.rs`：环绕式布局视图，已实现 | 已实现并对齐 |
+| **P2** | **BladeView** | Layout | `blade_view.rs`：水平多级刀片面板，已实现 | 已实现并对齐 |
+| **P2** | **HeaderedContentControl / HeaderedItemsControl** | Layout | `headered_content.rs`：上方标题 + 下方内容包装器，已实现 | 已实现并对齐 |
+| **P2** | **Cropper (ImageCropper)** | Media | `image_cropper.rs`：裁剪框 + 八向手柄，已实现 | 已实现并对齐 |
 
 ---
 
