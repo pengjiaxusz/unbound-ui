@@ -33,4 +33,6 @@ pub use plan::{
     UvRect, WallpaperTexture,
 };
 pub use state::{BackdropGenerator, MICA_READY_EVENT_ID};
-pub use wallpaper::{primary_screen_rect, wallpaper_path};
+pub use wallpaper::{
+    primary_screen_rect, primary_screen_scale, wallpaper_path, wallpaper_stamp, WallpaperStamp,
+};

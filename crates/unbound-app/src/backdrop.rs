@@ -214,6 +214,27 @@ mod tests {
     }
 
     #[test]
+    fn a_window_move_only_updates_the_sample_rect() {
+        let texture = WallpaperTexture {
+            width: 1920,
+            height: 1080,
+            screen_width: 1920,
+            screen_height: 1080,
+            dpi_scale: 1.0,
+            max_width: 640,
+            sigma: 18.0,
+            dark: false,
+        };
+        let mut backdrop = MicaBackdrop::new();
+        assert!(backdrop.sync(Some(texture), UvRect::new(0.25, 0.25, 0.5, 0.5), None));
+        assert!(!backdrop.sync(Some(texture), UvRect::new(0.25, 0.25, 0.5, 0.5), None));
+        assert!(
+            backdrop.sync(None, UvRect::new(0.0, 0.0, 0.5, 0.5), None),
+            "moving the window must invalidate the emitted overlay even if the texture is reused"
+        );
+    }
+
+    #[test]
     fn only_the_ready_event_id_is_recognized() {
         assert!(is_mica_ready_event(MICA_READY_EVENT_ID));
         assert!(!is_mica_ready_event(MICA_READY_EVENT_ID + 1));

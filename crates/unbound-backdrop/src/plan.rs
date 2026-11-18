@@ -126,6 +126,8 @@ pub struct WallpaperTexture {
     pub screen_width: u32,
     /// 主屏物理高，用于把窗口映射进壁纸空间。
     pub screen_height: u32,
+    /// 系统 DPI 缩放；纳入纹理失效条件。
+    pub dpi_scale: f32,
     /// 纹理最大宽度（0 视为默认值）。
     pub max_width: u32,
     /// 磨砂 sigma。
@@ -163,6 +165,8 @@ pub struct BackdropInputs {
     pub window_screen_rect: Option<PixelRect>,
     /// 主屏物理矩形；未知为 `None`。
     pub primary_screen_rect: Option<PixelRect>,
+    /// 系统 DPI 缩放；未知或非法时按 `1.0` 处理。
+    pub primary_screen_scale: f32,
     /// 是否深色主题。
     pub dark: bool,
     /// 自绘纹理是否已经就绪（用于根背景透明性）。
@@ -229,8 +233,8 @@ impl BackdropPlan {
                 DwmMaterial::None
             },
             texture,
-            // 当前纹理只覆盖窗口，整张采样；切换到壁纸空间纹理后才映射子矩形。
-            uv: UvRect::FULL,
+            // 纹理覆盖整块主屏，窗口只取自己所占的那一块。
+            uv: sample_uv(inputs.window_screen_rect, inputs.primary_screen_rect),
         }
     }
 }
@@ -242,10 +246,15 @@ fn wallpaper_texture(inputs: BackdropInputs) -> Option<WallpaperTexture> {
         return None;
     }
     Some(WallpaperTexture {
-        width: window.width.min(screen.width).max(1),
-        height: window.height.min(screen.height).max(1),
+        width: screen.width.max(1),
+        height: screen.height.max(1),
         screen_width: screen.width.max(1),
         screen_height: screen.height.max(1),
+        dpi_scale: if inputs.primary_screen_scale.is_finite() && inputs.primary_screen_scale > 0.0 {
+            inputs.primary_screen_scale
+        } else {
+            1.0
+        },
         max_width: DEFAULT_MAX_WIDTH,
         sigma: DEFAULT_SIGMA,
         dark: inputs.dark,
@@ -289,8 +298,9 @@ mod tests {
         BackdropInputs {
             choice,
             native_available,
-            window_screen_rect: Some(PixelRect::new(400, 300, 800, 600)),
+            window_screen_rect: Some(PixelRect::new(480, 270, 960, 540)),
             primary_screen_rect: Some(SCREEN),
+            primary_screen_scale: 1.5,
             dark: false,
             self_drawn_ready: false,
         }
@@ -370,12 +380,13 @@ mod tests {
     }
 
     #[test]
-    fn texture_geometry_keeps_the_window_size_for_now() {
+    fn texture_covers_the_primary_screen_and_samples_the_window_rect() {
         let plan = BackdropPlan::derive(inputs(BackdropMode::SelfDrawn, true));
         let texture = plan.texture.expect("self-drawn path needs a texture");
-        assert_eq!((texture.width, texture.height), (800, 600));
+        assert_eq!((texture.width, texture.height), (1920, 1080));
         assert_eq!((texture.screen_width, texture.screen_height), (1920, 1080));
-        assert_eq!(plan.uv, UvRect::FULL);
+        assert_eq!(texture.dpi_scale, 1.5);
+        assert_eq!(plan.uv, UvRect::new(0.25, 0.25, 0.5, 0.5));
     }
 
     #[test]

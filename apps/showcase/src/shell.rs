@@ -536,6 +536,7 @@ impl GalleryApp {
             native_available: self.state.native_backdrop_available,
             window_screen_rect: window,
             primary_screen_rect: unbound_backdrop::primary_screen_rect(),
+            primary_screen_scale: unbound_backdrop::primary_screen_scale(),
             dark: self.state.theme.is_dark(),
             self_drawn_ready: self.mica.visible(),
         });
