@@ -20,7 +20,12 @@ use crate::{ControlState, WidgetDesc, WidgetOutput};
 
 /// 模态框的命中测试层级：高于普通浮层。
 pub const MODAL_LAYER: u8 = PORTAL_LAYER + 1;
-const MODAL_SHADOW: f32 = 40.0;
+/// 模态对话框海拔阴影模糊半径。对齐 WinUI 3 `DialogElevation`（40px 解析阴影）。
+pub const MODAL_SHADOW: f32 = 40.0;
+/// 模态对话框默认圆角半径。对齐 WinUI 3 `OverlayCornerRadius = 8`（ContentDialog 标准圆角）。
+pub const MODAL_RADIUS: f32 = 8.0;
+/// 模态对话框外描边厚度。对齐 WinUI 3 `SurfaceStroke`（1px 微描边）。
+pub const MODAL_BORDER_WIDTH: f32 = 1.0;
 /// 标准标题栏关闭按钮尺寸。
 pub const MODAL_CLOSE_SIZE: f32 = 24.0;
 /// 默认底部操作按钮宽度。
@@ -314,13 +319,13 @@ pub fn emit_modal(
             SubElement::Shadow,
             desc.z,
         ),
-        surface(rect, desc.radius, Token::SURFACE_RAISED, desc.z),
+        surface(rect, desc.radius, Token::OVERLAY_BG, desc.z),
         instance(
             rect,
             radii,
             Token::NONE,
-            Token::OUTLINE,
-            1.0,
+            Token::CARD_BORDER,
+            MODAL_BORDER_WIDTH,
             0.0,
             PrimType::RoundedRect,
             SubElement::Border,

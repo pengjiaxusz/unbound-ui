@@ -18,12 +18,16 @@ use crate::{ControlState, SceneCollector, WidgetDesc, WidgetOutput};
 
 /// 气泡框的命中测试层：Portal 层级。
 pub const POPOVER_LAYER: u8 = PORTAL_LAYER;
-/// 气泡框阴影模糊半径。
-const POPOVER_SHADOW: f32 = 24.0;
+/// 气泡框阴影模糊半径。对齐 WinUI 3 `FlyoutElevation`（24px 解析阴影）。
+pub const POPOVER_SHADOW: f32 = 24.0;
+/// 气泡框默认圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（FlyoutPresenter 的 CornerRadius）。
+pub const POPOVER_RADIUS: f32 = 8.0;
+/// 气泡框外描边厚度。对齐 WinUI 3 `SurfaceStroke`（1px 微描边）。
+pub const POPOVER_BORDER_WIDTH: f32 = 1.0;
 /// 箭头尖端深度与底边半宽。
 const ARROW_SIZE: f32 = 8.0;
-/// 箭头描边宽度。
-const ARROW_STROKE: f32 = 2.0;
+/// 箭头描边宽度。对齐 SurfaceStroke 的 1px 微描边。
+const ARROW_STROKE: f32 = 1.0;
 
 /// 锚定到触发器的气泡框描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -144,8 +148,8 @@ pub fn emit_popover(
             rect,
             radii,
             Token::NONE,
-            Token::OUTLINE,
-            1.0,
+            Token::CARD_BORDER,
+            POPOVER_BORDER_WIDTH,
             0.0,
             PrimType::RoundedRect,
             SubElement::Border,
@@ -239,7 +243,7 @@ fn arrow_edges(
         curve_stroke(
             [tip, (tip + corner) * 0.5, corner],
             ARROW_STROKE,
-            Token::OUTLINE,
+            Token::CARD_BORDER,
             z,
             primitives,
             payloads,

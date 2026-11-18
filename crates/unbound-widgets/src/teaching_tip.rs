@@ -5,16 +5,17 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
+use unbound_gpu::data::{PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
+use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined, surface};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 卡片圆角。
+/// 卡片圆角。对齐 WinUI `OverlayCornerRadius = 8`（TeachingTip 的 CornerRadius）。
 pub const TEACHING_TIP_RADIUS: f32 = 8.0;
 /// 尖角尺寸。
 pub const TEACHING_TIP_TAIL: f32 = 10.0;
@@ -22,6 +23,10 @@ pub const TEACHING_TIP_TAIL: f32 = 10.0;
 pub const TEACHING_TIP_BUTTON_HEIGHT: f32 = 28.0;
 /// 关闭按钮边长。
 pub const TEACHING_TIP_CLOSE: f32 = 16.0;
+/// 引导气泡阴影模糊半径。对齐 WinUI 3 `FlyoutElevation`（24px 解析阴影）。
+pub const TEACHING_TIP_SHADOW: f32 = 24.0;
+/// 引导气泡外描边厚度。对齐 WinUI 3 `SurfaceStroke`（1px 微描边）。
+pub const TEACHING_TIP_BORDER_WIDTH: f32 = 1.0;
 
 /// 尖角所在的边。
 ///
@@ -209,9 +214,22 @@ pub fn emit_teaching_tip(
         Token::CARD_BORDER
     };
 
-    let mut primitives = Vec::with_capacity(7 + text_glyphs.len());
+    let mut primitives = Vec::with_capacity(8 + text_glyphs.len());
     let mut payloads = Vec::with_capacity(text_glyphs.len());
 
+    // 1. 引导气泡解析阴影（Elevation 阴影：24px）
+    primitives.push(instance(
+        rect,
+        [desc.radius; 4],
+        Token::NONE,
+        Token::NONE,
+        0.0,
+        TEACHING_TIP_SHADOW,
+        PrimType::Shadow,
+        SubElement::Shadow,
+        z,
+    ));
+    // 2. 气泡卡片表面与 1px 微描边（SurfaceStroke）
     primitives.push(outlined(
         rect,
         desc.radius,
@@ -221,8 +239,8 @@ pub fn emit_teaching_tip(
             Token::OVERLAY_BG
         },
         card_border,
-        1.0,
-        8.0,
+        TEACHING_TIP_BORDER_WIDTH,
+        0.0,
         z,
     ));
     primitives.push(surface(desc.tail_rect(), 2.0, Token::OVERLAY_BG, z + 1));

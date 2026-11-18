@@ -7,7 +7,7 @@ use unbound_gpu::atlas::AtlasSet;
 use unbound_gpu::debug::{is_device_lost, recover_with, RecoveryPolicy};
 use unbound_gpu::device::{Gpu, GpuConfig};
 use unbound_gpu::surface::{AcquireOutcome, Surface, Swapchain};
-use unbound_gpu::swapchain::PresentConfig;
+use unbound_gpu::swapchain::{CompositeAlphaMode, PresentConfig};
 use unbound_gpu::{Camera, Renderer};
 use unbound_input::PointerButton;
 use unbound_math::{Rect, Vec2};
@@ -15,7 +15,7 @@ use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::win32_frame::{install_custom_frame, set_window_dark_mode, FrameHitMetrics};
 use unbound_platform::window::{
     ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
-    PlatformState, WindowConfig,
+    PlatformState, SurfaceAlpha, WindowConfig,
 };
 use unbound_platform::Window;
 use unbound_theme::{ThemeSet, ThemeState};
@@ -37,9 +37,30 @@ impl crate::ClipboardProvider for WinClipboard {
     }
 }
 
+/// 按表面能力解析交换链合成方式。
+///
+/// 请求预乘 alpha 但驱动不支持时回退为不透明：宁可窗口不透明，也不能让内容以
+/// 未定义的 alpha 语义参与合成。回退只影响观感（原生材质被内容盖住），不会让
+/// 窗口变成「透明却没有材质」的空壳。
+fn resolve_composite_alpha(
+    requested: SurfaceAlpha,
+    surface: &Surface,
+    gpu: &Gpu,
+) -> CompositeAlphaMode {
+    match requested {
+        SurfaceAlpha::Opaque => CompositeAlphaMode::Opaque,
+        SurfaceAlpha::PreMultiplied => {
+            if surface.supports_premultiplied_alpha(gpu).unwrap_or(false) {
+                CompositeAlphaMode::PreMultiplied
+            } else {
+                CompositeAlphaMode::Opaque
+            }
+        }
+    }
+}
+
 /// 将平台后端唤醒闭包适配为运行时 [`crate::AppWaker`] 的桥接器。
 struct SignalWaker(Arc<dyn Fn() + Send + Sync>);
-
 impl core::fmt::Debug for SignalWaker {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("SignalWaker")
@@ -150,6 +171,11 @@ pub struct WindowedRunner<A: Application> {
     last_frame: Instant,
     swapchain_dirty: bool,
     committed_request: (u32, u32),
+    /// 请求的表面合成方式；每条交换链创建时按表面能力解析一次。
+    ///
+    /// 它必须与 `WindowConfig` 一致并贯穿整个窗口生命周期：交换链一旦按不透明
+    /// 合成建出来，原生后景的内容层就再也透不出来，只能靠重建窗口纠正。
+    surface_alpha: SurfaceAlpha,
     scene_generation: u64,
     /// 上一帧是否已执行场景构建但未能送达 GPU（例如交换链过期或获取图像失败）。
     ///
@@ -206,6 +232,7 @@ impl<A: Application> WindowedRunner<A> {
             last_frame: Instant::now(),
             swapchain_dirty: false,
             committed_request: (w, h),
+            surface_alpha: config.surface_alpha,
             scene_generation: 0,
             frame_dropped: false,
             os_scale: 1.0,
@@ -344,6 +371,7 @@ impl<A: Application> WindowedRunner<A> {
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
         let policy = RecoveryPolicy::default();
+        let requested_alpha = self.surface_alpha;
         let device_config = GpuConfig {
             app_name: "Unbound App (Recovered)".to_string(),
             instance_extensions,
@@ -366,7 +394,9 @@ impl<A: Application> WindowedRunner<A> {
                     return Err(err);
                 }
             };
-            let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false);
+            let composite_alpha = resolve_composite_alpha(requested_alpha, &surface, &gpu);
+            let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false)
+                .with_composite_alpha(composite_alpha);
             let swapchain = match Swapchain::new(&gpu, &surface, width, height, &present) {
                 Ok(sc) => sc,
                 Err(err) => {
@@ -397,16 +427,18 @@ impl<A: Application> WindowedRunner<A> {
                 renderer.destroy();
                 return Err(err);
             }
-            Ok((renderer, swapchain, surface, atlases))
+            let premultiplied = composite_alpha == CompositeAlphaMode::PreMultiplied;
+            Ok((renderer, swapchain, surface, atlases, premultiplied))
         });
 
         match recovered {
-            Ok(((renderer, swapchain, surface, atlases), attempts)) => {
+            Ok(((renderer, swapchain, surface, atlases, premultiplied), attempts)) => {
                 eprintln!("[unbound-app] GPU recovered successfully after {attempts} attempt(s).");
                 self.renderer = Some(renderer);
                 self.swapchain = Some(swapchain);
                 self.surface = Some(surface);
                 self.atlases = Some(atlases);
+                self.runtime.set_premultiplied_surface(premultiplied);
                 self.swapchain_dirty = true;
                 self.frame_dropped = true;
                 // 新建的渲染器此时只有占位 LUT。
@@ -500,7 +532,11 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             }
         };
 
-        let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false);
+        let composite_alpha = resolve_composite_alpha(self.surface_alpha, &surface, &gpu);
+        self.runtime
+            .set_premultiplied_surface(composite_alpha == CompositeAlphaMode::PreMultiplied);
+        let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false)
+            .with_composite_alpha(composite_alpha);
         let swapchain = match Swapchain::new(&gpu, &surface, width, height, &present) {
             Ok(swapchain) => swapchain,
             Err(error) => {
@@ -769,10 +805,15 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             if let (Some(renderer), Some(swapchain), Some(surface)) =
                 (&mut self.renderer, &mut self.swapchain, &self.surface)
             {
+                // 合成方式跟随窗口配置：原生后景需要预乘 alpha，且必须在每次重建时
+                // 保持同一取值，否则驱动会按新方式重配表面、后景在重建瞬间被盖住。
+                let composite_alpha =
+                    resolve_composite_alpha(self.surface_alpha, surface, &renderer.gpu);
                 let present = PresentConfig::from_capabilities(
                     &renderer.gpu.enabled_device_extensions,
                     false,
-                );
+                )
+                .with_composite_alpha(composite_alpha);
                 if let Err(error) =
                     swapchain.recreate(&renderer.gpu, surface, width, height, &present)
                 {
@@ -860,6 +901,16 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                             report.aux_changed,
                         );
 
+                        // 根背景清屏 alpha 由宿主逐帧决定：原生后景要 0 让 DWM 材质
+                        // 透出，自绘与纯色路径要 1。它只影响清屏色，不重配交换链。
+                        // 交换链回退为不透明时必须钳到 1：不透明表面的 alpha 不参与
+                        // 合成，清屏色却是预乘过的，保留 0 只会得到一块黑板。
+                        let clear_alpha = if self.runtime.premultiplied_surface() {
+                            self.runtime.clear_alpha()
+                        } else {
+                            1.0
+                        };
+                        renderer.set_clear_alpha(clear_alpha);
                         if let Err(ref err) =
                             renderer.render_into_swapchain(&scene, &image, actual_w, actual_h)
                         {

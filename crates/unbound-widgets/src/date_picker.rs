@@ -98,6 +98,57 @@ impl NaiveDate {
     pub fn month_start(self) -> Self {
         Self { day: 1, ..self }
     }
+
+    /// 前一天。
+    #[must_use]
+    pub fn prev_day(self) -> Option<Self> {
+        if self.day > 1 {
+            Some(Self {
+                day: self.day - 1,
+                ..self
+            })
+        } else if self.month > 1 {
+            let month = self.month - 1;
+            let day = days_in_month(self.year, month);
+            Some(Self {
+                year: self.year,
+                month,
+                day,
+            })
+        } else {
+            let year = self.year.checked_sub(1)?;
+            Some(Self {
+                year,
+                month: 12,
+                day: 31,
+            })
+        }
+    }
+
+    /// 后一天。
+    #[must_use]
+    pub fn next_day(self) -> Option<Self> {
+        let max_day = days_in_month(self.year, self.month);
+        if self.day < max_day {
+            Some(Self {
+                day: self.day + 1,
+                ..self
+            })
+        } else if self.month < 12 {
+            Some(Self {
+                year: self.year,
+                month: self.month + 1,
+                day: 1,
+            })
+        } else {
+            let year = self.year.checked_add(1)?;
+            Some(Self {
+                year,
+                month: 1,
+                day: 1,
+            })
+        }
+    }
 }
 
 /// 判断 `year` 在公历中是否为闰年。

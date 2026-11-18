@@ -7,12 +7,13 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
-use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::Rect;
+use unbound_input::{CursorKind, HitRegion, KeyName, Shape};
+use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
+use crate::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -59,6 +60,12 @@ impl RepeatButtonDesc {
         }
     }
 
+    /// 使用标准高度便捷构造。
+    #[must_use]
+    pub fn label(label: impl Into<String>) -> Self {
+        Self::new(Rect::new(0.0, 0.0, 120.0, REPEAT_BUTTON_HEIGHT), label)
+    }
+
     /// 覆盖重复节奏。
     #[must_use]
     pub fn with_timing(mut self, delay_ms: u32, interval_ms: u32) -> Self {
@@ -67,10 +74,24 @@ impl RepeatButtonDesc {
         self
     }
 
+    /// 设置圆角半径。
+    #[must_use]
+    pub fn with_radius(mut self, radius: f32) -> Self {
+        self.radius = radius;
+        self
+    }
+
     /// 设置为禁用状态。
     #[must_use]
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// 设置绘制图层顺序键。
+    #[must_use]
+    pub fn with_z(mut self, z: u16) -> Self {
+        self.z = z;
         self
     }
 
@@ -109,7 +130,7 @@ impl RepeatButtonDesc {
 /// 重复按钮的按住状态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RepeatButtonState {
-    /// 指针是否仍按住。
+    /// 指针或按键是否仍按住。
     pub held: bool,
     /// 自按下起累计的毫秒数。
     pub elapsed_ms: u32,
@@ -134,6 +155,26 @@ impl RepeatButtonState {
         self.elapsed_ms = 0;
     }
 
+    /// 处理按键按下：聚焦状态下按住 Space 或 Enter 开启连续触发。
+    pub fn handle_key_down(&mut self, is_space_or_enter: bool) -> bool {
+        if is_space_or_enter && !self.held {
+            self.begin();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 处理按键松开：释放 Space 或 Enter 结束连续触发。
+    pub fn handle_key_up(&mut self, is_space_or_enter: bool) -> bool {
+        if is_space_or_enter && self.held {
+            self.end();
+            true
+        } else {
+            false
+        }
+    }
+
     /// 推进 `dt_ms` 毫秒，并返回该步内是否至少触发了一次重复。
     ///
     /// 首次触发由 `repeat_delay_ms` 决定，随后每 `repeat_interval_ms`
@@ -155,6 +196,19 @@ impl RepeatButtonState {
             (before - desc.repeat_delay_ms) / interval + 1
         };
         last >= first
+    }
+}
+
+/// 将键盘激活折叠进视觉状态。
+#[must_use]
+pub fn keyboard_activation(state: ControlState, space_or_enter_down: bool) -> ControlState {
+    if space_or_enter_down && state.focused && !state.disabled {
+        ControlState {
+            phase: PointerPhase::Pressed,
+            ..state
+        }
+    } else {
+        state
     }
 }
 
@@ -238,6 +292,51 @@ pub fn emit_repeat_button(
     }
 }
 
+impl UiWidget for RepeatButtonDesc {
+    type State = RepeatButtonState;
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let measured = text_ctx.measure_line(&self.label, 14.0, 500);
+        let w = (measured.x + 22.0).max(self.rect.width()).max(64.0);
+        let h = REPEAT_BUTTON_HEIGHT.max(self.rect.height());
+        Vec2::new(w, h)
+    }
+
+    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        match event {
+            WidgetInputEvent::PointerDown { .. } => {
+                state.begin();
+                true
+            }
+            WidgetInputEvent::PointerUp { .. } => {
+                state.end();
+                true
+            }
+            WidgetInputEvent::KeyDown(chord) => {
+                let is_space_or_enter =
+                    matches!(chord.key, KeyName::Named("Enter") | KeyName::Named("Space"));
+                state.handle_key_down(is_space_or_enter)
+            }
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let mut glyphs =
+            text_ctx.shape_line(&desc.label, rect, 14.0, 500, AlignX::Center, AlignY::Middle);
+        emit_repeat_button(node, &desc, state, control, &mut glyphs)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,12 +361,41 @@ mod tests {
         let mut state = RepeatButtonState::new();
         state.begin();
         assert!(!state.advance(&d, 400));
-        assert!(state.advance(&d, 200), "crossing 500 ms fires the first repeat");
+        assert!(
+            state.advance(&d, 200),
+            "crossing 500 ms fires the first repeat"
+        );
         assert!(state.advance(&d, 100), "the next interval fires again");
         assert!(!state.advance(&d, 50));
         state.end();
         assert!(!state.held);
         assert!(!state.advance(&d, 1_000));
+    }
+
+    #[test]
+    fn key_down_and_up_drive_held_state() {
+        let mut state = RepeatButtonState::new();
+        assert!(state.handle_key_down(true));
+        assert!(state.held);
+        // 重复按下已按住时不重复触发
+        assert!(!state.handle_key_down(true));
+
+        assert!(state.handle_key_up(true));
+        assert!(!state.held);
+        assert!(!state.handle_key_up(true));
+    }
+
+    #[test]
+    fn keyboard_activation_collapses_to_pressed() {
+        let focused = ControlState {
+            focused: true,
+            ..ControlState::default()
+        };
+        let active = keyboard_activation(focused, true);
+        assert_eq!(active.phase, PointerPhase::Pressed);
+
+        let inactive = keyboard_activation(focused, false);
+        assert_eq!(inactive.phase, PointerPhase::Idle);
     }
 
     #[test]
@@ -312,12 +440,17 @@ mod tests {
                             elapsed_ms: 750,
                         };
                         counts.push(
-                            emit_repeat_button(1, &d, &repeat, state, &mut []).primitives.len(),
+                            emit_repeat_button(1, &d, &repeat, state, &mut [])
+                                .primitives
+                                .len(),
                         );
                     }
                 }
             }
         }
-        assert!(counts.windows(2).all(|pair| pair[0] == pair[1]), "{counts:?}");
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }

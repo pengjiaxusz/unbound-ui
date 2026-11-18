@@ -29,8 +29,8 @@ const NAV_INDICATOR_WIDTH: f32 = 3.0;
 /// 选中指示条高度。对齐 WinUI `NavigationViewSelectionIndicatorHeight = 16`。
 const NAV_INDICATOR_HEIGHT: f32 = 16.0;
 
-/// 选中指示条圆角。对齐 WinUI `NavigationViewSelectionIndicatorRadius = 2`。
-const NAV_INDICATOR_RADIUS: f32 = 2.0;
+/// 选中指示条圆角。对齐 WinUI `NavigationViewSelectionIndicatorRadius = 1.5`（全圆胶囊）。
+const NAV_INDICATOR_RADIUS: f32 = 1.5;
 
 /// [`NavigationRailDesc`] 中的单个导航项。
 #[derive(Clone, Debug, PartialEq, Eq)]

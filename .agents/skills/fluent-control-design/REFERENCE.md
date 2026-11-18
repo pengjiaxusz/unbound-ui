@@ -106,3 +106,32 @@ Win11 Fluent 不使用多档死板的实色灰，而是通过**在后景（云�
 2. `Slider` 的固有高度由旧实现的 `28 px` 收敛到 `32 px`，避免被外部矩形掩盖。
 3. 参考截图对 `Button` 显式使用 `4 px` 圆角、`14 px` 字号与零投影，绕过展台预览构造器的 `6 px` 网页风格圆角。
 4. `ToggleSwitch` 的 Header 排版高度为 `53 px`，并非 `32 px` 单行——差分器必须按 `explicitWidth/Height` 判定其固有尺寸，而不能套用标准输入行高。
+
+---
+
+## 7. 容器、浮层与导航胶囊实测规律（Containers, Overlays & Selection Pills）
+
+本节收录基于 #46 及 WinUI 3 像素差分闭环实测校准的容器类、浮层对话框类以及导航指示条设计规律：
+
+### 1. 容器类（Card / Border）
+* **圆角阶梯**：统一收敛至 `8.0 px`（`OverlayCornerRadius = 8`），与内嵌输入/按钮控件的 `4.0 px`（`ControlCornerRadius`）形成 2:1 层次嵌套比，杜绝内角顶死外框。
+* **微描边规范**：统一为 `1.0 px` `CardStrokeColorDefaultBrush`（映射至 `Token::CARD_BORDER`，浅色为黑色 5.9% 薄纱，深色为白色 5.1% 薄纱），禁止使用实色灰（如 `Token::OUTLINE`）以免在亚克力/云母背板上变脏。
+* **背景填充**：`Token::CARD_BG`（浅色为白色 70% 薄纱，深色为白色 ~5% 薄纱）。
+* **海拔阶梯**：`CARD_ELEVATIONS = [0.0, 2.0, 6.0, 12.0, 20.0]`，静止卡片默认无阴影或 `2.0 px` 微阴影。
+
+### 2. 浮层与对话框类（Flyout, MenuFlyout, TeachingTip, ContentDialog）
+* **外圆角**：浮层与弹窗标准统一为 `8.0 px`（`OverlayCornerRadius = 8`）。
+* **微描边**：统一采用 `1.0 px` `SurfaceStrokeColorFlyout`（`Token::CARD_BORDER`），与背景自然溶合。
+* **表面底色**：统一使用 `Token::OVERLAY_BG`（`SolidBackgroundFillColorQuarternary`，浅色 `#F9F9F9`，深色 `#2C2C2C`）。
+* **解析阴影阶梯（Elevation Shadow Hierarchy）**：
+  * `MenuFlyout`：`18.0 px` 模糊半径（菜单层级阴影）；
+  * `Flyout`（Popover / Callout）：`24.0 px` 模糊半径（标准锚定浮层阴影）；
+  * `TeachingTip`（气泡引导）：`24.0 px` 模糊半径（浮层阴影，自带指示尖角）；
+  * `ContentDialog`（Modal 模态对话框）：`40.0 px` 模糊半径（高海拔窗口级阴影，全视口覆盖 `Token::SCRIM` 遮罩）。
+* **渲染层级管线**：解析阴影必须标记为 `SubElement::Shadow`（或 `PrimType::Shadow`）先于背景表面输出，确保在硬件片元着色器中执行正确的解析高斯盒模糊合成，避免深色阴影渗入抗锯齿边。
+
+### 3. 导航与选择条选中胶囊条（Selection Pill Indicator）
+* **适用控件**：`NavigationView`（侧边栏项）、`ListView`（列表行）、`SelectorBar`（水平选择条）、`Dock`（活动面板标签）。
+* **几何规范**：固定为 **宽 `3.0 px`、高 `16.0 px`、全圆角 `1.5 px`**。
+* **对齐与布局**：沿选中项边缘居中对齐（纵向列表居左内缩 `3.0 px`，横向选择条沿底边居中），按下反馈时高度可微缩至 `10.0 px`。
+* **色彩映射**：激活态恒为 `Token::PRIMARY` 强调色；禁用态换为 `Token::TEXT_DISABLED`。

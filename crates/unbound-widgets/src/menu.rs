@@ -25,7 +25,12 @@ pub const MENU_LAYER: u8 = PORTAL_LAYER;
 /// WinUI `MenuFlyoutItemThemePadding = 11,8,11,9` 叠加 20px 行高即 37px，
 /// 与下拉框选中项行高 [`crate::select::SELECT_ROW_HEIGHT`] 保持一致。
 pub const MENU_ITEM_HEIGHT: f32 = 37.0;
-const MENU_SHADOW: f32 = 18.0;
+/// 菜单浮层海拔阴影模糊半径。对齐 WinUI 3 `FlyoutElevation` / `MenuFlyout`（18px 解析阴影）。
+pub const MENU_SHADOW: f32 = 18.0;
+/// 菜单浮层圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（MenuFlyoutPresenter 标准圆角）。
+pub const MENU_RADIUS: f32 = 8.0;
+/// 菜单浮层外描边厚度。对齐 WinUI `SurfaceStrokeColorFlyout`（1px 微描边）。
+pub const MENU_BORDER_WIDTH: f32 = 1.0;
 /// 下拉框选中项左侧强调条的宽度。
 const MENU_ACCENT_BAR_WIDTH: f32 = 3.0;
 
@@ -164,7 +169,7 @@ impl MenuDesc {
             items,
             item_height: MENU_ITEM_HEIGHT,
             // `MenuFlyoutPresenter` 的 `CornerRadius = OverlayCornerRadius = 8`。
-            radius: 8.0,
+            radius: MENU_RADIUS,
             z: 905,
             viewport: None,
         }
@@ -587,7 +592,7 @@ pub fn emit_menu(
         Token::NONE,
         // `MenuFlyoutPresenterBorderBrush` = SurfaceStrokeColorFlyout。
         Token::CARD_BORDER,
-        1.0,
+        MENU_BORDER_WIDTH,
         0.0,
         PrimType::RoundedRect,
         SubElement::Border,

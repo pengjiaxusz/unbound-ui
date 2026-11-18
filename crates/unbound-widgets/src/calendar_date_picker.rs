@@ -7,8 +7,8 @@
 use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_gpu::data::{PrimType, SubElement};
-use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::Rect;
+use unbound_input::{CursorKind, HitRegion, KeyChord, KeyName, Shape};
+use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
@@ -17,7 +17,9 @@ use crate::primitive::{
     curve_stroke, focus_ring, glyphs as emit_glyphs, instance, outlined, surface,
 };
 use crate::text_input::{focus_underline, TEXT_INPUT_LAYER};
-use crate::{ControlState, PointerPhase, WidgetOutput};
+use crate::{
+    AlignX, AlignY, ControlState, PointerPhase, TextCtx, UiWidget, WidgetInputEvent, WidgetOutput,
+};
 
 /// 标准高度。对齐 WinUI `TextControlThemeMinHeight = 32`。
 pub const CALENDAR_DATE_PICKER_HEIGHT: f32 = 32.0;
@@ -66,6 +68,34 @@ impl CalendarDatePickerDesc {
             radius: CALENDAR_DATE_PICKER_RADIUS,
             font_size: CALENDAR_DATE_PICKER_FONT_SIZE,
         }
+    }
+
+    /// 构造带默认 200px 宽度与 32px 高度的日历日期选择器。
+    #[must_use]
+    pub fn date_picker(placeholder: impl Into<String>) -> Self {
+        Self::new(Rect::new(0.0, 0.0, 200.0, CALENDAR_DATE_PICKER_HEIGHT))
+            .with_placeholder(placeholder)
+    }
+
+    /// 设置绘制深度。
+    #[must_use]
+    pub fn with_z(mut self, z: u16) -> Self {
+        self.z = z;
+        self
+    }
+
+    /// 设置圆角半径。
+    #[must_use]
+    pub fn with_radius(mut self, radius: f32) -> Self {
+        self.radius = radius;
+        self
+    }
+
+    /// 设置字号。
+    #[must_use]
+    pub fn with_font_size(mut self, font_size: f32) -> Self {
+        self.font_size = font_size;
+        self
     }
 
     /// 设置占位文本。
@@ -158,6 +188,120 @@ impl CalendarDatePickerState {
     pub fn selected_text(&self) -> String {
         self.date.map(NaiveDate::to_iso).unwrap_or_default()
     }
+
+    /// 处理键盘按键输入，若状态改变则返回 `true`。
+    pub fn handle_key(&mut self, chord: &KeyChord) -> bool {
+        match chord.key {
+            KeyName::Named("Enter") | KeyName::Named("Space") => {
+                self.toggle();
+                true
+            }
+            KeyName::Named("Escape") if self.open => {
+                self.collapse();
+                true
+            }
+            KeyName::Named("ArrowDown") if chord.alt && !self.open => {
+                self.expand();
+                true
+            }
+            KeyName::Named("ArrowUp") if chord.alt && self.open => {
+                self.collapse();
+                true
+            }
+            KeyName::Named("ArrowLeft") => {
+                if let Some(date) = self.date {
+                    if let Some(prev) = date.prev_day() {
+                        self.date = Some(prev);
+                        return true;
+                    }
+                }
+                false
+            }
+            KeyName::Named("ArrowRight") => {
+                if let Some(date) = self.date {
+                    if let Some(next) = date.next_day() {
+                        self.date = Some(next);
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+}
+
+impl UiWidget for CalendarDatePickerDesc {
+    type State = CalendarDatePickerState;
+
+    fn initial_state(&self) -> Self::State {
+        CalendarDatePickerState::new()
+    }
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let sample = if !self.placeholder.is_empty() {
+            self.placeholder.as_str()
+        } else {
+            "2024-00-00"
+        };
+        let measured = text_ctx.measure_line(sample, self.font_size, 400);
+        Vec2::new(
+            (measured.x + 48.0).max(self.rect.width()).max(160.0),
+            CALENDAR_DATE_PICKER_HEIGHT,
+        )
+    }
+
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        if self.disabled {
+            return false;
+        }
+        match event {
+            WidgetInputEvent::PointerDown { pos, .. } => {
+                let mut desc = self.clone();
+                desc.rect = rect;
+                if desc.icon_rect().contains_point(*pos) || desc.rect.contains_point(*pos) {
+                    state.toggle();
+                    true
+                } else {
+                    false
+                }
+            }
+            WidgetInputEvent::KeyDown(chord) => state.handle_key(chord),
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let text = if let Some(date) = state.date {
+            date.to_iso()
+        } else {
+            desc.placeholder.clone()
+        };
+        let text_rect = Rect::new(
+            rect.origin.x + 10.0,
+            rect.origin.y,
+            (rect.width() - 44.0).max(0.0),
+            rect.height(),
+        );
+        let mut glyphs = text_ctx.shape_line(
+            &text,
+            text_rect,
+            desc.font_size,
+            400,
+            AlignX::Left,
+            AlignY::Middle,
+        );
+        emit_calendar_date_picker(node, &desc, state, control, &mut glyphs)
+    }
 }
 
 /// 日历图标触发器的确定性子节点键。
@@ -224,7 +368,11 @@ pub fn emit_calendar_date_picker(
         rect,
         desc.radius,
         z + 1,
-        if control.focused && !disabled { 1.0 } else { 0.0 },
+        if control.focused && !disabled {
+            1.0
+        } else {
+            0.0
+        },
     ));
 
     // 右侧日历 glyph：14×14 方框 + 顶部横条 + 两枚装订环。
@@ -391,17 +539,16 @@ mod tests {
     #[test]
     fn clicking_the_trigger_expands_the_panel_shell() {
         let mut state = CalendarDatePickerState::with_date(date());
-        let collapsed = emit_calendar_date_picker(1, &desc(), &state, ControlState::default(), &mut []);
+        let collapsed =
+            emit_calendar_date_picker(1, &desc(), &state, ControlState::default(), &mut []);
         state.toggle();
-        let expanded = emit_calendar_date_picker(1, &desc(), &state, ControlState::default(), &mut []);
+        let expanded =
+            emit_calendar_date_picker(1, &desc(), &state, ControlState::default(), &mut []);
         assert!(
             expanded.primitives.len() > collapsed.primitives.len(),
             "the open panel must add visible shell primitives"
         );
-        assert_eq!(
-            expanded.a11y.expect("reachable").expanded,
-            Some(true)
-        );
+        assert_eq!(expanded.a11y.expect("reachable").expanded, Some(true));
         assert_eq!(expanded.sub_a11y[0].1.label, "Close calendar");
         state.collapse();
         assert!(!state.open);
@@ -470,6 +617,9 @@ mod tests {
                 }
             }
         }
-        assert!(counts.windows(2).all(|pair| pair[0] == pair[1]), "{counts:?}");
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }

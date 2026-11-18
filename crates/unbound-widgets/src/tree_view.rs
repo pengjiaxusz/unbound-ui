@@ -11,20 +11,21 @@ use accesskit::Role;
 use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_a11y::A11yNode;
 use unbound_gpu::data::{PrimType, SubElement};
+use unbound_gpu::GpuPrimitiveInstance;
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 use unbound_world::virtualize::{TreeRow, VirtualTree, WindowUpdate};
 
-use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined};
+use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined, surface};
 use crate::scroll::{ScrollState, ScrollViewDesc};
 use crate::switch::CONTROL_LAYER;
 use crate::text_input::TextEditState;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 默认行高。对齐 WinUI `TreeViewItemMinHeight = 28`。
-pub const TREE_ROW: f32 = 28.0;
+/// 默认行高。对齐 WinUI `TreeViewItemMinHeight = 36`。
+pub const TREE_ROW: f32 = 36.0;
 
 /// 每层缩进深度的水平缩进量。对齐 `TreeViewItem::UpdateIndentation`（depth × 16）。
 pub const TREE_INDENT: f32 = 16.0;
@@ -477,6 +478,21 @@ pub fn emit_tree_row(
         0.0,
         desc.z,
     ));
+
+    // 左侧选中强调指示条（未选中时透明度为 0，保持图元数恒定）
+    // 对齐 WinUI 3 关键规范：3×16px 垂直居中、圆角 1.5px 的选中胶囊条，使用 Token::PRIMARY
+    let indicator = Rect::new(
+        rect.origin.x + 4.0,
+        rect.origin.y + (rect.size.y - 16.0) * 0.5,
+        3.0,
+        16.0,
+    );
+    let mut indicator_inst = surface(indicator, 1.5, Token::PRIMARY, desc.z + 1);
+    if !selected {
+        indicator_inst.z_and_opacity =
+            GpuPrimitiveInstance::pack_z_opacity(indicator_inst.depth_u16(), 0.0);
+    }
+    primitives.push(indicator_inst);
 
     // 每个深度层级一条参考线，停在箭头列之前。
     let indent = desc.indent;

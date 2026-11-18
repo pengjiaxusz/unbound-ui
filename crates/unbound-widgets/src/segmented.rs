@@ -51,8 +51,8 @@ impl SegmentedTokens {
             selected: Token::PRIMARY,
             // ToggleButtonBorderBrushChecked 在强调色填充上不可见，取同色描边。
             selected_border: Token::PRIMARY,
-            // ToggleButtonBackgroundPointerOver = ControlFillColorSecondary。
-            hover: Token::CONTROL_HOVER,
+            // 悬停薄纱：次级半透明填充（SubtleFillColorSecondary）。
+            hover: Token::HOVER,
             label_selected: Token::ON_PRIMARY,
             // ToggleButtonForeground = TextFillColorPrimary。
             label: Token::TEXT_PRIMARY,

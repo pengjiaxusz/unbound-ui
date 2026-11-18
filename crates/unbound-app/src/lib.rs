@@ -2867,6 +2867,16 @@ pub struct AppRuntime<A: Application> {
     last_focused: Option<u64>,
     inspector: Inspector,
     debug_sanitizers: bool,
+    /// 根背景清屏 alpha：0 让 DWM 后景材质透出，1 输出主题表面色。
+    ///
+    /// 宿主在每帧回调里按后景计划写入，窗口运行器在渲染前应用。它只影响清屏色，
+    /// 不改变交换链配置，因此可以在运行期自由切换。
+    clear_alpha: f32,
+    /// 当前交换链是否真的按预乘 alpha 创建（原生后景的前提）。
+    ///
+    /// 宿主据此决定后景来源：驱动或表面不支持时交换链会回退为不透明，此时
+    /// 请求原生材质只会得到「内容盖住材质」的结果，必须继续走自绘。
+    premultiplied_surface: bool,
     node_keys: FxHashMap<u64, NodeId>,
     /// 命中区域键 → 所属控件节点键，由 `SceneCollector` 每帧登记。
     hit_owners: FxHashMap<u64, u64>,
@@ -2936,6 +2946,8 @@ impl<A: Application> AppRuntime<A> {
             last_focused: None,
             inspector: Inspector::new(),
             debug_sanitizers: false,
+            clear_alpha: 1.0,
+            premultiplied_surface: false,
             node_keys: FxHashMap::default(),
             hit_owners: FxHashMap::default(),
             seen_keys: FxHashSet::default(),
@@ -3017,6 +3029,35 @@ impl<A: Application> AppRuntime<A> {
         self.force_rebuild = true;
         self.dirty |= DirtyFlags::ALL;
         self.glyph_cache.clear();
+    }
+
+    /// 设置根背景清屏 alpha。
+    ///
+    /// `0.0` 让窗口内容之外的区域完全透明，DWM 的系统后景材质（云母 / 亚克力）
+    /// 才能从客户区透出；`1.0` 输出主题表面色。该值不改变交换链配置，宿主可在
+    /// 运行期随材质切换自由改写。窗口运行器在每帧渲染前读取它。
+    pub fn set_clear_alpha(&mut self, alpha: f32) {
+        self.clear_alpha = alpha.clamp(0.0, 1.0);
+    }
+
+    /// 当前根背景清屏 alpha。
+    #[must_use]
+    pub const fn clear_alpha(&self) -> f32 {
+        self.clear_alpha
+    }
+
+    /// 当前交换链是否按预乘 alpha 创建。
+    ///
+    /// 只有它为 `true` 时，把根背景清屏 alpha 降到 0 才能让 DWM 材质透出；
+    /// 为 `false` 时应继续走自绘后景，否则窗口会变成不透光的纯色壳。
+    #[must_use]
+    pub const fn premultiplied_surface(&self) -> bool {
+        self.premultiplied_surface
+    }
+
+    /// 记录交换链的实际合成方式（由窗口运行器在创建交换链后写入）。
+    pub(crate) fn set_premultiplied_surface(&mut self, supported: bool) {
+        self.premultiplied_surface = supported;
     }
 
     /// 距离下一个定时器触发的剩余时间，供 host 的 `ControlFlow` 使用。

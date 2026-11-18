@@ -6,14 +6,18 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
-use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::Rect;
+use unbound_input::{CursorKind, HitRegion, KeyName, Shape};
+use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
+use crate::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 use crate::primitive::{focus_ring, glyphs as emit_glyphs, surface};
 use crate::{ControlState, PointerPhase, WidgetOutput};
+
+/// 链接按钮的标准控件高度。对齐 WinUI `HyperlinkButton` 的 32px。
+pub const HYPERLINK_BUTTON_HEIGHT: f32 = 32.0;
 
 /// 链接按钮的圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
 pub const HYPERLINK_RADIUS: f32 = 4.0;
@@ -25,6 +29,8 @@ pub struct HyperlinkButtonDesc {
     pub rect: Rect,
     /// 无障碍标签与显示文本。
     pub label: String,
+    /// 目标链接地址（WinUI `NavigateUri`）。
+    pub uri: Option<String>,
     /// 禁用交互。
     pub disabled: bool,
     /// 绘制顺序键。
@@ -38,9 +44,23 @@ impl HyperlinkButtonDesc {
         Self {
             rect,
             label: label.into(),
+            uri: None,
             disabled: false,
             z: 705,
         }
+    }
+
+    /// 使用标准高度便捷构造。
+    #[must_use]
+    pub fn label(label: impl Into<String>) -> Self {
+        Self::new(Rect::new(0.0, 0.0, 120.0, HYPERLINK_BUTTON_HEIGHT), label)
+    }
+
+    /// 设置目标链接地址。
+    #[must_use]
+    pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
+        self.uri = Some(uri.into());
+        self
     }
 
     /// 设置为禁用状态。
@@ -48,6 +68,28 @@ impl HyperlinkButtonDesc {
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
+    }
+
+    /// 设置绘制图层顺序键。
+    #[must_use]
+    pub fn with_z(mut self, z: u16) -> Self {
+        self.z = z;
+        self
+    }
+}
+
+/// 将键盘激活（Enter / Space）折叠进视觉状态。
+///
+/// 与普通按钮一致，当控件聚焦且按住 Enter 或 Space 时，视觉表现等同于指针按下态。
+#[must_use]
+pub fn keyboard_activation(state: ControlState, space_or_enter_down: bool) -> ControlState {
+    if space_or_enter_down && state.focused && !state.disabled {
+        ControlState {
+            phase: PointerPhase::Pressed,
+            ..state
+        }
+    } else {
+        state
     }
 }
 
@@ -109,17 +151,56 @@ pub fn emit_hyperlink_button(
             .with_cursor(CursorKind::Pointer)
     });
 
+    let mut a11y = A11yNode::new(Role::Link, desc.label.clone(), rect)
+        .clickable()
+        .disabled(disabled);
+    if let Some(ref uri) = desc.uri {
+        a11y = a11y.with_value(uri);
+    }
+
     WidgetOutput {
         primitives,
         payloads,
         hit,
-        a11y: Some(
-            A11yNode::new(Role::Link, desc.label.clone(), rect)
-                .clickable()
-                .disabled(disabled),
-        ),
+        a11y: Some(a11y),
         focusable: !disabled,
         ..Default::default()
+    }
+}
+
+impl UiWidget for HyperlinkButtonDesc {
+    type State = ();
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let measured = text_ctx.measure_line(&self.label, 14.0, 500);
+        let w = (measured.x + 22.0).max(self.rect.width()).max(64.0);
+        let h = HYPERLINK_BUTTON_HEIGHT.max(self.rect.height());
+        Vec2::new(w, h)
+    }
+
+    fn reduce(&self, _state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+        match event {
+            WidgetInputEvent::PointerDown { .. } => true,
+            WidgetInputEvent::KeyDown(chord) => {
+                matches!(chord.key, KeyName::Named("Enter") | KeyName::Named("Space"))
+            }
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        _state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let mut glyphs =
+            text_ctx.shape_line(&desc.label, rect, 14.0, 500, AlignX::Center, AlignY::Middle);
+        emit_hyperlink_button(node, &desc, control, &mut glyphs)
     }
 }
 
@@ -162,6 +243,19 @@ mod tests {
     }
 
     #[test]
+    fn keyboard_activation_collapses_to_pressed() {
+        let focused = ControlState {
+            focused: true,
+            ..ControlState::default()
+        };
+        let active = keyboard_activation(focused, true);
+        assert_eq!(active.phase, PointerPhase::Pressed);
+
+        let inactive = keyboard_activation(focused, false);
+        assert_eq!(inactive.phase, PointerPhase::Idle);
+    }
+
+    #[test]
     fn the_primitive_count_is_constant_across_states() {
         let mut counts = Vec::new();
         for phase in [
@@ -178,24 +272,35 @@ mod tests {
                             disabled,
                             selected,
                         };
-                        counts.push(emit_hyperlink_button(1, &desc(), state, &mut []).primitives.len());
+                        counts.push(
+                            emit_hyperlink_button(1, &desc(), state, &mut [])
+                                .primitives
+                                .len(),
+                        );
                     }
                 }
             }
         }
-        assert!(counts.windows(2).all(|pair| pair[0] == pair[1]), "{counts:?}");
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 
     #[test]
     fn a_disabled_link_is_not_clickable() {
-        let output = emit_hyperlink_button(
-            1,
-            &desc().disabled(true),
-            ControlState::default(),
-            &mut [],
-        );
+        let output =
+            emit_hyperlink_button(1, &desc().disabled(true), ControlState::default(), &mut []);
         assert!(output.hit.is_none());
         assert!(!output.focusable);
         assert_eq!(output.a11y.expect("reachable").role, Role::Link);
+    }
+
+    #[test]
+    fn uri_is_propagated_to_a11y_node() {
+        let d = desc().with_uri("https://example.com");
+        let output = emit_hyperlink_button(1, &d, ControlState::default(), &mut []);
+        let node = output.a11y.expect("reachable");
+        assert_eq!(node.value, "https://example.com");
     }
 }

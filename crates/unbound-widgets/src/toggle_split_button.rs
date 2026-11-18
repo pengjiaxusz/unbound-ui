@@ -5,12 +5,13 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
-use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::Rect;
+use unbound_input::{CursorKind, HitRegion, KeyName, Shape};
+use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
+use crate::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -18,6 +19,30 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 pub const TOGGLE_SPLIT_DROPDOWN_WIDTH: f32 = 32.0;
 /// 圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
 pub const TOGGLE_SPLIT_RADIUS: f32 = 4.0;
+/// 标准控件高度。对齐 WinUI `ToggleSplitButton` 的 32px。
+pub const TOGGLE_SPLIT_HEIGHT: f32 = 32.0;
+
+/// 切换分裂按钮支持的键盘按键。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToggleSplitKey {
+    /// Enter 键。
+    Enter,
+    /// Space 键。
+    Space,
+    /// 下箭头（展开菜单）。
+    ArrowDown,
+    /// Escape 键（收起关闭菜单）。
+    Escape,
+}
+
+/// 切换分裂按钮的两个交互分区。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToggleSplitPart {
+    /// 左侧主切换操作区。
+    Primary,
+    /// 右侧下拉菜单触发区。
+    Secondary,
+}
 
 /// 切换分裂按钮描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -50,10 +75,37 @@ impl ToggleSplitButtonDesc {
         }
     }
 
+    /// 使用标准高度便捷构造。
+    #[must_use]
+    pub fn label(label: impl Into<String>) -> Self {
+        Self::new(Rect::new(0.0, 0.0, 180.0, TOGGLE_SPLIT_HEIGHT), label)
+    }
+
+    /// 设置圆角半径。
+    #[must_use]
+    pub fn with_radius(mut self, radius: f32) -> Self {
+        self.radius = radius;
+        self
+    }
+
+    /// 设置下拉区分隔宽度。
+    #[must_use]
+    pub fn with_split_width(mut self, width: f32) -> Self {
+        self.split_width = width;
+        self
+    }
+
     /// 设置为禁用状态。
     #[must_use]
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// 设置绘制图层顺序键。
+    #[must_use]
+    pub fn with_z(mut self, z: u16) -> Self {
+        self.z = z;
         self
     }
 
@@ -102,6 +154,64 @@ impl ToggleSplitButtonState {
     pub fn toggle(&mut self) {
         self.checked = !self.checked;
     }
+
+    /// 切换右侧菜单展开态。
+    pub fn toggle_menu(&mut self) {
+        self.menu_open = !self.menu_open;
+    }
+
+    /// 展开右侧菜单。
+    pub fn open_menu(&mut self) {
+        self.menu_open = true;
+    }
+
+    /// 收起关闭右侧菜单。
+    pub fn close_menu(&mut self) {
+        self.menu_open = false;
+    }
+
+    /// 处理具体分区的键盘按键交互。若状态发生改变则返回 `true`。
+    pub fn handle_key(&mut self, part: ToggleSplitPart, key: ToggleSplitKey) -> bool {
+        match (part, key) {
+            (ToggleSplitPart::Primary, ToggleSplitKey::Enter | ToggleSplitKey::Space) => {
+                self.toggle();
+                true
+            }
+            (ToggleSplitPart::Secondary, ToggleSplitKey::Enter | ToggleSplitKey::Space) => {
+                self.toggle_menu();
+                true
+            }
+            (_, ToggleSplitKey::ArrowDown) => {
+                if !self.menu_open {
+                    self.menu_open = true;
+                    true
+                } else {
+                    false
+                }
+            }
+            (_, ToggleSplitKey::Escape) => {
+                if self.menu_open {
+                    self.menu_open = false;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+}
+
+/// 将键盘激活折叠进视觉状态。
+#[must_use]
+pub fn keyboard_activation(state: ControlState, space_or_enter_down: bool) -> ControlState {
+    if space_or_enter_down && state.focused && !state.disabled {
+        ControlState {
+            phase: PointerPhase::Pressed,
+            ..state
+        }
+    } else {
+        state
+    }
 }
 
 /// 输出切换分裂按钮的图元、两个命中区域与语义节点。
@@ -120,12 +230,7 @@ pub fn emit_toggle_split_button(
     let checked = state.checked || control.selected;
     let main_rect = desc.main_rect();
     let arrow_rect = desc.dropdown_rect();
-    let divider_rect = Rect::new(
-        main_rect.max().x - 0.5,
-        rect.origin.y,
-        1.0,
-        rect.height(),
-    );
+    let divider_rect = Rect::new(main_rect.max().x - 0.5, rect.origin.y, 1.0, rect.height());
 
     // 左侧选中态：`AccentFillColorDefault` / `Secondary` / `Tertiary`；
     // 未选中沿用 SplitButton 的中性表面。
@@ -200,15 +305,7 @@ pub fn emit_toggle_split_button(
         z + 1,
     ));
     primitives.push(surface(divider_rect, 0.0, divider, z + 2));
-    primitives.push(outlined(
-        rect,
-        radius,
-        Token::NONE,
-        border,
-        1.0,
-        0.0,
-        z + 3,
-    ));
+    primitives.push(outlined(rect, radius, Token::NONE, border, 1.0, 0.0, z + 3));
 
     let acx = arrow_rect.max().x - 18.0;
     let acy = arrow_rect.center().y;
@@ -293,6 +390,71 @@ pub fn emit_toggle_split_button(
     out
 }
 
+impl UiWidget for ToggleSplitButtonDesc {
+    type State = ToggleSplitButtonState;
+
+    fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
+        let measured = text_ctx.measure_line(&self.label, 14.0, 500);
+        let w = (measured.x + self.split_width + 24.0)
+            .max(self.rect.width())
+            .max(100.0);
+        let h = TOGGLE_SPLIT_HEIGHT.max(self.rect.height());
+        Vec2::new(w, h)
+    }
+
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let main_r = desc.main_rect();
+        let dropdown_r = desc.dropdown_rect();
+        match event {
+            WidgetInputEvent::PointerDown { pos, .. } => {
+                if dropdown_r.contains_point(*pos) {
+                    state.toggle_menu();
+                    true
+                } else if main_r.contains_point(*pos) {
+                    state.toggle();
+                    true
+                } else {
+                    false
+                }
+            }
+            WidgetInputEvent::KeyDown(chord) => {
+                let key = match chord.key {
+                    KeyName::Named("Enter") => Some(ToggleSplitKey::Enter),
+                    KeyName::Named("Space") => Some(ToggleSplitKey::Space),
+                    KeyName::Named("ArrowDown") => Some(ToggleSplitKey::ArrowDown),
+                    KeyName::Named("Escape") => Some(ToggleSplitKey::Escape),
+                    _ => None,
+                };
+                key.is_some_and(|k| state.handle_key(ToggleSplitPart::Primary, k))
+            }
+            _ => false,
+        }
+    }
+
+    fn emit_laid_out(
+        &self,
+        node: u64,
+        rect: Rect,
+        control: ControlState,
+        state: &Self::State,
+        text_ctx: &mut TextCtx<'_>,
+    ) -> WidgetOutput {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        let mut glyphs = text_ctx.shape_line(
+            &desc.label,
+            desc.main_rect(),
+            14.0,
+            500,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        emit_toggle_split_button(node, &desc, state, control, &mut glyphs)
+    }
+}
+
 fn instance_rounded(
     rect: Rect,
     radii: [f32; 4],
@@ -317,7 +479,7 @@ mod tests {
     use super::*;
 
     fn desc() -> ToggleSplitButtonDesc {
-        ToggleSplitButtonDesc::new(Rect::new(0.0, 0.0, 180.0, 32.0), "Bold")
+        ToggleSplitButtonDesc::new(Rect::new(0.0, 0.0, 180.0, TOGGLE_SPLIT_HEIGHT), "Bold")
     }
 
     #[test]
@@ -357,6 +519,44 @@ mod tests {
     }
 
     #[test]
+    fn keyboard_activation_collapses_to_pressed() {
+        let focused = ControlState {
+            focused: true,
+            ..ControlState::default()
+        };
+        let active = keyboard_activation(focused, true);
+        assert_eq!(active.phase, PointerPhase::Pressed);
+
+        let inactive = keyboard_activation(focused, false);
+        assert_eq!(inactive.phase, PointerPhase::Idle);
+    }
+
+    #[test]
+    fn keyboard_keys_drive_checked_and_menu_open_states() {
+        let mut state = ToggleSplitButtonState::new();
+        assert!(!state.checked);
+        assert!(!state.menu_open);
+
+        // 主操作区触发 Space / Enter 切换 checked
+        assert!(state.handle_key(ToggleSplitPart::Primary, ToggleSplitKey::Space));
+        assert!(state.checked);
+        assert!(state.handle_key(ToggleSplitPart::Primary, ToggleSplitKey::Enter));
+        assert!(!state.checked);
+
+        // 下拉区触发 Space / Enter 切换 menu_open
+        assert!(state.handle_key(ToggleSplitPart::Secondary, ToggleSplitKey::Space));
+        assert!(state.menu_open);
+
+        // Escape 关闭菜单
+        assert!(state.handle_key(ToggleSplitPart::Secondary, ToggleSplitKey::Escape));
+        assert!(!state.menu_open);
+
+        // ArrowDown 展开菜单
+        assert!(state.handle_key(ToggleSplitPart::Primary, ToggleSplitKey::ArrowDown));
+        assert!(state.menu_open);
+    }
+
+    #[test]
     fn the_primitive_count_is_constant_across_states() {
         let mut counts = Vec::new();
         for phase in [
@@ -386,6 +586,9 @@ mod tests {
                 }
             }
         }
-        assert!(counts.windows(2).all(|pair| pair[0] == pair[1]), "{counts:?}");
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }
