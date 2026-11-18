@@ -259,24 +259,27 @@ mod win32 {
     use ::windows::core::{w, PCWSTR};
     use ::windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
     use ::windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, ScreenToClient, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        ClientToScreen, GetMonitorInfoW, MonitorFromWindow, ScreenToClient, MONITORINFO,
+        MONITOR_DEFAULTTONEAREST,
     };
     use ::windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use ::windows::Win32::System::Ole::{OleInitialize, OleUninitialize};
     use ::windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
     use ::windows::Win32::UI::Controls::WM_MOUSELEAVE;
     use ::windows::Win32::UI::HiDpi::{
         GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
     };
     use ::windows::Win32::UI::Input::Ime::{
-        ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext, GCS_COMPSTR, GCS_CURSORPOS,
-        GCS_RESULTSTR, HIMC, IME_COMPOSITION_STRING,
+        ImmGetCompositionStringW, ImmGetContext, ImmGetDescriptionW, ImmReleaseContext,
+        GCS_COMPSTR, GCS_CURSORPOS, GCS_RESULTSTR, HIMC, IMECHARPOSITION, IME_COMPOSITION_STRING,
+        IMR_QUERYCHARPOSITION,
     };
     use ::windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetKeyState, GetKeyboardState, ReleaseCapture, SetCapture, ToUnicode, TrackMouseEvent,
-        TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, VK_APPS, VK_BACK, VK_CAPITAL, VK_CONTROL,
-        VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN,
-        VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB,
-        VK_UP,
+        GetFocus, GetKeyState, GetKeyboardLayout, GetKeyboardState, ReleaseCapture, SetCapture,
+        ToUnicode, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, VK_APPS, VK_BACK,
+        VK_CAPITAL, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME,
+        VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_PROCESSKEY, VK_RETURN,
+        VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
     };
     use ::windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
     use ::windows::Win32::UI::WindowsAndMessaging::{
@@ -289,13 +292,13 @@ mod win32 {
         MSG, MWMO_INPUTAVAILABLE, NCCALCSIZE_PARAMS, PM_REMOVE, QS_ALLINPUT, SWP_FRAMECHANGED,
         SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, WINDOW_STYLE,
         WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_DROPFILES, WM_GETMINMAXINFO,
-        WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
-        WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
-        WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST,
-        WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN,
-        WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE,
-        WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW,
-        WS_EX_APPWINDOW,
+        WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_NOTIFY, WM_IME_REQUEST,
+        WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+        WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
+        WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+        WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
+        WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW,
     };
 
     use crate::pacing::PresentWaitPolicy;
@@ -463,6 +466,120 @@ mod win32 {
         Some(String::from_utf16_lossy(&buf[..actual_u16]))
     }
 
+    /// 当前键盘布局对应的输入法描述，仅用于诊断日志。
+    ///
+    /// 第三方输入法（搜狗、QQ 拼音等）与系统输入法在 IMM32 兼容层上的行为差异很大：
+    /// 有的会持续投递组合串，有的只在最后给一次上屏结果。日志里带上输入法名字，
+    /// 才能一眼分辨“代码回归”和“输入法实现差异”。
+    fn ime_description() -> String {
+        unsafe {
+            let mut buf = [0u16; 128];
+            let len = ImmGetDescriptionW(GetKeyboardLayout(0), Some(&mut buf));
+            String::from_utf16_lossy(&buf[..(len as usize).min(buf.len())])
+        }
+    }
+
+    thread_local! {
+        /// 上一次已投递给宿主的组合串，用于去重。
+        ///
+        /// 只缓存**预编辑**，不缓存也绝不轮询提交串：ADR 0011 规定平台层只有一条
+        /// 提交通道（`WM_IME_COMPOSITION`）。
+        static LAST_PREEDIT: std::cell::RefCell<String> =
+            const { std::cell::RefCell::new(String::new()) };
+    }
+
+    /// 记录一次已经投递过的预编辑，让轮询与消息两条通道看到同一份“已发送”状态。
+    fn mark_ime_preedit_delivered(preedit: &str) {
+        LAST_PREEDIT.with(|cell| {
+            let mut last = cell.borrow_mut();
+            last.clear();
+            last.push_str(preedit);
+        });
+    }
+
+    /// 组合串是否发生了变化；变化时同步记录，避免同一份预编辑被重复推送。
+    fn preedit_is_new(last: &mut String, comp: &str) -> bool {
+        if last == comp {
+            return false;
+        }
+        last.clear();
+        last.push_str(comp);
+        true
+    }
+
+    /// 从输入法上下文补读**组合串**，作为 `WM_IME_COMPOSITION(GCS_COMPSTR)` 的兜底。
+    ///
+    /// 只读 `GCS_COMPSTR`，绝不读 `GCS_RESULTSTR`。
+    ///
+    /// 提交串不能轮询：输入法在处理按键时就把结果写进了上下文，而
+    /// `WM_IME_COMPOSITION` 是随后才派发的排队消息。轮询永远先读到它，
+    /// 于是同一次上屏会被轮询和消息各投递一次（首字变两个词）；输入法在提交后
+    /// 频繁发出的通知又会让轮询反复读到同一份结果（疯狂上屏）。
+    /// 提交只有一个来源：`WM_IME_COMPOSITION`。
+    ///
+    /// 组合串则相反，它只活在上下文里，缺了消息就没人补，所以这里保留兜底读取。
+    fn sync_ime_preedit(data: &WindowUserData, hwnd: HWND) {
+        let (comp, cursor, himc_valid) = unsafe {
+            let himc = ImmGetContext(hwnd);
+            if himc.is_invalid() {
+                (String::new(), -1, false)
+            } else {
+                let comp = imm_string(himc, GCS_COMPSTR).unwrap_or_default();
+                let cursor = ImmGetCompositionStringW(himc, GCS_CURSORPOS, None, 0);
+                let _ = ImmReleaseContext(hwnd, himc);
+                (comp, cursor, true)
+            }
+        };
+        ime_trace(format!(
+            "ime sync himc={himc_valid} comp={comp:?} cursor={cursor}"
+        ));
+
+        let changed = LAST_PREEDIT.with(|cell| preedit_is_new(&mut cell.borrow_mut(), &comp));
+        if !changed {
+            return;
+        }
+        let selection = if cursor >= 0 {
+            let byte_pos = comp
+                .char_indices()
+                .nth(cursor as usize)
+                .map_or(comp.len(), |(idx, _)| idx);
+            Some((byte_pos, byte_pos))
+        } else {
+            None
+        };
+        data.events
+            .borrow_mut()
+            .push(PlatformEvent::Ime(ImeEvent::Preedit(comp, selection)));
+    }
+
+    /// 是否开启输入法诊断日志。
+    ///
+    /// 除了环境变量，同时接受 `%TEMP%\unbound-ime.trace` 标记文件：
+    /// 用资源管理器启动（非提升权限）时拿不到本进程的环境变量。
+    fn ime_trace_enabled() -> bool {
+        std::env::var_os("UNBOUND_IME_TRACE").is_some()
+            || std::env::temp_dir().join("unbound-ime.trace").exists()
+    }
+
+    /// 输入法诊断日志。
+    ///
+    /// 仅在环境变量 `UNBOUND_IME_TRACE` 存在时追加写入
+    /// `%TEMP%\unbound-ime.log`；正常运行时完全不产生输出。
+    fn ime_trace(message: impl core::fmt::Display) {
+        if !ime_trace_enabled() {
+            return;
+        }
+        use std::io::Write;
+        let path = std::env::temp_dir().join("unbound-ime.log");
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(file, "{message}");
+        }
+    }
+
     struct WindowUserData {
         decorations: bool,
         resizable: bool,
@@ -500,6 +617,10 @@ mod win32 {
             return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
         }
         let data = unsafe { &*user_ptr };
+
+        if (0x0281..=0x0291).contains(&msg) || (0x0100..=0x0110).contains(&msg) {
+            ime_trace(format!("ime msg=0x{msg:04X} wparam=0x{:X}", wparam.0));
+        }
 
         match msg {
             WM_NCCALCSIZE => {
@@ -879,6 +1000,25 @@ mod win32 {
                 let scan_code = ((lparam.0 >> 16) & 0xFF) as u32;
                 let vk = (wparam.0 & 0xFFFF) as u16;
                 let key = translate_vk(vk, scan_code);
+                if pressed && ime_trace_enabled() {
+                    // 输入法只在“焦点窗口 + 已关联输入上下文”时才投递 WM_IME_*，
+                    // 这两个状态是排查组合事件缺失时最先要看的东西。
+                    let focused = unsafe { GetFocus() } == hwnd;
+                    let himc = unsafe { ImmGetContext(hwnd) };
+                    let himc_valid = !himc.is_invalid();
+                    if himc_valid {
+                        let _ = unsafe { ImmReleaseContext(hwnd, himc) };
+                    }
+                    ime_trace(format!(
+                        "key down vk=0x{vk:02X} key={key:?} focus={focused} himc={himc_valid}"
+                    ));
+                }
+                if pressed && vk == VK_PROCESSKEY.0 {
+                    // VK_PROCESSKEY 说明这个按键已被输入法吞掉并用于组合；
+                    // 若输入法只更新了自己的组合窗、没发 WM_IME_COMPOSITION，
+                    // 这里主动拉一次，预编辑就不会丢。
+                    sync_ime_preedit(data, hwnd);
+                }
                 data.events.borrow_mut().push(PlatformEvent::KeyInput {
                     state: if pressed {
                         ButtonState::Pressed
@@ -902,18 +1042,94 @@ mod win32 {
                 }
                 LRESULT(0)
             }
+            WM_IME_SETCONTEXT => {
+                // 组合串最终由应用自己画进输入框，但“谁来画”这一步要等确认
+                // 组合串真的能拿到之后再切换：先保持输入法自带组合窗，
+                // 避免自绘还没生效时连输入法自己的提示也一起消失。
+                ime_trace(format!(
+                    "ime setcontext active={} lparam=0x{:X}",
+                    wparam.0, lparam.0
+                ));
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+            WM_IME_REQUEST => {
+                // 自绘组合串的应用必须回答“第 N 个字符在哪”，否则候选窗无法锚定到插入符，
+                // 输入法会反复重问（表现为 WM_IME_REQUEST 高频循环）。
+                // pt / rcDocument 都是屏幕坐标，而宿主上报的是客户区坐标。
+                if wparam.0 == IMR_QUERYCHARPOSITION as usize {
+                    if let Some((caret_x, caret_y, line_height)) =
+                        crate::win32_window::win32::ime_caret_client()
+                    {
+                        let mut origin = POINT {
+                            x: caret_x,
+                            y: caret_y,
+                        };
+                        let mut top_left = POINT { x: 0, y: 0 };
+                        let mut client = RECT::default();
+                        unsafe {
+                            let _ = ClientToScreen(hwnd, &mut origin);
+                            let _ = ClientToScreen(hwnd, &mut top_left);
+                            let _ = GetClientRect(hwnd, &mut client);
+                        }
+                        let info = unsafe { &mut *(lparam.0 as *mut IMECHARPOSITION) };
+                        info.dwSize = core::mem::size_of::<IMECHARPOSITION>() as u32;
+                        info.pt = origin;
+                        info.cLineHeight = line_height;
+                        info.rcDocument = RECT {
+                            left: top_left.x,
+                            top: top_left.y,
+                            right: top_left.x + client.right,
+                            bottom: top_left.y + client.bottom,
+                        };
+                        return LRESULT(1);
+                    }
+                }
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
             WM_IME_STARTCOMPOSITION => {
+                if ime_trace_enabled() {
+                    ime_trace(format!(
+                        "ime start ime={:?} caret={:?}",
+                        ime_description(),
+                        crate::win32_window::win32::ime_caret_client()
+                    ));
+                }
+                // 组合开始时输入法会重建自己的 UI，必须再报一次锚点。
+                crate::win32_window::win32::reapply_ime_area(hwnd.0 as isize);
                 data.events
                     .borrow_mut()
                     .push(PlatformEvent::Ime(ImeEvent::Enabled));
-                LRESULT(0)
+                sync_ime_preedit(data, hwnd);
+                // 即便组合串由我们自绘，也必须走默认处理：默认 IME 窗口负责建立
+                // 组合状态，之后 CUAS 才有“组合中”的镜像可镜像。
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+            WM_IME_NOTIFY => {
+                // 通知里最要紧的是“候选窗/组合窗变了”，说明组合串也刚更新过。
+                // 有些输入法（Win11 微软拼音）只发通知不发 WM_IME_COMPOSITION，
+                // 这里顺手拉一次组合状态，把漏掉的预编辑补回来。
+                sync_ime_preedit(data, hwnd);
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
             WM_IME_COMPOSITION => {
+                ime_trace(format!("ime composition flags=0x{:08X}", lparam.0));
                 let himc = unsafe { ImmGetContext(hwnd) };
                 if !himc.is_invalid() {
                     let flags = lparam.0 as u32;
+                    if flags == 0 {
+                        // 没有任何 GCS_ 标志表示本次组合被取消，必须清掉残留的预编辑。
+                        mark_ime_preedit_delivered("");
+                        data.events
+                            .borrow_mut()
+                            .push(PlatformEvent::Ime(ImeEvent::Preedit(String::new(), None)));
+                    }
                     if (flags & GCS_RESULTSTR.0) != 0 {
                         if let Some(commit) = imm_string(himc, GCS_RESULTSTR) {
+                            ime_trace(format!("ime result {commit:?}"));
+                            // 这是全应用唯一的提交通道（ADR 0011）：每条
+                            // WM_IME_COMPOSITION 携带的结果就是一次真实上屏，
+                            // 不做任何去重——去重反而会吞掉连续输入的同词。
+                            mark_ime_preedit_delivered("");
                             data.events
                                 .borrow_mut()
                                 .push(PlatformEvent::Ime(ImeEvent::Commit(commit)));
@@ -921,6 +1137,7 @@ mod win32 {
                     }
                     if (flags & GCS_COMPSTR.0) != 0 {
                         let preedit = imm_string(himc, GCS_COMPSTR).unwrap_or_default();
+                        ime_trace(format!("ime preedit {preedit:?} flags=0x{flags:08X}"));
                         let cursor =
                             unsafe { ImmGetCompositionStringW(himc, GCS_CURSORPOS, None, 0) };
                         let sel = if cursor >= 0 {
@@ -932,19 +1149,30 @@ mod win32 {
                         } else {
                             None
                         };
+                        mark_ime_preedit_delivered(&preedit);
                         data.events
                             .borrow_mut()
                             .push(PlatformEvent::Ime(ImeEvent::Preedit(preedit, sel)));
                     }
                     let _ = unsafe { ImmReleaseContext(hwnd, himc) };
                 }
-                LRESULT(0)
+                // 关键：把消息继续交给默认 IME 窗口。它负责按 lParam 的标志更新
+                // IMM32 组合状态；不交还的话，CUAS 的镜像永远停在空串，
+                // 后续按键也就只剩“上屏结果”而没有“组合中”的中间态。
+                let result = unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                // 组合串有可能是在默认 IME 窗口处理过程中才写进输入上下文的，
+                // 所以处理完再补读一次；内容没变时会被预编辑去重挡掉。
+                sync_ime_preedit(data, hwnd);
+                result
             }
             WM_IME_ENDCOMPOSITION => {
+                ime_trace("ime end");
                 data.events
                     .borrow_mut()
                     .push(PlatformEvent::Ime(ImeEvent::Disabled));
-                LRESULT(0)
+                // 组合结束：清理残留预编辑（若已提交，提交串在上面已经补发过）。
+                sync_ime_preedit(data, hwnd);
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
             WM_DROPFILES => {
                 let hdrop = HDROP(wparam.0 as *mut c_void);
@@ -1199,10 +1427,62 @@ mod win32 {
         })
     }
 
+    /// UI 线程的 COM/OLE 作用域。
+    ///
+    /// 可选地在本线程初始化 OLE/COM。
+    ///
+    /// TSF（文本服务框架）以单线程套间（STA）为前提。
+    ///
+    /// 这是 Windows 输入法链路里最容易被忽略的一条硬性要求：TSF 的线程管理器、
+    /// CUAS 兼容层（负责把 TSF 输入法的组合串翻译成 IMM32 的 `WM_IME_*` 消息）
+    /// 都必须在 STA 线程上激活。线程未经 `OleInitialize` / `CoInitializeEx(APT)`
+    /// 初始化 COM 时，`msctf.dll` 虽然已被 `user32` 加载进进程，却无法真正接管输入：
+    ///
+    /// * 按键仍会被输入法吞掉，应用只看到 `WM_KEYDOWN` + `VK_PROCESSKEY`；
+    /// * 组合串被输入法画在它自己的窗口里（所以能看到候选框和拼音）；
+    /// * `TranslateMessage` 无法生成 `WM_IME_STARTCOMPOSITION` / `WM_IME_COMPOSITION`；
+    /// * `ImmGetCompositionString(GCS_COMPSTR)` 永远返回空；
+    /// * 输入法还会反复用 `IMR_QUERYCHARPOSITION` 询问插入符位置（因为它想内联绘制）。
+    ///
+    /// 本窗口是 TSF-unaware 的 IMM32 应用，正确做法是：只做 COM STA 初始化，
+    /// **不要**自己创建 `ITfThreadMgr`（那会把进程标记为 TSF-aware，反而关闭 CUAS
+    /// 兼容层，此后必须自己实现 `ITextStoreACP` 才有输入）。初始化后 CUAS 会把
+    /// TSF 输入法的组合过程翻译成标准的 `WM_IME_*` 消息，正好对应 ADR 0011
+    /// “组合串即缓冲区文本”的设计。
+    ///
+    /// 成功初始化后必须配对反初始化，否则退出时可能残留 COM 引用。
+    struct OleScope {
+        initialized: bool,
+    }
+
+    impl OleScope {
+        fn enter() -> Self {
+            // SAFETY: 必须在创建窗口、泵消息的同一线程、且在输入法首次激活之前调用。
+            let result = unsafe { OleInitialize(None) };
+            let initialized = result.is_ok();
+            let code = result.as_ref().err().map_or(0, |err| err.code().0);
+            ime_trace(format!(
+                "OleInitialize hr=0x{code:08X} ok={initialized} (0x80010106=thread already STA)"
+            ));
+            Self { initialized }
+        }
+    }
+
+    impl Drop for OleScope {
+        fn drop(&mut self) {
+            if self.initialized {
+                unsafe { OleUninitialize() };
+            }
+        }
+    }
+
     pub(super) fn run_event_loop<A: PlatformApp>(
         config: WindowConfig,
         mut app: A,
     ) -> Result<(), PlatformError> {
+        // 必须在注册窗口类与创建窗口之前完成 STA 初始化：
+        // 输入法会在窗口首次激活时就接管该线程的输入。
+        let _ole = OleScope::enter();
         let hmodule = unsafe { GetModuleHandleW(None) }
             .map_err(|err| PlatformError::EventLoop(format!("GetModuleHandleW failed: {err}")))?;
         let hinstance = HINSTANCE(hmodule.0);
@@ -1411,6 +1691,24 @@ mod win32 {
         }
 
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod ime_preedit_tests {
+        use super::preedit_is_new;
+
+        #[test]
+        fn repeated_reads_of_the_same_composition_are_not_republished() {
+            // 轮询会在每个通知/按键后重复读到同一份组合串。
+            let mut last = String::new();
+            assert!(preedit_is_new(&mut last, "ni"));
+            assert!(!preedit_is_new(&mut last, "ni"));
+            assert!(preedit_is_new(&mut last, "nih"));
+            assert!(
+                preedit_is_new(&mut last, ""),
+                "a commit must clear the preedit held by the host"
+            );
+        }
     }
 }
 

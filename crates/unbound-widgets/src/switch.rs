@@ -65,6 +65,15 @@ pub const SWITCH_HEADER_LINE: f32 = 20.0;
 /// 20px 行盒 + 13px 间距正好落在 Reference 的轨道顶部（控件顶部 +33px）。
 pub const SWITCH_HEADER_GAP: f32 = 13.0;
 
+/// Header 排版下轨道底部保留的留白。
+///
+/// WinUI `ToggleSwitch` 模板在轨道下方还留有一段外边距：参考截图控件高 63，
+/// 即 20（标签行）+ 13（间距）+ 20（轨道）+ 10（底部留白）。
+pub const SWITCH_HEADER_TAIL: f32 = 10.0;
+
+/// `ToggleSwitch` 的最小宽度。对齐 WinUI 默认样式 `MinWidth = 154`。
+pub const SWITCH_MIN_WIDTH: f32 = 154.0;
+
 /// 开关的两种排版。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SwitchLayout {
@@ -79,6 +88,8 @@ pub enum SwitchLayout {
 pub struct SwitchTokens {
     /// 关闭状态下的轨道填充。
     pub track: Token,
+    /// 关闭状态悬停/按下时的轨道填充。
+    pub track_hover: Token,
     /// 关闭状态下的轨道描边。
     pub track_border: Token,
     /// 开启状态下的轨道。
@@ -110,17 +121,24 @@ impl SwitchTokens {
         Self {
             // 关闭态：WinUI `ToggleSwitchFillOff` = `ControlAltFillColorSecondary`。
             track: Token::CONTROL_ALT_FILL_SECONDARY,
+            // 悬停时叠一层黑色薄纱，让关闭态轨道明显加深。
+            track_hover: Token::CONTROL_HOVER,
             // WinUI `ToggleSwitchStrokeOff` = `ControlStrongStrokeColorDefault`，厚度 1px。
             track_border: Token::CONTROL_TRACK_STROKE,
             track_on: Token::PRIMARY,
-            track_disabled: Token::CONTROL_ALT_FILL_DISABLED,
+            // 禁用态轨道填充是透明的：参考截图里轨道内部与后景完全同色
+            // （light 243 / dark 32），WinUI 的 `ToggleSwitchFillOffDisabled`
+            // 不绘制底色，只保留 1px 描边。
+            track_disabled: Token::NONE,
             track_border_disabled: Token::CONTROL_STRONG_STROKE_DISABLED,
             // 关闭态旋钮用 `TextFillColorSecondary`（次级文字色）而不是纯白：
             // 浅色主题下白色旋钮会与白色轨道糊成一片。
             thumb: Token::SWITCH_THUMB_OFF,
             thumb_on: Token::CONTROL_THUMB_ON,
             thumb_disabled: Token::CONTROL_DISABLED_THUMB,
-            label: Token::TEXT_SECONDARY,
+            // 标签文字用 `TextFillColorPrimary`：参考截图的开关标签墨迹为 26，
+            // 与正文同色；次级灰只用于说明性文字。
+            label: Token::TEXT_PRIMARY,
             label_hover: Token::TEXT_PRIMARY,
             label_disabled: Token::TEXT_DISABLED,
             focus_ring: Token::FOCUS_RING,
@@ -278,6 +296,10 @@ pub fn emit_switch(
         (tokens.track_disabled, tokens.track_border_disabled)
     } else if desc.on {
         (tokens.track_on, Token::NONE)
+    } else if state.phase != crate::PointerPhase::Idle {
+        // `ToggleSwitchFillOffPointerOver`：关闭态悬停/按下时轨道加深一档，
+        // 与 WinUI 的指针反馈一致（开启态悬停由强调色自身承担）。
+        (tokens.track_hover, tokens.track_border)
     } else {
         (tokens.track, tokens.track_border)
     };

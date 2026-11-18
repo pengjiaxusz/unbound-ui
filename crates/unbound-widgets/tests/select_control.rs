@@ -38,7 +38,11 @@ fn the_arrow_is_two_curve_strokes_that_stay_pointing_down() {
     let desc = desc();
     let mut state = SelectState::new();
     let closed = emit_select(4, &desc, &state, ControlState::default());
-    assert_eq!(closed.primitives.len(), 5, "fill, border, 2 strokes, ring");
+    assert_eq!(
+        closed.primitives.len(),
+        6,
+        "fill, border, 2 strokes, ring, bottom accent"
+    );
     assert_eq!(closed.payloads.len(), 2, "one payload per chevron stroke");
     assert!(closed
         .payloads

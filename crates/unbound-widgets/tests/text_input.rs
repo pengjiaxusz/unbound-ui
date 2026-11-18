@@ -86,7 +86,10 @@ fn the_ime_preedit_is_replaced_by_the_commit_without_duplicating_text() {
     reduce_text_input(
         &desc(),
         &mut edit,
-        &TextInputEvent::ImePreedit { start: 2, end: 2 },
+        &TextInputEvent::ImePreedit {
+            text: "ni".into(),
+            cursor: None,
+        },
     );
     reduce_text_input(
         &desc(),
@@ -221,7 +224,13 @@ fn validation_drives_the_border_token() {
 #[test]
 fn an_ime_preedit_paints_the_underline_only_while_composing() {
     let mut edit = TextEditState::with_text("ab");
-    reduce(&mut edit, TextInputEvent::ImePreedit { start: 2, end: 2 });
+    reduce(
+        &mut edit,
+        TextInputEvent::ImePreedit {
+            text: "ni".into(),
+            cursor: None,
+        },
+    );
     let visual = TextInputVisual {
         preedit: Some(Rect::new(38.0, 40.0, 20.0, 2.0)),
         ..TextInputVisual::default()

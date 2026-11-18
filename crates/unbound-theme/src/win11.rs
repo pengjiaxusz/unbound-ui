@@ -65,7 +65,7 @@ pub fn dark() -> Palette {
         (Token::ON_SURFACE_MUTED, c(197, 197, 197, 255)),
         (Token::TEXT_PRIMARY, c(255, 255, 255, 255)),
         (Token::TEXT_SECONDARY, c(197, 197, 197, 255)),
-        (Token::TEXT_DISABLED, c(255, 255, 255, 93)),
+        (Token::TEXT_DISABLED, c(255, 255, 255, 42)),
         // ---- 描边 -------------------------------------------------------
         (Token::OUTLINE, c(58, 58, 58, 255)),
         (Token::OUTLINE_STRONG, c(92, 92, 92, 255)),
@@ -101,7 +101,9 @@ pub fn dark() -> Palette {
         (Token::HOVER, c(255, 255, 255, veil(12))),
         (Token::PRESSED, c(255, 255, 255, veil(20))),
         (Token::DISABLED, c(255, 255, 255, veil(15))),
-        (Token::ON_DISABLED, c(255, 255, 255, 93)),
+        // `TextFillColorDisabled`：WinUI 深色下约 16.5% 白薄纱。
+        // 像素对照实测禁用标签墨迹为 (120,120,120)，按线性空间反解得到该 alpha。
+        (Token::ON_DISABLED, c(255, 255, 255, 42)),
         (Token::CONTROL_TRACK, c(154, 154, 154, 255)),
         // 关闭态开关轨道的描边：WinUI 的 `ControlStrongStrokeColorDefault`
         // 深色值 `#8BFFFFFF`（54.5% 白）。实测本机 Win11 关闭态开关的轨道
@@ -118,16 +120,22 @@ pub fn dark() -> Palette {
         (Token::SWITCH_THUMB_OFF, c(255, 255, 255, veil(197))),
         (Token::CONTROL_THUMB, c(255, 255, 255, 255)),
         (Token::CONTROL_HOVER, c(45, 45, 45, 255)),
-        (Token::CONTROL_DISABLED_BG, c(43, 43, 43, 255)),
+        (Token::CONTROL_DISABLED_BG, c(42, 42, 42, 255)),
         (Token::CONTROL_DISABLED_BORDER, c(255, 255, 255, veil(10))),
         (Token::CONTROL_DISABLED_THUMB, c(116, 116, 116, 255)),
         // WinUI 深色下复选框未选中与开关关闭态的实际填充（实测 #1D1D1D）。
         (Token::CONTROL_ALT_FILL_SECONDARY, c(29, 29, 29, 255)),
         (Token::CONTROL_ALT_FILL_DISABLED, c(36, 36, 36, 255)),
-        (Token::CONTROL_STRONG_STROKE_DISABLED, c(115, 115, 115, 255)),
+        // 禁用描边按 WinUI `ControlStrongStrokeColorDisabled`（light #37000000 /
+        // dark #28FFFFFF）在基准表面上的合成结果取实色。交换链在线性空间混合，
+        // 直接写半透明白/黑会在深色主题下把 67 抬到 115；实色同时不受亚像素
+        // 相位影响，禁用开关的 1px 轨道轮廓才与参考一致。
+        (Token::CONTROL_STRONG_STROKE_DISABLED, c(67, 67, 67, 255)),
         (Token::SLIDER_TRACK_DISABLED, c(87, 87, 87, 255)),
         (Token::SLIDER_FILL_DISABLED, c(113, 113, 113, 255)),
         (Token::SLIDER_THUMB_DISABLED, c(98, 98, 98, 255)),
+        // 滑块拇指外盘（`SliderThumbBackground`）：深色实测 #454545。
+        (Token::SLIDER_THUMB_DISK, c(69, 69, 69, 255)),
         // ---- 外壳容器（云母之上不再加第二层不透明底） --------------------
         // 标题栏与导航面板不另加底色：Win11 的导航窗格本身就是云母。
         (Token::HEADER_BG, c(32, 32, 32, 0)),
@@ -146,11 +154,17 @@ pub fn dark() -> Palette {
         // 叠在卡片之上的 6% 白色薄纱，实测比卡片亮 13 级（#37373C vs #2A2A31）。
         // 薄纱的 alpha 字节按 sRGB 空间的百分比给定，而卡片比薄纱的参照底色
         // #202020 更亮，因此这里取 19（≈6% 在更亮底色上的线性等价值）。
-        (Token::CONTROL_FILL, c(255, 255, 255, veil(19))),
-        // 控件描边（`ControlStrokeColorDefault`）：6% 白色薄纱。
-        // 实测 Win11 下拉框左沿只比填充亮 3 级，几乎不可见——
-        // 因此不能拿 `OUTLINE`（92,92,92）去描边，那会让下拉框变成一个「黑框」。
-        (Token::CONTROL_STROKE, c(255, 255, 255, veil(15))),
+        (Token::CONTROL_FILL, c(255, 255, 255, veil(15))),
+        // 控件描边（`ControlStrokeColorDefault`）：`#18FFFFFF`（9.4% 白）。
+        // 像素对照实测按钮顶边为 53，正是 32 + 223 × 9.4%。
+        // 不能拿 `OUTLINE`（92,92,92）去描边，那会让下拉框变成一个「黑框」。
+        (Token::CONTROL_STROKE, c(255, 255, 255, veil(24))),
+        // 控件描边的下半段（`ControlStrokeColorSecondary`）：叠在顶边描边之上，
+        // 使底边由 53 加深到实测的 48，构成 WinUI 的「浮起」描边。
+        (Token::CONTROL_STROKE_SECONDARY, c(0, 0, 0, 44)),
+        // 输入框底边的强描边（`ControlStrongStrokeColorDefault`）：
+        // 叠在默认描边之上，由 53 提亮到实测的 154。
+        (Token::CONTROL_STROKE_STRONG, c(255, 255, 255, 76)),
         (Token::INPUT_BORDER_HOVER, c(255, 255, 255, veil(51))),
         (Token::INPUT_BORDER_ERROR, c(255, 153, 164, 255)),
         (Token::INPUT_BORDER_WARNING, c(252, 225, 0, 255)),
@@ -187,7 +201,7 @@ pub fn light() -> Palette {
         (Token::ON_SURFACE_MUTED, c(92, 92, 92, 255)),
         (Token::TEXT_PRIMARY, c(26, 26, 26, 255)),
         (Token::TEXT_SECONDARY, c(92, 92, 92, 255)),
-        (Token::TEXT_DISABLED, c(26, 26, 26, 90)),
+        (Token::TEXT_DISABLED, c(26, 26, 26, 164)),
         (Token::OUTLINE, c(209, 209, 209, 255)),
         (Token::OUTLINE_STRONG, c(134, 134, 134, 255)),
         (Token::DIVIDER, c(0, 0, 0, light_base_veil(18))),
@@ -219,7 +233,9 @@ pub fn light() -> Palette {
         (Token::HOVER, c(0, 0, 0, light_base_veil(12))),
         (Token::PRESSED, c(0, 0, 0, light_base_veil(20))),
         (Token::DISABLED, c(0, 0, 0, light_base_veil(12))),
-        (Token::ON_DISABLED, c(26, 26, 26, 90)),
+        // `TextFillColorDisabled` 浅色值等价于 36% 黑：禁用标签墨迹实测为 157。
+        // 渲染管线在线性空间混合，故反解出线性 alpha 164。
+        (Token::ON_DISABLED, c(26, 26, 26, 164)),
         (Token::CONTROL_TRACK, c(138, 138, 138, 255)),
         // 浅色下的关闭态轨道描边是 `ControlStrongStrokeColorDefault` 的
         // 浅色值 `#72000000`（44.7% 黑），靠它把透明轨道从白卡片上「抠」出来。
@@ -235,7 +251,8 @@ pub fn light() -> Palette {
         (Token::SWITCH_THUMB_OFF, c(0, 0, 0, light_base_veil(158))),
         (Token::CONTROL_THUMB, c(255, 255, 255, 255)),
         (Token::CONTROL_HOVER, c(245, 245, 245, 255)),
-        (Token::CONTROL_DISABLED_BG, c(248, 248, 248, 255)),
+        // `ControlFillColorDisabled` 浅色值等价于 #F5F5F5（实测禁用按钮填充 245）。
+        (Token::CONTROL_DISABLED_BG, c(245, 245, 245, 255)),
         (
             Token::CONTROL_DISABLED_BORDER,
             c(0, 0, 0, light_base_veil(12)),
@@ -243,10 +260,12 @@ pub fn light() -> Palette {
         (Token::CONTROL_DISABLED_THUMB, c(153, 153, 153, 255)),
         (Token::CONTROL_ALT_FILL_SECONDARY, c(237, 237, 237, 255)),
         (Token::CONTROL_ALT_FILL_DISABLED, c(240, 240, 240, 255)),
-        (Token::CONTROL_STRONG_STROKE_DISABLED, c(161, 161, 161, 255)),
+        (Token::CONTROL_STRONG_STROKE_DISABLED, c(191, 191, 191, 255)),
         (Token::SLIDER_TRACK_DISABLED, c(166, 166, 166, 255)),
         (Token::SLIDER_FILL_DISABLED, c(130, 130, 130, 255)),
         (Token::SLIDER_THUMB_DISABLED, c(200, 200, 200, 255)),
+        // 滑块拇指外盘（`SliderThumbBackground`）：浅色为纯白圆盘。
+        (Token::SLIDER_THUMB_DISK, c(255, 255, 255, 255)),
         (Token::HEADER_BG, c(243, 243, 243, 0)),
         (Token::NAV_BG, c(243, 243, 243, 0)),
         (Token::NAV_HOVER, c(0, 0, 0, light_base_veil(8))),
@@ -258,10 +277,17 @@ pub fn light() -> Palette {
         (Token::HUD_BG, c(249, 249, 249, 246)),
         (Token::HUD_TEXT, c(26, 26, 26, 255)),
         (Token::INPUT_BG, c(255, 255, 255, 178)),
-        // 浅色下的控件表面是纯白（WinUI 浅色下拉框为不透明白，靠描边区分）。
-        (Token::CONTROL_FILL, c(255, 255, 255, 255)),
+        // 浅色 `ControlFillColorDefault` 是 70% 白色薄纱：叠在 `#F3F3F3`
+        // 底上得到实测的 251，而不是不透明白色。
+        // `ControlFillColorDefault` 的 70% 白薄纱；取 178 使线性混合后落在
+        // 实测的 251，而不是 252（179 会因四舍五入多亮一级）。
+        (Token::CONTROL_FILL, c(255, 255, 255, 178)),
         // 浅色下的控件描边是 6% 黑色薄纱：白控件靠这圈灰线从卡片上「抠」出来。
         (Token::CONTROL_STROKE, c(0, 0, 0, light_base_veil(15))),
+        // 控件描边下半段（`ControlStrokeColorSecondary`）：叠在顶边描边之上加深到 204。
+        (Token::CONTROL_STROKE_SECONDARY, c(0, 0, 0, 58)),
+        // 输入框底边的强描边：叠在默认描边上把 229 压到实测的 134。
+        (Token::CONTROL_STROKE_STRONG, c(0, 0, 0, 178)),
         (
             Token::INPUT_BORDER_HOVER,
             c(26, 26, 26, light_base_veil(90)),

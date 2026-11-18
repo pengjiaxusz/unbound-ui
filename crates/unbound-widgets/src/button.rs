@@ -124,7 +124,8 @@ impl ButtonVariant {
                 // WinUI 默认按钮：`ButtonBackground` = `ControlFillColorDefault`
                 // 的 70% 白薄纱（浅色）/ 6% 白薄纱（深色），描边为
                 // `ControlStrokeColorDefault`，禁用填充为 `ControlFillColorDisabled`。
-                fill: Token::CARD_BG,
+                // 它比卡片背景亮一档，因此必须用 `CONTROL_FILL` 而不是 `CARD_BG`。
+                fill: Token::CONTROL_FILL,
                 fill_hover: Token::CONTROL_HOVER,
                 fill_pressed: Token::SURFACE_SUNKEN,
                 fill_disabled: Token::CONTROL_DISABLED_BG,
@@ -659,9 +660,24 @@ pub fn emit_button_with_tokens(
     ));
 
     // 2. 背景：状态颜色来自颜色表槽位。
+    //
+    // WinUI 的 `Border` 把 1px 描边画在布局矩形的最外圈，填充只占描边以内；
+    // 因此有描边的变体要把填充内缩 1px。否则描边会叠在填充上，顶边会被
+    // 抬亮约 7 级，与参考截图的 229/53 对不上。
+    let has_border = tokens.border != Token::NONE;
+    let fill_rect = if has_border {
+        rect.inflate(-BUTTON_BORDER)
+    } else {
+        rect
+    };
+    let fill_radii = if has_border {
+        [(desc.radius - BUTTON_BORDER).max(0.0); 4]
+    } else {
+        radii
+    };
     primitives.push(instance(
-        rect,
-        radii,
+        fill_rect,
+        fill_radii,
         state_fill(state, tokens),
         Token::NONE,
         0.0,
@@ -804,6 +820,36 @@ pub fn emit_button_with_tokens(
         SubElement::Border,
         z,
     ));
+
+    // WinUI 的 `ControlElevationBorderBrush` 在底边换用更深的
+    // `ControlStrokeColorSecondary`（浅 204 / 深 48），形成轻微浮起感。
+    // 禁用态使用均匀描边，因此不叠加这一条。
+    if has_border {
+        // 禁用态使用均匀描边，用透明令牌占位以保持图元数量恒定
+        // （状态切换时不会重排绘制列表）。
+        let accent = if state.disabled {
+            Token::NONE
+        } else {
+            Token::CONTROL_STROKE_SECONDARY
+        };
+        let inset = desc.radius.min(rect.size.x * 0.5);
+        primitives.push(instance(
+            Rect::new(
+                rect.origin.x + inset,
+                rect.max().y - BUTTON_BORDER,
+                (rect.size.x - inset * 2.0).max(0.0),
+                BUTTON_BORDER,
+            ),
+            [0.0; 4],
+            accent,
+            Token::NONE,
+            0.0,
+            0.0,
+            PrimType::RoundedRect,
+            SubElement::Border,
+            z,
+        ));
+    }
 
     if desc.active_selected && desc.left_align {
         let bar_h = (rect.size.y * 0.52).clamp(10.0, 16.0);

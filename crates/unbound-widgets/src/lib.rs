@@ -16,6 +16,7 @@
 
 // 基础设施模块：场景差分、图元打包辅助工具与默认标题栏描述符。它们没有独立的
 // `emit_*` 发射器，不属于业务组件，因此不纳入展示目录。
+pub mod canonical;
 pub mod catalog;
 pub mod diff;
 pub mod ergonomics;
@@ -86,6 +87,7 @@ define_widget_catalog! {
         banner,
         breadcrumb,
         button,
+        calendar_date_picker,
         callout,
         canvas_toolbar,
         carousel,
@@ -104,17 +106,20 @@ define_widget_catalog! {
         curve_editor,
         data_grid,
         date_picker,
+        date_picker_wheel,
         date_range_picker,
         descriptions,
         divider,
         dock,
         drawer,
+        drop_down_button,
         file_drop,
         form,
         generic_data_table,
         gizmo,
         hotkey_input,
         hover_card,
+        hyperlink_button,
         image,
         masonry,
         menu,
@@ -128,6 +133,7 @@ define_widget_catalog! {
         number_input,
         overlay,
         pagination,
+        password_box,
         pin_input,
         pipeline_view,
         pivot,
@@ -138,6 +144,7 @@ define_widget_catalog! {
         query_builder,
         radio,
         rating,
+        repeat_button,
         rich_text,
         ruler,
         schema_form,
@@ -165,6 +172,7 @@ define_widget_catalog! {
         timeline_track,
         toast,
         toggle_button,
+        toggle_split_button,
         toolbar,
         tooltip,
         tour,
@@ -174,44 +182,63 @@ define_widget_catalog! {
         virtual_masonry,
         virtual_views,
         watermark,
+        annotated_scroll_bar,
+        app_bar,
+        blade_view,
+        command_bar_flyout,
+        grid_view,
+        headered_content,
+        image_cropper,
+        items_view,
+        list_box,
+        orbit_view,
+        radial_gauge,
+        range_selector,
+        refresh_container,
+        rich_edit_box,
+        swipe_control,
+        teaching_tip,
     ],
     catalog: [
-        Accordion => accordion,
+        ExpanderGroup => accordion,
         AddressBar => address_bar,
-        Alert => alert,
+        InfoBar => alert,
         AlertDialog => alert_dialog,
         AspectRatioBox => masonry,
-        AutoComplete => autocomplete,
-        Avatar => avatar,
+        AutoSuggestBox => autocomplete,
+        PersonPicture => avatar,
         AvatarGroup => avatar,
-        Badge => badge,
+        InfoBadge => badge,
         Banner => banner,
-        Breadcrumb => breadcrumb,
+        BreadcrumbBar => breadcrumb,
         Button => button,
+        CalendarDatePicker => calendar_date_picker,
         Callout => callout,
         CanvasToolbar => canvas_toolbar,
-        Carousel => carousel,
+        FlipView => carousel,
         Cascader => cascader,
         Chart => chart,
-        Checkbox => checkbox,
+        CheckBox => checkbox,
         Chip => badge,
         CodeBlock => code_block,
         CodeEditor => code_editor,
-        Collapsible => collapsible,
+        Expander => collapsible,
         ColorPicker => color_picker,
         ColorSwatch => color_swatch,
-        Combobox => combobox,
+        ComboBoxEditable => combobox,
         CommandPalette => command_palette,
         Containers => containers,
         ContextMenu => context_menu,
         CurveEditor => curve_editor,
         DataGrid => data_grid,
-        DatePicker => date_picker,
+        CalendarView => date_picker,
+        DatePicker => date_picker_wheel,
         DateRangePicker => date_range_picker,
         Descriptions => descriptions,
         Divider => divider,
         Dock => dock,
-        Drawer => drawer,
+        SplitView => drawer,
+        DropDownButton => drop_down_button,
         EmptyState => hover_card,
         FileDrop => file_drop,
         Form => form,
@@ -220,71 +247,93 @@ define_widget_catalog! {
         GradientEditor => curve_editor,
         HotkeyInput => hotkey_input,
         HoverCard => hover_card,
-        Icon => image,
+        HyperlinkButton => hyperlink_button,
+        FontIcon => image,
         Image => image,
         LoadingOverlay => spinner,
         Masonry => masonry,
-        Menu => menu,
-        Menubar => menubar,
+        MenuFlyout => menu,
+        MenuBar => menubar,
         Minimap => minimap,
-        Modal => modal,
+        ContentDialog => modal,
         MultiSplit => multi_split,
-        NavigationRail => navigation_rail,
+        NavigationViewCompact => navigation_rail,
         NinePatch => image,
         NodeGraph => node_graph,
         NotificationCenter => notification_center,
-        NumberInput => number_input,
+        NumberBox => number_input,
         Overlay => overlay,
-        Pagination => pagination,
+        PipsPager => pagination,
+        PasswordBox => password_box,
         PinInput => pin_input,
         PipelineView => pipeline_view,
         Pivot => pivot,
         Popconfirm => popconfirm,
-        Popover => popover,
-        Progress => progress,
+        Flyout => popover,
+        ProgressBar => progress,
         PropertyGrid => property_grid,
         QueryBuilder => query_builder,
-        Radio => radio,
-        Rating => rating,
-        RichText => rich_text,
+        RadioButton => radio,
+        RatingControl => rating,
+        RepeatButton => repeat_button,
+        RichTextBlock => rich_text,
         Ruler => ruler,
         SchemaForm => schema_form,
-        Scroll => scroll,
-        Segmented => segmented,
-        Select => select,
+        ScrollView => scroll,
+        SelectorBar => segmented,
+        ComboBox => select,
         ShortcutBar => shortcut_bar,
-        Sidebar => sidebar,
+        NavigationView => sidebar,
         Skeleton => skeleton,
         Slider => slider,
-        Spinner => spinner,
+        ProgressRing => spinner,
         SplitButton => split_button,
         SplitPane => split_pane,
-        Stack => containers,
+        StackPanel => containers,
         StatusBar => toolbar,
         Stepper => stepper,
-        Switch => switch,
+        ToggleSwitch => switch,
         Table => table,
-        Tabs => tabs,
+        TabView => tabs,
         TagInput => tag_input,
         TaskHud => task_hud,
         TerminalView => terminal_view,
-        TextArea => text_area,
-        TextInput => text_input,
+        TextBoxMultiline => text_area,
+        TextBox => text_input,
         TimePicker => time_picker,
         Timeline => timeline,
         TimelineTrack => timeline_track,
         Toast => toast,
         ToggleButton => toggle_button,
-        Toolbar => toolbar,
-        Tooltip => tooltip,
+        ToggleSplitButton => toggle_split_button,
+        CommandBar => toolbar,
+        ToolTip => tooltip,
         Tour => tour,
         Transfer => transfer,
         TreeTable => tree_table,
         TreeView => tree_view,
         VirtualMasonry => virtual_masonry,
-        VirtualViews => virtual_views,
+        ListView => virtual_views,
         Watermark => watermark,
         Wrap => containers,
+        AnnotatedScrollBar => annotated_scroll_bar,
+        AppBarButton => app_bar,
+        AppBarSeparator => app_bar,
+        AppBarToggleButton => app_bar,
+        BladeView => blade_view,
+        CommandBarFlyout => command_bar_flyout,
+        GridView => grid_view,
+        HeaderedContentControl => headered_content,
+        ImageCropper => image_cropper,
+        ItemsView => items_view,
+        ListBox => list_box,
+        OrbitView => orbit_view,
+        RadialGauge => radial_gauge,
+        RangeSelector => range_selector,
+        RefreshContainer => refresh_container,
+        RichEditBox => rich_edit_box,
+        SwipeControl => swipe_control,
+        TeachingTip => teaching_tip,
     ],
 }
 
@@ -482,7 +531,7 @@ pub use overlay::{
     place_anchored_popup, place_combo_popup, place_tooltip_in_window, BackdropRequest,
     OverlayEntry, OverlayKind, OverlayStack, PlacedPopup, Placement, TOOLTIP_VIEWPORT_MARGIN,
 };
-pub use pagination::{emit_pagination, PaginationDesc, PaginationState};
+pub use pagination::{emit_pagination, PaginationDesc, PaginationState, PaginationStyle};
 pub use pin_input::{emit_pin_input, PinInputDesc, PinInputState};
 pub use popconfirm::{emit_popconfirm, PopconfirmDesc};
 pub use popover::{emit_popover, PopoverDesc, PopoverOutput, PopoverWidget};
@@ -583,6 +632,145 @@ pub use virtual_views::{
     emit_virtual_row, ReorderableListState, VariableVirtualList, VariableWindow, VirtualRowTokens,
 };
 pub use watermark::{emit_watermark, WatermarkDesc};
+
+pub use calendar_date_picker::{
+    calendar_icon_node, emit_calendar_date_picker, CalendarDatePickerDesc, CalendarDatePickerState,
+    CALENDAR_DATE_PICKER_HEIGHT,
+};
+pub use date_picker_wheel::{
+    emit_date_picker_wheel, DatePickerWheelDesc, DatePickerWheelState, WheelColumn,
+    DATE_PICKER_WHEEL_TRIGGER_HEIGHT,
+};
+pub use drop_down_button::{emit_drop_down_button, DropDownButtonDesc, DropDownButtonState};
+pub use hyperlink_button::{emit_hyperlink_button, HyperlinkButtonDesc};
+pub use password_box::{
+    emit_password_box, reveal_button_node, PasswordBoxDesc, PasswordBoxState, MASK_CHAR,
+};
+pub use repeat_button::{emit_repeat_button, RepeatButtonDesc, RepeatButtonState};
+pub use toggle_split_button::{
+    emit_toggle_split_button, ToggleSplitButtonDesc, ToggleSplitButtonState,
+};
+
+pub use canonical::{ControlClass, BASELINE_COUNT, EXCLUSIVE_COUNT, TOOLKIT_COUNT};
+
+// 扩展控件（P1 / P2）：WinUI 3 官方核心控件与 Community Toolkit 选补控件。
+pub use annotated_scroll_bar::{emit_annotated_scroll_bar, AnnotatedScrollBarDesc};
+pub use app_bar::{
+    emit_app_bar_button, emit_app_bar_separator, emit_app_bar_toggle_button, AppBarButtonDesc,
+    AppBarSeparatorDesc, AppBarToggleButtonDesc,
+};
+pub use blade_view::{emit_blade_view, BladeViewDesc};
+pub use command_bar_flyout::{emit_command_bar_flyout, CommandBarFlyoutDesc};
+pub use grid_view::{emit_grid_view, GridViewDesc};
+pub use headered_content::{emit_headered_content, HeaderedContentDesc};
+pub use image_cropper::{emit_image_cropper, ImageCropperDesc};
+pub use items_view::{emit_items_view, ItemsLayout, ItemsViewDesc};
+pub use list_box::{emit_list_box, ListBoxDesc};
+pub use orbit_view::{emit_orbit_view, OrbitViewDesc};
+pub use radial_gauge::{emit_radial_gauge, RadialGaugeDesc};
+pub use range_selector::{emit_range_selector, RangeSelectorDesc};
+pub use refresh_container::{emit_refresh_container, RefreshContainerDesc};
+pub use rich_edit_box::{emit_rich_edit_box, RichEditBoxDesc};
+pub use swipe_control::{emit_swipe_control, SwipeControlDesc, SwipeSide};
+pub use teaching_tip::{emit_teaching_tip, TeachingTipDesc, TeachingTipTail};
+
+// ---------------------------------------------------------------------------
+// WinUI 3 规范名类型别名（扩展期）
+//
+// 目录枚举已统一使用 WinUI 3 官方规范名；下列别名保留为公开 API 的官方入口，
+// 让差分器、展台与后续工单可以直接用规范名书写描述符类型，底层描述符类型名
+// 继续沿用历史模块命名。
+// ---------------------------------------------------------------------------
+
+/// WinUI 3 `CheckBox` 的规范名别名。
+pub type CheckBoxDesc = CheckboxDesc;
+/// WinUI 3 `ToggleSwitch` 的规范名别名。
+pub type ToggleSwitchDesc = SwitchDesc;
+/// WinUI 3 `ToggleSwitch` 布局别名。
+pub type ToggleSwitchLayout = SwitchLayout;
+/// WinUI 3 `ToggleSwitch` 令牌别名。
+pub type ToggleSwitchTokens = SwitchTokens;
+/// WinUI 3 `ComboBox`（不可编辑下拉）的规范名别名。
+pub type ComboBoxDesc = SelectDesc;
+/// WinUI 3 `ComboBox` 状态别名。
+pub type ComboBoxState = SelectState;
+/// WinUI 3 `ComboBox (IsEditable = true)` 的规范名别名。
+pub type ComboBoxEditableDesc = ComboboxDesc;
+/// WinUI 3 `TextBox` 的规范名别名。
+pub type TextBoxDesc = TextInputDesc;
+/// WinUI 3 `TextBox (AcceptsReturn = true)` 的规范名别名。
+pub type TextBoxAreaDesc = TextAreaDesc;
+/// WinUI 3 `RadioButton` 的规范名别名。
+pub type RadioButtonDesc = RadioDesc;
+/// WinUI 3 `NumberBox` 的规范名别名。
+pub type NumberBoxDesc = NumberInputDesc;
+/// WinUI 3 `AutoSuggestBox` 的规范名别名。
+pub type AutoSuggestBoxDesc = AutoCompleteDesc;
+/// WinUI 3 `RichTextBlock` 的规范名别名。
+pub type RichTextBlockDesc = RichTextDesc;
+/// WinUI 3 `ProgressBar` 的规范名别名。
+pub type ProgressBarDesc = ProgressDesc;
+/// WinUI 3 `ProgressRing` 的规范名别名。
+pub type ProgressRingDesc = SpinnerDesc;
+/// WinUI 3 `InfoBar` 的规范名别名。
+pub type InfoBarDesc = AlertDesc;
+/// WinUI 3 `InfoBadge` 的规范名别名。
+pub type InfoBadgeDesc = BadgeDesc;
+/// WinUI 3 `ToolTip` 的规范名别名。
+pub type ToolTipDesc = TooltipDesc;
+/// WinUI 3 `CommandBar` 的规范名别名。
+pub type CommandBarDesc = ToolbarDesc;
+/// WinUI 3 `TabView` 的规范名别名。
+pub type TabViewDesc = TabsDesc;
+/// WinUI 3 `BreadcrumbBar` 的规范名别名。
+pub type BreadcrumbBarDesc = BreadcrumbDesc;
+/// WinUI 3 `SelectorBar` 的规范名别名。
+pub type SelectorBarDesc = SegmentedDesc;
+/// WinUI 3 `PipsPager` 的规范名别名。
+pub type PipsPagerDesc = PaginationDesc;
+/// WinUI 3 `Expander` 的规范名别名。
+pub type ExpanderDesc = CollapsibleDesc;
+/// WinUI 3 `SplitView` 的规范名别名。
+pub type SplitViewDesc = DrawerDesc;
+/// WinUI 3 `FlipView` 的规范名别名。
+pub type FlipViewDesc = CarouselDesc;
+/// WinUI 3 `PersonPicture` 的规范名别名。
+pub type PersonPictureDesc = AvatarDesc;
+/// WinUI 3 `StackPanel` 的规范名别名。
+pub type StackPanelDesc = StackDesc;
+/// WinUI 3 `FontIcon` 的规范名别名。
+pub type FontIconDesc = IconDesc;
+/// WinUI 3 `ContentDialog` 的规范名别名。
+pub type ContentDialogDesc = ModalDesc;
+/// WinUI 3 `Flyout` 的规范名别名。
+pub type FlyoutDesc = PopoverDesc;
+/// WinUI 3 `MenuFlyout` 的规范名别名。
+pub type MenuFlyoutDesc = MenuDesc;
+/// WinUI 3 `NavigationView` 的规范名别名。
+pub type NavigationViewDesc = SidebarDesc;
+/// WinUI 3 `CalendarView` 的规范名别名。
+pub type CalendarViewDesc = DatePickerDesc;
+/// WinUI 3 `Border` 的规范名别名。
+pub type BorderDesc = CardDesc;
+
+/// Community Toolkit `TableView` 的规范名别名。
+pub type TableViewDesc = TableDesc;
+/// Community Toolkit `TokenizingTextBox` 的规范名别名。
+pub type TokenizingTextBoxDesc = TagInputDesc;
+/// Community Toolkit `SettingsCard` 的规范名别名。
+pub type SettingsCardDesc = FormDesc;
+/// Community Toolkit `SettingsExpander` 的规范名别名。
+pub type SettingsExpanderDesc = DescriptionsDesc;
+/// Community Toolkit `WrapPanel` 的规范名别名。
+pub type WrapPanelDesc = WrapDesc;
+/// Community Toolkit `StaggeredPanel` 的规范名别名。
+pub type StaggeredPanelDesc = MasonryDesc;
+/// Community Toolkit `Shimmer` 的规范名别名。
+pub type ShimmerDesc = SkeletonDesc;
+/// Community Toolkit `ColorPalette` 的规范名别名。
+pub type ColorPaletteDesc = ColorSwatchDesc;
+/// Community Toolkit `GridSplitter` 的规范名别名。
+pub type GridSplitterDesc = SplitPaneDesc;
 
 /// 无头控件会话渲染使用的默认视口。
 pub const DEFAULT_VIEWPORT: (f32, f32) = (1280.0, 720.0);

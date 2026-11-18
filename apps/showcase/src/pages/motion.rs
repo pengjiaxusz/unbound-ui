@@ -704,20 +704,23 @@ pub fn fps_limit_bar(ctx: &mut DemoCtx<'_, '_>) {
         bar.size.y,
     );
     if field.size.x >= 70.0 {
+        let focused = state.fps_input.focused;
         ctx.canvas.rect(
             field,
             7.0,
             palette.card_bg,
-            if state.fps_focused {
+            if focused {
                 palette.primary
             } else {
                 palette.card_border
             },
-            if state.fps_focused { 2.0 } else { 1.0 },
+            if focused { 2.0 } else { 1.0 },
             0.0,
         );
-        let text = if state.fps_focused {
-            state.fps_input.as_str()
+        let edit = &state.fps_input.edit;
+        let buffer = edit.text();
+        let text = if focused {
+            buffer
         } else if state.fps_limit == 0 {
             "uncapped"
         } else {
@@ -728,29 +731,84 @@ pub fn fps_limit_bar(ctx: &mut DemoCtx<'_, '_>) {
         } else {
             text
         };
-        ctx.canvas.text(
-            display,
-            Rect::new(
-                field.origin.x + 8.0,
-                field.origin.y,
-                field.size.x - 16.0,
-                field.size.y,
-            ),
-            10.0,
+        let scroll = edit.scroll_x();
+        let view_width = (field.size.x - 16.0).max(24.0);
+        state.set_editor_view(crate::state::EditorId::Fps, view_width);
+        let line = Rect::new(
+            field.origin.x + 8.0,
+            field.origin.y + 6.0,
+            view_width,
+            (field.size.y - 12.0).max(8.0),
+        );
+        if focused {
+            if let Some((from, to)) = crate::editor::selection_span(ctx.canvas.labels, edit, 10.0) {
+                ctx.canvas.rect(
+                    Rect::new(
+                        line.origin.x + from - scroll,
+                        line.origin.y,
+                        (to - from).max(1.0),
+                        line.size.y,
+                    ),
+                    1.5,
+                    palette.selection_fill,
+                    0,
+                    0.0,
+                    0.0,
+                );
+            }
+        }
+        ctx.canvas.begin_clip(Rect::new(
+            line.origin.x,
+            field.origin.y,
+            view_width,
+            field.size.y,
+        ));
+        let text_width = ctx.canvas.labels.measure(display, 10.0).x.max(view_width);
+        let text_rect_used = Rect::new(
+            line.origin.x - scroll,
+            field.origin.y,
+            text_width,
+            field.size.y,
+        );
+        let (quads, _) =
+            ctx.canvas
+                .layout_text(display, text_rect_used, 10.0, AlignX::Start, AlignY::Center);
+        ctx.canvas.glyphs(
+            &quads,
             if text.is_empty() {
                 palette.text_muted
             } else {
                 palette.text
             },
-            AlignX::Start,
-            AlignY::Center,
         );
+        if let Some(underline) =
+            crate::editor::preedit_underline(ctx.canvas.labels, edit, 10.0, text_rect_used)
+        {
+            ctx.canvas
+                .rect(underline, 0.5, palette.primary, 0, 0.0, 0.0);
+        }
+        if focused {
+            let caret = line.origin.x - scroll
+                + crate::editor::caret_x(ctx.canvas.labels, buffer, edit.cursor(), 10.0);
+            if state.fps_input.caret_visible() {
+                ctx.canvas.rect(
+                    Rect::new(caret, line.origin.y, 1.0, line.size.y),
+                    0.5,
+                    palette.primary,
+                    0,
+                    0.0,
+                    0.0,
+                );
+            }
+            state.set_ime_anchor(Vec2::new(caret, field.max().y));
+        }
+        ctx.canvas.end_clip();
         ctx.control(
             30,
             field,
             accesskit::Role::TextInput,
             "Custom FPS limit, minimum 60, 0 is unlimited",
-            state.fps_focused,
+            focused,
         );
     }
 }

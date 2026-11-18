@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media.Animation;
 
 namespace WinUiReference;
 
@@ -13,6 +14,9 @@ public partial class App : Application
 
     public App()
     {
+        // ProgressRing 是无限循环动画，截图相位不确定。关闭依赖动画后控件停留在
+        // 初始静态状态，使每次采集得到同一帧。
+        Timeline.AllowDependentAnimations = false;
         InitializeComponent();
     }
 

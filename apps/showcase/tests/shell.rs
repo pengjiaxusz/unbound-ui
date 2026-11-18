@@ -8,7 +8,7 @@ use showcase::pages::PageId;
 use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::target::{self, Target};
-use unbound_app::{AppKey, AppRuntime, Modifiers as AppModifiers};
+use unbound_app::{AppKey, AppRuntime, ImeUpdate, Modifiers as AppModifiers};
 use unbound_backdrop::{BackdropSource, MaterialKind};
 use unbound_headless::Harness;
 use unbound_input::PointerButton;
@@ -99,10 +99,23 @@ impl App {
         self.runtime.pointer_up(pos, PointerButton::Left);
     }
 
+    /// 像窗口宿主一样右键：移动到目标、按下并释放。
+    fn right_click(&mut self, pos: Vec2) {
+        self.runtime.pointer_move(pos);
+        self.runtime.advance(0.5);
+        self.runtime.pointer_down(pos, PointerButton::Right);
+        self.runtime.pointer_up(pos, PointerButton::Right);
+    }
+
     fn key(&mut self, key: &PlatformKey, modifiers: Modifiers) {
         if let Some(key) = app_key(key) {
             self.runtime.key(key, true, app_modifiers(modifiers));
         }
+    }
+
+    /// 注入平台上报的按住重复事件，走与窗口宿主相同的外壳入口。
+    fn repeat(&mut self, key: &PlatformKey, modifiers: Modifiers) {
+        self.runtime.application_mut().key_repeat(key, modifiers);
     }
 
     fn pressed(&self) -> Option<u64> {
@@ -190,6 +203,26 @@ fn click_node(app: &mut App, node: u64) {
     app.pointer_down(point, 0.0);
     app.pointer_up(point, 0.1);
     app.rebuild(VIEWPORT);
+}
+
+/// 聚焦搜索框并键入给定文本。
+fn search_with_text(text: &str) -> App {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in text.chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    app.rebuild(VIEWPORT);
+    app
 }
 
 #[test]
@@ -301,7 +334,7 @@ fn ctrl_k_searches_the_catalogue_by_crate_and_tag() {
             ..Default::default()
         },
     );
-    assert!(app.state.search_focused);
+    assert!(app.state.search.focused);
     for ch in "mtsdf".chars() {
         app.key(
             &PlatformKey::Character(ch.to_string()),
@@ -318,7 +351,947 @@ fn ctrl_k_searches_the_catalogue_by_crate_and_tag() {
         Modifiers::default(),
     );
     assert_eq!(app.state.active_page, PageId::Typography);
-    assert!(!app.state.search_focused);
+    assert!(!app.state.search.focused);
+}
+
+#[test]
+fn ime_composition_is_visible_and_commits_exactly_once() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    assert!(app.state.search.focused);
+
+    // 首字母组合：缓冲区为空时也必须绘制组合文本，而不是回退到占位符。
+    app.runtime.ime(ImeUpdate {
+        enabled: true,
+        preedit: "nihao".into(),
+        cursor_range: None,
+        commit: None,
+        cancelled: false,
+    });
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.search.text(), "nihao");
+
+    // 提交替换组合区间：整条链路上恰好插入一次。
+    app.runtime.ime(ImeUpdate {
+        enabled: false,
+        preedit: String::new(),
+        cursor_range: None,
+        commit: Some("hello".into()),
+        cancelled: false,
+    });
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.search.text(), "hello");
+    assert_eq!(
+        app.state.search.edit.preedit(),
+        None,
+        "a commit must clear the in-progress composition"
+    );
+}
+
+#[test]
+fn escape_cancels_only_the_active_composition() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    app.key(
+        &PlatformKey::Character("a".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(app.state.search.text(), "a");
+
+    app.runtime.ime(ImeUpdate {
+        enabled: true,
+        preedit: "ni".into(),
+        cursor_range: None,
+        commit: None,
+        cancelled: false,
+    });
+    assert_eq!(app.state.search.text(), "ani");
+
+    app.key(
+        &PlatformKey::Named("Escape".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(
+        app.state.search.text(),
+        "a",
+        "escape must drop only the composition and keep committed text"
+    );
+    assert!(app.state.search.focused);
+}
+
+/// 空查询下连续到达的组合更新只保留最新一份，并保持可绘制的组合区间。
+///
+/// 组合串在缓冲区为空时也必须直接参与渲染（而非回退为占位符），
+/// 且每一轮更新替换上一轮，而不是把拼音字母堆叠起来。
+///
+#[test]
+fn consecutive_preedits_replace_each_other_without_accumulating() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    assert!(app.state.search.focused);
+
+    for preedit in ["n", "ni", "nihao"] {
+        app.runtime.ime(ImeUpdate {
+            enabled: true,
+            preedit: preedit.into(),
+            cursor_range: None,
+            commit: None,
+            cancelled: false,
+        });
+    }
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.search.text(), "nihao");
+    assert!(
+        app.state.search.edit.preedit().is_some(),
+        "the composition must remain inline so its underline can be drawn"
+    );
+}
+
+/// 失焦丢弃未提交的组合，文本恢复为组合前内容。
+#[test]
+fn losing_focus_discards_the_active_composition() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    app.runtime.ime(ImeUpdate {
+        enabled: true,
+        preedit: "ni".into(),
+        cursor_range: None,
+        commit: None,
+        cancelled: false,
+    });
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.search.text(), "ni");
+
+    // 走真实链路：点击编辑器外部触发失焦，而不是直接调用状态层。
+    click_node(&mut app, target::id(Target::Theme(0)));
+
+    assert_eq!(app.state.search.text(), "");
+    assert_eq!(app.state.search.edit.preedit(), None);
+}
+
+/// 切换页面丢弃未提交的组合，不留下组合区间或残留文本。
+#[test]
+fn switching_pages_discards_the_active_composition() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    app.runtime.ime(ImeUpdate {
+        enabled: true,
+        preedit: "ni".into(),
+        cursor_range: None,
+        commit: None,
+        cancelled: false,
+    });
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.search.text(), "ni");
+
+    app.state.navigate(PageId::Typography);
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.search.text(), "");
+    assert_eq!(app.state.search.edit.preedit(), None);
+}
+
+/// 点击输入框后只移动指针，不得改变文本、插入符或选区。
+///
+/// 回归：释放之后的点击报告曾再次进入拖拽态，导致普通悬停被当作拖拽更新选区。
+///
+#[test]
+fn clicking_an_editor_then_hovering_keeps_the_caret_and_selection() {
+    let mut app = app();
+    app.state.search.edit.set_text("hello world");
+    app.state.search.edit.set_cursor(0, false);
+    app.rebuild(VIEWPORT);
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    let press = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    app.pointer_move(press);
+    app.pointer_down(press, 0.0);
+    app.pointer_up(press, 0.1);
+    app.rebuild(VIEWPORT);
+
+    let text = app.state.search.text().to_string();
+    let cursor = app.state.search.edit.cursor();
+    let anchor = app.state.search.edit.anchor();
+    assert!(!app.state.search.edit.has_selection());
+
+    // 不按键，仅把指针移到输入框另一端。
+    app.pointer_move(Vec2::new(rect.origin.x + rect.size.x - 12.0, press.y));
+
+    assert_eq!(app.state.search.text(), text);
+    assert_eq!(app.state.search.edit.cursor(), cursor);
+    assert_eq!(app.state.search.edit.anchor(), anchor);
+    assert!(
+        !app.state.search.edit.has_selection(),
+        "plain hover after a click must not form a selection"
+    );
+}
+
+/// 组合进行中普通悬停不得取消组合。
+///
+/// 回归：点击释放后的幽灵拖拽会把悬停送成 `PointerDrag`，而该事件属于
+/// “用户编辑”，会取消输入法组合。
+///
+#[test]
+fn hovering_during_a_composition_keeps_the_composition_alive() {
+    let mut app = app();
+    app.state.search.edit.set_text("hello");
+    app.state.search.edit.set_cursor(0, false);
+    app.rebuild(VIEWPORT);
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    let press = Vec2::new(rect.origin.x + 20.0, rect.center().y);
+    app.pointer_move(press);
+    app.pointer_down(press, 0.0);
+    app.pointer_up(press, 0.1);
+    app.rebuild(VIEWPORT);
+
+    app.runtime.ime(ImeUpdate {
+        enabled: true,
+        preedit: "ni".into(),
+        cursor_range: None,
+        commit: None,
+        cancelled: false,
+    });
+    assert!(app.state.search.edit.preedit().is_some());
+
+    app.pointer_move(Vec2::new(rect.origin.x + rect.size.x - 12.0, press.y));
+
+    assert!(
+        app.state.search.edit.preedit().is_some(),
+        "plain hover must not cancel an active IME composition"
+    );
+    assert_eq!(app.state.search.text(), "nihello");
+}
+
+/// 按住左键拖动仍要形成 (anchor, cursor) 选区，释放后定格。
+///
+/// 这是 #10 的红线：拆分点击路径不得牺牲拖拽选择。
+///
+#[test]
+fn pressing_and_dragging_still_forms_a_selection() {
+    let mut app = app();
+    app.state.search.edit.set_text("hello world");
+    app.state.search.edit.set_cursor(0, false);
+    app.rebuild(VIEWPORT);
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    let left = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    let right = Vec2::new(rect.origin.x + rect.size.x - 12.0, rect.center().y);
+
+    app.pointer_move(left);
+    app.pointer_down(left, 0.0);
+    app.pointer_move(right);
+    assert!(
+        app.state.search.edit.has_selection(),
+        "holding the button and dragging must extend a selection"
+    );
+    app.pointer_up(right, 0.1);
+
+    let frozen = app.state.search.edit.selection();
+    assert!(frozen.is_some());
+    app.pointer_move(left);
+    assert_eq!(
+        app.state.search.edit.selection(),
+        frozen,
+        "the selection must freeze once the button is released"
+    );
+}
+
+/// 在输入框外点击后选区折叠，随后的悬停不再复现选区。
+#[test]
+fn clicking_outside_collapses_the_selection() {
+    let mut app = app();
+    app.state.search.edit.set_text("hello world");
+    app.state.search.edit.set_cursor(0, false);
+    app.rebuild(VIEWPORT);
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    let left = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    let right = Vec2::new(rect.origin.x + rect.size.x - 12.0, rect.center().y);
+    app.pointer_move(left);
+    app.pointer_down(left, 0.0);
+    app.pointer_move(right);
+    app.pointer_up(right, 0.1);
+    assert!(app.state.search.edit.has_selection());
+
+    click_node(&mut app, target::id(Target::Theme(0)));
+    assert!(
+        !app.state.search.edit.has_selection(),
+        "clicking outside the editor must collapse the selection"
+    );
+    app.pointer_move(right);
+    assert!(!app.state.search.edit.has_selection());
+}
+
+/// 窗口失焦后选区折叠，随后的悬停不再复现选区。
+#[test]
+fn losing_the_window_focus_collapses_the_selection() {
+    let mut app = app();
+    app.state.search.edit.set_text("hello world");
+    app.state.search.edit.set_cursor(0, false);
+    app.rebuild(VIEWPORT);
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    let left = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    let right = Vec2::new(rect.origin.x + rect.size.x - 12.0, rect.center().y);
+    app.pointer_move(left);
+    app.pointer_down(left, 0.0);
+    app.pointer_move(right);
+    app.pointer_up(right, 0.1);
+    assert!(app.state.search.edit.has_selection());
+
+    app.cancel_interactions();
+    assert!(
+        !app.state.search.edit.has_selection(),
+        "losing the window focus must collapse the selection"
+    );
+    app.pointer_move(left);
+    assert!(!app.state.search.edit.has_selection());
+}
+
+#[test]
+fn held_character_keys_keep_inserting_at_the_caret() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    app.key(
+        &PlatformKey::Character("a".to_string()),
+        Modifiers::default(),
+    );
+    app.key(
+        &PlatformKey::Character("c".to_string()),
+        Modifiers::default(),
+    );
+    // 光标移到两个字符之间，重复字符必须插在同一插入点。
+    app.key(
+        &PlatformKey::Named("ArrowLeft".to_string()),
+        Modifiers::default(),
+    );
+    for _ in 0..3 {
+        app.repeat(
+            &PlatformKey::Character("b".to_string()),
+            Modifiers::default(),
+        );
+    }
+    assert_eq!(app.state.search.text(), "abbbc");
+    assert_eq!(app.state.search.edit.cursor(), 4);
+    assert_eq!(app.state.search.edit.anchor(), 4);
+}
+
+#[test]
+fn held_backspace_and_delete_keep_removing_text() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "abcd".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    for _ in 0..2 {
+        app.repeat(
+            &PlatformKey::Named("Backspace".to_string()),
+            Modifiers::default(),
+        );
+    }
+    assert_eq!(app.state.search.text(), "ab");
+
+    app.key(
+        &PlatformKey::Named("Home".to_string()),
+        Modifiers::default(),
+    );
+    for _ in 0..2 {
+        app.repeat(
+            &PlatformKey::Named("Delete".to_string()),
+            Modifiers::default(),
+        );
+    }
+    assert_eq!(
+        app.state.search.text(),
+        "",
+        "held Delete must remove forward"
+    );
+    assert_eq!(app.state.search.edit.cursor(), 0);
+}
+
+#[test]
+fn held_ctrl_backspace_deletes_one_word_per_repeat() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "hello world".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    let ctrl = Modifiers {
+        control: true,
+        ..Default::default()
+    };
+    app.repeat(&PlatformKey::Named("Backspace".to_string()), ctrl);
+    assert_eq!(app.state.search.text(), "hello ");
+    app.repeat(&PlatformKey::Named("Backspace".to_string()), ctrl);
+    assert_eq!(app.state.search.text(), "");
+}
+
+#[test]
+fn held_arrows_and_home_end_keep_moving_the_caret() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "abc".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    app.repeat(
+        &PlatformKey::Named("ArrowLeft".to_string()),
+        Modifiers::default(),
+    );
+    app.repeat(
+        &PlatformKey::Named("ArrowLeft".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(app.state.search.edit.cursor(), 1);
+    assert_eq!(app.state.search.edit.anchor(), 1);
+
+    app.repeat(
+        &PlatformKey::Named("Home".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(app.state.search.edit.cursor(), 0);
+    app.repeat(&PlatformKey::Named("End".to_string()), Modifiers::default());
+    assert_eq!(app.state.search.edit.cursor(), 3);
+}
+
+#[test]
+fn held_shift_left_keeps_extending_the_selection() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "abc".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    let shift = Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+    for _ in 0..2 {
+        app.repeat(&PlatformKey::Named("ArrowLeft".to_string()), shift);
+    }
+    assert_eq!(app.state.search.edit.selected_text(), Some("bc"));
+    assert_eq!(app.state.search.edit.anchor(), 3);
+    assert_eq!(app.state.search.edit.cursor(), 1);
+}
+
+#[test]
+fn held_ctrl_commands_do_not_run_again() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "abc".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    let ctrl = Modifiers {
+        control: true,
+        ..Default::default()
+    };
+
+    // 重复的全选不得执行任何命令：第一次按下才生效。
+    app.repeat(&PlatformKey::Character("a".to_string()), ctrl);
+    assert_eq!(app.state.search.edit.selection(), None);
+    app.key(&PlatformKey::Character("a".to_string()), ctrl);
+    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+
+    // 重复的复制、剪切、粘贴、撤销、重做都不得产生动作。
+    app.repeat(&PlatformKey::Character("c".to_string()), ctrl);
+    assert!(app.take_clipboard_request().is_none());
+    app.repeat(&PlatformKey::Character("x".to_string()), ctrl);
+    assert!(app.take_clipboard_request().is_none());
+    assert_eq!(app.state.search.text(), "abc", "held Ctrl+X must not cut");
+    app.repeat(&PlatformKey::Character("v".to_string()), ctrl);
+    assert!(app.take_clipboard_request().is_none());
+    app.repeat(&PlatformKey::Character("z".to_string()), ctrl);
+    app.repeat(
+        &PlatformKey::Character("z".to_string()),
+        Modifiers {
+            control: true,
+            shift: true,
+            ..Default::default()
+        },
+    );
+    app.repeat(&PlatformKey::Character("y".to_string()), ctrl);
+    assert_eq!(
+        app.state.search.text(),
+        "abc",
+        "held undo and redo must not alter the text"
+    );
+    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+}
+
+#[test]
+fn repeats_without_a_focused_editor_change_nothing() {
+    let mut app = app();
+    assert!(app.focused_editor().is_none());
+    let before = (
+        app.state.search.text().to_owned(),
+        app.state.demo.text.text().to_owned(),
+        app.state.fps_input.text().to_owned(),
+    );
+
+    app.repeat(
+        &PlatformKey::Character("x".to_string()),
+        Modifiers::default(),
+    );
+    app.repeat(
+        &PlatformKey::Named("Backspace".to_string()),
+        Modifiers::default(),
+    );
+    app.repeat(
+        &PlatformKey::Named("ArrowLeft".to_string()),
+        Modifiers::default(),
+    );
+    app.repeat(
+        &PlatformKey::Character("a".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        before,
+        (
+            app.state.search.text().to_owned(),
+            app.state.demo.text.text().to_owned(),
+            app.state.fps_input.text().to_owned(),
+        ),
+        "a repeat without focus must not edit any buffer"
+    );
+    assert!(app.take_clipboard_request().is_none());
+}
+
+#[test]
+fn fps_input_accepts_only_digits_and_rejects_overflow() {
+    let mut app = app();
+    app.state.fps_input.edit.set_text("60");
+    app.state.fps_input.focus();
+
+    app.key(
+        &PlatformKey::Character("a".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(app.state.fps_input.text(), "60");
+
+    app.key(
+        &PlatformKey::Character("7".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(app.state.fps_input.text(), "607");
+
+    app.key(
+        &PlatformKey::Character("8".to_string()),
+        Modifiers::default(),
+    );
+    assert_eq!(
+        app.state.fps_input.text(),
+        "607",
+        "the fps buffer is capped at three digits"
+    );
+}
+
+#[test]
+fn editor_menu_actions_respect_selection_and_clipboard_state() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    for ch in "abc".chars() {
+        app.key(
+            &PlatformKey::Character(ch.to_string()),
+            Modifiers::default(),
+        );
+    }
+    app.rebuild(VIEWPORT);
+    let target = Target::Search;
+    let anchor = rect_of(&app, target::id(target)).center();
+
+    // 剪贴板为空：粘贴项禁用，点击不产生读取请求。
+    app.open_editor_menu(target, anchor, false);
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(2)));
+    assert!(app.take_clipboard_request().is_none());
+    assert_eq!(app.state.search.text(), "abc");
+    assert!(!app.editor_menu_open());
+
+    // 剪贴板有内容：粘贴项可用，点击后运行时立即读取并插入。
+    app.runtime.context().clipboard_set("xyz");
+    app.open_editor_menu(target, anchor, true);
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(2)));
+    assert!(app.take_clipboard_request().is_none());
+    assert_eq!(app.state.search.text(), "abcxyz");
+    assert!(!app.editor_menu_open());
+
+    // 全选后可复制整段文本。
+    app.open_editor_menu(target, anchor, true);
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(4)));
+    assert_eq!(app.state.search.edit.selected_text(), Some("abcxyz"));
+
+    app.open_editor_menu(target, anchor, true);
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(1)));
+    assert!(app.take_clipboard_request().is_none());
+    assert_eq!(clipboard_text(&app).as_deref(), Some("abcxyz"));
+}
+
+/// 右键绝不主动做词选：无选区时只把插入符移到点击处。
+#[test]
+fn right_clicking_an_editor_moves_the_caret_without_selecting_a_word() {
+    let mut app = search_with_text("abc def");
+    app.key(
+        &PlatformKey::Named("Home".to_string()),
+        Modifiers::default(),
+    );
+    let rect = rect_of(&app, target::id(Target::Search));
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+
+    assert!(
+        app.editor_menu_open(),
+        "the right click must open the context menu"
+    );
+    assert_eq!(
+        app.state.search.edit.selection(),
+        None,
+        "opening the menu must never select a word"
+    );
+    assert!(
+        app.state.search.edit.cursor() > 0,
+        "the caret must move to the click position"
+    );
+}
+
+/// WinUI 选区规则：点在选区内保留选区，点在选区外折叠并把插入符移到点击处。
+#[test]
+fn right_click_keeps_a_selection_inside_it_and_collapses_it_outside() {
+    let mut app = search_with_text("abc def");
+    app.state.search.edit.set_cursor(0, false);
+    app.state.search.edit.set_cursor(3, true);
+    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+
+    let rect = rect_of(&app, target::id(Target::Search));
+    // 点击文本起点附近：落在选区内，选区必须保留。
+    let inside = Vec2::new(rect.origin.x + 36.0 + 1.0, rect.center().y);
+    app.open_editor_menu(Target::Search, inside, false);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.state.search.edit.selected_text(),
+        Some("abc"),
+        "a right click inside the selection must keep it"
+    );
+
+    // 点击文本末尾之外：落在选区外，选区折叠到点击处。
+    let outside = Vec2::new(rect.max().x - 1.0, rect.center().y);
+    app.open_editor_menu(Target::Search, outside, false);
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.state.search.edit.selection(),
+        None,
+        "a right click outside the selection must collapse it"
+    );
+    assert_eq!(
+        app.state.search.edit.cursor(),
+        "abc def".len(),
+        "the caret must land on the clicked position"
+    );
+}
+
+fn clipboard_text(app: &App) -> Option<String> {
+    app.runtime.context().clipboard_get()
+}
+
+fn select_all(app: &mut App) {
+    app.key(
+        &PlatformKey::Character("a".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+}
+
+/// 右键落在选区内必须保留选区；随后点击「复制」通过真实事件链写入剪贴板。
+///
+/// 回归：右键按下曾走 `focus_editor_at`/`begin_press_target`，在菜单打开前
+/// 就把选区折叠，使「复制」始终禁用。
+#[test]
+fn context_menu_copy_writes_the_selection_through_the_runtime() {
+    let mut app = search_with_text("abc def");
+    select_all(&mut app);
+    let rect = rect_of(&app, target::id(Target::Search));
+    // 点击文本起点附近：落在 (0, len) 选区内。
+    let inside = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    app.right_click(inside);
+    app.rebuild(VIEWPORT);
+
+    assert!(app.editor_menu_open(), "the right click must open the menu");
+    assert_eq!(
+        app.state.search.edit.selected_text(),
+        Some("abc def"),
+        "a right click inside the selection must keep it"
+    );
+
+    click_node(&mut app, target::id(Target::EditorMenuItem(1)));
+
+    assert_eq!(clipboard_text(&app).as_deref(), Some("abc def"));
+    assert!(!app.editor_menu_open());
+}
+
+/// 右键后点击「剪切」：选区文本进入剪贴板并从缓冲区移除。
+#[test]
+fn context_menu_cut_writes_the_clipboard_and_removes_the_selection() {
+    let mut app = search_with_text("abc def");
+    select_all(&mut app);
+    let rect = rect_of(&app, target::id(Target::Search));
+    let inside = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    app.right_click(inside);
+    app.rebuild(VIEWPORT);
+
+    click_node(&mut app, target::id(Target::EditorMenuItem(0)));
+
+    assert_eq!(app.state.search.text(), "");
+    assert_eq!(clipboard_text(&app).as_deref(), Some("abc def"));
+}
+
+/// 右键后点击「粘贴」：剪贴板内容立即插入，无需等待下一次按键。
+#[test]
+fn context_menu_paste_inserts_the_clipboard_through_the_runtime() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    app.runtime.context().clipboard_set("xyz");
+    let rect = rect_of(&app, target::id(Target::Search));
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+
+    click_node(&mut app, target::id(Target::EditorMenuItem(2)));
+
+    assert_eq!(app.state.search.text(), "xyz");
+}
+
+/// 无选区时「剪切」「复制」、空剪贴板时「粘贴」都必须无效果。
+#[test]
+fn disabled_context_menu_items_do_nothing_through_the_runtime() {
+    let mut app = search_with_text("abc");
+    let rect = rect_of(&app, target::id(Target::Search));
+
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(1)));
+    assert_eq!(clipboard_text(&app), None);
+    assert_eq!(app.state.search.text(), "abc");
+
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(0)));
+    assert_eq!(clipboard_text(&app), None);
+    assert_eq!(app.state.search.text(), "abc");
+
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+    click_node(&mut app, target::id(Target::EditorMenuItem(2)));
+    assert_eq!(app.state.search.text(), "abc");
+}
+
+/// 空文本时「全选」无效果。
+#[test]
+fn context_menu_select_all_on_empty_text_does_nothing() {
+    let mut app = app();
+    app.key(
+        &PlatformKey::Character("k".to_string()),
+        Modifiers {
+            control: true,
+            ..Default::default()
+        },
+    );
+    let rect = rect_of(&app, target::id(Target::Search));
+    app.right_click(rect.center());
+    app.rebuild(VIEWPORT);
+
+    click_node(&mut app, target::id(Target::EditorMenuItem(4)));
+
+    assert_eq!(app.state.search.edit.selection(), None);
+}
+
+/// 右键按住微动不得形成或扩展选区。
+#[test]
+fn right_press_never_starts_a_selection_drag() {
+    let mut app = search_with_text("abc def");
+    let rect = rect_of(&app, target::id(Target::Search));
+    let start = Vec2::new(rect.origin.x + 40.0, rect.center().y);
+    let end = Vec2::new(rect.max().x - 10.0, rect.center().y);
+
+    app.runtime.pointer_move(start);
+    app.runtime.pointer_down(start, PointerButton::Right);
+    app.runtime.pointer_move(end);
+
+    assert_eq!(
+        app.state.search.edit.selection(),
+        None,
+        "holding the right button must not extend a selection"
+    );
+
+    app.runtime.pointer_up(end, PointerButton::Right);
+}
+
+/// 「全选」菜单项用鼠标点击必须生效，结果与 Ctrl+A 相同。
+#[test]
+fn context_menu_select_all_works_with_the_mouse() {
+    let mut app = search_with_text("abc");
+    let anchor = rect_of(&app, target::id(Target::Search)).center();
+    app.open_editor_menu(Target::Search, anchor, false);
+    app.rebuild(VIEWPORT);
+
+    click_node(&mut app, target::id(Target::EditorMenuItem(4)));
+
+    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+    assert!(!app.editor_menu_open());
+}
+
+/// 「全选」菜单项用回车必须生效。
+#[test]
+fn context_menu_select_all_works_with_enter() {
+    let mut app = search_with_text("abc");
+    let anchor = rect_of(&app, target::id(Target::Search)).center();
+    app.open_editor_menu(Target::Search, anchor, false);
+    app.rebuild(VIEWPORT);
+
+    // 无选区时剪切/复制禁用、剪贴板为空时粘贴禁用，方向键直接落到「全选」。
+    app.key(
+        &PlatformKey::Named("ArrowDown".to_string()),
+        Modifiers::default(),
+    );
+    app.key(
+        &PlatformKey::Named("Enter".to_string()),
+        Modifiers::default(),
+    );
+
+    assert_eq!(app.state.search.edit.selected_text(), Some("abc"));
+    assert!(!app.editor_menu_open());
+}
+
+/// Esc、点击外部与滚动都能关闭菜单。
+#[test]
+fn escape_outside_click_and_scroll_close_the_context_menu() {
+    let mut app = search_with_text("abc");
+    let anchor = rect_of(&app, target::id(Target::Search)).center();
+
+    app.open_editor_menu(Target::Search, anchor, false);
+    app.rebuild(VIEWPORT);
+    assert!(app.editor_menu_open());
+    app.key(
+        &PlatformKey::Named("Escape".to_string()),
+        Modifiers::default(),
+    );
+    assert!(!app.editor_menu_open(), "escape must close the menu");
+
+    app.open_editor_menu(Target::Search, anchor, false);
+    app.rebuild(VIEWPORT);
+    let outside = rect_of(&app, target::id(Target::Theme(0))).center();
+    app.pointer_move(outside);
+    app.pointer_down(outside, 0.0);
+    app.pointer_up(outside, 0.1);
+    app.rebuild(VIEWPORT);
+    assert!(
+        !app.editor_menu_open(),
+        "clicking outside must close the menu"
+    );
+
+    app.open_editor_menu(Target::Search, anchor, false);
+    app.rebuild(VIEWPORT);
+    app.runtime.wheel(anchor, Vec2::new(0.0, -1.0));
+    app.rebuild(VIEWPORT);
+    assert!(!app.editor_menu_open(), "scrolling must close the menu");
 }
 
 #[test]
@@ -1402,14 +2375,14 @@ fn sidebar_covers_every_page_and_every_catalog_component() {
     // 点击侧边栏中的 Tooltip 组件项应导航至 Components 页并自动滚动到对应卡片位置。
     let mut app = app();
     app.click(
-        target::id(Target::NavComponent(WidgetCatalogId::Tooltip as u8)),
+        target::id(Target::NavComponent(WidgetCatalogId::ToolTip as u8)),
         Vec2::ZERO,
     );
     app.rebuild(VIEWPORT);
     assert_eq!(app.state.active_page, PageId::Components);
-    assert_eq!(app.state.active_component, Some(WidgetCatalogId::Tooltip));
+    assert_eq!(app.state.active_component, Some(WidgetCatalogId::ToolTip));
     assert!(
-        (app.state.content_scroll - component_scroll_offset(WidgetCatalogId::Tooltip)).abs() < 1.0
+        (app.state.content_scroll - component_scroll_offset(WidgetCatalogId::ToolTip)).abs() < 1.0
     );
 }
 

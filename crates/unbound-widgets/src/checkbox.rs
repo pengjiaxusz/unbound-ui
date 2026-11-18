@@ -301,17 +301,20 @@ fn check_mark(
     let y = box_rect.origin.y;
     let w = box_rect.size.x;
     let h = box_rect.size.y;
-    let width = (w * 0.16).max(1.5);
-    let start = [x + w * 0.22, y + h * 0.52];
-    let elbow = [x + w * 0.42, y + h * 0.72];
-    let tip = [x + w * 0.78, y + h * 0.28];
+    // 参考截图中勾选标记是一条无抗锯齿折线（由 Composition 几何绘制，
+    // 覆盖率只有 0 或 1）：折点按实测像素取方框 0.25/0.5 → 0.4/0.65 →
+    // 0.7/0.35，并偏移半像素使线心穿过像素中心。左臂实测约 2px 宽、
+    // 右臂约 1px 宽，开启抗锯齿会把折线糊成 2–3px 的灰边。
+    let start = [x + w * 0.25 + 0.5, y + h * 0.5 + 0.5];
+    let elbow = [x + w * 0.4 + 0.5, y + h * 0.65 + 0.5];
+    let tip = [x + w * 0.7 + 0.5, y + h * 0.35 + 0.5];
     curve_stroke(
         [
             start,
             [(start[0] + elbow[0]) * 0.5, (start[1] + elbow[1]) * 0.5],
             elbow,
         ],
-        width,
+        1.5,
         color,
         z,
         primitives,
@@ -323,7 +326,7 @@ fn check_mark(
             [(elbow[0] + tip[0]) * 0.5, (elbow[1] + tip[1]) * 0.5],
             tip,
         ],
-        width,
+        1.0,
         color,
         z,
         primitives,
@@ -373,6 +376,9 @@ fn curve_stroke(
         z,
     );
     primitive.extra_payload_idx = payload_idx;
+    // 勾选标记按无抗锯齿折线绘制，与 WinUI 的 Composition 几何一致。
+    primitive.prim_type_and_flags |=
+        u32::from(unbound_gpu::data::PrimFlags::NO_AA.bits()) << 16;
     primitives.push(primitive);
 }
 

@@ -122,7 +122,7 @@ impl Application for AsyncI18nApp {
 
                 card.progress(ui_key!("prog_bar"), ProgressDesc::bar(state.progress));
 
-                card.add(ui_key!("spinner"), WidgetCatalogId::Spinner);
+                card.add(ui_key!("spinner"), WidgetCatalogId::ProgressRing);
             });
         });
     }

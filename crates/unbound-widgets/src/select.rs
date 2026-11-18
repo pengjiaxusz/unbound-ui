@@ -39,10 +39,11 @@ pub const SELECT_POPUP_MARGIN: f32 = 8.0;
 const CHEVRON_HALF_WIDTH: f32 = 4.0;
 /// 展开箭头的半高。
 ///
-/// 实测 Win11 下拉框里的倒三角宽 8px、高 4px——比 Segoe 的普通箭头更扁。
-const CHEVRON_HALF_HEIGHT: f32 = 2.0;
+/// 像素对照实测 Win11 下拉框箭头只占 4 行（y30..y33），是一条 1px 细线，
+/// 因此半高取 1.5、描边取 1.0；此前的 2+1.5 会画成 6 行粗箭头。
+const CHEVRON_HALF_HEIGHT: f32 = 1.5;
 /// 展开/收起箭头的描边宽度。
-const CHEVRON_STROKE: f32 = 1.5;
+const CHEVRON_STROKE: f32 = 1.0;
 
 /// 下拉选择框描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -325,8 +326,12 @@ pub fn emit_select_with_glyphs(
         // 常态：叠在卡片之上的 6% 白色薄纱（实测比卡片亮 13 级）。
         Token::CONTROL_FILL
     };
+    // WinUI 的 1px 描边占据布局矩形最外圈，填充只画在描边以内；
+    // 内缩 1px 才能让顶边叠在背板上得到 229 / 53，而不是被填充抬亮。
+    let fill_rect = rect.inflate(-1.0);
+    let fill_radius = (desc.radius - 1.0).max(0.0);
     let mut primitives: Vec<GpuPrimitiveInstance> = vec![
-        surface(rect, desc.radius, fill, desc.z),
+        surface(fill_rect, fill_radius, fill, desc.z),
         instance(
             rect,
             radii,
@@ -348,6 +353,15 @@ pub fn emit_select_with_glyphs(
             desc.z,
         ),
     ];
+    // 底边加深段：WinUI 的 `ControlElevationBorderBrush` 底边使用
+    // `ControlStrokeColorSecondary`，常态下比顶边深一档。聚焦/展开/禁用时
+    // 边框已换成各自的高对比色，用透明令牌占位以保持图元数量恒定。
+    // 该图元置于末尾，但不影响绘制顺序——它属于 `Border` 子元素层。
+    let accent = if control.disabled || control.focused || state.open {
+        Token::NONE
+    } else {
+        Token::CONTROL_STROKE_SECONDARY
+    };
     let mut payloads: Vec<GpuPayload> = Vec::new();
     // 展开箭头：在顶点交汇的两条线段，**恒定朝下**。
     //
@@ -407,6 +421,24 @@ pub fn emit_select_with_glyphs(
         2.0,
         desc.z,
         control.focused,
+    ));
+
+    let inset = desc.radius.min(rect.size.x * 0.5);
+    primitives.push(instance(
+        Rect::new(
+            rect.origin.x + inset,
+            rect.max().y - 1.0,
+            (rect.size.x - inset * 2.0).max(0.0),
+            1.0,
+        ),
+        [0.0; 4],
+        accent,
+        Token::NONE,
+        0.0,
+        0.0,
+        PrimType::RoundedRect,
+        SubElement::Border,
+        desc.z,
     ));
 
     let hit = (!control.disabled).then(|| {
@@ -538,7 +570,7 @@ mod tests {
         let mut state = SelectState::new();
         state.selected = Some(1);
         let output = emit_select(4, &desc, &state, ControlState::default());
-        assert_eq!(output.primitives.len(), 5);
+        assert_eq!(output.primitives.len(), 6);
         assert!(output.hit.is_some());
         let a11y = output.a11y.as_ref().unwrap();
         assert_eq!(a11y.role, accesskit::Role::ComboBox);

@@ -16,11 +16,11 @@ use core::mem::ManuallyDrop;
 use rustc_hash::FxHashMap;
 use windows::core::{Interface, BOOL, PCWSTR};
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_TEXTURE_ALIASED_1x1, DWriteCreateFactory, IDWriteFactory, IDWriteFactory2, IDWriteFont,
-    IDWriteFontCollection, IDWriteFontFace, IDWriteFontFace2, DWRITE_FACTORY_TYPE_SHARED,
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT, DWRITE_GLYPH_OFFSET, DWRITE_GLYPH_RUN, DWRITE_GRID_FIT_MODE_DEFAULT,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_RENDERING_MODE_NATURAL,
+    DWRITE_TEXTURE_ALIASED_1x1, DWRITE_TEXTURE_CLEARTYPE_3x1, DWriteCreateFactory, IDWriteFactory,
+    IDWriteFactory2, IDWriteFont, IDWriteFontCollection, IDWriteFontFace, IDWriteFontFace2,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
+    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_GLYPH_OFFSET, DWRITE_GLYPH_RUN,
+    DWRITE_GRID_FIT_MODE_DEFAULT, DWRITE_MEASURING_MODE_NATURAL, DWRITE_RENDERING_MODE_NATURAL,
     DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
 };
 
@@ -74,8 +74,8 @@ impl DirectWriteRasterizer {
 
     /// 光栅化单个字形。
     ///
-    /// `key` 指定字体家族、字重与斜体；`phase` 为 0..3 的亚像素相位，基线的
-    /// 水平原点取 `phase * 0.25`。返回 `None` 时调用方应回退到 `swash`，包括：
+    /// `key` 指定字体家族、字重与斜体；`phase` 为 0..7 的亚像素相位，基线的
+    /// 水平原点取 `phase * 0.125`。返回 `None` 时调用方应回退到 `swash`，包括：
     /// 字体家族缺失、彩色字体、或 DirectWrite 拒绝该字形。
     pub fn rasterize(
         &mut self,
@@ -121,7 +121,7 @@ impl DirectWriteRasterizer {
                 DWRITE_MEASURING_MODE_NATURAL,
                 DWRITE_GRID_FIT_MODE_DEFAULT,
                 DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
-                f32::from(phase) * 0.25,
+                f32::from(phase) * 0.125,
                 0.0,
             )
         };
@@ -129,7 +129,39 @@ impl DirectWriteRasterizer {
         unsafe { ManuallyDrop::drop(&mut run.fontFace) };
         let analysis = analysis.ok()?;
 
-        let bounds = unsafe { analysis.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1) }.ok()?;
+        // 灰度抗锯齿优先取 ClearType 3x1 纹理再折算成单通道：
+        // `DWRITE_TEXTURE_ALIASED_1x1` 只给 1-bit 覆盖率，会让字形边缘出现
+        // 参考截图里没有的锯齿，是跨渲染器文字差异的主要来源。
+        // 部分渲染模式/字体下 ClearType 纹理不可用，此时回退到 1x1 覆盖率，
+        // 保证字形不会整块丢失。
+        let texture = DWRITE_TEXTURE_CLEARTYPE_3x1;
+        if let Ok(bounds) = unsafe { analysis.GetAlphaTextureBounds(texture) } {
+            let width = (bounds.right - bounds.left).max(0) as u32;
+            let height = (bounds.bottom - bounds.top).max(0) as u32;
+            if width > 0 && height > 0 {
+                let mut rgb = vec![0u8; (width * height * 3) as usize];
+                if unsafe { analysis.CreateAlphaTexture(texture, &bounds, &mut rgb) }.is_ok() {
+                    // ClearType 的三个子像素通道按人眼亮度权重合成灰度覆盖率。
+                    let data = rgb
+                        .chunks_exact(3)
+                        .map(|px| {
+                            ((u16::from(px[0]) * 3 + u16::from(px[1]) * 6 + u16::from(px[2])) / 10)
+                                as u8
+                        })
+                        .collect();
+                    return Some(RasterizedGlyph {
+                        width,
+                        height,
+                        bearing_x: bounds.left as f32,
+                        bearing_y: bounds.top as f32,
+                        data,
+                    });
+                }
+            }
+        }
+
+        let texture = DWRITE_TEXTURE_ALIASED_1x1;
+        let bounds = unsafe { analysis.GetAlphaTextureBounds(texture) }.ok()?;
         let width = (bounds.right - bounds.left).max(0) as u32;
         let height = (bounds.bottom - bounds.top).max(0) as u32;
         if width == 0 || height == 0 {
@@ -142,8 +174,7 @@ impl DirectWriteRasterizer {
             });
         }
         let mut data = vec![0u8; (width * height) as usize];
-        unsafe { analysis.CreateAlphaTexture(DWRITE_TEXTURE_ALIASED_1x1, &bounds, &mut data) }
-            .ok()?;
+        unsafe { analysis.CreateAlphaTexture(texture, &bounds, &mut data) }.ok()?;
         Some(RasterizedGlyph {
             width,
             height,
@@ -154,7 +185,29 @@ impl DirectWriteRasterizer {
     }
 
     fn find_face(&self, key: &FaceKey) -> Option<IDWriteFontFace> {
-        let name = windows::core::HSTRING::from(key.family.as_str());
+        // cosmic-text/fontdb 暴露的可变字体家族名是 `Segoe UI Variable`，
+        // 而 DirectWrite 的系统集合按光学尺寸拆成 `... Text` / `... Display`。
+        // 直接按 fontdb 名字查找会全部失败并静默回退到 swash，导致文字
+        // 抗锯齿与 WinUI 不一致。这里按正文优先尝试别名。
+        let mut candidates = Vec::with_capacity(4);
+        if key.family.eq_ignore_ascii_case("Segoe UI Variable") {
+            candidates.push("Segoe UI Variable Text");
+            candidates.push("Segoe UI Variable Display");
+        }
+        candidates.push(key.family.as_str());
+        if !key.family.eq_ignore_ascii_case("Segoe UI") {
+            candidates.push("Segoe UI");
+        }
+        for family in candidates {
+            if let Some(face) = self.find_face_in_family(key, family) {
+                return Some(face);
+            }
+        }
+        None
+    }
+
+    fn find_face_in_family(&self, key: &FaceKey, family_name: &str) -> Option<IDWriteFontFace> {
+        let name = windows::core::HSTRING::from(family_name);
         let mut index = 0u32;
         let mut exists = BOOL(0);
         unsafe {
@@ -185,4 +238,145 @@ impl DirectWriteRasterizer {
         let font: IDWriteFont = unsafe { list.GetFont(0) }.ok()?;
         unsafe { font.CreateFontFace() }.ok()
     }
+}
+
+/// 在共享的 DirectWrite 文本布局上执行一次测量。
+///
+/// DirectWrite 的文本布局按真实字距（kerning）给出每个字形簇的水平原点和
+/// 总宽度；`cosmic-text` 的前进宽度累计与之在 14px 正文上相差零点几像素，
+/// 长串标签会逐步累积。控件布局与像素对齐都需要与 WinUI 使用同一套度量。
+///
+/// 字体格式按「家族 + 字重 + 斜体 + 字号」缓存；布局本身每次重建。
+fn with_text_layout<R>(
+    family: &str,
+    weight: u16,
+    italic: bool,
+    font_size: f32,
+    text: &str,
+    f: impl FnOnce(&windows::Win32::Graphics::DirectWrite::IDWriteTextLayout) -> Option<R>,
+) -> Option<R> {
+    use std::sync::{Mutex, OnceLock};
+    use windows::core::HSTRING;
+    use windows::Win32::Graphics::DirectWrite::{IDWriteTextFormat, IDWriteTextLayout};
+
+    struct MeasureCache {
+        factory: IDWriteFactory2,
+        collection: IDWriteFontCollection,
+        formats: FxHashMap<(String, u16, bool, u32), IDWriteTextFormat>,
+    }
+
+    static CACHE: OnceLock<Mutex<Option<MeasureCache>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| {
+        let factory: Option<IDWriteFactory> =
+            unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }.ok();
+        let mut state = None;
+        if let Some(factory) = factory {
+            if let Ok(factory2) = factory.cast::<IDWriteFactory2>() {
+                let mut collection = None;
+                if unsafe { factory.GetSystemFontCollection(&mut collection, false) }.is_ok() {
+                    if let Some(collection) = collection {
+                        state = Some(MeasureCache {
+                            factory: factory2,
+                            collection,
+                            formats: FxHashMap::default(),
+                        });
+                    }
+                }
+            }
+        }
+        Mutex::new(state)
+    });
+    let mut guard = cache.lock().ok()?;
+    let cache = guard.as_mut()?;
+
+    let locale = HSTRING::from("en-us");
+    let key = (family.to_owned(), weight, italic, font_size.to_bits());
+    if !cache.formats.contains_key(&key) {
+        let style = if italic {
+            DWRITE_FONT_STYLE_ITALIC
+        } else {
+            DWRITE_FONT_STYLE_NORMAL
+        };
+        // 与光栅化器一致：`fontdb` 暴露的 `Segoe UI Variable` 在 DirectWrite
+        // 的系统集合里按光学尺寸拆成 `... Text` / `... Display`。
+        let mut candidates: Vec<&str> = Vec::with_capacity(4);
+        if family.eq_ignore_ascii_case("Segoe UI Variable") {
+            candidates.push("Segoe UI Variable Text");
+            candidates.push("Segoe UI Variable Display");
+        }
+        candidates.push(family);
+        if !family.eq_ignore_ascii_case("Segoe UI") {
+            candidates.push("Segoe UI");
+        }
+        let mut format: Option<IDWriteTextFormat> = None;
+        for candidate in candidates {
+            let name = HSTRING::from(candidate);
+            let mut index = 0u32;
+            let mut exists = BOOL(0);
+            if unsafe {
+                cache
+                    .collection
+                    .FindFamilyName(PCWSTR(name.as_ptr()), &mut index, &mut exists)
+            }
+            .is_err()
+                || !exists.as_bool()
+            {
+                continue;
+            }
+            if let Ok(created) = unsafe {
+                cache.factory.CreateTextFormat(
+                    PCWSTR(name.as_ptr()),
+                    None,
+                    DWRITE_FONT_WEIGHT(i32::from(weight)),
+                    style,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    font_size,
+                    PCWSTR(locale.as_ptr()),
+                )
+            } {
+                format = Some(created);
+                break;
+            }
+        }
+        let format = format?;
+        cache.formats.insert(key.clone(), format);
+    }
+    let format = cache.formats.get(&key)?;
+
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let layout: IDWriteTextLayout = unsafe {
+        cache
+            .factory
+            .CreateTextLayout(&units, format, f32::MAX, f32::MAX)
+    }
+    .ok()?;
+    f(&layout)
+}
+
+/// 每个字形簇的水平原点与布局总宽度。
+///
+/// `utf16_indices` 给出各字形簇在 UTF-16 文本中的起始下标（与 `text` 同一
+/// 字符串）。返回的 x 相对布局原点，单位与 `font_size` 相同。
+pub(crate) fn layout_cluster_positions(
+    family: &str,
+    weight: u16,
+    italic: bool,
+    font_size: f32,
+    text: &str,
+    utf16_indices: &[u32],
+) -> Option<(Vec<f32>, f32)> {
+    with_text_layout(family, weight, italic, font_size, text, |layout| {
+        use windows::Win32::Graphics::DirectWrite::{DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_METRICS};
+        let mut positions = Vec::with_capacity(utf16_indices.len());
+        for &index in utf16_indices {
+            let mut x = 0.0f32;
+            let mut y = 0.0f32;
+            let mut hit = DWRITE_HIT_TEST_METRICS::default();
+            unsafe { layout.HitTestTextPosition(index, false, &mut x, &mut y, &mut hit) }.ok()?;
+            positions.push(x);
+        }
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        unsafe { layout.GetMetrics(&mut metrics) }.ok()?;
+        Some((positions, metrics.widthIncludingTrailingWhitespace))
+    })
 }

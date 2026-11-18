@@ -13,6 +13,18 @@ use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const MAX_PAGE_SLOTS: usize = 7;
+/// 圆点分页最多同时显示的圆点数量。
+const MAX_PIPS: usize = 7;
+
+/// 分页外观。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaginationStyle {
+    /// 数字页码按钮 + 上一页 / 下一页。
+    #[default]
+    Numbers,
+    /// `PipsPager` 形态的纯圆点指示器：选中圆点放大，其余为小圆点。
+    Dots,
+}
 
 /// [`Pagination`] 分页栏的描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +39,8 @@ pub struct PaginationDesc {
     pub page_size: usize,
     /// 无障碍标签。
     pub label: String,
+    /// 外观形态。
+    pub style: PaginationStyle,
     /// 基础 z-index。
     pub z: u16,
 }
@@ -42,6 +56,7 @@ impl PaginationDesc {
             current_page: current_page.clamp(1, total),
             page_size: 20,
             label: "Pagination".to_owned(),
+            style: PaginationStyle::Numbers,
             z: 600,
         }
     }
@@ -51,6 +66,19 @@ impl PaginationDesc {
     pub fn with_page_size(mut self, page_size: usize) -> Self {
         self.page_size = page_size.max(1);
         self
+    }
+
+    /// 设置外观形态。
+    #[must_use]
+    pub fn with_style(mut self, style: PaginationStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// 切换为纯圆点形态（WinUI `PipsPager`）。
+    #[must_use]
+    pub fn dots(self) -> Self {
+        self.with_style(PaginationStyle::Dots)
     }
 
     /// 计算 7 个可见页码槽位（`Some(page)` 为页码，`None` 为省略号）。
@@ -144,10 +172,23 @@ impl PaginationState {
     }
 }
 
-/// 输出结构稳定的分页栏
-/// （1 个容器 + 9 个槽位按钮 + 9 条选中下划线 + 1 个焦点环 = 20 个图元）。
+/// 输出分页控件：`Numbers` 绘制数字页码栏，`Dots` 绘制纯圆点指示器。
 #[must_use]
 pub fn emit_pagination(
+    node: u64,
+    desc: &PaginationDesc,
+    state: ControlState,
+    label_glyphs: &[GlyphQuad],
+) -> WidgetOutput {
+    match desc.style {
+        PaginationStyle::Numbers => emit_number_pager(node, desc, state, label_glyphs),
+        PaginationStyle::Dots => emit_dot_pager(node, desc, state),
+    }
+}
+
+/// 输出结构稳定的数字分页栏
+/// （1 个容器 + 9 个槽位按钮 + 9 条选中下划线 + 1 个焦点环 = 20 个图元）。
+fn emit_number_pager(
     node: u64,
     desc: &PaginationDesc,
     state: ControlState,
@@ -302,6 +343,83 @@ pub fn emit_pagination(
     out
 }
 
+/// 输出纯圆点形态的分页指示器（WinUI `PipsPager`）。
+///
+/// 可见圆点最多 [`MAX_PIPS`] 个并围绕当前页居中；选中圆点直径 10px，
+/// 其余为 6px。图元数量只取决于可见圆点数，与交互状态无关。
+fn emit_dot_pager(node: u64, desc: &PaginationDesc, state: ControlState) -> WidgetOutput {
+    let total_pages = desc.total_pages.max(1);
+    let visible = total_pages.min(MAX_PIPS);
+    let current = desc.current_page.clamp(1, total_pages);
+    let start = if total_pages <= MAX_PIPS {
+        0
+    } else {
+        (current - 1)
+            .saturating_sub(visible / 2)
+            .min(total_pages - visible)
+    };
+
+    let border = if state.disabled {
+        Token::DISABLED
+    } else if state.phase == PointerPhase::Hovered || state.focused {
+        Token::FOCUS_RING
+    } else {
+        Token::CARD_BORDER
+    };
+
+    let mut primitives = Vec::with_capacity(visible + 2);
+    primitives.push(outlined(
+        desc.rect,
+        // WinUI `ControlCornerRadius = 4`。
+        4.0,
+        Token::NONE,
+        border,
+        1.0,
+        0.0,
+        desc.z,
+    ));
+
+    let step = desc.rect.width() / visible as f32;
+    let cy = desc.rect.center().y;
+    for index in 0..visible {
+        let page = start + index + 1;
+        let is_current = page == current;
+        let size = if is_current { 10.0 } else { 6.0 };
+        let cx = desc.rect.origin.x + step * (index as f32 + 0.5);
+        let dot = Rect::new(cx - size * 0.5, cy - size * 0.5, size, size);
+        let fill = if state.disabled {
+            Token::CONTROL_DISABLED_THUMB
+        } else if is_current {
+            Token::PRIMARY
+        } else {
+            Token::CONTROL_TRACK
+        };
+        primitives.push(surface(dot, size * 0.5, fill, desc.z + 1));
+    }
+
+    primitives.push(focus_ring(
+        desc.rect,
+        4.0,
+        Token::FOCUS_RING,
+        2.0,
+        desc.z + 2,
+        state.focused && !state.disabled,
+    ));
+
+    WidgetOutput {
+        primitives,
+        hit: (!state.disabled).then(|| {
+            HitRegion::new(node, CONTROL_LAYER, u32::from(desc.z), desc.rect)
+                .with_cursor(CursorKind::Pointer)
+        }),
+        a11y: Some(
+            A11yNode::new(Role::Group, desc.label.clone(), desc.rect).disabled(state.disabled),
+        ),
+        focusable: !state.disabled,
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +443,57 @@ mod tests {
         assert_eq!(st.page, 2);
         assert!(st.go_to(99, 5));
         assert_eq!(st.page, 5);
+    }
+
+    #[test]
+    fn the_dots_style_draws_one_pip_per_visible_page() {
+        let desc = PaginationDesc::new(Rect::new(0.0, 0.0, 140.0, 24.0), 5, 3).dots();
+        assert_eq!(desc.style, PaginationStyle::Dots);
+        let output = emit_pagination(1, &desc, ControlState::default(), &[]);
+        // 容器 + 5 个圆点 + 焦点环。
+        assert_eq!(output.primitives.len(), 7);
+    }
+
+    #[test]
+    fn the_selected_pip_is_larger_and_primary() {
+        let desc = PaginationDesc::new(Rect::new(0.0, 0.0, 140.0, 24.0), 5, 3).dots();
+        let output = emit_pagination(1, &desc, ControlState::default(), &[]);
+        let selected = &output.primitives[3];
+        let neighbour = &output.primitives[2];
+        assert!(selected.size[0] > neighbour.size[0]);
+        assert_eq!(selected.fill_token_or_uv as u16, Token::PRIMARY.raw());
+        assert_eq!(
+            neighbour.fill_token_or_uv as u16,
+            Token::CONTROL_TRACK.raw()
+        );
+    }
+
+    #[test]
+    fn the_dots_style_keeps_a_constant_primitive_count() {
+        let desc = PaginationDesc::new(Rect::new(0.0, 0.0, 140.0, 24.0), 20, 10).dots();
+        let mut counts = Vec::new();
+        for phase in [
+            PointerPhase::Idle,
+            PointerPhase::Hovered,
+            PointerPhase::Pressed,
+        ] {
+            for focused in [false, true] {
+                for disabled in [false, true] {
+                    for selected in [false, true] {
+                        let state = ControlState {
+                            phase,
+                            focused,
+                            disabled,
+                            selected,
+                        };
+                        counts.push(emit_pagination(1, &desc, state, &[]).primitives.len());
+                    }
+                }
+            }
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
     }
 }

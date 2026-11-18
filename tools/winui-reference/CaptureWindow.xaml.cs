@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics;
@@ -18,68 +19,41 @@ using Windows.Storage.Streams;
 namespace WinUiReference;
 
 /// <summary>
-/// 截图窗口：承载一个用例（或整批用例），等待渲染稳定后用 RenderTargetBitmap 导出 PNG 与同名 JSON。
-/// 批量模式只创建一个窗口，逐例替换内容后重新截图，避免反复启动进程与弹窗。
+/// 截图窗口：按「控件 × 主题 × 后景」为单位构建状态拼版（Contact Sheet），
+/// 将同一控件的多个状态并排放入同一张网格画布，单次等待 350ms 动画收敛、单次导出大图，
+/// 再按各槽位的紧凑出血区域切分落盘，并支持基于版本与规格指纹的增量缓存。
 /// </summary>
 public sealed partial class CaptureWindow : Window
 {
     private readonly CaptureOptions _options;
-    private readonly IReadOnlyList<CaptureCase> _cases;
+    private readonly IReadOnlyList<ContactSheetBatch> _sheets;
     private readonly System.Diagnostics.Stopwatch _settle = new();
-    private int _caseIndex;
-    private FrameworkElement? _control;
+    private int _sheetIndex;
+    private readonly List<(CaptureCase Case, Border SlotHost, FrameworkElement Control)> _activeSlots = new();
     private DispatcherQueueTimer? _timeoutTimer;
+    private DispatcherQueueTimer? _resizeWatchdog;
     private int _renderingTicks;
     private int _captureStarted;
+    private bool _settleStarted;
     private bool _loaded;
+    private int _skippedCount;
+    private int _capturedCount;
+    private int _failedCount;
+    private double _targetWidthDip;
+    private double _targetHeightDip;
 
     public CaptureWindow(CaptureOptions options)
     {
         _options = options;
         InitializeComponent();
 
-        _cases = options.BuildCases();
+        _sheets = options.BuildSheets();
         Title = $"WinUI Reference - {options.ControlName}";
-
-        if (!LoadCase(_cases[0]))
-        {
-            Environment.Exit(2);
-            return;
-        }
 
         Host.Loaded += OnHostLoaded;
     }
 
-    private CaptureCase ActiveCase => _cases[_caseIndex];
-
-    /// <summary>
-    /// 把一个用例装载进 Host：换主题、换控件、应用状态。返回 false 表示该用例不可用。
-    /// </summary>
-    private bool LoadCase(CaptureCase captureCase)
-    {
-        Host.RequestedTheme = captureCase.Theme == "dark" ? ElementTheme.Dark : ElementTheme.Light;
-        Host.Children.Clear();
-
-        if (!Catalog.TryCreate(captureCase.ControlName, out var control))
-        {
-            Fatal.Report($"未知控件：{captureCase.ControlName}{Environment.NewLine}可用控件：{string.Join(", ", Catalog.ControlNames)}");
-            return false;
-        }
-
-        _control = control;
-        Host.Children.Add(control);
-
-        if (!Catalog.TryApplyState(control, captureCase.State, out var stateError))
-        {
-            Fatal.Report(stateError);
-            return false;
-        }
-
-        _renderingTicks = 0;
-        _settle.Restart();
-        _captureStarted = 0;
-        return true;
-    }
+    private ContactSheetBatch ActiveSheet => _sheets[_sheetIndex];
 
     private void OnHostLoaded(object sender, RoutedEventArgs e)
     {
@@ -89,12 +63,219 @@ public sealed partial class CaptureWindow : Window
         }
 
         _loaded = true;
-        ResizeClientArea();
-        StartCaptureLoop();
+        AdvanceToNextUncachedOrStart(initial: true);
     }
 
+    /// <summary>
+    /// 跳过所有已命中缓存的拼版批次；若存在未命中的用例则装载该拼版并启动渲染等待循环。
+    /// </summary>
+    private void AdvanceToNextUncachedOrStart(bool initial)
+    {
+        if (!initial)
+        {
+            _sheetIndex++;
+        }
+
+        while (_sheetIndex < _sheets.Count)
+        {
+            var sheet = _sheets[_sheetIndex];
+            if (!_options.NoCache && AllCasesCached(sheet))
+            {
+                _skippedCount += sheet.Cases.Count;
+                Console.Out.WriteLine(
+                    $"[cache-hit] 跳过 {sheet.ControlName} ({sheet.Theme}, {sheet.Backdrop}) 的 {sheet.Cases.Count} 个状态");
+                _sheetIndex++;
+                continue;
+            }
+
+            if (!LoadSheet(sheet))
+            {
+                Environment.ExitCode = 2;
+                Application.Current.Exit();
+                return;
+            }
+
+            ResizeClientAreaForSheet();
+            StartCaptureLoop();
+            return;
+        }
+
+        Console.Out.WriteLine(
+            $"采集完成：新增 {_capturedCount} 个用例，失败 {_failedCount} 个用例，缓存命中跳过 {_skippedCount} 个用例。");
+        Application.Current.Exit();
+    }
+
+    /// <summary>检查当前拼版中的所有用例是否均在磁盘上拥有指纹匹配的 PNG 与 JSON。</summary>
+    private bool AllCasesCached(ContactSheetBatch sheet)
+    {
+        var outputDirectory = Path.GetFullPath(_options.OutputDirectory);
+        var scale = Host.XamlRoot?.RasterizationScale ?? 1.0;
+        var sdkVersion = typeof(Application).Assembly.GetName().Version?.ToString() ?? "unknown";
+        var osVersion = Environment.OSVersion.Version.ToString();
+
+        foreach (var c in sheet.Cases)
+        {
+            var baseName = c.FileBaseName();
+            var pngPath = Path.Combine(outputDirectory, $"{baseName}.png");
+            var jsonPath = Path.Combine(outputDirectory, $"{baseName}.json");
+            if (!File.Exists(pngPath) || !File.Exists(jsonPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                var jsonText = File.ReadAllText(jsonPath);
+                var expectedFp = Catalog.ComputeFingerprint(
+                    c.ControlName,
+                    c.State,
+                    c.Theme,
+                    c.Backdrop,
+                    scale,
+                    sdkVersion,
+                    osVersion);
+                if (!jsonText.Contains($"\"fingerprint\": \"{expectedFp}\"", StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// 把一个「控件 × 主题 × 后景」下的全部待测状态并排装载进 Host 的水平网格槽位中。
+    /// </summary>
+    private bool LoadSheet(ContactSheetBatch sheet)
+    {
+        Host.RequestedTheme = sheet.Theme == "dark" ? ElementTheme.Dark : ElementTheme.Light;
+        Host.Background = Catalog.CreateBackdropBrush(sheet.Theme, sheet.Backdrop);
+        Host.Children.Clear();
+        Host.ColumnDefinitions.Clear();
+        Host.RowDefinitions.Clear();
+        _activeSlots.Clear();
+
+        // 先把控件挂进槽位，再在可视树内测量期望尺寸，最后扩张槽位：
+        // 槽位至少覆盖 controlBounds 外扩出血，保证 TreeView（高 140）、
+        // CalendarView（高 260）、TitleBar（宽 420）不被裁碎。
+        foreach (var captureCase in sheet.Cases)
+        {
+            if (!Catalog.TryCreate(captureCase.ControlName, out var control))
+            {
+                Fatal.Report($"未知控件：{captureCase.ControlName}{Environment.NewLine}可用控件：{string.Join(", ", Catalog.ControlNames)}");
+                return false;
+            }
+
+            if (!Catalog.TryApplyState(control, captureCase.State, out var stateError))
+            {
+                Fatal.Report(stateError);
+                return false;
+            }
+
+            control.RequestedTheme = Host.RequestedTheme;
+            // ProgressRing 的弧线颜色不走可覆盖的资源键，而是直接取系统强调色；
+            // 这里显式指定前景色，把基线钉死为 Windows 11 默认蓝/青。
+            if (control is ProgressRing ring)
+            {
+                var accent = control.RequestedTheme == ElementTheme.Dark
+                    ? Windows.UI.Color.FromArgb(255, 0x60, 0xCD, 0xFF)
+                    : Windows.UI.Color.FromArgb(255, 0x00, 0x5F, 0xB8);
+                ring.Foreground = new SolidColorBrush(accent);
+            }
+            var slotHost = new Border
+            {
+                Width = Catalog.SlotWidthDip,
+                Height = Catalog.SlotHeightDip,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = Catalog.CreateBackdropBrush(sheet.Theme, sheet.Backdrop),
+                Child = control,
+            };
+            var column = new ColumnDefinition
+            {
+                Width = new GridLength(Catalog.SlotWidthDip, GridUnitType.Pixel),
+            };
+            Host.ColumnDefinitions.Add(column);
+            Grid.SetColumn(slotHost, Host.Children.Count);
+            Host.Children.Add(slotHost);
+            _activeSlots.Add((captureCase, slotHost, control));
+        }
+
+        for (var idx = 0; idx < _activeSlots.Count; idx++)
+        {
+            var (_, slotHost, control) = _activeSlots[idx];
+            // 只有在可视树内测量才能安全初始化 SwipeControl 等模板。
+            control.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            var desired = control.DesiredSize;
+            var widthDip = Math.Max(
+                Catalog.SlotWidthDip,
+                Math.Ceiling(desired.Width) + 2.0 * Catalog.BleedMarginDip);
+            var heightDip = Math.Max(
+                Catalog.SlotHeightDip,
+                Math.Ceiling(desired.Height) + 2.0 * Catalog.BleedMarginDip);
+            Host.ColumnDefinitions[idx].Width = new GridLength(widthDip, GridUnitType.Pixel);
+            slotHost.Width = widthDip;
+            slotHost.Height = heightDip;
+        }
+
+        Host.UpdateLayout();
+        _renderingTicks = 0;
+        _captureStarted = 0;
+        _settleStarted = false;
+        return true;
+    }
+
+    /// <summary>
+    /// 等待窗口 resize 生效后才开始 350ms 动画收敛计时，避免在旧尺寸上等待。
+    /// </summary>
     private void StartCaptureLoop()
     {
+        if (SizeMatchesTarget())
+        {
+            BeginSettle();
+            return;
+        }
+
+        Host.SizeChanged += OnHostSizeChangedForCapture;
+        // 兜底：窗口管理器未回报尺寸变化时，3 秒后仍按当前布局继续采集。
+        _resizeWatchdog = DispatcherQueue.CreateTimer();
+        _resizeWatchdog.Interval = TimeSpan.FromSeconds(3);
+        _resizeWatchdog.IsRepeating = false;
+        _resizeWatchdog.Tick += (_, _) => BeginSettle();
+        _resizeWatchdog.Start();
+    }
+
+    private void OnHostSizeChangedForCapture(object sender, SizeChangedEventArgs e)
+    {
+        if (SizeMatchesTarget())
+        {
+            BeginSettle();
+        }
+    }
+
+    private bool SizeMatchesTarget() =>
+        Math.Abs(Host.ActualWidth - _targetWidthDip) <= 1.5 &&
+        Math.Abs(Host.ActualHeight - _targetHeightDip) <= 1.5;
+
+    private void BeginSettle()
+    {
+        if (_settleStarted)
+        {
+            return;
+        }
+
+        _settleStarted = true;
+        Host.SizeChanged -= OnHostSizeChangedForCapture;
+        _resizeWatchdog?.Stop();
+        _resizeWatchdog = null;
+
+        _settle.Restart();
+        _renderingTicks = 0;
         CompositionTarget.Rendering += OnCompositionRendering;
 
         // 兜底：远程桌面/最小化等场景可能收不到渲染回调，超时后仍然尝试截图。
@@ -112,18 +293,58 @@ public sealed partial class CaptureWindow : Window
         // 焦点必须在控件进入可视树并获得一个渲染帧之后申请。
         if (_renderingTicks == 1)
         {
-            Catalog.ApplyFocus(_control!, ActiveCase.State);
+            foreach (var (captureCase, _, control) in _activeSlots)
+            {
+                Catalog.ApplyFocus(control, captureCase.State);
+            }
         }
 
-        // 至少 3 个渲染帧，并等待 350ms 让 VisualState 动画收敛：
-        // ToggleSwitch 的开/关过渡约 200ms，过早截图会拍到半透明强调色轨道，
-        // 让「已选中」基线变成动画中间帧。
+        // ProgressRing 的不确定动画由 AnimatedVisualPlayer 驱动，属于合成动画，
+        // 不受 Timeline.AllowDependentAnimations 影响。前两个渲染帧内停止播放器，
+        // 让所有采集都落在同一初始帧上。
+        if (_renderingTicks <= 2)
+        {
+            foreach (var (_, _, control) in _activeSlots)
+            {
+                FreezeAnimations(control);
+            }
+        }
+
+        // 同一拼版内的所有状态共享这一次 350ms VisualState 动画收敛等待。
         if (_renderingTicks < 3 || _settle.ElapsedMilliseconds < 350)
         {
             return;
         }
 
         BeginCapture(warning: null);
+    }
+
+    /// <summary>ProgressRing 冻结帧的归一化播放进度（取动画中段的稳定弧段）。</summary>
+    private static readonly double FrozenRingProgress =
+        double.TryParse(
+            Environment.GetEnvironmentVariable("PROGRESS_RING_FRAME"),
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var progress)
+            ? progress
+            : 0.4;
+
+    /// <summary>
+    /// 递归停止模板内的合成动画播放器（ProgressRing 的不确定动画），并固定到指定进度。
+    /// </summary>
+    private static void FreezeAnimations(DependencyObject root)
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var index = 0; index < count; index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is AnimatedVisualPlayer player)
+            {
+                player.Stop();
+                player.SetProgress(FrozenRingProgress);
+            }
+            FreezeAnimations(child);
+        }
     }
 
     private void BeginCapture(string? warning)
@@ -141,47 +362,119 @@ public sealed partial class CaptureWindow : Window
             Fatal.Report(warning);
         }
 
-        _ = CaptureAsync();
+        _ = CaptureSheetAsync();
     }
 
-    private async Task CaptureAsync()
+    private async Task CaptureSheetAsync()
     {
+        const int maxAttempts = 3;
+
         try
         {
             var outputDirectory = Path.GetFullPath(_options.OutputDirectory);
             Directory.CreateDirectory(outputDirectory);
 
-            var control = _control!;
-            var bitmap = new RenderTargetBitmap();
-            await bitmap.RenderAsync(Host);
+            byte[]? sheetPixels = null;
+            var sheetWidth = 0;
+            var sheetHeight = 0;
+            var scale = 1.0;
+            List<SlotPixelRegion>? regions = null;
+            bool[]? valid = null;
 
-            var pixelBuffer = await bitmap.GetPixelsAsync();
-            var pixelBytes = new byte[checked((int)pixelBuffer.Length)];
-            using (var pixelReader = DataReader.FromBuffer(pixelBuffer))
+            // 截图后必须在 controlBounds 内检测到非背景像素；失败重试最多 3 次，
+            // 仍失败则整例失败并跳过落盘，避免把空白图写入参考集。
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
-                pixelReader.ReadBytes(pixelBytes);
+                var bitmap = new RenderTargetBitmap();
+                await bitmap.RenderAsync(Host);
+
+                var pixelBuffer = await bitmap.GetPixelsAsync();
+                var pixels = new byte[checked((int)pixelBuffer.Length)];
+                using (var pixelReader = DataReader.FromBuffer(pixelBuffer))
+                {
+                    pixelReader.ReadBytes(pixels);
+                }
+
+                sheetPixels = pixels;
+                sheetWidth = bitmap.PixelWidth;
+                sheetHeight = bitmap.PixelHeight;
+                scale = Host.XamlRoot?.RasterizationScale ?? 1.0;
+
+                regions = BuildSlotRegions(scale, sheetWidth, sheetHeight);
+                valid = new bool[regions.Count];
+                var allValid = true;
+                for (var index = 0; index < regions.Count; index++)
+                {
+                    valid[index] = HasNonBackgroundPixels(sheetPixels, sheetWidth, sheetHeight, regions[index]);
+                    if (!valid[index])
+                    {
+                        allValid = false;
+                    }
+                }
+
+                if (allValid)
+                {
+                    break;
+                }
+
+                if (attempt < maxAttempts)
+                {
+                    await Task.Delay(150);
+                }
             }
 
-            using var encodedStream = new InMemoryRandomAccessStream();
-            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, encodedStream);
-            encoder.SetPixelData(
-                BitmapPixelFormat.Bgra8,
-                BitmapAlphaMode.Premultiplied,
-                (uint)bitmap.PixelWidth,
-                (uint)bitmap.PixelHeight,
-                96,
-                96,
-                pixelBytes);
-            await encoder.FlushAsync();
+            if (sheetPixels is null || regions is null || valid is null)
+            {
+                throw new InvalidOperationException("RenderTargetBitmap returned no pixels");
+            }
 
-            var pngBytes = await ReadStreamAsync(encodedStream);
-            var baseName = $"{Catalog.CanonicalName(ActiveCase.ControlName)}_{ActiveCase.State.ToLowerInvariant()}_{ActiveCase.Theme}";
-            var fileName = $"{baseName}.png";
-            var pngPath = Path.Combine(outputDirectory, fileName);
-            await File.WriteAllBytesAsync(pngPath, pngBytes);
+            // 可选保留拼版总览图供人工速览
+            if (_options.SaveContactSheet)
+            {
+                var sheetName = $"{Catalog.CanonicalName(ActiveSheet.ControlName)}_{ActiveSheet.Theme}_{ActiveSheet.Backdrop}_sheet.png";
+                var sheetPath = Path.Combine(outputDirectory, sheetName);
+                await WriteBgraPngAsync(sheetPath, sheetWidth, sheetHeight, sheetPixels);
+            }
 
-            await WriteMetaAsync(outputDirectory, baseName, bitmap, control);
-            Console.Out.WriteLine($"已写出 {pngPath}");
+            for (var index = 0; index < _activeSlots.Count; index++)
+            {
+                var (captureCase, _, control) = _activeSlots[index];
+                var baseName = captureCase.FileBaseName();
+
+                if (!valid[index])
+                {
+                    _failedCount++;
+                    Environment.ExitCode = 1;
+                    Console.Error.WriteLine(
+                        $"[fail] {baseName}: no non-background pixels within controlBounds after {maxAttempts} attempts; skipped");
+                    continue;
+                }
+
+                var region = regions[index];
+                var croppedBytes = CropBgraRegion(
+                    sheetPixels,
+                    sheetWidth,
+                    sheetHeight,
+                    region.CropX,
+                    region.CropY,
+                    region.CropWidth,
+                    region.CropHeight);
+
+                var pngPath = Path.Combine(outputDirectory, $"{baseName}.png");
+                await WriteBgraPngAsync(pngPath, region.CropWidth, region.CropHeight, croppedBytes);
+
+                await WriteMetaAsync(
+                    outputDirectory,
+                    baseName,
+                    captureCase,
+                    region.CropWidth,
+                    region.CropHeight,
+                    region.LocalBoundsDip,
+                    control);
+
+                _capturedCount++;
+                Console.Out.WriteLine($"已写出 {pngPath} ({region.CropWidth}x{region.CropHeight})");
+            }
         }
         catch (Exception ex)
         {
@@ -191,81 +484,252 @@ public sealed partial class CaptureWindow : Window
             return;
         }
 
-        Advance();
+        AdvanceToNextUncachedOrStart(initial: false);
     }
 
-    /// <summary>进入下一个用例；全部完成后退出进程。</summary>
-    private void Advance()
+    /// <summary>单个槽位在拼版像素坐标系中的裁剪框、控件区域与背景采样点。</summary>
+    private readonly record struct SlotPixelRegion(
+        int CropX,
+        int CropY,
+        int CropWidth,
+        int CropHeight,
+        int ControlLeft,
+        int ControlTop,
+        int ControlRight,
+        int ControlBottom,
+        int BackgroundX,
+        int BackgroundY,
+        Windows.Foundation.Rect LocalBoundsDip);
+
+    /// <summary>按每个槽位中的控件边界 + 16 DIP 出血边距计算紧凑裁剪框。</summary>
+    private List<SlotPixelRegion> BuildSlotRegions(double scale, int sheetWidth, int sheetHeight)
     {
-        _caseIndex++;
-        if (_caseIndex >= _cases.Count)
+        var regions = new List<SlotPixelRegion>(_activeSlots.Count);
+        var bleedPx = (int)Math.Ceiling(Catalog.BleedMarginDip * scale);
+
+        foreach (var (_, slotHost, control) in _activeSlots)
         {
-            Application.Current.Exit();
-            return;
+            var boundsInHost = control
+                .TransformToVisual(Host)
+                .TransformBounds(new Windows.Foundation.Rect(0, 0, control.ActualWidth, control.ActualHeight));
+
+            var ctrlLeftPx = (int)Math.Floor(boundsInHost.X * scale);
+            var ctrlTopPx = (int)Math.Floor(boundsInHost.Y * scale);
+            var ctrlRightPx = (int)Math.Ceiling((boundsInHost.X + boundsInHost.Width) * scale);
+            var ctrlBottomPx = (int)Math.Ceiling((boundsInHost.Y + boundsInHost.Height) * scale);
+
+            var slotBoundsInHost = slotHost
+                .TransformToVisual(Host)
+                .TransformBounds(new Windows.Foundation.Rect(0, 0, slotHost.ActualWidth, slotHost.ActualHeight));
+            var slotMinX = Math.Max(0, (int)Math.Floor(slotBoundsInHost.X * scale));
+            var slotMinY = Math.Max(0, (int)Math.Floor(slotBoundsInHost.Y * scale));
+            var slotMaxX = Math.Min(sheetWidth, (int)Math.Ceiling((slotBoundsInHost.X + slotBoundsInHost.Width) * scale));
+            var slotMaxY = Math.Min(sheetHeight, (int)Math.Ceiling((slotBoundsInHost.Y + slotBoundsInHost.Height) * scale));
+
+            // 紧凑裁剪框：限制在当前槽位内，防止相邻状态槽位互相串入视野。
+            var cropX = Math.Clamp(ctrlLeftPx - bleedPx, slotMinX, Math.Max(slotMinX, sheetWidth - 1));
+            var cropY = Math.Clamp(ctrlTopPx - bleedPx, slotMinY, Math.Max(slotMinY, sheetHeight - 1));
+            var cropRight = Math.Clamp(ctrlRightPx + bleedPx, cropX + 1, Math.Max(cropX + 1, slotMaxX));
+            var cropBottom = Math.Clamp(ctrlBottomPx + bleedPx, cropY + 1, Math.Max(cropY + 1, slotMaxY));
+            var cropWidth = cropRight - cropX;
+            var cropHeight = cropBottom - cropY;
+
+            var localBoundsDip = new Windows.Foundation.Rect(
+                boundsInHost.X - (cropX / scale),
+                boundsInHost.Y - (cropY / scale),
+                boundsInHost.Width,
+                boundsInHost.Height);
+
+            regions.Add(new SlotPixelRegion(
+                cropX,
+                cropY,
+                cropWidth,
+                cropHeight,
+                ctrlLeftPx,
+                ctrlTopPx,
+                ctrlRightPx,
+                ctrlBottomPx,
+                Math.Clamp(slotMinX, 0, sheetWidth - 1),
+                Math.Clamp(slotMinY, 0, sheetHeight - 1),
+                localBoundsDip));
         }
 
-        if (!LoadCase(ActiveCase))
-        {
-            Environment.ExitCode = 2;
-            Application.Current.Exit();
-            return;
-        }
-
-        StartCaptureLoop();
+        return regions;
     }
 
-    private void ResizeClientArea()
+    /// <summary>
+    /// 在 controlBounds 像素范围内断言至少存在一个与槽位背景不同的像素。
+    /// 控件边界越出图像时直接判失败，避免把被裁碎的控件当成有效参考。
+    /// </summary>
+    private static bool HasNonBackgroundPixels(
+        byte[] pixels,
+        int width,
+        int height,
+        SlotPixelRegion region)
+    {
+        if (region.ControlLeft < 0 ||
+            region.ControlTop < 0 ||
+            region.ControlRight > width ||
+            region.ControlBottom > height ||
+            region.ControlRight <= region.ControlLeft ||
+            region.ControlBottom <= region.ControlTop)
+        {
+            return false;
+        }
+
+        var backgroundOffset = (region.BackgroundY * width + region.BackgroundX) * 4;
+        var backgroundBlue = pixels[backgroundOffset];
+        var backgroundGreen = pixels[backgroundOffset + 1];
+        var backgroundRed = pixels[backgroundOffset + 2];
+
+        for (var y = region.ControlTop; y < region.ControlBottom; y++)
+        {
+            var rowOffset = y * width;
+            for (var x = region.ControlLeft; x < region.ControlRight; x++)
+            {
+                var offset = (rowOffset + x) * 4;
+                if (Math.Abs(pixels[offset] - backgroundBlue) > 2 ||
+                    Math.Abs(pixels[offset + 1] - backgroundGreen) > 2 ||
+                    Math.Abs(pixels[offset + 2] - backgroundRed) > 2)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static byte[] CropBgraRegion(
+        byte[] source,
+        int sourceWidth,
+        int sourceHeight,
+        int x,
+        int y,
+        int width,
+        int height)
+    {
+        var dst = new byte[width * height * 4];
+        for (var row = 0; row < height; row++)
+        {
+            var srcY = Math.Clamp(y + row, 0, sourceHeight - 1);
+            var srcOffset = (srcY * sourceWidth + x) * 4;
+            var dstOffset = row * width * 4;
+            System.Buffer.BlockCopy(source, srcOffset, dst, dstOffset, width * 4);
+        }
+
+        return dst;
+    }
+
+    private static async Task WriteBgraPngAsync(string pngPath, int width, int height, byte[] pixelBytes)
+    {
+        using var encodedStream = new InMemoryRandomAccessStream();
+        var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, encodedStream);
+        encoder.SetPixelData(
+            BitmapPixelFormat.Bgra8,
+            BitmapAlphaMode.Premultiplied,
+            (uint)width,
+            (uint)height,
+            96,
+            96,
+            pixelBytes);
+        await encoder.FlushAsync();
+
+        var pngBytes = await ReadStreamAsync(encodedStream);
+        await File.WriteAllBytesAsync(pngPath, pngBytes);
+    }
+
+    private void ResizeClientAreaForSheet()
     {
         try
         {
-            // ResizeClient 的单位是物理像素；Host 的 ActualWidth 是 DIP，二者之比即光栅化比例。
-            AppWindow.ResizeClient(new SizeInt32(_options.Width, _options.Height));
+            var scale = Host.XamlRoot?.RasterizationScale ?? 1.0;
+            if (!_options.Batch)
+            {
+                _targetWidthDip = _options.Width;
+                _targetHeightDip = _options.Height;
+                AppWindow.ResizeClient(new SizeInt32(_options.Width, _options.Height));
+                return;
+            }
+
+            var widthDip = 0.0;
+            var heightDip = 0.0;
+            foreach (var (_, slotHost, _) in _activeSlots)
+            {
+                widthDip += slotHost.Width;
+                heightDip = Math.Max(heightDip, slotHost.Height);
+            }
+
+            _targetWidthDip = Math.Max(260.0, widthDip);
+            _targetHeightDip = Math.Max(96.0, heightDip);
+            var targetWidth = Math.Clamp((int)Math.Ceiling(_targetWidthDip * scale), 260, 8192);
+            var targetHeight = Math.Clamp((int)Math.Ceiling(_targetHeightDip * scale), 96, 8192);
+            AppWindow.ResizeClient(new SizeInt32(targetWidth, targetHeight));
         }
         catch (Exception ex)
         {
+            _targetWidthDip = Math.Max(1.0, Host.ActualWidth);
+            _targetHeightDip = Math.Max(1.0, Host.ActualHeight);
             Fatal.Report($"调整窗口大小失败：{ex.Message}");
         }
     }
 
-    private async Task WriteMetaAsync(string outputDirectory, string baseName, RenderTargetBitmap bitmap, FrameworkElement control)
+    private async Task WriteMetaAsync(
+        string outputDirectory,
+        string baseName,
+        CaptureCase captureCase,
+        int imagePixelWidth,
+        int imagePixelHeight,
+        Windows.Foundation.Rect localBounds,
+        FrameworkElement control)
     {
-        var bounds = control
-            .TransformToVisual(Host)
-            .TransformBounds(new Windows.Foundation.Rect(0, 0, control.ActualWidth, control.ActualHeight));
-
-        var appSdkAssembly = typeof(Microsoft.UI.Xaml.Application).Assembly.GetName();
+        var appSdkAssembly = typeof(Application).Assembly.GetName();
+        var sdkVersion = appSdkAssembly.Version?.ToString() ?? "unknown";
+        var osVersion = Environment.OSVersion.Version.ToString();
+        var scale = Host.XamlRoot?.RasterizationScale ?? 1.0;
+        var canonical = Catalog.CanonicalName(captureCase.ControlName);
+        var fingerprint = Catalog.ComputeFingerprint(
+            canonical,
+            captureCase.State,
+            captureCase.Theme,
+            captureCase.Backdrop,
+            scale,
+            sdkVersion,
+            osVersion);
 
         var meta = new
         {
             capturedAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
-            control = Catalog.CanonicalName(ActiveCase.ControlName),
-            state = ActiveCase.State.ToLowerInvariant(),
-            theme = ActiveCase.Theme,
+            control = canonical,
+            state = captureCase.State.ToLowerInvariant(),
+            theme = captureCase.Theme,
+            backdrop = captureCase.Backdrop,
+            fingerprint,
+            explicitWidth = Catalog.HasExplicitWidth(canonical),
             processBitness = Environment.Is64BitProcess ? "64-bit" : "32-bit",
             processArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),
             osVersion = RuntimeInformation.OSDescription,
-            osVersionNumber = Environment.OSVersion.Version.ToString(),
-            windowsAppSdkAssemblyVersion = appSdkAssembly.Version?.ToString(),
+            osVersionNumber = osVersion,
+            windowsAppSdkAssemblyVersion = sdkVersion,
             windowsAppSdkAssemblyFullName = appSdkAssembly.FullName,
-            rasterizationScale = Host.XamlRoot?.RasterizationScale ?? 1.0,
+            rasterizationScale = scale,
             hostActualWidth = Host.ActualWidth,
             hostActualHeight = Host.ActualHeight,
             requestedWindowWidth = _options.Width,
             requestedWindowHeight = _options.Height,
-            imagePixelWidth = bitmap.PixelWidth,
-            imagePixelHeight = bitmap.PixelHeight,
+            imagePixelWidth,
+            imagePixelHeight,
             controlBounds = new
             {
-                x = bounds.X,
-                y = bounds.Y,
-                width = bounds.Width,
-                height = bounds.Height,
+                x = Math.Round(localBounds.X, 2),
+                y = Math.Round(localBounds.Y, 2),
+                width = Math.Round(localBounds.Width, 2),
+                height = Math.Round(localBounds.Height, 2),
             },
             controlFocusState = control.FocusState.ToString(),
             pngFile = $"{baseName}.png",
         };
 
-        // 每个用例写独立 JSON：批量采集时不会互相覆盖，差分器可直接按同名读取。
         var json = JsonSerializer.Serialize(meta, new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(Path.Combine(outputDirectory, $"{baseName}.json"), json);
     }
@@ -281,14 +745,15 @@ public sealed partial class CaptureWindow : Window
     }
 }
 
-/// <summary>一个截图用例。</summary>
+/// <summary>一个截图用例（四维坐标：控件 × 状态 × 主题 × 后景底板）。</summary>
 public sealed class CaptureCase
 {
-    public CaptureCase(string controlName, string state, string theme)
+    public CaptureCase(string controlName, string state, string theme, string backdrop = "solid")
     {
         ControlName = controlName;
         State = state;
         Theme = theme;
+        Backdrop = backdrop;
     }
 
     public string ControlName { get; }
@@ -296,6 +761,41 @@ public sealed class CaptureCase
     public string State { get; }
 
     public string Theme { get; }
+
+    public string Backdrop { get; }
+
+    /// <summary>
+    /// 生成输出文件基名：默认 solid 后景保持与既有 `<Control>_<state>_<theme>` 完全兼容；
+    /// 非 solid 后景追加 `_<backdrop>` 后缀。
+    /// </summary>
+    public string FileBaseName()
+    {
+        var canonical = Catalog.CanonicalName(ControlName);
+        var state = State.ToLowerInvariant();
+        return Backdrop == "solid"
+            ? $"{canonical}_{state}_{Theme}"
+            : $"{canonical}_{state}_{Theme}_{Backdrop}";
+    }
+}
+
+/// <summary>按「控件 × 主题 × 后景」组织的单张状态拼版批次。</summary>
+public sealed class ContactSheetBatch
+{
+    public ContactSheetBatch(string controlName, string theme, string backdrop, IReadOnlyList<CaptureCase> cases)
+    {
+        ControlName = controlName;
+        Theme = theme;
+        Backdrop = backdrop;
+        Cases = cases;
+    }
+
+    public string ControlName { get; }
+
+    public string Theme { get; }
+
+    public string Backdrop { get; }
+
+    public IReadOnlyList<CaptureCase> Cases { get; }
 }
 
 /// <summary>
@@ -309,7 +809,8 @@ public sealed class CaptureOptions
 
     private const string Usage =
         "用法: WinUiReference --out <目录> [--control <名称>] [--state normal|disabled|checked|focused] " +
-        "[--theme light|dark] [--width <像素>] [--height <像素>] [--batch]";
+        "[--theme light|dark] [--backdrop solid|mica|mica_alt|acrylic|all] " +
+        "[--width <像素>] [--height <像素>] [--batch] [--no-cache] [--save-sheet]";
 
     public string OutputDirectory { get; private init; } = DefaultOutputDirectory;
 
@@ -319,39 +820,68 @@ public sealed class CaptureOptions
 
     public string Theme { get; private init; } = "light";
 
+    public string Backdrop { get; private init; } = "solid";
+
     public int Width { get; private init; } = DefaultWidth;
 
     public int Height { get; private init; } = DefaultHeight;
 
-    /// <summary>批量模式：一次进程内跑完所有试点组合（normal / disabled / checked）。</summary>
+    /// <summary>批量模式：按状态拼版跑完所有试点组合。</summary>
     public bool Batch { get; private init; }
 
-    /// <summary>展开本次运行要采集的全部用例。</summary>
-    public IReadOnlyList<CaptureCase> BuildCases()
+    /// <summary>`--control` 是否由命令行显式给出；批量模式下据此只采集该控件。</summary>
+    public bool ExplicitControl { get; private init; }
+
+    /// <summary>禁用指纹缓存，强制重新截图。</summary>
+    public bool NoCache { get; private init; }
+
+    /// <summary>同时落盘未切分的 `_sheet.png` 拼版大图。</summary>
+    public bool SaveContactSheet { get; private init; }
+
+    /// <summary>展开本次运行要采集的全部状态拼版批次。</summary>
+    public IReadOnlyList<ContactSheetBatch> BuildSheets()
     {
         if (!Batch)
         {
-            return new[] { new CaptureCase(ControlName, State, Theme) };
+            var single = new CaptureCase(ControlName, State, Theme, Backdrop);
+            return new[]
+            {
+                new ContactSheetBatch(ControlName, Theme, Backdrop, new[] { single }),
+            };
         }
 
-        var cases = new List<CaptureCase>();
-        foreach (var control in Catalog.ControlNames)
-        {
-            foreach (var state in Catalog.ImplementedStates)
-            {
-                if (state == "focused" || !Catalog.SupportsState(control, state))
-                {
-                    continue;
-                }
+        var backdrops = Backdrop == "all"
+            ? Catalog.BackdropKinds
+            : new[] { Backdrop };
 
+        var sheets = new List<ContactSheetBatch>();
+        IReadOnlyList<string> controls = ExplicitControl ? new[] { ControlName } : Catalog.ControlNames;
+        foreach (var backdrop in backdrops)
+        {
+            foreach (var control in controls)
+            {
                 foreach (var theme in new[] { "light", "dark" })
                 {
-                    cases.Add(new CaptureCase(control, state, theme));
+                    var states = new List<CaptureCase>();
+                    foreach (var state in Catalog.ImplementedStates)
+                    {
+                        if (state == "focused" || !Catalog.SupportsState(control, state))
+                        {
+                            continue;
+                        }
+
+                        states.Add(new CaptureCase(control, state, theme, backdrop));
+                    }
+
+                    if (states.Count > 0)
+                    {
+                        sheets.Add(new ContactSheetBatch(control, theme, backdrop, states));
+                    }
                 }
             }
         }
 
-        return cases;
+        return sheets;
     }
 
     public static bool TryParse(string[] args, out CaptureOptions options, out string error)
@@ -363,9 +893,13 @@ public sealed class CaptureOptions
         var controlName = "Button";
         var state = "normal";
         var theme = "light";
+        var backdrop = "solid";
         var width = DefaultWidth;
         var height = DefaultHeight;
         var batch = false;
+        var noCache = false;
+        var saveSheet = false;
+        var explicitControl = false;
 
         for (var i = 1; i < args.Length; i++)
         {
@@ -378,6 +912,14 @@ public sealed class CaptureOptions
             {
                 case "--batch":
                     batch = true;
+                    break;
+
+                case "--no-cache":
+                    noCache = true;
+                    break;
+
+                case "--save-sheet":
+                    saveSheet = true;
                     break;
 
                 case "--out":
@@ -399,6 +941,7 @@ public sealed class CaptureOptions
                     }
 
                     controlName = value;
+                    explicitControl = true;
                     i++;
                     break;
 
@@ -421,6 +964,17 @@ public sealed class CaptureOptions
                     }
 
                     theme = value.ToLowerInvariant();
+                    i++;
+                    break;
+
+                case "--backdrop":
+                    if (value is null)
+                    {
+                        error = UsageError("--backdrop 缺少后景类型");
+                        return false;
+                    }
+
+                    backdrop = value.ToLowerInvariant();
                     i++;
                     break;
 
@@ -450,8 +1004,20 @@ public sealed class CaptureOptions
             }
         }
 
+        if (backdrop != "all" && !Catalog.BackdropKinds.Contains(backdrop, StringComparer.OrdinalIgnoreCase))
+        {
+            error = UsageError($"未知后景类型：{backdrop}，可用值：{string.Join(", ", Catalog.BackdropKinds)}, all");
+            return false;
+        }
+
         if (!batch)
         {
+            if (backdrop == "all")
+            {
+                error = UsageError("单用例模式不支持 --backdrop all，请指定具体后景或加 --batch");
+                return false;
+            }
+
             if (!Catalog.ControlNames.Contains(controlName, StringComparer.OrdinalIgnoreCase))
             {
                 error = UsageError($"未知控件：{controlName}{Environment.NewLine}可用控件：{string.Join(", ", Catalog.ControlNames)}");
@@ -491,9 +1057,13 @@ public sealed class CaptureOptions
             ControlName = Catalog.CanonicalName(controlName),
             State = state,
             Theme = theme,
+            Backdrop = backdrop,
             Width = width,
             Height = height,
             Batch = batch,
+            ExplicitControl = explicitControl,
+            NoCache = noCache,
+            SaveContactSheet = saveSheet,
         };
 
         return true;

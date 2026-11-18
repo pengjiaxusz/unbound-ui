@@ -28,6 +28,7 @@ fn main() {
     // 组合使用；它不是单一控件，若纳入目录会为每个组合件各生成一个 `WidgetCatalogId`，
     // 与 `WidgetCatalogId::COUNT` 的控件词汇表契约冲突，故按组合层处理。
     const ALLOWED_BARE_MODS: &[&str] = &[
+        "canonical",
         "catalog",
         "diff",
         "ergonomics",
