@@ -17,24 +17,86 @@ use unbound_gpu::{Camera, Renderer};
 use unbound_math::color::Color;
 use unbound_math::{Rect, Vec2};
 use unbound_theme::{Palette, ThemeKind, ThemeLut, Token};
+use unbound_widgets::catalog::{emit_widget_with_shaper, CatalogParams};
+use unbound_widgets::title_bar::{TitleBarChrome, WindowCaptionButton, WindowCaptionKind};
 use unbound_widgets::{
     ButtonDesc, ButtonVariant, CheckboxDesc, ControlState, PointerPhase, SelectDesc, SliderDesc,
-    SwitchDesc, TextCtx, TextInputDesc, UiWidget,
+    SwitchDesc, TextCtx, TextInputDesc, UiWidget, WidgetCatalogId,
 };
 
 use crate::gallery::{palette, Gallery, Labels};
 use crate::shot::write_bgra_png;
 use crate::theme;
 
-/// 试点控件清单，与 `tools/winui-reference/Catalog.cs` 一一对应。
-pub const PILOT_CONTROLS: [&str; 6] = [
+/// 已接入拼版采集与 ROI 差分的全部基准控件，与 `tools/winui-reference/Catalog.cs` 一一对应。
+///
+/// 前 6 个是首批试点，其后 12 个为「基础输入与文本类」批次，最后 28 个为
+/// 「导航、浮层、集合与日期类」批次。控件名统一使用 WinUI 3 官方规范名。
+pub const SUPPORTED_CONTROLS: [&str; 46] = [
+    // 首批试点（6）
     "Button",
     "CheckBox",
     "ToggleSwitch",
     "Slider",
     "ComboBox",
     "TextBox",
+    // 第一批：基础输入与文本类（12）
+    "ToggleButton",
+    "SplitButton",
+    "RadioButton",
+    "RatingControl",
+    "ColorPicker",
+    "NumberBox",
+    "AutoSuggestBox",
+    "RichTextBlock",
+    "ProgressBar",
+    "ProgressRing",
+    "InfoBadge",
+    "ToolTip",
+    // 第二批：导航、浮层、集合与日期类（28）
+    "InfoBar",
+    "TeachingTip",
+    "ContentDialog",
+    "Flyout",
+    "MenuFlyout",
+    "MenuBar",
+    "CommandBar",
+    "NavigationView",
+    "TabView",
+    "Pivot",
+    "BreadcrumbBar",
+    "SelectorBar",
+    "PipsPager",
+    "Expander",
+    "SplitView",
+    "Border",
+    "Card",
+    "StackPanel",
+    "ScrollView",
+    "TreeView",
+    "ListView",
+    "FlipView",
+    "CalendarView",
+    "TimePicker",
+    "PersonPicture",
+    "Image",
+    "FontIcon",
+    "TitleBar",
 ];
+
+/// 把一个 WinUI 3 规范名解析为目录标识。
+///
+/// `TeachingTip`、`Border` / `Card` 在目录中分别由 `Toast` 与 `Containers`
+/// 承担对应形态；`TitleBar` 不在业务目录内，由独立分支绘制。
+#[must_use]
+pub fn catalog_id_for(control: &str) -> Option<unbound_widgets::WidgetCatalogId> {
+    match control {
+        "TeachingTip" => Some(unbound_widgets::WidgetCatalogId::Toast),
+        "Border" | "Card" => Some(unbound_widgets::WidgetCatalogId::Containers),
+        "TitleBar" => None,
+        other => unbound_widgets::WidgetCatalogId::from_winui3_name(other),
+    }
+}
 
 /// 支持的确定性后景合成底板类型。
 pub const BACKDROP_KINDS: [&str; 4] = ["solid", "mica", "mica_alt", "acrylic"];
@@ -333,18 +395,16 @@ pub fn compute_source_fingerprint(
         .as_bytes(),
     );
 
-    let widget_file = match case.control {
-        "Button" => "crates/unbound-widgets/src/button.rs",
-        "CheckBox" => "crates/unbound-widgets/src/checkbox.rs",
-        "ToggleSwitch" => "crates/unbound-widgets/src/switch.rs",
-        "Slider" => "crates/unbound-widgets/src/slider.rs",
-        "ComboBox" => "crates/unbound-widgets/src/select.rs",
-        "TextBox" => "crates/unbound-widgets/src/text_input.rs",
-        _ => "",
+    let widget_file = if case.control == "TitleBar" {
+        "crates/unbound-widgets/src/title_bar.rs".to_owned()
+    } else {
+        catalog_id_for(case.control)
+            .map(|id| format!("crates/unbound-widgets/src/{}.rs", id.module_name()))
+            .unwrap_or_default()
     };
 
     for path in [
-        widget_file,
+        widget_file.as_str(),
         "crates/unbound-widgets/src/primitive.rs",
         "crates/unbound-theme/src/win11.rs",
         "apps/showcase/src/parity.rs",
@@ -452,10 +512,93 @@ fn emit_case(
             );
             size
         }
-        other => return Err(format!("unknown pilot control: {other}")),
+        "TitleBar" => {
+            // 标题栏由 chrome 与三枚窗口控制按钮组成；三者都实现 `UiWidget`，
+            // 因此固有高度直接取自真实描述符（32px）。
+            let chrome = TitleBarChrome::new(!control.disabled);
+            let chrome_size = chrome.intrinsic_size(text_ctx);
+            push(
+                scene,
+                chrome.emit_laid_out(NODE, rect, control, &(), text_ctx),
+            );
+            let caption_w = unbound_widgets::title_bar::TITLE_BAR_CAPTION_WIDTH;
+            let kinds = [
+                WindowCaptionKind::Minimize,
+                WindowCaptionKind::Maximize { maximized: false },
+                WindowCaptionKind::Close,
+            ];
+            let count = kinds.len();
+            for (index, kind) in kinds.into_iter().enumerate() {
+                let left = rect.max().x - caption_w * (count - index) as f32;
+                let button_rect = Rect::new(left, rect.origin.y, caption_w, rect.height());
+                let button = WindowCaptionButton::new(kind, rect.height()).focused(!control.disabled);
+                push(
+                    scene,
+                    button.emit_laid_out(NODE, button_rect, control, &(), text_ctx),
+                );
+            }
+            Vec2::new(rect.width(), chrome_size.y.max(rect.height()))
+        }
+        other => {
+            let id: WidgetCatalogId = catalog_id_for(other)
+                .ok_or_else(|| format!("unknown parity control: {other}"))?;
+            let params = CatalogParams {
+                value_norm: 0.5,
+                variant_idx: usize::from(checked),
+                show_icon: true,
+                bordered: true,
+                active: true,
+                compact: false,
+                read_only: false,
+                toggled: checked,
+                click_count: 0,
+            };
+            let output = emit_widget_with_shaper(id, NODE, control, rect, params, |text, origin, size| {
+                shape_at(text_ctx, text, origin, size)
+            });
+            push(scene, output);
+            // 没有实现 `UiWidget` 的组件暂时以参考边界作为固有尺寸；一旦其描述符
+            // 补齐 `intrinsic_size`，这里会自动被替换为真实测量值。
+            rect.size
+        }
     };
 
     Ok(intrinsic)
+}
+
+/// 按绝对起点与字号排版一行文本，供目录通用发射器复用同一套字形缓存。
+fn shape_at(
+    text_ctx: &mut TextCtx<'_>,
+    text: &str,
+    origin: Vec2,
+    size: f32,
+) -> Vec<unbound_text::GlyphQuad> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut style = unbound_text::TextStyle::sized(size * text_ctx.effective_raster_scale());
+    style.weight = 400;
+    let shaped = text_ctx.engine.shape(text, &style);
+    let mut quads = text_ctx.cache.quads_for(
+        text_ctx.engine,
+        &shaped,
+        Vec2::new(
+            origin.x * text_ctx.effective_raster_scale(),
+            origin.y * text_ctx.effective_raster_scale(),
+        ),
+        400,
+        false,
+    );
+    let scale = text_ctx.effective_raster_scale();
+    if (scale - 1.0).abs() > 1e-6 {
+        for quad in &mut quads {
+            quad.rect.origin.x /= scale;
+            quad.rect.origin.y /= scale;
+            quad.rect.size.x /= scale;
+            quad.rect.size.y /= scale;
+        }
+    }
+    quads
 }
 
 /// 把一次发射的图元与载荷追加到场景。

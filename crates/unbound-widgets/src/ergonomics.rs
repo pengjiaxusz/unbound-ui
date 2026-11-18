@@ -3327,7 +3327,13 @@ impl UiWidget for crate::autocomplete::AutoCompleteDesc {
     }
 
     fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
-        Vec2::new(self.rect.width().max(180.0), self.rect.height().max(34.0))
+        // AutoSuggestBox 与 NumberBox / TextBox 共用 32px 标准行高。
+        Vec2::new(
+            self.rect.width().max(180.0),
+            self.rect
+                .height()
+                .max(unbound_theme::typography::geometry::INPUT_HEIGHT),
+        )
     }
 
     fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {

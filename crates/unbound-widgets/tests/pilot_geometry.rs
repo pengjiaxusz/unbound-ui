@@ -8,8 +8,8 @@
 use unbound_math::Rect;
 use unbound_text::{GlyphCache, TextEngine};
 use unbound_widgets::{
-    ButtonDesc, ButtonVariant, CheckboxDesc, SelectDesc, SliderDesc, SwitchDesc, SwitchLayout,
-    TextCtx, TextInputDesc, UiWidget,
+    AutoCompleteDesc, ButtonDesc, ButtonVariant, CheckboxDesc, NumberInputDesc, SelectDesc,
+    SliderDesc, SwitchDesc, SwitchLayout, TextCtx, TextInputDesc, UiWidget,
 };
 
 /// 以 32px 标准高度构造试点控件并测量其固有尺寸。
@@ -66,6 +66,17 @@ fn the_combo_box_trigger_is_32px_tall() {
     let desc = SelectDesc::options(["Item 1", "Item 2", "Item 3"]).selected(0);
     let size = measure(desc);
     assert_eq!(size.y, 32.0, "ComboBox trigger height is 32px");
+}
+
+#[test]
+fn the_number_box_and_auto_suggest_box_share_the_32px_row() {
+    let number = measure(NumberInputDesc::new(Rect::ZERO, 0.0, 100.0));
+    assert_eq!(number.y, 32.0, "NumberBox height is 32px");
+    let suggest = measure(AutoCompleteDesc::new(Rect::ZERO, "Text", 3));
+    assert_eq!(
+        suggest.y, 32.0,
+        "AutoSuggestBox must not fall back to the old 34px height"
+    );
 }
 
 #[test]
