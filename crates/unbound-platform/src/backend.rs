@@ -169,13 +169,16 @@ pub(crate) mod style_bits {
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
 }
 
-/// 向窗口事件队列推入新事件，并对连续的窗口几何变化（`Resized`、`Moved`）与鼠标移动（`CursorMoved`）
+/// 向窗口事件队列推入新事件，并对同类的窗口几何变化（`Resized`、`Moved`）与鼠标移动（`CursorMoved`）
 /// 执行原地合并。
 ///
 /// 在 Win32 模态移动/缩放（`WM_ENTERSIZEMOVE`..`WM_EXITSIZEMOVE`）期间，操作系统会在单次
 /// `DispatchMessageW` 调用内高频派发数百条 `WM_SIZE` 与 `WM_MOVE`。若逐条排队而不合并，消息循环在
 /// 退出模态拖拽或单轮排空时会逐帧回放整条历史几何轨迹，在视觉上表现为极其缓慢的“滞后过渡动画”。
 /// 原地覆盖未消费的旧几何事件可确保任意时刻队列中最多只保留最后一次真实窗口尺寸与位置。
+///
+/// 合并是对整条队列查找同类事件后原地覆盖，因此同类事件在批内最多保留最后一条，且其队列位置
+/// 可能早于其间插入的其他事件；消费方不得依赖被合并事件的相对顺序。
 pub(crate) fn push_coalesced_event(events: &mut Vec<PlatformEvent>, event: PlatformEvent) {
     match event {
         PlatformEvent::Resized(extent) => {
