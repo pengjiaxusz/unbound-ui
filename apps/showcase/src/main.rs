@@ -1229,11 +1229,7 @@ impl Showcase {
 
         // 次级窗口始终使用不透明交换链，不参与后景模式：
         // 渲染前临时恢复不透明清屏，结束后还原主窗口的透明度设置。
-        let primary_clear_alpha = if self.shell().state.resolved_backdrop.uses_native_path() {
-            0.0
-        } else {
-            1.0
-        };
+        let primary_clear_alpha = self.shell().state.backdrop_plan.clear_alpha;
         let Some(renderer) = &mut self.renderer else {
             return Flow::Continue;
         };

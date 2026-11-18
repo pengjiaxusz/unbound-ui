@@ -49,9 +49,12 @@ impl MicaRequest {
         }
     }
 
-    /// 从后景计划给出的纹理规格构造请求。
+    /// 从后景计划给出的纹理规格与壁纸指纹构造请求。
     #[must_use]
-    pub fn from_texture(texture: &crate::plan::WallpaperTexture) -> Self {
+    pub fn from_texture(
+        texture: &crate::plan::WallpaperTexture,
+        wallpaper: Option<crate::wallpaper::WallpaperStamp>,
+    ) -> Self {
         Self {
             screen_width: texture.screen_width.max(1),
             screen_height: texture.screen_height.max(1),
@@ -63,7 +66,7 @@ impl MicaRequest {
             dark: texture.dark,
             max_width: texture.effective_max_width(),
             sigma: texture.effective_sigma(),
-            wallpaper: crate::wallpaper::wallpaper_stamp(),
+            wallpaper,
         }
     }
 

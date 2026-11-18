@@ -390,6 +390,58 @@ mod tests {
     }
 
     #[test]
+    fn deep_and_light_themes_only_change_the_texture_tint() {
+        let mut light_input = inputs(BackdropMode::SelfDrawn, true);
+        light_input.dark = false;
+        let mut dark_input = light_input;
+        dark_input.dark = true;
+        let light = BackdropPlan::derive(light_input);
+        let dark = BackdropPlan::derive(dark_input);
+        assert_eq!(light.resolved, dark.resolved);
+        assert_eq!(light.clear_alpha, dark.clear_alpha);
+        assert_eq!(light.uv, dark.uv);
+        assert_ne!(
+            light.texture.map(|texture| texture.dark),
+            dark.texture.map(|texture| texture.dark)
+        );
+    }
+
+    #[test]
+    fn uv_follows_several_window_positions_and_sizes() {
+        let cases = [
+            (
+                PixelRect::new(0, 0, 960, 540),
+                UvRect::new(0.0, 0.0, 0.5, 0.5),
+            ),
+            (
+                PixelRect::new(960, 540, 960, 540),
+                UvRect::new(0.5, 0.5, 0.5, 0.5),
+            ),
+            (
+                PixelRect::new(100, 50, 400, 300),
+                UvRect::new(
+                    100.0 / 1920.0,
+                    50.0 / 1080.0,
+                    400.0 / 1920.0,
+                    300.0 / 1080.0,
+                ),
+            ),
+        ];
+        for (window, expected) in cases {
+            assert_eq!(sample_uv(Some(window), Some(SCREEN)), expected);
+        }
+        // 主屏原点非零时必须减去原点，不能把副屏坐标直接归一化。
+        let offset_screen = PixelRect::new(100, 50, 1920, 1080);
+        assert_eq!(
+            sample_uv(
+                Some(PixelRect::new(580, 320, 960, 540)),
+                Some(offset_screen)
+            ),
+            UvRect::new(0.25, 0.25, 0.5, 0.5)
+        );
+    }
+
+    #[test]
     fn missing_geometry_skips_the_texture_but_keeps_the_path() {
         let mut input = inputs(BackdropMode::SelfDrawn, false);
         input.window_screen_rect = None;

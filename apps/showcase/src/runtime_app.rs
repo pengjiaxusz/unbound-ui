@@ -201,7 +201,7 @@ impl Application for GalleryApp {
         self.sync_backdrop_mode();
         // 只有自绘路径才需要生成、同步并绘制壁纸纹理；原生与关闭模式跳过，
         // 避免无意义的 CPU 与内存开销。
-        let draws_self_drawn = self.state.resolved_backdrop.draws_self_drawn_texture();
+        let draws_self_drawn = self.state.backdrop_plan.resolved.draws_self_drawn_texture();
         self.mica.set_enabled(draws_self_drawn);
         let was_mica_visible = self.mica.visible();
         let plan = self.state.backdrop_plan.clone();

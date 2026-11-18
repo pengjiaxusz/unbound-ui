@@ -17,8 +17,12 @@
 //! AppEvent::Custom { id, .. } if unbound_app::is_mica_ready_event(id) => DirtyFlags::ALL,
 //! ```
 
+use std::time::{Duration, Instant};
+
 use unbound_asset::AssetId;
-use unbound_backdrop::{BackdropGenerator, MicaRequest, UvRect, WallpaperTexture};
+use unbound_backdrop::{
+    wallpaper_stamp, BackdropGenerator, MicaRequest, UvRect, WallpaperStamp, WallpaperTexture,
+};
 use unbound_math::Rect;
 
 use crate::{AppEventSender, ViewBuilder};
@@ -44,6 +48,10 @@ pub struct MicaBackdrop {
     enabled: bool,
     /// 当前纹理在窗口内的归一化采样区域。
     uv: Rect,
+    /// 缓存的壁纸源指纹：避免每帧查询注册表与文件元数据。
+    wallpaper: Option<WallpaperStamp>,
+    /// 上次查询壁纸指纹的时间。
+    wallpaper_checked: Option<Instant>,
 }
 
 impl Default for MicaBackdrop {
@@ -55,6 +63,8 @@ impl Default for MicaBackdrop {
             visible: false,
             enabled: true,
             uv: Rect::new(0.0, 0.0, 1.0, 1.0),
+            wallpaper: None,
+            wallpaper_checked: None,
         }
     }
 }
@@ -105,12 +115,22 @@ impl MicaBackdrop {
             return false;
         }
         if let Some(texture) = texture {
-            self.generator
-                .sync(MicaRequest::from_texture(&texture), move || {
+            let now = Instant::now();
+            let stale = self
+                .wallpaper_checked
+                .is_none_or(|checked| now.duration_since(checked) >= Duration::from_secs(2));
+            if stale {
+                self.wallpaper = wallpaper_stamp();
+                self.wallpaper_checked = Some(now);
+            }
+            self.generator.sync(
+                MicaRequest::from_texture(&texture, self.wallpaper),
+                move || {
                     if let Some(sender) = wake {
                         sender.send_custom(MICA_READY_EVENT_ID, "");
                     }
-                });
+                },
+            );
         }
         let next = Rect::new(uv.x, uv.y, uv.width, uv.height);
         let changed = next != self.uv;
