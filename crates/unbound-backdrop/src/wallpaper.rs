@@ -30,6 +30,41 @@ pub fn wallpaper_path() -> Option<PathBuf> {
     }
 }
 
+/// 壁纸源指纹：路径、修改时间与文件大小。
+///
+/// 只用于判断“是否需要重新生成”，不参与纹理内容。幻灯片或动态壁纸拿不到静态
+/// 文件时为 `None`，此时与另一个 `None` 视为同一来源。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct WallpaperStamp {
+    /// 路径哈希。
+    pub path_hash: u64,
+    /// 修改时间（Unix 纪元秒）。
+    pub modified_secs: u64,
+    /// 修改时间（纳秒部分）。
+    pub modified_nanos: u32,
+    /// 文件字节数。
+    pub len: u64,
+}
+
+/// 读取当前壁纸源指纹；路径或元数据不可用时返回 `None`。
+#[must_use]
+pub fn wallpaper_stamp() -> Option<WallpaperStamp> {
+    use std::hash::{Hash, Hasher};
+
+    let path = wallpaper_path()?;
+    let metadata = std::fs::metadata(&path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let since_epoch = modified.duration_since(SystemTime::UNIX_EPOCH).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    Some(WallpaperStamp {
+        path_hash: hasher.finish(),
+        modified_secs: since_epoch.as_secs(),
+        modified_nanos: since_epoch.subsec_nanos(),
+        len: metadata.len(),
+    })
+}
+
 /// 读取并解码当前壁纸，命中缓存时零成本返回。
 ///
 /// 解码在锁外进行：4K 壁纸在 debug 构建下可达数百毫秒，不能阻塞同时到达的
@@ -74,6 +109,50 @@ pub fn load_wallpaper() -> Result<(Arc<DynamicImage>, SystemTime, u64), String> 
     });
     let entry = guard.as_ref().ok_or("wallpaper cache write failed")?;
     Ok((Arc::clone(&entry.image), modified, len))
+}
+
+/// 主屏在屏幕坐标系中的物理矩形。
+///
+/// 主屏原点固定为 `(0, 0)`；返回的是物理像素，与 `WM_MOVE` / `ClientToScreen`
+/// 使用的坐标系一致，可直接和窗口客户区矩形求交。
+#[must_use]
+pub fn primary_screen_rect() -> Option<crate::plan::PixelRect> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+
+        // SAFETY: 两个调用都是无参数的全局指标查询，不涉及指针或句柄。
+        let width = unsafe { GetSystemMetrics(SM_CXSCREEN) }.max(0) as u32;
+        let height = unsafe { GetSystemMetrics(SM_CYSCREEN) }.max(0) as u32;
+        (width > 0 && height > 0).then(|| crate::plan::PixelRect::new(0, 0, width, height))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
+/// 系统 DPI 缩放（`1.0` 对应 96 DPI）。
+///
+/// 主屏逻辑构图随缩放变化；自绘纹理把该值纳入失效条件。
+#[must_use]
+pub fn primary_screen_scale() -> f32 {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::HiDpi::GetDpiForSystem;
+
+        // SAFETY: 无参数的系统指标查询，不涉及指针或句柄。
+        let dpi = unsafe { GetDpiForSystem() };
+        if dpi > 0 {
+            dpi as f32 / 96.0
+        } else {
+            1.0
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        1.0
+    }
 }
 
 /// 主屏逻辑尺寸（按系统 DPI 归一化，不含每窗口缩放）。

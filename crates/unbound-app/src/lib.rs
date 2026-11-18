@@ -2591,6 +2591,19 @@ impl<'a> ViewBuilder<'a> {
     /// 图元在本次视图构建的最开头压入收集器，因此位于所有容器与卡片之下；
     /// 资源仍在解码时返回 `false` 且什么都不画——占位符会把整窗涂成内凹灰块。
     pub fn backdrop_image(&mut self, key: u64, asset: unbound_asset::AssetId) -> bool {
+        self.backdrop_image_sampled(key, asset, None)
+    }
+
+    /// 在整窗最底层绘制一张位图，并只采样其归一化子矩形。
+    ///
+    /// `sample_uv` 为 `None` 时与 [`Self::backdrop_image`] 完全一致；`Some` 表示纹理覆盖
+    /// 的范围大于窗口（例如一整张主屏壁纸纹理），窗口只显示自己的那一块。
+    pub fn backdrop_image_sampled(
+        &mut self,
+        key: u64,
+        asset: unbound_asset::AssetId,
+        sample_uv: Option<Rect>,
+    ) -> bool {
         use unbound_widgets::{ImageAssetResolver, ImageDesc, ObjectFit};
         if self.assets.resolve(asset).is_none() {
             return false;
@@ -2599,6 +2612,9 @@ impl<'a> ViewBuilder<'a> {
         let mut desc = ImageDesc::new(Rect::new(0.0, 0.0, viewport.x, viewport.y), viewport, 0)
             .with_asset(asset)
             .with_fit(ObjectFit::Fill);
+        if let Some(uv) = sample_uv {
+            desc = desc.with_sample_uv(uv);
+        }
         // z = 0：位列所有容器与卡片之下（图元按 z 排序，卡片背景在 1 以上）。
         desc.z = 0;
         let output = unbound_widgets::emit_image_with_assets(

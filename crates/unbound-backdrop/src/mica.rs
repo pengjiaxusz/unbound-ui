@@ -18,35 +18,63 @@ pub const DEFAULT_SIGMA: f32 = 16.0;
 /// 一次生成请求。
 #[derive(Clone, Copy, Debug)]
 pub struct MicaRequest {
-    /// 窗口逻辑宽。
-    pub width: u32,
-    /// 窗口逻辑高。
-    pub height: u32,
+    /// 主屏物理宽。
+    pub screen_width: u32,
+    /// 主屏物理高。
+    pub screen_height: u32,
+    /// 主屏 DPI 缩放；缩放变化会改变逻辑构图，必须使纹理失效。
+    pub dpi_scale: f32,
     /// 深色主题。
     pub dark: bool,
     /// 纹理最大宽度（0 视为 [`DEFAULT_MAX_WIDTH`]）。
     pub max_width: u32,
     /// 磨砂 sigma（0 表示不模糊）。
     pub sigma: f32,
+    /// 壁纸源指纹；壁纸切换后旧纹理必须失效。
+    pub wallpaper: Option<crate::wallpaper::WallpaperStamp>,
 }
 
 impl MicaRequest {
-    /// 按窗口尺寸与主题创建请求，其余参数取默认值。
+    /// 按主屏尺寸与主题创建请求，其余参数取默认值。
     #[must_use]
-    pub fn new(width: u32, height: u32, dark: bool) -> Self {
+    pub fn new(screen_width: u32, screen_height: u32, dark: bool) -> Self {
         Self {
-            width: width.max(1),
-            height: height.max(1),
+            screen_width: screen_width.max(1),
+            screen_height: screen_height.max(1),
+            dpi_scale: 1.0,
             dark,
             max_width: DEFAULT_MAX_WIDTH,
             sigma: DEFAULT_SIGMA,
+            wallpaper: None,
+        }
+    }
+
+    /// 从后景计划给出的纹理规格与壁纸指纹构造请求。
+    #[must_use]
+    pub fn from_texture(
+        texture: &crate::plan::WallpaperTexture,
+        wallpaper: Option<crate::wallpaper::WallpaperStamp>,
+    ) -> Self {
+        Self {
+            screen_width: texture.screen_width.max(1),
+            screen_height: texture.screen_height.max(1),
+            dpi_scale: if texture.dpi_scale.is_finite() && texture.dpi_scale > 0.0 {
+                texture.dpi_scale
+            } else {
+                1.0
+            },
+            dark: texture.dark,
+            max_width: texture.effective_max_width(),
+            sigma: texture.effective_sigma(),
+            wallpaper,
         }
     }
 
     /// 两个请求是否产出视觉等价的结果。
     ///
-    /// 窗口尺寸变化在 12% 以内时沿用现有纹理：云母是低频模糊图，
-    /// 拉伸几个百分点肉眼不可辨，但重新生成要付出一次壁纸解码与编码。
+    /// 纹理覆盖整块主屏，因此窗口位置与窗口尺寸都不参与比较：移动窗口只更新
+    /// 取样 UV，不重新生成纹理。只有主屏尺寸、DPI、主题、纹理参数或壁纸源
+    /// 变化才使旧纹理失效。
     #[must_use]
     pub fn matches(&self, other: &Self) -> bool {
         if self.dark != other.dark || self.max_width.max(1) != other.max_width.max(1) {
@@ -55,11 +83,22 @@ impl MicaRequest {
         if (self.sigma.max(0.0) - other.sigma.max(0.0)).abs() > f32::EPSILON {
             return false;
         }
-        let close = |a: u32, b: u32| {
-            let largest = a.max(b) as f32;
-            a.abs_diff(b) as f32 <= largest * 0.12
+        if self.screen_width.max(1) != other.screen_width.max(1)
+            || self.screen_height.max(1) != other.screen_height.max(1)
+        {
+            return false;
+        }
+        let dpi = |value: f32| {
+            if value.is_finite() && value > 0.0 {
+                value
+            } else {
+                1.0
+            }
         };
-        close(self.width, other.width) && close(self.height, other.height)
+        if (dpi(self.dpi_scale) - dpi(other.dpi_scale)).abs() > 1.0e-4 {
+            return false;
+        }
+        self.wallpaper == other.wallpaper
     }
 }
 
@@ -74,23 +113,19 @@ pub struct MicaImage {
     pub png: Vec<u8>,
 }
 
-/// 按请求生成一张覆盖整窗的 Mica 纹理。
+/// 按请求生成一张覆盖整块主屏的 Mica 纹理。
+///
+/// 纹理属于“壁纸空间”，窗口之后只从中采样自己的那块子矩形；因此窗口位置与
+/// 尺寸不进入请求，移动窗口不会触发重新生成。
 ///
 /// 返回 `None` 表示拿不到静态壁纸或主屏尺寸（调用方回退纯色底）。
 /// 该函数会读盘并做 CPU 密集运算，只应在工作线程调用。
 #[must_use]
 pub fn generate(request: &MicaRequest) -> Option<MicaImage> {
-    let screen = primary_screen_logical_size()?;
-
-    // 窗口居中于主屏：Win11 的云母取样与窗口在屏上的位置无关，
-    // 模糊后的构图差异肉眼不可辨，因此不查询窗口矩形。
-    let width = request.width.max(1).min(screen.0).max(1);
-    let height = request.height.max(1).min(screen.1).max(1);
-    let x = (screen.0 - width) / 2;
-    let y = (screen.1 - height) / 2;
-
-    let blurred = render_blurred_rect(
-        (x as i32, y as i32, width, height),
+    let screen = (request.screen_width.max(1), request.screen_height.max(1));
+    let blurred = render_blurred_rect_for_screen(
+        screen,
+        (0, 0, screen.0, screen.1),
         request.max_width,
         request.sigma,
     )?;
@@ -115,8 +150,17 @@ fn render_blurred_rect(
     max_width: u32,
     sigma: f32,
 ) -> Option<ImageBuffer<Rgba<u8>, Vec<u8>>> {
-    let (wallpaper, ..) = load_wallpaper().ok()?;
     let screen = primary_screen_logical_size()?;
+    render_blurred_rect_for_screen(screen, viewport, max_width, sigma)
+}
+
+fn render_blurred_rect_for_screen(
+    screen: (u32, u32),
+    viewport: (i32, i32, u32, u32),
+    max_width: u32,
+    sigma: f32,
+) -> Option<ImageBuffer<Rgba<u8>, Vec<u8>>> {
+    let (wallpaper, ..) = load_wallpaper().ok()?;
     blurred_viewport(
         &wallpaper,
         screen,
@@ -382,10 +426,44 @@ mod tests {
     }
 
     #[test]
-    fn request_matching_tolerates_small_resizes_only() {
-        let base = MicaRequest::new(1000, 800, true);
-        assert!(base.matches(&MicaRequest::new(1119, 800, true)));
-        assert!(!base.matches(&MicaRequest::new(1200, 800, true)));
-        assert!(!base.matches(&MicaRequest::new(1000, 800, false)));
+    fn only_screen_theme_or_wallpaper_changes_invalidate_the_texture() {
+        use crate::wallpaper::WallpaperStamp;
+
+        let mut base = MicaRequest::new(2560, 1440, true);
+        base.dpi_scale = 1.5;
+        base.wallpaper = Some(WallpaperStamp {
+            path_hash: 7,
+            modified_secs: 100,
+            modified_nanos: 200,
+            len: 300,
+        });
+
+        // 窗口位置与尺寸不在请求里：同一屏幕参数必须视为可复用。
+        assert!(base.matches(&base));
+        assert!(base.matches(&MicaRequest {
+            dpi_scale: 1.50001,
+            ..base
+        }));
+
+        let mut resized = base;
+        resized.screen_width = 1920;
+        assert!(!base.matches(&resized));
+
+        let mut scaled = base;
+        scaled.dpi_scale = 1.25;
+        assert!(!base.matches(&scaled));
+
+        let mut light = base;
+        light.dark = false;
+        assert!(!base.matches(&light));
+
+        let mut repainted = base;
+        repainted.wallpaper = Some(WallpaperStamp {
+            path_hash: 7,
+            modified_secs: 101,
+            modified_nanos: 200,
+            len: 300,
+        });
+        assert!(!base.matches(&repainted));
     }
 }

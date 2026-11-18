@@ -43,6 +43,41 @@ pub struct WindowPlacement {
     pub min_track_height: i32,
 }
 
+/// 屏幕坐标系中的物理像素矩形。
+///
+/// 用于把窗口客户区锚定到桌面：`x` / `y` 是相对虚拟桌面原点的物理像素，
+/// 宽度与高度为客户区的物理像素尺寸。布局仍只使用逻辑视口，不消费该矩形。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScreenRect {
+    /// 客户区左上角屏幕物理 X 坐标。
+    pub x: i32,
+    /// 客户区左上角屏幕物理 Y 坐标。
+    pub y: i32,
+    /// 客户区物理像素宽度。
+    pub width: u32,
+    /// 客户区物理像素高度。
+    pub height: u32,
+}
+
+impl ScreenRect {
+    /// 构造一个屏幕物理矩形。
+    #[must_use]
+    pub const fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// 是否具有可用的面积。
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+}
+
 /// 平台窗口的配置参数。
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowConfig {
@@ -279,6 +314,10 @@ pub enum PlatformEvent {
     RecreateSwapchain(Extent),
     /// 系统缩放因子发生变化。
     ScaleFactorChanged(f64),
+    /// 窗口在屏幕上的位置发生变化（客户区左上角物理坐标）。
+    ///
+    /// 尺寸不变而位置改变时也会触发；依赖屏幕锚点的后景必须借此刷新。
+    Moved { x: i32, y: i32 },
     /// 指针移动，坐标为相对于窗口的逻辑像素。
     CursorMoved { x: f64, y: f64 },
     /// 原始指针位移，单位为设备像素。
@@ -517,6 +556,11 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
                 out.push(PlatformEvent::RecreateSwapchain(new));
             }
         }
+        PlatformEvent::Moved { .. } => {
+            // 位置变化不需要重建布局或交换链，但依赖屏幕锚点的合成结果必须重绘。
+            state.pacer.request_immediate(now);
+            out.push(event.clone());
+        }
         PlatformEvent::ScaleFactorChanged(factor) => {
             state.scale_factor = *factor;
             // 应用按逻辑单位布局，因此必须获知设备缩放比，以使输入、字形光栅化
@@ -699,6 +743,23 @@ mod tests {
             state.pacer.should_render(now),
             "a resize must make the next frame due right away"
         );
+    }
+
+    /// 仅移动窗口不重建交换链，但必须立即排一帧，让屏幕锚点驱动的后景重新取样。
+    #[test]
+    fn a_move_wakes_the_frame_scheduler_without_resizing() {
+        let config = WindowConfig::default();
+        let mut state = PlatformState::new(
+            &config,
+            Extent::new(1280, 800),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        let now = Instant::now();
+        state.pacer.on_present(now);
+        assert!(!state.pacer.should_render(now));
+        let out = apply(&mut state, &PlatformEvent::Moved { x: 120, y: 80 }, now);
+        assert_eq!(out, vec![PlatformEvent::Moved { x: 120, y: 80 }]);
+        assert!(state.pacer.should_render(now));
     }
 
     /// 拖拽风暴以最后一条缩放事件结束。实时模式下每条消息都立即提交尺寸，
