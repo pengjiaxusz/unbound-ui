@@ -811,16 +811,13 @@ impl PlatformApp for Showcase {
         let metrics = Arc::new(FrameHitMetrics::new());
         metrics.set_scale_factor(self.effective_scale());
         install_custom_frame(hwnd, Arc::clone(&metrics));
-        // 后景材质由计划决定：原生 → 标准云母；自绘/关闭 → 禁用材质。
-        let wants_mica =
-            self.shell().state.backdrop_plan.material == unbound_backdrop::DwmMaterial::Mica;
+        // 后景材质由计划决定：材质档与系统取值一一对应，
+        // 云母变体走标签页材质（系统取值 4），不能退化成标准云母。
+        let (material, lock_mica) = window_backdrop_request(&self.shell().state.backdrop_plan);
         unbound_platform::set_window_dark_mode(hwnd, self.shell().state.theme.is_dark());
-        let _ = unbound_platform::set_window_backdrop(
-            hwnd,
-            unbound_platform::WindowBackdropMaterial::for_native_path(wants_mica),
-        );
-        // 原生模式启用失焦锁定，避免窗口失活时云母退化为纯色。
-        metrics.set_lock_mica_active(wants_mica);
+        let _ = unbound_platform::set_window_backdrop(hwnd, material);
+        // 原生模式启用失焦锁定，避免窗口失活时材质退化为纯色。
+        metrics.set_lock_mica_active(lock_mica);
         self.frame_metrics = Some(metrics);
 
         // 呈现链刚刚按窗口尺寸创建：该请求已提交，因此首帧不会再次重建。
