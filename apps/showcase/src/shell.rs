@@ -516,6 +516,7 @@ impl GalleryApp {
         premultiplied_alpha_supported: bool,
     ) -> bool {
         self.state.windows_build = windows_build;
+        self.state.premultiplied_alpha_supported = premultiplied_alpha_supported;
         self.state.native_backdrop_available = unbound_backdrop::native_backdrop_available(
             windows_build,
             premultiplied_alpha_supported,
@@ -532,8 +533,9 @@ impl GalleryApp {
             .window_screen_rect
             .map(|rect| unbound_backdrop::PixelRect::new(rect.x, rect.y, rect.width, rect.height));
         let plan = BackdropPlan::derive(unbound_backdrop::BackdropInputs {
-            choice: self.state.backdrop_mode,
-            native_available: self.state.native_backdrop_available,
+            selection: self.state.backdrop_mode.to_selection(),
+            windows_build: self.state.windows_build,
+            premultiplied_alpha_supported: self.state.premultiplied_alpha_supported,
             window_screen_rect: window,
             primary_screen_rect: unbound_backdrop::primary_screen_rect(),
             primary_screen_scale: unbound_backdrop::primary_screen_scale(),

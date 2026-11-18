@@ -301,6 +301,10 @@ pub struct GalleryState {
     pub backdrop_plan: BackdropPlan,
     /// 原生后景路径是否可用（构建号 ≥ 22621 且表面支持预乘 alpha）。
     pub native_backdrop_available: bool,
+    /// 图形表面是否支持预乘 alpha 合成。
+    ///
+    /// 与构建号一起构成逐档材质门槛所需的全部平台能力。
+    pub premultiplied_alpha_supported: bool,
     /// Windows 构建号；`None` 表示非 Windows 环境或探测失败。
     pub windows_build: Option<u32>,
     /// 客户区在屏幕坐标系中的物理矩形（后景锚点）。
@@ -357,6 +361,7 @@ impl Default for GalleryState {
             resolved_backdrop: ResolvedBackdrop::resolve(BackdropMode::Auto, false),
             backdrop_plan: BackdropPlan::default(),
             native_backdrop_available: false,
+            premultiplied_alpha_supported: false,
             windows_build: None,
             window_screen_rect: None,
             active_component: None,

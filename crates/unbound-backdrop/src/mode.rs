@@ -1,20 +1,32 @@
 //! 后景模式：用户选择、平台能力解析与两条语义查询。
+//!
+//! 本模块是旧的用户选择入口，在两轴模型落地期间继续可用：它只表达
+//! 「整窗后景走哪条路径」，并翻译成新模型的一组选择（标准云母 + 某个来源）。
+//! 新的组合解析接缝在 [`crate::selection`]。
+
+use crate::selection::{BackdropCapabilities, BackdropSelection, BackdropSource, MaterialKind};
 
 /// 原生云母路径要求的最低 Windows 构建号（Windows 11 22H2）。
-pub const NATIVE_MICA_MIN_BUILD: u32 = 22621;
+pub use crate::selection::NATIVE_MICA_MIN_BUILD;
 
 /// 判定原生后景路径是否可用。
 ///
 /// 只有构建号已知且不低于 [`NATIVE_MICA_MIN_BUILD`]、同时图形表面支持
 /// 预乘 alpha 合成时，才能启用 DWM 原生材质。未知构建号（非 Windows 或
 /// 探测失败）一律视为不可用，从而回退到自绘路径。
+///
+/// 这是平台**基线**能力，与逐档材质门槛是两件事：它只回答「这台机器能不能
+/// 承载原生后景」，不回答「某一档材质能不能走原生路径」。
 #[must_use]
 pub fn native_backdrop_available(
     windows_build: Option<u32>,
     premultiplied_alpha_supported: bool,
 ) -> bool {
-    windows_build.is_some_and(|build| build >= NATIVE_MICA_MIN_BUILD)
-        && premultiplied_alpha_supported
+    BackdropCapabilities {
+        windows_build,
+        premultiplied_alpha_supported,
+    }
+    .baseline_native_available()
 }
 
 /// 用户可选的整窗后景路径。
@@ -84,6 +96,33 @@ impl BackdropMode {
             Self::Native => "DWM system Mica material",
             Self::SelfDrawn => "Wallpaper blur drawn by the application",
             Self::Off => "No backdrop material at all",
+        }
+    }
+
+    /// 翻译成两轴模型的用户选择。
+    ///
+    /// 旧入口只表达路径，材质种类一律取标准云母；「关闭」翻译成材质种类为
+    /// 「无」，来源轴随之折叠。翻译后的实际生效结果与改造前逐项一致。
+    #[must_use]
+    #[deny(unreachable_patterns)]
+    pub const fn to_selection(self) -> BackdropSelection {
+        match self {
+            Self::Auto => BackdropSelection {
+                material: MaterialKind::Mica,
+                source: BackdropSource::Auto,
+            },
+            Self::Native => BackdropSelection {
+                material: MaterialKind::Mica,
+                source: BackdropSource::Native,
+            },
+            Self::SelfDrawn => BackdropSelection {
+                material: MaterialKind::Mica,
+                source: BackdropSource::SelfDrawn,
+            },
+            Self::Off => BackdropSelection {
+                material: MaterialKind::None,
+                source: BackdropSource::Auto,
+            },
         }
     }
 }
@@ -261,6 +300,30 @@ mod tests {
         assert!(
             !off.uses_native_path() && !off.draws_self_drawn_texture(),
             "the off result must use neither backdrop path"
+        );
+    }
+
+    #[test]
+    fn every_mode_translates_into_the_two_axis_model() {
+        assert_eq!(
+            BackdropMode::Auto.to_selection(),
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::Auto),
+            "Auto must translate to Mica with the auto source"
+        );
+        assert_eq!(
+            BackdropMode::Native.to_selection(),
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::Native),
+            "Native must translate to Mica with the native source"
+        );
+        assert_eq!(
+            BackdropMode::SelfDrawn.to_selection(),
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::SelfDrawn),
+            "SelfDrawn must translate to Mica with the self-drawn source"
+        );
+        assert_eq!(
+            BackdropMode::Off.to_selection(),
+            BackdropSelection::new(MaterialKind::None, BackdropSource::Auto),
+            "Off must translate to the None material"
         );
     }
 

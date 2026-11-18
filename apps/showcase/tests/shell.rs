@@ -1565,7 +1565,7 @@ fn native_mode_makes_the_root_transparent_without_a_texture() {
     use unbound_backdrop::{BackdropMode, ResolvedBackdrop};
 
     let mut app = app();
-    app.state.native_backdrop_available = true;
+    app.set_backdrop_capabilities(Some(22621), true);
     app.state.set_backdrop_mode(BackdropMode::Native);
     app.rebuild(VIEWPORT);
     assert_eq!(

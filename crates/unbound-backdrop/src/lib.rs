@@ -29,6 +29,7 @@
 pub mod mica;
 pub mod mode;
 pub mod plan;
+pub mod selection;
 pub mod state;
 pub mod stats;
 pub mod wallpaper;
@@ -37,10 +38,16 @@ pub mod wallpaper;
 mod test_support;
 
 pub use mica::{generate, MicaImage, MicaRequest, DEFAULT_MAX_WIDTH, DEFAULT_SIGMA};
-pub use mode::{native_backdrop_available, BackdropMode, ResolvedBackdrop, NATIVE_MICA_MIN_BUILD};
+pub use mode::{native_backdrop_available, BackdropMode, ResolvedBackdrop};
 pub use plan::{
-    sample_uv, BackdropCompositeAlpha, BackdropInputs, BackdropPlan, DwmMaterial, PixelRect,
-    UvRect, WallpaperTexture,
+    sample_uv, system_material_request, BackdropCompositeAlpha, BackdropInputs, BackdropPlan,
+    DwmMaterial, MaterialRequest, PixelRect, UvRect, WallpaperTexture, MATERIAL_REQUEST_TABLE,
+};
+pub use selection::{
+    has_self_drawn_variant, native_available, required_build, resolve_combination,
+    unavailable_reason, BackdropCapabilities, BackdropCombination, BackdropSelection,
+    BackdropSource, FallbackReason, MaterialKind, UnavailableReason, IMMERSIVE_BACKDROP_MIN_BUILD,
+    NATIVE_MICA_MIN_BUILD,
 };
 pub use state::{BackdropGenerator, MICA_READY_EVENT_ID};
 pub use stats::{texture_statistics, StatisticsRequest, TextureStatistics};
