@@ -308,6 +308,11 @@ struct LayoutKey {
     locale: u8,
     /// 处于打开状态的代码面板（支持最多 128 张卡片，覆盖 Components 页全部 109 个组件）。
     code_mask: [u64; 2],
+    /// 已载入的像素对照用例数；`u32::MAX` 表示报告尚未载入。
+    ///
+    /// 对照页的舞台高度由用例数决定，因此报告异步载入后必须重新求解布局，
+    /// 否则滚动范围仍停留在载入前的旧高度。
+    parity_cases: u32,
 }
 
 impl Default for GalleryApp {
@@ -372,6 +377,7 @@ impl GalleryApp {
                 page: 0,
                 locale: 0,
                 code_mask: [0; 2],
+                parity_cases: u32::MAX,
             },
             external_diff: false,
             frame_layout_stats: LayoutStats::default(),
@@ -667,6 +673,12 @@ impl GalleryApp {
             page: page.index() as u8,
             locale: self.state.locale.index() as u8,
             code_mask,
+            parity_cases: self
+                .state
+                .demo
+                .parity_report
+                .as_ref()
+                .map_or(u32::MAX, |report| report.cases.len() as u32),
         }
     }
 
@@ -688,6 +700,11 @@ impl GalleryApp {
         let mica_visible = self.root_background_transparent();
         let hover = inter.hovered;
         let pressed = inter.pressed;
+        // 对照报告在布局求解前载入：舞台高度取决于用例数，先拿到用例数再求解，
+        // 才能在进入报告页的首帧就得到完整滚动范围，而不是等到某次悬停才补一次重排。
+        if self.state.active_page == PageId::Parity {
+            self.state.demo.poll_parity(&mut self.labels.engine);
+        }
         // 布局树拥有几何信息：标题栏、导航窗格与页面均由树求解，而非手算测量。
         //
         //
@@ -738,8 +755,6 @@ impl GalleryApp {
             }
         } else if self.state.active_page == PageId::Assets {
             self.state.demo.poll_assets(&mut self.labels.engine);
-        } else if self.state.active_page == PageId::Parity {
-            self.state.demo.poll_parity(&mut self.labels.engine);
         }
 
         // 上一帧场景保留一帧：与新场景做 diff 可告知渲染器哪些图元实际发生了变化。

@@ -46,6 +46,39 @@ const THUMB_MAX_WIDTH: f32 = 320.0;
 const THUMB_ASPECT: f32 = 420.0 / 160.0;
 /// 三张缩略图之间的间距。
 const THUMB_GAP: f32 = 10.0;
+/// 概要横幅的高度。
+const SUMMARY_HEIGHT: f32 = 64.0;
+/// 概要横幅与首行对照卡片之间的间距。
+const SUMMARY_GAP: f32 = 12.0;
+/// 相邻对照卡片之间的间距。
+const ROW_GAP: f32 = 8.0;
+/// 列表底部的留白。
+const LIST_PAD_BOTTOM: f32 = 8.0;
+/// 行标题与指标文本占用的高度（缩略图从该高度之下开始）。
+const ROW_HEAD: f32 = 64.0;
+
+/// 三列缩略图随舞台宽度收缩的比例系数。
+fn thumb_scale(stage_width: f32) -> f32 {
+    let inner_width = (stage_width - 24.0).max(1.0);
+    (inner_width / (3.0 * THUMB_MAX_WIDTH + 2.0 * THUMB_GAP)).clamp(0.25, 1.0)
+}
+
+/// 单行对照卡片的高度。
+fn row_height(stage_width: f32) -> f32 {
+    ROW_HEAD + THUMB_MAX_WIDTH * thumb_scale(stage_width) / THUMB_ASPECT
+}
+
+/// 报告舞台容纳全部用例所需的高度。
+///
+/// 布局树必须按实际用例数预留舞台高度：若沿用固定高度，页面滚动范围会停在列表中途，
+/// 剩余用例被卡片裁剪，滚动条再怎么拖也看不到完整的对比列表。
+#[must_use]
+pub fn stage_height(case_count: usize, stage_width: f32) -> f32 {
+    SUMMARY_HEIGHT
+        + SUMMARY_GAP
+        + case_count as f32 * (row_height(stage_width) + ROW_GAP)
+        + LIST_PAD_BOTTOM
+}
 
 /// 单个用例的四态结论，与差分器的 `pass` / `known-aa` / `fail` / `invalid` 一一对应。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,7 +309,7 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
     let visible_bottom = ctx.canvas.viewport.max().y + 48.0;
 
     // 概要横幅：通过数、ROI 四重门禁与缓存命中统计。
-    let summary = Rect::new(rect.origin.x, rect.origin.y, rect.size.x, 64.0);
+    let summary = Rect::new(rect.origin.x, rect.origin.y, rect.size.x, SUMMARY_HEIGHT);
     ctx.canvas.rect(
         summary,
         12.0,
@@ -355,14 +388,13 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
         AlignY::Top,
     );
 
-    let inner_width = (rect.size.x - 24.0).max(1.0);
-    let scale = (inner_width / (3.0 * THUMB_MAX_WIDTH + 2.0 * THUMB_GAP)).clamp(0.25, 1.0);
+    let scale = thumb_scale(rect.size.x);
     let image_height = THUMB_MAX_WIDTH * scale / THUMB_ASPECT;
-    let row_height = 64.0 + image_height;
-    let mut y = summary.max().y + 12.0;
+    let row_h = row_height(rect.size.x);
+    let mut y = summary.max().y + SUMMARY_GAP;
     for (index, case) in report.cases.iter().enumerate() {
-        let row = Rect::new(rect.origin.x, y, rect.size.x, row_height);
-        y += row_height + 8.0;
+        let row = Rect::new(rect.origin.x, y, rect.size.x, row_h);
+        y += row_h + ROW_GAP;
         if row.max().y < visible_top || row.origin.y > visible_bottom {
             continue;
         }
