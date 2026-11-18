@@ -344,8 +344,12 @@ fn with_text_layout<R>(
     let format = cache.formats.get(&key)?;
 
     let units: Vec<u16> = text.encode_utf16().collect();
-    let layout: IDWriteTextLayout =
-        unsafe { cache.factory.CreateTextLayout(&units, format, f32::MAX, f32::MAX) }.ok()?;
+    let layout: IDWriteTextLayout = unsafe {
+        cache
+            .factory
+            .CreateTextLayout(&units, format, f32::MAX, f32::MAX)
+    }
+    .ok()?;
     f(&layout)
 }
 
@@ -362,9 +366,7 @@ pub(crate) fn layout_cluster_positions(
     utf16_indices: &[u32],
 ) -> Option<(Vec<f32>, f32)> {
     with_text_layout(family, weight, italic, font_size, text, |layout| {
-        use windows::Win32::Graphics::DirectWrite::{
-            DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_METRICS,
-        };
+        use windows::Win32::Graphics::DirectWrite::{DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_METRICS};
         let mut positions = Vec::with_capacity(utf16_indices.len());
         for &index in utf16_indices {
             let mut x = 0.0f32;

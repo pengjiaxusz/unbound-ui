@@ -185,9 +185,7 @@ impl TextCtx<'_> {
             // `font_size * 1.4` 的行盒居中；实测 14px 正文在 32px 控件里
             // 因此整体低 1px。所有 Middle 对齐统一上移 1px，使基线对齐
             // 参考截图的像素网格（否则字形亚像素相位与参考错位一整行）。
-            AlignY::Middle => {
-                rect.origin.y + ((rect.height() - logical_h) * 0.5).max(0.0) - 1.0
-            }
+            AlignY::Middle => rect.origin.y + ((rect.height() - logical_h) * 0.5).max(0.0) - 1.0,
             AlignY::Bottom => (rect.max().y - logical_h).max(rect.origin.y),
         };
         let mut quads = self.cache.quads_for(
