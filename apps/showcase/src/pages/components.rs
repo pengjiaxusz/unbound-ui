@@ -76,14 +76,14 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::RepeatButton
         | WidgetCatalogId::DropDownButton
         | WidgetCatalogId::ToggleSplitButton
-        | WidgetCatalogId::Badge
+        | WidgetCatalogId::InfoBadge
         | WidgetCatalogId::Chip
-        | WidgetCatalogId::Checkbox
-        | WidgetCatalogId::Switch
-        | WidgetCatalogId::Radio
-        | WidgetCatalogId::Segmented
+        | WidgetCatalogId::CheckBox
+        | WidgetCatalogId::ToggleSwitch
+        | WidgetCatalogId::RadioButton
+        | WidgetCatalogId::SelectorBar
         | WidgetCatalogId::Stepper
-        | WidgetCatalogId::Rating
+        | WidgetCatalogId::RatingControl
         | WidgetCatalogId::TagInput
         | WidgetCatalogId::PinInput
         | WidgetCatalogId::CommandBarFlyout
@@ -91,10 +91,10 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::AppBarToggleButton
         | WidgetCatalogId::AppBarSeparator => KNOBS_ACTION,
 
-        WidgetCatalogId::Progress
+        WidgetCatalogId::ProgressBar
         | WidgetCatalogId::Slider
-        | WidgetCatalogId::NumberInput
-        | WidgetCatalogId::Spinner
+        | WidgetCatalogId::NumberBox
+        | WidgetCatalogId::ProgressRing
         | WidgetCatalogId::AspectRatioBox
         | WidgetCatalogId::RefreshContainer
         | WidgetCatalogId::AnnotatedScrollBar
@@ -113,7 +113,7 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::TerminalView
         | WidgetCatalogId::Timeline
         | WidgetCatalogId::TimelineTrack
-        | WidgetCatalogId::VirtualViews
+        | WidgetCatalogId::ListView
         | WidgetCatalogId::Masonry
         | WidgetCatalogId::VirtualMasonry
         | WidgetCatalogId::AvatarGroup
@@ -126,33 +126,33 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::SwipeControl
         | WidgetCatalogId::PipelineView => KNOBS_DATA,
 
-        WidgetCatalogId::Alert
+        WidgetCatalogId::InfoBar
         | WidgetCatalogId::AlertDialog
         | WidgetCatalogId::Banner
         | WidgetCatalogId::Callout
         | WidgetCatalogId::Popconfirm
         | WidgetCatalogId::NotificationCenter
         | WidgetCatalogId::Toast
-        | WidgetCatalogId::Modal
-        | WidgetCatalogId::Drawer
-        | WidgetCatalogId::Popover
-        | WidgetCatalogId::Tooltip
+        | WidgetCatalogId::ContentDialog
+        | WidgetCatalogId::SplitView
+        | WidgetCatalogId::Flyout
+        | WidgetCatalogId::ToolTip
         | WidgetCatalogId::HoverCard
         | WidgetCatalogId::TeachingTip
         | WidgetCatalogId::Tour => KNOBS_FEEDBACK,
 
-        WidgetCatalogId::Breadcrumb
-        | WidgetCatalogId::NavigationRail
-        | WidgetCatalogId::Sidebar
-        | WidgetCatalogId::Pagination
+        WidgetCatalogId::BreadcrumbBar
+        | WidgetCatalogId::NavigationViewCompact
+        | WidgetCatalogId::NavigationView
+        | WidgetCatalogId::PipsPager
         | WidgetCatalogId::Pivot
-        | WidgetCatalogId::Tabs
+        | WidgetCatalogId::TabView
         | WidgetCatalogId::TreeView
-        | WidgetCatalogId::Menu
-        | WidgetCatalogId::Menubar
+        | WidgetCatalogId::MenuFlyout
+        | WidgetCatalogId::MenuBar
         | WidgetCatalogId::ContextMenu
         | WidgetCatalogId::CommandPalette
-        | WidgetCatalogId::Toolbar
+        | WidgetCatalogId::CommandBar
         | WidgetCatalogId::CanvasToolbar
         | WidgetCatalogId::StatusBar
         | WidgetCatalogId::AddressBar
@@ -162,27 +162,27 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::SplitPane
         | WidgetCatalogId::MultiSplit
         | WidgetCatalogId::Dock
-        | WidgetCatalogId::Accordion
-        | WidgetCatalogId::Collapsible
+        | WidgetCatalogId::ExpanderGroup
+        | WidgetCatalogId::Expander
         | WidgetCatalogId::EmptyState
         | WidgetCatalogId::Watermark
         | WidgetCatalogId::LoadingOverlay
         | WidgetCatalogId::NinePatch
-        | WidgetCatalogId::Stack
+        | WidgetCatalogId::StackPanel
         | WidgetCatalogId::Wrap
         | WidgetCatalogId::PropertyGrid
         | WidgetCatalogId::HeaderedContentControl
         | WidgetCatalogId::Divider => KNOBS_LAYOUT,
 
-        WidgetCatalogId::TextInput
-        | WidgetCatalogId::TextArea
+        WidgetCatalogId::TextBox
+        | WidgetCatalogId::TextBoxMultiline
         | WidgetCatalogId::PasswordBox
-        | WidgetCatalogId::DatePickerWheel
-        | WidgetCatalogId::CalendarDatePicker
-        | WidgetCatalogId::AutoComplete
-        | WidgetCatalogId::Cascader
-        | WidgetCatalogId::Combobox
         | WidgetCatalogId::DatePicker
+        | WidgetCatalogId::CalendarDatePicker
+        | WidgetCatalogId::AutoSuggestBox
+        | WidgetCatalogId::Cascader
+        | WidgetCatalogId::ComboBoxEditable
+        | WidgetCatalogId::CalendarView
         | WidgetCatalogId::DateRangePicker
         | WidgetCatalogId::TimePicker
         | WidgetCatalogId::HotkeyInput
@@ -193,7 +193,7 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::Form
         | WidgetCatalogId::Transfer
         | WidgetCatalogId::FileDrop
-        | WidgetCatalogId::Select
+        | WidgetCatalogId::ComboBox
         | WidgetCatalogId::QueryBuilder
         | WidgetCatalogId::RichEditBox
         | WidgetCatalogId::SchemaForm => KNOBS_INPUT,
@@ -203,12 +203,12 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::Ruler
         | WidgetCatalogId::Gizmo
         | WidgetCatalogId::Image
-        | WidgetCatalogId::Icon
+        | WidgetCatalogId::FontIcon
         | WidgetCatalogId::Skeleton
-        | WidgetCatalogId::Carousel
-        | WidgetCatalogId::Avatar
-        | WidgetCatalogId::RichText
-        | WidgetCatalogId::Scroll
+        | WidgetCatalogId::FlipView
+        | WidgetCatalogId::PersonPicture
+        | WidgetCatalogId::RichTextBlock
+        | WidgetCatalogId::ScrollView
         | WidgetCatalogId::Overlay => KNOBS_VISUAL,
     }
 }
@@ -217,16 +217,16 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
 #[must_use]
 pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
     match id {
-        WidgetCatalogId::Accordion => "view.accordion(ui_key!(\"acc\"), AccordionDesc::new(rect, sections));",
-        WidgetCatalogId::Alert => "view.alert(ui_key!(\"alt\"), AlertDesc::message(\"Notice\").severity(Severity::Info));",
+        WidgetCatalogId::ExpanderGroup => "view.accordion(ui_key!(\"acc\"), AccordionDesc::new(rect, sections));",
+        WidgetCatalogId::InfoBar => "view.alert(ui_key!(\"alt\"), AlertDesc::message(\"Notice\").severity(Severity::Info));",
         WidgetCatalogId::AlertDialog => "view.add(ui_key!(\"dlg\"), AlertDialogDesc::new(rect, \"Confirm Action\"));",
         WidgetCatalogId::AspectRatioBox => "view.add(ui_key!(\"box\"), AspectRatioBoxDesc::new(rect, 16.0 / 9.0));",
-        WidgetCatalogId::AutoComplete => "view.add(ui_key!(\"ac\"), AutoCompleteDesc::new(rect, suggestions));",
-        WidgetCatalogId::Avatar => "view.add(ui_key!(\"ava\"), AvatarDesc::initials(rect, \"JD\"));",
+        WidgetCatalogId::AutoSuggestBox => "view.add(ui_key!(\"ac\"), AutoCompleteDesc::new(rect, suggestions));",
+        WidgetCatalogId::PersonPicture => "view.add(ui_key!(\"ava\"), AvatarDesc::initials(rect, \"JD\"));",
         WidgetCatalogId::AvatarGroup => "view.add(ui_key!(\"grp\"), AvatarGroupDesc::new(rect, avatars));",
-        WidgetCatalogId::Badge => "view.badge(ui_key!(\"bdg\"), BadgeDesc::label(\"New\"));",
+        WidgetCatalogId::InfoBadge => "view.badge(ui_key!(\"bdg\"), BadgeDesc::label(\"New\"));",
         WidgetCatalogId::Banner => "view.add(ui_key!(\"bnr\"), BannerDesc::new(rect, \"System Banner\"));",
-        WidgetCatalogId::Breadcrumb => "view.add(ui_key!(\"bc\"), BreadcrumbDesc::new(rect, crumbs));",
+        WidgetCatalogId::BreadcrumbBar => "view.add(ui_key!(\"bc\"), BreadcrumbDesc::new(rect, crumbs));",
         WidgetCatalogId::Button => "view.button(ui_key!(\"btn\"), ButtonDesc::label(\"Click Me\").variant(ButtonVariant::Primary));",
         WidgetCatalogId::HyperlinkButton => "view.add(ui_key!(\"link\"), HyperlinkButtonDesc::new(rect, \"Open docs\"));",
         WidgetCatalogId::RepeatButton => "view.add(ui_key!(\"rep\"), RepeatButtonDesc::new(rect, \"Repeat\"));",
@@ -234,30 +234,30 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::ToggleSplitButton => "view.add(ui_key!(\"tsb\"), ToggleSplitButtonDesc::new(rect, \"Bold\"));",
         WidgetCatalogId::Callout => "view.callout(ui_key!(\"cal\"), CalloutDesc::new(rect, \"Tip\", \"GPU memory is optimal.\"));",
         WidgetCatalogId::CanvasToolbar => "view.add(ui_key!(\"tb\"), CanvasToolbarDesc::new(rect));",
-        WidgetCatalogId::Carousel => "view.add(ui_key!(\"car\"), CarouselDesc::new(rect, slides));",
+        WidgetCatalogId::FlipView => "view.add(ui_key!(\"car\"), CarouselDesc::new(rect, slides));",
         WidgetCatalogId::Cascader => "view.add(ui_key!(\"cas\"), CascaderDesc::new(rect, tree));",
         WidgetCatalogId::Chart => "view.add(ui_key!(\"chr\"), ChartDesc::new(rect, series));",
-        WidgetCatalogId::Checkbox => "view.checkbox(ui_key!(\"chk\"), CheckboxDesc::labeled(\"Accept terms\", true));",
+        WidgetCatalogId::CheckBox => "view.checkbox(ui_key!(\"chk\"), CheckboxDesc::labeled(\"Accept terms\", true));",
         WidgetCatalogId::Chip => "view.badge(ui_key!(\"chp\"), BadgeDesc::label(\"Filter\"));",
         WidgetCatalogId::CodeBlock => "view.add(ui_key!(\"cb\"), CodeBlockDesc::new(rect, code, \"rust\"));",
         WidgetCatalogId::CodeEditor => "view.add(ui_key!(\"ce\"), CodeEditorDesc::new(rect, buffer));",
-        WidgetCatalogId::Collapsible => "view.add(ui_key!(\"col\"), CollapsibleDesc::new(rect, \"Details\"));",
+        WidgetCatalogId::Expander => "view.add(ui_key!(\"col\"), CollapsibleDesc::new(rect, \"Details\"));",
         WidgetCatalogId::ColorPicker => "view.add(ui_key!(\"cp\"), ColorPickerDesc::new(rect));",
         WidgetCatalogId::ColorSwatch => "view.color_swatch(ui_key!(\"csw\"), ColorSwatchDesc::swatch(Token::accent_swatch(0), \"Accent\"));",
-        WidgetCatalogId::Combobox => "view.add(ui_key!(\"cmb\"), ComboboxDesc::new(rect, items));",
+        WidgetCatalogId::ComboBoxEditable => "view.add(ui_key!(\"cmb\"), ComboboxDesc::new(rect, items));",
         WidgetCatalogId::CommandPalette => "view.add(ui_key!(\"cmd\"), CommandPaletteDesc::new(rect));",
         WidgetCatalogId::Containers => "view.card(ui_key!(\"crd\"), CardDesc::default(), |card| { /* content */ });",
         WidgetCatalogId::ContextMenu => "view.add(ui_key!(\"ctx\"), ContextMenuDesc::new(rect, menu));",
         WidgetCatalogId::CurveEditor => "view.add(ui_key!(\"crv\"), CurveEditorDesc::new(rect));",
         WidgetCatalogId::DataGrid => "view.add(ui_key!(\"dg\"), DataGridDesc::new(rect, grid_model));",
-        WidgetCatalogId::DatePicker => "view.add(ui_key!(\"dp\"), DatePickerDesc::new(rect));",
-        WidgetCatalogId::DatePickerWheel => "view.add(ui_key!(\"dpw\"), DatePickerWheelDesc::new(rect, date));",
+        WidgetCatalogId::CalendarView => "view.add(ui_key!(\"dp\"), DatePickerDesc::new(rect));",
+        WidgetCatalogId::DatePicker => "view.add(ui_key!(\"dpw\"), DatePickerWheelDesc::new(rect, date));",
         WidgetCatalogId::CalendarDatePicker => "view.add(ui_key!(\"cdp\"), CalendarDatePickerDesc::new(rect, date));",
         WidgetCatalogId::DateRangePicker => "view.add(ui_key!(\"drp\"), DateRangePickerDesc::new(rect));",
         WidgetCatalogId::Descriptions => "view.descriptions(ui_key!(\"desc\"), DescriptionsDesc::new(rect, items));",
         WidgetCatalogId::Divider => "view.divider(ui_key!(\"div\"), DividerDesc::rule());",
         WidgetCatalogId::Dock => "view.add(ui_key!(\"dck\"), DockDesc::new(rect, dock_tree));",
-        WidgetCatalogId::Drawer => "view.add(ui_key!(\"drw\"), DrawerDesc::new(rect, DrawerSide::Right));",
+        WidgetCatalogId::SplitView => "view.add(ui_key!(\"drw\"), DrawerDesc::new(rect, DrawerSide::Right));",
         WidgetCatalogId::EmptyState => "view.add(ui_key!(\"emp\"), EmptyStateDesc::new(rect, \"No Items\"));",
         WidgetCatalogId::FileDrop => "view.add(ui_key!(\"fd\"), FileDropDesc::new(rect));",
         WidgetCatalogId::Form => "view.add(ui_key!(\"frm\"), FormDesc::new(rect, fields));",
@@ -265,62 +265,62 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::GradientEditor => "view.add(ui_key!(\"ge\"), GradientEditorDesc::new(rect));",
         WidgetCatalogId::HotkeyInput => "view.add(ui_key!(\"hk\"), HotkeyInputDesc::new(rect));",
         WidgetCatalogId::HoverCard => "view.add(ui_key!(\"hc\"), HoverCardDesc::new(rect));",
-        WidgetCatalogId::Icon => "view.add(ui_key!(\"ic\"), IconDesc::new(rect, icon_name));",
+        WidgetCatalogId::FontIcon => "view.add(ui_key!(\"ic\"), IconDesc::new(rect, icon_name));",
         WidgetCatalogId::Image => "view.add(ui_key!(\"img\"), ImageDesc::new(rect, asset_id));",
         WidgetCatalogId::LoadingOverlay => "view.add(ui_key!(\"lo\"), LoadingOverlayDesc::new(rect));",
         WidgetCatalogId::Masonry => "view.add(ui_key!(\"msn\"), MasonryDesc::new(rect, items));",
-        WidgetCatalogId::Menu => "view.add(ui_key!(\"mnu\"), MenuDesc::new(rect, items));",
-        WidgetCatalogId::Menubar => "view.add(ui_key!(\"mb\"), MenuBarDesc::new(rect, menus));",
+        WidgetCatalogId::MenuFlyout => "view.add(ui_key!(\"mnu\"), MenuDesc::new(rect, items));",
+        WidgetCatalogId::MenuBar => "view.add(ui_key!(\"mb\"), MenuBarDesc::new(rect, menus));",
         WidgetCatalogId::Minimap => "view.add(ui_key!(\"mm\"), MinimapDesc::new(rect));",
-        WidgetCatalogId::Modal => "view.add(ui_key!(\"mdl\"), ModalDesc::new(rect, \"Modal Dialog\"));",
+        WidgetCatalogId::ContentDialog => "view.add(ui_key!(\"mdl\"), ModalDesc::new(rect, \"Modal Dialog\"));",
         WidgetCatalogId::MultiSplit => "view.multi_split(ui_key!(\"msplit\"), MultiSplitDesc::new(rect, panes));",
-        WidgetCatalogId::NavigationRail => "view.add(ui_key!(\"nr\"), NavigationRailDesc::new(rect, items));",
+        WidgetCatalogId::NavigationViewCompact => "view.add(ui_key!(\"nr\"), NavigationRailDesc::new(rect, items));",
         WidgetCatalogId::NinePatch => "view.add(ui_key!(\"np\"), NinePatchDesc::new(rect, asset_id));",
         WidgetCatalogId::NodeGraph => "view.add(ui_key!(\"ng\"), NodeGraphDesc::new(rect, graph));",
         WidgetCatalogId::NotificationCenter => "view.add(ui_key!(\"nc\"), NotificationCenterDesc::new(rect));",
-        WidgetCatalogId::NumberInput => "view.add(ui_key!(\"ni\"), NumberInputDesc::new(rect).min(0.0).max(100.0));",
+        WidgetCatalogId::NumberBox => "view.add(ui_key!(\"ni\"), NumberInputDesc::new(rect).min(0.0).max(100.0));",
         WidgetCatalogId::Overlay => "view.add(ui_key!(\"ov\"), OverlayDesc::new(rect));",
-        WidgetCatalogId::Pagination => "view.add(ui_key!(\"pg\"), PaginationDesc::new(rect, 100).page_size(10));",
+        WidgetCatalogId::PipsPager => "view.add(ui_key!(\"pg\"), PaginationDesc::new(rect, 100).page_size(10));",
         WidgetCatalogId::PinInput => "view.add(ui_key!(\"pin\"), PinInputDesc::new(rect, 6));",
         WidgetCatalogId::Popconfirm => "view.add(ui_key!(\"pcf\"), PopconfirmDesc::new(rect, \"Delete item?\"));",
-        WidgetCatalogId::Popover => "view.add(ui_key!(\"pop\"), PopoverDesc::new(rect));",
-        WidgetCatalogId::Progress => "view.progress(ui_key!(\"prg\"), ProgressDesc::bar(0.75));",
+        WidgetCatalogId::Flyout => "view.add(ui_key!(\"pop\"), PopoverDesc::new(rect));",
+        WidgetCatalogId::ProgressBar => "view.progress(ui_key!(\"prg\"), ProgressDesc::bar(0.75));",
         WidgetCatalogId::PropertyGrid => "view.add(ui_key!(\"pgd\"), PropertyGridDesc::new(rect, props));",
-        WidgetCatalogId::Radio => "view.add(ui_key!(\"rad\"), RadioGroupDesc::new(rect, options));",
-        WidgetCatalogId::Rating => "view.add(ui_key!(\"rtg\"), RatingDesc::new(rect, 5).value(4.5));",
-        WidgetCatalogId::RichText => "view.add(ui_key!(\"rt\"), RichTextDesc::new(rect, markdown));",
+        WidgetCatalogId::RadioButton => "view.add(ui_key!(\"rad\"), RadioGroupDesc::new(rect, options));",
+        WidgetCatalogId::RatingControl => "view.add(ui_key!(\"rtg\"), RatingDesc::new(rect, 5).value(4.5));",
+        WidgetCatalogId::RichTextBlock => "view.add(ui_key!(\"rt\"), RichTextDesc::new(rect, markdown));",
         WidgetCatalogId::Ruler => "view.add(ui_key!(\"rlr\"), RulerDesc::new(rect));",
-        WidgetCatalogId::Scroll => "view.scroll_view(ui_key!(\"sc\"), true, |ui| { /* content */ });",
-        WidgetCatalogId::Segmented => "view.add(ui_key!(\"seg\"), SegmentedDesc::new(rect, options));",
-        WidgetCatalogId::Select => "view.select(ui_key!(\"sel\"), SelectDesc::options(&[\"A\", \"B\"]).selected(0));",
+        WidgetCatalogId::ScrollView => "view.scroll_view(ui_key!(\"sc\"), true, |ui| { /* content */ });",
+        WidgetCatalogId::SelectorBar => "view.add(ui_key!(\"seg\"), SegmentedDesc::new(rect, options));",
+        WidgetCatalogId::ComboBox => "view.select(ui_key!(\"sel\"), SelectDesc::options(&[\"A\", \"B\"]).selected(0));",
         WidgetCatalogId::Skeleton => "view.add(ui_key!(\"skl\"), SkeletonDesc::new(rect));",
         WidgetCatalogId::Slider => "view.slider(ui_key!(\"sld\"), SliderDesc::range(0.0..=100.0).value(50.0));",
-        WidgetCatalogId::Spinner => "view.add(ui_key!(\"spn\"), SpinnerDesc::new(rect));",
+        WidgetCatalogId::ProgressRing => "view.add(ui_key!(\"spn\"), SpinnerDesc::new(rect));",
         WidgetCatalogId::SplitButton => "view.split_button(ui_key!(\"sbtn\"), SplitButtonDesc::new(rect, \"Run\", \"Build & Run\"));",
         WidgetCatalogId::SplitPane => "view.split_pane(ui_key!(\"sp\"), true, |left| {}, |right| {});",
-        WidgetCatalogId::Stack => "view.add(ui_key!(\"stk\"), StackDesc::new(rect));",
+        WidgetCatalogId::StackPanel => "view.add(ui_key!(\"stk\"), StackDesc::new(rect));",
         WidgetCatalogId::StatusBar => "view.add(ui_key!(\"sb\"), StatusBarDesc::new(rect, segments));",
         WidgetCatalogId::Stepper => "view.add(ui_key!(\"stp\"), StepperDesc::new(rect, steps));",
-        WidgetCatalogId::Switch => "view.switch(ui_key!(\"sw\"), SwitchDesc::on(true));",
+        WidgetCatalogId::ToggleSwitch => "view.switch(ui_key!(\"sw\"), SwitchDesc::on(true));",
         WidgetCatalogId::Table => "view.table(ui_key!(\"tbl\"), TableDesc::columns(cols).rows(rows));",
-        WidgetCatalogId::Tabs => "view.add(ui_key!(\"tb\"), TabsDesc::new(rect, tabs));",
+        WidgetCatalogId::TabView => "view.add(ui_key!(\"tb\"), TabsDesc::new(rect, tabs));",
         WidgetCatalogId::TagInput => "view.add(ui_key!(\"tag\"), TagInputDesc::new(rect, tags));",
         WidgetCatalogId::TerminalView => "view.terminal_view(ui_key!(\"term\"), TerminalViewDesc::new(rect, lines));",
-        WidgetCatalogId::TextArea => "view.add(ui_key!(\"ta\"), TextAreaDesc::new(rect));",
-        WidgetCatalogId::TextInput => "view.text_input(ui_key!(\"txt\"), TextInputDesc::text(\"\").placeholder(\"Search...\"));",
+        WidgetCatalogId::TextBoxMultiline => "view.add(ui_key!(\"ta\"), TextAreaDesc::new(rect));",
+        WidgetCatalogId::TextBox => "view.text_input(ui_key!(\"txt\"), TextInputDesc::text(\"\").placeholder(\"Search...\"));",
         WidgetCatalogId::PasswordBox => "view.add(ui_key!(\"pwd\"), PasswordBoxDesc::new(rect, \"Password\"));",
         WidgetCatalogId::TimePicker => "view.add(ui_key!(\"tp\"), TimePickerDesc::new(rect));",
         WidgetCatalogId::Timeline => "view.add(ui_key!(\"tl\"), TimelineDesc::new(rect, events));",
         WidgetCatalogId::TimelineTrack => "view.add(ui_key!(\"tlt\"), TimelineTrackDesc::new(rect));",
         WidgetCatalogId::Toast => "view.add(ui_key!(\"tst\"), ToastDesc::new(rect, \"Notification\"));",
         WidgetCatalogId::ToggleButton => "view.toggle_button(ui_key!(\"tbtn\"), ToggleButtonDesc::new(rect, \"Pin\", true));",
-        WidgetCatalogId::Toolbar => "view.add(ui_key!(\"tbr\"), ToolbarDesc::new(rect, tools));",
-        WidgetCatalogId::Tooltip => "view.tooltip(ui_key!(\"ttp\"), TooltipDesc::labeled(anchor, viewport, \"Auto-flipping hint\"));",
+        WidgetCatalogId::CommandBar => "view.add(ui_key!(\"tbr\"), ToolbarDesc::new(rect, tools));",
+        WidgetCatalogId::ToolTip => "view.tooltip(ui_key!(\"ttp\"), TooltipDesc::labeled(anchor, viewport, \"Auto-flipping hint\"));",
         WidgetCatalogId::Tour => "view.add(ui_key!(\"tur\"), TourDesc::new(rect, step));",
         WidgetCatalogId::Transfer => "view.add(ui_key!(\"tr\"), TransferDesc::new(rect, items));",
         WidgetCatalogId::TreeTable => "view.tree_table(ui_key!(\"ttbl\"), TreeTableDesc::new(rect, rows));",
         WidgetCatalogId::TreeView => "view.add(ui_key!(\"tv\"), TreeViewDesc::new(rect, tree_nodes));",
-        WidgetCatalogId::VirtualViews => "view.add(ui_key!(\"vv\"), VirtualViewsDesc::new(rect));",
+        WidgetCatalogId::ListView => "view.add(ui_key!(\"vv\"), VirtualViewsDesc::new(rect));",
         WidgetCatalogId::VirtualMasonry => "view.virtual_masonry(ui_key!(\"vm\"), VirtualMasonryDesc::new(rect, 4, 1000));",
         WidgetCatalogId::Watermark => "view.add(ui_key!(\"wm\"), WatermarkDesc::new(rect, \"CONFIDENTIAL\"));",
         WidgetCatalogId::Wrap => "view.add(ui_key!(\"wrp\"), WrapDesc::new(rect));",
@@ -331,7 +331,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::QueryBuilder => "view.add(ui_key!(\"qb\"), QueryBuilderDesc::new(rect, QueryCombinator::And, rules));",
         WidgetCatalogId::SchemaForm => "view.add(ui_key!(\"sf\"), SchemaFormDesc::new(rect, fields));",
         WidgetCatalogId::ShortcutBar => "view.add(ui_key!(\"scb\"), ShortcutBarDesc::new(rect, entries));",
-        WidgetCatalogId::Sidebar => "view.add(ui_key!(\"sb\"), SidebarDesc::new(rect, sections).active(id));",
+        WidgetCatalogId::NavigationView => "view.add(ui_key!(\"sb\"), SidebarDesc::new(rect, sections).active(id));",
         WidgetCatalogId::TaskHud => "view.add(ui_key!(\"hud\"), TaskHudDesc::new(rect, tasks));",
         WidgetCatalogId::RichEditBox => "view.add(ui_key!(\"reb\"), RichEditBoxDesc::new(rect, \"Document\"));",
         WidgetCatalogId::GridView => "view.add(ui_key!(\"gv\"), GridViewDesc::new(rect, 3, 2).selected(0));",
@@ -413,30 +413,30 @@ macro_rules! define_showcase_components {
 }
 
 define_showcase_components! {
-    Accordion => "Accordion", "Collapsible sections with a stable header identity.", 320.0,
-    Alert => "Alert", "Severity banner with an optional dismiss affordance.", 240.0,
+    ExpanderGroup => "Expander group", "Collapsible sections with a stable header identity.", 320.0,
+    InfoBar => "InfoBar", "Severity banner with an optional dismiss affordance.", 240.0,
     AlertDialog => "Alert dialog", "A destructive confirmation placed in the viewport.", 320.0,
-    Avatar => "Avatar", "Initials avatar with a presence indicator.", 240.0,
-    Badge => "Badge / chip", "A closable chip — the interactive half of the badge module.", 240.0,
-    Breadcrumb => "Breadcrumb", "Hierarchical trail with per-crumb hit slots.", 240.0,
+    PersonPicture => "PersonPicture", "Initials avatar with a presence indicator.", 240.0,
+    InfoBadge => "InfoBadge", "A closable chip — the interactive half of the badge module.", 240.0,
+    BreadcrumbBar => "BreadcrumbBar", "Hierarchical trail with per-crumb hit slots.", 240.0,
     Button => "Button", "The flat button: shadow, surface, label, border, focus ring.", 240.0,
     CanvasToolbar => "Canvas toolbar", "Floating zoom and tool controls for the infinite canvas.", 280.0,
     Chart => "Chart", "Line series with axes and a hover crosshair.", 320.0,
-    Checkbox => "Checkbox", "A checked box with a shaped mark and label.", 240.0,
+    CheckBox => "CheckBox", "A checked box with a shaped mark and label.", 240.0,
     CodeBlock => "Code block", "Syntax-highlighted source with a copy affordance.", 300.0,
     ColorPicker => "Color picker", "HSVA field with HEX / OKLCH readouts.", 360.0,
     ColorSwatch => "Color swatch", "Accent palette tile with a selection ring.", 240.0,
-    Combobox => "Combobox", "Editable trigger with a filtered suggestion list.", 260.0,
+    ComboBoxEditable => "ComboBox (editable)", "Editable trigger with a filtered suggestion list.", 260.0,
     CommandPalette => "Command palette", "Fuzzy command search with shortcuts.", 360.0,
     Containers => "Card container", "Header / body / footer surface from the containers module.", 300.0,
     ContextMenu => "Context menu", "Right-click placement state machine over the menu emitter.", 300.0,
     CurveEditor => "Curve editor", "Editable bezier curve with draggable handles.", 320.0,
     CalendarDatePicker => "Calendar date picker", "Collapsed date trigger with a calendar flyout affordance.", 320.0,
-    DatePicker => "Date picker", "Month calendar with single-date selection.", 360.0,
-    DatePickerWheel => "Date picker (wheel)", "Three-column month / day / year wheel selector.", 320.0,
+    CalendarView => "CalendarView", "Month calendar with single-date selection.", 360.0,
+    DatePicker => "DatePicker", "Three-column month / day / year wheel selector.", 320.0,
     Divider => "Divider", "A hairline separator with an optional label.", 220.0,
     Dock => "Dock", "Tabbed panes with drag-to-dock layout.", 340.0,
-    Drawer => "Drawer", "A side drawer with a scrim over the viewport.", 340.0,
+    SplitView => "SplitView", "A side drawer with a scrim over the viewport.", 340.0,
     DropDownButton => "Drop-down button", "A button with a fixed trailing chevron that opens a menu.", 240.0,
     FileDrop => "File drop", "A drop target with idle and drag-over states.", 280.0,
     Form => "Form", "Field label with required marker and validation message.", 280.0,
@@ -444,43 +444,43 @@ define_showcase_components! {
     HoverCard => "Hover card", "A rich preview anchored to a trigger.", 280.0,
     HyperlinkButton => "Hyperlink button", "Borderless accent text button with hover and pressed veils.", 240.0,
     Image => "Image", "A textured quad bound to an atlas layer.", 280.0,
-    Menu => "Menu", "Action rows, separators and shortcuts.", 300.0,
-    Menubar => "Menubar", "Top-level menu items with keyboard traversal.", 240.0,
+    MenuFlyout => "MenuFlyout", "Action rows, separators and shortcuts.", 300.0,
+    MenuBar => "MenuBar", "Top-level menu items with keyboard traversal.", 240.0,
     Minimap => "Minimap", "A viewport thumbnail over the world bounds.", 300.0,
-    Modal => "Modal", "A centered dialog with a focus trap and scrim.", 360.0,
+    ContentDialog => "ContentDialog", "A centered dialog with a focus trap and scrim.", 360.0,
     NodeGraph => "Node graph", "Ported nodes connected by wires.", 340.0,
-    NumberInput => "Number input", "Stepper with expression evaluation.", 240.0,
+    NumberBox => "NumberBox", "Stepper with expression evaluation.", 240.0,
     Overlay => "Overlay stack", "Pure placement bookkeeping — emits no primitives of its own.", 220.0,
-    Popover => "Popover", "An anchored popup with a directional arrow.", 280.0,
-    Progress => "Progress", "A determinate bar driven by a value.", 220.0,
+    Flyout => "Flyout", "An anchored popup with a directional arrow.", 280.0,
+    ProgressBar => "ProgressBar", "A determinate bar driven by a value.", 220.0,
     PropertyGrid => "Property grid", "Sectioned inspector rows with reset points.", 320.0,
-    Radio => "Radio", "A single-choice row in a group.", 240.0,
-    RichText => "Rich text", "Markdown parsed into styled runs.", 320.0,
+    RadioButton => "RadioButton", "A single-choice row in a group.", 240.0,
+    RichTextBlock => "RichTextBlock", "Markdown parsed into styled runs.", 320.0,
     Ruler => "Ruler", "Canvas rulers with draggable guides.", 320.0,
-    Scroll => "Scroll view", "A scrollable viewport with a real scrollbar.", 320.0,
-    Segmented => "Segmented", "An unselected slot of a single-choice pill.", 240.0,
-    Select => "Select", "A closed select trigger with a value.", 240.0,
+    ScrollView => "ScrollView", "A scrollable viewport with a real scrollbar.", 320.0,
+    SelectorBar => "SelectorBar", "An unselected slot of a single-choice pill.", 240.0,
+    ComboBox => "ComboBox", "A closed select trigger with a value.", 240.0,
     Skeleton => "Skeleton", "An animated loading placeholder.", 220.0,
     Slider => "Slider", "A continuous track with a thumb and step.", 240.0,
     SplitPane => "Split pane", "A draggable divider between two panes.", 320.0,
-    Switch => "Switch", "An on/off toggle with a shaped label.", 240.0,
+    ToggleSwitch => "ToggleSwitch", "An on/off toggle with a shaped label.", 240.0,
     Table => "Table", "Column headers and a virtual row window.", 320.0,
-    Tabs => "Tabs", "An inactive tab slot with close affordance.", 240.0,
+    TabView => "TabView", "An inactive tab slot with close affordance.", 240.0,
     TagInput => "Tag input", "Removable tags with an inline editor.", 280.0,
-    TextArea => "Text area", "Multi-line editing with line numbers.", 300.0,
-    TextInput => "Text input", "A single-line field with caret and selection.", 240.0,
+    TextBoxMultiline => "TextBox (multiline)", "Multi-line editing with line numbers.", 300.0,
+    TextBox => "TextBox", "A single-line field with caret and selection.", 240.0,
     Toast => "Toast", "A spring-in notification with a countdown.", 280.0,
-    Toolbar => "Toolbar", "Button and toggle items in a row.", 240.0,
-    Tooltip => "Tooltip", "A delayed, smart-flipping in-window hint.", 260.0,
+    CommandBar => "CommandBar", "Button and toggle items in a row.", 240.0,
+    ToolTip => "ToolTip", "A delayed, smart-flipping in-window hint.", 260.0,
     TreeView => "Tree view", "An expandable row with keyboard navigation.", 320.0,
-    VirtualViews => "Virtual row", "A Fenwick-backed variable-height virtual row.", 240.0,
-    Collapsible => "Collapsible", "Single-section disclosure panel with smooth spring progress.", 240.0,
+    ListView => "ListView", "A Fenwick-backed variable-height virtual row.", 240.0,
+    Expander => "Expander", "Single-section disclosure panel with smooth spring progress.", 240.0,
     Masonry => "Masonry grid", "Shortest-column adaptive waterfall grid and aspect-ratio box.", 280.0,
-    NavigationRail => "Navigation rail", "Collapsible sidebar navigation rail with badges.", 280.0,
-    Pagination => "Pagination", "Page buttons with ellipsis folding and page-size metadata.", 220.0,
+    NavigationViewCompact => "NavigationView (compact)", "Collapsible sidebar navigation rail with badges.", 280.0,
+    PipsPager => "PipsPager", "Page buttons with ellipsis folding and page-size metadata.", 220.0,
     PasswordBox => "Password box", "Masked text field with a press-and-hold reveal button.", 240.0,
     Stepper => "Stepper", "Horizontal or vertical multi-step progress indicator.", 240.0,
-    AutoComplete => "AutoComplete", "Prefix-filtered input with live suggestion badge.", 220.0,
+    AutoSuggestBox => "AutoSuggestBox", "Prefix-filtered input with live suggestion badge.", 220.0,
     Banner => "Banner", "Full-width top global status and recovery banner.", 220.0,
     Cascader => "Cascader", "Multi-level hierarchical option selector.", 220.0,
     DateRangePicker => "Date range picker", "Dual-month calendar range selector with presets.", 260.0,
@@ -488,12 +488,12 @@ define_showcase_components! {
     NotificationCenter => "Notification center", "Drawer aggregating toast history and unread status.", 260.0,
     PinInput => "PIN input", "Segmented verification code input with paste splitting.", 220.0,
     Popconfirm => "Popconfirm", "Anchored confirmation bubble for destructive actions.", 240.0,
-    Rating => "Rating", "Five-star rating control with half-star precision.", 220.0,
+    RatingControl => "RatingControl", "Five-star rating control with half-star precision.", 220.0,
     RepeatButton => "Repeat button", "Press and hold to fire repeated clicks after the first delay.", 240.0,
-    Spinner => "Spinner", "Continuous loading spinner and overlay lock scrim.", 220.0,
+    ProgressRing => "ProgressRing", "Continuous loading spinner and overlay lock scrim.", 220.0,
     TimePicker => "Time picker", "Hour, minute, and second stepping time selector.", 220.0,
     Transfer => "Transfer", "Dual-column item transfer list with batch move.", 260.0,
-    Carousel => "Carousel", "Spring-snapping slide deck with indicator dots.", 240.0,
+    FlipView => "FlipView", "Spring-snapping slide deck with indicator dots.", 240.0,
     CodeEditor => "Code editor", "Editable code surface with line gutter and active line highlight.", 260.0,
     DataGrid => "Data grid", "Editable virtualized spreadsheet grid with cell selection.", 260.0,
     Timeline => "Timeline", "Chronological event stream with status nodes and timestamps.", 260.0,
@@ -505,10 +505,10 @@ define_showcase_components! {
     Chip => "Chip", "Interactive filter chip with close affordance.", 240.0,
     EmptyState => "Empty state", "Centred empty placeholder with action button.", 280.0,
     GradientEditor => "Gradient editor", "Colour ramp editor with draggable colour stops.", 300.0,
-    Icon => "Icon", "Sized vector icon with rounded corners.", 220.0,
+    FontIcon => "FontIcon", "Sized vector icon with rounded corners.", 220.0,
     LoadingOverlay => "Loading overlay", "Full-card scrim with centred spinning loader.", 260.0,
     NinePatch => "Nine-patch", "Nine-slice scaling image with fixed border corners.", 260.0,
-    Stack => "Stack", "Layered container stacking children in z-order.", 260.0,
+    StackPanel => "StackPanel", "Layered container stacking children in z-order.", 260.0,
     StatusBar => "Status bar", "Desktop status strip with aligned segments.", 220.0,
     Wrap => "Wrap layout", "Flow layout wrapping items into lines.", 260.0,
     SplitButton => "Split button", "Primary button paired with a dropdown trigger menu.", 220.0,
@@ -528,7 +528,7 @@ define_showcase_components! {
     SchemaForm => "Schema form", "Declarative schema-driven inspector form with dirty tracking and conditional fields.", 280.0,
     ShortcutBar => "Shortcut bar", "Contextual keycap shortcut hint bar with conflict detection.", 220.0,
     TaskHud => "Task HUD", "Background task progress stack with cancellation affordances.", 260.0,
-    Sidebar => "Sidebar", "Full-height navigation panel with grouped sections, active and hovered rows, badges and a pinned footer.", 420.0,
+    NavigationView => "NavigationView", "Full-height navigation panel with grouped sections, active and hovered rows, badges and a pinned footer.", 420.0,
     RichEditBox => "Rich edit box", "Formatted text editor with a bold / italic / underline toolbar.", 320.0,
     GridView => "Grid view", "Evenly sized cells with a selection frame and hover rounding.", 320.0,
     ListBox => "List box", "Classic single-selection list with a primary accent indicator.", 300.0,
@@ -560,44 +560,44 @@ pub const fn component_nav_label_localized(
         return component_nav_label(id);
     }
     match id {
-        WidgetCatalogId::Accordion => "折叠面板 (Accordion)",
+        WidgetCatalogId::ExpanderGroup => "折叠面板 (Expander Group)",
         WidgetCatalogId::AddressBar => "地址栏 (Address Bar)",
-        WidgetCatalogId::Alert => "提示横幅 (Alert)",
+        WidgetCatalogId::InfoBar => "信息栏 (InfoBar)",
         WidgetCatalogId::AlertDialog => "确认弹窗 (Alert Dialog)",
         WidgetCatalogId::AspectRatioBox => "宽高比容器 (Aspect Ratio Box)",
-        WidgetCatalogId::AutoComplete => "自动补全 (AutoComplete)",
-        WidgetCatalogId::Avatar => "头像 (Avatar)",
+        WidgetCatalogId::AutoSuggestBox => "自动建议框 (AutoSuggestBox)",
+        WidgetCatalogId::PersonPicture => "个人头像 (PersonPicture)",
         WidgetCatalogId::AvatarGroup => "头像组 (Avatar Group)",
-        WidgetCatalogId::Badge => "徽章胶囊 (Badge / Chip)",
+        WidgetCatalogId::InfoBadge => "信息徽章 (InfoBadge)",
         WidgetCatalogId::Banner => "全局横幅 (Banner)",
-        WidgetCatalogId::Breadcrumb => "面包屑 (Breadcrumb)",
+        WidgetCatalogId::BreadcrumbBar => "面包屑导航 (BreadcrumbBar)",
         WidgetCatalogId::Button => "按钮 (Button)",
         WidgetCatalogId::Callout => "高亮提示框 (Callout)",
         WidgetCatalogId::CanvasToolbar => "画布工具栏 (Canvas Toolbar)",
-        WidgetCatalogId::Carousel => "轮播走马灯 (Carousel)",
+        WidgetCatalogId::FlipView => "翻转视图 (FlipView)",
         WidgetCatalogId::Cascader => "级联选择器 (Cascader)",
         WidgetCatalogId::Chart => "图表 (Chart)",
-        WidgetCatalogId::Checkbox => "复选框 (Checkbox)",
+        WidgetCatalogId::CheckBox => "复选框 (CheckBox)",
         WidgetCatalogId::Chip => "过滤胶囊 (Chip)",
         WidgetCatalogId::CodeBlock => "代码块 (Code Block)",
         WidgetCatalogId::CodeEditor => "代码编辑器 (Code Editor)",
-        WidgetCatalogId::Collapsible => "可折叠区 (Collapsible)",
+        WidgetCatalogId::Expander => "可展开面板 (Expander)",
         WidgetCatalogId::ColorPicker => "颜色选择器 (Color Picker)",
         WidgetCatalogId::ColorSwatch => "颜色色块 (Color Swatch)",
-        WidgetCatalogId::Combobox => "组合框 (Combobox)",
+        WidgetCatalogId::ComboBoxEditable => "可编辑下拉框 (ComboBox)",
         WidgetCatalogId::CommandPalette => "命令面板 (Command Palette)",
         WidgetCatalogId::Containers => "卡片容器 (Card Container)",
         WidgetCatalogId::ContextMenu => "右键菜单 (Context Menu)",
         WidgetCatalogId::CurveEditor => "曲线编辑器 (Curve Editor)",
         WidgetCatalogId::DataGrid => "电子表格网格 (Data Grid)",
         WidgetCatalogId::CalendarDatePicker => "日期触发器 (Calendar Date Picker)",
-        WidgetCatalogId::DatePicker => "日期选择器 (Date Picker)",
-        WidgetCatalogId::DatePickerWheel => "滚轮日期选择器 (Date Picker Wheel)",
+        WidgetCatalogId::CalendarView => "日历视图 (CalendarView)",
+        WidgetCatalogId::DatePicker => "日期选择器 (DatePicker)",
         WidgetCatalogId::DateRangePicker => "日期区间选择器 (Date Range Picker)",
         WidgetCatalogId::Descriptions => "描述列表 (Descriptions)",
         WidgetCatalogId::Divider => "分割线 (Divider)",
         WidgetCatalogId::Dock => "停靠面板 (Dock)",
-        WidgetCatalogId::Drawer => "侧边抽屉 (Drawer)",
+        WidgetCatalogId::SplitView => "拆分视图 (SplitView)",
         WidgetCatalogId::DropDownButton => "下拉按钮 (Drop-Down Button)",
         WidgetCatalogId::EmptyState => "空状态占位 (Empty State)",
         WidgetCatalogId::FileDrop => "文件拖拽区 (File Drop)",
@@ -608,72 +608,72 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::HotkeyInput => "快捷键录制框 (Hotkey Input)",
         WidgetCatalogId::HoverCard => "悬停预览卡 (Hover Card)",
         WidgetCatalogId::HyperlinkButton => "超链接按钮 (Hyperlink Button)",
-        WidgetCatalogId::Icon => "矢量图标 (Icon)",
+        WidgetCatalogId::FontIcon => "字体图标 (FontIcon)",
         WidgetCatalogId::Image => "图像视图 (Image)",
         WidgetCatalogId::LoadingOverlay => "加载遮罩 (Loading Overlay)",
         WidgetCatalogId::Masonry => "瀑布流网格 (Masonry Grid)",
-        WidgetCatalogId::Menu => "下拉菜单 (Menu)",
-        WidgetCatalogId::Menubar => "顶部菜单栏 (Menubar)",
+        WidgetCatalogId::MenuFlyout => "菜单浮出 (MenuFlyout)",
+        WidgetCatalogId::MenuBar => "菜单栏 (MenuBar)",
         WidgetCatalogId::Minimap => "缩略小地图 (Minimap)",
-        WidgetCatalogId::Modal => "模态对话框 (Modal)",
+        WidgetCatalogId::ContentDialog => "内容对话框 (ContentDialog)",
         WidgetCatalogId::MultiSplit => "多列分割面板 (Multi-Split)",
-        WidgetCatalogId::NavigationRail => "侧边导航轨 (Navigation Rail)",
+        WidgetCatalogId::NavigationViewCompact => "紧凑导航视图 (NavigationView)",
         WidgetCatalogId::NinePatch => "九宫格图像 (Nine-Patch)",
         WidgetCatalogId::NodeGraph => "节点蓝图 (Node Graph)",
         WidgetCatalogId::NotificationCenter => "通知中心 (Notification Center)",
-        WidgetCatalogId::NumberInput => "数值输入框 (Number Input)",
+        WidgetCatalogId::NumberBox => "数字框 (NumberBox)",
         WidgetCatalogId::Overlay => "浮层栈 (Overlay Stack)",
-        WidgetCatalogId::Pagination => "分页器 (Pagination)",
+        WidgetCatalogId::PipsPager => "页码导航 (PipsPager)",
         WidgetCatalogId::PasswordBox => "密码输入框 (Password Box)",
         WidgetCatalogId::PinInput => "验证码输入框 (PIN Input)",
         WidgetCatalogId::PipelineView => "管线阶段视图 (Pipeline View)",
         WidgetCatalogId::Pivot => "页签条 (Pivot)",
         WidgetCatalogId::Popconfirm => "气泡确认框 (Popconfirm)",
-        WidgetCatalogId::Popover => "气泡浮层 (Popover)",
-        WidgetCatalogId::Progress => "进度指示器 (Progress)",
+        WidgetCatalogId::Flyout => "浮出控件 (Flyout)",
+        WidgetCatalogId::ProgressBar => "进度条 (ProgressBar)",
         WidgetCatalogId::PropertyGrid => "属性检视网格 (Property Grid)",
         WidgetCatalogId::QueryBuilder => "查询构建器 (Query Builder)",
-        WidgetCatalogId::Radio => "单选按钮 (Radio)",
-        WidgetCatalogId::Rating => "星级评分 (Rating)",
+        WidgetCatalogId::RadioButton => "单选按钮 (RadioButton)",
+        WidgetCatalogId::RatingControl => "评分控件 (RatingControl)",
         WidgetCatalogId::RepeatButton => "长按重复按钮 (Repeat Button)",
-        WidgetCatalogId::RichText => "富文本视图 (Rich Text)",
+        WidgetCatalogId::RichTextBlock => "富文本块 (RichTextBlock)",
         WidgetCatalogId::Ruler => "标尺参考线 (Ruler)",
         WidgetCatalogId::SchemaForm => "Schema 表单 (Schema Form)",
-        WidgetCatalogId::Scroll => "滚动视图 (Scroll View)",
-        WidgetCatalogId::Segmented => "分段控制器 (Segmented)",
-        WidgetCatalogId::Select => "下拉选择框 (Select)",
+        WidgetCatalogId::ScrollView => "滚动视图 (ScrollView)",
+        WidgetCatalogId::SelectorBar => "选择条 (SelectorBar)",
+        WidgetCatalogId::ComboBox => "下拉框 (ComboBox)",
         WidgetCatalogId::ShortcutBar => "快捷键提示栏 (Shortcut Bar)",
-        WidgetCatalogId::Sidebar => "侧边栏 (Sidebar)",
+        WidgetCatalogId::NavigationView => "导航视图 (NavigationView)",
         WidgetCatalogId::Skeleton => "骨架占位屏 (Skeleton)",
         WidgetCatalogId::Slider => "滑块 (Slider)",
-        WidgetCatalogId::Spinner => "加载转圈 (Spinner)",
+        WidgetCatalogId::ProgressRing => "进度环 (ProgressRing)",
         WidgetCatalogId::SplitButton => "分割按钮 (Split Button)",
         WidgetCatalogId::SplitPane => "双栏分割窗格 (Split Pane)",
-        WidgetCatalogId::Stack => "层叠容器 (Stack)",
+        WidgetCatalogId::StackPanel => "堆叠面板 (StackPanel)",
         WidgetCatalogId::StatusBar => "状态栏 (Status Bar)",
         WidgetCatalogId::Stepper => "步骤条 (Stepper)",
-        WidgetCatalogId::Switch => "切换开关 (Switch)",
+        WidgetCatalogId::ToggleSwitch => "切换开关 (Toggle Switch)",
         WidgetCatalogId::Table => "虚拟数据表 (Table)",
-        WidgetCatalogId::Tabs => "标签页 (Tabs)",
+        WidgetCatalogId::TabView => "选项卡视图 (TabView)",
         WidgetCatalogId::TagInput => "标签输入框 (Tag Input)",
         WidgetCatalogId::TaskHud => "任务进度坞 (Task HUD)",
         WidgetCatalogId::TerminalView => "终端日志视图 (Terminal View)",
-        WidgetCatalogId::TextArea => "多行文本域 (Text Area)",
-        WidgetCatalogId::TextInput => "单行输入框 (Text Input)",
+        WidgetCatalogId::TextBoxMultiline => "多行文本框 (TextBox)",
+        WidgetCatalogId::TextBox => "文本框 (TextBox)",
         WidgetCatalogId::TimePicker => "时间选择器 (Time Picker)",
         WidgetCatalogId::Timeline => "时间轴 (Timeline)",
         WidgetCatalogId::TimelineTrack => "关键帧轨道 (Timeline Track)",
         WidgetCatalogId::Toast => "吐司通知 (Toast)",
         WidgetCatalogId::ToggleButton => "双态切换按钮 (Toggle Button)",
         WidgetCatalogId::ToggleSplitButton => "切换分割按钮 (Toggle Split Button)",
-        WidgetCatalogId::Toolbar => "工具栏 (Toolbar)",
-        WidgetCatalogId::Tooltip => "工具提示 (Tooltip)",
+        WidgetCatalogId::CommandBar => "命令栏 (CommandBar)",
+        WidgetCatalogId::ToolTip => "工具提示 (ToolTip)",
         WidgetCatalogId::Tour => "漫游引导 (Tour)",
         WidgetCatalogId::Transfer => "双栏穿梭框 (Transfer)",
         WidgetCatalogId::TreeTable => "树形数据表 (Tree Table)",
         WidgetCatalogId::TreeView => "树形视图 (Tree View)",
         WidgetCatalogId::VirtualMasonry => "虚拟瀑布流 (Virtual Masonry)",
-        WidgetCatalogId::VirtualViews => "变高虚拟行 (Virtual Row)",
+        WidgetCatalogId::ListView => "列表视图 (ListView)",
         WidgetCatalogId::Watermark => "安全水印 (Watermark)",
         WidgetCatalogId::Wrap => "自动换行流 (Wrap Layout)",
         WidgetCatalogId::RichEditBox => "富文本编辑框 (Rich Edit Box)",
@@ -702,44 +702,44 @@ pub const fn component_nav_label_localized(
 #[deny(unreachable_patterns)]
 pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
     match id {
-        WidgetCatalogId::Accordion => "折叠面板 手风琴 accordion",
+        WidgetCatalogId::ExpanderGroup => "折叠面板 手风琴 expander group",
         WidgetCatalogId::AddressBar => "地址栏 路径导航 面包屑 address bar",
-        WidgetCatalogId::Alert => "警告提示 横幅 alert",
+        WidgetCatalogId::InfoBar => "信息栏 警告提示 横幅 info bar",
         WidgetCatalogId::AlertDialog => "确认对话框 弹窗 alert dialog",
         WidgetCatalogId::AspectRatioBox => "宽高比容器 比例盒 aspect ratio",
-        WidgetCatalogId::AutoComplete => "自动补全 输入建议 autocomplete",
-        WidgetCatalogId::Avatar => "头像 用户状态 avatar",
+        WidgetCatalogId::AutoSuggestBox => "自动建议框 自动补全输入建议 auto suggest box",
+        WidgetCatalogId::PersonPicture => "个人头像 用户状态 person picture",
         WidgetCatalogId::AvatarGroup => "头像组 叠放头像 avatar group",
-        WidgetCatalogId::Badge => "徽章 标记 badge",
+        WidgetCatalogId::InfoBadge => "信息徽章 标记 info badge",
         WidgetCatalogId::Banner => "全局横幅 顶部通知 banner",
-        WidgetCatalogId::Breadcrumb => "面包屑 路径导航 breadcrumb",
+        WidgetCatalogId::BreadcrumbBar => "面包屑 路径导航 breadcrumb bar",
         WidgetCatalogId::Button => "按钮 点击 触发器 button",
         WidgetCatalogId::Callout => "高亮提示框 说明框 callout",
         WidgetCatalogId::CanvasToolbar => "画布工具栏 缩放工具 canvas toolbar",
-        WidgetCatalogId::Carousel => "轮播图 走马灯 carousel",
+        WidgetCatalogId::FlipView => "翻转视图 轮播走马灯 flip view",
         WidgetCatalogId::Cascader => "级联选择器 多级下拉 cascader",
         WidgetCatalogId::Chart => "图表 折线图 渲染耗时曲线 chart",
-        WidgetCatalogId::Checkbox => "复选框 勾选框 checkbox",
+        WidgetCatalogId::CheckBox => "复选框 勾选框 check box",
         WidgetCatalogId::Chip => "标签胶囊 过滤标签 chip",
         WidgetCatalogId::CodeBlock => "代码块 语法高亮 code block",
         WidgetCatalogId::CodeEditor => "代码编辑器 着色器编辑 code editor",
-        WidgetCatalogId::Collapsible => "可折叠区域 展开收起 collapsible",
+        WidgetCatalogId::Expander => "可展开面板 展开收起 expander",
         WidgetCatalogId::ColorPicker => "颜色选择器 调色盘 材质球色彩 color picker",
         WidgetCatalogId::ColorSwatch => "颜色色块 品牌色板 调色板方块 color swatch",
-        WidgetCatalogId::Combobox => "组合框 可编辑下拉 combobox",
+        WidgetCatalogId::ComboBoxEditable => "可编辑下拉框 组合框 combo box editable",
         WidgetCatalogId::CommandPalette => "命令面板 快捷指令搜索 command palette",
         WidgetCatalogId::Containers => "卡片容器 面板 containers card",
         WidgetCatalogId::ContextMenu => "右键菜单 上下文菜单 context menu",
         WidgetCatalogId::CurveEditor => "曲线编辑器 贝塞尔动画曲线 curve editor",
         WidgetCatalogId::DataGrid => "数据网格 电子表格 data grid",
         WidgetCatalogId::CalendarDatePicker => "日期触发器 日历弹层 calendar date picker",
-        WidgetCatalogId::DatePicker => "日期选择器 日历 date picker",
-        WidgetCatalogId::DatePickerWheel => "滚轮日期选择器 月日年 date picker wheel",
+        WidgetCatalogId::CalendarView => "日历视图 月历 calendar view",
+        WidgetCatalogId::DatePicker => "日期选择器 滚轮日期 月日年 date picker",
         WidgetCatalogId::DateRangePicker => "日期区间选择器 date range picker",
         WidgetCatalogId::Descriptions => "描述列表 属性键值对 descriptions",
         WidgetCatalogId::Divider => "分割线 分隔符 divider",
         WidgetCatalogId::Dock => "停靠面板 工作区多窗格 dock",
-        WidgetCatalogId::Drawer => "抽屉面板 侧边滑出浮层 drawer",
+        WidgetCatalogId::SplitView => "拆分视图 侧边抽屉 split view",
         WidgetCatalogId::DropDownButton => "下拉按钮 菜单触发器 drop down button",
         WidgetCatalogId::EmptyState => "空状态 占位提示 empty state",
         WidgetCatalogId::FileDrop => "文件拖拽上传 资产导入 file drop",
@@ -752,72 +752,72 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::HotkeyInput => "快捷键录制 键位绑定 hotkey input",
         WidgetCatalogId::HoverCard => "悬停预览卡 浮窗卡片 hover card",
         WidgetCatalogId::HyperlinkButton => "超链接按钮 强调色文字 hyperlink button",
-        WidgetCatalogId::Icon => "矢量图标 icon",
+        WidgetCatalogId::FontIcon => "字体图标 矢量图标 font icon",
         WidgetCatalogId::Image => "图像 纹理贴图预览 image",
         WidgetCatalogId::LoadingOverlay => "加载遮罩 等待浮层 loading overlay",
         WidgetCatalogId::Masonry => "瀑布流布局 资产墙 masonry",
-        WidgetCatalogId::Menu => "菜单 下拉列表 menu",
-        WidgetCatalogId::Menubar => "顶部菜单栏 menubar",
+        WidgetCatalogId::MenuFlyout => "菜单浮出 下拉菜单 menu flyout",
+        WidgetCatalogId::MenuBar => "菜单栏 顶部菜单 menu bar",
         WidgetCatalogId::Minimap => "小地图 缩略导航 minimap",
-        WidgetCatalogId::Modal => "模态框 对话框 可拖拽弹窗 modal",
+        WidgetCatalogId::ContentDialog => "内容对话框 模态框 弹窗 content dialog",
         WidgetCatalogId::MultiSplit => "多列分割面板 可调分栏 multi split",
-        WidgetCatalogId::NavigationRail => "侧边导航栏 折叠导航轨 navigation rail",
+        WidgetCatalogId::NavigationViewCompact => "紧凑导航视图 折叠导航轨 navigation view",
         WidgetCatalogId::NinePatch => "九宫格拉伸图 nine patch",
         WidgetCatalogId::NodeGraph => "节点图 着色器管线蓝图 node graph",
         WidgetCatalogId::NotificationCenter => "通知中心 消息盒子 notification center",
-        WidgetCatalogId::NumberInput => "数值输入框 步进器 number input",
+        WidgetCatalogId::NumberBox => "数字框 数值输入 步进器 number box",
         WidgetCatalogId::Overlay => "浮层栈 弹出定位层 overlay",
-        WidgetCatalogId::Pagination => "分页器 页码切换 pagination",
+        WidgetCatalogId::PipsPager => "页码导航 分页器 pips pager",
         WidgetCatalogId::PasswordBox => "密码输入框 掩码 显密 password box",
         WidgetCatalogId::PinInput => "验证码输入框 PIN码 pin input",
         WidgetCatalogId::PipelineView => "渲染管线视图 阶段耗时分析 着色器管线 pipeline view",
         WidgetCatalogId::Pivot => "页签条 二级导航 pivot tabs",
         WidgetCatalogId::Popconfirm => "气泡确认框 删除确认 popconfirm",
-        WidgetCatalogId::Popover => "气泡浮层 锚定弹窗 popover",
-        WidgetCatalogId::Progress => "进度条 环形进度 progress",
+        WidgetCatalogId::Flyout => "浮出控件 锚定弹窗 flyout",
+        WidgetCatalogId::ProgressBar => "进度条 progress bar",
         WidgetCatalogId::PropertyGrid => "属性网格 检视器面板 property grid",
         WidgetCatalogId::QueryBuilder => "查询构建器 过滤规则树 query builder",
-        WidgetCatalogId::Radio => "单选框 单选组 radio",
-        WidgetCatalogId::Rating => "星级评分 资产评级 rating",
+        WidgetCatalogId::RadioButton => "单选按钮 单选组 radio button",
+        WidgetCatalogId::RatingControl => "评分控件 星级评分 rating control",
         WidgetCatalogId::RepeatButton => "长按重复按钮 连续触发 repeat button",
-        WidgetCatalogId::RichText => "富文本 Markdown渲染 rich text",
+        WidgetCatalogId::RichTextBlock => "富文本块 Markdown渲染 rich text block",
         WidgetCatalogId::Ruler => "标尺 辅助参考线 ruler",
         WidgetCatalogId::SchemaForm => "声明式配置表单 属性检查器 schema form",
-        WidgetCatalogId::Scroll => "滚动视图 平滑滚轮 scroll view",
-        WidgetCatalogId::Segmented => "分段控制器 胶囊切换 segmented",
-        WidgetCatalogId::Select => "下拉选择器 枚举选择 select",
+        WidgetCatalogId::ScrollView => "滚动视图 平滑滚轮 scroll view",
+        WidgetCatalogId::SelectorBar => "选择条 分段控制器 selector bar",
+        WidgetCatalogId::ComboBox => "下拉框 下拉选择器 枚举选择 combo box",
         WidgetCatalogId::ShortcutBar => "快捷键提示栏 键位冲突检测 shortcut bar",
-        WidgetCatalogId::Sidebar => "侧边栏 导航面板 分组条目 sidebar nav panel",
+        WidgetCatalogId::NavigationView => "导航视图 侧边栏 导航面板 navigation view",
         WidgetCatalogId::Skeleton => "骨架屏 加载占位 skeleton",
         WidgetCatalogId::Slider => "滑块 区间滑块 磁吸刻度 slider range snap",
-        WidgetCatalogId::Spinner => "加载转圈 旋转指示器 spinner",
+        WidgetCatalogId::ProgressRing => "进度环 加载转圈 progress ring",
         WidgetCatalogId::SplitButton => "分割按钮 下拉操作按钮 split button",
         WidgetCatalogId::SplitPane => "双栏分割窗格 split pane",
-        WidgetCatalogId::Stack => "层叠容器 堆叠布局 stack",
+        WidgetCatalogId::StackPanel => "堆叠面板 层叠容器 stack panel",
         WidgetCatalogId::StatusBar => "底部状态栏 status bar",
         WidgetCatalogId::Stepper => "步骤条 向导进度 stepper",
-        WidgetCatalogId::Switch => "开关 切换器 switch toggle",
+        WidgetCatalogId::ToggleSwitch => "切换开关 开关 toggle switch",
         WidgetCatalogId::Table => "基础数据表 虚拟行 table",
-        WidgetCatalogId::Tabs => "标签页 选项卡 tabs",
+        WidgetCatalogId::TabView => "选项卡视图 标签页 tab view",
         WidgetCatalogId::TagInput => "标签输入框 多标签编辑 tag input",
         WidgetCatalogId::TaskHud => "后台任务浮窗 烘焙进度栈 task hud",
         WidgetCatalogId::TerminalView => "终端控制台 日志视图 terminal view",
-        WidgetCatalogId::TextArea => "多行文本域 文本编辑 text area",
-        WidgetCatalogId::TextInput => "单行输入框 只读复制框 重命名文本 text input",
+        WidgetCatalogId::TextBoxMultiline => "多行文本框 文本编辑 text box multiline",
+        WidgetCatalogId::TextBox => "文本框 单行输入框 只读复制框 text box",
         WidgetCatalogId::TimePicker => "时间选择器 时分秒 time picker",
         WidgetCatalogId::Timeline => "时间轴 事件流 timeline",
         WidgetCatalogId::TimelineTrack => "关键帧轨道 动画时间线 timeline track",
         WidgetCatalogId::Toast => "轻量吐司通知 浮动提示 toast",
         WidgetCatalogId::ToggleButton => "双态切换按钮 按下锁定 toggle button",
         WidgetCatalogId::ToggleSplitButton => "切换分割按钮 选中态 toggle split button",
-        WidgetCatalogId::Toolbar => "工具栏 按钮条 toolbar",
-        WidgetCatalogId::Tooltip => "文字提示气泡 窗口防溢出 tooltip",
+        WidgetCatalogId::CommandBar => "命令栏 工具栏 command bar",
+        WidgetCatalogId::ToolTip => "工具提示 文字提示气泡 tool tip",
         WidgetCatalogId::Tour => "漫游引导 新手聚光灯 tour",
         WidgetCatalogId::Transfer => "穿梭框 双栏列表转移 transfer",
         WidgetCatalogId::TreeTable => "树形表格 层级数据表 tree table",
         WidgetCatalogId::TreeView => "树形视图 目录树 重命名文件 tree view",
         WidgetCatalogId::VirtualMasonry => "虚拟化瀑布流 大规模缩略图 virtual masonry",
-        WidgetCatalogId::VirtualViews => "变高虚拟列表 可重排列表 virtual views",
+        WidgetCatalogId::ListView => "列表视图 变高虚拟列表 list view",
         WidgetCatalogId::Watermark => "安全水印 平铺背景 watermark",
         WidgetCatalogId::Wrap => "自动换行流式布局 wrap",
         WidgetCatalogId::RichEditBox => "富文本编辑框 格式工具条 加粗斜体下划线 rich edit box",

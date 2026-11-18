@@ -195,7 +195,7 @@ pub fn toggle_switch(
         AlignY::Center,
     );
     let output = emit_switch(node, &desc, state, &quads, SwitchTokens::standard());
-    canvas.widget_output(WidgetCatalogId::Switch, node, &output);
+    canvas.widget_output(WidgetCatalogId::ToggleSwitch, node, &output);
     canvas.record_span(node, start);
     visual_of(state)
 }
@@ -240,7 +240,7 @@ pub fn checkbox(
         &quads,
         CheckboxTokens::standard(),
     );
-    canvas.widget_output(WidgetCatalogId::Checkbox, node, &output);
+    canvas.widget_output(WidgetCatalogId::CheckBox, node, &output);
     canvas.record_span(node, start);
     visual_of(state)
 }
@@ -265,7 +265,7 @@ pub fn radio(
         AlignY::Center,
     );
     let output = emit_radio(node, &desc, state, &quads, RadioTokens::standard());
-    canvas.widget_output(WidgetCatalogId::Radio, node, &output);
+    canvas.widget_output(WidgetCatalogId::RadioButton, node, &output);
     canvas.record_span(node, start);
     visual_of(state)
 }
@@ -308,7 +308,7 @@ pub fn segmented(
     }
     let tokens = SegmentedTokens::standard();
     let frame = emit_segmented_frame(&desc, tokens);
-    canvas.widget_output(WidgetCatalogId::Segmented, 0, &frame);
+    canvas.widget_output(WidgetCatalogId::SelectorBar, 0, &frame);
     for index in 0..labels.len() {
         let seg_start = canvas.span_start();
         let state = canvas.control_state(ids[index], disabled, index == selected);
@@ -352,7 +352,7 @@ pub fn select_trigger(
     );
     let (quads, _) = canvas.layout_text(display, text_rect, 11.5, AlignX::Start, AlignY::Center);
     let output = emit_select_with_glyphs(node, &desc, &select_state, state, &quads);
-    canvas.widget_output(WidgetCatalogId::Select, node, &output);
+    canvas.widget_output(WidgetCatalogId::ComboBox, node, &output);
     canvas.record_span(node, start);
     visual_of(state)
 }

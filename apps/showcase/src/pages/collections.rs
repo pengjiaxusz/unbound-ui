@@ -490,7 +490,7 @@ pub fn asset_grid(ctx: &mut DemoCtx<'_, '_>) {
         bar_state.tick(1.0, Some(progress), false);
         let bar_output = emit_progress(&bar_desc, &bar_state);
         ctx.canvas.widget_output(
-            WidgetCatalogId::Progress,
+            WidgetCatalogId::ProgressBar,
             ctx.part(200 + index as u16),
             &bar_output,
         );

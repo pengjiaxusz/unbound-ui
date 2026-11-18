@@ -129,7 +129,7 @@ pub const SLIDER_EXAMPLES: &[ExampleDef] = &[
         &["unbound-widgets", "unbound-anim"],
         r#"let desc = ProgressDesc::new(track).value(0.64);
 let output = emit_progress(&desc, &state.progress_bar);
-canvas.widget_output(WidgetCatalogId::Progress, node, &output);"#,
+canvas.widget_output(WidgetCatalogId::ProgressBar, node, &output);"#,
         "A progress indicator exposes `value` and `max`; the paused state is announced.",
         &[
             KnobSpec::segmented("Mode", &["Determinate", "Indeterminate"], 0),
@@ -671,7 +671,7 @@ fn progress_bar(ctx: &mut DemoCtx<'_, '_>) {
     };
     let bar_output = emit_progress(&bar, &ctx.state.demo.progress_bar);
     ctx.canvas
-        .widget_output(WidgetCatalogId::Progress, ctx.part(1), &bar_output);
+        .widget_output(WidgetCatalogId::ProgressBar, ctx.part(1), &bar_output);
 
     let ring_rect = Rect::new(rect.max().x - 104.0, rect.origin.y + 24.0, 80.0, 80.0);
     let mut ring = ProgressDesc::circular(ring_rect).with_label("Sync");
@@ -682,7 +682,7 @@ fn progress_bar(ctx: &mut DemoCtx<'_, '_>) {
     };
     let ring_output = emit_progress(&ring, &ctx.state.demo.progress_ring);
     ctx.canvas
-        .widget_output(WidgetCatalogId::Progress, ctx.part(2), &ring_output);
+        .widget_output(WidgetCatalogId::ProgressBar, ctx.part(2), &ring_output);
 
     ctx.canvas.text(
         if paused {

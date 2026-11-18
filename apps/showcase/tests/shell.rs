@@ -1391,14 +1391,14 @@ fn sidebar_covers_every_page_and_every_catalog_component() {
     // 点击侧边栏中的 Tooltip 组件项应导航至 Components 页并自动滚动到对应卡片位置。
     let mut app = app();
     app.click(
-        target::id(Target::NavComponent(WidgetCatalogId::Tooltip as u8)),
+        target::id(Target::NavComponent(WidgetCatalogId::ToolTip as u8)),
         Vec2::ZERO,
     );
     app.rebuild(VIEWPORT);
     assert_eq!(app.state.active_page, PageId::Components);
-    assert_eq!(app.state.active_component, Some(WidgetCatalogId::Tooltip));
+    assert_eq!(app.state.active_component, Some(WidgetCatalogId::ToolTip));
     assert!(
-        (app.state.content_scroll - component_scroll_offset(WidgetCatalogId::Tooltip)).abs() < 1.0
+        (app.state.content_scroll - component_scroll_offset(WidgetCatalogId::ToolTip)).abs() < 1.0
     );
 }
 
