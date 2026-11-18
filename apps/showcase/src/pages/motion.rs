@@ -764,18 +764,15 @@ pub fn fps_limit_bar(ctx: &mut DemoCtx<'_, '_>) {
             field.size.y,
         ));
         let text_width = ctx.canvas.labels.measure(display, 10.0).x.max(view_width);
-        let (quads, ink) = ctx.canvas.layout_text(
-            display,
-            Rect::new(
-                line.origin.x - scroll,
-                field.origin.y,
-                text_width,
-                field.size.y,
-            ),
-            10.0,
-            AlignX::Start,
-            AlignY::Center,
+        let text_rect_used = Rect::new(
+            line.origin.x - scroll,
+            field.origin.y,
+            text_width,
+            field.size.y,
         );
+        let (quads, _) =
+            ctx.canvas
+                .layout_text(display, text_rect_used, 10.0, AlignX::Start, AlignY::Center);
         ctx.canvas.glyphs(
             &quads,
             if text.is_empty() {
@@ -784,20 +781,11 @@ pub fn fps_limit_bar(ctx: &mut DemoCtx<'_, '_>) {
                 palette.text
             },
         );
-        if let Some((from, to)) = crate::editor::preedit_span(ctx.canvas.labels, edit, 10.0) {
-            ctx.canvas.rect(
-                Rect::new(
-                    line.origin.x + from - scroll,
-                    ink.max().y - 1.5,
-                    (to - from).max(1.0),
-                    1.0,
-                ),
-                0.5,
-                palette.primary,
-                0,
-                0.0,
-                0.0,
-            );
+        if let Some(underline) =
+            crate::editor::preedit_underline(ctx.canvas.labels, edit, 10.0, text_rect_used)
+        {
+            ctx.canvas
+                .rect(underline, 0.5, palette.primary, 0, 0.0, 0.0);
         }
         if focused {
             let caret = line.origin.x - scroll

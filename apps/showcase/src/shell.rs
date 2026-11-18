@@ -3084,9 +3084,10 @@ fn draw_top_bar(
             search.size.y,
         ));
         let text_width = canvas.labels.measure(placeholder, 11.0).x.max(view_width);
-        let ink = canvas.text(
+        let text_rect = Rect::new(text_x - scroll, search.origin.y, text_width, search.size.y);
+        canvas.text(
             placeholder,
-            Rect::new(text_x - scroll, search.origin.y, text_width, search.size.y),
+            text_rect,
             11.0,
             if text.is_empty() {
                 palette.text_muted
@@ -3103,20 +3104,10 @@ fn draw_top_bar(
         };
         // IME 组合文本带下划线，与原生文本框的展示方式一致。
         //
-        if let Some((from, to)) = crate::editor::preedit_span(canvas.labels, edit, 11.0) {
-            canvas.rect(
-                Rect::new(
-                    text_x + from - scroll,
-                    ink.max().y - 1.5,
-                    (to - from).max(1.0),
-                    1.0,
-                ),
-                0.5,
-                palette.primary,
-                0,
-                0.0,
-                0.0,
-            );
+        if let Some(underline) =
+            crate::editor::preedit_underline(canvas.labels, edit, 11.0, text_rect)
+        {
+            canvas.rect(underline, 0.5, palette.primary, 0, 0.0, 0.0);
         }
         if let Some(caret) = caret {
             if state.search.caret_visible() {

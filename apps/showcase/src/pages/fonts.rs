@@ -474,33 +474,21 @@ pub fn bidi_sandbox(ctx: &mut DemoCtx<'_, '_>) {
         field.size.y,
     ));
     let text_width = ctx.canvas.labels.measure(text, 15.0).x.max(view_width);
-    let (quads, ink) = ctx.canvas.layout_text(
-        text,
-        Rect::new(
-            line.origin.x - scroll,
-            field.origin.y,
-            text_width,
-            field.size.y,
-        ),
-        15.0,
-        AlignX::Start,
-        AlignY::Center,
+    let text_rect_used = Rect::new(
+        line.origin.x - scroll,
+        field.origin.y,
+        text_width,
+        field.size.y,
     );
+    let (quads, _) =
+        ctx.canvas
+            .layout_text(text, text_rect_used, 15.0, AlignX::Start, AlignY::Center);
     ctx.canvas.glyphs(&quads, color);
-    if let Some((from, to)) = crate::editor::preedit_span(ctx.canvas.labels, edit, 15.0) {
-        ctx.canvas.rect(
-            Rect::new(
-                line.origin.x + from - scroll,
-                ink.max().y - 2.0,
-                (to - from).max(1.0),
-                1.5,
-            ),
-            0.5,
-            palette.primary,
-            0,
-            0.0,
-            0.0,
-        );
+    if let Some(underline) =
+        crate::editor::preedit_underline(ctx.canvas.labels, edit, 15.0, text_rect_used)
+    {
+        ctx.canvas
+            .rect(underline, 0.5, palette.primary, 0, 0.0, 0.0);
     }
     if focused {
         let caret = line.origin.x - scroll
