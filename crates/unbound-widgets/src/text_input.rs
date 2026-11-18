@@ -101,10 +101,23 @@ pub enum TextInputEvent {
     DoubleClick { offset: usize },
     /// 三击选中整行（此处为整个缓冲区）。
     TripleClick,
-    /// 输入法预编辑文本占用 `start..end`，以便提交时替换。
-    ImePreedit { start: usize, end: usize },
-    /// 组合输入结束；`text` 替换预编辑区间。
-    ImeCommit { text: String },
+    /// 输入法预编辑更新：用 `text` 替换当前组合区间。
+    ///
+    /// `cursor` 是组合文本内部的字节偏移（缺省为末尾），用于放置组合光标。
+    /// 组合文本是缓冲区中的真实内容，连续更新只保留最新一份。
+    ImePreedit {
+        /// 本次组合文本。
+        text: String,
+        /// 组合文本内的光标字节偏移。
+        cursor: Option<usize>,
+    },
+    /// 输入法提交；`text` 替换组合区间，无组合区间时在光标处插入。
+    ImeCommit {
+        /// 最终提交文本。
+        text: String,
+    },
+    /// 取消输入法组合并丢弃组合区间。
+    ImeCancel,
 }
 
 /// 单次归约的输出结果。
@@ -339,6 +352,8 @@ pub struct TextEditState {
     anchor: usize,
     scroll_x: f32,
     preedit: Option<(usize, usize)>,
+    /// 组合开始前的缓冲区快照，用于取消或提交时形成单个撤销步骤。
+    preedit_origin: Option<Snapshot>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     /// 连续键入合并为单次撤销步骤。
@@ -625,15 +640,91 @@ impl TextEditState {
         self.coalescing = false;
     }
 
-    /// 用提交的文本替换预编辑区间（输入法提交）。
-    fn commit_preedit(&mut self, text: &str, max_bytes: usize) {
-        if let Some((start, end)) = self.preedit.take() {
-            let start = floor_boundary(&self.text, start);
-            let end = floor_boundary(&self.text, end).max(start);
-            self.cursor = start;
-            self.anchor = end;
+    /// 用新的组合文本替换当前组合区间。
+    ///
+    /// 组合文本真实写入缓冲区；连续调用只保留最新一份，不会累积。
+    /// 组合开始时会记录缓冲区快照，使取消或提交各自形成一个撤销步骤。
+    fn set_preedit(&mut self, text: &str, cursor: Option<usize>, max_bytes: usize) {
+        if self.preedit.is_none() {
+            self.preedit_origin = Some(self.snapshot());
         }
-        self.insert_with(text, max_bytes, false);
+        let (start, end) = self
+            .preedit
+            .unwrap_or_else(|| self.selection().unwrap_or((self.cursor, self.cursor)));
+        let start = floor_boundary(&self.text, start);
+        let end = floor_boundary(&self.text, end).max(start);
+        let accepted = self.replace_range(start, end, text, max_bytes);
+        self.preedit = Some((start, start + accepted));
+        let offset = floor_boundary(&text[..accepted], cursor.unwrap_or(accepted));
+        self.cursor = start + offset;
+        self.anchor = self.cursor;
+        self.coalescing = false;
+    }
+
+    /// 取消组合输入并恢复组合前的缓冲区状态。
+    ///
+    /// 无组合区间时不做任何事；返回是否清理了组合。
+    pub fn cancel_composition(&mut self) -> bool {
+        if self.preedit.is_none() {
+            return false;
+        }
+        self.cancel_preedit();
+        true
+    }
+
+    /// 取消组合输入并恢复组合前的缓冲区状态。
+    fn cancel_preedit(&mut self) {
+        let Some(origin) = self.preedit_origin.take() else {
+            self.preedit = None;
+            return;
+        };
+        self.preedit = None;
+        self.restore(origin);
+        self.coalescing = false;
+    }
+
+    /// 用提交文本替换组合区间；无组合区间时在光标处插入。
+    ///
+    /// 提交是整段组合的终点：撤销栈只记录一次“组合前”的快照。
+    fn commit_preedit(&mut self, text: &str, max_bytes: usize) {
+        let Some((start, end)) = self.preedit.take() else {
+            self.insert_with(text, max_bytes, false);
+            return;
+        };
+        if let Some(origin) = self.preedit_origin.take() {
+            self.undo.push(origin);
+            if self.undo.len() > 256 {
+                self.undo.remove(0);
+            }
+            self.redo.clear();
+        }
+        let start = floor_boundary(&self.text, start);
+        let end = floor_boundary(&self.text, end).max(start);
+        let accepted = self.replace_range(start, end, text, max_bytes);
+        self.cursor = start + accepted;
+        self.anchor = self.cursor;
+        self.coalescing = false;
+    }
+
+    /// 在 `start..end` 内写入 `text`（受 `max_bytes` 限制），不写撤销栈。
+    ///
+    /// 返回实际写入的字节数。
+    fn replace_range(&mut self, start: usize, end: usize, text: &str, max_bytes: usize) -> usize {
+        let room = max_bytes.saturating_sub(self.text.len() - (end - start));
+        let mut accepted = 0usize;
+        for (index, character) in text.char_indices() {
+            let after = index + character.len_utf8();
+            if after > room {
+                break;
+            }
+            accepted = after;
+        }
+        let mut next = String::with_capacity(self.text.len() + accepted);
+        next.push_str(&self.text[..start]);
+        next.push_str(&text[..accepted]);
+        next.push_str(&self.text[end..]);
+        self.text = next;
+        accepted
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -680,6 +771,18 @@ pub fn reduce_text_input(
 ) -> TextInputOutcome {
     if desc.disabled {
         return TextInputOutcome::default();
+    }
+    // 组合期间收到非 IME 事件时，先丢弃组合文本，避免它被当作已提交内容。
+    // 复制只读取当前缓冲区，不会改变编辑状态，因此不触发取消。
+    let cancel_composition = !matches!(
+        event,
+        TextInputEvent::ImePreedit { .. }
+            | TextInputEvent::ImeCommit { .. }
+            | TextInputEvent::ImeCancel
+            | TextInputEvent::Copy
+    );
+    if cancel_composition && edit.preedit().is_some() {
+        edit.cancel_preedit();
     }
     match event {
         TextInputEvent::Insert(text) => {
@@ -816,23 +919,31 @@ pub fn reduce_text_input(
             edit.select_all();
             TextInputOutcome::changed()
         }
-        TextInputEvent::ImePreedit { start, end } => {
+        TextInputEvent::ImePreedit { text, cursor } => {
             if !desc.editable() {
                 return TextInputOutcome::default();
             }
-            let start = floor_boundary(edit.text(), *start);
-            let end = floor_boundary(edit.text(), *end).max(start);
-            edit.preedit = Some((start, end));
-            edit.cursor = end;
-            edit.anchor = end;
+            edit.set_preedit(text, *cursor, desc.max_bytes);
             TextInputOutcome::changed()
         }
         TextInputEvent::ImeCommit { text } => {
             if !desc.editable() {
                 return TextInputOutcome::default();
             }
+            let had_composition = edit.preedit().is_some();
             edit.commit_preedit(text, desc.max_bytes);
-            TextInputOutcome::changed()
+            TextInputOutcome {
+                changed: had_composition || !text.is_empty(),
+                ..TextInputOutcome::default()
+            }
+        }
+        TextInputEvent::ImeCancel => {
+            if edit.preedit().is_some() {
+                edit.cancel_preedit();
+                TextInputOutcome::changed()
+            } else {
+                TextInputOutcome::default()
+            }
         }
     }
 }
@@ -1420,6 +1531,38 @@ mod tests {
     }
 
     #[test]
+    fn select_all_then_insert_replaces_the_whole_buffer() {
+        let mut edit = TextEditState::with_text("hello world");
+        reduce(&mut edit, TextInputEvent::SelectAll);
+        assert_eq!(edit.selected_text(), Some("hello world"));
+        reduce(&mut edit, TextInputEvent::Insert("hi".into()));
+        assert_eq!(edit.text(), "hi");
+        assert_eq!(edit.cursor(), 2);
+    }
+
+    #[test]
+    fn word_moves_and_home_end_land_on_word_and_buffer_boundaries() {
+        let mut edit = TextEditState::with_text("hello world");
+        reduce(&mut edit, TextInputEvent::Home { extend: false });
+        assert_eq!(edit.cursor(), 0);
+        reduce(&mut edit, TextInputEvent::MoveWordRight { extend: false });
+        assert_eq!(edit.cursor(), 5, "ctrl+right stops after the first word");
+        reduce(&mut edit, TextInputEvent::MoveWordRight { extend: false });
+        assert_eq!(edit.cursor(), 11, "ctrl+right reaches the buffer end");
+        reduce(&mut edit, TextInputEvent::MoveWordLeft { extend: false });
+        assert_eq!(edit.cursor(), 6, "ctrl+left stops at the second word start");
+        reduce(&mut edit, TextInputEvent::End { extend: false });
+        assert_eq!(edit.cursor(), 11);
+    }
+
+    #[test]
+    fn triple_click_selects_the_whole_buffer() {
+        let mut edit = TextEditState::with_text("hello world");
+        reduce(&mut edit, TextInputEvent::TripleClick);
+        assert_eq!(edit.selected_text(), Some("hello world"));
+    }
+
+    #[test]
     fn dragging_selects_between_two_offsets() {
         let mut edit = TextEditState::with_text("abcdef");
         reduce(&mut edit, TextInputEvent::PointerDown { offset: 1 });
@@ -1475,12 +1618,114 @@ mod tests {
     #[test]
     fn ime_preedit_is_replaced_by_the_commit() {
         let mut edit = TextEditState::with_text("ab");
-        reduce(&mut edit, TextInputEvent::ImePreedit { start: 2, end: 2 });
-        assert_eq!(edit.preedit(), Some((2, 2)));
+        reduce(
+            &mut edit,
+            TextInputEvent::ImePreedit {
+                text: "ni".into(),
+                cursor: None,
+            },
+        );
+        assert_eq!(edit.text(), "abni");
+        assert_eq!(edit.preedit(), Some((2, 4)));
+
+        reduce(
+            &mut edit,
+            TextInputEvent::ImePreedit {
+                text: "你".into(), // lang-ok: CJK IME preedit sample
+                cursor: None,
+            },
+        );
+        assert_eq!(edit.text(), "ab你"); // lang-ok: CJK IME preedit result
 
         reduce(&mut edit, TextInputEvent::ImeCommit { text: "你".into() }); // lang-ok: CJK IME commit sample
         assert_eq!(edit.text(), "ab你"); // lang-ok: CJK IME result
         assert_eq!(edit.preedit(), None);
+    }
+
+    #[test]
+    fn consecutive_preedits_keep_only_the_latest_composition() {
+        let mut edit = TextEditState::new();
+        for text in ["n", "ni", "nih", "niha", "nihaoo"] {
+            reduce(
+                &mut edit,
+                TextInputEvent::ImePreedit {
+                    text: text.into(),
+                    cursor: None,
+                },
+            );
+        }
+        assert_eq!(edit.text(), "nihaoo");
+        assert_eq!(edit.preedit(), Some((0, 6)));
+        assert_eq!(edit.cursor(), 6);
+    }
+
+    #[test]
+    fn ime_preedit_places_the_cursor_inside_the_composition() {
+        let mut edit = TextEditState::with_text("ab");
+        reduce(
+            &mut edit,
+            TextInputEvent::ImePreedit {
+                text: "nihao".into(),
+                cursor: Some(2),
+            },
+        );
+        assert_eq!(edit.text(), "abnihao");
+        assert_eq!(edit.preedit(), Some((2, 7)));
+        assert_eq!(edit.cursor(), 4);
+    }
+
+    #[test]
+    fn ime_cancel_restores_the_buffer_from_before_the_composition() {
+        let mut edit = TextEditState::with_text("ab");
+        reduce(
+            &mut edit,
+            TextInputEvent::ImePreedit {
+                text: "ni".into(),
+                cursor: None,
+            },
+        );
+        assert_eq!(edit.text(), "abni");
+        reduce(&mut edit, TextInputEvent::ImeCancel);
+        assert_eq!(edit.text(), "ab");
+        assert_eq!(edit.preedit(), None);
+        assert_eq!(edit.cursor(), 2);
+    }
+
+    #[test]
+    fn a_non_ime_edit_discards_the_composition_instead_of_committing_it() {
+        let mut edit = TextEditState::with_text("ab");
+        reduce(
+            &mut edit,
+            TextInputEvent::ImePreedit {
+                text: "ni".into(),
+                cursor: None,
+            },
+        );
+        reduce(&mut edit, TextInputEvent::MoveLeft { extend: false });
+        assert_eq!(edit.text(), "ab");
+        assert_eq!(edit.preedit(), None);
+
+        reduce(
+            &mut edit,
+            TextInputEvent::ImePreedit {
+                text: "ni".into(),
+                cursor: None,
+            },
+        );
+        reduce(&mut edit, TextInputEvent::Insert("x".into()));
+        // 组合被丢弃后缓冲区恢复为 "ab" 且插入符回到组合起点（第 1 字节），
+        // 因此新字符落在原插入符处，而不是缓冲区末尾。
+        assert_eq!(edit.text(), "axb");
+        assert_eq!(edit.preedit(), None);
+    }
+
+    #[test]
+    fn an_ime_commit_without_a_composition_inserts_at_the_cursor() {
+        let mut edit = TextEditState::with_text("ab");
+        edit.set_cursor(1, false);
+        reduce(&mut edit, TextInputEvent::ImeCommit { text: "X".into() });
+        assert_eq!(edit.text(), "aXb");
+        assert_eq!(edit.cursor(), 2);
     }
 
     #[test]

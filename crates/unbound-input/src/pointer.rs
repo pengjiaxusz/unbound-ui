@@ -226,18 +226,23 @@ impl PointerState {
                 click_count: 1,
             });
         }
-        let repeat = target.is_some()
-            && target == self.last_click_target
-            && now - self.last_click_time <= self.config.double_click_window
-            && (position - self.last_click_position).length() <= self.config.double_click_slop;
-        self.click_count = if repeat {
-            (self.click_count + 1).min(3)
-        } else {
-            1
-        };
-        self.last_click_time = now;
-        self.last_click_position = position;
-        self.last_click_target = target;
+        // 双击判定只属于左键：次键（中键、右键）的按下与释放都不得
+        // 写入左键双击所用的时间、位置与目标。
+        //
+        if button == PointerButton::Left {
+            let repeat = target.is_some()
+                && target == self.last_click_target
+                && now - self.last_click_time <= self.config.double_click_window
+                && (position - self.last_click_position).length() <= self.config.double_click_slop;
+            self.click_count = if repeat {
+                (self.click_count + 1).min(3)
+            } else {
+                1
+            };
+            self.last_click_time = now;
+            self.last_click_position = position;
+            self.last_click_target = target;
+        }
         self.down_position = position;
         self.pressed = target;
         self.press_button = Some(button);
@@ -293,7 +298,7 @@ impl PointerState {
     ///
     /// 返回 `Up` 事件；若该按压从未演变为拖拽，则紧随其后返回 `Click`
     /// （若为连续第二次点击，则附带 `DoubleClick`）。
-    pub fn on_up(&mut self, position: Vec2, button: PointerButton, now: f64) -> Vec<PointerEvent> {
+    pub fn on_up(&mut self, position: Vec2, button: PointerButton, _now: f64) -> Vec<PointerEvent> {
         self.position = position;
         self.buttons.set(button, false);
         // 只有启动当前交互的按键才能结束它。在主键按住期间释放
@@ -333,8 +338,6 @@ impl PointerState {
                     events.push(PointerEvent::DoubleClick { target, position });
                 }
             }
-        } else if !dragged {
-            self.last_click_time = now;
         }
         events
     }
@@ -628,6 +631,34 @@ mod tests {
                 .iter()
                 .all(|e| !matches!(e, PointerEvent::DoubleClick { .. })),
             "a right-click must not arm the double-click: {events:?}"
+        );
+    }
+
+    /// 右键的按下与释放都不得写入左键双击计时。
+    ///
+    /// 先完成一次左键单击（计数为 1），超过双击窗口后再右键，
+    /// 紧接着在 0.5 秒内左键单击：它必须是全新的单击，而非双击。
+    ///
+    #[test]
+    fn a_right_click_does_not_arm_the_next_left_double_click() {
+        let mut p = state();
+        p.on_down(Some(3), Vec2::new(10.0, 10.0), PointerButton::Left, 0.0);
+        p.on_up(Vec2::new(10.0, 10.0), PointerButton::Left, 0.05);
+        p.on_down(Some(3), Vec2::new(10.0, 10.0), PointerButton::Right, 1.0);
+        p.on_up(Vec2::new(10.0, 10.0), PointerButton::Right, 1.05);
+        let down = p
+            .on_down(Some(3), Vec2::new(10.0, 10.0), PointerButton::Left, 1.1)
+            .unwrap();
+        assert!(
+            matches!(down, PointerEvent::Down { click_count: 1, .. }),
+            "the left click after a right click must not continue the earlier sequence: {down:?}"
+        );
+        let events = p.on_up(Vec2::new(10.0, 10.0), PointerButton::Left, 1.15);
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, PointerEvent::DoubleClick { .. })),
+            "a right click must not arm a double click: {events:?}"
         );
     }
 

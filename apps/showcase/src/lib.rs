@@ -8,6 +8,8 @@
 pub mod button;
 /// 画布：图元、裁剪、命中区域与语义。
 pub mod canvas;
+/// 单行文本编辑器共用的测量辅助。
+pub mod editor;
 /// 帧计划：呈现尺寸与上传计划。
 pub mod frame_plan;
 /// 底层场景绘制器与调色板。

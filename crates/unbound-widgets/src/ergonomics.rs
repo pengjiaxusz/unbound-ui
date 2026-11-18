@@ -234,6 +234,17 @@ pub enum WidgetInputEvent {
     },
     /// 提交的文本 / 字符输入。
     TextInput(String),
+    /// 输入法预编辑更新（替换组合区间）。
+    ImePreedit {
+        /// 组合文本。
+        text: String,
+        /// 组合文本内的光标字节偏移。
+        cursor: Option<usize>,
+    },
+    /// 输入法提交。
+    ImeCommit(String),
+    /// 取消输入法组合。
+    ImeCancel,
     /// 聚焦时按下的组合键。
     KeyDown(unbound_input::KeyChord),
 }
@@ -848,6 +859,28 @@ impl UiWidget for TextInputDesc {
             WidgetInputEvent::TextInput(text) => {
                 let outcome = reduce_text_input(self, state, &TextInputEvent::Insert(text.clone()));
                 outcome.changed
+            }
+            WidgetInputEvent::ImePreedit { text, cursor } => {
+                let outcome = reduce_text_input(
+                    self,
+                    state,
+                    &TextInputEvent::ImePreedit {
+                        text: text.clone(),
+                        cursor: *cursor,
+                    },
+                );
+                outcome.changed
+            }
+            WidgetInputEvent::ImeCommit(text) => {
+                let outcome = reduce_text_input(
+                    self,
+                    state,
+                    &TextInputEvent::ImeCommit { text: text.clone() },
+                );
+                outcome.changed
+            }
+            WidgetInputEvent::ImeCancel => {
+                reduce_text_input(self, state, &TextInputEvent::ImeCancel).changed
             }
             WidgetInputEvent::KeyDown(chord) => {
                 let ev = match chord.key {

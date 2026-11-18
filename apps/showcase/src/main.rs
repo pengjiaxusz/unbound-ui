@@ -500,11 +500,12 @@ impl Showcase {
     /// 若不调用 `set_ime_allowed`，Windows 根本不会发送组合事件，
     /// 导致中日韩输入法只能输入 ASCII。候选框锚定在点击位置。
     ///
-    fn sync_ime(&mut self, state: &mut PlatformState, window: &Window) {
+    fn sync_ime(&mut self, _state: &mut PlatformState, window: &Window) {
         let active = self.shell().ime_active();
         if active != self.ime_allowed {
-            window.set_ime_allowed(active);
             self.ime_allowed = active;
+            window.set_ime_allowed(active);
+            ime_trace(format!("ime allowed -> {active}"));
         }
         if active {
             let scale = self.effective_scale();
@@ -517,31 +518,30 @@ impl Showcase {
                 ),
             );
         }
-        // 已提交文本必须精确插入一次，因此此处直接排空（drain）缓冲区而非仅读取。
+        // 提交文本只经平台 IME 事件通道送达；宿主不再轮询提交通道。
         //
-        let commit = state.ime.take_commit();
-        let mut changed = false;
-        if !commit.is_empty() {
-            // 经由运行时提交，使提交操作同时将帧标记为脏。
-            self.app.text(&commit);
-            changed = true;
-        }
-        let preedit = if active {
-            state.ime.preedit().to_string()
-        } else {
-            String::new()
-        };
-        if preedit != self.shell().state.ime_preedit {
-            self.shell_mut().state.ime_preedit = preedit;
-            self.shell_mut().state.bump();
-            self.app.invalidate();
-            changed = true;
-        }
-        // 经由运行时：IME 事件并非 `PlatformEvent`，处于休眠（parked）状态的循环
-        // 永远不会得知出现了组合输入，因此对它们也绕过帧率节奏限制。
-        if changed {
-            state.pacer.request_immediate(Instant::now());
-        }
+        // 运行时的 `ime` 事件会把帧标记为脏，因此这里无需额外处理。
+    }
+}
+
+/// 输入法诊断日志。
+///
+/// 环境变量 `UNBOUND_IME_TRACE` 或 `%TEMP%\unbound-ime.trace` 标记文件存在时
+/// 追加写入 `%TEMP%\unbound-ime.log`；正常运行时完全不产生输出。
+fn ime_trace(message: impl core::fmt::Display) {
+    if std::env::var_os("UNBOUND_IME_TRACE").is_none()
+        && !std::env::temp_dir().join("unbound-ime.trace").exists()
+    {
+        return;
+    }
+    use std::io::Write;
+    let path = std::env::temp_dir().join("unbound-ime.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{message}");
     }
 }
 
@@ -947,7 +947,8 @@ impl PlatformApp for Showcase {
                 let ime_owns_text = state.ime.enabled && matches!(key, PlatformKey::Character(_));
                 if !ime_owns_text {
                     if repeat {
-                        self.shell_mut().key_repeat(&key);
+                        let modifiers = self.modifiers;
+                        self.shell_mut().key_repeat(&key, modifiers);
                     } else {
                         let modifiers = app_modifiers(self.modifiers);
                         self.app.key(app_key(&key), true, modifiers);
@@ -1084,20 +1085,37 @@ impl PlatformApp for Showcase {
                 let update = match ime {
                     unbound_platform::ImeEvent::Preedit(text, selection) => {
                         unbound_app::ImeUpdate {
+                            enabled: true,
                             preedit: text,
                             cursor_range: selection,
                             commit: None,
+                            cancelled: false,
                         }
                     }
                     unbound_platform::ImeEvent::Commit(text) => unbound_app::ImeUpdate {
+                        enabled: false,
                         preedit: String::new(),
                         cursor_range: None,
                         commit: Some(text),
+                        cancelled: false,
                     },
-                    unbound_platform::ImeEvent::Enabled | unbound_platform::ImeEvent::Disabled => {
-                        unbound_app::ImeUpdate::default()
-                    }
+                    unbound_platform::ImeEvent::Disabled => unbound_app::ImeUpdate {
+                        enabled: false,
+                        preedit: String::new(),
+                        cursor_range: None,
+                        commit: None,
+                        cancelled: true,
+                    },
+                    unbound_platform::ImeEvent::Enabled => unbound_app::ImeUpdate::default(),
                 };
+                ime_trace(format!(
+                    "app ime enabled={} preedit={:?} commit={:?} cancelled={} focus={:?}",
+                    update.enabled,
+                    update.preedit,
+                    update.commit,
+                    update.cancelled,
+                    self.shell().focused_editor(),
+                ));
                 self.app.ime(update);
             }
             PlatformEvent::CloseRequested => {

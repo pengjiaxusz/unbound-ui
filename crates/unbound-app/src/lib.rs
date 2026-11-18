@@ -422,12 +422,16 @@ pub struct Modifiers {
 /// IME 组合输入更新。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImeUpdate {
+    /// 当前输入法是否启用。
+    pub enabled: bool,
     /// 正在组合的文本；组合结束时为空。
     pub preedit: String,
     /// 预编辑文本内当前光标 / 选区字节范围。
     pub cursor_range: Option<(usize, usize)>,
-    /// 若本帧完成组合输入，则为已提交的字符串。
+    /// 若本次完成组合输入，则为已提交的字符串。
     pub commit: Option<String>,
+    /// 组合被取消（失焦或输入法关闭）。
+    pub cancelled: bool,
 }
 
 /// **已解析**的应用事件。
@@ -4933,6 +4937,7 @@ impl<A: Application> AppRuntime<A> {
     fn dispatch_outcome(&mut self, event: AppEvent) -> EventOutcome {
         let mut widget_dirty = DirtyFlags::NONE;
         let mut widget_consumed = false;
+        let mut ime_absorbed = false;
         match &event {
             AppEvent::PointerDown {
                 pos,
@@ -5025,10 +5030,42 @@ impl<A: Application> AppRuntime<A> {
                     }
                 }
             }
+            AppEvent::Ime { update } => {
+                // IME 更新优先交给聚焦的已挂载文本控件；控件消费后不再转交应用层，
+                // 保证同一次提交在整条链路上只有一个消费者。
+                if let Some(focused_key) = self.ctx.focused {
+                    if let Some((rect, widget)) = self.mounted_widgets.get(&focused_key).cloned() {
+                        let w_evt = if update.cancelled {
+                            Some(unbound_widgets::WidgetInputEvent::ImeCancel)
+                        } else if let Some(commit) = &update.commit {
+                            Some(unbound_widgets::WidgetInputEvent::ImeCommit(commit.clone()))
+                        } else if update.enabled || !update.preedit.is_empty() {
+                            Some(unbound_widgets::WidgetInputEvent::ImePreedit {
+                                text: update.preedit.clone(),
+                                cursor: update.cursor_range.map(|(start, _)| start),
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some(w_evt) = w_evt {
+                            let mut store = self.widget_state.borrow_mut();
+                            if widget.reduce_erased(focused_key, rect, &w_evt, &mut store) {
+                                widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                                widget_consumed = true;
+                                ime_absorbed = true;
+                            }
+                        }
+                    }
+                }
+            }
             _ => {}
         }
 
-        let mut outcome = self.app.reduce(&mut self.state, event, &mut self.ctx);
+        let mut outcome = if ime_absorbed {
+            EventOutcome::new(widget_dirty)
+        } else {
+            self.app.reduce(&mut self.state, event, &mut self.ctx)
+        };
         outcome.dirty = outcome.dirty.merge(widget_dirty);
         if widget_consumed {
             outcome.propagation = Propagation::Stop;

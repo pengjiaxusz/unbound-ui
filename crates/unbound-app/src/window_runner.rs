@@ -665,23 +665,29 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             PlatformEvent::Ime(ime) => match ime {
                 ImeEvent::Preedit(text, selection) => {
                     self.runtime.ime(ImeUpdate {
+                        enabled: true,
                         preedit: text,
                         cursor_range: selection,
                         commit: None,
+                        cancelled: false,
                     });
                 }
                 ImeEvent::Commit(text) => {
                     self.runtime.ime(ImeUpdate {
+                        enabled: false,
                         preedit: String::new(),
                         cursor_range: None,
                         commit: Some(text),
+                        cancelled: false,
                     });
                 }
                 ImeEvent::Disabled => {
                     self.runtime.ime(ImeUpdate {
+                        enabled: false,
                         preedit: String::new(),
                         cursor_range: None,
                         commit: None,
+                        cancelled: true,
                     });
                 }
                 ImeEvent::Enabled => {}
