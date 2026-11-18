@@ -857,23 +857,23 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::RepeatButton
         | WidgetCatalogId::DropDownButton
         | WidgetCatalogId::Descriptions
-        | WidgetCatalogId::Alert
+        | WidgetCatalogId::InfoBar
         | WidgetCatalogId::AlertDialog
-        | WidgetCatalogId::Badge
+        | WidgetCatalogId::InfoBadge
         | WidgetCatalogId::Chip
         | WidgetCatalogId::CommandPalette
-        | WidgetCatalogId::Icon
+        | WidgetCatalogId::FontIcon
         | WidgetCatalogId::Popconfirm
         | WidgetCatalogId::Toast
         | WidgetCatalogId::Tour
-        | WidgetCatalogId::Avatar
+        | WidgetCatalogId::PersonPicture
         | WidgetCatalogId::AvatarGroup
         | WidgetCatalogId::Dock
         | WidgetCatalogId::Containers
         | WidgetCatalogId::EmptyState
         | WidgetCatalogId::Watermark
         | WidgetCatalogId::NinePatch
-        | WidgetCatalogId::Stack
+        | WidgetCatalogId::StackPanel
         | WidgetCatalogId::Wrap
         | WidgetCatalogId::Divider
         | WidgetCatalogId::Form
@@ -882,7 +882,7 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::NotificationCenter
         | WidgetCatalogId::Banner
         | WidgetCatalogId::FileDrop
-        | WidgetCatalogId::RichText
+        | WidgetCatalogId::RichTextBlock
         | WidgetCatalogId::Overlay
         | WidgetCatalogId::Image
         | WidgetCatalogId::ShortcutBar
@@ -894,17 +894,17 @@ pub fn reduce_showcase_component(
             *count = count.wrapping_add(1);
             true
         }
-        WidgetCatalogId::Checkbox
-        | WidgetCatalogId::Switch
+        WidgetCatalogId::CheckBox
+        | WidgetCatalogId::ToggleSwitch
         | WidgetCatalogId::ToggleButton
         | WidgetCatalogId::ToggleSplitButton
         | WidgetCatalogId::CalendarDatePicker
         | WidgetCatalogId::Callout
-        | WidgetCatalogId::Collapsible
-        | WidgetCatalogId::Modal
-        | WidgetCatalogId::Drawer
-        | WidgetCatalogId::Popover
-        | WidgetCatalogId::Tooltip
+        | WidgetCatalogId::Expander
+        | WidgetCatalogId::ContentDialog
+        | WidgetCatalogId::SplitView
+        | WidgetCatalogId::Flyout
+        | WidgetCatalogId::ToolTip
         | WidgetCatalogId::HoverCard
         | WidgetCatalogId::LoadingOverlay
         | WidgetCatalogId::AddressBar
@@ -917,38 +917,38 @@ pub fn reduce_showcase_component(
             *on = !*on;
             true
         }
-        WidgetCatalogId::Accordion
+        WidgetCatalogId::ExpanderGroup
         | WidgetCatalogId::TreeTable
         | WidgetCatalogId::VirtualMasonry
-        | WidgetCatalogId::Tabs
+        | WidgetCatalogId::TabView
         | WidgetCatalogId::Pivot
-        | WidgetCatalogId::Radio
-        | WidgetCatalogId::Segmented
+        | WidgetCatalogId::RadioButton
+        | WidgetCatalogId::SelectorBar
         | WidgetCatalogId::Stepper
-        | WidgetCatalogId::Rating
-        | WidgetCatalogId::Pagination
-        | WidgetCatalogId::Carousel
-        | WidgetCatalogId::NavigationRail
-        | WidgetCatalogId::Sidebar
-        | WidgetCatalogId::Menu
-        | WidgetCatalogId::Menubar
+        | WidgetCatalogId::RatingControl
+        | WidgetCatalogId::PipsPager
+        | WidgetCatalogId::FlipView
+        | WidgetCatalogId::NavigationViewCompact
+        | WidgetCatalogId::NavigationView
+        | WidgetCatalogId::MenuFlyout
+        | WidgetCatalogId::MenuBar
         | WidgetCatalogId::ContextMenu
-        | WidgetCatalogId::Breadcrumb
-        | WidgetCatalogId::Toolbar
+        | WidgetCatalogId::BreadcrumbBar
+        | WidgetCatalogId::CommandBar
         | WidgetCatalogId::CanvasToolbar
-        | WidgetCatalogId::Select
+        | WidgetCatalogId::ComboBox
         | WidgetCatalogId::Cascader
         | WidgetCatalogId::Table
         | WidgetCatalogId::DataGrid
-        | WidgetCatalogId::VirtualViews
+        | WidgetCatalogId::ListView
         | WidgetCatalogId::Masonry
         | WidgetCatalogId::Chart
         | WidgetCatalogId::Timeline
         | WidgetCatalogId::TimelineTrack
         | WidgetCatalogId::Transfer
         | WidgetCatalogId::TreeView
+        | WidgetCatalogId::CalendarView
         | WidgetCatalogId::DatePicker
-        | WidgetCatalogId::DatePickerWheel
         | WidgetCatalogId::DateRangePicker
         | WidgetCatalogId::TimePicker
         | WidgetCatalogId::GenericDataTable
@@ -965,14 +965,14 @@ pub fn reduce_showcase_component(
         }
         WidgetCatalogId::Slider
         | WidgetCatalogId::MultiSplit
-        | WidgetCatalogId::Progress
-        | WidgetCatalogId::NumberInput
-        | WidgetCatalogId::Spinner
+        | WidgetCatalogId::ProgressBar
+        | WidgetCatalogId::NumberBox
+        | WidgetCatalogId::ProgressRing
         | WidgetCatalogId::AspectRatioBox
         | WidgetCatalogId::SplitPane
         | WidgetCatalogId::Ruler
         | WidgetCatalogId::Minimap
-        | WidgetCatalogId::Scroll
+        | WidgetCatalogId::ScrollView
         | WidgetCatalogId::ColorPicker
         | WidgetCatalogId::GradientEditor
         | WidgetCatalogId::CurveEditor
@@ -988,12 +988,12 @@ pub fn reduce_showcase_component(
             *val = (*val + 10.0) % 100.0;
             true
         }
-        WidgetCatalogId::TextInput
+        WidgetCatalogId::TextBox
         | WidgetCatalogId::TerminalView
-        | WidgetCatalogId::TextArea
+        | WidgetCatalogId::TextBoxMultiline
         | WidgetCatalogId::PasswordBox
-        | WidgetCatalogId::AutoComplete
-        | WidgetCatalogId::Combobox
+        | WidgetCatalogId::AutoSuggestBox
+        | WidgetCatalogId::ComboBoxEditable
         | WidgetCatalogId::PinInput
         | WidgetCatalogId::TagInput
         | WidgetCatalogId::HotkeyInput
@@ -1025,7 +1025,7 @@ mod search_tests {
         let hits = state.search_hits();
         assert!(
             hits.iter()
-                .any(|h| matches!(h, SearchHit::Component(WidgetCatalogId::Accordion))),
+                .any(|h| matches!(h, SearchHit::Component(WidgetCatalogId::ExpanderGroup))),
             "搜索 Accordion 应命中对应组件卡片: {hits:?}"
         );
 

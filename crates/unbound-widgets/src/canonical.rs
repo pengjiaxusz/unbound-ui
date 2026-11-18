@@ -1,8 +1,8 @@
 //! WinUI 3 规范名与目录标识之间的双向映射。
 //!
-//! 目录枚举以源码模块名为主键（例如 `Switch`、`Select`），而差分系统、展台与
-//! 设计规律巡检需要以 WinUI 3 官方名称（例如 `ToggleSwitch`、`ComboBox`）寻址
-//! 同一个控件。本模块是两者之间的唯一事实源：
+//! 目录枚举以 WinUI 3 官方规范名为主键（例如 `ToggleSwitch`、`ComboBox`），而差分系统、
+//! 展台与设计规律巡检同样以官方名称寻址同一个控件。本模块是规范名与目录标识之间的
+//! 唯一事实源：
 //!
 //! 1. [`WidgetCatalogId::winui3_name`] 返回该组件对应的官方规范名；
 //! 2. [`WidgetCatalogId::from_winui3_name`] 按官方规范名反查目录标识；
@@ -124,65 +124,65 @@ impl WidgetCatalogId {
             | Self::Tour => ControlClass::Exclusive,
 
             // 其余全部为 WinUI 3 基准对齐控件。
-            Self::Accordion
-            | Self::Alert
+            Self::ExpanderGroup
+            | Self::InfoBar
             | Self::AlertDialog
-            | Self::AutoComplete
-            | Self::Avatar
-            | Self::Badge
-            | Self::Breadcrumb
+            | Self::AutoSuggestBox
+            | Self::PersonPicture
+            | Self::InfoBadge
+            | Self::BreadcrumbBar
             | Self::Button
             | Self::CalendarDatePicker
-            | Self::Carousel
-            | Self::Checkbox
-            | Self::Collapsible
+            | Self::FlipView
+            | Self::CheckBox
+            | Self::Expander
             | Self::ColorPicker
-            | Self::Combobox
+            | Self::ComboBoxEditable
             | Self::Containers
             | Self::ContextMenu
+            | Self::CalendarView
             | Self::DatePicker
-            | Self::DatePickerWheel
-            | Self::Drawer
+            | Self::SplitView
             | Self::DropDownButton
             | Self::HoverCard
             | Self::HyperlinkButton
-            | Self::Icon
+            | Self::FontIcon
             | Self::Image
             | Self::LoadingOverlay
-            | Self::Menu
-            | Self::Menubar
-            | Self::Modal
-            | Self::NavigationRail
-            | Self::NumberInput
-            | Self::Pagination
+            | Self::MenuFlyout
+            | Self::MenuBar
+            | Self::ContentDialog
+            | Self::NavigationViewCompact
+            | Self::NumberBox
+            | Self::PipsPager
             | Self::PasswordBox
             | Self::Pivot
-            | Self::Popover
-            | Self::Progress
-            | Self::Radio
-            | Self::Rating
+            | Self::Flyout
+            | Self::ProgressBar
+            | Self::RadioButton
+            | Self::RatingControl
             | Self::RepeatButton
-            | Self::RichText
-            | Self::Scroll
-            | Self::Segmented
-            | Self::Select
-            | Self::Sidebar
+            | Self::RichTextBlock
+            | Self::ScrollView
+            | Self::SelectorBar
+            | Self::ComboBox
+            | Self::NavigationView
             | Self::Slider
-            | Self::Spinner
+            | Self::ProgressRing
             | Self::SplitButton
-            | Self::Stack
-            | Self::Switch
-            | Self::Tabs
-            | Self::TextArea
-            | Self::TextInput
+            | Self::StackPanel
+            | Self::ToggleSwitch
+            | Self::TabView
+            | Self::TextBoxMultiline
+            | Self::TextBox
             | Self::TimePicker
             | Self::Toast
             | Self::ToggleButton
             | Self::ToggleSplitButton
-            | Self::Toolbar
-            | Self::Tooltip
+            | Self::CommandBar
+            | Self::ToolTip
             | Self::TreeView
-            | Self::VirtualViews
+            | Self::ListView
             | Self::RichEditBox
             | Self::GridView
             | Self::ListBox
@@ -202,57 +202,57 @@ impl WidgetCatalogId {
     #[must_use]
     pub const fn winui3_name(self) -> &'static str {
         match self {
-            Self::Accordion | Self::Collapsible => "Expander",
-            Self::Alert => "InfoBar",
-            Self::AlertDialog | Self::Modal => "ContentDialog",
-            Self::AutoComplete => "AutoSuggestBox",
-            Self::Avatar => "PersonPicture",
-            Self::Badge => "InfoBadge",
-            Self::Breadcrumb => "BreadcrumbBar",
+            Self::ExpanderGroup | Self::Expander => "Expander",
+            Self::InfoBar => "InfoBar",
+            Self::AlertDialog | Self::ContentDialog => "ContentDialog",
+            Self::AutoSuggestBox => "AutoSuggestBox",
+            Self::PersonPicture => "PersonPicture",
+            Self::InfoBadge => "InfoBadge",
+            Self::BreadcrumbBar => "BreadcrumbBar",
             Self::Button => "Button",
             Self::CalendarDatePicker => "CalendarDatePicker",
-            Self::Carousel => "FlipView",
-            Self::Checkbox => "CheckBox",
+            Self::FlipView => "FlipView",
+            Self::CheckBox => "CheckBox",
             Self::ColorPicker => "ColorPicker",
-            Self::Combobox | Self::Select => "ComboBox",
+            Self::ComboBoxEditable | Self::ComboBox => "ComboBox",
             Self::Containers => "Border",
-            Self::ContextMenu | Self::Menu => "MenuFlyout",
-            Self::DatePicker => "CalendarView",
-            Self::DatePickerWheel => "DatePicker",
-            Self::Drawer => "SplitView",
+            Self::ContextMenu | Self::MenuFlyout => "MenuFlyout",
+            Self::CalendarView => "CalendarView",
+            Self::DatePicker => "DatePicker",
+            Self::SplitView => "SplitView",
             Self::DropDownButton => "DropDownButton",
-            Self::HoverCard | Self::Popover => "Flyout",
+            Self::HoverCard | Self::Flyout => "Flyout",
             Self::HyperlinkButton => "HyperlinkButton",
-            Self::Icon => "FontIcon",
+            Self::FontIcon => "FontIcon",
             Self::Image => "Image",
-            Self::LoadingOverlay | Self::Spinner => "ProgressRing",
-            Self::Menubar => "MenuBar",
-            Self::NavigationRail | Self::Sidebar => "NavigationView",
-            Self::NumberInput => "NumberBox",
-            Self::Pagination => "PipsPager",
+            Self::LoadingOverlay | Self::ProgressRing => "ProgressRing",
+            Self::MenuBar => "MenuBar",
+            Self::NavigationViewCompact | Self::NavigationView => "NavigationView",
+            Self::NumberBox => "NumberBox",
+            Self::PipsPager => "PipsPager",
             Self::PasswordBox => "PasswordBox",
             Self::Pivot => "Pivot",
-            Self::Progress => "ProgressBar",
-            Self::Radio => "RadioButton",
-            Self::Rating => "RatingControl",
+            Self::ProgressBar => "ProgressBar",
+            Self::RadioButton => "RadioButton",
+            Self::RatingControl => "RatingControl",
             Self::RepeatButton => "RepeatButton",
-            Self::RichText => "RichTextBlock",
-            Self::Scroll => "ScrollView",
-            Self::Segmented => "SelectorBar",
+            Self::RichTextBlock => "RichTextBlock",
+            Self::ScrollView => "ScrollView",
+            Self::SelectorBar => "SelectorBar",
             Self::Slider => "Slider",
             Self::SplitButton => "SplitButton",
-            Self::Stack => "StackPanel",
-            Self::Switch => "ToggleSwitch",
-            Self::Tabs => "TabView",
-            Self::TextArea | Self::TextInput => "TextBox",
+            Self::StackPanel => "StackPanel",
+            Self::ToggleSwitch => "ToggleSwitch",
+            Self::TabView => "TabView",
+            Self::TextBoxMultiline | Self::TextBox => "TextBox",
             Self::TimePicker => "TimePicker",
             Self::Toast => "TeachingTip",
             Self::ToggleButton => "ToggleButton",
             Self::ToggleSplitButton => "ToggleSplitButton",
-            Self::Toolbar => "CommandBar",
-            Self::Tooltip => "ToolTip",
+            Self::CommandBar => "CommandBar",
+            Self::ToolTip => "ToolTip",
             Self::TreeView => "TreeView",
-            Self::VirtualViews => "ListView",
+            Self::ListView => "ListView",
 
             // Community Toolkit 规范名。
             Self::DataGrid | Self::GenericDataTable => "DataGrid",
@@ -338,9 +338,9 @@ impl WidgetCatalogId {
     /// 按 WinUI 3 官方规范名（或自有控件显示名）反查目录标识。
     ///
     /// 同一规范名对应多个变体时返回一对一差分使用的主变体：
-    /// `Expander → Collapsible`、`ContentDialog → Modal`、`MenuFlyout → Menu`、
-    /// `ComboBox → Select`、`NavigationView → Sidebar`、`Flyout → Popover`、
-    /// `ProgressRing → Spinner`、`TextBox → TextInput`、`StackPanel → Stack`。
+    /// `Expander → Expander`、`ContentDialog → ContentDialog`、`MenuFlyout → MenuFlyout`、
+    /// `ComboBox → ComboBox`、`NavigationView → NavigationView`、`Flyout → Flyout`、
+    /// `ProgressRing → ProgressRing`、`TextBox → TextBox`、`StackPanel → StackPanel`。
     #[must_use]
     pub fn from_winui3_name(name: &str) -> Option<Self> {
         let mut found = None;
@@ -362,15 +362,15 @@ impl WidgetCatalogId {
     pub const fn is_primary_canonical(self) -> bool {
         matches!(
             self,
-            Self::Collapsible
-                | Self::Modal
-                | Self::Menu
-                | Self::Select
-                | Self::Sidebar
-                | Self::Popover
-                | Self::Spinner
-                | Self::TextInput
-                | Self::Stack
+            Self::Expander
+                | Self::ContentDialog
+                | Self::MenuFlyout
+                | Self::ComboBox
+                | Self::NavigationView
+                | Self::Flyout
+                | Self::ProgressRing
+                | Self::TextBox
+                | Self::StackPanel
                 | Self::DataGrid
                 | Self::SplitPane
                 | Self::Form
@@ -437,17 +437,17 @@ mod tests {
 
     #[test]
     fn renamed_controls_use_the_official_winui3_spelling() {
-        assert_eq!(WidgetCatalogId::Switch.winui3_name(), "ToggleSwitch");
-        assert_eq!(WidgetCatalogId::Checkbox.winui3_name(), "CheckBox");
-        assert_eq!(WidgetCatalogId::Select.winui3_name(), "ComboBox");
-        assert_eq!(WidgetCatalogId::TextInput.winui3_name(), "TextBox");
+        assert_eq!(WidgetCatalogId::ToggleSwitch.winui3_name(), "ToggleSwitch");
+        assert_eq!(WidgetCatalogId::CheckBox.winui3_name(), "CheckBox");
+        assert_eq!(WidgetCatalogId::ComboBox.winui3_name(), "ComboBox");
+        assert_eq!(WidgetCatalogId::TextBox.winui3_name(), "TextBox");
         assert_eq!(
             WidgetCatalogId::from_winui3_name("ToggleSwitch"),
-            Some(WidgetCatalogId::Switch)
+            Some(WidgetCatalogId::ToggleSwitch)
         );
         assert_eq!(
             WidgetCatalogId::from_winui3_name("combobox"),
-            Some(WidgetCatalogId::Select)
+            Some(WidgetCatalogId::ComboBox)
         );
     }
 

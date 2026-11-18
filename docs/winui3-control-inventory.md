@@ -3,7 +3,7 @@
 本文档是 `unbound-ui` 控件体系对标 Windows 11 Fluent（WinUI 3 / Windows App SDK 1.8 + Windows Community Toolkit）的**单一事实源清单**。
 所有命名均**以 WinUI 3 官方规范名为主键**，服务于三项工程目标：
 
-1. **命名对齐与像素差分闭环**：明确本框架现有 **134 个目录组件**（121 个源码模块 + `title_bar` 等外壳模块）中，哪些是 WinUI 3 的**基准对齐控件**、它们的 WinUI 3 官方规范名是什么、需要改名还是归并。
+1. **命名对齐与像素差分闭环**：明确本框架现有 **134 个目录组件**（121 个源码模块 + `title_bar` 等外壳模块）中，哪些是 WinUI 3 的**基准对齐控件**、它们的 WinUI 3 官方规范名是什么、命名是否已与规范名一致。
 2. **缺失控件追踪**：列出 WinUI 3 官方画廊（WinUI 3 Gallery）与 Community Toolkit 中尚未实现的控件，区分**核心必补（P0/P1）**与**社区扩展选补（P2）**。
 3. **自有独有控件清单**：界定 WinUI 3 不存在、属于 `unbound-ui` 面向专业工作台/DCC/IDE 场景的**自有独有控件**，后续通过 `.agents/skills/fluent-control-design` 技能将基准控件总结出的外观与行为规律统一迁移到这些独有组件上。
 
@@ -13,10 +13,10 @@
 
 | 分类 | 数量 | 说明 |
 | --- | --- | --- |
-| **1. 已实现 · WinUI 3 基准对齐控件** | **71 个** | 已在 `unbound-widgets` 中实现（部分存在二合一拆分或 Web 风格命名），需统一对齐至 WinUI 3 官方名称并纳入批量像素差分 |
+| **1. 已实现 · WinUI 3 基准对齐控件** | **71 个** | 已在 `unbound-widgets` 中实现，目录枚举、展台展示名与展示文档均统一使用 WinUI 3 官方名称，可直接纳入批量像素差分 |
 | **2. 已实现 · Community Toolkit 社区标准对齐控件** | **20 个** | 对应 `CommunityToolkit.WinUI.Controls` 中的高频官方扩展组件（如 `Segmented`、`SettingsCard`、`TokenizingTextBox` 等） |
 | **3. 已实现 · Unbound 自有独有控件** | **43 个** | WinUI 3 无对应物，属于本框架面向节点图、时间轴、代码/终端、数据工作台等场景的自有独有组件 |
-| **4. 待实现 · WinUI 3 缺失必补控件（P1）** | **0 个**（11 项已全部落地） | P0 的 7 个缺失控件与 P1 的 11 项均已落地为独立目录变体；`PipsPager` 以 `Pagination` 的纯圆点样式承载 |
+| **4. 待实现 · WinUI 3 缺失必补控件（P1）** | **0 个**（11 项已全部落地） | P0 的 7 个缺失控件与 P1 的 11 项均已落地为独立目录变体；`PipsPager` 变体以 `PaginationStyle::Dots` 纯圆点样式承载 |
 | **5. 待实现 · Community Toolkit 选补控件（P2）** | **0 个**（6 项已全部落地） | Windows Community Toolkit 的 6 个选补控件均已实现 |
 
 > 汇总：71 + 20 + 43 = **134 个目录变体**，与 `WidgetCatalogId::COUNT` 及稳定形状探针一致。
@@ -27,56 +27,56 @@
 
 > **命名对齐规则**：
 > - 表中第一列 **WinUI 3 规范名称** 为主名称（检测系统 `Catalog` 与报告统一使用此名称）。
-> - **命名状态** 标注为 `已一致`、`需改名` 或 `需归并/拆分`。
+> - **命名状态** 标注为 `已一致` 或 `已对应`（`Containers` 等非直接官方名变体保留）。
 > - **差分接入状态** 标注为 `已接入批量差分`（参考宿主与差分器代码已就绪，实机采集需要 GPU/.NET 环境）或 `待接入批量差分`。当前首批 6 个试点 + 两批 40 个 + 后续补齐 11 个共 57 个已接入。
 
-| WinUI 3 规范名称 | WinUI 3 分类 | 本框架当前 `WidgetCatalogId` | 源码模块 (`crates/unbound-widgets/src/`) | 命名状态与迁移动作 | 差分接入状态 |
+| WinUI 3 规范名称 | WinUI 3 分类 | 本框架当前 `WidgetCatalogId` | 源码模块 (`crates/unbound-widgets/src/`) | 命名状态 | 差分接入状态 |
 | --- | --- | --- | --- | --- | --- |
 | **Button** | Basic Input | `Button` | `button.rs` | `已一致`（含 `Standard` / `AccentButtonStyle` / `Subtle` 三种变体） | 已接入批量差分（实机采集待 GPU） |
 | **ToggleButton** | Basic Input | `ToggleButton` | `toggle_button.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **SplitButton** | Basic Input | `SplitButton` | `split_button.rs` | `已一致`（另需对齐 `ToggleSplitButton` 变体） | 已接入批量差分（实机采集待 GPU） |
-| **CheckBox** | Basic Input | `Checkbox` | `checkbox.rs` | `需改名`：`Checkbox` → `CheckBox`（驼峰大写 B 对齐 WinUI） | 已接入批量差分（实机采集待 GPU） |
-| **RadioButton** | Basic Input | `Radio` | `radio.rs` | `需改名`：`Radio` → `RadioButton`（容器对应 `RadioButtons`） | 已接入批量差分（实机采集待 GPU） |
-| **ToggleSwitch** | Basic Input | `Switch` | `switch.rs` | `需改名`：`Switch` → `ToggleSwitch` | 已接入批量差分（实机采集待 GPU） |
-| **ComboBox** | Basic Input | `Select` / `Combobox` | `select.rs` / `combobox.rs` | `需归并/改名`：WinUI 中不可编辑下拉为 `ComboBox`（当前 `Select`），可编辑下拉为 `ComboBox (IsEditable=true)`（当前 `Combobox`） | 已接入批量差分（`Select`） |
+| **CheckBox** | Basic Input | `CheckBox` | `checkbox.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **RadioButton** | Basic Input | `RadioButton` | `radio.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **ToggleSwitch** | Basic Input | `ToggleSwitch` | `switch.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **ComboBox** | Basic Input | `ComboBox` / `ComboBoxEditable` | `select.rs` / `combobox.rs` | `已一致`：不可编辑下拉为 `ComboBox`，可编辑下拉为 `ComboBoxEditable`（`IsEditable=true`） | 已接入批量差分（`ComboBox`） |
 | **Slider** | Basic Input | `Slider` | `slider.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
-| **RatingControl** | Basic Input | `Rating` | `rating.rs` | `需改名`：`Rating` → `RatingControl` | 已接入批量差分（实机采集待 GPU） |
+| **RatingControl** | Basic Input | `RatingControl` | `rating.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **ColorPicker** | Basic Input | `ColorPicker` | `color_picker.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
-| **TextBox** | Text | `TextInput` / `TextArea` | `text_input.rs` / `text_area.rs` | `需归并/改名`：`TextInput` → `TextBox`；`TextArea` 对应 `TextBox (AcceptsReturn=true)` | 已接入批量差分（`TextInput`） |
-| **NumberBox** | Text | `NumberInput` | `number_input.rs` | `需改名`：`NumberInput` → `NumberBox` | 已接入批量差分（实机采集待 GPU） |
-| **AutoSuggestBox** | Text | `AutoComplete` | `autocomplete.rs` | `需改名`：`AutoComplete` → `AutoSuggestBox` | 已接入批量差分（实机采集待 GPU） |
-| **RichTextBlock** | Text | `RichText` | `rich_text.rs` | `需改名`：`RichText` → `RichTextBlock` | 已接入批量差分（实机采集待 GPU） |
-| **ProgressBar** | Status & Info | `Progress` | `progress.rs` | `需改名`：`Progress` → `ProgressBar` | 已接入批量差分（实机采集待 GPU） |
-| **ProgressRing** | Status & Info | `Spinner` / `LoadingOverlay` | `spinner.rs` | `需改名`：`Spinner` → `ProgressRing`（`LoadingOverlay` 为带遮罩封装） | 已接入批量差分（实机采集待 GPU） |
-| **InfoBar** | Status & Info | `Alert` / `Banner` / `Callout` | `alert.rs` / `banner.rs` / `callout.rs` | `需归并/改名`：`Alert` → `InfoBar`；`Banner` 为顶栏通栏变体，`Callout` 为内嵌提示块 | 已接入批量差分（实机采集待 GPU） |
-| **InfoBadge** | Status & Info | `Badge` | `badge.rs` | `需改名`：`Badge` → `InfoBadge` | 已接入批量差分（实机采集待 GPU） |
-| **ToolTip** | Status & Info | `Tooltip` | `tooltip.rs` | `需改名`：`Tooltip` → `ToolTip`（驼峰大写 T） | 已接入批量差分（实机采集待 GPU） |
-| **TeachingTip** | Status & Info | `Toast` / `Tour` / `Popconfirm` | `toast.rs` / `tour.rs` / `popconfirm.rs` | `需归并/改名`：非模态气泡引导与轻提示在 WinUI 中为 `TeachingTip`（`Tour` 为多步 `TeachingTip` 序列，`Toast` 兼具应用内通知职责） | 已接入批量差分（实机采集待 GPU） |
-| **ContentDialog** | Dialogs & Flyouts | `Modal` / `AlertDialog` | `modal.rs` / `alert_dialog.rs` | `需归并/改名`：`Modal` 与 `AlertDialog` 均对应 WinUI `ContentDialog`（标准模态框 vs 确认/破坏性双按钮配置） | 已接入批量差分（实机采集待 GPU） |
-| **Flyout** | Dialogs & Flyouts | `Popover` / `HoverCard` | `popover.rs` / `hover_card.rs` | `需归并/改名`：`Popover` → `Flyout`（`HoverCard` 为悬停触发的 `Flyout`） | 已接入批量差分（实机采集待 GPU） |
-| **MenuFlyout** | Menus & Toolbars | `Menu` / `ContextMenu` | `menu.rs` / `context_menu.rs` | `需归并/改名`：`Menu` 与 `ContextMenu` 对应 WinUI `MenuFlyout` | 已接入批量差分（实机采集待 GPU） |
-| **MenuBar** | Menus & Toolbars | `Menubar` | `menubar.rs` | `需改名`：`Menubar` → `MenuBar`（驼峰大写 B） | 已接入批量差分（实机采集待 GPU） |
-| **CommandBar** | Menus & Toolbars | `Toolbar` | `toolbar.rs` | `需改名`：`Toolbar` → `CommandBar` | 已接入批量差分（实机采集待 GPU） |
-| **NavigationView** | Navigation | `Sidebar` / `NavigationRail` | `sidebar.rs` / `navigation_rail.rs` | `需归并/改名`：`Sidebar`（展开态 Left）与 `NavigationRail`（紧凑态 LeftCompact）均为 `NavigationView` 的显示模式 | 已接入批量差分（实机采集待 GPU） |
-| **TabView** | Navigation | `Tabs` | `tabs.rs` | `需改名`：`Tabs` → `TabView` | 已接入批量差分（实机采集待 GPU） |
+| **TextBox** | Text | `TextBox` / `TextBoxMultiline` | `text_input.rs` / `text_area.rs` | `已一致`：多行形态为 `TextBoxMultiline`（`AcceptsReturn=true`） | 已接入批量差分（`TextBox`） |
+| **NumberBox** | Text | `NumberBox` | `number_input.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **AutoSuggestBox** | Text | `AutoSuggestBox` | `autocomplete.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **RichTextBlock** | Text | `RichTextBlock` | `rich_text.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **ProgressBar** | Status & Info | `ProgressBar` | `progress.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **ProgressRing** | Status & Info | `ProgressRing` / `LoadingOverlay` | `spinner.rs` | `已一致`（`LoadingOverlay` 为带遮罩封装） | 已接入批量差分（实机采集待 GPU） |
+| **InfoBar** | Status & Info | `InfoBar` / `Banner` / `Callout` | `alert.rs` / `banner.rs` / `callout.rs` | `已一致`（`Banner` 为顶栏通栏变体，`Callout` 为内嵌提示块） | 已接入批量差分（实机采集待 GPU） |
+| **InfoBadge** | Status & Info | `InfoBadge` | `badge.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **ToolTip** | Status & Info | `ToolTip` | `tooltip.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **TeachingTip** | Status & Info | `Toast` / `Tour` / `Popconfirm` | `toast.rs` / `tour.rs` / `popconfirm.rs` | `已一致`（`Tour` 为多步 `TeachingTip` 序列，`Toast` 兼具应用内通知职责） | 已接入批量差分（实机采集待 GPU） |
+| **ContentDialog** | Dialogs & Flyouts | `ContentDialog` / `AlertDialog` | `modal.rs` / `alert_dialog.rs` | `已一致`（标准模态框 vs 确认/破坏性双按钮配置） | 已接入批量差分（实机采集待 GPU） |
+| **Flyout** | Dialogs & Flyouts | `Flyout` / `HoverCard` | `popover.rs` / `hover_card.rs` | `已一致`（`HoverCard` 为悬停触发的 `Flyout`） | 已接入批量差分（实机采集待 GPU） |
+| **MenuFlyout** | Menus & Toolbars | `MenuFlyout` / `ContextMenu` | `menu.rs` / `context_menu.rs` | `已一致`（`ContextMenu` 为右键触发的 `MenuFlyout`） | 已接入批量差分（实机采集待 GPU） |
+| **MenuBar** | Menus & Toolbars | `MenuBar` | `menubar.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **CommandBar** | Menus & Toolbars | `CommandBar` | `toolbar.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **NavigationView** | Navigation | `NavigationView` / `NavigationViewCompact` | `sidebar.rs` / `navigation_rail.rs` | `已一致`（展开态 Left 与紧凑态 LeftCompact 的显示模式） | 已接入批量差分（实机采集待 GPU） |
+| **TabView** | Navigation | `TabView` | `tabs.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **Pivot** | Navigation | `Pivot` | `pivot.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
-| **BreadcrumbBar** | Navigation | `Breadcrumb` | `breadcrumb.rs` | `需改名`：`Breadcrumb` → `BreadcrumbBar` | 已接入批量差分（实机采集待 GPU） |
-| **SelectorBar** | Navigation | `Segmented` | `segmented.rs` | `需对齐`：WinUI 3 1.4+ 新增 `SelectorBar`（亦对应 Community Toolkit 的 `Segmented`） | 已接入批量差分（实机采集待 GPU） |
-| **PipsPager** | Navigation | `Pagination` | `pagination.rs` | `需对齐`：WinUI 原生分页指示器为 `PipsPager`，数字条形分页保留为桌面扩展样式 | 已接入批量差分（实机采集待 GPU） |
-| **Expander** | Layout & Containers | `Collapsible` / `Accordion` | `collapsible.rs` / `accordion.rs` | `需归并/改名`：`Collapsible` → `Expander`；`Accordion` 为多个 `Expander` 的手风琴编组 | 已接入批量差分（实机采集待 GPU） |
-| **SplitView** | Layout & Containers | `Drawer` | `drawer.rs` | `需改名`：`Drawer` → `SplitView` | 已接入批量差分（实机采集待 GPU） |
+| **BreadcrumbBar** | Navigation | `BreadcrumbBar` | `breadcrumb.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **SelectorBar** | Navigation | `SelectorBar` | `segmented.rs` | `已一致`：WinUI 3 1.4+ 原生选择条（亦对应 Toolkit `Segmented`） | 已接入批量差分（实机采集待 GPU） |
+| **PipsPager** | Navigation | `PipsPager` | `pagination.rs` | `已一致`：WinUI 原生分页指示器；数字条形分页保留为桌面扩展样式 | 已接入批量差分（实机采集待 GPU） |
+| **Expander** | Layout & Containers | `Expander` / `ExpanderGroup` | `collapsible.rs` / `accordion.rs` | `已一致`（`ExpanderGroup` 为多个 `Expander` 的编组） | 已接入批量差分（实机采集待 GPU） |
+| **SplitView** | Layout & Containers | `SplitView` | `drawer.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **Border / Card** | Layout & Containers | `Containers` | `containers.rs` | `已对应`：对应 WinUI `Border` 与卡片表面样式 | 已接入批量差分（实机采集待 GPU） |
-| **StackPanel** | Layout & Containers | `Stack` | `containers.rs` | `需改名`：`Stack` → `StackPanel` | 已接入批量差分（实机采集待 GPU） |
-| **ScrollView** | Scrolling | `Scroll` | `scroll.rs` | `需改名`：`Scroll` → `ScrollView` | 已接入批量差分（实机采集待 GPU） |
+| **StackPanel** | Layout & Containers | `StackPanel` | `containers.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **ScrollView** | Scrolling | `ScrollView` | `scroll.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **TreeView** | Collections | `TreeView` | `tree_view.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
-| **ListView** | Collections | `VirtualViews` | `virtual_views.rs` | `需改名`：`VirtualViews` → `ListView` | 已接入批量差分（实机采集待 GPU） |
-| **FlipView** | Collections | `Carousel` | `carousel.rs` | `需改名`：`Carousel` → `FlipView` | 已接入批量差分（实机采集待 GPU） |
-| **CalendarView / CalendarDatePicker** | Date & Time | `DatePicker` | `date_picker.rs` | `需细分`：我方 `DatePicker` 渲染的是展开的月历面板，对应 WinUI `CalendarView`；收起触发器 + 弹层对应 `CalendarDatePicker` | 已接入批量差分（实机采集待 GPU） |
+| **ListView** | Collections | `ListView` | `virtual_views.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **FlipView** | Collections | `FlipView` | `carousel.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **CalendarView / CalendarDatePicker** | Date & Time | `CalendarView` / `CalendarDatePicker` | `date_picker.rs` / `calendar_date_picker.rs` | `已一致`：`CalendarView` 渲染展开月历面板，`CalendarDatePicker` 为收起触发器 + 弹层 | 已接入批量差分（实机采集待 GPU） |
 | **TimePicker** | Date & Time | `TimePicker` | `time_picker.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
-| **PersonPicture** | Media & Visual | `Avatar` / `AvatarGroup` | `avatar.rs` | `需改名`：`Avatar` → `PersonPicture` | 已接入批量差分（实机采集待 GPU） |
+| **PersonPicture** | Media & Visual | `PersonPicture` / `AvatarGroup` | `avatar.rs` | `已一致`（`AvatarGroup` 为多头像叠放组） | 已接入批量差分（实机采集待 GPU） |
 | **Image** | Media & Visual | `Image` | `image.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
-| **FontIcon / SymbolIcon** | Media & Visual | `Icon` | `image.rs` | `需改名`：`Icon` → `FontIcon` / `SymbolIcon` | 已接入批量差分（实机采集待 GPU） |
-| **TitleBar** | Windowing | （位于 `title_bar.rs`，未入 `WidgetCatalogId`） | `title_bar.rs` | `需入列`：WinAppSDK 1.5+ 官方 `TitleBar` 控件，已在 `title_bar.rs` 实现，建议纳入目录与差分 | 已接入批量差分（实机采集待 GPU） |
+| **FontIcon / SymbolIcon** | Media & Visual | `FontIcon` | `image.rs` | `已一致`（`SymbolIcon` 由同一图标发射器承载） | 已接入批量差分（实机采集待 GPU） |
+| **TitleBar** | Windowing | （位于 `title_bar.rs`，未入 `WidgetCatalogId`） | `title_bar.rs` | `已一致`：WinAppSDK 1.5+ 官方 `TitleBar` 控件，已在 `title_bar.rs` 实现，仍建议纳入目录与差分 | 已接入批量差分（实机采集待 GPU） |
 | **RichEditBox** | Text | `RichEditBox` | `rich_edit_box.rs` | `已一致`：顶部 B / I / U 格式工具条 + 细分隔线 + 可编辑文本区 | 已登记，参考截图待采集 |
 | **GridView** | Collections | `GridView` | `grid_view.rs` | `已一致`：等宽网格单元，选中单元用强调色描边、悬停显示圆角 | 已登记，参考截图待采集 |
 | **ListBox** | Collections | `ListBox` | `list_box.rs` | `已一致`：经典单选列表，选中行铺强调浅底并带左侧指示条 | 已登记，参考截图待采集 |
@@ -121,7 +121,7 @@
 
 ### 4.1 核心必补控件（P0 / P1 —— 共 18 个）
 
-> **进度**：7 个 P0 与 11 个 P1 已全部落地（P1 产出 12 个目录变体：`AppBarButton` / `AppBarToggleButton` / `AppBarSeparator` 三个独立变体，纯圆点 `PipsPager` 以 `Pagination` 的 `Dots` 样式承载），并接入形状探针与 24 态图元数恒定门禁。下表保留原始缺口分析，描述列已更新为当前实现形态。
+> **进度**：7 个 P0 与 11 个 P1 已全部落地（P1 产出 12 个目录变体：`AppBarButton` / `AppBarToggleButton` / `AppBarSeparator` 三个独立变体，`PipsPager` 变体以 `PaginationStyle::Dots` 样式承载），并接入形状探针与 24 态图元数恒定门禁。下表保留原始缺口分析，描述列已更新为当前实现形态。
 
 | 优先级 | WinUI 3 官方控件名 | 所属分类 | 缺失现状与实现建议 | 状态 |
 | --- | --- | --- | --- | --- |
@@ -130,7 +130,7 @@
 | **P0** | **DropDownButton** | Basic Input | 右侧固定带 Chevron 下拉箭头、点击弹出 `MenuFlyout` 的按钮（区别于左主操作右下拉的 `SplitButton`） | 已实现 |
 | **P0** | **ToggleSplitButton** | Basic Input | 左侧主按钮带选中切换态（Checked）的 `SplitButton` | 已实现 |
 | **P0** | **PasswordBox** | Text | 带掩码字符（`●`）与“按住显示明文（RevealButton）”眼睛图标的密码输入框 | 已实现 |
-| **P0** | **DatePicker（三列滚轮选择器）** | Date & Time | 目录变体 `DatePickerWheel`；现有展开月历保留为 `CalendarView` 语义 | 已实现 |
+| **P0** | **DatePicker（三列滚轮选择器）** | Date & Time | 目录变体 `DatePicker`；展开月历对应 `CalendarView` 语义 | 已实现 |
 | **P0** | **CalendarDatePicker** | Date & Time | 带日历图标的收起态输入框触发器 + 点击弹出 `CalendarView` 浮层 | 已实现 |
 | **P1** | **RichEditBox** | Text | 独立描述符 `RichEditBoxDesc`：顶部 B / I / U 格式工具条 + 可编辑文本区外观 | 已实现 |
 | **P1** | **GridView** | Collections | 独立描述符 `GridViewDesc`：网格单元 + 选中描边 + 悬停圆角 | 已实现 |

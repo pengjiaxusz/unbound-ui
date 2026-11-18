@@ -277,7 +277,7 @@ where
     let o = rect.origin;
     let ctrl_rect = Rect::new(o.x, o.y, rect.size.x.min(320.0), rect.size.y.min(36.0));
     let mut out = match id {
-        WidgetCatalogId::Accordion => {
+        WidgetCatalogId::ExpanderGroup => {
             let desc = AccordionDesc::new(
                 Rect::new(o.x, o.y, rect.size.x, rect.size.y.max(200.0)),
                 vec![
@@ -361,7 +361,7 @@ where
             }
             out
         }
-        WidgetCatalogId::Alert => {
+        WidgetCatalogId::InfoBar => {
             let (severity, title, msg) = match variant_idx % 4 {
                 0 => (
                     Severity::Info,
@@ -465,7 +465,7 @@ where
             push_glyphs(&mut out, &confirm_glyphs, Token::ON_PRIMARY, desc.z + 2);
             out
         }
-        WidgetCatalogId::Avatar => {
+        WidgetCatalogId::PersonPicture => {
             let scale = 0.5 + value_norm;
             let side = (48.0 * scale).clamp(28.0, rect.size.x.min(rect.size.y).max(28.0));
             let mut desc = AvatarDesc::new(Rect::new(o.x, o.y, side, side), "Ada Lovelace");
@@ -483,7 +483,7 @@ where
             let _ = &mut glyphs;
             crate::avatar::emit_avatar(node, &desc, &glyphs, state)
         }
-        WidgetCatalogId::Badge => {
+        WidgetCatalogId::InfoBadge => {
             let (variant, text) = match variant_idx % 5 {
                 0 => (crate::badge::BadgeVariant::Primary, "Badge: Active"),
                 1 => (crate::badge::BadgeVariant::Success, "Badge: Ready"),
@@ -510,7 +510,7 @@ where
             merge_output(&mut out, chip_out);
             out
         }
-        WidgetCatalogId::Breadcrumb => {
+        WidgetCatalogId::BreadcrumbBar => {
             let crumbs = vec![
                 Crumb::new(1, "Root"),
                 Crumb::new(2, "src"),
@@ -630,7 +630,7 @@ where
             );
             crate::chart::emit_chart(node, &desc, &ChartState::new(), &glyphs, state).output
         }
-        WidgetCatalogId::Checkbox => {
+        WidgetCatalogId::CheckBox => {
             let glyphs = shape_centered_y(&mut shape, "Snap to grid", ctrl_rect, o.x + 26.0, 13.0);
             // 勾选态由展示变体与沙盒点击状态共同决定，不绑定 state.selected 以保证 24 态图元数恒定。
             let desc =
@@ -714,7 +714,7 @@ where
             .selected(variant_idx % 2 == 1);
             crate::color_swatch::emit_color_swatch(node, &desc, state)
         }
-        WidgetCatalogId::Combobox => {
+        WidgetCatalogId::ComboBoxEditable => {
             let desc = ComboboxDesc::new(
                 ctrl_rect,
                 vec![
@@ -898,7 +898,7 @@ where
             push_glyphs(&mut out, &g, Token::TEXT_SECONDARY, desc.z + 3);
             out
         }
-        WidgetCatalogId::DatePicker => {
+        WidgetCatalogId::CalendarView => {
             let cal_r = Rect::new(o.x, o.y, rect.size.x.min(300.0), rect.size.y.max(36.0));
             let desc = DatePickerDesc::new(cal_r);
             let today = NaiveDate::new(2024, 1, 15).expect("valid probe date");
@@ -1003,7 +1003,7 @@ where
             merge_output(&mut out, preview);
             out
         }
-        WidgetCatalogId::Drawer => {
+        WidgetCatalogId::SplitView => {
             let w = (rect.size.x * 0.55).min(300.0);
             let desc = DrawerDesc::new(rect, DrawerSide::Right, w);
             let drawer = DrawerState::new(true);
@@ -1154,7 +1154,7 @@ where
             push_glyphs(&mut out, &g, Token::TEXT_SECONDARY, desc.z + 2);
             out
         }
-        WidgetCatalogId::Menu => {
+        WidgetCatalogId::MenuFlyout => {
             let menu_r = Rect::new(o.x, o.y, rect.size.x.min(220.0), rect.size.y);
             let desc = MenuDesc::new(
                 menu_r,
@@ -1177,7 +1177,7 @@ where
             push_glyphs(&mut out, &g2, Token::TEXT_PRIMARY, desc.z + 2);
             out
         }
-        WidgetCatalogId::Menubar => {
+        WidgetCatalogId::MenuBar => {
             let desc = MenuBarDesc::new(
                 Rect::new(o.x, o.y, rect.size.x, crate::menubar::MENUBAR_HEIGHT),
                 vec![
@@ -1236,7 +1236,7 @@ where
             ];
             crate::minimap::emit_minimap(node, &desc, &items, &MinimapState::new(), state).0
         }
-        WidgetCatalogId::Modal => {
+        WidgetCatalogId::ContentDialog => {
             let card_rect = if rect.size.x > 260.0 && rect.size.y > 140.0 {
                 let w = rect.size.x.min(380.0);
                 let h = rect.size.y.min(200.0);
@@ -1302,7 +1302,7 @@ where
             push_glyphs(&mut out, &g2, Token::TEXT_PRIMARY, 650);
             out
         }
-        WidgetCatalogId::NumberInput => {
+        WidgetCatalogId::NumberBox => {
             let desc = NumberInputDesc::new(ctrl_rect, 0.0, 100.0);
             let val = (value_norm * 100.0).round();
             let number = NumberInputState::new(f64::from(val));
@@ -1348,7 +1348,7 @@ where
             push_glyphs(&mut out, &g_popup, Token::TEXT_PRIMARY, 896);
             out
         }
-        WidgetCatalogId::Popover => {
+        WidgetCatalogId::Flyout => {
             let trig_r = Rect::new(o.x, o.y, 128.0, 34.0);
             let pop_size = Vec2::new(220.0_f32.min(rect.size.x), 72.0);
             let mut desc = PopoverDesc::new(trig_r, rect, pop_size);
@@ -1379,7 +1379,7 @@ where
             push_glyphs(&mut out, &g, Token::TEXT_PRIMARY, desc.z + 2);
             out
         }
-        WidgetCatalogId::Progress => {
+        WidgetCatalogId::ProgressBar => {
             let bar_r = Rect::new(o.x, o.y + 12.0, rect.size.x, 10.0);
             let desc = ProgressDesc::new(bar_r).value(value_norm);
             let mut progress_state = ProgressState::new();
@@ -1422,7 +1422,7 @@ where
             }
             out
         }
-        WidgetCatalogId::Radio => {
+        WidgetCatalogId::RadioButton => {
             let labels = ["Comfortable", "Compact", "Dense"];
             let sel = variant_idx % 3;
             let item_w = (rect.size.x / 3.0).clamp(96.0, 140.0);
@@ -1475,7 +1475,7 @@ where
             let _group = RadioGroupDesc::new(items);
             out
         }
-        WidgetCatalogId::RichText => {
+        WidgetCatalogId::RichTextBlock => {
             let desc = RichTextDesc::new(rect);
             let document = parse_markdown("# Title\n\nMarkdown rendered as styled runs.");
             let layout = desc.layout(&document, &[28.0, 20.0]);
@@ -1520,7 +1520,7 @@ where
             }
             out
         }
-        WidgetCatalogId::Scroll => {
+        WidgetCatalogId::ScrollView => {
             let desc = ScrollViewDesc::new(rect, Vec2::new(rect.size.x, 3000.0));
             let mut scroll_state = ScrollState::new();
             scroll_state.jump_to(&desc, Vec2::new(0.0, value_norm * 1200.0));
@@ -1533,7 +1533,7 @@ where
             push_glyphs(&mut out, &g, Token::TEXT_SECONDARY, desc.z + 1);
             out
         }
-        WidgetCatalogId::Segmented => {
+        WidgetCatalogId::SelectorBar => {
             let mut desc = SegmentedDesc::new(ctrl_rect, &["One", "Two", "Three"]);
             desc.selected = variant_idx % 3;
             let interactive_idx = if desc.selected == 1 { 0 } else { 1 };
@@ -1591,7 +1591,7 @@ where
             }
             out
         }
-        WidgetCatalogId::Select => {
+        WidgetCatalogId::ComboBox => {
             let options = ["Apple", "Banana", "Cherry"];
             let desc = SelectDesc::new(
                 ctrl_rect,
@@ -1679,7 +1679,7 @@ where
             push_glyphs(&mut out, &g_right, Token::TEXT_SECONDARY, desc.z + 1);
             out
         }
-        WidgetCatalogId::Switch => {
+        WidgetCatalogId::ToggleSwitch => {
             let is_on = variant_idx % 2 == 1;
             let desc = SwitchDesc::new(ctrl_rect, "Animate").with_on(is_on);
             let glyphs = shape(
@@ -1726,7 +1726,7 @@ where
             push_glyphs(&mut out, &hdr2_g, Token::TEXT_SECONDARY, desc.z + 2);
             out
         }
-        WidgetCatalogId::Tabs => {
+        WidgetCatalogId::TabView => {
             let desc = TabsDesc::new(
                 Rect::new(o.x, o.y, rect.size.x, rect.size.y.min(36.0)),
                 &["One", "Two", "Three"],
@@ -1791,7 +1791,7 @@ where
             ));
             crate::tag_input::emit_tag_input(node, &desc, &tags, state, &layout, &mut glyphs)
         }
-        WidgetCatalogId::TextArea => {
+        WidgetCatalogId::TextBoxMultiline => {
             let desc = TextAreaDesc::new(rect);
             let area = TextAreaState::with_text("one\ntwo");
             let mut glyphs = shape("one", Vec2::new(o.x + 42.0, o.y + 10.0), 13.0);
@@ -1805,7 +1805,7 @@ where
                 &mut glyphs,
             )
         }
-        WidgetCatalogId::TextInput => {
+        WidgetCatalogId::TextBox => {
             let samples = ["type here", "Unbound UI", "Vulkan 1.3"];
             let sample = samples[variant_idx % samples.len()];
             let desc = TextInputDesc::new(ctrl_rect).with_placeholder("type here");
@@ -1849,7 +1849,7 @@ where
             ));
             crate::toast::emit_toast(node, &entry, toast_r, &glyphs, state).output
         }
-        WidgetCatalogId::Toolbar => {
+        WidgetCatalogId::CommandBar => {
             let bar_r = Rect::new(o.x, o.y, rect.size.x, 36.0);
             let desc = ToolbarDesc::new(
                 bar_r,
@@ -1896,7 +1896,7 @@ where
             merge_output(&mut out, overflow);
             out
         }
-        WidgetCatalogId::Tooltip => {
+        WidgetCatalogId::ToolTip => {
             let trig_r = Rect::new(o.x, o.y, 128.0, 32.0);
             let tip_size = Vec2::new(168.0, 30.0);
             let desc = TooltipDesc::new(trig_r, rect, tip_size);
@@ -1949,7 +1949,7 @@ where
             merge_output(&mut out, row_out);
             out
         }
-        WidgetCatalogId::VirtualViews => {
+        WidgetCatalogId::ListView => {
             let row_r = Rect::new(o.x, o.y, rect.size.x, 32.0);
             let g = shape(
                 "Virtual Row #0 (variable height)",
@@ -1965,7 +1965,7 @@ where
                 100,
             )
         }
-        WidgetCatalogId::Collapsible => {
+        WidgetCatalogId::Expander => {
             let open = variant_idx % 2 == 0;
             let desc = crate::collapsible::CollapsibleDesc::new(
                 Rect::new(o.x, o.y, rect.size.x, 88.0),
@@ -2003,7 +2003,7 @@ where
             }
             out
         }
-        WidgetCatalogId::NavigationRail => {
+        WidgetCatalogId::NavigationViewCompact => {
             let rail_r = Rect::new(o.x, o.y, 160.0, 110.0);
             let active_id = ((variant_idx % 2) + 1) as u64;
             let desc = crate::navigation_rail::NavigationRailDesc::new(
@@ -2018,7 +2018,7 @@ where
             glyphs.extend(shape("Assets", Vec2::new(o.x + 16.0, o.y + 62.0), 13.0));
             crate::navigation_rail::emit_navigation_rail(node, &desc, state, &glyphs)
         }
-        WidgetCatalogId::Pagination => {
+        WidgetCatalogId::PipsPager => {
             let pg_r = Rect::new(o.x, o.y, rect.size.x.min(380.0), rect.size.y.min(36.0));
             let desc = crate::pagination::PaginationDesc::new(pg_r, 12, (variant_idx % 12) + 1);
             let slots = desc.visible_slots();
@@ -2084,7 +2084,7 @@ where
             ));
             crate::stepper::emit_stepper(node, &desc, state, &glyphs)
         }
-        WidgetCatalogId::AutoComplete => {
+        WidgetCatalogId::AutoSuggestBox => {
             let desc = crate::autocomplete::AutoCompleteDesc::new(ctrl_rect, "unb", 3);
             let glyphs = shape(
                 "unb  →  unbound-widgets (3 matches)",
@@ -2243,7 +2243,7 @@ where
             push_glyphs(&mut out, &confirm_g, Token::ON_PRIMARY, desc.z + 3);
             out
         }
-        WidgetCatalogId::Rating => {
+        WidgetCatalogId::RatingControl => {
             let stars = if variant_idx > 0 {
                 ((variant_idx % 5) + 1) as f32
             } else {
@@ -2255,7 +2255,7 @@ where
             );
             crate::rating::emit_rating(node, &desc, state)
         }
-        WidgetCatalogId::Spinner => {
+        WidgetCatalogId::ProgressRing => {
             let desc =
                 crate::spinner::SpinnerDesc::new(Rect::new(o.x, o.y, 36.0, 36.0), value_norm);
             crate::spinner::emit_spinner(&desc, state)
@@ -2308,7 +2308,7 @@ where
             ));
             crate::transfer::emit_transfer(node, &desc, state, &glyphs)
         }
-        WidgetCatalogId::Carousel => {
+        WidgetCatalogId::FlipView => {
             let car_r = Rect::new(o.x, o.y, rect.size.x, 96.0);
             let active = variant_idx % 4;
             let desc = crate::carousel::CarouselDesc::new(car_r, 4, active);
@@ -2516,7 +2516,7 @@ where
             push_glyphs(&mut out, &g, Token::TEXT_SECONDARY, 104);
             out
         }
-        WidgetCatalogId::Icon => {
+        WidgetCatalogId::FontIcon => {
             let icon_r = Rect::new(o.x, o.y, 32.0, 32.0);
             let desc = IconDesc::new(icon_r, 1, Token::PRIMARY);
             let mut out = crate::image::emit_icon(node, &desc, state);
@@ -2597,7 +2597,7 @@ where
             push_glyphs(&mut out, &g, Token::TEXT_PRIMARY, desc.z + 2);
             out
         }
-        WidgetCatalogId::Stack => {
+        WidgetCatalogId::StackPanel => {
             let desc = StackDesc::new(rect);
             let mut out = crate::containers::emit_stack(&desc, Token::SURFACE);
             let layers = desc.layout(3);
@@ -2773,7 +2773,7 @@ where
             );
             crate::password_box::emit_password_box(node, &desc, &password, state, &mut g)
         }
-        WidgetCatalogId::DatePickerWheel => {
+        WidgetCatalogId::DatePicker => {
             let dw_r = Rect::new(o.x, o.y, rect.size.x.min(220.0), rect.size.y.min(32.0));
             let desc = crate::date_picker_wheel::DatePickerWheelDesc::new(dw_r);
             let wheel = crate::date_picker_wheel::DatePickerWheelState::new(2024, 3, 15);
@@ -3191,7 +3191,7 @@ where
             }
             emit_shortcut_bar(node, &desc, state, &glyphs)
         }
-        WidgetCatalogId::Sidebar => {
+        WidgetCatalogId::NavigationView => {
             let panel_w = rect.size.x.clamp(180.0, crate::sidebar::SIDEBAR_WIDTH);
             let panel_h = rect.size.y.max(240.0);
             let panel_r = Rect::new(o.x, o.y, panel_w, panel_h);
@@ -3617,7 +3617,7 @@ mod interactive_tests {
             toggle_off.primitives[0].fill_token_or_uv
         );
 
-        for &id in &[WidgetCatalogId::Progress, WidgetCatalogId::Skeleton] {
+        for &id in &[WidgetCatalogId::ProgressBar, WidgetCatalogId::Skeleton] {
             let out =
                 emit_widget_with_params(id, 11, ControlState::default(), rect, &mut glyphs, 0.8, 0);
             assert!(
