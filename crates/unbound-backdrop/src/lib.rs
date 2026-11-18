@@ -27,7 +27,6 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod mica;
-pub mod mode;
 pub mod plan;
 pub mod selection;
 pub mod state;
@@ -38,7 +37,6 @@ pub mod wallpaper;
 mod test_support;
 
 pub use mica::{generate, MicaImage, MicaRequest, DEFAULT_MAX_WIDTH, DEFAULT_SIGMA};
-pub use mode::{native_backdrop_available, BackdropMode, ResolvedBackdrop};
 pub use plan::{
     sample_uv, system_material_request, BackdropCompositeAlpha, BackdropInputs, BackdropPlan,
     DwmMaterial, MaterialRequest, PixelRect, UvRect, WallpaperTexture, MATERIAL_REQUEST_TABLE,

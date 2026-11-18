@@ -8,10 +8,9 @@
 //! 组合解析本身在 [`crate::selection`]：这里只负责把解析结论展开成计划。
 
 use crate::mica::{DEFAULT_MAX_WIDTH, DEFAULT_SIGMA};
-use crate::mode::ResolvedBackdrop;
 use crate::selection::{
-    resolve_combination, BackdropCapabilities, BackdropCombination, BackdropSelection,
-    BackdropSource, FallbackReason, MaterialKind, UnavailableReason,
+    resolve_combination, BackdropCapabilities, BackdropSelection, BackdropSource, FallbackReason,
+    MaterialKind, UnavailableReason,
 };
 
 /// 屏幕坐标系中的物理像素矩形。
@@ -259,8 +258,6 @@ pub struct BackdropInputs {
 /// 后景计划：启动、切换与生成共同消费的唯一结果。
 #[derive(Clone, Debug, PartialEq)]
 pub struct BackdropPlan {
-    /// 解析后的实际路径（扩展期保留的旧枚举，由实际生效组合导出）。
-    pub resolved: ResolvedBackdrop,
     /// 实际生效的材质种类；`None` 表示完全没有后景。
     pub material_kind: MaterialKind,
     /// 实际生效的来源。
@@ -289,7 +286,6 @@ pub struct BackdropPlan {
 impl Default for BackdropPlan {
     fn default() -> Self {
         Self {
-            resolved: ResolvedBackdrop::Off,
             material_kind: MaterialKind::None,
             source: BackdropSource::Auto,
             fallback: None,
@@ -346,7 +342,6 @@ impl BackdropPlan {
         let material = request.unwrap_or(DwmMaterial::None);
         let clear_alpha = if request.is_some() { 0.0 } else { 1.0 };
         Self {
-            resolved: resolved_from(&combination),
             material_kind: combination.material,
             source: combination.source,
             fallback: combination.fallback,
@@ -360,19 +355,6 @@ impl BackdropPlan {
             // 纹理覆盖整块主屏，窗口只取自己所占的那一块。
             uv: sample_uv(inputs.window_screen_rect, inputs.primary_screen_rect),
         }
-    }
-}
-
-/// 由实际生效组合导出扩展期保留的旧路径枚举。
-fn resolved_from(combination: &BackdropCombination) -> ResolvedBackdrop {
-    if combination.material == MaterialKind::None {
-        return ResolvedBackdrop::Off;
-    }
-    match combination.source {
-        BackdropSource::Native => ResolvedBackdrop::Native,
-        BackdropSource::SelfDrawn => ResolvedBackdrop::SelfDrawn,
-        // 「自动」总是被解析成具体来源；材质为「无」的情形已在上方返回。
-        BackdropSource::Auto => ResolvedBackdrop::Off,
     }
 }
 
@@ -434,7 +416,6 @@ pub fn sample_uv(window: Option<PixelRect>, screen: Option<PixelRect>) -> UvRect
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mode::{native_backdrop_available, BackdropMode};
 
     const SCREEN: PixelRect = PixelRect::new(0, 0, 1920, 1080);
 
@@ -469,41 +450,13 @@ mod tests {
         }
     }
 
-    /// 改造前的后景计划行为，逐字抄自改造前的推导逻辑。
-    ///
-    /// 它是等价性判定的独立事实来源：新模型翻译旧入口后必须给出与它逐项一致的结果。
-    struct LegacyExpectation {
-        resolved: ResolvedBackdrop,
-        composition: BackdropCompositeAlpha,
-        clear_alpha: f32,
-        root_background_transparent: bool,
-        material: DwmMaterial,
-        has_texture: bool,
-    }
-
-    fn legacy_expectation(
-        mode: BackdropMode,
-        native_available: bool,
-        ready: bool,
-    ) -> LegacyExpectation {
-        let resolved = ResolvedBackdrop::resolve(mode, native_available);
-        let native = resolved.uses_native_path();
-        LegacyExpectation {
-            resolved,
-            composition: if native_available {
-                BackdropCompositeAlpha::PreMultiplied
-            } else {
-                BackdropCompositeAlpha::Opaque
-            },
-            clear_alpha: if native { 0.0 } else { 1.0 },
-            root_background_transparent: native || (resolved.draws_self_drawn_texture() && ready),
-            material: if native {
-                DwmMaterial::Mica
-            } else {
-                DwmMaterial::None
-            },
-            has_texture: resolved.draws_self_drawn_texture(),
+    /// 平台基线能力：能否承载原生后景（只取决于构建号与预乘合成支持）。
+    fn native_baseline(build: Option<u32>, premultiplied: bool) -> bool {
+        BackdropCapabilities {
+            windows_build: build,
+            premultiplied_alpha_supported: premultiplied,
         }
+        .baseline_native_available()
     }
 
     /// 手写的“该材质种类请求哪一档系统材质”期望，独立于映射表实现。
@@ -521,51 +474,13 @@ mod tests {
     }
 
     #[test]
-    fn the_legacy_entry_point_resolves_exactly_as_before() {
-        for mode in BackdropMode::ALL {
-            for (build, premultiplied) in CAPABILITIES {
-                let native_available = native_backdrop_available(build, premultiplied);
-                for ready in [false, true] {
-                    let mut input = inputs(mode.to_selection(), build, premultiplied);
-                    input.self_drawn_ready = ready;
-                    let plan = BackdropPlan::derive(input);
-                    let expected = legacy_expectation(mode, native_available, ready);
-                    assert_eq!(
-                        plan.resolved, expected.resolved,
-                        "{mode:?} on build {build:?} must resolve as before"
-                    );
-                    assert_eq!(
-                        plan.composition, expected.composition,
-                        "{mode:?} on build {build:?} must keep the surface composition as before"
-                    );
-                    assert_eq!(
-                        plan.clear_alpha, expected.clear_alpha,
-                        "{mode:?} on build {build:?} must keep the clear alpha as before"
-                    );
-                    assert_eq!(
-                        plan.root_background_transparent, expected.root_background_transparent,
-                        "{mode:?} on build {build:?} must keep the root transparency as before"
-                    );
-                    assert_eq!(
-                        plan.material, expected.material,
-                        "{mode:?} on build {build:?} must request the same system material as before"
-                    );
-                    assert_eq!(
-                        plan.texture.is_some(),
-                        expected.has_texture,
-                        "{mode:?} on build {build:?} must produce the same texture as before"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn the_four_legacy_modes_keep_their_literal_effects() {
-        // 原生可用：走原生路径，清屏全透明，请求标准云母，不生成纹理。
-        let native =
-            BackdropPlan::derive(inputs(BackdropMode::Auto.to_selection(), Some(26100), true));
-        assert_eq!(native.resolved, ResolvedBackdrop::Native);
+    fn the_default_choice_keeps_its_original_effects() {
+        // 标准云母 + 自动来源，原生可用：走原生路径，清屏全透明，请求标准云母，不生成纹理。
+        let native = BackdropPlan::derive(inputs(
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::Auto),
+            Some(26100),
+            true,
+        ));
         assert_eq!(native.material_kind, MaterialKind::Mica);
         assert_eq!(native.source, BackdropSource::Native);
         assert_eq!(native.clear_alpha, 0.0);
@@ -577,11 +492,10 @@ mod tests {
 
         // 显式原生但机器承载不了：回退到自绘，材质种类不变。
         let fallback = BackdropPlan::derive(inputs(
-            BackdropMode::Native.to_selection(),
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::Native),
             Some(19045),
             true,
         ));
-        assert_eq!(fallback.resolved, ResolvedBackdrop::SelfDrawn);
         assert_eq!(fallback.material_kind, MaterialKind::Mica);
         assert_eq!(fallback.source, BackdropSource::SelfDrawn);
         assert_eq!(fallback.clear_alpha, 1.0);
@@ -597,11 +511,11 @@ mod tests {
 
         // 显式自绘：任何机器上都走自绘。
         let self_drawn = BackdropPlan::derive(inputs(
-            BackdropMode::SelfDrawn.to_selection(),
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::SelfDrawn),
             Some(26100),
             true,
         ));
-        assert_eq!(self_drawn.resolved, ResolvedBackdrop::SelfDrawn);
+        assert_eq!(self_drawn.source, BackdropSource::SelfDrawn);
         assert_eq!(self_drawn.clear_alpha, 1.0);
         assert_eq!(self_drawn.material, DwmMaterial::None);
         assert!(self_drawn.texture.is_some());
@@ -609,8 +523,11 @@ mod tests {
         assert_eq!(self_drawn.unavailable, None);
 
         // 关闭：材质种类为「无」，来源轴折叠，什么都不请求。
-        let off = BackdropPlan::derive(inputs(BackdropMode::Off.to_selection(), Some(26100), true));
-        assert_eq!(off.resolved, ResolvedBackdrop::Off);
+        let off = BackdropPlan::derive(inputs(
+            BackdropSelection::new(MaterialKind::None, BackdropSource::Auto),
+            Some(26100),
+            true,
+        ));
         assert_eq!(off.material_kind, MaterialKind::None);
         assert_eq!(off.clear_alpha, 1.0);
         assert_eq!(off.material, DwmMaterial::None);
@@ -689,7 +606,7 @@ mod tests {
                     );
                     assert_eq!(
                         plan.composition,
-                        if native_backdrop_available(build, premultiplied) {
+                        if native_baseline(build, premultiplied) {
                             BackdropCompositeAlpha::PreMultiplied
                         } else {
                             BackdropCompositeAlpha::Opaque
@@ -759,7 +676,11 @@ mod tests {
 
     #[test]
     fn root_transparency_follows_texture_readiness_on_the_self_drawn_path() {
-        let mut input = inputs(BackdropMode::SelfDrawn.to_selection(), Some(26100), true);
+        let mut input = inputs(
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::SelfDrawn),
+            Some(26100),
+            true,
+        );
         assert!(!BackdropPlan::derive(input).root_background_transparent);
         input.self_drawn_ready = true;
         assert!(BackdropPlan::derive(input).root_background_transparent);
@@ -767,27 +688,36 @@ mod tests {
 
     #[test]
     fn composition_only_depends_on_the_platform_baseline() {
-        for choice in BackdropMode::ALL {
-            let supported = BackdropPlan::derive(inputs(choice.to_selection(), Some(26100), true));
-            assert_eq!(
-                supported.composition,
-                BackdropCompositeAlpha::PreMultiplied,
-                "{choice:?} must keep a premultiplied surface when the platform supports it"
-            );
-            let unsupported =
-                BackdropPlan::derive(inputs(choice.to_selection(), Some(19045), true));
-            assert_eq!(
-                unsupported.composition,
-                BackdropCompositeAlpha::Opaque,
-                "{choice:?} must stay opaque without native capability"
-            );
+        for material in MaterialKind::ALL {
+            for source in BackdropSource::ALL {
+                let supported = BackdropPlan::derive(inputs(
+                    BackdropSelection::new(material, source),
+                    Some(26100),
+                    true,
+                ));
+                assert_eq!(
+                    supported.composition,
+                    BackdropCompositeAlpha::PreMultiplied,
+                    "{material:?} {source:?} must keep a premultiplied surface when the platform supports it"
+                );
+                let unsupported = BackdropPlan::derive(inputs(
+                    BackdropSelection::new(material, source),
+                    Some(19045),
+                    true,
+                ));
+                assert_eq!(
+                    unsupported.composition,
+                    BackdropCompositeAlpha::Opaque,
+                    "{material:?} {source:?} must stay opaque without native capability"
+                );
+            }
         }
     }
 
     #[test]
     fn switching_material_or_source_never_changes_the_composition() {
         for (build, premultiplied) in CAPABILITIES {
-            let expected = if native_backdrop_available(build, premultiplied) {
+            let expected = if native_baseline(build, premultiplied) {
                 BackdropCompositeAlpha::PreMultiplied
             } else {
                 BackdropCompositeAlpha::Opaque
@@ -809,22 +739,29 @@ mod tests {
     }
 
     #[test]
-    fn composition_survives_a_full_mode_round_trip() {
+    fn composition_survives_a_full_selection_round_trip() {
         let sequence = [
-            BackdropMode::Auto,
-            BackdropMode::SelfDrawn,
-            BackdropMode::Off,
-            BackdropMode::Native,
-            BackdropMode::Auto,
+            (MaterialKind::Mica, BackdropSource::Auto),
+            (MaterialKind::Mica, BackdropSource::SelfDrawn),
+            (MaterialKind::None, BackdropSource::Auto),
+            (MaterialKind::Mica, BackdropSource::Native),
+            (MaterialKind::Acrylic, BackdropSource::Auto),
         ];
-        let expected =
-            BackdropPlan::derive(inputs(BackdropMode::Auto.to_selection(), Some(26100), true))
-                .composition;
-        for choice in sequence {
-            let plan = BackdropPlan::derive(inputs(choice.to_selection(), Some(26100), true));
+        let expected = BackdropPlan::derive(inputs(
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::Auto),
+            Some(26100),
+            true,
+        ))
+        .composition;
+        for (material, source) in sequence {
+            let plan = BackdropPlan::derive(inputs(
+                BackdropSelection::new(material, source),
+                Some(26100),
+                true,
+            ));
             assert_eq!(
                 plan.composition, expected,
-                "switching to {choice:?} must not reconfigure the surface"
+                "switching to {material:?} {source:?} must not reconfigure the surface"
             );
         }
     }
@@ -832,7 +769,7 @@ mod tests {
     #[test]
     fn texture_covers_the_primary_screen_and_samples_the_window_rect() {
         let plan = BackdropPlan::derive(inputs(
-            BackdropMode::SelfDrawn.to_selection(),
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::SelfDrawn),
             Some(26100),
             true,
         ));
@@ -879,13 +816,17 @@ mod tests {
 
     #[test]
     fn deep_and_light_themes_only_change_the_texture_tint() {
-        let mut light_input = inputs(BackdropMode::SelfDrawn.to_selection(), Some(26100), true);
+        let mut light_input = inputs(
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::SelfDrawn),
+            Some(26100),
+            true,
+        );
         light_input.dark = false;
         let mut dark_input = light_input;
         dark_input.dark = true;
         let light = BackdropPlan::derive(light_input);
         let dark = BackdropPlan::derive(dark_input);
-        assert_eq!(light.resolved, dark.resolved);
+        assert_eq!(light.source, dark.source);
         assert_eq!(light.clear_alpha, dark.clear_alpha);
         assert_eq!(light.uv, dark.uv);
         assert_ne!(
@@ -931,10 +872,14 @@ mod tests {
 
     #[test]
     fn missing_geometry_skips_the_texture_but_keeps_the_path() {
-        let mut input = inputs(BackdropMode::SelfDrawn.to_selection(), Some(26100), true);
+        let mut input = inputs(
+            BackdropSelection::new(MaterialKind::Mica, BackdropSource::SelfDrawn),
+            Some(26100),
+            true,
+        );
         input.window_screen_rect = None;
         let plan = BackdropPlan::derive(input);
-        assert_eq!(plan.resolved, ResolvedBackdrop::SelfDrawn);
+        assert_eq!(plan.source, BackdropSource::SelfDrawn);
         assert!(plan.texture.is_none());
         assert_eq!(plan.uv, UvRect::FULL);
     }
