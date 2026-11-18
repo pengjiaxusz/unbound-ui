@@ -142,12 +142,29 @@ impl TextCtx<'_> {
         align_x: AlignX,
         align_y: AlignY,
     ) -> Vec<GlyphQuad> {
+        self.shape_line_styled(text, rect, size, weight, None, align_x, align_y)
+    }
+
+    /// 与 [`Self::shape_line`] 相同，但允许显式指定字体族（例如 WinUI 的
+    /// 「Segoe UI Variable Text」光学尺寸）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn shape_line_styled(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        size: f32,
+        weight: u16,
+        family: Option<&str>,
+        align_x: AlignX,
+        align_y: AlignY,
+    ) -> Vec<GlyphQuad> {
         if text.is_empty() || rect.width() <= 0.0 || rect.height() <= 0.0 {
             return Vec::new();
         }
         let scale = self.effective_raster_scale();
         let mut style = unbound_text::TextStyle::sized(size * scale);
         style.weight = weight;
+        style.family = family.map(str::to_owned);
         let shaped = match self.engine.shape_laid_out(text, &style) {
             Some(shaped) => shaped,
             None => self.engine.shape(text, &style),
