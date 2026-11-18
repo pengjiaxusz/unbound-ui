@@ -43,10 +43,10 @@ impl ControlClass {
 }
 
 /// 基准对齐控件总数（含 Community Toolkit 之外的 WinUI 3 标准控件与变体）。
-pub const BASELINE_COUNT: usize = 59;
+pub const BASELINE_COUNT: usize = 71;
 
 /// Community Toolkit 对齐控件总数。
-pub const TOOLKIT_COUNT: usize = 14;
+pub const TOOLKIT_COUNT: usize = 20;
 
 /// Unbound 自有独有控件总数。
 pub const EXCLUSIVE_COUNT: usize = 43;
@@ -70,7 +70,13 @@ impl WidgetCatalogId {
             | Self::Masonry
             | Self::VirtualMasonry
             | Self::Skeleton
-            | Self::ColorSwatch => ControlClass::Toolkit,
+            | Self::ColorSwatch
+            | Self::RangeSelector
+            | Self::RadialGauge
+            | Self::OrbitView
+            | Self::BladeView
+            | Self::HeaderedContentControl
+            | Self::ImageCropper => ControlClass::Toolkit,
 
             // Unbound 自有独有控件。
             Self::NodeGraph
@@ -176,7 +182,19 @@ impl WidgetCatalogId {
             | Self::Toolbar
             | Self::Tooltip
             | Self::TreeView
-            | Self::VirtualViews => ControlClass::Baseline,
+            | Self::VirtualViews
+            | Self::RichEditBox
+            | Self::GridView
+            | Self::ListBox
+            | Self::CommandBarFlyout
+            | Self::AppBarButton
+            | Self::AppBarToggleButton
+            | Self::AppBarSeparator
+            | Self::SwipeControl
+            | Self::RefreshContainer
+            | Self::TeachingTip
+            | Self::AnnotatedScrollBar
+            | Self::ItemsView => ControlClass::Baseline,
         }
     }
 
@@ -292,6 +310,28 @@ impl WidgetCatalogId {
             Self::Transfer => "Transfer",
             Self::TreeTable => "TreeTable",
             Self::Watermark => "Watermark",
+
+            // P1：后续补齐的 WinUI 3 官方控件。
+            Self::RichEditBox => "RichEditBox",
+            Self::GridView => "GridView",
+            Self::ListBox => "ListBox",
+            Self::CommandBarFlyout => "CommandBarFlyout",
+            Self::AppBarButton => "AppBarButton",
+            Self::AppBarToggleButton => "AppBarToggleButton",
+            Self::AppBarSeparator => "AppBarSeparator",
+            Self::SwipeControl => "SwipeControl",
+            Self::RefreshContainer => "RefreshContainer",
+            Self::TeachingTip => "TeachingTip",
+            Self::AnnotatedScrollBar => "AnnotatedScrollBar",
+            Self::ItemsView => "ItemsView",
+
+            // P2：Community Toolkit 选补控件。
+            Self::RangeSelector => "RangeSelector",
+            Self::RadialGauge => "RadialGauge",
+            Self::OrbitView => "OrbitView",
+            Self::BladeView => "BladeView",
+            Self::HeaderedContentControl => "HeaderedContentControl",
+            Self::ImageCropper => "ImageCropper",
         }
     }
 
@@ -335,6 +375,7 @@ impl WidgetCatalogId {
                 | Self::SplitPane
                 | Self::Form
                 | Self::Masonry
+                | Self::TeachingTip
         )
     }
 

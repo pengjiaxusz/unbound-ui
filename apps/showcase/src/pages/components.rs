@@ -20,7 +20,7 @@ use crate::canvas::{AlignX, AlignY};
 pub const COMPONENTS_INFO: PageInfo = PageInfo {
     title: "Component gallery",
     short: "All Components",
-    description: "All 109 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
+    description: "All 134 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
     crates: &["unbound-widgets"],
     keywords: "component gallery catalog emitter coverage widget showcase every control tooltip",
 };
@@ -85,13 +85,22 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::Stepper
         | WidgetCatalogId::Rating
         | WidgetCatalogId::TagInput
-        | WidgetCatalogId::PinInput => KNOBS_ACTION,
+        | WidgetCatalogId::PinInput
+        | WidgetCatalogId::CommandBarFlyout
+        | WidgetCatalogId::AppBarButton
+        | WidgetCatalogId::AppBarToggleButton
+        | WidgetCatalogId::AppBarSeparator => KNOBS_ACTION,
 
         WidgetCatalogId::Progress
         | WidgetCatalogId::Slider
         | WidgetCatalogId::NumberInput
         | WidgetCatalogId::Spinner
         | WidgetCatalogId::AspectRatioBox
+        | WidgetCatalogId::RefreshContainer
+        | WidgetCatalogId::AnnotatedScrollBar
+        | WidgetCatalogId::RangeSelector
+        | WidgetCatalogId::RadialGauge
+        | WidgetCatalogId::ImageCropper
         | WidgetCatalogId::TaskHud => KNOBS_NUMERIC,
 
         WidgetCatalogId::Table
@@ -109,6 +118,12 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::VirtualMasonry
         | WidgetCatalogId::AvatarGroup
         | WidgetCatalogId::GenericDataTable
+        | WidgetCatalogId::GridView
+        | WidgetCatalogId::ListBox
+        | WidgetCatalogId::ItemsView
+        | WidgetCatalogId::OrbitView
+        | WidgetCatalogId::BladeView
+        | WidgetCatalogId::SwipeControl
         | WidgetCatalogId::PipelineView => KNOBS_DATA,
 
         WidgetCatalogId::Alert
@@ -123,6 +138,7 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::Popover
         | WidgetCatalogId::Tooltip
         | WidgetCatalogId::HoverCard
+        | WidgetCatalogId::TeachingTip
         | WidgetCatalogId::Tour => KNOBS_FEEDBACK,
 
         WidgetCatalogId::Breadcrumb
@@ -155,6 +171,7 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::Stack
         | WidgetCatalogId::Wrap
         | WidgetCatalogId::PropertyGrid
+        | WidgetCatalogId::HeaderedContentControl
         | WidgetCatalogId::Divider => KNOBS_LAYOUT,
 
         WidgetCatalogId::TextInput
@@ -178,6 +195,7 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::FileDrop
         | WidgetCatalogId::Select
         | WidgetCatalogId::QueryBuilder
+        | WidgetCatalogId::RichEditBox
         | WidgetCatalogId::SchemaForm => KNOBS_INPUT,
 
         WidgetCatalogId::NodeGraph
@@ -315,6 +333,24 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::ShortcutBar => "view.add(ui_key!(\"scb\"), ShortcutBarDesc::new(rect, entries));",
         WidgetCatalogId::Sidebar => "view.add(ui_key!(\"sb\"), SidebarDesc::new(rect, sections).active(id));",
         WidgetCatalogId::TaskHud => "view.add(ui_key!(\"hud\"), TaskHudDesc::new(rect, tasks));",
+        WidgetCatalogId::RichEditBox => "view.add(ui_key!(\"reb\"), RichEditBoxDesc::new(rect, \"Document\"));",
+        WidgetCatalogId::GridView => "view.add(ui_key!(\"gv\"), GridViewDesc::new(rect, 3, 2).selected(0));",
+        WidgetCatalogId::ListBox => "view.add(ui_key!(\"lb\"), ListBoxDesc::new(rect, items).selected(0));",
+        WidgetCatalogId::CommandBarFlyout => "view.add(ui_key!(\"cbf\"), CommandBarFlyoutDesc::new(rect));",
+        WidgetCatalogId::AppBarButton => "view.add(ui_key!(\"abb\"), AppBarButtonDesc::new(rect, \"Add\"));",
+        WidgetCatalogId::AppBarToggleButton => "view.add(ui_key!(\"atb\"), AppBarToggleButtonDesc::new(rect, \"Bold\", true));",
+        WidgetCatalogId::AppBarSeparator => "view.add(ui_key!(\"abs\"), AppBarSeparatorDesc::vertical(rect));",
+        WidgetCatalogId::SwipeControl => "view.add(ui_key!(\"swp\"), SwipeControlDesc::new(rect).with_left(\"Delete\"));",
+        WidgetCatalogId::RefreshContainer => "view.add(ui_key!(\"rfc\"), RefreshContainerDesc::new(rect).pull(0.6));",
+        WidgetCatalogId::TeachingTip => "view.add(ui_key!(\"tip\"), TeachingTipDesc::new(rect, \"Title\", \"Body\"));",
+        WidgetCatalogId::AnnotatedScrollBar => "view.add(ui_key!(\"asb\"), AnnotatedScrollBarDesc::new(rect).thumb(0.5));",
+        WidgetCatalogId::ItemsView => "view.add(ui_key!(\"iv\"), ItemsViewDesc::new(rect, 6).grid(3));",
+        WidgetCatalogId::RangeSelector => "view.add(ui_key!(\"rng\"), RangeSelectorDesc::new(rect, 0.0, 100.0).with_range(20.0, 80.0));",
+        WidgetCatalogId::RadialGauge => "view.add(ui_key!(\"rg\"), RadialGaugeDesc::new(rect).value_norm(0.65));",
+        WidgetCatalogId::OrbitView => "view.add(ui_key!(\"orb\"), OrbitViewDesc::new(rect).with_nodes(6));",
+        WidgetCatalogId::BladeView => "view.add(ui_key!(\"blv\"), BladeViewDesc::new(rect).with_blades(3));",
+        WidgetCatalogId::HeaderedContentControl => "view.add(ui_key!(\"hcc\"), HeaderedContentDesc::new(rect, \"Appearance\"));",
+        WidgetCatalogId::ImageCropper => "view.add(ui_key!(\"crop\"), ImageCropperDesc::new(rect));",
     }
 }
 
@@ -493,6 +529,24 @@ define_showcase_components! {
     ShortcutBar => "Shortcut bar", "Contextual keycap shortcut hint bar with conflict detection.", 220.0,
     TaskHud => "Task HUD", "Background task progress stack with cancellation affordances.", 260.0,
     Sidebar => "Sidebar", "Full-height navigation panel with grouped sections, active and hovered rows, badges and a pinned footer.", 420.0,
+    RichEditBox => "Rich edit box", "Formatted text editor with a bold / italic / underline toolbar.", 320.0,
+    GridView => "Grid view", "Evenly sized cells with a selection frame and hover rounding.", 320.0,
+    ListBox => "List box", "Classic single-selection list with a primary accent indicator.", 300.0,
+    CommandBarFlyout => "Command bar flyout", "Mini icon toolbar with a trailing overflow menu.", 260.0,
+    AppBarButton => "App bar button", "Compact command-bar icon button with hover and pressed veils.", 240.0,
+    AppBarToggleButton => "App bar toggle button", "Command-bar toggle with a primary accent underline when checked.", 240.0,
+    AppBarSeparator => "App bar separator", "One-pixel divider between command-bar groups.", 220.0,
+    SwipeControl => "Swipe control", "List row that reveals leading and trailing action slots.", 300.0,
+    RefreshContainer => "Refresh container", "Pull-to-refresh indicator above a scrollable content area.", 320.0,
+    TeachingTip => "Teaching tip", "Coaching bubble with a tail, title, body and action buttons.", 340.0,
+    AnnotatedScrollBar => "Annotated scroll bar", "Scroll bar with tick labels and a hover preview tag.", 340.0,
+    ItemsView => "Items view", "Unified collection that switches between list and grid layouts.", 320.0,
+    RangeSelector => "Range selector", "Dual-thumb slider for low / high value ranges.", 260.0,
+    RadialGauge => "Radial gauge", "Circular dial with tick marks and a sweeping needle.", 320.0,
+    OrbitView => "Orbit view", "Nodes arranged evenly on a circular orbit ring.", 320.0,
+    BladeView => "Blade view", "Horizontal multi-level blade panels with active headers.", 320.0,
+    HeaderedContentControl => "Headered content", "Shared header strip above a content region.", 280.0,
+    ImageCropper => "Image cropper", "Crop frame with eight resize handles and corner scrim.", 340.0,
 }
 
 /// 按激活语言返回目录组件的侧边栏与卡片标题。
@@ -622,6 +676,24 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::VirtualViews => "变高虚拟行 (Virtual Row)",
         WidgetCatalogId::Watermark => "安全水印 (Watermark)",
         WidgetCatalogId::Wrap => "自动换行流 (Wrap Layout)",
+        WidgetCatalogId::RichEditBox => "富文本编辑框 (Rich Edit Box)",
+        WidgetCatalogId::GridView => "网格视图 (Grid View)",
+        WidgetCatalogId::ListBox => "列表框 (List Box)",
+        WidgetCatalogId::CommandBarFlyout => "命令条浮层 (Command Bar Flyout)",
+        WidgetCatalogId::AppBarButton => "命令栏按钮 (App Bar Button)",
+        WidgetCatalogId::AppBarToggleButton => "命令栏切换按钮 (App Bar Toggle Button)",
+        WidgetCatalogId::AppBarSeparator => "命令栏分隔线 (App Bar Separator)",
+        WidgetCatalogId::SwipeControl => "滑动操作容器 (Swipe Control)",
+        WidgetCatalogId::RefreshContainer => "下拉刷新容器 (Refresh Container)",
+        WidgetCatalogId::TeachingTip => "教学提示气泡 (Teaching Tip)",
+        WidgetCatalogId::AnnotatedScrollBar => "标注滚动条 (Annotated Scroll Bar)",
+        WidgetCatalogId::ItemsView => "集合视图 (Items View)",
+        WidgetCatalogId::RangeSelector => "区间选择器 (Range Selector)",
+        WidgetCatalogId::RadialGauge => "环形仪表 (Radial Gauge)",
+        WidgetCatalogId::OrbitView => "环绕视图 (Orbit View)",
+        WidgetCatalogId::BladeView => "刀片面板 (Blade View)",
+        WidgetCatalogId::HeaderedContentControl => "带标题内容容器 (Headered Content)",
+        WidgetCatalogId::ImageCropper => "图像裁剪器 (Image Cropper)",
     }
 }
 
@@ -748,6 +820,24 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::VirtualViews => "变高虚拟列表 可重排列表 virtual views",
         WidgetCatalogId::Watermark => "安全水印 平铺背景 watermark",
         WidgetCatalogId::Wrap => "自动换行流式布局 wrap",
+        WidgetCatalogId::RichEditBox => "富文本编辑框 格式工具条 加粗斜体下划线 rich edit box",
+        WidgetCatalogId::GridView => "网格视图 单元选中 悬停圆角 grid view",
+        WidgetCatalogId::ListBox => "列表框 单选列表 list box",
+        WidgetCatalogId::CommandBarFlyout => "命令条浮层 迷你工具条 更多菜单 command bar flyout",
+        WidgetCatalogId::AppBarButton => "命令栏按钮 图标按钮 app bar button",
+        WidgetCatalogId::AppBarToggleButton => "命令栏切换按钮 选中指示条 app bar toggle button",
+        WidgetCatalogId::AppBarSeparator => "命令栏分隔线 app bar separator",
+        WidgetCatalogId::SwipeControl => "滑动操作 左滑右滑删除归档 swipe control",
+        WidgetCatalogId::RefreshContainer => "下拉刷新 刷新指示器 refresh container",
+        WidgetCatalogId::TeachingTip => "教学提示 引导气泡 尖角 teaching tip",
+        WidgetCatalogId::AnnotatedScrollBar => "标注滚动条 刻度标签 悬停预览 annotated scroll bar",
+        WidgetCatalogId::ItemsView => "集合视图 列表网格切换 items view",
+        WidgetCatalogId::RangeSelector => "区间选择器 双拇指 range selector slider",
+        WidgetCatalogId::RadialGauge => "环形仪表 刻度指针 radial gauge dial",
+        WidgetCatalogId::OrbitView => "环绕布局 圆形排列 orbit view",
+        WidgetCatalogId::BladeView => "刀片面板 多级面板 blade view",
+        WidgetCatalogId::HeaderedContentControl => "带标题内容容器 标题条 headered content control",
+        WidgetCatalogId::ImageCropper => "图像裁剪 九宫格手柄 image cropper crop",
     }
 }
 

@@ -114,6 +114,7 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::VirtualMasonry,
     WidgetCatalogId::Watermark,
     WidgetCatalogId::Wrap,
+    WidgetCatalogId::AppBarSeparator,
 ];
 
 /// 在测试 crate 中镜像的编译期门禁：无通配符的详尽 `match`。
@@ -237,6 +238,24 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::PasswordBox => "password_box",
         WidgetCatalogId::RepeatButton => "repeat_button",
         WidgetCatalogId::ToggleSplitButton => "toggle_split_button",
+        WidgetCatalogId::RichEditBox => "rich_edit_box",
+        WidgetCatalogId::GridView => "grid_view",
+        WidgetCatalogId::ListBox => "list_box",
+        WidgetCatalogId::CommandBarFlyout => "command_bar_flyout",
+        WidgetCatalogId::AppBarButton => "app_bar",
+        WidgetCatalogId::AppBarToggleButton => "app_bar",
+        WidgetCatalogId::AppBarSeparator => "app_bar",
+        WidgetCatalogId::SwipeControl => "swipe_control",
+        WidgetCatalogId::RefreshContainer => "refresh_container",
+        WidgetCatalogId::TeachingTip => "teaching_tip",
+        WidgetCatalogId::AnnotatedScrollBar => "annotated_scroll_bar",
+        WidgetCatalogId::ItemsView => "items_view",
+        WidgetCatalogId::RangeSelector => "range_selector",
+        WidgetCatalogId::RadialGauge => "radial_gauge",
+        WidgetCatalogId::OrbitView => "orbit_view",
+        WidgetCatalogId::BladeView => "blade_view",
+        WidgetCatalogId::HeaderedContentControl => "headered_content",
+        WidgetCatalogId::ImageCropper => "image_cropper",
     }
 }
 
@@ -315,5 +334,5 @@ fn the_probe_covers_every_component() {
     );
     // 控件目录的条目数：这个数字是门禁——新增控件必须同步更新，
     // 否则「每个控件都被探针覆盖」这句话就不再成立。
-    assert_eq!(WidgetCatalogId::COUNT, 116);
+    assert_eq!(WidgetCatalogId::COUNT, 134);
 }
