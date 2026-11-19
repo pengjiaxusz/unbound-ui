@@ -11,8 +11,9 @@ use unbound_backdrop::{
     BackdropInputs, BackdropPlan, BackdropSelection, BackdropSource, DwmMaterial, MaterialKind,
 };
 use unbound_platform::{
-    clear_window_accent_tint, set_window_accent_tint, set_window_backdrop, set_window_dark_mode,
-    FrameHitMetrics, WindowBackdropMaterial,
+    accent_policy_export_available, clear_window_accent_tint, set_window_accent_tint,
+    set_window_backdrop, set_window_dark_mode, windows_build, FrameHitMetrics,
+    WindowBackdropMaterial,
 };
 use unbound_theme::ThemeKind;
 
@@ -55,6 +56,16 @@ impl AppearanceCaps {
             windows_build,
             premultiplied_alpha_supported,
             accent_policy_export,
+        }
+    }
+
+    /// 自动探测宿主系统的外观能力集（Windows 构建号与 Accent Policy 导出可用性）。
+    #[must_use]
+    pub fn detect(premultiplied_alpha_supported: bool) -> Self {
+        Self {
+            windows_build: windows_build(),
+            premultiplied_alpha_supported,
+            accent_policy_export: accent_policy_export_available(),
         }
     }
 }
