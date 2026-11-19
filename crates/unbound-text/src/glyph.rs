@@ -320,16 +320,11 @@ impl GlyphCache {
                     self.padding = settings.padding;
                     self.snap_phases = settings.snap_phases();
                 }
-                if let Some(engine) = engine {
-                    engine.clear_caches();
-                }
             }
-            InvalidationTier::Typographic => {
-                if let Some(engine) = engine {
-                    engine.clear_caches();
-                }
-            }
-            InvalidationTier::None => {}
+            InvalidationTier::Typographic | InvalidationTier::None => {}
+        }
+        if let Some(engine) = engine {
+            engine.apply_settings(&self.settings, settings);
         }
         self.settings = settings.clone();
         tier

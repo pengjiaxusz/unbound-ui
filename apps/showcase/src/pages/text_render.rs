@@ -10,7 +10,8 @@
 use accesskit::Role;
 use unbound_math::Rect;
 use unbound_text::{
-    CapabilityStatus, RasterBackend, TextCapabilities, TextRenderReport, TextRenderSettings,
+    CapabilityStatus, LineBreakMode, RasterBackend, TextCapabilities, TextRenderReport,
+    TextRenderSettings, TextShaper,
 };
 
 use super::{DemoCtx, DemoKind, ExampleDef, PageInfo};
@@ -20,6 +21,28 @@ use crate::canvas::{AlignX, AlignY};
 pub const GROUP_PART_BASE: u16 = 10;
 /// 状态栏部件编号。
 pub const STATUS_BAR_PART: u16 = 20;
+
+// === 排版组各控件部件编号 ===
+pub const PART_SHAPER_COSMIC: u16 = 101;
+pub const PART_SHAPER_NATIVE: u16 = 102;
+
+pub const PART_LINEBREAK_WORD: u16 = 111;
+pub const PART_LINEBREAK_ANYWHERE: u16 = 112;
+pub const PART_LINEBREAK_NONE: u16 = 113;
+
+pub const PART_BIDI_ON: u16 = 121;
+pub const PART_BIDI_OFF: u16 = 122;
+
+pub const PART_LIGATURES_ON: u16 = 131;
+pub const PART_LIGATURES_OFF: u16 = 132;
+
+pub const PART_LETTER_SPACING_0: u16 = 141;
+pub const PART_LETTER_SPACING_1: u16 = 142;
+pub const PART_LETTER_SPACING_2: u16 = 143;
+
+pub const PART_LINE_HEIGHT_AUTO: u16 = 151;
+pub const PART_LINE_HEIGHT_20: u16 = 152;
+pub const PART_LINE_HEIGHT_28: u16 = 153;
 
 /// 控制台六大功能参数分组。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -461,43 +484,19 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
         let is_expanded = state.group_expanded[index];
         let part = GROUP_PART_BASE + index as u16;
 
-        let content_h = if is_expanded { 36.0 } else { 0.0 };
+        let content_h = if is_expanded {
+            if *group == TextConsoleGroup::Typography {
+                180.0
+            } else {
+                28.0
+            }
+        } else {
+            0.0
+        };
         let total_group_h = header_h + content_h;
-
-        // 如果超出左侧容器底部，安全截断
-        if current_y + header_h > rect.max().y {
-            break;
-        }
-
         let header_rect = Rect::new(rect.origin.x, current_y, rect.size.x, header_h);
-        ctx.canvas.rect(
-            header_rect,
-            4.0,
-            palette.card_bg,
-            palette.card_border,
-            1.0,
-            0.0,
-        );
 
-        // 展开箭头指示
-        let arrow = if is_expanded { "v" } else { ">" };
-        let header_title = format!("{}  {}", arrow, group.label());
-
-        ctx.canvas.text(
-            &header_title,
-            Rect::new(
-                header_rect.origin.x + 8.0,
-                header_rect.origin.y,
-                header_rect.size.x - 16.0,
-                header_h,
-            ),
-            11.5,
-            palette.text,
-            AlignX::Start,
-            AlignY::Center,
-        );
-
-        // 无障碍：注册折叠标题按钮与展开状态位
+        // 无障碍：全量注册折叠标题按钮与展开状态位
         let a11y_label = format!("Group: {} — {}", group.label(), group.description());
         ctx.control_expandable(
             part,
@@ -508,38 +507,319 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
             is_expanded,
         );
 
-        // 若展开，绘制内容容器骨架
-        if is_expanded && current_y + total_group_h <= rect.max().y {
-            let content_rect = Rect::new(
-                rect.origin.x + 8.0,
-                current_y + header_h,
-                rect.size.x - 16.0,
-                content_h - 4.0,
-            );
+        // 如果未超出左侧容器底部，绘制视觉部件
+        if current_y + header_h <= rect.max().y {
             ctx.canvas.rect(
-                content_rect,
-                3.0,
+                header_rect,
+                4.0,
+                palette.card_bg,
                 palette.card_border,
-                palette.card_border,
-                0.5,
+                1.0,
                 0.0,
             );
+
+            // 展开箭头指示
+            let arrow = if is_expanded { "v" } else { ">" };
+            let header_title = format!("{}  {}", arrow, group.label());
+
             ctx.canvas.text(
-                group.description(),
+                &header_title,
                 Rect::new(
-                    content_rect.origin.x + 6.0,
-                    content_rect.origin.y,
-                    content_rect.size.x - 12.0,
-                    content_rect.size.y,
+                    header_rect.origin.x + 8.0,
+                    header_rect.origin.y,
+                    header_rect.size.x - 16.0,
+                    header_h,
                 ),
-                9.5,
-                palette.text_muted,
+                11.5,
+                palette.text,
                 AlignX::Start,
                 AlignY::Center,
             );
+
+            // 若展开，绘制内容容器
+            if is_expanded && current_y + total_group_h <= rect.max().y {
+                let content_rect = Rect::new(
+                    rect.origin.x + 8.0,
+                    current_y + header_h,
+                    rect.size.x - 16.0,
+                    content_h - 4.0,
+                );
+                if *group == TextConsoleGroup::Typography {
+                    draw_typography_group(ctx, content_rect, state);
+                } else {
+                    ctx.canvas.rect(
+                        content_rect,
+                        3.0,
+                        palette.card_border,
+                        palette.card_border,
+                        0.5,
+                        0.0,
+                    );
+                    ctx.canvas.text(
+                        group.description(),
+                        Rect::new(
+                            content_rect.origin.x + 6.0,
+                            content_rect.origin.y,
+                            content_rect.size.x - 12.0,
+                            content_rect.size.y,
+                        ),
+                        9.5,
+                        palette.text_muted,
+                        AlignX::Start,
+                        AlignY::Center,
+                    );
+                }
+            }
         }
 
         current_y += total_group_h + item_gap;
+    }
+}
+
+/// 绘制排版语义组六项可切换与灰化控件。
+fn draw_typography_group(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
+    let palette = *ctx.canvas.palette;
+    let caps = TextCapabilities::probe();
+
+    ctx.canvas
+        .rect(rect, 4.0, palette.surface, palette.card_border, 0.5, 0.0);
+
+    let padding = 4.0;
+    let row_h = 24.0;
+    let row_gap = 4.0;
+    let title_w = 84.0;
+    let mut current_y = rect.origin.y + padding;
+
+    struct OptionItem {
+        label: &'static str,
+        part: u16,
+        feature_key: Option<TextFeatureKey>,
+        selected: bool,
+    }
+
+    let rows: [(&'static str, &[OptionItem]); 6] = [
+        // 1. 塑形器
+        (
+            "Shaper",
+            &[
+                OptionItem {
+                    label: "Cosmic",
+                    part: PART_SHAPER_COSMIC,
+                    feature_key: Some(TextFeatureKey::ShaperCosmic),
+                    selected: state.settings.shaper == TextShaper::Cosmic,
+                },
+                OptionItem {
+                    label: "Native",
+                    part: PART_SHAPER_NATIVE,
+                    feature_key: Some(TextFeatureKey::ShaperNative),
+                    selected: false,
+                },
+            ],
+        ),
+        // 2. 断行
+        (
+            "Line Break",
+            &[
+                OptionItem {
+                    label: "Word",
+                    part: PART_LINEBREAK_WORD,
+                    feature_key: None,
+                    selected: state.settings.line_break == LineBreakMode::Word,
+                },
+                OptionItem {
+                    label: "Anywhere",
+                    part: PART_LINEBREAK_ANYWHERE,
+                    feature_key: None,
+                    selected: state.settings.line_break == LineBreakMode::Anywhere,
+                },
+                OptionItem {
+                    label: "None",
+                    part: PART_LINEBREAK_NONE,
+                    feature_key: None,
+                    selected: state.settings.line_break == LineBreakMode::None,
+                },
+            ],
+        ),
+        // 3. 双向文本
+        (
+            "BiDi",
+            &[
+                OptionItem {
+                    label: "On",
+                    part: PART_BIDI_ON,
+                    feature_key: None,
+                    selected: state.settings.bidi,
+                },
+                OptionItem {
+                    label: "Off",
+                    part: PART_BIDI_OFF,
+                    feature_key: None,
+                    selected: !state.settings.bidi,
+                },
+            ],
+        ),
+        // 4. 连字
+        (
+            "Ligatures",
+            &[
+                OptionItem {
+                    label: "On",
+                    part: PART_LIGATURES_ON,
+                    feature_key: None,
+                    selected: state.settings.ligatures,
+                },
+                OptionItem {
+                    label: "Off",
+                    part: PART_LIGATURES_OFF,
+                    feature_key: None,
+                    selected: !state.settings.ligatures,
+                },
+            ],
+        ),
+        // 5. 字距
+        (
+            "Spacing",
+            &[
+                OptionItem {
+                    label: "0 px",
+                    part: PART_LETTER_SPACING_0,
+                    feature_key: None,
+                    selected: state.settings.letter_spacing == 0.0,
+                },
+                OptionItem {
+                    label: "1 px",
+                    part: PART_LETTER_SPACING_1,
+                    feature_key: None,
+                    selected: (state.settings.letter_spacing - 1.0).abs() < 0.01,
+                },
+                OptionItem {
+                    label: "2 px",
+                    part: PART_LETTER_SPACING_2,
+                    feature_key: None,
+                    selected: (state.settings.letter_spacing - 2.0).abs() < 0.01,
+                },
+            ],
+        ),
+        // 6. 行高
+        (
+            "Line Height",
+            &[
+                OptionItem {
+                    label: "Auto",
+                    part: PART_LINE_HEIGHT_AUTO,
+                    feature_key: None,
+                    selected: state.settings.line_height == 0.0,
+                },
+                OptionItem {
+                    label: "20 px",
+                    part: PART_LINE_HEIGHT_20,
+                    feature_key: None,
+                    selected: (state.settings.line_height - 20.0).abs() < 0.01,
+                },
+                OptionItem {
+                    label: "28 px",
+                    part: PART_LINE_HEIGHT_28,
+                    feature_key: None,
+                    selected: (state.settings.line_height - 28.0).abs() < 0.01,
+                },
+            ],
+        ),
+    ];
+
+    for (row_title, options) in rows {
+        if current_y + row_h > rect.max().y {
+            break;
+        }
+
+        let title_rect = Rect::new(rect.origin.x + padding, current_y, title_w, row_h);
+        ctx.canvas.text(
+            row_title,
+            title_rect,
+            10.5,
+            palette.text_muted,
+            AlignX::Start,
+            AlignY::Center,
+        );
+
+        let options_x = rect.origin.x + padding + title_w;
+        let options_w = (rect.size.x - padding * 2.0 - title_w).max(20.0);
+        let btn_gap = 4.0;
+        let btn_w = (options_w - btn_gap * (options.len() as f32 - 1.0)) / options.len() as f32;
+
+        for (opt_idx, opt) in options.iter().enumerate() {
+            let btn_x = options_x + opt_idx as f32 * (btn_w + btn_gap);
+            let btn_rect = Rect::new(btn_x, current_y, btn_w, row_h);
+
+            // 表驱动灰化决议
+            let res = opt.feature_key.map_or(FeatureResolution::AVAILABLE, |key| {
+                resolve_feature(key, &caps, &state.settings)
+            });
+
+            let a11y_label = if let Some(reason) = res.reason {
+                format!("{} — Disabled: {}", opt.label, reason)
+            } else {
+                format!("{}: {}", row_title, opt.label)
+            };
+
+            ctx.control_state(
+                opt.part,
+                btn_rect,
+                Role::Button,
+                &a11y_label,
+                res.disabled,
+                opt.selected,
+            );
+
+            // 视觉呈现
+            if res.disabled {
+                ctx.canvas.rect(
+                    btn_rect,
+                    3.0,
+                    palette.surface,
+                    palette.card_border,
+                    0.5,
+                    0.0,
+                );
+                ctx.canvas.text(
+                    opt.label,
+                    btn_rect,
+                    10.0,
+                    palette.text_muted,
+                    AlignX::Center,
+                    AlignY::Center,
+                );
+            } else if opt.selected {
+                ctx.canvas
+                    .rect(btn_rect, 3.0, palette.primary, palette.primary, 1.0, 0.0);
+                ctx.canvas.text(
+                    opt.label,
+                    btn_rect,
+                    10.0,
+                    palette.card_bg,
+                    AlignX::Center,
+                    AlignY::Center,
+                );
+            } else {
+                ctx.canvas.rect(
+                    btn_rect,
+                    3.0,
+                    palette.card_bg,
+                    palette.card_border,
+                    0.5,
+                    0.0,
+                );
+                ctx.canvas.text(
+                    opt.label,
+                    btn_rect,
+                    10.0,
+                    palette.text,
+                    AlignX::Center,
+                    AlignY::Center,
+                );
+            }
+        }
+
+        current_y += row_h + row_gap;
     }
 }
 

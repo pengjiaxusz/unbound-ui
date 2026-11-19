@@ -6,7 +6,10 @@ use std::ops::{Deref, DerefMut};
 use accesskit::Role;
 use showcase::pages::text_render::{
     resolve_feature, FeatureResolution, TextConsoleGroup, TextFeatureKey, FEATURE_RULES,
-    GROUP_PART_BASE, STATUS_BAR_PART,
+    GROUP_PART_BASE, PART_BIDI_OFF, PART_BIDI_ON, PART_LETTER_SPACING_0, PART_LETTER_SPACING_1,
+    PART_LETTER_SPACING_2, PART_LIGATURES_OFF, PART_LIGATURES_ON, PART_LINEBREAK_ANYWHERE,
+    PART_LINEBREAK_NONE, PART_LINEBREAK_WORD, PART_LINE_HEIGHT_20, PART_LINE_HEIGHT_28,
+    PART_LINE_HEIGHT_AUTO, PART_SHAPER_COSMIC, PART_SHAPER_NATIVE, STATUS_BAR_PART,
 };
 use showcase::pages::{CategoryId, PageId};
 use showcase::shell::GalleryApp;
@@ -15,7 +18,10 @@ use showcase::target::{self, Target};
 use unbound_app::{AppRuntime, Locale};
 use unbound_input::PointerButton;
 use unbound_math::Vec2;
-use unbound_text::{CapabilityStatus, RasterBackend, TextCapabilities, TextRenderSettings};
+use unbound_text::{
+    CapabilityStatus, LineBreakMode, RasterBackend, TextCapabilities, TextRenderSettings,
+    TextShaper,
+};
 
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
 
@@ -362,4 +368,134 @@ fn table_driven_rules_comprehensive_coverage() {
             );
         }
     }
+}
+
+/// 验收条件 1、2：排版组六项控件全部呈现、禁用项严格表驱动灰化并注明具体原因。
+#[test]
+fn typography_group_controls_accessibility_and_table_driven_disabled() {
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+
+    // 1. 验证塑形器选项：Cosmic 可用，Native 禁用且标注未实现具体原因
+    let cosmic_node = app
+        .semantics
+        .get(target::id(Target::Demo(page_index, 0, PART_SHAPER_COSMIC)))
+        .expect("missing cosmic shaper node");
+    assert!(!cosmic_node.disabled);
+
+    let native_node = app
+        .semantics
+        .get(target::id(Target::Demo(page_index, 0, PART_SHAPER_NATIVE)))
+        .expect("missing native shaper node");
+    assert!(native_node.disabled);
+    assert!(
+        native_node
+            .label
+            .contains("Native and simple shapers not implemented"),
+        "disabled native shaper must indicate concrete unimplemented reason, got: {}",
+        native_node.label
+    );
+
+    // 点击禁用项 Native 不会改变设置，依然保持为 Cosmic
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_SHAPER_NATIVE)));
+    assert_eq!(app.state.text_render.settings.shaper, TextShaper::Cosmic);
+
+    // 2. 验证其余五项控件节点在语义树中全部存在
+    let parts = [
+        PART_LINEBREAK_WORD,
+        PART_LINEBREAK_ANYWHERE,
+        PART_LINEBREAK_NONE,
+        PART_BIDI_ON,
+        PART_BIDI_OFF,
+        PART_LIGATURES_ON,
+        PART_LIGATURES_OFF,
+        PART_LETTER_SPACING_0,
+        PART_LETTER_SPACING_1,
+        PART_LETTER_SPACING_2,
+        PART_LINE_HEIGHT_AUTO,
+        PART_LINE_HEIGHT_20,
+        PART_LINE_HEIGHT_28,
+    ];
+    for part in parts {
+        let node_id = target::id(Target::Demo(page_index, 0, part));
+        assert!(
+            app.semantics.get(node_id).is_some(),
+            "missing semantics node for part {part}"
+        );
+    }
+}
+
+/// 验收条件 1、4：排版组六项运行期切换、切页后依然保持、全局生效。
+#[test]
+fn typography_group_switching_updates_settings_and_persists_cross_page() {
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+
+    // 1. 切换断行为 Anywhere
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        PART_LINEBREAK_ANYWHERE,
+    )));
+    assert_eq!(
+        app.state.text_render.settings.line_break,
+        LineBreakMode::Anywhere
+    );
+
+    // 2. 切换断行为 None
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_LINEBREAK_NONE)));
+    assert_eq!(
+        app.state.text_render.settings.line_break,
+        LineBreakMode::None
+    );
+
+    // 3. 切换双向文本为 Off
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_BIDI_OFF)));
+    assert!(!app.state.text_render.settings.bidi);
+
+    // 4. 切换连字为 Off
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_LIGATURES_OFF)));
+    assert!(!app.state.text_render.settings.ligatures);
+
+    // 5. 切换字距为 2.0 px
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        PART_LETTER_SPACING_2,
+    )));
+    assert_eq!(app.state.text_render.settings.letter_spacing, 2.0);
+
+    // 6. 切换行高为 28.0 px
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_LINE_HEIGHT_28)));
+    assert_eq!(app.state.text_render.settings.line_height, 28.0);
+
+    // 7. 切换页面到其他页面（如 Buttons），验证全局生效且设置保持
+    app.navigate(PageId::Buttons);
+    app.rebuild(VIEWPORT);
+
+    // 全局标签引擎 settings 必须已同步当前设置
+    assert_eq!(app.labels.cache.settings().line_break, LineBreakMode::None);
+    assert!(!app.labels.cache.settings().bidi);
+    assert!(!app.labels.cache.settings().ligatures);
+    assert_eq!(app.labels.cache.settings().letter_spacing, 2.0);
+    assert_eq!(app.labels.cache.settings().line_height, 28.0);
+
+    // 8. 重新导航回 TextRender 页面，验证各项设置保持不变
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(
+        app.state.text_render.settings.line_break,
+        LineBreakMode::None
+    );
+    assert!(!app.state.text_render.settings.bidi);
+    assert!(!app.state.text_render.settings.ligatures);
+    assert_eq!(app.state.text_render.settings.letter_spacing, 2.0);
+    assert_eq!(app.state.text_render.settings.line_height, 28.0);
 }
