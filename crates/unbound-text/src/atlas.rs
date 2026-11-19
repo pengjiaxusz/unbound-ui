@@ -16,6 +16,8 @@
 
 use rustc_hash::FxHashMap;
 
+use crate::settings::PhaseMode;
+
 /// 标识单个已光栅化的字形变体。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -48,7 +50,31 @@ impl GlyphKey {
         Self::styled(glyph_id, size, phase, sdf, face, 400, false)
     }
 
-    /// 完整缓存键，包含字重与斜体倾斜标记。
+    /// 完整缓存键，包含字重、斜体倾斜标记与亚像素相位档位掩码。
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn styled_with_mode(
+        glyph_id: u16,
+        size: f32,
+        phase: u8,
+        sdf: bool,
+        face: u64,
+        weight: u16,
+        italic: bool,
+        mode: PhaseMode,
+    ) -> Self {
+        Self {
+            glyph_id,
+            phase: phase & mode.mask(),
+            sdf: u8::from(sdf),
+            size_q4: (size.max(0.0) * 4.0).round().clamp(0.0, 65535.0) as u16,
+            face: (face & 0xffff_ffff) as u32,
+            weight,
+            italic: u8::from(italic),
+        }
+    }
+
+    /// 完整缓存键，包含字重与斜体倾斜标记（默认 8 相位）。
     #[must_use]
     pub fn styled(
         glyph_id: u16,
@@ -59,15 +85,16 @@ impl GlyphKey {
         weight: u16,
         italic: bool,
     ) -> Self {
-        Self {
+        Self::styled_with_mode(
             glyph_id,
-            phase: phase & 7,
-            sdf: u8::from(sdf),
-            size_q4: (size.max(0.0) * 4.0).round().clamp(0.0, 65535.0) as u16,
-            face: (face & 0xffff_ffff) as u32,
+            size,
+            phase,
+            sdf,
+            face,
             weight,
-            italic: u8::from(italic),
-        }
+            italic,
+            PhaseMode::Eight,
+        )
     }
 }
 

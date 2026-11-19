@@ -17,8 +17,9 @@ use rustc_hash::FxHashMap;
 use unbound_math::{Rect, Vec2};
 
 use crate::atlas::{GlyphAtlas, GlyphKey, GlyphSlot};
+use crate::report::TextRenderReport;
 use crate::sdf;
-use crate::settings::{InvalidationTier, TextRenderSettings};
+use crate::settings::{InvalidationTier, PhaseMode, TextRenderSettings};
 use crate::shaping::{PositionedGlyph, ShapedText, TextEngine};
 
 /// 更新目标图集类型。
@@ -101,28 +102,31 @@ pub struct ResolvedGlyph {
 }
 
 impl ResolvedGlyph {
-    /// 文本局部空间中的四边形。
-    ///
-    /// 画笔坐标会对齐到光栅自身的像素网格：画笔位置的亚像素部分已被烘焙进
-    /// 位图中（光栅按 `pen.x` 隐含的相位生成），若再次叠加小数部分会导致
-    /// 字形发生双重偏移。
-    ///
-    ///
-    /// 水平原点来自 [`GlyphCache::quantize_x`]，它连同相位一起携带了整像素：
-    /// 落在 `[0.875, 1.0)` 的画笔小数部分会舍入到**下一像素**的相位 0，
-    /// 四边形也必须随之移动。丢弃该进位（旧版单纯 `% 4` 的做法）曾使
-    /// 12.5% 的字形向左偏移一个像素，导致其边缘与前一个字母重叠。
-    ///
-    ///
+    /// 文本局部空间中的四边形（指定亚像素相位档位）。
     #[must_use]
-    pub fn quad(&self, pen: Vec2, snap_phases: bool) -> Rect {
-        let (base_x, _) = GlyphCache::quantize_x(pen.x, snap_phases);
+    pub fn quad_with_mode(&self, pen: Vec2, mode: PhaseMode) -> Rect {
+        let (base_x, _) = mode.quantize_x(pen.x);
         Rect::new(
             base_x + self.bearing.x,
             pen.y.round() + self.bearing.y,
             self.size.x,
             self.size.y,
         )
+    }
+
+    /// 文本局部空间中的四边形。
+    ///
+    /// 画笔坐标会对齐到光栅自身的像素网格：画笔位置的亚像素部分已被烘焙进
+    /// 位图中（光栅按 `pen.x` 隐含的相位生成），若再次叠加小数部分会导致
+    /// 字形发生双重偏移。
+    ///
+    /// 水平原点来自 [`GlyphCache::quantize_x`]，它连同相位一起携带了整像素：
+    /// 落在 `[0.875, 1.0)` 的画笔小数部分会舍入到**下一像素**的相位 0，
+    /// 四边形也必须随之移动。丢弃该进位（旧版单纯 `% 4` 的做法）曾使
+    /// 12.5% 的字形向左偏移一个像素，导致其边缘与前一个字母重叠。
+    #[must_use]
+    pub fn quad(&self, pen: Vec2, snap_phases: bool) -> Rect {
+        self.quad_with_mode(pen, PhaseMode::from(snap_phases))
     }
 }
 
@@ -400,6 +404,33 @@ impl GlyphCache {
         }
     }
 
+    /// 返回当前生效的亚像素相位档位。
+    #[must_use]
+    pub fn phase_mode(&self) -> PhaseMode {
+        self.settings.phase_mode
+    }
+
+    /// 切换亚像素相位档位，若发生变更则触发整表清空。
+    pub fn set_phase_mode(&mut self, mode: PhaseMode) {
+        if self.settings.phase_mode != mode {
+            let mut settings = self.settings.clone();
+            settings.phase_mode = mode;
+            self.apply_settings(&settings, None);
+        }
+    }
+
+    /// 生成当前实际生效状态的只读报告快照。
+    #[must_use]
+    pub fn report(&self) -> TextRenderReport {
+        TextRenderReport {
+            backend: self.backend,
+            phases: self.settings.phase_mode.phases(),
+            emoji_path: "Swash (Color RGBA8)".to_string(),
+            fallback_count: 0,
+            last_fallback_reason: None,
+        }
+    }
+
     /// 将画笔坐标拆分为整像素原点与亚像素相位。
     ///
     /// 八个相位覆盖 `[0, 1)`，步长 ⅛ px。WinUI 的 DirectWrite 光栅按真实
@@ -416,20 +447,19 @@ impl GlyphCache {
     /// 供画笔始终位于像素网格上的调用方使用。
     #[must_use]
     pub fn quantize_x(x: f32, snap_phases: bool) -> (f32, u8) {
-        if snap_phases {
-            return (x.round(), 0);
-        }
-        let eighths = (x * 8.0).round();
-        (eighths.div_euclid(8.0), eighths.rem_euclid(8.0) as u8)
+        PhaseMode::from(snap_phases).quantize_x(x)
+    }
+
+    /// 按指定相位档位量化画笔坐标。
+    #[must_use]
+    pub fn quantize_x_mode(x: f32, mode: PhaseMode) -> (f32, u8) {
+        mode.quantize_x(x)
     }
 
     /// 由画笔位置推导出的亚像素相位。
     #[must_use]
     pub fn phase_for(x: f32) -> u8 {
-        // 八相位：0, ⅛, …, ⅞。舍入到最近相位可将误差控制在 ⅟₁₆ px 以内，
-        // 肉眼不可见；若改用整像素对齐则会明显改变字母间距。
-        //
-        Self::quantize_x(x, false).1
+        PhaseMode::Eight.quantize_x(x).1
     }
 
     /// `pen_x` 处字形实际光栅化所用的亚像素相位。
@@ -439,7 +469,7 @@ impl GlyphCache {
     ///
     #[must_use]
     pub fn phase_at(&self, pen_x: f32) -> u8 {
-        Self::quantize_x(pen_x, self.snap_phases).1
+        self.settings.phase_mode.quantize_x(pen_x).1
     }
 
     /// 解析（并在必要时光栅化）单个字形。
@@ -452,7 +482,8 @@ impl GlyphCache {
         weight: u16,
         italic: bool,
     ) -> Option<ResolvedGlyph> {
-        let phase = self.phase_at(pen.x);
+        let mode = self.settings.phase_mode;
+        let phase = mode.quantize_x(pen.x).1;
         let sdf_mode = self.use_sdf;
         let face_index = u64::from(self.face_id(face));
         // 光栅化字重必须与文本段塑形时使用的字重一致。此前在此叠加“光学”
@@ -461,7 +492,7 @@ impl GlyphCache {
         //
         // 光栅化结果取决于相位、字重与斜体倾斜，因此三者均纳入键中。
         //
-        let key = GlyphKey::styled(
+        let key = GlyphKey::styled_with_mode(
             glyph.glyph_id,
             glyph.font_size,
             phase,
@@ -469,6 +500,7 @@ impl GlyphCache {
             face_index,
             weight,
             italic,
+            mode,
         );
         if let Some(hit) = self.resolved.get(&key).copied() {
             if hit.slot.is_valid() {
@@ -488,7 +520,8 @@ impl GlyphCache {
         // 彩色字体、距离场或字体解析失败时继续走 swash。
         #[cfg(windows)]
         if !sdf_mode && self.backend == RasterBackend::DirectWrite {
-            if let Some(raster) = self.raster_directwrite(engine, face, glyph, phase) {
+            let phase_offset = mode.phase_offset(phase);
+            if let Some(raster) = self.raster_directwrite(engine, face, glyph, phase_offset) {
                 return self.commit_raster(
                     key,
                     glyph,
@@ -508,8 +541,8 @@ impl GlyphCache {
             flags |= CacheKeyFlags::FAKE_ITALIC;
         }
         // 在向 swash 请求光栅化前将坐标偏置到目标亚像素相位，
-        // 确保八个相位生成真正不同的位图。
-        let phase_offset = phase as f32 * 0.125;
+        // 确保亚像素相位生成真正不同的位图。
+        let phase_offset = mode.phase_offset(phase);
         let (cache_key, _, _) = CacheKey::new(
             face,
             glyph.glyph_id,
@@ -653,7 +686,7 @@ impl GlyphCache {
         engine: &mut TextEngine,
         face: fontdb::ID,
         glyph: &PositionedGlyph,
-        phase: u8,
+        phase_offset: f32,
     ) -> Option<crate::directwrite::RasterizedGlyph> {
         let directwrite = self.directwrite.as_mut()?;
         let key = {
@@ -664,7 +697,7 @@ impl GlyphCache {
                 italic: matches!(info.style, fontdb::Style::Italic | fontdb::Style::Oblique),
             }
         };
-        directwrite.rasterize(&key, glyph.glyph_id, glyph.font_size, glyph.w, phase)
+        directwrite.rasterize(&key, glyph.glyph_id, glyph.font_size, glyph.w, phase_offset)
     }
 
     /// 将整段已塑形的文本解析为四边形列表。
@@ -680,6 +713,7 @@ impl GlyphCache {
         italic: bool,
     ) -> Vec<GlyphQuad> {
         let mut out = Vec::with_capacity(shaped.glyphs.len());
+        let mode = self.settings.phase_mode;
         for g in &shaped.glyphs {
             let Some(face) = shaped.faces.get(g.face_index as usize).copied() else {
                 continue;
@@ -689,14 +723,19 @@ impl GlyphCache {
                 if resolved.size.x <= 0.0 || resolved.size.y <= 0.0 {
                     continue;
                 }
-                let snap = self.snap_phases;
+                let (base_x, phase) = mode.quantize_x(pen.x);
                 out.push(GlyphQuad {
-                    rect: resolved.quad(pen, snap),
+                    rect: Rect::new(
+                        base_x + resolved.bearing.x,
+                        pen.y.round() + resolved.bearing.y,
+                        resolved.size.x,
+                        resolved.size.y,
+                    ),
                     uv: resolved.slot.uv,
                     layer: resolved.slot.layer,
                     color: resolved.color,
                     msdf: resolved.msdf,
-                    phase: Self::quantize_x(pen.x, snap).1,
+                    phase,
                 });
             }
         }
