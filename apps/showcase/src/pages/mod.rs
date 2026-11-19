@@ -18,6 +18,7 @@ pub mod layout;
 pub mod motion;
 pub mod parity_report;
 pub mod systems;
+pub mod text_render;
 
 use unbound_app::Locale;
 use unbound_math::Rect;
@@ -127,6 +128,7 @@ impl CategoryId {
                 PageId::Parity,
                 PageId::I18n,
                 PageId::Settings,
+                PageId::TextRender,
                 PageId::Backdrop,
             ],
         }
@@ -167,12 +169,14 @@ pub enum PageId {
     I18n,
     /// WinUI 3 像素对照报告：参考截图、本框架渲染与 ΔE 热力图。
     Parity,
+    /// 文本渲染控制台：光栅化、亚像素相位、距离场与 Emoji 管线。
+    TextRender,
     /// 后景模式对照页：原生云母、自绘云母与关闭模式的运行时切换。
     Backdrop,
 }
 
 impl PageId {
-    pub const ALL: [PageId; 27] = [
+    pub const ALL: [PageId; 28] = [
         PageId::Home,
         PageId::Colors,
         PageId::Typography,
@@ -199,6 +203,7 @@ impl PageId {
         PageId::Systems,
         PageId::I18n,
         PageId::Parity,
+        PageId::TextRender,
         PageId::Backdrop,
     ];
 
@@ -232,7 +237,8 @@ impl PageId {
             Self::Systems => 23,
             Self::I18n => 24,
             Self::Parity => 25,
-            Self::Backdrop => 26,
+            Self::TextRender => 26,
+            Self::Backdrop => 27,
         }
     }
 
@@ -255,9 +261,12 @@ impl PageId {
             Self::Viewport | Self::Marquee | Self::Undo => CategoryId::Canvas,
             Self::Springs | Self::A11y | Self::Telemetry => CategoryId::Motion,
             Self::Components => CategoryId::Components,
-            Self::Systems | Self::Parity | Self::I18n | Self::Settings | Self::Backdrop => {
-                CategoryId::System
-            }
+            Self::Systems
+            | Self::Parity
+            | Self::I18n
+            | Self::Settings
+            | Self::Backdrop
+            | Self::TextRender => CategoryId::System,
         }
     }
 
@@ -292,6 +301,7 @@ impl PageId {
             Self::I18n => i18n::I18N_INFO,
             Self::Parity => parity_report::PARITY_INFO,
             Self::Backdrop => backdrop::BACKDROP_INFO,
+            Self::TextRender => text_render::TEXT_RENDER_INFO,
         }
     }
 
@@ -439,6 +449,11 @@ impl PageId {
                 "后景",
                 "在运行时对比 DWM 原生云母、自绘壁纸模糊与关闭后景三条路径；页面同步显示用户选择、实际生效模式、Windows 构建号与原生可用性。",
             ),
+            Self::TextRender => (
+                "文本渲染管线与光栅器控制台",
+                "文本渲染",
+                "运行期切换 DirectWrite 与 Swash 光栅器、亚像素相位档位、欧氏距离场与 Emoji 路径；底部状态栏实时呈现实际生效报告。",
+            ),
         };
         PageInfo {
             title,
@@ -480,6 +495,7 @@ impl PageId {
             Self::I18n => i18n::I18N_EXAMPLES,
             Self::Parity => parity_report::PARITY_EXAMPLES,
             Self::Backdrop => backdrop::BACKDROP_EXAMPLES,
+            Self::TextRender => text_render::TEXT_RENDER_EXAMPLES,
         }
     }
 
@@ -517,6 +533,9 @@ impl PageId {
             Self::Parity => "像素对照 差分报告 参考截图 色差 热力图 winui parity",
             Self::Backdrop => {
                 "后景 云母 原生 自绘 透明 交换链 材质 backdrop mica native self-drawn"
+            }
+            Self::TextRender => {
+                "文本渲染 光栅化 亚像素 相位 距离场 emoji directwrite swash cosmic text render console"
             }
         };
         let haystack = format!(
@@ -775,6 +794,8 @@ pub enum DemoKind {
     ParityReport,
     /// 后景模式对照舞台：四条路径的运行时切换与能力回读。
     Backdrop,
+    /// 文本渲染控制台舞台：光栅化、亚像素相位与距离场切换。
+    TextRender,
     /// 由其真实发射器绘制的单个目录组件。
     Component {
         id: WidgetCatalogId,
@@ -1038,6 +1059,10 @@ impl ExampleDef {
                 "后景模式切换台 (Backdrop Mode Switcher)",
                 "四条后景路径的运行时对照：选择 Auto / Native / SelfDrawn / Off，宿主在下一帧解析并回写实际生效模式。",
             ),
+            DemoKind::TextRender => (
+                "文本渲染管线控制台 (Text Render Pipeline Console)",
+                "运行期切换光栅化后端、亚像素相位档位与距离场设置；底部状态栏实时呈现实际生效报告。",
+            ),
             DemoKind::Component { id } => (
                 components::component_nav_label_localized(id, locale),
                 self.description,
@@ -1095,6 +1120,54 @@ impl DemoCtx<'_, '_> {
         );
         self.part(part)
     }
+
+    pub fn control_state(
+        &mut self,
+        part: u16,
+        rect: Rect,
+        role: accesskit::Role,
+        label: &str,
+        disabled: bool,
+        selected: bool,
+    ) -> u64 {
+        let node = self.part(part);
+        self.canvas.control(
+            node,
+            rect,
+            role,
+            label,
+            if disabled {
+                unbound_input::CursorKind::NotAllowed
+            } else {
+                unbound_input::CursorKind::Pointer
+            },
+            disabled,
+            selected,
+        );
+        node
+    }
+
+    pub fn control_expandable(
+        &mut self,
+        part: u16,
+        rect: Rect,
+        role: accesskit::Role,
+        label: &str,
+        selected: bool,
+        expanded: bool,
+    ) -> u64 {
+        self.canvas.demo_control_expandable(
+            self.page.index() as u8,
+            self.card as u8,
+            part,
+            rect,
+            role,
+            label,
+            selected,
+            expanded,
+        );
+        self.part(part)
+    }
 }
 
 /// 渲染单个示例的实时舞台。
@@ -1132,6 +1205,7 @@ pub fn render_demo(ctx: &mut DemoCtx<'_, '_>, demo: DemoKind) {
         DemoKind::I18n { mode } => i18n::i18n_demo(ctx, mode),
         DemoKind::ParityReport => parity_report::report(ctx),
         DemoKind::Backdrop => backdrop::backdrop(ctx),
+        DemoKind::TextRender => text_render::text_render(ctx),
         DemoKind::Component { id } => components::component(ctx, id),
     }
 }

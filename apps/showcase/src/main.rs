@@ -143,6 +143,11 @@ impl Showcase {
         Self {
             app: {
                 let mut app = GalleryRuntime::new();
+                if let Some(restored) =
+                    showcase::pages::text_render::TextRenderPageState::try_restore()
+                {
+                    app.state.text_render = restored;
+                }
                 // 运行时负责对帧做 diff，因此外壳不得为同一结果再次扫描图元列表。
                 //
                 app.set_external_diff(true);
@@ -1993,7 +1998,7 @@ mod tests {
     fn the_gallery_starts_on_home_with_a_full_catalogue() {
         let app = GalleryApp::new();
         assert_eq!(app.state.active_page, PageId::Home);
-        assert_eq!(PageId::ALL.len(), 27);
+        assert_eq!(PageId::ALL.len(), 28);
         assert!(!PageId::Home.examples().is_empty());
         assert!(PageId::Telemetry.examples().len() >= 2);
         assert!(!PageId::Systems.examples().is_empty());

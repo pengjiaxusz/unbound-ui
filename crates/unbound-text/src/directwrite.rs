@@ -1,3 +1,5 @@
+#![cfg(all(windows, feature = "backend-directwrite"))]
+
 //! DirectWrite 字形光栅化后端。
 //!
 //! 只替换字形位图的生成：塑形、折行与命中测试仍由 `cosmic-text` 负责。
@@ -32,7 +34,7 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 
 /// 一次字形光栅化的结果。
-pub(crate) struct RasterizedGlyph {
+pub struct RasterizedGlyph {
     pub width: u32,
     pub height: u32,
     /// 位图左边缘相对画笔原点的水平偏移。
@@ -48,18 +50,21 @@ pub(crate) struct RasterizedGlyph {
 /// `fontdb` 为每个命名字体实例分配独立 ID，其家族、字重与斜体信息足以
 /// 在系统字体集合中唯一定位同一个 `IDWriteFontFace`。
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct FaceKey {
-    pub(crate) family: String,
-    pub(crate) weight: u16,
-    pub(crate) italic: bool,
+pub struct FaceKey {
+    pub family: String,
+    pub weight: u16,
+    pub italic: bool,
 }
 
 /// DirectWrite 字形光栅化器。
-pub(crate) struct DirectWriteRasterizer {
+pub struct DirectWriteRasterizer {
     factory: IDWriteFactory2,
     collection: IDWriteFontCollection,
     faces: FxHashMap<FaceKey, Option<IDWriteFontFace>>,
 }
+
+/// DirectWrite 字形光栅化引擎（别名）。
+pub type DirectWriteEngine = DirectWriteRasterizer;
 
 impl DirectWriteRasterizer {
     /// 创建共享 DirectWrite 工厂与系统字体集合。
@@ -81,8 +86,8 @@ impl DirectWriteRasterizer {
 
     /// 光栅化单个字形。
     ///
-    /// `key` 指定字体家族、字重与斜体；`phase` 为 0..7 的亚像素相位，基线的
-    /// 水平原点取 `phase * 0.125`。返回 `None` 时调用方应回退到 `swash`，包括：
+    /// `key` 指定字体家族、字重与斜体；`phase_offset` 为水平亚像素偏移量。
+    /// 返回 `None` 时调用方应回退到 `swash`，包括：
     /// 字体家族缺失、彩色字体、或 DirectWrite 拒绝该字形。
     pub fn rasterize(
         &mut self,
@@ -90,7 +95,8 @@ impl DirectWriteRasterizer {
         glyph_id: u16,
         font_size: f32,
         advance: f32,
-        phase: u8,
+        phase_offset: f32,
+        mono: bool,
     ) -> Option<RasterizedGlyph> {
         let face = if let Some(cached) = self.faces.get(key) {
             cached.clone()?
@@ -101,9 +107,12 @@ impl DirectWriteRasterizer {
         };
 
         // 彩色字体需要调色板渲染，DirectWrite 的单通道纹理拿不到颜色层。
-        if let Ok(face2) = face.cast::<IDWriteFontFace2>() {
-            if unsafe { face2.IsColorFont() }.as_bool() {
-                return None;
+        // 在单色模式下允许覆盖率光栅化。
+        if !mono {
+            if let Ok(face2) = face.cast::<IDWriteFontFace2>() {
+                if unsafe { face2.IsColorFont() }.as_bool() {
+                    return None;
+                }
             }
         }
 
@@ -128,7 +137,7 @@ impl DirectWriteRasterizer {
                 DWRITE_MEASURING_MODE_NATURAL,
                 DWRITE_GRID_FIT_MODE_DISABLED,
                 DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
-                f32::from(phase) * 0.125,
+                phase_offset,
                 0.0,
             )
         };

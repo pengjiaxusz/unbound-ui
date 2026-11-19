@@ -18,6 +18,8 @@ use rustc_hash::FxHashMap;
 use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
 
+use crate::settings::{InvalidationTier, LineBreakMode, TextRenderSettings};
+
 /// 将所有影响塑形的属性打包为单一可比较的值。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
@@ -54,7 +56,9 @@ impl TextStyle {
         }
     }
 
-    fn metrics(&self) -> Metrics {
+    /// 样式的默认度量（基于字号与行高推导）。
+    #[must_use]
+    pub fn metrics(&self) -> Metrics {
         let line_height = if self.line_height > 0.0 {
             self.line_height
         } else {
@@ -469,6 +473,8 @@ pub struct TextEngine {
     wrap_cache: FxHashMap<(u64, u64, u32), Arc<WrappedText>>,
     stats: TextCacheStats,
     max_cache_entries: usize,
+    /// 运行期文本渲染设置快照。
+    settings: TextRenderSettings,
     /// 东亚文字显式绑定的系统字体族（`None` 表示按文本内容自动判定）。
     ///
     /// 见 [`east_asian_family`]：Windows 的 CJK 界面字体与拉丁界面字体是两套，
@@ -621,6 +627,7 @@ impl TextEngine {
             wrap_cache: FxHashMap::default(),
             stats: TextCacheStats::default(),
             max_cache_entries: 4096,
+            settings: TextRenderSettings::default(),
             cjk_family_override: None,
         }
     }
@@ -683,9 +690,42 @@ impl TextEngine {
     /// 清空两级缓存（主题/字体重载或收到内存压力信号时调用）。
     pub fn clear_caches(&mut self) {
         self.shape_cache.clear();
+        self.layout_cache.clear();
         self.wrap_cache.clear();
         self.buffer = None;
         self.buffer_metrics = None;
+    }
+
+    /// 获取当前应用的文本渲染设置快照。
+    #[must_use]
+    pub fn settings(&self) -> &TextRenderSettings {
+        &self.settings
+    }
+
+    /// 比对新旧设置并在排版语义或位图变更时清空缓存，并同步更新当前设置。
+    pub fn apply_settings(
+        &mut self,
+        old_settings: &TextRenderSettings,
+        new_settings: &TextRenderSettings,
+    ) -> InvalidationTier {
+        let tier = old_settings.invalidation_tier(new_settings);
+        if tier >= InvalidationTier::Typographic {
+            self.clear_caches();
+        }
+        self.settings = new_settings.clone();
+        tier
+    }
+
+    /// 综合局部样式与全局设置推导生效的排版度量。
+    fn effective_metrics(&self, style: &TextStyle) -> Metrics {
+        let line_height = if self.settings.line_height > 0.0 {
+            self.settings.line_height
+        } else if style.line_height > 0.0 {
+            style.line_height
+        } else {
+            (style.font_size * 1.4).round()
+        };
+        Metrics::new(style.font_size, line_height)
     }
 
     fn hash_text(text: &str) -> u64 {
@@ -708,11 +748,29 @@ impl TextEngine {
         if let Some(family) = &style.family {
             attrs = attrs.family(Family::Name(family.as_str()));
         }
+        // 连字开关：若全局设置禁用连字，向 font_features 禁用标准、上下文与交替连字
+        if !self.settings.ligatures {
+            let mut features = cosmic_text::FontFeatures::new();
+            features.disable(cosmic_text::FeatureTag::STANDARD_LIGATURES);
+            features.disable(cosmic_text::FeatureTag::CONTEXTUAL_LIGATURES);
+            features.disable(cosmic_text::FeatureTag::DISCRETIONARY_LIGATURES);
+            features.disable(cosmic_text::FeatureTag::CONTEXTUAL_ALTERNATES);
+            attrs = attrs.font_features(features);
+        }
+        // 字距调整：全局设置优先（非零时使用全局值，否则回退到 style 局部值）
+        let spacing = if self.settings.letter_spacing != 0.0 {
+            self.settings.letter_spacing
+        } else {
+            style.letter_spacing
+        };
+        if spacing != 0.0 {
+            attrs = attrs.letter_spacing(spacing);
+        }
         attrs
     }
 
     fn prepare_buffer(&mut self, text: &str, style: &TextStyle) {
-        let metrics = style.metrics();
+        let metrics = self.effective_metrics(style);
         let key = (metrics.font_size, metrics.line_height);
         if self.buffer_metrics != Some(key) {
             self.buffer = Some(Buffer::new(&mut self.font_system, metrics));
@@ -799,7 +857,7 @@ impl TextEngine {
             return Some(Arc::clone(cached));
         }
         let shaped = self.shape(text, style);
-        #[cfg(windows)]
+        #[cfg(all(windows, feature = "backend-directwrite"))]
         let corrected = {
             let face_id = shaped.faces.first().copied()?;
             // 多字体回退（CJK、Emoji）时字形分属不同字体面，单一
@@ -844,7 +902,7 @@ impl TextEngine {
             corrected.width = width;
             Arc::new(corrected)
         };
-        #[cfg(not(windows))]
+        #[cfg(not(all(windows, feature = "backend-directwrite")))]
         let corrected = shaped;
         if self.layout_cache.len() >= self.max_cache_entries {
             self.layout_cache.clear();
@@ -885,24 +943,30 @@ impl TextEngine {
             return ShapedText::default();
         }
         self.prepare_buffer(text, style);
+        let default_line_height = self.effective_metrics(style).line_height;
+        let bidi_enabled = self.settings.bidi;
         let buffer = self.buffer.as_ref().expect("prepared");
-        Self::extract(buffer, text, style)
+        Self::extract(buffer, text, style, bidi_enabled, default_line_height)
     }
 
     /// 从已塑形的缓冲区中提取已定位的字形。
     ///
     /// 单行路径与折行路径共用：两者都会生成已完成塑形的 `Buffer`，且都需要
     /// 相同的字形提取逻辑。二者的区别仅在于缓冲区是否设置了宽度限制。
-    ///
-    ///
-    fn extract(buffer: &Buffer, text: &str, style: &TextStyle) -> ShapedText {
+    fn extract(
+        buffer: &Buffer,
+        text: &str,
+        _style: &TextStyle,
+        bidi_enabled: bool,
+        default_line_height: f32,
+    ) -> ShapedText {
         let mut faces: Vec<fontdb::ID> = Vec::new();
         let mut glyphs = Vec::with_capacity(text.len());
         let mut width: f32 = 0.0;
         let mut height: f32 = 0.0;
         let mut line_count = 0u32;
         let mut first_baseline = 0.0;
-        let mut line_height = style.metrics().line_height;
+        let mut line_height = default_line_height;
         let mut ascent = 0.0;
         let mut descent = 0.0;
         let line_starts = source_line_starts(text);
@@ -918,6 +982,8 @@ impl TextEngine {
             }
             width = width.max(run.line_w);
             height = height.max(run.line_y + (run.line_height - ascent).max(0.0));
+
+            let mut run_glyphs: Vec<PositionedGlyph> = Vec::with_capacity(run.glyphs.len());
             for g in run.glyphs {
                 let face_index = match faces.iter().position(|f| *f == g.font_id) {
                     Some(i) => i,
@@ -926,39 +992,35 @@ impl TextEngine {
                         faces.len() - 1
                     }
                 };
-                glyphs.push(PositionedGlyph {
+                run_glyphs.push(PositionedGlyph {
                     glyph_id: g.glyph_id,
                     face_index: u16::try_from(face_index).unwrap_or(0),
                     // HarfBuzz（通过 rustybuzz）将附加符号（mark）定位在文本段画笔流之外：
                     // 阿拉伯文音符、泰文声调符号或越南文双变音符的真实位置保存在
                     // `x_offset`/`y_offset`（以 em 为单位）中。忽略它们会导致所有附加符号
                     // 塌陷到基线上并叠在基础字母上方。
-                    //
-                    //
-                    //
-                    // 此处与 `cosmic_text::LayoutGlyph::physical` 保持一致：
-                    // `x = g.x + font_size * x_offset`，
-                    // `y = g.y - font_size * y_offset`。
                     x: g.x + g.font_size * g.x_offset,
                     // 字形基线，相对于文本框顶部。
-                    //
-                    //
-                    // cosmic-text 将行基线上报为 `line_y`（已累加上方各行高度），将字形在该行内的
-                    // 偏移上报为 `g.y`（水平文本下为零）。旧代码误将 `g.font_size` 当作 ascent：
-                    // 这不仅把每个字形放到了错误的高度，还忽略了行位置，导致第二行直接
-                    // 绘制在第一行之上。
-                    //
-                    //
-                    //
-                    //
                     y: run.line_y + g.y - g.font_size * g.y_offset,
                     w: g.w,
                     font_size: g.font_size,
                     cluster: u32::try_from(line_base + g.start).unwrap_or(u32::MAX),
-                    level: g.level.number(),
+                    level: if bidi_enabled { g.level.number() } else { 0 },
                     _pad: [0; 3],
                 });
             }
+
+            if !bidi_enabled {
+                // 禁用双向文本重排时按源文本逻辑顺序（cluster 递增）排布，并自左向右累加坐标
+                run_glyphs.sort_by_key(|g| g.cluster);
+                let mut cur_x = 0.0;
+                for g in &mut run_glyphs {
+                    g.x = cur_x;
+                    cur_x += g.w;
+                }
+            }
+
+            glyphs.extend(run_glyphs);
         }
 
         ShapedText {
@@ -975,16 +1037,6 @@ impl TextEngine {
     }
 
     /// 对 `text` 进行塑形并按 `max_width` 折行，返回每条折行后的已定位字形。
-    ///
-    ///
-    /// 换行缓存仅记录**断点位置**；折行段落的字形位置此前无法获取，导致渲染器
-    /// 无法绘制折行段落——只能一次绘制一行。此方法补齐了这一环：执行与
-    /// [`TextEngine::shape`] 相同的提取流程，但缓冲区预先受限于 `max_width`。
-    ///
-    ///
-    ///
-    /// 宽度会混入样式哈希中，因此折行文本段绝不会与无宽度限制的同一文本发生冲突。
-    ///
     pub fn shape_wrapped(
         &mut self,
         text: &str,
@@ -1019,15 +1071,27 @@ impl TextEngine {
         if text.is_empty() {
             return ShapedText::default();
         }
-        let metrics = style.metrics();
-        // 使用独立缓冲区，使塑形缓存缓冲区保持无宽度限制：塑形结果绝不能依赖折行宽度。
-        //
+        let metrics = self.effective_metrics(style);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
-        buffer.set_size(Some(max_width.max(1.0)), None);
+        let wrap = match self.settings.line_break {
+            LineBreakMode::Word => cosmic_text::Wrap::Word,
+            LineBreakMode::Anywhere => cosmic_text::Wrap::Glyph,
+            LineBreakMode::None => cosmic_text::Wrap::None,
+        };
+        buffer.set_wrap(wrap);
+        if self.settings.line_break != LineBreakMode::None {
+            buffer.set_size(Some(max_width.max(1.0)), None);
+        }
         let attrs = self.attrs(style);
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
-        Self::extract(&buffer, text, style)
+        Self::extract(
+            &buffer,
+            text,
+            style,
+            self.settings.bidi,
+            metrics.line_height,
+        )
     }
 
     /// 将 `text` 按 `max_width` 折行（带缓存）。宽度量化为 ¼ px，
@@ -1052,11 +1116,17 @@ impl TextEngine {
     }
 
     fn wrap_uncached(&mut self, text: &str, style: &TextStyle, max_width: f32) -> WrappedText {
-        let metrics = style.metrics();
-        // 使用独立缓冲区，使塑形缓存缓冲区保持无宽度限制（塑形结果绝不能依赖折行宽度）。
-        //
+        let metrics = self.effective_metrics(style);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
-        buffer.set_size(Some(max_width.max(1.0)), None);
+        let wrap = match self.settings.line_break {
+            LineBreakMode::Word => cosmic_text::Wrap::Word,
+            LineBreakMode::Anywhere => cosmic_text::Wrap::Glyph,
+            LineBreakMode::None => cosmic_text::Wrap::None,
+        };
+        buffer.set_wrap(wrap);
+        if self.settings.line_break != LineBreakMode::None {
+            buffer.set_size(Some(max_width.max(1.0)), None);
+        }
         let attrs = self.attrs(style);
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
@@ -1065,22 +1135,12 @@ impl TextEngine {
         let mut height: f32 = 0.0;
         let mut width: f32 = 0.0;
         let mut line_height = metrics.line_height;
-        // `text` 中每个源文本行的字节偏移量。
-        //
-        // cosmic-text 将字形的 cluster 上报为**行内**索引，而 `LayoutRun::text`
-        // 是整条源文本行（而非折行后的片段）。因此需要行偏移量将 cluster 索引
-        // 转换为 `text` 中的绝对字节偏移量。
-        //
         let line_starts = source_line_starts(text);
         for run in buffer.layout_runs() {
             line_height = run.line_height;
             height = height.max(run.line_y + run.line_height);
             width = width.max(run.line_w);
-            // 该文本段所属源文本行的基准偏移量。
             let line_base = line_starts.get(run.line_i).copied().unwrap_or(0);
-            // 文本段中的字形携带相对于源文本行的 cluster 索引，因此该段在源行中的
-            // 范围即首个字形的起始位置与末个字形的结束位置。
-            //
             let (rel_start, rel_end) = match (run.glyphs.first(), run.glyphs.last()) {
                 (Some(first), Some(last)) => (first.start, last.end),
                 _ => (0, 0),
@@ -1225,12 +1285,26 @@ impl TextEngine {
             runs.push((text, self.attrs(base)));
         }
         let default = self.attrs(base);
-        let metrics = base.metrics();
+        let metrics = self.effective_metrics(base);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
-        buffer.set_size(max_width.map(|width| width.max(1.0)), None);
+        let wrap = match self.settings.line_break {
+            LineBreakMode::Word => cosmic_text::Wrap::Word,
+            LineBreakMode::Anywhere => cosmic_text::Wrap::Glyph,
+            LineBreakMode::None => cosmic_text::Wrap::None,
+        };
+        buffer.set_wrap(wrap);
+        if self.settings.line_break != LineBreakMode::None {
+            buffer.set_size(max_width.map(|width| width.max(1.0)), None);
+        }
         buffer.set_rich_text(runs, &default, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
-        let shaped = Arc::new(Self::extract(&buffer, text, base));
+        let shaped = Arc::new(Self::extract(
+            &buffer,
+            text,
+            base,
+            self.settings.bidi,
+            metrics.line_height,
+        ));
         if self.shape_cache.len() >= self.max_cache_entries {
             self.shape_cache.clear();
         }
