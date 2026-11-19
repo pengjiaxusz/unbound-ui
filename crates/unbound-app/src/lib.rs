@@ -83,6 +83,7 @@ pub use scene_upload::{collect_backdrops, scene_upload};
 pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
+pub use unbound_platform::WindowBackdropMaterial;
 pub use unbound_widgets::ergonomics::UiWidget;
 pub use window_runner::{
     run_windowed, run_windowed_with_frame_callback, run_windowed_with_hooks,
@@ -2877,6 +2878,8 @@ pub struct AppRuntime<A: Application> {
     /// 宿主在每帧回调里按后景计划写入，窗口运行器在渲染前应用。它只影响清屏色，
     /// 不改变交换链配置，因此可以在运行期自由切换。
     clear_alpha: f32,
+    /// 窗口外观意图（默认关闭）。
+    backdrop_intent: AppearanceIntent,
     /// 当前交换链是否真的按预乘 alpha 创建（原生后景的前提）。
     ///
     /// 宿主据此决定后景来源：驱动或表面不支持时交换链会回退为不透明，此时
@@ -2952,6 +2955,7 @@ impl<A: Application> AppRuntime<A> {
             inspector: Inspector::new(),
             debug_sanitizers: false,
             clear_alpha: 1.0,
+            backdrop_intent: AppearanceIntent::Material(None),
             premultiplied_surface: false,
             node_keys: FxHashMap::default(),
             hit_owners: FxHashMap::default(),
@@ -3063,6 +3067,39 @@ impl<A: Application> AppRuntime<A> {
     /// 记录交换链的实际合成方式（由窗口运行器在创建交换链后写入）。
     pub(crate) fn set_premultiplied_surface(&mut self, supported: bool) {
         self.premultiplied_surface = supported;
+    }
+
+    /// 设置窗口后景材质意图。
+    ///
+    /// 传入 `Some(...)` 开启对应材质（云母、亚克力等）；传入 `None` 或 `Some(WindowBackdropMaterial::None)`
+    /// 关闭后景恢复不透明。窗口运行器在每帧渲染前读取该值，通过外观意图账本按需向系统下发变更。
+    pub fn set_backdrop(&mut self, backdrop: Option<WindowBackdropMaterial>) {
+        self.backdrop_intent = AppearanceIntent::Material(backdrop);
+    }
+
+    /// 当前窗口后景材质意图（若当前为亚克力自定义色调等扩展意图则返回 `None`）。
+    #[must_use]
+    pub const fn backdrop(&self) -> Option<WindowBackdropMaterial> {
+        match self.backdrop_intent {
+            AppearanceIntent::Material(mat) => mat,
+            AppearanceIntent::AccentTint(_) => None,
+        }
+    }
+
+    /// 设置亚克力自定义色调后景（走 accent policy 通道，ABGR 格式）。
+    pub fn set_accent_tint(&mut self, argb: u32) {
+        self.backdrop_intent = AppearanceIntent::AccentTint(argb);
+    }
+
+    /// 设置底层外观意图。
+    pub fn set_backdrop_intent(&mut self, intent: AppearanceIntent) {
+        self.backdrop_intent = intent;
+    }
+
+    /// 当前底层外观意图。
+    #[must_use]
+    pub const fn backdrop_intent(&self) -> AppearanceIntent {
+        self.backdrop_intent
     }
 
     /// 距离下一个定时器触发的剩余时间，供 host 的 `ControlFlow` 使用。
