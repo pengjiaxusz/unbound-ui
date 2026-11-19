@@ -64,6 +64,10 @@ example NAME *ARGS:
 test-examples:
     just q-run cargo test -p unbound-app --examples
 
+# 运行文本渲染性能与构建裁剪基准测试套件
+text-baseline *ARGS:
+    @bque bench -- cargo test -p unbound-text --test text_render_baseline --all-features --release -- --nocapture {{ARGS}}
+
 # app-guest 的 host_roundtrip 集成测试要加载真实 cdylib，而 `cargo test`
 # 不保证在 target/<profile> 下生成该产物，故先显式构建一次，避免干净环境硬失败。
 # 覆盖机制见托管块的 allow-duplicate-recipes。
