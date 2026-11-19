@@ -19,6 +19,7 @@ use rustc_hash::FxHashMap;
 use unbound_math::{Rect, Vec2};
 
 use crate::atlas::{GlyphAtlas, GlyphKey, GlyphSlot};
+use crate::composite::cluster_ranges;
 use crate::report::TextRenderReport;
 use crate::sdf;
 use crate::settings::{InvalidationTier, PhaseMode, TextRenderSettings};
@@ -163,6 +164,20 @@ pub struct CosmicRaster {
     pub is_color: bool,
     /// 纹素数据（单色 R8 或彩色 RGBA8）。
     pub data: Vec<u8>,
+}
+
+/// 一簇彩色字形的解析结论。
+///
+/// 非 DirectWrite 构建只会产出 `NotColor`（彩色仍归 swash），因此这里放行
+/// 另外两个分支的 `dead_code`：它们是 Windows 彩色路径的出口。
+#[allow(dead_code)]
+enum ClusterResolution {
+    /// 已合成并驻留图集，可直接发射四边形。
+    Rendered(ResolvedGlyph),
+    /// 不是彩色字形：按普通单色 run 处理，不计回退。
+    NotColor,
+    /// 是彩色簇但合成不了；`force_cosmic` 表示回退策略要求改走 `swash`。
+    Fallback { force_cosmic: bool },
 }
 
 /// 光栅化并缓存字形，维护其在图集中的驻留状态。
@@ -617,19 +632,8 @@ impl GlyphCache {
             self.settings.emoji_presentation as u8,
             self.settings.palette_index,
         );
-        if let Some(hit) = self.resolved.get(&key).copied() {
-            if hit.slot.is_valid() {
-                // 刷新图集代际而无需重新光栅化。
-                self.hits += 1;
-                if hit.color {
-                    if let Some(rgba) = self.atlas.rgba.as_mut() {
-                        rgba.touch(&key);
-                    }
-                } else {
-                    self.atlas.r8.touch(&key);
-                }
-                return Some(hit);
-            }
+        if let Some(hit) = self.cached(&key) {
+            return Some(hit);
         }
         self.misses += 1;
 
@@ -647,7 +651,7 @@ impl GlyphCache {
             if let Some(raster) = self.raster_directwrite(engine, face, glyph, phase_offset) {
                 return self.commit_raster(
                     key,
-                    glyph,
+                    glyph.w,
                     raster.width,
                     raster.height,
                     raster.bearing_x,
@@ -672,7 +676,7 @@ impl GlyphCache {
             {
                 self.commit_raster(
                     key,
-                    glyph,
+                    glyph.w,
                     raster.width,
                     raster.height,
                     raster.left,
@@ -694,6 +698,24 @@ impl GlyphCache {
         }
     }
 
+    /// 命中图集缓存时刷新代际并返回已解析字形。
+    fn cached(&mut self, key: &GlyphKey) -> Option<ResolvedGlyph> {
+        let hit = self.resolved.get(key).copied()?;
+        if !hit.slot.is_valid() {
+            return None;
+        }
+        // 刷新图集代际而无需重新光栅化。
+        self.hits += 1;
+        if hit.color {
+            if let Some(rgba) = self.atlas.rgba.as_mut() {
+                rgba.touch(key);
+            }
+        } else {
+            self.atlas.r8.touch(key);
+        }
+        Some(hit)
+    }
+
     /// 将一块已光栅化的位图写入图集并登记缓存。
     ///
     /// `left` 为位图左缘相对画笔原点的偏移，`top` 为位图顶缘相对基线的
@@ -702,7 +724,7 @@ impl GlyphCache {
     fn commit_raster(
         &mut self,
         key: GlyphKey,
-        glyph: &PositionedGlyph,
+        advance: f32,
         width: u32,
         height: u32,
         left: f32,
@@ -717,7 +739,7 @@ impl GlyphCache {
                 slot: GlyphSlot::default(),
                 bearing: Vec2::new(left, 0.0),
                 size: Vec2::ZERO,
-                advance: glyph.w,
+                advance,
                 color: is_color,
                 msdf: false,
             });
@@ -748,7 +770,7 @@ impl GlyphCache {
                 slot,
                 bearing: Vec2::new(left - pad as f32, -(top) - pad as f32),
                 size: Vec2::new(width as f32 + pad2 as f32, height as f32 + pad2 as f32),
-                advance: glyph.w,
+                advance,
                 color: true,
                 msdf: false,
             }
@@ -771,7 +793,7 @@ impl GlyphCache {
                 slot,
                 bearing: Vec2::new(left - pad as f32, -(top) - pad as f32),
                 size: Vec2::new(width as f32 + pad2 as f32, height as f32 + pad2 as f32),
-                advance: glyph.w,
+                advance,
                 color: true,
                 msdf: true,
             }
@@ -793,7 +815,7 @@ impl GlyphCache {
                 slot,
                 bearing: Vec2::new(left - pad as f32, -(top) - pad as f32),
                 size: Vec2::new(width as f32 + pad2 as f32, height as f32 + pad2 as f32),
-                advance: glyph.w,
+                advance,
                 color: false,
                 msdf: false,
             }
@@ -929,6 +951,191 @@ impl GlyphCache {
         })
     }
 
+    /// 当前设置是否允许走 DirectWrite 彩色层合成。
+    ///
+    /// 只在显式要求彩色呈现、且光栅器落在 DirectWrite 上时成立；显式选择
+    /// `swash` 后端时彩色仍归 swash。非 Windows 构建恒为 `false`。
+    fn color_cluster_enabled(&self) -> bool {
+        #[cfg(all(windows, feature = "backend-directwrite"))]
+        {
+            if self.settings.emoji_presentation != crate::settings::EmojiPresentation::Color {
+                return false;
+            }
+            if self.directwrite.is_none() {
+                return false;
+            }
+            match self.settings.emoji_backend {
+                crate::settings::EmojiBackend::DirectWrite => true,
+                crate::settings::EmojiBackend::Cosmic => false,
+                crate::settings::EmojiBackend::Follow => self.backend == RasterBackend::DirectWrite,
+            }
+        }
+        #[cfg(not(all(windows, feature = "backend-directwrite")))]
+        {
+            false
+        }
+    }
+
+    /// 解析一簇彩色字形：一簇一个图集条目、一个四边形。
+    ///
+    /// 相位锁 0，原点由调用方按 `round(pen.x)` 取整（见 ADR 0017）。
+    #[cfg(all(windows, feature = "backend-directwrite"))]
+    fn resolve_color_cluster(
+        &mut self,
+        engine: &mut TextEngine,
+        glyphs: &[PositionedGlyph],
+        face: fontdb::ID,
+        weight: u16,
+        italic: bool,
+    ) -> ClusterResolution {
+        use crate::composite::{cluster_hash, composite, ColorLayer, CompositeOutcome, LayerColor};
+        use crate::directwrite::{ClusterGlyph, ColorClusterOutcome};
+        use crate::settings::EmojiFallback;
+
+        let Some(first) = glyphs.first().copied() else {
+            return ClusterResolution::NotColor;
+        };
+        let face_key = {
+            let Some(info) = engine.font_system_mut().db().face(face) else {
+                return ClusterResolution::NotColor;
+            };
+            let Some(family) = info.families.first() else {
+                return ClusterResolution::NotColor;
+            };
+            crate::directwrite::FaceKey {
+                family: family.0.clone(),
+                weight: info.weight.0,
+                italic: matches!(info.style, fontdb::Style::Italic | fontdb::Style::Oblique),
+            }
+        };
+        if !self
+            .directwrite
+            .as_mut()
+            .is_some_and(|dw| dw.is_color_face(&face_key))
+        {
+            return ClusterResolution::NotColor;
+        }
+
+        let face_index = self.face_id(face);
+        let ids: Vec<u16> = glyphs.iter().map(|g| g.glyph_id).collect();
+        let atlas_key = GlyphKey::styled_with_mode(
+            first.glyph_id,
+            first.font_size,
+            0,
+            false,
+            u64::from(face_index),
+            weight,
+            italic,
+            PhaseMode::One,
+            crate::settings::EmojiPresentation::Color as u8,
+            self.settings.palette_index,
+        )
+        .with_cluster(cluster_hash(&ids));
+
+        if let Some(hit) = self.cached(&atlas_key) {
+            return ClusterResolution::Rendered(hit);
+        }
+
+        // DWrite 的 run 用「步进 + 偏移」定位，这里把塑形结果的绝对坐标
+        // 折算回相对 run 起点的偏移，避免多字形簇内部错位。
+        let mut cluster_glyphs = Vec::with_capacity(glyphs.len());
+        let mut advanced = 0.0f32;
+        for g in glyphs {
+            cluster_glyphs.push(ClusterGlyph {
+                glyph_id: g.glyph_id,
+                advance: g.w,
+                offset_x: (g.x - first.x) - advanced,
+                offset_y: g.y - first.y,
+            });
+            advanced += g.w;
+        }
+        let advance = advanced;
+
+        let outcome = match self.directwrite.as_mut() {
+            Some(dw) => dw.rasterize_color_cluster(
+                &face_key,
+                &cluster_glyphs,
+                first.font_size,
+                u32::from(self.settings.palette_index),
+            ),
+            None => ColorClusterOutcome::NotColor,
+        };
+
+        match outcome {
+            ColorClusterOutcome::NotColor => ClusterResolution::NotColor,
+            ColorClusterOutcome::Unsupported(reason) => {
+                self.record_fallback(format!("color cluster {ids:?} is not composable: {reason}"));
+                let force_cosmic = match self.settings.emoji_fallback {
+                    EmojiFallback::Swash => {
+                        #[cfg(feature = "backend-swash")]
+                        {
+                            true
+                        }
+                        #[cfg(not(feature = "backend-swash"))]
+                        {
+                            self.record_fallback("swash is not compiled in; color fallback degrades to mono silhouette");
+                            false
+                        }
+                    }
+                    EmojiFallback::Mono => false,
+                    EmojiFallback::Placeholder => {
+                        self.record_fallback("placeholder primitive is not implemented; color fallback degrades to mono silhouette");
+                        false
+                    }
+                };
+                ClusterResolution::Fallback { force_cosmic }
+            }
+            ColorClusterOutcome::Layers(layers) => {
+                let borrowed: Vec<ColorLayer<'_>> = layers
+                    .iter()
+                    .map(|l| ColorLayer {
+                        color: LayerColor::new(l.color[0], l.color[1], l.color[2], l.color[3]),
+                        coverage: &l.data,
+                        width: l.width,
+                        height: l.height,
+                        left: l.left,
+                        top: l.top,
+                    })
+                    .collect();
+                match composite(&borrowed) {
+                    CompositeOutcome::NotColor => ClusterResolution::NotColor,
+                    CompositeOutcome::Color(bitmap) => match self.commit_raster(
+                        atlas_key,
+                        advance,
+                        bitmap.width,
+                        bitmap.height,
+                        bitmap.left as f32,
+                        -(bitmap.top as f32),
+                        true,
+                        bitmap.data,
+                        false,
+                    ) {
+                        Some(resolved) => ClusterResolution::Rendered(resolved),
+                        None => {
+                            self.record_fallback("color cluster atlas allocation failed");
+                            ClusterResolution::Fallback {
+                                force_cosmic: false,
+                            }
+                        }
+                    },
+                }
+            }
+        }
+    }
+
+    /// 非 Windows 构建没有彩色层遍历，恒按普通 run 处理。
+    #[cfg(not(all(windows, feature = "backend-directwrite")))]
+    fn resolve_color_cluster(
+        &mut self,
+        _engine: &mut TextEngine,
+        _glyphs: &[PositionedGlyph],
+        _face: fontdb::ID,
+        _weight: u16,
+        _italic: bool,
+    ) -> ClusterResolution {
+        ClusterResolution::NotColor
+    }
+
     /// 将整段已塑形的文本解析为四边形列表。
     ///
     /// `origin` 为调用方空间中文本框的左上角；返回的四边形位于同一空间。
@@ -943,30 +1150,77 @@ impl GlyphCache {
     ) -> Vec<GlyphQuad> {
         let mut out = Vec::with_capacity(shaped.glyphs.len());
         let mode = self.settings.phase_mode;
-        for g in &shaped.glyphs {
-            let Some(face) = shaped.faces.get(g.face_index as usize).copied() else {
+        for range in cluster_ranges(&shaped.glyphs) {
+            let group = &shaped.glyphs[range];
+            let Some(first) = group.first() else {
                 continue;
             };
-            let pen = origin + Vec2::new(g.x, g.y);
-            if let Some(resolved) = self.resolve(engine, g, face, pen, weight, italic) {
-                if resolved.size.x <= 0.0 || resolved.size.y <= 0.0 {
-                    continue;
+            let Some(face) = shaped.faces.get(first.face_index as usize).copied() else {
+                continue;
+            };
+            let pen = origin + Vec2::new(first.x, first.y);
+            let backend_before_fallback = self.settings.emoji_backend;
+            let mut force_cosmic = false;
+
+            // 彩色簇先试一次层合成：成功则整簇只发一个四边形。
+            if self.color_cluster_enabled() {
+                match self.resolve_color_cluster(engine, group, face, weight, italic) {
+                    ClusterResolution::Rendered(resolved) => {
+                        if resolved.size.x > 0.0 && resolved.size.y > 0.0 {
+                            out.push(GlyphQuad {
+                                rect: Rect::new(
+                                    pen.x.round() + resolved.bearing.x,
+                                    pen.y.round() + resolved.bearing.y,
+                                    resolved.size.x,
+                                    resolved.size.y,
+                                ),
+                                uv: resolved.slot.uv,
+                                layer: resolved.slot.layer,
+                                color: resolved.color,
+                                msdf: resolved.msdf,
+                                // 彩色簇锁相位 0：原点已取整，不再有亚像素位移。
+                                phase: 0,
+                            });
+                        }
+                        continue;
+                    }
+                    ClusterResolution::NotColor => {}
+                    ClusterResolution::Fallback {
+                        force_cosmic: force,
+                    } => force_cosmic = force,
                 }
-                let (base_x, phase) = mode.quantize_x(pen.x);
-                out.push(GlyphQuad {
-                    rect: Rect::new(
-                        base_x + resolved.bearing.x,
-                        pen.y.round() + resolved.bearing.y,
-                        resolved.size.x,
-                        resolved.size.y,
-                    ),
-                    uv: resolved.slot.uv,
-                    layer: resolved.slot.layer,
-                    color: resolved.color,
-                    msdf: resolved.msdf,
-                    phase,
-                });
             }
+
+            if force_cosmic {
+                self.settings.emoji_backend = crate::settings::EmojiBackend::Cosmic;
+            }
+            for g in group {
+                let Some(face) = shaped.faces.get(g.face_index as usize).copied() else {
+                    continue;
+                };
+                let pen = origin + Vec2::new(g.x, g.y);
+                if let Some(resolved) = self.resolve(engine, g, face, pen, weight, italic) {
+                    if resolved.size.x <= 0.0 || resolved.size.y <= 0.0 {
+                        continue;
+                    }
+                    let (base_x, phase) = mode.quantize_x(pen.x);
+                    out.push(GlyphQuad {
+                        rect: Rect::new(
+                            base_x + resolved.bearing.x,
+                            pen.y.round() + resolved.bearing.y,
+                            resolved.size.x,
+                            resolved.size.y,
+                        ),
+                        uv: resolved.slot.uv,
+                        layer: resolved.slot.layer,
+                        color: resolved.color,
+                        msdf: resolved.msdf,
+                        phase,
+                    });
+                }
+            }
+            // 逐簇回退只影响这一簇，下一簇仍按原设置重新判断。
+            self.settings.emoji_backend = backend_before_fallback;
         }
         out
     }

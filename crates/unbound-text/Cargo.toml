@@ -24,13 +24,14 @@ windows = { version = "0.62.2", optional = true, features = [
     "Win32_Graphics_DirectWrite",
     "Win32_System_Com",
 ] }
+windows-numerics = { workspace = true, optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
 cosmic-text = { version = "0.19", default-features = false, features = ["swash"] }
 
 [features]
 default = ["backend-native"]
-backend-directwrite = ["dep:windows"]
+backend-directwrite = ["dep:windows", "dep:windows-numerics"]
 backend-swash = ["cosmic-text/swash"]
 backend-native = ["backend-directwrite"]
 full = ["backend-directwrite", "backend-swash"]

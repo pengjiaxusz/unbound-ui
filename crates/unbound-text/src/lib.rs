@@ -25,6 +25,7 @@ compile_error!(
 
 pub mod atlas;
 pub mod capabilities;
+pub mod composite;
 #[cfg(all(windows, feature = "backend-directwrite"))]
 pub mod directwrite;
 pub mod glyph;
@@ -40,6 +41,10 @@ pub use atlas::{
     Atlas, AtlasConfig, AtlasReport, GlyphAtlas, GlyphKey, GlyphSlot, SUBPIXEL_PHASES,
 };
 pub use capabilities::{CapabilityStatus, TextCapabilities};
+pub use composite::{
+    cluster_hash, cluster_ranges, composite, ColorLayer, CompositeBitmap, CompositeOutcome,
+    LayerColor,
+};
 #[cfg(all(windows, feature = "backend-directwrite"))]
 pub use directwrite::{DirectWriteEngine, DirectWriteRasterizer};
 #[cfg(feature = "backend-swash")]

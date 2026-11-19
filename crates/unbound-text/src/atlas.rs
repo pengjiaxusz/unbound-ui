@@ -46,6 +46,11 @@ pub struct GlyphKey {
     pub presentation: u8,
     /// 调色板索引（用于彩色 Emoji 调色板区分）。
     pub palette_index: u16,
+    /// 彩色簇标识（簇内字形 id 的哈希）；`0` 表示单字形路径。
+    ///
+    /// 一个簇可能由多个字形组成，位图属于整簇而不是其中某个字形，
+    /// 因此不能只按 `glyph_id` 缓存——那会让共享前缀的不同序列串味。
+    pub cluster_hash: u64,
 }
 
 impl GlyphKey {
@@ -79,7 +84,18 @@ impl GlyphKey {
             italic: u8::from(italic),
             presentation,
             palette_index,
+            cluster_hash: 0,
         }
+    }
+
+    /// 标记该键属于一个多字形彩色簇。
+    ///
+    /// `cluster_hash` 由 [`crate::composite::cluster_hash`] 产出；传 `0` 或单字形簇的
+    /// 哈希（同样是 `0`）等价于单字形路径。
+    #[must_use]
+    pub fn with_cluster(mut self, cluster_hash: u64) -> Self {
+        self.cluster_hash = cluster_hash;
+        self
     }
 
     /// 完整缓存键，包含字重与斜体倾斜标记（默认 8 相位）。
