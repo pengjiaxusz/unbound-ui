@@ -6,7 +6,7 @@ use std::ops::{Deref, DerefMut};
 use accesskit::Role;
 use showcase::pages::text_render::{
     resolve_feature, FeatureResolution, TextConsoleGroup, TextFeatureKey, FEATURE_RULES,
-    GROUP_PART_BASE, STATUS_BAR_PART,
+    GROUP_PART_BASE, PART_BACKEND_COSMIC, PART_BACKEND_DW, STATUS_BAR_PART,
 };
 use showcase::pages::{CategoryId, PageId};
 use showcase::shell::GalleryApp;
@@ -362,4 +362,114 @@ fn table_driven_rules_comprehensive_coverage() {
             );
         }
     }
+}
+
+static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 验收条件 1、2：像素组内 DirectWrite 与 Swash 可操作切换，状态栏同步反映实际生效后端。
+#[test]
+fn text_render_backend_interactive_toggle_and_report_sync() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+    let cosmic_btn_node = target::id(Target::Demo(page_index, 0, PART_BACKEND_COSMIC));
+    let dw_btn_node = target::id(Target::Demo(page_index, 0, PART_BACKEND_DW));
+
+    // 1. 点击切换到 Cosmic (Swash) 后端
+    app.click_node(cosmic_btn_node);
+    assert_eq!(
+        app.state.text_render.report.backend,
+        RasterBackend::Cosmic,
+        "effective backend must switch to Cosmic"
+    );
+    assert_eq!(
+        app.state.text_render.settings.raster_backend,
+        RasterBackend::Cosmic
+    );
+
+    // 2. 点击切换回 DirectWrite 后端
+    #[cfg(windows)]
+    {
+        app.click_node(dw_btn_node);
+        assert_eq!(
+            app.state.text_render.report.backend,
+            RasterBackend::DirectWrite,
+            "effective backend must switch to DirectWrite on Windows"
+        );
+        assert_eq!(
+            app.state.text_render.settings.raster_backend,
+            RasterBackend::DirectWrite
+        );
+    }
+}
+
+/// 验收条件 1、2、3：初始化失败静默回退 swash，状态栏显示实际后端并计数递增，切页不复位。
+#[test]
+fn text_render_init_failure_fallback_and_counter_persistence() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+    let cosmic_btn_node = target::id(Target::Demo(page_index, 0, PART_BACKEND_COSMIC));
+    let dw_btn_node = target::id(Target::Demo(page_index, 0, PART_BACKEND_DW));
+    let status_node_id = target::id(Target::Demo(page_index, 0, STATUS_BAR_PART));
+
+    // 初始状态下先切到 Cosmic 确保当前不在 DirectWrite
+    app.click_node(cosmic_btn_node);
+    assert_eq!(
+        app.state.text_render.report.backend,
+        RasterBackend::Cosmic,
+        "pre-check: must switch to Cosmic initially"
+    );
+    let initial_fallback_count = app.state.text_render.report.fallback_count;
+
+    // 注入 DirectWrite 强制初始化失败环境
+    std::env::set_var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL", "1");
+
+    // 点击切换至 DirectWrite
+    app.click_node(dw_btn_node);
+
+    // 清理环境变量
+    std::env::remove_var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL");
+
+    // 验证实际生效后端回退到 Cosmic
+    assert_eq!(
+        app.state.text_render.report.backend,
+        RasterBackend::Cosmic,
+        "effective backend must fallback to Cosmic on initialization failure"
+    );
+
+    // 回退计数必须单调递增
+    let updated_fallback_count = app.state.text_render.report.fallback_count;
+    assert_eq!(
+        updated_fallback_count,
+        initial_fallback_count + 1,
+        "fallback count must increment upon fallback"
+    );
+
+    // 展开状态栏回退原因详情
+    if !app.state.text_render.fallback_details_expanded {
+        app.click_node(status_node_id);
+    }
+    assert!(app.state.text_render.fallback_details_expanded);
+    assert!(app.state.text_render.report.last_fallback_reason.is_some());
+
+    // 切页测试：切至 Buttons 页面后重绘
+    app.navigate(PageId::Buttons);
+    app.rebuild(VIEWPORT);
+
+    // 再切回 TextRender 页面并重绘
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    // 验证切页与重绘后回退计数不复位
+    assert_eq!(
+        app.state.text_render.report.fallback_count, updated_fallback_count,
+        "fallback count must not reset when navigating across pages"
+    );
 }
