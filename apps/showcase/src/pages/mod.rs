@@ -1121,6 +1121,32 @@ impl DemoCtx<'_, '_> {
         self.part(part)
     }
 
+    pub fn control_state(
+        &mut self,
+        part: u16,
+        rect: Rect,
+        role: accesskit::Role,
+        label: &str,
+        disabled: bool,
+        selected: bool,
+    ) -> u64 {
+        let node = self.part(part);
+        self.canvas.control(
+            node,
+            rect,
+            role,
+            label,
+            if disabled {
+                unbound_input::CursorKind::NotAllowed
+            } else {
+                unbound_input::CursorKind::Pointer
+            },
+            disabled,
+            selected,
+        );
+        node
+    }
+
     pub fn control_expandable(
         &mut self,
         part: u16,
