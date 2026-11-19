@@ -138,6 +138,24 @@ pub enum EmojiBackend {
     Cosmic,
 }
 
+/// Emoji 来源。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum EmojiSource {
+    #[default]
+    System,
+    Builtin,
+    Grid,
+}
+
+/// Emoji 失败回退策略。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum EmojiFallback {
+    #[default]
+    Swash,
+    Mono,
+    Placeholder,
+}
+
 /// 距离场生成模式。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum DistanceFieldMode {
@@ -214,6 +232,12 @@ pub struct TextRenderSettings {
     pub emoji_presentation: EmojiPresentation,
     /// Emoji 光栅化后端（跟随正文 / DirectWrite / Cosmic）。
     pub emoji_backend: EmojiBackend,
+    /// Emoji 来源（系统 / 内置 / 网格）。
+    pub emoji_source: EmojiSource,
+    /// Emoji 回退策略。
+    pub emoji_fallback: EmojiFallback,
+    /// Emoji 调色板索引。
+    pub palette_index: u16,
 
     // === 合成组 (Composition Group) ===
     /// 混合色彩空间（sRGB / 线性）。
@@ -243,6 +267,9 @@ impl Default for TextRenderSettings {
             padding: 2,
             emoji_presentation: EmojiPresentation::default(),
             emoji_backend: EmojiBackend::default(),
+            emoji_source: EmojiSource::default(),
+            emoji_fallback: EmojiFallback::default(),
+            palette_index: 0,
             blend_space: BlendSpace::default(),
             layer_mode: LayerMode::default(),
         }
@@ -269,6 +296,9 @@ impl PartialEq for TextRenderSettings {
             && self.padding == other.padding
             && self.emoji_presentation == other.emoji_presentation
             && self.emoji_backend == other.emoji_backend
+            && self.emoji_source == other.emoji_source
+            && self.emoji_fallback == other.emoji_fallback
+            && self.palette_index == other.palette_index
             && self.blend_space == other.blend_space
             && self.layer_mode == other.layer_mode
     }
@@ -311,6 +341,9 @@ impl TextRenderSettings {
             || self.padding != other.padding
             || self.emoji_presentation != other.emoji_presentation
             || self.emoji_backend != other.emoji_backend
+            || self.emoji_source != other.emoji_source
+            || self.emoji_fallback != other.emoji_fallback
+            || self.palette_index != other.palette_index
         {
             return InvalidationTier::Bitmap;
         }

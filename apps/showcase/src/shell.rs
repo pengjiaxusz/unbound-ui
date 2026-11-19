@@ -2621,6 +2621,81 @@ impl GalleryApp {
                                 self.state.text_render.settings.line_height = 28.0;
                                 self.state.bump();
                             }
+                            pages::text_render::PART_EMOJI_PRES_COLOR => {
+                                let caps = unbound_text::TextCapabilities::probe();
+                                let res = pages::text_render::resolve_feature(
+                                    pages::text_render::TextFeatureKey::EmojiPresentationColor,
+                                    &caps,
+                                    &self.state.text_render.settings,
+                                );
+                                if !res.disabled {
+                                    self.state.text_render.settings.emoji_presentation =
+                                        unbound_text::EmojiPresentation::Color;
+                                    self.labels.cache.apply_settings(
+                                        &self.state.text_render.settings,
+                                        Some(&mut self.labels.engine),
+                                    );
+                                    self.state.text_render.report = self.labels.cache.report();
+                                    self.state.bump();
+                                }
+                            }
+                            pages::text_render::PART_EMOJI_PRES_MONO => {
+                                self.state.text_render.settings.emoji_presentation =
+                                    unbound_text::EmojiPresentation::Mono;
+                                self.labels.cache.apply_settings(
+                                    &self.state.text_render.settings,
+                                    Some(&mut self.labels.engine),
+                                );
+                                self.state.text_render.report = self.labels.cache.report();
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_EMOJI_BACKEND_FOLLOW => {
+                                self.state.text_render.settings.emoji_backend =
+                                    unbound_text::EmojiBackend::Follow;
+                                self.labels.cache.apply_settings(
+                                    &self.state.text_render.settings,
+                                    Some(&mut self.labels.engine),
+                                );
+                                self.state.text_render.report = self.labels.cache.report();
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_EMOJI_BACKEND_DW => {
+                                let caps = unbound_text::TextCapabilities::probe();
+                                let res = pages::text_render::resolve_feature(
+                                    pages::text_render::TextFeatureKey::EmojiBackendDirectWrite,
+                                    &caps,
+                                    &self.state.text_render.settings,
+                                );
+                                if !res.disabled {
+                                    self.state.text_render.settings.emoji_backend =
+                                        unbound_text::EmojiBackend::DirectWrite;
+                                    self.labels.cache.apply_settings(
+                                        &self.state.text_render.settings,
+                                        Some(&mut self.labels.engine),
+                                    );
+                                    self.state.text_render.report = self.labels.cache.report();
+                                    self.state.bump();
+                                }
+                            }
+                            pages::text_render::PART_EMOJI_BACKEND_COSMIC => {
+                                self.state.text_render.settings.emoji_backend =
+                                    unbound_text::EmojiBackend::Cosmic;
+                                self.labels.cache.apply_settings(
+                                    &self.state.text_render.settings,
+                                    Some(&mut self.labels.engine),
+                                );
+                                self.state.text_render.report = self.labels.cache.report();
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_EMOJI_SOURCE_SYSTEM => {
+                                self.state.text_render.settings.emoji_source =
+                                    unbound_text::EmojiSource::System;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_EMOJI_SOURCE_BUILTIN
+                            | pages::text_render::PART_EMOJI_SOURCE_GRID => {
+                                // 禁用项，不生效
+                            }
                             _ => {}
                         }
                     }
