@@ -1,6 +1,7 @@
 //! 10_win11_native_desktop_shell：现代 Windows 10/11 原生桌面外壳示例。
 //!
 //! 演示内容：
+//! - 一行配置声明开启原生 Windows 11 云母（Mica）后景材质。
 //! - 无边框窗口样式与支持 Windows 11 Snap Layouts 的自定义标题栏。
 //! - 通过 [`FileDropDesc`] 集成系统文件拖放目标。
 //! - 系统通知、横幅与安全水印。
@@ -112,6 +113,7 @@ fn main() -> Result<(), PlatformError> {
         title: "10_win11_native_desktop_shell - Unbound UI".to_string(),
         width: 900,
         height: 650,
+        backdrop: Some(WindowBackdropMaterial::Mica),
         ..Default::default()
     };
     run_windowed(Win11ShellApp, config)
