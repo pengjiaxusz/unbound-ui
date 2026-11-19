@@ -209,8 +209,6 @@ pub struct WindowedRunner<A: Application> {
     on_frame: Option<FrameHook<A>>,
     /// 窗口外观意图账本。
     appearance: WindowAppearance,
-    /// 窗口后景材质意图。
-    backdrop_intent: Option<WindowBackdropMaterial>,
 }
 
 impl<A: Application> WindowedRunner<A> {
@@ -219,20 +217,17 @@ impl<A: Application> WindowedRunner<A> {
         let (w, h) = (config.width.max(1), config.height.max(1));
         let viewport = Vec2::new(w as f32, h as f32);
         let mut runtime = AppRuntime::new(app, viewport);
+        runtime.set_backdrop(config.backdrop);
         runtime.set_clipboard(Box::new(WinClipboard(std::cell::RefCell::new(
             unbound_platform::SystemClipboard::new(),
         ))));
         let ctx = runtime.context();
         let theme = ThemeState::new(ThemeSet::for_product(ctx.preset, ctx.accent), ctx.theme);
 
-        // 意图开启时表面合成方式强制为预乘，忽略宿主显式设置的合成方式；
-        // 意图关闭或无材质时沿用配置中的合成方式。
-        let surface_alpha =
-            if config.backdrop.is_some() && config.backdrop != Some(WindowBackdropMaterial::None) {
-                SurfaceAlpha::PreMultiplied
-            } else {
-                config.surface_alpha
-            };
+        // 遵循 ADR 0001：合成方式在窗口生命周期内固定，由平台能力决定，不随模式切换改变。
+        // 若驱动支持预乘 alpha，则生命周期统一采用预乘合成；关闭或自绘路径通过外观意图
+        // 账本派生的 clear_alpha = 1.0 维持视觉不透明，确保运行期 set_backdrop 切换时无需重建交换链。
+        let surface_alpha = SurfaceAlpha::PreMultiplied;
 
         Self {
             runtime,
@@ -256,7 +251,6 @@ impl<A: Application> WindowedRunner<A> {
             frame_metrics: None,
             hwnd: None,
             appearance: WindowAppearance::new(),
-            backdrop_intent: config.backdrop,
         }
     }
 
@@ -349,7 +343,9 @@ impl<A: Application> WindowedRunner<A> {
         let theme = self.runtime.context().theme;
         self.appearance
             .set_host_clear_alpha(self.runtime.clear_alpha());
-        let diff = self.appearance.set(self.backdrop_intent, caps, theme);
+        let diff = self
+            .appearance
+            .set_intent(self.runtime.backdrop_intent(), caps, theme);
         self.apply_appearance_diff(hwnd, diff);
     }
 
@@ -362,6 +358,7 @@ impl<A: Application> WindowedRunner<A> {
                     let _ = set_window_backdrop(hwnd, material);
                 }
                 BackdropChannel::AccentTint(argb) => {
+                    let _ = set_window_backdrop(hwnd, WindowBackdropMaterial::None);
                     let _ = set_window_accent_tint(hwnd, argb);
                 }
                 BackdropChannel::Off => {
