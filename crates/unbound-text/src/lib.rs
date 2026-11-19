@@ -41,8 +41,8 @@ pub use report::TextRenderReport;
 pub use sdf::{from_coverage, reconstruct_coverage, SdfBitmap};
 pub use selection::{ime_cursor_area, merge_line_rects, outline_polygon, RoundedSlot};
 pub use settings::{
-    EmojiBackend, EmojiPresentation, InvalidationTier, LineBreakMode, PhaseMode,
-    TextRenderSettings, TextShaper,
+    BlendSpace, DistanceFieldMode, EmojiBackend, EmojiPresentation, InvalidationTier, LayerMode,
+    LineBreakMode, PhaseMode, TextRenderSettings, TextShaper,
 };
 pub use shaping::{
     cjk_family_for_locale, PositionedGlyph, ShapedText, TextCacheStats, TextEngine, TextLine,
@@ -50,3 +50,15 @@ pub use shaping::{
 };
 
 // 亚像素相位档位运行期可切与整表失效支持。
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lib_exports_distance_field_and_composition() {
+        let _ = DistanceFieldMode::Off;
+        let _ = BlendSpace::Srgb;
+        let _ = LayerMode::Direct;
+    }
+}
