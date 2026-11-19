@@ -18,6 +18,8 @@ use rustc_hash::FxHashMap;
 use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
 
+use crate::settings::{InvalidationTier, TextRenderSettings};
+
 /// 将所有影响塑形的属性打包为单一可比较的值。
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
@@ -683,9 +685,23 @@ impl TextEngine {
     /// 清空两级缓存（主题/字体重载或收到内存压力信号时调用）。
     pub fn clear_caches(&mut self) {
         self.shape_cache.clear();
+        self.layout_cache.clear();
         self.wrap_cache.clear();
         self.buffer = None;
         self.buffer_metrics = None;
+    }
+
+    /// 比对新旧设置并在排版语义或位图变更时清空缓存。
+    pub fn apply_settings(
+        &mut self,
+        old_settings: &TextRenderSettings,
+        new_settings: &TextRenderSettings,
+    ) -> InvalidationTier {
+        let tier = old_settings.invalidation_tier(new_settings);
+        if tier >= InvalidationTier::Typographic {
+            self.clear_caches();
+        }
+        tier
     }
 
     fn hash_text(text: &str) -> u64 {
