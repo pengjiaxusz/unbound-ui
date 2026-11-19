@@ -54,6 +54,7 @@ use unbound_widgets::switch::SwitchDesc;
 use unbound_widgets::{BackdropRequest, ControlState, SceneCollector, WidgetOutput};
 use unbound_world::{NodeId, UiWorld};
 
+pub mod appearance;
 pub mod assets;
 pub mod backdrop;
 pub mod guest_bridge;
@@ -67,6 +68,10 @@ pub mod scheduler;
 pub mod state_store;
 pub mod window_runner;
 
+pub use appearance::{
+    backdrop_channel_request, dwm_material_to_platform, AppearanceCaps, AppearanceDiff,
+    AppearanceIntent, BackdropChannel, WindowAppearance,
+};
 pub use assets::{AssetHub, AssetResidency};
 pub use backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID};
 pub use guest_bridge::GuestAppAdapter;
