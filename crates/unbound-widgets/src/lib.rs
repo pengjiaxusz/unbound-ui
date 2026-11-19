@@ -26,15 +26,22 @@ pub mod slot_fixture;
 pub mod title_bar;
 
 pub use slot_fixture::{
-    apply_recursive_disabled_propagation, emit_canonical_list_rows_fixture,
-    emit_canonical_path_fixture, emit_canonical_segmented_fixture,
-    emit_canonical_text_rows_fixture, emit_canonical_tree_fixture, remap_token_to_disabled,
-    FixtureState, ListRowsFixtureOutput, PathFixtureOutput, TextRowsFixtureOutput,
-    TreeFixtureOutput, CANONICAL_LIST_ITEMS, CANONICAL_PATH_ITEMS, CANONICAL_PATH_SEPARATOR,
-    CANONICAL_ROW_ITEMS, CANONICAL_SEGMENTED_ITEMS, CANONICAL_TREE_CHILD, CANONICAL_TREE_ROOT,
-    STANDARD_FONT_SIZE, STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT, STANDARD_PILL_RADIUS,
-    STANDARD_PILL_WIDTH, STANDARD_STACK_SPACING, STANDARD_TREE_INDENT, STANDARD_TREE_ITEM_HEIGHT,
-    WINUI_DISABLED_OPACITY,
+    apply_recursive_disabled_propagation, emit_canonical_annotated_scroll_bar_fixture,
+    emit_canonical_flip_view_fixture, emit_canonical_grid_fixture,
+    emit_canonical_list_rows_fixture, emit_canonical_path_fixture, emit_canonical_refresh_fixture,
+    emit_canonical_segmented_fixture, emit_canonical_text_rows_fixture,
+    emit_canonical_tree_fixture, remap_token_to_disabled, AnnotatedScrollBarFixtureOutput,
+    FixtureState, FlipViewFixtureOutput, GridFixtureOutput, ListRowsFixtureOutput,
+    PathFixtureOutput, RefreshFixtureOutput, TextRowsFixtureOutput, TreeFixtureOutput,
+    CANONICAL_FLIP_PAGES, CANONICAL_GRID_ITEMS, CANONICAL_LIST_ITEMS, CANONICAL_PATH_ITEMS,
+    CANONICAL_PATH_SEPARATOR, CANONICAL_REFRESH_TEXT, CANONICAL_ROW_ITEMS,
+    CANONICAL_SEGMENTED_ITEMS, CANONICAL_TREE_CHILD, CANONICAL_TREE_ROOT, STANDARD_FLIP_HEIGHT,
+    STANDARD_FLIP_WIDTH, STANDARD_FONT_SIZE, STANDARD_GRID_CELL_RADIUS, STANDARD_GRID_HEIGHT,
+    STANDARD_GRID_WIDTH, STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT, STANDARD_PILL_RADIUS,
+    STANDARD_PILL_WIDTH, STANDARD_REFRESH_HEIGHT, STANDARD_REFRESH_INDICATOR_SIZE,
+    STANDARD_REFRESH_WIDTH, STANDARD_SCROLL_BAR_HEIGHT, STANDARD_SCROLL_BAR_TRACK_WIDTH,
+    STANDARD_SCROLL_BAR_WIDTH, STANDARD_STACK_SPACING, STANDARD_TREE_INDENT,
+    STANDARD_TREE_ITEM_HEIGHT, WINUI_DISABLED_OPACITY,
 };
 
 pub use shell::{
