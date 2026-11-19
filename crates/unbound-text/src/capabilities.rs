@@ -106,6 +106,11 @@ impl TextCapabilities {
         #[cfg(not(feature = "backend-swash"))]
         let cosmic = CapabilityStatus::NotCompiled;
 
+        #[cfg(feature = "backend-swash")]
+        let color_glyphs = CapabilityStatus::Available;
+        #[cfg(not(feature = "backend-swash"))]
+        let color_glyphs = CapabilityStatus::NotCompiled;
+
         Self {
             directwrite,
             cosmic,
@@ -114,7 +119,7 @@ impl TextCapabilities {
             subpixel_phase_8: CapabilityStatus::Available,
             subpixel_phase_4: CapabilityStatus::Available,
             subpixel_phase_1: CapabilityStatus::Available,
-            color_glyphs: CapabilityStatus::Available,
+            color_glyphs,
             mono_fallback: CapabilityStatus::Available,
             mono_directwrite,
             color_directwrite,

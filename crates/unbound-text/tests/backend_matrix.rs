@@ -32,21 +32,31 @@ fn single_backend_feature_matrix_capabilities_consistency() {
 
     #[cfg(feature = "backend-swash")]
     {
-        // 开启 backend-swash 时，Cosmic 状态必须为 Available
+        // 开启 backend-swash 时，Cosmic 状态必须为 Available，彩色字形亦可用
         assert_eq!(
             caps.cosmic,
             CapabilityStatus::Available,
             "Cosmic must be Available when backend-swash is active"
         );
+        assert_eq!(
+            caps.color_glyphs,
+            CapabilityStatus::Available,
+            "Color glyphs must be Available when backend-swash is active"
+        );
     }
 
     #[cfg(not(feature = "backend-swash"))]
     {
-        // 未开启 backend-swash 时，Cosmic 状态必须为 NotCompiled
+        // 未开启 backend-swash 时，Cosmic 状态必须为 NotCompiled，彩色字形亦未编译
         assert_eq!(
             caps.cosmic,
             CapabilityStatus::NotCompiled,
             "Cosmic must be NotCompiled when backend-swash is not active"
+        );
+        assert_eq!(
+            caps.color_glyphs,
+            CapabilityStatus::NotCompiled,
+            "Color glyphs must be NotCompiled when backend-swash is not active"
         );
     }
 }
@@ -117,11 +127,23 @@ fn switching_to_uncompiled_backend_is_safe_and_records_fallback() {
 
     #[cfg(not(feature = "backend-swash"))]
     {
-        // 当 Swash 未编译时，如果是 DirectWrite 构建，请求 Cosmic 光栅化应安全返回 None
+        // 当 Swash 未编译时，请求切换至 Cosmic 应安全回退到 DirectWrite 并记录回退
+        cache.set_backend(RasterBackend::Cosmic);
         assert_eq!(
             cache.backend(),
             RasterBackend::DirectWrite,
-            "Must remain on DirectWrite when Swash is not compiled"
+            "Must fall back to DirectWrite when Swash is not compiled"
+        );
+        assert!(
+            cache.fallback_count() > 0,
+            "Fallback count must increment when requesting uncompiled Cosmic"
+        );
+        assert!(
+            cache
+                .last_fallback_reason()
+                .unwrap_or("")
+                .contains("Cosmic (swash) backend is not compiled"),
+            "Fallback reason must note that Cosmic is not compiled"
         );
     }
 

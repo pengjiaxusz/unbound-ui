@@ -14,7 +14,7 @@ fn create_engine() -> TextEngine {
 /// 验收条件 1、3：来回切换 20 次，无字形串味、无图集泄漏、图集页数不增长。
 #[test]
 fn switching_rasterizer_twenty_times_no_leak_no_growth() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
     let caps = unbound_text::TextCapabilities::probe();
     if !caps.cosmic.is_available() || !caps.directwrite.is_available() {
         return;
@@ -98,7 +98,7 @@ fn switching_rasterizer_twenty_times_no_leak_no_growth() {
 #[cfg(windows)]
 #[test]
 fn switching_coverage_distribution_matches_target_backend() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
     let caps = unbound_text::TextCapabilities::probe();
     if !caps.cosmic.is_available() || !caps.directwrite.is_available() {
         return;
@@ -174,7 +174,11 @@ fn switching_coverage_distribution_matches_target_backend() {
 #[cfg(all(windows, feature = "backend-directwrite"))]
 #[test]
 fn directwrite_init_failure_fallback_and_monotonic_counter() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+    let caps = unbound_text::TextCapabilities::probe();
+    if !caps.cosmic.is_available() || !caps.directwrite.is_available() {
+        return;
+    }
     let mut engine = create_engine();
     let mut cache = GlyphCache::with_backend(RasterBackend::Cosmic);
 
