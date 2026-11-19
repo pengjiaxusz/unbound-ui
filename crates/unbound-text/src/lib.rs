@@ -42,8 +42,8 @@ pub use atlas::{
 };
 pub use capabilities::{CapabilityStatus, TextCapabilities};
 pub use composite::{
-    cluster_hash, cluster_ranges, composite, ColorLayer, CompositeBitmap, CompositeOutcome,
-    LayerColor,
+    bgra_premul_to_rgba, cluster_hash, cluster_ranges, composite, composite_layers, BitmapLayer,
+    ColorLayer, CompositeBitmap, CompositeOutcome, Layer as CompositeLayer, LayerColor,
 };
 #[cfg(all(windows, feature = "backend-directwrite"))]
 pub use directwrite::{DirectWriteEngine, DirectWriteRasterizer};

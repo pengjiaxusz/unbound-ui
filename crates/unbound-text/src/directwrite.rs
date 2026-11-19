@@ -10,8 +10,9 @@
 //!
 //! * 单字形独立光栅化，复用现有八相位图集键，避免引入第二套缓存；
 //! * 彩色字体（Emoji）走 `TranslateColorGlyphRun`：它把 COLR（含 v1）摊平成
-//!   一串实色矢量层，每层复用同一套覆盖率分析，最后交给 [`crate::composite`]
-//!   合成。位图层（CBDT / PNG）与 SVG 层不在白名单内，遇到即整簇回退（ADR 0017）；
+//!   一串层，矢量层复用同一套覆盖率分析、位图层（CBDT / PNG / JPEG）走
+//!   `GetGlyphImageData` 解码，最后交给 [`crate::composite`] 合成。SVG 层
+//!   与画笔树不在支持范围，遇到即整簇回退（ADR 0017）；
 //! * 彩色层按**簇**翻译：一簇一次调用、一簇一个位图。层跨出本簇字形集合时
 //!   整层丢弃而不是裁切——裁切会画出半对半错的图；
 //! * 距离场与光栅器无关：`sdf::from_coverage` 的输入就是覆盖率位图。
@@ -29,10 +30,12 @@ use windows::core::{Interface, BOOL, PCWSTR};
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_TEXTURE_ALIASED_1x1, DWriteCreateFactory, IDWriteFactory, IDWriteFactory2,
     IDWriteFactory4, IDWriteFont, IDWriteFontCollection, IDWriteFontFace, IDWriteFontFace2,
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
-    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_GLYPH_IMAGE_FORMATS_COLR,
-    DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE, DWRITE_GLYPH_OFFSET, DWRITE_GLYPH_RUN,
-    DWRITE_GRID_FIT_MODE_DISABLED, DWRITE_MEASURING_MODE_NATURAL,
+    IDWriteFontFace4, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
+    DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
+    DWRITE_GLYPH_IMAGE_DATA, DWRITE_GLYPH_IMAGE_FORMATS, DWRITE_GLYPH_IMAGE_FORMATS_COLR,
+    DWRITE_GLYPH_IMAGE_FORMATS_JPEG, DWRITE_GLYPH_IMAGE_FORMATS_PNG,
+    DWRITE_GLYPH_IMAGE_FORMATS_SVG, DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE, DWRITE_GLYPH_OFFSET,
+    DWRITE_GLYPH_RUN, DWRITE_GRID_FIT_MODE_DISABLED, DWRITE_MEASURING_MODE_NATURAL,
     DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
 };
 use windows_numerics::Vector2;
@@ -65,17 +68,31 @@ pub struct ClusterGlyph {
 }
 
 /// 一层彩色字形的光栅化结果。
-pub struct ColorLayerRaster {
-    /// 直通 alpha 的实色，分量为 `0..=1`。
-    pub color: [f32; 4],
-    pub width: u32,
-    pub height: u32,
-    /// 位图左缘相对簇原点的水平偏移。
-    pub left: i32,
-    /// 位图顶缘相对簇原点的垂直偏移（向下为正）。
-    pub top: i32,
-    /// 单通道覆盖率位图，长度等于 `width * height`。
-    pub data: Vec<u8>,
+pub enum ColorLayerRaster {
+    /// 矢量层：实色 × 单通道覆盖率。COLR（含 v1 摊平）与 `TrueType` 轮廓走这里。
+    Solid {
+        /// 直通 alpha 的实色，分量为 `0..=1`。
+        color: [f32; 4],
+        width: u32,
+        height: u32,
+        /// 位图左缘相对簇原点的水平偏移。
+        left: i32,
+        /// 位图顶缘相对簇原点的垂直偏移（向下为正）。
+        top: i32,
+        /// 单通道覆盖率位图，长度等于 `width * height`。
+        coverage: Vec<u8>,
+    },
+    /// 位图层：已解码并转成直通 alpha 的 RGBA8。CBDT / PNG / JPEG 走这里。
+    Bitmap {
+        width: u32,
+        height: u32,
+        /// 位图左缘相对簇原点的水平偏移。
+        left: i32,
+        /// 位图顶缘相对簇原点的垂直偏移（向下为正）。
+        top: i32,
+        /// 直通 alpha 的 RGBA8，长度等于 `width * height * 4`。
+        rgba: Vec<u8>,
+    },
 }
 
 /// 彩色簇的翻译结论。
@@ -84,7 +101,8 @@ pub enum ColorClusterOutcome {
     Layers(Vec<ColorLayerRaster>),
     /// 该 run 不是彩色字形（`DWRITE_E_NOCOLOR`）：按普通单色 run 处理，不计回退。
     NotColor,
-    /// 确实是彩色字体，但这一簇翻译不出可合成的层（格式白名单外 / 跨簇层 / 空包围盒）。
+    /// 确实是彩色字体，但这一簇翻译不出可合成的层：SVG / 画笔树层、
+    /// 位图层解码失败、跨界层、空包围盒。
     Unsupported(&'static str),
 }
 
@@ -296,7 +314,7 @@ impl DirectWriteRasterizer {
             .collect();
 
         let mut run = DWRITE_GLYPH_RUN {
-            fontFace: ManuallyDrop::new(Some(face)),
+            fontFace: ManuallyDrop::new(Some(face.clone())),
             fontEmSize: font_size,
             glyphCount: indices.len() as u32,
             glyphIndices: indices.as_ptr(),
@@ -306,12 +324,17 @@ impl DirectWriteRasterizer {
             bidiLevel: 0,
         };
 
+        // 请求层时把位图格式一并要进来：位图层（CBDT/PNG/JPEG）只出现在
+        // `glyphImageFormat` 里，不请求就永远拿不到，会被误判成"没有彩色层"。
         let translated = unsafe {
             factory4.TranslateColorGlyphRun(
                 Vector2 { X: 0.0, Y: 0.0 },
                 &run,
                 None,
-                DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE | DWRITE_GLYPH_IMAGE_FORMATS_COLR,
+                DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE
+                    | DWRITE_GLYPH_IMAGE_FORMATS_COLR
+                    | DWRITE_GLYPH_IMAGE_FORMATS_PNG
+                    | DWRITE_GLYPH_IMAGE_FORMATS_JPEG,
                 DWRITE_MEASURING_MODE_NATURAL,
                 None,
                 palette_index,
@@ -325,7 +348,12 @@ impl DirectWriteRasterizer {
             Err(_) => return ColorClusterOutcome::Unsupported("TranslateColorGlyphRun failed"),
         };
 
-        let allowed = DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE.0 | DWRITE_GLYPH_IMAGE_FORMATS_COLR.0;
+        // 单字形 ppem 是整数；位图层按这个尺寸取预渲染位图。
+        //
+        // 字号为非整数时（例如 16.5 px）位图会按 17 px 取，画回 16.5 px 的
+        // 空间里——这是字体只提供整数 strike 决定的，不是这里的取舍。
+        let ppem = font_size.round().max(1.0) as u32;
+        let face4 = face.cast::<IDWriteFontFace4>().ok();
         let mut layers = Vec::new();
         loop {
             let Ok(has) = (unsafe { enumerator.MoveNext() }) else {
@@ -341,14 +369,7 @@ impl DirectWriteRasterizer {
                 break;
             }
             let layer = unsafe { &*current };
-
-            // 白名单之外（SVG / PNG / JPEG / 画笔树）没有对应的光栅化路径，
-            // 整簇判为不可合成，交给上层按回退策略处理。
-            if layer.glyphImageFormat.0 & !allowed != 0 {
-                return ColorClusterOutcome::Unsupported(
-                    "color layer format is outside the TT|COLR whitelist",
-                );
-            }
+            let format = layer.glyphImageFormat;
 
             // 层里的 glyph id **未必**等于请求的字形：COLRv1 的复合画笔会引用
             // 字体里的其它字形来拼装这一层。所以“是否跨簇”不能靠 id 子集判断；
@@ -356,6 +377,75 @@ impl DirectWriteRasterizer {
             // 它引用的是字体内部字形，画出来仍属于本簇。
             if layer.Base.glyphRun.glyphCount == 0 {
                 continue;
+            }
+
+            // 位图层（CBDT / PNG / JPEG）自带颜色，走解码分支。
+            match classify_layer_format(format) {
+                LayerKind::Bitmap => {
+                    let Some(face4) = face4.as_ref() else {
+                        return ColorClusterOutcome::Unsupported(
+                            "this DirectWrite version does not expose glyph image data",
+                        );
+                    };
+                    // 位图层理论上不跨字形；真跨了就没法用单字形 API 取，整簇回退。
+                    if layer.Base.glyphRun.glyphCount != 1 {
+                        return ColorClusterOutcome::Unsupported(
+                            "a bitmap color layer spans more than one glyph",
+                        );
+                    }
+                    let glyph_id = unsafe { *layer.Base.glyphRun.glyphIndices };
+                    let mut image = DWRITE_GLYPH_IMAGE_DATA::default();
+                    let mut context: *mut core::ffi::c_void = core::ptr::null_mut();
+                    let decoded = unsafe {
+                        face4.GetGlyphImageData(glyph_id, ppem, format, &mut image, &mut context)
+                    };
+                    if decoded.is_err() || image.imageData.is_null() {
+                        unsafe { face4.ReleaseGlyphImageData(context) };
+                        return ColorClusterOutcome::Unsupported(
+                            "a bitmap color layer could not be decoded",
+                        );
+                    }
+                    let size = image.pixelSize;
+                    let bytes = unsafe {
+                        core::slice::from_raw_parts(
+                            image.imageData.cast::<u8>(),
+                            image.imageDataSize as usize,
+                        )
+                    };
+                    let rgba =
+                        crate::composite::bgra_premul_to_rgba(bytes, size.width, size.height);
+                    // 数据已拷出，DWrite 的临时缓冲可以立刻释放。
+                    unsafe { face4.ReleaseGlyphImageData(context) };
+                    if rgba.is_empty() || size.width == 0 || size.height == 0 {
+                        return ColorClusterOutcome::Unsupported(
+                            "a bitmap color layer decoded to an empty bitmap",
+                        );
+                    }
+                    layers.push(ColorLayerRaster::Bitmap {
+                        width: size.width,
+                        height: size.height,
+                        // 位图原点用 DWrite 的图像坐标系：y 向下，已是相对基线的偏移。
+                        left: image.horizontalLeftOrigin.x
+                            + layer.Base.baselineOriginX.round() as i32,
+                        top: image.horizontalLeftOrigin.y
+                            + layer.Base.baselineOriginY.round() as i32,
+                        rgba,
+                    });
+                    continue;
+                }
+                // SVG 层需要一套 SVG 渲染器，本期不做：整簇回退，但原因要能读。
+                LayerKind::Svg => {
+                    return ColorClusterOutcome::Unsupported(
+                        "SVG color layers are not implemented in this build",
+                    );
+                }
+                // 白名单之外（画笔树 / TIFF / 预乘 BGRA 直出）没有对应路径。
+                LayerKind::Unknown => {
+                    return ColorClusterOutcome::Unsupported(
+                        "color layer uses an image format outside the TT|COLR whitelist",
+                    );
+                }
+                LayerKind::Vector => {}
             }
 
             let color = layer.Base.runColor;
@@ -397,13 +487,13 @@ impl DirectWriteRasterizer {
                 return ColorClusterOutcome::Unsupported("layer coverage texture read failed");
             }
 
-            layers.push(ColorLayerRaster {
+            layers.push(ColorLayerRaster::Solid {
                 color: [color.r, color.g, color.b, color.a],
                 width,
                 height,
                 left: bounds.left + layer.Base.baselineOriginX.round() as i32,
                 top: -(bounds.top + layer.Base.baselineOriginY.round() as i32),
-                data,
+                coverage: data,
             });
         }
 
@@ -412,6 +502,39 @@ impl DirectWriteRasterizer {
         } else {
             ColorClusterOutcome::Layers(layers)
         }
+    }
+
+    /// 扫描系统字体集合，返回第一个声明支持位图彩色层（PNG / JPEG）的字体家族名。
+    ///
+    /// 位图层的端到端验收需要一个 CBDT / sbix 之类的字体；本机的
+    /// `seguiemj.ttf` 全是 COLR 矢量层，所以那条路径没有对象可验。把探测
+    /// 做成公开的诊断入口，测试据此决定「真跑」还是「明确跳过」——跳过
+    /// 原因会打印出来，不会变成静默通过。
+    pub fn find_bitmap_color_family(&self) -> Option<String> {
+        let count = unsafe { self.collection.GetFontFamilyCount() };
+        for i in 0..count {
+            let Ok(family) = (unsafe { self.collection.GetFontFamily(i) }) else {
+                continue;
+            };
+            let fonts = unsafe { family.GetFontCount() };
+            for j in 0..fonts {
+                let Ok(font) = (unsafe { family.GetFont(j) }) else {
+                    continue;
+                };
+                let Ok(face) = (unsafe { font.CreateFontFace() }) else {
+                    continue;
+                };
+                let Ok(face4) = face.cast::<IDWriteFontFace4>() else {
+                    continue;
+                };
+                let formats = unsafe { face4.GetGlyphImageFormats2() };
+                let bitmap = DWRITE_GLYPH_IMAGE_FORMATS_PNG.0 | DWRITE_GLYPH_IMAGE_FORMATS_JPEG.0;
+                if formats.0 & bitmap != 0 {
+                    return Some(family_name(&family));
+                }
+            }
+        }
+        None
     }
 
     fn find_face(&self, key: &FaceKey) -> Option<IDWriteFontFace> {
@@ -468,6 +591,61 @@ impl DirectWriteRasterizer {
         let font: IDWriteFont = unsafe { list.GetFont(0) }.ok()?;
         unsafe { font.CreateFontFace() }.ok()
     }
+}
+
+/// 一层的像素来源分类。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum LayerKind {
+    /// 实色 × 覆盖率：`TrueType` 轮廓与 COLR 层。
+    Vector,
+    /// 预渲染位图：CBDT / PNG / JPEG，需要 `GetGlyphImageData` 解码。
+    Bitmap,
+    /// SVG：需要一套 SVG 渲染器，本期整簇回退。
+    Svg,
+    /// 认识格式位但没有任何实现路径（画笔树 / TIFF / 预乘 BGRA 直出）。
+    Unknown,
+}
+
+/// 按 `glyphImageFormat` 判断一层该怎么画。
+///
+/// 位图判定优先于其它位：一个 PNG 层的格式位里可能同时带 `TRUETYPE`，
+/// 先判矢量会把位图层当成覆盖率位图来画，结果是一张纯色块。
+fn classify_layer_format(format: DWRITE_GLYPH_IMAGE_FORMATS) -> LayerKind {
+    // 空格式位说明 DWrite 没告诉我们这层是什么，按不可处理对待。
+    if format.0 == 0 {
+        return LayerKind::Unknown;
+    }
+    let bitmap = DWRITE_GLYPH_IMAGE_FORMATS_PNG.0 | DWRITE_GLYPH_IMAGE_FORMATS_JPEG.0;
+    if format.0 & bitmap != 0 {
+        return LayerKind::Bitmap;
+    }
+    if format.0 & DWRITE_GLYPH_IMAGE_FORMATS_SVG.0 != 0 {
+        return LayerKind::Svg;
+    }
+    let vector = DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE.0 | DWRITE_GLYPH_IMAGE_FORMATS_COLR.0;
+    if format.0 & !vector == 0 {
+        return LayerKind::Vector;
+    }
+    LayerKind::Unknown
+}
+
+/// 读取字体家族的首选名字（找不到时返回空串）。
+fn family_name(family: &windows::Win32::Graphics::DirectWrite::IDWriteFontFamily) -> String {
+    let Ok(names) = (unsafe { family.GetFamilyNames() }) else {
+        return String::new();
+    };
+    let mut index = 0u32;
+    let mut exists = BOOL(0);
+    let _ = unsafe { names.FindLocaleName(windows::core::w!("en-us"), &mut index, &mut exists) };
+    if !exists.as_bool() {
+        index = 0;
+    }
+    let len = unsafe { names.GetStringLength(index) }.unwrap_or(0);
+    let mut buf = vec![0u16; len as usize + 1];
+    if unsafe { names.GetString(index, &mut buf) }.is_err() {
+        return String::new();
+    }
+    String::from_utf16_lossy(&buf[..len as usize])
 }
 
 /// 在共享的 DirectWrite 文本布局上执行一次测量。
@@ -609,4 +787,67 @@ pub(crate) fn layout_cluster_positions(
         unsafe { layout.GetMetrics(&mut metrics) }.ok()?;
         Some((positions, metrics.widthIncludingTrailingWhitespace))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 位图判定必须先于矢量判定：PNG 层的格式位里可能同时带 `TRUETYPE`，
+    /// 按矢量处理会拿 `CreateGlyphRunAnalysis` 去画一张纯色块。
+    #[test]
+    fn layer_classification_prefers_bitmap_over_outline() {
+        let png_with_outline = DWRITE_GLYPH_IMAGE_FORMATS(
+            DWRITE_GLYPH_IMAGE_FORMATS_PNG.0 | DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE.0,
+        );
+        assert_eq!(classify_layer_format(png_with_outline), LayerKind::Bitmap);
+        assert_eq!(
+            classify_layer_format(DWRITE_GLYPH_IMAGE_FORMATS_JPEG),
+            LayerKind::Bitmap
+        );
+    }
+
+    /// SVG 与其余格式位必须落回退，且分类要能把两者区分开——回退原因不同。
+    #[test]
+    fn layer_classification_routes_svg_and_unknown_formats_to_fallback() {
+        use windows::Win32::Graphics::DirectWrite::{
+            DWRITE_GLYPH_IMAGE_FORMATS_COLR_PAINT_TREE, DWRITE_GLYPH_IMAGE_FORMATS_NONE,
+            DWRITE_GLYPH_IMAGE_FORMATS_PREMULTIPLIED_B8G8R8A8, DWRITE_GLYPH_IMAGE_FORMATS_TIFF,
+        };
+        assert_eq!(
+            classify_layer_format(DWRITE_GLYPH_IMAGE_FORMATS_SVG),
+            LayerKind::Svg
+        );
+        for format in [
+            DWRITE_GLYPH_IMAGE_FORMATS_COLR_PAINT_TREE,
+            DWRITE_GLYPH_IMAGE_FORMATS_PREMULTIPLIED_B8G8R8A8,
+            DWRITE_GLYPH_IMAGE_FORMATS_TIFF,
+            DWRITE_GLYPH_IMAGE_FORMATS_NONE,
+        ] {
+            assert_eq!(
+                classify_layer_format(format),
+                LayerKind::Unknown,
+                "format {:#x} must fall back",
+                format.0
+            );
+        }
+    }
+
+    #[test]
+    fn layer_classification_accepts_colr_and_truetype() {
+        assert_eq!(
+            classify_layer_format(DWRITE_GLYPH_IMAGE_FORMATS_COLR),
+            LayerKind::Vector
+        );
+        assert_eq!(
+            classify_layer_format(DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE),
+            LayerKind::Vector
+        );
+        assert_eq!(
+            classify_layer_format(
+                DWRITE_GLYPH_IMAGE_FORMATS_COLR | DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE
+            ),
+            LayerKind::Vector
+        );
+    }
 }
