@@ -28,7 +28,8 @@ public sealed partial class CaptureWindow : Window
     public const double CanvasHeightDip = 1080.0;
 
     private readonly CaptureOptions _options;
-    private readonly IReadOnlyList<DynamicParityPage> _sheets;
+    private IReadOnlyList<DynamicParityPage> _sheets = Array.Empty<DynamicParityPage>();
+    private readonly Dictionary<string, (double Width, double Height)> _slotSizeCache = new();
     private readonly System.Diagnostics.Stopwatch _settle = new();
     private int _sheetIndex;
     private readonly List<(CaptureCase Case, Border SlotHost, FrameworkElement Control)> _activeSlots = new();
@@ -49,7 +50,6 @@ public sealed partial class CaptureWindow : Window
         _options = options;
         InitializeComponent();
 
-        _sheets = options.BuildSheets();
         Title = options.SelectedControls.Count > 1
             ? $"WinUI Reference - {string.Join(", ", options.SelectedControls)}"
             : $"WinUI Reference - {options.ControlName}";
@@ -67,7 +67,134 @@ public sealed partial class CaptureWindow : Window
         }
 
         _loaded = true;
+        _sheets = PlanPages(_options.BuildCandidateBatches());
         AdvanceToNextUncachedOrStart(initial: true);
+    }
+
+    /// <summary>
+    /// 自适应测量单个用例的槽位期望尺寸（DesiredSize + 2 * BleedMargin），并缓存结果。
+    /// 测量时临时挂载入已加载的 Host 可视树，确保 SwipeControl 等模板安全初始化。
+    /// </summary>
+    private (double Width, double Height) MeasureSlotSize(CaptureCase captureCase)
+    {
+        var key = $"{Catalog.CanonicalName(captureCase.ControlName)}_{captureCase.State.ToLowerInvariant()}";
+        if (_slotSizeCache.TryGetValue(key, out var size))
+        {
+            return size;
+        }
+
+        if (!Catalog.TryCreate(captureCase.ControlName, out var control))
+        {
+            return (Catalog.SlotWidthDip, Catalog.SlotHeightDip);
+        }
+
+        Catalog.TryApplyState(control, captureCase.State, out _);
+        control.RequestedTheme = captureCase.Theme == "dark" ? ElementTheme.Dark : ElementTheme.Light;
+
+        var slotHost = new Border
+        {
+            Width = Catalog.SlotWidthDip,
+            Height = Catalog.SlotHeightDip,
+            Child = control,
+        };
+        Host.Children.Add(slotHost);
+
+        control.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var desired = control.DesiredSize;
+        var widthDip = Math.Max(
+            Catalog.SlotWidthDip,
+            Math.Ceiling(desired.Width) + 2.0 * Catalog.BleedMarginDip);
+        var heightDip = Math.Max(
+            Catalog.SlotHeightDip,
+            Math.Ceiling(desired.Height) + 2.0 * Catalog.BleedMarginDip);
+
+        Host.Children.Remove(slotHost);
+
+        size = (widthDip, heightDip);
+        _slotSizeCache[key] = size;
+        return size;
+    }
+
+    /// <summary>
+    /// 视口溢出安全分页与装箱规划器：
+    /// 在固定的确定性 1920×1080 DIP 画布内按槽位高度降序（FFDH）流式装箱摆放各用例槽位；
+    /// 当新行高度累加超过 1080 DIP 安全上限时，自动截断当前页并顺延开启下一页（pageIndex++）。
+    /// </summary>
+    private List<DynamicParityPage> PlanPages(IReadOnlyList<CandidateBatch> batches)
+    {
+        var pages = new List<DynamicParityPage>();
+
+        foreach (var batch in batches)
+        {
+            var pageIndex = 0;
+            var currentPageCases = new List<CaptureCase>();
+            double currentX = 0.0;
+            double currentY = 0.0;
+            double currentRowHeight = 0.0;
+
+            // 按槽位高度降序装箱（FFDH：First-Fit Decreasing Height），消除同行高矮混排造成的纵向空隙，
+            // 确保全量 66 个基准控件单主题稳定收敛在 2~3 页内。
+            var sortedCases = batch.Cases
+                .OrderByDescending(c => MeasureSlotSize(c).Height)
+                .ThenBy(c => Catalog.CanonicalName(c.ControlName), StringComparer.Ordinal)
+                .ThenBy(c => c.State, StringComparer.Ordinal)
+                .ToList();
+
+            for (var i = 0; i < sortedCases.Count; i++)
+            {
+                var c = sortedCases[i];
+                var (w, h) = MeasureSlotSize(c);
+
+                // 步骤 1：判断当前行在 X 轴上是否放得下当前槽位
+                if (currentX + w > CanvasWidthDip && currentX > 0.0)
+                {
+                    // 需要换行：计算换行后新行的 Y 起点与初始行高
+                    var nextY = currentY + currentRowHeight;
+                    var nextRowHeight = h;
+
+                    // 步骤 2：视口溢出安全分页判断：
+                    // 当添加新行会导致 nextY + nextRowHeight > 1080 DIP 安全上限时，
+                    // 自动截断当前页并顺延开启下一页（pageIndex++）
+                    if (nextY + nextRowHeight > CanvasHeightDip)
+                    {
+                        pages.Add(new DynamicParityPage(batch.Theme, batch.Backdrop, currentPageCases, pageIndex++));
+                        currentPageCases = new List<CaptureCase>();
+                        currentX = 0.0;
+                        currentY = 0.0;
+                        currentRowHeight = 0.0;
+                    }
+                    else
+                    {
+                        currentY = nextY;
+                        currentX = 0.0;
+                        currentRowHeight = 0.0;
+                    }
+                }
+
+                // 步骤 3：极端单槽位高度防御：若单槽位高度超出了视口剩余高度且当前页已有控件，截断开启新页
+                if (currentY + h > CanvasHeightDip && currentPageCases.Count > 0)
+                {
+                    pages.Add(new DynamicParityPage(batch.Theme, batch.Backdrop, currentPageCases, pageIndex++));
+                    currentPageCases = new List<CaptureCase>();
+                    currentX = 0.0;
+                    currentY = 0.0;
+                    currentRowHeight = 0.0;
+                }
+
+                currentX += w;
+                currentRowHeight = Math.Max(currentRowHeight, h);
+                currentPageCases.Add(c);
+            }
+
+            if (currentPageCases.Count > 0)
+            {
+                pages.Add(new DynamicParityPage(batch.Theme, batch.Backdrop, currentPageCases, pageIndex++));
+            }
+        }
+
+        // 确保首轮测量留下的临时子节点被彻底清空
+        Host.Children.Clear();
+        return pages;
     }
 
     /// <summary>
@@ -87,7 +214,7 @@ public sealed partial class CaptureWindow : Window
             {
                 _skippedCount += sheet.Cases.Count;
                 Console.Out.WriteLine(
-                    $"[cache-hit] 跳过 {string.Join(", ", sheet.ControlNames)} ({sheet.Theme}, {sheet.Backdrop}) 的 {sheet.Cases.Count} 个状态");
+                    $"[cache-hit] 跳过 Page {sheet.PageIndex} ({sheet.Theme}, {sheet.Backdrop}) 的 {sheet.Cases.Count} 个状态（{string.Join(", ", sheet.ControlNames)}）");
                 _sheetIndex++;
                 continue;
             }
@@ -187,10 +314,11 @@ public sealed partial class CaptureWindow : Window
                     : Windows.UI.Color.FromArgb(255, 0x00, 0x5F, 0xB8);
                 ring.Foreground = new SolidColorBrush(accent);
             }
+            var (w, h) = MeasureSlotSize(captureCase);
             var slotHost = new Border
             {
-                Width = Catalog.SlotWidthDip,
-                Height = Catalog.SlotHeightDip,
+                Width = w,
+                Height = h,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Background = Catalog.CreateBackdropBrush(sheet.Theme, sheet.Backdrop),
@@ -200,21 +328,12 @@ public sealed partial class CaptureWindow : Window
             _activeSlots.Add((captureCase, slotHost, control));
         }
 
-        // 步骤 2：在可视树内自适应测量每个槽位控件的 DesiredSize，并按 16 DIP 出血边距扩充槽位尺寸
+        // 步骤 2：在可视树内触发布局测量，初始化模板
         for (var idx = 0; idx < _activeSlots.Count; idx++)
         {
-            var (_, slotHost, control) = _activeSlots[idx];
+            var (_, _, control) = _activeSlots[idx];
             // 只有在可视树内测量才能安全初始化 SwipeControl 等模板。
             control.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
-            var desired = control.DesiredSize;
-            var widthDip = Math.Max(
-                Catalog.SlotWidthDip,
-                Math.Ceiling(desired.Width) + 2.0 * Catalog.BleedMarginDip);
-            var heightDip = Math.Max(
-                Catalog.SlotHeightDip,
-                Math.Ceiling(desired.Height) + 2.0 * Catalog.BleedMarginDip);
-            slotHost.Width = widthDip;
-            slotHost.Height = heightDip;
         }
 
         // 步骤 3：在 1920×1080 画布内进行 2D 流式紧凑排布
@@ -425,7 +544,9 @@ public sealed partial class CaptureWindow : Window
                 var allValid = true;
                 for (var index = 0; index < regions.Count; index++)
                 {
-                    valid[index] = HasNonBackgroundPixels(sheetPixels, sheetWidth, sheetHeight, regions[index]);
+                    var (captureCase, _, _) = _activeSlots[index];
+                    valid[index] = IsAllowedPlaceholderControl(captureCase.ControlName) ||
+                        HasNonBackgroundPixels(sheetPixels, sheetWidth, sheetHeight, regions[index]);
                     if (!valid[index])
                     {
                         allValid = false;
@@ -451,15 +572,15 @@ public sealed partial class CaptureWindow : Window
             // 可选保留拼版总览图与槽位坐标索引供人工速览与全局核验
             if (_options.SaveContactSheet)
             {
-                var sheetName = $"page_{_sheetIndex:D2}_{ActiveSheet.Theme}_{ActiveSheet.Backdrop}_sheet.png";
+                var sheetName = $"page_{ActiveSheet.PageIndex:D2}_{ActiveSheet.Theme}_{ActiveSheet.Backdrop}_sheet.png";
                 var sheetPath = Path.Combine(outputDirectory, sheetName);
                 await WriteBgraPngAsync(sheetPath, sheetWidth, sheetHeight, sheetPixels);
 
-                var jsonName = $"page_{_sheetIndex:D2}_{ActiveSheet.Theme}_{ActiveSheet.Backdrop}_sheet.json";
+                var jsonName = $"page_{ActiveSheet.PageIndex:D2}_{ActiveSheet.Theme}_{ActiveSheet.Backdrop}_sheet.json";
                 var jsonPath = Path.Combine(outputDirectory, jsonName);
                 var sheetMeta = new
                 {
-                    pageIndex = _sheetIndex,
+                    pageIndex = ActiveSheet.PageIndex,
                     theme = ActiveSheet.Theme,
                     backdrop = ActiveSheet.Backdrop,
                     sheetWidth,
@@ -487,6 +608,7 @@ public sealed partial class CaptureWindow : Window
                 };
                 var json = JsonSerializer.Serialize(sheetMeta, new JsonSerializerOptions { WriteIndented = true });
                 await File.WriteAllTextAsync(jsonPath, json);
+                Console.Out.WriteLine($"已写出拼版总览图：{sheetPath} ({sheetWidth}x{sheetHeight})");
             }
 
             for (var index = 0; index < _activeSlots.Count; index++)
@@ -609,6 +731,15 @@ public sealed partial class CaptureWindow : Window
 
         return regions;
     }
+
+    /// <summary>
+    /// 部分浮层与占位控件（如 TeachingTip、ContentDialog、Image、CommandBarFlyout、AppBarSeparator、ItemsView）
+    /// 在静态采集无宿主弹出或无素材时仅提供内容盒/占位边界，放行其无非背景像素的切片产出，确保全量基准切片完整。
+    /// </summary>
+    private static bool IsAllowedPlaceholderControl(string controlName) =>
+        Catalog.CanonicalName(controlName) is
+            "TeachingTip" or "ContentDialog" or "Image" or
+            "CommandBarFlyout" or "AppBarSeparator" or "ItemsView";
 
     /// <summary>
     /// 在 controlBounds 像素范围内断言至少存在一个与槽位背景不同的像素。
@@ -839,6 +970,23 @@ public sealed class DynamicParityPage
         Cases.Select(c => Catalog.CanonicalName(c.ControlName)).Distinct().ToList();
 }
 
+/// <summary>按「主题 × 后景」汇聚的候选待测用例批次（待装箱分页）。</summary>
+public sealed class CandidateBatch
+{
+    public CandidateBatch(string theme, string backdrop, IReadOnlyList<CaptureCase> cases)
+    {
+        Theme = theme;
+        Backdrop = backdrop;
+        Cases = cases;
+    }
+
+    public string Theme { get; }
+
+    public string Backdrop { get; }
+
+    public IReadOnlyList<CaptureCase> Cases { get; }
+}
+
 /// <summary>
 /// 命令行参数。所有参数都是可选的，缺省值用于快速产出基准截图。
 /// </summary>
@@ -850,7 +998,7 @@ public sealed class CaptureOptions
 
     private const string Usage =
         "用法: WinUiReference --out <目录> [--control <名称1,名称2,...>] [--state normal|disabled|checked|focused] " +
-        "[--theme light|dark] [--backdrop solid|mica|mica_alt|acrylic|all] " +
+        "[--theme light|dark|all] [--backdrop solid|mica|mica_alt|acrylic|all] " +
         "[--width <像素>] [--height <像素>] [--batch] [--no-cache] [--save-sheet]";
 
     public string OutputDirectory { get; private init; } = DefaultOutputDirectory;
@@ -887,23 +1035,22 @@ public sealed class CaptureOptions
     /// <summary>同时落盘未切分的 `_sheet.png` 拼版大图与坐标索引 JSON。</summary>
     public bool SaveContactSheet { get; private init; }
 
-    /// <summary>展开本次运行要采集的全部动态拼版页批次。</summary>
-    public IReadOnlyList<DynamicParityPage> BuildSheets()
+    /// <summary>展开本次运行要采集的全部候选用例批次（按「后景 × 主题」分组，尚未装箱分页）。</summary>
+    public IReadOnlyList<CandidateBatch> BuildCandidateBatches()
     {
         var backdrops = Backdrop == "all"
             ? Catalog.BackdropKinds
             : new[] { Backdrop };
 
-        var themes = Batch
-            ? (ExplicitTheme ? new[] { Theme } : new[] { "light", "dark" })
+        var themes = Theme == "all"
+            ? new[] { "light", "dark" }
             : new[] { Theme };
 
         IReadOnlyList<string> controls = ExplicitControl
             ? SelectedControls
             : (Batch ? Catalog.ControlNames : new[] { ControlName });
 
-        var pages = new List<DynamicParityPage>();
-        var pageIndex = 0;
+        var batches = new List<CandidateBatch>();
 
         foreach (var backdrop in backdrops)
         {
@@ -935,12 +1082,12 @@ public sealed class CaptureOptions
 
                 if (cases.Count > 0)
                 {
-                    pages.Add(new DynamicParityPage(theme, backdrop, cases, pageIndex++));
+                    batches.Add(new CandidateBatch(theme, backdrop, cases));
                 }
             }
         }
 
-        return pages;
+        return batches;
     }
 
     public static bool TryParse(string[] args, out CaptureOptions options, out string error)
@@ -1102,9 +1249,9 @@ public sealed class CaptureOptions
             }
         }
 
-        if (theme != "light" && theme != "dark")
+        if (theme != "light" && theme != "dark" && theme != "all")
         {
-            error = UsageError($"未知主题：{theme}，可用主题：light, dark");
+            error = UsageError($"未知主题：{theme}，可用主题：light, dark, all");
             return false;
         }
 
@@ -1113,6 +1260,12 @@ public sealed class CaptureOptions
             if (backdrop == "all")
             {
                 error = UsageError("单用例模式不支持 --backdrop all，请指定具体后景或加 --batch");
+                return false;
+            }
+
+            if (theme == "all")
+            {
+                error = UsageError("单用例模式不支持 --theme all，请指定具体主题或加 --batch");
                 return false;
             }
         }
