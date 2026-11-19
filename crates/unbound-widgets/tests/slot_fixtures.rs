@@ -10,16 +10,21 @@ use unbound_text::{GlyphCache, TextEngine};
 use unbound_theme::{win11, Token};
 use unbound_widgets::slot_fixture::{
     apply_recursive_disabled_propagation, emit_canonical_annotated_scroll_bar_fixture,
-    emit_canonical_flip_view_fixture, emit_canonical_grid_fixture,
-    emit_canonical_list_rows_fixture, emit_canonical_path_fixture, emit_canonical_refresh_fixture,
-    emit_canonical_segmented_fixture, emit_canonical_text_rows_fixture,
-    emit_canonical_tree_fixture, FixtureState, CANONICAL_GRID_ITEMS, CANONICAL_LIST_ITEMS,
-    STANDARD_FLIP_HEIGHT, STANDARD_FLIP_WIDTH, STANDARD_GRID_CELL_RADIUS, STANDARD_GRID_HEIGHT,
-    STANDARD_GRID_WIDTH, STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT, STANDARD_PILL_WIDTH,
-    STANDARD_REFRESH_HEIGHT, STANDARD_REFRESH_INDICATOR_SIZE, STANDARD_REFRESH_WIDTH,
-    STANDARD_SCROLL_BAR_HEIGHT, STANDARD_SCROLL_BAR_TRACK_WIDTH, STANDARD_SCROLL_BAR_WIDTH,
-    STANDARD_STACK_SPACING, STANDARD_TREE_INDENT, STANDARD_TREE_ITEM_HEIGHT,
-    WINUI_DISABLED_OPACITY,
+    emit_canonical_command_bar_fixture, emit_canonical_flip_view_fixture,
+    emit_canonical_grid_fixture, emit_canonical_list_rows_fixture, emit_canonical_menu_bar_fixture,
+    emit_canonical_navigation_view_fixture, emit_canonical_path_fixture,
+    emit_canonical_pips_pager_fixture, emit_canonical_refresh_fixture,
+    emit_canonical_segmented_fixture, emit_canonical_tab_view_fixture,
+    emit_canonical_text_rows_fixture, emit_canonical_title_bar_fixture,
+    emit_canonical_tree_fixture, FixtureState, CANONICAL_COMMAND_ITEMS, CANONICAL_GRID_ITEMS,
+    CANONICAL_LIST_ITEMS, CANONICAL_MENU_ITEMS, CANONICAL_NAV_ITEMS, CANONICAL_PIPS_COUNT,
+    CANONICAL_PIPS_SELECTED_INDEX, CANONICAL_PIP_SIZE_NORMAL, CANONICAL_PIP_SIZE_SELECTED,
+    CANONICAL_TAB_ITEMS, STANDARD_FLIP_HEIGHT, STANDARD_FLIP_WIDTH, STANDARD_GRID_CELL_RADIUS,
+    STANDARD_GRID_HEIGHT, STANDARD_GRID_WIDTH, STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT,
+    STANDARD_PILL_WIDTH, STANDARD_REFRESH_HEIGHT, STANDARD_REFRESH_INDICATOR_SIZE,
+    STANDARD_REFRESH_WIDTH, STANDARD_SCROLL_BAR_HEIGHT, STANDARD_SCROLL_BAR_TRACK_WIDTH,
+    STANDARD_SCROLL_BAR_WIDTH, STANDARD_STACK_SPACING, STANDARD_TREE_INDENT,
+    STANDARD_TREE_ITEM_HEIGHT, WINUI_DISABLED_OPACITY,
 };
 use unbound_widgets::{primitive, TextCtx, WidgetOutput};
 
@@ -793,4 +798,569 @@ fn list_box_and_list_view_share_canonical_list_items_and_row_height() {
         CANONICAL_GRID_ITEMS,
         ["Item 1", "Item 2", "Item 3", "Item 4"]
     );
+}
+
+#[test]
+fn breadcrumb_bar_focused_renders_focus_ring() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, 320.0, 32.0);
+        let fixture = emit_canonical_path_fixture(
+            rect,
+            FixtureState::normal().with_selected(2),
+            text_ctx,
+            100,
+        );
+        let normal_prim_count = fixture.output.primitives.len();
+
+        let focused_fixture = emit_canonical_path_fixture(
+            rect,
+            FixtureState::focused().with_selected(2),
+            text_ctx,
+            100,
+        );
+        let focused_prim_count = focused_fixture.output.primitives.len();
+
+        // 聚焦态必须增加焦点环图元
+        assert!(
+            focused_prim_count > normal_prim_count,
+            "focused state must emit focus ring primitive"
+        );
+        let has_focus_ring = focused_fixture
+            .output
+            .primitives
+            .iter()
+            .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw());
+        assert!(has_focus_ring, "focus ring must use Token::FOCUS_RING");
+    });
+}
+
+#[test]
+fn pips_pager_normal_renders_five_pips_and_selected_marker() {
+    let rect = Rect::new(0.0, 0.0, 320.0, 32.0);
+    let fixture = emit_canonical_pips_pager_fixture(rect, FixtureState::normal(), 100);
+
+    // 1. 结构与条目数量校验：固定 5 个圆点
+    assert_eq!(
+        fixture.pip_rects.len(),
+        CANONICAL_PIPS_COUNT,
+        "must emit 5 pip rects"
+    );
+    assert_eq!(
+        fixture.selected_index, CANONICAL_PIPS_SELECTED_INDEX,
+        "selected index must be 1"
+    );
+
+    // 2. 选中圆点与普通圆点尺寸与颜色校验
+    for (idx, r) in fixture.pip_rects.iter().enumerate() {
+        if idx == fixture.selected_index {
+            assert_eq!(
+                r.width(),
+                CANONICAL_PIP_SIZE_SELECTED,
+                "selected pip diameter must be 10px"
+            );
+        } else {
+            assert_eq!(
+                r.width(),
+                CANONICAL_PIP_SIZE_NORMAL,
+                "unselected pip diameter must be 6px"
+            );
+        }
+    }
+
+    let fills: Vec<Token> = fixture
+        .output
+        .primitives
+        .iter()
+        .filter(|p| p.prim_type() == PrimType::RoundedRect)
+        .map(|p| Token::new(p.fill_token_or_uv as u16))
+        .collect();
+
+    assert!(
+        fills.contains(&Token::PRIMARY),
+        "must contain Token::PRIMARY for selected pip"
+    );
+    assert!(
+        fills.contains(&Token::CONTROL_TRACK),
+        "must contain Token::CONTROL_TRACK for unselected pips"
+    );
+}
+
+#[test]
+fn pips_pager_disabled_and_focused_states() {
+    let rect = Rect::new(0.0, 0.0, 320.0, 32.0);
+
+    // 1. 禁用态校验：所有圆点均必须使用 CONTROL_DISABLED_THUMB
+    let disabled_fixture = emit_canonical_pips_pager_fixture(rect, FixtureState::disabled(), 100);
+    let disabled_fills: Vec<Token> = disabled_fixture
+        .output
+        .primitives
+        .iter()
+        .filter(|p| p.prim_type() == PrimType::RoundedRect)
+        .map(|p| Token::new(p.fill_token_or_uv as u16))
+        .collect();
+
+    assert_eq!(disabled_fills.len(), CANONICAL_PIPS_COUNT);
+    for fill in disabled_fills {
+        assert_eq!(
+            fill,
+            Token::CONTROL_DISABLED_THUMB,
+            "all pips must use CONTROL_DISABLED_THUMB in disabled state"
+        );
+    }
+
+    // 2. 聚焦态校验：选中圆点处必须绘制焦点环
+    let focused_fixture = emit_canonical_pips_pager_fixture(rect, FixtureState::focused(), 100);
+    let has_focus_ring = focused_fixture
+        .output
+        .primitives
+        .iter()
+        .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw());
+    assert!(has_focus_ring, "focused state must emit focus ring");
+}
+
+#[test]
+fn command_bar_normal_renders_two_commands_separator_and_more_button() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, 320.0, 48.0);
+        let fixture =
+            emit_canonical_command_bar_fixture(rect, FixtureState::normal(), text_ctx, 100);
+
+        // 1. 结构校验：2 个命令按钮、1 个分隔符与 1 个更多按钮
+        assert_eq!(
+            fixture.button_rects.len(),
+            CANONICAL_COMMAND_ITEMS.len(),
+            "must emit 2 command button rects"
+        );
+        assert!(fixture.separator_rect.is_some(), "must emit separator rect");
+        assert!(
+            fixture.more_button_rect.is_some(),
+            "must emit more button rect"
+        );
+        assert_eq!(fixture.total_size.y, 48.0, "bar height must be 48px");
+
+        // 2. 文本与图标颜色校验：正常态使用 TEXT_PRIMARY
+        let glyph_tokens: Vec<Token> = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+
+        assert!(
+            glyph_tokens.contains(&Token::TEXT_PRIMARY),
+            "command buttons must use TEXT_PRIMARY"
+        );
+        assert!(
+            !glyph_tokens.contains(&Token::TEXT_DISABLED),
+            "normal state must not use TEXT_DISABLED"
+        );
+    });
+}
+
+#[test]
+fn command_bar_disabled_and_focused_states() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, 320.0, 48.0);
+
+        // 1. 禁用态校验：文本和图标全部衰减为 TEXT_DISABLED
+        let disabled_fixture =
+            emit_canonical_command_bar_fixture(rect, FixtureState::disabled(), text_ctx, 100);
+        let glyph_tokens: Vec<Token> = disabled_fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+
+        assert!(!glyph_tokens.is_empty(), "must emit glyph primitives");
+        for tok in glyph_tokens {
+            assert_eq!(
+                tok,
+                Token::TEXT_DISABLED,
+                "all command bar text must be TEXT_DISABLED in disabled state"
+            );
+        }
+
+        // 2. 聚焦态校验：首个命令按钮处必须绘制焦点环
+        let focused_fixture =
+            emit_canonical_command_bar_fixture(rect, FixtureState::focused(), text_ctx, 100);
+        let has_focus_ring = focused_fixture
+            .output
+            .primitives
+            .iter()
+            .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw());
+        assert!(
+            has_focus_ring,
+            "focused state must emit focus ring on first button"
+        );
+    });
+}
+
+#[test]
+fn menu_bar_normal_renders_file_and_edit() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, 320.0, 40.0);
+        let fixture = emit_canonical_menu_bar_fixture(rect, FixtureState::normal(), text_ctx, 100);
+
+        assert_eq!(
+            fixture.item_rects.len(),
+            CANONICAL_MENU_ITEMS.len(),
+            "must emit 2 menu item rects"
+        );
+        assert_eq!(fixture.total_size.y, 40.0, "menu bar height must be 40px");
+
+        let glyph_tokens: Vec<Token> = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+
+        assert!(
+            glyph_tokens.contains(&Token::TEXT_PRIMARY),
+            "menu items must use TEXT_PRIMARY"
+        );
+    });
+}
+
+#[test]
+fn menu_bar_disabled_and_focused_states() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, 320.0, 40.0);
+
+        // 1. 禁用态校验
+        let disabled_fixture =
+            emit_canonical_menu_bar_fixture(rect, FixtureState::disabled(), text_ctx, 100);
+        let glyph_tokens: Vec<Token> = disabled_fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+
+        assert!(!glyph_tokens.is_empty());
+        for tok in glyph_tokens {
+            assert_eq!(
+                tok,
+                Token::TEXT_DISABLED,
+                "all menu items must be TEXT_DISABLED in disabled state"
+            );
+        }
+
+        // 2. 聚焦态校验
+        let focused_fixture =
+            emit_canonical_menu_bar_fixture(rect, FixtureState::focused(), text_ctx, 100);
+        let has_focus_ring = focused_fixture
+            .output
+            .primitives
+            .iter()
+            .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw());
+        assert!(
+            has_focus_ring,
+            "focused state must emit focus ring on first menu item"
+        );
+    });
+}
+
+#[test]
+fn title_bar_normal_renders_title_subtitle_and_captions() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, 420.0, 32.0);
+        let fixture = emit_canonical_title_bar_fixture(rect, FixtureState::normal(), text_ctx, 100);
+
+        // 1. 几何与标题区域校验
+        assert!(
+            fixture.title_rect.width() > 0.0,
+            "title rect must have width"
+        );
+        assert!(
+            fixture.subtitle_rect.width() > 0.0,
+            "subtitle rect must have width"
+        );
+        assert_eq!(
+            fixture.caption_rects.len(),
+            3,
+            "must emit 3 caption button rects"
+        );
+        assert_eq!(fixture.total_size.y, 32.0, "title bar height must be 32px");
+
+        // 2. 副标题紧随主标题且 baseline 保持水平对齐
+        assert!(
+            fixture.subtitle_rect.origin.x >= fixture.title_rect.max().x,
+            "subtitle must be positioned after title"
+        );
+        assert_eq!(
+            fixture.title_rect.origin.y, fixture.subtitle_rect.origin.y,
+            "title and subtitle must share vertical baseline alignment"
+        );
+
+        // 3. 令牌校验：主标题 TEXT_PRIMARY，副标题 TEXT_SECONDARY
+        let glyph_tokens: Vec<Token> = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+
+        assert!(
+            glyph_tokens.contains(&Token::TEXT_PRIMARY),
+            "title must use TEXT_PRIMARY"
+        );
+        assert!(
+            glyph_tokens.contains(&Token::TEXT_SECONDARY),
+            "subtitle must use TEXT_SECONDARY"
+        );
+    });
+}
+
+#[test]
+fn title_bar_disabled_downgrades_title_and_captions() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, 420.0, 32.0);
+        let fixture =
+            emit_canonical_title_bar_fixture(rect, FixtureState::disabled(), text_ctx, 100);
+
+        let glyph_tokens: Vec<Token> = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+
+        assert!(!glyph_tokens.is_empty());
+        for tok in glyph_tokens {
+            assert_eq!(
+                tok,
+                Token::TEXT_DISABLED,
+                "all title bar text must be TEXT_DISABLED in disabled state"
+            );
+        }
+    });
+}
+
+#[test]
+fn navigation_view_normal_renders_home_selected_and_library_and_settings() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, 300.0, 200.0);
+        let fixture = emit_canonical_navigation_view_fixture(
+            rect,
+            FixtureState::normal().with_selected(0),
+            text_ctx,
+            100,
+        );
+
+        assert_eq!(
+            fixture.item_rects.len(),
+            CANONICAL_NAV_ITEMS.len(),
+            "must emit 2 nav item rects"
+        );
+        assert!(
+            fixture.settings_rect.height() > 0.0,
+            "must emit settings rect"
+        );
+        assert_eq!(fixture.total_size.x, 300.0);
+        assert_eq!(fixture.total_size.y, 200.0);
+
+        // 选中态校验：必须包含 Accent 胶囊条与 NAV_SELECTED 背景
+        let rounded_rects: Vec<(Token, f32, f32)> = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::RoundedRect)
+            .map(|p| (Token::new(p.fill_token_or_uv as u16), p.size[0], p.size[1]))
+            .collect();
+
+        let has_nav_selected = rounded_rects
+            .iter()
+            .any(|&(tok, _, _)| tok == Token::NAV_SELECTED);
+        assert!(has_nav_selected, "selected item must use NAV_SELECTED");
+
+        let has_pill = rounded_rects.iter().any(|&(tok, w, h)| {
+            tok == Token::PRIMARY && (w - 3.0).abs() < 1e-2 && (h - 16.0).abs() < 1e-2
+        });
+        assert!(has_pill, "selected item must have 3x16px Accent pill");
+    });
+}
+
+#[test]
+fn navigation_view_disabled_and_focused_states() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, 300.0, 200.0);
+
+        // 1. 禁用态校验：抑制胶囊条与选中背景，所有文本和图标降级为 TEXT_DISABLED
+        let disabled_fixture = emit_canonical_navigation_view_fixture(
+            rect,
+            FixtureState::disabled().with_selected(0),
+            text_ctx,
+            100,
+        );
+
+        let rounded_rects: Vec<Token> = disabled_fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::RoundedRect)
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+
+        assert!(
+            !rounded_rects.contains(&Token::NAV_SELECTED),
+            "disabled state must suppress NAV_SELECTED"
+        );
+        assert!(
+            !rounded_rects.contains(&Token::PRIMARY),
+            "disabled state must suppress Accent pill"
+        );
+
+        let glyph_tokens: Vec<Token> = disabled_fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+
+        assert!(!glyph_tokens.is_empty());
+        for tok in glyph_tokens {
+            assert_eq!(
+                tok,
+                Token::TEXT_DISABLED,
+                "all navigation text and icons must be TEXT_DISABLED in disabled state"
+            );
+        }
+
+        // 2. 聚焦态校验
+        let focused_fixture = emit_canonical_navigation_view_fixture(
+            rect,
+            FixtureState::focused().with_selected(0),
+            text_ctx,
+            100,
+        );
+        let has_focus_ring = focused_fixture
+            .output
+            .primitives
+            .iter()
+            .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw());
+        assert!(
+            has_focus_ring,
+            "focused state must emit focus ring on selected item"
+        );
+    });
+}
+
+#[test]
+fn tab_view_normal_renders_two_tabs_and_content_area() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, 360.0, 120.0);
+        let fixture = emit_canonical_tab_view_fixture(
+            rect,
+            FixtureState::normal().with_selected(0),
+            text_ctx,
+            100,
+        );
+
+        // 1. 结构校验：2 个标签页与 1 个内容区
+        assert_eq!(
+            fixture.tab_rects.len(),
+            CANONICAL_TAB_ITEMS.len(),
+            "must emit 2 tab rects"
+        );
+        assert!(
+            fixture.content_rect.height() > 0.0,
+            "must emit content rect"
+        );
+        assert_eq!(fixture.total_size.x, 360.0);
+        assert_eq!(fixture.total_size.y, 120.0);
+
+        // 2. 激活标签页校验：包含 SURFACE 背景与 2px 底部指示条
+        let rounded_rects: Vec<(Token, f32, f32)> = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::RoundedRect)
+            .map(|p| (Token::new(p.fill_token_or_uv as u16), p.size[0], p.size[1]))
+            .collect();
+
+        let has_surface = rounded_rects
+            .iter()
+            .any(|&(tok, _, _)| tok == Token::SURFACE);
+        assert!(has_surface, "active tab must use SURFACE background");
+
+        let has_indicator = rounded_rects
+            .iter()
+            .any(|&(tok, _, h)| tok == Token::PRIMARY && (h - 2.0).abs() < 1e-2);
+        assert!(has_indicator, "active tab must have 2px Accent indicator");
+    });
+}
+
+#[test]
+fn tab_view_disabled_and_focused_states() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, 360.0, 120.0);
+
+        // 1. 禁用态校验：抑制底色与指示条，全量文本与图标衰减为 TEXT_DISABLED
+        let disabled_fixture = emit_canonical_tab_view_fixture(
+            rect,
+            FixtureState::disabled().with_selected(0),
+            text_ctx,
+            100,
+        );
+
+        let rounded_rects: Vec<Token> = disabled_fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::RoundedRect)
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+
+        assert!(
+            !rounded_rects.contains(&Token::SURFACE),
+            "disabled state must suppress SURFACE background"
+        );
+        assert!(
+            !rounded_rects.contains(&Token::PRIMARY),
+            "disabled state must suppress Accent indicator"
+        );
+
+        let glyph_tokens: Vec<Token> = disabled_fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+
+        assert!(!glyph_tokens.is_empty());
+        for tok in glyph_tokens {
+            assert_eq!(
+                tok,
+                Token::TEXT_DISABLED,
+                "all tab text and close icons must be TEXT_DISABLED in disabled state"
+            );
+        }
+
+        // 2. 聚焦态校验
+        let focused_fixture = emit_canonical_tab_view_fixture(
+            rect,
+            FixtureState::focused().with_selected(0),
+            text_ctx,
+            100,
+        );
+        let has_focus_ring = focused_fixture
+            .output
+            .primitives
+            .iter()
+            .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw());
+        assert!(
+            has_focus_ring,
+            "focused state must emit focus ring on active tab"
+        );
+    });
 }
