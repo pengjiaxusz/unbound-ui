@@ -3321,16 +3321,12 @@ where
                 variant_idx % 3 == 0,
                 false,
             );
-            let mut glyphs = Vec::new();
-            for (index, mark) in ["B", "I", "U"].into_iter().enumerate() {
-                let button = desc.format_button_rect(index);
-                glyphs.extend(shape_centered(&mut shape, mark, button, 11.0));
-            }
             let editor = desc.editor_rect();
+            let mut glyphs = Vec::new();
             glyphs.extend(shape(
                 "Formatted document body",
-                Vec2::new(editor.origin.x + 10.0, editor.origin.y + 8.0),
-                12.0,
+                Vec2::new(editor.origin.x, editor.origin.y + 2.0),
+                14.0,
             ));
             crate::rich_edit_box::emit_rich_edit_box(node, &desc, state, &mut glyphs)
         }

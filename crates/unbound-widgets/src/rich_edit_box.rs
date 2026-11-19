@@ -1,26 +1,28 @@
-//! RichEditBox：带格式工具条的可编辑富文本输入框。
+//! RichEditBox：对齐 WinUI 3 官方标准的原生富文本编辑框。
 //!
-//! 控件由三段组成：顶部格式工具条（B / I / U）、细分隔线与下方可编辑文本区。
-//! 三个格式按钮各自上报独立命中区域，但图元数量与交互状态无关——悬停、聚焦与
-//! 禁用只切换令牌槽位，绝不增删图元。
+//! 依据 ADR 0016 与 Spec #79，RichEditBox 还原为 WinUI 3 官方纯净形态（不内置非标格式工具栏）：
+//! 纯净编辑表面、1px 边框与标准内边距（TextControlThemePadding），支持悬停、聚焦与禁用状态切换。
+//! 图元数量严格保持常数，悬停/聚焦/禁用只切换令牌槽位，绝不增删图元。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::Rect;
+use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
+use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 格式工具条高度。
-pub const RICH_EDIT_TOOLBAR_HEIGHT: f32 = 28.0;
-/// 格式按钮边长。
-pub const RICH_EDIT_FORMAT_BUTTON: f32 = 20.0;
 /// 控件圆角。对齐 WinUI `ControlCornerRadius = 4`。
 pub const RICH_EDIT_RADIUS: f32 = 4.0;
+
+/// 水平内边距。对齐 WinUI `TextControlThemePadding` 左侧 10px。
+pub const RICH_EDIT_PADDING_X: f32 = 10.0;
+
+/// 垂直内边距。对齐 WinUI `TextControlThemePadding` 顶部 6px。
+pub const RICH_EDIT_PADDING_Y: f32 = 6.0;
 
 /// 富文本编辑框描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -29,7 +31,7 @@ pub struct RichEditBoxDesc {
     pub rect: Rect,
     /// 无障碍标签。
     pub label: String,
-    /// 加粗标记是否激活。
+    /// 加粗标记是否激活（保留供富文本格式状态绑定）。
     pub bold: bool,
     /// 斜体标记是否激活。
     pub italic: bool,
@@ -44,7 +46,7 @@ pub struct RichEditBoxDesc {
 }
 
 impl RichEditBoxDesc {
-    /// 创建格式标记全部关闭的富文本编辑框。
+    /// 创建格式标记全部关闭的纯净富文本编辑框。
     #[must_use]
     pub fn new(rect: Rect, label: impl Into<String>) -> Self {
         Self {
@@ -59,7 +61,7 @@ impl RichEditBoxDesc {
         }
     }
 
-    /// 设置三个格式标记的激活状态。
+    /// 设置格式标记的激活状态。
     #[must_use]
     pub fn with_marks(mut self, bold: bool, italic: bool, underline: bool) -> Self {
         self.bold = bold;
@@ -75,50 +77,53 @@ impl RichEditBoxDesc {
         self
     }
 
-    /// 工具条区域矩形。
+    /// 设置圆角半径。
     #[must_use]
-    pub fn toolbar_rect(&self) -> Rect {
-        let height = RICH_EDIT_TOOLBAR_HEIGHT.min(self.rect.height() * 0.5);
-        Rect::new(
-            self.rect.origin.x,
-            self.rect.origin.y,
-            self.rect.width(),
-            height.max(0.0),
-        )
+    pub fn with_radius(mut self, radius: f32) -> Self {
+        self.radius = radius;
+        self
     }
 
-    /// 第 `index` 个格式按钮（0=B、1=I、2=U）的矩形。
+    /// 设置绘制顺序键。
     #[must_use]
-    pub fn format_button_rect(&self, index: usize) -> Rect {
-        let toolbar = self.toolbar_rect();
-        let size = RICH_EDIT_FORMAT_BUTTON
-            .min((toolbar.height() - 4.0).max(8.0))
-            .max(8.0);
-        let x = toolbar.origin.x + 6.0 + index as f32 * (size + 4.0);
-        Rect::new(
-            x,
-            toolbar.origin.y + (toolbar.height() - size) * 0.5,
-            size,
-            size,
-        )
+    pub fn with_z(mut self, z: u16) -> Self {
+        self.z = z;
+        self
     }
 
-    /// 文本编辑区矩形。
+    /// 文本编辑区矩形（内边距：左 10px、上 6px、右 10px、下 6px）。
     #[must_use]
     pub fn editor_rect(&self) -> Rect {
-        let toolbar = self.toolbar_rect();
+        let pad_x = RICH_EDIT_PADDING_X;
+        let pad_y = RICH_EDIT_PADDING_Y;
         Rect::new(
-            self.rect.origin.x,
-            toolbar.max().y,
-            self.rect.width(),
-            (self.rect.height() - toolbar.height()).max(0.0),
+            self.rect.origin.x + pad_x,
+            self.rect.origin.y + pad_y,
+            (self.rect.width() - pad_x * 2.0).max(0.0),
+            (self.rect.height() - pad_y * 2.0).max(0.0),
         )
+    }
+
+    /// 固有尺寸：WinUI 3 标准宽度 240px、高度 96px（或当前矩形尺寸）。
+    #[must_use]
+    pub fn intrinsic_size(&self) -> Vec2 {
+        let w = if self.rect.width() > 0.0 {
+            self.rect.width()
+        } else {
+            240.0
+        };
+        let h = if self.rect.height() > 0.0 {
+            self.rect.height()
+        } else {
+            96.0
+        };
+        Vec2::new(w, h)
     }
 }
 
-/// 输出富文本编辑框的图元、命中区域与语义节点。
+/// 输出纯净富文本编辑框的图元、命中区域与语义节点。
 ///
-/// 图元顺序固定：外框、工具条、分隔线、三个格式按钮、编辑区、焦点环。
+/// 图元顺序固定：外框（背景+描边）、文本字形、焦点环。
 #[must_use]
 pub fn emit_rich_edit_box(
     node: u64,
@@ -130,7 +135,6 @@ pub fn emit_rich_edit_box(
     let z = desc.z;
     let disabled = control.disabled || desc.disabled;
     let hovered = !disabled && control.phase == PointerPhase::Hovered;
-    let pressed = !disabled && control.phase == PointerPhase::Pressed;
 
     let bg = if disabled {
         Token::CONTROL_DISABLED_BG
@@ -146,51 +150,14 @@ pub fn emit_rich_edit_box(
     } else {
         Token::CONTROL_STROKE
     };
-    let toolbar_fill = if disabled {
-        Token::CONTROL_DISABLED_BG
-    } else if pressed {
-        Token::CONTROL_HOVER
-    } else {
-        Token::SURFACE_SUNKEN
-    };
 
-    let toolbar = desc.toolbar_rect();
-    let editor = desc.editor_rect();
-
-    let mut primitives = Vec::with_capacity(8 + text_glyphs.len());
+    let mut primitives = Vec::with_capacity(2 + text_glyphs.len());
     let mut payloads = Vec::with_capacity(text_glyphs.len());
 
+    // 1. 外框与背景
     primitives.push(outlined(rect, desc.radius, bg, border, 1.0, 0.0, z));
-    primitives.push(surface(toolbar, 0.0, toolbar_fill, z + 1));
-    // 工具条与编辑区之间的细分隔线。
-    primitives.push(surface(
-        Rect::new(
-            toolbar.origin.x,
-            toolbar.max().y - 1.0,
-            toolbar.width(),
-            1.0,
-        ),
-        0.0,
-        Token::DIVIDER,
-        z + 2,
-    ));
 
-    let marks = [desc.bold, desc.italic, desc.underline];
-    for (index, active) in marks.into_iter().enumerate() {
-        let button = desc.format_button_rect(index);
-        let fill = if disabled {
-            Token::CONTROL_DISABLED_BG
-        } else if active {
-            Token::PRIMARY_SOFT
-        } else if hovered {
-            Token::CONTROL_HOVER
-        } else {
-            Token::CONTROL_FILL
-        };
-        primitives.push(outlined(button, 3.0, fill, Token::NONE, 0.0, 0.0, z + 3));
-    }
-
-    primitives.push(surface(editor, 0.0, Token::SURFACE, z + 4));
+    // 2. 文本字形
     emit_glyphs(
         text_glyphs,
         if disabled {
@@ -198,20 +165,22 @@ pub fn emit_rich_edit_box(
         } else {
             Token::TEXT_PRIMARY
         },
-        z + 5,
+        z + 2,
         &mut primitives,
         &mut payloads,
     );
+
+    // 3. 焦点环
     primitives.push(focus_ring(
         rect,
         desc.radius,
         Token::FOCUS_RING,
         2.0,
-        z + 6,
+        z + 3,
         control.focused && !disabled,
     ));
 
-    let mut out = WidgetOutput {
+    WidgetOutput {
         primitives,
         payloads,
         hit: (!disabled).then(|| {
@@ -228,23 +197,7 @@ pub fn emit_rich_edit_box(
         ),
         focusable: !disabled,
         ..Default::default()
-    };
-
-    if !disabled {
-        for (index, name) in ["Bold", "Italic", "Underline"].into_iter().enumerate() {
-            let key = node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (0x500 + index as u64);
-            let button = desc.format_button_rect(index);
-            out.with_sub_control(
-                key,
-                HitRegion::new(key, BUTTON_LAYER, u32::from(z) + 3, button)
-                    .with_cursor(CursorKind::Pointer),
-                A11yNode::new(Role::Button, name, button).clickable(),
-                true,
-            );
-        }
     }
-
-    out
 }
 
 #[cfg(test)]
@@ -252,30 +205,17 @@ mod tests {
     use super::*;
 
     fn desc() -> RichEditBoxDesc {
-        RichEditBoxDesc::new(Rect::new(0.0, 0.0, 260.0, 120.0), "Document")
+        RichEditBoxDesc::new(Rect::new(0.0, 0.0, 240.0, 96.0), "Document")
     }
 
     #[test]
-    fn the_toolbar_sits_above_the_editor() {
+    fn editor_rect_applies_standard_padding() {
         let d = desc();
-        let toolbar = d.toolbar_rect();
         let editor = d.editor_rect();
-        assert_eq!(toolbar.origin.y, d.rect.origin.y);
-        assert!((toolbar.max().y - editor.origin.y).abs() < 1e-4);
-        assert!((toolbar.height() + editor.height() - d.rect.height()).abs() < 1e-4);
-    }
-
-    #[test]
-    fn format_buttons_stay_inside_the_toolbar() {
-        let d = desc();
-        for index in 0..3 {
-            let button = d.format_button_rect(index);
-            assert!(
-                d.toolbar_rect().contains_rect(&button),
-                "{index}: {button:?}"
-            );
-            assert!(button.size.x > 0.0 && button.size.y > 0.0);
-        }
+        assert_eq!(editor.origin.x, 10.0);
+        assert_eq!(editor.origin.y, 6.0);
+        assert_eq!(editor.width(), 220.0);
+        assert_eq!(editor.height(), 84.0);
     }
 
     #[test]
@@ -327,6 +267,10 @@ mod tests {
         assert!(
             counts.windows(2).all(|pair| pair[0] == pair[1]),
             "{counts:?}"
+        );
+        assert_eq!(
+            counts[0], 2,
+            "2 primitives: outlined surface and focus ring"
         );
     }
 
