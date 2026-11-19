@@ -20,6 +20,38 @@ use crate::canvas::{AlignX, AlignY};
 pub const GROUP_PART_BASE: u16 = 10;
 /// 状态栏部件编号。
 pub const STATUS_BAR_PART: u16 = 20;
+/// 相位档位选项部件起始编号（8 / 4 / 1）。
+pub const PHASE_PART_BASE: u16 = 30;
+
+/// 相位档位定义。
+pub struct PhaseOptionDef {
+    pub mode: unbound_text::PhaseMode,
+    pub key: TextFeatureKey,
+    pub label: &'static str,
+    pub description: &'static str,
+}
+
+/// 亚像素相位选项列表。
+pub const PHASE_OPTIONS: [PhaseOptionDef; 3] = [
+    PhaseOptionDef {
+        mode: unbound_text::PhaseMode::Eight,
+        key: TextFeatureKey::PhaseEight,
+        label: "8 Phases",
+        description: "1/8 px subpixel precision (recommended)",
+    },
+    PhaseOptionDef {
+        mode: unbound_text::PhaseMode::Four,
+        key: TextFeatureKey::PhaseFour,
+        label: "4 Phases",
+        description: "1/4 px subpixel precision",
+    },
+    PhaseOptionDef {
+        mode: unbound_text::PhaseMode::One,
+        key: TextFeatureKey::PhaseOne,
+        label: "1 Phase",
+        description: "Pixel-snapped (phase 0 only)",
+    },
+];
 
 /// 控制台六大功能参数分组。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -461,7 +493,15 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
         let is_expanded = state.group_expanded[index];
         let part = GROUP_PART_BASE + index as u16;
 
-        let content_h = if is_expanded { 36.0 } else { 0.0 };
+        let content_h = if is_expanded {
+            if *group == TextConsoleGroup::Pixel {
+                64.0
+            } else {
+                36.0
+            }
+        } else {
+            0.0
+        };
         let total_group_h = header_h + content_h;
 
         // 如果超出左侧容器底部，安全截断
@@ -508,7 +548,7 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
             is_expanded,
         );
 
-        // 若展开，绘制内容容器骨架
+        // 若展开，绘制内容容器
         if is_expanded && current_y + total_group_h <= rect.max().y {
             let content_rect = Rect::new(
                 rect.origin.x + 8.0,
@@ -524,22 +564,105 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
                 0.5,
                 0.0,
             );
-            ctx.canvas.text(
-                group.description(),
-                Rect::new(
-                    content_rect.origin.x + 6.0,
-                    content_rect.origin.y,
-                    content_rect.size.x - 12.0,
-                    content_rect.size.y,
-                ),
-                9.5,
-                palette.text_muted,
-                AlignX::Start,
-                AlignY::Center,
-            );
+
+            if *group == TextConsoleGroup::Pixel {
+                draw_pixel_group_content(ctx, content_rect, state);
+            } else {
+                ctx.canvas.text(
+                    group.description(),
+                    Rect::new(
+                        content_rect.origin.x + 6.0,
+                        content_rect.origin.y,
+                        content_rect.size.x - 12.0,
+                        content_rect.size.y,
+                    ),
+                    9.5,
+                    palette.text_muted,
+                    AlignX::Start,
+                    AlignY::Center,
+                );
+            }
         }
 
         current_y += total_group_h + item_gap;
+    }
+}
+
+/// 绘制像素与相位组的内容：亚像素相位切换控件（8 / 4 / 1）。
+fn draw_pixel_group_content(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
+    let palette = *ctx.canvas.palette;
+    let label_h = 16.0;
+    let padding = 6.0;
+
+    // 标题提示
+    ctx.canvas.text(
+        "SUBPIXEL PHASE QUANTIZATION",
+        Rect::new(
+            rect.origin.x + padding,
+            rect.origin.y + 4.0,
+            rect.size.x - padding * 2.0,
+            label_h,
+        ),
+        8.5,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
+
+    // 三个选项并排排列
+    let button_top = rect.origin.y + 4.0 + label_h + 2.0;
+    let button_h = 32.0;
+    let gap = 4.0;
+    let item_w = (rect.size.x - padding * 2.0 - gap * 2.0) / 3.0;
+
+    let caps = TextCapabilities::probe();
+
+    for (i, opt) in PHASE_OPTIONS.iter().enumerate() {
+        let part = PHASE_PART_BASE + i as u16;
+        let opt_rect = Rect::new(
+            rect.origin.x + padding + i as f32 * (item_w + gap),
+            button_top,
+            item_w,
+            button_h,
+        );
+
+        let res = resolve_feature(opt.key, &caps, &state.settings);
+        let selected = state.settings.phase_mode == opt.mode;
+        let disabled = res.disabled;
+
+        // 根据三态呈现样式：
+        // 选中：高亮主色填充；
+        // 禁用：弱化填充与文字；
+        // 正常可用：表面背景与卡片边框。
+        let (bg, border, text_color) = if disabled {
+            (
+                palette.disabled_fill,
+                palette.card_border,
+                palette.text_muted,
+            )
+        } else if selected {
+            (palette.primary, palette.primary, palette.on_primary)
+        } else {
+            (palette.card_bg, palette.card_border, palette.text)
+        };
+
+        ctx.canvas.rect(opt_rect, 3.0, bg, border, 1.0, 0.0);
+
+        ctx.canvas.text(
+            opt.label,
+            opt_rect,
+            10.5,
+            text_color,
+            AlignX::Center,
+            AlignY::Center,
+        );
+
+        let mut a11y_label = format!("Phase Mode: {} — {}", opt.label, opt.description);
+        if let Some(reason) = res.reason {
+            a11y_label.push_str(&format!(" (Disabled: {})", reason));
+        }
+
+        ctx.control(part, opt_rect, Role::RadioButton, &a11y_label, selected);
     }
 }
 
