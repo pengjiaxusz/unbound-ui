@@ -4,7 +4,7 @@
 
 ## 核心特性（动态拼版页 + 2D 流式装箱 + 紧凑出血 + 指纹缓存）
 
-1. **多控件动态拼版页（Dynamic Parity Page & 2D Flow Packing）**：在固定的确定性标准视口（`1920×1080 DIP`）内，将多个不同控件的所有状态通过 2D 流式装箱规划器紧凑排布（按行摆放、自适应槽位测量、超宽自动换行），单页仅需一次 `350ms` 动效收敛等待与单次 `RenderTargetBitmap` 导出，随后根据每个槽位的相对视觉几何边界（`TransformToVisual(Host)`）精准切出紧凑单图。
+1. **多控件动态拼版页与视口溢出安全分页（Dynamic Parity Page & Viewport Paging）**：在固定的确定性标准视口（`1920×1080 DIP`）内，将多个不同控件的所有状态通过 2D 流式装箱规划器紧凑排布（按行摆放、自适应槽位测量、超宽自动换行）；当槽位行高度累加超过 1080 DIP 安全上限时自动截断当前页并顺延开启下一页。在同一个 Window 实例内主线程安全清空与挂载，无窗口重建与屏幕闪烁，单页仅需一次 `350ms` 动效收敛等待与单次 `RenderTargetBitmap` 导出，随后根据每个槽位的相对视觉几何边界（`TransformToVisual(Host)`）精准切出紧凑单图。
 2. **多控件联合指定**：`--control` 支持传入逗号分隔的多个控件名（如 `--control Button,CheckBox`），系统自动将所有指定控件的支持状态集中排入同一瞬态画布一次性导出。
 3. **版本与规格指纹缓存（Fingerprint Cache）**：每个用例 JSON 记录绑定了 `(WindowsAppSDKVersion, OSVersion, RasterizationScale, Control, State, Theme, Backdrop, SpecSignature)` 的 16 位 SHA-256 指纹。下次运行时若指纹一致且 PNG 存在，直接毫秒级跳过（可用 `--no-cache` 强制重截）。
 4. **确定性后景合成底板（Synthetic Backdrop）**：通过 `--backdrop solid|mica|mica_alt|acrylic|all` 控制画布底板。默认激活 `solid` 纯色基准面，并为后续云母/亚克力全面完工预留确定性合成底板。
@@ -66,13 +66,13 @@ dotnet build -c Release
 | `--out <dir>` | 任意目录 | `captures` | 输出目录，不存在会自动创建 |
 | `--control <names>` | 见下方「已接入控件」 | `Button` | 大小写不敏感；支持逗号分隔多个控件（如 `Button,CheckBox`） |
 | `--state <state>` | `normal` `disabled` `checked` `focused` | `normal` | `checked` 仅支持 CheckBox / ToggleSwitch / ToggleButton / RadioButton 等；缺省时采集所有支持状态 |
-| `--theme <theme>` | `light` `dark` | `light` | 通过 `Host.RequestedTheme` 切换 |
+| `--theme <theme>` | `light` `dark` `all` | `light` | 通过 `Host.RequestedTheme` 切换（`all` 仅限 `--batch`） |
 | `--backdrop <kind>` | `solid` `mica` `mica_alt` `acrylic` `all` | `solid` | 确定性合成底板类型（`all` 仅限 `--batch`） |
 | `--width <N>` | 64..8192 | `1920` | 画布宽度 DIP |
 | `--height <N>` | 64..8192 | `1080` | 画布高度 DIP |
 | `--batch` | 开关 | 关闭 | 批量模式：按「主题 × 后景」将待测控件流式装箱并自动切出紧凑单图 |
 | `--no-cache` | 开关 | 关闭 | 忽略 `fingerprint` 缓存，强制重新采集全部用例 |
-| `--save-sheet` | 开关 | 关闭 | 除切分后的单用例 PNG 外，额外保留 `page_{index}_{theme}_{backdrop}_sheet.png` 及坐标索引 JSON |
+| `--save-sheet` | 开关 | 关闭 | 除切分后的单用例 PNG 外，额外按页码输出 `page_{pageIndex:D2}_{theme}_{backdrop}_sheet.png` 拼版总览图及坐标索引 JSON |
 
 ### 已接入控件（57 个）
 
