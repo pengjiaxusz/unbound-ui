@@ -125,6 +125,16 @@ pub const PART_LINE_HEIGHT_AUTO: u16 = 251;
 pub const PART_LINE_HEIGHT_20: u16 = 252;
 pub const PART_LINE_HEIGHT_28: u16 = 253;
 
+// Emoji 组部件编号 (301..350)
+pub const PART_EMOJI_PRES_COLOR: u16 = 301;
+pub const PART_EMOJI_PRES_MONO: u16 = 302;
+pub const PART_EMOJI_BACKEND_FOLLOW: u16 = 310;
+pub const PART_EMOJI_BACKEND_DW: u16 = 311;
+pub const PART_EMOJI_BACKEND_COSMIC: u16 = 312;
+pub const PART_EMOJI_SOURCE_SYSTEM: u16 = 320;
+pub const PART_EMOJI_SOURCE_BUILTIN: u16 = 321;
+pub const PART_EMOJI_SOURCE_GRID: u16 = 322;
+
 /// 控制台六大功能参数分组。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TextConsoleGroup {
@@ -445,7 +455,13 @@ pub const FEATURE_RULES: &[FeatureRule] = &[
     FeatureRule {
         key: TextFeatureKey::EmojiPresentationColor,
         query_capability: |caps| caps.color_glyphs,
-        check_constraint: None,
+        check_constraint: Some(|caps, settings| {
+            if settings.emoji_backend == unbound_text::EmojiBackend::DirectWrite {
+                caps.color_directwrite.reason()
+            } else {
+                None
+            }
+        }),
     },
     // Emoji 呈现：单色
     FeatureRule {
@@ -572,7 +588,7 @@ let resolution = resolve_feature(TextFeatureKey::BackendDirectWrite, &capabiliti
     &[],
     DemoKind::TextRender,
 )
-.with_height(720.0)];
+.with_height(800.0)];
 
 /// 渲染文本渲染控制台舞台主入口。
 pub fn text_render(ctx: &mut DemoCtx<'_, '_>) {
@@ -636,7 +652,7 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
                 TextConsoleGroup::Pixel => 58.0,
                 TextConsoleGroup::DistanceField => 58.0,
                 TextConsoleGroup::Composition => 68.0,
-                _ => 22.0,
+                TextConsoleGroup::Emoji => 78.0,
             }
         } else {
             0.0
@@ -724,6 +740,16 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
                     0.0,
                 );
                 draw_composition_controls(ctx, content_rect, state);
+            } else if *group == TextConsoleGroup::Emoji {
+                ctx.canvas.rect(
+                    content_rect,
+                    3.0,
+                    palette.card_border,
+                    palette.card_border,
+                    0.5,
+                    0.0,
+                );
+                draw_emoji_controls(ctx, content_rect, state);
             } else {
                 ctx.canvas.rect(
                     content_rect,
@@ -1225,6 +1251,14 @@ fn draw_composition_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &Text
     );
 }
 
+/// 选项单选框条目描述。
+struct OptionItem {
+    label: &'static str,
+    part: u16,
+    feature_key: Option<TextFeatureKey>,
+    selected: bool,
+}
+
 /// 绘制排版语义组六项可切换与灰化控件。
 fn draw_typography_group(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
     let palette = *ctx.canvas.palette;
@@ -1238,13 +1272,6 @@ fn draw_typography_group(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRend
     let row_gap = 4.0;
     let title_w = 84.0;
     let mut current_y = rect.origin.y + padding;
-
-    struct OptionItem {
-        label: &'static str,
-        part: u16,
-        feature_key: Option<TextFeatureKey>,
-        selected: bool,
-    }
 
     let rows: [(&'static str, &[OptionItem]); 6] = [
         // 1. 塑形器
@@ -1723,5 +1750,153 @@ fn draw_status_bar(
             AlignX::Start,
             AlignY::Center,
         );
+    }
+}
+
+/// 绘制 Emoji 组五维度控件（呈现、光栅器、来源等）。
+fn draw_emoji_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
+    let palette = *ctx.canvas.palette;
+    let caps = TextCapabilities::probe();
+
+    let padding = 6.0;
+    let row_h = 20.0;
+    let row_gap = 4.0;
+    let title_w = 76.0;
+
+    let rows: [(&str, &[OptionItem]); 3] = [
+        (
+            "Presentation",
+            &[
+                OptionItem {
+                    label: "Color",
+                    part: PART_EMOJI_PRES_COLOR,
+                    feature_key: Some(TextFeatureKey::EmojiPresentationColor),
+                    selected: state.settings.emoji_presentation
+                        == unbound_text::EmojiPresentation::Color,
+                },
+                OptionItem {
+                    label: "Mono",
+                    part: PART_EMOJI_PRES_MONO,
+                    feature_key: Some(TextFeatureKey::EmojiPresentationMono),
+                    selected: state.settings.emoji_presentation
+                        == unbound_text::EmojiPresentation::Mono,
+                },
+            ],
+        ),
+        (
+            "Rasterizer",
+            &[
+                OptionItem {
+                    label: "Follow",
+                    part: PART_EMOJI_BACKEND_FOLLOW,
+                    feature_key: Some(TextFeatureKey::EmojiBackendFollow),
+                    selected: state.settings.emoji_backend == unbound_text::EmojiBackend::Follow,
+                },
+                OptionItem {
+                    label: "DW",
+                    part: PART_EMOJI_BACKEND_DW,
+                    feature_key: Some(TextFeatureKey::EmojiBackendDirectWrite),
+                    selected: state.settings.emoji_backend
+                        == unbound_text::EmojiBackend::DirectWrite,
+                },
+                OptionItem {
+                    label: "Cosmic",
+                    part: PART_EMOJI_BACKEND_COSMIC,
+                    feature_key: Some(TextFeatureKey::EmojiBackendCosmic),
+                    selected: state.settings.emoji_backend == unbound_text::EmojiBackend::Cosmic,
+                },
+            ],
+        ),
+        (
+            "Source",
+            &[
+                OptionItem {
+                    label: "System",
+                    part: PART_EMOJI_SOURCE_SYSTEM,
+                    feature_key: Some(TextFeatureKey::EmojiSourceSystem),
+                    selected: state.settings.emoji_source == unbound_text::EmojiSource::System,
+                },
+                OptionItem {
+                    label: "Builtin",
+                    part: PART_EMOJI_SOURCE_BUILTIN,
+                    feature_key: Some(TextFeatureKey::EmojiSourceBuiltin),
+                    selected: state.settings.emoji_source == unbound_text::EmojiSource::Builtin,
+                },
+                OptionItem {
+                    label: "Mesh",
+                    part: PART_EMOJI_SOURCE_GRID,
+                    feature_key: Some(TextFeatureKey::EmojiSourceGrid),
+                    selected: state.settings.emoji_source == unbound_text::EmojiSource::Grid,
+                },
+            ],
+        ),
+    ];
+
+    let mut current_y = rect.origin.y + padding;
+    for (row_title, options) in rows {
+        if current_y + row_h > rect.max().y {
+            break;
+        }
+
+        let title_rect = Rect::new(rect.origin.x + padding, current_y, title_w, row_h);
+        ctx.canvas.text(
+            row_title,
+            title_rect,
+            10.5,
+            palette.text_muted,
+            AlignX::Start,
+            AlignY::Center,
+        );
+
+        let options_x = rect.origin.x + padding + title_w;
+        let options_w = (rect.size.x - padding * 2.0 - title_w).max(20.0);
+        let btn_gap = 4.0;
+        let btn_w = (options_w - btn_gap * (options.len() as f32 - 1.0)) / options.len() as f32;
+
+        for (opt_idx, opt) in options.iter().enumerate() {
+            let btn_x = options_x + opt_idx as f32 * (btn_w + btn_gap);
+            let btn_rect = Rect::new(btn_x, current_y, btn_w, row_h);
+
+            // 表驱动灰化决议
+            let res = opt.feature_key.map_or(FeatureResolution::AVAILABLE, |key| {
+                resolve_feature(key, &caps, &state.settings)
+            });
+
+            let a11y_label = if let Some(reason) = res.reason {
+                format!("{} — Disabled: {}", opt.label, reason)
+            } else {
+                format!("{}: {}", row_title, opt.label)
+            };
+
+            ctx.control_state(
+                opt.part,
+                btn_rect,
+                Role::Button,
+                &a11y_label,
+                res.disabled,
+                opt.selected,
+            );
+
+            // 绘制按钮外观
+            let (bg, border, text_color) = if res.disabled {
+                (palette.surface, palette.card_border, palette.text_muted)
+            } else if opt.selected {
+                (palette.primary, palette.primary, palette.card_bg)
+            } else {
+                (palette.card_bg, palette.card_border, palette.text)
+            };
+
+            ctx.canvas.rect(btn_rect, 3.0, bg, border, 0.5, 0.0);
+            ctx.canvas.text(
+                opt.label,
+                btn_rect,
+                10.0,
+                text_color,
+                AlignX::Center,
+                AlignY::Center,
+            );
+        }
+
+        current_y += row_h + row_gap;
     }
 }

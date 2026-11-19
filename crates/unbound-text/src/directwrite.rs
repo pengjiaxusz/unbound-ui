@@ -91,6 +91,7 @@ impl DirectWriteRasterizer {
         font_size: f32,
         advance: f32,
         phase_offset: f32,
+        mono: bool,
     ) -> Option<RasterizedGlyph> {
         let face = if let Some(cached) = self.faces.get(key) {
             cached.clone()?
@@ -101,9 +102,12 @@ impl DirectWriteRasterizer {
         };
 
         // 彩色字体需要调色板渲染，DirectWrite 的单通道纹理拿不到颜色层。
-        if let Ok(face2) = face.cast::<IDWriteFontFace2>() {
-            if unsafe { face2.IsColorFont() }.as_bool() {
-                return None;
+        // 在单色模式下允许覆盖率光栅化。
+        if !mono {
+            if let Ok(face2) = face.cast::<IDWriteFontFace2>() {
+                if unsafe { face2.IsColorFont() }.as_bool() {
+                    return None;
+                }
             }
         }
 
