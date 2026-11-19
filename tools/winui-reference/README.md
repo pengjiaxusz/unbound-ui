@@ -2,11 +2,16 @@
 
 为 unbound-ui 的像素级一致性校验提供**官方 WinUI 3 控件参考截图**。本目录是一个独立的 .NET 8 / WinUI 3 非打包应用，不属于 Rust workspace，`just build` 不会处理它，也不需要改动仓库任何现有文件。
 
-## 核心特性（v2 拼版 + 紧凑出血 + 指纹缓存）
+## 核心特性（动态拼版页 + 2D 流式装箱 + 紧凑出血 + 指纹增量前置过滤）
 
-1. **状态拼版采集（Contact Sheet Batching）**：在 `--batch` 模式下，按「控件 × 主题 × 后景」为单位将同一控件支持的所有状态（如 `normal` / `disabled` / `checked`）并排放入同一张水平网格画布，共享一次 `350ms` 动画收敛与单次 `RenderTargetBitmap` 导出，随后自动按每个控件的 `controlBounds` + `16 DIP` 出血边距切分为紧凑单图。
-2. **版本与规格指纹缓存（Fingerprint Cache）**：每个用例 JSON 记录绑定了 `(WindowsAppSDKVersion, OSVersion, RasterizationScale, Control, State, Theme, Backdrop, SpecSignature)` 的 16 位 SHA-256 指纹。下次运行时若指纹一致且 PNG 存在，直接毫秒级跳过该拼版（可用 `--no-cache` 强制重截）。
-3. **确定性后景合成底板（Synthetic Backdrop）**：通过 `--backdrop solid|mica|mica_alt|acrylic|all` 控制画布底板。默认激活 `solid` 纯色基准面，并为后续云母/亚克力全面完工预留确定性合成底板。
+1. **瞬态采集载体与切片独立产物解耦（ADR 0015）**：将多控件动态拼版页（Dynamic Parity Page）界定为运行时的瞬态采集载体，排版坐标漂移完全不影响切片产物的单图像素与单用例指纹，下游 Rust 差分器与四重门禁零改动 100% 向后兼容。
+2. **多控件 2D 流式装箱与视口溢出安全分页（Dynamic Parity Page & Viewport Paging）**：在固定的确定性标准视口（`1920×1080 DIP`）内，按槽位期望高度降序（FFDH）紧凑流式装箱排布（自适应槽位测量、超宽自动换行）；当槽位行高度累加超过 1080 DIP 安全上限时自动截断当前页并顺延开启下一页。在同一个 Window 实例内主线程安全清空与挂载，无窗口重建与屏幕闪烁，单页仅需一次 `350ms` 动效收敛等待与单次 `RenderTargetBitmap` 导出，随后根据每个槽位的相对视觉几何边界（`TransformToVisual(Host)`）精准切出紧凑单图。
+3. **用例指纹增量前置过滤（Fingerprint Pre-Filtering）**：每个用例 JSON 记录绑定了 `(WindowsAppSDKVersion, OSVersion, RasterizationScale, Control, State, Theme, Backdrop, SpecSignature, SourceHash)` 的 16 位 SHA-256 指纹。送入装箱规划器前执行前置比对：
+   - 只有当控件内存在至少一个未命中状态或该控件被用户显式指定（或指定了 `--no-cache`）时，才将其送入装箱规划器；
+   - 已全部命中缓存的控件完全不进入装箱规划器，不分配版面槽位，不参与可视树测量；
+   - 若某主题下的所有控件均已命中缓存，系统直接打印 `[cache-hit]` 并跳过当前主题所有拼版页的渲染与等待，达到毫秒级退出。
+4. **多控件联合指定**：`--control` 支持传入逗号分隔的多个控件名（如 `--control Button,CheckBox`），系统自动将所有指定控件的支持状态集中排入同一瞬态画布一次性导出。
+5. **确定性后景合成底板（Synthetic Backdrop）**：通过 `--backdrop solid|mica|mica_alt|acrylic|all` 控制画布底板。默认激活 `solid` 纯色基准面，并为后续云母/亚克力全面完工预留确定性合成底板。
 
 ## 环境要求
 
@@ -24,10 +29,14 @@ dotnet build -c Release
 .\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe `
     --out .\captures --control Button --state normal --theme light
 
-# 批量状态拼版采集（单进程、状态并排拼版、命中指纹缓存自动跳过）
+# 多控件单页流式拼版采集（1920×1080 瞬态画布、单次 350ms 动效等待）
+.\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe `
+    --control Button,CheckBox --theme light --out .\captures
+
+# 批量动态拼版采集（全量或指定控件、多控件单页流式装箱、命中指纹缓存自动跳过）
 .\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe --batch --out .\captures
 
-# 强制忽略缓存重截并同时保存 _sheet.png 拼版总览图
+# 强制忽略缓存重截并同时保存 page_{index}_{theme}_{backdrop}_sheet.png 拼版总览图及索引 JSON
 .\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe --batch --no-cache --save-sheet --out .\captures
 ```
 
@@ -59,21 +68,26 @@ dotnet build -c Release
 | 参数 | 取值 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `--out <dir>` | 任意目录 | `captures` | 输出目录，不存在会自动创建 |
-| `--control <name>` | 见下方「已接入控件」 | `Button` | 大小写不敏感；与 `--batch` 同用时只采集该控件 |
-| `--state <state>` | `normal` `disabled` `checked` `focused` | `normal` | `checked` 仅支持 CheckBox / ToggleSwitch / ToggleButton / RadioButton |
-| `--theme <theme>` | `light` `dark` | `light` | 通过 `Host.RequestedTheme` 切换 |
+| `--control <names>` | 见下方「已接入控件」 | `Button` | 大小写不敏感；支持逗号分隔多个控件（如 `Button,CheckBox`） |
+| `--state <state>` | `normal` `disabled` `checked` `focused` | `normal` | `checked` 仅支持 CheckBox / ToggleSwitch / ToggleButton / RadioButton 等；缺省时采集所有支持状态 |
+| `--theme <theme>` | `light` `dark` `all` | `light` | 通过 `Host.RequestedTheme` 切换（`all` 仅限 `--batch`） |
 | `--backdrop <kind>` | `solid` `mica` `mica_alt` `acrylic` `all` | `solid` | 确定性合成底板类型（`all` 仅限 `--batch`） |
-| `--width <N>` | 64..8192 | `420` | 单例模式窗口宽度（批量模式按状态槽位自动计算并裁剪为紧凑出血画布） |
-| `--height <N>` | 64..8192 | `160` | 单例模式窗口高度 |
-| `--batch` | 开关 | 关闭 | 按「控件 × 主题 × 后景」生成状态拼版并自动切出紧凑单图 |
+| `--width <N>` | 64..8192 | `1920` | 画布宽度 DIP。动态拼版载体架构下，视口统一使用 1920×1080 标准画布以保证切片坐标确定性与抗裁剪；命令行传入值作为 `requestedWindowWidth` 记录在切片 JSON 元数据中 |
+| `--height <N>` | 64..8192 | `1080` | 画布高度 DIP。动态拼版载体架构下，视口统一使用 1920×1080 标准画布以保证切片坐标确定性与抗裁剪；命令行传入值作为 `requestedWindowHeight` 记录在切片 JSON 元数据中 |
+| `--batch` | 开关 | 关闭 | 批量模式：按「主题 × 后景」将待测控件流式装箱并自动切出紧凑单图 |
 | `--no-cache` | 开关 | 关闭 | 忽略 `fingerprint` 缓存，强制重新采集全部用例 |
-| `--save-sheet` | 开关 | 关闭 | 除切分后的单用例 PNG 外，额外保留 `<Control>_<theme>_<backdrop>_sheet.png` |
+| `--save-sheet` | 开关 | 关闭 | 除切分后的单用例 PNG 外，额外按页码输出 `page_{pageIndex:D2}_{theme}_{backdrop}_sheet.png` 拼版总览图及坐标索引 JSON |
 
-### 已接入控件（57 个）
+> **视口尺寸与坐标确定性说明**：
+> 在动态拼版架构（ADR 0015）下，瞬态排版载体统一使用 1920×1080 DIP 确定性画布进行 FFDH 流式装箱，杜绝因窗口动态拉伸导致的子像素抗锯齿抖动与切片边缘截断。命令行传入的 `--width` / `--height` 会被解析并校验在 `64..8192` 范围内，并作为 `requestedWindowWidth` / `requestedWindowHeight` 记录在切片 JSON 元数据中供回溯审计。
+
+### 已接入控件（64 个）
 
 - **首批试点**：`Button` `CheckBox` `ToggleSwitch` `Slider` `ComboBox` `TextBox`
 - **第一批（基础输入与文本）**：`ToggleButton` `SplitButton` `RadioButton` `RatingControl` `ColorPicker` `NumberBox` `AutoSuggestBox` `RichTextBlock` `ProgressBar` `ProgressRing` `InfoBadge` `ToolTip`
 - **第二批（导航、浮层、集合与日期）**：`InfoBar` `TeachingTip` `ContentDialog` `Flyout` `MenuFlyout` `MenuBar` `CommandBar` `NavigationView` `TabView` `Pivot` `BreadcrumbBar` `SelectorBar` `PipsPager` `Expander` `SplitView` `Border` `Card` `StackPanel` `ScrollView` `TreeView` `ListView` `FlipView` `CalendarView` `TimePicker` `PersonPicture` `Image` `FontIcon` `TitleBar`
 - **第三批（后续补齐的 WinUI 3 控件）**：`RichEditBox` `GridView` `ListBox` `CommandBarFlyout` `AppBarButton` `AppBarToggleButton` `AppBarSeparator` `SwipeControl` `RefreshContainer` `AnnotatedScrollBar` `ItemsView`
+- **第四批（按钮与切换类补充）**：`HyperlinkButton` `RepeatButton` `DropDownButton` `ToggleSplitButton`
+- **第五批（输入与日期类补充）**：`PasswordBox` `DatePicker` `CalendarDatePicker`
 
 > 说明：`Flyout` 与 `MenuFlyout` 本身不是 `FrameworkElement`，静态拼版以其呈现器（`FlyoutPresenter` / `MenuFlyoutPresenter`）为表面；`ToolTip`、`TeachingTip`、`ContentDialog` 需要运行时宿主才能展开，静态采集只测量其内容盒。这三类浮层后续由结构快照与人工屏幕捕获补足。
