@@ -19,20 +19,18 @@ use unbound_math::color::Color;
 use unbound_math::{Rect, Vec2};
 use unbound_theme::{Palette, ThemeKind, ThemeLut, Token};
 use unbound_widgets::button::ButtonTokens;
-use unbound_widgets::catalog::{emit_widget_with_shaper, CatalogParams};
 use unbound_widgets::primitive;
 use unbound_widgets::slot_fixture::{
     emit_canonical_text_rows_fixture, FixtureState, STANDARD_STACK_SPACING,
 };
 use unbound_widgets::{
-    emit_app_bar_button, emit_app_bar_toggle_button, emit_rich_edit_box, emit_scroll_view,
-    AppBarButtonDesc, AppBarSeparatorDesc, AppBarToggleButtonDesc, ButtonDesc, ButtonVariant,
+    emit_rich_edit_box, emit_scroll_view, AppBarSeparatorDesc, ButtonDesc, ButtonVariant,
     CalendarDatePickerDesc, CalendarDatePickerState, CheckboxDesc, ControlState,
     DatePickerWheelDesc, DatePickerWheelState, DropDownButtonDesc, DropDownButtonState,
     HyperlinkButtonDesc, NaiveDate, PasswordBoxDesc, PasswordBoxState, PointerPhase,
     RepeatButtonDesc, RepeatButtonState, RichEditBoxDesc, ScrollState, ScrollViewDesc, SelectDesc,
     SliderDesc, SwitchDesc, TextCtx, TextInputDesc, ToggleSplitButtonDesc, ToggleSplitButtonState,
-    UiWidget, WidgetCatalogId, WidgetOutput,
+    UiWidget, WidgetOutput,
 };
 
 use crate::gallery::{palette, Gallery, Labels};
@@ -1777,82 +1775,37 @@ fn emit_case(
             Vec2::new(size.x, 32.0)
         }
         "AppBarButton" => {
-            // WinUI 3 AppBarButton 规范：
-            // 标准尺寸宽 68px、高 48px（紧凑模式下 40×40px）。
-            // 包含顶部 16px Segoe Fluent Icons 图标与底部居中文本文案。
-            let btn_w = if rect.width() > 0.0 {
-                rect.width()
-            } else {
-                68.0
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
             };
-            let btn_h = if rect.height() > 0.0 {
-                rect.height()
-            } else {
-                48.0
-            };
-            let btn_r = Rect::new(rect.origin.x, rect.origin.y, btn_w, btn_h);
-            let desc = AppBarButtonDesc::new(btn_r, "Save");
-
-            let mut glyphs = Vec::new();
-            if btn_h >= 44.0 {
-                let icon_r = Rect::new(btn_r.origin.x, btn_r.origin.y + 6.0, btn_w, 16.0);
-                glyphs.extend(icon_quads(text_ctx, "\u{E74E}", icon_r, 16.0));
-                let label_r = Rect::new(btn_r.origin.x, btn_r.origin.y + 26.0, btn_w, 16.0);
-                glyphs.extend(text_ctx.shape_line_styled(
-                    "Save",
-                    label_r,
-                    12.0,
-                    400,
-                    None,
-                    unbound_widgets::AlignX::Center,
-                    unbound_widgets::AlignY::Middle,
-                ));
-            } else {
-                glyphs.extend(icon_quads(text_ctx, "\u{E74E}", btn_r, 16.0));
-            }
-
-            let out = emit_app_bar_button(NODE, &desc, control, &mut glyphs);
-            push(scene, out);
-            Vec2::new(btn_w, btn_h)
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_app_bar_button_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            fixture.total_size
         }
         "AppBarToggleButton" => {
-            // WinUI 3 AppBarToggleButton 规范：
-            // 标准尺寸宽 68px、高 48px。
-            // 支持 checked 状态：底边 2px 强调色胶囊指示条与微浅色高亮背景。
-            let btn_w = if rect.width() > 0.0 {
-                rect.width()
-            } else {
-                68.0
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
             };
-            let btn_h = if rect.height() > 0.0 {
-                rect.height()
-            } else {
-                48.0
-            };
-            let btn_r = Rect::new(rect.origin.x, rect.origin.y, btn_w, btn_h);
-            let desc = AppBarToggleButtonDesc::new(btn_r, "Bold", checked);
-
-            let mut glyphs = Vec::new();
-            if btn_h >= 44.0 {
-                let icon_r = Rect::new(btn_r.origin.x, btn_r.origin.y + 6.0, btn_w, 16.0);
-                glyphs.extend(icon_quads(text_ctx, "\u{E8DD}", icon_r, 16.0));
-                let label_r = Rect::new(btn_r.origin.x, btn_r.origin.y + 26.0, btn_w, 16.0);
-                glyphs.extend(text_ctx.shape_line_styled(
-                    "Bold",
-                    label_r,
-                    12.0,
-                    if checked { 600 } else { 400 },
-                    None,
-                    unbound_widgets::AlignX::Center,
-                    unbound_widgets::AlignY::Middle,
-                ));
-            } else {
-                glyphs.extend(icon_quads(text_ctx, "\u{E8DD}", btn_r, 16.0));
-            }
-
-            let out = emit_app_bar_toggle_button(NODE, &desc, control, &mut glyphs);
-            push(scene, out);
-            Vec2::new(btn_w, btn_h)
+            let fixture =
+                unbound_widgets::slot_fixture::emit_canonical_app_bar_toggle_button_fixture(
+                    rect,
+                    fixture_state,
+                    text_ctx,
+                    700,
+                );
+            push(scene, fixture.output);
+            fixture.total_size
         }
         "AppBarSeparator" => {
             // WinUI 3 AppBarSeparator 规范：
@@ -2510,165 +2463,36 @@ fn emit_case(
             Vec2::new(dialog_w, dialog_h)
         }
         "Flyout" => {
-            // WinUI 3 Flyout / FlyoutPresenter 规范：
-            // 固有宽度 200px、高度 60px。
-            // 容器外圆角 8px（OverlayCornerRadius）、1px SurfaceStroke 微描边（CARD_BORDER）。
-            // 24px 海拔解析阴影（FlyoutElevation）。
-            // 呈现器内部承载 Content="Flyout" 标签。
-            let flyout_w = if rect.width() > 0.0 {
-                rect.width()
-            } else {
-                200.0
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
             };
-            let flyout_h = if rect.height() > 0.0 {
-                rect.height()
-            } else {
-                60.0
-            };
-            let flyout_r = Rect::new(rect.origin.x, rect.origin.y, flyout_w, flyout_h);
-            let disabled = control.disabled;
-
-            let mut out = WidgetOutput::default();
-            // 1. 24px 解析阴影
-            out.primitives.push(primitive::instance(
-                flyout_r,
-                [8.0; 4],
-                Token::NONE,
-                Token::NONE,
-                0.0,
-                24.0,
-                PrimType::Shadow,
-                SubElement::Shadow,
-                900,
-            ));
-            // 2. 浮层表面背景
-            out.primitives
-                .push(primitive::surface(flyout_r, 8.0, Token::OVERLAY_BG, 900));
-            // 3. 1px SurfaceStroke 微描边
-            out.primitives.push(primitive::instance(
-                flyout_r,
-                [8.0; 4],
-                Token::NONE,
-                Token::CARD_BORDER,
-                1.0,
-                0.0,
-                PrimType::RoundedRect,
-                SubElement::Border,
-                900,
-            ));
-            push(scene, out);
-
-            // 4. 排版内容文本
-            let text_ink = if disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_PRIMARY
-            };
-            let quads = text_ctx.shape_line_styled(
-                "Flyout",
-                Rect::new(
-                    flyout_r.origin.x + 12.0,
-                    flyout_r.origin.y + 10.0,
-                    flyout_w - 24.0,
-                    20.0,
-                ),
-                14.0,
-                400,
-                None,
-                unbound_widgets::AlignX::Left,
-                unbound_widgets::AlignY::Top,
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_flyout_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
             );
-            emit_quads(scene, &quads, text_ink, 902);
-
-            Vec2::new(flyout_w, flyout_h)
+            push(scene, fixture.output);
+            fixture.total_size
         }
         "MenuFlyout" => {
-            // WinUI 3 MenuFlyout / MenuFlyoutPresenter 规范：
-            // 固有宽度 200px。
-            // 容器外圆角 8px（OverlayCornerRadius）、1px SurfaceStroke 微描边（CARD_BORDER）。
-            // 18px 海拔解析阴影（MenuFlyout 阴影阶梯）。
-            // 呈现器内部承载 2 个菜单项：Item 1 与 Item 2，菜单项高 36px。
-            let menu_w = if rect.width() > 0.0 {
-                rect.width()
-            } else {
-                200.0
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
             };
-            let item_h = 36.0;
-            let menu_h = if rect.height() > 0.0 {
-                rect.height()
-            } else {
-                item_h * 2.0 + 8.0
-            };
-            let menu_r = Rect::new(rect.origin.x, rect.origin.y, menu_w, menu_h);
-            let disabled = control.disabled;
-
-            let mut out = WidgetOutput::default();
-            // 1. 18px 解析阴影
-            out.primitives.push(primitive::instance(
-                menu_r,
-                [8.0; 4],
-                Token::NONE,
-                Token::NONE,
-                0.0,
-                18.0,
-                PrimType::Shadow,
-                SubElement::Shadow,
-                905,
-            ));
-            // 2. 菜单表面背景
-            out.primitives
-                .push(primitive::surface(menu_r, 8.0, Token::OVERLAY_BG, 905));
-            // 3. 1px SurfaceStroke 微描边
-            out.primitives.push(primitive::instance(
-                menu_r,
-                [8.0; 4],
-                Token::NONE,
-                Token::CARD_BORDER,
-                1.0,
-                0.0,
-                PrimType::RoundedRect,
-                SubElement::Border,
-                905,
-            ));
-
-            // 4. 菜单项行（Item 1 与 Item 2）
-            let items = ["Item 1", "Item 2"];
-            for (idx, _name) in items.iter().enumerate() {
-                let row_y = menu_r.origin.y + 4.0 + idx as f32 * item_h;
-                let row_r = Rect::new(menu_r.origin.x + 4.0, row_y, menu_w - 8.0, item_h);
-                let is_hovered = checked && idx == 0;
-                let fill = if is_hovered {
-                    Token::HOVER
-                } else {
-                    Token::NONE
-                };
-                out.primitives
-                    .push(primitive::surface(row_r, 4.0, fill, 906));
-            }
-            push(scene, out);
-
-            // 5. 排版菜单项文本
-            let text_ink = if disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_PRIMARY
-            };
-            for (idx, name) in items.iter().enumerate() {
-                let row_y = menu_r.origin.y + 4.0 + idx as f32 * item_h;
-                let text_r = Rect::new(menu_r.origin.x + 16.0, row_y, menu_w - 32.0, item_h);
-                let quads = text_ctx.shape_line_styled(
-                    name,
-                    text_r,
-                    14.0,
-                    400,
-                    None,
-                    unbound_widgets::AlignX::Left,
-                    unbound_widgets::AlignY::Middle,
-                );
-                emit_quads(scene, &quads, text_ink, 907);
-            }
-
-            Vec2::new(menu_w, menu_h)
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_menu_flyout_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            fixture.total_size
         }
         "TeachingTip" => {
             // WinUI 3 TeachingTip 引导气泡规范：
@@ -3666,35 +3490,158 @@ fn emit_case(
 
             Vec2::new(hcc_w, hcc_h)
         }
-        other => {
-            let id: WidgetCatalogId =
-                catalog_id_for(other).ok_or_else(|| format!("unknown parity control: {other}"))?;
-            let params = CatalogParams {
-                value_norm: 0.5,
-                variant_idx: usize::from(checked),
-                show_icon: true,
-                bordered: true,
-                active: true,
-                compact: false,
-                read_only: false,
-                toggled: checked,
-                click_count: 0,
+        "InfoBar" => {
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
             };
-            let output =
-                emit_widget_with_shaper(id, NODE, control, rect, params, |text, origin, size| {
-                    shape_at(text_ctx, text, origin, size)
-                });
-            push(scene, output);
-            // 没有实现 `UiWidget` 的组件暂时以参考边界作为固有尺寸；一旦其描述符
-            // 补齐 `intrinsic_size`，这里会自动被替换为真实测量值。
-            rect.size
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_info_bar_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            fixture.total_size
         }
+        "Pivot" => {
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_pivot_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            fixture.total_size
+        }
+        "Expander" => {
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_expander_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            fixture.total_size
+        }
+        "SplitView" => {
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_split_view_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            fixture.total_size
+        }
+        "CalendarView" => {
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_calendar_view_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            fixture.total_size
+        }
+        "TimePicker" => {
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_time_picker_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            fixture.total_size
+        }
+        "PersonPicture" => {
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_person_picture_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            fixture.total_size
+        }
+        "FontIcon" => {
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_font_icon_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            fixture.total_size
+        }
+        "Image" => {
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_image_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            fixture.total_size
+        }
+        other => return Err(format!("unimplemented parity control: {other}")),
     };
 
     Ok(intrinsic)
 }
 
 /// 按绝对起点与字号排版一行文本，供目录通用发射器复用同一套字形缓存。
+#[allow(dead_code)]
 fn shape_at(
     text_ctx: &mut TextCtx<'_>,
     text: &str,
@@ -3870,4 +3817,69 @@ fn push(scene: &mut Gallery, mut output: unbound_widgets::WidgetOutput) {
     }
     scene.primitives.extend(output.primitives);
     scene.payloads.extend(output.payloads);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_all_supported_controls_have_explicit_branches_without_unimplemented_error() {
+        let states = ["normal", "disabled", "checked", "focused"];
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut text_ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 0,
+            raster_scale: 1.0,
+        };
+        let mut texture_quads = Vec::new();
+        let bounds = Rect::new(0.0, 0.0, 320.0, 240.0);
+
+        for control in SUPPORTED_CONTROLS {
+            for state in states {
+                let case = ParityCase {
+                    control,
+                    state,
+                    theme: "light",
+                    backdrop: "solid",
+                };
+                let mut scene = Gallery::new();
+                let res = emit_case(&case, bounds, &mut scene, &mut text_ctx, &mut texture_quads);
+                assert!(
+                    res.is_ok(),
+                    "control '{control}' in state '{state}' failed with error: {:?}",
+                    res.err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_unimplemented_control_triggers_explicit_error_and_blocks_fallback() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut text_ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 0,
+            raster_scale: 1.0,
+        };
+        let mut texture_quads = Vec::new();
+        let bounds = Rect::new(0.0, 0.0, 320.0, 240.0);
+        let case = ParityCase {
+            control: "UnknownFutureWidget",
+            state: "normal",
+            theme: "light",
+            backdrop: "solid",
+        };
+        let mut scene = Gallery::new();
+        let res = emit_case(&case, bounds, &mut scene, &mut text_ctx, &mut texture_quads);
+        assert!(res.is_err());
+        assert_eq!(
+            res.err().unwrap(),
+            "unimplemented parity control: UnknownFutureWidget"
+        );
+    }
 }

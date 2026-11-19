@@ -6,7 +6,7 @@
 //! 3. 通用垂直列表/堆叠插桩辅助：固定输出统一字号与间距的 `Row 1`、`Row 2`、`Row 3`（用于 `StackPanel`、`ScrollView`、`ListView` 等）；
 //! 4. 通用递归禁用态（`disabled`）传播机制：保证容器处于 `disabled` 状态时，所有子插桩文本、图标与指示器同步应用半透明度衰减与变灰。
 
-use unbound_gpu::data::{GpuPrimitiveInstance, PrimType};
+use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
 
@@ -91,6 +91,82 @@ pub const CANONICAL_FLIP_PAGES: [&str; 2] = ["Page 1", "Page 2"];
 
 /// 标准下拉刷新提示文本。
 pub const CANONICAL_REFRESH_TEXT: &str = "Pull to refresh";
+
+/// 标准 InfoBar 标题与消息文案。
+pub const CANONICAL_INFOBAR_TITLE: &str = "InfoBar";
+pub const CANONICAL_INFOBAR_MESSAGE: &str = "Message";
+pub const CANONICAL_INFOBAR_WIDTH: f32 = 320.0;
+pub const CANONICAL_INFOBAR_HEIGHT: f32 = 48.0;
+pub const CANONICAL_INFOBAR_ICON_GLYPH: &str = "\u{E946}";
+pub const CANONICAL_INFOBAR_CLOSE_GLYPH: &str = "\u{E711}";
+
+/// 标准 Expander 标题与正文。
+pub const CANONICAL_EXPANDER_HEADER: &str = "Expander";
+pub const CANONICAL_EXPANDER_BODY: &str = "Body";
+pub const CANONICAL_EXPANDER_WIDTH: f32 = 320.0;
+pub const CANONICAL_EXPANDER_HEADER_HEIGHT: f32 = 48.0;
+pub const CANONICAL_EXPANDER_CONTENT_HEIGHT: f32 = 48.0;
+pub const CANONICAL_EXPANDER_CHEVRON_UP: &str = "\u{E70E}";
+pub const CANONICAL_EXPANDER_CHEVRON_DOWN: &str = "\u{E70D}";
+
+/// 标准 SplitView 左右分区文案。
+pub const CANONICAL_SPLIT_VIEW_PANE_TEXT: &str = "Pane";
+pub const CANONICAL_SPLIT_VIEW_CONTENT_TEXT: &str = "Content";
+pub const CANONICAL_SPLIT_VIEW_WIDTH: f32 = 320.0;
+pub const CANONICAL_SPLIT_VIEW_HEIGHT: f32 = 120.0;
+pub const CANONICAL_SPLIT_VIEW_PANE_WIDTH: f32 = 120.0;
+
+/// 标准 CalendarView 规范。
+pub const CANONICAL_CALENDAR_WIDTH: f32 = 300.0;
+pub const CANONICAL_CALENDAR_HEIGHT: f32 = 260.0;
+pub const CANONICAL_CALENDAR_TITLE: &str = "January 2026";
+pub const CANONICAL_CALENDAR_DAYS_HEADER: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+pub const CANONICAL_CALENDAR_SELECTED_DAY: u8 = 15;
+
+/// 标准 TimePicker 规范。
+pub const CANONICAL_TIME_PICKER_WIDTH: f32 = 200.0;
+pub const CANONICAL_TIME_PICKER_HEIGHT: f32 = 32.0;
+pub const CANONICAL_TIME_COLUMNS: [&str; 3] = ["13", "30", "00"];
+
+/// 标准 PersonPicture 规范。
+pub const CANONICAL_PERSON_PICTURE_INITIALS: &str = "AB";
+pub const CANONICAL_PERSON_PICTURE_SIZE: f32 = 48.0;
+
+/// 标准 FontIcon 规范。
+pub const CANONICAL_FONT_ICON_GLYPH: &str = "\u{E71D}";
+pub const CANONICAL_FONT_ICON_SIZE: f32 = 32.0;
+pub const CANONICAL_FONT_ICON_FONT_SIZE: f32 = 24.0;
+
+/// 标准 Pivot 规范。
+pub const CANONICAL_PIVOT_ITEMS: [&str; 2] = ["One", "Two"];
+pub const CANONICAL_PIVOT_CONTENT: &str = "One";
+pub const CANONICAL_PIVOT_WIDTH: f32 = 320.0;
+pub const CANONICAL_PIVOT_HEIGHT: f32 = 120.0;
+pub const CANONICAL_PIVOT_HEADER_HEIGHT: f32 = 48.0;
+
+/// 标准 Image 规范。
+pub const CANONICAL_IMAGE_SIZE: Vec2 = Vec2::new(64.0, 64.0);
+
+/// 标准 Flyout 规范。
+pub const CANONICAL_FLYOUT_TEXT: &str = "Flyout";
+pub const CANONICAL_FLYOUT_WIDTH: f32 = 200.0;
+pub const CANONICAL_FLYOUT_HEIGHT: f32 = 60.0;
+
+/// 标准 MenuFlyout 规范。
+pub const CANONICAL_MENU_FLYOUT_ITEMS: [&str; 2] = ["Item 1", "Item 2"];
+pub const CANONICAL_MENU_FLYOUT_WIDTH: f32 = 200.0;
+pub const CANONICAL_MENU_FLYOUT_ITEM_HEIGHT: f32 = 36.0;
+
+/// 标准 AppBarButton 与 AppBarToggleButton 规范。
+pub const CANONICAL_APP_BAR_BUTTON_LABEL: &str = "Save";
+pub const CANONICAL_APP_BAR_BUTTON_GLYPH: &str = "\u{E74E}";
+pub const CANONICAL_APP_BAR_BUTTON_WIDTH: f32 = 68.0;
+pub const CANONICAL_APP_BAR_BUTTON_HEIGHT: f32 = 48.0;
+
+pub const CANONICAL_APP_BAR_TOGGLE_BUTTON_LABEL: &str = "Bold";
+pub const CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH: &str = "\u{E8DD}";
+pub const CANONICAL_APP_BAR_TOGGLE_BUTTON_WIDTH: f32 = 68.0;
+pub const CANONICAL_APP_BAR_TOGGLE_BUTTON_HEIGHT: f32 = 48.0;
 
 /// 标准插桩文本字号（WinUI 3 默认 TextBlock 字号）。
 pub const STANDARD_FONT_SIZE: f32 = 14.0;
@@ -403,6 +479,155 @@ pub struct AnnotatedScrollBarFixtureOutput {
     pub thumb_rect: Rect,
     /// 测得的整体尺寸。
     pub total_size: Vec2,
+}
+
+/// 通用 InfoBar 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct InfoBarFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 整体包围矩形。
+    pub rect: Rect,
+}
+
+/// 通用 Expander 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct ExpanderFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 头部矩形。
+    pub header_rect: Rect,
+    /// 内容区矩形。
+    pub content_rect: Rect,
+}
+
+/// 通用 SplitView 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct SplitViewFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 侧边窗格矩形。
+    pub pane_rect: Rect,
+    /// 主内容区矩形。
+    pub content_rect: Rect,
+}
+
+/// 通用 CalendarView 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct CalendarViewFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 整体包围矩形。
+    pub rect: Rect,
+}
+
+/// 通用 TimePicker 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct TimePickerFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 整体包围矩形。
+    pub rect: Rect,
+}
+
+/// 通用 PersonPicture 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct PersonPictureFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 整体包围矩形。
+    pub rect: Rect,
+}
+
+/// 通用 FontIcon 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct FontIconFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 整体包围矩形。
+    pub rect: Rect,
+}
+
+/// 通用 Pivot 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct PivotFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 头部矩形。
+    pub header_rect: Rect,
+    /// 内容区矩形。
+    pub content_rect: Rect,
+}
+
+/// 通用 Image 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct ImageFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 整体包围矩形。
+    pub rect: Rect,
+}
+
+/// 通用 Flyout 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct FlyoutFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 整体包围矩形。
+    pub rect: Rect,
+}
+
+/// 通用 MenuFlyout 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct MenuFlyoutFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 整体包围矩形。
+    pub rect: Rect,
+}
+
+/// 通用 AppBarButton 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct AppBarButtonFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 整体包围矩形。
+    pub rect: Rect,
+}
+
+/// 通用 AppBarToggleButton 插桩输出。
+#[derive(Clone, Debug, Default)]
+pub struct AppBarToggleButtonFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 整体尺寸。
+    pub total_size: Vec2,
+    /// 整体包围矩形。
+    pub rect: Rect,
 }
 
 /// 发射标准化 3 级路径插桩（`Root > Folder > File.txt`）。
@@ -2383,6 +2608,1443 @@ pub fn emit_canonical_annotated_scroll_bar_fixture(
         track_rect,
         thumb_rect,
         total_size: Vec2::new(bar_w, bar_h),
+    }
+}
+
+/// 发射标准化 InfoBar 插桩。
+pub fn emit_canonical_info_bar_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> InfoBarFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        CANONICAL_INFOBAR_WIDTH
+    };
+    let h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        CANONICAL_INFOBAR_HEIGHT
+    };
+    let total_r = Rect::new(rect.origin.x, rect.origin.y, w, h);
+    let disabled = state.disabled;
+
+    // 1. 底板与微描边
+    out.primitives
+        .push(primitive::surface(total_r, 4.0, Token::CARD_BG, z));
+    out.primitives.push(primitive::outlined(
+        total_r,
+        4.0,
+        Token::NONE,
+        Token::CARD_BORDER,
+        1.0,
+        0.0,
+        z,
+    ));
+
+    // 2. 左侧状态色条
+    let stripe_ink = if disabled {
+        Token::CONTROL_DISABLED_THUMB
+    } else {
+        Token::PRIMARY
+    };
+    out.primitives.push(primitive::surface(
+        Rect::new(total_r.origin.x, total_r.origin.y, 4.0, h),
+        2.0,
+        stripe_ink,
+        z + 1,
+    ));
+
+    // 3. 严重级别图标（Info）
+    let icon_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::PRIMARY
+    };
+    let icon_r = Rect::new(
+        total_r.origin.x + 16.0,
+        total_r.origin.y + (h - 16.0) * 0.5,
+        16.0,
+        16.0,
+    );
+    let icon_quads = text_ctx.shape_line_styled(
+        CANONICAL_INFOBAR_ICON_GLYPH,
+        icon_r,
+        16.0,
+        400,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &icon_quads,
+        icon_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    // 4. Title 标题与 Message 消息文本
+    let title_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let title_r = Rect::new(total_r.origin.x + 40.0, total_r.origin.y, 60.0, h);
+    let title_quads = text_ctx.shape_line_styled(
+        CANONICAL_INFOBAR_TITLE,
+        title_r,
+        STANDARD_FONT_SIZE,
+        600,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &title_quads,
+        title_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    let msg_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_SECONDARY
+    };
+    let msg_r = Rect::new(
+        total_r.origin.x + 105.0,
+        total_r.origin.y,
+        (total_r.width() - 145.0).max(10.0),
+        h,
+    );
+    let msg_quads = text_ctx.shape_line_styled(
+        CANONICAL_INFOBAR_MESSAGE,
+        msg_r,
+        STANDARD_FONT_SIZE,
+        400,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &msg_quads,
+        msg_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    // 5. 关闭按钮
+    let close_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_SECONDARY
+    };
+    let close_r = Rect::new(
+        total_r.max().x - 30.0,
+        total_r.origin.y + (h - 16.0) * 0.5,
+        16.0,
+        16.0,
+    );
+    let close_quads = text_ctx.shape_line_styled(
+        CANONICAL_INFOBAR_CLOSE_GLYPH,
+        close_r,
+        12.0,
+        400,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &close_quads,
+        close_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    // 6. 焦点环
+    if state.focused && !disabled {
+        out.primitives.push(primitive::focus_ring(
+            total_r.inflate(1.0),
+            4.0,
+            Token::FOCUS_RING,
+            2.0,
+            z + 10,
+            true,
+        ));
+    }
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    InfoBarFixtureOutput {
+        output: out,
+        total_size: Vec2::new(w, h),
+        rect: total_r,
+    }
+}
+
+/// 发射标准化 Expander 折叠展开面板插桩。
+pub fn emit_canonical_expander_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> ExpanderFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        CANONICAL_EXPANDER_WIDTH
+    };
+    let header_h = CANONICAL_EXPANDER_HEADER_HEIGHT;
+    let content_h = CANONICAL_EXPANDER_CONTENT_HEIGHT;
+    let total_h = header_h + content_h;
+    let disabled = state.disabled;
+
+    let header_r = Rect::new(rect.origin.x, rect.origin.y, w, header_h);
+    let content_r = Rect::new(rect.origin.x, rect.origin.y + header_h, w, content_h);
+
+    // 1. 头部背景与描边
+    out.primitives
+        .push(primitive::surface(header_r, 4.0, Token::CARD_BG, z));
+    out.primitives.push(primitive::outlined(
+        header_r,
+        4.0,
+        Token::NONE,
+        Token::CARD_BORDER,
+        1.0,
+        0.0,
+        z,
+    ));
+
+    // 2. 头部文本 "Expander"
+    let header_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let header_text_r = Rect::new(
+        header_r.origin.x + 16.0,
+        header_r.origin.y,
+        w - 64.0,
+        header_h,
+    );
+    let header_quads = text_ctx.shape_line_styled(
+        CANONICAL_EXPANDER_HEADER,
+        header_text_r,
+        STANDARD_FONT_SIZE,
+        400,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &header_quads,
+        header_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    // 3. 头部展开折叠指示图标（向上箭头）
+    let chevron_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_SECONDARY
+    };
+    let chevron_r = Rect::new(
+        header_r.max().x - 32.0,
+        header_r.origin.y + (header_h - 16.0) * 0.5,
+        16.0,
+        16.0,
+    );
+    let chevron_quads = text_ctx.shape_line_styled(
+        CANONICAL_EXPANDER_CHEVRON_UP,
+        chevron_r,
+        12.0,
+        400,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &chevron_quads,
+        chevron_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    // 4. 分隔边框线
+    out.primitives.push(primitive::surface(
+        Rect::new(header_r.origin.x, header_r.max().y - 1.0, w, 1.0),
+        0.0,
+        Token::CARD_BORDER,
+        z + 1,
+    ));
+
+    // 5. 内容区背景与描边
+    out.primitives
+        .push(primitive::surface(content_r, 4.0, Token::SURFACE, z));
+    out.primitives.push(primitive::outlined(
+        content_r,
+        4.0,
+        Token::NONE,
+        Token::CARD_BORDER,
+        1.0,
+        0.0,
+        z,
+    ));
+
+    // 6. 内容区正文 "Body"
+    let body_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let body_text_r = Rect::new(
+        content_r.origin.x + 16.0,
+        content_r.origin.y,
+        w - 32.0,
+        content_h,
+    );
+    let body_quads = text_ctx.shape_line_styled(
+        CANONICAL_EXPANDER_BODY,
+        body_text_r,
+        STANDARD_FONT_SIZE,
+        400,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &body_quads,
+        body_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    if state.focused && !disabled {
+        out.primitives.push(primitive::focus_ring(
+            header_r.inflate(1.0),
+            4.0,
+            Token::FOCUS_RING,
+            2.0,
+            z + 10,
+            true,
+        ));
+    }
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    ExpanderFixtureOutput {
+        output: out,
+        total_size: Vec2::new(w, total_h),
+        header_rect: header_r,
+        content_rect: content_r,
+    }
+}
+
+/// 发射标准化 SplitView 分割视图插桩。
+pub fn emit_canonical_split_view_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> SplitViewFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        CANONICAL_SPLIT_VIEW_WIDTH
+    };
+    let h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        CANONICAL_SPLIT_VIEW_HEIGHT
+    };
+    let pane_w = CANONICAL_SPLIT_VIEW_PANE_WIDTH;
+    let disabled = state.disabled;
+
+    let pane_r = Rect::new(rect.origin.x, rect.origin.y, pane_w, h);
+    let content_r = Rect::new(
+        rect.origin.x + pane_w,
+        rect.origin.y,
+        (w - pane_w).max(1.0),
+        h,
+    );
+
+    // 1. 窗格底板与右侧分隔线
+    out.primitives
+        .push(primitive::surface(pane_r, 0.0, Token::SURFACE_SUNKEN, z));
+    out.primitives.push(primitive::surface(
+        Rect::new(pane_r.max().x - 1.0, rect.origin.y, 1.0, h),
+        0.0,
+        Token::CARD_BORDER,
+        z + 1,
+    ));
+
+    // 2. 窗格文字 "Pane"
+    let text_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let pane_text_r = Rect::new(
+        pane_r.origin.x + 16.0,
+        pane_r.origin.y + 16.0,
+        pane_w - 32.0,
+        24.0,
+    );
+    let pane_quads = text_ctx.shape_line_styled(
+        CANONICAL_SPLIT_VIEW_PANE_TEXT,
+        pane_text_r,
+        STANDARD_FONT_SIZE,
+        400,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &pane_quads,
+        text_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    // 3. 内容区底板与文字 "Content"
+    out.primitives
+        .push(primitive::surface(content_r, 0.0, Token::SURFACE, z));
+    let content_text_r = Rect::new(
+        content_r.origin.x + 16.0,
+        content_r.origin.y + 16.0,
+        content_r.width() - 32.0,
+        24.0,
+    );
+    let content_quads = text_ctx.shape_line_styled(
+        CANONICAL_SPLIT_VIEW_CONTENT_TEXT,
+        content_text_r,
+        STANDARD_FONT_SIZE,
+        400,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &content_quads,
+        text_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    SplitViewFixtureOutput {
+        output: out,
+        total_size: Vec2::new(w, h),
+        pane_rect: pane_r,
+        content_rect: content_r,
+    }
+}
+
+/// 发射标准化 CalendarView 日历视图插桩。
+pub fn emit_canonical_calendar_view_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> CalendarViewFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        CANONICAL_CALENDAR_WIDTH
+    };
+    let h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        CANONICAL_CALENDAR_HEIGHT
+    };
+    let total_r = Rect::new(rect.origin.x, rect.origin.y, w, h);
+    let disabled = state.disabled;
+
+    // 1. 外围表面卡片与描边
+    out.primitives
+        .push(primitive::surface(total_r, 4.0, Token::SURFACE, z));
+    out.primitives.push(primitive::outlined(
+        total_r,
+        4.0,
+        Token::NONE,
+        Token::CARD_BORDER,
+        1.0,
+        0.0,
+        z,
+    ));
+
+    // 2. 顶部标题栏 "January 2026"
+    let title_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let title_r = Rect::new(
+        total_r.origin.x + 16.0,
+        total_r.origin.y + 10.0,
+        160.0,
+        24.0,
+    );
+    let title_quads = text_ctx.shape_line_styled(
+        CANONICAL_CALENDAR_TITLE,
+        title_r,
+        STANDARD_FONT_SIZE,
+        600,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &title_quads,
+        title_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    // 导航箭头
+    let nav_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_SECONDARY
+    };
+    let up_r = Rect::new(total_r.max().x - 48.0, total_r.origin.y + 12.0, 16.0, 16.0);
+    let up_quads = text_ctx.shape_line_styled(
+        CANONICAL_EXPANDER_CHEVRON_UP,
+        up_r,
+        12.0,
+        400,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &up_quads,
+        nav_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    let down_r = Rect::new(total_r.max().x - 24.0, total_r.origin.y + 12.0, 16.0, 16.0);
+    let down_quads = text_ctx.shape_line_styled(
+        CANONICAL_EXPANDER_CHEVRON_DOWN,
+        down_r,
+        12.0,
+        400,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &down_quads,
+        nav_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    // 3. 星期表头
+    let col_w = (w - 16.0) / 7.0;
+    let week_y = total_r.origin.y + 40.0;
+    for (col, &day_name) in CANONICAL_CALENDAR_DAYS_HEADER.iter().enumerate() {
+        let cell_r = Rect::new(
+            total_r.origin.x + 8.0 + col as f32 * col_w,
+            week_y,
+            col_w,
+            20.0,
+        );
+        let cell_quads = text_ctx.shape_line_styled(
+            day_name,
+            cell_r,
+            12.0,
+            400,
+            None,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &cell_quads,
+            nav_ink,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
+
+    // 4. 日期网格（1 到 31 日，固定排布，15 日为选中态）
+    let grid_y = total_r.origin.y + 64.0;
+    let row_h = 28.0;
+    let day_strings: [String; 31] = std::array::from_fn(|i| (i + 1).to_string());
+    for day in 1..=31u8 {
+        let idx = (day + 3) as usize; // 起始偏移 4（从周四开始）
+        let col = idx % 7;
+        let row = idx / 7;
+        let cell_r = Rect::new(
+            total_r.origin.x + 8.0 + col as f32 * col_w,
+            grid_y + row as f32 * row_h,
+            col_w,
+            row_h,
+        );
+
+        let is_selected = !disabled && (day == CANONICAL_CALENDAR_SELECTED_DAY);
+        if is_selected {
+            let pill_size = 26.0;
+            let pill_r = Rect::new(
+                cell_r.origin.x + (cell_r.width() - pill_size) * 0.5,
+                cell_r.origin.y + (cell_r.height() - pill_size) * 0.5,
+                pill_size,
+                pill_size,
+            );
+            out.primitives.push(primitive::surface(
+                pill_r,
+                pill_size * 0.5,
+                Token::PRIMARY,
+                z + 3,
+            ));
+        }
+
+        let day_ink = if disabled {
+            Token::TEXT_DISABLED
+        } else if is_selected {
+            Token::ON_PRIMARY
+        } else {
+            Token::TEXT_PRIMARY
+        };
+        let day_weight = if is_selected { 600 } else { 400 };
+        let day_quads = text_ctx.shape_line_styled(
+            &day_strings[(day - 1) as usize],
+            cell_r,
+            12.0,
+            day_weight,
+            None,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &day_quads,
+            day_ink,
+            z + 4,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    CalendarViewFixtureOutput {
+        output: out,
+        total_size: Vec2::new(w, h),
+        rect: total_r,
+    }
+}
+
+/// 发射标准化 TimePicker 时间选择器插桩。
+pub fn emit_canonical_time_picker_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> TimePickerFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        CANONICAL_TIME_PICKER_WIDTH
+    };
+    let h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        CANONICAL_TIME_PICKER_HEIGHT
+    };
+    let total_r = Rect::new(rect.origin.x, rect.origin.y, w, h);
+    let disabled = state.disabled;
+
+    // 1. 底板与微描边
+    out.primitives
+        .push(primitive::surface(total_r, 4.0, Token::CONTROL_FILL, z));
+    out.primitives.push(primitive::outlined(
+        total_r,
+        4.0,
+        Token::NONE,
+        Token::CONTROL_STROKE,
+        1.0,
+        0.0,
+        z,
+    ));
+
+    // 2. 3 列时间分栏：时、分、秒
+    let col_w = (w - 2.0) / 3.0;
+    let text_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+
+    for (col, &col_text) in CANONICAL_TIME_COLUMNS.iter().enumerate() {
+        if col > 0 {
+            out.primitives.push(primitive::surface(
+                Rect::new(
+                    total_r.origin.x + col as f32 * col_w,
+                    total_r.origin.y + 4.0,
+                    1.0,
+                    h - 8.0,
+                ),
+                0.0,
+                Token::DIVIDER,
+                z + 1,
+            ));
+        }
+        let col_r = Rect::new(
+            total_r.origin.x + col as f32 * col_w,
+            total_r.origin.y,
+            col_w,
+            h,
+        );
+        let col_quads = text_ctx.shape_line_styled(
+            col_text,
+            col_r,
+            STANDARD_FONT_SIZE,
+            400,
+            None,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &col_quads,
+            text_ink,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
+
+    if state.focused && !disabled {
+        out.primitives.push(primitive::focus_ring(
+            total_r.inflate(1.0),
+            4.0,
+            Token::FOCUS_RING,
+            2.0,
+            z + 10,
+            true,
+        ));
+    }
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    TimePickerFixtureOutput {
+        output: out,
+        total_size: Vec2::new(w, h),
+        rect: total_r,
+    }
+}
+
+/// 发射标准化 PersonPicture 人物头像插桩。
+pub fn emit_canonical_person_picture_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> PersonPictureFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let size = if rect.width() > 0.0 {
+        rect.width().min(if rect.height() > 0.0 {
+            rect.height()
+        } else {
+            rect.width()
+        })
+    } else {
+        CANONICAL_PERSON_PICTURE_SIZE
+    };
+    let total_r = Rect::new(rect.origin.x, rect.origin.y, size, size);
+    let disabled = state.disabled;
+
+    // 1. 圆形底板与圆形边框
+    out.primitives.push(primitive::surface(
+        total_r,
+        size * 0.5,
+        Token::SURFACE_SUNKEN,
+        z,
+    ));
+    out.primitives.push(primitive::outlined(
+        total_r,
+        size * 0.5,
+        Token::NONE,
+        Token::CARD_BORDER,
+        1.0,
+        0.0,
+        z,
+    ));
+
+    // 2. 居中双字母缩写 "AB"
+    let text_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let font_size = (size * 0.42).clamp(11.0, 24.0);
+    let quads = text_ctx.shape_line_styled(
+        CANONICAL_PERSON_PICTURE_INITIALS,
+        total_r,
+        font_size,
+        600,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &quads,
+        text_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    PersonPictureFixtureOutput {
+        output: out,
+        total_size: Vec2::new(size, size),
+        rect: total_r,
+    }
+}
+
+/// 发射标准化 FontIcon 字体图标插桩。
+pub fn emit_canonical_font_icon_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> FontIconFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let size = if rect.width() > 0.0 {
+        rect.width().min(if rect.height() > 0.0 {
+            rect.height()
+        } else {
+            rect.width()
+        })
+    } else {
+        CANONICAL_FONT_ICON_SIZE
+    };
+    let total_r = Rect::new(rect.origin.x, rect.origin.y, size, size);
+    let disabled = state.disabled;
+
+    // 居中绘制矢量字形
+    let text_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let quads = text_ctx.shape_line_styled(
+        CANONICAL_FONT_ICON_GLYPH,
+        total_r,
+        CANONICAL_FONT_ICON_FONT_SIZE,
+        400,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &quads,
+        text_ink,
+        z + 1,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    FontIconFixtureOutput {
+        output: out,
+        total_size: Vec2::new(size, size),
+        rect: total_r,
+    }
+}
+
+/// 发射标准化 Pivot 页签条插桩。
+pub fn emit_canonical_pivot_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> PivotFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        CANONICAL_PIVOT_WIDTH
+    };
+    let h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        CANONICAL_PIVOT_HEIGHT
+    };
+    let header_h = CANONICAL_PIVOT_HEADER_HEIGHT;
+    let disabled = state.disabled;
+
+    let header_r = Rect::new(rect.origin.x, rect.origin.y, w, header_h);
+    let content_r = Rect::new(
+        rect.origin.x,
+        rect.origin.y + header_h,
+        w,
+        (h - header_h).max(1.0),
+    );
+
+    // 1. 底部分隔线
+    out.primitives.push(primitive::surface(
+        Rect::new(header_r.origin.x, header_r.max().y - 1.0, w, 1.0),
+        0.0,
+        Token::DIVIDER,
+        z + 1,
+    ));
+
+    // 2. 标签项排布（"One" 与 "Two"）
+    let item_w = 48.0;
+    let gap = 24.0;
+    let mut cur_x = header_r.origin.x + 12.0;
+
+    for (idx, &item_name) in CANONICAL_PIVOT_ITEMS.iter().enumerate() {
+        let is_selected = !disabled && (idx == state.selected_index);
+        let item_r = Rect::new(cur_x, header_r.origin.y, item_w, header_h);
+
+        let text_ink = if disabled {
+            Token::TEXT_DISABLED
+        } else if is_selected {
+            Token::TEXT_PRIMARY
+        } else {
+            Token::TEXT_SECONDARY
+        };
+        let weight = if is_selected { 600 } else { 400 };
+
+        let quads = text_ctx.shape_line_styled(
+            item_name,
+            item_r,
+            18.0,
+            weight,
+            None,
+            AlignX::Left,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &quads,
+            text_ink,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+
+        if is_selected {
+            // 选中指示下划线（3px 厚度）
+            let indicator_r =
+                Rect::new(item_r.origin.x, header_r.max().y - 3.0, item_r.width(), 3.0);
+            out.primitives
+                .push(primitive::surface(indicator_r, 1.5, Token::PRIMARY, z + 5));
+
+            if state.focused {
+                out.primitives.push(primitive::focus_ring(
+                    item_r.inflate(1.0),
+                    4.0,
+                    Token::FOCUS_RING,
+                    2.0,
+                    z + 10,
+                    true,
+                ));
+            }
+        }
+
+        cur_x += item_w + gap;
+    }
+
+    // 3. 内容区文本
+    let content_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let content_text_r = Rect::new(
+        content_r.origin.x + 12.0,
+        content_r.origin.y + 12.0,
+        content_r.width() - 24.0,
+        24.0,
+    );
+    let content_quads = text_ctx.shape_line_styled(
+        CANONICAL_PIVOT_CONTENT,
+        content_text_r,
+        STANDARD_FONT_SIZE,
+        400,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &content_quads,
+        content_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    PivotFixtureOutput {
+        output: out,
+        total_size: Vec2::new(w, h),
+        header_rect: header_r,
+        content_rect: content_r,
+    }
+}
+
+/// 发射标准化 Image 空图像占位盒插桩。
+pub fn emit_canonical_image_fixture(
+    rect: Rect,
+    state: FixtureState,
+    _text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> ImageFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let size = if rect.width() > 0.0 && rect.height() > 0.0 {
+        rect.size
+    } else {
+        CANONICAL_IMAGE_SIZE
+    };
+    let total_r = Rect::new(rect.origin.x, rect.origin.y, size.x, size.y);
+    let disabled = state.disabled;
+
+    out.primitives
+        .push(primitive::surface(total_r, 4.0, Token::SURFACE_SUNKEN, z));
+    out.primitives.push(primitive::outlined(
+        total_r,
+        4.0,
+        Token::NONE,
+        Token::CARD_BORDER,
+        1.0,
+        0.0,
+        z,
+    ));
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    ImageFixtureOutput {
+        output: out,
+        total_size: size,
+        rect: total_r,
+    }
+}
+
+/// 发射标准化 Flyout 浮层呈现器插桩。
+pub fn emit_canonical_flyout_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> FlyoutFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        CANONICAL_FLYOUT_WIDTH
+    };
+    let h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        CANONICAL_FLYOUT_HEIGHT
+    };
+    let total_r = Rect::new(rect.origin.x, rect.origin.y, w, h);
+    let disabled = state.disabled;
+
+    // 1. 24px 解析阴影
+    out.primitives.push(primitive::instance(
+        total_r,
+        [8.0; 4],
+        Token::NONE,
+        Token::NONE,
+        0.0,
+        24.0,
+        PrimType::Shadow,
+        SubElement::Shadow,
+        z,
+    ));
+
+    // 2. 浮层底板
+    out.primitives
+        .push(primitive::surface(total_r, 8.0, Token::OVERLAY_BG, z));
+
+    // 3. 1px 微描边
+    out.primitives.push(primitive::outlined(
+        total_r,
+        8.0,
+        Token::NONE,
+        Token::CARD_BORDER,
+        1.0,
+        0.0,
+        z,
+    ));
+
+    // 4. 内容文本 "Flyout"
+    let text_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let text_r = Rect::new(
+        total_r.origin.x + 12.0,
+        total_r.origin.y + 10.0,
+        w - 24.0,
+        20.0,
+    );
+    let quads = text_ctx.shape_line_styled(
+        CANONICAL_FLYOUT_TEXT,
+        text_r,
+        STANDARD_FONT_SIZE,
+        400,
+        None,
+        AlignX::Left,
+        AlignY::Top,
+    );
+    primitive::glyphs(
+        &quads,
+        text_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    FlyoutFixtureOutput {
+        output: out,
+        total_size: Vec2::new(w, h),
+        rect: total_r,
+    }
+}
+
+/// 发射标准化 MenuFlyout 菜单浮层呈现器插桩。
+pub fn emit_canonical_menu_flyout_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> MenuFlyoutFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        CANONICAL_MENU_FLYOUT_WIDTH
+    };
+    let item_h = CANONICAL_MENU_FLYOUT_ITEM_HEIGHT;
+    let h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        item_h * 2.0 + 8.0
+    };
+    let total_r = Rect::new(rect.origin.x, rect.origin.y, w, h);
+    let disabled = state.disabled;
+
+    // 1. 18px 解析阴影
+    out.primitives.push(primitive::instance(
+        total_r,
+        [8.0; 4],
+        Token::NONE,
+        Token::NONE,
+        0.0,
+        18.0,
+        PrimType::Shadow,
+        SubElement::Shadow,
+        z,
+    ));
+
+    // 2. 菜单表面底板
+    out.primitives
+        .push(primitive::surface(total_r, 8.0, Token::OVERLAY_BG, z));
+
+    // 3. 1px 微描边
+    out.primitives.push(primitive::outlined(
+        total_r,
+        8.0,
+        Token::NONE,
+        Token::CARD_BORDER,
+        1.0,
+        0.0,
+        z,
+    ));
+
+    // 4. 菜单项文本与选中背景
+    let text_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    for (idx, &item_name) in CANONICAL_MENU_FLYOUT_ITEMS.iter().enumerate() {
+        let row_y = total_r.origin.y + 4.0 + idx as f32 * item_h;
+        let row_r = Rect::new(total_r.origin.x + 4.0, row_y, w - 8.0, item_h);
+
+        if idx == state.selected_index && state.checked && !disabled {
+            out.primitives
+                .push(primitive::surface(row_r, 4.0, Token::CONTROL_HOVER, z + 1));
+        }
+
+        let text_r = Rect::new(total_r.origin.x + 16.0, row_y, w - 32.0, item_h);
+        let quads = text_ctx.shape_line_styled(
+            item_name,
+            text_r,
+            STANDARD_FONT_SIZE,
+            400,
+            None,
+            AlignX::Left,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &quads,
+            text_ink,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    MenuFlyoutFixtureOutput {
+        output: out,
+        total_size: Vec2::new(w, h),
+        rect: total_r,
+    }
+}
+
+/// 发射标准化 AppBarButton 命令栏按钮插桩。
+pub fn emit_canonical_app_bar_button_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> AppBarButtonFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        CANONICAL_APP_BAR_BUTTON_WIDTH
+    };
+    let h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        CANONICAL_APP_BAR_BUTTON_HEIGHT
+    };
+    let total_r = Rect::new(rect.origin.x, rect.origin.y, w, h);
+    let disabled = state.disabled;
+
+    // 1. 底板与焦点环
+    out.primitives
+        .push(primitive::surface(total_r, 4.0, Token::NONE, z));
+    if state.focused && !disabled {
+        out.primitives.push(primitive::focus_ring(
+            total_r.inflate(1.0),
+            4.0,
+            Token::FOCUS_RING,
+            2.0,
+            z + 10,
+            true,
+        ));
+    }
+
+    let text_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+
+    // 2. 顶部图标
+    let icon_r = Rect::new(total_r.origin.x, total_r.origin.y + 6.0, w, 16.0);
+    let icon_quads = text_ctx.shape_line_styled(
+        CANONICAL_APP_BAR_BUTTON_GLYPH,
+        icon_r,
+        16.0,
+        400,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &icon_quads,
+        text_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    // 3. 底部文字
+    let label_r = Rect::new(total_r.origin.x, total_r.origin.y + 26.0, w, 16.0);
+    let label_quads = text_ctx.shape_line_styled(
+        CANONICAL_APP_BAR_BUTTON_LABEL,
+        label_r,
+        12.0,
+        400,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &label_quads,
+        text_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    AppBarButtonFixtureOutput {
+        output: out,
+        total_size: Vec2::new(w, h),
+        rect: total_r,
+    }
+}
+
+/// 发射标准化 AppBarToggleButton 命令栏切换按钮插桩。
+pub fn emit_canonical_app_bar_toggle_button_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> AppBarToggleButtonFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        CANONICAL_APP_BAR_TOGGLE_BUTTON_WIDTH
+    };
+    let h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        CANONICAL_APP_BAR_TOGGLE_BUTTON_HEIGHT
+    };
+    let total_r = Rect::new(rect.origin.x, rect.origin.y, w, h);
+    let disabled = state.disabled;
+    let checked = state.checked;
+
+    // 1. 切换选中底板与指示条
+    let fill = if checked && !disabled {
+        Token::CONTROL_HOVER
+    } else {
+        Token::NONE
+    };
+    out.primitives
+        .push(primitive::surface(total_r, 4.0, fill, z));
+
+    if checked && !disabled {
+        let indicator_r = Rect::new(
+            total_r.origin.x + 12.0,
+            total_r.max().y - 2.0,
+            (w - 24.0).max(1.0),
+            2.0,
+        );
+        out.primitives
+            .push(primitive::surface(indicator_r, 1.0, Token::PRIMARY, z + 2));
+    }
+
+    if state.focused && !disabled {
+        out.primitives.push(primitive::focus_ring(
+            total_r.inflate(1.0),
+            4.0,
+            Token::FOCUS_RING,
+            2.0,
+            z + 10,
+            true,
+        ));
+    }
+
+    let text_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+
+    // 2. 顶部图标
+    let icon_r = Rect::new(total_r.origin.x, total_r.origin.y + 6.0, w, 16.0);
+    let icon_quads = text_ctx.shape_line_styled(
+        CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH,
+        icon_r,
+        16.0,
+        400,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &icon_quads,
+        text_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    // 3. 底部文字
+    let label_r = Rect::new(total_r.origin.x, total_r.origin.y + 26.0, w, 16.0);
+    let label_quads = text_ctx.shape_line_styled(
+        CANONICAL_APP_BAR_TOGGLE_BUTTON_LABEL,
+        label_r,
+        12.0,
+        if checked { 600 } else { 400 },
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &label_quads,
+        text_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    if disabled {
+        apply_recursive_disabled_propagation(&mut out, false);
+    }
+
+    AppBarToggleButtonFixtureOutput {
+        output: out,
+        total_size: Vec2::new(w, h),
+        rect: total_r,
     }
 }
 
