@@ -357,11 +357,14 @@ impl GalleryApp {
         nav_spring.rest_threshold = 0.25;
         nav_spring.rest_velocity = 2.0;
         nav_spring.set_target(NAV_EXPANDED);
+        let labels = Labels::new();
+        let mut state = GalleryState::default();
+        state.text_render.report = labels.cache.report();
         Self {
-            state: GalleryState::default(),
+            state,
             mica: unbound_app::MicaBackdrop::new(),
             scene: gallery::Gallery::new(),
-            labels: Labels::new(),
+            labels,
             layout,
             focus_order: Vec::new(),
             regions: Vec::new(),
@@ -2437,6 +2440,40 @@ impl GalleryApp {
                     } else if part == pages::text_render::STATUS_BAR_PART {
                         self.state.text_render.toggle_fallback_details();
                         self.state.bump();
+                    } else if part == pages::text_render::PART_BACKEND_DW {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        let res = pages::text_render::resolve_feature(
+                            pages::text_render::TextFeatureKey::BackendDirectWrite,
+                            &caps,
+                            &self.state.text_render.settings,
+                        );
+                        if !res.disabled {
+                            self.state.text_render.settings.raster_backend =
+                                unbound_text::RasterBackend::DirectWrite;
+                            self.labels.cache.apply_settings(
+                                &self.state.text_render.settings,
+                                Some(&mut self.labels.engine),
+                            );
+                            self.state.text_render.report = self.labels.cache.report();
+                            self.state.bump();
+                        }
+                    } else if part == pages::text_render::PART_BACKEND_COSMIC {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        let res = pages::text_render::resolve_feature(
+                            pages::text_render::TextFeatureKey::BackendCosmic,
+                            &caps,
+                            &self.state.text_render.settings,
+                        );
+                        if !res.disabled {
+                            self.state.text_render.settings.raster_backend =
+                                unbound_text::RasterBackend::Cosmic;
+                            self.labels.cache.apply_settings(
+                                &self.state.text_render.settings,
+                                Some(&mut self.labels.engine),
+                            );
+                            self.state.text_render.report = self.labels.cache.report();
+                            self.state.bump();
+                        }
                     } else if (pages::text_render::FONT_FAMILY_PART_BASE
                         ..pages::text_render::FONT_FAMILY_PART_BASE
                             + pages::text_render::FONT_FAMILY_OPTIONS.len() as u16)
