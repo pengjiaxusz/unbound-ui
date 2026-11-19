@@ -19,7 +19,8 @@ use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::theme;
 use unbound_app::appearance::{
-    AppearanceCaps, AppearanceDiff, AppearanceIntent, BackdropChannel, WindowAppearance,
+    apply_appearance_diff_to_platform, AppearanceCaps, AppearanceDiff, AppearanceIntent,
+    WindowAppearance,
 };
 
 use raw_window_handle::HasDisplayHandle;
@@ -444,36 +445,7 @@ impl Showcase {
 
     /// 执行外观变更 Diff。
     fn apply_appearance_diff(&mut self, hwnd: isize, diff: AppearanceDiff) {
-        if let Some(channel) = diff.channel {
-            match channel {
-                BackdropChannel::Dwm(material) => {
-                    let _ = unbound_platform::clear_window_accent_tint(hwnd);
-                    let _ = unbound_platform::set_window_backdrop(hwnd, material);
-                }
-                BackdropChannel::AccentTint(argb) => {
-                    let _ = unbound_platform::set_window_backdrop(
-                        hwnd,
-                        unbound_platform::WindowBackdropMaterial::None,
-                    );
-                    let _ = unbound_platform::set_window_accent_tint(hwnd, argb);
-                }
-                BackdropChannel::Off => {
-                    let _ = unbound_platform::clear_window_accent_tint(hwnd);
-                    let _ = unbound_platform::set_window_backdrop(
-                        hwnd,
-                        unbound_platform::WindowBackdropMaterial::None,
-                    );
-                }
-            }
-        }
-        if let Some(dark) = diff.dark_mode {
-            unbound_platform::set_window_dark_mode(hwnd, dark);
-        }
-        if let Some(lock_mica) = diff.lock_mica {
-            if let Some(metrics) = &self.frame_metrics {
-                metrics.set_lock_mica_active(lock_mica);
-            }
-        }
+        apply_appearance_diff_to_platform(&diff, hwnd, self.frame_metrics.as_deref());
         if let Some(clear_alpha) = diff.clear_alpha {
             if let Some(renderer) = &mut self.renderer {
                 renderer.set_clear_alpha(clear_alpha);

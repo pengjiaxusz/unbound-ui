@@ -1,8 +1,8 @@
 //! 常用图元、应用契约、描述符与运行时类型重导出。
 
 pub use crate::appearance::{
-    backdrop_channel_request, dwm_material_to_platform, AppearanceCaps, AppearanceDiff,
-    AppearanceIntent, BackdropChannel, WindowAppearance,
+    apply_appearance_diff_to_platform, backdrop_channel_request, dwm_material_to_platform,
+    AppearanceCaps, AppearanceDiff, AppearanceIntent, BackdropChannel, WindowAppearance,
 };
 pub use crate::backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID};
 pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
