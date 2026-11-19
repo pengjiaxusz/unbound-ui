@@ -1170,10 +1170,12 @@ impl GalleryApp {
         // 导致满载的图集永远驱逐左上角相同的那几个字形。
         //
         labels.cache.begin_frame(atlas_clock);
-        // 外壳保留八种亚像素相位：字形的光栅按其*绝对*位置隐含的相位生成，
-        // 四边形则围绕它放置在像素网格上。强制相位 0 会使每个字形偏离其应处位置
-        // 最多达一像素，这正是字距抖动的原因。
-        labels.set_snap_phases(false);
+        // 将全局文本渲染设置同步应用到标签引擎（若有排版语义或位图变更将按级别失效）。
+        labels
+            .cache
+            .apply_settings(&state.text_render.settings, Some(&mut labels.engine));
+        state.text_render.report.backend = labels.cache.backend();
+        state.text_render.report.phases = labels.cache.settings().phase_mode.phases();
         let mut canvas = Canvas::new(
             scene,
             labels,
@@ -2436,6 +2438,73 @@ impl GalleryApp {
                     } else if part == pages::text_render::STATUS_BAR_PART {
                         self.state.text_render.toggle_fallback_details();
                         self.state.bump();
+                    } else {
+                        match part {
+                            pages::text_render::PART_SHAPER_COSMIC => {
+                                self.state.text_render.settings.shaper =
+                                    unbound_text::TextShaper::Cosmic;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_SHAPER_NATIVE => {
+                                // 禁用项，不生效
+                            }
+                            pages::text_render::PART_LINEBREAK_WORD => {
+                                self.state.text_render.settings.line_break =
+                                    unbound_text::LineBreakMode::Word;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINEBREAK_ANYWHERE => {
+                                self.state.text_render.settings.line_break =
+                                    unbound_text::LineBreakMode::Anywhere;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINEBREAK_NONE => {
+                                self.state.text_render.settings.line_break =
+                                    unbound_text::LineBreakMode::None;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_BIDI_ON => {
+                                self.state.text_render.settings.bidi = true;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_BIDI_OFF => {
+                                self.state.text_render.settings.bidi = false;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LIGATURES_ON => {
+                                self.state.text_render.settings.ligatures = true;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LIGATURES_OFF => {
+                                self.state.text_render.settings.ligatures = false;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LETTER_SPACING_0 => {
+                                self.state.text_render.settings.letter_spacing = 0.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LETTER_SPACING_1 => {
+                                self.state.text_render.settings.letter_spacing = 1.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LETTER_SPACING_2 => {
+                                self.state.text_render.settings.letter_spacing = 2.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINE_HEIGHT_AUTO => {
+                                self.state.text_render.settings.line_height = 0.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINE_HEIGHT_20 => {
+                                self.state.text_render.settings.line_height = 20.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINE_HEIGHT_28 => {
+                                self.state.text_render.settings.line_height = 28.0;
+                                self.state.bump();
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }
