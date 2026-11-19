@@ -8,7 +8,7 @@ use showcase::pages::text_render::{
     resolve_feature, FeatureResolution, TextConsoleGroup, TextFeatureKey, FEATURE_RULES,
     FONT_FAMILY_OPTIONS, FONT_FAMILY_PART_BASE, FONT_ITALIC_PART, FONT_SIZE_OPTIONS,
     FONT_SIZE_PART_BASE, FONT_WEIGHT_OPTIONS, FONT_WEIGHT_PART_BASE, GROUP_PART_BASE,
-    STATUS_BAR_PART,
+    PHASE_PART_BASE, STATUS_BAR_PART,
 };
 use showcase::pages::{CategoryId, PageId};
 use showcase::shell::GalleryApp;
@@ -17,7 +17,9 @@ use showcase::target::{self, Target};
 use unbound_app::{AppRuntime, Locale};
 use unbound_input::PointerButton;
 use unbound_math::Vec2;
-use unbound_text::{CapabilityStatus, RasterBackend, TextCapabilities, TextRenderSettings};
+use unbound_text::{
+    CapabilityStatus, PhaseMode, RasterBackend, TextCapabilities, TextRenderSettings,
+};
 
 const VIEWPORT: (f32, f32) = (1440.0, 900.0);
 
@@ -497,4 +499,84 @@ fn font_preview_style_isolation_from_other_pages() {
     assert_eq!(app.state.text_render.settings.size, 24.0);
     assert_eq!(app.state.text_render.settings.weight, 700);
     assert!(app.state.text_render.settings.italic);
+}
+
+/// 验收条件 1、2：展台控制台像素组亚像素相位档位运行期切换（8 / 4 / 1）与状态栏同步。
+#[test]
+fn text_render_phase_mode_runtime_switching_and_status_sync() {
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+
+    // 1. 默认初始状态：8 相位
+    assert_eq!(app.state.text_render.settings.phase_mode, PhaseMode::Eight);
+    assert_eq!(app.state.text_render.report.phases, 8);
+    let status_node_id = target::id(Target::Demo(page_index, 0, STATUS_BAR_PART));
+    let status_node = app
+        .semantics
+        .get(status_node_id)
+        .expect("status bar a11y node exists");
+    assert!(
+        status_node.label.contains("8"),
+        "status bar a11y label must indicate 8 phases"
+    );
+
+    // 验证相位选项 8/4/1 控件均正常呈现于语义树中且处于可用状态
+    for i in 0..3 {
+        let opt_node_id = target::id(Target::Demo(page_index, 0, PHASE_PART_BASE + i));
+        let opt_node = app
+            .semantics
+            .get(opt_node_id)
+            .unwrap_or_else(|| panic!("missing a11y node for phase option {i}"));
+        assert_eq!(opt_node.role, Role::RadioButton);
+        if i == 0 {
+            assert!(opt_node.selected);
+        } else {
+            assert!(!opt_node.selected);
+        }
+    }
+
+    // 2. 点击切换到 4 档位（PHASE_PART_BASE + 1）
+    let phase_4_node = target::id(Target::Demo(page_index, 0, PHASE_PART_BASE + 1));
+    app.click_node(phase_4_node);
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.text_render.settings.phase_mode, PhaseMode::Four);
+    assert_eq!(
+        app.state.text_render.report.phases, 4,
+        "effective report must update to 4 phases"
+    );
+    assert_eq!(app.labels.cache.phase_mode(), PhaseMode::Four);
+    let opt_node_4 = app.semantics.get(phase_4_node).expect("a11y node exists");
+    assert!(opt_node_4.selected);
+
+    // 3. 点击切换到 1 档位（PHASE_PART_BASE + 2）
+    let phase_1_node = target::id(Target::Demo(page_index, 0, PHASE_PART_BASE + 2));
+    app.click_node(phase_1_node);
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.text_render.settings.phase_mode, PhaseMode::One);
+    assert_eq!(
+        app.state.text_render.report.phases, 1,
+        "effective report must update to 1 phase"
+    );
+    assert_eq!(app.labels.cache.phase_mode(), PhaseMode::One);
+    let opt_node_1 = app.semantics.get(phase_1_node).expect("a11y node exists");
+    assert!(opt_node_1.selected);
+
+    // 4. 点击切回 8 档位（PHASE_PART_BASE + 0）
+    let phase_8_node = target::id(Target::Demo(page_index, 0, PHASE_PART_BASE));
+    app.click_node(phase_8_node);
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.text_render.settings.phase_mode, PhaseMode::Eight);
+    assert_eq!(
+        app.state.text_render.report.phases, 8,
+        "effective report must restore to 8 phases"
+    );
+    assert_eq!(app.labels.cache.phase_mode(), PhaseMode::Eight);
+    let opt_node_8 = app.semantics.get(phase_8_node).expect("a11y node exists");
+    assert!(opt_node_8.selected);
 }
