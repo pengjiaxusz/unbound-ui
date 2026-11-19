@@ -2440,6 +2440,44 @@ impl GalleryApp {
                     } else if part == pages::text_render::STATUS_BAR_PART {
                         self.state.text_render.toggle_fallback_details();
                         self.state.bump();
+                    } else if part == pages::text_render::PART_PRESET_WINUI {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        self.state
+                            .text_render
+                            .apply_preset(pages::text_render::TextRenderPreset::WinuiNative, &caps);
+                        self.labels.cache.apply_settings(
+                            &self.state.text_render.settings,
+                            Some(&mut self.labels.engine),
+                        );
+                        self.state.text_render.report = self.labels.cache.report();
+                        self.state.bump();
+                    } else if part == pages::text_render::PART_PRESET_CROSS_PLATFORM {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        self.state.text_render.apply_preset(
+                            pages::text_render::TextRenderPreset::CrossPlatform,
+                            &caps,
+                        );
+                        self.labels.cache.apply_settings(
+                            &self.state.text_render.settings,
+                            Some(&mut self.labels.engine),
+                        );
+                        self.state.text_render.report = self.labels.cache.report();
+                        self.state.bump();
+                    } else if part == pages::text_render::PART_PRESET_PIXEL {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        self.state
+                            .text_render
+                            .apply_preset(pages::text_render::TextRenderPreset::Pixel, &caps);
+                        self.labels.cache.apply_settings(
+                            &self.state.text_render.settings,
+                            Some(&mut self.labels.engine),
+                        );
+                        self.state.text_render.report = self.labels.cache.report();
+                        self.state.bump();
+                    } else if part == pages::text_render::PART_PRESET_CUSTOM {
+                        self.state.text_render.mark_custom();
+                        self.state.text_render.persist();
+                        self.state.bump();
                     } else if part == pages::text_render::PART_BACKEND_DW {
                         let caps = unbound_text::TextCapabilities::probe();
                         let res = pages::text_render::resolve_feature(
@@ -2698,6 +2736,23 @@ impl GalleryApp {
                             }
                             _ => {}
                         }
+                    }
+
+                    // 若改动的不是预设按钮和折叠标题/状态栏，确保标记为自定义并持久化
+                    let is_preset_or_meta = matches!(
+                        part,
+                        pages::text_render::STATUS_BAR_PART
+                            | pages::text_render::PART_PRESET_WINUI
+                            | pages::text_render::PART_PRESET_CROSS_PLATFORM
+                            | pages::text_render::PART_PRESET_PIXEL
+                            | pages::text_render::PART_PRESET_CUSTOM
+                    ) || (pages::text_render::GROUP_PART_BASE
+                        ..pages::text_render::GROUP_PART_BASE
+                            + pages::text_render::TextConsoleGroup::ALL.len() as u16)
+                        .contains(&part);
+                    if !is_preset_or_meta {
+                        self.state.text_render.mark_custom();
+                        self.state.text_render.persist();
                     }
                 }
             }

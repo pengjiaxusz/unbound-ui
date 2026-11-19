@@ -10,8 +10,9 @@
 use accesskit::Role;
 use unbound_math::Rect;
 use unbound_text::{
-    BlendSpace, CapabilityStatus, DistanceFieldMode, LayerMode, LineBreakMode, RasterBackend,
-    TextCapabilities, TextRenderReport, TextRenderSettings, TextShaper,
+    BlendSpace, CapabilityStatus, DistanceFieldMode, EmojiBackend, EmojiPresentation, EmojiSource,
+    LayerMode, LineBreakMode, PhaseMode, RasterBackend, TextCapabilities, TextRenderReport,
+    TextRenderSettings, TextShaper,
 };
 
 use super::{DemoCtx, DemoKind, ExampleDef, PageInfo};
@@ -135,6 +136,13 @@ pub const PART_EMOJI_SOURCE_SYSTEM: u16 = 320;
 pub const PART_EMOJI_SOURCE_BUILTIN: u16 = 321;
 pub const PART_EMOJI_SOURCE_GRID: u16 = 322;
 
+// 预设方案部件编号 (401..404)
+pub const PART_PRESET_BASE: u16 = 400;
+pub const PART_PRESET_WINUI: u16 = 401;
+pub const PART_PRESET_CROSS_PLATFORM: u16 = 402;
+pub const PART_PRESET_PIXEL: u16 = 403;
+pub const PART_PRESET_CUSTOM: u16 = 404;
+
 /// 控制台六大功能参数分组。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TextConsoleGroup {
@@ -190,9 +198,44 @@ impl TextConsoleGroup {
     }
 }
 
+/// 预设渲染方案枚举。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
+pub enum TextRenderPreset {
+    /// Windows WinUI 3 原生渲染风格（DirectWrite 覆盖率 + 8 亚像素相位 + sRGB + Segoe UI）。
+    #[default]
+    WinuiNative,
+    /// 跨平台视觉一致风格（Swash + 8 亚像素相位 + 线性合成 + 图层隔离）。
+    CrossPlatform,
+    /// 像素风与低开销（Cosmic + 1 相位整数栅格对齐 + 单色 Emoji + 无连字）。
+    Pixel,
+    /// 用户自定义调节（手动修改任意项后自动落入此档）。
+    Custom,
+}
+
+impl TextRenderPreset {
+    pub const ALL: [TextRenderPreset; 4] = [
+        Self::WinuiNative,
+        Self::CrossPlatform,
+        Self::Pixel,
+        Self::Custom,
+    ];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::WinuiNative => "WinUI Native",
+            Self::CrossPlatform => "Cross-Platform",
+            Self::Pixel => "Pixel Style",
+            Self::Custom => "Custom",
+        }
+    }
+}
+
 /// 文本渲染控制台的持久页面状态。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextRenderPageState {
+    /// 当前选中的预设方案。
+    pub preset: TextRenderPreset,
     /// 六个分组的展开/折叠状态（true 为展开，false 为折叠）。
     pub group_expanded: [bool; 6],
     /// 状态栏回退原因详情是否展开。
@@ -203,48 +246,385 @@ pub struct TextRenderPageState {
     pub report: TextRenderReport,
 }
 
+thread_local! {
+    static CUSTOM_PERSISTENCE_PATH: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 impl Default for TextRenderPageState {
     fn default() -> Self {
+        #[cfg(test)]
+        {
+            let has_custom = CUSTOM_PERSISTENCE_PATH.with(|p| p.borrow().is_some());
+            if has_custom {
+                if let Some(restored) = Self::try_restore() {
+                    return restored;
+                }
+            }
+            Self::fresh_default()
+        }
+
+        #[cfg(not(test))]
+        {
+            #[allow(clippy::manual_unwrap_or_default)]
+            if let Some(restored) = Self::try_restore() {
+                restored
+            } else {
+                Self::fresh_default()
+            }
+        }
+    }
+}
+
+impl TextRenderPageState {
+    /// 默认初始空白状态。
+    #[must_use]
+    pub fn fresh_default() -> Self {
         Self {
+            preset: TextRenderPreset::WinuiNative,
             group_expanded: [true; 6],
             fallback_details_expanded: false,
             settings: TextRenderSettings::default(),
             report: TextRenderReport::default(),
         }
     }
-}
 
-impl TextRenderPageState {
+    /// 设置线程级持久化路径覆盖（供并发测试线程隔离使用）。
+    pub fn set_thread_persistence_path(path: Option<std::path::PathBuf>) {
+        CUSTOM_PERSISTENCE_PATH.with(|p| {
+            *p.borrow_mut() = path;
+        });
+    }
     /// 切换指定分组的折叠状态。
     pub fn toggle_group(&mut self, index: usize) {
         if index < self.group_expanded.len() {
             self.group_expanded[index] = !self.group_expanded[index];
+            self.persist();
         }
     }
 
     /// 切换状态栏回退原因展开状态。
     pub fn toggle_fallback_details(&mut self) {
         self.fallback_details_expanded = !self.fallback_details_expanded;
+        self.persist();
     }
 
     /// 设置字体家族。
     pub fn set_family(&mut self, family: Option<String>) {
         self.settings.family = family;
+        self.mark_custom();
+        self.persist();
     }
 
     /// 设置字体字重。
     pub fn set_weight(&mut self, weight: u16) {
         self.settings.weight = weight;
+        self.mark_custom();
+        self.persist();
     }
 
     /// 设置字号。
     pub fn set_size(&mut self, size: f32) {
         self.settings.size = size;
+        self.mark_custom();
+        self.persist();
     }
 
     /// 切换斜体状态。
     pub fn toggle_italic(&mut self) {
         self.settings.italic = !self.settings.italic;
+        self.mark_custom();
+        self.persist();
+    }
+
+    /// 标记为自定义档位。
+    pub fn mark_custom(&mut self) {
+        self.preset = TextRenderPreset::Custom;
+    }
+
+    /// 应用预设方案（按机器能力自动降级）。
+    pub fn apply_preset(&mut self, preset: TextRenderPreset, caps: &TextCapabilities) {
+        self.preset = preset;
+        match preset {
+            TextRenderPreset::WinuiNative => {
+                let raster_backend = if caps.directwrite.is_available() {
+                    RasterBackend::DirectWrite
+                } else {
+                    RasterBackend::Cosmic
+                };
+                self.settings.raster_backend = raster_backend;
+                self.settings.phase_mode = PhaseMode::Eight;
+                self.settings.distance_field = DistanceFieldMode::Off;
+                self.settings.use_sdf = false;
+                self.settings.blend_space = BlendSpace::Srgb;
+                self.settings.layer_mode = LayerMode::Direct;
+                self.settings.emoji_presentation = EmojiPresentation::Color;
+                self.settings.emoji_backend = EmojiBackend::Follow;
+                self.settings.shaper = TextShaper::Cosmic;
+                self.settings.line_break = LineBreakMode::Word;
+                self.settings.bidi = true;
+                self.settings.ligatures = true;
+                self.settings.letter_spacing = 0.0;
+                self.settings.line_height = 0.0;
+                self.settings.family = Some("Segoe UI".to_string());
+                self.settings.weight = 400;
+                self.settings.size = 14.0;
+                self.settings.italic = false;
+            }
+            TextRenderPreset::CrossPlatform => {
+                self.settings.raster_backend = RasterBackend::Cosmic;
+                self.settings.phase_mode = PhaseMode::Eight;
+                self.settings.distance_field = DistanceFieldMode::Off;
+                self.settings.use_sdf = false;
+                self.settings.blend_space = BlendSpace::Linear;
+                self.settings.layer_mode = LayerMode::Isolated;
+                self.settings.emoji_presentation = EmojiPresentation::Color;
+                self.settings.emoji_backend = EmojiBackend::Cosmic;
+                self.settings.shaper = TextShaper::Cosmic;
+                self.settings.line_break = LineBreakMode::Word;
+                self.settings.bidi = true;
+                self.settings.ligatures = true;
+                self.settings.letter_spacing = 0.0;
+                self.settings.line_height = 0.0;
+                self.settings.family = None;
+                self.settings.weight = 400;
+                self.settings.size = 14.0;
+                self.settings.italic = false;
+            }
+            TextRenderPreset::Pixel => {
+                self.settings.raster_backend = RasterBackend::Cosmic;
+                self.settings.phase_mode = PhaseMode::One;
+                self.settings.distance_field = DistanceFieldMode::Off;
+                self.settings.use_sdf = false;
+                self.settings.blend_space = BlendSpace::Srgb;
+                self.settings.layer_mode = LayerMode::Direct;
+                self.settings.emoji_presentation = EmojiPresentation::Mono;
+                self.settings.emoji_backend = EmojiBackend::Cosmic;
+                self.settings.shaper = TextShaper::Cosmic;
+                self.settings.line_break = LineBreakMode::Word;
+                self.settings.bidi = true;
+                self.settings.ligatures = false;
+                self.settings.letter_spacing = 0.0;
+                self.settings.line_height = 0.0;
+                self.settings.family = Some("Cascadia Mono".to_string());
+                self.settings.weight = 400;
+                self.settings.size = 14.0;
+                self.settings.italic = false;
+            }
+            TextRenderPreset::Custom => {}
+        }
+        self.persist();
+    }
+
+    /// 序列化状态为紧凑纯文本。
+    #[must_use]
+    pub fn serialize_to_string(&self) -> String {
+        let groups = self
+            .group_expanded
+            .iter()
+            .map(|&b| if b { '1' } else { '0' })
+            .collect::<String>();
+        format!(
+            "preset={:?}\ngroups={}\nfallback={}\nbackend={:?}\nphase={:?}\nsdf={}\nblend={:?}\nlayer={:?}\nemoji_pres={:?}\nemoji_be={:?}\nemoji_src={:?}\nshaper={:?}\nlinebreak={:?}\nbidi={}\nligatures={}\nspacing={}\nline_h={}\nsize={}\nweight={}\nitalic={}\n",
+            self.preset,
+            groups,
+            self.fallback_details_expanded,
+            self.settings.raster_backend,
+            self.settings.phase_mode,
+            self.settings.distance_field != DistanceFieldMode::Off || self.settings.use_sdf,
+            self.settings.blend_space,
+            self.settings.layer_mode,
+            self.settings.emoji_presentation,
+            self.settings.emoji_backend,
+            self.settings.emoji_source,
+            self.settings.shaper,
+            self.settings.line_break,
+            self.settings.bidi,
+            self.settings.ligatures,
+            self.settings.letter_spacing,
+            self.settings.line_height,
+            self.settings.size,
+            self.settings.weight,
+            self.settings.italic,
+        )
+    }
+
+    /// 从纯文本反序列化状态。
+    #[must_use]
+    pub fn deserialize_from_str(s: &str) -> Option<Self> {
+        let mut state = Self {
+            preset: TextRenderPreset::WinuiNative,
+            group_expanded: [true; 6],
+            fallback_details_expanded: false,
+            settings: TextRenderSettings::default(),
+            report: TextRenderReport::default(),
+        };
+
+        for line in s.lines() {
+            let (k, v) = line.split_once('=')?;
+            match k.trim() {
+                "preset" => {
+                    state.preset = match v.trim() {
+                        "WinuiNative" => TextRenderPreset::WinuiNative,
+                        "CrossPlatform" => TextRenderPreset::CrossPlatform,
+                        "Pixel" => TextRenderPreset::Pixel,
+                        _ => TextRenderPreset::Custom,
+                    };
+                }
+                "groups" => {
+                    for (i, ch) in v.trim().chars().take(6).enumerate() {
+                        state.group_expanded[i] = ch == '1';
+                    }
+                }
+                "fallback" => {
+                    state.fallback_details_expanded = v.trim() == "true";
+                }
+                "backend" => {
+                    if v.trim().contains("DirectWrite") {
+                        state.settings.raster_backend = RasterBackend::DirectWrite;
+                    } else {
+                        state.settings.raster_backend = RasterBackend::Cosmic;
+                    }
+                }
+                "phase" => {
+                    state.settings.phase_mode = if v.trim().contains("Four") {
+                        PhaseMode::Four
+                    } else if v.trim().contains("One") {
+                        PhaseMode::One
+                    } else {
+                        PhaseMode::Eight
+                    };
+                }
+                "sdf" => {
+                    let on = v.trim() == "true";
+                    state.settings.use_sdf = on;
+                    state.settings.distance_field = if on {
+                        DistanceFieldMode::Sdf
+                    } else {
+                        DistanceFieldMode::Off
+                    };
+                }
+                "blend" => {
+                    state.settings.blend_space = if v.trim().contains("Linear") {
+                        BlendSpace::Linear
+                    } else {
+                        BlendSpace::Srgb
+                    };
+                }
+                "layer" => {
+                    state.settings.layer_mode = if v.trim().contains("Isolated") {
+                        LayerMode::Isolated
+                    } else {
+                        LayerMode::Direct
+                    };
+                }
+                "emoji_pres" => {
+                    state.settings.emoji_presentation = if v.trim().contains("Mono") {
+                        EmojiPresentation::Mono
+                    } else {
+                        EmojiPresentation::Color
+                    };
+                }
+                "emoji_be" => {
+                    state.settings.emoji_backend = if v.trim().contains("DirectWrite") {
+                        EmojiBackend::DirectWrite
+                    } else if v.trim().contains("Cosmic") {
+                        EmojiBackend::Cosmic
+                    } else {
+                        EmojiBackend::Follow
+                    };
+                }
+                "emoji_src" => {
+                    state.settings.emoji_source = if v.trim().contains("Builtin") {
+                        EmojiSource::Builtin
+                    } else if v.trim().contains("Grid") {
+                        EmojiSource::Grid
+                    } else {
+                        EmojiSource::System
+                    };
+                }
+                "shaper" => {
+                    state.settings.shaper = TextShaper::Cosmic;
+                }
+                "linebreak" => {
+                    state.settings.line_break = if v.trim().contains("Anywhere") {
+                        LineBreakMode::Anywhere
+                    } else if v.trim().contains("None") {
+                        LineBreakMode::None
+                    } else {
+                        LineBreakMode::Word
+                    };
+                }
+                "bidi" => {
+                    state.settings.bidi = v.trim() == "true";
+                }
+                "ligatures" => {
+                    state.settings.ligatures = v.trim() == "true";
+                }
+                "spacing" => {
+                    if let Ok(val) = v.trim().parse::<f32>() {
+                        state.settings.letter_spacing = val;
+                    }
+                }
+                "line_h" => {
+                    if let Ok(val) = v.trim().parse::<f32>() {
+                        state.settings.line_height = val;
+                    }
+                }
+                "size" => {
+                    if let Ok(val) = v.trim().parse::<f32>() {
+                        state.settings.size = val;
+                    }
+                }
+                "weight" => {
+                    if let Ok(val) = v.trim().parse::<u16>() {
+                        state.settings.weight = val;
+                    }
+                }
+                "italic" => {
+                    state.settings.italic = v.trim() == "true";
+                }
+                _ => {}
+            }
+        }
+
+        Some(state)
+    }
+
+    /// 持久化状态至临时目录配置文件。
+    pub fn persist(&self) {
+        #[cfg(test)]
+        {
+            let has_custom = CUSTOM_PERSISTENCE_PATH.with(|p| p.borrow().is_some());
+            if !has_custom {
+                return;
+            }
+        }
+        let path = Self::persistence_path();
+        let _ = std::fs::write(path, self.serialize_to_string());
+    }
+
+    /// 尝试从持久化配置文件恢复。
+    #[must_use]
+    pub fn try_restore() -> Option<Self> {
+        let path = Self::persistence_path();
+        let content = std::fs::read_to_string(path).ok()?;
+        Self::deserialize_from_str(&content)
+    }
+
+    /// 持久化文件存储路径。
+    #[must_use]
+    pub fn persistence_path() -> std::path::PathBuf {
+        CUSTOM_PERSISTENCE_PATH.with(|p| {
+            if let Some(custom) = p.borrow().as_ref() {
+                return custom.clone();
+            }
+            std::env::temp_dir().join("unbound_showcase_text_render_state.txt")
+        })
+    }
+
+    /// 清理持久化文件（供测试重置环境）。
+    pub fn clear_persisted() {
+        let _ = std::fs::remove_file(Self::persistence_path());
     }
 }
 
@@ -588,7 +968,7 @@ let resolution = resolve_feature(TextFeatureKey::BackendDirectWrite, &capabiliti
     &[],
     DemoKind::TextRender,
 )
-.with_height(800.0)];
+.with_height(840.0)];
 
 /// 渲染文本渲染控制台舞台主入口。
 pub fn text_render(ctx: &mut DemoCtx<'_, '_>) {
@@ -640,6 +1020,12 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
     let header_h = 28.0;
     let item_gap = 6.0;
     let mut current_y = rect.origin.y;
+
+    // 0. 顶部预设方案切换栏
+    let preset_h = 26.0;
+    let preset_rect = Rect::new(rect.origin.x, current_y, rect.size.x, preset_h);
+    draw_preset_bar(ctx, preset_rect, state);
+    current_y += preset_h + item_gap;
 
     for (index, group) in TextConsoleGroup::ALL.iter().enumerate() {
         let is_expanded = state.group_expanded[index];
@@ -776,6 +1162,77 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
         }
 
         current_y += total_group_h + item_gap;
+    }
+}
+
+/// 绘制顶部预设方案切换栏（WinUI 原生 / 跨平台一致 / 像素风 / 自定义）。
+fn draw_preset_bar(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
+    let palette = *ctx.canvas.palette;
+    ctx.canvas
+        .rect(rect, 4.0, palette.surface, palette.card_border, 0.5, 0.0);
+
+    let padding = 4.0;
+    let label_w = 48.0;
+    let label_rect = Rect::new(rect.origin.x + padding, rect.origin.y, label_w, rect.size.y);
+    ctx.canvas.text(
+        "Preset:",
+        label_rect,
+        10.5,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
+
+    let presets_x = rect.origin.x + padding + label_w;
+    let presets_w = (rect.size.x - padding * 2.0 - label_w).max(20.0);
+    let gap = 4.0;
+    let items = [
+        ("WinUI", PART_PRESET_WINUI, TextRenderPreset::WinuiNative),
+        (
+            "Consistent",
+            PART_PRESET_CROSS_PLATFORM,
+            TextRenderPreset::CrossPlatform,
+        ),
+        ("Pixel", PART_PRESET_PIXEL, TextRenderPreset::Pixel),
+        ("Custom", PART_PRESET_CUSTOM, TextRenderPreset::Custom),
+    ];
+    let btn_w = (presets_w - gap * (items.len() as f32 - 1.0)) / items.len() as f32;
+
+    for (idx, (label, part, preset)) in items.iter().enumerate() {
+        let btn_rect = Rect::new(
+            presets_x + idx as f32 * (btn_w + gap),
+            rect.origin.y + 3.0,
+            btn_w,
+            rect.size.y - 6.0,
+        );
+
+        let selected = state.preset == *preset;
+        let a11y_label = format!("Preset: {} (Selected: {})", label, selected);
+
+        ctx.control_state(
+            *part,
+            btn_rect,
+            Role::RadioButton,
+            &a11y_label,
+            false,
+            selected,
+        );
+
+        let (bg, border, text_color) = if selected {
+            (palette.primary, palette.primary, palette.card_bg)
+        } else {
+            (palette.card_bg, palette.card_border, palette.text)
+        };
+
+        ctx.canvas.rect(btn_rect, 3.0, bg, border, 0.5, 0.0);
+        ctx.canvas.text(
+            label,
+            btn_rect,
+            10.0,
+            text_color,
+            AlignX::Center,
+            AlignY::Center,
+        );
     }
 }
 
