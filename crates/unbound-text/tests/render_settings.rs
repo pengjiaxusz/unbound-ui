@@ -240,20 +240,43 @@ fn text_capabilities_query_returns_tri_state() {
         other => panic!("expected Unavailable for MTSDF, got {other:?}"),
     }
 
-    // 彩色 DirectWrite 需要层遍历（待决策），必须返回不可用并附带原因
+    // 彩色 DirectWrite 由层遍历支撑（ADR 0017）：编译了且工厂可用即可用。
     match caps.color_directwrite {
+        CapabilityStatus::Available => {
+            #[cfg(all(windows, feature = "backend-directwrite"))]
+            assert_eq!(
+                caps.directwrite,
+                CapabilityStatus::Available,
+                "color traversal only exists when DirectWrite itself is available"
+            );
+            assert!(
+                caps.color_glyphs.is_available(),
+                "an available color path must make color glyphs available"
+            );
+        }
         CapabilityStatus::Unavailable(reason) => {
-            assert_eq!(reason, "Requires layer traversal (deferred)");
+            // 只允许因 DirectWrite 初始化失败而不可用，不能再是「待决策」。
+            assert_eq!(reason, "DirectWrite initialization failed");
+            #[cfg(all(windows, feature = "backend-directwrite"))]
+            assert!(
+                !caps.directwrite.is_available(),
+                "color traversal must not be unavailable while DirectWrite works"
+            );
         }
         CapabilityStatus::NotCompiled => {
             // 未开启 backend-directwrite 或在非 Windows 平台上允许为未编译
             #[cfg(all(windows, feature = "backend-directwrite"))]
-            panic!("expected Unavailable on windows, got NotCompiled");
-        }
-        CapabilityStatus::Available => {
-            panic!("color_directwrite must not be Available before deferred decision");
+            panic!("color traversal must be compiled on windows");
         }
     }
+
+    // 彩色字形是「任一彩色路径可用」：swash 彩色或 DirectWrite 层合成。
+    #[cfg(feature = "backend-swash")]
+    assert_eq!(
+        caps.color_glyphs,
+        CapabilityStatus::Available,
+        "swash color alone must make color glyphs available"
+    );
 
     // DirectWrite 在启用与未启用特性下的表现
     #[cfg(all(windows, feature = "backend-directwrite"))]
@@ -273,7 +296,12 @@ fn text_render_report_default_and_roundtrip() {
     let report = TextRenderReport::default();
     assert_eq!(report.backend, RasterBackend::default());
     assert_eq!(report.phases, 8);
-    assert_eq!(report.emoji_path, "Swash (Color RGBA8)");
+    assert_eq!(
+        report.emoji_path,
+        TextRenderReport::EMOJI_PATH_SWASH_COLOR,
+        "the default report must use the shared constant, not a literal"
+    );
+    assert_eq!(report.known_deviation, None);
     assert_eq!(report.fallback_count, 0);
     assert_eq!(report.last_fallback_reason, None);
     assert!(!report.rgba_atlas_allocated);

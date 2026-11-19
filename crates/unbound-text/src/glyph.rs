@@ -354,36 +354,80 @@ impl GlyphCache {
         self.last_fallback_reason.as_deref()
     }
 
+    /// 当前设置下 Emoji 实际会落在哪个光栅器上。
+    ///
+    /// 与 [`Self::color_cluster_enabled`] 及 [`Self::resolve`] 里的分派保持同一
+    /// 判据：`Follow` 看正文后端，显式指定则看该后端是否编译进来并初始化成功。
+    /// 返回 `None` 表示此构建里两条路都没有，报告不应假装有路径。
+    fn emoji_rasterizer(&self) -> Option<RasterBackend> {
+        #[cfg(all(windows, feature = "backend-directwrite"))]
+        let directwrite_ready = self.directwrite.is_some();
+        #[cfg(not(all(windows, feature = "backend-directwrite")))]
+        let directwrite_ready = false;
+        let swash_ready = cfg!(feature = "backend-swash");
+
+        match self.settings.emoji_backend {
+            crate::settings::EmojiBackend::DirectWrite => {
+                directwrite_ready.then_some(RasterBackend::DirectWrite)
+            }
+            crate::settings::EmojiBackend::Cosmic => swash_ready.then_some(RasterBackend::Cosmic),
+            crate::settings::EmojiBackend::Follow => {
+                if self.backend == RasterBackend::DirectWrite && directwrite_ready {
+                    Some(RasterBackend::DirectWrite)
+                } else if swash_ready {
+                    Some(RasterBackend::Cosmic)
+                } else {
+                    directwrite_ready.then_some(RasterBackend::DirectWrite)
+                }
+            }
+        }
+    }
+
+    /// Emoji 实际生效路径文案与「已知差异」说明。
+    ///
+    /// 路径按生效光栅器与呈现模式给出，不再固定成 swash 彩色。已知差异只在
+    /// `Mono` 下存在——两个后端的 `Mono` 未必是同一张图（ADR 0017 第 5、7 条）。
+    fn emoji_report(&self) -> (&'static str, Option<&'static str>) {
+        let color = self.settings.emoji_presentation == crate::settings::EmojiPresentation::Color;
+        let path = match (color, self.emoji_rasterizer()) {
+            (true, Some(RasterBackend::DirectWrite)) => {
+                TextRenderReport::EMOJI_PATH_DIRECTWRITE_COLOR
+            }
+            (true, Some(RasterBackend::Cosmic)) => TextRenderReport::EMOJI_PATH_SWASH_COLOR,
+            (false, Some(RasterBackend::DirectWrite)) => {
+                TextRenderReport::EMOJI_PATH_DIRECTWRITE_MONO
+            }
+            (false, Some(RasterBackend::Cosmic)) => TextRenderReport::EMOJI_PATH_SWASH_MONO,
+            (_, None) => TextRenderReport::EMOJI_PATH_NONE,
+        };
+
+        if color {
+            return (path, None);
+        }
+        // `Mono` 的偏差分两种：落在 swash 上就是「取亮度」，落在 DirectWrite
+        // 而无 swash 时则是「显式要 swash 回退会退化成 Mono」。两者都要写出来，
+        // 否则面板会把「Mono」当成两个后端等价的设置。
+        let deviation = if self.emoji_rasterizer() == Some(RasterBackend::Cosmic) {
+            Some(TextRenderReport::KNOWN_DEVIATION_SWASH_MONO)
+        } else if !cfg!(feature = "backend-swash")
+            && self.settings.emoji_fallback == crate::settings::EmojiFallback::Swash
+        {
+            Some(TextRenderReport::KNOWN_DEVIATION_NO_SWASH_FALLBACK)
+        } else {
+            Some(TextRenderReport::KNOWN_DEVIATION_SWASH_MONO)
+        };
+        (path, deviation)
+    }
+
     /// 获取文本渲染实际生效报告快照。
     #[must_use]
     pub fn report(&self) -> TextRenderReport {
+        let (emoji_path, known_deviation) = self.emoji_report();
         TextRenderReport {
             backend: self.backend,
             phases: self.settings.phase_mode.phases(),
-            emoji_path: match (
-                self.settings.emoji_presentation,
-                self.settings.emoji_backend,
-            ) {
-                (crate::settings::EmojiPresentation::Color, _) => "Swash (Color RGBA8)".to_string(),
-                (
-                    crate::settings::EmojiPresentation::Mono,
-                    crate::settings::EmojiBackend::DirectWrite,
-                ) => "DirectWrite (Mono R8)".to_string(),
-                (
-                    crate::settings::EmojiPresentation::Mono,
-                    crate::settings::EmojiBackend::Follow,
-                ) => {
-                    if self.backend == RasterBackend::DirectWrite {
-                        "DirectWrite (Mono R8)".to_string()
-                    } else {
-                        "Swash (Mono R8)".to_string()
-                    }
-                }
-                (
-                    crate::settings::EmojiPresentation::Mono,
-                    crate::settings::EmojiBackend::Cosmic,
-                ) => "Swash (Mono R8)".to_string(),
-            },
+            emoji_path: emoji_path.to_string(),
+            known_deviation: known_deviation.map(str::to_string),
             fallback_count: self.fallback_count,
             last_fallback_reason: self.last_fallback_reason.clone(),
             rgba_atlas_allocated: self.atlas.has_rgba(),

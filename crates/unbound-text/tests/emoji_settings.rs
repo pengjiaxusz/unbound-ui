@@ -1,8 +1,8 @@
 //! Emoji 呈现模式与缓存失效测试。
 
 use unbound_text::{
-    CapabilityStatus, EmojiPresentation, GlyphCache, GlyphKey, InvalidationTier, PhaseMode,
-    TextCapabilities, TextEngine, TextStyle,
+    CapabilityStatus, EmojiFallback, EmojiPresentation, GlyphCache, GlyphKey, InvalidationTier,
+    PhaseMode, TextCapabilities, TextEngine, TextRenderSettings, TextStyle,
 };
 
 static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -110,18 +110,61 @@ fn emoji_glyph_color_flag_and_atlas_allocation() {
 }
 
 #[test]
-fn emoji_color_directwrite_capability_unavailable() {
+fn emoji_color_directwrite_capability_tracks_directwrite() {
     let caps = TextCapabilities::probe();
     match caps.color_directwrite {
-        CapabilityStatus::Unavailable(reason) => {
+        // ADR 0017：彩色由 `TranslateColorGlyphRun` 摊平成实色层，不再是待决策项。
+        CapabilityStatus::Available => {
+            assert_eq!(
+                caps.directwrite,
+                CapabilityStatus::Available,
+                "color traversal cannot be available without DirectWrite"
+            );
             assert!(
-                reason.contains("layer traversal"),
-                "color_directwrite must specify layer traversal reason: {reason}"
+                caps.color_glyphs.is_available(),
+                "an available color path must make color glyphs available"
             );
         }
-        CapabilityStatus::NotCompiled => {}
-        CapabilityStatus::Available => {
-            panic!("color_directwrite must not be Available before architectural decision");
+        CapabilityStatus::Unavailable(reason) => {
+            assert_eq!(
+                reason, "DirectWrite initialization failed",
+                "the only remaining reason is a failed factory init"
+            );
         }
+        CapabilityStatus::NotCompiled => {
+            #[cfg(all(windows, feature = "backend-directwrite"))]
+            panic!("color traversal must be compiled on windows");
+        }
+    }
+}
+
+/// 彩色字形是「任一彩色路径可用」的并集，不是 swash 的独占能力。
+#[test]
+fn emoji_color_glyphs_available_without_swash() {
+    let caps = TextCapabilities::probe();
+    if cfg!(feature = "backend-swash") {
+        assert_eq!(caps.color_glyphs, CapabilityStatus::Available);
+    } else if caps.color_directwrite.is_available() {
+        assert_eq!(
+            caps.color_glyphs,
+            CapabilityStatus::Available,
+            "DirectWrite color traversal alone must unlock color glyphs"
+        );
+    } else {
+        assert!(!caps.color_glyphs.is_available());
+    }
+}
+
+/// 默认 Emoji 回退策略不能指向此构建执行不了的后端（ADR 0017 第 9 条）。
+#[test]
+fn emoji_fallback_default_follows_build_capability() {
+    let caps = TextCapabilities::probe();
+    let settings = TextRenderSettings::default();
+    if !caps.cosmic.is_available() {
+        assert_eq!(
+            settings.emoji_fallback,
+            EmojiFallback::Mono,
+            "a build without swash must default to the mono silhouette"
+        );
     }
 }

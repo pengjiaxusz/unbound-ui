@@ -47,7 +47,7 @@ fn single_backend_feature_matrix_capabilities_consistency() {
 
     #[cfg(not(feature = "backend-swash"))]
     {
-        // 未开启 backend-swash 时，Cosmic 状态必须为 NotCompiled，彩色字形亦未编译
+        // 未开启 backend-swash 时 Cosmic 未编译；彩色字形改为跟随 DirectWrite 层合成。
         assert_eq!(
             caps.cosmic,
             CapabilityStatus::NotCompiled,
@@ -55,8 +55,12 @@ fn single_backend_feature_matrix_capabilities_consistency() {
         );
         assert_eq!(
             caps.color_glyphs,
-            CapabilityStatus::NotCompiled,
-            "Color glyphs must be NotCompiled when backend-swash is not active"
+            if caps.color_directwrite.is_available() {
+                CapabilityStatus::Available
+            } else {
+                CapabilityStatus::NotCompiled
+            },
+            "color glyphs must follow the DirectWrite layer path when swash is absent"
         );
     }
 }
