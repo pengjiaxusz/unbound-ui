@@ -279,3 +279,61 @@ fn text_render_report_default_and_roundtrip() {
         postcard::from_bytes(&serialized).expect("deserialize report");
     assert_eq!(report, deserialized);
 }
+
+/// 验收条件 1：调字号时图集代际/内存不变，新旧字号在图集中天然隔离互不影响。
+#[test]
+fn font_size_change_preserves_atlas_and_isolates_entries() {
+    let mut engine = TextEngine::new();
+    let mut cache = GlyphCache::new();
+
+    // 1. 渲染 14px 样本字形
+    let style14 = TextStyle::sized(14.0);
+    let shaped14 = engine.shape("IsolatedGlyphs", &style14);
+    let quads14 = cache.quads_for(&mut engine, &shaped14, Vec2::ZERO, 400, false);
+    assert!(!quads14.is_empty(), "quads for 14px must not be empty");
+
+    let glyphs_after_14 = cache.resident_glyphs();
+    let memory_after_14 = cache.atlas_memory_bytes();
+    assert!(glyphs_after_14 > 0, "glyph cache must have entries");
+
+    // 2. 应用新字号 24px 设置：失效级别必须为 None
+    let mut new_settings = cache.settings().clone();
+    new_settings.size = 24.0;
+    let tier = cache.apply_settings(&new_settings, Some(&mut engine));
+    assert_eq!(tier, InvalidationTier::None);
+
+    // 验证图集条目数与图集内存完全保持不变（不清空）
+    assert_eq!(
+        cache.resident_glyphs(),
+        glyphs_after_14,
+        "font size change must not clear resident glyphs"
+    );
+    assert_eq!(
+        cache.atlas_memory_bytes(),
+        memory_after_14,
+        "font size change must not clear atlas memory"
+    );
+
+    // 3. 渲染 24px 样本：新旧字号在图集中隔离并存
+    let style24 = TextStyle::sized(24.0);
+    let shaped24 = engine.shape("IsolatedGlyphs", &style24);
+    let quads24 = cache.quads_for(&mut engine, &shaped24, Vec2::ZERO, 400, false);
+    assert!(!quads24.is_empty(), "quads for 24px must not be empty");
+
+    // 24px 的字形写入后，条目数单调增加
+    assert!(
+        cache.resident_glyphs() > glyphs_after_14,
+        "24px glyphs must be added as new entries without purging 14px"
+    );
+    assert!(cache.atlas_memory_bytes() >= memory_after_14);
+
+    // 4. 再次渲染 14px 样本：命中已有缓存
+    let updates_before = cache.pending_updates().len();
+    let quads14_again = cache.quads_for(&mut engine, &shaped14, Vec2::ZERO, 400, false);
+    assert_eq!(quads14.len(), quads14_again.len());
+    let updates_after = cache.pending_updates().len();
+    assert_eq!(
+        updates_before, updates_after,
+        "previously cached 14px glyphs must still be present and hot"
+    );
+}

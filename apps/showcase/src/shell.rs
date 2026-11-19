@@ -2436,6 +2436,36 @@ impl GalleryApp {
                     } else if part == pages::text_render::STATUS_BAR_PART {
                         self.state.text_render.toggle_fallback_details();
                         self.state.bump();
+                    } else if (pages::text_render::FONT_FAMILY_PART_BASE
+                        ..pages::text_render::FONT_FAMILY_PART_BASE
+                            + pages::text_render::FONT_FAMILY_OPTIONS.len() as u16)
+                        .contains(&part)
+                    {
+                        let index = (part - pages::text_render::FONT_FAMILY_PART_BASE) as usize;
+                        let (_, fam) = pages::text_render::FONT_FAMILY_OPTIONS[index];
+                        self.state.text_render.set_family(fam.map(str::to_string));
+                        self.state.bump();
+                    } else if (pages::text_render::FONT_WEIGHT_PART_BASE
+                        ..pages::text_render::FONT_WEIGHT_PART_BASE
+                            + pages::text_render::FONT_WEIGHT_OPTIONS.len() as u16)
+                        .contains(&part)
+                    {
+                        let index = (part - pages::text_render::FONT_WEIGHT_PART_BASE) as usize;
+                        let (_, weight) = pages::text_render::FONT_WEIGHT_OPTIONS[index];
+                        self.state.text_render.set_weight(weight);
+                        self.state.bump();
+                    } else if (pages::text_render::FONT_SIZE_PART_BASE
+                        ..pages::text_render::FONT_SIZE_PART_BASE
+                            + pages::text_render::FONT_SIZE_OPTIONS.len() as u16)
+                        .contains(&part)
+                    {
+                        let index = (part - pages::text_render::FONT_SIZE_PART_BASE) as usize;
+                        let (_, size) = pages::text_render::FONT_SIZE_OPTIONS[index];
+                        self.state.text_render.set_size(size);
+                        self.state.bump();
+                    } else if part == pages::text_render::FONT_ITALIC_PART {
+                        self.state.text_render.toggle_italic();
+                        self.state.bump();
                     }
                 }
             }
