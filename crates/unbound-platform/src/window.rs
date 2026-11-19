@@ -9,6 +9,7 @@ use std::time::Instant;
 use crate::latency::LatencyTracker;
 use crate::pacing::{FramePacer, PresentWaitPolicy};
 use crate::resize::{Extent, ResizeAction, ResizeTracker};
+use crate::win32_frame::WindowBackdropMaterial;
 
 /// 窗口启动时的初始位置策略。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -125,6 +126,18 @@ pub struct WindowConfig {
     /// 需要系统原生后景（云母 / 亚克力）从客户区透出的窗口必须选
     /// [`SurfaceAlpha::PreMultiplied`]，并按后景计划把根背景清屏 alpha 降到 0。
     pub surface_alpha: SurfaceAlpha,
+    /// 窗口后景材质意图（默认为 `None` 即不开启后景）。
+    ///
+    /// 开启后景材质（如 `Some(WindowBackdropMaterial::Mica)`）时：
+    /// 1. 框架自动将表面合成方式选为预乘 alpha（忽略显式设置的合成方式）；
+    /// 2. 框架自动派生并下发清屏 alpha，让系统材质从客户区透出；
+    /// 3. 当驱动不支持预乘或操作系统构建号不足时，自动退回不透明窗口（不发材质、清屏 alpha 钳回 1.0），
+    ///    避免出现透明空壳或黑窗。
+    ///
+    /// `Some(WindowBackdropMaterial::None)` 与 `None` 语义一致，均表示关闭后景。
+    /// 该字段只覆盖能直接映射到系统 DWM 取值的四档（`System`, `Mica`, `Tabbed`, `Acrylic`）；
+    /// 实验档（如亚克力自定义色调、自绘纹理等）必须走外观意图账本组件。
+    pub backdrop: Option<WindowBackdropMaterial>,
 }
 
 impl Default for WindowConfig {
@@ -141,6 +154,7 @@ impl Default for WindowConfig {
             refresh: crate::pacing::REFRESH_120,
             position: WindowPosition::CenterPrimary,
             surface_alpha: SurfaceAlpha::Opaque,
+            backdrop: None,
         }
     }
 }
@@ -211,6 +225,13 @@ impl WindowConfig {
     #[must_use]
     pub const fn with_surface_alpha(mut self, alpha: SurfaceAlpha) -> Self {
         self.surface_alpha = alpha;
+        self
+    }
+
+    /// 设置窗口后景材质意图。
+    #[must_use]
+    pub const fn with_backdrop(mut self, backdrop: Option<WindowBackdropMaterial>) -> Self {
+        self.backdrop = backdrop;
         self
     }
 

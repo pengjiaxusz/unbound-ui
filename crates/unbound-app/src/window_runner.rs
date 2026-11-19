@@ -12,7 +12,10 @@ use unbound_gpu::{Camera, Renderer};
 use unbound_input::PointerButton;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
-use unbound_platform::win32_frame::{install_custom_frame, set_window_dark_mode, FrameHitMetrics};
+use unbound_platform::win32_frame::{
+    clear_window_accent_tint, install_custom_frame, set_window_accent_tint, set_window_backdrop,
+    set_window_dark_mode, FrameHitMetrics, WindowBackdropMaterial,
+};
 use unbound_platform::window::{
     ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
     PlatformState, SurfaceAlpha, WindowConfig,
@@ -20,6 +23,7 @@ use unbound_platform::window::{
 use unbound_platform::Window;
 use unbound_theme::{ThemeSet, ThemeState};
 
+use crate::appearance::{AppearanceCaps, AppearanceDiff, BackdropChannel, WindowAppearance};
 use crate::{AppKey, AppRuntime, Application, ImeUpdate, Modifiers as AppModifiers, ThemeKind};
 
 /// 封装平台剪贴板的适配器。
@@ -203,6 +207,10 @@ pub struct WindowedRunner<A: Application> {
     /// Agent 操作界面时既不抢真实鼠标，也不会把渲染栈的线程约束
     /// 传染给业务代码。
     on_frame: Option<FrameHook<A>>,
+    /// 窗口外观意图账本。
+    appearance: WindowAppearance,
+    /// 窗口后景材质意图。
+    backdrop_intent: Option<WindowBackdropMaterial>,
 }
 
 impl<A: Application> WindowedRunner<A> {
@@ -216,6 +224,15 @@ impl<A: Application> WindowedRunner<A> {
         ))));
         let ctx = runtime.context();
         let theme = ThemeState::new(ThemeSet::for_product(ctx.preset, ctx.accent), ctx.theme);
+
+        // 意图开启时表面合成方式强制为预乘，忽略宿主显式设置的合成方式；
+        // 意图关闭或无材质时沿用配置中的合成方式。
+        let surface_alpha =
+            if config.backdrop.is_some() && config.backdrop != Some(WindowBackdropMaterial::None) {
+                SurfaceAlpha::PreMultiplied
+            } else {
+                config.surface_alpha
+            };
 
         Self {
             runtime,
@@ -232,12 +249,14 @@ impl<A: Application> WindowedRunner<A> {
             last_frame: Instant::now(),
             swapchain_dirty: false,
             committed_request: (w, h),
-            surface_alpha: config.surface_alpha,
+            surface_alpha,
             scene_generation: 0,
             frame_dropped: false,
             os_scale: 1.0,
             frame_metrics: None,
             hwnd: None,
+            appearance: WindowAppearance::new(),
+            backdrop_intent: config.backdrop,
         }
     }
 
@@ -313,6 +332,55 @@ impl<A: Application> WindowedRunner<A> {
             }
             Err(error) => {
                 eprintln!("[unbound-app] Could not upload the theme LUT: {error:?}");
+            }
+        }
+    }
+
+    /// 将外观意图账本同步至窗口与渲染器。
+    fn sync_appearance(&mut self, _window: &Window) {
+        let Some(hwnd) = self.hwnd else {
+            return;
+        };
+        let caps = AppearanceCaps::new(
+            unbound_platform::windows_build(),
+            self.runtime.premultiplied_surface(),
+            unbound_platform::accent_policy_export_available(),
+        );
+        let theme = self.runtime.context().theme;
+        self.appearance
+            .set_host_clear_alpha(self.runtime.clear_alpha());
+        let diff = self.appearance.set(self.backdrop_intent, caps, theme);
+        self.apply_appearance_diff(hwnd, diff);
+    }
+
+    /// 执行外观变更 Diff。
+    fn apply_appearance_diff(&mut self, hwnd: isize, diff: AppearanceDiff) {
+        if let Some(channel) = diff.channel {
+            match channel {
+                BackdropChannel::Dwm(material) => {
+                    let _ = clear_window_accent_tint(hwnd);
+                    let _ = set_window_backdrop(hwnd, material);
+                }
+                BackdropChannel::AccentTint(argb) => {
+                    let _ = set_window_accent_tint(hwnd, argb);
+                }
+                BackdropChannel::Off => {
+                    let _ = clear_window_accent_tint(hwnd);
+                    let _ = set_window_backdrop(hwnd, WindowBackdropMaterial::None);
+                }
+            }
+        }
+        if let Some(dark) = diff.dark_mode {
+            set_window_dark_mode(hwnd, dark);
+        }
+        if let Some(lock_mica) = diff.lock_mica {
+            if let Some(metrics) = &self.frame_metrics {
+                metrics.set_lock_mica_active(lock_mica);
+            }
+        }
+        if let Some(clear_alpha) = diff.clear_alpha {
+            if let Some(renderer) = &mut self.renderer {
+                renderer.set_clear_alpha(clear_alpha);
             }
         }
     }
@@ -614,6 +682,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
 
         state.set_present_extensions(&device_extensions);
         self.sync_theme(window);
+        self.sync_appearance(window);
         self.last_frame = Instant::now();
     }
 
@@ -752,9 +821,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                         ThemeKind::Light
                     });
                 }
-                if let Some(hwnd) = self.hwnd {
-                    set_window_dark_mode(hwnd, dark);
-                }
+                self.sync_appearance(window);
             }
             PlatformEvent::FileHover(path) => {
                 self.runtime.file_hover(vec![path]);
@@ -852,6 +919,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
 
         // `reduce` 可能改动 `ctx.theme`，每帧检查 4 KiB LUT 是否需要上传。
         self.sync_theme(window);
+        self.sync_appearance(window);
 
         if let (Some(renderer), Some(atlases)) = (&mut self.renderer, &self.atlases) {
             if !report.atlas_uploads.is_empty() {
@@ -901,15 +969,9 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                             report.aux_changed,
                         );
 
-                        // 根背景清屏 alpha 由宿主逐帧决定：原生后景要 0 让 DWM 材质
+                        // 根背景清屏 alpha 由外观账本统一派生：原生后景要 0 让 DWM 材质
                         // 透出，自绘与纯色路径要 1。它只影响清屏色，不重配交换链。
-                        // 交换链回退为不透明时必须钳到 1：不透明表面的 alpha 不参与
-                        // 合成，清屏色却是预乘过的，保留 0 只会得到一块黑板。
-                        let clear_alpha = if self.runtime.premultiplied_surface() {
-                            self.runtime.clear_alpha()
-                        } else {
-                            1.0
-                        };
+                        let clear_alpha = self.appearance.applied_clear_alpha();
                         renderer.set_clear_alpha(clear_alpha);
                         if let Err(ref err) =
                             renderer.render_into_swapchain(&scene, &image, actual_w, actual_h)

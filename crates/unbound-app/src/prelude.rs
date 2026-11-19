@@ -1,5 +1,9 @@
 //! 常用图元、应用契约、描述符与运行时类型重导出。
 
+pub use crate::appearance::{
+    backdrop_channel_request, dwm_material_to_platform, AppearanceCaps, AppearanceDiff,
+    AppearanceIntent, BackdropChannel, WindowAppearance,
+};
 pub use crate::backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID};
 pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
 pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};
@@ -21,8 +25,8 @@ pub use unbound_math::{Color, Rect, Vec2};
 pub use unbound_platform::{
     open_file, open_file_async, open_files, save_file, save_file_async, set_taskbar_progress,
     set_tray_icon, show_tray_balloon, FileDialogConfig, FrameHitMetrics, PlatformError,
-    SurfaceAlpha, TaskbarProgressState, TrayNotificationSeverity, WindowConfig, WindowPlacement,
-    WindowPosition,
+    SurfaceAlpha, TaskbarProgressState, TrayNotificationSeverity, WindowBackdropMaterial,
+    WindowConfig, WindowPlacement, WindowPosition,
 };
 pub use unbound_text::{
     global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,
