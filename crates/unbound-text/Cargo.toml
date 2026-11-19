@@ -13,6 +13,10 @@ unbound-theme.workspace = true
 bytemuck.workspace = true
 cosmic-text.workspace = true
 rustc-hash.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+postcard.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true

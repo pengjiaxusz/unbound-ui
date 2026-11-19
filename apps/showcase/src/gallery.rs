@@ -515,7 +515,9 @@ impl Labels {
 
     /// 是否按整像素网格光栅化字形。
     pub fn set_snap_phases(&mut self, snap: bool) {
-        self.cache.snap_phases = snap;
+        let mut settings = self.cache.settings().clone();
+        settings.phase_mode = unbound_text::PhaseMode::from(snap);
+        self.cache.apply_settings(&settings, None);
     }
 
     /// 字形光栅化所采用的缩放比例。

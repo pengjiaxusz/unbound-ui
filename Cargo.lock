@@ -1275,7 +1275,9 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "cosmic-text",
+ "postcard",
  "rustc-hash",
+ "serde",
  "unbound-math",
  "unbound-theme",
  "windows",

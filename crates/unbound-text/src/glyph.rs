@@ -17,7 +17,9 @@ use rustc_hash::FxHashMap;
 use unbound_math::{Rect, Vec2};
 
 use crate::atlas::{GlyphAtlas, GlyphKey, GlyphSlot};
+use crate::report::TextRenderReport;
 use crate::sdf;
+use crate::settings::{InvalidationTier, PhaseMode, TextRenderSettings};
 use crate::shaping::{PositionedGlyph, ShapedText, TextEngine};
 
 /// 更新目标图集类型。
@@ -33,7 +35,7 @@ pub enum AtlasTarget {
 ///
 /// `DirectWrite` 提供 8 位灰度的对称抗锯齿覆盖率；`Cosmic` 是纯 Rust
 /// 回退路径，用于非 Windows 平台、彩色字形与距离场。
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum RasterBackend {
     /// Windows DirectWrite 覆盖率位图。
     DirectWrite,
@@ -100,28 +102,31 @@ pub struct ResolvedGlyph {
 }
 
 impl ResolvedGlyph {
-    /// 文本局部空间中的四边形。
-    ///
-    /// 画笔坐标会对齐到光栅自身的像素网格：画笔位置的亚像素部分已被烘焙进
-    /// 位图中（光栅按 `pen.x` 隐含的相位生成），若再次叠加小数部分会导致
-    /// 字形发生双重偏移。
-    ///
-    ///
-    /// 水平原点来自 [`GlyphCache::quantize_x`]，它连同相位一起携带了整像素：
-    /// 落在 `[0.875, 1.0)` 的画笔小数部分会舍入到**下一像素**的相位 0，
-    /// 四边形也必须随之移动。丢弃该进位（旧版单纯 `% 4` 的做法）曾使
-    /// 12.5% 的字形向左偏移一个像素，导致其边缘与前一个字母重叠。
-    ///
-    ///
+    /// 文本局部空间中的四边形（指定亚像素相位档位）。
     #[must_use]
-    pub fn quad(&self, pen: Vec2, snap_phases: bool) -> Rect {
-        let (base_x, _) = GlyphCache::quantize_x(pen.x, snap_phases);
+    pub fn quad_with_mode(&self, pen: Vec2, mode: PhaseMode) -> Rect {
+        let (base_x, _) = mode.quantize_x(pen.x);
         Rect::new(
             base_x + self.bearing.x,
             pen.y.round() + self.bearing.y,
             self.size.x,
             self.size.y,
         )
+    }
+
+    /// 文本局部空间中的四边形。
+    ///
+    /// 画笔坐标会对齐到光栅自身的像素网格：画笔位置的亚像素部分已被烘焙进
+    /// 位图中（光栅按 `pen.x` 隐含的相位生成），若再次叠加小数部分会导致
+    /// 字形发生双重偏移。
+    ///
+    /// 水平原点来自 [`GlyphCache::quantize_x`]，它连同相位一起携带了整像素：
+    /// 落在 `[0.875, 1.0)` 的画笔小数部分会舍入到**下一像素**的相位 0，
+    /// 四边形也必须随之移动。丢弃该进位（旧版单纯 `% 4` 的做法）曾使
+    /// 12.5% 的字形向左偏移一个像素，导致其边缘与前一个字母重叠。
+    #[must_use]
+    pub fn quad(&self, pen: Vec2, snap_phases: bool) -> Rect {
+        self.quad_with_mode(pen, PhaseMode::from(snap_phases))
     }
 }
 
@@ -140,16 +145,20 @@ pub struct GlyphQuad {
 
 /// 光栅化并缓存字形，维护其在图集中的驻留状态。
 pub struct GlyphCache {
+    settings: TextRenderSettings,
     swash: SwashCache,
     pub atlas: GlyphAtlas,
     resolved: FxHashMap<GlyphKey, ResolvedGlyph>,
     /// 自上次排空以来产生的图集更新。
     updates: Vec<AtlasUpdate>,
     /// 输出距离场而非普通覆盖率位图（用于画布文本）。
+    #[deprecated(note = "use TextRenderSettings and GlyphCache::apply_settings instead")]
     pub use_sdf: bool,
     /// 距离场扩散范围（单位：纹素）。
+    #[deprecated(note = "use TextRenderSettings and GlyphCache::apply_settings instead")]
     pub sdf_spread: f32,
     /// 每个字形四周的额外边距纹素（防止双线性采样渗色）。
+    #[deprecated(note = "use TextRenderSettings and GlyphCache::apply_settings instead")]
     pub padding: u32,
     /// 在整像素网格上光栅化字形，而非使用 `SUBPIXEL_PHASES` 个亚像素相位。
     ///
@@ -161,6 +170,7 @@ pub struct GlyphCache {
     /// UI 文本保留八相位方案：相位由字形的绝对坐标推导，与真实画笔位置的误差
     /// 至多为 ⅛ px。
     ///
+    #[deprecated(note = "use TextRenderSettings and GlyphCache::apply_settings instead")]
     pub snap_phases: bool,
     /// `fontdb::ID` 与 [`GlyphKey`] 中紧凑字体索引之间的双射。`fontdb::ID` 是
     /// 不透明的 slotmap 键，未公开整数转换，因此图集改用稠密索引作为键。
@@ -179,6 +189,10 @@ pub struct GlyphCache {
     /// DirectWrite 光栅化器；初始化失败时为 `None`，并自动回退到 `Cosmic`。
     #[cfg(windows)]
     directwrite: Option<crate::directwrite::DirectWriteRasterizer>,
+    /// 累计发生的光栅化或字体回退次数。
+    fallback_count: u64,
+    /// 最近一次回退的原因说明。
+    last_fallback_reason: Option<String>,
 }
 
 impl core::fmt::Debug for GlyphCache {
@@ -188,6 +202,7 @@ impl core::fmt::Debug for GlyphCache {
             .field("updates", &self.updates.len())
             .field("hits", &self.hits)
             .field("misses", &self.misses)
+            .field("fallback_count", &self.fallback_count)
             .finish_non_exhaustive()
     }
 }
@@ -198,6 +213,7 @@ impl Default for GlyphCache {
     }
 }
 
+#[allow(deprecated)]
 impl GlyphCache {
     #[must_use]
     pub fn new() -> Self {
@@ -214,11 +230,20 @@ impl GlyphCache {
     #[must_use]
     pub fn with_backend(requested: RasterBackend) -> Self {
         let mut backend = requested;
+        let mut fallback_count = 0u64;
+        let mut last_fallback_reason = None;
         #[cfg(windows)]
         let directwrite = if backend == RasterBackend::DirectWrite {
-            let instance = crate::directwrite::DirectWriteRasterizer::new();
+            let instance = if std::env::var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL").is_ok() {
+                None
+            } else {
+                crate::directwrite::DirectWriteRasterizer::new()
+            };
             if instance.is_none() {
                 backend = RasterBackend::Cosmic;
+                fallback_count = 1;
+                last_fallback_reason =
+                    Some("DirectWrite factory initialization failed".to_string());
             }
             instance
         } else {
@@ -227,8 +252,17 @@ impl GlyphCache {
         #[cfg(not(windows))]
         if backend == RasterBackend::DirectWrite {
             backend = RasterBackend::Cosmic;
+            fallback_count = 1;
+            last_fallback_reason =
+                Some("DirectWrite not supported on non-Windows platforms".to_string());
         }
+        let settings = TextRenderSettings {
+            raster_backend: backend,
+            ..Default::default()
+        };
+        #[allow(deprecated)]
         Self {
+            settings,
             swash: SwashCache::new(),
             atlas: GlyphAtlas::default(),
             resolved: FxHashMap::default(),
@@ -245,6 +279,61 @@ impl GlyphCache {
             backend,
             #[cfg(windows)]
             directwrite,
+            fallback_count,
+            last_fallback_reason,
+        }
+    }
+
+    /// 记录一次底层回退事件（如 DirectWrite 初始化或光栅化失败）。
+    pub fn record_fallback(&mut self, reason: impl Into<String>) {
+        self.fallback_count = self.fallback_count.saturating_add(1);
+        self.last_fallback_reason = Some(reason.into());
+    }
+
+    /// 累计发生的光栅化或字体回退次数。
+    #[must_use]
+    pub fn fallback_count(&self) -> u64 {
+        self.fallback_count
+    }
+
+    /// 最近一次回退的原因说明。
+    #[must_use]
+    pub fn last_fallback_reason(&self) -> Option<&str> {
+        self.last_fallback_reason.as_deref()
+    }
+
+    /// 获取文本渲染实际生效报告快照。
+    #[must_use]
+    pub fn report(&self) -> TextRenderReport {
+        TextRenderReport {
+            backend: self.backend,
+            phases: self.settings.phase_mode.phases(),
+            emoji_path: match (
+                self.settings.emoji_presentation,
+                self.settings.emoji_backend,
+            ) {
+                (crate::settings::EmojiPresentation::Color, _) => "Swash (Color RGBA8)".to_string(),
+                (
+                    crate::settings::EmojiPresentation::Mono,
+                    crate::settings::EmojiBackend::DirectWrite,
+                ) => "DirectWrite (Mono R8)".to_string(),
+                (
+                    crate::settings::EmojiPresentation::Mono,
+                    crate::settings::EmojiBackend::Follow,
+                ) => {
+                    if self.backend == RasterBackend::DirectWrite {
+                        "DirectWrite (Mono R8)".to_string()
+                    } else {
+                        "Swash (Mono R8)".to_string()
+                    }
+                }
+                (
+                    crate::settings::EmojiPresentation::Mono,
+                    crate::settings::EmojiBackend::Cosmic,
+                ) => "Swash (Mono R8)".to_string(),
+            },
+            fallback_count: self.fallback_count,
+            last_fallback_reason: self.last_fallback_reason.clone(),
         }
     }
 
@@ -252,6 +341,77 @@ impl GlyphCache {
     #[must_use]
     pub fn backend(&self) -> RasterBackend {
         self.backend
+    }
+
+    /// 获取当前生效的设置引用。
+    #[must_use]
+    pub fn settings(&self) -> &TextRenderSettings {
+        &self.settings
+    }
+
+    /// 切换光栅化后端并同步初始化底层光栅化器。
+    pub fn set_backend(&mut self, requested: RasterBackend) {
+        let mut backend = requested;
+        #[cfg(windows)]
+        {
+            if backend == RasterBackend::DirectWrite {
+                let instance = if std::env::var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL").is_ok() {
+                    None
+                } else {
+                    crate::directwrite::DirectWriteRasterizer::new()
+                };
+                if instance.is_none() {
+                    backend = RasterBackend::Cosmic;
+                    self.record_fallback("DirectWrite factory initialization failed");
+                }
+                self.directwrite = instance;
+            } else {
+                self.directwrite = None;
+            }
+        }
+        #[cfg(not(windows))]
+        if backend == RasterBackend::DirectWrite {
+            backend = RasterBackend::Cosmic;
+            self.record_fallback("DirectWrite not supported on non-Windows platforms");
+        }
+        self.backend = backend;
+        self.settings.raster_backend = backend;
+    }
+
+    /// 应用新设置，执行字段级差异比对并按三档执行失效。
+    ///
+    /// - `None`（预览样式或相同配置）：不清除任何缓存；
+    /// - `Typographic`（排版语义）：若传入 `engine`，清空其塑形与换行缓存，但不清字形位图；
+    /// - `Bitmap`（位图内容）：清空整张字形图集与待上传队列，整表重建。
+    pub fn apply_settings(
+        &mut self,
+        settings: &TextRenderSettings,
+        engine: Option<&mut TextEngine>,
+    ) -> InvalidationTier {
+        let mut resolved_settings = settings.clone();
+        resolved_settings.enforce_constraints();
+        let tier = self.settings.invalidation_tier(&resolved_settings);
+        match tier {
+            InvalidationTier::Bitmap => {
+                self.clear();
+                if self.settings.raster_backend != resolved_settings.raster_backend {
+                    self.set_backend(resolved_settings.raster_backend);
+                }
+                #[allow(deprecated)]
+                {
+                    self.use_sdf = resolved_settings.use_sdf;
+                    self.sdf_spread = resolved_settings.sdf_spread;
+                    self.padding = resolved_settings.padding;
+                    self.snap_phases = resolved_settings.snap_phases();
+                }
+            }
+            InvalidationTier::Typographic | InvalidationTier::None => {}
+        }
+        if let Some(engine) = engine {
+            engine.apply_settings(&self.settings, settings);
+        }
+        self.settings = resolved_settings;
+        tier
     }
 
     /// 获取字体对应的稠密索引，首次遇到时分配新索引。
@@ -319,6 +479,21 @@ impl GlyphCache {
         }
     }
 
+    /// 返回当前生效的亚像素相位档位。
+    #[must_use]
+    pub fn phase_mode(&self) -> PhaseMode {
+        self.settings.phase_mode
+    }
+
+    /// 切换亚像素相位档位，若发生变更则触发整表清空。
+    pub fn set_phase_mode(&mut self, mode: PhaseMode) {
+        if self.settings.phase_mode != mode {
+            let mut settings = self.settings.clone();
+            settings.phase_mode = mode;
+            self.apply_settings(&settings, None);
+        }
+    }
+
     /// 将画笔坐标拆分为整像素原点与亚像素相位。
     ///
     /// 八个相位覆盖 `[0, 1)`，步长 ⅛ px。WinUI 的 DirectWrite 光栅按真实
@@ -335,20 +510,19 @@ impl GlyphCache {
     /// 供画笔始终位于像素网格上的调用方使用。
     #[must_use]
     pub fn quantize_x(x: f32, snap_phases: bool) -> (f32, u8) {
-        if snap_phases {
-            return (x.round(), 0);
-        }
-        let eighths = (x * 8.0).round();
-        (eighths.div_euclid(8.0), eighths.rem_euclid(8.0) as u8)
+        PhaseMode::from(snap_phases).quantize_x(x)
+    }
+
+    /// 按指定相位档位量化画笔坐标。
+    #[must_use]
+    pub fn quantize_x_mode(x: f32, mode: PhaseMode) -> (f32, u8) {
+        mode.quantize_x(x)
     }
 
     /// 由画笔位置推导出的亚像素相位。
     #[must_use]
     pub fn phase_for(x: f32) -> u8 {
-        // 八相位：0, ⅛, …, ⅞。舍入到最近相位可将误差控制在 ⅟₁₆ px 以内，
-        // 肉眼不可见；若改用整像素对齐则会明显改变字母间距。
-        //
-        Self::quantize_x(x, false).1
+        PhaseMode::Eight.quantize_x(x).1
     }
 
     /// `pen_x` 处字形实际光栅化所用的亚像素相位。
@@ -358,7 +532,7 @@ impl GlyphCache {
     ///
     #[must_use]
     pub fn phase_at(&self, pen_x: f32) -> u8 {
-        Self::quantize_x(pen_x, self.snap_phases).1
+        self.settings.phase_mode.quantize_x(pen_x).1
     }
 
     /// 解析（并在必要时光栅化）单个字形。
@@ -371,7 +545,8 @@ impl GlyphCache {
         weight: u16,
         italic: bool,
     ) -> Option<ResolvedGlyph> {
-        let phase = self.phase_at(pen.x);
+        let mode = self.settings.phase_mode;
+        let phase = mode.quantize_x(pen.x).1;
         let sdf_mode = self.use_sdf;
         let face_index = u64::from(self.face_id(face));
         // 光栅化字重必须与文本段塑形时使用的字重一致。此前在此叠加“光学”
@@ -380,7 +555,7 @@ impl GlyphCache {
         //
         // 光栅化结果取决于相位、字重与斜体倾斜，因此三者均纳入键中。
         //
-        let key = GlyphKey::styled(
+        let key = GlyphKey::styled_with_mode(
             glyph.glyph_id,
             glyph.font_size,
             phase,
@@ -388,6 +563,9 @@ impl GlyphCache {
             face_index,
             weight,
             italic,
+            mode,
+            self.settings.emoji_presentation as u8,
+            self.settings.palette_index,
         );
         if let Some(hit) = self.resolved.get(&key).copied() {
             if hit.slot.is_valid() {
@@ -404,10 +582,17 @@ impl GlyphCache {
         self.misses += 1;
 
         // Windows 上优先使用 DirectWrite：覆盖率位图直接取自系统光栅器。
-        // 彩色字体、距离场或字体解析失败时继续走 swash。
+        // 彩色字体或字体解析失败时静默回退 swash（距离场通过覆盖率位图后处理生成），并记录回退诊断。
         #[cfg(windows)]
-        if !sdf_mode && self.backend == RasterBackend::DirectWrite {
-            if let Some(raster) = self.raster_directwrite(engine, face, glyph, phase) {
+        let try_directwrite = match self.settings.emoji_backend {
+            crate::settings::EmojiBackend::DirectWrite => true,
+            crate::settings::EmojiBackend::Cosmic => false,
+            crate::settings::EmojiBackend::Follow => self.backend == RasterBackend::DirectWrite,
+        };
+        #[cfg(windows)]
+        if try_directwrite {
+            let phase_offset = mode.phase_offset(phase);
+            if let Some(raster) = self.raster_directwrite(engine, face, glyph, phase_offset) {
                 return self.commit_raster(
                     key,
                     glyph,
@@ -417,8 +602,13 @@ impl GlyphCache {
                     -raster.bearing_y,
                     false,
                     raster.data,
-                    false,
+                    sdf_mode,
                 );
+            } else if self.backend == RasterBackend::DirectWrite {
+                self.record_fallback(format!(
+                    "DirectWrite glyph rasterization failed for glyph {}",
+                    glyph.glyph_id
+                ));
             }
         }
 
@@ -427,8 +617,8 @@ impl GlyphCache {
             flags |= CacheKeyFlags::FAKE_ITALIC;
         }
         // 在向 swash 请求光栅化前将坐标偏置到目标亚像素相位，
-        // 确保八个相位生成真正不同的位图。
-        let phase_offset = phase as f32 * 0.125;
+        // 确保亚像素相位生成真正不同的位图。
+        let phase_offset = mode.phase_offset(phase);
         let (cache_key, _, _) = CacheKey::new(
             face,
             glyph.glyph_id,
@@ -443,13 +633,35 @@ impl GlyphCache {
             .as_ref()?;
 
         let placement = image.placement;
-        let is_color = matches!(image.content, cosmic_text::SwashContent::Color);
+        let mut is_color = matches!(image.content, cosmic_text::SwashContent::Color);
         // 先复制出所有字段，结束对 swash 内部的借用，再进入可变的图集写入。
-        let data = image.data.to_vec();
+        let mut data = image.data.to_vec();
         let width = placement.width;
         let height = placement.height;
         let left = placement.left as f32;
         let top = placement.top as f32;
+
+        if is_color && self.settings.emoji_presentation == crate::settings::EmojiPresentation::Mono
+        {
+            // 单色模式：将 RGBA8 彩色位图转换为单通道 R8 覆盖率，走文字染色路径
+            is_color = false;
+            let mono_len = (width * height) as usize;
+            let mut mono_data = Vec::with_capacity(mono_len);
+            for chunk in data.chunks_exact(4) {
+                let a = chunk[3] as u32;
+                if a == 0 {
+                    mono_data.push(0);
+                } else {
+                    let r = chunk[0] as u32;
+                    let g = chunk[1] as u32;
+                    let b = chunk[2] as u32;
+                    let gray = (r * 299 + g * 587 + b * 114) / 1000;
+                    mono_data.push(((gray * a) / 255) as u8);
+                }
+            }
+            data = mono_data;
+        }
+
         self.commit_raster(
             key, glyph, width, height, left, top, is_color, data, sdf_mode,
         )
@@ -572,7 +784,7 @@ impl GlyphCache {
         engine: &mut TextEngine,
         face: fontdb::ID,
         glyph: &PositionedGlyph,
-        phase: u8,
+        phase_offset: f32,
     ) -> Option<crate::directwrite::RasterizedGlyph> {
         let directwrite = self.directwrite.as_mut()?;
         let key = {
@@ -583,7 +795,15 @@ impl GlyphCache {
                 italic: matches!(info.style, fontdb::Style::Italic | fontdb::Style::Oblique),
             }
         };
-        directwrite.rasterize(&key, glyph.glyph_id, glyph.font_size, glyph.w, phase)
+        let mono = self.settings.emoji_presentation == crate::settings::EmojiPresentation::Mono;
+        directwrite.rasterize(
+            &key,
+            glyph.glyph_id,
+            glyph.font_size,
+            glyph.w,
+            phase_offset,
+            mono,
+        )
     }
 
     /// 将整段已塑形的文本解析为四边形列表。
@@ -599,6 +819,7 @@ impl GlyphCache {
         italic: bool,
     ) -> Vec<GlyphQuad> {
         let mut out = Vec::with_capacity(shaped.glyphs.len());
+        let mode = self.settings.phase_mode;
         for g in &shaped.glyphs {
             let Some(face) = shaped.faces.get(g.face_index as usize).copied() else {
                 continue;
@@ -608,14 +829,19 @@ impl GlyphCache {
                 if resolved.size.x <= 0.0 || resolved.size.y <= 0.0 {
                     continue;
                 }
-                let snap = self.snap_phases;
+                let (base_x, phase) = mode.quantize_x(pen.x);
                 out.push(GlyphQuad {
-                    rect: resolved.quad(pen, snap),
+                    rect: Rect::new(
+                        base_x + resolved.bearing.x,
+                        pen.y.round() + resolved.bearing.y,
+                        resolved.size.x,
+                        resolved.size.y,
+                    ),
                     uv: resolved.slot.uv,
                     layer: resolved.slot.layer,
                     color: resolved.color,
                     msdf: resolved.msdf,
-                    phase: Self::quantize_x(pen.x, snap).1,
+                    phase,
                 });
             }
         }
@@ -700,6 +926,7 @@ fn pad_field(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
 // 保留显式导入以便读者查阅。
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::atlas::AtlasConfig;
