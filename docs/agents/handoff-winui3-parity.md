@@ -95,7 +95,7 @@ gh issue create `
 
 本轮已基于 `to-spec` 与 `to-tickets` 技能生成了完整的特性规格说明（Spec）与按依赖顺序排列的 **10 张垂直切片工单（Tickets）**：
 
-- **Spec 路径**：`.scratch/winui3-parity-system/SPEC.md`（同时备份于 `docs/specs/winui3-parity-system-spec.md`）
+- **Spec 路径**：`.scratch/winui3-parity-system/SPEC.md`
 - **10 张本地工单路径**：`.scratch/winui3-parity-system/issues/01-*.md` ~ `10-*.md`
 - **一键发布至 GitHub Issues 脚本**：`.scratch/winui3-parity-system/publish-github-issues.ps1`
 
