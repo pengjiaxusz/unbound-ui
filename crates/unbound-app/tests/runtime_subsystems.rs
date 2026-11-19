@@ -278,3 +278,22 @@ fn a_skipped_frame_does_not_unmount_anything() {
     runtime.frame(0.0);
     assert!(runtime.state().unmounted.is_empty());
 }
+
+#[test]
+fn runtime_text_render_backend_switching_and_invalidation() {
+    let mut runtime = runtime();
+    runtime.frame(0.0);
+
+    let mut settings = runtime.text_settings().clone();
+    settings.raster_backend = unbound_text::RasterBackend::Cosmic;
+    let tier = runtime.apply_text_settings(&settings);
+    assert_eq!(tier, unbound_text::InvalidationTier::Bitmap);
+    assert!(runtime.dirty().contains(unbound_app::DirtyFlags::ALL));
+
+    let report = runtime.text_render_report();
+    assert_eq!(report.backend, unbound_text::RasterBackend::Cosmic);
+    assert_eq!(
+        runtime.text_settings().raster_backend,
+        unbound_text::RasterBackend::Cosmic
+    );
+}

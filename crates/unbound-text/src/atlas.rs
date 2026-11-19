@@ -206,6 +206,12 @@ impl Atlas {
         self.pages.len() as u32
     }
 
+    /// 当前已分配的图集页数（层数）。
+    #[must_use]
+    pub fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+
     #[must_use]
     pub fn len(&self) -> usize {
         self.slots.len()
@@ -665,6 +671,12 @@ impl GlyphAtlas {
     #[must_use]
     pub fn layer_count(&self) -> u32 {
         self.r8.layer_count().max(self.rgba.layer_count())
+    }
+
+    /// 两个图集已分配的总页数。
+    #[must_use]
+    pub fn page_count(&self) -> usize {
+        self.r8.page_count() + self.rgba.page_count()
     }
 }
 
