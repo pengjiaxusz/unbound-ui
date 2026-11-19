@@ -3,8 +3,8 @@
 use unbound_math::Vec2;
 use unbound_text::{
     CapabilityStatus, EmojiBackend, EmojiPresentation, GlyphCache, InvalidationTier, LineBreakMode,
-    PhaseMode, RasterBackend, TextCapabilities, TextEngine, TextRenderSettings, TextShaper,
-    TextStyle,
+    PhaseMode, RasterBackend, TextCapabilities, TextEngine, TextRenderReport, TextRenderSettings,
+    TextShaper, TextStyle,
 };
 
 #[test]
@@ -263,4 +263,19 @@ fn text_capabilities_query_returns_tri_state() {
             Some("Feature not included in this build")
         );
     }
+}
+
+#[test]
+fn text_render_report_default_and_roundtrip() {
+    let report = TextRenderReport::default();
+    assert_eq!(report.backend, RasterBackend::default());
+    assert_eq!(report.phases, 8);
+    assert_eq!(report.emoji_path, "Swash (Color RGBA8)");
+    assert_eq!(report.fallback_count, 0);
+    assert_eq!(report.last_fallback_reason, None);
+
+    let serialized = postcard::to_allocvec(&report).expect("serialize report");
+    let deserialized: TextRenderReport =
+        postcard::from_bytes(&serialized).expect("deserialize report");
+    assert_eq!(report, deserialized);
 }

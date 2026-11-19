@@ -2422,6 +2422,23 @@ impl GalleryApp {
                     }
                 }
             }
+            PageId::TextRender => {
+                if card == 0 {
+                    // 折叠标题按钮点击：GROUP_PART_BASE .. GROUP_PART_BASE + 6
+                    if (pages::text_render::GROUP_PART_BASE
+                        ..pages::text_render::GROUP_PART_BASE
+                            + pages::text_render::TextConsoleGroup::ALL.len() as u16)
+                        .contains(&part)
+                    {
+                        let group_index = (part - pages::text_render::GROUP_PART_BASE) as usize;
+                        self.state.text_render.toggle_group(group_index);
+                        self.state.bump();
+                    } else if part == pages::text_render::STATUS_BAR_PART {
+                        self.state.text_render.toggle_fallback_details();
+                        self.state.bump();
+                    }
+                }
+            }
             _ => {
                 let _ = position;
             }
