@@ -21,7 +21,7 @@ unbound-gpu.workspace = true
 unbound-app.workspace = true
 unbound-theme.workspace = true
 unbound-widgets.workspace = true
-unbound-text.workspace = true
+unbound-text = { workspace = true, features = ["full"] }
 unbound-vector.workspace = true
 unbound-platform.workspace = true
 unbound-abi.workspace = true
