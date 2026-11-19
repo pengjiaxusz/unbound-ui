@@ -67,8 +67,124 @@ public sealed partial class CaptureWindow : Window
         }
 
         _loaded = true;
-        _sheets = PlanPages(_options.BuildCandidateBatches());
+        var candidateBatches = _options.BuildCandidateBatches();
+        var filteredBatches = FilterCandidateBatches(candidateBatches);
+        _sheets = filteredBatches.Count > 0
+            ? PlanPages(filteredBatches)
+            : Array.Empty<DynamicParityPage>();
         AdvanceToNextUncachedOrStart(initial: true);
+    }
+
+    /// <summary>
+    /// 装箱前用例指纹增量过滤：
+    /// 基于 SDK 版本、OS 版本、光栅化缩放及控件规格指纹，比对磁盘上已有的 PNG 与 JSON 切片产物。
+    /// 仅保留存在至少一个未命中状态的候选控件（或在指定 --no-cache 时保留全部）。
+    /// 已全部命中缓存的控件完全不进入装箱规划器，不分配版面槽位，不参与可视树测量。
+    /// 若某主题下的所有控件均已命中缓存，直接打印 [cache-hit] 并跳过当前主题所有拼版页的渲染与等待。
+    /// </summary>
+    private List<CandidateBatch> FilterCandidateBatches(IReadOnlyList<CandidateBatch> batches)
+    {
+        if (_options.NoCache)
+        {
+            return batches.ToList();
+        }
+
+        var outputDirectory = Path.GetFullPath(_options.OutputDirectory);
+        var scale = Host.XamlRoot?.RasterizationScale ?? 1.0;
+        var sdkVersion = typeof(Application).Assembly.GetName().Version?.ToString() ?? "unknown";
+        var osVersion = Environment.OSVersion.Version.ToString();
+
+        var filteredBatches = new List<CandidateBatch>();
+
+        foreach (var batch in batches)
+        {
+            var groups = batch.Cases
+                .GroupBy(c => Catalog.CanonicalName(c.ControlName), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var activeCases = new List<CaptureCase>();
+            var cachedControls = new List<string>();
+            var uncachedControls = new List<string>();
+
+            foreach (var group in groups)
+            {
+                var controlName = group.Key;
+                var allCached = true;
+
+                foreach (var c in group)
+                {
+                    if (!IsCaseCached(c, scale, sdkVersion, osVersion, outputDirectory))
+                    {
+                        allCached = false;
+                        break;
+                    }
+                }
+
+                if (allCached)
+                {
+                    _skippedCount += group.Count();
+                    cachedControls.Add(controlName);
+                }
+                else
+                {
+                    activeCases.AddRange(group);
+                    uncachedControls.Add(controlName);
+                }
+            }
+
+            if (activeCases.Count == 0)
+            {
+                Console.Out.WriteLine(
+                    $"[cache-hit] 全部命中缓存，跳过主题 {batch.Theme} ({batch.Backdrop}) 的全部 {batch.Cases.Count} 个状态（{string.Join(", ", cachedControls)}）");
+            }
+            else
+            {
+                if (cachedControls.Count > 0)
+                {
+                    Console.Out.WriteLine(
+                        $"[cache-hit] 主题 {batch.Theme} ({batch.Backdrop}): 命中缓存跳过 {cachedControls.Count} 个控件（{string.Join(", ", cachedControls)}），待采 {uncachedControls.Count} 个控件（{string.Join(", ", uncachedControls)}）");
+                }
+
+                filteredBatches.Add(new CandidateBatch(batch.Theme, batch.Backdrop, activeCases));
+            }
+        }
+
+        return filteredBatches;
+    }
+
+    /// <summary>检查单个用例是否已在磁盘上存在指纹完全一致的有效 PNG 与 JSON 切片产物。</summary>
+    private static bool IsCaseCached(
+        CaptureCase c,
+        double scale,
+        string sdkVersion,
+        string osVersion,
+        string outputDirectory)
+    {
+        var baseName = c.FileBaseName();
+        var pngPath = Path.Combine(outputDirectory, $"{baseName}.png");
+        var jsonPath = Path.Combine(outputDirectory, $"{baseName}.json");
+        if (!File.Exists(pngPath) || !File.Exists(jsonPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var jsonText = File.ReadAllText(jsonPath);
+            var expectedFp = Catalog.ComputeFingerprint(
+                c.ControlName,
+                c.State,
+                c.Theme,
+                c.Backdrop,
+                scale,
+                sdkVersion,
+                osVersion);
+            return jsonText.Contains($"\"fingerprint\": \"{expectedFp}\"", StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -246,31 +362,7 @@ public sealed partial class CaptureWindow : Window
 
         foreach (var c in sheet.Cases)
         {
-            var baseName = c.FileBaseName();
-            var pngPath = Path.Combine(outputDirectory, $"{baseName}.png");
-            var jsonPath = Path.Combine(outputDirectory, $"{baseName}.json");
-            if (!File.Exists(pngPath) || !File.Exists(jsonPath))
-            {
-                return false;
-            }
-
-            try
-            {
-                var jsonText = File.ReadAllText(jsonPath);
-                var expectedFp = Catalog.ComputeFingerprint(
-                    c.ControlName,
-                    c.State,
-                    c.Theme,
-                    c.Backdrop,
-                    scale,
-                    sdkVersion,
-                    osVersion);
-                if (!jsonText.Contains($"\"fingerprint\": \"{expectedFp}\"", StringComparison.Ordinal))
-                {
-                    return false;
-                }
-            }
-            catch
+            if (!IsCaseCached(c, scale, sdkVersion, osVersion, outputDirectory))
             {
                 return false;
             }

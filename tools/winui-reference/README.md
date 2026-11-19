@@ -2,12 +2,16 @@
 
 为 unbound-ui 的像素级一致性校验提供**官方 WinUI 3 控件参考截图**。本目录是一个独立的 .NET 8 / WinUI 3 非打包应用，不属于 Rust workspace，`just build` 不会处理它，也不需要改动仓库任何现有文件。
 
-## 核心特性（动态拼版页 + 2D 流式装箱 + 紧凑出血 + 指纹缓存）
+## 核心特性（动态拼版页 + 2D 流式装箱 + 紧凑出血 + 指纹增量前置过滤）
 
-1. **多控件动态拼版页与视口溢出安全分页（Dynamic Parity Page & Viewport Paging）**：在固定的确定性标准视口（`1920×1080 DIP`）内，将多个不同控件的所有状态通过 2D 流式装箱规划器紧凑排布（按行摆放、自适应槽位测量、超宽自动换行）；当槽位行高度累加超过 1080 DIP 安全上限时自动截断当前页并顺延开启下一页。在同一个 Window 实例内主线程安全清空与挂载，无窗口重建与屏幕闪烁，单页仅需一次 `350ms` 动效收敛等待与单次 `RenderTargetBitmap` 导出，随后根据每个槽位的相对视觉几何边界（`TransformToVisual(Host)`）精准切出紧凑单图。
-2. **多控件联合指定**：`--control` 支持传入逗号分隔的多个控件名（如 `--control Button,CheckBox`），系统自动将所有指定控件的支持状态集中排入同一瞬态画布一次性导出。
-3. **版本与规格指纹缓存（Fingerprint Cache）**：每个用例 JSON 记录绑定了 `(WindowsAppSDKVersion, OSVersion, RasterizationScale, Control, State, Theme, Backdrop, SpecSignature)` 的 16 位 SHA-256 指纹。下次运行时若指纹一致且 PNG 存在，直接毫秒级跳过（可用 `--no-cache` 强制重截）。
-4. **确定性后景合成底板（Synthetic Backdrop）**：通过 `--backdrop solid|mica|mica_alt|acrylic|all` 控制画布底板。默认激活 `solid` 纯色基准面，并为后续云母/亚克力全面完工预留确定性合成底板。
+1. **瞬态采集载体与切片独立产物解耦（ADR 0015）**：将多控件动态拼版页（Dynamic Parity Page）界定为运行时的瞬态采集载体，排版坐标漂移完全不影响切片产物的单图像素与单用例指纹，下游 Rust 差分器与四重门禁零改动 100% 向后兼容。
+2. **多控件 2D 流式装箱与视口溢出安全分页（Dynamic Parity Page & Viewport Paging）**：在固定的确定性标准视口（`1920×1080 DIP`）内，按槽位期望高度降序（FFDH）紧凑流式装箱排布（自适应槽位测量、超宽自动换行）；当槽位行高度累加超过 1080 DIP 安全上限时自动截断当前页并顺延开启下一页。在同一个 Window 实例内主线程安全清空与挂载，无窗口重建与屏幕闪烁，单页仅需一次 `350ms` 动效收敛等待与单次 `RenderTargetBitmap` 导出，随后根据每个槽位的相对视觉几何边界（`TransformToVisual(Host)`）精准切出紧凑单图。
+3. **用例指纹增量前置过滤（Fingerprint Pre-Filtering）**：每个用例 JSON 记录绑定了 `(WindowsAppSDKVersion, OSVersion, RasterizationScale, Control, State, Theme, Backdrop, SpecSignature, SourceHash)` 的 16 位 SHA-256 指纹。送入装箱规划器前执行前置比对：
+   - 只有当控件内存在至少一个未命中状态或该控件被用户显式指定（或指定了 `--no-cache`）时，才将其送入装箱规划器；
+   - 已全部命中缓存的控件完全不进入装箱规划器，不分配版面槽位，不参与可视树测量；
+   - 若某主题下的所有控件均已命中缓存，系统直接打印 `[cache-hit]` 并跳过当前主题所有拼版页的渲染与等待，达到毫秒级退出。
+4. **多控件联合指定**：`--control` 支持传入逗号分隔的多个控件名（如 `--control Button,CheckBox`），系统自动将所有指定控件的支持状态集中排入同一瞬态画布一次性导出。
+5. **确定性后景合成底板（Synthetic Backdrop）**：通过 `--backdrop solid|mica|mica_alt|acrylic|all` 控制画布底板。默认激活 `solid` 纯色基准面，并为后续云母/亚克力全面完工预留确定性合成底板。
 
 ## 环境要求
 
@@ -74,11 +78,13 @@ dotnet build -c Release
 | `--no-cache` | 开关 | 关闭 | 忽略 `fingerprint` 缓存，强制重新采集全部用例 |
 | `--save-sheet` | 开关 | 关闭 | 除切分后的单用例 PNG 外，额外按页码输出 `page_{pageIndex:D2}_{theme}_{backdrop}_sheet.png` 拼版总览图及坐标索引 JSON |
 
-### 已接入控件（57 个）
+### 已接入控件（64 个）
 
 - **首批试点**：`Button` `CheckBox` `ToggleSwitch` `Slider` `ComboBox` `TextBox`
 - **第一批（基础输入与文本）**：`ToggleButton` `SplitButton` `RadioButton` `RatingControl` `ColorPicker` `NumberBox` `AutoSuggestBox` `RichTextBlock` `ProgressBar` `ProgressRing` `InfoBadge` `ToolTip`
 - **第二批（导航、浮层、集合与日期）**：`InfoBar` `TeachingTip` `ContentDialog` `Flyout` `MenuFlyout` `MenuBar` `CommandBar` `NavigationView` `TabView` `Pivot` `BreadcrumbBar` `SelectorBar` `PipsPager` `Expander` `SplitView` `Border` `Card` `StackPanel` `ScrollView` `TreeView` `ListView` `FlipView` `CalendarView` `TimePicker` `PersonPicture` `Image` `FontIcon` `TitleBar`
 - **第三批（后续补齐的 WinUI 3 控件）**：`RichEditBox` `GridView` `ListBox` `CommandBarFlyout` `AppBarButton` `AppBarToggleButton` `AppBarSeparator` `SwipeControl` `RefreshContainer` `AnnotatedScrollBar` `ItemsView`
+- **第四批（按钮与切换类补充）**：`HyperlinkButton` `RepeatButton` `DropDownButton` `ToggleSplitButton`
+- **第五批（输入与日期类补充）**：`PasswordBox` `DatePicker` `CalendarDatePicker`
 
 > 说明：`Flyout` 与 `MenuFlyout` 本身不是 `FrameworkElement`，静态拼版以其呈现器（`FlyoutPresenter` / `MenuFlyoutPresenter`）为表面；`ToolTip`、`TeachingTip`、`ContentDialog` 需要运行时宿主才能展开，静态采集只测量其内容盒。这三类浮层后续由结构快照与人工屏幕捕获补足。
