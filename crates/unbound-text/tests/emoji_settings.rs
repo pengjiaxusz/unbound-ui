@@ -9,7 +9,7 @@ static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn emoji_presentation_triggers_bitmap_invalidation() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
     let mut engine = TextEngine::new();
     let mut cache = GlyphCache::new();
 
@@ -52,7 +52,7 @@ fn emoji_cache_key_includes_presentation_and_palette() {
 
 #[test]
 fn emoji_glyph_color_flag_and_atlas_allocation() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
     let mut engine = TextEngine::new();
     let mut cache = GlyphCache::new();
 

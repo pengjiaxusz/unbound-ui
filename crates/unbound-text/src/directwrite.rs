@@ -1,3 +1,5 @@
+#![cfg(all(windows, feature = "backend-directwrite"))]
+
 //! DirectWrite 字形光栅化后端。
 //!
 //! 只替换字形位图的生成：塑形、折行与命中测试仍由 `cosmic-text` 负责。
@@ -32,7 +34,7 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 
 /// 一次字形光栅化的结果。
-pub(crate) struct RasterizedGlyph {
+pub struct RasterizedGlyph {
     pub width: u32,
     pub height: u32,
     /// 位图左边缘相对画笔原点的水平偏移。
@@ -48,18 +50,21 @@ pub(crate) struct RasterizedGlyph {
 /// `fontdb` 为每个命名字体实例分配独立 ID，其家族、字重与斜体信息足以
 /// 在系统字体集合中唯一定位同一个 `IDWriteFontFace`。
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct FaceKey {
-    pub(crate) family: String,
-    pub(crate) weight: u16,
-    pub(crate) italic: bool,
+pub struct FaceKey {
+    pub family: String,
+    pub weight: u16,
+    pub italic: bool,
 }
 
 /// DirectWrite 字形光栅化器。
-pub(crate) struct DirectWriteRasterizer {
+pub struct DirectWriteRasterizer {
     factory: IDWriteFactory2,
     collection: IDWriteFontCollection,
     faces: FxHashMap<FaceKey, Option<IDWriteFontFace>>,
 }
+
+/// DirectWrite 字形光栅化引擎（别名）。
+pub type DirectWriteEngine = DirectWriteRasterizer;
 
 impl DirectWriteRasterizer {
     /// 创建共享 DirectWrite 工厂与系统字体集合。

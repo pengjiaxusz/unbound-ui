@@ -149,6 +149,22 @@ pub struct GlyphQuad {
     pub phase: u8,
 }
 
+/// Cosmic (swash) 字形光栅化位图与度量。
+#[cfg(feature = "backend-swash")]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CosmicRaster {
+    pub width: u32,
+    pub height: u32,
+    /// 位图左边缘相对画笔原点的水平偏移。
+    pub left: f32,
+    /// 位图顶边缘相对基线的垂直偏移。
+    pub top: f32,
+    /// 是否为彩色（RGBA8）位图。
+    pub is_color: bool,
+    /// 纹素数据（单色 R8 或彩色 RGBA8）。
+    pub data: Vec<u8>,
+}
+
 /// 光栅化并缓存字形，维护其在图集中的驻留状态。
 pub struct GlyphCache {
     settings: TextRenderSettings,
@@ -239,6 +255,23 @@ impl GlyphCache {
         let mut backend = requested;
         let mut fallback_count = 0u64;
         let mut last_fallback_reason = None;
+
+        #[cfg(not(all(windows, feature = "backend-directwrite")))]
+        if backend == RasterBackend::DirectWrite {
+            backend = RasterBackend::Cosmic;
+            fallback_count = fallback_count.saturating_add(1);
+            last_fallback_reason =
+                Some("DirectWrite backend is not compiled in this build".to_string());
+        }
+
+        #[cfg(not(feature = "backend-swash"))]
+        if backend == RasterBackend::Cosmic {
+            backend = RasterBackend::DirectWrite;
+            fallback_count = fallback_count.saturating_add(1);
+            last_fallback_reason =
+                Some("Cosmic (swash) backend is not compiled in this build".to_string());
+        }
+
         #[cfg(all(windows, feature = "backend-directwrite"))]
         let directwrite = if backend == RasterBackend::DirectWrite {
             let instance = if std::env::var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL").is_ok() {
@@ -247,8 +280,11 @@ impl GlyphCache {
                 crate::directwrite::DirectWriteRasterizer::new()
             };
             if instance.is_none() {
-                backend = RasterBackend::Cosmic;
-                fallback_count = 1;
+                #[cfg(feature = "backend-swash")]
+                {
+                    backend = RasterBackend::Cosmic;
+                }
+                fallback_count = fallback_count.saturating_add(1);
                 last_fallback_reason =
                     Some("DirectWrite factory initialization failed".to_string());
             }
@@ -256,13 +292,6 @@ impl GlyphCache {
         } else {
             None
         };
-        #[cfg(not(all(windows, feature = "backend-directwrite")))]
-        if backend == RasterBackend::DirectWrite {
-            backend = RasterBackend::Cosmic;
-            fallback_count = 1;
-            last_fallback_reason =
-                Some("DirectWrite not supported on non-Windows platforms".to_string());
-        }
         let settings = TextRenderSettings {
             raster_backend: backend,
             ..Default::default()
@@ -362,6 +391,19 @@ impl GlyphCache {
     /// 切换光栅化后端并同步初始化底层光栅化器。
     pub fn set_backend(&mut self, requested: RasterBackend) {
         let mut backend = requested;
+
+        #[cfg(not(all(windows, feature = "backend-directwrite")))]
+        if backend == RasterBackend::DirectWrite {
+            backend = RasterBackend::Cosmic;
+            self.record_fallback("DirectWrite backend is not compiled in this build");
+        }
+
+        #[cfg(not(feature = "backend-swash"))]
+        if backend == RasterBackend::Cosmic {
+            backend = RasterBackend::DirectWrite;
+            self.record_fallback("Cosmic (swash) backend is not compiled in this build");
+        }
+
         #[cfg(all(windows, feature = "backend-directwrite"))]
         {
             if backend == RasterBackend::DirectWrite {
@@ -371,18 +413,16 @@ impl GlyphCache {
                     crate::directwrite::DirectWriteRasterizer::new()
                 };
                 if instance.is_none() {
-                    backend = RasterBackend::Cosmic;
+                    #[cfg(feature = "backend-swash")]
+                    {
+                        backend = RasterBackend::Cosmic;
+                    }
                     self.record_fallback("DirectWrite factory initialization failed");
                 }
                 self.directwrite = instance;
             } else {
                 self.directwrite = None;
             }
-        }
-        #[cfg(not(all(windows, feature = "backend-directwrite")))]
-        if backend == RasterBackend::DirectWrite {
-            backend = RasterBackend::Cosmic;
-            self.record_fallback("DirectWrite not supported on non-Windows platforms");
         }
         self.backend = backend;
         self.settings.raster_backend = backend;
@@ -626,60 +666,24 @@ impl GlyphCache {
 
         #[cfg(feature = "backend-swash")]
         {
-            let mut flags = CacheKeyFlags::empty();
-            if italic {
-                flags |= CacheKeyFlags::FAKE_ITALIC;
-            }
-            // 在向 swash 请求光栅化前将坐标偏置到目标亚像素相位，
-            // 确保亚像素相位生成真正不同的位图。
             let phase_offset = mode.phase_offset(phase);
-            let (cache_key, _, _) = CacheKey::new(
-                face,
-                glyph.glyph_id,
-                glyph.font_size,
-                (phase_offset, 0.0),
-                cosmic_text::Weight(weight),
-                flags,
-            );
-            let image = self
-                .swash
-                .get_image(engine.font_system_mut(), cache_key)
-                .as_ref()?;
-
-            let placement = image.placement;
-            let mut is_color = matches!(image.content, cosmic_text::SwashContent::Color);
-            // 先复制出所有字段，结束对 swash 内部的借用，再进入可变的图集写入。
-            let mut data = image.data.to_vec();
-            let width = placement.width;
-            let height = placement.height;
-            let left = placement.left as f32;
-            let top = placement.top as f32;
-
-            if is_color
-                && self.settings.emoji_presentation == crate::settings::EmojiPresentation::Mono
+            if let Some(raster) =
+                self.rasterize_cosmic(engine, face, glyph, phase_offset, italic, weight)
             {
-                // 单色模式：将 RGBA8 彩色位图转换为单通道 R8 覆盖率，走文字染色路径
-                is_color = false;
-                let mono_len = (width * height) as usize;
-                let mut mono_data = Vec::with_capacity(mono_len);
-                for chunk in data.chunks_exact(4) {
-                    let a = chunk[3] as u32;
-                    if a == 0 {
-                        mono_data.push(0);
-                    } else {
-                        let r = chunk[0] as u32;
-                        let g = chunk[1] as u32;
-                        let b = chunk[2] as u32;
-                        let gray = (r * 299 + g * 587 + b * 114) / 1000;
-                        mono_data.push(((gray * a) / 255) as u8);
-                    }
-                }
-                data = mono_data;
+                self.commit_raster(
+                    key,
+                    glyph,
+                    raster.width,
+                    raster.height,
+                    raster.left,
+                    raster.top,
+                    raster.is_color,
+                    raster.data,
+                    sdf_mode,
+                )
+            } else {
+                None
             }
-
-            self.commit_raster(
-                key, glyph, width, height, left, top, is_color, data, sdf_mode,
-            )
         }
 
         #[cfg(not(feature = "backend-swash"))]
@@ -820,7 +824,7 @@ impl GlyphCache {
 
     /// 用 DirectWrite 光栅化单个字形；字体家族或彩色字体不适用时返回 `None`。
     #[cfg(all(windows, feature = "backend-directwrite"))]
-    fn raster_directwrite(
+    pub fn rasterize_directwrite(
         &mut self,
         engine: &mut TextEngine,
         face: fontdb::ID,
@@ -845,6 +849,84 @@ impl GlyphCache {
             phase_offset,
             mono,
         )
+    }
+
+    #[cfg(all(windows, feature = "backend-directwrite"))]
+    #[inline]
+    fn raster_directwrite(
+        &mut self,
+        engine: &mut TextEngine,
+        face: fontdb::ID,
+        glyph: &PositionedGlyph,
+        phase_offset: f32,
+    ) -> Option<crate::directwrite::RasterizedGlyph> {
+        self.rasterize_directwrite(engine, face, glyph, phase_offset)
+    }
+
+    /// 用 Cosmic (swash) 光栅化单个字形。
+    #[cfg(feature = "backend-swash")]
+    pub fn rasterize_cosmic(
+        &mut self,
+        engine: &mut TextEngine,
+        face: fontdb::ID,
+        glyph: &PositionedGlyph,
+        phase_offset: f32,
+        italic: bool,
+        weight: u16,
+    ) -> Option<CosmicRaster> {
+        let mut flags = CacheKeyFlags::empty();
+        if italic {
+            flags |= CacheKeyFlags::FAKE_ITALIC;
+        }
+        let (cache_key, _, _) = CacheKey::new(
+            face,
+            glyph.glyph_id,
+            glyph.font_size,
+            (phase_offset, 0.0),
+            cosmic_text::Weight(weight),
+            flags,
+        );
+        let image = self
+            .swash
+            .get_image(engine.font_system_mut(), cache_key)
+            .as_ref()?;
+
+        let placement = image.placement;
+        let mut is_color = matches!(image.content, cosmic_text::SwashContent::Color);
+        let mut data = image.data.to_vec();
+        let width = placement.width;
+        let height = placement.height;
+        let left = placement.left as f32;
+        let top = placement.top as f32;
+
+        if is_color && self.settings.emoji_presentation == crate::settings::EmojiPresentation::Mono
+        {
+            is_color = false;
+            let mono_len = (width * height) as usize;
+            let mut mono_data = Vec::with_capacity(mono_len);
+            for chunk in data.chunks_exact(4) {
+                let a = chunk[3] as u32;
+                if a == 0 {
+                    mono_data.push(0);
+                } else {
+                    let r = chunk[0] as u32;
+                    let g = chunk[1] as u32;
+                    let b = chunk[2] as u32;
+                    let gray = (r * 299 + g * 587 + b * 114) / 1000;
+                    mono_data.push(((gray * a) / 255) as u8);
+                }
+            }
+            data = mono_data;
+        }
+
+        Some(CosmicRaster {
+            width,
+            height,
+            left,
+            top,
+            is_color,
+            data,
+        })
     }
 
     /// 将整段已塑形的文本解析为四边形列表。
