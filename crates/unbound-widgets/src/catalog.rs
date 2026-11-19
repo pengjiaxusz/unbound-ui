@@ -1934,40 +1934,52 @@ where
         }
         WidgetCatalogId::TreeView => {
             let desc = TreeViewDesc::new(rect);
-            let row = TreeViewRow {
+            let root_row = TreeViewRow {
                 row: TreeRow {
                     id: 1,
                     depth: 0,
                     has_children: true,
-                    expanded: variant_idx % 2 == 1,
+                    expanded: true,
                 },
                 item: 0,
                 rect: Rect::new(o.x, o.y, rect.size.x, 36.0),
             };
+            let child_row = TreeViewRow {
+                row: TreeRow {
+                    id: 2,
+                    depth: 1,
+                    has_children: false,
+                    expanded: false,
+                },
+                item: 1,
+                rect: Rect::new(o.x, o.y + 36.0, rect.size.x, 36.0),
+            };
             let mut out = crate::tree_view::emit_tree_background(&desc, TreeViewTokens::standard());
-            let row_g = shape(
-                "crates/unbound-widgets",
-                Vec2::new(o.x + 26.0, o.y + 11.0),
-                13.0,
-            );
-            let row_out = crate::tree_view::emit_tree_row(
+            let root_g = shape("Root", Vec2::new(o.x + 32.0, o.y + 11.0), 14.0);
+            let root_out = crate::tree_view::emit_tree_row(
                 &desc,
-                &row,
-                variant_idx % 2 == 1,
+                &root_row,
+                true,
                 state,
-                &row_g,
+                &root_g,
                 TreeViewTokens::standard(),
             );
-            merge_output(&mut out, row_out);
+            merge_output(&mut out, root_out);
+            let child_g = shape("Child", Vec2::new(o.x + 32.0, o.y + 36.0 + 11.0), 14.0);
+            let child_out = crate::tree_view::emit_tree_row(
+                &desc,
+                &child_row,
+                false,
+                state,
+                &child_g,
+                TreeViewTokens::standard(),
+            );
+            merge_output(&mut out, child_out);
             out
         }
         WidgetCatalogId::ListView => {
-            let row_r = Rect::new(o.x, o.y, rect.size.x, 36.0);
-            let g = shape(
-                "Virtual Row #0 (variable height)",
-                Vec2::new(o.x + 12.0, o.y + 11.0),
-                13.0,
-            );
+            let row_r = Rect::new(o.x, o.y, rect.size.x, 40.0);
+            let g = shape("Item 1", Vec2::new(o.x + 16.0, o.y + 13.0), 14.0);
             crate::virtual_views::emit_virtual_row(
                 row_r,
                 &g,
@@ -2321,10 +2333,10 @@ where
             crate::transfer::emit_transfer(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::FlipView => {
-            let car_r = Rect::new(o.x, o.y, rect.size.x, 96.0);
-            let active = variant_idx % 4;
-            let desc = crate::carousel::CarouselDesc::new(car_r, 4, active);
-            let title = format!("Slide {} of 4", active + 1);
+            let car_r = Rect::new(o.x, o.y, rect.size.x.min(220.0), 120.0);
+            let active = variant_idx % 2;
+            let desc = crate::carousel::CarouselDesc::new(car_r, 2, active);
+            let title = format!("Page {}", active + 1);
             let glyphs = shape_centered(&mut shape, &title, car_r, 14.0);
             crate::carousel::emit_carousel(node, &desc, state, &glyphs)
         }
@@ -3335,25 +3347,24 @@ where
             crate::rich_edit_box::emit_rich_edit_box(node, &desc, state, &mut glyphs)
         }
         WidgetCatalogId::GridView => {
-            let gv_r = Rect::new(o.x, o.y, rect.size.x.min(260.0), rect.size.y.min(160.0));
-            let desc = crate::grid_view::GridViewDesc::new(gv_r, 3, 2)
-                .selected(variant_idx % 6)
-                .hovered((variant_idx + 2) % 6);
+            let gv_r = Rect::new(o.x, o.y, rect.size.x.min(260.0), 140.0);
+            let desc = crate::grid_view::GridViewDesc::new(gv_r, 2, 2)
+                .selected(variant_idx % 4)
+                .hovered((variant_idx + 1) % 4);
             let mut glyphs = Vec::new();
             for index in 0..desc.cell_count() {
                 if let Some(cell) = desc.cell_rect(index) {
-                    glyphs.extend(shape_centered(&mut shape, "Item", cell, 10.5));
+                    let label = format!("Item {}", index + 1);
+                    glyphs.extend(shape_centered(&mut shape, &label, cell, 14.0));
                 }
             }
             crate::grid_view::emit_grid_view(node, &desc, state, &mut glyphs)
         }
         WidgetCatalogId::ListBox => {
-            let lb_r = Rect::new(o.x, o.y, rect.size.x.min(260.0), rect.size.y.min(160.0));
-            let desc = crate::list_box::ListBoxDesc::new(
-                lb_r,
-                ["Overview", "Assets", "Shaders", "Settings"],
-            )
-            .selected(variant_idx % 4);
+            let lb_r = Rect::new(o.x, o.y, rect.size.x.min(220.0), 120.0);
+            let desc = crate::list_box::ListBoxDesc::new(lb_r, ["Item 1", "Item 2", "Item 3"])
+                .with_row_height(40.0)
+                .selected(variant_idx % 3);
             let mut glyphs = Vec::new();
             for (index, item) in desc.items.iter().enumerate() {
                 if let Some(row) = desc.row_rect(index) {
@@ -3361,8 +3372,8 @@ where
                         &mut shape,
                         item,
                         row,
-                        row.origin.x + 12.0,
-                        12.0,
+                        row.origin.x + 16.0,
+                        14.0,
                     ));
                 }
             }
@@ -3421,7 +3432,7 @@ where
             crate::swipe_control::emit_swipe_control(node, &desc, state, &mut glyphs)
         }
         WidgetCatalogId::RefreshContainer => {
-            let rf_r = Rect::new(o.x, o.y, rect.size.x.min(280.0), rect.size.y.min(180.0));
+            let rf_r = Rect::new(o.x, o.y, rect.size.x.min(260.0), 160.0);
             let desc = crate::refresh_container::RefreshContainerDesc::new(rf_r)
                 .pull(value_norm)
                 .refreshing(variant_idx % 3 == 0);
@@ -3430,14 +3441,9 @@ where
                 &mut shape,
                 "Pull to refresh",
                 content,
-                content.origin.x + 12.0,
-                12.0,
+                content.origin.x + 16.0,
+                14.0,
             );
-            glyphs.extend(shape(
-                "Release to update the workspace.",
-                Vec2::new(content.origin.x + 12.0, content.origin.y + 22.0),
-                11.0,
-            ));
             crate::refresh_container::emit_refresh_container(node, &desc, state, &mut glyphs)
         }
         WidgetCatalogId::TeachingTip => {
@@ -3480,7 +3486,7 @@ where
             crate::teaching_tip::emit_teaching_tip(node, &desc, state, &mut glyphs)
         }
         WidgetCatalogId::AnnotatedScrollBar => {
-            let as_r = Rect::new(o.x, o.y, 28.0, rect.size.y.max(160.0));
+            let as_r = Rect::new(o.x, o.y, 16.0, 160.0);
             let desc = crate::annotated_scroll_bar::AnnotatedScrollBarDesc::new(as_r)
                 .thumb(value_norm)
                 .preview(value_norm);

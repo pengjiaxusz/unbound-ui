@@ -742,9 +742,10 @@ internal static class Catalog
                         HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center,
                     };
-                    var root = new TreeViewNode { Content = "Root" };
+                    var root = new TreeViewNode { Content = "Root", IsExpanded = true };
                     root.Children.Add(new TreeViewNode { Content = "Child" });
                     tree.RootNodes.Add(root);
+                    tree.SelectedNodes.Add(root);
                     element = tree;
                     return true;
                 }
