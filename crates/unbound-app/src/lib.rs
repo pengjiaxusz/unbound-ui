@@ -3082,13 +3082,21 @@ impl<A: Application> AppRuntime<A> {
     pub const fn backdrop(&self) -> Option<WindowBackdropMaterial> {
         match self.backdrop_intent {
             AppearanceIntent::Material(mat) => mat,
-            AppearanceIntent::AccentTint(_) => None,
+            AppearanceIntent::AccentTint(_) | AppearanceIntent::Selection { .. } => None,
         }
     }
 
     /// 设置亚克力自定义色调后景（走 accent policy 通道，ABGR 格式）。
     pub fn set_accent_tint(&mut self, argb: u32) {
         self.backdrop_intent = AppearanceIntent::AccentTint(argb);
+    }
+
+    /// 设置完整后景选择意图。
+    pub fn set_backdrop_selection(&mut self, selection: unbound_backdrop::BackdropSelection) {
+        self.backdrop_intent = AppearanceIntent::Selection {
+            selection,
+            accent_tint: None,
+        };
     }
 
     /// 设置底层外观意图。
