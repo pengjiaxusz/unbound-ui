@@ -75,25 +75,35 @@ public sealed partial class CaptureWindow : Window
         AdvanceToNextUncachedOrStart(initial: true);
     }
 
+    /// <summary>用例指纹比对上下文：缓存运行环境元数据与输出目录路径，减少跨方法零散传参。</summary>
+    private sealed record FingerprintContext(
+        string OutputDirectory,
+        double Scale,
+        string SdkVersion,
+        string OsVersion);
+
+    private FingerprintContext CreateFingerprintContext() =>
+        new(
+            Path.GetFullPath(_options.OutputDirectory),
+            Host.XamlRoot?.RasterizationScale ?? 1.0,
+            typeof(Application).Assembly.GetName().Version?.ToString() ?? "unknown",
+            Environment.OSVersion.Version.ToString());
+
     /// <summary>
     /// 装箱前用例指纹增量过滤：
     /// 基于 SDK 版本、OS 版本、光栅化缩放及控件规格指纹，比对磁盘上已有的 PNG 与 JSON 切片产物。
-    /// 仅保留存在至少一个未命中状态的候选控件（或在指定 --no-cache 时保留全部）。
+    /// 仅保留存在至少一个未命中状态的候选控件（或在指定 --no-cache / 显式指定 --control 时保留全部）。
     /// 已全部命中缓存的控件完全不进入装箱规划器，不分配版面槽位，不参与可视树测量。
     /// 若某主题下的所有控件均已命中缓存，直接打印 [cache-hit] 并跳过当前主题所有拼版页的渲染与等待。
     /// </summary>
     private List<CandidateBatch> FilterCandidateBatches(IReadOnlyList<CandidateBatch> batches)
     {
-        if (_options.NoCache)
+        if (_options.NoCache || _options.ExplicitControl)
         {
             return batches.ToList();
         }
 
-        var outputDirectory = Path.GetFullPath(_options.OutputDirectory);
-        var scale = Host.XamlRoot?.RasterizationScale ?? 1.0;
-        var sdkVersion = typeof(Application).Assembly.GetName().Version?.ToString() ?? "unknown";
-        var osVersion = Environment.OSVersion.Version.ToString();
-
+        var context = CreateFingerprintContext();
         var filteredBatches = new List<CandidateBatch>();
 
         foreach (var batch in batches)
@@ -113,7 +123,7 @@ public sealed partial class CaptureWindow : Window
 
                 foreach (var c in group)
                 {
-                    if (!IsCaseCached(c, scale, sdkVersion, osVersion, outputDirectory))
+                    if (!IsCaseCached(c, context))
                     {
                         allCached = false;
                         break;
@@ -135,14 +145,14 @@ public sealed partial class CaptureWindow : Window
             if (activeCases.Count == 0)
             {
                 Console.Out.WriteLine(
-                    $"[cache-hit] 全部命中缓存，跳过主题 {batch.Theme} ({batch.Backdrop}) 的全部 {batch.Cases.Count} 个状态（{string.Join(", ", cachedControls)}）");
+                    $"[cache-hit] All cases cached for theme {batch.Theme} ({batch.Backdrop}): {batch.Cases.Count} states skipped ({string.Join(", ", cachedControls)})");
             }
             else
             {
                 if (cachedControls.Count > 0)
                 {
                     Console.Out.WriteLine(
-                        $"[cache-hit] 主题 {batch.Theme} ({batch.Backdrop}): 命中缓存跳过 {cachedControls.Count} 个控件（{string.Join(", ", cachedControls)}），待采 {uncachedControls.Count} 个控件（{string.Join(", ", uncachedControls)}）");
+                        $"[cache-hit] Theme {batch.Theme} ({batch.Backdrop}): {cachedControls.Count} controls skipped ({string.Join(", ", cachedControls)}), {uncachedControls.Count} controls pending ({string.Join(", ", uncachedControls)})");
                 }
 
                 filteredBatches.Add(new CandidateBatch(batch.Theme, batch.Backdrop, activeCases));
@@ -153,16 +163,11 @@ public sealed partial class CaptureWindow : Window
     }
 
     /// <summary>检查单个用例是否已在磁盘上存在指纹完全一致的有效 PNG 与 JSON 切片产物。</summary>
-    private static bool IsCaseCached(
-        CaptureCase c,
-        double scale,
-        string sdkVersion,
-        string osVersion,
-        string outputDirectory)
+    private static bool IsCaseCached(CaptureCase c, FingerprintContext context)
     {
         var baseName = c.FileBaseName();
-        var pngPath = Path.Combine(outputDirectory, $"{baseName}.png");
-        var jsonPath = Path.Combine(outputDirectory, $"{baseName}.json");
+        var pngPath = Path.Combine(context.OutputDirectory, $"{baseName}.png");
+        var jsonPath = Path.Combine(context.OutputDirectory, $"{baseName}.json");
         if (!File.Exists(pngPath) || !File.Exists(jsonPath))
         {
             return false;
@@ -176,9 +181,9 @@ public sealed partial class CaptureWindow : Window
                 c.State,
                 c.Theme,
                 c.Backdrop,
-                scale,
-                sdkVersion,
-                osVersion);
+                context.Scale,
+                context.SdkVersion,
+                context.OsVersion);
             return jsonText.Contains($"\"fingerprint\": \"{expectedFp}\"", StringComparison.Ordinal);
         }
         catch
@@ -243,7 +248,7 @@ public sealed partial class CaptureWindow : Window
         foreach (var batch in batches)
         {
             var pageIndex = 0;
-            var currentPageCases = new List<CaptureCase>();
+            var currentPageSlots = new List<PlannedSlot>();
             double currentX = 0.0;
             double currentY = 0.0;
             double currentRowHeight = 0.0;
@@ -273,8 +278,8 @@ public sealed partial class CaptureWindow : Window
                     // 自动截断当前页并顺延开启下一页（pageIndex++）
                     if (nextY + nextRowHeight > CanvasHeightDip)
                     {
-                        pages.Add(new DynamicParityPage(batch.Theme, batch.Backdrop, currentPageCases, pageIndex++));
-                        currentPageCases = new List<CaptureCase>();
+                        pages.Add(new DynamicParityPage(batch.Theme, batch.Backdrop, currentPageSlots, pageIndex++));
+                        currentPageSlots = new List<PlannedSlot>();
                         currentX = 0.0;
                         currentY = 0.0;
                         currentRowHeight = 0.0;
@@ -288,23 +293,23 @@ public sealed partial class CaptureWindow : Window
                 }
 
                 // 步骤 3：极端单槽位高度防御：若单槽位高度超出了视口剩余高度且当前页已有控件，截断开启新页
-                if (currentY + h > CanvasHeightDip && currentPageCases.Count > 0)
+                if (currentY + h > CanvasHeightDip && currentPageSlots.Count > 0)
                 {
-                    pages.Add(new DynamicParityPage(batch.Theme, batch.Backdrop, currentPageCases, pageIndex++));
-                    currentPageCases = new List<CaptureCase>();
+                    pages.Add(new DynamicParityPage(batch.Theme, batch.Backdrop, currentPageSlots, pageIndex++));
+                    currentPageSlots = new List<PlannedSlot>();
                     currentX = 0.0;
                     currentY = 0.0;
                     currentRowHeight = 0.0;
                 }
 
+                currentPageSlots.Add(new PlannedSlot(c, currentX, currentY, w, h));
                 currentX += w;
                 currentRowHeight = Math.Max(currentRowHeight, h);
-                currentPageCases.Add(c);
             }
 
-            if (currentPageCases.Count > 0)
+            if (currentPageSlots.Count > 0)
             {
-                pages.Add(new DynamicParityPage(batch.Theme, batch.Backdrop, currentPageCases, pageIndex++));
+                pages.Add(new DynamicParityPage(batch.Theme, batch.Backdrop, currentPageSlots, pageIndex++));
             }
         }
 
@@ -323,14 +328,15 @@ public sealed partial class CaptureWindow : Window
             _sheetIndex++;
         }
 
+        var context = CreateFingerprintContext();
         while (_sheetIndex < _sheets.Count)
         {
             var sheet = _sheets[_sheetIndex];
-            if (!_options.NoCache && AllCasesCached(sheet))
+            if (!_options.NoCache && !_options.ExplicitControl && AllCasesCached(sheet, context))
             {
-                _skippedCount += sheet.Cases.Count;
+                _skippedCount += sheet.Slots.Count;
                 Console.Out.WriteLine(
-                    $"[cache-hit] 跳过 Page {sheet.PageIndex} ({sheet.Theme}, {sheet.Backdrop}) 的 {sheet.Cases.Count} 个状态（{string.Join(", ", sheet.ControlNames)}）");
+                    $"[cache-hit] Skipping Page {sheet.PageIndex} ({sheet.Theme}, {sheet.Backdrop}) with {sheet.Slots.Count} states ({string.Join(", ", sheet.ControlNames)})");
                 _sheetIndex++;
                 continue;
             }
@@ -348,21 +354,16 @@ public sealed partial class CaptureWindow : Window
         }
 
         Console.Out.WriteLine(
-            $"采集完成：新增 {_capturedCount} 个用例，失败 {_failedCount} 个用例，缓存命中跳过 {_skippedCount} 个用例。");
+            $"Capture complete: added {_capturedCount} cases, failed {_failedCount} cases, cache hit {_skippedCount} cases.");
         Application.Current.Exit();
     }
 
-    /// <summary>检查当前拼版中的所有用例是否均在磁盘上拥有指纹匹配的 PNG 与 JSON。</summary>
-    private bool AllCasesCached(DynamicParityPage sheet)
+    /// <summary>检查当前拼版中的所有槽位是否均在磁盘上拥有指纹匹配的 PNG 与 JSON。</summary>
+    private static bool AllCasesCached(DynamicParityPage sheet, FingerprintContext context)
     {
-        var outputDirectory = Path.GetFullPath(_options.OutputDirectory);
-        var scale = Host.XamlRoot?.RasterizationScale ?? 1.0;
-        var sdkVersion = typeof(Application).Assembly.GetName().Version?.ToString() ?? "unknown";
-        var osVersion = Environment.OSVersion.Version.ToString();
-
-        foreach (var c in sheet.Cases)
+        foreach (var slot in sheet.Slots)
         {
-            if (!IsCaseCached(c, scale, sdkVersion, osVersion, outputDirectory))
+            if (!IsCaseCached(slot.Case, context))
             {
                 return false;
             }
@@ -372,7 +373,7 @@ public sealed partial class CaptureWindow : Window
     }
 
     /// <summary>
-    /// 把一个动态拼版页下的所有待测状态装载入 Host 画布，并在可视树中完成自适应测量与 2D 流式装箱排布。
+    /// 把一个动态拼版页下的所有待测状态装载入 Host 画布，直接应用规划好的物理坐标与尺寸。
     /// </summary>
     private bool LoadSheet(DynamicParityPage sheet)
     {
@@ -381,12 +382,13 @@ public sealed partial class CaptureWindow : Window
         Host.Children.Clear();
         _activeSlots.Clear();
 
-        // 步骤 1：先实例化控件并放进槽位 Border，挂入 Host 可视树
-        foreach (var captureCase in sheet.Cases)
+        // 步骤 1：直接使用装箱规划器已计算好的槽位尺寸与绝对坐标，实例化控件并挂入 Host 画布
+        foreach (var slot in sheet.Slots)
         {
+            var captureCase = slot.Case;
             if (!Catalog.TryCreate(captureCase.ControlName, out var control))
             {
-                Fatal.Report($"未知控件：{captureCase.ControlName}{Environment.NewLine}可用控件：{string.Join(", ", Catalog.ControlNames)}");
+                Fatal.Report($"Unknown control: {captureCase.ControlName}{Environment.NewLine}Available controls: {string.Join(", ", Catalog.ControlNames)}");
                 return false;
             }
 
@@ -406,52 +408,28 @@ public sealed partial class CaptureWindow : Window
                     : Windows.UI.Color.FromArgb(255, 0x00, 0x5F, 0xB8);
                 ring.Foreground = new SolidColorBrush(accent);
             }
-            var (w, h) = MeasureSlotSize(captureCase);
+
             var slotHost = new Border
             {
-                Width = w,
-                Height = h,
+                Width = slot.Width,
+                Height = slot.Height,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Background = Catalog.CreateBackdropBrush(sheet.Theme, sheet.Backdrop),
                 Child = control,
             };
+
+            Canvas.SetLeft(slotHost, slot.X);
+            Canvas.SetTop(slotHost, slot.Y);
             Host.Children.Add(slotHost);
             _activeSlots.Add((captureCase, slotHost, control));
         }
 
-        // 步骤 2：在可视树内触发布局测量，初始化模板
+        // 步骤 2：在可视树内触发布局测量，初始化模板（如 SwipeControl）
         for (var idx = 0; idx < _activeSlots.Count; idx++)
         {
             var (_, _, control) = _activeSlots[idx];
-            // 只有在可视树内测量才能安全初始化 SwipeControl 等模板。
             control.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
-        }
-
-        // 步骤 3：在 1920×1080 画布内进行 2D 流式紧凑排布
-        // 按行摆放，行内从左到右累加宽度，换行时 Y 累加当前行最大高度
-        double currentX = 0.0;
-        double currentY = 0.0;
-        double currentRowHeight = 0.0;
-
-        for (var idx = 0; idx < _activeSlots.Count; idx++)
-        {
-            var (_, slotHost, _) = _activeSlots[idx];
-            var w = slotHost.Width;
-            var h = slotHost.Height;
-
-            if (currentX + w > CanvasWidthDip && currentX > 0.0)
-            {
-                currentY += currentRowHeight;
-                currentX = 0.0;
-                currentRowHeight = 0.0;
-            }
-
-            Canvas.SetLeft(slotHost, currentX);
-            Canvas.SetTop(slotHost, currentY);
-
-            currentX += w;
-            currentRowHeight = Math.Max(currentRowHeight, h);
         }
 
         Host.UpdateLayout();
@@ -513,7 +491,7 @@ public sealed partial class CaptureWindow : Window
         _timeoutTimer = DispatcherQueue.CreateTimer();
         _timeoutTimer.Interval = TimeSpan.FromSeconds(10);
         _timeoutTimer.IsRepeating = false;
-        _timeoutTimer.Tick += (_, _) => BeginCapture("渲染事件超时（10 秒），改为直接截图");
+        _timeoutTimer.Tick += (_, _) => BeginCapture("Rendering event timeout (10s), capturing directly");
         _timeoutTimer.Start();
     }
 
@@ -700,7 +678,7 @@ public sealed partial class CaptureWindow : Window
                 };
                 var json = JsonSerializer.Serialize(sheetMeta, new JsonSerializerOptions { WriteIndented = true });
                 await File.WriteAllTextAsync(jsonPath, json);
-                Console.Out.WriteLine($"已写出拼版总览图：{sheetPath} ({sheetWidth}x{sheetHeight})");
+                Console.Out.WriteLine($"Wrote contact sheet: {sheetPath} ({sheetWidth}x{sheetHeight})");
             }
 
             for (var index = 0; index < _activeSlots.Count; index++)
@@ -740,12 +718,12 @@ public sealed partial class CaptureWindow : Window
                     control);
 
                 _capturedCount++;
-                Console.Out.WriteLine($"已写出 {pngPath} ({region.CropWidth}x{region.CropHeight})");
+                Console.Out.WriteLine($"Wrote {pngPath} ({region.CropWidth}x{region.CropHeight})");
             }
         }
         catch (Exception ex)
         {
-            Fatal.Report($"截图失败：{ex}");
+            Fatal.Report($"Capture failed: {ex}");
             Environment.ExitCode = 1;
             Application.Current.Exit();
             return;
@@ -930,7 +908,7 @@ public sealed partial class CaptureWindow : Window
         {
             _targetWidthDip = Math.Max(1.0, Host.ActualWidth);
             _targetHeightDip = Math.Max(1.0, Host.ActualHeight);
-            Fatal.Report($"调整窗口大小失败：{ex.Message}");
+            Fatal.Report($"Failed to resize client area: {ex.Message}");
         }
     }
 
@@ -1038,14 +1016,17 @@ public sealed class CaptureCase
     }
 }
 
+/// <summary>已完成排版计算的单个槽位，包含目标用例与其在画布中的物理坐标与尺寸。</summary>
+public sealed record PlannedSlot(CaptureCase Case, double X, double Y, double Width, double Height);
+
 /// <summary>按「控件集 × 主题 × 后景」组织的单张动态拼版页批次。</summary>
 public sealed class DynamicParityPage
 {
-    public DynamicParityPage(string theme, string backdrop, IReadOnlyList<CaptureCase> cases, int pageIndex = 0)
+    public DynamicParityPage(string theme, string backdrop, IReadOnlyList<PlannedSlot> slots, int pageIndex = 0)
     {
         Theme = theme;
         Backdrop = backdrop;
-        Cases = cases;
+        Slots = slots;
         PageIndex = pageIndex;
     }
 
@@ -1053,13 +1034,16 @@ public sealed class DynamicParityPage
 
     public string Backdrop { get; }
 
-    public IReadOnlyList<CaptureCase> Cases { get; }
+    public IReadOnlyList<PlannedSlot> Slots { get; }
 
     public int PageIndex { get; }
 
+    /// <summary>兼容访问本页包含的所有用例列表。</summary>
+    public IReadOnlyList<CaptureCase> Cases => Slots.Select(s => s.Case).ToList();
+
     /// <summary>本页包含的所有控件规范名列表（去重）。</summary>
     public IReadOnlyList<string> ControlNames =>
-        Cases.Select(c => Catalog.CanonicalName(c.ControlName)).Distinct().ToList();
+        Slots.Select(s => Catalog.CanonicalName(s.Case.ControlName)).Distinct().ToList();
 }
 
 /// <summary>按「主题 × 后景」汇聚的候选待测用例批次（待装箱分页）。</summary>
@@ -1089,9 +1073,9 @@ public sealed class CaptureOptions
     public const string DefaultOutputDirectory = "captures";
 
     private const string Usage =
-        "用法: WinUiReference --out <目录> [--control <名称1,名称2,...>] [--state normal|disabled|checked|focused] " +
+        "Usage: WinUiReference --out <directory> [--control <name1,name2,...>] [--state normal|disabled|checked|focused] " +
         "[--theme light|dark|all] [--backdrop solid|mica|mica_alt|acrylic|all] " +
-        "[--width <像素>] [--height <像素>] [--batch] [--no-cache] [--save-sheet]";
+        "[--width <pixels>] [--height <pixels>] [--batch] [--no-cache] [--save-sheet]";
 
     public string OutputDirectory { get; private init; } = DefaultOutputDirectory;
 
@@ -1225,7 +1209,7 @@ public sealed class CaptureOptions
                 case "--out":
                     if (value is null)
                     {
-                        error = UsageError("--out 缺少目录参数");
+                        error = UsageError("--out missing directory argument");
                         return false;
                     }
 
@@ -1236,14 +1220,14 @@ public sealed class CaptureOptions
                 case "--control":
                     if (value is null)
                     {
-                        error = UsageError("--control 缺少控件名");
+                        error = UsageError("--control missing control name");
                         return false;
                     }
 
                     var names = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                     if (names.Length == 0)
                     {
-                        error = UsageError("--control 缺少有效控件名");
+                        error = UsageError("--control missing valid control name");
                         return false;
                     }
 
@@ -1252,7 +1236,7 @@ public sealed class CaptureOptions
                     {
                         if (!Catalog.ControlNames.Contains(raw, StringComparer.OrdinalIgnoreCase))
                         {
-                            error = UsageError($"未知控件：{raw}{Environment.NewLine}可用控件：{string.Join(", ", Catalog.ControlNames)}");
+                            error = UsageError($"Unknown control: {raw}{Environment.NewLine}Available controls: {string.Join(", ", Catalog.ControlNames)}");
                             return false;
                         }
                         validated.Add(Catalog.CanonicalName(raw));
@@ -1266,7 +1250,7 @@ public sealed class CaptureOptions
                 case "--state":
                     if (value is null)
                     {
-                        error = UsageError("--state 缺少状态名");
+                        error = UsageError("--state missing state name");
                         return false;
                     }
 
@@ -1278,7 +1262,7 @@ public sealed class CaptureOptions
                 case "--theme":
                     if (value is null)
                     {
-                        error = UsageError("--theme 缺少主题名");
+                        error = UsageError("--theme missing theme name");
                         return false;
                     }
 
@@ -1290,7 +1274,7 @@ public sealed class CaptureOptions
                 case "--backdrop":
                     if (value is null)
                     {
-                        error = UsageError("--backdrop 缺少后景类型");
+                        error = UsageError("--backdrop missing backdrop type");
                         return false;
                     }
 
@@ -1301,7 +1285,7 @@ public sealed class CaptureOptions
                 case "--width":
                     if (!TryParseSize(value, out width))
                     {
-                        error = UsageError("--width 需要整数像素");
+                        error = UsageError("--width requires integer pixels");
                         return false;
                     }
 
@@ -1311,7 +1295,7 @@ public sealed class CaptureOptions
                 case "--height":
                     if (!TryParseSize(value, out height))
                     {
-                        error = UsageError("--height 需要整数像素");
+                        error = UsageError("--height requires integer pixels");
                         return false;
                     }
 
@@ -1319,14 +1303,14 @@ public sealed class CaptureOptions
                     break;
 
                 default:
-                    error = UsageError($"未知参数：{name}");
+                    error = UsageError($"Unknown argument: {name}");
                     return false;
             }
         }
 
         if (backdrop != "all" && !Catalog.BackdropKinds.Contains(backdrop, StringComparer.OrdinalIgnoreCase))
         {
-            error = UsageError($"未知后景类型：{backdrop}，可用值：{string.Join(", ", Catalog.BackdropKinds)}, all");
+            error = UsageError($"Unknown backdrop type: {backdrop}, available: {string.Join(", ", Catalog.BackdropKinds)}, all");
             return false;
         }
 
@@ -1335,15 +1319,15 @@ public sealed class CaptureOptions
             if (!Catalog.ImplementedStates.Contains(state, StringComparer.OrdinalIgnoreCase))
             {
                 error = Catalog.ReservedStates.Contains(state, StringComparer.OrdinalIgnoreCase)
-                    ? UsageError($"状态 {state} 尚未实现（仅保留枚举），请改用 {string.Join("/", Catalog.ImplementedStates)}")
-                    : UsageError($"未知状态：{state}，可用状态：{string.Join(", ", Catalog.ImplementedStates)}");
+                    ? UsageError($"State {state} is not implemented yet (enum reserved), use {string.Join("/", Catalog.ImplementedStates)}")
+                    : UsageError($"Unknown state: {state}, available states: {string.Join(", ", Catalog.ImplementedStates)}");
                 return false;
             }
         }
 
         if (theme != "light" && theme != "dark" && theme != "all")
         {
-            error = UsageError($"未知主题：{theme}，可用主题：light, dark, all");
+            error = UsageError($"Unknown theme: {theme}, available themes: light, dark, all");
             return false;
         }
 
@@ -1351,26 +1335,26 @@ public sealed class CaptureOptions
         {
             if (backdrop == "all")
             {
-                error = UsageError("单用例模式不支持 --backdrop all，请指定具体后景或加 --batch");
+                error = UsageError("Single case mode does not support --backdrop all, specify a backdrop or use --batch");
                 return false;
             }
 
             if (theme == "all")
             {
-                error = UsageError("单用例模式不支持 --theme all，请指定具体主题或加 --batch");
+                error = UsageError("Single case mode does not support --theme all, specify a theme or use --batch");
                 return false;
             }
         }
 
         if (width is < 64 or > 8192 || height is < 64 or > 8192)
         {
-            error = UsageError($"窗口尺寸必须在 64..8192 之间，当前为 {width}x{height}");
+            error = UsageError($"Window size must be between 64 and 8192, current is {width}x{height}");
             return false;
         }
 
         if (string.IsNullOrWhiteSpace(outputDirectory))
         {
-            error = UsageError("--out 不能为空");
+            error = UsageError("--out cannot be empty");
             return false;
         }
 
