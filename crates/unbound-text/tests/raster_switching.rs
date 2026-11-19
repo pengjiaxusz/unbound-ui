@@ -15,6 +15,10 @@ fn create_engine() -> TextEngine {
 #[test]
 fn switching_rasterizer_twenty_times_no_leak_no_growth() {
     let _guard = ENV_MUTEX.lock().unwrap();
+    let caps = unbound_text::TextCapabilities::probe();
+    if !caps.cosmic.is_available() || !caps.directwrite.is_available() {
+        return;
+    }
     let mut engine = create_engine();
     let mut cache = GlyphCache::new();
 
@@ -95,6 +99,10 @@ fn switching_rasterizer_twenty_times_no_leak_no_growth() {
 #[test]
 fn switching_coverage_distribution_matches_target_backend() {
     let _guard = ENV_MUTEX.lock().unwrap();
+    let caps = unbound_text::TextCapabilities::probe();
+    if !caps.cosmic.is_available() || !caps.directwrite.is_available() {
+        return;
+    }
     if std::env::var("UNBOUND_TEXT_BACKEND").is_ok_and(|v| v == "cosmic") {
         return;
     }
@@ -163,6 +171,7 @@ fn switching_coverage_distribution_matches_target_backend() {
 }
 
 /// 验收条件 1、3：初始化失败静默回退 swash，回退单调递增且清空时不复位。
+#[cfg(all(windows, feature = "backend-directwrite"))]
 #[test]
 fn directwrite_init_failure_fallback_and_monotonic_counter() {
     let _guard = ENV_MUTEX.lock().unwrap();
