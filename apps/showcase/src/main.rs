@@ -143,6 +143,11 @@ impl Showcase {
         Self {
             app: {
                 let mut app = GalleryRuntime::new();
+                if let Some(restored) =
+                    showcase::pages::text_render::TextRenderPageState::try_restore()
+                {
+                    app.state.text_render = restored;
+                }
                 // 运行时负责对帧做 diff，因此外壳不得为同一结果再次扫描图元列表。
                 //
                 app.set_external_diff(true);
