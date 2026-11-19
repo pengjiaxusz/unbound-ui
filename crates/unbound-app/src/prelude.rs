@@ -1,3 +1,4 @@
+//! lang-allow: 中文注释与文档
 //! 常用图元、应用契约、描述符与运行时类型重导出。
 
 pub use crate::appearance::{
@@ -8,6 +9,7 @@ pub use crate::backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID
 pub use crate::form::{FormBindingStore, FormMutator, WidgetValue};
 pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
 pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};
+pub use crate::settings::{select_option_key, select_popup_key, SettingsCard};
 pub use crate::state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use crate::window_runner::{run_windowed, run_windowed_with_hwnd, WindowedRunner};
 pub use crate::{

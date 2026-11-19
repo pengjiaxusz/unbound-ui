@@ -68,6 +68,7 @@ pub mod prelude;
 pub mod router;
 pub mod scene_upload;
 pub mod scheduler;
+pub mod settings;
 pub mod state_store;
 pub mod window_runner;
 
@@ -89,6 +90,7 @@ pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
 pub use scene_upload::{collect_backdrops, scene_upload};
 pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
+pub use settings::{select_option_key, select_popup_key, SettingsCard};
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
 pub use unbound_platform::WindowBackdropMaterial;
@@ -959,6 +961,32 @@ impl AppContext {
         st.highlighted = selected;
     }
 
+    /// 查询指定 `SelectDesc` 控件键当前是否处于展开态。
+    #[must_use]
+    pub fn select_is_open(&self, key: u64) -> bool {
+        self.widget_state
+            .borrow()
+            .get::<unbound_widgets::SelectState>(key)
+            .map_or(false, |st| st.open)
+    }
+
+    /// 设置指定 `SelectDesc` 控件键的展开态。
+    pub fn set_select_open(&self, key: u64, open: bool) {
+        let mut store = self.widget_state.borrow_mut();
+        let st = store.entry::<unbound_widgets::SelectState>(key);
+        st.open = open;
+        if !open {
+            st.highlighted = None;
+        }
+    }
+
+    /// 切换指定 `SelectDesc` 控件键的展开态。
+    pub fn toggle_select_open(&self, key: u64) {
+        let mut store = self.widget_state.borrow_mut();
+        let st = store.entry::<unbound_widgets::SelectState>(key);
+        st.toggle();
+    }
+
     /// 读取指定 `SwitchDesc` 控件键当前的布尔开关状态。
     #[must_use]
     pub fn switch_value(&self, key: u64) -> Option<bool> {
@@ -1442,6 +1470,14 @@ impl<'a> TitleBarSlots<'a> {
     }
 }
 
+/// 活跃展开的下拉选择框弹出浮层元数据。
+#[derive(Clone, Debug)]
+pub struct ActiveSelectPopup {
+    pub select_key: u64,
+    pub bounds: Rect,
+    pub option_keys: Vec<u64>,
+}
+
 pub struct ViewBuilder<'a> {
     collector: &'a mut SceneCollector,
     /// 不可变帧上下文。
@@ -1469,6 +1505,8 @@ pub struct ViewBuilder<'a> {
     /// 当前视图所在的分层键作用域（根级为 `KeyScope::root()`）。
     key_scope: KeyScope,
     form_bindings: &'a mut FormBindingStore,
+    registered_selects: &'a mut Vec<(u64, unbound_widgets::SelectDesc)>,
+    active_select_popups: &'a mut Vec<ActiveSelectPopup>,
 }
 
 impl<'a> ViewBuilder<'a> {
@@ -2082,6 +2120,12 @@ impl<'a> ViewBuilder<'a> {
     ) -> NodeId {
         desc.key = key;
         let (effective_key, node) = self.reconcile_node(key, desc, core::panic::Location::caller());
+        if let Some(select_desc) =
+            (&widget as &dyn Any).downcast_ref::<unbound_widgets::SelectDesc>()
+        {
+            self.registered_selects
+                .push((effective_key, select_desc.clone()));
+        }
         self.pending.push(PendingWidget {
             key: effective_key,
             node,
@@ -2211,7 +2255,64 @@ impl<'a> ViewBuilder<'a> {
 
     /// 声明式下拉选择框快捷方式。
     pub fn select(&mut self, key: u64, desc: unbound_widgets::SelectDesc) -> NodeId {
-        self.add(key, desc)
+        let node = self.add(key, desc.clone());
+        let effective_key = self.world.get(node).map_or(key, |n| n.desc.key);
+        self.registered_selects.push((effective_key, desc));
+        node
+    }
+
+    /// 声明式双向绑定下拉选择框快捷方式。
+    ///
+    /// 渲染选择框的同时建立与应用状态的双向写回绑定。当用户展开浮层并选择新选项时，
+    /// 运行时将在 `reduce()` 调用前自动触发 `setter` 将新选中索引写回 `&mut State`，
+    /// 并自动轻关闭选项浮层。
+    pub fn select_bound<S: 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        desc: unbound_widgets::SelectDesc,
+        setter: impl FnMut(&mut S, usize) + 'static,
+    ) -> NodeId {
+        let raw_key = key.into_u64();
+        let node = self.select(raw_key, desc);
+        let effective_key = self.world.get(node).map_or(raw_key, |n| n.desc.key);
+        self.form_bindings.insert_select::<S>(effective_key, setter);
+        node
+    }
+
+    /// 声明式双向绑定下拉选择框快捷方式（带自定义节点布局）。
+    pub fn select_bound_with_layout<S: 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        layout: RawNodeDesc,
+        desc: unbound_widgets::SelectDesc,
+        setter: impl FnMut(&mut S, usize) + 'static,
+    ) -> NodeId {
+        let raw_key = key.into_u64();
+        let node = self.add_with_layout(raw_key, layout, desc.clone());
+        let effective_key = self.world.get(node).map_or(raw_key, |n| n.desc.key);
+        self.registered_selects.push((effective_key, desc));
+        self.form_bindings.insert_select::<S>(effective_key, setter);
+        node
+    }
+
+    /// 声明式 Action 绑定下拉选择框快捷方式。
+    ///
+    /// 为下拉框的各个选项预绑定派生 Action。
+    pub fn select_action<A: Clone + Send + Sync + 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        desc: unbound_widgets::SelectDesc,
+        action_fn: impl Fn(usize) -> A + 'static,
+    ) -> NodeId {
+        let raw_key = key.into_u64();
+        let option_count = desc.options.len();
+        let node = self.select(raw_key, desc);
+        let effective_key = self.world.get(node).map_or(raw_key, |n| n.desc.key);
+        for idx in 0..option_count {
+            let opt_key = select_option_key(effective_key, idx);
+            self.bind_action(opt_key, action_fn(idx));
+        }
+        node
     }
 
     /// 声明式徽章快捷方式。
@@ -2619,7 +2720,13 @@ impl<'a> ViewBuilder<'a> {
     /// 与 [`Self::panel_card`] 的关键差别：卡片**不承载内边距**，行与行之间
     /// 靠 1px 分隔线而不是留白隔开——这正是 Win11 设置页「一张卡片里排若干行」
     /// 的读法。卡片本身是 4px 圆角的薄纱加细描边，没有阴影。
-    pub fn settings_card(&mut self, key: u64, build: impl FnOnce(&mut Self)) -> NodeId {
+    /// 内置 [`SettingsCard`] 包装器，自动管理设置行排版与连续多行间的 1px 分隔线。
+    pub fn settings_card(
+        &mut self,
+        key: impl KeyDiscriminator,
+        build: impl FnOnce(&mut SettingsCard<'_, '_>),
+    ) -> NodeId {
+        let raw_key = key.into_u64();
         let mut desc = RawNodeDesc::container()
             .column()
             .width(Dim::percent(100.0))
@@ -2629,7 +2736,10 @@ impl<'a> ViewBuilder<'a> {
             .fill_token(u32::from(unbound_theme::Token::CARD_BG.raw()))
             .border(u32::from(unbound_theme::Token::CARD_BORDER.raw()), 1.0);
         desc.flex_shrink = 0.0;
-        self.container(key, desc, build)
+        self.container(raw_key, desc, |ui| {
+            let mut card = SettingsCard::new(ui, raw_key);
+            build(&mut card);
+        })
     }
 
     /// 声明设置卡片内的一行（扁平排布：标题在上、说明在下，右侧可放行内控件）。
@@ -3037,6 +3147,141 @@ impl<'a> ViewBuilder<'a> {
     pub fn viewport_rect(&self) -> Rect {
         Rect::new(0.0, 0.0, self.ctx.viewport.x, self.ctx.viewport.y)
     }
+
+    /// 为本帧挂载且处于展开态（`open == true`）的下拉选择框自动在顶层渲染选项列表浮层。
+    pub fn render_open_select_popups(&mut self) {
+        let registered = core::mem::take(self.registered_selects);
+        for (select_key, desc) in registered {
+            let is_open = self
+                .widget_state
+                .borrow()
+                .get::<unbound_widgets::SelectState>(select_key)
+                .map_or(false, |st| st.open);
+            if !is_open {
+                continue;
+            }
+            let current_selected = self
+                .widget_state
+                .borrow()
+                .get::<unbound_widgets::SelectState>(select_key)
+                .and_then(|st| st.selected);
+            let anchor = self
+                .widget_rect(select_key)
+                .unwrap_or(Rect::new(0.0, 0.0, 160.0, 32.0));
+            let width = anchor.width().max(120.0);
+            let height = desc.options.len() as f32 * unbound_widgets::select::SELECT_ROW_HEIGHT;
+            let placed = unbound_widgets::place_combo_popup(
+                anchor,
+                Vec2::new(width, height),
+                unbound_widgets::select::SELECT_ROW_HEIGHT,
+                0.0,
+                current_selected,
+                Rect::new(0.0, 0.0, self.ctx.viewport.x, self.ctx.viewport.y),
+                unbound_widgets::select::SELECT_POPUP_MARGIN,
+            );
+            let popup_key = select_popup_key(select_key);
+            let mut popup_desc = RawNodeDesc::container()
+                .column()
+                .absolute()
+                .bounds(
+                    placed.origin.x,
+                    placed.origin.y,
+                    placed.width(),
+                    placed.height(),
+                )
+                .z_index(1250)
+                .portal_root()
+                .padding(unbound_abi::Edges::all(0.0))
+                .gap(0.0)
+                .radius(8.0)
+                .fill_token(u32::from(unbound_theme::Token::SURFACE_RAISED.raw()))
+                .border(u32::from(unbound_theme::Token::OUTLINE.raw()), 1.0);
+            popup_desc.shadow_blur = 24.0;
+
+            let mut option_keys = Vec::with_capacity(desc.options.len());
+            let old_scope = self.key_scope.clone();
+            self.key_scope = KeyScope::root();
+            self.container(popup_key, popup_desc, |popup| {
+                for (idx, label) in desc.options.iter().enumerate() {
+                    let is_selected = current_selected == Some(idx);
+                    let is_disabled = desc.option_disabled(idx);
+                    let option_key = select_option_key(select_key, idx);
+                    option_keys.push(option_key);
+
+                    let tokens = if is_selected {
+                        unbound_widgets::ButtonTokens {
+                            fill: unbound_theme::Token::HOVER,
+                            fill_hover: unbound_theme::Token::HOVER,
+                            fill_pressed: unbound_theme::Token::PRESSED,
+                            fill_disabled: unbound_theme::Token::NONE,
+                            border: unbound_theme::Token::NONE,
+                            label: unbound_theme::Token::TEXT_PRIMARY,
+                            label_disabled: unbound_theme::Token::ON_DISABLED,
+                            focus_ring: unbound_theme::Token::NONE,
+                        }
+                    } else {
+                        unbound_widgets::ButtonTokens {
+                            fill: unbound_theme::Token::NONE,
+                            fill_hover: unbound_theme::Token::CONTROL_HOVER,
+                            fill_pressed: unbound_theme::Token::SURFACE_SUNKEN,
+                            fill_disabled: unbound_theme::Token::NONE,
+                            border: unbound_theme::Token::NONE,
+                            label: if is_disabled {
+                                unbound_theme::Token::TEXT_DISABLED
+                            } else {
+                                unbound_theme::Token::TEXT_PRIMARY
+                            },
+                            label_disabled: unbound_theme::Token::ON_DISABLED,
+                            focus_ring: unbound_theme::Token::NONE,
+                        }
+                    };
+
+                    let mut btn = ButtonDesc::label(label)
+                        .variant(unbound_widgets::ButtonVariant::Subtle)
+                        .left_align()
+                        .selected(is_selected)
+                        .with_font_size(14.0)
+                        .with_label_inset(unbound_widgets::select::SELECT_TEXT_INSET)
+                        .with_tokens(tokens);
+                    btn.radius = 4.0;
+                    btn.shadow = 0.0;
+
+                    popup.declare_semantics(
+                        option_key,
+                        SemanticIntent::new(Role::ListBoxOption, label.clone())
+                            .with_selected(is_selected),
+                    );
+
+                    let mut row_desc = RawNodeDesc::container().column();
+                    row_desc.width = Dim::percent(100.0);
+                    row_desc.height = Dim::px(unbound_widgets::select::SELECT_ROW_HEIGHT);
+                    row_desc.padding = unbound_abi::Edges::ltrb(
+                        unbound_widgets::select::SELECT_HIGHLIGHT_INSET_X,
+                        unbound_widgets::select::SELECT_HIGHLIGHT_INSET_Y,
+                        unbound_widgets::select::SELECT_HIGHLIGHT_INSET_X,
+                        unbound_widgets::select::SELECT_HIGHLIGHT_INSET_Y,
+                    );
+                    row_desc.flex_shrink = 0.0;
+                    let item_box_key = mix_key(popup_key, (idx as u64) + 1);
+                    popup.container(item_box_key, row_desc, |row| {
+                        let mut item_layout = RawNodeDesc::container();
+                        item_layout.width = Dim::percent(100.0);
+                        item_layout.height = Dim::px(
+                            unbound_widgets::select::SELECT_ROW_HEIGHT
+                                - 2.0 * unbound_widgets::select::SELECT_HIGHLIGHT_INSET_Y,
+                        );
+                        row.add_with_layout(option_key, item_layout, btn);
+                    });
+                }
+            });
+            self.key_scope = old_scope;
+            self.active_select_popups.push(ActiveSelectPopup {
+                select_key,
+                bounds: placed,
+                option_keys,
+            });
+        }
+    }
 }
 
 /// 应用契约。
@@ -3297,6 +3542,8 @@ pub struct AppRuntime<A: Application> {
     semantic_intents: FxHashMap<u64, SemanticIntent>,
     /// 表单控件双向绑定集合。
     form_bindings: FormBindingStore,
+    registered_selects: Vec<(u64, unbound_widgets::SelectDesc)>,
+    active_select_popups: Vec<ActiveSelectPopup>,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -3361,6 +3608,8 @@ impl<A: Application> AppRuntime<A> {
             applied_cjk_family: None,
             semantic_intents: FxHashMap::default(),
             form_bindings: FormBindingStore::new(),
+            registered_selects: Vec::new(),
+            active_select_popups: Vec::new(),
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -3650,6 +3899,11 @@ impl<A: Application> AppRuntime<A> {
         &mut self.ctx
     }
 
+    /// 设置指定下拉选择框的展开/收起状态。
+    pub fn set_select_open(&self, key: u64, open: bool) {
+        self.ctx.set_select_open(key, open);
+    }
+
     /// 获取最近一帧的场景。
     #[must_use]
     pub fn scene(&self) -> &SceneCollector {
@@ -3791,6 +4045,24 @@ impl<A: Application> AppRuntime<A> {
     /// 按下 `button`。
     pub fn pointer_down(&mut self, pos: Vec2, button: PointerButton) -> DirtyFlags {
         let mut flags = DirtyFlags::NONE;
+        if button == PointerButton::Left && !self.active_select_popups.is_empty() {
+            let in_any = self.active_select_popups.iter().any(|p| {
+                p.bounds.contains_point(pos)
+                    || self
+                        .widget_rect(p.select_key)
+                        .is_some_and(|r| r.contains_point(pos))
+            });
+            if !in_any {
+                let mut store = self.widget_state.borrow_mut();
+                for popup in &self.active_select_popups {
+                    let st = store.entry::<unbound_widgets::SelectState>(popup.select_key);
+                    st.close();
+                }
+                drop(store);
+                self.active_select_popups.clear();
+                flags = flags.merge(DirtyFlags::ALL);
+            }
+        }
         if button == PointerButton::Left
             && self
                 .overlays
@@ -4310,6 +4582,8 @@ impl<A: Application> AppRuntime<A> {
 
         self.title_bar_bindings.clear();
         self.form_bindings.clear();
+        self.registered_selects.clear();
+        self.active_select_popups.clear();
         let view_ctx = ViewContext {
             viewport: self.ctx.viewport,
             theme: self.ctx.theme,
@@ -4349,8 +4623,11 @@ impl<A: Application> AppRuntime<A> {
             z_base: 0,
             key_scope: KeyScope::root(),
             form_bindings: &mut self.form_bindings,
+            registered_selects: &mut self.registered_selects,
+            active_select_popups: &mut self.active_select_popups,
         };
         self.app.view(&self.state, &mut view);
+        view.render_open_select_popups();
         let vanished: Vec<(u64, NodeId)> = self
             .node_keys
             .iter()
@@ -5471,6 +5748,8 @@ impl<A: Application> AppRuntime<A> {
                 Some(WidgetValue::Float(val))
             } else if let Some(&b) = store.get::<bool>(key) {
                 Some(WidgetValue::Bool(b))
+            } else if let Some(st) = store.get::<unbound_widgets::SelectState>(key) {
+                st.selected.map(WidgetValue::Index)
             } else {
                 None
             }
@@ -5483,17 +5762,52 @@ impl<A: Application> AppRuntime<A> {
         }
     }
 
+    fn handle_select_option_click(&mut self, target_key: u64) -> bool {
+        let mut hit = None;
+        for popup in &self.active_select_popups {
+            if let Some(pos) = popup.option_keys.iter().position(|k| *k == target_key) {
+                hit = Some((popup.select_key, pos));
+                break;
+            }
+        }
+        if let Some((select_key, idx)) = hit {
+            {
+                let mut store = self.widget_state.borrow_mut();
+                let st = store.entry::<unbound_widgets::SelectState>(select_key);
+                st.selected = Some(idx);
+                st.highlighted = Some(idx);
+                st.close();
+            }
+            self.sync_form_binding(select_key);
+            self.active_select_popups
+                .retain(|p| p.select_key != select_key);
+            self.mark(DirtyFlags::ALL);
+            return true;
+        }
+        false
+    }
+
     fn dispatch_outcome(&mut self, event: AppEvent) -> EventOutcome {
         let mut widget_dirty = DirtyFlags::NONE;
         let mut widget_consumed = false;
         let mut ime_absorbed = false;
         match &event {
+            AppEvent::Click { node, .. } => {
+                if self.handle_select_option_click(*node) {
+                    widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                    widget_consumed = true;
+                }
+            }
             AppEvent::PointerDown {
                 pos,
                 target: Some(target_key),
                 click_count,
                 ..
             } => {
+                if self.handle_select_option_click(*target_key) {
+                    widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                    widget_consumed = true;
+                }
                 if self.focus.order().contains(target_key)
                     && self.focus.focus(*target_key, FocusCause::Pointer)
                 {
@@ -5597,6 +5911,17 @@ impl<A: Application> AppRuntime<A> {
                 pressed: true,
                 modifiers,
             } => {
+                if *key == AppKey::Escape && !self.active_select_popups.is_empty() {
+                    let mut store = self.widget_state.borrow_mut();
+                    for popup in &self.active_select_popups {
+                        let st = store.entry::<unbound_widgets::SelectState>(popup.select_key);
+                        st.close();
+                    }
+                    drop(store);
+                    self.active_select_popups.clear();
+                    widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                    widget_consumed = true;
+                }
                 if let Some(target_key) = self.ctx.event_target.or(self.ctx.focused) {
                     if let Some((rect, widget)) = self.mounted_widgets.get(&target_key).cloned() {
                         let chord = key.chord(*modifiers);

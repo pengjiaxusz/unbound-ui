@@ -10,6 +10,7 @@ pub enum WidgetValue {
     Text(String),
     Float(f32),
     Bool(bool),
+    Index(usize),
 }
 
 impl WidgetValue {
@@ -33,6 +34,14 @@ impl WidgetValue {
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Self::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_index(&self) -> Option<usize> {
+        match self {
+            Self::Index(i) => Some(*i),
             _ => None,
         }
     }
@@ -118,6 +127,24 @@ impl FormBindingStore {
                 if let Some(state) = any_state.downcast_mut::<S>() {
                     if let Some(b) = val.as_bool() {
                         setter(state, b);
+                    }
+                }
+            }),
+        );
+    }
+
+    /// 注册下拉选择框索引选择绑定。
+    pub fn insert_select<S: 'static>(
+        &mut self,
+        key: u64,
+        mut setter: impl FnMut(&mut S, usize) + 'static,
+    ) {
+        self.insert(
+            key,
+            Box::new(move |any_state: &mut dyn Any, val: &WidgetValue| {
+                if let Some(state) = any_state.downcast_mut::<S>() {
+                    if let Some(idx) = val.as_index() {
+                        setter(state, idx);
                     }
                 }
             }),
