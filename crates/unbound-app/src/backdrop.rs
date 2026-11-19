@@ -27,6 +27,11 @@ use unbound_math::Rect;
 
 use crate::{AppEventSender, ViewBuilder};
 
+pub mod controller;
+pub use controller::{
+    fallback_reason_zh, material_name_zh, plan_summary_zh, WindowBackdropController,
+};
+
 /// 云母纹理就绪事件 ID（后台线程 → UI 线程）。
 pub const MICA_READY_EVENT_ID: u64 = unbound_backdrop::MICA_READY_EVENT_ID;
 
