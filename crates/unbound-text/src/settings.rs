@@ -72,6 +72,38 @@ impl PhaseMode {
     pub fn snap_phases(self) -> bool {
         matches!(self, Self::One)
     }
+
+    /// 将画笔水平坐标量化为整像素原点与亚像素相位。
+    #[must_use]
+    pub fn quantize_x(self, x: f32) -> (f32, u8) {
+        match self {
+            Self::One => (x.round(), 0),
+            Self::Four => {
+                let fourths = (x * 4.0).round();
+                (
+                    fourths.div_euclid(4.0),
+                    (fourths.rem_euclid(4.0) as u8) & 0b11,
+                )
+            }
+            Self::Eight => {
+                let eighths = (x * 8.0).round();
+                (
+                    eighths.div_euclid(8.0),
+                    (eighths.rem_euclid(8.0) as u8) & 0b111,
+                )
+            }
+        }
+    }
+
+    /// 当前相位档位下，指定相位对应的水平亚像素偏移量（逻辑像素）。
+    #[must_use]
+    pub fn phase_offset(self, phase: u8) -> f32 {
+        match self {
+            Self::One => 0.0,
+            Self::Four => (phase & 0b11) as f32 * 0.25,
+            Self::Eight => (phase & 0b111) as f32 * 0.125,
+        }
+    }
 }
 
 impl From<bool> for PhaseMode {
