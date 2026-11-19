@@ -20,6 +20,38 @@ use crate::canvas::{AlignX, AlignY};
 pub const GROUP_PART_BASE: u16 = 10;
 /// 状态栏部件编号。
 pub const STATUS_BAR_PART: u16 = 20;
+/// 字体家族选项起始部件编号。
+pub const FONT_FAMILY_PART_BASE: u16 = 100;
+/// 字体字重选项起始部件编号。
+pub const FONT_WEIGHT_PART_BASE: u16 = 110;
+/// 字体字号选项起始部件编号。
+pub const FONT_SIZE_PART_BASE: u16 = 120;
+/// 字体斜体切换开关部件编号。
+pub const FONT_ITALIC_PART: u16 = 130;
+
+/// 字体家族候选选项表。
+pub const FONT_FAMILY_OPTIONS: &[(&str, Option<&str>)] = &[
+    ("Default", None),
+    ("Segoe UI", Some("Segoe UI")),
+    ("Cascadia", Some("Cascadia Mono")),
+    ("Arial", Some("Arial")),
+];
+
+/// 字体字重候选选项表。
+pub const FONT_WEIGHT_OPTIONS: &[(&str, u16)] = &[
+    ("Regular 400", 400),
+    ("Medium 500", 500),
+    ("SemiBold 600", 600),
+    ("Bold 700", 700),
+];
+
+/// 字体字号候选选项表。
+pub const FONT_SIZE_OPTIONS: &[(&str, f32)] = &[
+    ("12px", 12.0),
+    ("14px", 14.0),
+    ("18px", 18.0),
+    ("24px", 24.0),
+];
 
 /// 控制台六大功能参数分组。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -112,11 +144,36 @@ impl TextRenderPageState {
     pub fn toggle_fallback_details(&mut self) {
         self.fallback_details_expanded = !self.fallback_details_expanded;
     }
+
+    /// 设置字体家族。
+    pub fn set_family(&mut self, family: Option<String>) {
+        self.settings.family = family;
+    }
+
+    /// 设置字体字重。
+    pub fn set_weight(&mut self, weight: u16) {
+        self.settings.weight = weight;
+    }
+
+    /// 设置字号。
+    pub fn set_size(&mut self, size: f32) {
+        self.settings.size = size;
+    }
+
+    /// 切换斜体状态。
+    pub fn toggle_italic(&mut self) {
+        self.settings.italic = !self.settings.italic;
+    }
 }
 
 /// 表驱动能力灰化与互斥检查项。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TextFeatureKey {
+    // 预览样式：字体四项
+    FontFamily,
+    FontWeight,
+    FontSize,
+    FontItalic,
     // 光栅化后端
     BackendDirectWrite,
     BackendCosmic,
@@ -189,6 +246,30 @@ pub struct FeatureRule {
 
 /// 全局表驱动灰化规则表。
 pub const FEATURE_RULES: &[FeatureRule] = &[
+    // 预览样式：字体家族
+    FeatureRule {
+        key: TextFeatureKey::FontFamily,
+        query_capability: |_| CapabilityStatus::Available,
+        check_constraint: None,
+    },
+    // 预览样式：字重
+    FeatureRule {
+        key: TextFeatureKey::FontWeight,
+        query_capability: |_| CapabilityStatus::Available,
+        check_constraint: None,
+    },
+    // 预览样式：字号
+    FeatureRule {
+        key: TextFeatureKey::FontSize,
+        query_capability: |_| CapabilityStatus::Available,
+        check_constraint: None,
+    },
+    // 预览样式：斜体
+    FeatureRule {
+        key: TextFeatureKey::FontItalic,
+        query_capability: |_| CapabilityStatus::Available,
+        check_constraint: None,
+    },
     // DirectWrite 后端
     FeatureRule {
         key: TextFeatureKey::BackendDirectWrite,
@@ -404,7 +485,7 @@ let resolution = resolve_feature(TextFeatureKey::BackendDirectWrite, &capabiliti
     &[],
     DemoKind::TextRender,
 )
-.with_height(520.0)];
+.with_height(580.0)];
 
 /// 渲染文本渲染控制台舞台主入口。
 pub fn text_render(ctx: &mut DemoCtx<'_, '_>) {
@@ -439,7 +520,7 @@ pub fn text_render(ctx: &mut DemoCtx<'_, '_>) {
     draw_groups_panel(ctx, left_rect, state);
 
     // 2. 绘制右侧文本预览区
-    draw_preview_panel(ctx, right_rect);
+    draw_preview_panel(ctx, right_rect, &state.settings);
 
     // 3. 绘制底部实际生效状态栏
     draw_status_bar(
@@ -461,13 +542,15 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
         let is_expanded = state.group_expanded[index];
         let part = GROUP_PART_BASE + index as u16;
 
-        let content_h = if is_expanded { 36.0 } else { 0.0 };
+        let content_h = if is_expanded {
+            match group {
+                TextConsoleGroup::Font => 146.0,
+                _ => 22.0,
+            }
+        } else {
+            0.0
+        };
         let total_group_h = header_h + content_h;
-
-        // 如果超出左侧容器底部，安全截断
-        if current_y + header_h > rect.max().y {
-            break;
-        }
 
         let header_rect = Rect::new(rect.origin.x, current_y, rect.size.x, header_h);
         ctx.canvas.rect(
@@ -508,43 +591,170 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
             is_expanded,
         );
 
-        // 若展开，绘制内容容器骨架
-        if is_expanded && current_y + total_group_h <= rect.max().y {
+        // 若展开，绘制内容容器骨架或具体控件
+        if is_expanded {
             let content_rect = Rect::new(
                 rect.origin.x + 8.0,
                 current_y + header_h,
                 rect.size.x - 16.0,
                 content_h - 4.0,
             );
-            ctx.canvas.rect(
-                content_rect,
-                3.0,
-                palette.card_border,
-                palette.card_border,
-                0.5,
-                0.0,
-            );
-            ctx.canvas.text(
-                group.description(),
-                Rect::new(
-                    content_rect.origin.x + 6.0,
-                    content_rect.origin.y,
-                    content_rect.size.x - 12.0,
-                    content_rect.size.y,
-                ),
-                9.5,
-                palette.text_muted,
-                AlignX::Start,
-                AlignY::Center,
-            );
+            if *group == TextConsoleGroup::Font {
+                draw_font_controls(ctx, content_rect, state);
+            } else {
+                ctx.canvas.rect(
+                    content_rect,
+                    3.0,
+                    palette.card_border,
+                    palette.card_border,
+                    0.5,
+                    0.0,
+                );
+                ctx.canvas.text(
+                    group.description(),
+                    Rect::new(
+                        content_rect.origin.x + 6.0,
+                        content_rect.origin.y,
+                        content_rect.size.x - 12.0,
+                        content_rect.size.y,
+                    ),
+                    9.5,
+                    palette.text_muted,
+                    AlignX::Start,
+                    AlignY::Center,
+                );
+            }
         }
 
         current_y += total_group_h + item_gap;
     }
 }
 
+/// 绘制字体组四项调节控件（家族、字重、字号、斜体）。
+fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
+    let palette = *ctx.canvas.palette;
+    ctx.canvas
+        .rect(rect, 4.0, palette.card_bg, palette.card_border, 0.5, 0.0);
+
+    let caps = TextCapabilities::probe();
+    let family_res = resolve_feature(TextFeatureKey::FontFamily, &caps, &state.settings);
+    let weight_res = resolve_feature(TextFeatureKey::FontWeight, &caps, &state.settings);
+    let size_res = resolve_feature(TextFeatureKey::FontSize, &caps, &state.settings);
+    let italic_res = resolve_feature(TextFeatureKey::FontItalic, &caps, &state.settings);
+
+    let pad_x = 8.0;
+    let pad_y = 4.0;
+    let inner_w = rect.size.x - pad_x * 2.0;
+    let mut current_y = rect.origin.y + pad_y;
+
+    // 1. 字体家族 (Family)
+    ctx.canvas.text(
+        "FAMILY",
+        Rect::new(rect.origin.x + pad_x, current_y, inner_w, 10.0),
+        8.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
+    current_y += 12.0;
+
+    let family_rect = Rect::new(rect.origin.x + pad_x, current_y, inner_w, 22.0);
+    let family_ids: Vec<u64> = (0..FONT_FAMILY_OPTIONS.len())
+        .map(|i| ctx.part(FONT_FAMILY_PART_BASE + i as u16))
+        .collect();
+    let family_labels: Vec<&str> = FONT_FAMILY_OPTIONS.iter().map(|(lbl, _)| *lbl).collect();
+    let selected_family = FONT_FAMILY_OPTIONS
+        .iter()
+        .position(|(_, opt)| *opt == state.settings.family.as_deref())
+        .unwrap_or(0);
+    crate::widgets::segmented(
+        ctx.canvas,
+        &family_ids,
+        family_rect,
+        &family_labels,
+        selected_family,
+        family_res.disabled,
+        None,
+    );
+    current_y += 24.0;
+
+    // 2. 字重 (Weight)
+    ctx.canvas.text(
+        "WEIGHT",
+        Rect::new(rect.origin.x + pad_x, current_y, inner_w, 10.0),
+        8.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
+    current_y += 12.0;
+
+    let weight_rect = Rect::new(rect.origin.x + pad_x, current_y, inner_w, 22.0);
+    let weight_ids: Vec<u64> = (0..FONT_WEIGHT_OPTIONS.len())
+        .map(|i| ctx.part(FONT_WEIGHT_PART_BASE + i as u16))
+        .collect();
+    let weight_labels: Vec<&str> = FONT_WEIGHT_OPTIONS.iter().map(|(lbl, _)| *lbl).collect();
+    let selected_weight = FONT_WEIGHT_OPTIONS
+        .iter()
+        .position(|(_, w)| *w == state.settings.weight)
+        .unwrap_or(0);
+    crate::widgets::segmented(
+        ctx.canvas,
+        &weight_ids,
+        weight_rect,
+        &weight_labels,
+        selected_weight,
+        weight_res.disabled,
+        None,
+    );
+    current_y += 24.0;
+
+    // 3. 字号 (Size)
+    ctx.canvas.text(
+        "SIZE",
+        Rect::new(rect.origin.x + pad_x, current_y, inner_w, 10.0),
+        8.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
+    current_y += 12.0;
+
+    let size_rect = Rect::new(rect.origin.x + pad_x, current_y, inner_w, 22.0);
+    let size_ids: Vec<u64> = (0..FONT_SIZE_OPTIONS.len())
+        .map(|i| ctx.part(FONT_SIZE_PART_BASE + i as u16))
+        .collect();
+    let size_labels: Vec<&str> = FONT_SIZE_OPTIONS.iter().map(|(lbl, _)| *lbl).collect();
+    let selected_size = FONT_SIZE_OPTIONS
+        .iter()
+        .position(|(_, s)| (*s - state.settings.size).abs() < 0.1)
+        .unwrap_or(1);
+    crate::widgets::segmented(
+        ctx.canvas,
+        &size_ids,
+        size_rect,
+        &size_labels,
+        selected_size,
+        size_res.disabled,
+        None,
+    );
+    current_y += 26.0;
+
+    // 4. 斜体 (Italic)
+    let italic_rect = Rect::new(rect.origin.x + pad_x, current_y, inner_w, 24.0);
+    let italic_node = ctx.part(FONT_ITALIC_PART);
+    crate::widgets::toggle_switch(
+        ctx.canvas,
+        italic_node,
+        italic_rect,
+        "Italic Slant",
+        state.settings.italic,
+        italic_res.disabled,
+    );
+}
+
 /// 绘制右侧文本实时对照预览区。
-fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect) {
+fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, settings: &TextRenderSettings) {
     let palette = *ctx.canvas.palette;
     ctx.canvas
         .rect(rect, 8.0, palette.card_bg, palette.card_border, 1.0, 0.0);
@@ -554,13 +764,22 @@ fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect) {
     let sample_gap = 10.0;
     let header_h = 24.0;
 
-    // 标题
+    // 标题与当前预览样式数值摘要
+    let family_display = settings.family.as_deref().unwrap_or("Default");
+    let summary_text = format!(
+        "Family: {}  Weight: {}  Size: {:.1}px  Italic: {}",
+        family_display,
+        settings.weight,
+        settings.size,
+        if settings.italic { "Yes" } else { "No" }
+    );
+
     ctx.canvas.text(
         "LIVE PREVIEW SPECIMENS",
         Rect::new(
             rect.origin.x + padding,
             rect.origin.y + padding,
-            inner_w,
+            160.0,
             header_h,
         ),
         10.5,
@@ -569,10 +788,33 @@ fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect) {
         AlignY::Center,
     );
 
+    ctx.canvas.text(
+        &summary_text,
+        Rect::new(
+            rect.origin.x + padding + 160.0,
+            rect.origin.y + padding,
+            (inner_w - 160.0).max(20.0),
+            header_h,
+        ),
+        10.0,
+        palette.primary,
+        AlignX::End,
+        AlignY::Center,
+    );
+
+    let preview_style = unbound_text::TextStyle {
+        font_size: settings.size,
+        weight: settings.weight,
+        italic: settings.italic,
+        family: settings.family.clone(),
+        line_height: 0.0,
+        letter_spacing: 0.0,
+    };
+
     let start_y = rect.origin.y + padding + header_h + 4.0;
 
     // 样本 1：中英混排样例
-    let sample1_h = 64.0;
+    let sample1_h = 72.0;
     let sample1_rect = Rect::new(rect.origin.x + padding, start_y, inner_w, sample1_h);
     ctx.canvas.rect(
         sample1_rect,
@@ -582,10 +824,15 @@ fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect) {
         0.5,
         0.0,
     );
-    ctx.canvas.text(
+    ctx.canvas.text_styled(
         "Unbound UI 文本渲染引擎 DirectWrite & Swash 灰度抗锯齿 The quick brown fox jumps over the lazy dog 1234567890.",
-        Rect::new(sample1_rect.origin.x + 8.0, sample1_rect.origin.y + 6.0, sample1_rect.size.x - 16.0, sample1_rect.size.y - 12.0),
-        13.0,
+        Rect::new(
+            sample1_rect.origin.x + 8.0,
+            sample1_rect.origin.y + 6.0,
+            sample1_rect.size.x - 16.0,
+            sample1_rect.size.y - 12.0,
+        ),
+        &preview_style,
         palette.text,
         AlignX::Start,
         AlignY::Center,
@@ -593,7 +840,7 @@ fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect) {
 
     // 样本 2：纯汉字一行
     let sample2_y = start_y + sample1_h + sample_gap;
-    let sample2_h = 44.0;
+    let sample2_h = 48.0;
     let sample2_rect = Rect::new(rect.origin.x + padding, sample2_y, inner_w, sample2_h);
     ctx.canvas.rect(
         sample2_rect,
@@ -603,7 +850,7 @@ fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect) {
         0.5,
         0.0,
     );
-    ctx.canvas.text(
+    ctx.canvas.text_styled(
         "天地玄黄宇宙洪荒日月盈昃辰宿列张寒来暑往秋收冬藏",
         Rect::new(
             sample2_rect.origin.x + 8.0,
@@ -611,7 +858,7 @@ fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect) {
             sample2_rect.size.x - 16.0,
             sample2_rect.size.y - 8.0,
         ),
-        14.0,
+        &preview_style,
         palette.text,
         AlignX::Start,
         AlignY::Center,
@@ -619,7 +866,7 @@ fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect) {
 
     // 样本 3：Emoji 符号一行
     let sample3_y = sample2_y + sample2_h + sample_gap;
-    let sample3_h = 44.0;
+    let sample3_h = 48.0;
     let sample3_rect = Rect::new(rect.origin.x + padding, sample3_y, inner_w, sample3_h);
     ctx.canvas.rect(
         sample3_rect,
@@ -629,7 +876,7 @@ fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect) {
         0.5,
         0.0,
     );
-    ctx.canvas.text(
+    ctx.canvas.text_styled(
         "😀 😃 😄 😁 🎨 🚀 🦀 ⚡ 🌈 💻 📦 ⚙️ 🔍 🔬 💡",
         Rect::new(
             sample3_rect.origin.x + 8.0,
@@ -637,7 +884,7 @@ fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect) {
             sample3_rect.size.x - 16.0,
             sample3_rect.size.y - 8.0,
         ),
-        15.0,
+        &preview_style,
         palette.text,
         AlignX::Start,
         AlignY::Center,
