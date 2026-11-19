@@ -440,6 +440,18 @@ impl TextEditState {
         self.normalize();
     }
 
+    /// 替换整个缓冲区，同时尽可能保留当前光标和选区位置（夹紧至新文本字符边界）。
+    pub fn set_text_preserving_cursor(&mut self, text: impl Into<String>) {
+        let new_text = text.into();
+        if self.text == new_text {
+            return;
+        }
+        self.text = new_text;
+        self.preedit = None;
+        self.preedit_origin = None;
+        self.normalize();
+    }
+
     /// 设置水平滚动偏移量，夹紧至非负值。
     pub fn set_scroll_x(&mut self, scroll_x: f32) {
         self.scroll_x = scroll_x.max(0.0);
@@ -1220,10 +1232,7 @@ pub fn emit_text_input(
     // 禁用/校验态沿用各自的边框颜色，因此这些状态改用透明令牌占位，
     // 保持各状态图元数量恒定（便于缓存与状态切换时零重排）。
     // 放在末尾以保证既有图元索引稳定；它属于 `Border` 子元素层，绘制顺序不受影响。
-    let underline = if state.disabled
-        || state.focused
-        || desc.validation != ValidationState::None
-    {
+    let underline = if state.disabled || state.focused || desc.validation != ValidationState::None {
         Token::NONE
     } else {
         Token::CONTROL_STROKE_STRONG

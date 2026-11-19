@@ -800,6 +800,12 @@ impl UiWidget for TextInputDesc {
         }
     }
 
+    fn sync_state(&self, state: &mut Self::State) {
+        if !self.label.is_empty() && state.text() != self.label {
+            state.set_text_preserving_cursor(&self.label);
+        }
+    }
+
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
         let sample = if !self.label.is_empty() {
             self.label.as_str()

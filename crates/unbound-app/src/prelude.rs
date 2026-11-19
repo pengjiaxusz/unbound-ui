@@ -5,6 +5,7 @@ pub use crate::appearance::{
     AppearanceCaps, AppearanceDiff, AppearanceIntent, BackdropChannel, WindowAppearance,
 };
 pub use crate::backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID};
+pub use crate::form::{FormBindingStore, FormMutator, WidgetValue};
 pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
 pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};
 pub use crate::state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};

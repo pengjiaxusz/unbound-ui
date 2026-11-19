@@ -58,6 +58,7 @@ use unbound_world::{NodeId, UiWorld};
 pub mod appearance;
 pub mod assets;
 pub mod backdrop;
+pub mod form;
 pub mod guest_bridge;
 pub mod i18n;
 pub mod inspector;
@@ -79,6 +80,7 @@ pub use backdrop::{
     fallback_reason_zh, is_mica_ready_event, material_name_zh, plan_summary_zh, MicaBackdrop,
     WindowBackdropController, MICA_READY_EVENT_ID,
 };
+pub use form::{FormBindingStore, FormMutator, WidgetValue};
 pub use guest_bridge::GuestAppAdapter;
 pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Locale};
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
@@ -925,6 +927,21 @@ impl AppContext {
             .insert_state(key, unbound_widgets::TextEditState::with_text(text));
     }
 
+    /// 若指定输入框当前持有键盘焦点且文本发生变化，将局部状态同步回字段。
+    ///
+    /// 返回 `true` 表示字段被修改。
+    pub fn sync_text(&self, key: u64, field: &mut String) -> bool {
+        if self.focused == Some(key) {
+            if let Some(txt) = self.text_input_value(key) {
+                if *field != txt {
+                    *field = txt;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// 读取指定 `SelectDesc` 控件键当前选中的索引。
     #[must_use]
     pub fn select_index(&self, key: u64) -> Option<usize> {
@@ -962,6 +979,21 @@ impl AppContext {
     /// 设置指定 `SliderDesc` 控件键的浮点值。
     pub fn set_slider_value(&self, key: u64, value: f32) {
         self.widget_state.borrow_mut().insert_state(key, value);
+    }
+
+    /// 若指定滑块当前被按压/拖拽/聚焦且数值发生变化，将局部状态同步回字段。
+    ///
+    /// 返回 `true` 表示字段被修改。
+    pub fn sync_slider(&self, key: u64, field: &mut f32) -> bool {
+        if self.pressed == Some(key) || self.focused == Some(key) {
+            if let Some(val) = self.slider_value(key) {
+                if (*field - val).abs() > f32::EPSILON {
+                    *field = val;
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// 读取指定 `NumberInputDesc` 控件键当前的数值。
@@ -1436,6 +1468,7 @@ pub struct ViewBuilder<'a> {
     z_base: u16,
     /// 当前视图所在的分层键作用域（根级为 `KeyScope::root()`）。
     key_scope: KeyScope,
+    form_bindings: &'a mut FormBindingStore,
 }
 
 impl<'a> ViewBuilder<'a> {
@@ -2081,6 +2114,99 @@ impl<'a> ViewBuilder<'a> {
     /// 声明式文本输入框快捷方式。
     pub fn text_input(&mut self, key: u64, desc: unbound_widgets::TextInputDesc) -> NodeId {
         self.add(key, desc)
+    }
+
+    /// 注册文本框变更的双向状态绑定。
+    pub fn bind_text<S: 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        setter: impl FnMut(&mut S, &str) + 'static,
+    ) {
+        let raw_key = key.into_u64();
+        let effective_key = if !self.key_scope.is_root() && raw_key != 0 {
+            self.key_scope.key(raw_key)
+        } else {
+            raw_key
+        };
+        self.form_bindings.insert_text::<S>(effective_key, setter);
+    }
+
+    /// 注册滑块变更的双向状态绑定。
+    pub fn bind_slider<S: 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        setter: impl FnMut(&mut S, f32) + 'static,
+    ) {
+        let raw_key = key.into_u64();
+        let effective_key = if !self.key_scope.is_root() && raw_key != 0 {
+            self.key_scope.key(raw_key)
+        } else {
+            raw_key
+        };
+        self.form_bindings.insert_slider::<S>(effective_key, setter);
+    }
+
+    /// 注册开关变更的双向状态绑定。
+    pub fn bind_switch<S: 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        setter: impl FnMut(&mut S, bool) + 'static,
+    ) {
+        let raw_key = key.into_u64();
+        let effective_key = if !self.key_scope.is_root() && raw_key != 0 {
+            self.key_scope.key(raw_key)
+        } else {
+            raw_key
+        };
+        self.form_bindings.insert_switch::<S>(effective_key, setter);
+    }
+
+    /// 声明式双向绑定文本输入框快捷方式。
+    ///
+    /// 渲染文本框的同时建立与应用状态的双向写回绑定。当文本框编辑内容发生变化时，
+    /// 运行时将在 `reduce()` 调用前自动触发 `setter` 将新字符串写回 `&mut State`。
+    pub fn text_input_bound<S: 'static>(
+        &mut self,
+        key: u64,
+        desc: unbound_widgets::TextInputDesc,
+        setter: impl FnMut(&mut S, &str) + 'static,
+    ) -> NodeId {
+        let node = self.text_input(key, desc);
+        let effective_key = self.world.get(node).map_or(key, |n| n.desc.key);
+        self.form_bindings.insert_text::<S>(effective_key, setter);
+        node
+    }
+
+    /// 声明式双向绑定滑块快捷方式。
+    ///
+    /// 渲染滑块的同时建立与应用状态的双向写回绑定。当滑块拖拽或点击改变数值时，
+    /// 运行时将在 `reduce()` 调用前自动触发 `setter` 将新浮点值写回 `&mut State`。
+    pub fn slider_bound<S: 'static>(
+        &mut self,
+        key: u64,
+        desc: SliderDesc,
+        setter: impl FnMut(&mut S, f32) + 'static,
+    ) -> NodeId {
+        let node = self.slider(key, desc);
+        let effective_key = self.world.get(node).map_or(key, |n| n.desc.key);
+        self.form_bindings.insert_slider::<S>(effective_key, setter);
+        node
+    }
+
+    /// 声明式双向绑定开关快捷方式。
+    ///
+    /// 渲染开关的同时建立与应用状态的双向写回绑定。当开关点击改变状态时，
+    /// 运行时将在 `reduce()` 调用前自动触发 `setter` 将新布尔值写回 `&mut State`。
+    pub fn switch_bound<S: 'static>(
+        &mut self,
+        key: u64,
+        desc: SwitchDesc,
+        setter: impl FnMut(&mut S, bool) + 'static,
+    ) -> NodeId {
+        let node = self.switch(key, desc);
+        let effective_key = self.world.get(node).map_or(key, |n| n.desc.key);
+        self.form_bindings.insert_switch::<S>(effective_key, setter);
+        node
     }
 
     /// 声明式下拉选择框快捷方式。
@@ -2920,7 +3046,7 @@ impl<'a> ViewBuilder<'a> {
 ///
 pub trait Application {
     /// 应用状态类型。
-    type State;
+    type State: 'static;
 
     /// 构建初始状态。
     fn init(&mut self, ctx: &mut AppContext) -> Self::State;
@@ -3169,6 +3295,8 @@ pub struct AppRuntime<A: Application> {
     ///
     /// 复用同一张表，避免每帧重新分配；语义标注的规模通常远小于控件数量。
     semantic_intents: FxHashMap<u64, SemanticIntent>,
+    /// 表单控件双向绑定集合。
+    form_bindings: FormBindingStore,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -3232,6 +3360,7 @@ impl<A: Application> AppRuntime<A> {
             last_effective_scale: 1.0,
             applied_cjk_family: None,
             semantic_intents: FxHashMap::default(),
+            form_bindings: FormBindingStore::new(),
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -4180,6 +4309,7 @@ impl<A: Application> AppRuntime<A> {
         );
 
         self.title_bar_bindings.clear();
+        self.form_bindings.clear();
         let view_ctx = ViewContext {
             viewport: self.ctx.viewport,
             theme: self.ctx.theme,
@@ -4218,6 +4348,7 @@ impl<A: Application> AppRuntime<A> {
             depth: 0,
             z_base: 0,
             key_scope: KeyScope::root(),
+            form_bindings: &mut self.form_bindings,
         };
         self.app.view(&self.state, &mut view);
         let vanished: Vec<(u64, NodeId)> = self
@@ -5328,6 +5459,30 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
+    fn sync_form_binding(&mut self, key: u64) -> bool {
+        if !self.form_bindings.contains(key) {
+            return false;
+        }
+        let maybe_val = {
+            let store = self.widget_state.borrow();
+            if let Some(st) = store.get::<unbound_widgets::TextEditState>(key) {
+                Some(WidgetValue::Text(st.text().to_owned()))
+            } else if let Some(&val) = store.get::<f32>(key) {
+                Some(WidgetValue::Float(val))
+            } else if let Some(&b) = store.get::<bool>(key) {
+                Some(WidgetValue::Bool(b))
+            } else {
+                None
+            }
+        };
+        if let Some(val) = maybe_val {
+            self.form_bindings
+                .apply(key, &mut self.state as &mut dyn Any, &val)
+        } else {
+            false
+        }
+    }
+
     fn dispatch_outcome(&mut self, event: AppEvent) -> EventOutcome {
         let mut widget_dirty = DirtyFlags::NONE;
         let mut widget_consumed = false;
@@ -5351,8 +5506,14 @@ impl<A: Application> AppRuntime<A> {
                         click_count: *click_count,
                     };
                     let mut store = self.widget_state.borrow_mut();
-                    if widget.reduce_erased(*target_key, rect, &w_evt, &mut store) {
-                        widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                    let changed = widget.reduce_erased(*target_key, rect, &w_evt, &mut store);
+                    drop(store);
+                    if changed {
+                        if self.sync_form_binding(*target_key) {
+                            widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                        } else {
+                            widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        }
                         widget_consumed = true;
                     }
                 }
@@ -5361,8 +5522,14 @@ impl<A: Application> AppRuntime<A> {
                 if let Some((rect, widget)) = self.mounted_widgets.get(node).cloned() {
                     let w_evt = unbound_widgets::WidgetInputEvent::PointerDrag { pos: *pos };
                     let mut store = self.widget_state.borrow_mut();
-                    if widget.reduce_erased(*node, rect, &w_evt, &mut store) {
-                        widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                    let changed = widget.reduce_erased(*node, rect, &w_evt, &mut store);
+                    drop(store);
+                    if changed {
+                        if self.sync_form_binding(*node) {
+                            widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                        } else {
+                            widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        }
                         widget_consumed = true;
                     }
                 }
@@ -5375,8 +5542,14 @@ impl<A: Application> AppRuntime<A> {
                 if let Some((rect, widget)) = self.mounted_widgets.get(target_key).cloned() {
                     let w_evt = unbound_widgets::WidgetInputEvent::PointerUp { pos: *pos };
                     let mut store = self.widget_state.borrow_mut();
-                    if widget.reduce_erased(*target_key, rect, &w_evt, &mut store) {
-                        widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                    let changed = widget.reduce_erased(*target_key, rect, &w_evt, &mut store);
+                    drop(store);
+                    if changed {
+                        if self.sync_form_binding(*target_key) {
+                            widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                        } else {
+                            widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        }
                         widget_consumed = true;
                     }
                 }
@@ -5389,8 +5562,14 @@ impl<A: Application> AppRuntime<A> {
                 if let Some((rect, widget)) = self.mounted_widgets.get(target_key).cloned() {
                     let w_evt = unbound_widgets::WidgetInputEvent::Wheel { delta: *delta };
                     let mut store = self.widget_state.borrow_mut();
-                    if widget.reduce_erased(*target_key, rect, &w_evt, &mut store) {
-                        widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                    let changed = widget.reduce_erased(*target_key, rect, &w_evt, &mut store);
+                    drop(store);
+                    if changed {
+                        if self.sync_form_binding(*target_key) {
+                            widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                        } else {
+                            widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        }
                         widget_consumed = true;
                     }
                 }
@@ -5400,8 +5579,14 @@ impl<A: Application> AppRuntime<A> {
                     if let Some((rect, widget)) = self.mounted_widgets.get(&focused_key).cloned() {
                         let w_evt = unbound_widgets::WidgetInputEvent::TextInput(text.clone());
                         let mut store = self.widget_state.borrow_mut();
-                        if widget.reduce_erased(focused_key, rect, &w_evt, &mut store) {
-                            widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        let changed = widget.reduce_erased(focused_key, rect, &w_evt, &mut store);
+                        drop(store);
+                        if changed {
+                            if self.sync_form_binding(focused_key) {
+                                widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                            } else {
+                                widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                            }
                             widget_consumed = true;
                         }
                     }
@@ -5417,8 +5602,14 @@ impl<A: Application> AppRuntime<A> {
                         let chord = key.chord(*modifiers);
                         let w_evt = unbound_widgets::WidgetInputEvent::KeyDown(chord);
                         let mut store = self.widget_state.borrow_mut();
-                        if widget.reduce_erased(target_key, rect, &w_evt, &mut store) {
-                            widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        let changed = widget.reduce_erased(target_key, rect, &w_evt, &mut store);
+                        drop(store);
+                        if changed {
+                            if self.sync_form_binding(target_key) {
+                                widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                            } else {
+                                widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                            }
                             widget_consumed = true;
                         }
                     }
@@ -5443,8 +5634,15 @@ impl<A: Application> AppRuntime<A> {
                         };
                         if let Some(w_evt) = w_evt {
                             let mut store = self.widget_state.borrow_mut();
-                            if widget.reduce_erased(focused_key, rect, &w_evt, &mut store) {
-                                widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                            let changed =
+                                widget.reduce_erased(focused_key, rect, &w_evt, &mut store);
+                            drop(store);
+                            if changed {
+                                if self.sync_form_binding(focused_key) {
+                                    widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                                } else {
+                                    widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                                }
                                 widget_consumed = true;
                                 ime_absorbed = true;
                             }
