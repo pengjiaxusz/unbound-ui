@@ -529,7 +529,7 @@ define_showcase_components! {
     ShortcutBar => "Shortcut bar", "Contextual keycap shortcut hint bar with conflict detection.", 220.0,
     TaskHud => "Task HUD", "Background task progress stack with cancellation affordances.", 260.0,
     NavigationView => "NavigationView", "Full-height navigation panel with grouped sections, active and hovered rows, badges and a pinned footer.", 420.0,
-    RichEditBox => "Rich edit box", "Formatted text editor with a bold / italic / underline toolbar.", 320.0,
+    RichEditBox => "Rich edit box", "WinUI 3 native rich text editor area.", 320.0,
     GridView => "Grid view", "Evenly sized cells with a selection frame and hover rounding.", 320.0,
     ListBox => "List box", "Classic single-selection list with a primary accent indicator.", 300.0,
     CommandBarFlyout => "Command bar flyout", "Mini icon toolbar with a trailing overflow menu.", 260.0,

@@ -409,6 +409,26 @@ public sealed partial class CaptureWindow : Window
                 ring.Foreground = new SolidColorBrush(accent);
             }
 
+            // 对齐暗黑模式下 Border、Card 与 SwipeControl 底板背景画刷（CARD_BG / CARD_BORDER）
+            if (control is Border b && (string.Equals(captureCase.ControlName, "Border", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(captureCase.ControlName, "Card", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (control.RequestedTheme == ElementTheme.Dark)
+                {
+                    b.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 26, 27, 33));
+                    b.BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 44, 47, 56));
+                }
+            }
+
+            if (control is SwipeControl sc && sc.Content is Border swipeBorder)
+            {
+                if (control.RequestedTheme == ElementTheme.Dark)
+                {
+                    swipeBorder.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 26, 27, 33));
+                    swipeBorder.BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 44, 47, 56));
+                }
+            }
+
             var slotHost = new Border
             {
                 Width = slot.Width,

@@ -693,7 +693,9 @@ pub use orbit_view::{emit_orbit_view, OrbitViewDesc};
 pub use radial_gauge::{emit_radial_gauge, RadialGaugeDesc};
 pub use range_selector::{emit_range_selector, RangeSelectorDesc};
 pub use refresh_container::{emit_refresh_container, RefreshContainerDesc};
-pub use rich_edit_box::{emit_rich_edit_box, RichEditBoxDesc};
+pub use rich_edit_box::{
+    emit_rich_edit_box, RichEditBoxDesc, RICH_EDIT_PADDING_X, RICH_EDIT_PADDING_Y, RICH_EDIT_RADIUS,
+};
 pub use swipe_control::{emit_swipe_control, SwipeControlDesc, SwipeSide};
 pub use teaching_tip::{emit_teaching_tip, TeachingTipDesc, TeachingTipTail};
 
