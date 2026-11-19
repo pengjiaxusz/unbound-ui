@@ -93,6 +93,8 @@ fn test_glyph_keys_count_by_phase_mode() {
                 400,
                 false,
                 PhaseMode::Eight,
+                0,
+                0,
             );
             observed_keys.insert(key);
         }
@@ -133,6 +135,8 @@ fn test_glyph_keys_count_by_phase_mode() {
                 400,
                 false,
                 PhaseMode::Four,
+                0,
+                0,
             );
             observed_keys.insert(key);
         }
@@ -170,6 +174,8 @@ fn test_glyph_keys_count_by_phase_mode() {
                 400,
                 false,
                 PhaseMode::One,
+                0,
+                0,
             );
             observed_keys.insert(key);
         }

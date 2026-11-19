@@ -42,6 +42,10 @@ pub struct GlyphKey {
     /// 即使字形 ID 与字体相同，倾斜后的光栅结果也是与正体不同的图像。
     ///
     pub italic: u8,
+    /// Emoji 呈现模式（0: 彩色, 1: 单色）。
+    pub presentation: u8,
+    /// 调色板索引（用于彩色 Emoji 调色板区分）。
+    pub palette_index: u16,
 }
 
 impl GlyphKey {
@@ -62,6 +66,8 @@ impl GlyphKey {
         weight: u16,
         italic: bool,
         mode: PhaseMode,
+        presentation: u8,
+        palette_index: u16,
     ) -> Self {
         Self {
             glyph_id,
@@ -71,6 +77,8 @@ impl GlyphKey {
             face: (face & 0xffff_ffff) as u32,
             weight,
             italic: u8::from(italic),
+            presentation,
+            palette_index,
         }
     }
 
@@ -94,6 +102,8 @@ impl GlyphKey {
             weight,
             italic,
             PhaseMode::Eight,
+            0,
+            0,
         )
     }
 }

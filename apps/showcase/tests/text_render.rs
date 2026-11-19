@@ -8,11 +8,13 @@ use showcase::pages::text_render::{
     resolve_feature, FeatureResolution, TextConsoleGroup, TextFeatureKey, FEATURE_RULES,
     FONT_FAMILY_OPTIONS, FONT_FAMILY_PART_BASE, FONT_ITALIC_PART, FONT_SIZE_OPTIONS,
     FONT_SIZE_PART_BASE, FONT_WEIGHT_OPTIONS, FONT_WEIGHT_PART_BASE, GROUP_PART_BASE,
-    PART_BACKEND_COSMIC, PART_BACKEND_DW, PART_BIDI_OFF, PART_BIDI_ON, PART_LETTER_SPACING_0,
-    PART_LETTER_SPACING_1, PART_LETTER_SPACING_2, PART_LIGATURES_OFF, PART_LIGATURES_ON,
-    PART_LINEBREAK_ANYWHERE, PART_LINEBREAK_NONE, PART_LINEBREAK_WORD, PART_LINE_HEIGHT_20,
-    PART_LINE_HEIGHT_28, PART_LINE_HEIGHT_AUTO, PART_SHAPER_COSMIC, PART_SHAPER_NATIVE,
-    PHASE_PART_BASE, STATUS_BAR_PART,
+    PART_BACKEND_COSMIC, PART_BACKEND_DW, PART_BIDI_OFF, PART_BIDI_ON, PART_EMOJI_BACKEND_COSMIC,
+    PART_EMOJI_BACKEND_DW, PART_EMOJI_BACKEND_FOLLOW, PART_EMOJI_PRES_COLOR, PART_EMOJI_PRES_MONO,
+    PART_EMOJI_SOURCE_BUILTIN, PART_EMOJI_SOURCE_GRID, PART_EMOJI_SOURCE_SYSTEM,
+    PART_LETTER_SPACING_0, PART_LETTER_SPACING_1, PART_LETTER_SPACING_2, PART_LIGATURES_OFF,
+    PART_LIGATURES_ON, PART_LINEBREAK_ANYWHERE, PART_LINEBREAK_NONE, PART_LINEBREAK_WORD,
+    PART_LINE_HEIGHT_20, PART_LINE_HEIGHT_28, PART_LINE_HEIGHT_AUTO, PART_SHAPER_COSMIC,
+    PART_SHAPER_NATIVE, PHASE_PART_BASE, STATUS_BAR_PART,
 };
 use showcase::pages::{CategoryId, PageId};
 use showcase::shell::GalleryApp;
@@ -22,8 +24,8 @@ use unbound_app::{AppRuntime, Locale};
 use unbound_input::PointerButton;
 use unbound_math::Vec2;
 use unbound_text::{
-    CapabilityStatus, LineBreakMode, PhaseMode, RasterBackend, TextCapabilities,
-    TextRenderSettings, TextShaper,
+    CapabilityStatus, EmojiBackend, EmojiPresentation, EmojiSource, LineBreakMode, PhaseMode,
+    RasterBackend, TextCapabilities, TextRenderSettings, TextShaper,
 };
 
 const VIEWPORT: (f32, f32) = (1440.0, 1200.0);
@@ -824,4 +826,190 @@ fn typography_group_switching_updates_settings_and_persists_cross_page() {
     assert!(!app.state.text_render.settings.ligatures);
     assert_eq!(app.state.text_render.settings.letter_spacing, 2.0);
     assert_eq!(app.state.text_render.settings.line_height, 28.0);
+}
+
+/// 验收条件 1、4、5、6：Emoji 组控件交互、表驱动灰化、实际路径在状态栏反映且切页保持。
+#[test]
+fn emoji_group_controls_interaction_and_status_sync() {
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+
+    // 1. 初始状态：Emoji 呈现为 Color，状态栏输出包含 Swash
+    assert_eq!(
+        app.state.text_render.settings.emoji_presentation,
+        EmojiPresentation::Color
+    );
+    assert!(
+        app.state.text_render.report.emoji_path.contains("Swash")
+            || app.state.text_render.report.emoji_path.contains("Color"),
+        "initial emoji path must indicate color: {}",
+        app.state.text_render.report.emoji_path
+    );
+
+    // 验证初始控件节点在语义树中呈现
+    let color_node = app
+        .semantics
+        .get(target::id(Target::Demo(
+            page_index,
+            0,
+            PART_EMOJI_PRES_COLOR,
+        )))
+        .expect("color node exists");
+    assert!(!color_node.disabled);
+
+    let follow_node = app
+        .semantics
+        .get(target::id(Target::Demo(
+            page_index,
+            0,
+            PART_EMOJI_BACKEND_FOLLOW,
+        )))
+        .expect("follow node exists");
+    assert!(!follow_node.disabled);
+
+    let cosmic_node = app
+        .semantics
+        .get(target::id(Target::Demo(
+            page_index,
+            0,
+            PART_EMOJI_BACKEND_COSMIC,
+        )))
+        .expect("cosmic node exists");
+    assert!(!cosmic_node.disabled);
+
+    let system_node = app
+        .semantics
+        .get(target::id(Target::Demo(
+            page_index,
+            0,
+            PART_EMOJI_SOURCE_SYSTEM,
+        )))
+        .expect("system node exists");
+    assert!(!system_node.disabled);
+    assert_eq!(
+        app.state.text_render.settings.emoji_source,
+        EmojiSource::System
+    );
+
+    // 2. 验证来源三档灰化项：Builtin 与 Grid 必须禁用并给出具体原因
+    let builtin_node = app
+        .semantics
+        .get(target::id(Target::Demo(
+            page_index,
+            0,
+            PART_EMOJI_SOURCE_BUILTIN,
+        )))
+        .expect("builtin node exists");
+    assert!(builtin_node.disabled);
+    assert!(
+        builtin_node.label.contains("Bundled fonts not implemented"),
+        "builtin source disabled reason: {}",
+        builtin_node.label
+    );
+
+    let grid_node = app
+        .semantics
+        .get(target::id(Target::Demo(
+            page_index,
+            0,
+            PART_EMOJI_SOURCE_GRID,
+        )))
+        .expect("grid node exists");
+    assert!(grid_node.disabled);
+    assert!(
+        grid_node.label.contains("Grid atlas fonts not implemented"),
+        "grid source disabled reason: {}",
+        grid_node.label
+    );
+
+    // 3. 在 Color 模式下，Emoji 光栅器 DirectWrite 必须禁用（未实现层遍历）
+    let dw_node = app
+        .semantics
+        .get(target::id(Target::Demo(
+            page_index,
+            0,
+            PART_EMOJI_BACKEND_DW,
+        )))
+        .expect("emoji dw node exists");
+    assert!(
+        dw_node.disabled,
+        "Color + DirectWrite must be disabled in Color mode"
+    );
+    assert!(
+        dw_node.label.contains("layer traversal"),
+        "Color + DirectWrite disabled reason: {}",
+        dw_node.label
+    );
+
+    // 4. 点击切换到 Mono 呈现
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        PART_EMOJI_PRES_MONO,
+    )));
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(
+        app.state.text_render.settings.emoji_presentation,
+        EmojiPresentation::Mono
+    );
+    assert!(
+        app.state.text_render.report.emoji_path.contains("Mono"),
+        "effective emoji path must update to Mono: {}",
+        app.state.text_render.report.emoji_path
+    );
+
+    // 5. 切换到 Mono 后，在 Windows 上 Emoji 光栅器 DirectWrite 应变为可用
+    #[cfg(windows)]
+    {
+        let dw_node = app
+            .semantics
+            .get(target::id(Target::Demo(
+                page_index,
+                0,
+                PART_EMOJI_BACKEND_DW,
+            )))
+            .expect("emoji dw node exists");
+        assert!(
+            !dw_node.disabled,
+            "Mono + DirectWrite must be enabled on Windows"
+        );
+
+        // 点击切换到 DirectWrite 光栅器
+        app.click_node(target::id(Target::Demo(
+            page_index,
+            0,
+            PART_EMOJI_BACKEND_DW,
+        )));
+        app.rebuild(VIEWPORT);
+
+        assert_eq!(
+            app.state.text_render.settings.emoji_backend,
+            EmojiBackend::DirectWrite
+        );
+        assert_eq!(
+            app.state.text_render.report.emoji_path,
+            "DirectWrite (Mono R8)"
+        );
+    }
+
+    // 6. 跨页持久化：切到 Buttons 页面再切回
+    app.navigate(PageId::Buttons);
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(
+        app.labels.cache.settings().emoji_presentation,
+        EmojiPresentation::Mono
+    );
+
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(
+        app.state.text_render.settings.emoji_presentation,
+        EmojiPresentation::Mono
+    );
 }
