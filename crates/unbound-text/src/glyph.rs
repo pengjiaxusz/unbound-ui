@@ -1133,7 +1133,7 @@ impl GlyphCache {
         weight: u16,
         italic: bool,
     ) -> ClusterResolution {
-        use crate::composite::{cluster_hash, composite, ColorLayer, CompositeOutcome, LayerColor};
+        use crate::composite::{cluster_hash, ColorLayer, CompositeOutcome, LayerColor};
         use crate::directwrite::{ClusterGlyph, ColorClusterOutcome};
         use crate::settings::EmojiFallback;
 
@@ -1231,18 +1231,41 @@ impl GlyphCache {
                 ClusterResolution::Fallback { force_cosmic }
             }
             ColorClusterOutcome::Layers(layers) => {
-                let borrowed: Vec<ColorLayer<'_>> = layers
+                use crate::composite::Layer as CompositeLayer;
+                let borrowed: Vec<CompositeLayer<'_>> = layers
                     .iter()
-                    .map(|l| ColorLayer {
-                        color: LayerColor::new(l.color[0], l.color[1], l.color[2], l.color[3]),
-                        coverage: &l.data,
-                        width: l.width,
-                        height: l.height,
-                        left: l.left,
-                        top: l.top,
+                    .map(|l| match l {
+                        crate::directwrite::ColorLayerRaster::Solid {
+                            color,
+                            width,
+                            height,
+                            left,
+                            top,
+                            coverage,
+                        } => CompositeLayer::Solid(ColorLayer {
+                            color: LayerColor::new(color[0], color[1], color[2], color[3]),
+                            coverage,
+                            width: *width,
+                            height: *height,
+                            left: *left,
+                            top: *top,
+                        }),
+                        crate::directwrite::ColorLayerRaster::Bitmap {
+                            width,
+                            height,
+                            left,
+                            top,
+                            rgba,
+                        } => CompositeLayer::Bitmap(crate::composite::BitmapLayer {
+                            rgba,
+                            width: *width,
+                            height: *height,
+                            left: *left,
+                            top: *top,
+                        }),
                     })
                     .collect();
-                match composite(&borrowed) {
+                match crate::composite::composite_layers(&borrowed) {
                     CompositeOutcome::NotColor => ClusterResolution::NotColor,
                     CompositeOutcome::Color(bitmap) => match self.commit_raster(
                         atlas_key,
