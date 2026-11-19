@@ -170,15 +170,15 @@ fn color_path_chroma_clearly_exceeds_mono_path() {
          color {color_ratio}, mono {MONO_CHROMA_RATIO}"
     );
 
-    // 单色路径的已知差异必须写在报告里，面板不能把两个后端说成一致。
+    // 两个后端的单色路径现在都是基字形剪影，报告里不再有跨后端差异。
     let mono_report = mono_cache.report();
     assert_eq!(
         mono_report.emoji_path,
         TextRenderReport::EMOJI_PATH_DIRECTWRITE_MONO
     );
     assert_eq!(
-        mono_report.known_deviation,
-        Some(TextRenderReport::KNOWN_DEVIATION_SWASH_MONO.to_string())
+        mono_report.known_deviation, None,
+        "Mono is the base silhouette on both backends now"
     );
 }
 

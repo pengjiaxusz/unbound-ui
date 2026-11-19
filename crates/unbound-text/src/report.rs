@@ -19,9 +19,10 @@ pub struct TextRenderReport {
     pub emoji_path: String,
     /// 当前生效路径与目标语义的已知差异；无差异时为 `None`。
     ///
-    /// 只记录**已经确定不打算在本轮修掉**的偏差（例如 swash 侧的 `Mono` 仍
-    /// 取彩色位图的亮度），不重复 [`Self::last_fallback_reason`] 已经表达的
-    /// 运行期回退。面板必须把这条显示出来，不能假装两个后端一致。
+    /// 只记录**已经确定不打算在本轮修掉**的偏差（例如不含 swash 的构建里
+    /// 显式选择 `Swash` 回退时只能按 `Mono` 执行），不重复
+    /// [`Self::last_fallback_reason`] 已经表达的运行期回退。面板必须把这条
+    /// 显示出来，不能让设置看起来完全按字面生效。
     #[serde(default)]
     pub known_deviation: Option<String>,
     /// 字体或光栅化回退累计发生次数。
@@ -41,15 +42,10 @@ impl TextRenderReport {
     pub const EMOJI_PATH_SWASH_COLOR: &'static str = "Swash (Color RGBA8)";
     /// DirectWrite 单色：基字形覆盖率，R8 图集按文字色染色。
     pub const EMOJI_PATH_DIRECTWRITE_MONO: &'static str = "DirectWrite (Mono R8)";
-    /// swash 单色：彩色位图取亮度，R8 图集按文字色染色。
+    /// swash 单色：基字形轮廓覆盖率，R8 图集按文字色染色。
     pub const EMOJI_PATH_SWASH_MONO: &'static str = "Swash (Mono R8)";
     /// 没有任何可用的 Emoji 光栅器（此构建不含对应后端）。
     pub const EMOJI_PATH_NONE: &'static str = "Unavailable (no emoji rasterizer in this build)";
-
-    /// 已知差异：swash 的 `Mono` 由彩色位图取亮度得到，与 DirectWrite 的
-    /// 基字形剪影不是同一张图（见 ADR 0017 第 5、7 条）。
-    pub const KNOWN_DEVIATION_SWASH_MONO: &'static str =
-        "swash Mono is luminance-derived while DirectWrite Mono is the base silhouette";
 
     /// 已知差异：此构建不含 swash，显式选择 `Swash` 回退时按 `Mono` 执行。
     pub const KNOWN_DEVIATION_NO_SWASH_FALLBACK: &'static str =
