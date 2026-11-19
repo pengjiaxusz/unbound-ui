@@ -1,6 +1,6 @@
 {
   "tool": "pengj-templates",
-  "version": "0.76.1",
+  "version": "0.77.0",
   "project_name": "unbound-ui",
   "layers": [
     "common",
@@ -84,11 +84,11 @@
     ".agents\\skills\\git-workflow\\references\\commit.md": "233768777cfccca61f898d68efe4416e5798ee6cb2deccf131dd22e02ae538c6",
     ".agents\\skills\\git-workflow\\references\\non-interactive.md": "8c8d716ccbf8248faf1d47555aea057826847c41d30d07489af9ff37c865affb",
     ".agents\\skills\\git-workflow\\references\\rebase-conflict.md": "b66f40999c58af261551b7cf81ecc9dbba315396b3a157b38da9fdc6d7ffd352",
-    ".agents\\skills\\git-workflow\\scripts\\align-branches.ps1": "ef984a79e0c44f91bd32629375ab305a6e4ebbc32e0a3d9c65c475a4e34fc8fd",
-    ".agents\\skills\\git-workflow\\scripts\\continue-sync.ps1": "025cbf1989e3c7f0302e0ee5b0bec5f1db4eeb1500820f65496a53528135e50d",
-    ".agents\\skills\\git-workflow\\scripts\\manage-sync-backups.ps1": "8b78c7eaa3f3363ece03d1480a10605f46c32e36c5b0b68ac7d37891f3026bd4",
-    ".agents\\skills\\git-workflow\\scripts\\show-branch-topology.ps1": "2f163aa2a5ad26d2f57f47ecd44604146a4d3bfb574d81940c2a018dbd7fd0a3",
-    ".agents\\skills\\git-workflow\\scripts\\sync-branch.ps1": "4ff62d0cb294eb97fd4d75058ffa729717a7905841cff04d7b7eda6bbd1c9591",
+    ".agents\\skills\\git-workflow\\scripts\\align-branches.ps1": "564b4f0a55483fbb6ee10603ab6bd99645bdcf214f151ae19d701cef08a9cf82",
+    ".agents\\skills\\git-workflow\\scripts\\continue-sync.ps1": "f4f4f0ff5ac3710d49a87ee69dce2a4d464eedf811ef97bab33717e60ac4b452",
+    ".agents\\skills\\git-workflow\\scripts\\manage-sync-backups.ps1": "7143f5ef7a056d4302ba0da8c0de804975bb6a01a5b41e763592e23b5a731dfe",
+    ".agents\\skills\\git-workflow\\scripts\\show-branch-topology.ps1": "14d73332fb589fa6b8155ac88c6adb47087295535cff7f0ac44b3a6338a193e2",
+    ".agents\\skills\\git-workflow\\scripts\\sync-branch.ps1": "99a83ac0f7890810fceacf87902d70a70a6eb06a36df5b21489d35d9f19a9c82",
     ".agents\\skills\\grill-me\\SKILL.md": "a4e25e77a562d0928ff0f2edc6afc18adc755c18922c8f4805464a9f7c1ed9ae",
     ".agents\\skills\\grill-with-docs\\SKILL.md": "f241189924c5a354f57e2fe6e3a2d21e66aa1188c6c041f5055a01c39f0c8736",
     ".agents\\skills\\grilling\\SKILL.md": "e6a4cf1dd2411e1f8e42be8f584a1ec6f21afa8d3ecffcacfc9483de66c4e7ef",
@@ -160,7 +160,7 @@
     ".pengj-templates\\scripts\\doctor.sh": "d4a749741a383fe89688281b391f429dd627f9b0d500027f71ca16161b1aa4a9",
     ".vscode\\extensions.json": "c7cb87ed3321bc2a3f9d71ebf6b46e4e12b92b6c03ff22af5c08a0a86cc94dec",
     ".vscode\\settings.json": "d25f7fee2d39c690a70cd72b6c1d93477e2b306b8027fc4f85c31aa1c1d58135",
-    "AGENTS.md": "7c5261068a65ee56601eef097693312fb99f6138ef409799aaf2d33c1f7de510",
+    "AGENTS.md": "33cf9ad1cab4828210c4b11bc50d303c7918929df36e941dd73db0887b75d5cb",
     "Cargo.toml": "6f722ee3f7a969f9b46d867b96c1e14420b5560d7effd65c7c9b183e4e797707",
     "justfile": "5d03d2460f19fadde94b4be2d8f644e756c28cbcb9e7a425b2d9e6e41bd706bc",
     "rust-toolchain.toml": "b2bc09cc2b9bfbea423fe65a786d858571071150478018b261181135d4010412"
