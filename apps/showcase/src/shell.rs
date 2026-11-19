@@ -357,11 +357,14 @@ impl GalleryApp {
         nav_spring.rest_threshold = 0.25;
         nav_spring.rest_velocity = 2.0;
         nav_spring.set_target(NAV_EXPANDED);
+        let labels = Labels::new();
+        let mut state = GalleryState::default();
+        state.text_render.report = labels.cache.report();
         Self {
-            state: GalleryState::default(),
+            state,
             mica: unbound_app::MicaBackdrop::new(),
             scene: gallery::Gallery::new(),
-            labels: Labels::new(),
+            labels,
             layout,
             focus_order: Vec::new(),
             regions: Vec::new(),
@@ -1170,10 +1173,11 @@ impl GalleryApp {
         // 导致满载的图集永远驱逐左上角相同的那几个字形。
         //
         labels.cache.begin_frame(atlas_clock);
-        // 外壳保留八种亚像素相位：字形的光栅按其*绝对*位置隐含的相位生成，
-        // 四边形则围绕它放置在像素网格上。强制相位 0 会使每个字形偏离其应处位置
-        // 最多达一像素，这正是字距抖动的原因。
-        labels.set_snap_phases(false);
+        // 同步文本渲染控制台的全局设置与生效报告
+        labels
+            .cache
+            .apply_settings(&state.text_render.settings, Some(&mut labels.engine));
+        state.text_render.report = labels.cache.report();
         let mut canvas = Canvas::new(
             scene,
             labels,
@@ -2436,6 +2440,40 @@ impl GalleryApp {
                     } else if part == pages::text_render::STATUS_BAR_PART {
                         self.state.text_render.toggle_fallback_details();
                         self.state.bump();
+                    } else if part == pages::text_render::PART_BACKEND_DW {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        let res = pages::text_render::resolve_feature(
+                            pages::text_render::TextFeatureKey::BackendDirectWrite,
+                            &caps,
+                            &self.state.text_render.settings,
+                        );
+                        if !res.disabled {
+                            self.state.text_render.settings.raster_backend =
+                                unbound_text::RasterBackend::DirectWrite;
+                            self.labels.cache.apply_settings(
+                                &self.state.text_render.settings,
+                                Some(&mut self.labels.engine),
+                            );
+                            self.state.text_render.report = self.labels.cache.report();
+                            self.state.bump();
+                        }
+                    } else if part == pages::text_render::PART_BACKEND_COSMIC {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        let res = pages::text_render::resolve_feature(
+                            pages::text_render::TextFeatureKey::BackendCosmic,
+                            &caps,
+                            &self.state.text_render.settings,
+                        );
+                        if !res.disabled {
+                            self.state.text_render.settings.raster_backend =
+                                unbound_text::RasterBackend::Cosmic;
+                            self.labels.cache.apply_settings(
+                                &self.state.text_render.settings,
+                                Some(&mut self.labels.engine),
+                            );
+                            self.state.text_render.report = self.labels.cache.report();
+                            self.state.bump();
+                        }
                     }
                 }
             }

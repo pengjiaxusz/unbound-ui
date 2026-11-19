@@ -20,6 +20,10 @@ use crate::canvas::{AlignX, AlignY};
 pub const GROUP_PART_BASE: u16 = 10;
 /// 状态栏部件编号。
 pub const STATUS_BAR_PART: u16 = 20;
+/// DirectWrite 光栅化后端切换部件编号。
+pub const PART_BACKEND_DW: u16 = 30;
+/// Cosmic (Swash) 光栅化后端切换部件编号。
+pub const PART_BACKEND_COSMIC: u16 = 31;
 
 /// 控制台六大功能参数分组。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -461,7 +465,15 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
         let is_expanded = state.group_expanded[index];
         let part = GROUP_PART_BASE + index as u16;
 
-        let content_h = if is_expanded { 36.0 } else { 0.0 };
+        let content_h = if is_expanded {
+            if *group == TextConsoleGroup::Pixel {
+                72.0
+            } else {
+                36.0
+            }
+        } else {
+            0.0
+        };
         let total_group_h = header_h + content_h;
 
         // 如果超出左侧容器底部，安全截断
@@ -508,7 +520,7 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
             is_expanded,
         );
 
-        // 若展开，绘制内容容器骨架
+        // 若展开，绘制内容容器骨架或真实控制控件
         if is_expanded && current_y + total_group_h <= rect.max().y {
             let content_rect = Rect::new(
                 rect.origin.x + 8.0,
@@ -524,19 +536,171 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
                 0.5,
                 0.0,
             );
-            ctx.canvas.text(
-                group.description(),
-                Rect::new(
-                    content_rect.origin.x + 6.0,
-                    content_rect.origin.y,
-                    content_rect.size.x - 12.0,
-                    content_rect.size.y,
-                ),
-                9.5,
-                palette.text_muted,
-                AlignX::Start,
-                AlignY::Center,
-            );
+
+            if *group == TextConsoleGroup::Pixel {
+                // 像素组：光栅化后端 DirectWrite / Cosmic (Swash) 切换
+                ctx.canvas.text(
+                    "Rasterizer Backend (DW / Swash):",
+                    Rect::new(
+                        content_rect.origin.x + 6.0,
+                        content_rect.origin.y + 4.0,
+                        content_rect.size.x - 12.0,
+                        14.0,
+                    ),
+                    9.5,
+                    palette.text_muted,
+                    AlignX::Start,
+                    AlignY::Center,
+                );
+
+                let caps = TextCapabilities::probe();
+                let dw_res =
+                    resolve_feature(TextFeatureKey::BackendDirectWrite, &caps, &state.settings);
+                let cosmic_res =
+                    resolve_feature(TextFeatureKey::BackendCosmic, &caps, &state.settings);
+                let dw_selected = state.settings.raster_backend == RasterBackend::DirectWrite;
+                let cosmic_selected = state.settings.raster_backend == RasterBackend::Cosmic;
+
+                let btn_w = (content_rect.size.x - 12.0 - 6.0) * 0.5;
+                let btn_h = 24.0;
+                let btn_y = content_rect.origin.y + 20.0;
+                let dw_rect = Rect::new(content_rect.origin.x + 6.0, btn_y, btn_w, btn_h);
+                let cosmic_rect = Rect::new(
+                    content_rect.origin.x + 6.0 + btn_w + 6.0,
+                    btn_y,
+                    btn_w,
+                    btn_h,
+                );
+
+                // DirectWrite 按钮绘制
+                let dw_bg = if dw_selected {
+                    palette.surface
+                } else {
+                    palette.card_bg
+                };
+                let dw_border = if dw_selected {
+                    palette.primary
+                } else {
+                    palette.card_border
+                };
+                let dw_text_color = if dw_res.disabled {
+                    palette.text_muted
+                } else if dw_selected {
+                    palette.primary
+                } else {
+                    palette.text
+                };
+                ctx.canvas.rect(dw_rect, 3.0, dw_bg, dw_border, 1.0, 0.0);
+                let dw_btn_title = if dw_selected {
+                    "[•] DirectWrite"
+                } else {
+                    "DirectWrite"
+                };
+                ctx.canvas.text(
+                    dw_btn_title,
+                    dw_rect,
+                    10.5,
+                    dw_text_color,
+                    AlignX::Center,
+                    AlignY::Center,
+                );
+
+                let a11y_dw = format!(
+                    "Backend: DirectWrite{}{}",
+                    if dw_selected { " (Selected)" } else { "" },
+                    dw_res.reason.map_or(String::new(), |r| format!(" - {}", r))
+                );
+                ctx.control(
+                    PART_BACKEND_DW,
+                    dw_rect,
+                    Role::RadioButton,
+                    &a11y_dw,
+                    dw_res.disabled,
+                );
+
+                // Cosmic 按钮绘制
+                let cosmic_bg = if cosmic_selected {
+                    palette.surface
+                } else {
+                    palette.card_bg
+                };
+                let cosmic_border = if cosmic_selected {
+                    palette.primary
+                } else {
+                    palette.card_border
+                };
+                let cosmic_text_color = if cosmic_res.disabled {
+                    palette.text_muted
+                } else if cosmic_selected {
+                    palette.primary
+                } else {
+                    palette.text
+                };
+                ctx.canvas
+                    .rect(cosmic_rect, 3.0, cosmic_bg, cosmic_border, 1.0, 0.0);
+                let cosmic_btn_title = if cosmic_selected {
+                    "[•] Cosmic"
+                } else {
+                    "Cosmic"
+                };
+                ctx.canvas.text(
+                    cosmic_btn_title,
+                    cosmic_rect,
+                    10.5,
+                    cosmic_text_color,
+                    AlignX::Center,
+                    AlignY::Center,
+                );
+
+                let a11y_cosmic = format!(
+                    "Backend: Cosmic Swash{}{}",
+                    if cosmic_selected { " (Selected)" } else { "" },
+                    cosmic_res
+                        .reason
+                        .map_or(String::new(), |r| format!(" - {}", r))
+                );
+                ctx.control(
+                    PART_BACKEND_COSMIC,
+                    cosmic_rect,
+                    Role::RadioButton,
+                    &a11y_cosmic,
+                    cosmic_res.disabled,
+                );
+
+                // 底部说明附注
+                let note = if let Some(reason) = dw_res.reason {
+                    format!("DirectWrite unavailable: {}", reason)
+                } else {
+                    "Runtime rasterizer switching: rebuilds atlas on change".to_string()
+                };
+                ctx.canvas.text(
+                    &note,
+                    Rect::new(
+                        content_rect.origin.x + 6.0,
+                        btn_y + btn_h + 3.0,
+                        content_rect.size.x - 12.0,
+                        16.0,
+                    ),
+                    9.0,
+                    palette.text_muted,
+                    AlignX::Start,
+                    AlignY::Center,
+                );
+            } else {
+                ctx.canvas.text(
+                    group.description(),
+                    Rect::new(
+                        content_rect.origin.x + 6.0,
+                        content_rect.origin.y,
+                        content_rect.size.x - 12.0,
+                        content_rect.size.y,
+                    ),
+                    9.5,
+                    palette.text_muted,
+                    AlignX::Start,
+                    AlignY::Center,
+                );
+            }
         }
 
         current_y += total_group_h + item_gap;
@@ -721,4 +885,41 @@ fn draw_status_bar(
         false,
         fallback_expanded,
     );
+
+    // 若展开回退详情，在状态栏上方绘制诊断横幅
+    if fallback_expanded {
+        let details_h = 24.0;
+        let details_rect = Rect::new(
+            rect.origin.x,
+            rect.origin.y - details_h - 4.0,
+            rect.size.x,
+            details_h,
+        );
+        ctx.canvas.rect(
+            details_rect,
+            4.0,
+            palette.card_bg,
+            palette.primary,
+            1.0,
+            0.0,
+        );
+        let detail_text = if let Some(ref reason) = report.last_fallback_reason {
+            format!("Recent Fallback Diagnostic: {}", reason)
+        } else {
+            "No fallback recorded in current session".to_string()
+        };
+        ctx.canvas.text(
+            &detail_text,
+            Rect::new(
+                details_rect.origin.x + 8.0,
+                details_rect.origin.y,
+                details_rect.size.x - 16.0,
+                details_h,
+            ),
+            10.0,
+            palette.primary,
+            AlignX::Start,
+            AlignY::Center,
+        );
+    }
 }

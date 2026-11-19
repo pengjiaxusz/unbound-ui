@@ -17,6 +17,7 @@ use rustc_hash::FxHashMap;
 use unbound_math::{Rect, Vec2};
 
 use crate::atlas::{GlyphAtlas, GlyphKey, GlyphSlot};
+use crate::report::TextRenderReport;
 use crate::sdf;
 use crate::settings::{InvalidationTier, TextRenderSettings};
 use crate::shaping::{PositionedGlyph, ShapedText, TextEngine};
@@ -185,6 +186,10 @@ pub struct GlyphCache {
     /// DirectWrite 光栅化器；初始化失败时为 `None`，并自动回退到 `Cosmic`。
     #[cfg(windows)]
     directwrite: Option<crate::directwrite::DirectWriteRasterizer>,
+    /// 累计发生的光栅化或字体回退次数。
+    fallback_count: u64,
+    /// 最近一次回退的原因说明。
+    last_fallback_reason: Option<String>,
 }
 
 impl core::fmt::Debug for GlyphCache {
@@ -194,6 +199,7 @@ impl core::fmt::Debug for GlyphCache {
             .field("updates", &self.updates.len())
             .field("hits", &self.hits)
             .field("misses", &self.misses)
+            .field("fallback_count", &self.fallback_count)
             .finish_non_exhaustive()
     }
 }
@@ -221,11 +227,20 @@ impl GlyphCache {
     #[must_use]
     pub fn with_backend(requested: RasterBackend) -> Self {
         let mut backend = requested;
+        let mut fallback_count = 0u64;
+        let mut last_fallback_reason = None;
         #[cfg(windows)]
         let directwrite = if backend == RasterBackend::DirectWrite {
-            let instance = crate::directwrite::DirectWriteRasterizer::new();
+            let instance = if std::env::var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL").is_ok() {
+                None
+            } else {
+                crate::directwrite::DirectWriteRasterizer::new()
+            };
             if instance.is_none() {
                 backend = RasterBackend::Cosmic;
+                fallback_count = 1;
+                last_fallback_reason =
+                    Some("DirectWrite factory initialization failed".to_string());
             }
             instance
         } else {
@@ -234,6 +249,9 @@ impl GlyphCache {
         #[cfg(not(windows))]
         if backend == RasterBackend::DirectWrite {
             backend = RasterBackend::Cosmic;
+            fallback_count = 1;
+            last_fallback_reason =
+                Some("DirectWrite not supported on non-Windows platforms".to_string());
         }
         let settings = TextRenderSettings {
             raster_backend: backend,
@@ -258,6 +276,41 @@ impl GlyphCache {
             backend,
             #[cfg(windows)]
             directwrite,
+            fallback_count,
+            last_fallback_reason,
+        }
+    }
+
+    /// 记录一次底层回退事件（如 DirectWrite 初始化或光栅化失败）。
+    pub fn record_fallback(&mut self, reason: impl Into<String>) {
+        self.fallback_count = self.fallback_count.saturating_add(1);
+        self.last_fallback_reason = Some(reason.into());
+    }
+
+    /// 累计发生的光栅化或字体回退次数。
+    #[must_use]
+    pub fn fallback_count(&self) -> u64 {
+        self.fallback_count
+    }
+
+    /// 最近一次回退的原因说明。
+    #[must_use]
+    pub fn last_fallback_reason(&self) -> Option<&str> {
+        self.last_fallback_reason.as_deref()
+    }
+
+    /// 获取文本渲染实际生效报告快照。
+    #[must_use]
+    pub fn report(&self) -> TextRenderReport {
+        TextRenderReport {
+            backend: self.backend,
+            phases: self.settings.phase_mode.phases(),
+            emoji_path: match self.settings.emoji_presentation {
+                crate::settings::EmojiPresentation::Color => "Swash (Color RGBA8)".to_string(),
+                crate::settings::EmojiPresentation::Mono => "R8 (Mono Text Color)".to_string(),
+            },
+            fallback_count: self.fallback_count,
+            last_fallback_reason: self.last_fallback_reason.clone(),
         }
     }
 
@@ -279,9 +332,14 @@ impl GlyphCache {
         #[cfg(windows)]
         {
             if backend == RasterBackend::DirectWrite {
-                let instance = crate::directwrite::DirectWriteRasterizer::new();
+                let instance = if std::env::var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL").is_ok() {
+                    None
+                } else {
+                    crate::directwrite::DirectWriteRasterizer::new()
+                };
                 if instance.is_none() {
                     backend = RasterBackend::Cosmic;
+                    self.record_fallback("DirectWrite factory initialization failed");
                 }
                 self.directwrite = instance;
             } else {
@@ -291,6 +349,7 @@ impl GlyphCache {
         #[cfg(not(windows))]
         if backend == RasterBackend::DirectWrite {
             backend = RasterBackend::Cosmic;
+            self.record_fallback("DirectWrite not supported on non-Windows platforms");
         }
         self.backend = backend;
         self.settings.raster_backend = backend;
@@ -485,7 +544,7 @@ impl GlyphCache {
         self.misses += 1;
 
         // Windows 上优先使用 DirectWrite：覆盖率位图直接取自系统光栅器。
-        // 彩色字体、距离场或字体解析失败时继续走 swash。
+        // 彩色字体、距离场或字体解析失败时静默回退 swash，并记录回退诊断。
         #[cfg(windows)]
         if !sdf_mode && self.backend == RasterBackend::DirectWrite {
             if let Some(raster) = self.raster_directwrite(engine, face, glyph, phase) {
@@ -500,6 +559,11 @@ impl GlyphCache {
                     raster.data,
                     false,
                 );
+            } else {
+                self.record_fallback(format!(
+                    "DirectWrite glyph rasterization failed for glyph {}",
+                    glyph.glyph_id
+                ));
             }
         }
 
