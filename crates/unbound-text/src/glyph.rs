@@ -334,6 +334,8 @@ impl GlyphCache {
             },
             fallback_count: self.fallback_count,
             last_fallback_reason: self.last_fallback_reason.clone(),
+            rgba_atlas_allocated: self.atlas.has_rgba(),
+            atlas_memory_bytes: self.atlas.allocated_bytes(),
         }
     }
 
@@ -572,7 +574,9 @@ impl GlyphCache {
                 // 刷新图集代际而无需重新光栅化。
                 self.hits += 1;
                 if hit.color {
-                    self.atlas.rgba.touch(&key);
+                    if let Some(rgba) = self.atlas.rgba.as_mut() {
+                        rgba.touch(&key);
+                    }
                 } else {
                     self.atlas.r8.touch(&key);
                 }
@@ -703,16 +707,11 @@ impl GlyphCache {
         // 图集可能为腾出空间而淘汰已有字形；被淘汰键的缓存条目也必须一并删除，
         // 否则它将指向被回收复用的矩形区域。
         let mut evicted = core::mem::take(&mut self.evicted);
-        let mut resolved = if is_color || use_sdf {
+        let mut resolved = if is_color {
             let slot = self
                 .atlas
                 .allocate_color(key, width + pad2, height + pad2, &mut evicted)?;
-            let data = if use_sdf {
-                let field = sdf::from_coverage(&data, width, height, self.sdf_spread);
-                pad_field(&field.data, width, height, pad)
-            } else {
-                pad_rgba(&data, width, height, pad)
-            };
+            let data = pad_rgba(&data, width, height, pad);
             self.updates.push(AtlasUpdate {
                 target: AtlasTarget::Color,
                 layer: slot.layer,
@@ -728,7 +727,30 @@ impl GlyphCache {
                 size: Vec2::new(width as f32 + pad2 as f32, height as f32 + pad2 as f32),
                 advance: glyph.w,
                 color: true,
-                msdf: use_sdf,
+                msdf: false,
+            }
+        } else if use_sdf {
+            let slot = self
+                .atlas
+                .allocate_sdf(key, width + pad2, height + pad2, &mut evicted)?;
+            let field = sdf::from_coverage(&data, width, height, self.sdf_spread);
+            let data = pad_field(&field.data, width, height, pad);
+            self.updates.push(AtlasUpdate {
+                target: AtlasTarget::Color,
+                layer: slot.layer,
+                x: slot.x,
+                y: slot.y,
+                width: slot.w,
+                height: slot.h,
+                data,
+            });
+            ResolvedGlyph {
+                slot,
+                bearing: Vec2::new(left - pad as f32, -(top) - pad as f32),
+                size: Vec2::new(width as f32 + pad2 as f32, height as f32 + pad2 as f32),
+                advance: glyph.w,
+                color: true,
+                msdf: true,
             }
         } else {
             let slot =
@@ -851,7 +873,7 @@ impl GlyphCache {
     /// 丢弃所有已缓存字形（图集扩容或字体重载时调用）。
     pub fn clear(&mut self) {
         self.resolved.clear();
-        self.atlas = GlyphAtlas::default();
+        self.atlas.clear();
         self.updates.clear();
         // 字体索引保持有效：图集仅清除了纹素数据。
     }
@@ -859,7 +881,13 @@ impl GlyphCache {
     /// 图集占用的内存字节数。
     #[must_use]
     pub fn atlas_memory_bytes(&self) -> u64 {
-        self.atlas.memory_bytes()
+        self.atlas.allocated_bytes()
+    }
+
+    /// 当前已分配的图集显存字节数。
+    #[must_use]
+    pub fn allocated_bytes(&self) -> u64 {
+        self.atlas.allocated_bytes()
     }
 }
 
