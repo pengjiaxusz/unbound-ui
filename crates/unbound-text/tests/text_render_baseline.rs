@@ -72,8 +72,12 @@ fn baseline_features_matrix_isolation() {
         );
         assert_eq!(
             caps.color_glyphs,
-            CapabilityStatus::NotCompiled,
-            "Color glyphs must be NotCompiled when backend-swash is disabled"
+            if caps.color_directwrite.is_available() {
+                CapabilityStatus::Available
+            } else {
+                CapabilityStatus::NotCompiled
+            },
+            "color glyphs must follow the DirectWrite layer path when swash is absent"
         );
     }
 }

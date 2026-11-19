@@ -1262,9 +1262,11 @@ dependencies = [
  "postcard",
  "rustc-hash",
  "serde",
+ "swash",
  "unbound-math",
  "unbound-theme",
  "windows",
+ "windows-numerics",
 ]
 
 [[package]]

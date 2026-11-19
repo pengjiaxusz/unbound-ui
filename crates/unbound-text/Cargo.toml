@@ -14,6 +14,9 @@ bytemuck.workspace = true
 cosmic-text = { version = "0.19", default-features = false, features = ["std"] }
 rustc-hash.workspace = true
 serde.workspace = true
+# 单色剪影要绕开 `SwashCache` 的彩色条目，直接按 `Source::Outline` 光栅化
+# 基字形轮廓；版本与特性必须与 `cosmic-text` 内部一致，否则会解析出两份 swash。
+swash = { version = "0.2", default-features = false, features = ["render", "scale"], optional = true }
 
 [dev-dependencies]
 postcard.workspace = true
@@ -21,17 +24,19 @@ postcard.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", optional = true, features = [
     "Win32_Foundation",
+    "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_DirectWrite",
     "Win32_System_Com",
 ] }
+windows-numerics = { workspace = true, optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
 cosmic-text = { version = "0.19", default-features = false, features = ["swash"] }
 
 [features]
 default = ["backend-native"]
-backend-directwrite = ["dep:windows"]
-backend-swash = ["cosmic-text/swash"]
+backend-directwrite = ["dep:windows", "dep:windows-numerics"]
+backend-swash = ["cosmic-text/swash", "dep:swash"]
 backend-native = ["backend-directwrite"]
 full = ["backend-directwrite", "backend-swash"]
 
