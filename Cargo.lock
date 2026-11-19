@@ -1265,6 +1265,7 @@ dependencies = [
  "unbound-math",
  "unbound-theme",
  "windows",
+ "windows-numerics",
 ]
 
 [[package]]
