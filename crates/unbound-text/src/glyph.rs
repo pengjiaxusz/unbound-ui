@@ -18,6 +18,7 @@ use unbound_math::{Rect, Vec2};
 
 use crate::atlas::{GlyphAtlas, GlyphKey, GlyphSlot};
 use crate::sdf;
+use crate::settings::{InvalidationTier, TextRenderSettings};
 use crate::shaping::{PositionedGlyph, ShapedText, TextEngine};
 
 /// 更新目标图集类型。
@@ -33,7 +34,7 @@ pub enum AtlasTarget {
 ///
 /// `DirectWrite` 提供 8 位灰度的对称抗锯齿覆盖率；`Cosmic` 是纯 Rust
 /// 回退路径，用于非 Windows 平台、彩色字形与距离场。
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum RasterBackend {
     /// Windows DirectWrite 覆盖率位图。
     DirectWrite,
@@ -140,16 +141,20 @@ pub struct GlyphQuad {
 
 /// 光栅化并缓存字形，维护其在图集中的驻留状态。
 pub struct GlyphCache {
+    settings: TextRenderSettings,
     swash: SwashCache,
     pub atlas: GlyphAtlas,
     resolved: FxHashMap<GlyphKey, ResolvedGlyph>,
     /// 自上次排空以来产生的图集更新。
     updates: Vec<AtlasUpdate>,
     /// 输出距离场而非普通覆盖率位图（用于画布文本）。
+    #[deprecated(note = "use TextRenderSettings and GlyphCache::apply_settings instead")]
     pub use_sdf: bool,
     /// 距离场扩散范围（单位：纹素）。
+    #[deprecated(note = "use TextRenderSettings and GlyphCache::apply_settings instead")]
     pub sdf_spread: f32,
     /// 每个字形四周的额外边距纹素（防止双线性采样渗色）。
+    #[deprecated(note = "use TextRenderSettings and GlyphCache::apply_settings instead")]
     pub padding: u32,
     /// 在整像素网格上光栅化字形，而非使用 `SUBPIXEL_PHASES` 个亚像素相位。
     ///
@@ -161,6 +166,7 @@ pub struct GlyphCache {
     /// UI 文本保留八相位方案：相位由字形的绝对坐标推导，与真实画笔位置的误差
     /// 至多为 ⅛ px。
     ///
+    #[deprecated(note = "use TextRenderSettings and GlyphCache::apply_settings instead")]
     pub snap_phases: bool,
     /// `fontdb::ID` 与 [`GlyphKey`] 中紧凑字体索引之间的双射。`fontdb::ID` 是
     /// 不透明的 slotmap 键，未公开整数转换，因此图集改用稠密索引作为键。
@@ -198,6 +204,7 @@ impl Default for GlyphCache {
     }
 }
 
+#[allow(deprecated)]
 impl GlyphCache {
     #[must_use]
     pub fn new() -> Self {
@@ -228,7 +235,13 @@ impl GlyphCache {
         if backend == RasterBackend::DirectWrite {
             backend = RasterBackend::Cosmic;
         }
+        let settings = TextRenderSettings {
+            raster_backend: backend,
+            ..Default::default()
+        };
+        #[allow(deprecated)]
         Self {
+            settings,
             swash: SwashCache::new(),
             atlas: GlyphAtlas::default(),
             resolved: FxHashMap::default(),
@@ -252,6 +265,74 @@ impl GlyphCache {
     #[must_use]
     pub fn backend(&self) -> RasterBackend {
         self.backend
+    }
+
+    /// 获取当前生效的设置引用。
+    #[must_use]
+    pub fn settings(&self) -> &TextRenderSettings {
+        &self.settings
+    }
+
+    /// 切换光栅化后端并同步初始化底层光栅化器。
+    pub fn set_backend(&mut self, requested: RasterBackend) {
+        let mut backend = requested;
+        #[cfg(windows)]
+        {
+            if backend == RasterBackend::DirectWrite {
+                let instance = crate::directwrite::DirectWriteRasterizer::new();
+                if instance.is_none() {
+                    backend = RasterBackend::Cosmic;
+                }
+                self.directwrite = instance;
+            } else {
+                self.directwrite = None;
+            }
+        }
+        #[cfg(not(windows))]
+        if backend == RasterBackend::DirectWrite {
+            backend = RasterBackend::Cosmic;
+        }
+        self.backend = backend;
+        self.settings.raster_backend = backend;
+    }
+
+    /// 应用新设置，执行字段级差异比对并按三档执行失效。
+    ///
+    /// - `None`（预览样式或相同配置）：不清除任何缓存；
+    /// - `Typographic`（排版语义）：若传入 `engine`，清空其塑形与换行缓存，但不清字形位图；
+    /// - `Bitmap`（位图内容）：清空整张字形图集与待上传队列，整表重建。
+    pub fn apply_settings(
+        &mut self,
+        settings: &TextRenderSettings,
+        engine: Option<&mut TextEngine>,
+    ) -> InvalidationTier {
+        let tier = self.settings.invalidation_tier(settings);
+        match tier {
+            InvalidationTier::Bitmap => {
+                self.clear();
+                if self.settings.raster_backend != settings.raster_backend {
+                    self.set_backend(settings.raster_backend);
+                }
+                #[allow(deprecated)]
+                {
+                    self.use_sdf = settings.use_sdf;
+                    self.sdf_spread = settings.sdf_spread;
+                    self.padding = settings.padding;
+                    self.snap_phases = settings.snap_phases();
+                }
+                if let Some(engine) = engine {
+                    engine.clear_caches();
+                }
+            }
+            InvalidationTier::Typographic => {
+                if let Some(engine) = engine {
+                    engine.clear_caches();
+                }
+            }
+            InvalidationTier::None => {}
+        }
+        self.settings = settings.clone();
+        tier
     }
 
     /// 获取字体对应的稠密索引，首次遇到时分配新索引。
@@ -700,6 +781,7 @@ fn pad_field(src: &[u8], w: u32, h: u32, pad: u32) -> Vec<u8> {
 // 保留显式导入以便读者查阅。
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::atlas::AtlasConfig;
