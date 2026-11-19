@@ -26,7 +26,7 @@ use unbound_input::PointerButton;
 use unbound_math::Vec2;
 use unbound_text::{
     CapabilityStatus, EmojiBackend, EmojiPresentation, EmojiSource, LineBreakMode, PhaseMode,
-    RasterBackend, TextCapabilities, TextRenderSettings, TextShaper,
+    RasterBackend, TextCapabilities, TextRenderReport, TextRenderSettings, TextShaper,
 };
 
 const VIEWPORT: (f32, f32) = (1440.0, 1200.0);
@@ -146,9 +146,16 @@ fn text_render_page_headless_render_and_accessibility() {
         RasterBackend::default()
     );
     assert_eq!(app.state.text_render.report.phases, 8);
+    // 默认设置是「彩色 + 跟随正文后端」：Windows 上落到 DirectWrite 层合成。
+    #[cfg(windows)]
     assert_eq!(
         app.state.text_render.report.emoji_path,
-        "Swash (Color RGBA8)"
+        TextRenderReport::EMOJI_PATH_DIRECTWRITE_COLOR
+    );
+    #[cfg(not(windows))]
+    assert_eq!(
+        app.state.text_render.report.emoji_path,
+        TextRenderReport::EMOJI_PATH_SWASH_COLOR
     );
     assert_eq!(app.state.text_render.report.fallback_count, 0);
 
@@ -348,6 +355,7 @@ fn table_driven_rules_comprehensive_coverage() {
         subpixel_phase_4: CapabilityStatus::Unavailable("mock unavailable"),
         subpixel_phase_1: CapabilityStatus::Unavailable("mock unavailable"),
         color_glyphs: CapabilityStatus::Unavailable("mock unavailable"),
+        color_palettes: CapabilityStatus::Unavailable("mock unavailable"),
         mono_fallback: CapabilityStatus::Unavailable("mock unavailable"),
         mono_directwrite: CapabilityStatus::Unavailable("mock unavailable"),
         color_directwrite: CapabilityStatus::Unavailable("mock unavailable"),
@@ -926,7 +934,8 @@ fn emoji_group_controls_interaction_and_status_sync() {
         grid_node.label
     );
 
-    // 3. 在 Color 模式下，Emoji 光栅器 DirectWrite 必须禁用（未实现层遍历）
+    // 3. Color 模式下 Emoji 光栅器 DirectWrite 已解锁（ADR 0017：层合成），
+    //    并在读屏/悬停文案里说明「逐簇合成、相位锁 0、逐簇回退」。
     let dw_node = app
         .semantics
         .get(target::id(Target::Demo(
@@ -935,14 +944,39 @@ fn emoji_group_controls_interaction_and_status_sync() {
             PART_EMOJI_BACKEND_DW,
         )))
         .expect("emoji dw node exists");
+    #[cfg(windows)]
+    {
+        assert!(
+            !dw_node.disabled,
+            "Color + DirectWrite must be selectable now; label: {}",
+            dw_node.label
+        );
+        assert!(
+            dw_node.label.contains("per cluster") && dw_node.label.contains("phase"),
+            "the enabled color path must explain layer composition: {}",
+            dw_node.label
+        );
+
+        // 选上之后实际路径必须变成 DirectWrite 层合成，且不记回退。
+        app.click_node(target::id(Target::Demo(
+            page_index,
+            0,
+            PART_EMOJI_BACKEND_DW,
+        )));
+        app.rebuild(VIEWPORT);
+        assert_eq!(
+            app.state.text_render.settings.emoji_backend,
+            EmojiBackend::DirectWrite
+        );
+        assert_eq!(
+            app.state.text_render.report.emoji_path,
+            TextRenderReport::EMOJI_PATH_DIRECTWRITE_COLOR
+        );
+    }
+    #[cfg(not(windows))]
     assert!(
         dw_node.disabled,
-        "Color + DirectWrite must be disabled in Color mode"
-    );
-    assert!(
-        dw_node.label.contains("layer traversal"),
-        "Color + DirectWrite disabled reason: {}",
-        dw_node.label
+        "Color + DirectWrite stays disabled without DirectWrite"
     );
 
     // 4. 点击切换到 Mono 呈现
@@ -963,39 +997,40 @@ fn emoji_group_controls_interaction_and_status_sync() {
         app.state.text_render.report.emoji_path
     );
 
-    // 5. 切换到 Mono 后，在 Windows 上 Emoji 光栅器 DirectWrite 应变为可用
-    #[cfg(windows)]
-    {
-        let dw_node = app
-            .semantics
-            .get(target::id(Target::Demo(
-                page_index,
-                0,
-                PART_EMOJI_BACKEND_DW,
-            )))
-            .expect("emoji dw node exists");
-        assert!(
-            !dw_node.disabled,
-            "Mono + DirectWrite must be enabled on Windows"
-        );
+    // Mono 的已知差异必须同时出现在报告与状态栏语义里：两个后端的 Mono
+    // 不是同一张图，面板不能假装一致。
+    let deviation = app
+        .state
+        .text_render
+        .report
+        .known_deviation
+        .clone()
+        .expect("Mono must expose the known deviation");
+    let status_label = &app
+        .semantics
+        .get(target::id(Target::Demo(page_index, 0, STATUS_BAR_PART)))
+        .expect("status bar a11y node exists")
+        .label;
+    assert!(
+        status_label.to_lowercase().contains("known deviation"),
+        "status bar must surface the known deviation, got: {status_label}"
+    );
+    assert!(
+        status_label.contains(&deviation),
+        "status bar must repeat the report's deviation text, got: {status_label}"
+    );
 
-        // 点击切换到 DirectWrite 光栅器
-        app.click_node(target::id(Target::Demo(
-            page_index,
-            0,
-            PART_EMOJI_BACKEND_DW,
-        )));
-        app.rebuild(VIEWPORT);
-
-        assert_eq!(
-            app.state.text_render.settings.emoji_backend,
-            EmojiBackend::DirectWrite
-        );
-        assert_eq!(
-            app.state.text_render.report.emoji_path,
-            "DirectWrite (Mono R8)"
-        );
-    }
+    // 5. 切回 Color 后差异消失（彩色路径没有跨后端差异）
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        PART_EMOJI_PRES_COLOR,
+    )));
+    app.rebuild(VIEWPORT);
+    assert_eq!(
+        app.state.text_render.report.known_deviation, None,
+        "the color path must not carry a known deviation"
+    );
 
     // 6. 跨页持久化：切到 Buttons 页面再切回
     app.navigate(PageId::Buttons);
@@ -1003,7 +1038,7 @@ fn emoji_group_controls_interaction_and_status_sync() {
 
     assert_eq!(
         app.labels.cache.settings().emoji_presentation,
-        EmojiPresentation::Mono
+        EmojiPresentation::Color
     );
 
     app.navigate(PageId::TextRender);
@@ -1011,7 +1046,7 @@ fn emoji_group_controls_interaction_and_status_sync() {
 
     assert_eq!(
         app.state.text_render.settings.emoji_presentation,
-        EmojiPresentation::Mono
+        EmojiPresentation::Color
     );
 }
 

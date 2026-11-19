@@ -159,6 +159,17 @@ impl DirectWriteRasterizer {
         is_color
     }
 
+    /// 该字体面提供的调色板数量。
+    ///
+    /// 面板用它决定「调色板」维度是否灰化：只有一个调色板时无从选择。默认的
+    /// `seguiemj.ttf` 是 `CPAL` v0、单调色板（COLRv1 把渐变摊进了调色板条目），
+    /// 所以这个维度在本机永远是灰的（ADR 0017 第 8 条）。
+    pub fn color_palette_count(&mut self, key: &FaceKey) -> Option<u32> {
+        let face = self.face_for(key)?;
+        let face2 = face.cast::<IDWriteFontFace2>().ok()?;
+        Some(unsafe { face2.GetColorPaletteCount() })
+    }
+
     /// 光栅化单个字形。
     ///
     /// `key` 指定字体家族、字重与斜体；`phase_offset` 为水平亚像素偏移量。

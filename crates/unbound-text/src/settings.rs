@@ -148,12 +148,29 @@ pub enum EmojiSource {
 }
 
 /// Emoji 失败回退策略。
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EmojiFallback {
-    #[default]
+    /// 回退到 swash 彩色。此构建不含 swash 时运行期按 `Mono` 执行并记一次回退，
+    /// 不静默忽略——否则状态栏的「实际生效」会再次失真（ADR 0017 第 9 条）。
     Swash,
+    /// 回退到基字形剪影（单色覆盖率）。
     Mono,
+    /// 回退到占位框；尚未实现，当前按 `Mono` 执行并记账。
     Placeholder,
+}
+
+impl Default for EmojiFallback {
+    /// 默认回退随构建能力翻转：不含 swash 的构建默认 `Mono`。
+    ///
+    /// 默认值指向一个此构建根本执行不了的策略，会让第一次彩色合成失败就
+    /// 落进「回退到不存在的后端」这一分支。
+    fn default() -> Self {
+        if cfg!(feature = "backend-swash") {
+            Self::Swash
+        } else {
+            Self::Mono
+        }
+    }
 }
 
 /// 距离场生成模式。

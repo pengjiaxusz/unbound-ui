@@ -6,6 +6,30 @@
 use crate::glyph::RasterBackend;
 use crate::settings::PhaseMode;
 
+/// 系统 Emoji 字体家族名：本机彩色字形的唯一来源。
+#[cfg(all(windows, feature = "backend-directwrite"))]
+const EMOJI_FAMILY: &str = "Segoe UI Emoji";
+
+/// 系统 Emoji 字体提供的调色板数量。
+///
+/// 面板每帧都会调 [`TextCapabilities::probe`]，而查调色板数量要先解析字体面，
+/// 所以这里只算一次：系统字体集合在一个进程内不会变。返回 `None` 表示探测
+/// 失败（没有 DirectWrite、没有该字体），调用方按「少于两个」处理。
+#[cfg(all(windows, feature = "backend-directwrite"))]
+fn emoji_palette_count() -> Option<u32> {
+    use std::sync::OnceLock;
+
+    static COUNT: OnceLock<Option<u32>> = OnceLock::new();
+    *COUNT.get_or_init(|| {
+        let mut rasterizer = crate::directwrite::DirectWriteRasterizer::new()?;
+        rasterizer.color_palette_count(&crate::directwrite::FaceKey {
+            family: EMOJI_FAMILY.to_string(),
+            weight: 400,
+            italic: false,
+        })
+    })
+}
+
 /// 单项特性的三态能力状态。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CapabilityStatus {
@@ -53,12 +77,16 @@ pub struct TextCapabilities {
     /// 整像素相位（1 相位）可用性。
     pub subpixel_phase_1: CapabilityStatus,
     /// 彩色字形（RGBA8 图集）可用性。
+    ///
+    /// 只要有一条彩色路径可用即成立：swash 彩色，或 DirectWrite 层合成。
     pub color_glyphs: CapabilityStatus,
+    /// 彩色字体调色板维度可用性（只需一个调色板时恒为灰）。
+    pub color_palettes: CapabilityStatus,
     /// 单色字形回退可用性。
     pub mono_fallback: CapabilityStatus,
     /// 单色 DirectWrite 可用性。
     pub mono_directwrite: CapabilityStatus,
-    /// 彩色 DirectWrite 可用性。
+    /// 彩色 DirectWrite 可用性（`TranslateColorGlyphRun` 层合成）。
     pub color_directwrite: CapabilityStatus,
     /// 网格拟合（Hinting）可用性。
     pub hinting: CapabilityStatus,
@@ -85,31 +113,48 @@ impl TextCapabilities {
         let directwrite = CapabilityStatus::NotCompiled;
 
         #[cfg(all(windows, feature = "backend-directwrite"))]
-        let (mono_directwrite, color_directwrite) = if directwrite.is_available() {
+        let (mono_directwrite, color_directwrite, color_palettes) = if directwrite.is_available() {
             (
                 CapabilityStatus::Available,
-                CapabilityStatus::Unavailable("Requires layer traversal (deferred)"),
+                // 彩色层遍历不需要额外运行时前提：`TranslateColorGlyphRun` 由
+                // 系统 DirectWrite 提供，字体面按需解析（ADR 0017）。
+                CapabilityStatus::Available,
+                if emoji_palette_count().unwrap_or(0) > 1 {
+                    CapabilityStatus::Available
+                } else {
+                    CapabilityStatus::Unavailable("Font provides a single color palette")
+                },
             )
         } else {
             (
                 CapabilityStatus::Unavailable("DirectWrite initialization failed"),
-                CapabilityStatus::Unavailable("Requires layer traversal (deferred)"),
+                CapabilityStatus::Unavailable("DirectWrite initialization failed"),
+                CapabilityStatus::Unavailable("DirectWrite initialization failed"),
             )
         };
 
         #[cfg(not(all(windows, feature = "backend-directwrite")))]
-        let (mono_directwrite, color_directwrite) =
-            (CapabilityStatus::NotCompiled, CapabilityStatus::NotCompiled);
+        let (mono_directwrite, color_directwrite, color_palettes) = (
+            CapabilityStatus::NotCompiled,
+            CapabilityStatus::NotCompiled,
+            CapabilityStatus::NotCompiled,
+        );
 
         #[cfg(feature = "backend-swash")]
         let cosmic = CapabilityStatus::Available;
         #[cfg(not(feature = "backend-swash"))]
         let cosmic = CapabilityStatus::NotCompiled;
 
-        #[cfg(feature = "backend-swash")]
-        let color_glyphs = CapabilityStatus::Available;
-        #[cfg(not(feature = "backend-swash"))]
-        let color_glyphs = CapabilityStatus::NotCompiled;
+        // 彩色字形只要一条路可用即成立。两条路都没编译时报未编译；编译进来
+        // 但初始化失败时透传 DirectWrite 的具体原因，不能笼统说「本构建没有」。
+        let color_glyphs = if color_directwrite.is_available() || cfg!(feature = "backend-swash") {
+            CapabilityStatus::Available
+        } else {
+            match color_directwrite {
+                CapabilityStatus::Unavailable(reason) => CapabilityStatus::Unavailable(reason),
+                _ => CapabilityStatus::NotCompiled,
+            }
+        };
 
         Self {
             directwrite,
@@ -120,6 +165,7 @@ impl TextCapabilities {
             subpixel_phase_4: CapabilityStatus::Available,
             subpixel_phase_1: CapabilityStatus::Available,
             color_glyphs,
+            color_palettes,
             mono_fallback: CapabilityStatus::Available,
             mono_directwrite,
             color_directwrite,

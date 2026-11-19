@@ -635,6 +635,8 @@ pub enum TextFeatureKey {
     EmojiBackendFollow,
     EmojiBackendDirectWrite,
     EmojiBackendCosmic,
+    // Emoji 调色板
+    EmojiPalette,
     // 塑形器
     ShaperCosmic,
     ShaperNative,
@@ -847,6 +849,12 @@ pub const FEATURE_RULES: &[FeatureRule] = &[
         query_capability: |caps| caps.cosmic,
         check_constraint: None,
     },
+    // Emoji 调色板：字体只提供一个调色板时该维度无处可选
+    FeatureRule {
+        key: TextFeatureKey::EmojiPalette,
+        query_capability: |caps| caps.color_palettes,
+        check_constraint: None,
+    },
     // 塑形器：Cosmic
     FeatureRule {
         key: TextFeatureKey::ShaperCosmic,
@@ -917,6 +925,38 @@ pub fn resolve_feature(
     }
 
     FeatureResolution::AVAILABLE
+}
+
+/// 启用状态下补充的行为说明（悬停与读屏提示）。
+///
+/// 只有「选项名本身说不清实际行为」的维度才有说明，因此不是每条规则都配一条。
+/// 说明与 [`FEATURE_RULES`] 同源：都只读 [`TextCapabilities`] 与当前设置，
+/// 面板不另存一份判定。
+#[must_use]
+pub fn feature_hint(
+    key: TextFeatureKey,
+    caps: &TextCapabilities,
+    settings: &TextRenderSettings,
+) -> Option<&'static str> {
+    // 彩色 + DirectWrite 从「回退 swash」变成「层合成」，行为与代价都要讲清楚：
+    // 层数决定 analysis 次数，因此相位锁 0；翻译不出层的簇逐簇回退（ADR 0017）。
+    // 悬停说明描述「选上之后会发生什么」，所以只要求另一维已经就位，不要求
+    // 本维已经被选中——否则只有选完才看得到解释。
+    let color = settings.emoji_presentation == unbound_text::EmojiPresentation::Color;
+    let directwrite = settings.emoji_backend == unbound_text::EmojiBackend::DirectWrite;
+    let color_layers = caps.color_directwrite.is_available();
+    match key {
+        TextFeatureKey::EmojiPresentationColor if color_layers && directwrite => {
+            Some("Color layers composited per cluster, phase locked to 0, per-cluster fallback")
+        }
+        TextFeatureKey::EmojiBackendDirectWrite if color_layers && color => {
+            Some("DirectWrite layer traversal: one quad per cluster, phase 0, per-cluster fallback")
+        }
+        TextFeatureKey::EmojiPalette => {
+            Some("Palette index is passed through; source fonts ship a single palette")
+        }
+        _ => None,
+    }
 }
 
 pub const TEXT_RENDER_INFO: PageInfo = PageInfo {
@@ -1861,9 +1901,14 @@ fn draw_typography_group(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRend
             let res = opt.feature_key.map_or(FeatureResolution::AVAILABLE, |key| {
                 resolve_feature(key, &caps, &state.settings)
             });
+            let hint = opt
+                .feature_key
+                .and_then(|key| feature_hint(key, &caps, &state.settings));
 
             let a11y_label = if let Some(reason) = res.reason {
                 format!("{} — Disabled: {}", opt.label, reason)
+            } else if let Some(hint) = hint {
+                format!("{}: {} — {}", row_title, opt.label, hint)
             } else {
                 format!("{}: {}", row_title, opt.label)
             };
@@ -2133,9 +2178,14 @@ fn draw_status_bar(
     }
 
     // 状态栏语义与键盘可达（Button Role / 可聚焦），点击展开详细回退诊断
+    // 已知差异必须进摘要：面板不能把「Mono」显示成两个后端等价的设置。
+    let deviation_suffix = report
+        .known_deviation
+        .as_ref()
+        .map_or(String::new(), |dev| format!(". Known deviation: {dev}"));
     let a11y_summary = format!(
-        "Effective Report: Backend: {}, Phases: {}, Emoji: {}, Fallbacks: {}",
-        backend_text, phases_text, report.emoji_path, fallback_text
+        "Effective Report: Backend: {}, Phases: {}, Emoji: {}, Fallbacks: {}{}",
+        backend_text, phases_text, report.emoji_path, fallback_text, deviation_suffix
     );
     ctx.control_expandable(
         STATUS_BAR_PART,
@@ -2163,10 +2213,16 @@ fn draw_status_bar(
             1.0,
             0.0,
         );
-        let detail_text = if let Some(ref reason) = report.last_fallback_reason {
-            format!("Recent Fallback Diagnostic: {}", reason)
-        } else {
-            "No fallback recorded in current session".to_string()
+        let detail_text = match (
+            report.last_fallback_reason.as_ref(),
+            report.known_deviation.as_ref(),
+        ) {
+            (Some(reason), Some(dev)) => {
+                format!("Fallback: {reason}  |  Known deviation: {dev}")
+            }
+            (Some(reason), None) => format!("Recent Fallback Diagnostic: {reason}"),
+            (None, Some(dev)) => format!("Known deviation: {dev}"),
+            (None, None) => "No fallback recorded in current session".to_string(),
         };
         ctx.canvas.text(
             &detail_text,
@@ -2292,9 +2348,14 @@ fn draw_emoji_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRender
             let res = opt.feature_key.map_or(FeatureResolution::AVAILABLE, |key| {
                 resolve_feature(key, &caps, &state.settings)
             });
+            let hint = opt
+                .feature_key
+                .and_then(|key| feature_hint(key, &caps, &state.settings));
 
             let a11y_label = if let Some(reason) = res.reason {
                 format!("{} — Disabled: {}", opt.label, reason)
+            } else if let Some(hint) = hint {
+                format!("{}: {} — {}", row_title, opt.label, hint)
             } else {
                 format!("{}: {}", row_title, opt.label)
             };
