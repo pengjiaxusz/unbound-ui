@@ -7,12 +7,12 @@
 use std::ops::{Deref, DerefMut};
 
 use accesskit::Role;
-use showcase::backdrop_host::{window_backdrop_request, WindowBackdropRequest};
 use showcase::pages::backdrop::MATERIAL_PART_BASE;
 use showcase::pages::PageId;
 use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::target::{self, Target};
+use unbound_app::appearance::{backdrop_channel_request, BackdropChannel};
 use unbound_app::AppRuntime;
 use unbound_backdrop::{
     native_available, unavailable_reason, BackdropSource, DwmMaterial, MaterialKind,
@@ -167,10 +167,10 @@ fn the_tinted_acrylic_tier_is_selectable_on_the_showcase() {
         "the root background must be transparent for the accent material to show"
     );
 
-    let (request, lock) = window_backdrop_request(plan);
+    let (request, lock) = backdrop_channel_request(plan);
     assert_eq!(
         request,
-        WindowBackdropRequest::AccentTint(DEFAULT_ACRYLIC_TINT_ARGB),
+        BackdropChannel::AccentTint(DEFAULT_ACRYLIC_TINT_ARGB),
         "the host must emit exactly one accent tint request"
     );
     assert!(lock, "a native material must keep the inactive-window lock");
@@ -241,10 +241,10 @@ fn the_tinted_acrylic_channel_does_not_touch_the_system_material_requests() {
             plan.accent_tint, None,
             "{kind:?} must never carry an accent tint"
         );
-        let (request, _) = window_backdrop_request(plan);
+        let (request, _) = backdrop_channel_request(plan);
         assert_eq!(
             request,
-            WindowBackdropRequest::Dwm(expected),
+            BackdropChannel::Dwm(expected),
             "{kind:?} must keep its own DWM system material request"
         );
     }
