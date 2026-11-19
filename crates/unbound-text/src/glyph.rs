@@ -12,7 +12,9 @@
 //!
 //! 步骤 1–4 均为纯 CPU 计算，因此整套缓存无需 GPU 设备即可完成测试。
 
-use cosmic_text::{fontdb, CacheKey, CacheKeyFlags, SwashCache};
+use cosmic_text::fontdb;
+#[cfg(feature = "backend-swash")]
+use cosmic_text::{CacheKey, CacheKeyFlags, SwashCache};
 use rustc_hash::FxHashMap;
 use unbound_math::{Rect, Vec2};
 
@@ -43,11 +45,15 @@ pub enum RasterBackend {
     Cosmic,
 }
 
+#[allow(clippy::derivable_impls)] // 默认后端依据平台与编译期特性决定，不可直接 derive
 impl Default for RasterBackend {
     fn default() -> Self {
-        if cfg!(windows) {
+        #[cfg(all(windows, feature = "backend-directwrite"))]
+        {
             Self::DirectWrite
-        } else {
+        }
+        #[cfg(not(all(windows, feature = "backend-directwrite")))]
+        {
             Self::Cosmic
         }
     }
@@ -146,6 +152,7 @@ pub struct GlyphQuad {
 /// 光栅化并缓存字形，维护其在图集中的驻留状态。
 pub struct GlyphCache {
     settings: TextRenderSettings,
+    #[cfg(feature = "backend-swash")]
     swash: SwashCache,
     pub atlas: GlyphAtlas,
     resolved: FxHashMap<GlyphKey, ResolvedGlyph>,
@@ -187,7 +194,7 @@ pub struct GlyphCache {
     /// 当前生效的字形光栅化后端。
     backend: RasterBackend,
     /// DirectWrite 光栅化器；初始化失败时为 `None`，并自动回退到 `Cosmic`。
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "backend-directwrite"))]
     directwrite: Option<crate::directwrite::DirectWriteRasterizer>,
     /// 累计发生的光栅化或字体回退次数。
     fallback_count: u64,
@@ -232,7 +239,7 @@ impl GlyphCache {
         let mut backend = requested;
         let mut fallback_count = 0u64;
         let mut last_fallback_reason = None;
-        #[cfg(windows)]
+        #[cfg(all(windows, feature = "backend-directwrite"))]
         let directwrite = if backend == RasterBackend::DirectWrite {
             let instance = if std::env::var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL").is_ok() {
                 None
@@ -249,7 +256,7 @@ impl GlyphCache {
         } else {
             None
         };
-        #[cfg(not(windows))]
+        #[cfg(not(all(windows, feature = "backend-directwrite")))]
         if backend == RasterBackend::DirectWrite {
             backend = RasterBackend::Cosmic;
             fallback_count = 1;
@@ -263,6 +270,7 @@ impl GlyphCache {
         #[allow(deprecated)]
         Self {
             settings,
+            #[cfg(feature = "backend-swash")]
             swash: SwashCache::new(),
             atlas: GlyphAtlas::default(),
             resolved: FxHashMap::default(),
@@ -277,7 +285,7 @@ impl GlyphCache {
             misses: 0,
             hits: 0,
             backend,
-            #[cfg(windows)]
+            #[cfg(all(windows, feature = "backend-directwrite"))]
             directwrite,
             fallback_count,
             last_fallback_reason,
@@ -354,7 +362,7 @@ impl GlyphCache {
     /// 切换光栅化后端并同步初始化底层光栅化器。
     pub fn set_backend(&mut self, requested: RasterBackend) {
         let mut backend = requested;
-        #[cfg(windows)]
+        #[cfg(all(windows, feature = "backend-directwrite"))]
         {
             if backend == RasterBackend::DirectWrite {
                 let instance = if std::env::var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL").is_ok() {
@@ -371,7 +379,7 @@ impl GlyphCache {
                 self.directwrite = None;
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(not(all(windows, feature = "backend-directwrite")))]
         if backend == RasterBackend::DirectWrite {
             backend = RasterBackend::Cosmic;
             self.record_fallback("DirectWrite not supported on non-Windows platforms");
@@ -587,13 +595,13 @@ impl GlyphCache {
 
         // Windows 上优先使用 DirectWrite：覆盖率位图直接取自系统光栅器。
         // 彩色字体或字体解析失败时静默回退 swash（距离场通过覆盖率位图后处理生成），并记录回退诊断。
-        #[cfg(windows)]
+        #[cfg(all(windows, feature = "backend-directwrite"))]
         let try_directwrite = match self.settings.emoji_backend {
             crate::settings::EmojiBackend::DirectWrite => true,
             crate::settings::EmojiBackend::Cosmic => false,
             crate::settings::EmojiBackend::Follow => self.backend == RasterBackend::DirectWrite,
         };
-        #[cfg(windows)]
+        #[cfg(all(windows, feature = "backend-directwrite"))]
         if try_directwrite {
             let phase_offset = mode.phase_offset(phase);
             if let Some(raster) = self.raster_directwrite(engine, face, glyph, phase_offset) {
@@ -616,59 +624,70 @@ impl GlyphCache {
             }
         }
 
-        let mut flags = CacheKeyFlags::empty();
-        if italic {
-            flags |= CacheKeyFlags::FAKE_ITALIC;
-        }
-        // 在向 swash 请求光栅化前将坐标偏置到目标亚像素相位，
-        // 确保亚像素相位生成真正不同的位图。
-        let phase_offset = mode.phase_offset(phase);
-        let (cache_key, _, _) = CacheKey::new(
-            face,
-            glyph.glyph_id,
-            glyph.font_size,
-            (phase_offset, 0.0),
-            cosmic_text::Weight(weight),
-            flags,
-        );
-        let image = self
-            .swash
-            .get_image(engine.font_system_mut(), cache_key)
-            .as_ref()?;
-
-        let placement = image.placement;
-        let mut is_color = matches!(image.content, cosmic_text::SwashContent::Color);
-        // 先复制出所有字段，结束对 swash 内部的借用，再进入可变的图集写入。
-        let mut data = image.data.to_vec();
-        let width = placement.width;
-        let height = placement.height;
-        let left = placement.left as f32;
-        let top = placement.top as f32;
-
-        if is_color && self.settings.emoji_presentation == crate::settings::EmojiPresentation::Mono
+        #[cfg(feature = "backend-swash")]
         {
-            // 单色模式：将 RGBA8 彩色位图转换为单通道 R8 覆盖率，走文字染色路径
-            is_color = false;
-            let mono_len = (width * height) as usize;
-            let mut mono_data = Vec::with_capacity(mono_len);
-            for chunk in data.chunks_exact(4) {
-                let a = chunk[3] as u32;
-                if a == 0 {
-                    mono_data.push(0);
-                } else {
-                    let r = chunk[0] as u32;
-                    let g = chunk[1] as u32;
-                    let b = chunk[2] as u32;
-                    let gray = (r * 299 + g * 587 + b * 114) / 1000;
-                    mono_data.push(((gray * a) / 255) as u8);
-                }
+            let mut flags = CacheKeyFlags::empty();
+            if italic {
+                flags |= CacheKeyFlags::FAKE_ITALIC;
             }
-            data = mono_data;
+            // 在向 swash 请求光栅化前将坐标偏置到目标亚像素相位，
+            // 确保亚像素相位生成真正不同的位图。
+            let phase_offset = mode.phase_offset(phase);
+            let (cache_key, _, _) = CacheKey::new(
+                face,
+                glyph.glyph_id,
+                glyph.font_size,
+                (phase_offset, 0.0),
+                cosmic_text::Weight(weight),
+                flags,
+            );
+            let image = self
+                .swash
+                .get_image(engine.font_system_mut(), cache_key)
+                .as_ref()?;
+
+            let placement = image.placement;
+            let mut is_color = matches!(image.content, cosmic_text::SwashContent::Color);
+            // 先复制出所有字段，结束对 swash 内部的借用，再进入可变的图集写入。
+            let mut data = image.data.to_vec();
+            let width = placement.width;
+            let height = placement.height;
+            let left = placement.left as f32;
+            let top = placement.top as f32;
+
+            if is_color
+                && self.settings.emoji_presentation == crate::settings::EmojiPresentation::Mono
+            {
+                // 单色模式：将 RGBA8 彩色位图转换为单通道 R8 覆盖率，走文字染色路径
+                is_color = false;
+                let mono_len = (width * height) as usize;
+                let mut mono_data = Vec::with_capacity(mono_len);
+                for chunk in data.chunks_exact(4) {
+                    let a = chunk[3] as u32;
+                    if a == 0 {
+                        mono_data.push(0);
+                    } else {
+                        let r = chunk[0] as u32;
+                        let g = chunk[1] as u32;
+                        let b = chunk[2] as u32;
+                        let gray = (r * 299 + g * 587 + b * 114) / 1000;
+                        mono_data.push(((gray * a) / 255) as u8);
+                    }
+                }
+                data = mono_data;
+            }
+
+            self.commit_raster(
+                key, glyph, width, height, left, top, is_color, data, sdf_mode,
+            )
         }
 
-        self.commit_raster(
-            key, glyph, width, height, left, top, is_color, data, sdf_mode,
-        )
+        #[cfg(not(feature = "backend-swash"))]
+        {
+            let _ = (face, glyph, phase, mode, italic, weight, key, sdf_mode);
+            self.record_fallback("Swash backend is not compiled in");
+            None
+        }
     }
 
     /// 将一块已光栅化的位图写入图集并登记缓存。
@@ -800,7 +819,7 @@ impl GlyphCache {
     }
 
     /// 用 DirectWrite 光栅化单个字形；字体家族或彩色字体不适用时返回 `None`。
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "backend-directwrite"))]
     fn raster_directwrite(
         &mut self,
         engine: &mut TextEngine,
@@ -964,7 +983,7 @@ mod tests {
         TextEngine::new()
     }
 
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "backend-directwrite"))]
     #[test]
     fn the_default_backend_is_directwrite_unless_overridden() {
         // 环境变量是 A/B 对照入口，设置时允许测试机主动选择 cosmic。
@@ -1352,7 +1371,7 @@ mod tests {
     /// 若抗锯齿模式与纹理类型不匹配（例如在灰度模式下请求 ClearType 纹理），
     /// DirectWrite 会返回双电平纹理，中间灰占比坍缩到接近 0，字形边缘出现
     /// 硬阶梯。该断言把这条退化路径钉死在测试里。
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "backend-directwrite"))]
     #[test]
     fn directwrite_coverage_is_antialiased() {
         if std::env::var("UNBOUND_TEXT_BACKEND").is_ok_and(|v| v == "cosmic") {

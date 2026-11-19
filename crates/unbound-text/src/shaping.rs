@@ -857,7 +857,7 @@ impl TextEngine {
             return Some(Arc::clone(cached));
         }
         let shaped = self.shape(text, style);
-        #[cfg(windows)]
+        #[cfg(all(windows, feature = "backend-directwrite"))]
         let corrected = {
             let face_id = shaped.faces.first().copied()?;
             // 多字体回退（CJK、Emoji）时字形分属不同字体面，单一
@@ -902,7 +902,7 @@ impl TextEngine {
             corrected.width = width;
             Arc::new(corrected)
         };
-        #[cfg(not(windows))]
+        #[cfg(not(all(windows, feature = "backend-directwrite")))]
         let corrected = shaped;
         if self.layout_cache.len() >= self.max_cache_entries {
             self.layout_cache.clear();
