@@ -21,7 +21,6 @@ use unbound_theme::{Palette, ThemeKind, ThemeLut, Token};
 use unbound_widgets::button::ButtonTokens;
 use unbound_widgets::catalog::{emit_widget_with_shaper, CatalogParams};
 use unbound_widgets::primitive;
-use unbound_widgets::title_bar::{TitleBarChrome, WindowCaptionButton, WindowCaptionKind};
 use unbound_widgets::{
     emit_app_bar_button, emit_app_bar_toggle_button, emit_rich_edit_box, AppBarButtonDesc,
     AppBarSeparatorDesc, AppBarToggleButtonDesc, ButtonDesc, ButtonVariant, CalendarDatePickerDesc,
@@ -953,6 +952,7 @@ pub fn compute_source_fingerprint(
 
     for path in [
         widget_file.as_str(),
+        "crates/unbound-widgets/src/slot_fixture.rs",
         "crates/unbound-widgets/src/primitive.rs",
         "crates/unbound-theme/src/win11.rs",
         // 字形位图由 DirectWrite/塑形层决定，改动后必须让差分缓存失效。
@@ -1683,32 +1683,20 @@ fn emit_case(
             rect.size
         }
         "TitleBar" => {
-            // 标题栏由 chrome 与三枚窗口控制按钮组成；三者都实现 `UiWidget`，
-            // 因此固有高度直接取自真实描述符（32px）。
-            let chrome = TitleBarChrome::new(!control.disabled);
-            let chrome_size = chrome.intrinsic_size(text_ctx);
-            push(
-                scene,
-                chrome.emit_laid_out(NODE, rect, control, &(), text_ctx),
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: !control.disabled,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_title_bar_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                700,
             );
-            let caption_w = unbound_widgets::title_bar::TITLE_BAR_CAPTION_WIDTH;
-            let kinds = [
-                WindowCaptionKind::Minimize,
-                WindowCaptionKind::Maximize { maximized: false },
-                WindowCaptionKind::Close,
-            ];
-            let count = kinds.len();
-            for (index, kind) in kinds.into_iter().enumerate() {
-                let left = rect.max().x - caption_w * (count - index) as f32;
-                let button_rect = Rect::new(left, rect.origin.y, caption_w, rect.height());
-                let button =
-                    WindowCaptionButton::new(kind, rect.height()).focused(!control.disabled);
-                push(
-                    scene,
-                    button.emit_laid_out(NODE, button_rect, control, &(), text_ctx),
-                );
-            }
-            Vec2::new(rect.width(), chrome_size.y.max(rect.height()))
+            push(scene, fixture.output);
+            fixture.total_size
         }
         "HyperlinkButton" => {
             let desc = HyperlinkButtonDesc::new(rect, "HyperlinkButton");
@@ -2105,203 +2093,20 @@ fn emit_case(
             Vec2::new(bar_w, bar_h)
         }
         "NavigationView" => {
-            // WinUI 3 NavigationView 左侧窗格规范：
-            // 固有尺寸宽 300px、高 200px。
-            // 包含两枚顶层菜单项（Home 与 Library）及底部的 Settings 项。
-            // 选中项绘制左侧 3×16px、圆角 1.5px 的 Accent 强调色胶囊条。
-            let panel_w = if rect.width() > 0.0 {
-                rect.width()
-            } else {
-                300.0
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
             };
-            let panel_h = if rect.height() > 0.0 {
-                rect.height()
-            } else {
-                200.0
-            };
-            let item_h = 36.0;
-            let pad_x = 4.0;
-            let pad_y = 4.0;
-            let row_w = panel_w - pad_x * 2.0;
-
-            let mut out = WidgetOutput::default();
-            // 底板与右侧分隔微边框
-            out.primitives
-                .push(primitive::surface(rect, 0.0, Token::CARD_BG, 700));
-            out.primitives.push(primitive::surface(
-                Rect::new(rect.origin.x + panel_w - 1.0, rect.origin.y, 1.0, panel_h),
-                0.0,
-                Token::CARD_BORDER,
-                701,
-            ));
-
-            let disabled = control.disabled;
-            // 状态为 checked 或默认状态下首项选中
-            let home_selected =
-                !disabled && (checked || case.state == "normal" || case.state == "focused");
-
-            // 1. Home 菜单项
-            let home_r = Rect::new(rect.origin.x + pad_x, rect.origin.y + pad_y, row_w, item_h);
-            let home_fill = if disabled {
-                Token::NONE
-            } else if home_selected {
-                Token::NAV_SELECTED
-            } else {
-                Token::NONE
-            };
-            out.primitives
-                .push(primitive::surface(home_r, 4.0, home_fill, 702));
-
-            // Home 项左侧选中指示胶囊条（3×16px，垂直居中，圆角 1.5px）
-            if home_selected {
-                let pill = Rect::new(
-                    home_r.origin.x,
-                    home_r.origin.y + (item_h - 16.0) * 0.5,
-                    3.0,
-                    16.0,
-                );
-                out.primitives
-                    .push(primitive::surface(pill, 1.5, Token::PRIMARY, 705));
-            }
-
-            let home_icon_ink = if disabled {
-                Token::TEXT_DISABLED
-            } else if home_selected {
-                Token::PRIMARY
-            } else {
-                Token::TEXT_SECONDARY
-            };
-            let home_text_ink = if disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_PRIMARY
-            };
-
-            // 2. Library 菜单项
-            let lib_r = Rect::new(
-                rect.origin.x + pad_x,
-                rect.origin.y + pad_y + item_h,
-                row_w,
-                item_h,
-            );
-            out.primitives
-                .push(primitive::surface(lib_r, 4.0, Token::NONE, 702));
-
-            let lib_icon_ink = if disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_SECONDARY
-            };
-            let lib_text_ink = if disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_PRIMARY
-            };
-
-            // 3. 底部 Settings 分隔线与菜单项
-            let footer_y = rect.origin.y + panel_h - item_h - pad_y;
-            out.primitives.push(primitive::surface(
-                Rect::new(rect.origin.x + pad_x, footer_y - 5.0, row_w, 1.0),
-                0.0,
-                Token::DIVIDER,
-                702,
-            ));
-            let settings_r = Rect::new(rect.origin.x + pad_x, footer_y, row_w, item_h);
-            out.primitives
-                .push(primitive::surface(settings_r, 4.0, Token::NONE, 702));
-
-            let settings_ink = if disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_SECONDARY
-            };
-
-            if control.focused && !disabled {
-                out.primitives.push(primitive::focus_ring(
-                    home_r.inflate(1.0),
-                    5.0,
-                    Token::FOCUS_RING,
-                    2.0,
-                    710,
-                    true,
-                ));
-            }
-
-            push(scene, out);
-
-            // 图标与文本发射
-            let icon_x = rect.origin.x + pad_x + 12.0;
-            let text_x = rect.origin.x + pad_x + 40.0;
-            // Home: "\u{E80F}" (Home)
-            emit_icon_centered(
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_navigation_view_fixture(
+                rect,
+                fixture_state,
                 text_ctx,
-                scene,
-                "\u{E80F}",
-                Rect::new(icon_x - 8.0, home_r.origin.y, 16.0, item_h),
-                16.0,
-                home_icon_ink,
-                704,
+                700,
             );
-            emit_text_left_middle(
-                text_ctx,
-                scene,
-                "Home",
-                home_r,
-                text_x,
-                14.0,
-                if home_selected { 600 } else { 400 },
-                None,
-                home_text_ink,
-                704,
-            );
-
-            // Library: "\u{E8F1}" (Library)
-            emit_icon_centered(
-                text_ctx,
-                scene,
-                "\u{E8F1}",
-                Rect::new(icon_x - 8.0, lib_r.origin.y, 16.0, item_h),
-                16.0,
-                lib_icon_ink,
-                704,
-            );
-            emit_text_left_middle(
-                text_ctx,
-                scene,
-                "Library",
-                lib_r,
-                text_x,
-                14.0,
-                400,
-                None,
-                lib_text_ink,
-                704,
-            );
-
-            // Settings: "\u{E713}" (Setting)
-            emit_icon_centered(
-                text_ctx,
-                scene,
-                "\u{E713}",
-                Rect::new(icon_x - 8.0, settings_r.origin.y, 16.0, item_h),
-                16.0,
-                settings_ink,
-                704,
-            );
-            emit_text_left_middle(
-                text_ctx,
-                scene,
-                "Settings",
-                settings_r,
-                text_x,
-                14.0,
-                400,
-                None,
-                settings_ink,
-                704,
-            );
-
-            Vec2::new(panel_w, panel_h)
+            push(scene, fixture.output);
+            fixture.total_size
         }
         "ListView" => {
             // WinUI 3 ListView 集合视图规范：
@@ -2411,11 +2216,110 @@ fn emit_case(
 
             Vec2::new(flip_w, flip_h)
         }
+        "BreadcrumbBar" => {
+            let bar_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                320.0
+            };
+            let bar_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                32.0
+            };
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 2,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_path_fixture(
+                Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h),
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            Vec2::new(bar_w, bar_h)
+        }
+        "CommandBar" => {
+            let bar_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                320.0
+            };
+            let bar_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                48.0
+            };
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_command_bar_fixture(
+                Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h),
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            Vec2::new(bar_w, bar_h)
+        }
+        "MenuBar" => {
+            let bar_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                320.0
+            };
+            let bar_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                40.0
+            };
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_menu_bar_fixture(
+                Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h),
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
+            Vec2::new(bar_w, bar_h)
+        }
+        "PipsPager" => {
+            let bar_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                320.0
+            };
+            let bar_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                32.0
+            };
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: unbound_widgets::slot_fixture::CANONICAL_PIPS_SELECTED_INDEX,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_pips_pager_fixture(
+                Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h),
+                fixture_state,
+                700,
+            );
+            push(scene, fixture.output);
+            Vec2::new(bar_w, bar_h)
+        }
         "SelectorBar" => {
-            // WinUI 3 SelectorBar 选择条规范：
-            // 固有尺寸宽 320px、高 40px。
-            // 包含 3 个选项槽位（Day、Week、Month），首项处于选中态（SelectedItem = Items[0]）。
-            // 选中项左侧垂直居中绘制 3×16px、圆角 1.5px 的 Accent 胶囊条。
             let bar_w = if rect.width() > 0.0 {
                 rect.width()
             } else {
@@ -2427,8 +2331,13 @@ fn emit_case(
                 40.0
             };
             let mut out = WidgetOutput::default();
+            let frame_fill = if control.disabled {
+                Token::NONE
+            } else {
+                Token::CONTROL_FILL
+            };
             out.primitives
-                .push(primitive::surface(rect, 4.0, Token::CONTROL_FILL, 700));
+                .push(primitive::surface(rect, 4.0, frame_fill, 700));
 
             let fixture_state = unbound_widgets::slot_fixture::FixtureState {
                 disabled: control.disabled,
@@ -2446,6 +2355,32 @@ fn emit_case(
             out.payloads.extend(fixture_out.payloads);
             push(scene, out);
 
+            Vec2::new(bar_w, bar_h)
+        }
+        "TabView" => {
+            let bar_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                360.0
+            };
+            let bar_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                120.0
+            };
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_tab_view_fixture(
+                Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h),
+                fixture_state,
+                text_ctx,
+                700,
+            );
+            push(scene, fixture.output);
             Vec2::new(bar_w, bar_h)
         }
         "ContentDialog" => {
