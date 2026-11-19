@@ -16,6 +16,8 @@
 
 use rustc_hash::FxHashMap;
 
+use crate::settings::PhaseMode;
+
 /// 标识单个已光栅化的字形变体。
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -40,6 +42,10 @@ pub struct GlyphKey {
     /// 即使字形 ID 与字体相同，倾斜后的光栅结果也是与正体不同的图像。
     ///
     pub italic: u8,
+    /// Emoji 呈现模式（0: 彩色, 1: 单色）。
+    pub presentation: u8,
+    /// 调色板索引（用于彩色 Emoji 调色板区分）。
+    pub palette_index: u16,
 }
 
 impl GlyphKey {
@@ -48,7 +54,35 @@ impl GlyphKey {
         Self::styled(glyph_id, size, phase, sdf, face, 400, false)
     }
 
-    /// 完整缓存键，包含字重与斜体倾斜标记。
+    /// 完整缓存键，包含字重、斜体倾斜标记与亚像素相位档位掩码。
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn styled_with_mode(
+        glyph_id: u16,
+        size: f32,
+        phase: u8,
+        sdf: bool,
+        face: u64,
+        weight: u16,
+        italic: bool,
+        mode: PhaseMode,
+        presentation: u8,
+        palette_index: u16,
+    ) -> Self {
+        Self {
+            glyph_id,
+            phase: phase & mode.mask(),
+            sdf: u8::from(sdf),
+            size_q4: (size.max(0.0) * 4.0).round().clamp(0.0, 65535.0) as u16,
+            face: (face & 0xffff_ffff) as u32,
+            weight,
+            italic: u8::from(italic),
+            presentation,
+            palette_index,
+        }
+    }
+
+    /// 完整缓存键，包含字重与斜体倾斜标记（默认 8 相位）。
     #[must_use]
     pub fn styled(
         glyph_id: u16,
@@ -59,15 +93,18 @@ impl GlyphKey {
         weight: u16,
         italic: bool,
     ) -> Self {
-        Self {
+        Self::styled_with_mode(
             glyph_id,
-            phase: phase & 7,
-            sdf: u8::from(sdf),
-            size_q4: (size.max(0.0) * 4.0).round().clamp(0.0, 65535.0) as u16,
-            face: (face & 0xffff_ffff) as u32,
+            size,
+            phase,
+            sdf,
+            face,
             weight,
-            italic: u8::from(italic),
-        }
+            italic,
+            PhaseMode::Eight,
+            0,
+            0,
+        )
     }
 }
 
@@ -177,6 +214,12 @@ impl Atlas {
     #[must_use]
     pub fn layer_count(&self) -> u32 {
         self.pages.len() as u32
+    }
+
+    /// 当前已分配的图集页数（层数）。
+    #[must_use]
+    pub fn page_count(&self) -> usize {
+        self.pages.len()
     }
 
     #[must_use]
@@ -553,15 +596,38 @@ impl Atlas {
             * u64::from(self.config.page_size);
         used as f32 / total as f32
     }
+
+    /// 清空图集内已分配的页、架子与已分配槽位。
+    pub fn clear(&mut self) {
+        self.pages.clear();
+        self.slots.clear();
+        self.free.clear();
+        self.evictions = 0;
+    }
+}
+
+/// 图集生效状态只读报告。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct AtlasReport {
+    /// R8 覆盖率图集占用显存字节数。
+    pub r8_bytes: u64,
+    /// RGBA8 图集是否已开辟。
+    pub rgba_allocated: bool,
+    /// RGBA8 图集占用显存字节数。
+    pub rgba_bytes: u64,
+    /// 总显存字节数。
+    pub total_bytes: u64,
 }
 
 /// 渲染器绑定的一对图集（`Atlas_R8` + `Atlas_RGBA8`）。
 #[derive(Debug)]
 pub struct GlyphAtlas {
+    /// 图集初始配置（用于按需懒分配 RGBA 图集）。
+    config: AtlasConfig,
     /// 覆盖率图集，每纹素 1 字节；同一字形按 [`SUBPIXEL_PHASES`] 个亚像素相位各存一份。
     pub r8: Atlas,
-    /// 彩色 Emoji 与距离场，每纹素 4 字节。
-    pub rgba: Atlas,
+    /// 彩色 Emoji 与距离场，每纹素 4 字节；按需懒分配。
+    pub rgba: Option<Box<Atlas>>,
     /// 渲染器每帧递增的代际计数器。
     pub frame: u64,
 }
@@ -581,23 +647,59 @@ impl GlyphAtlas {
     #[must_use]
     pub fn new(config: AtlasConfig) -> Self {
         Self {
+            config,
             r8: Atlas::new(config, 1),
-            rgba: Atlas::new(config, 4),
+            rgba: None,
             frame: 0,
         }
+    }
+
+    /// 获取图集配置。
+    #[must_use]
+    pub fn config(&self) -> AtlasConfig {
+        self.config
+    }
+
+    /// 获取 RGBA 图集只读引用（若已分配）。
+    #[must_use]
+    pub fn rgba(&self) -> Option<&Atlas> {
+        self.rgba.as_deref()
+    }
+
+    /// 获取 RGBA 图集可变引用（若已分配）。
+    pub fn rgba_mut(&mut self) -> Option<&mut Atlas> {
+        self.rgba.as_deref_mut()
+    }
+
+    /// 是否已开辟 RGBA 图集。
+    #[must_use]
+    pub fn has_rgba(&self) -> bool {
+        self.rgba.is_some()
+    }
+
+    /// 按需初始化并返回 RGBA 图集的可变引用。
+    pub fn ensure_rgba(&mut self) -> &mut Atlas {
+        let config = self.config;
+        let frame = self.frame;
+        self.rgba.get_or_insert_with(|| {
+            let mut atlas = Box::new(Atlas::new(config, 4));
+            atlas.begin_frame(frame);
+            atlas
+        })
     }
 
     /// 开始新一帧；同时刷新淘汰时钟。
     pub fn begin_frame(&mut self, frame: u64) {
         self.frame = frame;
         self.r8.begin_frame(frame);
-        self.rgba.begin_frame(frame);
+        if let Some(rgba) = self.rgba.as_mut() {
+            rgba.begin_frame(frame);
+        }
     }
 
     /// 为指定亚像素相位下的字形分配覆盖率存储空间。
     ///
     /// 被淘汰字形的键会追加到 `evicted`，以便调用方清理自身缓存条目。
-    ///
     pub fn allocate_coverage(
         &mut self,
         key: GlyphKey,
@@ -608,16 +710,13 @@ impl GlyphAtlas {
         self.r8.allocate(key, w, h, evicted)
     }
 
-    /// 分配 RGBA 存储空间（Emoji 或距离场）。
+    /// 分配 RGBA 存储空间（彩色 Emoji）。
     ///
     /// 键中携带相位、字重与斜体倾斜标记，因为不同相位（或字重、倾斜度）
     /// 生成的光栅结果是完全不同的图像。遗漏其中任意一项都会导致两个变体
     /// 共享同一图集矩形，第二次上传将覆盖第一次的纹素。
     ///
-    ///
-    ///
     /// 被淘汰字形的键会追加到 `evicted`，以便调用方清理自身缓存条目。
-    ///
     pub fn allocate_color(
         &mut self,
         key: GlyphKey,
@@ -625,19 +724,92 @@ impl GlyphAtlas {
         h: u32,
         evicted: &mut Vec<GlyphKey>,
     ) -> Option<GlyphSlot> {
-        self.rgba.allocate(key, w, h, evicted)
+        self.ensure_rgba().allocate(key, w, h, evicted)
     }
 
-    /// 两个图集占用的总纹素内存。
+    /// 分配 SDF 欧氏距离场存储空间。
+    ///
+    /// 被淘汰字形的键会追加到 `evicted`，以便调用方清理自身缓存条目。
+    pub fn allocate_sdf(
+        &mut self,
+        key: GlyphKey,
+        w: u32,
+        h: u32,
+        evicted: &mut Vec<GlyphKey>,
+    ) -> Option<GlyphSlot> {
+        self.ensure_rgba().allocate(key, w, h, evicted)
+    }
+
+    /// 当前已分配的图集纹素内存字节数。未分配 RGBA 时仅计入 R8 显存大小。
+    #[must_use]
+    pub fn allocated_bytes(&self) -> u64 {
+        self.r8.memory_bytes() + self.rgba.as_ref().map_or(0, |a| a.memory_bytes())
+    }
+
+    /// 两个图集占用的总纹素内存。未分配 RGBA 时仅计入 R8 显存大小。
     #[must_use]
     pub fn memory_bytes(&self) -> u64 {
-        self.r8.memory_bytes() + self.rgba.memory_bytes()
+        self.allocated_bytes()
     }
 
     /// 渲染器必须绑定的纹理层数。
     #[must_use]
     pub fn layer_count(&self) -> u32 {
-        self.r8.layer_count().max(self.rgba.layer_count())
+        let rgba_layers = self.rgba.as_ref().map_or(0, |a| a.layer_count());
+        self.r8.layer_count().max(rgba_layers)
+    }
+
+    /// 两个图集已分配的总页数。
+    #[must_use]
+    pub fn page_count(&self) -> usize {
+        self.r8.page_count() + self.rgba.as_ref().map_or(0, |a| a.page_count())
+    }
+
+    /// 清空图集。
+    ///
+    /// 若 `self.rgba` 为 `Some(ref mut page)`，清空其条目；若为 `None` 则无操作。
+    pub fn clear(&mut self) {
+        self.r8.clear();
+        if let Some(rgba) = self.rgba.as_mut() {
+            rgba.clear();
+        }
+    }
+
+    /// 应用渲染设置，按需重置或保持图集配置。
+    pub fn apply_settings(&mut self, settings: &crate::settings::TextRenderSettings) {
+        if self.config.padding != settings.padding {
+            self.config.padding = settings.padding;
+            self.clear();
+        }
+    }
+
+    /// 应用新图集配置，并在配置变化时清空图集。
+    pub fn apply_config(&mut self, config: AtlasConfig) {
+        if self.config.page_size != config.page_size
+            || self.config.max_layers != config.max_layers
+            || self.config.padding != config.padding
+        {
+            self.config = config;
+            self.r8 = Atlas::new(config, 1);
+            self.r8.begin_frame(self.frame);
+            if let Some(rgba) = self.rgba.as_mut() {
+                **rgba = Atlas::new(config, 4);
+                rgba.begin_frame(self.frame);
+            }
+        }
+    }
+
+    /// 获取图集生效状态只读报告。
+    #[must_use]
+    pub fn report(&self) -> AtlasReport {
+        let r8_bytes = self.r8.memory_bytes();
+        let rgba_bytes = self.rgba.as_ref().map_or(0, |a| a.memory_bytes());
+        AtlasReport {
+            r8_bytes,
+            rgba_allocated: self.rgba.is_some(),
+            rgba_bytes,
+            total_bytes: r8_bytes + rgba_bytes,
+        }
     }
 }
 
@@ -957,7 +1129,7 @@ mod tests {
             .allocate_color(GlyphKey::new(3, 16.0, 0, true, 1), 32, 32, &mut evicted)
             .is_some());
         assert_eq!(atlas.r8.len(), 2);
-        assert_eq!(atlas.rgba.len(), 2);
+        assert_eq!(atlas.rgba.as_ref().map(|a| a.len()), Some(2));
         assert!(atlas.memory_bytes() > 0);
         assert!(atlas.layer_count() >= 1);
     }

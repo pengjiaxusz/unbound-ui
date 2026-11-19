@@ -357,11 +357,14 @@ impl GalleryApp {
         nav_spring.rest_threshold = 0.25;
         nav_spring.rest_velocity = 2.0;
         nav_spring.set_target(NAV_EXPANDED);
+        let labels = Labels::new();
+        let mut state = GalleryState::default();
+        state.text_render.report = labels.cache.report();
         Self {
-            state: GalleryState::default(),
+            state,
             mica: unbound_app::MicaBackdrop::new(),
             scene: gallery::Gallery::new(),
-            labels: Labels::new(),
+            labels,
             layout,
             focus_order: Vec::new(),
             regions: Vec::new(),
@@ -1170,10 +1173,11 @@ impl GalleryApp {
         // 导致满载的图集永远驱逐左上角相同的那几个字形。
         //
         labels.cache.begin_frame(atlas_clock);
-        // 外壳保留八种亚像素相位：字形的光栅按其*绝对*位置隐含的相位生成，
-        // 四边形则围绕它放置在像素网格上。强制相位 0 会使每个字形偏离其应处位置
-        // 最多达一像素，这正是字距抖动的原因。
-        labels.set_snap_phases(false);
+        // 应用运行期文本渲染设置，若产生位图级或排版级变更则按需清空缓存，并同步只读生效报告。
+        labels
+            .cache
+            .apply_settings(&state.text_render.settings, Some(&mut labels.engine));
+        state.text_render.report = labels.cache.report();
         let mut canvas = Canvas::new(
             scene,
             labels,
@@ -2419,6 +2423,336 @@ impl GalleryApp {
                             self.state.bump();
                         }
                         _ => {}
+                    }
+                }
+            }
+            PageId::TextRender => {
+                if card == 0 {
+                    // 折叠标题按钮点击：GROUP_PART_BASE .. GROUP_PART_BASE + 6
+                    if (pages::text_render::GROUP_PART_BASE
+                        ..pages::text_render::GROUP_PART_BASE
+                            + pages::text_render::TextConsoleGroup::ALL.len() as u16)
+                        .contains(&part)
+                    {
+                        let group_index = (part - pages::text_render::GROUP_PART_BASE) as usize;
+                        self.state.text_render.toggle_group(group_index);
+                        self.state.bump();
+                    } else if part == pages::text_render::STATUS_BAR_PART {
+                        self.state.text_render.toggle_fallback_details();
+                        self.state.bump();
+                    } else if part == pages::text_render::PART_PRESET_WINUI {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        self.state
+                            .text_render
+                            .apply_preset(pages::text_render::TextRenderPreset::WinuiNative, &caps);
+                        self.labels.cache.apply_settings(
+                            &self.state.text_render.settings,
+                            Some(&mut self.labels.engine),
+                        );
+                        self.state.text_render.report = self.labels.cache.report();
+                        self.state.bump();
+                    } else if part == pages::text_render::PART_PRESET_CROSS_PLATFORM {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        self.state.text_render.apply_preset(
+                            pages::text_render::TextRenderPreset::CrossPlatform,
+                            &caps,
+                        );
+                        self.labels.cache.apply_settings(
+                            &self.state.text_render.settings,
+                            Some(&mut self.labels.engine),
+                        );
+                        self.state.text_render.report = self.labels.cache.report();
+                        self.state.bump();
+                    } else if part == pages::text_render::PART_PRESET_PIXEL {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        self.state
+                            .text_render
+                            .apply_preset(pages::text_render::TextRenderPreset::Pixel, &caps);
+                        self.labels.cache.apply_settings(
+                            &self.state.text_render.settings,
+                            Some(&mut self.labels.engine),
+                        );
+                        self.state.text_render.report = self.labels.cache.report();
+                        self.state.bump();
+                    } else if part == pages::text_render::PART_PRESET_CUSTOM {
+                        self.state.text_render.mark_custom();
+                        self.state.text_render.persist();
+                        self.state.bump();
+                    } else if part == pages::text_render::PART_BACKEND_DW {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        let res = pages::text_render::resolve_feature(
+                            pages::text_render::TextFeatureKey::BackendDirectWrite,
+                            &caps,
+                            &self.state.text_render.settings,
+                        );
+                        if !res.disabled {
+                            self.state.text_render.settings.raster_backend =
+                                unbound_text::RasterBackend::DirectWrite;
+                            self.labels.cache.apply_settings(
+                                &self.state.text_render.settings,
+                                Some(&mut self.labels.engine),
+                            );
+                            self.state.text_render.report = self.labels.cache.report();
+                            self.state.bump();
+                        }
+                    } else if part == pages::text_render::PART_BACKEND_COSMIC {
+                        let caps = unbound_text::TextCapabilities::probe();
+                        let res = pages::text_render::resolve_feature(
+                            pages::text_render::TextFeatureKey::BackendCosmic,
+                            &caps,
+                            &self.state.text_render.settings,
+                        );
+                        if !res.disabled {
+                            self.state.text_render.settings.raster_backend =
+                                unbound_text::RasterBackend::Cosmic;
+                            self.labels.cache.apply_settings(
+                                &self.state.text_render.settings,
+                                Some(&mut self.labels.engine),
+                            );
+                            self.state.text_render.report = self.labels.cache.report();
+                            self.state.bump();
+                        }
+                    } else if (pages::text_render::FONT_FAMILY_PART_BASE
+                        ..pages::text_render::FONT_FAMILY_PART_BASE
+                            + pages::text_render::FONT_FAMILY_OPTIONS.len() as u16)
+                        .contains(&part)
+                    {
+                        let index = (part - pages::text_render::FONT_FAMILY_PART_BASE) as usize;
+                        let (_, fam) = pages::text_render::FONT_FAMILY_OPTIONS[index];
+                        self.state.text_render.set_family(fam.map(str::to_string));
+                        self.state.bump();
+                    } else if (pages::text_render::FONT_WEIGHT_PART_BASE
+                        ..pages::text_render::FONT_WEIGHT_PART_BASE
+                            + pages::text_render::FONT_WEIGHT_OPTIONS.len() as u16)
+                        .contains(&part)
+                    {
+                        let index = (part - pages::text_render::FONT_WEIGHT_PART_BASE) as usize;
+                        let (_, weight) = pages::text_render::FONT_WEIGHT_OPTIONS[index];
+                        self.state.text_render.set_weight(weight);
+                        self.state.bump();
+                    } else if (pages::text_render::FONT_SIZE_PART_BASE
+                        ..pages::text_render::FONT_SIZE_PART_BASE
+                            + pages::text_render::FONT_SIZE_OPTIONS.len() as u16)
+                        .contains(&part)
+                    {
+                        let index = (part - pages::text_render::FONT_SIZE_PART_BASE) as usize;
+                        let (_, size) = pages::text_render::FONT_SIZE_OPTIONS[index];
+                        self.state.text_render.set_size(size);
+                        self.state.bump();
+                    } else if part == pages::text_render::FONT_ITALIC_PART {
+                        self.state.text_render.toggle_italic();
+                        self.state.bump();
+                    } else if (pages::text_render::PHASE_PART_BASE
+                        ..pages::text_render::PHASE_PART_BASE + 3)
+                        .contains(&part)
+                    {
+                        let opt_idx = (part - pages::text_render::PHASE_PART_BASE) as usize;
+                        if let Some(opt) = pages::text_render::PHASE_OPTIONS.get(opt_idx) {
+                            let caps = unbound_text::TextCapabilities::probe();
+                            let res = pages::text_render::resolve_feature(
+                                opt.key,
+                                &caps,
+                                &self.state.text_render.settings,
+                            );
+                            if !res.disabled {
+                                self.state.text_render.settings.phase_mode = opt.mode;
+                                self.state.bump();
+                            }
+                        }
+                    } else {
+                        match part {
+                            pages::text_render::PART_DF_OFF => {
+                                self.state.text_render.settings.distance_field =
+                                    unbound_text::DistanceFieldMode::Off;
+                                self.state.text_render.settings.use_sdf = false;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_DF_SDF => {
+                                self.state.text_render.settings.distance_field =
+                                    unbound_text::DistanceFieldMode::Sdf;
+                                self.state.text_render.settings.use_sdf = true;
+                                self.state.text_render.settings.phase_mode =
+                                    unbound_text::PhaseMode::One;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_DF_MTSDF => {}
+                            pages::text_render::PART_COMP_SRGB => {
+                                self.state.text_render.settings.blend_space =
+                                    unbound_text::BlendSpace::Srgb;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_COMP_LINEAR => {
+                                self.state.text_render.settings.blend_space =
+                                    unbound_text::BlendSpace::Linear;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_COMP_LAYER_DIRECT => {
+                                self.state.text_render.settings.layer_mode =
+                                    unbound_text::LayerMode::Direct;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_COMP_LAYER_ISOLATED => {
+                                self.state.text_render.settings.layer_mode =
+                                    unbound_text::LayerMode::Isolated;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_SHAPER_COSMIC => {
+                                self.state.text_render.settings.shaper =
+                                    unbound_text::TextShaper::Cosmic;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_SHAPER_NATIVE => {
+                                // 禁用项，不生效
+                            }
+                            pages::text_render::PART_LINEBREAK_WORD => {
+                                self.state.text_render.settings.line_break =
+                                    unbound_text::LineBreakMode::Word;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINEBREAK_ANYWHERE => {
+                                self.state.text_render.settings.line_break =
+                                    unbound_text::LineBreakMode::Anywhere;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINEBREAK_NONE => {
+                                self.state.text_render.settings.line_break =
+                                    unbound_text::LineBreakMode::None;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_BIDI_ON => {
+                                self.state.text_render.settings.bidi = true;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_BIDI_OFF => {
+                                self.state.text_render.settings.bidi = false;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LIGATURES_ON => {
+                                self.state.text_render.settings.ligatures = true;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LIGATURES_OFF => {
+                                self.state.text_render.settings.ligatures = false;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LETTER_SPACING_0 => {
+                                self.state.text_render.settings.letter_spacing = 0.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LETTER_SPACING_1 => {
+                                self.state.text_render.settings.letter_spacing = 1.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LETTER_SPACING_2 => {
+                                self.state.text_render.settings.letter_spacing = 2.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINE_HEIGHT_AUTO => {
+                                self.state.text_render.settings.line_height = 0.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINE_HEIGHT_20 => {
+                                self.state.text_render.settings.line_height = 20.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINE_HEIGHT_28 => {
+                                self.state.text_render.settings.line_height = 28.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_EMOJI_PRES_COLOR => {
+                                let caps = unbound_text::TextCapabilities::probe();
+                                let res = pages::text_render::resolve_feature(
+                                    pages::text_render::TextFeatureKey::EmojiPresentationColor,
+                                    &caps,
+                                    &self.state.text_render.settings,
+                                );
+                                if !res.disabled {
+                                    self.state.text_render.settings.emoji_presentation =
+                                        unbound_text::EmojiPresentation::Color;
+                                    self.labels.cache.apply_settings(
+                                        &self.state.text_render.settings,
+                                        Some(&mut self.labels.engine),
+                                    );
+                                    self.state.text_render.report = self.labels.cache.report();
+                                    self.state.bump();
+                                }
+                            }
+                            pages::text_render::PART_EMOJI_PRES_MONO => {
+                                self.state.text_render.settings.emoji_presentation =
+                                    unbound_text::EmojiPresentation::Mono;
+                                self.labels.cache.apply_settings(
+                                    &self.state.text_render.settings,
+                                    Some(&mut self.labels.engine),
+                                );
+                                self.state.text_render.report = self.labels.cache.report();
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_EMOJI_BACKEND_FOLLOW => {
+                                self.state.text_render.settings.emoji_backend =
+                                    unbound_text::EmojiBackend::Follow;
+                                self.labels.cache.apply_settings(
+                                    &self.state.text_render.settings,
+                                    Some(&mut self.labels.engine),
+                                );
+                                self.state.text_render.report = self.labels.cache.report();
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_EMOJI_BACKEND_DW => {
+                                let caps = unbound_text::TextCapabilities::probe();
+                                let res = pages::text_render::resolve_feature(
+                                    pages::text_render::TextFeatureKey::EmojiBackendDirectWrite,
+                                    &caps,
+                                    &self.state.text_render.settings,
+                                );
+                                if !res.disabled {
+                                    self.state.text_render.settings.emoji_backend =
+                                        unbound_text::EmojiBackend::DirectWrite;
+                                    self.labels.cache.apply_settings(
+                                        &self.state.text_render.settings,
+                                        Some(&mut self.labels.engine),
+                                    );
+                                    self.state.text_render.report = self.labels.cache.report();
+                                    self.state.bump();
+                                }
+                            }
+                            pages::text_render::PART_EMOJI_BACKEND_COSMIC => {
+                                self.state.text_render.settings.emoji_backend =
+                                    unbound_text::EmojiBackend::Cosmic;
+                                self.labels.cache.apply_settings(
+                                    &self.state.text_render.settings,
+                                    Some(&mut self.labels.engine),
+                                );
+                                self.state.text_render.report = self.labels.cache.report();
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_EMOJI_SOURCE_SYSTEM => {
+                                self.state.text_render.settings.emoji_source =
+                                    unbound_text::EmojiSource::System;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_EMOJI_SOURCE_BUILTIN
+                            | pages::text_render::PART_EMOJI_SOURCE_GRID => {
+                                // 禁用项，不生效
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // 若改动的不是预设按钮和折叠标题/状态栏，确保标记为自定义并持久化
+                    let is_preset_or_meta = matches!(
+                        part,
+                        pages::text_render::STATUS_BAR_PART
+                            | pages::text_render::PART_PRESET_WINUI
+                            | pages::text_render::PART_PRESET_CROSS_PLATFORM
+                            | pages::text_render::PART_PRESET_PIXEL
+                            | pages::text_render::PART_PRESET_CUSTOM
+                    ) || (pages::text_render::GROUP_PART_BASE
+                        ..pages::text_render::GROUP_PART_BASE
+                            + pages::text_render::TextConsoleGroup::ALL.len() as u16)
+                        .contains(&part);
+                    if !is_preset_or_meta {
+                        self.state.text_render.mark_custom();
+                        self.state.text_render.persist();
                     }
                 }
             }
