@@ -19,7 +19,7 @@
 
 pub mod atlas;
 pub mod capabilities;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "backend-directwrite"))]
 mod directwrite;
 pub mod glyph;
 pub mod pinyin;

@@ -70,9 +70,9 @@ impl TextCapabilities {
     /// 探测当前平台与当前构建支持的能力。
     #[must_use]
     pub fn probe() -> Self {
-        #[cfg(windows)]
+        #[cfg(all(windows, feature = "backend-directwrite"))]
         let directwrite = {
-            // Windows 下探测 DirectWrite 是否可正常初始化
+            // Windows 下且启用 backend-directwrite 时探测 DirectWrite 是否可正常初始化
             let is_ok = crate::directwrite::DirectWriteRasterizer::new().is_some();
             if is_ok {
                 CapabilityStatus::Available
@@ -81,10 +81,10 @@ impl TextCapabilities {
             }
         };
 
-        #[cfg(not(windows))]
+        #[cfg(not(all(windows, feature = "backend-directwrite")))]
         let directwrite = CapabilityStatus::NotCompiled;
 
-        #[cfg(windows)]
+        #[cfg(all(windows, feature = "backend-directwrite"))]
         let (mono_directwrite, color_directwrite) = if directwrite.is_available() {
             (
                 CapabilityStatus::Available,
@@ -97,13 +97,18 @@ impl TextCapabilities {
             )
         };
 
-        #[cfg(not(windows))]
+        #[cfg(not(all(windows, feature = "backend-directwrite")))]
         let (mono_directwrite, color_directwrite) =
             (CapabilityStatus::NotCompiled, CapabilityStatus::NotCompiled);
 
+        #[cfg(feature = "backend-swash")]
+        let cosmic = CapabilityStatus::Available;
+        #[cfg(not(feature = "backend-swash"))]
+        let cosmic = CapabilityStatus::NotCompiled;
+
         Self {
             directwrite,
-            cosmic: CapabilityStatus::Available,
+            cosmic,
             sdf: CapabilityStatus::Available,
             mtsdf: CapabilityStatus::Unavailable("Pipeline not wired up"),
             subpixel_phase_8: CapabilityStatus::Available,

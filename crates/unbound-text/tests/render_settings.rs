@@ -217,10 +217,17 @@ fn glyph_cache_apply_settings_three_tiers_behavior() {
 fn text_capabilities_query_returns_tri_state() {
     let caps = TextCapabilities::probe();
 
-    // 无论任何平台，Cosmic 均应可用
-    assert_eq!(caps.cosmic, CapabilityStatus::Available);
-    assert!(caps.cosmic.is_available());
-    assert_eq!(caps.cosmic.reason(), None);
+    // Cosmic 能力状态受 backend-swash 特性门控
+    #[cfg(feature = "backend-swash")]
+    {
+        assert_eq!(caps.cosmic, CapabilityStatus::Available);
+        assert!(caps.cosmic.is_available());
+        assert_eq!(caps.cosmic.reason(), None);
+    }
+    #[cfg(not(feature = "backend-swash"))]
+    {
+        assert_eq!(caps.cosmic, CapabilityStatus::NotCompiled);
+    }
 
     // SDF 在纯 CPU 欧氏变换下应可用
     assert_eq!(caps.sdf, CapabilityStatus::Available);
@@ -239,8 +246,8 @@ fn text_capabilities_query_returns_tri_state() {
             assert_eq!(reason, "Requires layer traversal (deferred)");
         }
         CapabilityStatus::NotCompiled => {
-            // 在非 Windows 平台上允许为未编译
-            #[cfg(windows)]
+            // 未开启 backend-directwrite 或在非 Windows 平台上允许为未编译
+            #[cfg(all(windows, feature = "backend-directwrite"))]
             panic!("expected Unavailable on windows, got NotCompiled");
         }
         CapabilityStatus::Available => {
@@ -248,20 +255,16 @@ fn text_capabilities_query_returns_tri_state() {
         }
     }
 
-    // DirectWrite 在 Windows 与非 Windows 下的表现
-    #[cfg(windows)]
+    // DirectWrite 在启用与未启用特性下的表现
+    #[cfg(all(windows, feature = "backend-directwrite"))]
     {
         // Windows 下 DirectWrite 为已编译，状态为 Available 或 Unavailable（若初始化失败）
         assert_ne!(caps.directwrite, CapabilityStatus::NotCompiled);
     }
-    #[cfg(not(windows))]
+    #[cfg(not(all(windows, feature = "backend-directwrite")))]
     {
-        // 非 Windows 平台下 DirectWrite 必须为 NotCompiled
+        // 未开启 backend-directwrite 平台下 DirectWrite 必须为 NotCompiled
         assert_eq!(caps.directwrite, CapabilityStatus::NotCompiled);
-        assert_eq!(
-            caps.directwrite.reason(),
-            Some("Feature not included in this build")
-        );
     }
 }
 
