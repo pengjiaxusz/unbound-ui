@@ -1167,14 +1167,14 @@ internal static class Catalog
                     return true;
                 }
 
-                error = $"控件 {element.GetType().Name} 不支持 checked 状态";
+                error = $"Control {element.GetType().Name} does not support checked state";
                 return false;
 
             case "focused":
                 return true;
 
             default:
-                error = $"未知状态：{state}";
+                error = $"Unknown state: {state}";
                 return false;
         }
     }

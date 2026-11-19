@@ -7,11 +7,11 @@
 | 类别 | 文件路径 | 改动内容说明 |
 | --- | --- | --- |
 | **领域术语表** | `GLOSSARY.md` | 新增 6 个核心领域术语：**有效对比区、拼版图集、用例指纹、合成底板、基准对齐控件、自有独有控件** |
-| **架构决策记录** | `docs/adr/0008-batched-roi-parity-and-control-taxonomy.md` | 记录状态拼版分片切图、ROI 四重门禁、双端指纹缓存、合成底板预留与三类控件清单分级策略 |
+| **架构决策记录** | `docs/adr/0008-batched-roi-parity-and-control-taxonomy.md`<br>`docs/adr/0015-dynamic-multi-control-parity-pages.md` | 记录状态拼版分片切图、ROI 四重门禁、双端指纹缓存；ADR 0015 阐明瞬态采集载体与切片独立产物解耦、2D 流式装箱（FFDH）、用例指纹增量前置过滤，正式取代 ADR 0008 关于图集坐标漂移的历史顾虑 |
 | **系统架构文档** | `docs/architecture/03-扩展系统（subsystems）/无头验证与展台（verification-and-showcase）.md` | 按五段式无代码符号规范更新架构图与说明，纳入状态拼版与有效对比区像素差分闭环 |
 | **三合一控件清单** | `docs/winui3-control-inventory.md` | 完整梳理现有 **109 个目录组件**：包含 52 个 WinUI 3 基准对齐控件规范名映射、14 个 Community Toolkit 对齐控件、**18 个核心缺失必补（P0/P1）+ 6 个选补（P2）控件**，以及 **43 个 Unbound 自有独有控件** |
 | **Fluent 设计规律技能** | `.agents/skills/fluent-control-design/SKILL.md`<br>`.agents/skills/fluent-control-design/REFERENCE.md` | 沉淀 WinUI 3 的薄纱表面阶梯（sRGB vs 线性 alpha 反解）、微描边/底边强调线、尺寸圆角阶梯、四态单源状态机与弹簧规律，并提供自有独有控件迁移巡检表 |
-| **WinUI 3 参考截图宿主** | `tools/winui-reference/Catalog.cs`<br>`tools/winui-reference/CaptureWindow.xaml.cs`<br>`tools/winui-reference/README.md` | 支持按「控件 × 主题 × 后景」生成水平网格状态拼版（共享一次 350ms 动画收敛与单次 `RenderTargetBitmap`），自动按 `controlBounds + 16 DIP` 切出紧凑单图，支持 16 位 SHA-256 指纹增量缓存（`--no-cache` 强制刷新）与 `--backdrop solid|mica|mica_alt|acrylic|all` |
+| **WinUI 3 参考截图宿主** | `tools/winui-reference/Catalog.cs`<br>`tools/winui-reference/CaptureWindow.xaml.cs`<br>`tools/winui-reference/README.md` | 支持动态拼版页与 2D 流式装箱（FFDH 算法）、1920×1080 DIP 视口溢出安全分页与单窗口就地清空复用；装箱前用例指纹增量前置过滤与毫秒级全缓存跳过；自动按 `controlBounds + 16 DIP` 出血切出独立紧凑单图与 JSON；支持 `--save-sheet` 输出 `page_{index}_{theme}_{backdrop}_sheet.png` 总览大图及索引 JSON |
 | **Unbound 像素差分引擎** | `apps/showcase/src/parity.rs`<br>`apps/showcase/src/png_diff.rs`<br>`apps/showcase/src/pages/parity_report.rs`<br>`apps/showcase/src/main.rs` | 引入 `ParitySession` 全局复用单 Vulkan 设备/渲染器/字形图集实例；新增 FNV-1a 64-bit 控件源码与调色板哈希缓存；将色差统计裁剪至 `union(reference_bbox, ours_bbox, controlBounds) + 2px` 的有效对比区（ROI），并执行四重门禁（包围盒、固有尺寸、ROI mean/p95、显著色差像素占比 `≤ 2%`） |
 
 ---
@@ -142,28 +142,29 @@ pwsh -NoProfile -File .scratch/winui3-parity-system/publish-github-issues.ps1
 | 08 规范名收缩迁移 | 进行中 | 目录枚举与展台标题切换到 WinUI 3 官方名 |
 | 09 多后景矩阵解锁 | 阻塞 | `--backdrop all` 与四种合成底板已就绪，但 `unbound-backdrop` 目前只实现 Mica，`mica_alt` / `acrylic` 需外部管线完工 |
 | 10 Fluent 技能终版 + 43 控件巡检 | 阻塞 | 依赖 08/09；REFERENCE 已补试点实测表 |
-
-> 环境约束：当前会话机器没有 .NET SDK、Vulkan 参考截图与云母多材质管线，因此所有「实机像素差分」验收项只能完成代码与门禁层，不能伪造通过结论。拥有 GPU/.NET 的机器按第 2.2 节命令跑矩阵即可。
+| 74/75/76/77 动态多控件拼版页与用例装箱 | 已完成 | 瞬态采集载体与切片独立产物解耦（ADR 0015）；2D 流式装箱（FFDH）与 1920×1080 视口溢出安全分页；单窗口清空复用翻页；用例指纹增量前置过滤与全缓存毫秒级跳过；切片产物完全兼容下游 Rust 差分器与四重门禁 |
 
 ---
 
-## 6. 实机环境与当前基线（2026-11-18）
+## 6. 实机环境与当前基线（2026-11-19）
 
 ### 6.1 可复现命令
 
 本机默认 `dotnet` 只有运行时，**SDK 已安装到** `C:\Users\pengj\.dotnet-sdk`。参考宿主与差分的完整闭环：
 
 ```powershell
-# 1. 构建参考宿主（WinUI 3 / Windows App SDK 1.8）
-& "C:\Users\pengj\.dotnet-sdk\dotnet.exe" build -c Release -p:Platform=x64 `
-  # cwd: tools\winui-reference
+# 1. 设置 .NET 8 SDK 环境变量并构建参考宿主
+$env:DOTNET_ROOT = "C:\Users\pengj\.dotnet-sdk"
+$env:PATH = "C:\Users\pengj\.dotnet-sdk;" + $env:PATH
+dotnet build tools/winui-reference/WinUiReference.csproj -c Release
 
-# 2. 采集 57 个控件 × 状态 × 主题的参考截图
-.\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe --batch --out .\captures
+# 2. 批量动态拼版采集参考截图（全量控件流式装箱分页、动效收敛等待骤降 30 倍；命中缓存毫秒级跳过）
+Start-Process -FilePath "tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/WinUiReference.exe" `
+    -ArgumentList "--batch --out .\captures" -Wait
 
-# 3. 跑 ROI 四门禁差分
-just q-run cargo run -p showcase -- --parity-run `
-  --reference tools\winui-reference\captures --out target\parity
+# 3. 跑 ROI 四门禁离屏差分全链路回归
+cargo run -p showcase -- --parity-run `
+    --reference tools\winui-reference\captures --out target\parity
 ```
 
 产物：`target/parity/report.json`、`target/parity/ours/`、`target/parity/heat/`。参考截图目录已被 `.gitignore` 忽略。
