@@ -13,8 +13,7 @@ use unbound_input::PointerButton;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::win32_frame::{
-    clear_window_accent_tint, install_custom_frame, set_window_accent_tint, set_window_backdrop,
-    set_window_dark_mode, FrameHitMetrics, WindowBackdropMaterial,
+    install_custom_frame, FrameHitMetrics, WindowBackdropMaterial,
 };
 use unbound_platform::window::{
     ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
@@ -23,7 +22,7 @@ use unbound_platform::window::{
 use unbound_platform::Window;
 use unbound_theme::{ThemeSet, ThemeState};
 
-use crate::appearance::{AppearanceCaps, AppearanceDiff, BackdropChannel, WindowAppearance};
+use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
 use crate::{AppKey, AppRuntime, Application, ImeUpdate, Modifiers as AppModifiers, ThemeKind};
 
 /// 封装平台剪贴板的适配器。
@@ -224,10 +223,16 @@ impl<A: Application> WindowedRunner<A> {
         let ctx = runtime.context();
         let theme = ThemeState::new(ThemeSet::for_product(ctx.preset, ctx.accent), ctx.theme);
 
-        // 遵循 ADR 0001：合成方式在窗口生命周期内固定，由平台能力决定，不随模式切换改变。
-        // 若驱动支持预乘 alpha，则生命周期统一采用预乘合成；关闭或自绘路径通过外观意图
-        // 账本派生的 clear_alpha = 1.0 维持视觉不透明，确保运行期 set_backdrop 切换时无需重建交换链。
-        let surface_alpha = SurfaceAlpha::PreMultiplied;
+        // 根据 ADR 0014 与建窗契约：建窗计算 surface_alpha 时，只有当配置中显式意图开启原生后景
+        // （config.backdrop 存在且非 WindowBackdropMaterial::None）时，才强制覆盖为 PreMultiplied；
+        // 当意图关闭（None 或 Some(WindowBackdropMaterial::None)）时，严格保持 config.surface_alpha（默认 Opaque），
+        // 保证改造前后逐字节一致，不破坏原有不透明交换链。
+        let surface_alpha = match config.backdrop {
+            Some(material) if material != WindowBackdropMaterial::None => {
+                SurfaceAlpha::PreMultiplied
+            }
+            _ => config.surface_alpha,
+        };
 
         Self {
             runtime,
@@ -351,30 +356,11 @@ impl<A: Application> WindowedRunner<A> {
 
     /// 执行外观变更 Diff。
     fn apply_appearance_diff(&mut self, hwnd: isize, diff: AppearanceDiff) {
-        if let Some(channel) = diff.channel {
-            match channel {
-                BackdropChannel::Dwm(material) => {
-                    let _ = clear_window_accent_tint(hwnd);
-                    let _ = set_window_backdrop(hwnd, material);
-                }
-                BackdropChannel::AccentTint(argb) => {
-                    let _ = set_window_backdrop(hwnd, WindowBackdropMaterial::None);
-                    let _ = set_window_accent_tint(hwnd, argb);
-                }
-                BackdropChannel::Off => {
-                    let _ = clear_window_accent_tint(hwnd);
-                    let _ = set_window_backdrop(hwnd, WindowBackdropMaterial::None);
-                }
-            }
-        }
-        if let Some(dark) = diff.dark_mode {
-            set_window_dark_mode(hwnd, dark);
-        }
-        if let Some(lock_mica) = diff.lock_mica {
-            if let Some(metrics) = &self.frame_metrics {
-                metrics.set_lock_mica_active(lock_mica);
-            }
-        }
+        crate::appearance::apply_appearance_diff_to_platform(
+            &diff,
+            hwnd,
+            self.frame_metrics.as_deref(),
+        );
         if let Some(clear_alpha) = diff.clear_alpha {
             if let Some(renderer) = &mut self.renderer {
                 renderer.set_clear_alpha(clear_alpha);

@@ -20,12 +20,27 @@ use unbound_theme::ThemeKind;
 const CAPS_WIN11_NATIVE_OK: AppearanceCaps = AppearanceCaps::new(Some(22621), true, true);
 
 #[test]
-fn default_config_closed_produces_no_writes() {
+fn default_config_closed_produces_initial_dark_mode_and_no_backdrop_channel() {
     let mut appearance = WindowAppearance::new();
     let diff = appearance.set(None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
 
+    // 未开启后景材质的普通窗口：首帧正常广播深色模式，但不产生任何后景通道写入或失焦锁定
     assert_eq!(
         diff,
+        AppearanceDiff {
+            channel: None,
+            dark_mode: Some(true),
+            lock_mica: None,
+            clear_alpha: None,
+        }
+    );
+    assert!(diff.has_changes());
+    assert_eq!(appearance.applied_clear_alpha(), 1.0);
+
+    // 第二次同步（主题未变）：完全去重，无任何系统调用
+    let d2 = appearance.set(None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert_eq!(
+        d2,
         AppearanceDiff {
             channel: None,
             dark_mode: None,
@@ -33,8 +48,7 @@ fn default_config_closed_produces_no_writes() {
             clear_alpha: None,
         }
     );
-    assert!(!diff.has_changes());
-    assert_eq!(appearance.applied_clear_alpha(), 1.0);
+    assert!(!d2.has_changes());
 }
 
 #[test]
@@ -101,13 +115,21 @@ fn non_premultiplied_surface_clamps_clear_alpha_and_no_material() {
         diff,
         AppearanceDiff {
             channel: None,
-            dark_mode: None,
+            dark_mode: Some(true),
             lock_mica: None,
             clear_alpha: None,
         }
     );
-    assert!(!diff.has_changes());
+    assert!(diff.has_changes());
     assert_eq!(appearance.applied_clear_alpha(), 1.0);
+
+    // 第二次同步：完全去重
+    let d2 = appearance.set(
+        Some(WindowBackdropMaterial::Mica),
+        caps_non_premultiplied,
+        ThemeKind::Dark,
+    );
+    assert!(!d2.has_changes());
 }
 
 #[test]
@@ -125,13 +147,21 @@ fn insufficient_build_number_produces_no_material() {
         diff,
         AppearanceDiff {
             channel: None,
-            dark_mode: None,
+            dark_mode: Some(true),
             lock_mica: None,
             clear_alpha: None,
         }
     );
-    assert!(!diff.has_changes());
+    assert!(diff.has_changes());
     assert_eq!(appearance.applied_clear_alpha(), 1.0);
+
+    // 第二次同步：完全去重
+    let d2 = appearance.set(
+        Some(WindowBackdropMaterial::Mica),
+        caps_win10,
+        ThemeKind::Dark,
+    );
+    assert!(!d2.has_changes());
 }
 
 #[test]
@@ -241,6 +271,7 @@ fn explicit_host_clear_alpha_overridden_when_intent_active() {
 
     let d1 = appearance.set(None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
     assert_eq!(d1.clear_alpha, Some(0.5));
+    assert_eq!(d1.dark_mode, Some(true));
     assert_eq!(appearance.applied_clear_alpha(), 0.5);
 
     let d2 = appearance.set(
@@ -249,10 +280,12 @@ fn explicit_host_clear_alpha_overridden_when_intent_active() {
         ThemeKind::Dark,
     );
     assert_eq!(d2.clear_alpha, Some(0.0));
+    assert_eq!(d2.dark_mode, None);
     assert_eq!(appearance.applied_clear_alpha(), 0.0);
 
     let d3 = appearance.set(None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
     assert_eq!(d3.clear_alpha, Some(0.5));
+    assert_eq!(d3.dark_mode, None);
     assert_eq!(appearance.applied_clear_alpha(), 0.5);
 }
 
@@ -269,12 +302,12 @@ fn none_variant_same_as_none_option() {
         diff,
         AppearanceDiff {
             channel: None,
-            dark_mode: None,
+            dark_mode: Some(true),
             lock_mica: None,
             clear_alpha: None,
         }
     );
-    assert!(!diff.has_changes());
+    assert_eq!(appearance.applied_clear_alpha(), 1.0);
 }
 
 #[test]
@@ -410,8 +443,13 @@ fn accent_policy_unavailable_does_not_fallback_to_dwm_acrylic() {
 
     // 当 accent policy 导出不可用时，自定义色调按不可用处理，绝不回退到 DWM 亚克力
     let diff = appearance.set_accent_tint(tint_argb, caps_no_accent, ThemeKind::Dark);
-    assert!(!diff.has_changes());
+    assert_eq!(diff.channel, None);
+    assert_eq!(diff.dark_mode, Some(true));
     assert_eq!(appearance.applied_clear_alpha(), 1.0);
+
+    // 第二次同步：完全去重
+    let d0 = appearance.set_accent_tint(tint_argb, caps_no_accent, ThemeKind::Dark);
+    assert!(!d0.has_changes());
 
     // 从云母开启态切到不可用的自定义色调：应直接关闭后景，绝不回退到 DWM 亚克力
     let d1 = appearance.set(
@@ -503,51 +541,29 @@ impl unbound_app::Application for DummyApp {
 
 #[test]
 fn app_runtime_backdrop_apis_roundtrip() {
-    use unbound_app::{AppRuntime, AppearanceIntent};
+    use unbound_app::AppRuntime;
     use unbound_math::Vec2;
 
     let mut runtime = AppRuntime::new(DummyApp, Vec2::new(800.0, 600.0));
     assert_eq!(runtime.backdrop(), None);
-    assert_eq!(runtime.backdrop_intent(), AppearanceIntent::Material(None));
 
     runtime.set_backdrop(Some(WindowBackdropMaterial::Mica));
     assert_eq!(runtime.backdrop(), Some(WindowBackdropMaterial::Mica));
-    assert_eq!(
-        runtime.backdrop_intent(),
-        AppearanceIntent::Material(Some(WindowBackdropMaterial::Mica))
-    );
 
     runtime.set_backdrop(Some(WindowBackdropMaterial::Acrylic));
     assert_eq!(runtime.backdrop(), Some(WindowBackdropMaterial::Acrylic));
 
     runtime.set_backdrop(None);
     assert_eq!(runtime.backdrop(), None);
-    assert_eq!(runtime.backdrop_intent(), AppearanceIntent::Material(None));
-
-    let tint = 0xCCD07800;
-    runtime.set_accent_tint(tint);
-    assert_eq!(runtime.backdrop(), None);
-    assert_eq!(
-        runtime.backdrop_intent(),
-        AppearanceIntent::AccentTint(tint)
-    );
 
     runtime.set_backdrop(Some(WindowBackdropMaterial::System));
     assert_eq!(runtime.backdrop(), Some(WindowBackdropMaterial::System));
 
-    let sel = unbound_backdrop::BackdropSelection::new(
-        unbound_backdrop::MaterialKind::MicaAlt,
-        unbound_backdrop::BackdropSource::Native,
-    );
-    runtime.set_backdrop_selection(sel);
-    assert_eq!(runtime.backdrop(), None);
-    assert_eq!(
-        runtime.backdrop_intent(),
-        AppearanceIntent::Selection {
-            selection: sel,
-            accent_tint: None,
-        }
-    );
+    runtime.set_backdrop(Some(WindowBackdropMaterial::Tabbed));
+    assert_eq!(runtime.backdrop(), Some(WindowBackdropMaterial::Tabbed));
+
+    runtime.set_backdrop(Some(WindowBackdropMaterial::None));
+    assert_eq!(runtime.backdrop(), Some(WindowBackdropMaterial::None));
 }
 
 #[test]
@@ -642,4 +658,53 @@ fn selection_intent_accent_tint_roundtrip() {
 
     let d2 = appearance.set_selection(sel, Some(tint), CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
     assert!(!d2.has_changes());
+}
+
+#[test]
+fn normal_window_without_backdrop_synchronizes_dark_mode_and_theme_flips() {
+    let mut appearance = WindowAppearance::new();
+
+    // 1. 普通窗口（无后景）建窗首帧：深色模式正常下发
+    let d1 = appearance.set(None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert_eq!(d1.channel, None);
+    assert_eq!(d1.dark_mode, Some(true));
+    assert_eq!(d1.lock_mica, None);
+    assert_eq!(d1.clear_alpha, None);
+
+    // 2. 相同主题再次帧同步：去重为 None
+    let d2 = appearance.set(None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert_eq!(d2.dark_mode, None);
+    assert!(!d2.has_changes());
+
+    // 3. 宿主或系统切换为浅色主题：广播 dark_mode = Some(false)
+    let d3 = appearance.set(None, CAPS_WIN11_NATIVE_OK, ThemeKind::Light);
+    assert_eq!(d3.channel, None);
+    assert_eq!(d3.dark_mode, Some(false));
+
+    // 4. 再次切回深色主题：广播 dark_mode = Some(true)
+    let d4 = appearance.set(None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert_eq!(d4.channel, None);
+    assert_eq!(d4.dark_mode, Some(true));
+}
+
+#[test]
+fn apply_appearance_diff_to_platform_safe_with_null_hwnd() {
+    use unbound_app::apply_appearance_diff_to_platform;
+
+    let diff = AppearanceDiff {
+        channel: Some(BackdropChannel::Dwm(WindowBackdropMaterial::Mica)),
+        dark_mode: Some(true),
+        lock_mica: Some(true),
+        clear_alpha: Some(0.0),
+    };
+    // 在无真实窗口句柄（hwnd = 0）与无 metrics 下安全执行，不发生 panic
+    apply_appearance_diff_to_platform(&diff, 0, None);
+
+    let diff_off = AppearanceDiff {
+        channel: Some(BackdropChannel::Off),
+        dark_mode: Some(false),
+        lock_mica: Some(false),
+        clear_alpha: Some(1.0),
+    };
+    apply_appearance_diff_to_platform(&diff_off, 0, None);
 }
