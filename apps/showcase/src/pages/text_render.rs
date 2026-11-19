@@ -2177,8 +2177,8 @@ fn draw_status_bar(
         );
     }
 
-    // 状态栏语义与键盘可达（Button Role / 可聚焦），点击展开详细回退诊断
-    // 已知差异必须进摘要：面板不能把「Mono」显示成两个后端等价的设置。
+    // 状态栏语义与键盘可达（Button Role / 可聚焦），点击展开详细回退诊断。
+    // 已知差异一旦存在就必须进摘要：面板不能把设置说成完全按字面生效。
     let deviation_suffix = report
         .known_deviation
         .as_ref()

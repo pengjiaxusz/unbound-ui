@@ -997,30 +997,24 @@ fn emoji_group_controls_interaction_and_status_sync() {
         app.state.text_render.report.emoji_path
     );
 
-    // Mono 的已知差异必须同时出现在报告与状态栏语义里：两个后端的 Mono
-    // 不是同一张图，面板不能假装一致。
-    let deviation = app
-        .state
-        .text_render
-        .report
-        .known_deviation
-        .clone()
-        .expect("Mono must expose the known deviation");
+    // `Mono` 在两个后端都是基字形剪影，报告里不该再有跨后端差异；
+    // 状态栏也就不该挂「Known deviation」。唯一的偏差来源是「本构建不含
+    // swash 且显式要 Swash 回退」，本页没有那个组合的控件。
+    assert_eq!(
+        app.state.text_render.report.known_deviation, None,
+        "Mono must not carry a cross-backend deviation anymore"
+    );
     let status_label = &app
         .semantics
         .get(target::id(Target::Demo(page_index, 0, STATUS_BAR_PART)))
         .expect("status bar a11y node exists")
         .label;
     assert!(
-        status_label.to_lowercase().contains("known deviation"),
-        "status bar must surface the known deviation, got: {status_label}"
-    );
-    assert!(
-        status_label.contains(&deviation),
-        "status bar must repeat the report's deviation text, got: {status_label}"
+        !status_label.to_lowercase().contains("known deviation"),
+        "status bar must not invent a deviation, got: {status_label}"
     );
 
-    // 5. 切回 Color 后差异消失（彩色路径没有跨后端差异）
+    // 5. 切回 Color 后同样没有差异（彩色路径没有跨后端差异）
     app.click_node(target::id(Target::Demo(
         page_index,
         0,
