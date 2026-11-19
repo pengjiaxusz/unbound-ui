@@ -106,6 +106,38 @@ pub enum EmojiBackend {
     Cosmic,
 }
 
+/// 距离场生成模式。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum DistanceFieldMode {
+    /// 关闭距离场（普通覆盖率位图）。
+    #[default]
+    Off,
+    /// 单通道欧氏距离场（SDF）。
+    Sdf,
+    /// 多通道距离场（MTSDF/MSDF，管线未接线）。
+    Mtsdf,
+}
+
+/// 文本混合色彩空间。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum BlendSpace {
+    /// sRGB 色彩空间混合。
+    #[default]
+    Srgb,
+    /// 物理线性色彩空间混合。
+    Linear,
+}
+
+/// 文本合成图层模式。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum LayerMode {
+    /// 直接绘制到当前目标表面（单层合并）。
+    #[default]
+    Direct,
+    /// 独立透明中间层（离屏图层隔离后合成）。
+    Isolated,
+}
+
 /// 文本渲染全局与预览设置纯值结构。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TextRenderSettings {
@@ -138,6 +170,8 @@ pub struct TextRenderSettings {
     pub raster_backend: RasterBackend,
     /// 亚像素相位档位（8 / 4 / 1）。
     pub phase_mode: PhaseMode,
+    /// 距离场生成模式（关 / SDF / MTSDF）。
+    pub distance_field: DistanceFieldMode,
     /// 是否输出欧氏距离场（SDF）而非单通道覆盖率。
     pub use_sdf: bool,
     /// 距离场扩散范围（单位：纹素）。
@@ -148,6 +182,12 @@ pub struct TextRenderSettings {
     pub emoji_presentation: EmojiPresentation,
     /// Emoji 光栅化后端（跟随正文 / DirectWrite / Cosmic）。
     pub emoji_backend: EmojiBackend,
+
+    // === 合成组 (Composition Group) ===
+    /// 混合色彩空间（sRGB / 线性）。
+    pub blend_space: BlendSpace,
+    /// 图层模式（直接绘制 / 独立图层）。
+    pub layer_mode: LayerMode,
 }
 
 impl Default for TextRenderSettings {
@@ -165,11 +205,14 @@ impl Default for TextRenderSettings {
             line_height: 0.0,
             raster_backend: RasterBackend::default(),
             phase_mode: PhaseMode::default(),
+            distance_field: DistanceFieldMode::default(),
             use_sdf: false,
             sdf_spread: 4.0,
             padding: 2,
             emoji_presentation: EmojiPresentation::default(),
             emoji_backend: EmojiBackend::default(),
+            blend_space: BlendSpace::default(),
+            layer_mode: LayerMode::default(),
         }
     }
 }
@@ -188,17 +231,33 @@ impl PartialEq for TextRenderSettings {
             && self.line_height.to_bits() == other.line_height.to_bits()
             && self.raster_backend == other.raster_backend
             && self.phase_mode == other.phase_mode
+            && self.distance_field == other.distance_field
             && self.use_sdf == other.use_sdf
             && self.sdf_spread.to_bits() == other.sdf_spread.to_bits()
             && self.padding == other.padding
             && self.emoji_presentation == other.emoji_presentation
             && self.emoji_backend == other.emoji_backend
+            && self.blend_space == other.blend_space
+            && self.layer_mode == other.layer_mode
     }
 }
 
 impl Eq for TextRenderSettings {}
 
 impl TextRenderSettings {
+    /// 应用文本渲染互斥与约束规则。
+    ///
+    /// 规则 1：距离场开启（SDF）时，相位档位强制锁定为 1（整像素对齐）。
+    pub fn enforce_constraints(&mut self) {
+        if self.use_sdf || self.distance_field == DistanceFieldMode::Sdf {
+            self.use_sdf = true;
+            self.distance_field = DistanceFieldMode::Sdf;
+            self.phase_mode = PhaseMode::One;
+        } else if self.distance_field == DistanceFieldMode::Off {
+            self.use_sdf = false;
+        }
+    }
+
     /// 是否强制整像素对齐。
     #[must_use]
     pub fn snap_phases(&self) -> bool {
@@ -214,6 +273,7 @@ impl TextRenderSettings {
         // 首先比对位图内容档：若有任何一项变更，必须整表失效
         if self.raster_backend != other.raster_backend
             || self.phase_mode != other.phase_mode
+            || self.distance_field != other.distance_field
             || self.use_sdf != other.use_sdf
             || self.sdf_spread.to_bits() != other.sdf_spread.to_bits()
             || self.padding != other.padding
