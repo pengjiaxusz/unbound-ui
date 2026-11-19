@@ -57,6 +57,11 @@ pub const FONT_SIZE_OPTIONS: &[(&str, f32)] = &[
 /// 相位档位选项部件起始编号（8 / 4 / 1）。
 pub const PHASE_PART_BASE: u16 = 30;
 
+/// DirectWrite 光栅化后端切换部件编号。
+pub const PART_BACKEND_DW: u16 = 40;
+/// Cosmic (Swash) 光栅化后端切换部件编号。
+pub const PART_BACKEND_COSMIC: u16 = 41;
+
 /// 相位档位定义。
 pub struct PhaseOptionDef {
     pub mode: unbound_text::PhaseMode,
@@ -605,7 +610,7 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
         let content_h = if is_expanded {
             match group {
                 TextConsoleGroup::Font => 78.0,
-                TextConsoleGroup::Pixel => 64.0,
+                TextConsoleGroup::Pixel => 58.0,
                 TextConsoleGroup::DistanceField => 58.0,
                 TextConsoleGroup::Composition => 68.0,
                 _ => 22.0,
@@ -850,52 +855,131 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
     );
 }
 
-/// 绘制像素与相位组的内容：亚像素相位切换控件（8 / 4 / 1）。
+/// 绘制像素与相位组的内容：光栅器后端（DirectWrite / Cosmic）与亚像素相位（8 / 4 / 1）。
 fn draw_pixel_group_content(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
     let palette = *ctx.canvas.palette;
-    let label_h = 16.0;
     let padding = 6.0;
+    let caps = TextCapabilities::probe();
 
-    // 标题提示
-    ctx.canvas.text(
-        "SUBPIXEL PHASE QUANTIZATION",
-        Rect::new(
-            rect.origin.x + padding,
-            rect.origin.y + 4.0,
-            rect.size.x - padding * 2.0,
-            label_h,
-        ),
-        8.5,
-        palette.text_muted,
-        AlignX::Start,
-        AlignY::Center,
+    // 1. 光栅化后端切换（DirectWrite / Cosmic）
+    let btn_gap = 6.0;
+    let btn_w = (rect.size.x - padding * 2.0 - btn_gap) * 0.5;
+    let btn_h = 22.0;
+    let btn_y = rect.origin.y + 4.0;
+
+    let dw_rect = Rect::new(rect.origin.x + padding, btn_y, btn_w, btn_h);
+    let cosmic_rect = Rect::new(
+        rect.origin.x + padding + btn_w + btn_gap,
+        btn_y,
+        btn_w,
+        btn_h,
     );
 
-    // 三个选项并排排列
-    let button_top = rect.origin.y + 4.0 + label_h + 2.0;
-    let button_h = 32.0;
-    let gap = 4.0;
-    let item_w = (rect.size.x - padding * 2.0 - gap * 2.0) / 3.0;
+    let dw_res = resolve_feature(TextFeatureKey::BackendDirectWrite, &caps, &state.settings);
+    let cosmic_res = resolve_feature(TextFeatureKey::BackendCosmic, &caps, &state.settings);
+    let dw_selected = state.settings.raster_backend == RasterBackend::DirectWrite;
+    let cosmic_selected = state.settings.raster_backend == RasterBackend::Cosmic;
 
-    let caps = TextCapabilities::probe();
+    // DirectWrite 按钮绘制
+    let (dw_bg, dw_border, dw_text_color) = if dw_res.disabled {
+        (
+            palette.disabled_fill,
+            palette.card_border,
+            palette.text_muted,
+        )
+    } else if dw_selected {
+        (palette.primary, palette.primary, palette.on_primary)
+    } else {
+        (palette.card_bg, palette.card_border, palette.text)
+    };
+    ctx.canvas.rect(dw_rect, 3.0, dw_bg, dw_border, 1.0, 0.0);
+    let dw_btn_title = if dw_selected {
+        "[•] DirectWrite"
+    } else {
+        "DirectWrite"
+    };
+    ctx.canvas.text(
+        dw_btn_title,
+        dw_rect,
+        10.5,
+        dw_text_color,
+        AlignX::Center,
+        AlignY::Center,
+    );
+    let a11y_dw = format!(
+        "Backend: DirectWrite{}{}",
+        if dw_selected { " (Selected)" } else { "" },
+        dw_res.reason.map_or(String::new(), |r| format!(" - {}", r))
+    );
+    ctx.control(
+        PART_BACKEND_DW,
+        dw_rect,
+        Role::RadioButton,
+        &a11y_dw,
+        dw_selected,
+    );
+
+    // Cosmic 按钮绘制
+    let (cosmic_bg, cosmic_border, cosmic_text_color) = if cosmic_res.disabled {
+        (
+            palette.disabled_fill,
+            palette.card_border,
+            palette.text_muted,
+        )
+    } else if cosmic_selected {
+        (palette.primary, palette.primary, palette.on_primary)
+    } else {
+        (palette.card_bg, palette.card_border, palette.text)
+    };
+    ctx.canvas
+        .rect(cosmic_rect, 3.0, cosmic_bg, cosmic_border, 1.0, 0.0);
+    let cosmic_btn_title = if cosmic_selected {
+        "[•] Cosmic"
+    } else {
+        "Cosmic"
+    };
+    ctx.canvas.text(
+        cosmic_btn_title,
+        cosmic_rect,
+        10.5,
+        cosmic_text_color,
+        AlignX::Center,
+        AlignY::Center,
+    );
+    let a11y_cosmic = format!(
+        "Backend: Cosmic Swash{}{}",
+        if cosmic_selected { " (Selected)" } else { "" },
+        cosmic_res
+            .reason
+            .map_or(String::new(), |r| format!(" - {}", r))
+    );
+    ctx.control(
+        PART_BACKEND_COSMIC,
+        cosmic_rect,
+        Role::RadioButton,
+        &a11y_cosmic,
+        cosmic_selected,
+    );
+
+    // 2. 亚像素相位选项（8 / 4 / 1）
+    let phase_btn_top = btn_y + btn_h + 4.0;
+    let phase_btn_h = 22.0;
+    let phase_gap = 4.0;
+    let phase_item_w = (rect.size.x - padding * 2.0 - phase_gap * 2.0) / 3.0;
 
     for (i, opt) in PHASE_OPTIONS.iter().enumerate() {
         let part = PHASE_PART_BASE + i as u16;
         let opt_rect = Rect::new(
-            rect.origin.x + padding + i as f32 * (item_w + gap),
-            button_top,
-            item_w,
-            button_h,
+            rect.origin.x + padding + i as f32 * (phase_item_w + phase_gap),
+            phase_btn_top,
+            phase_item_w,
+            phase_btn_h,
         );
 
         let res = resolve_feature(opt.key, &caps, &state.settings);
         let selected = state.settings.phase_mode == opt.mode;
         let disabled = res.disabled;
 
-        // 根据三态呈现样式：
-        // 选中：高亮主色填充；
-        // 禁用：弱化填充与文字；
-        // 正常可用：表面背景与卡片边框。
         let (bg, border, text_color) = if disabled {
             (
                 palette.disabled_fill,
@@ -913,7 +997,7 @@ fn draw_pixel_group_content(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextR
         ctx.canvas.text(
             opt.label,
             opt_rect,
-            10.5,
+            10.0,
             text_color,
             AlignX::Center,
             AlignY::Center,
@@ -1331,4 +1415,41 @@ fn draw_status_bar(
         false,
         fallback_expanded,
     );
+
+    // 若展开回退详情，在状态栏上方绘制诊断横幅
+    if fallback_expanded {
+        let details_h = 24.0;
+        let details_rect = Rect::new(
+            rect.origin.x,
+            rect.origin.y - details_h - 4.0,
+            rect.size.x,
+            details_h,
+        );
+        ctx.canvas.rect(
+            details_rect,
+            4.0,
+            palette.card_bg,
+            palette.primary,
+            1.0,
+            0.0,
+        );
+        let detail_text = if let Some(ref reason) = report.last_fallback_reason {
+            format!("Recent Fallback Diagnostic: {}", reason)
+        } else {
+            "No fallback recorded in current session".to_string()
+        };
+        ctx.canvas.text(
+            &detail_text,
+            Rect::new(
+                details_rect.origin.x + 8.0,
+                details_rect.origin.y,
+                details_rect.size.x - 16.0,
+                details_h,
+            ),
+            10.0,
+            palette.primary,
+            AlignX::Start,
+            AlignY::Center,
+        );
+    }
 }
