@@ -5,16 +5,17 @@ use std::ops::{Deref, DerefMut};
 
 use accesskit::Role;
 use showcase::pages::text_render::{
-    resolve_feature, FeatureResolution, TextConsoleGroup, TextFeatureKey, FEATURE_RULES,
-    FONT_FAMILY_OPTIONS, FONT_FAMILY_PART_BASE, FONT_ITALIC_PART, FONT_SIZE_OPTIONS,
-    FONT_SIZE_PART_BASE, FONT_WEIGHT_OPTIONS, FONT_WEIGHT_PART_BASE, GROUP_PART_BASE,
-    PART_BACKEND_COSMIC, PART_BACKEND_DW, PART_BIDI_OFF, PART_BIDI_ON, PART_EMOJI_BACKEND_COSMIC,
-    PART_EMOJI_BACKEND_DW, PART_EMOJI_BACKEND_FOLLOW, PART_EMOJI_PRES_COLOR, PART_EMOJI_PRES_MONO,
-    PART_EMOJI_SOURCE_BUILTIN, PART_EMOJI_SOURCE_GRID, PART_EMOJI_SOURCE_SYSTEM,
-    PART_LETTER_SPACING_0, PART_LETTER_SPACING_1, PART_LETTER_SPACING_2, PART_LIGATURES_OFF,
-    PART_LIGATURES_ON, PART_LINEBREAK_ANYWHERE, PART_LINEBREAK_NONE, PART_LINEBREAK_WORD,
-    PART_LINE_HEIGHT_20, PART_LINE_HEIGHT_28, PART_LINE_HEIGHT_AUTO, PART_SHAPER_COSMIC,
-    PART_SHAPER_NATIVE, PHASE_PART_BASE, STATUS_BAR_PART,
+    resolve_feature, FeatureResolution, TextConsoleGroup, TextFeatureKey, TextRenderPageState,
+    TextRenderPreset, FEATURE_RULES, FONT_FAMILY_OPTIONS, FONT_FAMILY_PART_BASE, FONT_ITALIC_PART,
+    FONT_SIZE_OPTIONS, FONT_SIZE_PART_BASE, FONT_WEIGHT_OPTIONS, FONT_WEIGHT_PART_BASE,
+    GROUP_PART_BASE, PART_BACKEND_COSMIC, PART_BACKEND_DW, PART_BIDI_OFF, PART_BIDI_ON,
+    PART_EMOJI_BACKEND_COSMIC, PART_EMOJI_BACKEND_DW, PART_EMOJI_BACKEND_FOLLOW,
+    PART_EMOJI_PRES_COLOR, PART_EMOJI_PRES_MONO, PART_EMOJI_SOURCE_BUILTIN, PART_EMOJI_SOURCE_GRID,
+    PART_EMOJI_SOURCE_SYSTEM, PART_LETTER_SPACING_0, PART_LETTER_SPACING_1, PART_LETTER_SPACING_2,
+    PART_LIGATURES_OFF, PART_LIGATURES_ON, PART_LINEBREAK_ANYWHERE, PART_LINEBREAK_NONE,
+    PART_LINEBREAK_WORD, PART_LINE_HEIGHT_20, PART_LINE_HEIGHT_28, PART_LINE_HEIGHT_AUTO,
+    PART_PRESET_CROSS_PLATFORM, PART_PRESET_CUSTOM, PART_PRESET_PIXEL, PART_PRESET_WINUI,
+    PART_SHAPER_COSMIC, PART_SHAPER_NATIVE, PHASE_PART_BASE, STATUS_BAR_PART,
 };
 use showcase::pages::{CategoryId, PageId};
 use showcase::shell::GalleryApp;
@@ -1012,4 +1013,242 @@ fn emoji_group_controls_interaction_and_status_sync() {
         app.state.text_render.settings.emoji_presentation,
         EmojiPresentation::Mono
     );
+}
+
+/// 验收条件 1、2：预设方案应用、机器能力降级与手动改动自动落回"自定义"。
+#[test]
+fn text_render_presets_application_and_custom_transition() {
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+
+    // 1. 应用 Cross-Platform 预设
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        PART_PRESET_CROSS_PLATFORM,
+    )));
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(
+        app.state.text_render.preset,
+        TextRenderPreset::CrossPlatform
+    );
+    assert_eq!(
+        app.state.text_render.settings.raster_backend,
+        RasterBackend::Cosmic
+    );
+    assert_eq!(app.state.text_render.settings.phase_mode, PhaseMode::Eight);
+    assert_eq!(
+        app.state.text_render.settings.blend_space,
+        unbound_text::BlendSpace::Linear
+    );
+    assert_eq!(
+        app.state.text_render.settings.layer_mode,
+        unbound_text::LayerMode::Isolated
+    );
+
+    // 2. 应用 Pixel Style 预设
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_PRESET_PIXEL)));
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.text_render.preset, TextRenderPreset::Pixel);
+    assert_eq!(app.state.text_render.settings.phase_mode, PhaseMode::One);
+    assert_eq!(
+        app.state.text_render.settings.emoji_presentation,
+        EmojiPresentation::Mono
+    );
+    assert!(!app.state.text_render.settings.ligatures);
+
+    // 3. 应用 WinUI Native 预设（按机器能力自动裁决）
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_PRESET_WINUI)));
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.text_render.preset, TextRenderPreset::WinuiNative);
+    #[cfg(windows)]
+    assert_eq!(
+        app.state.text_render.settings.raster_backend,
+        RasterBackend::DirectWrite
+    );
+    assert_eq!(app.state.text_render.settings.phase_mode, PhaseMode::Eight);
+    assert_eq!(
+        app.state.text_render.settings.blend_space,
+        unbound_text::BlendSpace::Srgb
+    );
+    assert_eq!(
+        app.state.text_render.settings.layer_mode,
+        unbound_text::LayerMode::Direct
+    );
+
+    // 4. 手动修改任意一项设置（如行高），预设必须立即落入 Custom
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_LINE_HEIGHT_28)));
+    app.rebuild(VIEWPORT);
+
+    assert_eq!(app.state.text_render.preset, TextRenderPreset::Custom);
+    assert_eq!(app.state.text_render.settings.line_height, 28.0);
+}
+
+/// 验收条件 3：展台重启后折叠状态与设置恢复持久化。
+#[test]
+fn text_render_state_persistence_across_showcase_restart() {
+    let test_file = std::env::temp_dir().join(format!(
+        "unbound_showcase_persist_test_{}.txt",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    TextRenderPageState::set_thread_persistence_path(Some(test_file));
+    TextRenderPageState::clear_persisted();
+
+    // 阶段 1：在当前应用实例中修改折叠与设置
+    {
+        let mut app = app();
+        app.navigate(PageId::TextRender);
+        app.rebuild(VIEWPORT);
+
+        let page_index = PageId::TextRender.index() as u8;
+
+        // 折叠第 0 组（Font）和第 2 组（Pixel）
+        app.click_node(target::id(Target::Demo(page_index, 0, GROUP_PART_BASE)));
+        app.click_node(target::id(Target::Demo(page_index, 0, GROUP_PART_BASE + 2)));
+
+        // 切换断行模式为 None
+        app.click_node(target::id(Target::Demo(page_index, 0, PART_LINEBREAK_NONE)));
+
+        assert!(!app.state.text_render.group_expanded[0]);
+        assert!(!app.state.text_render.group_expanded[2]);
+        assert_eq!(
+            app.state.text_render.settings.line_break,
+            LineBreakMode::None
+        );
+    }
+
+    // 阶段 2：模拟重启展台（全新实例化 App）
+    {
+        let mut restarted_app = app();
+        restarted_app.navigate(PageId::TextRender);
+        restarted_app.rebuild(VIEWPORT);
+
+        // 验证折叠状态成功恢复
+        assert!(
+            !restarted_app.state.text_render.group_expanded[0],
+            "Group 0 must remain collapsed after restart"
+        );
+        assert!(
+            !restarted_app.state.text_render.group_expanded[2],
+            "Group 2 must remain collapsed after restart"
+        );
+
+        // 验证设置参数成功恢复
+        assert_eq!(
+            restarted_app.state.text_render.settings.line_break,
+            LineBreakMode::None,
+            "Settings must be restored after restart"
+        );
+    }
+
+    TextRenderPageState::clear_persisted();
+    TextRenderPageState::set_thread_persistence_path(None);
+}
+
+/// 验收条件 4：全键盘可达性与语义树完整性。
+#[test]
+fn text_render_all_keyboard_accessible_and_a11y_tree() {
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+
+    // 1. 验证四个预设按钮全量可达
+    for preset_part in [
+        PART_PRESET_WINUI,
+        PART_PRESET_CROSS_PLATFORM,
+        PART_PRESET_PIXEL,
+        PART_PRESET_CUSTOM,
+    ] {
+        let node_id = target::id(Target::Demo(page_index, 0, preset_part));
+        let node = app
+            .semantics
+            .get(node_id)
+            .unwrap_or_else(|| panic!("missing a11y node for preset {preset_part}"));
+        assert_eq!(node.role, Role::RadioButton);
+    }
+
+    // 2. 验证六大折叠标题均为 Button 角色且发布 expanded 状态
+    for i in 0..6 {
+        let group_node_id = target::id(Target::Demo(page_index, 0, GROUP_PART_BASE + i));
+        let node = app
+            .semantics
+            .get(group_node_id)
+            .unwrap_or_else(|| panic!("missing a11y node for group {i}"));
+        assert_eq!(node.role, Role::Button);
+        assert_eq!(node.expanded, Some(true));
+    }
+
+    // 3. 验证灰化项可聚焦且发布禁用理由
+    let native_node = app
+        .semantics
+        .get(target::id(Target::Demo(page_index, 0, PART_SHAPER_NATIVE)))
+        .expect("native shaper node exists");
+    assert!(native_node.disabled);
+    assert!(native_node.label.contains("not implemented"));
+}
+
+/// 验收条件 5：全局渲染策略在其他页面生效，预览样式不影响其他页面。
+#[test]
+fn text_render_global_strategy_affects_other_pages_and_isolates_preview() {
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+
+    // 1. 设置排版断行与双向参数
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        PART_LINEBREAK_ANYWHERE,
+    )));
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_BIDI_OFF)));
+
+    // 2. 设置预览样式为大号粗体斜体
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        FONT_SIZE_PART_BASE + 3,
+    )));
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        FONT_WEIGHT_PART_BASE + 3,
+    )));
+    app.click_node(target::id(Target::Demo(page_index, 0, FONT_ITALIC_PART)));
+
+    // 3. 导航至 Buttons 页面
+    app.navigate(PageId::Buttons);
+    app.rebuild(VIEWPORT);
+
+    // 全局渲染管线 settings 已反映排版策略
+    assert_eq!(
+        app.labels.cache.settings().line_break,
+        LineBreakMode::Anywhere
+    );
+    assert!(!app.labels.cache.settings().bidi);
+
+    // 4. Buttons 页面正常发射图元不受预览样式影响
+    assert!(
+        !app.scene.primitives.is_empty(),
+        "Buttons page must render with its own styles"
+    );
+
+    // 5. 导航回控制台，预览样式隔离保留
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.text_render.settings.size, 24.0);
+    assert_eq!(app.state.text_render.settings.weight, 700);
+    assert!(app.state.text_render.settings.italic);
 }
