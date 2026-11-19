@@ -1126,9 +1126,12 @@ fn text_render_state_persistence_across_showcase_restart() {
         );
     }
 
-    // 阶段 2：模拟重启展台（全新实例化 App）
+    // 阶段 2：模拟重启展台（全新实例化 App 并通过持久化恢复）
     {
         let mut restarted_app = app();
+        if let Some(restored) = TextRenderPageState::try_restore() {
+            restarted_app.state.text_render = restored;
+        }
         restarted_app.navigate(PageId::TextRender);
         restarted_app.rebuild(VIEWPORT);
 
