@@ -73,7 +73,10 @@ pub use appearance::{
     AppearanceCaps, AppearanceDiff, AppearanceIntent, BackdropChannel, WindowAppearance,
 };
 pub use assets::{AssetHub, AssetResidency};
-pub use backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID};
+pub use backdrop::{
+    fallback_reason_zh, is_mica_ready_event, material_name_zh, plan_summary_zh, MicaBackdrop,
+    WindowBackdropController, MICA_READY_EVENT_ID,
+};
 pub use guest_bridge::GuestAppAdapter;
 pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Locale};
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
