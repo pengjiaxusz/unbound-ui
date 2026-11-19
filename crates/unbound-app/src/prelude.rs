@@ -12,9 +12,9 @@ pub use crate::window_runner::{run_windowed, run_windowed_with_hwnd, WindowedRun
 pub use crate::{
     const_fnv1a_hash, global_locale, mix_key, set_global_locale, ui_key, AppContext, AppEvent,
     AppEventSender, AppKey, AppRuntime, Application, ClipboardProvider, DirtyFlags, ErasedUiWidget,
-    EventOutcome, FrameReport, I18nBundle, KeyDiscriminator, LayoutDirection, Locale, Modifiers,
-    PendingWidget, Propagation, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec, WindowCommand,
-    ROOT,
+    EventOutcome, FrameReport, I18nBundle, KeyDiscriminator, KeyScope, LayoutDirection, Locale,
+    Modifiers, PendingWidget, Propagation, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec,
+    WindowCommand, ROOT,
 };
 
 pub use accesskit::Role;

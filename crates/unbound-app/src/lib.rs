@@ -1,3 +1,4 @@
+//! lang-allow: 中文注释与文档
 //! 应用运行时：面向所有应用的统一事件循环模型。
 //!
 //! 运行时统一接管了过去需要在每个应用外壳中手动复制的模块：
@@ -60,6 +61,7 @@ pub mod backdrop;
 pub mod guest_bridge;
 pub mod i18n;
 pub mod inspector;
+pub mod key_scope;
 pub mod overlay_manager;
 pub mod prelude;
 pub mod router;
@@ -80,6 +82,7 @@ pub use backdrop::{
 pub use guest_bridge::GuestAppAdapter;
 pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Locale};
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
+pub use key_scope::KeyScope;
 pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
 pub use scene_upload::{collect_backdrops, scene_upload};
@@ -166,6 +169,62 @@ impl KeyDiscriminator for &String {
     #[inline]
     fn into_u64(self) -> u64 {
         const_fnv1a_hash(self.as_str(), 0, 0)
+    }
+}
+
+impl KeyDiscriminator for String {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        const_fnv1a_hash(self.as_str(), 0, 0)
+    }
+}
+
+impl KeyDiscriminator for u16 {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+impl KeyDiscriminator for u8 {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+impl KeyDiscriminator for i64 {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+impl KeyDiscriminator for i16 {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+impl KeyDiscriminator for i8 {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+impl KeyDiscriminator for char {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+impl KeyDiscriminator for KeyScope {
+    #[inline]
+    fn into_u64(self) -> u64 {
+        self.raw()
     }
 }
 
@@ -518,6 +577,31 @@ pub enum AppEvent {
     LocaleChanged { locale: String },
     /// 宿主后台线程或 Tokio 异步任务投递的自定义事件。
     Custom { id: u64, payload: String },
+}
+
+impl AppEvent {
+    /// 返回产生本事件的目标控件键（若事件类型包含目标节点）。
+    #[must_use]
+    pub fn target_node(&self) -> Option<u64> {
+        match self {
+            AppEvent::Click { node, .. }
+            | AppEvent::DoubleClick { node, .. }
+            | AppEvent::ContextMenu { node, .. }
+            | AppEvent::DragStart { node, .. }
+            | AppEvent::Drag { node, .. } => Some(*node),
+            AppEvent::PointerDown { target, .. }
+            | AppEvent::PointerUp { target, .. }
+            | AppEvent::Wheel { target, .. } => *target,
+            AppEvent::A11y { target, .. } => Some(*target),
+            _ => None,
+        }
+    }
+
+    /// 若本事件包含交互目标节点，从上下文局部状态池中提取绑定的强类型 Action。
+    #[must_use]
+    pub fn action<A: Clone + Send + Sync + 'static>(&self, ctx: &AppContext) -> Option<A> {
+        self.target_node().and_then(|node| ctx.action::<A>(node))
+    }
 }
 
 /// 跨线程事件投递句柄：供 Tokio 异步运行时、IPC 监听线程或后台作业随时向 UI 线程推送 [`AppEvent`] 并立即唤醒消息循环。
@@ -1127,6 +1211,26 @@ impl AppContext {
         self.async_sender = Some(sender);
         self.waker = waker;
     }
+
+    /// 查询绑定在指定控件键上的强类型 Action。
+    #[must_use]
+    pub fn action<A: Clone + Send + Sync + 'static>(&self, key: u64) -> Option<A> {
+        self.widget_state.borrow().get::<A>(key).cloned()
+    }
+
+    /// 从已解析的交互事件中直接提取绑定的强类型 Action（若事件具有目标节点且匹配类型）。
+    #[must_use]
+    pub fn action_from_event<A: Clone + Send + Sync + 'static>(
+        &self,
+        event: &AppEvent,
+    ) -> Option<A> {
+        event.action::<A>(self)
+    }
+
+    /// 提取并移除绑定在指定控件键上的强类型 Action（单次消费模式）。
+    pub fn take_action<A: Send + Sync + 'static>(&self, key: u64) -> Option<A> {
+        self.widget_state.borrow_mut().remove_state::<A>(key)
+    }
 }
 
 fn millis(duration: Duration) -> u64 {
@@ -1330,6 +1434,8 @@ pub struct ViewBuilder<'a> {
     event_sender: Option<AppEventSender>,
     depth: u16,
     z_base: u16,
+    /// 当前视图所在的分层键作用域（根级为 `KeyScope::root()`）。
+    key_scope: KeyScope,
 }
 
 impl<'a> ViewBuilder<'a> {
@@ -1373,8 +1479,13 @@ impl<'a> ViewBuilder<'a> {
     /// 布局矩形），只能在帧外访问；本方法供视图构建期使用。
     #[must_use]
     pub fn widget_rect(&self, key: u64) -> Option<Rect> {
+        let effective_key = if !self.key_scope.is_root() && key != 0 {
+            self.key_scope.key(key)
+        } else {
+            key
+        };
         self.node_keys
-            .get(&key)
+            .get(&effective_key)
             .and_then(|node| self.world.get(*node))
             .map(|node| node.world_rect)
     }
@@ -1389,7 +1500,14 @@ impl<'a> ViewBuilder<'a> {
     /// 该键会被记录为已渲染，因此停止调用此方法的键将在帧末被卸载并回收其值。
     ///
     pub fn use_state<T: Default + Send + Sync + 'static>(&mut self, key: u64) -> RefMut<'_, T> {
-        RefMut::map(self.widget_state.borrow_mut(), |store| store.use_state(key))
+        let effective_key = if !self.key_scope.is_root() && key != 0 {
+            self.key_scope.key(key)
+        } else {
+            key
+        };
+        RefMut::map(self.widget_state.borrow_mut(), |store| {
+            store.use_state(effective_key)
+        })
     }
 
     /// 追加控件的输出。
@@ -1408,7 +1526,12 @@ impl<'a> ViewBuilder<'a> {
     ///
     /// 同一控件重复声明时，后一次覆盖前一次。
     pub fn declare_semantics(&mut self, key: u64, intent: SemanticIntent) {
-        self.semantic_intents.insert(key, intent);
+        let effective_key = if !self.key_scope.is_root() && key != 0 {
+            self.key_scope.key(key)
+        } else {
+            key
+        };
+        self.semantic_intents.insert(effective_key, intent);
     }
 
     /// 声明某个控件的语义角色与名称。
@@ -1416,6 +1539,128 @@ impl<'a> ViewBuilder<'a> {
     /// [`Self::declare_semantics`] 的简写形式。
     pub fn declare_semantic(&mut self, key: u64, role: Role, label: impl Into<String>) {
         self.declare_semantics(key, SemanticIntent::new(role, label));
+    }
+
+    /// 在指定判别值的作用域命名空间下声明子视图。
+    ///
+    /// 作用域内部的所有容器、控件与文本节点将自动基于父作用域哈希
+    /// 派生出确定性、互不碰撞的命名空间键，彻底消除调用方手动计算
+    /// 基址与步长（如 `base + idx * 30 + offset`）的算术负担。
+    pub fn scope<R>(
+        &mut self,
+        discriminator: impl KeyDiscriminator,
+        build: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let prev_scope = self.key_scope;
+        self.key_scope = self.key_scope.scope(discriminator);
+        let result = build(self);
+        self.key_scope = prev_scope;
+        result
+    }
+
+    /// 临时脱离当前层级作用域，在无作用域（根级）命名空间下声明子视图。
+    pub fn unscoped<R>(&mut self, build: impl FnOnce(&mut Self) -> R) -> R {
+        let prev_scope = self.key_scope;
+        self.key_scope = KeyScope::root();
+        let result = build(self);
+        self.key_scope = prev_scope;
+        result
+    }
+
+    /// 获取当前生效的作用域对象。
+    #[must_use]
+    pub fn key_scope(&self) -> KeyScope {
+        self.key_scope
+    }
+
+    /// 获取当前生效的作用域 64 位哈希（若位于根作用域则返回 0）。
+    #[must_use]
+    pub fn current_scope(&self) -> u64 {
+        self.key_scope.raw()
+    }
+
+    /// 在当前作用域下派生叶子节点的全局有效键（不触碰世界树节点）。
+    #[must_use]
+    pub fn scoped_key(&self, discriminator: impl KeyDiscriminator) -> u64 {
+        self.key_scope.key(discriminator)
+    }
+
+    /// 为指定控件键绑定强类型 Action。
+    ///
+    /// Action 被存入运行时局部状态池，在事件归约（`reduce`）阶段可通过
+    /// [`AppContext::action`] 或 [`AppEvent::action`] 直接提取强类型意图，
+    /// 无需手动遍历匹配裸 `u64` 节点键。
+    pub fn bind_action<A: Clone + Send + Sync + 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        action: A,
+    ) {
+        let raw_key = key.into_u64();
+        let effective_key = if !self.key_scope.is_root() && raw_key != 0 {
+            self.key_scope.key(raw_key)
+        } else {
+            raw_key
+        };
+        self.widget_state
+            .borrow_mut()
+            .insert_state(effective_key, action);
+    }
+
+    /// [`Self::bind_action`] 的语义别名，明确表达点击交互意图。
+    pub fn on_click<A: Clone + Send + Sync + 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        action: A,
+    ) {
+        self.bind_action(key, action);
+    }
+
+    /// 声明绑定了强类型 Action 的按钮快捷方式。
+    pub fn button_action<A: Clone + Send + Sync + 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        desc: ButtonDesc,
+        action: A,
+    ) -> NodeId {
+        let raw_key = key.into_u64();
+        self.bind_action(raw_key, action);
+        self.button(raw_key, desc)
+    }
+
+    /// 声明绑定了强类型 Action 的图标按钮快捷方式。
+    pub fn icon_button_action<A: Clone + Send + Sync + 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        desc: unbound_widgets::IconButtonDesc,
+        action: A,
+    ) -> NodeId {
+        let raw_key = key.into_u64();
+        self.bind_action(raw_key, action);
+        self.icon_button(raw_key, desc)
+    }
+
+    /// 声明绑定了强类型 Action 的颜色色块快捷方式。
+    pub fn color_swatch_action<A: Clone + Send + Sync + 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        desc: unbound_widgets::ColorSwatchDesc,
+        action: A,
+    ) -> NodeId {
+        let raw_key = key.into_u64();
+        self.bind_action(raw_key, action);
+        self.color_swatch(raw_key, desc)
+    }
+
+    /// 声明绑定了强类型 Action 的侧边栏导航条目快捷方式。
+    pub fn sidebar_item_action<A: Clone + Send + Sync + 'static>(
+        &mut self,
+        key: impl KeyDiscriminator,
+        desc: unbound_widgets::SidebarItemDesc,
+        action: A,
+    ) -> NodeId {
+        let raw_key = key.into_u64();
+        self.bind_action(raw_key, action);
+        self.sidebar_item(raw_key, desc)
     }
 
     /// 以固定图元预留空间追加控件输出，使动态字形序列不会移动后续控件的 span。
@@ -1624,11 +1869,15 @@ impl<'a> ViewBuilder<'a> {
         mut desc: RawNodeDesc,
         loc: &'static core::panic::Location<'static>,
     ) -> (u64, NodeId) {
-        let mut effective_key = key;
+        let mut effective_key = if !self.key_scope.is_root() && key != 0 {
+            self.key_scope.key(key)
+        } else {
+            key
+        };
         if effective_key == ROOT {
             // 语义根键是保留键。控件占用它会让语义根成为自身的子节点，
             // 树遍历随即死循环；此处把控件改派到一个未被占用的派生键上。
-            effective_key = self.derive_reserved_key(mix_key(key, 0x9E37_79B9_7F4A_7C15));
+            effective_key = self.derive_reserved_key(mix_key(effective_key, 0x9E37_79B9_7F4A_7C15));
         }
         if effective_key != 0 && !self.seen_keys.insert(effective_key) {
             // 当调用方在循环体或复用辅助函数内使用无参 `ui_key!()` 时，同一帧会出现重复键；
@@ -3968,6 +4217,7 @@ impl<A: Application> AppRuntime<A> {
             event_sender,
             depth: 0,
             z_base: 0,
+            key_scope: KeyScope::root(),
         };
         self.app.view(&self.state, &mut view);
         let vanished: Vec<(u64, NodeId)> = self

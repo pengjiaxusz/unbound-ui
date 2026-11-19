@@ -134,6 +134,13 @@ impl WidgetStateStore {
             .insert((key, TypeId::of::<T>()), Box::new(value));
     }
 
+    /// 移除并返回 `(key, T)` 的状态。
+    pub fn remove_state<T: 'static>(&mut self, key: u64) -> Option<T> {
+        self.entries
+            .remove(&(key, TypeId::of::<T>()))
+            .and_then(|boxed| boxed.downcast::<T>().ok().map(|b| *b))
+    }
+
     /// 获取 `key` 的状态但不将其标记为已访问。
     ///
     /// 事件归约在帧间运行；此处触及的键不应计为已渲染，
