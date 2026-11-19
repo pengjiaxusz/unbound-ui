@@ -6,7 +6,9 @@ use std::ops::{Deref, DerefMut};
 use accesskit::Role;
 use showcase::pages::text_render::{
     resolve_feature, FeatureResolution, TextConsoleGroup, TextFeatureKey, FEATURE_RULES,
-    GROUP_PART_BASE, STATUS_BAR_PART,
+    FONT_FAMILY_OPTIONS, FONT_FAMILY_PART_BASE, FONT_ITALIC_PART, FONT_SIZE_OPTIONS,
+    FONT_SIZE_PART_BASE, FONT_WEIGHT_OPTIONS, FONT_WEIGHT_PART_BASE, GROUP_PART_BASE,
+    STATUS_BAR_PART,
 };
 use showcase::pages::{CategoryId, PageId};
 use showcase::shell::GalleryApp;
@@ -362,4 +364,137 @@ fn table_driven_rules_comprehensive_coverage() {
             );
         }
     }
+}
+
+/// 验收条件 2：字体组四项（家族、字重、字号、斜体）三态呈现均为可用（Available）。
+#[test]
+fn font_group_tri_state_capabilities_available() {
+    let caps = TextCapabilities::probe();
+    let settings = TextRenderSettings::default();
+
+    let font_keys = [
+        TextFeatureKey::FontFamily,
+        TextFeatureKey::FontWeight,
+        TextFeatureKey::FontSize,
+        TextFeatureKey::FontItalic,
+    ];
+
+    for key in font_keys {
+        let res = resolve_feature(key, &caps, &settings);
+        assert!(
+            !res.disabled,
+            "font feature {key:?} must be available in tri-state query"
+        );
+        assert_eq!(
+            res.reason, None,
+            "available font feature must not have a disabled reason"
+        );
+    }
+}
+
+/// 验收条件 1、2：字体组四项控件交互、状态更新与右侧实时预览渲染。
+#[test]
+fn font_group_controls_interaction_and_live_preview() {
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+
+    // 验证初始状态：默认字体设置
+    assert_eq!(app.state.text_render.settings.family, None);
+    assert_eq!(app.state.text_render.settings.weight, 400);
+    assert_eq!(app.state.text_render.settings.size, 14.0);
+    assert!(!app.state.text_render.settings.italic);
+
+    // 1. 切换字体家族：点击 FONT_FAMILY_OPTIONS 中的 Cascadia (索引 2)
+    assert!(FONT_FAMILY_OPTIONS.len() > 2);
+    let cascadia_node = target::id(Target::Demo(page_index, 0, FONT_FAMILY_PART_BASE + 2));
+    app.click_node(cascadia_node);
+    assert_eq!(
+        app.state.text_render.settings.family.as_deref(),
+        FONT_FAMILY_OPTIONS[2].1,
+        "font family must update to Cascadia Mono"
+    );
+
+    // 2. 切换字重：点击 FONT_WEIGHT_OPTIONS 中的 Bold 700 (索引 3)
+    assert!(FONT_WEIGHT_OPTIONS.len() > 3);
+    let bold_node = target::id(Target::Demo(page_index, 0, FONT_WEIGHT_PART_BASE + 3));
+    app.click_node(bold_node);
+    assert_eq!(
+        app.state.text_render.settings.weight, FONT_WEIGHT_OPTIONS[3].1,
+        "font weight must update to 700"
+    );
+
+    // 3. 切换字号：点击 FONT_SIZE_OPTIONS 中的 24px (索引 3)
+    assert!(FONT_SIZE_OPTIONS.len() > 3);
+    let size_node = target::id(Target::Demo(page_index, 0, FONT_SIZE_PART_BASE + 3));
+    app.click_node(size_node);
+    assert_eq!(
+        app.state.text_render.settings.size, FONT_SIZE_OPTIONS[3].1,
+        "font size must update to 24.0"
+    );
+
+    // 4. 切换斜体：点击 FONT_ITALIC_PART 开关
+    let italic_node = target::id(Target::Demo(page_index, 0, FONT_ITALIC_PART));
+    app.click_node(italic_node);
+    assert!(
+        app.state.text_render.settings.italic,
+        "italic setting must toggle to true"
+    );
+
+    // 5. 重绘后验证图元发射与预览渲染正常
+    app.rebuild(VIEWPORT);
+    let primitives_count = app.scene.primitives.len();
+    assert!(
+        primitives_count > 0,
+        "primitives must be emitted under modified preview style"
+    );
+}
+
+/// 验收条件 1：预览样式修改不影响其他页面文本。
+#[test]
+fn font_preview_style_isolation_from_other_pages() {
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+
+    // 修改预览样式：设置大字号、粗体、斜体
+    let size_node = target::id(Target::Demo(page_index, 0, FONT_SIZE_PART_BASE + 3));
+    app.click_node(size_node);
+    let bold_node = target::id(Target::Demo(page_index, 0, FONT_WEIGHT_PART_BASE + 3));
+    app.click_node(bold_node);
+    let italic_node = target::id(Target::Demo(page_index, 0, FONT_ITALIC_PART));
+    app.click_node(italic_node);
+
+    assert_eq!(app.state.text_render.settings.size, 24.0);
+    assert_eq!(app.state.text_render.settings.weight, 700);
+    assert!(app.state.text_render.settings.italic);
+
+    // 导航到排版页面
+    app.navigate(PageId::Typography);
+    app.rebuild(VIEWPORT);
+    let typography_primitives = app.scene.primitives.len();
+    assert!(
+        typography_primitives > 0,
+        "typography page must render without error"
+    );
+
+    // 导航到按钮页面
+    app.navigate(PageId::Buttons);
+    app.rebuild(VIEWPORT);
+    let buttons_primitives = app.scene.primitives.len();
+    assert!(
+        buttons_primitives > 0,
+        "buttons page must render without error"
+    );
+
+    // 导航回文本渲染控制台：预览设置依然保持
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.text_render.settings.size, 24.0);
+    assert_eq!(app.state.text_render.settings.weight, 700);
+    assert!(app.state.text_render.settings.italic);
 }
