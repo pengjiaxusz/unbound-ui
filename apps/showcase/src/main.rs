@@ -13,12 +13,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use showcase::backdrop_compare::{BackdropCompareRun, CompareReport, CompareStep};
-use showcase::backdrop_host::{window_backdrop_request, WindowBackdropRequest};
 use showcase::frame_plan::{frame_size, needs_rebuild, upload_plan};
 use showcase::runtime_app::GalleryRuntime;
 use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::theme;
+use unbound_app::appearance::{
+    AppearanceCaps, AppearanceDiff, AppearanceIntent, BackdropChannel, WindowAppearance,
+};
 
 use raw_window_handle::HasDisplayHandle;
 use unbound_app::{AppKey, AppRuntime, DirtyFlags, Modifiers as AppModifiers};
@@ -131,6 +133,8 @@ struct Showcase {
     new_window_requested: bool,
     /// 无人值守的原生/自绘后景对照运行；`None` 表示普通交互模式。
     compare: Option<BackdropCompareRun>,
+    /// 窗口外观意图账本：跟踪意图并按「已下发值」逐帧去重输出增量写入。
+    appearance: WindowAppearance,
 }
 
 impl Showcase {
@@ -183,6 +187,7 @@ impl Showcase {
             extras: Vec::new(),
             new_window_requested: false,
             compare: None,
+            appearance: WindowAppearance::new(),
         }
     }
 
@@ -406,46 +411,74 @@ fn window_hwnd(window: &Window) -> Option<isize> {
     }
 }
 
-/// 按计划产出的单一请求下发系统材质。
-///
-/// DWM 通道与 accent policy 通道互斥：这里用 `match` 保证每次只走一条。切回
-/// DWM 通道前先清掉可能残留的 accent policy，避免上一档的亚克力继续叠加。
-fn apply_window_backdrop_request(hwnd: isize, request: WindowBackdropRequest) {
-    match request {
-        WindowBackdropRequest::Dwm(material) => {
-            let _ = unbound_platform::clear_window_accent_tint(hwnd);
-            let _ = unbound_platform::set_window_backdrop(hwnd, material);
-        }
-        WindowBackdropRequest::AccentTint(argb) => {
-            let _ = unbound_platform::set_window_accent_tint(hwnd, argb);
+impl Showcase {
+    /// 将外观意图账本同步至窗口与渲染器。
+    ///
+    /// 向外观意图账本提供选择意图、平台能力与当前主题，账本负责解析计划、按已下发值去重，
+    /// 仅将发生变更的增量（`AppearanceDiff`）交由宿主执行系统写入与清屏 alpha 设置。
+    fn sync_appearance(&mut self, window: &Window) {
+        let plan_changed = self.shell_mut().sync_backdrop_plan();
+        let Some(hwnd) = window_hwnd(window) else {
+            return;
+        };
+        let caps = AppearanceCaps::new(
+            self.shell().state.windows_build,
+            self.shell().state.premultiplied_alpha_supported,
+            self.shell().state.accent_policy_export,
+        );
+        let theme = if self.shell().state.theme == ThemeMode::Dark {
+            ThemeKind::Dark
+        } else {
+            ThemeKind::Light
+        };
+        let intent = AppearanceIntent::Selection {
+            selection: self.shell().state.backdrop_selection,
+            accent_tint: Some(self.shell().state.backdrop_accent_tint),
+        };
+        let diff = self.appearance.set_intent(intent, caps, theme);
+        self.apply_appearance_diff(hwnd, diff);
+        if plan_changed {
+            self.app.invalidate();
         }
     }
-}
 
-impl Showcase {
-    /// 将解析后的后景计划同步到宿主资源。
-    ///
-    /// 只有计划变化时才更新清屏 alpha、系统材质请求与失焦锁定。
-    ///
-    /// 合成方式在窗口生命周期内固定，切换材质或来源绝不重建交换链；透明性变化只体现为
-    /// 清屏 alpha 与系统材质请求，二者都不会重配表面。
-    fn sync_backdrop_host(&mut self, window: &Window) {
-        if !self.shell_mut().sync_backdrop_plan() {
-            return;
+    /// 执行外观变更 Diff。
+    fn apply_appearance_diff(&mut self, hwnd: isize, diff: AppearanceDiff) {
+        if let Some(channel) = diff.channel {
+            match channel {
+                BackdropChannel::Dwm(material) => {
+                    let _ = unbound_platform::clear_window_accent_tint(hwnd);
+                    let _ = unbound_platform::set_window_backdrop(hwnd, material);
+                }
+                BackdropChannel::AccentTint(argb) => {
+                    let _ = unbound_platform::set_window_backdrop(
+                        hwnd,
+                        unbound_platform::WindowBackdropMaterial::None,
+                    );
+                    let _ = unbound_platform::set_window_accent_tint(hwnd, argb);
+                }
+                BackdropChannel::Off => {
+                    let _ = unbound_platform::clear_window_accent_tint(hwnd);
+                    let _ = unbound_platform::set_window_backdrop(
+                        hwnd,
+                        unbound_platform::WindowBackdropMaterial::None,
+                    );
+                }
+            }
         }
-        let plan = self.shell().state.backdrop_plan.clone();
-        if let Some(renderer) = &mut self.renderer {
-            renderer.set_clear_alpha(plan.clear_alpha);
+        if let Some(dark) = diff.dark_mode {
+            unbound_platform::set_window_dark_mode(hwnd, dark);
         }
-        let (request, lock_mica) = window_backdrop_request(&plan);
-        if let Some(hwnd) = window_hwnd(window) {
-            apply_window_backdrop_request(hwnd, request);
+        if let Some(lock_mica) = diff.lock_mica {
+            if let Some(metrics) = &self.frame_metrics {
+                metrics.set_lock_mica_active(lock_mica);
+            }
         }
-        if let Some(metrics) = &self.frame_metrics {
-            // 原生材质在场时锁定失焦激活态，避免窗口失活时材质退化为纯色。
-            metrics.set_lock_mica_active(lock_mica);
+        if let Some(clear_alpha) = diff.clear_alpha {
+            if let Some(renderer) = &mut self.renderer {
+                renderer.set_clear_alpha(clear_alpha);
+            }
         }
-        self.app.invalidate();
     }
 
     /// 为新的表面尺寸重建 swapchain。
@@ -744,14 +777,10 @@ impl PlatformApp for Showcase {
         // 子档，绝不参与其它材质的可用性判定。
         self.shell_mut()
             .set_backdrop_accent_capability(unbound_platform::accent_policy_export_available());
-        // 合成方式由平台能力固定，与用户当前选择无关：支持的机器整条生命周期都用
-        // 预乘 alpha，即使此刻显示的是关闭/自绘路径。这样后续切到原生时无需重配交换链。
-        self.composite_alpha = match self.shell().state.backdrop_plan.composition {
-            unbound_backdrop::BackdropCompositeAlpha::PreMultiplied => {
-                CompositeAlphaMode::PreMultiplied
-            }
-            unbound_backdrop::BackdropCompositeAlpha::Opaque => CompositeAlphaMode::Opaque,
-        };
+        // 遵循 ADR 0001：合成方式在窗口生命周期内固定，由平台能力决定，不随模式切换改变。
+        // 若驱动支持预乘 alpha，则生命周期统一采用预乘合成；关闭或自绘路径通过外观意图
+        // 账本派生的 clear_alpha = 1.0 维持视觉不透明，确保运行期切换时无需重建交换链。
+        self.composite_alpha = CompositeAlphaMode::PreMultiplied.resolve(premultiplied_alpha);
         let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false)
             .with_composite_alpha(self.composite_alpha);
         let swapchain = match Swapchain::new(&gpu, &surface, width, height, &present) {
@@ -780,8 +809,8 @@ impl PlatformApp for Showcase {
                 return;
             }
         };
-        // 清屏 alpha 来自后景计划：原生路径全透明，其它路径保持主题表面色。
-        renderer.set_clear_alpha(self.shell().state.backdrop_plan.clear_alpha);
+        // 渲染器清屏 alpha 由外观账本生效值决定。
+        renderer.set_clear_alpha(self.appearance.applied_clear_alpha());
         let atlases = match AtlasSet::new(&renderer.gpu, 64) {
             Ok(atlases) => Arc::new(atlases),
             Err(error) => {
@@ -818,16 +847,10 @@ impl PlatformApp for Showcase {
         let metrics = Arc::new(FrameHitMetrics::new());
         metrics.set_scale_factor(self.effective_scale());
         install_custom_frame(hwnd, Arc::clone(&metrics));
-        // 后景材质由计划决定：启动时必须请求计划给出的那一档系统材质——亚克力、
-        // 云母变体与跟随系统各有各的系统取值，不能一律当成标准云母。自绘与关闭
-        // 都落在「不请求材质」上，窗口因此保持不透明。
-        let (backdrop_request, lock_backdrop) =
-            window_backdrop_request(&self.shell().state.backdrop_plan);
-        unbound_platform::set_window_dark_mode(hwnd, self.shell().state.theme.is_dark());
-        apply_window_backdrop_request(hwnd, backdrop_request);
-        // 原生模式启用失焦锁定，避免窗口失活时云母退化为纯色。
-        metrics.set_lock_mica_active(lock_backdrop);
         self.frame_metrics = Some(metrics);
+
+        // 首帧外观意图同步：通过账本派生的变更集下发材质、深色模式与失焦锁定。
+        self.sync_appearance(window);
 
         // 呈现链刚刚按窗口尺寸创建：该请求已提交，因此首帧不会再次重建。
         //
@@ -1348,9 +1371,9 @@ impl Showcase {
         self.sync_window_size(window);
         let scale = self.effective_scale();
         self.shell_mut().set_effective_scale(scale);
-        // 每帧在重建交换链之前同步后景模式：选择变化会在本帧写入实际生效模式。
+        // 每帧在重建交换链之前同步外观意图：选择变化会在本帧写入实际生效模式。
         // 合成方式固定，因此这里只调整清屏 alpha 与 DWM 材质，不触碰交换链。
-        self.sync_backdrop_host(window);
+        self.sync_appearance(window);
 
         // 窗口尺寸只是*请求*。驱动决定 swapchain 图像大小，合成器显示的是图像，
         // 因此以下一切均由已提交范围推导：布局与相机从而始终描述同一幅画面。

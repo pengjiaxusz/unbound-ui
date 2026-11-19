@@ -87,6 +87,31 @@ pub enum AppearanceIntent {
     Material(Option<WindowBackdropMaterial>),
     /// 亚克力自定义色调（走 accent policy 通道，ABGR 格式）。
     AccentTint(u32),
+    /// 完整后景选择（支持指定来源：Auto / Native / SelfDrawn / Off 与可选自定义色调）。
+    Selection {
+        /// 后景选择项（材质种类与来源路径）。
+        selection: BackdropSelection,
+        /// 可选的自定义色调（ABGR 格式）。
+        accent_tint: Option<u32>,
+    },
+}
+
+impl From<BackdropSelection> for AppearanceIntent {
+    fn from(selection: BackdropSelection) -> Self {
+        Self::Selection {
+            selection,
+            accent_tint: None,
+        }
+    }
+}
+
+impl From<(BackdropSelection, u32)> for AppearanceIntent {
+    fn from((selection, tint): (BackdropSelection, u32)) -> Self {
+        Self::Selection {
+            selection,
+            accent_tint: Some(tint),
+        }
+    }
 }
 
 /// 将 DWM 内部材质枚举映射为平台层公开的 [`WindowBackdropMaterial`]。
@@ -192,6 +217,35 @@ impl WindowAppearance {
         self.set_intent(AppearanceIntent::AccentTint(argb), caps, theme)
     }
 
+    /// 完整后景选择快捷入口。
+    pub fn set_selection(
+        &mut self,
+        selection: BackdropSelection,
+        accent_tint: Option<u32>,
+        caps: AppearanceCaps,
+        theme: ThemeKind,
+    ) -> AppearanceDiff {
+        self.set_intent(
+            AppearanceIntent::Selection {
+                selection,
+                accent_tint,
+            },
+            caps,
+            theme,
+        )
+    }
+
+    /// 直接从已推导的后景计划同步外观。
+    pub fn set_plan(
+        &mut self,
+        plan: &BackdropPlan,
+        caps: AppearanceCaps,
+        theme: ThemeKind,
+    ) -> AppearanceDiff {
+        let is_open = plan.material_kind != MaterialKind::None;
+        self.sync_with_plan(plan, is_open, caps, theme)
+    }
+
     /// 全功能意图同步入口。
     pub fn set_intent(
         &mut self,
@@ -248,6 +302,14 @@ impl WindowAppearance {
                 argb,
                 true,
             ),
+            AppearanceIntent::Selection {
+                selection,
+                accent_tint,
+            } => {
+                let tint = accent_tint.unwrap_or(unbound_backdrop::DEFAULT_ACRYLIC_TINT_ARGB);
+                let open = selection.material != MaterialKind::None;
+                (selection, tint, open)
+            }
         };
 
         let dark = matches!(theme, ThemeKind::Dark);
@@ -264,7 +326,19 @@ impl WindowAppearance {
             self_drawn_ready: false,
         });
 
-        let (target_channel, target_lock_mica) = backdrop_channel_request(&plan);
+        self.sync_with_plan(&plan, is_open, caps, theme)
+    }
+
+    /// 使用后景计划与平台能力执行增量比对与状态更新。
+    fn sync_with_plan(
+        &mut self,
+        plan: &BackdropPlan,
+        is_open: bool,
+        caps: AppearanceCaps,
+        theme: ThemeKind,
+    ) -> AppearanceDiff {
+        let (target_channel, target_lock_mica) = backdrop_channel_request(plan);
+        let dark = matches!(theme, ThemeKind::Dark);
 
         // 优先级：意图关闭 -> 保留宿主设置值（默认 1.0）；意图开启 -> 计划派生值，且非预乘强制 1.0。
         let target_clear_alpha = if is_open {
@@ -316,7 +390,7 @@ impl WindowAppearance {
         }
         self.applied_lock_mica = target_lock_mica;
         self.applied_clear_alpha = target_clear_alpha;
-        self.plan = Some(plan);
+        self.plan = Some(plan.clone());
 
         AppearanceDiff {
             channel: diff_channel,

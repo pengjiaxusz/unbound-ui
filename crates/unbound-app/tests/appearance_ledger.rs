@@ -534,4 +534,112 @@ fn app_runtime_backdrop_apis_roundtrip() {
 
     runtime.set_backdrop(Some(WindowBackdropMaterial::System));
     assert_eq!(runtime.backdrop(), Some(WindowBackdropMaterial::System));
+
+    let sel = unbound_backdrop::BackdropSelection::new(
+        unbound_backdrop::MaterialKind::MicaAlt,
+        unbound_backdrop::BackdropSource::Native,
+    );
+    runtime.set_backdrop_selection(sel);
+    assert_eq!(runtime.backdrop(), None);
+    assert_eq!(
+        runtime.backdrop_intent(),
+        AppearanceIntent::Selection {
+            selection: sel,
+            accent_tint: None,
+        }
+    );
+}
+
+#[test]
+fn selection_intent_native_to_self_drawn_and_back() {
+    use unbound_backdrop::{BackdropSelection, BackdropSource, MaterialKind};
+
+    let mut appearance = WindowAppearance::new();
+
+    // 1. 原生云母意图：下发 DWM 云母、清屏 0.0、激活失焦锁定
+    let native_sel = BackdropSelection::new(MaterialKind::Mica, BackdropSource::Native);
+    let d1 = appearance.set_selection(native_sel, None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert_eq!(
+        d1,
+        AppearanceDiff {
+            channel: Some(BackdropChannel::Dwm(WindowBackdropMaterial::Mica)),
+            dark_mode: Some(true),
+            lock_mica: Some(true),
+            clear_alpha: Some(0.0),
+        }
+    );
+    assert_eq!(appearance.applied_clear_alpha(), 0.0);
+
+    // 2. 相同输入连续同步：无增量
+    let d2 = appearance.set_selection(native_sel, None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert!(!d2.has_changes());
+
+    // 3. 运行期切为自绘后景：关闭 DWM 通道、清屏钳回 1.0、解除失焦锁定
+    let self_drawn_sel = BackdropSelection::new(MaterialKind::Mica, BackdropSource::SelfDrawn);
+    let d3 = appearance.set_selection(self_drawn_sel, None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert_eq!(
+        d3,
+        AppearanceDiff {
+            channel: Some(BackdropChannel::Off),
+            dark_mode: None,
+            lock_mica: Some(false),
+            clear_alpha: Some(1.0),
+        }
+    );
+    assert_eq!(appearance.applied_clear_alpha(), 1.0);
+
+    // 4. 自绘连续同步：无增量
+    let d4 = appearance.set_selection(self_drawn_sel, None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert!(!d4.has_changes());
+
+    // 5. 运行期切回原生：恢复 DWM 云母、清屏 0.0、恢复失焦锁定
+    let d5 = appearance.set_selection(native_sel, None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert_eq!(
+        d5,
+        AppearanceDiff {
+            channel: Some(BackdropChannel::Dwm(WindowBackdropMaterial::Mica)),
+            dark_mode: None,
+            lock_mica: Some(true),
+            clear_alpha: Some(0.0),
+        }
+    );
+    assert_eq!(appearance.applied_clear_alpha(), 0.0);
+
+    // 6. 运行期切为关闭：关闭 DWM 通道、清屏 1.0、解除失焦锁定
+    let off_sel = BackdropSelection::new(MaterialKind::None, BackdropSource::Auto);
+    let d6 = appearance.set_selection(off_sel, None, CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert_eq!(
+        d6,
+        AppearanceDiff {
+            channel: Some(BackdropChannel::Off),
+            dark_mode: None,
+            lock_mica: Some(false),
+            clear_alpha: Some(1.0),
+        }
+    );
+    assert_eq!(appearance.applied_clear_alpha(), 1.0);
+}
+
+#[test]
+fn selection_intent_accent_tint_roundtrip() {
+    use unbound_backdrop::{BackdropSelection, BackdropSource, MaterialKind};
+
+    let mut appearance = WindowAppearance::new();
+    let tint = 0xCCD07800;
+    let sel = BackdropSelection::new(MaterialKind::AcrylicTint, BackdropSource::Native);
+
+    let d1 = appearance.set_selection(sel, Some(tint), CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert_eq!(
+        d1,
+        AppearanceDiff {
+            channel: Some(BackdropChannel::AccentTint(tint)),
+            dark_mode: Some(true),
+            lock_mica: Some(true),
+            clear_alpha: Some(0.0),
+        }
+    );
+    assert_eq!(appearance.applied_clear_alpha(), 0.0);
+
+    let d2 = appearance.set_selection(sel, Some(tint), CAPS_WIN11_NATIVE_OK, ThemeKind::Dark);
+    assert!(!d2.has_changes());
 }
