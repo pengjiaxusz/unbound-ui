@@ -10,7 +10,8 @@
 use accesskit::Role;
 use unbound_math::Rect;
 use unbound_text::{
-    CapabilityStatus, RasterBackend, TextCapabilities, TextRenderReport, TextRenderSettings,
+    BlendSpace, CapabilityStatus, DistanceFieldMode, LayerMode, RasterBackend, TextCapabilities,
+    TextRenderReport, TextRenderSettings,
 };
 
 use super::{DemoCtx, DemoKind, ExampleDef, PageInfo};
@@ -20,6 +21,17 @@ use crate::canvas::{AlignX, AlignY};
 pub const GROUP_PART_BASE: u16 = 10;
 /// 状态栏部件编号。
 pub const STATUS_BAR_PART: u16 = 20;
+
+/// 距离场调节部件编号。
+pub const PART_DF_OFF: u16 = 30;
+pub const PART_DF_SDF: u16 = 31;
+pub const PART_DF_MTSDF: u16 = 32;
+
+/// 合成组调节部件编号。
+pub const PART_COMP_SRGB: u16 = 40;
+pub const PART_COMP_LINEAR: u16 = 41;
+pub const PART_COMP_LAYER_DIRECT: u16 = 42;
+pub const PART_COMP_LAYER_ISOLATED: u16 = 43;
 
 /// 控制台六大功能参数分组。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -148,6 +160,9 @@ pub enum TextFeatureKey {
     // 合成色彩空间
     CompositionSrgb,
     CompositionLinear,
+    // 合成图层模式
+    CompositionLayerDirect,
+    CompositionLayerIsolated,
 }
 
 /// 控件特性状态决议结果。
@@ -206,7 +221,7 @@ pub const FEATURE_RULES: &[FeatureRule] = &[
         key: TextFeatureKey::PhaseEight,
         query_capability: |caps| caps.subpixel_phase_8,
         check_constraint: Some(|_, settings| {
-            if settings.use_sdf {
+            if settings.use_sdf || settings.distance_field != DistanceFieldMode::Off {
                 Some("Phase locked to 1 when distance field is active")
             } else {
                 None
@@ -218,7 +233,7 @@ pub const FEATURE_RULES: &[FeatureRule] = &[
         key: TextFeatureKey::PhaseFour,
         query_capability: |caps| caps.subpixel_phase_4,
         check_constraint: Some(|_, settings| {
-            if settings.use_sdf {
+            if settings.use_sdf || settings.distance_field != DistanceFieldMode::Off {
                 Some("Phase locked to 1 when distance field is active")
             } else {
                 None
@@ -347,6 +362,18 @@ pub const FEATURE_RULES: &[FeatureRule] = &[
         query_capability: |_| CapabilityStatus::Available,
         check_constraint: None,
     },
+    // 合成图层模式：Direct
+    FeatureRule {
+        key: TextFeatureKey::CompositionLayerDirect,
+        query_capability: |_| CapabilityStatus::Available,
+        check_constraint: None,
+    },
+    // 合成图层模式：Isolated
+    FeatureRule {
+        key: TextFeatureKey::CompositionLayerIsolated,
+        query_capability: |_| CapabilityStatus::Available,
+        check_constraint: None,
+    },
 ];
 
 /// 通过能力表与当前设置决议指定特性的禁用状态与原因。
@@ -461,7 +488,15 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
         let is_expanded = state.group_expanded[index];
         let part = GROUP_PART_BASE + index as u16;
 
-        let content_h = if is_expanded { 36.0 } else { 0.0 };
+        let content_h = if is_expanded {
+            match group {
+                TextConsoleGroup::DistanceField => 58.0,
+                TextConsoleGroup::Composition => 68.0,
+                _ => 36.0,
+            }
+        } else {
+            0.0
+        };
         let total_group_h = header_h + content_h;
 
         // 如果超出左侧容器底部，安全截断
@@ -508,7 +543,7 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
             is_expanded,
         );
 
-        // 若展开，绘制内容容器骨架
+        // 若展开，绘制内容容器
         if is_expanded && current_y + total_group_h <= rect.max().y {
             let content_rect = Rect::new(
                 rect.origin.x + 8.0,
@@ -524,23 +559,222 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
                 0.5,
                 0.0,
             );
-            ctx.canvas.text(
-                group.description(),
-                Rect::new(
-                    content_rect.origin.x + 6.0,
-                    content_rect.origin.y,
-                    content_rect.size.x - 12.0,
-                    content_rect.size.y,
-                ),
-                9.5,
-                palette.text_muted,
-                AlignX::Start,
-                AlignY::Center,
-            );
+
+            match group {
+                TextConsoleGroup::DistanceField => {
+                    draw_distance_field_controls(ctx, content_rect, state);
+                }
+                TextConsoleGroup::Composition => {
+                    draw_composition_controls(ctx, content_rect, state);
+                }
+                _ => {
+                    ctx.canvas.text(
+                        group.description(),
+                        Rect::new(
+                            content_rect.origin.x + 6.0,
+                            content_rect.origin.y,
+                            content_rect.size.x - 12.0,
+                            content_rect.size.y,
+                        ),
+                        9.5,
+                        palette.text_muted,
+                        AlignX::Start,
+                        AlignY::Center,
+                    );
+                }
+            }
         }
 
         current_y += total_group_h + item_gap;
     }
+}
+
+/// 绘制单个选项按钮并注册无障碍控件。
+fn draw_option_button(
+    ctx: &mut DemoCtx<'_, '_>,
+    part: u16,
+    rect: Rect,
+    label: &str,
+    selected: bool,
+    disabled: bool,
+    reason: Option<&str>,
+) {
+    let palette = *ctx.canvas.palette;
+    let (bg, border, text_color) = if disabled {
+        (palette.card_bg, palette.card_border, palette.text_muted)
+    } else if selected {
+        (palette.primary, palette.primary, palette.card_bg)
+    } else {
+        (palette.surface, palette.card_border, palette.text)
+    };
+
+    ctx.canvas.rect(rect, 3.0, bg, border, 1.0, 0.0);
+    ctx.canvas.text(
+        label,
+        Rect::new(
+            rect.origin.x + 2.0,
+            rect.origin.y,
+            rect.size.x - 4.0,
+            rect.size.y,
+        ),
+        10.5,
+        text_color,
+        AlignX::Center,
+        AlignY::Center,
+    );
+
+    let accessible_label = if let Some(r) = reason {
+        format!("{label} (Disabled: {r})")
+    } else {
+        label.to_string()
+    };
+    ctx.control(part, rect, Role::Button, &accessible_label, selected);
+}
+
+/// 绘制“距离场”组控件。
+fn draw_distance_field_controls(
+    ctx: &mut DemoCtx<'_, '_>,
+    rect: Rect,
+    state: &TextRenderPageState,
+) {
+    let palette = *ctx.canvas.palette;
+    let btn_gap = 6.0;
+    let btn_w = ((rect.size.x - 16.0 - btn_gap * 2.0) / 3.0).max(40.0);
+    let btn_h = 24.0;
+    let btn_y = rect.origin.y + 6.0;
+
+    let is_sdf = state.settings.use_sdf || state.settings.distance_field == DistanceFieldMode::Sdf;
+    let is_off = !is_sdf && state.settings.distance_field == DistanceFieldMode::Off;
+
+    // Off 按钮
+    let off_rect = Rect::new(rect.origin.x + 8.0, btn_y, btn_w, btn_h);
+    draw_option_button(ctx, PART_DF_OFF, off_rect, "Off", is_off, false, None);
+
+    // SDF 按钮
+    let sdf_rect = Rect::new(rect.origin.x + 8.0 + btn_w + btn_gap, btn_y, btn_w, btn_h);
+    draw_option_button(ctx, PART_DF_SDF, sdf_rect, "SDF", is_sdf, false, None);
+
+    // MTSDF 按钮（管线未接线，灰化）
+    let mtsdf_rect = Rect::new(
+        rect.origin.x + 8.0 + (btn_w + btn_gap) * 2.0,
+        btn_y,
+        btn_w,
+        btn_h,
+    );
+    draw_option_button(
+        ctx,
+        PART_DF_MTSDF,
+        mtsdf_rect,
+        "MTSDF",
+        false,
+        true,
+        Some("Pipeline not wired up"),
+    );
+
+    // 互斥说明或提示文案
+    let note = if is_sdf {
+        "Phase locked to 1 (Snapped)"
+    } else {
+        "Signed distance field generation"
+    };
+    ctx.canvas.text(
+        note,
+        Rect::new(
+            rect.origin.x + 8.0,
+            btn_y + btn_h + 3.0,
+            rect.size.x - 16.0,
+            16.0,
+        ),
+        9.0,
+        if is_sdf {
+            palette.primary
+        } else {
+            palette.text_muted
+        },
+        AlignX::Start,
+        AlignY::Center,
+    );
+}
+
+/// 绘制“合成”组控件。
+fn draw_composition_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
+    let palette = *ctx.canvas.palette;
+    let row_h = 24.0;
+    let label_w = 46.0;
+    let btn_gap = 6.0;
+
+    // 第一行：混合空间 (Blend Space)
+    let row1_y = rect.origin.y + 6.0;
+    ctx.canvas.text(
+        "Space:",
+        Rect::new(rect.origin.x + 8.0, row1_y, label_w, row_h),
+        10.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
+    let space_btn_w = ((rect.size.x - 16.0 - label_w - btn_gap) / 2.0).max(40.0);
+
+    let srgb_rect = Rect::new(rect.origin.x + 8.0 + label_w, row1_y, space_btn_w, row_h);
+    let is_srgb = state.settings.blend_space == BlendSpace::Srgb;
+    draw_option_button(ctx, PART_COMP_SRGB, srgb_rect, "sRGB", is_srgb, false, None);
+
+    let linear_rect = Rect::new(
+        rect.origin.x + 8.0 + label_w + space_btn_w + btn_gap,
+        row1_y,
+        space_btn_w,
+        row_h,
+    );
+    let is_linear = state.settings.blend_space == BlendSpace::Linear;
+    draw_option_button(
+        ctx,
+        PART_COMP_LINEAR,
+        linear_rect,
+        "Linear",
+        is_linear,
+        false,
+        None,
+    );
+
+    // 第二行：图层模式 (Layer Mode)
+    let row2_y = row1_y + row_h + 6.0;
+    ctx.canvas.text(
+        "Layer:",
+        Rect::new(rect.origin.x + 8.0, row2_y, label_w, row_h),
+        10.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
+
+    let direct_rect = Rect::new(rect.origin.x + 8.0 + label_w, row2_y, space_btn_w, row_h);
+    let is_direct = state.settings.layer_mode == LayerMode::Direct;
+    draw_option_button(
+        ctx,
+        PART_COMP_LAYER_DIRECT,
+        direct_rect,
+        "Direct",
+        is_direct,
+        false,
+        None,
+    );
+
+    let isolated_rect = Rect::new(
+        rect.origin.x + 8.0 + label_w + space_btn_w + btn_gap,
+        row2_y,
+        space_btn_w,
+        row_h,
+    );
+    let is_isolated = state.settings.layer_mode == LayerMode::Isolated;
+    draw_option_button(
+        ctx,
+        PART_COMP_LAYER_ISOLATED,
+        isolated_rect,
+        "Isolated",
+        is_isolated,
+        false,
+        None,
+    );
 }
 
 /// 绘制右侧文本实时对照预览区。

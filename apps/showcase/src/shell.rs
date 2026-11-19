@@ -2436,6 +2436,48 @@ impl GalleryApp {
                     } else if part == pages::text_render::STATUS_BAR_PART {
                         self.state.text_render.toggle_fallback_details();
                         self.state.bump();
+                    } else {
+                        match part {
+                            pages::text_render::PART_DF_OFF => {
+                                self.state.text_render.settings.distance_field =
+                                    unbound_text::DistanceFieldMode::Off;
+                                self.state.text_render.settings.use_sdf = false;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_DF_SDF => {
+                                self.state.text_render.settings.distance_field =
+                                    unbound_text::DistanceFieldMode::Sdf;
+                                self.state.text_render.settings.use_sdf = true;
+                                // 互斥规则生效：强制锁定相位为 1
+                                self.state.text_render.settings.phase_mode =
+                                    unbound_text::PhaseMode::One;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_DF_MTSDF => {
+                                // 管线未接线，灰化且不可点击
+                            }
+                            pages::text_render::PART_COMP_SRGB => {
+                                self.state.text_render.settings.blend_space =
+                                    unbound_text::BlendSpace::Srgb;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_COMP_LINEAR => {
+                                self.state.text_render.settings.blend_space =
+                                    unbound_text::BlendSpace::Linear;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_COMP_LAYER_DIRECT => {
+                                self.state.text_render.settings.layer_mode =
+                                    unbound_text::LayerMode::Direct;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_COMP_LAYER_ISOLATED => {
+                                self.state.text_render.settings.layer_mode =
+                                    unbound_text::LayerMode::Isolated;
+                                self.state.bump();
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }
