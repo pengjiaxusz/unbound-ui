@@ -10,7 +10,8 @@
 use accesskit::Role;
 use unbound_math::Rect;
 use unbound_text::{
-    CapabilityStatus, RasterBackend, TextCapabilities, TextRenderReport, TextRenderSettings,
+    BlendSpace, CapabilityStatus, DistanceFieldMode, LayerMode, RasterBackend, TextCapabilities,
+    TextRenderReport, TextRenderSettings,
 };
 
 use super::{DemoCtx, DemoKind, ExampleDef, PageInfo};
@@ -85,6 +86,17 @@ pub const PHASE_OPTIONS: [PhaseOptionDef; 3] = [
         description: "Pixel-snapped (phase 0 only)",
     },
 ];
+
+/// 距离场调节部件编号。
+pub const PART_DF_OFF: u16 = 50;
+pub const PART_DF_SDF: u16 = 51;
+pub const PART_DF_MTSDF: u16 = 52;
+
+/// 合成组调节部件编号。
+pub const PART_COMP_SRGB: u16 = 60;
+pub const PART_COMP_LINEAR: u16 = 61;
+pub const PART_COMP_LAYER_DIRECT: u16 = 62;
+pub const PART_COMP_LAYER_ISOLATED: u16 = 63;
 
 /// 控制台六大功能参数分组。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -238,6 +250,9 @@ pub enum TextFeatureKey {
     // 合成色彩空间
     CompositionSrgb,
     CompositionLinear,
+    // 合成图层模式
+    CompositionLayerDirect,
+    CompositionLayerIsolated,
 }
 
 /// 控件特性状态决议结果。
@@ -320,7 +335,7 @@ pub const FEATURE_RULES: &[FeatureRule] = &[
         key: TextFeatureKey::PhaseEight,
         query_capability: |caps| caps.subpixel_phase_8,
         check_constraint: Some(|_, settings| {
-            if settings.use_sdf {
+            if settings.use_sdf || settings.distance_field != DistanceFieldMode::Off {
                 Some("Phase locked to 1 when distance field is active")
             } else {
                 None
@@ -332,7 +347,7 @@ pub const FEATURE_RULES: &[FeatureRule] = &[
         key: TextFeatureKey::PhaseFour,
         query_capability: |caps| caps.subpixel_phase_4,
         check_constraint: Some(|_, settings| {
-            if settings.use_sdf {
+            if settings.use_sdf || settings.distance_field != DistanceFieldMode::Off {
                 Some("Phase locked to 1 when distance field is active")
             } else {
                 None
@@ -461,6 +476,18 @@ pub const FEATURE_RULES: &[FeatureRule] = &[
         query_capability: |_| CapabilityStatus::Available,
         check_constraint: None,
     },
+    // 合成图层模式：Direct
+    FeatureRule {
+        key: TextFeatureKey::CompositionLayerDirect,
+        query_capability: |_| CapabilityStatus::Available,
+        check_constraint: None,
+    },
+    // 合成图层模式：Isolated
+    FeatureRule {
+        key: TextFeatureKey::CompositionLayerIsolated,
+        query_capability: |_| CapabilityStatus::Available,
+        check_constraint: None,
+    },
 ];
 
 /// 通过能力表与当前设置决议指定特性的禁用状态与原因。
@@ -518,7 +545,7 @@ let resolution = resolve_feature(TextFeatureKey::BackendDirectWrite, &capabiliti
     &[],
     DemoKind::TextRender,
 )
-.with_height(580.0)];
+.with_height(520.0)];
 
 /// 渲染文本渲染控制台舞台主入口。
 pub fn text_render(ctx: &mut DemoCtx<'_, '_>) {
@@ -577,8 +604,10 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
 
         let content_h = if is_expanded {
             match group {
-                TextConsoleGroup::Font => 146.0,
+                TextConsoleGroup::Font => 78.0,
                 TextConsoleGroup::Pixel => 64.0,
+                TextConsoleGroup::DistanceField => 58.0,
+                TextConsoleGroup::Composition => 68.0,
                 _ => 22.0,
             }
         } else {
@@ -626,7 +655,7 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
         );
 
         // 若展开，绘制内容容器
-        if is_expanded && current_y + total_group_h <= rect.max().y {
+        if is_expanded {
             let content_rect = Rect::new(
                 rect.origin.x + 8.0,
                 current_y + header_h,
@@ -645,6 +674,26 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
                     0.0,
                 );
                 draw_pixel_group_content(ctx, content_rect, state);
+            } else if *group == TextConsoleGroup::DistanceField {
+                ctx.canvas.rect(
+                    content_rect,
+                    3.0,
+                    palette.card_border,
+                    palette.card_border,
+                    0.5,
+                    0.0,
+                );
+                draw_distance_field_controls(ctx, content_rect, state);
+            } else if *group == TextConsoleGroup::Composition {
+                ctx.canvas.rect(
+                    content_rect,
+                    3.0,
+                    palette.card_border,
+                    palette.card_border,
+                    0.5,
+                    0.0,
+                );
+                draw_composition_controls(ctx, content_rect, state);
             } else {
                 ctx.canvas.rect(
                     content_rect,
@@ -689,20 +738,29 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
     let pad_x = 8.0;
     let pad_y = 4.0;
     let inner_w = rect.size.x - pad_x * 2.0;
-    let mut current_y = rect.origin.y + pad_y;
+    let col_gap = 8.0;
+    let col_w = ((inner_w - col_gap) * 0.5).max(40.0);
 
-    // 1. 字体家族 (Family)
+    // Row 1: Family (left) & Weight (right)
+    let row1_y = rect.origin.y + pad_y;
     ctx.canvas.text(
         "FAMILY",
-        Rect::new(rect.origin.x + pad_x, current_y, inner_w, 10.0),
+        Rect::new(rect.origin.x + pad_x, row1_y, col_w, 10.0),
         8.0,
         palette.text_muted,
         AlignX::Start,
         AlignY::Center,
     );
-    current_y += 12.0;
+    ctx.canvas.text(
+        "WEIGHT",
+        Rect::new(rect.origin.x + pad_x + col_w + col_gap, row1_y, col_w, 10.0),
+        8.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
 
-    let family_rect = Rect::new(rect.origin.x + pad_x, current_y, inner_w, 22.0);
+    let family_rect = Rect::new(rect.origin.x + pad_x, row1_y + 11.0, col_w, 22.0);
     let family_ids: Vec<u64> = (0..FONT_FAMILY_OPTIONS.len())
         .map(|i| ctx.part(FONT_FAMILY_PART_BASE + i as u16))
         .collect();
@@ -720,20 +778,13 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
         family_res.disabled,
         None,
     );
-    current_y += 24.0;
 
-    // 2. 字重 (Weight)
-    ctx.canvas.text(
-        "WEIGHT",
-        Rect::new(rect.origin.x + pad_x, current_y, inner_w, 10.0),
-        8.0,
-        palette.text_muted,
-        AlignX::Start,
-        AlignY::Center,
+    let weight_rect = Rect::new(
+        rect.origin.x + pad_x + col_w + col_gap,
+        row1_y + 11.0,
+        col_w,
+        22.0,
     );
-    current_y += 12.0;
-
-    let weight_rect = Rect::new(rect.origin.x + pad_x, current_y, inner_w, 22.0);
     let weight_ids: Vec<u64> = (0..FONT_WEIGHT_OPTIONS.len())
         .map(|i| ctx.part(FONT_WEIGHT_PART_BASE + i as u16))
         .collect();
@@ -751,20 +802,19 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
         weight_res.disabled,
         None,
     );
-    current_y += 24.0;
 
-    // 3. 字号 (Size)
+    // Row 2: Size (left) & Italic (right)
+    let row2_y = row1_y + 37.0;
     ctx.canvas.text(
         "SIZE",
-        Rect::new(rect.origin.x + pad_x, current_y, inner_w, 10.0),
+        Rect::new(rect.origin.x + pad_x, row2_y, col_w, 10.0),
         8.0,
         palette.text_muted,
         AlignX::Start,
         AlignY::Center,
     );
-    current_y += 12.0;
 
-    let size_rect = Rect::new(rect.origin.x + pad_x, current_y, inner_w, 22.0);
+    let size_rect = Rect::new(rect.origin.x + pad_x, row2_y + 11.0, col_w, 22.0);
     let size_ids: Vec<u64> = (0..FONT_SIZE_OPTIONS.len())
         .map(|i| ctx.part(FONT_SIZE_PART_BASE + i as u16))
         .collect();
@@ -782,10 +832,13 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
         size_res.disabled,
         None,
     );
-    current_y += 26.0;
 
-    // 4. 斜体 (Italic)
-    let italic_rect = Rect::new(rect.origin.x + pad_x, current_y, inner_w, 24.0);
+    let italic_rect = Rect::new(
+        rect.origin.x + pad_x + col_w + col_gap,
+        row2_y + 11.0,
+        col_w,
+        22.0,
+    );
     let italic_node = ctx.part(FONT_ITALIC_PART);
     crate::widgets::toggle_switch(
         ctx.canvas,
@@ -873,6 +926,194 @@ fn draw_pixel_group_content(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextR
 
         ctx.control(part, opt_rect, Role::RadioButton, &a11y_label, selected);
     }
+}
+
+/// 绘制单个选项按钮并注册无障碍控件。
+fn draw_option_button(
+    ctx: &mut DemoCtx<'_, '_>,
+    part: u16,
+    rect: Rect,
+    label: &str,
+    selected: bool,
+    disabled: bool,
+    reason: Option<&str>,
+) {
+    let palette = *ctx.canvas.palette;
+    let (bg, border, text_color) = if disabled {
+        (palette.card_bg, palette.card_border, palette.text_muted)
+    } else if selected {
+        (palette.primary, palette.primary, palette.card_bg)
+    } else {
+        (palette.surface, palette.card_border, palette.text)
+    };
+
+    ctx.canvas.rect(rect, 3.0, bg, border, 1.0, 0.0);
+    ctx.canvas.text(
+        label,
+        Rect::new(
+            rect.origin.x + 2.0,
+            rect.origin.y,
+            rect.size.x - 4.0,
+            rect.size.y,
+        ),
+        10.5,
+        text_color,
+        AlignX::Center,
+        AlignY::Center,
+    );
+
+    let accessible_label = if let Some(r) = reason {
+        format!("{label} (Disabled: {r})")
+    } else {
+        label.to_string()
+    };
+    ctx.control(part, rect, Role::Button, &accessible_label, selected);
+}
+
+/// 绘制“距离场”组控件。
+fn draw_distance_field_controls(
+    ctx: &mut DemoCtx<'_, '_>,
+    rect: Rect,
+    state: &TextRenderPageState,
+) {
+    let palette = *ctx.canvas.palette;
+    let btn_gap = 6.0;
+    let btn_w = ((rect.size.x - 16.0 - btn_gap * 2.0) / 3.0).max(40.0);
+    let btn_h = 24.0;
+    let btn_y = rect.origin.y + 6.0;
+
+    let is_sdf = state.settings.use_sdf || state.settings.distance_field == DistanceFieldMode::Sdf;
+    let is_off = !is_sdf && state.settings.distance_field == DistanceFieldMode::Off;
+
+    // Off 按钮
+    let off_rect = Rect::new(rect.origin.x + 8.0, btn_y, btn_w, btn_h);
+    draw_option_button(ctx, PART_DF_OFF, off_rect, "Off", is_off, false, None);
+
+    // SDF 按钮
+    let sdf_rect = Rect::new(rect.origin.x + 8.0 + btn_w + btn_gap, btn_y, btn_w, btn_h);
+    draw_option_button(ctx, PART_DF_SDF, sdf_rect, "SDF", is_sdf, false, None);
+
+    // MTSDF 按钮（管线未接线，灰化）
+    let mtsdf_rect = Rect::new(
+        rect.origin.x + 8.0 + (btn_w + btn_gap) * 2.0,
+        btn_y,
+        btn_w,
+        btn_h,
+    );
+    draw_option_button(
+        ctx,
+        PART_DF_MTSDF,
+        mtsdf_rect,
+        "MTSDF",
+        false,
+        true,
+        Some("Pipeline not wired up"),
+    );
+
+    // 互斥说明或提示文案
+    let note = if is_sdf {
+        "Phase locked to 1 (Snapped)"
+    } else {
+        "Signed distance field generation"
+    };
+    ctx.canvas.text(
+        note,
+        Rect::new(
+            rect.origin.x + 8.0,
+            btn_y + btn_h + 3.0,
+            rect.size.x - 16.0,
+            16.0,
+        ),
+        9.0,
+        if is_sdf {
+            palette.primary
+        } else {
+            palette.text_muted
+        },
+        AlignX::Start,
+        AlignY::Center,
+    );
+}
+
+/// 绘制“合成”组控件。
+fn draw_composition_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
+    let palette = *ctx.canvas.palette;
+    let row_h = 24.0;
+    let label_w = 46.0;
+    let btn_gap = 6.0;
+
+    // 第一行：混合空间 (Blend Space)
+    let row1_y = rect.origin.y + 6.0;
+    ctx.canvas.text(
+        "Space:",
+        Rect::new(rect.origin.x + 8.0, row1_y, label_w, row_h),
+        10.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
+    let space_btn_w = ((rect.size.x - 16.0 - label_w - btn_gap) / 2.0).max(40.0);
+
+    let srgb_rect = Rect::new(rect.origin.x + 8.0 + label_w, row1_y, space_btn_w, row_h);
+    let is_srgb = state.settings.blend_space == BlendSpace::Srgb;
+    draw_option_button(ctx, PART_COMP_SRGB, srgb_rect, "sRGB", is_srgb, false, None);
+
+    let linear_rect = Rect::new(
+        rect.origin.x + 8.0 + label_w + space_btn_w + btn_gap,
+        row1_y,
+        space_btn_w,
+        row_h,
+    );
+    let is_linear = state.settings.blend_space == BlendSpace::Linear;
+    draw_option_button(
+        ctx,
+        PART_COMP_LINEAR,
+        linear_rect,
+        "Linear",
+        is_linear,
+        false,
+        None,
+    );
+
+    // 第二行：图层模式 (Layer Mode)
+    let row2_y = row1_y + row_h + 6.0;
+    ctx.canvas.text(
+        "Layer:",
+        Rect::new(rect.origin.x + 8.0, row2_y, label_w, row_h),
+        10.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Center,
+    );
+
+    let direct_rect = Rect::new(rect.origin.x + 8.0 + label_w, row2_y, space_btn_w, row_h);
+    let is_direct = state.settings.layer_mode == LayerMode::Direct;
+    draw_option_button(
+        ctx,
+        PART_COMP_LAYER_DIRECT,
+        direct_rect,
+        "Direct",
+        is_direct,
+        false,
+        None,
+    );
+
+    let isolated_rect = Rect::new(
+        rect.origin.x + 8.0 + label_w + space_btn_w + btn_gap,
+        row2_y,
+        space_btn_w,
+        row_h,
+    );
+    let is_isolated = state.settings.layer_mode == LayerMode::Isolated;
+    draw_option_button(
+        ctx,
+        PART_COMP_LAYER_ISOLATED,
+        isolated_rect,
+        "Isolated",
+        is_isolated,
+        false,
+        None,
+    );
 }
 
 /// 绘制右侧文本实时对照预览区。

@@ -310,19 +310,21 @@ impl GlyphCache {
         settings: &TextRenderSettings,
         engine: Option<&mut TextEngine>,
     ) -> InvalidationTier {
-        let tier = self.settings.invalidation_tier(settings);
+        let mut resolved_settings = settings.clone();
+        resolved_settings.enforce_constraints();
+        let tier = self.settings.invalidation_tier(&resolved_settings);
         match tier {
             InvalidationTier::Bitmap => {
                 self.clear();
-                if self.settings.raster_backend != settings.raster_backend {
-                    self.set_backend(settings.raster_backend);
+                if self.settings.raster_backend != resolved_settings.raster_backend {
+                    self.set_backend(resolved_settings.raster_backend);
                 }
                 #[allow(deprecated)]
                 {
-                    self.use_sdf = settings.use_sdf;
-                    self.sdf_spread = settings.sdf_spread;
-                    self.padding = settings.padding;
-                    self.snap_phases = settings.snap_phases();
+                    self.use_sdf = resolved_settings.use_sdf;
+                    self.sdf_spread = resolved_settings.sdf_spread;
+                    self.padding = resolved_settings.padding;
+                    self.snap_phases = resolved_settings.snap_phases();
                 }
                 if let Some(engine) = engine {
                     engine.clear_caches();
@@ -335,7 +337,7 @@ impl GlyphCache {
             }
             InvalidationTier::None => {}
         }
-        self.settings = settings.clone();
+        self.settings = resolved_settings;
         tier
     }
 
@@ -517,9 +519,9 @@ impl GlyphCache {
         self.misses += 1;
 
         // Windows 上优先使用 DirectWrite：覆盖率位图直接取自系统光栅器。
-        // 彩色字体、距离场或字体解析失败时继续走 swash。
+        // 彩色字体或字体解析失败时继续走 swash；欧氏距离场通过覆盖率位图后处理生成。
         #[cfg(windows)]
-        if !sdf_mode && self.backend == RasterBackend::DirectWrite {
+        if self.backend == RasterBackend::DirectWrite {
             let phase_offset = mode.phase_offset(phase);
             if let Some(raster) = self.raster_directwrite(engine, face, glyph, phase_offset) {
                 return self.commit_raster(
@@ -531,7 +533,7 @@ impl GlyphCache {
                     -raster.bearing_y,
                     false,
                     raster.data,
-                    false,
+                    sdf_mode,
                 );
             }
         }
