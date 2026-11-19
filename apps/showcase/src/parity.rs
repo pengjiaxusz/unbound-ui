@@ -2338,71 +2338,25 @@ fn emit_case(
             } else {
                 120.0
             };
-            let item_h = 40.0;
-            let disabled = control.disabled;
-
             let mut out = WidgetOutput::default();
             out.primitives
                 .push(primitive::surface(rect, 4.0, Token::CONTROL_FILL, 700));
 
-            let items = ["Item 1", "Item 2", "Item 3"];
-            for (idx, _text) in items.iter().enumerate() {
-                let y = rect.origin.y + idx as f32 * item_h;
-                let row_r = Rect::new(rect.origin.x + 3.0, y + 2.0, list_w - 6.0, item_h - 4.0);
-                let selected = !disabled && (idx == 0);
-
-                let fill = if selected {
-                    Token::HOVER // SubtleFillColorSecondary
-                } else {
-                    Token::NONE
-                };
-                out.primitives
-                    .push(primitive::surface(row_r, 4.0, fill, 702));
-
-                if selected {
-                    // 左侧选中胶囊条：3×16px，垂直居中，圆角 1.5px
-                    let pill = Rect::new(row_r.origin.x, y + (item_h - 16.0) * 0.5, 3.0, 16.0);
-                    out.primitives
-                        .push(primitive::surface(pill, 1.5, Token::PRIMARY, 705));
-
-                    if control.focused && !disabled {
-                        out.primitives.push(primitive::focus_ring(
-                            row_r.inflate(1.0),
-                            5.0,
-                            Token::FOCUS_RING,
-                            2.0,
-                            710,
-                            true,
-                        ));
-                    }
-                }
-            }
-
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_list_rows_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                702,
+            );
+            out.primitives.extend(fixture.output.primitives);
+            out.payloads.extend(fixture.output.payloads);
             push(scene, out);
-
-            // 排版列表项文本
-            for (idx, text) in items.iter().enumerate() {
-                let y = rect.origin.y + idx as f32 * item_h;
-                let row_r = Rect::new(rect.origin.x + 3.0, y + 2.0, list_w - 6.0, item_h - 4.0);
-                let selected = !disabled && (idx == 0);
-                let ink = if disabled {
-                    Token::TEXT_DISABLED
-                } else {
-                    Token::TEXT_PRIMARY
-                };
-                emit_text_left_middle(
-                    text_ctx,
-                    scene,
-                    text,
-                    row_r,
-                    rect.origin.x + 16.0,
-                    14.0,
-                    if selected { 500 } else { 400 },
-                    None,
-                    ink,
-                    704,
-                );
-            }
 
             Vec2::new(list_w, list_h)
         }
@@ -2421,129 +2375,25 @@ fn emit_case(
             } else {
                 140.0
             };
-            let item_h = 36.0;
-            let disabled = control.disabled;
-
             let mut out = WidgetOutput::default();
             out.primitives
                 .push(primitive::surface(rect, 4.0, Token::CONTROL_FILL, 700));
 
-            // 1. Root 根节点行（深度 0，首项选中）
-            let root_y = rect.origin.y + 4.0;
-            let root_r = Rect::new(rect.origin.x + 4.0, root_y, tree_w - 8.0, item_h - 4.0);
-            let root_selected =
-                !disabled && (checked || case.state == "normal" || case.state == "focused");
-
-            let root_fill = if root_selected {
-                Token::HOVER // SubtleFillColorSecondary
-            } else {
-                Token::NONE
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked: checked || case.state == "normal" || case.state == "focused",
+                selected_index: 0,
             };
-            out.primitives
-                .push(primitive::surface(root_r, 4.0, root_fill, 702));
-
-            if root_selected {
-                // 左侧选中胶囊条：3×16px，垂直居中，圆角 1.5px
-                let pill = Rect::new(
-                    root_r.origin.x,
-                    root_y + (item_h - 4.0 - 16.0) * 0.5,
-                    3.0,
-                    16.0,
-                );
-                out.primitives
-                    .push(primitive::surface(pill, 1.5, Token::PRIMARY, 705));
-
-                if control.focused && !disabled {
-                    out.primitives.push(primitive::focus_ring(
-                        root_r.inflate(1.0),
-                        5.0,
-                        Token::FOCUS_RING,
-                        2.0,
-                        710,
-                        true,
-                    ));
-                }
-            }
-
-            // 根节点的折叠/展开指示箭头（已展开：朝下箭头）
-            let chevron_cx = root_r.origin.x + 16.0;
-            let chevron_cy = root_y + (item_h - 4.0) * 0.5;
-            let chevron_ink = if disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_SECONDARY
-            };
-            primitive::curve_stroke(
-                [chevron_cx - 4.0, chevron_cy - 2.0],
-                [chevron_cx, chevron_cy + 2.0],
-                1.5,
-                chevron_ink,
-                704,
-                &mut out.primitives,
-                &mut out.payloads,
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_tree_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                702,
             );
-            primitive::curve_stroke(
-                [chevron_cx, chevron_cy + 2.0],
-                [chevron_cx + 4.0, chevron_cy - 2.0],
-                1.5,
-                chevron_ink,
-                704,
-                &mut out.primitives,
-                &mut out.payloads,
-            );
-
-            // 2. Child 子节点行（深度 1，缩进 16px）
-            let indent = 16.0;
-            let child_y = root_y + item_h;
-            let child_r = Rect::new(
-                rect.origin.x + 4.0 + indent,
-                child_y,
-                tree_w - 8.0 - indent,
-                item_h - 4.0,
-            );
-            out.primitives
-                .push(primitive::surface(child_r, 4.0, Token::NONE, 702));
-
-            // 子节点深度的引导连线
-            out.primitives.push(primitive::surface(
-                Rect::new(root_r.origin.x + 16.0, child_y, 1.0, item_h - 4.0),
-                0.0,
-                Token::DIVIDER,
-                703,
-            ));
-
+            out.primitives.extend(fixture.output.primitives);
+            out.payloads.extend(fixture.output.payloads);
             push(scene, out);
-
-            // 文本排版
-            let text_ink = if disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_PRIMARY
-            };
-            emit_text_left_middle(
-                text_ctx,
-                scene,
-                "Root",
-                root_r,
-                root_r.origin.x + 32.0,
-                14.0,
-                if root_selected { 600 } else { 400 },
-                None,
-                text_ink,
-                704,
-            );
-            emit_text_left_middle(
-                text_ctx,
-                scene,
-                "Child",
-                child_r,
-                child_r.origin.x + 16.0,
-                14.0,
-                400,
-                None,
-                text_ink,
-                704,
-            );
 
             Vec2::new(tree_w, tree_h)
         }
@@ -2562,83 +2412,25 @@ fn emit_case(
             } else {
                 40.0
             };
-            let disabled = control.disabled;
-
             let mut out = WidgetOutput::default();
-            // 选择条外框
             out.primitives
                 .push(primitive::surface(rect, 4.0, Token::CONTROL_FILL, 700));
 
-            let items = ["Day", "Week", "Month"];
-            let slot_count = items.len() as f32;
-            let pad = 2.0;
-            let available_w = bar_w - pad * 2.0;
-            let slot_w = available_w / slot_count;
-            let slot_h = bar_h - pad * 2.0;
-
-            for (idx, _text) in items.iter().enumerate() {
-                let slot_x = rect.origin.x + pad + idx as f32 * slot_w;
-                let slot_r = Rect::new(slot_x, rect.origin.y + pad, slot_w, slot_h);
-                let selected = !disabled && (idx == 0);
-
-                let fill = if selected {
-                    Token::HOVER // SubtleFillColorSecondary 悬停薄纱/选中底色
-                } else {
-                    Token::NONE
-                };
-                out.primitives
-                    .push(primitive::surface(slot_r, 4.0, fill, 702));
-
-                if selected {
-                    // 左侧选中指示条（3×16px，垂直居中，圆角 1.5px）
-                    let pill = Rect::new(
-                        slot_r.origin.x + 3.0,
-                        slot_r.origin.y + (slot_h - 16.0) * 0.5,
-                        3.0,
-                        16.0,
-                    );
-                    out.primitives
-                        .push(primitive::surface(pill, 1.5, Token::PRIMARY, 705));
-
-                    if control.focused && !disabled {
-                        out.primitives.push(primitive::focus_ring(
-                            slot_r.inflate(1.0),
-                            5.0,
-                            Token::FOCUS_RING,
-                            2.0,
-                            710,
-                            true,
-                        ));
-                    }
-                }
-            }
-
+            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
+                disabled: control.disabled,
+                focused: control.focused,
+                checked,
+                selected_index: 0,
+            };
+            let fixture_out = unbound_widgets::slot_fixture::emit_canonical_segmented_fixture(
+                rect,
+                fixture_state,
+                text_ctx,
+                702,
+            );
+            out.primitives.extend(fixture_out.primitives);
+            out.payloads.extend(fixture_out.payloads);
             push(scene, out);
-
-            // 文本排版
-            for (idx, text) in items.iter().enumerate() {
-                let slot_x = rect.origin.x + pad + idx as f32 * slot_w;
-                let slot_r = Rect::new(slot_x, rect.origin.y + pad, slot_w, slot_h);
-                let selected = !disabled && (idx == 0);
-                let ink = if disabled {
-                    Token::TEXT_DISABLED
-                } else if selected {
-                    Token::TEXT_PRIMARY
-                } else {
-                    Token::TEXT_SECONDARY
-                };
-
-                let quads = text_ctx.shape_line_styled(
-                    text,
-                    slot_r,
-                    14.0,
-                    if selected { 600 } else { 400 },
-                    None,
-                    unbound_widgets::AlignX::Center,
-                    unbound_widgets::AlignY::Middle,
-                );
-                emit_quads(scene, &quads, ink, 704);
-            }
 
             Vec2::new(bar_w, bar_h)
         }

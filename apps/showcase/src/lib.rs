@@ -24,6 +24,8 @@ pub mod layout_tree;
 pub mod pages;
 /// 像素一致性基准：按参考截图边界渲染单个试点控件。
 pub mod parity;
+/// 基准差分器容器标准插桩通用辅助。
+pub mod parity_fixtures;
 /// 像素一致性差分：ΔE2000 指标、热力图与 HTML 报告。
 pub mod png_diff;
 /// 适配到通用应用运行时的外壳。

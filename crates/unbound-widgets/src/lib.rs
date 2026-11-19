@@ -22,7 +22,20 @@ pub mod diff;
 pub mod ergonomics;
 pub mod primitive;
 pub mod shell;
+pub mod slot_fixture;
 pub mod title_bar;
+
+pub use slot_fixture::{
+    apply_recursive_disabled_propagation, emit_canonical_list_rows_fixture,
+    emit_canonical_path_fixture, emit_canonical_segmented_fixture,
+    emit_canonical_text_rows_fixture, emit_canonical_tree_fixture, remap_token_to_disabled,
+    FixtureState, ListRowsFixtureOutput, PathFixtureOutput, TextRowsFixtureOutput,
+    TreeFixtureOutput, CANONICAL_LIST_ITEMS, CANONICAL_PATH_ITEMS, CANONICAL_PATH_SEPARATOR,
+    CANONICAL_ROW_ITEMS, CANONICAL_SEGMENTED_ITEMS, CANONICAL_TREE_CHILD, CANONICAL_TREE_ROOT,
+    STANDARD_FONT_SIZE, STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT, STANDARD_PILL_RADIUS,
+    STANDARD_PILL_WIDTH, STANDARD_STACK_SPACING, STANDARD_TREE_INDENT, STANDARD_TREE_ITEM_HEIGHT,
+    WINUI_DISABLED_OPACITY,
+};
 
 pub use shell::{
     emit_brand_badge, emit_feature_card, emit_hero_backdrop, emit_icon_button,
