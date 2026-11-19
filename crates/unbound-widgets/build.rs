@@ -34,6 +34,7 @@ fn main() {
         "ergonomics",
         "primitive",
         "shell",
+        "slot_fixture",
         "title_bar",
     ];
 
