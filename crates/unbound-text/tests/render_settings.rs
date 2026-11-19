@@ -337,3 +337,171 @@ fn font_size_change_preserves_atlas_and_isolates_entries() {
         "previously cached 14px glyphs must still be present and hot"
     );
 }
+
+#[test]
+fn typographic_ligatures_toggle_reshapes_without_invalidating_atlas() {
+    let mut engine = TextEngine::new();
+    let mut cache = GlyphCache::new();
+
+    let mut style = TextStyle::sized(16.0);
+    // 优先选用支持丰富连字的字体（如 Cascadia Code 编程连字或 Calibri 标准连字）
+    let has_cascadia = engine
+        .font_system_mut()
+        .db()
+        .faces()
+        .any(|f| f.families.iter().any(|(name, _)| name == "Cascadia Code"));
+    let has_calibri = engine
+        .font_system_mut()
+        .db()
+        .faces()
+        .any(|f| f.families.iter().any(|(name, _)| name == "Calibri"));
+    if has_cascadia {
+        style.family = Some("Cascadia Code".to_string());
+    } else if has_calibri {
+        style.family = Some("Calibri".to_string());
+    }
+
+    let sample = "==> != -> <= >= Office conflict and difficult flow";
+
+    // 1. 默认设置开启连字 (ligatures = true)
+    let initial_settings = cache.settings().clone();
+    assert!(initial_settings.ligatures);
+    let shaped_with_ligatures = engine.shape(sample, &style);
+    let _ = cache.quads_for(&mut engine, &shaped_with_ligatures, Vec2::ZERO, 400, false);
+    let initial_resident_glyphs = cache.resident_glyphs();
+    assert!(initial_resident_glyphs > 0);
+
+    // 2. 切换连字为 false
+    let mut no_liga_settings = initial_settings.clone();
+    no_liga_settings.ligatures = false;
+    let tier = cache.apply_settings(&no_liga_settings, Some(&mut engine));
+    assert_eq!(tier, InvalidationTier::Typographic);
+
+    // 验证图集代际与位图缓存完全保留
+    assert_eq!(
+        cache.resident_glyphs(),
+        initial_resident_glyphs,
+        "typographic change must not clear glyph cache"
+    );
+
+    // 3. 再次塑形，连字关闭后文本重排生效（独立字形产生，字形数量或坐标改变）
+    let shaped_without_ligatures = engine.shape(sample, &style);
+    assert!(
+        shaped_without_ligatures.glyphs.len() >= shaped_with_ligatures.glyphs.len(),
+        "disabling ligatures should produce at least as many or more individual glyphs"
+    );
+    // 且塑形结果必须与开连字时有明确差异（文本重排生效）
+    assert_ne!(
+        shaped_with_ligatures.glyphs, shaped_without_ligatures.glyphs,
+        "glyphs must differ when ligatures are toggled"
+    );
+}
+
+#[test]
+fn typographic_line_break_and_bidi_toggle() {
+    let mut engine = TextEngine::new();
+    let style = TextStyle::sized(14.0);
+
+    // 1. 测试断行模式 LineBreakMode::None / Anywhere / Word
+    let wrap_text =
+        "Supercalifragilisticexpialidocious text with long words wrapping around container";
+    let max_w = 120.0;
+
+    // Word 模式：长词换行
+    let word_settings = TextRenderSettings {
+        line_break: LineBreakMode::Word,
+        ..Default::default()
+    };
+    engine.apply_settings(&TextRenderSettings::default(), &word_settings);
+    let wrapped_word = engine.wrap(wrap_text, &style, max_w);
+    assert!(wrapped_word.lines.len() > 1);
+
+    // None 模式：强制不换行，仅有 1 行
+    let none_settings = TextRenderSettings {
+        line_break: LineBreakMode::None,
+        ..Default::default()
+    };
+    engine.apply_settings(&word_settings, &none_settings);
+    let wrapped_none = engine.wrap(wrap_text, &style, max_w);
+    assert_eq!(
+        wrapped_none.lines.len(),
+        1,
+        "LineBreakMode::None must not break into multiple lines"
+    );
+
+    // Anywhere 模式：允许在任意字符截断换行
+    let anywhere_settings = TextRenderSettings {
+        line_break: LineBreakMode::Anywhere,
+        ..Default::default()
+    };
+    engine.apply_settings(&none_settings, &anywhere_settings);
+    let wrapped_anywhere = engine.wrap(wrap_text, &style, max_w);
+    assert!(
+        wrapped_anywhere.lines.len() >= wrapped_word.lines.len(),
+        "Anywhere mode should break at least as eagerly as Word mode"
+    );
+
+    // 2. 测试双向文本 BiDi 开关
+    let bidi_text = "Hello שלום World"; // lang-ok: Hebrew sample text for BiDi test
+    let bidi_on_settings = TextRenderSettings {
+        bidi: true,
+        ..Default::default()
+    };
+    engine.apply_settings(&anywhere_settings, &bidi_on_settings);
+    let shaped_bidi_on = engine.shape(bidi_text, &style);
+    let has_rtl = shaped_bidi_on.glyphs.iter().any(|g| g.is_rtl());
+    assert!(has_rtl, "RTL text with bidi=true must contain RTL glyphs");
+
+    let bidi_off_settings = TextRenderSettings {
+        bidi: false,
+        ..Default::default()
+    };
+    engine.apply_settings(&bidi_on_settings, &bidi_off_settings);
+    let shaped_bidi_off = engine.shape(bidi_text, &style);
+    // 禁用双向重排后，所有字形 level 均为 0（即非 RTL 倒序，纯从左往右）
+    assert!(
+        shaped_bidi_off.glyphs.iter().all(|g| !g.is_rtl()),
+        "bidi=false must not produce RTL glyph levels"
+    );
+    assert_ne!(
+        shaped_bidi_on.glyphs, shaped_bidi_off.glyphs,
+        "glyphs arrangement must differ between bidi on and off"
+    );
+}
+
+#[test]
+fn typographic_letter_spacing_and_line_height() {
+    let mut engine = TextEngine::new();
+    let style = TextStyle::sized(16.0);
+    let sample = "Letter spacing and line height adjustments";
+
+    // 1. 测试字距 letter_spacing
+    let default_settings = TextRenderSettings {
+        letter_spacing: 0.0,
+        ..Default::default()
+    };
+    engine.apply_settings(&TextRenderSettings::default(), &default_settings);
+    let normal = engine.shape(sample, &style);
+
+    let spaced_settings = TextRenderSettings {
+        letter_spacing: 2.0,
+        ..Default::default()
+    };
+    engine.apply_settings(&default_settings, &spaced_settings);
+    let spaced = engine.shape(sample, &style);
+
+    assert!(
+        spaced.width > normal.width,
+        "positive letter spacing must increase total text width"
+    );
+
+    // 2. 测试行高 line_height
+    let line_height_settings = TextRenderSettings {
+        line_height: 36.0,
+        ..Default::default()
+    };
+    engine.apply_settings(&spaced_settings, &line_height_settings);
+    let tall_line = engine.shape(sample, &style);
+    assert_eq!(tall_line.line_height, 36.0);
+    assert!(tall_line.height >= 36.0);
+}

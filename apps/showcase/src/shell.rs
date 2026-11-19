@@ -2558,6 +2558,69 @@ impl GalleryApp {
                                     unbound_text::LayerMode::Isolated;
                                 self.state.bump();
                             }
+                            pages::text_render::PART_SHAPER_COSMIC => {
+                                self.state.text_render.settings.shaper =
+                                    unbound_text::TextShaper::Cosmic;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_SHAPER_NATIVE => {
+                                // 禁用项，不生效
+                            }
+                            pages::text_render::PART_LINEBREAK_WORD => {
+                                self.state.text_render.settings.line_break =
+                                    unbound_text::LineBreakMode::Word;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINEBREAK_ANYWHERE => {
+                                self.state.text_render.settings.line_break =
+                                    unbound_text::LineBreakMode::Anywhere;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINEBREAK_NONE => {
+                                self.state.text_render.settings.line_break =
+                                    unbound_text::LineBreakMode::None;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_BIDI_ON => {
+                                self.state.text_render.settings.bidi = true;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_BIDI_OFF => {
+                                self.state.text_render.settings.bidi = false;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LIGATURES_ON => {
+                                self.state.text_render.settings.ligatures = true;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LIGATURES_OFF => {
+                                self.state.text_render.settings.ligatures = false;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LETTER_SPACING_0 => {
+                                self.state.text_render.settings.letter_spacing = 0.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LETTER_SPACING_1 => {
+                                self.state.text_render.settings.letter_spacing = 1.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LETTER_SPACING_2 => {
+                                self.state.text_render.settings.letter_spacing = 2.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINE_HEIGHT_AUTO => {
+                                self.state.text_render.settings.line_height = 0.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINE_HEIGHT_20 => {
+                                self.state.text_render.settings.line_height = 20.0;
+                                self.state.bump();
+                            }
+                            pages::text_render::PART_LINE_HEIGHT_28 => {
+                                self.state.text_render.settings.line_height = 28.0;
+                                self.state.bump();
+                            }
                             _ => {}
                         }
                     }
