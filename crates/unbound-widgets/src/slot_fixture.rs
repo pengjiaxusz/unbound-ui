@@ -12,7 +12,7 @@ use unbound_theme::Token;
 
 use crate::ergonomics::TextCtx;
 use crate::primitive;
-use crate::{AlignX, AlignY, WidgetOutput};
+use crate::{AlignX, AlignY, UiWidget, WidgetOutput};
 
 /// 标准路径插桩文本项（固定 3 级）。
 pub const CANONICAL_PATH_ITEMS: [&str; 3] = ["Root", "Folder", "File.txt"];
@@ -34,6 +34,54 @@ pub const CANONICAL_ROW_ITEMS: [&str; 3] = ["Row 1", "Row 2", "Row 3"];
 
 /// 标准可交互列表条目项（固定 3 项）。
 pub const CANONICAL_LIST_ITEMS: [&str; 3] = ["Item 1", "Item 2", "Item 3"];
+
+/// 标准 PipsPager 页数（固定 5 页）。
+pub const CANONICAL_PIPS_COUNT: usize = 5;
+
+/// 标准 PipsPager 默认选中页索引（第 2 页，0-based 为 1）。
+pub const CANONICAL_PIPS_SELECTED_INDEX: usize = 1;
+
+/// 标准 PipsPager 未选中圆点直径（6px）。
+pub const CANONICAL_PIP_SIZE_NORMAL: f32 = 6.0;
+
+/// 标准 PipsPager 选中圆点直径（10px）。
+pub const CANONICAL_PIP_SIZE_SELECTED: f32 = 10.0;
+
+/// 标准 PipsPager 圆点中心间距（16px）。
+pub const CANONICAL_PIP_SPACING: f32 = 16.0;
+
+/// 标准 CommandBar 命令项（图标与文本标签，对齐 C# 宿主 Save / Open）。
+pub const CANONICAL_COMMAND_ITEMS: [(&str, &str); 2] = [("\u{E74E}", "Save"), ("\u{E8E5}", "Open")];
+
+/// 标准 CommandBar 更多命令按钮图标。
+pub const CANONICAL_COMMAND_MORE_GLYPH: &str = "\u{E10C}";
+
+/// 标准 MenuBar 菜单项（固定为 File 与 Edit，对齐 C# 宿主）。
+pub const CANONICAL_MENU_ITEMS: [&str; 2] = ["File", "Edit"];
+
+/// 标准 TitleBar 窗口标题。
+pub const CANONICAL_TITLE_BAR_TITLE: &str = "Document";
+
+/// 标准 TitleBar 窗口副标题。
+pub const CANONICAL_TITLE_BAR_SUBTITLE: &str = "WinUiReference";
+
+/// 标准 NavigationView 菜单项（图标与文本标签，对齐 C# 宿主 Home / Library）。
+pub const CANONICAL_NAV_ITEMS: [(&str, &str); 2] = [("\u{E80F}", "Home"), ("\u{E8F1}", "Library")];
+
+/// 标准 NavigationView 底部 Settings 项。
+pub const CANONICAL_NAV_SETTINGS: (&str, &str) = ("\u{E713}", "Settings");
+
+/// 标准 NavigationView 顶部折叠汉堡按钮图标。
+pub const CANONICAL_NAV_TOGGLE_GLYPH: &str = "\u{E700}";
+
+/// 标准 TabView 标签页项（固定为 Tab 1 与 Tab 2，对齐 C# 宿主）。
+pub const CANONICAL_TAB_ITEMS: [&str; 2] = ["Tab 1", "Tab 2"];
+
+/// 标准 TabView 选中页内部纯文本内容（对齐 C# 宿主 "Content"）。
+pub const CANONICAL_TAB_CONTENT: &str = "Content";
+
+/// 标准 TabView 标签页关闭按钮图标。
+pub const CANONICAL_TAB_CLOSE_GLYPH: &str = "\u{E711}";
 
 /// 标准网格条目项（固定 2×2，共 4 项）。
 pub const CANONICAL_GRID_ITEMS: [&str; 4] = ["Item 1", "Item 2", "Item 3", "Item 4"];
@@ -225,6 +273,86 @@ pub struct ListRowsFixtureOutput {
     pub total_size: Vec2,
 }
 
+/// 通用 PipsPager 插桩输出与几何排版信息。
+#[derive(Clone, Debug, Default)]
+pub struct PipsPagerFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 各圆点对应的包围盒矩形。
+    pub pip_rects: Vec<Rect>,
+    /// 选中的圆点索引。
+    pub selected_index: usize,
+    /// 测得的整体尺寸。
+    pub total_size: Vec2,
+}
+
+/// 通用 CommandBar 插桩输出与几何排版信息。
+#[derive(Clone, Debug, Default)]
+pub struct CommandBarFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 各命令按钮对应的包围盒矩形。
+    pub button_rects: Vec<Rect>,
+    /// 分隔线对应的包围盒矩形。
+    pub separator_rect: Option<Rect>,
+    /// 更多操作按钮对应的包围盒矩形。
+    pub more_button_rect: Option<Rect>,
+    /// 测得的整体尺寸。
+    pub total_size: Vec2,
+}
+
+/// 通用 MenuBar 插桩输出与几何排版信息。
+#[derive(Clone, Debug, Default)]
+pub struct MenuBarFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 各菜单项对应的包围盒矩形。
+    pub item_rects: Vec<Rect>,
+    /// 测得的整体尺寸。
+    pub total_size: Vec2,
+}
+
+/// 通用 TitleBar 插桩输出与几何排版信息。
+#[derive(Clone, Debug, Default)]
+pub struct TitleBarFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 标题对应的包围盒矩形。
+    pub title_rect: Rect,
+    /// 副标题对应的包围盒矩形。
+    pub subtitle_rect: Rect,
+    /// 窗口控制按钮对应的包围盒矩形。
+    pub caption_rects: Vec<Rect>,
+    /// 测得的整体尺寸。
+    pub total_size: Vec2,
+}
+
+/// 通用 NavigationView 插桩输出与几何排版信息。
+#[derive(Clone, Debug, Default)]
+pub struct NavigationViewFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 各菜单项对应的包围盒矩形。
+    pub item_rects: Vec<Rect>,
+    /// 底部设置项对应的包围盒矩形。
+    pub settings_rect: Rect,
+    /// 测得的整体尺寸。
+    pub total_size: Vec2,
+}
+
+/// 通用 TabView 插桩输出与几何排版信息。
+#[derive(Clone, Debug, Default)]
+pub struct TabViewFixtureOutput {
+    /// 图元与载荷输出。
+    pub output: WidgetOutput,
+    /// 各标签页对应的包围盒矩形。
+    pub tab_rects: Vec<Rect>,
+    /// 内容区对应的包围盒矩形。
+    pub content_rect: Rect,
+    /// 测得的整体尺寸。
+    pub total_size: Vec2,
+}
+
 /// 通用网格集合视图插桩输出与几何排版信息。
 #[derive(Clone, Debug, Default)]
 pub struct GridFixtureOutput {
@@ -370,6 +498,24 @@ pub fn emit_canonical_path_fixture(
             );
 
             cur_x += sep_w + gap;
+        }
+    }
+
+    if state.focused && !state.disabled {
+        let focus_idx = if state.selected_index < item_rects.len() {
+            state.selected_index
+        } else {
+            item_rects.len().saturating_sub(1)
+        };
+        if let Some(r) = item_rects.get(focus_idx) {
+            out.primitives.push(primitive::focus_ring(
+                r.inflate(2.0),
+                4.0,
+                Token::FOCUS_RING,
+                2.0,
+                z + 10,
+                true,
+            ));
         }
     }
 
@@ -813,6 +959,848 @@ pub fn emit_canonical_list_rows_fixture(
         output: out,
         item_rects,
         total_size: Vec2::new(list_w, item_h * 3.0),
+    }
+}
+
+/// 发射标准化 PipsPager 分页指示点插桩（固定 5 页，第 2 页选中）。
+///
+/// 几何与排版规则：
+/// - 水平居中排布 5 个圆点，中心间距 16px；
+/// - 选中项（由 `state.selected_index` 决定，默认 1）：
+///   - 未禁用时：直径 10px，填充 [`Token::PRIMARY`]；
+///   - 禁用时：直径 10px，填充 [`Token::CONTROL_DISABLED_THUMB`]；
+///   - 聚焦时：绘制跟随选中圆点的圆形焦点环；
+/// - 未选中项：
+///   - 未禁用时：直径 6px，填充 [`Token::CONTROL_TRACK`]；
+///   - 禁用时：直径 6px，填充 [`Token::CONTROL_DISABLED_THUMB`]。
+pub fn emit_canonical_pips_pager_fixture(
+    rect: Rect,
+    state: FixtureState,
+    z: u16,
+) -> PipsPagerFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let count = CANONICAL_PIPS_COUNT;
+    let mut pip_rects = Vec::with_capacity(count);
+
+    let total_w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        320.0
+    };
+    let total_h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        32.0
+    };
+    let center_x = rect.origin.x + total_w * 0.5;
+    let center_y = rect.origin.y + total_h * 0.5;
+
+    let span = (count - 1) as f32 * CANONICAL_PIP_SPACING;
+    let start_x = center_x - span * 0.5;
+
+    let sel_idx = if state.selected_index == 0 {
+        CANONICAL_PIPS_SELECTED_INDEX
+    } else if state.selected_index < count {
+        state.selected_index
+    } else {
+        CANONICAL_PIPS_SELECTED_INDEX
+    };
+
+    for idx in 0..count {
+        let cx = start_x + idx as f32 * CANONICAL_PIP_SPACING;
+        let is_selected = idx == sel_idx;
+        let size = if is_selected {
+            CANONICAL_PIP_SIZE_SELECTED
+        } else {
+            CANONICAL_PIP_SIZE_NORMAL
+        };
+        let pip_r = Rect::new(cx - size * 0.5, center_y - size * 0.5, size, size);
+        pip_rects.push(pip_r);
+
+        let fill = if state.disabled {
+            Token::CONTROL_DISABLED_THUMB
+        } else if is_selected {
+            Token::PRIMARY
+        } else {
+            Token::CONTROL_TRACK
+        };
+
+        out.primitives
+            .push(primitive::surface(pip_r, size * 0.5, fill, z + 2));
+
+        if is_selected && state.focused && !state.disabled {
+            out.primitives.push(primitive::focus_ring(
+                pip_r.inflate(3.0),
+                (size * 0.5) + 3.0,
+                Token::FOCUS_RING,
+                2.0,
+                z + 10,
+                true,
+            ));
+        }
+    }
+
+    PipsPagerFixtureOutput {
+        output: out,
+        pip_rects,
+        selected_index: sel_idx,
+        total_size: Vec2::new(total_w, total_h),
+    }
+}
+
+/// 发射标准化 CommandBar 命令栏插桩（`Save`、`Open`、竖向分隔符与更多按钮）。
+///
+/// 几何与排版规则：
+/// - 整体高度 48px，宽度对齐 `rect.width()`（默认 320px）；
+/// - 左侧依次排布 2 枚 `AppBarButton`（宽 68px，上部 16px 图标，下部 12px 标签文本）；
+/// - 按钮后跟随 1px 宽竖向分隔符（高 24px，垂直居中）；
+/// - 右侧对齐排布 `...` 更多操作按钮（宽 40px）；
+/// - 未禁用时使用 [`Token::TEXT_PRIMARY`]，禁用时递归衰减为 [`Token::TEXT_DISABLED`]。
+pub fn emit_canonical_command_bar_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> CommandBarFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let bar_w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        320.0
+    };
+    let bar_h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        48.0
+    };
+    let bar_r = Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h);
+
+    let bg_fill = if state.disabled {
+        Token::NONE
+    } else {
+        Token::CONTROL_FILL
+    };
+    out.primitives
+        .push(primitive::surface(bar_r, 4.0, bg_fill, z));
+
+    let btn_w = 68.0;
+    let mut button_rects = Vec::with_capacity(CANONICAL_COMMAND_ITEMS.len());
+    let mut cur_x = bar_r.origin.x + 2.0;
+
+    let icon_ink = if state.disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let text_ink = if state.disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+
+    for (idx, &(glyph, label)) in CANONICAL_COMMAND_ITEMS.iter().enumerate() {
+        let btn_r = Rect::new(cur_x, bar_r.origin.y + 2.0, btn_w, bar_h - 4.0);
+        button_rects.push(btn_r);
+
+        if idx == 0 && state.focused && !state.disabled {
+            out.primitives.push(primitive::focus_ring(
+                btn_r.inflate(1.0),
+                4.0,
+                Token::FOCUS_RING,
+                2.0,
+                z + 10,
+                true,
+            ));
+        }
+
+        let icon_r = Rect::new(btn_r.origin.x, btn_r.origin.y + 4.0, btn_w, 20.0);
+        let icon_quads = text_ctx.shape_line_styled(
+            glyph,
+            icon_r,
+            16.0,
+            400,
+            None,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &icon_quads,
+            icon_ink,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+
+        let label_r = Rect::new(btn_r.origin.x, btn_r.origin.y + 24.0, btn_w, 16.0);
+        let label_quads = text_ctx.shape_line_styled(
+            label,
+            label_r,
+            12.0,
+            400,
+            None,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &label_quads,
+            text_ink,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+
+        cur_x += btn_w + 2.0;
+    }
+
+    let sep_r = Rect::new(
+        cur_x + 4.0,
+        bar_r.origin.y + (bar_h - 24.0) * 0.5,
+        1.0,
+        24.0,
+    );
+    let sep_ink = if state.disabled {
+        Token::CONTROL_DISABLED_BORDER
+    } else {
+        Token::DIVIDER
+    };
+    out.primitives
+        .push(primitive::surface(sep_r, 0.0, sep_ink, z + 2));
+
+    let more_w = 40.0;
+    let more_r = Rect::new(
+        bar_r.max().x - more_w - 4.0,
+        bar_r.origin.y + 2.0,
+        more_w,
+        bar_h - 4.0,
+    );
+    let more_ink = if state.disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_SECONDARY
+    };
+    let more_quads = text_ctx.shape_line_styled(
+        CANONICAL_COMMAND_MORE_GLYPH,
+        more_r,
+        14.0,
+        400,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &more_quads,
+        more_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    CommandBarFixtureOutput {
+        output: out,
+        button_rects,
+        separator_rect: Some(sep_r),
+        more_button_rect: Some(more_r),
+        total_size: Vec2::new(bar_w, bar_h),
+    }
+}
+
+/// 发射标准化 MenuBar 菜单栏插桩（`File` 与 `Edit`）。
+///
+/// 几何与排版规则：
+/// - 默认行高 40px，宽度对齐 `rect.width()`（默认 320px）；
+/// - 左侧横向排列 `File` 与 `Edit` 两个顶层菜单项；
+/// - 未禁用时使用 [`Token::TEXT_PRIMARY`]，禁用时统一降级为 [`Token::TEXT_DISABLED`]。
+pub fn emit_canonical_menu_bar_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> MenuBarFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let bar_w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        320.0
+    };
+    let bar_h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        40.0
+    };
+    let bar_r = Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h);
+
+    let text_ink = if state.disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+
+    let mut item_rects = Vec::with_capacity(CANONICAL_MENU_ITEMS.len());
+    let mut cur_x = bar_r.origin.x + 4.0;
+
+    for (idx, &item_text) in CANONICAL_MENU_ITEMS.iter().enumerate() {
+        let measured = text_ctx.measure_line(item_text, STANDARD_FONT_SIZE, 400);
+        let item_w = (measured.x + 20.0).max(44.0);
+        let item_r = Rect::new(cur_x, bar_r.origin.y + 4.0, item_w, bar_h - 8.0);
+        item_rects.push(item_r);
+
+        if idx == 0 && state.focused && !state.disabled {
+            out.primitives.push(primitive::focus_ring(
+                item_r.inflate(1.0),
+                4.0,
+                Token::FOCUS_RING,
+                2.0,
+                z + 10,
+                true,
+            ));
+        }
+
+        let quads = text_ctx.shape_line_styled(
+            item_text,
+            item_r,
+            STANDARD_FONT_SIZE,
+            400,
+            None,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &quads,
+            text_ink,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+
+        cur_x += item_w + 4.0;
+    }
+
+    MenuBarFixtureOutput {
+        output: out,
+        item_rects,
+        total_size: Vec2::new(bar_w, bar_h),
+    }
+}
+
+/// 发射标准化 TitleBar 标题栏插桩（`Document`、`WinUiReference` 与三枚控制按钮）。
+///
+/// 几何与排版规则：
+/// - 默认高度 32px，宽度对齐 `rect.width()`（默认 420px）；
+/// - 左侧垂直居中排布窗口主标题 `Document`（12px，SemiBold 600，[`Token::TEXT_PRIMARY`]）；
+/// - 主标题右侧相隔 8px 紧随副标题 `WinUiReference`（12px，Regular 400，[`Token::TEXT_SECONDARY`]），两端保持完全统一的基线排版；
+/// - 右侧自右向左紧贴排布三枚标准无边框窗口控制按钮（各 46px 宽）；
+/// - 递归禁用态传播：当 `state.disabled` 为 true 时，标题、副标题与控制按钮同步降级为 [`Token::TEXT_DISABLED`]。
+pub fn emit_canonical_title_bar_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> TitleBarFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let bar_w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        420.0
+    };
+    let bar_h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        32.0
+    };
+    let bar_r = Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h);
+
+    let chrome_fill = if state.disabled {
+        Token::SURFACE
+    } else {
+        Token::HEADER_BG
+    };
+    out.primitives
+        .push(primitive::surface(bar_r, 0.0, chrome_fill, z));
+    let rule_r = Rect::new(bar_r.origin.x, bar_r.max().y - 1.0, bar_w, 1.0);
+    out.primitives
+        .push(primitive::surface(rule_r, 0.0, Token::DIVIDER, z + 1));
+
+    let title_x = bar_r.origin.x + 16.0;
+    let title_ink = if state.disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let subtitle_ink = if state.disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_SECONDARY
+    };
+
+    let title_measured = text_ctx.measure_line(CANONICAL_TITLE_BAR_TITLE, 12.0, 600);
+    let title_w = title_measured.x.ceil().max(20.0);
+    let title_r = Rect::new(title_x, bar_r.origin.y, title_w, bar_h);
+
+    let title_quads = text_ctx.shape_line_styled(
+        CANONICAL_TITLE_BAR_TITLE,
+        title_r,
+        12.0,
+        600,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &title_quads,
+        title_ink,
+        z + 4,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    let sub_x = title_x + title_w + 8.0;
+    let sub_measured = text_ctx.measure_line(CANONICAL_TITLE_BAR_SUBTITLE, 12.0, 400);
+    let sub_w = sub_measured.x.ceil().max(20.0);
+    let sub_r = Rect::new(sub_x, bar_r.origin.y, sub_w, bar_h);
+
+    let sub_quads = text_ctx.shape_line_styled(
+        CANONICAL_TITLE_BAR_SUBTITLE,
+        sub_r,
+        12.0,
+        400,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &sub_quads,
+        subtitle_ink,
+        z + 4,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    let caption_w = crate::title_bar::TITLE_BAR_CAPTION_WIDTH;
+    let kinds = [
+        crate::title_bar::WindowCaptionKind::Minimize,
+        crate::title_bar::WindowCaptionKind::Maximize { maximized: false },
+        crate::title_bar::WindowCaptionKind::Close,
+    ];
+    let mut caption_rects = Vec::with_capacity(kinds.len());
+    let count = kinds.len();
+    for (index, kind) in kinds.into_iter().enumerate() {
+        let left = bar_r.max().x - caption_w * (count - index) as f32;
+        let button_rect = Rect::new(left, bar_r.origin.y, caption_w, bar_h);
+        caption_rects.push(button_rect);
+        let button =
+            crate::title_bar::WindowCaptionButton::new(kind, bar_h).focused(!state.disabled);
+        let btn_out = button.emit_laid_out(
+            index as u64 + 10,
+            button_rect,
+            crate::ControlState {
+                disabled: state.disabled,
+                ..Default::default()
+            },
+            &(),
+            text_ctx,
+        );
+        out.primitives.extend(btn_out.primitives);
+        out.payloads.extend(btn_out.payloads);
+    }
+
+    TitleBarFixtureOutput {
+        output: out,
+        title_rect: title_r,
+        subtitle_rect: sub_r,
+        caption_rects,
+        total_size: Vec2::new(bar_w, bar_h),
+    }
+}
+
+/// 发射标准化 NavigationView 导航窗格插桩（`Home`、`Library` 与底部 `Settings`）。
+///
+/// 几何与排版规则：
+/// - 默认宽度 300px，高度 200px；
+/// - 左侧窗格整体铺 [`Token::CARD_BG`]，右沿带 1px [`Token::CARD_BORDER`] 分隔；
+/// - 首项 `Home` 处于默认选中态：绘制 3×16px Accent 胶囊条与 [`Token::NAV_SELECTED`] 背景；
+/// - 底部相隔 1px 细线排布 `Settings` 菜单项；
+/// - 递归禁用态传播：当 `state.disabled` 为 true 时，抑制胶囊条与选中背景，所有图标与文本统一下发 [`Token::TEXT_DISABLED`]。
+pub fn emit_canonical_navigation_view_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> NavigationViewFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let panel_w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        300.0
+    };
+    let panel_h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        200.0
+    };
+    let panel_r = Rect::new(rect.origin.x, rect.origin.y, panel_w, panel_h);
+
+    let item_h = 36.0;
+    let pad_x = 4.0;
+    let pad_y = 4.0;
+    let row_w = panel_w - pad_x * 2.0;
+
+    out.primitives
+        .push(primitive::surface(panel_r, 0.0, Token::CARD_BG, z));
+    out.primitives.push(primitive::surface(
+        Rect::new(panel_r.max().x - 1.0, panel_r.origin.y, 1.0, panel_h),
+        0.0,
+        Token::CARD_BORDER,
+        z + 1,
+    ));
+
+    let disabled = state.disabled;
+    let selected_idx = state.selected_index;
+    let mut item_rects = Vec::with_capacity(CANONICAL_NAV_ITEMS.len());
+
+    let icon_x = panel_r.origin.x + pad_x + 12.0;
+    let text_x = panel_r.origin.x + pad_x + 40.0;
+
+    for (idx, &(glyph, label)) in CANONICAL_NAV_ITEMS.iter().enumerate() {
+        let is_selected = !disabled && (idx == selected_idx);
+        let row_y = panel_r.origin.y + pad_y + idx as f32 * item_h;
+        let row_r = Rect::new(panel_r.origin.x + pad_x, row_y, row_w, item_h);
+        item_rects.push(row_r);
+
+        let row_fill = if disabled {
+            Token::NONE
+        } else if is_selected {
+            Token::NAV_SELECTED
+        } else {
+            Token::NONE
+        };
+        out.primitives
+            .push(primitive::surface(row_r, 4.0, row_fill, z + 2));
+
+        if is_selected {
+            let pill = Rect::new(
+                row_r.origin.x,
+                row_r.origin.y + (item_h - 16.0) * 0.5,
+                3.0,
+                16.0,
+            );
+            out.primitives
+                .push(primitive::surface(pill, 1.5, Token::PRIMARY, z + 5));
+
+            if state.focused {
+                out.primitives.push(primitive::focus_ring(
+                    row_r.inflate(1.0),
+                    5.0,
+                    Token::FOCUS_RING,
+                    2.0,
+                    z + 10,
+                    true,
+                ));
+            }
+        }
+
+        let icon_ink = if disabled {
+            Token::TEXT_DISABLED
+        } else if is_selected {
+            Token::PRIMARY
+        } else {
+            Token::TEXT_SECONDARY
+        };
+        let text_ink = if disabled {
+            Token::TEXT_DISABLED
+        } else {
+            Token::TEXT_PRIMARY
+        };
+
+        let icon_r = Rect::new(icon_x - 8.0, row_r.origin.y, 16.0, item_h);
+        let icon_quads = text_ctx.shape_line_styled(
+            glyph,
+            icon_r,
+            16.0,
+            400,
+            None,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &icon_quads,
+            icon_ink,
+            z + 4,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+
+        let weight = if is_selected { 600 } else { 400 };
+        let text_r = Rect::new(
+            text_x,
+            row_r.origin.y,
+            row_w - (text_x - row_r.origin.x),
+            item_h,
+        );
+        let text_quads = text_ctx.shape_line_styled(
+            label,
+            text_r,
+            STANDARD_FONT_SIZE,
+            weight,
+            None,
+            AlignX::Left,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &text_quads,
+            text_ink,
+            z + 4,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
+
+    let footer_y = panel_r.origin.y + panel_h - item_h - pad_y;
+    out.primitives.push(primitive::surface(
+        Rect::new(panel_r.origin.x + pad_x, footer_y - 5.0, row_w, 1.0),
+        0.0,
+        Token::DIVIDER,
+        z + 2,
+    ));
+    let settings_r = Rect::new(panel_r.origin.x + pad_x, footer_y, row_w, item_h);
+    out.primitives
+        .push(primitive::surface(settings_r, 4.0, Token::NONE, z + 2));
+
+    let settings_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_SECONDARY
+    };
+
+    let set_icon_r = Rect::new(icon_x - 8.0, settings_r.origin.y, 16.0, item_h);
+    let set_icon_quads = text_ctx.shape_line_styled(
+        CANONICAL_NAV_SETTINGS.0,
+        set_icon_r,
+        16.0,
+        400,
+        None,
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &set_icon_quads,
+        settings_ink,
+        z + 4,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    let set_text_r = Rect::new(
+        text_x,
+        settings_r.origin.y,
+        row_w - (text_x - settings_r.origin.x),
+        item_h,
+    );
+    let set_text_quads = text_ctx.shape_line_styled(
+        CANONICAL_NAV_SETTINGS.1,
+        set_text_r,
+        STANDARD_FONT_SIZE,
+        400,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &set_text_quads,
+        settings_ink,
+        z + 4,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    NavigationViewFixtureOutput {
+        output: out,
+        item_rects,
+        settings_rect: settings_r,
+        total_size: Vec2::new(panel_w, panel_h),
+    }
+}
+
+/// 发射标准化 TabView 标签页组件插桩（`Tab 1`、`Tab 2` 与内容区 `Content`）。
+///
+/// 几何与排版规则：
+/// - 默认宽度 360px，高度 120px；
+/// - 顶部为 36px 高度的标签条，底部垫 1px [`Token::DIVIDER`] 细线；
+/// - 首项 `Tab 1` 处于激活态（[`Token::SURFACE`] 背景与底部 2px 强调色指示条），右侧带 `x` 关闭图标；
+/// - 标签条下方为内容区（[`Token::CARD_BG`] 底板），左上角内边距 16px 排布纯文本 `Content`；
+/// - 递归禁用态传播：当 `state.disabled` 为 true 时，抑制底色与指示条，标签页、关闭图标与正文全量变灰衰减为 [`Token::TEXT_DISABLED`]。
+pub fn emit_canonical_tab_view_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> TabViewFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let tab_w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        360.0
+    };
+    let tab_h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        120.0
+    };
+    let total_r = Rect::new(rect.origin.x, rect.origin.y, tab_w, tab_h);
+
+    let strip_h = 36.0;
+    let tab_item_w = 120.0;
+    let disabled = state.disabled;
+    let selected_idx = state.selected_index;
+
+    let mut tab_rects = Vec::with_capacity(CANONICAL_TAB_ITEMS.len());
+
+    let line_r = Rect::new(
+        total_r.origin.x,
+        total_r.origin.y + strip_h - 1.0,
+        tab_w,
+        1.0,
+    );
+    out.primitives
+        .push(primitive::surface(line_r, 0.0, Token::DIVIDER, z + 1));
+
+    let mut cur_x = total_r.origin.x + 4.0;
+    for (idx, &title) in CANONICAL_TAB_ITEMS.iter().enumerate() {
+        let is_selected = !disabled && (idx == selected_idx);
+        let t_rect = Rect::new(cur_x, total_r.origin.y + 4.0, tab_item_w, strip_h - 4.0);
+        tab_rects.push(t_rect);
+
+        let fill = if disabled {
+            Token::NONE
+        } else if is_selected {
+            Token::SURFACE
+        } else {
+            Token::NONE
+        };
+        out.primitives
+            .push(primitive::surface(t_rect, 4.0, fill, z + 2));
+
+        if is_selected {
+            let indicator_r = Rect::new(t_rect.origin.x, t_rect.max().y - 2.0, t_rect.width(), 2.0);
+            out.primitives
+                .push(primitive::surface(indicator_r, 1.0, Token::PRIMARY, z + 5));
+
+            if state.focused {
+                out.primitives.push(primitive::focus_ring(
+                    t_rect.inflate(1.0),
+                    4.0,
+                    Token::FOCUS_RING,
+                    2.0,
+                    z + 10,
+                    true,
+                ));
+            }
+        }
+
+        let text_ink = if disabled {
+            Token::TEXT_DISABLED
+        } else if is_selected {
+            Token::TEXT_PRIMARY
+        } else {
+            Token::TEXT_SECONDARY
+        };
+
+        let label_r = Rect::new(
+            t_rect.origin.x + 12.0,
+            t_rect.origin.y,
+            t_rect.width() - 36.0,
+            t_rect.height(),
+        );
+        let weight = if is_selected { 600 } else { 400 };
+        let quads = text_ctx.shape_line_styled(
+            title,
+            label_r,
+            12.0,
+            weight,
+            None,
+            AlignX::Left,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &quads,
+            text_ink,
+            z + 3,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+
+        let close_ink = if disabled {
+            Token::TEXT_DISABLED
+        } else {
+            Token::TEXT_SECONDARY
+        };
+        let close_r = Rect::new(
+            t_rect.max().x - 22.0,
+            t_rect.origin.y,
+            16.0,
+            t_rect.height(),
+        );
+        let close_quads = text_ctx.shape_line_styled(
+            CANONICAL_TAB_CLOSE_GLYPH,
+            close_r,
+            10.0,
+            400,
+            None,
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &close_quads,
+            close_ink,
+            z + 3,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+
+        cur_x += tab_item_w + 2.0;
+    }
+
+    let content_r = Rect::new(
+        total_r.origin.x,
+        total_r.origin.y + strip_h,
+        tab_w,
+        (tab_h - strip_h).max(1.0),
+    );
+    out.primitives
+        .push(primitive::surface(content_r, 0.0, Token::CARD_BG, z));
+
+    let content_ink = if disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let content_label_r = Rect::new(
+        content_r.origin.x + 16.0,
+        content_r.origin.y + 12.0,
+        content_r.width() - 32.0,
+        24.0,
+    );
+    let content_quads = text_ctx.shape_line_styled(
+        CANONICAL_TAB_CONTENT,
+        content_label_r,
+        STANDARD_FONT_SIZE,
+        400,
+        None,
+        AlignX::Left,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &content_quads,
+        content_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
+
+    TabViewFixtureOutput {
+        output: out,
+        tab_rects,
+        content_rect: content_r,
+        total_size: Vec2::new(tab_w, tab_h),
     }
 }
 
