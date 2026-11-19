@@ -30,7 +30,9 @@ pub mod selection;
 pub mod settings;
 pub mod shaping;
 
-pub use atlas::{Atlas, AtlasConfig, GlyphAtlas, GlyphKey, GlyphSlot, SUBPIXEL_PHASES};
+pub use atlas::{
+    Atlas, AtlasConfig, AtlasReport, GlyphAtlas, GlyphKey, GlyphSlot, SUBPIXEL_PHASES,
+};
 pub use capabilities::{CapabilityStatus, TextCapabilities};
 pub use glyph::{AtlasTarget, AtlasUpdate, GlyphCache, GlyphQuad, RasterBackend, ResolvedGlyph};
 pub use pinyin::{

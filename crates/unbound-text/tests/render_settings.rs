@@ -273,6 +273,8 @@ fn text_render_report_default_and_roundtrip() {
     assert_eq!(report.emoji_path, "Swash (Color RGBA8)");
     assert_eq!(report.fallback_count, 0);
     assert_eq!(report.last_fallback_reason, None);
+    assert!(!report.rgba_atlas_allocated);
+    assert_eq!(report.atlas_memory_bytes, 0);
 
     let serialized = postcard::to_allocvec(&report).expect("serialize report");
     let deserialized: TextRenderReport =
