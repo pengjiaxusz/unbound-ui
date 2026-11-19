@@ -43,7 +43,7 @@ jobs:
           GATE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           base="${GATE_BASE:-}"
-          if printf '%s' "$base" | grep -qE '^0+$'; then
+          if printf '%s' "$base" | grep -qE '^0+$' || [ -n "$base" ] && ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1; then
             base=""
           fi
           set +e
@@ -63,7 +63,7 @@ jobs:
               printf '%s\n' "$output"
               echo '```'
               echo ""
-              echo "范围内每个提交的标题都要写成 `type(scope): 摘要`。规则集在 `.pengj-templates/gate.toml` 里。"
+              echo '范围内每个提交的标题都要写成 `type(scope): 摘要`。规则集在 `.pengj-templates/gate.toml` 里。'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"
@@ -101,7 +101,7 @@ jobs:
               printf '%s\n' "$output"
               echo '```'
               echo ""
-              echo "英文项目不得出现汉字，中文项目面向人的文案必须含中文。请到模板源修复后对项目执行 `update`。"
+              echo '英文项目不得出现汉字，中文项目面向人的文案必须含中文。请到模板源修复后对项目执行 `update`。'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"
