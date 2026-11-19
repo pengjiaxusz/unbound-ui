@@ -72,11 +72,14 @@ dotnet build -c Release
 | `--state <state>` | `normal` `disabled` `checked` `focused` | `normal` | `checked` 仅支持 CheckBox / ToggleSwitch / ToggleButton / RadioButton 等；缺省时采集所有支持状态 |
 | `--theme <theme>` | `light` `dark` `all` | `light` | 通过 `Host.RequestedTheme` 切换（`all` 仅限 `--batch`） |
 | `--backdrop <kind>` | `solid` `mica` `mica_alt` `acrylic` `all` | `solid` | 确定性合成底板类型（`all` 仅限 `--batch`） |
-| `--width <N>` | 64..8192 | `1920` | 画布宽度 DIP |
-| `--height <N>` | 64..8192 | `1080` | 画布高度 DIP |
+| `--width <N>` | 64..8192 | `1920` | 画布宽度 DIP。动态拼版载体架构下，视口统一使用 1920×1080 标准画布以保证切片坐标确定性与抗裁剪；命令行传入值作为 `requestedWindowWidth` 记录在切片 JSON 元数据中 |
+| `--height <N>` | 64..8192 | `1080` | 画布高度 DIP。动态拼版载体架构下，视口统一使用 1920×1080 标准画布以保证切片坐标确定性与抗裁剪；命令行传入值作为 `requestedWindowHeight` 记录在切片 JSON 元数据中 |
 | `--batch` | 开关 | 关闭 | 批量模式：按「主题 × 后景」将待测控件流式装箱并自动切出紧凑单图 |
 | `--no-cache` | 开关 | 关闭 | 忽略 `fingerprint` 缓存，强制重新采集全部用例 |
 | `--save-sheet` | 开关 | 关闭 | 除切分后的单用例 PNG 外，额外按页码输出 `page_{pageIndex:D2}_{theme}_{backdrop}_sheet.png` 拼版总览图及坐标索引 JSON |
+
+> **视口尺寸与坐标确定性说明**：
+> 在动态拼版架构（ADR 0015）下，瞬态排版载体统一使用 1920×1080 DIP 确定性画布进行 FFDH 流式装箱，杜绝因窗口动态拉伸导致的子像素抗锯齿抖动与切片边缘截断。命令行传入的 `--width` / `--height` 会被解析并校验在 `64..8192` 范围内，并作为 `requestedWindowWidth` / `requestedWindowHeight` 记录在切片 JSON 元数据中供回溯审计。
 
 ### 已接入控件（64 个）
 
