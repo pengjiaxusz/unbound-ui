@@ -9,11 +9,17 @@ use unbound_math::Rect;
 use unbound_text::{GlyphCache, TextEngine};
 use unbound_theme::{win11, Token};
 use unbound_widgets::slot_fixture::{
-    apply_recursive_disabled_propagation, emit_canonical_list_rows_fixture,
-    emit_canonical_path_fixture, emit_canonical_segmented_fixture,
-    emit_canonical_text_rows_fixture, emit_canonical_tree_fixture, FixtureState,
-    STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT, STANDARD_PILL_WIDTH, STANDARD_STACK_SPACING,
-    STANDARD_TREE_INDENT, STANDARD_TREE_ITEM_HEIGHT, WINUI_DISABLED_OPACITY,
+    apply_recursive_disabled_propagation, emit_canonical_annotated_scroll_bar_fixture,
+    emit_canonical_flip_view_fixture, emit_canonical_grid_fixture,
+    emit_canonical_list_rows_fixture, emit_canonical_path_fixture, emit_canonical_refresh_fixture,
+    emit_canonical_segmented_fixture, emit_canonical_text_rows_fixture,
+    emit_canonical_tree_fixture, FixtureState, CANONICAL_GRID_ITEMS, CANONICAL_LIST_ITEMS,
+    STANDARD_FLIP_HEIGHT, STANDARD_FLIP_WIDTH, STANDARD_GRID_CELL_RADIUS, STANDARD_GRID_HEIGHT,
+    STANDARD_GRID_WIDTH, STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT, STANDARD_PILL_WIDTH,
+    STANDARD_REFRESH_HEIGHT, STANDARD_REFRESH_INDICATOR_SIZE, STANDARD_REFRESH_WIDTH,
+    STANDARD_SCROLL_BAR_HEIGHT, STANDARD_SCROLL_BAR_TRACK_WIDTH, STANDARD_SCROLL_BAR_WIDTH,
+    STANDARD_STACK_SPACING, STANDARD_TREE_INDENT, STANDARD_TREE_ITEM_HEIGHT,
+    WINUI_DISABLED_OPACITY,
 };
 use unbound_widgets::{primitive, TextCtx, WidgetOutput};
 
@@ -489,5 +495,302 @@ fn text_disabled_token_resolves_to_valid_semi_transparent_color_in_both_themes()
     assert!(
         (dark_disabled_color.a - 42.0 / 255.0).abs() < 1e-3,
         "dark disabled alpha matches Windows 11 specification"
+    );
+}
+
+#[test]
+fn grid_fixture_normal_outputs_deterministic_geometry_and_active_tokens() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, STANDARD_GRID_WIDTH, STANDARD_GRID_HEIGHT);
+        let fixture = emit_canonical_grid_fixture(rect, FixtureState::normal(), text_ctx, 100);
+
+        // 1. 结构与单元格排版（2×2，共 4 个单元）
+        assert_eq!(fixture.cell_rects.len(), 4, "must emit 4 grid cell rects");
+        assert_eq!(fixture.total_size.x, STANDARD_GRID_WIDTH);
+        assert_eq!(fixture.total_size.y, STANDARD_GRID_HEIGHT);
+        assert_eq!(STANDARD_GRID_CELL_RADIUS, 6.0);
+
+        // 2. 首项处于选中态：必须具有 PRIMARY 边框与 PRIMARY 徽章
+        let has_primary_border = fixture.output.primitives.iter().any(|p| {
+            Token::new(p.border_token_or_tex as u16) == Token::PRIMARY
+                && (p.border_width() - 2.0).abs() < 1e-4
+        });
+        assert!(
+            has_primary_border,
+            "selected cell must have 2px PRIMARY border"
+        );
+
+        let has_accent_badge = fixture.output.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::RoundedRect
+                && Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
+                && (p.size[0] - 18.0).abs() < 1e-4
+        });
+        assert!(
+            has_accent_badge,
+            "selected cell must have PRIMARY checkmark badge"
+        );
+
+        // 3. 勾选折线
+        let check_curves = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::Curve)
+            .count();
+        assert_eq!(check_curves, 2, "checkmark consists of 2 curve strokes");
+
+        // 4. 文本存在且包含主要文本
+        let glyph_tokens: Vec<Token> = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+        assert!(glyph_tokens.contains(&Token::TEXT_PRIMARY));
+    });
+}
+
+#[test]
+fn grid_fixture_disabled_suppresses_selection_and_downgrades_tokens() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, STANDARD_GRID_WIDTH, STANDARD_GRID_HEIGHT);
+        let fixture = emit_canonical_grid_fixture(rect, FixtureState::disabled(), text_ctx, 100);
+
+        for p in &fixture.output.primitives {
+            let prim_type = p.prim_type();
+            let fill = Token::new(p.fill_token_or_uv as u16);
+            let border = Token::new(p.border_token_or_tex as u16);
+
+            // 抑制选中徽章与高亮填充
+            if prim_type == PrimType::RoundedRect {
+                assert_ne!(fill, Token::PRIMARY);
+                assert_ne!(fill, Token::PRIMARY_SOFT);
+            }
+            // 抑制强调色边框
+            if prim_type == PrimType::Stroke {
+                assert_ne!(border, Token::PRIMARY);
+            }
+            // 文本全部为 TEXT_DISABLED
+            if matches!(prim_type, PrimType::Glyph | PrimType::GlyphColor) {
+                assert_eq!(fill, Token::TEXT_DISABLED);
+            }
+        }
+    });
+}
+
+#[test]
+fn flip_view_fixture_normal_outputs_card_and_nav_buttons() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, STANDARD_FLIP_WIDTH, STANDARD_FLIP_HEIGHT);
+        let fixture = emit_canonical_flip_view_fixture(rect, FixtureState::normal(), text_ctx, 200);
+
+        // 1. 固有尺寸
+        assert_eq!(fixture.total_size.x, STANDARD_FLIP_WIDTH);
+        assert_eq!(fixture.total_size.y, STANDARD_FLIP_HEIGHT);
+
+        // 2. 前后导航按钮位置
+        assert!(fixture.prev_button_rect.origin.x < fixture.card_rect.origin.x + 40.0);
+        assert!(fixture.next_button_rect.max().x > fixture.card_rect.max().x - 40.0);
+
+        // 3. 折线箭头（左 Prev 2 条折线 + 右 Next 2 条折线 = 4 条）
+        let chevron_curves = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::Curve)
+            .count();
+        assert_eq!(
+            chevron_curves, 4,
+            "must emit 4 curve strokes for nav chevrons"
+        );
+
+        // 4. 下一页箭头活跃色为 TEXT_PRIMARY
+        let curve_tokens: Vec<Token> = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::Curve)
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+        assert!(curve_tokens.contains(&Token::TEXT_PRIMARY));
+        assert!(curve_tokens.contains(&Token::TEXT_DISABLED));
+
+        // 5. 页面文字 "Page 1" 为 TEXT_PRIMARY
+        let glyph_tokens: Vec<Token> = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+        assert!(glyph_tokens.contains(&Token::TEXT_PRIMARY));
+    });
+}
+
+#[test]
+fn flip_view_fixture_disabled_downgrades_tokens() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, STANDARD_FLIP_WIDTH, STANDARD_FLIP_HEIGHT);
+        let fixture =
+            emit_canonical_flip_view_fixture(rect, FixtureState::disabled(), text_ctx, 200);
+
+        for p in &fixture.output.primitives {
+            let prim_type = p.prim_type();
+            let fill = Token::new(p.fill_token_or_uv as u16);
+
+            if prim_type == PrimType::Curve {
+                assert_eq!(fill, Token::TEXT_DISABLED);
+            }
+            if matches!(prim_type, PrimType::Glyph | PrimType::GlyphColor) {
+                assert_eq!(fill, Token::TEXT_DISABLED);
+            }
+        }
+    });
+}
+
+#[test]
+fn refresh_fixture_normal_outputs_indicator_and_card() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, STANDARD_REFRESH_WIDTH, STANDARD_REFRESH_HEIGHT);
+        let fixture = emit_canonical_refresh_fixture(rect, FixtureState::normal(), text_ctx, 300);
+
+        // 1. 尺寸校验
+        assert_eq!(fixture.total_size.x, STANDARD_REFRESH_WIDTH);
+        assert_eq!(fixture.total_size.y, STANDARD_REFRESH_HEIGHT);
+        assert_eq!(
+            fixture.indicator_rect.width(),
+            STANDARD_REFRESH_INDICATOR_SIZE
+        );
+        assert_eq!(
+            fixture.indicator_rect.height(),
+            STANDARD_REFRESH_INDICATOR_SIZE
+        );
+
+        // 2. 包含强调色圆弧（PRIMARY 曲线）
+        let arc_curves: Vec<Token> = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::Curve)
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+        assert!(!arc_curves.is_empty());
+        for &tok in &arc_curves {
+            assert_eq!(tok, Token::PRIMARY);
+        }
+
+        // 3. 内容卡片文本
+        let glyph_tokens: Vec<Token> = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+        assert!(glyph_tokens.contains(&Token::TEXT_PRIMARY));
+    });
+}
+
+#[test]
+fn refresh_fixture_disabled_suppresses_arc_and_downgrades_tokens() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, STANDARD_REFRESH_WIDTH, STANDARD_REFRESH_HEIGHT);
+        let fixture = emit_canonical_refresh_fixture(rect, FixtureState::disabled(), text_ctx, 300);
+
+        // 抑制强调弧线
+        let curve_count = fixture
+            .output
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::Curve)
+            .count();
+        assert_eq!(
+            curve_count, 0,
+            "disabled refresh ring suppresses accent arc"
+        );
+
+        // 文本变灰
+        for p in &fixture.output.primitives {
+            if matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor) {
+                assert_eq!(Token::new(p.fill_token_or_uv as u16), Token::TEXT_DISABLED);
+            }
+        }
+    });
+}
+
+#[test]
+fn annotated_scroll_bar_fixture_normal_outputs_track_and_thumb() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(
+            0.0,
+            0.0,
+            STANDARD_SCROLL_BAR_WIDTH,
+            STANDARD_SCROLL_BAR_HEIGHT,
+        );
+        let fixture = emit_canonical_annotated_scroll_bar_fixture(
+            rect,
+            FixtureState::normal(),
+            text_ctx,
+            400,
+        );
+
+        // 1. 轨道尺寸与居中
+        assert_eq!(
+            fixture.track_rect.width(),
+            STANDARD_SCROLL_BAR_TRACK_WIDTH,
+            "track width is standard 8px"
+        );
+        assert_eq!(fixture.track_rect.height(), STANDARD_SCROLL_BAR_HEIGHT);
+        let margin_left = fixture.track_rect.origin.x - rect.origin.x;
+        assert_eq!(margin_left, 4.0, "track is centered with 4px left margin");
+
+        // 2. 滑块存在
+        assert_eq!(fixture.thumb_rect.width(), STANDARD_SCROLL_BAR_TRACK_WIDTH);
+        assert_eq!(fixture.thumb_rect.height(), 32.0);
+
+        // 3. 图元令牌包含 CONTROL_TRACK_STROKE 滑块
+        let has_thumb = fixture.output.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::RoundedRect
+                && Token::new(p.fill_token_or_uv as u16) == Token::CONTROL_TRACK_STROKE
+        });
+        assert!(has_thumb, "must emit CONTROL_TRACK_STROKE thumb");
+    });
+}
+
+#[test]
+fn annotated_scroll_bar_fixture_disabled_downgrades_tokens() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(
+            0.0,
+            0.0,
+            STANDARD_SCROLL_BAR_WIDTH,
+            STANDARD_SCROLL_BAR_HEIGHT,
+        );
+        let fixture = emit_canonical_annotated_scroll_bar_fixture(
+            rect,
+            FixtureState::disabled(),
+            text_ctx,
+            400,
+        );
+
+        let has_thumb = fixture.output.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::RoundedRect
+                && Token::new(p.fill_token_or_uv as u16) == Token::CONTROL_DISABLED_THUMB
+        });
+        assert!(has_thumb, "disabled thumb must be CONTROL_DISABLED_THUMB");
+    });
+}
+
+#[test]
+fn list_box_and_list_view_share_canonical_list_items_and_row_height() {
+    assert_eq!(CANONICAL_LIST_ITEMS.len(), 3);
+    assert_eq!(CANONICAL_LIST_ITEMS, ["Item 1", "Item 2", "Item 3"]);
+    assert_eq!(STANDARD_LIST_ITEM_HEIGHT, 40.0);
+    assert_eq!(STANDARD_PILL_WIDTH, 3.0);
+    assert_eq!(STANDARD_PILL_HEIGHT, 16.0);
+    assert_eq!(
+        CANONICAL_GRID_ITEMS,
+        ["Item 1", "Item 2", "Item 3", "Item 4"]
     );
 }
