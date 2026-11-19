@@ -252,26 +252,7 @@ thread_local! {
 
 impl Default for TextRenderPageState {
     fn default() -> Self {
-        #[cfg(test)]
-        {
-            let has_custom = CUSTOM_PERSISTENCE_PATH.with(|p| p.borrow().is_some());
-            if has_custom {
-                if let Some(restored) = Self::try_restore() {
-                    return restored;
-                }
-            }
-            Self::fresh_default()
-        }
-
-        #[cfg(not(test))]
-        {
-            #[allow(clippy::manual_unwrap_or_default)]
-            if let Some(restored) = Self::try_restore() {
-                restored
-            } else {
-                Self::fresh_default()
-            }
-        }
+        Self::fresh_default()
     }
 }
 
@@ -592,13 +573,6 @@ impl TextRenderPageState {
 
     /// 持久化状态至临时目录配置文件。
     pub fn persist(&self) {
-        #[cfg(test)]
-        {
-            let has_custom = CUSTOM_PERSISTENCE_PATH.with(|p| p.borrow().is_some());
-            if !has_custom {
-                return;
-            }
-        }
         let path = Self::persistence_path();
         let _ = std::fs::write(path, self.serialize_to_string());
     }
