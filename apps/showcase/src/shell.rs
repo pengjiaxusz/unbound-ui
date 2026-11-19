@@ -1170,10 +1170,11 @@ impl GalleryApp {
         // 导致满载的图集永远驱逐左上角相同的那几个字形。
         //
         labels.cache.begin_frame(atlas_clock);
-        // 外壳保留八种亚像素相位：字形的光栅按其*绝对*位置隐含的相位生成，
-        // 四边形则围绕它放置在像素网格上。强制相位 0 会使每个字形偏离其应处位置
-        // 最多达一像素，这正是字距抖动的原因。
-        labels.set_snap_phases(false);
+        // 应用运行期文本渲染设置，若产生位图级或排版级变更则按需清空缓存，并同步只读生效报告。
+        labels
+            .cache
+            .apply_settings(&state.text_render.settings, Some(&mut labels.engine));
+        state.text_render.report = labels.cache.report();
         let mut canvas = Canvas::new(
             scene,
             labels,
@@ -2436,6 +2437,23 @@ impl GalleryApp {
                     } else if part == pages::text_render::STATUS_BAR_PART {
                         self.state.text_render.toggle_fallback_details();
                         self.state.bump();
+                    } else if (pages::text_render::PHASE_PART_BASE
+                        ..pages::text_render::PHASE_PART_BASE + 3)
+                        .contains(&part)
+                    {
+                        let opt_idx = (part - pages::text_render::PHASE_PART_BASE) as usize;
+                        if let Some(opt) = pages::text_render::PHASE_OPTIONS.get(opt_idx) {
+                            let caps = unbound_text::TextCapabilities::probe();
+                            let res = pages::text_render::resolve_feature(
+                                opt.key,
+                                &caps,
+                                &self.state.text_render.settings,
+                            );
+                            if !res.disabled {
+                                self.state.text_render.settings.phase_mode = opt.mode;
+                                self.state.bump();
+                            }
+                        }
                     }
                 }
             }

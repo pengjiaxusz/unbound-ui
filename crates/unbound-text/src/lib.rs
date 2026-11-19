@@ -48,3 +48,5 @@ pub use shaping::{
     cjk_family_for_locale, PositionedGlyph, ShapedText, TextCacheStats, TextEngine, TextLine,
     TextSpan, TextStyle, WrappedText,
 };
+
+// 亚像素相位档位运行期可切与整表失效支持。
