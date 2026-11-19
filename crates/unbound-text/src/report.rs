@@ -20,6 +20,10 @@ pub struct TextRenderReport {
     pub fallback_count: u64,
     /// 最近一次回退的原因说明（若未发生回退则为 None）。
     pub last_fallback_reason: Option<String>,
+    /// RGBA8 图集是否已开辟。
+    pub rgba_atlas_allocated: bool,
+    /// 图集显存占用字节数。
+    pub atlas_memory_bytes: u64,
 }
 
 impl Default for TextRenderReport {
@@ -30,6 +34,8 @@ impl Default for TextRenderReport {
             emoji_path: "Swash (Color RGBA8)".to_string(),
             fallback_count: 0,
             last_fallback_reason: None,
+            rgba_atlas_allocated: false,
+            atlas_memory_bytes: 0,
         }
     }
 }
