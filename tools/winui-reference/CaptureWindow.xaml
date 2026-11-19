@@ -9,8 +9,8 @@
         钉死成 Windows 11 默认蓝，使基线不随截图机器的主题色漂移。
         只覆盖对照组控件实际用到的键（复选框 / 滑块 / 开关），不改动其他资源。
     -->
-    <Grid x:Name="Host" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-        <Grid.Resources>
+    <Canvas x:Name="Host" Width="1920" Height="1080" HorizontalAlignment="Left" VerticalAlignment="Top" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Canvas.Resources>
             <ResourceDictionary>
                 <ResourceDictionary.ThemeDictionaries>
                     <ResourceDictionary x:Key="Light">
@@ -171,6 +171,6 @@
                     </ResourceDictionary>
                 </ResourceDictionary.ThemeDictionaries>
             </ResourceDictionary>
-        </Grid.Resources>
-    </Grid>
+        </Canvas.Resources>
+    </Canvas>
 </Window>
