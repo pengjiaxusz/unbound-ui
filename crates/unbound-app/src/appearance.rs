@@ -10,7 +10,10 @@
 use unbound_backdrop::{
     BackdropInputs, BackdropPlan, BackdropSelection, BackdropSource, DwmMaterial, MaterialKind,
 };
-use unbound_platform::WindowBackdropMaterial;
+use unbound_platform::{
+    clear_window_accent_tint, set_window_accent_tint, set_window_backdrop, set_window_dark_mode,
+    FrameHitMetrics, WindowBackdropMaterial,
+};
 use unbound_theme::ThemeKind;
 
 /// 平台后景通道请求。
@@ -351,14 +354,9 @@ impl WindowAppearance {
             self.host_clear_alpha.unwrap_or(1.0)
         };
 
-        // 只有后景通道处于激活态（或者曾经被激活）时，才同步深色标记；
-        // 意图关闭且从前未激活时不发送深色标记，与改造前行为一致。
-        let is_active = target_channel != BackdropChannel::Off;
-        let target_dark_mode = if is_active || self.applied_dark_mode.is_some() {
-            Some(dark)
-        } else {
-            None
-        };
+        // Windows 窗口沉浸式深色模式（DWMWA_USE_IMMERSIVE_DARK_MODE）是所有窗口通用的系统外观，
+        // 无论是否开启原生后景材质，深色标记都必须在首帧或主题切换时正常同步并逐帧去重。
+        let target_dark_mode = dark;
 
         let diff_channel = if target_channel != self.applied_channel {
             Some(target_channel)
@@ -366,8 +364,8 @@ impl WindowAppearance {
             None
         };
 
-        let diff_dark_mode = if target_dark_mode != self.applied_dark_mode {
-            target_dark_mode
+        let diff_dark_mode = if self.applied_dark_mode != Some(target_dark_mode) {
+            Some(target_dark_mode)
         } else {
             None
         };
@@ -385,9 +383,7 @@ impl WindowAppearance {
         };
 
         self.applied_channel = target_channel;
-        if target_dark_mode.is_some() {
-            self.applied_dark_mode = target_dark_mode;
-        }
+        self.applied_dark_mode = Some(target_dark_mode);
         self.applied_lock_mica = target_lock_mica;
         self.applied_clear_alpha = target_clear_alpha;
         self.plan = Some(plan.clone());
@@ -397,6 +393,41 @@ impl WindowAppearance {
             dark_mode: diff_dark_mode,
             lock_mica: diff_lock_mica,
             clear_alpha: diff_clear_alpha,
+        }
+    }
+}
+
+/// 将外观差异中的操作系统平台级设置下发到 Win32 原生窗口。
+///
+/// 涵盖 DWM 后景材质、Accent Policy 自定义色调、DWM 沉浸式深色模式以及失焦 Mica 激活锁定。
+/// 注意：`diff.clear_alpha` 属于 GPU 渲染器状态，由调用方在持有渲染器可变引用时单独设置。
+pub fn apply_appearance_diff_to_platform(
+    diff: &AppearanceDiff,
+    hwnd: isize,
+    metrics: Option<&FrameHitMetrics>,
+) {
+    if let Some(channel) = diff.channel {
+        match channel {
+            BackdropChannel::Dwm(material) => {
+                let _ = clear_window_accent_tint(hwnd);
+                let _ = set_window_backdrop(hwnd, material);
+            }
+            BackdropChannel::AccentTint(argb) => {
+                let _ = set_window_backdrop(hwnd, WindowBackdropMaterial::None);
+                let _ = set_window_accent_tint(hwnd, argb);
+            }
+            BackdropChannel::Off => {
+                let _ = clear_window_accent_tint(hwnd);
+                let _ = set_window_backdrop(hwnd, WindowBackdropMaterial::None);
+            }
+        }
+    }
+    if let Some(dark) = diff.dark_mode {
+        set_window_dark_mode(hwnd, dark);
+    }
+    if let Some(lock_mica) = diff.lock_mica {
+        if let Some(metrics) = metrics {
+            metrics.set_lock_mica_active(lock_mica);
         }
     }
 }

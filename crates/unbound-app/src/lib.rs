@@ -69,8 +69,8 @@ pub mod state_store;
 pub mod window_runner;
 
 pub use appearance::{
-    backdrop_channel_request, dwm_material_to_platform, AppearanceCaps, AppearanceDiff,
-    AppearanceIntent, BackdropChannel, WindowAppearance,
+    apply_appearance_diff_to_platform, backdrop_channel_request, dwm_material_to_platform,
+    AppearanceCaps, AppearanceDiff, AppearanceIntent, BackdropChannel, WindowAppearance,
 };
 pub use assets::{AssetHub, AssetResidency};
 pub use backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID};
@@ -3040,11 +3040,16 @@ impl<A: Application> AppRuntime<A> {
         self.glyph_cache.clear();
     }
 
-    /// 设置根背景清屏 alpha。
+    /// 设置根背景清屏 alpha（仅供兼容与自绘路径专用）。
     ///
-    /// `0.0` 让窗口内容之外的区域完全透明，DWM 的系统后景材质（云母 / 亚克力）
-    /// 才能从客户区透出；`1.0` 输出主题表面色。该值不改变交换链配置，宿主可在
-    /// 运行期随材质切换自由改写。窗口运行器在每帧渲染前读取它。
+    /// `0.0` 让窗口内容之外的区域完全透明；`1.0` 输出主题表面色。
+    ///
+    /// ### 语义优先级说明
+    /// 该接口专供无原生后景意图时的传统兼容路径或自绘后景使用。
+    /// 当窗口后景意图开启时（例如通过 [`Self::set_backdrop`] 设置了系统云母或亚克力等原生材质），
+    /// 外观意图账本会根据后景计划自动派生对应的清屏 alpha（原生材质通常派生为 `0.0`），
+    /// 此时本方法显式指定的值会被外观账本的派生值覆盖；仅在后景意图关闭时，本方法设置的
+    /// 清屏 alpha 才会生效并传递至渲染器。
     pub fn set_clear_alpha(&mut self, alpha: f32) {
         self.clear_alpha = alpha.clamp(0.0, 1.0);
     }
@@ -3087,12 +3092,17 @@ impl<A: Application> AppRuntime<A> {
     }
 
     /// 设置亚克力自定义色调后景（走 accent policy 通道，ABGR 格式）。
-    pub fn set_accent_tint(&mut self, argb: u32) {
+    #[cfg(test)]
+    pub(crate) fn set_accent_tint(&mut self, argb: u32) {
         self.backdrop_intent = AppearanceIntent::AccentTint(argb);
     }
 
     /// 设置完整后景选择意图。
-    pub fn set_backdrop_selection(&mut self, selection: unbound_backdrop::BackdropSelection) {
+    #[cfg(test)]
+    pub(crate) fn set_backdrop_selection(
+        &mut self,
+        selection: unbound_backdrop::BackdropSelection,
+    ) {
         self.backdrop_intent = AppearanceIntent::Selection {
             selection,
             accent_tint: None,
@@ -3100,13 +3110,14 @@ impl<A: Application> AppRuntime<A> {
     }
 
     /// 设置底层外观意图。
-    pub fn set_backdrop_intent(&mut self, intent: AppearanceIntent) {
+    #[cfg(test)]
+    pub(crate) fn set_backdrop_intent(&mut self, intent: AppearanceIntent) {
         self.backdrop_intent = intent;
     }
 
     /// 当前底层外观意图。
     #[must_use]
-    pub const fn backdrop_intent(&self) -> AppearanceIntent {
+    pub(crate) const fn backdrop_intent(&self) -> AppearanceIntent {
         self.backdrop_intent
     }
 
@@ -5189,5 +5200,69 @@ impl<A: Application> AppRuntime<A> {
     fn sync_focus_context(&mut self) {
         self.ctx.focused = self.focus.focused();
         self.ctx.focus_visible = self.focus.focus_visible();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unbound_math::Vec2;
+
+    struct DummyApp;
+    impl Application for DummyApp {
+        type State = ();
+        fn init(&mut self, _ctx: &mut AppContext) -> Self::State {}
+        fn reduce(
+            &mut self,
+            _state: &mut Self::State,
+            _event: AppEvent,
+            _ctx: &mut AppContext,
+        ) -> EventOutcome {
+            EventOutcome::new(DirtyFlags::NONE)
+        }
+        fn view(&mut self, _state: &Self::State, _view: &mut crate::ViewBuilder<'_>) {}
+    }
+
+    #[test]
+    fn runtime_internal_backdrop_intent_roundtrip() {
+        let mut runtime = AppRuntime::new(DummyApp, Vec2::new(800.0, 600.0));
+        assert_eq!(runtime.backdrop_intent(), AppearanceIntent::Material(None));
+
+        runtime.set_backdrop(Some(WindowBackdropMaterial::Mica));
+        assert_eq!(
+            runtime.backdrop_intent(),
+            AppearanceIntent::Material(Some(WindowBackdropMaterial::Mica))
+        );
+
+        let tint = 0xCCD07800;
+        runtime.set_accent_tint(tint);
+        assert_eq!(runtime.backdrop(), None);
+        assert_eq!(
+            runtime.backdrop_intent(),
+            AppearanceIntent::AccentTint(tint)
+        );
+
+        let sel = unbound_backdrop::BackdropSelection::new(
+            unbound_backdrop::MaterialKind::MicaAlt,
+            unbound_backdrop::BackdropSource::Native,
+        );
+        runtime.set_backdrop_selection(sel);
+        assert_eq!(runtime.backdrop(), None);
+        assert_eq!(
+            runtime.backdrop_intent(),
+            AppearanceIntent::Selection {
+                selection: sel,
+                accent_tint: None,
+            }
+        );
+
+        runtime.set_backdrop_intent(AppearanceIntent::Material(Some(
+            WindowBackdropMaterial::Acrylic,
+        )));
+        assert_eq!(
+            runtime.backdrop_intent(),
+            AppearanceIntent::Material(Some(WindowBackdropMaterial::Acrylic))
+        );
+        assert_eq!(runtime.backdrop(), Some(WindowBackdropMaterial::Acrylic));
     }
 }
