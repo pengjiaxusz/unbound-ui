@@ -914,6 +914,71 @@ impl<'a> Canvas<'a> {
         node
     }
 
+    /// 注册带有可展开/折叠状态的演示部件。
+    #[allow(clippy::too_many_arguments)]
+    pub fn demo_control_expandable(
+        &mut self,
+        page: u8,
+        card: u8,
+        part: u16,
+        rect: Rect,
+        role: Role,
+        label: impl Into<String>,
+        selected: bool,
+        expanded: bool,
+    ) -> u64 {
+        let node = target::id(Target::Demo(page, card, part));
+        self.control_expandable(
+            node,
+            rect,
+            role,
+            label,
+            CursorKind::Pointer,
+            false,
+            selected,
+            expanded,
+        );
+        node
+    }
+
+    /// 注册带有展开/折叠状态的可点击区域及其语义节点。
+    #[allow(clippy::too_many_arguments)]
+    pub fn control_expandable(
+        &mut self,
+        node: u64,
+        rect: Rect,
+        role: Role,
+        label: impl Into<String>,
+        cursor: CursorKind,
+        disabled: bool,
+        selected: bool,
+        expanded: bool,
+    ) {
+        let mut region = HitRegion::new(node, 1, u32::from(self.z), rect).with_cursor(cursor);
+        if let Some(clip) = self.clip_shape() {
+            region = region.with_clip(clip);
+        }
+        let mut a11y = A11yNode::new(role, label, rect);
+        if !disabled {
+            a11y = a11y.clickable();
+        }
+        a11y.disabled = disabled;
+        a11y.selected = selected;
+        a11y.expanded = Some(expanded);
+
+        if let Some(existing) = self.regions.iter_mut().find(|r| r.node == node) {
+            *existing = region;
+            self.semantics.upsert(node, a11y);
+        } else {
+            self.regions.push(region);
+            if !disabled {
+                self.focus_order.push(node);
+            }
+            self.semantics.upsert(node, a11y);
+            self.a11y_nodes.push(node);
+        }
+    }
+
     /// 截至目前发射的字形。
     #[must_use]
     pub fn glyph_count(&self) -> usize {

@@ -443,6 +443,8 @@ pub struct GalleryState {
     pub expanded_code: HashSet<(u8, u8)>,
     pub demo: DemoState,
     pub sandbox: ComponentSandboxState,
+    /// 文本渲染控制台持久页面状态。
+    pub text_render: crate::pages::text_render::TextRenderPageState,
     /// 每次状态变更时递增，使窗口可跳过完全相同的帧。
     pub revision: u64,
     /// 将演示动画重建节流到约 30 Hz 的累加器。
@@ -492,6 +494,7 @@ impl Default for GalleryState {
             expanded_code: HashSet::new(),
             demo: DemoState::default(),
             sandbox: ComponentSandboxState::default(),
+            text_render: crate::pages::text_render::TextRenderPageState::default(),
             revision: 1,
             animation_clock: 0.0,
         }

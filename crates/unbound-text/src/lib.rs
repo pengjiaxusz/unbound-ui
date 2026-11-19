@@ -24,6 +24,7 @@ mod directwrite;
 pub mod glyph;
 pub mod pinyin;
 pub mod pinyin_data;
+pub mod report;
 pub mod sdf;
 pub mod selection;
 pub mod settings;
@@ -36,6 +37,7 @@ pub use pinyin::{
     global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,
     set_global_shuangpin_scheme, PinyinConfig, PinyinMatch, PinyinMatcher, ShuangpinScheme,
 };
+pub use report::TextRenderReport;
 pub use sdf::{from_coverage, reconstruct_coverage, SdfBitmap};
 pub use selection::{ime_cursor_area, merge_line_rects, outline_polygon, RoundedSlot};
 pub use settings::{
