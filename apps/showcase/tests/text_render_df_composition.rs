@@ -15,7 +15,7 @@ use unbound_input::PointerButton;
 use unbound_math::Vec2;
 use unbound_text::{BlendSpace, DistanceFieldMode, LayerMode, PhaseMode, TextCapabilities};
 
-const VIEWPORT: (f32, f32) = (1440.0, 900.0);
+const VIEWPORT: (f32, f32) = (1440.0, 1200.0);
 
 struct App {
     runtime: AppRuntime<GalleryApp>,
