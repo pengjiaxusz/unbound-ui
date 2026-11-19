@@ -308,9 +308,29 @@ impl GlyphCache {
         TextRenderReport {
             backend: self.backend,
             phases: self.settings.phase_mode.phases(),
-            emoji_path: match self.settings.emoji_presentation {
-                crate::settings::EmojiPresentation::Color => "Swash (Color RGBA8)".to_string(),
-                crate::settings::EmojiPresentation::Mono => "R8 (Mono Text Color)".to_string(),
+            emoji_path: match (
+                self.settings.emoji_presentation,
+                self.settings.emoji_backend,
+            ) {
+                (crate::settings::EmojiPresentation::Color, _) => "Swash (Color RGBA8)".to_string(),
+                (
+                    crate::settings::EmojiPresentation::Mono,
+                    crate::settings::EmojiBackend::DirectWrite,
+                ) => "DirectWrite (Mono R8)".to_string(),
+                (
+                    crate::settings::EmojiPresentation::Mono,
+                    crate::settings::EmojiBackend::Follow,
+                ) => {
+                    if self.backend == RasterBackend::DirectWrite {
+                        "DirectWrite (Mono R8)".to_string()
+                    } else {
+                        "Swash (Mono R8)".to_string()
+                    }
+                }
+                (
+                    crate::settings::EmojiPresentation::Mono,
+                    crate::settings::EmojiBackend::Cosmic,
+                ) => "Swash (Mono R8)".to_string(),
             },
             fallback_count: self.fallback_count,
             last_fallback_reason: self.last_fallback_reason.clone(),
@@ -544,6 +564,8 @@ impl GlyphCache {
             weight,
             italic,
             mode,
+            self.settings.emoji_presentation as u8,
+            self.settings.palette_index,
         );
         if let Some(hit) = self.resolved.get(&key).copied() {
             if hit.slot.is_valid() {
@@ -562,7 +584,13 @@ impl GlyphCache {
         // Windows 上优先使用 DirectWrite：覆盖率位图直接取自系统光栅器。
         // 彩色字体或字体解析失败时静默回退 swash（距离场通过覆盖率位图后处理生成），并记录回退诊断。
         #[cfg(windows)]
-        if self.backend == RasterBackend::DirectWrite {
+        let try_directwrite = match self.settings.emoji_backend {
+            crate::settings::EmojiBackend::DirectWrite => true,
+            crate::settings::EmojiBackend::Cosmic => false,
+            crate::settings::EmojiBackend::Follow => self.backend == RasterBackend::DirectWrite,
+        };
+        #[cfg(windows)]
+        if try_directwrite {
             let phase_offset = mode.phase_offset(phase);
             if let Some(raster) = self.raster_directwrite(engine, face, glyph, phase_offset) {
                 return self.commit_raster(
@@ -576,7 +604,7 @@ impl GlyphCache {
                     raster.data,
                     sdf_mode,
                 );
-            } else {
+            } else if self.backend == RasterBackend::DirectWrite {
                 self.record_fallback(format!(
                     "DirectWrite glyph rasterization failed for glyph {}",
                     glyph.glyph_id
@@ -605,13 +633,35 @@ impl GlyphCache {
             .as_ref()?;
 
         let placement = image.placement;
-        let is_color = matches!(image.content, cosmic_text::SwashContent::Color);
+        let mut is_color = matches!(image.content, cosmic_text::SwashContent::Color);
         // 先复制出所有字段，结束对 swash 内部的借用，再进入可变的图集写入。
-        let data = image.data.to_vec();
+        let mut data = image.data.to_vec();
         let width = placement.width;
         let height = placement.height;
         let left = placement.left as f32;
         let top = placement.top as f32;
+
+        if is_color && self.settings.emoji_presentation == crate::settings::EmojiPresentation::Mono
+        {
+            // 单色模式：将 RGBA8 彩色位图转换为单通道 R8 覆盖率，走文字染色路径
+            is_color = false;
+            let mono_len = (width * height) as usize;
+            let mut mono_data = Vec::with_capacity(mono_len);
+            for chunk in data.chunks_exact(4) {
+                let a = chunk[3] as u32;
+                if a == 0 {
+                    mono_data.push(0);
+                } else {
+                    let r = chunk[0] as u32;
+                    let g = chunk[1] as u32;
+                    let b = chunk[2] as u32;
+                    let gray = (r * 299 + g * 587 + b * 114) / 1000;
+                    mono_data.push(((gray * a) / 255) as u8);
+                }
+            }
+            data = mono_data;
+        }
+
         self.commit_raster(
             key, glyph, width, height, left, top, is_color, data, sdf_mode,
         )
@@ -745,7 +795,15 @@ impl GlyphCache {
                 italic: matches!(info.style, fontdb::Style::Italic | fontdb::Style::Oblique),
             }
         };
-        directwrite.rasterize(&key, glyph.glyph_id, glyph.font_size, glyph.w, phase_offset)
+        let mono = self.settings.emoji_presentation == crate::settings::EmojiPresentation::Mono;
+        directwrite.rasterize(
+            &key,
+            glyph.glyph_id,
+            glyph.font_size,
+            glyph.w,
+            phase_offset,
+            mono,
+        )
     }
 
     /// 将整段已塑形的文本解析为四边形列表。

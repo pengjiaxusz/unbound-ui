@@ -41,8 +41,8 @@ pub use report::TextRenderReport;
 pub use sdf::{from_coverage, reconstruct_coverage, SdfBitmap};
 pub use selection::{ime_cursor_area, merge_line_rects, outline_polygon, RoundedSlot};
 pub use settings::{
-    BlendSpace, DistanceFieldMode, EmojiBackend, EmojiPresentation, InvalidationTier, LayerMode,
-    LineBreakMode, PhaseMode, TextRenderSettings, TextShaper,
+    BlendSpace, DistanceFieldMode, EmojiBackend, EmojiFallback, EmojiPresentation, EmojiSource,
+    InvalidationTier, LayerMode, LineBreakMode, PhaseMode, TextRenderSettings, TextShaper,
 };
 pub use shaping::{
     cjk_family_for_locale, PositionedGlyph, ShapedText, TextCacheStats, TextEngine, TextLine,
