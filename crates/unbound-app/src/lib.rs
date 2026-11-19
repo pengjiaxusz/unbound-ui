@@ -653,6 +653,8 @@ pub struct AppContext {
     event_target: Option<u64>,
     /// 共享剪贴板提供者（窗口模式为 SystemClipboard，无头模式为 MemoryClipboard）。
     clipboard: Rc<RefCell<Box<dyn ClipboardProvider>>>,
+    /// 运行期请求应用的文本渲染设置变更（若为 Some 则在每帧开始前生效）。
+    pub text_settings: Option<unbound_text::TextRenderSettings>,
 }
 
 impl core::fmt::Debug for AppContext {
@@ -707,7 +709,13 @@ impl AppContext {
             scroll_consumed: Vec2::ZERO,
             event_target: None,
             clipboard: Rc::new(RefCell::new(Box::new(MemoryClipboard::new()))),
+            text_settings: None,
         }
+    }
+
+    /// 请求在下一帧应用新的文本渲染设置。
+    pub fn set_text_settings(&mut self, settings: unbound_text::TextRenderSettings) {
+        self.text_settings = Some(settings);
     }
 
     /// 替换剪贴板提供者（例如替换为 `SystemClipboard`）。
@@ -3776,6 +3784,33 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
+    /// 获取当前文本渲染生效报告只读快照。
+    #[must_use]
+    pub fn text_render_report(&self) -> unbound_text::TextRenderReport {
+        self.glyph_cache.report()
+    }
+
+    /// 获取当前生效的文本渲染设置快照。
+    #[must_use]
+    pub fn text_settings(&self) -> &unbound_text::TextRenderSettings {
+        self.glyph_cache.settings()
+    }
+
+    /// 运行期应用文本渲染设置，按三档失效策略清空对应缓存并按需重建光栅器。
+    pub fn apply_text_settings(
+        &mut self,
+        settings: &unbound_text::TextRenderSettings,
+    ) -> unbound_text::InvalidationTier {
+        let tier = self
+            .glyph_cache
+            .apply_settings(settings, Some(&mut self.text_engine));
+        if tier != unbound_text::InvalidationTier::None {
+            self.force_rebuild = true;
+            self.dirty |= DirtyFlags::ALL;
+        }
+        tier
+    }
+
     /// 处理无障碍动作。
     pub fn a11y(&mut self, target: u64, action: A11yAction, value: Option<String>) -> DirtyFlags {
         self.dispatch(AppEvent::A11y {
@@ -3835,6 +3870,10 @@ impl<A: Application> AppRuntime<A> {
             self.text_engine.set_cjk_family(self.applied_cjk_family);
             self.force_rebuild = true;
             self.dirty |= DirtyFlags::ALL;
+        }
+        // 运行期文本渲染设置变更在视图构建前生效，按三档失效粒度处理字形与排版缓存。
+        if let Some(settings) = self.ctx.text_settings.take() {
+            self.apply_text_settings(&settings);
         }
         // 先归约自上一帧以来到达的异步结果与定时器，
         // 使仅因它们而唤醒的帧仍会执行重建。
