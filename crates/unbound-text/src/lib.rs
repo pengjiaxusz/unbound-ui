@@ -17,10 +17,16 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+// 零后端编译保护：必须至少启用一种文本光栅化后端。
+#[cfg(not(any(feature = "backend-directwrite", feature = "backend-swash")))]
+compile_error!(
+    "At least one text rasterization backend must be enabled (`backend-directwrite` or `backend-swash`)."
+);
+
 pub mod atlas;
 pub mod capabilities;
 #[cfg(all(windows, feature = "backend-directwrite"))]
-mod directwrite;
+pub mod directwrite;
 pub mod glyph;
 pub mod pinyin;
 pub mod pinyin_data;
@@ -34,6 +40,10 @@ pub use atlas::{
     Atlas, AtlasConfig, AtlasReport, GlyphAtlas, GlyphKey, GlyphSlot, SUBPIXEL_PHASES,
 };
 pub use capabilities::{CapabilityStatus, TextCapabilities};
+#[cfg(all(windows, feature = "backend-directwrite"))]
+pub use directwrite::{DirectWriteEngine, DirectWriteRasterizer};
+#[cfg(feature = "backend-swash")]
+pub use glyph::CosmicRaster;
 pub use glyph::{AtlasTarget, AtlasUpdate, GlyphCache, GlyphQuad, RasterBackend, ResolvedGlyph};
 pub use pinyin::{
     global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,
