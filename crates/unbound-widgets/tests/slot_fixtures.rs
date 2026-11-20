@@ -580,9 +580,9 @@ fn grid_fixture_disabled_suppresses_selection_and_downgrades_tokens() {
             if prim_type == PrimType::Stroke {
                 assert_ne!(border, Token::PRIMARY);
             }
-            // 文本全部为 TEXT_DISABLED
+            // WinUI 3 参考截图中 GridViewItem 文本在禁用态保持主文本色
             if matches!(prim_type, PrimType::Glyph | PrimType::GlyphColor) {
-                assert_eq!(fill, Token::TEXT_DISABLED);
+                assert_eq!(fill, Token::TEXT_PRIMARY);
             }
         }
     });
@@ -770,9 +770,12 @@ fn annotated_scroll_bar_fixture_disabled_downgrades_tokens() {
 
         let has_thumb = fixture.output.primitives.iter().any(|p| {
             p.prim_type() == PrimType::RoundedRect
-                && Token::new(p.fill_token_or_uv as u16) == Token::CONTROL_DISABLED_THUMB
+                && Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
         });
-        assert!(has_thumb, "disabled thumb must be CONTROL_DISABLED_THUMB");
+        assert!(
+            has_thumb,
+            "disabled AnnotatedScrollBar keeps PRIMARY indicator per WinUI 3"
+        );
     });
 }
 

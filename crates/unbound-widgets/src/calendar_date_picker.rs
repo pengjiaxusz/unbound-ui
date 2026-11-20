@@ -300,10 +300,15 @@ impl UiWidget for CalendarDatePickerDesc {
             AlignX::Left,
             AlignY::Middle,
         );
+        // WinUI 图标字形在 32px 触发器内垂直居中后仍比本框架低 1px（实测参考 26..37）。
+        let icon_place = {
+            let r = desc.icon_rect();
+            Rect::new(r.origin.x, r.origin.y + 1.0, r.size.x, r.size.y)
+        };
         let icon_glyphs = text_ctx.shape_line_styled(
             "\u{E787}",
-            desc.icon_rect(),
-            16.0,
+            icon_place,
+            14.0,
             400,
             Some("Segoe Fluent Icons"),
             AlignX::Center,
@@ -312,19 +317,28 @@ impl UiWidget for CalendarDatePickerDesc {
         let mut out = emit_calendar_date_picker(node, &desc, state, control, &mut glyphs);
         if !icon_glyphs.is_empty() && out.primitives.len() >= 8 {
             // 用 WinUI 官方 Segoe Fluent Icons 日历字形替换自绘几何线框（保留前 4 个容器图元与文本字形）。
+            // 图标墨色：WinUI 日历 glyph 使用主文本色（实测参考图墨迹最暗 41，远深于次要色 93）。
             let icon_ink = if control.disabled || desc.disabled {
                 Token::TEXT_DISABLED
             } else {
-                Token::TEXT_SECONDARY
+                Token::TEXT_PRIMARY
             };
             let mut rebuilt_prims =
                 Vec::with_capacity(out.primitives.len() - 4 + icon_glyphs.len());
             rebuilt_prims.extend_from_slice(&out.primitives[..4]);
             rebuilt_prims.extend_from_slice(&out.primitives[8..]);
-            out.primitives = rebuilt_prims;
             if out.payloads.len() >= 2 {
                 out.payloads.drain(..2);
+                for prim in &mut rebuilt_prims[4..] {
+                    let pt = prim.prim_type_and_flags & 0xFF;
+                    if prim.extra_payload_idx >= 2
+                        && (pt == PrimType::Glyph as u32 || pt == PrimType::GlyphColor as u32)
+                    {
+                        prim.extra_payload_idx -= 2;
+                    }
+                }
             }
+            out.primitives = rebuilt_prims;
             emit_glyphs(
                 &icon_glyphs,
                 icon_ink,
@@ -671,5 +685,32 @@ mod tests {
             counts.windows(2).all(|pair| pair[0] == pair[1]),
             "{counts:?}"
         );
+    }
+
+    #[test]
+    fn replacing_wireframe_icon_keeps_all_glyph_payload_indices_in_bounds() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut text_ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 1,
+            raster_scale: 1.0,
+        };
+        let rect = Rect::new(16.0, 16.0, 200.0, CALENDAR_DATE_PICKER_HEIGHT);
+        let d = CalendarDatePickerDesc::new(rect).with_placeholder("Select a date");
+        let s = CalendarDatePickerState::with_date(date());
+        let out = d.emit_laid_out(1, rect, ControlState::default(), &s, &mut text_ctx);
+        for prim in &out.primitives {
+            let pt = prim.prim_type_and_flags & 0xFF;
+            if pt == PrimType::Glyph as u32 || pt == PrimType::GlyphColor as u32 {
+                assert!(
+                    (prim.extra_payload_idx as usize) < out.payloads.len(),
+                    "glyph extra_payload_idx {} out of bounds (payloads len {})",
+                    prim.extra_payload_idx,
+                    out.payloads.len()
+                );
+            }
+        }
     }
 }

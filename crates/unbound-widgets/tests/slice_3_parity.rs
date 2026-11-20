@@ -411,7 +411,7 @@ fn annotated_scroll_bar_normal_and_disabled_states() {
         });
         assert!(has_thumb, "must emit PRIMARY horizontal thumb");
 
-        // 2. 禁用态契约：滑块与刻度降级为禁用态
+        // 2. 禁用态契约：WinUI 3 参考中横向指示条仍保持 PRIMARY，仅上下箭头降级为 TEXT_DISABLED
         let disabled = emit_canonical_annotated_scroll_bar_fixture(
             rect,
             FixtureState::disabled(),
@@ -423,8 +423,16 @@ fn annotated_scroll_bar_normal_and_disabled_states() {
                 && Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
         });
         assert!(
-            !has_active_thumb,
-            "disabled scroll bar must downgrade thumb stroke"
+            has_active_thumb,
+            "disabled AnnotatedScrollBar keeps PRIMARY horizontal indicator per WinUI 3"
+        );
+        let has_disabled_arrow = disabled.output.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::RoundedRect
+                && Token::new(p.fill_token_or_uv as u16) == Token::TEXT_DISABLED
+        });
+        assert!(
+            has_disabled_arrow,
+            "disabled AnnotatedScrollBar arrows must use TEXT_DISABLED"
         );
     });
 }

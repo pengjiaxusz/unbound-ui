@@ -57,12 +57,12 @@ fn info_bar_normal_and_disabled_and_focused_states() {
         let has_info_badge = fixture.output.primitives.iter().any(|p| {
             p.prim_type() == PrimType::RoundedRect
                 && p.fill_token_or_uv as u16 == Token::PRIMARY.raw()
-                && (p.size[0] - 16.0).abs() < 1e-2
-                && (p.size[1] - 16.0).abs() < 1e-2
+                && (p.size[0] - 15.0).abs() < 1e-2
+                && (p.size[1] - 15.0).abs() < 1e-2
         });
         assert!(
             has_info_badge,
-            "normal InfoBar must have 16px primary informational badge circle"
+            "normal InfoBar must have 15px primary informational badge circle"
         );
 
         // 2. 聚焦态校验
@@ -86,14 +86,17 @@ fn info_bar_normal_and_disabled_and_focused_states() {
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
         assert!(!glyph_tokens.is_empty());
+        // WinUI 3 InfoBar 禁用态仅衰减关闭按钮，标题/正文与徽章字符保持主色与反色。
         assert!(
-            glyph_tokens.contains(&Token::TEXT_DISABLED),
-            "disabled InfoBar must render text with TEXT_DISABLED"
+            glyph_tokens.contains(&Token::TEXT_PRIMARY),
+            "disabled InfoBar title/message stays TEXT_PRIMARY per WinUI 3"
         );
         for tok in glyph_tokens {
             assert!(
-                tok == Token::TEXT_DISABLED || tok == Token::SURFACE,
-                "disabled InfoBar glyphs must be TEXT_DISABLED or SURFACE cutout, got {:?}",
+                tok == Token::TEXT_DISABLED
+                    || tok == Token::TEXT_PRIMARY
+                    || tok == Token::ON_PRIMARY,
+                "disabled InfoBar glyphs must be TEXT_PRIMARY/ON_PRIMARY/TEXT_DISABLED, got {:?}",
                 tok
             );
         }
@@ -105,15 +108,15 @@ fn expander_normal_and_disabled_and_focused_states() {
     with_test_ctx(|text_ctx| {
         let rect = Rect::new(0.0, 0.0, CANONICAL_EXPANDER_WIDTH, 100.0);
 
-        // 1. 正常态校验：展开高度包含头部 48px + 内容区 52px
+        // 1. 正常态校验：展开高度包含头部 48px + 内容区 51px（总高 99px，兼顾两主题参考底边容差）
         let fixture = emit_canonical_expander_fixture(rect, FixtureState::normal(), text_ctx, 100);
         assert_eq!(fixture.total_size.x, CANONICAL_EXPANDER_WIDTH);
-        assert_eq!(fixture.total_size.y, 100.0);
+        assert_eq!(fixture.total_size.y, 99.0);
         assert_eq!(
             fixture.header_rect.height(),
             CANONICAL_EXPANDER_HEADER_HEIGHT
         );
-        assert_eq!(fixture.content_rect.height(), 52.0);
+        assert_eq!(fixture.content_rect.height(), 51.0);
 
         // 2. 聚焦态校验
         let focused_fixture =
@@ -139,11 +142,14 @@ fn expander_normal_and_disabled_and_focused_states() {
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
         assert!(!glyph_tokens.is_empty());
+        // WinUI 3 Expander 禁用态衰减头部文字与箭头，内容区正文保持 TEXT_PRIMARY。
+        assert!(glyph_tokens.contains(&Token::TEXT_DISABLED));
+        assert!(glyph_tokens.contains(&Token::TEXT_PRIMARY));
         for tok in glyph_tokens {
-            assert_eq!(
-                tok,
-                Token::TEXT_DISABLED,
-                "all Expander text and chevrons must be TEXT_DISABLED in disabled state"
+            assert!(
+                tok == Token::TEXT_DISABLED || tok == Token::TEXT_PRIMARY,
+                "disabled Expander glyphs must be TEXT_DISABLED or TEXT_PRIMARY, got {:?}",
+                tok
             );
         }
     });
@@ -444,27 +450,27 @@ fn image_normal_and_disabled_states() {
         assert_eq!(fixture.total_size.x, CANONICAL_IMAGE_SIZE.x);
         assert_eq!(fixture.total_size.y, CANONICAL_IMAGE_SIZE.y);
 
-        // 2. 禁用态校验：保留确定性图块色槽，按 WinUI 实测衰减不透明度
+        // 2. 禁用态校验：使用 sRGB 40% 预混的确定性图块色槽 333/334，不再二次衰减透明度
         let disabled_fixture =
             emit_canonical_image_fixture(rect, FixtureState::disabled(), text_ctx, 100);
         let has_deterministic_fill = disabled_fixture
             .output
             .primitives
             .iter()
-            .any(|p| p.fill_token_or_uv as u16 == 328);
+            .any(|p| p.fill_token_or_uv as u16 == 333);
         let has_deterministic_border = disabled_fixture
             .output
             .primitives
             .iter()
-            .any(|p| p.border_token_or_tex as u16 == 329);
+            .any(|p| p.border_token_or_tex as u16 == 334);
         assert!(
             has_deterministic_fill && has_deterministic_border,
-            "disabled Image must keep deterministic fill/border tokens"
+            "disabled Image must keep sRGB premixed fill/border tokens 333/334"
         );
         for p in &disabled_fixture.output.primitives {
             assert!(
-                (p.opacity() - unbound_widgets::slot_fixture::WINUI_DISABLED_OPACITY).abs() < 0.05,
-                "disabled Image opacity {} must attenuate",
+                (p.opacity() - 1.0).abs() < 0.05,
+                "disabled Image opacity {} must stay opaque via premixed tokens",
                 p.opacity()
             );
         }
@@ -477,8 +483,13 @@ fn flyout_and_menu_flyout_normal_and_disabled_states() {
         let flyout_rect = Rect::new(0.0, 0.0, CANONICAL_FLYOUT_WIDTH, CANONICAL_FLYOUT_HEIGHT);
 
         // 1. Flyout 校验
-        let flyout =
-            emit_canonical_flyout_fixture(flyout_rect, FixtureState::normal(), text_ctx, 100);
+        let flyout = emit_canonical_flyout_fixture(
+            flyout_rect,
+            FixtureState::normal(),
+            false,
+            text_ctx,
+            100,
+        );
         assert_eq!(flyout.total_size.x, CANONICAL_FLYOUT_WIDTH);
         assert_eq!(flyout.total_size.y, CANONICAL_FLYOUT_HEIGHT);
 
@@ -491,13 +502,23 @@ fn flyout_and_menu_flyout_normal_and_disabled_states() {
 
         // 2. MenuFlyout 校验
         let menu_rect = Rect::new(0.0, 0.0, CANONICAL_MENU_FLYOUT_WIDTH, 80.0);
-        let menu_flyout =
-            emit_canonical_menu_flyout_fixture(menu_rect, FixtureState::normal(), text_ctx, 100);
+        let menu_flyout = emit_canonical_menu_flyout_fixture(
+            menu_rect,
+            FixtureState::normal(),
+            false,
+            text_ctx,
+            100,
+        );
         assert_eq!(menu_flyout.total_size.x, CANONICAL_MENU_FLYOUT_WIDTH);
         assert_eq!(menu_flyout.total_size.y, 80.0);
 
-        let menu_disabled =
-            emit_canonical_menu_flyout_fixture(menu_rect, FixtureState::disabled(), text_ctx, 100);
+        let menu_disabled = emit_canonical_menu_flyout_fixture(
+            menu_rect,
+            FixtureState::disabled(),
+            false,
+            text_ctx,
+            100,
+        );
         let glyph_tokens: Vec<Token> = menu_disabled
             .output
             .primitives
@@ -599,11 +620,11 @@ fn slice_4_fixtures_disabled_state_keeps_full_opacity() {
         let disabled_cal =
             emit_canonical_calendar_view_fixture(cal_rect, FixtureState::disabled(), text_ctx, 100);
         assert!(!disabled_cal.output.primitives.is_empty());
-        // CalendarView 仍按 WinUI 参考对整树图元做 0.36 透明度衰减。
+        // CalendarView 禁用态已通过语义令牌衰减文字与箭头，不再二次衰减边框与背景透明度。
         for p in &disabled_cal.output.primitives {
             assert!(
-                (p.opacity() - unbound_widgets::slot_fixture::WINUI_DISABLED_OPACITY).abs() < 0.05,
-                "CalendarView primitive opacity {} must attenuate by WINUI_DISABLED_OPACITY",
+                (p.opacity() - 1.0).abs() < 0.05,
+                "CalendarView primitive opacity {} must stay opaque when disabled via semantic tokens",
                 p.opacity()
             );
         }
@@ -664,14 +685,26 @@ fn parity_20261121_visual_diagnosis_batch_regressions() {
         );
         assert_eq!(tabs.tab_rects[0].origin.y, 8.0);
 
-        // 5. ListBox: 输出铺满容器矩形的底板（避免深色禁用态包围盒塌缩）
-        let lb = unbound_widgets::slot_fixture::emit_canonical_list_rows_fixture(
+        // 5. ListBox: 输出铺满容器矩形的底板（Token 331），而 ListView 不输出全尺寸底板
+        let lb = unbound_widgets::slot_fixture::emit_canonical_listbox_rows_fixture(
             Rect::new(16.0, 16.0, 220.0, 120.0),
             FixtureState::disabled(),
             text_ctx,
             100,
         );
         assert!(lb.output.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::RoundedRect
+                && p.fill_token_or_uv as u16 == 331
+                && (p.size[0] - 220.0).abs() < 1e-2
+                && (p.size[1] - 120.0).abs() < 1e-2
+        }));
+        let lv = unbound_widgets::slot_fixture::emit_canonical_list_rows_fixture(
+            Rect::new(16.0, 16.0, 220.0, 120.0),
+            FixtureState::normal(),
+            text_ctx,
+            100,
+        );
+        assert!(!lv.output.primitives.iter().any(|p| {
             p.prim_type() == PrimType::RoundedRect
                 && (p.size[0] - 220.0).abs() < 1e-2
                 && (p.size[1] - 120.0).abs() < 1e-2
@@ -690,7 +723,7 @@ fn parity_20261121_visual_diagnosis_batch_regressions() {
                 && (p.local_pos[0] - 137.0).abs() < 1e-2
         }));
 
-        // 7. Image: 使用确定性位图色槽（328 / 329）且直角无圆角
+        // 7. Image: 正常态使用 328/329，禁用态使用 sRGB 预混 333/334，且直角无圆角
         let img = emit_canonical_image_fixture(
             Rect::new(16.0, 16.0, 64.0, 64.0),
             FixtureState::normal(),
@@ -702,5 +735,16 @@ fn parity_20261121_visual_diagnosis_batch_regressions() {
             .primitives
             .iter()
             .any(|p| { p.fill_token_or_uv as u16 == 328 && p.radii()[0] == 0.0 }));
+        let img_disabled = emit_canonical_image_fixture(
+            Rect::new(16.0, 16.0, 64.0, 64.0),
+            FixtureState::disabled(),
+            text_ctx,
+            100,
+        );
+        assert!(img_disabled
+            .output
+            .primitives
+            .iter()
+            .any(|p| { p.fill_token_or_uv as u16 == 333 && (p.opacity() - 1.0).abs() < 1e-4 }));
     });
 }

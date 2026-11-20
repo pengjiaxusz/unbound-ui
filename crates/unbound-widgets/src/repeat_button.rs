@@ -319,7 +319,7 @@ impl UiWidget for RepeatButtonDesc {
     type State = RepeatButtonState;
 
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
-        let measured = text_ctx.measure_line(&self.label, 14.0, 500);
+        let measured = text_ctx.measure_line(&self.label, 14.0, 400);
         let w = (measured.x + 22.0).max(self.rect.width()).max(64.0);
         let h = REPEAT_BUTTON_HEIGHT.max(self.rect.height());
         Vec2::new(w, h)
@@ -355,7 +355,7 @@ impl UiWidget for RepeatButtonDesc {
         let mut desc = self.clone();
         desc.rect = rect;
         let mut glyphs =
-            text_ctx.shape_line(&desc.label, rect, 14.0, 500, AlignX::Center, AlignY::Middle);
+            text_ctx.shape_line(&desc.label, rect, 14.0, 400, AlignX::Center, AlignY::Middle);
         emit_repeat_button(node, &desc, state, control, &mut glyphs)
     }
 }

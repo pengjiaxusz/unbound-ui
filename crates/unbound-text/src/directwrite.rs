@@ -36,7 +36,8 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_GLYPH_IMAGE_FORMATS_JPEG, DWRITE_GLYPH_IMAGE_FORMATS_PNG,
     DWRITE_GLYPH_IMAGE_FORMATS_SVG, DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE, DWRITE_GLYPH_OFFSET,
     DWRITE_GLYPH_RUN, DWRITE_GRID_FIT_MODE_ENABLED, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_RENDERING_MODE_NATURAL, DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
+    DWRITE_RENDERING_MODE_NATURAL, DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
+    DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
 };
 use windows_numerics::Vector2;
 
@@ -227,11 +228,17 @@ impl DirectWriteRasterizer {
             isSideways: BOOL(0),
             bidiLevel: 0,
         };
+        let rendering_mode =
+            if font_size >= 24.0 && key.family.eq_ignore_ascii_case("Segoe Fluent Icons") {
+                DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC
+            } else {
+                DWRITE_RENDERING_MODE_NATURAL
+            };
         let analysis = unsafe {
             self.factory.CreateGlyphRunAnalysis(
                 &run,
                 None,
-                DWRITE_RENDERING_MODE_NATURAL,
+                rendering_mode,
                 DWRITE_MEASURING_MODE_NATURAL,
                 DWRITE_GRID_FIT_MODE_ENABLED,
                 DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,

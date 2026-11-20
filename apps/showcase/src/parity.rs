@@ -372,6 +372,7 @@ impl ParitySession {
             }
         }
         let needs_premixed_label = (case.control == "ToggleButton" && case.state == "checked")
+            || (case.control == "AppBarToggleButton" && case.state == "checked")
             || (case.control == "HyperlinkButton" && case.state == "normal");
         if needs_premixed_label && !texture_quads.is_empty() {
             // 强调色底或高饱和字形标签：线性空间混合会让字干边缘偏色，因此把
@@ -521,7 +522,7 @@ pub fn render_case(
 ///
 /// 每项为 `(原始槽位, 浅色 sRGB, 深色 sRGB)`；颜色取自 WinUI 3 参考截图里
 /// 那些没有语义令牌可表达的模板过渡色。
-const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 21] = [
+const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 32] = [
     // 选中态 ToggleButton 的侧边与底边（WinUI 以强调色叠加半透明描边）。
     (310, [20, 108, 190], [108, 209, 255]),
     (311, [0, 57, 110], [83, 177, 220]),
@@ -563,6 +564,25 @@ const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 21] = [
     (329, [120, 144, 176], [120, 144, 176]),
     // ContentDialog / MenuFlyout 表面底色（浅 #F3F3F3 / 深 #202020）。
     (330, [243, 243, 243], [32, 32, 32]),
+    // ListBox 容器底板（浅 #F2F2F2 / 深 #2B2B2B）。
+    (331, [242, 242, 242], [43, 43, 43]),
+    // GridView 禁用态选中框描边（浅 #FFFFFF / 深 #454545）。
+    (332, [255, 255, 255], [69, 69, 69]),
+    // Image 禁用态 sRGB 40% 预混填充与描边（避免深色背景线性混合偏亮）。
+    (333, [226, 232, 239], [99, 105, 112]),
+    (334, [194, 204, 217], [67, 77, 89]),
+    // Flyout / MenuFlyout 浮层外描边（浅 #D7D7D7 / 深 #161616）。
+    (335, [215, 215, 215], [22, 22, 22]),
+    // ContentDialog 禁用态主强调按钮底色与文字（WinUI 保留淡化强调蓝）。
+    (336, [146, 184, 219], [57, 101, 121]),
+    (337, [190, 212, 233], [34, 61, 73]),
+    // ContentDialog / TeachingTip 外描边（正常态 浅 #C1C1C1 / 深 #424242；禁用态 浅 #DFDFDF / 深 #2D2D2D）。
+    (338, [193, 193, 193], [66, 66, 66]),
+    (339, [223, 223, 223], [45, 45, 45]),
+    // CalendarView 外描边与标题栏分隔线（浅 #E5E5E5 / 深 #303030）。
+    (340, [229, 229, 229], [48, 48, 48]),
+    // CommandBarFlyout / TeachingTip 禁用态浮层表面（浅 #F9F9F9 / 深 #252525）。
+    (341, [249, 249, 249], [37, 37, 37]),
 ];
 
 const PARITY_CHECKED_BORDER: Token = Token::new(310);
@@ -1279,7 +1299,7 @@ fn emit_case(
             let quads = {
                 let scale = text_ctx.effective_raster_scale();
                 let mut style = unbound_text::TextStyle::sized(size * scale);
-                style.weight = 500;
+                style.weight = 400;
                 let shaped = match text_ctx.engine.shape_laid_out("ToggleButton", &style) {
                     Some(shaped) => shaped,
                     None => text_ctx.engine.shape("ToggleButton", &style),
@@ -1292,7 +1312,7 @@ fn emit_case(
                     text_ctx.engine,
                     &shaped,
                     Vec2::new(x * scale, y * scale),
-                    500,
+                    400,
                     false,
                 )
             };
@@ -1788,7 +1808,7 @@ fn emit_case(
                 let clip_right = rect.max().x - 12.0;
                 let content_r = Rect::new(
                     rect.origin.x + 12.0,
-                    rect.origin.y + 1.0,
+                    rect.origin.y,
                     (rect.width() - 24.0).max(0.0),
                     rect.height(),
                 );
@@ -1921,6 +1941,35 @@ fn emit_case(
                 } else {
                     unbound_widgets::slot_fixture::CANONICAL_APP_BAR_BUTTON_HEIGHT
                 };
+                // 剥离线性混合字形，改用 sRGB 预混纹理绘制强调色底板上的图标与文字。
+                fixture.output.primitives.retain(|p| {
+                    let pt = p.prim_type_and_flags & 0xFF;
+                    pt != PrimType::Glyph as u32 && pt != PrimType::GlyphColor as u32
+                });
+                fixture.output.payloads.clear();
+                let stack_top = rect.origin.y + ((h - 30.0) * 0.5).round();
+                let icon_r = Rect::new(rect.origin.x, stack_top - 3.0, w, 16.0);
+                let icon_quads = text_ctx.shape_line_styled(
+                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH,
+                    icon_r,
+                    16.0,
+                    400,
+                    Some("Segoe Fluent Icons"),
+                    unbound_widgets::AlignX::Center,
+                    unbound_widgets::AlignY::Middle,
+                );
+                let label_r = Rect::new(rect.origin.x, stack_top + 18.0, w, 12.0);
+                let label_quads = text_ctx.shape_line_styled(
+                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_LABEL,
+                    label_r,
+                    12.0,
+                    400,
+                    None,
+                    unbound_widgets::AlignX::Center,
+                    unbound_widgets::AlignY::Middle,
+                );
+                texture_quads.extend(icon_quads);
+                texture_quads.extend(label_quads);
                 let visual_r = Rect::new(
                     rect.origin.x + 2.0,
                     rect.origin.y + 6.0,
@@ -1996,15 +2045,16 @@ fn emit_case(
             let disabled = control.disabled;
 
             let mut out = WidgetOutput::default();
-            // 1. 浮层表面背景（参考宿主用内联 Border 包裹，无外扩阴影）
-            out.primitives
-                .push(primitive::surface(flyout_r, 8.0, Token::OVERLAY_BG, 760));
-            // 2. 1px SurfaceStroke 微描边
-            let border_token = if disabled {
-                Token::CONTROL_DISABLED_BORDER
+            // 1. 浮层表面背景（参考宿主用内联 Border 包裹，禁用深色态为 #252525）
+            let bg_token = if disabled {
+                Token::new(341)
             } else {
-                Token::CARD_BORDER
+                Token::OVERLAY_BG
             };
+            out.primitives
+                .push(primitive::surface(flyout_r, 8.0, bg_token, 760));
+            // 2. 1px SurfaceStroke 微描边（禁用态深色仍保持 #1D1D1D，不升亮为 CONTROL_DISABLED_BORDER）
+            let border_token = Token::CARD_BORDER;
             out.primitives.push(primitive::instance(
                 flyout_r,
                 [8.0; 4],
@@ -2061,7 +2111,13 @@ fn emit_case(
                 );
             }
 
-            let more_quads = icon_quads(text_ctx, "\u{E712}", more_r, 16.0);
+            let more_icon_r = Rect::new(
+                more_r.origin.x - 3.0,
+                more_r.origin.y,
+                more_r.width(),
+                more_r.height(),
+            );
+            let more_quads = icon_quads(text_ctx, "\u{E712}", more_icon_r, 16.0);
             primitive::glyphs(
                 &more_quads,
                 icon_ink,
@@ -2398,12 +2454,17 @@ fn emit_case(
             // 1. 对话框表面背景（对齐 Catalog.cs ContentDialogBackground：浅 #F3F3F3 / 深 #202020，无外扩阴影）
             out.primitives
                 .push(primitive::surface(dialog_r, 8.0, Token::new(330), 950));
-            // 2. 1px SurfaceStroke 微描边
+            // 2. 1px SurfaceStroke 微描边（正常态 浅 #C1C1C1 / 深 #424242；禁用态 浅 #DFDFDF / 深 #2D2D2D）
+            let dialog_border = if disabled {
+                Token::new(339)
+            } else {
+                Token::new(338)
+            };
             out.primitives.push(primitive::instance(
                 dialog_r,
                 [8.0; 4],
                 Token::NONE,
-                Token::CARD_BORDER,
+                dialog_border,
                 1.0,
                 0.0,
                 PrimType::RoundedRect,
@@ -2424,23 +2485,24 @@ fn emit_case(
             let btn_w = 120.0_f32.min(dialog_w - 48.0);
             let btn_h = 32.0;
             let btn_r = Rect::new(
-                dialog_r.max().x - 24.0 - btn_w,
-                footer_y + (footer_h - btn_h) * 0.5,
+                dialog_r.max().x - 25.0 - btn_w,
+                footer_y + (footer_h - btn_h) * 0.5 - 1.0,
                 btn_w,
                 btn_h,
             );
             let btn_fill = if disabled {
-                Token::CONTROL_DISABLED_BG
+                Token::new(336)
             } else {
                 Token::PRIMARY
             };
-            let btn_border = if disabled {
-                Token::CONTROL_DISABLED_BORDER
-            } else {
-                Token::NONE
-            };
             out.primitives.push(primitive::outlined(
-                btn_r, 4.0, btn_fill, btn_border, 1.0, 0.0, 952,
+                btn_r,
+                4.0,
+                btn_fill,
+                Token::NONE,
+                1.0,
+                0.0,
+                952,
             ));
 
             push(scene, out);
@@ -2454,8 +2516,8 @@ fn emit_case(
             let title_quads = text_ctx.shape_line_styled(
                 "ContentDialog",
                 Rect::new(
-                    dialog_r.origin.x + 24.0,
-                    dialog_r.origin.y + 22.0,
+                    dialog_r.origin.x + 26.0,
+                    dialog_r.origin.y + 21.0,
                     dialog_w - 48.0,
                     28.0,
                 ),
@@ -2475,8 +2537,8 @@ fn emit_case(
             let body_quads = text_ctx.shape_line_styled(
                 "Message",
                 Rect::new(
-                    dialog_r.origin.x + 24.0,
-                    dialog_r.origin.y + 56.0,
+                    dialog_r.origin.x + 25.0,
+                    dialog_r.origin.y + 55.0,
                     dialog_w - 48.0,
                     20.0,
                 ),
@@ -2489,7 +2551,7 @@ fn emit_case(
             emit_quads(scene, &body_quads, body_ink, 953);
 
             let btn_ink = if disabled {
-                Token::TEXT_DISABLED
+                Token::new(337)
             } else {
                 Token::ON_PRIMARY
             };
@@ -2497,7 +2559,7 @@ fn emit_case(
                 "OK",
                 btn_r,
                 14.0,
-                500,
+                400,
                 None,
                 unbound_widgets::AlignX::Center,
                 unbound_widgets::AlignY::Middle,
@@ -2511,6 +2573,7 @@ fn emit_case(
             let fixture = unbound_widgets::slot_fixture::emit_canonical_flyout_fixture(
                 rect,
                 fixture_state,
+                case.theme == "dark",
                 text_ctx,
                 700,
             );
@@ -2522,6 +2585,7 @@ fn emit_case(
             let fixture = unbound_widgets::slot_fixture::emit_canonical_menu_flyout_fixture(
                 rect,
                 fixture_state,
+                case.theme == "dark",
                 text_ctx,
                 700,
             );
@@ -2548,15 +2612,25 @@ fn emit_case(
             let disabled = control.disabled;
 
             let mut out = WidgetOutput::default();
-            // 1. 气泡表面背景（参考宿主用内联 Border 呈现，无外扩阴影）
+            // 1. 气泡表面背景（正常态 浅 #F9F9F9 / 深 #2E2E2E；禁用态 浅 #F9F9F9 / 深 #252525）
+            let tip_bg = if disabled {
+                Token::new(341)
+            } else {
+                PARITY_TOOLTIP_FILL
+            };
+            let tip_border = if disabled {
+                Token::new(339)
+            } else {
+                Token::new(338)
+            };
             out.primitives
-                .push(primitive::surface(tip_r, 8.0, Token::OVERLAY_BG, 780));
+                .push(primitive::surface(tip_r, 8.0, tip_bg, 780));
             // 3. 1px SurfaceStroke 微描边
             out.primitives.push(primitive::instance(
                 tip_r,
                 [8.0; 4],
                 Token::NONE,
-                Token::CARD_BORDER,
+                tip_border,
                 1.0,
                 0.0,
                 PrimType::RoundedRect,
@@ -2574,7 +2648,7 @@ fn emit_case(
             let title_quads = text_ctx.shape_line_styled(
                 "TeachingTip",
                 Rect::new(
-                    tip_r.origin.x + 14.0,
+                    tip_r.origin.x + 15.0,
                     tip_r.origin.y + 12.0,
                     tip_w - 28.0,
                     20.0,
@@ -2595,8 +2669,8 @@ fn emit_case(
             let sub_quads = text_ctx.shape_line_styled(
                 "Message",
                 Rect::new(
-                    tip_r.origin.x + 14.0,
-                    tip_r.origin.y + 36.0,
+                    tip_r.origin.x + 15.0,
+                    tip_r.origin.y + 35.0,
                     tip_w - 28.0,
                     18.0,
                 ),
@@ -3416,6 +3490,7 @@ fn emit_case(
             fixture.total_size
         }
         "CalendarView" => {
+            let first = scene.primitives.len();
             let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_calendar_view_fixture(
                 rect,
@@ -3424,6 +3499,16 @@ fn emit_case(
                 700,
             );
             push(scene, fixture.output);
+            let clip_idx = scene.clips.len() as u32;
+            scene.clips.push(GpuClipNode::from_aabb([
+                rect.origin.x,
+                rect.origin.y,
+                rect.max().x,
+                rect.max().y,
+            ]));
+            for primitive in &mut scene.primitives[first..] {
+                primitive.clip_idx = clip_idx;
+            }
             fixture.total_size
         }
         "TimePicker" => {

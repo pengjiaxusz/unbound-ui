@@ -534,7 +534,7 @@ impl UiWidget for ButtonDesc {
     }
 
     fn intrinsic_size(&self, text_ctx: &mut TextCtx<'_>) -> Vec2 {
-        let measured = text_ctx.measure_line(&self.label, self.font_size, 500);
+        let measured = text_ctx.measure_line(&self.label, self.font_size, 400);
         // WinUI `ButtonPadding = 11,5,11,6`：标准按钮的文本区两侧各让出 11px。
         let pad_x = if self.left_align {
             20.0
@@ -584,7 +584,7 @@ impl UiWidget for ButtonDesc {
             &desc.label,
             text_rect,
             desc.font_size,
-            500,
+            400,
             align_x,
             AlignY::Middle,
         );
