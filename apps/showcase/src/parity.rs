@@ -373,7 +373,9 @@ impl ParitySession {
         }
         let needs_premixed_label = (case.control == "ToggleButton" && case.state == "checked")
             || (case.control == "AppBarToggleButton" && case.state == "checked")
-            || (case.control == "HyperlinkButton" && case.state == "normal");
+            || (case.control == "ToggleSplitButton" && case.state == "checked")
+            || (case.control == "HyperlinkButton" && case.state == "normal")
+            || (case.control == "FontIcon" && case.state == "disabled" && !dark);
         if needs_premixed_label && !texture_quads.is_empty() {
             // 强调色底或高饱和字形标签：线性空间混合会让字干边缘偏色，因此把
             // DirectWrite 覆盖率与底色按 sRGB 预混成一张不透明纹理。
@@ -409,6 +411,14 @@ impl ParitySession {
                 let height = rect.height() as u32;
                 let label_data = if case.control == "HyperlinkButton" {
                     hyperlink_label_rgba(dark, &texture_quads, &tiles, rect.origin, width, height)
+                } else if case.control == "FontIcon" {
+                    font_icon_disabled_light_rgba(
+                        &texture_quads,
+                        &tiles,
+                        rect.origin,
+                        width,
+                        height,
+                    )
                 } else {
                     checked_label_rgba(dark, &texture_quads, &tiles, rect.origin, width, height)
                 };
@@ -421,6 +431,11 @@ impl ParitySession {
                     height,
                     data: label_data,
                 });
+                let label_z = if case.control == "ToggleSplitButton" {
+                    712
+                } else {
+                    704
+                };
                 emit_texture(
                     &mut scene,
                     rect,
@@ -430,21 +445,28 @@ impl ParitySession {
                         width as f32 / ATLAS_PAGE,
                         (LABEL_TEXTURE_Y + height) as f32 / ATLAS_PAGE,
                     ),
-                    704,
+                    label_z,
                 );
             } else {
                 let ink = if case.control == "HyperlinkButton" {
                     Token::PRIMARY
+                } else if case.control == "FontIcon" {
+                    Token::TEXT_DISABLED
                 } else if dark {
                     PARITY_BLACK
                 } else {
                     PARITY_WHITE
                 };
+                let label_z = if case.control == "ToggleSplitButton" {
+                    712
+                } else {
+                    704
+                };
                 let mut out = WidgetOutput::default();
                 primitive::glyphs(
                     &texture_quads,
                     ink,
-                    704,
+                    label_z,
                     &mut out.primitives,
                     &mut out.payloads,
                 );
@@ -522,7 +544,7 @@ pub fn render_case(
 ///
 /// 每项为 `(原始槽位, 浅色 sRGB, 深色 sRGB)`；颜色取自 WinUI 3 参考截图里
 /// 那些没有语义令牌可表达的模板过渡色。
-const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 32] = [
+const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 33] = [
     // 选中态 ToggleButton 的侧边与底边（WinUI 以强调色叠加半透明描边）。
     (310, [20, 108, 190], [108, 209, 255]),
     (311, [0, 57, 110], [83, 177, 220]),
@@ -583,6 +605,8 @@ const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 32] = [
     (340, [229, 229, 229], [48, 48, 48]),
     // CommandBarFlyout / TeachingTip 禁用态浮层表面（浅 #F9F9F9 / 深 #252525）。
     (341, [249, 249, 249], [37, 37, 37]),
+    // ToggleSplitButton 选中态主区与下拉区之间的暗强调色分隔线。
+    (342, [0, 75, 144], [75, 161, 200]),
 ];
 
 const PARITY_CHECKED_BORDER: Token = Token::new(310);
@@ -736,6 +760,26 @@ fn hyperlink_label_rgba(
     let palette = theme::palette(dark);
     let background = srgb8(palette.color(Token::SURFACE));
     let ink = if dark { [153, 235, 255] } else { [0, 62, 146] };
+    // 深色底板上的浅青色强调字形在 WinUI 侧有文本伽马抬升（实测中位 gamma≈0.68）。
+    let gamma: f32 = if dark { 0.68 } else { 1.0 };
+    glyph_rgba(background, ink, quads, tiles, origin, width, height, gamma)
+}
+
+/// 生成 FontIcon 浅色禁用态在底板上的 sRGB 预混纹理。
+///
+/// 参考侧对 FontIcon（非 Control）应用 `Opacity = 0.4` 在 sRGB 空间合成；
+/// 默认着色器的浅底字形补偿曲线叠加半透明令牌会使抗锯齿边缘二次加深，这里
+/// 直接按 sRGB 线性覆盖率与 40% 禁用灰预混。
+fn font_icon_disabled_light_rgba(
+    quads: &[unbound_text::GlyphQuad],
+    tiles: &[BadgeGlyph],
+    origin: Vec2,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let palette = theme::palette(false);
+    let background = srgb8(palette.color(Token::SURFACE));
+    let ink = [156, 156, 156];
     glyph_rgba(background, ink, quads, tiles, origin, width, height, 1.0)
 }
 
@@ -1872,10 +1916,52 @@ fn emit_case(
                 menu_open: false,
             };
             let size = desc.intrinsic_size(text_ctx);
-            push(
-                scene,
-                desc.emit_laid_out(NODE, rect, control, &state, text_ctx),
-            );
+            if checked && !control.disabled {
+                // 选中态底板与箭头走通用发射器（传空标签），文字经 sRGB 预混并精确裁剪右边界。
+                let bg_desc = ToggleSplitButtonDesc::new(rect, "");
+                push(
+                    scene,
+                    bg_desc.emit_laid_out(NODE, rect, control, &state, text_ctx),
+                );
+                let main = desc.main_rect();
+                let clip_right = main.max().x - 11.0;
+                let content_r = Rect::new(
+                    main.origin.x + 11.0,
+                    main.origin.y,
+                    (main.width() - 11.0).max(0.0),
+                    main.height(),
+                );
+                let mut glyphs = text_ctx.shape_line(
+                    &desc.label,
+                    content_r,
+                    14.0,
+                    400,
+                    unbound_widgets::AlignX::Left,
+                    unbound_widgets::AlignY::Middle,
+                );
+                glyphs.retain_mut(|quad| {
+                    if quad.rect.origin.x >= clip_right {
+                        false
+                    } else {
+                        if quad.rect.max().x > clip_right {
+                            let w = quad.rect.width();
+                            let new_w = clip_right - quad.rect.origin.x;
+                            if w > 0.0 && new_w > 0.0 {
+                                let fraction = new_w / w;
+                                quad.uv[2] = quad.uv[0] + (quad.uv[2] - quad.uv[0]) * fraction;
+                                quad.rect.size.x = new_w;
+                            }
+                        }
+                        true
+                    }
+                });
+                texture_quads.extend(glyphs);
+            } else {
+                push(
+                    scene,
+                    desc.emit_laid_out(NODE, rect, control, &state, text_ctx),
+                );
+            }
             Vec2::new(size.x, 32.0)
         }
         "PasswordBox" => {
@@ -3534,15 +3620,39 @@ fn emit_case(
             fixture.total_size
         }
         "FontIcon" => {
-            let fixture_state = FixtureState::from_control_state(control, checked);
-            let fixture = unbound_widgets::slot_fixture::emit_canonical_font_icon_fixture(
-                rect,
-                fixture_state,
-                text_ctx,
-                700,
-            );
-            push(scene, fixture.output);
-            fixture.total_size
+            if control.disabled && case.theme == "light" {
+                let size = if rect.width() > 0.0 {
+                    rect.width().min(if rect.height() > 0.0 {
+                        rect.height()
+                    } else {
+                        rect.width()
+                    })
+                } else {
+                    unbound_widgets::slot_fixture::CANONICAL_FONT_ICON_SIZE
+                };
+                let total_r = Rect::new(rect.origin.x, rect.origin.y, size, size);
+                let quads = text_ctx.shape_line_styled(
+                    unbound_widgets::slot_fixture::CANONICAL_FONT_ICON_GLYPH,
+                    total_r,
+                    unbound_widgets::slot_fixture::CANONICAL_FONT_ICON_FONT_SIZE,
+                    400,
+                    Some("Segoe Fluent Icons"),
+                    unbound_widgets::AlignX::Center,
+                    unbound_widgets::AlignY::Middle,
+                );
+                texture_quads.extend(quads);
+                Vec2::new(size, size)
+            } else {
+                let fixture_state = FixtureState::from_control_state(control, checked);
+                let fixture = unbound_widgets::slot_fixture::emit_canonical_font_icon_fixture(
+                    rect,
+                    fixture_state,
+                    text_ctx,
+                    700,
+                );
+                push(scene, fixture.output);
+                fixture.total_size
+            }
         }
         "Image" => {
             let fixture_state = FixtureState::from_control_state(control, checked);
