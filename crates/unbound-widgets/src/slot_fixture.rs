@@ -3785,9 +3785,7 @@ pub fn emit_canonical_app_bar_button_fixture(
         &mut out.payloads,
     );
 
-    if disabled {
-        apply_recursive_disabled_propagation(&mut out, true);
-    }
+    // disabled 态下 text_ink 已是 Token::TEXT_DISABLED，不需二次衰减透明度
 
     AppBarButtonFixtureOutput {
         output: out,
