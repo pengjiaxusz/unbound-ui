@@ -22,9 +22,9 @@ use unbound_widgets::slot_fixture::{
     CANONICAL_TAB_ITEMS, STANDARD_FLIP_HEIGHT, STANDARD_FLIP_WIDTH, STANDARD_GRID_CELL_RADIUS,
     STANDARD_GRID_HEIGHT, STANDARD_GRID_WIDTH, STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT,
     STANDARD_PILL_WIDTH, STANDARD_REFRESH_HEIGHT, STANDARD_REFRESH_INDICATOR_SIZE,
-    STANDARD_REFRESH_WIDTH, STANDARD_SCROLL_BAR_HEIGHT, STANDARD_SCROLL_BAR_TRACK_WIDTH,
-    STANDARD_SCROLL_BAR_WIDTH, STANDARD_STACK_SPACING, STANDARD_TREE_INDENT,
-    STANDARD_TREE_ITEM_HEIGHT, WINUI_DISABLED_OPACITY,
+    STANDARD_REFRESH_WIDTH, STANDARD_SCROLL_BAR_HEIGHT, STANDARD_SCROLL_BAR_WIDTH,
+    STANDARD_STACK_SPACING, STANDARD_TREE_INDENT, STANDARD_TREE_ITEM_HEIGHT,
+    WINUI_DISABLED_OPACITY,
 };
 use unbound_widgets::{primitive, TextCtx, WidgetOutput};
 
@@ -594,7 +594,7 @@ fn flip_view_fixture_normal_outputs_card_and_nav_buttons() {
         assert!(fixture.prev_button_rect.origin.x < fixture.card_rect.origin.x + 40.0);
         assert!(fixture.next_button_rect.max().x > fixture.card_rect.max().x - 40.0);
 
-        // 3. 折线箭头（左 Prev 2 条折线 + 右 Next 2 条折线 = 4 条）
+        // 3. WinUI FlipView 静止态不常驻左右翻页箭标曲线
         let chevron_curves = fixture
             .output
             .primitives
@@ -602,20 +602,9 @@ fn flip_view_fixture_normal_outputs_card_and_nav_buttons() {
             .filter(|p| p.prim_type() == PrimType::Curve)
             .count();
         assert_eq!(
-            chevron_curves, 4,
-            "must emit 4 curve strokes for nav chevrons"
+            chevron_curves, 0,
+            "idle WinUI FlipView must not emit static nav chevron curves"
         );
-
-        // 4. 下一页箭头活跃色为 TEXT_PRIMARY
-        let curve_tokens: Vec<Token> = fixture
-            .output
-            .primitives
-            .iter()
-            .filter(|p| p.prim_type() == PrimType::Curve)
-            .map(|p| Token::new(p.fill_token_or_uv as u16))
-            .collect();
-        assert!(curve_tokens.contains(&Token::TEXT_PRIMARY));
-        assert!(curve_tokens.contains(&Token::TEXT_DISABLED));
 
         // 5. 页面文字 "Page 1" 为 TEXT_PRIMARY
         let glyph_tokens: Vec<Token> = fixture
@@ -668,18 +657,17 @@ fn refresh_fixture_normal_outputs_indicator_and_card() {
             STANDARD_REFRESH_INDICATOR_SIZE
         );
 
-        // 2. 包含强调色圆弧（PRIMARY 曲线）
-        let arc_curves: Vec<Token> = fixture
+        // 2. 使用 Segoe Fluent Icons 刷新字形，不绘制占位弧线
+        let arc_count = fixture
             .output
             .primitives
             .iter()
             .filter(|p| p.prim_type() == PrimType::Curve)
-            .map(|p| Token::new(p.fill_token_or_uv as u16))
-            .collect();
-        assert!(!arc_curves.is_empty());
-        for &tok in &arc_curves {
-            assert_eq!(tok, Token::PRIMARY);
-        }
+            .count();
+        assert_eq!(
+            arc_count, 0,
+            "RefreshContainer uses icon glyph instead of curves"
+        );
 
         // 3. 内容卡片文本
         let glyph_tokens: Vec<Token> = fixture
@@ -736,26 +724,23 @@ fn annotated_scroll_bar_fixture_normal_outputs_track_and_thumb() {
             400,
         );
 
-        // 1. 轨道尺寸与居中
+        // 1. 轨道尺寸对齐 WinUI AnnotatedScrollBar 全宽槽道
         assert_eq!(
             fixture.track_rect.width(),
-            STANDARD_SCROLL_BAR_TRACK_WIDTH,
-            "track width is standard 8px"
+            STANDARD_SCROLL_BAR_WIDTH,
+            "track spans full bar width"
         );
         assert_eq!(fixture.track_rect.height(), STANDARD_SCROLL_BAR_HEIGHT);
-        let margin_left = fixture.track_rect.origin.x - rect.origin.x;
-        assert_eq!(margin_left, 4.0, "track is centered with 4px left margin");
 
-        // 2. 滑块存在
-        assert_eq!(fixture.thumb_rect.width(), STANDARD_SCROLL_BAR_TRACK_WIDTH);
-        assert_eq!(fixture.thumb_rect.height(), 32.0);
+        // 2. 横向滑块存在
+        assert_eq!(fixture.thumb_rect.height(), 8.0);
 
-        // 3. 图元令牌包含 CONTROL_TRACK_STROKE 滑块
+        // 3. 图元令牌包含 PRIMARY 滑块
         let has_thumb = fixture.output.primitives.iter().any(|p| {
             p.prim_type() == PrimType::RoundedRect
-                && Token::new(p.fill_token_or_uv as u16) == Token::CONTROL_TRACK_STROKE
+                && Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
         });
-        assert!(has_thumb, "must emit CONTROL_TRACK_STROKE thumb");
+        assert!(has_thumb, "must emit PRIMARY horizontal thumb");
     });
 }
 
@@ -872,12 +857,8 @@ fn pips_pager_normal_renders_five_pips_and_selected_marker() {
         .collect();
 
     assert!(
-        fills.contains(&Token::PRIMARY),
-        "must contain Token::PRIMARY for selected pip"
-    );
-    assert!(
-        fills.contains(&Token::CONTROL_TRACK),
-        "must contain Token::CONTROL_TRACK for unselected pips"
+        fills.iter().all(|tok| *tok == Token::CONTROL_TRACK),
+        "WinUI PipsPager pips use CONTROL_TRACK with larger selected diameter"
     );
 }
 

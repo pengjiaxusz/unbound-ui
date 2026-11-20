@@ -297,16 +297,9 @@ pub fn emit_toggle_split_button(
     let mut primitives = Vec::with_capacity(8 + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len() + 2);
 
-    let fill_rect = if !disabled && !checked {
-        rect.inflate(-1.0)
-    } else {
-        rect
-    };
-    let fill_radii = if !disabled && !checked {
-        [(radius - 1.0).max(0.0); 4]
-    } else {
-        [radius; 4]
-    };
+    // 表面填满整个矩形，使外框 1px 半透明描边叠加在控件表面上，对齐 WinUI 实测描边亮度。
+    let fill_rect = rect;
+    let fill_radii = [radius; 4];
 
     primitives.push(instance_rounded(fill_rect, fill_radii, main_fill, z));
     if state.menu_open {

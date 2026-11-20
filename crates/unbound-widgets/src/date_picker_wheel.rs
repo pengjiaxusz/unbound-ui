@@ -427,44 +427,54 @@ pub fn emit_date_picker_wheel(
     let mut primitives = Vec::with_capacity(14 + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len() + 8);
 
-    // 1. 触发器：表面、描边、列间分割线与下拉 Chevron。
-    primitives.push(surface(trigger, 4.0, fill, z));
-    primitives.push(outlined(trigger, 4.0, Token::NONE, border, 1.0, 0.0, z + 1));
-    let col_w = trigger.size.x / DATE_PICKER_WHEEL_COLUMNS as f32;
+    // 1. 触发器：WinUI DatePicker 触发按钮实测高 30px，无右侧下拉箭头，底边叠次级浮起描边。
+    let visual_trigger = Rect::new(
+        trigger.origin.x,
+        trigger.origin.y,
+        trigger.size.x,
+        trigger.size.y.min(30.0),
+    );
+    primitives.push(surface(visual_trigger, 4.0, fill, z));
+    primitives.push(outlined(
+        visual_trigger,
+        4.0,
+        Token::NONE,
+        border,
+        1.0,
+        0.0,
+        z + 1,
+    ));
+    // 底边强调线在所有状态保留图元槽位，禁用/聚焦态以 NONE 隐藏，维持恒定形状契约。
+    primitives.push(surface(
+        Rect::new(
+            visual_trigger.origin.x + 3.0,
+            visual_trigger.max().y - 1.0,
+            (visual_trigger.size.x - 6.0).max(0.0),
+            1.0,
+        ),
+        0.0,
+        if !disabled && !control.focused {
+            Token::CONTROL_STROKE_SECONDARY
+        } else {
+            Token::NONE
+        },
+        z + 1,
+    ));
+    let col_w = visual_trigger.size.x / DATE_PICKER_WHEEL_COLUMNS as f32;
     for i in 1..DATE_PICKER_WHEEL_COLUMNS {
-        let div_x = trigger.origin.x + i as f32 * col_w;
+        let div_x = visual_trigger.origin.x + i as f32 * col_w;
         primitives.push(surface(
             Rect::new(
                 div_x - 0.5,
-                trigger.origin.y + 1.0,
+                visual_trigger.origin.y + 1.0,
                 1.0,
-                (trigger.size.y - 2.0).max(0.0),
+                (visual_trigger.size.y - 2.0).max(0.0),
             ),
             0.0,
             border,
             z + 1,
         ));
     }
-    let tcx = trigger.max().x - 16.0;
-    let tcy = trigger.center().y;
-    curve_stroke(
-        [tcx - 4.0, tcy - 2.0],
-        [tcx, tcy + 2.0],
-        1.5,
-        chevron_ink,
-        z + 2,
-        &mut primitives,
-        &mut payloads,
-    );
-    curve_stroke(
-        [tcx, tcy + 2.0],
-        [tcx + 4.0, tcy - 2.0],
-        1.5,
-        chevron_ink,
-        z + 2,
-        &mut primitives,
-        &mut payloads,
-    );
 
     // 2. 展开态绘制滚轮面板：阴影、表面、描边、选中行高亮与每列上下 Chevron。
     if state.open {

@@ -70,7 +70,8 @@ pub fn dark() -> Palette {
         (Token::OUTLINE, c(58, 58, 58, 255)),
         (Token::OUTLINE_STRONG, c(92, 92, 92, 255)),
         (Token::DIVIDER, c(255, 255, 255, veil(14))),
-        (Token::CARD_BORDER, c(255, 255, 255, veil(13))),
+        // 深色 `CardStrokeColorDefault` 为 `#19000000`（10% 黑），叠在 `#202020` 上实测为 (29,29,29)。
+        (Token::CARD_BORDER, c(0, 0, 0, 38)),
         // ---- 语义状态 ---------------------------------------------------
         (Token::ERROR, c(255, 153, 164, 255)),
         (Token::ON_ERROR, c(0, 0, 0, 255)),
@@ -83,7 +84,7 @@ pub fn dark() -> Palette {
         (Token::SCRIM, c(0, 0, 0, 128)),
         // ---- 强调色（WinUI 深色强调填充 = #60CDFF，前景为黑） -------------
         (Token::PRIMARY, c(96, 205, 255, 255)),
-        (Token::ON_PRIMARY, c(0, 20, 32, 255)),
+        (Token::ON_PRIMARY, c(0, 0, 0, 255)),
         (Token::PRIMARY_HOVER, c(130, 216, 255, 255)),
         (Token::PRIMARY_PRESSED, c(76, 194, 255, 255)),
         (Token::PRIMARY_SOFT, c(10, 46, 66, 255)),
@@ -144,7 +145,8 @@ pub fn dark() -> Palette {
         (Token::NAV_SELECTED, c(255, 255, 255, veil(16))),
         (Token::NAV_TEXT, c(255, 255, 255, 255)),
         (Token::NAV_TEXT_MUTED, c(197, 197, 197, 255)),
-        (Token::CARD_BG, c(255, 255, 255, veil(12))),
+        // 深色 `CardBackgroundFillColorDefault` 为 5.12% 白薄纱，叠在 `#202020` 上实测为 (43,43,43)。
+        (Token::CARD_BG, c(255, 255, 255, veil(13))),
         (Token::OVERLAY_BG, c(44, 44, 44, 255)),
         (Token::HUD_BG, c(44, 44, 44, 240)),
         (Token::HUD_TEXT, c(255, 255, 255, 255)),
@@ -205,7 +207,8 @@ pub fn light() -> Palette {
         (Token::OUTLINE, c(209, 209, 209, 255)),
         (Token::OUTLINE_STRONG, c(134, 134, 134, 255)),
         (Token::DIVIDER, c(0, 0, 0, light_base_veil(18))),
-        (Token::CARD_BORDER, c(0, 0, 0, light_base_veil(15))),
+        // 浅色 `CardStrokeColorDefault` 在卡片亮面 (251) 上实测描边为 (229,229,229)。
+        (Token::CARD_BORDER, c(0, 0, 0, light_base_veil(23))),
         (Token::ERROR, c(196, 43, 28, 255)),
         (Token::ON_ERROR, c(255, 255, 255, 255)),
         (Token::WARNING, c(157, 93, 0, 255)),

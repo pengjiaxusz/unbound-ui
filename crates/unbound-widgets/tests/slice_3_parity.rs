@@ -20,8 +20,8 @@ use unbound_widgets::slot_fixture::{
     STANDARD_FLIP_HEIGHT, STANDARD_FLIP_WIDTH, STANDARD_GRID_CELL_RADIUS, STANDARD_GRID_HEIGHT,
     STANDARD_GRID_WIDTH, STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT, STANDARD_PILL_WIDTH,
     STANDARD_REFRESH_HEIGHT, STANDARD_REFRESH_INDICATOR_SIZE, STANDARD_REFRESH_WIDTH,
-    STANDARD_SCROLL_BAR_HEIGHT, STANDARD_SCROLL_BAR_TRACK_WIDTH, STANDARD_SCROLL_BAR_WIDTH,
-    STANDARD_TREE_INDENT, STANDARD_TREE_ITEM_HEIGHT,
+    STANDARD_SCROLL_BAR_HEIGHT, STANDARD_SCROLL_BAR_WIDTH, STANDARD_TREE_INDENT,
+    STANDARD_TREE_ITEM_HEIGHT,
 };
 use unbound_widgets::{primitive, TextCtx, WidgetOutput};
 
@@ -53,9 +53,10 @@ fn tree_view_normal_and_disabled_and_focused_states() {
         // 1. 正常态契约：Root 根节点与缩进 40px 的 Child 子节点
         let normal = emit_canonical_tree_fixture(rect, FixtureState::normal(), text_ctx, 100);
         assert_eq!(normal.root_rect.height(), STANDARD_TREE_ITEM_HEIGHT);
+        // 根节点相对容器上移 4px，子节点沿用 2px 行间重叠，故落点为 4+32-2。
         assert_eq!(
             normal.child_rect.origin.y,
-            rect.origin.y + STANDARD_TREE_ITEM_HEIGHT
+            rect.origin.y + STANDARD_TREE_ITEM_HEIGHT + 2.0
         );
         assert_eq!(
             normal.child_rect.origin.x - normal.root_rect.origin.x,
@@ -315,8 +316,8 @@ fn flip_view_normal_and_disabled_states() {
             .filter(|p| p.prim_type() == PrimType::Curve)
             .count();
         assert_eq!(
-            chevron_curves, 4,
-            "must emit 4 curve strokes for nav chevrons"
+            chevron_curves, 0,
+            "idle WinUI FlipView must not emit static nav chevron curves"
         );
 
         // 2. 禁用态契约：箭头与文本降级为 TEXT_DISABLED
@@ -352,17 +353,15 @@ fn refresh_container_normal_and_disabled_states() {
             STANDARD_REFRESH_INDICATOR_SIZE
         );
 
-        let arc_curves: Vec<Token> = normal
+        let normal_glyphs: Vec<Token> = normal
             .output
             .primitives
             .iter()
-            .filter(|p| p.prim_type() == PrimType::Curve)
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
-        assert!(!arc_curves.is_empty());
-        for tok in arc_curves {
-            assert_eq!(tok, Token::PRIMARY);
-        }
+        assert!(!normal_glyphs.is_empty());
+        assert!(normal_glyphs.contains(&Token::TEXT_PRIMARY));
 
         // 2. 禁用态契约：抑制弧线且文本降级
         let disabled =
@@ -401,15 +400,16 @@ fn annotated_scroll_bar_normal_and_disabled_states() {
             text_ctx,
             100,
         );
-        assert_eq!(normal.track_rect.width(), STANDARD_SCROLL_BAR_TRACK_WIDTH);
+        assert_eq!(normal.track_rect.width(), STANDARD_SCROLL_BAR_WIDTH);
         assert_eq!(normal.track_rect.height(), STANDARD_SCROLL_BAR_HEIGHT);
-        assert_eq!(normal.thumb_rect.width(), STANDARD_SCROLL_BAR_TRACK_WIDTH);
+        // WinUI 指示条为 3px 横向强调条，不再是旧版 8px 竖向滑块。
+        assert_eq!(normal.thumb_rect.height(), 3.0);
 
         let has_thumb = normal.output.primitives.iter().any(|p| {
             p.prim_type() == PrimType::RoundedRect
-                && Token::new(p.fill_token_or_uv as u16) == Token::CONTROL_TRACK_STROKE
+                && Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
         });
-        assert!(has_thumb, "must emit CONTROL_TRACK_STROKE thumb");
+        assert!(has_thumb, "must emit PRIMARY horizontal thumb");
 
         // 2. 禁用态契约：滑块与刻度降级为禁用态
         let disabled = emit_canonical_annotated_scroll_bar_fixture(
@@ -420,7 +420,7 @@ fn annotated_scroll_bar_normal_and_disabled_states() {
         );
         let has_active_thumb = disabled.output.primitives.iter().any(|p| {
             p.prim_type() == PrimType::RoundedRect
-                && Token::new(p.fill_token_or_uv as u16) == Token::CONTROL_TRACK_STROKE
+                && Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
         });
         assert!(
             !has_active_thumb,

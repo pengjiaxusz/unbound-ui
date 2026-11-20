@@ -195,3 +195,12 @@ ROI 第四门禁统计 `ΔE2000 > 5` 的像素占比 ≤2%，字形边缘仍是�
 3. **或追求逐像素字形一致**：需要与 DirectWrite 完全同源的栅格化，成本最高。
 
 建议采用方案 1，并以 ADR 固化，否则 #44~#48 的“全量通过”在跨渲染器下不可达。
+
+### 6.5 2026-11-20 批量像素对齐与 24 例 invalid 清零修复摘要
+
+针对 `2026-11-20T14:31:27Z` 基线（`pass 122 / known-aa 8 / fail 114 / invalid 24`）中的 39 个控件、138 个异常用例完成系统性修复：
+
+1. **参考宿主强调色泄漏与区域化钉死**：在 `tools/winui-reference/CaptureWindow.xaml` 补齐 `SystemAccentColor*`、`AccentTextFillColor*`、`HyperlinkButtonForeground*`、`AppBarToggleButton*Checked*`、`ToggleSplitButton*Checked*`、`ListView/TreeView/GridView` 选中态及 `CalendarView`/`InfoBar`/`AnnotatedScrollBar` 等资源覆盖，彻底消除采集机紫色强调色泄漏；在 `Catalog.cs` 为 `DatePicker`/`TimePicker`/`CalendarView` 锁定 `en-US`、`24HourClock` 与固定日期 `2026-01-15`，并移除 `SplitView` 硬编码浅色底板。
+2. **6 个 `invalid` 控件（24 例）修复**：在 `Catalog.cs` 为 `AppBarSeparator` 显式设高 `40px`、`Image` 填充确定性 `64×64` 位图、`ItemsView` 绑定数据源、`CommandBarFlyout`/`ContentDialog`/`TeachingTip` 提供与 WinUI 主题资源一致的静态可视宿主表面，并移除 `CaptureWindow.xaml.cs` 中的占位豁免白名单。
+3. **主题令牌、图标字体与几何对齐**：修正 `crates/unbound-theme/src/win11.rs` 深浅色 `CARD_BG`/`CARD_BORDER`/`ON_PRIMARY`；在 `slot_fixture.rs` 将所有图标字形显式切到 `Segoe Fluent Icons`，并同步对齐 `BreadcrumbBar`、`TreeView`、`ListView`、`ListBox`、`GridView`、`PipsPager`、`CommandBar`、`MenuBar`、`TitleBar`、`NavigationView`、`TabView`、`FlipView`、`RefreshContainer`、`AnnotatedScrollBar`、`InfoBar`、`Expander`、`SplitView`、`CalendarView`、`TimePicker`、`PersonPicture`、`Flyout`、`MenuFlyout`、`AppBarButton`、`AppBarToggleButton`；修正 `RichEditBox`、`ToggleSplitButton`、`DatePickerWheel`、`CalendarDatePicker`、`Card`/`Border`/`SwipeControl`/`HyperlinkButton` 的描边、底边强调线与禁用态逻辑。
+4. **本地复测命令**：应用补丁后执行 `just parity-capture --no-cache --theme all` 与 `just parity --no-cache`，再运行 `just check`、`just test`、`just gate-check`。

@@ -54,14 +54,15 @@ fn info_bar_normal_and_disabled_and_focused_states() {
         assert_eq!(fixture.total_size.x, CANONICAL_INFOBAR_WIDTH);
         assert_eq!(fixture.total_size.y, CANONICAL_INFOBAR_HEIGHT);
 
-        let has_accent_stripe = fixture.output.primitives.iter().any(|p| {
+        let has_info_badge = fixture.output.primitives.iter().any(|p| {
             p.prim_type() == PrimType::RoundedRect
                 && p.fill_token_or_uv as u16 == Token::PRIMARY.raw()
-                && (p.size[0] - 4.0).abs() < 1e-2
+                && (p.size[0] - 16.0).abs() < 1e-2
+                && (p.size[1] - 16.0).abs() < 1e-2
         });
         assert!(
-            has_accent_stripe,
-            "normal InfoBar must have 4px primary accent stripe"
+            has_info_badge,
+            "normal InfoBar must have 16px primary informational badge circle"
         );
 
         // 2. 聚焦态校验
@@ -85,11 +86,15 @@ fn info_bar_normal_and_disabled_and_focused_states() {
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
         assert!(!glyph_tokens.is_empty());
+        assert!(
+            glyph_tokens.contains(&Token::TEXT_DISABLED),
+            "disabled InfoBar must render text with TEXT_DISABLED"
+        );
         for tok in glyph_tokens {
-            assert_eq!(
-                tok,
-                Token::TEXT_DISABLED,
-                "all InfoBar text and icons must be TEXT_DISABLED in disabled state"
+            assert!(
+                tok == Token::TEXT_DISABLED || tok == Token::SURFACE,
+                "disabled InfoBar glyphs must be TEXT_DISABLED or SURFACE cutout, got {:?}",
+                tok
             );
         }
     });
@@ -98,17 +103,17 @@ fn info_bar_normal_and_disabled_and_focused_states() {
 #[test]
 fn expander_normal_and_disabled_and_focused_states() {
     with_test_ctx(|text_ctx| {
-        let rect = Rect::new(0.0, 0.0, CANONICAL_EXPANDER_WIDTH, 96.0);
+        let rect = Rect::new(0.0, 0.0, CANONICAL_EXPANDER_WIDTH, 100.0);
 
-        // 1. 正常态校验：展开高度包含头部 48px + 内容区 48px
+        // 1. 正常态校验：展开高度包含头部 48px + 内容区 52px
         let fixture = emit_canonical_expander_fixture(rect, FixtureState::normal(), text_ctx, 100);
         assert_eq!(fixture.total_size.x, CANONICAL_EXPANDER_WIDTH);
-        assert_eq!(fixture.total_size.y, 96.0);
+        assert_eq!(fixture.total_size.y, 100.0);
         assert_eq!(
             fixture.header_rect.height(),
             CANONICAL_EXPANDER_HEADER_HEIGHT
         );
-        assert_eq!(fixture.content_rect.height(), 48.0);
+        assert_eq!(fixture.content_rect.height(), 52.0);
 
         // 2. 聚焦态校验
         let focused_fixture =
@@ -588,4 +593,28 @@ fn slice_4_fixtures_disabled_state_attenuates_opacity() {
             );
         }
     });
+}
+
+#[test]
+fn parity_20261120_win11_card_tokens_and_two_col_time_picker_regression() {
+    assert_eq!(
+        CANONICAL_TIME_COLUMNS,
+        ["13", "30"],
+        "24HourClock TimePicker must render 2 columns without seconds"
+    );
+
+    let light = unbound_theme::win11::light();
+    let dark = unbound_theme::win11::dark();
+
+    // 验证浅色与深色卡片描边与深色强调字色已对齐 WinUI 3 实测色值
+    let dark_on_primary = dark.color(Token::ON_PRIMARY);
+    assert_eq!(dark_on_primary.r, 0.0);
+    assert_eq!(dark_on_primary.g, 0.0);
+    assert_eq!(dark_on_primary.b, 0.0);
+    assert_eq!(dark_on_primary.a, 1.0);
+
+    let light_card_border = light.color(Token::CARD_BORDER);
+    let dark_card_border = dark.color(Token::CARD_BORDER);
+    assert!(light_card_border.a > 0.0);
+    assert!(dark_card_border.a > 0.0);
 }

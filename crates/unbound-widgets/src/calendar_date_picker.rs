@@ -375,17 +375,34 @@ pub fn emit_calendar_date_picker(
         },
     ));
 
-    // 右侧日历 glyph：14×14 方框 + 顶部横条 + 两枚装订环。
-    let body = 14.0;
+    // 底边强调线在所有状态保留图元槽位，禁用/聚焦态以 NONE 隐藏，维持恒定形状契约。
+    primitives.push(surface(
+        Rect::new(
+            rect.origin.x + 3.0,
+            rect.max().y - 1.0,
+            (rect.width() - 6.0).max(0.0),
+            1.0,
+        ),
+        0.0,
+        if !disabled && !control.focused {
+            Token::CONTROL_STROKE_SECONDARY
+        } else {
+            Token::NONE
+        },
+        z + 1,
+    ));
+
+    // 右侧日历 glyph：对齐 WinUI 12×12 细线轮廓 + 1px 表头横线 + 两枚短装订环。
+    let body = 12.0;
     let body_rect = Rect::new(
-        icon.center().x - body * 0.5,
-        icon.center().y - body * 0.5 + 1.0,
+        (icon.center().x - body * 0.5).round(),
+        (icon.center().y - body * 0.5 + 0.5).round(),
         body,
         body,
     );
     primitives.push(outlined(
         body_rect,
-        2.0,
+        1.5,
         Token::NONE,
         icon_ink,
         1.0,
@@ -395,27 +412,27 @@ pub fn emit_calendar_date_picker(
     primitives.push(surface(
         Rect::new(
             body_rect.origin.x + 1.0,
-            body_rect.origin.y + 1.0,
+            body_rect.origin.y + 3.0,
             body_rect.size.x - 2.0,
-            3.0,
+            1.0,
         ),
         0.0,
         icon_ink,
         z + 2,
     ));
     curve_stroke(
-        [body_rect.origin.x + 4.0, body_rect.origin.y - 2.0],
-        [body_rect.origin.x + 4.0, body_rect.origin.y + 1.0],
-        1.2,
+        [body_rect.origin.x + 3.0, body_rect.origin.y - 1.5],
+        [body_rect.origin.x + 3.0, body_rect.origin.y + 0.5],
+        1.0,
         icon_ink,
         z + 2,
         &mut primitives,
         &mut payloads,
     );
     curve_stroke(
-        [body_rect.max().x - 4.0, body_rect.origin.y - 2.0],
-        [body_rect.max().x - 4.0, body_rect.origin.y + 1.0],
-        1.2,
+        [body_rect.max().x - 3.0, body_rect.origin.y - 1.5],
+        [body_rect.max().x - 3.0, body_rect.origin.y + 0.5],
+        1.0,
         icon_ink,
         z + 2,
         &mut primitives,

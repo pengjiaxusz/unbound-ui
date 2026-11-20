@@ -616,8 +616,7 @@ public sealed partial class CaptureWindow : Window
                 for (var index = 0; index < regions.Count; index++)
                 {
                     var (captureCase, _, _) = _activeSlots[index];
-                    valid[index] = IsAllowedPlaceholderControl(captureCase.ControlName) ||
-                        HasNonBackgroundPixels(sheetPixels, sheetWidth, sheetHeight, regions[index]);
+                    valid[index] = HasNonBackgroundPixels(sheetPixels, sheetWidth, sheetHeight, regions[index]);
                     if (!valid[index])
                     {
                         allValid = false;
@@ -802,15 +801,6 @@ public sealed partial class CaptureWindow : Window
 
         return regions;
     }
-
-    /// <summary>
-    /// 部分浮层与占位控件（如 TeachingTip、ContentDialog、Image、CommandBarFlyout、AppBarSeparator、ItemsView）
-    /// 在静态采集无宿主弹出或无素材时仅提供内容盒/占位边界，放行其无非背景像素的切片产出，确保全量基准切片完整。
-    /// </summary>
-    private static bool IsAllowedPlaceholderControl(string controlName) =>
-        Catalog.CanonicalName(controlName) is
-            "TeachingTip" or "ContentDialog" or "Image" or
-            "CommandBarFlyout" or "AppBarSeparator" or "ItemsView";
 
     /// <summary>
     /// 在 controlBounds 像素范围内断言至少存在一个与槽位背景不同的像素。

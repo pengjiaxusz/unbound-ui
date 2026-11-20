@@ -702,11 +702,7 @@ fn hyperlink_label_rgba(
 ) -> Vec<u8> {
     let palette = theme::palette(dark);
     let background = srgb8(palette.color(Token::SURFACE));
-    let ink = if dark {
-        SYSTEM_ACCENT_RED
-    } else {
-        [154, 18, 13]
-    };
+    let ink = if dark { [153, 235, 255] } else { [0, 62, 146] };
     glyph_rgba(background, ink, quads, tiles, origin, width, height, 1.0)
 }
 
@@ -925,58 +921,22 @@ fn build_lut(dark: bool, backdrop: &str, overrides: &[(Token, Color)]) -> ThemeL
     ThemeLut::from_palette(&Palette::new(kind, &entries))
 }
 
-/// 参考机的系统强调色（Windows 默认红）。
+/// 为单个用例生成主题 LUT。
 ///
-/// 采集宿主只把 `AccentFillColorDefaultBrush` 与少数控件资源钉成蓝色；Pivot、
-/// 列表选择条、AppBarToggleButton 等控件仍直接引用 `SystemAccentColor`，在参考机
-/// 上呈现为 `#C21C14`。差分需要按控件还原这层差异。
-const SYSTEM_ACCENT_RED: [u8; 3] = [194, 28, 20];
-
-/// 使用系统强调色（红）而非 Fluent 蓝的控件清单。
-const SYSTEM_ACCENT_CONTROLS: &[&str] = &[
-    "HyperlinkButton",
-    "Pivot",
-    "SelectorBar",
-    "ToggleSplitButton",
-    "AppBarToggleButton",
-    "ListView",
-    "ListBox",
-    "TreeView",
-    "GridView",
-    "CalendarView",
-    "DatePicker",
-    "TimePicker",
-    "CalendarDatePicker",
-];
-
-/// 为单个用例生成主题 LUT：在后景底板基础上按控件还原系统强调色。
+/// 参考宿主 `CaptureWindow.xaml` 已将全部系统强调色资源统一钉死为 Windows 11
+/// 默认 Fluent 蓝（浅色 `#005FB8` / 深色 `#60CDFF`），不再按机器个性化颜色覆盖。
 #[must_use]
 pub fn parity_lut(dark: bool, backdrop: &str, control: &str) -> ThemeLut {
-    if !SYSTEM_ACCENT_CONTROLS.contains(&control) {
-        return backdrop_lut(dark, backdrop);
+    if control == "ListBox" {
+        // WinUI ListBox 选中行使用 40% 强调色叠在基准面上（SystemControlHighlightListAccentLowBrush）。
+        let soft = if dark {
+            Color::from_srgb8(56, 100, 122, 255)
+        } else {
+            Color::from_srgb8(146, 184, 219, 255)
+        };
+        return build_lut(dark, backdrop, &[(Token::PRIMARY_SOFT, soft)]);
     }
-    let [r, g, b] = SYSTEM_ACCENT_RED;
-    let accent = if control == "HyperlinkButton" && !dark {
-        Color::from_srgb8(154, 18, 13, 255)
-    } else {
-        Color::from_srgb8(r, g, b, 255)
-    };
-    // 参考截图中悬停与按下态同样是实色强调，差分层不做透明度推导。
-    build_lut(
-        dark,
-        backdrop,
-        &[
-            (Token::PRIMARY, accent),
-            (Token::PRIMARY_HOVER, accent),
-            (Token::PRIMARY_PRESSED, Color::from_srgb8(152, 22, 16, 255)),
-            // ListBox 的选中行是强调色 40% 叠加在页面底板上（采样 235,159,155）。
-            (Token::PRIMARY_SOFT, Color::from_srgb8(235, 159, 155, 255)),
-            // 强调色控件侧边/顶边描边（采样参考图得到 [199, 46, 38]）。
-            (PARITY_CHECKED_BORDER, Color::from_srgb8(199, 46, 38, 255)),
-            // 强调色分裂按钮底边深色浮起线（采样参考图得到 [116, 17, 12]）。
-            (PARITY_CHECKED_BOTTOM, Color::from_srgb8(116, 17, 12, 255)),
-        ],
-    )
+    backdrop_lut(dark, backdrop)
 }
 
 /// 确定性合成底板的 sRGB 背景基准色（与 `tools/winui-reference/Catalog.cs` 一一对应）。
@@ -1951,7 +1911,7 @@ fn emit_case(
             let sep_h = if rect.height() > 0.0 {
                 rect.height()
             } else {
-                32.0
+                40.0
             };
             let sep_r = Rect::new(rect.origin.x, rect.origin.y, sep_w, sep_h);
             let desc = AppBarSeparatorDesc::vertical(sep_r);
@@ -2214,10 +2174,7 @@ fn emit_case(
             };
             let mut out = WidgetOutput::default();
 
-            let fixture_state = FixtureState::from_control_state(
-                control,
-                checked || case.state == "normal" || case.state == "focused",
-            );
+            let fixture_state = FixtureState::from_control_state(control, true);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_tree_fixture(
                 rect,
                 fixture_state,
@@ -2665,20 +2622,7 @@ fn emit_case(
             let disabled = control.disabled;
 
             let mut out = WidgetOutput::default();
-            // 1. 2px 海拔微阴影（禁用态抑制）
-            if !disabled {
-                out.primitives.push(primitive::instance(
-                    card_r,
-                    [8.0; 4],
-                    Token::NONE,
-                    Token::NONE,
-                    0.0,
-                    2.0,
-                    PrimType::Shadow,
-                    SubElement::Shadow,
-                    100,
-                ));
-            }
+            // WinUI Card（Border 模板）不附带外部投影，避免包围盒外扩 1px。
             // 2. 卡片表面背景
             let bg_token = if disabled {
                 Token::CONTROL_DISABLED_BG
@@ -2729,14 +2673,14 @@ fn emit_case(
                 Rect::new(
                     card_r.origin.x + 12.0,
                     card_r.origin.y + 12.0,
-                    card_w - 24.0,
-                    20.0,
+                    (card_w - 24.0).max(0.0),
+                    (card_h - 24.0).max(0.0),
                 ),
                 14.0,
                 400,
                 None,
-                unbound_widgets::AlignX::Left,
-                unbound_widgets::AlignY::Top,
+                unbound_widgets::AlignX::Center,
+                unbound_widgets::AlignY::Middle,
             );
             emit_quads(scene, &quads, text_ink, 102);
 
@@ -2811,14 +2755,14 @@ fn emit_case(
                 Rect::new(
                     border_r.origin.x + 12.0,
                     border_r.origin.y + 12.0,
-                    border_w - 24.0,
-                    20.0,
+                    (border_w - 24.0).max(0.0),
+                    (border_h - 24.0).max(0.0),
                 ),
                 14.0,
                 400,
                 None,
-                unbound_widgets::AlignX::Left,
-                unbound_widgets::AlignY::Top,
+                unbound_widgets::AlignX::Center,
+                unbound_widgets::AlignY::Middle,
             );
             emit_quads(scene, &quads, text_ink, 102);
 
@@ -2925,10 +2869,7 @@ fn emit_case(
             };
             let mut out = WidgetOutput::default();
 
-            let fixture_state = FixtureState::from_control_state(
-                control,
-                checked || case.state == "normal" || case.state == "focused",
-            );
+            let fixture_state = FixtureState::from_control_state(control, true);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_grid_fixture(
                 rect,
                 fixture_state,
@@ -3227,29 +3168,15 @@ fn emit_case(
                 );
                 emit_quads(scene, &action_quads, action_ink, 704);
             } else {
-                // normal / disabled / focused 态：静态未滑动卡片，占满全宽 260px
-                out.primitives.push(primitive::outlined(
-                    swipe_rect,
-                    8.0,
-                    if disabled {
-                        Token::CONTROL_DISABLED_BG
-                    } else {
-                        Token::CARD_BG
-                    },
-                    if disabled {
-                        Token::CONTROL_DISABLED_BORDER
-                    } else {
-                        Token::CARD_BORDER
-                    },
-                    1.0,
-                    0.0,
-                    702,
-                ));
+                // normal / disabled / focused 态：WinUI SwipeControl 内容 Border 无圆角无描边，
+                // 禁用态仅阻断交互不降级内部卡片填充与文本色，文本左上对齐 12px 内边距。
+                out.primitives
+                    .push(primitive::surface(swipe_rect, 0.0, Token::CARD_BG, 702));
 
                 if control.focused && !disabled {
                     out.primitives.push(primitive::focus_ring(
                         swipe_rect.inflate(1.0),
-                        9.0,
+                        4.0,
                         Token::FOCUS_RING,
                         2.0,
                         710,
@@ -3259,23 +3186,21 @@ fn emit_case(
 
                 push(scene, out);
 
-                let text_ink = if disabled {
-                    Token::TEXT_DISABLED
-                } else {
-                    Token::TEXT_PRIMARY
-                };
-                emit_text_left_middle(
-                    text_ctx,
-                    scene,
+                let quads = text_ctx.shape_line_styled(
                     "Swipe me",
-                    swipe_rect,
-                    swipe_rect.origin.x + 16.0,
+                    Rect::new(
+                        swipe_rect.origin.x + 12.0,
+                        swipe_rect.origin.y + 12.0,
+                        (swipe_w - 24.0).max(0.0),
+                        (swipe_h - 24.0).max(0.0),
+                    ),
                     14.0,
                     400,
                     None,
-                    text_ink,
-                    704,
+                    unbound_widgets::AlignX::Left,
+                    unbound_widgets::AlignY::Top,
                 );
+                emit_quads(scene, &quads, Token::TEXT_PRIMARY, 704);
             }
 
             Vec2::new(swipe_w, swipe_h)

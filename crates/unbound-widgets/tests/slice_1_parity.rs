@@ -86,7 +86,7 @@ fn rich_edit_box_token_transitions_and_constant_primitive_count() {
     let idle_out = emit_rich_edit_box(1, &desc, ControlState::default(), &mut []);
     assert_eq!(
         idle_out.primitives[0].fill_token_or_uv as u16,
-        Token::INPUT_BG.raw()
+        Token::CONTROL_FILL.raw()
     );
     assert_eq!(
         idle_out.primitives[0].border_token_or_tex as u16,
@@ -154,8 +154,8 @@ fn rich_edit_box_token_transitions_and_constant_primitive_count() {
                     let out = emit_rich_edit_box(1, &desc, st, &mut []);
                     assert_eq!(
                         out.primitives.len(),
-                        2,
-                        "exactly 2 primitives: outlined surface and focus ring"
+                        3,
+                        "exactly 3 primitives: outlined surface, bottom hairline, and focus ring"
                     );
                 }
             }

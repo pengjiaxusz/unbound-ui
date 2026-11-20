@@ -11,6 +11,8 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI.Xaml.Markup;
 using Windows.UI;
 
@@ -477,23 +479,50 @@ internal static class Catalog
                 return true;
 
             case "TeachingTip":
-                // IsOpen 需要 XamlRoot；批量宿主在 Loaded 后若无法打开会记录跳过。
-                element = new TeachingTip
-                {
-                    Title = "TeachingTip",
-                    Subtitle = "Message",
-                    Width = 280,
-                };
+                // TeachingTip 弹出层挂在 Popup 根，RenderTargetBitmap 无法直接截取；
+                // 使用官方 TeachingTip 主题资源在槽位内构造等值静态呈现表面。
+                element = (FrameworkElement)XamlReader.Load(
+                    @"<Border xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
+                             Width=""280"" Height=""96"" CornerRadius=""8"" BorderThickness=""1""
+                             Background=""{ThemeResource TeachingTipTransientBackground}""
+                             BorderBrush=""{ThemeResource TeachingTipBorderBrush}""
+                             Padding=""14,12,14,12"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"">
+                         <StackPanel Spacing=""4"">
+                             <TextBlock Text=""TeachingTip"" FontSize=""14"" FontWeight=""SemiBold""
+                                        Foreground=""{ThemeResource TextFillColorPrimaryBrush}""/>
+                             <TextBlock Text=""Message"" FontSize=""12""
+                                        Foreground=""{ThemeResource TextFillColorSecondaryBrush}""/>
+                         </StackPanel>
+                     </Border>");
                 return true;
 
             case "ContentDialog":
-                element = new ContentDialog
-                {
-                    Title = "ContentDialog",
-                    Content = "Message",
-                    PrimaryButtonText = "OK",
-                    Width = 320,
-                };
+                // ContentDialog 未调用 ShowAsync 时处于 Collapsed 状态且 ShowAsync 会打开独立模态 Popup；
+                // 使用官方 ContentDialog 主题资源在槽位内构造等值静态呈现表面。
+                element = (FrameworkElement)XamlReader.Load(
+                    @"<Border xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
+                             Width=""320"" Height=""180"" CornerRadius=""8"" BorderThickness=""1""
+                             Background=""{ThemeResource ContentDialogBackground}""
+                             BorderBrush=""{ThemeResource ContentDialogBorderBrush}""
+                             HorizontalAlignment=""Center"" VerticalAlignment=""Center"">
+                         <Grid>
+                             <Grid.RowDefinitions>
+                                 <RowDefinition Height=""*""/>
+                                 <RowDefinition Height=""Auto""/>
+                             </Grid.RowDefinitions>
+                             <StackPanel Grid.Row=""0"" Padding=""24,20,24,16"" Spacing=""8"">
+                                 <TextBlock Text=""ContentDialog"" FontSize=""20"" FontWeight=""SemiBold""
+                                            Foreground=""{ThemeResource TextFillColorPrimaryBrush}""/>
+                                 <TextBlock Text=""Message"" FontSize=""14""
+                                            Foreground=""{ThemeResource TextFillColorPrimaryBrush}""/>
+                             </StackPanel>
+                             <Border Grid.Row=""1"" Padding=""24,16,24,16"" BorderThickness=""0,1,0,0""
+                                     BorderBrush=""{ThemeResource ContentDialogSeparatorBorderBrush}"">
+                                 <Button Content=""OK"" Style=""{StaticResource AccentButtonStyle}""
+                                         HorizontalAlignment=""Right"" MinWidth=""120""/>
+                             </Border>
+                         </Grid>
+                     </Border>");
                 return true;
 
             case "Flyout":
@@ -661,11 +690,7 @@ internal static class Catalog
                     DisplayMode = SplitViewDisplayMode.CompactInline,
                     IsPaneOpen = true,
                     OpenPaneLength = 120,
-                    Pane = new Border
-                    {
-                        Background = new SolidColorBrush(Color.FromArgb(255, 243, 243, 243)),
-                        Child = new TextBlock { Text = "Pane" },
-                    },
+                    Pane = new TextBlock { Text = "Pane" },
                     Content = new TextBlock { Text = "Content" },
                 };
                 return true;
@@ -776,20 +801,32 @@ internal static class Catalog
                 }
 
             case "CalendarView":
-                element = new CalendarView
                 {
-                    Width = 300,
-                    Height = 260,
-                    SelectionMode = CalendarViewSelectionMode.Single,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center,
-                };
-                return true;
+                    var fixedDate = new DateTimeOffset(new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc));
+                    var cal = new CalendarView
+                    {
+                        Width = 300,
+                        Height = 260,
+                        Language = "en-US",
+                        CalendarIdentifier = "GregorianCalendar",
+                        FirstDayOfWeek = Windows.Globalization.DayOfWeek.Sunday,
+                        SelectionMode = CalendarViewSelectionMode.Single,
+                        IsTodayHighlighted = false,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    };
+                    cal.SetDisplayDate(fixedDate);
+                    cal.SelectedDates.Add(fixedDate);
+                    element = cal;
+                    return true;
+                }
 
             case "TimePicker":
                 element = new TimePicker
                 {
                     Width = 200,
+                    Language = "en-US",
+                    ClockIdentifier = "24HourClock",
                     SelectedTime = new TimeSpan(13, 30, 0),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
@@ -808,11 +845,12 @@ internal static class Catalog
                 return true;
 
             case "Image":
-                // 无内置素材，静态采集只测量空图像占位盒。
+                // 生成确定性 64×64 BGRA 位图作为参考图像，避免空 Source 导致无非背景像素。
                 element = new Image
                 {
                     Width = 64,
                     Height = 64,
+                    Source = CreateDeterministicImageSource(64, 64),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
                 };
@@ -894,31 +932,39 @@ internal static class Catalog
 
             case "CommandBarFlyout":
                 {
-                    // CommandBarFlyout 是 FlyoutBase，不是 FrameworkElement；
-                    // 静态采集用展开的 CommandBar 呈现同一套命令表面。
-                    var flyout = new CommandBar
+                    // CommandBarFlyout 是 FlyoutBase，IsOpen=true 会把内容移入 Popup 根；
+                    // 静态采集用带浮层边框的容器包裹闭合态 CommandBar，确保直接落入槽位可视树。
+                    var bar = new CommandBar
                     {
-                        Width = 280,
-                        IsOpen = true,
+                        IsOpen = false,
                         DefaultLabelPosition = CommandBarDefaultLabelPosition.Collapsed,
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        VerticalAlignment = VerticalAlignment.Center,
                     };
-                    flyout.PrimaryCommands.Add(new AppBarButton
+                    bar.PrimaryCommands.Add(new AppBarButton
                     {
                         Label = "Copy",
                         Icon = new SymbolIcon(Symbol.Copy),
                     });
-                    flyout.PrimaryCommands.Add(new AppBarButton
+                    bar.PrimaryCommands.Add(new AppBarButton
                     {
                         Label = "Cut",
                         Icon = new SymbolIcon(Symbol.Cut),
                     });
-                    flyout.PrimaryCommands.Add(new AppBarSeparator());
-                    flyout.PrimaryCommands.Add(new AppBarButton
+                    bar.PrimaryCommands.Add(new AppBarSeparator());
+                    bar.PrimaryCommands.Add(new AppBarButton
                     {
                         Label = "More",
                         Icon = new SymbolIcon(Symbol.More),
                     });
-                    element = flyout;
+                    var surface = (Border)XamlReader.Load(
+                        @"<Border xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
+                                 Width=""280"" Height=""48"" CornerRadius=""8"" BorderThickness=""1""
+                                 Background=""{ThemeResource FlyoutPresenterBackground}""
+                                 BorderBrush=""{ThemeResource FlyoutBorderThemeBrush}""
+                                 HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>");
+                    surface.Child = bar;
+                    element = surface;
                     return true;
                 }
 
@@ -945,6 +991,7 @@ internal static class Catalog
             case "AppBarSeparator":
                 element = new AppBarSeparator
                 {
+                    Height = 40,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
                 };
@@ -1002,6 +1049,8 @@ internal static class Catalog
                 {
                     Width = 260,
                     Height = 160,
+                    ItemsSource = new[] { "Item 1", "Item 2", "Item 3", "Item 4" },
+                    SelectionMode = ItemsViewSelectionMode.Single,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
                 };
@@ -1073,6 +1122,7 @@ internal static class Catalog
             case "DatePicker":
                 element = new DatePicker
                 {
+                    Language = "en-US",
                     SelectedDate = new DateTimeOffset(new DateTime(2024, 4, 15)),
                     Width = 240,
                     Height = 32,
@@ -1181,5 +1231,28 @@ internal static class Catalog
             // 窗口未激活时可能失败，实际结果记录在用例 JSON 的 controlFocusState 中。
             element.Focus(FocusState.Programmatic);
         }
+    }
+
+    /// <summary>生成确定性纯色带 1px 边框的 64×64 BGRA8 位图供 Image 控件像素对齐使用。</summary>
+    private static WriteableBitmap CreateDeterministicImageSource(int width, int height)
+    {
+        var bmp = new WriteableBitmap(width, height);
+        var pixels = new byte[width * height * 4];
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var idx = (y * width + x) * 4;
+                var border = x == 0 || y == 0 || x == width - 1 || y == height - 1;
+                // 确定性灰蓝占位块（与 unbound-widgets Image 占位图元一致）
+                pixels[idx + 0] = border ? (byte)0xB0 : (byte)0xE8; // B
+                pixels[idx + 1] = border ? (byte)0x90 : (byte)0xD8; // G
+                pixels[idx + 2] = border ? (byte)0x78 : (byte)0xC8; // R
+                pixels[idx + 3] = 0xFF;                             // A
+            }
+        }
+        using var stream = bmp.PixelBuffer.AsStream();
+        stream.Write(pixels, 0, pixels.Length);
+        return bmp;
     }
 }

@@ -12,7 +12,7 @@ use unbound_theme::Token;
 
 use crate::ergonomics::TextCtx;
 use crate::primitive;
-use crate::{AlignX, AlignY, ControlState, UiWidget, WidgetOutput};
+use crate::{AlignX, AlignY, ControlState, WidgetOutput};
 
 /// 标准路径插桩文本项（固定 3 级）。
 pub const CANONICAL_PATH_ITEMS: [&str; 3] = ["Root", "Folder", "File.txt"];
@@ -105,7 +105,7 @@ pub const CANONICAL_EXPANDER_HEADER: &str = "Expander";
 pub const CANONICAL_EXPANDER_BODY: &str = "Body";
 pub const CANONICAL_EXPANDER_WIDTH: f32 = 320.0;
 pub const CANONICAL_EXPANDER_HEADER_HEIGHT: f32 = 48.0;
-pub const CANONICAL_EXPANDER_CONTENT_HEIGHT: f32 = 48.0;
+pub const CANONICAL_EXPANDER_CONTENT_HEIGHT: f32 = 52.0;
 pub const CANONICAL_EXPANDER_CHEVRON_UP: &str = "\u{E70E}";
 pub const CANONICAL_EXPANDER_CHEVRON_DOWN: &str = "\u{E70D}";
 
@@ -126,7 +126,7 @@ pub const CANONICAL_CALENDAR_SELECTED_DAY: u8 = 15;
 /// 标准 TimePicker 规范。
 pub const CANONICAL_TIME_PICKER_WIDTH: f32 = 200.0;
 pub const CANONICAL_TIME_PICKER_HEIGHT: f32 = 32.0;
-pub const CANONICAL_TIME_COLUMNS: [&str; 3] = ["13", "30", "00"];
+pub const CANONICAL_TIME_COLUMNS: [&str; 2] = ["13", "30"];
 
 /// 标准 PersonPicture 规范。
 pub const CANONICAL_PERSON_PICTURE_INITIALS: &str = "AB";
@@ -664,21 +664,19 @@ pub fn emit_canonical_path_fixture(
     } else {
         32.0
     };
-    let gap = 4.0;
-    let mut cur_x = rect.origin.x;
+    let gap = 5.0;
+    let mut cur_x = rect.origin.x + 1.0;
 
     let sep_measure = text_ctx.measure_line(CANONICAL_PATH_SEPARATOR, 12.0, 400);
     let sep_w = sep_measure.x.ceil().max(8.0);
 
     for (idx, &item_text) in CANONICAL_PATH_ITEMS.iter().enumerate() {
         let is_last = idx == CANONICAL_PATH_ITEMS.len() - 1;
-        let weight = if is_last && !state.disabled { 600 } else { 400 };
+        let weight = 400;
         let text_color = if state.disabled {
             Token::TEXT_DISABLED
-        } else if is_last {
-            Token::TEXT_PRIMARY
         } else {
-            Token::TEXT_SECONDARY
+            Token::TEXT_PRIMARY
         };
 
         let item_measure = text_ctx.measure_line(item_text, STANDARD_FONT_SIZE, weight);
@@ -948,10 +946,10 @@ pub fn emit_canonical_tree_fixture(
         220.0
     };
 
-    // 1. Root 根节点行（深度 0，首项选中）
-    let root_y = rect.origin.y + 2.0;
+    // 1. Root 根节点行（深度 0，首项选中；WinUI 在禁用态仍保留选中行底色与指示胶囊）
+    let root_y = rect.origin.y + 4.0;
     let root_r = Rect::new(rect.origin.x + 4.0, root_y, (tree_w - 8.0).max(1.0), item_h);
-    let root_selected = !state.disabled && (state.checked || state.selected_index == 0);
+    let root_selected = state.checked || state.selected_index == 0;
 
     if root_selected {
         out.primitives
@@ -966,7 +964,11 @@ pub fn emit_canonical_tree_fixture(
         out.primitives.push(primitive::surface(
             pill,
             STANDARD_PILL_RADIUS,
-            Token::PRIMARY,
+            if state.disabled {
+                Token::CONTROL_DISABLED_THUMB
+            } else {
+                Token::PRIMARY
+            },
             z + 5,
         ));
 
@@ -1171,7 +1173,7 @@ pub fn emit_canonical_list_rows_fixture(
     };
 
     for (idx, &text) in CANONICAL_LIST_ITEMS.iter().enumerate() {
-        let y = rect.origin.y + idx as f32 * item_h;
+        let y = rect.origin.y + 2.0 + idx as f32 * item_h;
         let row_r = Rect::new(
             rect.origin.x + 4.0,
             y + 2.0,
@@ -1271,6 +1273,18 @@ pub fn emit_canonical_listbox_rows_fixture(
     } else {
         220.0
     };
+
+    let container_h = if rect.height() > 0.0 {
+        rect.height()
+    } else {
+        item_h * 3.0
+    };
+    out.primitives.push(primitive::surface(
+        Rect::new(rect.origin.x, rect.origin.y, list_w, container_h),
+        0.0,
+        Token::CARD_BG,
+        z,
+    ));
 
     for (idx, &text) in CANONICAL_LIST_ITEMS.iter().enumerate() {
         let y = rect.origin.y + idx as f32 * item_h;
@@ -1377,7 +1391,8 @@ pub fn emit_canonical_pips_pager_fixture(
             // （浅色 #A6A6A6），比 `ControlStrongFillColorDisabled` 更亮。
             Token::SLIDER_TRACK_DISABLED
         } else if is_selected {
-            Token::PRIMARY
+            // WinUI PipsPager 选中圆点使用中性灰（TextFillColorSecondary / CONTROL_TRACK），而非强调蓝。
+            Token::CONTROL_TRACK
         } else {
             Token::CONTROL_TRACK
         };
@@ -1432,30 +1447,21 @@ pub fn emit_canonical_command_bar_fixture(
     };
     let bar_r = Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h);
 
-    let bg_fill = if state.disabled {
-        Token::NONE
-    } else {
-        Token::CONTROL_FILL
-    };
-    out.primitives
-        .push(primitive::surface(bar_r, 4.0, bg_fill, z));
-
+    // WinUI CommandBar 闭合态背景透明、命令右对齐且仅显示图标（隐藏底部标签）。
+    let more_w = 48.0;
     let btn_w = 68.0;
+    let sep_w = 1.0;
+    let total_cmd_w = CANONICAL_COMMAND_ITEMS.len() as f32 * btn_w + sep_w + 8.0 + more_w;
     let mut button_rects = Vec::with_capacity(CANONICAL_COMMAND_ITEMS.len());
-    let mut cur_x = bar_r.origin.x + 2.0;
+    let mut cur_x = (bar_r.max().x - total_cmd_w).max(bar_r.origin.x);
 
     let icon_ink = if state.disabled {
         Token::TEXT_DISABLED
     } else {
         Token::TEXT_PRIMARY
     };
-    let text_ink = if state.disabled {
-        Token::TEXT_DISABLED
-    } else {
-        Token::TEXT_PRIMARY
-    };
 
-    for (idx, &(glyph, label)) in CANONICAL_COMMAND_ITEMS.iter().enumerate() {
+    for (idx, &(glyph, _label)) in CANONICAL_COMMAND_ITEMS.iter().enumerate() {
         let btn_r = Rect::new(cur_x, bar_r.origin.y + 2.0, btn_w, bar_h - 4.0);
         button_rects.push(btn_r);
 
@@ -1470,13 +1476,12 @@ pub fn emit_canonical_command_bar_fixture(
             ));
         }
 
-        let icon_r = Rect::new(btn_r.origin.x, btn_r.origin.y + 4.0, btn_w, 20.0);
         let icon_quads = text_ctx.shape_line_styled(
             glyph,
-            icon_r,
+            btn_r,
             16.0,
             400,
-            None,
+            Some("Segoe Fluent Icons"),
             AlignX::Center,
             AlignY::Middle,
         );
@@ -1488,31 +1493,13 @@ pub fn emit_canonical_command_bar_fixture(
             &mut out.payloads,
         );
 
-        let label_r = Rect::new(btn_r.origin.x, btn_r.origin.y + 24.0, btn_w, 16.0);
-        let label_quads = text_ctx.shape_line_styled(
-            label,
-            label_r,
-            12.0,
-            400,
-            None,
-            AlignX::Center,
-            AlignY::Middle,
-        );
-        primitive::glyphs(
-            &label_quads,
-            text_ink,
-            z + 2,
-            &mut out.primitives,
-            &mut out.payloads,
-        );
-
-        cur_x += btn_w + 2.0;
+        cur_x += btn_w;
     }
 
     let sep_r = Rect::new(
         cur_x + 4.0,
         bar_r.origin.y + (bar_h - 24.0) * 0.5,
-        1.0,
+        sep_w,
         24.0,
     );
     let sep_ink = if state.disabled {
@@ -1523,9 +1510,8 @@ pub fn emit_canonical_command_bar_fixture(
     out.primitives
         .push(primitive::surface(sep_r, 0.0, sep_ink, z + 2));
 
-    let more_w = 40.0;
     let more_r = Rect::new(
-        bar_r.max().x - more_w - 4.0,
+        bar_r.max().x - more_w,
         bar_r.origin.y + 2.0,
         more_w,
         bar_h - 4.0,
@@ -1533,14 +1519,14 @@ pub fn emit_canonical_command_bar_fixture(
     let more_ink = if state.disabled {
         Token::TEXT_DISABLED
     } else {
-        Token::TEXT_SECONDARY
+        Token::TEXT_PRIMARY
     };
     let more_quads = text_ctx.shape_line_styled(
         CANONICAL_COMMAND_MORE_GLYPH,
         more_r,
-        14.0,
+        16.0,
         400,
-        None,
+        Some("Segoe Fluent Icons"),
         AlignX::Center,
         AlignY::Middle,
     );
@@ -1593,7 +1579,7 @@ pub fn emit_canonical_menu_bar_fixture(
     };
 
     let mut item_rects = Vec::with_capacity(CANONICAL_MENU_ITEMS.len());
-    let mut cur_x = bar_r.origin.x + 4.0;
+    let mut cur_x = bar_r.origin.x + 2.0;
     // WinUI 的 MenuBar 菜单项固定 40px 行高，并在菜单栏高度内垂直居中；
     // 绘制整条菜单栏高度会让文字随栏高下移。
     let row_h = 40.0_f32.min(bar_h);
@@ -1671,16 +1657,10 @@ pub fn emit_canonical_title_bar_fixture(
     };
     let bar_r = Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h);
 
-    let chrome_fill = if state.disabled {
-        Token::SURFACE
-    } else {
-        Token::HEADER_BG
-    };
+    // WinUI 独立 TitleBar 控件背景透明、无底部分隔线，窗口控制按钮由宿主窗口非客户区负责。
+    let chrome_fill = Token::HEADER_BG;
     out.primitives
         .push(primitive::surface(bar_r, 0.0, chrome_fill, z));
-    let rule_r = Rect::new(bar_r.origin.x, bar_r.max().y - 1.0, bar_w, 1.0);
-    out.primitives
-        .push(primitive::surface(rule_r, 0.0, Token::DIVIDER, z + 1));
 
     let title_x = bar_r.origin.x + 16.0;
     let title_ink = if state.disabled {
@@ -1745,24 +1725,10 @@ pub fn emit_canonical_title_bar_fixture(
     ];
     let mut caption_rects = Vec::with_capacity(kinds.len());
     let count = kinds.len();
-    for (index, kind) in kinds.into_iter().enumerate() {
+    for (index, _kind) in kinds.into_iter().enumerate() {
         let left = bar_r.max().x - caption_w * (count - index) as f32;
         let button_rect = Rect::new(left, bar_r.origin.y, caption_w, bar_h);
         caption_rects.push(button_rect);
-        let button =
-            crate::title_bar::WindowCaptionButton::new(kind, bar_h).focused(!state.disabled);
-        let btn_out = button.emit_laid_out(
-            index as u64 + 10,
-            button_rect,
-            crate::ControlState {
-                disabled: state.disabled,
-                ..Default::default()
-            },
-            &(),
-            text_ctx,
-        );
-        out.primitives.extend(btn_out.primitives);
-        out.payloads.extend(btn_out.payloads);
     }
 
     TitleBarFixtureOutput {
@@ -1807,7 +1773,15 @@ pub fn emit_canonical_navigation_view_fixture(
     let row_w = panel_w - pad_x * 2.0;
 
     // 参考截图只绘制导航项本身：没有整块窗格底板，也没有右侧分隔线。
-    // 顶部折叠按钮是三条 12x1 的横线（WinUI NavigationView 汉堡按钮）。
+    // 顶部折叠按钮：禁用态在深色模式下保留 40×36 圆角底板（对齐 WinUI 实测包围盒 [20,22]）。
+    if state.disabled {
+        out.primitives.push(primitive::surface(
+            Rect::new(panel_r.origin.x + 4.0, panel_r.origin.y + 6.0, 40.0, 36.0),
+            4.0,
+            Token::CONTROL_DISABLED_BG,
+            z,
+        ));
+    }
     let hamburger_x = panel_r.origin.x + 17.0;
     for offset in [19.0_f32, 24.0, 28.0] {
         out.primitives.push(primitive::surface(
@@ -2014,7 +1988,7 @@ pub fn emit_canonical_tab_view_fixture(
     let mut cur_x = total_r.origin.x + 4.0;
     for (idx, &title) in CANONICAL_TAB_ITEMS.iter().enumerate() {
         let is_selected = idx == selected_idx;
-        let t_rect = Rect::new(cur_x, total_r.origin.y + 8.0, tab_item_w, strip_h - 7.0);
+        let t_rect = Rect::new(cur_x, total_r.origin.y + 12.0, tab_item_w, strip_h - 11.0);
         tab_rects.push(t_rect);
 
         if is_selected {
@@ -2090,7 +2064,7 @@ pub fn emit_canonical_tab_view_fixture(
             close_r,
             10.0,
             400,
-            None,
+            Some("Segoe Fluent Icons"),
             AlignX::Center,
             AlignY::Middle,
         );
@@ -2183,8 +2157,8 @@ pub fn emit_canonical_grid_fixture(
     // WinUI GridView 默认使用 `ItemsWrapGrid`：条目按内容尺寸从左到右流式排布，
     // 没有外层卡片、也没有整块单元格底色。参考截图中只有选中项带 2px 强调色
     // 圆角描边，其余条目只显示文本。
-    let cell_w = 40.0;
-    let cell_h = 40.0;
+    let cell_w = 42.0;
+    let cell_h = 42.0;
     let gap = 8.0;
     let per_row = ((grid_w + gap) / (cell_w + gap)).floor().max(1.0) as usize;
 
@@ -2194,22 +2168,26 @@ pub fn emit_canonical_grid_fixture(
         let col = idx % per_row;
         let row = idx / per_row;
         let x = rect.origin.x + col as f32 * (cell_w + gap);
-        let y = rect.origin.y + row as f32 * (cell_h + gap);
+        let y = rect.origin.y + 3.0 + row as f32 * (cell_h + gap);
         let cell_r = Rect::new(x, y, cell_w, cell_h);
         cell_rects.push(cell_r);
 
-        let is_selected = !state.disabled && (idx == state.selected_index);
+        let is_selected = idx == state.selected_index;
         if is_selected {
             out.primitives.push(primitive::outlined(
                 Rect::new(
                     cell_r.origin.x,
                     cell_r.origin.y,
-                    cell_r.width() + 4.0,
-                    cell_r.height() + 4.0,
+                    cell_r.width() + 2.0,
+                    cell_r.height() + 2.0,
                 ),
                 4.0,
-                Token::NONE,
-                Token::PRIMARY,
+                Token::HOVER,
+                if state.disabled {
+                    Token::CONTROL_DISABLED_THUMB
+                } else {
+                    Token::PRIMARY
+                },
                 2.0,
                 0.0,
                 z + 2,
@@ -2285,24 +2263,7 @@ pub fn emit_canonical_flip_view_fixture(
     };
     let card_r = Rect::new(rect.origin.x, rect.origin.y, flip_w, flip_h);
 
-    out.primitives.push(primitive::outlined(
-        card_r,
-        4.0,
-        if state.disabled {
-            Token::CONTROL_DISABLED_BG
-        } else {
-            Token::CARD_BG
-        },
-        if state.disabled {
-            Token::CONTROL_DISABLED_BORDER
-        } else {
-            Token::CARD_BORDER
-        },
-        1.0,
-        0.0,
-        z,
-    ));
-
+    // WinUI FlipView 静态无悬停时背景透明、不显示翻页按钮，当前页 TextBlock 左上对齐。
     if state.focused && !state.disabled {
         out.primitives.push(primitive::focus_ring(
             card_r.inflate(1.0),
@@ -2314,7 +2275,6 @@ pub fn emit_canonical_flip_view_fixture(
         ));
     }
 
-    // 1. 翻页导航按钮（左 Prev，右 Next，28×28px 垂直居中）
     let btn_size = 28.0;
     let prev_x = card_r.origin.x + 8.0;
     let prev_y = card_r.origin.y + (flip_h - btn_size) * 0.5;
@@ -2324,89 +2284,21 @@ pub fn emit_canonical_flip_view_fixture(
     let next_y = prev_y;
     let next_btn_r = Rect::new(next_x, next_y, btn_size, btn_size);
 
-    let btn_surface_token = if state.disabled {
-        Token::NONE
-    } else {
-        Token::HOVER
-    };
-    out.primitives.push(primitive::surface(
-        prev_btn_r,
-        14.0,
-        btn_surface_token,
-        z + 1,
-    ));
-    out.primitives.push(primitive::surface(
-        next_btn_r,
-        14.0,
-        btn_surface_token,
-        z + 1,
-    ));
-
-    // 上一页箭头（因首页故为 TEXT_DISABLED）
-    let prev_cx = prev_x + 14.0;
-    let prev_cy = prev_y + 14.0;
-    let arm = 4.0;
-    primitive::curve_stroke(
-        [prev_cx + 2.0, prev_cy - arm],
-        [prev_cx - 2.0, prev_cy],
-        1.5,
-        Token::TEXT_DISABLED,
-        z + 3,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
-    primitive::curve_stroke(
-        [prev_cx - 2.0, prev_cy],
-        [prev_cx + 2.0, prev_cy + arm],
-        1.5,
-        Token::TEXT_DISABLED,
-        z + 3,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
-
-    // 下一页箭头（活跃为 TEXT_PRIMARY，禁用为 TEXT_DISABLED）
-    let next_cx = next_x + 14.0;
-    let next_cy = next_y + 14.0;
-    let next_ink = if state.disabled {
-        Token::TEXT_DISABLED
-    } else {
-        Token::TEXT_PRIMARY
-    };
-    primitive::curve_stroke(
-        [next_cx - 2.0, next_cy - arm],
-        [next_cx + 2.0, next_cy],
-        1.5,
-        next_ink,
-        z + 3,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
-    primitive::curve_stroke(
-        [next_cx + 2.0, next_cy],
-        [next_cx - 2.0, next_cy + arm],
-        1.5,
-        next_ink,
-        z + 3,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
-
-    // 2. 当前页内容排版（"Page 1" 居中）
     let current_page = CANONICAL_FLIP_PAGES[0];
     let page_ink = if state.disabled {
         Token::TEXT_DISABLED
     } else {
         Token::TEXT_PRIMARY
     };
+    let page_r = Rect::new(card_r.origin.x, card_r.origin.y, flip_w, 20.0);
     let quads = text_ctx.shape_line_styled(
         current_page,
-        card_r,
+        page_r,
         STANDARD_FONT_SIZE,
         400,
         None,
-        AlignX::Center,
-        AlignY::Middle,
+        AlignX::Left,
+        AlignY::Top,
     );
     primitive::glyphs(
         &quads,
@@ -2455,89 +2347,40 @@ pub fn emit_canonical_refresh_fixture(
     };
     let refresh_rect = Rect::new(rect.origin.x, rect.origin.y, refresh_w, refresh_h);
 
-    // 1. 顶部 ProgressRing 环形指示器（直径 24px，水平居中）
+    // WinUI RefreshContainer 静态无卡片底板：左上显示内容文本，上方居中绘制浅灰刷新图标。
     let ring_size = STANDARD_REFRESH_INDICATOR_SIZE;
     let ring_cx = refresh_rect.origin.x + refresh_w * 0.5;
-    let ring_cy = refresh_rect.origin.y + 16.0;
+    let ring_cy = refresh_rect.origin.y + 46.0;
     let ring_rect = Rect::new(
         ring_cx - ring_size * 0.5,
         ring_cy - ring_size * 0.5,
         ring_size,
         ring_size,
     );
+    let card_rect = refresh_rect;
 
-    // 环形底轨
-    out.primitives.push(primitive::surface(
+    let refresh_icon_ink = Token::TEXT_DISABLED;
+    let icon_quads = text_ctx.shape_line_styled(
+        "\u{E72C}",
         ring_rect,
-        ring_size * 0.5,
-        Token::SURFACE_SUNKEN,
-        z + 1,
-    ));
-    // 内部掏空
-    out.primitives.push(primitive::surface(
-        ring_rect.inflate(-2.5),
-        (ring_size - 5.0) * 0.5,
-        if state.disabled {
-            Token::CONTROL_DISABLED_BG
-        } else {
-            Token::CARD_BG
-        },
+        20.0,
+        400,
+        Some("Segoe Fluent Icons"),
+        AlignX::Center,
+        AlignY::Middle,
+    );
+    primitive::glyphs(
+        &icon_quads,
+        refresh_icon_ink,
         z + 2,
-    ));
-
-    // 弧形强调指示段（右上四分之一弧）
-    if !state.disabled {
-        let arc_r = 10.0;
-        let p0 = [ring_cx, ring_cy - arc_r];
-        let p1 = [ring_cx + arc_r * 0.707, ring_cy - arc_r * 0.707];
-        let p2 = [ring_cx + arc_r, ring_cy];
-        primitive::curve_stroke(
-            p0,
-            p1,
-            2.5,
-            Token::PRIMARY,
-            z + 3,
-            &mut out.primitives,
-            &mut out.payloads,
-        );
-        primitive::curve_stroke(
-            p1,
-            p2,
-            2.5,
-            Token::PRIMARY,
-            z + 3,
-            &mut out.primitives,
-            &mut out.payloads,
-        );
-    }
-
-    // 2. 下方内容卡片（圆角 8px）
-    let card_y = refresh_rect.origin.y + 36.0;
-    let card_h = (refresh_h - 40.0).max(1.0);
-    let card_rect = Rect::new(refresh_rect.origin.x + 4.0, card_y, refresh_w - 8.0, card_h);
-
-    out.primitives.push(primitive::outlined(
-        card_rect,
-        8.0,
-        if state.disabled {
-            Token::CONTROL_DISABLED_BG
-        } else {
-            Token::CARD_BG
-        },
-        if state.disabled {
-            Token::CONTROL_DISABLED_BORDER
-        } else {
-            Token::CARD_BORDER
-        },
-        1.0,
-        0.0,
-        z + 1,
-    ));
+        &mut out.primitives,
+        &mut out.payloads,
+    );
 
     if state.focused && !state.disabled {
         out.primitives.push(primitive::focus_ring(
-            card_rect.inflate(1.0),
-            9.0,
+            refresh_rect.inflate(1.0),
+            5.0,
             Token::FOCUS_RING,
             2.0,
             z + 10,
@@ -2545,17 +2388,16 @@ pub fn emit_canonical_refresh_fixture(
         ));
     }
 
-    // 3. 内容卡片文本
     let ink = if state.disabled {
         Token::TEXT_DISABLED
     } else {
         Token::TEXT_PRIMARY
     };
     let label_r = Rect::new(
-        card_rect.origin.x + 16.0,
-        card_rect.origin.y,
-        (card_rect.width() - 32.0).max(1.0),
-        card_rect.height(),
+        refresh_rect.origin.x,
+        refresh_rect.origin.y,
+        refresh_w,
+        20.0,
     );
     let quads = text_ctx.shape_line_styled(
         CANONICAL_REFRESH_TEXT,
@@ -2564,7 +2406,7 @@ pub fn emit_canonical_refresh_fixture(
         400,
         None,
         AlignX::Left,
-        AlignY::Middle,
+        AlignY::Top,
     );
     primitive::glyphs(&quads, ink, z + 4, &mut out.primitives, &mut out.payloads);
 
@@ -2604,47 +2446,53 @@ pub fn emit_canonical_annotated_scroll_bar_fixture(
         STANDARD_SCROLL_BAR_HEIGHT
     };
 
-    // 1. 垂直轨道（8px 居中）
-    let track_w = STANDARD_SCROLL_BAR_TRACK_WIDTH;
-    let track_x = rect.origin.x + (bar_w - track_w) * 0.5;
-    let track_rect = Rect::new(track_x, rect.origin.y, track_w, bar_h);
+    // WinUI AnnotatedScrollBar 无垂直底轨，由顶部上三角、横向强调色指示条与底部下三角组成。
+    let track_rect = Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h);
+    let arrow_ink = if state.disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+    let cx = rect.origin.x + bar_w * 0.5;
 
-    out.primitives.push(primitive::surface(
-        track_rect,
-        4.0,
-        if state.disabled {
-            Token::CONTROL_DISABLED_BG
-        } else {
-            Token::CONTROL_FILL
-        },
-        z + 1,
-    ));
-
-    // 2. 沿轨道的 5 个刻度线
-    for i in 0..5 {
-        let tick_y = rect.origin.y + i as f32 * ((bar_h - 2.0) / 4.0) + 1.0;
-        let tick_r = Rect::new(track_x + 2.0, tick_y, 4.0, 1.0);
-        let tick_token = if state.disabled {
-            Token::CONTROL_DISABLED_BORDER
-        } else {
-            Token::DIVIDER
-        };
-        out.primitives
-            .push(primitive::surface(tick_r, 0.0, tick_token, z + 2));
+    // 1. 顶部上三角（y = origin.y + 6..10）
+    for row in 0..4 {
+        let w = (row * 2 + 2) as f32;
+        out.primitives.push(primitive::surface(
+            Rect::new(cx - w * 0.5, rect.origin.y + 6.0 + row as f32, w, 1.0),
+            0.0,
+            arrow_ink,
+            z + 2,
+        ));
     }
 
-    // 3. 滑块（0.4 位置，高度 32px）
-    let thumb_h = 32.0;
-    let thumb_y = rect.origin.y + (bar_h - thumb_h) * 0.4;
-    let thumb_rect = Rect::new(track_x, thumb_y, track_w, thumb_h);
-
+    // 2. 横向强调色滑块指示条（宽 30px、高 3px，位于 y = origin.y + 18）
+    let thumb_w = (bar_w - 14.0).clamp(12.0, 30.0);
+    let thumb_h = 3.0;
+    let thumb_rect = Rect::new(cx - thumb_w * 0.5, rect.origin.y + 18.0, thumb_w, thumb_h);
     let thumb_token = if state.disabled {
         Token::CONTROL_DISABLED_THUMB
     } else {
-        Token::CONTROL_TRACK_STROKE
+        Token::PRIMARY
     };
     out.primitives
-        .push(primitive::surface(thumb_rect, 3.0, thumb_token, z + 4));
+        .push(primitive::surface(thumb_rect, 1.5, thumb_token, z + 4));
+
+    // 3. 底部下三角（y = max.y - 12..max.y - 8）
+    for row in 0..4 {
+        let w = ((3 - row) * 2 + 2) as f32;
+        out.primitives.push(primitive::surface(
+            Rect::new(
+                cx - w * 0.5,
+                rect.origin.y + bar_h - 12.0 + row as f32,
+                w,
+                1.0,
+            ),
+            0.0,
+            arrow_ink,
+            z + 2,
+        ));
+    }
 
     if state.focused && !state.disabled {
         out.primitives.push(primitive::focus_ring(
@@ -2699,22 +2547,9 @@ pub fn emit_canonical_info_bar_fixture(
         z,
     ));
 
-    // 2. 左侧状态色条
-    let stripe_ink = if disabled {
+    // 2. 严重级别实心圆徽章图标（WinUI InfoBar 无左侧色条，使用 16px 实心强调圆 + 反色 i）
+    let badge_fill = if disabled {
         Token::CONTROL_DISABLED_THUMB
-    } else {
-        Token::PRIMARY
-    };
-    out.primitives.push(primitive::surface(
-        Rect::new(total_r.origin.x, total_r.origin.y, 4.0, h),
-        2.0,
-        stripe_ink,
-        z + 1,
-    ));
-
-    // 3. 严重级别图标（Info）
-    let icon_ink = if disabled {
-        Token::TEXT_DISABLED
     } else {
         Token::PRIMARY
     };
@@ -2724,30 +2559,30 @@ pub fn emit_canonical_info_bar_fixture(
         16.0,
         16.0,
     );
-    let icon_quads = text_ctx.shape_line_styled(
-        CANONICAL_INFOBAR_ICON_GLYPH,
-        icon_r,
-        16.0,
-        400,
-        None,
-        AlignX::Center,
-        AlignY::Middle,
-    );
+    out.primitives
+        .push(primitive::surface(icon_r, 8.0, badge_fill, z + 1));
+    let badge_ink = if disabled {
+        Token::SURFACE
+    } else {
+        Token::ON_PRIMARY
+    };
+    let info_quads =
+        text_ctx.shape_line_styled("i", icon_r, 11.0, 600, None, AlignX::Center, AlignY::Middle);
     primitive::glyphs(
-        &icon_quads,
-        icon_ink,
+        &info_quads,
+        badge_ink,
         z + 2,
         &mut out.primitives,
         &mut out.payloads,
     );
 
-    // 4. Title 标题与 Message 消息文本
+    // 3. Title 标题与 Message 消息文本（WinUI Informational 两者均为 TEXT_PRIMARY）
     let title_ink = if disabled {
         Token::TEXT_DISABLED
     } else {
         Token::TEXT_PRIMARY
     };
-    let title_r = Rect::new(total_r.origin.x + 40.0, total_r.origin.y, 60.0, h);
+    let title_r = Rect::new(total_r.origin.x + 44.0, total_r.origin.y, 56.0, h);
     let title_quads = text_ctx.shape_line_styled(
         CANONICAL_INFOBAR_TITLE,
         title_r,
@@ -2765,15 +2600,10 @@ pub fn emit_canonical_info_bar_fixture(
         &mut out.payloads,
     );
 
-    let msg_ink = if disabled {
-        Token::TEXT_DISABLED
-    } else {
-        Token::TEXT_SECONDARY
-    };
     let msg_r = Rect::new(
-        total_r.origin.x + 105.0,
+        total_r.origin.x + 102.0,
         total_r.origin.y,
-        (total_r.width() - 145.0).max(10.0),
+        (total_r.width() - 142.0).max(10.0),
         h,
     );
     let msg_quads = text_ctx.shape_line_styled(
@@ -2787,20 +2617,20 @@ pub fn emit_canonical_info_bar_fixture(
     );
     primitive::glyphs(
         &msg_quads,
-        msg_ink,
+        title_ink,
         z + 2,
         &mut out.primitives,
         &mut out.payloads,
     );
 
-    // 5. 关闭按钮
+    // 4. 关闭按钮（Segoe Fluent Icons）
     let close_ink = if disabled {
         Token::TEXT_DISABLED
     } else {
-        Token::TEXT_SECONDARY
+        Token::TEXT_PRIMARY
     };
     let close_r = Rect::new(
-        total_r.max().x - 30.0,
+        total_r.max().x - 32.0,
         total_r.origin.y + (h - 16.0) * 0.5,
         16.0,
         16.0,
@@ -2810,7 +2640,7 @@ pub fn emit_canonical_info_bar_fixture(
         close_r,
         12.0,
         400,
-        None,
+        Some("Segoe Fluent Icons"),
         AlignX::Center,
         AlignY::Middle,
     );
@@ -2822,7 +2652,7 @@ pub fn emit_canonical_info_bar_fixture(
         &mut out.payloads,
     );
 
-    // 6. 焦点环
+    // 5. 焦点环
     if state.focused && !disabled {
         out.primitives.push(primitive::focus_ring(
             total_r.inflate(1.0),
@@ -2832,10 +2662,6 @@ pub fn emit_canonical_info_bar_fixture(
             z + 10,
             true,
         ));
-    }
-
-    if disabled {
-        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     InfoBarFixtureOutput {
@@ -2923,9 +2749,9 @@ pub fn emit_canonical_expander_fixture(
     let chevron_quads = text_ctx.shape_line_styled(
         CANONICAL_EXPANDER_CHEVRON_UP,
         chevron_r,
-        12.0,
+        10.0,
         400,
-        None,
+        Some("Segoe Fluent Icons"),
         AlignX::Center,
         AlignY::Middle,
     );
@@ -2947,7 +2773,7 @@ pub fn emit_canonical_expander_fixture(
 
     // 5. 内容区背景与描边
     out.primitives
-        .push(primitive::surface(content_r, 4.0, Token::SURFACE, z));
+        .push(primitive::surface(content_r, 4.0, Token::CARD_BG, z));
     out.primitives.push(primitive::outlined(
         content_r,
         4.0,
@@ -2976,7 +2802,7 @@ pub fn emit_canonical_expander_fixture(
         STANDARD_FONT_SIZE,
         400,
         None,
-        AlignX::Left,
+        AlignX::Center,
         AlignY::Middle,
     );
     primitive::glyphs(
@@ -3039,28 +2865,17 @@ pub fn emit_canonical_split_view_fixture(
         h,
     );
 
-    // 1. 窗格底板与右侧分隔线
+    // 1. 窗格底板（WinUI CompactInline SplitView 默认使用 CARD_BG，无硬分隔线）
     out.primitives
-        .push(primitive::surface(pane_r, 0.0, Token::SURFACE_SUNKEN, z));
-    out.primitives.push(primitive::surface(
-        Rect::new(pane_r.max().x - 1.0, rect.origin.y, 1.0, h),
-        0.0,
-        Token::CARD_BORDER,
-        z + 1,
-    ));
+        .push(primitive::surface(pane_r, 0.0, Token::CARD_BG, z));
 
-    // 2. 窗格文字 "Pane"
+    // 2. 窗格文字 "Pane"（左上对齐）
     let text_ink = if disabled {
         Token::TEXT_DISABLED
     } else {
         Token::TEXT_PRIMARY
     };
-    let pane_text_r = Rect::new(
-        pane_r.origin.x + 16.0,
-        pane_r.origin.y + 16.0,
-        pane_w - 32.0,
-        24.0,
-    );
+    let pane_text_r = Rect::new(pane_r.origin.x, pane_r.origin.y, pane_w, 20.0);
     let pane_quads = text_ctx.shape_line_styled(
         CANONICAL_SPLIT_VIEW_PANE_TEXT,
         pane_text_r,
@@ -3068,7 +2883,7 @@ pub fn emit_canonical_split_view_fixture(
         400,
         None,
         AlignX::Left,
-        AlignY::Middle,
+        AlignY::Top,
     );
     primitive::glyphs(
         &pane_quads,
@@ -3078,14 +2893,12 @@ pub fn emit_canonical_split_view_fixture(
         &mut out.payloads,
     );
 
-    // 3. 内容区底板与文字 "Content"
-    out.primitives
-        .push(primitive::surface(content_r, 0.0, Token::SURFACE, z));
+    // 3. 内容区文字 "Content"（左上对齐）
     let content_text_r = Rect::new(
-        content_r.origin.x + 16.0,
-        content_r.origin.y + 16.0,
-        content_r.width() - 32.0,
-        24.0,
+        content_r.origin.x,
+        content_r.origin.y,
+        content_r.width(),
+        20.0,
     );
     let content_quads = text_ctx.shape_line_styled(
         CANONICAL_SPLIT_VIEW_CONTENT_TEXT,
@@ -3094,7 +2907,7 @@ pub fn emit_canonical_split_view_fixture(
         400,
         None,
         AlignX::Left,
-        AlignY::Middle,
+        AlignY::Top,
     );
     primitive::glyphs(
         &content_quads,
@@ -3137,9 +2950,15 @@ pub fn emit_canonical_calendar_view_fixture(
     let total_r = Rect::new(rect.origin.x, rect.origin.y, w, h);
     let disabled = state.disabled;
 
-    // 1. 外围表面卡片与描边
+    // 1. 外围表面卡片与描边（WinUI CalendarView 浅色为纯白 #FFFFFF，深色为 #2B2B2B）
     out.primitives
-        .push(primitive::surface(total_r, 4.0, Token::SURFACE, z));
+        .push(primitive::surface(total_r, 4.0, Token::SURFACE_RAISED, z));
+    out.primitives.push(primitive::surface(
+        Rect::new(total_r.origin.x, total_r.origin.y + 40.0, w, 1.0),
+        0.0,
+        Token::CARD_BORDER,
+        z + 1,
+    ));
     out.primitives.push(primitive::outlined(
         total_r,
         4.0,
@@ -3187,11 +3006,11 @@ pub fn emit_canonical_calendar_view_fixture(
     };
     let up_r = Rect::new(total_r.max().x - 48.0, total_r.origin.y + 12.0, 16.0, 16.0);
     let up_quads = text_ctx.shape_line_styled(
-        CANONICAL_EXPANDER_CHEVRON_UP,
+        "\u{EDDB}",
         up_r,
-        12.0,
+        10.0,
         400,
-        None,
+        Some("Segoe Fluent Icons"),
         AlignX::Center,
         AlignY::Middle,
     );
@@ -3205,11 +3024,11 @@ pub fn emit_canonical_calendar_view_fixture(
 
     let down_r = Rect::new(total_r.max().x - 24.0, total_r.origin.y + 12.0, 16.0, 16.0);
     let down_quads = text_ctx.shape_line_styled(
-        CANONICAL_EXPANDER_CHEVRON_DOWN,
+        "\u{EDDC}",
         down_r,
-        12.0,
+        10.0,
         400,
-        None,
+        Some("Segoe Fluent Icons"),
         AlignX::Center,
         AlignY::Middle,
     );
@@ -3266,7 +3085,7 @@ pub fn emit_canonical_calendar_view_fixture(
 
         let is_selected = !disabled && (day == CANONICAL_CALENDAR_SELECTED_DAY);
         if is_selected {
-            let pill_size = 26.0;
+            let pill_size = 34.0;
             let pill_r = Rect::new(
                 cell_r.origin.x + (cell_r.width() - pill_size) * 0.5,
                 cell_r.origin.y + (cell_r.height() - pill_size) * 0.5,
@@ -3352,8 +3171,22 @@ pub fn emit_canonical_time_picker_fixture(
         z,
     ));
 
-    // 2. 3 列时间分栏：时、分、秒
-    let col_w = (w - 2.0) / 3.0;
+    if !disabled && !state.focused {
+        out.primitives.push(primitive::surface(
+            Rect::new(
+                total_r.origin.x + 3.0,
+                total_r.max().y - 1.0,
+                (w - 6.0).max(0.0),
+                1.0,
+            ),
+            0.0,
+            Token::CONTROL_STROKE_SECONDARY,
+            z + 1,
+        ));
+    }
+
+    // 2. WinUI TimePicker 24 小时制为 2 列分栏（时 | 分）
+    let col_w = (w - 2.0) / CANONICAL_TIME_COLUMNS.len() as f32;
     let text_ink = if disabled {
         Token::TEXT_DISABLED
     } else {
@@ -3440,22 +3273,9 @@ pub fn emit_canonical_person_picture_fixture(
     let total_r = Rect::new(rect.origin.x, rect.origin.y, size, size);
     let disabled = state.disabled;
 
-    // 1. 圆形底板与圆形边框
-    out.primitives.push(primitive::surface(
-        total_r,
-        size * 0.5,
-        Token::SURFACE_SUNKEN,
-        z,
-    ));
-    out.primitives.push(primitive::outlined(
-        total_r,
-        size * 0.5,
-        Token::NONE,
-        Token::CARD_BORDER,
-        1.0,
-        0.0,
-        z,
-    ));
+    // 1. 圆形底板（对齐 WinUI PersonPicture 默认中性灰底）
+    out.primitives
+        .push(primitive::surface(total_r, size * 0.5, Token::OUTLINE, z));
 
     // 2. 居中双字母缩写 "AB"
     let text_ink = if disabled {
@@ -3463,7 +3283,7 @@ pub fn emit_canonical_person_picture_fixture(
     } else {
         Token::TEXT_PRIMARY
     };
-    let font_size = (size * 0.42).clamp(11.0, 24.0);
+    let font_size = (size * 0.45).clamp(11.0, 24.0);
     let quads = text_ctx.shape_line_styled(
         CANONICAL_PERSON_PICTURE_INITIALS,
         total_r,
@@ -3523,7 +3343,7 @@ pub fn emit_canonical_font_icon_fixture(
         total_r,
         CANONICAL_FONT_ICON_FONT_SIZE,
         400,
-        None,
+        Some("Segoe Fluent Icons"),
         AlignX::Center,
         AlignY::Middle,
     );
@@ -3735,14 +3555,14 @@ pub fn emit_canonical_flyout_fixture(
     let total_r = Rect::new(rect.origin.x, rect.origin.y, w, h);
     let disabled = state.disabled;
 
-    // 1. 24px 解析阴影
+    // 1. 12px 解析阴影（避免阴影外扩超出 WinUI 参考包围盒）
     out.primitives.push(primitive::instance(
         total_r,
         [8.0; 4],
         Token::NONE,
         Token::NONE,
         0.0,
-        24.0,
+        12.0,
         PrimType::Shadow,
         SubElement::Shadow,
         z,
@@ -3770,9 +3590,9 @@ pub fn emit_canonical_flyout_fixture(
         Token::TEXT_PRIMARY
     };
     let text_r = Rect::new(
-        total_r.origin.x + 12.0,
-        total_r.origin.y + 10.0,
-        w - 24.0,
+        total_r.origin.x + 16.0,
+        total_r.origin.y + 14.0,
+        (w - 32.0).max(1.0),
         20.0,
     );
     let quads = text_ctx.shape_line_styled(
@@ -3825,14 +3645,14 @@ pub fn emit_canonical_menu_flyout_fixture(
     let total_r = Rect::new(rect.origin.x, rect.origin.y, w, h);
     let disabled = state.disabled;
 
-    // 1. 18px 解析阴影
+    // 1. 12px 解析阴影（对齐 WinUI MenuFlyoutPresenter 参考包围盒）
     out.primitives.push(primitive::instance(
         total_r,
         [8.0; 4],
         Token::NONE,
         Token::NONE,
         0.0,
-        18.0,
+        12.0,
         PrimType::Shadow,
         SubElement::Shadow,
         z,
@@ -3860,7 +3680,7 @@ pub fn emit_canonical_menu_flyout_fixture(
         Token::TEXT_PRIMARY
     };
     for (idx, &item_name) in CANONICAL_MENU_FLYOUT_ITEMS.iter().enumerate() {
-        let row_y = total_r.origin.y + 4.0 + idx as f32 * item_h;
+        let row_y = total_r.origin.y + 6.0 + idx as f32 * item_h;
         let row_r = Rect::new(total_r.origin.x + 4.0, row_y, w - 8.0, item_h);
 
         if idx == state.selected_index && state.checked && !disabled {
@@ -3868,7 +3688,7 @@ pub fn emit_canonical_menu_flyout_fixture(
                 .push(primitive::surface(row_r, 4.0, Token::CONTROL_HOVER, z + 1));
         }
 
-        let text_r = Rect::new(total_r.origin.x + 16.0, row_y, w - 32.0, item_h);
+        let text_r = Rect::new(total_r.origin.x + 13.0, row_y, (w - 26.0).max(1.0), item_h);
         let quads = text_ctx.shape_line_styled(
             item_name,
             text_r,
@@ -3950,7 +3770,7 @@ pub fn emit_canonical_app_bar_button_fixture(
         icon_r,
         16.0,
         400,
-        None,
+        Some("Segoe Fluent Icons"),
         AlignX::Center,
         AlignY::Middle,
     );
@@ -4063,7 +3883,7 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
         icon_r,
         16.0,
         400,
-        None,
+        Some("Segoe Fluent Icons"),
         AlignX::Center,
         AlignY::Middle,
     );
@@ -4081,7 +3901,7 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
         CANONICAL_APP_BAR_TOGGLE_BUTTON_LABEL,
         label_r,
         12.0,
-        if checked { 600 } else { 400 },
+        400,
         None,
         AlignX::Center,
         AlignY::Middle,

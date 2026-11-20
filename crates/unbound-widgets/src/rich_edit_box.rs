@@ -12,7 +12,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined};
+use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 /// 控件圆角。对齐 WinUI `ControlCornerRadius = 4`。
@@ -139,7 +139,7 @@ pub fn emit_rich_edit_box(
     let bg = if disabled {
         Token::CONTROL_DISABLED_BG
     } else {
-        Token::INPUT_BG
+        Token::CONTROL_FILL
     };
     let border = if disabled {
         Token::CONTROL_DISABLED_BORDER
@@ -154,8 +154,25 @@ pub fn emit_rich_edit_box(
     let mut primitives = Vec::with_capacity(2 + text_glyphs.len());
     let mut payloads = Vec::with_capacity(text_glyphs.len());
 
-    // 1. 外框与背景
+    // 1. 外框与背景 + 底边强描边（WinUI TextControlBorderBrush）
     primitives.push(outlined(rect, desc.radius, bg, border, 1.0, 0.0, z));
+    let bottom_stroke = if !disabled && !control.focused {
+        Token::CONTROL_STROKE_STRONG
+    } else {
+        Token::NONE
+    };
+    let bottom_inset = (desc.radius - 1.0).max(0.0);
+    primitives.push(surface(
+        Rect::new(
+            rect.origin.x + bottom_inset,
+            rect.max().y - 1.0,
+            (rect.width() - bottom_inset * 2.0).max(0.0),
+            1.0,
+        ),
+        0.0,
+        bottom_stroke,
+        z + 1,
+    ));
 
     // 2. 文本字形
     emit_glyphs(
@@ -269,8 +286,8 @@ mod tests {
             "{counts:?}"
         );
         assert_eq!(
-            counts[0], 2,
-            "2 primitives: outlined surface and focus ring"
+            counts[0], 3,
+            "3 primitives: outlined surface, bottom hairline, and focus ring"
         );
     }
 
