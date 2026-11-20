@@ -263,6 +263,7 @@ define_widget_catalog! {
         duration_input,
         preset_number_input,
         kbd,
+        virtual_grid,
     ],
     catalog: [
         ExpanderGroup => accordion,
@@ -436,6 +437,10 @@ use unbound_text::GlyphQuad;
 use unbound_world::{NodeId, UiWorld};
 
 pub use address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
+pub use virtual_grid::{
+    emit_virtual_grid, virtual_grid_cell_node, GridColumnSizing, VirtualGridDesc,
+    VirtualGridState, VirtualGridWindow,
+};
 pub use kbd::{
     emit_kbd, emit_kbd_chord, key_labels_from_chord, normalize_key_label, KbdChordDesc, KbdDesc,
     KbdSize,

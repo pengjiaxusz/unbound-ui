@@ -3693,6 +3693,9 @@ pub fn probe_workbench_widgets(state: ControlState) -> Vec<WidgetOutput> {
     outputs.push(crate::kbd::emit_kbd(9008, &kbd_desc, state, &glyphs));
     let chord_desc = crate::kbd::KbdChordDesc::from_keys(rect.origin, &["Ctrl", "Shift", "P"]);
     outputs.push(crate::kbd::emit_kbd_chord(9009, &chord_desc, state, &glyphs));
+    let vgrid_desc = crate::virtual_grid::VirtualGridDesc::new(Rect::new(0.0, 0.0, 320.0, 200.0), 100);
+    let vgrid_state = crate::virtual_grid::VirtualGridState::new();
+    outputs.push(crate::virtual_grid::emit_virtual_grid(9010, &vgrid_desc, &vgrid_state, state, &glyphs));
     outputs
 }
 
@@ -3738,6 +3741,33 @@ mod interactive_tests {
                 out.hit.is_some(),
                 "{id:?} must expose a fallback hit region for showcase interaction"
             );
+        }
+    }
+
+    #[test]
+    fn workbench_extension_widgets_keep_stable_shape_across_24_states() {
+        let base_counts: Vec<usize> = probe_workbench_widgets(ControlState::default())
+            .into_iter()
+            .map(|o| o.primitives.len())
+            .collect();
+        for phase in [PointerPhase::Idle, PointerPhase::Hovered, PointerPhase::Pressed] {
+            for focused in [false, true] {
+                for disabled in [false, true] {
+                    for selected in [false, true] {
+                        let st = ControlState {
+                            phase,
+                            focused,
+                            disabled,
+                            selected,
+                        };
+                        let counts: Vec<usize> = probe_workbench_widgets(st)
+                            .into_iter()
+                            .map(|o| o.primitives.len())
+                            .collect();
+                        assert_eq!(counts, base_counts);
+                    }
+                }
+            }
         }
     }
 }
