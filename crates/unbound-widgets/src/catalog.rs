@@ -3689,6 +3689,10 @@ pub fn probe_workbench_widgets(state: ControlState) -> Vec<WidgetOutput> {
     );
     outputs.push(crate::preset_number_input::emit_preset_number_input(9007, &preset_desc, state, &glyphs));
     outputs.push(crate::preset_number_input::emit_preset_number_popup(9011, &preset_desc, Rect::new(0.0, 0.0, 1280.0, 720.0), state, &glyphs));
+    let kbd_desc = crate::kbd::KbdDesc::new(rect, "Ctrl");
+    outputs.push(crate::kbd::emit_kbd(9008, &kbd_desc, state, &glyphs));
+    let chord_desc = crate::kbd::KbdChordDesc::from_keys(rect.origin, &["Ctrl", "Shift", "P"]);
+    outputs.push(crate::kbd::emit_kbd_chord(9009, &chord_desc, state, &glyphs));
     outputs
 }
 

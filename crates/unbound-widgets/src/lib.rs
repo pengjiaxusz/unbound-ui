@@ -262,6 +262,7 @@ define_widget_catalog! {
         copy_button,
         duration_input,
         preset_number_input,
+        kbd,
     ],
     catalog: [
         ExpanderGroup => accordion,
@@ -435,6 +436,10 @@ use unbound_text::GlyphQuad;
 use unbound_world::{NodeId, UiWorld};
 
 pub use address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
+pub use kbd::{
+    emit_kbd, emit_kbd_chord, key_labels_from_chord, normalize_key_label, KbdChordDesc, KbdDesc,
+    KbdSize,
+};
 pub use preset_number_input::{
     emit_preset_number_input, emit_preset_number_popup, preset_dropdown_node, preset_item_node,
     NumberPreset, PresetDisplayMode, PresetNumberInputDesc, PresetNumberInputState,
