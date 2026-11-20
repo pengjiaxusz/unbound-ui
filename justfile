@@ -51,6 +51,19 @@ showcase *ARGS:
 gallery *ARGS:
     cargo run -p gallery {{ARGS}}
 
+# 先构建 tools/winui-reference 再批量截图；WinAppSDK 走自包含，不要求机器预装 Windows App Runtime。
+# 产物已被 gitignore，控件样式变动后才需要重跑；采集器自带指纹缓存，命中时会毫秒级跳过。
+# 采集 WinUI 3 参考截图到 captures/（需 .NET 8+ SDK，示例：just parity-capture -- --no-cache）
+[windows]
+parity-capture *ARGS:
+    cd tools/winui-reference && dotnet build -c Release -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -r win-x64 && ./bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/WinUiReference.exe --batch --out ./captures {{ARGS}}
+
+# 纯离屏 Vulkan 渲染，不开窗；默认复用源码指纹缓存。
+# 跑 WinUI 3 ROI 像素差分，产出 target/parity/report.json 供展台 Pixel parity 页读取
+# 示例：just parity 或 just parity -- --no-cache
+parity *ARGS:
+    cargo run -p showcase -- --parity-run --reference tools/winui-reference/captures --out target/parity {{ARGS}}
+
 # 编译 Vulkan 着色器
 compile-shaders:
     bash scripts/compile-shaders.sh

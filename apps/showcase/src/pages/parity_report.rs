@@ -138,12 +138,15 @@ pub struct ParityReport {
     pub cache_hits: usize,
     /// 载入失败原因；为 `Some` 时页面显示空态说明。
     pub error: Option<String>,
+    /// 空态里给出的下一步命令，随运行形态（仓库内 / 独立分发）切换。
+    pub hint: String,
 }
 
 impl ParityReport {
     /// 读取 `report.json` 并提交全部截图进行异步解码。
     #[must_use]
     pub fn load(hub: &mut AssetHub) -> Self {
+        let hint = next_step_hint();
         let root = Path::new(REPORT_DIR);
         let json = match std::fs::read_to_string(root.join("report.json")) {
             Ok(text) => text,
@@ -156,6 +159,7 @@ impl ParityReport {
                     known_aa: 0,
                     cache_hits: 0,
                     error: Some(format!("{REPORT_DIR}/report.json: {error}")),
+                    hint,
                 }
             }
         };
@@ -201,6 +205,7 @@ impl ParityReport {
                 known_aa,
                 cache_hits,
                 error: Some(format!("{REPORT_DIR}/report.json 中没有用例")),
+                hint,
             };
         }
         Self {
@@ -211,7 +216,26 @@ impl ParityReport {
             known_aa,
             cache_hits,
             error: None,
+            hint,
         }
+    }
+}
+
+/// 空态里给出的下一步命令。
+///
+/// 展厅既会在仓库里跑（有 justfile，配方封装了参数），也会被独立分发（没有 just，
+/// 只能给完整 CLI）。这里按运行形态选一条真正可执行的命令：参考截图缺失时补上采集步，
+/// 否则只提示差分。
+fn next_step_hint() -> String {
+    if Path::new("justfile").is_file() {
+        if Path::new(REFERENCE_FALLBACK).is_dir() {
+            "just parity".to_string()
+        } else {
+            "just parity-capture && just parity".to_string()
+        }
+    } else {
+        r"showcase --parity-run --reference tools\winui-reference\captures --out target\parity"
+            .to_string()
     }
 }
 
@@ -285,11 +309,13 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
     if let Some(error) = &report.error {
         let body = if zh {
             format!(
-                "未找到可用的差分产物：{error}\n先运行 `showcase --parity-run --reference tools\\winui-reference\\captures --out target\\parity`，再回到本页。"
+                "未找到可用的差分产物：{error}\n先运行 `{}`，再回到本页。",
+                report.hint
             )
         } else {
             format!(
-                "No parity artifacts were found: {error}\nRun `showcase --parity-run --reference tools\\winui-reference\\captures --out target/parity` first, then reopen this page."
+                "No parity artifacts were found: {error}\nRun `{}` first, then reopen this page.",
+                report.hint
             )
         };
         empty_state(
