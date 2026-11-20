@@ -667,12 +667,14 @@ pub fn emit_canonical_path_fixture(
     let gap = 4.0;
     let mut cur_x = rect.origin.x + 1.0;
 
-    let sep_measure = text_ctx.measure_line(CANONICAL_PATH_SEPARATOR, 12.0, 400);
-    let sep_w = sep_measure.x.ceil().max(8.0);
+    // WinUI BreadcrumbBar 使用 Segoe Fluent Icons 右尖括号（U+E76C），
+    // 每个分隔槽含两侧间距合计 17px（gap=4 + sep_w=9 + gap=4），使第二、三项与参考逐像素对齐。
+    let sep_w = 9.0;
 
     for (idx, &item_text) in CANONICAL_PATH_ITEMS.iter().enumerate() {
         let is_last = idx == CANONICAL_PATH_ITEMS.len() - 1;
-        let weight = if is_last { 600 } else { 400 };
+        // WinUI 3 BreadcrumbBar 默认全部条目（含末项）均使用 400 常规字重。
+        let weight = 400;
         let text_color = if state.disabled {
             Token::TEXT_DISABLED
         } else {
@@ -715,11 +717,11 @@ pub fn emit_canonical_path_fixture(
             };
 
             let sep_quads = text_ctx.shape_line_styled(
-                CANONICAL_PATH_SEPARATOR,
+                "\u{E76C}",
                 sep_r,
-                12.0,
+                10.0,
                 400,
-                None,
+                Some("Segoe Fluent Icons"),
                 AlignX::Center,
                 AlignY::Middle,
             );
@@ -3042,32 +3044,66 @@ pub fn emit_canonical_calendar_view_fixture(
         Token::TEXT_PRIMARY
     };
     for (col, &day_name) in CANONICAL_CALENDAR_DAYS_HEADER.iter().enumerate() {
-        let cell_r = Rect::new(
-            total_r.origin.x + 2.0 + col as f32 * col_w,
-            week_y,
-            col_w,
-            24.0,
-        );
-        let cell_quads = text_ctx.shape_line_styled(
-            day_name,
-            cell_r,
-            12.0,
-            600,
-            None,
-            AlignX::Center,
-            AlignY::Middle,
-        );
-        primitive::glyphs(
-            &cell_quads,
-            header_ink,
-            z + 2,
-            &mut out.primitives,
-            &mut out.payloads,
-        );
+        let cell_x = total_r.origin.x + 2.0 + col as f32 * col_w;
+        // WinUI CalendarView 在 300px 宽度下，表头槽位较窄导致较宽的 Mo / We 自动折为两行。
+        if w <= 305.0 && matches!(day_name, "Mo" | "We") {
+            let top_r = Rect::new(cell_x, week_y - 7.0, col_w, 16.0);
+            let bot_r = Rect::new(cell_x, week_y + 9.0, col_w, 16.0);
+            let top_quads = text_ctx.shape_line_styled(
+                &day_name[..1],
+                top_r,
+                12.0,
+                600,
+                None,
+                AlignX::Center,
+                AlignY::Middle,
+            );
+            let bot_quads = text_ctx.shape_line_styled(
+                &day_name[1..],
+                bot_r,
+                12.0,
+                600,
+                None,
+                AlignX::Center,
+                AlignY::Middle,
+            );
+            primitive::glyphs(
+                &top_quads,
+                header_ink,
+                z + 2,
+                &mut out.primitives,
+                &mut out.payloads,
+            );
+            primitive::glyphs(
+                &bot_quads,
+                header_ink,
+                z + 2,
+                &mut out.primitives,
+                &mut out.payloads,
+            );
+        } else {
+            let cell_r = Rect::new(cell_x, week_y, col_w, 24.0);
+            let cell_quads = text_ctx.shape_line_styled(
+                day_name,
+                cell_r,
+                12.0,
+                600,
+                None,
+                AlignX::Center,
+                AlignY::Middle,
+            );
+            primitive::glyphs(
+                &cell_quads,
+                header_ink,
+                z + 2,
+                &mut out.primitives,
+                &mut out.payloads,
+            );
+        }
     }
 
     // 4. 日期网格（补齐 2025 年 12 月前导日 28..31，后接 2026 年 1 月 1..31，15 日为空心强调圆环）
-    // 实测参考图网格整体比本地排版低 1px（首行墨迹 145..154 对 144..152）。
+    // 实测参考图网格整体比本地排版低 1px（首行墨迹 145..154 对 144..152），日期数字字号为 14px。
     let grid_y = total_r.origin.y + 113.0;
     let row_h = 42.0;
     let leading_days = ["28", "29", "30", "31"];
@@ -3081,7 +3117,7 @@ pub fn emit_canonical_calendar_view_fixture(
         let lead_quads = text_ctx.shape_line_styled(
             lead_text,
             cell_r,
-            13.0,
+            STANDARD_FONT_SIZE,
             400,
             None,
             AlignX::Center,
@@ -3143,7 +3179,7 @@ pub fn emit_canonical_calendar_view_fixture(
         let day_quads = text_ctx.shape_line_styled(
             &day_strings[(day - 1) as usize],
             cell_r,
-            13.0,
+            STANDARD_FONT_SIZE,
             400,
             None,
             AlignX::Center,

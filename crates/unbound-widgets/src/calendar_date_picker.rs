@@ -300,7 +300,20 @@ impl UiWidget for CalendarDatePickerDesc {
             AlignX::Left,
             AlignY::Middle,
         );
-        // WinUI 图标字形在 32px 触发器内垂直居中后仍比本框架低 1px（实测参考 26..37）。
+        // WinUI CalendarDatePicker 日期数字采用等宽表格式步进；Segoe UI Variable Text
+        // 默认比例数字 '1' 步进偏窄约 2px，导致 '1' 及后续字符整体左移。
+        if state.date.is_some() && glyphs.len() == text.len() {
+            let mut shift = 0.0_f32;
+            for (ch, quad) in text.bytes().zip(glyphs.iter_mut()) {
+                if ch == b'1' {
+                    quad.rect.origin.x += shift + 1.0;
+                    shift += 2.0;
+                } else if shift > 0.0 {
+                    quad.rect.origin.x += shift;
+                }
+            }
+        }
+        // WinUI 日历图标在 32px 触发器内为 12px 字号（墨迹 12×12），垂直居中后下移 1px。
         let icon_place = {
             let r = desc.icon_rect();
             Rect::new(r.origin.x, r.origin.y + 1.0, r.size.x, r.size.y)
@@ -308,7 +321,7 @@ impl UiWidget for CalendarDatePickerDesc {
         let icon_glyphs = text_ctx.shape_line_styled(
             "\u{E787}",
             icon_place,
-            14.0,
+            12.0,
             400,
             Some("Segoe Fluent Icons"),
             AlignX::Center,
