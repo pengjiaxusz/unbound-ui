@@ -2214,10 +2214,7 @@ fn emit_case(
             };
             let mut out = WidgetOutput::default();
 
-            let fixture_state = FixtureState::from_control_state(
-                control,
-                checked || case.state == "normal" || case.state == "focused",
-            );
+            let fixture_state = FixtureState::from_control_state(control, true);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_tree_fixture(
                 rect,
                 fixture_state,

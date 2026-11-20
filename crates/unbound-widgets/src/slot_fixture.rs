@@ -948,10 +948,11 @@ pub fn emit_canonical_tree_fixture(
         220.0
     };
 
-    // 1. Root 根节点行（深度 0，首项选中）
+    // 1. Root 根节点行（深度 0，首项选中）。
+    // WinUI 3 官方参考截图里 TreeView 无论是否处于 disabled 态，Root 项均保留选中底板、Accent 胶囊条与正常墨水。
     let root_y = rect.origin.y + 2.0;
     let root_r = Rect::new(rect.origin.x + 4.0, root_y, (tree_w - 8.0).max(1.0), item_h);
-    let root_selected = !state.disabled && (state.checked || state.selected_index == 0);
+    let root_selected = state.checked || state.selected_index == 0;
 
     if root_selected {
         out.primitives
@@ -985,11 +986,7 @@ pub fn emit_canonical_tree_fixture(
     // 根节点折叠/展开指示箭头（已展开：朝下箭头）
     let chevron_cx = root_r.origin.x + 16.0;
     let chevron_cy = root_y + item_h * 0.5;
-    let chevron_ink = if state.disabled {
-        Token::TEXT_DISABLED
-    } else {
-        Token::TEXT_SECONDARY
-    };
+    let chevron_ink = Token::TEXT_SECONDARY;
     primitive::curve_stroke(
         [chevron_cx - 4.0, chevron_cy - 2.0],
         [chevron_cx, chevron_cy + 2.0],
@@ -1020,11 +1017,7 @@ pub fn emit_canonical_tree_fixture(
     );
 
     // 文本排版
-    let text_ink = if state.disabled {
-        Token::TEXT_DISABLED
-    } else {
-        Token::TEXT_PRIMARY
-    };
+    let text_ink = Token::TEXT_PRIMARY;
 
     let root_weight = if root_selected { 600 } else { 400 };
     let root_label_r = Rect::new(
