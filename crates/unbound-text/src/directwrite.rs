@@ -36,7 +36,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_GLYPH_IMAGE_FORMATS_JPEG, DWRITE_GLYPH_IMAGE_FORMATS_PNG,
     DWRITE_GLYPH_IMAGE_FORMATS_SVG, DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE, DWRITE_GLYPH_OFFSET,
     DWRITE_GLYPH_RUN, DWRITE_GRID_FIT_MODE_ENABLED, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
+    DWRITE_RENDERING_MODE_NATURAL, DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
 };
 use windows_numerics::Vector2;
 
@@ -231,7 +231,7 @@ impl DirectWriteRasterizer {
             self.factory.CreateGlyphRunAnalysis(
                 &run,
                 None,
-                DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
+                DWRITE_RENDERING_MODE_NATURAL,
                 DWRITE_MEASURING_MODE_NATURAL,
                 DWRITE_GRID_FIT_MODE_ENABLED,
                 DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
@@ -457,7 +457,7 @@ impl DirectWriteRasterizer {
                 self.factory.CreateGlyphRunAnalysis(
                     &layer.Base.glyphRun,
                     None,
-                    DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
+                    DWRITE_RENDERING_MODE_NATURAL,
                     DWRITE_MEASURING_MODE_NATURAL,
                     DWRITE_GRID_FIT_MODE_ENABLED,
                     DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
