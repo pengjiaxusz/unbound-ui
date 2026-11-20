@@ -276,22 +276,31 @@ fn tree_fixture_normal_renders_two_levels_with_chevron_pill_and_guide_line() {
 }
 
 #[test]
-fn tree_fixture_disabled_propagates_gray_and_suppresses_selection() {
+fn tree_fixture_disabled_keeps_selection_and_default_ink() {
     with_test_ctx(|text_ctx| {
         let rect = Rect::new(0.0, 0.0, 220.0, 140.0);
         let fixture = emit_canonical_tree_fixture(rect, FixtureState::disabled(), text_ctx, 300);
 
+        // WinUI 3 参考实现下，禁用态仍保留根节点选中底板与 Accent 胶囊条。
+        let has_selected_background = fixture.output.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::RoundedRect
+                && Token::new(p.fill_token_or_uv as u16) == Token::HOVER
+        });
+        let has_pill = fixture.output.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::RoundedRect
+                && Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
+        });
+        assert!(
+            has_selected_background,
+            "disabled tree keeps selected background"
+        );
+        assert!(has_pill, "disabled tree keeps the primary root pill");
+
+        // 展开 chevron 与文本仍降级为禁用墨水。
         for p in &fixture.output.primitives {
             let prim_type = p.prim_type();
             let fill = Token::new(p.fill_token_or_uv as u16);
 
-            // 抑制胶囊条与选中背景
-            if prim_type == PrimType::RoundedRect {
-                assert_ne!(fill, Token::PRIMARY, "disabled tree must not have pill");
-                assert_ne!(fill, Token::HOVER, "disabled tree must not have hover bg");
-            }
-
-            // 展开 chevron 指示箭头变灰
             if prim_type == PrimType::Curve {
                 assert_eq!(
                     fill,
@@ -300,7 +309,6 @@ fn tree_fixture_disabled_propagates_gray_and_suppresses_selection() {
                 );
             }
 
-            // 文本全部变灰
             if matches!(prim_type, PrimType::Glyph | PrimType::GlyphColor) {
                 assert_eq!(
                     fill,
@@ -732,8 +740,8 @@ fn annotated_scroll_bar_fixture_normal_outputs_track_and_thumb() {
         );
         assert_eq!(fixture.track_rect.height(), STANDARD_SCROLL_BAR_HEIGHT);
 
-        // 2. 横向滑块存在
-        assert_eq!(fixture.thumb_rect.height(), 8.0);
+        // 2. 横向滑块存在（WinUI 3 参考实现为 3px 高）
+        assert_eq!(fixture.thumb_rect.height(), 3.0);
 
         // 3. 图元令牌包含 PRIMARY 滑块
         let has_thumb = fixture.output.primitives.iter().any(|p| {

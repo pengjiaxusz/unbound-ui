@@ -612,3 +612,69 @@ mod tests {
         assert_eq!(pool.primary_window(), Some(tasks_id));
     }
 }
+
+/// 计算弹出菜单在屏幕坐标系中的安全放置矩形（优先锚点右下，越界时自动翻转并钳制到显示器工作区，ADR-0022）。
+#[must_use]
+pub fn place_popup_in_work_area(anchor_screen: Vec2, popup_size: Vec2, work_area: Rect) -> Rect {
+    let w = popup_size.x.max(1.0).min(work_area.width().max(1.0));
+    let h = popup_size.y.max(1.0).min(work_area.height().max(1.0));
+
+    let mut x = anchor_screen.x;
+    if x + w > work_area.max().x {
+        x = anchor_screen.x - w;
+    }
+    x = x.clamp(
+        work_area.origin.x,
+        (work_area.max().x - w).max(work_area.origin.x),
+    );
+
+    let mut y = anchor_screen.y;
+    if y + h > work_area.max().y {
+        y = anchor_screen.y - h;
+    }
+    y = y.clamp(
+        work_area.origin.y,
+        (work_area.max().y - h).max(work_area.origin.y),
+    );
+
+    Rect::new(x, y, w, h)
+}
+
+/// 判断给定客户区坐标的弹出菜单是否越出宿主窗口边界，从而需要路由至独立无焦点 Popup 宿主（ADR-0022）。
+#[must_use]
+pub fn should_use_popup_host(popup_in_client: Rect, host_client_size: Vec2) -> bool {
+    popup_in_client.origin.x < 0.0
+        || popup_in_client.origin.y < 0.0
+        || popup_in_client.max().x > host_client_size.x
+        || popup_in_client.max().y > host_client_size.y
+}
+
+#[cfg(test)]
+mod popup_placement_tests {
+    use super::*;
+
+    #[test]
+    fn popup_flips_when_exceeding_bottom_right_and_handles_negative_monitors() {
+        let work = Rect::new(-1920.0, 0.0, 1920.0, 1040.0);
+        let placed =
+            place_popup_in_work_area(Vec2::new(-50.0, 1000.0), Vec2::new(220.0, 180.0), work);
+        assert!(placed.origin.x >= work.origin.x);
+        assert!(placed.max().x <= work.max().x);
+        assert!(placed.origin.y >= work.origin.y);
+        assert!(placed.max().y <= work.max().y);
+        assert!((placed.max().x - (-50.0)).abs() < 1e-4);
+        assert!((placed.max().y - 1000.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn overflow_detection_routes_only_clipping_menus_to_popup_host() {
+        assert!(!should_use_popup_host(
+            Rect::new(10.0, 10.0, 200.0, 150.0),
+            Vec2::new(800.0, 600.0)
+        ));
+        assert!(should_use_popup_host(
+            Rect::new(700.0, 10.0, 200.0, 150.0),
+            Vec2::new(800.0, 600.0)
+        ));
+    }
+}

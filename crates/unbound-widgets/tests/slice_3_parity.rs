@@ -53,10 +53,10 @@ fn tree_view_normal_and_disabled_and_focused_states() {
         // 1. 正常态契约：Root 根节点与缩进 40px 的 Child 子节点
         let normal = emit_canonical_tree_fixture(rect, FixtureState::normal(), text_ctx, 100);
         assert_eq!(normal.root_rect.height(), STANDARD_TREE_ITEM_HEIGHT);
-        // 根节点相对容器上移 4px，子节点沿用 2px 行间重叠，故落点为 4+32-2。
+        // 根节点相对容器下移 2px，子节点沿用 2px 行间重叠，故落点为 2+32-2=32。
         assert_eq!(
             normal.child_rect.origin.y,
-            rect.origin.y + STANDARD_TREE_ITEM_HEIGHT + 2.0
+            rect.origin.y + STANDARD_TREE_ITEM_HEIGHT
         );
         assert_eq!(
             normal.child_rect.origin.x - normal.root_rect.origin.x,
@@ -98,15 +98,15 @@ fn tree_view_normal_and_disabled_and_focused_states() {
             .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw());
         assert!(has_focus_ring, "focused TreeView must emit focus ring");
 
-        // 3. 禁用态契约：抑制胶囊指示条且文本与箭头变灰
+        // 3. 禁用态契约：按 WinUI 3 参考保留根节点胶囊指示条，文本与箭头仍变灰。
         let disabled = emit_canonical_tree_fixture(rect, FixtureState::disabled(), text_ctx, 100);
         let has_disabled_pill = disabled.output.primitives.iter().any(|p| {
             p.prim_type() == PrimType::RoundedRect
                 && Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
         });
         assert!(
-            !has_disabled_pill,
-            "disabled TreeView must suppress primary pill"
+            has_disabled_pill,
+            "disabled TreeView must keep the primary root pill"
         );
 
         let glyph_tokens: Vec<Token> = disabled

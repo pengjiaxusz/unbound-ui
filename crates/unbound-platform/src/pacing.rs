@@ -23,7 +23,10 @@ pub const REFRESH_120: Duration = Duration::from_nanos(8_333_333);
 pub const REFRESH_60: Duration = Duration::from_nanos(16_666_667);
 
 /// 引擎接受的最小非零帧率上限。
-pub const MIN_FPS_LIMIT: u32 = 60;
+pub const MIN_FPS_LIMIT: u32 = 10;
+
+/// 后台空闲默认降频目标（10 Hz，ADR-0022）。
+pub const IDLE_FPS_LIMIT: u32 = 10;
 
 /// 在精确帧截止时间之前提前唤醒事件循环系统休眠的时长。
 ///
@@ -373,8 +376,10 @@ mod tests {
     #[test]
     fn fps_limits_are_clamped_and_zero_means_unlimited() {
         let mut pacer = FramePacer::at_120_hz();
-        pacer.set_fps_limit(30);
-        assert_eq!(pacer.fps_limit(), MIN_FPS_LIMIT, "30 must clamp to 60");
+        pacer.set_fps_limit(5);
+        assert_eq!(pacer.fps_limit(), MIN_FPS_LIMIT, "5 must clamp to 10");
+        pacer.set_fps_limit(IDLE_FPS_LIMIT);
+        assert_eq!(pacer.fps_limit(), IDLE_FPS_LIMIT);
         pacer.set_fps_limit(144);
         assert_eq!(pacer.fps_limit(), 144);
         pacer.set_fps_limit(0);

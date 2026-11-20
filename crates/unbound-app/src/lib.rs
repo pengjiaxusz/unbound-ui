@@ -63,6 +63,7 @@ pub mod guest_bridge;
 pub mod i18n;
 pub mod inspector;
 pub mod key_scope;
+pub mod multi_window;
 pub mod overlay_manager;
 pub mod prelude;
 pub mod router;
@@ -76,7 +77,9 @@ pub use appearance::{
     apply_appearance_diff_to_platform, backdrop_channel_request, dwm_material_to_platform,
     AppearanceCaps, AppearanceDiff, AppearanceIntent, BackdropChannel, WindowAppearance,
 };
-pub use assets::{AssetHub, AssetResidency};
+pub use assets::{
+    AssetHub, AssetResidency, AssetUploadError, ExternalTextureUpload, DYNAMIC_ATLAS_MAX_EDGE,
+};
 pub use backdrop::{
     fallback_reason_zh, is_mica_ready_event, material_name_zh, plan_summary_zh, MicaBackdrop,
     WindowBackdropController, MICA_READY_EVENT_ID,
@@ -86,6 +89,10 @@ pub use guest_bridge::GuestAppAdapter;
 pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Locale};
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
 pub use key_scope::KeyScope;
+pub use multi_window::{
+    CrossWindowDragState, CrossWindowDropEvent, MultiWindowCommand, MultiWindowCoordinator,
+    WindowHostMeta,
+};
 pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
 pub use scene_upload::{collect_backdrops, scene_upload};

@@ -562,16 +562,17 @@ fn app_bar_button_and_toggle_button_states() {
 }
 
 #[test]
-fn slice_4_fixtures_disabled_state_attenuates_opacity() {
+fn slice_4_fixtures_disabled_state_keeps_full_opacity() {
     with_test_ctx(|text_ctx| {
         let rect = Rect::new(0.0, 0.0, CANONICAL_INFOBAR_WIDTH, CANONICAL_INFOBAR_HEIGHT);
         let disabled_fixture =
             emit_canonical_info_bar_fixture(rect, FixtureState::disabled(), text_ctx, 100);
         assert!(!disabled_fixture.output.primitives.is_empty());
+        // 禁用态通过 TEXT_DISABLED 令牌表达，不再二次衰减透明度。
         for p in &disabled_fixture.output.primitives {
             assert!(
-                (p.opacity() - unbound_widgets::slot_fixture::WINUI_DISABLED_OPACITY).abs() < 0.05,
-                "InfoBar primitive opacity {} must attenuate by WINUI_DISABLED_OPACITY",
+                (p.opacity() - 1.0).abs() < 0.05,
+                "InfoBar primitive opacity {} must stay fully opaque",
                 p.opacity()
             );
         }
@@ -585,6 +586,7 @@ fn slice_4_fixtures_disabled_state_attenuates_opacity() {
         let disabled_cal =
             emit_canonical_calendar_view_fixture(cal_rect, FixtureState::disabled(), text_ctx, 100);
         assert!(!disabled_cal.output.primitives.is_empty());
+        // CalendarView 仍按 WinUI 参考对整树图元做 0.36 透明度衰减。
         for p in &disabled_cal.output.primitives {
             assert!(
                 (p.opacity() - unbound_widgets::slot_fixture::WINUI_DISABLED_OPACITY).abs() < 0.05,
