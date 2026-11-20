@@ -1,8 +1,10 @@
 //! 快捷键输入框（HotkeyInput / ShortcutRecorder）：捕获组合键并检测冲突。
+//!
+//! 支持组合键录制、`Escape` 取消录制、`Backspace`/`Delete` 清除绑定与单修饰键拦截。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
-use unbound_input::{CursorKind, HitRegion, KeyChord};
+use unbound_input::{CursorKind, HitRegion, KeyChord, KeyName};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
@@ -13,6 +15,34 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 /// 控件圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
 const HOTKEY_RADIUS: f32 = 4.0;
+
+/// 判断按键事件是否为单独按下的修饰键（不含主键，不应作为合法快捷键提交）。
+#[must_use]
+pub fn is_modifier_only_chord(chord: &KeyChord) -> bool {
+    match chord.key {
+        KeyName::Named(name) => matches!(
+            name.to_ascii_lowercase().as_str(),
+            "control"
+                | "ctrl"
+                | "controlleft"
+                | "controlright"
+                | "shift"
+                | "shiftleft"
+                | "shiftright"
+                | "alt"
+                | "altleft"
+                | "altright"
+                | "meta"
+                | "super"
+                | "win"
+                | "metaleft"
+                | "metaright"
+                | "superleft"
+                | "superright"
+        ),
+        KeyName::Char(_) | KeyName::Function(_) => false,
+    }
+}
 
 /// [`HotkeyInputDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -48,13 +78,13 @@ pub fn format_key_chord(chord: &KeyChord) -> String {
         parts.push("Win".to_owned());
     }
     match chord.key {
-        unbound_input::KeyName::Char(c) => {
+        KeyName::Char(c) => {
             parts.push(c.to_ascii_uppercase().to_string());
         }
-        unbound_input::KeyName::Named(name) => {
+        KeyName::Named(name) => {
             parts.push(name.to_owned());
         }
-        unbound_input::KeyName::Function(n) => {
+        KeyName::Function(n) => {
             parts.push(format!("F{n}"));
         }
     }
@@ -67,10 +97,16 @@ impl HotkeyInputState {
     pub fn formatted_chord(&self) -> Option<String> {
         self.chord.as_ref().map(format_key_chord)
     }
+
     /// 开始监听组合键。
     pub fn start_recording(&mut self) {
         self.recording = true;
         self.conflict = false;
+    }
+
+    /// 取消当前录制并保持原有绑定不变。
+    pub fn cancel_recording(&mut self) {
+        self.recording = false;
     }
 
     /// 清除已绑定的快捷键并停止录制。
@@ -80,11 +116,30 @@ impl HotkeyInputState {
         self.conflict = false;
     }
 
-    /// 若 `recording` 为 true 则捕获 `chord`，并检查 `existing_bindings` 是否存在冲突。
-    /// 若组合键无冲突并被接受则返回 `true`。
+    /// 若 `recording` 为 true 则处理捕获到的 `chord`：
+    /// - 单独按下修饰键：拦截忽略并保持录制态（返回 `false`）；
+    /// - 无修饰键 `Escape`：取消录制且保留旧绑定（返回 `false`）；
+    /// - 无修饰键 `Backspace` / `Delete`：清除当前绑定并结束录制（返回 `true`）；
+    /// - 其余有效组合键：写入 `chord`、结束录制并检查 `existing_bindings` 冲突（无冲突返回 `true`）。
     pub fn handle_key(&mut self, chord: KeyChord, existing_bindings: &[KeyChord]) -> bool {
         if !self.recording {
             return false;
+        }
+        if is_modifier_only_chord(&chord) {
+            return false;
+        }
+        let no_mods = !chord.ctrl && !chord.alt && !chord.shift && !chord.meta;
+        if no_mods {
+            if let KeyName::Named(name) = chord.key {
+                if name.eq_ignore_ascii_case("Escape") || name.eq_ignore_ascii_case("Esc") {
+                    self.recording = false;
+                    return false;
+                }
+                if name.eq_ignore_ascii_case("Backspace") || name.eq_ignore_ascii_case("Delete") {
+                    self.clear();
+                    return true;
+                }
+            }
         }
         self.conflict = existing_bindings.contains(&chord);
         self.chord = Some(chord);
@@ -125,7 +180,7 @@ impl HotkeyInputDesc {
     }
 }
 
-/// 发射固定形状的快捷键录制器（1 背景 + 1 录制圆点 + 1 焦点环 = 3 个图元）。
+/// 发射固定形状的快捷键录制器（1 背景 + 1 键帽 + 1 录制圆点 + 1 焦点环 = 4 个图元）。
 #[must_use]
 pub fn emit_hotkey_input(
     node: u64,
@@ -133,7 +188,7 @@ pub fn emit_hotkey_input(
     state: ControlState,
     label_glyphs: &[GlyphQuad],
 ) -> WidgetOutput {
-    let mut primitives = Vec::with_capacity(3 + label_glyphs.len());
+    let mut primitives = Vec::with_capacity(4 + label_glyphs.len());
     let mut payloads = Vec::with_capacity(label_glyphs.len());
 
     let hovered = state.phase == PointerPhase::Hovered;
@@ -252,4 +307,76 @@ pub fn emit_hotkey_input(
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unbound_headless::{FrameBuilder, Harness, NodeKind};
+
+    #[test]
+    fn hotkey_input_recording_escape_backspace_and_modifier_guard() {
+        let existing = vec![KeyChord::character('s').with_ctrl()];
+        let mut st = HotkeyInputState::default();
+
+        // 未进入录制态时不响应按键。
+        assert!(!st.handle_key(KeyChord::character('k').with_ctrl(), &existing));
+        assert!(st.chord.is_none());
+
+        // 正常录制组合键。
+        st.start_recording();
+        let ctrl_k = KeyChord::character('k').with_ctrl().with_shift();
+        assert!(st.handle_key(ctrl_k, &existing));
+        assert!(!st.recording);
+        assert!(!st.conflict);
+        assert_eq!(st.formatted_chord().as_deref(), Some("Ctrl+Shift+K"));
+
+        // 单修饰键必须被拦截并保持录制态。
+        st.start_recording();
+        let lone_ctrl = KeyChord::named("ControlLeft").with_ctrl();
+        assert!(!st.handle_key(lone_ctrl, &existing));
+        assert!(st.recording);
+        assert_eq!(st.chord, Some(ctrl_k));
+
+        // Escape 取消录制且保留原绑定。
+        assert!(!st.handle_key(KeyChord::named("Escape"), &existing));
+        assert!(!st.recording);
+        assert_eq!(st.chord, Some(ctrl_k));
+
+        // 冲突检测：录制已占用的 Ctrl+S。
+        st.start_recording();
+        assert!(!st.handle_key(KeyChord::character('s').with_ctrl(), &existing));
+        assert!(st.conflict);
+        assert!(!st.recording);
+
+        // Backspace 清除绑定。
+        st.start_recording();
+        assert!(st.handle_key(KeyChord::named("Backspace"), &existing));
+        assert!(st.chord.is_none());
+        assert!(!st.recording);
+        assert!(!st.conflict);
+    }
+
+    #[test]
+    fn hotkey_input_headless_geometry() {
+        let rect = Rect::new(20.0, 20.0, 200.0, 32.0);
+        let desc = HotkeyInputDesc::new(rect, "Ctrl+K");
+        let out = emit_hotkey_input(1, &desc, ControlState::default(), &[]);
+        assert_eq!(out.primitives.len(), 4);
+
+        let viewport = Rect::new(0.0, 0.0, 1280.0, 720.0);
+        let mut frame = FrameBuilder::new(viewport);
+        frame.open(NodeKind::Container, viewport, "Root");
+        frame.open(
+            NodeKind::Interactive {
+                min_size: NodeKind::DEFAULT_MIN_SIZE,
+                occluded: false,
+            },
+            rect,
+            "HotkeyInput",
+        );
+        frame.close();
+        frame.close();
+        assert!(Harness::assert_clean(&frame.build()).is_clean());
+    }
 }

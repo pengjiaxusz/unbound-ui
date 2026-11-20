@@ -490,7 +490,9 @@ pub use schema_form::{
     emit_schema_form, FieldInheritanceState, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc,
     SchemaFormState, SchemaValue,
 };
-pub use shortcut_bar::{emit_shortcut_bar, KeybindingManagerState, ShortcutBarDesc, ShortcutEntry};
+pub use shortcut_bar::{
+    emit_shortcut_bar, BindingOrigin, KeybindingManagerState, ShortcutBarDesc, ShortcutEntry,
+};
 pub use sidebar::{
     emit_sidebar, sidebar_row_node, SidebarDesc, SidebarEntry, SidebarRow, SidebarRowGlyphs,
     SidebarRowKind, SidebarSection, SIDEBAR_BADGE_HEIGHT, SIDEBAR_BADGE_WIDTH,
