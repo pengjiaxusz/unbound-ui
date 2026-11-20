@@ -198,19 +198,20 @@ fn calendar_view_normal_and_disabled_states() {
             CANONICAL_CALENDAR_HEIGHT,
         );
 
-        // 1. 正常态校验：包含标题、星期表头、31 日单元格与 15 日选中强调胶囊
+        // 1. 正常态校验：包含标题、星期表头、31 日单元格与 15 日空心强调圆环
         let fixture =
             emit_canonical_calendar_view_fixture(rect, FixtureState::normal(), text_ctx, 100);
         assert_eq!(fixture.total_size.x, CANONICAL_CALENDAR_WIDTH);
         assert_eq!(fixture.total_size.y, CANONICAL_CALENDAR_HEIGHT);
 
-        let has_selected_pill = fixture.output.primitives.iter().any(|p| {
+        let has_selected_ring = fixture.output.primitives.iter().any(|p| {
             p.prim_type() == PrimType::RoundedRect
-                && p.fill_token_or_uv as u16 == Token::PRIMARY.raw()
+                && Token::new(p.fill_token_or_uv as u16) == Token::NONE
+                && Token::new(p.border_token_or_tex as u16) == Token::PRIMARY
         });
         assert!(
-            has_selected_pill,
-            "normal CalendarView must render selected day pill"
+            has_selected_ring,
+            "normal CalendarView must render hollow primary ring for selected day"
         );
 
         // 2. 禁用态校验：抑制选中高亮胶囊，全量字形变灰
@@ -334,8 +335,8 @@ fn person_picture_normal_and_disabled_states() {
         for tok in glyph_tokens {
             assert_eq!(
                 tok,
-                Token::TEXT_DISABLED,
-                "PersonPicture initials must be TEXT_DISABLED in disabled state"
+                Token::TEXT_PRIMARY,
+                "WinUI 3 PersonPicture keeps initials bright (TEXT_PRIMARY) in disabled state"
             );
         }
     });
@@ -443,18 +444,30 @@ fn image_normal_and_disabled_states() {
         assert_eq!(fixture.total_size.x, CANONICAL_IMAGE_SIZE.x);
         assert_eq!(fixture.total_size.y, CANONICAL_IMAGE_SIZE.y);
 
-        // 2. 禁用态校验
+        // 2. 禁用态校验：保留确定性图块色槽，按 WinUI 实测衰减不透明度
         let disabled_fixture =
             emit_canonical_image_fixture(rect, FixtureState::disabled(), text_ctx, 100);
-        let has_disabled_border = disabled_fixture
+        let has_deterministic_fill = disabled_fixture
             .output
             .primitives
             .iter()
-            .any(|p| p.border_token_or_tex as u16 == Token::CONTROL_DISABLED_BORDER.raw());
+            .any(|p| p.fill_token_or_uv as u16 == 328);
+        let has_deterministic_border = disabled_fixture
+            .output
+            .primitives
+            .iter()
+            .any(|p| p.border_token_or_tex as u16 == 329);
         assert!(
-            has_disabled_border,
-            "disabled Image must use CONTROL_DISABLED_BORDER"
+            has_deterministic_fill && has_deterministic_border,
+            "disabled Image must keep deterministic fill/border tokens"
         );
+        for p in &disabled_fixture.output.primitives {
+            assert!(
+                (p.opacity() - unbound_widgets::slot_fixture::WINUI_DISABLED_OPACITY).abs() < 0.05,
+                "disabled Image opacity {} must attenuate",
+                p.opacity()
+            );
+        }
     });
 }
 
@@ -619,4 +632,75 @@ fn parity_20261120_win11_card_tokens_and_two_col_time_picker_regression() {
     let dark_card_border = dark.color(Token::CARD_BORDER);
     assert!(light_card_border.a > 0.0);
     assert!(dark_card_border.a > 0.0);
+}
+
+#[test]
+fn parity_20261121_visual_diagnosis_batch_regressions() {
+    with_test_ctx(|text_ctx| {
+        // 1. AppBarSeparator: 40px 槽位内上下各内缩 8px -> 24px 竖线
+        let sep = unbound_widgets::AppBarSeparatorDesc::vertical(Rect::new(16.0, 16.0, 5.0, 40.0));
+        let sep_line = sep.line_rect();
+        assert_eq!(sep_line.origin.y, 24.0);
+        assert_eq!(sep_line.height(), 24.0);
+
+        // 2. RichEditBox: 水平内边距对齐 WinUI 实测 11px
+        assert_eq!(unbound_widgets::RICH_EDIT_PADDING_X, 11.0);
+
+        // 3. AnnotatedScrollBar: 44px 槽位内右对齐（滑块右沿紧贴槽位右沿）
+        let asb = unbound_widgets::slot_fixture::emit_canonical_annotated_scroll_bar_fixture(
+            Rect::new(16.0, 16.0, 44.0, 160.0),
+            FixtureState::normal(),
+            text_ctx,
+            100,
+        );
+        assert!((asb.thumb_rect.max().x - 60.0).abs() < 1e-2);
+
+        // 4. TabView: 选中标签页从 origin.y + 8.0 起排布
+        let tabs = unbound_widgets::slot_fixture::emit_canonical_tab_view_fixture(
+            Rect::new(16.0, 0.0, 360.0, 120.0),
+            FixtureState::normal(),
+            text_ctx,
+            100,
+        );
+        assert_eq!(tabs.tab_rects[0].origin.y, 8.0);
+
+        // 5. ListBox: 输出铺满容器矩形的底板（避免深色禁用态包围盒塌缩）
+        let lb = unbound_widgets::slot_fixture::emit_canonical_list_rows_fixture(
+            Rect::new(16.0, 16.0, 220.0, 120.0),
+            FixtureState::disabled(),
+            text_ctx,
+            100,
+        );
+        assert!(lb.output.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::RoundedRect
+                && (p.size[0] - 220.0).abs() < 1e-2
+                && (p.size[1] - 120.0).abs() < 1e-2
+        }));
+
+        // 6. TimePicker: 24 小时制非对称分栏线位于 60.5%（200px 宽时在 x = origin.x + 121）
+        let tp = emit_canonical_time_picker_fixture(
+            Rect::new(16.0, 16.0, 200.0, 30.0),
+            FixtureState::normal(),
+            text_ctx,
+            100,
+        );
+        assert!(tp.output.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::RoundedRect
+                && (p.size[0] - 1.0).abs() < 1e-2
+                && (p.local_pos[0] - 137.0).abs() < 1e-2
+        }));
+
+        // 7. Image: 使用确定性位图色槽（328 / 329）且直角无圆角
+        let img = emit_canonical_image_fixture(
+            Rect::new(16.0, 16.0, 64.0, 64.0),
+            FixtureState::normal(),
+            text_ctx,
+            100,
+        );
+        assert!(img
+            .output
+            .primitives
+            .iter()
+            .any(|p| { p.fill_token_or_uv as u16 == 328 && p.radii()[0] == 0.0 }));
+    });
 }

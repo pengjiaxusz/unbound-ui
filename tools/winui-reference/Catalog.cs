@@ -1123,6 +1123,9 @@ internal static class Catalog
                 element = new DatePicker
                 {
                     Language = "en-US",
+                    MonthFormat = "{month.full}",
+                    DayFormat = "{day.integer}",
+                    YearFormat = "{year.full}",
                     SelectedDate = new DateTimeOffset(new DateTime(2024, 4, 15)),
                     Width = 240,
                     Height = 32,

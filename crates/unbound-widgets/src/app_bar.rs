@@ -123,11 +123,13 @@ impl AppBarSeparatorDesc {
     /// 实际绘制的一像素线条矩形。
     #[must_use]
     pub fn line_rect(&self) -> Rect {
+        // WinUI 3 AppBarSeparator 默认上下各留 8px 内缩（40px 槽位内实际竖线高 24px）。
+        let inset_y = if self.rect.height() > 16.0 { 8.0 } else { 0.0 };
         Rect::new(
             (self.rect.origin.x + (self.rect.width() - APP_BAR_SEPARATOR_THICKNESS) * 0.5).round(),
-            self.rect.origin.y,
+            self.rect.origin.y + inset_y,
             APP_BAR_SEPARATOR_THICKNESS,
-            self.rect.height(),
+            (self.rect.height() - inset_y * 2.0).max(1.0),
         )
     }
 }

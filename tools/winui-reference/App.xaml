@@ -9,6 +9,126 @@
                 <!-- 引入 WinUI 默认控件样式，保证参考截图使用官方主题资源 -->
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+            <!--
+                在 Application.Resources 级别钉死 Windows 11 默认 Fluent 蓝强调色，
+                确保 StaticResource AccentButtonStyle（ContentDialog）、ToggleSplitButton、
+                AnnotatedScrollBar、ListBoxItem、CalendarView 等模板均不随采集机系统
+                个性化强调色（例如红色）漂移。
+            -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <Color x:Key="SystemAccentColor">#0078D4</Color>
+                    <Color x:Key="SystemAccentColorLight1">#4CC2FF</Color>
+                    <Color x:Key="SystemAccentColorLight2">#60CDFF</Color>
+                    <Color x:Key="SystemAccentColorLight3">#99EBFF</Color>
+                    <Color x:Key="SystemAccentColorDark1">#005FB8</Color>
+                    <Color x:Key="SystemAccentColorDark2">#003E92</Color>
+                    <Color x:Key="SystemAccentColorDark3">#002659</Color>
+                    <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#37000000" />
+                    <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#5CFFFFFF" />
+                    <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="#003E92" />
+                    <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="#003E92" />
+                    <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AccentButtonBackground" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AccentButtonBackgroundDisabled" Color="#37000000" />
+                    <SolidColorBrush x:Key="AccentButtonForeground" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="AccentButtonForegroundDisabled" Color="#5CFFFFFF" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrush" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrushPointerOver" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrushPressed" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrushDisabled" Color="#37000000" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonBackgroundChecked" Color="#005FB8" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonBackgroundCheckedPointerOver" Color="#005FB8" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonBackgroundCheckedPressed" Color="#005FB8" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonBackgroundCheckedDisabled" Color="#37000000" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonForegroundChecked" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonForegroundCheckedPointerOver" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonForegroundCheckedPressed" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonForegroundCheckedDisabled" Color="#5CFFFFFF" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonBorderBrushChecked" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AnnotatedScrollBarThumbFill" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AnnotatedScrollBarThumbFillPointerOver" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AnnotatedScrollBarThumbFillPressed" Color="#005FB8" />
+                    <SolidColorBrush x:Key="AnnotatedScrollBarThumbFillDisabled" Color="#37000000" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentLowBrush" Color="#66005FB8" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentMediumBrush" Color="#99005FB8" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentHighBrush" Color="#B3005FB8" />
+                    <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#005FB8" />
+                    <SolidColorBrush x:Key="ListBoxItemSelectedBackgroundThemeBrush" Color="#66005FB8" />
+                    <SolidColorBrush x:Key="ListBoxItemSelectedPointerOverBackgroundThemeBrush" Color="#99005FB8" />
+                    <SolidColorBrush x:Key="ListBoxItemSelectedPressedBackgroundThemeBrush" Color="#B3005FB8" />
+                    <SolidColorBrush x:Key="CalendarViewTodayBackground" Color="#005FB8" />
+                    <SolidColorBrush x:Key="CalendarViewSelectedBorderBrush" Color="#005FB8" />
+                    <SolidColorBrush x:Key="CalendarViewSelectedHoverBorderBrush" Color="#005FB8" />
+                    <SolidColorBrush x:Key="CalendarViewSelectedPressedBorderBrush" Color="#005FB8" />
+                    <SolidColorBrush x:Key="CalendarViewSelectedForeground" Color="#005FB8" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <Color x:Key="SystemAccentColor">#0078D4</Color>
+                    <Color x:Key="SystemAccentColorLight1">#4CC2FF</Color>
+                    <Color x:Key="SystemAccentColorLight2">#60CDFF</Color>
+                    <Color x:Key="SystemAccentColorLight3">#99EBFF</Color>
+                    <Color x:Key="SystemAccentColorDark1">#005FB8</Color>
+                    <Color x:Key="SystemAccentColorDark2">#003E92</Color>
+                    <Color x:Key="SystemAccentColorDark3">#002659</Color>
+                    <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#28FFFFFF" />
+                    <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#000000" />
+                    <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#000000" />
+                    <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#5C000000" />
+                    <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="#99EBFF" />
+                    <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="#99EBFF" />
+                    <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AccentButtonBackground" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AccentButtonBackgroundDisabled" Color="#28FFFFFF" />
+                    <SolidColorBrush x:Key="AccentButtonForeground" Color="#000000" />
+                    <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="#000000" />
+                    <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="#000000" />
+                    <SolidColorBrush x:Key="AccentButtonForegroundDisabled" Color="#5C000000" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrush" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrushPointerOver" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrushPressed" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AccentButtonBorderBrushDisabled" Color="#28FFFFFF" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonBackgroundChecked" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonBackgroundCheckedPointerOver" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonBackgroundCheckedPressed" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonBackgroundCheckedDisabled" Color="#28FFFFFF" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonForegroundChecked" Color="#000000" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonForegroundCheckedPointerOver" Color="#000000" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonForegroundCheckedPressed" Color="#000000" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonForegroundCheckedDisabled" Color="#5C000000" />
+                    <SolidColorBrush x:Key="ToggleSplitButtonBorderBrushChecked" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AnnotatedScrollBarThumbFill" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AnnotatedScrollBarThumbFillPointerOver" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AnnotatedScrollBarThumbFillPressed" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="AnnotatedScrollBarThumbFillDisabled" Color="#28FFFFFF" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentLowBrush" Color="#6660CDFF" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentMediumBrush" Color="#9960CDFF" />
+                    <SolidColorBrush x:Key="SystemControlHighlightListAccentHighBrush" Color="#B360CDFF" />
+                    <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="ListBoxItemSelectedBackgroundThemeBrush" Color="#6660CDFF" />
+                    <SolidColorBrush x:Key="ListBoxItemSelectedPointerOverBackgroundThemeBrush" Color="#9960CDFF" />
+                    <SolidColorBrush x:Key="ListBoxItemSelectedPressedBackgroundThemeBrush" Color="#B360CDFF" />
+                    <SolidColorBrush x:Key="CalendarViewTodayBackground" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="CalendarViewSelectedBorderBrush" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="CalendarViewSelectedHoverBorderBrush" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="CalendarViewSelectedPressedBorderBrush" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="CalendarViewSelectedForeground" Color="#60CDFF" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

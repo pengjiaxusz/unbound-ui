@@ -734,7 +734,9 @@ impl GlyphCache {
         #[cfg(all(windows, feature = "backend-directwrite"))]
         if try_directwrite {
             let phase_offset = mode.phase_offset(phase);
-            if let Some(raster) = self.raster_directwrite(engine, face, glyph, phase_offset) {
+            if let Some(raster) =
+                self.raster_directwrite(engine, face, glyph, phase_offset, italic, weight)
+            {
                 return self.commit_raster(
                     key,
                     glyph.w,
@@ -939,13 +941,28 @@ impl GlyphCache {
         glyph: &PositionedGlyph,
         phase_offset: f32,
     ) -> Option<crate::directwrite::RasterizedGlyph> {
+        self.rasterize_directwrite_styled(engine, face, glyph, phase_offset, false, 0)
+    }
+
+    /// 用 DirectWrite 按显式字重与斜体样式光栅化单个字形（支持 `Segoe UI Variable` 等可变字体）。
+    #[cfg(all(windows, feature = "backend-directwrite"))]
+    pub fn rasterize_directwrite_styled(
+        &mut self,
+        engine: &mut TextEngine,
+        face: fontdb::ID,
+        glyph: &PositionedGlyph,
+        phase_offset: f32,
+        italic: bool,
+        weight: u16,
+    ) -> Option<crate::directwrite::RasterizedGlyph> {
         let directwrite = self.directwrite.as_mut()?;
         let key = {
             let info = engine.font_system_mut().db().face(face)?;
             crate::directwrite::FaceKey {
                 family: info.families.first()?.0.clone(),
-                weight: info.weight.0,
-                italic: matches!(info.style, fontdb::Style::Italic | fontdb::Style::Oblique),
+                weight: if weight != 0 { weight } else { info.weight.0 },
+                italic: italic
+                    || matches!(info.style, fontdb::Style::Italic | fontdb::Style::Oblique),
             }
         };
         let mono = self.settings.emoji_presentation == crate::settings::EmojiPresentation::Mono;
@@ -967,8 +984,10 @@ impl GlyphCache {
         face: fontdb::ID,
         glyph: &PositionedGlyph,
         phase_offset: f32,
+        italic: bool,
+        weight: u16,
     ) -> Option<crate::directwrite::RasterizedGlyph> {
-        self.rasterize_directwrite(engine, face, glyph, phase_offset)
+        self.rasterize_directwrite_styled(engine, face, glyph, phase_offset, italic, weight)
     }
 
     /// 用 Cosmic (swash) 光栅化单个字形。
@@ -1149,8 +1168,9 @@ impl GlyphCache {
             };
             crate::directwrite::FaceKey {
                 family: family.0.clone(),
-                weight: info.weight.0,
-                italic: matches!(info.style, fontdb::Style::Italic | fontdb::Style::Oblique),
+                weight: if weight != 0 { weight } else { info.weight.0 },
+                italic: italic
+                    || matches!(info.style, fontdb::Style::Italic | fontdb::Style::Oblique),
             }
         };
         if !self

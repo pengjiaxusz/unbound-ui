@@ -867,9 +867,14 @@ impl TextEngine {
             }
             let (family, weight) = {
                 let face = self.font_system_mut().db().face(face_id)?;
+                let resolved_weight = if style.weight != 0 {
+                    style.weight
+                } else {
+                    face.weight.0
+                };
                 (
                     face.families.first().map(|(name, _)| name.clone())?,
-                    face.weight.0,
+                    resolved_weight,
                 )
             };
             // `cluster` 是源字符串中的字节偏移；DirectWrite 的命中测试使用

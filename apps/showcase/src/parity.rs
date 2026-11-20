@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use unbound_gpu::atlas::{AtlasKind, AtlasSet, AtlasUpload};
-use unbound_gpu::data::{GpuClipNode, GpuPayload, PrimType, SubElement};
+use unbound_gpu::data::{GpuClipNode, GpuPayload, GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_gpu::device::{Gpu, GpuConfig};
 use unbound_gpu::{Camera, Renderer};
 use unbound_math::color::Color;
@@ -521,7 +521,7 @@ pub fn render_case(
 ///
 /// 每项为 `(原始槽位, 浅色 sRGB, 深色 sRGB)`；颜色取自 WinUI 3 参考截图里
 /// 那些没有语义令牌可表达的模板过渡色。
-const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 14] = [
+const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 21] = [
     // 选中态 ToggleButton 的侧边与底边（WinUI 以强调色叠加半透明描边）。
     (310, [20, 108, 190], [108, 209, 255]),
     (311, [0, 57, 110], [83, 177, 220]),
@@ -550,6 +550,19 @@ const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 14] = [
     // 禁用态 RatingControl 实心星：采样参考图星形中心得到浅色 155、深色 113，
     // 既不同于正文禁用色，也不能沿用未选中星的字形色。
     (323, [155, 155, 155], [113, 113, 113]),
+    // InfoBar / Expander 内容区次级卡片表面（浅 #F4F4F4 / 深 #272727）。
+    (324, [244, 244, 244], [39, 39, 39]),
+    // SplitView 左侧窗格表面（浅 #F2F2F2 / 深 #171717）。
+    (325, [242, 242, 242], [23, 23, 23]),
+    // CalendarView 外壳表面（浅 #FFFFFF / 深 #202020）。
+    (326, [255, 255, 255], [32, 32, 32]),
+    // PersonPicture 圆形默认底板（浅 #DCDCDC / 深 #303030）。
+    (327, [220, 220, 220], [48, 48, 48]),
+    // Image 确定性位图填充与 1px 描边（对齐 Catalog.cs CreateDeterministicImageSource）。
+    (328, [200, 216, 232], [200, 216, 232]),
+    (329, [120, 144, 176], [120, 144, 176]),
+    // ContentDialog / MenuFlyout 表面底色（浅 #F3F3F3 / 深 #202020）。
+    (330, [243, 243, 243], [32, 32, 32]),
 ];
 
 const PARITY_CHECKED_BORDER: Token = Token::new(310);
@@ -928,39 +941,13 @@ fn build_lut(dark: bool, backdrop: &str, overrides: &[(Token, Color)]) -> ThemeL
 #[must_use]
 pub fn parity_lut(dark: bool, backdrop: &str, control: &str) -> ThemeLut {
     if control == "ListBox" {
-        // WinUI ListBox 选中行使用 40% 强调色叠在基准面上（SystemControlHighlightListAccentLowBrush）。
+        // WinUI ListBox 选中行使用 40% Fluent 蓝强调色叠在基准面上（SystemControlHighlightListAccentLowBrush）。
         let soft = if dark {
             Color::from_srgb8(56, 100, 122, 255)
         } else {
-            Color::from_srgb8(235, 159, 155, 255)
+            Color::from_srgb8(146, 184, 219, 255)
         };
         return build_lut(dark, backdrop, &[(Token::PRIMARY_SOFT, soft)]);
-    }
-    if control == "AppBarToggleButton" {
-        let primary = if dark {
-            Color::from_srgb8(255, 153, 164, 255)
-        } else {
-            Color::from_srgb8(194, 28, 20, 255)
-        };
-        let border = if dark {
-            Color::from_srgb8(255, 180, 190, 255)
-        } else {
-            Color::from_srgb8(199, 46, 38, 255)
-        };
-        let bottom = if dark {
-            Color::from_srgb8(180, 40, 50, 255)
-        } else {
-            Color::from_srgb8(116, 17, 12, 255)
-        };
-        return build_lut(
-            dark,
-            backdrop,
-            &[
-                (Token::PRIMARY, primary),
-                (PARITY_CHECKED_BORDER, border),
-                (PARITY_CHECKED_BOTTOM, bottom),
-            ],
-        );
     }
     backdrop_lut(dark, backdrop)
 }
@@ -1801,7 +1788,7 @@ fn emit_case(
                 let clip_right = rect.max().x - 12.0;
                 let content_r = Rect::new(
                     rect.origin.x + 12.0,
-                    rect.origin.y,
+                    rect.origin.y + 1.0,
                     (rect.width() - 24.0).max(0.0),
                     rect.height(),
                 );
@@ -1983,7 +1970,7 @@ fn emit_case(
             let stroke = if control.disabled {
                 Token::CONTROL_DISABLED_BORDER
             } else {
-                Token::CARD_BORDER
+                Token::DIVIDER
             };
             let mut out = WidgetOutput::default();
             out.primitives
@@ -2009,22 +1996,10 @@ fn emit_case(
             let disabled = control.disabled;
 
             let mut out = WidgetOutput::default();
-            // 1. 18px 解析阴影
-            out.primitives.push(primitive::instance(
-                flyout_r,
-                [8.0; 4],
-                Token::NONE,
-                Token::NONE,
-                0.0,
-                18.0,
-                PrimType::Shadow,
-                SubElement::Shadow,
-                760,
-            ));
-            // 2. 浮层表面背景
+            // 1. 浮层表面背景（参考宿主用内联 Border 包裹，无外扩阴影）
             out.primitives
                 .push(primitive::surface(flyout_r, 8.0, Token::OVERLAY_BG, 760));
-            // 3. 1px SurfaceStroke 微描边
+            // 2. 1px SurfaceStroke 微描边
             let border_token = if disabled {
                 Token::CONTROL_DISABLED_BORDER
             } else {
@@ -2042,28 +2017,41 @@ fn emit_case(
                 760,
             ));
 
-            // 4. 内部横向排列常用命令项：Copy、Cut、Paste、分隔线、More
-            let pad_y = 6.0;
-            let pad_x = 6.0;
-            let item_size = (flyout_h - pad_y * 2.0).max(16.0);
-            let commands = [
-                ("\u{E8C8}", "Copy"),
-                ("\u{E8C6}", "Cut"),
-                ("\u{E77F}", "Paste"),
-            ];
-            let item_fill = Token::NONE;
+            // 3. 对齐 Catalog.cs：右对齐排布 2 枚主命令（Copy、Cut）+ 竖向分隔线 + More
+            let btn_w = 68.0;
+            let more_w = 68.0;
+            let sep_w = 1.0;
+            let commands = [("\u{E8C8}", "Copy"), ("\u{E8C6}", "Cut")];
             let icon_ink = if disabled {
                 Token::TEXT_DISABLED
             } else {
                 Token::TEXT_PRIMARY
             };
+            let more_r = Rect::new(
+                flyout_r.max().x - more_w - 4.0,
+                flyout_r.origin.y + 2.0,
+                more_w,
+                (flyout_h - 4.0).max(16.0),
+            );
+            let sep_x = more_r.origin.x - 4.0;
+            let sep_r = Rect::new(
+                sep_x,
+                flyout_r.origin.y + (flyout_h - 32.0) * 0.5,
+                sep_w,
+                32.0_f32.min(flyout_h - 8.0).max(8.0),
+            );
+            out.primitives
+                .push(primitive::surface(sep_r, 0.0, Token::DIVIDER, 761));
 
+            let cmd_start_x = sep_x - 4.0 - commands.len() as f32 * btn_w;
             for (idx, (glyph, _name)) in commands.iter().enumerate() {
-                let item_x = flyout_r.origin.x + pad_x + idx as f32 * (item_size + 4.0);
-                let item_r = Rect::new(item_x, flyout_r.origin.y + pad_y, item_size, item_size);
-                out.primitives
-                    .push(primitive::surface(item_r, 4.0, item_fill, 761));
-                let quads = icon_quads(text_ctx, glyph, item_r, 14.0);
+                let item_r = Rect::new(
+                    cmd_start_x + idx as f32 * btn_w,
+                    flyout_r.origin.y + 2.0,
+                    btn_w,
+                    (flyout_h - 4.0).max(16.0),
+                );
+                let quads = icon_quads(text_ctx, glyph, item_r, 16.0);
                 primitive::glyphs(
                     &quads,
                     icon_ink,
@@ -2073,27 +2061,7 @@ fn emit_case(
                 );
             }
 
-            // 竖向分隔线
-            let sep_x = flyout_r.origin.x + pad_x + commands.len() as f32 * (item_size + 4.0) + 2.0;
-            let sep_r = Rect::new(
-                sep_x,
-                flyout_r.origin.y + pad_y + 4.0,
-                1.0,
-                (item_size - 8.0).max(8.0),
-            );
-            out.primitives
-                .push(primitive::surface(sep_r, 0.0, border_token, 761));
-
-            // 右侧「更多」按钮
-            let more_r = Rect::new(
-                flyout_r.max().x - item_size - pad_x,
-                flyout_r.origin.y + pad_y,
-                item_size,
-                item_size,
-            );
-            out.primitives
-                .push(primitive::surface(more_r, 4.0, item_fill, 761));
-            let more_quads = icon_quads(text_ctx, "\u{E712}", more_r, 14.0);
+            let more_quads = icon_quads(text_ctx, "\u{E712}", more_r, 16.0);
             primitive::glyphs(
                 &more_quads,
                 icon_ink,
@@ -2427,22 +2395,10 @@ fn emit_case(
             let disabled = control.disabled;
 
             let mut out = WidgetOutput::default();
-            // 1. 40px 海拔解析阴影
-            out.primitives.push(primitive::instance(
-                dialog_r,
-                [8.0; 4],
-                Token::NONE,
-                Token::NONE,
-                0.0,
-                40.0,
-                PrimType::Shadow,
-                SubElement::Shadow,
-                950,
-            ));
-            // 2. 对话框表面背景
+            // 1. 对话框表面背景（对齐 Catalog.cs ContentDialogBackground：浅 #F3F3F3 / 深 #202020，无外扩阴影）
             out.primitives
-                .push(primitive::surface(dialog_r, 8.0, Token::OVERLAY_BG, 950));
-            // 3. 1px SurfaceStroke 微描边
+                .push(primitive::surface(dialog_r, 8.0, Token::new(330), 950));
+            // 2. 1px SurfaceStroke 微描边
             out.primitives.push(primitive::instance(
                 dialog_r,
                 [8.0; 4],
@@ -2455,8 +2411,8 @@ fn emit_case(
                 950,
             ));
 
-            // 4. 底部栏分隔线与主操作按钮
-            let footer_h = 56.0;
+            // 3. 底部栏分隔线与主操作按钮（对齐 Catalog.cs：Padding 24,16,24,16 + MinWidth 120）
+            let footer_h = 64.0;
             let footer_y = dialog_r.max().y - footer_h;
             out.primitives.push(primitive::surface(
                 Rect::new(dialog_r.origin.x, footer_y, dialog_w, 1.0),
@@ -2465,7 +2421,7 @@ fn emit_case(
                 951,
             ));
 
-            let btn_w = 88.0_f32.min(dialog_w - 48.0);
+            let btn_w = 120.0_f32.min(dialog_w - 48.0);
             let btn_h = 32.0;
             let btn_r = Rect::new(
                 dialog_r.max().x - 24.0 - btn_w,
@@ -2499,11 +2455,11 @@ fn emit_case(
                 "ContentDialog",
                 Rect::new(
                     dialog_r.origin.x + 24.0,
-                    dialog_r.origin.y + 20.0,
+                    dialog_r.origin.y + 22.0,
                     dialog_w - 48.0,
-                    24.0,
+                    28.0,
                 ),
-                18.0,
+                20.0,
                 600,
                 None,
                 unbound_widgets::AlignX::Left,
@@ -2514,13 +2470,13 @@ fn emit_case(
             let body_ink = if disabled {
                 Token::TEXT_DISABLED
             } else {
-                Token::TEXT_SECONDARY
+                Token::TEXT_PRIMARY
             };
             let body_quads = text_ctx.shape_line_styled(
                 "Message",
                 Rect::new(
                     dialog_r.origin.x + 24.0,
-                    dialog_r.origin.y + 54.0,
+                    dialog_r.origin.y + 56.0,
                     dialog_w - 48.0,
                     20.0,
                 ),
@@ -2592,19 +2548,7 @@ fn emit_case(
             let disabled = control.disabled;
 
             let mut out = WidgetOutput::default();
-            // 1. 24px 解析阴影
-            out.primitives.push(primitive::instance(
-                tip_r,
-                [8.0; 4],
-                Token::NONE,
-                Token::NONE,
-                0.0,
-                24.0,
-                PrimType::Shadow,
-                SubElement::Shadow,
-                780,
-            ));
-            // 2. 气泡表面背景
+            // 1. 气泡表面背景（参考宿主用内联 Border 呈现，无外扩阴影）
             out.primitives
                 .push(primitive::surface(tip_r, 8.0, Token::OVERLAY_BG, 780));
             // 3. 1px SurfaceStroke 微描边
@@ -2686,18 +2630,10 @@ fn emit_case(
             let disabled = control.disabled;
 
             let mut out = WidgetOutput::default();
-            // WinUI Card（Border 模板）不附带外部投影，避免包围盒外扩 1px。
-            // 2. 卡片表面背景
-            let bg_token = if disabled {
-                Token::CONTROL_DISABLED_BG
-            } else {
-                Token::CARD_BG
-            };
-            let border_token = if disabled {
-                Token::CONTROL_DISABLED_BORDER
-            } else {
-                Token::CARD_BORDER
-            };
+            // WinUI Card（Border 模板）不附带外部投影；禁用态由 Catalog.cs 设置 Opacity=0.4，
+            // 使 CARD_BG (#2B2B2B) 与背景 (#202020) 混合为 #242424。
+            let bg_token = Token::CARD_BG;
+            let border_token = Token::CARD_BORDER;
             out.primitives
                 .push(primitive::surface(card_r, 8.0, bg_token, 100));
             // 3. 1px SurfaceStroke 微描边
@@ -2724,6 +2660,14 @@ fn emit_case(
                 ));
             }
 
+            if disabled {
+                for prim in &mut out.primitives {
+                    prim.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+                        prim.depth_u16(),
+                        prim.opacity() * unbound_widgets::slot_fixture::WINUI_DISABLED_OPACITY,
+                    );
+                }
+            }
             push(scene, out);
 
             // 4. 排版内容文本
@@ -2769,17 +2713,9 @@ fn emit_case(
             let disabled = control.disabled;
 
             let mut out = WidgetOutput::default();
-            // 1. 表面背景
-            let bg_token = if disabled {
-                Token::CONTROL_DISABLED_BG
-            } else {
-                Token::CARD_BG
-            };
-            let border_token = if disabled {
-                Token::CONTROL_DISABLED_BORDER
-            } else {
-                Token::CARD_BORDER
-            };
+            // 1. 表面背景（禁用态由 Catalog.cs 设置 Opacity=0.4，使 CARD_BG 混合为 #242424）
+            let bg_token = Token::CARD_BG;
+            let border_token = Token::CARD_BORDER;
             out.primitives
                 .push(primitive::surface(border_r, 8.0, bg_token, 100));
             // 2. 1px SurfaceStroke 微描边
@@ -2806,6 +2742,14 @@ fn emit_case(
                 ));
             }
 
+            if disabled {
+                for prim in &mut out.primitives {
+                    prim.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+                        prim.depth_u16(),
+                        prim.opacity() * unbound_widgets::slot_fixture::WINUI_DISABLED_OPACITY,
+                    );
+                }
+            }
             push(scene, out);
 
             // 3. 排版内容文本
@@ -2981,123 +2925,44 @@ fn emit_case(
             Vec2::new(list_w, list_h)
         }
         "ItemsView" => {
-            // WinUI 3 ItemsView 流式集合视图规范：
-            // 固有尺寸宽 240px、高 140px。
-            // 排版多列流式集合项目，首项处于选中高亮态。
+            // WinUI 3 ItemsView 默认 StackLayout：无外框、无卡片底色，纵向排列 4 行纯文本（行高 19px）。
             let items_w = if rect.width() > 0.0 {
                 rect.width()
             } else {
-                240.0
+                260.0
             };
             let items_h = if rect.height() > 0.0 {
                 rect.height()
             } else {
-                140.0
+                160.0
             };
             let items_rect = Rect::new(rect.origin.x, rect.origin.y, items_w, items_h);
             let disabled = control.disabled;
-
-            let mut out = WidgetOutput::default();
-            out.primitives.push(primitive::outlined(
-                items_rect,
-                8.0,
-                if disabled {
-                    Token::CONTROL_DISABLED_BG
-                } else {
-                    Token::SURFACE
-                },
-                if disabled {
-                    Token::CONTROL_DISABLED_BORDER
-                } else {
-                    Token::CONTROL_STROKE
-                },
-                1.0,
-                0.0,
-                700,
-            ));
-
-            let pad = 8.0;
-            let gap = 6.0;
-            let cols = 3;
-            let rows = 2;
-            let cell_w = ((items_w - pad * 2.0 - gap * (cols - 1) as f32) / cols as f32).max(1.0);
-            let cell_h = ((items_h - pad * 2.0 - gap * (rows - 1) as f32) / rows as f32).max(1.0);
-
-            let items = ["Item 1", "Item 2", "Item 3", "Item 4", "Item 5", "Item 6"];
-            for (idx, _text) in items.iter().enumerate() {
-                let col = idx % cols;
-                let row = idx / cols;
-                let x = items_rect.origin.x + pad + col as f32 * (cell_w + gap);
-                let y = items_rect.origin.y + pad + row as f32 * (cell_h + gap);
-                let item_r = Rect::new(x, y, cell_w, cell_h);
-                let selected = !disabled && (idx == 0);
-
-                let fill = if disabled {
-                    Token::CONTROL_DISABLED_BG
-                } else if selected {
-                    Token::PRIMARY_SOFT
-                } else {
-                    Token::CARD_BG
-                };
-                let border = if disabled {
-                    Token::CONTROL_DISABLED_BORDER
-                } else if selected {
-                    Token::PRIMARY
-                } else {
-                    Token::CARD_BORDER
-                };
-
-                out.primitives.push(primitive::outlined(
-                    item_r,
-                    4.0,
-                    fill,
-                    border,
-                    if selected { 2.0 } else { 1.0 },
-                    0.0,
-                    702,
-                ));
-
-                if selected && control.focused && !disabled {
-                    out.primitives.push(primitive::focus_ring(
-                        item_r.inflate(1.0),
-                        5.0,
-                        Token::FOCUS_RING,
-                        2.0,
-                        710,
-                        true,
-                    ));
-                }
-            }
-
-            push(scene, out);
-
-            // 排版流式项目文本
+            let ink = if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            };
+            let items = ["Item 1", "Item 2", "Item 3", "Item 4"];
+            let line_h = 19.0;
             for (idx, text) in items.iter().enumerate() {
-                let col = idx % cols;
-                let row = idx / cols;
-                let x = items_rect.origin.x + pad + col as f32 * (cell_w + gap);
-                let y = items_rect.origin.y + pad + row as f32 * (cell_h + gap);
-                let item_r = Rect::new(x, y, cell_w, cell_h);
-                let selected = !disabled && (idx == 0);
-                let ink = if disabled {
-                    Token::TEXT_DISABLED
-                } else {
-                    Token::TEXT_PRIMARY
-                };
-                emit_text_left_middle(
-                    text_ctx,
-                    scene,
-                    text,
-                    item_r,
-                    item_r.origin.x + 8.0,
-                    12.0,
-                    if selected { 600 } else { 400 },
-                    None,
-                    ink,
-                    704,
+                let row_r = Rect::new(
+                    items_rect.origin.x,
+                    items_rect.origin.y + idx as f32 * line_h,
+                    items_w,
+                    line_h,
                 );
+                let quads = text_ctx.shape_line_styled(
+                    text,
+                    row_r,
+                    14.0,
+                    400,
+                    None,
+                    unbound_widgets::AlignX::Left,
+                    unbound_widgets::AlignY::Middle,
+                );
+                emit_quads(scene, &quads, ink, 704);
             }
-
             Vec2::new(items_w, items_h)
         }
         "SwipeControl" => {

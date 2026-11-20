@@ -18,8 +18,8 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 /// 控件圆角。对齐 WinUI `ControlCornerRadius = 4`。
 pub const RICH_EDIT_RADIUS: f32 = 4.0;
 
-/// 水平内边距。对齐 WinUI `TextControlThemePadding` 左侧 10px。
-pub const RICH_EDIT_PADDING_X: f32 = 10.0;
+/// 水平内边距。对齐 WinUI 3 实测 `TextControlThemePadding` 左侧 11px。
+pub const RICH_EDIT_PADDING_X: f32 = 11.0;
 
 /// 垂直内边距。对齐 WinUI `TextControlThemePadding` 顶部 6px。
 pub const RICH_EDIT_PADDING_Y: f32 = 6.0;
@@ -229,9 +229,9 @@ mod tests {
     fn editor_rect_applies_standard_padding() {
         let d = desc();
         let editor = d.editor_rect();
-        assert_eq!(editor.origin.x, 10.0);
+        assert_eq!(editor.origin.x, 11.0);
         assert_eq!(editor.origin.y, 6.0);
-        assert_eq!(editor.width(), 220.0);
+        assert_eq!(editor.width(), 218.0);
         assert_eq!(editor.height(), 84.0);
     }
 

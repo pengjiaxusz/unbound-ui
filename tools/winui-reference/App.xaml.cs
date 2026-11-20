@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media.Animation;
@@ -14,6 +15,19 @@ public partial class App : Application
 
     public App()
     {
+        // 钉死 en-US 区域设置，避免 DatePicker 等本地化控件在中文宿主机上泄漏「2024年/4月」格式。
+        var enUs = new CultureInfo("en-US");
+        CultureInfo.DefaultThreadCurrentCulture = enUs;
+        CultureInfo.DefaultThreadCurrentUICulture = enUs;
+        try
+        {
+            Windows.Globalization.ApplicationLanguages.PrimaryLanguageOverride = "en-US";
+        }
+        catch
+        {
+            // 非打包环境若不允许设置 PrimaryLanguageOverride，回退到控件级 Language + Format 约束。
+        }
+
         // ProgressRing 是无限循环动画，截图相位不确定。关闭依赖动画后控件停留在
         // 初始静态状态，使每次采集得到同一帧。
         Timeline.AllowDependentAnimations = false;

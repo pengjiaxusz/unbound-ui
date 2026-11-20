@@ -1267,7 +1267,7 @@ fn tab_view_normal_renders_two_tabs_and_content_area() {
         assert_eq!(fixture.total_size.x, 360.0);
         assert_eq!(fixture.total_size.y, 120.0);
 
-        // 2. 激活标签页校验：包含 SURFACE 背景与 2px 底部指示条
+        // 2. 激活标签页校验：包含 CARD_BG 背景且没有 2px 底部指示条
         let rounded_rects: Vec<(Token, f32, f32)> = fixture
             .output
             .primitives
@@ -1276,12 +1276,12 @@ fn tab_view_normal_renders_two_tabs_and_content_area() {
             .map(|p| (Token::new(p.fill_token_or_uv as u16), p.size[0], p.size[1]))
             .collect();
 
-        let has_surface = rounded_rects
+        let has_card_bg = rounded_rects
             .iter()
-            .any(|&(tok, _, _)| tok == Token::SURFACE);
-        assert!(has_surface, "active tab must use SURFACE background");
+            .any(|&(tok, _, _)| tok == Token::CARD_BG);
+        assert!(has_card_bg, "active tab must use CARD_BG background");
 
-        // WinUI TabView 选中态是带 CARD_BORDER 描边的 SURFACE 卡片，没有底部 2px 指示条。
+        // WinUI TabView 选中态是带 CARD_BORDER 描边的 CARD_BG 卡片，没有底部 2px 指示条。
         let has_indicator = rounded_rects
             .iter()
             .any(|&(tok, _, h)| tok == Token::PRIMARY && (h - 2.0).abs() < 1e-2);
@@ -1310,10 +1310,10 @@ fn tab_view_disabled_and_focused_states() {
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
 
-        // 禁用态保留选中卡片的 SURFACE 底板，只衰减文案与强调色。
+        // 禁用态保留选中卡片的 CARD_BG 底板，只衰减文案与强调色。
         assert!(
-            rounded_rects.contains(&Token::SURFACE),
-            "disabled state keeps selected tab SURFACE background"
+            rounded_rects.contains(&Token::CARD_BG),
+            "disabled state keeps selected tab CARD_BG background"
         );
         assert!(
             !rounded_rects.contains(&Token::PRIMARY),

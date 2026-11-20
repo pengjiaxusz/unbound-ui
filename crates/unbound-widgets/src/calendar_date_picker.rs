@@ -287,7 +287,7 @@ impl UiWidget for CalendarDatePickerDesc {
             desc.placeholder.clone()
         };
         let text_rect = Rect::new(
-            rect.origin.x + 10.0,
+            rect.origin.x + 12.0,
             rect.origin.y,
             (rect.width() - 44.0).max(0.0),
             rect.height(),
@@ -300,7 +300,40 @@ impl UiWidget for CalendarDatePickerDesc {
             AlignX::Left,
             AlignY::Middle,
         );
-        emit_calendar_date_picker(node, &desc, state, control, &mut glyphs)
+        let icon_glyphs = text_ctx.shape_line_styled(
+            "\u{E787}",
+            desc.icon_rect(),
+            16.0,
+            400,
+            Some("Segoe Fluent Icons"),
+            AlignX::Center,
+            AlignY::Middle,
+        );
+        let mut out = emit_calendar_date_picker(node, &desc, state, control, &mut glyphs);
+        if !icon_glyphs.is_empty() && out.primitives.len() >= 8 {
+            // 用 WinUI 官方 Segoe Fluent Icons 日历字形替换自绘几何线框（保留前 4 个容器图元与文本字形）。
+            let icon_ink = if control.disabled || desc.disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_SECONDARY
+            };
+            let mut rebuilt_prims =
+                Vec::with_capacity(out.primitives.len() - 4 + icon_glyphs.len());
+            rebuilt_prims.extend_from_slice(&out.primitives[..4]);
+            rebuilt_prims.extend_from_slice(&out.primitives[8..]);
+            out.primitives = rebuilt_prims;
+            if out.payloads.len() >= 2 {
+                out.payloads.drain(..2);
+            }
+            emit_glyphs(
+                &icon_glyphs,
+                icon_ink,
+                desc.z + 2,
+                &mut out.primitives,
+                &mut out.payloads,
+            );
+        }
+        out
     }
 }
 
