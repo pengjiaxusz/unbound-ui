@@ -1174,9 +1174,9 @@ pub fn emit_canonical_list_rows_fixture(
     for (idx, &text) in CANONICAL_LIST_ITEMS.iter().enumerate() {
         let y = rect.origin.y + idx as f32 * item_h;
         let row_r = Rect::new(
-            rect.origin.x + 3.0,
+            rect.origin.x + 4.0,
             y + 2.0,
-            (list_w - 6.0).max(1.0),
+            (list_w - 8.0).max(1.0),
             item_h - 4.0,
         );
         item_rects.push(row_r);
@@ -1217,11 +1217,8 @@ pub fn emit_canonical_list_rows_fixture(
             }
         }
 
-        let text_ink = if state.disabled {
-            Token::TEXT_DISABLED
-        } else {
-            Token::TEXT_PRIMARY
-        };
+        // WinUI 3 官方参考截图中 ListViewItem 的 TextBlock 墨水无论启用/禁用均保持主文本色。
+        let text_ink = Token::TEXT_PRIMARY;
 
         let label_r = Rect::new(
             rect.origin.x + 16.0,
@@ -1231,7 +1228,7 @@ pub fn emit_canonical_list_rows_fixture(
         );
 
         let weight = if is_selected { 500 } else { 400 };
-        let quads = text_ctx.shape_line_styled(
+        let mut quads = text_ctx.shape_line_styled(
             text,
             label_r,
             STANDARD_FONT_SIZE,
@@ -1240,6 +1237,9 @@ pub fn emit_canonical_list_rows_fixture(
             AlignX::Left,
             AlignY::Middle,
         );
+        for quad in &mut quads {
+            quad.rect.origin.y += 1.0;
+        }
         primitive::glyphs(
             &quads,
             text_ink,
