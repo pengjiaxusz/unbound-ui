@@ -260,6 +260,7 @@ define_widget_catalog! {
         inline_editable_text,
         elided_text,
         copy_button,
+        duration_input,
     ],
     catalog: [
         ExpanderGroup => accordion,
@@ -433,6 +434,10 @@ use unbound_text::GlyphQuad;
 use unbound_world::{NodeId, UiWorld};
 
 pub use address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
+pub use duration_input::{
+    duration_spin_down_node, duration_spin_up_node, emit_duration_input, format_duration_ms,
+    parse_duration_ms, DurationInputDesc, DurationInputState, DurationUnit,
+};
 pub use copy_button::{
     emit_copy_button, emit_read_only_input, read_only_copy_node, CopyButtonDesc, CopyButtonState,
     ReadOnlyInputDesc, ReadOnlyInputState, COPY_FEEDBACK_DURATION_MS,

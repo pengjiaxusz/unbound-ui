@@ -3679,6 +3679,8 @@ pub fn probe_workbench_widgets(state: ControlState) -> Vec<WidgetOutput> {
     outputs.push(crate::copy_button::emit_copy_button(9004, &copy_desc, state, &glyphs));
     let ro_desc = crate::copy_button::ReadOnlyInputDesc::new(rect, "0xdeadbeef");
     outputs.push(crate::copy_button::emit_read_only_input(9005, &ro_desc, state, &glyphs));
+    let dur_desc = crate::duration_input::DurationInputDesc::new(rect, 1500);
+    outputs.push(crate::duration_input::emit_duration_input(9006, &dur_desc, state, &glyphs));
     outputs
 }
 
