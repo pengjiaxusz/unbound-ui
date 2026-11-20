@@ -1685,12 +1685,7 @@ fn emit_case(
             rect.size
         }
         "TitleBar" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: !control.disabled,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_title_bar_fixture(
                 rect,
                 fixture_state,
@@ -1775,12 +1770,7 @@ fn emit_case(
             Vec2::new(size.x, 32.0)
         }
         "AppBarButton" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_app_bar_button_fixture(
                 rect,
                 fixture_state,
@@ -1791,12 +1781,7 @@ fn emit_case(
             fixture.total_size
         }
         "AppBarToggleButton" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture =
                 unbound_widgets::slot_fixture::emit_canonical_app_bar_toggle_button_fixture(
                     rect,
@@ -2009,12 +1994,7 @@ fn emit_case(
             };
             let mut out = WidgetOutput::default();
 
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture =
                 unbound_widgets::slot_fixture::emit_canonical_annotated_scroll_bar_fixture(
                     rect,
@@ -2029,12 +2009,7 @@ fn emit_case(
             Vec2::new(bar_w, bar_h)
         }
         "NavigationView" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_navigation_view_fixture(
                 rect,
                 fixture_state,
@@ -2063,12 +2038,7 @@ fn emit_case(
             out.primitives
                 .push(primitive::surface(rect, 4.0, Token::CONTROL_FILL, 700));
 
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_list_rows_fixture(
                 rect,
                 fixture_state,
@@ -2100,12 +2070,10 @@ fn emit_case(
             out.primitives
                 .push(primitive::surface(rect, 4.0, Token::CONTROL_FILL, 700));
 
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked: checked || case.state == "normal" || case.state == "focused",
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(
+                control,
+                checked || case.state == "normal" || case.state == "focused",
+            );
             let fixture = unbound_widgets::slot_fixture::emit_canonical_tree_fixture(
                 rect,
                 fixture_state,
@@ -2134,12 +2102,7 @@ fn emit_case(
             };
             let mut out = WidgetOutput::default();
 
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_flip_view_fixture(
                 rect,
                 fixture_state,
@@ -2163,12 +2126,7 @@ fn emit_case(
             } else {
                 32.0
             };
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 2,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked).with_selected(2);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_path_fixture(
                 Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h),
                 fixture_state,
@@ -2189,12 +2147,7 @@ fn emit_case(
             } else {
                 48.0
             };
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_command_bar_fixture(
                 Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h),
                 fixture_state,
@@ -2215,12 +2168,7 @@ fn emit_case(
             } else {
                 40.0
             };
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_menu_bar_fixture(
                 Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h),
                 fixture_state,
@@ -2241,12 +2189,8 @@ fn emit_case(
             } else {
                 32.0
             };
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: unbound_widgets::slot_fixture::CANONICAL_PIPS_SELECTED_INDEX,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked)
+                .with_selected(unbound_widgets::slot_fixture::CANONICAL_PIPS_SELECTED_INDEX);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_pips_pager_fixture(
                 Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h),
                 fixture_state,
@@ -2275,12 +2219,7 @@ fn emit_case(
             out.primitives
                 .push(primitive::surface(rect, 4.0, frame_fill, 700));
 
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture_out = unbound_widgets::slot_fixture::emit_canonical_segmented_fixture(
                 rect,
                 fixture_state,
@@ -2304,12 +2243,7 @@ fn emit_case(
             } else {
                 120.0
             };
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_tab_view_fixture(
                 Rect::new(rect.origin.x, rect.origin.y, bar_w, bar_h),
                 fixture_state,
@@ -2463,12 +2397,7 @@ fn emit_case(
             Vec2::new(dialog_w, dialog_h)
         }
         "Flyout" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_flyout_fixture(
                 rect,
                 fixture_state,
@@ -2479,12 +2408,7 @@ fn emit_case(
             fixture.total_size
         }
         "MenuFlyout" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_menu_flyout_fixture(
                 rect,
                 fixture_state,
@@ -2777,12 +2701,7 @@ fn emit_case(
                 200.0
             };
             let panel_rect = Rect::new(rect.origin.x, rect.origin.y, panel_w, rect.height());
-            let fixture_state = FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = emit_canonical_text_rows_fixture(
                 panel_rect,
                 STANDARD_STACK_SPACING,
@@ -2825,12 +2744,7 @@ fn emit_case(
                 80.0
             };
             let scroll_rect = Rect::new(rect.origin.x, rect.origin.y, scroll_w, scroll_h);
-            let fixture_state = FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let rows_fixture =
                 emit_canonical_text_rows_fixture(scroll_rect, 6.0, fixture_state, text_ctx, 702);
             let content_size = Vec2::new(scroll_w, rows_fixture.total_size.y);
@@ -2870,12 +2784,10 @@ fn emit_case(
             };
             let mut out = WidgetOutput::default();
 
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked: checked || case.state == "normal" || case.state == "focused",
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(
+                control,
+                checked || case.state == "normal" || case.state == "focused",
+            );
             let fixture = unbound_widgets::slot_fixture::emit_canonical_grid_fixture(
                 rect,
                 fixture_state,
@@ -2925,12 +2837,7 @@ fn emit_case(
                 700,
             ));
 
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_list_rows_fixture(
                 list_rect,
                 fixture_state,
@@ -3264,12 +3171,7 @@ fn emit_case(
             };
             let mut out = WidgetOutput::default();
 
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_refresh_fixture(
                 rect,
                 fixture_state,
@@ -3491,12 +3393,7 @@ fn emit_case(
             Vec2::new(hcc_w, hcc_h)
         }
         "InfoBar" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_info_bar_fixture(
                 rect,
                 fixture_state,
@@ -3507,12 +3404,7 @@ fn emit_case(
             fixture.total_size
         }
         "Pivot" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_pivot_fixture(
                 rect,
                 fixture_state,
@@ -3523,12 +3415,7 @@ fn emit_case(
             fixture.total_size
         }
         "Expander" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_expander_fixture(
                 rect,
                 fixture_state,
@@ -3539,12 +3426,7 @@ fn emit_case(
             fixture.total_size
         }
         "SplitView" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_split_view_fixture(
                 rect,
                 fixture_state,
@@ -3555,12 +3437,7 @@ fn emit_case(
             fixture.total_size
         }
         "CalendarView" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_calendar_view_fixture(
                 rect,
                 fixture_state,
@@ -3571,12 +3448,7 @@ fn emit_case(
             fixture.total_size
         }
         "TimePicker" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_time_picker_fixture(
                 rect,
                 fixture_state,
@@ -3587,12 +3459,7 @@ fn emit_case(
             fixture.total_size
         }
         "PersonPicture" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_person_picture_fixture(
                 rect,
                 fixture_state,
@@ -3603,12 +3470,7 @@ fn emit_case(
             fixture.total_size
         }
         "FontIcon" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_font_icon_fixture(
                 rect,
                 fixture_state,
@@ -3619,12 +3481,7 @@ fn emit_case(
             fixture.total_size
         }
         "Image" => {
-            let fixture_state = unbound_widgets::slot_fixture::FixtureState {
-                disabled: control.disabled,
-                focused: control.focused,
-                checked,
-                selected_index: 0,
-            };
+            let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_image_fixture(
                 rect,
                 fixture_state,

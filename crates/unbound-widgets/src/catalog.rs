@@ -3327,20 +3327,85 @@ where
             emit_task_hud(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::RichEditBox => {
-            let re_r = Rect::new(o.x, o.y, rect.size.x, rect.size.y.max(96.0));
-            let desc = crate::rich_edit_box::RichEditBoxDesc::new(re_r, "Rich text").with_marks(
-                variant_idx % 2 == 0,
-                variant_idx % 3 == 0,
-                false,
-            );
-            let editor = desc.editor_rect();
-            let mut glyphs = Vec::new();
-            glyphs.extend(shape(
-                "Formatted document body",
-                Vec2::new(editor.origin.x, editor.origin.y + 2.0),
-                14.0,
-            ));
-            crate::rich_edit_box::emit_rich_edit_box(node, &desc, state, &mut glyphs)
+            let is_composite = variant_idx % 2 == 1;
+            if !is_composite {
+                let re_r = Rect::new(o.x, o.y, rect.size.x, rect.size.y.max(96.0));
+                let desc = crate::rich_edit_box::RichEditBoxDesc::new(re_r, "Rich text");
+                let editor = desc.editor_rect();
+                let mut glyphs = Vec::new();
+                glyphs.extend(shape(
+                    "Formatted document body",
+                    Vec2::new(editor.origin.x, editor.origin.y + 2.0),
+                    14.0,
+                ));
+                crate::rich_edit_box::emit_rich_edit_box(node, &desc, state, &mut glyphs)
+            } else {
+                // 展台专属高级复合示例：带格式工具条（[B] [I] [U]）的富文本编辑器组合（Spec 用户故事 5）
+                let toolbar_h = 28.0;
+                let toolbar_r = Rect::new(o.x, o.y, rect.size.x, toolbar_h);
+                let edit_y = o.y + toolbar_h + 4.0;
+                let edit_h = (rect.size.y - toolbar_h - 4.0).max(64.0);
+                let edit_r = Rect::new(o.x, edit_y, rect.size.x, edit_h);
+
+                let mut out = WidgetOutput::default();
+                out.primitives.push(crate::primitive::surface(
+                    toolbar_r,
+                    4.0,
+                    Token::SURFACE_SUNKEN,
+                    700,
+                ));
+
+                let marks = [("B", true), ("I", false), ("U", false)];
+                for (idx, (label_txt, active)) in marks.into_iter().enumerate() {
+                    let btn_r = Rect::new(
+                        toolbar_r.origin.x + 6.0 + idx as f32 * 28.0,
+                        toolbar_r.origin.y + 4.0,
+                        22.0,
+                        20.0,
+                    );
+                    let fill = if active {
+                        Token::PRIMARY_SOFT
+                    } else {
+                        Token::CONTROL_FILL
+                    };
+                    let stroke = if active { Token::PRIMARY } else { Token::NONE };
+                    out.primitives.push(crate::primitive::outlined(
+                        btn_r, 3.0, fill, stroke, 1.0, 0.0, 702,
+                    ));
+                    let glyphs = shape_centered(&mut shape, label_txt, btn_r, 11.0);
+                    let text_color = if active {
+                        Token::TEXT_PRIMARY
+                    } else {
+                        Token::TEXT_SECONDARY
+                    };
+                    crate::primitive::glyphs(
+                        &glyphs,
+                        text_color,
+                        704,
+                        &mut out.primitives,
+                        &mut out.payloads,
+                    );
+                }
+
+                let desc =
+                    crate::rich_edit_box::RichEditBoxDesc::new(edit_r, "Rich text with toolbar")
+                        .with_marks(true, false, false);
+                let editor = desc.editor_rect();
+                let mut glyphs = Vec::new();
+                glyphs.extend(shape(
+                    "Formatted document body with toolbar",
+                    Vec2::new(editor.origin.x, editor.origin.y + 2.0),
+                    14.0,
+                ));
+                let editor_out = crate::rich_edit_box::emit_rich_edit_box(
+                    node.wrapping_add(1),
+                    &desc,
+                    state,
+                    &mut glyphs,
+                );
+                merge_output(&mut out, editor_out);
+                out
+            }
         }
         WidgetCatalogId::GridView => {
             let gv_r = Rect::new(o.x, o.y, rect.size.x.min(260.0), 140.0);

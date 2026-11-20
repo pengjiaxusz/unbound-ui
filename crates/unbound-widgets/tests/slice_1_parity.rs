@@ -220,6 +220,47 @@ fn rich_edit_box_renders_glyphs_with_theme_tokens() {
     });
 }
 
+#[test]
+fn rich_edit_box_catalog_pure_and_composite_variants_conformance() {
+    use unbound_widgets::catalog::emit_widget_with_shaper;
+    use unbound_widgets::WidgetCatalogId;
+
+    let rect = Rect::new(0.0, 0.0, 320.0, 140.0);
+    let mut shaper =
+        |_text: &str, _origin: Vec2, _size: f32| -> Vec<unbound_text::GlyphQuad> { Vec::new() };
+
+    // 1. variant 0 为纯净 WinUI 3 基准富文本编辑框
+    let pure_out = emit_widget_with_shaper(
+        WidgetCatalogId::RichEditBox,
+        1,
+        ControlState::default(),
+        rect,
+        unbound_widgets::catalog::CatalogParams {
+            variant_idx: 0,
+            ..Default::default()
+        },
+        &mut shaper,
+    );
+    assert!(pure_out.primitives.len() <= 3);
+
+    // 2. variant 1 为展台专属高级复合富文本编辑器（带 [B][I][U] 格式工具栏，满足 Spec 用户故事 5）
+    let composite_out = emit_widget_with_shaper(
+        WidgetCatalogId::RichEditBox,
+        1,
+        ControlState::default(),
+        rect,
+        unbound_widgets::catalog::CatalogParams {
+            variant_idx: 1,
+            ..Default::default()
+        },
+        &mut shaper,
+    );
+    assert!(
+        composite_out.primitives.len() > pure_out.primitives.len(),
+        "composite variant must include format toolbar buttons"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 2. SwipeControl 状态机与静态/滑开渲染契约
 // ---------------------------------------------------------------------------

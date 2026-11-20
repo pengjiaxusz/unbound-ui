@@ -554,3 +554,37 @@ fn app_bar_button_and_toggle_button_states() {
         );
     });
 }
+
+#[test]
+fn slice_4_fixtures_disabled_state_attenuates_opacity() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(0.0, 0.0, CANONICAL_INFOBAR_WIDTH, CANONICAL_INFOBAR_HEIGHT);
+        let disabled_fixture =
+            emit_canonical_info_bar_fixture(rect, FixtureState::disabled(), text_ctx, 100);
+        assert!(!disabled_fixture.output.primitives.is_empty());
+        for p in &disabled_fixture.output.primitives {
+            assert!(
+                (p.opacity() - unbound_widgets::slot_fixture::WINUI_DISABLED_OPACITY).abs() < 0.05,
+                "InfoBar primitive opacity {} must attenuate by WINUI_DISABLED_OPACITY",
+                p.opacity()
+            );
+        }
+
+        let cal_rect = Rect::new(
+            0.0,
+            0.0,
+            CANONICAL_CALENDAR_WIDTH,
+            CANONICAL_CALENDAR_HEIGHT,
+        );
+        let disabled_cal =
+            emit_canonical_calendar_view_fixture(cal_rect, FixtureState::disabled(), text_ctx, 100);
+        assert!(!disabled_cal.output.primitives.is_empty());
+        for p in &disabled_cal.output.primitives {
+            assert!(
+                (p.opacity() - unbound_widgets::slot_fixture::WINUI_DISABLED_OPACITY).abs() < 0.05,
+                "CalendarView primitive opacity {} must attenuate by WINUI_DISABLED_OPACITY",
+                p.opacity()
+            );
+        }
+    });
+}
