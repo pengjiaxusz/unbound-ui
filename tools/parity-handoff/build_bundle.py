@@ -15,6 +15,7 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -111,13 +112,15 @@ def build_source_map() -> dict[str, dict[str, Any]]:
     emit_line: dict[str, int] = {}
     start = parity.find("fn emit_case(")
     if start >= 0:
+        # start 是字符偏移；必须换算成行号，否则交接文档里的定位会指向几万行之外。
+        start_line = parity.count("\n", 0, start) + 1
         tail = parity[start:]
         next_fn = re.search(r"^fn |^pub fn ", tail[1:], re.M)
         body = tail[: next_fn.start() + 1] if next_fn else tail
         for offset, line in enumerate(body.splitlines(), start=1):
             match = re.match(r'\s*"([A-Za-z0-9]+)"\s*=>', line)
             if match:
-                emit_line.setdefault(match.group(1), start + offset - 1)
+                emit_line.setdefault(match.group(1), start_line + offset - 1)
 
     result: dict[str, dict[str, Any]] = {}
     for name, module in module_by_name.items():
@@ -563,7 +566,7 @@ def build(args: argparse.Namespace) -> int:
         f"caseCount={total}",
         "captureCommand=just parity-capture --no-cache --theme all",
         "diffCommand=just parity --no-cache",
-        "dotnetSdk=C:\\Users\\pengj\\.dotnet-sdk (8.0.428)",
+        f"dotnetRoot={os.environ.get('DOTNET_ROOT', '(unset)')}",
         "agentRules=just check / just test / just gate-check",
         f"missingImages={len(missing_images)}",
     ]

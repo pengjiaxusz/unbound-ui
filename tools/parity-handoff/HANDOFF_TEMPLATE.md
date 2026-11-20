@@ -135,8 +135,8 @@ parity_bundle/
 
 ### 6.3 环境注意事项
 
-- 参考图来自真机 WinUI 3，部分控件引用系统强调色（采集机为红色 `#C21C14`），差分层通过 `SYSTEM_ACCENT_CONTROLS` 还原；不要误把它当成 Fluent 默认蓝。
-- 本机 .NET 8 SDK 在 `C:\Users\pengj\.dotnet-sdk`，默认 PATH 可能只有运行时，需显式设置 `DOTNET_ROOT` 与 `PATH`。
+- 参考图来自真机 WinUI 3，采集宿主 `CaptureWindow.xaml` 已将系统强调色统一钉死为 Fluent 默认蓝（浅色 `#005FB8` / 深色 `#60CDFF`），共 128 处资源覆盖；当前源码中**不存在** `SYSTEM_ACCENT_CONTROLS` 还原机制，不要按旧文档的"红色强调色"假设改动差分层。
+- 本机 .NET 8 SDK 在 `D:\pengj\scoop\apps\dotnet8-sdk\8.0.428`（`DOTNET_ROOT` 指向 `...\dotnet8-sdk\current`）；默认 PATH 里的 `C:\Program Files\dotnet` 只有运行时，需显式把 SDK 目录前置到 PATH（见下方命令）。
 - 生成时缺失的图像文件数：{{MISSING_IMAGES}}（若为 0 则全部用例都有完整四联图）。
 
 ---
@@ -146,8 +146,8 @@ parity_bundle/
 在仓库根目录（PowerShell）：
 
 ```powershell
-$env:DOTNET_ROOT = "C:\Users\pengj\.dotnet-sdk"
-$env:PATH = "C:\Users\pengj\.dotnet-sdk;" + $env:PATH
+$env:DOTNET_ROOT = "D:\pengj\scoop\apps\dotnet8-sdk\current"
+$env:PATH = "D:\pengj\scoop\apps\dotnet8-sdk\8.0.428;" + $env:PATH
 
 # 1. 重新采集 WinUI 3 参考图（全量，跳过双端指纹缓存）
 just parity-capture --no-cache --theme all
