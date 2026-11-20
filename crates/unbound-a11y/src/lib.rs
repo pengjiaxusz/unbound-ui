@@ -20,7 +20,7 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
-use accesskit::{Action, Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
+use accesskit::{Action, Live, Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_math::Rect;
 
@@ -145,7 +145,9 @@ pub struct A11yNode {
     /// 屏幕空间包围盒，单位为物理像素。
     pub bounds: Rect,
     pub disabled: bool,
+    pub read_only: bool,
     pub selected: bool,
+    pub live: Option<Live>,
     /// 仅对可展开元素为 `Some`。
     pub expanded: Option<bool>,
     pub focusable: bool,
@@ -163,7 +165,9 @@ impl Default for A11yNode {
             value: String::new(),
             bounds: Rect::ZERO,
             disabled: false,
+            read_only: false,
             selected: false,
+            live: None,
             expanded: None,
             focusable: false,
             level: 0,
@@ -261,6 +265,20 @@ impl A11yNode {
         self
     }
 
+    /// 设置只读态（与禁用态区分：只读节点仍可聚焦、选中与复制）。
+    #[must_use]
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// 设置 AccessKit 实时区域播报级别（如 `Live::Polite`）。
+    #[must_use]
+    pub fn with_live(mut self, live: Live) -> Self {
+        self.live = Some(live);
+        self
+    }
+
     /// 转换为 AccessKit 表示形式，并填充 `children`。
     #[must_use]
     pub fn to_accesskit(&self, children: &[u64]) -> Node {
@@ -286,6 +304,12 @@ impl A11yNode {
         }
         if self.disabled {
             node.set_disabled();
+        }
+        if self.read_only {
+            node.set_read_only();
+        }
+        if let Some(live) = self.live {
+            node.set_live(live);
         }
         if self.selected {
             node.set_selected(true);

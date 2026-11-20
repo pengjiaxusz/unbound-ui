@@ -256,6 +256,7 @@ define_widget_catalog! {
         rich_edit_box,
         swipe_control,
         teaching_tip,
+        scale_osd,
     ],
     catalog: [
         ExpanderGroup => accordion,
@@ -429,6 +430,11 @@ use unbound_text::GlyphQuad;
 use unbound_world::{NodeId, UiWorld};
 
 pub use address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
+pub use scale_osd::{
+    emit_scale_osd, scale_osd_reset_node, scale_osd_zoom_in_node, scale_osd_zoom_out_node,
+    ScaleOsdAnchor, ScaleOsdDesc, ScaleOsdState, SCALE_OSD_DEFAULT_TIMEOUT_MS, SCALE_OSD_HEIGHT,
+    SCALE_OSD_MARGIN, SCALE_OSD_WIDTH,
+};
 pub use generic_data_table::{
     emit_generic_data_table, DataColumnSpec, GenericDataTableDesc, GenericDataTableState,
     SortDirection,

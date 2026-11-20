@@ -3662,6 +3662,18 @@ where
     out
 }
 
+
+/// 工作台扩展控件探针（覆盖未纳入 134 项 WinUI 3 目录但由 `build.rs` 门禁看守的桌面工作台原语）。
+#[must_use]
+pub fn probe_workbench_widgets(state: ControlState) -> Vec<WidgetOutput> {
+    let rect = RECT;
+    let glyphs = label();
+    let mut outputs = Vec::new();
+    let scale_desc = crate::scale_osd::ScaleOsdDesc::new(Rect::new(0.0, 0.0, 1280.0, 720.0), 1.0);
+    outputs.push(crate::scale_osd::emit_scale_osd(9001, &scale_desc, state, &glyphs));
+    outputs
+}
+
 #[cfg(test)]
 mod interactive_tests {
     use super::*;
