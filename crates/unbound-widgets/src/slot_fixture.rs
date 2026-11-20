@@ -41,14 +41,14 @@ pub const CANONICAL_PIPS_COUNT: usize = 5;
 /// 标准 PipsPager 默认选中页索引（第 2 页，0-based 为 1）。
 pub const CANONICAL_PIPS_SELECTED_INDEX: usize = 1;
 
-/// 标准 PipsPager 未选中圆点直径（6px）。
-pub const CANONICAL_PIP_SIZE_NORMAL: f32 = 6.0;
+/// 标准 PipsPager 未选中圆点直径（4px）。
+pub const CANONICAL_PIP_SIZE_NORMAL: f32 = 4.0;
 
-/// 标准 PipsPager 选中圆点直径（10px）。
-pub const CANONICAL_PIP_SIZE_SELECTED: f32 = 10.0;
+/// 标准 PipsPager 选中圆点直径（6px）。
+pub const CANONICAL_PIP_SIZE_SELECTED: f32 = 6.0;
 
-/// 标准 PipsPager 圆点中心间距（16px）。
-pub const CANONICAL_PIP_SPACING: f32 = 16.0;
+/// 标准 PipsPager 圆点中心间距（12px）。
+pub const CANONICAL_PIP_SPACING: f32 = 12.0;
 
 /// 标准 CommandBar 命令项（图标与文本标签，对齐 C# 宿主 Save / Open）。
 pub const CANONICAL_COMMAND_ITEMS: [(&str, &str); 2] = [("\u{E74E}", "Save"), ("\u{E8E5}", "Open")];
@@ -1257,7 +1257,9 @@ pub fn emit_canonical_pips_pager_fixture(
         pip_rects.push(pip_r);
 
         let fill = if state.disabled {
-            Token::CONTROL_DISABLED_THUMB
+            // WinUI 的 PipsPager 禁用圆点整体降到 `SliderTrackValueFillDisabled`
+            // （浅色 #A6A6A6），比 `ControlStrongFillColorDisabled` 更亮。
+            Token::SLIDER_TRACK_DISABLED
         } else if is_selected {
             Token::PRIMARY
         } else {
