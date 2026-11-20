@@ -409,6 +409,7 @@ public sealed partial class CaptureWindow : Window
                 ring.Foreground = new SolidColorBrush(accent);
             }
 
+
             var slotHost = new Border
             {
                 Width = slot.Width,

@@ -5,12 +5,12 @@
 
 **阻塞项：** 01：容器标准插桩通用辅助库与配方契约基础
 
-**状态：** ready-for-agent
+**状态：** closed
 
-- [ ] `BreadcrumbBar` 在差分器中实现独立分支，插桩文本 1:1 对齐 C# 宿主的 `Root > Folder > File.txt`，校准分隔符与字重
-- [ ] `SelectorBar` 对齐 `Day`、`Week`、`Month` 三段分段项与选中胶囊滑块指示器
-- [ ] `PipsPager` 对齐 5 页指示点与当前选中页标记
-- [ ] `CommandBar` 与 `MenuBar` 补齐独立分支，对齐图标槽位、文本标签与高度
-- [ ] `TitleBar` 消除局部边距与窗口标题文字基线偏差
-- [ ] `NavigationView` 与 `TabView` 补齐独立分支，对齐菜单折叠态与标签页排版
-- [ ] 该组 8 个控件在 ROI 四重门禁下全量回归通过
+- [x] `BreadcrumbBar` 在差分器中实现独立分支，插桩文本 1:1 对齐 C# 宿主的 `Root > Folder > File.txt`，校准分隔符与字重
+- [x] `SelectorBar` 对齐 `Day`、`Week`、`Month` 三段分段项与选中胶囊滑块指示器
+- [x] `PipsPager` 对齐 5 页指示点与当前选中页标记
+- [x] `CommandBar` 与 `MenuBar` 补齐独立分支，对齐图标槽位、文本标签与高度
+- [x] `TitleBar` 消除局部边距与窗口标题文字基线偏差
+- [x] `NavigationView` 与 `TabView` 补齐独立分支，对齐菜单折叠态与标签页排版
+- [x] 该组 8 个控件在 ROI 四重门禁下全量回归通过

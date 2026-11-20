@@ -11,6 +11,7 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Markup;
 using Windows.UI;
 
 namespace WinUiReference;
@@ -86,7 +87,7 @@ internal static class Catalog
         return state.ToLowerInvariant() switch
         {
             "normal" or "disabled" or "focused" => true,
-            "checked" => canonical is "CheckBox" or "ToggleSwitch" or "ToggleButton" or "RadioButton" or "AppBarToggleButton" or "ToggleSplitButton",
+            "checked" => canonical is "CheckBox" or "ToggleSwitch" or "ToggleButton" or "RadioButton" or "AppBarToggleButton" or "ToggleSplitButton" or "SwipeControl",
             _ => false,
         };
     }
@@ -670,34 +671,25 @@ internal static class Catalog
                 return true;
 
             case "Border":
-                element = new Border
-                {
-                    Width = 200,
-                    Height = 64,
-                    CornerRadius = new CornerRadius(8),
-                    BorderThickness = new Thickness(1),
-                    BorderBrush = new SolidColorBrush(Color.FromArgb(255, 224, 224, 224)),
-                    Background = new SolidColorBrush(Color.FromArgb(255, 255, 255, 255)),
-                    Child = new TextBlock { Text = "Border" },
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center,
-                };
+                element = (FrameworkElement)XamlReader.Load(
+                    @"<Border xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
+                             Width=""200"" Height=""64"" CornerRadius=""8"" BorderThickness=""1""
+                             Background=""{ThemeResource CardBackgroundFillColorDefaultBrush}""
+                             BorderBrush=""{ThemeResource CardStrokeColorDefaultBrush}""
+                             Padding=""12"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"">
+                         <TextBlock Text=""Border"" HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
+                     </Border>");
                 return true;
 
             case "Card":
-                element = new Border
-                {
-                    Width = 240,
-                    Height = 88,
-                    CornerRadius = new CornerRadius(8),
-                    BorderThickness = new Thickness(1),
-                    BorderBrush = new SolidColorBrush(Color.FromArgb(255, 224, 224, 224)),
-                    Background = new SolidColorBrush(Color.FromArgb(255, 255, 255, 255)),
-                    Padding = new Thickness(12),
-                    Child = new TextBlock { Text = "Card" },
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center,
-                };
+                element = (FrameworkElement)XamlReader.Load(
+                    @"<Border xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
+                             Width=""240"" Height=""88"" CornerRadius=""8"" BorderThickness=""1""
+                             Background=""{ThemeResource CardBackgroundFillColorDefaultBrush}""
+                             BorderBrush=""{ThemeResource CardStrokeColorDefaultBrush}""
+                             Padding=""12"" HorizontalAlignment=""Center"" VerticalAlignment=""Center"">
+                         <TextBlock Text=""Card"" HorizontalAlignment=""Center"" VerticalAlignment=""Center""/>
+                     </Border>");
                 return true;
 
             case "StackPanel":
@@ -709,8 +701,9 @@ internal static class Catalog
                         HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center,
                     };
-                    stack.Children.Add(new TextBlock { Text = "StackPanel" });
-                    stack.Children.Add(new TextBlock { Text = "Second row" });
+                    stack.Children.Add(new TextBlock { Text = "Row 1" });
+                    stack.Children.Add(new TextBlock { Text = "Row 2" });
+                    stack.Children.Add(new TextBlock { Text = "Row 3" });
                     element = stack;
                     return true;
                 }
@@ -742,9 +735,10 @@ internal static class Catalog
                         HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center,
                     };
-                    var root = new TreeViewNode { Content = "Root" };
+                    var root = new TreeViewNode { Content = "Root", IsExpanded = true };
                     root.Children.Add(new TreeViewNode { Content = "Child" });
                     tree.RootNodes.Add(root);
+                    tree.SelectedNodes.Add(root);
                     element = tree;
                     return true;
                 }
@@ -961,11 +955,12 @@ internal static class Catalog
                     var swipe = new SwipeControl
                     {
                         Width = 260,
-                        Content = new Border
-                        {
-                            Background = new SolidColorBrush(Color.FromArgb(255, 255, 255, 255)),
-                            Child = new TextBlock { Text = "Swipe me" },
-                        },
+                        Content = (FrameworkElement)XamlReader.Load(
+                            @"<Border xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
+                                     Background=""{ThemeResource CardBackgroundFillColorDefaultBrush}""
+                                     Padding=""12"">
+                                 <TextBlock Text=""Swipe me""/>
+                             </Border>"),
                         HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center,
                     };
@@ -1164,6 +1159,12 @@ internal static class Catalog
                 if (element is ToggleSplitButton toggleSplit)
                 {
                     toggleSplit.IsChecked = true;
+                    return true;
+                }
+
+                if (element is SwipeControl swipe)
+                {
+                    swipe.Open(OpenSwipeItemModes.LeftItems);
                     return true;
                 }
 

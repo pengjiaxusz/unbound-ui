@@ -107,7 +107,7 @@ fn test_switch_bound_automatic_sync() {
     runtime.invalidate();
     let _ = runtime.frame(0.016);
 
-    assert_eq!(runtime.state().enabled, false);
+    assert!(!runtime.state().enabled);
 
     // 模拟点击开关
     let dirty = runtime.dispatch(AppEvent::PointerDown {
@@ -118,7 +118,7 @@ fn test_switch_bound_automatic_sync() {
     });
 
     assert!(dirty.contains(DirtyFlags::ALL));
-    assert_eq!(runtime.state().enabled, true);
+    assert!(runtime.state().enabled);
 }
 
 #[test]

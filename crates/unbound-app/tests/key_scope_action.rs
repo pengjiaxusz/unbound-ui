@@ -12,20 +12,11 @@ enum CounterAction {
     Reset,
 }
 
+#[derive(Default)]
 struct TestApp {
     count: u32,
     active_tab: usize,
     last_action: Option<CounterAction>,
-}
-
-impl Default for TestApp {
-    fn default() -> Self {
-        Self {
-            count: 0,
-            active_tab: 0,
-            last_action: None,
-        }
-    }
 }
 
 impl Application for TestApp {

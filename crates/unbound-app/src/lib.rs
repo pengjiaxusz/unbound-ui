@@ -967,7 +967,7 @@ impl AppContext {
         self.widget_state
             .borrow()
             .get::<unbound_widgets::SelectState>(key)
-            .map_or(false, |st| st.open)
+            .is_some_and(|st| st.open)
     }
 
     /// 设置指定 `SelectDesc` 控件键的展开态。
@@ -3156,7 +3156,7 @@ impl<'a> ViewBuilder<'a> {
                 .widget_state
                 .borrow()
                 .get::<unbound_widgets::SelectState>(select_key)
-                .map_or(false, |st| st.open);
+                .is_some_and(|st| st.open);
             if !is_open {
                 continue;
             }
@@ -3199,7 +3199,7 @@ impl<'a> ViewBuilder<'a> {
             popup_desc.shadow_blur = 24.0;
 
             let mut option_keys = Vec::with_capacity(desc.options.len());
-            let old_scope = self.key_scope.clone();
+            let old_scope = self.key_scope;
             self.key_scope = KeyScope::root();
             self.container(popup_key, popup_desc, |popup| {
                 for (idx, label) in desc.options.iter().enumerate() {

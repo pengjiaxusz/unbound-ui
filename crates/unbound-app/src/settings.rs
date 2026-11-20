@@ -22,7 +22,7 @@ pub fn select_option_key(select_key: u64, index: usize) -> u64 {
 /// 派生指定下拉选择框的弹出浮层容器键。
 #[must_use]
 pub fn select_popup_key(select_key: u64) -> u64 {
-    mix_key(select_key, 0x5e1000_f100)
+    mix_key(select_key, 0x005e_1000_f100)
 }
 
 /// 包含自动分割线与行排版管理的 Win11 规范设置卡片构建器。

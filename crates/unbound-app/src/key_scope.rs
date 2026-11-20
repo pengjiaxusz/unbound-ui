@@ -130,11 +130,6 @@ impl KeyScope {
     /// 在 `0..count` 连续索引中查找匹配 `node` 的索引项。
     #[must_use]
     pub fn find_index(&self, node: u64, count: usize) -> Option<usize> {
-        for idx in 0..count {
-            if self.key(idx) == node {
-                return Some(idx);
-            }
-        }
-        None
+        (0..count).find(|&idx| self.key(idx) == node)
     }
 }
