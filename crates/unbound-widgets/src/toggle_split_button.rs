@@ -268,7 +268,7 @@ pub fn emit_toggle_split_button(
     let divider = if disabled {
         Token::CONTROL_DISABLED_BORDER
     } else if checked {
-        Token::PRIMARY_PRESSED
+        Token::new(342)
     } else {
         Token::CONTROL_STROKE
     };
@@ -338,10 +338,10 @@ pub fn emit_toggle_split_button(
         primitives.push(surface(Rect::ZERO, 0.0, Token::NONE, z + 3));
     }
 
-    let acx = arrow_rect.center().x - 0.5;
-    let acy = arrow_rect.center().y;
+    let acx = arrow_rect.center().x;
+    let acy = arrow_rect.center().y + 0.5;
     curve_stroke(
-        [acx - 3.5, acy - 2.0],
+        [acx - 3.0, acy - 1.5],
         [acx, acy + 1.5],
         0.75,
         arrow_ink,
@@ -351,7 +351,7 @@ pub fn emit_toggle_split_button(
     );
     curve_stroke(
         [acx, acy + 1.5],
-        [acx + 3.5, acy - 2.0],
+        [acx + 3.0, acy - 1.5],
         0.75,
         arrow_ink,
         z + 4,
