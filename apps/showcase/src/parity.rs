@@ -916,6 +916,7 @@ const SYSTEM_ACCENT_RED: [u8; 3] = [194, 28, 20];
 /// 使用系统强调色（红）而非 Fluent 蓝的控件清单。
 const SYSTEM_ACCENT_CONTROLS: &[&str] = &[
     "Pivot",
+    "SelectorBar",
     "ToggleSplitButton",
     "AppBarToggleButton",
     "ListView",
@@ -2260,27 +2261,16 @@ fn emit_case(
             let bar_h = if rect.height() > 0.0 {
                 rect.height()
             } else {
-                40.0
+                47.0
             };
-            let mut out = WidgetOutput::default();
-            let frame_fill = if control.disabled {
-                Token::NONE
-            } else {
-                Token::CONTROL_FILL
-            };
-            out.primitives
-                .push(primitive::surface(rect, 4.0, frame_fill, 700));
-
             let fixture_state = FixtureState::from_control_state(control, checked);
-            let fixture_out = unbound_widgets::slot_fixture::emit_canonical_segmented_fixture(
+            let fixture_out = unbound_widgets::slot_fixture::emit_canonical_selector_bar_fixture(
                 rect,
                 fixture_state,
                 text_ctx,
-                702,
+                700,
             );
-            out.primitives.extend(fixture_out.primitives);
-            out.payloads.extend(fixture_out.payloads);
-            push(scene, out);
+            push(scene, fixture_out);
 
             Vec2::new(bar_w, bar_h)
         }

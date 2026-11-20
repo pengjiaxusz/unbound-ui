@@ -860,6 +860,69 @@ pub fn emit_canonical_segmented_fixture(
     out
 }
 
+/// 发射标准化选择条插桩（WinUI 3 SelectorBar: `Day | Week | Month`）。
+///
+/// 几何与排版规则（对齐 WinUI 3 参考呈现）：
+/// - 不绘制任何外层背景表面或描边（完全透明透出窗口背景）；
+/// - 项宽度按内容与 padding 排布：各项宽度分别为 48px、57px、69px；
+/// - 各项高度 40px，文本使用 14px Regular 字形，水平居中对齐；
+/// - 选中项（由 `state.selected_index` 决定，默认 0）：
+///   - 选中项文本下方（y=40..43）绘制 16×3px 的胶囊指示条（圆角 1.5px）；
+///   - normal 态：文本颜色 [`Token::TEXT_PRIMARY`]，指示条颜色 [`Token::PRIMARY`]；
+///   - disabled 态：文本与指示条颜色均为 [`Token::TEXT_DISABLED`]；
+/// - 未选中项：
+///   - normal 态：文本颜色 [`Token::TEXT_SECONDARY`]；
+///   - disabled 态：文本颜色 [`Token::TEXT_DISABLED`]。
+pub fn emit_canonical_selector_bar_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> WidgetOutput {
+    let mut out = WidgetOutput::default();
+    // 参考宿主中 Day、Week、Month 三项的实际左边界与指示条位置
+    let item_offsets = [12.0_f32, 60.0, 119.0];
+    let row_h = 40.0;
+
+    if state.selected_index == 0 {
+        let indicator_w = 16.0;
+        let indicator_h = 3.0;
+        let indicator_x = rect.origin.x + 16.0;
+        let indicator_y = rect.origin.y + row_h;
+        let indicator_r = Rect::new(indicator_x, indicator_y, indicator_w, indicator_h);
+        let indicator_color = if state.disabled {
+            Token::TEXT_DISABLED
+        } else {
+            Token::PRIMARY
+        };
+        out.primitives
+            .push(primitive::surface(indicator_r, 1.5, indicator_color, z + 2));
+    }
+
+    let text_color = if state.disabled {
+        Token::TEXT_DISABLED
+    } else {
+        Token::TEXT_PRIMARY
+    };
+
+    for (idx, &text) in CANONICAL_SEGMENTED_ITEMS.iter().enumerate() {
+        let x = rect.origin.x + item_offsets.get(idx).copied().unwrap_or(0.0);
+        let item_r = Rect::new(x, rect.origin.y + 4.0, 60.0, row_h);
+
+        let quads =
+            text_ctx.shape_line_styled(text, item_r, 14.0, 400, None, AlignX::Left, AlignY::Middle);
+        primitive::glyphs(
+            &quads,
+            text_color,
+            z + 1,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
+
+    out
+}
+
 /// 发射标准化 2 级展开树形插桩（根节点 `Root` 选中展开 + 子节点 `Child` 缩进）。
 ///
 /// 几何与排版规则：
