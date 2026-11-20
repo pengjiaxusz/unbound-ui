@@ -453,7 +453,7 @@ impl ParitySession {
                 .map_err(|error| error.to_string())?;
         }
 
-        let lut = backdrop_lut(dark, case.backdrop);
+        let lut = parity_lut(dark, case.backdrop, case.control);
         self.renderer
             .write_theme_lut(&lut)
             .map_err(|error| error.to_string())?;
@@ -862,6 +862,11 @@ fn srgb8(color: Color) -> [u8; 3] {
 /// 生成包含指定后景合成底板颜色的 `ThemeLut`（与 `Catalog.cs::CreateBackdropBrush` 严格对齐）。
 #[must_use]
 pub fn backdrop_lut(dark: bool, backdrop: &str) -> ThemeLut {
+    build_lut(dark, backdrop, &[])
+}
+
+/// 构建主题 LUT，并按顺序覆盖或追加额外颜色条目。
+fn build_lut(dark: bool, backdrop: &str, overrides: &[(Token, Color)]) -> ThemeLut {
     let [r, g, b] = backdrop_surface_srgb(dark, backdrop);
     let base_palette = theme::palette(dark);
     let mut entries: Vec<(Token, Color)> = unbound_theme::TOKENS
@@ -875,6 +880,13 @@ pub fn backdrop_lut(dark: bool, backdrop: &str) -> ThemeLut {
     }
     // 差分专用色槽：WinUI 模板里少量过渡色（选中态上下边缘、ToolTip 表面）
     // 没有对应的语义令牌。这里用未占用的原始槽位承载，阈值与主题保持一致。
+    for (token, color) in overrides {
+        if let Some(entry) = entries.iter_mut().find(|(existing, _)| existing == token) {
+            entry.1 = *color;
+        } else {
+            entries.push((*token, *color));
+        }
+    }
     for (token, light, dark_color) in PARITY_COLORS {
         entries.push((
             Token::new(token),
@@ -892,6 +904,49 @@ pub fn backdrop_lut(dark: bool, backdrop: &str) -> ThemeLut {
         ThemeKind::Light
     };
     ThemeLut::from_palette(&Palette::new(kind, &entries))
+}
+
+/// 参考机的系统强调色（Windows 默认红）。
+///
+/// 采集宿主只把 `AccentFillColorDefaultBrush` 与少数控件资源钉成蓝色；Pivot、
+/// 列表选择条、AppBarToggleButton 等控件仍直接引用 `SystemAccentColor`，在参考机
+/// 上呈现为 `#C21C14`。差分需要按控件还原这层差异。
+const SYSTEM_ACCENT_RED: [u8; 3] = [194, 28, 20];
+
+/// 使用系统强调色（红）而非 Fluent 蓝的控件清单。
+const SYSTEM_ACCENT_CONTROLS: &[&str] = &[
+    "Pivot",
+    "ToggleSplitButton",
+    "AppBarToggleButton",
+    "ListView",
+    "ListBox",
+    "TreeView",
+    "GridView",
+    "CalendarView",
+    "DatePicker",
+    "TimePicker",
+    "CalendarDatePicker",
+];
+
+/// 为单个用例生成主题 LUT：在后景底板基础上按控件还原系统强调色。
+#[must_use]
+pub fn parity_lut(dark: bool, backdrop: &str, control: &str) -> ThemeLut {
+    if !SYSTEM_ACCENT_CONTROLS.contains(&control) {
+        return backdrop_lut(dark, backdrop);
+    }
+    let [r, g, b] = SYSTEM_ACCENT_RED;
+    let accent = Color::from_srgb8(r, g, b, 255);
+    // 参考截图中悬停与按下态同样是实色强调，差分层不做透明度推导。
+    build_lut(
+        dark,
+        backdrop,
+        &[
+            (Token::PRIMARY, accent),
+            (Token::PRIMARY_HOVER, accent),
+            (Token::PRIMARY_PRESSED, accent),
+            (Token::PRIMARY_SOFT, accent),
+        ],
+    )
 }
 
 /// 确定性合成底板的 sRGB 背景基准色（与 `tools/winui-reference/Catalog.cs` 一一对应）。
@@ -2035,8 +2090,6 @@ fn emit_case(
                 120.0
             };
             let mut out = WidgetOutput::default();
-            out.primitives
-                .push(primitive::surface(rect, 4.0, Token::CONTROL_FILL, 700));
 
             let fixture_state = FixtureState::from_control_state(control, checked);
             let fixture = unbound_widgets::slot_fixture::emit_canonical_list_rows_fixture(
@@ -2067,8 +2120,6 @@ fn emit_case(
                 140.0
             };
             let mut out = WidgetOutput::default();
-            out.primitives
-                .push(primitive::surface(rect, 4.0, Token::CONTROL_FILL, 700));
 
             let fixture_state = FixtureState::from_control_state(
                 control,
