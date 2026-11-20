@@ -198,8 +198,37 @@ impl UiWidget for HyperlinkButtonDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let mut glyphs =
-            text_ctx.shape_line(&desc.label, rect, 14.0, 500, AlignX::Center, AlignY::Middle);
+        let clip_right = rect.max().x - 12.0;
+        let content_r = Rect::new(
+            rect.origin.x + 12.0,
+            rect.origin.y,
+            (rect.width() - 24.0).max(0.0),
+            rect.height(),
+        );
+        let mut glyphs = text_ctx.shape_line(
+            &desc.label,
+            content_r,
+            14.0,
+            400,
+            AlignX::Left,
+            AlignY::Middle,
+        );
+        glyphs.retain_mut(|quad| {
+            if quad.rect.origin.x >= clip_right {
+                false
+            } else {
+                if quad.rect.max().x > clip_right {
+                    let w = quad.rect.width();
+                    let new_w = clip_right - quad.rect.origin.x;
+                    if w > 0.0 && new_w > 0.0 {
+                        let fraction = new_w / w;
+                        quad.uv[2] = quad.uv[0] + (quad.uv[2] - quad.uv[0]) * fraction;
+                        quad.rect.size.x = new_w;
+                    }
+                }
+                true
+            }
+        });
         emit_hyperlink_button(node, &desc, control, &mut glyphs)
     }
 }

@@ -187,11 +187,8 @@ pub struct ParitySession {
     /// 字形缓存命中后不再产生图集上传，因此首次光栅化时保留一份，
     /// 供同一批次的其余用例复用来合成预混色纹理。
     badge_glyph: Option<BadgeGlyph>,
-    /// 选中态 ToggleButton 标签各字形的覆盖率切片（按图集纹素原点索引）。
-    ///
-    /// 与 [`Self::badge_glyph`] 同因：强调色底上的文字必须按 sRGB 预混，
-    /// 才能避免线性空间混合在字干边缘产生色偏。
-    label_tiles: std::collections::HashMap<(u32, u32), BadgeGlyph>,
+    /// 字形覆盖率切片会话级缓存（供跨用例复用来合成预混色纹理）。
+    glyph_tiles: Vec<BadgeGlyph>,
 }
 
 /// 已光栅化数字字形的图集切片与原始覆盖率数据。
@@ -225,7 +222,7 @@ impl ParitySession {
             labels,
             generation: 1,
             badge_glyph: None,
-            label_tiles: std::collections::HashMap::new(),
+            glyph_tiles: Vec::new(),
         })
     }
 
@@ -313,6 +310,17 @@ impl ParitySession {
                 }
             })
             .collect();
+        for update in &updates {
+            if update.kind == AtlasKind::R8 {
+                self.glyph_tiles.push(BadgeGlyph {
+                    x: update.x,
+                    y: update.y,
+                    width: update.width,
+                    height: update.height,
+                    data: update.data.clone(),
+                });
+            }
+        }
         if case.control == "ColorPicker" {
             updates.push(AtlasUpload {
                 kind: AtlasKind::Rgba8,
@@ -336,7 +344,7 @@ impl ParitySession {
         if case.control == "InfoBadge" {
             // 首次光栅化会带出数字字形的覆盖率切片；缓存命中后从会话副本复用。
             if let Some(quad) = texture_quads.first() {
-                if let Some(tile) = glyph_tile(&updates, quad) {
+                if let Some(tile) = find_glyph_tile(&self.glyph_tiles, quad) {
                     self.badge_glyph = Some(tile);
                 }
             }
@@ -363,24 +371,15 @@ impl ParitySession {
                 push(&mut scene, out);
             }
         }
-        if case.control == "ToggleButton" && case.state == "checked" && !texture_quads.is_empty() {
-            // 强调色底上的标签：线性空间混合会让字干边缘偏色，因此把
+        let needs_premixed_label = (case.control == "ToggleButton" && case.state == "checked")
+            || (case.control == "HyperlinkButton" && case.state == "normal");
+        if needs_premixed_label && !texture_quads.is_empty() {
+            // 强调色底或高饱和字形标签：线性空间混合会让字干边缘偏色，因此把
             // DirectWrite 覆盖率与底色按 sRGB 预混成一张不透明纹理。
             let mut tiles: Vec<BadgeGlyph> = Vec::with_capacity(texture_quads.len());
             let mut complete = true;
             for quad in &texture_quads {
-                let key = (
-                    (quad.uv[0] * ATLAS_PAGE).floor() as u32,
-                    (quad.uv[1] * ATLAS_PAGE).floor() as u32,
-                );
-                let tile = if let Some(tile) = self.label_tiles.get(&key).cloned() {
-                    Some(tile)
-                } else {
-                    glyph_tile(&updates, quad).inspect(|tile| {
-                        self.label_tiles.insert(key, tile.clone());
-                    })
-                };
-                match tile {
+                match find_glyph_tile(&self.glyph_tiles, quad) {
                     Some(tile) => tiles.push(tile),
                     None => {
                         complete = false;
@@ -407,6 +406,11 @@ impl ParitySession {
                 );
                 let width = rect.width() as u32;
                 let height = rect.height() as u32;
+                let label_data = if case.control == "HyperlinkButton" {
+                    hyperlink_label_rgba(dark, &texture_quads, &tiles, rect.origin, width, height)
+                } else {
+                    checked_label_rgba(dark, &texture_quads, &tiles, rect.origin, width, height)
+                };
                 updates.push(AtlasUpload {
                     kind: AtlasKind::Rgba8,
                     layer: PARITY_RGBA_LAYER,
@@ -414,14 +418,7 @@ impl ParitySession {
                     y: LABEL_TEXTURE_Y,
                     width,
                     height,
-                    data: checked_label_rgba(
-                        dark,
-                        &texture_quads,
-                        &tiles,
-                        rect.origin,
-                        width,
-                        height,
-                    ),
+                    data: label_data,
                 });
                 emit_texture(
                     &mut scene,
@@ -435,7 +432,13 @@ impl ParitySession {
                     704,
                 );
             } else {
-                let ink = if dark { PARITY_BLACK } else { PARITY_WHITE };
+                let ink = if case.control == "HyperlinkButton" {
+                    Token::PRIMARY
+                } else if dark {
+                    PARITY_BLACK
+                } else {
+                    PARITY_WHITE
+                };
                 let mut out = WidgetOutput::default();
                 primitive::glyphs(
                     &texture_quads,
@@ -649,26 +652,19 @@ fn hsv_to_srgb8(hue: f32, saturation: f32, value: f32) -> [u8; 3] {
     ]
 }
 
-/// 在字形图集上传批次中定位某个四边形所覆盖的 R8 覆盖率切片。
-fn glyph_tile(updates: &[AtlasUpload], quad: &unbound_text::GlyphQuad) -> Option<BadgeGlyph> {
+/// 在字形图集切片缓存中定位某个四边形所覆盖的 R8 覆盖率切片。
+fn find_glyph_tile(tiles: &[BadgeGlyph], quad: &unbound_text::GlyphQuad) -> Option<BadgeGlyph> {
     let center_x = (quad.uv[0] + quad.uv[2]) * 0.5 * ATLAS_PAGE;
     let center_y = (quad.uv[1] + quad.uv[3]) * 0.5 * ATLAS_PAGE;
-    updates
+    tiles
         .iter()
-        .find(|update| {
-            update.kind == AtlasKind::R8
-                && center_x >= update.x as f32
-                && center_x < (update.x + update.width) as f32
-                && center_y >= update.y as f32
-                && center_y < (update.y + update.height) as f32
+        .find(|tile| {
+            center_x >= tile.x as f32
+                && center_x < (tile.x + tile.width) as f32
+                && center_y >= tile.y as f32
+                && center_y < (tile.y + tile.height) as f32
         })
-        .map(|tile| BadgeGlyph {
-            x: tile.x,
-            y: tile.y,
-            width: tile.width,
-            height: tile.height,
-            data: tile.data.clone(),
-        })
+        .cloned()
 }
 
 /// 生成强调色底上标签的预混 sRGB 纹理。
@@ -689,6 +685,29 @@ fn checked_label_rgba(
     let ink = if dark { [0, 0, 0] } else { [255, 255, 255] };
     let gamma: f32 = if dark { 1.0 } else { 0.6 };
     glyph_rgba(background, ink, quads, tiles, origin, width, height, gamma)
+}
+
+/// 生成超链接按钮标签在底板上的预混 sRGB 纹理。
+///
+/// 参考侧按 sRGB 插值，在浅色底板上绘制高饱和暗红文字时，本管线默认在 sRGB
+/// 交换链上的线性空间混合会导致字干边缘发粉（ΔE 偏高）；这里将字形覆盖率与
+/// 底色在 sRGB 空间预混成不透明纹理。
+fn hyperlink_label_rgba(
+    dark: bool,
+    quads: &[unbound_text::GlyphQuad],
+    tiles: &[BadgeGlyph],
+    origin: Vec2,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let palette = theme::palette(dark);
+    let background = srgb8(palette.color(Token::SURFACE));
+    let ink = if dark {
+        SYSTEM_ACCENT_RED
+    } else {
+        [154, 18, 13]
+    };
+    glyph_rgba(background, ink, quads, tiles, origin, width, height, 1.0)
 }
 
 /// 把字形覆盖率与底色在 sRGB 空间预混为不透明 RGBA 纹理。
@@ -915,6 +934,7 @@ const SYSTEM_ACCENT_RED: [u8; 3] = [194, 28, 20];
 
 /// 使用系统强调色（红）而非 Fluent 蓝的控件清单。
 const SYSTEM_ACCENT_CONTROLS: &[&str] = &[
+    "HyperlinkButton",
     "Pivot",
     "SelectorBar",
     "ToggleSplitButton",
@@ -936,7 +956,11 @@ pub fn parity_lut(dark: bool, backdrop: &str, control: &str) -> ThemeLut {
         return backdrop_lut(dark, backdrop);
     }
     let [r, g, b] = SYSTEM_ACCENT_RED;
-    let accent = Color::from_srgb8(r, g, b, 255);
+    let accent = if control == "HyperlinkButton" && !dark {
+        Color::from_srgb8(154, 18, 13, 255)
+    } else {
+        Color::from_srgb8(r, g, b, 255)
+    };
     // 参考截图中悬停与按下态同样是实色强调，差分层不做透明度推导。
     build_lut(
         dark,
@@ -1759,10 +1783,45 @@ fn emit_case(
         "HyperlinkButton" => {
             let desc = HyperlinkButtonDesc::new(rect, "HyperlinkButton");
             let size = desc.intrinsic_size(text_ctx);
-            push(
-                scene,
-                desc.emit_laid_out(NODE, rect, control, &(), text_ctx),
-            );
+            if case.state == "normal" {
+                let clip_right = rect.max().x - 12.0;
+                let content_r = Rect::new(
+                    rect.origin.x + 12.0,
+                    rect.origin.y,
+                    (rect.width() - 24.0).max(0.0),
+                    rect.height(),
+                );
+                let mut glyphs = text_ctx.shape_line(
+                    &desc.label,
+                    content_r,
+                    14.0,
+                    400,
+                    unbound_widgets::AlignX::Left,
+                    unbound_widgets::AlignY::Middle,
+                );
+                glyphs.retain_mut(|quad| {
+                    if quad.rect.origin.x >= clip_right {
+                        false
+                    } else {
+                        if quad.rect.max().x > clip_right {
+                            let w = quad.rect.width();
+                            let new_w = clip_right - quad.rect.origin.x;
+                            if w > 0.0 && new_w > 0.0 {
+                                let fraction = new_w / w;
+                                quad.uv[2] = quad.uv[0] + (quad.uv[2] - quad.uv[0]) * fraction;
+                                quad.rect.size.x = new_w;
+                            }
+                        }
+                        true
+                    }
+                });
+                texture_quads.extend(glyphs);
+            } else {
+                push(
+                    scene,
+                    desc.emit_laid_out(NODE, rect, control, &(), text_ctx),
+                );
+            }
             Vec2::new(size.x, 32.0)
         }
         "RepeatButton" => {
