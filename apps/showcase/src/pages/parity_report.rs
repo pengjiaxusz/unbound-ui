@@ -15,6 +15,7 @@ use unbound_widgets::{ControlState, WidgetCatalogId};
 
 use super::{DemoCtx, DemoKind, ExampleDef, PageInfo};
 use crate::canvas::{AlignX, AlignY};
+use crate::widgets::{self, ButtonVariant};
 
 pub const PARITY_INFO: PageInfo = PageInfo {
     title: "WinUI 3 pixel parity",
@@ -39,6 +40,8 @@ pub const PARITY_EXAMPLES: &[ExampleDef] = &[ExampleDef::new(
 const REPORT_DIR: &str = "target/parity";
 /// 旧版参考截图的回退目录（报告尚未打包参考图时使用）。
 const REFERENCE_FALLBACK: &str = "tools/winui-reference/captures";
+/// 刷新按钮的部件 ID；截图缩略图占用 `100..` 段，这里避开它们。
+pub const REFRESH_PART: u16 = 9_000;
 
 /// 缩略图最大宽度；更窄的窗口按比例缩小。
 const THUMB_MAX_WIDTH: f32 = 320.0;
@@ -124,6 +127,8 @@ pub struct ParityCase {
     pub status: ParityStatus,
     /// 参考 / 本框架 / 热力图三张纹理。
     pub images: [Option<AssetId>; 3],
+    /// 三张 PNG 的内容指纹；刷新时逐张比对，未变的直接复用旧纹理，避免图集持续膨胀。
+    pub image_keys: [u64; 3],
 }
 
 /// 已载入的对照报告。
@@ -144,8 +149,11 @@ pub struct ParityReport {
 
 impl ParityReport {
     /// 读取 `report.json` 并提交全部截图进行异步解码。
+    ///
+    /// `previous` 是刷新前的旧报告：同名图片若内容指纹未变，直接沿用旧 `AssetId`。
+    /// 图集只分配、不回收，若每次刷新都重新请求整册截图，显存会按报告体量持续增长。
     #[must_use]
-    pub fn load(hub: &mut AssetHub) -> Self {
+    pub fn load(hub: &mut AssetHub, previous: Option<&Self>) -> Self {
         let hint = next_step_hint();
         let root = Path::new(REPORT_DIR);
         let json = match std::fs::read_to_string(root.join("report.json")) {
@@ -166,18 +174,40 @@ impl ParityReport {
         let reference = reference_dir(root);
         let ours = root.join("ours");
         let heat = root.join("heat");
+        // 刷新前那一册的纹理指纹与句柄：按用例名索引，逐张判断能否复用。
+        let previous_images: std::collections::HashMap<&str, ([u64; 3], [Option<AssetId>; 3])> =
+            previous
+                .map(|report| {
+                    report
+                        .cases
+                        .iter()
+                        .map(|case| (case.name.as_str(), (case.image_keys, case.images)))
+                        .collect()
+                })
+                .unwrap_or_default();
         let mut cases = parse_cases(&json);
         for case in &mut cases {
-            case.images = std::array::from_fn(|which| {
+            for which in 0..3 {
                 let dir: &Path = match which {
                     0 => &reference,
                     1 => &ours,
                     _ => &heat,
                 };
-                std::fs::read(dir.join(format!("{}.png", case.name)))
-                    .ok()
-                    .map(|bytes| hub.request_png(bytes))
-            });
+                let Ok(bytes) = std::fs::read(dir.join(format!("{}.png", case.name))) else {
+                    continue;
+                };
+                let key = content_key(&bytes);
+                case.image_keys[which] = key;
+                let reused = previous_images
+                    .get(case.name.as_str())
+                    .filter(|entry| entry.0[which] == key)
+                    .map(|entry| entry.1[which]);
+                if let Some(image) = reused {
+                    case.images[which] = image;
+                    continue;
+                }
+                case.images[which] = Some(hub.request_png(bytes));
+            }
         }
         let passed = cases
             .iter()
@@ -239,6 +269,18 @@ fn next_step_hint() -> String {
     }
 }
 
+/// 单张 PNG 的内容指纹（FNV-1a 64 位）。
+///
+/// 只用来判断刷新前后是否同一张图；这里不追求抗碰撞，改用重量级哈希得不偿失。
+fn content_key(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 /// 逐行解析报告中的用例（图像纹理由 [`ParityReport::load`] 另行提交解码）。
 fn parse_cases(json: &str) -> Vec<ParityCase> {
     let mut cases = Vec::new();
@@ -276,6 +318,7 @@ fn parse_cases(json: &str) -> Vec<ParityCase> {
             bbox_delta,
             status,
             images: std::array::from_fn(|_| None),
+            image_keys: [0; 3],
         });
     }
     cases
@@ -303,6 +346,8 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
                 "Loading the parity report…"
             },
             "",
+            zh,
+            false,
         );
         return;
     };
@@ -326,6 +371,8 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
                 "Parity report unavailable"
             },
             &body,
+            zh,
+            true,
         );
         return;
     };
@@ -353,7 +400,7 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
         Rect::new(
             summary.origin.x + 16.0,
             summary.origin.y + 8.0,
-            summary.size.x - 300.0,
+            (summary.size.x - 360.0).max(160.0),
             26.0,
         ),
         15.0,
@@ -385,7 +432,7 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
         Rect::new(
             summary.origin.x + 16.0,
             summary.origin.y + 36.0,
-            summary.size.x - 300.0,
+            (summary.size.x - 360.0).max(160.0),
             18.0,
         ),
         10.0,
@@ -393,7 +440,7 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
         AlignX::Start,
         AlignY::Top,
     );
-    let bar = Rect::new(summary.max().x - 236.0, summary.origin.y + 26.0, 220.0, 8.0);
+    let bar = Rect::new(summary.max().x - 344.0, summary.origin.y + 40.0, 220.0, 8.0);
     ctx.canvas
         .rect(bar, 4.0, palette.control_track, 0, 0.0, 0.0);
     let ratio = report.passed as f32 / report.cases.len().max(1) as f32;
@@ -412,6 +459,12 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
         palette.text_muted,
         AlignX::End,
         AlignY::Top,
+    );
+    refresh_button(
+        ctx,
+        Rect::new(summary.max().x - 112.0, summary.origin.y + 18.0, 96.0, 28.0),
+        zh,
+        false,
     );
 
     let scale = thumb_scale(rect.size.x);
@@ -584,10 +637,23 @@ fn draw_case(
     }
 }
 
-fn empty_state(ctx: &mut DemoCtx<'_, '_>, title: &str, body: &str) {
+/// 刷新按钮：重新读取 `report.json` 与三组截图，供跑完差分后就地更新。
+fn refresh_button(ctx: &mut DemoCtx<'_, '_>, rect: Rect, zh: bool, primary: bool) {
+    let node = ctx.part(REFRESH_PART);
+    let label = if zh { "刷新" } else { "Refresh" };
+    let variant = if primary {
+        ButtonVariant::Primary
+    } else {
+        ButtonVariant::Secondary
+    };
+    let _ = widgets::button(ctx.canvas, node, rect, label, variant, true);
+}
+
+fn empty_state(ctx: &mut DemoCtx<'_, '_>, title: &str, body: &str, zh: bool, show_refresh: bool) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
-    let card = Rect::new(rect.origin.x, rect.origin.y, rect.size.x, 180.0);
+    let height = if show_refresh { 208.0 } else { 180.0 };
+    let card = Rect::new(rect.origin.x, rect.origin.y, rect.size.x, height);
     ctx.canvas
         .rect(card, 12.0, palette.card_bg, palette.card_border, 1.0, 0.0);
     ctx.canvas.text(
@@ -604,16 +670,25 @@ fn empty_state(ctx: &mut DemoCtx<'_, '_>, title: &str, body: &str) {
         AlignY::Top,
     );
     if !body.is_empty() {
+        let body_height = if show_refresh { 92.0 } else { 100.0 };
         ctx.canvas.text_wrapped(
             body,
             Rect::new(
                 card.origin.x + 20.0,
                 card.origin.y + 54.0,
                 card.size.x - 40.0,
-                100.0,
+                body_height,
             ),
             10.5,
             palette.text_muted,
+        );
+    }
+    if show_refresh {
+        refresh_button(
+            ctx,
+            Rect::new(card.origin.x + 20.0, card.origin.y + 154.0, 112.0, 32.0),
+            zh,
+            true,
         );
     }
 }

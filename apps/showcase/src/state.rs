@@ -191,6 +191,8 @@ pub struct DemoState {
     pub asset_ring: StagingRing,
     /// WinUI 3 像素对照报告（进入报告页时延迟载入一次）。
     pub parity_report: Option<crate::pages::parity_report::ParityReport>,
+    /// 报告页刷新按钮按下后置位：下一帧重新读取差分产物，并复用未变化的纹理。
+    pub parity_reload: bool,
     pub canvas_pan: Vec2,
     pub canvas_zoom: f32,
     pub marquee: Option<(Vec2, Vec2)>,
@@ -257,6 +259,7 @@ impl Default for DemoState {
             asset_ids: Vec::new(),
             asset_ring: StagingRing::new(4096, 3),
             parity_report: None,
+            parity_reload: false,
             canvas_pan: Vec2::new(18.0, 12.0),
             canvas_zoom: 1.0,
             marquee: None,
@@ -334,8 +337,13 @@ impl DemoState {
     /// 延迟载入像素对照报告，并为参考 / 本框架 / 热力图三组截图提交异步解码。
     pub fn poll_parity(&mut self, text: &mut unbound_text::TextEngine) {
         let hub = self.asset_hub.get_or_insert_with(AssetHub::new);
-        if self.parity_report.is_none() {
-            self.parity_report = Some(crate::pages::parity_report::ParityReport::load(hub));
+        if self.parity_reload || self.parity_report.is_none() {
+            let previous = self.parity_report.take();
+            self.parity_report = Some(crate::pages::parity_report::ParityReport::load(
+                hub,
+                previous.as_ref(),
+            ));
+            self.parity_reload = false;
         }
         let _ = hub.poll(text);
     }

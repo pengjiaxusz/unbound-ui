@@ -2225,6 +2225,14 @@ impl GalleryApp {
             }
         }
         match page {
+            PageId::Parity => {
+                if part == pages::parity_report::REFRESH_PART {
+                    // 只置位，真正的重读发生在下一帧的 poll_parity：那里才有 asset_hub
+                    // 与文本引擎，也能顺手复用未变化的截图纹理。
+                    self.state.demo.parity_reload = true;
+                    self.state.bump();
+                }
+            }
             PageId::Home => match card {
                 0 => {
                     if part == 1 {
