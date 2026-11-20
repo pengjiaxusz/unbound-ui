@@ -259,6 +259,7 @@ define_widget_catalog! {
         scale_osd,
         inline_editable_text,
         elided_text,
+        copy_button,
     ],
     catalog: [
         ExpanderGroup => accordion,
@@ -432,6 +433,10 @@ use unbound_text::GlyphQuad;
 use unbound_world::{NodeId, UiWorld};
 
 pub use address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
+pub use copy_button::{
+    emit_copy_button, emit_read_only_input, read_only_copy_node, CopyButtonDesc, CopyButtonState,
+    ReadOnlyInputDesc, ReadOnlyInputState, COPY_FEEDBACK_DURATION_MS,
+};
 pub use elided_text::{
     elide_text_with_measure, emit_elided_text, ElideMode, ElideResult, ElidedTextDesc,
     ElidedTextState, ELLIPSIS,

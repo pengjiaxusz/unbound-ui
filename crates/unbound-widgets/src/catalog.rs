@@ -3675,6 +3675,10 @@ pub fn probe_workbench_widgets(state: ControlState) -> Vec<WidgetOutput> {
     outputs.push(crate::inline_editable_text::emit_inline_editable_text(9002, &inline_desc, state, &glyphs));
     let elided_desc = crate::elided_text::ElidedTextDesc::new(rect, "C:/Projects/Unbound/capture.rdc");
     outputs.push(crate::elided_text::emit_elided_text(9003, &elided_desc, state, &glyphs));
+    let copy_desc = crate::copy_button::CopyButtonDesc::new(rect);
+    outputs.push(crate::copy_button::emit_copy_button(9004, &copy_desc, state, &glyphs));
+    let ro_desc = crate::copy_button::ReadOnlyInputDesc::new(rect, "0xdeadbeef");
+    outputs.push(crate::copy_button::emit_read_only_input(9005, &ro_desc, state, &glyphs));
     outputs
 }
 
