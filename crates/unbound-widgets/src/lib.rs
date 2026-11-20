@@ -483,7 +483,8 @@ pub use pivot::{
     PIVOT_INDICATOR_HEIGHT,
 };
 pub use query_builder::{
-    emit_query_builder, FilterPopupState, QueryBuilderDesc, QueryCombinator, QueryRule,
+    emit_query_builder, evaluate_rule, FilterPopupState, QueryBuilderDesc, QueryBuilderState,
+    QueryCombinator, QueryGroup, QueryRule,
 };
 pub use schema_form::{
     emit_schema_form, FieldInheritanceState, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc,
