@@ -41,59 +41,78 @@ doctor *ARGS:
 # 不要裸跑 cargo / cmake / ninja / pnpm build / tsc 等编译命令。
 # ---------------------------------------------------------------------------
 
+# 排队约定：有限的重型命令整条走 `just q-run` / `just q-bench`（Unix 分支自动透传）。
+# 开窗交互程序（showcase / gallery / example）只把编译段排队，编译完立即释放全局锁并以前台
+# 优先级直接运行二进制；若把常驻窗口塞进 bque，会长期阻塞其他工作树编译，还会让窗口跑在 Idle 优先级。
+
 # 运行组件展台（可视验收台：开窗查看所有图元）
 # 示例：just showcase 或 just showcase -- --shot shot.png
+[windows]
 showcase *ARGS:
-    cargo run -p showcase {{ARGS}}
+    @just q-run cargo build -p showcase
+    @& "{{CARGO_TARGET_DIR}}/debug/showcase.exe" {{ARGS}}
+[unix]
+showcase *ARGS:
+    @just q-run cargo build -p showcase
+    @"{{CARGO_TARGET_DIR}}/debug/showcase" {{ARGS}}
 
 # 运行全链路演示程序
 # 示例：just gallery 或 just gallery -- --kpi
+[windows]
 gallery *ARGS:
-    cargo run -p gallery {{ARGS}}
+    @just q-run cargo build -p gallery
+    @& "{{CARGO_TARGET_DIR}}/debug/gallery.exe" {{ARGS}}
+[unix]
+gallery *ARGS:
+    @just q-run cargo build -p gallery
+    @"{{CARGO_TARGET_DIR}}/debug/gallery" {{ARGS}}
 
 # 先构建 tools/winui-reference 再批量截图；WinAppSDK 走自包含，不要求机器预装 Windows App Runtime。
 # 产物已被 gitignore，控件样式变动后才需要重跑；采集器自带指纹缓存，命中时会毫秒级跳过。
 # 采集 WinUI 3 参考截图到 captures/（需 .NET 8+ SDK，示例：just parity-capture --no-cache）
+# 采集器自身也走排队，但 q-run 不支持指定工作目录；这里用 bque 原生 --cwd 保留 ./captures 的语义。
 [windows]
 parity-capture *ARGS:
-    cd tools/winui-reference && dotnet build -c Release -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -r win-x64 && ./bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/WinUiReference.exe --batch --out ./captures {{ARGS}}
+    @just q-run dotnet build tools/winui-reference/WinUiReference.csproj -c Release -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -r win-x64
+    @bque run --cwd "{{justfile_directory()}}/tools/winui-reference" -- "{{justfile_directory()}}/tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/WinUiReference.exe" --batch --out ./captures {{ARGS}}
 
 # 纯离屏 Vulkan 渲染，不开窗；默认复用源码指纹缓存。
 # 跑 WinUI 3 ROI 像素差分，产出 target/parity/report.json 供展台 Pixel parity 页读取
 # 示例：just parity 或 just parity --no-cache
 parity *ARGS:
-    cargo run -p showcase -- --parity-run --reference tools/winui-reference/captures --out target/parity {{ARGS}}
+    @just q-run cargo run -p showcase -- --parity-run --reference tools/winui-reference/captures --out target/parity {{ARGS}}
 
-# 编译 Vulkan 着色器
+# 编译 Vulkan 着色器（glslc 逐个编译并校验，同样纳入排队）
 compile-shaders:
-    bash scripts/compile-shaders.sh
+    @just q-run bash scripts/compile-shaders.sh
 
 # 运行指定示例程序
 # 示例：just example 01_hello_counter
+[windows]
 example NAME *ARGS:
-    cargo run -p unbound-app --example {{NAME}} {{ARGS}}
+    @just q-run cargo build -p unbound-app --example {{NAME}}
+    @& "{{CARGO_TARGET_DIR}}/debug/examples/{{NAME}}.exe" {{ARGS}}
+[unix]
+example NAME *ARGS:
+    @just q-run cargo build -p unbound-app --example {{NAME}}
+    @"{{CARGO_TARGET_DIR}}/debug/examples/{{NAME}}" {{ARGS}}
 
 # 运行所有示例程序的无头自检套件
 test-examples:
-    just q-run cargo test -p unbound-app --examples
+    @just q-run cargo test -p unbound-app --examples
 
-# 运行文本渲染性能与构建裁剪基准测试套件
+# 运行文本渲染性能与构建裁剪基准测试套件（走 q-bench，Unix/CI 下自动透传）
 text-baseline *ARGS:
-    @bque bench -- cargo test -p unbound-text --test text_render_baseline --all-features --release -- --nocapture {{ARGS}}
+    @just q-bench cargo test -p unbound-text --test text_render_baseline --all-features --release -- --nocapture {{ARGS}}
 
 # app-guest 的 host_roundtrip 集成测试要加载真实 cdylib，而 `cargo test`
 # 不保证在 target/<profile> 下生成该产物，故先显式构建一次，避免干净环境硬失败。
 # 覆盖机制见托管块的 allow-duplicate-recipes。
 
 # 覆盖框架 test：先产出 app-guest cdylib 再跑测试
-[windows]
 test *ARGS:
-    @bque run -- cargo build -p app-guest
-    @bque run -- cargo test --workspace --all-features {{ARGS}}
-[unix]
-test *ARGS:
-    cargo build -p app-guest
-    cargo test --workspace --all-features {{ARGS}}
+    @just q-run cargo build -p app-guest
+    @just q-run cargo test --workspace --all-features {{ARGS}}
 
 # ---------- 共享编译目录（worktree 层） ----------
 

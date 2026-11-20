@@ -44,13 +44,15 @@ just test-examples
 just test
 ```
 
-亦可使用原生 `cargo` 命令：
+临时需要跑原生命令时，统一经排队入口转交，不要裸跑：
 
 ```bash
-cargo run -p showcase
-cargo run -p gallery -- --kpi
-cargo test --workspace
+just q-run cargo run -p showcase
+just q-run cargo run -p gallery -- --kpi
+just q-run cargo test --workspace
 ```
+
+性能基线用 `just q-bench <cmd>`，它会挂起后台编译以保证跑分环境纯净。
 
 > **注意**：GPU 集成测试与窗口运行需要 Vulkan 1.3 支持；无 Vulkan 设备时相关集成用例会自动跳过。
 

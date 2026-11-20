@@ -21,33 +21,34 @@
 
 ## 构建与运行
 
+在仓库根目录执行；构建与采集统一经 `just q-run` 进入 bque 全局排队，不裸跑 `dotnet build` 或宿主 exe。
+批量闭环（构建 + `--batch` 采集）直接走 `just parity-capture`，它已经包含下面的构建与批量采集两步。
+
 ```powershell
-# 在本目录执行（Project 已把默认 AnyCPU 提升为 x64）
-dotnet build -c Release
+# 构建宿主（Project 已把默认 AnyCPU 提升为 x64）
+just q-run dotnet build tools/winui-reference/WinUiReference.csproj -c Release
 
 # 采集单个控件用例
-.\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe `
-    --out .\captures --control Button --state normal --theme light
+just q-run tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/WinUiReference.exe `
+    --out tools/winui-reference/captures --control Button --state normal --theme light
 
 # 多控件单页流式拼版采集（1920×1080 瞬态画布、单次 350ms 动效等待）
-.\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe `
-    --control Button,CheckBox --theme light --out .\captures
+just q-run tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/WinUiReference.exe `
+    --control Button,CheckBox --theme light --out tools/winui-reference/captures
 
 # 批量动态拼版采集（全量或指定控件、多控件单页流式装箱、命中指纹缓存自动跳过）
-.\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe --batch --out .\captures
+just parity-capture
 
 # 强制忽略缓存重截并同时保存 page_{index}_{theme}_{backdrop}_sheet.png 拼版总览图及索引 JSON
-.\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe --batch --no-cache --save-sheet --out .\captures
+just parity-capture --no-cache --save-sheet
 ```
 
 ## 与 unbound-ui 的对照闭环
 
-参考图采集完成后，回到仓库根目录用展厅的差分模式跑完整闭环：
+参考图采集完成后，回到仓库根目录跑差分闭环（编译与离屏差分都经 bque 排队）：
 
 ```powershell
-.\target\debug\showcase.exe --parity-run `
-    --reference tools\winui-reference\captures `
-    --out target\parity
+just parity
 ```
 
 该命令在**全局复用同一个 Vulkan 渲染器实例**与**源码哈希缓存**的前提下，对每张参考图调用 `unbound-widgets` 的对应控件，并在**有效对比区（ROI：`union(reference_bbox, ours_bbox, controlBounds)` 外扩 2px）**内计算 CIEDE2000 与四重门禁，输出：

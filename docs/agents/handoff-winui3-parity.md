@@ -40,13 +40,10 @@ just gate-check
 
 ```powershell
 # 1. 构建并运行 WinUI 3 参考宿主（状态拼版 + 16 DIP 紧凑切图 + 指纹缓存）
-cd tools\winui-reference
-dotnet build -c Release
-.\bin\x64\Release\net8.0-windows10.0.19041.0\WinUiReference.exe --batch --out .\captures
-cd ..\..
+just parity-capture
 
 # 2. 运行 Unbound UI 差分（单实例 GPU 复用 + 源码指纹缓存 + ROI 四重门禁）
-cargo run -p showcase -- --parity-run --reference tools\winui-reference\captures --out target\parity
+just parity
 ```
 
 ### 2.3 推送代码并同步创建 GitHub Issue / Milestone
@@ -153,18 +150,15 @@ pwsh -NoProfile -File .scratch/winui3-parity-system/publish-github-issues.ps1
 本机默认 `dotnet` 只有运行时，**SDK 已安装到** `C:\Users\pengj\.dotnet-sdk`。参考宿主与差分的完整闭环：
 
 ```powershell
-# 1. 设置 .NET 8 SDK 环境变量并构建参考宿主
+# 1. 设置 .NET 8 SDK 环境变量（本机 SDK 不在默认 PATH 时）
 $env:DOTNET_ROOT = "C:\Users\pengj\.dotnet-sdk"
 $env:PATH = "C:\Users\pengj\.dotnet-sdk;" + $env:PATH
-dotnet build tools/winui-reference/WinUiReference.csproj -c Release
 
-# 2. 批量动态拼版采集参考截图（全量控件流式装箱分页、动效收敛等待骤降 30 倍；命中缓存毫秒级跳过）
-Start-Process -FilePath "tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/WinUiReference.exe" `
-    -ArgumentList "--batch --out .\captures" -Wait
+# 2. 构建并批量采集参考截图（全量控件流式装箱分页、命中缓存毫秒级跳过，内部经 bque 排队）
+just parity-capture
 
-# 3. 跑 ROI 四门禁离屏差分全链路回归
-cargo run -p showcase -- --parity-run `
-    --reference tools\winui-reference\captures --out target\parity
+# 3. 跑 ROI 四门禁离屏差分全链路回归（同样经 bque 排队）
+just parity --no-cache
 ```
 
 产物：`target/parity/report.json`、`target/parity/ours/`、`target/parity/heat/`。参考截图目录已被 `.gitignore` 忽略。
