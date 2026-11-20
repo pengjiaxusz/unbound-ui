@@ -3671,6 +3671,8 @@ pub fn probe_workbench_widgets(state: ControlState) -> Vec<WidgetOutput> {
     let mut outputs = Vec::new();
     let scale_desc = crate::scale_osd::ScaleOsdDesc::new(Rect::new(0.0, 0.0, 1280.0, 720.0), 1.0);
     outputs.push(crate::scale_osd::emit_scale_osd(9001, &scale_desc, state, &glyphs));
+    let inline_desc = crate::inline_editable_text::InlineEditableTextDesc::new(rect, "Preset Alpha");
+    outputs.push(crate::inline_editable_text::emit_inline_editable_text(9002, &inline_desc, state, &glyphs));
     outputs
 }
 

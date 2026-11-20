@@ -257,6 +257,7 @@ define_widget_catalog! {
         swipe_control,
         teaching_tip,
         scale_osd,
+        inline_editable_text,
     ],
     catalog: [
         ExpanderGroup => accordion,
@@ -430,6 +431,10 @@ use unbound_text::GlyphQuad;
 use unbound_world::{NodeId, UiWorld};
 
 pub use address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
+pub use inline_editable_text::{
+    emit_inline_editable_text, BlurBehavior, EditTrigger, InlineEditEvent, InlineEditableTextDesc,
+    InlineEditableTextState,
+};
 pub use scale_osd::{
     emit_scale_osd, scale_osd_reset_node, scale_osd_zoom_in_node, scale_osd_zoom_out_node,
     ScaleOsdAnchor, ScaleOsdDesc, ScaleOsdState, SCALE_OSD_DEFAULT_TIMEOUT_MS, SCALE_OSD_HEIGHT,
