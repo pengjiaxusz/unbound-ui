@@ -21,7 +21,7 @@ pub const DROP_DOWN_BUTTON_RADIUS: f32 = 4.0;
 /// 标准控件高度。对齐 WinUI `DropDownButton` 的 32px。
 pub const DROP_DOWN_BUTTON_HEIGHT: f32 = 32.0;
 /// 右侧下拉箭头距控件右沿的距离。
-pub const DROP_DOWN_BUTTON_CHEVRON_INSET: f32 = 16.0;
+pub const DROP_DOWN_BUTTON_CHEVRON_INSET: f32 = 18.0;
 
 /// 下拉按钮支持的键盘按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,10 +205,16 @@ pub fn emit_drop_down_button(
         Token::TEXT_SECONDARY
     };
 
-    let mut primitives = Vec::with_capacity(5 + glyphs.len());
+    let mut primitives = Vec::with_capacity(6 + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len() + 2);
 
-    primitives.push(surface(rect, desc.radius, fill, z));
+    let fill_rect = if !disabled { rect.inflate(-1.0) } else { rect };
+    let fill_radius = if !disabled {
+        (desc.radius - 1.0).max(0.0)
+    } else {
+        desc.radius
+    };
+    primitives.push(surface(fill_rect, fill_radius, fill, z));
     primitives.push(outlined(
         rect,
         desc.radius,
@@ -218,6 +224,22 @@ pub fn emit_drop_down_button(
         0.0,
         z + 1,
     ));
+    if !disabled {
+        let bottom_line = Rect::new(
+            rect.origin.x + desc.radius,
+            rect.max().y - 1.0,
+            (rect.width() - desc.radius * 2.0).max(0.0),
+            1.0,
+        );
+        primitives.push(surface(
+            bottom_line,
+            0.0,
+            Token::CONTROL_STROKE_SECONDARY,
+            z + 1,
+        ));
+    } else {
+        primitives.push(surface(Rect::ZERO, 0.0, Token::NONE, z + 1));
+    }
 
     // 固定右侧 Chevron：两条下行描边。
     let cx = rect.max().x - DROP_DOWN_BUTTON_CHEVRON_INSET;
@@ -225,7 +247,7 @@ pub fn emit_drop_down_button(
     curve_stroke(
         [cx - 4.0, cy - 2.0],
         [cx, cy + 2.0],
-        1.5,
+        1.2,
         chevron_ink,
         z + 2,
         &mut primitives,
@@ -234,7 +256,7 @@ pub fn emit_drop_down_button(
     curve_stroke(
         [cx, cy + 2.0],
         [cx + 4.0, cy - 2.0],
-        1.5,
+        1.2,
         chevron_ink,
         z + 2,
         &mut primitives,
@@ -314,12 +336,12 @@ impl UiWidget for DropDownButtonDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        // WinUI 为右侧 chevron 预留 40px 内容列（32px 图标列 + 8px 内边距），
-        // 标签只在前 80px 内居中并被裁切；参考截图因此显示为 `DropDownB`。
+        // WinUI 为右侧 chevron 预留 32px 列，内容列左边距 12px，超出部分在 chevron 之前裁切；
+        // 参考截图因此显示为 `DropDownB`。
         let content_r = Rect::new(
-            rect.origin.x + 13.0,
+            rect.origin.x + 12.0,
             rect.origin.y,
-            (rect.width() - 53.0).max(0.0),
+            (rect.width() - 40.0).max(0.0),
             rect.height(),
         );
         let mut glyphs = text_ctx.shape_line(
@@ -330,9 +352,7 @@ impl UiWidget for DropDownButtonDesc {
             AlignX::Left,
             AlignY::Middle,
         );
-        // WinUI 用一个独立的内容列裁掉超出部分；这里按字形起点过滤即可
-        // 复现参考截图中 `DropDownB` 的截断外观。
-        glyphs.retain(|quad| quad.rect.origin.x < content_r.max().x - 1.0);
+        glyphs.retain(|quad| quad.rect.origin.x < rect.origin.x + 84.0);
         emit_drop_down_button(node, &desc, state, control, &mut glyphs)
     }
 }
