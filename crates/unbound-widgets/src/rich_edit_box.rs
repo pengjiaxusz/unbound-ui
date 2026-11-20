@@ -6,20 +6,21 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
+use unbound_gpu::data::{PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::button::BUTTON_LAYER;
-use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined};
+use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 /// 控件圆角。对齐 WinUI `ControlCornerRadius = 4`。
 pub const RICH_EDIT_RADIUS: f32 = 4.0;
 
-/// 水平内边距。对齐 WinUI `TextControlThemePadding` 左侧 10px。
-pub const RICH_EDIT_PADDING_X: f32 = 10.0;
+/// 水平内边距。对齐 WinUI `TextControlThemePadding` 左侧 11px。
+pub const RICH_EDIT_PADDING_X: f32 = 11.0;
 
 /// 垂直内边距。对齐 WinUI `TextControlThemePadding` 顶部 6px。
 pub const RICH_EDIT_PADDING_Y: f32 = 6.0;
@@ -151,11 +152,35 @@ pub fn emit_rich_edit_box(
         Token::CONTROL_STROKE
     };
 
-    let mut primitives = Vec::with_capacity(2 + text_glyphs.len());
+    let mut primitives = Vec::with_capacity(3 + text_glyphs.len());
     let mut payloads = Vec::with_capacity(text_glyphs.len());
 
     // 1. 外框与背景
     primitives.push(outlined(rect, desc.radius, bg, border, 1.0, 0.0, z));
+
+    // 底边强描边：WinUI 输入框下沿使用 ControlStrongStrokeColorDefault。
+    let underline = if disabled || control.focused {
+        Token::NONE
+    } else {
+        Token::CONTROL_STROKE_STRONG
+    };
+    let inset = desc.radius.min(rect.size.x * 0.5);
+    primitives.push(instance(
+        Rect::new(
+            rect.origin.x + inset,
+            rect.max().y - 1.0,
+            (rect.size.x - inset * 2.0).max(0.0),
+            1.0,
+        ),
+        [0.0; 4],
+        underline,
+        Token::NONE,
+        0.0,
+        0.0,
+        PrimType::RoundedRect,
+        SubElement::Border,
+        z + 1,
+    ));
 
     // 2. 文本字形
     emit_glyphs(
