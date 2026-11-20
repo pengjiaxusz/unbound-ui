@@ -443,14 +443,22 @@ impl UiWidget for ToggleSplitButtonDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
+        let main = desc.main_rect();
+        let content_r = Rect::new(
+            main.origin.x + 13.0,
+            main.origin.y,
+            (main.width() - 13.0).max(0.0),
+            main.height(),
+        );
         let mut glyphs = text_ctx.shape_line(
             &desc.label,
-            desc.main_rect(),
+            content_r,
             14.0,
-            500,
-            AlignX::Center,
+            400,
+            AlignX::Left,
             AlignY::Middle,
         );
+        glyphs.retain(|quad| quad.rect.origin.x < content_r.max().x - 1.0);
         emit_toggle_split_button(node, &desc, state, control, &mut glyphs)
     }
 }

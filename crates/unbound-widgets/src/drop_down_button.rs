@@ -314,20 +314,25 @@ impl UiWidget for DropDownButtonDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
+        // WinUI 为右侧 chevron 预留 40px 内容列（32px 图标列 + 8px 内边距），
+        // 标签只在前 80px 内居中并被裁切；参考截图因此显示为 `DropDownB`。
         let content_r = Rect::new(
-            rect.origin.x,
+            rect.origin.x + 13.0,
             rect.origin.y,
-            (rect.width() - DROP_DOWN_BUTTON_CHEVRON_INSET - 8.0).max(0.0),
+            (rect.width() - 53.0).max(0.0),
             rect.height(),
         );
         let mut glyphs = text_ctx.shape_line(
             &desc.label,
             content_r,
             14.0,
-            500,
-            AlignX::Center,
+            400,
+            AlignX::Left,
             AlignY::Middle,
         );
+        // WinUI 用一个独立的内容列裁掉超出部分；这里按字形起点过滤即可
+        // 复现参考截图中 `DropDownB` 的截断外观。
+        glyphs.retain(|quad| quad.rect.origin.x < content_r.max().x - 1.0);
         emit_drop_down_button(node, &desc, state, control, &mut glyphs)
     }
 }
