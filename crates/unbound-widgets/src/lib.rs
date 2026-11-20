@@ -258,6 +258,7 @@ define_widget_catalog! {
         teaching_tip,
         scale_osd,
         inline_editable_text,
+        elided_text,
     ],
     catalog: [
         ExpanderGroup => accordion,
@@ -431,6 +432,10 @@ use unbound_text::GlyphQuad;
 use unbound_world::{NodeId, UiWorld};
 
 pub use address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
+pub use elided_text::{
+    elide_text_with_measure, emit_elided_text, ElideMode, ElideResult, ElidedTextDesc,
+    ElidedTextState, ELLIPSIS,
+};
 pub use inline_editable_text::{
     emit_inline_editable_text, BlurBehavior, EditTrigger, InlineEditEvent, InlineEditableTextDesc,
     InlineEditableTextState,

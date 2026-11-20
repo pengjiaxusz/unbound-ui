@@ -3673,6 +3673,8 @@ pub fn probe_workbench_widgets(state: ControlState) -> Vec<WidgetOutput> {
     outputs.push(crate::scale_osd::emit_scale_osd(9001, &scale_desc, state, &glyphs));
     let inline_desc = crate::inline_editable_text::InlineEditableTextDesc::new(rect, "Preset Alpha");
     outputs.push(crate::inline_editable_text::emit_inline_editable_text(9002, &inline_desc, state, &glyphs));
+    let elided_desc = crate::elided_text::ElidedTextDesc::new(rect, "C:/Projects/Unbound/capture.rdc");
+    outputs.push(crate::elided_text::emit_elided_text(9003, &elided_desc, state, &glyphs));
     outputs
 }
 
