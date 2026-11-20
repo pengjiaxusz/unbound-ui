@@ -1160,6 +1160,7 @@ internal static class Catalog
                 element = new DatePicker
                 {
                     Language = "en-US",
+                    CalendarIdentifier = "GregorianCalendar",
                     MonthFormat = "{month.full}",
                     DayFormat = "{day.integer}",
                     YearFormat = "{year.full}",
