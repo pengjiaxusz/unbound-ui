@@ -181,13 +181,13 @@ fn pips_pager_normal_and_disabled_and_focused_states() {
         .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw());
     assert!(has_focus_ring, "focused PipsPager must emit focus ring");
 
-    // 3. 禁用态契约：圆点颜色降级且抑制高亮
+    // 3. 禁用态契约：圆点降到 WinUI 的 SliderTrackValueFillDisabled 且抑制高亮
     let disabled = emit_canonical_pips_pager_fixture(rect, FixtureState::disabled(), 100);
     for p in &disabled.output.primitives {
         if p.prim_type() == PrimType::RoundedRect {
             assert_eq!(
                 p.fill_token_or_uv as u16,
-                Token::CONTROL_DISABLED_THUMB.raw()
+                Token::SLIDER_TRACK_DISABLED.raw()
             );
         }
     }

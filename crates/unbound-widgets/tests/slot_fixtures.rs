@@ -227,15 +227,15 @@ fn tree_fixture_normal_renders_two_levels_with_chevron_pill_and_guide_line() {
         let fixture = emit_canonical_tree_fixture(rect, FixtureState::normal(), text_ctx, 300);
 
         // 1. 根节点与子节点矩形几何排布
-        assert_eq!(fixture.root_rect.height(), STANDARD_TREE_ITEM_HEIGHT - 4.0);
+        assert_eq!(fixture.root_rect.height(), STANDARD_TREE_ITEM_HEIGHT);
         assert_eq!(
             fixture.child_rect.origin.y,
-            fixture.root_rect.origin.y + STANDARD_TREE_ITEM_HEIGHT
+            rect.origin.y + STANDARD_TREE_ITEM_HEIGHT
         );
         assert_eq!(
             fixture.child_rect.origin.x - fixture.root_rect.origin.x,
             STANDARD_TREE_INDENT,
-            "child row is indented by standard 16px"
+            "child row is indented by standard 40px"
         );
 
         // 2. 根节点左侧 Accent 胶囊条
@@ -247,7 +247,7 @@ fn tree_fixture_normal_renders_two_levels_with_chevron_pill_and_guide_line() {
         });
         assert!(has_pill, "expanded root must have 3x16px Accent pill");
 
-        // 3. 展开箭头与垂直层级引导线
+        // 3. 展开箭头（WinUI 参考形态没有深度引导线）
         let curve_strokes = fixture
             .output
             .primitives
@@ -261,7 +261,7 @@ fn tree_fixture_normal_renders_two_levels_with_chevron_pill_and_guide_line() {
                 && Token::new(p.fill_token_or_uv as u16) == Token::DIVIDER
                 && (p.size[0] - 1.0).abs() < 1e-4
         });
-        assert!(has_guide_line, "must render 1px DIVIDER depth guide line");
+        assert!(!has_guide_line, "WinUI TreeView has no depth guide line");
 
         // 4. 文本标签存在
         let glyph_tokens: Vec<Token> = fixture
@@ -289,13 +289,6 @@ fn tree_fixture_disabled_propagates_gray_and_suppresses_selection() {
             if prim_type == PrimType::RoundedRect {
                 assert_ne!(fill, Token::PRIMARY, "disabled tree must not have pill");
                 assert_ne!(fill, Token::HOVER, "disabled tree must not have hover bg");
-                if (p.size[0] - 1.0).abs() < 1e-4 {
-                    assert_eq!(
-                        fill,
-                        Token::CONTROL_DISABLED_BORDER,
-                        "guide line must downgrade to CONTROL_DISABLED_BORDER"
-                    );
-                }
             }
 
             // 展开 chevron 指示箭头变灰
@@ -332,6 +325,12 @@ fn text_rows_fixture_normal_outputs_three_rows_with_equal_spacing() {
         );
 
         assert_eq!(fixture.row_rects.len(), 3, "must emit 3 text rows");
+        // 锁定 WinUI 3 的 14px 正文行盒：改成 20px 会破坏切片 1 的像素对齐基线。
+        assert_eq!(
+            fixture.row_rects[0].height(),
+            19.0,
+            "canonical row box must be 19px"
+        );
         let spacing0 = fixture.row_rects[1].origin.y - fixture.row_rects[0].max().y;
         let spacing1 = fixture.row_rects[2].origin.y - fixture.row_rects[1].max().y;
         assert!(
@@ -405,9 +404,10 @@ fn list_rows_fixture_normal_and_disabled_states_are_deterministic() {
         });
         assert!(!disabled_has_pill, "disabled list item must suppress pill");
 
+        // WinUI 参考截图中 ListViewItem 的墨水在禁用态仍保持主文本色。
         for p in &disabled_fixture.output.primitives {
             if matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor) {
-                assert_eq!(Token::new(p.fill_token_or_uv as u16), Token::TEXT_DISABLED);
+                assert_eq!(Token::new(p.fill_token_or_uv as u16), Token::TEXT_PRIMARY);
             }
         }
     });
@@ -525,24 +525,20 @@ fn grid_fixture_normal_outputs_deterministic_geometry_and_active_tokens() {
             "selected cell must have 2px PRIMARY border"
         );
 
+        // WinUI GridView 选中项只有强调色描边，没有勾选徽章或折线。
         let has_accent_badge = fixture.output.primitives.iter().any(|p| {
             p.prim_type() == PrimType::RoundedRect
                 && Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
                 && (p.size[0] - 18.0).abs() < 1e-4
         });
-        assert!(
-            has_accent_badge,
-            "selected cell must have PRIMARY checkmark badge"
-        );
+        assert!(!has_accent_badge, "GridView has no checkmark badge");
 
-        // 3. 勾选折线
-        let check_curves = fixture
+        let has_check_curve = fixture
             .output
             .primitives
             .iter()
-            .filter(|p| p.prim_type() == PrimType::Curve)
-            .count();
-        assert_eq!(check_curves, 2, "checkmark consists of 2 curve strokes");
+            .any(|p| p.prim_type() == PrimType::Curve);
+        assert!(!has_check_curve, "GridView has no checkmark strokes");
 
         // 4. 文本存在且包含主要文本
         let glyph_tokens: Vec<Token> = fixture
@@ -889,7 +885,7 @@ fn pips_pager_normal_renders_five_pips_and_selected_marker() {
 fn pips_pager_disabled_and_focused_states() {
     let rect = Rect::new(0.0, 0.0, 320.0, 32.0);
 
-    // 1. 禁用态校验：所有圆点均必须使用 CONTROL_DISABLED_THUMB
+    // 1. 禁用态校验：所有圆点均降到 WinUI 的 SliderTrackValueFillDisabled
     let disabled_fixture = emit_canonical_pips_pager_fixture(rect, FixtureState::disabled(), 100);
     let disabled_fills: Vec<Token> = disabled_fixture
         .output
@@ -903,8 +899,8 @@ fn pips_pager_disabled_and_focused_states() {
     for fill in disabled_fills {
         assert_eq!(
             fill,
-            Token::CONTROL_DISABLED_THUMB,
-            "all pips must use CONTROL_DISABLED_THUMB in disabled state"
+            Token::SLIDER_TRACK_DISABLED,
+            "all pips must use SLIDER_TRACK_DISABLED in disabled state"
         );
     }
 
@@ -1176,10 +1172,14 @@ fn navigation_view_normal_renders_home_selected_and_library_and_settings() {
             .map(|p| (Token::new(p.fill_token_or_uv as u16), p.size[0], p.size[1]))
             .collect();
 
+        // 参考图的选中项只有左侧胶囊，没有整行 NAV_SELECTED 底色。
         let has_nav_selected = rounded_rects
             .iter()
             .any(|&(tok, _, _)| tok == Token::NAV_SELECTED);
-        assert!(has_nav_selected, "selected item must use NAV_SELECTED");
+        assert!(
+            !has_nav_selected,
+            "selected item has no NAV_SELECTED row fill"
+        );
 
         let has_pill = rounded_rects.iter().any(|&(tok, w, h)| {
             tok == Token::PRIMARY && (w - 3.0).abs() < 1e-2 && (h - 16.0).abs() < 1e-2
@@ -1292,10 +1292,11 @@ fn tab_view_normal_renders_two_tabs_and_content_area() {
             .any(|&(tok, _, _)| tok == Token::SURFACE);
         assert!(has_surface, "active tab must use SURFACE background");
 
+        // WinUI TabView 选中态是带 CARD_BORDER 描边的 SURFACE 卡片，没有底部 2px 指示条。
         let has_indicator = rounded_rects
             .iter()
             .any(|&(tok, _, h)| tok == Token::PRIMARY && (h - 2.0).abs() < 1e-2);
-        assert!(has_indicator, "active tab must have 2px Accent indicator");
+        assert!(!has_indicator, "active tab has no 2px Accent indicator");
     });
 }
 
@@ -1320,9 +1321,10 @@ fn tab_view_disabled_and_focused_states() {
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
 
+        // 禁用态保留选中卡片的 SURFACE 底板，只衰减文案与强调色。
         assert!(
-            !rounded_rects.contains(&Token::SURFACE),
-            "disabled state must suppress SURFACE background"
+            rounded_rects.contains(&Token::SURFACE),
+            "disabled state keeps selected tab SURFACE background"
         );
         assert!(
             !rounded_rects.contains(&Token::PRIMARY),

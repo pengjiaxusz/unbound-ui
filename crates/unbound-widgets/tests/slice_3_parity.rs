@@ -50,17 +50,17 @@ fn tree_view_normal_and_disabled_and_focused_states() {
     with_test_ctx(|text_ctx| {
         let rect = Rect::new(0.0, 0.0, 220.0, 140.0);
 
-        // 1. 正常态契约：Root 根节点与缩进 16px 的 Child 子节点
+        // 1. 正常态契约：Root 根节点与缩进 40px 的 Child 子节点
         let normal = emit_canonical_tree_fixture(rect, FixtureState::normal(), text_ctx, 100);
-        assert_eq!(normal.root_rect.height(), STANDARD_TREE_ITEM_HEIGHT - 4.0);
+        assert_eq!(normal.root_rect.height(), STANDARD_TREE_ITEM_HEIGHT);
         assert_eq!(
             normal.child_rect.origin.y,
-            normal.root_rect.origin.y + STANDARD_TREE_ITEM_HEIGHT
+            rect.origin.y + STANDARD_TREE_ITEM_HEIGHT
         );
         assert_eq!(
             normal.child_rect.origin.x - normal.root_rect.origin.x,
             STANDARD_TREE_INDENT,
-            "child row is indented by standard 16px"
+            "child row is indented by standard 40px"
         );
 
         // 根节点具备 3×16px Accent 胶囊条
@@ -72,7 +72,7 @@ fn tree_view_normal_and_disabled_and_focused_states() {
         });
         assert!(has_pill, "expanded root must have 3x16px Accent pill");
 
-        // 包含折线箭头与层级引导线
+        // 包含折线箭头；WinUI 参考形态没有层级引导线
         let curve_strokes = normal
             .output
             .primitives
@@ -86,7 +86,7 @@ fn tree_view_normal_and_disabled_and_focused_states() {
                 && Token::new(p.fill_token_or_uv as u16) == Token::DIVIDER
                 && (p.size[0] - 1.0).abs() < 1e-4
         });
-        assert!(has_guide_line, "must render 1px DIVIDER depth guide line");
+        assert!(!has_guide_line, "WinUI TreeView has no depth guide line");
 
         // 2. 聚焦态契约
         let focused = emit_canonical_tree_fixture(rect, FixtureState::focused(), text_ctx, 100);
@@ -178,8 +178,9 @@ fn list_view_normal_and_disabled_and_focused_states() {
             .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
+        // WinUI 参考截图中 ListViewItem 的墨水在禁用态仍保持主文本色。
         for tok in glyph_tokens {
-            assert_eq!(tok, Token::TEXT_DISABLED);
+            assert_eq!(tok, Token::TEXT_PRIMARY);
         }
     });
 }
@@ -193,7 +194,7 @@ fn grid_view_normal_and_disabled_and_focused_states() {
     with_test_ctx(|text_ctx| {
         let rect = Rect::new(0.0, 0.0, STANDARD_GRID_WIDTH, STANDARD_GRID_HEIGHT);
 
-        // 1. 正常态契约：4 个网格单元、首项 PRIMARY 边框与徽章
+        // 1. 正常态契约：4 个网格单元、首项 PRIMARY 描边（无勾选徽章）
         let normal = emit_canonical_grid_fixture(rect, FixtureState::normal(), text_ctx, 100);
         assert_eq!(normal.cell_rects.len(), CANONICAL_GRID_ITEMS.len());
         assert_eq!(normal.total_size.x, STANDARD_GRID_WIDTH);
@@ -214,10 +215,7 @@ fn grid_view_normal_and_disabled_and_focused_states() {
                 && Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
                 && (p.size[0] - 18.0).abs() < 1e-4
         });
-        assert!(
-            has_accent_badge,
-            "selected grid cell must have PRIMARY badge"
-        );
+        assert!(!has_accent_badge, "GridView has no checkmark badge");
 
         // 2. 聚焦态契约
         let focused = emit_canonical_grid_fixture(rect, FixtureState::focused(), text_ctx, 100);

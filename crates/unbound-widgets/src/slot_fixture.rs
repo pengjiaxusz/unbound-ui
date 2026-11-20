@@ -172,7 +172,7 @@ pub const CANONICAL_APP_BAR_TOGGLE_BUTTON_HEIGHT: f32 = 48.0;
 pub const STANDARD_FONT_SIZE: f32 = 14.0;
 
 /// 标准树形行高（WinUI 3 TreeView 标准行高）。
-pub const STANDARD_TREE_ITEM_HEIGHT: f32 = 36.0;
+pub const STANDARD_TREE_ITEM_HEIGHT: f32 = 32.0;
 
 /// 标准列表项行高（WinUI 3 ListView 标准行高）。
 pub const STANDARD_LIST_ITEM_HEIGHT: f32 = 40.0;
@@ -180,8 +180,8 @@ pub const STANDARD_LIST_ITEM_HEIGHT: f32 = 40.0;
 /// 标准堆叠项垂直间距（WinUI 3 StackPanel 常用间距）。
 pub const STANDARD_STACK_SPACING: f32 = 8.0;
 
-/// 标准树形层级缩进量。
-pub const STANDARD_TREE_INDENT: f32 = 16.0;
+/// 标准树形层级缩进量（WinUI 3 TreeView 子节点相对父节点的偏移）。
+pub const STANDARD_TREE_INDENT: f32 = 40.0;
 
 /// 标准网格视图固有宽度。
 pub const STANDARD_GRID_WIDTH: f32 = 260.0;
@@ -926,14 +926,13 @@ pub fn emit_canonical_selector_bar_fixture(
 /// 发射标准化 2 级展开树形插桩（根节点 `Root` 选中展开 + 子节点 `Child` 缩进）。
 ///
 /// 几何与排版规则：
-/// - 根节点（深度 0，行高 36px）：
+/// - 根节点（深度 0，行高 [`STANDARD_TREE_ITEM_HEIGHT`]）：
 ///   - 包含展开箭头（朝下 chevron，thickness 1.5px）；
 ///   - 首项处于选中态：左侧垂直居中绘制 3×16px、圆角 1.5px 的 Accent 胶囊条（[`Token::PRIMARY`]），填充 [`Token::HOVER`] 背景；
 ///   - 标签 `"Root"` 位于箭头右侧（x 偏移 32px）；
-/// - 子节点（深度 1，缩进 16px，行高 36px）：
-///   - 绘制垂直深度连线（1.0px 宽度，[`Token::DIVIDER`]）；
-///   - 标签 `"Child"` 位于连线右侧（x 偏移 16px）；
-/// - 递归禁用态传播：当 `state.disabled` 为 true 时，抑制 Accent 胶囊条与选中背景，chevron 指示器、引导线与文本全量变灰衰减为 [`Token::TEXT_DISABLED`]。
+/// - 子节点（深度 1，缩进 [`STANDARD_TREE_INDENT`]，行高 [`STANDARD_TREE_ITEM_HEIGHT`]）：
+///   - WinUI 参考形态没有深度引导线，只画缩进后的标签；
+/// - 递归禁用态传播：当 `state.disabled` 为 true 时，抑制 Accent 胶囊条与选中背景，chevron 指示器与文本全量变灰衰减为 [`Token::TEXT_DISABLED`]。
 pub fn emit_canonical_tree_fixture(
     rect: Rect,
     state: FixtureState,
@@ -942,7 +941,7 @@ pub fn emit_canonical_tree_fixture(
 ) -> TreeFixtureOutput {
     let mut out = WidgetOutput::default();
     // WinUI 的 TreeViewItem 参考行高是 32px（不是 36），行与行之间没有额外间距。
-    let item_h = 32.0;
+    let item_h = STANDARD_TREE_ITEM_HEIGHT;
     let tree_w = if rect.width() > 0.0 {
         rect.width()
     } else {
@@ -1010,8 +1009,8 @@ pub fn emit_canonical_tree_fixture(
         &mut out.payloads,
     );
 
-    // 2. Child 子节点行（深度 1，缩进 16px）
-    let indent = 40.0;
+    // 2. Child 子节点行（深度 1，缩进 40px）
+    let indent = STANDARD_TREE_INDENT;
     let child_y = root_y + item_h - 2.0;
     let child_r = Rect::new(
         rect.origin.x + 4.0 + indent,

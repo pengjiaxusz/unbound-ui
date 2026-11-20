@@ -527,17 +527,18 @@ fn app_bar_button_and_toggle_button_states() {
             text_ctx,
             100,
         );
-        let has_indicator = checked_toggle.output.primitives.iter().any(|p| {
+        // WinUI 选中态是整块强调色实底（左右内缩 2px、上下内缩 6px），不是底部指示条。
+        let has_checked_surface = checked_toggle.output.primitives.iter().any(|p| {
             p.prim_type() == PrimType::RoundedRect
                 && p.fill_token_or_uv as u16 == Token::PRIMARY.raw()
-                && (p.size[1] - 2.0).abs() < 1e-2
+                && (p.size[1] - (CANONICAL_APP_BAR_TOGGLE_BUTTON_HEIGHT - 12.0)).abs() < 1e-2
         });
         assert!(
-            has_indicator,
-            "checked AppBarToggleButton must have 2px primary indicator"
+            has_checked_surface,
+            "checked AppBarToggleButton must have solid PRIMARY surface"
         );
 
-        // 3. 禁用态校验：抑制指示条并变灰
+        // 3. 禁用态校验：抑制实底并变灰
         let disabled_toggle = emit_canonical_app_bar_toggle_button_fixture(
             toggle_rect,
             FixtureState::disabled(),

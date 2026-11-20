@@ -382,16 +382,18 @@ fn stack_panel_canonical_rows_and_spacing() {
         assert_eq!(CANONICAL_ROW_ITEMS.len(), 3);
         assert_eq!(fixture.total_size.x, 200.0);
 
-        // 3 行文本高度 20px，2 个 8px 间距：20 * 3 + 8 * 2 = 76px
+        // WinUI 3 的 14px 正文行盒为 19px；3 行 + 2 个 8px 间距 = 73px。
+        // 回归锁定 19px：回退到 20px 会让第三行相对参考截图整体下移 2px。
         assert_eq!(
-            fixture.total_size.y, 76.0,
-            "StackPanel 3 rows with 8px spacing measure 76px"
+            fixture.total_size.y, 73.0,
+            "StackPanel 3 rows with 8px spacing measure 73px"
         );
 
         // 各行等间距排列
         let row0 = fixture.row_rects[0];
         let row1 = fixture.row_rects[1];
         let row2 = fixture.row_rects[2];
+        assert_eq!(row0.height(), 19.0, "canonical row box must be 19px");
         assert_eq!(row1.origin.y - row0.max().y, STANDARD_STACK_SPACING);
         assert_eq!(row2.origin.y - row1.max().y, STANDARD_STACK_SPACING);
 
@@ -448,8 +450,13 @@ fn scroll_view_viewport_and_rows_fixture() {
             702,
         );
 
-        // 3 行文本高度 20px，2 个 6px 间距：20 * 3 + 6 * 2 = 72px <= 80px 视口
-        assert_eq!(rows_fixture.total_size.y, 72.0);
+        // 3 行 19px 行盒 + 2 个 6px 间距 = 69px <= 80px 视口
+        assert_eq!(rows_fixture.total_size.y, 69.0);
+        assert_eq!(
+            rows_fixture.row_rects[0].height(),
+            19.0,
+            "canonical row box must be 19px"
+        );
 
         let content_size = Vec2::new(scroll_w, rows_fixture.total_size.y);
         let desc = ScrollViewDesc::new(scroll_rect, content_size);
