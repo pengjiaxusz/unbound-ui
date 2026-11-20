@@ -7,19 +7,20 @@
 
 use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yNode};
+use unbound_gpu::data::{PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, KeyChord, KeyName, Shape};
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
+use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined, surface};
 use crate::text_input::{focus_underline, TEXT_INPUT_LAYER};
 use crate::{
     AlignX, AlignY, ControlState, PointerPhase, TextCtx, UiWidget, WidgetInputEvent, WidgetOutput,
 };
 
-/// 掩码字符（U+2022 圆点）。以转义书写，避免在源码里引入非 ASCII 字面量。
-pub const MASK_CHAR: char = '\u{2022}';
+/// 掩码字符（U+25CF 实心圆点）。以转义书写，避免在源码里引入非 ASCII 字面量。
+pub const MASK_CHAR: char = '\u{25cf}';
 /// 圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
 pub const PASSWORD_BOX_RADIUS: f32 = 4.0;
 /// 标准高度。对齐 WinUI `TextControlThemeMinHeight = 32`。
@@ -292,7 +293,7 @@ impl UiWidget for PasswordBoxDesc {
             &display
         };
         let text_rect = Rect::new(
-            rect.origin.x + 10.0,
+            rect.origin.x + 11.0,
             rect.origin.y,
             (rect.width() - 48.0).max(0.0),
             rect.height(),
@@ -350,22 +351,22 @@ pub fn emit_password_box(
     } else {
         Token::TEXT_PRIMARY
     };
-    let eye_fill = if disabled {
-        Token::NONE
-    } else if control.phase == PointerPhase::Hovered {
+    // 眼睛按钮：WinUI 规范仅在聚焦、未禁用且有输入内容时显示；未聚焦或禁用时置空占位保持图元数量恒定。
+    let show_eye = control.focused && !disabled && !state.text.is_empty();
+    let eye_fill = if show_eye && control.phase == PointerPhase::Hovered {
         Token::CONTROL_HOVER
     } else {
         Token::NONE
     };
-    let eye_ink = if disabled {
-        Token::TEXT_DISABLED
+    let eye_ink = if !show_eye {
+        Token::NONE
     } else if state.reveal {
         Token::PRIMARY
     } else {
         Token::TEXT_SECONDARY
     };
 
-    let mut primitives = Vec::with_capacity(8 + glyphs.len());
+    let mut primitives = Vec::with_capacity(10 + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len());
 
     primitives.push(surface(rect, desc.radius, fill, z));
@@ -376,6 +377,29 @@ pub fn emit_password_box(
         border,
         1.0,
         0.0,
+        z + 1,
+    ));
+    // 底边强描边：WinUI 输入框下沿使用 ControlStrongStrokeColorDefault。
+    let underline = if disabled || control.focused {
+        Token::NONE
+    } else {
+        Token::CONTROL_STROKE_STRONG
+    };
+    let inset = desc.radius.min(rect.size.x * 0.5);
+    primitives.push(instance(
+        Rect::new(
+            rect.origin.x + inset,
+            rect.max().y - 1.0,
+            (rect.size.x - inset * 2.0).max(0.0),
+            1.0,
+        ),
+        [0.0; 4],
+        underline,
+        Token::NONE,
+        0.0,
+        0.0,
+        PrimType::RoundedRect,
+        SubElement::Border,
         z + 1,
     ));
     // 聚焦态底部 2px 强调线；与 TextBox 使用同一实现。
