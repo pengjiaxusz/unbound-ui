@@ -1275,7 +1275,7 @@ pub fn emit_canonical_listbox_rows_fixture(
 
     for (idx, &text) in CANONICAL_LIST_ITEMS.iter().enumerate() {
         let y = rect.origin.y + idx as f32 * item_h;
-        let row_r = Rect::new(rect.origin.x, y, list_w, item_h - 1.0);
+        let row_r = Rect::new(rect.origin.x, y, list_w, item_h);
         item_rects.push(row_r);
 
         let is_selected = !state.disabled && idx == state.selected_index;
@@ -1289,13 +1289,8 @@ pub fn emit_canonical_listbox_rows_fixture(
         } else {
             Token::TEXT_PRIMARY
         };
-        let label_r = Rect::new(
-            rect.origin.x + 13.0,
-            y,
-            (list_w - 13.0).max(1.0),
-            item_h - 1.0,
-        );
-        let quads = text_ctx.shape_line_styled(
+        let label_r = Rect::new(rect.origin.x + 12.0, y, (list_w - 12.0).max(1.0), item_h);
+        let mut quads = text_ctx.shape_line_styled(
             text,
             label_r,
             STANDARD_FONT_SIZE,
@@ -1304,6 +1299,9 @@ pub fn emit_canonical_listbox_rows_fixture(
             AlignX::Left,
             AlignY::Middle,
         );
+        for quad in &mut quads {
+            quad.rect.origin.y -= 1.0;
+        }
         primitive::glyphs(
             &quads,
             text_ink,
