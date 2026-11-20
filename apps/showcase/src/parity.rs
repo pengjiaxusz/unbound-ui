@@ -2744,7 +2744,15 @@ fn emit_case(
                 80.0
             };
             let scroll_rect = Rect::new(rect.origin.x, rect.origin.y, scroll_w, scroll_h);
-            let fixture_state = FixtureState::from_control_state(control, checked);
+            // WinUI 的 `ScrollView` 没有禁用态模板：`IsEnabled=false` 只阻断输入，
+            // 视口内的文本仍按常规色绘制，因此文本插桩不能跟随 disabled 降级。
+            let fixture_state = FixtureState::from_control_state(
+                ControlState {
+                    disabled: false,
+                    ..control
+                },
+                checked,
+            );
             let rows_fixture =
                 emit_canonical_text_rows_fixture(scroll_rect, 6.0, fixture_state, text_ctx, 702);
             let content_size = Vec2::new(scroll_w, rows_fixture.total_size.y);
