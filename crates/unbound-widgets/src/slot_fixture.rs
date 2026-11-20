@@ -3836,7 +3836,7 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
         total_r
     };
     out.primitives
-        .push(primitive::surface(visual_r, 4.0, fill, z));
+        .push(primitive::surface(visual_r, 4.5, fill, z));
 
     if state.focused && !disabled {
         out.primitives.push(primitive::focus_ring(
@@ -3896,9 +3896,7 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
         &mut out.payloads,
     );
 
-    if disabled {
-        apply_recursive_disabled_propagation(&mut out, true);
-    }
+    // disabled 态下 text_ink 已是 Token::TEXT_DISABLED，不需二次衰减透明度
 
     AppBarToggleButtonFixtureOutput {
         output: out,

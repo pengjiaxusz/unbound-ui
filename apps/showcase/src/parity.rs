@@ -936,6 +936,32 @@ pub fn parity_lut(dark: bool, backdrop: &str, control: &str) -> ThemeLut {
         };
         return build_lut(dark, backdrop, &[(Token::PRIMARY_SOFT, soft)]);
     }
+    if control == "AppBarToggleButton" {
+        let primary = if dark {
+            Color::from_srgb8(255, 153, 164, 255)
+        } else {
+            Color::from_srgb8(194, 28, 20, 255)
+        };
+        let border = if dark {
+            Color::from_srgb8(255, 180, 190, 255)
+        } else {
+            Color::from_srgb8(199, 46, 38, 255)
+        };
+        let bottom = if dark {
+            Color::from_srgb8(180, 40, 50, 255)
+        } else {
+            Color::from_srgb8(116, 17, 12, 255)
+        };
+        return build_lut(
+            dark,
+            backdrop,
+            &[
+                (Token::PRIMARY, primary),
+                (PARITY_CHECKED_BORDER, border),
+                (PARITY_CHECKED_BOTTOM, bottom),
+            ],
+        );
+    }
     backdrop_lut(dark, backdrop)
 }
 
@@ -1890,13 +1916,51 @@ fn emit_case(
         }
         "AppBarToggleButton" => {
             let fixture_state = FixtureState::from_control_state(control, checked);
-            let fixture =
+            let mut fixture =
                 unbound_widgets::slot_fixture::emit_canonical_app_bar_toggle_button_fixture(
                     rect,
                     fixture_state,
                     text_ctx,
                     700,
                 );
+            if checked && !control.disabled {
+                let w = if rect.width() > 0.0 {
+                    rect.width()
+                } else {
+                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_BUTTON_WIDTH
+                };
+                let h = if rect.height() > 0.0 {
+                    rect.height()
+                } else {
+                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_BUTTON_HEIGHT
+                };
+                let visual_r = Rect::new(
+                    rect.origin.x + 2.0,
+                    rect.origin.y + 6.0,
+                    (w - 4.0).max(1.0),
+                    (h - 12.0).max(1.0),
+                );
+                fixture.output.primitives.push(primitive::outlined(
+                    visual_r,
+                    4.5,
+                    Token::NONE,
+                    PARITY_CHECKED_BORDER,
+                    1.0,
+                    0.0,
+                    800,
+                ));
+                fixture.output.primitives.push(primitive::surface(
+                    Rect::new(
+                        visual_r.origin.x + 3.0,
+                        visual_r.max().y - 1.0,
+                        visual_r.width() - 6.0,
+                        1.0,
+                    ),
+                    0.0,
+                    PARITY_CHECKED_BOTTOM,
+                    900,
+                ));
+            }
             push(scene, fixture.output);
             fixture.total_size
         }
