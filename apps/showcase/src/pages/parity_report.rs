@@ -49,8 +49,8 @@ const THUMB_MAX_WIDTH: f32 = 320.0;
 const THUMB_ASPECT: f32 = 420.0 / 160.0;
 /// 三张缩略图之间的间距。
 const THUMB_GAP: f32 = 10.0;
-/// 概要横幅的高度。
-const SUMMARY_HEIGHT: f32 = 64.0;
+/// 概要横幅的高度。三行：标题与刷新按钮、统计、进度条。
+const SUMMARY_HEIGHT: f32 = 84.0;
 /// 概要横幅与首行对照卡片之间的间距。
 const SUMMARY_GAP: f32 = 12.0;
 /// 相邻对照卡片之间的间距。
@@ -399,8 +399,8 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
         },
         Rect::new(
             summary.origin.x + 16.0,
-            summary.origin.y + 8.0,
-            (summary.size.x - 360.0).max(160.0),
+            summary.origin.y + 10.0,
+            (summary.size.x - 140.0).max(160.0),
             26.0,
         ),
         15.0,
@@ -431,8 +431,8 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
         ),
         Rect::new(
             summary.origin.x + 16.0,
-            summary.origin.y + 36.0,
-            (summary.size.x - 360.0).max(160.0),
+            summary.origin.y + 42.0,
+            (summary.size.x - 40.0).max(160.0),
             18.0,
         ),
         10.0,
@@ -440,7 +440,7 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
         AlignX::Start,
         AlignY::Top,
     );
-    let bar = Rect::new(summary.max().x - 344.0, summary.origin.y + 40.0, 220.0, 8.0);
+    let bar = Rect::new(summary.origin.x + 16.0, summary.origin.y + 68.0, 200.0, 8.0);
     ctx.canvas
         .rect(bar, 4.0, palette.control_track, 0, 0.0, 0.0);
     let ratio = report.passed as f32 / report.cases.len().max(1) as f32;
@@ -454,15 +454,15 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
     );
     ctx.canvas.text(
         &format!("{:.0}%", ratio * 100.0),
-        Rect::new(bar.origin.x, bar.origin.y - 18.0, bar.size.x, 16.0),
+        Rect::new(bar.max().x + 8.0, bar.origin.y - 4.0, 56.0, 16.0),
         10.0,
         palette.text_muted,
-        AlignX::End,
+        AlignX::Start,
         AlignY::Top,
     );
     refresh_button(
         ctx,
-        Rect::new(summary.max().x - 112.0, summary.origin.y + 18.0, 96.0, 28.0),
+        Rect::new(summary.max().x - 112.0, summary.origin.y + 10.0, 96.0, 28.0),
         zh,
         false,
     );
