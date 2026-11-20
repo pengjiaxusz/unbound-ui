@@ -474,7 +474,10 @@ pub use generic_data_table::{
     emit_generic_data_table, DataColumnSpec, GenericDataTableDesc, GenericDataTableState,
     SortDirection,
 };
-pub use pipeline_view::{emit_pipeline_view, PipelineStageItem, PipelineViewDesc};
+pub use pipeline_view::{
+    emit_pipeline_view, PipelineStageItem, PipelineStageStatus, PipelineSubStep, PipelineViewDesc,
+    PipelineViewState,
+};
 pub use pivot::{
     emit_pivot_item, PivotDesc, PivotItem, PivotState, PIVOT_GAP, PIVOT_HEIGHT,
     PIVOT_INDICATOR_HEIGHT,
@@ -493,7 +496,7 @@ pub use sidebar::{
     SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_FOOTER_GAP, SIDEBAR_ITEM_HEIGHT, SIDEBAR_PADDING,
     SIDEBAR_SECTION_GAP, SIDEBAR_SECTION_HEIGHT, SIDEBAR_WIDTH,
 };
-pub use task_hud::{emit_task_hud, TaskActivityItem, TaskHudDesc};
+pub use task_hud::{emit_task_hud, TaskActivityItem, TaskHudDesc, TaskHudState, TaskStatus};
 
 pub use accordion::{
     emit_accordion_body, emit_accordion_header, AccordionDesc, AccordionSection, AccordionState,
