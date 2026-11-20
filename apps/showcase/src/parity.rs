@@ -944,7 +944,8 @@ pub fn parity_lut(dark: bool, backdrop: &str, control: &str) -> ThemeLut {
             (Token::PRIMARY, accent),
             (Token::PRIMARY_HOVER, accent),
             (Token::PRIMARY_PRESSED, accent),
-            (Token::PRIMARY_SOFT, accent),
+            // ListBox 的选中行是强调色 40% 叠加在页面底板上（采样 235,159,155）。
+            (Token::PRIMARY_SOFT, Color::from_srgb8(235, 159, 155, 255)),
         ],
     )
 }
@@ -2878,26 +2879,10 @@ fn emit_case(
             let disabled = control.disabled;
 
             let mut out = WidgetOutput::default();
-            out.primitives.push(primitive::outlined(
-                list_rect,
-                4.0,
-                if disabled {
-                    Token::CONTROL_DISABLED_BG
-                } else {
-                    Token::CARD_BG
-                },
-                if disabled {
-                    Token::CONTROL_DISABLED_BORDER
-                } else {
-                    Token::CONTROL_STROKE
-                },
-                1.0,
-                0.0,
-                700,
-            ));
+            let _ = disabled;
 
             let fixture_state = FixtureState::from_control_state(control, checked);
-            let fixture = unbound_widgets::slot_fixture::emit_canonical_list_rows_fixture(
+            let fixture = unbound_widgets::slot_fixture::emit_canonical_listbox_rows_fixture(
                 list_rect,
                 fixture_state,
                 text_ctx,
