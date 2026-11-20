@@ -452,6 +452,9 @@ impl GalleryApp {
             }
         }
         self.editor_mut(id).focus();
+        if id == EditorId::Search {
+            self.state.search_selection = 0;
+        }
         self.pending_focus = Some(node);
         self.state.bump();
     }
@@ -501,6 +504,10 @@ impl GalleryApp {
         if outcome.changed {
             self.editor_mut(id).touch();
             self.sync_editor_scroll(id);
+            // 查询变化后旧选中项已失去意义，回到第一项。
+            if id == EditorId::Search {
+                self.state.search_selection = 0;
+            }
             self.state.bump();
         }
         if let Some(text) = outcome.copied.clone() {
@@ -1400,7 +1407,13 @@ impl GalleryApp {
         // 点击编辑器之外的区域时释放编辑器焦点：选区随焦点一起折叠，
         // 否则旧选区会在后续悬停时继续显示。上下文菜单项属于编辑器本身。
         let editor_related = target.and_then(target::decode).is_some_and(|item| {
-            Self::editor_for_target(item).is_some() || matches!(item, Target::EditorMenuItem(_))
+            Self::editor_for_target(item).is_some()
+                || matches!(
+                    item,
+                    Target::EditorMenuItem(_)
+                        | Target::SearchResult(_)
+                        | Target::SearchComponent(_)
+                )
         });
         if self.focused_editor().is_some() && !editor_related {
             self.state.blur_editors();
@@ -1691,6 +1704,24 @@ impl GalleryApp {
         }
 
         if let Some(id) = self.focused_editor() {
+            // 搜索框的上下键用于遍历命中项：在文本编辑归约之前拦截，
+            // 否则会被 key_to_edit_event 映射为 Home/End，只移动插入符。
+            if id == EditorId::Search {
+                let hit_count = self.state.search_hits().len();
+                self.state.clamp_search_selection(hit_count);
+                if let PlatformKey::Named(name) = key {
+                    let delta = match name.as_str() {
+                        "ArrowDown" => Some(1),
+                        "ArrowUp" => Some(-1),
+                        _ => None,
+                    };
+                    if let Some(delta) = delta {
+                        let count = self.state.search_hits().len();
+                        self.state.move_search_selection(delta, count);
+                        return;
+                    }
+                }
+            }
             match key {
                 PlatformKey::Named(name) if name == "Escape" => {
                     // 组合进行中优先只取消组合：保留已提交的文本与焦点，
@@ -1703,6 +1734,7 @@ impl GalleryApp {
                     match id {
                         EditorId::Search => {
                             self.editor_mut(id).edit.set_text(String::new());
+                            self.state.search_selection = 0;
                         }
                         EditorId::Fps => {
                             let limit = self.state.fps_limit;
@@ -1717,7 +1749,8 @@ impl GalleryApp {
                 PlatformKey::Named(name) if name == "Enter" => {
                     match id {
                         EditorId::Search => {
-                            if let Some(hit) = self.state.search_hits().first().copied() {
+                            let hits = self.state.search_hits();
+                            if let Some(hit) = hits.get(self.state.search_selection).copied() {
                                 match hit {
                                     crate::state::SearchHit::Page(page) => self.navigate(page),
                                     crate::state::SearchHit::Component(component) => {
@@ -4719,12 +4752,11 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
             panel.size.x - 12.0,
             34.0,
         );
-        let (node, active, title, meta, a11y_label) = match *hit {
+        let (node, title, meta, a11y_label) = match *hit {
             crate::state::SearchHit::Page(page) => {
                 let info = page.localized_info(state.locale);
                 (
                     target::id(Target::SearchResult(page.index() as u8)),
-                    page == state.active_page,
                     info.short.to_string(),
                     format!(
                         "{} · {}",
@@ -4736,19 +4768,20 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
             }
             crate::state::SearchHit::Component(id) => (
                 target::id(Target::SearchComponent(id as u8)),
-                state.active_page == PageId::Components,
                 crate::pages::components::component_nav_label_localized(id, state.locale)
                     .to_string(),
                 format!("Component · {}", id.module_name()),
                 format!("Component {}", id.module_name()),
             ),
         };
-        let hover = canvas.visual(node, false);
-        if hover.is_hovered() || active {
+        // 键盘选中项优先高亮，鼠标悬停次之；两者都不再依赖当前页面。
+        let selected = index == state.search_selection;
+        let hovered = canvas.visual(node, false).is_hovered();
+        if selected || hovered {
             canvas.rect(
                 row,
                 7.0,
-                if active {
+                if selected {
                     palette.primary_soft
                 } else {
                     palette.control_hover
@@ -4791,7 +4824,7 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
             &a11y_label,
             CursorKind::Pointer,
             false,
-            active,
+            selected,
             2,
         );
     }

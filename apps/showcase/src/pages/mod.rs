@@ -499,9 +499,11 @@ impl PageId {
         }
     }
 
-    /// 支持中英文子串、全拼、双拼（默认小鹤双拼）及首字母缩写的页面搜索。
+    /// 页面的搜索匹配分数：所有查询词都命中时返回各词分数之和，否则返回 `None`。
+    ///
+    /// 与 [`Self::matches`] 共用同一份匹配逻辑，供搜索结果按强度排序使用。
     #[must_use]
-    pub fn matches(self, query: &str) -> bool {
+    pub fn match_score(self, query: &str) -> Option<u32> {
         let info = self.info();
         let zh_info = self.localized_info(Locale::ZhCn);
         let zh_keywords = match self {
@@ -551,9 +553,17 @@ impl PageId {
             zh_keywords
         );
         let matcher = unbound_text::PinyinMatcher::new();
-        query
-            .split_whitespace()
-            .all(|term| matcher.match_text(&haystack, term).is_some())
+        let mut total = 0;
+        for term in query.split_whitespace() {
+            total += matcher.match_text(&haystack, term)?.score;
+        }
+        Some(total)
+    }
+
+    /// 支持中英文子串、全拼、双拼（默认小鹤双拼）及首字母缩写的页面搜索。
+    #[must_use]
+    pub fn matches(self, query: &str) -> bool {
+        self.match_score(query).is_some()
     }
 }
 

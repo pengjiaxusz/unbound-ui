@@ -424,6 +424,8 @@ pub struct GalleryState {
     pub nav_expanded: bool,
     /// 顶栏全局搜索框的共享编辑状态。
     pub search: TextEditor,
+    /// 搜索命中列表中的键盘选中项索引；随查询变化归零。
+    pub search_selection: usize,
     /// 各编辑器最近一帧的文本视口宽度，用于保持插入符可见。
     pub editor_views: [core::cell::Cell<f32>; 3],
     /// 最近一帧记录的插入符位置（IME 候选框锚点）。
@@ -482,6 +484,7 @@ impl Default for GalleryState {
             active_component: None,
             nav_expanded: true,
             search: TextEditor::default(),
+            search_selection: 0,
             editor_views: core::array::from_fn(|_| core::cell::Cell::new(200.0)),
             ime_anchor: core::cell::Cell::new(Vec2::new(24.0, 60.0)),
             locale: Locale::EnUs,
@@ -989,7 +992,10 @@ impl GalleryState {
             .collect()
     }
 
-    /// 同时检索页面目录与全部 106 个标准组件目录（支持中英文子串、全拼、多方案双拼与首字母缩写）。
+    /// 同时检索页面目录与全部标准组件目录（支持中英文子串、全拼、多方案双拼与首字母缩写）。
+    ///
+    /// 页面与组件统一按匹配分数降序混排：查询词为每个命中贡献分数，全部词都命中才算命中。
+    /// 因此完全匹配与前缀匹配会排在离散子序列之前。同分沿用目录声明顺序（稳定排序）。
     #[must_use]
     pub fn search_hits(&self) -> Vec<SearchHit> {
         let query = self.search.text().trim();
@@ -998,13 +1004,10 @@ impl GalleryState {
         }
         let terms: Vec<&str> = query.split_whitespace().collect();
         let matcher = unbound_text::PinyinMatcher::new();
-        let mut hits = Vec::new();
+        let mut scored: Vec<(u32, SearchHit)> = Vec::new();
         for page in PageId::ALL {
-            if page.matches(query) {
-                hits.push(SearchHit::Page(page));
-                if hits.len() >= 6 {
-                    return hits;
-                }
+            if let Some(score) = page.match_score(query) {
+                scored.push((score, SearchHit::Page(page)));
             }
         }
         for &id in WidgetCatalogId::ALL {
@@ -1012,17 +1015,43 @@ impl GalleryState {
             let mod_name = id.module_name();
             let keywords = crate::pages::components::component_search_keywords(id);
             let hay = format!("{label} {mod_name} {keywords} component widget");
-            if terms
-                .iter()
-                .all(|term| matcher.match_text(&hay, term).is_some())
-            {
-                hits.push(SearchHit::Component(id));
-                if hits.len() >= 6 {
-                    break;
+            let mut total = 0;
+            let mut all_terms_match = true;
+            for term in &terms {
+                match matcher.match_text(&hay, term) {
+                    Some(matched) => total += matched.score,
+                    None => {
+                        all_terms_match = false;
+                        break;
+                    }
                 }
             }
+            if all_terms_match {
+                scored.push((total, SearchHit::Component(id)));
+            }
         }
-        hits
+        scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+        scored.into_iter().take(6).map(|(_, hit)| hit).collect()
+    }
+
+    /// 把搜索选中项钳制到当前命中数内；命中数变化后调用，避免索引越界。
+    pub fn clamp_search_selection(&mut self, count: usize) {
+        if count == 0 {
+            self.search_selection = 0;
+        } else if self.search_selection >= count {
+            self.search_selection = count - 1;
+        }
+    }
+
+    /// 按增量移动搜索选中项并在两端环绕。
+    pub fn move_search_selection(&mut self, delta: isize, count: usize) {
+        if count == 0 {
+            self.search_selection = 0;
+            return;
+        }
+        let current = self.search_selection.min(count - 1) as isize;
+        self.search_selection = (current + delta).rem_euclid(count as isize) as usize;
+        self.bump();
     }
 }
 
@@ -1285,5 +1314,33 @@ mod search_tests {
                 .any(|h| matches!(h, SearchHit::Page(PageId::Buttons))),
             "搜索 Button 应命中页面: {hits:?}"
         );
+    }
+
+    #[test]
+    fn search_hits_ranks_prefix_match_first() {
+        // 完全匹配的组件名必须排在仅离散子序列命中的项之前。
+        let state = GalleryState {
+            search: TextEditor::new("toggle_button"),
+            ..Default::default()
+        };
+        let hits = state.search_hits();
+        assert_eq!(
+            hits.first(),
+            Some(&SearchHit::Component(WidgetCatalogId::ToggleButton)),
+            "完全匹配应排第一: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn search_selection_wraps_and_clamps() {
+        let mut state = GalleryState::default();
+        state.move_search_selection(-1, 3);
+        assert_eq!(state.search_selection, 2, "向上越过首项应环绕到末项");
+        state.move_search_selection(1, 3);
+        assert_eq!(state.search_selection, 0, "向下越过末项应环绕到首项");
+        state.clamp_search_selection(1);
+        assert_eq!(state.search_selection, 0, "命中数减少后索引应被钳制");
+        state.clamp_search_selection(0);
+        assert_eq!(state.search_selection, 0, "无命中时索引归零");
     }
 }
