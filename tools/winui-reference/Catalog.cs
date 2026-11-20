@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -87,7 +87,7 @@ internal static class Catalog
         return state.ToLowerInvariant() switch
         {
             "normal" or "disabled" or "focused" => true,
-            "checked" => canonical is "CheckBox" or "ToggleSwitch" or "ToggleButton" or "RadioButton" or "AppBarToggleButton" or "ToggleSplitButton" or "SwipeControl",
+            "checked" => canonical is "CheckBox" or "ToggleSwitch" or "ToggleButton" or "RadioButton" or "AppBarToggleButton" or "ToggleSplitButton",
             _ => false,
         };
     }
@@ -1159,12 +1159,6 @@ internal static class Catalog
                 if (element is ToggleSplitButton toggleSplit)
                 {
                     toggleSplit.IsChecked = true;
-                    return true;
-                }
-
-                if (element is SwipeControl swipe)
-                {
-                    swipe.Open(OpenSwipeItemModes.LeftItems);
                     return true;
                 }
 
