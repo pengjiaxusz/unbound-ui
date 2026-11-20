@@ -249,10 +249,17 @@ pub fn emit_repeat_button(
         Token::TEXT_PRIMARY
     };
 
-    let mut primitives = Vec::with_capacity(3 + glyphs.len());
+    let mut primitives = Vec::with_capacity(4 + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len());
 
-    primitives.push(surface(rect, desc.radius, fill, z));
+    let fill_rect = if !disabled { rect.inflate(-1.0) } else { rect };
+    let fill_radius = if !disabled {
+        (desc.radius - 1.0).max(0.0)
+    } else {
+        desc.radius
+    };
+
+    primitives.push(surface(fill_rect, fill_radius, fill, z));
     primitives.push(outlined(
         rect,
         desc.radius,
@@ -262,6 +269,22 @@ pub fn emit_repeat_button(
         0.0,
         z + 1,
     ));
+    if !disabled {
+        let inset = desc.radius.min(rect.size.x * 0.5);
+        primitives.push(surface(
+            Rect::new(
+                rect.origin.x + inset,
+                rect.max().y - 1.0,
+                (rect.size.x - inset * 2.0).max(0.0),
+                1.0,
+            ),
+            0.0,
+            Token::CONTROL_STROKE_SECONDARY,
+            z + 1,
+        ));
+    } else {
+        primitives.push(surface(Rect::ZERO, 0.0, Token::NONE, z + 1));
+    }
     emit_glyphs(glyphs, ink, z + 1, &mut primitives, &mut payloads);
     primitives.push(focus_ring(
         rect,

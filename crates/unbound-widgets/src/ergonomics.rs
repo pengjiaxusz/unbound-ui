@@ -176,7 +176,10 @@ impl TextCtx<'_> {
         let logical_h = (shaped.height / scale).max(size);
         let x = match align_x {
             AlignX::Left => rect.origin.x,
-            AlignX::Center => rect.origin.x + ((rect.width() - logical_w) * 0.5).max(0.0),
+            AlignX::Center => {
+                let center_x = rect.origin.x + ((rect.width() - logical_w) * 0.5).max(0.0);
+                (center_x * scale).round() / scale
+            }
             AlignX::Right => (rect.max().x - logical_w).max(rect.origin.x),
         };
         let y = match align_y {
