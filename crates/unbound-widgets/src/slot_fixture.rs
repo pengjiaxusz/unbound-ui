@@ -69,7 +69,7 @@ pub const CANONICAL_TITLE_BAR_SUBTITLE: &str = "WinUiReference";
 pub const CANONICAL_NAV_ITEMS: [(&str, &str); 2] = [("\u{E80F}", "Home"), ("\u{E8F1}", "Library")];
 
 /// 标准 NavigationView 底部 Settings 项。
-pub const CANONICAL_NAV_SETTINGS: (&str, &str) = ("\u{E713}", "Settings");
+pub const CANONICAL_NAV_SETTINGS: (&str, &str) = ("\u{E713}", "\u{8BBE}\u{7F6E}"); // lang-ok: 复刻参考截图的 zh-CN 系统设置项
 
 /// 标准 NavigationView 顶部折叠汉堡按钮图标。
 pub const CANONICAL_NAV_TOGGLE_GLYPH: &str = "\u{E700}";
@@ -1741,46 +1741,44 @@ pub fn emit_canonical_navigation_view_fixture(
     };
     let panel_r = Rect::new(rect.origin.x, rect.origin.y, panel_w, panel_h);
 
-    let item_h = 36.0;
+    let item_h = 40.0;
     let pad_x = 4.0;
     let pad_y = 4.0;
     let row_w = panel_w - pad_x * 2.0;
 
-    out.primitives
-        .push(primitive::surface(panel_r, 0.0, Token::CARD_BG, z));
-    out.primitives.push(primitive::surface(
-        Rect::new(panel_r.max().x - 1.0, panel_r.origin.y, 1.0, panel_h),
-        0.0,
-        Token::CARD_BORDER,
-        z + 1,
-    ));
+    // 参考截图只绘制导航项本身：没有整块窗格底板，也没有右侧分隔线。
+    // 顶部折叠按钮是三条 12x1 的横线（WinUI NavigationView 汉堡按钮）。
+    let hamburger_x = panel_r.origin.x + 17.0;
+    for offset in [19.0_f32, 24.0, 28.0] {
+        out.primitives.push(primitive::surface(
+            Rect::new(hamburger_x, panel_r.origin.y + offset, 12.0, 1.0),
+            0.0,
+            Token::TEXT_PRIMARY,
+            z + 1,
+        ));
+    }
 
     let disabled = state.disabled;
     let selected_idx = state.selected_index;
     let mut item_rects = Vec::with_capacity(CANONICAL_NAV_ITEMS.len());
 
-    let icon_x = panel_r.origin.x + pad_x + 12.0;
-    let text_x = panel_r.origin.x + pad_x + 40.0;
+    let icon_x = panel_r.origin.x + 19.0;
+    let text_x = panel_r.origin.x + 47.0;
 
     for (idx, &(glyph, label)) in CANONICAL_NAV_ITEMS.iter().enumerate() {
         let is_selected = !disabled && (idx == selected_idx);
-        let row_y = panel_r.origin.y + pad_y + idx as f32 * item_h;
+        let row_y = panel_r.origin.y + 44.0 + idx as f32 * item_h;
         let row_r = Rect::new(panel_r.origin.x + pad_x, row_y, row_w, item_h);
         item_rects.push(row_r);
 
-        let row_fill = if disabled {
-            Token::NONE
-        } else if is_selected {
-            Token::NAV_SELECTED
-        } else {
-            Token::NONE
-        };
+        // 参考图的选中项只有左侧胶囊，没有整行底色。
+        let row_fill = Token::NONE;
         out.primitives
             .push(primitive::surface(row_r, 4.0, row_fill, z + 2));
 
         if is_selected {
             let pill = Rect::new(
-                row_r.origin.x,
+                panel_r.origin.x + 16.0,
                 row_r.origin.y + (item_h - 16.0) * 0.5,
                 3.0,
                 16.0,
@@ -1802,10 +1800,8 @@ pub fn emit_canonical_navigation_view_fixture(
 
         let icon_ink = if disabled {
             Token::TEXT_DISABLED
-        } else if is_selected {
-            Token::PRIMARY
         } else {
-            Token::TEXT_SECONDARY
+            Token::TEXT_PRIMARY
         };
         let text_ink = if disabled {
             Token::TEXT_DISABLED
@@ -1813,7 +1809,7 @@ pub fn emit_canonical_navigation_view_fixture(
             Token::TEXT_PRIMARY
         };
 
-        let icon_r = Rect::new(icon_x - 8.0, row_r.origin.y, 16.0, item_h);
+        let icon_r = Rect::new(icon_x, row_r.origin.y, 16.0, item_h);
         let icon_quads = text_ctx.shape_line_styled(
             glyph,
             icon_r,
@@ -1857,12 +1853,7 @@ pub fn emit_canonical_navigation_view_fixture(
     }
 
     let footer_y = panel_r.origin.y + panel_h - item_h - pad_y;
-    out.primitives.push(primitive::surface(
-        Rect::new(panel_r.origin.x + pad_x, footer_y - 5.0, row_w, 1.0),
-        0.0,
-        Token::DIVIDER,
-        z + 2,
-    ));
+    // 参考截图的 Settings 前没有横贯窗格的分隔线。
     let settings_r = Rect::new(panel_r.origin.x + pad_x, footer_y, row_w, item_h);
     out.primitives
         .push(primitive::surface(settings_r, 4.0, Token::NONE, z + 2));
@@ -1873,7 +1864,7 @@ pub fn emit_canonical_navigation_view_fixture(
         Token::TEXT_SECONDARY
     };
 
-    let set_icon_r = Rect::new(icon_x - 8.0, settings_r.origin.y, 16.0, item_h);
+    let set_icon_r = Rect::new(icon_x, settings_r.origin.y, 16.0, item_h);
     let set_icon_quads = text_ctx.shape_line_styled(
         CANONICAL_NAV_SETTINGS.0,
         set_icon_r,
@@ -1949,53 +1940,46 @@ pub fn emit_canonical_tab_view_fixture(
     };
     let total_r = Rect::new(rect.origin.x, rect.origin.y, tab_w, tab_h);
 
-    let strip_h = 36.0;
-    let tab_item_w = 120.0;
+    let strip_h = 39.0;
+    let tab_item_w = 176.0;
     let disabled = state.disabled;
     let selected_idx = state.selected_index;
 
     let mut tab_rects = Vec::with_capacity(CANONICAL_TAB_ITEMS.len());
 
-    let line_r = Rect::new(
-        total_r.origin.x,
-        total_r.origin.y + strip_h - 1.0,
-        tab_w,
-        1.0,
-    );
+    let line_r = Rect::new(total_r.origin.x, total_r.origin.y + strip_h, tab_w, 1.0);
     out.primitives
-        .push(primitive::surface(line_r, 0.0, Token::DIVIDER, z + 1));
+        .push(primitive::surface(line_r, 0.0, Token::CARD_BORDER, z + 1));
 
     let mut cur_x = total_r.origin.x + 4.0;
     for (idx, &title) in CANONICAL_TAB_ITEMS.iter().enumerate() {
-        let is_selected = !disabled && (idx == selected_idx);
-        let t_rect = Rect::new(cur_x, total_r.origin.y + 4.0, tab_item_w, strip_h - 4.0);
+        let is_selected = idx == selected_idx;
+        let t_rect = Rect::new(cur_x, total_r.origin.y + 8.0, tab_item_w, strip_h - 7.0);
         tab_rects.push(t_rect);
 
-        let fill = if disabled {
-            Token::NONE
-        } else if is_selected {
-            Token::SURFACE
-        } else {
-            Token::NONE
-        };
-        out.primitives
-            .push(primitive::surface(t_rect, 4.0, fill, z + 2));
-
         if is_selected {
-            let indicator_r = Rect::new(t_rect.origin.x, t_rect.max().y - 2.0, t_rect.width(), 2.0);
             out.primitives
-                .push(primitive::surface(indicator_r, 1.0, Token::PRIMARY, z + 5));
+                .push(primitive::surface(t_rect, 7.0, Token::SURFACE, z + 2));
+            out.primitives.push(primitive::outlined(
+                t_rect,
+                7.0,
+                Token::NONE,
+                Token::CARD_BORDER,
+                1.0,
+                0.0,
+                z + 2,
+            ));
+        }
 
-            if state.focused {
-                out.primitives.push(primitive::focus_ring(
-                    t_rect.inflate(1.0),
-                    4.0,
-                    Token::FOCUS_RING,
-                    2.0,
-                    z + 10,
-                    true,
-                ));
-            }
+        if is_selected && state.focused && !disabled {
+            out.primitives.push(primitive::focus_ring(
+                t_rect.inflate(1.0),
+                7.0,
+                Token::FOCUS_RING,
+                2.0,
+                z + 10,
+                true,
+            ));
         }
 
         let text_ink = if disabled {
@@ -2008,7 +1992,7 @@ pub fn emit_canonical_tab_view_fixture(
 
         let label_r = Rect::new(
             t_rect.origin.x + 12.0,
-            t_rect.origin.y,
+            t_rect.origin.y + 1.0,
             t_rect.width() - 36.0,
             t_rect.height(),
         );
@@ -2036,7 +2020,7 @@ pub fn emit_canonical_tab_view_fixture(
             Token::TEXT_SECONDARY
         };
         let close_r = Rect::new(
-            t_rect.max().x - 22.0,
+            t_rect.max().x - 26.0,
             t_rect.origin.y,
             16.0,
             t_rect.height(),
@@ -2058,7 +2042,7 @@ pub fn emit_canonical_tab_view_fixture(
             &mut out.payloads,
         );
 
-        cur_x += tab_item_w + 2.0;
+        cur_x += tab_item_w;
     }
 
     let content_r = Rect::new(
@@ -2067,8 +2051,7 @@ pub fn emit_canonical_tab_view_fixture(
         tab_w,
         (tab_h - strip_h).max(1.0),
     );
-    out.primitives
-        .push(primitive::surface(content_r, 0.0, Token::CARD_BG, z));
+    // 参考截图的内容区没有独立底板，页面背景直接透出。
 
     let content_ink = if disabled {
         Token::TEXT_DISABLED
@@ -2076,10 +2059,10 @@ pub fn emit_canonical_tab_view_fixture(
         Token::TEXT_PRIMARY
     };
     let content_label_r = Rect::new(
-        content_r.origin.x + 16.0,
-        content_r.origin.y + 12.0,
-        content_r.width() - 32.0,
-        24.0,
+        content_r.origin.x,
+        content_r.origin.y + 1.0,
+        content_r.width(),
+        20.0,
     );
     let content_quads = text_ctx.shape_line_styled(
         CANONICAL_TAB_CONTENT,
@@ -3521,7 +3504,7 @@ pub fn emit_canonical_pivot_fixture(
     } else {
         CANONICAL_PIVOT_HEIGHT
     };
-    let header_h = CANONICAL_PIVOT_HEADER_HEIGHT;
+    let header_h = 46.0;
     let disabled = state.disabled;
 
     let header_r = Rect::new(rect.origin.x, rect.origin.y, w, header_h);
@@ -3532,22 +3515,16 @@ pub fn emit_canonical_pivot_fixture(
         (h - header_h).max(1.0),
     );
 
-    // 1. 底部分隔线
-    out.primitives.push(primitive::surface(
-        Rect::new(header_r.origin.x, header_r.max().y - 1.0, w, 1.0),
-        0.0,
-        Token::DIVIDER,
-        z + 1,
-    ));
+    // 参考截图的 Pivot 没有横贯全宽的分隔线，只有选中项下方的短指示条。
 
     // 2. 标签项排布（"One" 与 "Two"）
-    let item_w = 48.0;
+    let item_w = 44.0;
     let gap = 24.0;
-    let mut cur_x = header_r.origin.x + 12.0;
+    let mut cur_x = header_r.origin.x + 11.0;
 
     for (idx, &item_name) in CANONICAL_PIVOT_ITEMS.iter().enumerate() {
         let is_selected = !disabled && (idx == state.selected_index);
-        let item_r = Rect::new(cur_x, header_r.origin.y, item_w, header_h);
+        let item_r = Rect::new(cur_x, header_r.origin.y + 2.0, item_w, header_h);
 
         let text_ink = if disabled {
             Token::TEXT_DISABLED
@@ -3561,7 +3538,7 @@ pub fn emit_canonical_pivot_fixture(
         let quads = text_ctx.shape_line_styled(
             item_name,
             item_r,
-            18.0,
+            24.0,
             weight,
             None,
             AlignX::Left,
@@ -3605,7 +3582,7 @@ pub fn emit_canonical_pivot_fixture(
     };
     let content_text_r = Rect::new(
         content_r.origin.x + 12.0,
-        content_r.origin.y + 12.0,
+        content_r.origin.y,
         content_r.width() - 24.0,
         24.0,
     );
