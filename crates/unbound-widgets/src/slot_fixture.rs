@@ -12,7 +12,7 @@ use unbound_theme::Token;
 
 use crate::ergonomics::TextCtx;
 use crate::primitive;
-use crate::{AlignX, AlignY, UiWidget, WidgetOutput};
+use crate::{AlignX, AlignY, ControlState, UiWidget, WidgetOutput};
 
 /// 标准路径插桩文本项（固定 3 级）。
 pub const CANONICAL_PATH_ITEMS: [&str; 3] = ["Root", "Folder", "File.txt"];
@@ -298,6 +298,17 @@ impl FixtureState {
     pub const fn with_selected(mut self, selected_index: usize) -> Self {
         self.selected_index = selected_index;
         self
+    }
+
+    /// 从 ControlState 与 checked 标志派生插桩状态。
+    #[must_use]
+    pub const fn from_control_state(control: ControlState, checked: bool) -> Self {
+        Self {
+            disabled: control.disabled,
+            focused: control.focused,
+            checked,
+            selected_index: 0,
+        }
     }
 }
 
@@ -2781,7 +2792,7 @@ pub fn emit_canonical_info_bar_fixture(
     }
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     InfoBarFixtureOutput {
@@ -2945,7 +2956,7 @@ pub fn emit_canonical_expander_fixture(
     }
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     ExpanderFixtureOutput {
@@ -3051,7 +3062,7 @@ pub fn emit_canonical_split_view_fixture(
     );
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     SplitViewFixtureOutput {
@@ -3254,7 +3265,7 @@ pub fn emit_canonical_calendar_view_fixture(
     }
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     CalendarViewFixtureOutput {
@@ -3356,7 +3367,7 @@ pub fn emit_canonical_time_picker_fixture(
     }
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     TimePickerFixtureOutput {
@@ -3428,7 +3439,7 @@ pub fn emit_canonical_person_picture_fixture(
     );
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     PersonPictureFixtureOutput {
@@ -3482,7 +3493,7 @@ pub fn emit_canonical_font_icon_fixture(
     );
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     FontIconFixtureOutput {
@@ -3616,7 +3627,7 @@ pub fn emit_canonical_pivot_fixture(
     );
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     PivotFixtureOutput {
@@ -3656,7 +3667,7 @@ pub fn emit_canonical_image_fixture(
     ));
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     ImageFixtureOutput {
@@ -3745,7 +3756,7 @@ pub fn emit_canonical_flyout_fixture(
     );
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     FlyoutFixtureOutput {
@@ -3840,7 +3851,7 @@ pub fn emit_canonical_menu_flyout_fixture(
     }
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     MenuFlyoutFixtureOutput {
@@ -3930,7 +3941,7 @@ pub fn emit_canonical_app_bar_button_fixture(
     );
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     AppBarButtonFixtureOutput {
@@ -4038,7 +4049,7 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
     );
 
     if disabled {
-        apply_recursive_disabled_propagation(&mut out, false);
+        apply_recursive_disabled_propagation(&mut out, true);
     }
 
     AppBarToggleButtonFixtureOutput {
