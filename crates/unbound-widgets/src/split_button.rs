@@ -13,8 +13,8 @@ use crate::primitive::{
 };
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 下拉触发器的固定宽度。对齐 WinUI `SplitButtonSecondaryButtonSize = 32`。
-pub const DROPDOWN_WIDTH: f32 = 32.0;
+/// 下拉触发器的固定宽度。对齐 WinUI `SplitButtonSecondaryButtonSize = 36`。
+pub const DROPDOWN_WIDTH: f32 = 36.0;
 
 /// 分裂按钮描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -220,22 +220,22 @@ pub fn emit_split_button_with_glyphs(
     } else {
         (Token::TEXT_SECONDARY, Token::TEXT_PRIMARY)
     };
-    // WinUI 的下拉图标是 12×12、距右沿 12px 的内容内边距，故中心在右沿内 18px。
-    let acx = arrow_rect.max().x - 18.0;
+    // WinUI 的下拉图标居中于 36px 触发区，中心在中心微偏 0.5px。
+    let acx = arrow_rect.center().x - 0.5;
     let acy = arrow_rect.center().y;
     curve_stroke(
-        [acx - 4.0, acy - 2.0],
-        [acx, acy + 2.0],
-        1.5,
+        [acx - 3.5, acy - 2.0],
+        [acx, acy + 1.5],
+        0.75,
         arrow_ink,
         z + 4,
         &mut out.primitives,
         &mut out.payloads,
     );
     curve_stroke(
-        [acx, acy + 2.0],
-        [acx + 4.0, acy - 2.0],
-        1.5,
+        [acx, acy + 1.5],
+        [acx + 3.5, acy - 2.0],
+        0.75,
         arrow_ink,
         z + 4,
         &mut out.primitives,

@@ -1366,14 +1366,23 @@ fn emit_case(
             } else {
                 Token::CONTROL_FILL
             };
+            let border = if disabled {
+                Token::CONTROL_DISABLED_BORDER
+            } else {
+                Token::CONTROL_STROKE
+            };
             let mut out = WidgetOutput::default();
-            out.primitives.push(primitive::outlined(
-                rect,
-                4.0,
+            let fill_rect = if !disabled { rect.inflate(-1.0) } else { rect };
+            let fill_radii = if !disabled { [3.0; 4] } else { [4.0; 4] };
+            out.primitives.push(primitive::instance(
+                fill_rect,
+                fill_radii,
                 fill,
-                Token::CONTROL_STROKE,
-                1.0,
+                Token::NONE,
                 0.0,
+                0.0,
+                unbound_gpu::data::PrimType::RoundedRect,
+                unbound_gpu::data::SubElement::Background,
                 700,
             ));
             // 分隔列：主操作区 84px，其余为下拉箭头区。
@@ -1385,63 +1394,82 @@ fn emit_case(
                     rect.height() - 2.0,
                 ),
                 0.0,
-                Token::CONTROL_STROKE,
+                border,
                 701,
             ));
-            out.primitives.push(primitive::surface(
-                Rect::new(
-                    rect.origin.x + 3.0,
-                    rect.max().y - 1.0,
-                    rect.width() - 6.0,
-                    1.0,
-                ),
+            out.primitives.push(primitive::outlined(
+                rect,
+                4.0,
+                Token::NONE,
+                border,
+                1.0,
                 0.0,
-                if disabled {
-                    PARITY_SPLIT_BOTTOM_DISABLED
-                } else {
-                    PARITY_SPLIT_BOTTOM
-                },
                 702,
             ));
+            if !disabled {
+                let bottom_line = Rect::new(
+                    rect.origin.x + 4.0,
+                    rect.max().y - 1.0,
+                    (rect.width() - 8.0).max(0.0),
+                    1.0,
+                );
+                out.primitives.push(primitive::surface(
+                    bottom_line,
+                    0.0,
+                    PARITY_SPLIT_BOTTOM,
+                    703,
+                ));
+            } else {
+                out.primitives.push(primitive::surface(
+                    Rect::ZERO,
+                    0.0,
+                    PARITY_SPLIT_BOTTOM_DISABLED,
+                    703,
+                ));
+            }
             let ink = if disabled {
                 Token::TEXT_DISABLED
             } else {
                 Token::TEXT_PRIMARY
             };
-            emit_text_left_middle(
-                text_ctx,
-                scene,
-                "SplitButton",
-                rect,
+            let content_r = Rect::new(
                 rect.origin.x + 11.0,
-                unbound_widgets::button::BUTTON_FONT_SIZE,
-                600,
-                None,
-                ink,
-                703,
+                rect.origin.y,
+                (84.0_f32 - 11.0).max(0.0),
+                rect.height(),
             );
-            let cx = rect.max().x - 18.5;
-            let cy = rect.center().y;
+            let mut glyphs = text_ctx.shape_line(
+                "SplitButton",
+                content_r,
+                14.0,
+                400,
+                unbound_widgets::AlignX::Left,
+                unbound_widgets::AlignY::Middle,
+            );
+            glyphs.retain(|quad| quad.rect.origin.x < rect.origin.x + 84.0 - 13.0);
+            primitive::glyphs(&glyphs, ink, 704, &mut out.primitives, &mut out.payloads);
+            let acx = rect.origin.x + 84.0 + 18.0 - 0.5;
+            let acy = rect.center().y;
             let arrow_ink = if disabled {
                 Token::TEXT_DISABLED
             } else {
                 Token::TEXT_SECONDARY
             };
             primitive::curve_stroke(
-                [cx - 4.0, cy - 2.5],
-                [cx - 0.5, cy + 1.5],
-                1.0,
+                [acx - 3.5, acy - 2.0],
+                [acx, acy + 1.5],
+                0.75,
                 arrow_ink,
-                704,
+                705,
                 &mut out.primitives,
                 &mut out.payloads,
             );
             primitive::curve_stroke(
-                [cx - 0.5, cy + 1.5],
-                [cx + 3.5, cy - 2.5],
-                1.0,
+                [acx, acy + 1.5],
+                [acx + 3.5, acy - 2.0],
+                0.75,
                 arrow_ink,
-                704,
+                705,
                 &mut out.primitives,
                 &mut out.payloads,
             );

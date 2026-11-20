@@ -1917,14 +1917,21 @@ impl UiWidget for SplitButtonDesc {
         desc.rect = rect;
         let action_w = (rect.width() - DROPDOWN_WIDTH).max(0.0);
         let action_r = Rect::new(rect.origin.x, rect.origin.y, action_w, rect.height());
-        let glyphs = text_ctx.shape_line(
+        let content_r = Rect::new(
+            action_r.origin.x + 11.0,
+            action_r.origin.y,
+            (action_r.width() - 11.0).max(0.0),
+            action_r.height(),
+        );
+        let mut glyphs = text_ctx.shape_line(
             &desc.label,
-            action_r,
+            content_r,
             14.0,
-            500,
-            AlignX::Center,
+            400,
+            AlignX::Left,
             AlignY::Middle,
         );
+        glyphs.retain(|quad| quad.rect.origin.x < action_r.max().x - 13.0);
         emit_split_button_with_glyphs(node, &desc, state, control, &glyphs)
     }
 }
