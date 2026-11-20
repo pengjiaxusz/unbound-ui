@@ -947,7 +947,7 @@ pub fn emit_canonical_tree_fixture(
     };
 
     // 1. Root 根节点行（深度 0，首项选中；WinUI 在禁用态仍保留选中行底色与指示胶囊）
-    let root_y = rect.origin.y + 4.0;
+    let root_y = rect.origin.y + 2.0;
     let root_r = Rect::new(rect.origin.x + 4.0, root_y, (tree_w - 8.0).max(1.0), item_h);
     let root_selected = state.checked || state.selected_index == 0;
 
@@ -964,11 +964,7 @@ pub fn emit_canonical_tree_fixture(
         out.primitives.push(primitive::surface(
             pill,
             STANDARD_PILL_RADIUS,
-            if state.disabled {
-                Token::CONTROL_DISABLED_THUMB
-            } else {
-                Token::PRIMARY
-            },
+            Token::PRIMARY,
             z + 5,
         ));
 
@@ -1173,7 +1169,7 @@ pub fn emit_canonical_list_rows_fixture(
     };
 
     for (idx, &text) in CANONICAL_LIST_ITEMS.iter().enumerate() {
-        let y = rect.origin.y + 2.0 + idx as f32 * item_h;
+        let y = rect.origin.y + idx as f32 * item_h;
         let row_r = Rect::new(
             rect.origin.x + 4.0,
             y + 2.0,
@@ -1273,18 +1269,6 @@ pub fn emit_canonical_listbox_rows_fixture(
     } else {
         220.0
     };
-
-    let container_h = if rect.height() > 0.0 {
-        rect.height()
-    } else {
-        item_h * 3.0
-    };
-    out.primitives.push(primitive::surface(
-        Rect::new(rect.origin.x, rect.origin.y, list_w, container_h),
-        0.0,
-        Token::CARD_BG,
-        z,
-    ));
 
     for (idx, &text) in CANONICAL_LIST_ITEMS.iter().enumerate() {
         let y = rect.origin.y + idx as f32 * item_h;

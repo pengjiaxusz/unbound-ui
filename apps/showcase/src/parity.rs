@@ -932,7 +932,7 @@ pub fn parity_lut(dark: bool, backdrop: &str, control: &str) -> ThemeLut {
         let soft = if dark {
             Color::from_srgb8(56, 100, 122, 255)
         } else {
-            Color::from_srgb8(146, 184, 219, 255)
+            Color::from_srgb8(235, 159, 155, 255)
         };
         return build_lut(dark, backdrop, &[(Token::PRIMARY_SOFT, soft)]);
     }
