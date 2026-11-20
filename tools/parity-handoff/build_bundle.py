@@ -38,6 +38,27 @@ OVER_LIMIT_MAX = 0.02
 BBOX_TOLERANCE = 1
 INTRINSIC_TOLERANCE = 1.0
 
+# 让交接包自包含：外部 Agent 即使没有仓库读权限，也能拿到设计规律与判定依据。
+REFERENCE_DOCS = (
+    ("GLOSSARY.md", "GLOSSARY.md"),
+    (".agents/skills/fluent-control-design/SKILL.md", "fluent-control-design/SKILL.md"),
+    (".agents/skills/fluent-control-design/REFERENCE.md", "fluent-control-design/REFERENCE.md"),
+    ("docs/adr/0008-batched-roi-parity-and-control-taxonomy.md", "adr/0008-batched-roi-parity-and-control-taxonomy.md"),
+    ("docs/adr/0009-parity-validity-gate-and-capture-contract.md", "adr/0009-parity-validity-gate-and-capture-contract.md"),
+    ("docs/adr/0010-known-aa-edge-exemption.md", "adr/0010-known-aa-edge-exemption.md"),
+    ("docs/adr/0013-text-antialiasing-is-grayscale-only.md", "adr/0013-text-antialiasing-is-grayscale-only.md"),
+    ("docs/adr/0015-dynamic-multi-control-parity-pages.md", "adr/0015-dynamic-multi-control-parity-pages.md"),
+    ("docs/adr/0016-parity-recipe-single-source-of-truth.md", "adr/0016-parity-recipe-single-source-of-truth.md"),
+)
+
+BASE_SOURCE_FILES = (
+    "apps/showcase/src/parity.rs",
+    "apps/showcase/src/png_diff.rs",
+    "crates/unbound-theme/src/win11.rs",
+    "crates/unbound-widgets/src/primitive.rs",
+    "crates/unbound-widgets/src/slot_fixture.rs",
+)
+
 STATUS_ORDER = {"fail": 0, "invalid": 1, "known-aa": 2, "pass": 3}
 COLOR_TEXT = (232, 234, 240)
 COLOR_MUTED = (150, 158, 176)
@@ -379,6 +400,45 @@ def git_head() -> str:
         return "unknown"
 
 
+def copy_reference_docs(bundle: Path) -> list[str]:
+    """Copy design rules, parity ADRs and glossary into the bundle."""
+    copied: list[str] = []
+    for source_rel, target_rel in REFERENCE_DOCS:
+        source = ROOT / source_rel
+        if not source.is_file():
+            continue
+        target = bundle / "reference_docs" / target_rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        copied.append(target_rel)
+    return copied
+
+
+def copy_source_snapshot(
+    bundle: Path,
+    cases: list[dict[str, Any]],
+    source_map: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Snapshot the sources needed to fix non-passing cases (paths preserved)."""
+    paths = set(BASE_SOURCE_FILES)
+    for case in cases:
+        if case["status"] == "pass":
+            continue
+        widget_source = source_map.get(case["control"], {}).get("widgetSource")
+        if widget_source:
+            paths.add(widget_source)
+    copied: list[str] = []
+    for source_rel in sorted(paths):
+        source = ROOT / source_rel
+        if not source.is_file():
+            continue
+        target = bundle / "source_snapshot" / source_rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        copied.append(source_rel)
+    return copied
+
+
 def build(args: argparse.Namespace) -> int:
     cases = read_json(REPORT)["cases"]
     cases.sort(key=lambda item: (STATUS_ORDER.get(item["status"], 9), item["name"]))
@@ -501,6 +561,8 @@ def build(args: argparse.Namespace) -> int:
         )
 
     total = len(cases)
+    reference_docs = copy_reference_docs(bundle)
+    source_snapshot = copy_source_snapshot(bundle, cases, source_map)
     summary = {
         "generatedAtUtc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "gitHead": git_head(),
@@ -523,6 +585,8 @@ def build(args: argparse.Namespace) -> int:
         "controls": control_stats,
         "cases": case_index,
         "missingImages": missing_images,
+        "referenceDocs": reference_docs,
+        "sourceSnapshot": source_snapshot,
     }
     write_json(bundle / "summary.json", summary)
     shutil.copy2(REPORT, bundle / "report.json")
