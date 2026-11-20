@@ -1048,7 +1048,10 @@ pub fn emit_canonical_text_rows_fixture(
     let mut out = WidgetOutput::default();
     let mut row_rects = Vec::with_capacity(3);
 
-    let line_h = 20.0;
+    // WinUI 3 的 `TextBlock` 在 14px 正文下自然行盒为 19px（Segoe UI Variable
+    // 的 ascent/descent 合计取整），三行加 8px 间距的固有高度是 73px。
+    // 此前按 20px 排布会累计多出 3px，使第三行整体下移 2px。
+    let line_h = 19.0;
     let mut cur_y = rect.origin.y;
     let text_ink = if state.disabled {
         Token::TEXT_DISABLED
