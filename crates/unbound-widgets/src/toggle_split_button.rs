@@ -15,8 +15,8 @@ use crate::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
-/// 右侧下拉区的固定宽度。对齐 WinUI `SplitButtonSecondaryButtonSize = 32`。
-pub const TOGGLE_SPLIT_DROPDOWN_WIDTH: f32 = 32.0;
+/// 右侧下拉区的固定宽度。对齐 WinUI `SplitButtonSecondaryButtonSize = 36`。
+pub const TOGGLE_SPLIT_DROPDOWN_WIDTH: f32 = 36.0;
 /// 圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
 pub const TOGGLE_SPLIT_RADIUS: f32 = 4.0;
 /// 标准控件高度。对齐 WinUI `ToggleSplitButton` 的 32px。
@@ -230,7 +230,12 @@ pub fn emit_toggle_split_button(
     let checked = state.checked || control.selected;
     let main_rect = desc.main_rect();
     let arrow_rect = desc.dropdown_rect();
-    let divider_rect = Rect::new(main_rect.max().x - 0.5, rect.origin.y, 1.0, rect.height());
+    let divider_rect = Rect::new(
+        main_rect.max().x - 0.5,
+        rect.origin.y + 1.0,
+        1.0,
+        (rect.height() - 2.0).max(0.0),
+    );
 
     // 左侧选中态：`AccentFillColorDefault` / `Secondary` / `Tertiary`；
     // 未选中沿用 SplitButton 的中性表面。
@@ -270,7 +275,7 @@ pub fn emit_toggle_split_button(
     let border = if disabled {
         Token::CONTROL_DISABLED_BORDER
     } else if checked {
-        Token::PRIMARY
+        Token::new(310)
     } else {
         Token::CONTROL_STROKE
     };
@@ -289,39 +294,72 @@ pub fn emit_toggle_split_button(
         Token::TEXT_SECONDARY
     };
 
-    let mut primitives = Vec::with_capacity(7 + glyphs.len());
+    let mut primitives = Vec::with_capacity(8 + glyphs.len());
     let mut payloads = Vec::with_capacity(glyphs.len() + 2);
 
-    primitives.push(instance_rounded(
-        main_rect,
-        [radius, 0.0, 0.0, radius],
-        main_fill,
-        z,
-    ));
-    primitives.push(instance_rounded(
-        arrow_rect,
-        [0.0, radius, radius, 0.0],
-        arrow_fill,
-        z + 1,
-    ));
+    let fill_rect = if !disabled && !checked {
+        rect.inflate(-1.0)
+    } else {
+        rect
+    };
+    let fill_radii = if !disabled && !checked {
+        [(radius - 1.0).max(0.0); 4]
+    } else {
+        [radius; 4]
+    };
+
+    primitives.push(instance_rounded(fill_rect, fill_radii, main_fill, z));
+    if state.menu_open {
+        let arrow_fill_rect = Rect::new(
+            main_rect.max().x,
+            fill_rect.origin.y,
+            (fill_rect.max().x - main_rect.max().x).max(0.0),
+            fill_rect.height(),
+        );
+        primitives.push(instance_rounded(
+            arrow_fill_rect,
+            [0.0, fill_radii[1], fill_radii[2], 0.0],
+            arrow_fill,
+            z + 1,
+        ));
+    } else {
+        primitives.push(surface(Rect::ZERO, 0.0, Token::NONE, z + 1));
+    }
     primitives.push(surface(divider_rect, 0.0, divider, z + 2));
     primitives.push(outlined(rect, radius, Token::NONE, border, 1.0, 0.0, z + 3));
 
-    let acx = arrow_rect.max().x - 18.0;
+    if !disabled {
+        let bottom_token = if checked {
+            Token::new(311)
+        } else {
+            Token::CONTROL_STROKE_SECONDARY
+        };
+        let bottom_line = Rect::new(
+            rect.origin.x + radius,
+            rect.max().y - 1.0,
+            (rect.width() - radius * 2.0).max(0.0),
+            1.0,
+        );
+        primitives.push(surface(bottom_line, 0.0, bottom_token, z + 3));
+    } else {
+        primitives.push(surface(Rect::ZERO, 0.0, Token::NONE, z + 3));
+    }
+
+    let acx = arrow_rect.center().x - 0.5;
     let acy = arrow_rect.center().y;
     curve_stroke(
-        [acx - 4.0, acy - 2.0],
-        [acx, acy + 2.0],
-        1.5,
+        [acx - 3.5, acy - 2.0],
+        [acx, acy + 1.5],
+        0.75,
         arrow_ink,
         z + 4,
         &mut primitives,
         &mut payloads,
     );
     curve_stroke(
-        [acx, acy + 2.0],
-        [acx + 4.0, acy - 2.0],
-        1.5,
+        [acx, acy + 1.5],
+        [acx + 3.5, acy - 2.0],
+        0.75,
         arrow_ink,
         z + 4,
         &mut primitives,
@@ -445,9 +483,9 @@ impl UiWidget for ToggleSplitButtonDesc {
         desc.rect = rect;
         let main = desc.main_rect();
         let content_r = Rect::new(
-            main.origin.x + 13.0,
+            main.origin.x + 11.0,
             main.origin.y,
-            (main.width() - 13.0).max(0.0),
+            (main.width() - 11.0).max(0.0),
             main.height(),
         );
         let mut glyphs = text_ctx.shape_line(
@@ -458,7 +496,7 @@ impl UiWidget for ToggleSplitButtonDesc {
             AlignX::Left,
             AlignY::Middle,
         );
-        glyphs.retain(|quad| quad.rect.origin.x < content_r.max().x - 1.0);
+        glyphs.retain(|quad| quad.rect.origin.x < main.max().x - 11.0);
         emit_toggle_split_button(node, &desc, state, control, &mut glyphs)
     }
 }

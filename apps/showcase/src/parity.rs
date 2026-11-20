@@ -878,15 +878,6 @@ fn build_lut(dark: bool, backdrop: &str, overrides: &[(Token, Color)]) -> ThemeL
             *color = Color::from_srgb8(r, g, b, 255);
         }
     }
-    // 差分专用色槽：WinUI 模板里少量过渡色（选中态上下边缘、ToolTip 表面）
-    // 没有对应的语义令牌。这里用未占用的原始槽位承载，阈值与主题保持一致。
-    for (token, color) in overrides {
-        if let Some(entry) = entries.iter_mut().find(|(existing, _)| existing == token) {
-            entry.1 = *color;
-        } else {
-            entries.push((*token, *color));
-        }
-    }
     for (token, light, dark_color) in PARITY_COLORS {
         entries.push((
             Token::new(token),
@@ -897,6 +888,15 @@ fn build_lut(dark: bool, backdrop: &str, overrides: &[(Token, Color)]) -> ThemeL
                 255,
             ),
         ));
+    }
+    // 差分专用色槽：WinUI 模板里少量过渡色（选中态上下边缘、ToolTip 表面）
+    // 没有对应的语义令牌。这里用未占用的原始槽位承载，阈值与主题保持一致。
+    for (token, color) in overrides {
+        if let Some(entry) = entries.iter_mut().find(|(existing, _)| existing == token) {
+            entry.1 = *color;
+        } else {
+            entries.push((*token, *color));
+        }
     }
     let kind = if dark {
         ThemeKind::Dark
@@ -944,9 +944,13 @@ pub fn parity_lut(dark: bool, backdrop: &str, control: &str) -> ThemeLut {
         &[
             (Token::PRIMARY, accent),
             (Token::PRIMARY_HOVER, accent),
-            (Token::PRIMARY_PRESSED, accent),
+            (Token::PRIMARY_PRESSED, Color::from_srgb8(152, 22, 16, 255)),
             // ListBox 的选中行是强调色 40% 叠加在页面底板上（采样 235,159,155）。
             (Token::PRIMARY_SOFT, Color::from_srgb8(235, 159, 155, 255)),
+            // 强调色控件侧边/顶边描边（采样参考图得到 [199, 46, 38]）。
+            (PARITY_CHECKED_BORDER, Color::from_srgb8(199, 46, 38, 255)),
+            // 强调色分裂按钮底边深色浮起线（采样参考图得到 [116, 17, 12]）。
+            (PARITY_CHECKED_BOTTOM, Color::from_srgb8(116, 17, 12, 255)),
         ],
     )
 }
