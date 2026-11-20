@@ -71,6 +71,8 @@ gallery *ARGS:
 # 产物已被 gitignore，控件样式变动后才需要重跑；采集器自带指纹缓存，命中时会毫秒级跳过。
 # 采集 WinUI 3 参考截图到 captures/（需 .NET 8+ SDK，示例：just parity-capture --no-cache）
 # 采集器自身也走排队，但 q-run 不支持指定工作目录；这里用 bque 原生 --cwd 保留 ./captures 的语义。
+# 注意：这是唯一会重新生成 WinUI 3 参考图的入口。宿主已把强调色钉死为 Fluent 蓝；
+# 若系统强调色变化或参考图早于「钉死强调色」改动，必须跑 `just parity-capture --no-cache --theme all`。
 [windows]
 parity-capture *ARGS:
     @just q-run dotnet build tools/winui-reference/WinUiReference.csproj -c Release -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -r win-x64
@@ -79,6 +81,10 @@ parity-capture *ARGS:
 # 纯离屏 Vulkan 渲染，不开窗；默认复用源码指纹缓存。
 # 跑 WinUI 3 ROI 像素差分，产出 target/parity/report.json 供展台 Pixel parity 页读取
 # 示例：just parity 或 just parity --no-cache
+# 注意：本命令只重渲 unbound-ui 一侧，绝不重采 WinUI 3 参考图。
+# `--no-cache` 只关闭本框架的渲染缓存；参考图是否过期由 parity-capture 保证。
+# 若差分提示 pinnedAccent 过期或参考图仍带系统强调色，请先跑
+# `just parity-capture --no-cache --theme all`，再跑本命令。
 parity *ARGS:
     @just q-run cargo run -p showcase -- --parity-run --reference tools/winui-reference/captures --out target/parity {{ARGS}}
 

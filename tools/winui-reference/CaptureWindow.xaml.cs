@@ -934,6 +934,8 @@ public sealed partial class CaptureWindow : Window
             theme = captureCase.Theme,
             backdrop = captureCase.Backdrop,
             fingerprint,
+            systemAccent = Catalog.SystemAccentSignature(),
+            pinnedAccent = Catalog.PinnedAccentColor,
             explicitWidth = Catalog.HasExplicitWidth(canonical),
             processBitness = Environment.Is64BitProcess ? "64-bit" : "32-bit",
             processArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),

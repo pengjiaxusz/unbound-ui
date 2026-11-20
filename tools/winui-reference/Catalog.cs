@@ -30,6 +30,42 @@ internal static class Catalog
     /// </summary>
     public const string CaptureRecipeVersion = "v3-slot-bleed-content-contract";
 
+    /// <summary>
+    /// 采集宿主钉死的 WinUI 11 默认 Fluent 强调色（浅色 / 深色）。
+    /// 与 unbound-ui 的 win11.rs 原生蓝阶梯一致，用于元数据显式记录基准，便于诊断系统强调色泄漏。
+    /// </summary>
+    public const string PinnedAccentColor = "#005FB8/#60CDFF";
+
+    /// <summary>
+    /// 采集机当前系统强调色签名（Accent / AccentLight1 / AccentDark1 的 RGB 十六进制）。
+    /// 宿主虽在 App.xaml 与 CaptureWindow.xaml 覆盖了全部已知强调色资源键，但 WinUI 模板仍在演进，
+    /// 未知资源键会把系统个性化强调色泄漏进参考图（历史案例：红色描边、紫色 CheckBox 选中描边）。
+    /// 将系统强调色纳入指纹后，切换系统强调色必然使旧缓存失效并触发重采，
+    /// 既消除「换色后仍复用旧图」，也让钉死蓝的宿主重新产出稳定的蓝色基准。
+    /// </summary>
+    private static readonly Lazy<string> SystemAccentValue = new(ComputeSystemAccentSignature);
+
+    /// <summary>读取并缓存当前系统强调色签名，供指纹与元数据共用。</summary>
+    public static string SystemAccentSignature() => SystemAccentValue.Value;
+
+    private static string ComputeSystemAccentSignature()
+    {
+        try
+        {
+            var settings = new Windows.UI.ViewManagement.UISettings();
+            string Hex(Windows.UI.Color color) => $"{color.R:X2}{color.G:X2}{color.B:X2}";
+            return string.Join(",",
+                Hex(settings.GetColorValue(Windows.UI.ViewManagement.UIColorType.Accent)),
+                Hex(settings.GetColorValue(Windows.UI.ViewManagement.UIColorType.AccentLight1)),
+                Hex(settings.GetColorValue(Windows.UI.ViewManagement.UIColorType.AccentDark1)));
+        }
+        catch
+        {
+            // 非打包环境或远程会话可能拒绝读取 UISettings；返回固定哨兵值，保证指纹确定性。
+            return "unavailable";
+        }
+    }
+
     /// <summary>拼版槽位四周预留的阴影与焦点环出血边距（DIP）。</summary>
     public const int BleedMarginDip = 16;
 
@@ -161,6 +197,7 @@ internal static class Catalog
             theme.ToLowerInvariant(),
             backdrop.ToLowerInvariant(),
             specSignature,
+            SystemAccentValue.Value,
             SourceHashValue.Value);
 
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(raw));

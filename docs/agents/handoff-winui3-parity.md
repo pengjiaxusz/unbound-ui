@@ -204,3 +204,29 @@ ROI 第四门禁统计 `ΔE2000 > 5` 的像素占比 ≤2%，字形边缘仍是�
 2. **6 个 `invalid` 控件（24 例）修复**：在 `Catalog.cs` 为 `AppBarSeparator` 显式设高 `40px`、`Image` 填充确定性 `64×64` 位图、`ItemsView` 绑定数据源、`CommandBarFlyout`/`ContentDialog`/`TeachingTip` 提供与 WinUI 主题资源一致的静态可视宿主表面，并移除 `CaptureWindow.xaml.cs` 中的占位豁免白名单。
 3. **主题令牌、图标字体与几何对齐**：修正 `crates/unbound-theme/src/win11.rs` 深浅色 `CARD_BG`/`CARD_BORDER`/`ON_PRIMARY`；在 `slot_fixture.rs` 将所有图标字形显式切到 `Segoe Fluent Icons`，并同步对齐 `BreadcrumbBar`、`TreeView`、`ListView`、`ListBox`、`GridView`、`PipsPager`、`CommandBar`、`MenuBar`、`TitleBar`、`NavigationView`、`TabView`、`FlipView`、`RefreshContainer`、`AnnotatedScrollBar`、`InfoBar`、`Expander`、`SplitView`、`CalendarView`、`TimePicker`、`PersonPicture`、`Flyout`、`MenuFlyout`、`AppBarButton`、`AppBarToggleButton`；修正 `RichEditBox`、`ToggleSplitButton`、`DatePickerWheel`、`CalendarDatePicker`、`Card`/`Border`/`SwipeControl`/`HyperlinkButton` 的描边、底边强调线与禁用态逻辑。
 4. **本地复测命令**：应用补丁后执行 `just parity-capture --no-cache --theme all` 与 `just parity --no-cache`，再运行 `just check`、`just test`、`just gate-check`。
+
+### 6.5.1 2026-11-21 强调色残留与「切系统色后仍为红色」根因
+
+现象：切换 Windows 系统强调色后仅跑 `just parity --no-cache`，`ToggleSplitButton_checked_*` 等用例参考图仍为红色，被误判为缓存未清。
+
+根因（两条独立链路叠加）：
+
+1. **命令职责混淆**：`just parity` 只重渲 unbound-ui 一侧并与**磁盘上已有的** `tools/winui-reference/captures/*.png` 差分；其 `--no-cache` 只关闭 Rust 侧 `render_case_cached`。**它从不重新运行 WinUI 3 采集宿主**。唯一重采入口是 `just parity-capture`，其 `--no-cache` 才作用于 C# 侧指纹缓存。
+2. **参考图早于钉死色改动**：现存 PNG 采于 `2026-11-20T18:08Z`（本机 11-21 02:08），而把强调色钉死为 Fluent 蓝的提交 `093869a` 落盘于本机 11-21 03:31。旧宿主未覆盖全部强调色资源键，采集机的系统强调色泄漏进未覆盖键，故参考图为红/紫色。更关键的是旧 `Catalog.ComputeFingerprint()` 只哈希源码与写死的 `Accent=#005FB8/#60CDFF` 字符串，**不含真实系统强调色**，因此切换系统色不会让缓存失效，旧图被持续复用。
+
+修复：
+
+- `Catalog.cs` 新增 `SystemAccentSignature()`（读取 `UISettings` 的 Accent / AccentLight1 / AccentDark1），写入 `ComputeFingerprint()` 的哈希输入；系统强调色变化即缓存失效，强制重采。
+- 采集 JSON 新增 `systemAccent` 与 `pinnedAccent` 字段；`pinnedAccent` 固定为 `#005FB8/#60CDFF`，与 `unbound-theme/src/win11.rs` 的原生蓝阶梯一致。
+- `apps/showcase/src/png_diff.rs` 新增 `accent_stale_references()`，差分前对缺失或值不符的参考图打印可操作预警：`just parity-capture --no-cache --theme all`。
+- `justfile` 的 `parity` / `parity-capture` 注释明确两条命令职责与 `--no-cache` 作用域差异。
+
+正确复现顺序（强调色相关改动后**必须**整套跑）：
+
+```powershell
+just parity-capture --no-cache --theme all
+just parity --no-cache
+just check; just test; just gate-check
+```
+
+注意：本机 `DOTNET_ROOT` 已指向 Scoop dotnet8-sdk（`D:\pengj\scoop\apps\dotnet8-sdk\current`），但 PATH 上的 `dotnet` 只有运行时、无 SDK。采集前需让 PATH 优先解析到 Scoop 的 `dotnet.exe`，否则 `dotnet build` 会报 `could not be loaded`。

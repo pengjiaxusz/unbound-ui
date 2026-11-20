@@ -31,6 +31,46 @@ pub const P99_LIMIT: f64 = SIGNIFICANT_DE_THRESHOLD;
 pub const ROI_MARGIN_PX: i64 = 2;
 /// 有效用例要求的最小内容像素占比（0.1%），低于该值视为采集/渲染无效。
 pub const MIN_CONTENT_COVERAGE: f64 = 0.001;
+/// 参考宿主钉死的 WinUI 3 默认 Fluent 强调色（浅色 / 深色），与 Catalog.PinnedAccentColor 一致。
+pub const REFERENCE_PINNED_ACCENT: &str = "#005FB8/#60CDFF";
+
+/// 检查参考目录里哪些用例缺少「钉死强调色」元数据。
+///
+/// 旧版采集宿主没有记录 `pinnedAccent`，且没有在指纹里绑定系统强调色，
+/// 因此切换系统个性化强调色后会继续复用被污染的旧图（典型症状：.checked 态出现红/紫色填充）。
+/// 这里在差分前明确提示重采，避免把「缓存没清干净」误判为渲染器色值错误。
+pub fn accent_stale_references(reference_dir: &str) -> Result<Vec<String>, String> {
+    let mut stale = Vec::new();
+    for entry in std::fs::read_dir(reference_dir)
+        .map_err(|error| format!("{}: {error}", reference_dir))?
+        .flatten()
+    {
+        let path = entry.path();
+        if !path.extension().is_some_and(|ext| ext == "png")
+            || path
+                .file_stem()
+                .is_some_and(|stem| stem.to_string_lossy().ends_with("_sheet"))
+        {
+            continue;
+        }
+        let name = path
+            .file_stem()
+            .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
+        let meta = match std::fs::read_to_string(path.with_extension("json")) {
+            Ok(text) => text,
+            Err(_) => continue,
+        };
+        let Some(pinned) = json_string(&meta, "pinnedAccent") else {
+            stale.push(name);
+            continue;
+        };
+        if pinned != REFERENCE_PINNED_ACCENT {
+            stale.push(name);
+        }
+    }
+    stale.sort();
+    Ok(stale)
+}
 
 /// 单个用例的四态判定结果。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -273,6 +313,21 @@ pub fn run_batch_with_options(
             "no reference PNGs found in {}",
             reference_dir.display()
         ));
+    }
+
+    // 强调色过期预警：旧参考图没有钉死色元数据，可能是切换系统强调色前的污染产物。
+    // 只提示不阻断，方便诊断历史基线；真正修复必须重采。
+    match accent_stale_references(&reference_dir.to_string_lossy()) {
+        Ok(stale) if !stale.is_empty() => eprintln!(
+            "parity: WARNING {} reference(s) missing pinnedAccent={} ({}...). \
+             These may be stale captures with leaked system accent color. \
+             Re-capture with: just parity-capture --no-cache --theme all",
+            stale.len(),
+            REFERENCE_PINNED_ACCENT,
+            stale.first().map_or("", String::as_str),
+        ),
+        Err(error) => eprintln!("parity: accent freshness check skipped: {error}"),
+        Ok(_) => {}
     }
 
     // 整个批量差分只创建一次 Vulkan 渲染会话
@@ -1089,5 +1144,27 @@ mod tests {
             invalid_reason: reason,
         };
         assert_eq!(case.status(), CaseStatus::Pass);
+    }
+
+    #[test]
+    fn accent_stale_detector_flags_missing_and_mismatched_pinned_accent() {
+        // 固定临时目录名，避免并行测试互相覆盖。
+        let dir = std::env::temp_dir().join("unbound_png_diff_accent_stale_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        for (name, meta) in [
+            ("fresh", r##"{"pinnedAccent": "#005FB8/#60CDFF"}"##),
+            ("mismatch", r##"{"pinnedAccent": "#FF0000/#FF8080"}"##),
+            ("legacy", r##"{"fingerprint": "old"}"##),
+        ] {
+            std::fs::write(dir.join(format!("{name}.png")), b"dummy").unwrap();
+            std::fs::write(dir.join(format!("{name}.json")), meta).unwrap();
+        }
+
+        let stale = super::accent_stale_references(&dir.to_string_lossy()).unwrap();
+        assert_eq!(stale, vec!["legacy".to_string(), "mismatch".to_string()]);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
