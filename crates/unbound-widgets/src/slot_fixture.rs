@@ -675,7 +675,8 @@ pub fn emit_canonical_path_fixture(
         let is_last = idx == CANONICAL_PATH_ITEMS.len() - 1;
         // WinUI 3 BreadcrumbBar 默认全部条目（含末项）均使用 400 常规字重。
         let weight = 400;
-        let text_color = if state.disabled {
+        // 参考图禁用态只衰减前序条目，末项仍为 PRIMARY（实测 core 26/255，与常规态一致）。
+        let text_color = if state.disabled && !is_last {
             Token::TEXT_DISABLED
         } else {
             Token::TEXT_PRIMARY
@@ -707,14 +708,12 @@ pub fn emit_canonical_path_fixture(
 
         if !is_last {
             cur_x += gap;
-            let sep_r = Rect::new(cur_x, rect.origin.y, sep_w, row_h);
+            // 参考图分隔符墨迹比条目基线低 1px（y25..32 对 y24..33），单独下移一格。
+            let sep_r = Rect::new(cur_x, rect.origin.y + 1.0, sep_w, row_h);
             separator_rects.push(sep_r);
 
-            let sep_color = if state.disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_SECONDARY
-            };
+            // 分隔符实测取主文本色（浅色 core 55、深色 core 238），且禁用态不衰减。
+            let sep_color = Token::TEXT_PRIMARY;
 
             let sep_quads = text_ctx.shape_line_styled(
                 "\u{E76C}",
@@ -733,7 +732,8 @@ pub fn emit_canonical_path_fixture(
                 &mut out.payloads,
             );
 
-            cur_x += sep_w + gap;
+            // 参考图相邻条目起点逐级 +1px（66/123 对 65/121），故每个分隔槽多推进 1px。
+            cur_x += sep_w + gap + 1.0;
         }
     }
 
@@ -3163,7 +3163,7 @@ pub fn emit_canonical_calendar_view_fixture(
                 pill_size * 0.5,
                 Token::NONE,
                 Token::PRIMARY,
-                1.5,
+                1.0,
                 0.0,
                 z + 3,
             ));

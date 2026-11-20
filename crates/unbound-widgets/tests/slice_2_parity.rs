@@ -63,8 +63,11 @@ fn breadcrumb_bar_normal_and_disabled_and_focused_states() {
             .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
-        assert!(glyph_tokens.contains(&Token::TEXT_PRIMARY));
-        assert!(glyph_tokens.contains(&Token::TEXT_SECONDARY));
+        // 参考实测：条目与分隔符均取主文本色（`E76C` 图标在 10px 下 AA 后 core 55/238）。
+        assert!(!glyph_tokens.is_empty());
+        for tok in &glyph_tokens {
+            assert_eq!(*tok, Token::TEXT_PRIMARY);
+        }
 
         // 2. 聚焦态契约：必须发射焦点环
         let focused = emit_canonical_path_fixture(
@@ -80,7 +83,7 @@ fn breadcrumb_bar_normal_and_disabled_and_focused_states() {
             .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw());
         assert!(has_focus_ring, "focused BreadcrumbBar must emit focus ring");
 
-        // 3. 禁用态契约：全部条目降级为 TEXT_DISABLED
+        // 3. 禁用态契约：WinUI 只衰减前序可点条目，末项与分隔符保持主文本色
         let disabled = emit_canonical_path_fixture(rect, FixtureState::disabled(), text_ctx, 100);
         let disabled_tokens: Vec<Token> = disabled
             .output
@@ -90,9 +93,20 @@ fn breadcrumb_bar_normal_and_disabled_and_focused_states() {
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
         assert!(!disabled_tokens.is_empty());
-        for tok in disabled_tokens {
-            assert_eq!(tok, Token::TEXT_DISABLED);
-        }
+        assert!(
+            disabled_tokens.contains(&Token::TEXT_DISABLED),
+            "ancestor items must downgrade to TEXT_DISABLED when disabled"
+        );
+        assert!(
+            disabled_tokens.contains(&Token::TEXT_PRIMARY),
+            "last item and separators keep TEXT_PRIMARY when disabled"
+        );
+        assert!(
+            disabled_tokens
+                .iter()
+                .all(|t| matches!(*t, Token::TEXT_DISABLED | Token::TEXT_PRIMARY)),
+            "disabled state must only emit TEXT_DISABLED or TEXT_PRIMARY"
+        );
     });
 }
 

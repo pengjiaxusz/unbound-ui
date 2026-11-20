@@ -84,7 +84,7 @@ fn path_fixture_normal_outputs_deterministic_geometry_and_active_tokens() {
             "last item starts after last separator"
         );
 
-        // 3. 图元令牌校验：前序项为次要文本，当前项为主要文本
+        // 3. 图元令牌校验：WinUI 3 的条目与分隔符统一使用主文本色
         let glyph_tokens: Vec<Token> = fixture
             .output
             .primitives
@@ -98,8 +98,8 @@ fn path_fixture_normal_outputs_deterministic_geometry_and_active_tokens() {
             "current item must use TEXT_PRIMARY"
         );
         assert!(
-            glyph_tokens.contains(&Token::TEXT_SECONDARY),
-            "ancestor items must use TEXT_SECONDARY"
+            glyph_tokens.iter().all(|t| *t == Token::TEXT_PRIMARY),
+            "WinUI BreadcrumbBar 条目与分隔符均使用 TEXT_PRIMARY"
         );
         assert!(
             !glyph_tokens.contains(&Token::TEXT_DISABLED),
@@ -109,7 +109,7 @@ fn path_fixture_normal_outputs_deterministic_geometry_and_active_tokens() {
 }
 
 #[test]
-fn path_fixture_disabled_recursively_downgrades_all_items_and_separators() {
+fn path_fixture_disabled_downgrades_ancestors_only() {
     with_test_ctx(|text_ctx| {
         let rect = Rect::new(0.0, 0.0, 320.0, 32.0);
         let fixture = emit_canonical_path_fixture(rect, FixtureState::disabled(), text_ctx, 100);
@@ -118,7 +118,7 @@ fn path_fixture_disabled_recursively_downgrades_all_items_and_separators() {
         assert_eq!(fixture.item_rects.len(), 3);
         assert_eq!(fixture.separator_rects.len(), 2);
 
-        // 所有字形图元均必须递归降级为 TEXT_DISABLED
+        // 禁用态只降级前序可点条目；末项与分隔符按参考实测保持主文本色
         let glyph_tokens: Vec<Token> = fixture
             .output
             .primitives
@@ -128,13 +128,20 @@ fn path_fixture_disabled_recursively_downgrades_all_items_and_separators() {
             .collect();
 
         assert!(!glyph_tokens.is_empty(), "must emit glyph primitives");
-        for &tok in &glyph_tokens {
-            assert_eq!(
-                tok,
-                Token::TEXT_DISABLED,
-                "all text and separators must be TEXT_DISABLED in disabled state"
-            );
-        }
+        assert!(
+            glyph_tokens.contains(&Token::TEXT_DISABLED),
+            "ancestor items must downgrade to TEXT_DISABLED"
+        );
+        assert!(
+            glyph_tokens.contains(&Token::TEXT_PRIMARY),
+            "last item and separators stay TEXT_PRIMARY"
+        );
+        assert!(
+            glyph_tokens
+                .iter()
+                .all(|t| matches!(*t, Token::TEXT_DISABLED | Token::TEXT_PRIMARY)),
+            "disabled state must only use TEXT_DISABLED or TEXT_PRIMARY"
+        );
     });
 }
 
