@@ -805,7 +805,11 @@ pub fn emit_canonical_segmented_fixture(
             out.primitives.push(primitive::surface(
                 pill,
                 STANDARD_PILL_RADIUS,
-                Token::PRIMARY,
+                if state.disabled {
+                    Token::CONTROL_DISABLED_THUMB
+                } else {
+                    Token::PRIMARY
+                },
                 z + 5,
             ));
 
@@ -874,7 +878,8 @@ pub fn emit_canonical_tree_fixture(
     z: u16,
 ) -> TreeFixtureOutput {
     let mut out = WidgetOutput::default();
-    let item_h = STANDARD_TREE_ITEM_HEIGHT;
+    // WinUI 的 TreeViewItem 参考行高是 32px（不是 36），行与行之间没有额外间距。
+    let item_h = 32.0;
     let tree_w = if rect.width() > 0.0 {
         rect.width()
     } else {
@@ -882,13 +887,8 @@ pub fn emit_canonical_tree_fixture(
     };
 
     // 1. Root 根节点行（深度 0，首项选中）
-    let root_y = rect.origin.y + 4.0;
-    let root_r = Rect::new(
-        rect.origin.x + 4.0,
-        root_y,
-        (tree_w - 8.0).max(1.0),
-        item_h - 4.0,
-    );
+    let root_y = rect.origin.y + 2.0;
+    let root_r = Rect::new(rect.origin.x + 4.0, root_y, (tree_w - 8.0).max(1.0), item_h);
     let root_selected = !state.disabled && (state.checked || state.selected_index == 0);
 
     if root_selected {
@@ -897,7 +897,7 @@ pub fn emit_canonical_tree_fixture(
 
         let pill = Rect::new(
             root_r.origin.x,
-            root_y + (item_h - 4.0 - STANDARD_PILL_HEIGHT) * 0.5,
+            root_y + (item_h - STANDARD_PILL_HEIGHT) * 0.5,
             STANDARD_PILL_WIDTH,
             STANDARD_PILL_HEIGHT,
         );
@@ -922,7 +922,7 @@ pub fn emit_canonical_tree_fixture(
 
     // 根节点折叠/展开指示箭头（已展开：朝下箭头）
     let chevron_cx = root_r.origin.x + 16.0;
-    let chevron_cy = root_y + (item_h - 4.0) * 0.5;
+    let chevron_cy = root_y + item_h * 0.5;
     let chevron_ink = if state.disabled {
         Token::TEXT_DISABLED
     } else {
@@ -948,27 +948,14 @@ pub fn emit_canonical_tree_fixture(
     );
 
     // 2. Child 子节点行（深度 1，缩进 16px）
-    let indent = STANDARD_TREE_INDENT;
-    let child_y = root_y + item_h;
+    let indent = 40.0;
+    let child_y = root_y + item_h - 2.0;
     let child_r = Rect::new(
         rect.origin.x + 4.0 + indent,
         child_y,
         (tree_w - 8.0 - indent).max(1.0),
-        item_h - 4.0,
+        item_h,
     );
-
-    // 子节点深度的引导连线
-    let guide_token = if state.disabled {
-        Token::CONTROL_DISABLED_BORDER
-    } else {
-        Token::DIVIDER
-    };
-    out.primitives.push(primitive::surface(
-        Rect::new(root_r.origin.x + 16.0, child_y, 1.0, item_h - 4.0),
-        0.0,
-        guide_token,
-        z + 3,
-    ));
 
     // 文本排版
     let text_ink = if state.disabled {
@@ -1028,7 +1015,7 @@ pub fn emit_canonical_tree_fixture(
         output: out,
         root_rect: root_r,
         child_rect: child_r,
-        total_size: Vec2::new(tree_w, item_h * 2.0 + 8.0),
+        total_size: Vec2::new(tree_w, item_h * 2.0 + 2.0),
     }
 }
 
@@ -1131,7 +1118,8 @@ pub fn emit_canonical_list_rows_fixture(
         );
         item_rects.push(row_r);
 
-        let is_selected = !state.disabled && (idx == state.selected_index);
+        // 参考截图里 ListView 的选中高亮在禁用态仍然保留（只是整体变淡）。
+        let is_selected = idx == state.selected_index;
 
         if is_selected {
             out.primitives
@@ -1146,7 +1134,11 @@ pub fn emit_canonical_list_rows_fixture(
             out.primitives.push(primitive::surface(
                 pill,
                 STANDARD_PILL_RADIUS,
-                Token::PRIMARY,
+                if state.disabled {
+                    Token::CONTROL_DISABLED_THUMB
+                } else {
+                    Token::PRIMARY
+                },
                 z + 5,
             ));
 
@@ -1181,6 +1173,70 @@ pub fn emit_canonical_list_rows_fixture(
             label_r,
             STANDARD_FONT_SIZE,
             weight,
+            None,
+            AlignX::Left,
+            AlignY::Middle,
+        );
+        primitive::glyphs(
+            &quads,
+            text_ink,
+            z + 4,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
+
+    ListRowsFixtureOutput {
+        output: out,
+        item_rects,
+        total_size: Vec2::new(list_w, item_h * 3.0),
+    }
+}
+
+/// 发射 WinUI `ListBox` 的行插桩：选中行铺满控件宽度的强调色淡化底色，
+/// 没有 ListView 的左侧胶囊指示条，其余行只有文本。
+pub fn emit_canonical_listbox_rows_fixture(
+    rect: Rect,
+    state: FixtureState,
+    text_ctx: &mut TextCtx<'_>,
+    z: u16,
+) -> ListRowsFixtureOutput {
+    let mut out = WidgetOutput::default();
+    let mut item_rects = Vec::with_capacity(3);
+    let item_h = STANDARD_LIST_ITEM_HEIGHT;
+    let list_w = if rect.width() > 0.0 {
+        rect.width()
+    } else {
+        220.0
+    };
+
+    for (idx, &text) in CANONICAL_LIST_ITEMS.iter().enumerate() {
+        let y = rect.origin.y + idx as f32 * item_h;
+        let row_r = Rect::new(rect.origin.x, y, list_w, item_h - 1.0);
+        item_rects.push(row_r);
+
+        let is_selected = !state.disabled && idx == state.selected_index;
+        if is_selected {
+            out.primitives
+                .push(primitive::surface(row_r, 0.0, Token::PRIMARY_SOFT, z + 2));
+        }
+
+        let text_ink = if state.disabled {
+            Token::TEXT_DISABLED
+        } else {
+            Token::TEXT_PRIMARY
+        };
+        let label_r = Rect::new(
+            rect.origin.x + 13.0,
+            y,
+            (list_w - 13.0).max(1.0),
+            item_h - 1.0,
+        );
+        let quads = text_ctx.shape_line_styled(
+            text,
+            label_r,
+            STANDARD_FONT_SIZE,
+            400,
             None,
             AlignX::Left,
             AlignY::Middle,
@@ -1478,11 +1534,16 @@ pub fn emit_canonical_menu_bar_fixture(
 
     let mut item_rects = Vec::with_capacity(CANONICAL_MENU_ITEMS.len());
     let mut cur_x = bar_r.origin.x + 4.0;
+    // WinUI 的 MenuBar 菜单项固定 40px 行高，并在菜单栏高度内垂直居中；
+    // 绘制整条菜单栏高度会让文字随栏高下移。
+    let row_h = 40.0_f32.min(bar_h);
+    // 参考截图的菜单文字基线比通用 Middle 位置低 2px（菜单栏行盒按 40px 对齐）。
+    let row_y = bar_r.origin.y + (bar_h - row_h) * 0.5 + 2.0;
 
     for (idx, &item_text) in CANONICAL_MENU_ITEMS.iter().enumerate() {
         let measured = text_ctx.measure_line(item_text, STANDARD_FONT_SIZE, 400);
         let item_w = (measured.x + 20.0).max(44.0);
-        let item_r = Rect::new(cur_x, bar_r.origin.y + 4.0, item_w, bar_h - 8.0);
+        let item_r = Rect::new(cur_x, row_y, item_w, row_h);
         item_rects.push(item_r);
 
         if idx == 0 && state.focused && !state.disabled {
@@ -2075,110 +2136,46 @@ pub fn emit_canonical_grid_fixture(
     } else {
         STANDARD_GRID_HEIGHT
     };
-    let grid_rect = Rect::new(rect.origin.x, rect.origin.y, grid_w, grid_h);
 
-    out.primitives.push(primitive::outlined(
-        grid_rect,
-        8.0,
-        if state.disabled {
-            Token::CONTROL_DISABLED_BG
-        } else {
-            Token::CARD_BG
-        },
-        if state.disabled {
-            Token::CONTROL_DISABLED_BORDER
-        } else {
-            Token::CARD_BORDER
-        },
-        1.0,
-        0.0,
-        z,
-    ));
+    // WinUI GridView 默认使用 `ItemsWrapGrid`：条目按内容尺寸从左到右流式排布，
+    // 没有外层卡片、也没有整块单元格底色。参考截图中只有选中项带 2px 强调色
+    // 圆角描边，其余条目只显示文本。
+    let cell_w = 40.0;
+    let cell_h = 40.0;
+    let gap = 8.0;
+    let per_row = ((grid_w + gap) / (cell_w + gap)).floor().max(1.0) as usize;
 
-    let pad = 6.0;
-    let gap = 6.0;
-    let cols = 2;
-    let rows = 2;
-    let cell_w = ((grid_w - pad * 2.0 - gap * (cols - 1) as f32) / cols as f32).max(1.0);
-    let cell_h = ((grid_h - pad * 2.0 - gap * (rows - 1) as f32) / rows as f32).max(1.0);
-
-    let mut cell_rects = Vec::with_capacity(4);
+    let mut cell_rects = Vec::with_capacity(CANONICAL_GRID_ITEMS.len());
 
     for (idx, &text) in CANONICAL_GRID_ITEMS.iter().enumerate() {
-        let col = idx % cols;
-        let row = idx / cols;
-        let x = grid_rect.origin.x + pad + col as f32 * (cell_w + gap);
-        let y = grid_rect.origin.y + pad + row as f32 * (cell_h + gap);
+        let col = idx % per_row;
+        let row = idx / per_row;
+        let x = rect.origin.x + col as f32 * (cell_w + gap);
+        let y = rect.origin.y + row as f32 * (cell_h + gap);
         let cell_r = Rect::new(x, y, cell_w, cell_h);
         cell_rects.push(cell_r);
 
         let is_selected = !state.disabled && (idx == state.selected_index);
-
-        let fill = if state.disabled {
-            Token::CONTROL_DISABLED_BG
-        } else if is_selected {
-            Token::PRIMARY_SOFT
-        } else {
-            Token::SURFACE_SUNKEN
-        };
-
-        let border = if state.disabled {
-            Token::CONTROL_DISABLED_BORDER
-        } else if is_selected {
-            Token::PRIMARY
-        } else {
-            Token::CONTROL_STROKE
-        };
-
-        out.primitives.push(primitive::outlined(
-            cell_r,
-            STANDARD_GRID_CELL_RADIUS,
-            fill,
-            border,
-            if is_selected { 2.0 } else { 1.0 },
-            0.0,
-            z + 2,
-        ));
-
         if is_selected {
-            let badge_size = 18.0;
-            let badge_x = cell_r.max().x - badge_size - 6.0;
-            let badge_y = cell_r.origin.y + 6.0;
-            let badge_r = Rect::new(badge_x, badge_y, badge_size, badge_size);
-
-            out.primitives.push(primitive::surface(
-                badge_r,
-                badge_size * 0.5,
+            out.primitives.push(primitive::outlined(
+                Rect::new(
+                    cell_r.origin.x,
+                    cell_r.origin.y,
+                    cell_r.width() + 4.0,
+                    cell_r.height() + 4.0,
+                ),
+                4.0,
+                Token::NONE,
                 Token::PRIMARY,
-                z + 4,
+                2.0,
+                0.0,
+                z + 2,
             ));
-
-            let mark_start = [badge_x + 4.5, badge_y + 9.0];
-            let mark_elbow = [badge_x + 7.5, badge_y + 12.0];
-            let mark_tip = [badge_x + 13.5, badge_y + 5.5];
-            primitive::curve_stroke(
-                mark_start,
-                mark_elbow,
-                1.5,
-                Token::ON_PRIMARY,
-                z + 5,
-                &mut out.primitives,
-                &mut out.payloads,
-            );
-            primitive::curve_stroke(
-                mark_elbow,
-                mark_tip,
-                1.5,
-                Token::ON_PRIMARY,
-                z + 5,
-                &mut out.primitives,
-                &mut out.payloads,
-            );
 
             if state.focused {
                 out.primitives.push(primitive::focus_ring(
                     cell_r.inflate(1.0),
-                    7.0,
+                    5.0,
                     Token::FOCUS_RING,
                     2.0,
                     z + 8,
@@ -2192,13 +2189,11 @@ pub fn emit_canonical_grid_fixture(
         } else {
             Token::TEXT_PRIMARY
         };
-
-        let weight = if is_selected { 600 } else { 400 };
         let quads = text_ctx.shape_line_styled(
             text,
             cell_r,
             STANDARD_FONT_SIZE,
-            weight,
+            400,
             None,
             AlignX::Center,
             AlignY::Middle,
@@ -3908,7 +3903,11 @@ pub fn emit_canonical_app_bar_button_fixture(
     };
 
     // 2. 顶部图标
-    let icon_r = Rect::new(total_r.origin.x, total_r.origin.y + 6.0, w, 16.0);
+    //
+    // WinUI 的 AppBarButton 把「16px 图标 + 2px 间隙 + 12px 标签」当成 30px 内容栈
+    // 在控件高度内垂直居中；参考截图的图标顶端因此在 y=33（64px 高时为 17）。
+    let stack_top = total_r.origin.y + ((h - 30.0) * 0.5).round();
+    let icon_r = Rect::new(total_r.origin.x, stack_top - 3.0, w, 16.0);
     let icon_quads = text_ctx.shape_line_styled(
         CANONICAL_APP_BAR_BUTTON_GLYPH,
         icon_r,
@@ -3927,7 +3926,7 @@ pub fn emit_canonical_app_bar_button_fixture(
     );
 
     // 3. 底部文字
-    let label_r = Rect::new(total_r.origin.x, total_r.origin.y + 26.0, w, 16.0);
+    let label_r = Rect::new(total_r.origin.x, stack_top + 18.0, w, 12.0);
     let label_quads = text_ctx.shape_line_styled(
         CANONICAL_APP_BAR_BUTTON_LABEL,
         label_r,
@@ -3978,25 +3977,27 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
     let disabled = state.disabled;
     let checked = state.checked;
 
-    // 1. 切换选中底板与指示条
+    // 1. 选中底板
+    //
+    // WinUI 的 AppBarToggleButton 选中态是整块强调色实底（左右内缩 2px、上下
+    // 内缩 6px），文字与图标反色；不是底部指示条。
     let fill = if checked && !disabled {
-        Token::CONTROL_HOVER
+        Token::PRIMARY
     } else {
         Token::NONE
     };
+    let visual_r = if checked && !disabled {
+        Rect::new(
+            total_r.origin.x + 2.0,
+            total_r.origin.y + 6.0,
+            (w - 4.0).max(1.0),
+            (h - 12.0).max(1.0),
+        )
+    } else {
+        total_r
+    };
     out.primitives
-        .push(primitive::surface(total_r, 4.0, fill, z));
-
-    if checked && !disabled {
-        let indicator_r = Rect::new(
-            total_r.origin.x + 12.0,
-            total_r.max().y - 2.0,
-            (w - 24.0).max(1.0),
-            2.0,
-        );
-        out.primitives
-            .push(primitive::surface(indicator_r, 1.0, Token::PRIMARY, z + 2));
-    }
+        .push(primitive::surface(visual_r, 4.0, fill, z));
 
     if state.focused && !disabled {
         out.primitives.push(primitive::focus_ring(
@@ -4011,12 +4012,15 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
 
     let text_ink = if disabled {
         Token::TEXT_DISABLED
+    } else if checked {
+        Token::ON_PRIMARY
     } else {
         Token::TEXT_PRIMARY
     };
 
-    // 2. 顶部图标
-    let icon_r = Rect::new(total_r.origin.x, total_r.origin.y + 6.0, w, 16.0);
+    // 2. 顶部图标（与 AppBarButton 相同的 30px 内容栈居中）
+    let stack_top = total_r.origin.y + ((h - 30.0) * 0.5).round();
+    let icon_r = Rect::new(total_r.origin.x, stack_top - 3.0, w, 16.0);
     let icon_quads = text_ctx.shape_line_styled(
         CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH,
         icon_r,
@@ -4035,7 +4039,7 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
     );
 
     // 3. 底部文字
-    let label_r = Rect::new(total_r.origin.x, total_r.origin.y + 26.0, w, 16.0);
+    let label_r = Rect::new(total_r.origin.x, stack_top + 18.0, w, 12.0);
     let label_quads = text_ctx.shape_line_styled(
         CANONICAL_APP_BAR_TOGGLE_BUTTON_LABEL,
         label_r,
