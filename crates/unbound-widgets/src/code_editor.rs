@@ -1,4 +1,5 @@
-//! 可编辑代码编辑器（CodeEditor），支持行号槽、当前行高亮、选区与括号匹配。
+//! 可编辑代码编辑器（CodeEditor），支持行号槽、当前行高亮、选区、括号匹配、
+//! 只读/可编辑模式边界、键盘光标移动、选区复制、行内查找高亮与撤回/重做栈。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -17,6 +18,13 @@ const EDITOR_RADIUS: f32 = 4.0;
 /// 编辑器描边宽度，对齐 WinUI `TextControlBorderThemeThickness`（1）。
 const EDITOR_BORDER: f32 = 1.0;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EditorSnapshot {
+    source: String,
+    cursor_line: usize,
+    cursor_col: usize,
+}
+
 /// [`CodeEditorDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CodeEditorState {
@@ -24,14 +32,24 @@ pub struct CodeEditorState {
     pub source: String,
     /// 0-based 当前光标所在行。
     pub cursor_line: usize,
-    /// 0-based 当前光标所在列。
+    /// 0-based 当前光标所在列（按字符索引）。
     pub cursor_col: usize,
     /// 可选选区 `(start_line, start_col)..(end_line, end_col)`。
     pub selection: Option<((usize, usize), (usize, usize))>,
+    /// 只读模式标志（为 `true` 时允许移动光标、选区复制与查找，禁止文本写入与撤回/重做）。
+    pub read_only: bool,
+    /// 当前查找关键词。
+    pub search_query: String,
+    /// 查找命中列表 `(line, start_col, end_col)`。
+    pub search_matches: Vec<(usize, usize, usize)>,
+    /// 当前激活的查找命中索引。
+    pub active_match: Option<usize>,
+    undo_stack: Vec<EditorSnapshot>,
+    redo_stack: Vec<EditorSnapshot>,
 }
 
 impl CodeEditorState {
-    /// 使用源码文本创建状态。
+    /// 使用源码文本创建可编辑状态。
     #[must_use]
     pub fn new(source: impl Into<String>) -> Self {
         Self {
@@ -39,6 +57,344 @@ impl CodeEditorState {
             cursor_line: 0,
             cursor_col: 0,
             selection: None,
+            read_only: false,
+            search_query: String::new(),
+            search_matches: Vec::new(),
+            active_match: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+        }
+    }
+
+    /// 切换只读/可编辑模式。
+    pub fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
+    }
+
+    /// 按行切分源码（空源码返回单空行）。
+    fn split_lines(&self) -> Vec<&str> {
+        if self.source.is_empty() {
+            vec![""]
+        } else {
+            self.source.split('\n').collect()
+        }
+    }
+
+    fn line_char_len(line: &str) -> usize {
+        line.chars().count()
+    }
+
+    fn line_col_to_byte(&self, target_line: usize, target_col: usize) -> usize {
+        let mut offset = 0usize;
+        for (idx, line) in self.source.split('\n').enumerate() {
+            if idx == target_line {
+                let col_byte = line
+                    .char_indices()
+                    .nth(target_col)
+                    .map_or(line.len(), |(b, _)| b);
+                return offset + col_byte;
+            }
+            offset += line.len() + 1;
+        }
+        self.source.len()
+    }
+
+    fn push_undo_snapshot(&mut self) {
+        self.undo_stack.push(EditorSnapshot {
+            source: self.source.clone(),
+            cursor_line: self.cursor_line,
+            cursor_col: self.cursor_col,
+        });
+        self.redo_stack.clear();
+    }
+
+    fn update_selection(&mut self, prev: (usize, usize), extend: bool) {
+        if extend {
+            let anchor = self.selection.map_or(prev, |(start, _)| start);
+            let head = (self.cursor_line, self.cursor_col);
+            self.selection = if anchor == head {
+                None
+            } else {
+                Some((anchor, head))
+            };
+        } else {
+            self.selection = None;
+        }
+    }
+
+    /// 光标向左移动一列（行首自动回退至上一行末尾）。
+    pub fn move_left(&mut self, extend_selection: bool) {
+        let prev = (self.cursor_line, self.cursor_col);
+        // 先取出回绕目标行的长度，结束对 `self.source` 的不可变借用，再修改光标。
+        let wrap_len = if self.cursor_col == 0 && self.cursor_line > 0 {
+            let target = self.cursor_line - 1;
+            let lines = self.split_lines();
+            Some(Self::line_char_len(lines[target]))
+        } else {
+            None
+        };
+        if let Some(len) = wrap_len {
+            self.cursor_line -= 1;
+            self.cursor_col = len;
+        } else if self.cursor_col > 0 {
+            self.cursor_col -= 1;
+        }
+        self.update_selection(prev, extend_selection);
+    }
+
+    /// 光标向右移动一列（行尾自动步入下一行行首）。
+    pub fn move_right(&mut self, extend_selection: bool) {
+        let prev = (self.cursor_line, self.cursor_col);
+        let (line_len, line_count) = {
+            let lines = self.split_lines();
+            let len = lines
+                .get(self.cursor_line)
+                .map_or(0, |l| Self::line_char_len(l));
+            (len, lines.len())
+        };
+        if self.cursor_col < line_len {
+            self.cursor_col += 1;
+        } else if self.cursor_line + 1 < line_count {
+            self.cursor_line += 1;
+            self.cursor_col = 0;
+        }
+        self.update_selection(prev, extend_selection);
+    }
+
+    /// 光标向上移动一行（列号自动钳制至目标行长度）。
+    pub fn move_up(&mut self, extend_selection: bool) {
+        let prev = (self.cursor_line, self.cursor_col);
+        if self.cursor_line > 0 {
+            let target = self.cursor_line - 1;
+            let len = {
+                let lines = self.split_lines();
+                Self::line_char_len(lines[target])
+            };
+            self.cursor_line = target;
+            self.cursor_col = self.cursor_col.min(len);
+        }
+        self.update_selection(prev, extend_selection);
+    }
+
+    /// 光标向下移动一行（列号自动钳制至目标行长度）。
+    pub fn move_down(&mut self, extend_selection: bool) {
+        let prev = (self.cursor_line, self.cursor_col);
+        let len = {
+            let lines = self.split_lines();
+            (self.cursor_line + 1 < lines.len())
+                .then(|| Self::line_char_len(lines[self.cursor_line + 1]))
+        };
+        if let Some(len) = len {
+            self.cursor_line += 1;
+            self.cursor_col = self.cursor_col.min(len);
+        }
+        self.update_selection(prev, extend_selection);
+    }
+
+    /// 移动至当前行首。
+    pub fn move_line_start(&mut self, extend_selection: bool) {
+        let prev = (self.cursor_line, self.cursor_col);
+        self.cursor_col = 0;
+        self.update_selection(prev, extend_selection);
+    }
+
+    /// 移动至当前行尾。
+    pub fn move_line_end(&mut self, extend_selection: bool) {
+        let prev = (self.cursor_line, self.cursor_col);
+        let lines = self.split_lines();
+        self.cursor_col = lines
+            .get(self.cursor_line)
+            .map_or(0, |l| Self::line_char_len(l));
+        self.update_selection(prev, extend_selection);
+    }
+
+    /// 提取当前选区内的文本（支持单行与跨行选区，用于复制到剪贴板）。
+    #[must_use]
+    pub fn selected_text(&self) -> Option<String> {
+        let (a, b) = self.selection?;
+        let (start, end) = if a <= b { (a, b) } else { (b, a) };
+        let start_byte = self.line_col_to_byte(start.0, start.1);
+        let end_byte = self.line_col_to_byte(end.0, end.1);
+        if start_byte >= end_byte || end_byte > self.source.len() {
+            return None;
+        }
+        Some(self.source[start_byte..end_byte].to_owned())
+    }
+
+    /// 在当前光标处插入文本（只读模式下拒绝修改并返回 `false`）。
+    pub fn insert_text(&mut self, text: &str) -> bool {
+        if self.read_only || text.is_empty() {
+            return false;
+        }
+        self.push_undo_snapshot();
+        let insert_at = if let Some((a, b)) = self.selection.take() {
+            let (start, end) = if a <= b { (a, b) } else { (b, a) };
+            let sb = self.line_col_to_byte(start.0, start.1);
+            let eb = self.line_col_to_byte(end.0, end.1);
+            self.source.replace_range(sb..eb, "");
+            self.cursor_line = start.0;
+            self.cursor_col = start.1;
+            sb
+        } else {
+            self.line_col_to_byte(self.cursor_line, self.cursor_col)
+        };
+
+        self.source.insert_str(insert_at, text);
+        let added_lines: Vec<&str> = text.split('\n').collect();
+        if added_lines.len() == 1 {
+            self.cursor_col += added_lines[0].chars().count();
+        } else {
+            self.cursor_line += added_lines.len() - 1;
+            self.cursor_col = added_lines.last().map_or(0, |l| l.chars().count());
+        }
+        true
+    }
+
+    /// 删除选区或光标前一个字符（只读模式下拒绝修改并返回 `false`）。
+    pub fn backspace(&mut self) -> bool {
+        if self.read_only {
+            return false;
+        }
+        if let Some((a, b)) = self.selection {
+            let (start, end) = if a <= b { (a, b) } else { (b, a) };
+            self.push_undo_snapshot();
+            let sb = self.line_col_to_byte(start.0, start.1);
+            let eb = self.line_col_to_byte(end.0, end.1);
+            self.source.replace_range(sb..eb, "");
+            self.cursor_line = start.0;
+            self.cursor_col = start.1;
+            self.selection = None;
+            return true;
+        }
+        let end_byte = self.line_col_to_byte(self.cursor_line, self.cursor_col);
+        if end_byte == 0 {
+            return false;
+        }
+        self.push_undo_snapshot();
+        let prev_char_byte = self.source[..end_byte]
+            .char_indices()
+            .next_back()
+            .map_or(0, |(b, _)| b);
+        let removed = self.source[prev_char_byte..end_byte].to_owned();
+        self.source.replace_range(prev_char_byte..end_byte, "");
+        if removed == "\n" {
+            self.cursor_line = self.cursor_line.saturating_sub(1);
+            let line_prefix = self.source[..prev_char_byte]
+                .rsplit('\n')
+                .next()
+                .unwrap_or("");
+            self.cursor_col = line_prefix.chars().count();
+        } else {
+            self.cursor_col = self.cursor_col.saturating_sub(1);
+        }
+        true
+    }
+
+    /// 撤回上一步编辑操作（只读模式下不执行）。
+    pub fn undo(&mut self) -> bool {
+        if self.read_only {
+            return false;
+        }
+        let Some(prev) = self.undo_stack.pop() else {
+            return false;
+        };
+        self.redo_stack.push(EditorSnapshot {
+            source: self.source.clone(),
+            cursor_line: self.cursor_line,
+            cursor_col: self.cursor_col,
+        });
+        self.source = prev.source;
+        self.cursor_line = prev.cursor_line;
+        self.cursor_col = prev.cursor_col;
+        self.selection = None;
+        true
+    }
+
+    /// 重做最近一次被撤回的操作（只读模式下不执行）。
+    pub fn redo(&mut self) -> bool {
+        if self.read_only {
+            return false;
+        }
+        let Some(next) = self.redo_stack.pop() else {
+            return false;
+        };
+        self.undo_stack.push(EditorSnapshot {
+            source: self.source.clone(),
+            cursor_line: self.cursor_line,
+            cursor_col: self.cursor_col,
+        });
+        self.source = next.source;
+        self.cursor_line = next.cursor_line;
+        self.cursor_col = next.cursor_col;
+        self.selection = None;
+        true
+    }
+
+    /// 在源码中执行行内查找（大小写不敏感），高亮并跳转至首个命中项，返回总命中数。
+    pub fn find(&mut self, query: &str) -> usize {
+        self.search_query = query.to_owned();
+        self.search_matches.clear();
+        self.active_match = None;
+        if query.is_empty() {
+            return 0;
+        }
+        let needle = query.to_ascii_lowercase();
+        let needle_chars = query.chars().count();
+        for (line_idx, line) in self.source.split('\n').enumerate() {
+            let lower_line = line.to_ascii_lowercase();
+            let mut search_from = 0usize;
+            while let Some(rel) = lower_line[search_from..].find(&needle) {
+                let match_byte = search_from + rel;
+                let start_col = lower_line[..match_byte].chars().count();
+                let end_col = start_col + needle_chars;
+                self.search_matches.push((line_idx, start_col, end_col));
+                search_from = match_byte + needle.len().max(1);
+            }
+        }
+        if !self.search_matches.is_empty() {
+            self.focus_match(0);
+        }
+        self.search_matches.len()
+    }
+
+    /// 跳转到下一处查找命中项（循环）。
+    pub fn find_next(&mut self) -> Option<(usize, usize, usize)> {
+        if self.search_matches.is_empty() {
+            return None;
+        }
+        let next = self
+            .active_match
+            .map_or(0, |idx| (idx + 1) % self.search_matches.len());
+        self.focus_match(next);
+        self.search_matches.get(next).copied()
+    }
+
+    /// 跳转到上一处查找命中项（循环）。
+    pub fn find_prev(&mut self) -> Option<(usize, usize, usize)> {
+        if self.search_matches.is_empty() {
+            return None;
+        }
+        let len = self.search_matches.len();
+        let prev = self
+            .active_match
+            .map_or(len - 1, |idx| if idx == 0 { len - 1 } else { idx - 1 });
+        self.focus_match(prev);
+        self.search_matches.get(prev).copied()
+    }
+
+    /// 清空查找高亮状态。
+    pub fn clear_find(&mut self) {
+        self.search_query.clear();
+        self.search_matches.clear();
+        self.active_match = None;
+    }
+
+    fn focus_match(&mut self, index: usize) {
+        if let Some(&(line, start_col, end_col)) = self.search_matches.get(index) {
+            self.active_match = Some(index);
+            self.cursor_line = line;
+            self.cursor_col = end_col;
+            self.selection = Some(((line, start_col), (line, end_col)));
         }
     }
 
@@ -105,6 +461,28 @@ impl CodeEditorState {
         }
         None
     }
+
+    /// 从当前交互状态构造渲染描述符。
+    #[must_use]
+    pub fn to_desc(&self, rect: Rect) -> CodeEditorDesc {
+        let lines: Vec<String> = self.split_lines().into_iter().map(ToOwned::to_owned).collect();
+        let single_line_sel = self.selection.and_then(|(a, b)| {
+            let (s, e) = if a <= b { (a, b) } else { (b, a) };
+            if s.0 == self.cursor_line && e.0 == self.cursor_line {
+                Some((s.1, e.1))
+            } else {
+                None
+            }
+        });
+        let mut desc = CodeEditorDesc::new(rect, lines.len(), self.cursor_line)
+            .with_lines(lines)
+            .with_cursor_col(self.cursor_col)
+            .with_selection(single_line_sel)
+            .with_matching_bracket(self.find_matching_bracket());
+        desc.read_only = self.read_only;
+        desc.search_match_count = self.search_matches.len();
+        desc
+    }
 }
 
 /// [`CodeEditor`] 描述符。
@@ -124,6 +502,10 @@ pub struct CodeEditorDesc {
     pub selection: Option<(usize, usize)>,
     /// 可选的待高亮匹配括号坐标 `(line, col)`。
     pub matching_bracket: Option<(usize, usize)>,
+    /// 是否处于只读模式。
+    pub read_only: bool,
+    /// 当前查找命中总数。
+    pub search_match_count: usize,
     /// 垂直滚动偏移量。
     pub scroll: Vec2,
     /// 无障碍标签。
@@ -144,6 +526,8 @@ impl CodeEditorDesc {
             lines: Vec::new(),
             selection: None,
             matching_bracket: None,
+            read_only: false,
+            search_match_count: 0,
             scroll: Vec2::ZERO,
             label: "Code Editor".to_owned(),
             z: 600,
@@ -326,8 +710,9 @@ pub fn emit_code_editor(
         HitRegion::new(node, CONTROL_LAYER, u32::from(desc.z), desc.rect)
             .with_cursor(CursorKind::Text)
     });
-    let mut a11y =
-        A11yNode::new(Role::TextInput, desc.label.clone(), desc.rect).disabled(state.disabled);
+    let mut a11y = A11yNode::new(Role::TextInput, desc.label.clone(), desc.rect)
+        .read_only(desc.read_only)
+        .disabled(state.disabled);
     if !desc.lines.is_empty() {
         a11y.value = desc.lines.join("\n");
     }
@@ -339,5 +724,74 @@ pub fn emit_code_editor(
         a11y: Some(a11y),
         focusable: !state.disabled,
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unbound_headless::{FrameBuilder, Harness, NodeKind};
+
+    #[test]
+    fn code_editor_cursor_selection_find_undo_redo_and_read_only() {
+        let mut ed = CodeEditorState::new("fn main() {\n    let x = foo(1);\n    let y = foo(2);\n}");
+
+        // 括号匹配。
+        ed.cursor_line = 0;
+        ed.cursor_col = 10; // '{'
+        assert_eq!(ed.find_matching_bracket(), Some((3, 0)));
+
+        // 光标移动与选区复制。
+        ed.cursor_line = 0;
+        ed.cursor_col = 0;
+        ed.move_right(true);
+        ed.move_right(true);
+        assert_eq!(ed.selected_text().as_deref(), Some("fn"));
+
+        // 行内查找与循环跳转。
+        assert_eq!(ed.find("foo"), 2);
+        assert_eq!(ed.active_match, Some(0));
+        assert_eq!(ed.selected_text().as_deref(), Some("foo"));
+        assert_eq!(ed.find_next(), Some((2, 12, 15)));
+        assert_eq!(ed.find_prev(), Some((1, 12, 15)));
+
+        // 编辑、撤回与重做。
+        assert!(ed.insert_text("bar"));
+        assert!(ed.source.contains("bar(1)"));
+        assert!(ed.undo());
+        assert!(ed.source.contains("foo(1)"));
+        assert!(ed.redo());
+        assert!(ed.source.contains("bar(1)"));
+
+        // 只读模式下允许导航和查找，但拒绝编辑与撤回。
+        ed.set_read_only(true);
+        assert!(!ed.insert_text("nope"));
+        assert!(!ed.backspace());
+        assert!(!ed.undo());
+        assert_eq!(ed.find("bar"), 1);
+    }
+
+    #[test]
+    fn code_editor_headless_geometry() {
+        let rect = Rect::new(20.0, 20.0, 480.0, 220.0);
+        let ed = CodeEditorState::new("let alpha = 1;\nlet beta = 2;");
+        let desc = ed.to_desc(rect);
+        let out = emit_code_editor(1, &desc, ControlState::default(), &[]);
+        assert_eq!(out.primitives.len(), 7);
+
+        let viewport = Rect::new(0.0, 0.0, 1280.0, 720.0);
+        let mut frame = FrameBuilder::new(viewport);
+        frame.open(NodeKind::Container, viewport, "Root");
+        frame.open(
+            NodeKind::Interactive {
+                min_size: NodeKind::DEFAULT_MIN_SIZE,
+                occluded: false,
+            },
+            rect,
+            "CodeEditor",
+        );
+        frame.close();
+        frame.close();
+        assert!(Harness::assert_clean(&frame.build()).is_clean());
     }
 }
