@@ -3681,6 +3681,14 @@ pub fn probe_workbench_widgets(state: ControlState) -> Vec<WidgetOutput> {
     outputs.push(crate::copy_button::emit_read_only_input(9005, &ro_desc, state, &glyphs));
     let dur_desc = crate::duration_input::DurationInputDesc::new(rect, 1500);
     outputs.push(crate::duration_input::emit_duration_input(9006, &dur_desc, state, &glyphs));
+    let preset_desc = crate::preset_number_input::PresetNumberInputDesc::new(
+        rect,
+        10.0,
+        240.0,
+        vec![crate::preset_number_input::NumberPreset::new("60 FPS", 60.0)],
+    );
+    outputs.push(crate::preset_number_input::emit_preset_number_input(9007, &preset_desc, state, &glyphs));
+    outputs.push(crate::preset_number_input::emit_preset_number_popup(9011, &preset_desc, Rect::new(0.0, 0.0, 1280.0, 720.0), state, &glyphs));
     outputs
 }
 
