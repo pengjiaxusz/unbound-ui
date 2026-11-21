@@ -1,20 +1,19 @@
-//! 标签页栏：水平滚动的标签页行，带动画选中指示器。
-//!
+//! 标签页栏：水平滚动的标签页行，带动画选中指示器与 Win11 壳层卡片融合形态。
 //!
 //! 标签页栏仅持有标识与几何信息，从不持有内容。每个标签页由单独调用输出，
 //! 以便关闭按钮拥有独立的命中区域，且调用方可在标签页内放置任意标签字形四边形。
-//!
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_anim::Spring;
 use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::Rect;
+use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined, surface};
+use crate::shell::{emit_shell_icon_primitives, ShellIcon};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -23,17 +22,114 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 /// 落在 WinUI `TabViewItemMinWidth = 100` 与 `TabViewItemMaxWidth = 240` 之间。
 pub const TAB_WIDTH: f32 = 140.0;
 
+/// 自适应模式下单个标签页的最小宽度（WinUI `TabViewItemMinWidth = 100`）。
+pub const TAB_MIN_WIDTH: f32 = 100.0;
+
+/// 自适应模式下单个标签页的最大宽度（WinUI `TabViewItemMaxWidth = 240`）。
+pub const TAB_MAX_WIDTH: f32 = 240.0;
+
 /// 标签页栏默认高度。
 ///
 /// 对齐 WinUI `TabViewItemMinHeight = 32` 叠加 `TabViewHeaderPadding = 0,8,0,0`
 /// 的顶部留白，即 32 + 8 = 40。
 pub const TAB_STRIP_HEIGHT: f32 = 40.0;
 
-/// 标签页圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
+/// 标签页标准圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
 const TAB_RADIUS: f32 = 4.0;
 
-/// 关闭按钮的宽度。对齐 WinUI `TabViewItemHeaderCloseButtonSize = 16`。
+/// 壳层融合态选中标签顶部圆角半径（对齐 WinUI `OverlayCornerRadius = 8`）。
+pub const TAB_SHELL_CORNER_RADIUS: f32 = 8.0;
+
+/// 壳层融合态顶部留白（40px 标题栏减去 32px 标签卡片高度）。
+pub const TAB_SHELL_TOP_INSET: f32 = 8.0;
+
+/// 关闭按钮图标宽度。对齐 WinUI `TabViewItemHeaderCloseButtonSize = 16`。
 pub const TAB_CLOSE: f32 = 16.0;
+
+/// 壳层融合态关闭按钮独立命中盒边长（24×24，内部居中 16×16 图标）。
+pub const TAB_CLOSE_HIT_SIZE: f32 = 24.0;
+
+/// 壳层融合态“+”新增按钮宽度（32×28，圆角 4px）。
+pub const TAB_ADD_WIDTH: f32 = 32.0;
+
+/// 壳层融合态“+”新增按钮高度。
+pub const TAB_ADD_HEIGHT: f32 = 28.0;
+
+/// 壳层融合态“+”新增按钮与末标签之间的水平间距。
+pub const TAB_ADD_GAP: f32 = 4.0;
+
+/// `TabView` 视觉风格变体。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TabViewStyle {
+    /// 标准底部指示条风格（向后兼容既有调用与默认差分）。
+    #[default]
+    Standard,
+    /// Win11 壳层卡片融合风格：顶部圆角卡片与下方表面无缝衔接，无底部蓝条。
+    ShellChrome,
+}
+
+/// 标签宽度分配策略。
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum TabWidthMode {
+    /// 固定宽度（兼容既有 `tab_width`）。
+    #[default]
+    Fixed,
+    /// Win11 自适应宽：在 `[min_width, max_width]` 之间随容器宽度弹性缩放。
+    Adaptive {
+        /// 单个标签压缩下限（触底后开启水平溢出滚动）。
+        min_width: f32,
+        /// 单个标签展开上限。
+        max_width: f32,
+    },
+}
+
+impl TabWidthMode {
+    /// Win11 标准自适应宽度范围（`100..=240px`）。
+    #[must_use]
+    pub const fn adaptive_default() -> Self {
+        Self::Adaptive {
+            min_width: TAB_MIN_WIDTH,
+            max_width: TAB_MAX_WIDTH,
+        }
+    }
+}
+
+/// `TabView` 交互事件。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TabViewEvent {
+    /// 选中了某个标签页。
+    Selected {
+        /// 标签页稳定标识。
+        id: u64,
+        /// 标签页索引。
+        index: usize,
+    },
+    /// 点击关闭按钮请求关闭某个标签页。
+    CloseRequested {
+        /// 标签页稳定标识。
+        id: u64,
+        /// 标签页索引。
+        index: usize,
+    },
+    /// 鼠标中键点击某个标签页（通常用于快捷关闭）。
+    MiddleClicked {
+        /// 标签页稳定标识。
+        id: u64,
+        /// 标签页索引。
+        index: usize,
+    },
+    /// 点击“+”按钮请求新建标签页。
+    AddClicked,
+    /// 在某个标签页上请求右键上下文菜单。
+    ContextMenuRequested {
+        /// 标签页稳定标识。
+        id: u64,
+        /// 标签页索引。
+        index: usize,
+        /// 触发菜单的屏幕逻辑坐标。
+        screen_pos: [i32; 2],
+    },
+}
 
 /// 单个标签页。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,8 +138,14 @@ pub struct TabItem {
     pub id: u64,
     /// 可见标题。
     pub title: String,
+    /// 可选前置矢量图标。
+    pub icon: Option<ShellIcon>,
     /// 该标签页是否带有关闭按钮。
     pub closable: bool,
+    /// 是否为固定标签页（固定标签不展示关闭按钮）。
+    pub pinned: bool,
+    /// 可选悬停提示文案（常用于展示完整路径或长标题）。
+    pub tooltip: Option<String>,
 }
 
 impl TabItem {
@@ -53,7 +155,10 @@ impl TabItem {
         Self {
             id,
             title: title.into(),
+            icon: None,
             closable: true,
+            pinned: false,
+            tooltip: None,
         }
     }
 
@@ -61,6 +166,28 @@ impl TabItem {
     #[must_use]
     pub fn fixed(mut self) -> Self {
         self.closable = false;
+        self
+    }
+
+    /// 设置标签页前置图标。
+    #[must_use]
+    pub fn with_icon(mut self, icon: ShellIcon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// 标记为固定标签页（同时隐藏关闭按钮）。
+    #[must_use]
+    pub fn pinned(mut self) -> Self {
+        self.pinned = true;
+        self.closable = false;
+        self
+    }
+
+    /// 设置悬停提示文案。
+    #[must_use]
+    pub fn with_tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
         self
     }
 }
@@ -76,8 +203,12 @@ pub struct TabsDesc {
     pub closable: bool,
     /// 是否显示末尾的“+”按钮。
     pub addable: bool,
-    /// 单个标签页的宽度。
+    /// 单个标签页的固定宽度（在 [`TabWidthMode::Fixed`] 下生效）。
     pub tab_width: f32,
+    /// 视觉风格变体（默认 [`TabViewStyle::Standard`]）。
+    pub style: TabViewStyle,
+    /// 标签宽度分配策略（默认 [`TabWidthMode::Fixed`]）。
+    pub width_mode: TabWidthMode,
     /// 绘制顺序键。
     pub z: u16,
 }
@@ -96,6 +227,8 @@ impl TabsDesc {
             closable: true,
             addable: false,
             tab_width: TAB_WIDTH,
+            style: TabViewStyle::Standard,
+            width_mode: TabWidthMode::Fixed,
             z: 620,
         }
     }
@@ -114,10 +247,24 @@ impl TabsDesc {
         self
     }
 
-    /// 覆盖标签页宽度。
+    /// 覆盖标签页固定宽度。
     #[must_use]
     pub fn with_tab_width(mut self, width: f32) -> Self {
         self.tab_width = width.max(24.0);
+        self
+    }
+
+    /// 设置视觉风格变体。
+    #[must_use]
+    pub fn with_style(mut self, style: TabViewStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// 设置标签宽度分配策略。
+    #[must_use]
+    pub fn with_width_mode(mut self, width_mode: TabWidthMode) -> Self {
+        self.width_mode = width_mode;
         self
     }
 
@@ -130,24 +277,68 @@ impl TabsDesc {
     /// 不含新增按钮的标签页可用宽度。
     #[must_use]
     pub fn strip_width(&self) -> f32 {
-        let add = if self.addable { TAB_STRIP_HEIGHT } else { 0.0 };
+        let add = if self.addable {
+            match self.style {
+                TabViewStyle::Standard => TAB_STRIP_HEIGHT,
+                TabViewStyle::ShellChrome => TAB_ADD_GAP + TAB_ADD_WIDTH,
+            }
+        } else {
+            0.0
+        };
         (self.rect.size.x - add).max(0.0)
+    }
+
+    /// 当前宽度模式下实际生效的单标签宽度。
+    #[must_use]
+    pub fn effective_tab_width(&self) -> f32 {
+        match self.width_mode {
+            TabWidthMode::Fixed => self.tab_width.max(24.0),
+            TabWidthMode::Adaptive {
+                min_width,
+                max_width,
+            } => {
+                let min_w = min_width.max(24.0);
+                let max_w = max_width.max(min_w);
+                let count = self.count();
+                if count == 0 {
+                    max_w
+                } else {
+                    (self.strip_width() / count as f32).clamp(min_w, max_w)
+                }
+            }
+        }
     }
 
     /// 最后一个标签页右边缘齐平前可滚动的最大距离。
     #[must_use]
     pub fn max_scroll(&self) -> f32 {
-        (self.count() as f32 * self.tab_width - self.strip_width()).max(0.0)
+        (self.count() as f32 * self.effective_tab_width() - self.strip_width()).max(0.0)
+    }
+
+    /// 当前标签流是否超出可视宽度并进入水平溢出滚动。
+    #[must_use]
+    pub fn is_overflowing(&self) -> bool {
+        self.max_scroll() > 0.5
+    }
+
+    /// 壳层融合态顶部留白；标准态恒为 0。
+    fn shell_top_inset(&self) -> f32 {
+        match self.style {
+            TabViewStyle::Standard => 0.0,
+            TabViewStyle::ShellChrome => (self.rect.size.y - 32.0).clamp(0.0, TAB_SHELL_TOP_INSET),
+        }
     }
 
     /// 给定滚动偏移下单个标签页的未裁剪矩形。
     #[must_use]
     pub fn raw_tab_rect(&self, index: usize, scroll: f32) -> Rect {
+        let w = self.effective_tab_width();
+        let top_inset = self.shell_top_inset();
         Rect::new(
-            self.rect.origin.x + index as f32 * self.tab_width - scroll,
-            self.rect.origin.y,
-            self.tab_width,
-            self.rect.size.y,
+            self.rect.origin.x + index as f32 * w - scroll,
+            self.rect.origin.y + top_inset,
+            w,
+            (self.rect.size.y - top_inset).max(0.0),
         )
     }
 
@@ -155,44 +346,190 @@ impl TabsDesc {
     #[must_use]
     pub fn tab_rect(&self, index: usize, scroll: f32) -> Rect {
         let raw = self.raw_tab_rect(index, scroll);
+        let top_inset = self.shell_top_inset();
         let strip = Rect::new(
             self.rect.origin.x,
-            self.rect.origin.y,
+            self.rect.origin.y + top_inset,
             self.strip_width(),
-            self.rect.size.y,
+            (self.rect.size.y - top_inset).max(0.0),
         );
         raw.intersect(&strip)
+    }
+
+    /// 单个标签页的前置 16×16 图标槽矩形（仅当该标签配置了图标且宽度足够时返回）。
+    #[must_use]
+    pub fn icon_rect(&self, index: usize, scroll: f32) -> Option<Rect> {
+        let tab = self.items.get(index)?;
+        tab.icon?;
+        let visible = self.tab_rect(index, scroll);
+        if visible.size.x < 36.0 || visible.size.y < 16.0 {
+            return None;
+        }
+        Some(Rect::new(
+            visible.origin.x + 12.0,
+            visible.origin.y + (visible.size.y - 16.0) * 0.5,
+            16.0,
+            16.0,
+        ))
+    }
+
+    /// 单个标签页标题文本的排版矩形（已避让前置图标与右侧关闭按钮）。
+    #[must_use]
+    pub fn label_rect(&self, index: usize, scroll: f32) -> Rect {
+        let visible = self.tab_rect(index, scroll);
+        if visible.size.x <= 0.0 {
+            return Rect::ZERO;
+        }
+        let left_pad = if self.icon_rect(index, scroll).is_some() {
+            12.0 + 16.0 + 8.0
+        } else {
+            12.0
+        };
+        let right_edge = if let Some(close) = self.close_rect(index, scroll) {
+            close.origin.x - 4.0
+        } else {
+            visible.max().x - 8.0
+        };
+        let x = visible.origin.x + left_pad;
+        let w = (right_edge - x).max(0.0);
+        Rect::new(x, visible.origin.y, w, visible.size.y)
     }
 
     /// 单个标签页的关闭按钮矩形（若有）。
     #[must_use]
     pub fn close_rect(&self, index: usize, scroll: f32) -> Option<Rect> {
         let tab = self.items.get(index)?;
-        if !(self.closable && tab.closable) {
+        if !(self.closable && tab.closable) || tab.pinned {
             return None;
         }
         let visible = self.tab_rect(index, scroll);
-        if visible.size.x < TAB_CLOSE * 2.0 {
-            return None;
+        match self.style {
+            TabViewStyle::Standard => {
+                if visible.size.x < TAB_CLOSE * 2.0 {
+                    return None;
+                }
+                Some(Rect::new(
+                    visible.max().x - TAB_CLOSE - 6.0,
+                    visible.origin.y + (visible.size.y - TAB_CLOSE) * 0.5,
+                    TAB_CLOSE,
+                    TAB_CLOSE,
+                ))
+            }
+            TabViewStyle::ShellChrome => {
+                if visible.size.x < TAB_CLOSE_HIT_SIZE + 20.0 {
+                    return None;
+                }
+                let hit_size = TAB_CLOSE_HIT_SIZE.min(visible.size.y);
+                Some(Rect::new(
+                    visible.max().x - hit_size - 4.0,
+                    visible.origin.y + (visible.size.y - hit_size) * 0.5,
+                    hit_size,
+                    hit_size,
+                ))
+            }
         }
-        Some(Rect::new(
-            visible.max().x - TAB_CLOSE - 6.0,
-            visible.origin.y + (visible.size.y - TAB_CLOSE) * 0.5,
-            TAB_CLOSE,
-            TAB_CLOSE,
-        ))
     }
 
-    /// 末尾的“+”按钮矩形。
+    /// 末尾的“+”按钮矩形（未滚动偏移）。
     #[must_use]
     pub fn add_rect(&self) -> Option<Rect> {
-        self.addable.then(|| {
-            Rect::new(
+        self.add_rect_scrolled(0.0)
+    }
+
+    /// 考虑滚动偏移后的“+”按钮矩形。
+    ///
+    /// 在 [`TabViewStyle::ShellChrome`] 下紧随最后一个标签之后 `4px` 间距，
+    /// 溢出时自动停靠于可视区右沿，不遮挡右侧窗口控制按钮。
+    #[must_use]
+    pub fn add_rect_scrolled(&self, scroll: f32) -> Option<Rect> {
+        self.addable.then(|| match self.style {
+            TabViewStyle::Standard => Rect::new(
                 self.rect.max().x - TAB_STRIP_HEIGHT,
                 self.rect.origin.y,
                 TAB_STRIP_HEIGHT,
                 self.rect.size.y,
-            )
+            ),
+            TabViewStyle::ShellChrome => {
+                let top_inset = self.shell_top_inset();
+                let card_h = (self.rect.size.y - top_inset).max(0.0);
+                let btn_h = TAB_ADD_HEIGHT.min(card_h);
+                let flow_x =
+                    self.rect.origin.x + self.count() as f32 * self.effective_tab_width() - scroll
+                        + TAB_ADD_GAP;
+                let max_x = (self.rect.max().x - TAB_ADD_WIDTH).max(self.rect.origin.x);
+                let x = flow_x.min(max_x).max(self.rect.origin.x);
+                let y = self.rect.origin.y + top_inset + (card_h - btn_h) * 0.5;
+                Rect::new(x, y, TAB_ADD_WIDTH, btn_h)
+            }
+        })
+    }
+
+    /// 命中测试：判断 `pos` 是否落在某个标签页的关闭按钮内。
+    #[must_use]
+    pub fn hit_test_close(&self, scroll: f32, pos: Vec2) -> Option<usize> {
+        for index in 0..self.count() {
+            if let Some(close) = self.close_rect(index, scroll) {
+                if close.contains_point(pos) {
+                    return Some(index);
+                }
+            }
+        }
+        None
+    }
+
+    /// 命中测试：判断 `pos` 是否落在“+”新增按钮内。
+    #[must_use]
+    pub fn hit_test_add(&self, scroll: f32, pos: Vec2) -> bool {
+        self.add_rect_scrolled(scroll)
+            .is_some_and(|rect| rect.contains_point(pos))
+    }
+
+    /// 命中测试：判断 `pos` 是否落在某个可见标签页内。
+    #[must_use]
+    pub fn hit_test_tab(&self, scroll: f32, pos: Vec2) -> Option<usize> {
+        for index in 0..self.count() {
+            let rect = self.tab_rect(index, scroll);
+            if rect.size.x > 0.0 && rect.size.y > 0.0 && rect.contains_point(pos) {
+                return Some(index);
+            }
+        }
+        None
+    }
+
+    /// 处理左键点击：优先检测独立关闭按钮与“+”按钮，避免误触标签选中。
+    pub fn handle_left_click(&self, state: &mut TabsState, pos: Vec2) -> Option<TabViewEvent> {
+        if let Some(index) = self.hit_test_close(state.scroll_x, pos) {
+            let id = self.items[index].id;
+            return Some(TabViewEvent::CloseRequested { id, index });
+        }
+        if self.hit_test_add(state.scroll_x, pos) {
+            return Some(TabViewEvent::AddClicked);
+        }
+        if let Some(index) = self.hit_test_tab(state.scroll_x, pos) {
+            let id = self.items[index].id;
+            state.activate(self, index);
+            return Some(TabViewEvent::Selected { id, index });
+        }
+        None
+    }
+
+    /// 处理鼠标中键点击：命中标签时发射 [`TabViewEvent::MiddleClicked`]。
+    #[must_use]
+    pub fn handle_middle_click(&self, state: &TabsState, pos: Vec2) -> Option<TabViewEvent> {
+        let index = self.hit_test_tab(state.scroll_x, pos)?;
+        let id = self.items[index].id;
+        Some(TabViewEvent::MiddleClicked { id, index })
+    }
+
+    /// 处理鼠标右键点击：命中标签时发射 [`TabViewEvent::ContextMenuRequested`]。
+    #[must_use]
+    pub fn handle_right_click(&self, state: &TabsState, pos: Vec2) -> Option<TabViewEvent> {
+        let index = self.hit_test_tab(state.scroll_x, pos)?;
+        let id = self.items[index].id;
+        Some(TabViewEvent::ContextMenuRequested {
+            id,
+            index,
+            screen_pos: [pos.x.round() as i32, pos.y.round() as i32],
         })
     }
 }
@@ -303,8 +640,9 @@ impl TabsState {
 
     /// 滚动使指定标签页完全可见。
     pub fn reveal(&mut self, desc: &TabsDesc, index: usize) {
-        let left = index as f32 * desc.tab_width;
-        let right = left + desc.tab_width;
+        let tab_w = desc.effective_tab_width();
+        let left = index as f32 * tab_w;
+        let right = left + tab_w;
         let width = desc.strip_width();
         if left < self.scroll_x {
             self.scroll_x = left;
@@ -407,31 +745,79 @@ impl TabsTokens {
 #[must_use]
 pub fn emit_tabs_strip(desc: &TabsDesc, state: &TabsState, tokens: TabsTokens) -> WidgetOutput {
     let mut primitives = Vec::with_capacity(3);
-    primitives.push(surface(desc.rect, 0.0, tokens.strip, desc.z));
-    let line = Rect::new(
-        desc.rect.origin.x,
-        desc.rect.max().y - 1.0,
-        desc.rect.size.x,
-        1.0,
-    );
-    primitives.push(instance(
-        line,
-        [0.0; 4],
-        tokens.border,
-        Token::NONE,
-        0.0,
-        0.0,
-        PrimType::Line,
-        SubElement::Background,
-        desc.z,
-    ));
-    if desc.count() > 0 {
-        primitives.push(surface(
-            state.indicator_rect(desc),
-            1.0,
-            tokens.indicator,
-            desc.z,
-        ));
+    match desc.style {
+        TabViewStyle::Standard => {
+            primitives.push(surface(desc.rect, 0.0, tokens.strip, desc.z));
+            let line = Rect::new(
+                desc.rect.origin.x,
+                desc.rect.max().y - 1.0,
+                desc.rect.size.x,
+                1.0,
+            );
+            primitives.push(instance(
+                line,
+                [0.0; 4],
+                tokens.border,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Line,
+                SubElement::Background,
+                desc.z,
+            ));
+            if desc.count() > 0 {
+                primitives.push(surface(
+                    state.indicator_rect(desc),
+                    1.0,
+                    tokens.indicator,
+                    desc.z,
+                ));
+            }
+        }
+        TabViewStyle::ShellChrome => {
+            // 壳层融合态底板透明以透出 TitleBarChrome 的 HEADER_BG。
+            primitives.push(surface(desc.rect, 0.0, Token::NONE, desc.z));
+            // 底部 1px 分隔线绕过当前选中标签底边，使选中卡片与下方工具栏无缝融合。
+            let y = desc.rect.max().y - 1.0;
+            let (left_w, right_x, right_w) = if desc.count() > 0 {
+                let active_r = desc.tab_rect(state.active_index(desc), state.scroll_x);
+                let left_w = (active_r.origin.x - desc.rect.origin.x).max(0.0);
+                let right_x = active_r.max().x.min(desc.rect.max().x);
+                let right_w = (desc.rect.max().x - right_x).max(0.0);
+                (left_w, right_x, right_w)
+            } else {
+                (desc.rect.size.x, desc.rect.max().x, 0.0)
+            };
+            let mut left_line = instance(
+                Rect::new(desc.rect.origin.x, y, left_w, 1.0),
+                [0.0; 4],
+                tokens.border,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Line,
+                SubElement::Background,
+                desc.z,
+            );
+            left_line.z_and_opacity =
+                GpuPrimitiveInstance::pack_z_opacity(desc.z, if left_w > 0.0 { 1.0 } else { 0.0 });
+            primitives.push(left_line);
+
+            let mut right_line = instance(
+                Rect::new(right_x, y, right_w, 1.0),
+                [0.0; 4],
+                tokens.border,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Line,
+                SubElement::Background,
+                desc.z,
+            );
+            right_line.z_and_opacity =
+                GpuPrimitiveInstance::pack_z_opacity(desc.z, if right_w > 0.0 { 1.0 } else { 0.0 });
+            primitives.push(right_line);
+        }
     }
     WidgetOutput {
         primitives,
@@ -462,36 +848,171 @@ pub fn emit_tab(
     }
     let active = index == state.active_index(desc);
     let disabled = control.disabled;
-    let mut primitives = Vec::with_capacity(3 + label.len());
+    let mut primitives = Vec::with_capacity(8 + label.len());
     let mut payloads = Vec::with_capacity(label.len());
 
-    let fill = if active {
-        tokens.tab_active
-    } else if control.phase == PointerPhase::Hovered {
-        tokens.tab_hover
+    let text_token = if disabled {
+        Token::TEXT_DISABLED
+    } else if active {
+        tokens.tab_text_active
     } else {
-        tokens.tab
+        tokens.tab_text
     };
-    primitives.push(outlined(
-        rect,
-        TAB_RADIUS,
-        fill,
-        Token::NONE,
-        0.0,
-        0.0,
-        desc.z,
-    ));
-    glyphs(
-        label,
-        if active {
-            tokens.tab_text_active
-        } else {
-            tokens.tab_text
-        },
-        desc.z,
-        &mut primitives,
-        &mut payloads,
-    );
+
+    let hit_radii = match desc.style {
+        TabViewStyle::Standard => {
+            let fill = if active {
+                tokens.tab_active
+            } else if control.phase == PointerPhase::Hovered {
+                tokens.tab_hover
+            } else {
+                tokens.tab
+            };
+            primitives.push(outlined(
+                rect,
+                TAB_RADIUS,
+                fill,
+                Token::NONE,
+                0.0,
+                0.0,
+                desc.z,
+            ));
+            [TAB_RADIUS; 4]
+        }
+        TabViewStyle::ShellChrome => {
+            let radii = if active {
+                [TAB_SHELL_CORNER_RADIUS, TAB_SHELL_CORNER_RADIUS, 0.0, 0.0]
+            } else {
+                [TAB_RADIUS; 4]
+            };
+            let fill = if active {
+                tokens.tab_active
+            } else if control.phase == PointerPhase::Pressed {
+                Token::PRESSED
+            } else if control.phase == PointerPhase::Hovered {
+                tokens.tab_hover
+            } else {
+                tokens.tab
+            };
+            // 1. 标签卡片底板（选中时为顶圆角 8px + 底直角 0px，填充 SURFACE_RAISED）。
+            primitives.push(instance(
+                rect,
+                radii,
+                fill,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::RoundedRect,
+                SubElement::Background,
+                desc.z,
+            ));
+            // 2~4. 选中态顶/左/右 1px CARD_BORDER 描边（无底边），非选中态透明度 0 保持图元数恒定。
+            let border_opacity = if active { 1.0 } else { 0.0 };
+            let top_inset = TAB_SHELL_CORNER_RADIUS.min(rect.size.x * 0.5);
+            let mut top_border = instance(
+                Rect::new(
+                    rect.origin.x + top_inset * 0.5,
+                    rect.origin.y,
+                    (rect.size.x - top_inset).max(0.0),
+                    1.0,
+                ),
+                [0.0; 4],
+                tokens.border,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Line,
+                SubElement::Background,
+                desc.z,
+            );
+            top_border.z_and_opacity =
+                GpuPrimitiveInstance::pack_z_opacity(desc.z, border_opacity);
+            primitives.push(top_border);
+
+            let side_h = (rect.size.y - top_inset * 0.5).max(0.0);
+            let mut left_border = instance(
+                Rect::new(rect.origin.x, rect.origin.y + top_inset * 0.5, 1.0, side_h),
+                [0.0; 4],
+                tokens.border,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Line,
+                SubElement::Background,
+                desc.z,
+            );
+            left_border.z_and_opacity =
+                GpuPrimitiveInstance::pack_z_opacity(desc.z, border_opacity);
+            primitives.push(left_border);
+
+            let mut right_border = instance(
+                Rect::new(
+                    (rect.max().x - 1.0).max(rect.origin.x),
+                    rect.origin.y + top_inset * 0.5,
+                    1.0,
+                    side_h,
+                ),
+                [0.0; 4],
+                tokens.border,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Line,
+                SubElement::Background,
+                desc.z,
+            );
+            right_border.z_and_opacity =
+                GpuPrimitiveInstance::pack_z_opacity(desc.z, border_opacity);
+            primitives.push(right_border);
+
+            // 5. 相邻非选中标签之间的 1px × 16px DIVIDER 竖线（紧邻选中或悬停标签时隐藏）。
+            let active_idx = state.active_index(desc);
+            let show_divider = !active
+                && control.phase == PointerPhase::Idle
+                && index + 1 < desc.count()
+                && index + 1 != active_idx;
+            let div_h = 16.0f32.min(rect.size.y);
+            let mut divider = instance(
+                Rect::new(
+                    (rect.max().x - 1.0).max(rect.origin.x),
+                    rect.origin.y + (rect.size.y - div_h) * 0.5,
+                    1.0,
+                    div_h,
+                ),
+                [0.0; 4],
+                Token::DIVIDER,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Line,
+                SubElement::Background,
+                desc.z,
+            );
+            divider.z_and_opacity =
+                GpuPrimitiveInstance::pack_z_opacity(desc.z, if show_divider { 1.0 } else { 0.0 });
+            primitives.push(divider);
+
+            radii
+        }
+    };
+
+    if let (Some(icon), Some(icon_r)) = (item.icon, desc.icon_rect(index, state.scroll_x)) {
+        emit_shell_icon_primitives(
+            icon,
+            icon_r,
+            text_token,
+            if active {
+                tokens.tab_active
+            } else {
+                Token::HEADER_BG
+            },
+            desc.z,
+            &mut primitives,
+            &mut payloads,
+        );
+    }
+
+    glyphs(label, text_token, desc.z, &mut primitives, &mut payloads);
     primitives.push(focus_ring(
         rect.inflate(1.0),
         2.0,
@@ -503,9 +1024,7 @@ pub fn emit_tab(
 
     let hit = (!disabled).then(|| {
         HitRegion::new(item.id, CONTROL_LAYER, u32::from(desc.z), rect)
-            .with_shape(Shape::Rounded {
-                radii: [TAB_RADIUS; 4],
-            })
+            .with_shape(Shape::Rounded { radii: hit_radii })
             .with_cursor(CursorKind::Pointer)
     });
     let mut a11y = A11yNode::new(Role::Tab, item.title.clone(), rect)
@@ -540,23 +1059,55 @@ pub fn emit_tab_close(
         return WidgetOutput::default();
     };
     let disabled = control.disabled;
-    let color = if control.phase == PointerPhase::Hovered {
+    let color = if disabled {
+        Token::TEXT_DISABLED
+    } else if control.phase == PointerPhase::Hovered {
         tokens.close_hover
     } else {
         tokens.close
     };
-    let mut primitives = Vec::with_capacity(3);
+    let mut primitives = Vec::with_capacity(4);
     let mut payloads = Vec::with_capacity(2);
-    let inset = rect.size.x * 0.3;
+    let close_z = match desc.style {
+        TabViewStyle::Standard => desc.z,
+        TabViewStyle::ShellChrome => desc.z.saturating_add(1),
+    };
+
+    if desc.style == TabViewStyle::ShellChrome {
+        let bg = if disabled {
+            Token::NONE
+        } else if control.phase == PointerPhase::Pressed {
+            Token::PRESSED
+        } else if control.phase == PointerPhase::Hovered {
+            Token::HOVER
+        } else {
+            Token::NONE
+        };
+        primitives.push(outlined(rect, TAB_RADIUS, bg, Token::NONE, 0.0, 0.0, close_z));
+    }
+
+    let glyph_rect = match desc.style {
+        TabViewStyle::Standard => rect,
+        TabViewStyle::ShellChrome => {
+            let icon_size = TAB_CLOSE.min(rect.size.x).min(rect.size.y);
+            Rect::new(
+                rect.origin.x + (rect.size.x - icon_size) * 0.5,
+                rect.origin.y + (rect.size.y - icon_size) * 0.5,
+                icon_size,
+                icon_size,
+            )
+        }
+    };
+    let inset = glyph_rect.size.x * 0.3;
     let thickness = 1.5;
     for (start, end) in [
         (
-            [rect.origin.x + inset, rect.origin.y + inset],
-            [rect.max().x - inset, rect.max().y - inset],
+            [glyph_rect.origin.x + inset, glyph_rect.origin.y + inset],
+            [glyph_rect.max().x - inset, glyph_rect.max().y - inset],
         ),
         (
-            [rect.max().x - inset, rect.origin.y + inset],
-            [rect.origin.x + inset, rect.max().y - inset],
+            [glyph_rect.max().x - inset, glyph_rect.origin.y + inset],
+            [glyph_rect.origin.x + inset, glyph_rect.max().y - inset],
         ),
     ] {
         curve_stroke(
@@ -564,7 +1115,7 @@ pub fn emit_tab_close(
             end,
             thickness,
             color,
-            desc.z,
+            close_z,
             &mut primitives,
             &mut payloads,
         );
@@ -574,12 +1125,12 @@ pub fn emit_tab_close(
         4.0,
         tokens.focus_ring,
         1.5,
-        desc.z,
+        close_z,
         control.focused,
     ));
 
     let hit = (!disabled).then(|| {
-        HitRegion::new(node, CONTROL_LAYER, u32::from(desc.z), rect)
+        HitRegion::new(node, CONTROL_LAYER, u32::from(close_z), rect)
             .with_shape(Shape::Rounded { radii: [4.0; 4] })
             .with_cursor(CursorKind::Pointer)
     });
@@ -614,10 +1165,27 @@ pub fn emit_tabs_add(
         return WidgetOutput::default();
     };
     let disabled = control.disabled;
-    let fill = if control.phase == PointerPhase::Hovered {
-        tokens.tab_hover
-    } else {
-        tokens.tab
+    let (fill, radius) = match desc.style {
+        TabViewStyle::Standard => (
+            if control.phase == PointerPhase::Hovered {
+                tokens.tab_hover
+            } else {
+                tokens.tab
+            },
+            0.0,
+        ),
+        TabViewStyle::ShellChrome => (
+            if disabled {
+                Token::NONE
+            } else if control.phase == PointerPhase::Pressed {
+                Token::PRESSED
+            } else if control.phase == PointerPhase::Hovered {
+                Token::HOVER
+            } else {
+                Token::NONE
+            },
+            TAB_RADIUS,
+        ),
     };
     let color = if disabled {
         Token::TEXT_DISABLED
@@ -625,9 +1193,12 @@ pub fn emit_tabs_add(
         tokens.tab_text
     };
     let mut primitives = Vec::with_capacity(4);
-    primitives.push(outlined(rect, 0.0, fill, Token::NONE, 0.0, 0.0, desc.z));
+    primitives.push(outlined(rect, radius, fill, Token::NONE, 0.0, 0.0, desc.z));
     let centre = rect.size.x * 0.5;
-    let arm = rect.size.x * 0.18;
+    let arm = match desc.style {
+        TabViewStyle::Standard => rect.size.x * 0.18,
+        TabViewStyle::ShellChrome => 5.0,
+    };
     let cx = rect.origin.x + centre;
     let cy = rect.origin.y + rect.size.y * 0.5;
     primitives.push(stroke_between(
@@ -703,6 +1274,21 @@ mod tests {
 
     fn desc() -> TabsDesc {
         TabsDesc::new(Rect::new(0.0, 0.0, 300.0, 36.0), &["One", "Two", "Three"])
+    }
+
+    fn shell_desc(width: f32, count: usize) -> TabsDesc {
+        let items: Vec<TabItem> = (0..count)
+            .map(|i| {
+                TabItem::new(i as u64 + 1, format!("Tab {}", i + 1))
+                    .with_icon(ShellIcon::Folder)
+                    .with_tooltip(format!("Path {}", i + 1))
+            })
+            .collect();
+        TabsDesc::new(Rect::new(0.0, 0.0, width, TAB_STRIP_HEIGHT), &[])
+            .with_items(items)
+            .with_addable(true)
+            .with_style(TabViewStyle::ShellChrome)
+            .with_width_mode(TabWidthMode::adaptive_default())
     }
 
     #[test]
@@ -862,5 +1448,150 @@ mod tests {
         state.snap(&desc);
         let output = emit_tabs_strip(&desc, &state, TabsTokens::standard());
         assert_eq!(output.primitives.len(), 3);
+    }
+
+    #[test]
+    fn adaptive_width_clamps_between_min_and_max_and_triggers_overflow() {
+        // 宽容器：2 个标签上限夹紧至 240px，且 `+` 按钮紧随最后一个标签流末端。
+        let wide = shell_desc(800.0, 2);
+        assert_eq!(wide.effective_tab_width(), TAB_MAX_WIDTH);
+        assert!(!wide.is_overflowing());
+        let add = wide.add_rect().expect("addable");
+        assert_eq!(add.origin.x, TAB_MAX_WIDTH * 2.0 + TAB_ADD_GAP);
+        assert_eq!(add.size.x, TAB_ADD_WIDTH);
+        assert_eq!(add.size.y, TAB_ADD_HEIGHT);
+
+        // 中等容器：4 个标签按 strip_width 等分压缩至 (636 - 36) / 4 = 150px。
+        let medium = shell_desc(636.0, 4);
+        assert_eq!(medium.effective_tab_width(), 150.0);
+        assert!(!medium.is_overflowing());
+
+        // 窄容器：6 个标签触底 100px 并开启水平溢出滚动，`+` 按钮停靠可视区右沿。
+        let narrow = shell_desc(436.0, 6);
+        assert_eq!(narrow.effective_tab_width(), TAB_MIN_WIDTH);
+        assert!(narrow.is_overflowing());
+        assert_eq!(narrow.max_scroll(), 200.0);
+        let docked_add = narrow.add_rect().expect("addable");
+        assert_eq!(docked_add.origin.x, 436.0 - TAB_ADD_WIDTH);
+    }
+
+    #[test]
+    fn shell_chrome_keeps_constant_primitive_count_across_24_states() {
+        let desc = shell_desc(600.0, 3);
+        let tokens = TabsTokens::standard();
+        let mut counts = Vec::new();
+        for active in [0usize, 1] {
+            let state = TabsState::new(active);
+            for phase in [
+                PointerPhase::Idle,
+                PointerPhase::Hovered,
+                PointerPhase::Pressed,
+            ] {
+                for focused in [false, true] {
+                    for disabled in [false, true] {
+                        let control = ControlState {
+                            phase,
+                            focused,
+                            disabled,
+                            selected: active == 0,
+                        };
+                        let out = emit_tab(&desc, &state, 0, control, &[], tokens);
+                        counts.push(out.primitives.len());
+                    }
+                }
+            }
+        }
+        assert_eq!(counts.len(), 24);
+        assert!(counts.windows(2).all(|w| w[0] == w[1]), "{counts:?}");
+    }
+
+    #[test]
+    fn shell_chrome_selected_card_has_top_and_side_borders_without_bottom_stroke() {
+        let desc = shell_desc(600.0, 3);
+        let state = TabsState::new(1);
+        let tokens = TabsTokens::standard();
+
+        let strip = emit_tabs_strip(&desc, &state, tokens);
+        assert_eq!(strip.primitives.len(), 3);
+        // 底部线分为选中标签左段与右段，且左段终点等于选中标签左沿。
+        let active_rect = desc.tab_rect(1, 0.0);
+        assert_eq!(strip.primitives[1].size[0], active_rect.origin.x);
+        assert_eq!(strip.primitives[2].local_pos[0], active_rect.max().x);
+
+        let active_tab = emit_tab(&desc, &state, 1, ControlState::default(), &[], tokens);
+        assert_eq!(
+            active_tab.primitives[0].fill_token_or_uv,
+            u32::from(Token::SURFACE_RAISED.raw())
+        );
+        // 顶/左/右描边透明度为 1.0，右侧非选中分隔线透明度为 0.0。
+        assert_eq!(active_tab.primitives[1].opacity(), 1.0);
+        assert_eq!(active_tab.primitives[2].opacity(), 1.0);
+        assert_eq!(active_tab.primitives[3].opacity(), 1.0);
+        assert_eq!(active_tab.primitives[4].opacity(), 0.0);
+
+        // 非选中标签 0 紧邻选中标签 1，分隔线应自动隐藏。
+        let adjacent_inactive = emit_tab(&desc, &state, 0, ControlState::default(), &[], tokens);
+        assert_eq!(adjacent_inactive.primitives[1].opacity(), 0.0);
+        assert_eq!(adjacent_inactive.primitives[4].opacity(), 0.0);
+
+        // 两个连续非选中标签（active=2 时标签 0 与标签 1 之间）应显示 1px × 16px 分隔竖线。
+        let state_last = TabsState::new(2);
+        let non_adjacent = emit_tab(&desc, &state_last, 0, ControlState::default(), &[], tokens);
+        assert_eq!(non_adjacent.primitives[4].opacity(), 1.0);
+        assert_eq!(non_adjacent.primitives[4].size, [1.0, 16.0]);
+    }
+
+    #[test]
+    fn close_hit_is_independent_and_middle_and_right_click_emit_events() {
+        let mut desc = shell_desc(600.0, 3);
+        desc.items[2] = desc.items[2].clone().pinned();
+        assert!(
+            desc.close_rect(2, 0.0).is_none(),
+            "pinned tabs must not render a close button"
+        );
+
+        let mut state = TabsState::new(0);
+        let close_rect = desc.close_rect(1, 0.0).expect("tab 1 is closable");
+        assert_eq!(close_rect.size.x, TAB_CLOSE_HIT_SIZE);
+        assert_eq!(close_rect.size.y, TAB_CLOSE_HIT_SIZE);
+
+        // 点击标签 1 的关闭按钮：发射 CloseRequested 且不得误触选中标签 1。
+        let close_evt = desc.handle_left_click(&mut state, close_rect.center());
+        assert_eq!(
+            close_evt,
+            Some(TabViewEvent::CloseRequested { id: 2, index: 1 })
+        );
+        assert_eq!(state.active, 0);
+
+        // 点击标签 1 标题区：切换激活至标签 1。
+        let label_center = desc.label_rect(1, 0.0).center();
+        let select_evt = desc.handle_left_click(&mut state, label_center);
+        assert_eq!(select_evt, Some(TabViewEvent::Selected { id: 2, index: 1 }));
+        assert_eq!(state.active, 1);
+
+        // 点击 `+` 按钮：发射 AddClicked。
+        let add_center = desc.add_rect().expect("addable").center();
+        assert_eq!(
+            desc.handle_left_click(&mut state, add_center),
+            Some(TabViewEvent::AddClicked)
+        );
+
+        // 中键点击标签 0：发射 MiddleClicked。
+        let tab0_center = desc.tab_rect(0, 0.0).center();
+        assert_eq!(
+            desc.handle_middle_click(&state, tab0_center),
+            Some(TabViewEvent::MiddleClicked { id: 1, index: 0 })
+        );
+
+        // 右键点击标签 0：发射 ContextMenuRequested。
+        let right_pos = Vec2::new(tab0_center.x + 2.4, tab0_center.y);
+        assert_eq!(
+            desc.handle_right_click(&state, right_pos),
+            Some(TabViewEvent::ContextMenuRequested {
+                id: 1,
+                index: 0,
+                screen_pos: [right_pos.x.round() as i32, right_pos.y.round() as i32],
+            })
+        );
     }
 }

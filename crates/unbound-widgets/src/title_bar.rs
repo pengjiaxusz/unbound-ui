@@ -19,6 +19,11 @@ use crate::{ControlState, PointerPhase, TextCtx, UiWidget, WidgetInputEvent, Wid
 /// 取紧凑高度后，窗口控制按钮为 46×32 的贴边矩形。
 pub const TITLE_BAR_HEIGHT: f32 = 32.0;
 
+/// 壳层融合标题栏高度（逻辑像素）。
+///
+/// 对齐 WinUI `TabView` 融合标题栏高度：`TabViewItemMinHeight = 32` + 顶部 `8px` 留白 = 40。
+pub const TITLE_BAR_FUSED_HEIGHT: f32 = 40.0;
+
 /// 窗口控制按钮（最小化 / 最大化 / 关闭）的默认宽度（逻辑像素，与 Showcase 一致）。
 ///
 /// Win11 的标题栏按钮固定 46 宽（`AppWindowTitleBar` 的 caption button 度量），
@@ -34,7 +39,7 @@ const TITLE_BAR_CAPTION_RESERVE: f32 = TITLE_BAR_CAPTION_WIDTH * 3.0;
 /// 拖拽区至少保留的宽度（WinUI `TitleBarMinDragRegionWidth` = 48）。
 ///
 /// 窗口窄到按钮列几乎占满标题栏时，优先保住这段可拖拽区域而不是让它归零。
-const TITLE_BAR_MIN_DRAG_WIDTH: f32 = 48.0;
+pub const TITLE_BAR_MIN_DRAG_WIDTH: f32 = 48.0;
 
 /// 标题栏背景表面与底部分隔线的图元深度。
 ///
@@ -64,25 +69,100 @@ pub const TITLE_BAR_DRAG_ID: u64 = 0xFFFF_FF00;
 /// 默认标题栏的背景表面与底部分隔线。
 ///
 /// 与 showcase 的 `draw_top_bar` 保持一致的视觉约定：`HEADER_BG` 铺满整条
-/// 标题栏，底边以 1px `DIVIDER` 与内容区分隔。它是绝对定位的纯装饰控件，
+/// 标题栏，底边以 1px `DIVIDER` 与内容区分隔（融合态下可通过
+/// `show_bottom_divider = false` 隐藏底边线）。它是绝对定位的纯装饰控件，
 /// 不参与 flex 排布；只发射 `layer = 0` 的最低优先级命中区，作为标题栏空白处的
 /// 冒泡起点（拖动窗口 / 双击最大化由标题栏根容器的冒泡兜底接管）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TitleBarChrome {
     /// 当前窗口是否处于激活聚焦状态（失焦时降低标题文本与图标对比度）。
     pub focused: bool,
+    /// 是否显示底部 1px 分隔线（壳层融合态设为 `false`，由 `TabView` 统一绘制）。
+    pub show_bottom_divider: bool,
+    /// 左侧固定非拖拽内容槽预留宽度（逻辑像素）。
+    pub left_reserved_width: f32,
+    /// 右侧自定义全局操作槽预留宽度（不含三枚系统窗口控制按钮，逻辑像素）。
+    pub right_reserved_width: f32,
+    /// 右侧系统窗口控制按钮区预留宽度（默认 `46 × 3 = 138`）。
+    pub caption_reserved_width: f32,
 }
 
 impl Default for TitleBarChrome {
     fn default() -> Self {
-        Self { focused: true }
+        Self::new(true)
     }
 }
 
 impl TitleBarChrome {
+    /// 创建默认标题栏背景装饰控件（保留 138px 窗口控制按钮区与底部分隔线）。
     #[must_use]
     pub const fn new(focused: bool) -> Self {
-        Self { focused }
+        Self {
+            focused,
+            show_bottom_divider: true,
+            left_reserved_width: 0.0,
+            right_reserved_width: 0.0,
+            caption_reserved_width: TITLE_BAR_CAPTION_RESERVE,
+        }
+    }
+
+    /// 从 [`TitleBarDesc`] 构造同步配置的背景装饰控件。
+    #[must_use]
+    pub fn from_desc(desc: &TitleBarDesc, focused: bool) -> Self {
+        let caption_count = usize::from(desc.show_minimize)
+            + usize::from(desc.show_maximize)
+            + usize::from(desc.show_close);
+        Self {
+            focused,
+            show_bottom_divider: desc.show_bottom_divider,
+            left_reserved_width: desc.left_reserved_width.max(0.0),
+            right_reserved_width: desc.right_reserved_width.max(0.0),
+            caption_reserved_width: caption_count as f32 * TITLE_BAR_CAPTION_WIDTH,
+        }
+    }
+
+    /// 设置是否显示底部 1px 分隔线。
+    #[must_use]
+    pub const fn show_bottom_divider(mut self, show: bool) -> Self {
+        self.show_bottom_divider = show;
+        self
+    }
+
+    /// 设置左侧与右侧自定义内容槽的预留宽度（逻辑像素）。
+    #[must_use]
+    pub fn with_reserved_widths(mut self, left: f32, right: f32) -> Self {
+        self.left_reserved_width = left.max(0.0);
+        self.right_reserved_width = right.max(0.0);
+        self
+    }
+
+    /// 覆盖右侧窗口控制按钮区预留宽度（逻辑像素）。
+    #[must_use]
+    pub fn with_caption_reserved_width(mut self, width: f32) -> Self {
+        self.caption_reserved_width = width.max(0.0);
+        self
+    }
+
+    /// 计算扣除窗口控制按钮与左右预留槽后的拖拽区矩形。
+    ///
+    /// 始终保障在窗口宽度足够时，拖拽区宽度不少于 [`TITLE_BAR_MIN_DRAG_WIDTH`]（48px）。
+    #[must_use]
+    pub fn drag_rect(&self, rect: Rect) -> Rect {
+        let total_w = rect.size.x.max(0.0);
+        let min_drag = TITLE_BAR_MIN_DRAG_WIDTH.min(total_w);
+        let budget = (total_w - min_drag).max(0.0);
+        let total_right = self.caption_reserved_width.max(0.0) + self.right_reserved_width.max(0.0);
+        let right_reserve = total_right.min(budget);
+        let left_reserve = self
+            .left_reserved_width
+            .max(0.0)
+            .min((budget - right_reserve).max(0.0));
+        Rect::new(
+            rect.origin.x + left_reserve,
+            rect.origin.y,
+            (total_w - left_reserve - right_reserve).max(0.0),
+            rect.size.y,
+        )
     }
 }
 
@@ -115,7 +195,7 @@ impl UiWidget for TitleBarChrome {
             TITLE_BAR_CHROME_Z,
         ));
         let rule = Rect::new(rect.origin.x, rect.max().y - 1.0, rect.size.x, 1.0);
-        output.primitives.push(instance(
+        let mut rule_prim = instance(
             rule,
             [0.0; 4],
             Token::DIVIDER,
@@ -125,18 +205,15 @@ impl UiWidget for TitleBarChrome {
             PrimType::Line,
             SubElement::Background,
             TITLE_BAR_CHROME_RULE_Z,
-        ));
-        // 发射 layer=0、层内 z=0 的最低优先级命中区：标题栏空白处的按压由它作为冒泡起点。
-        // 命中区止于右侧窗口控制按钮列的左沿（Win11 的 non-client 拖拽区同样排除按钮区），
-        // 因此拖拽区与三枚按钮的命中区在几何上互不重叠。
-        let reserve =
-            TITLE_BAR_CAPTION_RESERVE.min((rect.size.x - TITLE_BAR_MIN_DRAG_WIDTH).max(0.0));
-        let drag = Rect::new(
-            rect.origin.x,
-            rect.origin.y,
-            (rect.size.x - reserve).max(0.0),
-            rect.size.y,
         );
+        rule_prim.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+            TITLE_BAR_CHROME_RULE_Z,
+            if self.show_bottom_divider { 1.0 } else { 0.0 },
+        );
+        output.primitives.push(rule_prim);
+        // 发射 layer=0、层内 z=0 的最低优先级命中区：标题栏空白处的按压由它作为冒泡起点。
+        // 命中区自动扣除右侧窗口控制按钮列与自定义操作槽，并保证拖拽区宽度至少保留 48px。
+        let drag = self.drag_rect(rect);
         output.hit = Some(HitRegion::new(node, 0, 0, drag));
         output
     }
@@ -408,6 +485,12 @@ pub struct TitleBarDesc {
     pub close_id: u64,
     /// 是否显示默认标题徽章（使用自定义 `left` 插槽时可关闭）。
     pub show_title: bool,
+    /// 是否显示底部 1px 分隔线（壳层融合态可设为 `false`）。
+    pub show_bottom_divider: bool,
+    /// 左侧非拖拽内容槽预留宽度（逻辑像素）。
+    pub left_reserved_width: f32,
+    /// 右侧自定义全局操作槽预留宽度（逻辑像素，不含三枚窗口按钮）。
+    pub right_reserved_width: f32,
 }
 
 impl Default for TitleBarDesc {
@@ -433,6 +516,9 @@ impl TitleBarDesc {
             maximize_id: TITLE_BAR_MAXIMIZE_ID,
             close_id: TITLE_BAR_CLOSE_ID,
             show_title: true,
+            show_bottom_divider: true,
+            left_reserved_width: 0.0,
+            right_reserved_width: 0.0,
         }
     }
 
@@ -440,6 +526,28 @@ impl TitleBarDesc {
     #[must_use]
     pub fn height(mut self, height: f32) -> Self {
         self.height = height.max(24.0);
+        self
+    }
+
+    /// 设置壳层融合态标题栏高度（常取 [`TITLE_BAR_FUSED_HEIGHT`] = `40.0`）。
+    #[must_use]
+    pub fn with_fused_height(mut self, height: f32) -> Self {
+        self.height = height.max(24.0);
+        self
+    }
+
+    /// 设置是否显示底部 1px 分隔线。
+    #[must_use]
+    pub fn show_bottom_divider(mut self, show: bool) -> Self {
+        self.show_bottom_divider = show;
+        self
+    }
+
+    /// 设置左侧与右侧自定义内容槽预留宽度（逻辑像素）。
+    #[must_use]
+    pub fn with_reserved_widths(mut self, left: f32, right: f32) -> Self {
+        self.left_reserved_width = left.max(0.0);
+        self.right_reserved_width = right.max(0.0);
         self
     }
 
@@ -540,6 +648,23 @@ mod tests {
         assert_eq!(desc.id, TITLE_BAR_DRAG_ID);
         assert_eq!(desc.close_id, TITLE_BAR_CLOSE_ID);
         assert!(desc.show_title);
+        assert!(desc.show_bottom_divider);
+        assert_eq!(desc.left_reserved_width, 0.0);
+        assert_eq!(desc.right_reserved_width, 0.0);
+    }
+
+    #[test]
+    fn title_bar_desc_fused_builders_configure_height_divider_and_reserves() {
+        let desc = TitleBarDesc::new("Explorer")
+            .with_fused_height(TITLE_BAR_FUSED_HEIGHT)
+            .show_bottom_divider(false)
+            .with_reserved_widths(120.0, 64.0)
+            .show_title(false);
+        assert_eq!(desc.height, 40.0);
+        assert!(!desc.show_bottom_divider);
+        assert_eq!(desc.left_reserved_width, 120.0);
+        assert_eq!(desc.right_reserved_width, 64.0);
+        assert!(!desc.show_title);
     }
 
     #[test]
@@ -577,6 +702,7 @@ mod tests {
             out.primitives[1].size[1], 1.0,
             "divider must be exactly 1px"
         );
+        assert_eq!(out.primitives[1].opacity(), 1.0);
 
         // 命中区必须是最低优先级：layer 0（画布层）且层内 z 为 0，
         // 任何 layer >= 1 的交互控件与浮层都天然覆盖其上。
@@ -592,6 +718,48 @@ mod tests {
             hit.bounds.size.x,
             rect.size.x - TITLE_BAR_CAPTION_WIDTH * 3.0
         );
+    }
+
+    #[test]
+    fn fused_title_bar_chrome_hides_divider_and_preserves_minimum_drag_width() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut font = text_ctx(&mut engine, &mut cache);
+
+        let desc = TitleBarDesc::new("Fused")
+            .with_fused_height(TITLE_BAR_FUSED_HEIGHT)
+            .show_bottom_divider(false)
+            .with_reserved_widths(200.0, 64.0);
+        let chrome = TitleBarChrome::from_desc(&desc, true);
+
+        // 宽窗口：扣除左侧 200px、右侧操作槽 64px 与三枚窗口按钮 138px。
+        let wide_rect = Rect::new(0.0, 0.0, 1000.0, TITLE_BAR_FUSED_HEIGHT);
+        let wide_out = chrome.emit_laid_out(1, wide_rect, ControlState::default(), &(), &mut font);
+        assert_eq!(wide_out.primitives.len(), 2);
+        assert_eq!(
+            wide_out.primitives[1].opacity(),
+            0.0,
+            "fused title bar must hide bottom divider via zero opacity"
+        );
+        let wide_hit = wide_out.hit.expect("drag region");
+        assert_eq!(wide_hit.bounds.origin.x, 200.0);
+        assert_eq!(
+            wide_hit.bounds.size.x,
+            1000.0 - 200.0 - 64.0 - TITLE_BAR_CAPTION_WIDTH * 3.0
+        );
+
+        // 窄窗口：即使预留宽度之和超出窗口宽度，仍严格保留至少 48px 拖拽区。
+        for width in [48.0f32, 120.0, 180.0, 260.0, 400.0] {
+            let narrow_rect = Rect::new(0.0, 0.0, width, TITLE_BAR_FUSED_HEIGHT);
+            let drag = chrome.drag_rect(narrow_rect);
+            assert!(
+                drag.size.x >= TITLE_BAR_MIN_DRAG_WIDTH,
+                "width={width}: drag width {} must be >= {}",
+                drag.size.x,
+                TITLE_BAR_MIN_DRAG_WIDTH
+            );
+            assert!(drag.max().x <= narrow_rect.max().x + 1e-4);
+        }
     }
 
     #[test]
