@@ -43,7 +43,8 @@ jobs:
           GATE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           base="${GATE_BASE:-}"
-          if printf '%s' "$base" | grep -qE '^0+$' || [ -n "$base" ] && ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1; then
+          # 全零 base 代表分支删除，而 force-push 之后 base 也可能指向一个已不存在的提交；两种情况都退回不带 base 的检查，否则 git log 会直接报错，门禁因无关原因失败。
+          if printf '%s' "$base" | grep -qE '^0+$' || { [ -n "$base" ] && ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1; }; then
             base=""
           fi
           set +e

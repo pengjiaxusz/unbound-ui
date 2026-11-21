@@ -158,7 +158,7 @@
     ".githooks\\pre-push": "65289a4930a1ad794ac93f7ade7be2caa29297beea36399c5b209cd559805cab",
     ".github\\pull_request_template.md": "0d6034cb72da4dfdb073d0a2155964aa99590276168ae0245820d6822fb88f4f",
     ".github\\rulesets\\gate.json": "2bb6ffbe9d29e527986b86ec139f8ed6138711b594a43240e4e1954a450d67e8",
-    ".github\\workflows\\gate.yml": "0ae2938196e98b97e8bbf5f1282af6e1bfcc89d9dc85998c4a1b872dc97c9643",
+    ".github\\workflows\\gate.yml": "9c6ea4ae781b587bd07ac3f41ffa1543c5605dc2db18209bfb908dff9d1182a8",
     ".gitignore": "9908a23d777d0023f1b112d02159864081a49f86491e0ee5abdadcac137c0f9d",
     ".pengj-templates\\gate.toml": "800af9020c29544f1f1516cce3ce3644c4f5b778509c6280e56fc2a0e8487245",
     ".pengj-templates\\just\\bque.just": "d014bf30776544e5cc5084763edef784f0c712d06339b50e4250c853f48e8e3f",
