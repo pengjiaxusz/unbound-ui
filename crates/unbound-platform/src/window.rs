@@ -414,6 +414,8 @@ pub enum PlatformEvent {
     Ime(ImeEvent),
     /// 操作系统请求绘制新的一帧。
     RedrawRequested,
+    /// 归属于当前窗口的原生弹出窗已关闭（如宿主最小化、隐藏或关闭引发级联回收）。
+    PopupDismissed { id: u64 },
     /// 用户请求关闭窗口。
     CloseRequested,
 }
@@ -707,6 +709,9 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
             out.push(PlatformEvent::Ime(ime.clone()));
         }
         PlatformEvent::RedrawRequested => out.push(PlatformEvent::RedrawRequested),
+        PlatformEvent::PopupDismissed { id } => {
+            out.push(PlatformEvent::PopupDismissed { id: *id });
+        }
         PlatformEvent::CloseRequested => out.push(PlatformEvent::CloseRequested),
         PlatformEvent::RecreateSwapchain(extent) => {
             out.push(PlatformEvent::RecreateSwapchain(*extent));

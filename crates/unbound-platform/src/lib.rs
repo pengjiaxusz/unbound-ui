@@ -27,6 +27,7 @@ pub mod latency;
 pub mod ole_drag;
 pub mod overlay_host;
 pub mod pacing;
+pub mod popup_host;
 pub mod resize;
 pub mod screen_capture;
 pub mod tray;
@@ -56,6 +57,10 @@ pub use ole_drag::{
 pub use pacing::{
     renderer_present_config, FramePacer, PresentSync, PresentWaitPolicy, RenderThrottlePolicy,
     RenderThrottleState, IDLE_FPS_LIMIT, MIN_FPS_LIMIT,
+};
+pub use popup_host::{
+    clamp_popup_to_work_area, PopupHostEntry, PopupHostRegistry, PopupSyncAction,
+    PopupWindowConfig,
 };
 pub use resize::{Extent, ResizeAction, ResizeTracker};
 pub use screen_capture::{

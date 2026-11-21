@@ -73,6 +73,16 @@ pub trait PlatformApp {
         None
     }
 
+    /// 排空本帧需要同步（创建或重定位）的越界原生弹出窗请求。
+    fn take_popup_sync_requests(&mut self) -> Vec<(u64, crate::popup_host::PopupWindowConfig)> {
+        Vec::new()
+    }
+
+    /// 排空本帧需要显式关闭的原生弹出窗 ID 列表。
+    fn take_popup_close_requests(&mut self) -> Vec<u64> {
+        Vec::new()
+    }
+
     /// 当应用即使在无输入时也需要唤醒事件循环的时间点。
     fn next_wake(&self) -> Option<Instant> {
         None
@@ -260,8 +270,8 @@ mod win32 {
     use ::windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
     use ::windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use ::windows::Win32::Graphics::Gdi::{
-        ClientToScreen, GetMonitorInfoW, MonitorFromWindow, ScreenToClient, MONITORINFO,
-        MONITOR_DEFAULTTONEAREST,
+        ClientToScreen, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, ScreenToClient,
+        MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
     use ::windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use ::windows::Win32::System::Ole::{OleInitialize, OleUninitialize};
@@ -291,18 +301,19 @@ mod win32 {
         TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CW_USEDEFAULT,
         GWLP_USERDATA, GWL_EXSTYLE, GW_HWNDPREV, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT,
         HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
-        IDC_ARROW, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE, NCCALCSIZE_PARAMS, PM_REMOVE,
-        QS_ALLINPUT, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SWP_FRAMECHANGED,
-        SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, WINDOW_STYLE,
-        WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_DROPFILES, WM_GETMINMAXINFO,
-        WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_NOTIFY, WM_IME_REQUEST,
-        WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-        WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
-        WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-        WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
-        WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW,
-        WS_EX_LAYERED, WS_EX_TRANSPARENT,
+        HWND_TOPMOST, IDC_ARROW, MA_NOACTIVATE, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE,
+        NCCALCSIZE_PARAMS, PM_REMOVE, QS_ALLINPUT, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
+        SW_SHOW, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_DESTROY,
+        WM_DPICHANGED, WM_DROPFILES, WM_GETMINMAXINFO, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
+        WM_IME_NOTIFY, WM_IME_REQUEST, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN,
+        WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+        WM_MOUSEACTIVATE, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE,
+        WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
+        WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
+        WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED,
+        WS_EX_TRANSPARENT,
     };
 
     use crate::pacing::PresentWaitPolicy;
@@ -587,6 +598,8 @@ mod win32 {
     struct WindowUserData {
         decorations: bool,
         resizable: bool,
+        /// 是否为无激活越界弹出窗（用于拦截 `WM_MOUSEACTIVATE` 返回 `MA_NOACTIVATE`）。
+        is_popup: bool,
         min_width: u32,
         min_height: u32,
         /// 原生装饰窗口的非客户区边框增量（用于 `WM_GETMINMAXINFO` 保证客户区最小尺寸准确）。
@@ -769,6 +782,13 @@ mod win32 {
                         }
                     }
                     return LRESULT(HTCLIENT as isize);
+                }
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+            WM_MOUSEACTIVATE => {
+                if data.is_popup {
+                    // 越界原生弹出窗绝不抢占主窗口键盘焦点与输入法组合上下文。
+                    return LRESULT(MA_NOACTIVATE as isize);
                 }
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
@@ -1352,6 +1372,7 @@ mod win32 {
         let user_data = Rc::new(WindowUserData {
             decorations: config.decorations,
             resizable: config.resizable,
+            is_popup: false,
             min_width: eff_min_w,
             min_height: eff_min_h,
             frame_extra_w: std::cell::Cell::new(0),
@@ -1512,6 +1533,155 @@ mod win32 {
         })
     }
 
+    /// 查询指定屏幕矩形所在显示器的工作区并按配置执行越界裁剪。
+    fn resolve_popup_rect(config: &crate::popup_host::PopupWindowConfig) -> crate::window::ScreenRect {
+        if !config.clamp_to_work_area {
+            return config.screen_rect;
+        }
+        let anchor = POINT {
+            x: config.screen_rect.x,
+            y: config.screen_rect.y,
+        };
+        let monitor = unsafe { MonitorFromPoint(anchor, MONITOR_DEFAULTTONEAREST) };
+        let mut mi = MONITORINFO {
+            cbSize: core::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if unsafe { GetMonitorInfoW(monitor, &mut mi) }.as_bool() {
+            let work_area = crate::window::ScreenRect::new(
+                mi.rcWork.left,
+                mi.rcWork.top,
+                (mi.rcWork.right - mi.rcWork.left).max(0) as u32,
+                (mi.rcWork.bottom - mi.rcWork.top).max(0) as u32,
+            );
+            crate::popup_host::clamp_popup_to_work_area(config.screen_rect, work_area)
+        } else {
+            config.screen_rect
+        }
+    }
+
+    /// 创建无边框、无激活（`WS_POPUP | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`）的原生弹出窗。
+    fn create_native_popup_window(
+        class_name: PCWSTR,
+        hinstance: HINSTANCE,
+        owner_hwnd: Option<HWND>,
+        config: &crate::popup_host::PopupWindowConfig,
+    ) -> Result<WindowEntry, PlatformError> {
+        let rect = resolve_popup_rect(config);
+        let width = rect.width.max(1) as i32;
+        let height = rect.height.max(1) as i32;
+
+        let redraw_requested = Arc::new(AtomicBool::new(true));
+        let destroyed = Arc::new(AtomicBool::new(false));
+        let cursor = Arc::new(AtomicU8::new(CursorIcon::Default as u8));
+        let user_data = Rc::new(WindowUserData {
+            decorations: false,
+            resizable: false,
+            is_popup: true,
+            min_width: 0,
+            min_height: 0,
+            frame_extra_w: std::cell::Cell::new(0),
+            frame_extra_h: std::cell::Cell::new(0),
+            cursor: Arc::clone(&cursor),
+            tracking_leave: std::cell::Cell::new(false),
+            minimized: std::cell::Cell::new(false),
+            last_modifiers: std::cell::Cell::new(Modifiers::default()),
+            events: RefCell::new(Vec::new()),
+            redraw_requested: Arc::clone(&redraw_requested),
+            destroyed: Arc::clone(&destroyed),
+        });
+
+        let style = WINDOW_STYLE(config.win32_style_bits());
+        let ex_style = WINDOW_EX_STYLE(config.win32_ex_style_bits());
+        let hwnd = unsafe {
+            CreateWindowExW(
+                ex_style,
+                class_name,
+                w!(""),
+                style,
+                rect.x,
+                rect.y,
+                width,
+                height,
+                owner_hwnd,
+                None,
+                Some(hinstance),
+                Some(Rc::as_ptr(&user_data).cast::<c_void>()),
+            )
+        }
+        .map_err(|err| PlatformError::Window(format!("CreateWindowExW popup failed: {err}")))?;
+
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::as_ptr(&user_data) as isize);
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        }
+
+        user_data.events.borrow_mut().clear();
+
+        let window = Window::new(
+            hwnd.0 as isize,
+            hinstance.0 as isize,
+            false,
+            cursor,
+            redraw_requested,
+            destroyed,
+        );
+        let a11y = Win32A11y::new(hwnd.0 as isize);
+        let popup_win_cfg = WindowConfig {
+            title: String::new(),
+            width: rect.width.max(1),
+            height: rect.height.max(1),
+            resizable: false,
+            decorations: false,
+            min_width: 1,
+            min_height: 1,
+            visible: true,
+            ..WindowConfig::default()
+        };
+        let mut state = PlatformState::new(
+            &popup_win_cfg,
+            Extent::new(rect.width.max(1), rect.height.max(1)),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        state.scale_factor = window.scale_factor();
+        state.visible = true;
+        state.focused = false;
+
+        Ok(WindowEntry {
+            window,
+            state,
+            a11y,
+            user_data,
+            hwnd,
+        })
+    }
+
+    /// 重定位已有的原生弹出窗并保持无激活语义。
+    fn reposition_native_popup_window(hwnd: HWND, config: &crate::popup_host::PopupWindowConfig) {
+        let rect = resolve_popup_rect(config);
+        let insert_after = if config.topmost {
+            Some(HWND_TOPMOST)
+        } else {
+            None
+        };
+        let flags = if config.topmost {
+            SWP_NOACTIVATE
+        } else {
+            SWP_NOACTIVATE | SWP_NOZORDER
+        };
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                insert_after,
+                rect.x,
+                rect.y,
+                rect.width.max(1) as i32,
+                rect.height.max(1) as i32,
+                flags,
+            );
+        }
+    }
+
     /// UI 线程的 COM/OLE 作用域。
     ///
     /// 可选地在本线程初始化 OLE/COM。
@@ -1610,6 +1780,8 @@ mod win32 {
         });
 
         let mut windows = vec![primary_entry];
+        let mut popup_registry = crate::popup_host::PopupHostRegistry::new();
+        let mut popup_windows: Vec<(u64, WindowEntry)> = Vec::new();
         app.attach_waker(waker);
         let first = &mut windows[0];
         app.resumed(&mut first.state, &first.window);
@@ -1699,8 +1871,65 @@ mod win32 {
                 }
             }
 
+            // 当宿主窗口最小化或隐藏时，级联关闭其名下所有原生弹出窗并发出 PopupDismissed。
+            for entry in &mut windows {
+                if entry.state.minimized || !entry.state.visible {
+                    let owner_id = crate::windows::WindowId(entry.window.hwnd() as u64);
+                    let dismissed = popup_registry.close_for_owner(owner_id);
+                    for action in dismissed {
+                        if let crate::popup_host::PopupSyncAction::Close { id, .. } = action {
+                            if let Some(pos) = popup_windows.iter().position(|(pid, _)| *pid == id)
+                            {
+                                let (_, popup_entry) = popup_windows.remove(pos);
+                                app.window_closing(&popup_entry.window);
+                                if !popup_entry.window.is_destroyed() {
+                                    let _ = unsafe { DestroyWindow(popup_entry.hwnd) };
+                                }
+                            }
+                            let now = Instant::now();
+                            for out in apply(
+                                &mut entry.state,
+                                &PlatformEvent::PopupDismissed { id },
+                                now,
+                            ) {
+                                if app.event(&mut entry.state, &entry.window, out) == Flow::Exit {
+                                    break 'main_loop;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 派发所有原生弹出窗收到的指针/滚轮等平台事件。
+            for (_, popup_entry) in &mut popup_windows {
+                let events: Vec<PlatformEvent> =
+                    popup_entry.user_data.events.borrow_mut().drain(..).collect();
+                for platform_event in events {
+                    let now = Instant::now();
+                    for out in apply(&mut popup_entry.state, &platform_event, now) {
+                        if app.event(&mut popup_entry.state, &popup_entry.window, out) == Flow::Exit
+                        {
+                            break 'main_loop;
+                        }
+                    }
+                }
+            }
+
             for index in closing_indices.into_iter().rev() {
                 let entry = windows.remove(index);
+                let owner_id = crate::windows::WindowId(entry.window.hwnd() as u64);
+                for action in popup_registry.close_for_owner(owner_id) {
+                    if let crate::popup_host::PopupSyncAction::Close { id, .. } = action {
+                        if let Some(pos) = popup_windows.iter().position(|(pid, _)| *pid == id) {
+                            let (_, popup_entry) = popup_windows.remove(pos);
+                            app.window_closing(&popup_entry.window);
+                            if !popup_entry.window.is_destroyed() {
+                                let _ = unsafe { DestroyWindow(popup_entry.hwnd) };
+                            }
+                        }
+                    }
+                }
                 app.window_closing(&entry.window);
                 if !entry.window.is_destroyed() {
                     let _ = unsafe { DestroyWindow(entry.hwnd) };
@@ -1742,6 +1971,65 @@ mod win32 {
                     break 'main_loop;
                 }
             }
+
+            for (_, popup_entry) in &mut popup_windows {
+                if app.frame(&mut popup_entry.state, &popup_entry.window) == Flow::Exit {
+                    break 'main_loop;
+                }
+            }
+
+            // 响应应用侧的原生弹出窗关闭与同步（创建/重定位）请求。
+            for close_id in app.take_popup_close_requests() {
+                if let Some(crate::popup_host::PopupSyncAction::Close { id, .. }) =
+                    popup_registry.close_popup(close_id)
+                {
+                    if let Some(pos) = popup_windows.iter().position(|(pid, _)| *pid == id) {
+                        let (_, popup_entry) = popup_windows.remove(pos);
+                        app.window_closing(&popup_entry.window);
+                        if !popup_entry.window.is_destroyed() {
+                            let _ = unsafe { DestroyWindow(popup_entry.hwnd) };
+                        }
+                    }
+                }
+            }
+
+            for (popup_id, popup_cfg) in app.take_popup_sync_requests() {
+                let Some(action) = popup_registry.sync_popup(popup_id, popup_cfg) else {
+                    continue;
+                };
+                match action {
+                    crate::popup_host::PopupSyncAction::Create { id, config, .. } => {
+                        let owner_hwnd = windows
+                            .iter()
+                            .find(|w| crate::windows::WindowId(w.window.hwnd() as u64) == config.owner)
+                            .or_else(|| windows.first())
+                            .map(|w| w.hwnd);
+                        if let Ok(mut popup_entry) =
+                            create_native_popup_window(class_name, hinstance, owner_hwnd, &config)
+                        {
+                            app.window_created(&mut popup_entry.state, &popup_entry.window);
+                            popup_windows.push((id, popup_entry));
+                        }
+                    }
+                    crate::popup_host::PopupSyncAction::Reposition { id, config, .. } => {
+                        if let Some((_, popup_entry)) =
+                            popup_windows.iter().find(|(pid, _)| *pid == id)
+                        {
+                            reposition_native_popup_window(popup_entry.hwnd, &config);
+                        }
+                    }
+                    crate::popup_host::PopupSyncAction::Close { id, .. } => {
+                        if let Some(pos) = popup_windows.iter().position(|(pid, _)| *pid == id) {
+                            let (_, popup_entry) = popup_windows.remove(pos);
+                            app.window_closing(&popup_entry.window);
+                            if !popup_entry.window.is_destroyed() {
+                                let _ = unsafe { DestroyWindow(popup_entry.hwnd) };
+                            }
+                        }
+                    }
+                }
+            }
+            popup_windows.retain(|(_, entry)| !entry.window.is_destroyed());
 
             while let Some(extra_config) = app.take_window_request() {
                 let Ok(mut entry) = create_native_window(class_name, hinstance, &extra_config)
@@ -1793,6 +2081,12 @@ mod win32 {
         }
 
         primary_hwnd_atomic.store(0, Ordering::Release);
+        for (_, popup_entry) in popup_windows.drain(..) {
+            app.window_closing(&popup_entry.window);
+            if !popup_entry.window.is_destroyed() {
+                let _ = unsafe { DestroyWindow(popup_entry.hwnd) };
+            }
+        }
         for entry in windows.drain(..) {
             app.window_closing(&entry.window);
             if !entry.window.is_destroyed() {
