@@ -70,9 +70,11 @@ gallery *ARGS:
 # 采集器自身也走排队；需要指定工作目录，所以用 bque 原生 `--cwd` 保留 ./captures 的语义（包装配方传不进工作目录）。
 # 注意：这是唯一会重新生成 WinUI 3 参考图的入口。宿主已把强调色钉死为 Fluent 蓝；
 # 若系统强调色变化或参考图早于「钉死强调色」改动，必须跑 `just parity-capture --no-cache --theme all`。
+# Windows 的 PATH 里 `C:\Program Files\dotnet` 只有 runtime、没有 SDK，且排在 scoop 的 dotnet8-sdk 之前，
+# 直接写 `dotnet build` 会解析到空壳并报 "No .NET SDKs were found"；这里优先用 DOTNET_ROOT 指向的 SDK。
 [windows]
 parity-capture *ARGS:
-    @bque run -- dotnet build tools/winui-reference/WinUiReference.csproj -c Release -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -r win-x64
+    @bque run -- $(if ($env:DOTNET_ROOT) { "$env:DOTNET_ROOT\dotnet.exe" } else { "dotnet" }) build tools/winui-reference/WinUiReference.csproj -c Release -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -r win-x64
     @bque run --cwd "{{justfile_directory()}}/tools/winui-reference" -- "{{justfile_directory()}}/tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/WinUiReference.exe" --batch --out ./captures {{ARGS}}
 
 # 纯离屏 Vulkan 渲染，不开窗；默认复用源码指纹缓存。
