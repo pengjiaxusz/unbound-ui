@@ -17,7 +17,8 @@ pub use crate::{
     ExternalTextureHandle, ExternalTextureOp, ExternalTextureState,
     AppEventSender, AppKey, AppRuntime, Application, ClipboardProvider, DirtyFlags, ErasedUiWidget,
     EventOutcome, FrameReport, I18nBundle, KeyDiscriminator, KeyScope, LayoutDirection, Locale,
-    Modifiers, PendingWidget, Propagation, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec,
+    Modifiers, OverlayManager, PendingWidget, Propagation, TitleBarSlots, ViewBuilder,
+    ViewContext, WidgetSpec,
     WindowCommand, ROOT,
 };
 
@@ -70,4 +71,13 @@ pub use unbound_widgets::{
     WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID,
     TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID,
 };
-pub use unbound_world::NodeId;
+pub use unbound_widgets::overlay::{OverlayEntry, OverlayKind, OverlayStack};
+pub use unbound_widgets::virtual_masonry::MasonryItem;
+pub use unbound_widgets::{
+    Command, CommandPaletteDesc, CommandPaletteState, CommandPaletteTokens, ContextClose,
+    ContextKey, ContextMenuState, DockNode, DockPane, DockState, DockTab, DockTokens, DockTree,
+    DockZone, ImageDesc, ImageSource, MenuDesc, MenuItem, MenuState, MinimapDesc, MinimapItem,
+    MinimapState, ObjectFit, PopoverDesc, PopoverOutput, TreeViewRow, TreeViewTokens,
+    VariableVirtualList, VariableWindow,
+};
+pub use unbound_world::{NodeId, TreeRow};

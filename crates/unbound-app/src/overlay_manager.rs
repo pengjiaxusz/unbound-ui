@@ -3,6 +3,7 @@
 //! 封装 [`OverlayStack`]，协调 [`FocusManager`] 焦点陷阱、点击外部轻关闭、
 //! `Escape` 关闭以及将焦点归还至触发元素。
 
+use rustc_hash::FxHashSet;
 use unbound_input::{FocusCause, FocusManager};
 use unbound_math::Vec2;
 use unbound_widgets::overlay::{OverlayEntry, OverlayStack};
@@ -12,6 +13,7 @@ use unbound_widgets::overlay::{OverlayEntry, OverlayStack};
 pub struct OverlayManager {
     stack: OverlayStack,
     return_focus: Vec<(u64, Option<u64>)>,
+    dismissed: FxHashSet<u64>,
 }
 
 impl OverlayManager {
@@ -42,6 +44,7 @@ impl OverlayManager {
     ///
     pub fn open(&mut self, entry: OverlayEntry, focus: &mut FocusManager) -> u64 {
         let node = entry.node;
+        self.dismissed.remove(&node);
         let prev = focus.focused();
         if !self.stack.contains(node) {
             self.return_focus.push((node, prev));
@@ -56,6 +59,7 @@ impl OverlayManager {
         if !self.stack.close(node) {
             return false;
         }
+        self.dismissed.insert(node);
         self.restore_and_sync(node, focus);
         true
     }
@@ -64,6 +68,7 @@ impl OverlayManager {
     ///
     pub fn handle_pointer_down(&mut self, point: Vec2, focus: &mut FocusManager) -> Option<u64> {
         let closed = self.stack.close_outside(point)?;
+        self.dismissed.insert(closed);
         self.restore_and_sync(closed, focus);
         Some(closed)
     }
@@ -71,6 +76,7 @@ impl OverlayManager {
     /// 处理 `Escape` 键，关闭最顶层可按 Esc 关闭的覆盖层并恢复焦点。
     pub fn handle_escape(&mut self, focus: &mut FocusManager) -> Option<u64> {
         let closed = self.stack.close_on_escape()?;
+        self.dismissed.insert(closed);
         self.restore_and_sync(closed, focus);
         Some(closed)
     }
@@ -97,6 +103,31 @@ impl OverlayManager {
         } else {
             focus.clear_trap();
         }
+    }
+
+
+    /// 查询指定浮层节点是否已被用户交互（点击外部 / `Esc` / 显式关闭）关闭。
+    #[must_use]
+    pub fn is_dismissed(&self, node: u64) -> bool {
+        self.dismissed.contains(&node)
+    }
+
+    /// 清除指定浮层节点的已关闭标记，允许其再次被声明式打开。
+    pub fn clear_dismissed(&mut self, node: u64) {
+        self.dismissed.remove(&node);
+    }
+
+    /// 在单帧视图声明结束后同步声明式浮层状态：
+    /// 1. 清理本帧不再声明的浮层的已关闭标记，便于下次重新打开；
+    /// 2. 裁剪锚点已不在本帧活跃节点集合中的浮层，并同步焦点陷阱。
+    pub fn sync_declared_overlays(
+        &mut self,
+        declared: &FxHashSet<u64>,
+        seen_keys: &FxHashSet<u64>,
+        focus: &mut FocusManager,
+    ) -> usize {
+        self.dismissed.retain(|node| declared.contains(node));
+        self.prune_anchors(|anchor| seen_keys.contains(&anchor), focus)
     }
 
     fn restore_and_sync(&mut self, closed: u64, focus: &mut FocusManager) {

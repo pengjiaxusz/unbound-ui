@@ -1427,6 +1427,66 @@ pub enum WidgetSpec {
     Divider(DividerDesc),
     /// 状态提示横幅。
     Alert(AlertDesc),
+    /// 图像控件（支持图集层与异步资产解析）。
+    Image(unbound_widgets::ImageDesc),
+    /// 外部托管 RGBA8 纹理图像控件（未就绪时绘制等尺寸占位框）。
+    ExternalImage {
+        /// 外部纹理逻辑句柄。
+        handle: ExternalTextureHandle,
+        /// 布局占位与绘制目标尺寸。
+        size: Vec2,
+        /// 图像适应方式。
+        fit: unbound_widgets::ObjectFit,
+    },
+    /// 虚拟树形视图。
+    TreeView {
+        /// 树形视图描述符。
+        desc: unbound_widgets::TreeViewDesc,
+        /// 本帧可见行及选中态快照。
+        rows: Vec<(unbound_widgets::TreeViewRow, bool)>,
+    },
+    /// 双模路径地址栏。
+    AddressBar {
+        /// 地址栏描述符。
+        desc: unbound_widgets::AddressBarDesc,
+        /// 地址栏交互状态快照。
+        state: unbound_widgets::AddressBarState,
+    },
+    /// 停靠面板树。
+    Dock {
+        /// 停靠区状态快照。
+        state: unbound_widgets::DockState,
+    },
+    /// 缩略导航小地图。
+    Minimap {
+        /// 小地图描述符。
+        desc: unbound_widgets::MinimapDesc,
+        /// 小地图色块列表。
+        items: Vec<unbound_widgets::MinimapItem>,
+    },
+    /// 锚定气泡浮层外壳。
+    Popover {
+        /// 锚点节点键。
+        anchor_key: u64,
+        /// 气泡框描述符。
+        desc: unbound_widgets::PopoverDesc,
+    },
+    /// 右键上下文菜单。
+    ContextMenu {
+        /// 触发菜单的锚点节点键。
+        anchor_key: u64,
+        /// 菜单描述符。
+        desc: unbound_widgets::MenuDesc,
+        /// 菜单内部高亮与滚动状态。
+        menu_state: unbound_widgets::MenuState,
+    },
+    /// 全局命令面板。
+    CommandPalette {
+        /// 命令面板描述符。
+        desc: unbound_widgets::CommandPaletteDesc,
+        /// 命令面板查询与选中状态。
+        state: unbound_widgets::CommandPaletteState,
+    },
 }
 
 /// 单个延迟控件及其由布局引擎求解的节点。
@@ -1514,6 +1574,10 @@ pub struct ViewBuilder<'a> {
     form_bindings: &'a mut FormBindingStore,
     registered_selects: &'a mut Vec<(u64, unbound_widgets::SelectDesc)>,
     active_select_popups: &'a mut Vec<ActiveSelectPopup>,
+    overlays: &'a mut OverlayManager,
+    focus: &'a mut FocusManager,
+    declared_overlays: &'a mut FxHashSet<u64>,
+    overlay_pending_ranges: &'a mut Vec<(u64, NodeId, usize, usize)>,
 }
 
 impl<'a> ViewBuilder<'a> {
@@ -2087,7 +2151,30 @@ impl<'a> ViewBuilder<'a> {
                 alert.rect.width().max(240.0),
                 alert.rect.height().max(48.0),
             )),
-            WidgetSpec::Text { .. }
+            WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
+                .then_some(Vec2::new(img.rect.width(), img.rect.height())),
+            WidgetSpec::ExternalImage { size, .. } => Some(*size),
+            WidgetSpec::TreeView { desc, .. } => {
+                (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
+                    .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
+            }
+            WidgetSpec::AddressBar { desc, .. } => {
+                (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
+                    .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
+            }
+            WidgetSpec::Minimap { desc, .. } => {
+                (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
+                    .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
+            }
+            WidgetSpec::Popover { desc, .. } => Some(desc.size),
+            WidgetSpec::ContextMenu { desc, .. } => {
+                Some(Vec2::new(desc.rect.width(), desc.rect.height()))
+            }
+            WidgetSpec::CommandPalette { desc, .. } => {
+                Some(Vec2::new(desc.rect.width(), desc.rect.height()))
+            }
+            WidgetSpec::Dock { .. }
+            | WidgetSpec::Text { .. }
             | WidgetSpec::TextInline { .. }
             | WidgetSpec::BoxSurface { .. }
             | WidgetSpec::ScrollScopeBegin { .. }
@@ -2479,6 +2566,513 @@ impl<'a> ViewBuilder<'a> {
     }
 
     /// 声明式 Showcase 风格内凹舞台容器（`radius = 10.0`, `SURFACE_SUNKEN`, `OUTLINE`）。
+
+    /// 声明式图像控件（支持图集层与异步资产中心解析）。
+    pub fn image(&mut self, key: u64, desc: unbound_widgets::ImageDesc) -> NodeId {
+        let mut node_desc = RawNodeDesc::leaf();
+        if desc.rect.width() > 0.0 {
+            node_desc = node_desc.width(Dim::px(desc.rect.width()));
+        }
+        if desc.rect.height() > 0.0 {
+            node_desc = node_desc.height(Dim::px(desc.rect.height()));
+        }
+        self.widget(key, node_desc, WidgetSpec::Image(desc))
+    }
+
+    /// 声明式外部纹理图像控件：外部纹理未就绪时自动绘制同尺寸占位框，就绪后绑定真实外部槽位与 UV。
+    pub fn image_external(
+        &mut self,
+        key: u64,
+        handle: ExternalTextureHandle,
+        size: Vec2,
+        fit: unbound_widgets::ObjectFit,
+    ) -> NodeId {
+        let node_desc = RawNodeDesc::leaf().size(size.x.max(0.0), size.y.max(0.0));
+        self.widget(key, node_desc, WidgetSpec::ExternalImage { handle, size, fit })
+    }
+
+    /// 声明式虚拟树形视图控件。
+    pub fn tree_view(
+        &mut self,
+        key: u64,
+        mut desc: unbound_widgets::TreeViewDesc,
+        state: &mut unbound_widgets::TreeViewState,
+    ) -> NodeId {
+        let effective_key = self.scoped_key(key);
+        if desc.rect.width() <= 0.0 || desc.rect.height() <= 0.0 {
+            desc.rect = self
+                .widget_rect(effective_key)
+                .unwrap_or_else(|| self.viewport_rect());
+        }
+        let rows = state
+            .rows(&desc)
+            .into_iter()
+            .map(|row| {
+                let selected = state.selected.contains(&row.row.id);
+                (row, selected)
+            })
+            .collect();
+        let mut node_desc = RawNodeDesc::leaf();
+        if desc.rect.width() > 0.0 && desc.rect.height() > 0.0 {
+            node_desc = node_desc.size(desc.rect.width(), desc.rect.height());
+        }
+        self.widget(key, node_desc, WidgetSpec::TreeView { desc, rows })
+    }
+
+    /// 声明式双模路径地址栏控件。
+    pub fn address_bar(
+        &mut self,
+        key: u64,
+        desc: unbound_widgets::AddressBarDesc,
+        state: &unbound_widgets::AddressBarState,
+    ) -> NodeId {
+        let mut node_desc = RawNodeDesc::leaf();
+        if desc.rect.width() > 0.0 {
+            node_desc = node_desc.width(Dim::px(desc.rect.width()));
+        }
+        if desc.rect.height() > 0.0 {
+            node_desc = node_desc.height(Dim::px(desc.rect.height()));
+        }
+        self.widget(
+            key,
+            node_desc,
+            WidgetSpec::AddressBar {
+                desc,
+                state: state.clone(),
+            },
+        )
+    }
+
+    /// 声明式停靠面板树控件。
+    pub fn dock(&mut self, key: u64, state: &unbound_widgets::DockState) -> NodeId {
+        let node_desc = RawNodeDesc::leaf()
+            .width(Dim::fr(1.0))
+            .height(Dim::fr(1.0));
+        self.widget(
+            key,
+            node_desc,
+            WidgetSpec::Dock {
+                state: state.clone(),
+            },
+        )
+    }
+
+    /// 声明式画布缩略导航小地图控件。
+    pub fn minimap(
+        &mut self,
+        key: u64,
+        desc: unbound_widgets::MinimapDesc,
+        items: &[unbound_widgets::MinimapItem],
+    ) -> NodeId {
+        let mut node_desc = RawNodeDesc::leaf();
+        if desc.rect.width() > 0.0 && desc.rect.height() > 0.0 {
+            node_desc = node_desc.size(desc.rect.width(), desc.rect.height());
+        }
+        self.widget(
+            key,
+            node_desc,
+            WidgetSpec::Minimap {
+                desc,
+                items: items.to_vec(),
+            },
+        )
+    }
+
+    /// 声明式统一浮层容器：接入 [`OverlayManager`] Z 序、焦点陷阱、外部点击与 `Esc` 关闭以及锚点裁剪。
+    pub fn overlay_layer(
+        &mut self,
+        key: u64,
+        mut entry: unbound_widgets::overlay::OverlayEntry,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let effective_key = self.scoped_key(key);
+        entry.node = effective_key;
+        self.declared_overlays.insert(effective_key);
+        if self.overlays.is_dismissed(effective_key) {
+            return self.world.root();
+        }
+        let _ = self.overlays.open(entry.clone(), self.focus);
+        let stack_idx = self
+            .overlays
+            .stack()
+            .entries()
+            .iter()
+            .position(|e| e.node == effective_key)
+            .unwrap_or(0);
+        let overlay_z = (PORTAL_Z_BASE as u16)
+            .saturating_add(100)
+            .saturating_add((stack_idx as u16).saturating_mul(32));
+
+        let parent_saved = core::mem::replace(&mut self.parent, self.world.root());
+        let z_saved = core::mem::replace(&mut self.z_base, overlay_z);
+        let depth_saved = self.depth;
+        self.depth = self.depth.saturating_add(1);
+
+        let container_desc = RawNodeDesc::container()
+            .column()
+            .absolute()
+            .bounds(
+                entry.bounds.origin.x,
+                entry.bounds.origin.y,
+                entry.bounds.width().max(1.0),
+                entry.bounds.height().max(1.0),
+            )
+            .z_index(i32::from(overlay_z))
+            .portal_root();
+        let (_, overlay_node) =
+            self.reconcile_node(key, container_desc, core::panic::Location::caller());
+        let pending_start = self.pending.len();
+        self.parent = overlay_node;
+        build(self);
+        let pending_end = self.pending.len();
+
+        self.depth = depth_saved;
+        self.z_base = z_saved;
+        self.parent = parent_saved;
+
+        self.overlay_pending_ranges
+            .push((effective_key, overlay_node, pending_start, pending_end));
+        overlay_node
+    }
+
+    /// 声明式锚定气泡框浮层：自动交由 [`OverlayManager`] 管理关闭与锚点失效裁剪。
+    pub fn popover(
+        &mut self,
+        key: u64,
+        anchor_key: u64,
+        mut desc: unbound_widgets::PopoverDesc,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let effective_key = self.scoped_key(key);
+        let effective_anchor = self.scoped_key(anchor_key);
+        if desc.anchor.width() <= 0.0 && desc.anchor.height() <= 0.0 {
+            if let Some(r) = self.widget_rect(effective_anchor) {
+                desc.anchor = r;
+            }
+        }
+        if desc.viewport.width() <= 0.0 && desc.viewport.height() <= 0.0 {
+            desc.viewport = self.viewport_rect();
+        }
+        let bounds = desc.rect();
+        let entry = unbound_widgets::overlay::OverlayEntry::popover(
+            effective_key,
+            effective_anchor,
+            bounds,
+        );
+        self.overlay_layer(key, entry, |ov| {
+            let bg_key = mix_key(effective_key, 0x504F_5042);
+            let bg_desc = RawNodeDesc::leaf()
+                .absolute()
+                .bounds(0.0, 0.0, bounds.width().max(1.0), bounds.height().max(1.0));
+            ov.widget(
+                bg_key,
+                bg_desc,
+                WidgetSpec::Popover {
+                    anchor_key: effective_anchor,
+                    desc,
+                },
+            );
+            build(ov);
+        })
+    }
+
+    /// 声明式右键上下文菜单浮层：打开时自动定位并交由 [`OverlayManager`] 管理。
+    pub fn context_menu(
+        &mut self,
+        key: u64,
+        desc: unbound_widgets::MenuDesc,
+        state: &unbound_widgets::ContextMenuState,
+    ) -> NodeId {
+        if !state.is_open() {
+            return self.world.root();
+        }
+        let effective_key = self.scoped_key(key);
+        let placed_desc = state.desc_at(desc, self.viewport_rect());
+        let anchor = state.target.map(|t| self.scoped_key(t));
+        let mut entry = unbound_widgets::overlay::OverlayEntry::menu(
+            effective_key,
+            anchor.unwrap_or(0),
+            placed_desc.rect,
+        );
+        entry.anchor = anchor;
+        let menu_state = state.menu.clone();
+        let anchor_key = anchor.unwrap_or(0);
+        self.overlay_layer(key, entry, |ov| {
+            let menu_key = mix_key(effective_key, 0x4354_584D);
+            let menu_node_desc = RawNodeDesc::leaf().absolute().bounds(
+                0.0,
+                0.0,
+                placed_desc.rect.width().max(1.0),
+                placed_desc.rect.height().max(1.0),
+            );
+            ov.widget(
+                menu_key,
+                menu_node_desc,
+                WidgetSpec::ContextMenu {
+                    anchor_key,
+                    desc: placed_desc,
+                    menu_state,
+                },
+            );
+        })
+    }
+
+    /// 声明式命令面板模态浮层：打开时自动接入 [`OverlayManager`] 焦点陷阱与 `Esc` 关闭。
+    pub fn command_palette(
+        &mut self,
+        key: u64,
+        mut desc: unbound_widgets::CommandPaletteDesc,
+        state: &unbound_widgets::CommandPaletteState,
+    ) -> NodeId {
+        if !state.open {
+            return self.world.root();
+        }
+        let effective_key = self.scoped_key(key);
+        if desc.rect.width() <= 0.0 || desc.rect.height() <= 0.0 {
+            let vp = self.viewport_rect();
+            let w = 560.0f32.min((vp.width() - 32.0).max(240.0));
+            let h = 360.0f32.min((vp.height() - 64.0).max(180.0));
+            desc.rect = Rect::new(
+                vp.origin.x + (vp.width() - w) * 0.5,
+                vp.origin.y + (vp.height() - h) * 0.25,
+                w,
+                h,
+            );
+        }
+        let entry = unbound_widgets::overlay::OverlayEntry::modal(
+            effective_key,
+            desc.rect,
+            vec![effective_key],
+        );
+        let state_snapshot = state.clone();
+        self.overlay_layer(key, entry, |ov| {
+            let cp_key = mix_key(effective_key, 0x434D_4450);
+            let cp_node_desc = RawNodeDesc::leaf().absolute().bounds(
+                0.0,
+                0.0,
+                desc.rect.width().max(1.0),
+                desc.rect.height().max(1.0),
+            );
+            ov.widget(
+                cp_key,
+                cp_node_desc,
+                WidgetSpec::CommandPalette {
+                    desc,
+                    state: state_snapshot,
+                },
+            );
+        })
+    }
+
+    /// 自定义子项构建闭包的可变行高虚拟列表容器。
+    ///
+    /// 仅对与当前视口（含上下 `overscan` 行余量）相交的索引区间调用 `build_item`，
+    /// 前后不可见区域不构造任何子节点。
+    pub fn virtual_list(
+        &mut self,
+        key: u64,
+        list: &unbound_widgets::VariableVirtualList,
+        overscan: usize,
+        mut build_item: impl FnMut(&mut Self, usize, Rect),
+    ) -> NodeId {
+        let effective_key = self.scoped_key(key);
+        let viewport_rect = self
+            .widget_rect(effective_key)
+            .unwrap_or_else(|| self.viewport_rect());
+        let scroll_y = self
+            .widget_state
+            .borrow()
+            .get::<unbound_widgets::ScrollState>(effective_key)
+            .map_or(0.0, |st| st.offset().y)
+            .max(0.0);
+        let window = list.window(scroll_y, viewport_rect.height(), overscan);
+
+        let desc = RawNodeDesc::container()
+            .width(Dim::fr(1.0))
+            .height(Dim::fr(1.0))
+            .column()
+            .flags(NodeFlags::CLIP | NodeFlags::SCROLL_Y);
+        let (_, scroll_node) =
+            self.reconcile_node(key, desc, core::panic::Location::caller());
+        self.declare_semantic(key, Role::List, "VirtualList");
+
+        let parent_saved = core::mem::replace(&mut self.parent, scroll_node);
+        let total_height = list.total_height().max(viewport_rect.height());
+        let mut inner_desc = RawNodeDesc::container()
+            .width(Dim::percent(100.0))
+            .height(Dim::px(total_height));
+        inner_desc.flex_shrink = 0.0;
+        let content_key = mix_key(effective_key, 0x564C_4354);
+        let (_, content_node) =
+            self.reconcile_node(content_key, inner_desc, core::panic::Location::caller());
+
+        self.pending.push(PendingWidget {
+            key: effective_key,
+            node: scroll_node,
+            spec: WidgetSpec::ScrollScopeBegin {
+                scroll_key: effective_key,
+                content_node,
+                vertical: true,
+            },
+            z_base: self.z_base,
+        });
+
+        self.parent = content_node;
+        let prev_depth = self.depth;
+        self.depth = self.depth.saturating_add(1);
+        for idx in window.first..window.last {
+            let y = list.offset_of(idx);
+            let h = list.height(idx);
+            let item_rect = Rect::new(0.0, y, viewport_rect.width(), h);
+            let item_key = mix_key(effective_key, idx as u64);
+            let item_desc = RawNodeDesc::container()
+                .column()
+                .absolute()
+                .bounds(
+                    item_rect.origin.x,
+                    item_rect.origin.y,
+                    item_rect.width(),
+                    item_rect.height(),
+                );
+            self.container(item_key, item_desc, |row_view| {
+                build_item(row_view, idx, item_rect);
+            });
+        }
+        self.depth = prev_depth;
+
+        self.pending.push(PendingWidget {
+            key: mix_key(effective_key, 0x564C_454E),
+            node: scroll_node,
+            spec: WidgetSpec::ScrollScopeEnd,
+            z_base: self.z_base,
+        });
+        self.parent = parent_saved;
+        scroll_node
+    }
+
+    /// 自定义子项构建闭包的多列虚拟瀑布流容器。
+    ///
+    /// 按最短列优先排布全部条目矩形，但仅对与当前视口（含上下 `overscan` 逻辑像素余量）
+    /// 相交的条目调用 `build_item`。
+    pub fn virtual_masonry(
+        &mut self,
+        key: u64,
+        desc: unbound_widgets::VirtualMasonryDesc,
+        items: &[unbound_widgets::virtual_masonry::MasonryItem],
+        overscan: f32,
+        mut build_item: impl FnMut(&mut Self, usize, Rect),
+    ) -> NodeId {
+        let effective_key = self.scoped_key(key);
+        let viewport_rect = if desc.rect.width() > 0.0 && desc.rect.height() > 0.0 {
+            desc.rect
+        } else {
+            self.widget_rect(effective_key)
+                .unwrap_or_else(|| self.viewport_rect())
+        };
+        let scroll_y = self
+            .widget_state
+            .borrow()
+            .get::<unbound_widgets::ScrollState>(effective_key)
+            .map_or(0.0, |st| st.offset().y)
+            .max(0.0);
+
+        let cols = desc.columns.max(1);
+        let gap = desc.gap.max(0.0);
+        let col_w =
+            ((viewport_rect.width() - gap * (cols.saturating_sub(1) as f32)) / cols as f32)
+                .max(1.0);
+        let mut col_heights = vec![0.0f32; cols];
+        let overscan = overscan.max(0.0);
+        let view_top = (scroll_y - overscan).max(0.0);
+        let view_bottom = scroll_y + viewport_rect.height() + overscan;
+        let mut visible = Vec::new();
+
+        for (idx, item) in items.iter().enumerate() {
+            let mut best_col = 0usize;
+            let mut best_y = col_heights[0];
+            for (c, &h) in col_heights.iter().enumerate().skip(1) {
+                if h < best_y {
+                    best_y = h;
+                    best_col = c;
+                }
+            }
+            let aspect = if item.aspect_ratio.is_finite() && item.aspect_ratio > 0.05 {
+                item.aspect_ratio
+            } else {
+                1.0
+            };
+            let item_h = (col_w / aspect).max(1.0);
+            let x = best_col as f32 * (col_w + gap);
+            let y = best_y;
+            col_heights[best_col] = y + item_h + gap;
+            if y + item_h >= view_top && y <= view_bottom {
+                visible.push((idx, Rect::new(x, y, col_w, item_h)));
+            }
+        }
+        let total_height = col_heights
+            .into_iter()
+            .fold(0.0f32, f32::max)
+            .max(viewport_rect.height());
+
+        let mut container_desc = RawNodeDesc::container()
+            .column()
+            .flags(NodeFlags::CLIP | NodeFlags::SCROLL_Y);
+        if desc.rect.width() > 0.0 && desc.rect.height() > 0.0 {
+            container_desc = container_desc.size(desc.rect.width(), desc.rect.height());
+        } else {
+            container_desc = container_desc.width(Dim::fr(1.0)).height(Dim::fr(1.0));
+        }
+        let (_, scroll_node) =
+            self.reconcile_node(key, container_desc, core::panic::Location::caller());
+        self.declare_semantic(key, Role::Grid, "VirtualMasonry");
+
+        let parent_saved = core::mem::replace(&mut self.parent, scroll_node);
+        let mut inner_desc = RawNodeDesc::container()
+            .width(Dim::percent(100.0))
+            .height(Dim::px(total_height));
+        inner_desc.flex_shrink = 0.0;
+        let content_key = mix_key(effective_key, 0x564D_4354);
+        let (_, content_node) =
+            self.reconcile_node(content_key, inner_desc, core::panic::Location::caller());
+
+        self.pending.push(PendingWidget {
+            key: effective_key,
+            node: scroll_node,
+            spec: WidgetSpec::ScrollScopeBegin {
+                scroll_key: effective_key,
+                content_node,
+                vertical: true,
+            },
+            z_base: self.z_base,
+        });
+
+        self.parent = content_node;
+        let prev_depth = self.depth;
+        self.depth = self.depth.saturating_add(1);
+        for (idx, item_rect) in visible {
+            let item_key = mix_key(effective_key, items[idx].id ^ (idx as u64));
+            let item_desc = RawNodeDesc::container().column().absolute().bounds(
+                item_rect.origin.x,
+                item_rect.origin.y,
+                item_rect.width(),
+                item_rect.height(),
+            );
+            self.container(item_key, item_desc, |cell_view| {
+                build_item(cell_view, idx, item_rect);
+            });
+        }
+        self.depth = prev_depth;
+
+        self.pending.push(PendingWidget {
+            key: mix_key(effective_key, 0x564D_454E),
+            node: scroll_node,
+            spec: WidgetSpec::ScrollScopeEnd,
+            z_base: self.z_base,
+        });
+        self.parent = parent_saved;
+        scroll_node
+    }
+
     pub fn stage_box(
         &mut self,
         key: u64,
@@ -4612,6 +5206,8 @@ impl<A: Application> AppRuntime<A> {
             scale_osd_remaining: self.ctx.scale_osd_remaining,
         };
         let mut focus_groups = Vec::new();
+        let mut declared_overlays = FxHashSet::default();
+        let mut overlay_pending_ranges = Vec::new();
         let event_sender = self.ctx.event_sender();
         let mut view = ViewBuilder {
             collector: &mut self.collector,
@@ -4635,9 +5231,15 @@ impl<A: Application> AppRuntime<A> {
             form_bindings: &mut self.form_bindings,
             registered_selects: &mut self.registered_selects,
             active_select_popups: &mut self.active_select_popups,
+            overlays: &mut self.overlays,
+            focus: &mut self.focus,
+            declared_overlays: &mut declared_overlays,
+            overlay_pending_ranges: &mut overlay_pending_ranges,
         };
         self.app.view(&self.state, &mut view);
         view.render_open_select_popups();
+        drop(view);
+        self.finalize_declared_overlays(&declared_overlays, &overlay_pending_ranges);
         let vanished: Vec<(u64, NodeId)> = self
             .node_keys
             .iter()
@@ -4867,6 +5469,66 @@ impl<A: Application> AppRuntime<A> {
     /// 或通过 [`LayoutEngine::solve_boundaries`] 仅求解脏重布局边界，
     /// 随后在各自解析出的矩形位置发射每个控件。
     ///
+    /// 在视图构建完成后同步 [`OverlayManager`] 锚点裁剪并按浮层 Z 序重排延迟控件。
+    fn finalize_declared_overlays(
+        &mut self,
+        declared_overlays: &FxHashSet<u64>,
+        overlay_pending_ranges: &[(u64, NodeId, usize, usize)],
+    ) {
+        let _ = self.overlays.sync_declared_overlays(
+            declared_overlays,
+            &self.seen_keys,
+            &mut self.focus,
+        );
+        if overlay_pending_ranges.is_empty() {
+            return;
+        }
+        let mut is_overlay_idx = vec![false; self.pending.len()];
+        for &(_, _, start, end) in overlay_pending_ranges {
+            let end = end.min(self.pending.len());
+            for flag in is_overlay_idx.iter_mut().take(end).skip(start) {
+                *flag = true;
+            }
+        }
+        let old_pending = core::mem::take(&mut self.pending);
+        let mut base_pending = Vec::with_capacity(old_pending.len());
+        let mut slots: Vec<Option<PendingWidget>> = old_pending.into_iter().map(Some).collect();
+        for (idx, flag) in is_overlay_idx.iter().enumerate() {
+            if !*flag {
+                if let Some(item) = slots[idx].take() {
+                    base_pending.push(item);
+                }
+            }
+        }
+        let mut surviving: Vec<(usize, usize, usize)> = Vec::new();
+        for &(overlay_key, overlay_node, start, end) in overlay_pending_ranges {
+            if let Some(order) = self
+                .overlays
+                .stack()
+                .entries()
+                .iter()
+                .position(|e| e.node == overlay_key)
+            {
+                surviving.push((order, start, end.min(slots.len())));
+            } else {
+                self.seen_keys.remove(&overlay_key);
+                self.node_keys.remove(&overlay_key);
+                if self.world.get(overlay_node).is_some() {
+                    self.world.remove(overlay_node);
+                }
+            }
+        }
+        surviving.sort_by_key(|&(order, _, _)| order);
+        for (_, start, end) in surviving {
+            for slot in slots.iter_mut().take(end).skip(start) {
+                if let Some(item) = slot.take() {
+                    base_pending.push(item);
+                }
+            }
+        }
+        self.pending = base_pending;
+    }
+
     fn layout_pending(&mut self) {
         if self.pending.is_empty() && !self.world.topology_dirty() {
             let boundaries = self.world.dirty_boundaries();
@@ -4932,7 +5594,30 @@ impl<A: Application> AppRuntime<A> {
                             ))
                         }
                     }
-                    WidgetSpec::Text { .. }
+                    WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
+                        .then_some(Vec2::new(img.rect.width(), img.rect.height())),
+                    WidgetSpec::ExternalImage { size, .. } => Some(*size),
+                    WidgetSpec::TreeView { desc, .. } => {
+                        (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
+                            .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
+                    }
+                    WidgetSpec::AddressBar { desc, .. } => {
+                        (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
+                            .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
+                    }
+                    WidgetSpec::Minimap { desc, .. } => {
+                        (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
+                            .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
+                    }
+                    WidgetSpec::Popover { desc, .. } => Some(desc.size),
+                    WidgetSpec::ContextMenu { desc, .. } => {
+                        Some(Vec2::new(desc.rect.width(), desc.rect.height()))
+                    }
+                    WidgetSpec::CommandPalette { desc, .. } => {
+                        Some(Vec2::new(desc.rect.width(), desc.rect.height()))
+                    }
+                    WidgetSpec::Dock { .. }
+                    | WidgetSpec::Text { .. }
                     | WidgetSpec::BoxSurface { .. }
                     | WidgetSpec::ScrollScopeBegin { .. }
                     | WidgetSpec::ScrollScopeEnd => None,
@@ -5123,6 +5808,281 @@ impl<A: Application> AppRuntime<A> {
                         entry.z_base,
                     );
                     self.collector.push(entry.key, output);
+                }
+                WidgetSpec::Image(desc) => {
+                    let mut desc = desc.clone();
+                    if rect.width() > 0.0 && rect.height() > 0.0 {
+                        desc.rect = rect;
+                    }
+                    desc.z = entry.z_base.saturating_add(desc.z);
+                    let out = unbound_widgets::emit_image_with_assets(
+                        entry.key,
+                        &desc,
+                        state,
+                        &self.asset_hub,
+                    );
+                    self.collector.push(entry.key, out);
+                }
+                WidgetSpec::ExternalImage { handle, size, fit } => {
+                    let draw_rect = if rect.width() > 0.0 && rect.height() > 0.0 {
+                        rect
+                    } else {
+                        Rect::new(rect.origin.x, rect.origin.y, size.x, size.y)
+                    };
+                    let mut desc = if let Some((slot, w, h)) =
+                        self.asset_hub.external_texture_slot(*handle)
+                    {
+                        unbound_widgets::ImageDesc::new(
+                            draw_rect,
+                            Vec2::new(w as f32, h as f32),
+                            slot,
+                        )
+                    } else {
+                        unbound_widgets::ImageDesc::new(draw_rect, *size, 0)
+                            .with_asset(unbound_asset::AssetId(0))
+                    };
+                    desc.fit = *fit;
+                    desc.z = entry.z_base.saturating_add(desc.z);
+                    let out = unbound_widgets::emit_image_with_assets(
+                        entry.key,
+                        &desc,
+                        state,
+                        &self.asset_hub,
+                    );
+                    self.collector.push(entry.key, out);
+                }
+                WidgetSpec::TreeView { desc, rows } => {
+                    let mut desc = desc.clone();
+                    if rect.width() > 0.0 && rect.height() > 0.0 {
+                        desc.rect = rect;
+                    }
+                    desc.z = entry.z_base.saturating_add(desc.z);
+                    let tokens = unbound_widgets::TreeViewTokens::standard();
+                    let mut bg = unbound_widgets::emit_tree_background(&desc, tokens);
+                    if bg.a11y.is_none() {
+                        bg.a11y = Some(A11yNode::new(Role::Tree, "TreeView", desc.rect));
+                    }
+                    self.collector.push(entry.key, bg);
+                    for (row, selected) in rows {
+                        let label_text = format!("Node {}", row.row.id);
+                        let label_rect = Rect::new(
+                            row.rect.origin.x + 28.0 + f32::from(row.row.depth) * desc.indent,
+                            row.rect.origin.y,
+                            (row.rect.width() - 32.0).max(16.0),
+                            row.rect.height(),
+                        );
+                        let label = text_ctx.shape_line(
+                            &label_text,
+                            label_rect,
+                            13.0,
+                            400,
+                            unbound_widgets::AlignX::Start,
+                            unbound_widgets::AlignY::Center,
+                        );
+                        let row_out = unbound_widgets::emit_tree_row(
+                            &desc, row, *selected, state, &label, tokens,
+                        );
+                        self.collector.push(row.row.id, row_out);
+                    }
+                }
+                WidgetSpec::AddressBar {
+                    desc,
+                    state: bar_state,
+                } => {
+                    let mut desc = desc.clone();
+                    if rect.width() > 0.0 && rect.height() > 0.0 {
+                        desc.rect = rect;
+                    }
+                    desc.z = entry.z_base.saturating_add(desc.z);
+                    let text = if bar_state.editing {
+                        bar_state.edit_buffer.clone()
+                    } else {
+                        desc.full_path()
+                    };
+                    let text_rect = Rect::new(
+                        desc.rect.origin.x + 64.0,
+                        desc.rect.origin.y,
+                        (desc.rect.width() - 72.0).max(16.0),
+                        desc.rect.height().max(24.0),
+                    );
+                    let glyphs = text_ctx.shape_line(
+                        &text,
+                        text_rect,
+                        13.0,
+                        400,
+                        unbound_widgets::AlignX::Start,
+                        unbound_widgets::AlignY::Center,
+                    );
+                    let out = unbound_widgets::emit_address_bar(
+                        entry.key, &desc, bar_state, state, &glyphs,
+                    );
+                    self.collector.push(entry.key, out);
+                }
+                WidgetSpec::Dock { state: dock_state } => {
+                    let dock_rect = if rect.width() > 0.0 && rect.height() > 0.0 {
+                        rect
+                    } else {
+                        Rect::new(0.0, 0.0, self.ctx.viewport.x, self.ctx.viewport.y)
+                    };
+                    let tokens = unbound_widgets::DockTokens::standard();
+                    let z = entry.z_base.saturating_add(300);
+                    let panes = dock_state.tree.layout(dock_rect);
+                    let mut root_a11y_pushed = false;
+                    for pane in &panes {
+                        let mut pane_out = unbound_widgets::emit_dock_pane(pane, tokens, z);
+                        if !root_a11y_pushed {
+                            pane_out.a11y = Some(A11yNode::new(Role::Region, "Dock", dock_rect));
+                            root_a11y_pushed = true;
+                        }
+                        self.collector.push(entry.key, pane_out);
+                        let tab_count = pane.tabs.len().max(1);
+                        let tab_w = (pane.tab_bar().width() / tab_count as f32).clamp(64.0, 180.0);
+                        for (idx, tab) in pane.tabs.iter().enumerate() {
+                            let tab_rect = pane.tab_rect(idx, tab_w);
+                            let quads = text_ctx.shape_line(
+                                &tab.title,
+                                tab_rect,
+                                12.0,
+                                500,
+                                unbound_widgets::AlignX::Start,
+                                unbound_widgets::AlignY::Center,
+                            );
+                            let tab_out = unbound_widgets::emit_dock_tab(
+                                pane,
+                                idx,
+                                tab_w,
+                                state,
+                                &quads,
+                                tokens,
+                                z.saturating_add(2),
+                            );
+                            self.collector.push(tab.id, tab_out);
+                        }
+                    }
+                    if !root_a11y_pushed {
+                        let mut out = WidgetOutput::default();
+                        out.a11y = Some(A11yNode::new(Role::Region, "Dock", dock_rect));
+                        self.collector.push(entry.key, out);
+                    }
+                    if let Some(hover) = dock_state.hover {
+                        let preview =
+                            unbound_widgets::emit_dock_preview(hover, tokens, z.saturating_add(20));
+                        self.collector.push(mix_key(entry.key, 0x444F_434B), preview);
+                    }
+                }
+                WidgetSpec::Minimap { desc, items } => {
+                    let mut desc = *desc;
+                    if rect.width() > 0.0 && rect.height() > 0.0 {
+                        desc.rect = rect;
+                    }
+                    desc.z = entry.z_base.saturating_add(desc.z);
+                    let mm_state = self
+                        .widget_state
+                        .borrow()
+                        .get::<unbound_widgets::MinimapState>(entry.key)
+                        .copied()
+                        .unwrap_or_else(unbound_widgets::MinimapState::new);
+                    let (mut out, hit) =
+                        unbound_widgets::emit_minimap(entry.key, &desc, items, &mm_state, state);
+                    if out.hit.is_none() {
+                        out.hit = Some(hit);
+                    }
+                    if out.a11y.is_none() {
+                        out.a11y = Some(A11yNode::new(Role::Region, "Minimap", desc.rect));
+                    }
+                    self.collector.push(entry.key, out);
+                }
+                WidgetSpec::Popover { anchor_key, desc } => {
+                    let mut desc = desc.clone();
+                    desc.z = entry.z_base.saturating_add(desc.z.min(100));
+                    let mut pop = unbound_widgets::emit_popover(entry.key, *anchor_key, &desc, state);
+                    if pop.output.a11y.is_none() {
+                        pop.output.a11y = Some(A11yNode::new(Role::Dialog, "Popover", desc.rect()));
+                    }
+                    if let Some(hit) = pop.output.hit.as_mut() {
+                        hit.layer = unbound_input::PORTAL_LAYER;
+                        hit.z = hit.z.saturating_add(u32::from(entry.z_base));
+                    }
+                    if let Some(backdrop) = pop.backdrop {
+                        self.collector.push_backdrop(backdrop);
+                    }
+                    self.collector.push(entry.key, pop.output);
+                }
+                WidgetSpec::ContextMenu {
+                    anchor_key,
+                    desc,
+                    menu_state,
+                } => {
+                    let mut desc = desc.clone();
+                    desc.z = entry.z_base.saturating_add(desc.z.min(100));
+                    let (mut out, _) = unbound_widgets::emit_menu(
+                        entry.key,
+                        *anchor_key,
+                        &desc,
+                        menu_state,
+                        state,
+                    );
+                    if out.a11y.is_none() {
+                        out.a11y = Some(A11yNode::new(Role::Menu, "ContextMenu", desc.rect));
+                    }
+                    if let Some(hit) = out.hit.as_mut() {
+                        hit.layer = unbound_input::PORTAL_LAYER;
+                        hit.z = hit.z.saturating_add(u32::from(entry.z_base));
+                    }
+                    self.collector.push(entry.key, out);
+                }
+                WidgetSpec::CommandPalette {
+                    desc,
+                    state: cp_state,
+                } => {
+                    let mut desc = desc.clone();
+                    desc.z = entry.z_base.saturating_add(desc.z.min(100));
+                    let tokens = unbound_widgets::CommandPaletteTokens::standard();
+                    let mut out = unbound_widgets::emit_command_palette(&desc, cp_state, tokens);
+                    if out.a11y.is_none() {
+                        out.a11y = Some(A11yNode::new(Role::Dialog, "CommandPalette", desc.rect));
+                    }
+                    if let Some(hit) = out.hit.as_mut() {
+                        hit.layer = unbound_input::PORTAL_LAYER;
+                        hit.z = hit.z.saturating_add(u32::from(entry.z_base));
+                    }
+                    self.collector.push(entry.key, out);
+                    let visible = cp_state.visible_results(&desc);
+                    for (vis_idx, cmd_idx) in visible.into_iter().enumerate() {
+                        if let Some(cmd) = cp_state.commands.get(cmd_idx) {
+                            let row_rect = desc.row_rect(vis_idx);
+                            let label_quads = text_ctx.shape_line(
+                                &cmd.title,
+                                row_rect,
+                                13.0,
+                                400,
+                                unbound_widgets::AlignX::Start,
+                                unbound_widgets::AlignY::Center,
+                            );
+                            let shortcut_quads = if cmd.shortcut.is_empty() {
+                                Vec::new()
+                            } else {
+                                text_ctx.shape_line(
+                                    &cmd.shortcut,
+                                    row_rect,
+                                    11.0,
+                                    400,
+                                    unbound_widgets::AlignX::End,
+                                    unbound_widgets::AlignY::Center,
+                                )
+                            };
+                            let row_out = unbound_widgets::emit_command_row(
+                                &desc,
+                                cp_state,
+                                vis_idx,
+                                state,
+                                &label_quads,
+                                &shortcut_quads,
+                                tokens,
+                            );
+                            self.collector.push(mix_key(entry.key, cmd.id), row_out);
+                        }
+                    }
                 }
                 WidgetSpec::BoxSurface {
                     fill,
@@ -6136,5 +7096,304 @@ mod tests {
         assert!(rt.asset_hub_mut().release_external_texture(cancelled));
         let report3 = rt.frame(0.0);
         assert!(report3.external_texture_ops.is_empty());
+    }
+
+    #[test]
+    fn desktop_widgets_emit_primitives_and_semantics() {
+        use unbound_widgets::{
+            AddressBarDesc, AddressBarState, Command, CommandPaletteDesc, CommandPaletteState,
+            ContextMenuState, DockState, DockTab, DockTree, ImageDesc, MenuDesc, MenuItem,
+            MinimapDesc, MinimapItem, ObjectFit, PopoverDesc, TreeViewDesc, TreeViewState,
+        };
+        use unbound_world::TreeRow;
+
+        struct DesktopWidgetsApp {
+            ext_handle: Option<ExternalTextureHandle>,
+            tree_state: RefCell<TreeViewState>,
+            address_state: AddressBarState,
+            dock_state: DockState,
+            menu_state: ContextMenuState,
+            palette_state: CommandPaletteState,
+        }
+        impl Application for DesktopWidgetsApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
+                DirtyFlags::NONE
+            }
+            fn view(&self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.column(1, |col| {
+                    col.image(
+                        10,
+                        ImageDesc::new(Rect::new(0.0, 0.0, 64.0, 64.0), Vec2::new(64.0, 64.0), 0),
+                    );
+                    if let Some(h) = self.ext_handle {
+                        col.image_external(11, h, Vec2::new(80.0, 60.0), ObjectFit::Contain);
+                    }
+                    col.tree_view(
+                        12,
+                        TreeViewDesc::new(Rect::new(0.0, 0.0, 220.0, 120.0)),
+                        &mut self.tree_state.borrow_mut(),
+                    );
+                    col.address_bar(
+                        13,
+                        AddressBarDesc::new(
+                            Rect::new(0.0, 0.0, 300.0, 32.0),
+                            vec!["root".into(), "docs".into()],
+                        ),
+                        &self.address_state,
+                    );
+                    col.dock(14, &self.dock_state);
+                    col.minimap(
+                        15,
+                        MinimapDesc::new(
+                            Rect::new(0.0, 0.0, 140.0, 100.0),
+                            Rect::new(0.0, 0.0, 1000.0, 1000.0),
+                            Rect::new(100.0, 100.0, 200.0, 200.0),
+                        ),
+                        &[MinimapItem {
+                            bounds: Rect::new(50.0, 50.0, 100.0, 80.0),
+                            token: unbound_theme::Token::PRIMARY,
+                        }],
+                    );
+                    col.button(16, ButtonDesc::new(Rect::new(10.0, 10.0, 80.0, 32.0), "Anchor"));
+                    col.popover(
+                        17,
+                        16,
+                        PopoverDesc::new(
+                            Rect::new(10.0, 10.0, 80.0, 32.0),
+                            Rect::new(0.0, 0.0, 1200.0, 800.0),
+                            Vec2::new(160.0, 90.0),
+                        ),
+                        |p| {
+                            p.text_primary(18, "Popover Body", 13.0);
+                        },
+                    );
+                    col.context_menu(
+                        19,
+                        MenuDesc::new(
+                            Rect::new(0.0, 0.0, 160.0, 80.0),
+                            vec![MenuItem::action("Copy"), MenuItem::action("Paste")],
+                        ),
+                        &self.menu_state,
+                    );
+                    col.command_palette(
+                        20,
+                        CommandPaletteDesc::new(Rect::new(200.0, 80.0, 480.0, 300.0)),
+                        &self.palette_state,
+                    );
+                });
+            }
+        }
+
+        let mut tree = TreeViewState::new(28.0);
+        let roots = vec![TreeRow {
+            id: 1001,
+            depth: 0,
+            has_children: false,
+            expanded: false,
+        }];
+        tree.rebuild(&roots, |_| Vec::new());
+
+        let dock = DockState::new(DockTree::new(vec![DockTab::new(2001, "Main")]));
+        let mut menu_state = ContextMenuState::new();
+        menu_state.open_at(Vec2::new(120.0, 120.0), 16, None);
+        let mut palette_state =
+            CommandPaletteState::new(vec![Command::new(3001, "Open File", "File")]);
+        palette_state.open();
+
+        let app = DesktopWidgetsApp {
+            ext_handle: None,
+            tree_state: RefCell::new(tree),
+            address_state: AddressBarState::new(),
+            dock_state: dock,
+            menu_state,
+            palette_state,
+        };
+        let mut rt = AppRuntime::new(app, Vec2::new(1200.0, 800.0));
+        let ext_h = rt
+            .asset_hub_mut()
+            .upload_external_rgba8(16, 16, true, vec![255u8; 16 * 16 * 4]);
+        rt.application_mut().ext_handle = Some(ext_h);
+        rt.invalidate();
+
+        let report_pending = rt.frame(0.0);
+        assert!(report_pending.primitives > 0);
+        assert!(!rt.semantics().nodes().is_empty());
+        let pending_rect = rt.widget_rect(11).expect("external image laid out");
+        assert_eq!(pending_rect.size, Vec2::new(80.0, 60.0));
+        assert!(!rt
+            .scene()
+            .primitives
+            .iter()
+            .any(|p| p.border_token_or_tex == 55));
+
+        rt.asset_hub_mut().commit_external_texture_slot(ext_h, Ok(55));
+        let _ = rt.frame(0.0);
+        let ready_rect = rt.widget_rect(11).expect("external image still laid out");
+        assert_eq!(ready_rect.size, pending_rect.size);
+        assert!(rt
+            .scene()
+            .primitives
+            .iter()
+            .any(|p| p.border_token_or_tex == 55));
+    }
+
+    #[test]
+    fn virtual_list_and_virtual_masonry_only_build_visible_plus_overscan() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use unbound_widgets::{
+            virtual_masonry::MasonryItem, VariableVirtualList, VirtualMasonryDesc,
+        };
+
+        struct VirtApp {
+            list: VariableVirtualList,
+            masonry_items: Vec<MasonryItem>,
+            list_calls: Arc<AtomicUsize>,
+            masonry_calls: Arc<AtomicUsize>,
+            last_list_first: Arc<AtomicUsize>,
+        }
+        impl Application for VirtApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
+                DirtyFlags::NONE
+            }
+            fn view(&self, _: &(), v: &mut ViewBuilder<'_>) {
+                self.list_calls.store(0, Ordering::SeqCst);
+                self.masonry_calls.store(0, Ordering::SeqCst);
+                self.last_list_first.store(usize::MAX, Ordering::SeqCst);
+                v.virtual_list(100, &self.list, 2, |row, idx, _| {
+                    let prev = self.last_list_first.load(Ordering::SeqCst);
+                    if idx < prev {
+                        self.last_list_first.store(idx, Ordering::SeqCst);
+                    }
+                    self.list_calls.fetch_add(1, Ordering::SeqCst);
+                    row.spacer(mix_key(1000, idx as u64));
+                });
+                v.virtual_masonry(
+                    200,
+                    VirtualMasonryDesc::new(Rect::new(0.0, 0.0, 400.0, 400.0), 4).gap(0.0),
+                    &self.masonry_items,
+                    100.0,
+                    |cell, idx, _| {
+                        self.masonry_calls.fetch_add(1, Ordering::SeqCst);
+                        cell.spacer(mix_key(2000, idx as u64));
+                    },
+                );
+            }
+        }
+
+        let list_calls = Arc::new(AtomicUsize::new(0));
+        let masonry_calls = Arc::new(AtomicUsize::new(0));
+        let last_list_first = Arc::new(AtomicUsize::new(usize::MAX));
+        let masonry_items: Vec<MasonryItem> = (0..10_000)
+            .map(|i| MasonryItem {
+                id: i as u64 + 1,
+                aspect_ratio: 1.0,
+            })
+            .collect();
+        let app = VirtApp {
+            list: VariableVirtualList::new(10_000, 40.0),
+            masonry_items,
+            list_calls: Arc::clone(&list_calls),
+            masonry_calls: Arc::clone(&masonry_calls),
+            last_list_first: Arc::clone(&last_list_first),
+        };
+        let mut rt = AppRuntime::new(app, Vec2::new(400.0, 400.0));
+        let _ = rt.frame(0.0);
+        assert_eq!(list_calls.load(Ordering::SeqCst), 12);
+        assert_eq!(last_list_first.load(Ordering::SeqCst), 0);
+        let m_count = masonry_calls.load(Ordering::SeqCst);
+        assert!(
+            (20..=24).contains(&m_count),
+            "unexpected masonry calls: {m_count}"
+        );
+
+        rt.with_state::<unbound_widgets::ScrollState, _>(100, |st| {
+            let desc = unbound_widgets::ScrollViewDesc::new(
+                Rect::new(0.0, 0.0, 400.0, 400.0),
+                Vec2::new(400.0, 400_000.0),
+            );
+            st.jump_to(&desc, Vec2::new(0.0, 2000.0));
+        });
+        rt.invalidate();
+        let _ = rt.frame(0.0);
+        assert_eq!(last_list_first.load(Ordering::SeqCst), 48);
+        assert_eq!(list_calls.load(Ordering::SeqCst), 14);
+    }
+
+    #[test]
+    fn overlay_layer_and_popover_dismiss_on_outside_click_escape_and_anchor_removal() {
+        use unbound_widgets::overlay::OverlayEntry;
+        use unbound_widgets::PopoverDesc;
+
+        struct OverlayApp {
+            show_anchor: bool,
+            show_second: bool,
+        }
+        impl Application for OverlayApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
+                DirtyFlags::NONE
+            }
+            fn view(&self, _: &(), v: &mut ViewBuilder<'_>) {
+                if self.show_anchor {
+                    v.button(50, ButtonDesc::new(Rect::new(20.0, 20.0, 80.0, 30.0), "Anchor"));
+                }
+                v.popover(
+                    51,
+                    50,
+                    PopoverDesc::new(
+                        Rect::new(20.0, 20.0, 80.0, 30.0),
+                        Rect::new(0.0, 0.0, 800.0, 600.0),
+                        Vec2::new(150.0, 80.0),
+                    ),
+                    |p| {
+                        p.spacer(52);
+                    },
+                );
+                if self.show_second {
+                    v.overlay_layer(
+                        60,
+                        OverlayEntry::popover(60, 50, Rect::new(300.0, 100.0, 120.0, 60.0)),
+                        |o| {
+                            o.spacer(61);
+                        },
+                    );
+                }
+            }
+        }
+
+        let mut rt = AppRuntime::new(
+            OverlayApp {
+                show_anchor: true,
+                show_second: true,
+            },
+            Vec2::new(800.0, 600.0),
+        );
+        let _ = rt.frame(0.0);
+        assert!(rt.overlays().stack().contains(51));
+        assert!(rt.overlays().stack().contains(60));
+
+        rt.key(AppKey::Escape, true, Modifiers::default());
+        let _ = rt.frame(0.0);
+        assert!(!rt.overlays().stack().contains(60));
+        assert!(rt.overlays().stack().contains(51));
+
+        rt.pointer_down(Vec2::new(750.0, 550.0), PointerButton::Left);
+        let _ = rt.frame(0.0);
+        assert!(!rt.overlays().stack().contains(51));
+
+        rt.overlays_mut().clear_dismissed(51);
+        rt.invalidate();
+        let _ = rt.frame(0.0);
+        assert!(rt.overlays().stack().contains(51));
+
+        rt.application_mut().show_anchor = false;
+        rt.invalidate();
+        let _ = rt.frame(0.0);
+        assert!(!rt.overlays().stack().contains(51));
     }
 }
