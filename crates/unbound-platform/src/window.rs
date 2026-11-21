@@ -1144,7 +1144,10 @@ mod tests {
         apply(&mut state, &PlatformEvent::Focused(true), t_rec);
         assert!(!state.occluded);
         assert!(!state.occlusion.is_occluded());
-        assert_eq!(state.pacer.throttle_state(t_rec), RenderThrottleState::Active);
+        assert_eq!(
+            state.pacer.throttle_state(t_rec),
+            RenderThrottleState::Active
+        );
         assert!(state.pacer.should_render(t_rec));
 
         // 最小化事件同样暂停渲染并在恢复后立刻重绘

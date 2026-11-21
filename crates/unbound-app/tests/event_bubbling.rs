@@ -300,6 +300,7 @@ fn key_bubbles_before_overlay_escape_and_exposes_event_target() {
         bounds: Rect::new(0.0, 0.0, 240.0, 140.0),
         focus_scope: vec![PORTAL_INPUT],
         anchor_clipped: false,
+        prefer_native_popup: false,
     });
     // 当前浮层条目只安装焦点陷阱、不自动移动焦点，显式聚焦模态内的输入节点。
     rt.focus_node(Some(PORTAL_INPUT));

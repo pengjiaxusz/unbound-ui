@@ -3,12 +3,12 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use rustc_hash::FxHashMap;
 use unbound_gpu::atlas::AtlasSet;
 use unbound_gpu::debug::{is_device_lost, recover_with, RecoveryPolicy};
 use unbound_gpu::device::{Gpu, GpuConfig};
 use unbound_gpu::surface::{AcquireOutcome, Surface, Swapchain};
 use unbound_gpu::swapchain::{CompositeAlphaMode, PresentConfig};
-use rustc_hash::FxHashMap;
 use unbound_gpu::{Camera, ManagedExternalTextureDesc, Renderer};
 use unbound_input::PointerButton;
 use unbound_math::{Rect, Vec2};
@@ -217,6 +217,12 @@ pub struct WindowedRunner<A: Application> {
     appearance: WindowAppearance,
     /// 已上传至当前渲染器的外部纹理句柄映射：`handle -> (slot, width, height, srgb)`。
     external_gpu_slots: FxHashMap<ExternalTextureHandle, (u32, u32, u32, bool)>,
+    /// 主窗口平台 ID（用于与原生弹出窗区分，避免弹出窗覆写或销毁主窗口渲染资源）。
+    primary_window_id: Option<WindowId>,
+    /// 主窗口客户区左上角在屏幕坐标系中的物理像素原点。
+    main_screen_origin: (i32, i32),
+    /// 已创建的原生弹出窗 `WindowId -> popup_id` 映射。
+    native_popup_windows: FxHashMap<WindowId, u64>,
     /// 越界原生弹出窗状态注册表。
     popup_host: PopupHostRegistry,
     /// 待平台后端在事件循环安全点同步的越界弹出窗请求队列。
@@ -274,6 +280,9 @@ impl<A: Application> WindowedRunner<A> {
             hwnd: None,
             appearance: WindowAppearance::new(),
             external_gpu_slots: FxHashMap::default(),
+            primary_window_id: None,
+            main_screen_origin: (0, 0),
+            native_popup_windows: FxHashMap::default(),
             popup_host: PopupHostRegistry::new(),
             pending_popup_syncs: Vec::new(),
             pending_popup_closes: Vec::new(),
@@ -390,6 +399,32 @@ impl<A: Application> WindowedRunner<A> {
         }
     }
 
+    /// 判断给定平台窗口是否为原生弹出窗并返回其业务浮层 ID。
+    fn resolve_popup_id(&self, window: &Window) -> Option<u64> {
+        if let Some(id) = window.popup_id() {
+            return Some(id);
+        }
+        let win_id = WindowId(window.id().0 as u64);
+        self.native_popup_windows
+            .get(&win_id)
+            .copied()
+            .or_else(|| self.popup_host.get_by_window(win_id).map(|e| e.id))
+    }
+
+    /// 将原生弹出窗内的局部物理像素指针坐标按屏幕原点偏移换算为主窗口逻辑坐标。
+    #[must_use]
+    pub fn map_popup_pointer_to_main_logical(
+        &self,
+        popup_screen_rect: unbound_platform::ScreenRect,
+        local_x: f64,
+        local_y: f64,
+    ) -> Vec2 {
+        let effective_scale = self.runtime.context().effective_scale().max(0.01);
+        let main_phys_x = local_x as f32 + (popup_screen_rect.x - self.main_screen_origin.0) as f32;
+        let main_phys_y = local_y as f32 + (popup_screen_rect.y - self.main_screen_origin.1) as f32;
+        Vec2::new(main_phys_x / effective_scale, main_phys_y / effective_scale)
+    }
+
     /// 判断当前帧是否因窗口最小化或遮挡暂停而应跳过构建与交换链提交。
     ///
     /// 从暂停态恢复可见时会自动置位 `frame_dropped` 并失效运行时脏状态，
@@ -442,7 +477,9 @@ impl<A: Application> WindowedRunner<A> {
                     }
                 }
                 crate::WindowCommand::OpenWindow(_) => {
-                    eprintln!("[unbound-app] WindowCommand::OpenWindow requires MultiWindowCoordinator");
+                    eprintln!(
+                        "[unbound-app] WindowCommand::OpenWindow requires MultiWindowCoordinator"
+                    );
                 }
                 crate::WindowCommand::CloseWindow(target) => {
                     if target == WindowId(window.id().0 as u64) {
@@ -578,7 +615,9 @@ impl<A: Application> WindowedRunner<A> {
 
     fn destroy_vulkan(&mut self) {
         self.external_gpu_slots.clear();
-        self.runtime.asset_hub_mut().invalidate_all_external_textures();
+        self.runtime
+            .asset_hub_mut()
+            .invalidate_all_external_textures();
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -602,7 +641,9 @@ impl<A: Application> WindowedRunner<A> {
         // `ERROR_NATIVE_WINDOW_IN_USE_KHR`。必须先销毁子对象，再让持有设备的
         // renderer 拆除设备本身。
         self.external_gpu_slots.clear();
-        self.runtime.asset_hub_mut().invalidate_all_external_textures();
+        self.runtime
+            .asset_hub_mut()
+            .invalidate_all_external_textures();
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -736,7 +777,26 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         core::mem::take(&mut self.pending_popup_closes)
     }
 
+    fn window_created(&mut self, state: &mut PlatformState, window: &Window) {
+        if let Some(popup_id) = self.resolve_popup_id(window) {
+            let win_id = WindowId(window.id().0 as u64);
+            self.native_popup_windows.insert(win_id, popup_id);
+            let _ = self.popup_host.bind_native_window(popup_id, win_id);
+            return;
+        }
+        if self.surface.is_some() {
+            return;
+        }
+        self.resumed(state, window);
+    }
+
     fn resumed(&mut self, state: &mut PlatformState, window: &Window) {
+        if self.resolve_popup_id(window).is_some() || self.surface.is_some() {
+            return;
+        }
+        self.primary_window_id = Some(WindowId(window.id().0 as u64));
+        let client_screen = window.client_rect_on_screen();
+        self.main_screen_origin = (client_screen.x, client_screen.y);
         let os_scale = self.sync_os_scale(window);
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
@@ -890,6 +950,53 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
     }
 
     fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
+        if let Some(popup_id) = self.resolve_popup_id(window) {
+            let popup_rect = {
+                let live = window.client_rect_on_screen();
+                if live.width > 0 && live.height > 0 {
+                    live
+                } else {
+                    self.popup_host
+                        .get(popup_id)
+                        .map_or(live, |entry| entry.config.screen_rect)
+                }
+            };
+            match event {
+                PlatformEvent::CursorMoved { x, y } => {
+                    self.pointer = self.map_popup_pointer_to_main_logical(popup_rect, x, y);
+                    state.pacer.note_activity(Instant::now());
+                    self.runtime.pointer_move(self.pointer);
+                }
+                PlatformEvent::MouseInput {
+                    state: btn_state,
+                    button,
+                } => {
+                    if let Some(btn) = translate_pointer_button(button) {
+                        if btn_state == ButtonState::Pressed {
+                            self.runtime.pointer_down(self.pointer, btn);
+                        } else {
+                            self.runtime.pointer_up(self.pointer, btn);
+                        }
+                        state.pacer.note_activity(Instant::now());
+                    }
+                }
+                PlatformEvent::MouseWheel { delta_x, delta_y } => {
+                    state.pacer.note_activity(Instant::now());
+                    self.runtime
+                        .wheel(self.pointer, Vec2::new(delta_x as f32, delta_y as f32));
+                }
+                PlatformEvent::CloseRequested => {
+                    let _ = self.popup_host.close_popup(popup_id);
+                    let _ = self.runtime.notify_native_popup_dismissed(popup_id);
+                    state.pacer.note_activity(Instant::now());
+                }
+                _ => {}
+            }
+            if self.drain_runtime_commands(state, window) == Flow::Exit {
+                return Flow::Exit;
+            }
+            return Flow::Continue;
+        }
         let os_scale = self.sync_os_scale(window);
         match event {
             PlatformEvent::Resized(_) => {
@@ -913,9 +1020,12 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 state.pacer.note_activity(Instant::now());
                 self.runtime.pointer_move(self.pointer);
             }
-            PlatformEvent::MouseInput { state, button } => {
+            PlatformEvent::MouseInput {
+                state: input_state,
+                button,
+            } => {
                 if let Some(btn) = translate_pointer_button(button) {
-                    if state == ButtonState::Pressed {
+                    if input_state == ButtonState::Pressed {
                         self.runtime.pointer_down(self.pointer, btn);
                     } else {
                         self.runtime.pointer_up(self.pointer, btn);
@@ -946,9 +1056,13 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                         .wheel(self.pointer, Vec2::new(delta_x as f32, delta_y as f32));
                 }
             }
-            PlatformEvent::KeyInput { state, key, .. } => {
+            PlatformEvent::KeyInput {
+                state: input_state,
+                key,
+                ..
+            } => {
                 let app_k = translate_app_key(&key);
-                let pressed = state == ButtonState::Pressed;
+                let pressed = input_state == ButtonState::Pressed;
                 let modifiers = translate_modifiers(self.modifiers);
                 state.pacer.note_activity(Instant::now());
                 self.runtime.key(app_k, pressed, modifiers);
@@ -1045,6 +1159,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 }
             }
             PlatformEvent::Moved { x, y } => {
+                self.main_screen_origin = (x, y);
                 self.runtime
                     .set_window_screen_origin((x, y), WindowId(window.id().0 as u64));
             }
@@ -1076,6 +1191,9 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
     }
 
     fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+        if self.resolve_popup_id(window).is_some() {
+            return Flow::Continue;
+        }
         if self.should_skip_frame_for_throttle(state) {
             return Flow::Continue;
         }
@@ -1084,6 +1202,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             return Flow::Continue;
         }
         let client_screen = window.client_rect_on_screen();
+        self.main_screen_origin = (client_screen.x, client_screen.y);
         self.runtime.set_window_screen_origin(
             (client_screen.x, client_screen.y),
             WindowId(window.id().0 as u64),
@@ -1303,7 +1422,19 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         Flow::Continue
     }
 
-    fn window_closing(&mut self, _window: &Window) {
+    fn window_closing(&mut self, window: &Window) {
+        let win_id = WindowId(window.id().0 as u64);
+        if let Some(popup_id) = self
+            .native_popup_windows
+            .remove(&win_id)
+            .or_else(|| self.resolve_popup_id(window))
+        {
+            let _ = self.popup_host.close_popup(popup_id);
+            return;
+        }
+        if self.primary_window_id.is_some_and(|pid| pid != win_id) {
+            return;
+        }
         self.destroy_vulkan();
     }
 }
@@ -1372,17 +1503,17 @@ pub fn run_windowed_with_hooks<A: Application + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AppContext, AppEvent, DirtyFlags, ViewBuilder};
+    use crate::{AppContext, AppEvent, DirtyFlags, EventOutcome, ViewBuilder};
     use unbound_platform::{Extent, PresentWaitPolicy, RenderThrottlePolicy};
 
     struct DummyApp;
     impl Application for DummyApp {
         type State = ();
         fn init(&mut self, _: &mut AppContext) {}
-        fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
-            DirtyFlags::NONE
+        fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+            EventOutcome::new(DirtyFlags::NONE)
         }
-        fn view(&self, _: &(), _: &mut ViewBuilder<'_>) {}
+        fn view(&mut self, _: &(), _: &mut ViewBuilder<'_>) {}
     }
 
     #[test]
@@ -1417,5 +1548,20 @@ mod tests {
         state.pacer.set_occluded(false);
         assert!(!runner.should_skip_frame_for_throttle(&state));
         assert!(runner.frame_dropped);
+    }
+
+    #[test]
+    fn popup_pointer_maps_with_screen_origin_offset_and_effective_scale() {
+        let config = WindowConfig::default();
+        let mut runner = WindowedRunner::new(DummyApp, &config);
+        runner.main_screen_origin = (100, 200);
+        runner
+            .runtime_mut()
+            .sync_physical_viewport(Vec2::new(1600.0, 1200.0), 2.0);
+        let popup_rect = unbound_platform::ScreenRect::new(900, 300, 200, 160);
+        let logical = runner.map_popup_pointer_to_main_logical(popup_rect, 40.0, 20.0);
+        // (900 - 100 + 40) / 2.0 = 420.0, (300 - 200 + 20) / 2.0 = 60.0
+        assert!((logical.x - 420.0).abs() < 1e-4);
+        assert!((logical.y - 60.0).abs() < 1e-4);
     }
 }

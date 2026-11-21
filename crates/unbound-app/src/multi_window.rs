@@ -16,7 +16,7 @@ use unbound_gpu::surface::{AcquireOutcome, PresentOutcome, Surface, Swapchain};
 use unbound_gpu::swapchain::{CompositeAlphaMode, PresentConfig};
 use unbound_gpu::{Camera, ManagedExternalTextureDesc, Renderer};
 use unbound_input::PointerButton;
-use unbound_math::{Rect, Vec2};
+use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::win32_frame::{
     install_custom_frame, FrameHitMetrics, WindowBackdropMaterial,
@@ -215,6 +215,7 @@ pub struct WindowContext<A: Application> {
     appearance: WindowAppearance,
     external_gpu_slots: FxHashMap<ExternalTextureHandle, (u32, u32, u32, bool)>,
     popup_host: PopupHostRegistry,
+    screen_origin: (i32, i32),
     was_suspended: bool,
 }
 
@@ -260,6 +261,7 @@ impl<A: Application> WindowContext<A> {
             appearance: WindowAppearance::new(),
             external_gpu_slots: FxHashMap::default(),
             popup_host: PopupHostRegistry::new(),
+            screen_origin: (0, 0),
             was_suspended: false,
         }
     }
@@ -453,7 +455,9 @@ impl<A: Application> WindowContext<A> {
     /// 严格按“先停用交换链与表面、再释放窗口级 `Renderer`”的顺序回收本窗口 GPU 资源。
     pub fn destroy_vulkan(&mut self) {
         self.external_gpu_slots.clear();
-        self.runtime.asset_hub_mut().invalidate_all_external_textures();
+        self.runtime
+            .asset_hub_mut()
+            .invalidate_all_external_textures();
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -483,8 +487,10 @@ pub struct MultiWindowCoordinator<A: Application> {
     shared_atlases: Option<Arc<AtlasSet>>,
     pending_windows: VecDeque<WindowConfig>,
     pending_created_configs: VecDeque<WindowConfig>,
+    pending_window_close_requests: Vec<WindowId>,
     pending_popup_syncs: Vec<(u64, PopupWindowConfig)>,
     pending_popup_closes: Vec<u64>,
+    native_popup_owners: FxHashMap<WindowId, (u64, WindowId)>,
     primary_config: WindowConfig,
     factory: Box<dyn MultiWindowFactory<A>>,
     waker: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -503,8 +509,10 @@ impl<A: Application> MultiWindowCoordinator<A> {
             shared_atlases: None,
             pending_windows: VecDeque::new(),
             pending_created_configs: VecDeque::new(),
+            pending_window_close_requests: Vec::new(),
             pending_popup_syncs: Vec::new(),
             pending_popup_closes: Vec::new(),
+            native_popup_owners: FxHashMap::default(),
             primary_config,
             factory: Box::new(factory),
             waker: None,
@@ -545,7 +553,8 @@ impl<A: Application> MultiWindowCoordinator<A> {
         let app = self.factory.create(id, &config);
         let mut ctx = WindowContext::new(app, &config);
         if let Some(waker) = &self.waker {
-            ctx.runtime.set_waker(Arc::new(SignalWaker(Arc::clone(waker))));
+            ctx.runtime
+                .set_waker(Arc::new(SignalWaker(Arc::clone(waker))));
         }
         let _ = self.registry.insert(id, ctx);
     }
@@ -609,13 +618,20 @@ impl<A: Application> MultiWindowCoordinator<A> {
             }
         }
         for target in &to_close {
-            let _ = self.close_window(*target);
+            if self.close_window(*target) {
+                self.pending_window_close_requests.push(*target);
+            }
         }
         to_close
     }
 
     fn release_shared_gpu(&mut self) {
-        self.shared_atlases = None;
+        if let Some(atlases) = self.shared_atlases.take() {
+            if let Some(gpu) = &self.shared_gpu {
+                gpu.wait_idle();
+            }
+            atlases.free();
+        }
         if let Some(gpu) = self.shared_gpu.take() {
             if let Ok(owned) = Arc::try_unwrap(gpu) {
                 owned.destroy();
@@ -716,7 +732,14 @@ impl<A: Application> MultiWindowCoordinator<A> {
             }
         };
 
-        let surface = match Surface::new_win32(&gpu, hwnd) {
+        #[cfg(windows)]
+        let surface_result = Surface::new_win32(&gpu, hwnd);
+        #[cfg(not(windows))]
+        let surface_result: Result<Surface, unbound_gpu::device::GpuError> =
+            Err(unbound_gpu::device::GpuError::Allocation(
+                "windowed presentation is implemented for Win32 only".into(),
+            ));
+        let surface = match surface_result {
             Ok(surface) => surface,
             Err(error) => {
                 eprintln!(
@@ -789,6 +812,8 @@ impl<A: Application> MultiWindowCoordinator<A> {
         ctx.frame_metrics = Some(metrics);
 
         state.set_present_extensions(&device_extensions);
+        let client_screen = window.client_rect_on_screen();
+        ctx.screen_origin = (client_screen.x, client_screen.y);
         ctx.sync_theme(window);
         ctx.sync_appearance();
         ctx.last_frame = Instant::now();
@@ -796,11 +821,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
         let _ = self.registry.insert(id, ctx);
     }
 
-    fn drain_window_commands_live(
-        &mut self,
-        id: WindowId,
-        window: &Window,
-    ) -> Flow {
+    fn drain_window_commands_live(&mut self, id: WindowId, window: &Window) -> Flow {
         let mut outbound_drag = None;
         let mut close_targets = Vec::new();
         let mut close_self = false;
@@ -868,17 +889,45 @@ impl<A: Application> MultiWindowCoordinator<A> {
         }
 
         for target in close_targets {
-            let _ = self.close_window(target);
+            if self.close_window(target) {
+                self.pending_window_close_requests.push(target);
+            }
         }
 
         if close_self {
             window.request_close();
-            let _ = self.close_window(id);
+            if self.close_window(id) {
+                self.pending_window_close_requests.push(id);
+            }
             if self.registry.is_empty() {
                 return Flow::Exit;
             }
         }
         Flow::Continue
+    }
+
+    /// 识别平台窗口是否为原生弹出窗，返回 `(popup_id, owner_window_id)`。
+    fn resolve_popup_window(&self, window: &Window) -> Option<(u64, WindowId)> {
+        let win_id = platform_window_id(window);
+        if let Some(&mapped) = self.native_popup_owners.get(&win_id) {
+            return Some(mapped);
+        }
+        if let Some(popup_id) = window.popup_id() {
+            for slot in self.registry.iter() {
+                if slot.context.popup_host.get(popup_id).is_some() {
+                    return Some((popup_id, slot.id));
+                }
+            }
+            if let Some(primary) = self.registry.primary() {
+                return Some((popup_id, primary));
+            }
+        }
+        for slot in self.registry.iter() {
+            if let Some(entry) = slot.context.popup_host.get_by_window(win_id) {
+                return Some((entry.id, slot.id));
+            }
+        }
+        None
     }
 }
 
@@ -907,16 +956,39 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         self.registry
             .iter()
             .filter(|slot| !slot.context.pacer.is_suspended())
-            .filter_map(|slot| slot.context.runtime.next_wake_in().map(|d| now + d))
+            .filter_map(|slot| {
+                let pacer_wake = slot.context.pacer.next_wake(now);
+                let runtime_wake = slot.context.runtime.next_wake_in().map(|d| now + d);
+                match (pacer_wake, runtime_wake) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                }
+            })
             .min()
     }
 
     fn resumed(&mut self, state: &mut PlatformState, window: &Window) {
+        if window.is_popup() || self.resolve_popup_window(window).is_some() {
+            return;
+        }
         let config = self.primary_config.clone();
         self.attach_window_gpu(state, window, config);
     }
 
     fn window_created(&mut self, state: &mut PlatformState, window: &Window) {
+        if window.is_popup() || self.resolve_popup_window(window).is_some() {
+            if let Some((popup_id, owner_id)) = self.resolve_popup_window(window) {
+                let popup_win_id = platform_window_id(window);
+                self.native_popup_owners
+                    .insert(popup_win_id, (popup_id, owner_id));
+                if let Some(owner_ctx) = self.registry.get_mut(owner_id) {
+                    let _ = owner_ctx
+                        .popup_host
+                        .bind_native_window(popup_id, popup_win_id);
+                }
+            }
+            return;
+        }
         let config = self
             .pending_created_configs
             .pop_front()
@@ -926,6 +998,19 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
 
     fn window_closing(&mut self, window: &Window) {
         let id = platform_window_id(window);
+        if let Some((popup_id, owner_id)) = self
+            .native_popup_owners
+            .remove(&id)
+            .or_else(|| self.resolve_popup_window(window))
+        {
+            if let Some(owner_ctx) = self.registry.get_mut(owner_id) {
+                let _ = owner_ctx.popup_host.close_popup(popup_id);
+            }
+            return;
+        }
+        if window.is_popup() {
+            return;
+        }
         let _ = self.close_window(id);
     }
 
@@ -933,6 +1018,10 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         let config = self.pending_windows.pop_front()?;
         self.pending_created_configs.push_back(config.clone());
         Some(config)
+    }
+
+    fn take_window_close_requests(&mut self) -> Vec<WindowId> {
+        core::mem::take(&mut self.pending_window_close_requests)
     }
 
     fn take_popup_sync_requests(&mut self) -> Vec<(u64, PopupWindowConfig)> {
@@ -945,6 +1034,60 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
 
     fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
         let id = platform_window_id(window);
+        if window.is_popup() || self.resolve_popup_window(window).is_some() {
+            let Some((popup_id, owner_id)) = self.resolve_popup_window(window) else {
+                return Flow::Continue;
+            };
+            let live_rect = window.client_rect_on_screen();
+            if let Some(owner_ctx) = self.registry.get_mut(owner_id) {
+                let popup_rect = if live_rect.width > 0 && live_rect.height > 0 {
+                    live_rect
+                } else {
+                    owner_ctx
+                        .popup_host
+                        .get(popup_id)
+                        .map_or(live_rect, |entry| entry.config.screen_rect)
+                };
+                match event {
+                    PlatformEvent::CursorMoved { x, y } => {
+                        let scale = owner_ctx.runtime.context().effective_scale().max(0.01);
+                        let main_phys_x =
+                            x as f32 + (popup_rect.x - owner_ctx.screen_origin.0) as f32;
+                        let main_phys_y =
+                            y as f32 + (popup_rect.y - owner_ctx.screen_origin.1) as f32;
+                        owner_ctx.pointer = Vec2::new(main_phys_x / scale, main_phys_y / scale);
+                        owner_ctx.pacer.note_activity(Instant::now());
+                        owner_ctx.runtime.pointer_move(owner_ctx.pointer);
+                    }
+                    PlatformEvent::MouseInput {
+                        state: btn_state,
+                        button,
+                    } => {
+                        if let Some(btn) = translate_pointer_button(button) {
+                            if btn_state == ButtonState::Pressed {
+                                owner_ctx.runtime.pointer_down(owner_ctx.pointer, btn);
+                            } else {
+                                owner_ctx.runtime.pointer_up(owner_ctx.pointer, btn);
+                            }
+                            owner_ctx.pacer.note_activity(Instant::now());
+                        }
+                    }
+                    PlatformEvent::MouseWheel { delta_x, delta_y } => {
+                        owner_ctx.pacer.note_activity(Instant::now());
+                        owner_ctx
+                            .runtime
+                            .wheel(owner_ctx.pointer, Vec2::new(delta_x as f32, delta_y as f32));
+                    }
+                    PlatformEvent::CloseRequested => {
+                        let _ = owner_ctx.popup_host.close_popup(popup_id);
+                        let _ = owner_ctx.runtime.notify_native_popup_dismissed(popup_id);
+                        owner_ctx.pacer.note_activity(Instant::now());
+                    }
+                    _ => {}
+                }
+            }
+            return Flow::Continue;
+        }
         if matches!(event, PlatformEvent::CloseRequested) {
             let _ = self.close_window(id);
             return if self.registry.is_empty() {
@@ -978,7 +1121,10 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                 ctx.pacer.note_activity(Instant::now());
                 ctx.runtime.pointer_move(ctx.pointer);
             }
-            PlatformEvent::MouseInput { state: btn_state, button } => {
+            PlatformEvent::MouseInput {
+                state: btn_state,
+                button,
+            } => {
                 if let Some(btn) = translate_pointer_button(button) {
                     if btn_state == ButtonState::Pressed {
                         ctx.runtime.pointer_down(ctx.pointer, btn);
@@ -1113,6 +1259,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                 }
             }
             PlatformEvent::Moved { x, y } => {
+                ctx.screen_origin = (x, y);
                 ctx.runtime.set_window_screen_origin((x, y), id);
             }
             PlatformEvent::PopupDismissed { id: popup_id } => {
@@ -1139,6 +1286,9 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
     }
 
     fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+        if window.is_popup() || self.resolve_popup_window(window).is_some() {
+            return Flow::Continue;
+        }
         let id = platform_window_id(window);
         let shared_atlases = self.shared_atlases.clone();
         let Some(ctx) = self.registry.get_mut(id) else {
@@ -1154,6 +1304,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         let (width, height) = (size.width.max(1), size.height.max(1));
         let os_scale = ctx.sync_os_scale(window);
         let client_screen = window.client_rect_on_screen();
+        ctx.screen_origin = (client_screen.x, client_screen.y);
         ctx.runtime
             .set_window_screen_origin((client_screen.x, client_screen.y), id);
         let now = Instant::now();
@@ -1326,7 +1477,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AppContext, AppEvent, DirtyFlags, ViewBuilder};
+    use crate::{AppContext, AppEvent, DirtyFlags, EventOutcome, ViewBuilder};
     use unbound_platform::RenderThrottlePolicy;
 
     struct TaggedApp {
@@ -1339,26 +1490,34 @@ mod tests {
 
         fn init(&mut self, _: &mut AppContext) {}
 
-        fn reduce(&mut self, _: &mut (), event: &AppEvent, _: &mut AppContext) -> DirtyFlags {
+        fn reduce(&mut self, _: &mut (), event: AppEvent, _: &mut AppContext) -> EventOutcome {
             if let AppEvent::Custom { payload, .. } = event {
                 self.events.push(payload.clone());
-                return DirtyFlags::PAINT;
+                return EventOutcome::new(DirtyFlags::PAINT);
             }
-            DirtyFlags::NONE
+            EventOutcome::new(DirtyFlags::NONE)
         }
 
-        fn view(&self, _: &(), v: &mut ViewBuilder<'_>) {
-            v.text_primary(self.window_id.0, format!("Window {}", self.window_id.0), 14.0);
+        fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+            v.text_primary(
+                self.window_id.0,
+                format!("Window {}", self.window_id.0),
+                14.0,
+                400,
+            );
         }
     }
 
     #[test]
     fn multi_window_isolates_events_commands_and_closing_preserves_survivors() {
         let primary_cfg = WindowConfig::default().with_title("Primary");
-        let mut coord = MultiWindowCoordinator::new(primary_cfg.clone(), |id, _| TaggedApp {
-            window_id: id,
-            events: Vec::new(),
-        });
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
 
         coord.register_headless_window(WindowId(1), primary_cfg);
         // 通过 OpenWindow 命令请求打开辅助窗口。
@@ -1398,11 +1557,23 @@ mod tests {
                 payload: "only-win-2".into(),
             });
         assert_eq!(
-            coord.registry().get(WindowId(1)).unwrap().runtime.app().events,
+            coord
+                .registry()
+                .get(WindowId(1))
+                .unwrap()
+                .runtime
+                .app()
+                .events,
             vec!["only-win-1"]
         );
         assert_eq!(
-            coord.registry().get(WindowId(2)).unwrap().runtime.app().events,
+            coord
+                .registry()
+                .get(WindowId(2))
+                .unwrap()
+                .runtime
+                .app()
+                .events,
             vec!["only-win-2"]
         );
 
@@ -1415,10 +1586,18 @@ mod tests {
             .close_window(WindowId(2));
         let closed = coord.route_window_commands(WindowId(1));
         assert_eq!(closed, vec![WindowId(2)]);
+        assert_eq!(coord.take_window_close_requests(), vec![WindowId(2)]);
+        assert!(coord.take_window_close_requests().is_empty());
         assert_eq!(coord.registry().len(), 1);
         assert!(coord.registry().get(WindowId(2)).is_none());
         assert_eq!(
-            coord.registry().get(WindowId(1)).unwrap().runtime.app().events,
+            coord
+                .registry()
+                .get(WindowId(1))
+                .unwrap()
+                .runtime
+                .app()
+                .events,
             vec!["only-win-1"]
         );
     }
@@ -1426,10 +1605,11 @@ mod tests {
     #[test]
     fn mixed_throttling_suspends_only_occluded_window_without_blocking_active_window() {
         let cfg = WindowConfig::default();
-        let mut coord = MultiWindowCoordinator::new(cfg.clone(), |id, _| TaggedApp {
-            window_id: id,
-            events: Vec::new(),
-        });
+        let mut coord =
+            MultiWindowCoordinator::new(cfg.clone(), |id: WindowId, _: &WindowConfig| TaggedApp {
+                window_id: id,
+                events: Vec::new(),
+            });
         coord.register_headless_window(WindowId(1), cfg.clone());
         coord.register_headless_window(WindowId(2), cfg);
 
@@ -1455,20 +1635,25 @@ mod tests {
             .pacer
             .set_occluded(true);
 
-        assert!(
-            coord
-                .registry_mut()
-                .get_mut(WindowId(1))
-                .unwrap()
-                .should_skip_frame_for_throttle()
-        );
-        assert!(
-            !coord
-                .registry_mut()
-                .get_mut(WindowId(2))
-                .unwrap()
-                .should_skip_frame_for_throttle()
-        );
+        assert!(coord
+            .registry_mut()
+            .get_mut(WindowId(1))
+            .unwrap()
+            .should_skip_frame_for_throttle());
+        assert!(!coord
+            .registry_mut()
+            .get_mut(WindowId(2))
+            .unwrap()
+            .should_skip_frame_for_throttle());
+
+        // 窗口 2 活跃动画时，即使窗口 1 遮挡暂停，协调器的 next_wake 仍返回窗口 2 的唤醒时间。
+        coord
+            .registry_mut()
+            .get_mut(WindowId(2))
+            .unwrap()
+            .pacer
+            .set_animating(true);
+        assert!(coord.next_wake().is_some());
 
         // 窗口 2 可独立正常出帧。
         let report_b = coord
@@ -1484,10 +1669,11 @@ mod tests {
     fn shared_gpu_and_atlas_handles_use_arc_ptr_identity() {
         // 验证共享句柄封装语义与主窗口关闭提升规则。
         let cfg = WindowConfig::default();
-        let mut coord = MultiWindowCoordinator::new(cfg.clone(), |id, _| TaggedApp {
-            window_id: id,
-            events: Vec::new(),
-        });
+        let mut coord =
+            MultiWindowCoordinator::new(cfg.clone(), |id: WindowId, _: &WindowConfig| TaggedApp {
+                window_id: id,
+                events: Vec::new(),
+            });
         coord.register_headless_window(WindowId(10), cfg.clone());
         coord.register_headless_window(WindowId(20), cfg);
         assert_eq!(coord.registry().primary(), Some(WindowId(10)));

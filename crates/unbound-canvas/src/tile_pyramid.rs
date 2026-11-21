@@ -880,7 +880,10 @@ mod tests {
 
         let plan = cache.plan(Rect::new(0.0, 0.0, 1000.0, 700.0), 1.0, 0);
         assert_eq!(plan.draws.len(), 4);
-        assert!(plan.draws.iter().all(|d| d.is_fallback && d.resident_key == root));
+        assert!(plan
+            .draws
+            .iter()
+            .all(|d| d.is_fallback && d.resident_key == root));
 
         // 四个子块的 UV 面积之和应精确等于 1.0。
         let total_uv_area: f32 = plan.draws.iter().map(|d| d.sample_uv.area()).sum();
@@ -922,7 +925,13 @@ mod tests {
         let vp_c = viewport.center();
         let prefetch_dists: Vec<f64> = plan.load_queue[2..]
             .iter()
-            .map(|&k| rect_center_dist_sq(spec.tile_world_rect(k), f64::from(vp_c.x), f64::from(vp_c.y)))
+            .map(|&k| {
+                rect_center_dist_sq(
+                    spec.tile_world_rect(k),
+                    f64::from(vp_c.x),
+                    f64::from(vp_c.y),
+                )
+            })
             .collect();
         for pair in prefetch_dists.windows(2) {
             assert!(pair[0] <= pair[1] + 1e-6);

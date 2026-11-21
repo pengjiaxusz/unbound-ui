@@ -443,7 +443,11 @@ impl FramePacer {
             return None;
         }
         let interval = self.effective_interval(now)?;
-        let last = self.last_present?;
+        // 尚未呈现过任何一帧的节拍器没有节拍基准：此时应用仍需要首帧，
+        // 应立即到期而不是让事件循环无限休眠。
+        let Some(last) = self.last_present else {
+            return Some(now);
+        };
         // 无限制节拍器始终处于到期状态；返回过去的截止时间也可行，
         // 但返回 `now` 能让 `ControlFlow::Poll` 意图更明确。
         Some((last + interval).max(now))

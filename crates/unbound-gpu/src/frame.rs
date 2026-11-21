@@ -487,7 +487,7 @@ fn create_renderer_frames(gpu: &Gpu) -> Result<(vk::CommandPool, Vec<FrameSync>)
                 return Err(GpuError::from(err));
             }
         };
-        let mut frames = Vec::with_capacity(frame_count as usize);
+        let mut frames: Vec<FrameSync> = Vec::with_capacity(frame_count as usize);
         for cmd in cmd_buffers {
             let in_flight = match gpu.device.create_fence(
                 &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED),
@@ -650,11 +650,11 @@ fn upload_rgba8_to_image(
             )];
             let cmd = gpu.begin_single_time()?;
             gpu.device.cmd_pipeline_barrier2(
-                cmd,
+                *cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&to_copy),
             );
             gpu.device.cmd_copy_buffer_to_image(
-                cmd,
+                *cmd,
                 staging.raw,
                 image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -677,7 +677,7 @@ fn upload_rgba8_to_image(
                     })],
             );
             gpu.device.cmd_pipeline_barrier2(
-                cmd,
+                *cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&to_shader_read),
             );
             gpu.end_single_time(cmd)
@@ -2853,11 +2853,11 @@ impl Renderer {
             )];
             let cmd = self.gpu.begin_single_time()?;
             device.cmd_pipeline_barrier2(
-                cmd,
+                *cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&barrier),
             );
             device.cmd_copy_image_to_buffer(
-                cmd,
+                *cmd,
                 self.target.color,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 self.staging.raw,
@@ -4073,11 +4073,11 @@ mod tests {
             )];
             let cmd = renderer.gpu.begin_single_time()?;
             device.cmd_pipeline_barrier2(
-                cmd,
+                *cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&barrier),
             );
             device.cmd_copy_image_to_buffer(
-                cmd,
+                *cmd,
                 image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 renderer.staging.raw,
@@ -4318,7 +4318,7 @@ mod tests {
         let linear = ManagedExternalTextureDesc::new(4, 3, false);
         assert_eq!(linear.vk_format(), vk::Format::R8G8B8A8_UNORM);
         assert_eq!(linear.expected_byte_len().unwrap(), 48);
-        assert_eq!(linear.validate_rgba(&vec![0u8; 48]).unwrap(), 48);
+        assert_eq!(linear.validate_rgba(&[0u8; 48]).unwrap(), 48);
 
         let srgb = ManagedExternalTextureDesc::new(2, 2, true);
         assert_eq!(srgb.vk_format(), vk::Format::R8G8B8A8_SRGB);
@@ -4336,11 +4336,11 @@ mod tests {
 
         // 字节长度不足或超出均必须返回 InvalidArgument。
         assert!(matches!(
-            linear.validate_rgba(&vec![0u8; 47]),
+            linear.validate_rgba(&[0u8; 47]),
             Err(GpuError::InvalidArgument(_))
         ));
         assert!(matches!(
-            linear.validate_rgba(&vec![0u8; 49]),
+            linear.validate_rgba(&[0u8; 49]),
             Err(GpuError::InvalidArgument(_))
         ));
 
@@ -4464,10 +4464,8 @@ mod tests {
             Err(GpuError::InvalidArgument(_))
         ));
         assert!(matches!(
-            renderer.upload_external_rgba8(
-                ManagedExternalTextureDesc::new(2, 2, false),
-                &[0u8; 12]
-            ),
+            renderer
+                .upload_external_rgba8(ManagedExternalTextureDesc::new(2, 2, false), &[0u8; 12]),
             Err(GpuError::InvalidArgument(_))
         ));
         assert!(matches!(

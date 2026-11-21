@@ -105,7 +105,6 @@ impl OverlayManager {
         }
     }
 
-
     /// 查询指定浮层节点是否已被用户交互（点击外部 / `Esc` / 显式关闭）关闭。
     #[must_use]
     pub fn is_dismissed(&self, node: u64) -> bool {

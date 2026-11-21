@@ -118,6 +118,7 @@ pub struct Window {
     hwnd: isize,
     hinstance: isize,
     decorated: bool,
+    popup_id: Option<u64>,
     cursor: Arc<AtomicU8>,
     ime_allowed: Cell<bool>,
     redraw_requested: Arc<AtomicBool>,
@@ -137,11 +138,31 @@ impl Window {
             hwnd,
             hinstance,
             decorated,
+            popup_id: None,
             cursor,
             ime_allowed: Cell::new(false),
             redraw_requested,
             destroyed,
         }
+    }
+
+    /// 将当前窗口标记为指定业务浮层 ID 对应的原生弹出窗宿主。
+    #[must_use]
+    pub(crate) fn with_popup_id(mut self, popup_id: u64) -> Self {
+        self.popup_id = Some(popup_id);
+        self
+    }
+
+    /// 当前窗口是否为无激活越界原生弹出窗。
+    #[must_use]
+    pub fn is_popup(&self) -> bool {
+        self.popup_id.is_some()
+    }
+
+    /// 若当前窗口为原生弹出窗，返回其绑定的业务浮层 ID。
+    #[must_use]
+    pub fn popup_id(&self) -> Option<u64> {
+        self.popup_id
     }
 
     /// 返回窗口唯一标识。

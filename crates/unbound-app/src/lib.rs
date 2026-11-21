@@ -1307,10 +1307,6 @@ impl AppContext {
     pub fn take_action<A: Send + Sync + 'static>(&self, key: u64) -> Option<A> {
         self.widget_state.borrow_mut().remove_state::<A>(key)
     }
-}
-
-fn millis(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 
     /// 排入一条待窗口运行器执行的窗口控制命令。
     pub fn push_window_command(&mut self, command: WindowCommand) {
@@ -1343,6 +1339,10 @@ fn millis(duration: Duration) -> u64 {
         self.pending_window_commands
             .push(WindowCommand::CloseWindow(id));
     }
+}
+
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// `view` 构建场景期间可用的不可变上下文。
@@ -2195,18 +2195,15 @@ impl<'a> ViewBuilder<'a> {
             WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
                 .then_some(Vec2::new(img.rect.width(), img.rect.height())),
             WidgetSpec::ExternalImage { size, .. } => Some(*size),
-            WidgetSpec::TreeView { desc, .. } => {
-                (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
-                    .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
-            }
-            WidgetSpec::AddressBar { desc, .. } => {
-                (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
-                    .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
-            }
-            WidgetSpec::Minimap { desc, .. } => {
-                (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
-                    .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
-            }
+            WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
+                || desc.rect.height() > 0.0)
+                .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
+            WidgetSpec::AddressBar { desc, .. } => (desc.rect.width() > 0.0
+                || desc.rect.height() > 0.0)
+                .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
+            WidgetSpec::Minimap { desc, .. } => (desc.rect.width() > 0.0
+                || desc.rect.height() > 0.0)
+                .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
             WidgetSpec::Popover { desc, .. } => Some(desc.size),
             WidgetSpec::ContextMenu { desc, .. } => {
                 Some(Vec2::new(desc.rect.width(), desc.rect.height()))
@@ -2606,11 +2603,9 @@ impl<'a> ViewBuilder<'a> {
         self.add_with_layout(key, layout, desc)
     }
 
-    /// 声明式 Showcase 风格内凹舞台容器（`radius = 10.0`, `SURFACE_SUNKEN`, `OUTLINE`）。
-
     /// 声明式图像控件（支持图集层与异步资产中心解析）。
     pub fn image(&mut self, key: u64, desc: unbound_widgets::ImageDesc) -> NodeId {
-        let mut node_desc = RawNodeDesc::leaf();
+        let mut node_desc = RawNodeDesc::container();
         if desc.rect.width() > 0.0 {
             node_desc = node_desc.width(Dim::px(desc.rect.width()));
         }
@@ -2628,8 +2623,12 @@ impl<'a> ViewBuilder<'a> {
         size: Vec2,
         fit: unbound_widgets::ObjectFit,
     ) -> NodeId {
-        let node_desc = RawNodeDesc::leaf().size(size.x.max(0.0), size.y.max(0.0));
-        self.widget(key, node_desc, WidgetSpec::ExternalImage { handle, size, fit })
+        let node_desc = RawNodeDesc::container().size(size.x.max(0.0), size.y.max(0.0));
+        self.widget(
+            key,
+            node_desc,
+            WidgetSpec::ExternalImage { handle, size, fit },
+        )
     }
 
     /// 声明式虚拟树形视图控件。
@@ -2653,7 +2652,7 @@ impl<'a> ViewBuilder<'a> {
                 (row, selected)
             })
             .collect();
-        let mut node_desc = RawNodeDesc::leaf();
+        let mut node_desc = RawNodeDesc::container();
         if desc.rect.width() > 0.0 && desc.rect.height() > 0.0 {
             node_desc = node_desc.size(desc.rect.width(), desc.rect.height());
         }
@@ -2667,7 +2666,7 @@ impl<'a> ViewBuilder<'a> {
         desc: unbound_widgets::AddressBarDesc,
         state: &unbound_widgets::AddressBarState,
     ) -> NodeId {
-        let mut node_desc = RawNodeDesc::leaf();
+        let mut node_desc = RawNodeDesc::container();
         if desc.rect.width() > 0.0 {
             node_desc = node_desc.width(Dim::px(desc.rect.width()));
         }
@@ -2686,9 +2685,9 @@ impl<'a> ViewBuilder<'a> {
 
     /// 声明式停靠面板树控件。
     pub fn dock(&mut self, key: u64, state: &unbound_widgets::DockState) -> NodeId {
-        let node_desc = RawNodeDesc::leaf()
-            .width(Dim::fr(1.0))
-            .height(Dim::fr(1.0));
+        let node_desc = RawNodeDesc::container()
+            .width(Dim::percent(100.0))
+            .height(Dim::percent(100.0));
         self.widget(
             key,
             node_desc,
@@ -2705,7 +2704,7 @@ impl<'a> ViewBuilder<'a> {
         desc: unbound_widgets::MinimapDesc,
         items: &[unbound_widgets::MinimapItem],
     ) -> NodeId {
-        let mut node_desc = RawNodeDesc::leaf();
+        let mut node_desc = RawNodeDesc::container();
         if desc.rect.width() > 0.0 && desc.rect.height() > 0.0 {
             node_desc = node_desc.size(desc.rect.width(), desc.rect.height());
         }
@@ -2802,9 +2801,12 @@ impl<'a> ViewBuilder<'a> {
         );
         self.overlay_layer(key, entry, |ov| {
             let bg_key = mix_key(effective_key, 0x504F_5042);
-            let bg_desc = RawNodeDesc::leaf()
-                .absolute()
-                .bounds(0.0, 0.0, bounds.width().max(1.0), bounds.height().max(1.0));
+            let bg_desc = RawNodeDesc::container().absolute().bounds(
+                0.0,
+                0.0,
+                bounds.width().max(1.0),
+                bounds.height().max(1.0),
+            );
             ov.widget(
                 bg_key,
                 bg_desc,
@@ -2840,7 +2842,7 @@ impl<'a> ViewBuilder<'a> {
         let anchor_key = anchor.unwrap_or(0);
         self.overlay_layer(key, entry, |ov| {
             let menu_key = mix_key(effective_key, 0x4354_584D);
-            let menu_node_desc = RawNodeDesc::leaf().absolute().bounds(
+            let menu_node_desc = RawNodeDesc::container().absolute().bounds(
                 0.0,
                 0.0,
                 placed_desc.rect.width().max(1.0),
@@ -2888,7 +2890,7 @@ impl<'a> ViewBuilder<'a> {
         let state_snapshot = state.clone();
         self.overlay_layer(key, entry, |ov| {
             let cp_key = mix_key(effective_key, 0x434D_4450);
-            let cp_node_desc = RawNodeDesc::leaf().absolute().bounds(
+            let cp_node_desc = RawNodeDesc::container().absolute().bounds(
                 0.0,
                 0.0,
                 desc.rect.width().max(1.0),
@@ -2928,13 +2930,14 @@ impl<'a> ViewBuilder<'a> {
             .max(0.0);
         let window = list.window(scroll_y, viewport_rect.height(), overscan);
 
-        let desc = RawNodeDesc::container()
-            .width(Dim::fr(1.0))
-            .height(Dim::fr(1.0))
+        let mut desc = RawNodeDesc::container()
+            .width(Dim::percent(100.0))
+            .height(Dim::percent(100.0))
             .column()
             .flags(NodeFlags::CLIP | NodeFlags::SCROLL_Y);
-        let (_, scroll_node) =
-            self.reconcile_node(key, desc, core::panic::Location::caller());
+        // 满高容器在纵向父容器里必须禁止收缩，否则同层还有其它满高兄弟时会被压扁。
+        desc.flex_shrink = 0.0;
+        let (_, scroll_node) = self.reconcile_node(key, desc, core::panic::Location::caller());
         self.declare_semantic(key, Role::List, "VirtualList");
 
         let parent_saved = core::mem::replace(&mut self.parent, scroll_node);
@@ -2966,15 +2969,12 @@ impl<'a> ViewBuilder<'a> {
             let h = list.height(idx);
             let item_rect = Rect::new(0.0, y, viewport_rect.width(), h);
             let item_key = mix_key(effective_key, idx as u64);
-            let item_desc = RawNodeDesc::container()
-                .column()
-                .absolute()
-                .bounds(
-                    item_rect.origin.x,
-                    item_rect.origin.y,
-                    item_rect.width(),
-                    item_rect.height(),
-                );
+            let item_desc = RawNodeDesc::container().column().absolute().bounds(
+                item_rect.origin.x,
+                item_rect.origin.y,
+                item_rect.width(),
+                item_rect.height(),
+            );
             self.container(item_key, item_desc, |row_view| {
                 build_item(row_view, idx, item_rect);
             });
@@ -3019,9 +3019,8 @@ impl<'a> ViewBuilder<'a> {
 
         let cols = desc.columns.max(1);
         let gap = desc.gap.max(0.0);
-        let col_w =
-            ((viewport_rect.width() - gap * (cols.saturating_sub(1) as f32)) / cols as f32)
-                .max(1.0);
+        let col_w = ((viewport_rect.width() - gap * (cols.saturating_sub(1) as f32)) / cols as f32)
+            .max(1.0);
         let mut col_heights = vec![0.0f32; cols];
         let overscan = overscan.max(0.0);
         let view_top = (scroll_y - overscan).max(0.0);
@@ -3061,7 +3060,9 @@ impl<'a> ViewBuilder<'a> {
         if desc.rect.width() > 0.0 && desc.rect.height() > 0.0 {
             container_desc = container_desc.size(desc.rect.width(), desc.rect.height());
         } else {
-            container_desc = container_desc.width(Dim::fr(1.0)).height(Dim::fr(1.0));
+            container_desc = container_desc
+                .width(Dim::percent(100.0))
+                .height(Dim::percent(100.0));
         }
         let (_, scroll_node) =
             self.reconcile_node(key, container_desc, core::panic::Location::caller());
@@ -3519,8 +3520,10 @@ impl<'a> ViewBuilder<'a> {
         build: impl FnOnce(&mut Self),
     ) -> NodeId {
         let mut desc = RawNodeDesc::container()
-            .width(Dim::fr(1.0))
-            .height(Dim::fr(1.0));
+            .width(Dim::percent(100.0))
+            .height(Dim::percent(100.0));
+        // 满高容器在纵向父容器里必须禁止收缩，避免被同层的其它满高兄弟压扁。
+        desc.flex_shrink = 0.0;
         if vertical {
             desc = desc.column().flags(NodeFlags::CLIP | NodeFlags::SCROLL_Y);
         } else {
@@ -5523,14 +5526,12 @@ impl<A: Application> AppRuntime<A> {
 
     /// 请求多窗口协调器打开一个辅助窗口。
     pub fn open_window(&mut self, config: unbound_platform::WindowConfig) {
-        self.window_commands
-            .push(WindowCommand::OpenWindow(config));
+        self.window_commands.push(WindowCommand::OpenWindow(config));
     }
 
     /// 请求多窗口协调器关闭指定标识的窗口。
     pub fn close_window(&mut self, id: unbound_platform::WindowId) {
-        self.window_commands
-            .push(WindowCommand::CloseWindow(id));
+        self.window_commands.push(WindowCommand::CloseWindow(id));
     }
 
     /// 同步宿主窗口客户区在屏幕物理坐标系下的原点与窗口标识，用于换算越界原生弹出窗位置。
@@ -5672,11 +5673,9 @@ impl<A: Application> AppRuntime<A> {
             if b.width() <= 0.0 || b.height() <= 0.0 {
                 continue;
             }
-            let overflows = b.origin.x < 0.0
-                || b.origin.y < 0.0
-                || b.max().x > vp_w
-                || b.max().y > vp_h;
-            if !overflows {
+            let overflows =
+                b.origin.x < 0.0 || b.origin.y < 0.0 || b.max().x > vp_w || b.max().y > vp_h;
+            if !overflows && !entry.prefer_native_popup {
                 continue;
             }
             let screen_rect = unbound_platform::ScreenRect::new(
@@ -5685,7 +5684,8 @@ impl<A: Application> AppRuntime<A> {
                 (b.width() * scale).round().max(1.0) as u32,
                 (b.height() * scale).round().max(1.0) as u32,
             );
-            let config = unbound_platform::PopupWindowConfig::new(self.window_owner_id, screen_rect);
+            let config =
+                unbound_platform::PopupWindowConfig::new(self.window_owner_id, screen_rect);
             desired.insert(entry.node, config);
         }
 
@@ -5777,18 +5777,15 @@ impl<A: Application> AppRuntime<A> {
                     WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
                         .then_some(Vec2::new(img.rect.width(), img.rect.height())),
                     WidgetSpec::ExternalImage { size, .. } => Some(*size),
-                    WidgetSpec::TreeView { desc, .. } => {
-                        (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
-                            .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
-                    }
-                    WidgetSpec::AddressBar { desc, .. } => {
-                        (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
-                            .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
-                    }
-                    WidgetSpec::Minimap { desc, .. } => {
-                        (desc.rect.width() > 0.0 || desc.rect.height() > 0.0)
-                            .then_some(Vec2::new(desc.rect.width(), desc.rect.height()))
-                    }
+                    WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
+                        || desc.rect.height() > 0.0)
+                        .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
+                    WidgetSpec::AddressBar { desc, .. } => (desc.rect.width() > 0.0
+                        || desc.rect.height() > 0.0)
+                        .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
+                    WidgetSpec::Minimap { desc, .. } => (desc.rect.width() > 0.0
+                        || desc.rect.height() > 0.0)
+                        .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
                     WidgetSpec::Popover { desc, .. } => Some(desc.size),
                     WidgetSpec::ContextMenu { desc, .. } => {
                         Some(Vec2::new(desc.rect.width(), desc.rect.height()))
@@ -6009,18 +6006,17 @@ impl<A: Application> AppRuntime<A> {
                     } else {
                         Rect::new(rect.origin.x, rect.origin.y, size.x, size.y)
                     };
-                    let mut desc = if let Some((slot, w, h)) =
-                        self.asset_hub.external_texture_slot(*handle)
-                    {
-                        unbound_widgets::ImageDesc::new(
-                            draw_rect,
-                            Vec2::new(w as f32, h as f32),
-                            slot,
-                        )
-                    } else {
-                        unbound_widgets::ImageDesc::new(draw_rect, *size, 0)
-                            .with_asset(unbound_asset::AssetId(0))
-                    };
+                    let mut desc =
+                        if let Some((slot, w, h)) = self.asset_hub.external_texture_slot(*handle) {
+                            unbound_widgets::ImageDesc::new(
+                                draw_rect,
+                                Vec2::new(w as f32, h as f32),
+                                slot,
+                            )
+                        } else {
+                            unbound_widgets::ImageDesc::new(draw_rect, *size, 0)
+                                .with_asset(unbound_asset::AssetId(0))
+                        };
                     desc.fit = *fit;
                     desc.z = entry.z_base.saturating_add(desc.z);
                     let out = unbound_widgets::emit_image_with_assets(
@@ -6056,8 +6052,8 @@ impl<A: Application> AppRuntime<A> {
                             label_rect,
                             13.0,
                             400,
-                            unbound_widgets::AlignX::Start,
-                            unbound_widgets::AlignY::Center,
+                            unbound_widgets::AlignX::Left,
+                            unbound_widgets::AlignY::Middle,
                         );
                         let row_out = unbound_widgets::emit_tree_row(
                             &desc, row, *selected, state, &label, tokens,
@@ -6090,8 +6086,8 @@ impl<A: Application> AppRuntime<A> {
                         text_rect,
                         13.0,
                         400,
-                        unbound_widgets::AlignX::Start,
-                        unbound_widgets::AlignY::Center,
+                        unbound_widgets::AlignX::Left,
+                        unbound_widgets::AlignY::Middle,
                     );
                     let out = unbound_widgets::emit_address_bar(
                         entry.key, &desc, bar_state, state, &glyphs,
@@ -6124,8 +6120,8 @@ impl<A: Application> AppRuntime<A> {
                                 tab_rect,
                                 12.0,
                                 500,
-                                unbound_widgets::AlignX::Start,
-                                unbound_widgets::AlignY::Center,
+                                unbound_widgets::AlignX::Left,
+                                unbound_widgets::AlignY::Middle,
                             );
                             let tab_out = unbound_widgets::emit_dock_tab(
                                 pane,
@@ -6140,14 +6136,17 @@ impl<A: Application> AppRuntime<A> {
                         }
                     }
                     if !root_a11y_pushed {
-                        let mut out = WidgetOutput::default();
-                        out.a11y = Some(A11yNode::new(Role::Region, "Dock", dock_rect));
+                        let out = WidgetOutput {
+                            a11y: Some(A11yNode::new(Role::Region, "Dock", dock_rect)),
+                            ..WidgetOutput::default()
+                        };
                         self.collector.push(entry.key, out);
                     }
                     if let Some(hover) = dock_state.hover {
                         let preview =
                             unbound_widgets::emit_dock_preview(hover, tokens, z.saturating_add(20));
-                        self.collector.push(mix_key(entry.key, 0x444F_434B), preview);
+                        self.collector
+                            .push(mix_key(entry.key, 0x444F_434B), preview);
                     }
                 }
                 WidgetSpec::Minimap { desc, items } => {
@@ -6175,7 +6174,8 @@ impl<A: Application> AppRuntime<A> {
                 WidgetSpec::Popover { anchor_key, desc } => {
                     let mut desc = desc.clone();
                     desc.z = entry.z_base.saturating_add(desc.z.min(100));
-                    let mut pop = unbound_widgets::emit_popover(entry.key, *anchor_key, &desc, state);
+                    let mut pop =
+                        unbound_widgets::emit_popover(entry.key, *anchor_key, &desc, state);
                     if pop.output.a11y.is_none() {
                         pop.output.a11y = Some(A11yNode::new(Role::Dialog, "Popover", desc.rect()));
                     }
@@ -6184,7 +6184,7 @@ impl<A: Application> AppRuntime<A> {
                         hit.z = hit.z.saturating_add(u32::from(entry.z_base));
                     }
                     if let Some(backdrop) = pop.backdrop {
-                        self.collector.push_backdrop(backdrop);
+                        self.collector.backdrops.push(backdrop);
                     }
                     self.collector.push(entry.key, pop.output);
                 }
@@ -6236,20 +6236,19 @@ impl<A: Application> AppRuntime<A> {
                                 row_rect,
                                 13.0,
                                 400,
-                                unbound_widgets::AlignX::Start,
-                                unbound_widgets::AlignY::Center,
+                                unbound_widgets::AlignX::Left,
+                                unbound_widgets::AlignY::Middle,
                             );
-                            let shortcut_quads = if cmd.shortcut.is_empty() {
-                                Vec::new()
-                            } else {
-                                text_ctx.shape_line(
-                                    &cmd.shortcut,
+                            let shortcut_quads = match cmd.shortcut.as_deref() {
+                                Some(shortcut) if !shortcut.is_empty() => text_ctx.shape_line(
+                                    shortcut,
                                     row_rect,
                                     11.0,
                                     400,
-                                    unbound_widgets::AlignX::End,
-                                    unbound_widgets::AlignY::Center,
-                                )
+                                    unbound_widgets::AlignX::Right,
+                                    unbound_widgets::AlignY::Middle,
+                                ),
+                                _ => Vec::new(),
                             };
                             let row_out = unbound_widgets::emit_command_row(
                                 &desc,
@@ -7238,10 +7237,10 @@ mod tests {
         impl Application for EmptyApp {
             type State = ();
             fn init(&mut self, _: &mut AppContext) {}
-            fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
-                DirtyFlags::NONE
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
             }
-            fn view(&self, _: &(), _: &mut ViewBuilder<'_>) {}
+            fn view(&mut self, _: &(), _: &mut ViewBuilder<'_>) {}
         }
 
         let mut rt = AppRuntime::new(EmptyApp, Vec2::new(640.0, 480.0));
@@ -7257,8 +7256,12 @@ mod tests {
             ExternalTextureOp::Upload { handle: h, width: 2, height: 2, srgb: true, .. } if h == handle
         ));
 
-        rt.asset_hub_mut().commit_external_texture_slot(handle, Ok(50));
-        assert_eq!(rt.asset_hub().external_texture_slot(handle), Some((50, 2, 2)));
+        rt.asset_hub_mut()
+            .commit_external_texture_slot(handle, Ok(50));
+        assert_eq!(
+            rt.asset_hub().external_texture_slot(handle),
+            Some((50, 2, 2))
+        );
 
         assert!(rt
             .asset_hub_mut()
@@ -7298,10 +7301,10 @@ mod tests {
         impl Application for DesktopWidgetsApp {
             type State = ();
             fn init(&mut self, _: &mut AppContext) {}
-            fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
-                DirtyFlags::NONE
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
             }
-            fn view(&self, _: &(), v: &mut ViewBuilder<'_>) {
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
                 v.column(1, |col| {
                     col.image(
                         10,
@@ -7336,7 +7339,10 @@ mod tests {
                             token: unbound_theme::Token::PRIMARY,
                         }],
                     );
-                    col.button(16, ButtonDesc::new(Rect::new(10.0, 10.0, 80.0, 32.0), "Anchor"));
+                    col.button(
+                        16,
+                        ButtonDesc::new(Rect::new(10.0, 10.0, 80.0, 32.0), "Anchor"),
+                    );
                     col.popover(
                         17,
                         16,
@@ -7346,7 +7352,7 @@ mod tests {
                             Vec2::new(160.0, 90.0),
                         ),
                         |p| {
-                            p.text_primary(18, "Popover Body", 13.0);
+                            p.text_primary(18, "Popover Body", 13.0, 400);
                         },
                     );
                     col.context_menu(
@@ -7391,15 +7397,15 @@ mod tests {
             palette_state,
         };
         let mut rt = AppRuntime::new(app, Vec2::new(1200.0, 800.0));
-        let ext_h = rt
-            .asset_hub_mut()
-            .upload_external_rgba8(16, 16, true, vec![255u8; 16 * 16 * 4]);
+        let ext_h =
+            rt.asset_hub_mut()
+                .upload_external_rgba8(16, 16, true, vec![255u8; 16 * 16 * 4]);
         rt.application_mut().ext_handle = Some(ext_h);
         rt.invalidate();
 
         let report_pending = rt.frame(0.0);
         assert!(report_pending.primitives > 0);
-        assert!(!rt.semantics().nodes().is_empty());
+        assert!(!rt.semantics().is_empty());
         let pending_rect = rt.widget_rect(11).expect("external image laid out");
         assert_eq!(pending_rect.size, Vec2::new(80.0, 60.0));
         assert!(!rt
@@ -7408,7 +7414,8 @@ mod tests {
             .iter()
             .any(|p| p.border_token_or_tex == 55));
 
-        rt.asset_hub_mut().commit_external_texture_slot(ext_h, Ok(55));
+        rt.asset_hub_mut()
+            .commit_external_texture_slot(ext_h, Ok(55));
         let _ = rt.frame(0.0);
         let ready_rect = rt.widget_rect(11).expect("external image still laid out");
         assert_eq!(ready_rect.size, pending_rect.size);
@@ -7436,10 +7443,10 @@ mod tests {
         impl Application for VirtApp {
             type State = ();
             fn init(&mut self, _: &mut AppContext) {}
-            fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
-                DirtyFlags::NONE
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
             }
-            fn view(&self, _: &(), v: &mut ViewBuilder<'_>) {
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
                 self.list_calls.store(0, Ordering::SeqCst);
                 self.masonry_calls.store(0, Ordering::SeqCst);
                 self.last_list_first.store(usize::MAX, Ordering::SeqCst);
@@ -7515,12 +7522,15 @@ mod tests {
         impl Application for OverlayApp {
             type State = ();
             fn init(&mut self, _: &mut AppContext) {}
-            fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
-                DirtyFlags::NONE
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
             }
-            fn view(&self, _: &(), v: &mut ViewBuilder<'_>) {
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
                 if self.show_anchor {
-                    v.button(50, ButtonDesc::new(Rect::new(20.0, 20.0, 80.0, 30.0), "Anchor"));
+                    v.button(
+                        50,
+                        ButtonDesc::new(Rect::new(20.0, 20.0, 80.0, 30.0), "Anchor"),
+                    );
                 }
                 v.popover(
                     51,
@@ -7588,19 +7598,24 @@ mod tests {
         impl Application for DragApp {
             type State = ();
             fn init(&mut self, _: &mut AppContext) {}
-            fn reduce(&mut self, _: &mut (), event: &AppEvent, _: &mut AppContext) -> DirtyFlags {
+            fn reduce(&mut self, _: &mut (), event: AppEvent, _: &mut AppContext) -> EventOutcome {
                 if let AppEvent::ExternalFileDragFinished(outcome) = event {
-                    self.outcomes.push(*outcome);
-                    return DirtyFlags::PAINT;
+                    self.outcomes.push(outcome);
+                    return EventOutcome::new(DirtyFlags::PAINT);
                 }
-                DirtyFlags::NONE
+                EventOutcome::new(DirtyFlags::NONE)
             }
-            fn view(&self, _: &(), v: &mut ViewBuilder<'_>) {
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
                 v.button(1, ButtonDesc::new(Rect::new(0.0, 0.0, 120.0, 40.0), "Drag"));
             }
         }
 
-        let mut rt = AppRuntime::new(DragApp { outcomes: Vec::new() }, Vec2::new(400.0, 300.0));
+        let mut rt = AppRuntime::new(
+            DragApp {
+                outcomes: Vec::new(),
+            },
+            Vec2::new(400.0, 300.0),
+        );
         let _ = rt.frame(0.0);
         rt.pointer_down(Vec2::new(20.0, 20.0), PointerButton::Left);
         assert!(rt.router().pointer().pressed().is_some());
@@ -7627,11 +7642,14 @@ mod tests {
         impl Application for PopupApp {
             type State = ();
             fn init(&mut self, _: &mut AppContext) {}
-            fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
-                DirtyFlags::NONE
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
             }
-            fn view(&self, _: &(), v: &mut ViewBuilder<'_>) {
-                v.button(10, ButtonDesc::new(Rect::new(10.0, 10.0, 80.0, 30.0), "Anchor"));
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.button(
+                    10,
+                    ButtonDesc::new(Rect::new(10.0, 10.0, 80.0, 30.0), "Anchor"),
+                );
                 if let Some(bounds) = self.bounds {
                     v.overlay_layer(20, OverlayEntry::popover(20, 10, bounds), |o| {
                         o.spacer(21);
@@ -7673,5 +7691,45 @@ mod tests {
             rt.drain_window_commands(),
             vec![WindowCommand::CloseNativePopup { id: 20 }]
         );
+    }
+
+    #[test]
+    fn prefer_native_popup_triggers_sync_even_when_overlay_is_within_viewport() {
+        use unbound_platform::{ScreenRect, WindowId};
+        use unbound_widgets::overlay::OverlayEntry;
+
+        struct PreferNativeApp;
+        impl Application for PreferNativeApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.button(
+                    10,
+                    ButtonDesc::new(Rect::new(10.0, 10.0, 80.0, 30.0), "Anchor"),
+                );
+                let entry = OverlayEntry::popover(20, 10, Rect::new(100.0, 100.0, 150.0, 80.0))
+                    .with_prefer_native_popup(true);
+                v.overlay_layer(20, entry, |o| {
+                    o.spacer(21);
+                });
+            }
+        }
+
+        let mut rt = AppRuntime::new(PreferNativeApp, Vec2::new(800.0, 600.0));
+        rt.set_window_screen_origin((50, 40), WindowId(9));
+        let _ = rt.frame(0.0);
+        let cmds = rt.drain_window_commands();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            WindowCommand::SyncNativePopup { id, config } => {
+                assert_eq!(*id, 20);
+                assert_eq!(config.owner, WindowId(9));
+                assert_eq!(config.screen_rect, ScreenRect::new(150, 140, 150, 80));
+            }
+            other => panic!("expected SyncNativePopup, got {other:?}"),
+        }
     }
 }

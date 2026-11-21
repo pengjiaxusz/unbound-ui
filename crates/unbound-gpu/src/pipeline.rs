@@ -933,11 +933,11 @@ unsafe fn create_dummy_texture(gpu: &Gpu, format: vk::Format) -> Result<DummyTex
         );
     let barriers = [barrier];
     device.cmd_pipeline_barrier2(
-        cmd,
+        *cmd,
         &vk::DependencyInfo::default().image_memory_barriers(&barriers),
     );
     device.cmd_clear_color_image(
-        cmd,
+        *cmd,
         image,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         &vk::ClearColorValue {
@@ -964,7 +964,7 @@ unsafe fn create_dummy_texture(gpu: &Gpu, format: vk::Format) -> Result<DummyTex
         );
     let read_barriers = [to_read];
     device.cmd_pipeline_barrier2(
-        cmd,
+        *cmd,
         &vk::DependencyInfo::default().image_memory_barriers(&read_barriers),
     );
     gpu.end_single_time(cmd)?;

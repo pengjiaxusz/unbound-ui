@@ -228,9 +228,9 @@ mod win32 {
 
     use core::mem::ManuallyDrop;
 
-    use ::windows::core::{implement, Error, Ref, HRESULT};
+    use ::windows::core::{implement, Error, Ref, BOOL, HRESULT};
     use ::windows::Win32::Foundation::{
-        GlobalFree, BOOL, DATA_S_SAMEFORMATETC, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP,
+        GlobalFree, DATA_S_SAMEFORMATETC, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP,
         DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC, E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY,
         OLE_E_ADVISENOTSUPPORTED, RPC_E_CHANGED_MODE, S_OK,
     };
@@ -244,7 +244,7 @@ mod win32 {
     use ::windows::Win32::System::Ole::{
         DoDragDrop, IDropSource, IDropSource_Impl, OleInitialize, OleUninitialize, DROPEFFECT,
     };
-    use ::windows::Win32::System::SystemServices::{MODIFIERKEYS_FLAGS, MK_LBUTTON, MK_RBUTTON};
+    use ::windows::Win32::System::SystemServices::{MK_LBUTTON, MK_RBUTTON, MODIFIERKEYS_FLAGS};
     use ::windows::Win32::UI::Shell::SHCreateStdEnumFmtEtc;
 
     use super::{effect_from_win32_mask, OutboundFileDragOutcome};
@@ -347,9 +347,8 @@ mod win32 {
             // SAFETY: 分配可移动 `HGLOBAL` 并将 `CF_HDROP` 字节拷贝进去；返回 `STGMEDIUM`
             // 时将 `pUnkForRelease` 置为 `None`，由接收方通过 `ReleaseStgMedium` 负责释放。
             unsafe {
-                let hglobal =
-                    GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, self.hdrop_payload.len())
-                        .map_err(|_| Error::from(E_OUTOFMEMORY))?;
+                let hglobal = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, self.hdrop_payload.len())
+                    .map_err(|_| Error::from(E_OUTOFMEMORY))?;
                 let dst = GlobalLock(hglobal).cast::<u8>();
                 if dst.is_null() {
                     let _ = GlobalFree(Some(hglobal));
@@ -487,7 +486,7 @@ mod tests {
     fn build_cf_hdrop_payload_encodes_header_and_double_nul_utf16le() {
         let paths = vec![
             PathBuf::from("C:\\Projects\\My Assets\\sample file.png"),
-            PathBuf::from("D:\\素材目录\\示例图片 01.webp"), // lang-ok
+            PathBuf::from("D:\\Archive\\sample image 01.webp"),
         ];
         let payload = build_cf_hdrop_payload(&paths).expect("valid payload");
 
@@ -526,7 +525,7 @@ mod tests {
             decoded,
             vec![
                 "C:\\Projects\\My Assets\\sample file.png".to_string(),
-                "D:\\素材目录\\示例图片 01.webp".to_string(), // lang-ok
+                "D:\\Archive\\sample image 01.webp".to_string(),
             ]
         );
     }

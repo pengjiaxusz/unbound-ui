@@ -73,6 +73,11 @@ pub trait PlatformApp {
         None
     }
 
+    /// 排空本帧需要由平台显式关闭并销毁原生句柄的应用窗口 ID 列表。
+    fn take_window_close_requests(&mut self) -> Vec<crate::windows::WindowId> {
+        Vec::new()
+    }
+
     /// 排空本帧需要同步（创建或重定位）的越界原生弹出窗请求。
     fn take_popup_sync_requests(&mut self) -> Vec<(u64, crate::popup_host::PopupWindowConfig)> {
         Vec::new()
@@ -1534,7 +1539,9 @@ mod win32 {
     }
 
     /// 查询指定屏幕矩形所在显示器的工作区并按配置执行越界裁剪。
-    fn resolve_popup_rect(config: &crate::popup_host::PopupWindowConfig) -> crate::window::ScreenRect {
+    fn resolve_popup_rect(
+        config: &crate::popup_host::PopupWindowConfig,
+    ) -> crate::window::ScreenRect {
         if !config.clamp_to_work_area {
             return config.screen_rect;
         }
@@ -1565,6 +1572,7 @@ mod win32 {
         class_name: PCWSTR,
         hinstance: HINSTANCE,
         owner_hwnd: Option<HWND>,
+        popup_id: u64,
         config: &crate::popup_host::PopupWindowConfig,
     ) -> Result<WindowEntry, PlatformError> {
         let rect = resolve_popup_rect(config);
@@ -1625,7 +1633,8 @@ mod win32 {
             cursor,
             redraw_requested,
             destroyed,
-        );
+        )
+        .with_popup_id(popup_id);
         let a11y = Win32A11y::new(hwnd.0 as isize);
         let popup_win_cfg = WindowConfig {
             title: String::new(),
@@ -1761,7 +1770,7 @@ mod win32 {
         unsafe { RegisterClassExW(&wc) };
 
         let primary_entry = create_native_window(class_name, hinstance, &config)?;
-        let primary_id = primary_entry.window.id();
+        let mut primary_id = primary_entry.window.id();
         let primary_hwnd_atomic = Arc::new(AtomicIsize::new(primary_entry.window.hwnd()));
 
         let wake_target = Arc::clone(&primary_hwnd_atomic);
@@ -1854,9 +1863,8 @@ mod win32 {
                 for platform_event in events {
                     let now = Instant::now();
                     if matches!(platform_event, PlatformEvent::CloseRequested) {
-                        let is_primary = entry.window.id() == primary_id;
-                        let _ = app.event(&mut entry.state, &entry.window, platform_event);
-                        if is_primary {
+                        let flow = app.event(&mut entry.state, &entry.window, platform_event);
+                        if flow == Flow::Exit {
                             break 'main_loop;
                         }
                         closing_indices.push(index);
@@ -1887,11 +1895,9 @@ mod win32 {
                                 }
                             }
                             let now = Instant::now();
-                            for out in apply(
-                                &mut entry.state,
-                                &PlatformEvent::PopupDismissed { id },
-                                now,
-                            ) {
+                            for out in
+                                apply(&mut entry.state, &PlatformEvent::PopupDismissed { id }, now)
+                            {
                                 if app.event(&mut entry.state, &entry.window, out) == Flow::Exit {
                                     break 'main_loop;
                                 }
@@ -1903,8 +1909,12 @@ mod win32 {
 
             // 派发所有原生弹出窗收到的指针/滚轮等平台事件。
             for (_, popup_entry) in &mut popup_windows {
-                let events: Vec<PlatformEvent> =
-                    popup_entry.user_data.events.borrow_mut().drain(..).collect();
+                let events: Vec<PlatformEvent> = popup_entry
+                    .user_data
+                    .events
+                    .borrow_mut()
+                    .drain(..)
+                    .collect();
                 for platform_event in events {
                     let now = Instant::now();
                     for out in apply(&mut popup_entry.state, &platform_event, now) {
@@ -1918,6 +1928,7 @@ mod win32 {
 
             for index in closing_indices.into_iter().rev() {
                 let entry = windows.remove(index);
+                let closed_was_primary = entry.window.id() == primary_id;
                 let owner_id = crate::windows::WindowId(entry.window.hwnd() as u64);
                 for action in popup_registry.close_for_owner(owner_id) {
                     if let crate::popup_host::PopupSyncAction::Close { id, .. } = action {
@@ -1934,6 +1945,14 @@ mod win32 {
                 if !entry.window.is_destroyed() {
                     let _ = unsafe { DestroyWindow(entry.hwnd) };
                 }
+                if closed_was_primary {
+                    if let Some(next_primary) = windows.first() {
+                        primary_id = next_primary.window.id();
+                        primary_hwnd_atomic.store(next_primary.window.hwnd(), Ordering::Release);
+                    } else {
+                        primary_hwnd_atomic.store(0, Ordering::Release);
+                    }
+                }
             }
 
             if windows.is_empty() {
@@ -1941,8 +1960,7 @@ mod win32 {
             }
 
             let probe_now = Instant::now();
-            if probe_now.saturating_duration_since(last_occlusion_probe)
-                >= OCCLUSION_PROBE_INTERVAL
+            if probe_now.saturating_duration_since(last_occlusion_probe) >= OCCLUSION_PROBE_INTERVAL
             {
                 last_occlusion_probe = probe_now;
                 for entry in &mut windows {
@@ -2001,12 +2019,17 @@ mod win32 {
                     crate::popup_host::PopupSyncAction::Create { id, config, .. } => {
                         let owner_hwnd = windows
                             .iter()
-                            .find(|w| crate::windows::WindowId(w.window.hwnd() as u64) == config.owner)
+                            .find(|w| {
+                                crate::windows::WindowId(w.window.hwnd() as u64) == config.owner
+                            })
                             .or_else(|| windows.first())
                             .map(|w| w.hwnd);
-                        if let Ok(mut popup_entry) =
-                            create_native_popup_window(class_name, hinstance, owner_hwnd, &config)
-                        {
+                        if let Ok(mut popup_entry) = create_native_popup_window(
+                            class_name, hinstance, owner_hwnd, id, &config,
+                        ) {
+                            let popup_win_id =
+                                crate::windows::WindowId(popup_entry.window.hwnd() as u64);
+                            let _ = popup_registry.bind_native_window(id, popup_win_id);
                             app.window_created(&mut popup_entry.state, &popup_entry.window);
                             popup_windows.push((id, popup_entry));
                         }
@@ -2040,9 +2063,51 @@ mod win32 {
                 windows.push(entry);
             }
 
+            // 响应应用侧显式关闭窗口请求，销毁对应原生 HWND 并级联回收其名下原生弹出窗。
+            for close_id in app.take_window_close_requests() {
+                if let Some(pos) = windows
+                    .iter()
+                    .position(|e| crate::windows::WindowId(e.window.hwnd() as u64) == close_id)
+                {
+                    let entry = windows.remove(pos);
+                    let closed_was_primary = entry.window.id() == primary_id;
+                    for action in popup_registry.close_for_owner(close_id) {
+                        if let crate::popup_host::PopupSyncAction::Close { id, .. } = action {
+                            if let Some(ppos) = popup_windows.iter().position(|(pid, _)| *pid == id)
+                            {
+                                let (_, popup_entry) = popup_windows.remove(ppos);
+                                app.window_closing(&popup_entry.window);
+                                if !popup_entry.window.is_destroyed() {
+                                    let _ = unsafe { DestroyWindow(popup_entry.hwnd) };
+                                }
+                            }
+                        }
+                    }
+                    app.window_closing(&entry.window);
+                    if !entry.window.is_destroyed() {
+                        let _ = unsafe { DestroyWindow(entry.hwnd) };
+                    }
+                    if closed_was_primary {
+                        if let Some(next_primary) = windows.first() {
+                            primary_id = next_primary.window.id();
+                            primary_hwnd_atomic
+                                .store(next_primary.window.hwnd(), Ordering::Release);
+                        } else {
+                            primary_hwnd_atomic.store(0, Ordering::Release);
+                        }
+                    }
+                }
+            }
+
             windows.retain(|entry| !entry.window.is_destroyed());
             if windows.is_empty() {
                 break;
+            }
+            if !windows.iter().any(|e| e.window.id() == primary_id) {
+                if let Some(next_primary) = windows.first() {
+                    primary_id = next_primary.window.id();
+                    primary_hwnd_atomic.store(next_primary.window.hwnd(), Ordering::Release);
+                }
             }
 
             let any_redraw = windows
@@ -2052,11 +2117,16 @@ mod win32 {
                 continue;
             }
 
-            let Some(primary) = windows.iter().find(|e| e.window.id() == primary_id) else {
-                break;
-            };
             let now = Instant::now();
-            let deadline = match (primary.state.pacer.next_wake(now), app.next_wake()) {
+            let any_active_animating = windows
+                .iter()
+                .any(|e| !e.state.pacer.is_suspended() && e.state.pacer.animating());
+            let platform_deadline = windows
+                .iter()
+                .filter(|e| !e.state.pacer.is_suspended())
+                .filter_map(|e| e.state.pacer.next_wake(now))
+                .min();
+            let deadline = match (platform_deadline, app.next_wake()) {
                 (Some(frame), Some(timer)) => Some(frame.min(timer)),
                 (frame, timer) => frame.or(timer),
             };
@@ -2068,9 +2138,7 @@ mod win32 {
                     }
                     wait.as_millis().min(u128::from(INFINITE_TIMEOUT - 1)) as u32
                 }
-                None if !primary.state.pacer.is_suspended() && primary.state.pacer.animating() => {
-                    continue
-                }
+                None if any_active_animating => continue,
                 None => INFINITE_TIMEOUT,
             };
 

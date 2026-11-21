@@ -520,6 +520,8 @@ pub struct OverlayEntry {
     /// 锚点是否已滚出其裁剪区域。被裁剪的锚点会隐藏浮层但不关闭它，
     /// 以便锚点滚回视图时重新显示。
     pub anchor_clipped: bool,
+    /// 是否显式请求使用原生弹出窗宿主（默认 `false`，仅在越出主窗口客户区时自动启用）。
+    pub prefer_native_popup: bool,
 }
 
 impl OverlayEntry {
@@ -533,6 +535,7 @@ impl OverlayEntry {
             bounds,
             focus_scope: Vec::new(),
             anchor_clipped: false,
+            prefer_native_popup: false,
         }
     }
 
@@ -546,6 +549,7 @@ impl OverlayEntry {
             bounds,
             focus_scope: Vec::new(),
             anchor_clipped: false,
+            prefer_native_popup: false,
         }
     }
 
@@ -559,6 +563,7 @@ impl OverlayEntry {
             bounds,
             focus_scope: Vec::new(),
             anchor_clipped: false,
+            prefer_native_popup: false,
         }
     }
 
@@ -572,6 +577,7 @@ impl OverlayEntry {
             bounds,
             focus_scope,
             anchor_clipped: false,
+            prefer_native_popup: false,
         }
     }
 
@@ -579,6 +585,13 @@ impl OverlayEntry {
     #[must_use]
     pub fn with_anchor_clipped(mut self, clipped: bool) -> Self {
         self.anchor_clipped = clipped;
+        self
+    }
+
+    /// 显式请求或取消使用原生弹出窗宿主（默认 `false`）。
+    #[must_use]
+    pub const fn with_prefer_native_popup(mut self, prefer: bool) -> Self {
+        self.prefer_native_popup = prefer;
         self
     }
 }

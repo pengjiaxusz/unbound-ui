@@ -450,30 +450,70 @@ impl LayoutEngine {
             }
         }
         // 第二阶段：在所有节点均已创建后挂接子节点。
+        //
+        // 只挂接本次遍历实际到达的节点：世界树的子链可能仍指向已释放的槽位，
+        // 而映射表要到第三阶段才清理，直接 `map.get` 会把死节点挂成 Taffy 子节点。
+        let live: std::collections::HashSet<NodeId> = order.iter().copied().collect();
         for id in &order {
             let Some(t) = self.map.get(id).copied() else {
                 continue;
             };
             let kids: Vec<taffy::NodeId> = world
                 .children(*id)
+                .filter(|c| live.contains(c))
                 .filter_map(|c| self.map.get(&c).copied())
                 .collect();
             let _ = self.taffy.set_children(t, &kids);
         }
         // 第三阶段：移除已离开世界树的节点。
         //
-        // `UiWorld::remove` 会释放槽位，但引擎此前会永久保留对应的 Taffy 节点、
-        // 映射表项与缓存矩形：长时间运行中反复创建和销毁组件会导致每移除一个节点
-        // 就泄漏一份上述数据。
+        // `UiWorld::remove` 会释放槽位，若不清理，引擎会永久保留对应的 Taffy 节点、
+        // 映射表项与缓存矩形：长时间运行中反复创建和销毁组件会持续泄漏。
         //
-        self.map.retain(|id, taffy_id| {
-            let alive = world.contains(*id);
-            if !alive {
-                let _ = self.taffy.remove(*taffy_id);
-                self.rects.remove(id);
+        // 但删除不能只做 `taffy.remove`：绝对定位子项被记录在包含块的
+        // `hoisted_children` 里，而 Taffy 只在该包含块重跑定位流程时才重建这份列表。
+        // 直接删节点会在列表里留下悬空键，下一次 `round_layout` 就抛
+        // `invalid SlotMap key`——虚拟列表滚动、浮层关闭等场景必然触发。
+        //
+        // 因此一旦检测到节点离开世界树，就整棵重建 Taffy 树：结构变更本身是低频事件，
+        // 重建一次性保证不再有指向已释放键的引用，也不会残留任何缓存矩形。
+        let dead: Vec<NodeId> = self
+            .map
+            .keys()
+            .filter(|id| !world.contains(**id))
+            .copied()
+            .collect();
+        if dead.is_empty() {
+            return;
+        }
+        for id in &dead {
+            if let Some(taffy_id) = self.map.remove(id) {
+                let _ = self.taffy.remove(taffy_id);
             }
-            alive
-        });
+            self.rects.remove(id);
+        }
+        self.taffy = taffy::TaffyTree::new();
+        self.map.clear();
+        self.rects.clear();
+        for id in &order {
+            let style = style_for(world, *id);
+            let t = self
+                .taffy
+                .new_leaf_with_context(style, *id)
+                .expect("taffy node allocation");
+            self.map.insert(*id, t);
+        }
+        for id in &order {
+            let Some(t) = self.map.get(id).copied() else {
+                continue;
+            };
+            let kids: Vec<taffy::NodeId> = world
+                .children(*id)
+                .filter(|c| live.contains(c))
+                .filter_map(|c| self.map.get(&c).copied())
+                .collect();
+            let _ = self.taffy.set_children(t, &kids);
+        }
     }
 
     /// 在指定 `viewport` 下执行全量重算（用于拓扑变更或视口调整）。

@@ -1251,6 +1251,7 @@ dependencies = [
  "unbound-gpu",
  "unbound-math",
  "windows",
+ "windows-core",
 ]
 
 [[package]]

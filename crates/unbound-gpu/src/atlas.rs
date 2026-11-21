@@ -563,7 +563,7 @@ impl AtlasSet {
                 })
                 .collect();
             gpu.device.cmd_pipeline_barrier2(
-                cmd,
+                *cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&to_copy),
             );
 
@@ -576,7 +576,7 @@ impl AtlasSet {
                 };
                 let atlas = self.get(upload.kind);
                 gpu.device.cmd_copy_buffer_to_image(
-                    cmd,
+                    *cmd,
                     staging.raw,
                     atlas.image(),
                     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -630,7 +630,7 @@ impl AtlasSet {
                 })
                 .collect();
             gpu.device.cmd_pipeline_barrier2(
-                cmd,
+                *cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&to_read),
             );
         }
@@ -699,11 +699,11 @@ impl AtlasSet {
                         .layer_count(1),
                 )];
             gpu.device.cmd_pipeline_barrier2(
-                cmd,
+                *cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&barrier),
             );
             gpu.device.cmd_copy_image_to_buffer(
-                cmd,
+                *cmd,
                 atlas.image(),
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 staging.raw,
@@ -749,7 +749,7 @@ impl AtlasSet {
                         .layer_count(1),
                 )];
             gpu.device.cmd_pipeline_barrier2(
-                cmd,
+                *cmd,
                 &vk::DependencyInfo::default().image_memory_barriers(&to_read),
             );
         }

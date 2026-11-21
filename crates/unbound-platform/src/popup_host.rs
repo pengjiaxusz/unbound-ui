@@ -199,6 +199,16 @@ impl PopupHostRegistry {
             .find(|entry| entry.window_id == window_id)
     }
 
+    /// 将已注册浮层条目绑定到平台实际创建的原生窗口 ID，供运行器按窗口 ID 反查。
+    pub fn bind_native_window(&mut self, id: u64, window_id: WindowId) -> bool {
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) {
+            entry.window_id = window_id;
+            true
+        } else {
+            false
+        }
+    }
+
     /// 按注册顺序遍历全部活跃弹出窗。
     pub fn iter(&self) -> impl Iterator<Item = &PopupHostEntry> {
         self.entries.iter()

@@ -59,8 +59,7 @@ pub use pacing::{
     RenderThrottleState, IDLE_FPS_LIMIT, MIN_FPS_LIMIT,
 };
 pub use popup_host::{
-    clamp_popup_to_work_area, PopupHostEntry, PopupHostRegistry, PopupSyncAction,
-    PopupWindowConfig,
+    clamp_popup_to_work_area, PopupHostEntry, PopupHostRegistry, PopupSyncAction, PopupWindowConfig,
 };
 pub use resize::{Extent, ResizeAction, ResizeTracker};
 pub use screen_capture::{

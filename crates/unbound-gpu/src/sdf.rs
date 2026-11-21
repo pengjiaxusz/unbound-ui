@@ -159,7 +159,7 @@ impl SdfPipeline {
             if let Some(scope) = &self.timing {
                 scope.reset(gpu)?;
                 // SAFETY: 属于本结构体的命令缓冲区。
-                scope.write_at(gpu, cmd, 0, vk::PipelineStageFlags::TOP_OF_PIPE);
+                scope.write_at(gpu, *cmd, 0, vk::PipelineStageFlags::TOP_OF_PIPE);
             }
             let packed_spread = (spread.clamp(0.25, 64.0) * 256.0).round() as u32;
             let base = PushConstants {
@@ -173,47 +173,47 @@ impl SdfPipeline {
             };
 
             gpu.device
-                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.pipeline);
+                .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, self.pipeline);
 
             // Pass 0：水平方向，每行一次调用。
             let mut pc = PushConstants { aux: 0, ..base };
             gpu.device.cmd_push_constants(
-                cmd,
+                *cmd,
                 // 所有计算管线共用相同布局；直接复用创建管线时的布局。
                 self.layout,
                 vk::ShaderStageFlags::COMPUTE,
                 0,
                 bytemuck::bytes_of(&pc),
             );
-            gpu.device.cmd_dispatch(cmd, height, 1, 1);
-            self.barrier(gpu, cmd);
+            gpu.device.cmd_dispatch(*cmd, height, 1, 1);
+            self.barrier(gpu, *cmd);
 
             // Pass 1：垂直方向，每列一次调用。
             pc.aux = 1;
             gpu.device.cmd_push_constants(
-                cmd,
+                *cmd,
                 self.layout,
                 vk::ShaderStageFlags::COMPUTE,
                 0,
                 bytemuck::bytes_of(&pc),
             );
-            gpu.device.cmd_dispatch(cmd, width, 1, 1);
-            self.barrier(gpu, cmd);
+            gpu.device.cmd_dispatch(*cmd, width, 1, 1);
+            self.barrier(gpu, *cmd);
 
             // Pass 2：打包，每纹素一次调用。打包 Pass 使用独立着色器，
             // 每个工作组含 64 个通道，因此工作组数量为纹素总数除以 64。
             pc.aux = 2;
             let groups = (width * height).div_ceil(64);
             gpu.device
-                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.pack_pipeline);
+                .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, self.pack_pipeline);
             gpu.device.cmd_push_constants(
-                cmd,
+                *cmd,
                 self.layout,
                 vk::ShaderStageFlags::COMPUTE,
                 0,
                 bytemuck::bytes_of(&pc),
             );
-            gpu.device.cmd_dispatch(cmd, groups, 1, 1);
+            gpu.device.cmd_dispatch(*cmd, groups, 1, 1);
 
             // 将结果拷贝回读缓冲区。
             let copy_barrier = [vk::MemoryBarrier2::default()
@@ -222,18 +222,18 @@ impl SdfPipeline {
                 .dst_stage_mask(vk::PipelineStageFlags2::COPY)
                 .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)];
             gpu.device.cmd_pipeline_barrier2(
-                cmd,
+                *cmd,
                 &vk::DependencyInfo::default().memory_barriers(&copy_barrier),
             );
             gpu.device.cmd_copy_buffer(
-                cmd,
+                *cmd,
                 self.output.raw,
                 self.staging.raw,
                 &[vk::BufferCopy::default().size(texels as u64 * 4)],
             );
             if let Some(scope) = &self.timing {
                 // SAFETY: 属于本结构体的命令缓冲区。
-                scope.write_at(gpu, cmd, 1, vk::PipelineStageFlags::BOTTOM_OF_PIPE);
+                scope.write_at(gpu, *cmd, 1, vk::PipelineStageFlags::BOTTOM_OF_PIPE);
             }
             gpu.end_single_time(cmd)?;
 

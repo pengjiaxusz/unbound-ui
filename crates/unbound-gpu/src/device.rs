@@ -1928,16 +1928,20 @@ impl Gpu {
             .map_err(GpuError::from)
     }
 
-    /// 在图形队列上开启一个一次性命令缓冲区。
+    /// 在图形队列上开启一个持锁的一次性命令缓冲区守卫。
+    ///
+    /// 返回的 [`SingleTimeCommand`] 在整个“分配 → 录制 → 结束 → 提交等待 → 释放”生命周期内
+    /// 持续持有 `single_time_lock`，严格满足 Vulkan 对 `VkCommandPool` 的外部同步契约；
+    /// 若录制阶段提前返回错误，守卫在 `Drop` 时会自动释放命令缓冲区后再解锁。
     ///
     /// # Errors
     /// 透传 Vulkan 调用错误。
-    pub fn begin_single_time(&self) -> Result<vk::CommandBuffer, GpuError> {
-        let _pool_guard = self
+    pub fn begin_single_time(&self) -> Result<SingleTimeCommand<'_>, GpuError> {
+        let pool_guard = self
             .single_time_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // SAFETY: 标准一次性命令缓冲区模式；总是与 `end_single_time` 配对结束。
+        // SAFETY: `pool_guard` 已独占 `self.command_pool`；分配与开始录制均在锁内完成。
         unsafe {
             let cmd = self.device.allocate_command_buffers(
                 &vk::CommandBufferAllocateInfo::default()
@@ -1945,41 +1949,43 @@ impl Gpu {
                     .level(vk::CommandBufferLevel::PRIMARY)
                     .command_buffer_count(1),
             )?[0];
-            self.device.begin_command_buffer(
+            if let Err(err) = self.device.begin_command_buffer(
                 cmd,
                 &vk::CommandBufferBeginInfo::default()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-            )?;
-            Ok(cmd)
+            ) {
+                self.device.free_command_buffers(self.command_pool, &[cmd]);
+                return Err(GpuError::from(err));
+            }
+            Ok(SingleTimeCommand {
+                gpu: self,
+                cmd,
+                _pool_guard: pool_guard,
+                finished: false,
+            })
         }
     }
 
-    /// 提交一次性命令缓冲区并等待执行完成。
+    /// 提交一次性命令缓冲区守卫并等待执行完成，随后在持锁状态下释放命令缓冲区。
     ///
     /// # Errors
     /// 透传 Vulkan 调用错误。
-    pub fn end_single_time(&self, cmd: vk::CommandBuffer) -> Result<(), GpuError> {
-        // SAFETY: `cmd` 来自 `begin_single_time` 并在此释放。
-        unsafe {
-            self.device.end_command_buffer(cmd)?;
-            let cmds = [cmd];
-            let submit = vk::SubmitInfo::default().command_buffers(&cmds);
-            let submit_result = {
-                let _queue_guard = self.lock_graphics_queue();
-                self.device
-                    .queue_submit(self.graphics_queue, &[submit], vk::Fence::null())
-                    .and_then(|()| self.device.queue_wait_idle(self.graphics_queue))
-            };
-            {
-                let _pool_guard = self
-                    .single_time_lock
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                self.device.free_command_buffers(self.command_pool, &cmds);
-            }
-            submit_result?;
-            Ok(())
-        }
+    pub fn end_single_time(&self, cmd: SingleTimeCommand<'_>) -> Result<(), GpuError> {
+        cmd.finish()
+    }
+
+    /// 在 `single_time_lock` 保护下执行一次性命令缓冲区的分配、闭包录制、提交等待与释放。
+    ///
+    /// # Errors
+    /// 透传闭包错误或 Vulkan 调用错误。
+    pub fn with_single_time<R>(
+        &self,
+        record: impl FnOnce(vk::CommandBuffer) -> Result<R, GpuError>,
+    ) -> Result<R, GpuError> {
+        let cmd = self.begin_single_time()?;
+        let out = record(*cmd)?;
+        cmd.finish()?;
+        Ok(out)
     }
 
     /// 通过暂存缓冲区将 `bytes` 上传到设备本地缓冲区。
@@ -2001,7 +2007,7 @@ impl Gpu {
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), staging.mapped, bytes.len());
             let cmd = self.begin_single_time()?;
             self.device.cmd_copy_buffer(
-                cmd,
+                *cmd,
                 staging.raw,
                 dst.raw,
                 &[vk::BufferCopy::default()
@@ -2149,6 +2155,76 @@ pub fn test_device() -> Option<Gpu> {
         Err(e) => {
             eprintln!("skipping GPU test: {e}");
             None
+        }
+    }
+}
+
+/// 持有 `Gpu::single_time_lock` 的一次性命令缓冲区 RAII 守卫。
+///
+/// 锁顺序固定为 `single_time_lock -> graphics_queue_lock`，确保多窗口/多线程场景下
+/// `VkCommandPool` 的分配、录制、提交与释放全程满足 Vulkan 外部同步契约且无死锁风险。
+#[allow(missing_debug_implementations)]
+pub struct SingleTimeCommand<'a> {
+    gpu: &'a Gpu,
+    cmd: vk::CommandBuffer,
+    _pool_guard: std::sync::MutexGuard<'a, ()>,
+    finished: bool,
+}
+
+impl<'a> SingleTimeCommand<'a> {
+    /// 获取底层 `vk::CommandBuffer` 句柄。
+    #[must_use]
+    pub const fn raw(&self) -> vk::CommandBuffer {
+        self.cmd
+    }
+
+    /// 结束录制、在图形队列互斥锁下提交并等待空闲，随后在仍持有命令池锁时释放命令缓冲区。
+    ///
+    /// # Errors
+    /// 透传 Vulkan 结束录制或队列提交等待错误。
+    pub fn finish(mut self) -> Result<(), GpuError> {
+        self.finished = true;
+        // SAFETY: `self._pool_guard` 仍独占 `self.gpu.command_pool`，`self.cmd` 由本守卫独占。
+        unsafe {
+            let end_res = self.gpu.device.end_command_buffer(self.cmd);
+            let cmds = [self.cmd];
+            let submit_result = match end_res {
+                Ok(()) => {
+                    let submit = vk::SubmitInfo::default().command_buffers(&cmds);
+                    let _queue_guard = self.gpu.lock_graphics_queue();
+                    self.gpu
+                        .device
+                        .queue_submit(self.gpu.graphics_queue, &[submit], vk::Fence::null())
+                        .and_then(|()| self.gpu.device.queue_wait_idle(self.gpu.graphics_queue))
+                }
+                Err(err) => Err(err),
+            };
+            self.gpu
+                .device
+                .free_command_buffers(self.gpu.command_pool, &cmds);
+            submit_result?;
+            Ok(())
+        }
+    }
+}
+
+impl core::ops::Deref for SingleTimeCommand<'_> {
+    type Target = vk::CommandBuffer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.cmd
+    }
+}
+
+impl Drop for SingleTimeCommand<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            // SAFETY: 提前退出时仍持有 `_pool_guard`，安全释放未提交的命令缓冲区。
+            unsafe {
+                self.gpu
+                    .device
+                    .free_command_buffers(self.gpu.command_pool, &[self.cmd]);
+            }
         }
     }
 }
@@ -2400,7 +2476,7 @@ mod tests {
         unsafe {
             let cmd = gpu.begin_single_time().unwrap();
             gpu.device.cmd_copy_buffer(
-                cmd,
+                *cmd,
                 dst.raw,
                 readback.raw,
                 &[vk::BufferCopy::default().size(payload.len() as u64)],
