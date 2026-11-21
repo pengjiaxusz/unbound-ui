@@ -28,6 +28,7 @@ use unbound_world::{NodeId, UiWorld};
 
 use crate::image::IconDesc;
 use crate::primitive::focus_ring;
+use crate::shell::{emit_shell_icon_primitives, ShellIcon};
 use crate::{ControlState, PointerPhase, WidgetDesc, WidgetOutput};
 
 /// 按钮标签字体大小。字形预热必须使用相同字号，否则数字会被光栅化两次。
@@ -49,6 +50,9 @@ pub const BUTTON_CONTENT_GAP: f32 = 8.0;
 
 /// 加载指示器直径。
 pub const BUTTON_LOADING_SIZE: f32 = 12.0;
+
+/// 按钮内原生矢量图标（[`ShellIcon`]）的标准占位边长（逻辑像素）。
+pub const BUTTON_SHELL_ICON_SIZE: f32 = 16.0;
 
 /// 按钮高度（逻辑像素）。
 ///
@@ -214,6 +218,8 @@ pub struct ButtonDesc {
     pub size: ButtonSize,
     /// 绘制在标签旁的图标。
     pub icon: Option<IconDesc>,
+    /// 绘制在标签旁的原生矢量图标（由解析几何图元绘制，零字体依赖）。
+    pub shell_icon: Option<ShellIcon>,
     /// 将图标绘制在标签之后而非之前。
     pub icon_trailing: bool,
     /// 显示加载指示器并禁用交互。
@@ -252,6 +258,7 @@ impl ButtonDesc {
             variant: ButtonVariant::default(),
             size: ButtonSize::default(),
             icon: None,
+            shell_icon: None,
             icon_trailing: false,
             loading: false,
             shadow: BUTTON_SHADOW,
@@ -477,9 +484,23 @@ impl ButtonDesc {
         self
     }
 
+    /// 在标签旁附加原生矢量图标（[`ShellIcon`]）的同款按钮。
+    #[must_use]
+    pub fn with_shell_icon(mut self, icon: ShellIcon) -> Self {
+        self.shell_icon = Some(icon);
+        self
+    }
+
     /// 将图标置于标签之后而非之前。
     #[must_use]
     pub fn with_icon_trailing(mut self, trailing: bool) -> Self {
+        self.icon_trailing = trailing;
+        self
+    }
+
+    /// 将原生矢量图标置于标签之后而非之前（与 [`Self::with_icon_trailing`] 共用位置标志）。
+    #[must_use]
+    pub fn with_shell_icon_trailing(mut self, trailing: bool) -> Self {
         self.icon_trailing = trailing;
         self
     }
@@ -640,11 +661,19 @@ pub fn emit_button_with_tokens(
     let rect = desc.rect;
     let radii = [desc.radius; 4];
     let z = desc.z;
-    let mut primitives = Vec::with_capacity(8 + label.len());
-    let mut payloads = Vec::with_capacity(label.len() + 1);
+    let mut primitives =
+        Vec::with_capacity(8 + label.len() + if desc.shell_icon.is_some() { 6 } else { 0 });
+    let mut payloads =
+        Vec::with_capacity(label.len() + if desc.shell_icon.is_some() { 4 } else { 1 });
 
     // 加载中的按钮不是交互目标，也不显示焦点环：旋转指示器表示“请等待”，此时不应再接受第二次激活。
     let blocked = state.disabled || desc.loading;
+    let bg_token = state_fill(state, tokens);
+    let fg_token = if state.disabled {
+        tokens.label_disabled
+    } else {
+        tokens.label
+    };
 
     // 1. 阴影：专用 Shadow 图元，填充与边框均透明，因此仅绘制解析阴影。
     primitives.push(instance(
@@ -678,7 +707,7 @@ pub fn emit_button_with_tokens(
     primitives.push(instance(
         fill_rect,
         fill_radii,
-        state_fill(state, tokens),
+        bg_token,
         Token::NONE,
         0.0,
         0.0,
@@ -690,14 +719,24 @@ pub fn emit_button_with_tokens(
     // 3. 图标、加载指示器与标签共享同一居中内容行。指示器始终前置，
     //    因此加载状态切换时按钮不会产生水平跳动。
     let ink = ink_bounds(label);
-    let leading_icon = desc.icon.is_some() && !desc.icon_trailing;
+    let has_label = ink.is_some();
+    let shell_gap = if has_label { BUTTON_CONTENT_GAP } else { 0.0 };
+    let leading_shell_icon = desc.shell_icon.is_some() && !desc.icon_trailing;
+    let trailing_shell_icon = desc.shell_icon.is_some() && desc.icon_trailing;
+    let leading_icon = !leading_shell_icon && desc.icon.is_some() && !desc.icon_trailing;
+    let trailing_icon = !trailing_shell_icon && desc.icon.is_some() && desc.icon_trailing;
+
     let mut content_width = ink.map_or(0.0, |bounds| bounds.width());
     if desc.loading {
         content_width += BUTTON_LOADING_SIZE + BUTTON_CONTENT_GAP;
+    } else if leading_shell_icon {
+        content_width += BUTTON_SHELL_ICON_SIZE + shell_gap;
     } else if leading_icon {
         content_width += desc.font_size + BUTTON_CONTENT_GAP;
     }
-    if desc.icon.is_some() && desc.icon_trailing {
+    if trailing_shell_icon {
+        content_width += BUTTON_SHELL_ICON_SIZE + shell_gap;
+    } else if trailing_icon {
         content_width += desc.font_size + BUTTON_CONTENT_GAP;
     }
     let mut cursor = if desc.left_align {
@@ -708,16 +747,11 @@ pub fn emit_button_with_tokens(
 
     if desc.loading {
         let indicator = desc.loading_rect();
-        let color = if state.disabled {
-            tokens.label_disabled
-        } else {
-            tokens.label
-        };
         primitives.push(instance(
             indicator,
             [BUTTON_LOADING_SIZE * 0.5; 4],
             Token::NONE,
-            color,
+            fg_token,
             2.0,
             0.0,
             PrimType::Stroke,
@@ -725,6 +759,21 @@ pub fn emit_button_with_tokens(
             z,
         ));
         cursor += BUTTON_LOADING_SIZE + BUTTON_CONTENT_GAP;
+    } else if leading_shell_icon {
+        if let Some(shell_icon) = desc.shell_icon {
+            shell_icon_at(
+                shell_icon,
+                cursor,
+                rect.center().y,
+                BUTTON_SHELL_ICON_SIZE,
+                fg_token,
+                bg_token,
+                z,
+                &mut primitives,
+                &mut payloads,
+            );
+            cursor += BUTTON_SHELL_ICON_SIZE + shell_gap;
+        }
     } else if leading_icon {
         if let Some(icon) = &desc.icon {
             icon_at(
@@ -752,11 +801,6 @@ pub fn emit_button_with_tokens(
                 quad.rect.origin.y += offset.y;
             }
         }
-        let color = if state.disabled {
-            tokens.label_disabled
-        } else {
-            tokens.label
-        };
         for quad in label {
             let payload_idx = payloads.len() as u32;
             payloads.push(GpuPayload {
@@ -771,7 +815,7 @@ pub fn emit_button_with_tokens(
             let mut glyph = instance(
                 quad.rect,
                 [0.0; 4],
-                color,
+                fg_token,
                 Token::NONE,
                 0.0,
                 0.0,
@@ -794,7 +838,21 @@ pub fn emit_button_with_tokens(
         cursor += ink.width();
     }
 
-    if desc.icon.is_some() && desc.icon_trailing {
+    if trailing_shell_icon {
+        if let Some(shell_icon) = desc.shell_icon {
+            shell_icon_at(
+                shell_icon,
+                cursor + shell_gap,
+                rect.center().y,
+                BUTTON_SHELL_ICON_SIZE,
+                fg_token,
+                bg_token,
+                z,
+                &mut primitives,
+                &mut payloads,
+            );
+        }
+    } else if trailing_icon {
         if let Some(icon) = &desc.icon {
             icon_at(
                 icon,
@@ -941,6 +999,33 @@ fn icon_at(
     primitive.border_token_or_tex = icon.texture_layer;
     primitive.extra_payload_idx = payload_idx;
     primitives.push(primitive);
+}
+
+/// 发射单个原生矢量图标（[`ShellIcon`]），锚定于 `left` 并垂直居中，
+/// 所有产出图元统一归入 [`SubElement::Content`] 以保证与按钮背景/边框严格分层。
+#[allow(clippy::too_many_arguments)]
+fn shell_icon_at(
+    icon: ShellIcon,
+    left: f32,
+    center_y: f32,
+    side: f32,
+    fg_token: Token,
+    bg_token: Token,
+    z: u16,
+    primitives: &mut Vec<GpuPrimitiveInstance>,
+    payloads: &mut Vec<GpuPayload>,
+) {
+    let icon_rect = Rect::new(left, center_y - side * 0.5, side, side);
+    let start_idx = primitives.len();
+    emit_shell_icon_primitives(icon, icon_rect, fg_token, bg_token, z, primitives, payloads);
+    for primitive in &mut primitives[start_idx..] {
+        let (kind, blend, flags) =
+            GpuPrimitiveInstance::unpack_type(primitive.prim_type_and_flags);
+        let content_flags =
+            (flags & !PrimFlags::SUB_ELEMENT_MASK.0) | u16::from(SubElement::Content as u8);
+        primitive.prim_type_and_flags =
+            GpuPrimitiveInstance::pack_type(kind, blend, content_flags);
+    }
 }
 
 /// 状态绘制使用的填充槽位。
