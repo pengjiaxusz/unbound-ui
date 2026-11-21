@@ -13,6 +13,12 @@ description: >-
 
 **默认文档不可信，直到你复现它。** 这类包常声称 `git am` / lint / 测试全部通过，实测常见「打完根本编译不过」且基线 SHA 写错。文档里的每条声明都当假设，逐条复现，把结论写进报告。
 
+## 就地验收，不要克隆项目来测试
+
+**直接在用户现有的工作区里验收并落补丁，不要为了「安全测试」再 `git clone` 一份、拷到临时目录或另起一套并行构建。** 复杂项目重新克隆加重装依赖动辄几十分钟到几小时，收益为零：要复现的门禁就在这个工作区里，提交也必须落在本地这份仓库。另起一份只会多出一个需要事后对齐的分叉状态，徒增工作量与风险。
+
+只有用户明确要求隔离时（例如工作区要为另一个进行中的任务保持原样）才另起克隆，且即便如此也要先在克隆里装好钩子再干活。默认就是：在当前工作区操作、保持工作树干净到能 `git am`、只清理自己创建的解包目录和日志（见 S8）。
+
 ## 动手前先钉六个参数
 
 参数一律从仓库读，不从 `HANDOFF.md` 读。
@@ -22,7 +28,7 @@ description: >-
 | 基线 ref | `git rev-parse --abbrev-ref origin/HEAD`，并与文档声称的 SHA 对照 | `git am` 失败多数是基线不对，不是补丁坏 |
 | 验收命令链 | `justfile` / `Makefile` / `package.json` / `.github/workflows/*.yml` | 你自选的命令不等于 CI 门禁 |
 | 格式检查位置 | CI 是否有独立的 `fmt --check` / `lint` 步骤 | linter 过了不代表格式过 |
-| 钩子安装 | `git config core.hooksPath`；新克隆要跑仓库的安装脚本 | 钩子是每克隆自己的配置，不随 clone 传播 |
+| 钩子安装 | `git config core.hooksPath`；在当前工作区跑仓库的安装脚本（若未装） | 钩子是每个工作区自己的配置，不随 clone 传播 |
 | 作者身份 | `normalize-authors.sh --print-identity` —— owner 取自 `origin` URL + `git config user.email`；**禁止手填或从包里读** | 包里的作者多为合成占位身份，手填名字就是乱填的源头 |
 | issue 仓库 | 文档引用的编号 + 仓库名 + 状态标签 | 关单是落地的一部分，不是收尾补充 |
 
@@ -53,7 +59,7 @@ git status -sb; git rev-list --count "$BASE"..HEAD     # 必须干净且为 0
 | S5 | 作者与推送 | **不传名字/邮箱**运行 `normalize-authors.sh "$BASE"`，身份自动从仓库解析（保留 author date），再 `push --force-with-lease` |
 | S6 | 同步 | 强推后 `fetch --prune --force` 再 `reset --hard`，**不要** `git pull` |
 | S7 | issue | 逐条关闭已实现工单并写单条摘要评论，再翻状态标签 |
-| S8 | 清理 | 只删自己创建的：解包目录、日志、临时克隆 |
+| S8 | 清理 | 只删自己创建的：解包目录、日志。不应存在临时克隆——不要为了验收而克隆项目 |
 
 ## 铁律
 
@@ -63,7 +69,8 @@ git status -sb; git rev-list --count "$BASE"..HEAD     # 必须干净且为 0
 4. 作者必须是仓库拥有者的身份：**不传名字/邮箱**运行 `normalize-authors.sh`，由脚本从 `origin` 解析 owner、从 `git config user.email` 取邮箱；绝不手填，也不从交接包里抄。
 5. 删除任何路径前先输出清单并获得确认，只删自己创建的，禁止通配符。
 6. 测试失败先反馈用户，不擅自改断言把失败糊过去。
-7. `git am` / `cherry-pick` / `rebase` 都不触发 `pre-commit`，只有 `pre-push` 拦得住；临时克隆里先装钩子再干活。
+7. `git am` / `cherry-pick` / `rebase` 都不触发 `pre-commit`，只有 `pre-push` 拦得住；干活前先确认当前工作区钩子已装（若被明确要求隔离到克隆，则先在克隆里装钩子）。
+8. **在用户的工作区里干活。** 绝不为验收或落补丁而克隆、复制项目——复杂项目重新克隆加重装依赖要耗掉几十分钟到几小时，收益为零。
 
 ## 验收判据怎么写
 

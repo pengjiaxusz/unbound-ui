@@ -152,11 +152,11 @@ cargo run -p pengj-templates-cli -- audit --dir <目标项目目录> --diff
    pnpm build
    ```
 2. **自动提交策略与精准暂存红线**：
-   - **默认必须提交**：`update` / `adopt` 成功后，Agent 必须在**被应用的项目**中提交本次模板同步并 `git push`，不得把已应用的模板更新留在工作区等待用户确认——「每次改了都不提交」正是要消除的旧行为。
+   - **直接提交并推送，禁止询问**：`update` / `adopt` 成功后，Agent 必须在**被应用的项目**中立即提交本次模板同步并 `git push`，**不要停下来问用户「要不要提交 / 要不要推送」**。这是预先授权、无条件执行的动作——绝不把已应用的模板更新留在工作区等确认；「每次都问」和「每次都不提交」正是本步骤要消除的旧行为。
    - **提交正确的仓库**：上述提交属于下游被应用的项目；上游 `pengj-templates` 仓库自身的改动（模板源、引擎、文档）在该仓库单独提交，两者绝不混在一起。
    - **精准暂存（红线）**：**只能单独 `git add <file>` 本次同步报告里的 `[更新]` / `[新增]` 路径与 `.pengj-templates/manifest.json`**，**严禁 `git add .` 或 `git commit -a`**，防止误将工作区既有的无关改动或脏文件一并带入提交。
    - **提交信息语言跟随目标项目**：读取目标项目 `.pengj-templates/manifest.json` 的 `options.commit_zh`；为 `true` 时标题必须中文（如 `chore: 同步分层模板更新`），为 `false` 时必须英文（如 `chore: sync layered template updates`），commit-msg 钩子会强制校验。
-   - **仅在用户明确要求不提交时豁免**：极速脚本传 `-NoCommit` / `-NoPush`，或手动跳过本步骤。
+   - **仅在用户事先明确要求不提交时豁免**：极速脚本传 `-NoCommit` / `-NoPush`，或手动跳过本步骤。没有这种明确指示就直接提交推送，不要询问。
 
 <!-- PENGJ_TEMPLATE_END -->
 
