@@ -50,11 +50,16 @@ public sealed partial class CaptureWindow : Window
         _options = options;
         InitializeComponent();
 
-        Title = options.SelectedControls.Count > 1
-            ? $"WinUI Reference - {string.Join(", ", options.SelectedControls)}"
+        Title = options.Review
+            ? "WinUI Reference - review"
             : $"WinUI Reference - {options.ControlName}";
 
         Host.Loaded += OnHostLoaded;
+
+        if (options.Review)
+        {
+            InitializeReviewUi();
+        }
     }
 
     private DynamicParityPage ActiveSheet => _sheets[_sheetIndex];
@@ -72,6 +77,15 @@ public sealed partial class CaptureWindow : Window
         _sheets = filteredBatches.Count > 0
             ? PlanPages(filteredBatches)
             : Array.Empty<DynamicParityPage>();
+
+        if (_options.Review)
+        {
+            // 检视模式不采图、不退出：把同一套装箱规划结果直接摆进窗口，等用户翻页。
+            ReviewBar.Visibility = Visibility.Visible;
+            EnterReview(0);
+            return;
+        }
+
         AdvanceToNextUncachedOrStart(initial: true);
     }
 
@@ -98,7 +112,9 @@ public sealed partial class CaptureWindow : Window
     /// </summary>
     private List<CandidateBatch> FilterCandidateBatches(IReadOnlyList<CandidateBatch> batches)
     {
-        if (_options.NoCache || _options.ExplicitControl)
+        // 检视模式永远装载全量页面：人工评审要看的是完整矩阵，
+        // 而不是「本次运行恰好过期的那几页」。
+        if (_options.Refresh || _options.ExplicitControl || _options.Review)
         {
             return batches.ToList();
         }
@@ -332,7 +348,7 @@ public sealed partial class CaptureWindow : Window
         while (_sheetIndex < _sheets.Count)
         {
             var sheet = _sheets[_sheetIndex];
-            if (!_options.NoCache && !_options.ExplicitControl && AllCasesCached(sheet, context))
+            if (!_options.Refresh && !_options.ExplicitControl && AllCasesCached(sheet, context))
             {
                 _skippedCount += sheet.Slots.Count;
                 Console.Out.WriteLine(
@@ -572,10 +588,17 @@ public sealed partial class CaptureWindow : Window
             Fatal.Report(warning);
         }
 
-        _ = CaptureSheetAsync();
+        _ = CaptureSheetAsync(advance: true);
     }
 
-    private async Task CaptureSheetAsync()
+    /// <summary>
+    /// 把当前拼版导出为切片与切片 JSON。
+    ///
+    /// `advance` 为真时继续推进到下一页（自动批采）；检视模式的「截图本页」传假，
+    /// 导出后停在当前页，窗口保持打开。
+    /// `forceSheet` 强制落盘拼版总览图，用于人工留证。
+    /// </summary>
+    private async Task CaptureSheetAsync(bool advance, bool forceSheet = false)
     {
         const int maxAttempts = 3;
 
@@ -640,7 +663,7 @@ public sealed partial class CaptureWindow : Window
             }
 
             // 可选保留拼版总览图与槽位坐标索引供人工速览与全局核验
-            if (_options.SaveContactSheet)
+            if (_options.KeepSheets || forceSheet)
             {
                 var sheetName = $"page_{ActiveSheet.PageIndex:D2}_{ActiveSheet.Theme}_{ActiveSheet.Backdrop}_sheet.png";
                 var sheetPath = Path.Combine(outputDirectory, sheetName);
@@ -725,11 +748,18 @@ public sealed partial class CaptureWindow : Window
         {
             Fatal.Report($"Capture failed: {ex}");
             Environment.ExitCode = 1;
-            Application.Current.Exit();
+            // 检视模式是长驻窗口：单页导出失败只报告，不把整个应用带走。
+            if (!_options.Review)
+            {
+                Application.Current.Exit();
+            }
             return;
         }
 
-        AdvanceToNextUncachedOrStart(initial: false);
+        if (advance)
+        {
+            AdvanceToNextUncachedOrStart(initial: false);
+        }
     }
 
     /// <summary>单个槽位在拼版像素坐标系中的裁剪框、控件区域与背景采样点。</summary>
@@ -946,8 +976,8 @@ public sealed partial class CaptureWindow : Window
             rasterizationScale = scale,
             hostActualWidth = Host.ActualWidth,
             hostActualHeight = Host.ActualHeight,
-            requestedWindowWidth = _options.Width,
-            requestedWindowHeight = _options.Height,
+            requestedWindowWidth = (int)CanvasWidthDip,
+            requestedWindowHeight = (int)CanvasHeightDip,
             imagePixelWidth,
             imagePixelHeight,
             controlBounds = new
@@ -973,412 +1003,5 @@ public sealed partial class CaptureWindow : Window
         await reader.LoadAsync((uint)stream.Size);
         reader.ReadBytes(bytes);
         return bytes;
-    }
-}
-
-/// <summary>一个截图用例（四维坐标：控件 × 状态 × 主题 × 后景底板）。</summary>
-public sealed class CaptureCase
-{
-    public CaptureCase(string controlName, string state, string theme, string backdrop = "solid")
-    {
-        ControlName = controlName;
-        State = state;
-        Theme = theme;
-        Backdrop = backdrop;
-    }
-
-    public string ControlName { get; }
-
-    public string State { get; }
-
-    public string Theme { get; }
-
-    public string Backdrop { get; }
-
-    /// <summary>
-    /// 生成输出文件基名：默认 solid 后景保持与既有 `<Control>_<state>_<theme>` 完全兼容；
-    /// 非 solid 后景追加 `_<backdrop>` 后缀。
-    /// </summary>
-    public string FileBaseName()
-    {
-        var canonical = Catalog.CanonicalName(ControlName);
-        var state = State.ToLowerInvariant();
-        return Backdrop == "solid"
-            ? $"{canonical}_{state}_{Theme}"
-            : $"{canonical}_{state}_{Theme}_{Backdrop}";
-    }
-}
-
-/// <summary>已完成排版计算的单个槽位，包含目标用例与其在画布中的物理坐标与尺寸。</summary>
-public sealed record PlannedSlot(CaptureCase Case, double X, double Y, double Width, double Height);
-
-/// <summary>按「控件集 × 主题 × 后景」组织的单张动态拼版页批次。</summary>
-public sealed class DynamicParityPage
-{
-    public DynamicParityPage(string theme, string backdrop, IReadOnlyList<PlannedSlot> slots, int pageIndex = 0)
-    {
-        Theme = theme;
-        Backdrop = backdrop;
-        Slots = slots;
-        PageIndex = pageIndex;
-    }
-
-    public string Theme { get; }
-
-    public string Backdrop { get; }
-
-    public IReadOnlyList<PlannedSlot> Slots { get; }
-
-    public int PageIndex { get; }
-
-    /// <summary>兼容访问本页包含的所有用例列表。</summary>
-    public IReadOnlyList<CaptureCase> Cases => Slots.Select(s => s.Case).ToList();
-
-    /// <summary>本页包含的所有控件规范名列表（去重）。</summary>
-    public IReadOnlyList<string> ControlNames =>
-        Slots.Select(s => Catalog.CanonicalName(s.Case.ControlName)).Distinct().ToList();
-}
-
-/// <summary>按「主题 × 后景」汇聚的候选待测用例批次（待装箱分页）。</summary>
-public sealed class CandidateBatch
-{
-    public CandidateBatch(string theme, string backdrop, IReadOnlyList<CaptureCase> cases)
-    {
-        Theme = theme;
-        Backdrop = backdrop;
-        Cases = cases;
-    }
-
-    public string Theme { get; }
-
-    public string Backdrop { get; }
-
-    public IReadOnlyList<CaptureCase> Cases { get; }
-}
-
-/// <summary>
-/// 命令行参数。所有参数都是可选的，缺省值用于快速产出基准截图。
-/// </summary>
-public sealed class CaptureOptions
-{
-    public const int DefaultWidth = 1920;
-    public const int DefaultHeight = 1080;
-    public const string DefaultOutputDirectory = "captures";
-
-    private const string Usage =
-        "Usage: WinUiReference --out <directory> [--control <name1,name2,...>] [--state normal|disabled|checked|focused] " +
-        "[--theme light|dark|all] [--backdrop solid|mica|mica_alt|acrylic|all] " +
-        "[--width <pixels>] [--height <pixels>] [--batch] [--no-cache] [--save-sheet]";
-
-    public string OutputDirectory { get; private init; } = DefaultOutputDirectory;
-
-    public IReadOnlyList<string> SelectedControls { get; private init; } = new[] { "Button" };
-
-    public string ControlName => SelectedControls.Count > 0 ? SelectedControls[0] : "Button";
-
-    public string State { get; private init; } = "normal";
-
-    public string Theme { get; private init; } = "light";
-
-    public string Backdrop { get; private init; } = "solid";
-
-    public int Width { get; private init; } = DefaultWidth;
-
-    public int Height { get; private init; } = DefaultHeight;
-
-    /// <summary>批量模式：按动态拼版页跑完所有试点组合。</summary>
-    public bool Batch { get; private init; }
-
-    /// <summary>`--control` 是否由命令行显式给出。</summary>
-    public bool ExplicitControl { get; private init; }
-
-    /// <summary>`--state` 是否由命令行显式给出。</summary>
-    public bool ExplicitState { get; private init; }
-
-    /// <summary>`--theme` 是否由命令行显式给出。</summary>
-    public bool ExplicitTheme { get; private init; }
-
-    /// <summary>禁用指纹缓存，强制重新截图。</summary>
-    public bool NoCache { get; private init; }
-
-    /// <summary>同时落盘未切分的 `_sheet.png` 拼版大图与坐标索引 JSON。</summary>
-    public bool SaveContactSheet { get; private init; }
-
-    /// <summary>展开本次运行要采集的全部候选用例批次（按「后景 × 主题」分组，尚未装箱分页）。</summary>
-    public IReadOnlyList<CandidateBatch> BuildCandidateBatches()
-    {
-        var backdrops = Backdrop == "all"
-            ? Catalog.BackdropKinds
-            : new[] { Backdrop };
-
-        var themes = Theme == "all"
-            ? new[] { "light", "dark" }
-            : new[] { Theme };
-
-        IReadOnlyList<string> controls = ExplicitControl
-            ? SelectedControls
-            : (Batch ? Catalog.ControlNames : new[] { ControlName });
-
-        var batches = new List<CandidateBatch>();
-
-        foreach (var backdrop in backdrops)
-        {
-            foreach (var theme in themes)
-            {
-                var cases = new List<CaptureCase>();
-                foreach (var control in controls)
-                {
-                    if (ExplicitState)
-                    {
-                        if (Catalog.SupportsState(control, State))
-                        {
-                            cases.Add(new CaptureCase(control, State, theme, backdrop));
-                        }
-                    }
-                    else
-                    {
-                        foreach (var state in Catalog.ImplementedStates)
-                        {
-                            if (state == "focused" || !Catalog.SupportsState(control, state))
-                            {
-                                continue;
-                            }
-
-                            cases.Add(new CaptureCase(control, state, theme, backdrop));
-                        }
-                    }
-                }
-
-                if (cases.Count > 0)
-                {
-                    batches.Add(new CandidateBatch(theme, backdrop, cases));
-                }
-            }
-        }
-
-        return batches;
-    }
-
-    public static bool TryParse(string[] args, out CaptureOptions options, out string error)
-    {
-        options = new CaptureOptions();
-        error = string.Empty;
-
-        var outputDirectory = DefaultOutputDirectory;
-        var selectedControls = new List<string> { "Button" };
-        var state = "normal";
-        var theme = "light";
-        var backdrop = "solid";
-        var width = DefaultWidth;
-        var height = DefaultHeight;
-        var batch = false;
-        var noCache = false;
-        var saveSheet = false;
-        var explicitControl = false;
-        var explicitState = false;
-        var explicitTheme = false;
-
-        for (var i = 1; i < args.Length; i++)
-        {
-            var name = args[i];
-            var value = i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal)
-                ? args[i + 1]
-                : null;
-
-            switch (name.ToLowerInvariant())
-            {
-                case "--batch":
-                    batch = true;
-                    break;
-
-                case "--no-cache":
-                    noCache = true;
-                    break;
-
-                case "--save-sheet":
-                    saveSheet = true;
-                    break;
-
-                case "--out":
-                    if (value is null)
-                    {
-                        error = UsageError("--out missing directory argument");
-                        return false;
-                    }
-
-                    outputDirectory = value;
-                    i++;
-                    break;
-
-                case "--control":
-                    if (value is null)
-                    {
-                        error = UsageError("--control missing control name");
-                        return false;
-                    }
-
-                    var names = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                    if (names.Length == 0)
-                    {
-                        error = UsageError("--control missing valid control name");
-                        return false;
-                    }
-
-                    var validated = new List<string>();
-                    foreach (var raw in names)
-                    {
-                        if (!Catalog.ControlNames.Contains(raw, StringComparer.OrdinalIgnoreCase))
-                        {
-                            error = UsageError($"Unknown control: {raw}{Environment.NewLine}Available controls: {string.Join(", ", Catalog.ControlNames)}");
-                            return false;
-                        }
-                        validated.Add(Catalog.CanonicalName(raw));
-                    }
-
-                    selectedControls = validated;
-                    explicitControl = true;
-                    i++;
-                    break;
-
-                case "--state":
-                    if (value is null)
-                    {
-                        error = UsageError("--state missing state name");
-                        return false;
-                    }
-
-                    state = value.ToLowerInvariant();
-                    explicitState = true;
-                    i++;
-                    break;
-
-                case "--theme":
-                    if (value is null)
-                    {
-                        error = UsageError("--theme missing theme name");
-                        return false;
-                    }
-
-                    theme = value.ToLowerInvariant();
-                    explicitTheme = true;
-                    i++;
-                    break;
-
-                case "--backdrop":
-                    if (value is null)
-                    {
-                        error = UsageError("--backdrop missing backdrop type");
-                        return false;
-                    }
-
-                    backdrop = value.ToLowerInvariant();
-                    i++;
-                    break;
-
-                case "--width":
-                    if (!TryParseSize(value, out width))
-                    {
-                        error = UsageError("--width requires integer pixels");
-                        return false;
-                    }
-
-                    i++;
-                    break;
-
-                case "--height":
-                    if (!TryParseSize(value, out height))
-                    {
-                        error = UsageError("--height requires integer pixels");
-                        return false;
-                    }
-
-                    i++;
-                    break;
-
-                default:
-                    error = UsageError($"Unknown argument: {name}");
-                    return false;
-            }
-        }
-
-        if (backdrop != "all" && !Catalog.BackdropKinds.Contains(backdrop, StringComparer.OrdinalIgnoreCase))
-        {
-            error = UsageError($"Unknown backdrop type: {backdrop}, available: {string.Join(", ", Catalog.BackdropKinds)}, all");
-            return false;
-        }
-
-        if (explicitState)
-        {
-            if (!Catalog.ImplementedStates.Contains(state, StringComparer.OrdinalIgnoreCase))
-            {
-                error = Catalog.ReservedStates.Contains(state, StringComparer.OrdinalIgnoreCase)
-                    ? UsageError($"State {state} is not implemented yet (enum reserved), use {string.Join("/", Catalog.ImplementedStates)}")
-                    : UsageError($"Unknown state: {state}, available states: {string.Join(", ", Catalog.ImplementedStates)}");
-                return false;
-            }
-        }
-
-        if (theme != "light" && theme != "dark" && theme != "all")
-        {
-            error = UsageError($"Unknown theme: {theme}, available themes: light, dark, all");
-            return false;
-        }
-
-        if (!batch)
-        {
-            if (backdrop == "all")
-            {
-                error = UsageError("Single case mode does not support --backdrop all, specify a backdrop or use --batch");
-                return false;
-            }
-
-            if (theme == "all")
-            {
-                error = UsageError("Single case mode does not support --theme all, specify a theme or use --batch");
-                return false;
-            }
-        }
-
-        if (width is < 64 or > 8192 || height is < 64 or > 8192)
-        {
-            error = UsageError($"Window size must be between 64 and 8192, current is {width}x{height}");
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(outputDirectory))
-        {
-            error = UsageError("--out cannot be empty");
-            return false;
-        }
-
-        options = new CaptureOptions
-        {
-            OutputDirectory = outputDirectory,
-            SelectedControls = selectedControls,
-            State = state,
-            Theme = theme,
-            Backdrop = backdrop,
-            Width = width,
-            Height = height,
-            Batch = batch,
-            ExplicitControl = explicitControl,
-            ExplicitState = explicitState,
-            ExplicitTheme = explicitTheme,
-            NoCache = noCache,
-            SaveContactSheet = saveSheet,
-        };
-
-        return true;
-    }
-
-    private static bool TryParseSize(string? value, out int size)
-    {
-        size = 0;
-        return value is not null && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out size);
-    }
-
-    private static string UsageError(string message)
-    {
-        return $"{message}{Environment.NewLine}{Usage}";
     }
 }

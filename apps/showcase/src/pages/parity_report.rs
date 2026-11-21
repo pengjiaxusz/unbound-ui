@@ -29,7 +29,7 @@ pub const PARITY_EXAMPLES: &[ExampleDef] = &[ExampleDef::new(
     "Reference / unbound-ui / ROI ΔE",
     "Each row holds three captures of the same control: the WinUI 3 reference, the unbound-ui render at identical bounds, and the CIEDE2000 heatmap with ROI bounds. A row fails when ROI mean ΔE, p95, outlier ratio, content bbox, or intrinsic size drifts.",
     &["tools/winui-reference", "apps/showcase/src/png_diff.rs"],
-    r#"showcase --parity-run --reference tools/winui-reference/captures --out target/parity"#,
+    r#"showcase parity-diff --reference tools/winui-reference/captures --out target/parity"#,
     "A scrollable parity report rendered by the gallery itself; every case exposes its name, pass state, ROI colour metrics, intrinsic size check, and three captures.",
     &[],
     DemoKind::ParityReport,

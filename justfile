@@ -64,28 +64,79 @@ gallery *ARGS:
     @cargo build -p gallery
     @"{{CARGO_TARGET_DIR}}/debug/gallery" {{ARGS}}
 
-# 先构建 tools/winui-reference 再批量截图；WinAppSDK 走自包含，不要求机器预装 Windows App Runtime。
-# 产物已被 gitignore，控件样式变动后才需要重跑；采集器自带指纹缓存，命中时会毫秒级跳过。
-# 采集 WinUI 3 参考截图到 captures/（需 .NET 8+ SDK，示例：just parity-capture --no-cache）
-# 采集器自身也走排队；需要指定工作目录，所以用 bque 原生 `--cwd` 保留 ./captures 的语义（包装配方传不进工作目录）。
-# 注意：这是唯一会重新生成 WinUI 3 参考图的入口。宿主已把强调色钉死为 Fluent 蓝；
-# 若系统强调色变化或参考图早于「钉死强调色」改动，必须跑 `just parity-capture --no-cache --theme all`。
+# ---------------------------------------------------------------------------
+# 参考图与像素差分（WinUI 3 基准）
+#
+# 唯一入口是 `just parity <动词>`，五个动词分别对应「全闭环 / 采参考图 / 跑差分 /
+# 人工翻页 / 看报告」。两侧的 `--refresh` 同义：不要相信缓存。
+# 参考图固定在 tools/winui-reference/captures（绝对路径），与调用者的工作目录无关。
+# 宿主已把强调色钉死为 Fluent 蓝；系统强调色变化、或参考图早于「钉死强调色」改动时，
+# 必须 `just parity capture --refresh --theme all`。
+# ---------------------------------------------------------------------------
+
+# parity 统一入口（动词：all | capture | diff | review | report，缺省 all）
+# 示例：just parity / just parity review / just parity diff --control Button --refresh
+parity action="all" *ARGS:
+    @just "parity-{{action}}" {{ARGS}}
+
+# 全闭环：增量采集参考图 → ROI 四门禁差分；`--refresh` 等公共旗标会同时作用于两段
+[windows]
+parity-all *ARGS:
+    @just parity-capture {{ARGS}}
+    @just parity-diff {{ARGS}}
+[unix]
+parity-all *ARGS:
+    @echo "parity-all needs Windows (WinUI 3 reference host)" >&2
+    @exit 1
+
+# 采集 WinUI 3 参考图（增量；命中指纹缓存的用例毫秒级跳过）
+[windows]
+parity-capture *ARGS:
+    @just _parity-build
+    @just _parity-exe --out "{{justfile_directory()}}/tools/winui-reference/captures" {{ARGS}}
+[unix]
+parity-capture *ARGS:
+    @echo "parity-capture needs Windows (WinUI 3 reference host)" >&2
+    @exit 1
+
+# 人工翻页检视：打开参考宿主逐页看（←/→ 或 PgUp/PgDn 翻页、Ctrl+S 导出本页、Esc 退出）
+# 缺省同时装载浅色与深色两套页面；需要只看一套时再传 `--theme light|dark` 覆盖。
+[windows]
+parity-review *ARGS:
+    @just _parity-build
+    @just _parity-exe --review --theme all --out "{{justfile_directory()}}/tools/winui-reference/captures" {{ARGS}}
+[unix]
+parity-review *ARGS:
+    @echo "parity-review needs Windows (WinUI 3 reference host)" >&2
+    @exit 1
+
+# 只跑差分：本框架侧离屏渲染 + ROI 四门禁，产出 target/parity/report.json
+# 本命令绝不重采 WinUI 3 参考图；参考图过期请先 `just parity capture --refresh --theme all`。
+# 示例：just parity diff --control Button --refresh / just parity diff --only-failed
+parity-diff *ARGS:
+    @bque run -- cargo run -p showcase -- parity-diff --reference tools/winui-reference/captures --out target/parity {{ARGS}}
+
+# 打开展台的 Pixel parity 报告页（参考图 / 本框架 / 热力图三列并排）
+[windows]
+parity-report *ARGS:
+    @bque run -- cargo build -p showcase
+    @& "{{CARGO_TARGET_DIR}}/debug/showcase.exe" gallery --page ParityReport {{ARGS}}
+[unix]
+parity-report *ARGS:
+    @cargo build -p showcase
+    @"{{CARGO_TARGET_DIR}}/debug/showcase" gallery --page ParityReport {{ARGS}}
+
+# WinUI 3 参考宿主的唯一构建入口；WinAppSDK 走自包含，不要求机器预装 Windows App Runtime。
 # Windows 的 PATH 里 `C:\Program Files\dotnet` 只有 runtime、没有 SDK，且排在 scoop 的 dotnet8-sdk 之前，
 # 直接写 `dotnet build` 会解析到空壳并报 "No .NET SDKs were found"；这里优先用 DOTNET_ROOT 指向的 SDK。
 [windows]
-parity-capture *ARGS:
+_parity-build:
     @bque run -- $(if ($env:DOTNET_ROOT) { "$env:DOTNET_ROOT\dotnet.exe" } else { "dotnet" }) build tools/winui-reference/WinUiReference.csproj -c Release -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -r win-x64
-    @bque run --cwd "{{justfile_directory()}}/tools/winui-reference" -- "{{justfile_directory()}}/tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/WinUiReference.exe" --batch --out ./captures {{ARGS}}
 
-# 纯离屏 Vulkan 渲染，不开窗；默认复用源码指纹缓存。
-# 跑 WinUI 3 ROI 像素差分，产出 target/parity/report.json 供展台 Pixel parity 页读取
-# 示例：just parity 或 just parity --no-cache
-# 注意：本命令只重渲 unbound-ui 一侧，绝不重采 WinUI 3 参考图。
-# `--no-cache` 只关闭本框架的渲染缓存；参考图是否过期由 parity-capture 保证。
-# 若差分提示 pinnedAccent 过期或参考图仍带系统强调色，请先跑
-# `just parity-capture --no-cache --theme all`，再跑本命令。
-parity *ARGS:
-    @bque run -- cargo run -p showcase -- --parity-run --reference tools/winui-reference/captures --out target/parity {{ARGS}}
+# 直接运行参考宿主（开窗程序不占全局锁；编译段已经在 _parity-build 里排过队）
+[windows]
+_parity-exe *ARGS:
+    @& "{{justfile_directory()}}/tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/WinUiReference.exe" {{ARGS}}
 
 # 编译 Vulkan 着色器（glslc 逐个编译并校验，同样纳入排队）
 compile-shaders:

@@ -10,6 +10,8 @@ pub mod backdrop_compare;
 pub mod button;
 /// 画布：图元、裁剪、命中区域与语义。
 pub mod canvas;
+/// 命令行动词：展厅、差分、离屏截图与后景对照。
+pub mod cli;
 /// 单行文本编辑器共用的测量辅助。
 pub mod editor;
 /// 帧计划：呈现尺寸与上传计划。

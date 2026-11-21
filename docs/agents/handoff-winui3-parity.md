@@ -147,18 +147,21 @@ pwsh -NoProfile -File .scratch/winui3-parity-system/publish-github-issues.ps1
 
 ### 6.1 可复现命令
 
-本机默认 `dotnet` 只有运行时，**SDK 已安装到** `C:\Users\pengj\.dotnet-sdk`。参考宿主与差分的完整闭环：
+> 2026-11-22 起命令面统一为 `just parity <动词>`，两侧 `--no-cache` 改名 `--refresh`，详见 ADR 0027。本节旧命令已同步更新。
+
+本机默认 `dotnet` 只有运行时，**SDK 通过 `DOTNET_ROOT` 指向 scoop 的 dotnet8-sdk**（`just` 配方会自动优先使用该 SDK）。参考宿主与差分的完整闭环：
 
 ```powershell
-# 1. 设置 .NET 8 SDK 环境变量（本机 SDK 不在默认 PATH 时）
-$env:DOTNET_ROOT = "C:\Users\pengj\.dotnet-sdk"
-$env:PATH = "C:\Users\pengj\.dotnet-sdk;" + $env:PATH
+# 1. 人工翻页检视：打开宿主逐页比对（←/→ 或 PgUp/PgDn 翻页、Ctrl+S 导出本页）
+just parity review
 
-# 2. 构建并批量采集参考截图（全量控件流式装箱分页、命中缓存毫秒级跳过，内部经 bque 排队）
-just parity-capture
+# 2. 增量采集参考截图（全量控件流式装箱分页、命中缓存毫秒级跳过，内部经 bque 排队）
+just parity capture
 
 # 3. 跑 ROI 四门禁离屏差分全链路回归（同样经 bque 排队）
-just parity --no-cache
+just parity diff --refresh
+
+# 一键全闭环（采集 + 差分）：just parity
 ```
 
 产物：`target/parity/report.json`、`target/parity/ours/`、`target/parity/heat/`。参考截图目录已被 `.gitignore` 忽略。

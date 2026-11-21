@@ -17,31 +17,48 @@
 
 - .NET 8 SDK（`dotnet --list-sdks` 能看到 8.x）
 - Windows 10 1809+（本机需能显示 WinUI 3 窗口）
-- Windows App SDK 运行时：本工程按 `WindowsAppSDKSelfContained=false` 构建，运行机需要安装 Microsoft Windows App SDK 1.8 运行时；若只想单机临时跑，可在 `WinUiReference.csproj` 里加 `<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>` 改为自包含。
+- Windows App SDK 运行时：`just parity capture` 以 `WindowsAppSDKSelfContained=true` 构建，运行机无需预装 Windows App SDK 1.8 运行时。
 
 ## 构建与运行
 
-在仓库根目录执行；构建与采集统一经 `just q-run` 进入 bque 全局排队，不裸跑 `dotnet build` 或宿主 exe。
-批量闭环（构建 + `--batch` 采集）直接走 `just parity-capture`，它已经包含下面的构建与批量采集两步。
+在仓库根目录执行。只有一个入口：`just parity <动词>`，它会自己完成构建（`_parity-build`，经 bque 全局排队）再运行宿主，
+不要裸跑 `dotnet build` 或宿主 exe。
 
 ```powershell
-# 构建宿主（Project 已把默认 AnyCPU 提升为 x64）
-just q-run dotnet build tools/winui-reference/WinUiReference.csproj -c Release
+# 人工翻页检视：打开窗口逐页看，不采图、不退出（推荐日常用这条）
+just parity review
 
-# 采集单个控件用例
-just q-run tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/WinUiReference.exe `
-    --out tools/winui-reference/captures --control Button --state normal --theme light
+# 只检视某个控件（会跳到包含它的第一页，其余页仍可翻）
+just parity review --control NavigationView --theme all
 
-# 多控件单页流式拼版采集（1920×1080 瞬态画布、单次 350ms 动效等待）
-just q-run tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/WinUiReference.exe `
-    --control Button,CheckBox --theme light --out tools/winui-reference/captures
+# 增量采集全量参考图（命中指纹缓存的用例毫秒级跳过）
+just parity capture
 
-# 批量动态拼版采集（全量或指定控件、多控件单页流式装箱、命中指纹缓存自动跳过）
-just parity-capture
+# 强制重采并额外保留拼版总览图
+just parity capture --refresh --keep-sheets
 
-# 强制忽略缓存重截并同时保存 page_{index}_{theme}_{backdrop}_sheet.png 拼版总览图及索引 JSON
-just parity-capture --no-cache --save-sheet
+# 采集单个控件、单个状态
+just parity capture --control Button --state normal --theme light
 ```
+
+### 人工翻页检视（`--review`）
+
+参考宿主原本只会「逐页 settle → 截图 → 退出」，`--review` 把它变成一张可以停留的检视台：
+
+- 分页与自动批采完全一致：同一份 FFDH 装箱结果、同一张 1920×1080 DIP 画布、同一棵可视树。
+- 检视条位于画布**之外**，因此永远不会进入 `RenderTargetBitmap` 的像素。
+- 「截图本页」复用批采的切片路径（`page_{index}_{theme}_{backdrop}_sheet.png` + 坐标索引 JSON），
+  导出前会把窗口钉回 1:1，导出后恢复窗口尺寸。
+- 整页命中指纹缓存时页码旁显示「已缓存」，说明 `just parity diff` 会直接复用这一页。
+
+| 交互 | 作用 |
+| --- | --- |
+| `←` / `→`、`PageUp` / `PageDown` | 上一页 / 下一页 |
+| `Home` / `End` | 第一页 / 最后一页 |
+| `Ctrl+S` | 导出当前页 |
+| `Esc` | 退出 |
+| 「跳到控件」下拉 | 跳到包含该控件的第一页 |
+| 「适应窗口」/「实际大小」 | 整页缩放显示 / 1:1 像素级查看 |
 
 ## 与 unbound-ui 的对照闭环
 
@@ -68,19 +85,19 @@ just parity
 
 | 参数 | 取值 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `--out <dir>` | 任意目录 | `captures` | 输出目录，不存在会自动创建 |
-| `--control <names>` | 见下方「已接入控件」 | `Button` | 大小写不敏感；支持逗号分隔多个控件（如 `Button,CheckBox`） |
-| `--state <state>` | `normal` `disabled` `checked` `focused` | `normal` | `checked` 仅支持 CheckBox / ToggleSwitch / ToggleButton / RadioButton 等；缺省时采集所有支持状态 |
-| `--theme <theme>` | `light` `dark` `all` | `light` | 通过 `Host.RequestedTheme` 切换（`all` 仅限 `--batch`） |
-| `--backdrop <kind>` | `solid` `mica` `mica_alt` `acrylic` `all` | `solid` | 确定性合成底板类型（`all` 仅限 `--batch`） |
-| `--width <N>` | 64..8192 | `1920` | 画布宽度 DIP。动态拼版载体架构下，视口统一使用 1920×1080 标准画布以保证切片坐标确定性与抗裁剪；命令行传入值作为 `requestedWindowWidth` 记录在切片 JSON 元数据中 |
-| `--height <N>` | 64..8192 | `1080` | 画布高度 DIP。动态拼版载体架构下，视口统一使用 1920×1080 标准画布以保证切片坐标确定性与抗裁剪；命令行传入值作为 `requestedWindowHeight` 记录在切片 JSON 元数据中 |
-| `--batch` | 开关 | 关闭 | 批量模式：按「主题 × 后景」将待测控件流式装箱并自动切出紧凑单图 |
-| `--no-cache` | 开关 | 关闭 | 忽略 `fingerprint` 缓存，强制重新采集全部用例 |
-| `--save-sheet` | 开关 | 关闭 | 除切分后的单用例 PNG 外，额外按页码输出 `page_{pageIndex:D2}_{theme}_{backdrop}_sheet.png` 拼版总览图及坐标索引 JSON |
+| `--out <dir>` | 任意目录 | `captures` | 输出目录，不存在会自动创建；`just` 配方传绝对路径，与调用者工作目录无关 |
+| `--control <names>` | 见下方「已接入控件」 | 全部 | 大小写不敏感；支持逗号分隔多个控件（如 `Button,CheckBox`） |
+| `--state <state>` | `normal` `disabled` `checked` `focused` | 全部已实现态 | `checked` 仅支持 CheckBox / ToggleSwitch / ToggleButton / RadioButton 等 |
+| `--theme <theme>` | `light` `dark` `all` | `light` | 通过 `Host.RequestedTheme` 切换；`all` 无需额外开关 |
+| `--backdrop <kind>` | `solid` `mica` `mica_alt` `acrylic` `all` | `solid` | 确定性合成底板类型；`all` 无需额外开关 |
+| `--review` | 开关 | 关闭 | 人工翻页检视：装载全量页面、不采图、不退出，见上文快捷键表 |
+| `--refresh` | 开关 | 关闭 | 忽略 `fingerprint` 缓存，强制重新采集（旧名 `--no-cache` 仍可用但会提示废弃） |
+| `--keep-sheets` | 开关 | 关闭 | 额外按页码输出 `page_{pageIndex:D2}_{theme}_{backdrop}_sheet.png` 拼版总览图及坐标索引 JSON（旧名 `--save-sheet`） |
 
-> **视口尺寸与坐标确定性说明**：
-> 在动态拼版架构（ADR 0015）下，瞬态排版载体统一使用 1920×1080 DIP 确定性画布进行 FFDH 流式装箱，杜绝因窗口动态拉伸导致的子像素抗锯齿抖动与切片边缘截断。命令行传入的 `--width` / `--height` 会被解析并校验在 `64..8192` 范围内，并作为 `requestedWindowWidth` / `requestedWindowHeight` 记录在切片 JSON 元数据中供回溯审计。
+> **画布尺寸与坐标确定性**：
+> 在动态拼版架构（ADR 0015）下，瞬态排版载体固定为 1920×1080 DIP 的确定性画布进行 FFDH 流式装箱，杜绝窗口拉伸导致的子像素抗锯齿抖动与切片边缘截断。因此**不再提供 `--width` / `--height`**：画布尺寸是契约的一部分，能改它就能让历史参考图不可比。检视模式只是把显示层缩放到屏幕内，导出前仍会钉回 1:1。
+>
+> **已移除的旧参数**：`--batch`（现在采全部控件是默认行为，用 `--control` 收窄）、`--width` / `--height`（见上）。传入会得到明确的报错而不是被静默忽略。
 
 ### 已接入控件（64 个）
 

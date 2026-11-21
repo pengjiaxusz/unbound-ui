@@ -8,11 +8,14 @@
 //! gallery 打印测量结果，无头校验器检查布局，showcase 则同时展示两者。
 //!
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
 use showcase::backdrop_compare::{BackdropCompareRun, CompareReport, CompareStep};
+use showcase::cli::{
+    self, BackdropCompareOptions, Command, GalleryOptions, ParityDiffOptions, ShotOptions,
+};
 use showcase::frame_plan::{frame_size, needs_rebuild, upload_plan};
 use showcase::runtime_app::GalleryRuntime;
 use showcase::shell::GalleryApp;
@@ -1764,13 +1767,6 @@ fn write_png(path: &str, width: u32, height: u32, bgra: &[u8]) -> Result<(), Str
     showcase::shot::write_bgra_png(path, width, height, bgra)
 }
 
-/// 读取 `--name value` 形式的参数值。
-fn arg_value(args: &[String], name: &str) -> Option<String> {
-    args.windows(2)
-        .find(|window| window[0] == name && !window[1].starts_with("--"))
-        .map(|window| window[1].clone())
-}
-
 /// 解析对照入口的材质名称。
 fn parse_material(name: &str) -> Option<unbound_backdrop::MaterialKind> {
     match name.to_ascii_lowercase().replace('_', "-").as_str() {
@@ -1806,153 +1802,23 @@ fn report_compare(result: Result<CompareReport, String>) {
     }
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--parity-run") {
-        let reference = arg_value(&args, "--reference")
-            .unwrap_or_else(|| "tools/winui-reference/captures".into());
-        let out = arg_value(&args, "--out").unwrap_or_else(|| "target/parity".into());
-        let allow_cache = !args.iter().any(|a| a == "--no-cache");
-        match showcase::png_diff::run_batch_with_options(&reference, &out, allow_cache) {
-            Ok(summary) => {
-                println!(
-                    "parity: pass={} known-aa={} fail={} invalid={} (of {}, {} cached) · {}",
-                    summary.passed(),
-                    summary.known_aa(),
-                    summary.failed(),
-                    summary.invalid(),
-                    summary.cases.len(),
-                    summary.cache_hits,
-                    summary.out_dir.join("report.json").display()
-                );
-                for case in summary
-                    .cases
-                    .iter()
-                    .filter(|case| {
-                        !matches!(
-                            case.status(),
-                            showcase::png_diff::CaseStatus::Pass
-                                | showcase::png_diff::CaseStatus::KnownAa
-                        )
-                    })
-                    .take(8)
-                {
-                    println!(
-                        "  {} [{}] {} roi_mean={:.2} p95={:.2} over={:.1}% bbox={:?} ref={:?} intrinsic={:?}",
-                        case.name,
-                        case.status().as_str(),
-                        case.invalid_reason.as_deref().unwrap_or("-"),
-                        case.mean_de,
-                        case.p95_de,
-                        case.over_limit_ratio * 100.0,
-                        case.ours_bbox,
-                        case.reference_bbox,
-                        case.intrinsic
-                    );
-                }
-            }
-            Err(error) => eprintln!("parity run failed:\n{error}"),
-        }
-        return;
-    }
-    if args.iter().any(|a| a == "--shot") {
-        let dark = args.iter().any(|a| a == "--dark");
-        let zoom_step = args
-            .windows(2)
-            .find(|w| w[0] == "--zoom")
-            .and_then(|w| w[1].parse::<usize>().ok())
-            .map_or(0, |percent| match percent {
-                125 => 1,
-                150 => 2,
-                200 => 3,
-                _ => 0,
-            });
-        let path = args
-            .windows(2)
-            .find(|w| w[0] == "--shot" && !w[1].starts_with("--"))
-            .map_or_else(
-                || {
-                    let name = if dark {
-                        "gallery-dark.png"
-                    } else {
-                        "gallery-light.png"
-                    };
-                    format!("target/showcase/{name}")
-                },
-                |w| w[1].clone(),
-            );
-        let width = args
-            .windows(2)
-            .find(|w| w[0] == "--width")
-            .and_then(|w| w[1].parse::<u32>().ok())
-            .unwrap_or(1440);
-        let height = args
-            .windows(2)
-            .find(|w| w[0] == "--height")
-            .and_then(|w| w[1].parse::<u32>().ok())
-            .unwrap_or(900);
-        match render_to_png(
-            &path,
-            width,
-            height,
-            dark,
-            zoom_step,
-            args.iter().any(|a| a == "--hud"),
-            arg_value(&args, "--page").as_deref(),
-        ) {
-            Ok(()) => println!("wrote {path}"),
-            Err(error) => eprintln!("could not render:\n{error}"),
-        }
-        return;
-    }
+/// 按名称查找页面（大小写不敏感，与历史上 `--shot --page` 的口径一致）。
+fn page_by_name(name: &str) -> Option<showcase::pages::PageId> {
+    let wanted = name.to_ascii_lowercase();
+    showcase::pages::PageId::ALL
+        .into_iter()
+        .find(|candidate| format!("{candidate:?}").to_ascii_lowercase() == wanted)
+}
 
-    if args.iter().any(|a| a == "--backdrop-compare") {
-        let name = arg_value(&args, "--name").unwrap_or_else(|| "backdrop".into());
-        let out = arg_value(&args, "--out").unwrap_or_else(|| "target/backdrop-compare".into());
-        let material = match arg_value(&args, "--material") {
-            Some(value) => match parse_material(&value) {
-                Some(material) => material,
-                None => {
-                    eprintln!("unknown backdrop material: {value}");
-                    return;
-                }
-            },
-            None => unbound_backdrop::MaterialKind::Mica,
+/// 打开交互式展厅；`--page` 可指定启动后停留的页面。
+fn run_gallery(options: GalleryOptions) {
+    let mut app = Showcase::new();
+    if let Some(name) = options.page.as_deref() {
+        let Some(page) = page_by_name(name) else {
+            eprintln!("unknown page: {name}");
+            std::process::exit(2);
         };
-        let width = arg_value(&args, "--width")
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(1280);
-        let height = arg_value(&args, "--height")
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(800);
-        let position = match (
-            arg_value(&args, "--x").and_then(|value| value.parse::<i32>().ok()),
-            arg_value(&args, "--y").and_then(|value| value.parse::<i32>().ok()),
-        ) {
-            (Some(x), Some(y)) => WindowPosition::Physical { x, y },
-            _ => WindowPosition::CenterPrimary,
-        };
-        let config = WindowConfig {
-            title: TITLE.to_string(),
-            width,
-            height,
-            resizable: false,
-            decorations: false,
-            min_width: 320,
-            min_height: 240,
-            visible: true,
-            position,
-            ..Default::default()
-        };
-        let Ok(window) = PlatformWindow::new(&config) else {
-            eprintln!("could not create the window");
-            return;
-        };
-        let run = BackdropCompareRun::new(name, material, PathBuf::from(out));
-        if let Err(error) = window.run(Showcase::with_compare(run)) {
-            eprintln!("the event loop failed: {error}");
-        }
-        return;
+        app.shell_mut().state.active_page = page;
     }
 
     let config = WindowConfig {
@@ -1970,8 +1836,162 @@ fn main() {
         eprintln!("could not create the window");
         return;
     };
-    if let Err(error) = window.run(Showcase::new()) {
+    if let Err(error) = window.run(app) {
         eprintln!("the event loop failed: {error}");
+    }
+}
+
+/// 跑 WinUI 3 参考图的本框架侧差分；`--only-failed` 时只重跑上一份报告的失败清单。
+fn run_parity_diff(mut options: ParityDiffOptions) {
+    if options.only_failed {
+        let report = Path::new(&options.out).join("report.json");
+        let text = match std::fs::read_to_string(&report) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!(
+                    "cannot read {}: {error}\nrun `just parity diff` once to produce a baseline report",
+                    report.display()
+                );
+                std::process::exit(2);
+            }
+        };
+        let names = showcase::png_diff::failed_case_names(&text);
+        if names.is_empty() {
+            println!("parity: no failed cases in {}", report.display());
+            return;
+        }
+        println!("parity: retrying {} failed case(s)", names.len());
+        options.filter.names = names;
+    }
+
+    match showcase::png_diff::run_batch_filtered(
+        &options.reference,
+        &options.out,
+        options.allow_cache,
+        &options.filter,
+    ) {
+        Ok(summary) => {
+            println!(
+                "parity: pass={} known-aa={} fail={} invalid={} (of {}, {} cached, {} filtered) - {}",
+                summary.passed(),
+                summary.known_aa(),
+                summary.failed(),
+                summary.invalid(),
+                summary.cases.len(),
+                summary.cache_hits,
+                summary.filtered_out,
+                summary.out_dir.join("report.json").display()
+            );
+            for case in summary
+                .cases
+                .iter()
+                .filter(|case| {
+                    !matches!(
+                        case.status(),
+                        showcase::png_diff::CaseStatus::Pass
+                            | showcase::png_diff::CaseStatus::KnownAa
+                    )
+                })
+                .take(8)
+            {
+                println!(
+                    "  {} [{}] {} roi_mean={:.2} p95={:.2} over={:.1}% bbox={:?} ref={:?} intrinsic={:?}",
+                    case.name,
+                    case.status().as_str(),
+                    case.invalid_reason.as_deref().unwrap_or("-"),
+                    case.mean_de,
+                    case.p95_de,
+                    case.over_limit_ratio * 100.0,
+                    case.ours_bbox,
+                    case.reference_bbox,
+                    case.intrinsic
+                );
+            }
+        }
+        Err(error) => {
+            eprintln!("parity run failed:\n{error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// 离屏渲染整页展厅并写出 PNG。
+fn run_shot(options: ShotOptions) {
+    let path = options.path.clone().unwrap_or_else(|| {
+        let name = if options.dark {
+            "gallery-dark.png"
+        } else {
+            "gallery-light.png"
+        };
+        format!("target/showcase/{name}")
+    });
+    match render_to_png(
+        &path,
+        options.width,
+        options.height,
+        options.dark,
+        options.zoom_step,
+        options.show_hud,
+        options.page.as_deref(),
+    ) {
+        Ok(()) => println!("wrote {path}"),
+        Err(error) => eprintln!("could not render:\n{error}"),
+    }
+}
+
+/// 同一窗口位置下先截原生后景、再截自绘后景并写出产物。
+fn run_backdrop_compare(options: BackdropCompareOptions) {
+    let material = match options.material.as_deref() {
+        Some(value) => match parse_material(value) {
+            Some(material) => material,
+            None => {
+                eprintln!("unknown backdrop material: {value}");
+                return;
+            }
+        },
+        None => unbound_backdrop::MaterialKind::Mica,
+    };
+    let position = match options.position {
+        Some((x, y)) => WindowPosition::Physical { x, y },
+        None => WindowPosition::CenterPrimary,
+    };
+    let config = WindowConfig {
+        title: TITLE.to_string(),
+        width: options.width,
+        height: options.height,
+        resizable: false,
+        decorations: false,
+        min_width: 320,
+        min_height: 240,
+        visible: true,
+        position,
+        ..Default::default()
+    };
+    let Ok(window) = PlatformWindow::new(&config) else {
+        eprintln!("could not create the window");
+        return;
+    };
+    let run = BackdropCompareRun::new(options.name, material, PathBuf::from(options.out));
+    if let Err(error) = window.run(Showcase::with_compare(run)) {
+        eprintln!("the event loop failed: {error}");
+    }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let command = match cli::parse(&args) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+
+    match command {
+        Command::Gallery(options) => run_gallery(options),
+        Command::ParityDiff(options) => run_parity_diff(options),
+        Command::Shot(options) => run_shot(options),
+        Command::BackdropCompare(options) => run_backdrop_compare(options),
     }
 }
 

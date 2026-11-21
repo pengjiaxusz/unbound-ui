@@ -236,6 +236,8 @@ pub struct BatchSummary {
     pub out_dir: PathBuf,
     /// 命中源码指纹缓存跳过的渲染次数。
     pub cache_hits: usize,
+    /// 被 `--control` / `--theme` / `--only-failed` 等筛选条件跳过的用例数。
+    pub filtered_out: usize,
 }
 
 impl BatchSummary {
@@ -276,16 +278,95 @@ impl BatchSummary {
     }
 }
 
+/// 差分筛选：只重渲关心的用例，其余直接跳过（不渲染、不写产物、不计入统计）。
+///
+/// 空列表表示「不限」，因此 `ParityFilter::default()` 等于全量差分。
+/// `names` 用于 `--only-failed`：名字通常来自上一份 `report.json` 的失败清单。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ParityFilter {
+    /// 用例名（即参考图文件基名）。
+    pub names: Vec<String>,
+    pub controls: Vec<String>,
+    pub states: Vec<String>,
+    pub themes: Vec<String>,
+    pub backdrops: Vec<String>,
+}
+
+impl ParityFilter {
+    /// 是否放行了任何限制条件。
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+            && self.controls.is_empty()
+            && self.states.is_empty()
+            && self.themes.is_empty()
+            && self.backdrops.is_empty()
+    }
+
+    /// 用例是否命中筛选。
+    #[must_use]
+    pub fn matches(
+        &self,
+        name: &str,
+        control: &str,
+        state: &str,
+        theme: &str,
+        backdrop: &str,
+    ) -> bool {
+        fn hit(list: &[String], value: &str) -> bool {
+            list.is_empty() || list.iter().any(|item| item.eq_ignore_ascii_case(value))
+        }
+        hit(&self.names, name)
+            && hit(&self.controls, control)
+            && hit(&self.states, state)
+            && hit(&self.themes, theme)
+            && hit(&self.backdrops, backdrop)
+    }
+}
+
+/// 从上一份 `report.json` 里挑出未通过（`fail` / `invalid`）的用例名。
+///
+/// 报告由本模块写出，每个用例固定占一行，因此逐行读取即可，无需引入 JSON 解析器。
+#[must_use]
+pub fn failed_case_names(report_json: &str) -> Vec<String> {
+    let mut names: Vec<String> = report_json
+        .lines()
+        .filter(|line| line.contains("\"name\":"))
+        .filter(|line| {
+            json_string(line, "status").is_none_or(|status| status == "fail" || status == "invalid")
+        })
+        .filter_map(|line| json_string(line, "name"))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// 对参考目录中的每个用例 PNG 渲染本框架对应控件并计算有效对比区（ROI）指标（默认启用缓存）。
 pub fn run_batch(reference_dir: &str, out_dir: &str) -> Result<BatchSummary, String> {
     run_batch_with_options(reference_dir, out_dir, true)
 }
 
-/// 带缓存开关的批量差分入口。
+/// 带缓存开关的批量差分入口（全量）。
 pub fn run_batch_with_options(
     reference_dir: &str,
     out_dir: &str,
     allow_cache: bool,
+) -> Result<BatchSummary, String> {
+    run_batch_filtered(
+        reference_dir,
+        out_dir,
+        allow_cache,
+        &ParityFilter::default(),
+    )
+}
+
+/// 带缓存开关与筛选条件的批量差分入口。
+pub fn run_batch_filtered(
+    reference_dir: &str,
+    out_dir: &str,
+    allow_cache: bool,
+    filter: &ParityFilter,
 ) -> Result<BatchSummary, String> {
     let reference_dir = Path::new(reference_dir);
     let out_root = Path::new(out_dir);
@@ -334,6 +415,7 @@ pub fn run_batch_with_options(
     let mut session = ParitySession::new(420, 160)?;
     let mut cases = Vec::new();
     let mut cache_hits = 0;
+    let mut filtered_out = 0;
 
     for reference_png in png_files {
         let name = reference_png
@@ -360,6 +442,13 @@ pub fn run_batch_with_options(
         let state = json_string(&meta, "state").ok_or_else(|| format!("{name}: missing state"))?;
         let theme = json_string(&meta, "theme").ok_or_else(|| format!("{name}: missing theme"))?;
         let backdrop = json_string(&meta, "backdrop").unwrap_or_else(|| "solid".to_string());
+
+        // 筛选放在最前：未命中的用例不进渲染器、不写渲染产物。
+        if !filter.matches(&name, &control, &state, &theme, &backdrop) {
+            filtered_out += 1;
+            continue;
+        }
+
         let explicit_width =
             json_bool(&meta, "explicitWidth").unwrap_or_else(|| default_explicit_width(&control));
         let scale = json_number(&meta, "rasterizationScale").unwrap_or(1.0) as f32;
@@ -461,10 +550,18 @@ pub fn run_batch_with_options(
 
     session.destroy();
 
+    if cases.is_empty() && !filter.is_empty() {
+        return Err(format!(
+            "no reference cases matched the filter ({filtered_out} skipped) in {}",
+            reference_dir.display()
+        ));
+    }
+
     let summary = BatchSummary {
         cases,
         out_dir: out_root.to_path_buf(),
         cache_hits,
+        filtered_out,
     };
     write_report(&summary)?;
     Ok(summary)
@@ -1166,5 +1263,56 @@ mod tests {
         assert_eq!(stale, vec!["legacy".to_string(), "mismatch".to_string()]);
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn default_filter_admits_every_case() {
+        let filter = super::ParityFilter::default();
+        assert!(filter.is_empty());
+        assert!(filter.matches("Button_normal_light", "Button", "normal", "light", "solid"));
+    }
+
+    #[test]
+    fn filter_narrows_by_control_and_state_without_case_sensitivity() {
+        let filter = super::ParityFilter {
+            controls: vec!["button".to_string()],
+            states: vec!["normal".to_string()],
+            ..Default::default()
+        };
+        assert!(!filter.is_empty());
+        assert!(filter.matches("Button_normal_light", "Button", "normal", "light", "solid"));
+        assert!(!filter.matches(
+            "CheckBox_normal_light",
+            "CheckBox",
+            "normal",
+            "light",
+            "solid"
+        ));
+        assert!(!filter.matches(
+            "Button_disabled_light",
+            "Button",
+            "disabled",
+            "light",
+            "solid"
+        ));
+    }
+
+    #[test]
+    fn only_failed_names_skips_passing_and_known_aa_cases() {
+        let report = r#"{
+  "cases": [
+    { "name": "Button_normal_light", "control": "Button", "status": "pass" },
+    { "name": "Button_disabled_dark", "control": "Button", "status": "fail" },
+    { "name": "RatingControl_normal_light", "control": "RatingControl", "status": "known-aa" },
+    { "name": "Image_normal_light", "control": "Image", "status": "invalid" }
+  ]
+}"#;
+        assert_eq!(
+            super::failed_case_names(report),
+            vec![
+                "Button_disabled_dark".to_string(),
+                "Image_normal_light".to_string()
+            ]
+        );
     }
 }
