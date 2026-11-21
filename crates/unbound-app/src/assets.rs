@@ -3,25 +3,99 @@
 //! 异步管线在渲染线程之外完成解码；本模块是主线程一侧。
 //! 每帧 [`AssetHub::poll`] 会排空已完成的任务，将解码后的图像打包进共享
 //! RGBA8 图集页，将字体注入文本引擎，并返回重建所需的脏标志。
-//! 同时支持通过 [`AssetHub::upload_rgba8`] 直接上传已解码的 RGBA8 原始像素，
-//! 并提供显式释放（[`AssetHub::release_asset`]）与按字节预算的 LRU 淘汰
-//! （[`AssetHub::evict_lru_to_budget`]），满足高频缩略图与画布瓦片的显存驻留治理（ADR-0019）。
-
-use std::sync::Arc;
+//! 仍在解码中的图像由 [`unbound_widgets::emit_image_with_assets`] 绘制为占位符，
+//! 因此解码绝不会阻塞帧渲染，纹理到达时布局也不会跳动。
+//!
+//!
 
 use rustc_hash::FxHashMap;
 
 use unbound_asset::{AssetId, AssetKind, AssetPipeline, Completed, PipelineConfig};
 use unbound_gpu::atlas::{AtlasKind, AtlasUpload, PAGE_SIZE};
-use unbound_gpu::pipeline::{ExternalTextureSlots, EXTERNAL_TEXTURE_BASE};
+use unbound_gpu::pipeline::EXTERNAL_TEXTURE_BASE;
 use unbound_math::{Rect, Vec2};
 use unbound_text::TextEngine;
 use unbound_widgets::{ImageAssetResolver, ResolvedImage};
 
 use crate::DirtyFlags;
 
-/// 共享图集接纳的单边尺寸上限：超过该阈值的动态 RGBA8 纹理走独立外部纹理槽，避免撑爆图集页。
-pub const DYNAMIC_ATLAS_MAX_EDGE: u32 = 512;
+/// 外部托管 RGBA8 纹理的逻辑句柄。
+///
+/// 由 [`AssetHub::upload_external_rgba8`] 分配，在纹理上传完成前即可用于视图声明；
+/// 窗口运行器在每帧渲染前自动向 GPU 渲染器执行上传/更新/释放并回写实际 Bindless 槽位。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ExternalTextureHandle(pub u64);
+
+/// 外部托管 RGBA8 纹理的生命周期状态。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ExternalTextureState {
+    /// 上传请求已入队，尚未完成 GPU 槽位分配。
+    Pending,
+    /// 已绑定到有效 GPU 外部 Bindless 纹理槽。
+    Ready {
+        /// 外部 Bindless 纹理槽位索引（`EXTERNAL_TEXTURE_BASE..`）。
+        slot: u32,
+        /// 纹理宽度（像素）。
+        width: u32,
+        /// 纹理高度（像素）。
+        height: u32,
+    },
+    /// 上传、更新或设备恢复导致纹理不可用。
+    Failed,
+    /// 句柄已主动释放。
+    Released,
+}
+
+/// 供窗口运行器在渲染前消费的外部纹理 GPU 操作队列项。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExternalTextureOp {
+    /// 分配新的外部纹理槽并上传 RGBA8 像素数据。
+    Upload {
+        /// 逻辑句柄。
+        handle: ExternalTextureHandle,
+        /// 纹理宽度（像素）。
+        width: u32,
+        /// 纹理高度（像素）。
+        height: u32,
+        /// 为 `true` 时按 sRGB 采样，否则按线性 UNORM 采样。
+        srgb: bool,
+        /// 紧凑 RGBA8 像素字节（长度等于 `width * height * 4`）。
+        rgba: Vec<u8>,
+    },
+    /// 对已存在的外部纹理执行像素更新。
+    Update {
+        /// 逻辑句柄。
+        handle: ExternalTextureHandle,
+        /// 目标宽度（像素）。
+        width: u32,
+        /// 目标高度（像素）。
+        height: u32,
+        /// 紧凑 RGBA8 像素字节（长度等于 `width * height * 4`）。
+        rgba: Vec<u8>,
+    },
+    /// 销毁外部纹理并归还其 GPU Bindless 槽位。
+    Release {
+        /// 逻辑句柄。
+        handle: ExternalTextureHandle,
+    },
+}
+
+#[derive(Copy, Clone, Debug)]
+struct ExternalTextureRecord {
+    state: ExternalTextureState,
+    width: u32,
+    height: u32,
+}
+
+fn validate_rgba8_len(width: u32, height: u32, len: usize) -> bool {
+    if width == 0 || height == 0 {
+        return false;
+    }
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4));
+    expected == Some(len)
+}
 
 /// 资产在其生命周期中所处的阶段。
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -30,7 +104,7 @@ pub enum AssetResidency {
     Loading,
     /// 已解码并打包到 `layer` 的 `uv` 区域，附带其原始尺寸。
     Ready {
-        /// 无绑定（bindless）图集数组层索引或外部纹理槽位。
+        /// 无绑定（bindless）图集数组层索引。
         layer: u32,
         /// 层内归一化至 `0..1` 的区域。
         uv: Rect,
@@ -39,60 +113,6 @@ pub enum AssetResidency {
     },
     /// 解码或图集分配失败。
     Failed,
-}
-
-/// 动态 RGBA8 像素上传错误（ADR-0019）。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AssetUploadError {
-    /// 图像宽或高为零。
-    ZeroDimension,
-    /// 行步长小于 `width * 4` 字节。
-    InvalidStride {
-        /// 允许的最小行步长（字节）。
-        expected_min: u32,
-        /// 调用方实际传入的行步长（字节）。
-        actual: u32,
-    },
-    /// 像素缓冲字节长度不足以覆盖 `stride_bytes * height`。
-    BufferTooSmall {
-        /// 所需最小字节数。
-        expected_min: usize,
-        /// 实际缓冲长度。
-        actual: usize,
-    },
-    /// 共享 RGBA8 图集层已全部占满且无法再分配。
-    AtlasExhausted,
-    /// 外部独立纹理槽已全部分配完毕。
-    ExternalSlotExhausted,
-}
-
-/// 待提交至 GPU 外部纹理槽的 RGBA8 原始像素上传请求。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExternalTextureUpload {
-    /// 关联的资产标识。
-    pub asset_id: AssetId,
-    /// 已分配的外部纹理 Bindless 槽位号。
-    pub slot: u32,
-    /// 纹理像素宽度。
-    pub width: u32,
-    /// 纹理像素高度。
-    pub height: u32,
-    /// 紧凑排列（`width * height * 4` 字节）的 RGBA8 像素数据。
-    pub data: Vec<u8>,
-}
-
-/// 动态资产的存储归属与 LRU 追踪元数据。
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum DynamicBacking {
-    Atlas { layer: u32 },
-    External { slot: u32 },
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct DynamicAssetRecord {
-    backing: DynamicBacking,
-    byte_size: usize,
-    last_used_frame: u64,
 }
 
 /// 共享图像图集中的单个已放置矩形。
@@ -118,6 +138,10 @@ impl Allocation {
 }
 
 /// 基于 RGBA8 图集页的货架式打包器（shelf packer）。
+///
+/// 图像按从左到右、从上到下的顺序排入货架；当前页满时开启下一数组层。
+/// 打包器永不释放空间：图像在会话期间常驻，符合无绑定图集的预期。
+///
 #[derive(Debug, Default)]
 struct ShelfAtlas {
     layer: u32,
@@ -128,6 +152,7 @@ struct ShelfAtlas {
 
 impl ShelfAtlas {
     /// 1 纹素的内边距可防止双线性采样在相邻图像间发生渗色。
+    ///
     const PADDING: u32 = 1;
 
     fn allocate(&mut self, width: u32, height: u32) -> Option<Allocation> {
@@ -161,36 +186,28 @@ impl ShelfAtlas {
         self.shelf_height = self.shelf_height.max(height + Self::PADDING);
         Some(allocation)
     }
-
-    fn reset(&mut self) {
-        self.layer = 0;
-        self.shelf_y = 0;
-        self.shelf_height = 0;
-        self.cursor_x = 0;
-    }
 }
 
 /// 主线程侧的资产前端。
 ///
-/// 持有解码管线、共享图集、外部纹理槽位与 LRU 驻留表；帧循环仅需调用 [`AssetHub::poll`]。
+/// 持有解码管线与驻留表；帧循环仅需调用 [`AssetHub::poll`]。
+///
 pub struct AssetHub {
     pipeline: AssetPipeline,
     residency: FxHashMap<AssetId, AssetResidency>,
-    dynamic_records: FxHashMap<AssetId, DynamicAssetRecord>,
     atlas: ShelfAtlas,
-    external_slots: ExternalTextureSlots,
     uploads: Vec<AtlasUpload>,
-    external_uploads: Vec<ExternalTextureUpload>,
-    external_releases: Vec<u32>,
     next_id: u32,
-    touch_clock: u64,
+    external_textures: FxHashMap<ExternalTextureHandle, ExternalTextureRecord>,
+    external_ops: Vec<ExternalTextureOp>,
+    next_external_id: u64,
+    external_dirty: bool,
 }
 
 impl std::fmt::Debug for AssetHub {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AssetHub")
             .field("residency_len", &self.residency.len())
-            .field("dynamic_len", &self.dynamic_records.len())
             .field("next_id", &self.next_id)
             .finish_non_exhaustive()
     }
@@ -215,14 +232,13 @@ impl AssetHub {
         Self {
             pipeline: AssetPipeline::new(config),
             residency: FxHashMap::default(),
-            dynamic_records: FxHashMap::default(),
             atlas: ShelfAtlas::default(),
-            external_slots: ExternalTextureSlots::new(),
             uploads: Vec::new(),
-            external_uploads: Vec::new(),
-            external_releases: Vec::new(),
             next_id: 1,
-            touch_clock: 0,
+            external_textures: FxHashMap::default(),
+            external_ops: Vec::new(),
+            next_external_id: 1,
+            external_dirty: false,
         }
     }
 
@@ -236,190 +252,9 @@ impl AssetHub {
         self.request(AssetKind::Font, bytes)
     }
 
-    /// 直接上传已解码的 RGBA8 原始像素缓冲区（ADR-0019，免 PNG 重编码）。
-    ///
-    /// - 宽高均不超过 [`DYNAMIC_ATLAS_MAX_EDGE`]（512px）时优先打入共享 RGBA8 图集；
-    /// - 超过阈值或图集已满时自动分配独立外部纹理槽（`ExternalTextureSlots`）。
-    pub fn upload_rgba8(
-        &mut self,
-        width: u32,
-        height: u32,
-        stride_bytes: u32,
-        pixels: Arc<[u8]>,
-    ) -> Result<AssetId, AssetUploadError> {
-        if width == 0 || height == 0 {
-            return Err(AssetUploadError::ZeroDimension);
-        }
-        let row_bytes = width.saturating_mul(4);
-        if stride_bytes < row_bytes {
-            return Err(AssetUploadError::InvalidStride {
-                expected_min: row_bytes,
-                actual: stride_bytes,
-            });
-        }
-        let required_len = (stride_bytes as usize).saturating_mul(height as usize);
-        if pixels.len() < required_len {
-            return Err(AssetUploadError::BufferTooSmall {
-                expected_min: required_len,
-                actual: pixels.len(),
-            });
-        }
-
-        let compact = compact_rgba8_rows(&pixels, width, height, stride_bytes);
-        let byte_size = compact.len();
-        let id = self.alloc_id();
-        self.touch_clock = self.touch_clock.saturating_add(1);
-        let stamp = self.touch_clock;
-
-        let prefer_atlas = width <= DYNAMIC_ATLAS_MAX_EDGE && height <= DYNAMIC_ATLAS_MAX_EDGE;
-        if prefer_atlas {
-            if let Some(allocation) = self.atlas.allocate(width, height) {
-                self.uploads.push(AtlasUpload {
-                    kind: AtlasKind::Rgba8,
-                    layer: allocation.layer,
-                    x: allocation.x,
-                    y: allocation.y,
-                    width: allocation.width,
-                    height: allocation.height,
-                    data: compact,
-                });
-                self.residency.insert(
-                    id,
-                    AssetResidency::Ready {
-                        layer: allocation.layer,
-                        uv: allocation.uv(),
-                        size: Vec2::new(width as f32, height as f32),
-                    },
-                );
-                self.dynamic_records.insert(
-                    id,
-                    DynamicAssetRecord {
-                        backing: DynamicBacking::Atlas {
-                            layer: allocation.layer,
-                        },
-                        byte_size,
-                        last_used_frame: stamp,
-                    },
-                );
-                return Ok(id);
-            }
-        }
-
-        let Some(slot) = self.external_slots.allocate() else {
-            return Err(if prefer_atlas {
-                AssetUploadError::AtlasExhausted
-            } else {
-                AssetUploadError::ExternalSlotExhausted
-            });
-        };
-        self.external_uploads.push(ExternalTextureUpload {
-            asset_id: id,
-            slot,
-            width,
-            height,
-            data: compact,
-        });
-        self.residency.insert(
-            id,
-            AssetResidency::Ready {
-                layer: slot,
-                uv: Rect::new(0.0, 0.0, 1.0, 1.0),
-                size: Vec2::new(width as f32, height as f32),
-            },
-        );
-        self.dynamic_records.insert(
-            id,
-            DynamicAssetRecord {
-                backing: DynamicBacking::External { slot },
-                byte_size,
-                last_used_frame: stamp,
-            },
-        );
-        Ok(id)
-    }
-
-    /// 显式释放指定资产并回收其外部纹理槽；当全部动态图集资产清空时自动复用图集页。
-    pub fn release_asset(&mut self, id: AssetId) -> bool {
-        let removed_residency = self.residency.remove(&id).is_some();
-        if let Some(record) = self.dynamic_records.remove(&id) {
-            match record.backing {
-                DynamicBacking::External { slot } => {
-                    if self.external_slots.release(slot) {
-                        self.external_releases.push(slot);
-                    }
-                }
-                DynamicBacking::Atlas { .. } => {
-                    let has_atlas_assets = self
-                        .dynamic_records
-                        .values()
-                        .any(|r| matches!(r.backing, DynamicBacking::Atlas { .. }));
-                    if !has_atlas_assets && self.residency.is_empty() {
-                        self.atlas.reset();
-                    }
-                }
-            }
-            return true;
-        }
-        removed_residency
-    }
-
-    /// 刷新指定动态资产的最近访问帧号，供 [`Self::evict_lru_to_budget`] 按 LRU 淘汰。
-    pub fn touch_asset(&mut self, id: AssetId, frame_index: u64) {
-        if let Some(record) = self.dynamic_records.get_mut(&id) {
-            record.last_used_frame = frame_index;
-        }
-    }
-
-    /// 按字节预算淘汰最久未使用的动态 RGBA8 资产，返回被淘汰的 [`AssetId`] 列表。
-    pub fn evict_lru_to_budget(&mut self, max_bytes: usize) -> Vec<AssetId> {
-        let mut current_bytes = self.dynamic_bytes();
-        if current_bytes <= max_bytes {
-            return Vec::new();
-        }
-        let mut candidates: Vec<(AssetId, u64, usize)> = self
-            .dynamic_records
-            .iter()
-            .map(|(&id, rec)| (id, rec.last_used_frame, rec.byte_size))
-            .collect();
-        candidates.sort_by_key(|&(id, frame, _)| (frame, id.0));
-
-        let mut evicted = Vec::new();
-        for (id, _, size) in candidates {
-            if current_bytes <= max_bytes {
-                break;
-            }
-            if self.release_asset(id) {
-                current_bytes = current_bytes.saturating_sub(size);
-                evicted.push(id);
-            }
-        }
-        evicted
-    }
-
-    /// 当前由 [`Self::upload_rgba8`] 登记的动态像素驻留总字节数。
-    #[must_use]
-    pub fn dynamic_bytes(&self) -> usize {
-        self.dynamic_records.values().map(|r| r.byte_size).sum()
-    }
-
-    /// 取出待上传至 GPU 外部纹理槽的 RGBA8 上传请求。
-    pub fn take_external_uploads(&mut self) -> Vec<ExternalTextureUpload> {
-        core::mem::take(&mut self.external_uploads)
-    }
-
-    /// 取出待从 GPU 解绑回收的外部纹理槽位号列表。
-    pub fn take_external_releases(&mut self) -> Vec<u32> {
-        core::mem::take(&mut self.external_releases)
-    }
-
-    fn alloc_id(&mut self) -> AssetId {
-        let id = AssetId(self.next_id);
-        self.next_id = self.next_id.saturating_add(1);
-        id
-    }
-
     fn request(&mut self, kind: AssetKind, bytes: Vec<u8>) -> AssetId {
-        let id = self.alloc_id();
+        let id = AssetId(self.next_id);
+        self.next_id += 1;
         let state = match self.pipeline.request(id, kind, bytes) {
             Ok(()) => AssetResidency::Loading,
             Err(_) => AssetResidency::Failed,
@@ -431,6 +266,7 @@ impl AssetHub {
     /// 排空已完成的解码任务，上传图像并注入字体。
     ///
     /// 返回重建所需的脏标志：新纹理对应 `PAINT`，新字体对应 `LAYOUT | TEXT`。
+    ///
     pub fn poll(&mut self, text: &mut TextEngine) -> DirtyFlags {
         self.pipeline.begin_frame();
         let completed = match self.pipeline.poll() {
@@ -448,6 +284,9 @@ impl AssetHub {
         let mut dirty = DirtyFlags::NONE;
         for completed in completed {
             dirty = dirty.merge(self.accept(completed, text));
+        }
+        if core::mem::take(&mut self.external_dirty) {
+            dirty = dirty.merge(DirtyFlags::PAINT);
         }
         dirty
     }
@@ -531,21 +370,196 @@ impl AssetHub {
     pub fn failures(&self) -> &[(AssetId, String)] {
         self.pipeline.failures()
     }
-}
 
-fn compact_rgba8_rows(pixels: &[u8], width: u32, height: u32, stride_bytes: u32) -> Vec<u8> {
-    let row_bytes = (width as usize) * 4;
-    let stride = stride_bytes as usize;
-    let total = row_bytes * (height as usize);
-    if stride == row_bytes {
-        return pixels[..total].to_vec();
+    /// 提交原始 RGBA8 像素上传至独立外部纹理槽，返回逻辑句柄。
+    ///
+    /// 若宽高为 0 或像素字节长度不等于 `width * height * 4`，则直接将该句柄标记为
+    /// [`ExternalTextureState::Failed`] 且不入队 GPU 上传操作。
+    pub fn upload_external_rgba8(
+        &mut self,
+        width: u32,
+        height: u32,
+        srgb: bool,
+        rgba: Vec<u8>,
+    ) -> ExternalTextureHandle {
+        let handle = ExternalTextureHandle(self.next_external_id);
+        self.next_external_id = self.next_external_id.wrapping_add(1).max(1);
+        if !validate_rgba8_len(width, height, rgba.len()) {
+            self.external_textures.insert(
+                handle,
+                ExternalTextureRecord {
+                    state: ExternalTextureState::Failed,
+                    width,
+                    height,
+                },
+            );
+            self.external_dirty = true;
+            return handle;
+        }
+        self.external_textures.insert(
+            handle,
+            ExternalTextureRecord {
+                state: ExternalTextureState::Pending,
+                width,
+                height,
+            },
+        );
+        self.external_ops.push(ExternalTextureOp::Upload {
+            handle,
+            width,
+            height,
+            srgb,
+            rgba,
+        });
+        self.external_dirty = true;
+        handle
     }
-    let mut out = Vec::with_capacity(total);
-    for row in 0..(height as usize) {
-        let start = row * stride;
-        out.extend_from_slice(&pixels[start..start + row_bytes]);
+
+    /// 请求原地更新已注册外部纹理的 RGBA8 像素。
+    ///
+    /// 对不存在、已释放、已失败的句柄或非法像素缓冲区返回 `false`。
+    pub fn update_external_rgba8(
+        &mut self,
+        handle: ExternalTextureHandle,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> bool {
+        if !validate_rgba8_len(width, height, rgba.len()) {
+            return false;
+        }
+        let Some(record) = self.external_textures.get_mut(&handle) else {
+            return false;
+        };
+        match record.state {
+            ExternalTextureState::Pending | ExternalTextureState::Ready { .. } => {
+                record.width = width;
+                record.height = height;
+                if let ExternalTextureState::Ready { slot, .. } = record.state {
+                    record.state = ExternalTextureState::Ready {
+                        slot,
+                        width,
+                        height,
+                    };
+                }
+                self.external_ops.push(ExternalTextureOp::Update {
+                    handle,
+                    width,
+                    height,
+                    rgba,
+                });
+                self.external_dirty = true;
+                true
+            }
+            ExternalTextureState::Failed | ExternalTextureState::Released => false,
+        }
     }
-    out
+
+    /// 释放外部纹理逻辑句柄并入队 GPU 槽位回收操作。
+    ///
+    /// 若同一帧内该句柄的 [`ExternalTextureOp::Upload`] 尚未出队，则自动合并抵消其全部
+    /// 未消费操作，不向 GPU 提交冗余的上传与释放指令。
+    pub fn release_external_texture(&mut self, handle: ExternalTextureHandle) -> bool {
+        let Some(record) = self.external_textures.get_mut(&handle) else {
+            return false;
+        };
+        if record.state == ExternalTextureState::Released {
+            return false;
+        }
+        let had_pending_upload = self.external_ops.iter().any(|op| {
+            matches!(
+                op,
+                ExternalTextureOp::Upload { handle: h, .. } if *h == handle
+            )
+        });
+        // 丢弃该句柄尚未出队的上传或更新操作。
+        self.external_ops.retain(|op| match op {
+            ExternalTextureOp::Upload { handle: h, .. }
+            | ExternalTextureOp::Update { handle: h, .. } => *h != handle,
+            ExternalTextureOp::Release { .. } => true,
+        });
+        let was_failed = record.state == ExternalTextureState::Failed;
+        record.state = ExternalTextureState::Released;
+        if !had_pending_upload && !was_failed {
+            self.external_ops
+                .push(ExternalTextureOp::Release { handle });
+        }
+        self.external_dirty = true;
+        true
+    }
+
+    /// 查询外部纹理当前绑定的 GPU 槽位与尺寸，返回 `Some((slot, width, height))`。
+    #[must_use]
+    pub fn external_texture_slot(&self, handle: ExternalTextureHandle) -> Option<(u32, u32, u32)> {
+        match self.external_textures.get(&handle)?.state {
+            ExternalTextureState::Ready {
+                slot,
+                width,
+                height,
+            } => Some((slot, width, height)),
+            ExternalTextureState::Pending
+            | ExternalTextureState::Failed
+            | ExternalTextureState::Released => None,
+        }
+    }
+
+    /// 查询外部纹理逻辑句柄当前的完整状态。
+    #[must_use]
+    pub fn external_texture_state(
+        &self,
+        handle: ExternalTextureHandle,
+    ) -> Option<ExternalTextureState> {
+        self.external_textures.get(&handle).map(|r| r.state)
+    }
+
+    /// 取出并清空本帧待由窗口运行器执行的外部纹理 GPU 操作队列。
+    pub fn take_external_texture_ops(&mut self) -> Vec<ExternalTextureOp> {
+        core::mem::take(&mut self.external_ops)
+    }
+
+    /// 由窗口运行器在执行 GPU 上传/更新后回写槽位分配结果。
+    pub fn commit_external_texture_slot(
+        &mut self,
+        handle: ExternalTextureHandle,
+        slot: Result<u32, String>,
+    ) {
+        let Some(record) = self.external_textures.get_mut(&handle) else {
+            return;
+        };
+        if record.state == ExternalTextureState::Released {
+            return;
+        }
+        match slot {
+            Ok(slot) => {
+                record.state = ExternalTextureState::Ready {
+                    slot,
+                    width: record.width,
+                    height: record.height,
+                };
+            }
+            Err(_) => {
+                record.state = ExternalTextureState::Failed;
+            }
+        }
+        self.external_dirty = true;
+    }
+
+    /// 在 GPU 设备丢失恢复或销毁 Vulkan 上下文时清空全部外部纹理槽位绑定。
+    ///
+    /// 所有原 `Pending` / `Ready` 句柄均转为 [`ExternalTextureState::Failed`]，
+    /// 防止渲染阶段继续采样失效的外部槽位索引。
+    pub fn invalidate_all_external_textures(&mut self) {
+        self.external_ops.clear();
+        for record in self.external_textures.values_mut() {
+            match record.state {
+                ExternalTextureState::Pending | ExternalTextureState::Ready { .. } => {
+                    record.state = ExternalTextureState::Failed;
+                }
+                ExternalTextureState::Failed | ExternalTextureState::Released => {}
+            }
+        }
+        self.external_dirty = true;
+    }
 }
 
 impl ImageAssetResolver for AssetHub {
@@ -660,87 +674,95 @@ mod tests {
     }
 
     #[test]
-    fn upload_rgba8_validates_dimensions_stride_and_buffer_length() {
+    fn external_texture_upload_update_release_lifecycle() {
         let mut hub = AssetHub::new();
-        let empty: Arc<[u8]> = Arc::from([]);
+        let rgba = vec![255u8; 4 * 4 * 4];
+        let handle = hub.upload_external_rgba8(4, 4, true, rgba.clone());
         assert_eq!(
-            hub.upload_rgba8(0, 4, 16, empty.clone()),
-            Err(AssetUploadError::ZeroDimension)
+            hub.external_texture_state(handle),
+            Some(ExternalTextureState::Pending)
         );
-        assert_eq!(
-            hub.upload_rgba8(4, 4, 8, Arc::from(vec![0u8; 64])),
-            Err(AssetUploadError::InvalidStride {
-                expected_min: 16,
-                actual: 8,
-            })
-        );
-        assert_eq!(
-            hub.upload_rgba8(4, 4, 16, Arc::from(vec![0u8; 32])),
-            Err(AssetUploadError::BufferTooSmall {
-                expected_min: 64,
-                actual: 32,
-            })
-        );
-    }
+        assert_eq!(hub.external_texture_slot(handle), None);
 
-    #[test]
-    fn upload_rgba8_packs_small_image_into_atlas_and_compacts_stride() {
-        let mut hub = AssetHub::new();
-        // 2x2 RGBA8，行步长 12 字节（含 4 字节对齐填充）
-        let pixels: Arc<[u8]> = Arc::from(vec![
-            1, 2, 3, 4, 5, 6, 7, 8, 99, 99, 99, 99, 11, 12, 13, 14, 15, 16, 17, 18, 88, 88, 88, 88,
-        ]);
-        let id = hub
-            .upload_rgba8(2, 2, 12, pixels)
-            .expect("small rgba8 upload succeeds");
+        let ops = hub.take_external_texture_ops();
+        assert_eq!(ops.len(), 1);
         assert!(matches!(
-            hub.residency(id),
-            Some(AssetResidency::Ready { layer: 0, .. })
+            &ops[0],
+            ExternalTextureOp::Upload {
+                handle: h,
+                width: 4,
+                height: 4,
+                srgb: true,
+                rgba: data,
+            } if *h == handle && data.len() == 64
         ));
-        let uploads = hub.take_uploads();
-        assert_eq!(uploads.len(), 1);
+
+        hub.commit_external_texture_slot(handle, Ok(48));
+        assert_eq!(hub.external_texture_slot(handle), Some((48, 4, 4)));
+
+        let updated = vec![128u8; 4 * 4 * 4];
+        assert!(hub.update_external_rgba8(handle, 4, 4, updated));
+        let ops = hub.take_external_texture_ops();
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(
+            &ops[0],
+            ExternalTextureOp::Update {
+                handle: h,
+                width: 4,
+                height: 4,
+                ..
+            } if *h == handle
+        ));
+
+        assert!(hub.release_external_texture(handle));
         assert_eq!(
-            uploads[0].data,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18]
+            hub.external_texture_state(handle),
+            Some(ExternalTextureState::Released)
         );
+        assert_eq!(hub.external_texture_slot(handle), None);
+        assert!(!hub.update_external_rgba8(handle, 4, 4, rgba));
+
+        let ops = hub.take_external_texture_ops();
+        assert_eq!(ops, vec![ExternalTextureOp::Release { handle }]);
     }
 
     #[test]
-    fn upload_rgba8_routes_large_image_to_external_slot_and_releases_cleanly() {
+    fn same_frame_upload_and_release_coalesces_to_noop() {
         let mut hub = AssetHub::new();
-        let pixels: Arc<[u8]> = Arc::from(vec![255u8; 520 * 520 * 4]);
-        let id = hub
-            .upload_rgba8(520, 520, 520 * 4, pixels)
-            .expect("large tile routes to external slot");
-        let Some(AssetResidency::Ready { layer, uv, size }) = hub.residency(id) else {
-            panic!("external asset must be ready");
-        };
-        assert!(layer >= EXTERNAL_TEXTURE_BASE);
-        assert_eq!(uv, Rect::new(0.0, 0.0, 1.0, 1.0));
-        assert_eq!(size, Vec2::new(520.0, 520.0));
-        assert_eq!(hub.take_external_uploads().len(), 1);
-
-        assert!(hub.release_asset(id));
-        assert_eq!(hub.residency(id), None);
-        assert_eq!(hub.take_external_releases(), vec![layer]);
+        let rgba = vec![42u8; 2 * 2 * 4];
+        let handle = hub.upload_external_rgba8(2, 2, false, rgba.clone());
+        assert!(hub.update_external_rgba8(handle, 2, 2, rgba.clone()));
+        assert!(hub.release_external_texture(handle));
+        assert_eq!(
+            hub.external_texture_state(handle),
+            Some(ExternalTextureState::Released)
+        );
+        assert!(
+            hub.take_external_texture_ops().is_empty(),
+            "same-frame upload + release must coalesce without GPU ops"
+        );
+        assert!(!hub.update_external_rgba8(handle, 2, 2, rgba));
     }
 
     #[test]
-    fn evict_lru_to_budget_reclaims_oldest_dynamic_assets_first() {
+    fn invalidate_all_external_textures_clears_stale_slots() {
         let mut hub = AssetHub::new();
-        let buf: Arc<[u8]> = Arc::from(vec![7u8; 16 * 16 * 4]); // 1024 bytes each
-        let a = hub.upload_rgba8(16, 16, 64, buf.clone()).unwrap();
-        let b = hub.upload_rgba8(16, 16, 64, buf.clone()).unwrap();
-        let c = hub.upload_rgba8(16, 16, 64, buf).unwrap();
-        hub.touch_asset(a, 10);
-        hub.touch_asset(b, 5);
-        hub.touch_asset(c, 20);
+        let h1 = hub.upload_external_rgba8(2, 2, true, vec![1u8; 16]);
+        let _ = hub.take_external_texture_ops();
+        hub.commit_external_texture_slot(h1, Ok(49));
+        let h2 = hub.upload_external_rgba8(2, 2, true, vec![2u8; 16]);
+        assert_eq!(hub.external_texture_slot(h1), Some((49, 2, 2)));
 
-        let evicted = hub.evict_lru_to_budget(2048);
-        assert_eq!(evicted, vec![b]);
-        assert!(hub.dynamic_bytes() <= 2048);
-        assert_eq!(hub.residency(b), None);
-        assert!(hub.residency(a).is_some());
-        assert!(hub.residency(c).is_some());
+        hub.invalidate_all_external_textures();
+        assert_eq!(hub.external_texture_slot(h1), None);
+        assert_eq!(
+            hub.external_texture_state(h1),
+            Some(ExternalTextureState::Failed)
+        );
+        assert_eq!(
+            hub.external_texture_state(h2),
+            Some(ExternalTextureState::Failed)
+        );
+        assert!(hub.take_external_texture_ops().is_empty());
     }
 }

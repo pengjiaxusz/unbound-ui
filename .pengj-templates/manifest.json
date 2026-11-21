@@ -1,6 +1,6 @@
 {
   "tool": "pengj-templates",
-  "version": "0.77.1",
+  "version": "0.80.0",
   "project_name": "unbound-ui",
   "layers": [
     "common",
@@ -100,6 +100,14 @@
     ".agents\\skills\\improve-codebase-architecture\\SKILL.md": "4523d59d9997cd4c72ab7e926fee0f38fe43f9e9c96471ad39e2c8c46971d134",
     ".agents\\skills\\mcp-bootstrap\\SKILL.md": "afbfa562775a6f934bfe903f28fe5742c6fcc489c58b747299af11d965222873",
     ".agents\\skills\\mcp-bootstrap\\scripts\\ensure-mcp.mjs": "7c3d9f774e69ed48a751987e449844f81138126aa7fd413709f2cf5a2144767f",
+    ".agents\\skills\\patch-handoff\\SKILL.md": "05ff71612fd027ce7b0fce95c2e08d9400ae51e1caed5b8d01e4e75225163c6a",
+    ".agents\\skills\\patch-handoff\\references\\field-notes.md": "b290b98800ad2b1e6c009c0cc75ffc3199440265a7649d68db8b9b9180071b65",
+    ".agents\\skills\\patch-handoff\\references\\git-mechanics.md": "1f93fb13103e700e5e08bb648a51861e05fe7b9ffb7bb123b93fa99ae7e59904",
+    ".agents\\skills\\patch-handoff\\references\\handoff-audit.md": "f8ec0fc249cd60580fba904239f2802a64474d68c556505eb2c6d267e53b1e8d",
+    ".agents\\skills\\patch-handoff\\scripts\\inspect-handoff-package.sh": "94dcbfe29d6c0902fe086788220368736f8e6792d5c78937cc85d818c2baa5a4",
+    ".agents\\skills\\patch-handoff\\scripts\\normalize-authors.sh": "1f471648420e381047d121eb5bfe1119ad8d60bfc63f504da4ca9b638eb726f4",
+    ".agents\\skills\\patch-handoff\\scripts\\replay-patch-series.sh": "517e9e6f8122cb3db667987ca64808b41b467c6217b390e24b18c39453518faf",
+    ".agents\\skills\\patch-handoff\\scripts\\sync-after-force-push.sh": "646dd0c84d24259dbe5e13f46f65ab8f46cfe9123a6832be381d3f91bcd608d8",
     ".agents\\skills\\pr\\CREDITS.md": "11be909255309658a53d0c3c9dda4afa3a4949890750d877e673eb7b491f5ceb",
     ".agents\\skills\\pr\\SKILL.md": "288c713a7e3565ea0bb62e627c0fee8962baf54755d77016aea3c55c255688d8",
     ".agents\\skills\\prototype\\LOGIC.md": "2b85c60db106c24e5af6b6f61f59777e972923f0e7655e7ee4f0e23be2553a99",
@@ -152,7 +160,7 @@
     ".github\\rulesets\\gate.json": "2bb6ffbe9d29e527986b86ec139f8ed6138711b594a43240e4e1954a450d67e8",
     ".github\\workflows\\gate.yml": "0ae2938196e98b97e8bbf5f1282af6e1bfcc89d9dc85998c4a1b872dc97c9643",
     ".gitignore": "9908a23d777d0023f1b112d02159864081a49f86491e0ee5abdadcac137c0f9d",
-    ".pengj-templates\\gate.toml": "423ebaa48785514ea56f99427f03f39ebd5ae4d05d86791a605152d953f80e48",
+    ".pengj-templates\\gate.toml": "800af9020c29544f1f1516cce3ce3644c4f5b778509c6280e56fc2a0e8487245",
     ".pengj-templates\\just\\bque.just": "d014bf30776544e5cc5084763edef784f0c712d06339b50e4250c853f48e8e3f",
     ".pengj-templates\\just\\gate.just": "848074b50fb8e799c8e0a32d9c76f33527d6f028550709797818b0b5a09a23ef",
     ".pengj-templates\\just\\rust-workspace.just": "bd9450392b6a4f773d531b7297fbbe9faee441e2c64a880926f35c4f60cecc6f",
@@ -165,14 +173,6 @@
     "AGENTS.md": "b7c474c16161b43fed03cad9ac5c093012a297e236791cefbce5d7e2b3eb6e3a",
     "Cargo.toml": "6f722ee3f7a969f9b46d867b96c1e14420b5560d7effd65c7c9b183e4e797707",
     "justfile": "fd8a0ca5a29ea86c0751e9a4c666ebabcbc62605e5d90c90a532fb69511ac80f",
-    "rust-toolchain.toml": "b2bc09cc2b9bfbea423fe65a786d858571071150478018b261181135d4010412",
-    ".agents\\skills\\patch-handoff\\SKILL.md": "05ff71612fd027ce7b0fce95c2e08d9400ae51e1caed5b8d01e4e75225163c6a",
-    ".agents\\skills\\patch-handoff\\references\\field-notes.md": "b290b98800ad2b1e6c009c0cc75ffc3199440265a7649d68db8b9b9180071b65",
-    ".agents\\skills\\patch-handoff\\references\\git-mechanics.md": "1f93fb13103e700e5e08bb648a51861e05fe7b9ffb7bb123b93fa99ae7e59904",
-    ".agents\\skills\\patch-handoff\\references\\handoff-audit.md": "f8ec0fc249cd60580fba904239f2802a64474d68c556505eb2c6d267e53b1e8d",
-    ".agents\\skills\\patch-handoff\\scripts\\inspect-handoff-package.sh": "94dcbfe29d6c0902fe086788220368736f8e6792d5c78937cc85d818c2baa5a4",
-    ".agents\\skills\\patch-handoff\\scripts\\normalize-authors.sh": "1f471648420e381047d121eb5bfe1119ad8d60bfc63f504da4ca9b638eb726f4",
-    ".agents\\skills\\patch-handoff\\scripts\\replay-patch-series.sh": "517e9e6f8122cb3db667987ca64808b41b467c6217b390e24b18c39453518faf",
-    ".agents\\skills\\patch-handoff\\scripts\\sync-after-force-push.sh": "646dd0c84d24259dbe5e13f46f65ab8f46cfe9123a6832be381d3f91bcd608d8"
+    "rust-toolchain.toml": "b2bc09cc2b9bfbea423fe65a786d858571071150478018b261181135d4010412"
   }
 }

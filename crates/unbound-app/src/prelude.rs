@@ -14,6 +14,7 @@ pub use crate::state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore}
 pub use crate::window_runner::{run_windowed, run_windowed_with_hwnd, WindowedRunner};
 pub use crate::{
     const_fnv1a_hash, global_locale, mix_key, set_global_locale, ui_key, AppContext, AppEvent,
+    ExternalTextureHandle, ExternalTextureOp, ExternalTextureState,
     AppEventSender, AppKey, AppRuntime, Application, ClipboardProvider, DirtyFlags, ErasedUiWidget,
     EventOutcome, FrameReport, I18nBundle, KeyDiscriminator, KeyScope, LayoutDirection, Locale,
     Modifiers, PendingWidget, Propagation, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec,

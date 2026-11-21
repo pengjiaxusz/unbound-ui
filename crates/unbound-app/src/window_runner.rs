@@ -8,7 +8,8 @@ use unbound_gpu::debug::{is_device_lost, recover_with, RecoveryPolicy};
 use unbound_gpu::device::{Gpu, GpuConfig};
 use unbound_gpu::surface::{AcquireOutcome, Surface, Swapchain};
 use unbound_gpu::swapchain::{CompositeAlphaMode, PresentConfig};
-use unbound_gpu::{Camera, Renderer};
+use rustc_hash::FxHashMap;
+use unbound_gpu::{Camera, ManagedExternalTextureDesc, Renderer};
 use unbound_input::PointerButton;
 use unbound_math::{Rect, Vec2};
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
@@ -23,7 +24,10 @@ use unbound_platform::Window;
 use unbound_theme::{ThemeSet, ThemeState};
 
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
-use crate::{AppKey, AppRuntime, Application, ImeUpdate, Modifiers as AppModifiers, ThemeKind};
+use crate::{
+    AppKey, AppRuntime, Application, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
+    Modifiers as AppModifiers, ThemeKind,
+};
 
 /// 封装平台剪贴板的适配器。
 struct WinClipboard(std::cell::RefCell<unbound_platform::SystemClipboard>);
@@ -208,6 +212,8 @@ pub struct WindowedRunner<A: Application> {
     on_frame: Option<FrameHook<A>>,
     /// 窗口外观意图账本。
     appearance: WindowAppearance,
+    /// 已上传至当前渲染器的外部纹理句柄映射：`handle -> (slot, width, height, srgb)`。
+    external_gpu_slots: FxHashMap<ExternalTextureHandle, (u32, u32, u32, bool)>,
 }
 
 impl<A: Application> WindowedRunner<A> {
@@ -256,6 +262,7 @@ impl<A: Application> WindowedRunner<A> {
             frame_metrics: None,
             hwnd: None,
             appearance: WindowAppearance::new(),
+            external_gpu_slots: FxHashMap::default(),
         }
     }
 
@@ -368,7 +375,117 @@ impl<A: Application> WindowedRunner<A> {
         }
     }
 
+    fn process_external_texture_ops(&mut self, ops: Vec<ExternalTextureOp>, window: &Window) {
+        if ops.is_empty() {
+            return;
+        }
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let mut needs_redraw = false;
+        for op in ops {
+            match op {
+                ExternalTextureOp::Upload {
+                    handle,
+                    width,
+                    height,
+                    srgb,
+                    rgba,
+                } => {
+                    let desc = ManagedExternalTextureDesc::new(width, height, srgb);
+                    match renderer.upload_external_rgba8(desc, &rgba) {
+                        Ok(slot) => {
+                            self.external_gpu_slots
+                                .insert(handle, (slot, width, height, srgb));
+                            self.runtime
+                                .asset_hub_mut()
+                                .commit_external_texture_slot(handle, Ok(slot));
+                            needs_redraw = true;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[unbound-app] Could not upload external texture {handle:?} ({width}x{height}): {error:?}"
+                            );
+                            self.runtime
+                                .asset_hub_mut()
+                                .commit_external_texture_slot(handle, Err(format!("{error:?}")));
+                            needs_redraw = true;
+                        }
+                    }
+                }
+                ExternalTextureOp::Update {
+                    handle,
+                    width,
+                    height,
+                    rgba,
+                } => {
+                    let Some((slot, cur_w, cur_h, srgb)) =
+                        self.external_gpu_slots.get(&handle).copied()
+                    else {
+                        eprintln!(
+                            "[unbound-app] Skipping update for unbound external texture {handle:?}"
+                        );
+                        continue;
+                    };
+                    if cur_w == width && cur_h == height {
+                        if let Err(error) = renderer.update_external_rgba8(slot, &rgba) {
+                            eprintln!(
+                                "[unbound-app] Could not update external texture {handle:?} (slot {slot}): {error:?}"
+                            );
+                            self.runtime
+                                .asset_hub_mut()
+                                .commit_external_texture_slot(handle, Err(format!("{error:?}")));
+                        }
+                        needs_redraw = true;
+                    } else {
+                        if let Err(error) = renderer.destroy_external_texture(slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy resized external texture {handle:?} (slot {slot}): {error:?}"
+                            );
+                        }
+                        self.external_gpu_slots.remove(&handle);
+                        let desc = ManagedExternalTextureDesc::new(width, height, srgb);
+                        match renderer.upload_external_rgba8(desc, &rgba) {
+                            Ok(new_slot) => {
+                                self.external_gpu_slots
+                                    .insert(handle, (new_slot, width, height, srgb));
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_external_texture_slot(handle, Ok(new_slot));
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not re-upload resized external texture {handle:?} ({width}x{height}): {error:?}"
+                                );
+                                self.runtime.asset_hub_mut().commit_external_texture_slot(
+                                    handle,
+                                    Err(format!("{error:?}")),
+                                );
+                            }
+                        }
+                        needs_redraw = true;
+                    }
+                }
+                ExternalTextureOp::Release { handle } => {
+                    if let Some((slot, _, _, _)) = self.external_gpu_slots.remove(&handle) {
+                        if let Err(error) = renderer.destroy_external_texture(slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy external texture {handle:?} (slot {slot}): {error:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        if needs_redraw {
+            self.runtime.invalidate();
+            window.request_redraw();
+        }
+    }
+
     fn destroy_vulkan(&mut self) {
+        self.external_gpu_slots.clear();
+        self.runtime.asset_hub_mut().invalidate_all_external_textures();
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -391,6 +508,8 @@ impl<A: Application> WindowedRunner<A> {
         // 尤其是旧 `VkSurfaceKHR` 仍绑定在 HWND 上，导致第一次重建就报
         // `ERROR_NATIVE_WINDOW_IN_USE_KHR`。必须先销毁子对象，再让持有设备的
         // renderer 拆除设备本身。
+        self.external_gpu_slots.clear();
+        self.runtime.asset_hub_mut().invalidate_all_external_textures();
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -903,6 +1022,8 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         // `reduce` 可能改动 `ctx.theme`，每帧检查 4 KiB LUT 是否需要上传。
         self.sync_theme(window);
         self.sync_appearance(window);
+
+        self.process_external_texture_ops(report.external_texture_ops, window);
 
         if let (Some(renderer), Some(atlases)) = (&mut self.renderer, &self.atlases) {
             if !report.atlas_uploads.is_empty() {

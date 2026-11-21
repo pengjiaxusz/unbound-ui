@@ -78,7 +78,7 @@ pub use appearance::{
     AppearanceCaps, AppearanceDiff, AppearanceIntent, BackdropChannel, WindowAppearance,
 };
 pub use assets::{
-    AssetHub, AssetResidency, AssetUploadError, ExternalTextureUpload, DYNAMIC_ATLAS_MAX_EDGE,
+    AssetHub, AssetResidency, ExternalTextureHandle, ExternalTextureOp, ExternalTextureState,
 };
 pub use backdrop::{
     fallback_reason_zh, is_mica_ready_event, material_name_zh, plan_summary_zh, MicaBackdrop,
@@ -3476,6 +3476,8 @@ pub struct FrameReport {
     /// 外壳在绘制前通过 [`unbound_gpu::atlas::AtlasSet::upload_batch`] 上传它们；
     /// 运行时本身从不接触 GPU。
     pub atlas_uploads: Vec<AtlasUpload>,
+    /// 本帧待窗口运行器执行的外部纹理槽上传、更新与释放操作队列。
+    pub external_texture_ops: Vec<ExternalTextureOp>,
 }
 
 /// 负责事件归约与场景 diff 的应用运行时。
@@ -4562,6 +4564,7 @@ impl<A: Application> AppRuntime<A> {
                 aux_changed: false,
                 backdrops: self.backdrops.clone(),
                 atlas_uploads: self.collect_atlas_uploads(),
+                external_texture_ops: self.asset_hub.take_external_texture_ops(),
             };
         }
 
@@ -4790,6 +4793,7 @@ impl<A: Application> AppRuntime<A> {
             aux_changed,
             backdrops: self.backdrops.clone(),
             atlas_uploads: self.collect_atlas_uploads(),
+            external_texture_ops: self.asset_hub.take_external_texture_ops(),
         }
     }
 
@@ -6086,5 +6090,51 @@ mod tests {
             AppearanceIntent::Material(Some(WindowBackdropMaterial::Acrylic))
         );
         assert_eq!(runtime.backdrop(), Some(WindowBackdropMaterial::Acrylic));
+    }
+
+    #[test]
+    fn frame_report_drains_external_texture_ops_in_order() {
+        struct EmptyApp;
+        impl Application for EmptyApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
+                DirtyFlags::NONE
+            }
+            fn view(&self, _: &(), _: &mut ViewBuilder<'_>) {}
+        }
+
+        let mut rt = AppRuntime::new(EmptyApp, Vec2::new(640.0, 480.0));
+        let _ = rt.frame(0.0);
+
+        let handle = rt
+            .asset_hub_mut()
+            .upload_external_rgba8(2, 2, true, vec![200u8; 16]);
+        let report1 = rt.frame(0.0);
+        assert_eq!(report1.external_texture_ops.len(), 1);
+        assert!(matches!(
+            report1.external_texture_ops[0],
+            ExternalTextureOp::Upload { handle: h, width: 2, height: 2, srgb: true, .. } if h == handle
+        ));
+
+        rt.asset_hub_mut().commit_external_texture_slot(handle, Ok(50));
+        assert_eq!(rt.asset_hub().external_texture_slot(handle), Some((50, 2, 2)));
+
+        assert!(rt
+            .asset_hub_mut()
+            .update_external_rgba8(handle, 2, 2, vec![100u8; 16]));
+        assert!(rt.asset_hub_mut().release_external_texture(handle));
+        let report2 = rt.frame(0.0);
+        assert_eq!(
+            report2.external_texture_ops,
+            vec![ExternalTextureOp::Release { handle }]
+        );
+
+        let cancelled = rt
+            .asset_hub_mut()
+            .upload_external_rgba8(2, 2, false, vec![9u8; 16]);
+        assert!(rt.asset_hub_mut().release_external_texture(cancelled));
+        let report3 = rt.frame(0.0);
+        assert!(report3.external_texture_ops.is_empty());
     }
 }
