@@ -204,7 +204,7 @@ pub struct WindowedRunner<A: Application> {
         unbound_theme::ProductPreset,
         unbound_theme::AccentBrand,
     )>,
-    /// 原生窗口句柄创建完成后的可选宿主回调（例如供 下游渲染工具 注册主窗口 HWND）。
+    /// 原生窗口句柄创建完成后的可选宿主回调（例如供下游渲染工具注册主窗口 HWND）。
     on_hwnd_created: Option<Box<dyn FnMut(isize) + Send>>,
     /// 每帧开始时的可选宿主回调，拿到运行时的可变引用。
     ///

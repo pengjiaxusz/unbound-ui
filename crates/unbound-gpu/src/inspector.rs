@@ -9,7 +9,7 @@
 
 use unbound_math::{Rect, Vec2};
 
-/// 扩展外部纹理槽位容量（支持 下游资产应用 大规模缩略图与 下游渲染工具 多Pass RT 检视）。
+/// 扩展外部纹理槽位容量（支持下游资产应用的大规模缩略图与下游渲染工具的多 Pass RT 检视）。
 pub const EXTENDED_EXTERNAL_SLOTS: u32 = 256;
 
 /// 跨 API / 跨进程外部显存句柄类型。
@@ -164,7 +164,7 @@ impl ExtendedExternalSlots {
     }
 }
 
-/// 2D 纹理检视器的通道掩码模式（服务于 下游渲染工具 RT 检视与 下游资产应用 贴图通道预览）。
+/// 2D 纹理检视器的通道掩码模式（服务于下游渲染工具的 RT 检视与下游资产应用贴图通道预览）。
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ChannelMask {
@@ -271,7 +271,7 @@ impl TextureInspectorParams {
     }
 }
 
-/// 3D 视口轨道相机参数（用于 下游资产应用 3D 模型/材质球预览与 下游渲染工具 网格检视）。
+/// 3D 视口轨道相机参数（用于下游资产应用的 3D 模型/材质球预览与下游渲染工具网格检视）。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ViewportCamera3D {
     /// 水平旋转角（弧度）。
@@ -406,7 +406,7 @@ impl ExternalMemoryImporter {
     }
 }
 
-/// 嵌入 `unbound-ui` 帧管线的自定义 2D/3D 视口渲染钩子（供 下游渲染工具 零拷贝注入）。
+/// 嵌入 `unbound-ui` 帧管线的自定义 2D/3D 视口渲染钩子（供下游渲染工具零拷贝注入）。
 pub trait CustomViewportPass: Send + Sync + core::fmt::Debug {
     /// 视口唯一标识。
     fn viewport_id(&self) -> u64;

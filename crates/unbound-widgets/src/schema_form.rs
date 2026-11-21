@@ -30,7 +30,7 @@ const LABEL_GAP: f32 = 4.0;
 /// Fluent 2 表单节奏取 16（与 `form::FORM_FIELD_GAP` 对齐）。
 const FIELD_GAP: f32 = 16.0;
 
-/// 字段值的继承与覆写来源状态（供 下游渲染工具 启动预设配置继承链展示徽章）。
+/// 字段值的继承与覆写来源状态（供下游渲染工具启动预设配置继承链展示徽章）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum FieldInheritanceState {
     /// 使用 Schema 默认值。

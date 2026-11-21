@@ -27,7 +27,7 @@ git status --porcelain -uall            # 必须为空
 git reset --hard origin/main
 ```
 
-父仓 下游渲染工具（`dev`）会显示 ` M submodules/unbound-ui`，因其记录的指针本就比子模块实际 checkout 更旧；这是既有状态，不要替他提交或回滚父仓。
+父仓（`dev`）会显示 ` M submodules/unbound-ui`，因其记录的指针本就比子模块实际 checkout 更旧；这是既有状态，不要替他提交或回滚父仓。
 
 ## 二、包里的写法 → 本仓库真实 API
 

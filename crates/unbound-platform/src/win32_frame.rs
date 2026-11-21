@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 pub use unbound_math::Rect;
 
-/// Windows 11 DWM 窗口背景材质（对齐 下游渲染工具 的 5 档材质枚举）。
+/// Windows 11 DWM 窗口背景材质（对齐下游渲染工具的 5 档材质枚举）。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum WindowBackdropMaterial {
     /// 跟随系统默认策略（`DWMSBT_AUTO`）。

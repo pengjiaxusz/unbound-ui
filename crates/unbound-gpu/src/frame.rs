@@ -2313,7 +2313,7 @@ impl Renderer {
 
     /// 将指定视口子矩形（`x, y, width, height`）内的离屏颜色缓冲像素回读为紧凑 BGRA8 字节数组。
     ///
-    /// 供 下游渲染工具 的 `读取原生视口交换链区域诊断` 与像素拾取器（Pixel Picker）调用。
+    /// 供下游渲染工具的 `读取原生视口交换链区域诊断` 与像素拾取器（Pixel Picker）调用。
     pub fn read_region_pixels(
         &mut self,
         x: u32,

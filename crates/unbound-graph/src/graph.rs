@@ -42,14 +42,14 @@ pub enum PassKind {
     Composite,
     /// 将最终图像绘制到交换链。
     Present,
-    /// 嵌入 UI 区域的自定义 3D 视口渲染 Pass（服务于 下游资产应用 网格/材质预览）。
+    /// 嵌入 UI 区域的自定义 3D 视口渲染 Pass（服务于下游资产应用的网格/材质预览）。
     CustomViewport {
         /// 视口唯一标识。
         viewport_id: u64,
         /// 是否清空深度附件。
         clear_depth: bool,
     },
-    /// 2D 纹理单通道/Mip/曝光检视 Pass（服务于 下游渲染工具 RT 检视）。
+    /// 2D 纹理单通道/Mip/曝光检视 Pass（服务于下游渲染工具的 RT 检视）。
     TextureInspect {
         /// 通道掩码枚举值。
         channel_mask: u8,

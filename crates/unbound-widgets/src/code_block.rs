@@ -79,7 +79,7 @@ pub struct CodeSpan {
     pub token: SyntaxToken,
 }
 
-/// 着色器与调试器代码高亮语言枚举（服务于 下游渲染工具 的 Shader 检视器与报文面板）。
+/// 着色器与调试器代码高亮语言枚举（服务于下游渲染工具的 Shader 检视器与报文面板）。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CodeLanguage {
     #[default]

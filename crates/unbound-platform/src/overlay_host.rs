@@ -53,7 +53,7 @@ impl Default for OverlayWindowSpec {
 }
 
 impl OverlayWindowSpec {
-    /// 创建面向 下游渲染工具 调试覆盖层的预设规格。
+    /// 创建面向下游渲染工具调试覆盖层的预设规格。
     #[must_use]
     pub fn debugger_overlay(title: impl Into<String>, width: u32, height: u32) -> Self {
         Self {
@@ -177,7 +177,7 @@ impl HitTestPassThroughPolicy {
     }
 }
 
-/// 目标进程窗口跟随状态机（用于 下游渲染工具 覆盖层与目标 HWND 同步位置、尺寸与最小化隐藏）。
+/// 目标进程窗口跟随状态机（用于下游渲染工具覆盖层与目标 HWND 同步位置、尺寸与最小化隐藏）。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct TargetWindowFollower {
     /// 被调试的目标窗口 `HWND`。
@@ -353,7 +353,7 @@ pub fn is_rect_fully_covered(target: Rect, covers: &[Rect]) -> bool {
     false
 }
 
-/// 屏幕防休眠守卫：通过引用计数追踪耗时任务（如 下游资产应用 批量缩略图烘焙或 下游渲染工具 长帧回放），
+/// 屏幕防休眠守卫：通过引用计数追踪耗时任务（如下游资产应用批量缩略图烘焙或下游渲染工具长帧回放），
 /// 在计数 > 0 时维持 `ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED`。
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScreenSleepInhibitor {
@@ -451,7 +451,7 @@ impl FileDragDropBridge {
         core::mem::take(&mut self.hovering_files)
     }
 
-    /// 发起从应用内部（如 下游资产应用 资产网格）向外部 DCC 软件拖出文件的操作（`DoDragDrop`）。
+    /// 发起从应用内部（如下游资产应用资产网格）向外部 DCC 软件拖出文件的操作（`DoDragDrop`）。
     pub fn begin_external_file_drag(&mut self, files: Vec<PathBuf>) -> bool {
         if files.is_empty() {
             return false;
