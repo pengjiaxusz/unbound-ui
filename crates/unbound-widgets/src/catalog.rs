@@ -3121,34 +3121,27 @@ where
             if params.toggled {
                 sf_state.set("shuangpin", SchemaValue::EnumIndex(1));
             }
-            let label_col_w = (sf_r.size.x * 0.36).clamp(90.0, 180.0);
+            let rows = desc.layout_rows();
             let mut glyphs = Vec::new();
             let values_preview = ["Xiaohe Shuangpin", "Enabled", "16.6 ms"];
-            for (idx, field) in desc.fields.iter().enumerate() {
-                let y = sf_r.origin.y + 10.0 + idx as f32 * desc.row_height;
-                let row_r = Rect::new(
-                    sf_r.origin.x + 18.0,
-                    y,
-                    label_col_w - 14.0,
-                    desc.row_height - 4.0,
-                );
+            for row in &rows {
                 glyphs.extend(shape_centered_y(
                     &mut shape,
-                    &field.label,
-                    row_r,
-                    row_r.origin.x,
+                    &row.display_label,
+                    row.label_rect,
+                    row.label_rect.origin.x,
                     12.0,
                 ));
-                let val_x = sf_r.origin.x + 16.0 + label_col_w;
+                let val_x = row.control_rect.origin.x + 8.0;
                 let val_r = Rect::new(
                     val_x,
-                    y,
-                    sf_r.size.x - label_col_w - 28.0,
-                    desc.row_height - 4.0,
+                    row.control_rect.origin.y,
+                    (row.control_rect.size.x - 16.0).max(16.0),
+                    row.control_rect.size.y,
                 );
                 glyphs.extend(shape_centered_y(
                     &mut shape,
-                    values_preview[idx],
+                    values_preview[row.index],
                     val_r,
                     val_x,
                     12.0,

@@ -33,7 +33,7 @@ use crate::pipeline_view::{emit_pipeline_view, PipelineViewDesc};
 use crate::popconfirm::{emit_popconfirm, PopconfirmDesc};
 use crate::progress::{emit_progress, ProgressDesc, ProgressState};
 use crate::query_builder::{emit_query_builder, QueryBuilderDesc};
-use crate::schema_form::{emit_schema_form, SchemaFormDesc, SchemaFormState};
+use crate::schema_form::{emit_schema_form, SchemaFormDesc, SchemaFormEvent, SchemaFormState, LABEL_FONT_SIZE};
 use crate::select::{emit_select_with_glyphs, SelectDesc, SelectState};
 use crate::shortcut_bar::{emit_shortcut_bar, ShortcutBarDesc};
 use crate::slider::{emit_slider, value_from_pointer, Orientation, SliderDesc, SliderTokens};
@@ -318,6 +318,13 @@ impl ButtonDesc {
         self.loading = loading;
         self
     }
+
+    /// 设置原生矢量图标（[`crate::shell::ShellIcon`]）。
+    #[must_use]
+    pub fn shell_icon(mut self, icon: crate::shell::ShellIcon) -> Self {
+        self.shell_icon = Some(icon);
+        self
+    }
 }
 
 impl CheckboxDesc {
@@ -550,7 +557,18 @@ impl UiWidget for ButtonDesc {
         } else {
             56.0
         };
-        let w = (measured.x + pad_x).max(self.rect.width()).max(min_w);
+        let icon_extra = if self.shell_icon.is_some() {
+            if self.label.is_empty() {
+                crate::button::BUTTON_SHELL_ICON_SIZE
+            } else {
+                crate::button::BUTTON_SHELL_ICON_SIZE + crate::button::BUTTON_CONTENT_GAP
+            }
+        } else {
+            0.0
+        };
+        let w = (measured.x + icon_extra + pad_x)
+            .max(self.rect.width())
+            .max(min_w);
         let h = self.size.height().max(self.rect.height());
         Vec2::new(w, h)
     }
@@ -565,7 +583,7 @@ impl UiWidget for ButtonDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        desc.centre_label = false;
+        desc.centre_label = desc.shell_icon.is_some();
         let (text_rect, align_x) = if desc.left_align {
             let inset_left = if desc.active_selected { 11.0 } else { 9.0 };
             (
@@ -2642,64 +2660,82 @@ impl UiWidget for SchemaFormDesc {
 
     fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
         if let WidgetInputEvent::PointerDown { pos, .. } = event {
-            let rel_y = pos.y - (rect.origin.y + 10.0);
-            if rel_y < 0.0 {
-                return false;
-            }
-            let idx = (rel_y / self.row_height).floor() as usize;
-            let Some(field) = self.fields.get(idx) else {
+            let rows = self.layout_rows_in(rect);
+            let Some(hit) = self.hit_test_in(rect, *pos) else {
                 return false;
             };
-            // 点击左侧指示点重置该字段为默认值
-            if pos.x <= rect.origin.x + 28.0 {
-                state.reset_field(field);
-                return true;
-            }
-            if !state.is_field_enabled(field) {
-                return false;
-            }
-            let label_col_w = (rect.size.x * 0.36).clamp(90.0, 220.0);
-            let ctrl_x = rect.origin.x + 8.0 + label_col_w;
-            if pos.x >= ctrl_x {
-                let current = state
-                    .get(&field.key)
-                    .cloned()
-                    .unwrap_or_else(|| field.default_value.clone());
-                match (&field.kind, current) {
-                    (
-                        crate::schema_form::SchemaFieldKind::Switch,
-                        crate::schema_form::SchemaValue::Bool(b),
-                    ) => {
-                        state.set(field.key.clone(), crate::schema_form::SchemaValue::Bool(!b));
-                        return true;
+            match hit {
+                SchemaFormEvent::ResetDot(idx) => {
+                    let Some(field) = self.fields.get(idx) else {
+                        return false;
+                    };
+                    state.reset_field(field);
+                    state.record_event(SchemaFormEvent::ResetDot(idx));
+                    return true;
+                }
+                SchemaFormEvent::TrailingAction(idx) => {
+                    let Some(field) = self.fields.get(idx) else {
+                        return false;
+                    };
+                    if !state.is_field_enabled(field) {
+                        return false;
                     }
-                    (
-                        crate::schema_form::SchemaFieldKind::Select { options },
-                        crate::schema_form::SchemaValue::EnumIndex(cur_i),
-                    ) => {
-                        if !options.is_empty() {
-                            let next = (cur_i + 1) % options.len();
-                            state.set(
-                                field.key.clone(),
-                                crate::schema_form::SchemaValue::EnumIndex(next),
-                            );
+                    state.record_event(SchemaFormEvent::TrailingAction(idx));
+                    return true;
+                }
+                SchemaFormEvent::ControlClicked(idx) => {
+                    let Some(field) = self.fields.get(idx) else {
+                        return false;
+                    };
+                    if !state.is_field_enabled(field) {
+                        return false;
+                    }
+                    let Some(row) = rows.get(idx) else {
+                        return false;
+                    };
+                    let current = state
+                        .get(&field.key)
+                        .cloned()
+                        .unwrap_or_else(|| field.default_value.clone());
+                    match (&field.kind, current) {
+                        (
+                            crate::schema_form::SchemaFieldKind::Switch,
+                            crate::schema_form::SchemaValue::Bool(b),
+                        ) => {
+                            state.set(field.key.clone(), crate::schema_form::SchemaValue::Bool(!b));
+                            state.record_event(SchemaFormEvent::ControlClicked(idx));
                             return true;
                         }
+                        (
+                            crate::schema_form::SchemaFieldKind::Select { options },
+                            crate::schema_form::SchemaValue::EnumIndex(cur_i),
+                        ) => {
+                            if !options.is_empty() {
+                                let next = (cur_i + 1) % options.len();
+                                state.set(
+                                    field.key.clone(),
+                                    crate::schema_form::SchemaValue::EnumIndex(next),
+                                );
+                                state.record_event(SchemaFormEvent::ControlClicked(idx));
+                                return true;
+                            }
+                        }
+                        (
+                            crate::schema_form::SchemaFieldKind::Number { min, max, step, .. },
+                            crate::schema_form::SchemaValue::Number(cur_v),
+                        ) => {
+                            let ctrl_mid = row.control_rect.center().x;
+                            let delta = if pos.x >= ctrl_mid { *step } else { -*step };
+                            let next = (cur_v + delta).clamp(*min, *max);
+                            state.set(
+                                field.key.clone(),
+                                crate::schema_form::SchemaValue::Number(next),
+                            );
+                            state.record_event(SchemaFormEvent::ControlClicked(idx));
+                            return true;
+                        }
+                        _ => {}
                     }
-                    (
-                        crate::schema_form::SchemaFieldKind::Number { min, max, step, .. },
-                        crate::schema_form::SchemaValue::Number(cur_v),
-                    ) => {
-                        let ctrl_mid = ctrl_x + ((rect.max().x - 8.0 - ctrl_x) * 0.5).max(16.0);
-                        let delta = if pos.x >= ctrl_mid { *step } else { -*step };
-                        let next = (cur_v + delta).clamp(*min, *max);
-                        state.set(
-                            field.key.clone(),
-                            crate::schema_form::SchemaValue::Number(next),
-                        );
-                        return true;
-                    }
-                    _ => {}
                 }
             }
         }
@@ -2716,50 +2752,72 @@ impl UiWidget for SchemaFormDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let label_col_w = (rect.size.x * 0.36).clamp(90.0, 220.0);
+        let rows = desc.layout_rows();
         let mut glyphs = Vec::new();
-        for (idx, field) in desc.fields.iter().enumerate() {
-            let y = rect.origin.y + 10.0 + idx as f32 * desc.row_height;
-            let row_r = Rect::new(
-                rect.origin.x + 20.0,
-                y,
-                (label_col_w - 16.0).max(24.0),
-                desc.row_height - 4.0,
+        for (row, field) in rows.iter().zip(desc.fields.iter()) {
+            let full_label = field.full_label_text();
+            let elided = crate::elided_text::elide_text_with_measure(
+                &full_label,
+                row.label_rect.size.x,
+                crate::elided_text::ElideMode::End,
+                |sample| text_ctx.measure_line(sample, LABEL_FONT_SIZE, 400).x,
             );
-            let label_txt = match &field.inheritance {
-                crate::schema_form::FieldInheritanceState::DefaultValue => field.label.clone(),
-                crate::schema_form::FieldInheritanceState::InheritedFrom(parent) => {
-                    format!("{} [inherited:{}]", field.label, parent)
-                }
-                crate::schema_form::FieldInheritanceState::Overridden => {
-                    format!("{} [override]", field.label)
-                }
-            };
             glyphs.extend(text_ctx.shape_line(
-                &label_txt,
-                row_r,
-                12.0,
+                &elided.display,
+                row.label_rect,
+                LABEL_FONT_SIZE,
                 400,
                 AlignX::Left,
                 AlignY::Middle,
             ));
 
-            let ctrl_r = Rect::new(
-                rect.origin.x + 8.0 + label_col_w + 10.0,
-                y + 2.0,
-                (rect.size.x - 24.0 - label_col_w - 16.0).max(24.0),
-                (desc.row_height - 8.0).max(16.0),
+            let val_rect = Rect::new(
+                row.control_rect.origin.x + 8.0,
+                row.control_rect.origin.y,
+                (row.control_rect.size.x - 16.0).max(16.0),
+                row.control_rect.size.y,
             );
             let val = state.get(&field.key).unwrap_or(&field.default_value);
             let val_txt = val.display_text(&field.kind);
-            glyphs.extend(text_ctx.shape_line(
+            let elided_val = crate::elided_text::elide_text_with_measure(
                 &val_txt,
-                ctrl_r,
-                12.0,
+                val_rect.size.x,
+                crate::elided_text::ElideMode::End,
+                |sample| text_ctx.measure_line(sample, LABEL_FONT_SIZE, 400).x,
+            );
+            glyphs.extend(text_ctx.shape_line(
+                &elided_val.display,
+                val_rect,
+                LABEL_FONT_SIZE,
                 400,
                 AlignX::Left,
                 AlignY::Middle,
             ));
+
+            if let (Some(action_r), Some(action_label)) =
+                (row.trailing_action_rect, field.trailing_action_label.as_ref())
+            {
+                let action_text_rect = Rect::new(
+                    action_r.origin.x + 4.0,
+                    action_r.origin.y,
+                    (action_r.size.x - 8.0).max(16.0),
+                    action_r.size.y,
+                );
+                let elided_action = crate::elided_text::elide_text_with_measure(
+                    action_label,
+                    action_text_rect.size.x,
+                    crate::elided_text::ElideMode::End,
+                    |sample| text_ctx.measure_line(sample, LABEL_FONT_SIZE, 500).x,
+                );
+                glyphs.extend(text_ctx.shape_line(
+                    &elided_action.display,
+                    action_text_rect,
+                    LABEL_FONT_SIZE,
+                    500,
+                    AlignX::Center,
+                    AlignY::Middle,
+                ));
+            }
         }
         emit_schema_form(node, &desc, state, control, &glyphs)
     }

@@ -483,8 +483,11 @@ pub use scale_osd::{
     SCALE_OSD_MARGIN, SCALE_OSD_WIDTH,
 };
 pub use schema_form::{
-    emit_schema_form, FieldInheritanceState, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc,
-    SchemaFormState, SchemaValue,
+    emit_schema_form, estimate_label_text_width, schema_form_trailing_action_node,
+    FieldInheritanceState, SchemaFieldKind, SchemaFieldSpec, SchemaFormDesc, SchemaFormEvent,
+    SchemaFormRowLayout, SchemaFormState, SchemaLabelColumnConfig, SchemaValue,
+    DEFAULT_LABEL_MAX_RATIO, DEFAULT_LABEL_MAX_WIDTH, DEFAULT_LABEL_MIN_WIDTH,
+    DEFAULT_TRAILING_ACTION_WIDTH, LABEL_CONTROL_GAP, LABEL_FONT_SIZE, TRAILING_ACTION_GAP,
 };
 pub use shortcut_bar::{
     emit_shortcut_bar, BindingOrigin, KeybindingManagerState, ShortcutBarDesc, ShortcutEntry,
