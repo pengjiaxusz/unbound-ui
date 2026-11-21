@@ -89,6 +89,7 @@ for n in $(seq 102 113); do gh issue edit $n -R "$REPO" --remove-label "status:o
 
 ## 八、仓库约定
 
+- **`git am` 不触发 pre-commit 钩子**：真实基线仓库虽有 `core.hooksPath=.githooks` 与 rustfmt 钩子，但 `git am` 走的是 `pre-applypatch`/`post-applypatch` 通道，`pre-commit` 不会执行。所以补丁集落下的 12 条提交天然没被 rustfmt 扫过，收尾必须手动 `cargo fmt`，别指望钩子兜底。
 - **本地验收 ≠ CI 门禁**：`gate.yml` 只跑「提交标题 → 代码语言守卫 → 文案语言 → `cargo fmt --check`」，而 `just check` 是 clippy、不含格式检查。批量新增模块后 `pub use` 的排序与长行会被 rustfmt 重排，漏跑 `fmt-check` 必然在 CI 挂（2026-11-21 即因此连挂两次）。收工前固定序列：`just gate-check && just gate-lang && just fmt-check && just check && just test`。
 - 语言守卫 `mode=english`：中文 `///` 文档注释可用（实测通过），新增公开 API 注释风格与邻居一致即可。
 - `just test` 会先 `cargo build -p app-guest`（`host_roundtrip` 要加载真实 cdylib），跳过在干净环境会硬失败。
