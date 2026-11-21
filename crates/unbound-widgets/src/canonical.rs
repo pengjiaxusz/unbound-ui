@@ -43,7 +43,7 @@ impl ControlClass {
 }
 
 /// 基准对齐控件总数（含 Community Toolkit 之外的 WinUI 3 标准控件与变体）。
-pub const BASELINE_COUNT: usize = 71;
+pub const BASELINE_COUNT: usize = 70;
 
 /// Community Toolkit 对齐控件总数。
 pub const TOOLKIT_COUNT: usize = 20;
@@ -152,7 +152,6 @@ impl WidgetCatalogId {
             | Self::MenuFlyout
             | Self::MenuBar
             | Self::ContentDialog
-            | Self::NavigationViewCompact
             | Self::NumberBox
             | Self::PipsPager
             | Self::PasswordBox
@@ -227,7 +226,7 @@ impl WidgetCatalogId {
             Self::Image => "Image",
             Self::LoadingOverlay | Self::ProgressRing => "ProgressRing",
             Self::MenuBar => "MenuBar",
-            Self::NavigationViewCompact | Self::NavigationView => "NavigationView",
+            Self::NavigationView => "NavigationView",
             Self::NumberBox => "NumberBox",
             Self::PipsPager => "PipsPager",
             Self::PasswordBox => "PasswordBox",

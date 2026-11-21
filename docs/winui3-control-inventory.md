@@ -3,7 +3,7 @@
 本文档是 `unbound-ui` 控件体系对标 Windows 11 Fluent（WinUI 3 / Windows App SDK 1.8 + Windows Community Toolkit）的**单一事实源清单**。
 所有命名均**以 WinUI 3 官方规范名为主键**，服务于三项工程目标：
 
-1. **命名对齐与像素差分闭环**：明确本框架现有 **134 个目录组件**（121 个源码模块 + `title_bar` 等外壳模块）中，哪些是 WinUI 3 的**基准对齐控件**、它们的 WinUI 3 官方规范名是什么、命名是否已与规范名一致。
+1. **命名对齐与像素差分闭环**：明确本框架现有 **133 个目录组件**（120 个源码模块 + `title_bar` 等外壳模块）中，哪些是 WinUI 3 的**基准对齐控件**、它们的 WinUI 3 官方规范名是什么、命名是否已与规范名一致。
 2. **缺失控件追踪**：列出 WinUI 3 官方画廊（WinUI 3 Gallery）与 Community Toolkit 中尚未实现的控件，区分**核心必补（P0/P1）**与**社区扩展选补（P2）**。
 3. **自有独有控件清单**：界定 WinUI 3 不存在、属于 `unbound-ui` 面向专业工作台/DCC/IDE 场景的**自有独有控件**，后续通过 `.agents/skills/fluent-control-design` 技能将基准控件总结出的外观与行为规律统一迁移到这些独有组件上。
 
@@ -13,13 +13,13 @@
 
 | 分类 | 数量 | 说明 |
 | --- | --- | --- |
-| **1. 已实现 · WinUI 3 基准对齐控件** | **71 个** | 已在 `unbound-widgets` 中实现，目录枚举、展台展示名与展示文档均统一使用 WinUI 3 官方名称，可直接纳入批量像素差分 |
+| **1. 已实现 · WinUI 3 基准对齐控件** | **70 个** | 已在 `unbound-widgets` 中实现，目录枚举、展台展示名与展示文档均统一使用 WinUI 3 官方名称，可直接纳入批量像素差分 |
 | **2. 已实现 · Community Toolkit 社区标准对齐控件** | **20 个** | 对应 `CommunityToolkit.WinUI.Controls` 中的高频官方扩展组件（如 `Segmented`、`SettingsCard`、`TokenizingTextBox` 等） |
 | **3. 已实现 · Unbound 自有独有控件** | **43 个** | WinUI 3 无对应物，属于本框架面向节点图、时间轴、代码/终端、数据工作台等场景的自有独有组件 |
 | **4. 待实现 · WinUI 3 缺失必补控件（P1）** | **0 个**（11 项已全部落地并对齐） | P0 的 7 个缺失控件与 P1 的 11 项均已落地为独立目录变体并完成视觉对齐；`PipsPager` 变体以 `PaginationStyle::Dots` 纯圆点样式承载 |
 | **5. 待实现 · Community Toolkit 选补控件（P2）** | **0 个**（6 项已全部落地并对齐） | Windows Community Toolkit 的 6 个选补控件均已实现并完成对齐 |
 
-> 汇总：71 + 20 + 43 = **134 个目录变体**，与 `WidgetCatalogId::COUNT` 及稳定形状探针一致。
+> 汇总：70 + 20 + 43 = **133 个目录变体**，与 `WidgetCatalogId::COUNT` 及稳定形状探针一致。
 
 ---
 
@@ -57,7 +57,7 @@
 | **MenuFlyout** | Menus & Toolbars | `MenuFlyout` / `ContextMenu` | `menu.rs` / `context_menu.rs` | `已一致`（`ContextMenu` 为右键触发的 `MenuFlyout`） | 已接入批量差分（实机采集待 GPU） |
 | **MenuBar** | Menus & Toolbars | `MenuBar` | `menubar.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **CommandBar** | Menus & Toolbars | `CommandBar` | `toolbar.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
-| **NavigationView** | Navigation | `NavigationView` / `NavigationViewCompact` | `sidebar.rs` / `navigation_rail.rs` | `已一致`（展开态 Left 与紧凑态 LeftCompact 的显示模式） | 已接入批量差分（实机采集待 GPU） |
+| **NavigationView** | Navigation | `NavigationView` | `navigation_view.rs` | `已一致`（5 种 PaneDisplayMode + 7 场景多形态差分矩阵） | 已接入 7 场景真实控件差分（实机采集待 GPU） |
 | **TabView** | Navigation | `TabView` | `tabs.rs` | `已一致`（ADR-0024 新增 `TabViewStyle::ShellChrome` 标题栏融合卡片、`TabWidthMode::Adaptive` `100..=240px`、图标/独立关闭/`+` 按钮事件与溢出滚动；默认 `Standard` 形态保持向后兼容） | 已接入批量差分（实机采集待 GPU） |
 | **Pivot** | Navigation | `Pivot` | `pivot.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **BreadcrumbBar** | Navigation | `BreadcrumbBar` | `breadcrumb.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |

@@ -183,7 +183,6 @@ define_widget_catalog! {
         minimap,
         modal,
         multi_split,
-        navigation_rail,
         navigation_view,
         node_graph,
         notification_center,
@@ -209,7 +208,6 @@ define_widget_catalog! {
         segmented,
         select,
         shortcut_bar,
-        sidebar,
         skeleton,
         slider,
         spinner,
@@ -322,7 +320,6 @@ define_widget_catalog! {
         Minimap => minimap,
         ContentDialog => modal,
         MultiSplit => multi_split,
-        NavigationViewCompact => navigation_rail,
         NinePatch => image,
         NodeGraph => node_graph,
         NotificationCenter => notification_center,
@@ -492,12 +489,6 @@ pub use schema_form::{
 pub use shortcut_bar::{
     emit_shortcut_bar, BindingOrigin, KeybindingManagerState, ShortcutBarDesc, ShortcutEntry,
 };
-pub use sidebar::{
-    emit_sidebar, sidebar_row_node, SidebarDesc, SidebarEntry, SidebarRow, SidebarRowGlyphs,
-    SidebarRowKind, SidebarSection, SIDEBAR_BADGE_HEIGHT, SIDEBAR_BADGE_WIDTH,
-    SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_FOOTER_GAP, SIDEBAR_ITEM_HEIGHT, SIDEBAR_PADDING,
-    SIDEBAR_SECTION_GAP, SIDEBAR_SECTION_HEIGHT, SIDEBAR_WIDTH,
-};
 pub use task_hud::{emit_task_hud, TaskActivityItem, TaskHudDesc, TaskHudState, TaskStatus};
 pub use virtual_grid::{
     emit_virtual_grid, virtual_grid_cell_node, GridColumnSizing, VirtualGridDesc, VirtualGridState,
@@ -620,9 +611,6 @@ pub use menubar::{
 pub use minimap::{emit_minimap, MinimapDesc, MinimapItem, MinimapState, MINIMAP_INSET};
 pub use modal::{emit_modal, DraggableModalState, ModalDesc, ModalOutput, ModalWidget};
 pub use multi_split::{emit_multi_split, MultiSplitDesc, MultiSplitState, MULTI_SPLIT_GUTTER_SIZE};
-pub use navigation_rail::{
-    emit_navigation_rail, NavRailItem, NavigationRailDesc, NavigationRailState,
-};
 pub use navigation_view::{
     emit_navigation_view, navigation_view_row_node, NavigationViewBackButtonVisible,
     NavigationViewDesc, NavigationViewDisplayMode, NavigationViewEvent, NavigationViewIcon,

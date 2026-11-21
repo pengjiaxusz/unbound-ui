@@ -181,7 +181,6 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::ListView => "virtual_views",
         WidgetCatalogId::Expander => "collapsible",
         WidgetCatalogId::Masonry => "masonry",
-        WidgetCatalogId::NavigationViewCompact => "navigation_rail",
         WidgetCatalogId::PipsPager => "pagination",
         WidgetCatalogId::Stepper => "stepper",
         WidgetCatalogId::AutoSuggestBox => "autocomplete",

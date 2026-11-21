@@ -2019,21 +2019,6 @@ where
             }
             out
         }
-        WidgetCatalogId::NavigationViewCompact => {
-            let rail_r = Rect::new(o.x, o.y, 160.0, 110.0);
-            let active_id = ((variant_idx % 2) + 1) as u64;
-            let desc = crate::navigation_rail::NavigationRailDesc::new(
-                rail_r,
-                vec![
-                    crate::navigation_rail::NavRailItem::new(1, "Home").with_badge(2),
-                    crate::navigation_rail::NavRailItem::new(2, "Assets"),
-                ],
-                active_id,
-            );
-            let mut glyphs = shape("Home", Vec2::new(o.x + 16.0, o.y + 18.0), 13.0);
-            glyphs.extend(shape("Assets", Vec2::new(o.x + 16.0, o.y + 62.0), 13.0));
-            crate::navigation_rail::emit_navigation_rail(node, &desc, state, &glyphs)
-        }
         WidgetCatalogId::PipsPager => {
             let pg_r = Rect::new(o.x, o.y, rect.size.x.min(380.0), rect.size.y.min(36.0));
             let desc = crate::pagination::PaginationDesc::new(pg_r, 12, (variant_idx % 12) + 1);

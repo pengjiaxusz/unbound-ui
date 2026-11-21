@@ -1191,7 +1191,6 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::RatingControl
         | WidgetCatalogId::PipsPager
         | WidgetCatalogId::FlipView
-        | WidgetCatalogId::NavigationViewCompact
         | WidgetCatalogId::NavigationView
         | WidgetCatalogId::MenuFlyout
         | WidgetCatalogId::MenuBar

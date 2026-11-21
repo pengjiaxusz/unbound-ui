@@ -20,7 +20,7 @@ use crate::canvas::{AlignX, AlignY};
 pub const COMPONENTS_INFO: PageInfo = PageInfo {
     title: "Component gallery",
     short: "All Components",
-    description: "All 134 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
+    description: "All 133 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
     crates: &["unbound-widgets"],
     keywords: "component gallery catalog emitter coverage widget showcase every control tooltip",
 };
@@ -142,7 +142,6 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::Tour => KNOBS_FEEDBACK,
 
         WidgetCatalogId::BreadcrumbBar
-        | WidgetCatalogId::NavigationViewCompact
         | WidgetCatalogId::NavigationView
         | WidgetCatalogId::PipsPager
         | WidgetCatalogId::Pivot
@@ -274,7 +273,6 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Minimap => "view.add(ui_key!(\"mm\"), MinimapDesc::new(rect));",
         WidgetCatalogId::ContentDialog => "view.add(ui_key!(\"mdl\"), ModalDesc::new(rect, \"Modal Dialog\"));",
         WidgetCatalogId::MultiSplit => "view.multi_split(ui_key!(\"msplit\"), MultiSplitDesc::new(rect, panes));",
-        WidgetCatalogId::NavigationViewCompact => "view.add(ui_key!(\"nr\"), NavigationRailDesc::new(rect, items));",
         WidgetCatalogId::NinePatch => "view.add(ui_key!(\"np\"), NinePatchDesc::new(rect, asset_id));",
         WidgetCatalogId::NodeGraph => "view.add(ui_key!(\"ng\"), NodeGraphDesc::new(rect, graph));",
         WidgetCatalogId::NotificationCenter => "view.add(ui_key!(\"nc\"), NotificationCenterDesc::new(rect));",
@@ -331,7 +329,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::QueryBuilder => "view.add(ui_key!(\"qb\"), QueryBuilderDesc::new(rect, QueryCombinator::And, rules));",
         WidgetCatalogId::SchemaForm => "view.add(ui_key!(\"sf\"), SchemaFormDesc::new(rect, fields));",
         WidgetCatalogId::ShortcutBar => "view.add(ui_key!(\"scb\"), ShortcutBarDesc::new(rect, entries));",
-        WidgetCatalogId::NavigationView => "view.add(ui_key!(\"sb\"), SidebarDesc::new(rect, sections).active(id));",
+        WidgetCatalogId::NavigationView => "view.add(ui_key!(\"nav\"), NavigationViewDesc::new(rect, menu_items));",
         WidgetCatalogId::TaskHud => "view.add(ui_key!(\"hud\"), TaskHudDesc::new(rect, tasks));",
         WidgetCatalogId::RichEditBox => "view.add(ui_key!(\"reb\"), RichEditBoxDesc::new(rect, \"Document\"));",
         WidgetCatalogId::GridView => "view.add(ui_key!(\"gv\"), GridViewDesc::new(rect, 3, 2).selected(0));",
@@ -476,7 +474,6 @@ define_showcase_components! {
     ListView => "ListView", "A Fenwick-backed variable-height virtual row.", 240.0,
     Expander => "Expander", "Single-section disclosure panel with smooth spring progress.", 240.0,
     Masonry => "Masonry grid", "Shortest-column adaptive waterfall grid and aspect-ratio box.", 280.0,
-    NavigationViewCompact => "NavigationView (compact)", "Collapsible sidebar navigation rail with badges.", 280.0,
     PipsPager => "PipsPager", "Page buttons with ellipsis folding and page-size metadata.", 220.0,
     PasswordBox => "Password box", "Masked text field with a press-and-hold reveal button.", 240.0,
     Stepper => "Stepper", "Horizontal or vertical multi-step progress indicator.", 240.0,
@@ -617,7 +614,6 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::Minimap => "缩略小地图 (Minimap)",
         WidgetCatalogId::ContentDialog => "内容对话框 (ContentDialog)",
         WidgetCatalogId::MultiSplit => "多列分割面板 (Multi-Split)",
-        WidgetCatalogId::NavigationViewCompact => "紧凑导航视图 (NavigationView)",
         WidgetCatalogId::NinePatch => "九宫格图像 (Nine-Patch)",
         WidgetCatalogId::NodeGraph => "节点蓝图 (Node Graph)",
         WidgetCatalogId::NotificationCenter => "通知中心 (Notification Center)",
@@ -761,7 +757,6 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::Minimap => "小地图 缩略导航 minimap",
         WidgetCatalogId::ContentDialog => "内容对话框 模态框 弹窗 content dialog",
         WidgetCatalogId::MultiSplit => "多列分割面板 可调分栏 multi split",
-        WidgetCatalogId::NavigationViewCompact => "紧凑导航视图 折叠导航轨 navigation view",
         WidgetCatalogId::NinePatch => "九宫格拉伸图 nine patch",
         WidgetCatalogId::NodeGraph => "节点图 着色器管线蓝图 node graph",
         WidgetCatalogId::NotificationCenter => "通知中心 消息盒子 notification center",
