@@ -40,7 +40,7 @@ AI 助手**绝对严禁**在终端中直接裸跑任何底层构建或编译测�
 | ❌ `ninja -C <dir> <target>` / `ninja ...` | 抢占全部 CPU 逻辑核心导致系统卡死，多工作树冲突 | `just test-build <target>` 或 `bque run -- ninja -C <dir> <target>` |
 | ❌ `cmake --build <dir> ...` | 争用 CMake/Ninja 编译锁，打死前台交互 | `just build` 或 `bque run -- cmake --build <dir> ...` |
 | ❌ `cargo build` / `cargo test` / `cargo clippy` | 产生 cargo target/ 锁争用，打满 CPU | `just build` / `just test` / `just check` 或 `bque run -- cargo ...` |
-| ❌ 原生基准测试（如 `ninja -C target/debug <BENCH_TARGET>` 或 `./bench.exe`） | **致命跑分污染**：未冻结后台构建，CPU 与 L3 缓存严重受扰，测试数据失真 | `just test-bench` 或 `bque bench -- <命令>`（自动挂起后台编译以提供 0% 干扰环境） |
+| ❌ 原生基准测试（如 `ninja -C target/debug DuntingThumbnailPipelineBenchmark` 或 `./bench.exe`） | **致命跑分污染**：未冻结后台构建，CPU 与 L3 缓存严重受扰，测试数据失真 | `just test-bench` 或 `bque bench -- <命令>`（自动挂起后台编译以提供 0% 干扰环境） |
 | ❌ `ctest ...` / `<TestBinary>.exe` | 未降级的多线程并发测试抢占 CPU 造成前台卡顿 | `just test` 或 `bque run -- ctest ...` |
 | ❌ `pnpm build` / `tsc`（大型前端项目） | Node.js/V8 引擎内存与 CPU 突增卡顿 | `just build` 或 `bque run -- pnpm build` |
 
@@ -90,7 +90,7 @@ bque clean
    - **原理解析**：原生 Windows 进程不响应 PowerShell 的协同终止信号，4KB 匿名管道缓冲区写满后触发内核级系统调用阻塞，整条调用链永久死锁（卡死 120 秒超时）。
    - **正确姿势**：必须先重定向落盘，再通过 PowerShell 读取：`cargo test *> out.log; Get-Content out.log -TotalCount 100`。
 2. **多工作树进程精准终止**：
-   - 在清理构建残留或重启服务时，**严禁使用进程名无差别盲杀**（如 `Stop-Process -Name <APP_NAME>`）；
+   - 在清理构建残留或重启服务时，**严禁使用进程名无差别盲杀**（如 `Stop-Process -Name Dunting`）；
    - 必须通过命令行路径精确匹配**当前工作树路径**后再终止，严禁误杀其他 worktree 的前台调试或测试实例。
 
 ---

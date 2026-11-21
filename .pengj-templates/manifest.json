@@ -1,6 +1,6 @@
 {
   "tool": "pengj-templates",
-  "version": "0.80.0",
+  "version": "0.80.1",
   "project_name": "unbound-ui",
   "layers": [
     "common",
@@ -57,6 +57,7 @@
       "worktree",
       "write-a-skill",
       "write-docs",
+      "write-just",
       "writing-for-agents"
     ],
     "use_lld": true,
@@ -100,7 +101,7 @@
     ".agents\\skills\\improve-codebase-architecture\\SKILL.md": "4523d59d9997cd4c72ab7e926fee0f38fe43f9e9c96471ad39e2c8c46971d134",
     ".agents\\skills\\mcp-bootstrap\\SKILL.md": "afbfa562775a6f934bfe903f28fe5742c6fcc489c58b747299af11d965222873",
     ".agents\\skills\\mcp-bootstrap\\scripts\\ensure-mcp.mjs": "7c3d9f774e69ed48a751987e449844f81138126aa7fd413709f2cf5a2144767f",
-    ".agents\\skills\\patch-handoff\\SKILL.md": "05ff71612fd027ce7b0fce95c2e08d9400ae51e1caed5b8d01e4e75225163c6a",
+    ".agents\\skills\\patch-handoff\\SKILL.md": "634f2bc3db8723f3aa1ea037284f4a31742ae6cbb45fb830618a53c4d19ab364",
     ".agents\\skills\\patch-handoff\\references\\field-notes.md": "b290b98800ad2b1e6c009c0cc75ffc3199440265a7649d68db8b9b9180071b65",
     ".agents\\skills\\patch-handoff\\references\\git-mechanics.md": "1f93fb13103e700e5e08bb648a51861e05fe7b9ffb7bb123b93fa99ae7e59904",
     ".agents\\skills\\patch-handoff\\references\\handoff-audit.md": "f8ec0fc249cd60580fba904239f2802a64474d68c556505eb2c6d267e53b1e8d",
@@ -148,6 +149,9 @@
     ".agents\\skills\\worktree\\SKILL.md": "0733707b73721d8646f0d71e2fc6ff71e9f978595a4753abb46aff9307ede9d2",
     ".agents\\skills\\write-a-skill\\SKILL.md": "4d1b1de7937feabcc909050c34d95b149134e2b07baf1521c3f708dcb10e8ba5",
     ".agents\\skills\\write-docs\\SKILL.md": "873c5688743b786c3f445229240d9faf562c5179f484be5b04d00b85a9dcfeca",
+    ".agents\\skills\\write-just\\SKILL.md": "8960277e9fcfecb8b0c5638103f380cf5171b89a83bafe00f3fe4d9ee501c167",
+    ".agents\\skills\\write-just\\references\\command-map.md": "7b3d890ece93c1fc41be23607418c704e738df81b757a12b683a1054d9dea600",
+    ".agents\\skills\\write-just\\scripts\\check-just.sh": "4663dc6a22a9eea7482425fc9e6cbba44338a5e27d9f4d8363bb559ee0a943c3",
     ".agents\\skills\\writing-for-agents\\SKILL-MECHANICS.md": "8270f0089a3f0f21ff6df51a728b1ac4fcb71405cc5cc3612fb28e028451edf0",
     ".agents\\skills\\writing-for-agents\\SKILL.md": "97ab5dc50277c8eb78cb83cd36c7b08bd997969fcb7efebcb2cb82f2592e580e",
     ".cargo\\config.toml": "c2b8603537f1a91b6871cae0699bfdc8ec9820b46bf561fedf6e50dabb763bb1",
