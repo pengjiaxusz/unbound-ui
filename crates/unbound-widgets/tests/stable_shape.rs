@@ -229,7 +229,7 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::QueryBuilder => "query_builder",
         WidgetCatalogId::SchemaForm => "schema_form",
         WidgetCatalogId::ShortcutBar => "shortcut_bar",
-        WidgetCatalogId::NavigationView => "sidebar",
+        WidgetCatalogId::NavigationView => "navigation_view",
         WidgetCatalogId::TaskHud => "task_hud",
         WidgetCatalogId::CalendarDatePicker => "calendar_date_picker",
         WidgetCatalogId::DatePicker => "date_picker_wheel",

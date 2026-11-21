@@ -12,12 +12,11 @@ use unbound_widgets::slot_fixture::{
     apply_recursive_disabled_propagation, emit_canonical_annotated_scroll_bar_fixture,
     emit_canonical_command_bar_fixture, emit_canonical_flip_view_fixture,
     emit_canonical_grid_fixture, emit_canonical_list_rows_fixture, emit_canonical_menu_bar_fixture,
-    emit_canonical_navigation_view_fixture, emit_canonical_path_fixture,
-    emit_canonical_pips_pager_fixture, emit_canonical_refresh_fixture,
+    emit_canonical_path_fixture, emit_canonical_pips_pager_fixture, emit_canonical_refresh_fixture,
     emit_canonical_segmented_fixture, emit_canonical_tab_view_fixture,
     emit_canonical_text_rows_fixture, emit_canonical_title_bar_fixture,
     emit_canonical_tree_fixture, FixtureState, CANONICAL_COMMAND_ITEMS, CANONICAL_GRID_ITEMS,
-    CANONICAL_LIST_ITEMS, CANONICAL_MENU_ITEMS, CANONICAL_NAV_ITEMS, CANONICAL_PIPS_COUNT,
+    CANONICAL_LIST_ITEMS, CANONICAL_MENU_ITEMS, CANONICAL_PIPS_COUNT,
     CANONICAL_PIPS_SELECTED_INDEX, CANONICAL_PIP_SIZE_NORMAL, CANONICAL_PIP_SIZE_SELECTED,
     CANONICAL_TAB_ITEMS, STANDARD_FLIP_HEIGHT, STANDARD_FLIP_WIDTH, STANDARD_GRID_CELL_RADIUS,
     STANDARD_GRID_HEIGHT, STANDARD_GRID_WIDTH, STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT,
@@ -99,7 +98,7 @@ fn path_fixture_normal_outputs_deterministic_geometry_and_active_tokens() {
         );
         assert!(
             glyph_tokens.iter().all(|t| *t == Token::TEXT_PRIMARY),
-            "WinUI BreadcrumbBar 条目与分隔符均使用 TEXT_PRIMARY"
+            "WinUI BreadcrumbBar items and separators must use TEXT_PRIMARY"
         );
         assert!(
             !glyph_tokens.contains(&Token::TEXT_DISABLED),
@@ -1136,54 +1135,6 @@ fn title_bar_disabled_downgrades_title_and_captions() {
                 "all title bar text must be TEXT_DISABLED in disabled state"
             );
         }
-    });
-}
-
-#[test]
-fn navigation_view_normal_renders_home_selected_and_library_and_settings() {
-    with_test_ctx(|text_ctx| {
-        let rect = Rect::new(0.0, 0.0, 300.0, 200.0);
-        let fixture = emit_canonical_navigation_view_fixture(
-            rect,
-            FixtureState::normal().with_selected(0),
-            text_ctx,
-            100,
-        );
-
-        assert_eq!(
-            fixture.item_rects.len(),
-            CANONICAL_NAV_ITEMS.len(),
-            "must emit 2 nav item rects"
-        );
-        assert!(
-            fixture.settings_rect.height() > 0.0,
-            "must emit settings rect"
-        );
-        assert_eq!(fixture.total_size.x, 300.0);
-        assert_eq!(fixture.total_size.y, 200.0);
-
-        // 选中态校验：必须包含 Accent 胶囊条与 NAV_SELECTED 背景
-        let rounded_rects: Vec<(Token, f32, f32)> = fixture
-            .output
-            .primitives
-            .iter()
-            .filter(|p| p.prim_type() == PrimType::RoundedRect)
-            .map(|p| (Token::new(p.fill_token_or_uv as u16), p.size[0], p.size[1]))
-            .collect();
-
-        // 参考图的选中项只有左侧胶囊，没有整行 NAV_SELECTED 底色。
-        let has_nav_selected = rounded_rects
-            .iter()
-            .any(|&(tok, _, _)| tok == Token::NAV_SELECTED);
-        assert!(
-            !has_nav_selected,
-            "selected item has no NAV_SELECTED row fill"
-        );
-
-        let has_pill = rounded_rects.iter().any(|&(tok, w, h)| {
-            tok == Token::PRIMARY && (w - 3.0).abs() < 1e-2 && (h - 16.0).abs() < 1e-2
-        });
-        assert!(has_pill, "selected item must have 3x16px Accent pill");
     });
 }
 

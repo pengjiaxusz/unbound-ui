@@ -3209,91 +3209,61 @@ where
             emit_shortcut_bar(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::NavigationView => {
-            let panel_w = rect.size.x.clamp(180.0, crate::sidebar::SIDEBAR_WIDTH);
-            let panel_h = rect.size.y.max(240.0);
-            let panel_r = Rect::new(o.x, o.y, panel_w, panel_h);
-            // 点击卡片时按 `variant_idx` 循环切换高亮条目，悬停项始终错开一格，
-            // 因此展厅里能一眼看出“选中 + 悬停”两个状态互不干扰。
-            let active = 1 + (variant_idx % 5) as u64;
-            let hovered = 1 + ((variant_idx + 2) % 5) as u64;
-            let sections = vec![
-                crate::sidebar::SidebarSection::new("Workspace")
-                    .with_entry(crate::sidebar::SidebarEntry::new(
-                        1,
-                        "Overview",
-                        crate::ShellIcon::Grid,
-                    ))
-                    .with_entry(
-                        crate::sidebar::SidebarEntry::new(2, "Sessions", crate::ShellIcon::Bolt)
-                            .badge("3"),
-                    )
-                    .with_entry(crate::sidebar::SidebarEntry::new(
-                        3,
-                        "Shaders",
-                        crate::ShellIcon::Code,
-                    )),
-                crate::sidebar::SidebarSection::new("System")
-                    .with_entry(crate::sidebar::SidebarEntry::new(
-                        4,
-                        "Settings",
-                        crate::ShellIcon::Settings,
-                    ))
-                    .with_entry(crate::sidebar::SidebarEntry::new(
-                        5,
-                        "Extensions",
-                        crate::ShellIcon::Package,
-                    )),
-            ];
-            let desc = crate::sidebar::SidebarDesc::new(panel_r, sections)
-                .active(active)
-                .hovered(hovered)
-                .label("Component gallery sidebar")
-                .footer(vec![crate::sidebar::SidebarEntry::new(
-                    9,
-                    "Help",
-                    crate::ShellIcon::Search,
-                )]);
-            let rows = desc.rows();
-            let mut shaped = Vec::with_capacity(rows.len());
-            for row in &rows {
-                let label_rect = desc.row_label_rect(row);
-                if let crate::sidebar::SidebarRowKind::Section { section } = row.kind {
-                    let title = desc
-                        .sections
-                        .get(section)
-                        .map_or("", |value| value.title.as_str());
-                    shaped.push(crate::sidebar::SidebarRowGlyphs {
-                        label: shape_centered_y(
-                            &mut shape,
-                            title,
-                            label_rect,
-                            label_rect.origin.x,
-                            10.5,
-                        ),
-                        badge: Vec::new(),
-                    });
-                    continue;
-                }
-                let Some(entry) = desc.row_entry(row) else {
-                    shaped.push(crate::sidebar::SidebarRowGlyphs::default());
-                    continue;
-                };
-                let badge_rect = desc.row_badge_rect(row);
-                let badge = entry.badge.as_deref().map_or_else(Vec::new, |text| {
-                    shape_centered(&mut shape, text, badge_rect, 10.5)
-                });
-                shaped.push(crate::sidebar::SidebarRowGlyphs {
-                    label: shape_centered_y(
-                        &mut shape,
-                        &entry.label,
-                        label_rect,
-                        label_rect.origin.x,
-                        12.5,
+            let desc = crate::navigation_view::NavigationViewDesc::new(
+                rect,
+                vec![
+                    crate::navigation_view::NavigationViewMenuItem::header("Workspace"),
+                    crate::navigation_view::NavigationViewMenuItem::item(
+                        crate::navigation_view::NavigationViewItem::new(1, "Home")
+                            .with_icon(crate::ShellIcon::Grid),
                     ),
-                    badge,
-                });
-            }
-            crate::sidebar::emit_sidebar(node, &desc, state, &shaped)
+                    crate::navigation_view::NavigationViewMenuItem::item(
+                        crate::navigation_view::NavigationViewItem::new(2, "Sessions")
+                            .with_icon(crate::ShellIcon::Bolt)
+                            .with_info_badge("3"),
+                    ),
+                    crate::navigation_view::NavigationViewMenuItem::separator(),
+                    crate::navigation_view::NavigationViewMenuItem::item(
+                        crate::navigation_view::NavigationViewItem::new(3, "Analytics")
+                            .with_icon(crate::ShellIcon::Chart),
+                    ),
+                ],
+            )
+            .pane_display_mode(crate::navigation_view::NavigationViewPaneDisplayMode::Left)
+            .open_pane_length(rect.size.x.clamp(
+                180.0,
+                crate::navigation_view::NAVIGATION_VIEW_OPEN_PANE_LENGTH,
+            ))
+            .selected_item(Some(1))
+            .footer_menu_items(vec![crate::navigation_view::NavigationViewMenuItem::item(
+                crate::navigation_view::NavigationViewItem::new(9, "Account")
+                    .with_icon(crate::ShellIcon::Sliders),
+            )])
+            .label("Component gallery NavigationView");
+            // 探针把控件级悬停相位翻译成窗格折叠键悬停，让目录穷举覆盖真实悬停绘制路径。
+            let desc = if state.phase == PointerPhase::Hovered {
+                desc.hovered_item(Some(crate::navigation_view::NAVIGATION_VIEW_PANE_TOGGLE_ID))
+            } else {
+                desc
+            };
+            let mut nav_state = crate::navigation_view::NavigationViewState::from_desc(&desc);
+            nav_state.set_animations_enabled(false, &desc);
+            let mut engine = unbound_text::TextEngine::new();
+            let mut cache = unbound_text::GlyphCache::new();
+            let mut text_ctx = crate::TextCtx {
+                engine: &mut engine,
+                cache: &mut cache,
+                atlas_clock: 1,
+                raster_scale: 1.0,
+            };
+            crate::navigation_view::emit_navigation_view(
+                node,
+                &desc,
+                state,
+                &nav_state,
+                &mut text_ctx,
+            )
+            .output
         }
         WidgetCatalogId::TaskHud => {
             let hud_r = Rect::new(o.x, o.y, rect.size.x.min(340.0), 92.0);

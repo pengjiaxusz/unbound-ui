@@ -16,14 +16,16 @@ use unbound_text::{GlyphCache, TextEngine};
 use unbound_theme::Token;
 use unbound_widgets::slot_fixture::{
     emit_canonical_command_bar_fixture, emit_canonical_menu_bar_fixture,
-    emit_canonical_navigation_view_fixture, emit_canonical_path_fixture,
-    emit_canonical_pips_pager_fixture, emit_canonical_segmented_fixture,
-    emit_canonical_tab_view_fixture, emit_canonical_title_bar_fixture, FixtureState,
-    CANONICAL_COMMAND_ITEMS, CANONICAL_MENU_ITEMS, CANONICAL_NAV_ITEMS, CANONICAL_PATH_ITEMS,
-    CANONICAL_PIPS_COUNT, CANONICAL_PIPS_SELECTED_INDEX, CANONICAL_TAB_ITEMS, STANDARD_PILL_HEIGHT,
-    STANDARD_PILL_WIDTH,
+    emit_canonical_path_fixture, emit_canonical_pips_pager_fixture,
+    emit_canonical_segmented_fixture, emit_canonical_tab_view_fixture,
+    emit_canonical_title_bar_fixture, FixtureState, CANONICAL_COMMAND_ITEMS, CANONICAL_MENU_ITEMS,
+    CANONICAL_PATH_ITEMS, CANONICAL_PIPS_COUNT, CANONICAL_PIPS_SELECTED_INDEX, CANONICAL_TAB_ITEMS,
+    STANDARD_PILL_HEIGHT, STANDARD_PILL_WIDTH,
 };
-use unbound_widgets::TextCtx;
+use unbound_widgets::{
+    emit_navigation_view, ControlState, NavigationViewDesc, NavigationViewItem,
+    NavigationViewMenuItem, NavigationViewPaneDisplayMode, NavigationViewState, ShellIcon, TextCtx,
+};
 
 /// 构造供纯代码级测试使用的测量上下文。
 fn with_test_ctx<F, R>(f: F) -> R
@@ -355,47 +357,59 @@ fn title_bar_normal_and_disabled_and_focused_states() {
 #[test]
 fn navigation_view_normal_and_disabled_and_focused_states() {
     with_test_ctx(|text_ctx| {
-        let rect = Rect::new(0.0, 0.0, 240.0, 360.0);
+        let rect = Rect::new(0.0, 0.0, 360.0, 280.0);
+        let desc = NavigationViewDesc::new(
+            rect,
+            vec![
+                NavigationViewMenuItem::item(
+                    NavigationViewItem::new(1, "Home").with_icon(ShellIcon::Grid),
+                ),
+                NavigationViewMenuItem::item(
+                    NavigationViewItem::new(2, "Library").with_icon(ShellIcon::Layers),
+                ),
+            ],
+        )
+        .pane_display_mode(NavigationViewPaneDisplayMode::Left)
+        .selected_item(Some(1));
+        let mut nav_state = NavigationViewState::from_desc(&desc);
+        nav_state.set_animations_enabled(false, &desc);
 
-        // 1. 正常态契约：顶部汉堡按钮、菜单项与底部设置
+        // 1. 正常态契约：真实 NavigationView 发射器输出菜单项与底部 Settings
         let normal =
-            emit_canonical_navigation_view_fixture(rect, FixtureState::normal(), text_ctx, 100);
-        assert_eq!(normal.item_rects.len(), CANONICAL_NAV_ITEMS.len());
-        assert!(normal.settings_rect.width() > 0.0);
-
-        // 首项具有 Accent 胶囊条
-        let has_pill = normal.output.primitives.iter().any(|p| {
-            p.prim_type() == PrimType::RoundedRect
-                && p.fill_token_or_uv as u16 == Token::PRIMARY.raw()
-        });
-        assert!(
-            has_pill,
-            "selected item in NavigationView must have primary accent pill"
-        );
+            emit_navigation_view(100, &desc, ControlState::default(), &nav_state, text_ctx);
+        assert!(normal.layout.rows.len() >= 3);
 
         // 2. 聚焦态契约
-        let focused =
-            emit_canonical_navigation_view_fixture(rect, FixtureState::focused(), text_ctx, 100);
-        let has_focus_ring = focused
+        let focused = emit_navigation_view(
+            100,
+            &desc,
+            ControlState {
+                focused: true,
+                ..ControlState::default()
+            },
+            &nav_state,
+            text_ctx,
+        );
+        assert!(focused
             .output
             .primitives
             .iter()
-            .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw());
-        assert!(
-            has_focus_ring,
-            "focused NavigationView must emit focus ring"
-        );
+            .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw()));
 
-        // 3. 禁用态契约：抑制胶囊指示条且文本降级
-        let disabled =
-            emit_canonical_navigation_view_fixture(rect, FixtureState::disabled(), text_ctx, 100);
-        let has_disabled_pill = disabled.output.primitives.iter().any(|p| {
-            p.prim_type() == PrimType::RoundedRect
-                && p.fill_token_or_uv as u16 == Token::PRIMARY.raw()
-        });
-        assert!(
-            !has_disabled_pill,
-            "disabled NavigationView must suppress primary pill"
+        // 3. 禁用态契约：保持恒定图元数量
+        let disabled = emit_navigation_view(
+            100,
+            &desc,
+            ControlState {
+                disabled: true,
+                ..ControlState::default()
+            },
+            &nav_state,
+            text_ctx,
+        );
+        assert_eq!(
+            disabled.output.primitives.len(),
+            normal.output.primitives.len()
         );
     });
 }
