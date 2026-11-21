@@ -22,10 +22,11 @@ description: >-
 | **重型编译构建**（`cargo build`、`cmake`、`ninja`、`pnpm build`、`tsc`、`xtask pack`） | **必须使用** | `just build` 或 `bque run -- <命令>` | 跨工作树串行排队，进程优先级降为 `Idle`，杜绝卡死前台 IDE 与桌面 |
 | **工作区检查与测试**（`cargo check`、`cargo clippy`、`cargo test`、`vitest run`） | **必须使用** | `just check` / `just test` 或 `bque run -- <命令>` | 高负载 CPU 任务，接入排队避免多工作树争抢挤爆 CPU 与磁盘 IO |
 | **性能跑分与基准测试**（`bench`、`perf`、耗时画像探针） | **必须使用（Bench 模式）** | `just bench` 或 `bque bench -- <命令>` | **纯净跑分保护**：秒级挂起后台正在跑的编译，提供干净 CPU 环境，结束后原位恢复 |
+| **常驻服务**（dev server、watch 循环、`xtask dev`、`pnpm dev`） | **必须使用（observer 模式）** | `bque run --observer -- <命令>` | 优先级与 CPU 预算不变，但**不取**全局编译锁——持锁的常驻服务会把所有其他构建一直堵住 |
 | **递归/嵌套会话**（检测到 `BQUE_ACTIVE_PID` 环境变量） | **禁止使用** | 原生命令直跑（`& <命令>`）或 `bque run`（原生自动穿透） | 当前进程树已被外层 bque 纳管，直接执行避免重复排队造成嵌套死锁 |
 | **轻量格式化与单文件检查**（`cargo fmt`、单文件 `prettier`/`eslint`） | **无需使用** | 原生命令直跑 | 秒级极速完成，几乎不占 CPU，无需额外排队开销 |
 | **Git 工作流操作**（`git status`、`commit`、`push`、`rebase`） | **无需使用** | 原生命令直跑 | I/O 与网络操作，绝对严禁堵在编译队列后面 |
-| **队列自省与运维**（`queue-status`、`queue-clean`） | **无需使用** | `just queue-status` / `just queue-clean` 或 `bque status` | 控制面与排查诊断工具，必须瞬时直达 |
+| **队列自省与运维**（`status`、`clean`） | **无需使用** | `bque status` / `bque clean` | 控制面与排查诊断工具，必须瞬时直达 |
 
 完整场景判定表与命令映射详见 [references/usage-matrix.md](references/usage-matrix.md)。
 
@@ -55,14 +56,14 @@ just build           # 全局排队 + Idle 优先级构建
 just check           # 全局排队代码检查
 just test            # 全局排队单测运行
 just bench           # 纯净基准测试（自动冻结后台其他编译）
-just q-run cargo build --release   # 临时重命令，`--` 不要加
-just q-bench pnpm bench           # 临时跑分命令，纯净独占模式
-just queue-status    # 查看当前全局持锁者、排队任务与状态
-just queue-clean     # 应急清理异常残留的编译锁状态
-just queue-doctor    # 自检本机 bque 安装、PATH 回退与锁状态
+bque status          # 查看当前全局持锁者、排队任务与状态
+bque clean           # 应急清理异常残留的编译锁状态
+just doctor          # 自检工具链、bque 安装、PATH 回退与锁状态
 ```
 
-无现成配方时优先用 `just q-run <cmd>`，原生 CLI 才是最后手段。`justfile` 框架区位于
+无现成配方时直接走原生 CLI（`bque run -- <cmd>`）——本层不再提供临时包装配方：包装层只能转发
+命令，传不进 bque 自己的 `--cwd` / `--observer` / `--priority`，这正是它被撤掉的原因。需要长期
+排队的那条命令，就在项目专属区里写一个具体配方把它包住。`justfile` 框架区位于
 `# PENGJ_TEMPLATE_START/END` 托管块内，项目自有配方写在块外、模板更新不会覆盖。
 bque 是 Windows 全局锁：Unix 与 CI 环境下同一批 `just` 配方的 `[unix]` 分支会直跑透传，
 属预期行为，严禁在那里强行套用原生 bque。
@@ -79,6 +80,9 @@ bque bench -- pnpm bench
 # 状态查询与锁清理
 bque status
 bque clean
+
+# 常驻服务：优先级不变，但不取全局编译锁
+bque run --observer -- cargo run -- dev
 ```
 
 ---
@@ -97,7 +101,7 @@ bque clean
 
 ## 🔧 5. 环境检测与安装指引
 
-先运行 `just queue-doctor`：它会探测 `PATH`、回退到 `$env:LOCALAPPDATA\bque\bin`，
+先运行 `just doctor`：它会探测 `PATH`、回退到 `$env:LOCALAPPDATA\bque\bin`，
 缺失时直接打印一键安装命令。完整安装指引：
 👉 详见 [references/install.md](references/install.md)。
 

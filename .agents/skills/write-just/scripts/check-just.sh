@@ -15,8 +15,8 @@ Usage: check-just.sh [--dir <project-root>]
 Scan <project-root>/justfile and <project-root>/.pengj-templates/just/*.just
 for raw heavy commands (cargo run/build/clippy/test/bench/check, ninja,
 cmake --build, ctest, pnpm build, tsc) that are not wrapped by bque.
-Both `bque run -- <command>` and the layer's `just q-run <command>` /
-`just q-bench <command>` wrappers count as queued.
+Only a direct `bque run -- <command>` / `bque bench -- <command>` counts as
+queued; the layers ship no ad-hoc `just` wrapper.
 
 Rules:
   - [unix] recipes pass through raw commands by design and are skipped.
@@ -24,8 +24,7 @@ Rules:
     recipe or in an un-attributed recipe is an ERROR.
   - When the bque layer is absent, the same finding is only an INFO note
     (the legitimate downgrade of the current layer).
-  - A direct bque call inside a [unix] recipe is a WARNING; `just q-run`
-    and `just q-bench` are not, because they already pass through on Unix.
+  - A direct bque call inside a [unix] recipe is a WARNING.
 
 Exit codes:
   0  no errors (info/warning notes may still be printed)
@@ -133,11 +132,9 @@ FNR == 1 {
              cmd ~ /(^|[^[:alnum:]_-])ctest([^[:alnum:]_-]|$)/ || \
              cmd ~ /pnpm[[:space:]]+(build|run)/ || \
              cmd ~ /(^|[^[:alnum:]_-])tsc([^[:alnum:]_-]|$)/)
-    # Both direct bque calls (including --cwd style) and the q-run / q-bench
-    # q-bench recipes count as queued.
+    # A direct bque call (including --cwd style) is the only queued form.
     direct_bque = (cmd ~ /bque[[:space:]]+(run|bench)[[:space:]]+/)
-    just_queue  = (cmd ~ /(^|[[:space:]])just[[:space:]]+q-(run|bench)([[:space:]]|$)/)
-    wrapped = (direct_bque || just_queue)
+    wrapped = direct_bque
 
     if (direct_bque && current == "unix") {
         warnings++
@@ -165,7 +162,7 @@ FNR == 1 {
 
     if (has_bque) {
         errors++
-        print "ERROR: " FILENAME ":" FNR ": " where " recipe runs raw " label " - use bque run -- " label " (or just q-run)"
+        print "ERROR: " FILENAME ":" FNR ": " where " recipe runs raw " label " - use bque run -- " label
     } else {
         infos++
         print "INFO: " FILENAME ":" FNR ": " where " recipe runs raw " label " - no bque layer; direct command is the current downgrade"

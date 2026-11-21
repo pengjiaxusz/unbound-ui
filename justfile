@@ -1,6 +1,6 @@
 # justfile — 项目统一任务入口（由 just 层托管）
 # 框架区在下方托管块内，由模板更新原位替换；块外的项目专属区归项目所有。
-# 重型任务统一走 `just q-run <cmd>`，性能跑分走 `just q-bench <cmd>`。
+# 重型任务直接走 `bque run -- <cmd>`，性能跑分走 `bque bench -- <cmd>`（bque 层不再产出包装配方）。
 # PENGJ_TEMPLATE_START
 [unix]
 set shell := ["sh", "-uc"]
@@ -8,9 +8,6 @@ set shell := ["sh", "-uc"]
 set shell := ["pwsh", "-NoProfile", "-Command"]
 # 允许项目专属区用同名 recipe 覆盖框架配方（例如 `test` 前需要先产出某个产物），避免去改受管的 import 文件。
 set allow-duplicate-recipes := true
-
-
-import '.pengj-templates/just/bque.just'
 
 
 import '.pengj-templates/just/gate.just'
@@ -37,11 +34,11 @@ doctor *ARGS:
 
 # ---------------------------------------------------------------------------
 # 项目专属区：模板更新只替换上方托管块，本区域归项目所有、完整保留。
-# 在这里登记项目自己的 recipe；新增重任务请调用 `just q-run <cmd>` / `just q-bench <cmd>`，
+# 在这里登记项目自己的 recipe；新增重任务请直接调用 `bque run -- <cmd>` / `bque bench -- <cmd>`，
 # 不要裸跑 cargo / cmake / ninja / pnpm build / tsc 等编译命令。
 # ---------------------------------------------------------------------------
 
-# 排队约定：有限的重型命令整条走 `just q-run` / `just q-bench`（Unix 分支自动透传）。
+# 排队约定：重型命令整条走 `bque run --` / `bque bench --`（bque 是 Windows 全局锁，`[unix]` 分支直跑）。
 # 开窗交互程序（showcase / gallery / example）只把编译段排队，编译完立即释放全局锁并以前台
 # 优先级直接运行二进制；若把常驻窗口塞进 bque，会长期阻塞其他工作树编译，还会让窗口跑在 Idle 优先级。
 
@@ -49,33 +46,33 @@ doctor *ARGS:
 # 示例：just showcase 或 just showcase -- --shot shot.png
 [windows]
 showcase *ARGS:
-    @just q-run cargo build -p showcase
+    @bque run -- cargo build -p showcase
     @& "{{CARGO_TARGET_DIR}}/debug/showcase.exe" {{ARGS}}
 [unix]
 showcase *ARGS:
-    @just q-run cargo build -p showcase
+    @cargo build -p showcase
     @"{{CARGO_TARGET_DIR}}/debug/showcase" {{ARGS}}
 
 # 运行全链路演示程序
 # 示例：just gallery 或 just gallery -- --kpi
 [windows]
 gallery *ARGS:
-    @just q-run cargo build -p gallery
+    @bque run -- cargo build -p gallery
     @& "{{CARGO_TARGET_DIR}}/debug/gallery.exe" {{ARGS}}
 [unix]
 gallery *ARGS:
-    @just q-run cargo build -p gallery
+    @cargo build -p gallery
     @"{{CARGO_TARGET_DIR}}/debug/gallery" {{ARGS}}
 
 # 先构建 tools/winui-reference 再批量截图；WinAppSDK 走自包含，不要求机器预装 Windows App Runtime。
 # 产物已被 gitignore，控件样式变动后才需要重跑；采集器自带指纹缓存，命中时会毫秒级跳过。
 # 采集 WinUI 3 参考截图到 captures/（需 .NET 8+ SDK，示例：just parity-capture --no-cache）
-# 采集器自身也走排队，但 q-run 不支持指定工作目录；这里用 bque 原生 --cwd 保留 ./captures 的语义。
+# 采集器自身也走排队；需要指定工作目录，所以用 bque 原生 `--cwd` 保留 ./captures 的语义（包装配方传不进工作目录）。
 # 注意：这是唯一会重新生成 WinUI 3 参考图的入口。宿主已把强调色钉死为 Fluent 蓝；
 # 若系统强调色变化或参考图早于「钉死强调色」改动，必须跑 `just parity-capture --no-cache --theme all`。
 [windows]
 parity-capture *ARGS:
-    @just q-run dotnet build tools/winui-reference/WinUiReference.csproj -c Release -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -r win-x64
+    @bque run -- dotnet build tools/winui-reference/WinUiReference.csproj -c Release -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -r win-x64
     @bque run --cwd "{{justfile_directory()}}/tools/winui-reference" -- "{{justfile_directory()}}/tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/WinUiReference.exe" --batch --out ./captures {{ARGS}}
 
 # 纯离屏 Vulkan 渲染，不开窗；默认复用源码指纹缓存。
@@ -86,30 +83,30 @@ parity-capture *ARGS:
 # 若差分提示 pinnedAccent 过期或参考图仍带系统强调色，请先跑
 # `just parity-capture --no-cache --theme all`，再跑本命令。
 parity *ARGS:
-    @just q-run cargo run -p showcase -- --parity-run --reference tools/winui-reference/captures --out target/parity {{ARGS}}
+    @bque run -- cargo run -p showcase -- --parity-run --reference tools/winui-reference/captures --out target/parity {{ARGS}}
 
 # 编译 Vulkan 着色器（glslc 逐个编译并校验，同样纳入排队）
 compile-shaders:
-    @just q-run bash scripts/compile-shaders.sh
+    @bque run -- bash scripts/compile-shaders.sh
 
 # 运行指定示例程序
 # 示例：just example 01_hello_counter
 [windows]
 example NAME *ARGS:
-    @just q-run cargo build -p unbound-app --example {{NAME}}
+    @bque run -- cargo build -p unbound-app --example {{NAME}}
     @& "{{CARGO_TARGET_DIR}}/debug/examples/{{NAME}}.exe" {{ARGS}}
 [unix]
 example NAME *ARGS:
-    @just q-run cargo build -p unbound-app --example {{NAME}}
+    @cargo build -p unbound-app --example {{NAME}}
     @"{{CARGO_TARGET_DIR}}/debug/examples/{{NAME}}" {{ARGS}}
 
 # 运行所有示例程序的无头自检套件
 test-examples:
-    @just q-run cargo test -p unbound-app --examples
+    @bque run -- cargo test -p unbound-app --examples
 
-# 运行文本渲染性能与构建裁剪基准测试套件（走 q-bench，Unix/CI 下自动透传）
+# 运行文本渲染性能与构建裁剪基准测试套件（走 bque bench，秒级挂起后台编译）
 text-baseline *ARGS:
-    @just q-bench cargo test -p unbound-text --test text_render_baseline --all-features --release -- --nocapture {{ARGS}}
+    @bque bench -- cargo test -p unbound-text --test text_render_baseline --all-features --release -- --nocapture {{ARGS}}
 
 # app-guest 的 host_roundtrip 集成测试要加载真实 cdylib，而 `cargo test`
 # 不保证在 target/<profile> 下生成该产物，故先显式构建一次，避免干净环境硬失败。
@@ -117,8 +114,8 @@ text-baseline *ARGS:
 
 # 覆盖框架 test：先产出 app-guest cdylib 再跑测试
 test *ARGS:
-    @just q-run cargo build -p app-guest
-    @just q-run cargo test --workspace --all-features {{ARGS}}
+    @bque run -- cargo build -p app-guest
+    @bque run -- cargo test --workspace --all-features {{ARGS}}
 
 # ---------- 共享编译目录（worktree 层） ----------
 
