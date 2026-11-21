@@ -258,6 +258,7 @@ mod win32 {
 
     use ::windows::core::{w, PCWSTR};
     use ::windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+    use ::windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use ::windows::Win32::Graphics::Gdi::{
         ClientToScreen, GetMonitorInfoW, MonitorFromWindow, ScreenToClient, MONITORINFO,
         MONITOR_DEFAULTTONEAREST,
@@ -284,12 +285,14 @@ mod win32 {
     use ::windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
     use ::windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-        GetCursorPos, GetWindowLongPtrW, IsZoomed, LoadCursorW, MsgWaitForMultipleObjectsEx,
-        PeekMessageW, PostMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+        GetCursorPos, GetWindow, GetWindowLongPtrW, GetWindowLongW, GetWindowRect, IsIconic,
+        IsWindowVisible, IsZoomed, LoadCursorW, MsgWaitForMultipleObjectsEx, PeekMessageW,
+        PostMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
         TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CW_USEDEFAULT,
-        GWLP_USERDATA, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTCLOSE, HTLEFT,
-        HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, MINMAXINFO,
-        MSG, MWMO_INPUTAVAILABLE, NCCALCSIZE_PARAMS, PM_REMOVE, QS_ALLINPUT, SWP_FRAMECHANGED,
+        GWLP_USERDATA, GWL_EXSTYLE, GW_HWNDPREV, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT,
+        HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
+        IDC_ARROW, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE, NCCALCSIZE_PARAMS, PM_REMOVE,
+        QS_ALLINPUT, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SWP_FRAMECHANGED,
         SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, WINDOW_STYLE,
         WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_DROPFILES, WM_GETMINMAXINFO,
         WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_NOTIFY, WM_IME_REQUEST,
@@ -299,6 +302,7 @@ mod win32 {
         WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
         WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
         WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW,
+        WS_EX_LAYERED, WS_EX_TRANSPARENT,
     };
 
     use crate::pacing::PresentWaitPolicy;
@@ -590,10 +594,74 @@ mod win32 {
         frame_extra_h: std::cell::Cell<i32>,
         cursor: Arc<AtomicU8>,
         tracking_leave: std::cell::Cell<bool>,
+        minimized: std::cell::Cell<bool>,
         last_modifiers: std::cell::Cell<Modifiers>,
         events: RefCell<Vec<PlatformEvent>>,
         redraw_requested: Arc<AtomicBool>,
         destroyed: Arc<AtomicBool>,
+    }
+
+    /// 探测指定 Win32 窗口是否被 Z 序上方的不透明顶层窗口完全遮挡。
+    fn probe_window_occluded(hwnd: HWND) -> bool {
+        unsafe {
+            if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+                return true;
+            }
+            let mut target_rc = RECT::default();
+            if GetWindowRect(hwnd, &mut target_rc).is_err() {
+                return false;
+            }
+            let target = unbound_math::Rect::new(
+                target_rc.left as f32,
+                target_rc.top as f32,
+                (target_rc.right - target_rc.left).max(0) as f32,
+                (target_rc.bottom - target_rc.top).max(0) as f32,
+            );
+            if target.is_empty() {
+                return true;
+            }
+            let mut opaque_covers = Vec::new();
+            let mut cursor = hwnd;
+            for _ in 0..256 {
+                let Ok(prev) = GetWindow(cursor, GW_HWNDPREV) else {
+                    break;
+                };
+                if prev.0.is_null() {
+                    break;
+                }
+                cursor = prev;
+                if !IsWindowVisible(prev).as_bool() || IsIconic(prev).as_bool() {
+                    continue;
+                }
+                let ex_style = GetWindowLongW(prev, GWL_EXSTYLE) as u32;
+                if (ex_style & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0)) != 0 {
+                    continue;
+                }
+                let mut cloaked: u32 = 0;
+                let cloaked_ok = DwmGetWindowAttribute(
+                    prev,
+                    DWMWA_CLOAKED,
+                    (&raw mut cloaked).cast::<c_void>(),
+                    core::mem::size_of::<u32>() as u32,
+                );
+                if cloaked_ok.is_ok() && cloaked != 0 {
+                    continue;
+                }
+                let mut rc = RECT::default();
+                if GetWindowRect(prev, &mut rc).is_ok() {
+                    let cover = unbound_math::Rect::new(
+                        rc.left as f32,
+                        rc.top as f32,
+                        (rc.right - rc.left).max(0) as f32,
+                        (rc.bottom - rc.top).max(0) as f32,
+                    );
+                    if !cover.is_empty() {
+                        opaque_covers.push(cover);
+                    }
+                }
+            }
+            crate::overlay_host::is_rect_fully_covered(target, &opaque_covers)
+        }
     }
 
     unsafe extern "system" fn wnd_proc(
@@ -770,6 +838,22 @@ mod win32 {
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
             WM_SIZE => {
+                let size_type = wparam.0 as u32;
+                if size_type == SIZE_MINIMIZED {
+                    if !data.minimized.replace(true) {
+                        data.events
+                            .borrow_mut()
+                            .push(PlatformEvent::Minimized(true));
+                    }
+                    return LRESULT(0);
+                }
+                if (size_type == SIZE_RESTORED || size_type == SIZE_MAXIMIZED)
+                    && data.minimized.replace(false)
+                {
+                    data.events
+                        .borrow_mut()
+                        .push(PlatformEvent::Minimized(false));
+                }
                 let width = (lparam.0 & 0xFFFF) as u32;
                 let height = ((lparam.0 >> 16) & 0xFFFF) as u32;
                 if width > 0 && height > 0 {
@@ -1274,6 +1358,7 @@ mod win32 {
             frame_extra_h: std::cell::Cell::new(0),
             cursor: Arc::clone(&cursor),
             tracking_leave: std::cell::Cell::new(false),
+            minimized: std::cell::Cell::new(false),
             last_modifiers: std::cell::Cell::new(Modifiers::default()),
             events: RefCell::new(Vec::new()),
             redraw_requested: Arc::clone(&redraw_requested),
@@ -1530,6 +1615,8 @@ mod win32 {
         app.resumed(&mut first.state, &first.window);
 
         let mut msg = MSG::default();
+        let mut last_occlusion_probe = Instant::now();
+        const OCCLUSION_PROBE_INTERVAL: Duration = Duration::from_millis(250);
 
         'main_loop: while !windows.is_empty() {
             let mut modal_exit = false;
@@ -1624,6 +1711,27 @@ mod win32 {
                 break;
             }
 
+            let probe_now = Instant::now();
+            if probe_now.saturating_duration_since(last_occlusion_probe)
+                >= OCCLUSION_PROBE_INTERVAL
+            {
+                last_occlusion_probe = probe_now;
+                for entry in &mut windows {
+                    let occluded = probe_window_occluded(entry.hwnd);
+                    if occluded != entry.state.occluded {
+                        for out in apply(
+                            &mut entry.state,
+                            &PlatformEvent::Occluded(occluded),
+                            probe_now,
+                        ) {
+                            if app.event(&mut entry.state, &entry.window, out) == Flow::Exit {
+                                break 'main_loop;
+                            }
+                        }
+                    }
+                }
+            }
+
             for entry in &mut windows {
                 if app.frame(&mut entry.state, &entry.window) == Flow::Exit {
                     break 'main_loop;
@@ -1672,7 +1780,9 @@ mod win32 {
                     }
                     wait.as_millis().min(u128::from(INFINITE_TIMEOUT - 1)) as u32
                 }
-                None if primary.state.visible && primary.state.pacer.animating() => continue,
+                None if !primary.state.pacer.is_suspended() && primary.state.pacer.animating() => {
+                    continue
+                }
                 None => INFINITE_TIMEOUT,
             };
 

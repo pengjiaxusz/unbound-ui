@@ -7,6 +7,7 @@
 use std::time::Instant;
 
 use crate::latency::LatencyTracker;
+use crate::overlay_host::OcclusionMonitor;
 use crate::pacing::{FramePacer, PresentWaitPolicy};
 use crate::resize::{Extent, ResizeAction, ResizeTracker};
 use crate::win32_frame::WindowBackdropMaterial;
@@ -397,6 +398,10 @@ pub enum PlatformEvent {
     Focused(bool),
     /// 窗口变为可见或隐藏。
     VisibilityChanged(bool),
+    /// 窗口被其他不透明窗口完全遮挡或恢复未被遮挡。
+    Occluded(bool),
+    /// 窗口进入或退出最小化状态。
+    Minimized(bool),
     /// 系统的浅色 / 深色主题偏好发生变化。
     ThemeChanged { dark: bool },
     /// 有文件正在窗口上方拖拽。
@@ -532,6 +537,12 @@ pub struct PlatformState {
     pub focused: bool,
     /// 窗口当前是否可见。
     pub visible: bool,
+    /// 窗口当前是否被完全遮挡。
+    pub occluded: bool,
+    /// 窗口当前是否处于最小化状态。
+    pub minimized: bool,
+    /// 窗口遮挡状态监测器。
+    pub occlusion: OcclusionMonitor,
     /// 输入法组合串与已提交文本。
     pub ime: ImeState,
 }
@@ -540,15 +551,22 @@ impl PlatformState {
     /// 为新创建的窗口初始化平台状态。
     #[must_use]
     pub fn new(config: &WindowConfig, extent: Extent, present: PresentWaitPolicy) -> Self {
+        let mut pacer = FramePacer::new(config.refresh);
+        pacer.set_visible(config.visible);
+        let mut occlusion = OcclusionMonitor::new();
+        occlusion.set_visible(config.visible);
         Self {
             resize: ResizeTracker::with_default_settle(extent),
             latency: LatencyTracker::new(),
-            pacer: FramePacer::new(config.refresh),
+            pacer,
             present,
             scale_factor: 1.0,
             modifiers: Modifiers::default(),
             focused: true,
             visible: config.visible,
+            occluded: false,
+            minimized: false,
+            occlusion,
             ime: ImeState::default(),
         }
     }
@@ -638,12 +656,43 @@ pub fn apply(state: &mut PlatformState, event: &PlatformEvent, now: Instant) -> 
         }
         PlatformEvent::Focused(focused) => {
             state.focused = *focused;
+            state.pacer.set_focused(*focused);
+            state.occlusion.set_focused(*focused);
+            state.pacer.note_activity(now);
+            if *focused {
+                state.pacer.request_immediate(now);
+            }
             out.push(PlatformEvent::Focused(*focused));
         }
         PlatformEvent::VisibilityChanged(visible) => {
             state.visible = *visible;
             state.pacer.set_visible(*visible);
+            state.occlusion.set_visible(*visible);
+            if *visible {
+                state.pacer.note_activity(now);
+                state.pacer.request_immediate(now);
+            }
             out.push(PlatformEvent::VisibilityChanged(*visible));
+        }
+        PlatformEvent::Occluded(occluded) => {
+            state.occluded = *occluded;
+            state.pacer.set_occluded(*occluded);
+            state.occlusion.set_occluded(*occluded);
+            if !*occluded {
+                state.pacer.note_activity(now);
+                state.pacer.request_immediate(now);
+            }
+            out.push(PlatformEvent::Occluded(*occluded));
+        }
+        PlatformEvent::Minimized(minimized) => {
+            state.minimized = *minimized;
+            state.pacer.set_minimized(*minimized);
+            state.occlusion.set_minimized(*minimized);
+            if !*minimized {
+                state.pacer.note_activity(now);
+                state.pacer.request_immediate(now);
+            }
+            out.push(PlatformEvent::Minimized(*minimized));
         }
         PlatformEvent::ThemeChanged { dark } => {
             out.push(PlatformEvent::ThemeChanged { dark: *dark });
@@ -1033,5 +1082,79 @@ mod tests {
         );
         assert!(state.ime.enabled);
         assert_eq!(state.ime.preedit(), "ni");
+    }
+
+    #[test]
+    fn apply_drives_pacer_and_occlusion_monitor_across_throttle_events() {
+        use crate::pacing::{RenderThrottlePolicy, RenderThrottleState};
+        use std::time::Duration;
+
+        let config = WindowConfig::default();
+        let mut state = PlatformState::new(
+            &config,
+            Extent::new(1280, 800),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        state.pacer.set_throttle_policy(RenderThrottlePolicy {
+            active_fps: 120,
+            unfocused_idle_fps: 10,
+            idle_grace_ms: 500,
+            suspend_when_occluded: true,
+            suspend_when_minimized: true,
+        });
+
+        let t0 = Instant::now();
+        state.pacer.on_present(t0);
+
+        // 失焦后在宽限期内仍保持 Active，超过宽限期进入 ThrottledFps(10)
+        let out = apply(&mut state, &PlatformEvent::Focused(false), t0);
+        assert_eq!(out, vec![PlatformEvent::Focused(false)]);
+        assert!(!state.focused);
+        assert!(!state.occlusion.is_focused());
+        assert_eq!(
+            state.pacer.throttle_state(t0 + Duration::from_millis(200)),
+            RenderThrottleState::Active
+        );
+        assert_eq!(
+            state.pacer.throttle_state(t0 + Duration::from_millis(500)),
+            RenderThrottleState::ThrottledFps(10)
+        );
+
+        // 遮挡事件使状态机进入 Suspended，不再唤醒
+        let t_occ = t0 + Duration::from_millis(600);
+        let out = apply(&mut state, &PlatformEvent::Occluded(true), t_occ);
+        assert_eq!(out, vec![PlatformEvent::Occluded(true)]);
+        assert!(state.occluded);
+        assert!(state.occlusion.is_occluded());
+        assert_eq!(
+            state.pacer.throttle_state(t_occ),
+            RenderThrottleState::Suspended
+        );
+        assert!(!state.pacer.should_render(t_occ));
+        assert!(state.pacer.next_wake(t_occ).is_none());
+
+        // 解除遮挡并获得焦点后立即触发首帧
+        let t_rec = t_occ + Duration::from_millis(100);
+        apply(&mut state, &PlatformEvent::Occluded(false), t_rec);
+        apply(&mut state, &PlatformEvent::Focused(true), t_rec);
+        assert!(!state.occluded);
+        assert!(!state.occlusion.is_occluded());
+        assert_eq!(state.pacer.throttle_state(t_rec), RenderThrottleState::Active);
+        assert!(state.pacer.should_render(t_rec));
+
+        // 最小化事件同样暂停渲染并在恢复后立刻重绘
+        let t_min = t_rec + Duration::from_millis(50);
+        state.pacer.on_present(t_min);
+        apply(&mut state, &PlatformEvent::Minimized(true), t_min);
+        assert!(state.minimized);
+        assert!(state.occlusion.is_minimized());
+        assert!(!state.pacer.should_render(t_min));
+        assert!(state.pacer.next_wake(t_min).is_none());
+
+        let t_res = t_min + Duration::from_millis(50);
+        apply(&mut state, &PlatformEvent::Minimized(false), t_res);
+        assert!(!state.minimized);
+        assert!(!state.occlusion.is_minimized());
+        assert!(state.pacer.should_render(t_res));
     }
 }

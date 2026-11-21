@@ -50,8 +50,8 @@ pub use dialogs::{
 };
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
 pub use pacing::{
-    renderer_present_config, FramePacer, PresentSync, PresentWaitPolicy, IDLE_FPS_LIMIT,
-    MIN_FPS_LIMIT,
+    renderer_present_config, FramePacer, PresentSync, PresentWaitPolicy, RenderThrottlePolicy,
+    RenderThrottleState, IDLE_FPS_LIMIT, MIN_FPS_LIMIT,
 };
 pub use resize::{Extent, ResizeAction, ResizeTracker};
 pub use screen_capture::{
@@ -80,8 +80,7 @@ pub use windows_build::windows_build;
 pub use overlay_host::{
     is_rect_fully_covered, place_popup_in_work_area, should_use_popup_host, FileDragDropBridge,
     FileDragEffect, HitTestPassThroughPolicy, MultiWindowHostPool, OcclusionMonitor,
-    OverlayHitDisposition, OverlayWindowSpec, RenderThrottleState, ScreenSleepInhibitor,
-    TargetWindowFollower,
+    OverlayHitDisposition, OverlayWindowSpec, ScreenSleepInhibitor, TargetWindowFollower,
 };
 
 pub use ole_drag::{encode_cf_hdrop_payload, start_external_file_drag, DROPFILES_HEADER_BYTES};

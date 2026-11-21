@@ -216,16 +216,7 @@ impl TargetWindowFollower {
     }
 }
 
-/// 窗口遮挡与空闲节流状态。
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum RenderThrottleState {
-    /// 窗口可见且处于前台，按显示器完整刷新率运行。
-    FullSpeed,
-    /// 窗口可见但非前台且无动画，降频至指定 FPS。
-    ThrottledFps(u32),
-    /// 窗口最小化、隐藏或被上方不透明窗口 100% 遮挡，暂停 Vulkan 渲染提交（0% GPU 开销）。
-    PausedZeroCost,
-}
+pub use crate::pacing::RenderThrottleState;
 
 /// 窗口遮挡检测器：判断目标窗口矩形是否被前方不透明窗口集合完全覆盖。
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
@@ -273,9 +264,44 @@ impl OcclusionMonitor {
         }
     }
 
+    /// 直接同步遮挡标记（供平台事件状态机更新）。
+    pub fn set_occluded(&mut self, occluded: bool) {
+        self.occluded = occluded;
+    }
+
+    /// 直接同步最小化标记（供平台事件状态机更新）。
+    pub fn set_minimized(&mut self, minimized: bool) {
+        self.minimized = minimized;
+    }
+
+    /// 直接同步可见性标记（供平台事件状态机更新）。
+    pub fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    /// 直接同步焦点标记（供平台事件状态机更新）。
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+    }
+
     #[must_use]
     pub const fn is_occluded(&self) -> bool {
         self.occluded
+    }
+
+    #[must_use]
+    pub const fn is_minimized(&self) -> bool {
+        self.minimized
+    }
+
+    #[must_use]
+    pub const fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    #[must_use]
+    pub const fn is_focused(&self) -> bool {
+        self.focused
     }
 }
 

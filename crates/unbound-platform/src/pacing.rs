@@ -116,10 +116,76 @@ pub fn renderer_present_config(
     unbound_gpu::PresentConfig::from_capabilities(extensions, allow_tearing)
 }
 
+/// 窗口遮挡与空闲节流状态。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RenderThrottleState {
+    /// 窗口可见且处于活跃态，按完整目标刷新率运行。
+    Active,
+    /// 窗口失焦且已超过空闲宽限期，降频至指定 FPS。
+    ThrottledFps(u32),
+    /// 窗口最小化、隐藏或被完全遮挡，彻底暂停帧唤醒与 GPU 提交。
+    Suspended,
+}
+
+impl RenderThrottleState {
+    /// 兼容别名：等同于 [`Self::Active`]。
+    #[allow(non_upper_case_globals)]
+    pub const FullSpeed: Self = Self::Active;
+    /// 兼容别名：等同于 [`Self::Suspended`]。
+    #[allow(non_upper_case_globals)]
+    pub const PausedZeroCost: Self = Self::Suspended;
+}
+
+/// 帧节流策略：控制活跃态、失焦空闲态与遮挡/最小化暂停行为。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct RenderThrottlePolicy {
+    /// 活跃态目标帧率（FPS；`0` 表示无限制）。
+    pub active_fps: u32,
+    /// 失焦且超过空闲宽限期后的目标帧率（FPS）。
+    pub unfocused_idle_fps: u32,
+    /// 窗口失焦后进入降频前的空闲宽限时长（毫秒）。
+    pub idle_grace_ms: u64,
+    /// 窗口被其他不透明窗口完全遮挡时是否暂停渲染。
+    pub suspend_when_occluded: bool,
+    /// 窗口最小化时是否暂停渲染。
+    pub suspend_when_minimized: bool,
+}
+
+impl Default for RenderThrottlePolicy {
+    fn default() -> Self {
+        Self {
+            active_fps: 60,
+            unfocused_idle_fps: 10,
+            idle_grace_ms: 500,
+            suspend_when_occluded: true,
+            suspend_when_minimized: true,
+        }
+    }
+}
+
+#[inline]
+const fn interval_from_fps(fps: u32) -> Duration {
+    if fps == 0 {
+        Duration::ZERO
+    } else {
+        let nanos = 1_000_000_000u64 / (fps as u64);
+        Duration::from_nanos(if nanos == 0 { 1 } else { nanos })
+    }
+}
+
+#[inline]
+fn fps_from_interval(interval: Duration) -> u32 {
+    if interval.is_zero() {
+        return 0;
+    }
+    let nanos = interval.as_nanos().max(1) as u64;
+    ((1_000_000_000u64 + nanos / 2) / nanos).max(1) as u32
+}
+
 /// 决定下一帧何时到期。
 #[derive(Copy, Clone, Debug)]
 pub struct FramePacer {
-    /// 目标帧间隔。
+    /// 目标帧间隔（活跃态）。
     interval: Duration,
     /// 上一帧呈现的时刻。
     last_present: Option<Instant>,
@@ -130,17 +196,36 @@ pub struct FramePacer {
     /// 静止页面将其设为 `false`；事件循环随后休眠在 `ControlFlow::Wait`，
     /// 而非按刷新率定时唤醒。
     animating: bool,
+    /// 窗口当前是否拥有焦点。
+    focused: bool,
+    /// 窗口当前是否被其他不透明窗口完全遮挡。
+    occluded: bool,
+    /// 窗口当前是否处于最小化状态。
+    minimized: bool,
+    /// 最近一次交互或状态唤醒时间戳（用于计算失焦空闲宽限期）。
+    last_activity: Option<Instant>,
+    /// 自适应空闲降频与遮挡暂停策略。
+    policy: RenderThrottlePolicy,
 }
 
 impl FramePacer {
     /// 按给定刷新率创建节拍器。
     #[must_use]
     pub fn new(interval: Duration) -> Self {
+        let active_fps = fps_from_interval(interval);
         Self {
             interval,
             last_present: None,
             visible: true,
             animating: true,
+            focused: true,
+            occluded: false,
+            minimized: false,
+            last_activity: None,
+            policy: RenderThrottlePolicy {
+                active_fps,
+                ..RenderThrottlePolicy::default()
+            },
         }
     }
 
@@ -168,12 +253,120 @@ impl FramePacer {
     ///
     /// * 其余值均钳制到不低于 [`MIN_FPS_LIMIT`]。
     pub fn set_fps_limit(&mut self, fps: u32) {
-        self.interval = if fps == 0 {
-            Duration::ZERO
+        if fps == 0 {
+            self.interval = Duration::ZERO;
+            self.policy.active_fps = 0;
         } else {
             let clamped = fps.max(MIN_FPS_LIMIT);
-            Duration::from_nanos((1_000_000_000u64 / u64::from(clamped)).max(1))
-        };
+            self.interval = interval_from_fps(clamped);
+            self.policy.active_fps = clamped;
+        }
+    }
+
+    /// 配置自适应空闲降频与遮挡暂停策略。
+    pub fn set_throttle_policy(&mut self, policy: RenderThrottlePolicy) {
+        self.policy = policy;
+        self.interval = interval_from_fps(policy.active_fps);
+    }
+
+    /// 返回当前生效的帧节流策略。
+    #[must_use]
+    pub const fn throttle_policy(&self) -> RenderThrottlePolicy {
+        self.policy
+    }
+
+    /// 更新窗口焦点状态。
+    ///
+    /// 窗口从失焦恢复焦点时清除上一帧相位，确保首帧零延迟绘制。
+    pub fn set_focused(&mut self, focused: bool) {
+        let regained = !self.focused && focused;
+        self.focused = focused;
+        if regained {
+            self.last_present = None;
+        }
+    }
+
+    /// 窗口当前是否拥有焦点。
+    #[must_use]
+    pub const fn is_focused(&self) -> bool {
+        self.focused
+    }
+
+    /// 更新窗口完全遮挡状态。
+    ///
+    /// 进入遮挡暂停时清除旧截止时间，解除遮挡时触发即时首帧重绘。
+    pub fn set_occluded(&mut self, occluded: bool) {
+        let changed = self.occluded != occluded;
+        self.occluded = occluded;
+        if changed && (occluded || self.policy.suspend_when_occluded) {
+            self.last_present = None;
+        }
+    }
+
+    /// 窗口当前是否被完全遮挡。
+    #[must_use]
+    pub const fn is_occluded(&self) -> bool {
+        self.occluded
+    }
+
+    /// 更新窗口最小化状态。
+    ///
+    /// 进入最小化暂停时清除旧截止时间，从最小化恢复时触发即时首帧重绘。
+    pub fn set_minimized(&mut self, minimized: bool) {
+        let changed = self.minimized != minimized;
+        self.minimized = minimized;
+        if changed && (minimized || self.policy.suspend_when_minimized) {
+            self.last_present = None;
+        }
+    }
+
+    /// 窗口当前是否处于最小化状态。
+    #[must_use]
+    pub const fn is_minimized(&self) -> bool {
+        self.minimized
+    }
+
+    /// 记录一次用户交互或显式活跃事件的时间戳。
+    pub fn note_activity(&mut self, now: Instant) {
+        self.last_activity = Some(now);
+    }
+
+    /// 当前是否处于彻底暂停状态（不可见、策略允许下的最小化或完全遮挡）。
+    #[must_use]
+    pub const fn is_suspended(&self) -> bool {
+        !self.visible
+            || (self.minimized && self.policy.suspend_when_minimized)
+            || (self.occluded && self.policy.suspend_when_occluded)
+    }
+
+    /// 计算在时刻 `now` 的节流状态。
+    #[must_use]
+    pub fn throttle_state(&self, now: Instant) -> RenderThrottleState {
+        if self.is_suspended() {
+            return RenderThrottleState::Suspended;
+        }
+        if self.focused {
+            return RenderThrottleState::Active;
+        }
+        let grace = Duration::from_millis(self.policy.idle_grace_ms);
+        let in_grace = self
+            .last_activity
+            .is_some_and(|last| now.saturating_duration_since(last) < grace);
+        if in_grace {
+            RenderThrottleState::Active
+        } else {
+            RenderThrottleState::ThrottledFps(self.policy.unfocused_idle_fps.max(1))
+        }
+    }
+
+    /// 计算在时刻 `now` 实际生效的帧间隔；处于暂停状态时返回 `None`。
+    #[must_use]
+    pub fn effective_interval(&self, now: Instant) -> Option<Duration> {
+        match self.throttle_state(now) {
+            RenderThrottleState::Suspended => None,
+            RenderThrottleState::Active => Some(self.interval),
+            RenderThrottleState::ThrottledFps(fps) => Some(interval_from_fps(fps.max(1))),
+        }
     }
 
     /// 当前帧率上限（无限制时为 `0`）。
@@ -229,10 +422,11 @@ impl FramePacer {
     /// 停顿后瞬间爆发一连串背靠背的帧。
     ///
     pub fn on_present(&mut self, now: Instant) {
+        let interval = self.effective_interval(now).unwrap_or(self.interval);
         self.last_present = Some(match self.last_present {
-            Some(previous) if !self.interval.is_zero() => {
-                let next = previous + self.interval;
-                if now > next + self.interval {
+            Some(previous) if !interval.is_zero() => {
+                let next = previous + interval;
+                if now > next + interval {
                     now
                 } else {
                     next
@@ -245,13 +439,14 @@ impl FramePacer {
     /// 若节拍器正在运行，返回下一帧到期的时刻。
     #[must_use]
     pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
-        if !self.visible || !self.animating {
+        if !self.animating {
             return None;
         }
+        let interval = self.effective_interval(now)?;
         let last = self.last_present?;
         // 无限制节拍器始终处于到期状态；返回过去的截止时间也可行，
         // 但返回 `now` 能让 `ControlFlow::Poll` 意图更明确。
-        Some((last + self.interval).max(now))
+        Some((last + interval).max(now))
     }
 
     /// 事件循环应当唤醒的时刻。
@@ -261,8 +456,9 @@ impl FramePacer {
     /// 决定帧的落点。
     #[must_use]
     pub fn next_wake(&self, now: Instant) -> Option<Instant> {
+        let interval = self.effective_interval(now)?;
         let deadline = self.next_deadline(now)?;
-        if self.interval <= MIN_SPIN_INTERVAL {
+        if interval <= MIN_SPIN_INTERVAL {
             return Some(deadline);
         }
         Some(deadline.checked_sub(SPIN_LEAD).unwrap_or(now))
@@ -271,13 +467,16 @@ impl FramePacer {
     /// 精确截止时间是否已足够接近、适合开始自旋。
     #[must_use]
     pub fn within_spin_lead(&self, now: Instant) -> bool {
+        let Some(interval) = self.effective_interval(now) else {
+            return false;
+        };
         let Some(last) = self.last_present else {
             return false;
         };
-        if self.interval <= MIN_SPIN_INTERVAL {
+        if interval <= MIN_SPIN_INTERVAL {
             return false;
         }
-        let deadline = last + self.interval;
+        let deadline = last + interval;
         now < deadline && deadline.saturating_duration_since(now) <= SPIN_LEAD
     }
 
@@ -290,8 +489,11 @@ impl FramePacer {
         let Some(last) = self.last_present else {
             return Instant::now();
         };
-        let deadline = last + self.interval;
         let mut now = Instant::now();
+        let Some(interval) = self.effective_interval(now) else {
+            return now;
+        };
+        let deadline = last + interval;
         while now < deadline {
             std::hint::spin_loop();
             now = Instant::now();
@@ -302,22 +504,27 @@ impl FramePacer {
     /// 当有帧到期需要绘制时返回 `true`。
     #[must_use]
     pub fn should_render(&self, now: Instant) -> bool {
-        if !self.visible {
+        let Some(interval) = self.effective_interval(now) else {
             return false;
-        }
+        };
         match self.last_present {
             // 尚未呈现过任何帧：立即绘制首帧。
             None => true,
-            Some(last) => now.duration_since(last) >= self.interval,
+            Some(last) => now.saturating_duration_since(last) >= interval,
         }
     }
 
-    /// 跳过等待下一帧：立即标记一帧到期。
+    /// 跳过等待下一帧：立即标记一帧到期并刷新活跃时间戳。
     ///
     /// 在用户交互时使用——响应绝不能干等常规节拍。
     ///
     pub fn request_immediate(&mut self, now: Instant) {
-        self.last_present = Some(now - self.interval);
+        self.last_activity = Some(now);
+        self.last_present = if self.interval.is_zero() {
+            Some(now)
+        } else {
+            now.checked_sub(self.interval)
+        };
     }
 }
 
@@ -469,5 +676,89 @@ mod tests {
         assert_eq!(wake + SPIN_LEAD, deadline);
         assert!(!pacer.within_spin_lead(now));
         assert!(pacer.within_spin_lead(wake));
+    }
+
+    #[test]
+    fn throttle_lifecycle_transitions_from_active_to_idle_to_suspended_and_recovers() {
+        let mut pacer = FramePacer::at_120_hz();
+        pacer.set_throttle_policy(RenderThrottlePolicy {
+            active_fps: 120,
+            unfocused_idle_fps: 10,
+            idle_grace_ms: 500,
+            suspend_when_occluded: true,
+            suspend_when_minimized: true,
+        });
+        let t0 = Instant::now();
+        pacer.note_activity(t0);
+        pacer.on_present(t0);
+
+        // 1. 活跃态按 120fps 推进
+        assert_eq!(pacer.throttle_state(t0), RenderThrottleState::Active);
+        let active_deadline = pacer.next_deadline(t0).expect("active deadline");
+        assert!(active_deadline.duration_since(t0) <= Duration::from_millis(9));
+
+        // 2. 失焦但仍在 500ms 宽限期内：仍为 Active
+        pacer.set_focused(false);
+        let t_grace = t0 + Duration::from_millis(250);
+        assert_eq!(pacer.throttle_state(t_grace), RenderThrottleState::Active);
+
+        // 3. 失焦超过 500ms 宽限期：降频至 10fps（100ms 间隔）
+        let t_idle = t0 + Duration::from_millis(500);
+        assert_eq!(
+            pacer.throttle_state(t_idle),
+            RenderThrottleState::ThrottledFps(10)
+        );
+        pacer.on_present(t_idle);
+        assert!(!pacer.should_render(t_idle + Duration::from_millis(50)));
+        assert!(pacer.should_render(t_idle + Duration::from_millis(100)));
+        let idle_deadline = pacer.next_deadline(t_idle).expect("idle deadline");
+        assert_eq!(
+            idle_deadline.duration_since(t_idle),
+            Duration::from_millis(100)
+        );
+
+        // 4. 完全遮挡：彻底暂停，无定时唤醒
+        let t_occ = t_idle + Duration::from_millis(20);
+        pacer.set_occluded(true);
+        assert_eq!(pacer.throttle_state(t_occ), RenderThrottleState::Suspended);
+        assert!(!pacer.should_render(t_occ + Duration::from_secs(10)));
+        assert!(pacer.next_deadline(t_occ).is_none());
+        assert!(pacer.next_wake(t_occ).is_none());
+
+        // 5. 解除遮挡并重新获得焦点：立即恢复 Active 且首帧立即可渲染
+        let t_recover = t_occ + Duration::from_millis(10);
+        pacer.set_occluded(false);
+        pacer.set_focused(true);
+        assert_eq!(pacer.throttle_state(t_recover), RenderThrottleState::Active);
+        assert!(
+            pacer.should_render(t_recover),
+            "first frame after recovery must render immediately"
+        );
+    }
+
+    #[test]
+    fn minimized_window_suspends_only_when_policy_enables_it() {
+        let mut pacer = FramePacer::at_60_hz();
+        let now = Instant::now();
+        pacer.on_present(now);
+
+        pacer.set_minimized(true);
+        assert_eq!(pacer.throttle_state(now), RenderThrottleState::Suspended);
+        assert!(!pacer.should_render(now + Duration::from_secs(1)));
+        assert!(pacer.next_wake(now).is_none());
+
+        // 策略关闭最小化暂停时恢复正常渲染
+        let mut policy = pacer.throttle_policy();
+        policy.suspend_when_minimized = false;
+        pacer.set_throttle_policy(policy);
+        assert_eq!(pacer.throttle_state(now), RenderThrottleState::Active);
+        assert!(pacer.should_render(now));
+
+        // 恢复最小化状态
+        policy.suspend_when_minimized = true;
+        pacer.set_throttle_policy(policy);
+        pacer.set_minimized(false);
+        assert_eq!(pacer.throttle_state(now), RenderThrottleState::Active);
+        assert!(pacer.should_render(now));
     }
 }
