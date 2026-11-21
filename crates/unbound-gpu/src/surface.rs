@@ -937,8 +937,9 @@ impl Swapchain {
             p_results: core::ptr::null_mut(),
             _marker: core::marker::PhantomData,
         };
-        // SAFETY: 交换链与图像均属于当前设备。
+        // SAFETY: 交换链与图像均属于当前设备；持图形队列互斥锁避免与共享设备上的提交并发竞争。
         let result = unsafe {
+            let _queue_guard = gpu.lock_graphics_queue();
             self.khr_swapchain
                 .queue_present(gpu.graphics_queue, &present_info)
         };

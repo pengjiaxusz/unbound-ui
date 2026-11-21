@@ -18,13 +18,16 @@
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+
 use ash::vk;
 
 use crate::data::{
     BackdropCompositePush, BlurPush, FramePushConstants, GpuClipNode, GpuPayload,
     GpuPrimitiveInstance, GpuScatterPatch, GpuTransform, PassLayer, PushConstants,
 };
-use crate::device::{Buffer, Gpu, GpuError, MemoryKind};
+use crate::device::{Buffer, FrameSync, Gpu, GpuError, MemoryKind};
 use crate::pipeline::{ExternalTextureSlots, Pipelines, COLOR_FORMAT, DEPTH_FORMAT};
 use crate::pool::{PersistentPool, PoolHandle};
 use crate::ring::TransientRing;
@@ -306,9 +309,394 @@ impl BlurTargets {
     }
 }
 
+/// 渲染器托管的外部 RGBA8 纹理描述。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ManagedExternalTextureDesc {
+    /// 纹理宽度（像素，必须大于 0）。
+    pub width: u32,
+    /// 纹理高度（像素，必须大于 0）。
+    pub height: u32,
+    /// 为 true 时按 `R8G8B8A8_SRGB` 创建；否则按线性 `R8G8B8A8_UNORM` 创建。
+    pub srgb: bool,
+}
+
+impl ManagedExternalTextureDesc {
+    /// 构造外部 RGBA8 纹理描述。
+    #[must_use]
+    pub const fn new(width: u32, height: u32, srgb: bool) -> Self {
+        Self {
+            width,
+            height,
+            srgb,
+        }
+    }
+
+    /// 计算该描述对应的 RGBA8 像素字节长度，并校验尺寸合法性与乘法不溢出。
+    ///
+    /// # Errors
+    /// 当宽高任意一维为 0 或字节总数溢出时返回 [`GpuError::InvalidArgument`]。
+    pub fn expected_byte_len(self) -> Result<usize, GpuError> {
+        if self.width == 0 || self.height == 0 {
+            return Err(GpuError::InvalidArgument(format!(
+                "managed external texture dimensions must be non-zero, got {}x{}",
+                self.width, self.height
+            )));
+        }
+        let bytes = u64::from(self.width)
+            .checked_mul(u64::from(self.height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|total| usize::try_from(total).ok())
+            .ok_or_else(|| {
+                GpuError::InvalidArgument(format!(
+                    "managed external texture byte size overflows usize for {}x{}",
+                    self.width, self.height
+                ))
+            })?;
+        Ok(bytes)
+    }
+
+    /// 校验 RGBA8 像素切片长度与纹理描述是否严格匹配。
+    ///
+    /// # Errors
+    /// 当尺寸非法或 `rgba.len()` 不等于 `width * height * 4` 时返回 [`GpuError::InvalidArgument`]。
+    pub fn validate_rgba(self, rgba: &[u8]) -> Result<usize, GpuError> {
+        let expected = self.expected_byte_len()?;
+        if rgba.len() != expected {
+            return Err(GpuError::InvalidArgument(format!(
+                "managed external texture expects {expected} RGBA8 bytes for {}x{}, got {}",
+                self.width,
+                self.height,
+                rgba.len()
+            )));
+        }
+        Ok(expected)
+    }
+
+    /// 返回该纹理对应的 Vulkan 像素格式。
+    #[must_use]
+    pub const fn vk_format(self) -> vk::Format {
+        if self.srgb {
+            vk::Format::R8G8B8A8_SRGB
+        } else {
+            vk::Format::R8G8B8A8_UNORM
+        }
+    }
+}
+
+/// 渲染器托管的单个外部 RGBA8 纹理及其底层 Vulkan 资源。
+#[derive(Debug)]
+struct ManagedExternalTexture {
+    desc: ManagedExternalTextureDesc,
+    image: vk::Image,
+    memory: vk::DeviceMemory,
+    view: vk::ImageView,
+}
+
+impl ManagedExternalTexture {
+    /// 释放纹理视图、图像与绑定的显存。
+    ///
+    /// # Safety
+    /// 调用方须确保已无在飞命令缓冲区引用该纹理。
+    unsafe fn destroy(self, gpu: &Gpu) {
+        gpu.device.destroy_image_view(self.view, None);
+        gpu.device.destroy_image(self.image, None);
+        gpu.device.free_memory(self.memory, None);
+    }
+}
+
+/// 按在飞帧代次对齐的通用延迟销毁队列（纯 CPU 状态机，便于无头单测）。
+#[derive(Debug)]
+struct DeferredDestroyQueue<T> {
+    pending: VecDeque<(u64, T)>,
+}
+
+impl<T> Default for DeferredDestroyQueue<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> DeferredDestroyQueue<T> {
+    /// 创建空的延迟销毁队列。
+    const fn new() -> Self {
+        Self {
+            pending: VecDeque::new(),
+        }
+    }
+
+    /// 将待销毁对象登记到队列中，至少在 `frames_in_flight` 帧提交并退役后才允许回收。
+    fn defer(&mut self, current_frame: u64, frames_in_flight: u32, item: T) {
+        let retire_at = current_frame.saturating_add(u64::from(frames_in_flight.max(1)));
+        self.pending.push_back((retire_at, item));
+    }
+
+    /// 取出全部在 `completed_frame` 代次时已安全退役的对象并交由回调销毁。
+    fn drain_ready_with(&mut self, completed_frame: u64, mut on_reclaim: impl FnMut(T)) {
+        while let Some((retire_at, _)) = self.pending.front() {
+            if *retire_at > completed_frame {
+                break;
+            }
+            if let Some((_, item)) = self.pending.pop_front() {
+                on_reclaim(item);
+            }
+        }
+    }
+
+    /// 强制排空队列中全部对象（用于渲染器销毁且设备已空闲时）。
+    fn drain_all_with(&mut self, mut on_reclaim: impl FnMut(T)) {
+        while let Some((_, item)) = self.pending.pop_front() {
+            on_reclaim(item);
+        }
+    }
+
+    /// 当前滞留等待退役的对象数量。
+    fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// 当前队列是否为空。
+    #[allow(dead_code)]
+    fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+}
+
+/// 为单个渲染器分配独立的图形命令池与逐帧同步原语。
+fn create_renderer_frames(gpu: &Gpu) -> Result<(vk::CommandPool, Vec<FrameSync>), GpuError> {
+    // SAFETY: 仅在有效设备上创建命令池、命令缓冲区与围栏；若中途失败会完整清理已创建句柄。
+    unsafe {
+        let command_pool = gpu
+            .device
+            .create_command_pool(
+                &vk::CommandPoolCreateInfo::default()
+                    .queue_family_index(gpu.families.graphics)
+                    .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
+                None,
+            )
+            .map_err(GpuError::from)?;
+        let frame_count = gpu.frames_in_flight().max(1);
+        let cmd_buffers = match gpu.device.allocate_command_buffers(
+            &vk::CommandBufferAllocateInfo::default()
+                .command_pool(command_pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(frame_count),
+        ) {
+            Ok(cmds) => cmds,
+            Err(err) => {
+                gpu.device.destroy_command_pool(command_pool, None);
+                return Err(GpuError::from(err));
+            }
+        };
+        let mut frames = Vec::with_capacity(frame_count as usize);
+        for cmd in cmd_buffers {
+            let in_flight = match gpu.device.create_fence(
+                &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED),
+                None,
+            ) {
+                Ok(fence) => fence,
+                Err(err) => {
+                    for created in &frames {
+                        gpu.device.destroy_fence(created.in_flight, None);
+                    }
+                    gpu.device.destroy_command_pool(command_pool, None);
+                    return Err(GpuError::from(err));
+                }
+            };
+            frames.push(FrameSync {
+                in_flight,
+                command_buffer: cmd,
+                timeline_value: 0,
+            });
+        }
+        Ok((command_pool, frames))
+    }
+}
+
+/// 创建托管外部 RGBA8 纹理的底层 Vulkan 图像、显存与图像视图。
+fn create_managed_external_image(
+    gpu: &Gpu,
+    desc: ManagedExternalTextureDesc,
+) -> Result<ManagedExternalTexture, GpuError> {
+    let format = desc.vk_format();
+    // SAFETY: 顺序创建图像、显存与视图；任意步骤失败都会回滚已创建对象。
+    unsafe {
+        let device = &gpu.device;
+        let image = device
+            .create_image(
+                &vk::ImageCreateInfo::default()
+                    .image_type(vk::ImageType::TYPE_2D)
+                    .format(format)
+                    .extent(vk::Extent3D {
+                        width: desc.width,
+                        height: desc.height,
+                        depth: 1,
+                    })
+                    .mip_levels(1)
+                    .array_layers(1)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .tiling(vk::ImageTiling::OPTIMAL)
+                    .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+                    .initial_layout(vk::ImageLayout::UNDEFINED),
+                None,
+            )
+            .map_err(GpuError::from)?;
+        let requirements = device.get_image_memory_requirements(image);
+        let type_index = match gpu
+            .memory_type_index_for_bits(requirements.memory_type_bits, MemoryKind::DeviceLocal)
+        {
+            Some(index) => index,
+            None => {
+                device.destroy_image(image, None);
+                return Err(GpuError::Allocation(
+                    "no device-local memory for managed external texture".into(),
+                ));
+            }
+        };
+        let memory = match device.allocate_memory(
+            &vk::MemoryAllocateInfo::default()
+                .allocation_size(requirements.size)
+                .memory_type_index(type_index),
+            None,
+        ) {
+            Ok(memory) => memory,
+            Err(err) => {
+                device.destroy_image(image, None);
+                return Err(GpuError::from(err));
+            }
+        };
+        if let Err(err) = device.bind_image_memory(image, memory, 0) {
+            device.destroy_image(image, None);
+            device.free_memory(memory, None);
+            return Err(GpuError::from(err));
+        }
+        let view = match device.create_image_view(
+            &vk::ImageViewCreateInfo::default()
+                .image(image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(format)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                ),
+            None,
+        ) {
+            Ok(view) => view,
+            Err(err) => {
+                device.destroy_image(image, None);
+                device.free_memory(memory, None);
+                return Err(GpuError::from(err));
+            }
+        };
+        Ok(ManagedExternalTexture {
+            desc,
+            image,
+            memory,
+            view,
+        })
+    }
+}
+
+/// 经临时 Staging 缓冲区将紧凑 RGBA8 像素上传至目标图像并转换为 `SHADER_READ_ONLY_OPTIMAL`。
+fn upload_rgba8_to_image(
+    gpu: &Gpu,
+    image: vk::Image,
+    width: u32,
+    height: u32,
+    old_layout: vk::ImageLayout,
+    rgba: &[u8],
+) -> Result<(), GpuError> {
+    let staging = gpu.create_buffer(
+        rgba.len() as u64,
+        vk::BufferUsageFlags::TRANSFER_SRC,
+        MemoryKind::HostVisible,
+        "managed-external-staging",
+    )?;
+    // SAFETY: `staging` 由本次调用独占，写入并刷写后经一次性命令缓冲区拷贝并等待完成再释放。
+    let upload_result = unsafe {
+        if !gpu.write_host(&staging, 0, rgba) {
+            Err(GpuError::Allocation(
+                "managed external staging buffer is not host mapped".into(),
+            ))
+        } else {
+            let (src_stage, src_access) = if old_layout == vk::ImageLayout::UNDEFINED {
+                (vk::PipelineStageFlags2::TOP_OF_PIPE, vk::AccessFlags2::NONE)
+            } else {
+                (
+                    vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                    vk::AccessFlags2::SHADER_SAMPLED_READ,
+                )
+            };
+            let to_copy = [image_barrier(
+                image,
+                old_layout,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                src_stage,
+                src_access,
+                vk::PipelineStageFlags2::COPY,
+                vk::AccessFlags2::TRANSFER_WRITE,
+                false,
+            )];
+            let to_shader_read = [image_barrier(
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::PipelineStageFlags2::COPY,
+                vk::AccessFlags2::TRANSFER_WRITE,
+                vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                vk::AccessFlags2::SHADER_SAMPLED_READ,
+                false,
+            )];
+            let cmd = gpu.begin_single_time()?;
+            gpu.device.cmd_pipeline_barrier2(
+                cmd,
+                &vk::DependencyInfo::default().image_memory_barriers(&to_copy),
+            );
+            gpu.device.cmd_copy_buffer_to_image(
+                cmd,
+                staging.raw,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[vk::BufferImageCopy::default()
+                    .buffer_offset(0)
+                    .buffer_row_length(0)
+                    .buffer_image_height(0)
+                    .image_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .mip_level(0)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    )
+                    .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+                    .image_extent(vk::Extent3D {
+                        width,
+                        height,
+                        depth: 1,
+                    })],
+            );
+            gpu.device.cmd_pipeline_barrier2(
+                cmd,
+                &vk::DependencyInfo::default().image_memory_barriers(&to_shader_read),
+            );
+            gpu.end_single_time(cmd)
+        }
+    };
+    // SAFETY: `end_single_time` 已等待图形队列完成或命令从未提交，暂存缓冲区可安全销毁。
+    unsafe {
+        gpu.destroy_buffer(&staging);
+    }
+    upload_result
+}
+
 /// 渲染器主体：管理设备资源与帧执行调度。
 pub struct Renderer {
-    pub gpu: Gpu,
+    pub gpu: Arc<Gpu>,
+    /// 本渲染器独占的图形命令池，避免多渲染器共享 `Arc<Gpu>` 时并发访问同一命令池。
+    command_pool: vk::CommandPool,
+    /// 本渲染器独占的逐帧同步原语（每在飞帧一份围栏与命令缓冲区）。
+    frames: Vec<FrameSync>,
     pub pipelines: Pipelines,
     pub target: RenderTarget,
     pool: PersistentPool,
@@ -353,8 +741,12 @@ pub struct Renderer {
     staging_patches: Vec<GpuScatterPatch>,
     /// 安装后绑定到 Bindless 描述符槽位的图集集合。
     atlases: Option<std::sync::Arc<crate::atlas::AtlasSet>>,
-    /// 供调用方注册外部纹理的 Bindless 槽位（`48..64`）簿记器。
+    /// 供调用方注册外部纹理的 Bindless 槽位（`48..304`）簿记器。
     external_slots: ExternalTextureSlots,
+    /// 由渲染器创建并托管生命周期的外部 RGBA8 纹理表（键为外部槽位索引）。
+    managed_external: HashMap<u32, ManagedExternalTexture>,
+    /// 已解绑等待在飞帧退役的托管外部纹理延迟销毁队列。
+    deferred_external_destroys: DeferredDestroyQueue<ManagedExternalTexture>,
     /// 若已设置，则渲染到外部拥有的颜色附件。
     /// 借用的颜色附件：图像句柄、视图与尺寸。
     ///
@@ -538,11 +930,20 @@ impl RenderTarget {
 }
 
 impl Renderer {
-    /// 为离屏渲染目标构建全部持久化 GPU 资源。
+    /// 为离屏渲染目标构建全部持久化 GPU 资源（独占封装 [`Gpu`]，保持既有单窗口签名兼容）。
     ///
     /// # Errors
     /// 透传 Vulkan 调用错误。
     pub fn new(gpu: Gpu, width: u32, height: u32) -> Result<Self, GpuError> {
+        Self::new_shared(Arc::new(gpu), width, height)
+    }
+
+    /// 基于共享的 `Arc<Gpu>` 构建独立渲染器实例，供多窗口共享单一 `VkDevice`。
+    ///
+    /// # Errors
+    /// 透传 Vulkan 调用错误。
+    pub fn new_shared(gpu: Arc<Gpu>, width: u32, height: u32) -> Result<Self, GpuError> {
+        let (command_pool, frames) = create_renderer_frames(&gpu)?;
         let pipelines = Pipelines::new(&gpu)?;
         let target = RenderTarget::new(&gpu, width, height)?;
         // 标记“帧已完全绘制完成”的二值信号量，供呈现引擎等待。
@@ -649,6 +1050,8 @@ impl Renderer {
 
         let mut renderer = Self {
             gpu,
+            command_pool,
+            frames,
             pipelines,
             target,
             pool,
@@ -684,6 +1087,8 @@ impl Renderer {
             staging_patches: Vec::new(),
             atlases: None,
             external_slots: ExternalTextureSlots::default(),
+            managed_external: HashMap::new(),
+            deferred_external_destroys: DeferredDestroyQueue::new(),
             external_color: None,
             external_present: false,
             external_ready: vk::Semaphore::null(),
@@ -695,6 +1100,12 @@ impl Renderer {
         };
         renderer.write_default_lut()?;
         Ok(renderer)
+    }
+
+    /// 返回当前渲染器持有的共享 [`Gpu`] 引用计数句柄。
+    #[must_use]
+    pub fn shared_gpu(&self) -> Arc<Gpu> {
+        Arc::clone(&self.gpu)
     }
 
     /// 写入 4 KiB 主题 LUT。
@@ -909,15 +1320,18 @@ impl Renderer {
     /// # Errors
     /// 透传 Vulkan 错误（含设备丢失）。
     pub fn render(&mut self, scene: &SceneUpload<'_>) -> Result<FrameStats, GpuError> {
-        let frame_count = self.gpu.frames_in_flight();
+        let frame_count = self.frames.len() as u32;
         let frame_slot = (self.frame_index % u64::from(frame_count)) as usize;
-        let cmd = self.gpu.frames[frame_slot].command_buffer;
+        let cmd = self.frames[frame_slot].command_buffer;
         // 复用命令缓冲区前，上次使用该槽位的帧必须已退役。
         self.wait_for_previous_frame()?;
+        // 围栏等待完成后，至少 `frames_in_flight` 帧前解绑的托管外部纹理已不再被 GPU 引用。
+        let completed_generation = self.frame_index.saturating_add(1);
+        self.reclaim_deferred_external_textures(completed_generation);
         {
             let gpu = &self.gpu;
-            let sync = &gpu.frames[frame_slot];
-            // SAFETY: 围栏、命令缓冲区与队列均属于本渲染器；等待自身围栏不会死锁。
+            let sync = &self.frames[frame_slot];
+            // SAFETY: 围栏与命令缓冲区归本渲染器独占；等待自身围栏不会死锁。
             unsafe {
                 gpu.device.reset_fences(&[sync.in_flight])?;
                 gpu.device
@@ -930,14 +1344,14 @@ impl Renderer {
             ..Default::default()
         };
 
-        // 池的帧生命周期：设置本帧时间线 epoch，并回收 GPU 已越过对应 epoch 的隔离块。
-        // 若缺少此步骤，隔离队列永远不会排空并最终导致内存泄漏。
-        let timeline_value = self.frame_index + 1;
+        // 池的帧生命周期：从共享时间线获取严格递增的 epoch，并按本槽位已退役的时间线值回收隔离块。
+        // 多渲染器共享 `Arc<Gpu>` 时必须经原子递增获取时间线值，防止不同窗口发出非递增信号值。
+        let timeline_value = self.gpu.timeline.next();
         self.pool.begin_frame(timeline_value, frame_slot as u32);
-        // 上方围栏等待已完成，意味着 `frames_in_flight` 帧前使用该槽位的帧已退役，
-        // 可依据该槽位记录的时间线值安全回收已隔离内存块。
-        let retired = self.frame_index.saturating_sub(u64::from(frame_count)) + 1;
-        self.pool.reclaim(retired);
+        let retired_timeline = self.frames[frame_slot].timeline_value;
+        if retired_timeline > 0 {
+            self.pool.reclaim(retired_timeline);
+        }
 
         let upload = self.prepare_upload(scene)?;
         self.stats.patches = upload.patch_count;
@@ -973,7 +1387,7 @@ impl Renderer {
 
         {
             let gpu = &self.gpu;
-            let sync = &gpu.frames[frame_slot];
+            let fence = self.frames[frame_slot].in_flight;
             // SAFETY: 命令缓冲区刚结束录制且仅提交一次。
             unsafe {
                 gpu.device.end_command_buffer(cmd)?;
@@ -1017,10 +1431,10 @@ impl Renderer {
                     .command_buffer_infos(&command_infos)
                     .wait_semaphore_infos(&wait_infos[..wait_count as usize])
                     .signal_semaphore_infos(&signal_infos[..signal_count]);
-                gpu.device
-                    .queue_submit2(gpu.graphics_queue, &[submit], sync.in_flight)?;
+                gpu.submit_graphics_queue2(&[submit], fence)?;
             }
         }
+        self.frames[frame_slot].timeline_value = timeline_value;
         // 帧已成功提交至 GPU：持久化池现已持有该版本场景，可确认提交版本号。
         self.generation.commit();
         self.frame_index += 1;
@@ -1738,15 +2152,157 @@ impl Renderer {
 
     /// 释放外部槽位并重绑回 1×1 占位纹理。
     ///
+    /// 若该槽位属于渲染器托管的外部 RGBA8 纹理，则自动转交 [`Self::destroy_external_texture`]
+    /// 以防泄漏底层 Vulkan 图像与显存。
+    ///
     /// # Errors
     /// 若 `slot` 非有效外部槽位则返回 [`GpuError::InvalidArgument`]。
     pub fn release_external_texture(&mut self, slot: u32) -> Result<(), GpuError> {
+        if self.managed_external.contains_key(&slot) {
+            return self.destroy_external_texture(slot);
+        }
         if !self.external_slots.release(slot) {
             return Err(GpuError::InvalidArgument(format!(
                 "bindless slot {slot} is not a live external texture slot"
             )));
         }
         self.pipelines.unbind_external_texture(&self.gpu, slot)
+    }
+
+    /// 上传 RGBA8 像素并由渲染器全权托管该外部 Bindless 纹理槽（`48..304`）。
+    ///
+    /// 内部自动校验像素字节长度（`width * height * 4`）、创建 `vk::Image`/`vk::DeviceMemory`/
+    /// `vk::ImageView`、经 Staging 缓冲传输并转换至 `SHADER_READ_ONLY_OPTIMAL`，随后绑定返回槽位号。
+    ///
+    /// # Errors
+    /// 当尺寸为 0、字节长度不匹配或 256 个外部槽位已满时返回 [`GpuError::InvalidArgument`]；
+    /// 底层 Vulkan 分配或上传失败时透传对应 [`GpuError`]。
+    pub fn upload_external_rgba8(
+        &mut self,
+        desc: ManagedExternalTextureDesc,
+        rgba: &[u8],
+    ) -> Result<u32, GpuError> {
+        desc.validate_rgba(rgba)?;
+        let slot = self.external_slots.allocate().ok_or_else(|| {
+            GpuError::InvalidArgument(format!(
+                "all {} external bindless slots are in use",
+                crate::pipeline::EXTERNAL_TEXTURE_SLOTS
+            ))
+        })?;
+        let texture = match create_managed_external_image(&self.gpu, desc) {
+            Ok(tex) => tex,
+            Err(error) => {
+                self.external_slots.release(slot);
+                return Err(error);
+            }
+        };
+        if let Err(error) = upload_rgba8_to_image(
+            &self.gpu,
+            texture.image,
+            desc.width,
+            desc.height,
+            vk::ImageLayout::UNDEFINED,
+            rgba,
+        ) {
+            // SAFETY: 图像尚未绑定到任何描述符集，可立即销毁。
+            unsafe { texture.destroy(&self.gpu) };
+            self.external_slots.release(slot);
+            return Err(error);
+        }
+        if let Err(error) = self.pipelines.bind_external_texture(
+            &self.gpu,
+            slot,
+            texture.view,
+            self.pipelines.sampler,
+        ) {
+            // SAFETY: 描述符绑定失败，无帧引用该纹理，可立即销毁。
+            unsafe { texture.destroy(&self.gpu) };
+            self.external_slots.release(slot);
+            return Err(error);
+        }
+        self.managed_external.insert(slot, texture);
+        Ok(slot)
+    }
+
+    /// 对已托管外部 RGBA8 纹理槽执行同尺寸原地像素覆写。
+    ///
+    /// # Errors
+    /// 当 `slot` 非托管外部槽位或 `rgba.len()` 与该槽位既有尺寸不匹配时返回
+    /// [`GpuError::InvalidArgument`]；底层传输失败时透传对应 [`GpuError`]。
+    pub fn update_external_rgba8(&mut self, slot: u32, rgba: &[u8]) -> Result<(), GpuError> {
+        if !ExternalTextureSlots::owns(slot) {
+            return Err(GpuError::InvalidArgument(format!(
+                "bindless slot {slot} is not an external texture slot ({}..{})",
+                crate::pipeline::EXTERNAL_TEXTURE_BASE,
+                crate::pipeline::MAX_RGBA_BINDLESS_SLOTS
+            )));
+        }
+        let Some(texture) = self.managed_external.get(&slot) else {
+            return Err(GpuError::InvalidArgument(format!(
+                "bindless slot {slot} is not a managed external texture"
+            )));
+        };
+        texture.desc.validate_rgba(rgba)?;
+        let (image, width, height) = (texture.image, texture.desc.width, texture.desc.height);
+        upload_rgba8_to_image(
+            &self.gpu,
+            image,
+            width,
+            height,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            rgba,
+        )
+    }
+
+    /// 立即解除托管外部纹理槽的描述符绑定并归还槽位，底层 Vulkan 对象推入延迟销毁队列。
+    ///
+    /// 底层 `vk::Image` / `vk::ImageView` / `vk::DeviceMemory` 不会在当前帧强制调用
+    /// `vkDeviceWaitIdle`，而是至少经过 `frames_in_flight` 帧提交并退役后在 [`Self::render`]
+    /// 或 [`Self::destroy`] 中安全回收。
+    ///
+    /// # Errors
+    /// 当 `slot` 不属于当前已托管外部纹理时返回 [`GpuError::InvalidArgument`]。
+    pub fn destroy_external_texture(&mut self, slot: u32) -> Result<(), GpuError> {
+        if !ExternalTextureSlots::owns(slot) {
+            return Err(GpuError::InvalidArgument(format!(
+                "bindless slot {slot} is not an external texture slot"
+            )));
+        }
+        let Some(texture) = self.managed_external.remove(&slot) else {
+            return Err(GpuError::InvalidArgument(format!(
+                "bindless slot {slot} is not a managed external texture"
+            )));
+        };
+        if let Err(error) = self.pipelines.unbind_external_texture(&self.gpu, slot) {
+            self.managed_external.insert(slot, texture);
+            return Err(error);
+        }
+        self.external_slots.release(slot);
+        self.deferred_external_destroys
+            .defer(self.frame_index, self.frames.len() as u32, texture);
+        Ok(())
+    }
+
+    /// 查询指定外部槽位对应的托管纹理描述；若槽位未托管则返回 `None`。
+    #[must_use]
+    pub fn managed_external_texture_desc(&self, slot: u32) -> Option<ManagedExternalTextureDesc> {
+        self.managed_external.get(&slot).map(|tex| tex.desc)
+    }
+
+    /// 当前处于延迟销毁队列中等待在飞帧退役的托管外部纹理数量。
+    #[must_use]
+    pub fn pending_external_texture_destroys(&self) -> usize {
+        self.deferred_external_destroys.len()
+    }
+
+    /// 回收已完成全部在飞帧引用的延迟销毁外部纹理。
+    fn reclaim_deferred_external_textures(&mut self, completed_generation: u64) {
+        let gpu = &self.gpu;
+        self.deferred_external_destroys
+            .drain_ready_with(completed_generation, |texture| {
+                // SAFETY: 对应在飞帧围栏已退役，GPU 不再引用该纹理。
+                unsafe { texture.destroy(gpu) };
+            });
     }
 
     /// 当前已注册的外部纹理槽位数量。
@@ -1793,9 +2349,9 @@ impl Renderer {
     /// # Errors
     /// 透传 Vulkan 调用错误。
     pub fn wait_for_previous_frame(&mut self) -> Result<(), GpuError> {
-        let frame_count = self.gpu.frames_in_flight();
+        let frame_count = self.frames.len() as u32;
         let frame_slot = (self.frame_index % u64::from(frame_count)) as usize;
-        let fence = self.gpu.frames[frame_slot].in_flight;
+        let fence = self.frames[frame_slot].in_flight;
         // SAFETY: 围栏归本渲染器所有；等待自身围栏不会死锁。
         unsafe {
             self.gpu
@@ -1939,9 +2495,9 @@ impl Renderer {
             return Ok(None);
         }
         {
-            let frame_count = self.gpu.frames_in_flight();
+            let frame_count = self.frames.len() as u32;
             let frame_slot = ((self.frame_index - 1) % u64::from(frame_count)) as usize;
-            let fence = self.gpu.frames[frame_slot].in_flight;
+            let fence = self.frames[frame_slot].in_flight;
             // SAFETY: 等待自有围栏不会死锁。
             unsafe {
                 self.gpu.device.wait_for_fences(&[fence], true, u64::MAX)?;
@@ -1961,9 +2517,9 @@ impl Renderer {
             return Ok(None);
         }
         {
-            let frame_count = self.gpu.frames_in_flight();
+            let frame_count = self.frames.len() as u32;
             let frame_slot = ((self.frame_index - 1) % u64::from(frame_count)) as usize;
-            let fence = self.gpu.frames[frame_slot].in_flight;
+            let fence = self.frames[frame_slot].in_flight;
             // SAFETY: 等待自有围栏不会死锁。
             unsafe {
                 self.gpu.device.wait_for_fences(&[fence], true, u64::MAX)?;
@@ -2537,11 +3093,18 @@ impl Renderer {
         unsafe {
             this.pipelines.destroy(&this.gpu);
         }
-        // 在设备销毁前显式释放图集图像（幂等），即使应用层仍持有 `Arc` 也不会在设备销毁后触碰悬空句柄。
-        if let Some(atlases) = &this.atlases {
-            atlases.free();
+        // 清空全部存活及延迟销毁队列中的托管外部纹理，避免任何显存或句柄泄漏。
+        for (_, texture) in this.managed_external.drain() {
+            // SAFETY: 设备已空闲，可直接销毁托管外部纹理。
+            unsafe { texture.destroy(&this.gpu) };
         }
-        this.atlases = None;
+        {
+            let gpu = &this.gpu;
+            this.deferred_external_destroys.drain_all_with(|texture| {
+                // SAFETY: 设备已空闲，可立即排空全部延迟销毁对象。
+                unsafe { texture.destroy(gpu) };
+            });
+        }
         // SAFETY: 设备已空闲且 `self` 正在被消费。
         unsafe {
             this.target.destroy(&this.gpu);
@@ -2562,8 +3125,22 @@ impl Renderer {
             ] {
                 this.gpu.destroy_buffer(b);
             }
+            for frame in &this.frames {
+                this.gpu.device.destroy_fence(frame.in_flight, None);
+            }
+            this.gpu
+                .device
+                .destroy_command_pool(this.command_pool, None);
         }
-        this.gpu.destroy();
+        // 仅当本渲染器持有最后一份 `Arc<Gpu>` 时释放共享图集并销毁设备；
+        // 多窗口共享设备场景下其余存活渲染器继续安全使用共享图集与设备。
+        let atlases = this.atlases.take();
+        if let Ok(gpu) = Arc::try_unwrap(this.gpu) {
+            if let Some(atlases) = atlases {
+                atlases.free();
+            }
+            gpu.destroy();
+        }
     }
 }
 
@@ -3732,6 +4309,217 @@ mod tests {
             &pixels[idx..idx + 4]
         );
         assert_eq!(renderer.stats.visible, 0, "culling must report 0 visible");
+        renderer.destroy();
+    }
+
+    /// 校验托管外部 RGBA8 纹理描述的尺寸、字节长度、溢出保护与 sRGB 格式映射。
+    #[test]
+    fn managed_external_desc_validates_dimensions_and_byte_length() {
+        let linear = ManagedExternalTextureDesc::new(4, 3, false);
+        assert_eq!(linear.vk_format(), vk::Format::R8G8B8A8_UNORM);
+        assert_eq!(linear.expected_byte_len().unwrap(), 48);
+        assert_eq!(linear.validate_rgba(&vec![0u8; 48]).unwrap(), 48);
+
+        let srgb = ManagedExternalTextureDesc::new(2, 2, true);
+        assert_eq!(srgb.vk_format(), vk::Format::R8G8B8A8_SRGB);
+        assert_eq!(srgb.expected_byte_len().unwrap(), 16);
+
+        // 0 宽高必须返回 InvalidArgument。
+        assert!(matches!(
+            ManagedExternalTextureDesc::new(0, 4, false).validate_rgba(&[]),
+            Err(GpuError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            ManagedExternalTextureDesc::new(4, 0, true).validate_rgba(&[]),
+            Err(GpuError::InvalidArgument(_))
+        ));
+
+        // 字节长度不足或超出均必须返回 InvalidArgument。
+        assert!(matches!(
+            linear.validate_rgba(&vec![0u8; 47]),
+            Err(GpuError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            linear.validate_rgba(&vec![0u8; 49]),
+            Err(GpuError::InvalidArgument(_))
+        ));
+
+        // 极大尺寸触发乘法溢出时也必须安全返回 InvalidArgument。
+        assert!(matches!(
+            ManagedExternalTextureDesc::new(u32::MAX, u32::MAX, false).expected_byte_len(),
+            Err(GpuError::InvalidArgument(_))
+        ));
+    }
+
+    /// 验证外部纹理槽位边界（48..304）与 256 槽耗尽后的复用契约。
+    #[test]
+    fn external_slot_bounds_and_exhaustion_match_managed_contract() {
+        let mut slots = ExternalTextureSlots::default();
+        assert!(!ExternalTextureSlots::owns(0));
+        assert!(!ExternalTextureSlots::owns(
+            crate::pipeline::EXTERNAL_TEXTURE_BASE - 1
+        ));
+        assert!(ExternalTextureSlots::owns(
+            crate::pipeline::EXTERNAL_TEXTURE_BASE
+        ));
+        assert!(ExternalTextureSlots::owns(
+            crate::pipeline::MAX_RGBA_BINDLESS_SLOTS - 1
+        ));
+        assert!(!ExternalTextureSlots::owns(
+            crate::pipeline::MAX_RGBA_BINDLESS_SLOTS
+        ));
+
+        let mut allocated = Vec::new();
+        while let Some(slot) = slots.allocate() {
+            assert!(ExternalTextureSlots::owns(slot));
+            allocated.push(slot);
+        }
+        assert_eq!(
+            allocated.len(),
+            crate::pipeline::EXTERNAL_TEXTURE_SLOTS as usize
+        );
+        assert_eq!(slots.allocate(), None);
+
+        let reused_target = allocated[17];
+        assert!(slots.release(reused_target));
+        assert_eq!(slots.allocate(), Some(reused_target));
+    }
+
+    /// 验证延迟销毁队列严格按 `frames_in_flight` 代次推进并在到期前保留对象。
+    #[test]
+    fn deferred_destroy_queue_respects_frames_in_flight_generations() {
+        let mut queue: DeferredDestroyQueue<u32> = DeferredDestroyQueue::new();
+        assert!(queue.is_empty());
+
+        // 在第 1 帧解绑，frames_in_flight = 2 -> 需推进至第 3 代次方可回收。
+        queue.defer(1, 2, 101);
+        // 在第 2 帧解绑，frames_in_flight = 2 -> 需推进至第 4 代次方可回收。
+        queue.defer(2, 2, 202);
+        assert_eq!(queue.len(), 2);
+
+        let mut reclaimed = Vec::new();
+        // 第 1 次帧提交（completed_generation = 2）：均未到期。
+        queue.drain_ready_with(2, |id| reclaimed.push(id));
+        assert!(reclaimed.is_empty());
+        assert_eq!(queue.len(), 2);
+
+        // 第 2 次帧提交（completed_generation = 3）：仅 101 到期，202 继续保留。
+        queue.drain_ready_with(3, |id| reclaimed.push(id));
+        assert_eq!(reclaimed, vec![101]);
+        assert_eq!(queue.len(), 1);
+
+        // 第 3 次帧提交（completed_generation = 4）：202 到期。
+        queue.drain_ready_with(4, |id| reclaimed.push(id));
+        assert_eq!(reclaimed, vec![101, 202]);
+        assert!(queue.is_empty());
+
+        // `drain_all_with` 用于渲染器销毁时强制排空所有剩余条目。
+        queue.defer(10, 3, 303);
+        queue.defer(11, 3, 404);
+        let mut flushed = Vec::new();
+        queue.drain_all_with(|id| flushed.push(id));
+        assert_eq!(flushed, vec![303, 404]);
+        assert!(queue.is_empty());
+    }
+
+    /// 验证 `Renderer::new_shared` 可基于同一 `Arc<Gpu>` 创建多个独立渲染器并互不干扰地渲染与销毁。
+    #[test]
+    fn shared_gpu_supports_multiple_independent_renderers() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let shared = Arc::new(gpu);
+        let mut first = Renderer::new_shared(Arc::clone(&shared), 64, 64).expect("first renderer");
+        let mut second =
+            Renderer::new_shared(Arc::clone(&shared), 64, 64).expect("second renderer");
+        assert!(Arc::ptr_eq(&first.shared_gpu(), &second.shared_gpu()));
+        assert!(Arc::ptr_eq(&first.shared_gpu(), &shared));
+
+        first.render(&scene(&[], &[], 1)).expect("first render");
+        second.render(&scene(&[], &[], 1)).expect("second render");
+
+        // 销毁首个渲染器不得破坏共享设备，第二个渲染器必须继续正常渲染。
+        first.destroy();
+        second
+            .render(&scene(&[], &[], 2))
+            .expect("second render after first destroy");
+        second.destroy();
+        drop(shared);
+    }
+
+    /// 验证托管外部 RGBA8 纹理的上传、原地更新、参数校验与按 `frames_in_flight` 延迟回收全流程。
+    #[test]
+    fn managed_external_rgba8_lifecycle_uploads_updates_and_defers_destroy() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let frames_in_flight = gpu.frames_in_flight();
+        let mut renderer = Renderer::new(gpu, 64, 64).expect("renderer");
+
+        // 非法参数检查。
+        assert!(matches!(
+            renderer.upload_external_rgba8(ManagedExternalTextureDesc::new(0, 4, false), &[]),
+            Err(GpuError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            renderer.upload_external_rgba8(
+                ManagedExternalTextureDesc::new(2, 2, false),
+                &[0u8; 12]
+            ),
+            Err(GpuError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            renderer.update_external_rgba8(0, &[0u8; 16]),
+            Err(GpuError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            renderer.update_external_rgba8(crate::pipeline::EXTERNAL_TEXTURE_BASE, &[0u8; 16]),
+            Err(GpuError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            renderer.destroy_external_texture(crate::pipeline::EXTERNAL_TEXTURE_BASE),
+            Err(GpuError::InvalidArgument(_))
+        ));
+
+        // 正常上传与原地更新。
+        let desc = ManagedExternalTextureDesc::new(4, 4, true);
+        let initial = vec![255u8; 4 * 4 * 4];
+        let slot = renderer
+            .upload_external_rgba8(desc, &initial)
+            .expect("upload external rgba8");
+        assert!(ExternalTextureSlots::owns(slot));
+        assert_eq!(renderer.managed_external_texture_desc(slot), Some(desc));
+        assert_eq!(renderer.external_texture_count(), 1);
+
+        // 更新字节数不匹配时拒绝。
+        assert!(matches!(
+            renderer.update_external_rgba8(slot, &[0u8; 8]),
+            Err(GpuError::InvalidArgument(_))
+        ));
+
+        let updated = vec![128u8; 4 * 4 * 4];
+        renderer
+            .update_external_rgba8(slot, &updated)
+            .expect("update external rgba8");
+
+        // 先提交一帧，再释放外部纹理：槽位立即归还，底层对象进入延迟销毁队列。
+        renderer.render(&scene(&[], &[], 1)).expect("frame 0");
+        renderer
+            .destroy_external_texture(slot)
+            .expect("destroy external texture");
+        assert_eq!(renderer.managed_external_texture_desc(slot), None);
+        assert_eq!(renderer.external_texture_count(), 0);
+        assert_eq!(renderer.pending_external_texture_destroys(), 1);
+
+        // 经过 frames_in_flight 帧提交后延迟队列应自动排空。
+        for step in 0..frames_in_flight {
+            renderer
+                .render(&scene(&[], &[], u64::from(step) + 2))
+                .expect("advance frame");
+        }
+        assert_eq!(renderer.pending_external_texture_destroys(), 0);
         renderer.destroy();
     }
 }

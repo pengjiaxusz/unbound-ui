@@ -676,6 +676,12 @@ pub struct Gpu {
     pub timeline: Timeline,
     pub frames: Vec<FrameSync>,
     command_pool: vk::CommandPool,
+    /// 保护共享图形队列提交与呈现的互斥锁（满足 Vulkan 队列外部同步契约）。
+    graphics_queue_lock: std::sync::Mutex<()>,
+    /// 保护设备级一次性命令池分配与释放的互斥锁。
+    single_time_lock: std::sync::Mutex<()>,
+    /// 标记设备是否已执行销毁，保证显式 `destroy` 与 `Drop` 路径均幂等。
+    destroyed: std::sync::atomic::AtomicBool,
     pub config: GpuConfig,
     /// 设备的共享句柄，传递给生命周期可能长于 `Gpu` 的对象（如图集）。
     pub lifetime: DeviceLifetime,
@@ -1675,6 +1681,9 @@ impl Gpu {
             timeline,
             frames,
             command_pool,
+            graphics_queue_lock: std::sync::Mutex::new(()),
+            single_time_lock: std::sync::Mutex::new(()),
+            destroyed: std::sync::atomic::AtomicBool::new(false),
             config,
             lifetime,
         })
@@ -1872,11 +1881,62 @@ impl Gpu {
         let _ = self.device.flush_mapped_memory_ranges(&[range]);
     }
 
+    /// 获取图形队列提交与呈现的串行化互斥锁。
+    ///
+    /// 当多个 [`crate::frame::Renderer`] 共享同一 `Arc<Gpu>` 时，所有对
+    /// [`Self::graphics_queue`] 的提交与呈现调用必须持锁执行，以满足 Vulkan
+    /// 规范对队列外部同步的硬性要求。
+    pub fn lock_graphics_queue(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.graphics_queue_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 在图形队列互斥锁保护下执行 `vkQueueSubmit`。
+    ///
+    /// # Errors
+    /// 透传 Vulkan 提交错误（含设备丢失）。
+    ///
+    /// # Safety
+    /// 调用方须保证 `submits` 中的命令缓冲区、信号量与 `fence` 均有效且未被并发访问。
+    pub unsafe fn submit_graphics_queue(
+        &self,
+        submits: &[vk::SubmitInfo<'_>],
+        fence: vk::Fence,
+    ) -> Result<(), GpuError> {
+        let _guard = self.lock_graphics_queue();
+        self.device
+            .queue_submit(self.graphics_queue, submits, fence)
+            .map_err(GpuError::from)
+    }
+
+    /// 在图形队列互斥锁保护下执行 `vkQueueSubmit2`。
+    ///
+    /// # Errors
+    /// 透传 Vulkan 提交错误（含设备丢失）。
+    ///
+    /// # Safety
+    /// 调用方须保证 `submits` 中的命令缓冲区、信号量与 `fence` 均有效且未被并发访问。
+    pub unsafe fn submit_graphics_queue2(
+        &self,
+        submits: &[vk::SubmitInfo2<'_>],
+        fence: vk::Fence,
+    ) -> Result<(), GpuError> {
+        let _guard = self.lock_graphics_queue();
+        self.device
+            .queue_submit2(self.graphics_queue, submits, fence)
+            .map_err(GpuError::from)
+    }
+
     /// 在图形队列上开启一个一次性命令缓冲区。
     ///
     /// # Errors
     /// 透传 Vulkan 调用错误。
     pub fn begin_single_time(&self) -> Result<vk::CommandBuffer, GpuError> {
+        let _pool_guard = self
+            .single_time_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // SAFETY: 标准一次性命令缓冲区模式；总是与 `end_single_time` 配对结束。
         unsafe {
             let cmd = self.device.allocate_command_buffers(
@@ -1904,10 +1964,20 @@ impl Gpu {
             self.device.end_command_buffer(cmd)?;
             let cmds = [cmd];
             let submit = vk::SubmitInfo::default().command_buffers(&cmds);
-            self.device
-                .queue_submit(self.graphics_queue, &[submit], vk::Fence::null())?;
-            self.device.queue_wait_idle(self.graphics_queue)?;
-            self.device.free_command_buffers(self.command_pool, &cmds);
+            let submit_result = {
+                let _queue_guard = self.lock_graphics_queue();
+                self.device
+                    .queue_submit(self.graphics_queue, &[submit], vk::Fence::null())
+                    .and_then(|()| self.device.queue_wait_idle(self.graphics_queue))
+            };
+            {
+                let _pool_guard = self
+                    .single_time_lock
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                self.device.free_command_buffers(self.command_pool, &cmds);
+            }
+            submit_result?;
             Ok(())
         }
     }
@@ -1971,12 +2041,15 @@ impl Gpu {
         }
     }
 
-    /// 销毁全部设备资源。仅可安全调用一次。
-    pub fn destroy(mut self) {
+    /// 内部幂等销毁逻辑：确保显式 [`Self::destroy`] 与 `Arc<Gpu>` 末尾 `Drop` 均只销毁一次。
+    fn destroy_inner(&mut self) {
+        if self.destroyed.swap(true, Ordering::AcqRel) {
+            return;
+        }
         // 生命周期可能长于 `Gpu` 的对象（如图集）在此之后不得再触碰设备，
         // 因此在销毁设备句柄前先使共享状态失效。
         self.lifetime.invalidate();
-        // SAFETY: `Self` 拥有全部句柄且正在被消费销毁。
+        // SAFETY: 本方法至多执行一次，且在此前无其他存活引用或外部提交正在使用设备。
         unsafe {
             let _ = self.device.device_wait_idle();
             for f in &self.frames {
@@ -1990,6 +2063,17 @@ impl Gpu {
             }
             self.instance.destroy_instance(None);
         }
+    }
+
+    /// 销毁全部设备资源。可安全显式调用；若经 `Arc<Gpu>` 共享，则在最后引用释放时自动触发。
+    pub fn destroy(mut self) {
+        self.destroy_inner();
+    }
+}
+
+impl Drop for Gpu {
+    fn drop(&mut self) {
+        self.destroy_inner();
     }
 }
 

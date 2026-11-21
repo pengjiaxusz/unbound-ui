@@ -58,7 +58,7 @@ pub use device::{
     resolve_device_extensions, Buffer, DeviceExtensionResolution, Gpu, GpuConfig, GpuError,
     GpuFeatures, GpuInitDiagnostics, InstanceExtensionResolution, MemoryKind, Timeline,
 };
-pub use frame::{Camera, FrameStats, Renderer, SceneUpload};
+pub use frame::{Camera, FrameStats, ManagedExternalTextureDesc, Renderer, SceneUpload};
 pub use pool::{PersistentPool, PoolHandle, PoolStats, ScatterPatch};
 pub use quarantine::{EpochQuarantine, QuarantinedBlock};
 pub use ring::TransientRing;
