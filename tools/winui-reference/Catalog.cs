@@ -48,6 +48,20 @@ internal static class Catalog
     /// <summary>读取并缓存当前系统强调色签名，供指纹与元数据共用。</summary>
     public static string SystemAccentSignature() => SystemAccentValue.Value;
 
+    /// <summary>
+    /// WinUI 的 NavigationView 内置 Settings 项由 MRT 按系统 UI 语言解析，PreferredUILanguages 管不住，
+    /// 中文系统会渲染成「设置」，与本框架固定的英文 "Settings" 对不上。这里隐藏内置项，改用手动 Footer 项钉死英文。
+    /// </summary>
+    private static void AddEnglishSettingsFooter(NavigationView nav)
+    {
+        nav.IsSettingsVisible = false;
+        nav.FooterMenuItems.Add(new NavigationViewItem
+        {
+            Content = "Settings",
+            Icon = new SymbolIcon(Symbol.Setting),
+        });
+    }
+
     private static string ComputeSystemAccentSignature()
     {
         try
@@ -629,11 +643,11 @@ internal static class Catalog
                     var nav = new NavigationView
                     {
                         Width = 360,
-                        Height = 280,
+                        Height = 360,
                         PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
                         OpenPaneLength = 220,
                         IsPaneOpen = true,
-                        IsSettingsVisible = true,
+                        IsSettingsVisible = false,
                         IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
                     };
                     nav.MenuItems.Add(new NavigationViewItemHeader { Content = "Workspace" });
@@ -655,6 +669,7 @@ internal static class Catalog
                         Icon = new SymbolIcon(Symbol.Contact),
                     });
                     nav.SelectedItem = home;
+                    AddEnglishSettingsFooter(nav);
                     element = nav;
                     return true;
                 }
@@ -672,7 +687,7 @@ internal static class Catalog
                         Height = 280,
                         PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
                         IsPaneOpen = false,
-                        IsSettingsVisible = true,
+                        IsSettingsVisible = false,
                         IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
                     };
                     nav.MenuItems.Add(home);
@@ -682,6 +697,7 @@ internal static class Catalog
                         Icon = new SymbolIcon(Symbol.Library),
                     });
                     nav.SelectedItem = home;
+                    AddEnglishSettingsFooter(nav);
                     element = nav;
                     return true;
                 }
@@ -700,7 +716,7 @@ internal static class Catalog
                         PaneDisplayMode = NavigationViewPaneDisplayMode.LeftCompact,
                         OpenPaneLength = 220,
                         IsPaneOpen = true,
-                        IsSettingsVisible = true,
+                        IsSettingsVisible = false,
                         IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
                     };
                     nav.MenuItems.Add(home);
@@ -710,6 +726,7 @@ internal static class Catalog
                         Icon = new SymbolIcon(Symbol.Library),
                     });
                     nav.SelectedItem = home;
+                    AddEnglishSettingsFooter(nav);
                     element = nav;
                     return true;
                 }
@@ -727,7 +744,7 @@ internal static class Catalog
                         Height = 280,
                         PaneDisplayMode = NavigationViewPaneDisplayMode.LeftMinimal,
                         IsPaneOpen = false,
-                        IsSettingsVisible = true,
+                        IsSettingsVisible = false,
                         IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
                     };
                     nav.MenuItems.Add(home);
@@ -737,6 +754,7 @@ internal static class Catalog
                         Icon = new SymbolIcon(Symbol.Library),
                     });
                     nav.SelectedItem = home;
+                    AddEnglishSettingsFooter(nav);
                     element = nav;
                     return true;
                 }
@@ -753,7 +771,7 @@ internal static class Catalog
                         Width = 360,
                         Height = 200,
                         PaneDisplayMode = NavigationViewPaneDisplayMode.Top,
-                        IsSettingsVisible = true,
+                        IsSettingsVisible = false,
                         IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
                     };
                     nav.MenuItems.Add(home);
@@ -773,6 +791,7 @@ internal static class Catalog
                         Icon = new SymbolIcon(Symbol.Document),
                     });
                     nav.SelectedItem = home;
+                    AddEnglishSettingsFooter(nav);
                     element = nav;
                     return true;
                 }
@@ -804,7 +823,7 @@ internal static class Catalog
                         PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
                         OpenPaneLength = 220,
                         IsPaneOpen = true,
-                        IsSettingsVisible = true,
+                        IsSettingsVisible = false,
                         IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
                     };
                     nav.MenuItems.Add(new NavigationViewItem
@@ -814,6 +833,7 @@ internal static class Catalog
                     });
                     nav.MenuItems.Add(collections);
                     nav.SelectedItem = mail;
+                    AddEnglishSettingsFooter(nav);
                     element = nav;
                     return true;
                 }
@@ -832,7 +852,7 @@ internal static class Catalog
                         PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
                         OpenPaneLength = 220,
                         IsPaneOpen = true,
-                        IsSettingsVisible = true,
+                        IsSettingsVisible = false,
                         IsBackButtonVisible = NavigationViewBackButtonVisible.Visible,
                         IsBackEnabled = true,
                         PaneTitle = "Menu",
@@ -846,6 +866,7 @@ internal static class Catalog
                         Icon = new SymbolIcon(Symbol.Library),
                     });
                     nav.SelectedItem = home;
+                    AddEnglishSettingsFooter(nav);
                     element = nav;
                     return true;
                 }

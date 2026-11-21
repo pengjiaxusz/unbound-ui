@@ -2311,6 +2311,9 @@ fn emit_case(
         | "NavigationViewHierarchical"
         | "NavigationViewChrome" => {
             let (default_w, default_h) = match case.control {
+                // 基础场景含 5 个主菜单项（Header + 3 项 + 分隔线），280px 高时 WinUI 会把
+                // 末尾的 Analytics 滚出可视区，两侧内容对不上；统一提到 360px 让全部菜单项可见。
+                "NavigationView" => (360.0_f32, 360.0_f32),
                 "NavigationViewTop" => (360.0_f32, 200.0_f32),
                 "NavigationViewChrome" => (420.0_f32, 280.0_f32),
                 _ => (360.0_f32, 280.0_f32),
