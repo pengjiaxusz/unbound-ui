@@ -58,7 +58,7 @@
 | **MenuBar** | Menus & Toolbars | `MenuBar` | `menubar.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **CommandBar** | Menus & Toolbars | `CommandBar` | `toolbar.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **NavigationView** | Navigation | `NavigationView` / `NavigationViewCompact` | `sidebar.rs` / `navigation_rail.rs` | `已一致`（展开态 Left 与紧凑态 LeftCompact 的显示模式） | 已接入批量差分（实机采集待 GPU） |
-| **TabView** | Navigation | `TabView` | `tabs.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **TabView** | Navigation | `TabView` | `tabs.rs` | `已一致`（ADR-0024 新增 `TabViewStyle::ShellChrome` 标题栏融合卡片、`TabWidthMode::Adaptive` `100..=240px`、图标/独立关闭/`+` 按钮事件与溢出滚动；默认 `Standard` 形态保持向后兼容） | 已接入批量差分（实机采集待 GPU） |
 | **Pivot** | Navigation | `Pivot` | `pivot.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **BreadcrumbBar** | Navigation | `BreadcrumbBar` | `breadcrumb.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **SelectorBar** | Navigation | `SelectorBar` | `segmented.rs` | `已一致`：WinUI 3 1.4+ 原生选择条（亦对应 Toolkit `Segmented`） | 已接入批量差分（实机采集待 GPU） |
@@ -68,7 +68,7 @@
 | **Border / Card** | Layout & Containers | `Containers` | `containers.rs` | `已对应`：对应 WinUI `Border` 与卡片表面样式 | 已接入批量差分（实机采集待 GPU） |
 | **StackPanel** | Layout & Containers | `StackPanel` | `containers.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **ScrollView** | Scrolling | `ScrollView` | `scroll.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
-| **TreeView** | Collections | `TreeView` | `tree_view.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
+| **TreeView** | Collections | `TreeView` | `tree_view.rs` | `已一致`（ADR-0024 新增 `TreeViewDensity::Compact` 28px 紧凑档位、`TreeRowIcon` 矢量/外部纹理双通道图标槽、懒加载三态与 `ExpandRequested`、以及 `occurrence_key` / `logical_id` 隔离；默认保持 WinUI 36px） | 已接入批量差分（实机采集待 GPU） |
 | **ListView** | Collections | `ListView` | `virtual_views.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **FlipView** | Collections | `FlipView` | `carousel.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **CalendarView / CalendarDatePicker** | Date & Time | `CalendarView` / `CalendarDatePicker` | `date_picker.rs` / `calendar_date_picker.rs` | `已一致`：`CalendarView` 渲染展开月历面板，`CalendarDatePicker` 为收起触发器 + 弹层 | 已接入批量差分（实机采集待 GPU） |
@@ -76,7 +76,7 @@
 | **PersonPicture** | Media & Visual | `PersonPicture` / `AvatarGroup` | `avatar.rs` | `已一致`（`AvatarGroup` 为多头像叠放组） | 已接入批量差分（实机采集待 GPU） |
 | **Image** | Media & Visual | `Image` | `image.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **FontIcon / SymbolIcon** | Media & Visual | `FontIcon` | `image.rs` | `已一致`（`SymbolIcon` 由同一图标发射器承载） | 已接入批量差分（实机采集待 GPU） |
-| **TitleBar** | Windowing | （位于 `title_bar.rs`，未入 `WidgetCatalogId`） | `title_bar.rs` | `已一致`：WinAppSDK 1.5+ 官方 `TitleBar` 控件，已在 `title_bar.rs` 实现，仍建议纳入目录与差分 | 已接入批量差分（实机采集待 GPU） |
+| **TitleBar** | Windowing | （位于 `title_bar.rs`，未入 `WidgetCatalogId`） | `title_bar.rs` | `已一致`：WinAppSDK 1.5+ 官方 `TitleBar` 控件，ADR-0024 扩展 `TITLE_BAR_FUSED_HEIGHT`（40px）壳层融合态、可选底部分隔线隐藏、左右内容槽预留宽与 `TITLE_BAR_MIN_DRAG_WIDTH`（48px）最小拖拽区保障 | 已接入批量差分（实机采集待 GPU） |
 | **RichEditBox** | Text | `RichEditBox` | `rich_edit_box.rs` | `已一致`：顶部 B / I / U 格式工具条 + 细分隔线 + 可编辑文本区 | 已接入批量差分（实机采集待 GPU） |
 | **GridView** | Collections | `GridView` | `grid_view.rs` | `已一致`：等宽网格单元，选中单元用强调色描边、悬停显示圆角 | 已接入批量差分（实机采集待 GPU） |
 | **ListBox** | Collections | `ListBox` | `list_box.rs` | `已一致`：经典单选列表，选中行铺强调浅底并带左侧指示条 | 已接入批量差分（实机采集待 GPU） |
@@ -178,7 +178,7 @@
 | | `CommandPalette` | `command_palette.rs` | `Ctrl+K / Ctrl+P` 顶部模态命令面板（复用 `ContentDialog` / `Flyout` 阴影与 `AutoSuggestBox` 搜索头） |
 | | `Dock` | `dock.rs` | IDE 多标签停靠面板与拖拽分屏预览区（标签头对齐 `TabView`） |
 | | `StatusBar` | `toolbar.rs` | 窗口底部状态栏与分段指示器 |
-| **专业输入与导航扩展（8 个）** | `AddressBar` | `address_bar.rs` | 文件管理器/浏览器式可点击分段 + 点击转文本编辑的地址栏 |
+| **专业输入与导航扩展（8 个）** | `AddressBar` | `address_bar.rs` | ADR-0024 双模复合地址栏：外部 `← → ↑ ↻` 导航按钮簇、一体化面包屑（含 `«` 溢出折叠与 `›` 子目录菜单触发）/原位 `TextEditState` 文本编辑（`Ctrl+L` / `Alt+D`）、右侧可折叠内联搜索框与 `AddressBarEvent` |
 | | `Cascader` | `cascader.rs` | 多级联选择器 |
 | | `DateRangePicker` | `date_range_picker.rs` | 双月历面板 + 快捷预设（近 7 天/30 天）的日期区间选择器 |
 | | `HotkeyInput` | `hotkey_input.rs` | 快捷键组合录制输入框（键帽视觉对齐 Win11 PowerToys `ShortcutControl`） |

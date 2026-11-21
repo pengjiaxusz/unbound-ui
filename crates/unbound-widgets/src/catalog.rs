@@ -1935,30 +1935,21 @@ where
         WidgetCatalogId::TreeView => {
             let desc = TreeViewDesc::new(rect);
             let root_row = TreeViewRow {
-                row: TreeRow {
-                    id: 1,
-                    depth: 0,
-                    has_children: true,
-                    expanded: true,
-                },
+                row: TreeRow::new(1, 0, true).with_expanded(true),
                 item: 0,
                 rect: Rect::new(o.x, o.y, rect.size.x, 36.0),
             };
             let child_row = TreeViewRow {
-                row: TreeRow {
-                    id: 2,
-                    depth: 1,
-                    has_children: false,
-                    expanded: false,
-                },
+                row: TreeRow::new(2, 1, false),
                 item: 1,
                 rect: Rect::new(o.x, o.y + 36.0, rect.size.x, 36.0),
             };
             let mut out = crate::tree_view::emit_tree_background(&desc, TreeViewTokens::standard());
             let root_g = shape("Root", Vec2::new(o.x + 32.0, o.y + 11.0), 14.0);
-            let root_out = crate::tree_view::emit_tree_row(
+            let root_out = crate::tree_view::emit_tree_row_with_icon(
                 &desc,
                 &root_row,
+                crate::tree_view::TreeRowIcon::Vector(crate::shell::ShellIcon::FolderOpen),
                 true,
                 state,
                 &root_g,
@@ -1966,9 +1957,10 @@ where
             );
             merge_output(&mut out, root_out);
             let child_g = shape("Child", Vec2::new(o.x + 32.0, o.y + 36.0 + 11.0), 14.0);
-            let child_out = crate::tree_view::emit_tree_row(
+            let child_out = crate::tree_view::emit_tree_row_with_icon(
                 &desc,
                 &child_row,
+                crate::tree_view::TreeRowIcon::Vector(crate::shell::ShellIcon::Documents),
                 false,
                 state,
                 &child_g,

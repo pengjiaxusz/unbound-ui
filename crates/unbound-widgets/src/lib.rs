@@ -90,8 +90,8 @@ pub use shell::{
 };
 pub use title_bar::{
     TitleBarChrome, TitleBarDesc, WindowCaptionButton, WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH,
-    TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID,
-    TITLE_BAR_MINIMIZE_ID,
+    TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_FUSED_HEIGHT, TITLE_BAR_HEIGHT,
+    TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID, TITLE_BAR_MIN_DRAG_WIDTH,
 };
 
 /// 声明所有业务组件模块并派生穷举目录。
@@ -436,7 +436,11 @@ use unbound_math::{f16_to_f32, f32_to_f16, project_rounded_radii, Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_world::{NodeId, UiWorld};
 
-pub use address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
+pub use address_bar::{
+    address_bar_sub_node, compute_layout, emit_address_bar, AddressBarDesc, AddressBarEvent,
+    AddressBarHitKind, AddressBarLayout, AddressBarState, PathSegment, SegmentLayout,
+    ADDRESS_BAR_HEIGHT,
+};
 pub use copy_button::{
     emit_copy_button, emit_read_only_input, read_only_copy_node, CopyButtonDesc, CopyButtonState,
     ReadOnlyInputDesc, ReadOnlyInputState, COPY_FEEDBACK_DURATION_MS,
@@ -686,8 +690,10 @@ pub use table::{
     TableState, TableTokens,
 };
 pub use tabs::{
-    emit_tab, emit_tab_close, emit_tabs_add, emit_tabs_strip, reduce_tabs_key, TabItem, TabsDesc,
-    TabsKey, TabsState, TabsTokens,
+    emit_tab, emit_tab_close, emit_tabs_add, emit_tabs_strip, reduce_tabs_key, TabItem,
+    TabViewEvent, TabViewStyle, TabWidthMode, TabsDesc, TabsKey, TabsState, TabsTokens,
+    TAB_ADD_GAP, TAB_ADD_HEIGHT, TAB_ADD_WIDTH, TAB_CLOSE_HIT_SIZE, TAB_MAX_WIDTH, TAB_MIN_WIDTH,
+    TAB_SHELL_CORNER_RADIUS, TAB_SHELL_TOP_INSET,
 };
 pub use tag_input::{
     emit_tag_input, layout_tags, TagInputDesc, TagInputOutcome, TagInputState, TagKey, TagLayout,
@@ -731,7 +737,9 @@ pub use tree_table::{
     TREE_TABLE_HEADER_HEIGHT, TREE_TABLE_ROW_HEIGHT,
 };
 pub use tree_view::{
-    emit_tree_background, emit_tree_row, TreeViewDesc, TreeViewRow, TreeViewState, TreeViewTokens,
+    emit_tree_background, emit_tree_row, emit_tree_row_with_icon, tree_row_label_x, TreeRowIcon,
+    TreeViewDensity, TreeViewDesc, TreeViewEvent, TreeViewRow, TreeViewState, TreeViewTokens,
+    TREE_ICON_GAP, TREE_ICON_SIZE, TREE_ROW_COMPACT,
 };
 pub use virtual_masonry::{emit_virtual_masonry, VirtualMasonryDesc, VirtualMasonryState};
 pub use virtual_views::{

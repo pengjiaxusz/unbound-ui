@@ -2319,7 +2319,48 @@ impl UiWidget for AddressBarDesc {
     type State = AddressBarState;
 
     fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
-        Vec2::new(self.rect.width().max(260.0), self.rect.height().max(34.0))
+        Vec2::new(
+            self.rect.width().max(260.0),
+            self.rect
+                .height()
+                .max(crate::address_bar::ADDRESS_BAR_HEIGHT),
+        )
+    }
+
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
+        let mut desc = self.clone();
+        desc.rect = rect;
+        match event {
+            WidgetInputEvent::PointerDown { pos, .. } => state.handle_click(&desc, *pos),
+            WidgetInputEvent::KeyDown(chord) => state.handle_key(&desc, *chord),
+            WidgetInputEvent::TextInput(text) => {
+                state
+                    .handle_text_event(&desc, &TextInputEvent::Insert(text.clone()))
+                    .changed
+            }
+            WidgetInputEvent::ImePreedit { text, cursor } => {
+                state
+                    .handle_text_event(
+                        &desc,
+                        &TextInputEvent::ImePreedit {
+                            text: text.clone(),
+                            cursor: *cursor,
+                        },
+                    )
+                    .changed
+            }
+            WidgetInputEvent::ImeCommit(text) => {
+                state
+                    .handle_text_event(&desc, &TextInputEvent::ImeCommit { text: text.clone() })
+                    .changed
+            }
+            WidgetInputEvent::ImeCancel => {
+                state
+                    .handle_text_event(&desc, &TextInputEvent::ImeCancel)
+                    .changed
+            }
+            _ => false,
+        }
     }
 
     fn emit_laid_out(
@@ -2332,20 +2373,70 @@ impl UiWidget for AddressBarDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
+        let layout = crate::address_bar::compute_layout(&desc);
         let mut glyphs = Vec::new();
-        let mut sx = rect.origin.x + 114.0;
-        for seg in &desc.segments {
-            let w = (seg.chars().count() as f32 * 7.5 + 16.0).clamp(36.0, 140.0);
-            let seg_r = Rect::new(sx, rect.origin.y + 4.0, w, (rect.size.y - 8.0).max(16.0));
+        if state.editing {
+            let edit_text = if state.edit_core.text().is_empty() && !state.edit_buffer.is_empty() {
+                state.edit_buffer.as_str()
+            } else {
+                state.edit_core.text()
+            };
+            let text_x = layout.root_icon_rect.max().x + 6.0;
+            let edit_r = Rect::new(
+                text_x,
+                layout.address_rect.origin.y,
+                (layout.address_rect.max().x - text_x - 8.0).max(16.0),
+                layout.address_rect.size.y,
+            );
             glyphs.extend(text_ctx.shape_line(
-                seg,
-                seg_r,
-                12.0,
+                edit_text,
+                edit_r,
+                12.5,
                 400,
-                AlignX::Center,
+                AlignX::Left,
                 AlignY::Middle,
             ));
-            sx += w + 6.0;
+        } else {
+            for seg_layout in &layout.segments {
+                if let Some(seg) = desc.segments.get(seg_layout.index) {
+                    glyphs.extend(text_ctx.shape_line(
+                        &seg.label,
+                        seg_layout.label_rect,
+                        12.0,
+                        400,
+                        AlignX::Center,
+                        AlignY::Middle,
+                    ));
+                }
+            }
+        }
+        if let Some(sr) = layout.search_rect {
+            if !layout.search_collapsed {
+                let search_text = state.search_core.text();
+                let display = if search_text.is_empty() {
+                    desc.search_placeholder.as_str()
+                } else {
+                    search_text
+                };
+                if !display.is_empty() {
+                    let left_x = layout
+                        .search_icon_rect
+                        .map_or(sr.origin.x + 8.0, |ir| ir.max().x + 6.0);
+                    let right_x = layout
+                        .search_clear_rect
+                        .map_or(sr.max().x - 8.0, |cr| cr.origin.x - 4.0);
+                    let text_r =
+                        Rect::new(left_x, sr.origin.y, (right_x - left_x).max(16.0), sr.size.y);
+                    glyphs.extend(text_ctx.shape_line(
+                        display,
+                        text_r,
+                        12.0,
+                        400,
+                        AlignX::Left,
+                        AlignY::Middle,
+                    ));
+                }
+            }
         }
         emit_address_bar(node, &desc, state, control, &glyphs)
     }
@@ -3573,7 +3664,18 @@ impl UiWidget for crate::tabs::TabsDesc {
     type State = crate::tabs::TabsState;
 
     fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
-        let w = (self.count() as f32 * self.tab_width)
+        let tab_w = self.effective_tab_width();
+        let add_w = if self.addable {
+            match self.style {
+                crate::tabs::TabViewStyle::Standard => crate::tabs::TAB_STRIP_HEIGHT,
+                crate::tabs::TabViewStyle::ShellChrome => {
+                    crate::tabs::TAB_ADD_GAP + crate::tabs::TAB_ADD_WIDTH
+                }
+            }
+        } else {
+            0.0
+        };
+        let w = (self.count() as f32 * tab_w + add_w)
             .max(self.rect.width())
             .max(200.0);
         Vec2::new(w, self.rect.height().max(crate::tabs::TAB_STRIP_HEIGHT))
@@ -3583,9 +3685,15 @@ impl UiWidget for crate::tabs::TabsDesc {
         if let WidgetInputEvent::PointerDown { pos, .. } = event {
             let mut desc = self.clone();
             desc.rect = rect;
+            if desc.hit_test_close(state.scroll_x, *pos).is_some()
+                || desc.hit_test_add(state.scroll_x, *pos)
+            {
+                return true;
+            }
             let rel_x = pos.x - rect.origin.x + state.scroll_x;
-            if rel_x >= 0.0 {
-                let idx = (rel_x / desc.tab_width.max(1.0)).floor() as usize;
+            let tab_w = desc.effective_tab_width().max(1.0);
+            if rel_x >= 0.0 && pos.x <= rect.origin.x + desc.strip_width() {
+                let idx = (rel_x / tab_w).floor() as usize;
                 if idx < desc.count() {
                     state.activate(&desc, idx);
                     state.snap(&desc);
@@ -3610,27 +3718,58 @@ impl UiWidget for crate::tabs::TabsDesc {
         st.snap(&desc);
         let tokens = crate::tabs::TabsTokens::standard();
         let mut out = crate::tabs::emit_tabs_strip(&desc, &st, tokens);
+        let align_x = match desc.style {
+            crate::tabs::TabViewStyle::Standard => AlignX::Center,
+            crate::tabs::TabViewStyle::ShellChrome => AlignX::Left,
+        };
         for idx in 0..desc.count() {
             let tab_r = desc.tab_rect(idx, st.scroll_x);
             if tab_r.width() <= 0.0 {
                 continue;
             }
+            let label_r = desc.label_rect(idx, st.scroll_x);
             let title = &desc.items[idx].title;
-            let glyphs = text_ctx.shape_line(
-                title,
-                tab_r,
-                12.5,
-                if idx == st.active_index(&desc) {
-                    600
-                } else {
-                    400
-                },
-                AlignX::Center,
-                AlignY::Middle,
-            );
+            let glyphs = if label_r.width() > 0.0 {
+                text_ctx.shape_line(
+                    title,
+                    label_r,
+                    12.5,
+                    if idx == st.active_index(&desc) {
+                        600
+                    } else {
+                        400
+                    },
+                    align_x,
+                    AlignY::Middle,
+                )
+            } else {
+                Vec::new()
+            };
             let tab_out = crate::tabs::emit_tab(&desc, &st, idx, control, &glyphs, tokens);
             out.primitives.extend(tab_out.primitives);
             out.payloads.extend(tab_out.payloads);
+            if desc.close_rect(idx, st.scroll_x).is_some() {
+                let close_out = crate::tabs::emit_tab_close(
+                    node ^ 0x5441_4200 ^ (idx as u64 + 1),
+                    &desc,
+                    &st,
+                    idx,
+                    ControlState::default(),
+                    tokens,
+                );
+                out.primitives.extend(close_out.primitives);
+                out.payloads.extend(close_out.payloads);
+            }
+        }
+        if desc.addable {
+            let add_out = crate::tabs::emit_tabs_add(
+                node ^ 0x5441_42FF,
+                &desc,
+                ControlState::default(),
+                tokens,
+            );
+            out.primitives.extend(add_out.primitives);
+            out.payloads.extend(add_out.payloads);
         }
         out.hit = Some(
             unbound_input::HitRegion::new(node, 1, u32::from(desc.z), rect)

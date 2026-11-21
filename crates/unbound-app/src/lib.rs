@@ -1483,8 +1483,12 @@ pub enum WidgetSpec {
     TreeView {
         /// 树形视图描述符。
         desc: unbound_widgets::TreeViewDesc,
-        /// 本帧可见行及选中态快照。
-        rows: Vec<(unbound_widgets::TreeViewRow, bool)>,
+        /// 本帧可见行、选中态及行前置图标快照。
+        rows: Vec<(
+            unbound_widgets::TreeViewRow,
+            bool,
+            unbound_widgets::TreeRowIcon,
+        )>,
     },
     /// 双模路径地址栏。
     AddressBar {
@@ -1910,7 +1914,7 @@ impl<'a> ViewBuilder<'a> {
             bar.add_with_layout(
                 mix_key(root_key, 1),
                 chrome_desc,
-                unbound_widgets::TitleBarChrome::new(focused),
+                unbound_widgets::TitleBarChrome::from_desc(&desc, focused),
             );
             // 左区为可压缩的等权伸缩容器（`flex_grow = 1` + `min_width = 0`）：
             // 空间充足时它与右区等分留白，使 `center` 插槽保持视觉居中；
@@ -2649,7 +2653,8 @@ impl<'a> ViewBuilder<'a> {
             .into_iter()
             .map(|row| {
                 let selected = state.selected.contains(&row.row.id);
-                (row, selected)
+                let icon = state.row_icon(row.row.id);
+                (row, selected, icon)
             })
             .collect();
         let mut node_desc = RawNodeDesc::container();
@@ -6039,24 +6044,51 @@ impl<A: Application> AppRuntime<A> {
                         bg.a11y = Some(A11yNode::new(Role::Tree, "TreeView", desc.rect));
                     }
                     self.collector.push(entry.key, bg);
-                    for (row, selected) in rows {
+                    for (row, selected, icon) in rows {
+                        // 将 `TreeRowIcon::ExternalTexture(handle_raw)` 桥接至 `AssetHub` 已上传的外部纹理 GPU 槽位；
+                        // 若句柄尚未驻留则退化为 `TreeRowIcon::None`，避免绑定无效纹理槽。
+                        let resolved_icon = match *icon {
+                            unbound_widgets::TreeRowIcon::ExternalTexture(handle_raw) => self
+                                .asset_hub
+                                .external_texture_slot(ExternalTextureHandle(handle_raw))
+                                .map(|(slot, _, _)| {
+                                    unbound_widgets::TreeRowIcon::ExternalTexture(u64::from(slot))
+                                })
+                                .unwrap_or(unbound_widgets::TreeRowIcon::None),
+                            other => other,
+                        };
+                        let has_icon = !matches!(resolved_icon, unbound_widgets::TreeRowIcon::None);
                         let label_text = format!("Node {}", row.row.id);
+                        let label_x =
+                            unbound_widgets::tree_row_label_x(&desc, row.row.depth, has_icon);
                         let label_rect = Rect::new(
-                            row.rect.origin.x + 28.0 + f32::from(row.row.depth) * desc.indent,
+                            label_x,
                             row.rect.origin.y,
-                            (row.rect.width() - 32.0).max(16.0),
+                            (row.rect.max().x - label_x - 8.0).max(16.0),
                             row.rect.height(),
                         );
+                        let font_size = if desc.density == unbound_widgets::TreeViewDensity::Compact
+                        {
+                            12.5
+                        } else {
+                            13.0
+                        };
                         let label = text_ctx.shape_line(
                             &label_text,
                             label_rect,
-                            13.0,
+                            font_size,
                             400,
                             unbound_widgets::AlignX::Left,
                             unbound_widgets::AlignY::Middle,
                         );
-                        let row_out = unbound_widgets::emit_tree_row(
-                            &desc, row, *selected, state, &label, tokens,
+                        let row_out = unbound_widgets::emit_tree_row_with_icon(
+                            &desc,
+                            row,
+                            resolved_icon,
+                            *selected,
+                            state,
+                            &label,
+                            tokens,
                         );
                         self.collector.push(row.row.id, row_out);
                     }
@@ -6070,25 +6102,77 @@ impl<A: Application> AppRuntime<A> {
                         desc.rect = rect;
                     }
                     desc.z = entry.z_base.saturating_add(desc.z);
-                    let text = if bar_state.editing {
-                        bar_state.edit_buffer.clone()
+                    let layout = unbound_widgets::compute_layout(&desc);
+                    let mut glyphs = Vec::new();
+                    if bar_state.editing {
+                        let edit_text = if bar_state.edit_core.text().is_empty()
+                            && !bar_state.edit_buffer.is_empty()
+                        {
+                            bar_state.edit_buffer.as_str()
+                        } else {
+                            bar_state.edit_core.text()
+                        };
+                        let text_x = layout.root_icon_rect.max().x + 6.0;
+                        let edit_rect = Rect::new(
+                            text_x,
+                            layout.address_rect.origin.y,
+                            (layout.address_rect.max().x - text_x - 8.0).max(16.0),
+                            layout.address_rect.size.y.max(24.0),
+                        );
+                        glyphs.extend(text_ctx.shape_line(
+                            edit_text,
+                            edit_rect,
+                            13.0,
+                            400,
+                            unbound_widgets::AlignX::Left,
+                            unbound_widgets::AlignY::Middle,
+                        ));
                     } else {
-                        desc.full_path()
-                    };
-                    let text_rect = Rect::new(
-                        desc.rect.origin.x + 64.0,
-                        desc.rect.origin.y,
-                        (desc.rect.width() - 72.0).max(16.0),
-                        desc.rect.height().max(24.0),
-                    );
-                    let glyphs = text_ctx.shape_line(
-                        &text,
-                        text_rect,
-                        13.0,
-                        400,
-                        unbound_widgets::AlignX::Left,
-                        unbound_widgets::AlignY::Middle,
-                    );
+                        for seg_layout in &layout.segments {
+                            if let Some(seg) = desc.segments.get(seg_layout.index) {
+                                glyphs.extend(text_ctx.shape_line(
+                                    &seg.label,
+                                    seg_layout.label_rect,
+                                    12.5,
+                                    400,
+                                    unbound_widgets::AlignX::Center,
+                                    unbound_widgets::AlignY::Middle,
+                                ));
+                            }
+                        }
+                    }
+                    if let Some(sr) = layout.search_rect {
+                        if !layout.search_collapsed {
+                            let search_text = bar_state.search_core.text();
+                            let display = if search_text.is_empty() {
+                                desc.search_placeholder.as_str()
+                            } else {
+                                search_text
+                            };
+                            if !display.is_empty() {
+                                let left_x = layout
+                                    .search_icon_rect
+                                    .map_or(sr.origin.x + 8.0, |ir| ir.max().x + 6.0);
+                                let right_x = layout
+                                    .search_clear_rect
+                                    .map_or(sr.max().x - 8.0, |cr| cr.origin.x - 4.0);
+                                let search_text_rect = Rect::new(
+                                    left_x,
+                                    sr.origin.y,
+                                    (right_x - left_x).max(16.0),
+                                    sr.size.y.max(24.0),
+                                );
+                                glyphs.extend(text_ctx.shape_line(
+                                    display,
+                                    search_text_rect,
+                                    12.5,
+                                    400,
+                                    unbound_widgets::AlignX::Left,
+                                    unbound_widgets::AlignY::Middle,
+                                ));
+                            }
+                        }
+                    }
                     let out = unbound_widgets::emit_address_bar(
                         entry.key, &desc, bar_state, state, &glyphs,
                     );
@@ -7373,12 +7457,7 @@ mod tests {
         }
 
         let mut tree = TreeViewState::new(28.0);
-        let roots = vec![TreeRow {
-            id: 1001,
-            depth: 0,
-            has_children: false,
-            expanded: false,
-        }];
+        let roots = vec![TreeRow::new(1001, 0, false)];
         tree.rebuild(&roots, |_| Vec::new());
 
         let dock = DockState::new(DockTree::new(vec![DockTab::new(2001, "Main")]));
