@@ -49,6 +49,10 @@ pub use dialogs::{
     save_file_async, set_mock_dialog_path, FileDialogConfig,
 };
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
+pub use ole_drag::{
+    begin_outbound_file_drag, build_cf_hdrop_payload, OutboundFileDragOutcome,
+    OutboundFileDragRequest,
+};
 pub use pacing::{
     renderer_present_config, FramePacer, PresentSync, PresentWaitPolicy, RenderThrottlePolicy,
     RenderThrottleState, IDLE_FPS_LIMIT, MIN_FPS_LIMIT,
@@ -82,5 +86,3 @@ pub use overlay_host::{
     FileDragEffect, HitTestPassThroughPolicy, MultiWindowHostPool, OcclusionMonitor,
     OverlayHitDisposition, OverlayWindowSpec, ScreenSleepInhibitor, TargetWindowFollower,
 };
-
-pub use ole_drag::{encode_cf_hdrop_payload, start_external_file_drag, DROPFILES_HEADER_BYTES};

@@ -104,7 +104,9 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
     "Wdk_System_SystemServices",
+    "implement",
 ] }
+windows-core = "0.62.2"
 windows-numerics = "0.3"
 
 [workspace.lints.cargo]
