@@ -34,3 +34,15 @@
 
 - 下游资产应用 的文件浏览缩略图与单图查看器可直接零拷贝对接 `AssetHub`；
 - 为 `ADR-0020`（瓦片金字塔渲染）提供统一的 `AssetId` 纹理驻留与回收底座。
+
+## 实现修订（2026-11-21）
+
+交接补丁集落地后，本 ADR 决策中的部分 API 名与最终实现不一致；以代码为准的对照如下。
+
+| 决策稿写法 | 实际 API（`unbound-app`） |
+| :--- | :--- |
+| `AssetHub::upload_rgba8` | `AssetHub::upload_external_rgba8` / `update_external_rgba8` |
+| `AssetHub::release_asset` | `AssetHub::release_external_texture` |
+| `AssetId` 寻址 | `ExternalTextureHandle` 寻址（`ExternalTextureState` 状态机 + `ExternalTextureOp` 每帧队列） |
+
+每帧的上传/释放指令由运行器在 `frame_report` 中排空（`AssetHub::commit_external_texture_slot` 回填槽位）。

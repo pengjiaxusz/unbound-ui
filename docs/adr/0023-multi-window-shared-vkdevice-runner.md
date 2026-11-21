@@ -22,3 +22,15 @@
 ## 后果
 
 - 下游资产应用 现有的 `下游资产应用-workspace::SlotTransfer`（跨窗槽位转移载荷）可直接无缝对接 `CrossWindowDrop` 与 `SpawnWindow`。
+
+## 实现修订（2026-11-21）
+
+交接补丁集落地后，多窗口入口以泛型协调器形式实现，与决策稿的 `MultiWindowApp` trait 不同。
+
+| 决策稿写法 | 实际 API（`unbound-app::multi_window`） |
+| :--- | :--- |
+| `MultiWindowApp` trait | `MultiWindowFactory<A>`（`FnMut(WindowId, &WindowConfig) -> A` 自动实现） |
+| `run_multi_window` | `run_multi_window`，配 `MultiWindowCoordinator<A>` 与每窗 `WindowContext<A>` |
+| `MultiWindowHostPool` | `unbound_platform::overlay_host::MultiWindowHostPool<C>`（宿主侧窗口池） |
+
+跨窗拖拽/撕出仍走 `MultiWindowCommand` 与 `CrossWindowDrop`；遮挡与降频由每窗 `pacer` 独立判定。

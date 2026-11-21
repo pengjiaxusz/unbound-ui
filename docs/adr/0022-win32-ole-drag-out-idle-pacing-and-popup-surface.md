@@ -25,3 +25,15 @@
 ## 后果
 
 - 三项能力全部建立在既有 `overlay_host.rs` 策略结构上，保持平台无关单测与 Win32 真机调用清晰分层。
+
+## 实现修订（2026-11-21）
+
+交接补丁集落地后，本 ADR 中的函数名与宿主模块名与实现不一致；以代码为准的对照如下。
+
+| 决策稿写法 | 实际 API |
+| :--- | :--- |
+| `start_external_file_drag` | `unbound_platform::begin_outbound_file_drag`（请求体 `OutboundFileDragRequest`，回执 `OutboundFileDragOutcome`）+ `build_cf_hdrop_payload` |
+| 复用 `OverlayWindowSpec::utility_floating` 的 Popup 宿主 | `unbound_platform::popup_host::PopupHostRegistry` / `PopupWindowConfig` / `clamp_popup_to_work_area` / `PopupSyncAction` |
+| 越界判定 | `overlay_host::{place_popup_in_work_area, should_use_popup_host}` |
+
+回执经 `AppEvent::ExternalFileDragFinished` 回到应用，浮层关闭经 `AppEvent::NativePopupDismissed` 回流。

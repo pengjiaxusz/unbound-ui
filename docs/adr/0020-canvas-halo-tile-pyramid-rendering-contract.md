@@ -23,3 +23,14 @@
 ## 后果
 
 - 下游资产应用 无限画布可直接把现有解码调度器产出的 520×520 RGBA8 瓦片喂给 `AssetHub::upload_rgba8`，再由 `TilePyramid` 驱动无接缝深缩放绘制。
+
+## 实现修订（2026-11-21）
+
+交接补丁集落地后，瓦片金字塔的公开 API 与决策稿不一致；以代码为准的对照如下。
+
+| 决策稿写法 | 实际 API（`unbound-canvas::tile_pyramid`） |
+| :--- | :--- |
+| `TILE_CONTENT_SIZE` / `TILE_HALO_PX` / `TILE_PHYSICAL_SIZE` | `DEFAULT_TILE_SIZE` / `DEFAULT_TILE_HALO_PX`（物理边长 = 边长 + 2 × Halo） |
+| `TileKey { image_id, lod, tx, ty }` | `TileKey { level, x, y }`，`TileKey::parent` 向上回溯 |
+| `TilePyramidSpec::new(image_id, w, h)` + `lod_dimensions` / `grid_size` | `TilePyramidSpec::new(w, h, tile_size)`（含 `with_default_tile_size`）+ `level_dimensions` / `max_level` |
+| `TileDrawCommand` + `plan_visible_tiles` | `ResolvedTileDraw` + `TilePyramidCache` / `TileSchedulePlan`（可见区优先、预取环与 LRU 淘汰队列同源输出） |
