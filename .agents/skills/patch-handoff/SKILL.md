@@ -2,7 +2,7 @@
 name: patch-handoff
 description: >-
 
-  验收并合入离线补丁交接包（`HANDOFF.md` + `patches/NNNN-*.patch`）：先把包里带的 issue 条目上传成真实 GitHub issue 并拿回编号，再按序 `git am` 落提交、修编译与测试、把修复折回引入缺陷的提交、作者自动归一为仓库拥有者身份（禁止手填）、强推、同步工作树；落地后按映射逐条收口 issue 状态，并删掉解包出来的临时内容。交接文档里的每一条验收声明，在你亲手复现之前都是未验证假设。当收到别的 agent 产出的补丁集/交接 zip，或交付的补丁集并不像文档说的那样能编译时使用。 Triggers: patch-handoff, 交接包, handoff 包, handoff.zip, 补丁集, patches, git am, 打补丁验收, patch series, 补丁包验收, 校验交接文档, 交接 issue 上传, issue 收口.
+  验收并合入离线补丁交接包（`HANDOFF.md` + `patches/NNNN-*.patch`）：先把包里带的 issue 条目上传成真实 GitHub issue 并拿回编号，再按序 `git am` 落提交、修编译与测试、把修复折回引入缺陷的提交、作者自动归一为仓库拥有者身份（禁止手填）、强推、同步工作树；落地后按映射逐条收口 issue 状态，并删掉解包出来的临时内容。交接文档里的每一条验收声明，在你亲手复现之前都是未验证假设。自带的 `issue-pull.ps1` / `issue-push.ps1` 同时负责在 GitHub 与可搬运的 Markdown 包之间搬运 issue——导出积压清单，或批量建单并挂原生 sub-issue 与 `blocked_by`。当收到别的 agent 产出的补丁集/交接 zip、交付的补丁集并不像文档说的那样能编译，或需要导出 issue / 批量建单时使用。 Triggers: patch-handoff, 交接包, handoff 包, handoff.zip, 补丁集, patches, git am, 打补丁验收, patch series, 补丁包验收, 校验交接文档, 交接 issue 上传, issue 收口, issue 导出, 拉取 issue, 推送 issue, 依赖拓扑, sub-issue, blocked_by.
 
 ---
 
@@ -43,7 +43,7 @@ git status -sb; git rev-list --count "$BASE"..HEAD     # 必须干净且为 0
 .agents/skills/patch-handoff/scripts/inspect-handoff-package.sh "$PKG"   # 落库前体检
 
 # 包里带 issue 条目时：先导入成真实 issue，留住 key -> 编号 的映射
-pwsh .agents/skills/issue-sync/scripts/issue-push.ps1 -Repo <owner/name> \
+pwsh .agents/skills/patch-handoff/scripts/issue-push.ps1 -Repo <owner/name> \
     -InputDir <dir>/issues -Mapping ./issue-mapping.json -DryRun   # 去掉 -DryRun 才真正建单
 
 .agents/skills/patch-handoff/scripts/normalize-authors.sh "$BASE" --print-identity  # 确认归一目标身份
@@ -75,7 +75,7 @@ pwsh .agents/skills/issue-sync/scripts/issue-push.ps1 -Repo <owner/name> \
 2. **建单。** 去掉 `-DryRun` 真跑。脚本幂等——重跑只补缺口——并产出 `mapping.json`（本地 `key` → 真实编号）。
 3. **建映射。** 用 mapping 拼出 `补丁 NNNN ↔ #编号` 表（文档原本就写了编号的，逐个 `gh issue view` 核对）。S7 就按这张表走；没有编号的补丁，意味着那张工单还没上 GitHub。
 4. **回填。** push 会把 `number` 与 `url` 写回 issue 文件——留着它，下一份交接包就不必靠猜来对齐。
-5. **项目里没有 `issue-sync` 技能**（它不是基线技能）：按依赖顺序逐条 `gh issue create --title ... --body-file ...`，映射表手工记。慢一点，契约一样。
+5. **脚本随本技能一起下发。** `issue-push.ps1` / `issue-pull.ps1` 就在 `scripts/` 里，与交接工具同目录——不用另装技能，也不依赖项目可能没生成的技能。用法、产物格式与 API 说明见 [references/issue-sync.md](references/issue-sync.md)。
 6. **映射绝不许猜。** 补丁标题与工单标题对不上就直接停手问用户——猜错编号关掉的是别人的工单，比留一张开着更糟。
 
 注意「上传交接包的 issue」与「自己发现的问题」是两件事：你验收中新发现的缺陷**不开新单**，写进报告；用户要留痕的话，就评论在对应工单下面。要建单先问用户。
@@ -138,6 +138,7 @@ pwsh .agents/skills/issue-sync/scripts/issue-push.ps1 -Repo <owner/name> \
 - [references/git-mechanics.md](references/git-mechanics.md) —— 钩子触发面矩阵、`git am` 失败诊断、折叠前提、作者重写
 - [references/field-notes.md](references/field-notes.md) —— 一次真实落地的「报错 → 真实 API」对照
 - [references/issue-import.md](references/issue-import.md) —— 交接包 issue 的导入、映射表、按映射收口、`gh` 的失败模式
+- [references/issue-sync.md](references/issue-sync.md) —— 自带的 issue 脚本：导出积压清单、把包推回 GitHub、`gh` API 说明与产物格式
 <!-- PENGJ_TEMPLATE_END -->
 
 
