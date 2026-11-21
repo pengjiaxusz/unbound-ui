@@ -588,6 +588,13 @@ pub enum AppEvent {
     LocaleChanged { locale: String },
     /// 宿主后台线程或 Tokio 异步任务投递的自定义事件。
     Custom { id: u64, payload: String },
+    /// 原生 Win32 OLE 向外文件拖出操作结束回执。
+    ExternalFileDragFinished(unbound_platform::OutboundFileDragOutcome),
+    /// 越界原生弹出窗已被平台宿主关闭（如失焦、宿主最小化或级联回收）。
+    NativePopupDismissed {
+        /// 被关闭的原生弹出窗标识（对应浮层节点键）。
+        id: u64,
+    },
 }
 
 impl AppEvent {
@@ -753,6 +760,8 @@ pub struct AppContext {
     clipboard: Rc<RefCell<Box<dyn ClipboardProvider>>>,
     /// 运行期请求应用的文本渲染设置变更（若为 Some 则在每帧开始前生效）。
     pub text_settings: Option<unbound_text::TextRenderSettings>,
+    /// 应用在 `reduce` 中排入的待执行窗口控制命令队列。
+    pending_window_commands: Vec<WindowCommand>,
 }
 
 impl core::fmt::Debug for AppContext {
@@ -808,6 +817,7 @@ impl AppContext {
             event_target: None,
             clipboard: Rc::new(RefCell::new(Box::new(MemoryClipboard::new()))),
             text_settings: None,
+            pending_window_commands: Vec::new(),
         }
     }
 
@@ -1302,6 +1312,26 @@ impl AppContext {
 
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+
+    /// 排入一条待窗口运行器执行的窗口控制命令。
+    pub fn push_window_command(&mut self, command: WindowCommand) {
+        self.pending_window_commands.push(command);
+    }
+
+    /// 请求平台启动原生 OLE 向外文件拖出操作。
+    pub fn request_external_file_drag(
+        &mut self,
+        request: unbound_platform::OutboundFileDragRequest,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::BeginExternalFileDrag(request));
+    }
+
+    /// 动态更新窗口运行器的自适应帧节流策略。
+    pub fn set_throttle_policy(&mut self, policy: unbound_platform::RenderThrottlePolicy) {
+        self.pending_window_commands
+            .push(WindowCommand::SetThrottlePolicy(policy));
+    }
 }
 
 /// `view` 构建场景期间可用的不可变上下文。
@@ -3936,7 +3966,7 @@ pub trait Application {
 }
 
 /// 标题栏通过冒泡兜底产出的窗口控制意图，由窗口运行器在输入处理后消费执行。
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WindowCommand {
     /// 启动系统原生窗口拖拽。
     StartDrag,
@@ -3946,6 +3976,22 @@ pub enum WindowCommand {
     ToggleMaximize,
     /// 请求关闭窗口。
     Close,
+    /// 请求平台启动 Win32 OLE 向外文件拖出操作。
+    BeginExternalFileDrag(unbound_platform::OutboundFileDragRequest),
+    /// 同步（创建或重定位）越界无焦点原生弹出窗。
+    SyncNativePopup {
+        /// 弹出窗逻辑标识（对应浮层节点键）。
+        id: u64,
+        /// 目标屏幕物理矩形与宿主关联配置。
+        config: unbound_platform::PopupWindowConfig,
+    },
+    /// 显式关闭指定的越界原生弹出窗。
+    CloseNativePopup {
+        /// 待关闭的弹出窗逻辑标识。
+        id: u64,
+    },
+    /// 更新运行器帧节流与遮挡/最小化暂停策略。
+    SetThrottlePolicy(unbound_platform::RenderThrottlePolicy),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -4147,6 +4193,12 @@ pub struct AppRuntime<A: Application> {
     form_bindings: FormBindingStore,
     registered_selects: Vec<(u64, unbound_widgets::SelectDesc)>,
     active_select_popups: Vec<ActiveSelectPopup>,
+    /// 主窗口客户区左上角在屏幕物理坐标系中的位置，用于换算越界原生弹出窗矩形。
+    window_screen_origin: (i32, i32),
+    /// 归属的平台窗口标识（用于构造 `PopupWindowConfig::owner`）。
+    window_owner_id: unbound_platform::WindowId,
+    /// 当前已同步至原生弹出窗宿主的越界浮层集合：`overlay_key -> config`。
+    active_native_popups: FxHashMap<u64, unbound_platform::PopupWindowConfig>,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -4213,6 +4265,9 @@ impl<A: Application> AppRuntime<A> {
             form_bindings: FormBindingStore::new(),
             registered_selects: Vec::new(),
             active_select_popups: Vec::new(),
+            window_screen_origin: (0, 0),
+            window_owner_id: unbound_platform::WindowId(0),
+            active_native_popups: FxHashMap::default(),
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -5240,6 +5295,7 @@ impl<A: Application> AppRuntime<A> {
         view.render_open_select_popups();
         drop(view);
         self.finalize_declared_overlays(&declared_overlays, &overlay_pending_ranges);
+        self.sync_native_popups();
         let vanished: Vec<(u64, NodeId)> = self
             .node_keys
             .iter()
@@ -5428,9 +5484,58 @@ impl<A: Application> AppRuntime<A> {
         &self.router
     }
 
-    /// 取出并清空本帧经事件冒泡产出的待执行窗口控制命令。
+    /// 取出并清空本帧经事件冒泡或应用显式请求产出的待执行窗口控制命令。
     pub fn drain_window_commands(&mut self) -> Vec<WindowCommand> {
-        core::mem::take(&mut self.window_commands)
+        let mut cmds = core::mem::take(&mut self.window_commands);
+        cmds.append(&mut self.ctx.pending_window_commands);
+        cmds
+    }
+
+    /// 请求平台启动 Win32 OLE 向外文件拖出操作。
+    pub fn request_external_file_drag(
+        &mut self,
+        request: unbound_platform::OutboundFileDragRequest,
+    ) {
+        self.window_commands
+            .push(WindowCommand::BeginExternalFileDrag(request));
+    }
+
+    /// 动态更新窗口运行器的自适应帧节流策略。
+    pub fn set_throttle_policy(&mut self, policy: unbound_platform::RenderThrottlePolicy) {
+        self.window_commands
+            .push(WindowCommand::SetThrottlePolicy(policy));
+    }
+
+    /// 同步宿主窗口客户区在屏幕物理坐标系下的原点与窗口标识，用于换算越界原生弹出窗位置。
+    pub fn set_window_screen_origin(
+        &mut self,
+        origin: (i32, i32),
+        owner_id: unbound_platform::WindowId,
+    ) {
+        self.window_screen_origin = origin;
+        self.window_owner_id = owner_id;
+    }
+
+    /// 将原生 OLE 向外文件拖出操作的结果回灌给应用运行时。
+    pub fn notify_external_file_drag_finished(
+        &mut self,
+        outcome: unbound_platform::OutboundFileDragOutcome,
+    ) -> DirtyFlags {
+        let flags = self.dispatch(AppEvent::ExternalFileDragFinished(outcome));
+        self.mark(flags);
+        flags
+    }
+
+    /// 将平台侧越界原生弹出窗关闭信号回流给应用运行时并同步关闭对应浮层。
+    pub fn notify_native_popup_dismissed(&mut self, id: u64) -> DirtyFlags {
+        self.active_native_popups.remove(&id);
+        let _ = self.overlays.close(id, &mut self.focus);
+        self.sync_focus_context();
+        let flags = self
+            .dispatch(AppEvent::NativePopupDismissed { id })
+            .merge(DirtyFlags::PAINT | DirtyFlags::LAYOUT);
+        self.mark(flags);
+        flags
     }
 
     /// 同步原生窗口激活聚焦状态，并在变化时触发重绘以更新标题栏失焦视觉。
@@ -5527,6 +5632,54 @@ impl<A: Application> AppRuntime<A> {
             }
         }
         self.pending = base_pending;
+    }
+
+    /// 检查当前活跃浮层是否越出主窗口客户区，并生成 `SyncNativePopup` / `CloseNativePopup` 命令。
+    fn sync_native_popups(&mut self) {
+        let vp_w = self.ctx.viewport.x;
+        let vp_h = self.ctx.viewport.y;
+        let scale = self.ctx.effective_scale();
+        let mut desired: FxHashMap<u64, unbound_platform::PopupWindowConfig> = FxHashMap::default();
+        for entry in self.overlays.stack().visible_entries() {
+            let b = entry.bounds;
+            if b.width() <= 0.0 || b.height() <= 0.0 {
+                continue;
+            }
+            let overflows = b.origin.x < 0.0
+                || b.origin.y < 0.0
+                || b.max().x > vp_w
+                || b.max().y > vp_h;
+            if !overflows {
+                continue;
+            }
+            let screen_rect = unbound_platform::ScreenRect::new(
+                self.window_screen_origin.0 + (b.origin.x * scale).round() as i32,
+                self.window_screen_origin.1 + (b.origin.y * scale).round() as i32,
+                (b.width() * scale).round().max(1.0) as u32,
+                (b.height() * scale).round().max(1.0) as u32,
+            );
+            let config = unbound_platform::PopupWindowConfig::new(self.window_owner_id, screen_rect);
+            desired.insert(entry.node, config);
+        }
+
+        for (&id, &config) in &desired {
+            if self.active_native_popups.get(&id) != Some(&config) {
+                self.active_native_popups.insert(id, config);
+                self.window_commands
+                    .push(WindowCommand::SyncNativePopup { id, config });
+            }
+        }
+        let stale: Vec<u64> = self
+            .active_native_popups
+            .keys()
+            .copied()
+            .filter(|id| !desired.contains_key(id))
+            .collect();
+        for id in stale {
+            self.active_native_popups.remove(&id);
+            self.window_commands
+                .push(WindowCommand::CloseNativePopup { id });
+        }
     }
 
     fn layout_pending(&mut self) {
@@ -7395,5 +7548,103 @@ mod tests {
         rt.invalidate();
         let _ = rt.frame(0.0);
         assert!(!rt.overlays().stack().contains(51));
+    }
+
+    #[test]
+    fn outbound_file_drag_command_cancels_pointer_and_delivers_outcome() {
+        use std::path::PathBuf;
+        use unbound_platform::{OutboundFileDragOutcome, OutboundFileDragRequest};
+
+        struct DragApp {
+            outcomes: Vec<OutboundFileDragOutcome>,
+        }
+        impl Application for DragApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), event: &AppEvent, _: &mut AppContext) -> DirtyFlags {
+                if let AppEvent::ExternalFileDragFinished(outcome) = event {
+                    self.outcomes.push(*outcome);
+                    return DirtyFlags::PAINT;
+                }
+                DirtyFlags::NONE
+            }
+            fn view(&self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.button(1, ButtonDesc::new(Rect::new(0.0, 0.0, 120.0, 40.0), "Drag"));
+            }
+        }
+
+        let mut rt = AppRuntime::new(DragApp { outcomes: Vec::new() }, Vec2::new(400.0, 300.0));
+        let _ = rt.frame(0.0);
+        rt.pointer_down(Vec2::new(20.0, 20.0), PointerButton::Left);
+        assert!(rt.router().pointer().pressed().is_some());
+
+        let req = OutboundFileDragRequest::new(vec![PathBuf::from("C:/tmp/sample.txt")]);
+        rt.request_external_file_drag(req.clone());
+        let cmds = rt.drain_window_commands();
+        assert_eq!(cmds, vec![WindowCommand::BeginExternalFileDrag(req)]);
+
+        let _ = rt.cancel_pointer();
+        assert!(rt.router().pointer().pressed().is_none());
+        let _ = rt.notify_external_file_drag_finished(OutboundFileDragOutcome::Cancelled);
+        assert_eq!(rt.app().outcomes, vec![OutboundFileDragOutcome::Cancelled]);
+    }
+
+    #[test]
+    fn native_popup_syncs_only_when_overlay_overflows_client_bounds() {
+        use unbound_platform::{ScreenRect, WindowId};
+        use unbound_widgets::overlay::OverlayEntry;
+
+        struct PopupApp {
+            bounds: Option<Rect>,
+        }
+        impl Application for PopupApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
+                DirtyFlags::NONE
+            }
+            fn view(&self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.button(10, ButtonDesc::new(Rect::new(10.0, 10.0, 80.0, 30.0), "Anchor"));
+                if let Some(bounds) = self.bounds {
+                    v.overlay_layer(20, OverlayEntry::popover(20, 10, bounds), |o| {
+                        o.spacer(21);
+                    });
+                }
+            }
+        }
+
+        let mut rt = AppRuntime::new(
+            PopupApp {
+                bounds: Some(Rect::new(100.0, 100.0, 150.0, 80.0)),
+            },
+            Vec2::new(800.0, 600.0),
+        );
+        rt.set_window_screen_origin((50, 40), WindowId(7));
+
+        let _ = rt.frame(0.0);
+        assert!(rt.drain_window_commands().is_empty());
+
+        rt.application_mut().bounds = Some(Rect::new(720.0, 100.0, 160.0, 90.0));
+        rt.invalidate();
+        let _ = rt.frame(0.0);
+        let cmds = rt.drain_window_commands();
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            WindowCommand::SyncNativePopup { id, config } => {
+                assert_eq!(*id, 20);
+                assert_eq!(config.owner, WindowId(7));
+                assert_eq!(config.screen_rect, ScreenRect::new(770, 140, 160, 90));
+            }
+            other => panic!("expected SyncNativePopup, got {other:?}"),
+        }
+
+        let _ = rt.close_overlay(20);
+        rt.application_mut().bounds = None;
+        rt.invalidate();
+        let _ = rt.frame(0.0);
+        assert_eq!(
+            rt.drain_window_commands(),
+            vec![WindowCommand::CloseNativePopup { id: 20 }]
+        );
     }
 }

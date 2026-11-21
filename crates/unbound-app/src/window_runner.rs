@@ -20,7 +20,10 @@ use unbound_platform::window::{
     ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
     PlatformState, SurfaceAlpha, WindowConfig,
 };
-use unbound_platform::Window;
+use unbound_platform::{
+    begin_outbound_file_drag, OutboundFileDragOutcome, PopupHostRegistry, PopupWindowConfig,
+    Window, WindowId,
+};
 use unbound_theme::{ThemeSet, ThemeState};
 
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
@@ -214,6 +217,14 @@ pub struct WindowedRunner<A: Application> {
     appearance: WindowAppearance,
     /// 已上传至当前渲染器的外部纹理句柄映射：`handle -> (slot, width, height, srgb)`。
     external_gpu_slots: FxHashMap<ExternalTextureHandle, (u32, u32, u32, bool)>,
+    /// 越界原生弹出窗状态注册表。
+    popup_host: PopupHostRegistry,
+    /// 待平台后端在事件循环安全点同步的越界弹出窗请求队列。
+    pending_popup_syncs: Vec<(u64, PopupWindowConfig)>,
+    /// 待平台后端显式关闭的越界弹出窗 ID 队列。
+    pending_popup_closes: Vec<u64>,
+    /// 上一帧是否处于最小化/遮挡暂停态，用于在恢复可见后强制刷新首帧。
+    was_suspended: bool,
 }
 
 impl<A: Application> WindowedRunner<A> {
@@ -263,6 +274,10 @@ impl<A: Application> WindowedRunner<A> {
             hwnd: None,
             appearance: WindowAppearance::new(),
             external_gpu_slots: FxHashMap::default(),
+            popup_host: PopupHostRegistry::new(),
+            pending_popup_syncs: Vec::new(),
+            pending_popup_closes: Vec::new(),
+            was_suspended: false,
         }
     }
 
@@ -373,6 +388,75 @@ impl<A: Application> WindowedRunner<A> {
                 renderer.set_clear_alpha(clear_alpha);
             }
         }
+    }
+
+    /// 判断当前帧是否因窗口最小化或遮挡暂停而应跳过构建与交换链提交。
+    ///
+    /// 从暂停态恢复可见时会自动置位 `frame_dropped` 并失效运行时脏状态，
+    /// 确保恢复后的首帧立即产出完整画面且不丢失期间积累的脏状态。
+    pub fn should_skip_frame_for_throttle(&mut self, state: &PlatformState) -> bool {
+        if state.pacer.is_suspended() {
+            self.was_suspended = true;
+            return true;
+        }
+        if self.was_suspended {
+            self.was_suspended = false;
+            self.frame_dropped = true;
+            self.runtime.invalidate();
+        }
+        false
+    }
+
+    /// 排空应用运行时产生的窗口控制命令并执行平台动作。
+    fn drain_runtime_commands(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+        let mut outbound_drag = None;
+        for cmd in self.runtime.drain_window_commands() {
+            match cmd {
+                crate::WindowCommand::StartDrag => {
+                    let _ = window.drag_window();
+                }
+                crate::WindowCommand::Minimize => {
+                    window.set_minimized(true);
+                }
+                crate::WindowCommand::ToggleMaximize => {
+                    window.set_maximized(!window.is_maximized());
+                }
+                crate::WindowCommand::Close => {
+                    window.request_close();
+                    return Flow::Exit;
+                }
+                crate::WindowCommand::SetThrottlePolicy(policy) => {
+                    state.pacer.set_throttle_policy(policy);
+                }
+                crate::WindowCommand::BeginExternalFileDrag(request) => {
+                    outbound_drag = Some(request);
+                }
+                crate::WindowCommand::SyncNativePopup { id, config } => {
+                    if self.popup_host.sync_popup(id, config).is_some() {
+                        self.pending_popup_syncs.push((id, config));
+                    }
+                }
+                crate::WindowCommand::CloseNativePopup { id } => {
+                    if self.popup_host.close_popup(id).is_some() {
+                        self.pending_popup_closes.push(id);
+                    }
+                }
+            }
+        }
+        if let Some(request) = outbound_drag {
+            let _ = self.runtime.cancel_pointer();
+            let outcome = match begin_outbound_file_drag(&request) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    eprintln!("[unbound-app] Outbound OLE file drag failed: {error:?}");
+                    OutboundFileDragOutcome::Cancelled
+                }
+            };
+            let _ = self.runtime.notify_external_file_drag_finished(outcome);
+            state.pacer.note_activity(Instant::now());
+            window.request_redraw();
+        }
+        Flow::Continue
     }
 
     fn process_external_texture_ops(&mut self, ops: Vec<ExternalTextureOp>, window: &Window) {
@@ -635,6 +719,14 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             .map(|delay| Instant::now() + delay)
     }
 
+    fn take_popup_sync_requests(&mut self) -> Vec<(u64, PopupWindowConfig)> {
+        core::mem::take(&mut self.pending_popup_syncs)
+    }
+
+    fn take_popup_close_requests(&mut self) -> Vec<u64> {
+        core::mem::take(&mut self.pending_popup_closes)
+    }
+
     fn resumed(&mut self, state: &mut PlatformState, window: &Window) {
         let os_scale = self.sync_os_scale(window);
         let size = window.inner_size();
@@ -809,6 +901,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             PlatformEvent::CursorMoved { x, y } => {
                 let effective_scale = self.runtime.context().effective_scale();
                 self.pointer = Vec2::new(x as f32 / effective_scale, y as f32 / effective_scale);
+                state.pacer.note_activity(Instant::now());
                 self.runtime.pointer_move(self.pointer);
             }
             PlatformEvent::MouseInput { state, button } => {
@@ -818,23 +911,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                     } else {
                         self.runtime.pointer_up(self.pointer, btn);
                     }
-                    for cmd in self.runtime.drain_window_commands() {
-                        match cmd {
-                            crate::WindowCommand::StartDrag => {
-                                let _ = window.drag_window();
-                            }
-                            crate::WindowCommand::Minimize => {
-                                window.set_minimized(true);
-                            }
-                            crate::WindowCommand::ToggleMaximize => {
-                                window.set_maximized(!window.is_maximized());
-                            }
-                            crate::WindowCommand::Close => {
-                                window.request_close();
-                                return Flow::Exit;
-                            }
-                        }
-                    }
+                    state.pacer.note_activity(Instant::now());
                 }
             }
             PlatformEvent::MouseWheel { delta_x, delta_y } => {
@@ -864,6 +941,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 let app_k = translate_app_key(&key);
                 let pressed = state == ButtonState::Pressed;
                 let modifiers = translate_modifiers(self.modifiers);
+                state.pacer.note_activity(Instant::now());
                 self.runtime.key(app_k, pressed, modifiers);
             }
             PlatformEvent::ModifiersChanged(modifiers) => {
@@ -935,7 +1013,36 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 self.runtime.file_hover_cancelled();
             }
             PlatformEvent::Focused(focused) => {
+                state.pacer.set_focused(focused);
+                if focused {
+                    state.pacer.note_activity(Instant::now());
+                }
                 self.runtime.set_window_focused(focused);
+            }
+            PlatformEvent::Minimized(minimized) => {
+                state.pacer.set_minimized(minimized);
+                if !minimized {
+                    self.frame_dropped = true;
+                    state.pacer.request_immediate(Instant::now());
+                    window.request_redraw();
+                }
+            }
+            PlatformEvent::Occluded(occluded) => {
+                state.pacer.set_occluded(occluded);
+                if !occluded {
+                    self.frame_dropped = true;
+                    state.pacer.request_immediate(Instant::now());
+                    window.request_redraw();
+                }
+            }
+            PlatformEvent::Moved { x, y } => {
+                self.runtime
+                    .set_window_screen_origin((x, y), WindowId(window.id().0 as u64));
+            }
+            PlatformEvent::PopupDismissed { id } => {
+                let _ = self.popup_host.close_popup(id);
+                let _ = self.runtime.notify_native_popup_dismissed(id);
+                state.pacer.note_activity(Instant::now());
             }
             PlatformEvent::CloseRequested => {
                 self.destroy_vulkan();
@@ -947,7 +1054,11 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             _ => {}
         }
 
-        if self.runtime.dirty() != crate::DirtyFlags::NONE {
+        if self.drain_runtime_commands(state, window) == Flow::Exit {
+            return Flow::Exit;
+        }
+
+        if self.runtime.dirty() != crate::DirtyFlags::NONE && !state.pacer.is_suspended() {
             state.pacer.request_immediate(Instant::now());
             window.request_redraw();
         }
@@ -956,10 +1067,18 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
     }
 
     fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+        if self.should_skip_frame_for_throttle(state) {
+            return Flow::Continue;
+        }
         let size = window.inner_size();
         if size.width == 0 || size.height == 0 {
             return Flow::Continue;
         }
+        let client_screen = window.client_rect_on_screen();
+        self.runtime.set_window_screen_origin(
+            (client_screen.x, client_screen.y),
+            WindowId(window.id().0 as u64),
+        );
         let (width, height) = (size.width.max(1), size.height.max(1));
         let os_scale = self.sync_os_scale(window);
         let now = Instant::now();
@@ -1018,6 +1137,9 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
 
         let _ = self.runtime.tick(dt);
         let report = self.runtime.frame(0.0);
+        if self.drain_runtime_commands(state, window) == Flow::Exit {
+            return Flow::Exit;
+        }
 
         // `reduce` 可能改动 `ctx.theme`，每帧检查 4 KiB LUT 是否需要上传。
         self.sync_theme(window);
@@ -1236,4 +1358,55 @@ pub fn run_windowed_with_hooks<A: Application + 'static>(
         .with_hwnd_callback(on_hwnd)
         .with_frame_callback(on_frame);
     PlatformWindow::new(&config)?.run(runner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AppContext, AppEvent, DirtyFlags, ViewBuilder};
+    use unbound_platform::{Extent, PresentWaitPolicy, RenderThrottlePolicy};
+
+    struct DummyApp;
+    impl Application for DummyApp {
+        type State = ();
+        fn init(&mut self, _: &mut AppContext) {}
+        fn reduce(&mut self, _: &mut (), _: &AppEvent, _: &mut AppContext) -> DirtyFlags {
+            DirtyFlags::NONE
+        }
+        fn view(&self, _: &(), _: &mut ViewBuilder<'_>) {}
+    }
+
+    #[test]
+    fn throttle_suspends_on_minimized_or_occluded_and_recovers_dirty_frame() {
+        let config = WindowConfig::default();
+        let mut runner = WindowedRunner::new(DummyApp, &config);
+        let mut state = PlatformState::new(
+            &config,
+            Extent::new(800, 600),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        state
+            .pacer
+            .set_throttle_policy(RenderThrottlePolicy::default());
+
+        assert!(!runner.should_skip_frame_for_throttle(&state));
+
+        state.pacer.set_minimized(true);
+        assert!(runner.should_skip_frame_for_throttle(&state));
+        assert!(runner.was_suspended);
+
+        state.pacer.set_minimized(false);
+        assert!(!runner.should_skip_frame_for_throttle(&state));
+        assert!(!runner.was_suspended);
+        assert!(runner.frame_dropped);
+        assert_ne!(runner.runtime().dirty(), DirtyFlags::NONE);
+
+        runner.frame_dropped = false;
+        let _ = runner.runtime_mut().frame(0.0);
+        state.pacer.set_occluded(true);
+        assert!(runner.should_skip_frame_for_throttle(&state));
+        state.pacer.set_occluded(false);
+        assert!(!runner.should_skip_frame_for_throttle(&state));
+        assert!(runner.frame_dropped);
+    }
 }

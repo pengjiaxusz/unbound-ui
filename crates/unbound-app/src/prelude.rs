@@ -30,8 +30,10 @@ pub use unbound_math::{Color, Rect, Vec2};
 pub use unbound_platform::{
     open_file, open_file_async, open_files, save_file, save_file_async, set_taskbar_progress,
     set_tray_icon, show_tray_balloon, FileDialogConfig, FrameHitMetrics, PlatformError,
-    SurfaceAlpha, TaskbarProgressState, TrayNotificationSeverity, WindowBackdropMaterial,
-    WindowConfig, WindowPlacement, WindowPosition,
+    FileDragEffect, OutboundFileDragOutcome, OutboundFileDragRequest, PopupWindowConfig,
+    RenderThrottlePolicy, RenderThrottleState, ScreenRect, SurfaceAlpha, TaskbarProgressState,
+    TrayNotificationSeverity, WindowBackdropMaterial, WindowConfig, WindowId, WindowPlacement,
+    WindowPosition,
 };
 pub use unbound_text::{
     global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,
