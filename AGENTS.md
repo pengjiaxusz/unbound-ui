@@ -2,7 +2,7 @@
 
 # unbound-ui 编码规范
 - **构建与测试**：统一走 `just check` / `just test`。
-- **回复前提交**：验证通过后先 commit & push 再回复（约定式提交：`type(scope): 中文摘要`）。
+- **回复前提交**：验证通过后按所在仓库自己的提交流程直接 commit & push 再回复，不得征询是否提交；跨仓改动（submodule、模板下游）逐仓分别提交，先子仓后父仓指针（约定式提交：`type(scope): 中文摘要`）。
 - **代码注释**：注释强制中文，专有名词保留英文。
 - **代码语言守卫**：代码与字符串一律英文（中文仅限注释）；例外标 `lang-ok` / `lang-allow`，自检跑 `just gate-check`。
 <!-- PENGJ_TEMPLATE_END -->
