@@ -89,8 +89,10 @@ for n in $(seq 102 113); do gh issue edit $n -R "$REPO" --remove-label "status:o
 
 ## 八、仓库约定
 
-- **`git am` 不触发 pre-commit 钩子**：真实基线仓库虽有 `core.hooksPath=.githooks` 与 rustfmt 钩子，但 `git am` 走的是 `pre-applypatch`/`post-applypatch` 通道，`pre-commit` 不会执行。所以补丁集落下的 12 条提交天然没被 rustfmt 扫过，收尾必须手动 `cargo fmt`，别指望钩子兜底。
-- **本地验收 ≠ CI 门禁**：`gate.yml` 只跑「提交标题 → 代码语言守卫 → 文案语言 → `cargo fmt --check`」，而 `just check` 是 clippy、不含格式检查。批量新增模块后 `pub use` 的排序与长行会被 rustfmt 重排，漏跑 `fmt-check` 必然在 CI 挂（2026-11-21 即因此连挂两次）。收工前固定序列：`just gate-check && just gate-lang && just fmt-check && just check && just test`。
+- **`git am` 不触发 pre-commit 钩子**：实测的触发面是——`git commit`（含 `--amend`）触发 `pre-commit` + `commit-msg`；`git am` 只触发 `pre-applypatch`/`post-applypatch`；`git cherry-pick` 与 `git rebase` 一个都不触发。所以补丁集落下的提交天然没被 rustfmt 扫过。
+- **补救是 `pre-push`，不是「记得手动补充」**：`pre-push` 覆盖所有造历史方式，`gate` 层已内置（`cargo fmt --check` + 全树语言守卫 + `prepush.commands`）。`pre-applypatch` 不要拿来修补：实测在钩子里改文件 + `git add` 进不了提交（`git am` 提交后会 `read-tree` 冲掉索引，只留一棵脏工作树），它只能拦、不能改。
+- **钩子是每克隆配置**：`core.hooksPath` 存在 `.git/config`，不随 clone 传播。临时克隆里没跑 `sh .githooks/install.sh` 就等于没有任何钩子——2026-11-21 那轮正是在临时克隆里推的，`pre-push` 当时还不存在，两重原因叠加才让 12 条未格式化的提交推到 CI。
+- **本地验收 ≠ CI 门禁**：`gate.yml` 只跑「提交标题 → 代码语言守卫 → 文案语言 → `cargo fmt --check`」，而 `just check` 是 clippy、不含格式检查。批量新增模块后 `pub use` 的排序与长行会被 rustfmt 重排，漏跑 `fmt-check` 必然在 CI 挂（2026-11-21 即因此连挂两次）。收工前固定序列：`just gate-check && just gate-lang && just fmt-check && just check && just test`；推送时 `pre-push` 会再跑一遍前四项里的静态部分（不含 test）。
 - 语言守卫 `mode=english`：中文 `///` 文档注释可用（实测通过），新增公开 API 注释风格与邻居一致即可。
 - `just test` 会先 `cargo build -p app-guest`（`host_roundtrip` 要加载真实 cdylib），跳过在干净环境会硬失败。
 - `CARGO_TARGET_DIR` 由 `pengj-templates-cli worktree target-dir --dir .` 推导到仓库外共享目录；正因如此，另克隆一份仓库会连带数十 GB 构建产物，处置完必须清理。

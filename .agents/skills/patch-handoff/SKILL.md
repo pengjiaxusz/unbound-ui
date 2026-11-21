@@ -27,6 +27,10 @@ just gate-check && just gate-lang && just fmt-check && just check && just test  
 
 **`just check` 只跑 clippy，不含格式检查**。CI 的 `gate.yml` 是「提交标题 → 代码语言守卫 → 文案语言 → `cargo fmt --check`」四步，本地漏跑 `fmt-check` 就会在推送后才挂。收工前务必补 `cargo fmt`。
 
+**推送前已由 `pre-push` 钩子兜底**：`git am` / `cherry-pick` / `rebase` 都不触发 `pre-commit`，只有 `pre-push` 拦得住。它自动跑 `cargo fmt --check` + 全树语言守卫 + `prepush.commands`（本项目 = `just gate-lang` + `just check`）。推送时看到 `[gate] pre-push:` 那几行，才算钩子真的生效了。
+
+**钩子是每个克隆自己的本地配置**：`core.hooksPath` 不随 clone 传播。在临时克隆里干活必须先 `sh .githooks/install.sh`，否则 `pre-push` 等于不存在。
+
 ## 铁律
 
 1. `HANDOFF.md` 与 `handoff/` 目录**永不入库**，只有 `patches/*.patch` 可经 `git am` 进入仓库。
@@ -35,6 +39,7 @@ just gate-check && just gate-lang && just fmt-check && just check && just test  
 4. 作者只能是 `pengjiaxusz <pengjiaxu.sz@gmail.com>`，包内自带的 `dev@unbound-ui.local` 必须重写。
 5. 删除任何路径前先输出清单并获得确认，只删自己创建的，禁止通配符。
 6. 测试失败先反馈用户，不擅自改断言。
+7. 临时克隆先 `sh .githooks/install.sh` 再干活；`git push` 必须能看到 `[gate] pre-push:` 输出，否则钩子没生效。
 
 ## 工作流
 
@@ -65,6 +70,7 @@ S3 的折叠命令（可直接跑）：
 | `just fmt-check` | 无 `Diff in` 输出（有则 `cargo fmt` 后重跑） |
 | `just check` | `Finished` 且无 warning / error |
 | `just test` | 全部 `test result: ok`，`failed=0`（2026-11-21 基线 2285 passed） |
+| `pengj-templates-cli gate hook pre-push` | 先见 `[gate] pre-push: cargo fmt --check`，最后 `[gate] pre-push passed` |
 
 再抽查新增控件的测试是否真被执行：`grep workbench_extension_widgets_keep_stable_shape <log>`。
 
