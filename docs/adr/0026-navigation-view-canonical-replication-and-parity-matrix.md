@@ -1,4 +1,4 @@
-# ADR 0024：NavigationView 1:1 规范复刻、废弃旧侧边栏与多形态 Parity 矩阵
+# ADR 0026：NavigationView 1:1 规范复刻、废弃旧侧边栏与多形态 Parity 矩阵
 
 - 状态：已采纳
 - 日期：2026-11-22
