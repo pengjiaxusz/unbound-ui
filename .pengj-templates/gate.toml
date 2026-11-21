@@ -20,6 +20,10 @@
 #   commit.scopes            scope 三态：整行或整段删掉 = 拒绝所有 scope；["*"] = 放行
 #                            任意 scope；列出条目 = 只放行这些（`a/b` 这类分段 scope
 #                            要求每一段都命中）。
+#   prepush.commands         pre-push 钩子在「内置的 `cargo fmt --check` + 语言守卫」之后
+#                            按序执行的命令。每条是「程序 + 参数」，按空白切分（不支持引号
+#                            与管道）——复杂编排请包进 just 配方，这里只留入口名。
+#                            留空或缺省表示不加项目自定义检查。
 #
 # 改这一块没有意义——下次 update 会覆盖。要改就改下面的值。
 # 块以下只有键值、没有注释：这是刻意的——说明放在块外就成了永远不更新的冻结文案，
@@ -34,3 +38,4 @@ commit.subject_min_han = 2
 commit.max_header = 100
 commit.types = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"]
 commit.scopes = ["*"]
+prepush.commands = ["just gate-lang", "just check"]

@@ -1,5 +1,5 @@
 #!/bin/sh
-# gate install: 在当前克隆上激活提交钩子.
+# gate install: 在当前克隆上激活门禁钩子.
 #
 # 沿用 `core.hooksPath` 存在 `.git/config` 里、不会随克隆传播，所以每个克隆跑一次即可。脚本只需要 git 与一个 POSIX shell——它不需要 CLI，因为「激活钩子」与「跑钩子」是两件事。
 #
@@ -22,7 +22,7 @@ fi
 git config core.hooksPath .githooks
 
 # Unix 上没有可执行位的钩子会被 git 静默跳过。模式位以索引记录为准，`update-index` 负责把它写进去。
-for hook in commit-msg pre-commit; do
+for hook in commit-msg pre-commit pre-push; do
     [ -f ".githooks/$hook" ] || continue
     if git ls-files --error-unmatch ".githooks/$hook" >/dev/null 2>&1; then
         git update-index --chmod=+x ".githooks/$hook"
