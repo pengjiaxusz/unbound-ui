@@ -33,7 +33,9 @@ use crate::pipeline_view::{emit_pipeline_view, PipelineViewDesc};
 use crate::popconfirm::{emit_popconfirm, PopconfirmDesc};
 use crate::progress::{emit_progress, ProgressDesc, ProgressState};
 use crate::query_builder::{emit_query_builder, QueryBuilderDesc};
-use crate::schema_form::{emit_schema_form, SchemaFormDesc, SchemaFormEvent, SchemaFormState, LABEL_FONT_SIZE};
+use crate::schema_form::{
+    emit_schema_form, SchemaFormDesc, SchemaFormEvent, SchemaFormState, LABEL_FONT_SIZE,
+};
 use crate::select::{emit_select_with_glyphs, SelectDesc, SelectState};
 use crate::shortcut_bar::{emit_shortcut_bar, ShortcutBarDesc};
 use crate::slider::{emit_slider, value_from_pointer, Orientation, SliderDesc, SliderTokens};
@@ -2794,9 +2796,10 @@ impl UiWidget for SchemaFormDesc {
                 AlignY::Middle,
             ));
 
-            if let (Some(action_r), Some(action_label)) =
-                (row.trailing_action_rect, field.trailing_action_label.as_ref())
-            {
+            if let (Some(action_r), Some(action_label)) = (
+                row.trailing_action_rect,
+                field.trailing_action_label.as_ref(),
+            ) {
                 let action_text_rect = Rect::new(
                     action_r.origin.x + 4.0,
                     action_r.origin.y,

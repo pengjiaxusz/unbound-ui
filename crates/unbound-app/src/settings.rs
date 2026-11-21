@@ -265,12 +265,7 @@ impl<'a> ViewBuilder<'a> {
     ///
     /// 在宽视口（如 1440p / 4K / 超宽屏）下将表单与设置卡片列宽钳制在 `1000px`，
     /// 避免标题与右侧行内控件被无限拉扯；在窄视口下 `width: 100%` 自动收缩至可用宽度。
-    pub fn readable_column(
-        &mut self,
-        key: u64,
-        gap: f32,
-        build: impl FnOnce(&mut Self),
-    ) -> NodeId {
+    pub fn readable_column(&mut self, key: u64, gap: f32, build: impl FnOnce(&mut Self)) -> NodeId {
         self.readable_column_with_max_width(
             key,
             unbound_theme::typography::geometry::READABLE_FORM_MAX_WIDTH,

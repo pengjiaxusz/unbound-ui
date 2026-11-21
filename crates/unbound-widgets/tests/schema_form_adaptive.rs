@@ -1,4 +1,5 @@
 //! `SchemaForm` 自适应 CJK 标签列、超长标签省略与行尾动作槽集成测试。
+//! lang-allow: CJK 标签宽度自适应与省略行为必须以中文字面量作为测量输入
 
 use unbound_input::pick;
 use unbound_math::Rect;
@@ -97,7 +98,8 @@ fn cjk_long_labels_never_overlap_controls_across_800_1280_1920() {
 
 #[test]
 fn overly_long_cjk_label_automatically_elides_and_respects_builder_overrides() {
-    let super_long_label = "超长中文配置项标签用于验证超出自适应上限时按省略规则自动截断绝不与右侧输入控件发生重叠";
+    let super_long_label =
+        "超长中文配置项标签用于验证超出自适应上限时按省略规则自动截断绝不与右侧输入控件发生重叠";
     let fields = vec![SchemaFieldSpec::new(
         "long_key",
         super_long_label,
@@ -165,13 +167,9 @@ fn trailing_action_slot_shrinks_control_without_overlap_and_is_clickable() {
     );
     assert!((action_r0.size.x - DEFAULT_TRAILING_ACTION_WIDTH).abs() < 1e-3);
     assert!(!rows[0].control_rect.intersects(&action_r0));
-    assert!(
-        action_r0.origin.x - rows[0].control_rect.max().x >= TRAILING_ACTION_GAP - 1e-3
-    );
+    assert!(action_r0.origin.x - rows[0].control_rect.max().x >= TRAILING_ACTION_GAP - 1e-3);
     assert!(!rows[1].control_rect.intersects(&action_r1));
-    assert!(
-        action_r1.origin.x - rows[1].control_rect.max().x >= TRAILING_ACTION_GAP - 1e-3
-    );
+    assert!(action_r1.origin.x - rows[1].control_rect.max().x >= TRAILING_ACTION_GAP - 1e-3);
 
     // 几何 hit_test 精确返回 TrailingAction(idx) 与 ControlClicked(idx)。
     assert_eq!(
@@ -193,12 +191,12 @@ fn trailing_action_slot_shrinks_control_without_overlap_and_is_clickable() {
     let out = emit_schema_form(base_node, &desc, &state, ControlState::default(), &[]);
     scene.push(base_node, out.clone());
 
-    let picked0 = pick(&scene.regions, action_r0.center())
-        .expect("trailing action 0 must be pickable");
+    let picked0 =
+        pick(&scene.regions, action_r0.center()).expect("trailing action 0 must be pickable");
     assert_eq!(picked0.node, schema_form_trailing_action_node(base_node, 0));
 
-    let picked1 = pick(&scene.regions, action_r1.center())
-        .expect("trailing action 1 must be pickable");
+    let picked1 =
+        pick(&scene.regions, action_r1.center()).expect("trailing action 1 must be pickable");
     assert_eq!(picked1.node, schema_form_trailing_action_node(base_node, 1));
 
     // 24 态恒定图元数契约验证（含行尾动作槽）。

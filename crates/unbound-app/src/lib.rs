@@ -100,10 +100,10 @@ pub use settings::{
     overflow_menu_item_key, overflow_menu_popup_key, select_option_key, select_popup_key,
     SettingsCard,
 };
-pub use unbound_theme::typography::geometry::READABLE_FORM_MAX_WIDTH;
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
 pub use unbound_platform::WindowBackdropMaterial;
+pub use unbound_theme::typography::geometry::READABLE_FORM_MAX_WIDTH;
 pub use unbound_widgets::ergonomics::UiWidget;
 pub use window_runner::{
     run_windowed, run_windowed_with_frame_callback, run_windowed_with_hooks,
@@ -1446,10 +1446,7 @@ pub enum WidgetSpec {
         hit_scrim: bool,
     },
     /// 可交互容器的纯命中区域注册（不发射绘制图元，直接绑定容器逻辑键）。
-    InteractiveHit {
-        z: u16,
-        cursor: CursorKind,
-    },
+    InteractiveHit { z: u16, cursor: CursorKind },
     /// 开启滚动裁剪与平移作用域。
     ScrollScopeBegin {
         scroll_key: u64,

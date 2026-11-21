@@ -236,16 +236,26 @@ impl Application for ReadableColumnTestApp {
     fn view(&mut self, _state: &Self::State, view: &mut ViewBuilder<'_>) {
         view.readable_column(3000, 12.0, |col| {
             col.settings_card(3010, |card| {
-                card.settings_row(3011, "默认限宽行", "宽视口下钳制在 1000px", |right, _| {
-                    right.switch(3012, SwitchDesc::labeled("启用", true));
-                });
+                card.settings_row(
+                    3011,
+                    "默认限宽行",
+                    "宽视口下钳制在 1000px",
+                    |right, _| {
+                        right.switch(3012, SwitchDesc::labeled("启用", true));
+                    },
+                );
             });
         });
         view.readable_column_with_max_width(3020, 640.0, 8.0, |col| {
             col.settings_card(3021, |card| {
-                card.settings_row(3022, "自定义限宽行", "最大宽度 640px", |right, _| {
-                    right.switch(3023, SwitchDesc::labeled("启用", false));
-                });
+                card.settings_row(
+                    3022,
+                    "自定义限宽行",
+                    "最大宽度 640px",
+                    |right, _| {
+                        right.switch(3023, SwitchDesc::labeled("启用", false));
+                    },
+                );
             });
         });
     }
@@ -267,18 +277,14 @@ fn test_readable_column_clamps_wide_viewport_and_shrinks_narrow_viewport() {
         "1920px 视口下 readable_column 宽度应钳制在 1000px，实际为 {}",
         wide_col.width()
     );
-    let wide_row = wide_rt
-        .widget_rect(3011)
-        .expect("内部设置行必须完成布局");
+    let wide_row = wide_rt.widget_rect(3011).expect("内部设置行必须完成布局");
     assert!(
         wide_row.width() <= READABLE_FORM_MAX_WIDTH + 0.5,
         "内部设置行宽度不应超过 1000px，实际为 {}",
         wide_row.width()
     );
 
-    let custom_wide = wide_rt
-        .widget_rect(3020)
-        .expect("自定义限宽列必须完成布局");
+    let custom_wide = wide_rt.widget_rect(3020).expect("自定义限宽列必须完成布局");
     assert!(
         (custom_wide.width() - 640.0).abs() < 1.0,
         "1920px 视口下自定义限宽列宽度应为 640px，实际为 {}",
@@ -368,13 +374,18 @@ impl Application for ExpanderTestApp {
                 "展开查看可折叠子项",
                 state.expanded,
                 |card| {
-                    card.settings_row(4010, "子设置项一", "仅在展开时渲染", |right, _| {
-                        right.switch_bound::<ExpanderTestState>(
-                            4012,
-                            SwitchDesc::labeled("开关", state.enable_opt),
-                            |st, on| st.enable_opt = on,
-                        );
-                    });
+                    card.settings_row(
+                        4010,
+                        "子设置项一",
+                        "仅在展开时渲染",
+                        |right, _| {
+                            right.switch_bound::<ExpanderTestState>(
+                                4012,
+                                SwitchDesc::labeled("开关", state.enable_opt),
+                                |st, on| st.enable_opt = on,
+                            );
+                        },
+                    );
                     card.settings_row_with_icon(
                         4020,
                         ShellIcon::Shield,
@@ -394,9 +405,14 @@ impl Application for ExpanderTestApp {
                 "",
                 state.plain_expanded,
                 |card| {
-                    card.settings_row(4110, "无图标子项", "验证无图标分支", |right, _| {
-                        right.badge(4112, BadgeDesc::new(Rect::ZERO, "OK"));
-                    });
+                    card.settings_row(
+                        4110,
+                        "无图标子项",
+                        "验证无图标分支",
+                        |right, _| {
+                            right.badge(4112, BadgeDesc::new(Rect::ZERO, "OK"));
+                        },
+                    );
                 },
             );
         });
@@ -567,9 +583,14 @@ impl Application for OverflowMenuTestApp {
 
     fn view(&mut self, state: &Self::State, view: &mut ViewBuilder<'_>) {
         view.settings_card(5001, |card| {
-            card.settings_row(5002, "列表条目", "测试行尾溢出菜单", |right, _| {
-                right.overflow_menu_trigger(OVERFLOW_TRIGGER_KEY, "更多操作");
-            });
+            card.settings_row(
+                5002,
+                "列表条目",
+                "测试行尾溢出菜单",
+                |right, _| {
+                    right.overflow_menu_trigger(OVERFLOW_TRIGGER_KEY, "更多操作");
+                },
+            );
         });
 
         if state.open {
@@ -582,12 +603,8 @@ impl Application for OverflowMenuTestApp {
                 MenuItem::action("不可用操作").disabled(),
                 MenuItem::action("删除").with_shortcut("Del"),
             ];
-            let _ = view.overflow_menu_popup(
-                OVERFLOW_TRIGGER_KEY,
-                anchor,
-                view.ctx.viewport,
-                &items,
-            );
+            let _ =
+                view.overflow_menu_popup(OVERFLOW_TRIGGER_KEY, anchor, view.ctx.viewport, &items);
         }
     }
 }
