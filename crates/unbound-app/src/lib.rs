@@ -96,7 +96,11 @@ pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
 pub use scene_upload::{collect_backdrops, scene_upload};
 pub use scheduler::{AppWaker, TimerQueue, TimerRequest, TimerToken};
-pub use settings::{select_option_key, select_popup_key, SettingsCard};
+pub use settings::{
+    overflow_menu_item_key, overflow_menu_popup_key, select_option_key, select_popup_key,
+    SettingsCard,
+};
+pub use unbound_theme::typography::geometry::READABLE_FORM_MAX_WIDTH;
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
 pub use unbound_platform::WindowBackdropMaterial;
@@ -1441,6 +1445,11 @@ pub enum WidgetSpec {
         z: u16,
         hit_scrim: bool,
     },
+    /// 可交互容器的纯命中区域注册（不发射绘制图元，直接绑定容器逻辑键）。
+    InteractiveHit {
+        z: u16,
+        cursor: CursorKind,
+    },
     /// 开启滚动裁剪与平移作用域。
     ScrollScopeBegin {
         scroll_key: u64,
@@ -2119,12 +2128,26 @@ impl<'a> ViewBuilder<'a> {
         let has_surface = desc.fill != 0
             || (desc.border_width > 0.0 && desc.border_color != 0)
             || desc.shadow_blur > 0.0;
+        let is_interactive = desc.has(NodeFlags::INTERACTIVE);
         let next_z_base = if desc.z_index >= PORTAL_Z_BASE {
             (desc.z_index as u16).max(self.z_base)
         } else {
             self.z_base
         };
         let (effective_key, node) = self.reconcile_node(key, desc, core::panic::Location::caller());
+        if is_interactive && effective_key != 0 {
+            let depth_z = (80u16.saturating_add(self.depth.saturating_mul(6))).min(480);
+            let hit_z = next_z_base.saturating_add(depth_z);
+            self.pending.push(PendingWidget {
+                key: effective_key,
+                node,
+                spec: WidgetSpec::InteractiveHit {
+                    z: hit_z,
+                    cursor: CursorKind::Pointer,
+                },
+                z_base: next_z_base,
+            });
+        }
         if has_surface {
             let depth_z = (80u16.saturating_add(self.depth.saturating_mul(6))).min(480);
             let surface_z = next_z_base.saturating_add(depth_z);
@@ -2219,6 +2242,7 @@ impl<'a> ViewBuilder<'a> {
             | WidgetSpec::Text { .. }
             | WidgetSpec::TextInline { .. }
             | WidgetSpec::BoxSurface { .. }
+            | WidgetSpec::InteractiveHit { .. }
             | WidgetSpec::ScrollScopeBegin { .. }
             | WidgetSpec::ScrollScopeEnd => None,
         };
@@ -5801,6 +5825,7 @@ impl<A: Application> AppRuntime<A> {
                     WidgetSpec::Dock { .. }
                     | WidgetSpec::Text { .. }
                     | WidgetSpec::BoxSurface { .. }
+                    | WidgetSpec::InteractiveHit { .. }
                     | WidgetSpec::ScrollScopeBegin { .. }
                     | WidgetSpec::ScrollScopeEnd => None,
                 };
@@ -6398,6 +6423,21 @@ impl<A: Application> AppRuntime<A> {
                             entry.key,
                             WidgetOutput {
                                 primitives,
+                                hit,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
+                WidgetSpec::InteractiveHit { z, cursor } => {
+                    if rect.width() > 0.0 && rect.height() > 0.0 {
+                        let hit = Some(
+                            unbound_input::HitRegion::ui(entry.key, u32::from(*z), rect)
+                                .with_cursor(*cursor),
+                        );
+                        self.collector.push(
+                            entry.key,
+                            WidgetOutput {
                                 hit,
                                 ..Default::default()
                             },

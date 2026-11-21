@@ -86,6 +86,11 @@ pub mod geometry {
     pub const PAGE_PADDING: f32 = 32.0;
     /// 内容区与页面外边距之间的间距。
     pub const PAGE_GAP: f32 = 24.0;
+    /// 可读表单与设置页主内容列的最大宽度（Win11 设置页实测 1000px 限宽）。
+    ///
+    /// 在宽视口（如 1440p / 4K / 超宽屏）下将单列卡片与设置行钳制在该宽度内，
+    /// 避免左侧标签与右侧控件被过度拉扯；在窄视口下配合 `width: 100%` 自动收缩。
+    pub const READABLE_FORM_MAX_WIDTH: f32 = 1000.0;
 
     /// 开关轨道宽度（Win11 ToggleSwitch 为 40 × 20）。
     pub const TOGGLE_TRACK_W: f32 = 40.0;
