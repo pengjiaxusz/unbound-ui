@@ -101,7 +101,7 @@ git status -sb; git rev-list --count "$BASE"..HEAD     # 必须干净且为 0
 | :--- | :--- |
 | 基线 ref | `origin/main`（子模块自己的 `main`，不是父仓的 `dev`） |
 | 作者身份 | `pengjiaxusz <pengjiaxu.sz@gmail.com>`；包内自带的 `dev@unbound-ui.local` 必须重写 |
-| issue 仓库 | `pengjiaxusz/unbound-ui`，状态标签 `status:open` → `status:closed` |
+| issue 仓库 | `pengjiaxusz/unbound-ui`，开关状态用 `gh issue close` / `reopen`，不设 `status:*` 标签 |
 | 语言守卫 | `mode=english`：中文 `///` 文档注释可用，新增公开 API 注释风格与邻居一致 |
 
 ### 门禁链与通过标志

@@ -91,8 +91,10 @@ gh issue close 102 -R "$REPO" -c "Implemented ScaleOsd state machine, OverlaySta
 gh issue comment 114 -R "$REPO" -b "All 12 tickets (#102-#113) have been implemented as individual commits (<base>..<head>), verified locally with \`just check\` and \`just test\` (<N> passed / 0 failed), and pushed to \`main\`.
 
 Note: the offline patch series did not compile as delivered (<K> hard errors). The fixes were folded back into the commits that introduced each defect, so each commit still maps 1:1 to its ticket."
-for n in $(seq 102 113); do gh issue edit $n -R "$REPO" --remove-label "status:open" --add-label "status:closed"; done
+for n in $(seq 102 113); do gh issue close $n -R "$REPO"; done
 ```
+
+开关状态一律用 `gh issue close` / `gh issue reopen` 表达，不要新增 `status:*` 标签——GitHub 自带的 Open/Closed 状态已经够了，重复打标只会让列表眼花。
 
 必须如实披露原本编译不过及修了哪些点，不要只写「已实现并验收通过」。
 
