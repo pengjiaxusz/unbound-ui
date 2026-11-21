@@ -2,7 +2,7 @@
 name: patch-handoff
 description: >-
 
-  验收并合入离线补丁交接包（`HANDOFF.md` + `patches/NNNN-*.patch`）：按序 `git am` 落提交、修编译与测试、把修复折回引入缺陷的提交、作者归一、强推、同步工作树并关闭对应 issue。交接文档里的每一条验收声明，在你亲手复现之前都是未验证假设。当收到别的 agent 产出的补丁集/交接 zip，或交付的补丁集并不像文档说的那样能编译时使用。 Triggers: patch-handoff, 交接包, handoff 包, handoff.zip, 补丁集, patches, git am, 打补丁验收, patch series, 补丁包验收, 校验交接文档.
+  验收并合入离线补丁交接包（`HANDOFF.md` + `patches/NNNN-*.patch`）：按序 `git am` 落提交、修编译与测试、把修复折回引入缺陷的提交、作者自动归一为仓库拥有者身份（禁止手填）、强推、同步工作树并关闭对应 issue。交接文档里的每一条验收声明，在你亲手复现之前都是未验证假设。当收到别的 agent 产出的补丁集/交接 zip，或交付的补丁集并不像文档说的那样能编译时使用。 Triggers: patch-handoff, 交接包, handoff 包, handoff.zip, 补丁集, patches, git am, 打补丁验收, patch series, 补丁包验收, 校验交接文档.
 
 ---
 
@@ -23,7 +23,7 @@ description: >-
 | 验收命令链 | `justfile` / `Makefile` / `package.json` / `.github/workflows/*.yml` | 你自选的命令不等于 CI 门禁 |
 | 格式检查位置 | CI 是否有独立的 `fmt --check` / `lint` 步骤 | linter 过了不代表格式过 |
 | 钩子安装 | `git config core.hooksPath`；新克隆要跑仓库的安装脚本 | 钩子是每克隆自己的配置，不随 clone 传播 |
-| 作者身份 | `git config user.email` 或仓库明文约定 | 包里的作者多为合成占位身份 |
+| 作者身份 | `normalize-authors.sh --print-identity` —— owner 取自 `origin` URL + `git config user.email`；**禁止手填或从包里读** | 包里的作者多为合成占位身份，手填名字就是乱填的源头 |
 | issue 仓库 | 文档引用的编号 + 仓库名 + 状态标签 | 关单是落地的一部分，不是收尾补充 |
 
 ## 快速开始
@@ -34,9 +34,12 @@ BASE="origin/$(git rev-parse --abbrev-ref origin/HEAD | sed 's|^origin/||')"
 git status -sb; git rev-list --count "$BASE"..HEAD     # 必须干净且为 0
 
 .agents/skills/patch-handoff/scripts/inspect-handoff-package.sh "$PKG"   # 落库前体检
+.agents/skills/patch-handoff/scripts/normalize-authors.sh "$BASE" --print-identity  # 确认归一目标身份
 .agents/skills/patch-handoff/scripts/replay-patch-series.sh <dir>/patches <fix-spec-dir> "$BASE"
 
 # 然后整条门禁链全跑，不跳步
+# 折回修复后归一作者，再推送：
+.agents/skills/patch-handoff/scripts/normalize-authors.sh "$BASE"   # 不传名字/邮箱：自动从仓库解析
 ```
 
 ## 工作流
@@ -47,7 +50,7 @@ git status -sb; git rev-list --count "$BASE"..HEAD     # 必须干净且为 0
 | S2 | 落提交 | 按序 `git am patches/*.patch`；失败先判基线，再 `--show-current-patch` |
 | S3 | 修编译 | 自上而下跑门禁链；语法错会掩盖类型错，每修完一类必须重跑 |
 | S4 | 折回 | 把修复折进引入缺陷的那条提交，保持一单一提交 |
-| S5 | 作者与推送 | 归一作者（保留 author date），再 `push --force-with-lease` |
+| S5 | 作者与推送 | **不传名字/邮箱**运行 `normalize-authors.sh "$BASE"`，身份自动从仓库解析（保留 author date），再 `push --force-with-lease` |
 | S6 | 同步 | 强推后 `fetch --prune --force` 再 `reset --hard`，**不要** `git pull` |
 | S7 | issue | 逐条关闭已实现工单并写单条摘要评论，再翻状态标签 |
 | S8 | 清理 | 只删自己创建的：解包目录、日志、临时克隆 |
@@ -57,7 +60,7 @@ git status -sb; git rev-list --count "$BASE"..HEAD     # 必须干净且为 0
 1. `HANDOFF.md` 与交接目录**永不入库**，只有 `patches/*.patch` 可经 `git am` 进入仓库。
 2. 文档里的基线 SHA 不是证据：真实基线是「补丁能干净应用且 API 全对得上」的那个提交，差异要写进报告。
 3. 一张子工单对应一个提交；修复折回引入缺陷的提交，不追加 `fix(...)` 提交破坏 1:1 映射。
-4. 作者必须是仓库的真实身份，包内自带的合成身份必须重写。
+4. 作者必须是仓库拥有者的身份：**不传名字/邮箱**运行 `normalize-authors.sh`，由脚本从 `origin` 解析 owner、从 `git config user.email` 取邮箱；绝不手填，也不从交接包里抄。
 5. 删除任何路径前先输出清单并获得确认，只删自己创建的，禁止通配符。
 6. 测试失败先反馈用户，不擅自改断言把失败糊过去。
 7. `git am` / `cherry-pick` / `rebase` 都不触发 `pre-commit`，只有 `pre-push` 拦得住；临时克隆里先装钩子再干活。
@@ -80,7 +83,7 @@ git status -sb; git rev-list --count "$BASE"..HEAD     # 必须干净且为 0
 | :--- | :--- |
 | `scripts/inspect-handoff-package.sh` | 落库前体检：补丁清单、作者、涉及文件、声称基线与实际基线 |
 | `scripts/replay-patch-series.sh` | 按序 `git am`，并把修复文件折回对应提交 |
-| `scripts/normalize-authors.sh` | 在提交区间内重写作者，保留 author date |
+| `scripts/normalize-authors.sh` | 在提交区间内重写作者为自动解析的仓库拥有者身份（保留 author date）；`--print-identity` 预览目标身份 |
 | `scripts/sync-after-force-push.sh` | 强推后安全同步工作树，脏树或有未推送提交时拒绝执行 |
 
 ## 参考

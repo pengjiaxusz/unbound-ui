@@ -48,15 +48,18 @@ git log --oneline <base>..HEAD -- <path> | wc -l    # 必须为 1
 ## 四、作者归一
 
 ```bash
-FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --env-filter \
-  'export GIT_AUTHOR_NAME="<name>"; export GIT_AUTHOR_EMAIL="<email>"' \
-  <base>..HEAD
-git log --format="%an <%ae>" <base>..HEAD | sort -u     # 必须只剩一行
+# 目标身份由仓库自动解析：owner 取自 `origin` URL，邮箱取自 `git config user.email`。
+# 绝不手填 name/email。
+scripts/normalize-authors.sh <base> --print-identity   # 预览目标身份
+scripts/normalize-authors.sh <base>                    # 重写作者、保留 author date
+git log --format="%an <%ae>" <base>..HEAD | sort -u    # 必须恰好是目标那一行
 ```
 
 - `--env-filter` 改作者、保留 author date；`--reset-author` 连时间一起重置，会毁掉交接文档描述的时间线。
+- 脚本校验区间最终**恰好**是解析出的目标身份——只剩一个作者还不够，身份错了照样失败。
 - committer 身份一般不动，除非项目另有约定；署名看的是 author 行。
 - `filter-branch` 会重写区间内每一条提交，所以区间要小，且在推送之前做，绝不要推完再改。
+- 只有在刻意覆盖时（如没有 `origin` remote）才位置传 `<name> <email>`，并在报告里写明理由。
 
 ## 五、强推之后
 

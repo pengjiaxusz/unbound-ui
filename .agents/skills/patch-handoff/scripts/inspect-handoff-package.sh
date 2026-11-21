@@ -37,7 +37,7 @@ if [ -z "$BASE_REF" ]; then
 fi
 
 TMP_DIR=""
-cleanup() { [ -n "$TMP_DIR" ] && rm -rf "$TMP_DIR"; }
+cleanup() { [ -n "$TMP_DIR" ] && rm -rf "$TMP_DIR"; return 0; }
 trap cleanup EXIT
 
 if [ -d "$PKG" ]; then
@@ -131,6 +131,20 @@ echo "== Authors this package would introduce ====================="
 sort -u "$AUTHORS_FILE" | sed 's/^/  /'
 echo
 
+echo "== Identity this repo will normalize authors to =============="
+# Author identity is resolved from THIS repo, never from the package or by hand.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGET_IDENTITY="$("$SCRIPT_DIR/normalize-authors.sh" "$BASE_REF" --print-identity 2>/dev/null || true)"
+if [ -n "$TARGET_IDENTITY" ]; then
+  echo "  $TARGET_IDENTITY"
+  echo "  (owner from origin URL + git config user.email; every patch above is"
+  echo "   rewritten to this identity before push — hand-filled names are not used)"
+else
+  echo "  WARN: cannot resolve the owner identity; check 'git remote get-url origin'"
+  echo "        and 'git config user.email', or pass <name> <email> explicitly."
+fi
+echo
+
 echo "== Files the series touches that do not exist at base ======="
 sort -u "$TOUCHED_FILE" > "$TOUCHED_FILE.sorted"
 new_count=0
@@ -150,3 +164,4 @@ echo "== Next ====================================================="
 echo "1. Confirm the base ref above is the commit the series was cut from."
 echo "2. Replay with: scripts/replay-patch-series.sh \"$PATCH_DIR\" <fix-spec-dir> \"$BASE_REF\""
 echo "3. Run the project gate chain top-down; expect the series NOT to compile as delivered."
+echo "4. After repairs: normalize-authors.sh \"$BASE_REF\" (no args -> resolved owner identity), then push."
