@@ -441,6 +441,15 @@ impl<A: Application> WindowedRunner<A> {
                         self.pending_popup_closes.push(id);
                     }
                 }
+                crate::WindowCommand::OpenWindow(_) => {
+                    eprintln!("[unbound-app] WindowCommand::OpenWindow requires MultiWindowCoordinator");
+                }
+                crate::WindowCommand::CloseWindow(target) => {
+                    if target == WindowId(window.id().0 as u64) {
+                        window.request_close();
+                        return Flow::Exit;
+                    }
+                }
             }
         }
         if let Some(request) = outbound_drag {

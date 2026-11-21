@@ -90,8 +90,7 @@ pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Lo
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
 pub use key_scope::KeyScope;
 pub use multi_window::{
-    CrossWindowDragState, CrossWindowDropEvent, MultiWindowCommand, MultiWindowCoordinator,
-    WindowHostMeta,
+    run_multi_window, MultiWindowCoordinator, MultiWindowFactory, WindowContext,
 };
 pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
@@ -1331,6 +1330,18 @@ fn millis(duration: Duration) -> u64 {
     pub fn set_throttle_policy(&mut self, policy: unbound_platform::RenderThrottlePolicy) {
         self.pending_window_commands
             .push(WindowCommand::SetThrottlePolicy(policy));
+    }
+
+    /// 请求多窗口协调器打开一个辅助窗口。
+    pub fn open_window(&mut self, config: unbound_platform::WindowConfig) {
+        self.pending_window_commands
+            .push(WindowCommand::OpenWindow(config));
+    }
+
+    /// 请求多窗口协调器关闭指定标识的窗口。
+    pub fn close_window(&mut self, id: unbound_platform::WindowId) {
+        self.pending_window_commands
+            .push(WindowCommand::CloseWindow(id));
     }
 }
 
@@ -3966,7 +3977,7 @@ pub trait Application {
 }
 
 /// 标题栏通过冒泡兜底产出的窗口控制意图，由窗口运行器在输入处理后消费执行。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum WindowCommand {
     /// 启动系统原生窗口拖拽。
     StartDrag,
@@ -3992,6 +4003,10 @@ pub enum WindowCommand {
     },
     /// 更新运行器帧节流与遮挡/最小化暂停策略。
     SetThrottlePolicy(unbound_platform::RenderThrottlePolicy),
+    /// 请求多窗口协调器按给定配置打开新窗口。
+    OpenWindow(unbound_platform::WindowConfig),
+    /// 请求多窗口协调器关闭指定标识的窗口。
+    CloseWindow(unbound_platform::WindowId),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -5504,6 +5519,18 @@ impl<A: Application> AppRuntime<A> {
     pub fn set_throttle_policy(&mut self, policy: unbound_platform::RenderThrottlePolicy) {
         self.window_commands
             .push(WindowCommand::SetThrottlePolicy(policy));
+    }
+
+    /// 请求多窗口协调器打开一个辅助窗口。
+    pub fn open_window(&mut self, config: unbound_platform::WindowConfig) {
+        self.window_commands
+            .push(WindowCommand::OpenWindow(config));
+    }
+
+    /// 请求多窗口协调器关闭指定标识的窗口。
+    pub fn close_window(&mut self, id: unbound_platform::WindowId) {
+        self.window_commands
+            .push(WindowCommand::CloseWindow(id));
     }
 
     /// 同步宿主窗口客户区在屏幕物理坐标系下的原点与窗口标识，用于换算越界原生弹出窗位置。

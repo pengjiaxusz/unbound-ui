@@ -11,6 +11,9 @@ pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
 pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};
 pub use crate::settings::{select_option_key, select_popup_key, SettingsCard};
 pub use crate::state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
+pub use crate::multi_window::{
+    run_multi_window, MultiWindowCoordinator, MultiWindowFactory, WindowContext,
+};
 pub use crate::window_runner::{run_windowed, run_windowed_with_hwnd, WindowedRunner};
 pub use crate::{
     const_fnv1a_hash, global_locale, mix_key, set_global_locale, ui_key, AppContext, AppEvent,
