@@ -3662,7 +3662,6 @@ where
     out
 }
 
-
 /// 工作台扩展控件探针（覆盖未纳入 134 项 WinUI 3 目录但由 `build.rs` 门禁看守的桌面工作台原语）。
 #[must_use]
 pub fn probe_workbench_widgets(state: ControlState) -> Vec<WidgetOutput> {
@@ -3670,32 +3669,80 @@ pub fn probe_workbench_widgets(state: ControlState) -> Vec<WidgetOutput> {
     let glyphs = label();
     let mut outputs = Vec::new();
     let scale_desc = crate::scale_osd::ScaleOsdDesc::new(Rect::new(0.0, 0.0, 1280.0, 720.0), 1.0);
-    outputs.push(crate::scale_osd::emit_scale_osd(9001, &scale_desc, state, &glyphs));
-    let inline_desc = crate::inline_editable_text::InlineEditableTextDesc::new(rect, "Preset Alpha");
-    outputs.push(crate::inline_editable_text::emit_inline_editable_text(9002, &inline_desc, state, &glyphs));
-    let elided_desc = crate::elided_text::ElidedTextDesc::new(rect, "C:/Projects/Unbound/capture.rdc");
-    outputs.push(crate::elided_text::emit_elided_text(9003, &elided_desc, state, &glyphs));
+    outputs.push(crate::scale_osd::emit_scale_osd(
+        9001,
+        &scale_desc,
+        state,
+        &glyphs,
+    ));
+    let inline_desc =
+        crate::inline_editable_text::InlineEditableTextDesc::new(rect, "Preset Alpha");
+    outputs.push(crate::inline_editable_text::emit_inline_editable_text(
+        9002,
+        &inline_desc,
+        state,
+        &glyphs,
+    ));
+    let elided_desc =
+        crate::elided_text::ElidedTextDesc::new(rect, "C:/Projects/Unbound/capture.rdc");
+    outputs.push(crate::elided_text::emit_elided_text(
+        9003,
+        &elided_desc,
+        state,
+        &glyphs,
+    ));
     let copy_desc = crate::copy_button::CopyButtonDesc::new(rect);
-    outputs.push(crate::copy_button::emit_copy_button(9004, &copy_desc, state, &glyphs));
+    outputs.push(crate::copy_button::emit_copy_button(
+        9004, &copy_desc, state, &glyphs,
+    ));
     let ro_desc = crate::copy_button::ReadOnlyInputDesc::new(rect, "0xdeadbeef");
-    outputs.push(crate::copy_button::emit_read_only_input(9005, &ro_desc, state, &glyphs));
+    outputs.push(crate::copy_button::emit_read_only_input(
+        9005, &ro_desc, state, &glyphs,
+    ));
     let dur_desc = crate::duration_input::DurationInputDesc::new(rect, 1500);
-    outputs.push(crate::duration_input::emit_duration_input(9006, &dur_desc, state, &glyphs));
+    outputs.push(crate::duration_input::emit_duration_input(
+        9006, &dur_desc, state, &glyphs,
+    ));
     let preset_desc = crate::preset_number_input::PresetNumberInputDesc::new(
         rect,
         10.0,
         240.0,
-        vec![crate::preset_number_input::NumberPreset::new("60 FPS", 60.0)],
+        vec![crate::preset_number_input::NumberPreset::new(
+            "60 FPS", 60.0,
+        )],
     );
-    outputs.push(crate::preset_number_input::emit_preset_number_input(9007, &preset_desc, state, &glyphs));
-    outputs.push(crate::preset_number_input::emit_preset_number_popup(9011, &preset_desc, Rect::new(0.0, 0.0, 1280.0, 720.0), state, &glyphs));
+    outputs.push(crate::preset_number_input::emit_preset_number_input(
+        9007,
+        &preset_desc,
+        state,
+        &glyphs,
+    ));
+    outputs.push(crate::preset_number_input::emit_preset_number_popup(
+        9011,
+        &preset_desc,
+        Rect::new(0.0, 0.0, 1280.0, 720.0),
+        state,
+        &glyphs,
+    ));
     let kbd_desc = crate::kbd::KbdDesc::new(rect, "Ctrl");
     outputs.push(crate::kbd::emit_kbd(9008, &kbd_desc, state, &glyphs));
     let chord_desc = crate::kbd::KbdChordDesc::from_keys(rect.origin, &["Ctrl", "Shift", "P"]);
-    outputs.push(crate::kbd::emit_kbd_chord(9009, &chord_desc, state, &glyphs));
-    let vgrid_desc = crate::virtual_grid::VirtualGridDesc::new(Rect::new(0.0, 0.0, 320.0, 200.0), 100);
+    outputs.push(crate::kbd::emit_kbd_chord(
+        9009,
+        &chord_desc,
+        state,
+        &glyphs,
+    ));
+    let vgrid_desc =
+        crate::virtual_grid::VirtualGridDesc::new(Rect::new(0.0, 0.0, 320.0, 200.0), 100);
     let vgrid_state = crate::virtual_grid::VirtualGridState::new();
-    outputs.push(crate::virtual_grid::emit_virtual_grid(9010, &vgrid_desc, &vgrid_state, state, &glyphs));
+    outputs.push(crate::virtual_grid::emit_virtual_grid(
+        9010,
+        &vgrid_desc,
+        &vgrid_state,
+        state,
+        &glyphs,
+    ));
     outputs
 }
 
@@ -3750,7 +3797,11 @@ mod interactive_tests {
             .into_iter()
             .map(|o| o.primitives.len())
             .collect();
-        for phase in [PointerPhase::Idle, PointerPhase::Hovered, PointerPhase::Pressed] {
+        for phase in [
+            PointerPhase::Idle,
+            PointerPhase::Hovered,
+            PointerPhase::Pressed,
+        ] {
             for focused in [false, true] {
                 for disabled in [false, true] {
                     for selected in [false, true] {
