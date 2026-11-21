@@ -22,8 +22,10 @@ git fetch origin
 mkdir -p /tmp/handoff && unzip -o -q <包路径> -d /tmp/handoff
 git am /tmp/handoff/patches/*.patch
 
-just gate-check && just check && just test                   # 依次跑，不跳步
+just gate-check && just gate-lang && just fmt-check && just check && just test   # 全跑，不跳步
 ```
+
+**`just check` 只跑 clippy，不含格式检查**。CI 的 `gate.yml` 是「提交标题 → 代码语言守卫 → 文案语言 → `cargo fmt --check`」四步，本地漏跑 `fmt-check` 就会在推送后才挂。收工前务必补 `cargo fmt`。
 
 ## 铁律
 
@@ -39,7 +41,7 @@ just gate-check && just check && just test                   # 依次跑，不�
 | 步 | 动作 | 要点 |
 | :-- | :--- | :--- |
 | S1 | 落提交 | `git am patches/*.patch`；失败先判基线问题，再 `--show-current-patch` |
-| S2 | 修编译 | `gate-check` → `check` → `test`；语法错会掩盖类型错，修完语法错必须重跑 |
+| S2 | 修编译 | `gate-check` → `gate-lang` → `fmt-check` → `check` → `test`；语法错会掩盖类型错，修完语法错必须重跑 |
 | S3 | 折回提交 | 文件仅被单个提交触碰时，重放序列 + 覆盖文件 + `--amend`（用 `scripts/replay-patch-series.sh`） |
 | S4 | 作者与推送 | `filter-branch --env-filter` 改作者（保留 author date）→ `push --force-with-lease` |
 | S5 | 同步本地 | 强推后 `fetch --prune --force` 再 `reset --hard`，**不要 `git pull`** |
@@ -59,6 +61,8 @@ S3 的折叠命令（可直接跑）：
 | 命令 | 期望 |
 | :--- | :--- |
 | `just gate-check` | `[lang-guard] passed: N Rust file(s)` |
+| `just gate-lang` | `通过：文案与语言轴一致。` |
+| `just fmt-check` | 无 `Diff in` 输出（有则 `cargo fmt` 后重跑） |
 | `just check` | `Finished` 且无 warning / error |
 | `just test` | 全部 `test result: ok`，`failed=0`（2026-11-21 基线 2285 passed） |
 
