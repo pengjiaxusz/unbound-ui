@@ -265,5 +265,5 @@ fn icon_only_shell_icon_button_centers_within_rect() {
         "icon-only button should center shell_icon horizontally (got {icon_center_x}, expected {})",
         rect.center().x
     );
-    assert!(BUTTON_SHELL_ICON_SIZE > 0.0 && BUTTON_CONTENT_GAP > 0.0);
+    const { assert!(BUTTON_SHELL_ICON_SIZE > 0.0 && BUTTON_CONTENT_GAP > 0.0) };
 }

@@ -1501,7 +1501,8 @@ pub enum WidgetSpec {
         /// 地址栏描述符。
         desc: unbound_widgets::AddressBarDesc,
         /// 地址栏交互状态快照。
-        state: unbound_widgets::AddressBarState,
+        /// 地址栏交互状态快照（装箱：状态含两套文本编辑核心，直接内联会让整个枚举膨胀近 600 字节）。
+        state: Box<unbound_widgets::AddressBarState>,
     },
     /// 停靠面板树。
     Dock {
@@ -2704,7 +2705,7 @@ impl<'a> ViewBuilder<'a> {
             node_desc,
             WidgetSpec::AddressBar {
                 desc,
-                state: state.clone(),
+                state: Box::new(state.clone()),
             },
         )
     }
